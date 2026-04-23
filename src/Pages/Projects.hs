@@ -73,8 +73,8 @@ import Lucid.Aria qualified as Aria
 import Lucid.Base (makeAttribute)
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
-import Models.Apis.Integrations (SlackData, deletePagerdutyData, getDiscordDataByProjectId, getPagerdutyByProjectId, getProjectSlackData, insertPagerdutyData)
-import Models.Apis.Integrations qualified as Slack
+import Models.Apis.Integrations (SlackData, getDiscordDataByProjectId, getProjectSlackData)
+import Models.Apis.Integrations qualified as Integrations
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers (TeamMemberVM (..), TeamVM (..))
 import Models.Projects.ProjectMembers qualified as ProjectMembers
@@ -258,13 +258,16 @@ integrationsSettingsGetH pid = do
           , dailyNotifs = if project.dailyNotif then Just "on" else Nothing
           }
   slackInfo <- getProjectSlackData pid
-  pagerdutyInfo <- getPagerdutyByProjectId pid
+  discordInfo <- getDiscordDataByProjectId pid
   channels <- maybe (pure []) (\d -> maybe [] (fromMaybe [] . (.channels)) <$> SlackP.getSlackChannels d.botToken d.teamId) slackInfo
-  -- Back-fill the @everyone team with the Slack integration's default channel
-  -- for legacy installs that pre-date addSlackChannelToEveryoneTeam on OAuth.
-  -- Keeps the notifications input, Test, and Save in sync with a single source of truth.
+  -- Converge @everyone.slack_channels with the OAuth-time default on every render.
+  -- Idempotent (addSlackChannelToEveryoneTeam no-ops when present). Covers legacy
+  -- installs that pre-date the OAuth-side add, plus out-of-band updates to
+  -- apis.slack.channel_id (e.g. /monoscope-here) that don't go through Save.
   whenJust slackInfo \s -> void $ ProjectMembers.addSlackChannelToEveryoneTeam pid s.channelId
   everyoneTeamM <- ProjectMembers.getEveryoneTeam pid
+  let pagerdutyKey = listToMaybe . V.toList . (.pagerduty_services) =<< everyoneTeamM
+      hasDiscord = isJust discordInfo
   let existingSlackChannels = maybe V.empty (.slack_channels) everyoneTeamM
       knownChannelIds = S.fromList $ map BotUtils.channelId channels
       -- Seed extras with the stored default channel name (captured at OAuth time),
@@ -288,11 +291,12 @@ integrationsSettingsGetH pid = do
         , envConfig = appCtx.env
         , isUpdate = True
         , createForm = createProj
-        , notifChannel = Just project.notificationsChannel
-        , phones = project.whatsappNumbers
-        , emails = project.notifyEmails
+        , disabledChannels = maybe V.empty (.disabled_channels) everyoneTeamM
+        , phones = maybe V.empty (.phone_numbers) everyoneTeamM
+        , emails = maybe V.empty (.notify_emails) everyoneTeamM
         , slackData = slackInfo
-        , pagerdutyData = pagerdutyInfo
+        , pagerdutyKey = pagerdutyKey
+        , discordConnected = hasDiscord
         , slackChannels = channels
         , extraSlackChannels = extraSlackChannels
         , existingSlackChannels = existingSlackChannels
@@ -301,7 +305,7 @@ integrationsSettingsGetH pid = do
 
 
 data NotifListForm = NotifListForm
-  { notificationsChannel :: [Text]
+  { enabledChannels :: [Text]
   , phones :: [Text]
   , emails :: [Text]
   , slackChannels :: [Text]
@@ -310,68 +314,76 @@ data NotifListForm = NotifListForm
   deriving anyclass (AE.FromJSON, FromForm)
 
 
+allChannels :: [Text]
+allChannels = ["email", "slack", "discord", "phone", "pagerduty"]
+
+
 updateNotificationsChannel :: Projects.ProjectId -> NotifListForm -> ATAuthCtx (RespHeaders (Html ()))
-updateNotificationsChannel pid NotifListForm{notificationsChannel, phones, emails, slackChannels} = do
-  validationResult <- validateNotificationChannels pid notificationsChannel phones
+updateNotificationsChannel pid NotifListForm{enabledChannels, phones, emails, slackChannels} = do
+  validationResult <- validateNotificationChannels pid enabledChannels phones
   case validationResult of
     Left errorMessage -> do
       addErrorToast errorMessage Nothing
       integrationsSettingsGetH pid
     Right () -> do
-      _ <- Projects.updateNotificationsChannel pid notificationsChannel phones emails
       projectM <- Projects.projectById pid
       slackInfoM <- getProjectSlackData pid
       everyoneTeamM <- ProjectMembers.getEveryoneTeam pid
       whenJust everyoneTeamM \team -> do
         let oldChannels = S.fromList $ V.toList team.slack_channels
-            newChannelsSet = S.fromList slackChannels
-            addedChannels = S.difference newChannelsSet oldChannels
-            teamDetails = (ProjectMembers.teamToDetails team){ProjectMembers.slackChannels = V.fromList slackChannels} :: ProjectMembers.TeamDetails
+            -- Default channel from OAuth is always preserved — bot is guaranteed a member there.
+            defaultCh = (.channelId) <$> slackInfoM
+            requested = ordNub $ maybeToList defaultCh <> slackChannels
+            addedChannels = filter (`S.notMember` oldChannels) requested
+
+        -- Gate-on-reachability: try the welcome message for each newly-added
+        -- channel; drop any where Slack says not_in_channel / channel_not_found
+        -- / etc. so we don't persist unreachable routes that fail every alert.
+        (unreachable, reachableAdds) <- case (,) <$> projectM <*> slackInfoM of
+          Just (project, slackInfo) -> do
+            results <- forM addedChannels \cid -> do
+              r <- tryAny $ SlackP.sendSlackWelcomeMessage slackInfo.botToken cid project.title
+              case r of
+                Right () -> pure (Right cid)
+                Left err -> do
+                  SlackP.logWelcomeMessageFailure cid err
+                  pure (Left cid)
+            pure $ partitionEithers results
+          Nothing -> do
+            unless (null addedChannels)
+              $ addErrorToast "Slack workspace is not linked to this project; new channels were not saved." Nothing
+            pure (addedChannels, [])
+
+        let finalSlack = V.fromList $ ordNub $ V.toList team.slack_channels <> reachableAdds
+            disabled = V.fromList $ filter (`notElem` enabledChannels) allChannels
+            teamDetails =
+              (ProjectMembers.teamToDetails team)
+                { ProjectMembers.slackChannels = finalSlack
+                , ProjectMembers.notifyEmails = V.fromList emails
+                , ProjectMembers.phoneNumbers = V.fromList phones
+                , ProjectMembers.disabledChannels = disabled
+                } :: ProjectMembers.TeamDetails
         void $ ProjectMembers.updateTeam pid team.id teamDetails
-        case (,) <$> projectM <*> slackInfoM of
-          Just (project, slackInfo) ->
-            forM_ addedChannels \channelId -> do
-              result <- tryAny $ SlackP.sendSlackWelcomeMessage slackInfo.botToken channelId project.title
-              whenLeft_ result (SlackP.logWelcomeMessageFailure channelId)
-          Nothing ->
-            unless (S.null addedChannels)
-              $ addErrorToast "Slack workspace is not linked to this project; welcome messages were not sent" Nothing
+
+        unless (null unreachable)
+          $ addErrorToast ("Could not reach Slack channel(s): " <> T.intercalate ", " unreachable <> ". Invite Monoscope to each channel and try again.") Nothing
       addSuccessToast "Updated Notification Channels Successfully" Nothing
       integrationsSettingsGetH pid
 
 
 validateNotificationChannels :: Projects.ProjectId -> [Text] -> [Text] -> ATAuthCtx (Either Text ())
-validateNotificationChannels pid notificationsChannel phones = do
-  discordValidation <- validateDiscord pid notificationsChannel
-  slackValidation <- validateSlack pid notificationsChannel
-  let whatsappValidation = validateWhatsapp notificationsChannel phones
-  pure $ discordValidation *> slackValidation *> whatsappValidation
+validateNotificationChannels pid enabledChannels phones = do
+  discord <- requireIntegration "discord" "You need to connect Discord to this project first." enabledChannels (getDiscordDataByProjectId pid)
+  slack <- requireIntegration "slack" "You need to connect Slack to this project first." enabledChannels (getProjectSlackData pid)
+  let whatsapp = if "phone" `elem` enabledChannels && null phones then Left "Provide at least one whatsapp number" else Right ()
+  pure $ discord *> slack *> whatsapp
 
 
-validateDiscord :: Projects.ProjectId -> [Text] -> ATAuthCtx (Either Text ())
-validateDiscord pid notificationsChannel =
-  if "discord" `elem` notificationsChannel
-    then do
-      discordData <- getDiscordDataByProjectId pid
-      pure $ case discordData of
-        Just _ -> Right ()
-        Nothing -> Left "You need to connect Discord to this project first."
-    else pure $ Right ()
-
-
-validateSlack :: Projects.ProjectId -> [Text] -> ATAuthCtx (Either Text ())
-validateSlack pid notificationsChannel =
-  if "slack" `elem` notificationsChannel
-    then do
-      slackData <- getProjectSlackData pid
-      pure $ case slackData of
-        Just _ -> Right ()
-        Nothing -> Left "You need to connect Slack to this project first."
-    else pure $ Right ()
-
-
-validateWhatsapp :: [Text] -> [Text] -> Either Text ()
-validateWhatsapp notificationsChannel numbers = if "phone" `elem` notificationsChannel && null numbers then Left "Provide at least one whatsapp number" else Right ()
+-- | When @channel@ is toggled on, the corresponding integration row must exist.
+requireIntegration :: Text -> Text -> [Text] -> ATAuthCtx (Maybe a) -> ATAuthCtx (Either Text ())
+requireIntegration channel errMsg enabled fetch
+  | channel `elem` enabled = maybe (Left errMsg) (const (Right ())) <$> fetch
+  | otherwise = pure (Right ())
 
 
 newtype PagerdutyConnectForm = PagerdutyConnectForm {integrationKey :: Text}
@@ -385,7 +397,7 @@ pagerdutyConnectH pid form = do
   if T.length key < 20 || T.null key
     then addErrorToast "PagerDuty integration key is too short" Nothing >> integrationsSettingsGetH pid
     else do
-      void $ insertPagerdutyData pid key
+      void $ ProjectMembers.addPagerdutyServiceToEveryoneTeam pid key
       sess <- Projects.getSession
       Projects.logAuditS pid Projects.AEIntegrationConnected sess
         $ Just
@@ -396,7 +408,7 @@ pagerdutyConnectH pid form = do
 
 pagerdutyDisconnectH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 pagerdutyDisconnectH pid = do
-  void $ deletePagerdutyData pid
+  ProjectMembers.removePagerdutyServicesFromEveryoneTeam pid
   sess <- Projects.getSession
   Projects.logAuditS pid Projects.AEIntegrationDisconnected sess
     $ Just
@@ -407,7 +419,7 @@ pagerdutyDisconnectH pid = do
 
 slackDisconnectH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 slackDisconnectH pid = do
-  deleted <- Slack.deleteSlackData pid
+  deleted <- Integrations.deleteSlackData pid
   if deleted > 0
     then do
       void $ ProjectMembers.removeSlackChannelsFromEveryoneTeam pid
@@ -426,11 +438,12 @@ data IntegrationsConfig = IntegrationsConfig
   , envConfig :: EnvConfig
   , isUpdate :: Bool
   , createForm :: CreateProjectForm
-  , notifChannel :: Maybe (V.Vector Projects.NotificationChannel)
+  , disabledChannels :: V.Vector Text
   , phones :: V.Vector Text
   , emails :: V.Vector Text
   , slackData :: Maybe SlackData
-  , pagerdutyData :: Maybe Slack.PagerdutyData
+  , pagerdutyKey :: Maybe Text
+  , discordConnected :: Bool
   , slackChannels :: [BotUtils.Channel]
   , extraSlackChannels :: [BotUtils.Channel]
   , existingSlackChannels :: V.Vector Text
@@ -449,30 +462,28 @@ integrationsBody IntegrationsConfig{..} = do
       a_ [href_ ("/p/" <> pid <> "/manage_teams/everyone"), class_ "font-medium text-textBrand underline"] "@everyone"
       " team."
 
-    let notifVals = hxVals_ "js:{notificationsChannel: Array.from(document.querySelectorAll('input[name=\"notifChannel\"]:checked')).map(i => i.value), phones: window.getTagValues('#phones_input'), emails: window.getTagValues('#emails_input'), slackChannels: window.getTagValues('#slack-channels-input')}"
+    -- Form posts `enabledChannels` (the set of channel types whose toggles are checked).
+    -- The handler writes `disabled_channels = allChannels \\ enabledChannels` on @everyone.
+    -- If a new channel type is ever added, it must also be added to `allChannels`
+    -- or it will silently be treated as "enabled" for every project.
+    let notifVals = hxVals_ "js:{enabledChannels: Array.from(document.querySelectorAll('input[name=\"notifChannel\"]:checked')).map(i => i.value), phones: window.getTagValues('#phones_input'), emails: window.getTagValues('#emails_input'), slackChannels: window.getTagValues('#slack-channels-input')}"
     div_ [id_ "integrations-form-section"] do
-      div_
-        [ hxPost_ [text|/p/$pid/notifications-channels|]
-        , notifVals
-        , hxSwap_ "none"
-        , hxTrigger_ "submit"
-        , id_ "notifsForm"
-        ]
-        do
+      div_ [id_ "notifsForm"] do
           let ems = decodeUtf8 $ AE.encode $ V.toList emails
               tgs = decodeUtf8 $ AE.encode $ V.toList phones
+              disabledSet = S.fromList $ V.toList disabledChannels
               integrations =
-                [ ("email", "Email", Projects.NEmail, True, faSprite_ "envelope" "solid" "h-4 w-4", renderEmailIntegration ems)
-                , ("slack", "Slack", Projects.NSlack, isJust slackData, faSprite_ "slack" "solid" "h-4 w-4", renderSlackIntegration envConfig pid slackData slackChannels extraSlackChannels existingSlackChannels)
-                , ("discord", "Discord", Projects.NDiscord, True, faSprite_ "discord" "solid" "h-4 w-4", renderDiscordIntegration envConfig pid)
-                , ("phone", "WhatsApp", Projects.NPhone, not $ V.null phones, faSprite_ "whatsapp" "solid" "h-4 w-4", renderWhatsappIntegration tgs)
-                , ("pagerduty", "PagerDuty", Projects.NPagerduty, isJust pagerdutyData, faSprite_ "pager" "solid" "h-4 w-4", renderPagerdutyIntegration projectId.toText pagerdutyData)
+                [ ("email", "Email", True, faSprite_ "envelope" "solid" "h-4 w-4", renderEmailIntegration ems)
+                , ("slack", "Slack", isJust slackData, faSprite_ "slack" "solid" "h-4 w-4", renderSlackIntegration envConfig pid slackData slackChannels extraSlackChannels existingSlackChannels)
+                , ("discord", "Discord", discordConnected, faSprite_ "discord" "solid" "h-4 w-4", renderDiscordIntegration envConfig pid)
+                , ("phone", "WhatsApp", not $ V.null phones, faSprite_ "whatsapp" "solid" "h-4 w-4", renderWhatsappIntegration tgs)
+                , ("pagerduty", "PagerDuty", isJust pagerdutyKey, faSprite_ "pager" "solid" "h-4 w-4", renderPagerdutyIntegration projectId.toText pagerdutyKey)
                 ]
-                  :: [(Text, Text, Projects.NotificationChannel, Bool, Html (), Html ())]
+                  :: [(Text, Text, Bool, Html (), Html ())]
 
           div_ [class_ "divide-y divide-strokeWeak rounded-xl border border-strokeWeak"] do
-            forM_ integrations \(val, title, channel, configured, icon, content) ->
-              renderNotificationOption pid everyoneTeamId title val channel notifChannel configured icon content
+            forM_ integrations \(val, title, configured, icon, content) ->
+              renderNotificationOption pid everyoneTeamId title val (not $ S.member val disabledSet) configured icon content
 
           div_ [class_ "mt-6"] do
             button_
@@ -511,10 +522,9 @@ renderInlineTestButton pid channel teamIdM =
       "Test"
 
 
-renderNotificationOption :: Text -> Maybe UUID.UUID -> Text -> Text -> Projects.NotificationChannel -> Maybe (V.Vector Projects.NotificationChannel) -> Bool -> Html () -> Html () -> Html ()
-renderNotificationOption pid teamIdM title value channel notifChannel isConfigured icon extraContent = do
-  let isChecked = channel `elem` fromMaybe [] notifChannel
-      isActive = isChecked && isConfigured
+renderNotificationOption :: Text -> Maybe UUID.UUID -> Text -> Text -> Bool -> Bool -> Html () -> Html () -> Html ()
+renderNotificationOption pid teamIdM title value isChecked isConfigured icon extraContent = do
+  let isActive = isChecked && isConfigured
   div_ [class_ ""] do
     -- Compact row: icon, name, test, toggle
     div_ [class_ "flex items-center gap-3 p-3"] do
@@ -584,7 +594,7 @@ renderDiscordIntegration envCfg pid = do
     "Add to Discord"
 
 
-renderPagerdutyIntegration :: Text -> Maybe Slack.PagerdutyData -> Html ()
+renderPagerdutyIntegration :: Text -> Maybe Text -> Html ()
 renderPagerdutyIntegration pid = div_ [id_ "pagerduty-integration"] . maybe disconnectedUI (const connectedUI)
   where
     connectedUI = do
@@ -725,7 +735,7 @@ manageTeamPostH pid form tmView = do
   projMembers <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
   let validMemberIds = V.map (.userId) projMembers
       invalidMembers = V.filter (`V.notElem` validMemberIds) form.teamMembers
-      teamDetails = ProjectMembers.TeamDetails form.teamName form.teamDescription form.teamHandle form.teamMembers form.notifEmails form.slackChannels form.discordChannels form.phoneNumbers form.pagerdutyServices
+      teamDetails = ProjectMembers.TeamDetails form.teamName form.teamDescription form.teamHandle form.teamMembers form.notifEmails form.slackChannels form.discordChannels form.phoneNumbers form.pagerdutyServices V.empty
       validationErr msg = addErrorToast msg Nothing >> addRespHeaders (ManageTeamsPostError msg)
   case (userPermission == Just ProjectMembers.PAdmin, V.null invalidMembers, validateTeamDetails form.teamName form.teamHandle form.notifEmails, form.teamId) of
     (False, _, _, _) -> validationErr "Only admins can create or update teams"
@@ -803,8 +813,8 @@ manageTeamsGetH pid layoutM = do
   (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   projMembers <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
-  channels <- Slack.getProjectSlackData pid >>= maybe (pure []) \d -> maybe [] (fromMaybe [] . (.channels)) <$> SlackP.getSlackChannels d.botToken d.teamId
-  discordChannels <- Slack.getDiscordDataByProjectId pid >>= maybe (pure []) (Discord.getDiscordChannels appCtx.env.discordBotToken . (.guildId))
+  channels <- Integrations.getProjectSlackData pid >>= maybe (pure []) \d -> maybe [] (fromMaybe [] . (.channels)) <$> SlackP.getSlackChannels d.botToken d.teamId
+  discordChannels <- Integrations.getDiscordDataByProjectId pid >>= maybe (pure []) (Discord.getDiscordChannels appCtx.env.discordBotToken . (.guildId))
   teams <- V.fromList <$> ProjectMembers.getTeamsVM pid
   let bwconf =
         (def :: BWConfig)
@@ -886,8 +896,8 @@ teamGetH pid handle layoutM = do
   appCtx <- ask @AuthContext
   teamVm <- ProjectMembers.getTeamByHandle pid handle
   projMembers <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
-  channels <- Slack.getProjectSlackData pid >>= maybe (pure []) \d -> maybe [] (fromMaybe [] . (.channels)) <$> SlackP.getSlackChannels d.botToken d.teamId
-  discordChannels <- Slack.getDiscordDataByProjectId pid >>= maybe (pure []) (Discord.getDiscordChannels appCtx.env.discordBotToken . (.guildId))
+  channels <- Integrations.getProjectSlackData pid >>= maybe (pure []) \d -> maybe [] (fromMaybe [] . (.channels)) <$> SlackP.getSlackChannels d.botToken d.teamId
+  discordChannels <- Integrations.getDiscordDataByProjectId pid >>= maybe (pure []) (Discord.getDiscordChannels appCtx.env.discordBotToken . (.guildId))
   case teamVm of
     Just team -> do
       let bwconf =

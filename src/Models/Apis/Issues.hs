@@ -38,6 +38,7 @@ module Models.Apis.Issues (
   updateIssueEnhancement,
   updateIssueCriticality,
   acknowledgeIssue,
+  isInCooldown,
   setAckState,
   setArchiveState,
   selectIssueByHash,
@@ -422,12 +423,16 @@ selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM 
   countResult <- fromMaybe 0 <$> Hasql.interpOne (rawSql countQ)
   pure (issues, countResult)
   where
+    -- Inbox tab (unacked + unarchived) hides severity='low' so demoted silent
+    -- drops don't clutter the incident view. Other tabs leave them visible.
+    isInbox = isAcknowledged == Just False && isArchived == Just False
     mkFilters pfx =
       let timeF = maybe "" (\(st, end) -> " AND " <> pfx <> "created_at >= '" <> formatUTC st <> "' AND " <> pfx <> "created_at <= '" <> formatUTC end <> "'") timeRangeM
           ackF' = maybe "" (bool (" AND " <> pfx <> "acknowledged_at IS NULL") (" AND " <> pfx <> "acknowledged_at IS NOT NULL")) isAcknowledged
           archF' = maybe "" (bool (" AND " <> pfx <> "archived_at IS NULL") (" AND " <> pfx <> "archived_at IS NOT NULL")) isArchived
+          sevF = if isInbox then " AND (" <> pfx <> "severity IS NULL OR " <> pfx <> "severity != 'low')" else ""
           sqlArr col vals = if null vals then "" else " AND " <> pfx <> col <> " = ANY(ARRAY[" <> T.intercalate "," (map (\v -> "'" <> T.replace "'" "''" v <> "'") vals) <> "]::text[])"
-       in timeF <> ackF' <> archF' <> sqlArr "service" serviceFilters <> sqlArr "issue_type::text" typeFilters
+       in timeF <> ackF' <> archF' <> sevF <> sqlArr "service" serviceFilters <> sqlArr "issue_type::text" typeFilters
     timefilter = mkFilters "i."
     ackF = ""
     archF = ""
@@ -454,7 +459,9 @@ selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM 
     q =
       [text|
       SELECT i.id, i.created_at, i.updated_at, i.project_id, i.issue_type::text, i.parent_hash, i.is_framework, i.target_hash, i.acknowledged_at, i.acknowledged_by, i.archived_at, i.title, i.service, i.critical,
-        CASE WHEN i.critical THEN 'critical' ELSE 'info' END, i.affected_requests, i.affected_clients, NULL::double precision,
+        -- Prefer the stored severity (e.g. 'low' for silent drops, 'critical'/'warning'/'info'
+        -- from detectors); fall back to the critical flag for rows without one.
+        COALESCE(NULLIF(i.severity, ''), CASE WHEN i.critical THEN 'critical' ELSE 'info' END), i.affected_requests, i.affected_clients, NULL::double precision,
         i.recommended_action, i.migration_complexity, i.issue_data, i.request_payloads, i.response_payloads, NULL::timestamp with time zone, NULL::int, i.seq_num,
         CASE
           WHEN i.issue_type = 'runtime_exception' THEN COALESCE(err_ev.cnt, 0)
@@ -553,26 +560,69 @@ updateIssueCriticality issueId isCritical sev =
       UPDATE apis.issues SET critical = #{isCritical}, severity = #{sev} WHERE id = #{issueId} |]
 
 
--- | Acknowledge issue
+-- How long an acknowledgment suppresses re-firing for rate-change issues.
+-- Kept short so genuinely persistent regressions still resurface, but long
+-- enough that a ack during an incident is not immediately undone.
+rateChangeCooldownHours :: Int
+rateChangeCooldownHours = 24
+
+
+-- | Acknowledge issue. For rate-change issues the ack also opens a 24h cooldown
+-- that the detector consults before firing again for the same (project,
+-- target_hash) — prevents the "ack'd issue re-fires on the next detection run"
+-- pattern that was making the Inbox unusable.
 acknowledgeIssue :: (DB es, Time :> es) => IssueId -> Projects.UserId -> Eff es ()
 acknowledgeIssue issueId userId = do
   now <- Time.currentTime
+  let hrs = rateChangeCooldownHours
   Hasql.interpExecute_
     [HI.sql|
-      UPDATE apis.issues SET acknowledged_at = #{now}, acknowledged_by = #{userId} WHERE id = #{issueId} |]
+      UPDATE apis.issues SET
+        acknowledged_at = #{now},
+        acknowledged_by = #{userId},
+        cooldown_until = CASE WHEN issue_type = 'log_pattern_rate_change'
+                              THEN #{now}::timestamptz + (INTERVAL '1 hour' * #{hrs})
+                              ELSE cooldown_until END
+      WHERE id = #{issueId} |]
 
 
 -- | Set ack/unack on a batch of issues. Pass @Just now@ to ack (records @acknowledged_by@);
--- pass @Nothing@ to unack (clears both timestamp and actor).
+-- pass @Nothing@ to unack (clears both timestamp and actor). Rate-change acks
+-- also set a 24h cooldown; unacks clear it.
 setAckState :: DB es => Projects.ProjectId -> V.Vector IssueId -> Maybe UTCTime -> Maybe Projects.UserId -> Eff es Int64
 setAckState pid iids mTs mUid
   | V.null iids = pure 0
   | otherwise =
-      Hasql.interpExecute
-        [HI.sql|
-          UPDATE apis.issues
-          SET acknowledged_at = #{mTs}, acknowledged_by = #{mUid}, updated_at = COALESCE(#{mTs}, updated_at)
-          WHERE project_id = #{pid} AND id = ANY(#{iids}::uuid[]) |]
+      let hrs = rateChangeCooldownHours
+       in Hasql.interpExecute
+            [HI.sql|
+              UPDATE apis.issues
+              SET acknowledged_at = #{mTs},
+                  acknowledged_by = #{mUid},
+                  updated_at = COALESCE(#{mTs}, updated_at),
+                  cooldown_until = CASE
+                    WHEN #{mTs}::timestamptz IS NULL THEN NULL
+                    WHEN issue_type = 'log_pattern_rate_change'
+                      THEN #{mTs}::timestamptz + (INTERVAL '1 hour' * #{hrs})
+                    ELSE cooldown_until END
+              WHERE project_id = #{pid} AND id = ANY(#{iids}::uuid[]) |]
+
+
+-- | True if an acknowledged issue for this (project, target, type) is still
+-- within its cooldown window. The detector uses this to suppress re-firing.
+isInCooldown :: DB es => Projects.ProjectId -> Text -> IssueType -> UTCTime -> Eff es Bool
+isInCooldown pid tgt ty now =
+  isJust <$> (Hasql.interpOne q :: DB es => Eff es (Maybe Int64))
+  where
+    q =
+      [HI.sql|
+        SELECT 1 FROM apis.issues
+        WHERE project_id = #{pid}
+          AND target_hash = #{tgt}
+          AND issue_type = #{ty}::apis.issue_type
+          AND cooldown_until IS NOT NULL
+          AND cooldown_until > #{now}
+        LIMIT 1 |]
 
 
 -- | Set archive state on a batch of issues. @Just now@ archives, @Nothing@ unarchives.
@@ -810,10 +860,30 @@ createLogPatternRateChangeIssue projectId lp sr = do
       dir = display sr.direction
       zonedNow = utcToZonedTime utc now
       lvl = T.toLower $ fromMaybe "" lp.logLevel
-      severity = case (sr.direction, lvl) of
-        (Spike, "error") -> "critical"
-        (Spike, _) -> "warning"
-        (Drop, _) -> "info"
+      -- Silent drops on unknown/empty services are almost always deploy/pod-restart
+      -- noise, not incidents. Demote them so the Inbox filter hides them by default.
+      svcLabel = fromMaybe "unknown" lp.serviceName
+      silentDrop = sr.direction == Drop && sr.currentRate == 0 && svcLabel `elem` ["", "unknown"]
+      severity
+        | silentDrop = "low"
+        | otherwise = case (sr.direction, lvl) of
+            (Spike, "error") -> "critical"
+            (Spike, _) -> "warning"
+            (Drop, _) -> "info"
+      patternSnippet = T.take 40 lp.logPattern
+      title =
+        svcLabel
+          <> " · "
+          <> patternSnippet
+          <> " · "
+          <> dir
+          <> " "
+          <> showPct changePercentVal
+          <> " ("
+          <> showRate sr.currentRate
+          <> "/hr vs "
+          <> showRate sr.mean
+          <> "/hr)"
   mkIssue
     MkIssueOpts
       { projectId
@@ -822,9 +892,9 @@ createLogPatternRateChangeIssue projectId lp sr = do
       , parentHash = Nothing
       , isFramework = False
       , service = lp.serviceName
-      , critical = sr.direction == Spike && lvl == "error"
+      , critical = not silentDrop && sr.direction == Spike && lvl == "error"
       , severity
-      , title = "Log Pattern " <> T.toTitle dir <> ": " <> T.take 60 lp.logPattern <> " (" <> showPct changePercentVal <> ")"
+      , title
       , recommendedAction = "Log pattern volume " <> dir <> " detected. Current: " <> showRate sr.currentRate <> ", Baseline: " <> showRate sr.mean <> " (" <> show (round (abs sr.zScore) :: Int) <> " std devs)."
       , migrationComplexity = "n/a"
       , issueData =

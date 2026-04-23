@@ -1,22 +1,18 @@
 module Models.Apis.Integrations (
   SlackData (..),
   DiscordData (..),
-  PagerdutyData (..),
   insertAccessToken,
   getSlackDataByTeamId,
   insertDiscordData,
-  updateDiscordNotificationChannel,
   getDiscordDataByProjectId,
   getProjectSlackData,
-  updateSlackNotificationChannel,
+  updateSlackDefaultChannel,
   getDashboardsForDiscord,
   getDashboardsForSlack,
   getDashboardsForWhatsapp,
   getDiscordData,
-  getPagerdutyByProjectId,
-  insertPagerdutyData,
-  deletePagerdutyData,
   deleteSlackData,
+  deleteDiscordData,
 ) where
 
 import Data.Effectful.Hasql qualified as Hasql
@@ -29,13 +25,18 @@ import Relude
 import System.Types (DB)
 
 
+-- | OAuth-time Slack credentials + the channel the app was installed to.
+--
+-- @channelId@ and @channelName@ are display metadata: they record the channel
+-- the bot originally landed in at OAuth time so the UI can label it (crucial
+-- for private channels the bot can't list via conversations.list). Alert
+-- routing reads from the @everyone team's @slack_channels@ — never this row.
 data SlackData = SlackData
   { projectId :: Projects.ProjectId
-  , webhookUrl :: Text
   , teamId :: Text
-  , channelId :: Text
   , teamName :: Maybe Text
   , botToken :: Text
+  , channelId :: Text
   , channelName :: Maybe Text
   }
   deriving stock (Eq, Generic, Show)
@@ -43,28 +44,35 @@ data SlackData = SlackData
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SlackData
 
 
-insertAccessToken :: DB es => Projects.ProjectId -> Text -> Text -> Text -> Text -> Text -> Text -> Eff es Int64
-insertAccessToken pid webhookUrl teamId channelId teamName botToken channelName =
+insertAccessToken :: DB es => Projects.ProjectId -> Text -> Text -> Text -> Text -> Text -> Eff es Int64
+insertAccessToken pid teamId channelId teamName botToken channelName =
   Hasql.interpExecute
     [HI.sql|INSERT INTO apis.slack
-               (project_id, webhook_url, team_id, channel_id, team_name, bot_token, channel_name)
-               VALUES (#{pid},#{webhookUrl},#{teamId},#{channelId},#{teamName},#{botToken},#{channelName})
+               (project_id, team_id, channel_id, team_name, bot_token, channel_name)
+               VALUES (#{pid},#{teamId},#{channelId},#{teamName},#{botToken},#{channelName})
                ON CONFLICT (project_id)
-               DO UPDATE SET webhook_url = EXCLUDED.webhook_url, team_id = EXCLUDED.team_id, channel_id = EXCLUDED.channel_id, team_name = EXCLUDED.team_name, bot_token = EXCLUDED.bot_token, channel_name = EXCLUDED.channel_name |]
+               DO UPDATE SET team_id = EXCLUDED.team_id, channel_id = EXCLUDED.channel_id, team_name = EXCLUDED.team_name, bot_token = EXCLUDED.bot_token, channel_name = EXCLUDED.channel_name |]
 
 
 getProjectSlackData :: DB es => Projects.ProjectId -> Eff es (Maybe SlackData)
-getProjectSlackData pid = Hasql.interpOne [HI.sql|SELECT project_id, webhook_url, team_id, channel_id, team_name, bot_token, channel_name FROM apis.slack WHERE project_id = #{pid} |]
+getProjectSlackData pid = Hasql.interpOne [HI.sql|SELECT project_id, team_id, team_name, bot_token, channel_id, channel_name FROM apis.slack WHERE project_id = #{pid} |]
 
 
 getSlackDataByTeamId :: DB es => Text -> Eff es (Maybe SlackData)
-getSlackDataByTeamId teamId = Hasql.interpOne [HI.sql|SELECT project_id, webhook_url, team_id, channel_id, team_name, bot_token, channel_name FROM apis.slack WHERE team_id = #{teamId} |]
+getSlackDataByTeamId teamId = Hasql.interpOne [HI.sql|SELECT project_id, team_id, team_name, bot_token, channel_id, channel_name FROM apis.slack WHERE team_id = #{teamId} |]
+
+
+-- | Update the OAuth-time "default" channel cached on apis.slack. This is
+-- display metadata only; routing is driven by the @everyone team.
+updateSlackDefaultChannel :: DB es => Text -> Text -> Maybe Text -> Eff es Int64
+updateSlackDefaultChannel teamId channelId channelName =
+  Hasql.interpExecute
+    [HI.sql|UPDATE apis.slack SET channel_id = #{channelId}, channel_name = #{channelName} WHERE team_id = #{teamId}|]
 
 
 data DiscordData = DiscordData
   { projectId :: Projects.ProjectId
   , guildId :: Text
-  , notifsChannelId :: Maybe Text
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (HI.DecodeRow, NFData)
@@ -82,19 +90,11 @@ insertDiscordData pid guildId =
 
 
 getDiscordData :: DB es => Text -> Eff es (Maybe DiscordData)
-getDiscordData guildId = Hasql.interpOne [HI.sql|SELECT project_id, guild_id, notifs_channel_id FROM apis.discord WHERE guild_id = #{guildId} |]
+getDiscordData guildId = Hasql.interpOne [HI.sql|SELECT project_id, guild_id FROM apis.discord WHERE guild_id = #{guildId} |]
 
 
 getDiscordDataByProjectId :: DB es => Projects.ProjectId -> Eff es (Maybe DiscordData)
-getDiscordDataByProjectId pid = Hasql.interpOne [HI.sql|SELECT project_id, guild_id, notifs_channel_id FROM apis.discord WHERE project_id = #{pid} |]
-
-
-updateDiscordNotificationChannel :: DB es => Text -> Text -> Eff es Int64
-updateDiscordNotificationChannel guildId channelId = Hasql.interpExecute [HI.sql|Update apis.discord SET notifs_channel_id=#{channelId} WHERE guild_id = #{guildId} |]
-
-
-updateSlackNotificationChannel :: DB es => Text -> Text -> Eff es Int64
-updateSlackNotificationChannel teamId channelId = Hasql.interpExecute [HI.sql|Update apis.slack SET channel_id = #{channelId} WHERE team_id = #{teamId} |]
+getDiscordDataByProjectId pid = Hasql.interpOne [HI.sql|SELECT project_id, guild_id FROM apis.discord WHERE project_id = #{pid} |]
 
 
 getDashboardsForSlack :: DB es => Text -> Eff es [(Text, Text)]
@@ -102,35 +102,21 @@ getDashboardsForSlack teamId = Hasql.interp [HI.sql|SELECT d.title, d.id::text F
 
 
 getDashboardsForWhatsapp :: DB es => Text -> Eff es [(Text, Text)]
-getDashboardsForWhatsapp number = Hasql.interp [HI.sql|SELECT d.title, d.id::text FROM projects.dashboards d JOIN projects.projects p ON d.project_id = p.id where #{number}=Any(p.whatsapp_numbers)|]
+getDashboardsForWhatsapp number =
+  Hasql.interp
+    [HI.sql|SELECT d.title, d.id::text FROM projects.dashboards d
+            JOIN projects.teams t ON t.project_id = d.project_id
+            WHERE t.is_everyone = TRUE AND t.deleted_at IS NULL
+              AND #{number} = ANY(t.phone_numbers)|]
 
 
 getDashboardsForDiscord :: DB es => Text -> Eff es [(Text, Text)]
 getDashboardsForDiscord guildId = Hasql.interp [HI.sql|SELECT d.title, d.id::text FROM projects.dashboards d JOIN apis.discord dd ON d.project_id = dd.project_id where guild_id=#{guildId}|]
 
 
-data PagerdutyData = PagerdutyData
-  { projectId :: Projects.ProjectId
-  , integrationKey :: Text
-  }
-  deriving stock (Eq, Generic, Show)
-  deriving anyclass (HI.DecodeRow, NFData)
-
-
-getPagerdutyByProjectId :: DB es => Projects.ProjectId -> Eff es (Maybe PagerdutyData)
-getPagerdutyByProjectId pid = Hasql.interpOne [HI.sql|SELECT project_id, integration_key FROM apis.pagerduty WHERE project_id = #{pid}|]
-
-
-insertPagerdutyData :: DB es => Projects.ProjectId -> Text -> Eff es Int64
-insertPagerdutyData pid integrationKey =
-  Hasql.interpExecute
-    [HI.sql|INSERT INTO apis.pagerduty (project_id, integration_key) VALUES (#{pid}, #{integrationKey})
-            ON CONFLICT (project_id) DO UPDATE SET integration_key = EXCLUDED.integration_key|]
-
-
-deletePagerdutyData :: DB es => Projects.ProjectId -> Eff es Int64
-deletePagerdutyData pid = Hasql.interpExecute [HI.sql|DELETE FROM apis.pagerduty WHERE project_id = #{pid}|]
-
-
 deleteSlackData :: DB es => Projects.ProjectId -> Eff es Int64
 deleteSlackData pid = Hasql.interpExecute [HI.sql|DELETE FROM apis.slack WHERE project_id = #{pid}|]
+
+
+deleteDiscordData :: DB es => Projects.ProjectId -> Eff es Int64
+deleteDiscordData pid = Hasql.interpExecute [HI.sql|DELETE FROM apis.discord WHERE project_id = #{pid}|]

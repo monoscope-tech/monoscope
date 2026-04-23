@@ -219,7 +219,7 @@ installedSuccess botPlatform pidM = do
         div_ [class_ "bg-gradient-to-r from-fillSuccess-weak to-fillBrand-weak px-8 py-10 text-center"] do
           div_ [class_ "inline-flex items-center justify-center w-16 h-16 bg-bgRaised rounded-full mb-4 shadow-lg"] do
             faSprite_ "check" "regular" "h-8 w-8 text-iconSuccess"
-          h1_ [class_ "text-3xl font-semibold text-white mb-4"] "Installation Complete!"
+          h1_ [class_ "text-3xl font-semibold text-textStrong mb-4"] "Installation Complete!"
           p_ [class_ "text-textBrand font-semibold max-w-2xl mx-auto"] $ toHtml $ "Monoscope Bot has been successfully added to your " <> botPlatform <> " server"
         div_ [class_ "px-8 py-12"] do
           div_ [class_ "text-center mb-12"] do

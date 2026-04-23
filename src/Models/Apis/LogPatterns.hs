@@ -25,6 +25,8 @@ module Models.Apis.LogPatterns (
   -- Pattern with current rate for spike detection
   LogPatternWithRate (..),
   getPatternsWithCurrentRates,
+  setPendingAnomaly,
+  clearPendingAnomalies,
   getLogPatternsByIds,
   -- Field labels
   knownPatternFields,
@@ -104,6 +106,8 @@ data LogPattern = LogPattern
   , embedding :: Maybe (V.Vector Float)
   , embeddingAt :: Maybe ZonedTime
   , mergeOverride :: Bool
+  , pendingAnomalyDirection :: Maybe Text
+  , pendingAnomalyDetectedAt :: Maybe UTCTime
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, HI.DecodeRow, NFData, ToRow)
@@ -372,6 +376,8 @@ data LogPatternWithRate = LogPatternWithRate
   , baselineMean :: Maybe Double
   , baselineMad :: Maybe Double
   , currentHourCount :: Int64
+  , pendingAnomalyDirection :: Maybe Text
+  , pendingAnomalyDetectedAt :: Maybe UTCTime
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, HI.DecodeRow)
@@ -391,7 +397,8 @@ getPatternsWithCurrentRates pid now =
         SELECT lp.id, lp.project_id, LEFT(lp.log_pattern, 2000), lp.pattern_hash, lp.source_field,
           lp.service_name, lp.log_level, LEFT(lp.sample_message, 2000),
           lp.baseline_state, lp.baseline_volume_hourly_mean, lp.baseline_volume_hourly_mad,
-          COALESCE(hs.event_count, 0)::BIGINT + COALESCE(mhs.member_count, 0)::BIGINT AS current_hour_count
+          COALESCE(hs.event_count, 0)::BIGINT + COALESCE(mhs.member_count, 0)::BIGINT AS current_hour_count,
+          lp.pending_anomaly_direction, lp.pending_anomaly_detected_at
         FROM apis.log_patterns lp
         LEFT JOIN apis.log_pattern_hourly_stats hs
           ON hs.project_id = lp.project_id AND hs.source_field = lp.source_field
@@ -433,6 +440,32 @@ knownPatternFields = [("body", "Log body"), ("summary", "Event summary"), ("url_
 -- "unknown_field"
 sourceFieldLabel :: Text -> Text
 sourceFieldLabel f = fromMaybe f $ lookup f knownPatternFields
+
+
+-- | Record a first-observation anomaly so the next detection run can confirm it.
+-- Caller passes "spike" or "drop" as the direction.
+setPendingAnomaly :: DB es => LogPatternId -> Text -> UTCTime -> Eff es ()
+setPendingAnomaly lpid dir at =
+  Hasql.interpExecute_
+    [HI.sql|
+      UPDATE apis.log_patterns
+      SET pending_anomaly_direction = #{dir}, pending_anomaly_detected_at = #{at}
+      WHERE id = #{lpid}
+    |]
+
+
+-- | Clear pending anomaly state for the given pattern ids (either after firing
+-- an issue or because the anomaly did not recur within the TTL).
+clearPendingAnomalies :: DB es => V.Vector LogPatternId -> Eff es ()
+clearPendingAnomalies ids
+  | V.null ids = pass
+  | otherwise =
+      Hasql.interpExecute_
+        [HI.sql|
+          UPDATE apis.log_patterns
+          SET pending_anomaly_direction = NULL, pending_anomaly_detected_at = NULL
+          WHERE id = ANY(#{ids})
+        |]
 
 
 -- | Total event count across all patterns for a project within a time window.

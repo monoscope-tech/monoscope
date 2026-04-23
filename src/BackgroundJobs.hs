@@ -1,6 +1,6 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, spikeZScoreThreshold, spikeMinAbsoluteDelta, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSessionBackfillTimer, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..)) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSessionBackfillTimer, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..)) where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
@@ -62,7 +62,6 @@ import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Fields qualified as Fields
-import Models.Apis.Integrations (PagerdutyData (..), getPagerdutyByProjectId)
 import Models.Apis.IssueEnhancement qualified as Enhancement
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns qualified as LogPatterns
@@ -913,7 +912,16 @@ data ErrorSubscriptionDue = ErrorSubscriptionDue
   deriving anyclass (FromRow, HI.DecodeRow, NFData)
 
 
--- | Send alerts to all configured notification channels for a project, threading Slack/Discord messages.
+-- | Dispatch an alert to every enabled channel configured on the project's @everyone team.
+-- For slack/discord/phone/pagerduty a channel is "enabled" when its targets array is
+-- non-empty AND the type isn't in disabled_channels. Email is the exception: it
+-- routes to project members, so it dispatches whenever the "email" toggle is on,
+-- regardless of notify_emails.
+--
+-- The returned Bool reports whether the @everyone team existed. Callers use it to
+-- decide whether to persist "last notified" state: when the team is missing that's
+-- a data integrity bug (logged at attention level), and we must not stamp
+-- last_notified_at or the pattern gets silenced for the whole cooldown window.
 sendAlertToChannels
   :: NotificationAlerts
   -> Projects.ProjectId
@@ -923,22 +931,31 @@ sendAlertToChannels
   -> Text
   -> Html ()
   -> (Maybe Text, Maybe Text)
-  -> ATBackgroundCtx (Maybe Text, Maybe Text)
-sendAlertToChannels alert pid project users alertUrl subj html (initSlackTs, initDiscordMsgId) =
-  foldlM
-    ( \(slackTs, discordMsgId) -> \case
-        Projects.NSlack -> do
-          tsM <- sendSlackAlertWith slackTs alert pid project.title Nothing
-          pure (slackTs <|> tsM, discordMsgId)
-        Projects.NDiscord -> do
-          msgIdM <- sendDiscordAlertWith discordMsgId alert pid project.title Nothing
-          pure (slackTs, discordMsgId <|> msgIdM)
-        Projects.NPhone -> (slackTs, discordMsgId) <$ sendWhatsAppAlert alert pid project.title project.whatsappNumbers
-        Projects.NEmail -> let rendered = ET.renderEmail subj html in (slackTs, discordMsgId) <$ forM_ users \u -> sendRenderedEmail (CI.original u.email) subj rendered
-        Projects.NPagerduty -> (slackTs, discordMsgId) <$ (getPagerdutyByProjectId pid >>= traverse_ \pd -> sendPagerdutyAlertToService pd.integrationKey alert project.title alertUrl)
-    )
-    (initSlackTs, initDiscordMsgId)
-    project.notificationsChannel
+  -> ATBackgroundCtx (Maybe Text, Maybe Text, Bool)
+sendAlertToChannels alert pid project users alertUrl subj html (initSlackTs, initDiscordMsgId) = do
+  teamM <- ProjectMembers.getEveryoneTeam pid
+  case teamM of
+    Nothing -> do
+      Log.logAttention "sendAlertToChannels: no @everyone team for project; no dispatch" (AE.object ["project_id" AE..= pid])
+      pure (initSlackTs, initDiscordMsgId, False)
+    Just team -> do
+      let enabled ch = ProjectMembers.isChannelEnabled ch team
+      slackTs <-
+        if enabled "slack" && not (V.null team.slack_channels)
+          then foldlM (\acc cid -> (acc <|>) <$> sendSlackAlertWith acc alert pid project.title (Just cid)) initSlackTs team.slack_channels
+          else pure initSlackTs
+      discordMsgId <-
+        if enabled "discord" && not (V.null team.discord_channels)
+          then foldlM (\acc cid -> (acc <|>) <$> sendDiscordAlertWith acc alert pid project.title (Just cid)) initDiscordMsgId team.discord_channels
+          else pure initDiscordMsgId
+      when (enabled "phone" && not (V.null team.phone_numbers))
+        $ sendWhatsAppAlert alert pid project.title team.phone_numbers
+      when (enabled "email") do
+        let rendered = ET.renderEmail subj html
+        forM_ users \u -> sendRenderedEmail (CI.original u.email) subj rendered
+      when (enabled "pagerduty")
+        $ forM_ team.pagerduty_services \k -> sendPagerdutyAlertToService k alert project.title alertUrl
+      pure (slackTs, discordMsgId, True)
 
 
 trendChartUrl :: Log :> es => Config.AuthContext -> Projects.ProjectId -> Widget.Widget -> Text -> Text -> Eff es (Maybe Text)
@@ -1057,7 +1074,8 @@ runNotificationDigest _scheduledTime = do
           Log.logInfo "notification_digest_flushing"
             $ AE.object ["project_id" AE..= pid.toText, "count" AE..= length rows, "url" AE..= url]
           -- Email-only delivery today; Slack/Discord templates TBD.
-          Relude.when (V.elem Projects.NEmail project.notificationsChannel) do
+          emailEnabled <- ProjectMembers.isEveryoneChannelEnabled "email" pid
+          Relude.when emailEnabled do
             users <- Projects.usersByProjectId pid
             let html = ET.digestEmail project.title url summary (length rows)
                 rendered = ET.renderEmail subj html
@@ -1137,10 +1155,12 @@ dispatchDueErrorNotifications ctx pid now dueErrors =
   unless (null dueErrors) do
     Log.logInfo "Notifying error subscriptions" ("project_id", AE.toJSON pid.toText, "due_count", AE.toJSON (length dueErrors))
     let ctxObj = AE.object ["project_id" AE..= pid.toText, "due_count" AE..= length dueErrors]
-    Projects.projectById pid >>= flip whenJust \project ->
+    Projects.projectById pid >>= flip whenJust \project -> do
+      teamM <- ProjectMembers.getEveryoneTeam pid
+      let hasAnyChannel = maybe False ProjectMembers.teamHasAnyEnabledChannel teamM
       if
         | not project.errorAlerts -> Log.logInfo "Error alerts disabled for project — skipping" ctxObj
-        | V.null project.notificationsChannel -> Log.logAttention "Notifications skipped: no channels configured" ctxObj
+        | not hasAnyChannel -> Log.logAttention "Notifications skipped: no channels configured" ctxObj
         | otherwise -> do
             users <- Projects.usersByProjectId pid
             let alertTypeForState = \case
@@ -1164,10 +1184,10 @@ dispatchDueErrorNotifications ctx pid now dueErrors =
               allowed <- consumeNotificationToken pid now
               if allowed
                 then do
-                  (finalSlackTs, finalDiscordMsgId) <-
+                  (finalSlackTs, finalDiscordMsgId, dispatched) <-
                     sendAlertToChannels alert pid project users errorsUrl subj html (sub.slackThreadTs, sub.discordMessageId)
-                  Log.logInfo "notification_sent" (AE.object ["project_id" AE..= pid.toText, "error_id" AE..= sub.errorId, "alert_type" AE..= show @Text alertType])
-                  pure (sub.errorId, finalSlackTs, finalDiscordMsgId, True)
+                  Log.logInfo "notification_sent" (AE.object ["project_id" AE..= pid.toText, "error_id" AE..= sub.errorId, "alert_type" AE..= show @Text alertType, "dispatched" AE..= dispatched])
+                  pure (sub.errorId, finalSlackTs, finalDiscordMsgId, dispatched)
                 else do
                   enqueueDigest pid (Just sub.errorId) (Just sub.issueId) "rate_limit" sub.issueTitle
                   Log.logInfo "notification_skipped" (AE.object ["project_id" AE..= pid.toText, "error_id" AE..= sub.errorId, "reason" AE..= ("rate_limit" :: Text)])
@@ -2042,12 +2062,15 @@ sendReportForProject pid rType = do
       errQ <- Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid errorsWidget Nothing (Just stmTxt) (Just currentTimeTxt)
       let alert = ReportAlert typTxt stmTxt currentTimeTxt totalErrors totalEvents (V.fromList stats) reportUrl allQ errQ
 
-      Relude.when pr.weeklyNotif $ forM_ pr.notificationsChannel \case
-        Projects.NDiscord -> void $ sendDiscordAlert alert pid pr.title Nothing
-        Projects.NSlack -> void $ sendSlackAlert alert pid pr.title Nothing
-        Projects.NPhone -> do
-          sendWhatsAppAlert alert pid pr.title pr.whatsappNumbers
-        _ -> do
+      teamM <- ProjectMembers.getEveryoneTeam pid
+      let ifCh ch getField act = whenJust teamM \t ->
+            Relude.when (ProjectMembers.isChannelEnabled ch t && not (V.null (getField t))) (act t)
+      Relude.when pr.weeklyNotif do
+        ifCh "discord" (.discord_channels) \t -> forM_ t.discord_channels \cid -> void $ sendDiscordAlert alert pid pr.title (Just cid)
+        ifCh "slack" (.slack_channels) \t -> forM_ t.slack_channels \cid -> void $ sendSlackAlert alert pid pr.title (Just cid)
+        ifCh "phone" (.phone_numbers) \t -> sendWhatsAppAlert alert pid pr.title t.phone_numbers
+        ifCh "pagerduty" (.pagerduty_services) \t -> forM_ t.pagerduty_services \k -> sendPagerdutyAlertToService k alert pr.title (ctx.env.hostUrl <> "p/" <> pid.toText)
+        Relude.when (maybe False (ProjectMembers.isChannelEnabled "email") teamM) do
           totalRequest <- LogQueries.getLastSevenDaysTotalRequest pid
           Relude.when (totalRequest > 0) do
             patterns <- LogPatterns.getLogPatterns pid 10 0
@@ -2194,16 +2217,18 @@ processAPIChangeAnomalies pid targetHashes = do
         users <- Projects.usersByProjectId pid
         Relude.when project.endpointAlerts do
           let alert = EndpointAlert{project = project.title, endpoints = V.fromList newEndpointInfos, endpointHash = fromMaybe "" $ viaNonEmpty head $ V.toList targetHashes}
-          forM_ project.notificationsChannel \case
-            Projects.NSlack -> void $ sendSlackAlert alert pid project.title Nothing
-            Projects.NDiscord -> void $ sendDiscordAlert alert pid project.title Nothing
-            Projects.NPhone -> sendWhatsAppAlert alert pid project.title project.whatsappNumbers
-            Projects.NPagerduty -> pass
-            Projects.NEmail -> do
-              forM_ users \u -> do
-                let anomalyUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues"
-                    (subj, html) = ET.anomalyEndpointEmail u.firstName project.title anomalyUrl newEndpointInfos
-                sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
+          teamM <- ProjectMembers.getEveryoneTeam pid
+          let ifCh ch getField act = whenJust teamM \t ->
+                Relude.when (ProjectMembers.isChannelEnabled ch t && not (V.null (getField t))) (act t)
+          ifCh "slack" (.slack_channels) \t -> forM_ t.slack_channels \cid -> void $ sendSlackAlert alert pid project.title (Just cid)
+          ifCh "discord" (.discord_channels) \t -> forM_ t.discord_channels \cid -> void $ sendDiscordAlert alert pid project.title (Just cid)
+          ifCh "phone" (.phone_numbers) \t -> sendWhatsAppAlert alert pid project.title t.phone_numbers
+          ifCh "pagerduty" (.pagerduty_services) \t -> forM_ t.pagerduty_services \k -> sendPagerdutyAlertToService k alert project.title (authCtx.env.hostUrl <> "p/" <> pid.toText)
+          Relude.when (maybe False (ProjectMembers.isChannelEnabled "email") teamM) do
+            forM_ users \u -> do
+              let anomalyUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues"
+                  (subj, html) = ET.anomalyEndpointEmail u.firstName project.title anomalyUrl newEndpointInfos
+              sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
 
 
 -- | Group anomalies by endpoint hash
@@ -2923,6 +2948,22 @@ spikeZScoreThreshold = 3.0 -- 99.7% confidence interval
 spikeMinAbsoluteDelta = 50 -- avoids alerting on tiny volumes (e.g. 20→35/hr)
 
 
+-- Baseline volume floors. Rate changes below these thresholds produce almost
+-- nothing actionable (1-2 logs/min drops are typically deploys or source moves).
+-- Drops are held to a higher bar than spikes — silence is ambiguous, volume spikes
+-- are unambiguous.
+spikeMinBaselineRate, dropMinBaselineRate :: Double
+spikeMinBaselineRate = 500
+dropMinBaselineRate = 2000
+
+
+-- Persistence: an anomaly must be observed in two consecutive detection runs
+-- within this window before an issue fires. Kills single-window blips from
+-- deploys and pod restarts. 2h is long enough to absorb one missed run.
+pendingAnomalyTtlHours :: Int
+pendingAnomalyTtlHours = 2
+
+
 -- | Calculate baselines for log patterns
 -- Uses hourly counts over the last 48 hours
 calculateLogPatternBaselines :: Projects.ProjectId -> ATBackgroundCtx ()
@@ -2962,35 +3003,91 @@ detectSpikeOrDrop zThreshold minDelta mean mad currentCount
     z = (rate - mean) / effectiveMad
 
 
+-- | True if the anomaly clears the direction-specific baseline volume floor.
+aboveVolumeFloor :: Issues.SpikeResult -> Bool
+aboveVolumeFloor sr = case sr.direction of
+  Issues.Spike -> sr.mean >= spikeMinBaselineRate
+  Issues.Drop -> sr.mean >= dropMinBaselineRate
+
+
+dirText :: Issues.RateChangeDirection -> Text
+dirText Issues.Spike = "spike"
+dirText Issues.Drop = "drop"
+
+
 -- | Detect log pattern volume spikes and create issues.
 -- Projects partial-hour counts to hourly rate for sub-hourly detection.
+--
+-- Gating stack (applied in order):
+--   1. Ignore INFO/TRACE logs and patterns without an established baseline.
+--   2. Baseline volume floor (spikeMinBaselineRate / dropMinBaselineRate) —
+--      anything below is expected silence, not signal.
+--   3. Persistence gate: first detection writes a pending marker on the
+--      pattern; only a matching second detection within the TTL fires an
+--      issue. A run with no anomaly clears any stale pending marker.
+--   4. Post-ack cooldown: if the latest acked issue for the same target_hash
+--      has cooldown_until > now, skip firing (user already told us to hush).
 detectLogPatternSpikes :: Projects.ProjectId -> UTCTime -> Config.AuthContext -> ATBackgroundCtx ()
 detectLogPatternSpikes pid scheduledTime authCtx = do
   Log.logTrace "Detecting log pattern spikes" pid
   let totalSecs = truncate (utctDayTime scheduledTime) :: Int
       minutesIntoHour = max 15 $ (totalSecs `mod` 3600) `div` 60
       scaleFactor = 60.0 / fromIntegral minutesIntoHour :: Double
-  -- Re-alerting: ON CONFLICT dedup only matches open (unacknowledged) issues,
-  -- so a fresh issue is created if the prior one was acknowledged — intentional.
+      ttlSecs = fromIntegral (pendingAnomalyTtlHours * 3600) :: NominalDiffTime
+
   patternsWithRates <- LogPatterns.getPatternsWithCurrentRates pid scheduledTime
-  let anomalies = flip mapMaybe patternsWithRates \lpRate ->
+
+  -- Step 1+2: per-pattern anomaly detection with floor check.
+  let classify lpRate =
         guard (lpRate.logLevel `notElem` [Just "INFO", Just "TRACE" :: Maybe Text])
           *> case (lpRate.baselineState, lpRate.baselineMean, lpRate.baselineMad) of
-            (BSEstablished, Just mean, Just mad) ->
+            (BSEstablished, Just mean, Just mad) -> do
               let projectedCount = round (fromIntegral lpRate.currentHourCount * scaleFactor)
-               in detectSpikeOrDrop spikeZScoreThreshold spikeMinAbsoluteDelta mean mad projectedCount <&> (lpRate,)
+              sr <- detectSpikeOrDrop spikeZScoreThreshold spikeMinAbsoluteDelta mean mad projectedCount
+              guard (aboveVolumeFloor sr)
+              pure sr
             _ -> Nothing
+      detected = map (\lp -> (lp, classify lp)) patternsWithRates
 
-  issueIds <- forM anomalies \(lpRate, sr) -> do
+  -- Step 3: persistence gate. Partition into fire / pend / clear buckets.
+  let freshPending detAt = diffUTCTime scheduledTime detAt <= ttlSecs
+      matchedPending dir lp = case (lp.pendingAnomalyDirection, lp.pendingAnomalyDetectedAt) of
+        (Just pd, Just pAt) -> pd == dir && freshPending pAt
+        _ -> False
+      fires = [(lp, sr) | (lp, Just sr) <- detected, matchedPending (dirText sr.direction) lp]
+      pends = [(lp, dirText sr.direction) | (lp, Just sr) <- detected, not (matchedPending (dirText sr.direction) lp)]
+      clears = V.fromList [lp.patternId | (lp, Nothing) <- detected, isJust lp.pendingAnomalyDirection]
+
+  forM_ pends \(lp, dir) ->
+    LogPatterns.setPendingAnomaly lp.patternId dir scheduledTime
+  unless (V.null clears) $ LogPatterns.clearPendingAnomalies clears
+
+  -- Step 4: cooldown filter, then insert.
+  firesAllowed <- flip filterM fires \(lp, _) ->
+    not <$> Issues.isInCooldown pid lp.patternHash Issues.LogPatternRateChange scheduledTime
+
+  issueIds <- forM firesAllowed \(lpRate, sr) -> do
     let dir = display sr.direction
-    Log.logInfo ("Log pattern " <> dir <> " detected") (lpRate.patternId, lpRate.logPattern, sr.currentRate, sr.mean)
+    Log.logInfo ("Log pattern " <> dir <> " confirmed") (lpRate.patternId, lpRate.logPattern, sr.currentRate, sr.mean)
     issue <- Issues.createLogPatternRateChangeIssue pid lpRate sr
     Issues.insertIssue issue
-    Log.logInfo ("Created issue for log pattern " <> dir) (pid, lpRate.patternId, issue.id)
     pure issue.id
+
+  -- Clear the pending markers for anything we just fired; a new detection
+  -- will need to re-qualify through two windows again.
+  let firedPatternIds = V.fromList [lp.patternId | (lp, _) <- firesAllowed]
+  unless (V.null firedPatternIds) $ LogPatterns.clearPendingAnomalies firedPatternIds
+
   unless (null issueIds) $ liftIO $ withResource authCtx.jobsPool \conn ->
     void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.fromList issueIds)
-  Log.logTrace "Finished log pattern spike detection" ("checked" :: Text, length patternsWithRates, "anomalies" :: Text, length anomalies)
+  Log.logTrace
+    "Finished log pattern spike detection"
+    ( ("checked" :: Text, length patternsWithRates)
+    , ("pended" :: Text, length pends)
+    , ("cleared" :: Text, V.length clears)
+    , ("fires_confirmed" :: Text, length fires)
+    , ("fires_emitted" :: Text, length issueIds)
+    )
 
 
 -- | Batch-process all state='new' log patterns for a project.
@@ -3108,6 +3205,8 @@ createAndNotifyErrorIssue pid issue runtimeAlertType errorData emailFn errorPatt
         alert = RuntimeErrorAlert{issueId = issue.id.toText, issueTitle = issue.title, errorData, runtimeAlertType, chartUrl = chartUrlM, occurrenceText = Nothing, firstSeenText = firstSeenTextM}
         errorsUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> issue.id.toText
         (subj, html) = emailFn project.title errorsUrl [errorData] chartUrlM Nothing
-    (finalSlackTs, finalDiscordMsgId) <-
+    (finalSlackTs, finalDiscordMsgId, dispatched) <-
       sendAlertToChannels alert pid project users errorsUrl subj html (existSlackTs, existDiscordId)
-    void $ ErrorPatterns.updateErrorPatternThreadIdsAndNotifiedAt errorPatternId finalSlackTs finalDiscordMsgId now
+    Relude.when dispatched
+      $ void
+      $ ErrorPatterns.updateErrorPatternThreadIdsAndNotifiedAt errorPatternId finalSlackTs finalDiscordMsgId now

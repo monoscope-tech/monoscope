@@ -10,7 +10,8 @@ import Deriving.Aeson qualified as DAE
 import Effectful.Error.Static (throwError)
 import Effectful.Ki qualified as Ki
 import Effectful.Reader.Static (ask, asks)
-import Models.Apis.Integrations (DiscordData (..), getDashboardsForDiscord, getDiscordData, insertDiscordData, updateDiscordNotificationChannel)
+import Models.Apis.Integrations (DiscordData (..), getDashboardsForDiscord, getDiscordData, insertDiscordData)
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Relude hiding (ask, asks)
@@ -254,11 +255,14 @@ discordInteractionsH rawBody signatureM timestampM = do
               handleAskCommand options interaction envCfg authCtx discordData
               pure $ AE.object []
             "here" -> do
-              case (interaction.channel_id, interaction.guild_id) of
-                (Just channelId, Just guildId) -> do
-                  _ <- updateDiscordNotificationChannel guildId channelId
+              -- The guild is implicit: `discordData` was resolved from interaction.guild_id
+              -- at the top of handleInteraction, so discordData.projectId IS this guild's
+              -- project. We only need the channel the user typed /here in.
+              case interaction.channel_id of
+                Just channelId -> do
+                  void $ ProjectMembers.addDiscordChannelToEveryoneTeam discordData.projectId channelId
                   pure hereSuccessResponse
-                _ -> pure $ contentResponse "No channel ID provided"
+                Nothing -> pure $ contentResponse "No channel ID provided"
             "dashboard" -> do
               handleDashboard options interaction envCfg authCtx discordData
               pure $ AE.object []

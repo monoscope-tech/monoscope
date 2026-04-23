@@ -1,6 +1,6 @@
 module BackgroundJobs.SpikeDetectionSpec (spec) where
 
-import BackgroundJobs (detectSpikeOrDrop, spikeMinAbsoluteDelta, spikeZScoreThreshold)
+import BackgroundJobs (aboveVolumeFloor, detectSpikeOrDrop, dropMinBaselineRate, spikeMinAbsoluteDelta, spikeMinBaselineRate, spikeZScoreThreshold)
 import Models.Apis.Issues (RateChangeDirection (..), SpikeResult (..))
 import Relude
 import Test.Hspec
@@ -40,3 +40,25 @@ spec = describe "detectSpikeOrDrop" do
 
   it "no spike at just-below threshold" do
     detectSpikeOrDrop spikeZScoreThreshold spikeMinAbsoluteDelta 100 50 110 `shouldBe` Nothing -- z=0.2 < 3
+
+
+  describe "aboveVolumeFloor" do
+    let mkSpike mean = SpikeResult{currentRate = mean * 2, mean = mean, mad = 1, zScore = 10, direction = Spike}
+        mkDrop mean = SpikeResult{currentRate = 0, mean = mean, mad = 1, zScore = -10, direction = Drop}
+
+    it "rejects spikes whose baseline is below the spike floor" do
+      aboveVolumeFloor (mkSpike (spikeMinBaselineRate - 1)) `shouldBe` False
+
+    it "accepts spikes whose baseline meets the spike floor" do
+      aboveVolumeFloor (mkSpike spikeMinBaselineRate) `shouldBe` True
+
+    it "rejects drops whose baseline is below the drop floor" do
+      aboveVolumeFloor (mkDrop (dropMinBaselineRate - 1)) `shouldBe` False
+
+    it "accepts drops whose baseline meets the drop floor" do
+      aboveVolumeFloor (mkDrop dropMinBaselineRate) `shouldBe` True
+
+    it "drops held to a stricter floor than spikes" do
+      -- 1000 is plenty for a spike but too small for a drop
+      aboveVolumeFloor (mkSpike 1000) `shouldBe` True
+      aboveVolumeFloor (mkDrop 1000) `shouldBe` False

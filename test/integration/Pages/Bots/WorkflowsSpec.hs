@@ -101,7 +101,7 @@ spec = aroundAll withTestResources do
     describe "Thread/Conversation Context" do
       it "Slack: handles threaded messages" \tr -> do
         setupSlackData tr testPid "T_THREAD_WF"
-        void $ runTestBg frozenTime tr $ Slack.updateSlackNotificationChannel "T_THREAD_WF" "C_THREAD_CHANNEL"
+        void $ runTestBg frozenTime tr $ Slack.updateSlackDefaultChannel "T_THREAD_WF" "C_THREAD_CHANNEL" Nothing
 
         let threadedEventJson = slackThreadedEvent "T_THREAD_WF" "C_THREAD_CHANNEL" "follow up question" "1700000002.000" "1700000001.000"
         case AE.fromJSON threadedEventJson of

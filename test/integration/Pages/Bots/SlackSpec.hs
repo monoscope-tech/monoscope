@@ -72,7 +72,7 @@ spec = aroundAll withTestResources do
     describe "Anomaly Notifications" do
       it "captures Slack notification when anomaly occurs" \tr -> do
         setupSlackData tr testPid "T05ANOMALY1"
-        void $ runTestBg frozenTime tr $ Slack.updateSlackNotificationChannel "T05ANOMALY1" "C06ALERTSCH"
+        void $ runTestBg frozenTime tr $ Slack.updateSlackDefaultChannel "T05ANOMALY1" "C06ALERTSCH" Nothing
 
         -- Use existing infrastructure from TestUtils
         (notifs, _) <- runTestBackgroundWithNotifications frozenTime tr.trLogger tr.trATCtx pass

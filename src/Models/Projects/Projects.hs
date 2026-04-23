@@ -14,7 +14,6 @@ module Models.Projects.Projects (
   Project' (..),
   ProjectId,
   CreateProject (..),
-  NotificationChannel (..),
   OnboardingStep (..),
   ProjectS3Bucket (..),
   insertProject,
@@ -42,8 +41,6 @@ module Models.Projects.Projects (
   updateProjectReportNotif,
   ProjectCache (..),
   defaultProjectCache,
-  updateNotificationsChannel,
-  enableNotificationChannel,
   updateUsageLastReported,
   updateProjectS3Bucket,
   QueryLibItemId,
@@ -222,21 +219,6 @@ projectIdFromText :: Text -> Maybe ProjectId
 projectIdFromText = idFromText
 
 
-data NotificationChannel
-  = NEmail
-  | NSlack
-  | NDiscord
-  | NPhone
-  | NPagerduty
-  deriving stock (Eq, Generic, Read, Show)
-  deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC "N" NotificationChannel
-
-
-instance HasField "toText" NotificationChannel Text where
-  getField nc = case AE.toJSON nc of
-    AE.String t -> t
-    _ -> error "NotificationChannel should serialize to String"
 
 
 data OnboardingStep = Info | Survey | CreateMonitor | NotifChannel | Integration | Pricing | Complete
@@ -259,17 +241,12 @@ data Project = Project
   , dailyNotif :: Bool
   , weeklyNotif :: Bool
   , timeZone :: Text
-  , notificationsChannel :: V.Vector NotificationChannel
   , subId :: Maybe Text
   , firstSubItemId :: Maybe Text
   , orderId :: Maybe Text
   , usageLastReported :: UTCTime
-  , discordUrl :: Maybe Text
   , billingDay :: Maybe UTCTime
   , onboardingStepsCompleted :: V.Vector Text
-  , notifyPhoneNumber :: Maybe Text
-  , notifyEmails :: V.Vector Text
-  , whatsappNumbers :: V.Vector Text
   , s3Bucket :: Maybe ProjectS3Bucket
   , endpointAlerts :: Bool
   , errorAlerts :: Bool
@@ -301,17 +278,12 @@ data Project' = Project'
   , dailyNotif :: Bool
   , weeklyNotif :: Bool
   , timeZone :: Text
-  , notificationsChannel :: V.Vector NotificationChannel
   , subId :: Maybe Text
   , firstSubItemId :: Maybe Text
   , orderId :: Maybe Text
   , usageLastReported :: UTCTime
-  , discordUrl :: Maybe Text
   , billingDay :: Maybe UTCTime
   , onboardingStepsCompleted :: V.Vector Text
-  , notifyPhoneNumber :: Maybe Text
-  , notifyEmails :: V.Vector Text
-  , whatsappNumbers :: V.Vector Text
   , s3Bucket :: Maybe ProjectS3Bucket
   , endpointAlerts :: Bool
   , errorAlerts :: Bool
@@ -453,7 +425,13 @@ updateSubItemIdBySubId newItemId subId =
 
 
 getProjectByPhoneNumber :: DB es => Text -> Eff es (Maybe Project)
-getProjectByPhoneNumber number = EHasql.interpOne [HI.sql| select p.* from projects.projects p where #{number}=Any(p.whatsapp_numbers) |]
+getProjectByPhoneNumber number =
+  EHasql.interpOne
+    [HI.sql| SELECT p.* FROM projects.projects p
+             JOIN projects.teams t ON t.project_id = p.id
+             WHERE t.is_everyone = TRUE AND t.deleted_at IS NULL
+               AND #{number} = ANY(t.phone_numbers)
+             LIMIT 1 |]
 
 
 activeProjects :: DB es => Eff es [Project]
@@ -574,23 +552,6 @@ deleteProject :: (DB es, Time :> es) => ProjectId -> Eff es Int64
 deleteProject pid = do
   now <- currentTime
   EHasql.interpExecute [HI.sql| UPDATE projects.projects SET deleted_at=#{now}, active=False where id=#{pid};|]
-
-
-updateNotificationsChannel :: DB es => ProjectId -> [Text] -> [Text] -> [Text] -> Eff es Int64
-updateNotificationsChannel pid channels phones emails = do
-  let list = V.fromList channels
-      vPhones = V.fromList phones
-      vEmails = V.fromList emails
-  EHasql.interpExecute [HI.sql| UPDATE projects.projects SET notifications_channel=#{list}::notification_channel_enum[], whatsapp_numbers=#{vPhones}, notify_emails=#{vEmails} WHERE id=#{pid};|]
-
-
--- | Idempotently append a channel (e.g. NSlack) to projects.notifications_channel.
-enableNotificationChannel :: DB es => ProjectId -> NotificationChannel -> Eff es Int64
-enableNotificationChannel pid ch =
-  EHasql.interpExecute
-    [HI.sql| UPDATE projects.projects
-            SET notifications_channel = notifications_channel || ARRAY[#{ch}::notification_channel_enum]
-            WHERE id = #{pid} AND NOT (#{ch}::notification_channel_enum = ANY(notifications_channel)); |]
 
 
 updateUsageLastReported :: DB es => ProjectId -> ZonedTime -> Eff es Int64

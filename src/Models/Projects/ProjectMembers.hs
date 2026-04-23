@@ -30,7 +30,17 @@ module Models.Projects.ProjectMembers (
   TeamMemberVM (..),
   teamToDetails,
   addSlackChannelToEveryoneTeam,
+  addDiscordChannelToEveryoneTeam,
+  addPagerdutyServiceToEveryoneTeam,
   removeSlackChannelsFromEveryoneTeam,
+  removeDiscordChannelsFromEveryoneTeam,
+  removePagerdutyServicesFromEveryoneTeam,
+  setEveryoneTeamEmails,
+  setEveryoneTeamPhones,
+  setEveryoneTeamDisabledChannels,
+  isChannelEnabled,
+  isEveryoneChannelEnabled,
+  teamHasAnyEnabledChannel,
   resolveTeamEmails,
 ) where
 
@@ -38,8 +48,9 @@ import Data.Aeson qualified as AE
 import Data.CaseInsensitive (CI)
 import Data.CaseInsensitive qualified as CI
 import Data.Effectful.Hasql qualified as Hasql
+import Effectful.Log (Log)
+import System.Logging qualified as Log
 import Data.OpenApi (ToSchema)
-import Data.Set qualified as S
 import Data.Text.Display (Display)
 import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
@@ -227,18 +238,19 @@ data TeamDetails = TeamDetails
   , discordChannels :: V.Vector Text
   , phoneNumbers :: V.Vector Text
   , pagerdutyServices :: V.Vector Text
+  , disabledChannels :: V.Vector Text
   }
   deriving stock (Eq, Generic, Show)
 
 
 createTeam :: DB es => Projects.ProjectId -> Maybe Projects.UserId -> TeamDetails -> Eff es (Maybe UUID.UUID)
-createTeam pid uidM TeamDetails{name, description, handle, members, notifyEmails, slackChannels, discordChannels, phoneNumbers, pagerdutyServices}
+createTeam pid uidM TeamDetails{name, description, handle, members, notifyEmails, slackChannels, discordChannels, phoneNumbers, pagerdutyServices, disabledChannels}
   | handle == "everyone" = pure Nothing -- Prevent creating team with reserved handle
   | otherwise =
       Hasql.interpOne
         [HI.sql| INSERT INTO projects.teams
-               (project_id, created_by, name, description, handle, members, notify_emails, slack_channels, discord_channels, phone_numbers, pagerduty_services)
-               VALUES (#{pid}, #{uidM}, #{name}, #{description}, #{handle}, #{members}::uuid[], #{notifyEmails}, #{slackChannels}, #{discordChannels}, #{phoneNumbers}, #{pagerdutyServices})
+               (project_id, created_by, name, description, handle, members, notify_emails, slack_channels, discord_channels, phone_numbers, pagerduty_services, disabled_channels)
+               VALUES (#{pid}, #{uidM}, #{name}, #{description}, #{handle}, #{members}::uuid[], #{notifyEmails}, #{slackChannels}, #{discordChannels}, #{phoneNumbers}, #{pagerdutyServices}, #{disabledChannels})
                ON CONFLICT (project_id, handle) DO NOTHING
                RETURNING id |]
 
@@ -247,9 +259,9 @@ createEveryoneTeam :: DB es => Projects.ProjectId -> Projects.UserId -> Eff es I
 createEveryoneTeam pid uid =
   Hasql.interpExecute
     [HI.sql| INSERT INTO projects.teams
-           (project_id, created_by, name, description, handle, is_everyone, members, notify_emails, slack_channels, discord_channels, phone_numbers, pagerduty_services)
+           (project_id, created_by, name, description, handle, is_everyone, members, notify_emails, slack_channels, discord_channels, phone_numbers, pagerduty_services, disabled_channels)
            VALUES (#{pid}, #{uid}, 'Everyone', 'All project members and configured integrations', 'everyone', TRUE,
-                   '{}'::uuid[], '{}'::text[], '{}'::text[], '{}'::text[], '{}'::text[], '{}'::text[])
+                   '{}'::uuid[], '{}'::text[], '{}'::text[], '{}'::text[], '{}'::text[], '{}'::text[], '{}'::text[])
            ON CONFLICT (project_id, handle) DO NOTHING |]
 
 
@@ -260,10 +272,10 @@ getEveryoneTeam pid =
 
 
 updateTeam :: DB es => Projects.ProjectId -> UUID.UUID -> TeamDetails -> Eff es Int64
-updateTeam pid tid TeamDetails{name, description, handle, members, notifyEmails, slackChannels, discordChannels, phoneNumbers, pagerdutyServices} =
+updateTeam pid tid TeamDetails{name, description, handle, members, notifyEmails, slackChannels, discordChannels, phoneNumbers, pagerdutyServices, disabledChannels} =
   Hasql.interpExecute
     [HI.sql| UPDATE projects.teams
-           SET name = #{name}, description = #{description}, handle = #{handle}, members = #{members}::uuid[], notify_emails = #{notifyEmails}, slack_channels = #{slackChannels}, discord_channels = #{discordChannels}, phone_numbers = #{phoneNumbers}, pagerduty_services = #{pagerdutyServices}
+           SET name = #{name}, description = #{description}, handle = #{handle}, members = #{members}::uuid[], notify_emails = #{notifyEmails}, slack_channels = #{slackChannels}, discord_channels = #{discordChannels}, phone_numbers = #{phoneNumbers}, pagerduty_services = #{pagerdutyServices}, disabled_channels = #{disabledChannels}
            WHERE project_id = #{pid} AND id = #{tid} |]
 
 
@@ -281,6 +293,7 @@ data Team = Team
   , discord_channels :: V.Vector Text
   , phone_numbers :: V.Vector Text
   , pagerduty_services :: V.Vector Text
+  , disabled_channels :: V.Vector Text
   , is_everyone :: Bool
   }
   deriving stock (Eq, Generic, Show)
@@ -311,6 +324,7 @@ getTeamsVM pid =
         t.discord_channels,
         t.phone_numbers,
         t.pagerduty_services,
+        t.disabled_channels,
         t.is_everyone,
         COALESCE(
           array_agg(
@@ -328,7 +342,7 @@ getTeamsVM pid =
       LEFT JOIN users.users u ON u.id = mid
       WHERE t.project_id = #{pid} AND t.deleted_at IS NULL
       GROUP BY t.id, t.created_at, t.updated_at, t.created_by, t.name, t.handle,
-               t.description, t.notify_emails, t.slack_channels, t.discord_channels, t.phone_numbers, t.pagerduty_services, t.is_everyone
+               t.description, t.notify_emails, t.slack_channels, t.discord_channels, t.phone_numbers, t.pagerduty_services, t.disabled_channels, t.is_everyone
       ORDER BY t.is_everyone DESC, t.created_at ASC
     |]
 
@@ -346,6 +360,7 @@ data TeamVM = TeamVM
   , discord_channels :: V.Vector Text
   , phone_numbers :: V.Vector Text
   , pagerduty_services :: V.Vector Text
+  , disabled_channels :: V.Vector Text
   , is_everyone :: Bool
   , members :: V.Vector TeamMemberVM
   }
@@ -413,6 +428,7 @@ getTeamsByHandles pid handles =
         t.discord_channels,
         t.phone_numbers,
         t.pagerduty_services,
+        t.disabled_channels,
         t.is_everyone,
         COALESCE(
           array_agg(
@@ -430,39 +446,60 @@ getTeamsByHandles pid handles =
       LEFT JOIN users.users u ON u.id = mid
       WHERE t.project_id = #{pid} AND t.handle = ANY(#{handlesVec}) AND t.deleted_at IS NULL
       GROUP BY t.id, t.created_at, t.updated_at, t.created_by, t.name, t.handle,
-               t.description, t.notify_emails, t.slack_channels, t.discord_channels, t.phone_numbers, t.pagerduty_services, t.is_everyone
+               t.description, t.notify_emails, t.slack_channels, t.discord_channels, t.phone_numbers, t.pagerduty_services, t.disabled_channels, t.is_everyone
     |]
 
 
 -- | Convert Team to TeamDetails for updates
 teamToDetails :: Team -> TeamDetails
-teamToDetails t = TeamDetails{name = t.name, description = t.description, handle = t.handle, members = t.members, notifyEmails = t.notify_emails, slackChannels = t.slack_channels, discordChannels = t.discord_channels, phoneNumbers = t.phone_numbers, pagerdutyServices = t.pagerduty_services}
+teamToDetails t = TeamDetails{name = t.name, description = t.description, handle = t.handle, members = t.members, notifyEmails = t.notify_emails, slackChannels = t.slack_channels, discordChannels = t.discord_channels, phoneNumbers = t.phone_numbers, pagerdutyServices = t.pagerduty_services, disabledChannels = t.disabled_channels}
 
 
--- | Generic function to add a unique channel to @everyone team
--- Returns True if channel was added, False if it already existed
-addChannelToEveryoneTeam
-  :: DB es
-  => (Team -> V.Vector Text)
-  -> (TeamDetails -> V.Vector Text -> TeamDetails)
-  -> Projects.ProjectId
-  -> Text
-  -> Eff es Bool
-addChannelToEveryoneTeam getChannels updateChannels pid channelId = do
-  everyoneTeamM <- getEveryoneTeam pid
-  maybe (pure False) addIfNotExists everyoneTeamM
-  where
-    addIfNotExists team = do
-      let channelExists = S.member channelId $ S.fromList $ V.toList $ getChannels team
-      if channelExists
-        then pure False
-        else void (updateTeam pid team.id $ updateChannels (teamToDetails team) (V.snoc (getChannels team) channelId)) $> True
+-- | Run a TeamDetails update against the @everyone team. When the team is
+-- missing we log attention rather than silently no-opping — callers of the
+-- dependents (disconnect handlers, onboarding, integrations save) assume the
+-- write succeeded and surface a success toast; silence here hides real bugs.
+modifyEveryoneTeamDetails :: (DB es, Log :> es) => Projects.ProjectId -> (TeamDetails -> TeamDetails) -> Eff es ()
+modifyEveryoneTeamDetails pid f =
+  getEveryoneTeam pid >>= \case
+    Nothing -> Log.logAttention "modifyEveryoneTeamDetails: no @everyone team; write ignored" (AE.object ["project_id" AE..= pid])
+    Just team -> void $ updateTeam pid team.id $ f (teamToDetails team)
 
 
--- | Add unique Slack channel to @everyone team's channel list
--- Returns True if channel was added, False if it already existed
-addSlackChannelToEveryoneTeam :: DB es => Projects.ProjectId -> Text -> Eff es Bool
-addSlackChannelToEveryoneTeam = addChannelToEveryoneTeam (.slack_channels) \d cs -> d{slackChannels = cs}
+-- | Race-free idempotent append to one of @everyone's text[] fields. Returns True
+-- if the value was actually added, False if it was already present (or there was
+-- no team). Single UPDATE, no read-modify-write window.
+addSlackChannelToEveryoneTeam, addDiscordChannelToEveryoneTeam, addPagerdutyServiceToEveryoneTeam
+  :: DB es => Projects.ProjectId -> Text -> Eff es Bool
+addSlackChannelToEveryoneTeam pid val =
+  (> 0) <$> Hasql.interpExecute [HI.sql|
+    UPDATE projects.teams SET slack_channels = array_append(slack_channels, #{val})
+    WHERE project_id = #{pid} AND is_everyone = TRUE AND deleted_at IS NULL
+      AND NOT (#{val} = ANY(slack_channels))|]
+addDiscordChannelToEveryoneTeam pid val =
+  (> 0) <$> Hasql.interpExecute [HI.sql|
+    UPDATE projects.teams SET discord_channels = array_append(discord_channels, #{val})
+    WHERE project_id = #{pid} AND is_everyone = TRUE AND deleted_at IS NULL
+      AND NOT (#{val} = ANY(discord_channels))|]
+addPagerdutyServiceToEveryoneTeam pid val =
+  (> 0) <$> Hasql.interpExecute [HI.sql|
+    UPDATE projects.teams SET pagerduty_services = array_append(pagerduty_services, #{val})
+    WHERE project_id = #{pid} AND is_everyone = TRUE AND deleted_at IS NULL
+      AND NOT (#{val} = ANY(pagerduty_services))|]
+
+
+removeSlackChannelsFromEveryoneTeam, removeDiscordChannelsFromEveryoneTeam, removePagerdutyServicesFromEveryoneTeam
+  :: (DB es, Log :> es) => Projects.ProjectId -> Eff es ()
+removeSlackChannelsFromEveryoneTeam pid = modifyEveryoneTeamDetails pid \d -> d{slackChannels = mempty}
+removeDiscordChannelsFromEveryoneTeam pid = modifyEveryoneTeamDetails pid \d -> d{discordChannels = mempty}
+removePagerdutyServicesFromEveryoneTeam pid = modifyEveryoneTeamDetails pid \d -> d{pagerdutyServices = mempty}
+
+
+setEveryoneTeamEmails, setEveryoneTeamPhones, setEveryoneTeamDisabledChannels
+  :: (DB es, Log :> es) => Projects.ProjectId -> V.Vector Text -> Eff es ()
+setEveryoneTeamEmails pid v = modifyEveryoneTeamDetails pid \d -> d{notifyEmails = v}
+setEveryoneTeamPhones pid v = modifyEveryoneTeamDetails pid \d -> d{phoneNumbers = v}
+setEveryoneTeamDisabledChannels pid v = modifyEveryoneTeamDetails pid \d -> d{disabledChannels = v}
 
 
 resolveTeamEmails :: DB es => Projects.ProjectId -> Team -> Eff es [CI Text]
@@ -474,10 +511,28 @@ resolveTeamEmails projectId team =
     else pure $ V.toList $ fmap CI.mk team.notify_emails
 
 
--- | Remove all Slack channels from @everyone team
-removeSlackChannelsFromEveryoneTeam :: DB es => Projects.ProjectId -> Eff es ()
-removeSlackChannelsFromEveryoneTeam pid = do
-  everyoneTeamM <- getEveryoneTeam pid
-  traverse_ clearChannels everyoneTeamM
+-- | A channel type ("slack" | "discord" | "email" | "phone" | "pagerduty") is
+-- enabled for a team iff it's not listed in disabled_channels. Absence of
+-- targets on the team is a separate question — this only answers "has the
+-- user muted this channel type?"
+isChannelEnabled :: Text -> Team -> Bool
+isChannelEnabled ch t = not $ V.elem ch t.disabled_channels
+
+
+-- | Fetch @everyone and ask whether a channel type is enabled there. Defaults to False
+-- when the team doesn't exist — the caller is about to dispatch, and silently dispatching
+-- with no team would route nowhere.
+isEveryoneChannelEnabled :: DB es => Text -> Projects.ProjectId -> Eff es Bool
+isEveryoneChannelEnabled ch pid = maybe False (isChannelEnabled ch) <$> getEveryoneTeam pid
+
+
+-- | True iff at least one channel could deliver. Email is special — project
+-- members are always addressable, so "email enabled" is sufficient regardless
+-- of notify_emails (extra addresses on top of members). The other channels
+-- need a non-empty target list since they have no implicit recipients.
+teamHasAnyEnabledChannel :: Team -> Bool
+teamHasAnyEnabledChannel t =
+  any populatedAndEnabled [("slack" :: Text, t.slack_channels), ("discord", t.discord_channels), ("phone", t.phone_numbers), ("pagerduty", t.pagerduty_services)]
+    || isChannelEnabled "email" t
   where
-    clearChannels team = void $ updateTeam pid team.id (teamToDetails team){slackChannels = V.empty}
+    populatedAndEnabled (ch, xs) = not (V.null xs) && isChannelEnabled ch t

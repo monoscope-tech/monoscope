@@ -116,7 +116,7 @@ getOpenAIModel tr = tr.trATCtx.env.openaiModel
 
 
 setupSlackData :: TestResources -> Projects.ProjectId -> Text -> IO ()
-setupSlackData tr pid teamId = void $ runTestBg frozenTime tr $ Slack.insertAccessToken pid ("https://hooks.slack.com/test/" <> teamId) teamId "C_NOTIF_CHANNEL" ("Test Workspace " <> teamId) "x-bot-token" "test-channel"
+setupSlackData tr pid teamId = void $ runTestBg frozenTime tr $ Slack.insertAccessToken pid teamId "C_NOTIF_CHANNEL" ("Test Workspace " <> teamId) "x-bot-token" "test-channel"
 
 
 setupDiscordData :: TestResources -> Projects.ProjectId -> Text -> IO ()
@@ -128,7 +128,11 @@ setupDiscordData tr pid guildId = void
 setupWhatsappNumber :: TestResources -> Projects.ProjectId -> Text -> IO ()
 setupWhatsappNumber tr pid phoneNumber = void
   $ withResource tr.trPool \conn ->
-    PGS.execute conn [sql|UPDATE projects.projects SET whatsapp_numbers = ARRAY[?] WHERE id = ?|] (phoneNumber, pid)
+    PGS.execute
+      conn
+      [sql|UPDATE projects.teams SET phone_numbers = ARRAY[?]
+           WHERE project_id = ? AND is_everyone = TRUE AND deleted_at IS NULL|]
+      (phoneNumber, pid)
 
 
 -- * Golden File Helpers

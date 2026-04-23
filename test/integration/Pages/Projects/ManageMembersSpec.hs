@@ -20,7 +20,7 @@ import Test.Hspec
 
 
 -- | Extract the members vector from a ManageMembersPost response, failing otherwise.
-postMembers :: HasCallStack => ManageMembers.ManageMembers -> IO (V.Vector ProjectMembers.ProjectMemberWithStatusVM)
+postMembers :: ManageMembers.ManageMembers -> IO (V.Vector ProjectMembers.ProjectMemberWithStatusVM)
 postMembers (ManageMembers.ManageMembersPost (_, ms, _, _)) = pure ms
 postMembers _ = fail "Expected ManageMembersPost response"
 

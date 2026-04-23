@@ -20,9 +20,10 @@ import Effectful (
 import Effectful.Log (Log)
 import Effectful.Reader.Static (Reader, ask)
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
-import Models.Apis.Integrations (DiscordData (..), SlackData (..), getDiscordDataByProjectId, getProjectSlackData)
+import Models.Apis.Integrations (SlackData (..), getProjectSlackData)
 import Models.Apis.Issues (IssueType (..), parseIssueType)
 import Models.Apis.LogQueries qualified as LogQueries
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
 import Pkg.EmailTemplates (EndpointAlertRow (..), groupedByContext)
@@ -112,7 +113,13 @@ sendDiscordAlert = sendDiscordAlertWith Nothing
 sendDiscordAlertWith :: (DB es, Log :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => Maybe Text -> NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es (Maybe Text)
 sendDiscordAlertWith replyToMsgIdM alert pid pTitle channelIdM' = do
   appCtx <- ask @Config.AuthContext
-  channelIdM <- maybe (getDiscordDataByProjectId pid <&> (>>= (.notifsChannelId))) (pure . Just) channelIdM'
+  -- When no explicit channel is supplied, fall back to the first entry of
+  -- @everyone.discord_channels (insertion order; see addDiscordChannelToEveryoneTeam).
+  channelIdM <- case channelIdM' of
+    Just c -> pure (Just c)
+    Nothing -> do
+      teamM <- ProjectMembers.getEveryoneTeam pid
+      pure $ teamM >>= viaNonEmpty head . V.toList . (.discord_channels)
   case channelIdM of
     Nothing -> do
       Log.logAttention "Discord alert skipped: no channel configured" (AE.object ["project_id" AE..= pid])
@@ -139,14 +146,17 @@ sendSlackAlert :: (DB es, Log :> es, Notify.Notify :> es, Reader Config.AuthCont
 sendSlackAlert = sendSlackAlertWith Nothing
 
 
--- | Internal: send Slack alert with optional thread-ts for threading
+-- | Internal: send Slack alert with optional thread-ts for threading.
+-- Routing source is the explicit @channelM@ argument — which callers resolve from
+-- @everyone.slack_channels@. We do NOT fall back to apis.slack.channel_id: that
+-- column is OAuth-time display metadata, not a routing source. A caller that
+-- forgets to supply a channel should surface as "no routing" and get logged.
 sendSlackAlertWith :: (DB es, Log :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => Maybe Text -> NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es (Maybe Text)
 sendSlackAlertWith threadTsM alert pid pTitle channelM = do
   appCtx <- ask @Config.AuthContext
   slackData <- getProjectSlackData pid
-  let channelIdM = channelM <|> fmap (.channelId) slackData
-      botTokenM = (.botToken) <$> slackData
-  case (channelIdM, botTokenM) of
+  let botTokenM = (.botToken) <$> slackData
+  case (channelM, botTokenM) of
     (Just cid, Just bt) -> do
       let projectUrl = appCtx.env.hostUrl <> "p/" <> pid.toText
           mkPayload = \case
@@ -162,7 +172,7 @@ sendSlackAlertWith threadTsM alert pid pTitle channelM = do
         Nothing -> pure Nothing
         Just payload -> Notify.sendNotificationWithReply $ Notify.slackThreadedNotification cid bt payload threadTsM
     _ -> do
-      Log.logAttention "Slack alert skipped: missing channel or bot token" (AE.object ["project_id" AE..= pid, "has_channel" AE..= isJust channelIdM, "has_token" AE..= isJust botTokenM])
+      Log.logAttention "Slack alert skipped: missing channel or bot token" (AE.object ["project_id" AE..= pid, "has_channel" AE..= isJust channelM, "has_token" AE..= isJust botTokenM])
       pure Nothing
 
 

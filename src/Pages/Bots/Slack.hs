@@ -7,6 +7,7 @@ import Control.Lens ((.~), (^.))
 import Data.Aeson (withObject)
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as KEM
+import Data.Aeson.KeyMap qualified as AEKM
 
 import Data.Aeson.Types (parseMaybe)
 import Data.Default (Default (def))
@@ -23,13 +24,13 @@ import Data.Text qualified as T
 
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
-import Effectful (Eff, type (:>))
+import Effectful (Eff, IOE, type (:>))
 import Effectful.Concurrent (forkIO)
 import Effectful.Error.Static (throwError)
 import Effectful.Log qualified as Log
 import Effectful.Reader.Static (ask, asks)
 import Effectful.Time qualified as Time
-import Models.Apis.Integrations (SlackData (..), getDashboardsForSlack, getProjectSlackData, getSlackDataByTeamId, insertAccessToken, updateSlackNotificationChannel)
+import Models.Apis.Integrations (SlackData (..), getDashboardsForSlack, getProjectSlackData, getSlackDataByTeamId, insertAccessToken, updateSlackDefaultChannel)
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.ProjectMembers qualified as ProjectMembers
@@ -49,7 +50,8 @@ import Servant.API.ResponseHeaders (Headers, addHeader)
 import Servant.Server (ServerError (errBody), err400)
 import System.Config (AuthContext (env, pool), EnvConfig (..))
 import System.Types (ATBaseCtx, DB)
-import UnliftIO.Exception (tryAny)
+import Control.Exception (ErrorCall (..))
+import UnliftIO.Exception (throwIO, tryAny)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -148,8 +150,7 @@ linkProjectGetH slack_code stateM = do
       project <- Projects.projectById pid
       case (token, project) of
         (Just token', Just project') -> do
-          void $ insertAccessToken pid token'.incomingWebhook.url token'.team.id token'.incomingWebhook.channelId token'.team.name token'.accessToken token'.incomingWebhook.channel
-          void $ Projects.enableNotificationChannel pid Projects.NSlack
+          void $ insertAccessToken pid token'.team.id token'.incomingWebhook.channelId token'.team.name token'.accessToken token'.incomingWebhook.channel
           void $ liftIO $ withResource pool $ \conn -> createJob conn "background_jobs" $ BgJobs.SlackNotification pid ("Monoscope Bot has been linked to your project: " <> project'.title)
           wasAdded <- ProjectMembers.addSlackChannelToEveryoneTeam pid token'.incomingWebhook.channelId
           when wasAdded do
@@ -207,8 +208,9 @@ slackInteractionsH interaction = do
 
     runMonoscopeHere :: SlackInteraction -> SlackData -> ATBaseCtx AE.Value
     runMonoscopeHere inter slackData = do
-      _ <- updateSlackNotificationChannel inter.team_id inter.channel_id
-      void $ Projects.enableNotificationChannel slackData.projectId Projects.NSlack
+      -- Refresh apis.slack's display cache for the "default" channel and
+      -- ensure the team routes alerts there.
+      _ <- updateSlackDefaultChannel inter.team_id inter.channel_id Nothing
       wasAdded <- ProjectMembers.addSlackChannelToEveryoneTeam slackData.projectId inter.channel_id
       when wasAdded do
         projectM <- Projects.projectById slackData.projectId
@@ -573,7 +575,29 @@ sendSlackChatMessage token content = do
   pass
 
 
-sendSlackWelcomeMessage :: HTTP :> es => Text -> Text -> Text -> Eff es ()
+-- | Slack chat.postMessage returns HTTP 200 even on semantic failures
+-- (not_in_channel, channel_not_found, is_archived, …), with the real status in
+-- the JSON body. This variant parses @ok@/@error@ and throws a plain
+-- 'Exception' on semantic failure so callers using 'tryAny' (e.g. the
+-- integrations save handler) can distinguish reachable from unreachable
+-- channels.
+sendSlackChatMessageChecked :: (HTTP :> es, IOE :> es) => Text -> AE.Value -> Eff es ()
+sendSlackChatMessageChecked token content = do
+  let url = "https://slack.com/api/chat.postMessage"
+  let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bearer " <> token]
+  rs <- postWith opts (toString url) content
+  let body = rs ^. Wreq.responseBody
+  case AE.decode body of
+    Just (AE.Object o) | Just (AE.Bool True) <- AEKM.lookup "ok" o -> pass
+    Just (AE.Object o) ->
+      let errTxt = case AEKM.lookup "error" o of
+            Just (AE.String e) -> e
+            _ -> "unknown_slack_error"
+       in liftIO $ throwIO $ ErrorCall $ "slack chat.postMessage failed: " <> toString errTxt
+    _ -> liftIO $ throwIO $ ErrorCall "slack chat.postMessage returned unparseable body"
+
+
+sendSlackWelcomeMessage :: (HTTP :> es, IOE :> es) => Text -> Text -> Text -> Eff es ()
 sendSlackWelcomeMessage token channelId projectTitle = do
   let message =
         AE.object
@@ -595,7 +619,7 @@ This channel will now receive notifications for *{projectTitle}*.|]
                     ]
                 )
           ]
-  sendSlackChatMessage token message
+  sendSlackChatMessageChecked token message
 
 
 data UrlVerificationData = UrlVerificationData

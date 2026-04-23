@@ -42,6 +42,7 @@ import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Apis.Integrations (getDiscordDataByProjectId, getProjectSlackData)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
@@ -87,8 +88,9 @@ onboardingGetH pid onboardingStepM = do
     "NotifChannel" -> do
       slack <- getProjectSlackData pid
       discord <- getDiscordDataByProjectId pid
-      let phone = fromMaybe "" project.notifyPhoneNumber
-          emails = project.notifyEmails
+      everyoneTeamM <- ProjectMembers.getEveryoneTeam pid
+      let phone = fromMaybe "" $ everyoneTeamM >>= viaNonEmpty head . V.toList . (.phone_numbers)
+          emails = maybe mempty (.notify_emails) everyoneTeamM
           hasDiscord = isJust discord
           hasSlack = isJust slack
           slackRedirectUri = appCtx.env.slackRedirectUri
@@ -278,16 +280,14 @@ phoneEmailPostH pid form = do
   let envCfg = appCtx.config
       phone = form.phoneNumber
       emails = form.emails
-      notifs = if phone /= "" then map (.toText) (V.toList project.notificationsChannel) <> ["phone"] else map (.toText) (V.toList project.notificationsChannel)
-      notifs' = if emails /= [] then notifs <> ["email"] else notifs
-      notifsTxt = ordNub notifs'
       stepsCompleted = project.onboardingStepsCompleted
       newCompleted = insertIfNotExist "NotifChannel" stepsCompleted
-      notifsVec = V.fromList notifsTxt
       emailsVec = V.fromList emails
   projectMembers <- Projects.usersByProjectId pid
   let emails' = (\u -> CI.original u.email) <$> projectMembers
-  _ <- Hasql.interpExecute [HI.sql| update projects.projects set notifications_channel=#{notifsVec}::notification_channel_enum[], notify_phone_number=#{phone}, notify_emails=#{emailsVec}::text[],onboarding_steps_completed=#{newCompleted} where id=#{pid} |]
+  _ <- Hasql.interpExecute [HI.sql| update projects.projects set onboarding_steps_completed=#{newCompleted} where id=#{pid} |]
+  ProjectMembers.setEveryoneTeamEmails pid emailsVec
+  when (phone /= "") $ ProjectMembers.setEveryoneTeamPhones pid (V.fromList [phone])
   addRespHeaders $ OnboardingPhoneEmailsPost pid (V.fromList $ ordNub $ emails <> emails') envCfg.enableFreetier
 
 

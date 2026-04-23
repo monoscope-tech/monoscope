@@ -616,13 +616,13 @@ toProjectSummary p =
     }
 
 
-toProjectFull :: Projects.Project -> ProjectFull
-toProjectFull p =
+toProjectFull :: Projects.Project -> [Text] -> ProjectFull
+toProjectFull p emails =
   ProjectFull
     { summary = toProjectSummary p
     , dailyNotif = p.dailyNotif
     , weeklyNotif = p.weeklyNotif
-    , notifyEmails = V.toList p.notifyEmails
+    , notifyEmails = emails
     , endpointAlerts = p.endpointAlerts
     , errorAlerts = p.errorAlerts
     }
@@ -635,8 +635,10 @@ apiMe pid = do
 
 
 apiProjectGet :: Projects.ProjectId -> ATBaseCtx ProjectFull
-apiProjectGet pid =
-  toProjectFull <$> (notFoundOr "Project not found" =<< Projects.projectById pid)
+apiProjectGet pid = do
+  p <- notFoundOr "Project not found" =<< Projects.projectById pid
+  emails <- maybe [] (V.toList . (.notify_emails)) <$> PM.getEveryoneTeam pid
+  pure $ toProjectFull p emails
 
 
 -- | Partial update: only provided fields change. 0 rows affected ⇒ 404.
@@ -918,6 +920,7 @@ teamDetailsFromInput inp =
     , discordChannels = vml inp.discordChannels
     , phoneNumbers = vml inp.phoneNumbers
     , pagerdutyServices = vml inp.pagerdutyServices
+    , disabledChannels = V.empty
     }
   where
     vml :: Maybe [a] -> V.Vector a

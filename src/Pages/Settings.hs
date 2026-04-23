@@ -71,7 +71,6 @@ import Fmt (commaizeF, fmt)
 import Lucid
 import Lucid.Htmx (hxConfirm_, hxDelete_, hxGet_, hxIndicator_, hxPatch_, hxPost_, hxSwap_, hxTarget_)
 import Lucid.Hyperscript (__)
-import Models.Apis.Integrations (DiscordData (..), PagerdutyData (..), SlackData (..), getDiscordDataByProjectId, getPagerdutyByProjectId, getProjectSlackData)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers (Team (..), getTeamsById, resolveTeamEmails)
 import Models.Projects.ProjectMembers qualified as ProjectMembers
@@ -486,34 +485,48 @@ notificationsTestPostH pid TestForm{..} = do
         _ -> ET.anomalyEndpointEmail "Test User" project.title (fullProjectUrl <> "/issues") [ET.EndpointAlertRow "GET /api/v1/test" (Just "api.example.com") (Just "api-service") (Just "production")]
       sendTestEmail email = let (subj, html) = testTemplate; subj' = "[Test] " <> subj in sendRenderedEmail email subj' (ET.renderEmail subj' html)
 
+  -- The @everyone team is the single source of truth for project notification settings,
+  -- so tests always resolve against a team — the provided one, or @everyone when omitted.
   let resolveEmails t = map CI.original <$> resolveTeamEmails pid t
+      targetTeam = case teamId of
+        Just tid -> getTeam tid
+        Nothing -> ProjectMembers.getEveryoneTeam pid
+      countingSend (count, reason) run =
+        targetTeam >>= \case
+          Nothing -> pure (count, Just "no_team")
+          Just t -> (,reason) . (+ count) <$> run t
+      sent n = pure n
+      -- per-channel attempt counts
+      slack t = do forM_ t.slack_channels (sendSlackAlert alert pid project.title . Just); sent (V.length t.slack_channels)
+      discord t = do forM_ t.discord_channels (sendDiscordAlert alert pid project.title . Just); sent (V.length t.discord_channels)
+      whatsapp t = if V.null t.phone_numbers then sent 0 else sent (V.length t.phone_numbers) <* sendWhatsAppAlert alert pid project.title t.phone_numbers
+      pagerduty t = do forM_ t.pagerduty_services \k -> sendPagerdutyAlertToService k alert project.title projectUrl; sent (V.length t.pagerduty_services)
+      email t = do emails <- resolveEmails t; forM_ emails sendTestEmail; sent (length emails)
 
-  case (channel, teamId) of
-    ("all", Just tid) ->
-      getTeam tid >>= traverse_ \t -> do
-        resolveEmails t >>= mapM_ sendTestEmail
-        forM_ t.slack_channels (sendSlackAlert alert pid project.title . Just)
-        forM_ t.discord_channels (sendDiscordAlert alert pid project.title . Just)
-        unless (V.null t.phone_numbers) $ sendWhatsAppAlert alert pid project.title t.phone_numbers
-        forM_ t.pagerduty_services \k -> sendPagerdutyAlertToService k alert project.title projectUrl
-    ("email", Just tid) -> getTeam tid >>= traverse_ (resolveEmails >=> mapM_ sendTestEmail)
-    ("email", Nothing) -> forM_ project.notifyEmails sendTestEmail
-    ("slack", Just tid) -> getTeam tid >>= traverse_ \t -> forM_ t.slack_channels (sendSlackAlert alert pid project.title . Just)
-    ("slack", Nothing) -> getProjectSlackData pid >>= traverse_ \s -> void $ sendSlackAlert alert pid project.title (Just s.channelId)
-    ("discord", Just tid) -> getTeam tid >>= traverse_ \t -> forM_ t.discord_channels (sendDiscordAlert alert pid project.title . Just)
-    ("discord", Nothing) -> getDiscordDataByProjectId pid >>= traverse_ \d -> forM_ d.notifsChannelId (sendDiscordAlert alert pid project.title . Just)
-    ("whatsapp", _) -> Projects.projectById pid >>= traverse_ \p -> sendWhatsAppAlert alert pid p.title p.whatsappNumbers
-    ("pagerduty", Just tid) -> getTeam tid >>= traverse_ \t -> forM_ t.pagerduty_services \k -> sendPagerdutyAlertToService k alert project.title projectUrl
-    ("pagerduty", Nothing) -> getPagerdutyByProjectId pid >>= traverse_ \pd -> sendPagerdutyAlertToService pd.integrationKey alert project.title projectUrl
+  (attempts, skipReason) <- case channel of
+    "all" -> countingSend (0, Nothing) \t -> do
+      e <- email t; s <- slack t; d <- discord t; w <- whatsapp t; p <- pagerduty t
+      pure (e + s + d + w + p)
+    "email" -> countingSend (0, Nothing) email
+    "slack" -> countingSend (0, Nothing) slack
+    "discord" -> countingSend (0, Nothing) discord
+    "whatsapp" -> countingSend (0, Nothing) whatsapp
+    "pagerduty" -> countingSend (0, Nothing) pagerduty
     _ -> throwError err400{errBody = "Unknown notification channel"}
 
+  let (status, err) = case (attempts, skipReason) of
+        (_, Just r) -> ("skipped" :: Text, Just r)
+        (0, _) -> ("skipped", Just "no_targets")
+        _ -> ("sent", Nothing)
   void
     $ Hasql.interpExecute
-      [HI.sql|INSERT INTO apis.notification_test_history (project_id, issue_type, channel, target, status, error) VALUES (#{pid}, #{issueType}, #{channel}, #{("" :: Text)}, #{("sent" :: Text)}, #{(Nothing :: Maybe Text)})|]
+      [HI.sql|INSERT INTO apis.notification_test_history (project_id, issue_type, channel, target, status, error) VALUES (#{pid}, #{issueType}, #{channel}, #{("" :: Text)}, #{status}, #{err})|]
 
-  Log.logTrace "Test notification sent" (channel, pid)
-  let msg = if channel == "all" then "Test notification sent to all channels!" else "Test " <> channel <> " notification sent!"
-  addSuccessToast msg Nothing >> addRespHeaders mempty
+  Log.logTrace "Test notification complete" (channel, pid, status, attempts)
+  let toast = case status of
+        "sent" -> addSuccessToast (if channel == "all" then "Test notification sent to all channels!" else "Test " <> channel <> " notification sent!") Nothing
+        _ -> addErrorToast ("Test skipped: " <> fromMaybe "unknown" err) Nothing
+  toast >> addRespHeaders mempty
 
 
 notificationsTestHistoryGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders NotificationTestHistoryGet)

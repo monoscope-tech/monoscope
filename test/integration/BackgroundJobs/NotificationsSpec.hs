@@ -23,12 +23,16 @@ pid = UUIDId UUID.nil
 seedSlackChannel :: TestResources -> IO ()
 seedSlackChannel tr = withResource tr.trPool \conn -> do
   void $ PGS.execute conn
-    [sql| INSERT INTO apis.slack (project_id, webhook_url, team_id, channel_id, team_name, bot_token)
-          VALUES (?, 'https://hooks.slack.com/test', 'T_TEST', 'C_TEST', 'TestTeam', 'xoxb-test')
+    [sql| INSERT INTO apis.slack (project_id, team_id, channel_id, team_name, bot_token)
+          VALUES (?, 'T_TEST', 'C_TEST', 'TestTeam', 'xoxb-test')
           ON CONFLICT (project_id) DO UPDATE SET channel_id = 'C_TEST', bot_token = 'xoxb-test' |]
     (PGS.Only pid)
   void $ PGS.execute conn
-    [sql| UPDATE projects.projects SET notifications_channel = '{slack}', error_alerts = true WHERE id = ? |]
+    [sql| UPDATE projects.teams SET slack_channels = ARRAY['C_TEST']::text[], disabled_channels = '{}'
+          WHERE project_id = ? AND is_everyone = TRUE AND deleted_at IS NULL |]
+    (PGS.Only pid)
+  void $ PGS.execute conn
+    [sql| UPDATE projects.projects SET error_alerts = true WHERE id = ? |]
     (PGS.Only pid)
 
 
