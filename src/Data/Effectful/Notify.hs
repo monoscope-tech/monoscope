@@ -306,6 +306,7 @@ runNotifyProduction = interpret $ \_ -> \case
         let withThread = maybe obj (\ts -> AEK.insert "thread_ts" (AE.String ts) obj) sd.threadTs
             msg = AE.Object $ AEK.insert "channel" (AE.String sd.channelId) withThread
             opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bearer " <> sd.botToken]
+            fail_ tag extra = Nothing <$ Log.logAttention ("Slack chat.postMessage " <> tag) (chatApiLog sd extra)
         -- Slack always returns HTTP 200; the real success flag is in the JSON body.
         -- not_in_channel / channel_not_found / is_archived all come back as 200 with
         -- ok:false. Treating 200 as success hides the "bot not invited" class of bug.
@@ -315,12 +316,9 @@ runNotifyProduction = interpret $ \_ -> \case
                 let body = AE.decode (re ^. responseBody) :: Maybe AE.Value
                  in case body >>= (^? key "ok" . _Bool) of
                       Just True -> pure $ body >>= (^? key "ts" . _String)
-                      _ -> do
-                        let errTxt = fromMaybe "unknown" $ body >>= (^? key "error" . _String)
-                        Log.logAttention "Slack chat.postMessage rejected by API" (chatApiLog sd ["error" AE..= errTxt])
-                        pure Nothing
-          Right re -> Nothing <$ Log.logAttention "Slack chat.postMessage HTTP failure" (chatApiLog sd ["status" AE..= show @Text (re ^. responseStatus)])
-          Left ex -> Nothing <$ Log.logAttention "Slack chat.postMessage exception" (chatApiLog sd ["error" AE..= displayException ex])
+                      _ -> fail_ "rejected by API" ["error" AE..= fromMaybe "unknown" (body >>= (^? key "error" . _String))]
+          Right re -> fail_ "HTTP failure" ["status" AE..= show @Text (re ^. responseStatus)]
+          Left ex -> fail_ "exception" ["error" AE..= displayException ex]
       _ -> Nothing <$ Log.logAttention "Slack notification message is not an object" (slackLogCtx sd [])
 
     -- Incoming webhook: channel-bound, no bot membership needed, no thread_ts.
@@ -335,15 +333,16 @@ runNotifyProduction = interpret $ \_ -> \case
       -- which is where Slack tells us which block/field it rejected.
       let opts = defaults & header "Content-Type" .~ ["application/json"] & checkResponse ?~ (\_ _ -> pure ())
           cleaned = flattenForWebhook sd.payload
+          fail_ tag extra = Nothing <$ Log.logAttention ("Slack webhook " <> tag) (webhookLog sd url (("payload" AE..= cleaned) : extra))
       liftIO (try @SomeException $ postWith opts (toString url) cleaned) >>= \case
         Right re
           | statusIsSuccessful (re ^. responseStatus) ->
               let body = re ^. responseBody
                in if body == "ok" || body == "\"ok\""
                     then pure Nothing
-                    else Nothing <$ Log.logAttention "Slack webhook returned non-ok body" (webhookLog sd url ["body" AE..= decodeUtf8 @Text (toStrict body), "payload" AE..= cleaned])
-          | otherwise -> Nothing <$ Log.logAttention "Slack webhook HTTP failure" (webhookLog sd url ["status" AE..= show @Text (re ^. responseStatus), "body" AE..= decodeUtf8 @Text (toStrict (re ^. responseBody)), "payload" AE..= cleaned])
-        Left ex -> Nothing <$ Log.logAttention "Slack webhook exception" (webhookLog sd url ["error" AE..= displayException ex, "payload" AE..= cleaned])
+                    else fail_ "returned non-ok body" ["body" AE..= decodeUtf8 @Text (toStrict body)]
+          | otherwise -> fail_ "HTTP failure" ["status" AE..= show @Text (re ^. responseStatus), "body" AE..= decodeUtf8 @Text (toStrict (re ^. responseBody))]
+        Left ex -> fail_ "exception" ["error" AE..= displayException ex]
 
     -- Log context builders with transport pre-tagged at the call site.
     slackLogCtx sd extra =
@@ -397,7 +396,7 @@ runNotifyProduction = interpret $ \_ -> \case
             let linkOf (AE.Object e)
                   | Just (AE.String "button") <- AEK.lookup "type" e
                   , Just (AE.String u) <- AEK.lookup "url" e
-                  , Just label <- plainTextOf e =
+                  , Just label <- nestedText e =
                       Just $ "<" <> u <> "|" <> label <> ">"
                 linkOf _ = Nothing
              in Just $ T.intercalate " · " $ mapMaybe linkOf (toList els)
@@ -412,9 +411,6 @@ runNotifyProduction = interpret $ \_ -> \case
     nestedText o = case AEK.lookup "text" o of
       Just (AE.Object inner) | Just (AE.String t) <- AEK.lookup "text" inner -> Just t
       _ -> Nothing
-
-    plainTextOf :: AE.Object -> Maybe Text
-    plainTextOf = nestedText
 
     sendDiscord :: (IOE :> es, Log :> es, Reader Config.AuthContext :> es) => DiscordData -> Eff es (Maybe Text)
     sendDiscord DiscordData{..} = do
