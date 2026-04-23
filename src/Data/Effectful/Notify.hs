@@ -347,7 +347,7 @@ runNotifyProduction = interpret $ \_ -> \case
     slackLogCtx sd extra =
       AE.object
         $ ["project_id" AE..= sd.projectIdCtx, "team_id" AE..= sd.teamIdCtx, "channel_id" AE..= sd.channelId]
-          <> extra
+        <> extra
     chatApiLog sd extra = slackLogCtx sd (("transport" AE..= ("chat.postMessage" :: Text)) : extra)
     webhookLog sd url extra = slackLogCtx sd (("transport" AE..= ("webhook" :: Text)) : ("webhook_suffix" AE..= redactedWebhookSuffix url) : extra)
 

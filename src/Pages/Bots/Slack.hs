@@ -677,7 +677,11 @@ sendSlackWelcomeViaWebhook webhookUrl projectTitle = do
   rs <- postWith opts (toString webhookUrl) (welcomeBlocks projectTitle)
   let body = rs ^. Wreq.responseBody
   unless (body == "ok" || body == "\"ok\"")
-    $ liftIO $ throwIO $ ErrorCall $ "slack webhook rejected payload: " <> toString (decodeUtf8 @Text (toStrict body))
+    $ liftIO
+    $ throwIO
+    $ ErrorCall
+    $ "slack webhook rejected payload: "
+    <> toString (decodeUtf8 @Text (toStrict body))
 
 
 data UrlVerificationData = UrlVerificationData
