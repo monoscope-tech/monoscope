@@ -22,6 +22,7 @@ import Data.Effectful.Wreq (
 import Data.Pool (withResource)
 import Data.Text qualified as T
 
+import Control.Exception (ErrorCall (..))
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, IOE, type (:>))
@@ -50,7 +51,6 @@ import Servant.API.ResponseHeaders (Headers, addHeader)
 import Servant.Server (ServerError (errBody), err400)
 import System.Config (AuthContext (env, pool), EnvConfig (..))
 import System.Types (ATBaseCtx, DB)
-import Control.Exception (ErrorCall (..))
 import UnliftIO.Exception (throwIO, tryAny)
 import Web.FormUrlEncoded (FromForm)
 

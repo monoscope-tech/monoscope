@@ -48,8 +48,6 @@ import Data.Aeson qualified as AE
 import Data.CaseInsensitive (CI)
 import Data.CaseInsensitive qualified as CI
 import Data.Effectful.Hasql qualified as Hasql
-import Effectful.Log (Log)
-import System.Logging qualified as Log
 import Data.OpenApi (ToSchema)
 import Data.Text.Display (Display)
 import Data.Time (UTCTime, ZonedTime)
@@ -69,6 +67,7 @@ import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Effectful (Eff, type (:>))
+import Effectful.Log (Log)
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
@@ -76,6 +75,7 @@ import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (WrappedEnumSC (..), selectFrom)
 import Relude
 import Servant (FromHttpApiData)
+import System.Logging qualified as Log
 import System.Types (DB)
 
 
@@ -469,34 +469,46 @@ modifyEveryoneTeamDetails pid f =
 -- | Race-free idempotent append to one of @everyone's text[] fields. Returns True
 -- if the value was actually added, False if it was already present (or there was
 -- no team). Single UPDATE, no read-modify-write window.
-addSlackChannelToEveryoneTeam, addDiscordChannelToEveryoneTeam, addPagerdutyServiceToEveryoneTeam
-  :: DB es => Projects.ProjectId -> Text -> Eff es Bool
+addSlackChannelToEveryoneTeam
+  , addDiscordChannelToEveryoneTeam
+  , addPagerdutyServiceToEveryoneTeam
+    :: DB es => Projects.ProjectId -> Text -> Eff es Bool
 addSlackChannelToEveryoneTeam pid val =
-  (> 0) <$> Hasql.interpExecute [HI.sql|
+  (> 0)
+    <$> Hasql.interpExecute
+      [HI.sql|
     UPDATE projects.teams SET slack_channels = array_append(slack_channels, #{val})
     WHERE project_id = #{pid} AND is_everyone = TRUE AND deleted_at IS NULL
       AND NOT (#{val} = ANY(slack_channels))|]
 addDiscordChannelToEveryoneTeam pid val =
-  (> 0) <$> Hasql.interpExecute [HI.sql|
+  (> 0)
+    <$> Hasql.interpExecute
+      [HI.sql|
     UPDATE projects.teams SET discord_channels = array_append(discord_channels, #{val})
     WHERE project_id = #{pid} AND is_everyone = TRUE AND deleted_at IS NULL
       AND NOT (#{val} = ANY(discord_channels))|]
 addPagerdutyServiceToEveryoneTeam pid val =
-  (> 0) <$> Hasql.interpExecute [HI.sql|
+  (> 0)
+    <$> Hasql.interpExecute
+      [HI.sql|
     UPDATE projects.teams SET pagerduty_services = array_append(pagerduty_services, #{val})
     WHERE project_id = #{pid} AND is_everyone = TRUE AND deleted_at IS NULL
       AND NOT (#{val} = ANY(pagerduty_services))|]
 
 
-removeSlackChannelsFromEveryoneTeam, removeDiscordChannelsFromEveryoneTeam, removePagerdutyServicesFromEveryoneTeam
-  :: (DB es, Log :> es) => Projects.ProjectId -> Eff es ()
+removeSlackChannelsFromEveryoneTeam
+  , removeDiscordChannelsFromEveryoneTeam
+  , removePagerdutyServicesFromEveryoneTeam
+    :: (DB es, Log :> es) => Projects.ProjectId -> Eff es ()
 removeSlackChannelsFromEveryoneTeam pid = modifyEveryoneTeamDetails pid \d -> d{slackChannels = mempty}
 removeDiscordChannelsFromEveryoneTeam pid = modifyEveryoneTeamDetails pid \d -> d{discordChannels = mempty}
 removePagerdutyServicesFromEveryoneTeam pid = modifyEveryoneTeamDetails pid \d -> d{pagerdutyServices = mempty}
 
 
-setEveryoneTeamEmails, setEveryoneTeamPhones, setEveryoneTeamDisabledChannels
-  :: (DB es, Log :> es) => Projects.ProjectId -> V.Vector Text -> Eff es ()
+setEveryoneTeamEmails
+  , setEveryoneTeamPhones
+  , setEveryoneTeamDisabledChannels
+    :: (DB es, Log :> es) => Projects.ProjectId -> V.Vector Text -> Eff es ()
 setEveryoneTeamEmails pid v = modifyEveryoneTeamDetails pid \d -> d{notifyEmails = v}
 setEveryoneTeamPhones pid v = modifyEveryoneTeamDetails pid \d -> d{phoneNumbers = v}
 setEveryoneTeamDisabledChannels pid v = modifyEveryoneTeamDetails pid \d -> d{disabledChannels = v}

@@ -505,7 +505,11 @@ notificationsTestPostH pid TestForm{..} = do
 
   (attempts, skipReason) <- case channel of
     "all" -> countingSend (0, Nothing) \t -> do
-      e <- email t; s <- slack t; d <- discord t; w <- whatsapp t; p <- pagerduty t
+      e <- email t
+      s <- slack t
+      d <- discord t
+      w <- whatsapp t
+      p <- pagerduty t
       pure (e + s + d + w + p)
     "email" -> countingSend (0, Nothing) email
     "slack" -> countingSend (0, Nothing) slack

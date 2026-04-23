@@ -219,8 +219,6 @@ projectIdFromText :: Text -> Maybe ProjectId
 projectIdFromText = idFromText
 
 
-
-
 data OnboardingStep = Info | Survey | CreateMonitor | NotifChannel | Integration | Pricing | Complete
   deriving stock (Eq, Generic, Read, Show)
   deriving (AE.FromJSON, AE.ToJSON, FromField, NFData, ToField) via OnboardingStep

@@ -362,7 +362,8 @@ updateNotificationsChannel pid NotifListForm{enabledChannels, phones, emails, sl
                 , ProjectMembers.notifyEmails = V.fromList emails
                 , ProjectMembers.phoneNumbers = V.fromList phones
                 , ProjectMembers.disabledChannels = disabled
-                } :: ProjectMembers.TeamDetails
+                }
+                :: ProjectMembers.TeamDetails
         void $ ProjectMembers.updateTeam pid team.id teamDetails
 
         unless (null unreachable)
@@ -469,33 +470,33 @@ integrationsBody IntegrationsConfig{..} = do
     let notifVals = hxVals_ "js:{enabledChannels: Array.from(document.querySelectorAll('input[name=\"notifChannel\"]:checked')).map(i => i.value), phones: window.getTagValues('#phones_input'), emails: window.getTagValues('#emails_input'), slackChannels: window.getTagValues('#slack-channels-input')}"
     div_ [id_ "integrations-form-section"] do
       div_ [id_ "notifsForm"] do
-          let ems = decodeUtf8 $ AE.encode $ V.toList emails
-              tgs = decodeUtf8 $ AE.encode $ V.toList phones
-              disabledSet = S.fromList $ V.toList disabledChannels
-              integrations =
-                [ ("email", "Email", True, faSprite_ "envelope" "solid" "h-4 w-4", renderEmailIntegration ems)
-                , ("slack", "Slack", isJust slackData, faSprite_ "slack" "solid" "h-4 w-4", renderSlackIntegration envConfig pid slackData slackChannels extraSlackChannels existingSlackChannels)
-                , ("discord", "Discord", discordConnected, faSprite_ "discord" "solid" "h-4 w-4", renderDiscordIntegration envConfig pid)
-                , ("phone", "WhatsApp", not $ V.null phones, faSprite_ "whatsapp" "solid" "h-4 w-4", renderWhatsappIntegration tgs)
-                , ("pagerduty", "PagerDuty", isJust pagerdutyKey, faSprite_ "pager" "solid" "h-4 w-4", renderPagerdutyIntegration projectId.toText pagerdutyKey)
-                ]
-                  :: [(Text, Text, Bool, Html (), Html ())]
-
-          div_ [class_ "divide-y divide-strokeWeak rounded-xl border border-strokeWeak"] do
-            forM_ integrations \(val, title, configured, icon, content) ->
-              renderNotificationOption pid everyoneTeamId title val (not $ S.member val disabledSet) configured icon content
-
-          div_ [class_ "mt-6"] do
-            button_
-              [ class_ "btn btn-sm btn-ghost"
-              , hxPost_ [text|/p/$pid/notifications-channels|]
-              , notifVals
-              , hxTarget_ "#integrations-form-section"
-              , hxSelect_ "#integrations-form-section"
-              , hxSwap_ "outerHTML swap:0.3s"
-              , [__| on change from closest <div/> put .btn-primary into my.className then put 'btn btn-sm btn-primary' into my.className end |]
+        let ems = decodeUtf8 $ AE.encode $ V.toList emails
+            tgs = decodeUtf8 $ AE.encode $ V.toList phones
+            disabledSet = S.fromList $ V.toList disabledChannels
+            integrations =
+              [ ("email", "Email", True, faSprite_ "envelope" "solid" "h-4 w-4", renderEmailIntegration ems)
+              , ("slack", "Slack", isJust slackData, faSprite_ "slack" "solid" "h-4 w-4", renderSlackIntegration envConfig pid slackData slackChannels extraSlackChannels existingSlackChannels)
+              , ("discord", "Discord", discordConnected, faSprite_ "discord" "solid" "h-4 w-4", renderDiscordIntegration envConfig pid)
+              , ("phone", "WhatsApp", not $ V.null phones, faSprite_ "whatsapp" "solid" "h-4 w-4", renderWhatsappIntegration tgs)
+              , ("pagerduty", "PagerDuty", isJust pagerdutyKey, faSprite_ "pager" "solid" "h-4 w-4", renderPagerdutyIntegration projectId.toText pagerdutyKey)
               ]
-              "Save"
+                :: [(Text, Text, Bool, Html (), Html ())]
+
+        div_ [class_ "divide-y divide-strokeWeak rounded-xl border border-strokeWeak"] do
+          forM_ integrations \(val, title, configured, icon, content) ->
+            renderNotificationOption pid everyoneTeamId title val (not $ S.member val disabledSet) configured icon content
+
+        div_ [class_ "mt-6"] do
+          button_
+            [ class_ "btn btn-sm btn-ghost"
+            , hxPost_ [text|/p/$pid/notifications-channels|]
+            , notifVals
+            , hxTarget_ "#integrations-form-section"
+            , hxSelect_ "#integrations-form-section"
+            , hxSwap_ "outerHTML swap:0.3s"
+            , [__| on change from closest <div/> put .btn-primary into my.className then put 'btn btn-sm btn-primary' into my.className end |]
+            ]
+            "Save"
 
     -- Developer tools
     div_ [class_ "pt-6 border-t border-strokeWeak space-y-2"] do
