@@ -122,12 +122,15 @@ type FlameGraphItem = {
   start: number;
   parentId: string;
   name: string;
+  label?: string;
   serviceName: string;
   hasErrors: boolean;
   children: FlameGraphItem[];
 };
 
 type ItemsWithStyle = Pick<FlameGraphItem, 'name' | 'hasErrors' | 'spanId'> & {
+  label: string;
+  serviceName: string;
   itemStyle: { color: string };
   value: [number, number, number, string, number];
 };
@@ -186,6 +189,8 @@ function flameGraphChart(data: FlameGraphItem[], renderAt: string, colorsMap: Re
       const color = resolveColor(item.serviceName, colorsMap);
       data.push({
         name: item.name,
+        label: item.label || item.name,
+        serviceName: item.serviceName,
         hasErrors: item.hasErrors,
         spanId: item.spanId,
         value: [level, item.start - baseMinStart, item.value, item.name, (item.value / baseRange) * 100],
@@ -230,7 +235,7 @@ function flameGraphChart(data: FlameGraphItem[], renderAt: string, colorsMap: Re
         (window as any).htmx.trigger('#trigger-span-' + item.spanId, 'click');
       },
       onmouseenter: (e: MouseEvent) =>
-        showTooltip(e, `${item.name} — ${Math.floor(Number(t))} ${u} (${pct.toFixed(1)}%)${item.hasErrors ? ' · error' : ''}`),
+        showTooltip(e, `${item.serviceName ? item.serviceName + ' · ' : ''}${item.label} — ${Math.floor(Number(t))} ${u} (${pct.toFixed(1)}%)${item.hasErrors ? ' · error' : ''}`),
       onmouseleave: () => hideTooltip(),
     });
     div.style.left = `${startPix}px`;
@@ -245,7 +250,7 @@ function flameGraphChart(data: FlameGraphItem[], renderAt: string, colorsMap: Re
     // Errored + wide-enough bars get a real flex-child glyph that flows before
     // the label (no overlap with the span name).
     if (item.hasErrors && width >= 24) div.appendChild(getErrorGlyph());
-    const text = elt('span', { class: 'ml-1 shrink-0 mr-4 text-xs relative', style: `color: ${textColor}` }, item.name);
+    const text = elt('span', { class: 'ml-1 min-w-0 truncate mr-4 text-xs relative', style: `color: ${textColor}` }, item.label);
     const tim = elt('span', { class: 'text-xs shrink-0 ml-auto mr-1 tabular-nums relative', style: `color: ${textColor}` }, `${Math.floor(Number(t))} ${u}`);
     div.appendChild(text);
     div.appendChild(tim);

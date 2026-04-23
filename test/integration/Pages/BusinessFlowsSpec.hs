@@ -207,7 +207,7 @@ settingsTests = do
   it "should load manage members page" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
     result <- testServant tr $ ManageMembers.manageMembersGetH testPid
     case result of
-      (_, ManageMembers.ManageMembersGet (PageCtx _ (_, members, _))) -> do
+      (_, ManageMembers.ManageMembersGet (PageCtx _ (_, members, _, _))) -> do
         V.length members `shouldSatisfy` (>= 0)
       _ -> fail "Expected ManageMembersGet response"
 

@@ -12,7 +12,6 @@ module Pages.LogExplorer.LogItem (
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEKey
 import Data.Aeson.KeyMap qualified as KEM
-import Data.Aeson.Text (encodeToLazyText)
 import Data.Char (isSpace)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
@@ -32,7 +31,7 @@ import Models.Telemetry.Telemetry (atMapText)
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
 import Pages.Components (dateTime)
-import Pkg.DeriveUtils (encodeEnumSC, unAesonTextMaybe)
+import Pkg.DeriveUtils (unAesonTextMaybe)
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
@@ -265,52 +264,17 @@ expandedItemView pid item aptSp leftM rightM = do
     unless isLog $ htmxOverlayIndicator_ "loading-span-list"
     htmxOverlayIndicator_ "details_indicator"
     div_ [class_ "detail-header-block flex flex-col gap-1.5 bg-fillWeaker py-2.5 px-3"] $ do
-      -- Row 1: severity/title + date + close (compact for logs)
+      -- Row 1: rendered summary pills (same contract as list row) + date + close.
+      -- Alerts keep their bespoke title/status layout since they don't flow through generateSummary.
       div_ [class_ "flex justify-between items-start gap-2"] do
-        if isLog
-          then do
-            let svTxt = maybe "UNSET" (\x -> maybe "UNSET" (toText . encodeEnumSC @"SL") x.severity_text) item.severity
-                cls = getSeverityColor svTxt
-                bodyText = case unAesonTextMaybe item.body of
-                  Just (AE.String x) -> x
-                  Just (AE.Object v) -> case extractMessageFromLog (AE.Object v) of
-                    Just v' -> v'
-                    _ -> toStrict $ encodeToLazyText (unAesonTextMaybe item.body)
-                  _ -> toStrict $ encodeToLazyText (unAesonTextMaybe item.body)
-            div_ [class_ "flex items-center gap-2 min-w-0"] do
-              span_ [class_ $ "rounded-lg border cbadge-sm text-xs px-1.5 py-0.5 shrink-0 " <> cls] $ toHtml $ T.toUpper svTxt
-              h4_ [class_ "text-textStrong truncate text-sm font-medium"] $ toHtml bodyText
+        if isAlert
+          then div_ [class_ "flex items-center gap-3 flex-1 min-w-0"] do
+              h4_ [class_ "text-xl max-w-96 truncate"] $ toHtml $ fromMaybe "" item.name
+              let strCls = getAlertStatusColor $ fromMaybe "" item.status_message
+              span_ [class_ $ "badge badge-sm whitespace-nowrap " <> strCls] $ toHtml $ fromMaybe "" item.status_message
           else
-            if isAlert
-              then div_ [class_ "flex items-center gap-3"] do
-                h4_ [class_ "text-xl max-w-96 truncate"] $ toHtml $ fromMaybe "" item.name
-                div_ [class_ "flex flex-wrap items-center gap-2"] do
-                  let strCls = getAlertStatusColor $ fromMaybe "" item.status_message
-                  span_ [class_ $ "badge badge-sm whitespace-nowrap " <> strCls] $ toHtml $ fromMaybe "" item.status_message
-              else div_ [class_ "flex items-center gap-3 text-sm font-medium text-textStrong"] $ do
-                case reqDetails of
-                  Just req -> do
-                    div_ [class_ "flex flex-wrap items-center gap-2"] do
-                      whenJust reqDetails $ \case
-                        ("HTTP", method, path, status) -> do
-                          span_ [class_ $ "relative cbadge-sm badge-" <> method <> " whitespace-nowrap", term "data-tip" ""] $ toHtml method
-                          span_ [class_ $ "relative cbadge-sm badge-" <> T.take 1 (show status) <> "xx whitespace-nowrap", term "data-tip" ""] $ toHtml $ T.take 3 $ show status
-                          let displayPath = if T.length path <= 1 then fromMaybe path item.name else path
-                          div_ [class_ "flex items-center"] do
-                            span_ [class_ "shrink-1 px-2 py-1.5 max-w-96 truncate mr-2 urlPath"] $ toHtml displayPath
-                            div_ [[__| install Copy(content:.urlPath )|], Aria.label_ "Copy URL to clipboard", role_ "button", tabindex_ "0"] do
-                              faSprite_ "copy" "regular" "h-8 w-8 border border-strokeWeak bg-fillWeakerer rounded-full p-2 text-iconNeutral"
-                        (scheme, method, path, status) -> do
-                          div_ [class_ "flex flex-wrap items-center"] do
-                            span_ [class_ "flex gap-2 items-center text-textStrong bg-fillWeaker border border-strokeWeak rounded-lg whitespace-nowrap px-2 py-1"] $ toHtml method
-                            span_ [class_ "px-2 py-1.5 max-w-96"] $ toHtml path
-                            let extraClass = getGrpcStatusColor status
-                            when (scheme /= "DB") $ span_ [class_ $ " px-2 py-1.5 border-l " <> extraClass] $ toHtml $ show status
-                  Nothing -> do
-                    let parts = mapMaybe (guarded (not . T.null)) [getServiceName (unAesonTextMaybe item.resource), fromMaybe "" item.kind]
-                        fallback = if null parts then "Unnamed span" else T.intercalate " · " parts <> " span"
-                        title = fromMaybe fallback (item.name >>= guarded (not . T.null))
-                    h4_ [class_ "text-xl max-w-96 truncate"] $ toHtml title
+            div_ [class_ "flex-1 min-w-0"]
+              $ renderSummaryElements (summaryForDetailView (Telemetry.generateSummary item))
         div_ [class_ "flex gap-2 items-center shrink-0"] $ do
           dateTime (if isLog then item.timestamp else item.start_time) Nothing
           button_
@@ -320,29 +284,10 @@ expandedItemView pid item aptSp leftM rightM = do
             ]
             do
               faSprite_ "xmark" "regular" "w-3.5 h-3.5 text-iconNeutral"
-      -- Row 2: metadata badges (service, span/trace IDs, session/user identity)
-      let attrs = unAesonTextMaybe item.attributes
-          -- Prefer user.full_name, fall back to user.name; carry the matching attr path so the badge filters correctly.
-          uNameInfo =
-            (("attributes.user.full_name",) <$> atMapText "user.full_name" attrs)
-              <|> (("attributes.user.name",) <$> atMapText "user.name" attrs)
-      div_ [class_ "flex gap-2 flex-wrap min-w-0"] $ do
-        unless (isLog || isAlert) $ do
-          spanBadge pid "duration" (toText $ getDurationNSMS $ maybe 0 fromIntegral item.duration) "Span duration"
-          spanBadge pid "kind" (fromMaybe "" item.kind) "Span Kind"
-        spanBadge pid "resource___service___name" (getServiceName (unAesonTextMaybe item.resource)) "Service"
-        whenJust (item.context >>= (.span_id) >>= guarded (not . T.null)) $ \v ->
-          spanBadge pid "context___span_id" ("Span ID: " <> v) "Span ID"
-        whenJust (item.context >>= (.trace_id) >>= guarded (not . T.null)) $ \v ->
-          spanBadge pid "context___trace_id" ("Trace ID: " <> v) "Trace ID"
-        whenJust uNameInfo \(p, v) ->
-          spanBadge pid p ("User: " <> v) "User name"
-        whenJust (atMapText "user.email" attrs) \v ->
-          spanBadge pid "attributes.user.email" ("Email: " <> v) "User email"
-        whenJust (atMapText "user.id" attrs) \v ->
-          spanBadge pid "attributes.user.id" ("User ID: " <> v) "User ID"
-        whenJust (atMapText "session.id" attrs) \v ->
-          spanBadge pid "attributes.session.id" ("Session: " <> v) "Session ID"
+      -- span_id is not carried by generateSummary; keep a single pill for it so the filter-menu is reachable.
+      whenJust (item.context >>= (.span_id) >>= guarded (not . T.null)) $ \v ->
+        div_ [class_ "flex gap-2 flex-wrap min-w-0"]
+          $ spanBadge pid "context.span_id" ("Span ID: " <> v) "Span ID"
       let actBtn = [class_ "cursor-pointer flex items-center gap-1.5 text-xs font-medium px-2 py-1 rounded-md border border-strokeWeak bg-fillWeakerer hover:bg-fillWeaker transition-colors text-textBrand"]
       div_ [class_ "flex flex-wrap gap-2 items-center"] do
         unless isLog $ whenJust reqDetails $ \case

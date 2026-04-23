@@ -19,6 +19,11 @@ import Relude.Unsafe qualified as Unsafe
 import Test.Hspec
 
 
+-- | Extract the members vector from a ManageMembersPost response, failing otherwise.
+postMembers :: HasCallStack => ManageMembers.ManageMembers -> IO (V.Vector ProjectMembers.ProjectMemberWithStatusVM)
+postMembers (ManageMembers.ManageMembersPost (_, ms, _, _)) = pure ms
+postMembers _ = fail "Expected ManageMembersPost response"
+
 
 userID :: Projects.UserId
 userID = Projects.UserId (Unsafe.fromJust $ UUID.fromText "00000000-0000-0000-0000-000000000001")
@@ -41,10 +46,8 @@ spec = aroundAll withTestResources do
       (_, pg) <-
         testServant tr $ ManageMembers.manageMembersPostH testPid Nothing member
       -- Check if the response contains the newly added member
-      case pg of
-        ManageMembers.ManageMembersPost (_, p, _) -> do
-          "example@gmail.com" `shouldSatisfy` (`elem` (p <&> (.email)))
-        _ -> fail "Expected ManageMembersPost response"
+      p <- postMembers pg
+      "example@gmail.com" `shouldSatisfy` (`elem` (p <&> (.email)))
 
     it "Update member permissions" \tr -> do
       let member =
@@ -56,14 +59,9 @@ spec = aroundAll withTestResources do
         testServant tr $ ManageMembers.manageMembersPostH testPid Nothing member
 
       -- Check if the member's permission is updated
-      case pg of
-        ManageMembers.ManageMembersPost (_, projMembers, _) -> do
-          let memberM = projMembers & V.toList & find (\pm -> pm.email == "example@gmail.com")
-          isJust memberM `shouldBe` True
-          let mem = memberM & Unsafe.fromJust
-          mem.permission `shouldBe` ProjectMembers.PView
-          pass
-        _ -> fail "Expected ManageMembersPost response"
+      projMembers <- postMembers pg
+      mem <- maybe (fail "example@gmail.com not found in members") pure $ find (\pm -> pm.email == "example@gmail.com") (V.toList projMembers)
+      mem.permission `shouldBe` ProjectMembers.PView
 
     it "Get members" \tr -> do
       (_, pg) <-
@@ -72,7 +70,7 @@ spec = aroundAll withTestResources do
       -- Check if the response contains the expected members
       -- Note: 2 members expected - the test user from setup + example@gmail.com
       case pg of
-        ManageMembers.ManageMembersGet (PageCtx _ (_, projMembers, _)) -> do
+        ManageMembers.ManageMembersGet (PageCtx _ (_, projMembers, _, _)) -> do
           let emails = (.email) <$> projMembers
           "example@gmail.com" `shouldSatisfy` (`elem` emails)
           length projMembers `shouldBe` 2
@@ -88,11 +86,8 @@ spec = aroundAll withTestResources do
         testServant tr $ ManageMembers.manageMembersPostH testPid Nothing member
 
       -- Check if the member is deleted
-      case pg of
-        ManageMembers.ManageMembersPost (_, projMembers, _) -> do
-          let emails = (.email) <$> projMembers
-          "example@gmail.com" `shouldNotSatisfy` (`elem` emails)
-        _ -> fail "Expected ManageMembersPost response"
+      projMembers <- postMembers pg
+      "example@gmail.com" `shouldNotSatisfy` (`elem` ((.email) <$> projMembers))
 
     it "Should add member after deletion" \tr -> do
       let member =
@@ -103,10 +98,8 @@ spec = aroundAll withTestResources do
       (_, pg) <-
         testServant tr $ ManageMembers.manageMembersPostH testPid Nothing member
       -- Check if the response contains the newly added member
-      case pg of
-        ManageMembers.ManageMembersPost (_, p, _) -> do
-          "example@gmail.com" `shouldSatisfy` (`elem` (p <&> (.email)))
-        _ -> fail "Expected ManageMembersPost response"
+      p <- postMembers pg
+      "example@gmail.com" `shouldSatisfy` (`elem` (p <&> (.email)))
 
   describe "Teams Creation, Update and Consumption" do
     let team =

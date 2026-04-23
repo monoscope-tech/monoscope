@@ -1342,29 +1342,3 @@ renderCellValue col value
     formatted = formatColumnValue col value
 
 
--- | Style mapping matching web-components/src/log-list-utils.ts STYLE_MAPPINGS
-summaryStyleClass :: Text -> Text
-summaryStyleClass = \case
-  "badge-error" -> "badge badge-sm badge-error"
-  "badge-warning" -> "badge badge-sm badge-warning"
-  "badge-info" -> "badge badge-sm badge-info"
-  "badge-success" -> "badge badge-sm badge-success"
-  "badge-neutral" -> "badge badge-sm badge-neutral"
-  "error-strong" -> "badge badge-sm badge-error"
-  "error-weak" -> "badge badge-sm opacity-70 badge-error"
-  "warning-strong" -> "badge badge-sm badge-warning"
-  "info-strong" -> "badge badge-sm badge-info"
-  "success-strong" -> "badge badge-sm badge-success"
-  "neutral" -> "badge badge-sm badge-neutral"
-  s | "right-badge-" `T.isPrefixOf` s -> "badge badge-sm ml-auto " <> T.drop 6 s
-  _ -> "badge badge-sm badge-neutral"
-
-
-renderSummaryTags :: Text -> Html ()
-renderSummaryTags txt = span_ [class_ "inline-flex flex-wrap items-center gap-1"] $ forM_ (words txt) \seg ->
-  case T.breakOn "⇒" seg of
-    (prefix, rest)
-      | not (T.null rest)
-      , Just (';', style) <- T.uncons =<< T.stripPrefix (T.takeWhile (/= ';') prefix) prefix ->
-          span_ [class_ $ summaryStyleClass style] $ toHtml (T.drop 1 rest)
-    _ -> toHtml (" " <> seg)

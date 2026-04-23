@@ -60,6 +60,9 @@ module Utils (
   renderMarkdown,
   jsonToMap,
   fieldContextMenuItems_,
+  renderSummaryTags,
+  renderSummaryElements,
+  summaryForDetailView,
 )
 where
 
@@ -84,6 +87,7 @@ import Data.Time.Clock (UTCTime (..), diffUTCTime, secondsToDiffTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format (formatTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
+import Data.Set qualified as Set
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.ToField (ToField (..))
 import Effectful (Eff, IOE, type (:>))
@@ -1382,3 +1386,133 @@ renderMarkdown md = case MMark.parse "" md of
 jsonToMap :: AE.Value -> Maybe (Map Text AE.Value)
 jsonToMap (AE.Object o) = Just $ AEKM.toMapText o
 jsonToMap _ = Nothing
+
+
+-- | Style mapping matching web-components/src/log-list-utils.ts STYLE_MAPPINGS
+summaryStyleClass :: Text -> Text
+summaryStyleClass = \case
+  "badge-error" -> "badge badge-sm badge-error"
+  "badge-warning" -> "badge badge-sm badge-warning"
+  "badge-info" -> "badge badge-sm badge-info"
+  "badge-success" -> "badge badge-sm badge-success"
+  "badge-neutral" -> "badge badge-sm badge-neutral"
+  "error-strong" -> "badge badge-sm badge-error"
+  "error-weak" -> "badge badge-sm opacity-70 badge-error"
+  "warning-strong" -> "badge badge-sm badge-warning"
+  "info-strong" -> "badge badge-sm badge-info"
+  "success-strong" -> "badge badge-sm badge-success"
+  "neutral" -> "badge badge-sm badge-neutral"
+  s | "right-badge-" `T.isPrefixOf` s -> "badge badge-sm ml-auto " <> T.drop 6 s
+  s | "text-" `T.isPrefixOf` s -> s <> " text-xs"
+  _ -> "badge badge-sm badge-neutral"
+
+
+-- | Map a summary `field` (left side of `;style⇒value`) to the column path used
+-- by the filter-menu (LogItemMenuable). Return Nothing for synthetic/derived
+-- fields that don't map to a filterable column.
+summaryFilterPath :: Text -> Maybe Text
+summaryFilterPath = \case
+  "method" -> Just "attributes.http.request.method"
+  "status_code" -> Just "attributes.http.response.status_code"
+  "status" -> Just "status_code"
+  "route" -> Just "attributes.http.route"
+  "url" -> Just "attributes.url.path"
+  "service" -> Just "resource.service.name"
+  "kind" -> Just "kind"
+  "duration" -> Just "duration"
+  "trace_id" -> Just "context.trace_id"
+  "span_id" -> Just "context.span_id"
+  "severity_text" -> Just "severity.severity_text"
+  "db.system" -> Just "attributes.db.system.name"
+  "db.statement" -> Just "attributes.db.statement"
+  "db.query.text" -> Just "attributes.db.query.text"
+  "rpc.method" -> Just "attributes.rpc.method"
+  "rpc.service" -> Just "attributes.rpc.service"
+  "span_name" -> Just "name"
+  "session" -> Just "attributes.session.id"
+  "user email" -> Just "attributes.user.email"
+  "user name" -> Just "attributes.user.full_name"
+  _ -> Nothing
+
+
+-- | Fields whose values can be long (URLs, routes, queries) — truncate to keep
+-- the header scannable and surface the full value via tooltip.
+summaryFieldIsLong :: Text -> Bool
+summaryFieldIsLong f = f `elem` ["url", "route", "resource", "target", "db.statement", "db.query.text", "span_name"]
+
+
+-- | Parse a `field;style⇒value` segment. Returns Nothing for malformed input.
+parseSummaryEl :: Text -> Maybe (Text, Text, Text)
+parseSummaryEl seg = do
+  let (prefix, rest) = T.breakOn "⇒" seg
+  value <- T.stripPrefix "⇒" rest
+  let (field, styleSep) = T.breakOn ";" prefix
+  style <- T.stripPrefix ";" styleSep
+  pure (field, style, value)
+
+
+-- | Render a single `field;style⇒value` element. When the field maps to a
+-- known filter path, wraps the pill so clicking opens the LogItemMenuable menu
+-- with the path/value pre-filled (same contract as Pages.LogExplorer.LogItem.spanBadge).
+renderSummaryElement :: Text -> Html ()
+renderSummaryElement seg = case parseSummaryEl seg of
+  Just (field, style, value) ->
+    let
+      -- `badge` centers its content; for long values we want left-anchored truncation so `/foo/...` reads naturally.
+      truncCls = if summaryFieldIsLong field then " max-w-sm truncate whitespace-nowrap !justify-start" else ""
+      pillCls = summaryStyleClass style <> truncCls
+      tooltip = field <> ": " <> value
+     in case summaryFilterPath field of
+          Just path ->
+            div_
+              [ class_ "relative min-w-0"
+              , term "data-field-path" path
+              , term "data-field-value" ("\"" <> value <> "\"")
+              ]
+              $ button_
+                [ class_ $ "cursor-pointer " <> pillCls
+                , term "data-tippy-content" tooltip
+                , term "_" "install LogItemMenuable"
+                ]
+                (toHtml value)
+          Nothing ->
+            span_ [class_ pillCls, title_ tooltip] (toHtml value)
+  Nothing -> span_ [class_ "text-xs text-textWeak"] $ toHtml seg
+
+
+-- | Render a space-separated `field;style⇒value` string from the DB summary
+-- column. Whitespace inside values is lost by design (matches list-row contract).
+renderSummaryTags :: Text -> Html ()
+renderSummaryTags txt =
+  span_ [class_ "inline-flex flex-wrap items-center gap-1"]
+    $ forM_ (words txt) renderSummaryElement
+
+
+-- | Render a pre-split summary vector (from Telemetry.generateSummary) as pills.
+renderSummaryElements :: V.Vector Text -> Html ()
+renderSummaryElements els =
+  div_ [class_ "flex flex-wrap items-center gap-1.5 min-w-0"]
+    $ V.forM_ els renderSummaryElement
+
+
+-- | Adapt a summary vector for the log-item detail header:
+--   1. drop list-row noise (raw JSON dumps of attributes/resource, redundant protocol);
+--   2. strip `right-badge-` style (ml-auto right-alignment is meaningless in a wrapping header);
+--   3. dedupe by (field, value) so `status ERROR` doesn't appear twice (left-side + right-side).
+summaryForDetailView :: V.Vector Text -> V.Vector Text
+summaryForDetailView = dedupe . V.mapMaybe step
+  where
+    skip el = any (`T.isPrefixOf` el) ["attributes;text-textWeak⇒", "resource;text-textWeak⇒", "protocol;"]
+    step el
+      | skip el = Nothing
+      | otherwise = Just $ case parseSummaryEl el of
+          Just (field, style, value) ->
+            let style' = fromMaybe style (T.stripPrefix "right-badge-" style)
+             in field <> ";" <> style' <> "⇒" <> value
+          Nothing -> el
+    key el = maybe ("", el) (\(f, _, v) -> (f, v)) (parseSummaryEl el)
+    dedupe xs = V.fromList $ reverse $ snd $ V.foldl' step' (mempty, []) xs
+      where
+        step' (seen, acc) x
+          | Set.member (key x) seen = (seen, acc)
+          | otherwise = (Set.insert (key x) seen, x : acc)

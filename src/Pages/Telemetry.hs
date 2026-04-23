@@ -90,15 +90,32 @@ data SpanMin = SpanMin
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
--- | Extract a human-readable label from span attributes (db query, http route, rpc method)
+-- | Lookup a dotted attribute key — try flat key first, then nested-object traversal.
+attrLookup :: Text -> Maybe (Map Text AE.Value) -> Maybe Text
+attrLookup key attrs =
+  (attrs >>= Map.lookup key >>= textOfValue) <|> Telemetry.atMapText key attrs
+  where
+    textOfValue = \case
+      AE.String t -> Just t
+      AE.Number n -> Just (show n)
+      _ -> Nothing
+
+
+-- | Extract a human-readable label from span attributes (db query, http route, rpc method, messaging).
+-- Order matches semantic precedence: db query > http method+route > rpc > messaging > exception.
 spanDisplayLabel :: Maybe (Map Text AE.Value) -> Maybe Text
-spanDisplayLabel attrs
-  | isJust (Telemetry.atMapText "db.system.name" attrs <|> Telemetry.atMapText "db.system" attrs) =
-      T.take 200 <$> (Telemetry.atMapText "db.query.text" attrs <|> Telemetry.atMapText "db.statement" attrs)
-  | otherwise =
-      Telemetry.atMapText "http.route" attrs
-        <|> Telemetry.atMapText "url.path" attrs
-        <|> ((\m s -> m <> " " <> s) <$> Telemetry.atMapText "rpc.method" attrs <*> Telemetry.atMapText "rpc.service" attrs)
+spanDisplayLabel attrs =
+  (T.take 200 <$> (look "db.query.text" <|> look "db.statement"))
+    <|> joinWith " " (look "http.request.method") (look "http.route" <|> look "url.path" <|> look "url.full")
+    <|> look "http.route"
+    <|> look "url.path"
+    <|> joinWith "/" (look "rpc.service") (look "rpc.method")
+    <|> look "rpc.method"
+    <|> joinWith " " (look "messaging.operation") (look "messaging.destination.name" <|> look "messaging.destination")
+    <|> look "exception.type"
+  where
+    look k = attrLookup k attrs
+    joinWith sep = liftA2 (\a b -> a <> sep <> b)
 
 
 -- | Draggable column resize divider. Parameters: CSS variable name, min%, max%, resize event, extra CSS classes.
@@ -728,6 +745,7 @@ tracePage pid traceItem spanRecords = do
         AE.object
           [ "spanId" AE..= sp.spanId
           , "name" AE..= sp.spanName
+          , "label" AE..= fromMaybe sp.spanName (spanDisplayLabel sp.attributes)
           , "value" AE..= sp.spanDurationNs
           , "start" AE..= sp.startTime
           , "parentId" AE..= sp.parentSpanId
