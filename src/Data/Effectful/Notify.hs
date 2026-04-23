@@ -52,7 +52,7 @@ import Effectful.TH
 import Network.HTTP.Types (statusIsSuccessful)
 import Network.Mail.Mime (Address (..), Mail (..), htmlPart)
 import Network.Mail.SMTP (sendMailWithLoginSTARTTLS', sendMailWithLoginTLS')
-import Network.Wreq (FormParam ((:=)), auth, basicAuth, defaults, header, postWith, responseBody, responseStatus)
+import Network.Wreq (FormParam ((:=)), auth, basicAuth, checkResponse, defaults, header, postWith, responseBody, responseStatus)
 import Pkg.DeriveUtils (WrappedEnumSC (..))
 import Relude hiding (Reader, State, ask, get, modify, put, runState)
 import System.Config qualified as Config
@@ -324,24 +324,26 @@ runNotifyProduction = interpret $ \_ -> \case
       _ -> Nothing <$ Log.logAttention "Slack notification message is not an object" (slackLogCtx sd [])
 
     -- Incoming webhook: channel-bound, no bot membership needed, no thread_ts.
-    -- Slack rejects the "channel" field on webhooks, so strip it. Webhook
-    -- endpoints return HTTP 200 + body "ok" on success; non-2xx (or a 200 with
-    -- a different body) on failure — we parse both so semantic failures
-    -- surface the same way as chat.postMessage rejections.
+    -- Slack rejects the "channel" field on webhooks. The OAuth-time webhook
+    -- endpoint (hooks.slack.com/services/T.../B.../SECRET) also rejects Block
+    -- Kit nested inside legacy "attachments" with invalid_attachments, so we
+    -- lift the inner blocks to the top level and drop the attachment wrapper
+    -- (losing only the color accent bar). Webhook endpoints return HTTP 200 +
+    -- body "ok" on success; we surface semantic failures as attention logs.
     sendSlackWebhook sd url = do
-      let opts = defaults & header "Content-Type" .~ ["application/json"]
-          cleaned = case sd.payload of
-            AE.Object obj -> AE.Object (AEK.delete "channel" obj)
-            v -> v
+      -- checkResponse = nop: wreq otherwise throws on 4xx and we lose the body
+      -- which is where Slack tells us which block/field it rejected.
+      let opts = defaults & header "Content-Type" .~ ["application/json"] & checkResponse ?~ (\_ _ -> pure ())
+          cleaned = flattenForWebhook sd.payload
       liftIO (try @SomeException $ postWith opts (toString url) cleaned) >>= \case
         Right re
           | statusIsSuccessful (re ^. responseStatus) ->
               let body = re ^. responseBody
                in if body == "ok" || body == "\"ok\""
                     then pure Nothing
-                    else Nothing <$ Log.logAttention "Slack webhook returned non-ok body" (webhookLog sd url ["body" AE..= decodeUtf8 @Text (toStrict body)])
-          | otherwise -> Nothing <$ Log.logAttention "Slack webhook HTTP failure" (webhookLog sd url ["status" AE..= show @Text (re ^. responseStatus), "body" AE..= decodeUtf8 @Text (toStrict (re ^. responseBody))])
-        Left ex -> Nothing <$ Log.logAttention "Slack webhook exception" (webhookLog sd url ["error" AE..= displayException ex])
+                    else Nothing <$ Log.logAttention "Slack webhook returned non-ok body" (webhookLog sd url ["body" AE..= decodeUtf8 @Text (toStrict body), "payload" AE..= cleaned])
+          | otherwise -> Nothing <$ Log.logAttention "Slack webhook HTTP failure" (webhookLog sd url ["status" AE..= show @Text (re ^. responseStatus), "body" AE..= decodeUtf8 @Text (toStrict (re ^. responseBody)), "payload" AE..= cleaned])
+        Left ex -> Nothing <$ Log.logAttention "Slack webhook exception" (webhookLog sd url ["error" AE..= displayException ex, "payload" AE..= cleaned])
 
     -- Log context builders with transport pre-tagged at the call site.
     slackLogCtx sd extra =
@@ -354,6 +356,29 @@ runNotifyProduction = interpret $ \_ -> \case
     -- Webhook URLs embed secrets (hooks.slack.com/services/T…/B…/SECRET).
     -- Only include a short prefix for debugging; never the secret.
     redactedWebhookSuffix url = T.take 16 (fromMaybe url $ T.stripPrefix "https://hooks.slack.com/services/" url) <> "…"
+
+    -- Rewrite a chat.postMessage-shaped payload into one the incoming webhook
+    -- accepts: strip "channel", and when blocks are nested inside a single
+    -- legacy attachment (our @slackAttachment@ wrapper, used for the color
+    -- bar), promote them to top-level "blocks" since webhooks reject Block Kit
+    -- inside attachments with invalid_attachments. Fallback text (if present)
+    -- is preserved as top-level "text" for notifications/pre-expand previews.
+    flattenForWebhook :: AE.Value -> AE.Value
+    flattenForWebhook = \case
+      AE.Object obj ->
+        let stripped = AEK.delete "channel" obj
+         in case AEK.lookup "attachments" stripped of
+              Just (AE.Array atts)
+                | [AE.Object att] <- toList atts
+                , Just bs@(AE.Array _) <- AEK.lookup "blocks" att ->
+                    let base = AEK.delete "attachments" stripped
+                        withBlocks = AEK.insert "blocks" bs base
+                        fallback = case AEK.lookup "fallback" att of
+                          Just (AE.String t) -> Just t
+                          _ -> Nothing
+                     in AE.Object $ maybe withBlocks (\t -> AEK.insert "text" (AE.String t) withBlocks) fallback
+              _ -> AE.Object stripped
+      v -> v
 
     sendDiscord :: (IOE :> es, Log :> es, Reader Config.AuthContext :> es) => DiscordData -> Eff es (Maybe Text)
     sendDiscord DiscordData{..} = do
