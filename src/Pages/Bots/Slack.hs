@@ -1,13 +1,14 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-module Pages.Bots.Slack (linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, getSlackChannels, getSlackChannelInfo, SlackChannelsResponse (..), SlackActionForm, externalOptionsH, slackInteractionsH, SlackInteraction (..), sendSlackWelcomeMessage, logWelcomeMessageFailure) where
+module Pages.Bots.Slack (linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, getSlackChannels, getSlackChannelInfo, SlackChannelsResponse (..), SlackActionForm, externalOptionsH, slackInteractionsH, SlackInteraction (..), sendSlackWelcomeMessage, sendSlackWelcomeViaWebhook, logWelcomeMessageFailure) where
 
 import BackgroundJobs qualified as BgJobs
-import Control.Lens ((.~), (^.))
+import Control.Lens ((.~), (^.), (^?))
 import Data.Aeson (withObject)
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as KEM
 import Data.Aeson.KeyMap qualified as AEKM
+import Data.Aeson.Lens (key, _Bool, _String)
 
 import Data.Aeson.Types (parseMaybe)
 import Data.Default (Default (def))
@@ -36,6 +37,7 @@ import Models.Apis.Issues qualified as Issues
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
+import Network.HTTP.Types (statusIsSuccessful)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
 import OddJobs.Job (createJob)
@@ -109,7 +111,7 @@ data TokenResponse = TokenResponse
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] TokenResponse
 
 
-exchangeCodeForToken :: HTTP :> es => Text -> Text -> Text -> Text -> Eff es (Maybe TokenResponse)
+exchangeCodeForToken :: (HTTP :> es, Log.Log :> es) => Text -> Text -> Text -> Text -> Eff es (Maybe TokenResponse)
 exchangeCodeForToken clientId clientSecret redirectUri code = do
   let formData :: [FormParam]
       formData =
@@ -123,9 +125,14 @@ exchangeCodeForToken clientId clientSecret redirectUri code = do
   response <- postWith (defaults & hds) "https://slack.com/api/oauth.v2.access" formData
   let responseBdy = response ^. responseBody
   case AE.decode responseBdy of
-    Just token -> do
-      return $ Just token
-    Nothing -> return Nothing
+    Just token -> return $ Just token
+    Nothing -> do
+      -- Slack returns {"ok":false,"error":"bad_redirect_uri"} etc. here; log
+      -- the error field so install failures are diagnosable. Never log raw
+      -- body (could contain access_token on partial/odd responses).
+      let errTxt = fromMaybe "unparseable_response" $ (AE.decode responseBdy :: Maybe AE.Value) >>= (^? key "error" . _String)
+      Log.logAttention "Slack oauth.v2.access token exchange failed" $ AE.object ["error" AE..= errTxt]
+      return Nothing
 
 
 -- | Parse state parameter: "projectId" or "projectId__onboarding"
@@ -150,11 +157,23 @@ linkProjectGetH slack_code stateM = do
       project <- Projects.projectById pid
       case (token, project) of
         (Just token', Just project') -> do
-          void $ insertAccessToken pid token'.team.id token'.incomingWebhook.channelId token'.team.name token'.accessToken token'.incomingWebhook.channel
+          -- Cross-workspace re-install: if the previous apis.slack row was bound to a
+          -- different Slack workspace (team_id), channels on @everyone belonging to the
+          -- old workspace are orphaned by the new bot token and would produce
+          -- channel_not_found on every alert. Clear them before installing the new one.
+          existing <- getProjectSlackData pid
+          case existing of
+            Just prev | prev.teamId /= token'.team.id -> do
+              Log.logAttention ("Slack re-install switching workspaces; clearing old channels" :: Text) $ AE.object ["project_id" AE..= pid, "old_team_id" AE..= prev.teamId, "new_team_id" AE..= token'.team.id]
+              ProjectMembers.removeSlackChannelsFromEveryoneTeam pid
+            _ -> pass
+          void $ insertAccessToken pid token'.team.id token'.incomingWebhook.channelId token'.team.name token'.accessToken token'.incomingWebhook.channel token'.incomingWebhook.url
           void $ liftIO $ withResource pool $ \conn -> createJob conn "background_jobs" $ BgJobs.SlackNotification pid ("Monoscope Bot has been linked to your project: " <> project'.title)
           wasAdded <- ProjectMembers.addSlackChannelToEveryoneTeam pid token'.incomingWebhook.channelId
           when wasAdded do
-            result <- tryAny $ sendSlackWelcomeMessage token'.accessToken token'.incomingWebhook.channelId project'.title
+            -- Bot isn't auto-joined to the picked channel (esp. private ones),
+            -- so post the welcome via the channel-bound incoming webhook URL.
+            result <- tryAny $ sendSlackWelcomeViaWebhook token'.incomingWebhook.url project'.title
             whenLeft_ result (logWelcomeMessageFailure token'.incomingWebhook.channelId)
           if isOnboarding
             then pure $ addHeader ("/p/" <> pid.toText <> "/onboarding?step=NotifChannel") $ NoContent $ PageCtx bwconf ()
@@ -433,26 +452,38 @@ slackActionsH action = do
 lookupSelectedValueByKey :: Text -> AE.Value -> Maybe Text
 lookupSelectedValueByKey key' = parseMaybe parser
   where
-    key = KEM.fromText key'
+    kemKey = KEM.fromText key'
     parser = AE.withObject "state" $ \o -> do
       values <- o AE..: "values"
-      inner <- values AE..: key
-      field <- inner AE..: key
+      inner <- values AE..: kemKey
+      field <- inner AE..: kemKey
       selected <- field AE..: "selected_option"
       selected AE..: "value"
 
 
+-- | Slack's response_url is ephemeral (30 min / 5 uses). A 4xx means the URL
+-- expired or the channel/user is gone; surface it so failed slash-command
+-- follow-ups don't vanish silently.
 sendSlackFollowupResponse :: Text -> AE.Value -> ATBaseCtx ()
 sendSlackFollowupResponse responseUrl content = do
-  _ <- postWith (defaults & contentTypeHeader "application/json") (toString responseUrl) content
-  pass
+  rs <- postWith (defaults & contentTypeHeader "application/json") (toString responseUrl) content
+  unless (statusIsSuccessful (rs ^. Wreq.responseStatus))
+    $ Log.logAttention "Slack followup POST non-2xx"
+    $ AE.object
+      [ "response_url_prefix" AE..= T.take 60 responseUrl
+      , "status" AE..= show @Text (rs ^. Wreq.responseStatus)
+      , "body" AE..= T.take 200 (decodeUtf8 @Text (toStrict (rs ^. Wreq.responseBody)))
+      ]
 
 
+-- | views.open / views.update returns ok:false on expired trigger_id, bad
+-- view definition, etc. Log on non-ok so failed modals don't silently vanish
+-- (user clicks /dashboard, nothing happens, no trace in logs).
 triggerSlackModal :: Text -> Text -> AE.Value -> ATBaseCtx ()
 triggerSlackModal token action content = do
-  let url = toString $ "https://slack.com/api/views." <> action
-  res <- postWith (defaults & header "Authorization" .~ [encodeUtf8 $ "Bearer " <> token] & contentTypeHeader "application/json") url content
-  pass
+  rs <- slackPost token ("https://slack.com/api/views." <> action) content
+  whenLeft_ (parseSlackOkOrErr (rs ^. Wreq.responseBody)) \err ->
+    Log.logAttention "Slack views API rejected" $ AE.object ["action" AE..= action, "error" AE..= err]
 
 
 data SlackInteraction = SlackInteraction
@@ -567,59 +598,86 @@ externalOptionsH val = do
       ]
 
 
-sendSlackChatMessage :: HTTP :> es => Text -> AE.Value -> Eff es ()
+-- | Parse Slack's uniform ok/error envelope. Returns @Right ()@ when
+-- @ok:true@, @Left err@ otherwise (including unparseable bodies).
+-- Slack's REST endpoints (chat.postMessage, views.open, views.update, etc.)
+-- all return HTTP 200 on semantic failures; the real status is in the body.
+parseSlackOkOrErr :: LByteString -> Either Text ()
+parseSlackOkOrErr body = case (AE.decode body :: Maybe AE.Value) >>= (^? key "ok" . _Bool) of
+  Just True -> Right ()
+  _ -> Left $ fromMaybe "unparseable_response" $ (AE.decode body :: Maybe AE.Value) >>= (^? key "error" . _String)
+
+
+slackPost :: HTTP :> es => Text -> Text -> AE.Value -> Eff es (Wreq.Response LByteString)
+slackPost token url =
+  postWith (defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bearer " <> token]) (toString url)
+
+
+-- | Post to chat.postMessage and log attention on non-ok responses so silent
+-- drops (bot not invited, archived channel, etc.) surface in monitoring.
+sendSlackChatMessage :: (HTTP :> es, Log.Log :> es) => Text -> AE.Value -> Eff es ()
 sendSlackChatMessage token content = do
-  let url = "https://slack.com/api/chat.postMessage"
-  let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bearer " <> token]
-  rs <- postWith opts (toString url) content
-  pass
+  rs <- slackPost token "https://slack.com/api/chat.postMessage" content
+  whenLeft_ (parseSlackOkOrErr (rs ^. Wreq.responseBody)) \err ->
+    let chan = fromMaybe "" $ content ^? key "channel" . _String
+     in Log.logAttention "Slack chat.postMessage rejected" $ AE.object ["channel_id" AE..= chan, "error" AE..= err]
 
 
--- | Slack chat.postMessage returns HTTP 200 even on semantic failures
--- (not_in_channel, channel_not_found, is_archived, …), with the real status in
--- the JSON body. This variant parses @ok@/@error@ and throws a plain
--- 'Exception' on semantic failure so callers using 'tryAny' (e.g. the
--- integrations save handler) can distinguish reachable from unreachable
--- channels.
+-- | Like 'sendSlackChatMessage' but throws on non-ok — for callers that
+-- wrap with 'tryAny' and want reachability as an exception (e.g. the
+-- integrations save handler's per-channel welcome probe).
 sendSlackChatMessageChecked :: (HTTP :> es, IOE :> es) => Text -> AE.Value -> Eff es ()
 sendSlackChatMessageChecked token content = do
-  let url = "https://slack.com/api/chat.postMessage"
-  let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bearer " <> token]
-  rs <- postWith opts (toString url) content
-  let body = rs ^. Wreq.responseBody
-  case AE.decode body of
-    Just (AE.Object o) | Just (AE.Bool True) <- AEKM.lookup "ok" o -> pass
-    Just (AE.Object o) ->
-      let errTxt = case AEKM.lookup "error" o of
-            Just (AE.String e) -> e
-            _ -> "unknown_slack_error"
-       in liftIO $ throwIO $ ErrorCall $ "slack chat.postMessage failed: " <> toString errTxt
-    _ -> liftIO $ throwIO $ ErrorCall "slack chat.postMessage returned unparseable body"
+  rs <- slackPost token "https://slack.com/api/chat.postMessage" content
+  whenLeft_ (parseSlackOkOrErr (rs ^. Wreq.responseBody)) \err ->
+    liftIO $ throwIO $ ErrorCall $ "slack chat.postMessage failed: " <> toString err
+
+
+welcomeBlocks :: Text -> AE.Value
+welcomeBlocks projectTitle =
+  AE.object
+    [ "blocks"
+        AE..= AE.Array
+          ( V.fromList
+              [ AE.object
+                  [ "type" AE..= "section"
+                  , "text"
+                      AE..= AE.object
+                        [ "type" AE..= "mrkdwn"
+                        , "text"
+                            AE..= [fmt|🟢 *Monoscope connected!*
+
+This channel will now receive notifications for *{projectTitle}*.|]
+                        ]
+                  ]
+              ]
+          )
+    ]
 
 
 sendSlackWelcomeMessage :: (HTTP :> es, IOE :> es) => Text -> Text -> Text -> Eff es ()
 sendSlackWelcomeMessage token channelId projectTitle = do
-  let message =
-        AE.object
-          [ "channel" AE..= channelId
-          , "blocks"
-              AE..= AE.Array
-                ( V.fromList
-                    [ AE.object
-                        [ "type" AE..= "section"
-                        , "text"
-                            AE..= AE.object
-                              [ "type" AE..= "mrkdwn"
-                              , "text"
-                                  AE..= [fmt|🟢 *Monoscope connected!*
-
-This channel will now receive notifications for *{projectTitle}*.|]
-                              ]
-                        ]
-                    ]
-                )
-          ]
+  let message = case welcomeBlocks projectTitle of
+        AE.Object blocks -> AE.Object (AEKM.insert "channel" (AE.String channelId) blocks)
+        v -> v -- unreachable: welcomeBlocks always returns an object
   sendSlackChatMessageChecked token message
+
+
+-- | Post the welcome message via an OAuth-time incoming webhook. Used when
+-- the bot user isn't a member of the channel (typical for private channels
+-- picked at install time). Webhook URL is channel-bound, so no "channel"
+-- field (Slack rejects it on webhooks). Slack webhooks respond with body
+-- "ok" on success — a 200 with a different body means the payload was
+-- rejected semantically (invalid_payload, channel_is_archived, no_service).
+-- Throws on either HTTP error or body≠ok so tryAny-wrapping callers surface
+-- the failure as a welcome-message-failed log with context.
+sendSlackWelcomeViaWebhook :: (HTTP :> es, IOE :> es) => Text -> Text -> Eff es ()
+sendSlackWelcomeViaWebhook webhookUrl projectTitle = do
+  let opts = defaults & header "Content-Type" .~ ["application/json"]
+  rs <- postWith opts (toString webhookUrl) (welcomeBlocks projectTitle)
+  let body = rs ^. Wreq.responseBody
+  unless (body == "ok" || body == "\"ok\"")
+    $ liftIO $ throwIO $ ErrorCall $ "slack webhook rejected payload: " <> toString (decodeUtf8 @Text (toStrict body))
 
 
 data UrlVerificationData = UrlVerificationData
@@ -682,16 +740,18 @@ slackEventsPostH payload = do
         whenLeft_ resultE \err -> Log.logAttention "Slack event callback background task failed" $ AE.object ["error" AE..= show @Text err, "team_id" AE..= cb.team_id]
       pure $ AE.object []
   where
-    handleEventCallback envCfg event teamId now = void $ withSlackDataByTeam "handleEventCallback" teamId \slackData -> case event.thread_ts of
-      Nothing -> sendSlackChatMessage slackData.botToken (mergeSlackContent (formatBotError Slack ServiceError) (AE.object ["channel" AE..= event.channel]))
-      Just threadTs -> processThreadedEvent envCfg slackData event teamId threadTs now
+    handleEventCallback envCfg event workspaceId now = void $ withSlackDataByTeam "handleEventCallback" workspaceId \slackData -> case event.thread_ts of
+      Nothing -> do
+        Log.logTrace "Slack fallback_error_message (non-threaded event)" $ AE.object ["team_id" AE..= (workspaceId :: Text), "channel_id" AE..= event.channel]
+        sendSlackChatMessage slackData.botToken (mergeSlackContent (formatBotError Slack ServiceError) (AE.object ["channel" AE..= event.channel]))
+      Just threadTs -> processThreadedEvent envCfg slackData event workspaceId threadTs now
 
-    processThreadedEvent envCfg slackData event teamId threadTs now = do
+    processThreadedEvent envCfg slackData event workspaceId threadTs now = do
       -- Generate deterministic conversation ID from channel + thread_ts
       let convId = Issues.slackThreadToConversationId event.channel threadTs
 
       -- Ensure conversation exists
-      _ <- Issues.getOrCreateConversation slackData.projectId convId Issues.CTSlackThread (AE.object ["channel_id" AE..= event.channel, "thread_ts" AE..= threadTs, "team_id" AE..= teamId])
+      _ <- Issues.getOrCreateConversation slackData.projectId convId Issues.CTSlackThread (AE.object ["channel_id" AE..= event.channel, "thread_ts" AE..= threadTs, "team_id" AE..= (workspaceId :: Text)])
 
       -- Load existing history from DB
       existingHistory <- Issues.selectChatHistory convId
@@ -720,7 +780,9 @@ slackEventsPostH payload = do
       -- Use processAIQuery with thread context
       result <- processAIQuery slackData.projectId event.text (Just threadContext) envCfg.openaiModel envCfg.openaiApiKey
       case result of
-        Left _ -> sendSlackChatMessage slackData.botToken (mergeSlackContent (formatBotError Slack ServiceError) (AE.object ["channel" AE..= event.channel, "thread_ts" AE..= threadTs]))
+        Left err -> do
+          Log.logAttention "Slack fallback_error_message (threaded AI query failed)" $ AE.object ["team_id" AE..= slackData.teamId, "channel_id" AE..= event.channel, "thread_ts" AE..= threadTs, "ai_error" AE..= err]
+          sendSlackChatMessage slackData.botToken (mergeSlackContent (formatBotError Slack ServiceError) (AE.object ["channel" AE..= event.channel, "thread_ts" AE..= threadTs]))
         Right resp -> do
           -- Save user message and bot response to DB
           Issues.insertChatMessage slackData.projectId convId "user" event.text Nothing Nothing

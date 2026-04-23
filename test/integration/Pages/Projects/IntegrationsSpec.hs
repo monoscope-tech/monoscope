@@ -225,7 +225,7 @@ spec = aroundAll withTestResources $ do
           [HI.sql|UPDATE projects.teams SET slack_channels = '{}' WHERE project_id = #{testPid} AND is_everyone = TRUE|]
         -- Simulate what Slack.linkProjectGetH does
         runTestBg frozenTime tr do
-          void $ ApisInt.insertAccessToken testPid "T_OAUTH" "C_OAUTH" "Workspace" "xoxb-oauth" "general"
+          void $ ApisInt.insertAccessToken testPid "T_OAUTH" "C_OAUTH" "Workspace" "xoxb-oauth" "general" "https://hooks.slack.com/services/oauth"
           void $ PM.addSlackChannelToEveryoneTeam testPid "C_OAUTH"
         slackRows :: [(Text, Maybe Text)] <- runQueryEffect tr $
           Hasql.interp [HI.sql|SELECT channel_id, team_name FROM apis.slack WHERE project_id = #{testPid}|]

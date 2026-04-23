@@ -147,17 +147,23 @@ sendSlackAlert = sendSlackAlertWith Nothing
 
 
 -- | Internal: send Slack alert with optional thread-ts for threading.
--- Routing source is the explicit @channelM@ argument — which callers resolve from
--- @everyone.slack_channels@. We do NOT fall back to apis.slack.channel_id: that
--- column is OAuth-time display metadata, not a routing source. A caller that
--- forgets to supply a channel should surface as "no routing" and get logged.
+-- Routing: if the target channel matches the project's OAuth-time default
+-- (apis.slack.channel_id) AND a webhook URL is on file, post via the
+-- channel-bound incoming webhook — works without bot membership, essential
+-- for private channels picked at install time. Otherwise post via
+-- chat.postMessage which supports threading but needs bot membership.
+--
+-- Threading caveat: @threadTsM@ is silently dropped on the webhook branch
+-- — Slack's incoming-webhook API does not accept @thread_ts@. If a feature
+-- relies on threaded replies, the thread parent must have been posted via
+-- chat.postMessage (i.e. the target is NOT the OAuth-default channel, or no
+-- webhook URL is on file).
 sendSlackAlertWith :: (DB es, Log :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => Maybe Text -> NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es (Maybe Text)
 sendSlackAlertWith threadTsM alert pid pTitle channelM = do
   appCtx <- ask @Config.AuthContext
   slackData <- getProjectSlackData pid
-  let botTokenM = (.botToken) <$> slackData
-  case (channelM, botTokenM) of
-    (Just cid, Just bt) -> do
+  case (channelM, slackData) of
+    (Just cid, Just sd) -> do
       let projectUrl = appCtx.env.hostUrl <> "p/" <> pid.toText
           mkPayload = \case
             RuntimeErrorAlert{..} -> Just $ slackErrorAlert runtimeAlertType errorData issueTitle pTitle cid projectUrl chartUrl occurrenceText firstSeenText
@@ -168,12 +174,20 @@ sendSlackAlertWith threadTsM alert pid pTitle channelM = do
             LogPatternAlert{..} -> Just $ mkSlackLogPatternPayload patternText issueUrl logLevel serviceName sourceField occurrenceCount pTitle cid
             LogPatternRateChangeAlert{..} -> Just $ mkSlackLogPatternRateChangePayload patternText issueUrl logLevel serviceName direction currentRate baselineMean changePercent pTitle cid
             ShapeAlert -> Nothing
+          isDefaultChannel = cid == sd.channelId
       case mkPayload alert of
         Nothing -> pure Nothing
-        Just payload -> Notify.sendNotificationWithReply $ Notify.slackThreadedNotification cid bt payload threadTsM
-    _ -> do
-      Log.logAttention "Slack alert skipped: missing channel or bot token" (AE.object ["project_id" AE..= pid, "has_channel" AE..= isJust channelM, "has_token" AE..= isJust botTokenM])
-      pure Nothing
+        Just payload -> do
+          -- Legacy installs (apis.slack row created between migrations 0077 and 0080)
+          -- have no webhookUrl; they silently fall through to chat.postMessage and
+          -- fail for private channels. Log a distinct attention so ops can prompt a re-OAuth.
+          when (isDefaultChannel && isNothing sd.webhookUrl)
+            $ Log.logAttention "Slack default channel has no webhook URL; falling back to chat.postMessage (will fail for private channels — user must re-OAuth)" (AE.object ["project_id" AE..= pid, "team_id" AE..= sd.teamId, "channel_id" AE..= cid])
+          let notif = case (isDefaultChannel, sd.webhookUrl) of
+                (True, Just url) -> Notify.slackWebhookNotification url cid payload
+                _ -> Notify.slackThreadedNotification cid sd.botToken payload threadTsM
+          Notify.sendNotificationWithReply $ Notify.withSlackContext pid.toText sd.teamId notif
+    _ -> Nothing <$ Log.logAttention "Slack alert skipped: missing channel or slack data" (AE.object ["project_id" AE..= pid, "has_channel" AE..= isJust channelM, "has_slack" AE..= isJust slackData])
 
 
 sendWhatsAppAlert :: (Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> V.Vector Text -> Eff es ()

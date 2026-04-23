@@ -27,10 +27,16 @@ import System.Types (DB)
 
 -- | OAuth-time Slack credentials + the channel the app was installed to.
 --
--- @channelId@ and @channelName@ are display metadata: they record the channel
--- the bot originally landed in at OAuth time so the UI can label it (crucial
--- for private channels the bot can't list via conversations.list). Alert
--- routing reads from the @everyone team's @slack_channels@ — never this row.
+-- @channelId@ and @channelName@ record the channel the user picked during
+-- OAuth. @webhookUrl@ is the channel-bound incoming webhook Slack issues at
+-- install time — POSTing to it delivers to that exact channel without
+-- requiring the bot user to be a member. That's the only path that works for
+-- private channels unless the user manually @/invite@s the bot.
+--
+-- Alert routing to this channel uses @webhookUrl@; routing to any additional
+-- channels the user adds (via /here or the dropdown) uses chat.postMessage
+-- with @botToken@ and does require bot membership. Threading is available
+-- only on the chat.postMessage path — webhooks don't accept thread_ts.
 data SlackData = SlackData
   { projectId :: Projects.ProjectId
   , teamId :: Text
@@ -38,32 +44,40 @@ data SlackData = SlackData
   , botToken :: Text
   , channelId :: Text
   , channelName :: Maybe Text
+  , webhookUrl :: Maybe Text
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (HI.DecodeRow, NFData)
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SlackData
 
 
-insertAccessToken :: DB es => Projects.ProjectId -> Text -> Text -> Text -> Text -> Text -> Eff es Int64
-insertAccessToken pid teamId channelId teamName botToken channelName =
+insertAccessToken :: DB es => Projects.ProjectId -> Text -> Text -> Text -> Text -> Text -> Text -> Eff es Int64
+insertAccessToken pid teamId channelId teamName botToken channelName webhookUrl =
   Hasql.interpExecute
     [HI.sql|INSERT INTO apis.slack
-               (project_id, team_id, channel_id, team_name, bot_token, channel_name)
-               VALUES (#{pid},#{teamId},#{channelId},#{teamName},#{botToken},#{channelName})
+               (project_id, team_id, channel_id, team_name, bot_token, channel_name, webhook_url)
+               VALUES (#{pid},#{teamId},#{channelId},#{teamName},#{botToken},#{channelName},#{webhookUrl})
                ON CONFLICT (project_id)
-               DO UPDATE SET team_id = EXCLUDED.team_id, channel_id = EXCLUDED.channel_id, team_name = EXCLUDED.team_name, bot_token = EXCLUDED.bot_token, channel_name = EXCLUDED.channel_name |]
+               DO UPDATE SET team_id = EXCLUDED.team_id, channel_id = EXCLUDED.channel_id, team_name = EXCLUDED.team_name, bot_token = EXCLUDED.bot_token, channel_name = EXCLUDED.channel_name, webhook_url = EXCLUDED.webhook_url |]
 
 
 getProjectSlackData :: DB es => Projects.ProjectId -> Eff es (Maybe SlackData)
-getProjectSlackData pid = Hasql.interpOne [HI.sql|SELECT project_id, team_id, team_name, bot_token, channel_id, channel_name FROM apis.slack WHERE project_id = #{pid} |]
+getProjectSlackData pid = Hasql.interpOne [HI.sql|SELECT project_id, team_id, team_name, bot_token, channel_id, channel_name, webhook_url FROM apis.slack WHERE project_id = #{pid} |]
 
 
 getSlackDataByTeamId :: DB es => Text -> Eff es (Maybe SlackData)
-getSlackDataByTeamId teamId = Hasql.interpOne [HI.sql|SELECT project_id, team_id, team_name, bot_token, channel_id, channel_name FROM apis.slack WHERE team_id = #{teamId} |]
+getSlackDataByTeamId teamId = Hasql.interpOne [HI.sql|SELECT project_id, team_id, team_name, bot_token, channel_id, channel_name, webhook_url FROM apis.slack WHERE team_id = #{teamId} |]
 
 
--- | Update the OAuth-time "default" channel cached on apis.slack. This is
--- display metadata only; routing is driven by the @everyone team.
+-- | Update the OAuth-time default channel cached on apis.slack.
+--
+-- Note: this is NOT purely display metadata. @channel_id@ is the discriminator
+-- @Pkg.Mail.sendSlackAlertWith@ uses to decide webhook-vs-chat-API routing
+-- (@cid == sd.channelId@). Updating @channel_id@ here without also re-issuing
+-- @webhook_url@ will desync the pair — the webhook is channel-bound at
+-- install time and cannot be moved. Callers that change this should either
+-- re-run OAuth (which rewrites both) or clear @webhook_url@ so the alert path
+-- falls through to chat.postMessage.
 updateSlackDefaultChannel :: DB es => Text -> Text -> Maybe Text -> Eff es Int64
 updateSlackDefaultChannel teamId channelId channelName =
   Hasql.interpExecute

@@ -25,6 +25,8 @@ module Data.Effectful.Notify (
   emailNotification,
   slackNotification,
   slackThreadedNotification,
+  slackWebhookNotification,
+  withSlackContext,
   whatsappNotification,
   discordNotification,
   discordThreadedNotification,
@@ -38,8 +40,9 @@ import Control.Lens.Setter ((?~))
 import Control.Retry (exponentialBackoff, limitRetries, retrying)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEK
-import Data.Aeson.Lens (key, _String)
+import Data.Aeson.Lens (key, _Bool, _String)
 import Data.Aeson.QQ (aesonQQ)
+import Data.Text qualified as T
 import Data.Text.Display (Display, display)
 import Effectful
 import Effectful.Dispatch.Dynamic
@@ -67,11 +70,26 @@ data EmailData = EmailData
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
+-- | Routing info for a single Slack message.
+-- When @webhookUrl@ is @Just u@, the message is posted to @u@ directly — used
+-- for the OAuth-time default channel so we don't require the bot user to be a
+-- member (critical for private channels picked in Slack's install consent
+-- screen). Threading is unavailable via webhook; @threadTs@ is ignored.
+-- When @webhookUrl@ is @Nothing@, we use chat.postMessage with @botToken@,
+-- which supports threading but requires the bot to be in @channelId@.
+--
+-- @projectIdCtx@ and @teamIdCtx@ are logging breadcrumbs only — when Slack
+-- starts silently 404ing a webhook (app uninstalled, token revoked) we need
+-- to attribute the failure back to a specific project/workspace. Empty when
+-- unavailable; never used for routing.
 data SlackData = SlackData
   { channelId :: Text
   , botToken :: Text
   , payload :: AE.Value
   , threadTs :: Maybe Text
+  , webhookUrl :: Maybe Text
+  , projectIdCtx :: Text
+  , teamIdCtx :: Text
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
@@ -150,12 +168,27 @@ emailNotification receiver subject htmlBody = EmailNotification EmailData{..}
 
 slackNotification :: Text -> Text -> AE.Value -> Notification
 slackNotification channelId botToken payload =
-  let threadTs = Nothing in SlackNotification SlackData{..}
+  SlackNotification SlackData{channelId, botToken, payload, threadTs = Nothing, webhookUrl = Nothing, projectIdCtx = "", teamIdCtx = ""}
 
 
 slackThreadedNotification :: Text -> Text -> AE.Value -> Maybe Text -> Notification
 slackThreadedNotification channelId botToken payload threadTs =
-  SlackNotification SlackData{..}
+  SlackNotification SlackData{channelId, botToken, payload, threadTs, webhookUrl = Nothing, projectIdCtx = "", teamIdCtx = ""}
+
+
+-- | Post via the OAuth-time incoming webhook URL. Works for any channel the
+-- user picked during install (public or private) without requiring bot
+-- membership; does not support threading.
+slackWebhookNotification :: Text -> Text -> AE.Value -> Notification
+slackWebhookNotification webhookUrl channelId payload =
+  SlackNotification SlackData{channelId, botToken = "", payload, threadTs = Nothing, webhookUrl = Just webhookUrl, projectIdCtx = "", teamIdCtx = ""}
+
+
+-- | Attach project + workspace ids to a Slack notification for log
+-- correlation. Does not affect routing.
+withSlackContext :: Text -> Text -> Notification -> Notification
+withSlackContext pid tid (SlackNotification sd) = SlackNotification sd{projectIdCtx = pid, teamIdCtx = tid}
+withSlackContext _ _ n = n
 
 
 discordNotification :: Text -> AE.Value -> Notification
@@ -263,28 +296,64 @@ runNotifyProduction = interpret $ \_ -> \case
   GetNotifications -> pure [] -- Production doesn't store notifications
   where
     sendSlack :: (IOE :> es, Log :> es, Reader Config.AuthContext :> es) => SlackData -> Eff es (Maybe Text)
-    sendSlack SlackData{..} = do
-      let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bearer " <> botToken]
-      case payload of
-        AE.Object obj -> do
-          let withThread = case threadTs of
-                Just ts -> AEK.insert "thread_ts" (AE.String ts) obj
-                Nothing -> obj
-              msg = AE.Object $ AEK.insert "channel" (AE.String channelId) withThread
-          result <- liftIO $ try @SomeException $ postWith opts "https://slack.com/api/chat.postMessage" msg
-          case result of
-            Right re
-              | statusIsSuccessful (re ^. responseStatus) ->
-                  pure $ (AE.decode (re ^. responseBody) :: Maybe AE.Value) >>= (^? key "ts" . _String)
-            Right re -> do
-              Log.logAttention "Slack notification failed" (channelId, show $ re ^. responseStatus)
-              pure Nothing
-            Left ex -> do
-              Log.logAttention "Slack notification failed" (channelId, displayException ex)
-              pure Nothing
-        _ -> do
-          Log.logAttention "Slack notification message is not an object" (channelId, show payload)
-          pure Nothing
+    sendSlack sd = case sd.webhookUrl of
+      Just url -> sendSlackWebhook sd url
+      Nothing -> sendSlackChatApi sd
+
+    -- chat.postMessage: requires bot membership; supports threading.
+    sendSlackChatApi sd = case sd.payload of
+      AE.Object obj -> do
+        let withThread = maybe obj (\ts -> AEK.insert "thread_ts" (AE.String ts) obj) sd.threadTs
+            msg = AE.Object $ AEK.insert "channel" (AE.String sd.channelId) withThread
+            opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bearer " <> sd.botToken]
+        -- Slack always returns HTTP 200; the real success flag is in the JSON body.
+        -- not_in_channel / channel_not_found / is_archived all come back as 200 with
+        -- ok:false. Treating 200 as success hides the "bot not invited" class of bug.
+        liftIO (try @SomeException $ postWith opts "https://slack.com/api/chat.postMessage" msg) >>= \case
+          Right re
+            | statusIsSuccessful (re ^. responseStatus) ->
+                let body = AE.decode (re ^. responseBody) :: Maybe AE.Value
+                 in case body >>= (^? key "ok" . _Bool) of
+                      Just True -> pure $ body >>= (^? key "ts" . _String)
+                      _ -> do
+                        let errTxt = fromMaybe "unknown" $ body >>= (^? key "error" . _String)
+                        Log.logAttention "Slack chat.postMessage rejected by API" (chatApiLog sd ["error" AE..= errTxt])
+                        pure Nothing
+          Right re -> Nothing <$ Log.logAttention "Slack chat.postMessage HTTP failure" (chatApiLog sd ["status" AE..= show @Text (re ^. responseStatus)])
+          Left ex -> Nothing <$ Log.logAttention "Slack chat.postMessage exception" (chatApiLog sd ["error" AE..= displayException ex])
+      _ -> Nothing <$ Log.logAttention "Slack notification message is not an object" (slackLogCtx sd [])
+
+    -- Incoming webhook: channel-bound, no bot membership needed, no thread_ts.
+    -- Slack rejects the "channel" field on webhooks, so strip it. Webhook
+    -- endpoints return HTTP 200 + body "ok" on success; non-2xx (or a 200 with
+    -- a different body) on failure — we parse both so semantic failures
+    -- surface the same way as chat.postMessage rejections.
+    sendSlackWebhook sd url = do
+      let opts = defaults & header "Content-Type" .~ ["application/json"]
+          cleaned = case sd.payload of
+            AE.Object obj -> AE.Object (AEK.delete "channel" obj)
+            v -> v
+      liftIO (try @SomeException $ postWith opts (toString url) cleaned) >>= \case
+        Right re
+          | statusIsSuccessful (re ^. responseStatus) ->
+              let body = re ^. responseBody
+               in if body == "ok" || body == "\"ok\""
+                    then pure Nothing
+                    else Nothing <$ Log.logAttention "Slack webhook returned non-ok body" (webhookLog sd url ["body" AE..= decodeUtf8 @Text (toStrict body)])
+          | otherwise -> Nothing <$ Log.logAttention "Slack webhook HTTP failure" (webhookLog sd url ["status" AE..= show @Text (re ^. responseStatus), "body" AE..= decodeUtf8 @Text (toStrict (re ^. responseBody))])
+        Left ex -> Nothing <$ Log.logAttention "Slack webhook exception" (webhookLog sd url ["error" AE..= displayException ex])
+
+    -- Log context builders with transport pre-tagged at the call site.
+    slackLogCtx sd extra =
+      AE.object
+        $ ["project_id" AE..= sd.projectIdCtx, "team_id" AE..= sd.teamIdCtx, "channel_id" AE..= sd.channelId]
+          <> extra
+    chatApiLog sd extra = slackLogCtx sd (("transport" AE..= ("chat.postMessage" :: Text)) : extra)
+    webhookLog sd url extra = slackLogCtx sd (("transport" AE..= ("webhook" :: Text)) : ("webhook_suffix" AE..= redactedWebhookSuffix url) : extra)
+
+    -- Webhook URLs embed secrets (hooks.slack.com/services/T…/B…/SECRET).
+    -- Only include a short prefix for debugging; never the secret.
+    redactedWebhookSuffix url = T.take 16 (fromMaybe url $ T.stripPrefix "https://hooks.slack.com/services/" url) <> "…"
 
     sendDiscord :: (IOE :> es, Log :> es, Reader Config.AuthContext :> es) => DiscordData -> Eff es (Maybe Text)
     sendDiscord DiscordData{..} = do

@@ -116,7 +116,7 @@ getOpenAIModel tr = tr.trATCtx.env.openaiModel
 
 
 setupSlackData :: TestResources -> Projects.ProjectId -> Text -> IO ()
-setupSlackData tr pid teamId = void $ runTestBg frozenTime tr $ Slack.insertAccessToken pid teamId "C_NOTIF_CHANNEL" ("Test Workspace " <> teamId) "x-bot-token" "test-channel"
+setupSlackData tr pid teamId = void $ runTestBg frozenTime tr $ Slack.insertAccessToken pid teamId "C_NOTIF_CHANNEL" ("Test Workspace " <> teamId) "x-bot-token" "test-channel" "https://hooks.slack.com/services/test"
 
 
 setupDiscordData :: TestResources -> Projects.ProjectId -> Text -> IO ()

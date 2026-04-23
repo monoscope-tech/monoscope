@@ -342,7 +342,14 @@ updateNotificationsChannel pid NotifListForm{enabledChannels, phones, emails, sl
         (unreachable, reachableAdds) <- case (,) <$> projectM <*> slackInfoM of
           Just (project, slackInfo) -> do
             results <- forM addedChannels \cid -> do
-              r <- tryAny $ SlackP.sendSlackWelcomeMessage slackInfo.botToken cid project.title
+              -- OAuth-default channel: probe via the channel-bound webhook URL
+              -- (works for private channels; no bot membership needed).
+              -- Other channels: probe via chat.postMessage (needs bot membership).
+              -- A dead OAuth webhook (uninstalled app, revoked token) shouldn't
+              -- persist as a routing target any more than an un-invited channel.
+              r <- tryAny $ case (cid == slackInfo.channelId, slackInfo.webhookUrl) of
+                (True, Just url) -> SlackP.sendSlackWelcomeViaWebhook url project.title
+                _ -> SlackP.sendSlackWelcomeMessage slackInfo.botToken cid project.title
               case r of
                 Right () -> pure (Right cid)
                 Left err -> do
