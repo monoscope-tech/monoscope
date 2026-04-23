@@ -269,9 +269,9 @@ expandedItemView pid item aptSp leftM rightM = do
       div_ [class_ "flex justify-between items-start gap-2"] do
         if isAlert
           then div_ [class_ "flex items-center gap-3 flex-1 min-w-0"] do
-              h4_ [class_ "text-xl max-w-96 truncate"] $ toHtml $ fromMaybe "" item.name
-              let strCls = getAlertStatusColor $ fromMaybe "" item.status_message
-              span_ [class_ $ "badge badge-sm whitespace-nowrap " <> strCls] $ toHtml $ fromMaybe "" item.status_message
+            h4_ [class_ "text-xl max-w-96 truncate"] $ toHtml $ fromMaybe "" item.name
+            let strCls = getAlertStatusColor $ fromMaybe "" item.status_message
+            span_ [class_ $ "badge badge-sm whitespace-nowrap " <> strCls] $ toHtml $ fromMaybe "" item.status_message
           else
             div_ [class_ "flex-1 min-w-0"]
               $ renderSummaryElements (summaryForDetailView (Telemetry.generateSummary item))

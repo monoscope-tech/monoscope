@@ -80,6 +80,7 @@ import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HS
 import Data.Scientific (toBoundedInteger)
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Text.Lazy.Builder qualified as TLB
 import Data.Time (ZonedTime, addUTCTime, defaultTimeLocale, parseTimeM, secondsToNominalDiffTime)
@@ -87,7 +88,6 @@ import Data.Time.Clock (UTCTime (..), diffUTCTime, secondsToDiffTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format (formatTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
-import Data.Set qualified as Set
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.ToField (ToField (..))
 import Effectful (Eff, IOE, type (:>))
@@ -1462,21 +1462,22 @@ renderSummaryElement seg = case parseSummaryEl seg of
       truncCls = if summaryFieldIsLong field then " max-w-sm truncate whitespace-nowrap !justify-start" else ""
       pillCls = summaryStyleClass style <> truncCls
       tooltip = field <> ": " <> value
-     in case summaryFilterPath field of
-          Just path ->
-            div_
-              [ class_ "relative min-w-0"
-              , term "data-field-path" path
-              , term "data-field-value" ("\"" <> value <> "\"")
+     in
+      case summaryFilterPath field of
+        Just path ->
+          div_
+            [ class_ "relative min-w-0"
+            , term "data-field-path" path
+            , term "data-field-value" ("\"" <> value <> "\"")
+            ]
+            $ button_
+              [ class_ $ "cursor-pointer " <> pillCls
+              , term "data-tippy-content" tooltip
+              , term "_" "install LogItemMenuable"
               ]
-              $ button_
-                [ class_ $ "cursor-pointer " <> pillCls
-                , term "data-tippy-content" tooltip
-                , term "_" "install LogItemMenuable"
-                ]
-                (toHtml value)
-          Nothing ->
-            span_ [class_ pillCls, title_ tooltip] (toHtml value)
+              (toHtml value)
+        Nothing ->
+          span_ [class_ pillCls, title_ tooltip] (toHtml value)
   Nothing -> span_ [class_ "text-xs text-textWeak"] $ toHtml seg
 
 

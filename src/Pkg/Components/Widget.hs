@@ -1340,5 +1340,3 @@ renderCellValue col value
   | otherwise = toHtml formatted
   where
     formatted = formatColumnValue col value
-
-
