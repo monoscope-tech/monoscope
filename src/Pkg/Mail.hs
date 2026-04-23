@@ -692,11 +692,21 @@ runtimeAlertMessages = \case
 
 -- | Wrap Slack blocks in an attachment so Slack renders a colored left border bar.
 -- Channel is top-level; blocks live inside the single attachment along with the color.
+-- Incoming webhooks reject attachments missing a fallback — include one unconditionally
+-- so the same payload works on both chat.postMessage and the webhook transport.
 slackAttachment :: Text -> Text -> [AE.Value] -> AE.Value
 slackAttachment channelId color blocks =
   AE.object
     [ "channel" AE..= channelId
-    , "attachments" AE..= AE.Array (V.singleton $ AE.object ["color" AE..= color, "blocks" AE..= AE.Array (V.fromList blocks)])
+    , "attachments"
+        AE..= AE.Array
+          ( V.singleton
+              $ AE.object
+                [ "color" AE..= color
+                , "fallback" AE..= ("Monoscope alert" :: Text)
+                , "blocks" AE..= AE.Array (V.fromList blocks)
+                ]
+          )
     ]
 
 
