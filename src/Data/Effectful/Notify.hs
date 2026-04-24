@@ -43,8 +43,8 @@ import Data.Aeson.KeyMap qualified as AEK
 import Data.Aeson.Lens (key, _Bool, _String)
 import Data.Aeson.QQ (aesonQQ)
 import Data.Text qualified as T
-import Data.Vector qualified as V
 import Data.Text.Display (Display, display)
+import Data.Vector qualified as V
 import Effectful
 import Effectful.Dispatch.Dynamic
 import Effectful.Log (Log)
@@ -374,11 +374,13 @@ runNotifyProduction = interpret $ \_ -> \case
           text = if T.null rendered then "Monoscope alert" else rendered
           imageUrl = listToMaybe [u | AE.Object b <- blocks, Just (AE.String "image") <- [AEK.lookup "type" b], Just (AE.String u) <- [AEK.lookup "image_url" b]]
           color = extractColor payload
-          attachment = AE.object $ catMaybes
-            [ Just $ "fallback" AE..= ("Monoscope alert" :: Text)
-            , ("color" AE..=) <$> color
-            , ("image_url" AE..=) <$> imageUrl
-            ]
+          attachment =
+            AE.object
+              $ catMaybes
+                [ Just $ "fallback" AE..= ("Monoscope alert" :: Text)
+                , ("color" AE..=) <$> color
+                , ("image_url" AE..=) <$> imageUrl
+                ]
           base = ["text" AE..= text]
        in AE.object $ case (imageUrl, color) of
             (Nothing, Nothing) -> base
@@ -388,7 +390,8 @@ runNotifyProduction = interpret $ \_ -> \case
     extractColor (AE.Object obj)
       | Just (AE.Array atts) <- AEK.lookup "attachments" obj
       , (AE.Object att : _) <- toList atts
-      , Just (AE.String c) <- AEK.lookup "color" att = Just c
+      , Just (AE.String c) <- AEK.lookup "color" att =
+          Just c
     extractColor _ = Nothing
 
     -- Blocks may live at top level or inside the first legacy attachment

@@ -64,6 +64,7 @@ import Effectful.Error.Static (throwError)
 import Effectful.Log qualified as Log
 import Hasql.Interpolate qualified as HI
 
+import BackgroundJobs (errorTrendChartUrl)
 import BackgroundJobs qualified as BJ
 import Effectful.Reader.Static (ask, asks)
 import Effectful.Time qualified as Time
@@ -71,6 +72,7 @@ import Fmt (commaizeF, fmt)
 import Lucid
 import Lucid.Htmx (hxConfirm_, hxDelete_, hxGet_, hxIndicator_, hxPatch_, hxPost_, hxSwap_, hxTarget_)
 import Lucid.Hyperscript (__)
+import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers (Team (..), getTeamsById, resolveTeamEmails)
 import Models.Projects.ProjectMembers qualified as ProjectMembers
@@ -84,8 +86,6 @@ import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.EmailTemplates qualified as ET
 import Pkg.Mail (NotificationAlerts (..), sampleAlertByIssueTypeText, sampleReport, sendDiscordAlert, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendWhatsAppAlert)
-import BackgroundJobs (errorTrendChartUrl)
-import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Relude hiding (ask, asks)
 import Servant (err400, errBody)
 import System.Config
