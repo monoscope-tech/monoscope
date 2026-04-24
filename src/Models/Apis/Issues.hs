@@ -46,6 +46,7 @@ module Models.Apis.Issues (
   selectLatestIssueByHash,
   reopenIssue,
   bumpIssueUpdatedAt,
+  rateChangeCooldownHours,
 
   -- * Conversion Functions
   createAPIChangeIssue,

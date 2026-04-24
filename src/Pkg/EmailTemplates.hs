@@ -15,6 +15,8 @@ module Pkg.EmailTemplates (
   projectDeletedEmail,
   runtimeErrorsEmail,
   escalatingErrorsEmail,
+  logPatternEmail,
+  logPatternRateChangeEmail,
   regressedErrorsEmail,
   errorSpikesEmail,
   digestEmail,
@@ -375,6 +377,69 @@ runtimeErrorsEmail = runtimeErrorVariantEmail "New Runtime Error(s)" "[···] N
 escalatingErrorsEmail = runtimeErrorVariantEmail "Escalating Runtime Error(s)" "[···] Escalating Runtime Error(s) Detected - " "We've detected escalating runtime errors in your "
 regressedErrorsEmail = runtimeErrorVariantEmail "Regressed Runtime Error(s)" "[···] Regressed Runtime Error(s) Detected - " "We've detected regressed runtime errors in your "
 errorSpikesEmail = runtimeErrorVariantEmail "Runtime Error Spike(s)" "[···] Runtime Error Spike(s) Detected - " "We've detected a runtime error spike in your "
+
+
+-- | Email variants for log-pattern issues. Slack/Discord/PagerDuty payloads
+-- live in Pkg.Mail; email is just subject + html passed to sendRenderedEmail.
+logPatternEmail
+  :: Text -- projectName
+  -> Text -- issueUrl
+  -> Text -- patternText
+  -> Maybe Text -- sampleMessage
+  -> Maybe Text -- logLevel
+  -> Maybe Text -- serviceName
+  -> Text -- sourceField
+  -> Int -- occurrenceCount
+  -> (Text, Html ())
+logPatternEmail projectName issueUrl patternText sampleMessage logLevel serviceName sourceField occurrenceCount =
+  ( "[···] New " <> fromMaybe "log" logLevel <> " pattern - " <> projectName
+  , emailBody do
+      h1_ $ toHtml @Text ("New log pattern detected in " <> projectName)
+      emailStatRow
+        $ catMaybes
+          [ Just ("Level", fromMaybe "—" logLevel, Nothing)
+          , ("Service",,Nothing) <$> serviceName
+          , Just ("Occurrences", show occurrenceCount, Nothing)
+          , Just ("Source", sourceField, Nothing)
+          ]
+      emailDivider
+      p_ [style_ "margin: 0 0 8px; font-weight: 600; color: #24292f;"] "Pattern"
+      pre_ [style_ "font-family: monospace; font-size: 13px; white-space: pre-wrap; margin: 0 0 16px 0;"] $ toHtml patternText
+      whenJust sampleMessage \s -> do
+        p_ [style_ "margin: 0 0 8px; font-weight: 600; color: #24292f;"] "Sample"
+        pre_ [style_ "font-family: monospace; font-size: 13px; white-space: pre-wrap; margin: 0 0 16px 0;"] $ toHtml (truncateText 400 s)
+      emailButton issueUrl "Open issue"
+  )
+
+
+logPatternRateChangeEmail
+  :: Text -- projectName
+  -> Text -- issueUrl
+  -> Text -- patternText
+  -> Maybe Text -- logLevel
+  -> Maybe Text -- serviceName
+  -> Text -- direction
+  -> Double -- currentRate
+  -> Double -- baselineMean
+  -> Double -- changePercent
+  -> (Text, Html ())
+logPatternRateChangeEmail projectName issueUrl patternText logLevel serviceName direction currentRate baselineMean changePercent =
+  ( "[···] Log pattern " <> direction <> " - " <> projectName
+  , emailBody do
+      h1_ $ toHtml @Text ("Log pattern " <> direction <> " detected in " <> projectName)
+      emailStatRow
+        $ catMaybes
+          [ Just ("Level", fromMaybe "—" logLevel, Nothing)
+          , ("Service",,Nothing) <$> serviceName
+          , Just ("Current", show (round currentRate :: Int) <> "/h", Just "#cf222e")
+          , Just ("Baseline", show (round baselineMean :: Int) <> "/h", Nothing)
+          , Just ("Change", show (round changePercent :: Int) <> "%", Just "#cf222e")
+          ]
+      emailDivider
+      p_ [style_ "margin: 0 0 8px; font-weight: 600; color: #24292f;"] "Pattern"
+      pre_ [style_ "font-family: monospace; font-size: 13px; white-space: pre-wrap; margin: 0 0 16px 0;"] $ toHtml (truncateText 400 patternText)
+      emailButton issueUrl "Open issue"
+  )
 
 
 -- | Summary digest body for the hourly notification flush (rate-limited

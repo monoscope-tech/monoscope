@@ -1299,6 +1299,13 @@ notificationsPerProjectPerHour :: Int
 notificationsPerProjectPerHour = 20
 
 
+-- | Dedup window for new-log-pattern issue notifications. Shorter than the
+-- rate-change cooldown because first appearance of a novel ERROR/WARN pattern
+-- matters more; re-firing sooner is acceptable if it truly re-appeared.
+newPatternCooldownHours :: Int
+newPatternCooldownHours = 6
+
+
 consumeNotificationToken :: Projects.ProjectId -> UTCTime -> ATBackgroundCtx Bool
 consumeNotificationToken pid now = do
   -- UPSERT…RETURNING always produces one row; Nothing is treated as pass-through.
@@ -1332,6 +1339,57 @@ enqueueDigest pid errorPatternId issueId reason title =
     >> pass
 
 
+-- | Atomically claim the notification slot for an issue. Returns True if the
+-- UPDATE updated a row (caller must dispatch), False if another worker or an
+-- earlier tick in the cooldown window already notified — caller must skip.
+-- Mirrors the claim pattern used for error-pattern re-notifications.
+claimIssueNotification :: Issues.IssueId -> UTCTime -> Int -> ATBackgroundCtx Bool
+claimIssueNotification iid now cooldownHours =
+  isJust <$> (Hasql.interpOne q :: ATBackgroundCtx (Maybe Int))
+  where
+    q =
+      [HI.sql|
+        UPDATE apis.issues SET last_notified_at = #{now}
+        WHERE id = #{iid}
+          AND (last_notified_at IS NULL
+               OR last_notified_at < #{now}::timestamptz - make_interval(hours => #{cooldownHours}))
+        RETURNING 1 :: int
+      |]
+
+
+-- | Dispatch an issue notification with dedup + rate-limit + digest fallback.
+--
+-- Dedup: 'claimIssueNotification' atomically stamps 'apis.issues.last_notified_at'.
+-- Re-entry within the cooldown window is a no-op (prevents spam).
+-- Rate-limit: 'consumeNotificationToken' caps at 'notificationsPerProjectPerHour';
+-- overflow rows are enqueued to 'apis.notification_digest_queue' and flushed
+-- into one batched message by 'NotificationDigestJob'.
+-- Gated by 'project.errorAlerts' so customers can opt out without code changes.
+notifyIssue
+  :: Issues.Issue
+  -> Projects.Project
+  -> [Projects.User]
+  -> Int -- cooldown hours (dedup window)
+  -> Text -- digest reason (matches apis.notification_digest_queue.reason values)
+  -> NotificationAlerts
+  -> Text -- alert url
+  -> Text -- email subject
+  -> Html () -- email body
+  -> ATBackgroundCtx ()
+notifyIssue issue project users cooldownHours digestReason alert alertUrl subj html = Relude.when project.errorAlerts do
+  now <- Time.currentTime
+  claimed <- claimIssueNotification issue.id now cooldownHours
+  Relude.when claimed do
+    allowed <- consumeNotificationToken project.id now
+    if allowed
+      then do
+        (_, _, dispatched) <- sendAlertToChannels alert project.id project users alertUrl subj html (Nothing, Nothing)
+        Log.logInfo "issue_notification_sent" (AE.object ["project_id" AE..= project.id.toText, "issue_id" AE..= issue.id.toText, "reason" AE..= digestReason, "dispatched" AE..= dispatched])
+      else do
+        enqueueDigest project.id Nothing (Just issue.id) digestReason issue.title
+        Log.logInfo "issue_notification_digested" (AE.object ["project_id" AE..= project.id.toText, "issue_id" AE..= issue.id.toText, "reason" AE..= ("rate_limit" :: Text)])
+
+
 -- | Process and insert errors for a specific project (single batched round-trip via unnest).
 -- Creates issues synchronously for new/regressed errors. Reopens existing issues on regression.
 processProjectErrors :: Projects.ProjectId -> V.Vector ErrorPatterns.ATError -> UTCTime -> ATBackgroundCtx ()
@@ -1354,6 +1412,20 @@ processProjectErrors pid errors now = do
             errorRollupGroups = HM.toList $ V.foldl' (\acc e -> HM.insertWith addErrCounts e.hash (1 :: Int, bool 0 1 (isJust e.userId)) acc) HM.empty errors
             errorRollupStats = V.fromList [(h, cnt, users) | (h, (cnt, users)) <- errorRollupGroups]
         void $ ErrorPatterns.upsertErrorPatternHourlyStats pid now errorRollupStats
+      -- Look up the full ATError payload by hash for the notification path —
+      -- ErrorPattern alone lacks the stack trace / request context the alert uses.
+      let atErrByHash = HM.fromList [(e.hash, e) | e <- V.toList errors]
+      projectM <- Projects.projectById pid
+      users <- Projects.usersByProjectId pid
+      authCtx <- Effectful.Reader.Static.ask @Config.AuthContext
+      let notifyNewError :: Issues.Issue -> ErrorPatterns.ATError -> ATBackgroundCtx ()
+          notifyNewError issue atErr = whenJust projectM \project -> do
+            chartUrlM <- errorTrendChartUrl authCtx pid atErr.hash (formatUTC (addUTCTime (-(15 * 60)) now)) (formatUTC now)
+            let issueUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> issue.id.toText
+                firstSeenTextM = Just $ relTimeAgo now atErr.when <> " · " <> toText (formatTime defaultTimeLocale "%b %-e %-l:%M %p" atErr.when)
+                alert = RuntimeErrorAlert{issueId = issue.id.toText, issueTitle = issue.title, errorData = atErr, runtimeAlertType = NewRuntimeError, chartUrl = chartUrlM, occurrenceText = Nothing, firstSeenText = firstSeenTextM, ongoingFor = Nothing}
+                (subj, html) = ET.runtimeErrorsEmail project.title issueUrl [atErr] chartUrlM Nothing Nothing
+            notifyIssue issue project users Issues.rateChangeCooldownHours "runtime_exception" alert issueUrl subj html
       forM_ newOrRegressed \(errorHash, errState) -> do
         errM <- ErrorPatterns.getErrorPatternByHash pid errorHash
         whenJust errM \err ->
@@ -1364,6 +1436,7 @@ processProjectErrors pid errors now = do
                 ( do
                     issue <- createIssueForError pid err
                     Log.logInfo "Created new issue for regressed error (no prior issue)" (pid, err.id, issue.id)
+                    whenJust (HM.lookup errorHash atErrByHash) (notifyNewError issue)
                 )
                 (handleRegression pid err)
                 existingM
@@ -1376,10 +1449,10 @@ processProjectErrors pid errors now = do
                   Log.logTrace "Pre-merged new error into canonical" (pid, err.id, canonicalId)
                 _ -> do
                   issue <- createIssueForError pid err
-                  authCtx <- Effectful.Reader.Static.ask @Config.AuthContext
                   liftIO $ withResource authCtx.jobsPool \conn ->
                     void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
                   Log.logInfo "Created issue for new error" (pid, err.id, issue.id)
+                  whenJust (HM.lookup errorHash atErrByHash) (notifyNewError issue)
   where
     createIssueForError pid' err' = do
       issue <- Issues.createNewErrorIssue pid' err'
@@ -3183,11 +3256,19 @@ detectLogPatternSpikes pid scheduledTime authCtx = do
   firesAllowed <- flip filterM fires \(lp, _) ->
     not <$> Issues.isInCooldown pid lp.patternHash Issues.LogPatternRateChange scheduledTime
 
+  projectM <- Projects.projectById pid
+  users <- Projects.usersByProjectId pid
   issueIds <- forM firesAllowed \(lpRate, sr) -> do
     let dir = display sr.direction
     Log.logInfo ("Log pattern " <> dir <> " confirmed") (lpRate.patternId, lpRate.logPattern, sr.currentRate, sr.mean)
     issue <- Issues.createLogPatternRateChangeIssue pid lpRate sr
     Issues.insertIssue issue
+    whenJust projectM \project -> do
+      let issueUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> issue.id.toText
+          changePct = if sr.mean > 0 then (sr.currentRate - sr.mean) / sr.mean * 100 else 0
+          alert = LogPatternRateChangeAlert{issueUrl, patternText = lpRate.logPattern, sampleMessage = Nothing, logLevel = lpRate.logLevel, serviceName = lpRate.serviceName, direction = dir, currentRate = sr.currentRate, baselineMean = sr.mean, changePercent = changePct}
+          (subj, html) = ET.logPatternRateChangeEmail project.title issueUrl lpRate.logPattern lpRate.logLevel lpRate.serviceName dir sr.currentRate sr.mean changePct
+      notifyIssue issue project users Issues.rateChangeCooldownHours "log_pattern_rate_change" alert issueUrl subj html
     pure issue.id
 
   -- Clear the pending markers for anything we just fired; a new detection
@@ -3224,13 +3305,21 @@ processNewLogPatterns pid authCtx = do
       else do
         -- Filter out infrastructure noise; errors/exceptions/app logs still create issues
         let issueWorthy = V.fromList $ filter isIssueWorthy newPatterns
-        issueIds <- V.forM issueWorthy \lp -> do
+        projectM <- Projects.projectById pid
+        users <- Projects.usersByProjectId pid
+        results <- V.forM issueWorthy \lp -> do
           issue <- Issues.createLogPatternIssue pid lp
           Issues.insertIssue issue
           Log.logInfo "Created issue for new log pattern" (pid, lp.id, issue.id)
+          whenJust projectM \project -> do
+            let issueUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> issue.id.toText
+                occCount = fromIntegral lp.occurrenceCount :: Int
+                alert = LogPatternAlert{issueUrl, patternText = lp.logPattern, sampleMessage = lp.sampleMessage, logLevel = lp.logLevel, serviceName = lp.serviceName, sourceField = lp.sourceField, occurrenceCount = occCount}
+                (subj, html) = ET.logPatternEmail project.title issueUrl lp.logPattern lp.sampleMessage lp.logLevel lp.serviceName lp.sourceField occCount
+            notifyIssue issue project users newPatternCooldownHours "log_pattern" alert issueUrl subj html
           pure issue.id
-        unless (V.null issueIds) $ liftIO $ withResource authCtx.jobsPool \conn ->
-          void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid issueIds
+        unless (V.null results) $ liftIO $ withResource authCtx.jobsPool \conn ->
+          void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid results
 
 
 -- | Should a new log pattern create an issue? Whitelist-based: only error/warn logs
