@@ -1306,7 +1306,8 @@ collapseLogPatternGroups pid currTime period issues =
 
     aggregates :: Map.Map (Issues.IssueType, Maybe Text) (Int, UTCTime)
     aggregates =
-      Map.fromListWith combine
+      Map.fromListWith
+        combine
         [ (keyOf i, (1, zonedTimeToUTC i.updatedAt))
         | i <- issues
         , isLogPattern i.issueType
