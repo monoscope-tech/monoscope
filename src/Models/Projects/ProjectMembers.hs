@@ -122,13 +122,41 @@ data CreateProjectMembers = CreateProjectMembers
     via (GenericEntity '[Schema "projects", TableName "project_members", PrimaryKey "id", FieldModifiers '[CamelToSnake]] CreateProjectMembers)
 
 
-insertProjectMembers :: DB es => [CreateProjectMembers] -> Eff es Int64
+-- | Insert members AND sync their emails into each project's @everyone notify_emails
+-- atomically. @everyone.notify_emails is the authoritative alert audience (see
+-- resolveTeamEmails) — inserting without this sync would leave the new member silently
+-- unreachable. Single CTE so the insert and sync succeed or fail together.
+-- Emails are stored lower-cased to match the soft-delete/deactivate paths and the
+-- backfill migration, avoiding case-duplicate entries.
+insertProjectMembers :: (DB es, Log :> es) => [CreateProjectMembers] -> Eff es Int64
 insertProjectMembers [] = pure 0
-insertProjectMembers members =
-  Hasql.interpExecute
-    [HI.sql| INSERT INTO projects.project_members(project_id, user_id, permission)
-           SELECT * FROM unnest(#{pidsV}::uuid[], #{uidsV}::uuid[], #{permsV}::projects.project_permissions[])
-           ON CONFLICT (project_id, user_id) DO UPDATE SET active = TRUE, deleted_at = NULL |]
+insertProjectMembers members = do
+  n <-
+    Hasql.interpExecute
+      [HI.sql|
+        WITH ins AS (
+          INSERT INTO projects.project_members(project_id, user_id, permission)
+          SELECT * FROM unnest(#{pidsV}::uuid[], #{uidsV}::uuid[], #{permsV}::projects.project_permissions[])
+          ON CONFLICT (project_id, user_id) DO UPDATE SET active = TRUE, deleted_at = NULL
+          RETURNING project_id, user_id
+        ),
+        added AS (
+          SELECT DISTINCT ins.project_id, lower(u.email::text) AS email
+          FROM ins JOIN users.users u ON u.id = ins.user_id
+        )
+        UPDATE projects.teams t SET notify_emails = ARRAY(
+          SELECT DISTINCT e FROM unnest(
+            t.notify_emails || ARRAY(SELECT email FROM added WHERE project_id = t.project_id)
+          ) e
+        )
+        WHERE t.is_everyone = TRUE AND t.deleted_at IS NULL
+          AND t.project_id IN (SELECT project_id FROM added) |]
+  -- Surface projects without an @everyone row so members don't silently become unreachable.
+  let distinctPids = ordNub (V.toList pidsV)
+  when (n < fromIntegral (length distinctPids))
+    $ Log.logAttention "insertProjectMembers: @everyone sync updated fewer teams than projects — some members may be unreachable"
+    $ AE.object ["project_ids" AE..= distinctPids, "teams_updated" AE..= n]
+  pure n
   where
     v = V.fromList members
     pidsV = V.map (.projectId) v
@@ -186,19 +214,50 @@ updateProjectMembersPermissons vals =
     (idsV, permsV) = (V.fromList ids, V.fromList perms)
 
 
+-- | Soft-delete members and strip their emails from the matching @everyone
+-- notify_emails — the list is the authoritative audience, so leaving stale
+-- addresses would keep paging ex-members.
 softDeleteProjectMembers :: (DB es, Time :> es) => NonEmpty UUID.UUID -> Eff es ()
 softDeleteProjectMembers ids = do
   now <- Time.currentTime
   let idsVec = V.fromList $ toList ids
   Hasql.interpExecute_
-    [HI.sql| UPDATE projects.project_members SET active = FALSE, deleted_at = #{now} WHERE id = ANY(#{idsVec}::uuid[]) |]
+    [HI.sql|
+      WITH del AS (
+        UPDATE projects.project_members SET active = FALSE, deleted_at = #{now}
+        WHERE id = ANY(#{idsVec}::uuid[])
+        RETURNING project_id, user_id
+      ),
+      affected AS (
+        SELECT del.project_id, lower(u.email::text) AS email
+        FROM del JOIN users.users u ON u.id = del.user_id
+      )
+      UPDATE projects.teams t SET notify_emails = ARRAY(
+        SELECT e FROM unnest(t.notify_emails) e
+        WHERE lower(e) <> ALL(SELECT email FROM affected WHERE project_id = t.project_id)
+      )
+      WHERE t.is_everyone = TRUE AND t.deleted_at IS NULL
+        AND t.project_id IN (SELECT project_id FROM affected) |]
 
 
-deactivateNonOwnerMembers :: DB es => Projects.ProjectId -> Eff es Int64
+-- | Deactivate all non-owner members (Free-plan downgrade) and strip their
+-- emails from @everyone in one atomic CTE. Externally-added emails (not tied
+-- to any project member) are preserved.
+deactivateNonOwnerMembers :: DB es => Projects.ProjectId -> Eff es ()
 deactivateNonOwnerMembers pid =
-  Hasql.interpExecute
-    [HI.sql| UPDATE projects.project_members SET active = FALSE WHERE project_id = #{pid}
-           AND user_id != (SELECT user_id FROM projects.project_members WHERE project_id = #{pid} ORDER BY created_at LIMIT 1) |]
+  Hasql.interpExecute_
+    [HI.sql|
+      WITH del AS (
+        UPDATE projects.project_members SET active = FALSE
+        WHERE project_id = #{pid}
+          AND user_id != (SELECT user_id FROM projects.project_members WHERE project_id = #{pid} ORDER BY created_at LIMIT 1)
+        RETURNING user_id
+      ),
+      removed AS (SELECT lower(u.email::text) AS email FROM del JOIN users.users u ON u.id = del.user_id)
+      UPDATE projects.teams t SET notify_emails = ARRAY(
+        SELECT e FROM unnest(t.notify_emails) e WHERE lower(e) <> ALL(SELECT email FROM removed)
+      )
+      WHERE t.is_everyone = TRUE AND t.deleted_at IS NULL AND t.project_id = #{pid} |]
 
 
 activateAllMembers :: DB es => Projects.ProjectId -> Eff es Int64
@@ -514,13 +573,11 @@ setEveryoneTeamPhones pid v = modifyEveryoneTeamDetails pid \d -> d{phoneNumbers
 setEveryoneTeamDisabledChannels pid v = modifyEveryoneTeamDetails pid \d -> d{disabledChannels = v}
 
 
-resolveTeamEmails :: DB es => Projects.ProjectId -> Team -> Eff es [CI Text]
-resolveTeamEmails projectId team =
-  if team.is_everyone
-    then do
-      memberEmails <- fmap (.email) <$> selectActiveProjectMembers projectId
-      pure $ memberEmails <> V.toList (fmap CI.mk team.notify_emails)
-    else pure $ V.toList $ fmap CI.mk team.notify_emails
+-- | The notify_emails column is now the single source of truth for who gets
+-- paged — @everyone syncs member emails in/out at add/remove time, so no
+-- implicit expansion is needed here.
+resolveTeamEmails :: Team -> [CI Text]
+resolveTeamEmails team = V.toList $ fmap CI.mk team.notify_emails
 
 
 -- | A channel type ("slack" | "discord" | "email" | "phone" | "pagerduty") is
@@ -538,13 +595,18 @@ isEveryoneChannelEnabled :: DB es => Text -> Projects.ProjectId -> Eff es Bool
 isEveryoneChannelEnabled ch pid = maybe False (isChannelEnabled ch) <$> getEveryoneTeam pid
 
 
--- | True iff at least one channel could deliver. Email is special — project
--- members are always addressable, so "email enabled" is sufficient regardless
--- of notify_emails (extra addresses on top of members). The other channels
--- need a non-empty target list since they have no implicit recipients.
+-- | True iff at least one channel has a populated, enabled target list.
+-- notify_emails is the authoritative email audience (kept in sync with
+-- project members), so it's treated like any other channel — empty means
+-- undeliverable.
 teamHasAnyEnabledChannel :: Team -> Bool
 teamHasAnyEnabledChannel t =
-  any populatedAndEnabled [("slack" :: Text, t.slack_channels), ("discord", t.discord_channels), ("phone", t.phone_numbers), ("pagerduty", t.pagerduty_services)]
-    || isChannelEnabled "email" t
+  any populatedAndEnabled
+    [ ("email" :: Text, t.notify_emails)
+    , ("slack", t.slack_channels)
+    , ("discord", t.discord_channels)
+    , ("phone", t.phone_numbers)
+    , ("pagerduty", t.pagerduty_services)
+    ]
   where
     populatedAndEnabled (ch, xs) = not (V.null xs) && isChannelEnabled ch t

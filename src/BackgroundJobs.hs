@@ -1929,7 +1929,12 @@ notifyQueryMonitorStatusChange monitor value isRecovery = do
 
 dispatchTeamNotifications :: ProjectMembers.Team -> Pkg.Mail.NotificationAlerts -> Projects.ProjectId -> Text -> Text -> (CI.CI Text -> Maybe Projects.User -> ATBackgroundCtx ()) -> ATBackgroundCtx ()
 dispatchTeamNotifications team alert projectId projectTitle monitorUrl emailAction = do
-  emails <- ProjectMembers.resolveTeamEmails projectId team
+  let emails = ProjectMembers.resolveTeamEmails team
+  -- notify_emails is the authoritative audience now (no implicit member fallback) —
+  -- if it's empty the alert goes to zero email recipients, which is almost never intended.
+  when (null emails && ProjectMembers.isChannelEnabled "email" team)
+    $ Log.logAttention "dispatchTeamNotifications: email channel enabled but notify_emails is empty — zero email recipients"
+    $ AE.object ["project_id" AE..= projectId, "team_id" AE..= team.id, "is_everyone" AE..= team.is_everyone]
   for_ emails (`emailAction` Nothing)
   for_ team.slack_channels (void . sendSlackAlert alert projectId projectTitle . Just)
   for_ team.discord_channels (void . sendDiscordAlert alert projectId projectTitle . Just)

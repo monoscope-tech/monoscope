@@ -554,8 +554,8 @@ renderNotificationOption pid teamIdM title value isChecked isConfigured icon ext
 
 renderEmailIntegration :: Text -> Html ()
 renderEmailIntegration ems = do
-  p_ [class_ "text-xs text-textWeak mb-2"] "Members are auto-included via @everyone. Add extra emails:"
-  formField_ FieldSm def "Additional emails" "emails_input" False $ Just $ tagInput_ "emails_input" "Enter email addresses" [data_ "tagify-initial" ems]
+  p_ [class_ "text-xs text-textWeak mb-2"] "Everyone listed here receives email alerts for this project. New members are added automatically — remove anyone who shouldn't be paged."
+  formField_ FieldSm def "Recipients" "emails_input" False $ Just $ tagInput_ "emails_input" "Add email address" [data_ "tagify-initial" ems]
 
 
 renderWhatsappIntegration :: Text -> Html ()

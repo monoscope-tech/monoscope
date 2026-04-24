@@ -99,6 +99,15 @@ extra-source-files:
     static/migrations/0071_project_customer_id.sql
     static/migrations/0072_subscriptions_uniq.sql
     static/migrations/0073_fix_notification_backfill.sql
+    static/migrations/0074_slack_channel_name.sql
+    static/migrations/0075_log_pattern_signal_overhaul.sql
+    static/migrations/0076_everyone_team_as_source_of_truth.sql
+    static/migrations/0077_notifications_single_source_of_truth.sql
+    static/migrations/0078_ensure_everyone_team_and_slack_sync.sql
+    static/migrations/0079_fix_all_disabled_from_null_inversion.sql
+    static/migrations/0080_restore_slack_webhook_url.sql
+    static/migrations/0081_everyone_notify_emails_from_members.sql
+    static/migrations/0082_everyone_notify_emails_lowercase.sql
 
 source-repository head
   type: git
@@ -575,6 +584,7 @@ test-suite integration-tests
       Pages.LogExplorer.LogSpec
       Pages.LogPatternsSpec
       Pages.MonitorsSpec
+      Pages.Projects.EveryoneSyncSpec
       Pages.Projects.IntegrationsSpec
       Pages.Projects.ManageMembersSpec
       Pages.Projects.ProjectsSpec

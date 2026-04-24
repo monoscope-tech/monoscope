@@ -487,8 +487,7 @@ notificationsTestPostH pid TestForm{..} = do
 
   -- The @everyone team is the single source of truth for project notification settings,
   -- so tests always resolve against a team — the provided one, or @everyone when omitted.
-  let resolveEmails t = map CI.original <$> resolveTeamEmails pid t
-      targetTeam = case teamId of
+  let targetTeam = case teamId of
         Just tid -> getTeam tid
         Nothing -> ProjectMembers.getEveryoneTeam pid
       countingSend (count, reason) run =
@@ -501,7 +500,7 @@ notificationsTestPostH pid TestForm{..} = do
       discord t = do forM_ t.discord_channels (sendDiscordAlert alert pid project.title . Just); sent (V.length t.discord_channels)
       whatsapp t = if V.null t.phone_numbers then sent 0 else sent (V.length t.phone_numbers) <* sendWhatsAppAlert alert pid project.title t.phone_numbers
       pagerduty t = do forM_ t.pagerduty_services \k -> sendPagerdutyAlertToService k alert project.title projectUrl; sent (V.length t.pagerduty_services)
-      email t = do emails <- resolveEmails t; forM_ emails sendTestEmail; sent (length emails)
+      email t = let emails = map CI.original (resolveTeamEmails t) in forM_ emails sendTestEmail *> sent (length emails)
 
   (attempts, skipReason) <- case channel of
     "all" -> countingSend (0, Nothing) \t -> do
