@@ -214,6 +214,61 @@ spec = aroundAll withTestResources do
       issuesAfter <- countIssues tr Issues.LogPatternRateChange
       issuesAfter `shouldSatisfy` (> issuesBefore)
 
+    it "4d. Rate-change gate rejects lowercase INFO, DEBUG, and unknown log levels" \tr -> do
+      -- Builds three patterns with identical spike conditions but different
+      -- log levels. Only ERROR / WARN / FATAL / CRITICAL should produce an
+      -- issue — Phase 2 widened the gate to be case-insensitive and reject
+      -- null levels (the biggest historical source of Inbox noise).
+      let srcField = "summary"
+          mkGatedPattern h lvl = do
+            void $ runTestBg frozenTime tr $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern
+              { projectId = pid, logPattern = "Gate test " <> h <> " <*>", hash = h
+              , sourceField = srcField, serviceName = Just "test-svc", logLevel = lvl
+              , traceId = Nothing, sampleMessage = Just "Gate test", eventCount = 100
+              }
+            forM_ ([-48 .. -1] :: [Int]) \hr ->
+              insertHourlyStat tr srcField h (addUTCTime (fromIntegral hr * 3600) frozenTime) 600
+          spikeCount = 600 :: Int64 -- projected = 600*4 = 2400 — far above baseline mean ~600 + 3*mad
+
+      mkGatedPattern "gate-info-lc" (Just "info")
+      mkGatedPattern "gate-debug" (Just "DEBUG")
+      mkGatedPattern "gate-null" Nothing
+      mkGatedPattern "gate-error" (Just "ERROR")
+
+      runTestBg frozenTime tr $ BackgroundJobs.calculateLogPatternBaselines pid
+
+      forM_ ["gate-info-lc", "gate-debug", "gate-null", "gate-error"] \h ->
+        insertHourlyStat tr srcField h frozenTime spikeCount
+
+      -- Detector runs twice: persistence gate requires two consecutive windows.
+      runTestBg frozenTime tr $ BackgroundJobs.detectLogPatternSpikes pid frozenTime tr.trATCtx
+      let secondRun = addUTCTime 900 frozenTime -- 15 min later, still within TTL
+      insertHourlyStat tr srcField "gate-info-lc" secondRun spikeCount
+      insertHourlyStat tr srcField "gate-debug" secondRun spikeCount
+      insertHourlyStat tr srcField "gate-null" secondRun spikeCount
+      insertHourlyStat tr srcField "gate-error" secondRun spikeCount
+      runTestBg secondRun tr $ BackgroundJobs.detectLogPatternSpikes pid secondRun tr.trATCtx
+
+      -- Only the ERROR pattern should have produced a rate-change issue.
+      forM_ ["gate-info-lc", "gate-debug", "gate-null"] \h -> do
+        cnt <- withResource tr.trPool \conn -> do
+          [PGS.Only n] <- PGS.query conn
+            [sql| SELECT COUNT(*)::INT FROM apis.issues
+                  WHERE project_id = ? AND issue_type = 'log_pattern_rate_change'
+                    AND target_hash = ? |]
+            (pid, h) :: IO [PGS.Only Int]
+          pure n
+        cnt `shouldBe` 0
+
+      errorCnt <- withResource tr.trPool \conn -> do
+        [PGS.Only n] <- PGS.query conn
+          [sql| SELECT COUNT(*)::INT FROM apis.issues
+                WHERE project_id = ? AND issue_type = 'log_pattern_rate_change'
+                  AND target_hash = 'gate-error' |]
+          (PGS.Only pid) :: IO [PGS.Only Int]
+        pure n
+      errorCnt `shouldSatisfy` (>= 1)
+
     it "4b. getLogPatternTexts excludes merged member patterns" \tr -> do
       let canonHash = "canon-drain-001"
           memberHash = "member-drain-001"
@@ -353,6 +408,54 @@ spec = aroundAll withTestResources do
       -- Verify stale hourly stats are also prunable
       statsPruned <- runTestBg frozenTime tr $ LogPatterns.pruneOldHourlyStats pid frozenTime 72
       statsPruned `shouldSatisfy` (>= 1)
+
+    it "7a. pruneStaleLogPatterns auto-archives open log_pattern issues older than 14 days" \tr -> do
+      -- Seed two open log_pattern issues — one stale (20d), one fresh (5d) —
+      -- plus a stale log_pattern_rate_change to cover both types. Archiving
+      -- is keyed on updated_at; insertIssue bumps it on conflict, so only
+      -- dead signal ages out.
+      let stalePatRow = ("autoarchive-stale-pat" :: Text, "log_pattern" :: Text, 20 :: Int)
+          freshPatRow = ("autoarchive-fresh-pat" :: Text, "log_pattern" :: Text, 5 :: Int)
+          staleRcRow = ("autoarchive-stale-rc" :: Text, "log_pattern_rate_change" :: Text, 20 :: Int)
+          rows = [stalePatRow, freshPatRow, staleRcRow]
+      -- Use frozenTime for row timestamps so the auto-archive cutoff
+      -- (frozenTime - 14 days) sees the stale rows as older.
+      withResource tr.trPool \conn -> forM_ rows \(tgt, ty, daysOld) -> do
+        iid <- UUID.nextRandom
+        let title = ("t" :: Text) <> tgt
+        void $ PGS.execute conn
+          [sql| INSERT INTO apis.issues
+                  (id, project_id, issue_type, target_hash, endpoint_hash, title,
+                   severity, critical, affected_requests, affected_clients,
+                   issue_data, updated_at, created_at)
+                VALUES (?, ?, ?::apis.issue_type, ?, ?, ?, 'warning', false,
+                        1, 1, '{}'::jsonb,
+                        ?::timestamptz - (INTERVAL '1 day' * ?),
+                        ?::timestamptz - (INTERVAL '1 day' * ?)) |]
+          (iid, pid, ty, tgt, tgt, title, frozenTime, daysOld, frozenTime, daysOld)
+
+      -- Sanity: all three rows are open pre-prune.
+      openBefore <- withResource tr.trPool \conn -> do
+        rs <- PGS.query conn
+          [sql| SELECT target_hash FROM apis.issues
+                WHERE project_id = ? AND archived_at IS NULL
+                  AND target_hash = ANY(?) |]
+          (pid, V.fromList ["autoarchive-stale-pat", "autoarchive-fresh-pat", "autoarchive-stale-rc" :: Text])
+        pure $ V.fromList (map (PGS.fromOnly :: PGS.Only Text -> Text) rs)
+      V.length openBefore `shouldBe` 3
+
+      runTestBg frozenTime tr $ BackgroundJobs.pruneStaleLogPatterns pid
+
+      archivedAfter <- withResource tr.trPool \conn -> do
+        rs <- PGS.query conn
+          [sql| SELECT target_hash FROM apis.issues
+                WHERE project_id = ? AND archived_at IS NOT NULL
+                  AND target_hash = ANY(?) |]
+          (pid, V.fromList ["autoarchive-stale-pat", "autoarchive-fresh-pat", "autoarchive-stale-rc" :: Text])
+        pure $ V.fromList (map (PGS.fromOnly :: PGS.Only Text -> Text) rs)
+      V.toList archivedAfter `shouldSatisfy` elem "autoarchive-stale-pat"
+      V.toList archivedAfter `shouldSatisfy` elem "autoarchive-stale-rc"
+      V.toList archivedAfter `shouldSatisfy` (not . elem "autoarchive-fresh-pat")
 
     it "8. logCanMerge gate correctly filters pairs" \_ -> do
       -- Similar patterns (share meaningful tokens) → should pass

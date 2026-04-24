@@ -1,6 +1,6 @@
 module BackgroundJobs.SpikeDetectionSpec (spec) where
 
-import BackgroundJobs (aboveVolumeFloor, detectSpikeOrDrop, dropMinBaselineRate, spikeMinAbsoluteDelta, spikeMinBaselineRate, spikeZScoreThreshold)
+import BackgroundJobs (aboveVolumeFloor, detectSpikeOrDrop, dropMinBaselineRate, isAlertableLogLevel, spikeMinAbsoluteDelta, spikeMinBaselineRate, spikeZScoreThreshold)
 import Models.Apis.Issues (RateChangeDirection (..), SpikeResult (..))
 import Relude
 import Test.Hspec
@@ -62,3 +62,27 @@ spec = describe "detectSpikeOrDrop" do
       -- 1000 is plenty for a spike but too small for a drop
       aboveVolumeFloor (mkSpike 1000) `shouldBe` True
       aboveVolumeFloor (mkDrop 1000) `shouldBe` False
+
+
+  describe "isAlertableLogLevel" do
+    it "accepts ERROR / WARN / WARNING / FATAL / CRITICAL (any case)" do
+      isAlertableLogLevel (Just "ERROR") `shouldBe` True
+      isAlertableLogLevel (Just "error") `shouldBe` True
+      isAlertableLogLevel (Just "Warn") `shouldBe` True
+      isAlertableLogLevel (Just "warning") `shouldBe` True
+      isAlertableLogLevel (Just "FATAL") `shouldBe` True
+      isAlertableLogLevel (Just "critical") `shouldBe` True
+
+    it "rejects INFO / DEBUG / TRACE / NOTICE (any case)" do
+      isAlertableLogLevel (Just "INFO") `shouldBe` False
+      isAlertableLogLevel (Just "info") `shouldBe` False
+      isAlertableLogLevel (Just "DEBUG") `shouldBe` False
+      isAlertableLogLevel (Just "debug") `shouldBe` False
+      isAlertableLogLevel (Just "TRACE") `shouldBe` False
+      isAlertableLogLevel (Just "notice") `shouldBe` False
+
+    it "rejects unknown level (Nothing) — largest source of historical noise" do
+      isAlertableLogLevel Nothing `shouldBe` False
+
+    it "rejects empty string" do
+      isAlertableLogLevel (Just "") `shouldBe` False

@@ -1,6 +1,6 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSessionBackfillTimer, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSessionBackfillTimer, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl) where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
@@ -2934,12 +2934,17 @@ monitorStatus triggerLessThan warnThreshold alertThreshold alertRecovery warnRec
 -- ============================================================================
 
 -- Tuning knobs for log pattern baseline and spike detection
-baselineWindowHours, baselinePageSize, maxNewPatternsPerRun, stalePatternDays, staleNewPatternDays :: Int
+baselineWindowHours, baselinePageSize, maxNewPatternsPerRun, stalePatternDays, staleNewPatternDays, staleLogPatternIssueDays :: Int
 baselineWindowHours = 48 -- 2 days
 baselinePageSize = 1000
 maxNewPatternsPerRun = 500
 stalePatternDays = 30 -- prune acknowledged patterns older than this
 staleNewPatternDays = 7 -- auto-acknowledge 'new' patterns older than this
+-- Auto-archive open log_pattern / log_pattern_rate_change issues with no
+-- `updated_at` activity in this many days. `insertIssue` bumps updated_at on
+-- conflict, so still-firing patterns never age out. Well clear of the 24h ack
+-- cooldown and 2h pending-anomaly TTL.
+staleLogPatternIssueDays = 14
 
 
 minEventsForNewPatternAlerts :: Int64
@@ -3015,6 +3020,15 @@ aboveVolumeFloor sr = case sr.direction of
   Issues.Drop -> sr.mean >= dropMinBaselineRate
 
 
+-- | Whitelist of log levels that can produce a rate-change issue. Case-insensitive.
+-- Nothing is explicitly rejected: a pattern with no level is not a reliable
+-- incident signal, and was the single biggest source of historical noise.
+isAlertableLogLevel :: Maybe Text -> Bool
+isAlertableLogLevel = \case
+  Just lvl -> T.toUpper lvl `elem` ["ERROR", "WARN", "WARNING", "FATAL", "CRITICAL"]
+  Nothing -> False
+
+
 dirText :: Issues.RateChangeDirection -> Text
 dirText Issues.Spike = "spike"
 dirText Issues.Drop = "drop"
@@ -3024,7 +3038,9 @@ dirText Issues.Drop = "drop"
 -- Projects partial-hour counts to hourly rate for sub-hourly detection.
 --
 -- Gating stack (applied in order):
---   1. Ignore INFO/TRACE logs and patterns without an established baseline.
+--   1. Whitelist ERROR/WARN/FATAL/CRITICAL (case-insensitive) via
+--      `isAlertableLogLevel`; reject Nothing and everything else.
+--      Also require an established baseline.
 --   2. Baseline volume floor (spikeMinBaselineRate / dropMinBaselineRate) —
 --      anything below is expected silence, not signal.
 --   3. Persistence gate: first detection writes a pending marker on the
@@ -3043,8 +3059,12 @@ detectLogPatternSpikes pid scheduledTime authCtx = do
   patternsWithRates <- LogPatterns.getPatternsWithCurrentRates pid scheduledTime
 
   -- Step 1+2: per-pattern anomaly detection with floor check.
+  -- Gate: whitelist known error/warn levels (case-insensitive). Nothing is
+  -- rejected — unknown level is not a reliable incident signal, and projects
+  -- that don't attach `log.level` were the largest source of Inbox noise.
+  -- Mirrors the shape of `isIssueWorthy` for the new-pattern path.
   let classify lpRate =
-        guard (lpRate.logLevel `notElem` [Just "INFO", Just "TRACE" :: Maybe Text])
+        guard (isAlertableLogLevel lpRate.logLevel)
           *> case (lpRate.baselineState, lpRate.baselineMean, lpRate.baselineMad) of
             (BSEstablished, Just mean, Just mad) -> do
               let projectedCount = round (fromIntegral lpRate.currentHourCount * scaleFactor)
@@ -3133,15 +3153,30 @@ isIssueWorthy lp
 
 
 -- | Prune acknowledged patterns not seen in 30 days, auto-acknowledge stale 'new' patterns,
--- and delete old hourly stats beyond the baseline window.
+-- delete old hourly stats beyond the baseline window, and archive open
+-- log_pattern/log_pattern_rate_change issues that have had no updates in 14
+-- days (dead signal — actively-firing patterns bump @updated_at@ via
+-- @insertIssue@ on conflict).
 pruneStaleLogPatterns :: Projects.ProjectId -> ATBackgroundCtx ()
 pruneStaleLogPatterns pid = do
   now <- Time.currentTime
   autoAcked <- LogPatterns.autoAcknowledgeStaleNewPatterns pid now staleNewPatternDays
   pruned <- LogPatterns.pruneStalePatterns pid now stalePatternDays
   statsPruned <- LogPatterns.pruneOldHourlyStats pid now (baselineWindowHours + 24)
-  Relude.when (autoAcked > 0 || pruned > 0 || statsPruned > 0)
-    $ Log.logTrace "Pruned stale log patterns and old stats" (pid, "autoAcked" :: Text, autoAcked, "pruned" :: Text, pruned, "statsPruned" :: Text, statsPruned)
+  autoArchived <- Issues.autoArchiveStaleLogPatternIssues pid now staleLogPatternIssueDays
+  Relude.when (autoAcked > 0 || pruned > 0 || statsPruned > 0 || autoArchived > 0)
+    $ Log.logTrace
+      "Pruned stale log patterns and old stats"
+      ( pid
+      , "autoAcked" :: Text
+      , autoAcked
+      , "pruned" :: Text
+      , pruned
+      , "statsPruned" :: Text
+      , statsPruned
+      , "autoArchived" :: Text
+      , autoArchived
+      )
 
 
 calculateErrorBaselines :: Projects.ProjectId -> ATBackgroundCtx ()
