@@ -5,6 +5,7 @@ module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
 import Control.Concurrent.STM.TBQueue (isFullTBQueue, readTBQueue, writeTBQueue)
+import Control.Exception (ErrorCall (..))
 import Control.Lens (view, (.~), (^.), (^?), _1, _3)
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens qualified as AL
@@ -28,7 +29,6 @@ import Data.Pool (withResource)
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (display)
-import Control.Exception (ErrorCall (..))
 import Data.Time (DayOfWeek (Monday), UTCTime (utctDay, utctDayTime), ZonedTime, addUTCTime, dayOfWeek, formatTime)
 import Data.Time.Clock (NominalDiffTime, diffUTCTime, getCurrentTime)
 import Data.Time.Clock.POSIX (POSIXTime, posixSecondsToUTCTime, utcTimeToPOSIXSeconds)

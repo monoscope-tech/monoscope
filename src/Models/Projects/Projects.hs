@@ -726,7 +726,7 @@ getTotalUsage pid start = do
 -- only producer in the codebase.
 newtype ChunkQuantity = ChunkQuantity Int
   deriving stock (Eq, Generic)
-  deriving newtype (Show, NFData, HI.DecodeValue, HI.EncodeValue, ToField, FromField)
+  deriving newtype (FromField, HI.DecodeValue, HI.EncodeValue, NFData, Show, ToField)
 
 
 -- DecodeRow's role is nominal so newtype coercion doesn't deduce it; one-liner
@@ -854,7 +854,8 @@ recordUsageWindow pid wStart wEnd totalUsage chunks = do
     when (totalUsage > 0) do
       exec [HI.sql| INSERT INTO apis.daily_usage (project_id, total_requests) VALUES (#{pid}, #{totalUsage}) |]
       for_ (zip chunkIds chunks) \(cid, ChunkQuantity qty) ->
-        exec [HI.sql| INSERT INTO projects.usage_report_submissions (id, project_id, window_start, window_end, quantity)
+        exec
+          [HI.sql| INSERT INTO projects.usage_report_submissions (id, project_id, window_start, window_end, quantity)
                       VALUES (#{cid}, #{pid}, #{wStart}, #{wEnd}, #{qty}) |]
 
 
