@@ -41,7 +41,7 @@ module Models.Apis.Issues (
   isInCooldown,
   setAckState,
   setArchiveState,
-  autoArchiveStaleLogPatternIssues,
+  autoArchiveStaleDiscoveryIssues,
   selectIssueByHash,
   selectLatestIssueByHash,
   reopenIssue,
@@ -644,8 +644,13 @@ setArchiveState pid iids mTs
 -- does. The predicate runs against OLD @updated_at@ before the
 -- @set_updated_at@ trigger fires, so the cutoff is evaluated on the
 -- pre-archive value.
-autoArchiveStaleLogPatternIssues :: DB es => Projects.ProjectId -> UTCTime -> Int -> Eff es Int64
-autoArchiveStaleLogPatternIssues pid now days =
+-- | Auto-archive open discovery-type issues (log_pattern, log_pattern_rate_change,
+-- api_change) whose @updated_at@ is older than @days@. @insertIssue@ bumps
+-- @updated_at@ on conflict, so an actively-drifting endpoint or firing pattern
+-- never ages out — only dead signal does. Discovery issues have no "resolved"
+-- column by design: the absence of new drift over time *is* the resolution.
+autoArchiveStaleDiscoveryIssues :: DB es => Projects.ProjectId -> UTCTime -> Int -> Eff es Int64
+autoArchiveStaleDiscoveryIssues pid now days =
   Hasql.interpExecute
     [HI.sql|
       UPDATE apis.issues
@@ -653,7 +658,11 @@ autoArchiveStaleLogPatternIssues pid now days =
       WHERE project_id = #{pid}
         AND acknowledged_at IS NULL
         AND archived_at IS NULL
-        AND issue_type IN ('log_pattern'::apis.issue_type, 'log_pattern_rate_change'::apis.issue_type)
+        AND issue_type IN (
+          'log_pattern'::apis.issue_type,
+          'log_pattern_rate_change'::apis.issue_type,
+          'api_change'::apis.issue_type
+        )
         AND updated_at < #{now} - (INTERVAL '1 day' * #{days}) |]
 
 
@@ -727,7 +736,7 @@ createAPIChangeIssue projectId endpointHash anomalies = do
       , severity = if isCritical then "critical" else "warning"
       , title =
           if V.any ((== Anomalies.ATEndpoint) . (.anomalyType)) anomalies
-            then "New endpoint detected: " <> apiChangeData.endpointMethod <> " " <> apiChangeData.endpointPath
+            then "New endpoint detected: " <> apiChangeData.endpointMethod <> " " <> apiChangeData.endpointPath <> " on " <> apiChangeData.endpointHost
             else "API structure has changed"
       , recommendedAction = "Review the API changes and update your integration accordingly."
       , migrationComplexity = if breakingChanges > 5 then "high" else if breakingChanges > 0 then "medium" else "low"
@@ -962,7 +971,7 @@ sanitizeLogPatternTitle raw sampleM serviceM =
         , ("{*}", "")
         , ("{hex}", "")
         ]
-      stripped = T.unwords $ T.words $ foldl' (\t (a, b) -> T.replace a b t) raw replacements
+      stripped = unwords $ words $ foldl' (\t (a, b) -> T.replace a b t) raw replacements
       printableRatio txt
         | T.null txt = 0
         | otherwise = fromIntegral (T.length (T.filter (\c -> isPrint c && isAscii c) txt)) / fromIntegral (T.length txt) :: Double

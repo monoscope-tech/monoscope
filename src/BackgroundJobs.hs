@@ -98,6 +98,7 @@ import Pkg.TraceSessionCache qualified as TSC
 import ProcessMessage (parseCanonicalPaths, processSpanToEntities, tokenizeUrlPath)
 import PyF (fmtTrim)
 import Relude hiding (ask)
+import Relude.Extra.Tuple (fmapToSnd)
 import System.Clock (Clock (Monotonic), diffTimeSpec, getTime, toNanoSecs)
 import System.Config qualified as Config
 import System.Logging qualified as Log
@@ -1082,7 +1083,7 @@ runNotificationDigest _scheduledTime = do
             |]
         unless (null rows) do
           let idsVec = V.fromList [i | (i, _, _) <- rows]
-              summary = T.unlines ["• [" <> reason <> "] " <> title | (_, reason, title) <- take 10 rows]
+              summary = unlines ["• [" <> reason <> "] " <> title | (_, reason, title) <- take 10 rows]
               subj = "[" <> project.title <> "] " <> show (length rows) <> " batched notifications"
               url = ctx.env.hostUrl <> "p/" <> pid.toText <> "/issues?filter=Inbox"
           Log.logInfo "notification_digest_flushing"
@@ -2092,8 +2093,8 @@ sendReportForProject pid rType = do
       let ifCh ch getField act = whenJust teamM \t ->
             Relude.when (ProjectMembers.isChannelEnabled ch t && not (V.null (getField t))) (act t)
       Relude.when pr.weeklyNotif do
-        ifCh "discord" (.discord_channels) \t -> forM_ t.discord_channels \cid -> void $ sendDiscordAlert alert pid pr.title (Just cid)
-        ifCh "slack" (.slack_channels) \t -> forM_ t.slack_channels \cid -> void $ sendSlackAlert alert pid pr.title (Just cid)
+        ifCh "discord" (.discord_channels) \t -> forM_ t.discord_channels (sendDiscordAlert alert pid pr.title . Just)
+        ifCh "slack" (.slack_channels) \t -> forM_ t.slack_channels (sendSlackAlert alert pid pr.title . Just)
         ifCh "phone" (.phone_numbers) \t -> sendWhatsAppAlert alert pid pr.title t.phone_numbers
         ifCh "pagerduty" (.pagerduty_services) \t -> forM_ t.pagerduty_services \k -> sendPagerdutyAlertToService k alert pr.title (ctx.env.hostUrl <> "p/" <> pid.toText)
         Relude.when (maybe False (ProjectMembers.isChannelEnabled "email") teamM) do
@@ -2246,8 +2247,8 @@ processAPIChangeAnomalies pid targetHashes = do
           teamM <- ProjectMembers.getEveryoneTeam pid
           let ifCh ch getField act = whenJust teamM \t ->
                 Relude.when (ProjectMembers.isChannelEnabled ch t && not (V.null (getField t))) (act t)
-          ifCh "slack" (.slack_channels) \t -> forM_ t.slack_channels \cid -> void $ sendSlackAlert alert pid project.title (Just cid)
-          ifCh "discord" (.discord_channels) \t -> forM_ t.discord_channels \cid -> void $ sendDiscordAlert alert pid project.title (Just cid)
+          ifCh "slack" (.slack_channels) \t -> forM_ t.slack_channels (sendSlackAlert alert pid project.title . Just)
+          ifCh "discord" (.discord_channels) \t -> forM_ t.discord_channels (sendDiscordAlert alert pid project.title . Just)
           ifCh "phone" (.phone_numbers) \t -> sendWhatsAppAlert alert pid project.title t.phone_numbers
           ifCh "pagerduty" (.pagerduty_services) \t -> forM_ t.pagerduty_services \k -> sendPagerdutyAlertToService k alert project.title (authCtx.env.hostUrl <> "p/" <> pid.toText)
           Relude.when (maybe False (ProjectMembers.isChannelEnabled "email") teamM) do
@@ -3093,7 +3094,7 @@ detectLogPatternSpikes pid scheduledTime authCtx = do
               guard (aboveVolumeFloor sr)
               pure sr
             _ -> Nothing
-      detected = map (\lp -> (lp, classify lp)) patternsWithRates
+      detected = fmapToSnd classify patternsWithRates
 
   -- Step 3: persistence gate. Partition into fire / pend / clear buckets.
   let freshPending detAt = diffUTCTime scheduledTime detAt <= ttlSecs
@@ -3184,7 +3185,7 @@ pruneStaleLogPatterns pid = do
   autoAcked <- LogPatterns.autoAcknowledgeStaleNewPatterns pid now staleNewPatternDays
   pruned <- LogPatterns.pruneStalePatterns pid now stalePatternDays
   statsPruned <- LogPatterns.pruneOldHourlyStats pid now (baselineWindowHours + 24)
-  autoArchived <- Issues.autoArchiveStaleLogPatternIssues pid now staleLogPatternIssueDays
+  autoArchived <- Issues.autoArchiveStaleDiscoveryIssues pid now staleLogPatternIssueDays
   Relude.when (autoAcked > 0 || pruned > 0 || statsPruned > 0 || autoArchived > 0)
     $ Log.logTrace
       "Pruned stale log patterns and old stats"

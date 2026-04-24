@@ -234,11 +234,8 @@ spec = aroundAll withTestResources do
         _ -> error "Unexpected response"
 
 
--- | Row predicate for API-change singles; ignores 'IssueGroup' placeholders.
 isApiChangeSingleRow :: Issues.IssueType -> AnomalyList.IssueVM -> Bool
-isApiChangeSingleRow ty = \case
-  AnomalyList.IssueVM _ _ _ _ c -> c.issueType == ty
-  _ -> False
+isApiChangeSingleRow ty (AnomalyList.IssueVM _ _ _ _ c) = c.issueType == ty
 
 
 -- Same endpoint as msg1 but with different request body shape, to test shape anomaly detection
