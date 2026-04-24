@@ -1023,7 +1023,7 @@ runDueNotifications pid hashesM = do
   ctx <- ask @Config.AuthContext
   Relude.unless ctx.config.pauseNotifications do
     now <- Time.currentTime
-    dueErrors :: [ErrorSubscriptionDue] <- queryDueErrorNotifications pid hashesM now
+    dueErrors :: [ErrorSubscriptionDue] <- claimDueErrorNotifications pid hashesM now
     dispatchDueErrorNotifications ctx pid now dueErrors
 
 
@@ -1116,48 +1116,67 @@ runNotificationDigest _scheduledTime = do
 --       issue still firing (at least one `event_count>0` hourly stat within
 --       the last hour). Uses `apis.error_hourly_stats` because the decayed
 --       `occurrences_1h` on `error_patterns` is unreliable.
-queryDueErrorNotifications
+--
+-- This function *atomically claims* each due row by UPDATEing @last_notified_at@
+-- to @now@ with a compare-and-swap (@IS NOT DISTINCT FROM@ the value read in
+-- the CTE). Under read-committed isolation, a second concurrent caller sees
+-- the already-updated row and its CAS fails → zero claimed rows → no duplicate
+-- dispatch. Callers MUST revert via @ErrorPatterns.revertLastNotifiedAt@ if the
+-- send is skipped (e.g. rate-limited), otherwise the row is suppressed until
+-- the next cadence window. @ErrorSubscriptionDue.lastNotifiedAt@ carries the
+-- pre-claim value for that purpose.
+claimDueErrorNotifications
   :: Projects.ProjectId
   -> Maybe (V.Vector Text)
   -> UTCTime
   -> ATBackgroundCtx [ErrorSubscriptionDue]
-queryDueErrorNotifications pid mHashes now =
+claimDueErrorNotifications pid mHashes now =
   let hashes = fromMaybe V.empty mHashes
       applyHashFilter = isJust mHashes
    in Hasql.interp
         [HI.sql|
-          SELECT DISTINCT ON (e.id)
-                 e.id, e.error_data, e.state, i.id, i.title,
-                 e.slack_thread_ts, e.discord_message_id, e.occurrences_1h,
-                 e.created_at, e.last_notified_at
-          FROM apis.error_patterns e
-          JOIN apis.issues i ON i.project_id = e.project_id AND i.target_hash = e.hash
-          WHERE e.project_id = #{pid}
-            AND (NOT #{applyHashFilter} OR e.hash = ANY(#{hashes}::text[]))
-            AND e.state != 'resolved'
-            AND i.issue_type = #{Issues.RuntimeException}::apis.issue_type
-            AND (
-              (e.last_notified_at IS NULL AND e.created_at >= #{now}::timestamptz - INTERVAL '24 hours')
-              OR (e.subscribed = TRUE
-                  AND #{now}::timestamptz - e.last_notified_at >= (e.notify_every_minutes * INTERVAL '1 minute'))
-              OR (e.state = 'regressed'
-                  AND (e.last_notified_at IS NULL OR e.last_notified_at < e.regressed_at))
-              OR (e.state IN ('new','escalating','ongoing')
-                  AND e.last_notified_at IS NOT NULL
-                  AND EXISTS (
-                    SELECT 1 FROM apis.error_hourly_stats s
-                    WHERE s.error_id = e.id
-                      AND s.hour_bucket >= date_trunc('hour', #{now}::timestamptz) - INTERVAL '1 hour'
-                      AND s.event_count > 0
-                  )
-                  AND #{now}::timestamptz - e.last_notified_at >= CASE
-                        WHEN #{now}::timestamptz - e.created_at < INTERVAL '1 hour'  THEN INTERVAL '1 hour'
-                        WHEN #{now}::timestamptz - e.created_at < INTERVAL '6 hours' THEN INTERVAL '6 hours'
-                        WHEN #{now}::timestamptz - e.created_at < INTERVAL '24 hours' THEN INTERVAL '24 hours'
-                        ELSE INTERVAL '24 hours'
-                      END)
-            )
-          ORDER BY e.id, i.created_at DESC
+          WITH candidates AS (
+            SELECT DISTINCT ON (e.id)
+                   e.id, e.error_data, e.state, i.id AS issue_id, i.title,
+                   e.slack_thread_ts, e.discord_message_id, e.occurrences_1h,
+                   e.created_at, e.last_notified_at
+            FROM apis.error_patterns e
+            JOIN apis.issues i ON i.project_id = e.project_id AND i.target_hash = e.hash
+            WHERE e.project_id = #{pid}
+              AND (NOT #{applyHashFilter} OR e.hash = ANY(#{hashes}::text[]))
+              AND e.state != 'resolved'
+              AND i.issue_type = #{Issues.RuntimeException}::apis.issue_type
+              AND (
+                (e.last_notified_at IS NULL AND e.created_at >= #{now}::timestamptz - INTERVAL '24 hours')
+                OR (e.subscribed = TRUE
+                    AND #{now}::timestamptz - e.last_notified_at >= (e.notify_every_minutes * INTERVAL '1 minute'))
+                OR (e.state = 'regressed'
+                    AND (e.last_notified_at IS NULL OR e.last_notified_at < e.regressed_at))
+                OR (e.state IN ('new','escalating','ongoing')
+                    AND e.last_notified_at IS NOT NULL
+                    AND EXISTS (
+                      SELECT 1 FROM apis.error_hourly_stats s
+                      WHERE s.error_id = e.id
+                        AND s.hour_bucket >= date_trunc('hour', #{now}::timestamptz) - INTERVAL '1 hour'
+                        AND s.event_count > 0
+                    )
+                    AND #{now}::timestamptz - e.last_notified_at >= CASE
+                          WHEN #{now}::timestamptz - e.created_at < INTERVAL '1 hour'  THEN INTERVAL '1 hour'
+                          WHEN #{now}::timestamptz - e.created_at < INTERVAL '6 hours' THEN INTERVAL '6 hours'
+                          WHEN #{now}::timestamptz - e.created_at < INTERVAL '24 hours' THEN INTERVAL '24 hours'
+                          ELSE INTERVAL '24 hours'
+                        END)
+              )
+            ORDER BY e.id, i.created_at DESC
+          )
+          UPDATE apis.error_patterns e
+          SET last_notified_at = #{now}, updated_at = #{now}
+          FROM candidates c
+          WHERE e.id = c.id
+            AND e.last_notified_at IS NOT DISTINCT FROM c.last_notified_at
+          RETURNING c.id, c.error_data, c.state, c.issue_id, c.title,
+                    c.slack_thread_ts, c.discord_message_id, c.occurrences_1h,
+                    c.created_at, c.last_notified_at
         |]
 
 
@@ -1202,7 +1221,8 @@ dispatchDueErrorNotifications ctx pid now dueErrors =
                     RegressedErrors -> ET.regressedErrorsEmail project.title errorsUrl [sub.errorData] chartUrlM occTextM ongoingForM
                     _ -> ET.runtimeErrorsEmail project.title errorsUrl [sub.errorData] chartUrlM occTextM ongoingForM
               -- Rate-limit gate. Overflow lands in apis.notification_digest_queue
-              -- and is flushed by NotificationDigestJob.
+              -- and is flushed by NotificationDigestJob. On rate-limit we must
+              -- revert the claim so the next tick re-evaluates the row.
               allowed <- consumeNotificationToken pid now
               if allowed
                 then do
@@ -1211,15 +1231,16 @@ dispatchDueErrorNotifications ctx pid now dueErrors =
                   Log.logInfo "notification_sent" (AE.object ["project_id" AE..= pid.toText, "error_id" AE..= sub.errorId, "alert_type" AE..= show @Text alertType, "dispatched" AE..= dispatched])
                   pure (sub.errorId, finalSlackTs, finalDiscordMsgId, dispatched)
                 else do
+                  void $ ErrorPatterns.revertLastNotifiedAt sub.errorId sub.lastNotifiedAt now
                   enqueueDigest pid (Just sub.errorId) (Just sub.issueId) "rate_limit" sub.issueTitle
                   Log.logInfo "notification_skipped" (AE.object ["project_id" AE..= pid.toText, "error_id" AE..= sub.errorId, "reason" AE..= ("rate_limit" :: Text)])
                   pure (sub.errorId, sub.slackThreadTs, sub.discordMessageId, False)
-            -- Only stamp last_notified_at for deliveries that actually went out.
-            -- Rate-limited rows stay eligible so the next tick retries.
+            -- last_notified_at is already stamped atomically by the claim query.
+            -- Only persist slack/discord thread IDs when the send actually went out.
             forM_ results \(errorId, slackTs, discordMsgId, delivered) ->
-              Relude.when delivered
+              Relude.when (delivered && (isJust slackTs || isJust discordMsgId))
                 $ void
-                $ ErrorPatterns.updateErrorPatternThreadIdsAndNotifiedAt errorId slackTs discordMsgId now
+                $ ErrorPatterns.updateErrorPatternThreadIds errorId slackTs discordMsgId now
 
 
 -- | Sliding-window rate limiter. One bucket per project per hour. Returns True
