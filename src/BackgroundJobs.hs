@@ -28,7 +28,8 @@ import Data.Pool (withResource)
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (display)
-import Data.Time (DayOfWeek (Monday), UTCTime (utctDay, utctDayTime), ZonedTime, addUTCTime, dayOfWeek, formatTime, getZonedTime)
+import Control.Exception (ErrorCall (..))
+import Data.Time (DayOfWeek (Monday), UTCTime (utctDay, utctDayTime), ZonedTime, addUTCTime, dayOfWeek, formatTime)
 import Data.Time.Clock (NominalDiffTime, diffUTCTime, getCurrentTime)
 import Data.Time.Clock.POSIX (POSIXTime, posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.Time.Format (defaultTimeLocale)
@@ -421,27 +422,75 @@ processBackgroundJob authCtx bgJob =
       let provider = Projects.billingProvider project.subId
       Log.logInfo "Reporting usage" ("project_id", pid.toText, "plan", project.paymentPlan, "provider", show provider)
       Relude.when (project.paymentPlan /= "Free" && project.paymentPlan /= "ONBOARDING") $ whenJust (mfilter (not . T.null) project.firstSubItemId) \fSubId -> do
-        currentTime <- liftIO getZonedTime
+        -- 1) Commit bookkeeping BEFORE any provider HTTP call. usage_last_reported
+        --    always advances; daily_usage + usage_report_submissions rows are
+        --    inserted in the same tx only when totalUsage > 0. See
+        --    'splitUsageIntoChunks' for the per-provider quantity policy.
+        nowU <- Time.currentTime
         totalToReport <- Telemetry.getTotalEventsToReport pid project.usageLastReported
         totalMetricsCount <- Telemetry.getTotalMetricsCount pid project.usageLastReported
         let totalUsage = totalToReport + totalMetricsCount
-        Log.logInfo "Usage to report" ("project_id", pid.toText, "events", totalToReport, "metrics", totalMetricsCount, "total", totalUsage)
-        Relude.when (totalUsage > 0) do
-          -- Capture failures for structured logging; rethrow so odd-jobs retries.
-          reportResult <- tryAny $ case provider of
-            Projects.StripeProvider -> whenJust (mfilter (not . T.null) (project.customerId <|> project.orderId)) \custId ->
-              liftIO $ reportUsageToStripe authCtx.config.stripeSecretKey custId "events_usage" totalUsage
-            Projects.LemonSqueezyProvider -> liftIO $ reportUsageToLemonsqueezy fSubId totalUsage authCtx.config.lemonSqueezyApiKey
-            Projects.NoBillingProvider -> Log.logAttention "ReportUsage: NoBillingProvider for paid project" ("project_id", pid.toText, "sub_id", project.subId, "plan", project.paymentPlan)
-          case reportResult of
-            Left e -> do
-              Log.logAttention "Usage report FAILED — billing data may be missing" ("project_id", pid.toText, "provider", show provider :: Text, "total", totalUsage, "error", displayException e)
-              throwIO e
-            Right () ->
-              Relude.when (provider /= Projects.NoBillingProvider) do
-                void $ Projects.addDailyUsageReport pid totalUsage
-                void $ Projects.updateUsageLastReported pid currentTime
-                Log.logInfo "Usage reported successfully" ("project_id", pid.toText, "total", totalUsage)
+            chunks = case provider of
+              Projects.NoBillingProvider -> []
+              -- Both paid providers chunk identically. LS's 1M POST cap forces
+              -- splitting; Stripe has no documented cap but N meter-events with
+              -- the same meter+customer aggregate identically to one big event,
+              -- so we share the same code path for a single invariant surface.
+              _ -> Projects.splitUsageIntoChunks totalUsage
+        Log.logInfo "Usage to report" ("project_id", pid.toText, "events", totalToReport, "metrics", totalMetricsCount, "total", totalUsage, "chunks", length chunks)
+        Projects.recordUsageWindow pid project.usageLastReported nowU totalUsage chunks
+
+        -- 2) Drain any pending/failed chunks (new + backlog from previous runs).
+        --    Provider failures are logged + recorded per-row; we never throw, so
+        --    odd-jobs does not retry the whole job and we never double-submit a
+        --    succeeded chunk. Retry happens on the next daily ReportUsage tick.
+        pending <- Projects.pendingUsageSubmissions pid
+        unless (null pending) $ Log.logInfo "Draining pending usage chunks" ("project_id", pid.toText, "pending", length pending)
+        case provider of
+          -- Paid plan with no usable provider: mark every pending chunk 'failed'
+          -- once so it persists in pendingUsageSubmissions as an audit signal
+          -- (rather than being quietly marked 'submitted' by the happy path).
+          Projects.NoBillingProvider -> do
+            Log.logAttention "ReportUsage: NoBillingProvider for paid project" ("project_id", pid.toText, "sub_id", project.subId, "plan", project.paymentPlan, "pending_chunks", length pending)
+            for_ pending \row -> do
+              mr <- tryAny $ Projects.markUsageSubmissionFailed row.id "NoBillingProvider: paid plan has no usable billing provider"
+              whenLeft_ mr \e ->
+                Log.logAttention "NoBillingProvider mark failed — backlog stuck" ("project_id", pid.toText, "chunk_id", show row.id :: Text, "error", toText (displayException e))
+          _ -> for_ pending \row -> do
+            let chunkId = show row.id :: Text
+                qty = Projects.chunkQuantityInt row.quantity
+                -- window_end + sub_id surface in logs so on-call can pivot to
+                -- the provider UI, which is not indexed by our chunk UUIDs.
+                logFields extra =
+                  ("project_id", pid.toText) : ("chunk_id", chunkId) : ("quantity", show qty :: Text) : ("window_end", show row.windowEnd :: Text) : ("sub_id", fromMaybe "" project.subId) : extra
+            res <- tryAny $ case provider of
+              Projects.StripeProvider ->
+                -- Missing customerId/orderId is a misconfig, not a transient error.
+                -- Throw so the chunk is marked 'failed' in the Left branch below,
+                -- rather than no-oping into Right () and being marked 'submitted'.
+                case mfilter (not . T.null) (project.customerId <|> project.orderId) of
+                  Just custId -> liftIO $ reportUsageToStripe authCtx.config.stripeSecretKey custId "events_usage" qty
+                  Nothing -> throwIO $ ErrorCall "Stripe: project has no customerId or orderId"
+              Projects.LemonSqueezyProvider -> liftIO $ reportUsageToLemonsqueezy fSubId qty authCtx.config.lemonSqueezyApiKey
+            -- Wrap mark* in tryAny: a DB blip between a successful HTTP call
+            -- and the status UPDATE would re-select this row next tick and
+            -- double-submit. Emit a loud manual-reconcile signal on that path.
+            either
+              ( \e -> do
+                  let errText = toText (displayException e)
+                  Log.logAttention "Usage chunk submission FAILED — will retry next tick" $ logFields [("provider", show provider :: Text), ("error", errText)]
+                  markRes <- tryAny $ Projects.markUsageSubmissionFailed row.id errText
+                  whenLeft_ markRes \e2 ->
+                    Log.logAttention "Usage chunk status=failed UPDATE failed — row may retry on next tick" $ logFields [("error", toText (displayException e2))]
+              )
+              ( \() -> do
+                  markRes <- tryAny $ Projects.markUsageSubmissionSucceeded row.id
+                  case markRes of
+                    Right _ -> Log.logInfo "Usage chunk submitted" $ logFields []
+                    Left e2 ->
+                      Log.logAttention "Usage chunk submitted but DB mark failed — DOUBLE-SUBMIT RISK, manual reconcile required" $ logFields [("error", toText (displayException e2))]
+              )
+              res
     TrialEndingReminder pid scheduledDaysLeft -> do
       projectM <- Projects.projectById pid
       case projectM of

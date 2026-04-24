@@ -41,7 +41,6 @@ module Models.Projects.Projects (
   updateProjectReportNotif,
   ProjectCache (..),
   defaultProjectCache,
-  updateUsageLastReported,
   updateProjectS3Bucket,
   QueryLibItemId,
   QueryLibType (..),
@@ -58,6 +57,17 @@ module Models.Projects.Projects (
   addSubscription,
   getTotalUsage,
   addDailyUsageReport,
+  -- Usage report submissions (chunked provider submissions)
+  UsageSubmission (..),
+  SubmissionOutcome (..),
+  ChunkQuantity,
+  mkChunkQuantity,
+  chunkQuantityInt,
+  splitUsageIntoChunks,
+  pendingUsageSubmissions,
+  recordUsageWindow,
+  markUsageSubmissionSucceeded,
+  markUsageSubmissionFailed,
   upgradeToPaid,
   downgradeToFree,
   downgradeToFreeBySubId,
@@ -111,6 +121,9 @@ import Effectful.Time (Time, currentTime, runTime)
 import GHC.Records (HasField (getField))
 import Hasql.Interpolate qualified as HI
 import Hasql.Pool qualified as HPool
+import Hasql.Statement (Statement)
+import Hasql.Transaction qualified as Tx
+import Hasql.Transaction.Sessions qualified as TxS
 import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumSC (..), idFromText, selectFrom)
 import Pkg.Parser.Stats (Section)
 import Relude
@@ -552,11 +565,6 @@ deleteProject pid = do
   EHasql.interpExecute [HI.sql| UPDATE projects.projects SET deleted_at=#{now}, active=False where id=#{pid};|]
 
 
-updateUsageLastReported :: DB es => ProjectId -> ZonedTime -> Eff es Int64
-updateUsageLastReported pid lastReported =
-  EHasql.interpExecute [HI.sql| UPDATE projects.projects SET usage_last_reported=#{lastReported} WHERE id=#{pid};|]
-
-
 updateProjectS3Bucket :: DB es => ProjectId -> Maybe ProjectS3Bucket -> Eff es Int64
 updateProjectS3Bucket pid bucket =
   EHasql.interpExecute [HI.sql| UPDATE projects.projects SET s3_bucket=#{bucket} WHERE id=#{pid}|]
@@ -710,6 +718,164 @@ getTotalUsage pid start = do
   case results of
     [count] -> pure count
     _ -> pure 0
+
+
+-- | Quantity of events in one submission chunk. Invariant: 0 < n <= 900_000
+-- (Lemon Squeezy rejects quantities > 1,000,000; 900k leaves headroom). The
+-- smart constructor is the only public way in; splitUsageIntoChunks is the
+-- only producer in the codebase.
+newtype ChunkQuantity = ChunkQuantity Int
+  deriving stock (Eq, Generic)
+  deriving newtype (Show, NFData, HI.DecodeValue, HI.EncodeValue, ToField, FromField)
+
+
+-- DecodeRow's role is nominal so newtype coercion doesn't deduce it; one-liner
+-- mirrors the Int instance in Pkg.DeriveUtils.
+instance HI.DecodeRow ChunkQuantity where
+  decodeRow = HI.getOneColumn <$> HI.decodeRow
+
+
+-- | >>> mkChunkQuantity 0
+-- Nothing
+-- >>> mkChunkQuantity (-1)
+-- Nothing
+-- >>> mkChunkQuantity 1
+-- Just 1
+-- >>> mkChunkQuantity 900000
+-- Just 900000
+-- >>> mkChunkQuantity 900001
+-- Nothing
+mkChunkQuantity :: Int -> Maybe ChunkQuantity
+mkChunkQuantity n
+  | n > 0 && n <= 900_000 = Just (ChunkQuantity n)
+  | otherwise = Nothing
+
+
+chunkQuantityInt :: ChunkQuantity -> Int
+chunkQuantityInt (ChunkQuantity n) = n
+
+
+-- | State of a submission chunk. Collapses (status, submitted_at, last_error)
+-- into one type so illegal combinations ("submitted" with a last_error,
+-- "failed" without one) are unrepresentable. The DB CHECK constraints on
+-- projects.usage_report_submissions enforce the same invariant at the write
+-- boundary; this type guarantees it at the read boundary.
+data SubmissionOutcome
+  = Pending
+  | Submitted !UTCTime
+  | Failed !Text
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (NFData)
+
+
+-- | Per-chunk record of a usage submission to a billing provider. One window
+-- may produce several rows. Bookkeeping (apis.daily_usage + usage_last_reported)
+-- is committed atomically with 'Pending' rows BEFORE any provider HTTP call;
+-- the outcome is then updated per submission. Non-'Submitted' rows are retried
+-- on the next daily ReportUsage tick for the same project.
+data UsageSubmission = UsageSubmission
+  { id :: UUID.UUID
+  , projectId :: ProjectId
+  , windowStart :: UTCTime
+  , windowEnd :: UTCTime
+  , quantity :: ChunkQuantity
+  , outcome :: SubmissionOutcome
+  , createdAt :: UTCTime
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (NFData)
+
+
+-- Manual DecodeRow: collapses the 3 DB columns (status, submitted_at, last_error)
+-- into one SubmissionOutcome. Safe because DB CHECK constraints guarantee the
+-- triples that can reach us — see migration 0084.
+instance HI.DecodeRow UsageSubmission where
+  decodeRow = do
+    id_ <- HI.decodeRow
+    projectId <- HI.decodeRow
+    windowStart <- HI.decodeRow
+    windowEnd <- HI.decodeRow
+    quantity <- HI.decodeRow
+    status <- HI.decodeRow @Text
+    submittedAt <- HI.decodeRow @(Maybe UTCTime)
+    lastError <- HI.decodeRow @(Maybe Text)
+    createdAt <- HI.decodeRow
+    let outcome = case (status, submittedAt, lastError) of
+          ("submitted", Just t, _) -> Submitted t
+          ("failed", _, Just e) -> Failed e
+          _ -> Pending
+    pure UsageSubmission{id = id_, ..}
+
+
+-- | >>> splitUsageIntoChunks 0
+-- []
+-- >>> splitUsageIntoChunks 500
+-- [500]
+-- >>> splitUsageIntoChunks 900000
+-- [900000]
+-- >>> splitUsageIntoChunks 900001
+-- [900000,1]
+-- >>> splitUsageIntoChunks 2700000
+-- [900000,900000,900000]
+-- >>> splitUsageIntoChunks 2700001
+-- [900000,900000,900000,1]
+splitUsageIntoChunks :: Int -> [ChunkQuantity]
+splitUsageIntoChunks total
+  | total <= 0 = []
+  | otherwise =
+      let cap = 900_000 :: Int
+          (fulls, rem_) = total `divMod` cap
+       in replicate fulls (ChunkQuantity cap) <> [ChunkQuantity rem_ | rem_ > 0]
+
+
+pendingUsageSubmissions :: DB es => ProjectId -> Eff es [UsageSubmission]
+pendingUsageSubmissions pid =
+  EHasql.interp
+    [HI.sql|
+      SELECT id, project_id, window_start, window_end, quantity::int8, status, submitted_at, last_error, created_at
+      FROM projects.usage_report_submissions
+      WHERE project_id = #{pid} AND status <> 'submitted'
+      ORDER BY created_at ASC
+    |]
+
+
+recordUsageWindow
+  :: (DB es, UUIDEff :> es)
+  => ProjectId -> UTCTime -> UTCTime -> Int -> [ChunkQuantity] -> Eff es ()
+recordUsageWindow pid wStart wEnd totalUsage chunks = do
+  chunkIds <- replicateM (length chunks) genUUID
+  let exec :: HI.Sql -> Tx.Transaction ()
+      exec s = Tx.statement () (HI.interp True s :: Statement () HI.RowsAffected) $> ()
+  EHasql.transaction TxS.ReadCommitted TxS.Write do
+    -- usage_last_reported always advances (even on zero-usage days); otherwise
+    -- the next tick re-scans an ever-growing window, which is the failure mode
+    -- that produced the original 15-month poison loop.
+    exec [HI.sql| UPDATE projects.projects SET usage_last_reported = #{wEnd} WHERE id = #{pid} |]
+    when (totalUsage > 0) do
+      exec [HI.sql| INSERT INTO apis.daily_usage (project_id, total_requests) VALUES (#{pid}, #{totalUsage}) |]
+      for_ (zip chunkIds chunks) \(cid, ChunkQuantity qty) ->
+        exec [HI.sql| INSERT INTO projects.usage_report_submissions (id, project_id, window_start, window_end, quantity)
+                      VALUES (#{cid}, #{pid}, #{wStart}, #{wEnd}, #{qty}) |]
+
+
+markUsageSubmissionSucceeded :: DB es => UUID.UUID -> Eff es Int64
+markUsageSubmissionSucceeded sid =
+  EHasql.interpExecute
+    [HI.sql|
+      UPDATE projects.usage_report_submissions
+      SET status = 'submitted', submitted_at = now(), last_error = NULL
+      WHERE id = #{sid}
+    |]
+
+
+markUsageSubmissionFailed :: DB es => UUID.UUID -> Text -> Eff es Int64
+markUsageSubmissionFailed sid err =
+  EHasql.interpExecute
+    [HI.sql|
+      UPDATE projects.usage_report_submissions
+      SET status = 'failed', last_error = #{err}
+      WHERE id = #{sid}
+    |]
 
 
 -- Keep sub_id/order_id/first_sub_item_id intact on downgrade so resume/payment_success can re-upgrade without a new checkout.
