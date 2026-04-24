@@ -1510,8 +1510,9 @@ ansiToHtml t
       | T.null input = pass
       | otherwise =
           let (plain, rest) = T.breakOn "\ESC[" input
-              emitPlain = unless (T.null plain)
-                $ if T.null cls then toHtml plain else span_ [class_ cls] (toHtml plain)
+              emitPlain =
+                unless (T.null plain)
+                  $ if T.null cls then toHtml plain else span_ [class_ cls] (toHtml plain)
            in case T.stripPrefix "\ESC[" rest of
                 Nothing -> emitPlain
                 Just rest' ->
