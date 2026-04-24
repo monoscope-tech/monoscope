@@ -1139,7 +1139,16 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
           }
   let serviceMenu = FilterMenu{label = "Service", paramName = "service", multiSelect = True, options = map (\s -> FilterOption{label = s, value = s, isActive = s `elem` serviceFilters}) availableServices}
       typeMenu = FilterMenu{label = "Type", paramName = "type", multiSelect = True, options = map (\t -> FilterOption{label = t, value = t, isActive = t `elem` typeFilters}) availableTypes}
-      issuesVM = V.fromList $ map (IssueVM False False currTime filterV) issues
+      -- Only the Inbox tab applies log-pattern clustering. Acknowledged /
+      -- Archived stay flat so operators can inspect every row. Groups also
+      -- dissolve when the user explicitly filters by service (no value in
+      -- collapsing a single service into itself).
+      applyGrouping = currentFilterTab == "Inbox" && null serviceFilters
+      issuesVM =
+        V.fromList
+          $ if applyGrouping
+            then collapseLogPatternGroups pid currTime period issues
+            else map (IssueVM False False currTime filterV) issues
       tableActions =
         TableHeaderActions
           { baseUrl
@@ -1163,7 +1172,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
           , rows = issuesVM
           , features =
               def
-                { rowId = Just \(IssueVM _ _ _ _ issue) -> Issues.issueIdText issue.id
+                { rowId = Just issueRowId
                 , rowAttrs = Just issueRowAttrs
                 , bulkActions =
                     [ BulkAction{icon = Just "check", title = "Acknowledge", uri = "/p/" <> pid.toText <> "/issues/bulk_actions/acknowledge"}
@@ -1207,7 +1216,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
                   }
           }
   addRespHeaders $ case (layoutM, hxRequestM, hxBoostedM, loadM) of
-    (_, _, _, Just "true") -> ALRows $ TableRows{columns = issueColumns pid period, rows = issuesVM, emptyState = Nothing, renderAsTable = True, rowId = Just \(IssueVM _ _ _ _ issue) -> Issues.issueIdText issue.id, rowAttrs = Just issueRowAttrs, pagination = if totalCount > 0 then Just paginationConfig else Nothing}
+    (_, _, _, Just "true") -> ALRows $ TableRows{columns = issueColumns pid period, rows = issuesVM, emptyState = Nothing, renderAsTable = True, rowId = Just issueRowId, rowAttrs = Just issueRowAttrs, pagination = if totalCount > 0 then Just paginationConfig else Nothing}
     _ -> ALPage $ PageCtx bwconf issuesTable
 
 
@@ -1233,6 +1242,17 @@ issueRowAttrs (IssueVM _ _ _ _ issue) =
       "critical" -> "bg-fillError-weak"
       "warning" -> "bg-fillWarning-weak"
       _ -> ""
+issueRowAttrs IssueGroup{} = [class_ "group/row hover:bg-fillWeaker bg-fillWeaker/40"]
+
+
+issueRowId :: IssueVM -> Text
+issueRowId (IssueVM _ _ _ _ issue) = Issues.issueIdText issue.id
+issueRowId (IssueGroup _ ty svcM _ _ _ _) = "group:" <> tyText <> ":" <> Issues.serviceLabel svcM
+  where
+    tyText = case ty of
+      Issues.LogPattern -> "log_pattern"
+      Issues.LogPatternRateChange -> "log_pattern_rate_change"
+      _ -> "other"
 
 
 -- | (icon, iconStyle, colorClass, tooltip) — uses shape+color so status isn't color-only
@@ -1244,8 +1264,67 @@ anomalyStatusIndicator False False "warning" = ("triangle-alert", "regular", "te
 anomalyStatusIndicator False False _ = ("circle-alert", "regular", "text-textWeak", "Active")
 
 
-data IssueVM = IssueVM Bool Bool UTCTime Text Issues.IssueL
+-- | Row type rendered by the Issues list. 'IssueVM' is the normal per-issue
+-- row; 'IssueGroup' is a synthetic collapsed row used only in the Inbox tab to
+-- fold large clusters of log-pattern issues into a single expandable entry.
+data IssueVM
+  = IssueVM Bool Bool UTCTime Text Issues.IssueL
+  | -- | IssueGroup projectId issueType service count currTime lastSeen (period label)
+    IssueGroup Projects.ProjectId Issues.IssueType (Maybe Text) Int UTCTime UTCTime Text
   deriving stock (Show)
+
+
+-- | Minimum number of log-pattern rows sharing (issue_type, service) before
+-- they collapse into a single group header in the Inbox. Below this, the
+-- normal per-row listing is clearer than a group wrapper.
+logPatternGroupThreshold :: Int
+logPatternGroupThreshold = 5
+
+
+-- | Collapse log-pattern / log-pattern-rate-change rows that share
+-- (issue_type, service) into 'IssueGroup' headers when the cluster hits
+-- 'logPatternGroupThreshold'. Non-log-pattern rows and small clusters render
+-- through the normal 'IssueVM' path. Only active on the Inbox tab so
+-- Acknowledged / Archived views stay inspectable.
+--
+-- Issues arrive in an arbitrary sort order (default is created_at DESC) so
+-- grouping runs over two passes: aggregate counts + last-seen per
+-- (type, service) first, then stream the original list emitting an
+-- 'IssueGroup' header at the first occurrence of a clusterable key and
+-- skipping the rest. Ordering of the first representative is preserved.
+collapseLogPatternGroups :: Projects.ProjectId -> UTCTime -> Text -> [Issues.IssueL] -> [IssueVM]
+collapseLogPatternGroups pid currTime period issues =
+  go issues Map.empty
+  where
+    isLogPattern :: Issues.IssueType -> Bool
+    isLogPattern Issues.LogPattern = True
+    isLogPattern Issues.LogPatternRateChange = True
+    isLogPattern _ = False
+
+    keyOf :: Issues.IssueL -> (Issues.IssueType, Maybe Text)
+    keyOf i = (i.issueType, i.service)
+
+    aggregates :: Map.Map (Issues.IssueType, Maybe Text) (Int, UTCTime)
+    aggregates =
+      Map.fromListWith combine
+        [ (keyOf i, (1, zonedTimeToUTC i.updatedAt))
+        | i <- issues
+        , isLogPattern i.issueType
+        ]
+      where
+        combine (c1, t1) (c2, t2) = (c1 + c2, max t1 t2)
+
+    go :: [Issues.IssueL] -> Map.Map (Issues.IssueType, Maybe Text) () -> [IssueVM]
+    go [] _ = []
+    go (i : rest) emitted
+      | isLogPattern i.issueType
+      , let k = keyOf i
+      , Just (count, lastSeen) <- Map.lookup k aggregates
+      , count >= logPatternGroupThreshold =
+          if Map.member k emitted
+            then go rest emitted
+            else IssueGroup pid (fst k) (snd k) count currTime lastSeen period : go rest (Map.insert k () emitted)
+      | otherwise = IssueVM False False currTime period i : go rest emitted
 
 
 issueColumns :: Projects.ProjectId -> Text -> [Column IssueVM]
@@ -1272,17 +1351,24 @@ renderIssueEventsCol (IssueVM _ isWidget _ _ issue) =
       | n >= 100 = "text-sm text-fillError-strong"
       | n >= 10 = "text-sm text-fillWarning-strong"
       | otherwise = "text-sm text-textStrong"
+renderIssueEventsCol (IssueGroup _ _ _ count _ _ _) =
+  span_ [class_ "tabular-nums font-medium text-sm text-textStrong"]
+    $ toHtml
+    $ formatWithCommas (fromIntegral count)
 
 
 renderIssueDateCol :: IssueVM -> Html ()
 renderIssueDateCol (IssueVM _ _ currTime _ issue) =
   span_ [class_ "text-xs text-textWeak"] $ toHtml $ compactTimeAgo $ toText $ prettyTimeAuto currTime $ zonedTimeToUTC issue.createdAt
+renderIssueDateCol (IssueGroup _ _ _ _ currTime lastSeen _) =
+  span_ [class_ "text-xs text-textWeak"] $ toHtml $ compactTimeAgo $ toText $ prettyTimeAuto currTime lastSeen
 
 
 renderIssueChartCol :: IssueVM -> Html ()
 renderIssueChartCol (IssueVM _ _ _ _ issue) = sparkline_ buckets
   where
     PGArray buckets = issue.activityBuckets
+renderIssueChartCol IssueGroup{} = pass
 
 
 highlightJsHead_ :: Monad m => HtmlT m ()
@@ -1393,6 +1479,36 @@ renderIssueMainCol pid (IssueVM _ _ currTime period issue) = do
     inlineBtn tip icon hxAction extraAttrs =
       button_ ([type_ "button", term "data-tippy-content" tip, class_ "cursor-pointer hover:text-textBrand transition-colors tap-target", hxSwap_ "outerHTML", hxTarget_ "closest .itemsListItem", hxAction] <> extraAttrs)
         $ faSprite_ icon "regular" "h-3.5 w-3.5"
+renderIssueMainCol pid (IssueGroup _ ty svcM count currTime lastSeen period) = do
+  let typeNoun = case ty of
+        Issues.LogPatternRateChange -> "log pattern rate changes"
+        Issues.LogPattern -> "new log patterns"
+        _ -> "issues"
+      svcLabel = Issues.serviceLabel svcM
+      typeParam = case ty of
+        Issues.LogPatternRateChange -> "log_pattern_rate_change"
+        Issues.LogPattern -> "log_pattern"
+        _ -> ""
+      expandUrl =
+        "/p/"
+          <> pid.toText
+          <> "/issues?filter=Inbox&period="
+          <> period
+          <> "&type="
+          <> typeParam
+          <> "&service="
+          <> svcLabel
+  div_ [class_ "flex items-center gap-2 py-1 min-w-0"] do
+    span_ [class_ "inline-flex shrink-0 text-textWeak"] $ faSprite_ "layer-group" "regular" "w-3.5 h-3.5"
+    span_ [class_ "text-sm text-textStrong font-medium"] $ toHtml $ show count <> " " <> typeNoun
+    span_ [class_ "text-xs text-textWeak"] "in"
+    span_ [class_ "cbadge-sm badge-neutral"] $ toHtml svcLabel
+    span_ [class_ "text-xs text-textWeak ml-auto"] $ toHtml $ "last seen " <> toText (prettyTimeAuto currTime lastSeen)
+    a_
+      [ href_ expandUrl
+      , class_ "text-xs text-textBrand hover:underline shrink-0"
+      ]
+      "Expand →"
 
 
 issueCardCompact_ :: Projects.ProjectId -> UTCTime -> Issues.IssueL -> Html ()

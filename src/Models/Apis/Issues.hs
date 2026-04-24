@@ -41,6 +41,7 @@ module Models.Apis.Issues (
   isInCooldown,
   setAckState,
   setArchiveState,
+  autoArchiveStaleLogPatternIssues,
   selectIssueByHash,
   selectLatestIssueByHash,
   reopenIssue,
@@ -151,7 +152,7 @@ data IssueType
   | QueryAlert
   | LogPattern
   | LogPatternRateChange
-  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving stock (Bounded, Enum, Eq, Generic, Ord, Read, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField, ToSchema) via WrappedEnumSC "" IssueType
 
@@ -635,6 +636,25 @@ setArchiveState pid iids mTs
           UPDATE apis.issues
           SET archived_at = #{mTs}, updated_at = COALESCE(#{mTs}, updated_at)
           WHERE project_id = #{pid} AND id = ANY(#{iids}::uuid[]) |]
+
+
+-- | Archive open @log_pattern@ / @log_pattern_rate_change@ issues whose
+-- @updated_at@ is older than @days@. @insertIssue@ bumps @updated_at@ on
+-- conflict, so an actively-firing pattern never ages out — only dead signal
+-- does. The predicate runs against OLD @updated_at@ before the
+-- @set_updated_at@ trigger fires, so the cutoff is evaluated on the
+-- pre-archive value.
+autoArchiveStaleLogPatternIssues :: DB es => Projects.ProjectId -> UTCTime -> Int -> Eff es Int64
+autoArchiveStaleLogPatternIssues pid now days =
+  Hasql.interpExecute
+    [HI.sql|
+      UPDATE apis.issues
+      SET archived_at = #{now}
+      WHERE project_id = #{pid}
+        AND acknowledged_at IS NULL
+        AND archived_at IS NULL
+        AND issue_type IN ('log_pattern'::apis.issue_type, 'log_pattern_rate_change'::apis.issue_type)
+        AND updated_at < #{now} - (INTERVAL '1 day' * #{days}) |]
 
 
 -- | Scoped lookup: returns Nothing if the issue belongs to a different project.
