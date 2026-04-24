@@ -516,7 +516,7 @@ instance HI.EncodeValue (Map Text AET.Value) where
 
 
 instance AET.FromJSON a => HI.DecodeValue (Aeson a) where
-  decodeValue = D.refine (\v -> bimap toText Aeson $ AET.parseEither AET.parseJSON v) D.jsonb
+  decodeValue = D.refine (bimap toText Aeson . AET.parseEither AET.parseJSON) D.jsonb
 
 
 instance AET.ToJSON a => HI.EncodeValue (Aeson a) where

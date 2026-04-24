@@ -305,7 +305,7 @@ slackErrorAlert alertType err _issTitle project channelId projectUrl chartUrlM o
 -- Gives alert readers the file/line where the exception was thrown — the single most
 -- useful piece of context after the error message itself.
 topStackFrame :: Text -> Maybe Text
-topStackFrame stack = case filter (not . T.null) $ map T.strip $ T.lines stack of
+topStackFrame stack = case filter (not . T.null) $ map T.strip $ lines stack of
   (_ : frame : _) -> Just $ T.take 160 frame -- skip first line (usually the error header)
   [only] -> Just $ T.take 160 only
   [] -> Nothing

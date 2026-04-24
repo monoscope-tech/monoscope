@@ -141,8 +141,10 @@ projectIdsByProjectApiKeys projectKeys = do
 -- | IO-level helper for cache callbacks that need to query hasql directly.
 queryProjectIdByKey :: HPool.Pool -> Text -> IO (Maybe Projects.ProjectId)
 queryProjectIdByKey hpool key =
-  HPool.use hpool (Session.statement () (HI.interp True [HI.sql| SELECT project_id FROM projects.project_api_keys WHERE key_prefix = #{key} |]))
-    >>= either (const (pure Nothing)) pure
+  whenRightM
+    Nothing
+    (HPool.use hpool (Session.statement () (HI.interp True [HI.sql| SELECT project_id FROM projects.project_api_keys WHERE key_prefix = #{key} |])))
+    pure
 
 
 -- AES256 encryption

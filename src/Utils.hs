@@ -80,7 +80,7 @@ import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HS
 import Data.Scientific (toBoundedInteger)
-import Data.Set qualified as Set
+import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Lazy.Builder qualified as TLB
 import Data.Time (ZonedTime, addUTCTime, defaultTimeLocale, parseTimeM, secondsToNominalDiffTime)
@@ -1479,10 +1479,79 @@ renderSummaryElement seg = case parseSummaryEl seg of
               , term "data-tippy-content" tooltip
               , term "_" "install LogItemMenuable"
               ]
-              (toHtml value)
+              (ansiToHtml value)
         Nothing ->
-          span_ [class_ pillCls, title_ tooltip] (toHtml value)
+          span_ [class_ pillCls, title_ tooltip] (ansiToHtml value)
   Nothing -> span_ [class_ "text-xs text-textWeak"] $ toHtml seg
+
+
+-- | Render text containing ANSI SGR escape sequences (@\\ESC[...m@) as styled
+-- Lucid HTML, mirroring the @ansi_up.ansi_to_html@ path that
+-- @web-components/src/log-list-utils.ts@ uses for log-list summary values.
+-- Hot-paths plain text (no ESC) through 'toHtml'. Unknown SGR codes are dropped.
+--
+-- >>> import Lucid (renderText)
+-- >>> renderText (ansiToHtml "plain")
+-- "plain"
+-- >>> renderText (ansiToHtml "\ESC[31mboom\ESC[0m")
+-- "<span class=\"text-textError\">boom</span>"
+-- >>> renderText (ansiToHtml "a\ESC[1;32mOK\ESC[0mb")
+-- "a<span class=\"font-bold text-textSuccess\">OK</span>b"
+-- >>> renderText (ansiToHtml "\ESC[99mx")
+-- "x"
+-- >>> renderText (ansiToHtml "\ESC[33mwarn")
+-- "<span class=\"text-textWarning\">warn</span>"
+ansiToHtml :: Text -> Html ()
+ansiToHtml t
+  | not (T.isInfixOf "\ESC[" t) = toHtml t
+  | otherwise = go t ""
+  where
+    go input cls
+      | T.null input = pass
+      | otherwise =
+          let (plain, rest) = T.breakOn "\ESC[" input
+              emitPlain = unless (T.null plain)
+                $ if T.null cls then toHtml plain else span_ [class_ cls] (toHtml plain)
+           in case T.stripPrefix "\ESC[" rest of
+                Nothing -> emitPlain
+                Just rest' ->
+                  let (codes, after) = T.breakOn "m" rest'
+                   in case T.stripPrefix "m" after of
+                        Nothing -> emitPlain
+                        Just tl -> emitPlain >> go tl (updateCls cls codes)
+    updateCls cur codes = stepCodes (mapMaybe (readMaybe @Int . toString) (T.splitOn ";" codes)) cur
+    -- Skip 256-color (38/48;5;n) and truecolor (38/48;2;r;g;b) payloads so their
+    -- numeric args don't leak back into sgrClass as spurious codes.
+    stepCodes [] c = c
+    stepCodes (0 : rs) _ = stepCodes rs ""
+    stepCodes (38 : 5 : _ : rs) c = stepCodes rs c
+    stepCodes (48 : 5 : _ : rs) c = stepCodes rs c
+    stepCodes (38 : 2 : _ : _ : _ : rs) c = stepCodes rs c
+    stepCodes (48 : 2 : _ : _ : _ : rs) c = stepCodes rs c
+    stepCodes (n : rs) c = stepCodes rs $ case sgrClass n of
+      Just new -> if T.null c then new else c <> " " <> new
+      Nothing -> c
+    sgrClass :: Int -> Maybe Text
+    sgrClass = \case
+      1 -> Just "font-bold"
+      2 -> Just "text-textWeak"
+      30 -> Just "text-textStrong"
+      31 -> Just "text-textError"
+      32 -> Just "text-textSuccess"
+      33 -> Just "text-textWarning"
+      34 -> Just "text-textBrand"
+      35 -> Just "text-fuchsia-500"
+      36 -> Just "text-cyan-500"
+      37 -> Just "text-textStrong"
+      90 -> Just "text-textWeak"
+      91 -> Just "text-textError"
+      92 -> Just "text-textSuccess"
+      93 -> Just "text-textWarning"
+      94 -> Just "text-textBrand"
+      95 -> Just "text-fuchsia-400"
+      96 -> Just "text-cyan-400"
+      97 -> Just "text-textStrong"
+      _ -> Nothing
 
 
 -- | Render a space-separated `field;style⇒value` string from the DB summary
@@ -1519,5 +1588,5 @@ summaryForDetailView = dedupe . V.mapMaybe step
     dedupe xs = V.fromList $ reverse $ snd $ V.foldl' step' (mempty, []) xs
       where
         step' (seen, acc) x
-          | Set.member (key x) seen = (seen, acc)
-          | otherwise = (Set.insert (key x) seen, x : acc)
+          | S.member (key x) seen = (seen, acc)
+          | otherwise = (S.insert (key x) seen, x : acc)

@@ -494,7 +494,7 @@ batchUpsertErrorPatterns pid errors now =
     environments = V.map (.environment) errs
     services = V.map (.serviceName) errs
     runtimes = V.map (.runtime) errs
-    errorDatas = V.map (HI.AsJsonb) errs
+    errorDatas = V.map HI.AsJsonb errs
     traceIds = V.map (.traceId) errs
 
 

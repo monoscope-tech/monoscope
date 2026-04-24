@@ -37,6 +37,7 @@ import Data.Vector qualified as V
 import Models.Projects.Projects qualified as Projects
 import Pkg.Drain qualified as Drain
 import Relude
+import Relude.Extra.Enum (next, prev)
 import UnliftIO (tryAny)
 
 
@@ -168,7 +169,7 @@ submitBatch st batch = do
         then pure False
         else do
           writeTBQueue shard.ingressQ batch
-          modifyTVar' shard.queueDepth succ
+          modifyTVar' shard.queueDepth next
           pure True
 
 
@@ -192,7 +193,7 @@ runShardWorker
 runShardWorker logWarn processor shard = forever do
   batch <- atomically do
     b <- readTBQueue shard.ingressQ
-    modifyTVar' shard.queueDepth pred
+    modifyTVar' shard.queueDepth prev
     pure b
   tryAny (processor batch shard) >>= \case
     Right () -> pass

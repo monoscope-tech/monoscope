@@ -873,7 +873,7 @@ sessionsHeader_ summ = do
       kpi label value subM = div_ [class_ "surface-raised rounded-2xl px-3 py-2 flex flex-col gap-0.5 min-w-0"] do
         span_ [class_ "text-xs text-textWeak truncate"] $ toHtml label
         strong_ [class_ "text-textStrong text-xl font-bold tabular-nums leading-tight truncate"] $ toHtml value
-        whenJust subM \s -> span_ [class_ "text-xs text-textWeak tabular-nums truncate"] $ toHtml s
+        whenJust subM (span_ [class_ "text-xs text-textWeak tabular-nums truncate"] . toHtml)
   div_ [class_ "mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full flex flex-col gap-2"] do
     div_ [class_ "grid grid-cols-6 max-md:grid-cols-3 gap-2"] do
       kpi "Sessions" (prettyPrintCount total) (Just $ prettyPrintCount clean <> " clean")
@@ -972,7 +972,7 @@ instance AE.ToJSON LogsGet where
         -- Group words into summary elements: each word containing ⇒ starts a new
         -- element; subsequent plain words are part of the preceding element's value.
         splitSummaryElements :: Text -> [Text]
-        splitSummaryElements = map (T.unwords . reverse) . reverse . foldl' go [] . T.words
+        splitSummaryElements = map (unwords . reverse) . reverse . foldl' go [] . words
           where
             go [] w = [[w]]
             go acc w | "⇒" `T.isInfixOf` w = [w] : acc
@@ -1003,7 +1003,7 @@ instance AE.ToJSON LogsGet where
             -- Error messages can be stack traces. Take just the first line
             -- and cap length so one huge exception doesn't blow out the row.
             clipError t =
-              let firstLine = fromMaybe t . viaNonEmpty head . T.lines . T.strip $ t
+              let firstLine = fromMaybe t . viaNonEmpty head . lines . T.strip $ t
                in if T.length firstLine > 120 then T.take 119 firstLine <> "\x2026" else firstLine
             -- `session;right-neutral` puts the session id in the right-aligned
             -- badge group, which is the branch that renders the ▶ play button

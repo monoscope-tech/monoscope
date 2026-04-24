@@ -81,6 +81,7 @@ import Proto.Opentelemetry.Proto.Resource.V1.Resource_Fields qualified as PRF
 import Proto.Opentelemetry.Proto.Trace.V1.Trace qualified as PT
 import Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields qualified as PTF
 import Relude hiding (ask)
+import Relude.Extra.Enum (safeToEnum)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.IO.Unsafe (unsafePerformIO)
 import System.Logging qualified as Log
@@ -1159,7 +1160,7 @@ convertMetricToMetricRecords fallbackTime pid resourceM scopeM metric =
         PM.Metric'Gauge gauge -> convertNumberDataPoints (gauge ^. PMF.dataPoints) Telemetry.MTGauge Telemetry.GaugeValue Nothing Nothing
         PM.Metric'Sum s ->
           let !n = fromEnum (s ^. PMF.aggregationTemporality)
-              !temporality = if n >= fromEnum (minBound @Telemetry.AggregationTemporality) && n <= fromEnum (maxBound @Telemetry.AggregationTemporality) then Just (toEnum n) else Nothing
+              !temporality = safeToEnum @Telemetry.AggregationTemporality n
               !monotonic = Just $ s ^. PMF.isMonotonic
            in convertNumberDataPoints (s ^. PMF.dataPoints) Telemetry.MTSum Telemetry.SumValue temporality monotonic
         PM.Metric'Histogram hist -> mapMaybe convertHistogramPoint $ hist ^. PMF.dataPoints

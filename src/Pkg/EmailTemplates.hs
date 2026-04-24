@@ -98,7 +98,7 @@ groupedByContext :: Foldable f => f EndpointAlertRow -> [((Maybe Text, Maybe Tex
 groupedByContext rows =
   NE.groupAllWith (\r -> (r.host, r.service, r.environment)) (toList rows)
     <&> \grp ->
-      let r = NE.head grp
+      let r = head grp
        in ((r.host, endpointContextLabel r), (.label) <$> NE.toList grp)
 
 
@@ -494,16 +494,10 @@ anomalyEndpointEmail userName projectName anomalyUrl endpointRows =
               tr_ $ td_ [style_ "padding: 10px 0 2px 0; font-weight: 600; font-size: 14px; color: #111827;"] do
                 "🌐 "
                 toHtml h
-                whenJust ctxM \c ->
-                  span_ [style_ "color: #6b7280; font-weight: 400; margin-left: 8px; font-size: 13px;"] $ toHtml c
+                whenJust ctxM (span_ [style_ "color: #6b7280; font-weight: 400; margin-left: 8px; font-size: 13px;"] . toHtml)
             -- When host is absent but a service/env caption is present, still show it on its own line.
-            when (isNothing hostM) $ whenJust ctxM \c ->
-              tr_ $ td_ [style_ "padding: 10px 0 2px 0; color: #6b7280; font-size: 13px;"] $ toHtml c
-            forM_ labels \label ->
-              tr_
-                $ td_ [style_ "padding: 3px 0 3px 18px;"]
-                $ span_ [class_ "monoscope-code"]
-                $ toHtml label
+            when (isNothing hostM) $ whenJust ctxM (tr_ . td_ [style_ "padding: 10px 0 2px 0; color: #6b7280; font-size: 13px;"] . toHtml)
+            forM_ labels (tr_ . td_ [style_ "padding: 3px 0 3px 18px;"] . span_ [class_ "monoscope-code"] . toHtml)
       emailButton anomalyUrl "Explore the Endpoint"
       emailHelpLinks
       br_ []

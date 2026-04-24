@@ -142,6 +142,7 @@ import Proto.Opentelemetry.Proto.Trace.V1.Trace (Span'Event, Status)
 import Proto.Opentelemetry.Proto.Trace.V1.Trace qualified as PT
 import Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields qualified as PTF
 import Relude
+import Relude.Extra.Enum (prev)
 import Relude.Unsafe qualified as Unsafe
 import Servant qualified
 import Servant.Server qualified as ServantS
@@ -931,7 +932,7 @@ drainExtractionWorker :: TestResources -> IO ()
 drainExtractionWorker TestResources{..} = do
   let shards = V.toList trATCtx.extractionWorker.shards
   for_ shards \shard ->
-    drainSTM (isEmptyTBQueue shard.ingressQ) (readTBQueue shard.ingressQ <* modifyTVar' shard.queueDepth pred) \batch ->
+    drainSTM (isEmptyTBQueue shard.ingressQ) (readTBQueue shard.ingressQ <* modifyTVar' shard.queueDepth prev) \batch ->
       runTestBackgroundWithLogger frozenTime trLogger trATCtx $ BackgroundJobs.processEagerBatch batch shard
   now <- getCurrentTime
   ExtractionWorker.forceFlushAllBuffers trATCtx.extractionWorker now
@@ -1263,7 +1264,7 @@ mkSpanRequest trId spanId parentSpanIdM spanName events statusM attrs resource t
 
 createOtelSpanAtTime :: Text -> Text -> Text -> Maybe Text -> Text -> UTCTime -> TS.ExportTraceServiceRequest
 createOtelSpanAtTime apiKey trId spanId parentSpanIdM spanName =
-  let (method, path) = case T.words spanName of
+  let (method, path) = case words spanName of
         (m : p : _) | m `elem` ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"] -> (m, p)
         _ -> ("GET", "/" <> spanName)
    in mkSpanRequest trId spanId parentSpanIdM spanName [] Nothing [mkAttr "http.method" method, mkAttr "http.route" path] (mkResource apiKey [])

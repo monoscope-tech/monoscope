@@ -90,7 +90,7 @@ import Data.Generics.Labels ()
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
 import Data.OpenApi (ToSchema (..))
-import Data.Set qualified as Set
+import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Time (UTCTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
@@ -401,7 +401,7 @@ apiDashboardApply pid doc = do
     Just existing -> do
       _ <- Dashboards.updateSchemaAndUpdatedAt existing.id doc.schema now
       _ <- Dashboards.updateTitle existing.id newTitle
-      whenJust doc.tags \ts -> void $ Dashboards.updateTags existing.id (V.fromList ts)
+      whenJust doc.tags (void . Dashboards.updateTags existing.id . V.fromList)
       apiDashboardGet pid existing.id
     Nothing -> do
       did <- UUIDId <$> UUID.genUUID
@@ -740,11 +740,11 @@ apiLogPatternsBulk pid ba = do
     "ignore" -> pure LogPatterns.LPSIgnored
     _ -> throwError err400{errBody = encodeUtf8 $ "Unknown bulk action: " <> ba.action}
   updated <- LogPatterns.setLogPatternStatesByIds pid Nothing (V.fromList ba.ids) st
-  let updatedSet = Set.fromList updated
+  let updatedSet = S.fromList updated
   pure
     BulkResult
       { succeeded = updated
-      , failed = [BulkFailure{id = i, error = "not applied"} | i <- ba.ids, not (Set.member i updatedSet)]
+      , failed = [BulkFailure{id = i, error = "not applied"} | i <- ba.ids, not (S.member i updatedSet)]
       }
 
 
@@ -933,7 +933,7 @@ assertHandleAllowed h
   | T.toLower h == "everyone" =
       throwError err400{errBody = "Handle \"everyone\" is reserved"}
   | T.null h = throwError err400{errBody = "handle is required"}
-  | otherwise = pure ()
+  | otherwise = pass
 
 
 apiTeamCreate :: Projects.ProjectId -> TeamInput -> ATBaseCtx TeamFull

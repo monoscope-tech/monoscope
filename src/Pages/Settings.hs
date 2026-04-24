@@ -43,7 +43,7 @@ import Control.Lens ((.~), (^.))
 import Data.Aeson qualified as AE
 import Data.Aeson.Types (parseMaybe)
 import Data.ByteArray qualified as BA
-import Data.ByteString qualified as B
+import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
 import Data.CaseInsensitive qualified as CI
 import Data.Default
@@ -509,7 +509,7 @@ notificationsTestPostH pid TestForm{..} = do
         targetTeam >>= \case
           Nothing -> pure (count, Just "no_team")
           Just t -> (,reason) . (+ count) <$> run t
-      sent n = pure n
+      sent = pure
       -- per-channel attempt counts
       slack t = do forM_ t.slack_channels (sendSlackAlert alert pid project.title . Just); sent (V.length t.slack_channels)
       discord t = do forM_ t.discord_channels (sendDiscordAlert alert pid project.title . Just); sent (V.length t.discord_channels)
@@ -645,7 +645,7 @@ webhookPostH sigHeaderM rawBody = do
       sigValid = case sigHeaderM of
         Just h -> verifyLemonSqueezySignature h rawBody secret
         Nothing -> False
-  unless sigValid $ Log.logAttention "ls_webhook_sig_mismatch" (T.take 8 <$> sigHeaderM, B.length rawBody)
+  unless sigValid $ Log.logAttention "ls_webhook_sig_mismatch" (T.take 8 <$> sigHeaderM, BS.length rawBody)
   when envConfig.lsWebhookSigEnforce $ case sigHeaderM of
     Nothing -> throwError err400{errBody = "missing signature"}
     Just _ | not sigValid -> throwError err400{errBody = "invalid signature"}
@@ -653,7 +653,7 @@ webhookPostH sigHeaderM rawBody = do
   dat <- case AE.eitherDecodeStrict rawBody :: Either String WebhookData of
     Right d -> pure d
     Left err -> do
-      Log.logAttention "LS webhook invalid JSON" (err, decodeUtf8 @Text (B.take 256 rawBody))
+      Log.logAttention "LS webhook invalid JSON" (err, decodeUtf8 @Text (BS.take 256 rawBody))
       throwError err400{errBody = "invalid json"}
   let orderId = dat.dataVal.attributes.orderId
       subItem = dat.dataVal.attributes.firstSubscriptionItem

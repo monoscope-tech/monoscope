@@ -16,7 +16,7 @@ import Data.Default
 import Data.HashMap.Internal.Strict qualified as HM
 import Data.Map qualified as Map
 import Data.Map.Strict qualified as MapS
-import Data.Set qualified as Set
+import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale)
 import Data.Time.Format (formatTime)
@@ -740,7 +740,7 @@ tracePage pid traceItem spanRecords = do
               renderSpanListTable serviceNames serviceColors spanRecords
 
   -- Use skew-adjusted SpanMin from the span tree so flame/timeline matches the waterfall.
-  let flattenTrees ts = concatMap (\t -> t.spanRecord : flattenTrees t.children) ts
+  let flattenTrees = concatMap (\t -> t.spanRecord : flattenTrees t.children)
       spanMinToFlame sp =
         AE.object
           [ "spanId" AE..= sp.spanId
@@ -889,8 +889,8 @@ stBox label value iconM =
 -- instead of being silently dropped by the tree walk.
 buildSpanMap :: V.Vector Telemetry.SpanRecord -> MapS.Map (Maybe Text) [Telemetry.SpanRecord]
 buildSpanMap spans =
-  let ids = foldr (Set.insert . (.spanId)) Set.empty spans
-      norm sp = if maybe True (`Set.member` ids) sp.parentSpanId then sp.parentSpanId else Nothing
+  let ids = foldr (S.insert . (.spanId)) S.empty spans
+      norm sp = if maybe True (`S.member` ids) sp.parentSpanId then sp.parentSpanId else Nothing
    in V.foldr (\sp m -> MapS.insertWith (++) (norm sp) [sp] m) MapS.empty spans
 
 

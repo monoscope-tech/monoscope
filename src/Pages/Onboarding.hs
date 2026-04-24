@@ -718,7 +718,7 @@ integrationsPage pid apikey =
 
     -- Mobile overlay for docs panel
     style_
-      $ T.unlines
+      $ unlines
         [ "@media(max-width:767px){#docs-panel{display:none}#docs-panel.open{display:flex;flex-direction:column;position:fixed;inset:0;z-index:50;background:var(--color-bgBase);overflow-y:auto}}"
         , ".ai-menu-wrap{position:relative}"
         , ".ai-menu{position:absolute;right:0;top:100%;z-index:50;min-width:260px;margin-top:6px;background:var(--color-bgRaised);border:1px solid var(--color-strokeWeak);border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,0.12);padding:6px;opacity:0;transform:scale(0.95) translateY(-4px);pointer-events:none;transition:opacity 150ms ease,transform 150ms ease}"

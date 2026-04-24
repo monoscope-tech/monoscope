@@ -164,7 +164,7 @@ resolveBody sid now row = do
       let replayInfo =
             Telemetry.atMapText "session.id" (unAesonTextMaybe anchor.attributes)
               >>= UUID.fromText
-              <&> \s -> (UUID.toText sid, row.pid.toText, s)
+              <&> (UUID.toText sid,row.pid.toText,)
       pure
         $ ShareLive
           row.hoursLeft

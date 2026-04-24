@@ -471,7 +471,7 @@ renderErrors errs = do
         summary_ [class_ "cursor-pointer select-none flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-textWeak hover:text-textStrong"] do
           faSprite_ "chevron-right" "regular" "w-3 h-3 transition-transform group-open/st:rotate-90"
           "Stack trace"
-          span_ [class_ "text-[10px] text-textWeak/70"] $ toHtml @Text $ "(" <> show (length (T.lines stacktrace)) <> " frames)"
+          span_ [class_ "text-[10px] text-textWeak/70"] $ toHtml @Text $ "(" <> show (length (lines stacktrace)) <> " frames)"
         div_ [class_ "px-3 pb-3"]
           $ pre_ [class_ "text-[12px] font-mono whitespace-pre text-textWeak bg-bgBase border border-strokeWeak rounded-md p-3 max-h-72 overflow-auto leading-snug"]
           $ toHtml stacktrace

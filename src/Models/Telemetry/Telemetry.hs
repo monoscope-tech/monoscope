@@ -108,6 +108,7 @@ import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), WrappedEnum (..), WrappedEnumSC (..), encodeEnumSC, idFromText, textArrayEnc, unAesonTextMaybe)
 import Pkg.ExtractionWorker qualified as EW
 import Relude hiding (ask)
+import Relude.Extra.Enum (safeToEnum)
 import System.IO (hPutStrLn)
 import System.Logging qualified as Log
 import Text.Regex.TDFA.Text ()
@@ -502,11 +503,9 @@ instance HI.EncodeValue AggregationTemporality where encodeValue = contramap fro
 
 instance FromField AggregationTemporality where
   fromField f bs =
-    fromField @Int f bs >>= \n ->
-      if n >= fromEnum (minBound @AggregationTemporality) && n <= fromEnum (maxBound @AggregationTemporality)
-        then pure (toEnum n)
-        else returnError ConversionFailed f ("Invalid aggregation_temporality: " <> show n)
-instance HI.DecodeValue AggregationTemporality where decodeValue = toEnum <$> HI.decodeValue
+    fromField @Int f bs
+      >>= \n -> maybe (returnError ConversionFailed f ("Invalid aggregation_temporality: " <> show n)) pure (safeToEnum n)
+instance HI.DecodeValue AggregationTemporality where decodeValue = fromMaybe minBound . safeToEnum <$> HI.decodeValue
 
 
 data MetricDataPoint = MetricDataPoint

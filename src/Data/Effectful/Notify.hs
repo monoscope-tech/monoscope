@@ -332,7 +332,7 @@ runNotifyProduction = interpret $ \_ -> \case
     sendSlackWebhook sd url = do
       -- checkResponse = nop: wreq otherwise throws on 4xx and we lose the body
       -- which is where Slack tells us which block/field it rejected.
-      let opts = defaults & header "Content-Type" .~ ["application/json"] & checkResponse ?~ (\_ _ -> pure ())
+      let opts = defaults & header "Content-Type" .~ ["application/json"] & checkResponse ?~ (\_ _ -> pass)
           cleaned = flattenForWebhook sd.payload
           fail_ tag extra = Nothing <$ Log.logAttention ("Slack webhook " <> tag) (webhookLog sd url (("payload" AE..= cleaned) : extra))
       liftIO (try @SomeException $ postWith opts (toString url) cleaned) >>= \case

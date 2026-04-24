@@ -906,7 +906,7 @@ parseUrlSegments (x : xs) (segs, vals) = case valueToFormatStr x of
 
 addNewSegment :: [Text] -> Text -> [Text]
 addNewSegment segs seg =
-  let pos = length (filter (T.isPrefixOf ("{" <> seg)) segs)
+  let pos = sum [1 :: Int | s <- segs, T.isPrefixOf ("{" <> seg) s]
       newSeg = if pos > 0 then "{" <> seg <> "_" <> show pos <> "}" else "{" <> seg <> "}"
    in newSeg : segs
 
