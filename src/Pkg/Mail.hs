@@ -632,27 +632,28 @@ sampleAlert = \case
     const
       $ RuntimeErrorAlert
         "test-123"
-        "TEST: TypeError - Sample error"
+        "TEST: TypeError - Cannot read properties of undefined"
         def
           { ErrorPatterns.when = UTCTime (fromGregorian 2025 1 1) 0
-          , ErrorPatterns.errorType = "🧪 TEST: TypeError"
+          , ErrorPatterns.errorType = "🧪 TEST · TypeError"
           , ErrorPatterns.rootErrorType = "TypeError"
-          , ErrorPatterns.message = "Sample error message for testing"
-          , ErrorPatterns.rootErrorMessage = "Sample error"
-          , ErrorPatterns.stackTrace = "at sampleFunction (sample.js:42:15)"
+          , ErrorPatterns.message = "Cannot read properties of undefined (reading 'id') at /api/v1/orders/:orderId/items"
+          , ErrorPatterns.rootErrorMessage = "Cannot read properties of undefined (reading 'id')"
+          , ErrorPatterns.stackTrace = "TypeError: Cannot read properties of undefined (reading 'id')\n    at getOrderItems (/app/src/routes/orders.ts:87:24)\n    at Layer.handle [as handle_request] (/app/node_modules/express/lib/router/layer.js:95:5)"
           , ErrorPatterns.hash = "test-hash-xyz"
           , ErrorPatterns.technology = Just LogQueries.JsExpress
           , ErrorPatterns.requestMethod = Just "GET"
-          , ErrorPatterns.requestPath = Just "/api/test"
-          , ErrorPatterns.spanId = Just "test-span-id"
-          , ErrorPatterns.traceId = Just "test-trace-id"
-          , ErrorPatterns.serviceName = Just "api"
+          , ErrorPatterns.requestPath = Just "/api/v1/orders/:orderId/items"
+          , ErrorPatterns.environment = Just "production"
+          , ErrorPatterns.spanId = Just "a1b2c3d4e5f67890"
+          , ErrorPatterns.traceId = Just "296e419eef5ed7da296e419eef5ed7da"
+          , ErrorPatterns.serviceName = Just "orders-api"
           , ErrorPatterns.runtime = Just "nodejs"
           }
         NewRuntimeError
         Nothing
-        (Just "42/hr")
-        (Just "3m ago")
+        (Just "4/hr")
+        (Just "just now")
   QueryAlert -> const $ MonitorsAlert "🧪 TEST: High Error Rate" "https://example.com/test" Nothing
   LogPattern -> const $ MonitorsAlert "🧪 TEST: New Log Pattern" "https://example.com/test" Nothing
   LogPatternRateChange -> const $ MonitorsAlert "🧪 TEST: Log Pattern Rate Change" "https://example.com/test" Nothing

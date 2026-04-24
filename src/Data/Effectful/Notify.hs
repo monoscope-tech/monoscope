@@ -43,6 +43,7 @@ import Data.Aeson.KeyMap qualified as AEK
 import Data.Aeson.Lens (key, _Bool, _String)
 import Data.Aeson.QQ (aesonQQ)
 import Data.Text qualified as T
+import Data.Vector qualified as V
 import Data.Text.Display (Display, display)
 import Effectful
 import Effectful.Dispatch.Dynamic
@@ -363,15 +364,32 @@ runNotifyProduction = interpret $ \_ -> \case
     --
     -- So for the webhook transport, we walk the Block Kit payload and render
     -- it to a single @text@ string in Slack mrkdwn (links, bold, code blocks
-    -- all still work). Rich formatting is lost on the OAuth-time default
-    -- channel; user-added channels go via @chat.postMessage@ which keeps full
-    -- Block Kit fidelity.
+    -- all still work). Image blocks are lifted to the legacy attachment's
+    -- @image_url@ so Slack renders the chart inline instead of auto-unfurling
+    -- a bare signed URL into a file-attachment-style preview.
     flattenForWebhook :: AE.Value -> AE.Value
     flattenForWebhook payload =
       let blocks = extractBlocks payload
           rendered = T.intercalate "\n\n" $ mapMaybe renderBlock blocks
           text = if T.null rendered then "Monoscope alert" else rendered
-       in AE.object ["text" AE..= text]
+          imageUrl = listToMaybe [u | AE.Object b <- blocks, Just (AE.String "image") <- [AEK.lookup "type" b], Just (AE.String u) <- [AEK.lookup "image_url" b]]
+          color = extractColor payload
+          attachment = AE.object $ catMaybes
+            [ Just $ "fallback" AE..= ("Monoscope alert" :: Text)
+            , ("color" AE..=) <$> color
+            , ("image_url" AE..=) <$> imageUrl
+            ]
+          base = ["text" AE..= text]
+       in AE.object $ case (imageUrl, color) of
+            (Nothing, Nothing) -> base
+            _ -> base <> ["attachments" AE..= AE.Array (V.singleton attachment)]
+
+    extractColor :: AE.Value -> Maybe Text
+    extractColor (AE.Object obj)
+      | Just (AE.Array atts) <- AEK.lookup "attachments" obj
+      , (AE.Object att : _) <- toList atts
+      , Just (AE.String c) <- AEK.lookup "color" att = Just c
+    extractColor _ = Nothing
 
     -- Blocks may live at top level or inside the first legacy attachment
     -- (our @slackAttachment@ color-bar wrapper).
@@ -400,8 +418,9 @@ runNotifyProduction = interpret $ \_ -> \case
                       Just $ "<" <> u <> "|" <> label <> ">"
                 linkOf _ = Nothing
              in Just $ T.intercalate " · " $ mapMaybe linkOf (toList els)
-      Just (AE.String "image")
-        | Just (AE.String u) <- AEK.lookup "image_url" b -> Just u
+      -- Image blocks are lifted to the legacy attachment's @image_url@
+      -- field in @flattenForWebhook@ — never emit the signed URL as text.
+      Just (AE.String "image") -> Nothing
       _ -> Nothing
     renderBlock _ = Nothing
 

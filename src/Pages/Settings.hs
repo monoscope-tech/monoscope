@@ -50,7 +50,7 @@ import Data.Default
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Notify qualified as Notify
 import Data.Text qualified as T
-import Data.Time (UTCTime (..), getZonedTime, timeOfDayToTime, timeToTimeOfDay)
+import Data.Time (UTCTime (..), addUTCTime, getZonedTime, timeOfDayToTime, timeToTimeOfDay)
 import Data.Time.Calendar (fromGregorian, toGregorian)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format (defaultTimeLocale, formatTime)
@@ -83,13 +83,15 @@ import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), ModalCf
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.EmailTemplates qualified as ET
-import Pkg.Mail (sampleAlertByIssueTypeText, sampleReport, sendDiscordAlert, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendWhatsAppAlert)
+import Pkg.Mail (NotificationAlerts (..), sampleAlertByIssueTypeText, sampleReport, sendDiscordAlert, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendWhatsAppAlert)
+import BackgroundJobs (errorTrendChartUrl)
+import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Relude hiding (ask, asks)
 import Servant (err400, errBody)
 import System.Config
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
 import Text.Printf (printf)
-import Utils (LoadingSize (..), faSprite_, htmxIndicator_)
+import Utils (LoadingSize (..), faSprite_, formatUTC, htmxIndicator_)
 import Web.FormUrlEncoded (FromForm)
 import "cryptonite" Crypto.Hash (SHA256)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
@@ -468,8 +470,21 @@ notificationsTestPostH pid TestForm{..} = do
     $ throwError err400{errBody = "Rate limit: Please wait 60 seconds between test notifications"}
 
   (_, project) <- Projects.sessionAndProject pid
-  let alert = bool (sampleAlertByIssueTypeText issueType project.title) (sampleReport project.title) (issueType == "report")
+  let baseAlert = bool (sampleAlertByIssueTypeText issueType project.title) (sampleReport project.title) (issueType == "report")
       getTeam tid = listToMaybe <$> getTeamsById pid (V.singleton tid)
+  -- Build a real signed widget URL so the test exercises the same image path
+  -- as production alerts (webhook transport lifts it into attachments.image_url).
+  -- The chart may be empty for the sample hash; what matters is that signing,
+  -- URL length, and the webhook flatten/lift logic are all on the critical path.
+  appCtxForChart <- ask @AuthContext
+  nowUtc <- Time.currentTime
+  let fromUtc = addUTCTime (-3600) nowUtc
+  alert <- case baseAlert of
+    RuntimeErrorAlert{errorData} -> do
+      let errHash = (errorData :: ErrorPatterns.ATError).hash
+      chartUrlM <- errorTrendChartUrl appCtxForChart pid errHash (formatUTC fromUtc) (formatUTC nowUtc)
+      pure baseAlert{chartUrl = chartUrlM}
+    _ -> pure baseAlert
 
   Log.logTrace "Sending test notification" (channel, pid, issueType)
   appCtx <- ask @AuthContext
