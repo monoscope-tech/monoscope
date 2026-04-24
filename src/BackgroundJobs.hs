@@ -1365,6 +1365,10 @@ claimIssueNotification iid now cooldownHours =
 -- overflow rows are enqueued to 'apis.notification_digest_queue' and flushed
 -- into one batched message by 'NotificationDigestJob'.
 -- Gated by 'project.errorAlerts' so customers can opt out without code changes.
+-- | Returns (slackTs, discordMsgId, dispatched). Callers that track
+-- per-resource thread IDs (e.g. error_patterns) persist them so later
+-- re-notifications thread under the original alert. Returns (Nothing, Nothing, False)
+-- when suppressed by cooldown, errorAlerts=false, or rate-limit overflow.
 notifyIssue
   :: Issues.Issue
   -> Projects.Project
@@ -1375,19 +1379,25 @@ notifyIssue
   -> Text -- alert url
   -> Text -- email subject
   -> Html () -- email body
-  -> ATBackgroundCtx ()
-notifyIssue issue project users cooldownHours digestReason alert alertUrl subj html = Relude.when project.errorAlerts do
-  now <- Time.currentTime
-  claimed <- claimIssueNotification issue.id now cooldownHours
-  Relude.when claimed do
-    allowed <- consumeNotificationToken project.id now
-    if allowed
-      then do
-        (_, _, dispatched) <- sendAlertToChannels alert project.id project users alertUrl subj html (Nothing, Nothing)
-        Log.logInfo "issue_notification_sent" (AE.object ["project_id" AE..= project.id.toText, "issue_id" AE..= issue.id.toText, "reason" AE..= digestReason, "dispatched" AE..= dispatched])
-      else do
-        enqueueDigest project.id Nothing (Just issue.id) digestReason issue.title
-        Log.logInfo "issue_notification_digested" (AE.object ["project_id" AE..= project.id.toText, "issue_id" AE..= issue.id.toText, "reason" AE..= ("rate_limit" :: Text)])
+  -> ATBackgroundCtx (Maybe Text, Maybe Text, Bool)
+notifyIssue issue project users cooldownHours digestReason alert alertUrl subj html
+  | not project.errorAlerts = pure (Nothing, Nothing, False)
+  | otherwise = do
+      now <- Time.currentTime
+      claimed <- claimIssueNotification issue.id now cooldownHours
+      if not claimed
+        then pure (Nothing, Nothing, False)
+        else do
+          allowed <- consumeNotificationToken project.id now
+          if allowed
+            then do
+              (slackTs, discordMsgId, dispatched) <- sendAlertToChannels alert project.id project users alertUrl subj html (Nothing, Nothing)
+              Log.logInfo "issue_notification_sent" (AE.object ["project_id" AE..= project.id.toText, "issue_id" AE..= issue.id.toText, "reason" AE..= digestReason, "dispatched" AE..= dispatched])
+              pure (slackTs, discordMsgId, dispatched)
+            else do
+              enqueueDigest project.id Nothing (Just issue.id) digestReason issue.title
+              Log.logInfo "issue_notification_digested" (AE.object ["project_id" AE..= project.id.toText, "issue_id" AE..= issue.id.toText, "reason" AE..= ("rate_limit" :: Text)])
+              pure (Nothing, Nothing, False)
 
 
 -- | Process and insert errors for a specific project (single batched round-trip via unnest).
@@ -1418,14 +1428,22 @@ processProjectErrors pid errors now = do
       projectM <- Projects.projectById pid
       users <- Projects.usersByProjectId pid
       authCtx <- Effectful.Reader.Static.ask @Config.AuthContext
-      let notifyNewError :: Issues.Issue -> ErrorPatterns.ATError -> ATBackgroundCtx ()
-          notifyNewError issue atErr = whenJust projectM \project -> do
+      let notifyNewError :: Issues.Issue -> ErrorPatterns.ErrorPattern -> ErrorPatterns.ATError -> ATBackgroundCtx ()
+          notifyNewError issue err atErr = whenJust projectM \project -> do
             chartUrlM <- errorTrendChartUrl authCtx pid atErr.hash (formatUTC (addUTCTime (-(15 * 60)) now)) (formatUTC now)
             let issueUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> issue.id.toText
                 firstSeenTextM = Just $ relTimeAgo now atErr.when <> " · " <> toText (formatTime defaultTimeLocale "%b %-e %-l:%M %p" atErr.when)
                 alert = RuntimeErrorAlert{issueId = issue.id.toText, issueTitle = issue.title, errorData = atErr, runtimeAlertType = NewRuntimeError, chartUrl = chartUrlM, occurrenceText = Nothing, firstSeenText = firstSeenTextM, ongoingFor = Nothing}
                 (subj, html) = ET.runtimeErrorsEmail project.title issueUrl [atErr] chartUrlM Nothing Nothing
-            notifyIssue issue project users Issues.rateChangeCooldownHours "runtime_exception" alert issueUrl subj html
+            (slackTs, discordMsgId, dispatched) <- notifyIssue issue project users Issues.rateChangeCooldownHours "runtime_exception" alert issueUrl subj html
+            -- Persist thread IDs + stamp error_patterns.last_notified_at so later
+            -- escalation/regression sweeps thread under this alert instead of
+            -- firing fresh. 'apis.issues.last_notified_at' gates re-notification
+            -- of THIS issue; error_patterns.last_notified_at is what the sweep
+            -- path (notifyErrorSubscriptions) reads for per-pattern dedup.
+            Relude.when dispatched
+              $ void
+              $ ErrorPatterns.updateErrorPatternThreadIdsAndNotifiedAt err.id slackTs discordMsgId now
       forM_ newOrRegressed \(errorHash, errState) -> do
         errM <- ErrorPatterns.getErrorPatternByHash pid errorHash
         whenJust errM \err ->
@@ -1436,7 +1454,7 @@ processProjectErrors pid errors now = do
                 ( do
                     issue <- createIssueForError pid err
                     Log.logInfo "Created new issue for regressed error (no prior issue)" (pid, err.id, issue.id)
-                    whenJust (HM.lookup errorHash atErrByHash) (notifyNewError issue)
+                    whenJust (HM.lookup errorHash atErrByHash) (notifyNewError issue err)
                 )
                 (handleRegression pid err)
                 existingM
@@ -1452,7 +1470,7 @@ processProjectErrors pid errors now = do
                   liftIO $ withResource authCtx.jobsPool \conn ->
                     void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
                   Log.logInfo "Created issue for new error" (pid, err.id, issue.id)
-                  whenJust (HM.lookup errorHash atErrByHash) (notifyNewError issue)
+                  whenJust (HM.lookup errorHash atErrByHash) (notifyNewError issue err)
   where
     createIssueForError pid' err' = do
       issue <- Issues.createNewErrorIssue pid' err'
@@ -3268,7 +3286,7 @@ detectLogPatternSpikes pid scheduledTime authCtx = do
           changePct = if sr.mean > 0 then (sr.currentRate - sr.mean) / sr.mean * 100 else 0
           alert = LogPatternRateChangeAlert{issueUrl, patternText = lpRate.logPattern, sampleMessage = Nothing, logLevel = lpRate.logLevel, serviceName = lpRate.serviceName, direction = dir, currentRate = sr.currentRate, baselineMean = sr.mean, changePercent = changePct}
           (subj, html) = ET.logPatternRateChangeEmail project.title issueUrl lpRate.logPattern lpRate.logLevel lpRate.serviceName dir sr.currentRate sr.mean changePct
-      notifyIssue issue project users Issues.rateChangeCooldownHours "log_pattern_rate_change" alert issueUrl subj html
+      void $ notifyIssue issue project users Issues.rateChangeCooldownHours "log_pattern_rate_change" alert issueUrl subj html
     pure issue.id
 
   -- Clear the pending markers for anything we just fired; a new detection
@@ -3316,7 +3334,7 @@ processNewLogPatterns pid authCtx = do
                 occCount = fromIntegral lp.occurrenceCount :: Int
                 alert = LogPatternAlert{issueUrl, patternText = lp.logPattern, sampleMessage = lp.sampleMessage, logLevel = lp.logLevel, serviceName = lp.serviceName, sourceField = lp.sourceField, occurrenceCount = occCount}
                 (subj, html) = ET.logPatternEmail project.title issueUrl lp.logPattern lp.sampleMessage lp.logLevel lp.serviceName lp.sourceField occCount
-            notifyIssue issue project users newPatternCooldownHours "log_pattern" alert issueUrl subj html
+            void $ notifyIssue issue project users newPatternCooldownHours "log_pattern" alert issueUrl subj html
           pure issue.id
         unless (V.null results) $ liftIO $ withResource authCtx.jobsPool \conn ->
           void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid results
