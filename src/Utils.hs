@@ -208,6 +208,10 @@ fieldContextMenuItems_ copyScript = do
     span_ [] "View patterns"
 
 
+-- | Render a Font Awesome icon from the sprite sheet at
+-- static/public/assets/svgs/fa-sprites/{regular,solid}.svg. The first arg is
+-- the symbol id (e.g. "bucket"). When adding a new icon, you must add its
+-- <symbol> to the corresponding sprite file — it will not render otherwise.
 faSprite_ :: Monad m => Text -> Text -> Text -> HtmlT m ()
 faSprite_ mIcon faType classes = svg_ [class_ $ "inline-block icon " <> classes] $ Svg.use_ [href_ $ "/public/assets/svgs/fa-sprites/" <> faType <> ".svg?v=" <> fileHash <> "#" <> mIcon]
   where
