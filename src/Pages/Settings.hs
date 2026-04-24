@@ -492,10 +492,10 @@ notificationsTestPostH pid TestForm{..} = do
   let projectUrl = "/p/" <> pid.toText
       fullProjectUrl = appCtx.env.hostUrl <> "p/" <> pid.toText
       testTemplate = case issueType of
-        "runtime_exception" -> ET.runtimeErrorsEmail project.title (fullProjectUrl <> "/issues/") [] Nothing Nothing
-        "escalating_errors" -> ET.escalatingErrorsEmail project.title (fullProjectUrl <> "/issues/") [] Nothing Nothing
-        "regressed_errors" -> ET.regressedErrorsEmail project.title (fullProjectUrl <> "/issues/") [] Nothing Nothing
-        "error_spike" -> ET.errorSpikesEmail project.title (fullProjectUrl <> "/issues/") [] Nothing Nothing
+        "runtime_exception" -> ET.runtimeErrorsEmail project.title (fullProjectUrl <> "/issues/") [] Nothing Nothing Nothing
+        "escalating_errors" -> ET.escalatingErrorsEmail project.title (fullProjectUrl <> "/issues/") [] Nothing Nothing Nothing
+        "regressed_errors" -> ET.regressedErrorsEmail project.title (fullProjectUrl <> "/issues/") [] Nothing Nothing Nothing
+        "error_spike" -> ET.errorSpikesEmail project.title (fullProjectUrl <> "/issues/") [] Nothing Nothing Nothing
         "report" -> ET.sampleWeeklyReport "" ""
         _ -> ET.anomalyEndpointEmail "Test User" project.title (fullProjectUrl <> "/issues") [ET.EndpointAlertRow "GET /api/v1/test" (Just "api.example.com") (Just "api-service") (Just "production")]
       sendTestEmail email = let (subj, html) = testTemplate; subj' = "[Test] " <> subj in sendRenderedEmail email subj' (ET.renderEmail subj' html)

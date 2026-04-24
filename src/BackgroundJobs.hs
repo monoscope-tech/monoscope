@@ -907,6 +907,8 @@ data ErrorSubscriptionDue = ErrorSubscriptionDue
   , slackThreadTs :: Maybe Text
   , discordMessageId :: Maybe Text
   , occurrences1h :: Int
+  , createdAt :: UTCTime
+  , lastNotifiedAt :: Maybe UTCTime
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, HI.DecodeRow, NFData)
@@ -968,6 +970,18 @@ trendChartUrl ctx pid widget fromTxt toTxt =
 errorTrendChartUrl :: Log :> es => Config.AuthContext -> Projects.ProjectId -> Text -> Text -> Text -> Eff es (Maybe Text)
 errorTrendChartUrl ctx pid errHash =
   trendChartUrl ctx pid def{Widget.wType = Widget.WTTimeseries, Widget.query = Just $ "hashes has_any [\"err:" <> errHash <> "\"] | summarize count(*) by bin_auto(timestamp)", Widget.theme = Just "roma"}
+
+
+-- | Long-form duration ("3 days", "8 hours", "45 minutes") for the "Still firing"
+-- banner — readers are assessing how long an incident has been burning, not recency.
+humanDuration :: UTCTime -> UTCTime -> Text
+humanDuration now t
+  | s < 3600 = unit (max 1 (s `div` 60)) "minute" "minutes"
+  | s < 86400 = unit (s `div` 3600) "hour" "hours"
+  | otherwise = unit (s `div` 86400) "day" "days"
+  where
+    s = max 0 $ round (diffUTCTime now t) :: Int
+    unit n sg pl = show n <> " " <> bool pl sg (n == 1)
 
 
 -- | Compact relative time ("3m ago", "2h ago", "5d ago") for alert timestamps.
@@ -1113,7 +1127,8 @@ queryDueErrorNotifications pid mHashes now =
         [HI.sql|
           SELECT DISTINCT ON (e.id)
                  e.id, e.error_data, e.state, i.id, i.title,
-                 e.slack_thread_ts, e.discord_message_id, e.occurrences_1h
+                 e.slack_thread_ts, e.discord_message_id, e.occurrences_1h,
+                 e.created_at, e.last_notified_at
           FROM apis.error_patterns e
           JOIN apis.issues i ON i.project_id = e.project_id AND i.target_hash = e.hash
           WHERE e.project_id = #{pid}
@@ -1173,12 +1188,18 @@ dispatchDueErrorNotifications ctx pid now dueErrors =
                   occTextM = (show sub.occurrences1h <> "/hr") <$ guard (sub.occurrences1h > 0)
                   fromTime = addUTCTime (-(15 * 60)) now
                   firstSeenTextM = Just $ relTimeAgo now sub.errorData.when <> " · " <> toText (formatTime defaultTimeLocale "%b %-e %-l:%M %p" sub.errorData.when)
+                  -- Surface an ongoing-duration banner once we've already notified on this
+                  -- issue and it's still in a non-regressed state; a regression restarts
+                  -- the narrative and deserves its own fresh-looking alert.
+                  ongoingForM =
+                    humanDuration now sub.createdAt
+                      <$ guard (isJust sub.lastNotifiedAt && sub.errorState /= ErrorPatterns.ESRegressed)
               chartUrlM <- errorTrendChartUrl ctx pid sub.errorData.hash (formatUTC fromTime) (formatUTC now)
-              let alert = RuntimeErrorAlert{issueId = Issues.issueIdText sub.issueId, issueTitle = sub.issueTitle, errorData = sub.errorData, runtimeAlertType = alertType, chartUrl = chartUrlM, occurrenceText = occTextM, firstSeenText = firstSeenTextM}
+              let alert = RuntimeErrorAlert{issueId = Issues.issueIdText sub.issueId, issueTitle = sub.issueTitle, errorData = sub.errorData, runtimeAlertType = alertType, chartUrl = chartUrlM, occurrenceText = occTextM, firstSeenText = firstSeenTextM, ongoingFor = ongoingForM}
                   ~(subj, html) = case alertType of
-                    EscalatingErrors -> ET.escalatingErrorsEmail project.title errorsUrl [sub.errorData] chartUrlM occTextM
-                    RegressedErrors -> ET.regressedErrorsEmail project.title errorsUrl [sub.errorData] chartUrlM occTextM
-                    _ -> ET.runtimeErrorsEmail project.title errorsUrl [sub.errorData] chartUrlM occTextM
+                    EscalatingErrors -> ET.escalatingErrorsEmail project.title errorsUrl [sub.errorData] chartUrlM occTextM ongoingForM
+                    RegressedErrors -> ET.regressedErrorsEmail project.title errorsUrl [sub.errorData] chartUrlM occTextM ongoingForM
+                    _ -> ET.runtimeErrorsEmail project.title errorsUrl [sub.errorData] chartUrlM occTextM ongoingForM
               -- Rate-limit gate. Overflow lands in apis.notification_digest_queue
               -- and is flushed by NotificationDigestJob.
               allowed <- consumeNotificationToken pid now
@@ -3226,7 +3247,7 @@ createAndNotifyErrorIssue
   -> Issues.Issue
   -> RuntimeAlertType
   -> ErrorPatterns.ATError
-  -> (Text -> Text -> [ErrorPatterns.ATError] -> Maybe Text -> Maybe Text -> (Text, Html ()))
+  -> (Text -> Text -> [ErrorPatterns.ATError] -> Maybe Text -> Maybe Text -> Maybe Text -> (Text, Html ()))
   -> ErrorPatterns.ErrorPatternId
   -> (Maybe Text, Maybe Text)
   -> ATBackgroundCtx ()
@@ -3242,9 +3263,9 @@ createAndNotifyErrorIssue pid issue runtimeAlertType errorData emailFn errorPatt
     let fromTime = addUTCTime (-(15 * 60)) now
     chartUrlM <- errorTrendChartUrl authCtx pid errorData.hash (formatUTC fromTime) (formatUTC now)
     let firstSeenTextM = Just $ relTimeAgo now errorData.when <> " · " <> toText (formatTime defaultTimeLocale "%b %-e %-l:%M %p" errorData.when)
-        alert = RuntimeErrorAlert{issueId = issue.id.toText, issueTitle = issue.title, errorData, runtimeAlertType, chartUrl = chartUrlM, occurrenceText = Nothing, firstSeenText = firstSeenTextM}
+        alert = RuntimeErrorAlert{issueId = issue.id.toText, issueTitle = issue.title, errorData, runtimeAlertType, chartUrl = chartUrlM, occurrenceText = Nothing, firstSeenText = firstSeenTextM, ongoingFor = Nothing}
         errorsUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> issue.id.toText
-        (subj, html) = emailFn project.title errorsUrl [errorData] chartUrlM Nothing
+        (subj, html) = emailFn project.title errorsUrl [errorData] chartUrlM Nothing Nothing
     (finalSlackTs, finalDiscordMsgId, dispatched) <-
       sendAlertToChannels alert pid project users errorsUrl subj html (existSlackTs, existDiscordId)
     Relude.when dispatched

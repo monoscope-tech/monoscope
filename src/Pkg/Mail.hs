@@ -51,7 +51,7 @@ sendSlackMessage pid message = do
 
 data NotificationAlerts
   = EndpointAlert {project :: Text, endpoints :: V.Vector EndpointAlertRow, endpointHash :: Text}
-  | RuntimeErrorAlert {issueId :: Text, issueTitle :: Text, errorData :: ErrorPatterns.ATError, runtimeAlertType :: RuntimeAlertType, chartUrl :: Maybe Text, occurrenceText :: Maybe Text, firstSeenText :: Maybe Text}
+  | RuntimeErrorAlert {issueId :: Text, issueTitle :: Text, errorData :: ErrorPatterns.ATError, runtimeAlertType :: RuntimeAlertType, chartUrl :: Maybe Text, occurrenceText :: Maybe Text, firstSeenText :: Maybe Text, ongoingFor :: Maybe Text}
   | ShapeAlert
   | ReportAlert
       { reportType :: Text
@@ -127,7 +127,7 @@ sendDiscordAlertWith replyToMsgIdM alert pid pTitle channelIdM' = do
     Just cid -> do
       let projectUrl = appCtx.env.hostUrl <> "p/" <> pid.toText
           mkPayload = \case
-            RuntimeErrorAlert{..} -> Just $ discordErrorAlert runtimeAlertType errorData issueTitle pTitle projectUrl chartUrl occurrenceText firstSeenText
+            RuntimeErrorAlert{..} -> Just $ discordErrorAlert runtimeAlertType errorData issueTitle pTitle projectUrl chartUrl occurrenceText firstSeenText ongoingFor
             EndpointAlert{..} -> Just $ discordNewEndpointAlert project endpoints endpointHash projectUrl
             ReportAlert{..} -> Just $ discordReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle reportUrl allChartUrl errorChartUrl
             MonitorsAlert{..} -> Just $ discordMonitorAlert monitorTitle monitorUrl chartUrl
@@ -166,7 +166,7 @@ sendSlackAlertWith threadTsM alert pid pTitle channelM = do
     (Just cid, Just sd) -> do
       let projectUrl = appCtx.env.hostUrl <> "p/" <> pid.toText
           mkPayload = \case
-            RuntimeErrorAlert{..} -> Just $ slackErrorAlert runtimeAlertType errorData issueTitle pTitle cid projectUrl chartUrl occurrenceText firstSeenText
+            RuntimeErrorAlert{..} -> Just $ slackErrorAlert runtimeAlertType errorData issueTitle pTitle cid projectUrl chartUrl occurrenceText firstSeenText ongoingFor
             EndpointAlert{..} -> Just $ slackNewEndpointsAlert project endpoints cid endpointHash projectUrl
             ReportAlert{..} -> Just $ slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle cid reportUrl allChartUrl errorChartUrl
             MonitorsAlert{..} -> Just $ slackMonitorAlert monitorTitle monitorUrl chartUrl cid
@@ -258,8 +258,8 @@ slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown 
     sumr = V.take 10 $ V.map (\(name, errCount, evCount) -> AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*" <> name <> ":* " <> toText (show evCount) <> " events · " <> toText (show errCount) <> " errors")]) breakDown
 
 
-slackErrorAlert :: RuntimeAlertType -> ErrorPatterns.ATError -> Text -> Text -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> AE.Value
-slackErrorAlert alertType err _issTitle project channelId projectUrl chartUrlM occTextM firstSeenM =
+slackErrorAlert :: RuntimeAlertType -> ErrorPatterns.ATError -> Text -> Text -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> AE.Value
+slackErrorAlert alertType err _issTitle project channelId projectUrl chartUrlM occTextM firstSeenM ongoingForM =
   slackAttachment channelId msgs.color
     $ [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= title]]
       , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= body]]
@@ -270,7 +270,13 @@ slackErrorAlert alertType err _issTitle project channelId projectUrl chartUrlM o
   where
     targetUrl = projectUrl <> "/issues/by_hash/" <> err.hash
     msgs = runtimeAlertMessages alertType
-    title = "<" <> targetUrl <> "|" <> msgs.slackEmoji <> " *" <> msgs.alertLabel <> "* · " <> err.errorType <> " in " <> project <> ">"
+    -- When ongoingForM is set, downgrade the headline from "New error/Escalating/etc."
+    -- to "Still firing · <duration>": re-notify cadence implies operators already know
+    -- the error exists; what they need now is how long it's been burning.
+    (titleEmoji, titleLabel) = case ongoingForM of
+      Just d -> (":hourglass_flowing_sand:", "Still firing · " <> d)
+      Nothing -> (msgs.slackEmoji, msgs.alertLabel)
+    title = "<" <> targetUrl <> "|" <> titleEmoji <> " *" <> titleLabel <> "* · " <> err.errorType <> " in " <> project <> ">"
     body = "```" <> T.take 600 err.message <> maybe "" ("\n" <>) (topStackFrame err.stackTrace) <> "```"
     field lbl v = guard (not (T.null v)) $> AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*" <> lbl <> ":* " <> v)]
     route = case (fromMaybe "" err.requestMethod, fromMaybe "" err.requestPath) of
@@ -460,8 +466,8 @@ discordReportAlert reportType startTime endTime totalErrors totalEvents breakDow
       T.intercalate "\n" $ V.toList $ V.take 10 $ V.map (\(name, errCount, evCount) -> "* **" <> name <> "**: Total errors-" <> show errCount <> ", Total events-" <> show evCount) breakDown
 
 
-discordErrorAlert :: RuntimeAlertType -> ErrorPatterns.ATError -> Text -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> AE.Value
-discordErrorAlert alertType err _issTitle project projectUrl chartUrlM occTextM firstSeenM =
+discordErrorAlert :: RuntimeAlertType -> ErrorPatterns.ATError -> Text -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> AE.Value
+discordErrorAlert alertType err _issTitle project projectUrl chartUrlM occTextM firstSeenM ongoingForM =
   AE.object
     [ "embeds"
         AE..= AE.Array
@@ -475,7 +481,7 @@ discordErrorAlert alertType err _issTitle project projectUrl chartUrlM occTextM 
                   <> maybeToList (chartUrlM <&> \u -> "image" AE..= AE.object ["url" AE..= u])
               )
           ]
-    , "content" AE..= msgs.discordContent
+    , "content" AE..= maybe msgs.discordContent (\d -> "⏳ **Still firing · " <> d <> "**") ongoingForM
     ]
   where
     msgs = runtimeAlertMessages alertType
@@ -654,6 +660,7 @@ sampleAlert = \case
         Nothing
         (Just "4/hr")
         (Just "just now")
+        Nothing
   QueryAlert -> const $ MonitorsAlert "🧪 TEST: High Error Rate" "https://example.com/test" Nothing
   LogPattern -> const $ MonitorsAlert "🧪 TEST: New Log Pattern" "https://example.com/test" Nothing
   LogPatternRateChange -> const $ MonitorsAlert "🧪 TEST: Log Pattern Rate Change" "https://example.com/test" Nothing

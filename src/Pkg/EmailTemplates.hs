@@ -366,24 +366,12 @@ projectDeletedEmail userName projectName =
 -- Runtime Errors Template
 -- =============================================================================
 
-runtimeErrorsEmail :: Text -> Text -> [ErrorPatterns.ATError] -> Maybe Text -> Maybe Text -> (Text, Html ())
-runtimeErrorsEmail projectName errorsUrl errors =
-  runtimeErrorVariantEmail "New Runtime Error(s)" "[···] New Runtime Exception(s) Detected - " projectName errorsUrl errors "We've detected a new runtime error in your "
-
-
-escalatingErrorsEmail :: Text -> Text -> [ErrorPatterns.ATError] -> Maybe Text -> Maybe Text -> (Text, Html ())
-escalatingErrorsEmail projectName errorsUrl errors =
-  runtimeErrorVariantEmail "Escalating Runtime Error(s)" "[···] Escalating Runtime Error(s) Detected - " projectName errorsUrl errors "We've detected escalating runtime errors in your "
-
-
-regressedErrorsEmail :: Text -> Text -> [ErrorPatterns.ATError] -> Maybe Text -> Maybe Text -> (Text, Html ())
-regressedErrorsEmail projectName errorsUrl errors =
-  runtimeErrorVariantEmail "Regressed Runtime Error(s)" "[···] Regressed Runtime Error(s) Detected - " projectName errorsUrl errors "We've detected regressed runtime errors in your "
-
-
-errorSpikesEmail :: Text -> Text -> [ErrorPatterns.ATError] -> Maybe Text -> Maybe Text -> (Text, Html ())
-errorSpikesEmail projectName errorsUrl errors =
-  runtimeErrorVariantEmail "Runtime Error Spike(s)" "[···] Runtime Error Spike(s) Detected - " projectName errorsUrl errors "We've detected a runtime error spike in your "
+runtimeErrorsEmail, escalatingErrorsEmail, regressedErrorsEmail, errorSpikesEmail
+  :: Text -> Text -> [ErrorPatterns.ATError] -> Maybe Text -> Maybe Text -> Maybe Text -> (Text, Html ())
+runtimeErrorsEmail = runtimeErrorVariantEmail "New Runtime Error(s)" "[···] New Runtime Exception(s) Detected - " "We've detected a new runtime error in your "
+escalatingErrorsEmail = runtimeErrorVariantEmail "Escalating Runtime Error(s)" "[···] Escalating Runtime Error(s) Detected - " "We've detected escalating runtime errors in your "
+regressedErrorsEmail = runtimeErrorVariantEmail "Regressed Runtime Error(s)" "[···] Regressed Runtime Error(s) Detected - " "We've detected regressed runtime errors in your "
+errorSpikesEmail = runtimeErrorVariantEmail "Runtime Error Spike(s)" "[···] Runtime Error Spike(s) Detected - " "We've detected a runtime error spike in your "
 
 
 -- | Summary digest body for the hourly notification flush (rate-limited
@@ -403,15 +391,20 @@ digestEmail projectName inboxUrl summary total = emailBody do
   emailButton inboxUrl "Open inbox"
 
 
-runtimeErrorVariantEmail :: Text -> Text -> Text -> Text -> [ErrorPatterns.ATError] -> Text -> Maybe Text -> Maybe Text -> (Text, Html ())
-runtimeErrorVariantEmail heading subjectPrefix projectName errorsUrl errors intro chartUrlM occTextM =
-  ( subjectPrefix <> projectName
+-- | @ongoingForM@ surfaces the "Still firing · 3 hours" banner and rewrites the
+-- subject line when we re-notify on an issue we've already alerted about — the
+-- signal that matters is *how long* this has been burning, not "new error".
+runtimeErrorVariantEmail :: Text -> Text -> Text -> Text -> Text -> [ErrorPatterns.ATError] -> Maybe Text -> Maybe Text -> Maybe Text -> (Text, Html ())
+runtimeErrorVariantEmail heading subjectPrefix intro projectName errorsUrl errors chartUrlM occTextM ongoingForM =
+  ( subject
   , emailBody do
-      h1_ $ toHtml heading
+      h1_ $ toHtml $ maybe heading ("Still firing: " <>) ongoingForM
       p_ do
         toHtml intro
         b_ $ toHtml projectName
         "."
+      whenJust ongoingForM $ \d ->
+        p_ [style_ "margin: 8px 0; font-size: 14px; font-weight: 600; color: #57606a;"] $ toHtml @Text ("⏳ Still firing · " <> d)
       whenJust occTextM $ \t -> p_ [style_ "margin: 8px 0; font-size: 14px; font-weight: 600; color: #57606a;"] $ toHtml t
       emailDivider
       forM_ (take maxErrorCards errors) (errorCard errorsUrl)
@@ -426,6 +419,10 @@ runtimeErrorVariantEmail heading subjectPrefix projectName errorsUrl errors intr
   )
   where
     maxErrorCards = 5
+    subject = case ongoingForM of
+      Just d | Just e <- viaNonEmpty head errors ->
+        "[···] Still firing: " <> truncateText 80 e.errorType <> " — " <> d <> " · " <> projectName
+      _ -> subjectPrefix <> projectName
 
 
 errorCard :: Text -> ErrorPatterns.ATError -> Html ()
@@ -788,7 +785,7 @@ sampleProjectDeleted = projectDeletedEmail "Jane Doe" "My API Project"
 
 
 sampleRuntimeErrors :: (Text, Html ())
-sampleRuntimeErrors = runtimeErrorsEmail "My API Project" "https://app.monoscope.tech/p/sample-id/issues/" [sampleError1, sampleError2, sampleError3] Nothing (Just "42 occurrences in last hour")
+sampleRuntimeErrors = runtimeErrorsEmail "My API Project" "https://app.monoscope.tech/p/sample-id/issues/" [sampleError1, sampleError2, sampleError3] Nothing (Just "42 occurrences in last hour") (Just "3 hours")
   where
     sampleError1 =
       def
