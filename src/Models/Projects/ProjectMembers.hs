@@ -601,7 +601,8 @@ isEveryoneChannelEnabled ch pid = maybe False (isChannelEnabled ch) <$> getEvery
 -- undeliverable.
 teamHasAnyEnabledChannel :: Team -> Bool
 teamHasAnyEnabledChannel t =
-  any populatedAndEnabled
+  any
+    populatedAndEnabled
     [ ("email" :: Text, t.notify_emails)
     , ("slack", t.slack_channels)
     , ("discord", t.discord_channels)
