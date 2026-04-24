@@ -366,8 +366,11 @@ projectDeletedEmail userName projectName =
 -- Runtime Errors Template
 -- =============================================================================
 
-runtimeErrorsEmail, escalatingErrorsEmail, regressedErrorsEmail, errorSpikesEmail
-  :: Text -> Text -> [ErrorPatterns.ATError] -> Maybe Text -> Maybe Text -> Maybe Text -> (Text, Html ())
+runtimeErrorsEmail
+  , escalatingErrorsEmail
+  , regressedErrorsEmail
+  , errorSpikesEmail
+    :: Text -> Text -> [ErrorPatterns.ATError] -> Maybe Text -> Maybe Text -> Maybe Text -> (Text, Html ())
 runtimeErrorsEmail = runtimeErrorVariantEmail "New Runtime Error(s)" "[···] New Runtime Exception(s) Detected - " "We've detected a new runtime error in your "
 escalatingErrorsEmail = runtimeErrorVariantEmail "Escalating Runtime Error(s)" "[···] Escalating Runtime Error(s) Detected - " "We've detected escalating runtime errors in your "
 regressedErrorsEmail = runtimeErrorVariantEmail "Regressed Runtime Error(s)" "[···] Regressed Runtime Error(s) Detected - " "We've detected regressed runtime errors in your "
@@ -420,8 +423,9 @@ runtimeErrorVariantEmail heading subjectPrefix intro projectName errorsUrl error
   where
     maxErrorCards = 5
     subject = case ongoingForM of
-      Just d | Just e <- viaNonEmpty head errors ->
-        "[···] Still firing: " <> truncateText 80 e.errorType <> " — " <> d <> " · " <> projectName
+      Just d
+        | Just e <- viaNonEmpty head errors ->
+            "[···] Still firing: " <> truncateText 80 e.errorType <> " — " <> d <> " · " <> projectName
       _ -> subjectPrefix <> projectName
 
 
