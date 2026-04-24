@@ -225,7 +225,7 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM periodM hxR
   let endpointsTable =
         Table
           { config = def{elemID = "endpointsForm", containerId = Just "endpointsListContainer", addPadding = True, renderAsTable = True, bulkActionsInHeader = Just 0}
-          , columns = endpointColumns pid baseUrl period
+          , columns = endpointColumns pid baseUrl period requestType
           , rows = endpReqVM
           , features =
               def
@@ -251,7 +251,7 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM periodM hxR
           }
   let endpRowId = Just \(EnpReqStatsVM _ _ _ enp) -> enp.endpointHash
       endpRowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"]
-      rowsOnly = EndpointsListRows $ TableRows{columns = endpointColumns pid baseUrl period, rows = endpReqVM, emptyState = Nothing, renderAsTable = True, rowId = endpRowId, rowAttrs = endpRowAttrs, pagination = Nothing}
+      rowsOnly = EndpointsListRows $ TableRows{columns = endpointColumns pid baseUrl period requestType, rows = endpReqVM, emptyState = Nothing, renderAsTable = True, rowId = endpRowId, rowAttrs = endpRowAttrs, pagination = Nothing}
   addRespHeaders $ if isJust loadMoreM || isJust searchM then rowsOnly else EndpointsListPage $ PageCtx bwconf endpointsTable
 
 
@@ -259,9 +259,9 @@ data EnpReqStatsVM = EnpReqStatsVM Bool UTCTime Text Endpoints.EndpointRequestSt
   deriving stock (Show)
 
 
-endpointColumns :: Projects.ProjectId -> Text -> Text -> [Column EnpReqStatsVM]
-endpointColumns pid baseUrl period =
-  [ col "Endpoint" (renderEndpointMainCol pid) & withAttrs [class_ "min-w-0 max-w-0 w-full"]
+endpointColumns :: Projects.ProjectId -> Text -> Text -> Text -> [Column EnpReqStatsVM]
+endpointColumns pid baseUrl period requestType =
+  [ col "Endpoint" (renderEndpointMainCol pid requestType) & withAttrs [class_ "min-w-0 max-w-0 w-full"]
   , col ("Events (" <> period <> ")") (\(EnpReqStatsVM _ _ _ enp) -> eventsCountCell_ enp.totalRequests) & withAttrs [class_ "w-24 max-md:hidden"]
   , col "Last Seen" (\(EnpReqStatsVM _ currTime _ enp) -> lastSeenCell_ currTime enp.lastSeen) & withAttrs [class_ "w-24 max-md:hidden"]
   , col "Activity" (\(EnpReqStatsVM _ _ _ enp) -> activityCell_ enp.activityBuckets) & withAttrs [class_ "w-40 max-md:hidden"] & withColHeaderExtra (periodToggle_ baseUrl "endpointsListContainer" period)
@@ -289,13 +289,17 @@ activityCell_ :: PGArray Int -> Html ()
 activityCell_ (PGArray buckets) = sparkline_ buckets
 
 
-renderEndpointMainCol :: Projects.ProjectId -> EnpReqStatsVM -> Html ()
-renderEndpointMainCol pid (EnpReqStatsVM _ _ _ enp) =
+renderEndpointMainCol :: Projects.ProjectId -> Text -> EnpReqStatsVM -> Html ()
+renderEndpointMainCol pid requestType (EnpReqStatsVM _ _ _ enp) =
   div_ [class_ "flex items-center gap-2 min-w-0"] do
     a_ ([class_ "inline-flex items-center gap-1.5 font-medium text-textStrong hover:text-textBrand transition-colors truncate min-w-0", href_ ("/p/" <> pid.toText <> "/endpoints/details?var-endpointHash=" <> enp.endpointHash <> "&var-host=" <> enp.host)] <> navTabAttrs) $ do
       span_ [class_ $ "endpoint endpoint-" <> T.toLower enp.method <> " shrink-0 !w-auto !p-0.5 !px-1.5 !m-0 !text-xs !rounded", data_ "enp-urlMethod" enp.method] $ toHtml enp.method
       span_ [class_ "inconsolata text-sm truncate", data_ "enp-urlPath" enp.urlPath] $ toHtml $ if T.null enp.urlPath then "/" else T.take 150 enp.urlPath
-    a_ ([class_ "shrink-0 text-xs text-textBrand hover:text-textStrong transition-colors", href_ ("/p/" <> pid.toText <> "/log_explorer?query=" <> "attributes.http.route==\"" <> enp.urlPath <> "\"")] <> navTabAttrs) "View logs"
+    let outgoing = requestType == "Outgoing"
+        hostAttr = if outgoing then "attributes.server.address" else "attributes.net.host.name"
+        kindVal = if outgoing then "client" else "server"
+        q = hostAttr <> "==\"" <> enp.host <> "\" AND kind==\"" <> kindVal <> "\" AND attributes.http.route==\"" <> enp.urlPath <> "\" AND attributes.http.request.method==\"" <> enp.method <> "\""
+    a_ ([class_ "shrink-0 text-xs text-textBrand hover:text-textStrong transition-colors", href_ ("/p/" <> pid.toText <> "/log_explorer?query=" <> toUriStr q)] <> navTabAttrs) "View logs"
 
 
 data EndpointRequestStatsVM
