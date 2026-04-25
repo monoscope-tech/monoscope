@@ -431,10 +431,12 @@ processBackgroundJob authCtx bgJob =
             --    inserted in the same tx only when totalUsage > 0. See
             --    'splitUsageIntoChunks' for the per-provider quantity policy.
             nowU <- Time.currentTime
-            let -- Cap wStart to the current cycle start: if usage_last_reported is
-                -- older than the cycle boundary, we must not charge for events from
-                -- previous cycles — that's our fault.
-                wStart = max project.usageLastReported
+            let
+              -- Cap wStart to the current cycle start: if usage_last_reported is
+              -- older than the cycle boundary, we must not charge for events from
+              -- previous cycles — that's our fault.
+              wStart =
+                max project.usageLastReported
                   $ calculateCycleStartDate (fromMaybe project.createdAt project.billingDay) nowU
             totalToReport <- Telemetry.getTotalEventsToReport pid wStart
             totalMetricsCount <- Telemetry.getTotalMetricsCount pid wStart

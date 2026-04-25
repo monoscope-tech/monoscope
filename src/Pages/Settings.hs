@@ -794,10 +794,11 @@ billingPage d = div_ [] do
       provider = d.provider
       pidTxt = pid.toText
       isFree = paymentPlan == "Free"
-      basePriceNum = if
-        | isFree -> 0
-        | paymentPlan == "Bring your own storage" -> 199
-        | otherwise -> 29 :: Int64
+      basePriceNum =
+        if
+          | isFree -> 0
+          | paymentPlan == "Bring your own storage" -> 199
+          | otherwise -> 29 :: Int64
       planPrice = show basePriceNum
       overageNum = max 0 (reqs - 20_000_000)
       overageCost = fromIntegral overageNum / 1_000_000 :: Double
@@ -824,8 +825,9 @@ billingPage d = div_ [] do
       div_ [] do
         div_ [class_ "text-2xl font-bold text-textStrong tabular-nums"] $ toHtml estCost
         div_ [class_ "text-sm text-textWeak mt-0.5"] "Estimated this cycle"
-        div_ [class_ "text-xs text-textWeak mt-1 tabular-nums"] $ toHtml $
-          if isFree || overageNum <= 0
+        div_ [class_ "text-xs text-textWeak mt-1 tabular-nums"]
+          $ toHtml
+          $ if isFree || overageNum <= 0
             then fmt (commaizeF reqs) <> " requests"
             else "$" <> planPrice <> " plan + " <> fmtUSD overageCost <> " usage (" <> fmt (commaizeF reqs) <> " requests)"
       unless (T.null last_reported)
@@ -870,16 +872,18 @@ dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-s
           withRunning =
             fst
               $ foldl'
-                (\(xs, acc) (day, n) ->
-                  let acc' = (if day < cycleStartDay then 0 else acc) + n
-                   in ((day, n, acc' - n, acc') : xs, acc'))
+                ( \(xs, acc) (day, n) ->
+                    let acc' = (if day < cycleStartDay then 0 else acc) + n
+                     in ((day, n, acc' - n, acc') : xs, acc')
+                )
                 ([], 0 :: Int64)
                 ascending
           dayCostText prev cur
             | isFree = "—"
             | dayOverage <= 0 = "—"
             | otherwise = "$" <> T.pack (printf "%.2f" (fromIntegral dayOverage / 1_000_000 :: Double))
-            where dayOverage = max 0 (cur - included) - max 0 (prev - included)
+            where
+              dayOverage = max 0 (cur - included) - max 0 (prev - included)
       div_ [class_ "border border-strokeWeak rounded-md overflow-hidden max-h-96 overflow-y-auto"] do
         table_ [class_ "w-full text-sm tabular-nums"] do
           thead_ [class_ "bg-fillWeak text-textWeak text-xs uppercase tracking-wide sticky top-0"] do
@@ -902,7 +906,12 @@ dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-s
       when (activeDays < 30)
         $ div_ [class_ "text-xs text-textWeak"]
         $ toHtml
-        $ show activeDays <> " day" <> (if activeDays == 1 then "" else "s") <> " with activity since " <> cycleStartText <> "."
+        $ show activeDays
+        <> " day"
+        <> (if activeDays == 1 then "" else "s")
+        <> " with activity since "
+        <> cycleStartText
+        <> "."
       div_ [class_ "text-xs text-textWeak"] do
         if isFree
           then "Free plan — usage shown for reference only."

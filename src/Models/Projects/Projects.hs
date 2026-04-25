@@ -712,7 +712,9 @@ addSubscription s = do
 -- rows without window_start are excluded from billing calculations.
 getTotalUsage :: DB es => ProjectId -> UTCTime -> Eff es Int64
 getTotalUsage pid start =
-  fromMaybe 0 <$> EHasql.interpOne [HI.sql|
+  fromMaybe 0
+    <$> EHasql.interpOne
+      [HI.sql|
     SELECT COALESCE(SUM(total_requests), 0)::bigint
     FROM apis.daily_usage
     WHERE project_id = #{pid} AND window_start >= #{start}

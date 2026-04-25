@@ -87,10 +87,10 @@ import Data.Text.Lazy.Builder qualified as TLB
 import Data.Time (ZonedTime, addUTCTime, defaultTimeLocale, parseTimeM, secondsToNominalDiffTime)
 import Data.Time.Calendar (fromGregorian, toGregorian)
 import Data.Time.Clock (UTCTime (..), diffUTCTime, secondsToDiffTime)
-import Data.Time.LocalTime (timeOfDayToTime, timeToTimeOfDay)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format (formatTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
+import Data.Time.LocalTime (timeOfDayToTime, timeToTimeOfDay)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.ToField (ToField (..))
 import Effectful (Eff, IOE, type (:>))
