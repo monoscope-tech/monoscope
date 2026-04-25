@@ -50,8 +50,7 @@ import Data.Default
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Notify qualified as Notify
 import Data.Text qualified as T
-import Data.Time (UTCTime (..), addUTCTime, getZonedTime, timeOfDayToTime, timeToTimeOfDay)
-import Data.Time.Calendar (fromGregorian, toGregorian)
+import Data.Time (Day, UTCTime (..), addUTCTime, getZonedTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.UUID qualified as UUID
@@ -91,7 +90,7 @@ import Servant (err400, errBody)
 import System.Config
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
 import Text.Printf (printf)
-import Utils (LoadingSize (..), faSprite_, formatUTC, htmxIndicator_)
+import Utils (LoadingSize (..), calculateCycleStartDate, faSprite_, formatUTC, htmxIndicator_)
 import Web.FormUrlEncoded (FromForm)
 import "cryptonite" Crypto.Hash (SHA256)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
@@ -735,7 +734,6 @@ webhookPostH sigHeaderM rawBody = do
 data BillingData = BillingData
   { pid :: Projects.ProjectId
   , totalReqs :: Int64
-  , amount :: Text
   , lastReported :: Text
   , lemonUrl :: Text
   , critical :: Text
@@ -743,6 +741,8 @@ data BillingData = BillingData
   , enableFreetier :: Bool
   , basicAuthEnabled :: Bool
   , provider :: Projects.BillingProvider
+  , dailyUsage :: [(Day, Int64)]
+  , cycleStart :: Day
   }
 
 
@@ -750,7 +750,7 @@ newtype BillingGet = BillingGet (PageCtx BillingData)
 
 
 instance ToHtml BillingGet where
-  toHtml (BillingGet (PageCtx bwconf d)) = toHtml $ PageCtx bwconf $ billingPage d.pid d.totalReqs d.amount d.lastReported d.lemonUrl d.critical d.paymentPlan d.enableFreetier d.basicAuthEnabled d.provider
+  toHtml (BillingGet (PageCtx bwconf d)) = toHtml $ PageCtx bwconf $ billingPage d
   toHtmlRaw = toHtml
 
 
@@ -762,10 +762,11 @@ manageBillingGetH pid from = do
   let envCfg = appCtx.config
   currentTime <- Time.currentTime
   let cycleStart = calculateCycleStartDate dat currentTime
+      thirtyDaysAgo = addUTCTime (negate $ 30 * 86400) currentTime
+      breakdownStart = min cycleStart thirtyDaysAgo
   totalRequests <- Projects.getTotalUsage pid cycleStart
-  let requestAfter = totalRequests - 20_000_000
-  let estimatedAmount = show $ if requestAfter <= 0 then "29.00" else printf "%.2f" (fromIntegral requestAfter / 500_000 + 29.00)
-  let last_reported = show project.usageLastReported
+  dailyUsage <- Projects.getDailyUsageBreakdown pid breakdownStart
+  let last_reported = T.pack $ formatTime defaultTimeLocale "%b %-d" project.usageLastReported
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess
@@ -777,18 +778,33 @@ manageBillingGetH pid from = do
   let lemonUrl = envCfg.lemonSqueezyUrl <> "&checkout[custom][project_id]=" <> pid.toText
       critical = envCfg.lemonSqueezyCriticalUrl <> "&checkout[custom][project_id]=" <> pid.toText
   let provider = if project.paymentPlan == "Free" then Projects.NoBillingProvider else Projects.billingProvider project.subId
-  addRespHeaders $ BillingGet $ PageCtx bwconf BillingData{pid, totalReqs = totalRequests, amount = estimatedAmount, lastReported = last_reported, lemonUrl, critical, paymentPlan = project.paymentPlan, enableFreetier = envCfg.enableFreetier, basicAuthEnabled = envCfg.basicAuthEnabled, provider}
+  addRespHeaders $ BillingGet $ PageCtx bwconf BillingData{pid, totalReqs = totalRequests, lastReported = last_reported, lemonUrl, critical, paymentPlan = project.paymentPlan, enableFreetier = envCfg.enableFreetier, basicAuthEnabled = envCfg.basicAuthEnabled, provider, dailyUsage, cycleStart = utctDay cycleStart}
 
 
-billingPage :: Projects.ProjectId -> Int64 -> Text -> Text -> Text -> Text -> Text -> Bool -> Bool -> Projects.BillingProvider -> Html ()
-billingPage pid reqs amount last_reported lemonUrl critical paymentPlan enableFreetier basicAuthEnabled provider = div_ [] do
-  let pidTxt = pid.toText
+billingPage :: BillingData -> Html ()
+billingPage d = div_ [] do
+  let pid = d.pid
+      reqs = d.totalReqs
+      last_reported = d.lastReported
+      lemonUrl = d.lemonUrl
+      critical = d.critical
+      paymentPlan = d.paymentPlan
+      enableFreetier = d.enableFreetier
+      basicAuthEnabled = d.basicAuthEnabled
+      provider = d.provider
+      pidTxt = pid.toText
       isFree = paymentPlan == "Free"
-      planPrice
-        | isFree = "0"
-        | paymentPlan == "Bring your own storage" = "199"
-        | otherwise = "29" :: Text
-      estCost = "$" <> if isFree then "0" else T.replace "\"" "" amount
+      basePriceNum = if
+        | isFree -> 0
+        | paymentPlan == "Bring your own storage" -> 199
+        | otherwise -> 29 :: Int64
+      planPrice = show basePriceNum
+      overageNum = max 0 (reqs - 20_000_000)
+      overageCost = fromIntegral overageNum / 1_000_000 :: Double
+      totalCost = fromIntegral basePriceNum + overageCost
+      fmtUSD n = "$" <> T.pack (printf "%.2f" (n :: Double))
+      estCost = if isFree then "$0" else fmtUSD totalCost
+      cycleStartText = T.pack $ formatTime defaultTimeLocale "%b %-d" d.cycleStart
   settingsSection_ do
     settingsH2_ "Billing"
 
@@ -803,25 +819,27 @@ billingPage pid reqs amount last_reported lemonUrl critical paymentPlan enableFr
 
     -- Usage section
     div_ [class_ "border-t border-strokeWeak pt-6 space-y-4"] do
-      sectionLabel_ "This month"
-      div_ [class_ "grid grid-cols-2 gap-6"] do
-        div_ [] do
-          div_ [class_ "text-2xl font-bold text-textStrong tabular-nums"] $ toHtml @Text $ fmt (commaizeF reqs)
-          div_ [class_ "text-sm text-textWeak mt-0.5"] "Requests"
-        div_ [] do
-          div_ [class_ "text-2xl font-bold text-textStrong tabular-nums"] $ toHtml estCost
-          div_ [class_ "text-sm text-textWeak mt-0.5"] "Estimated cost"
+      sectionLabel_ $ "Billing cycle (since " <> cycleStartText <> ")"
+      -- Estimated cost as the primary stat; requests as supporting context
+      div_ [] do
+        div_ [class_ "text-2xl font-bold text-textStrong tabular-nums"] $ toHtml estCost
+        div_ [class_ "text-sm text-textWeak mt-0.5"] "Estimated this cycle"
+        div_ [class_ "text-xs text-textWeak mt-1 tabular-nums"] $ toHtml $
+          if isFree || overageNum <= 0
+            then fmt (commaizeF reqs) <> " requests"
+            else "$" <> planPrice <> " plan + " <> fmtUSD overageCost <> " usage (" <> fmt (commaizeF reqs) <> " requests)"
       unless (T.null last_reported)
         $ div_ [class_ "text-xs text-textWeak"]
-        $ toHtml
-        $ "Updated "
-        <> T.take 10 last_reported
+        $ toHtml ("Last reported " <> last_reported)
 
-    -- Actions
+    -- Actions (kept above the breakdown so they remain near the headline numbers)
     div_ [class_ "border-t border-strokeWeak pt-6 flex items-center gap-3"] do
       label_ [Lucid.for_ "pricing-modal", class_ "btn btn-sm btn-primary cursor-pointer"] "Change plan"
       unless isFree
         $ a_ [class_ "btn btn-sm btn-ghost text-textBrand", hxGet_ [text| /p/$pidTxt/manage_subscription |]] "Manage subscription"
+
+    -- Daily breakdown
+    dailyUsageBreakdown_ isFree d.cycleStart d.dailyUsage
 
   modalWith_ "pricing-modal" def{boxClass = "w-[1250px] max-w-[1300px] py-16 px-32", wrapperClass = "p-8"} Nothing do
     div_ [class_ "text-center text-sm text-textWeak w-full mx-auto max-w-96"] do
@@ -830,16 +848,65 @@ billingPage pid reqs amount last_reported lemonUrl critical paymentPlan enableFr
     paymentPlanPicker pid lemonUrl critical paymentPlan enableFreetier basicAuthEnabled False provider
 
 
-calculateCycleStartDate :: UTCTime -> UTCTime -> UTCTime
-calculateCycleStartDate start current =
-  let (_startYear, _startMonth, startDay) = toGregorian $ utctDay start
-      (currentYear, currentMonth, currentDay) = toGregorian $ utctDay current
-      timeOfDay = timeToTimeOfDay $ utctDayTime start
-      cycleStartDay
-        | currentDay > startDay = fromGregorian currentYear currentMonth startDay
-        | currentMonth == 1 = fromGregorian (currentYear - 1) 12 startDay
-        | otherwise = fromGregorian currentYear (currentMonth - 1) startDay
-   in UTCTime cycleStartDay (timeOfDayToTime timeOfDay)
+-- | Per-day usage table for the last 30 days. Cost shown is the marginal
+-- contribution past the 20M-included tier ($1 per 1M), assuming chronological
+-- accumulation across the cycle. Days entirely below the threshold show "—".
+dailyUsageBreakdown_ :: Bool -> Day -> [(Day, Int64)] -> Html ()
+dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-strokeWeak pt-6 space-y-3"] do
+  div_ [class_ "flex items-baseline justify-between"] do
+    sectionLabel_ "Daily breakdown"
+    span_ [class_ "text-xs text-textWeak tabular-nums"] $ toHtml @Text $ fmt (commaizeF (sum (map snd rows))) <> " requests"
+  if null rows
+    then div_ [class_ "text-sm text-textWeak py-4"] "No usage recorded yet this cycle."
+    else do
+      let activeDays = length rows
+          included = 20_000_000 :: Int64
+          maxDay = foldr (max . snd) 1 rows
+          ascending = sortOn fst rows
+          -- Running cumulative resets at cycleStartDay so pre-cycle rows (shown
+          -- for context) don't inflate the included-tier counter and produce
+          -- incorrect "Est. cost" for current-cycle days.
+          -- Fold over ascending order; cons prepends so the result is newest-first.
+          withRunning =
+            fst
+              $ foldl'
+                (\(xs, acc) (day, n) ->
+                  let acc' = (if day < cycleStartDay then 0 else acc) + n
+                   in ((day, n, acc' - n, acc') : xs, acc'))
+                ([], 0 :: Int64)
+                ascending
+          dayCostText prev cur
+            | isFree = "—"
+            | dayOverage <= 0 = "—"
+            | otherwise = "$" <> T.pack (printf "%.2f" (fromIntegral dayOverage / 1_000_000 :: Double))
+            where dayOverage = max 0 (cur - included) - max 0 (prev - included)
+      div_ [class_ "border border-strokeWeak rounded-md overflow-hidden max-h-96 overflow-y-auto"] do
+        table_ [class_ "w-full text-sm tabular-nums"] do
+          thead_ [class_ "bg-fillWeak text-textWeak text-xs uppercase tracking-wide sticky top-0"] do
+            tr_ do
+              th_ [class_ "text-left font-medium px-3 py-2"] "Date"
+              th_ [class_ "text-right font-medium px-3 py-2"] "Requests"
+              th_ [class_ "text-left font-medium px-3 py-2 w-1/3"] "Volume"
+              th_ [class_ "text-right font-medium px-3 py-2"] "Est. cost"
+          tbody_ do
+            forM_ withRunning \(day, n, prev, cur) -> do
+              let pct = max 1 $ min 100 $ (n * 100) `div` maxDay
+              tr_ [class_ "border-t border-strokeWeak"] do
+                td_ [class_ "px-3 py-2 text-textStrong"] $ toHtml $ T.pack $ formatTime defaultTimeLocale "%a %b %e" day
+                td_ [class_ "px-3 py-2 text-right text-textStrong"] $ toHtml @Text $ fmt (commaizeF n)
+                td_ [class_ "px-3 py-2"] do
+                  div_ [class_ "h-1.5 bg-fillWeak rounded-full overflow-hidden"] do
+                    div_ [class_ "h-full bg-fillBrand", style_ ("width: " <> show pct <> "%")] mempty
+                td_ [class_ "px-3 py-2 text-right text-textWeak"] $ toHtml $ dayCostText prev cur
+      let cycleStartText = T.pack $ formatTime defaultTimeLocale "%b %-d" cycleStartDay
+      when (activeDays < 30)
+        $ div_ [class_ "text-xs text-textWeak"]
+        $ toHtml
+        $ show activeDays <> " day" <> (if activeDays == 1 then "" else "s") <> " with activity since " <> cycleStartText <> "."
+      div_ [class_ "text-xs text-textWeak"] do
+        if isFree
+          then "Free plan — usage shown for reference only."
+          else toHtml $ "Cycle started " <> cycleStartText <> ". First 20M requests are included in the $29 plan price. Overage is $1 per 1M requests."
 
 
 ----------------------------------------------------------------------

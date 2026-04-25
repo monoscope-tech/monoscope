@@ -63,6 +63,7 @@ module Utils (
   renderSummaryTags,
   renderSummaryElements,
   summaryForDetailView,
+  calculateCycleStartDate,
 )
 where
 
@@ -84,7 +85,9 @@ import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Lazy.Builder qualified as TLB
 import Data.Time (ZonedTime, addUTCTime, defaultTimeLocale, parseTimeM, secondsToNominalDiffTime)
+import Data.Time.Calendar (fromGregorian, toGregorian)
 import Data.Time.Clock (UTCTime (..), diffUTCTime, secondsToDiffTime)
+import Data.Time.LocalTime (timeOfDayToTime, timeToTimeOfDay)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format (formatTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
@@ -1591,3 +1594,18 @@ summaryForDetailView = dedupe . V.mapMaybe step
         step' (seen, acc) x
           | S.member (key x) seen = (seen, acc)
           | otherwise = (S.insert (key x) seen, x : acc)
+
+
+-- | Given the subscription start date and current time, returns the UTC
+-- timestamp of the start of the current billing cycle. The cycle renews on
+-- the same day-of-month as the original start date.
+calculateCycleStartDate :: UTCTime -> UTCTime -> UTCTime
+calculateCycleStartDate start current =
+  let (_startYear, _startMonth, startDay) = toGregorian $ utctDay start
+      (currentYear, currentMonth, currentDay) = toGregorian $ utctDay current
+      timeOfDay = timeToTimeOfDay $ utctDayTime start
+      cycleStartDay
+        | currentDay > startDay = fromGregorian currentYear currentMonth startDay
+        | currentMonth == 1 = fromGregorian (currentYear - 1) 12 startDay
+        | otherwise = fromGregorian currentYear (currentMonth - 1) startDay
+   in UTCTime cycleStartDay (timeOfDayToTime timeOfDay)

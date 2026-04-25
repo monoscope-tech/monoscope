@@ -56,7 +56,7 @@ module Models.Projects.Projects (
   LemonSubId (..),
   addSubscription,
   getTotalUsage,
-  addDailyUsageReport,
+  getDailyUsageBreakdown,
   -- Usage report submissions (chunked provider submissions)
   UsageSubmission (..),
   SubmissionOutcome (..),
@@ -104,7 +104,7 @@ import Data.Effectful.UUID (UUIDEff, genUUID)
 import Data.Effectful.UUID qualified as UUID
 import Data.Text qualified as T
 import Data.Text.Display
-import Data.Time (UTCTime, ZonedTime)
+import Data.Time (Day, UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.Types
@@ -707,17 +707,30 @@ addSubscription s = do
     |]
 
 
-addDailyUsageReport :: DB es => ProjectId -> Int -> Eff es Int64
-addDailyUsageReport pid total_requests =
-  EHasql.interpExecute [HI.sql|INSERT INTO apis.daily_usage (project_id, total_requests) VALUES (#{pid}, #{total_requests}) |]
-
-
+-- | Sum of requests for the given project since `start`, using window_start
+-- (when events occurred) rather than created_at (when the job ran). Pre-migration
+-- rows without window_start are excluded from billing calculations.
 getTotalUsage :: DB es => ProjectId -> UTCTime -> Eff es Int64
-getTotalUsage pid start = do
-  results :: [Int64] <- EHasql.interp [HI.sql|SELECT COALESCE(SUM(total_requests), 0) FROM apis.daily_usage WHERE project_id = #{pid} AND created_at >= #{start}|]
-  case results of
-    [count] -> pure count
-    _ -> pure 0
+getTotalUsage pid start =
+  fromMaybe 0 <$> EHasql.interpOne [HI.sql|
+    SELECT COALESCE(SUM(total_requests), 0)::bigint
+    FROM apis.daily_usage
+    WHERE project_id = #{pid} AND window_start >= #{start}
+  |]
+
+
+-- | Per-day usage breakdown since `start`, grouped by the day the events
+-- occurred (window_start), newest first. Hourly rows on the same day are summed.
+getDailyUsageBreakdown :: DB es => ProjectId -> UTCTime -> Eff es [(Day, Int64)]
+getDailyUsageBreakdown pid start =
+  EHasql.interp
+    [HI.sql|
+      SELECT (window_start AT TIME ZONE 'UTC')::date AS day, SUM(total_requests)::bigint
+      FROM apis.daily_usage
+      WHERE project_id = #{pid} AND window_start >= #{start}
+      GROUP BY day
+      ORDER BY day DESC
+    |]
 
 
 -- | Quantity of events in one submission chunk. Invariant: 0 < n <= 900_000
@@ -852,7 +865,7 @@ recordUsageWindow pid wStart wEnd totalUsage chunks = do
     -- that produced the original 15-month poison loop.
     exec [HI.sql| UPDATE projects.projects SET usage_last_reported = #{wEnd} WHERE id = #{pid} |]
     when (totalUsage > 0) do
-      exec [HI.sql| INSERT INTO apis.daily_usage (project_id, total_requests) VALUES (#{pid}, #{totalUsage}) |]
+      exec [HI.sql| INSERT INTO apis.daily_usage (project_id, total_requests, window_start, window_end) VALUES (#{pid}, #{totalUsage}, #{wStart}, #{wEnd}) |]
       for_ (zip chunkIds chunks) \(cid, ChunkQuantity qty) ->
         exec
           [HI.sql| INSERT INTO projects.usage_report_submissions (id, project_id, window_start, window_end, quantity)

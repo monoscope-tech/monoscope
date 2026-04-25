@@ -121,8 +121,8 @@ paymentPlanPicker pid lemonUrl criticalUrl currentPlan freePricingEnabled basicA
                function priceChange() {
                  const value = price_indicator.value
                  let num_reqs = Math.floor(value/1000000)
-                 let calculatedPrice = value <= 20_000_000 ? 29 : 29 + ((value- 20_000_000)/500_000)
-                 let calculatedPriceCritical = value <= 100_000_000 ? 199 : 199 + ((value - 100_000_000)/500_000)
+                 let calculatedPrice = value <= 20_000_000 ? 29 : 29 + ((value- 20_000_000)/1_000_000)
+                 let calculatedPriceCritical = value <= 100_000_000 ? 199 : 199 + ((value - 100_000_000)/1_000_000)
                  priceContainer.innerText = calculatedPrice
                  criticalContainer.innerText = calculatedPriceCritical
                  reqsContainer.innerText = num_reqs + " Million"
