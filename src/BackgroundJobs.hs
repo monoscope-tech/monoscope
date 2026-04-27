@@ -1268,7 +1268,7 @@ dispatchDueErrorNotifications ctx pid now dueErrors =
                   errorsUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> sub.issueId.toText
                   occTextM = (show sub.occurrences1h <> "/hr") <$ guard (sub.occurrences1h > 0)
                   fromTime = addUTCTime (-(15 * 60)) now
-                  firstSeenTextM = Just $ relTimeAgo now sub.errorData.when <> " · " <> toText (formatTime defaultTimeLocale "%b %-e %-l:%M %p" sub.errorData.when)
+                  firstSeenTextM = Just $ relTimeAgo now sub.createdAt <> " · " <> toText (formatTime defaultTimeLocale "%b %-e %-l:%M %p" sub.createdAt)
                   -- Surface an ongoing-duration banner once we've already notified on this
                   -- issue and it's still in a non-regressed state; a regression restarts
                   -- the narrative and deserves its own fresh-looking alert.
