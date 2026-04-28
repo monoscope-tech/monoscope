@@ -5,18 +5,28 @@
 // When updating this logic, also update chartshot/colorMapping.ts to keep server-side
 // chart rendering consistent with browser rendering.
 
-// Service/generic colors: 8 cool/neutral hues with lightness variation (300/400/500).
-// Warm colors (red, orange, amber, yellow) are reserved for severity/error semantics.
-// Hue + lightness separation ensures any 3 consecutive are visually distinct.
+// Theme colors ordered for maximum hue separation: any 3 consecutive are visually distinct
 const THEME_COLORS = [
   '#60a5fa', // Blue-400
-  '#34d399', // Emerald-400
+  '#f87171', // Red-400
+  '#4ade80', // Green-400
+  '#fbbf24', // Amber-400
   '#c084fc', // Purple-400
-  '#67e8f9', // Cyan-300
-  '#6366f1', // Indigo-500
-  '#f0abfc', // Fuchsia-300
-  '#14b8a6', // Teal-500
-  '#94a3b8', // Slate-400
+  '#2dd4bf', // Teal-400
+  '#fb923c', // Orange-400
+  '#38bdf8', // Sky-400
+  '#fb7185', // Rose-400
+  '#a3e635', // Lime-400
+  '#818cf8', // Indigo-400
+  '#facc15', // Yellow-400
+  '#f472b6', // Pink-400
+  '#34d399', // Emerald-400
+  '#a78bfa', // Violet-400
+  '#22d3ee', // Cyan-400
+  '#e879f9', // Fuchsia-400
+  '#fc8452', // Dark orange
+  '#1A74A8', // Deep blue
+  '#ee6666'  // Classic red
 ];
 
 // HTTP Status Code Colors
@@ -236,15 +246,25 @@ export function getSeriesColor(value: string, context?: 'status' | 'percentile' 
   return THEME_COLORS[hashString(value) % THEME_COLORS.length];
 }
 
-// Tailwind class to hex mapping for service colors (cool/neutral hues with lightness variation)
+// Tailwind class to hex mapping for service colors (full hue wheel for maximum distinguishability)
 export const TAILWIND_TO_HEX: Record<string, string> = {
   'bg-blue-400': '#60a5fa',
-  'bg-emerald-400': '#34d399',
+  'bg-red-400': '#f87171',
+  'bg-green-400': '#4ade80',
+  'bg-amber-400': '#fbbf24',
   'bg-purple-400': '#c084fc',
-  'bg-cyan-300': '#67e8f9',
-  'bg-indigo-500': '#6366f1',
-  'bg-fuchsia-300': '#f0abfc',
-  'bg-teal-500': '#14b8a6',
+  'bg-teal-400': '#2dd4bf',
+  'bg-orange-400': '#fb923c',
+  'bg-sky-400': '#38bdf8',
+  'bg-rose-400': '#fb7185',
+  'bg-lime-400': '#a3e635',
+  'bg-indigo-400': '#818cf8',
+  'bg-yellow-400': '#facc15',
+  'bg-pink-400': '#f472b6',
+  'bg-emerald-400': '#34d399',
+  'bg-violet-400': '#a78bfa',
+  'bg-cyan-400': '#22d3ee',
+  'bg-fuchsia-400': '#e879f9',
   'bg-slate-400': '#94a3b8',
   'bg-gray-500': '#9ca3af',
 };

@@ -536,16 +536,24 @@ checkFreeTierExceeded pid pp = isExceeded <$> checkFreeTierStatus pid pp
 serviceColors :: V.Vector Text
 serviceColors =
   V.fromList
-    -- 8 cool/neutral hues — warm colors reserved for severity/error semantics.
-    -- Uses hue + lightness variation (300/400/500) for max perceptual distance.
-    [ "bg-blue-400" -- blue (medium)
-    , "bg-emerald-400" -- emerald (medium)
-    , "bg-purple-400" -- purple (medium)
-    , "bg-cyan-300" -- cyan (light)
-    , "bg-indigo-500" -- indigo (dark)
-    , "bg-fuchsia-300" -- fuchsia (light)
-    , "bg-teal-500" -- teal (dark)
-    , "bg-slate-400" -- slate (neutral)
+    -- Ordered for maximum hue separation: any 3 consecutive colors are visually distinct
+    [ "bg-blue-400" -- blue
+    , "bg-red-400" -- red
+    , "bg-green-400" -- green
+    , "bg-amber-400" -- amber
+    , "bg-purple-400" -- purple
+    , "bg-teal-400" -- teal
+    , "bg-orange-400" -- orange
+    , "bg-sky-400" -- sky
+    , "bg-rose-400" -- rose
+    , "bg-lime-400" -- lime
+    , "bg-indigo-400" -- indigo
+    , "bg-yellow-400" -- yellow
+    , "bg-pink-400" -- pink
+    , "bg-emerald-400" -- emerald
+    , "bg-violet-400" -- violet
+    , "bg-cyan-400" -- cyan
+    , "bg-fuchsia-400" -- fuchsia
     ]
 
 
@@ -557,19 +565,30 @@ getServiceColors = V.foldl' assign HM.empty
        in HM.insert service (serviceColors V.! colorIdx) colors
 
 
--- | Theme colors (hex) for ECharts - matches colorMapping.ts THEME_COLORS.
--- 8 cool/neutral hues with lightness variation; warm colors reserved for severity.
+-- | Theme colors (hex) for ECharts - matches colorMapping.ts THEME_COLORS
 themeColorsHex :: V.Vector Text
 themeColorsHex =
   V.fromList
-    [ "#60a5fa" -- Blue-400
-    , "#34d399" -- Emerald-400
-    , "#c084fc" -- Purple-400
-    , "#67e8f9" -- Cyan-300
-    , "#6366f1" -- Indigo-500
-    , "#f0abfc" -- Fuchsia-300
-    , "#14b8a6" -- Teal-500
-    , "#94a3b8" -- Slate-400
+    [ "#1A74A8"
+    , "#91cc75"
+    , "#fac858"
+    , "#ee6666"
+    , "#73c0de"
+    , "#3ba272"
+    , "#fc8452"
+    , "#9a60b4"
+    , "#c71585"
+    , "#37a2da"
+    , "#32c5e9"
+    , "#20b2aa"
+    , "#228b22"
+    , "#ff8c00"
+    , "#ff6347"
+    , "#dc143c"
+    , "#8b008b"
+    , "#4b0082"
+    , "#6a5acd"
+    , "#4169e1"
     ]
 
 
