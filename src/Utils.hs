@@ -1485,7 +1485,7 @@ renderSummaryElement seg = case parseSummaryEl seg of
               (ansiToHtml value)
         Nothing ->
           span_ [class_ pillCls, title_ tooltip] (ansiToHtml value)
-  Nothing -> span_ [class_ "text-xs text-textWeak"] $ toHtml seg
+  Nothing -> span_ [class_ "text-xs text-textWeak"] $ ansiToHtml seg
 
 
 -- | Render text containing ANSI SGR escape sequences (@\\ESC[...m@) as styled

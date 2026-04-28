@@ -250,7 +250,7 @@ spec = aroundAll withTestResources do
       runTestBg secondRun tr $ BackgroundJobs.detectLogPatternSpikes pid secondRun tr.trATCtx
 
       -- Only the ERROR pattern should have produced a rate-change issue.
-      forM_ ["gate-info-lc", "gate-debug", "gate-null"] \h -> do
+      forM_ (["gate-info-lc", "gate-debug", "gate-null"] :: [Text]) \h -> do
         cnt <- withResource tr.trPool \conn -> do
           [PGS.Only n] <- PGS.query conn
             [sql| SELECT COUNT(*)::INT FROM apis.issues

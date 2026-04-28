@@ -11,6 +11,7 @@ module Pages.LogExplorer.Log (
   logQueryBox_,
   TraceTreeEntry (..),
   buildTraceTree,
+  fmtPct1,
 )
 where
 
@@ -104,6 +105,7 @@ data SpanInfo = SpanInfo {spanId :: Text, parentId :: Maybe Text, traceIdVal :: 
 -- >>> import Data.Vector qualified as V
 -- >>> import Data.Aeson qualified as AE
 -- >>> import Data.HashMap.Strict qualified as HM
+-- >>> import Pages.LogExplorer.Log
 -- >>> let colIdx = HM.fromList [("id",0),("trace_id",1),("parent_id",2),("start_time_ns",3),("duration",4),("latency_breakdown",5),("kind",6),("errors",7),("timestamp",8)]
 -- >>> let row1 = V.fromList [AE.String "s1", AE.String "t1", AE.Null, AE.Number 100, AE.Number 1000, AE.String "lb1", AE.String "span", AE.Null, AE.String "2025-01-01T00:00:00Z"]
 -- >>> let row2 = V.fromList [AE.String "s2", AE.String "t1", AE.String "lb1", AE.Number 200, AE.Number 500, AE.String "lb2", AE.String "span", AE.Null, AE.String "2025-01-01T00:00:01Z"]
@@ -832,6 +834,7 @@ logLatencyWidget pid =
 
 -- | One-decimal percent formatter.
 --
+-- >>> import Pages.LogExplorer.Log
 -- >>> fmtPct1 0
 -- "0.0%"
 -- >>> fmtPct1 5.24

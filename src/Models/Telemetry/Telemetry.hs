@@ -1711,11 +1711,11 @@ shortenUrl full =
 -- ""
 urlBasename :: T.Text -> T.Text
 urlBasename url =
-  let path = T.takeWhile (\c -> c /= '?' && c /= '#') (shortenUrl url)
-      seg = snd (T.breakOnEnd "/" path)
-   in if T.null seg
-        then T.dropWhileEnd (== '/') path -- trailing-slash URL: drop the slash
-        else seg
+  let stripped = fromMaybe url $ T.stripPrefix "https://" url <|> T.stripPrefix "http://" url
+      path = T.takeWhile (\c -> c /= '?' && c /= '#') stripped
+      trimmed = T.dropWhileEnd (== '/') path
+      seg = snd (T.breakOnEnd "/" trimmed)
+   in if T.null seg then trimmed else seg
 
 
 -- | Best-effort label for a user-interaction span (click, submit, etc.).

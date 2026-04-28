@@ -7,7 +7,9 @@ import Data.ByteString qualified as BS
 import Data.Map qualified as Map
 import Data.Ord (clamp)
 import Data.Pool (Pool)
+import Data.Default (def)
 import Data.UUID qualified as UUID
+import Pkg.DeriveUtils (UUIDId (..))
 import GHC.TypeLits (Symbol)
 import Relude hiding (ask)
 
@@ -993,15 +995,21 @@ emailPreviewListH = do
 emailPreviewH :: Text -> ATBaseCtx (Html ())
 emailPreviewH templateName = do
   guardDevOnly
-  let (subject, content) = case templateName of
-        "project-invite" -> ET.sampleProjectInvite
-        "project-created" -> ET.sampleProjectCreated
-        "project-deleted" -> ET.sampleProjectDeleted
-        "weekly-report" -> ET.sampleWeeklyReport "https://placehold.co/600x200?text=Events+Chart" "https://placehold.co/600x200?text=Errors+Chart"
-        "runtime-errors" -> ET.sampleRuntimeErrors
-        "anomaly-endpoint" -> ET.sampleAnomalyEndpoint
-        "issue-assigned" -> ET.sampleIssueAssigned
-        _ -> ("Unknown", p_ "Template not found")
+  ctx <- Effectful.Reader.Static.ask @AuthContext
+  let nilPid = UUIDId UUID.nil :: Projects.ProjectId
+  (subject, content) <- case templateName of
+        "project-invite" -> pure ET.sampleProjectInvite
+        "project-created" -> pure ET.sampleProjectCreated
+        "project-deleted" -> pure ET.sampleProjectDeleted
+        "weekly-report" -> pure $ ET.sampleWeeklyReport "https://placehold.co/600x200?text=Events+Chart" "https://placehold.co/600x200?text=Errors+Chart"
+        "runtime-errors" -> do
+          chartUrl <- Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl nilPid
+            def{Widget.wType = Widget.WTTimeseries, Widget.query = Just "project_id == \"00000000-0000-0000-0000-000000000000\" and level == \"ERROR\" | summarize count(*) by bin_auto(timestamp)", Widget.theme = Just "roma"}
+            (Just "24H") Nothing Nothing
+          pure $ ET.sampleRuntimeErrors (if T.null chartUrl then Nothing else Just chartUrl)
+        "anomaly-endpoint" -> pure ET.sampleAnomalyEndpoint
+        "issue-assigned" -> pure ET.sampleIssueAssigned
+        _ -> pure ("Unknown", p_ "Template not found")
   pure $ ET.emailWrapper subject content
 
 

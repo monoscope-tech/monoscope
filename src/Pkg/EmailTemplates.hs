@@ -128,14 +128,14 @@ emailCss =
   .monoscope-email a img { border: none; }
   .monoscope-email td { word-break: break-word; }
   .monoscope-email, .monoscope-email td, .monoscope-email th { font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif; }
-  .monoscope-email h1 { color: #24292f; font-size: 24px; font-weight: 600; margin: 0 0 16px; letter-spacing: -0.3px; }
-  .monoscope-email h2 { color: #24292f; font-size: 20px; font-weight: 600; margin: 32px 0 12px; letter-spacing: -0.2px; }
-  .monoscope-email h3 { color: #24292f; font-size: 18px; font-weight: 600; margin: 24px 0 10px; letter-spacing: -0.2px; }
+  .monoscope-email h1 { color: #24292f; font-size: 24px; font-weight: 600; line-height: 1.25; margin: 0 0 16px; letter-spacing: -0.02em; }
+  .monoscope-email h2 { color: #24292f; font-size: 20px; font-weight: 600; line-height: 1.3; margin: 32px 0 12px; letter-spacing: -0.01em; }
+  .monoscope-email h3 { color: #24292f; font-size: 18px; font-weight: 600; line-height: 1.3; margin: 24px 0 10px; }
   .monoscope-email td, .monoscope-email th { font-size: 16px; }
-  .monoscope-email p { margin: 0 0 12px; font-size: 16px; font-weight: 400; line-height: 24px; color: #24292f; letter-spacing: -0.2px; }
+  .monoscope-email p { margin: 0 0 12px; font-size: 16px; font-weight: 400; line-height: 1.6; color: #24292f; }
   .monoscope-email p:last-child { margin-bottom: 0; }
   .monoscope-email ul, .monoscope-email ol { color: #24292f; list-style-position: outside; padding-left: 20px; margin: 0 0 16px; }
-  .monoscope-email li { padding: 0 0 10px 5px; line-height: 24px; }
+  .monoscope-email li { padding: 0 0 10px 5px; line-height: 1.6; }
   .monoscope-email p.sub { font-size: 13px; color: #99a2af; }
   .monoscope-email .email-wrapper { width: 100%; margin: 0; padding: 0; }
   .monoscope-email .email-content { width: 100%; margin: 0; padding: 0; }
@@ -149,21 +149,20 @@ emailCss =
   .monoscope-email .content-image { width: 100%; max-width: 100%; height: auto; border-radius: 12px; margin: 16px 0 24px; display: block; }
   .monoscope-email .feature-image { width: 100%; max-width: 100%; height: auto; border-radius: 16px; border: 1px solid #dee2e7; margin: 0 0 24px; display: block; }
   .monoscope-email .email-footer { width: 100%; max-width: 600px; margin: 0 auto; padding: 0; }
-  .monoscope-email .email-footer p { font-family: Ubuntu, Helvetica, Arial, sans-serif; color: #99a2af; font-size: 12px; line-height: 16px; text-align: left; margin: 0 0 10px; }
   .monoscope-email .email-footer a { color: #99a2af; text-decoration: none; }
   .monoscope-email .email-footer a:hover { text-decoration: underline; }
-  .monoscope-email .footer-links { font-family: Ubuntu, Helvetica, Arial, sans-serif; font-size: 12px; line-height: 20px; text-align: center; color: #99a2af; }
   .monoscope-email .footer-links a { color: #99a2af; text-decoration: none; }
   .monoscope-email .divider { border: none; border-top: 1px solid #dee2e7; margin: 32px 0; }
-  .monoscope-email .button { display: inline-block; background-color: #1d1e20; color: #ffffff !important; font-size: 16px; font-weight: 500; text-decoration: none; padding: 14px 28px; border-radius: 12px; border: 1px solid #505967; letter-spacing: -0.2px; }
+  .monoscope-email .button { display: inline-block; background-color: #1d1e20; color: #ffffff !important; font-size: 15px; font-weight: 500; text-decoration: none; padding: 13px 28px; border-radius: 6px; border: 1px solid #505967; }
   .monoscope-email .button:hover { text-decoration: none; background-color: #2d2e30; }
   .monoscope-email .button-wrapper { text-align: center; margin: 32px 0; }
   .monoscope-email .monoscope-code { background-color: #f6f8fa; border: 1px solid #dee2e7; border-radius: 6px; padding: 2px 6px; font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; font-size: 14px; }
   .monoscope-email .highlight-box { background-color: #f6f8fa; border-radius: 12px; padding: 20px 24px; margin: 24px 0; }
   .monoscope-email .highlight-box p { margin: 0; color: #57606a; font-size: 15px; }
-  .monoscope-email .error-card { border: 1px solid #dee2e7; border-radius: 12px; margin: 16px 0; }
-  .monoscope-email .error-card-header { color: #cf222e; font-size: 16px; font-weight: 600; margin: 0 0 4px; word-break: break-word; }
-  .monoscope-email .error-card-sub { color: #57606a; font-size: 13px; margin: 0; }
+  .monoscope-email .error-card { border-top: 1px solid #f1f3f5; margin: 0; }
+  .monoscope-email .error-card:first-of-type { border-top: none; }
+  .monoscope-email .error-card-header { color: #cf222e; font-size: 16px; font-weight: 600; line-height: 1.35; margin: 0 0 5px; word-break: break-word; }
+  .monoscope-email .error-card-sub { color: #374151; font-size: 15px; line-height: 1.5; margin: 0; }
   .monoscope-email .error-card-meta { font-size: 13px; color: #57606a; }
   .monoscope-email .error-card-label { font-weight: 600; color: #24292f; }
   .monoscope-email .error-card-stack { background-color: #1d1e20; color: #e2e8f0; border-radius: 8px; padding: 12px 16px; font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace; font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-x: auto; }
@@ -172,7 +171,7 @@ emailCss =
   .monoscope-email .social-icons img { width: 17px; height: 17px; border-radius: 3px; display: block; }
   .monoscope-email .report-table { margin: 20px 0 32px 0 !important; border: 1px solid #dee2e7 !important; border-collapse: collapse !important; width: 100% !important; }
   .monoscope-email .report-table th { background-color: #f6f8fa !important; color: #24292f !important; padding: 12px 15px !important; text-align: left !important; border: 1px solid #dee2e7 !important; font-size: 14px !important; font-weight: 600 !important; }
-  .monoscope-email .report-table td { font-weight: 400 !important; color: #24292f !important; padding: 16px 15px !important; text-align: left !important; border: 1px solid #dee2e7 !important; font-size: 14px !important; }
+  .monoscope-email .report-table td { font-weight: 400 !important; color: #24292f !important; padding: 16px 15px !important; text-align: left !important; border: 1px solid #dee2e7 !important; font-size: 14px !important; font-variant-numeric: tabular-nums; }
   @media only screen and (max-width: 600px) {
     .monoscope-email .email-body_inner, .monoscope-email .email-footer { width: 100% !important; }
     .monoscope-email .content-cell { padding: 0 20px 30px !important; }
@@ -192,9 +191,9 @@ emailCss =
     .monoscope-email .monoscope-code { background-color: #1a1a1a !important; border-color: #333333 !important; color: #ffffff !important; }
     .monoscope-email .highlight-box { background-color: #1a1a1a !important; }
     .monoscope-email .highlight-box p { color: #aaaaaa !important; }
-    .monoscope-email .error-card { border-color: #333333 !important; background-color: transparent !important; }
+    .monoscope-email .error-card { border-top-color: #2a2a2a !important; background-color: transparent !important; }
     .monoscope-email .error-card-header { color: #f87171 !important; }
-    .monoscope-email .error-card-sub { color: #aaaaaa !important; }
+    .monoscope-email .error-card-sub { color: #d1d5db !important; }
     .monoscope-email .error-card-meta { color: #aaaaaa !important; }
     .monoscope-email .error-card-label { color: #ffffff !important; }
     .monoscope-email .feature-image { border-color: #333333 !important; }
@@ -241,8 +240,8 @@ emailWrapper subject content = doctypehtml_ do
             $ table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0", role_ "presentation"]
             $ tr_ [class_ "footer-row"] do
               td_ [class_ "footer-col-left", style_ "vertical-align: top; width: 65%;"] do
-                p_ [style_ "font-family: Ubuntu, Helvetica, Arial, sans-serif; font-size: 12px; line-height: 16px; text-align: left; color: #99a2af; margin: 0 0 10px;"] "Monoscope \8212 monitoring and observability, built to know what\8217s happening the moment it happens. Logs, metrics, traces, and API payload monitoring with unlimited retention."
-                p_ [style_ "font-family: Ubuntu, Helvetica, Arial, sans-serif; font-size: 12px; line-height: 16px; text-align: left; color: #99a2af; margin: 0;"] "\169 2026 Monoscope."
+                p_ [style_ "font-size: 12px; line-height: 1.5; text-align: left; color: #99a2af; margin: 0 0 10px;"] "Monoscope \8212 monitoring and observability, built to know what\8217s happening the moment it happens. Logs, metrics, traces, and API payload monitoring with unlimited retention."
+                p_ [style_ "font-size: 12px; line-height: 1.5; text-align: left; color: #99a2af; margin: 0;"] "\169 2026 Monoscope."
               td_ [class_ "footer-col-right", style_ "vertical-align: top; text-align: right; width: 35%;"]
                 $ table_ [class_ "footer-icons", align_ "right", cellpadding_ "0", cellspacing_ "0", role_ "presentation"]
                 $ tr_ do
@@ -255,7 +254,7 @@ emailWrapper subject content = doctypehtml_ do
           -- Footer links
           tr_
             $ td_ [align_ "center", style_ "padding: 0 20px 19px;"]
-            $ p_ [style_ "font-family: Ubuntu, Helvetica, Arial, sans-serif; font-size: 12px; line-height: 20px; text-align: center; color: #99a2af; margin: 0;"] do
+            $ p_ [style_ "font-size: 12px; line-height: 1.5; text-align: center; color: #99a2af; margin: 0;"] do
               a_ [href_ "https://monoscope.tech/changelog?utm_source=transac_emails", style_ "color: #99a2af; text-decoration: none;"] "Changelog"
               toHtmlRaw @Text " &nbsp;\183&nbsp; "
               a_ [href_ "https://monoscope.tech/docs?utm_source=transac_emails", style_ "color: #99a2af; text-decoration: none;"] "Docs"
@@ -310,13 +309,17 @@ emailFallbackUrl url = do
 
 
 emailStatRow :: [(Text, Text, Maybe Text)] -> Html ()
-emailStatRow cols = div_ [class_ "highlight-box"]
-  $ table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"]
-  $ tr_
-  $ forM_ (zip [0 :: Int ..] cols) \(i, (label, val, colorM)) ->
-    td_ [width_ "33%", style_ $ "text-align: center; padding: 8px 0;" <> if i > 0 then " border-left: 1px solid #dee2e7;" else ""] do
-      p_ [style_ "margin: 0 0 4px; font-size: 13px; color: #57606a;"] $ toHtml label
-      p_ [style_ $ "margin: 0; font-size: 22px; font-weight: 700;" <> maybe "" ("; color: " <>) colorM] $ toHtml val
+emailStatRow cols =
+  p_ [style_ "margin: 8px 0 20px; font-size: 13px; color: #57606a; line-height: 1.8;"] $
+    mconcat
+      $ intersperse (span_ [style_ "padding: 0 8px; color: #c0c5cc;"] "\183")
+      $ map
+        ( \(label, val, colorM) -> span_ [] do
+            toHtml label
+            " "
+            b_ [style_ $ "font-weight: 600;" <> maybe "" (\c -> " color: " <> c <> ";") colorM] $ toHtml val
+        )
+        cols
 
 
 emailGreeting :: Maybe Text -> Html ()
@@ -475,14 +478,16 @@ runtimeErrorVariantEmail heading subjectPrefix intro projectName errorsUrl error
         p_ [style_ "margin: 8px 0; font-size: 14px; font-weight: 600; color: #57606a;"] $ toHtml @Text ("⏳ Still firing · " <> d)
       whenJust occTextM $ \t -> p_ [style_ "margin: 8px 0; font-size: 14px; font-weight: 600; color: #57606a;"] $ toHtml t
       emailDivider
-      forM_ (take maxErrorCards errors) (errorCard errorsUrl)
+      let (firstErrors, restErrors) = splitAt 1 (take maxErrorCards errors)
+      forM_ firstErrors (errorCard errorsUrl)
+      whenJust chartUrlM $ chartBlock "Error Trend"
+      forM_ restErrors (errorCard errorsUrl)
       when (length errors > maxErrorCards)
         $ p_ [style_ "text-align: center; color: #57606a; font-size: 14px; margin: 16px 0;"]
         $ toHtml
         $ "and "
         <> show (length errors - maxErrorCards)
         <> " more error(s)…"
-      whenJust chartUrlM $ chartBlock "Error Trend"
       emailButton errorsUrl "View all errors"
   )
   where
@@ -497,7 +502,7 @@ runtimeErrorVariantEmail heading subjectPrefix intro projectName errorsUrl error
 errorCard :: Text -> ErrorPatterns.ATError -> Html ()
 errorCard errorsUrl e =
   table_ [class_ "error-card", width_ "100%", cellpadding_ "0", cellspacing_ "0"] do
-    tr_ $ td_ [style_ "padding: 15px 20px 10px 20px;"] do
+    tr_ $ td_ [style_ "padding: 16px 0 8px 0;"] do
       p_ [class_ "error-card-header"] $ toHtml $ truncateText 120 e.errorType
       p_ [class_ "error-card-sub", style_ "word-break: break-word;"] $ toHtml $ truncateText 200 e.message
       when hasDistinctRootCause
@@ -506,21 +511,18 @@ errorCard errorsUrl e =
           b_ [style_ "color: #57606a;"] "Root cause: "
           toHtml $ truncateText 200 (e.rootErrorType <> ": " <> e.rootErrorMessage)
     tr_
-      $ td_ [style_ "padding: 0 20px 12px 20px;"]
+      $ td_ [style_ "padding: 0 0 10px 0;"]
       $ p_ [class_ "error-card-meta", style_ "margin: 0; line-height: 1.6;"]
       $ do
-        let meta =
-              filter
-                ((/= "") . snd)
-                [ ("", fromMaybe "" e.requestMethod <> " " <> fromMaybe "" e.requestPath)
-                , ("", fromMaybe "" e.serviceName)
-                , ("", fromMaybe "" e.environment)
-                , ("", toText $ formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M %p" e.when)
-                ]
-        forM_ (zip [0 :: Int ..] meta) \(i, (_, val)) -> do
+        let routeText = T.strip $ fromMaybe "" e.requestMethod <> " " <> fromMaybe "" e.requestPath
+            ctxMeta = filter (/= "") [fromMaybe "" e.serviceName, fromMaybe "" e.environment, toText $ formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M %p" e.when]
+        when (routeText /= "") do
+          span_ [class_ "monoscope-code", style_ "font-size: 12px;"] $ toHtml routeText
+          unless (null ctxMeta) $ span_ [style_ "color: #c0c5cc; padding: 0 6px;"] "\183"
+        forM_ (zip [0 :: Int ..] ctxMeta) \(i, val) -> do
           when (i > 0) $ span_ [style_ "color: #c0c5cc; padding: 0 6px;"] "\183"
           toHtml val
-    when (e.stackTrace /= "") $ tr_ $ td_ [style_ "padding: 0 20px 15px 20px;"] do
+    when (e.stackTrace /= "") $ tr_ $ td_ [style_ "padding: 0 0 16px 0;"] do
       let traceLines = lines e.stackTrace
           lastLines = takeEnd 2 traceLines
           hasMore = length traceLines > 2
@@ -847,8 +849,8 @@ sampleProjectDeleted :: (Text, Html ())
 sampleProjectDeleted = projectDeletedEmail "Jane Doe" "My API Project"
 
 
-sampleRuntimeErrors :: (Text, Html ())
-sampleRuntimeErrors = runtimeErrorsEmail "My API Project" "https://app.monoscope.tech/p/sample-id/issues/" [sampleError1, sampleError2, sampleError3] Nothing (Just "42 occurrences in last hour") (Just "3 hours")
+sampleRuntimeErrors :: Maybe Text -> (Text, Html ())
+sampleRuntimeErrors chartUrlM = runtimeErrorsEmail "My API Project" "https://app.monoscope.tech/p/sample-id/issues/" [sampleError1, sampleError2, sampleError3] chartUrlM (Just "42 occurrences in last hour") (Just "3 hours")
   where
     sampleError1 =
       def

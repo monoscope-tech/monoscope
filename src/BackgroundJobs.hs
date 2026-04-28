@@ -1,6 +1,6 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSessionBackfillTimer, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSessionBackfillTimer, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl, sameSegmentCount) where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
@@ -2669,6 +2669,7 @@ embeddingConfig ctx =
 -- | Only merge endpoints with the same number of path segments.
 -- Prevents e.g. /api/v2/users/auth0|abc from merging into /api/v2/users.
 --
+-- >>> import BackgroundJobs
 -- >>> sameSegmentCount "/api/v1/users/{param}" "/api/v1/users/123"
 -- True
 --
@@ -3068,6 +3069,7 @@ evaluateWithResults monitor startWall title total durationNs = do
 -- For "below" (triggerLessThan=True): alert when value <= threshold, recover when value > recoveryThreshold
 --
 -- Trigger tests (above direction):
+-- >>> import BackgroundJobs
 -- >>> monitorStatus False Nothing 100 Nothing Nothing False False 100
 -- MSAlerting
 -- >>> monitorStatus False Nothing 100 Nothing Nothing False False 150

@@ -615,6 +615,10 @@ data WebhookData = WebhookData
 
 -- | LS signs a hex-encoded HMAC-SHA256 of the raw body in the X-Signature header.
 --
+-- >>> import Data.ByteString.Base16 qualified as B16
+-- >>> import Data.ByteArray qualified as BA
+-- >>> import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
+-- >>> import "cryptonite" Crypto.Hash (SHA256)
 -- >>> let body = "{\"event\":\"x\"}" :: ByteString
 -- >>> let secret = "s3cret" :: ByteString
 -- >>> let sig = decodeUtf8 (B16.encode (BA.convert (HMAC.hmac secret body :: HMAC.HMAC SHA256) :: ByteString)) :: Text
@@ -766,7 +770,7 @@ manageBillingGetH pid from = do
       breakdownStart = min cycleStart thirtyDaysAgo
   totalRequests <- Projects.getTotalUsage pid cycleStart
   dailyUsage <- Projects.getDailyUsageBreakdown pid breakdownStart
-  let last_reported = T.pack $ formatTime defaultTimeLocale "%b %-d" project.usageLastReported
+  let last_reported = toText (formatTime defaultTimeLocale "%b %-d" project.usageLastReported)
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess
@@ -803,9 +807,9 @@ billingPage d = div_ [] do
       overageNum = max 0 (reqs - 20_000_000)
       overageCost = fromIntegral overageNum / 1_000_000 :: Double
       totalCost = fromIntegral basePriceNum + overageCost
-      fmtUSD n = "$" <> T.pack (printf "%.2f" (n :: Double))
+      fmtUSD n = "$" <> toText (printf "%.2f" (n :: Double) :: String)
       estCost = if isFree then "$0" else fmtUSD totalCost
-      cycleStartText = T.pack $ formatTime defaultTimeLocale "%b %-d" d.cycleStart
+      cycleStartText = toText (formatTime defaultTimeLocale "%b %-d" d.cycleStart)
   settingsSection_ do
     settingsH2_ "Billing"
 
@@ -881,7 +885,7 @@ dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-s
           dayCostText prev cur
             | isFree = "—"
             | dayOverage <= 0 = "—"
-            | otherwise = "$" <> T.pack (printf "%.2f" (fromIntegral dayOverage / 1_000_000 :: Double))
+            | otherwise = "$" <> toText (printf "%.2f" (fromIntegral dayOverage / 1_000_000 :: Double) :: String)
             where
               dayOverage = max 0 (cur - included) - max 0 (prev - included)
       div_ [class_ "border border-strokeWeak rounded-md overflow-hidden max-h-96 overflow-y-auto"] do
@@ -896,13 +900,13 @@ dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-s
             forM_ withRunning \(day, n, prev, cur) -> do
               let pct = max 1 $ min 100 $ (n * 100) `div` maxDay
               tr_ [class_ "border-t border-strokeWeak"] do
-                td_ [class_ "px-3 py-2 text-textStrong"] $ toHtml $ T.pack $ formatTime defaultTimeLocale "%a %b %e" day
+                td_ [class_ "px-3 py-2 text-textStrong"] $ toHtml $ toText (formatTime defaultTimeLocale "%a %b %e" day)
                 td_ [class_ "px-3 py-2 text-right text-textStrong"] $ toHtml @Text $ fmt (commaizeF n)
                 td_ [class_ "px-3 py-2"] do
                   div_ [class_ "h-1.5 bg-fillWeak rounded-full overflow-hidden"] do
                     div_ [class_ "h-full bg-fillBrand", style_ ("width: " <> show pct <> "%")] mempty
                 td_ [class_ "px-3 py-2 text-right text-textWeak"] $ toHtml $ dayCostText prev cur
-      let cycleStartText = T.pack $ formatTime defaultTimeLocale "%b %-d" cycleStartDay
+      let cycleStartText = toText (formatTime defaultTimeLocale "%b %-d" cycleStartDay)
       when (activeDays < 30)
         $ div_ [class_ "text-xs text-textWeak"]
         $ toHtml

@@ -386,6 +386,7 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds conv
 -- | Parse a database connection string to extract server address and port
 --
 -- >>> import qualified Data.Aeson as AE
+-- >>> import Opentelemetry.OtlpServer
 --
 -- >>> parseConnectionString "Server=localhost:5432"
 -- [("server.address",String "localhost"),("server.port",String "5432")]
@@ -432,6 +433,7 @@ parseConnectionString connStr =
 -- | Migrate Elasticsearch path parts to db.operation.parameter
 --
 -- >>> import qualified Data.Aeson as AE
+-- >>> import Opentelemetry.OtlpServer
 -- >>> migrateElasticsearchPathParts [("db.elasticsearch.path_parts.index", AE.String "users"), ("db.elasticsearch.path_parts.id", AE.String "123")]
 -- [("db.operation.parameter.index",String "users"),("db.operation.parameter.id",String "123")]
 --
@@ -456,6 +458,7 @@ migrateElasticsearchPathParts keyVals =
 -- to their new standardized names according to the latest OTEL spec.
 --
 -- >>> import qualified Data.Aeson as AE
+-- >>> import Opentelemetry.OtlpServer
 --
 -- == HTTP field migrations
 -- >>> migrateHttpSemanticConventions [("http.method", AE.String "GET")]
