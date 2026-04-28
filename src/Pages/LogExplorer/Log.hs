@@ -206,10 +206,11 @@ buildTraceTree colIdxMap queryResultCount rows = (adjustedRows, sortWith (Down .
         applyAdj i row = case Map.lookup i adjMap of
           Nothing -> row
           Just (s, d) ->
-            let upd = catMaybes
-                  [ (\j -> (j, AE.Number (fromIntegral s))) <$> stIdxM
-                  , (\j -> (j, AE.Number (fromIntegral d))) <$> durIdxM
-                  ]
+            let upd =
+                  catMaybes
+                    [ (\j -> (j, AE.Number (fromIntegral s))) <$> stIdxM
+                    , (\j -> (j, AE.Number (fromIntegral d))) <$> durIdxM
+                    ]
              in if null upd then row else row V.// upd
 
     buildTraceEntries :: [SpanInfo] -> [(TraceTreeEntry, [(Int, Int64, Int64)])]
