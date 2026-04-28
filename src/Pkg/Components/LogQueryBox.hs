@@ -549,7 +549,7 @@ popularSearchChips_ _pid queryLibSaved queryLibRecent showChips =
       $ span_
         [ class_ "inline-flex gap-1.5 items-center"
         , id_ "popular-search-chips"
-        , [__|on update-query from window if event.detail.value.trim() is not '' add .hidden to me else remove .hidden from me|]
+        , [__|on 'update-query' from window if (event.detail.value or '').trim() is not '' add .hidden to me else remove .hidden from me|]
         ]
         do
           span_ [class_ "text-textDisabled"] "Try:"

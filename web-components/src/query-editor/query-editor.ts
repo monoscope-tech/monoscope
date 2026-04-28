@@ -3,8 +3,15 @@ import { customElement, state, query } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
 import 'monaco-editor/esm/vs/editor/contrib/suggest/browser/suggestController.js';
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api';
+import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
 import { conf as yamlConf, language as yamlLanguage } from 'monaco-editor/esm/vs/basic-languages/yaml/yaml';
 import { groupBy, pick } from 'lodash';
+
+// Configure Monaco workers (we only use the base editor, no language services).
+// Without this, Monaco logs a warning and falls back to running worker code on the main thread.
+(self as any).MonacoEnvironment = (self as any).MonacoEnvironment || {
+  getWorker: () => new EditorWorker(),
+};
 
 // Make monaco available globally for tests
 globalThis.monaco = monaco;
@@ -801,6 +808,10 @@ export class QueryEditorComponent extends LitElement {
   private updateHandlers: Array<monaco.IDisposable> = [];
   private resizeObserver: ResizeObserver | null = null;
   private themeObserver: MutationObserver | null = null;
+  // Single abort signal scoping every global listener to this connection lifecycle.
+  // disconnectedCallback aborts it, so any in-flight callback that fires after
+  // teardown is dropped by the platform — no manual remove needed per listener.
+  private lifecycleAbort: AbortController | null = null;
 
   // Bound handlers for cleanup
   private resizeHandler = () => {
@@ -880,8 +891,9 @@ export class QueryEditorComponent extends LitElement {
     if (!this.layoutRefreshPending) {
       this.layoutRefreshPending = true;
       requestAnimationFrame(() => {
-        this.refreshLayout();
         this.layoutRefreshPending = false;
+        if (!this.isConnected) return;
+        this.refreshLayout();
       });
     }
   };
@@ -923,12 +935,13 @@ export class QueryEditorComponent extends LitElement {
 
     // Set new timeout - only fires after user stops typing for 300ms
     this.updateQueryTimeout = window.setTimeout(() => {
+      this.updateQueryTimeout = null;
+      if (!this.isConnected) return;
       // Only call updateQuery if the value actually changed
       if (this.lastQueryValue !== this.lastEmittedQueryValue) {
         this.updateQuery(this.lastQueryValue);
         this.lastEmittedQueryValue = this.lastQueryValue;
       }
-      this.updateQueryTimeout = null;
     }, 500); // wait 300ms after last keypress
   };
 
@@ -968,13 +981,18 @@ export class QueryEditorComponent extends LitElement {
 
     // Re-validate after update-query clears errors (setTimeout ensures it runs after event handlers)
     setTimeout(() => {
+      if (!this.isConnected) return;
       const model = this.editor?.getModel();
       if (model) this.validateAndMark(queryValue, model);
     }, 0);
   };
 
   async firstUpdated(): Promise<void> {
-    if (!this._editorContainer) return;
+    // Bail if disconnected before we got here (fast nav before render commits).
+    if (!this.isConnected || !this._editorContainer) return;
+
+    this.lifecycleAbort = new AbortController();
+    const { signal } = this.lifecycleAbort;
 
     this.defaultValue = this.getAttribute('default-value') || '';
     this.updateURLParams = this.getAttribute('widget-editor') !== 'true';
@@ -985,9 +1003,9 @@ export class QueryEditorComponent extends LitElement {
       if (e.key === 'Escape' && this.showSuggestions) {
         this.showSuggestions = false;
       }
-    });
+    }, { signal });
 
-    window.addEventListener('resize', this.resizeHandler);
+    window.addEventListener('resize', this.resizeHandler, { signal });
 
     // Set up ResizeObserver to handle container size changes
     if (this._editorContainer && window.ResizeObserver) {
@@ -998,10 +1016,11 @@ export class QueryEditorComponent extends LitElement {
     }
 
     // Focus editor when "/" is pressed
-    document.addEventListener('keydown', this.keydownHandler);
+    document.addEventListener('keydown', this.keydownHandler, { signal });
 
     // Watch for theme changes
     this.themeObserver = new MutationObserver((mutations) => {
+      if (!this.isConnected || !this.editor) return;
       mutations.forEach((mutation) => {
         if (mutation.type === 'attributes' && mutation.attributeName === 'data-theme') {
           const isDarkMode = document.body.getAttribute('data-theme') === 'dark';
@@ -1018,6 +1037,10 @@ export class QueryEditorComponent extends LitElement {
   }
 
   disconnectedCallback(): void {
+    // Single abort tears down every listener registered with our signal —
+    // works even if firstUpdated was mid-flight when we got disconnected.
+    this.lifecycleAbort?.abort();
+    this.lifecycleAbort = null;
     this.suggestionListeners.forEach((dispose) => dispose());
     this.suggestionListeners = [];
     this.updateHandlers.forEach((handler) => handler.dispose());
@@ -1026,9 +1049,6 @@ export class QueryEditorComponent extends LitElement {
     this.resizeObserver = null;
     this.themeObserver?.disconnect();
     this.themeObserver = null;
-    // Remove global event listeners
-    window.removeEventListener('resize', this.resizeHandler);
-    document.removeEventListener('keydown', this.keydownHandler);
     // Clear any pending debounced update
     if (this.updateQueryTimeout !== null) {
       clearTimeout(this.updateQueryTimeout);
@@ -1038,6 +1058,7 @@ export class QueryEditorComponent extends LitElement {
     this.lastEmittedQueryValue = '';
     this.lastQueryValue = '';
     this.editor?.dispose();
+    this.editor = null;
     super.disconnectedCallback();
   }
 
@@ -1364,9 +1385,9 @@ export class QueryEditorComponent extends LitElement {
     });
 
     let clickedOnSuggestion = false;
-    document.addEventListener('pointerdown', (e: MouseEvent) => {
+    document.addEventListener('pointerdown', (e: Event) => {
       clickedOnSuggestion = !!this.querySelector('.suggestions-dropdown')?.contains(e.target as Node);
-    });
+    }, { signal: this.lifecycleAbort?.signal });
 
     const handlers = [
       this.editor.onDidFocusEditorText(() => {
@@ -1526,7 +1547,7 @@ export class QueryEditorComponent extends LitElement {
   }
 
   private adjustEditorHeight(): void {
-    if (!this.editor) return;
+    if (!this.editor || !this._editorContainer) return;
     const minHeight = 24; // Minimum height in pixels (single line + padding)
     const height = Math.max(this.editor.getContentHeight(), minHeight);
 
