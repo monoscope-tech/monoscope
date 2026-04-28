@@ -310,16 +310,16 @@ emailFallbackUrl url = do
 
 emailStatRow :: [(Text, Text, Maybe Text)] -> Html ()
 emailStatRow cols =
-  p_ [style_ "margin: 8px 0 20px; font-size: 13px; color: #57606a; line-height: 1.8;"] $
-    mconcat
-      $ intersperse (span_ [style_ "padding: 0 8px; color: #c0c5cc;"] "\183")
-      $ map
-        ( \(label, val, colorM) -> span_ [] do
-            toHtml label
-            " "
-            b_ [style_ $ "font-weight: 600;" <> maybe "" (\c -> " color: " <> c <> ";") colorM] $ toHtml val
-        )
-        cols
+  p_ [style_ "margin: 8px 0 20px; font-size: 13px; color: #57606a; line-height: 1.8;"]
+    $ mconcat
+    $ intersperse (span_ [style_ "padding: 0 8px; color: #c0c5cc;"] "\183")
+    $ map
+      ( \(label, val, colorM) -> span_ [] do
+          toHtml label
+          " "
+          b_ [style_ $ "font-weight: 600;" <> maybe "" (\c -> " color: " <> c <> ";") colorM] $ toHtml val
+      )
+      cols
 
 
 emailGreeting :: Maybe Text -> Html ()

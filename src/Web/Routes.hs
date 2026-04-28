@@ -4,13 +4,13 @@ module Web.Routes (server, genAuthServerContext, KeepPrefixExp, widgetPngGetH, A
 import Control.Lens
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
+import Data.Default (def)
 import Data.Map qualified as Map
 import Data.Ord (clamp)
 import Data.Pool (Pool)
-import Data.Default (def)
 import Data.UUID qualified as UUID
-import Pkg.DeriveUtils (UUIDId (..))
 import GHC.TypeLits (Symbol)
+import Pkg.DeriveUtils (UUIDId (..))
 import Relude hiding (ask)
 
 -- Database imports
@@ -998,18 +998,24 @@ emailPreviewH templateName = do
   ctx <- Effectful.Reader.Static.ask @AuthContext
   let nilPid = UUIDId UUID.nil :: Projects.ProjectId
   (subject, content) <- case templateName of
-        "project-invite" -> pure ET.sampleProjectInvite
-        "project-created" -> pure ET.sampleProjectCreated
-        "project-deleted" -> pure ET.sampleProjectDeleted
-        "weekly-report" -> pure $ ET.sampleWeeklyReport "https://placehold.co/600x200?text=Events+Chart" "https://placehold.co/600x200?text=Errors+Chart"
-        "runtime-errors" -> do
-          chartUrl <- Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl nilPid
-            def{Widget.wType = Widget.WTTimeseries, Widget.query = Just "project_id == \"00000000-0000-0000-0000-000000000000\" and level == \"ERROR\" | summarize count(*) by bin_auto(timestamp)", Widget.theme = Just "roma"}
-            (Just "24H") Nothing Nothing
-          pure $ ET.sampleRuntimeErrors (if T.null chartUrl then Nothing else Just chartUrl)
-        "anomaly-endpoint" -> pure ET.sampleAnomalyEndpoint
-        "issue-assigned" -> pure ET.sampleIssueAssigned
-        _ -> pure ("Unknown", p_ "Template not found")
+    "project-invite" -> pure ET.sampleProjectInvite
+    "project-created" -> pure ET.sampleProjectCreated
+    "project-deleted" -> pure ET.sampleProjectDeleted
+    "weekly-report" -> pure $ ET.sampleWeeklyReport "https://placehold.co/600x200?text=Events+Chart" "https://placehold.co/600x200?text=Errors+Chart"
+    "runtime-errors" -> do
+      chartUrl <-
+        Widget.widgetPngUrl
+          ctx.env.apiKeyEncryptionSecretKey
+          ctx.env.hostUrl
+          nilPid
+          def{Widget.wType = Widget.WTTimeseries, Widget.query = Just "project_id == \"00000000-0000-0000-0000-000000000000\" and level == \"ERROR\" | summarize count(*) by bin_auto(timestamp)", Widget.theme = Just "roma"}
+          (Just "24H")
+          Nothing
+          Nothing
+      pure $ ET.sampleRuntimeErrors (if T.null chartUrl then Nothing else Just chartUrl)
+    "anomaly-endpoint" -> pure ET.sampleAnomalyEndpoint
+    "issue-assigned" -> pure ET.sampleIssueAssigned
+    _ -> pure ("Unknown", p_ "Template not found")
   pure $ ET.emailWrapper subject content
 
 
