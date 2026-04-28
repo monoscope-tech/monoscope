@@ -94,7 +94,7 @@ data TraceTreeEntry = TraceTreeEntry
 
 
 -- Internal type for span info extraction
-data SpanInfo = SpanInfo {spanId :: Text, parentId :: Maybe Text, traceIdVal :: Text, startNs :: Int64, dur :: Int64, timestamp :: Maybe Text, isQueryResult :: Bool}
+data SpanInfo = SpanInfo {spanId :: Text, parentId :: Maybe Text, traceIdVal :: Text, startNs :: Int64, dur :: Int64, timestamp :: Maybe Text, isQueryResult :: Bool, rowIdx :: Int}
 
 
 -- | Build trace tree from flat rows. Query-result spans (index < queryResultCount)
@@ -110,7 +110,7 @@ data SpanInfo = SpanInfo {spanId :: Text, parentId :: Maybe Text, traceIdVal :: 
 -- >>> let row1 = V.fromList [AE.String "s1", AE.String "t1", AE.Null, AE.Number 100, AE.Number 1000, AE.String "lb1", AE.String "span", AE.Null, AE.String "2025-01-01T00:00:00Z"]
 -- >>> let row2 = V.fromList [AE.String "s2", AE.String "t1", AE.String "lb1", AE.Number 200, AE.Number 500, AE.String "lb2", AE.String "span", AE.Null, AE.String "2025-01-01T00:00:01Z"]
 -- >>> let vecs = V.fromList [row1, row2]
--- >>> let result = buildTraceTree colIdx 1 vecs
+-- >>> let (_, result) = buildTraceTree colIdx 1 vecs
 -- >>> length result
 -- 1
 -- >>> fmap (.root) (viaNonEmpty head result)
@@ -122,7 +122,7 @@ data SpanInfo = SpanInfo {spanId :: Text, parentId :: Maybe Text, traceIdVal :: 
 -- >>> let qr = V.fromList [AE.String "s1", AE.String "t1", AE.Null, AE.Number 100, AE.Number 1000, AE.String "rt", AE.String "span", AE.Null, AE.String "2025-01-01T00:00:00Z"]
 -- >>> let ch = V.fromList [AE.String "s2", AE.String "t1", AE.String "rt", AE.Number 200, AE.Number 500, AE.String "ch1", AE.String "span", AE.Null, AE.String "2025-01-01T00:00:01Z"]
 -- >>> let orph = V.fromList [AE.String "s3", AE.String "t1", AE.String "missing", AE.Number 300, AE.Number 100, AE.String "orp", AE.String "span", AE.Null, AE.String "2025-01-01T00:00:02Z"]
--- >>> let r2 = buildTraceTree colIdx2 1 (V.fromList [qr, ch, orph])
+-- >>> let (_, r2) = buildTraceTree colIdx2 1 (V.fromList [qr, ch, orph])
 -- >>> length r2
 -- 1
 -- >>> fmap (.children) (viaNonEmpty head r2)
@@ -133,7 +133,7 @@ data SpanInfo = SpanInfo {spanId :: Text, parentId :: Maybe Text, traceIdVal :: 
 -- >>> let colIdx = HM.fromList [("id",0),("trace_id",1),("parent_id",2),("start_time_ns",3),("duration",4),("latency_breakdown",5),("kind",6),("errors",7),("timestamp",8)]
 -- >>> let mkSpan lb par ns = V.fromList [AE.String lb, AE.String "t1", maybe AE.Null AE.String par, AE.Number ns, AE.Number 100, AE.String lb, AE.String "span", AE.Null, AE.String "2025-01-01T00:00:00Z"]
 -- >>> let rows = V.fromList [mkSpan "L0" Nothing 100, mkSpan "L1" (Just "L0") 200, mkSpan "L2" (Just "L1") 300, mkSpan "L3" (Just "L2") 400, mkSpan "L4" (Just "L3") 500, mkSpan "L5" (Just "L4") 600, mkSpan "L6" (Just "L5") 700]
--- >>> let r = buildTraceTree colIdx 1 rows
+-- >>> let (_, r) = buildTraceTree colIdx 1 rows
 -- >>> length r
 -- 1
 -- >>> Map.size . (.children) <$> viaNonEmpty head r
@@ -147,15 +147,27 @@ data SpanInfo = SpanInfo {spanId :: Text, parentId :: Maybe Text, traceIdVal :: 
 -- >>> let rootSpan = V.fromList [AE.String "s1", AE.String "t1", AE.Null, AE.Number 100, AE.Number 1000, AE.String "root-span", AE.String "span", AE.Null, AE.String "2025-01-01T00:00:00Z"]
 -- >>> let childSpan = V.fromList [AE.String "s2", AE.String "t1", AE.String "root-span", AE.Number 200, AE.Number 500, AE.String "child-span", AE.String "span", AE.Null, AE.String "2025-01-01T00:00:01Z"]
 -- >>> let logEntry = V.fromList [AE.String "log1", AE.String "t1", AE.String "child-span", AE.Number 250, AE.Number 0, AE.String "child-span", AE.String "log", AE.Null, AE.String "2025-01-01T00:00:02Z"]
--- >>> let r = buildTraceTree colIdx 1 (V.fromList [rootSpan, childSpan, logEntry])
+-- >>> let (_, r) = buildTraceTree colIdx 1 (V.fromList [rootSpan, childSpan, logEntry])
 -- >>> length r
 -- 1
 -- >>> Map.lookup "root-span" . (.children) =<< viaNonEmpty head r
 -- Just ["child-span"]
 -- >>> Map.lookup "child-span" . (.children) =<< viaNonEmpty head r
 -- Just ["log1"]
-buildTraceTree :: HM.HashMap Text Int -> Int -> V.Vector (V.Vector AE.Value) -> [TraceTreeEntry]
-buildTraceTree colIdxMap queryResultCount rows = sortWith (Down . (.startTime)) entries
+--
+-- Clock skew: child raw start (50) is before parent (100). Adjusted child start
+-- shifts to 100 and the trace start window matches the parent's start:
+--
+-- >>> let colIdxS = HM.fromList [("id",0),("trace_id",1),("parent_id",2),("start_time_ns",3),("duration",4),("latency_breakdown",5),("kind",6),("errors",7),("timestamp",8)]
+-- >>> let parent = V.fromList [AE.String "p", AE.String "t1", AE.Null, AE.Number 100, AE.Number 1000, AE.String "p", AE.String "span", AE.Null, AE.String "2025-01-01T00:00:00Z"]
+-- >>> let skewed = V.fromList [AE.String "c", AE.String "t1", AE.String "p", AE.Number 50, AE.Number 200, AE.String "c", AE.String "span", AE.Null, AE.String "2025-01-01T00:00:01Z"]
+-- >>> let (adj, rs) = buildTraceTree colIdxS 1 (V.fromList [parent, skewed])
+-- >>> fmap (.startTime) (viaNonEmpty head rs)
+-- Just 100
+-- >>> (adj V.! 1) V.!? 3
+-- Just (Number 100.0)
+buildTraceTree :: HM.HashMap Text Int -> Int -> V.Vector (V.Vector AE.Value) -> (V.Vector (V.Vector AE.Value), [TraceTreeEntry])
+buildTraceTree colIdxMap queryResultCount rows = (adjustedRows, sortWith (Down . (.startTime)) entries)
   where
     lookupIdx = flip HM.lookup colIdxMap
     valText v = (v V.!?) >=> \case AE.String t | not (T.null t) -> Just t; _ -> Nothing
@@ -172,16 +184,35 @@ buildTraceTree colIdxMap queryResultCount rows = sortWith (Down . (.startTime)) 
           sns = fromMaybe 0 $ lookupIdx "start_time_ns" >>= valInt64 row
           d = if isLog then 0 else fromMaybe 0 (lookupIdx "duration" >>= valInt64 row)
           ts = lookupIdx "timestamp" >>= valText row
-       in SpanInfo sid pid tid sns d ts (idx < queryResultCount)
+       in SpanInfo sid pid tid sns d ts (idx < queryResultCount) idx
 
     spanInfos = V.imap mkSpanInfo rows
 
     grouped :: Map.Map Text [SpanInfo]
     grouped = Map.fromListWith (<>) [(si.traceIdVal, [si]) | si <- V.toList spanInfos]
 
-    entries = concatMap buildTraceEntries (Map.elems grouped)
+    -- Per-trace results: (entry, [(rowIdx, adjStart, adjDur)])
+    traceResults = concatMap buildTraceEntries (Map.elems grouped)
+    entries = map fst traceResults
+    adjustments = concatMap snd traceResults
 
-    buildTraceEntries :: [SpanInfo] -> [TraceTreeEntry]
+    -- Apply adjustments to row vectors at start_time_ns / duration columns.
+    stIdxM = HM.lookup "start_time_ns" colIdxMap
+    durIdxM = HM.lookup "duration" colIdxMap
+    adjMap :: Map.Map Int (Int64, Int64)
+    adjMap = Map.fromList [(i, (s, d)) | (i, s, d) <- adjustments]
+    adjustedRows = V.imap applyAdj rows
+      where
+        applyAdj i row = case Map.lookup i adjMap of
+          Nothing -> row
+          Just (s, d) ->
+            let upd = catMaybes
+                  [ (\j -> (j, AE.Number (fromIntegral s))) <$> stIdxM
+                  , (\j -> (j, AE.Number (fromIntegral d))) <$> durIdxM
+                  ]
+             in if null upd then row else row V.// upd
+
+    buildTraceEntries :: [SpanInfo] -> [(TraceTreeEntry, [(Int, Int64, Int64)])]
     buildTraceEntries spans =
       let spanMap = Map.fromList $ map (\s -> (s.spanId, s)) spans
           childrenMap :: Map.Map Text [Text]
@@ -193,20 +224,35 @@ buildTraceTree colIdxMap queryResultCount rows = sortWith (Down . (.startTime)) 
           tid = maybe "" (.traceIdVal) (viaNonEmpty head spans)
        in map (buildEntry tid sortedChildrenMap spanMap traceStartTime) roots
 
-    buildEntry :: Text -> Map.Map Text [Text] -> Map.Map Text SpanInfo -> Maybe Text -> SpanInfo -> TraceTreeEntry
+    -- Walk subtree applying clock-skew correction: if a child starts before its
+    -- parent's adjusted start, shift it forward and clamp its duration to fit
+    -- within the parent's window. Mirrors Pages.Telemetry.buildSpanTree.
+    buildEntry :: Text -> Map.Map Text [Text] -> Map.Map Text SpanInfo -> Maybe Text -> SpanInfo -> (TraceTreeEntry, [(Int, Int64, Int64)])
     buildEntry tid fullChildrenMap spanMap tst root' =
-      let go [] minS maxE acc = (minS, maxE, acc)
-          go (x : xs) minS maxE acc = case Map.lookup x spanMap of
-            Nothing -> go xs minS maxE acc
-            Just si ->
-              let ce = si.startNs + si.dur
-                  kids = fromMaybe [] (Map.lookup x fullChildrenMap)
-                  newAcc = if null kids then acc else Map.insert x kids acc
-               in go (kids ++ xs) (min minS si.startNs) (max maxE ce) newAcc
+      let rootEnd = root'.startNs + root'.dur
           rootKids = fromMaybe [] (Map.lookup root'.spanId fullChildrenMap)
           initAcc = Map.fromList [(root'.spanId, rootKids) | not (null rootKids)]
-          (minStart, maxEnd, subtreeChildren) = go rootKids root'.startNs (root'.startNs + root'.dur) initAcc
-       in TraceTreeEntry tid minStart (maxEnd - minStart) tst root'.spanId subtreeChildren
+          rootAdj = (root'.rowIdx, root'.startNs, root'.dur)
+          go _ _ [] st = st
+          go pStart pEnd (x : xs) (minS, maxE, adjs, treeAcc) = case Map.lookup x spanMap of
+            Nothing -> go pStart pEnd xs (minS, maxE, adjs, treeAcc)
+            Just si ->
+              let cStart = si.startNs
+                  delta = pStart - cStart
+                  (adjStart, adjDur) =
+                    if delta > 0
+                      then (cStart + delta, max 0 (min si.dur (pEnd - cStart - delta)))
+                      else (cStart, si.dur)
+                  adjEnd = adjStart + adjDur
+                  kids = fromMaybe [] (Map.lookup x fullChildrenMap)
+                  treeAcc' = if null kids then treeAcc else Map.insert x kids treeAcc
+                  st' = (min minS adjStart, max maxE adjEnd, (si.rowIdx, adjStart, adjDur) : adjs, treeAcc')
+                  -- recurse depth-first into this subtree, then continue with siblings
+                  st'' = go adjStart adjEnd kids st'
+               in go pStart pEnd xs st''
+          (minStart, maxEnd, adjustments', subtreeChildren) =
+            go root'.startNs rootEnd rootKids (root'.startNs, rootEnd, [rootAdj], initAcc)
+       in (TraceTreeEntry tid minStart (maxEnd - minStart) tst root'.spanId subtreeChildren, adjustments')
 
 
 -- $setup
@@ -515,11 +561,11 @@ buildLogResult pid now sinceM fromM toM summaryCols (requestVecs, colNames, resu
         let allTraceIds = V.filter (not . T.null) $ V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "trace_id") requestVecs
             traceIds = V.fromList $ take 50 $ nubOrd $ V.toList allTraceIds
         LogQueries.selectChildSpansAndLogs pid summaryCols traceIds (fromDD, toDD) alreadyLoadedIds
-  let logsData = requestVecs <> V.fromList childSpansList
+  let rawLogsData = requestVecs <> V.fromList childSpansList
       cols = nubOrd $ curateCols summaryCols colNames
-      colors = getServiceColors $ V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") logsData
+      colors = getServiceColors $ V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") rawLogsData
       queryResultCount = V.length requestVecs
-      traces = buildTraceTree colIdxMap queryResultCount logsData
+      (logsData, traces) = buildTraceTree colIdxMap queryResultCount rawLogsData
   pure
     LogResult
       { logsData
@@ -1407,9 +1453,9 @@ apiLogExpandH pid kindM keyM skipM queryM sinceM fromM toM = do
         let allTraceIds = V.filter (not . T.null) $ V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "trace_id") shown
             traceIds = V.fromList $ take 100 $ nubOrd $ V.toList allTraceIds
         LogQueries.selectChildSpansAndLogs pid [] traceIds (fromD, toD) alreadyLoadedIds
-  let logsData = shown <> V.fromList childSpansList
+  let rawLogsData = shown <> V.fromList childSpansList
       queryResultCount = V.length shown
-      traces = buildTraceTree colIdxMap queryResultCount logsData
+      (logsData, traces) = buildTraceTree colIdxMap queryResultCount rawLogsData
       displayCols = curateCols [] cols
   addRespHeaders
     $ AE.object
