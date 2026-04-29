@@ -530,8 +530,9 @@ errorCard errorsUrl chartUrlM e =
         $ a_ [href_ (errorsUrl <> "by_hash/" <> e.hash), style_ "color: #377cfb; text-decoration: none;"]
         $ toHtml @Text ("View full trace (" <> show (length traceLines) <> " lines) \8594")
     whenJust chartUrlM $ \url ->
-      tr_ $ td_ [style_ "padding: 8px 0 16px 0;"] $
-        img_ [src_ url, alt_ "Error trend", width_ "560", style_ "max-width: 100%; height: auto; display: block; border-radius: 4px;"]
+      tr_
+        $ td_ [style_ "padding: 8px 0 16px 0;"]
+        $ img_ [src_ url, alt_ "Error trend", width_ "560", style_ "max-width: 100%; height: auto; display: block; border-radius: 4px;"]
   where
     hasDistinctRootCause = e.rootErrorType /= e.errorType || e.rootErrorMessage /= e.message
     takeEnd n xs = drop (length xs - n) xs
