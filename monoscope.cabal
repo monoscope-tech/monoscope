@@ -108,6 +108,11 @@ extra-source-files:
     static/migrations/0080_restore_slack_webhook_url.sql
     static/migrations/0081_everyone_notify_emails_from_members.sql
     static/migrations/0082_everyone_notify_emails_lowercase.sql
+    static/migrations/0083_index_notification_digest_queue_issue_id.sql
+    static/migrations/0084_usage_report_submissions.sql
+    static/migrations/0085_issues_last_notified_at.sql
+    static/migrations/0086_daily_usage_window_timestamps.sql
+    static/migrations/0087_apis_hosts.sql
 
 source-repository head
   type: git
@@ -651,6 +656,7 @@ test-suite integration-tests
     , ki-effectful
     , lens
     , lens-aeson
+    , lucid
     , memory
     , monad-time-effectful
     , monoscope
