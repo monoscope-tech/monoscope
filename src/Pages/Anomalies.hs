@@ -637,7 +637,8 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
                 else div_ [class_ "surface-raised rounded-2xl px-4 py-6 flex flex-col items-center gap-2 text-center"] do
                   faSprite_ "rocket" "regular" "w-5 h-5 text-fillBrand-strong"
                   span_ [class_ "text-sm text-textStrong"] "New endpoint discovered"
-                  span_ [class_ "text-xs text-textWeak max-w-sm"]
+                  span_
+                    [class_ "text-xs text-textWeak max-w-sm"]
                     "This endpoint started receiving traffic. Inspect the originating request in Investigation below to see headers, body, and call site."
             activityPanel_ pid issueId "lg:w-80 shrink-0" spanRecs
       div_ [class_ "surface-raised rounded-2xl overflow-hidden", id_ "error-details-container", makeAttribute "tabindex" "-1", onkeydown_ "if(event.key==='Escape'&&this.classList.contains('investigation-fullscreen'))document.getElementById('investigation-fullscreen-btn').click()"] do

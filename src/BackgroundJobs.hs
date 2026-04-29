@@ -2499,36 +2499,36 @@ enhanceIssuesWithLLM pid issueIds = do
           Just issue
             | Issues.isNewEndpointOnly issue -> Log.logTrace "Skipping LLM enhancement for new endpoint issue" issueId
             | otherwise -> do
-            -- Call LLM to enhance the issue based on type
-            enhancementResult <- Enhancement.enhanceIssueWithLLM ctx issue
-            case enhancementResult of
-              Left err -> Log.logAttention "Failed to enhance issue with LLM" (issueId, err)
-              Right enhancement -> do
-                -- Update the issue with enhanced data
-                _ <-
-                  Issues.updateIssueEnhancement
-                    enhancement.issueId
-                    enhancement.enhancedTitle
-                    enhancement.recommendedAction
-                    enhancement.migrationComplexity
+                -- Call LLM to enhance the issue based on type
+                enhancementResult <- Enhancement.enhanceIssueWithLLM ctx issue
+                case enhancementResult of
+                  Left err -> Log.logAttention "Failed to enhance issue with LLM" (issueId, err)
+                  Right enhancement -> do
+                    -- Update the issue with enhanced data
+                    _ <-
+                      Issues.updateIssueEnhancement
+                        enhancement.issueId
+                        enhancement.enhancedTitle
+                        enhancement.recommendedAction
+                        enhancement.migrationComplexity
 
-                -- Also classify and update criticality
-                criticalityResult <- Enhancement.classifyIssueCriticality ctx issue
-                case criticalityResult of
-                  Left err -> Log.logAttention "Failed to classify issue criticality" (issueId, err)
-                  Right (isCritical, breakingCount, incrementalCount) -> do
-                    _ <- Enhancement.updateIssueClassification issue.id isCritical breakingCount incrementalCount
-                    Log.logInfo "Successfully enhanced and classified issue" (issueId, isCritical, breakingCount)
+                    -- Also classify and update criticality
+                    criticalityResult <- Enhancement.classifyIssueCriticality ctx issue
+                    case criticalityResult of
+                      Left err -> Log.logAttention "Failed to classify issue criticality" (issueId, err)
+                      Right (isCritical, breakingCount, incrementalCount) -> do
+                        _ <- Enhancement.updateIssueClassification issue.id isCritical breakingCount incrementalCount
+                        Log.logInfo "Successfully enhanced and classified issue" (issueId, isCritical, breakingCount)
 
-                -- Analyze error patterns for root cause and category
-                analysisResult <- Enhancement.analyzeErrorPattern ctx issue
-                case analysisResult of
-                  Left _ -> pass -- not a runtime exception or LLM failure
-                  Right (rootCause, category) -> do
-                    epM <- ErrorPatterns.getErrorPatternByHash pid issue.targetHash
-                    for_ epM \ep -> void $ ErrorPatterns.updateErrorPatternAnalysis ep.id rootCause category
+                    -- Analyze error patterns for root cause and category
+                    analysisResult <- Enhancement.analyzeErrorPattern ctx issue
+                    case analysisResult of
+                      Left _ -> pass -- not a runtime exception or LLM failure
+                      Right (rootCause, category) -> do
+                        epM <- ErrorPatterns.getErrorPatternByHash pid issue.targetHash
+                        for_ epM \ep -> void $ ErrorPatterns.updateErrorPatternAnalysis ep.id rootCause category
 
-                Log.logInfo "Successfully enhanced issue" issueId
+                    Log.logInfo "Successfully enhanced issue" issueId
 
 
 patternEmbeddingAndMerge :: Projects.ProjectId -> ATBackgroundCtx ()

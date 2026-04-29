@@ -129,11 +129,10 @@ data Config = Config
   , showHeader :: Bool
   , elemID :: Text
   , containerId :: Maybe Text -- Outer container id for HTMX targeting
-  , -- | (event name, GET url): container re-fetches itself when the named HX-Trigger event
-    -- fires anywhere on the page. /Requires/ 'containerId' to be set; without it the
-    -- table has no element to attach the listener to and refreshOnEvent is a no-op.
-    refreshOnEvent :: Maybe (Text, Text)
-
+  , refreshOnEvent :: Maybe (Text, Text)
+  -- ^ (event name, GET url): container re-fetches itself when the named HX-Trigger event
+  -- fires anywhere on the page. /Requires/ 'containerId' to be set; without it the
+  -- table has no element to attach the listener to and refreshOnEvent is a no-op.
   , renderAsTable :: Bool -- True for table mode, False for list mode
   , addPadding :: Bool -- When True, wraps table in div with px-4 pt-4 pb-2 padding
   , bulkActionsInHeader :: Maybe Int -- Column index (0-based) to place bulk actions in header; Nothing uses toolbar
