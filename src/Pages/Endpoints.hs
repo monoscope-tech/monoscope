@@ -61,7 +61,7 @@ apiCatalogH pid sortM timeFilter requestTypeM periodM skipM = do
           }
   let catalogTable =
         Table
-          { config = def{elemID = "apiCatalogForm", containerId = Just "apiCatalogContainer", addPadding = True, renderAsTable = True, bulkActionsInHeader = Just 0}
+          { config = def{elemID = "apiCatalogForm", containerId = Just "apiCatalogContainer", addPadding = True, renderAsTable = True, bulkActionsInHeader = Just 0, refreshOnEvent = Just ("apiCatalogChanged", baseUrl)}
           , columns = catalogColumns pid requestType baseUrl period
           , rows = hostsVM
           , features =
@@ -224,7 +224,7 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM periodM hxR
           }
   let endpointsTable =
         Table
-          { config = def{elemID = "endpointsForm", containerId = Just "endpointsListContainer", addPadding = True, renderAsTable = True, bulkActionsInHeader = Just 0}
+          { config = def{elemID = "endpointsForm", containerId = Just "endpointsListContainer", addPadding = True, renderAsTable = True, bulkActionsInHeader = Just 0, refreshOnEvent = Just ("endpointsListChanged", baseUrl)}
           , columns = endpointColumns pid baseUrl period requestType
           , rows = endpReqVM
           , features =

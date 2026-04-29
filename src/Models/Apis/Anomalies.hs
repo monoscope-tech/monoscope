@@ -205,27 +205,26 @@ where
       |]
 
 
+-- | Acknowledge issues by id and cascade to anomalies referenced via @issue_data.anomaly_hashes@.
+-- Returned target_hashes are passed to 'acknowlegeCascade' by the caller for an additional
+-- LIKE-prefix sweep on the legacy hash space.
 acknowledgeAnomalies :: (DB es, Time :> es) => Projects.UserId -> V.Vector Text -> Eff es [Text]
-acknowledgeAnomalies uid aids
-  | V.null aids = pure []
+acknowledgeAnomalies uid issueIds
+  | V.null issueIds = pure []
   | otherwise = do
       now <- Time.currentTime
-      -- Get anomaly hashes from the issues being acknowledged
-      anomalyHashesResult :: [V.Vector Text] <-
+      targetHashes :: [Text] <-
         Hasql.interp
-          [HI.sql| SELECT anomaly_hashes FROM apis.issues WHERE id=ANY(#{aids}::uuid[]) |]
-      let allAnomalyHashes = V.concat anomalyHashesResult
-      -- Update issues
-      (_ :: [Text]) <-
-        Hasql.interp
-          [HI.sql| UPDATE apis.issues SET acknowledged_by=#{uid}, acknowledged_at=#{now} WHERE id=ANY(#{aids}::uuid[]) RETURNING target_hash |]
-      -- Also update anomalies referenced by the issues' anomaly_hashes arrays
-      unless (V.null allAnomalyHashes)
-        $ Hasql.interpExecute_
-          [HI.sql| UPDATE apis.anomalies SET acknowledged_by=#{uid}, acknowledged_at=#{now} WHERE target_hash=ANY(#{allAnomalyHashes}) |]
-      -- Update anomalies - both directly referenced and those tracked by the issues
-      Hasql.interp
-        [HI.sql| UPDATE apis.anomalies SET acknowledged_by=#{uid}, acknowledged_at=#{now} WHERE id=ANY(#{aids}::uuid[]) RETURNING target_hash |]
+          [HI.sql| UPDATE apis.issues SET acknowledged_by=#{uid}, acknowledged_at=#{now}
+                   WHERE id=ANY(#{issueIds}::uuid[]) RETURNING target_hash |]
+      Hasql.interpExecute_
+        [HI.sql| WITH related AS (
+                   SELECT jsonb_array_elements_text(COALESCE(issue_data->'anomaly_hashes','[]'::jsonb)) AS h
+                   FROM apis.issues WHERE id=ANY(#{issueIds}::uuid[])
+                 )
+                 UPDATE apis.anomalies a SET acknowledged_by=#{uid}, acknowledged_at=#{now}
+                 WHERE a.target_hash IN (SELECT h FROM related) |]
+      pure targetHashes
 
 
 acknowlegeCascade :: (DB es, Time :> es) => Projects.UserId -> V.Vector Text -> Eff es Int64
@@ -238,14 +237,23 @@ acknowlegeCascade uid targets
       Hasql.interpExecute [HI.sql| UPDATE apis.anomalies SET acknowledged_by = #{uid}, acknowledged_at = #{now} WHERE target_hash LIKE ANY(#{hashes}) |]
 
 
--- | Archive both issues and anomalies by id in one shot — used by the bulk API.
+-- | Archive issues by id and cascade-archive their underlying anomalies via
+-- the @issue_data.anomaly_hashes@ JSONB field. Returns the row count from the
+-- issues update (the user-visible action target).
 archiveAnomaliesAndIssues :: (DB es, Time :> es) => V.Vector Text -> Eff es Int64
-archiveAnomaliesAndIssues aids
-  | V.null aids = pure 0
+archiveAnomaliesAndIssues issueIds
+  | V.null issueIds = pure 0
   | otherwise = do
       now <- Time.currentTime
-      _ <- Hasql.interpExecute [HI.sql| UPDATE apis.issues    SET archived_at=#{now} WHERE id=ANY(#{aids}::uuid[]) |]
-      Hasql.interpExecute [HI.sql| UPDATE apis.anomalies SET archived_at=#{now} WHERE id=ANY(#{aids}::uuid[]) |]
+      n <- Hasql.interpExecute [HI.sql| UPDATE apis.issues SET archived_at=#{now} WHERE id=ANY(#{issueIds}::uuid[]) |]
+      Hasql.interpExecute_
+        [HI.sql| WITH related AS (
+                   SELECT jsonb_array_elements_text(COALESCE(issue_data->'anomaly_hashes','[]'::jsonb)) AS h
+                   FROM apis.issues WHERE id=ANY(#{issueIds}::uuid[])
+                 )
+                 UPDATE apis.anomalies a SET archived_at=#{now}
+                 WHERE a.target_hash IN (SELECT h FROM related) |]
+      pure n
 
 
 -------------------------------------------------------------------------------------------

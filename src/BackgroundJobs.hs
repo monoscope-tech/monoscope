@@ -2496,7 +2496,9 @@ enhanceIssuesWithLLM pid issueIds = do
         issueM <- Issues.selectIssueById issueId
         case issueM of
           Nothing -> Log.logTrace "Issue not found for enhancement (likely cleaned up by endpoint canonicalization)" issueId
-          Just issue -> do
+          Just issue
+            | Issues.isNewEndpointOnly issue -> Log.logTrace "Skipping LLM enhancement for new endpoint issue" issueId
+            | otherwise -> do
             -- Call LLM to enhance the issue based on type
             enhancementResult <- Enhancement.enhanceIssueWithLLM ctx issue
             case enhancementResult of

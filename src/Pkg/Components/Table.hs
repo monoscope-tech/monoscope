@@ -129,6 +129,11 @@ data Config = Config
   , showHeader :: Bool
   , elemID :: Text
   , containerId :: Maybe Text -- Outer container id for HTMX targeting
+  , -- | (event name, GET url): container re-fetches itself when the named HX-Trigger event
+    -- fires anywhere on the page. /Requires/ 'containerId' to be set; without it the
+    -- table has no element to attach the listener to and refreshOnEvent is a no-op.
+    refreshOnEvent :: Maybe (Text, Text)
+
   , renderAsTable :: Bool -- True for table mode, False for list mode
   , addPadding :: Bool -- When True, wraps table in div with px-4 pt-4 pb-2 padding
   , bulkActionsInHeader :: Maybe Int -- Column index (0-based) to place bulk actions in header; Nothing uses toolbar
@@ -265,12 +270,13 @@ instance Default Config where
   def =
     Config
       { tableClasses = "table table-sm w-full relative"
-      , thClasses = "text-left bg-fillWeaker sticky top-0"
+      , thClasses = "text-left bg-fillWeaker sticky top-0 overflow-hidden"
       , tdClasses = "px-4 py-4"
       , containerClasses = "w-full mx-auto space-y-4"
       , showHeader = True
       , elemID = "tableContainer"
       , containerId = Nothing
+      , refreshOnEvent = Nothing
       , renderAsTable = False
       , addPadding = False
       , bulkActionsInHeader = Nothing
@@ -364,8 +370,17 @@ renderTable tbl =
         whenJust tbl.features.pagination renderPaginationFooter
         when (isJust tbl.features.treeConfig) treeScript
       paddedContent = if tbl.config.addPadding then div_ [class_ "max-md:px-2 px-4 pt-4 pb-2"] tableContent else tableContent
+      refreshAttrs cid = case tbl.config.refreshOnEvent of
+        Just (evt, url) ->
+          [ hxGet_ url
+          , hxTrigger_ $ evt <> " from:body"
+          , hxTarget_ "this"
+          , hxSwap_ "outerHTML"
+          , term "hx-select" $ "#" <> cid
+          ]
+        Nothing -> []
    in case tbl.config.containerId of
-        Just cid -> div_ [class_ "w-full", id_ cid] paddedContent
+        Just cid -> div_ ([class_ "w-full", id_ cid] <> refreshAttrs cid) paddedContent
         Nothing -> paddedContent
 
 
@@ -404,7 +419,7 @@ renderRows tbl =
                     (Just field, Just cfg) | "+" <> field == cfg.currentSort -> Just Asc
                     _ -> Nothing
               th_ (c.attrs <> baseAttrs <> sortAttrs) do
-                span_ [class_ "flex items-center gap-2"] do
+                span_ [class_ "flex items-center gap-2 min-w-0"] do
                   span_ [class_ $ bool "max-md:hidden" "" (idx > 0)] $ toHtml c.name
                   whenJust c.headerExtra id
                   when isSorted $ case sortOrder of

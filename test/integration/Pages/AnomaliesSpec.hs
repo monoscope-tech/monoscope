@@ -14,8 +14,12 @@ import Data.HashMap.Strict qualified as HashMap
 import Data.Int (Int64)
 import Data.Text qualified as T
 import Data.Time (UTCTime, ZonedTime, addUTCTime, defaultTimeLocale, formatTime, getCurrentTime)
+import Data.UUID qualified as DataUUID
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
+import Lucid (renderText, toHtml)
+import Data.Text.Lazy qualified as TL
+import Pkg.DeriveUtils (UUIDId (..))
 import Data.Pool (withResource)
 import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple qualified as PGS
@@ -233,9 +237,116 @@ spec = aroundAll withTestResources do
           length tbl.rows `shouldSatisfy` (> 0)
         _ -> error "Unexpected response"
 
+    -- Regression: posting via the bulk handler used the wrong form field name
+    -- (`anomalyId` instead of `itemId`) so selected ids were silently dropped and
+    -- the handler reported "No items selected". Subsequent attempt to read
+    -- `anomaly_hashes` as a column returned 500. This test goes through the real
+    -- handler so both bugs are caught together.
+    it "bulk acknowledge cascades from issues to underlying anomalies" \tr -> do
+      issueId <- pickApiChangeIssue tr
+      let issueIdText = DataUUID.toText issueId.unUUIDId
+
+      -- Reset state — earlier tests in this describe block may have acknowledged it.
+      withResource tr.trPool \conn -> do
+        void $ PGS.execute conn [sql| UPDATE apis.issues    SET acknowledged_at=NULL, acknowledged_by=NULL WHERE id=? |] (Only issueId)
+        void $ PGS.execute conn [sql| UPDATE apis.anomalies SET acknowledged_at=NULL, acknowledged_by=NULL WHERE project_id=? |] (Only testPid)
+
+      _ <- testServant tr $ AnomalyList.anomalyBulkActionsPostH testPid "acknowledge" AnomalyList.AnomalyBulk{itemId = [issueIdText]}
+
+      -- Issue must be acknowledged.
+      ackedIssues <- withResource tr.trPool \conn -> PGS.query conn
+        [sql| SELECT id FROM apis.issues WHERE id=? AND acknowledged_at IS NOT NULL |] (Only issueId) :: IO [Only Issues.IssueId]
+      length ackedIssues `shouldBe` 1
+
+      -- Cascade: every anomaly referenced via issue_data->'anomaly_hashes' must be acknowledged.
+      cascadedCount <- withResource tr.trPool \conn -> do
+        [Only n] <- PGS.query conn
+          [sql| WITH related AS (
+                  SELECT jsonb_array_elements_text(COALESCE(issue_data->'anomaly_hashes','[]'::jsonb)) AS h
+                  FROM apis.issues WHERE id=?
+                )
+                SELECT COUNT(*)::INT FROM apis.anomalies a
+                WHERE a.project_id=? AND a.target_hash IN (SELECT h FROM related)
+                  AND a.acknowledged_at IS NULL |]
+          (issueId, testPid) :: IO [Only Int]
+        pure n
+      cascadedCount `shouldBe` 0
+
+    -- Regression: archive path posted to apis.anomalies by issue id (which is
+    -- never an anomaly id), so the cascade silently no-op'd and acknowledged_at
+    -- never propagated. Now archives apis.issues by id and cascades through
+    -- issue_data.anomaly_hashes; this test asserts both halves fire.
+    it "bulk archive cascades to anomalies referenced by issue_data.anomaly_hashes" \tr -> do
+      issueId <- pickApiChangeIssue tr
+      let issueIdText = DataUUID.toText issueId.unUUIDId
+
+      withResource tr.trPool \conn -> do
+        void $ PGS.execute conn [sql| UPDATE apis.issues    SET archived_at=NULL WHERE id=? |] (Only issueId)
+        void $ PGS.execute conn [sql| UPDATE apis.anomalies SET archived_at=NULL WHERE project_id=? |] (Only testPid)
+
+      _ <- testServant tr $ AnomalyList.anomalyBulkActionsPostH testPid "archive" AnomalyList.AnomalyBulk{itemId = [issueIdText]}
+
+      archivedIssues <- withResource tr.trPool \conn -> PGS.query conn
+        [sql| SELECT id FROM apis.issues WHERE id=? AND archived_at IS NOT NULL |] (Only issueId) :: IO [Only Issues.IssueId]
+      length archivedIssues `shouldBe` 1
+
+      pendingCascade <- withResource tr.trPool \conn -> do
+        [Only n] <- PGS.query conn
+          [sql| WITH related AS (
+                  SELECT jsonb_array_elements_text(COALESCE(issue_data->'anomaly_hashes','[]'::jsonb)) AS h
+                  FROM apis.issues WHERE id=?
+                )
+                SELECT COUNT(*)::INT FROM apis.anomalies a
+                WHERE a.project_id=? AND a.target_hash IN (SELECT h FROM related)
+                  AND a.archived_at IS NULL |]
+          (issueId, testPid) :: IO [Only Int]
+        pure n
+      pendingCascade `shouldBe` 0
+
+    -- Regression: the ApiChange detail page used to render an empty Investigation
+    -- panel because hashPrefix returned Nothing for ApiChange and there was no
+    -- query to find the originating trace. Now hashPrefix is "" and
+    -- getEndpointTraceId locates spans by (method, url_path); seed one and
+    -- assert the rendered page surfaces its trace id.
+    it "new-endpoint issue detail surfaces originating trace via getEndpointTraceId" \tr -> do
+      issueId <- pickApiChangeIssue tr
+      -- Un-archive so the detail handler renders normally
+      withResource tr.trPool \conn ->
+        void $ PGS.execute conn [sql| UPDATE apis.issues SET archived_at=NULL WHERE id=? |] (Only issueId)
+      traceIdText <- DataUUID.toText <$> UUID.nextRandom
+      spanIdText  <- DataUUID.toText <$> UUID.nextRandom
+      now <- getCurrentTime
+      withResource tr.trPool \conn -> void $ PGS.execute conn
+        [sql| INSERT INTO otel_logs_and_spans
+                (id, project_id, timestamp, start_time,
+                 attributes___http___request___method, attributes___url___path,
+                 context___trace_id, context___span_id,
+                 context, kind, status_code)
+              VALUES (gen_random_uuid(), ?, ?, ?, 'GET', '/', ?, ?,
+                      jsonb_build_object('trace_id', ?::text, 'span_id', ?::text),
+                      'SERVER', '200') |]
+        (testPid, now, now, traceIdText, spanIdText, traceIdText, spanIdText)
+
+      (_, pg) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid issueId Nothing Nothing
+      let html = TL.toStrict $ renderText $ toHtml pg
+      -- The trace id should be embedded somewhere in the rendered investigation panel.
+      html `shouldSatisfy` (traceIdText `T.isInfixOf`)
+
 
 isApiChangeSingleRow :: Issues.IssueType -> AnomalyList.IssueVM -> Bool
 isApiChangeSingleRow ty (AnomalyList.IssueVM _ _ _ _ c) = c.issueType == ty
+
+
+-- | Pull the first ApiChange issue id created by earlier tests. Fails the test
+-- with a useful message if the seed step (test 2) didn't run or left no issues.
+pickApiChangeIssue :: TestResources -> IO Issues.IssueId
+pickApiChangeIssue tr = do
+  rows <- withResource tr.trPool \conn -> PGS.query conn
+    [sql| SELECT id FROM apis.issues WHERE project_id=? AND issue_type='api_change' ORDER BY created_at LIMIT 1 |]
+    (Only testPid) :: IO [Only Issues.IssueId]
+  case rows of
+    Only iid : _ -> pure iid
+    [] -> error "pickApiChangeIssue: no ApiChange issue seeded — earlier tests in this spec must run first"
 
 
 -- Same endpoint as msg1 but with different request body shape, to test shape anomaly detection

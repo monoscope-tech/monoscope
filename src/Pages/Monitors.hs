@@ -487,6 +487,7 @@ alertBulkActionH pid action form = do
         "reactivate" -> "Active"
         "delete" -> "Active"
         _ -> "Active"
+  unless (null monitorIds) $ addTriggerEvent "monitorsListChanged" AE.Null
   unifiedMonitorsGetH pid (Just filterTab) Nothing
 
 
@@ -522,7 +523,7 @@ unifiedMonitorsGetH pid filterTM sinceM = do
   let currentURL = "/p/" <> pid.toText <> "/monitors?"
   let monitorsTable =
         Table
-          { config = def{elemID = "monitorsListForm", addPadding = True, renderAsTable = True, bulkActionsInHeader = Just 0}
+          { config = def{elemID = "monitorsListForm", containerId = Just "monitorsListContainer", addPadding = True, renderAsTable = True, bulkActionsInHeader = Just 0, refreshOnEvent = Just ("monitorsListChanged", currentURL <> "filter=" <> filterType)}
           , columns =
               [ col "Name" renderNameCol & withAttrs [class_ "min-w-0"]
               , col "Teams" (\i -> forM_ i.teamBadges \(_, handle) -> span_ [class_ "badge badge-sm badge-neutral mr-1"] $ toHtml handle) & withAttrs [class_ "w-48 max-md:hidden"]

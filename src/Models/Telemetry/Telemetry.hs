@@ -34,6 +34,7 @@ module Models.Telemetry.Telemetry (
   getDataPointsData,
   spanRecordByName,
   getTraceDetails,
+  getEndpointTraceId,
   getTotalMetricsCount,
   getMetricData,
   bulkInsertMetrics,
@@ -575,6 +576,40 @@ lookupOtelRecord mPid createdAt rdId = do
            FROM otel_logs_and_spans where timestamp BETWEEN #{tLo} AND #{tHi}|]
     <> pidFilter
     <> [HI.sql| and id=#{rdId} LIMIT 1|]
+
+
+-- | First/recent trace_id for a (project, method, url_path). Window kept tight (7d) since
+-- endpoint-anomaly issues are minutes-to-hours old; tie-broken by id for stable nav between
+-- "First" and "Recent" page loads. We UNION ALL two index-friendly subqueries (one per
+-- url-path source) instead of OR'ing them in a single WHERE, so each side can hit its own
+-- expression index and avoid a 7d seq scan on otel_logs_and_spans.
+getEndpointTraceId :: (Hasql :> es, IOE :> es) => Projects.ProjectId -> Text -> Text -> Bool -> UTCTime -> Eff es (Maybe Text)
+getEndpointTraceId pid method urlPath isFirst now =
+  Hasql.interpOne
+    $ [HI.sql| SELECT context___trace_id FROM ( |]
+    <> branch [HI.sql| attributes___url___path = #{urlPath} |]
+    <> [HI.sql| UNION ALL |]
+    <> branch [HI.sql| attributes->'http'->>'route' = #{urlPath} |]
+    <> [HI.sql| ) c |]
+    <> orderSql
+    <> [HI.sql| LIMIT 1 |]
+  where
+    pidTxt = pid.toText
+    windowStart = addUTCTime (-(7 * 24 * 3600)) now
+    orderSql =
+      if isFirst
+        then [HI.sql| ORDER BY start_time ASC, id ASC |]
+        else [HI.sql| ORDER BY start_time DESC, id DESC |]
+    branch pathPred =
+      [HI.sql| (SELECT context___trace_id, start_time, id FROM otel_logs_and_spans
+                WHERE project_id = #{pidTxt}
+                  AND timestamp BETWEEN #{windowStart} AND #{now}
+                  AND attributes___http___request___method = #{method}
+                  AND |]
+        <> pathPred
+        <> [HI.sql| AND context___trace_id IS NOT NULL |]
+        <> orderSql
+        <> [HI.sql| LIMIT 1) |]
 
 
 getSpanRecordsByTraceId :: DB es => Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Eff es [OtelLogsAndSpans]

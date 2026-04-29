@@ -41,6 +41,7 @@ import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
+import Data.List.NonEmpty qualified as NE
 import Data.Map qualified as Map
 import Data.Ord (clamp)
 import Data.Pool (withResource)
@@ -82,7 +83,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), navTabAttrs)
 import Pages.Charts.Charts qualified as Charts
-import Pages.Components (abbreviateUnit, colorChip_, compactTimeAgo, emptyState_, metadataChip_, periodToggle_, resizer_, sparkline_)
+import Pages.Components (colorChip_, compactTimeAgo, emptyState_, metadataChip_, periodToggle_, resizer_, sparkline_)
 import Pages.LogExplorer.Log (virtualTable)
 import Pages.Telemetry (tracePage)
 import Pkg.AI qualified as AI
@@ -95,14 +96,14 @@ import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import Servant (err400, errBody)
 import System.Config (AuthContext (..), EnvConfig (..))
-import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
+import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (LoadingSize (..), LoadingType (..), checkFreeTierStatus, escapedQueryPartial, faSprite_, formatOffset, formatUTC, formatWithCommas, htmxOverlayIndicator_, loadingIndicator_, lookupValueText, methodFillColor, renderMarkdown, toUriStr)
+import Utils (LoadingSize (..), LoadingType (..), checkFreeTierStatus, escapedQueryPartial, faSprite_, formatOffset, formatUTC, formatWithCommas, htmxOverlayIndicator_, loadingIndicator_, lookupValueText, renderMarkdown, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 
 
 newtype AnomalyBulkForm = AnomalyBulk
-  { anomalyId :: [Text]
+  { itemId :: [Text]
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromForm)
@@ -167,26 +168,26 @@ anomalyBulkActionsPostH :: Projects.ProjectId -> Text -> AnomalyBulkForm -> ATAu
 anomalyBulkActionsPostH pid action items = do
   (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
-  if null items.anomalyId
+  if null items.itemId
     then do
       addErrorToast "No items selected" Nothing
       addRespHeaders Bulk
     else do
+      let vIds = V.fromList items.itemId
       eventType <- case action of
         "acknowledge" -> do
-          v <- Anomalies.acknowledgeAnomalies sess.user.id (V.fromList items.anomalyId)
-          void $ Anomalies.acknowlegeCascade sess.user.id (V.fromList v)
+          ths <- Anomalies.acknowledgeAnomalies sess.user.id vIds
+          void $ Anomalies.acknowlegeCascade sess.user.id (V.fromList ths)
           pure Issues.IEAcknowledged
         "archive" -> do
-          now <- Time.currentTime
-          let vIds = V.fromList items.anomalyId
-          Hasql.interpExecute_ [HI.sql| update apis.anomalies set archived_at=#{now} where id=ANY(#{vIds}::uuid[]) |]
+          void $ Anomalies.archiveAnomaliesAndIssues vIds
           pure Issues.IEArchived
         _ -> throwError err400{errBody = "unhandled anomaly bulk action: " <> encodeUtf8 action}
-      let vAnomalyIds = V.fromList items.anomalyId
-      issueIds :: [Issues.IssueId] <- Hasql.interp [HI.sql| SELECT DISTINCT issue_id FROM apis.anomalies WHERE id=ANY(#{vAnomalyIds}::uuid[]) AND issue_id IS NOT NULL |]
-      forM_ issueIds \iid -> Issues.logIssueActivity iid eventType (Just sess.user.id) Nothing
+      forM_ items.itemId \iid -> case UUID.fromText iid of
+        Just u -> Issues.logIssueActivity (UUIDId u) eventType (Just sess.user.id) Nothing
+        Nothing -> pass
       addSuccessToast (action <> "d items Successfully") Nothing
+      addTriggerEvent "issuesListChanged" AE.Null
       addRespHeaders Bulk
 
 
@@ -242,12 +243,18 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
                       errorResolveAction pid errL.base.id errL.base.state canResolve
                       errorSubscriptionAction pid errL.base
               }
+      let isFirst = isJust firstM
+      mTraceId <- case issue.issueType of
+        Issues.RuntimeException ->
+          pure $ errorM >>= \errL -> bool errL.base.recentTraceId errL.base.firstTraceId isFirst
+        Issues.ApiChange -> case AE.fromJSON (getAeson issue.issueData) of
+          AE.Success (d :: Issues.APIChangeData) ->
+            Telemetry.getEndpointTraceId pid d.endpointMethod d.endpointPath isFirst now
+          _ -> pure Nothing
+        _ -> pure Nothing
       (trItem, spanRecs) <-
         fromMaybe (Nothing, V.empty) <$> runMaybeT do
-          errL <- hoistMaybe errorM
-          let err = errL.base
-              isFirst = isJust firstM
-          tId <- hoistMaybe $ bool err.recentTraceId err.firstTraceId isFirst
+          tId <- hoistMaybe mTraceId
           traceItem <- MaybeT $ Telemetry.getTraceDetails pid tId Nothing now
           otelLogs <- lift $ Telemetry.getSpanRecordsByTraceId pid traceItem.traceId (Just traceItem.traceStartTime) now
           pure (Just traceItem, V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> V.fromList otelLogs)
@@ -269,20 +276,6 @@ defaultSinceRange createdAt now
     ageH = diffUTCTime now (zonedTimeToUTC createdAt) / 3600
 
 
--- | Stat box for time display with number large and unit small. Empty input renders nothing.
-timeStatBox_ :: Text -> String -> Html ()
-timeStatBox_ title timeStr
-  | null timeStr = pass
-  | (num : rest) <- words $ toText timeStr =
-      div_ [class_ "bg-fillWeaker rounded-3xl flex flex-col gap-3 p-5 border border-strokeWeak"] do
-        div_ [class_ "flex flex-col gap-1"] do
-          span_ [class_ "font-bold text-textStrong"] do
-            span_ [class_ "text-4xl tabular-nums"] $ toHtml num
-            span_ [class_ "text-sm text-textWeak"] $ toHtml $ " " <> unwords (map abbreviateUnit rest)
-          div_ [class_ "flex gap-2 items-center text-sm text-textWeak"] $ p_ [] $ toHtml title
-  | otherwise = pass
-
-
 -- | A single user-journey event (Sentry-style) attached to a span as a JSON-encoded array
 -- under the @breadcrumbs@ attribute. @kind@/@payload@ stand in for the JSON keys @type@/@data@
 -- (renamed because @type_@ would clash with @Lucid.type_@ since field selectors are enabled).
@@ -302,12 +295,71 @@ data Breadcrumb = Breadcrumb
           Breadcrumb
 
 
--- | Pull breadcrumbs (a stringified JSON array) off any span in the trace and decode them.
+-- | Convert a UTCTime to epoch-milliseconds (the unit used by Breadcrumb).
+utcToEpochMs :: UTCTime -> Integer
+utcToEpochMs = floor . (* 1000) . POSIX.utcTimeToPOSIXSeconds
+
+
+-- | Source 1: legacy Sentry-style stringified JSON array under @attributes.breadcrumbs@.
+breadcrumbsFromCustomAttr :: Telemetry.SpanRecord -> [Breadcrumb]
+breadcrumbsFromCustomAttr sr = fromMaybe [] do
+  raw <- Telemetry.atMapText "breadcrumbs" sr.attributes
+  AE.decodeStrict (encodeUtf8 raw)
+
+
+-- | Source 2: OTel-native span events. Sentry's modern OTel SDK records breadcrumbs as
+-- span events with attribute keys prefixed @sentry.breadcrumb.*@; we also handle plain
+-- OTel events (using the event name as the kind and @attributes.message\/body@ as the message).
+breadcrumbsFromSpanEvents :: Telemetry.SpanRecord -> [Breadcrumb]
+breadcrumbsFromSpanEvents sr = case AE.fromJSON sr.events of
+  AE.Success (events :: [Telemetry.SpanEvent]) -> map toBreadcrumb events
+  _ -> []
+  where
+    toBreadcrumb ev =
+      let attrs = ev.eventAttributes
+          sentryKind = lookupValueText attrs "sentry.breadcrumb.category" <|> lookupValueText attrs "sentry.breadcrumb.type"
+          msg =
+            asum
+              $ lookupValueText attrs
+              <$> ["sentry.breadcrumb.message", "message", "body", "exception.message"]
+       in Breadcrumb
+            { kind = fromMaybe ev.eventName sentryKind
+            , message = msg
+            , payload = Just attrs
+            , timestamp = utcToEpochMs ev.eventTime
+            }
+
+
+-- | Source 3: trace-scoped log records — every record in the trace that isn't the error
+-- span itself. For backend traces this surfaces "user logged in -> queried db -> exception"
+-- without any custom instrumentation.
+breadcrumbsFromTraceLogs :: Text -> Telemetry.SpanRecord -> [Breadcrumb]
+breadcrumbsFromTraceLogs errorSpanId sr =
+  [ Breadcrumb
+      { kind = sr.spanName
+      , message = sr.statusMessage <|> Telemetry.atMapText "body" sr.attributes <|> Telemetry.atMapText "message" sr.attributes
+      , payload = AE.toJSON <$> sr.attributes
+      , timestamp = utcToEpochMs sr.startTime
+      }
+  | sr.spanId /= errorSpanId
+  ]
+
+
+-- | Combine all breadcrumb sources for a trace, dedupe near-duplicates emitted by
+-- overlapping instrumentation (e.g. Sentry SDK that ships both legacy attr + OTel events),
+-- and sort chronologically. Duplicates land adjacent after sorting on the dedup key,
+-- so 'groupBy' suffices.
 extractBreadcrumbs :: V.Vector Telemetry.SpanRecord -> Maybe (NonEmpty Breadcrumb)
-extractBreadcrumbs spans = do
-  raw <- viaNonEmpty head $ mapMaybe (Telemetry.atMapText "breadcrumbs" . (.attributes)) (V.toList spans)
-  decoded <- AE.decodeStrict @[Breadcrumb] (encodeUtf8 raw)
-  nonEmpty decoded
+extractBreadcrumbs spans =
+  let recs = V.toList spans
+      errorSpanId = maybe "" (.spanId) $ viaNonEmpty last $ sortOn (.startTime) recs
+      raw =
+        concatMap breadcrumbsFromCustomAttr recs
+          <> concatMap breadcrumbsFromSpanEvents recs
+          <> concatMap (breadcrumbsFromTraceLogs errorSpanId) recs
+      dedupKey bc = (bc.timestamp, bc.kind, T.take 80 $ fromMaybe "" bc.message)
+      deduped = map NE.head $ NE.groupBy ((==) `on` dedupKey) $ sortOn dedupKey raw
+   in nonEmpty deduped
 
 
 -- | Icon id + tailwind colour class for a breadcrumb @type@.
@@ -527,30 +579,67 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
             span_ [class_ "text-xs text-textWeak mb-2 block font-semibold uppercase tracking-wide"] "Query"
             div_ [class_ "bg-fillInformation-weak border border-strokeInformation-weak rounded-lg p-3 text-sm font-mono text-fillInformation-strong max-w-2xl overflow-x-auto"] $ toHtml alertData.queryExpression
         Issues.ApiChange -> withIssueDataH @Issues.APIChangeData issue.issueData \d -> do
-          div_ [class_ "flex items-center gap-3 mb-4 p-3 rounded-lg"] do
-            span_ [class_ $ "badge " <> methodFillColor d.endpointMethod] $ toHtml d.endpointMethod
-            span_ [class_ "monospace bg-fillWeaker px-2 py-1 rounded text-sm text-textStrong"] $ toHtml d.endpointPath
-            div_ [class_ "w-px h-4 bg-strokeWeak"] ""
+          let detailItem (icn, iconColor, lbl, value) = div_ [class_ "flex items-center gap-1.5 whitespace-nowrap"] do
+                faSprite_ icn "regular" $ "w-3 h-3 " <> iconColor
+                span_ [class_ "text-xs text-textWeak"] $ toHtml lbl <> ":"
+                span_ [class_ "text-xs font-medium"] $ toHtml value
+              fieldChip color f = span_ [class_ $ "font-mono text-xs px-2 py-0.5 rounded bg-fillWeaker " <> color] $ toHtml f
+              fieldList :: Text -> Text -> Text -> V.Vector Text -> Html ()
+              fieldList lbl color icn fields
+                | V.null fields = pass
+                | otherwise = div_ [class_ "flex flex-col gap-1.5"] do
+                    div_ [class_ "flex items-center gap-1.5"] do
+                      faSprite_ icn "regular" $ "w-3 h-3 " <> color
+                      span_ [class_ $ "text-xs font-semibold uppercase tracking-wide " <> color] $ toHtml lbl
+                      span_ [class_ "text-xs text-textWeak"] $ toHtml $ "(" <> show (V.length fields) <> ")"
+                      pass
+                    div_ [class_ "flex flex-wrap gap-1"] $ V.forM_ fields (fieldChip color)
+              hasFieldChanges = not (V.null d.newFields) || not (V.null d.deletedFields) || not (V.null d.modifiedFields)
+          -- Endpoint chip line
+          div_ [class_ "flex flex-wrap items-center gap-3"] do
+            span_ [class_ $ "cbadge-sm whitespace-nowrap badge-" <> d.endpointMethod] $ toHtml d.endpointMethod
+            span_ [class_ "font-mono bg-fillWeaker px-2 py-1 rounded text-sm text-textStrong"] $ toHtml d.endpointPath
             span_ [class_ "flex items-center gap-1.5 text-sm text-textWeak"] do
               faSprite_ "server" "regular" "h-3 w-3"
               toHtml d.endpointHost
-          div_ [class_ "grid grid-cols-4 lg:grid-cols-8 gap-4 mb-4"] do
-            timeStatBox_ "First Seen" $ prettyTimeAuto now (zonedTimeToUTC issue.createdAt)
-            div_ [class_ "col-span-4"]
-              $ Widget.widget_
-              $ (def :: Widget.Widget)
-                { Widget.standalone = Just True
-                , Widget.id = Just $ issueId <> "-api-change-timeline"
-                , Widget.naked = Just True
-                , Widget.wType = Widget.WTTimeseries
-                , Widget.title = Just "Request trend"
-                , Widget.showTooltip = Just True
-                , Widget.xAxis = Just (def{Widget.showAxisLabel = Just True})
-                , Widget.yAxis = Just (def{Widget.showOnlyMaxLabel = Just True})
-                , Widget.query = Just $ "attributes.http.request.method==\"" <> d.endpointMethod <> "\" AND attributes.http.route==\"" <> d.endpointPath <> "\" | summarize count(*) by bin_auto(timestamp)"
-                , Widget._projectId = Just issue.projectId
-                , Widget.hideLegend = Just True
-                }
+          -- Chart + endpoint details panel side-by-side
+          div_ [class_ "flex flex-col lg:flex-row gap-4 lg:items-start"] do
+            div_ [class_ "min-w-0 flex-1"] $ volumeChart_ "Request Trend"
+            div_ [class_ "lg:w-72 shrink-0 surface-raised rounded-2xl overflow-hidden"] do
+              div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
+                faSprite_ "circle-info" "regular" "w-3.5 h-3.5 text-textWeak"
+                span_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Endpoint Details"
+              div_ [class_ "p-4 flex flex-col gap-3"] do
+                div_ [class_ "flex flex-wrap items-center gap-x-5 gap-y-2"]
+                  $ forM_
+                    [ ("calendar" :: Text, "text-fillBrand-strong" :: Text, "First seen" :: Text, compactTimeAgo $ toText $ prettyTimeAuto now (zonedTimeToUTC issue.createdAt))
+                    , ("calendar" :: Text, "text-fillBrand-strong" :: Text, "Last seen" :: Text, compactTimeAgo $ toText $ prettyTimeAuto now (zonedTimeToUTC issue.updatedAt))
+                    ]
+                    detailItem
+                div_ [class_ "flex flex-wrap items-center gap-x-5 gap-y-2"]
+                  $ forM_
+                    [ ("server" :: Text, "text-fillSuccess-strong" :: Text, "Service" :: Text, fromMaybe "Unknown service" issue.service)
+                    , ("hashtag" :: Text, "text-fillBrand-strong" :: Text, "Requests" :: Text, formatWithCommas (fromIntegral issue.affectedRequests :: Double))
+                    ]
+                    detailItem
+          -- Field changes (or "new endpoint" hint) + Activity panel
+          div_ [class_ "flex flex-col lg:flex-row gap-4 lg:items-start"] do
+            div_ [class_ "min-w-0 flex-1"]
+              $ if hasFieldChanges
+                then div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
+                  div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
+                    faSprite_ "list-check" "regular" "w-3.5 h-3.5 text-textWeak"
+                    span_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Field Changes"
+                  div_ [class_ "p-4 flex flex-col gap-4"] do
+                    fieldList "New" "text-fillSuccess-strong" "plus" d.newFields
+                    fieldList "Deleted" "text-fillError-strong" "minus" d.deletedFields
+                    fieldList "Modified" "text-fillWarning-strong" "code" d.modifiedFields
+                else div_ [class_ "surface-raised rounded-2xl px-4 py-6 flex flex-col items-center gap-2 text-center"] do
+                  faSprite_ "rocket" "regular" "w-5 h-5 text-fillBrand-strong"
+                  span_ [class_ "text-sm text-textStrong"] "New endpoint discovered"
+                  span_ [class_ "text-xs text-textWeak max-w-sm"]
+                    "This endpoint started receiving traffic. Inspect the originating request in Investigation below to see headers, body, and call site."
+            activityPanel_ pid issueId "lg:w-80 shrink-0" spanRecs
       div_ [class_ "surface-raised rounded-2xl overflow-hidden", id_ "error-details-container", makeAttribute "tabindex" "-1", onkeydown_ "if(event.key==='Escape'&&this.classList.contains('investigation-fullscreen'))document.getElementById('investigation-fullscreen-btn').click()"] do
         div_ [class_ "max-md:px-3 px-4 border-b border-strokeWeak flex max-md:flex-col md:items-center md:justify-between"] do
           div_ [class_ "flex items-center gap-2 max-md:py-1.5"] do
@@ -571,7 +660,7 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
               $ maybe
                 ( div_ [class_ "flex flex-col items-center justify-center h-48"] do
                     faSprite_ "inbox-full" "regular" "w-6 h-6 text-iconNeutral"
-                    span_ [class_ "mt-2 text-sm text-textWeak"] "No trace data available for this error."
+                    span_ [class_ "mt-2 text-sm text-textWeak"] "No trace data available for this issue."
                 )
                 (\t -> tracePage pid t spanRecs)
                 tr
@@ -582,7 +671,8 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
                 div_ [hxGet_ $ "/p/" <> pid.toText <> "/log_explorer/" <> sr.uSpanId <> "/" <> formatUTC sr.timestamp <> "/detailed", hxTarget_ "#log_details_container", hxSwap_ "innerHtml", hxTrigger_ "intersect once", hxIndicator_ "#details_indicator", term "hx-sync" "this:replace"] pass
 
         div_ [id_ "log-content", class_ "hidden err-tab-content"] do
-          virtualTable pid (Just ("/p/" <> pid.toText <> "/log_explorer?json=true&query=" <> toUriStr ("kind==\"log\" AND context___trace_id==\"" <> fromMaybe "" (errM >>= (.base.recentTraceId)) <> "\""))) Nothing
+          let logsTraceId = fromMaybe "" $ asum [errM >>= (.base.recentTraceId), (.traceId) <$> tr]
+          virtualTable pid (Just ("/p/" <> pid.toText <> "/log_explorer?json=true&query=" <> toUriStr ("kind==\"log\" AND context___trace_id==\"" <> logsTraceId <> "\""))) Nothing
 
         div_ [id_ "replay-content", class_ "hidden err-tab-content"] do
           let withSessionIds = V.catMaybes $ (\sr -> (`lookupValueText` "id") =<< Map.lookup "session" =<< sr.attributes) <$> spanRecs
@@ -591,7 +681,7 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
             (div_ [class_ "border border-r border-l w-max mx-auto"] $ termRaw "session-replay" [id_ "sessionReplay", term "initialSession" $ V.head withSessionIds, class_ "shrink-1 flex flex-col", term "projectId" pid.toText, term "containerId" "sessionPlayerWrapper"] ("" :: Text))
             (not $ V.null withSessionIds)
 
-      when (issue.issueType /= Issues.RuntimeException) $ activityPanel_ pid issueId "" V.empty
+      when (issue.issueType `notElem` [Issues.RuntimeException, Issues.ApiChange]) $ activityPanel_ pid issueId "" V.empty
 
     -- RIGHT: Inline collapsible AI chat panel (checkbox + group-has CSS, persists to localStorage)
     input_ [type_ "checkbox", id_ "ai-panel-toggle", class_ "hidden", onchange_ "localStorage.setItem('ai-panel-open', this.checked); if(this.checked) htmx.trigger('#ai-response-container','load-chat')"]
@@ -1259,7 +1349,15 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
           }
   let issuesTable =
         Table
-          { config = def{elemID = "anomalyListForm", containerId = Just "anomalyListContainer", addPadding = True, renderAsTable = True, bulkActionsInHeader = Just 0}
+          { config =
+              def
+                { elemID = "anomalyListForm"
+                , containerId = Just "anomalyListContainer"
+                , addPadding = True
+                , renderAsTable = True
+                , bulkActionsInHeader = Just 0
+                , refreshOnEvent = Just ("issuesListChanged", baseUrl)
+                }
           , columns = issueColumnsWithToggle pid period (Just $ periodToggle_ baseUrl "anomalyListContainer" period)
           , rows = issuesVM
           , features =

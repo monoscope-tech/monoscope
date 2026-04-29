@@ -65,6 +65,7 @@ module Models.Apis.Issues (
   serviceLabel,
   showRate,
   showPct,
+  isNewEndpointOnly,
 
   -- * AI Conversations
   AIConversation (..),
@@ -117,7 +118,7 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
-import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
+import Database.PostgreSQL.Simple.Newtypes (Aeson (..), getAeson)
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Simple.Types (PGArray (..), fromPGArray)
 import Deriving.Aeson qualified as DAE
@@ -163,6 +164,7 @@ hashPrefix :: IssueType -> Maybe Text
 hashPrefix LogPattern = Just "pat:"
 hashPrefix LogPatternRateChange = Just "pat:"
 hashPrefix RuntimeException = Just "err:"
+hashPrefix ApiChange = Just "" -- endpoint hash is stored unprefixed on span hashes
 hashPrefix _ = Nothing
 
 
@@ -200,6 +202,14 @@ showPct x = show (round x :: Int) <> "%"
 
 serviceLabel :: Maybe Text -> Text
 serviceLabel = fromMaybe "unknown-service"
+
+
+isNewEndpointOnly :: Issue -> Bool
+isNewEndpointOnly issue
+  | issue.issueType /= ApiChange = False
+  | otherwise = case AE.fromJSON (getAeson issue.issueData) of
+      AE.Success (d :: APIChangeData) -> V.null d.newFields && V.null d.deletedFields && V.null d.modifiedFields
+      _ -> False
 
 
 -- | API Change issue data
