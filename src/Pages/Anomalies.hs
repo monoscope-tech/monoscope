@@ -37,7 +37,6 @@ where
 import BackgroundJobs qualified
 import Data.Aeson qualified as AE
 import Data.Aeson.Types (Parser, parseMaybe)
-import Deriving.Aeson qualified as DAE
 import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
@@ -54,6 +53,7 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..), getAeson)
 import Database.PostgreSQL.Simple.Types (PGArray (..))
+import Deriving.Aeson qualified as DAE
 import Effectful.Concurrent.Async (concurrently)
 import Effectful.Error.Static (throwError)
 import Effectful.Reader.Static (ask)
@@ -513,12 +513,12 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
                       $ pre_ [class_ "text-sm leading-relaxed overflow-x-auto whitespace-pre-wrap"]
                       $ code_ []
                       $ toHtml trimmedStack
-                  else
-                    div_ [class_ "border-t border-strokeWeak px-4 py-6 flex flex-col items-center gap-2 text-center"] do
-                      faSprite_ "circle-info" "regular" "w-5 h-5 text-textWeak"
-                      span_ [class_ "text-sm text-textStrong"] "No stack trace captured"
-                      span_ [class_ "text-xs text-textWeak max-w-sm"]
-                        "This error was reported without a stack trace — common for browser console errors. Check the User Journey for the events that led up to it."
+                  else div_ [class_ "border-t border-strokeWeak px-4 py-6 flex flex-col items-center gap-2 text-center"] do
+                    faSprite_ "circle-info" "regular" "w-5 h-5 text-textWeak"
+                    span_ [class_ "text-sm text-textStrong"] "No stack trace captured"
+                    span_
+                      [class_ "text-xs text-textWeak max-w-sm"]
+                      "This error was reported without a stack trace — common for browser console errors. Check the User Journey for the events that led up to it."
             activityPanel_ pid issueId "lg:w-80 shrink-0" spanRecs
           -- Similar patterns
           whenJust errM \errL -> similarPatternsSection_ pid errL.base.id
