@@ -1,31 +1,31 @@
 module Pages.Endpoints (apiCatalogH, HostEventsVM (..), endpointListGetH, CatalogList (..), EndpointRequestStatsVM (..), EnpReqStatsVM (..), apiCatalogBulkActionH, HostBulkActionForm (..), CatalogBulkAction (..)) where
 
+import Data.Aeson qualified as AE
 import Data.Default (def)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Time.LocalTime (ZonedTime, zonedTimeToUTC)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.Types (PGArray (..))
+import Effectful.Concurrent.Async (concurrently)
+import Effectful.Error.Static (throwError)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
+import Log (logAttention)
 import Lucid
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), navTabAttrs)
 import Pages.Components (compactTimeAgo, periodToggle_, sparkline_)
-import Effectful.Concurrent.Async (concurrently)
 import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features (..), Pagination (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableRows (..), ZeroState (..), col, withAttrs, withColHeaderExtra)
-import Effectful.Error.Static (throwError)
-import Servant (err400, errBody)
-import Web.FormUrlEncoded (FromForm)
-import Data.Aeson qualified as AE
 import PyF qualified
 import Relude hiding (ask, asks)
+import Servant (err400, errBody)
 import System.Config (AuthContext (..))
-import Log (logAttention)
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
 import Text.Time.Pretty (prettyTimeAuto)
 import Utils (checkFreeTierStatus, faSprite_, formatWithCommas, toUriStr)
+import Web.FormUrlEncoded (FromForm)
 
 
 apiCatalogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> ATAuthCtx (RespHeaders CatalogList)
@@ -112,16 +112,19 @@ apiCatalogH pid sortM timeFilter currentTabM periodM skipM filterTabM = do
           , currProject = Just project
           , pageTitle = "API Catalog"
           , freeTierStatus = freeTierStatus
-          , navTabs = Just $ toHtml $ TabFilter
-              { current = currentTab
-              , currentURL = "/p/" <> pid.toText <> "/api_catalog?sort=" <> currentSort <> "&period=" <> period
-              , clientSide = False
-              , options =
-                  [ TabFilterOpt{name = "Incoming", count = Nothing, targetId = Nothing}
-                  , TabFilterOpt{name = "Outgoing", count = Nothing, targetId = Nothing}
-                  , TabFilterOpt{name = "Archived", count = Nothing, targetId = Nothing}
-                  ]
-              }
+          , navTabs =
+              Just
+                $ toHtml
+                $ TabFilter
+                  { current = currentTab
+                  , currentURL = "/p/" <> pid.toText <> "/api_catalog?sort=" <> currentSort <> "&period=" <> period
+                  , clientSide = False
+                  , options =
+                      [ TabFilterOpt{name = "Incoming", count = Nothing, targetId = Nothing}
+                      , TabFilterOpt{name = "Outgoing", count = Nothing, targetId = Nothing}
+                      , TabFilterOpt{name = "Archived", count = Nothing, targetId = Nothing}
+                      ]
+                  }
           }
   case skipM of
     Just _ -> addRespHeaders $ CatalogListRows $ TableRows{columns = catalogColumns pid currentTab baseUrl period, rows = hostsVM, emptyState = Nothing, renderAsTable = True, rowId = Just \(HostEventsVM _ he _ _ _ _) -> he.host, rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"], pagination = Nothing}

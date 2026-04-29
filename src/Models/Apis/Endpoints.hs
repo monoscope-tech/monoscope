@@ -148,11 +148,21 @@ data EndpointRequestStats = EndpointRequestStats
 -- @"s."@) or empty for unaliased queries.
 hostCoalesceExpr :: Text -> Text
 hostCoalesceExpr prefix =
-  "COALESCE(NULLIF(" <> prefix <> "attributes->'net'->'host'->>'name',''), "
-    <> "NULLIF(" <> prefix <> "attributes___server___address,''), "
-    <> "NULLIF(" <> prefix <> "attributes->'http'->>'host',''), "
-    <> "NULLIF(split_part(split_part(split_part(" <> prefix <> "attributes___url___full, '://', 2), '/', 1), ':', 1), ''), "
-    <> "NULLIF(" <> prefix <> "resource___service___name,''), '')"
+  "COALESCE(NULLIF("
+    <> prefix
+    <> "attributes->'net'->'host'->>'name',''), "
+    <> "NULLIF("
+    <> prefix
+    <> "attributes___server___address,''), "
+    <> "NULLIF("
+    <> prefix
+    <> "attributes->'http'->>'host',''), "
+    <> "NULLIF(split_part(split_part(split_part("
+    <> prefix
+    <> "attributes___url___full, '://', 2), '/', 1), ':', 1), ''), "
+    <> "NULLIF("
+    <> prefix
+    <> "resource___service___name,''), '')"
 
 
 periodBuckets :: Text -> (Text, Text)
@@ -271,7 +281,8 @@ WITH endpoint_hosts AS (
     <> [HI.sql|#{pid} |]
     <> rawSql [text| AND host != ''|]
     <> directionClause
-    <> rawSql [text| AND $archivedClause
+    <> rawSql
+      [text| AND $archivedClause
 ), combined AS (
     SELECT $hostExprT AS host,
            $outgoingExprT AS outgoing,
@@ -282,7 +293,8 @@ WITH endpoint_hosts AS (
     WHERE s.project_id = |]
     <> [HI.sql|#{pid}::text AND |]
     <> timeRangeSql
-    <> rawSql [text| AND s.attributes___http___request___method IS NOT NULL
+    <> rawSql
+      [text| AND s.attributes___http___request___method IS NOT NULL
 ), aggregated AS (
     SELECT host, outgoing, service, bucket_idx,
            COUNT(*)::int AS cnt, MAX(ts) AS last_seen, MIN(ts) AS first_seen
