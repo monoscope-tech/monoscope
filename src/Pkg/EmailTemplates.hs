@@ -478,10 +478,8 @@ runtimeErrorVariantEmail heading subjectPrefix intro projectName errorsUrl error
         p_ [style_ "margin: 8px 0; font-size: 14px; font-weight: 600; color: #57606a;"] $ toHtml @Text ("⏳ Still firing · " <> d)
       whenJust occTextM $ \t -> p_ [style_ "margin: 8px 0; font-size: 14px; font-weight: 600; color: #57606a;"] $ toHtml t
       emailDivider
-      let (firstErrors, restErrors) = splitAt 1 (take maxErrorCards errors)
-      forM_ firstErrors (errorCard errorsUrl)
-      whenJust chartUrlM $ chartBlock "Error Trend"
-      forM_ restErrors (errorCard errorsUrl)
+      forM_ (zip [0 :: Int ..] (take maxErrorCards errors)) \(i, err) ->
+        errorCard errorsUrl (if i == 0 then chartUrlM else Nothing) err
       when (length errors > maxErrorCards)
         $ p_ [style_ "text-align: center; color: #57606a; font-size: 14px; margin: 16px 0;"]
         $ toHtml
@@ -499,8 +497,8 @@ runtimeErrorVariantEmail heading subjectPrefix intro projectName errorsUrl error
       _ -> subjectPrefix <> projectName
 
 
-errorCard :: Text -> ErrorPatterns.ATError -> Html ()
-errorCard errorsUrl e =
+errorCard :: Text -> Maybe Text -> ErrorPatterns.ATError -> Html ()
+errorCard errorsUrl chartUrlM e =
   table_ [class_ "error-card", width_ "100%", cellpadding_ "0", cellspacing_ "0"] do
     tr_ $ td_ [style_ "padding: 16px 0 8px 0;"] do
       p_ [class_ "error-card-header"] $ toHtml $ truncateText 120 e.errorType
@@ -522,7 +520,7 @@ errorCard errorsUrl e =
         forM_ (zip [0 :: Int ..] ctxMeta) \(i, val) -> do
           when (i > 0) $ span_ [style_ "color: #c0c5cc; padding: 0 6px;"] "\183"
           toHtml val
-    when (e.stackTrace /= "") $ tr_ $ td_ [style_ "padding: 0 0 16px 0;"] do
+    when (e.stackTrace /= "") $ tr_ $ td_ [style_ "padding: 0 0 12px 0;"] do
       let traceLines = lines e.stackTrace
           lastLines = takeEnd 2 traceLines
           hasMore = length traceLines > 2
@@ -531,6 +529,9 @@ errorCard errorsUrl e =
         $ p_ [style_ "margin: 8px 0 0; font-size: 12px;"]
         $ a_ [href_ (errorsUrl <> "by_hash/" <> e.hash), style_ "color: #377cfb; text-decoration: none;"]
         $ toHtml @Text ("View full trace (" <> show (length traceLines) <> " lines) \8594")
+    whenJust chartUrlM $ \url ->
+      tr_ $ td_ [style_ "padding: 8px 0 16px 0;"] $
+        img_ [src_ url, alt_ "Error trend", width_ "560", style_ "max-width: 100%; height: auto; display: block; border-radius: 4px;"]
   where
     hasDistinctRootCause = e.rootErrorType /= e.errorType || e.rootErrorMessage /= e.message
     takeEnd n xs = drop (length xs - n) xs
