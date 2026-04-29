@@ -37,6 +37,7 @@ where
 import BackgroundJobs qualified
 import Data.Aeson qualified as AE
 import Data.Aeson.Types (Parser, parseMaybe)
+import Deriving.Aeson qualified as DAE
 import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
@@ -46,7 +47,7 @@ import Data.Ord (clamp)
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Text.Display (display)
-import Data.Time (UTCTime, addUTCTime, diffUTCTime, getCurrentTime)
+import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, diffUTCTime, formatTime, getCurrentTime)
 import Data.Time.Clock.POSIX qualified as POSIX
 import Data.Time.LocalTime (ZonedTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
@@ -96,7 +97,7 @@ import Servant (err400, errBody)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (LoadingSize (..), LoadingType (..), checkFreeTierStatus, escapedQueryPartial, faSprite_, formatUTC, formatWithCommas, htmxOverlayIndicator_, loadingIndicator_, lookupValueText, methodFillColor, renderMarkdown, toUriStr)
+import Utils (LoadingSize (..), LoadingType (..), checkFreeTierStatus, escapedQueryPartial, faSprite_, formatOffset, formatUTC, formatWithCommas, htmxOverlayIndicator_, loadingIndicator_, lookupValueText, methodFillColor, renderMarkdown, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -282,15 +283,105 @@ timeStatBox_ title timeStr
   | otherwise = pass
 
 
-activityPanel_ :: Projects.ProjectId -> Text -> Text -> Html ()
-activityPanel_ pid issueId extraClass = do
+-- | A single user-journey event (Sentry-style) attached to a span as a JSON-encoded array
+-- under the @breadcrumbs@ attribute. @kind@/@payload@ stand in for the JSON keys @type@/@data@
+-- (renamed because @type_@ would clash with @Lucid.type_@ since field selectors are enabled).
+data Breadcrumb = Breadcrumb
+  { kind :: Text
+  , message :: Maybe Text
+  , payload :: Maybe AE.Value
+  , timestamp :: Integer
+  }
+  deriving stock (Generic, Show)
+  deriving
+    (AE.FromJSON)
+    via DAE.CustomJSON
+          '[ DAE.OmitNothingFields
+           , DAE.FieldLabelModifier '[DAE.Rename "kind" "type", DAE.Rename "payload" "data"]
+           ]
+          Breadcrumb
+
+
+-- | Pull breadcrumbs (a stringified JSON array) off any span in the trace and decode them.
+extractBreadcrumbs :: V.Vector Telemetry.SpanRecord -> Maybe (NonEmpty Breadcrumb)
+extractBreadcrumbs spans = do
+  raw <- viaNonEmpty head $ mapMaybe (Telemetry.atMapText "breadcrumbs" . (.attributes)) (V.toList spans)
+  decoded <- AE.decodeStrict @[Breadcrumb] (encodeUtf8 raw)
+  nonEmpty decoded
+
+
+-- | Icon id + tailwind colour class for a breadcrumb @type@.
+breadcrumbVisual :: Text -> (Text, Text)
+breadcrumbVisual t = case t of
+  "click" -> ("arrow-pointer", "text-fillBrand-strong")
+  "navigation" -> ("globe", "text-fillSuccess-strong")
+  "nav" -> ("globe", "text-fillSuccess-strong")
+  "xhr" -> ("wifi", "text-fillInformation-strong")
+  "fetch" -> ("wifi", "text-fillInformation-strong")
+  "console.error" -> ("terminal", "text-fillError-strong")
+  "console.warn" -> ("terminal", "text-fillWarning-strong")
+  _ -> ("terminal", "text-textWeak")
+
+
+-- | Compact selector / url summary from a breadcrumb's @data@ blob.
+breadcrumbDataSummary :: AE.Value -> Maybe Text
+breadcrumbDataSummary (AE.String s) = Just s
+breadcrumbDataSummary v = asum $ lookupValueText v <$> ["selector", "url"]
+
+
+-- | User-journey breadcrumb section, rendered inline inside an existing card.
+-- Emits nothing when the trace carries no parseable breadcrumbs.
+userJourneySection_ :: V.Vector Telemetry.SpanRecord -> Html ()
+userJourneySection_ spans = whenJust (extractBreadcrumbs spans) \crumbs -> do
+  let crumbList = toList crumbs
+      total = length crumbList
+      base = (head crumbs).timestamp
+      lastIdx = total - 1
+      renderCrumb idx bc = do
+        let (icn, iconColor) = breadcrumbVisual bc.kind
+            isTerminal = idx == lastIdx
+            rowCls =
+              if isTerminal
+                then "relative flex gap-2.5 px-4 py-2 border-l-2 border-strokeError-strong bg-fillError-weak"
+                else "relative flex gap-2.5 px-4 py-2 border-l-2 border-transparent hover:bg-fillWeaker"
+            timeLabel
+              | idx == 0 = toText $ formatTime defaultTimeLocale "%b %-e, %H:%M:%S" $ POSIX.posixSecondsToUTCTime $ realToFrac (fromIntegral bc.timestamp / 1000 :: Double)
+              | otherwise = formatOffset base bc.timestamp
+        div_ [class_ rowCls] do
+          div_ [class_ "flex flex-col items-center pt-0.5 shrink-0"] do
+            faSprite_ icn "regular" $ "w-3 h-3 " <> iconColor
+            unless isTerminal $ div_ [class_ "w-px flex-1 bg-strokeWeak mt-1"] ""
+          div_ [class_ "min-w-0 flex-1 flex flex-col gap-0.5"] do
+            div_ [class_ "flex items-center gap-2 flex-wrap"] do
+              span_ [class_ "text-xs tabular-nums text-textWeak shrink-0"] $ toHtml timeLabel
+              span_ [class_ $ "text-xs font-medium " <> iconColor] $ toHtml bc.kind
+            whenJust bc.message \msg ->
+              span_ [class_ "text-sm text-textStrong line-clamp-3 break-words"] $ toHtml msg
+            whenJust (bc.payload >>= breadcrumbDataSummary) \summary ->
+              span_ [class_ "font-mono text-xs text-textWeak line-clamp-2 break-all"] $ toHtml summary
+  div_ [class_ "border-t border-strokeWeak"] do
+    div_ [class_ "px-4 py-2 flex items-center gap-2 bg-fillWeaker/40"] do
+      faSprite_ "route" "regular" "w-3 h-3 text-textWeak"
+      span_ [class_ "text-[11px] font-semibold text-textWeak uppercase tracking-wide"] "User journey"
+      span_ [class_ "text-[11px] text-textWeak"] $ toHtml $ show total <> " event" <> (if total == 1 then "" else "s") <> " before error"
+    div_ [class_ "max-h-80 overflow-y-auto py-1"]
+      $ V.imapM_ renderCrumb (V.fromList crumbList)
+
+
+activityPanel_ :: Projects.ProjectId -> Text -> Text -> V.Vector Telemetry.SpanRecord -> Html ()
+activityPanel_ pid issueId extraClass spans = do
   let activityUrl = "/p/" <> pid.toText <> "/issues/" <> issueId <> "/activity"
-  details_ [class_ $ unwords $ filter (not . T.null) ["surface-raised rounded-2xl group/activity", extraClass], term "open" ""] do
+  details_ [class_ $ unwords $ filter (not . T.null) ["surface-raised rounded-2xl group/activity overflow-hidden", extraClass], term "open" ""] do
     summary_ [class_ "px-4 py-3 flex items-center gap-2 cursor-pointer list-none [&::-webkit-details-marker]:hidden"] do
       faSprite_ "clock-rotate-left" "regular" "w-3.5 h-3.5 text-textWeak"
       span_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Activity"
       faSprite_ "chevron-down" "regular" "w-3 h-3 text-textWeak shrink-0 ml-auto group-open/activity:rotate-180 transition-transform"
-    div_ [id_ "issue-activity", class_ "border-t border-strokeWeak", hxGet_ activityUrl, hxTrigger_ "intersect once", hxSwap_ "innerHTML"]
+    userJourneySection_ spans
+    div_ [class_ "border-t border-strokeWeak"] do
+      div_ [class_ "px-4 py-2 flex items-center gap-2 bg-fillWeaker/40"] do
+        faSprite_ "circle-info" "regular" "w-3 h-3 text-textWeak"
+        span_ [class_ "text-[11px] font-semibold text-textWeak uppercase tracking-wide"] "Issue events"
+    div_ [id_ "issue-activity", hxGet_ activityUrl, hxTrigger_ "intersect once", hxSwap_ "innerHTML"]
       $ div_ [class_ "p-4 flex justify-center"]
       $ loadingIndicator_ LdSM LdDots
 
@@ -373,7 +464,9 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
           volumeChart_ "Pattern Volume"
           logPatternCards d.sourceField d.logPattern d.sampleMessage
         Issues.RuntimeException -> withIssueDataH @Issues.RuntimeExceptionData issue.issueData \exceptionData -> do
-          let errorFirstLine = fromMaybe exceptionData.stackTrace $ viaNonEmpty head $ lines exceptionData.stackTrace
+          let trimmedStack = T.strip exceptionData.stackTrace
+              hasStack = not $ T.null trimmedStack
+              errorFirstLine = if hasStack then fromMaybe trimmedStack $ viaNonEmpty head $ lines trimmedStack else exceptionData.errorMessage
               detailItem (icn, iconColor, lbl, value) = div_ [class_ "flex items-center gap-1.5 whitespace-nowrap"] do
                 faSprite_ icn "regular" $ "w-3 h-3 " <> iconColor
                 span_ [class_ "text-xs text-textWeak"] $ toHtml lbl <> ":"
@@ -404,7 +497,7 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
                       , ("server" :: Text, "text-fillSuccess-strong" :: Text, "Service" :: Text, fromMaybe "Unknown service" err.errorData.serviceName)
                       ]
                       detailItem
-          -- Stack trace + Activity side by side
+          -- Stack trace + Activity (Activity column merges User Journey + issue events)
           div_ [class_ "flex flex-col lg:flex-row gap-4 lg:items-start"] do
             div_ [class_ "min-w-0 flex-1"]
               $ details_ [class_ "surface-raised rounded-2xl group/details", term "open" "", term "_" "init if window.innerWidth < 768 remove @open from me"]
@@ -414,11 +507,19 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
                   span_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide shrink-0"] "Stack Trace"
                   span_ [class_ "text-xs text-fillError-strong truncate"] $ toHtml errorFirstLine
                   faSprite_ "chevron-down" "regular" "w-3 h-3 text-textWeak shrink-0 ml-auto group-open/details:rotate-180 transition-transform"
-                div_ [class_ "max-h-80 overflow-y-auto border-t border-strokeWeak"]
-                  $ pre_ [class_ "text-sm leading-relaxed overflow-x-auto whitespace-pre-wrap"]
-                  $ code_ []
-                  $ toHtml exceptionData.stackTrace
-            activityPanel_ pid issueId "lg:w-72 shrink-0"
+                if hasStack
+                  then
+                    div_ [class_ "max-h-80 overflow-y-auto border-t border-strokeWeak"]
+                      $ pre_ [class_ "text-sm leading-relaxed overflow-x-auto whitespace-pre-wrap"]
+                      $ code_ []
+                      $ toHtml trimmedStack
+                  else
+                    div_ [class_ "border-t border-strokeWeak px-4 py-6 flex flex-col items-center gap-2 text-center"] do
+                      faSprite_ "circle-info" "regular" "w-5 h-5 text-textWeak"
+                      span_ [class_ "text-sm text-textStrong"] "No stack trace captured"
+                      span_ [class_ "text-xs text-textWeak max-w-sm"]
+                        "This error was reported without a stack trace — common for browser console errors. Check the User Journey for the events that led up to it."
+            activityPanel_ pid issueId "lg:w-80 shrink-0" spanRecs
           -- Similar patterns
           whenJust errM \errL -> similarPatternsSection_ pid errL.base.id
         Issues.QueryAlert -> withIssueDataH @Issues.QueryAlertData issue.issueData \alertData ->
@@ -490,7 +591,7 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
             (div_ [class_ "border border-r border-l w-max mx-auto"] $ termRaw "session-replay" [id_ "sessionReplay", term "initialSession" $ V.head withSessionIds, class_ "shrink-1 flex flex-col", term "projectId" pid.toText, term "containerId" "sessionPlayerWrapper"] ("" :: Text))
             (not $ V.null withSessionIds)
 
-      when (issue.issueType /= Issues.RuntimeException) $ activityPanel_ pid issueId ""
+      when (issue.issueType /= Issues.RuntimeException) $ activityPanel_ pid issueId "" V.empty
 
     -- RIGHT: Inline collapsible AI chat panel (checkbox + group-has CSS, persists to localStorage)
     input_ [type_ "checkbox", id_ "ai-panel-toggle", class_ "hidden", onchange_ "localStorage.setItem('ai-panel-open', this.checked); if(this.checked) htmx.trigger('#ai-response-container','load-chat')"]

@@ -56,6 +56,7 @@ module Utils (
   replaceAllFormats,
   truncateHour,
   prettyTimeShort,
+  formatOffset,
   navTabAttrs,
   renderMarkdown,
   jsonToMap,
@@ -1389,6 +1390,17 @@ prettyTimeShort now t =
         | s < 86400 -> let h = s `div` 3600 in T.show h <> bool " hrs" " hr" (h == 1) <> " ago"
         | s < 604800 -> let d = s `div` 86400 in T.show d <> bool " days" " day" (d == 1) <> " ago"
         | otherwise -> let w = s `div` 604800 in T.show w <> bool " wks" " wk" (w == 1) <> " ago"
+
+
+-- | Forward-progress offset between two epoch-ms timestamps: @"+0s"@, @"+5s"@, @"+1m 23s"@, @"+2h 5m"@.
+-- For timeline rails where the leading @+@ marks "elapsed since the base event", not "ago".
+formatOffset :: Integer -> Integer -> Text
+formatOffset base ts
+  | s < 60 = "+" <> T.show s <> "s"
+  | s < 3600 = "+" <> T.show (s `div` 60) <> "m " <> T.show (s `mod` 60) <> "s"
+  | otherwise = "+" <> T.show (s `div` 3600) <> "h " <> T.show ((s `mod` 3600) `div` 60) <> "m"
+  where
+    s = max 0 $ (ts - base) `div` 1000
 
 
 -- Reusable htmx attrs for tab-style nav links (preload + morph swap)
