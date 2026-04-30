@@ -90,11 +90,6 @@ Manage your Monoscope project from the terminal — search logs, query metrics, 
 
 ```bash
 curl -fsSL https://monoscope.tech/install.sh | bash
-```
-
-Then authenticate:
-
-```bash
 monoscope auth login
 ```
 
@@ -102,20 +97,20 @@ See the [CLI reference](docs/cli.md) for the full command list.
 
 ### Claude Code Skills
 
-Install Monoscope skills for Claude Code to enable AI-assisted incident investigation, on-call triage, and KQL query writing:
+Let Claude investigate incidents, triage alerts, and write KQL queries using the `monoscope` CLI — install the skills plugin:
 
 ```bash
+# Claude Code
 claude plugin marketplace add monoscope-tech/skills
 claude plugin install monoscope-skills@monoscope-skills
-```
 
-Or via the [skills.sh](https://skills.sh) ecosystem:
-
-```bash
+# or via npx (Cursor, Cline, Copilot, and other agents)
 npx skills add monoscope-tech/skills
 ```
 
-See [github.com/monoscope-tech/skills](https://github.com/monoscope-tech/skills) for details.
+Restart Claude Code after installation. Skills activate automatically when relevant — e.g. *"investigate the 500 errors in payment-api"* or *"do an on-call sweep"*.
+
+See [github.com/monoscope-tech/skills](https://github.com/monoscope-tech/skills) for the full skill list and documentation.
 
 <br/>
 
