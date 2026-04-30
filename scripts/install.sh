@@ -26,9 +26,9 @@ detect_platform() {
 }
 
 get_latest_version() {
-  local url="https://api.github.com/repos/${REPO}/releases?per_page=20"
-  curl -fsSL "$url" | grep -o '"tag_name": *"cli-v[^"]*"' | head -1 | grep -o 'cli-v[^"]*' \
-    || error "Could not find a cli-v* release"
+  local url="https://api.github.com/repos/${REPO}/releases/latest"
+  curl -fsSL "$url" | grep -o '"tag_name": *"v[^"]*"' | grep -o 'v[^"]*' \
+    || error "Could not find latest release"
 }
 
 main() {

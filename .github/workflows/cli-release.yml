@@ -2,7 +2,7 @@ name: CLI Release
 
 on:
   push:
-    tags: ['cli-v*']
+    tags: ['v*']
 
 env:
   LANG: C.UTF-8
@@ -208,12 +208,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd artifacts
-          VERSION="${GITHUB_REF_NAME#cli-}"
-          gh release create "$GITHUB_REF_NAME" \
-            --title "Monoscope CLI ${VERSION}" \
-            --generate-notes \
-            monoscope-linux-x86_64.tar.gz \
-            monoscope-linux-arm64.tar.gz \
-            monoscope-darwin-arm64.tar.gz \
-            monoscope-darwin-x86_64.tar.gz \
-            checksums.txt
+          ASSETS="monoscope-linux-x86_64.tar.gz monoscope-linux-arm64.tar.gz monoscope-darwin-arm64.tar.gz monoscope-darwin-x86_64.tar.gz checksums.txt"
+          if gh release view "$GITHUB_REF_NAME" &>/dev/null; then
+            gh release upload "$GITHUB_REF_NAME" $ASSETS --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --title "Monoscope ${GITHUB_REF_NAME}" \
+              --generate-notes \
+              $ASSETS
+          fi
