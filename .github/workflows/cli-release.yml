@@ -19,17 +19,24 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Build CSS
+      - name: Build frontend assets
         run: |
           mkdir -p static/public/assets/css
+          mkdir -p static/public/assets/web-components/dist/js
+          mkdir -p static/public/assets/web-components/dist/css
           npm ci
           npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify
+          cd web-components
+          npm ci
+          NODE_ENV=production npx vite build --mode production --sourcemap false
 
       - name: Upload frontend artifact
         uses: actions/upload-artifact@v4
         with:
           name: frontend-assets
-          path: static/public/assets/css/tailwind.min.css
+          path: |
+            static/public/assets/css/tailwind.min.css
+            static/public/assets/web-components/dist
           retention-days: 1
 
   build-linux-x64:
@@ -50,7 +57,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: frontend-assets
-          path: static/public/assets/css
+          path: static/public/assets
 
       - name: Cache dist-newstyle
         uses: actions/cache@v4
@@ -90,7 +97,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: frontend-assets
-          path: static/public/assets/css
+          path: static/public/assets
 
       - name: Install GHC and Cabal
         uses: haskell-actions/setup@v2
@@ -150,7 +157,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: frontend-assets
-          path: static/public/assets/css
+          path: static/public/assets
 
       - name: Install GHC and Cabal
         uses: haskell-actions/setup@v2
@@ -219,7 +226,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: frontend-assets
-          path: static/public/assets/css
+          path: static/public/assets
 
       - name: Install GHC and Cabal
         uses: haskell-actions/setup@v2
