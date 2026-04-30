@@ -178,13 +178,15 @@ jobs:
         run: |
           brew install pkg-config libpq librdkafka snappy lz4 zstd grpc openssl protobuf
           PREFIX=$(brew --prefix)
-          echo "PKG_CONFIG_PATH=$PREFIX/opt/libpq/lib/pkgconfig:$PREFIX/opt/snappy/lib/pkgconfig:$PREFIX/opt/librdkafka/lib/pkgconfig:$PREFIX/opt/lz4/lib/pkgconfig:$PREFIX/opt/zstd/lib/pkgconfig:$PREFIX/opt/grpc/lib/pkgconfig:$PREFIX/opt/openssl/lib/pkgconfig" >> $GITHUB_ENV
+          LIBS="snappy libpq librdkafka lz4 zstd grpc openssl"
+          PKG_PATH=$(for f in $LIBS; do echo -n "$PREFIX/opt/$f/lib/pkgconfig:"; done)
+          echo "PKG_CONFIG_PATH=${PKG_PATH%:}" >> $GITHUB_ENV
+          echo "LDFLAGS=$(for f in $LIBS; do echo -n "-L$PREFIX/opt/$f/lib "; done)-L$PREFIX/lib" >> $GITHUB_ENV
+          echo "CPPFLAGS=$(for f in $LIBS; do echo -n "-I$PREFIX/opt/$f/include "; done)-I$PREFIX/include" >> $GITHUB_ENV
           echo "$PREFIX/opt/libpq/bin" >> $GITHUB_PATH
-          # Write extra lib/include dirs for Cabal's configure-based packages (snappy-c, etc.)
-          cat >> cabal.project.local <<EOF
-          extra-lib-dirs: $PREFIX/opt/snappy/lib $PREFIX/opt/libpq/lib $PREFIX/opt/librdkafka/lib $PREFIX/opt/lz4/lib $PREFIX/opt/zstd/lib $PREFIX/opt/openssl/lib $PREFIX/lib
-          extra-include-dirs: $PREFIX/opt/snappy/include $PREFIX/opt/libpq/include $PREFIX/opt/librdkafka/include $PREFIX/opt/lz4/include $PREFIX/opt/zstd/include $PREFIX/opt/openssl/include $PREFIX/include
-          EOF
+          # cabal.project.local must have fields at column 0 (no leading whitespace)
+          printf 'extra-lib-dirs: %s\n' "$(for f in $LIBS; do echo -n "$PREFIX/opt/$f/lib "; done)$PREFIX/lib" >> cabal.project.local
+          printf 'extra-include-dirs: %s\n' "$(for f in $LIBS; do echo -n "$PREFIX/opt/$f/include "; done)$PREFIX/include" >> cabal.project.local
 
       - name: Build CLI binary
         run: cabal build exe:monoscope -j --ghc-options="-O2 +RTS -A64m -n2m -RTS"
