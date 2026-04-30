@@ -8,8 +8,33 @@ env:
   LANG: C.UTF-8
 
 jobs:
+  build-frontend:
+    name: Build Frontend Assets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build CSS
+        run: |
+          mkdir -p static/public/assets/css
+          npm ci
+          npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify
+
+      - name: Upload frontend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-assets
+          path: static/public/assets/css/tailwind.min.css
+          retention-days: 1
+
   build-linux-x64:
     name: Build Linux x86_64
+    needs: build-frontend
     runs-on: blacksmith-4vcpu-ubuntu-2404
     container:
       image: ghcr.io/monoscope-tech/monoscope-deps:latest
@@ -20,6 +45,12 @@ jobs:
         CABAL_DIR: /root/.cabal
     steps:
       - uses: actions/checkout@v4
+
+      - name: Download frontend artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-assets
+          path: static/public/assets/css
 
       - name: Cache dist-newstyle
         uses: actions/cache@v4
@@ -49,6 +80,7 @@ jobs:
 
   build-linux-arm64:
     name: Build Linux ARM64
+    needs: build-frontend
     runs-on: blacksmith-4vcpu-ubuntu-2404-arm
     container:
       image: ghcr.io/monoscope-tech/monoscope-deps:latest
@@ -59,6 +91,12 @@ jobs:
         CABAL_DIR: /root/.cabal
     steps:
       - uses: actions/checkout@v4
+
+      - name: Download frontend artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-assets
+          path: static/public/assets/css
 
       - name: Cache dist-newstyle
         uses: actions/cache@v4
@@ -88,9 +126,16 @@ jobs:
 
   build-macos-arm64:
     name: Build macOS ARM64
+    needs: build-frontend
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Download frontend artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-assets
+          path: static/public/assets/css
 
       - name: Install GHC and Cabal
         uses: haskell-actions/setup@v2
@@ -138,9 +183,16 @@ jobs:
 
   build-macos-x64:
     name: Build macOS x86_64
+    needs: build-frontend
     runs-on: macos-13
     steps:
       - uses: actions/checkout@v4
+
+      - name: Download frontend artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-assets
+          path: static/public/assets/css
 
       - name: Install GHC and Cabal
         uses: haskell-actions/setup@v2
