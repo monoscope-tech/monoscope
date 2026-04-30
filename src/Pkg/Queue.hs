@@ -201,8 +201,8 @@ publishJSONToKafka appCtx topicName jsonData attributes = checkpoint "publishJSO
     Right res -> pure res
 
 
-kafkaService :: Log.Logger -> AuthContext -> TracerProvider -> [Text] -> ([(Text, ByteString)] -> HM.HashMap Text Text -> ATBackgroundCtx [Text]) -> IO ()
-kafkaService appLogger appCtx tp kafkaTopics fn = checkpoint "kafkaService" do
+kafkaService :: Log.Logger -> AuthContext -> TracerProvider -> [Text] -> Int -> ([(Text, ByteString)] -> HM.HashMap Text Text -> ATBackgroundCtx [Text]) -> IO ()
+kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaService" do
   -- Generate unique client ID for logging/metrics
   instanceUuid <- UUID.toText <$> UUID.nextRandom
   let clientId = "monoscope-" <> T.take 8 instanceUuid
@@ -228,7 +228,7 @@ kafkaService appLogger appCtx tp kafkaTopics fn = checkpoint "kafkaService" do
         $ LogBase.logInfo "Kafka consumer connected successfully, starting message polling loop"
         $ AE.object ["client_id" AE..= clientId]
       forever do
-        pollResult@(leftRecords, rightRecords) <- partitionEithers <$> K.pollMessageBatch consumer (K.Timeout 100) (K.BatchSize appCtx.config.messagesPerPubsubPullBatch) -- timeout in milliseconds
+        pollResult@(leftRecords, rightRecords) <- partitionEithers <$> K.pollMessageBatch consumer (K.Timeout 100) (K.BatchSize batchSize) -- timeout in milliseconds
 
         -- Log polling errors if any
         unless (null leftRecords)

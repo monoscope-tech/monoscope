@@ -1,4 +1,4 @@
-module Pages.Replay (replayPostH, ReplayPost (..), processReplayEvents, replaySessionGetH, fetchReplaySession, compressAndMergeReplaySessions, mergeReplaySession, expireOldReplayData) where
+module Pages.Replay (replayPostH, ReplayPost (..), processReplayEvents, replaySessionGetH, fetchReplaySession, compressAndMergeReplaySessions, mergeReplaySession, expireOldReplayData, concatRawJsonArrays, mergeEventArrays, sessionFileKeys) where
 
 import Codec.Compression.GZip qualified as GZip
 import Conduit (runConduit)
@@ -160,6 +160,40 @@ fetchEventArray bucket objKey gzipped = do
     Left e -> Left e
 
 
+-- | Fetch one S3 object as raw decompressed bytes plus the first event's
+-- timestamp (used to sort files before merging at the byte level).
+-- Avoids re-encoding events during merge — raw bytes go directly to the output.
+fetchRawForMerge :: Minio.Bucket -> Minio.Object -> Bool -> Minio.Minio (Either String (Double, BL.ByteString))
+fetchRawForMerge bucket objKey gzipped = do
+  src <- Minio.getObject bucket objKey Minio.defaultGetObjectOptions
+  bs <- runConduit $ Minio.gorObjectStream src .| CC.foldMap fromStrict
+  let raw = if gzipped then GZip.decompress bs else bs
+  pure $ case AE.eitherDecode raw of
+    Right (AE.Array arr) ->
+      let ts = fromMaybe 0 $ (arr V.!? 0) >>= AET.parseMaybe (AE.withObject "ev" (AE..: "timestamp"))
+       in Right (ts, raw)
+    Right v -> Left $ "expected JSON array, got " <> describeValue v
+    Left e -> Left e
+
+
+-- | Concatenate pre-sorted raw JSON array byte strings into one flat JSON array
+-- by stripping outer brackets and joining with commas. No re-encoding of events.
+--
+-- >>> concatRawJsonArrays []
+-- "[]"
+-- >>> concatRawJsonArrays ["[1,2]","[3,4]"]
+-- "[1,2,3,4]"
+-- >>> concatRawJsonArrays ["[]","[1]","[]"]
+-- "[1]"
+concatRawJsonArrays :: [BL.ByteString] -> BL.ByteString
+concatRawJsonArrays bss =
+  let filled = filter (\b -> BL.length b > 2) bss
+      inner = map (\b -> BL.drop 1 $ BL.take (BL.length b - 1) b) filled
+   in case inner of
+        [] -> "[]"
+        _ -> "[" <> BL.intercalate "," inner <> "]"
+
+
 -- | Resolve per-project or default S3 credentials into a connection + bucket.
 projectMinioConn :: EnvConfig -> Projects.Project -> (Minio.ConnectInfo, Minio.Bucket)
 projectMinioConn envCfg p =
@@ -293,7 +327,13 @@ sessionMetadata pid sessionId = do
   pure $ listToMaybe rows
 
 
--- | Merge multiple already-sorted event arrays by sorting arrays based on their first event's timestamp, then concatenating
+-- | Merge multiple already-sorted event arrays by sorting arrays based on their first event's timestamp, then concatenating.
+--
+-- >>> let ev ts = AE.object ["timestamp" AE..= (ts :: Double)]
+-- >>> mergeEventArrays [V.fromList [ev 5], V.fromList [ev 1], V.fromList [ev 3]] == V.fromList [ev 1, ev 3, ev 5]
+-- True
+-- >>> mergeEventArrays [V.empty, V.fromList [ev 2]] == V.fromList [ev 2]
+-- True
 mergeEventArrays :: [AE.Array] -> AE.Array
 mergeEventArrays arrays = V.concat $ sortWith firstTimestamp $ filter (not . V.null) arrays
   where
@@ -501,41 +541,44 @@ mergeOneSessionByKeys pid sessionId logSuffix afterMerge = do
 
 
 -- | Merge the tracked S3 event files for a single session into one gzip-compressed file.
--- The merged.json.gz object is fetched-and-appended if it already exists; individual files
--- are deleted after. Aborts (via `throwIO MergeError`) on any decode/fetch failure to avoid
--- silently clobbering historical data.
+-- Uses raw byte concatenation to avoid the V.concat + AE.encode copies: events are never
+-- re-parsed into AE.Array; sorting uses only the first event's timestamp from each file.
+-- Aborts (via `throwIO MergeError`) on any decode/fetch failure to avoid silently
+-- clobbering historical data.
 mergeOneSession :: Minio.ConnectInfo -> Minio.Bucket -> UUID.UUID -> [Text] -> IO ()
 mergeOneSession conn bucket sessionId fileKeys = do
   let mergedKey = fromString $ toString $ UUID.toText sessionId <> "/merged.json.gz"
       fileObjs = map (fromString . toString) fileKeys
 
-  existingRes <- Minio.runMinio conn $ fetchEventArray bucket mergedKey True
-  mergedExisting <- case existingRes of
-    Right (Right arr) -> pure arr
+  existingRes <- Minio.runMinio conn $ fetchRawForMerge bucket mergedKey True
+  (mergedTs, mergedRaw) <- case existingRes of
+    Right (Right r) -> pure r
     Right (Left decodeErr) -> throwIO $ MergeDecodeFailed [("merged.json.gz", decodeErr)]
     Left err
-      | isNoSuchKey err -> pure V.empty
+      | isNoSuchKey err -> pure (0, "[]")
       | otherwise -> throwIO $ MergeFetchFailed err
 
   -- Fetch each key in its own runMinio so one NoSuchKey (e.g. left over from a crashed
   -- prior merge) doesn't abort the whole batch. Decode failures and genuine transport
   -- errors still abort — we will not silently clobber historical data.
   perKey <- forM (zip fileKeys fileObjs) $ \(k, obj) ->
-    (k,) <$> Minio.runMinio conn (fetchEventArray bucket obj False)
+    (k,) <$> Minio.runMinio conn (fetchRawForMerge bucket obj False)
   -- Decode errors are permanent (corrupt data); transport errors are transient.
-  -- Conflating them would mark a merge permanently-failed on a single S3 hiccup.
-  let (decodeErrs, transportErrs, newArrays) = foldr classify ([], [], []) perKey
-      classify (_, Right (Right a)) (de, te, as) = (de, te, a : as)
-      classify (k, Right (Left e)) (de, te, as) = ((k, e) : de, te, as)
-      classify (k, Left me) (de, te, as)
-        | isNoSuchKey me = (de, te, as)
-        | otherwise = (de, me : te, as)
+  let (decodeErrs, transportErrs, newRaws) = foldr classify ([], [], []) perKey
+      classify (_, Right (Right r)) (de, te, rs) = (de, te, r : rs)
+      classify (k, Right (Left e)) (de, te, rs) = ((k, e) : de, te, rs)
+      classify (k, Left me) (de, te, rs)
+        | isNoSuchKey me = (de, te, rs)
+        | otherwise = (de, me : te, rs)
   case transportErrs of
     (firstErr : _) -> throwIO $ MergeFetchFailed firstErr
     [] -> unless (null decodeErrs) $ throwIO $ MergeDecodeFailed decodeErrs
 
-  let allEvents = mergeEventArrays (mergedExisting : newArrays)
-      compressed = GZip.compress $ AE.encode (AE.Array allEvents)
+  -- Sort by first event timestamp, then concatenate raw JSON bytes.
+  -- Forces both results strictly so each is fully computed and released before the next.
+  let sorted = sortWith fst $ (mergedTs, mergedRaw) : newRaws
+      !merged = concatRawJsonArrays (map snd sorted)
+      !compressed = GZip.compress merged
   putRes <- Minio.runMinio conn $ do
     Minio.putObject bucket mergedKey (CC.sourceLazy compressed) (Just (BL.length compressed)) Minio.defaultPutObjectOptions
     forM_ fileObjs $ Minio.removeObject bucket

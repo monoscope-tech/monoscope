@@ -111,6 +111,7 @@ data EnvConfig = EnvConfig
   , whatsappDashboardList :: Text
   , whatsappShareWidget :: Text
   , rrwebTopics :: [Text]
+  , replayBatchSize :: Int
   , s3Endpoint :: Text
   , s3Bucket :: Text
   , s3AccessKey :: Text
@@ -174,6 +175,7 @@ instance DefConfig EnvConfig where
       , migrationsDir = "./static/migrations/"
       , messagesPerPubsubPullBatch = 200
       , rrwebTopics = ["rrweb-client"]
+      , replayBatchSize = 0 -- 0 = derive at runtime as messagesPerPubsubPullBatch `div` 2
       , loggingDestination = Logging.StdOut
       , logLevel = LogInfo -- Default to Info level
       , smtpPort = 465

@@ -107,6 +107,10 @@ runServer appLogger env tp = do
           -- . loggingMiddleware
           $ server
   let bgJobWorker = BackgroundJobs.jobsWorkerInit appLogger env tp
+      effectiveReplayBatch =
+        if env.config.replayBatchSize == 0
+          then max 1 (env.config.messagesPerPubsubPullBatch `div` 2)
+          else env.config.replayBatchSize
   let logExc = logException env.config.environment appLogger env.config.logLevel
   -- Extraction worker shard fibers. Each shard runs `processEagerBatch` per
   -- batch inside its own `runBackground` effect stack. The error-decay fiber
@@ -133,8 +137,8 @@ runServer appLogger env tp = do
         , guard env.config.enablePubsubService $> async (supervise logExc "pubsub" $ Queue.pubsubService appLogger env tp env.config.requestPubsubTopics processMessages)
         , Just $ async $ supervise logExc "background-jobs" bgJobWorker
         , Just $ async $ supervise logExc "otlp-grpc" $ OtlpServer.runServer appLogger env tp
-        , guard (env.config.enableKafkaService && not (any T.null env.config.kafkaTopics)) $> async (supervise logExc "kafka" $ Queue.kafkaService appLogger env tp env.config.kafkaTopics OtlpServer.processList)
-        , guard env.config.enableReplayService $> async (supervise logExc "kafka-replay" $ Queue.kafkaService appLogger env tp env.config.rrwebTopics processReplayEvents)
+        , guard (env.config.enableKafkaService && not (any T.null env.config.kafkaTopics)) $> async (supervise logExc "kafka" $ Queue.kafkaService appLogger env tp env.config.kafkaTopics env.config.messagesPerPubsubPullBatch OtlpServer.processList)
+        , guard env.config.enableReplayService $> async (supervise logExc "kafka-replay" $ Queue.kafkaService appLogger env tp env.config.rrwebTopics effectiveReplayBatch processReplayEvents)
         ]
       <> fmap Just workerFibers
   void $ liftIO $ waitAnyCancel asyncs

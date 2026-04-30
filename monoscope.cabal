@@ -597,6 +597,7 @@ test-suite integration-tests
       Pages.ReportsSpec
       Pages.ShareSpec
       ProcessMessageSpec
+      ReplaySpec
       Spec
       Web.ApiV1Spec
       Web.ClientMetadataSpec
