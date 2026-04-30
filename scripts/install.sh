@@ -3,7 +3,7 @@ set -euo pipefail
 
 REPO="monoscope-tech/monoscope"
 INSTALL_DIR="${MONO_INSTALL_DIR:-$HOME/.local/bin}"
-BINARY="mono"
+BINARY="monoscope"
 
 info() { printf '\033[1;34m%s\033[0m\n' "$*"; }
 error() { printf '\033[1;31merror: %s\033[0m\n' "$*" >&2; exit 1; }
@@ -45,7 +45,7 @@ main() {
   fi
   info "Version: ${version}"
 
-  archive_name="mono-${platform}.tar.gz"
+  archive_name="monoscope-${platform}.tar.gz"
   download_url="https://github.com/${REPO}/releases/download/${version}/${archive_name}"
   checksum_url="https://github.com/${REPO}/releases/download/${version}/checksums.txt"
 
@@ -82,7 +82,7 @@ main() {
   fi
 
   echo ""
-  info "Run 'mono --help' to get started"
+  info "Run 'monoscope --help' to get started"
 }
 
 main "$@"
