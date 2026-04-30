@@ -47,7 +47,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Download frontend artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: frontend-assets
           path: static/public/assets/css
@@ -87,7 +87,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Download frontend artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: frontend-assets
           path: static/public/assets/css
@@ -147,7 +147,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Download frontend artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: frontend-assets
           path: static/public/assets/css
@@ -177,7 +177,9 @@ jobs:
       - name: Install system deps
         run: |
           brew install pkg-config libpq librdkafka snappy lz4 zstd grpc openssl
-          echo "$(brew --prefix libpq)/bin" >> $GITHUB_PATH
+          PREFIX=$(brew --prefix)
+          echo "PKG_CONFIG_PATH=$PREFIX/opt/libpq/lib/pkgconfig:$PREFIX/opt/snappy/lib/pkgconfig:$PREFIX/opt/librdkafka/lib/pkgconfig:$PREFIX/opt/lz4/lib/pkgconfig:$PREFIX/opt/zstd/lib/pkgconfig:$PREFIX/opt/grpc/lib/pkgconfig:$PREFIX/opt/openssl/lib/pkgconfig" >> $GITHUB_ENV
+          echo "$PREFIX/opt/libpq/bin" >> $GITHUB_PATH
 
       - name: Build CLI binary
         run: cabal build exe:monoscope -j --ghc-options="-O2 +RTS -A64m -n2m -RTS"
@@ -204,7 +206,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Download frontend artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: frontend-assets
           path: static/public/assets/css
@@ -234,7 +236,9 @@ jobs:
       - name: Install system deps
         run: |
           brew install pkg-config libpq librdkafka snappy lz4 zstd grpc openssl
-          echo "$(brew --prefix libpq)/bin" >> $GITHUB_PATH
+          PREFIX=$(brew --prefix)
+          echo "PKG_CONFIG_PATH=$PREFIX/opt/libpq/lib/pkgconfig:$PREFIX/opt/snappy/lib/pkgconfig:$PREFIX/opt/librdkafka/lib/pkgconfig:$PREFIX/opt/lz4/lib/pkgconfig:$PREFIX/opt/zstd/lib/pkgconfig:$PREFIX/opt/grpc/lib/pkgconfig:$PREFIX/opt/openssl/lib/pkgconfig" >> $GITHUB_ENV
+          echo "$PREFIX/opt/libpq/bin" >> $GITHUB_PATH
 
       - name: Build CLI binary
         run: cabal build exe:monoscope -j --ghc-options="-O2 +RTS -A64m -n2m -RTS"
@@ -256,7 +260,6 @@ jobs:
   release:
     name: Create GitHub Release
     needs: [build-linux-x64, build-linux-arm64, build-macos-arm64, build-macos-x64]
-
     runs-on: ubuntu-latest
     permissions:
       contents: write
