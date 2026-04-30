@@ -81,6 +81,7 @@ jobs:
   build-linux-arm64:
     name: Build Linux ARM64
     needs: build-frontend
+    continue-on-error: true
     runs-on: blacksmith-4vcpu-ubuntu-2404-arm
     container:
       image: ghcr.io/monoscope-tech/monoscope-deps:latest
@@ -241,6 +242,7 @@ jobs:
   release:
     name: Create GitHub Release
     needs: [build-linux-x64, build-linux-arm64, build-macos-arm64, build-macos-x64]
+    if: always() && !cancelled() && needs.build-linux-x64.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -248,7 +250,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
           path: artifacts
           merge-multiple: true
@@ -264,7 +266,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd artifacts
-          ASSETS="monoscope-linux-x86_64.tar.gz monoscope-linux-arm64.tar.gz monoscope-darwin-arm64.tar.gz monoscope-darwin-x86_64.tar.gz checksums.txt"
+          ASSETS=$(ls *.tar.gz checksums.txt 2>/dev/null | tr '\n' ' ')
           if gh release view "$GITHUB_REF_NAME" &>/dev/null; then
             gh release upload "$GITHUB_REF_NAME" $ASSETS --clobber
           else
