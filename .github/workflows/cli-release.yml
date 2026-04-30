@@ -115,7 +115,9 @@ jobs:
             cli-macos-arm64-dist-
 
       - name: Install system deps
-        run: brew install pkg-config libpq librdkafka snappy lz4 zstd grpc openssl
+        run: |
+          brew install pkg-config libpq librdkafka snappy lz4 zstd grpc openssl
+          echo "$(brew --prefix libpq)/bin" >> $GITHUB_PATH
 
       - name: Build CLI binary
         run: cabal build exe:monoscope -j --ghc-options="-O2 +RTS -A64m -n2m -RTS"
@@ -163,7 +165,9 @@ jobs:
             cli-macos-x64-dist-
 
       - name: Install system deps
-        run: brew install pkg-config libpq librdkafka snappy lz4 zstd grpc openssl
+        run: |
+          brew install pkg-config libpq librdkafka snappy lz4 zstd grpc openssl
+          echo "$(brew --prefix libpq)/bin" >> $GITHUB_PATH
 
       - name: Build CLI binary
         run: cabal build exe:monoscope -j --ghc-options="-O2 +RTS -A64m -n2m -RTS"
