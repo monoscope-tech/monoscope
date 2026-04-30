@@ -83,13 +83,6 @@ jobs:
     needs: build-frontend
     continue-on-error: true
     runs-on: blacksmith-4vcpu-ubuntu-2404-arm
-    container:
-      image: ghcr.io/monoscope-tech/monoscope-deps:latest
-      credentials:
-        username: ${{ github.repository_owner }}
-        password: ${{ secrets.GH_TOKEN }}
-      env:
-        CABAL_DIR: /root/.cabal
     steps:
       - uses: actions/checkout@v4
 
@@ -99,14 +92,35 @@ jobs:
           name: frontend-assets
           path: static/public/assets/css
 
+      - name: Install GHC and Cabal
+        uses: haskell-actions/setup@v2
+        with:
+          ghc-version: '9.12.2'
+          cabal-version: '3.14'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libssl-dev librdkafka-dev libsnappy-dev libgrpc-dev \
+            libpq-dev libldap2-dev libsasl2-dev liblz4-dev libzstd-dev \
+            pkg-config
+
+      - name: Cache Cabal
+        uses: actions/cache@v4
+        with:
+          path: ~/.cabal
+          key: cli-linux-arm64-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}
+          restore-keys: cli-linux-arm64-cabal-
+
       - name: Cache dist-newstyle
         uses: actions/cache@v4
         with:
           path: dist-newstyle
-          key: cli-linux-arm64-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}-${{ github.sha }}
+          key: cli-linux-arm64-dist-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}-${{ github.sha }}
           restore-keys: |
-            cli-linux-arm64-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}-
-            cli-linux-arm64-
+            cli-linux-arm64-dist-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}-
+            cli-linux-arm64-dist-
 
       - name: Build CLI binary
         run: cabal build exe:monoscope -j --ghc-options="-O2 +RTS -A64m -n2m -RTS"

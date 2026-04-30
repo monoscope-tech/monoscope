@@ -16,13 +16,21 @@ on:
 
 jobs:
   build-deps:
-    name: Build Dependencies Image
-    runs-on: ubuntu-latest
+    name: Build Dependencies Image (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: blacksmith-4vcpu-ubuntu-2404
+          - platform: linux/arm64
+            runner: blacksmith-4vcpu-ubuntu-2404-arm
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
       - name: Free Disk Space
         run: |
@@ -42,16 +50,37 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GH_TOKEN }}
 
-      - name: Build and push Dependencies Image
+      - name: Build and push platform image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile.deps
           push: true
-          tags: |
-            ghcr.io/monoscope-tech/monoscope-deps:latest
-            ghcr.io/monoscope-tech/monoscope-deps:${{ github.sha }}
-          cache-from: type=registry,ref=ghcr.io/monoscope-tech/monoscope-deps:buildcache
-          cache-to: type=registry,ref=ghcr.io/monoscope-tech/monoscope-deps:buildcache,mode=max
-          platforms: linux/amd64
+          tags: ghcr.io/monoscope-tech/monoscope-deps:${{ github.sha }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
+          cache-from: type=registry,ref=ghcr.io/monoscope-tech/monoscope-deps:buildcache-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
+          cache-to: type=registry,ref=ghcr.io/monoscope-tech/monoscope-deps:buildcache-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }},mode=max
+          platforms: ${{ matrix.platform }}
           provenance: false
+
+  merge-manifest:
+    name: Merge Multi-Arch Manifest
+    needs: build-deps
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Login to Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GH_TOKEN }}
+
+      - name: Create and push multi-arch manifest
+        run: |
+          docker buildx imagetools create \
+            --tag ghcr.io/monoscope-tech/monoscope-deps:latest \
+            --tag ghcr.io/monoscope-tech/monoscope-deps:${{ github.sha }} \
+            ghcr.io/monoscope-tech/monoscope-deps:${{ github.sha }}-amd64 \
+            ghcr.io/monoscope-tech/monoscope-deps:${{ github.sha }}-arm64
