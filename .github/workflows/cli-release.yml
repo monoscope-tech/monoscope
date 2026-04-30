@@ -178,15 +178,18 @@ jobs:
         run: |
           brew install pkg-config libpq librdkafka snappy lz4 zstd grpc openssl protobuf
           PREFIX=$(brew --prefix)
-          LIBS="snappy libpq librdkafka lz4 zstd grpc openssl"
-          PKG_PATH=$(for f in $LIBS; do echo -n "$PREFIX/opt/$f/lib/pkgconfig:"; done)
+          KEGONLY="snappy libpq librdkafka lz4 zstd openssl"
+          # Symlink keg-only libs/headers into /usr/local so configure scripts and GHC linker find them
+          sudo mkdir -p /usr/local/lib /usr/local/include
+          for f in $KEGONLY; do
+            pf="$PREFIX/opt/$f"
+            [ -d "$pf/lib" ]     && find "$pf/lib"     -maxdepth 1 \( -name "*.dylib" -o -name "*.a" \) -exec sudo ln -sf {} /usr/local/lib/ \;
+            [ -d "$pf/include" ] && sudo cp -rn "$pf/include/." /usr/local/include/ 2>/dev/null || true
+          done
+          # pkg-config paths as belt-and-suspenders
+          PKG_PATH=$(for f in $KEGONLY grpc; do echo -n "$PREFIX/opt/$f/lib/pkgconfig:"; done)
           echo "PKG_CONFIG_PATH=${PKG_PATH%:}" >> $GITHUB_ENV
-          echo "LDFLAGS=$(for f in $LIBS; do echo -n "-L$PREFIX/opt/$f/lib "; done)-L$PREFIX/lib" >> $GITHUB_ENV
-          echo "CPPFLAGS=$(for f in $LIBS; do echo -n "-I$PREFIX/opt/$f/include "; done)-I$PREFIX/include" >> $GITHUB_ENV
           echo "$PREFIX/opt/libpq/bin" >> $GITHUB_PATH
-          # cabal.project.local must have fields at column 0 (no leading whitespace)
-          printf 'extra-lib-dirs: %s\n' "$(for f in $LIBS; do echo -n "$PREFIX/opt/$f/lib "; done)$PREFIX/lib" >> cabal.project.local
-          printf 'extra-include-dirs: %s\n' "$(for f in $LIBS; do echo -n "$PREFIX/opt/$f/include "; done)$PREFIX/include" >> cabal.project.local
 
       - name: Build CLI binary
         run: cabal build exe:monoscope -j --ghc-options="-O2 +RTS -A64m -n2m -RTS"
