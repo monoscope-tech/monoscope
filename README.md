@@ -100,6 +100,23 @@ monoscope auth login
 
 See the [CLI reference](docs/cli.md) for the full command list.
 
+### Claude Code Skills
+
+Install Monoscope skills for Claude Code to enable AI-assisted incident investigation, on-call triage, and KQL query writing:
+
+```bash
+claude plugin marketplace add monoscope-tech/skills
+claude plugin install monoscope-skills@monoscope-skills
+```
+
+Or via the [skills.sh](https://skills.sh) ecosystem:
+
+```bash
+npx skills add monoscope-tech/skills
+```
+
+See [github.com/monoscope-tech/skills](https://github.com/monoscope-tech/skills) for details.
+
 <br/>
 
 ## Integration
