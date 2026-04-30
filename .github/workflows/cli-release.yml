@@ -104,7 +104,7 @@ jobs:
           sudo apt-get install -y \
             libssl-dev librdkafka-dev libsnappy-dev libgrpc-dev \
             libpq-dev libldap2-dev libsasl2-dev liblz4-dev libzstd-dev \
-            pkg-config
+            pkg-config protobuf-compiler
 
       - name: Cache Cabal
         uses: actions/cache@v4
@@ -176,7 +176,7 @@ jobs:
 
       - name: Install system deps
         run: |
-          brew install pkg-config libpq librdkafka snappy lz4 zstd grpc openssl
+          brew install pkg-config libpq librdkafka snappy lz4 zstd grpc openssl protobuf
           PREFIX=$(brew --prefix)
           echo "PKG_CONFIG_PATH=$PREFIX/opt/libpq/lib/pkgconfig:$PREFIX/opt/snappy/lib/pkgconfig:$PREFIX/opt/librdkafka/lib/pkgconfig:$PREFIX/opt/lz4/lib/pkgconfig:$PREFIX/opt/zstd/lib/pkgconfig:$PREFIX/opt/grpc/lib/pkgconfig:$PREFIX/opt/openssl/lib/pkgconfig" >> $GITHUB_ENV
           echo "$PREFIX/opt/libpq/bin" >> $GITHUB_PATH
@@ -235,7 +235,7 @@ jobs:
 
       - name: Install system deps
         run: |
-          brew install pkg-config libpq librdkafka snappy lz4 zstd grpc openssl
+          brew install pkg-config libpq librdkafka snappy lz4 zstd grpc openssl protobuf
           PREFIX=$(brew --prefix)
           echo "PKG_CONFIG_PATH=$PREFIX/opt/libpq/lib/pkgconfig:$PREFIX/opt/snappy/lib/pkgconfig:$PREFIX/opt/librdkafka/lib/pkgconfig:$PREFIX/opt/lz4/lib/pkgconfig:$PREFIX/opt/zstd/lib/pkgconfig:$PREFIX/opt/grpc/lib/pkgconfig:$PREFIX/opt/openssl/lib/pkgconfig" >> $GITHUB_ENV
           echo "$PREFIX/opt/libpq/bin" >> $GITHUB_PATH
