@@ -256,7 +256,7 @@ jobs:
   release:
     name: Create GitHub Release
     needs: [build-linux-x64, build-linux-arm64, build-macos-arm64, build-macos-x64]
-    if: always() && !cancelled() && needs.build-linux-x64.result == 'success'
+
     runs-on: ubuntu-latest
     permissions:
       contents: write
