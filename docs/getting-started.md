@@ -222,6 +222,23 @@ For production environments:
          device: /path/to/persistent/storage
    ```
 
+## Install the CLI
+
+The `monoscope` CLI lets you manage your project from the terminal — query logs, manage monitors, dashboards, API keys, and more.
+
+```bash
+curl -fsSL https://monoscope.tech/install.sh | bash
+```
+
+Then authenticate:
+
+```bash
+export MONO_PROJECT=<your-project-uuid>
+monoscope auth login --token <your-api-key>
+```
+
+See the [CLI reference](cli.md) for the full command list.
+
 ## Integrate Your Applications
 
 ### Node.js Applications

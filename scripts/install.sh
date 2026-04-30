@@ -5,8 +5,9 @@ REPO="monoscope-tech/monoscope"
 INSTALL_DIR="${MONO_INSTALL_DIR:-$HOME/.local/bin}"
 BINARY="monoscope"
 
-info() { printf '\033[1;34m%s\033[0m\n' "$*"; }
-error() { printf '\033[1;31merror: %s\033[0m\n' "$*" >&2; exit 1; }
+info()    { printf '\033[1;34m%s\033[0m\n' "$*"; }
+success() { printf '\033[1;32m%s\033[0m\n' "$*"; }
+error()   { printf '\033[1;31merror: %s\033[0m\n' "$*" >&2; exit 1; }
 
 detect_platform() {
   local os arch
@@ -31,19 +32,44 @@ get_latest_version() {
     || error "Could not find latest release"
 }
 
+get_installed_version() {
+  local bin="${INSTALL_DIR}/${BINARY}"
+  if [ -x "$bin" ]; then
+    "$bin" --version 2>/dev/null | grep -o 'v[0-9][^ ]*' | head -1 || true
+  fi
+}
+
 main() {
-  local platform version archive_name download_url checksum_url tmpdir
+  local platform version current_version archive_name download_url checksum_url tmpdir force=0
+
+  # Parse args: optional --force flag and optional version positional arg
+  local pos_args=()
+  for arg in "$@"; do
+    case "$arg" in
+      --force|-f) force=1 ;;
+      *) pos_args+=("$arg") ;;
+    esac
+  done
 
   platform="$(detect_platform)"
   info "Detected platform: ${platform}"
 
-  if [ -n "${1:-}" ]; then
-    version="$1"
+  if [ "${#pos_args[@]}" -gt 0 ]; then
+    version="${pos_args[0]}"
   else
     info "Fetching latest release..."
     version="$(get_latest_version)"
   fi
   info "Version: ${version}"
+
+  current_version="$(get_installed_version)"
+  if [ -n "$current_version" ]; then
+    if [ "$current_version" = "$version" ] && [ "$force" -eq 0 ]; then
+      success "${BINARY} ${version} is already installed and up to date."
+      exit 0
+    fi
+    info "Updating ${BINARY} ${current_version} → ${version}..."
+  fi
 
   archive_name="monoscope-${platform}.tar.gz"
   download_url="https://github.com/${REPO}/releases/download/${version}/${archive_name}"
@@ -71,7 +97,11 @@ main() {
   mv "${tmpdir}/${BINARY}" "${INSTALL_DIR}/${BINARY}"
   chmod +x "${INSTALL_DIR}/${BINARY}"
 
-  info "Installed ${BINARY} to ${INSTALL_DIR}/${BINARY}"
+  if [ -n "$current_version" ]; then
+    success "Updated ${BINARY} ${current_version} → ${version} at ${INSTALL_DIR}/${BINARY}"
+  else
+    success "Installed ${BINARY} ${version} to ${INSTALL_DIR}/${BINARY}"
+  fi
 
   if ! echo "$PATH" | tr ':' '\n' | grep -qx "$INSTALL_DIR"; then
     echo ""

@@ -84,6 +84,24 @@ telemetrygen traces --otlp-endpoint localhost:4317 --otlp-insecure \
 
 <br/>
 
+## CLI
+
+Manage your Monoscope project from the terminal — search logs, query metrics, manage monitors and dashboards, triage issues, and more.
+
+```bash
+curl -fsSL https://monoscope.tech/install.sh | bash
+```
+
+Then authenticate:
+
+```bash
+monoscope auth login
+```
+
+See the [CLI reference](docs/cli.md) for the full command list.
+
+<br/>
+
 ## Integration
 
 ### Auto-instrument your apps
@@ -265,6 +283,7 @@ Real-time metrics and performance monitoring with AI-powered insights.
 ## Documentation
 
 - [Getting Started Guide](docs/getting-started.md)
+- [CLI Reference](docs/cli.md)
 - [Configuration](docs/configuration.md)
 - [Kubernetes Guide](docs/kubernetes.md)
 - [Development Guide](docs/DEVELOPMENT.md)
