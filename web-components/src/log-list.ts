@@ -2255,19 +2255,16 @@ export class LogList extends LitElement {
     `;
   }
 
-  // Play button escalates with severity: neutral pill for clean sessions,
-  // filled brand CTA for sessions with errors. Keeps a restrained hover
-  // scale on both — the button is the primary affordance on the row, so
-  // it should feel alive without bouncing.
+  // Error sessions reuse the neutral pill but swap the border to strokeError
+  // as a quiet severity signal — no filled CTA, no scale change.
   createSessionButton = (sessionId: string, hasErrors: boolean = false) => html`
     <button
       class=${clsx(
         'inline-flex items-center justify-center shrink-0 self-center rounded-md cursor-pointer tooltip tooltip-left',
         'h-7 px-2.5 gap-1 transition-transform duration-150 ease-out hover:scale-105 active:scale-100',
         'motion-reduce:transition-none motion-reduce:hover:scale-100',
-        hasErrors
-          ? 'bg-fillBrand-strong text-textInverse-strong fill-textInverse-strong hover:bg-fillBrand-strong/90 shadow-xs font-medium'
-          : 'bg-fillWeak text-textStrong fill-iconNeutral hover:bg-fillStrong/10 border border-strokeWeak'
+        'bg-fillWeak text-textStrong fill-iconNeutral hover:bg-fillStrong/10 border',
+        hasErrors ? 'border-strokeError-strong' : 'border-strokeWeak'
       )}
       data-tip=${hasErrors ? 'Replay this broken session' : 'Play recording'}
       aria-label=${hasErrors ? 'Replay broken session' : 'Play session recording'}
@@ -2287,7 +2284,7 @@ export class LogList extends LitElement {
         if (wrapper) wrapper.classList.remove('hidden');
       }}
     >
-      ${faSprite('play', hasErrors ? 'solid' : 'regular', 'w-3.5 h-3.5')}
+      ${faSprite('play', 'regular', 'w-3.5 h-3.5')}
       <span class="text-xs">Play</span>
     </button>
   `;
