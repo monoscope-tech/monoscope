@@ -68,11 +68,11 @@ import Pkg.AI qualified as AI
 import BackgroundJobs qualified
 import Control.Lens ((.~), (?~))
 import Data.Map.Strict qualified as Map
-import Data.Set qualified as S
 import Data.OpenApi (NamedSchema (..), OpenApiItems (..), OpenApiType (..), Referenced (..), ToSchema (..))
 import Data.OpenApi qualified as OA
 import Data.Pool (withResource)
 import Data.Scientific (toBoundedInteger)
+import Data.Set qualified as S
 import Deriving.Aeson qualified as DAE
 import Effectful.Ki qualified as Ki
 import OddJobs.Job (createJob)

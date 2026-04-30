@@ -987,14 +987,14 @@ buildSpanTree_ pid sp trId level scol = do
         , id_ $ "trigger-span-" <> sp.spanRecord.spanId
         ]
           <> ( if isSynthetic
-                then [title_ ("Upstream parent span " <> sp.spanRecord.spanId <> " was never reported by the service. Showing an inferred placeholder.")]
-                else
-                  [ hxGet_ $ "/p/" <> pid.toText <> "/log_explorer/" <> spanId <> "/" <> tme <> "/detailed?source=spans"
-                  , hxTarget_ "#log_details_container"
-                  , hxSwap_ "innerHTML"
-                  , hxIndicator_ "#loading-span-list"
-                  , [__|on click remove .bg-fillBrand-weak from .waterfall-active then add .bg-fillBrand-weak .waterfall-active to me|]
-                  ]
+                 then [title_ ("Upstream parent span " <> sp.spanRecord.spanId <> " was never reported by the service. Showing an inferred placeholder.")]
+                 else
+                   [ hxGet_ $ "/p/" <> pid.toText <> "/log_explorer/" <> spanId <> "/" <> tme <> "/detailed?source=spans"
+                   , hxTarget_ "#log_details_container"
+                   , hxSwap_ "innerHTML"
+                   , hxIndicator_ "#loading-span-list"
+                   , [__|on click remove .bg-fillBrand-weak from .waterfall-active then add .bg-fillBrand-weak .waterfall-active to me|]
+                   ]
              )
       )
       do
