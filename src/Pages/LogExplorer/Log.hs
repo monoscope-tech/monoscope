@@ -68,6 +68,7 @@ import Pkg.AI qualified as AI
 import BackgroundJobs qualified
 import Control.Lens ((.~), (?~))
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as S
 import Data.OpenApi (NamedSchema (..), OpenApiItems (..), OpenApiType (..), Referenced (..), ToSchema (..))
 import Data.OpenApi qualified as OA
 import Data.Pool (withResource)
@@ -261,6 +262,54 @@ buildTraceTree colIdxMap queryResultCount rows = (adjustedRows, sortWith (Down .
 -- >>> import Data.Vector qualified as Vector
 -- >>> import Data.Aeson.QQ (aesonQQ)
 -- >>> import Data.Aeson
+
+
+-- | Detect query-result spans whose parent_id is missing from the result and
+-- ≥2 of them share that same parent_id. Emit one synthetic row per group whose
+-- latency_breakdown = parent_id so 'buildTraceTree' nests the orphans under
+-- it, matching the trace-breakdown waterfall's visual contract.
+synthesizeOrphanHeaders :: HM.HashMap Text Int -> V.Vector (V.Vector AE.Value) -> V.Vector (V.Vector AE.Value)
+synthesizeOrphanHeaders colIdxMap rows = V.fromList [synthRow t p ks | ((t, p), ks) <- Map.toList groups, length ks >= 2]
+  where
+    lookupIdx = flip HM.lookup colIdxMap
+    colCount = maybe 0 V.length (rows V.!? 0)
+    textAt k r = lookupIdx k >>= (r V.!?) >>= \case AE.String t | not (T.null t) -> Just t; _ -> Nothing
+    numAt k r = lookupIdx k >>= (r V.!?) >>= \case AE.Number n -> Just (round n :: Integer); _ -> Nothing
+    presentIds = S.fromList $ V.toList $ V.mapMaybe (textAt "latency_breakdown") rows
+    -- Combined orphan-detect + key extraction: trace_id + parent_id where the
+    -- parent_id is non-empty and not present as any row's span_id.
+    keyOf r = do
+      p <- textAt "parent_id" r
+      guard (not (S.member p presentIds))
+      t <- textAt "trace_id" r
+      pure (t, p)
+    groups = Map.fromListWith (<>) [(k, [r]) | r <- V.toList rows, Just k <- [keyOf r]]
+    firstText k = fromMaybe "" . asum . map (textAt k)
+    synthRow tid pid ks =
+      let spans' = mapMaybe (\r -> (,) <$> numAt "start_time_ns" r <*> numAt "duration" r) ks
+          startNs = foldr (min . fst) 0 spans'
+          endNs = foldr (max . uncurry (+)) startNs spans'
+          label = "Upstream span missing \x2014 " <> T.take 8 pid
+          -- Children count already shows on the tree chevron — no duplicate
+          -- here. Single 'text-textWeak' style so the renderer's
+          -- WEAK_TEXT_STYLES lookup matches; the italic + dashed border live
+          -- on the row in log-list.ts, keyed off the synthetic-* id.
+          fields :: [(Text, AE.Value)]
+          fields =
+            [ ("id", AE.String ("synthetic-" <> pid))
+            , ("timestamp", AE.String (firstText "timestamp" ks))
+            , ("trace_id", AE.String tid)
+            , ("span_name", AE.String label)
+            , ("duration", AE.Number (fromIntegral (max 0 (endNs - startNs))))
+            , ("service", AE.String (firstText "service" ks))
+            , ("parent_id", AE.Null)
+            , ("start_time_ns", AE.Number (fromIntegral startNs))
+            , ("errors", AE.Bool False)
+            , ("summary", AE.toJSON (["span_name;text-textWeak\x21d2" <> label] :: [Text]))
+            , ("latency_breakdown", AE.String pid)
+            , ("kind", AE.String "span")
+            ]
+       in V.replicate colCount AE.Null V.// [(i, v) | (k, v) <- fields, Just i <- [lookupIdx k]]
 
 
 rowCountDisplay_ :: Text -> Text -> Text -> Html ()
@@ -562,10 +611,12 @@ buildLogResult pid now sinceM fromM toM summaryCols (requestVecs, colNames, resu
         let allTraceIds = V.filter (not . T.null) $ V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "trace_id") requestVecs
             traceIds = V.fromList $ take 50 $ nubOrd $ V.toList allTraceIds
         LogQueries.selectChildSpansAndLogs pid summaryCols traceIds (fromDD, toDD) alreadyLoadedIds
-  let rawLogsData = requestVecs <> V.fromList childSpansList
+  let synthRows = synthesizeOrphanHeaders colIdxMap requestVecs
+      requestVecsAug = synthRows <> requestVecs
+      rawLogsData = requestVecsAug <> V.fromList childSpansList
       cols = nubOrd $ curateCols summaryCols colNames
       colors = getServiceColors $ V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") rawLogsData
-      queryResultCount = V.length requestVecs
+      queryResultCount = V.length requestVecsAug
       (logsData, traces) = buildTraceTree colIdxMap queryResultCount rawLogsData
   pure
     LogResult

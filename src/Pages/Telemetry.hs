@@ -884,49 +884,86 @@ stBox label value iconM =
     span_ [class_ "font-medium text-textWeak text-xs"] $ toHtml label
 
 
--- | Group spans by parent. Spans whose parent isn't in the batch (cross-trace
--- entries, dropped parents) are normalized to Nothing so they render as roots
--- instead of being silently dropped by the tree walk.
+syntheticMissingParentKey :: Text
+syntheticMissingParentKey = "monoscope.synthetic.missing_parent"
+
+
+-- | Orphan handling lives in 'buildSpanTree' (synthetic placeholders) — keep
+-- this map keyed by literal parent_id so we can detect them.
 buildSpanMap :: V.Vector Telemetry.SpanRecord -> MapS.Map (Maybe Text) [Telemetry.SpanRecord]
-buildSpanMap spans =
-  let ids = foldr (S.insert . (.spanId)) S.empty spans
-      norm sp = if maybe True (`S.member` ids) sp.parentSpanId then sp.parentSpanId else Nothing
-   in V.foldr (\sp m -> MapS.insertWith (++) (norm sp) [sp] m) MapS.empty spans
+buildSpanMap = V.foldr (\sp m -> MapS.insertWith (++) sp.parentSpanId [sp] m) MapS.empty
 
 
--- | Build span tree with clock skew adjustment: if a child starts before its parent
--- (due to clock skew between services), shift it forward to the parent's start time.
+-- | Build span tree with clock skew adjustment: if a child starts before its
+-- parent, shift it forward to the parent's start time. Orphans cluster under
+-- one synthetic placeholder per missing parent_id, instead of flattening as
+-- sibling roots.
 buildSpanTree :: V.Vector Telemetry.SpanRecord -> [SpanTree]
 buildSpanTree spans =
   let spanMap = buildSpanMap spans
-   in buildTree spanMap Nothing (0, toInteger (maxBound :: Int64))
+      ids :: Set Text
+      ids = V.foldr (S.insert . (.spanId)) S.empty spans
+      missingParents :: [Text]
+      missingParents =
+        ordNub $ V.toList $ V.mapMaybe (mfilter (\p -> not (T.null p) && not (S.member p ids)) . (.parentSpanId)) spans
+      realRoots = buildTree spanMap Nothing (0, toInteger (maxBound :: Int64))
+      orphanRoots = mapMaybe (syntheticRoot spanMap) missingParents
+   in realRoots <> orphanRoots
   where
-    buildTree spanMap parentId (pStart, pEnd) =
-      case MapS.lookup parentId spanMap of
-        Nothing -> []
-        Just spans' ->
-          [ let cStart = utcTimeToNanoseconds sp.startTime
-                delta = pStart - cStart
-                (adjStart, adjEnd, adjDur)
-                  | delta > 0 = (cStart + delta, (+ delta) . utcTimeToNanoseconds <$> sp.endTime, min sp.spanDurationNs (pEnd - cStart - delta))
-                  | otherwise = (cStart, utcTimeToNanoseconds <$> sp.endTime, sp.spanDurationNs)
-                rec =
-                  SpanMin
-                    { parentSpanId = sp.parentSpanId
-                    , spanId = sp.spanId
-                    , uSpanId = fromMaybe UUID.nil (UUID.fromText sp.uSpanId)
-                    , spanName = sp.spanName
-                    , spanDurationNs = adjDur
-                    , serviceName = getServiceName sp.resource
-                    , startTime = adjStart
-                    , endTime = adjEnd
-                    , hasErrors = spanHasErrors sp
-                    , timestamp = sp.timestamp
-                    , attributes = sp.attributes
-                    }
-             in SpanTree rec (buildTree spanMap (Just sp.spanId) (adjStart, adjStart + adjDur))
-          | sp <- spans'
-          ]
+    buildTree :: MapS.Map (Maybe Text) [Telemetry.SpanRecord] -> Maybe Text -> (Integer, Integer) -> [SpanTree]
+    buildTree spanMap parentId (pStart, pEnd) = case MapS.lookup parentId spanMap of
+      Nothing -> []
+      Just spans' ->
+        [ let cStart = utcTimeToNanoseconds sp.startTime
+              delta = max 0 (pStart - cStart)
+              adjStart = cStart + delta
+              adjEnd = fmap ((+ delta) . utcTimeToNanoseconds) sp.endTime
+              adjDur = if delta > 0 then min sp.spanDurationNs (pEnd - adjStart) else sp.spanDurationNs
+              rec = (spanMinFromRecord sp){spanDurationNs = adjDur, startTime = adjStart, endTime = adjEnd}
+           in SpanTree rec (buildTree spanMap (Just sp.spanId) (adjStart, adjStart + adjDur))
+        | sp <- spans'
+        ]
+
+    syntheticRoot :: MapS.Map (Maybe Text) [Telemetry.SpanRecord] -> Text -> Maybe SpanTree
+    syntheticRoot spanMap missingPid = case MapS.lookup (Just missingPid) spanMap of
+      Just kids@(sp : rest) ->
+        let startNs = foldr (min . (utcTimeToNanoseconds . (.startTime))) (utcTimeToNanoseconds sp.startTime) rest
+            endNs = foldr (max . utcTimeToNanoseconds) startNs (mapMaybe (.endTime) kids)
+            rec =
+              (spanMinFromRecord sp)
+                { parentSpanId = Nothing
+                , spanId = missingPid
+                , uSpanId = UUID.nil
+                , spanName = "Upstream span missing \x2014 " <> T.take 8 missingPid
+                , spanDurationNs = max 0 (endNs - startNs)
+                , startTime = startNs
+                , endTime = Just endNs
+                , hasErrors = False
+                , attributes = Just (MapS.singleton syntheticMissingParentKey (AE.String missingPid))
+                }
+         in Just (SpanTree rec (buildTree spanMap (Just missingPid) (startNs, endNs)))
+      _ -> Nothing
+
+
+-- | Lift a 'Telemetry.SpanRecord' into the lighter 'SpanMin' the waterfall
+-- renderer consumes. Time fields are normalised to nanos and end-time is
+-- mapped through Maybe; callers override durations / bounds when applying
+-- clock-skew adjustment or building synthetic placeholders.
+spanMinFromRecord :: Telemetry.SpanRecord -> SpanMin
+spanMinFromRecord sp =
+  SpanMin
+    { parentSpanId = sp.parentSpanId
+    , spanId = sp.spanId
+    , uSpanId = fromMaybe UUID.nil (UUID.fromText sp.uSpanId)
+    , spanName = sp.spanName
+    , spanDurationNs = sp.spanDurationNs
+    , serviceName = getServiceName sp.resource
+    , startTime = utcTimeToNanoseconds sp.startTime
+    , endTime = utcTimeToNanoseconds <$> sp.endTime
+    , hasErrors = spanHasErrors sp
+    , timestamp = sp.timestamp
+    , attributes = sp.attributes
+    }
 
 
 waterFallTree :: Projects.ProjectId -> [SpanTree] -> Text -> HashMap Text Text -> Html ()
@@ -942,28 +979,39 @@ buildSpanTree_ pid sp trId level scol = do
       spanId = UUID.toText sp.spanRecord.uSpanId
       indent = show (level * 12) <> "px"
       errRowCls = if sp.spanRecord.hasErrors then " bg-fillError-weak/40 hover:bg-fillError-weak" else ""
+      isSynthetic = maybe False (MapS.member syntheticMissingParentKey) sp.spanRecord.attributes
+      syntheticRowCls = if isSynthetic then " italic text-textWeak bg-fillWeaker/50" else " cursor-pointer"
   div_ [class_ "span-filterble"] do
     div_
-      [ class_ $ "flex items-center w-full h-7 cursor-pointer hover:bg-fillWeaker waterfall-row" <> errRowCls
-      , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer/" <> spanId <> "/" <> tme <> "/detailed?source=spans"
-      , hxTarget_ "#log_details_container"
-      , hxSwap_ "innerHTML"
-      , hxIndicator_ "#loading-span-list"
-      , id_ $ "trigger-span-" <> sp.spanRecord.spanId
-      , [__|on click remove .bg-fillBrand-weak from .waterfall-active then add .bg-fillBrand-weak .waterfall-active to me|]
-      ]
+      ( [ class_ $ "flex items-center w-full h-7 hover:bg-fillWeaker waterfall-row" <> errRowCls <> syntheticRowCls
+        , id_ $ "trigger-span-" <> sp.spanRecord.spanId
+        ]
+          <> ( if isSynthetic
+                then [title_ ("Upstream parent span " <> sp.spanRecord.spanId <> " was never reported by the service. Showing an inferred placeholder.")]
+                else
+                  [ hxGet_ $ "/p/" <> pid.toText <> "/log_explorer/" <> spanId <> "/" <> tme <> "/detailed?source=spans"
+                  , hxTarget_ "#log_details_container"
+                  , hxSwap_ "innerHTML"
+                  , hxIndicator_ "#loading-span-list"
+                  , [__|on click remove .bg-fillBrand-weak from .waterfall-active then add .bg-fillBrand-weak .waterfall-active to me|]
+                  ]
+             )
+      )
       do
         div_ [class_ "shrink-0 flex items-center gap-1 px-2 overflow-hidden", style_ $ "width:var(--wf-left);padding-left:" <> indent] do
-          when hasChildren
-            $ button_
-              [ class_ "waterfall-toggle w-4 h-4 flex items-center justify-center shrink-0"
-              , [__|on click halt the event's bubbling then toggle .hidden on the next .waterfall-children from the closest .span-filterble then toggle .rotate-90 on the first <svg/> in me|]
-              ]
-              do faSprite_ "chevron-right" "regular" "h-3 w-3 text-textWeak rotate-90"
-          unless hasChildren $ div_ [class_ "w-4 shrink-0"] pass
+          if hasChildren
+            then
+              button_
+                [ class_ "waterfall-toggle w-4 h-4 flex items-center justify-center shrink-0"
+                , [__|on click halt the event's bubbling then toggle .hidden on the next .waterfall-children from the closest .span-filterble then toggle .rotate-90 on the first <svg/> in me|]
+                ]
+                $ faSprite_ "chevron-right" "regular" "h-3 w-3 text-textWeak rotate-90"
+            else div_ [class_ "w-4 shrink-0"] pass
           let label = fromMaybe sp.spanRecord.spanName (spanDisplayLabel sp.spanRecord.attributes)
               tip = sp.spanRecord.serviceName <> " — " <> label
-          div_ [class_ $ "w-2.5 h-2.5 rounded-full shrink-0 " <> serviceCol, title_ sp.spanRecord.serviceName] pass
+          if isSynthetic
+            then faSprite_ "circle-question" "regular" "h-3 w-3 text-textWeak shrink-0"
+            else div_ [class_ $ "w-2.5 h-2.5 rounded-full shrink-0 " <> serviceCol, title_ sp.spanRecord.serviceName] pass
           when sp.spanRecord.hasErrors
             $ span_
               [ class_ "shrink-0 w-3.5 h-3.5 rounded-sm bg-fillError-strong text-textInverse-strong text-[10px] font-bold flex items-center justify-center leading-none"

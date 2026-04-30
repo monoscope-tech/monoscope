@@ -72,7 +72,9 @@ import Data.Generics.Labels ()
 import Data.HashMap.Strict qualified as HM
 import Data.List qualified as L (groupBy)
 import Data.List.Extra (chunksOf)
+import Data.List.NonEmpty qualified as NE
 import Data.Map qualified as Map
+import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (Display)
 import Data.Time (UTCTime)
@@ -565,15 +567,24 @@ logRecordById :: DB es => UTCTime -> UUID.UUID -> Eff es (Maybe OtelLogsAndSpans
 logRecordById = lookupOtelRecord Nothing
 
 
+-- | Full column list for SELECT against otel_logs_and_spans, in the field
+-- order 'OtelLogsAndSpans' expects. Centralised so the four trace/log lookups
+-- below can't drift out of sync.
+otelSpanColsSql :: HI.Sql
+otelSpanColsSql =
+  [HI.sql|project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource,
+          COALESCE(hashes, '{}'), kind, status_code, status_message, COALESCE(start_time, timestamp), end_time, events, links, duration, name, parent_id, summary, date::timestamptz|]
+
+
 lookupOtelRecord :: DB es => Maybe Text -> UTCTime -> UUID.UUID -> Eff es (Maybe OtelLogsAndSpans)
 lookupOtelRecord mPid createdAt rdId = do
   let tLo = addUTCTime (-1) createdAt
       tHi = addUTCTime 1 createdAt
       pidFilter = maybe mempty (\p -> [HI.sql| and project_id=#{p}|]) mPid
   Hasql.interpOne
-    $ [HI.sql|SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource,
-                COALESCE(hashes, '{}'), kind, status_code, status_message, COALESCE(start_time, timestamp), end_time, events, links, duration, name, parent_id, summary, date::timestamptz
-           FROM otel_logs_and_spans where timestamp BETWEEN #{tLo} AND #{tHi}|]
+    $ [HI.sql|SELECT |]
+    <> otelSpanColsSql
+    <> [HI.sql| FROM otel_logs_and_spans where timestamp BETWEEN #{tLo} AND #{tHi}|]
     <> pidFilter
     <> [HI.sql| and id=#{rdId} LIMIT 1|]
 
@@ -612,18 +623,68 @@ getEndpointTraceId pid method urlPath isFirst now =
         <> [HI.sql| LIMIT 1) |]
 
 
-getSpanRecordsByTraceId :: DB es => Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Eff es [OtelLogsAndSpans]
+-- | Up to this many extra round-trips to chase chains of late-ingested parents.
+maxOrphanResolverHops :: Int
+maxOrphanResolverHops = 3
+
+
+-- | Parent_ids referenced by some span in the batch but not present (and not
+-- empty). Drives both the iterative resolver and the unresolved-orphan log.
+orphanParentIds :: [OtelLogsAndSpans] -> [Text]
+orphanParentIds rs =
+  let present = S.fromList $ mapMaybe (\r -> r.context >>= (.span_id)) rs
+   in ordNub [p | r <- rs, Just p <- [r.parent_id], not (T.null p), not (S.member p present)]
+
+
+getSpanRecordsByTraceId :: (DB es, Log :> es) => Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Eff es [OtelLogsAndSpans]
 getSpanRecordsByTraceId pid trId tme now = do
   let pidTxt = pid.toText
+      baseT = fromMaybe now tme
       (start, end) = case tme of
         Nothing -> (addUTCTime (-(14 * 24 * 3600)) now, now)
-        Just ts -> (addUTCTime (-(60 * 5)) ts, addUTCTime (60 * 5) ts)
-  Hasql.interp
-    [HI.sql|
-      SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource,
-                  COALESCE(hashes, '{}'), kind, status_code, status_message, COALESCE(start_time, timestamp), end_time, events, links, duration, name, parent_id, summary, date::timestamptz
-              FROM otel_logs_and_spans where project_id=#{pidTxt} and timestamp BETWEEN #{start} AND #{end} and context___trace_id=#{trId} ORDER BY start_time ASC
-    |]
+        Just ts -> (addUTCTime (-300) ts, addUTCTime 300 ts)
+      (wideStart, wideEnd) = (addUTCTime (-86400) baseT, addUTCTime 86400 baseT)
+      resolveHop ids =
+        Hasql.interp
+          $ [HI.sql|SELECT |]
+          <> otelSpanColsSql
+          <> [HI.sql| FROM otel_logs_and_spans
+                       WHERE project_id=#{pidTxt}
+                         AND timestamp BETWEEN #{wideStart} AND #{wideEnd}
+                         AND context___trace_id=#{trId}
+                         AND context___span_id = ANY(#{ids})|]
+  initial :: [OtelLogsAndSpans] <-
+    Hasql.interp
+      $ [HI.sql|SELECT |]
+      <> otelSpanColsSql
+      <> [HI.sql| FROM otel_logs_and_spans
+                   WHERE project_id=#{pidTxt}
+                     AND timestamp BETWEEN #{start} AND #{end}
+                     AND context___trace_id=#{trId}
+                   ORDER BY start_time ASC|]
+  -- Resolve missing parents iteratively: a parent ingested outside ±5min
+  -- (clock skew, late ingestion, async batch) is looked up via
+  -- context___span_id within ±24h. Recovered spans may themselves have a
+  -- missing parent — loop up to 'maxOrphanResolverHops'. Anything still
+  -- unresolved becomes a synthetic placeholder in 'buildSpanTree' and is
+  -- logged so SREs can correlate with ingestion incidents.
+  let go !acc !hop !ids
+        | hop >= maxOrphanResolverHops || null ids = pure acc
+        | otherwise = do
+            extras <- resolveHop ids
+            if null extras
+              then pure acc -- no progress: remaining ids are truly absent
+              else let acc' = acc <> extras in go acc' (hop + 1) (orphanParentIds acc')
+  resolved <- go initial 0 (orphanParentIds initial)
+  whenNotNull (orphanParentIds resolved) \stillMissing ->
+    Log.logAttention "TRACE_ORPHAN_PARENTS_UNRESOLVED"
+      $ AE.object
+        [ "project_id" AE..= pidTxt
+        , "trace_id" AE..= trId
+        , "missing_count" AE..= length stillMissing
+        , "missing_sample" AE..= NE.take 5 stillMissing
+        ]
+  pure resolved
 
 
 getSpanRecordsByTraceIds :: (DB es, Time.Time :> es) => Projects.ProjectId -> V.Vector Text -> Maybe UTCTime -> Eff es [OtelLogsAndSpans]
@@ -635,16 +696,14 @@ getSpanRecordsByTraceIds pid traceIds tme = do
       pidText = pid.toText
       traceIdsList = V.toList traceIds
   Hasql.interp
-    [HI.sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity,
-                 body, attributes, resource, COALESCE(hashes, '{}'), kind, status_code, status_message,
-                 COALESCE(start_time, timestamp), end_time, events, links, duration, name,
-                 parent_id, summary, date::timestamptz
-          FROM otel_logs_and_spans
-          WHERE project_id = #{pidText}
-            AND timestamp >= #{start}
-            AND timestamp <= #{end'}
-            AND context___trace_id = ANY(#{traceIdsList})
-          ORDER BY context___trace_id ASC, start_time ASC |]
+    $ [HI.sql|SELECT |]
+    <> otelSpanColsSql
+    <> [HI.sql| FROM otel_logs_and_spans
+                 WHERE project_id = #{pidText}
+                   AND timestamp >= #{start}
+                   AND timestamp <= #{end'}
+                   AND context___trace_id = ANY(#{traceIdsList})
+                 ORDER BY context___trace_id ASC, start_time ASC|]
 
 
 spanRecordByProjectAndId :: DB es => Projects.ProjectId -> UTCTime -> UUID.UUID -> Eff es (Maybe OtelLogsAndSpans)

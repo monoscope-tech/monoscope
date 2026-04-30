@@ -1694,6 +1694,8 @@ export class LogList extends LitElement {
     const wrapClass = this.wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap';
     // When rendering inside aggregate children, use overridden colIdxMap
     const colIdxMap = this._renderOverrides?.colIdxMap ?? this.colIdxMap;
+    // Detect once, reused by latency + summary cases.
+    const isSyntheticRow = isSyntheticRowId(lookupVecValue<string>(dataArr, colIdxMap, 'id'));
 
     switch (key) {
       case 'pattern_count':
@@ -1745,7 +1747,9 @@ export class LogList extends LitElement {
         const currentWidth = this.columnMaxWidthMap['latency_breakdown'] || this.fixedColumnWidths['latency_breakdown'] || 120;
         if (!rowData._latencyCache || rowData._latencyCache.width !== currentWidth || rowData._latencyCache.expanded !== expanded) {
           const { traceStart, traceEnd, startNs, duration, childrenTimeSpans } = rowData;
-          const color = this.serviceColors[lookupVecValue<string>(dataArr, colIdxMap, 'span_name')] || 'bg-slate-400';
+          const color = isSyntheticRow
+            ? 'bg-transparent border border-dashed border-strokeWeak'
+            : this.serviceColors[lookupVecValue<string>(dataArr, colIdxMap, 'span_name')] || 'bg-slate-400';
           const chil = childrenTimeSpans.map(({ startNs, duration, data }: { startNs: number; duration: number; data: any }) => ({
             startNs: startNs - traceStart,
             duration,
@@ -1828,6 +1832,9 @@ export class LogList extends LitElement {
             wrapLines: this.wrapLines,
           };
         }
+        // Synthetic-orphan rows append a click-to-copy chip showing the full
+        // upstream parent id (carried in the latency_breakdown column).
+        const synthParentId = isSyntheticRow ? lookupVecValue<string>(dataArr, colIdxMap, 'latency_breakdown') ?? '' : '';
         if (this.mode === 'patterns') {
           return html`<div class="break-all whitespace-break-spaces">${rowData._summaryCache.content}</div>`;
         }
@@ -1880,7 +1887,7 @@ export class LogList extends LitElement {
           <div class=${clsx(
             'flex gap-1 min-w-0',
             isSessionTopLevel ? 'flex-1 items-center' : this.wrapLines ? 'items-center break-all flex-wrap' : 'items-center overflow-hidden'
-          )}>${summaryContent}</div>
+          )}>${summaryContent}${synthParentId ? renderCopyIdChip(synthParentId) : nothing}</div>
         </div>`;
       case 'service':
         let serviceData = lookupVecValue<string>(dataArr, colIdxMap, key);
@@ -2078,6 +2085,9 @@ export class LogList extends LitElement {
       const isErrorSessionRow = isSessionTopLevelRow && !!rowData.hasErrors;
       const cellBg = isErrorSessionRow ? 'bg-fillError-weak' : 'bg-bgBase';
       const rowHoverBg = isErrorSessionRow ? 'hover:bg-fillError-weak' : 'hover:bg-fillWeaker';
+      // Synthetic placeholder rows (server tags id="synthetic-<parent_id>")
+      // get muted styling so they don't compete with real spans.
+      const isSynthetic = isSyntheticRowId(lookupVecValue<string>(rowData.data, this.colIdxMap, 'id'));
       const rowHtml = html`
         <tr
           class=${clsx(
@@ -2088,6 +2098,7 @@ export class LogList extends LitElement {
             // All non-wrapping, non-aggregate rows (including sessions) use the
             // dense 28px log row height for a consistent rhythm.
             !this.wrapLines && !isAggregate && 'h-[28px] items-center',
+            isSynthetic && 'italic text-textWeak border-l-2 border-dashed border-strokeWeak',
             isNew && 'animate-fadeBg'
           )}
           style=${Object.entries(columnStyles)
@@ -2529,6 +2540,39 @@ class ColumnsSettings extends LitElement {
     );
   }
 }
+
+const isSyntheticRowId = (id: unknown): id is string => typeof id === 'string' && id.startsWith('synthetic-');
+
+
+// Click-to-copy chip for synthetic-row parent ids. Briefly swaps the copy
+// icon for a checkmark on success — confirmation without a toast.
+function renderCopyIdChip(fullId: string) {
+  const onClick = async (e: MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const btn = e.currentTarget as HTMLButtonElement;
+    try {
+      await navigator.clipboard.writeText(fullId);
+      btn.classList.add('copied');
+      setTimeout(() => btn.classList.remove('copied'), 1200);
+    } catch (err) {
+      console.warn('clipboard.writeText failed for parent id:', err);
+    }
+  };
+  const short = fullId.length > 10 ? fullId.slice(0, 8) + '…' : fullId;
+  return html`<button
+    type="button"
+    class="group/copy inline-flex items-center gap-1 px-1.5 py-px ml-1 rounded border border-strokeWeak text-xs font-mono text-textWeak hover:text-textStrong hover:border-strokeStrong cursor-copy transition-colors [&.copied_.copy-icon]:hidden [&.copied_.check-icon]:inline-flex"
+    title="Copy full parent id: ${fullId}"
+    aria-label="Copy parent id ${fullId}"
+    @click=${onClick}
+  >
+    <span class="truncate max-w-[10ch]">${short}</span>
+    <span class="copy-icon opacity-50 group-hover/copy:opacity-100" aria-hidden="true">${faSprite('copy', 'regular', 'w-3 h-3')}</span>
+    <span class="check-icon hidden text-textSuccess" aria-hidden="true">${faSprite('check', 'regular', 'w-3 h-3')}</span>
+  </button>`;
+}
+
 
 function spanLatencyBreakdown({
   start,

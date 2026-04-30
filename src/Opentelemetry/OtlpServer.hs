@@ -697,6 +697,15 @@ byteStringToHexText :: BS.ByteString -> Text
 byteStringToHexText !bs = decodeUtf8 (B16.encode bs)
 
 
+-- | Hex-encode a span/parent id, collapsing empty and all-zero bytes to
+-- Nothing. Some producers send 8/16 zero bytes to mean "no parent" instead
+-- of an empty field — downstream queries must not treat "0000…" as a real id.
+hexIdMaybe :: BS.ByteString -> Maybe Text
+hexIdMaybe bs
+  | BS.null bs || BS.all (== 0) bs = Nothing
+  | otherwise = Just (byteStringToHexText bs)
+
+
 keyValueToJSON :: [PC.KeyValue] -> AE.Value
 keyValueToJSON !kvs =
   let
@@ -845,14 +854,7 @@ convertLogRecordToOtelLog !fallbackTime !pid resourceM scopeM logRecord =
           then nanosecondsToUTC observedTimeNano
           else fallbackTime
 
-      -- Convert parent span ID, ensuring empty strings become Nothing
-      !parentSpanIdBS = logRecord ^. PLF.spanId
-      !parentId =
-        if BS.null parentSpanIdBS
-          then Nothing
-          else
-            let hexText = byteStringToHexText parentSpanIdBS
-             in if T.null hexText then Nothing else Just hexText
+      !parentId = hexIdMaybe (logRecord ^. PLF.spanId)
 
       otelLog =
         OtelLogsAndSpans
@@ -972,13 +974,7 @@ convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
       statusMsgText = case statusM of
         Just status -> Just $ status ^. PTF.message
         Nothing -> Nothing
-      parentSpanId = pSpan ^. PTF.parentSpanId
-      parentId =
-        if BS.null parentSpanId
-          then Nothing
-          else
-            let hexText = byteStringToHexText parentSpanId
-             in if T.null hexText then Nothing else Just hexText
+      parentId = hexIdMaybe (pSpan ^. PTF.parentSpanId)
 
       -- Convert events only if non-empty
       eventsJson =
