@@ -57,7 +57,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: frontend-assets
-          path: .
+          path: static/public/assets
 
       - name: Cache dist-newstyle
         uses: actions/cache@v4
@@ -97,7 +97,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: frontend-assets
-          path: .
+          path: static/public/assets
 
       - name: Install GHC and Cabal
         uses: haskell-actions/setup@v2
@@ -157,7 +157,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: frontend-assets
-          path: .
+          path: static/public/assets
 
       - name: Install GHC and Cabal
         uses: haskell-actions/setup@v2
@@ -226,7 +226,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: frontend-assets
-          path: .
+          path: static/public/assets
 
       - name: Install GHC and Cabal
         uses: haskell-actions/setup@v2
