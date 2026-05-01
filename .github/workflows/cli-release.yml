@@ -31,7 +31,7 @@ jobs:
           NODE_ENV=production npx vite build --mode production --sourcemap false
 
       - name: Upload frontend artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: frontend-assets
           path: |
@@ -57,7 +57,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: frontend-assets
-          path: static/public/assets
+          path: .
 
       - name: Cache dist-newstyle
         uses: actions/cache@v4
@@ -97,7 +97,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: frontend-assets
-          path: static/public/assets
+          path: .
 
       - name: Install GHC and Cabal
         uses: haskell-actions/setup@v2
@@ -157,7 +157,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: frontend-assets
-          path: static/public/assets
+          path: .
 
       - name: Install GHC and Cabal
         uses: haskell-actions/setup@v2
@@ -226,7 +226,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: frontend-assets
-          path: static/public/assets
+          path: .
 
       - name: Install GHC and Cabal
         uses: haskell-actions/setup@v2
