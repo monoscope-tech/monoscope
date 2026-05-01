@@ -211,10 +211,9 @@ endpointListGetH
 endpointListGetH pid pageM perPageM layoutM filterTM hostM currentTabM sortM periodM hxRequestM hxBoostedM hxCurrentURL loadMoreM searchM = do
   (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
-  let (ackd, archived, currentFilterTab) = case filterTM of
-        -- Legacy "Active"/"Inbox" links route to the default tab.
-        Just "Archived" -> (False, True, "Archived")
-        _ -> (True, False, "Endpoints")
+  let (archived, currentFilterTab) = case filterTM of
+        Just "Archived" -> (True, "Archived")
+        _ -> (False, "Endpoints")
 
   let host = maybeToMonoid $ hostM >>= \t -> if t == "" then Nothing else Just t
       page = fromMaybe 0 $ readMaybe (toString $ fromMaybe "" pageM)
@@ -232,8 +231,8 @@ endpointListGetH pid pageM perPageM layoutM filterTM hostM currentTabM sortM per
         _ -> Just "events"
   (endpointStats, totalCount) <-
     concurrently
-      (Endpoints.endpointRequestStatsByProject pid ackd archived hostParam sortV searchM page perPage (fromMaybe "" currentTabM) period)
-      (Endpoints.countEndpointsForHost pid isOutgoing hostParam searchM)
+      (Endpoints.endpointRequestStatsByProject pid archived hostParam sortV searchM page perPage (fromMaybe "" currentTabM) period)
+      (Endpoints.countEndpointsForHost pid isOutgoing archived hostParam searchM)
   freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
 
   let currentTab = fromMaybe "Incoming" currentTabM

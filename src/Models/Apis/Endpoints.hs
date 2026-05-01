@@ -176,10 +176,15 @@ directionClauseSql :: Maybe Bool -> HI.Sql
 directionClauseSql = maybe [HI.sql| |] (\o -> [HI.sql| AND outgoing = #{o} |])
 
 
+archivedHostClauseSql :: Bool -> HI.Sql
+archivedHostClauseSql True  = [HI.sql| AND h.archived_at IS NOT NULL|]
+archivedHostClauseSql False = [HI.sql| AND h.archived_at IS NULL|]
+
+
 -- FIXME: Include and return a boolean flag to show if fields that have annomalies.
 -- FIXME: return endpoint_hash as well.
-endpointRequestStatsByProject :: DB es => Projects.ProjectId -> Bool -> Bool -> Maybe Text -> Maybe Text -> Maybe Text -> Int -> Int -> Text -> Text -> Eff es (V.Vector EndpointRequestStats)
-endpointRequestStatsByProject pid _ackd _archived pHostM sortM searchM page perPage requestType period = V.fromList <$> Hasql.interp query
+endpointRequestStatsByProject :: DB es => Projects.ProjectId -> Bool -> Maybe Text -> Maybe Text -> Maybe Text -> Int -> Int -> Text -> Text -> Eff es (V.Vector EndpointRequestStats)
+endpointRequestStatsByProject pid archived pHostM sortM searchM page perPage requestType period = V.fromList <$> Hasql.interp query
   where
     isOutgoing = requestType == "Outgoing"
     offset = page * perPage
@@ -231,6 +236,7 @@ endpointRequestStatsByProject pid _ackd _archived pHostM sortM searchM page perP
            \        COALESCE(ba.activity_buckets, ARRAY[]::int[]) AS activity_buckets,\
            \        COALESCE(es.services, ARRAY[]::text[]) AS services\
            \ FROM apis.endpoints enp\
+           \ JOIN apis.hosts h ON (h.project_id = enp.project_id AND h.host = enp.host AND h.outgoing = enp.outgoing)\
            \ LEFT JOIN endpoint_stats es ON (enp.url_path=es.url_path AND enp.method=es.method)\
            \ LEFT JOIN bucketed_agg ba ON (enp.url_path=ba.url_path AND enp.method=ba.method)\
            \ WHERE enp.project_id="
@@ -239,6 +245,7 @@ endpointRequestStatsByProject pid _ackd _archived pHostM sortM searchM page perP
         <> [HI.sql|#{isOutgoing}|]
         <> pHostQuery
         <> search
+        <> archivedHostClauseSql archived
         <> " ORDER BY "
         <> rawSql orderBy
         <> ", url_path ASC OFFSET "
@@ -395,17 +402,18 @@ countEndpointsByProject pid outgoing =
 
 
 -- | Count of endpoints under a (project, direction) optionally filtered by
--- host and url_path search — mirrors the row filters used by
+-- host, url_path search, and archived status — mirrors the row filters used by
 -- 'endpointRequestStatsByProject' so paginators stay in sync.
-countEndpointsForHost :: DB es => Projects.ProjectId -> Bool -> Maybe Text -> Maybe Text -> Eff es Int
-countEndpointsForHost pid outgoing pHostM searchM = do
-  let hostQ = maybe "" (\h -> [HI.sql| AND host = #{h}|]) pHostM
-      searchQ = maybe "" (\s -> let pat = "%" <> s <> "%" in [HI.sql| AND url_path LIKE #{pat}|]) searchM
+countEndpointsForHost :: DB es => Projects.ProjectId -> Bool -> Bool -> Maybe Text -> Maybe Text -> Eff es Int
+countEndpointsForHost pid outgoing archived pHostM searchM = do
+  let hostQ = maybe "" (\h -> [HI.sql| AND enp.host = #{h}|]) pHostM
+      searchQ = maybe "" (\s -> let pat = "%" <> s <> "%" in [HI.sql| AND enp.url_path LIKE #{pat}|]) searchM
   fromMaybe 0
     <$> Hasql.interpOne
-      ( [HI.sql| SELECT COUNT(*)::int FROM apis.endpoints WHERE project_id = #{pid} AND outgoing = #{outgoing}|]
+      ( [HI.sql| SELECT COUNT(*)::int FROM apis.endpoints enp JOIN apis.hosts h ON (h.project_id = enp.project_id AND h.host = enp.host AND h.outgoing = enp.outgoing) WHERE enp.project_id = #{pid} AND enp.outgoing = #{outgoing}|]
           <> hostQ
           <> searchQ
+          <> archivedHostClauseSql archived
       )
 
 
