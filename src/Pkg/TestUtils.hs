@@ -155,6 +155,8 @@ import System.Logging qualified as Logging
 import System.Tracing (Tracing)
 import System.Tracing qualified as Tracing
 import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, RespHeaders, atAuthToBase, atAuthToBaseTest, effToServantHandlerTest)
+import Unsafe.Coerce (unsafeCoerce)
+import Web.ApiHandlers qualified as ApiH
 import Web.Auth qualified as Auth
 import Web.Cookie (SetCookie)
 
@@ -1157,18 +1159,26 @@ extractParams opts = opts ^. W.params
 
 
 -- | Test HTTP interpreter that routes CLI requests to server handlers.
--- Intercepts GetWith and routes based on URL path to the real handlers.
+-- Dispatches GET, POST, PUT, PATCH, DELETE to real servant handlers in-process.
 runHTTPtoServant :: IOE :> es => TestResources -> Eff (HTTP ': es) a -> Eff es a
 runHTTPtoServant tr = interpret $ \_ -> \case
   GetWith opts url -> liftIO $ routeRequest tr (extractPath url) (extractParams opts)
   Get url -> liftIO $ routeRequest tr (extractPath url) []
-  _ -> error "runHTTPtoServant: only GET is supported for CLI tests"
+  -- CLI always sends LBS via AE.encode; the coerce is safe in the test interpreter
+  PostWith _opts url body -> liftIO $ routeWriteRequest tr (extractPath url) (unsafeCoerce body)
+  Post url body -> liftIO $ routeWriteRequest tr (extractPath url) (unsafeCoerce body)
+  PutWith _opts url body -> liftIO $ routeWriteRequest tr (extractPath url) (unsafeCoerce body)
+  Put url body -> liftIO $ routeWriteRequest tr (extractPath url) (unsafeCoerce body)
+  PatchWith _opts url body -> liftIO $ routeWriteRequest tr (extractPath url) (unsafeCoerce body)
+  Patch url body -> liftIO $ routeWriteRequest tr (extractPath url) (unsafeCoerce body)
+  DeleteWith _opts url -> liftIO $ routeDeleteRequest tr (extractPath url)
+  Delete url -> liftIO $ routeDeleteRequest tr (extractPath url)
+  _ -> error "runHTTPtoServant: unsupported HTTP method (Options/Head not routed)"
 
 
 extractPath :: String -> Text
 extractPath url =
   let t = toText url
-      -- Strip scheme + host to get path
       afterScheme = fromMaybe t $ T.stripPrefix "https://" t <|> T.stripPrefix "http://" t
       path = T.dropWhile (/= '/') afterScheme
    in if T.null path then "/" else T.takeWhile (/= '?') path
@@ -1176,6 +1186,22 @@ extractPath url =
 
 lookupParam :: Text -> [(Text, Text)] -> Maybe Text
 lookupParam key = fmap snd . find ((== key) . fst)
+
+
+pInt :: Text -> [(Text, Text)] -> Maybe Int
+pInt k ps = lookupParam k ps >>= readMaybe . toString
+
+
+pBool :: Text -> [(Text, Text)] -> Maybe Bool
+pBool k ps = lookupParam k ps >>= \case "true" -> Just True; "false" -> Just False; _ -> Nothing
+
+
+parseUUIDId :: Text -> UUIDId t
+parseUUIDId t = UUIDId $ fromMaybe (error $ "invalid UUID in CLI test path: " <> t) (UUID.fromText t)
+
+
+parseIntId :: Text -> Int64
+parseIntId t = fromMaybe (error $ "invalid int in CLI test path: " <> t) (readMaybe (toString t))
 
 
 routeRequest :: TestResources -> Text -> [(Text, Text)] -> IO (Response LBS.ByteString)
@@ -1192,7 +1218,8 @@ routeRequest tr path params
         runQueryEffect tr
           $ Charts.queryMetrics Nothing Nothing (Just testPid) query Nothing since from to source []
       pure $ mockResponse $ AE.encode result
-  | otherwise = error $ "runHTTPtoServant: unhandled path: " <> path
+  | "/api/v1/" `T.isPrefixOf` path = routeApiV1Get tr (T.drop 8 path) params
+  | otherwise = error $ "runHTTPtoServant: unhandled GET path: " <> path
   where
     p = lookupParam
     query = p "query" params
@@ -1201,6 +1228,56 @@ routeRequest tr path params
     to = p "to" params
     source = p "source" params
     jsonParam = p "json" params
+
+
+routeApiV1Get :: TestResources -> Text -> [(Text, Text)] -> IO (Response LBS.ByteString)
+routeApiV1Get tr rest params = case T.splitOn "/" rest of
+  ["issues"] ->
+    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiIssuesList testPid Nothing Nothing Nothing (pInt "page" params) (pInt "per_page" params))
+  ["issues", iid] ->
+    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiIssueGet testPid (parseUUIDId iid))
+  ["endpoints"] ->
+    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiEndpointsList testPid (lookupParam "search" params) (pBool "outgoing" params) (pInt "page" params) (pInt "per_page" params))
+  ["endpoints", eid] ->
+    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiEndpointGet testPid (parseUUIDId eid))
+  ["log_patterns"] ->
+    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiLogPatternsList testPid (pInt "page" params) (pInt "per_page" params))
+  ["log_patterns", lpid] ->
+    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiLogPatternGet testPid (parseIntId lpid))
+  ["me"] -> mockResponse . AE.encode <$> runAsBase tr (ApiH.apiMe testPid)
+  ["project"] -> mockResponse . AE.encode <$> runAsBase tr (ApiH.apiProjectGet testPid)
+  _ -> error $ "runHTTPtoServant: unhandled GET api/v1/" <> rest
+
+
+routeWriteRequest :: TestResources -> Text -> LBS.ByteString -> IO (Response LBS.ByteString)
+routeWriteRequest tr path body
+  | "/api/v1/" `T.isPrefixOf` path = routeApiV1Write tr (T.drop 8 path) body
+  | otherwise = error $ "runHTTPtoServant: unhandled write path: " <> path
+
+
+routeApiV1Write :: TestResources -> Text -> LBS.ByteString -> IO (Response LBS.ByteString)
+routeApiV1Write tr rest body = case T.splitOn "/" rest of
+  ["issues", iid, "ack"] ->
+    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiIssueAck testPid (parseUUIDId iid))
+  ["issues", iid, "unack"] ->
+    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiIssueUnack testPid (parseUUIDId iid))
+  ["issues", iid, "archive"] ->
+    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiIssueArchive testPid (parseUUIDId iid))
+  ["issues", iid, "unarchive"] ->
+    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiIssueUnarchive testPid (parseUUIDId iid))
+  ["issues", "bulk"] ->
+    let ba = fromMaybe (error "routeApiV1Write: failed to decode BulkAction IssueId") (AE.decode body)
+     in mockResponse . AE.encode <$> runAsBase tr (ApiH.apiIssuesBulk testPid ba)
+  ["log_patterns", lpid, "ack"] ->
+    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiLogPatternAck testPid (parseIntId lpid))
+  ["log_patterns", "bulk"] ->
+    let ba = fromMaybe (error "routeApiV1Write: failed to decode BulkAction Int64") (AE.decode body)
+     in mockResponse . AE.encode <$> runAsBase tr (ApiH.apiLogPatternsBulk testPid ba)
+  _ -> error $ "runHTTPtoServant: unhandled write api/v1/" <> rest
+
+
+routeDeleteRequest :: TestResources -> Text -> IO (Response LBS.ByteString)
+routeDeleteRequest _tr path = error $ "runHTTPtoServant: DELETE not yet routed — use runAsBase for: " <> path
 
 
 ----------------------------------------------------------------------

@@ -50,6 +50,9 @@ spec = aroundAll withTestResources do
           Just arr -> not (null arr)
           Nothing -> False
 
+      -- This list doubles as the CLI contract: every path the CLI constructs
+      -- (without the /api/v1 prefix the Servant base already provides) must
+      -- appear here. If a Servant route is renamed, this test fails first.
       it "declares all expected endpoint paths" $ \_tr -> do
         let expectedPaths :: [Text]
             expectedPaths =

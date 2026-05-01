@@ -6,7 +6,7 @@ import Control.Lens ((&), (.~), (^.))
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Lazy qualified as LBS
-import Data.Effectful.Wreq (HTTP, getWith, responseBody)
+import Data.Effectful.Wreq (HTTP, getWith, postWith, responseBody)
 import Data.Effectful.Wreq qualified as W
 import Data.Time (addUTCTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
@@ -26,6 +26,10 @@ cliGet base path params = do
   let url = toString (base <> path)
       opts = foldl' (\acc (k, v) -> acc & Wreq.param k .~ [v]) W.defaults params
   (^. responseBody) <$> getWith opts url
+
+
+cliPost :: (HTTP :> es) => Text -> Text -> AE.Value -> Eff es LBS.ByteString
+cliPost base path body = (^. responseBody) <$> postWith W.defaults (toString (base <> path)) (AE.encode body)
 
 runCLITest :: TestResources -> Eff '[HTTP, IOE] a -> IO a
 runCLITest tr = runEff . runHTTPtoServant tr
@@ -137,3 +141,35 @@ spec = aroundAll withTestResources do
               checkJsonValue val $ \fieldObj ->
                 shouldHaveKeys fieldObj ["field_type", "description"]
           _ -> expectationFailure "Expected fields to be an object"
+
+  -- These tests verify that the URL paths the CLI constructs actually route to
+  -- real server handlers. A wrong path (e.g. missing /api/v1 prefix) causes
+  -- runHTTPtoServant to error, making the test fail immediately.
+  describe "CLI api/v1 resource commands" do
+    it "GET /api/v1/issues returns Paged envelope" \tr -> do
+      bs <- runCLITest tr $ cliGet baseUrl "/api/v1/issues" []
+      decodeObject bs $ \obj -> shouldHaveKeys obj ["data", "page", "per_page", "total_count"]
+
+    it "POST /api/v1/issues/bulk with empty ids succeeds" \tr -> do
+      bs <- runCLITest tr $ cliPost baseUrl "/api/v1/issues/bulk" (AE.object ["action" AE..= ("acknowledge" :: Text), "ids" AE..= ([] :: [AE.Value])])
+      decodeObject bs $ \obj -> shouldHaveKeys obj ["succeeded", "failed"]
+
+    it "GET /api/v1/endpoints returns Paged envelope" \tr -> do
+      bs <- runCLITest tr $ cliGet baseUrl "/api/v1/endpoints" []
+      decodeObject bs $ \obj -> shouldHaveKeys obj ["data", "page", "per_page", "total_count"]
+
+    it "GET /api/v1/log_patterns returns Paged envelope" \tr -> do
+      bs <- runCLITest tr $ cliGet baseUrl "/api/v1/log_patterns" []
+      decodeObject bs $ \obj -> shouldHaveKeys obj ["data", "page", "per_page", "total_count"]
+
+    it "POST /api/v1/log_patterns/bulk with empty ids succeeds" \tr -> do
+      bs <- runCLITest tr $ cliPost baseUrl "/api/v1/log_patterns/bulk" (AE.object ["action" AE..= ("acknowledge" :: Text), "ids" AE..= ([] :: [AE.Value])])
+      decodeObject bs $ \obj -> shouldHaveKeys obj ["succeeded", "failed"]
+
+    it "GET /api/v1/me returns project summary" \tr -> do
+      bs <- runCLITest tr $ cliGet baseUrl "/api/v1/me" []
+      decodeObject bs $ \obj -> shouldHaveKeys obj ["project_id", "project"]
+
+    it "GET /api/v1/project returns project full" \tr -> do
+      bs <- runCLITest tr $ cliGet baseUrl "/api/v1/project" []
+      decodeObject bs $ \obj -> shouldHaveKeys obj ["summary"]

@@ -722,62 +722,62 @@ run global = \case
     DashDelete i -> Resource.runDelete cfg Resource.Dashboards i
     DashStar i -> Resource.runLifecycle cfg Resource.Dashboards i "star" [] mode
     DashUnstar i ->
-      Resource.withResult (apiDelete cfg ("/dashboards/" <> i <> "/star")) renderAPIError $ \() ->
-        putTextLn $ "/dashboards/" <> i <> "/star unstarred"
+      Resource.withResult (apiDelete cfg ("/api/v1/dashboards/" <> i <> "/star")) renderAPIError $ \() ->
+        putTextLn $ "/api/v1/dashboards/" <> i <> "/star unstarred"
     DashDuplicate i -> Resource.runLifecycle cfg Resource.Dashboards i "duplicate" [] mode
     DashYaml i -> Resource.runYamlDump cfg Resource.Dashboards i
     DashApply path -> Resource.runApplyResource cfg Resource.Dashboards path mode
     DashBulk act ids -> Resource.runBulk cfg Resource.Dashboards act ids Nothing mode
-    DashWidgetUpsert did path -> Resource.runFromFile cfg Resource.PUT ("/dashboards/" <> did <> "/widgets") [] path mode
+    DashWidgetUpsert did path -> Resource.runFromFile cfg Resource.PUT ("/api/v1/dashboards/" <> did <> "/widgets") [] path mode
     DashWidgetDelete did wid ->
-      Resource.withResult (apiDelete cfg ("/dashboards/" <> did <> "/widgets/" <> wid)) renderAPIError $ \() ->
-        putTextLn $ "/dashboards/" <> did <> "/widgets/" <> wid <> " deleted"
+      Resource.withResult (apiDelete cfg ("/api/v1/dashboards/" <> did <> "/widgets/" <> wid)) renderAPIError $ \() ->
+        putTextLn $ "/api/v1/dashboards/" <> did <> "/widgets/" <> wid <> " deleted"
     DashWidgetsReorder did tabM path ->
-      Resource.runFromFile cfg Resource.PATCH ("/dashboards/" <> did <> "/widgets/order") (maybe [] (\t -> [("tab", t)]) tabM) path mode
+      Resource.runFromFile cfg Resource.PATCH ("/api/v1/dashboards/" <> did <> "/widgets/order") (maybe [] (\t -> [("tab", t)]) tabM) path mode
   ApiKeysCmd sub -> withCfgMode global $ \cfg mode -> case sub of
     KeyList -> Resource.runList cfg Resource.ApiKeys [] mode
     KeyGet i -> Resource.runGet cfg Resource.ApiKeys i mode
     KeyCreate title ->
-      Resource.runAPI mode $ apiPostJson @_ @_ @AE.Value cfg "/api_keys" [] (AE.object ["title" AE..= title])
+      Resource.runAPI mode $ apiPostJson @_ @_ @AE.Value cfg "/api/v1/api_keys" [] (AE.object ["title" AE..= title])
     KeyActivate i -> Resource.runLifecycle cfg Resource.ApiKeys i "activate" [] mode
     KeyDeactivate i -> Resource.runLifecycle cfg Resource.ApiKeys i "deactivate" [] mode
     KeyDelete i -> Resource.runDelete cfg Resource.ApiKeys i
   ShareLinkCmd (ShareLinkCreate eid createdAt typeM) -> withCfgMode global $ \cfg mode ->
     Resource.runAPI mode $
-      apiPostJson @_ @_ @AE.Value cfg "/share" [] $
+      apiPostJson @_ @_ @AE.Value cfg "/api/v1/share" [] $
         AE.object
           [ "event_id" AE..= eid
           , "event_created_at" AE..= createdAt
           , "event_type" AE..= typeM
           ]
   MeCmd -> withCfgMode global $ \cfg mode ->
-    Resource.runAPI mode (apiGetJson @_ @AE.Value cfg "/me" [])
+    Resource.runAPI mode (apiGetJson @_ @AE.Value cfg "/api/v1/me" [])
   ProjectCmd sub -> withCfgMode global $ \cfg mode -> case sub of
-    ProjGet -> Resource.runAPI mode (apiGetJson @_ @AE.Value cfg "/project" [])
-    ProjPatch path -> Resource.runFromFile cfg Resource.PATCH "/project" [] path mode
+    ProjGet -> Resource.runAPI mode (apiGetJson @_ @AE.Value cfg "/api/v1/project" [])
+    ProjPatch path -> Resource.runFromFile cfg Resource.PATCH "/api/v1/project" [] path mode
   IssuesCmd sub -> withCfgMode global $ \cfg mode -> case sub of
     IssueList statusM typeM svcM pageM perM ->
       let params = catMaybes [("status",) <$> statusM, ("type",) <$> typeM, ("service",) <$> svcM] <> pageParams pageM perM
-       in Resource.runAPI mode (apiGetJson @_ @AE.Value cfg "/issues" params)
-    IssueGet i -> Resource.runAPI mode (apiGetJson @_ @AE.Value cfg ("/issues/" <> i) [])
-    IssueAck i -> Resource.writeJson cfg Resource.POST ("/issues/" <> i <> "/ack") [] AE.Null mode
-    IssueUnack i -> Resource.writeJson cfg Resource.POST ("/issues/" <> i <> "/unack") [] AE.Null mode
-    IssueArchive i -> Resource.writeJson cfg Resource.POST ("/issues/" <> i <> "/archive") [] AE.Null mode
-    IssueUnarchive i -> Resource.writeJson cfg Resource.POST ("/issues/" <> i <> "/unarchive") [] AE.Null mode
+       in Resource.runAPI mode (apiGetJson @_ @AE.Value cfg "/api/v1/issues" params)
+    IssueGet i -> Resource.runAPI mode (apiGetJson @_ @AE.Value cfg ("/api/v1/issues/" <> i) [])
+    IssueAck i -> Resource.writeJson cfg Resource.POST ("/api/v1/issues/" <> i <> "/ack") [] AE.Null mode
+    IssueUnack i -> Resource.writeJson cfg Resource.POST ("/api/v1/issues/" <> i <> "/unack") [] AE.Null mode
+    IssueArchive i -> Resource.writeJson cfg Resource.POST ("/api/v1/issues/" <> i <> "/archive") [] AE.Null mode
+    IssueUnarchive i -> Resource.writeJson cfg Resource.POST ("/api/v1/issues/" <> i <> "/unarchive") [] AE.Null mode
     IssueBulk act ids ->
-      Resource.writeJson cfg Resource.POST "/issues/bulk" [] (AE.object ["action" AE..= act, "ids" AE..= ids]) mode
+      Resource.writeJson cfg Resource.POST "/api/v1/issues/bulk" [] (AE.object ["action" AE..= act, "ids" AE..= ids]) mode
   EndpointsCmd sub -> withCfgMode global $ \cfg mode -> case sub of
     EndList searchM outgoingM pageM perM ->
       let params = catMaybes [("search",) <$> searchM, ("outgoing",) . bool "false" "true" <$> outgoingM] <> pageParams pageM perM
-       in Resource.runAPI mode (apiGetJson @_ @AE.Value cfg "/endpoints" params)
-    EndGet i -> Resource.runAPI mode (apiGetJson @_ @AE.Value cfg ("/endpoints/" <> i) [])
+       in Resource.runAPI mode (apiGetJson @_ @AE.Value cfg "/api/v1/endpoints" params)
+    EndGet i -> Resource.runAPI mode (apiGetJson @_ @AE.Value cfg ("/api/v1/endpoints/" <> i) [])
   LogPatternsCmd sub -> withCfgMode global $ \cfg mode -> case sub of
     LPList pageM perM ->
-      Resource.runAPI mode (apiGetJson @_ @AE.Value cfg "/log_patterns" (pageParams pageM perM))
-    LPGet i -> Resource.runAPI mode (apiGetJson @_ @AE.Value cfg ("/log_patterns/" <> show i) [])
-    LPAck i -> Resource.writeJson cfg Resource.POST ("/log_patterns/" <> show i <> "/ack") [] AE.Null mode
+      Resource.runAPI mode (apiGetJson @_ @AE.Value cfg "/api/v1/log_patterns" (pageParams pageM perM))
+    LPGet i -> Resource.runAPI mode (apiGetJson @_ @AE.Value cfg ("/api/v1/log_patterns/" <> show i) [])
+    LPAck i -> Resource.writeJson cfg Resource.POST ("/api/v1/log_patterns/" <> show i <> "/ack") [] AE.Null mode
     LPBulk act ids ->
-      Resource.writeJson cfg Resource.POST "/log_patterns/bulk" [] (AE.object ["action" AE..= act, "ids" AE..= ids]) mode
+      Resource.writeJson cfg Resource.POST "/api/v1/log_patterns/bulk" [] (AE.object ["action" AE..= act, "ids" AE..= ids]) mode
   TeamsCmd sub -> withCfgMode global $ \cfg mode -> case sub of
     TeamList -> Resource.runList cfg Resource.Teams [] mode
     TeamGet i -> Resource.runGet cfg Resource.Teams i mode
@@ -802,7 +802,7 @@ run global = \case
       Resource.writeJson cfg Resource.PATCH (Resource.resourceIdPath Resource.Members uid) [] (AE.object ["permission" AE..= perm]) mode
     MemberRemove uid -> Resource.runDelete cfg Resource.Members uid
   SchemaCmd -> withCfgMode global $ \cfg mode ->
-    Resource.runAPI mode (apiGetJson @_ @AE.Value cfg "/schema" [])
+    Resource.runAPI mode (apiGetJson @_ @AE.Value cfg "/api/v1/schema" [])
   CompletionCmd shell -> emitCompletion shell
   VersionCmd -> putTextLn $ "monoscope " <> toText (showVersion Paths.version)
 

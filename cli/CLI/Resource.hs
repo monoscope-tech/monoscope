@@ -47,9 +47,9 @@ data WriteVerb = POST | PUT | PATCH
   deriving stock (Eq, Show)
 
 
--- | URL prefix for a given kind (matches server routes under /api/v1).
+-- | URL prefix for a given kind under /api/v1.
 resourcePath :: ResourceKind -> Text
-resourcePath = \case
+resourcePath = ("/api/v1" <>) . \case
   Monitors -> "/monitors"
   Dashboards -> "/dashboards"
   ApiKeys -> "/api_keys"
