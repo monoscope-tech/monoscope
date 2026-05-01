@@ -1042,6 +1042,7 @@ export class LogList extends LitElement {
       }
 
       this.hasMore = meta.hasMore !== false;
+      if (!this.hasMore) this.expandTimeRange = true;
       if (isLoadMore || isRefresh || !this.spanListTree.length) this.nextFetchUrl = meta.nextUrl;
       if (isRecentFetch || !this.spanListTree.length) this.recentFetchUrl = meta.recentUrl;
       if (isLoadMore) {
