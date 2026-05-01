@@ -215,72 +215,9 @@ jobs:
           path: monoscope-darwin-arm64.tar.gz
           retention-days: 5
 
-  build-macos-x64:
-    name: Build macOS x86_64
-    needs: build-frontend
-    runs-on: macos-13
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download frontend artifacts
-        uses: actions/download-artifact@v8
-        with:
-          name: frontend-assets
-          path: static/public/assets
-
-      - name: Install GHC and Cabal
-        uses: haskell-actions/setup@v2
-        with:
-          ghc-version: '9.12.2'
-          cabal-version: '3.14'
-
-      - name: Cache Cabal
-        uses: actions/cache@v4
-        with:
-          path: ~/.cabal
-          key: cli-macos-x64-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}
-          restore-keys: cli-macos-x64-cabal-
-
-      - name: Cache dist-newstyle
-        uses: actions/cache@v4
-        with:
-          path: dist-newstyle
-          key: cli-macos-x64-dist-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}-${{ github.sha }}
-          restore-keys: |
-            cli-macos-x64-dist-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}-
-            cli-macos-x64-dist-
-
-      - name: Install system deps
-        run: |
-          brew install pkg-config libpq librdkafka snappy lz4 zstd grpc openssl protobuf
-          PREFIX=$(brew --prefix)
-          echo "PKG_CONFIG_PATH=$PREFIX/opt/libpq/lib/pkgconfig:$PREFIX/opt/snappy/lib/pkgconfig:$PREFIX/opt/librdkafka/lib/pkgconfig:$PREFIX/opt/lz4/lib/pkgconfig:$PREFIX/opt/zstd/lib/pkgconfig:$PREFIX/opt/grpc/lib/pkgconfig:$PREFIX/opt/openssl/lib/pkgconfig" >> $GITHUB_ENV
-          echo "$PREFIX/opt/libpq/bin" >> $GITHUB_PATH
-          cat >> cabal.project.local <<EOF
-          extra-lib-dirs: $PREFIX/opt/snappy/lib $PREFIX/opt/libpq/lib $PREFIX/opt/librdkafka/lib $PREFIX/opt/lz4/lib $PREFIX/opt/zstd/lib $PREFIX/opt/openssl/lib $PREFIX/lib
-          extra-include-dirs: $PREFIX/opt/snappy/include $PREFIX/opt/libpq/include $PREFIX/opt/librdkafka/include $PREFIX/opt/lz4/include $PREFIX/opt/zstd/include $PREFIX/opt/openssl/include $PREFIX/include
-          EOF
-
-      - name: Build CLI binary
-        run: cabal build exe:monoscope -j --ghc-options="-O2 +RTS -A64m -n2m -RTS"
-
-      - name: Package binary
-        run: |
-          BIN=$(cabal list-bin exe:monoscope | tail -n1)
-          strip "$BIN"
-          cp "$BIN" monoscope
-          tar czf monoscope-darwin-x86_64.tar.gz monoscope
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: monoscope-darwin-x86_64
-          path: monoscope-darwin-x86_64.tar.gz
-          retention-days: 5
-
   release:
     name: Create GitHub Release
-    needs: [build-linux-x64, build-linux-arm64, build-macos-arm64, build-macos-x64]
+    needs: [build-linux-x64, build-linux-arm64, build-macos-arm64]
     runs-on: ubuntu-latest
     permissions:
       contents: write
