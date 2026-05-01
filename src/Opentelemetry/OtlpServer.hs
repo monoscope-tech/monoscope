@@ -386,27 +386,27 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds conv
 -- | Parse a database connection string to extract server address and port
 --
 -- >>> import qualified Data.Aeson as AE
--- >>> import Opentelemetry.OtlpServer
+-- >>> import "monoscope" Opentelemetry.OtlpServer qualified as OS
 --
--- >>> parseConnectionString "Server=localhost:5432"
+-- >>> OS.parseConnectionString "Server=localhost:5432"
 -- [("server.address",String "localhost"),("server.port",String "5432")]
 --
--- >>> parseConnectionString "Server=localhost,1433"
+-- >>> OS.parseConnectionString "Server=localhost,1433"
 -- [("server.address",String "localhost"),("server.port",String "1433")]
 --
--- >>> parseConnectionString "Server=localhost,1433;Database=mydb;User Id=myuser;Password=mypass;"
+-- >>> OS.parseConnectionString "Server=localhost,1433;Database=mydb;User Id=myuser;Password=mypass;"
 -- [("server.address",String "localhost"),("server.port",String "1433")]
 --
--- >>> parseConnectionString "Server=(localdb)\\v11.0;Integrated Security=true;"
+-- >>> OS.parseConnectionString "Server=(localdb)\\v11.0;Integrated Security=true;"
 -- [("server.address",String "(localdb)\\v11.0")]
 --
--- >>> parseConnectionString "Server=db.example.com"
+-- >>> OS.parseConnectionString "Server=db.example.com"
 -- [("server.address",String "db.example.com")]
 --
--- >>> parseConnectionString "Host=localhost"
+-- >>> OS.parseConnectionString "Host=localhost"
 -- [("server.address",String "localhost")]
 --
--- >>> parseConnectionString ""
+-- >>> OS.parseConnectionString ""
 -- []
 parseConnectionString :: Text -> [(Text, AE.Value)]
 parseConnectionString connStr =
@@ -433,17 +433,17 @@ parseConnectionString connStr =
 -- | Migrate Elasticsearch path parts to db.operation.parameter
 --
 -- >>> import qualified Data.Aeson as AE
--- >>> import Opentelemetry.OtlpServer
--- >>> migrateElasticsearchPathParts [("db.elasticsearch.path_parts.index", AE.String "users"), ("db.elasticsearch.path_parts.id", AE.String "123")]
+-- >>> import "monoscope" Opentelemetry.OtlpServer qualified as OS
+-- >>> OS.migrateElasticsearchPathParts [("db.elasticsearch.path_parts.index", AE.String "users"), ("db.elasticsearch.path_parts.id", AE.String "123")]
 -- [("db.operation.parameter.index",String "users"),("db.operation.parameter.id",String "123")]
 --
--- >>> migrateElasticsearchPathParts [("other.field", AE.String "value"), ("db.elasticsearch.path_parts.doc_type", AE.String "customer")]
+-- >>> OS.migrateElasticsearchPathParts [("other.field", AE.String "value"), ("db.elasticsearch.path_parts.doc_type", AE.String "customer")]
 -- [("db.operation.parameter.doc_type",String "customer")]
 --
--- >>> migrateElasticsearchPathParts []
+-- >>> OS.migrateElasticsearchPathParts []
 -- []
 --
--- >>> migrateElasticsearchPathParts [("db.system", AE.String "elasticsearch")]
+-- >>> OS.migrateElasticsearchPathParts [("db.system", AE.String "elasticsearch")]
 -- []
 migrateElasticsearchPathParts :: [(Text, AE.Value)] -> [(Text, AE.Value)]
 migrateElasticsearchPathParts keyVals =
@@ -458,51 +458,51 @@ migrateElasticsearchPathParts keyVals =
 -- to their new standardized names according to the latest OTEL spec.
 --
 -- >>> import qualified Data.Aeson as AE
--- >>> import Opentelemetry.OtlpServer
+-- >>> import "monoscope" Opentelemetry.OtlpServer qualified as OS
 --
 -- == HTTP field migrations
--- >>> migrateHttpSemanticConventions [("http.method", AE.String "GET")]
+-- >>> OS.migrateHttpSemanticConventions [("http.method", AE.String "GET")]
 -- [("http.request.method",String "GET")]
 --
--- >>> migrateHttpSemanticConventions [("http.status_code", AE.Number 200)]
+-- >>> OS.migrateHttpSemanticConventions [("http.status_code", AE.Number 200)]
 -- [("http.response.status_code",Number 200.0)]
 --
--- >>> migrateHttpSemanticConventions [("http.url", AE.String "https://example.com"), ("http.client_ip", AE.String "192.168.1.1")]
+-- >>> OS.migrateHttpSemanticConventions [("http.url", AE.String "https://example.com"), ("http.client_ip", AE.String "192.168.1.1")]
 -- [("url.full",String "https://example.com"),("client.address",String "192.168.1.1")]
 --
 -- == Database field migrations
--- >>> migrateHttpSemanticConventions [("db.system", AE.String "postgresql"), ("db.name", AE.String "users")]
+-- >>> OS.migrateHttpSemanticConventions [("db.system", AE.String "postgresql"), ("db.name", AE.String "users")]
 -- [("db.system.name",String "postgresql"),("db.namespace",String "users")]
 --
--- >>> migrateHttpSemanticConventions [("db.statement", AE.String "SELECT * FROM users")]
+-- >>> OS.migrateHttpSemanticConventions [("db.statement", AE.String "SELECT * FROM users")]
 -- [("db.query.text",String "SELECT * FROM users")]
 --
--- >>> migrateHttpSemanticConventions [("db.cassandra.table", AE.String "products"), ("db.cassandra.consistency_level", AE.String "quorum")]
+-- >>> OS.migrateHttpSemanticConventions [("db.cassandra.table", AE.String "products"), ("db.cassandra.consistency_level", AE.String "quorum")]
 -- [("db.collection.name",String "products"),("cassandra.consistency.level",String "quorum")]
 --
 -- == Special migrations
--- >>> migrateHttpSemanticConventions [("db.connection_string", AE.String "Server=db.example.com:5432")]
+-- >>> OS.migrateHttpSemanticConventions [("db.connection_string", AE.String "Server=db.example.com:5432")]
 -- [("server.address",String "db.example.com"),("server.port",String "5432")]
 --
--- >>> migrateHttpSemanticConventions [("db.elasticsearch.path_parts.index", AE.String "logs-2024"), ("db.elasticsearch.path_parts.id", AE.String "abc123")]
+-- >>> OS.migrateHttpSemanticConventions [("db.elasticsearch.path_parts.index", AE.String "logs-2024"), ("db.elasticsearch.path_parts.id", AE.String "abc123")]
 -- [("db.operation.parameter.index",String "logs-2024"),("db.operation.parameter.id",String "abc123")]
 --
--- >>> migrateHttpSemanticConventions [("db.redis.database_index", AE.Number 3)]
+-- >>> OS.migrateHttpSemanticConventions [("db.redis.database_index", AE.Number 3)]
 -- [("db.namespace",String "3")]
 --
 -- == Deprecated fields removal
--- >>> migrateHttpSemanticConventions [("db.user", AE.String "admin"), ("db.jdbc.driver_classname", AE.String "org.postgresql.Driver")]
+-- >>> OS.migrateHttpSemanticConventions [("db.user", AE.String "admin"), ("db.jdbc.driver_classname", AE.String "org.postgresql.Driver")]
 -- []
 --
 -- == HTTP target migration
--- >>> migrateHttpSemanticConventions [("http.target", AE.String "/api/users?page=1&limit=10")]
+-- >>> OS.migrateHttpSemanticConventions [("http.target", AE.String "/api/users?page=1&limit=10")]
 -- [("url.path",String "/api/users"),("url.query",String "page=1&limit=10")]
 --
--- >>> migrateHttpSemanticConventions [("http.target", AE.String "/api/users"), ("url.path", AE.String "/api/users")]
+-- >>> OS.migrateHttpSemanticConventions [("http.target", AE.String "/api/users"), ("url.path", AE.String "/api/users")]
 -- [("url.path",String "/api/users")]
 --
 -- == HTTP method _OTHER migration
--- >>> migrateHttpSemanticConventions [("http.method", AE.String "_OTHER"), ("http.request.method_original", AE.String "PROPFIND")]
+-- >>> OS.migrateHttpSemanticConventions [("http.method", AE.String "_OTHER"), ("http.request.method_original", AE.String "PROPFIND")]
 -- [("http.request.method",String "PROPFIND")]
 --
 -- == Browser error.* → OTel exception.* normalization
@@ -511,11 +511,11 @@ migrateElasticsearchPathParts keyVals =
 -- extraction and Issues pipelines only have to understand one namespace.
 -- error.name (JS class, e.g. "TypeError") is preferred over error.type
 -- (category, e.g. "uncaught_exception") for exception.type.
--- >>> migrateHttpSemanticConventions [("error.name", AE.String "TypeError"), ("error.message", AE.String "x is null"), ("error.stack", AE.String "at f()")]
+-- >>> OS.migrateHttpSemanticConventions [("error.name", AE.String "TypeError"), ("error.message", AE.String "x is null"), ("error.stack", AE.String "at f()")]
 -- [("error.name",String "TypeError"),("error.message",String "x is null"),("error.stack",String "at f()"),("exception.type",String "TypeError"),("exception.message",String "x is null"),("exception.stacktrace",String "at f()")]
 --
 -- Existing @exception.*@ fields win when both are present:
--- >>> migrateHttpSemanticConventions [("error.name", AE.String "TypeError"), ("exception.type", AE.String "DomainError")]
+-- >>> OS.migrateHttpSemanticConventions [("error.name", AE.String "TypeError"), ("exception.type", AE.String "DomainError")]
 -- [("error.name",String "TypeError"),("exception.type",String "DomainError")]
 fieldMappingsMap :: HM.HashMap Text Text
 fieldMappingsMap =

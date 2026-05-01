@@ -695,12 +695,14 @@ spec = aroundAll withTestResources do
       ingestTraceWithException tr apiKey "POST /api/connect" "ConnectionRefusedError" "connect ECONNREFUSED 10.0.0.1:5432" connErrStack (addUTCTime (-10) frozenTime)
 
       -- b) Process errors → creates error patterns + RuntimeException issues
+      -- Exclude PatternEmbeddingAndMerge to prevent auto-merging TypeErrors before manual assignment
+      let notEmbedMerge = \case BackgroundJobs.PatternEmbeddingAndMerge _ _ -> False; _ -> True
       drainExtractionWorker tr
-      void $ runAllBackgroundJobs frozenTime tr.trATCtx
+      void $ runBackgroundJobsWhere frozenTime tr.trATCtx notEmbedMerge
 
       -- c) Run pending background jobs (processOneMinuteErrors enqueued EnhanceIssuesWithLLM jobs)
       --    This executes the LLM enhancement: titles, criticality, root cause analysis
-      void $ runAllBackgroundJobs frozenTime tr.trATCtx
+      void $ runBackgroundJobsWhere frozenTime tr.trATCtx notEmbedMerge
 
       -- Verify at least one issue got an enhanced title (golden file provides cached LLM response)
       enhancedCount <- withResource tr.trPool \conn -> do

@@ -311,6 +311,7 @@ setupProjectWithSubscription pool testPid plan = do
   _ <- withResource pool \conn -> PGS.execute conn [sql|
     INSERT INTO apis.subscriptions (id, created_at, updated_at, project_id, order_id, subscription_id, first_sub_id, product_name, user_email)
     VALUES (?, ?, ?, ?, 12345, 67890, 111, 'Test Plan', 'test@example.com')
+    ON CONFLICT (subscription_id) DO UPDATE SET project_id=EXCLUDED.project_id, product_name=EXCLUDED.product_name
   |] (subId, currentZonedTime, currentZonedTime, testPid.toText)
   _ <- withResource pool \conn -> PGS.execute conn [sql|UPDATE projects.projects SET payment_plan = ?, order_id = '67890', sub_id = '12345', first_sub_item_id = '111' WHERE id = ?|] (plan, testPid)
   pass

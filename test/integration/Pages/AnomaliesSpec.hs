@@ -315,17 +315,16 @@ spec = aroundAll withTestResources do
         void $ PGS.execute conn [sql| UPDATE apis.issues SET archived_at=NULL WHERE id=? |] (Only issueId)
       traceIdText <- DataUUID.toText <$> UUID.nextRandom
       spanIdText  <- DataUUID.toText <$> UUID.nextRandom
-      now <- getCurrentTime
       withResource tr.trPool \conn -> void $ PGS.execute conn
         [sql| INSERT INTO otel_logs_and_spans
                 (id, project_id, timestamp, start_time,
                  attributes___http___request___method, attributes___url___path,
                  context___trace_id, context___span_id,
-                 context, kind, status_code)
+                 context, kind, status_code, summary)
               VALUES (gen_random_uuid(), ?, ?, ?, 'GET', '/', ?, ?,
                       jsonb_build_object('trace_id', ?::text, 'span_id', ?::text),
-                      'SERVER', '200') |]
-        (testPid, now, now, traceIdText, spanIdText, traceIdText, spanIdText)
+                      'SERVER', '200', '{}') |]
+        (testPid, frozenTime, frozenTime, traceIdText, spanIdText, traceIdText, spanIdText)
 
       (_, pg) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid issueId Nothing Nothing
       let html = TL.toStrict $ renderText $ toHtml pg

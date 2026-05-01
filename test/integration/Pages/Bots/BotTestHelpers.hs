@@ -86,6 +86,7 @@ import Effectful.Labeled (runLabeled)
 import Effectful.Reader.Static qualified as Effectful.Reader
 import Effectful.Time (runFrozenTime)
 import Models.Apis.Integrations qualified as Slack
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
@@ -116,7 +117,9 @@ getOpenAIModel tr = tr.trATCtx.env.openaiModel
 
 
 setupSlackData :: TestResources -> Projects.ProjectId -> Text -> IO ()
-setupSlackData tr pid teamId = void $ runTestBg frozenTime tr $ Slack.insertAccessToken pid teamId "C_NOTIF_CHANNEL" ("Test Workspace " <> teamId) "x-bot-token" "test-channel" "https://hooks.slack.com/services/test"
+setupSlackData tr pid teamId = void $ runTestBg frozenTime tr $ do
+  _ <- Slack.insertAccessToken pid teamId "C_NOTIF_CHANNEL" ("Test Workspace " <> teamId) "x-bot-token" "test-channel" "https://hooks.slack.com/services/test"
+  ProjectMembers.addSlackChannelToEveryoneTeam pid "C_NOTIF_CHANNEL"
 
 
 setupDiscordData :: TestResources -> Projects.ProjectId -> Text -> IO ()

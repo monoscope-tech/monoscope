@@ -109,7 +109,7 @@ getUnembeddedLogPatterns pid =
   Hasql.interp
     [HI.sql| SELECT id, log_pattern FROM apis.log_patterns
         WHERE project_id = #{pid} AND embedding IS NULL AND merge_override = FALSE
-        LIMIT 500 |]
+        ORDER BY id LIMIT 500 |]
 
 
 updateLogEmbeddings :: DB es => [(LogPatternId, [Float])] -> Eff es Int64

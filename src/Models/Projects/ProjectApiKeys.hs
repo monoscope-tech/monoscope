@@ -19,7 +19,7 @@ where
 
 import Data.Aeson qualified as AE
 import Data.Base64.Types qualified as B64T
-import Data.ByteString.Base64 qualified as B64
+import "base64" Data.ByteString.Base64 qualified as B64
 import Data.Cache qualified as Cache
 import Data.Default (Default)
 import Data.Effectful.Hasql qualified as Hasql

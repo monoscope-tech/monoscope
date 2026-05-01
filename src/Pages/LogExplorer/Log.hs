@@ -106,12 +106,12 @@ data SpanInfo = SpanInfo {spanId :: Text, parentId :: Maybe Text, traceIdVal :: 
 -- >>> import Data.Vector qualified as V
 -- >>> import Data.Aeson qualified as AE
 -- >>> import Data.HashMap.Strict qualified as HM
--- >>> import Pages.LogExplorer.Log
+-- >>> import "monoscope" Pages.LogExplorer.Log qualified as LL
 -- >>> let colIdx = HM.fromList [("id",0),("trace_id",1),("parent_id",2),("start_time_ns",3),("duration",4),("latency_breakdown",5),("kind",6),("errors",7),("timestamp",8)]
 -- >>> let row1 = V.fromList [AE.String "s1", AE.String "t1", AE.Null, AE.Number 100, AE.Number 1000, AE.String "lb1", AE.String "span", AE.Null, AE.String "2025-01-01T00:00:00Z"]
 -- >>> let row2 = V.fromList [AE.String "s2", AE.String "t1", AE.String "lb1", AE.Number 200, AE.Number 500, AE.String "lb2", AE.String "span", AE.Null, AE.String "2025-01-01T00:00:01Z"]
 -- >>> let vecs = V.fromList [row1, row2]
--- >>> let (_, result) = buildTraceTree colIdx 1 vecs
+-- >>> let (_, result) = LL.buildTraceTree colIdx 1 vecs
 -- >>> length result
 -- 1
 -- >>> fmap (.root) (viaNonEmpty head result)
@@ -123,7 +123,7 @@ data SpanInfo = SpanInfo {spanId :: Text, parentId :: Maybe Text, traceIdVal :: 
 -- >>> let qr = V.fromList [AE.String "s1", AE.String "t1", AE.Null, AE.Number 100, AE.Number 1000, AE.String "rt", AE.String "span", AE.Null, AE.String "2025-01-01T00:00:00Z"]
 -- >>> let ch = V.fromList [AE.String "s2", AE.String "t1", AE.String "rt", AE.Number 200, AE.Number 500, AE.String "ch1", AE.String "span", AE.Null, AE.String "2025-01-01T00:00:01Z"]
 -- >>> let orph = V.fromList [AE.String "s3", AE.String "t1", AE.String "missing", AE.Number 300, AE.Number 100, AE.String "orp", AE.String "span", AE.Null, AE.String "2025-01-01T00:00:02Z"]
--- >>> let (_, r2) = buildTraceTree colIdx2 1 (V.fromList [qr, ch, orph])
+-- >>> let (_, r2) = LL.buildTraceTree colIdx2 1 (V.fromList [qr, ch, orph])
 -- >>> length r2
 -- 1
 -- >>> fmap (.children) (viaNonEmpty head r2)
@@ -134,7 +134,8 @@ data SpanInfo = SpanInfo {spanId :: Text, parentId :: Maybe Text, traceIdVal :: 
 -- >>> let colIdx = HM.fromList [("id",0),("trace_id",1),("parent_id",2),("start_time_ns",3),("duration",4),("latency_breakdown",5),("kind",6),("errors",7),("timestamp",8)]
 -- >>> let mkSpan lb par ns = V.fromList [AE.String lb, AE.String "t1", maybe AE.Null AE.String par, AE.Number ns, AE.Number 100, AE.String lb, AE.String "span", AE.Null, AE.String "2025-01-01T00:00:00Z"]
 -- >>> let rows = V.fromList [mkSpan "L0" Nothing 100, mkSpan "L1" (Just "L0") 200, mkSpan "L2" (Just "L1") 300, mkSpan "L3" (Just "L2") 400, mkSpan "L4" (Just "L3") 500, mkSpan "L5" (Just "L4") 600, mkSpan "L6" (Just "L5") 700]
--- >>> let (_, r) = buildTraceTree colIdx 1 rows
+-- >>> import Data.Map.Strict qualified as Map
+-- >>> let (_, r) = LL.buildTraceTree colIdx 1 rows
 -- >>> length r
 -- 1
 -- >>> Map.size . (.children) <$> viaNonEmpty head r
@@ -148,7 +149,7 @@ data SpanInfo = SpanInfo {spanId :: Text, parentId :: Maybe Text, traceIdVal :: 
 -- >>> let rootSpan = V.fromList [AE.String "s1", AE.String "t1", AE.Null, AE.Number 100, AE.Number 1000, AE.String "root-span", AE.String "span", AE.Null, AE.String "2025-01-01T00:00:00Z"]
 -- >>> let childSpan = V.fromList [AE.String "s2", AE.String "t1", AE.String "root-span", AE.Number 200, AE.Number 500, AE.String "child-span", AE.String "span", AE.Null, AE.String "2025-01-01T00:00:01Z"]
 -- >>> let logEntry = V.fromList [AE.String "log1", AE.String "t1", AE.String "child-span", AE.Number 250, AE.Number 0, AE.String "child-span", AE.String "log", AE.Null, AE.String "2025-01-01T00:00:02Z"]
--- >>> let (_, r) = buildTraceTree colIdx 1 (V.fromList [rootSpan, childSpan, logEntry])
+-- >>> let (_, r) = LL.buildTraceTree colIdx 1 (V.fromList [rootSpan, childSpan, logEntry])
 -- >>> length r
 -- 1
 -- >>> Map.lookup "root-span" . (.children) =<< viaNonEmpty head r
@@ -162,7 +163,7 @@ data SpanInfo = SpanInfo {spanId :: Text, parentId :: Maybe Text, traceIdVal :: 
 -- >>> let colIdxS = HM.fromList [("id",0),("trace_id",1),("parent_id",2),("start_time_ns",3),("duration",4),("latency_breakdown",5),("kind",6),("errors",7),("timestamp",8)]
 -- >>> let parent = V.fromList [AE.String "p", AE.String "t1", AE.Null, AE.Number 100, AE.Number 1000, AE.String "p", AE.String "span", AE.Null, AE.String "2025-01-01T00:00:00Z"]
 -- >>> let skewed = V.fromList [AE.String "c", AE.String "t1", AE.String "p", AE.Number 50, AE.Number 200, AE.String "c", AE.String "span", AE.Null, AE.String "2025-01-01T00:00:01Z"]
--- >>> let (adj, rs) = buildTraceTree colIdxS 1 (V.fromList [parent, skewed])
+-- >>> let (adj, rs) = LL.buildTraceTree colIdxS 1 (V.fromList [parent, skewed])
 -- >>> fmap (.startTime) (viaNonEmpty head rs)
 -- Just 100
 -- >>> (adj V.! 1) V.!? 3
@@ -932,14 +933,14 @@ logLatencyWidget pid =
 
 -- | One-decimal percent formatter.
 --
--- >>> import Pages.LogExplorer.Log
--- >>> fmtPct1 0
+-- >>> import "monoscope" Pages.LogExplorer.Log qualified as LL
+-- >>> LL.fmtPct1 0
 -- "0.0%"
--- >>> fmtPct1 5.24
+-- >>> LL.fmtPct1 5.24
 -- "5.2%"
--- >>> fmtPct1 100
+-- >>> LL.fmtPct1 100
 -- "100.0%"
--- >>> fmtPct1 (-1.25)
+-- >>> LL.fmtPct1 (-1.25)
 -- "-1.2%"
 fmtPct1 :: Double -> Text
 fmtPct1 x = toText (showFFloat (Just 1) x "") <> "%"

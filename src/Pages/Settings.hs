@@ -37,6 +37,7 @@ module Pages.Settings (
   cancelLemonSqueezySubscription,
   lemonSqueezyOpts,
   verifyStripeSignature,
+  verifyLemonSqueezySignature,
 ) where
 
 import Control.Lens ((.~), (^.))
@@ -504,9 +505,10 @@ notificationsTestPostH pid TestForm{..} = do
   let targetTeam = case teamId of
         Just tid -> getTeam tid
         Nothing -> ProjectMembers.getEveryoneTeam pid
-      countingSend (count, reason) run =
+      countingSend mChKey (count, reason) run =
         targetTeam >>= \case
           Nothing -> pure (count, Just "no_team")
+          Just t | Just chKey <- mChKey, not (ProjectMembers.isChannelEnabled chKey t) -> pure (count, Just "channel_disabled")
           Just t -> (,reason) . (+ count) <$> run t
       sent = pure
       -- per-channel attempt counts
@@ -517,18 +519,18 @@ notificationsTestPostH pid TestForm{..} = do
       email t = let emails = map CI.original (resolveTeamEmails t) in forM_ emails sendTestEmail *> sent (length emails)
 
   (attempts, skipReason) <- case channel of
-    "all" -> countingSend (0, Nothing) \t -> do
+    "all" -> countingSend Nothing (0, Nothing) \t -> do
       e <- email t
       s <- slack t
       d <- discord t
       w <- whatsapp t
       p <- pagerduty t
       pure (e + s + d + w + p)
-    "email" -> countingSend (0, Nothing) email
-    "slack" -> countingSend (0, Nothing) slack
-    "discord" -> countingSend (0, Nothing) discord
-    "whatsapp" -> countingSend (0, Nothing) whatsapp
-    "pagerduty" -> countingSend (0, Nothing) pagerduty
+    "email" -> countingSend Nothing (0, Nothing) email
+    "slack" -> countingSend (Just "slack") (0, Nothing) slack
+    "discord" -> countingSend (Just "discord") (0, Nothing) discord
+    "whatsapp" -> countingSend (Just "phone") (0, Nothing) whatsapp
+    "pagerduty" -> countingSend (Just "pagerduty") (0, Nothing) pagerduty
     _ -> throwError err400{errBody = "Unknown notification channel"}
 
   let (status, err) = case (attempts, skipReason) of
@@ -615,6 +617,7 @@ data WebhookData = WebhookData
 
 -- | LS signs a hex-encoded HMAC-SHA256 of the raw body in the X-Signature header.
 --
+-- >>> import "monoscope" Pages.Settings qualified as PS
 -- >>> import Data.ByteString.Base16 qualified as B16
 -- >>> import Data.ByteArray qualified as BA
 -- >>> import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
@@ -622,15 +625,15 @@ data WebhookData = WebhookData
 -- >>> let body = "{\"event\":\"x\"}" :: ByteString
 -- >>> let secret = "s3cret" :: ByteString
 -- >>> let sig = decodeUtf8 (B16.encode (BA.convert (HMAC.hmac secret body :: HMAC.HMAC SHA256) :: ByteString)) :: Text
--- >>> verifyLemonSqueezySignature sig body secret
+-- >>> PS.verifyLemonSqueezySignature sig body secret
 -- True
--- >>> verifyLemonSqueezySignature sig body "wrong"
+-- >>> PS.verifyLemonSqueezySignature sig body "wrong"
 -- False
--- >>> verifyLemonSqueezySignature sig "tampered" secret
+-- >>> PS.verifyLemonSqueezySignature sig "tampered" secret
 -- False
--- >>> verifyLemonSqueezySignature "not-hex!" body secret
+-- >>> PS.verifyLemonSqueezySignature "not-hex!" body secret
 -- False
--- >>> verifyLemonSqueezySignature "" body secret
+-- >>> PS.verifyLemonSqueezySignature "" body secret
 -- False
 verifyLemonSqueezySignature :: Text -> ByteString -> ByteString -> Bool
 verifyLemonSqueezySignature sigHeader payload secret =

@@ -408,7 +408,7 @@ dashboardsParser =
               )
               (progDesc "Run bulk action over multiple dashboards")
           )
-      , command "widget" (info widgetParser (progDesc "Widget-level operations"))
+      , command "widget" (info (widgetParser <**> helper) (progDesc "Widget-level operations"))
       ]
 
 

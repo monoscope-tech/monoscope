@@ -739,11 +739,10 @@ toBaseServantResponse trATCtx trLogger k = do
 runAsBase :: TestResources -> ATBaseCtx a -> IO a
 runAsBase TestResources{..} k = do
   tp <- getGlobalTracerProvider
-  ( k
-      & effToServantHandlerTest trUUIDRef trATCtx trLogger tp
-      & ServantS.runHandler
-    )
-    <&> fromRightShow
+  k
+    & effToServantHandlerTest trUUIDRef trATCtx trLogger tp
+    & ServantS.runHandler
+    >>= either (fail . ("Servant error: " <>) . show) pure
 
 
 freshUUIDRef :: IO (IORef [UUID.UUID])

@@ -133,7 +133,7 @@ spec = aroundAll withTestResources $ do
         notifs `shouldSatisfy` any isSlackNotification
         let slackNotif = find isSlackNotification notifs
         case slackNotif of
-          Just (SlackNotification sd) -> payloadText sd.payload `shouldSatisfy` T.isInfixOf "🧪 TEST"
+          Just (SlackNotification sd) -> payloadText sd.payload `shouldSatisfy` T.isInfixOf "🧪 Test:"
           _ -> pure ()
 
     describe "Test History Retrieval" $ do
@@ -320,8 +320,9 @@ setupDiscordDataWithChannel tr pid guildId channelId = runTestBg frozenTime tr d
 
 
 clearTestHistory :: TestResources -> Projects.ProjectId -> IO ()
-clearTestHistory tr pid = runTestBg frozenTime tr $ Hasql.interpExecute_
-  [HI.sql|DELETE FROM apis.notification_test_history WHERE project_id = #{pid}|]
+clearTestHistory tr pid = runTestBg frozenTime tr $ do
+  Hasql.interpExecute_ [HI.sql|DELETE FROM apis.notification_test_history WHERE project_id = #{pid}|]
+  Hasql.interpExecute_ [HI.sql|UPDATE projects.teams SET disabled_channels = '{}' WHERE project_id = #{pid} AND is_everyone = TRUE AND deleted_at IS NULL|]
 
 
 payloadText :: AE.Value -> Text

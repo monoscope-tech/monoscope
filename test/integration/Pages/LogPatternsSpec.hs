@@ -162,6 +162,8 @@ spec = aroundAll withTestResources do
           insertHourlyStat tr srcField patHash frozenTime rawCount
 
           issuesBefore <- countIssues tr Issues.LogPatternRateChange
+          -- Detection is two-pass: first run pends, second run fires
+          runTestBg frozenTime tr $ BackgroundJobs.detectLogPatternSpikes pid frozenTime tr.trATCtx
           runTestBg frozenTime tr $ BackgroundJobs.detectLogPatternSpikes pid frozenTime tr.trATCtx
           issuesAfter <- countIssues tr Issues.LogPatternRateChange
           issuesAfter `shouldSatisfy` (> issuesBefore)
@@ -183,6 +185,8 @@ spec = aroundAll withTestResources do
           -- Spike in current hour; projected = 200 * 4 = 800 >> baseline ~600
           insertHourlyStat tr srcField patHash frozenTime 200
           issuesBefore <- countIssues tr Issues.LogPatternRateChange
+          -- Detection is two-pass: first run pends, second run fires
+          runTestBg frozenTime tr $ BackgroundJobs.detectLogPatternSpikes pid frozenTime tr.trATCtx
           runTestBg frozenTime tr $ BackgroundJobs.detectLogPatternSpikes pid frozenTime tr.trATCtx
           issuesAfter <- countIssues tr Issues.LogPatternRateChange
           issuesAfter `shouldSatisfy` (> issuesBefore)
@@ -210,6 +214,8 @@ spec = aroundAll withTestResources do
       insertHourlyStat tr srcField patHash timeAt45 rawCount
 
       issuesBefore <- countIssues tr Issues.LogPatternRateChange
+      -- Detection is two-pass: first run pends, second run fires
+      runTestBg timeAt45 tr $ BackgroundJobs.detectLogPatternSpikes pid timeAt45 tr.trATCtx
       runTestBg timeAt45 tr $ BackgroundJobs.detectLogPatternSpikes pid timeAt45 tr.trATCtx
       issuesAfter <- countIssues tr Issues.LogPatternRateChange
       issuesAfter `shouldSatisfy` (> issuesBefore)
@@ -496,7 +502,15 @@ spec = aroundAll withTestResources do
             "summary" (Just "INFO") 8
       forM_ [patA1, patA2, patC1, patC2] \p -> void $ runTestBg frozenTime tr $ LogPatterns.upsertLogPattern p
 
-      -- First run: embed ALL unembedded patterns
+      -- Mark all pre-existing patterns as merge_override so getUnembeddedLogPatterns only returns our 4
+      let testHashes = ["emb-merge-a1", "emb-merge-a2", "emb-nomerge-c1", "emb-nomerge-c2"] :: [Text]
+      withResource tr.trPool \conn ->
+        void $ PGS.execute conn
+          [sql| UPDATE apis.log_patterns SET merge_override = TRUE
+                WHERE project_id = ? AND pattern_hash != ALL(?) AND embedding IS NULL |]
+          (pid, PGArray testHashes)
+
+      -- First run: embed ALL unembedded patterns (now only our 4)
       runTestBg frozenTime tr $ BackgroundJobs.patternEmbeddingAndMerge pid
       -- A1 is now a centroid. Clear A2's embedding so it gets re-embedded on next run.
       Just a2Before <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash pid "summary" "emb-merge-a2"

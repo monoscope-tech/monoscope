@@ -38,7 +38,11 @@ main = do
         , "-XBangPatterns"
         , "-XPackageImports"
         ]
-  doctest $ args ++ 
+  -- Filter out test-runner flags not supported by doctest (e.g. --color, --jobs)
+  let filteredArgs = filter (\a -> not ("--color" `isPrefixOf` a || "--jobs" `isPrefixOf` a || "--match" `isPrefixOf` a)) args
+  doctest $ filteredArgs ++
     [ "-isrc"
     , "--fast"
+    , "-package monoscope"
+    , "-hide-package base64-bytestring"
     ] ++ extensions ++ ["src"]

@@ -1364,7 +1364,7 @@ claimIssueNotification iid now cooldownHours =
         UPDATE apis.issues SET last_notified_at = #{now}
         WHERE id = #{iid}
           AND (last_notified_at IS NULL
-               OR last_notified_at < #{now}::timestamptz - make_interval(hours => #{cooldownHours}))
+               OR last_notified_at < #{now}::timestamptz - make_interval(hours => #{cooldownHours}::int))
         RETURNING 1 :: int
       |]
 
@@ -2671,11 +2671,11 @@ embeddingConfig ctx =
 -- | Only merge endpoints with the same number of path segments.
 -- Prevents e.g. /api/v2/users/auth0|abc from merging into /api/v2/users.
 --
--- >>> import BackgroundJobs
--- >>> sameSegmentCount "/api/v1/users/{param}" "/api/v1/users/123"
+-- >>> import "monoscope" BackgroundJobs qualified as BJ
+-- >>> BJ.sameSegmentCount "/api/v1/users/{param}" "/api/v1/users/123"
 -- True
 --
--- >>> sameSegmentCount "/api/users" "/api/users/{param}"
+-- >>> BJ.sameSegmentCount "/api/users" "/api/users/{param}"
 -- False
 sameSegmentCount :: Text -> Text -> Bool
 sameSegmentCount a b = T.count "/" a == T.count "/" b
@@ -3071,50 +3071,50 @@ evaluateWithResults monitor startWall title total durationNs = do
 -- For "below" (triggerLessThan=True): alert when value <= threshold, recover when value > recoveryThreshold
 --
 -- Trigger tests (above direction):
--- >>> import BackgroundJobs
--- >>> monitorStatus False Nothing 100 Nothing Nothing False False 100
+-- >>> import "monoscope" BackgroundJobs qualified as BJ
+-- >>> BJ.monitorStatus False Nothing 100 Nothing Nothing False False 100
 -- MSAlerting
--- >>> monitorStatus False Nothing 100 Nothing Nothing False False 150
+-- >>> BJ.monitorStatus False Nothing 100 Nothing Nothing False False 150
 -- MSAlerting
--- >>> monitorStatus False Nothing 100 Nothing Nothing False False 99
+-- >>> BJ.monitorStatus False Nothing 100 Nothing Nothing False False 99
 -- MSNormal
 --
 -- Trigger tests (below direction):
--- >>> monitorStatus True Nothing 100 Nothing Nothing False False 100
+-- >>> BJ.monitorStatus True Nothing 100 Nothing Nothing False False 100
 -- MSAlerting
--- >>> monitorStatus True Nothing 100 Nothing Nothing False False 50
+-- >>> BJ.monitorStatus True Nothing 100 Nothing Nothing False False 50
 -- MSAlerting
--- >>> monitorStatus True Nothing 100 Nothing Nothing False False 101
+-- >>> BJ.monitorStatus True Nothing 100 Nothing Nothing False False 101
 -- MSNormal
 --
 -- Hysteresis: stays alerting until recovery threshold crossed (above)
--- >>> monitorStatus False Nothing 100 (Just 80) Nothing True False 95
+-- >>> BJ.monitorStatus False Nothing 100 (Just 80) Nothing True False 95
 -- MSAlerting
--- >>> monitorStatus False Nothing 100 (Just 80) Nothing True False 79
+-- >>> BJ.monitorStatus False Nothing 100 (Just 80) Nothing True False 79
 -- MSNormal
 --
 -- Hysteresis: stays alerting until recovery threshold crossed (below)
--- >>> monitorStatus True Nothing 100 (Just 120) Nothing True False 105
+-- >>> BJ.monitorStatus True Nothing 100 (Just 120) Nothing True False 105
 -- MSAlerting
--- >>> monitorStatus True Nothing 100 (Just 120) Nothing True False 121
+-- >>> BJ.monitorStatus True Nothing 100 (Just 120) Nothing True False 121
 -- MSNormal
 --
 -- Warning threshold with hysteresis
--- >>> monitorStatus False (Just 80) 100 Nothing (Just 60) False True 75
+-- >>> BJ.monitorStatus False (Just 80) 100 Nothing (Just 60) False True 75
 -- MSWarning
--- >>> monitorStatus False (Just 80) 100 Nothing (Just 60) False True 59
+-- >>> BJ.monitorStatus False (Just 80) 100 Nothing (Just 60) False True 59
 -- MSNormal
 --
 -- Edge case: recovery > threshold (above) - no hysteresis band
--- >>> monitorStatus False Nothing 100 (Just 120) Nothing True False 110
+-- >>> BJ.monitorStatus False Nothing 100 (Just 120) Nothing True False 110
 -- MSAlerting
--- >>> monitorStatus False Nothing 100 (Just 120) Nothing True False 99
+-- >>> BJ.monitorStatus False Nothing 100 (Just 120) Nothing True False 99
 -- MSNormal
 --
 -- Edge case: recovery < threshold (below) - no hysteresis band
--- >>> monitorStatus True Nothing 100 (Just 80) Nothing True False 95
+-- >>> BJ.monitorStatus True Nothing 100 (Just 80) Nothing True False 95
 -- MSAlerting
--- >>> monitorStatus True Nothing 100 (Just 80) Nothing True False 101
+-- >>> BJ.monitorStatus True Nothing 100 (Just 80) Nothing True False 101
 -- MSNormal
 monitorStatus :: Bool -> Maybe Double -> Double -> Maybe Double -> Maybe Double -> Bool -> Bool -> Double -> Monitors.MonitorStatus
 monitorStatus triggerLessThan warnThreshold alertThreshold alertRecovery warnRecovery wasAlerting wasWarning value
