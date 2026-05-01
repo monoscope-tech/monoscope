@@ -176,7 +176,9 @@ renderCatalogMainCol pid _currentTab (HostEventsVM _ he _ _ _ _) = do
       span_ [class_ "tooltip tooltip-right shrink-0 inline-flex", term "data-tip" arrowTip] $ faSprite_ arrowIcon "solid" arrowClass
       a_ ([href_ $ "/p/" <> pid.toText <> "/endpoints?host=" <> he.host <> "&request_type=" <> reqTypeLabel, class_ "font-medium text-textStrong hover:text-textBrand transition-colors truncate min-w-0"] <> navTabAttrs) $ toHtml (T.replace "http://" "" $ T.replace "https://" "" he.host)
       a_ ([href_ $ logExplorerHref pid $ "attributes.net.host.name==\"" <> he.host <> "\"", class_ "shrink-0 text-xs text-textBrand hover:text-textStrong transition-colors"] <> navTabAttrs) "View logs"
-    servicesBadges_ sourceLabel kindVal
+    servicesBadges_
+      sourceLabel
+      kindVal
       (\svc -> logExplorerHref pid $ "resource.service.name==\"" <> svc <> "\" AND kind==\"" <> kindVal <> "\"")
       svcs
 
@@ -354,7 +356,9 @@ renderEndpointMainCol pid currentTab (EnpReqStatsVM _ _ _ enp) = do
         span_ [class_ $ "endpoint endpoint-" <> T.toLower enp.method <> " shrink-0 !w-auto !p-0.5 !px-1.5 !m-0 !text-xs !rounded", data_ "enp-urlMethod" enp.method] $ toHtml enp.method
         span_ [class_ "inconsolata text-sm truncate", data_ "enp-urlPath" enp.urlPath] $ toHtml $ if T.null enp.urlPath then "/" else T.take 150 enp.urlPath
       a_ ([class_ "shrink-0 text-xs text-textBrand hover:text-textStrong transition-colors", href_ (logExplorerHref pid q)] <> navTabAttrs) "View logs"
-    servicesBadges_ sourceLabel kindVal
+    servicesBadges_
+      sourceLabel
+      kindVal
       (\svc -> logExplorerHref pid $ "resource.service.name==\"" <> svc <> "\" AND kind==\"" <> kindVal <> "\" AND attributes.http.route==\"" <> enp.urlPath <> "\"")
       svcs
 
