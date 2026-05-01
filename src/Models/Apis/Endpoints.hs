@@ -177,7 +177,7 @@ directionClauseSql = maybe [HI.sql| |] (\o -> [HI.sql| AND outgoing = #{o} |])
 
 
 archivedHostClauseSql :: Bool -> HI.Sql
-archivedHostClauseSql True  = [HI.sql| AND h.archived_at IS NOT NULL|]
+archivedHostClauseSql True = [HI.sql| AND h.archived_at IS NOT NULL|]
 archivedHostClauseSql False = [HI.sql| AND h.archived_at IS NULL|]
 
 
