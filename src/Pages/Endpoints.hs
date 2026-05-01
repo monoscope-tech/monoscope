@@ -143,14 +143,30 @@ catalogColumns pid currentTab baseUrl period =
   ]
 
 
+logExplorerHref :: Projects.ProjectId -> Text -> Text
+logExplorerHref pid q = "/p/" <> pid.toText <> "/log_explorer?query=" <> toUriStr q
+
+
+servicesBadges_ :: Text -> Text -> (Text -> Text) -> [Text] -> Html ()
+servicesBadges_ sourceLabel kindVal badgeHref svcs =
+  unless (null svcs) $ div_ [class_ "flex items-center gap-1 flex-wrap min-w-0"] do
+    span_ [class_ "text-xs text-textWeak shrink-0"] $ toHtml sourceLabel
+    forM_ svcs \svc ->
+      a_
+        [ href_ $ badgeHref svc
+        , class_ "badge badge-sm badge-ghost text-xs whitespace-nowrap hover:text-textBrand transition-colors"
+        , term "data-tippy-content" $ "Filter logs by service: " <> svc
+        ]
+        $ toHtml svc
+
+
 renderCatalogMainCol :: Projects.ProjectId -> Text -> HostEventsVM -> Html ()
 renderCatalogMainCol pid _currentTab (HostEventsVM _ he _ _ _ _) = do
   let PGArray svcs = he.services
       outgoing = he.outgoing
-      reqTypeLabel = if outgoing then "Outgoing" else "Incoming" :: Text
-      sourceLabel = if outgoing then "Called by:" else "Served by:"
-      kindVal = if outgoing then "client" else "server"
-      logsHref q = "/p/" <> pid.toText <> "/log_explorer?query=" <> toUriStr q
+      reqTypeLabel = bool "Incoming" "Outgoing" outgoing :: Text
+      sourceLabel = bool "Served by:" "Called by:" outgoing
+      kindVal = bool "server" "client" outgoing
       (arrowIcon, arrowClass, arrowTip) =
         if outgoing
           then ("arrow-up-right", "h-3 w-3 fill-iconBrand shrink-0", "Outgoing request" :: Text)
@@ -159,16 +175,10 @@ renderCatalogMainCol pid _currentTab (HostEventsVM _ he _ _ _ _) = do
     div_ [class_ "flex items-center gap-2 min-w-0"] do
       span_ [class_ "tooltip tooltip-right shrink-0 inline-flex", term "data-tip" arrowTip] $ faSprite_ arrowIcon "solid" arrowClass
       a_ ([href_ $ "/p/" <> pid.toText <> "/endpoints?host=" <> he.host <> "&request_type=" <> reqTypeLabel, class_ "font-medium text-textStrong hover:text-textBrand transition-colors truncate min-w-0"] <> navTabAttrs) $ toHtml (T.replace "http://" "" $ T.replace "https://" "" he.host)
-      a_ ([href_ $ logsHref $ "attributes.net.host.name==\"" <> he.host <> "\"", class_ "shrink-0 text-xs text-textBrand hover:text-textStrong transition-colors"] <> navTabAttrs) "View logs"
-    unless (null svcs) $ div_ [class_ "flex items-center gap-1 flex-wrap min-w-0"] do
-      span_ [class_ "text-xs text-textWeak shrink-0"] sourceLabel
-      forM_ svcs \svc ->
-        a_
-          [ href_ $ logsHref $ "resource.service.name==\"" <> svc <> "\" AND kind==\"" <> kindVal <> "\""
-          , class_ "badge badge-sm badge-ghost text-xs whitespace-nowrap hover:text-textBrand transition-colors"
-          , term "data-tippy-content" $ "Filter logs by service: " <> svc
-          ]
-          $ toHtml svc
+      a_ ([href_ $ logExplorerHref pid $ "attributes.net.host.name==\"" <> he.host <> "\"", class_ "shrink-0 text-xs text-textBrand hover:text-textStrong transition-colors"] <> navTabAttrs) "View logs"
+    servicesBadges_ sourceLabel kindVal
+      (\svc -> logExplorerHref pid $ "resource.service.name==\"" <> svc <> "\" AND kind==\"" <> kindVal <> "\"")
+      svcs
 
 
 data CatalogList = CatalogListPage (PageCtx (Table HostEventsVM)) | CatalogListRows (TableRows HostEventsVM)
@@ -331,16 +341,22 @@ activityCell_ (PGArray buckets) = sparkline_ buckets
 
 
 renderEndpointMainCol :: Projects.ProjectId -> Text -> EnpReqStatsVM -> Html ()
-renderEndpointMainCol pid currentTab (EnpReqStatsVM _ _ _ enp) =
-  div_ [class_ "flex items-center gap-2 min-w-0"] do
-    a_ ([class_ "inline-flex items-center gap-1.5 font-medium text-textStrong hover:text-textBrand transition-colors truncate min-w-0", href_ ("/p/" <> pid.toText <> "/endpoints/details?var-endpointHash=" <> enp.endpointHash <> "&var-host=" <> enp.host)] <> navTabAttrs) $ do
-      span_ [class_ $ "endpoint endpoint-" <> T.toLower enp.method <> " shrink-0 !w-auto !p-0.5 !px-1.5 !m-0 !text-xs !rounded", data_ "enp-urlMethod" enp.method] $ toHtml enp.method
-      span_ [class_ "inconsolata text-sm truncate", data_ "enp-urlPath" enp.urlPath] $ toHtml $ if T.null enp.urlPath then "/" else T.take 150 enp.urlPath
-    let outgoing = currentTab == "Outgoing"
-        hostAttr = if outgoing then "attributes.server.address" else "attributes.net.host.name"
-        kindVal = if outgoing then "client" else "server"
-        q = hostAttr <> "==\"" <> enp.host <> "\" AND kind==\"" <> kindVal <> "\" AND attributes.http.route==\"" <> enp.urlPath <> "\" AND attributes.http.request.method==\"" <> enp.method <> "\""
-    a_ ([class_ "shrink-0 text-xs text-textBrand hover:text-textStrong transition-colors", href_ ("/p/" <> pid.toText <> "/log_explorer?query=" <> toUriStr q)] <> navTabAttrs) "View logs"
+renderEndpointMainCol pid currentTab (EnpReqStatsVM _ _ _ enp) = do
+  let outgoing = currentTab == "Outgoing"
+      hostAttr = bool "attributes.net.host.name" "attributes.server.address" outgoing
+      kindVal = bool "server" "client" outgoing :: Text
+      sourceLabel = bool "Served by:" "Called by:" outgoing
+      q = hostAttr <> "==\"" <> enp.host <> "\" AND kind==\"" <> kindVal <> "\" AND attributes.http.route==\"" <> enp.urlPath <> "\" AND attributes.http.request.method==\"" <> enp.method <> "\""
+      PGArray svcs = enp.services
+  div_ [class_ "flex flex-col gap-1 min-w-0"] do
+    div_ [class_ "flex items-center gap-2 min-w-0"] do
+      a_ ([class_ "inline-flex items-center gap-1.5 font-medium text-textStrong hover:text-textBrand transition-colors truncate min-w-0", href_ ("/p/" <> pid.toText <> "/endpoints/details?var-endpointHash=" <> enp.endpointHash <> "&var-host=" <> enp.host)] <> navTabAttrs) $ do
+        span_ [class_ $ "endpoint endpoint-" <> T.toLower enp.method <> " shrink-0 !w-auto !p-0.5 !px-1.5 !m-0 !text-xs !rounded", data_ "enp-urlMethod" enp.method] $ toHtml enp.method
+        span_ [class_ "inconsolata text-sm truncate", data_ "enp-urlPath" enp.urlPath] $ toHtml $ if T.null enp.urlPath then "/" else T.take 150 enp.urlPath
+      a_ ([class_ "shrink-0 text-xs text-textBrand hover:text-textStrong transition-colors", href_ (logExplorerHref pid q)] <> navTabAttrs) "View logs"
+    servicesBadges_ sourceLabel kindVal
+      (\svc -> logExplorerHref pid $ "resource.service.name==\"" <> svc <> "\" AND kind==\"" <> kindVal <> "\" AND attributes.http.route==\"" <> enp.urlPath <> "\"")
+      svcs
 
 
 data EndpointRequestStatsVM

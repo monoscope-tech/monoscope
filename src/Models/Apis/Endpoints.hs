@@ -134,6 +134,7 @@ data EndpointRequestStats = EndpointRequestStats
   , totalRequests :: Int
   , lastSeen :: Maybe ZonedTime
   , activityBuckets :: PGArray Int
+  , services :: PGArray Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, HI.DecodeRow, ToRow)
@@ -193,6 +194,7 @@ endpointRequestStatsByProject pid _ackd _archived pHostM sortM searchM page perP
       "WITH combined AS (\
       \ SELECT COALESCE(NULLIF(attributes->'http'->>'route', ''), attributes___url___path, '/') AS url_path,\
       \        attributes___http___request___method AS method,\
+      \        resource___service___name AS service,\
       \        COUNT(*) AS eventsCount,\
       \        MAX(timestamp) AS last_seen,\
       \        LEAST(width_bucket(EXTRACT(EPOCH FROM timestamp), EXTRACT(EPOCH FROM "
@@ -211,9 +213,11 @@ endpointRequestStatsByProject pid _ackd _archived pHostM sortM searchM page perP
         <> " AND timestamp >= "
         <> seriesStartSql
         <> "::timestamptz\
-           \ GROUP BY url_path, method, bucket_idx\
+           \ GROUP BY url_path, method, service, bucket_idx\
            \), endpoint_stats AS (\
-           \ SELECT url_path, method, SUM(eventsCount)::bigint AS eventsCount, MAX(last_seen) AS last_seen FROM combined GROUP BY url_path, method\
+           \ SELECT url_path, method, SUM(eventsCount)::bigint AS eventsCount, MAX(last_seen) AS last_seen,\
+           \        COALESCE(ARRAY_AGG(DISTINCT service) FILTER (WHERE service IS NOT NULL AND service != ''), ARRAY[]::text[]) AS services\
+           \ FROM combined GROUP BY url_path, method\
            \), bucketed_agg AS (\
            \ SELECT c.url_path, c.method, ARRAY_AGG(COALESCE(c2.cnt, 0) ORDER BY s.idx) AS activity_buckets\
            \ FROM (SELECT DISTINCT url_path, method FROM combined) c\
@@ -224,7 +228,8 @@ endpointRequestStatsByProject pid _ackd _archived pHostM sortM searchM page perP
            \ GROUP BY c.url_path, c.method\
            \) SELECT enp.id endpoint_id, enp.hash endpoint_hash, enp.project_id, enp.url_path, enp.method, enp.host,\
            \        coalesce(es.eventsCount, 0) as total_requests, es.last_seen,\
-           \        COALESCE(ba.activity_buckets, ARRAY[]::int[]) AS activity_buckets\
+           \        COALESCE(ba.activity_buckets, ARRAY[]::int[]) AS activity_buckets,\
+           \        COALESCE(es.services, ARRAY[]::text[]) AS services\
            \ FROM apis.endpoints enp\
            \ LEFT JOIN endpoint_stats es ON (enp.url_path=es.url_path AND enp.method=es.method)\
            \ LEFT JOIN bucketed_agg ba ON (enp.url_path=ba.url_path AND enp.method=ba.method)\
