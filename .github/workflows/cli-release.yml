@@ -73,7 +73,7 @@ jobs:
 
       - name: Package binary
         run: |
-          BIN=$(cabal list-bin exe:monoscope)
+          BIN=$(cabal list-bin exe:monoscope | tail -n1)
           strip "$BIN"
           cp "$BIN" monoscope
           tar czf monoscope-linux-x86_64.tar.gz monoscope
@@ -134,7 +134,7 @@ jobs:
 
       - name: Package binary
         run: |
-          BIN=$(cabal list-bin exe:monoscope)
+          BIN=$(cabal list-bin exe:monoscope | tail -n1)
           strip "$BIN"
           cp "$BIN" monoscope
           tar czf monoscope-linux-arm64.tar.gz monoscope
@@ -203,7 +203,7 @@ jobs:
 
       - name: Package binary
         run: |
-          BIN=$(cabal list-bin exe:monoscope)
+          BIN=$(cabal list-bin exe:monoscope | tail -n1)
           strip "$BIN"
           cp "$BIN" monoscope
           tar czf monoscope-darwin-arm64.tar.gz monoscope
@@ -266,7 +266,7 @@ jobs:
 
       - name: Package binary
         run: |
-          BIN=$(cabal list-bin exe:monoscope)
+          BIN=$(cabal list-bin exe:monoscope | tail -n1)
           strip "$BIN"
           cp "$BIN" monoscope
           tar czf monoscope-darwin-x86_64.tar.gz monoscope
