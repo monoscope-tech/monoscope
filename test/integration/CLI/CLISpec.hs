@@ -148,7 +148,7 @@ spec = aroundAll withTestResources do
   describe "CLI api/v1 resource commands" do
     it "GET /api/v1/issues returns Paged envelope" \tr -> do
       bs <- runCLITest tr $ cliGet baseUrl "/api/v1/issues" []
-      decodeObject bs $ \obj -> shouldHaveKeys obj ["data", "page", "per_page", "total_count"]
+      decodeObject bs $ \obj -> shouldHaveKeys obj ["items", "page", "per_page", "total_count", "has_more"]
 
     it "POST /api/v1/issues/bulk with empty ids succeeds" \tr -> do
       bs <- runCLITest tr $ cliPost baseUrl "/api/v1/issues/bulk" (AE.object ["action" AE..= ("acknowledge" :: Text), "ids" AE..= ([] :: [AE.Value])])
@@ -156,11 +156,11 @@ spec = aroundAll withTestResources do
 
     it "GET /api/v1/endpoints returns Paged envelope" \tr -> do
       bs <- runCLITest tr $ cliGet baseUrl "/api/v1/endpoints" []
-      decodeObject bs $ \obj -> shouldHaveKeys obj ["data", "page", "per_page", "total_count"]
+      decodeObject bs $ \obj -> shouldHaveKeys obj ["items", "page", "per_page", "total_count", "has_more"]
 
     it "GET /api/v1/log_patterns returns Paged envelope" \tr -> do
       bs <- runCLITest tr $ cliGet baseUrl "/api/v1/log_patterns" []
-      decodeObject bs $ \obj -> shouldHaveKeys obj ["data", "page", "per_page", "total_count"]
+      decodeObject bs $ \obj -> shouldHaveKeys obj ["items", "page", "per_page", "total_count", "has_more"]
 
     it "POST /api/v1/log_patterns/bulk with empty ids succeeds" \tr -> do
       bs <- runCLITest tr $ cliPost baseUrl "/api/v1/log_patterns/bulk" (AE.object ["action" AE..= ("acknowledge" :: Text), "ids" AE..= ([] :: [AE.Value])])
