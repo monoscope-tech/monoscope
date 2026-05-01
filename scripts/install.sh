@@ -39,8 +39,13 @@ get_installed_version() {
   fi
 }
 
+tmpdir=""
+
+cleanup() { [ -n "$tmpdir" ] && rm -rf "$tmpdir"; }
+trap cleanup EXIT
+
 main() {
-  local platform version current_version archive_name download_url checksum_url tmpdir force=0
+  local platform version current_version archive_name download_url checksum_url force=0
 
   # Parse args: optional --force flag and optional version positional arg
   local pos_args=()
@@ -76,7 +81,6 @@ main() {
   checksum_url="https://github.com/${REPO}/releases/download/${version}/checksums.txt"
 
   tmpdir="$(mktemp -d)"
-  trap 'rm -rf "$tmpdir"' EXIT
 
   info "Downloading ${archive_name}..."
   curl -fSL --progress-bar -o "${tmpdir}/${archive_name}" "$download_url" \
