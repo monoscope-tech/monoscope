@@ -237,6 +237,10 @@ httpExToError (HttpExceptionRequest req content) =
 httpExToError (InvalidUrlException url reason) =
   APIError 0 ("invalid URL " <> toText url <> ": " <> toText reason)
 
+-- | Debug-only query-string formatter — values are NOT URL-encoded so the
+-- KQL/operator characters are readable in the printed line. Auth lives in
+-- HTTP headers ('reqOpts'), not query params; if you ever add a credential
+-- to a query param, redact it here before it lands in stderr.
 renderParams :: [(Text, Text)] -> Text
 renderParams [] = ""
 renderParams ps = "?" <> T.intercalate "&" [k <> "=" <> v | (k, v) <- ps]

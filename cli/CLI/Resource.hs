@@ -27,7 +27,7 @@ module CLI.Resource
 import Relude
 
 import CLI.Config (CLIConfig (..))
-import CLI.Core (APIError, OutputMode (..), apiDelete, apiGetJson, apiPatchJson, apiPostJson, apiPutJson, printError, renderAPIError, renderByMode)
+import CLI.Core (APIError, OutputMode (..), apiDelete, apiGetJson, apiPatchJson, apiPostJson, apiPutJson, printDebug, printError, renderAPIError, renderByMode)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Effectful.Wreq (HTTP)
@@ -89,18 +89,35 @@ runAPI mode act = withResult act renderAPIError (renderByMode mode Nothing)
 -- @dashboards list@, @api-keys list@, @teams list@, @members list@,
 -- @endpoints list@, @log-patterns list@.
 runList :: (HTTP :> es, Environment :> es, IOE :> es) => CLIConfig -> ResourceKind -> [(Text, Text)] -> OutputMode -> Eff es ()
-runList cfg k params mode = runAPI mode (normalizeList <<$>> apiGetJson @_ @AE.Value cfg (resourcePath k) params)
+runList cfg k params mode =
+  apiGetJson @_ @AE.Value cfg (resourcePath k) params >>= \case
+    Left e -> printError (renderAPIError e) >> liftIO exitFailure
+    Right v -> case normalizeListE v of
+      Right normalised -> renderByMode mode Nothing normalised
+      Left raw -> do
+        -- Server returned an envelope shape we don't recognise. Surface
+        -- it via printDebug (always-on for stderr noise; agents that pipe
+        -- stdout get the raw payload regardless).
+        printDebug $
+          "list response from " <> resourcePath k <> " did not match {data, pagination} or Paged envelope; passing through raw"
+        renderByMode mode Nothing raw
 
 
--- | Normalise a list response to @{data, pagination}@. Idempotent if the
--- response already has @data@ + @pagination@. The 'Paged' branch decodes via
--- the server's typed envelope ('Web.ApiTypes.Paged') so a wire shape change
--- there shows up at compile time on the CLI side.
-normalizeList :: AE.Value -> AE.Value
-normalizeList v = case v of
-  AE.Object obj | AEKM.member "data" obj && AEKM.member "pagination" obj -> v
+-- | Normalise a list response to @{data, pagination}@. Returns 'Right' with
+-- the normalised value, or 'Left' carrying the original value when the shape
+-- doesn't match any known envelope (callers can surface a debug warning so
+-- contributors notice a server-side wire change rather than silently emit
+-- the raw payload).
+--
+-- Recognises three shapes:
+--   1. Already @{data, pagination}@ → passthrough
+--   2. Server's typed @Paged@ envelope (Web.ApiTypes.Paged) → repackaged
+--   3. Bare array → wrapped with empty pagination metadata
+normalizeListE :: AE.Value -> Either AE.Value AE.Value
+normalizeListE v = case v of
+  AE.Object obj | AEKM.member "data" obj && AEKM.member "pagination" obj -> Right v
   AE.Object _ | AE.Success (p :: Paged AE.Value) <- AE.fromJSON v ->
-    AE.object
+    Right $ AE.object
       [ "data" AE..= p.items
       , "pagination" AE..= AE.object
           [ "has_more" AE..= p.hasMore
@@ -111,11 +128,18 @@ normalizeList v = case v of
           ]
       ]
   AE.Array _ ->
-    AE.object
+    Right $ AE.object
       [ "data" AE..= v
       , "pagination" AE..= AE.object ["has_more" AE..= False, "total" AE..= AE.Null, "cursor" AE..= AE.Null]
       ]
-  _ -> v
+  _ -> Left v
+
+
+-- | Pure normaliser kept for direct use; falls through to the original value
+-- on shape mismatch (without warning). Prefer 'normalizeListE' from new code
+-- so the caller can flag unexpected payloads.
+normalizeList :: AE.Value -> AE.Value
+normalizeList = either id id . normalizeListE
 
 
 runGet :: (HTTP :> es, Environment :> es, IOE :> es) => CLIConfig -> ResourceKind -> Text -> OutputMode -> Eff es ()

@@ -1676,7 +1676,6 @@ activeFilters_ pid baseUrl filters = div_ [class_ "flex items-center gap-2 mb-4"
 dashboardsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UUID.UUID -> Maybe Text -> Maybe UUID.UUID -> Maybe Text -> DashboardFilters -> ATAuthCtx (RespHeaders DashboardsGet)
 dashboardsGetH pid sortM embeddedM teamIdM copyWidgetIdM sourceDashIdM newM filters = do
   (_, project, bw) <- mkPageCtx pid
-  appCtx <- ask @AuthContext
 
   -- Sort and filter configuration
   let currentSort = fromMaybe "-updated_at" sortM
@@ -1703,7 +1702,7 @@ dashboardsGetH pid sortM embeddedM teamIdM copyWidgetIdM sourceDashIdM newM filt
       isTeamView = isJust teamIdM
       copyMode = (,) <$> copyWidgetIdM <*> (UUIDId <$> sourceDashIdM)
 
-  templates <- getDashboardTemplates appCtx.config.liveReloadDashboards
+  templates <- getDashboardTemplates bw.config.liveReloadDashboards
   if embedded || isTeamView
     then -- For embedded/team mode, use a minimal BWConfig that will still work with ToHtml instance
       addRespHeaders $ DashboardsGetSlim DashboardsGetD{dashboards, projectId = pid, embedded, hideActions = isTeamView, teams, tableActions = Nothing, filters, availableTags, copyMode, dashTemplates = templates, showNew = False}

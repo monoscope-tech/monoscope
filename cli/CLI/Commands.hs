@@ -326,7 +326,7 @@ runEventsSearch cfg opts mode = do
 -- @count@/@cursor@/@has_more@ semantics for downstream pagination.
 takeFirstEvent :: AE.Value -> AE.Value
 takeFirstEvent (AE.Object obj) = case KM.lookup "events" obj of
-  Just (AE.Array arr) -> AE.Object (KM.insert "events" (AE.toJSON (take 1 (toList arr))) obj)
+  Just (AE.Array arr) -> AE.Object (KM.insert "events" (AE.Array (V.take 1 arr)) obj)
   _ -> AE.Object obj
 takeFirstEvent v = v
 

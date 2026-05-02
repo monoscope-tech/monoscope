@@ -460,8 +460,7 @@ data UnifiedMonitorDetails = AlertDetails
 
 teamAlertsGetH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders (TableRows UnifiedMonitorItem))
 teamAlertsGetH pid teamId = do
-  (sess, project) <- Projects.sessionAndProject pid
-  appCtx <- ask @AuthContext
+  _ <- Projects.sessionAndProject pid
   alerts <- Monitors.getAlertsByTeamHandle pid teamId
   currTime <- Time.currentTime
   teamMap <- buildTeamMap pid
