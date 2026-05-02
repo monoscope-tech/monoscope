@@ -10,7 +10,7 @@ env:
 jobs:
   build-frontend:
     name: Build Frontend Assets
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
 
@@ -135,7 +135,7 @@ jobs:
   build-macos-arm64:
     name: Build macOS ARM64
     needs: build-frontend
-    runs-on: macos-latest
+    runs-on: blacksmith-6vcpu-macos-15
     steps:
       - uses: actions/checkout@v4
 
@@ -202,7 +202,7 @@ jobs:
   release:
     name: Create GitHub Release
     needs: [build-linux-x64, build-linux-arm64, build-macos-arm64]
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: write
     steps:
