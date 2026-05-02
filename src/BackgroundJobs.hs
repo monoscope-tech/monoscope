@@ -5,6 +5,7 @@ module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
 import Control.Concurrent.STM.TBQueue (isFullTBQueue, readTBQueue, writeTBQueue)
+import Control.Exception qualified as CE
 import Control.Lens (view, (.~), (^.), (^?), _1, _3)
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens qualified as AL
@@ -105,7 +106,6 @@ import System.Logging qualified as Log
 import System.Tracing (SpanStatus (..), Tracing, addEvent, setStatus, withSpan)
 import System.Types (ATBackgroundCtx, DB, runBackground)
 import UnliftIO.Exception (bracket, catch, throwIO, try, tryAny)
-import Control.Exception qualified as CE
 import Utils (calculateCycleStartDate, formatUTC, freeTierDailyMaxEvents, toXXHash)
 
 
