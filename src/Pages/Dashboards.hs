@@ -1019,7 +1019,7 @@ getDashAndVM dashId fileM = do
 
 dashboardGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders (PageCtx DashboardGet))
 dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
-  (sess, project) <- Projects.sessionAndProject pid
+  (_, project, bw) <- mkPageCtx pid
   appCtx <- ask @AuthContext
   now <- Time.currentTime
   let (_fromD, _toD, currentRange) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
@@ -1052,13 +1052,10 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
       freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
 
       let bwconf =
-            (def :: BWConfig)
-              { sessM = Just sess
-              , currProject = Just project
-              , prePageTitle = Just "Dashboards"
+            bw
+              { prePageTitle = Just "Dashboards"
               , pageTitle = dashTitle dashVM.title
               , pageTitleModalId = Just "pageTitleModalId"
-              , config = appCtx.config
               , freeTierStatus = freeTierStatus
               , headContent = Just dashboardHeadContent_
               , pageActions = Just $ div_ [class_ "flex gap-3 max-md:gap-1 items-center"] do
@@ -1678,7 +1675,7 @@ activeFilters_ pid baseUrl filters = div_ [class_ "flex items-center gap-2 mb-4"
 
 dashboardsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UUID.UUID -> Maybe Text -> Maybe UUID.UUID -> Maybe Text -> DashboardFilters -> ATAuthCtx (RespHeaders DashboardsGet)
 dashboardsGetH pid sortM embeddedM teamIdM copyWidgetIdM sourceDashIdM newM filters = do
-  (sess, project) <- Projects.sessionAndProject pid
+  (_, project, bw) <- mkPageCtx pid
   appCtx <- ask @AuthContext
 
   -- Sort and filter configuration
@@ -1713,12 +1710,9 @@ dashboardsGetH pid sortM embeddedM teamIdM copyWidgetIdM sourceDashIdM newM filt
     else do
       freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
       let bwconf =
-            (def :: BWConfig)
-              { sessM = Just sess
-              , currProject = Just project
-              , pageTitle = "Dashboards"
+            bw
+              { pageTitle = "Dashboards"
               , freeTierStatus = freeTierStatus
-              , config = appCtx.config
               , headContent = Just dashboardHeadContent_
               , pageActions = Just $ label_ [Lucid.for_ "newDashboardMdl", class_ "btn btn-sm btn-primary gap-2"] do
                   faSprite_ "plus" "regular" "h-4 w-4"
@@ -2234,7 +2228,7 @@ mkWidgetProcessor pid dashId now timeParams paramsWithConstants =
 -- This renders the full page with the specified tab active
 dashboardTabGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders (PageCtx DashboardGet))
 dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = do
-  (sess, project) <- Projects.sessionAndProject pid
+  (_, project, bw) <- mkPageCtx pid
   appCtx <- ask @AuthContext
   now <- Time.currentTime
   let (_fromD, _toD, currentRange) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
@@ -2274,15 +2268,12 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = d
   freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
 
   let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = Just project
-          , prePageTitle = Just "Dashboards"
+        bw
+          { prePageTitle = Just "Dashboards"
           , pageTitle = dashTitle dashVM.title
           , pageTitleSuffix = activeTabName -- Show current tab in breadcrumbs
           , pageTitleModalId = Just "pageTitleModalId"
           , pageTitleSuffixModalId = Just "tabRenameModalId" -- Modal for renaming tab
-          , config = appCtx.config
           , freeTierStatus = freeTierStatus
           , headContent = Just dashboardHeadContent_
           , pageActions = Just $ div_ [class_ "flex gap-3 max-md:gap-1 items-center"] do

@@ -80,7 +80,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import Models.Telemetry.Telemetry qualified as Telemetry
 import OddJobs.Job (createJob)
-import Pages.BodyWrapper (BWConfig (..), PageCtx (..), navTabAttrs)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (colorChip_, compactTimeAgo, emptyState_, metadataChip_, periodToggle_, resizer_, sparkline_)
 import Pages.LogExplorer.Log (virtualTable)
@@ -202,11 +202,10 @@ anomalyDetailHashGetH pid issueId firstM sinceM = anomalyDetailCore pid firstM s
 
 anomalyDetailCore :: Projects.ProjectId -> Maybe Text -> Maybe Text -> (Projects.ProjectId -> ATAuthCtx (Maybe Issues.Issue)) -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
 anomalyDetailCore pid firstM sinceM fetchIssue = do
-  (sess, project) <- Projects.sessionAndProject pid
-  appCtx <- ask @AuthContext
+  (sess, project, bw) <- mkPageCtx pid
   issueM <- fetchIssue pid
   now <- Time.currentTime
-  let baseBwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle = "Issues", menuItem = Just "Issues", config = appCtx.config}
+  let baseBwconf = bw{pageTitle = "Issues", menuItem = Just "Issues"}
   case issueM of
     Nothing -> do
       addErrorToast "Issue not found" Nothing
@@ -1293,8 +1292,7 @@ anomalyListGetH
   -> Maybe Text
   -> ATAuthCtx (RespHeaders AnomalyListGet)
 anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpointM periodM serviceFilters typeFilters hxRequestM hxBoostedM = do
-  (sess, project) <- Projects.sessionAndProject pid
-  appCtx <- ask @AuthContext
+  (_, project, bw) <- mkPageCtx pid
   let (ackd, archived, currentFilterTab) = case filterTM of
         Just "Inbox" -> (Just False, Just False, "Inbox")
         Just "Acknowledged" -> (Just True, Nothing, "Acknowledged")
@@ -1383,13 +1381,10 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
                 }
           }
   let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = Just project
-          , pageTitle = "Issues"
+        bw
+          { pageTitle = "Issues"
           , menuItem = Just "Issues"
           , freeTierStatus = freeTierStatus
-          , config = appCtx.config
           , headContent = Just highlightJsHead_
           , navTabs =
               Just

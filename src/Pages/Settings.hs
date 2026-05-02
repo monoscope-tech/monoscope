@@ -80,7 +80,7 @@ import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Network.Minio qualified as Minio
 import Network.Wreq qualified as Wreq
-import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper, settingsContentTarget)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper, mkPageCtx, settingsContentTarget)
 import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), ModalCfg (..), confirmModal_, connectionBadge_, formField_, iconBadgeLg_, modalWith_, paymentPlanPicker, sectionLabel_, settingsH2_, settingsSection_)
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (UUIDId (..))
@@ -144,10 +144,8 @@ brings3RemoveH pid = do
 
 bringS3GetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 bringS3GetH pid = do
-  (sess, project) <- Projects.sessionAndProject pid
-  appCtx <- ask @AuthContext -- Get auth context
-  let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle = "Integrations", isSettingsPage = True, config = appCtx.config}
-  addRespHeaders $ bodyWrapper bwconf $ bringS3Page pid project.s3Bucket
+  (_, project, bw) <- mkPageCtx pid
+  addRespHeaders $ bodyWrapper bw{pageTitle = "Integrations", isSettingsPage = True} $ bringS3Page pid project.s3Bucket
 
 
 bringS3Page :: Projects.ProjectId -> Maybe Projects.ProjectS3Bucket -> Html ()
@@ -249,18 +247,9 @@ instance ToHtml ApiMut where
 -- | apiGetH renders the api keys list page which includes a modal for creating the apikeys.
 apiGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders ApiGet)
 apiGetH pid = do
-  (sess, project) <- Projects.sessionAndProject pid
-  appCtx <- ask @AuthContext
+  (_, _, bw) <- mkPageCtx pid
   apiKeys <- V.fromList <$> ProjectApiKeys.projectApiKeysByProjectId pid
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = Just project
-          , pageTitle = "API Keys"
-          , isSettingsPage = True
-          , config = appCtx.config
-          }
-  addRespHeaders $ ApiGet $ PageCtx bwconf (pid, apiKeys)
+  addRespHeaders $ ApiGet $ PageCtx bw{pageTitle = "API Keys", isSettingsPage = True} (pid, apiKeys)
 
 
 newtype ApiGet = ApiGet (PageCtx (Projects.ProjectId, V.Vector ProjectApiKeys.ProjectApiKey))
@@ -763,10 +752,9 @@ instance ToHtml BillingGet where
 
 manageBillingGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders BillingGet)
 manageBillingGetH pid from = do
-  (sess, project) <- Projects.sessionAndProject pid
+  (_, project, bw) <- mkPageCtx pid
   let dat = fromMaybe project.createdAt project.billingDay
-  appCtx <- ask @AuthContext
-  let envCfg = appCtx.config
+      envCfg = bw.config
   currentTime <- Time.currentTime
   let cycleStart = calculateCycleStartDate dat currentTime
       thirtyDaysAgo = addUTCTime (negate $ 30 * 86400) currentTime
@@ -774,14 +762,7 @@ manageBillingGetH pid from = do
   totalRequests <- Projects.getTotalUsage pid cycleStart
   dailyUsage <- Projects.getDailyUsageBreakdown pid breakdownStart
   let last_reported = toText (formatTime defaultTimeLocale "%b %-d" project.usageLastReported)
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = Just project
-          , pageTitle = "Billing"
-          , isSettingsPage = True
-          , config = appCtx.config
-          }
+      bwconf = bw{pageTitle = "Billing", isSettingsPage = True}
   let lemonUrl = envCfg.lemonSqueezyUrl <> "&checkout[custom][project_id]=" <> pid.toText
       critical = envCfg.lemonSqueezyCriticalUrl <> "&checkout[custom][project_id]=" <> pid.toText
   let provider = if project.paymentPlan == "Free" then Projects.NoBillingProvider else Projects.billingProvider project.subId

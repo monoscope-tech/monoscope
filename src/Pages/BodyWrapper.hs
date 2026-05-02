@@ -1,10 +1,11 @@
-module Pages.BodyWrapper (bodyWrapper, BWConfig (..), PageCtx (..), onboardingChecklist_, settingsContentTarget, navTabAttrs) where
+module Pages.BodyWrapper (bodyWrapper, BWConfig (..), PageCtx (..), mkPageCtx, onboardingChecklist_, settingsContentTarget, navTabAttrs) where
 
 import Data.CaseInsensitive qualified as CI
-import Data.Default (Default)
+import Data.Default (Default, def)
 import Data.Text qualified as T
 import Data.Tuple.Extra (fst3)
 import Data.Vector qualified as V
+import Effectful.Reader.Static qualified as EffReader
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx (hxGet_, hxIndicator_, hxPost_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
@@ -15,9 +16,20 @@ import Pages.CommandPalette qualified as CommandPalette
 import Pages.Components qualified as Components
 import Pkg.DeriveUtils (hashAssetFile)
 import PyF
-import Relude
-import System.Config (EnvConfig (..))
+import Relude hiding (ask)
+import System.Config (AuthContext (..), EnvConfig (..))
+import System.Types (ATAuthCtx)
 import Utils (FreeTierStatus (..), LoadingSize (..), LoadingType (..), faSprite_, fieldContextMenuItems_, freeTierUsageBanner, loadingIndicatorWith_, loadingIndicator_, navTabAttrs)
+
+
+-- | Page-handler bootstrap. Loads (session, project), reads AuthContext, and seeds
+-- a BWConfig with the always-set fields (sessM, currProject, config). Caller updates
+-- the returned BWConfig with handler-specific fields via record syntax.
+mkPageCtx :: Projects.ProjectId -> ATAuthCtx (Projects.Session, Projects.Project, BWConfig)
+mkPageCtx pid = do
+  (sess, project) <- Projects.sessionAndProject pid
+  appCtx <- EffReader.ask @AuthContext
+  pure (sess, project, def{sessM = Just sess, currProject = Just project, config = appCtx.config})
 
 
 menu :: Projects.ProjectId -> [(Text, Text, Text)]

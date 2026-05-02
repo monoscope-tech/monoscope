@@ -34,7 +34,7 @@ import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import OddJobs.Job (createJob)
-import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Pages.BodyWrapper (BWConfig (..), bodyWrapper, mkPageCtx)
 import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), confirmModal_, connectionBadge_, formField_, iconBadgeLg_, iconBadge_, sectionLabel_, settingsH2_, settingsSection_)
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude hiding (ask)
@@ -140,11 +140,10 @@ validateWebhookSignature (Just secret) (Just sig) body =
 
 gitSyncSettingsGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 gitSyncSettingsGetH pid = do
-  (sess, project) <- Projects.sessionAndProject pid
+  (_, _, bw) <- mkPageCtx pid
   ctx <- ask @Config.AuthContext
   syncM <- GitSync.getGitHubSync pid
-  let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle = "Integrations", isSettingsPage = True, config = ctx.config}
-  addRespHeaders $ bodyWrapper bwconf $ gitSyncSettingsPage ctx.env.hostUrl pid syncM
+  addRespHeaders $ bodyWrapper bw{pageTitle = "Integrations", isSettingsPage = True} $ gitSyncSettingsPage ctx.env.hostUrl pid syncM
 
 
 gitSyncSettingsPostH :: Projects.ProjectId -> GitSyncForm -> ATAuthCtx (RespHeaders (Html ()))
@@ -424,7 +423,7 @@ projectSelectorView instId projects = div_ [class_ "min-h-screen bg-bgBase flex 
 -- | List repositories from GitHub App installation (full page with BodyWrapper)
 githubAppReposH :: Projects.ProjectId -> Maybe Int64 -> ATAuthCtx (RespHeaders (Html ()))
 githubAppReposH pid instIdParam = do
-  (sess, project) <- Projects.sessionAndProject pid
+  (_, _, bw) <- mkPageCtx pid
   ctx <- ask @Config.AuthContext
   syncM <- GitSync.getGitHubSync pid
   let instIdM = instIdParam <|> (syncM >>= (.installationId))
@@ -439,8 +438,7 @@ githubAppReposH pid instIdParam = do
           case reposResult of
             Left err -> pure $ div_ [class_ "text-textError p-4"] $ toHtml $ "Failed to list repos: " <> err
             Right repos -> pure $ repoSelectionView pid instId repos
-  let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle = "Integrations", isSettingsPage = True, config = ctx.config}
-  addRespHeaders $ bodyWrapper bwconf $ repoSelectionPage content
+  addRespHeaders $ bodyWrapper bw{pageTitle = "Integrations", isSettingsPage = True} $ repoSelectionPage content
 
 
 -- | Page structure for repo selection

@@ -53,7 +53,7 @@ import Models.Projects.ProjectMembers qualified as ManageMembers
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
-import Pages.BodyWrapper (BWConfig (..), PageCtx (..), navTabAttrs)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as Slack
 import Pages.Bots.Slack qualified as SlackP
@@ -497,8 +497,7 @@ unifiedMonitorsGetH
   -> Maybe Text -- since
   -> ATAuthCtx (RespHeaders (PageCtx (Table UnifiedMonitorItem)))
 unifiedMonitorsGetH pid filterTM sinceM = do
-  (sess, project) <- Projects.sessionAndProject pid
-  appCtx <- ask @AuthContext
+  (_, project, bw) <- mkPageCtx pid
   currTime <- Time.currentTime
 
   let filterType = fromMaybe "Active" filterTM
@@ -552,14 +551,11 @@ unifiedMonitorsGetH pid filterTM sinceM = do
           }
 
   let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = Just project
-          , pageTitle = "Monitors"
+        bw
+          { pageTitle = "Monitors"
           , menuItem = Just "Monitors"
           , docsLink = Just "https://monoscope.tech/docs/monitors/"
           , freeTierStatus = freeTierStatus
-          , config = appCtx.env
           , pageActions = Just $ div_ [class_ "flex gap-2"] do
               a_ [class_ "btn btn-sm btn-primary gap-2", href_ $ "/p/" <> pid.toText <> "/log_explorer#create-alert-toggle"] do
                 faSprite_ "bell" "regular" "h-4 w-4 max-md:hidden"
@@ -797,7 +793,7 @@ rewriteBinAutoMins mins q
 
 unifiedMonitorOverviewH :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
 unifiedMonitorOverviewH pid monitorId = do
-  (sess, project) <- Projects.sessionAndProject pid
+  (_, project, bw) <- mkPageCtx pid
   appCtx <- ask @AuthContext
   currTime <- Time.currentTime
   (freeTierStatus, alertM) <-
@@ -809,15 +805,12 @@ unifiedMonitorOverviewH pid monitorId = do
       )
 
   let baseBwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = Just project
-          , pageTitle = "Monitor Overview"
+        bw
+          { pageTitle = "Monitor Overview"
           , prePageTitle = Just "Monitors"
           , menuItem = Just "Monitors"
           , docsLink = Just "https://monoscope.tech/docs/monitors/"
           , freeTierStatus = freeTierStatus
-          , config = appCtx.config
           }
 
   case alertM of

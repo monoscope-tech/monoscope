@@ -82,7 +82,7 @@ import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Network.Wreq (getWith)
 import OddJobs.Job (createJob)
-import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper, settingsContentTarget)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper, mkPageCtx, settingsContentTarget)
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as SlackP
 import Pages.Bots.Utils qualified as BotUtils
@@ -113,16 +113,9 @@ import Web.FormUrlEncoded (FromForm)
 
 listProjectsGetH :: ATAuthCtx (RespHeaders ListProjectsGet)
 listProjectsGetH = do
-  (sess, project) <- Projects.sessionAndProject (UUIDId RealUUID.nil)
+  (sess, project, bw) <- mkPageCtx (UUIDId RealUUID.nil)
   appCtx <- ask @AuthContext
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , pageTitle = "Projects"
-          , hideNavbar = True
-          , pageActions = Nothing
-          , config = appCtx.env
-          }
+  let bwconf = bw{currProject = Nothing, pageTitle = "Projects", hideNavbar = True, pageActions = Nothing}
 
   projects <- V.fromList <$> Projects.selectProjectsForUser sess.persistentSession.userId
   let demoProject =
@@ -243,7 +236,7 @@ data CreateProjectForm = CreateProjectForm
 
 integrationsSettingsGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 integrationsSettingsGetH pid = do
-  (sess, project) <- Projects.sessionAndProject pid
+  (sess, project, bw) <- mkPageCtx pid
   appCtx <- ask @AuthContext
   let createProj =
         CreateProjectForm
@@ -281,7 +274,7 @@ integrationsSettingsGetH pid = do
     Nothing -> pure []
   let extraSlackChannels = seededExtras <> fetchedExtras
 
-  let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle = "Integrations", isSettingsPage = True, config = appCtx.config}
+  let bwconf = bw{pageTitle = "Integrations", isSettingsPage = True}
   addRespHeaders
     $ bodyWrapper bwconf
     $ integrationsBody
@@ -818,20 +811,13 @@ instance ToHtml ManageTeams where
 
 manageTeamsGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders ManageTeams)
 manageTeamsGetH pid layoutM = do
-  (sess, project) <- Projects.sessionAndProject pid
+  (_, _, bw) <- mkPageCtx pid
   appCtx <- ask @AuthContext
   projMembers <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
   channels <- Integrations.getProjectSlackData pid >>= maybe (pure []) \d -> maybe [] (fromMaybe [] . (.channels)) <$> SlackP.getSlackChannels d.botToken d.teamId
   discordChannels <- Integrations.getDiscordDataByProjectId pid >>= maybe (pure []) (Discord.getDiscordChannels appCtx.env.discordBotToken . (.guildId))
   teams <- V.fromList <$> ProjectMembers.getTeamsVM pid
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , pageTitle = "Team"
-          , currProject = Just project
-          , isSettingsPage = True
-          , config = appCtx.config
-          }
+  let bwconf = bw{pageTitle = "Team", isSettingsPage = True}
   case layoutM of
     Just _ -> do
       addRespHeaders $ ManageTeamsGet' (pid, projMembers, channels, discordChannels, teams)
@@ -900,7 +886,7 @@ notifsCell team = div_ [class_ "flex items-center gap-2"] do
 
 teamGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders ManageTeams)
 teamGetH pid handle layoutM = do
-  (sess, project) <- Projects.sessionAndProject pid
+  (sess, _, bw) <- mkPageCtx pid
   appCtx <- ask @AuthContext
   teamVm <- ProjectMembers.getTeamByHandle pid handle
   projMembers <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
@@ -909,11 +895,8 @@ teamGetH pid handle layoutM = do
   case teamVm of
     Just team -> do
       let bwconf =
-            (def :: BWConfig)
-              { sessM = Just sess
-              , pageTitle = "Team details"
-              , currProject = Just project
-              , config = appCtx.config
+            bw
+              { pageTitle = "Team details"
               , pageActions =
                   if team.is_everyone
                     then Nothing
@@ -925,13 +908,7 @@ teamGetH pid handle layoutM = do
         Just _ -> addRespHeaders $ ManageTeamGet' (pid, team, projMembers, channels, discordChannels)
         _ -> addRespHeaders $ ManageTeamGet (PageCtx bwconf (pid, team, projMembers, channels, discordChannels))
     Nothing -> do
-      let bwconf =
-            (def :: BWConfig)
-              { sessM = Just sess
-              , pageTitle = "Team details"
-              , currProject = Just project
-              , config = appCtx.config
-              }
+      let bwconf = bw{pageTitle = "Team details"}
       addRespHeaders $ ManageTeamGetError (PageCtx bwconf (pid, handle))
 
 
@@ -1022,18 +999,10 @@ teamPageNF pid handle = do
 
 manageMembersGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders ManageMembers)
 manageMembersGetH pid = do
-  (sess, project) <- Projects.sessionAndProject pid
-  appCtx <- ask @AuthContext
+  (_, project, bw) <- mkPageCtx pid
   projMembers <- V.fromList <$> ProjectMembers.selectAllProjectMembers pid
   teamsCount <- length <$> ProjectMembers.getTeamsVM pid
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , pageTitle = "Team"
-          , currProject = Just project
-          , isSettingsPage = True
-          , config = appCtx.config
-          }
+  let bwconf = bw{pageTitle = "Team", isSettingsPage = True}
   addRespHeaders $ ManageMembersGet $ PageCtx bwconf (pid, projMembers, project.paymentPlan, teamsCount)
 
 
@@ -1348,7 +1317,7 @@ instance ToHtml CreateProject where
 
 projectSettingsGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders CreateProject)
 projectSettingsGetH pid = do
-  (sess, project) <- Projects.sessionAndProject pid
+  (sess, project, bw) <- mkPageCtx pid
   appCtx <- ask @AuthContext
   let createProj =
         CreateProjectForm
@@ -1363,14 +1332,7 @@ projectSettingsGetH pid = do
           , endpointAlerts = if project.endpointAlerts then Just "on" else Nothing
           }
 
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = Just project
-          , pageTitle = "Project"
-          , isSettingsPage = True
-          , config = appCtx.config
-          }
+  let bwconf = bw{pageTitle = "Project", isSettingsPage = True}
   addRespHeaders $ CreateProject $ PageCtx bwconf (sess.persistentSession, pid, appCtx.config, project.paymentPlan, True, createProj, def @CreateProjectFormError, project)
 
 
