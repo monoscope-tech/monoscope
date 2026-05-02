@@ -417,6 +417,7 @@ tests:
       - effectful-postgresql
       - process
       - lucid
+      - http-types
   unit-tests:
     main: Main.hs
     source-dirs: test/unit
