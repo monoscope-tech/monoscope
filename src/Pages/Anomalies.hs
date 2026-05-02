@@ -53,7 +53,6 @@ import Data.Time.LocalTime (ZonedTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..), getAeson)
-import Database.PostgreSQL.Simple.Types (PGArray (..))
 import Deriving.Aeson qualified as DAE
 import Effectful.Concurrent.Async (concurrently)
 import Effectful.Error.Static (throwError)
@@ -1423,20 +1422,16 @@ instance ToHtml AnomalyListGet where
 
 
 issueRowAttrs :: IssueVM -> [Attribute]
-issueRowAttrs (IssueVM _ _ _ _ issue) =
-  [class_ $ "group/row hover:bg-fillWeaker " <> bg] <> case issue.severity of
-    "critical" -> [style_ "box-shadow: inset 3px 0 0 var(--color-fillError-strong)"]
-    "warning" -> [style_ "box-shadow: inset 3px 0 0 var(--color-fillWarning-strong)"]
-    _ -> []
+issueRowAttrs (IssueVM _ _ _ _ issue) = [class_ $ "group/row hover:bg-fillWeaker " <> bg] <> sty
   where
-    bg = case issue.severity of
-      "critical" -> "bg-fillError-weak"
-      "warning" -> "bg-fillWarning-weak"
-      _ -> ""
+    (bg, sty) = case issue.base.severity of
+      "critical" -> ("bg-fillError-weak", [style_ "box-shadow: inset 3px 0 0 var(--color-fillError-strong)"])
+      "warning" -> ("bg-fillWarning-weak", [style_ "box-shadow: inset 3px 0 0 var(--color-fillWarning-strong)"])
+      _ -> ("", [])
 
 
 issueRowId :: IssueVM -> Text
-issueRowId (IssueVM _ _ _ _ issue) = Issues.issueIdText issue.id
+issueRowId (IssueVM _ _ _ _ issue) = Issues.issueIdText issue.base.id
 
 
 -- | (icon, iconStyle, colorClass, tooltip) — uses shape+color so status isn't color-only
@@ -1480,13 +1475,11 @@ renderIssueEventsCol (IssueVM _ isWidget _ _ issue) =
 
 renderIssueDateCol :: IssueVM -> Html ()
 renderIssueDateCol (IssueVM _ _ currTime _ issue) =
-  span_ [class_ "text-xs text-textWeak"] $ toHtml $ compactTimeAgo $ toText $ prettyTimeAuto currTime $ zonedTimeToUTC issue.createdAt
+  span_ [class_ "text-xs text-textWeak"] $ toHtml $ compactTimeAgo $ toText $ prettyTimeAuto currTime $ zonedTimeToUTC issue.base.createdAt
 
 
 renderIssueChartCol :: IssueVM -> Html ()
-renderIssueChartCol (IssueVM _ _ _ _ issue) = sparkline_ buckets
-  where
-    PGArray buckets = issue.activityBuckets
+renderIssueChartCol (IssueVM _ _ _ _ issue) = sparkline_ $ V.toList issue.activityBuckets
 
 
 highlightJsHead_ :: Monad m => HtmlT m ()
@@ -1538,13 +1531,13 @@ renderSummaryText_ txt = forM_ (words txt) \token ->
 
 
 renderIssueTitle_ :: Issues.IssueL -> Html ()
-renderIssueTitle_ issue
+renderIssueTitle_ Issues.IssueL{base}
   | T.null title = "(Untitled)"
   | "⇒" `T.isInfixOf` title = renderSummaryText_ title
   | looksLikeRawPattern title = span_ [class_ "font-mono text-[0.8125rem] break-all"] $ renderWithPlaceholders_ title
   | otherwise = renderWithPlaceholders_ title
   where
-    title = stripIssuePrefix issue.title
+    title = stripIssuePrefix base.title
     stripIssuePrefix =
       foldl' (\t pfx -> fromMaybe t $ T.stripPrefix pfx t)
         <*> const
@@ -1564,32 +1557,33 @@ renderWithPlaceholders_ = go
 
 renderIssueMainCol :: Projects.ProjectId -> IssueVM -> Html ()
 renderIssueMainCol pid (IssueVM _ _ currTime period issue) = do
-  let isAcknowledged = isJust issue.acknowledgedAt
-      isArchived = isJust issue.archivedAt
-      (icon, iconStyle, iconColor, tooltip) = anomalyStatusIndicator isAcknowledged isArchived issue.severity
-      issueUrl = "/p/" <> pid.toText <> "/issues/" <> Issues.issueIdText issue.id
+  let b = issue.base
+      isAcknowledged = isJust b.acknowledgedAt
+      isArchived = isJust b.archivedAt
+      (icon, iconStyle, iconColor, tooltip) = anomalyStatusIndicator isAcknowledged isArchived b.severity
+      issueUrl = "/p/" <> pid.toText <> "/issues/" <> Issues.issueIdText b.id
   div_ [class_ "flex flex-col gap-1 py-0.5 min-w-0"] do
     div_ [class_ "flex items-center gap-2 min-w-0"] do
       div_ [class_ "text-sm line-clamp-2 min-w-0"] do
         span_ [class_ $ "inline-flex align-middle mr-1 " <> iconColor, title_ tooltip, Aria.label_ tooltip] $ faSprite_ icon iconStyle "w-3.5 h-3.5"
-        span_ [class_ "text-xs tabular-nums mr-1 text-textWeak max-md:text-textStrong max-md:font-medium"] $ toHtml $ "#" <> show issue.seqNum <> " "
+        span_ [class_ "text-xs tabular-nums mr-1 text-textWeak max-md:text-textStrong max-md:font-medium"] $ toHtml $ "#" <> show b.seqNum <> " "
         a_ ([href_ issueUrl, class_ "font-medium text-textStrong hover:text-textBrand transition-colors"] <> navTabAttrs) $ renderIssueTitle_ issue
       span_ [class_ "shrink-0 flex items-center gap-1.5 max-md:hidden"] do
-        severityBadge_ issue.severity
+        severityBadge_ b.severity
         issueStateBadge_ issue.latestStateEvent
         when isAcknowledged $ span_ [class_ "badge badge-sm badge-ghost gap-1"] do faSprite_ "check" "regular" "h-3 w-3"; "Ack'd"
       div_ [class_ "shrink-0 flex gap-1 items-center opacity-0 group-hover/row:opacity-100 has-[:focus-within]:opacity-100 transition-opacity max-md:hidden"] do
         inlineBtn (bool "Acknowledge" "Unacknowledge" isAcknowledged) "check" (hxGet_ $ issueUrl <> bool "/acknowledge" "/unacknowledge" isAcknowledged) []
         inlineBtn (bool "Archive" "Unarchive" isArchived) "archive" (hxGet_ $ issueUrl <> bool "/archive" "/unarchive" isArchived) []
     div_ [class_ "hidden max-md:flex items-center gap-1.5 flex-wrap"] do
-      severityBadge_ issue.severity
+      severityBadge_ b.severity
       issueStateBadge_ issue.latestStateEvent
     div_ [class_ "max-md:hidden"] $ issuePreview_ issue
     div_ [class_ "hidden max-md:flex items-center justify-between text-xs text-textWeak"] do
       div_ [class_ "flex items-center gap-1.5"] do
         span_ [class_ $ "tabular-nums" <> bool "" " font-medium text-textStrong" (issue.eventCount > 100)] $ toHtml $ show issue.eventCount <> bool " event" " events" (issue.eventCount /= 1) <> " (" <> period <> ")"
         span_ [class_ "opacity-30"] "·"
-        span_ [] $ toHtml $ compactTimeAgo $ toText $ prettyTimeAuto currTime $ zonedTimeToUTC issue.createdAt
+        span_ [] $ toHtml $ compactTimeAgo $ toText $ prettyTimeAuto currTime $ zonedTimeToUTC b.createdAt
       div_ [class_ "flex items-center gap-3"] do
         button_ [type_ "button", class_ "cursor-pointer text-textBrand tap-target font-medium", hxSwap_ "outerHTML", hxTarget_ "closest .itemsListItem", hxGet_ $ issueUrl <> bool "/acknowledge" "/unacknowledge" isAcknowledged] $ toHtml $ bool "Ack" "Unack" isAcknowledged
         button_ [type_ "button", class_ "cursor-pointer text-textBrand tap-target font-medium", hxSwap_ "outerHTML", hxTarget_ "closest .itemsListItem", hxGet_ $ issueUrl <> bool "/archive" "/unarchive" isArchived] $ toHtml $ bool "Archive" "Unarchive" isArchived
@@ -1601,15 +1595,16 @@ renderIssueMainCol pid (IssueVM _ _ currTime period issue) = do
 
 issueCardCompact_ :: Projects.ProjectId -> UTCTime -> Issues.IssueL -> Html ()
 issueCardCompact_ pid now issue = do
-  let (icon, iconStyle, iconColor, tooltip) = anomalyStatusIndicator (isJust issue.acknowledgedAt) (isJust issue.archivedAt) issue.severity
-      issueUrl = "/p/" <> pid.toText <> "/issues/" <> Issues.issueIdText issue.id
+  let b = issue.base
+      (icon, iconStyle, iconColor, tooltip) = anomalyStatusIndicator (isJust b.acknowledgedAt) (isJust b.archivedAt) b.severity
+      issueUrl = "/p/" <> pid.toText <> "/issues/" <> Issues.issueIdText b.id
   a_ ([href_ issueUrl, class_ "block border border-strokeWeak rounded-xl p-3 hover:bg-bgRaised transition-colors"] <> navTabAttrs) do
     div_ [class_ "flex items-center gap-2 min-w-0"] do
       span_ [class_ $ "shrink-0 " <> iconColor, title_ tooltip, Aria.label_ tooltip] $ faSprite_ icon iconStyle "w-3.5 h-3.5"
-      span_ [class_ "text-xs text-textWeak shrink-0 tabular-nums"] $ toHtml $ "#" <> show issue.seqNum
+      span_ [class_ "text-xs text-textWeak shrink-0 tabular-nums"] $ toHtml $ "#" <> show b.seqNum
       span_ [class_ "text-sm font-medium text-textStrong truncate min-w-0"] $ renderIssueTitle_ issue
-      severityBadge_ issue.severity
-      span_ [class_ "text-xs text-textWeak shrink-0 ml-auto"] $ toHtml $ compactTimeAgo $ toText $ prettyTimeAuto now $ zonedTimeToUTC issue.createdAt
+      severityBadge_ b.severity
+      span_ [class_ "text-xs text-textWeak shrink-0 ml-auto"] $ toHtml $ compactTimeAgo $ toText $ prettyTimeAuto now $ zonedTimeToUTC b.createdAt
     issuePreview_ issue
 
 
@@ -1633,22 +1628,22 @@ issueStateBadge_ = \case
 
 
 issuePreview_ :: Issues.IssueL -> Html ()
-issuePreview_ issue = div_ [class_ "flex items-center gap-2 min-w-0 overflow-hidden text-xs text-textWeak"] do
-  issueTypeBadge issue.issueType issue.critical
-  whenJust issue.service $ span_ [class_ "shrink-0", term "data-tippy-content" "Service"] . toHtml
+issuePreview_ Issues.IssueL{base} = div_ [class_ "flex items-center gap-2 min-w-0 overflow-hidden text-xs text-textWeak"] do
+  issueTypeBadge base.issueType base.critical
+  whenJust base.service $ span_ [class_ "shrink-0", term "data-tippy-content" "Service"] . toHtml
   span_ [class_ "shrink-0 opacity-40"] "·"
   snippet
   where
-    snippet = case issue.issueType of
-      Issues.RuntimeException -> withIssueDataH @Issues.RuntimeExceptionData issue.issueData \d ->
+    snippet = case base.issueType of
+      Issues.RuntimeException -> withIssueDataH @Issues.RuntimeExceptionData base.issueData \d ->
         previewSnippet $ d.errorType <> ": " <> d.errorMessage
-      Issues.QueryAlert -> withIssueDataH @Issues.QueryAlertData issue.issueData \d ->
+      Issues.QueryAlert -> withIssueDataH @Issues.QueryAlertData base.issueData \d ->
         previewSnippet d.queryExpression
-      Issues.LogPattern -> withIssueDataH @Issues.LogPatternData issue.issueData \d ->
+      Issues.LogPattern -> withIssueDataH @Issues.LogPatternData base.issueData \d ->
         logPatternPreview d.logPattern d.sampleMessage
-      Issues.LogPatternRateChange -> withIssueDataH @Issues.LogPatternRateChangeData issue.issueData \d ->
+      Issues.LogPatternRateChange -> withIssueDataH @Issues.LogPatternRateChangeData base.issueData \d ->
         logPatternPreview d.logPattern d.sampleMessage
-      Issues.ApiChange -> withIssueDataH @Issues.APIChangeData issue.issueData \d ->
+      Issues.ApiChange -> withIssueDataH @Issues.APIChangeData base.issueData \d ->
         previewSnippet $ d.endpointMethod <> " " <> d.endpointPath <> if T.null d.endpointHost then "" else " on " <> d.endpointHost
     previewSnippet txt = span_ [class_ "font-mono truncate min-w-0", term "data-tippy-content" txt] $ renderWithPlaceholders_ $ unescapeJson txt
     summaryPreview txt = span_ [class_ "truncate min-w-0"] $ renderSummaryText_ txt

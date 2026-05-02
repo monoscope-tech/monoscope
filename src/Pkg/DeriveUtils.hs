@@ -57,7 +57,7 @@ import Database.PostgreSQL.Simple.FromField (Conversion (..), FromField (..), fr
 import Database.PostgreSQL.Simple.Internal qualified as PGI
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (ToField (..))
-import Database.PostgreSQL.Simple.Types (PGArray (..), Query (..))
+import Database.PostgreSQL.Simple.Types (Query (..))
 import Effectful (IOE, type (:>))
 import GHC.Generics (Rep)
 import GHC.Records (HasField (getField))
@@ -238,13 +238,6 @@ instance (KnownSymbol prefix, Read a) => HI.DecodeRow (WrappedEnumSC prefix a) w
 instance HI.DecodeValue ZonedTime where
   decodeValue = utcToZonedTime utc <$> D.timestamptz
 
-
-instance HI.DecodeValue a => HI.DecodeValue (PGArray a) where
-  decodeValue = PGArray . V.toList <$> HI.decodeValue
-
-
-instance HI.EncodeValue a => HI.EncodeValue (PGArray a) where
-  encodeValue = contramap (\(PGArray xs) -> V.fromList xs) HI.encodeValue
 
 
 instance HI.EncodeValue ZonedTime where

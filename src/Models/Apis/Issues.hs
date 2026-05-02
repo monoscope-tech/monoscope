@@ -120,7 +120,6 @@ import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..), getAeson)
 import Database.PostgreSQL.Simple.ToField (ToField)
-import Database.PostgreSQL.Simple.Types (PGArray (..), fromPGArray)
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, type (:>))
 import Effectful.Error.Static (Error, throwError)
@@ -189,7 +188,8 @@ data IssueSummary = IssueSummary
 
 
 toIssueSummary :: IssueL -> IssueSummary
-toIssueSummary x = IssueSummary x.id x.title x.critical x.severity x.issueType (Just $ fromPGArray x.activityBuckets)
+toIssueSummary IssueL{base, activityBuckets} =
+  IssueSummary base.id base.title base.critical base.severity base.issueType (Just $ V.toList activityBuckets)
 
 
 showRate :: Double -> Text
@@ -299,46 +299,21 @@ data Issue = Issue
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "issues", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Issue)
 
 
-deriving newtype instance NFData a => NFData (PGArray a)
-
-
--- | Issue with aggregated event data (for list views)
+-- | Issue with aggregated event data (for list views).
+-- Columns 1-28 must match Issue's field declaration order (Generic DecodeRow).
 data IssueL = IssueL
-  { id :: IssueId
-  , createdAt :: ZonedTime
-  , updatedAt :: ZonedTime
-  , projectId :: Projects.ProjectId
-  , issueType :: IssueType -- Will be converted from anomaly_type in query
-  , parentHash :: Maybe Text
-  , isFramework :: Bool
-  , endpointHash :: Text
-  , acknowledgedAt :: Maybe ZonedTime
-  , acknowledgedBy :: Maybe Projects.UserId
-  , archivedAt :: Maybe ZonedTime
-  , title :: Text
-  , service :: Maybe Text
-  , critical :: Bool
-  , severity :: Text -- Computed in query
-  , affectedRequests :: Int -- Will be converted from affected_payloads in query
-  , affectedClients :: Int
-  , errorRate :: Maybe Double -- Not in DB, will be NULL
-  , recommendedAction :: Text
-  , migrationComplexity :: Text
-  , issueData :: Aeson AE.Value
-  , -- Payload changes tracking (for API changes)
-    requestPayloads :: Aeson [PayloadChange]
-  , responsePayloads :: Aeson [PayloadChange]
-  , llmEnhancedAt :: Maybe UTCTime -- Not in DB, will be NULL
-  , llmEnhancementVersion :: Maybe Int -- Not in DB, will be NULL
-  , seqNum :: Int
-  , -- Aggregated data
-    eventCount :: Int
+  { base :: Issue
+  , eventCount :: Int
   , lastSeen :: UTCTime
   , latestStateEvent :: Maybe IssueEvent
-  , activityBuckets :: PGArray Int
+  , activityBuckets :: V.Vector Int
   }
   deriving stock (Generic, Show)
-  deriving anyclass (FromRow, HI.DecodeRow, NFData)
+  deriving anyclass (NFData)
+
+-- Generic HI.DecodeRow can't derive this: Issue has DecodeRow but not DecodeValue.
+instance HI.DecodeRow IssueL where
+  decodeRow = IssueL <$> HI.decodeRow <*> HI.decodeRow <*> HI.decodeRow <*> HI.decodeRow <*> HI.decodeRow
 
 
 -- | Insert a single issue
@@ -346,15 +321,13 @@ data IssueL = IssueL
 -- but only for open issues (not acknowledged/archived). Preserves occurrence_count and first_seen.
 insertIssue :: DB es => Issue -> Eff es ()
 insertIssue (i :: Issue) = do
+  -- DuplicateRecordFields: bind before TH quasi-quote which can't disambiguate
   let (iId, iCreated, iUpdated, iPid, iType, iTgt, iPHash, iFrame, iEHash) =
         (i.id, i.createdAt, i.updatedAt, i.projectId, i.issueType, i.targetHash, i.parentHash, i.isFramework, i.endpointHash)
       (iAckAt, iAckBy, iArchAt, iTitle, iSvc, iEnv, iCrit, iSev) =
         (i.acknowledgedAt, i.acknowledgedBy, i.archivedAt, i.title, i.service, i.environment, i.critical, i.severity)
       (iAction, iComplex, iData, iReqP, iResP, iLlmAt, iLlmVer, iSeq) =
         (i.recommendedAction, i.migrationComplexity, i.issueData, i.requestPayloads, i.responsePayloads, i.llmEnhancedAt, i.llmEnhancementVersion, i.seqNum)
-      -- Seed affected_requests/_clients from the triggering batch so reminder
-      -- logic that depends on "is it still firing?" has real counters from day one.
-      -- ON CONFLICT, accumulate rather than overwrite.
       (iAffReq, iAffCli) = (max 1 i.affectedRequests, max 1 i.affectedClients)
   Hasql.interpExecute_
     [HI.sql|
@@ -470,11 +443,16 @@ selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM 
     pidTxt = pid.toText
     q =
       [text|
-      SELECT i.id, i.created_at, i.updated_at, i.project_id, i.issue_type::text, i.parent_hash, i.is_framework, i.target_hash, i.acknowledged_at, i.acknowledged_by, i.archived_at, i.title, i.service, i.critical,
-        -- Prefer the stored severity (e.g. 'low' for silent drops, 'critical'/'warning'/'info'
-        -- from detectors); fall back to the critical flag for rows without one.
-        COALESCE(NULLIF(i.severity, ''), CASE WHEN i.critical THEN 'critical' ELSE 'info' END), i.affected_requests, i.affected_clients, NULL::double precision,
-        i.recommended_action, i.migration_complexity, i.issue_data, i.request_payloads, i.response_payloads, NULL::timestamp with time zone, NULL::int, i.seq_num,
+      SELECT i.id, i.created_at, i.updated_at, i.project_id, i.issue_type::text,
+        i.endpoint_hash, i.acknowledged_at, i.acknowledged_by, i.archived_at, i.title, i.service, i.critical,
+        -- Columns 1-28 must match Issue's field declaration order so that Generic
+        -- FromRow/DecodeRow for Issue decodes the base row correctly.
+        -- Prefer the stored severity (e.g. 'low' for silent drops); fall back to critical flag.
+        COALESCE(NULLIF(i.severity, ''), CASE WHEN i.critical THEN 'critical' ELSE 'info' END),
+        i.affected_requests, i.affected_clients, NULL::double precision,
+        i.recommended_action, i.migration_complexity, i.issue_data, i.request_payloads, i.response_payloads,
+        NULL::timestamp with time zone, NULL::int,
+        i.target_hash, NULL::text, i.seq_num, i.parent_hash, i.is_framework,
         CASE
           WHEN i.issue_type = 'runtime_exception' THEN COALESCE(err_ev.cnt, 0)
           WHEN i.issue_type IN ('log_pattern', 'log_pattern_rate_change') THEN COALESCE(lp_ev.cnt, 0)

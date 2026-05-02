@@ -41,7 +41,6 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
-import Database.PostgreSQL.Simple.Types (PGArray (..))
 import Deriving.Aeson qualified as DAE
 import Effectful
 import Effectful.Time (Time)
@@ -133,11 +132,11 @@ data EndpointRequestStats = EndpointRequestStats
   , host :: Text
   , totalRequests :: Int
   , lastSeen :: Maybe ZonedTime
-  , activityBuckets :: PGArray Int
-  , services :: PGArray Text
+  , activityBuckets :: V.Vector Int
+  , services :: V.Vector Text
   }
   deriving stock (Generic, Show)
-  deriving anyclass (FromRow, HI.DecodeRow, ToRow)
+  deriving anyclass (HI.DecodeRow)
 
 
 -- | Resolve the remote host of a span. Mirrors the priority used by
@@ -258,11 +257,11 @@ data HostEvents = HostEvents
   , eventCount :: Int64
   , first_seen :: Maybe ZonedTime
   , last_seen :: Maybe ZonedTime
-  , activityBuckets :: PGArray Int
-  , services :: PGArray Text -- distinct resource.service.name emitting traffic for this host
+  , activityBuckets :: V.Vector Int
+  , services :: V.Vector Text -- distinct resource.service.name emitting traffic for this host
   }
   deriving stock (Generic, Show)
-  deriving anyclass (FromRow, HI.DecodeRow, ToRow)
+  deriving anyclass (HI.DecodeRow)
 
 
 -- | When @outgoingM@ is @Nothing@, both directions are returned (used for the

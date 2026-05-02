@@ -6,7 +6,6 @@ import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Time.LocalTime (ZonedTime, zonedTimeToUTC)
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple.Types (PGArray (..))
 import Effectful.Concurrent.Async (concurrently)
 import Effectful.Error.Static (throwError)
 import Effectful.Reader.Static (ask)
@@ -162,7 +161,7 @@ servicesBadges_ sourceLabel kindVal badgeHref svcs =
 
 renderCatalogMainCol :: Projects.ProjectId -> Text -> HostEventsVM -> Html ()
 renderCatalogMainCol pid _currentTab (HostEventsVM _ he _ _ _ _) = do
-  let PGArray svcs = he.services
+  let svcs = V.toList he.services
       outgoing = he.outgoing
       reqTypeLabel = bool "Incoming" "Outgoing" outgoing :: Text
       sourceLabel = bool "Served by:" "Called by:" outgoing
@@ -337,8 +336,8 @@ lastSeenCell_ currTime = \case
   Nothing -> span_ [class_ "text-textWeak text-xs"] "-"
 
 
-activityCell_ :: PGArray Int -> Html ()
-activityCell_ (PGArray buckets) = sparkline_ buckets
+activityCell_ :: V.Vector Int -> Html ()
+activityCell_ = sparkline_ . V.toList
 
 
 renderEndpointMainCol :: Projects.ProjectId -> Text -> EnpReqStatsVM -> Html ()
@@ -348,7 +347,7 @@ renderEndpointMainCol pid currentTab (EnpReqStatsVM _ _ _ enp) = do
       kindVal = bool "server" "client" outgoing :: Text
       sourceLabel = bool "Served by:" "Called by:" outgoing
       q = hostAttr <> "==\"" <> enp.host <> "\" AND kind==\"" <> kindVal <> "\" AND attributes.http.route==\"" <> enp.urlPath <> "\" AND attributes.http.request.method==\"" <> enp.method <> "\""
-      PGArray svcs = enp.services
+      svcs = V.toList enp.services
   div_ [class_ "flex flex-col gap-1 min-w-0"] do
     div_ [class_ "flex items-center gap-2 min-w-0"] do
       a_ ([class_ "inline-flex items-center gap-1.5 font-medium text-textStrong hover:text-textBrand transition-colors truncate min-w-0", href_ ("/p/" <> pid.toText <> "/endpoints/details?var-endpointHash=" <> enp.endpointHash <> "&var-host=" <> enp.host)] <> navTabAttrs) $ do

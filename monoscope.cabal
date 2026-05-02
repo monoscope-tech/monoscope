@@ -284,6 +284,7 @@ library
     , aeson-qq
     , annotated-exception
     , async
+    , barbies
     , base
     , base16-bytestring
     , base64
