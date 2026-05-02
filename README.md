@@ -95,6 +95,46 @@ monoscope auth login
 
 See the [CLI reference](docs/cli.md) for the full command list.
 
+### Agentic pipeline
+
+Every CLI command emits a stable JSON envelope, so you can chain discovery →
+search → triage without manual munging. This is the same pipeline a Claude
+Code skill runs end-to-end:
+
+```bash
+# 1. What services exist? (Precomputed; no aggregation query needed.)
+SVC=$(monoscope facets resource.service.name --top 1 \
+        | jq -r '.["resource.service.name"][0].value')
+
+# 2. Grab one error event from that service — id only, ready to chain.
+ID=$(monoscope logs search 'severity.text=="error"' \
+        --service "$SVC" --first --id-only)
+
+# 3. Pull the surrounding 5 minutes of traffic, with a per-trace summary
+#    showing which other services were affected.
+monoscope events context --window 5m --summary \
+  --at "$(monoscope events get "$ID" | jq -r .timestamp)" \
+  | jq '.traces | sort_by(-.error_count) | .[0:3]'
+
+# 4. Acknowledge the open issue once you have a hypothesis.
+monoscope issues list --service "$SVC" --status open \
+  | jq -r '.data[].id' | head -3 \
+  | xargs -I {} monoscope issues ack {}
+```
+
+Each step's output shape is documented and stable:
+
+| Command | Envelope |
+|---|---|
+| `facets [FIELD]` | `{<field_path>: [{value, count}, ...]}` |
+| `events search` (and `logs`/`traces`) | `{events: [...], count, has_more, cursor}` |
+| `events context --summary` | `{events, count, traces: [{trace_id, services, span_count, error_count}]}` |
+| `issues list`, `monitors list`, ... | `{data: [...], pagination: {has_more, total, cursor, page, per_page}}` |
+| `auth status` (agent mode) | `{authenticated, method, api_url, project}` |
+
+Set `MONOSCOPE_AGENT_MODE=1` (or run with `--agent`) to force JSON output and
+disable interactive prompts — auto-detected when `CI` or `CLAUDE_CODE` is set.
+
 ### Claude Code Skills
 
 Let Claude investigate incidents, triage alerts, and write KQL queries using the `monoscope` CLI — install the skills plugin:
