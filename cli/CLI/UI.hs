@@ -47,7 +47,7 @@ listApp title =
     { B.appDraw = drawList title
     , B.appChooseCursor = B.neverShowCursor
     , B.appHandleEvent = handleListEvent
-    , B.appStartEvent = pure ()
+    , B.appStartEvent = pass
     , B.appAttrMap = const listAttrMap
     }
 
@@ -68,7 +68,7 @@ handleListEvent = \case
   B.VtyEvent (Vty.EvKey Vty.KEnter []) -> B.halt
   B.VtyEvent (Vty.EvKey k []) | k == Vty.KEsc || k == Vty.KChar 'q' -> cancelList
   B.VtyEvent ev -> BL.handleListEvent ev
-  _ -> pure ()
+  _ -> pass
 
 listAttrMap :: BA.AttrMap
 listAttrMap =
@@ -95,14 +95,14 @@ formFallback fields = do
     pure (key, if T.null input then def else input)
   pure $ fromList results
 
-data FormEditorName = FormEditor Text
+newtype FormEditorName = FormEditor Text
   deriving stock (Eq, Ord, Show)
 
 data FormField = FormField {key :: Text, label :: Text, editor :: BE.Editor Text FormEditorName}
 data FormState = FormState {fields :: [FormField], focusIdx :: Int}
 
 currentValue :: BE.Editor Text FormEditorName -> Text
-currentValue = T.strip . T.unlines . BE.getEditContents
+currentValue = T.strip . unlines . BE.getEditContents
 
 formApp :: Text -> B.App FormState () FormEditorName
 formApp title =
@@ -110,7 +110,7 @@ formApp title =
     { B.appDraw = drawForm title
     , B.appChooseCursor = B.showFirstCursor
     , B.appHandleEvent = handleFormEvent
-    , B.appStartEvent = pure ()
+    , B.appStartEvent = pass
     , B.appAttrMap = const $ BA.attrMap Vty.defAttr [(BE.editFocusedAttr, Vty.withStyle Vty.defAttr Vty.underline)]
     }
 
@@ -129,7 +129,7 @@ drawField focused f =
   B.padLeftRight 1 $
     B.vBox
       [ B.txt $ f.label <> ":"
-      , (if focused then B.visible else id) $ BE.renderEditor (B.txt . T.unlines) focused f.editor
+      , (if focused then B.visible else id) $ BE.renderEditor (B.txt . unlines) focused f.editor
       ]
 
 handleFormEvent :: B.BrickEvent FormEditorName () -> B.EventM FormEditorName FormState ()
@@ -149,17 +149,17 @@ handleFormEvent = \case
       newEditor <- B.nestEventM' field.editor $ BE.handleEditorEvent (B.VtyEvent ev)
       let updated = zipWith (\i f -> if i == idx then f{editor = newEditor} else f) [0 ..] st.fields
       B.put st{fields = updated}
-  _ -> pure ()
+  _ -> pass
 
 -- Animated spinner shown while an IO action runs. Cleans up terminal on completion.
 withSpinner :: Bool -> Text -> IO a -> IO a
 withSpinner interactive msg action
   | not interactive = putTextLn msg >> action
-  | otherwise = withAsync spinLoop \_ -> action
+  | otherwise = withAsync spinLoop (const action)
  where
   frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] :: [Text]
   spinLoop = go $ cycle frames
-  go [] = pure ()
+  go [] = pass
   go (f : fs) = do
     putStr $ "\r" <> toString f <> " " <> toString msg
     hFlush stdout

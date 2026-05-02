@@ -89,7 +89,7 @@ runAPI mode act = withResult act renderAPIError (renderByMode mode Nothing)
 -- @dashboards list@, @api-keys list@, @teams list@, @members list@,
 -- @endpoints list@, @log-patterns list@.
 runList :: (HTTP :> es, Environment :> es, IOE :> es) => CLIConfig -> ResourceKind -> [(Text, Text)] -> OutputMode -> Eff es ()
-runList cfg k params mode = runAPI mode $ fmap (fmap normalizeList) (apiGetJson @_ @AE.Value cfg (resourcePath k) params)
+runList cfg k params mode = runAPI mode (normalizeList <<$>> apiGetJson @_ @AE.Value cfg (resourcePath k) params)
 
 
 -- | Normalise a list response to @{data, pagination}@. Idempotent if the
@@ -207,8 +207,8 @@ applyOne cfg k path mode = do
       pure 1
   where
     runAndCount act = act >>= \case
-      Left e -> printError (toText path <> ": " <> renderAPIError e) >> pure 1
-      Right v -> renderByMode mode Nothing v >> pure 0
+      Left e -> printError (toText path <> ": " <> renderAPIError e) $> 1
+      Right v -> renderByMode mode Nothing v $> 0
 
 
 -- | Read + parse a YAML or JSON file. Exits with an error message on missing file or parse failure.

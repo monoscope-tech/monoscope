@@ -98,7 +98,7 @@ loadYaml :: (FileSystem :> es, IOE :> es) => FilePath -> Eff es FileConfig
 loadYaml path = do
   exists <- doesFileExist path
   if exists
-    then liftIO $ either (const emptyConfig) id <$> Yaml.decodeFileEither path
+    then liftIO $ fromRight emptyConfig <$> Yaml.decodeFileEither path
     else pure emptyConfig
 
 emptyConfig :: FileConfig

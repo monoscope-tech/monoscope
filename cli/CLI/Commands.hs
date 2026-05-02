@@ -87,15 +87,15 @@ runAuth = \case
     let baseUrl = cfg.apiUrl
     result <- runExceptT $ do
       bs <- ExceptT $ first show <$> apiPostUnauth baseUrl "/api/device/code" []
-      resp <- ExceptT . pure $ first toText $ AE.eitherDecode @DeviceCodeResponse bs
+      resp <- hoistEither $ first toText $ AE.eitherDecode @DeviceCodeResponse bs
       putTextLn $ "\nYour authorization code: " <> resp.userCode
       putTextLn $ "Opening browser to: " <> resp.verificationUri
       liftIO $ tryOpenBrowser (toString resp.verificationUri)
       tty <- lift isInteractiveTTY
       tokenResp <- ExceptT $ liftIO $ withSpinner tty "Waiting for authorization..." $
-        runEff . runHTTPWreq $ maybe (Left "Authorization timed out (5 minutes)") Right <$> pollForToken baseUrl resp.deviceCode 60
+        runEff . runHTTPWreq $ maybeToRight "Authorization timed out (5 minutes)" <$> pollForToken baseUrl resp.deviceCode 60
       liftIO $ putStr ("\r\ESC[K" :: String) >> hFlush stdout
-      sessId <- ExceptT . pure $ maybeToRight "No session received" tokenResp.sessionId
+      sessId <- hoistEither $ maybeToRight "No session received" tokenResp.sessionId
       lift $ saveToken sessId
       putTextLn "Authenticated successfully!"
       lift $ selectProject tokenResp.projects
@@ -138,7 +138,7 @@ runAuth = \case
 data ConfigSetOpts = ConfigSetOpts {key :: Text, value :: Text}
   deriving stock (Show)
 
-data ConfigGetOpts = ConfigGetOpts {key :: Maybe Text}
+newtype ConfigGetOpts = ConfigGetOpts {key :: Maybe Text}
   deriving stock (Show)
 
 -- | Stable JSON shape for @config get@ in JSON/YAML mode. The @api_key@ is
@@ -206,7 +206,7 @@ runConfigGet opts mode = do
 
 -- Services
 
-data ServicesListOpts = ServicesListOpts
+newtype ServicesListOpts = ServicesListOpts
   { since :: Maybe Text
   }
   deriving stock (Show)
@@ -448,7 +448,7 @@ withTraceSummary raw (AE.Object out) = case raw of
         merge (s1, c1, e1) (s2, c2, e2) = (s1 <> s2, c1 + c2, e1 + e2)
         groups :: Map Text (Set Text, Int, Int)
         groups = Map.fromListWith merge
-          [ (tid, (Set.singleton (fromMaybe "" (cell "service" r)), 1, isErr (fromMaybe "" (cell "severity" r))))
+          [ (tid, (one (fromMaybe "" (cell "service" r)), 1, isErr (fromMaybe "" (cell "severity" r))))
           | r <- rows
           , let tid = fromMaybe "" (cell "context.trace_id" r <|> cell "trace_id" r)
           , not (T.null tid)
@@ -559,7 +559,7 @@ renderEventsTable val mFields = case val of
         rows = extractRows $ KM.lookup "logsData" obj
         count = extractInt $ KM.lookup "count" obj
         filteredCols = maybe cols (\f -> filter (`elem` T.splitOn "," f) cols) mFields
-        colIdxs = mapMaybe (\c -> Map.lookup c idxMap) filteredCols
+        colIdxs = mapMaybe (`Map.lookup` idxMap) filteredCols
         summaryCols = Set.fromList [i | (c, i) <- zip filteredCols [0 :: Int ..], c `elem` ["summary", "latency_breakdown"]]
         filteredRows = map (\r ->
           let raw = map (\i -> fromMaybe "" $ listToMaybe (drop i r)) colIdxs

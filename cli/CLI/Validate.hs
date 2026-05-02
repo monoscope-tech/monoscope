@@ -109,7 +109,7 @@ validateOrDie = \case
 
 -- | Validate an optional duration flag, exiting on failure.
 validateDurationOrDie :: IOE :> es => Maybe Text -> Eff es ()
-validateDurationOrDie = mapM_ (void . validateOrDie . validateDuration)
+validateDurationOrDie = mapM_ (validateOrDie . validateDuration)
 
 
 -- | Validate an optional @--kind@ flag and apply 'normalizeKind' so callers

@@ -120,7 +120,7 @@ data MetricsCommand
   deriving stock (Show)
 
 
-data ServicesCommand = SList ServicesListOpts
+newtype ServicesCommand = SList ServicesListOpts
   deriving stock (Show)
 
 
@@ -443,7 +443,7 @@ fileArg = strArgument (metavar "FILE" <> help "Path to YAML or JSON file")
 
 
 idsOpt :: Parser [Text]
-idsOpt = fmap (T.splitOn ",") $ strOption (long "ids" <> metavar "ID1,ID2,..." <> help "Comma-separated UUIDs")
+idsOpt = T.splitOn "," <$> strOption (long "ids" <> metavar "ID1,ID2,..." <> help "Comma-separated UUIDs")
 
 
 monitorsParser :: Parser MonitorsCommand
@@ -648,8 +648,8 @@ int64Arg = argument auto (metavar "ID" <> help "Pattern ID (integer)")
 
 int64IdsOpt :: Parser [Int64]
 int64IdsOpt =
-  fmap (mapMaybe (readMaybe . toString) . T.splitOn ",") $
-    strOption (long "ids" <> metavar "ID1,ID2,..." <> help "Comma-separated pattern IDs")
+  mapMaybe (readMaybe . toString) . T.splitOn ","
+    <$> strOption (long "ids" <> metavar "ID1,ID2,..." <> help "Comma-separated pattern IDs")
 
 
 logPatternsParser :: Parser LogPatternsCommand
@@ -659,7 +659,7 @@ logPatternsParser =
       [ command
           "list"
           ( info
-              ((\(p, pp) -> LPList p pp) <$> pageOpts <**> helper)
+              (uncurry LPList <$> pageOpts <**> helper)
               (progDesc "List log patterns")
           )
       , command "get" (info (LPGet <$> int64Arg <**> helper) (progDesc "Get log pattern by ID"))
@@ -855,7 +855,7 @@ run global = \case
   IssuesCmd sub -> withCfgMode global $ \cfg mode -> case sub of
     IssueList statusM typeM svcM pageM perM ->
       let params = catMaybes [("status",) <$> statusM, ("type",) <$> typeM, ("service",) <$> svcM] <> pageParams pageM perM
-       in Resource.runAPI mode (fmap (fmap Resource.normalizeList) (apiGetJson @_ @AE.Value cfg "/api/v1/issues" params))
+       in Resource.runAPI mode (Resource.normalizeList <<$>> apiGetJson @_ @AE.Value cfg "/api/v1/issues" params)
     IssueGet i -> Resource.runAPI mode (apiGetJson @_ @AE.Value cfg ("/api/v1/issues/" <> i) [])
     IssueAck i -> Resource.writeJson cfg Resource.POST ("/api/v1/issues/" <> i <> "/ack") [] AE.Null mode
     IssueUnack i -> Resource.writeJson cfg Resource.POST ("/api/v1/issues/" <> i <> "/unack") [] AE.Null mode
@@ -866,11 +866,11 @@ run global = \case
   EndpointsCmd sub -> withCfgMode global $ \cfg mode -> case sub of
     EndList searchM outgoingM pageM perM ->
       let params = catMaybes [("search",) <$> searchM, ("outgoing",) . bool "false" "true" <$> outgoingM] <> pageParams pageM perM
-       in Resource.runAPI mode (fmap (fmap Resource.normalizeList) (apiGetJson @_ @AE.Value cfg "/api/v1/endpoints" params))
+       in Resource.runAPI mode (Resource.normalizeList <<$>> apiGetJson @_ @AE.Value cfg "/api/v1/endpoints" params)
     EndGet i -> Resource.runAPI mode (apiGetJson @_ @AE.Value cfg ("/api/v1/endpoints/" <> i) [])
   LogPatternsCmd sub -> withCfgMode global $ \cfg mode -> case sub of
     LPList pageM perM ->
-      Resource.runAPI mode (fmap (fmap Resource.normalizeList) (apiGetJson @_ @AE.Value cfg "/api/v1/log_patterns" (pageParams pageM perM)))
+      Resource.runAPI mode (Resource.normalizeList <<$>> apiGetJson @_ @AE.Value cfg "/api/v1/log_patterns" (pageParams pageM perM))
     LPGet i -> Resource.runAPI mode (apiGetJson @_ @AE.Value cfg ("/api/v1/log_patterns/" <> show i) [])
     LPAck i -> Resource.writeJson cfg Resource.POST ("/api/v1/log_patterns/" <> show i <> "/ack") [] AE.Null mode
     LPBulk act ids ->
@@ -899,11 +899,10 @@ run global = \case
       Resource.writeJson cfg Resource.PATCH (Resource.resourceIdPath Resource.Members uid) [] (AE.object ["permission" AE..= perm]) mode
     MemberRemove uid -> Resource.runDelete cfg Resource.Members uid
   SchemaCmd schemaOpts -> withCfgMode global $ \cfg mode ->
-    Resource.runAPI mode . fmap (fmap (filterSchema schemaOpts)) $ apiGetJson @_ @Schema.Schema cfg "/api/v1/schema" []
+    Resource.runAPI mode (filterSchema schemaOpts <<$>> apiGetJson @_ @Schema.Schema cfg "/api/v1/schema" [])
   FacetsCmd facetsOpts -> withCfgMode global $ \cfg mode -> do
     let params = catMaybes [("since",) <$> facetsOpts.facetSince, ("field",) <$> facetsOpts.facetField]
-    Resource.runAPI mode . fmap (fmap (capFacets facetsOpts.facetTopN)) $
-      apiGetJson @_ @AE.Value cfg "/api/v1/facets" params
+    Resource.runAPI mode (capFacets facetsOpts.facetTopN <<$>> apiGetJson @_ @AE.Value cfg "/api/v1/facets" params)
   CompletionCmd shell -> emitCompletion shell
   VersionCmd -> putTextLn $ "monoscope " <> toText (showVersion Paths.version)
 
