@@ -1046,7 +1046,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
       processedWidgets <- pooledForConcurrently dash'.widgets processWidgetWithDashboardId
       -- Populate alert statuses and PNG URLs for widgets
       widgetsWithAlerts <- populateWidgetAlertStatuses processedWidgets
-      widgetsWithPngUrls <- populateWidgetPngUrls appCtx.env.apiKeyEncryptionSecretKey appCtx.config.hostUrl pid timeParams widgetsWithAlerts
+      widgetsWithPngUrls <- populateWidgetPngUrls appCtx.env.apiKeyEncryptionSecretKey bw.config.hostUrl pid timeParams widgetsWithAlerts
       let dash'' = dash' & #widgets .~ widgetsWithPngUrls
 
       freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
@@ -2252,7 +2252,7 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = d
             -- Process widgets concurrently for faster initial page load
             processedWidgets <- pooledForConcurrently tab.widgets processWidgetWithDashboardId
             widgetsWithAlerts <- populateWidgetAlertStatuses processedWidgets
-            widgetsWithPngUrls <- populateWidgetPngUrls appCtx.env.apiKeyEncryptionSecretKey appCtx.config.hostUrl pid timeParams widgetsWithAlerts
+            widgetsWithPngUrls <- populateWidgetPngUrls appCtx.env.apiKeyEncryptionSecretKey bw.config.hostUrl pid timeParams widgetsWithAlerts
             pure $ tab & #widgets .~ widgetsWithPngUrls
           else pure tab -- Don't process widgets for inactive tabs
       pure $ dash' & #tabs ?~ processedTabs

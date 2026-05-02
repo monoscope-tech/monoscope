@@ -601,14 +601,18 @@ normalizeEventsResponse :: AE.Value -> Maybe Text -> AE.Value
 normalizeEventsResponse val mFields = maybe val (`normalizeDecoded` mFields) (decodeEvents val)
 
 
+-- | Project rows into named-field objects. Missing fields encode as @null@
+-- (not @""@) so agents can distinguish "field present but empty" from
+-- "field missing or row truncated".
 normalizeDecoded :: DecodedEvents -> Maybe Text -> AE.Value
 normalizeDecoded d mFields =
   let keep = case mFields of
         Nothing -> Map.keys d.idxMap
         Just s -> filter (`Map.member` d.idxMap) (T.splitOn "," s)
+      cellAt r k = Map.lookup k d.idxMap >>= \i -> listToMaybe (drop i r)
       toObj r =
         AE.object
-          [ AK.fromText k AE..= fromMaybe "" (Map.lookup k d.idxMap >>= \i -> listToMaybe (drop i r))
+          [ AK.fromText k AE..= maybe AE.Null AE.String (cellAt r k)
           | k <- keep
           ]
       events = map toObj d.rows

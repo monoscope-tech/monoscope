@@ -753,7 +753,9 @@ main = do
   hSetBuffering stdout LineBuffering
   (global, cmd) <- execParser parserInfo
   -- Make --debug equivalent to MONOSCOPE_DEBUG=1 so 'CLI.Core.printDebug'
-  -- (which only sees the env) lights up either way.
+  -- (which only sees the env) lights up either way. setEnv is process-global
+  -- and not thread-safe, but we set it exactly once here, before runCLI
+  -- starts any concurrent work, so the race window is empty.
   when global.debugFlag $ setEnv "MONOSCOPE_DEBUG" "1"
   runCLI $ run global cmd
 
@@ -946,13 +948,12 @@ capFacets _ v = v
 -- silently doesn't work in their fish shell. Now we exit non-zero with a
 -- clear message that lists the supported shells.
 emitCompletion :: IOE :> es => Text -> Eff es ()
-emitCompletion shell = case shell of
+emitCompletion shell = liftIO $ case shell of
   "bash" -> emit "--bash-completion-script"
   "zsh" -> emit "--zsh-completion-script"
   "fish" -> emit "--fish-completion-script"
-  other -> liftIO $ do
+  other -> do
     Data.Text.IO.hPutStrLn stderr $ "error: unknown shell '" <> other <> "'; supported: bash|zsh|fish"
     exitFailure
   where
-    emit shellArg = liftIO $
-      void $ handleParseResult $ execParserPure defaultPrefs parserInfo [shellArg, "monoscope"]
+    emit shellArg = void $ handleParseResult $ execParserPure defaultPrefs parserInfo [shellArg, "monoscope"]

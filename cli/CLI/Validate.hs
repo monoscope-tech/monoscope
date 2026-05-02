@@ -3,6 +3,7 @@
 -- message instead of an opaque server-side HTTP 400.
 module CLI.Validate
   ( validateDuration
+  , validateDurationFor
   , validateUuid
   , validateKind
   , normalizeKind

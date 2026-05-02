@@ -93,6 +93,16 @@ spec = describe "CLI binary E2E tests" do
           , ["members", "add", "--help"]
           , ["members", "patch", "--help"]
           , ["members", "remove", "--help"]
+          , ["schema", "--help"]
+          , ["facets", "--help"]
+          , ["services", "list", "--help"]
+          , ["events", "search", "--help"]
+          , ["events", "context", "--help"]
+          , ["events", "tail", "--help"]
+          , ["metrics", "query", "--help"]
+          , ["metrics", "chart", "--help"]
+          , ["auth", "login", "--help"]
+          , ["completion", "--help"]
           ]
     forM_ helpCases $ \args ->
       it (toString $ unwords $ map toText args) do

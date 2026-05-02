@@ -3,7 +3,6 @@ module Pkg.CLIFormat (
   formatRow,
   extractTextArray,
   extractRows,
-  extractNumericRows,
   extractInt,
   valToText,
   evalCond,
@@ -137,19 +136,6 @@ extractRows :: Maybe AE.Value -> [[Text]]
 extractRows = withArray $ map extractRow . V.toList
   where
     extractRow (AE.Array row) = map valToText (V.toList row)
-    extractRow _ = []
-
-
--- | Extract numeric rows from a JSON array of arrays.
---
--- >>> extractNumericRows (Just (AE.Array (V.fromList [AE.Array (V.fromList [AE.Number 1.0, AE.Null])])))
--- [[Just 1.0,Nothing]]
--- >>> extractNumericRows Nothing
--- []
-extractNumericRows :: Maybe AE.Value -> [[Maybe Double]]
-extractNumericRows = withArray $ map extractRow . V.toList
-  where
-    extractRow (AE.Array row) = map (\case AE.Number n -> Just (realToFrac n); _ -> Nothing) (V.toList row)
     extractRow _ = []
 
 
