@@ -631,7 +631,7 @@ JSON is the default when stdout is not a TTY or `CI` is set. Use `jq` for script
 monoscope metrics query 'summarize count() | where severity.text=="error"' --since 30m --assert '< 100'
 
 # Get open issue count
-monoscope issues list --status open -o json | jq '.items | length'
+monoscope issues list --status open -o json | jq '.data | length'
 
 # Apply all monitors from a directory (idempotent)
 monoscope monitors apply .monoscope/monitors/

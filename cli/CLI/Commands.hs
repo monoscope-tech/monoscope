@@ -338,7 +338,7 @@ emitFirstEventId :: IOE :> es => AE.Value -> Eff es ()
 emitFirstEventId v = case v of
   AE.Object obj
     | Just (AE.Array arr) <- KM.lookup "events" obj
-    , (AE.Object e : _) <- toList arr
+    , Just (AE.Object e) <- arr V.!? 0
     , Just (AE.String i) <- KM.lookup "id" e -> putTextLn i
   _ -> printError "no events matched" >> liftIO exitFailure
 
