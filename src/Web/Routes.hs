@@ -43,6 +43,7 @@ import Web.Cookie (SetCookie)
 import Data.OpenApi (OpenApi, SecurityDefinitions (..), SecurityScheme (..), SecuritySchemeType (..), components, description, info, security, securitySchemes, servers, title, version)
 import Data.OpenApi qualified as OA
 import Deriving.Aeson qualified as DAE
+import OpenTelemetry.Trace (TracerProvider)
 import Pages.Bots.Utils (verifyWidgetSignature)
 import Pages.CommandPalette qualified as CommandPalette
 import Servant.OpenApi (toOpenApi)
@@ -51,7 +52,6 @@ import System.Exit (ExitCode (..))
 import System.Logging qualified as Log
 import System.Process.Typed (byteStringInput, proc, readProcess, setStdin)
 import System.Timeout (timeout)
-import OpenTelemetry.Trace (TracerProvider)
 import System.Types (ATAuthCtx, ATBaseCtx, HXRedirectDest, RespHeaders, TriggerEvents, XWidgetJSON, addRespHeaders, effToServantHandler)
 import Web.Auth (APItoolkitAuthContext, ApiKeyAuthContext, apiKeyAuthHandler, authHandler, htmlServerError)
 import Web.Auth qualified as Auth

@@ -63,7 +63,8 @@ mkToolsFromOpenApi spec =
           methodTxt = decodeUtf8 method :: Text
           desc =
             fromMaybe (methodTxt <> " " <> path)
-              $ (op ^. OA.summary) <|> (op ^. OA.description)
+              $ (op ^. OA.summary)
+              <|> (op ^. OA.description)
           -- Prefer explicit operationId; otherwise synthesize from path+method
           -- so renames at the route level still produce stable, readable tool ids.
           rawName = case op ^. OA.operationId of
@@ -296,7 +297,8 @@ splitArgs te args =
         Just v -> T.replace ("{" <> k <> "}") (urlEncodeText (jsonToText v)) acc
         Nothing -> acc
       qs =
-        T.intercalate "&"
+        T.intercalate
+          "&"
           [ k <> "=" <> urlEncodeText (jsonToText v)
           | k <- te.teQueryParams
           , Just v <- [look k]
@@ -316,5 +318,3 @@ jsonToText v = decodeUtf8 (LBS.toStrict (AE.encode v))
 
 urlEncodeText :: Text -> Text
 urlEncodeText = TE.decodeUtf8 . H.urlEncode True . TE.encodeUtf8
-
-
