@@ -927,7 +927,7 @@ filterSchema opts s
       let needle = T.toLower <$> opts.search
           matches k = maybe True (`T.isInfixOf` T.toLower k) needle
           filtered = Map.filterWithKey (\k _ -> matches k) s.fields
-          capped = maybe filtered (\n -> Map.fromList (take n (Map.toList filtered))) opts.schemaLimit
+          capped = maybe filtered (`Map.take` filtered) opts.schemaLimit
        in Schema.Schema {fields = capped}
 
 

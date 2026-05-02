@@ -402,10 +402,15 @@ validateEventsOpts opts = do
 -- column name, so every call returned 400.
 runEventsGet :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> EventsGetOpts -> OutputMode -> Eff es ()
 runEventsGet cfg opts mode = do
-  let q =
+  -- Event IDs are not always UUIDs (synthetic-… spans, integer log_pattern
+  -- ids, etc.) so we don't validate the format — but we DO escape the
+  -- backslash and double-quote so the value can't break out of the KQL
+  -- string literal and cause an opaque server-side parse failure.
+  let eid = T.replace "\"" "\\\"" (T.replace "\\" "\\\\" opts.eventId)
+      q =
         if opts.showTree
-          then "context.trace_id==\"" <> opts.eventId <> "\""
-          else "(id==\"" <> opts.eventId <> "\") or (context.trace_id==\"" <> opts.eventId <> "\")"
+          then "context.trace_id==\"" <> eid <> "\""
+          else "(id==\"" <> eid <> "\") or (context.trace_id==\"" <> eid <> "\")"
       params = [("query", q), ("since", "24H")]
   withAPIResult cfg "/api/v1/events" params $ \val ->
     if opts.showTree
@@ -487,13 +492,21 @@ withTraceSummary :: DecodedEvents -> AE.Value -> AE.Value
 withTraceSummary d (AE.Object out) =
   let cell :: Text -> [Text] -> Maybe Text
       cell field r = Map.lookup field d.idxMap >>= \i -> listToMaybe (drop i r)
-      isErr s = if T.toLower s `elem` ["error", "fatal", "critical"] then 1 :: Int else 0
+      -- The colIdxMap exposes a curated column set
+      -- (Pages.LogExplorer.Log.allCols): "service" is the alias for
+      -- resource.service.name, and the only error signal is "errors"
+      -- (boolean rendered as "true"/"false"). Fall back to the dotted
+      -- form for service in case a future column-set change re-exposes it.
+      svc r = fromMaybe "" (cell "service" r <|> cell "resource.service.name" r)
+      isErr r = case cell "errors" r of
+        Just "true" -> 1 :: Int
+        _ -> 0
       merge (s1, c1, e1) (s2, c2, e2) = (s1 <> s2, c1 + c2, e1 + e2)
       groups :: Map Text (Set Text, Int, Int)
       groups =
         Map.fromListWith
           merge
-          [ (tid, (one (fromMaybe "" (cell "service" r)), 1, isErr (fromMaybe "" (cell "severity" r))))
+          [ (tid, (one (svc r), 1, isErr r))
           | r <- d.rows
           , let tid = fromMaybe "" (cell "context.trace_id" r <|> cell "trace_id" r)
           , not (T.null tid)

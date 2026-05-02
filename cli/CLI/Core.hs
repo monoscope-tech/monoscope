@@ -27,6 +27,7 @@ import Relude
 
 import CLI.Config (CLIConfig (..))
 import Control.Lens ((.~), (^.))
+import Data.Char (toLower)
 import Data.Aeson qualified as AE
 import Data.Aeson.Encode.Pretty qualified as AE
 import Data.ByteString.Lazy qualified as LBS
@@ -76,7 +77,7 @@ isInteractiveTTY = do
 isAgentMode :: Environment :> es => Eff es Bool
 isAgentMode = any truthy <$> mapM Env.lookupEnv ["MONOSCOPE_AGENT_MODE", "CLAUDE_CODE", "CI"]
   where
-    truthy = maybe False (\v -> not (null v) && v `notElem` ["false", "False", "FALSE", "0"])
+    truthy = maybe False (\v -> not (null v) && map toLower v `notElem` ["false", "0"])
 
 
 renderJSON :: (AE.ToJSON a, IOE :> es) => a -> Eff es ()
