@@ -10,9 +10,6 @@ module Models.Apis.Fields (
   FacetSummary (..),
   FacetValue (..),
   FacetData (..),
-  parseFieldCategoryEnum,
-  parseFieldTypes,
-  fieldTypeToText,
   bulkInsertFields,
   Format (..),
   FormatId,
@@ -32,13 +29,14 @@ where
 
 import Control.Exception.Annotated (checkpoint)
 import Data.Aeson qualified as AE
+import Data.Char (toLower)
 import Data.Annotation (toAnnotation)
 import Data.Default
 import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.UUID qualified as UUID
 import Data.HashMap.Strict qualified as HM
-import Data.Text.Display (Display, display)
+import Data.Text.Display (Display)
 import Data.Time (UTCTime, ZonedTime, addUTCTime, diffUTCTime)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
@@ -80,41 +78,12 @@ data FieldTypes
   | FTNull
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (Default, NFData)
-  deriving (FromField, ToField) via WrappedEnumSC "FT" FieldTypes
+  deriving (AE.FromJSON, AE.ToJSON, FromField, ToField) via WrappedEnumSC "FT" FieldTypes
   deriving (HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC "FT" FieldTypes
 
 
-instance AE.FromJSON FieldTypes where
-  parseJSON (AE.String v) = maybe empty pure (parseFieldTypes v)
-  parseJSON _ = empty
-
-
-instance AE.ToJSON FieldTypes where
-  toJSON = AE.String . fieldTypeToText
-
-
 instance HasField "toText" FieldTypes Text where
-  getField = fieldTypeToText
-
-
-fieldTypeToText :: FieldTypes -> Text
-fieldTypeToText FTString = "string"
-fieldTypeToText FTNumber = "number"
-fieldTypeToText FTBool = "bool"
-fieldTypeToText FTObject = "object"
-fieldTypeToText FTList = "list"
-fieldTypeToText FTNull = "null"
-fieldTypeToText FTUnknown = "unknown"
-
-
-parseFieldTypes :: (Eq s, IsString s) => s -> Maybe FieldTypes
-parseFieldTypes "string" = Just FTString
-parseFieldTypes "number" = Just FTNumber
-parseFieldTypes "bool" = Just FTBool
-parseFieldTypes "object" = Just FTObject
-parseFieldTypes "list" = Just FTList
-parseFieldTypes "null" = Just FTNull
-parseFieldTypes _ = Nothing
+  getField = toText . map toLower . drop 2 . show
 
 
 data FieldCategoryEnum
@@ -126,27 +95,8 @@ data FieldCategoryEnum
   | FCResponseBody
   deriving stock (Eq, Generic, Ord, Read, Show)
   deriving anyclass (Default, NFData)
-  deriving (Display, FromField, ToField) via WrappedEnumSC "FC" FieldCategoryEnum
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, ToField) via WrappedEnumSC "FC" FieldCategoryEnum
   deriving (HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC "FC" FieldCategoryEnum
-
-
-instance AE.FromJSON FieldCategoryEnum where
-  parseJSON (AE.String v) = maybe empty pure (parseFieldCategoryEnum v)
-  parseJSON _ = empty
-
-
-instance AE.ToJSON FieldCategoryEnum where
-  toJSON = AE.String . display
-
-
-parseFieldCategoryEnum :: (Eq s, IsString s) => s -> Maybe FieldCategoryEnum
-parseFieldCategoryEnum "query_param" = Just FCQueryParam
-parseFieldCategoryEnum "path_param" = Just FCPathParam
-parseFieldCategoryEnum "request_header" = Just FCRequestHeader
-parseFieldCategoryEnum "response_header" = Just FCResponseHeader
-parseFieldCategoryEnum "request_body" = Just FCRequestBody
-parseFieldCategoryEnum "response_body" = Just FCResponseBody
-parseFieldCategoryEnum _ = Nothing
 
 
 data Field = Field
