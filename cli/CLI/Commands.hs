@@ -212,55 +212,48 @@ newtype ServicesListOpts = ServicesListOpts
   deriving stock (Show)
 
 -- | Aggregate events by 'resource.service.name' to derive the service list.
--- Originally hit '/api/v1/metrics' with a 'summarize' query, but that endpoint
--- consistently returned empty arrays for the same query that succeeds against
--- '/api/v1/events'. Aggregating client-side off the events response is correct
--- and gives us a count + last-seen timestamp for free.
+-- Backed by the precomputed @/api/v1/facets@ endpoint (one indexed lookup
+-- in the server's @apis.facet_summaries@ table) — single-millisecond instead
+-- of fetching 10k events to aggregate client-side. Earlier iterations went
+-- via @/api/v1/metrics@ (returned empty for @summarize ... by@) then events
+-- aggregation (correct but slow); facets is the right home now that the
+-- background job populates them.
 runServicesList :: (HTTP :> es, Environment :> es, IOE :> es) => CLIConfig -> ServicesListOpts -> OutputMode -> Eff es ()
 runServicesList cfg opts mode = do
   validateDurationOrDie "--since" opts.since
-  let params = [("since", fromMaybe "24H" opts.since), ("limit", "10000")]
-  withAPIResult cfg "/api/v1/events" params $ \val -> do
-    let services = aggregateServices val
+  let params = [("since", fromMaybe "24H" opts.since), ("field", "resource.service.name")]
+  withAPIResult cfg "/api/v1/facets" params $ \val -> do
+    let services = parseServiceFacets val
         normalized = AE.object ["services" AE..= services, "count" AE..= length services]
     renderWith mode normalized $
       if null services
         then putTextLn "No services found"
-        else renderTable ["service", "events", "last_seen"]
-               [[s.name, show s.events, s.lastSeen] | s <- services]
+        else renderTable ["service", "events"] [[s.name, show s.events] | s <- services]
+
 
 -- | One row of @services list@ output. Field labels are camelCase in Haskell
--- but the JSON encoding is snake_case (e.g. @lastSeen@ → @last_seen@) — the
--- 'CamelToSnake' modifier from @deriving-aeson@ handles the rewrite so we
--- don't have to write a manual instance and risk drift if a field is added.
-data ServiceRow = ServiceRow {name :: Text, events :: Int, lastSeen :: Text}
+-- but the JSON encoding is snake_case via the 'CamelToSnake' modifier so
+-- adding a field can't drift between Haskell and the wire.
+data ServiceRow = ServiceRow {name :: Text, events :: Int}
   deriving stock (Generic)
   deriving (AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] ServiceRow
 
--- | The server aliases @resource.service.name@ (the OTel field path) to the
--- short column name @"service"@ in the @logsData@/@colIdxMap@ envelope —
--- see 'Pages.LogExplorer.Log.allCols'. Don't change this lookup to the dotted
--- form; it would silently report zero services. The 'CLI.CLIE2ESpec'
--- regression test pins this contract.
-aggregateServices :: AE.Value -> [ServiceRow]
-aggregateServices val = case val of
-  AE.Object obj ->
-    let idxMap = extractColIdxMap (KM.lookup "colIdxMap" obj)
-        rows = extractRows (KM.lookup "logsData" obj)
-        svcIdx = Map.lookup "service" idxMap
-        tsIdx = Map.lookup "timestamp" idxMap
-        cellAt mi r = mi >>= \i -> listToMaybe (drop i r)
-        bumps =
-          [ (svc, ts)
-          | r <- rows
-          , Just svc <- [cellAt svcIdx r]
-          , not (T.null svc)
-          , let ts = fromMaybe "" (cellAt tsIdx r)
-          ]
-        agg = foldl' (\m (s, t) -> Map.insertWith bump s (1 :: Int, t) m) mempty bumps
-        bump (_, tNew) (n, tOld) = (n + 1, max tNew tOld)
-     in [ServiceRow s n t | (s, (n, t)) <- Map.toList agg]
+
+-- | The facets endpoint returns @{ <field>: [{value, count}, ...] }@.
+-- Pull out the @resource.service.name@ array and rename @value@→@name@,
+-- @count@→@events@ for the CLI surface.
+parseServiceFacets :: AE.Value -> [ServiceRow]
+parseServiceFacets (AE.Object obj) = case KM.lookup "resource.service.name" obj of
+  Just (AE.Array arr) -> mapMaybe toRow (toList arr)
   _ -> []
+  where
+    toRow (AE.Object o) = ServiceRow <$> txt o "value" <*> int o "count"
+    toRow _ = Nothing
+    txt o k = case KM.lookup k o of Just (AE.String s) -> Just s; _ -> Nothing
+    int o k = case KM.lookup k o of
+      Just (AE.Number n) -> Just (round n)
+      _ -> Nothing
+parseServiceFacets _ = []
 
 -- Events
 

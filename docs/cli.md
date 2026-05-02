@@ -561,7 +561,7 @@ Each event is a flat object — no `colIdxMap` / `logsData` indirection. Use `--
 For `services list`:
 
 ```json
-{ "services": [{ "name": "checkout-api", "events": 1284, "last_seen": "..." }], "count": 12 }
+{ "services": [{ "name": "checkout-api", "events": 1284 }], "count": 12 }
 ```
 
 For every other list command (`monitors list`, `dashboards list`, `api-keys list`, `teams list`, `members list`, `issues list`, `endpoints list`, `log-patterns list`) the CLI normalises to a single shape:

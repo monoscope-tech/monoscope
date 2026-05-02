@@ -248,9 +248,10 @@ spec = describe "CLI binary E2E (real server)" $ do
       err `shouldSatisfy` (\e -> "HTTP 400" `isInfixOf` e || "parse" `isInfixOf` e || "expected" `isInfixOf` e)
 
   describe "services" $ do
-    -- Pins the @"service"@ alias in @colIdxMap@: the CLI aggregates events
-    -- by that key. If the server ever reverts to the dotted form, this test
-    -- breaks before the bug ships (silent zero-services regression).
+    -- Pins the facets-backed implementation: services list hits
+    -- @/api/v1/facets?field=resource.service.name@ and rewraps as
+    -- @{services: [{name, events}], count}@. A regression that broke
+    -- the field path or the response key would zero this out silently.
     it "services list returns {services, count} envelope" $ withReachableServer $ \cfg -> do
       (code, out, err) <- runMono cfg ["services", "list"]
       when (code /= ExitSuccess) $ expectationFailure $ "stderr=" <> err
