@@ -34,6 +34,7 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.Effectful.Wreq (HTTP, deleteWith, getWith, patchWith, postWith, putWith, responseBody)
 import Data.Effectful.Wreq qualified as W
 import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
 import Data.Text.IO qualified
 import Data.Yaml qualified as Yaml
 import Effectful
@@ -77,7 +78,9 @@ isInteractiveTTY = do
 isAgentMode :: Environment :> es => Eff es Bool
 isAgentMode = any truthy <$> mapM Env.lookupEnv ["MONOSCOPE_AGENT_MODE", "CLAUDE_CODE", "CI"]
   where
-    truthy = maybe False (\v -> not (null v) && map toLower v `notElem` ["false", "0"])
+    -- @v@ is 'String' (Env.lookupEnv) — explicit /= "" sidesteps ambiguity
+    -- between Prelude.null and Relude's container @null@.
+    truthy = maybe False (\v -> v /= "" && map toLower v `notElem` ["false", "0"])
 
 
 renderJSON :: (AE.ToJSON a, IOE :> es) => a -> Eff es ()
@@ -267,8 +270,11 @@ addParams ps o = foldl' (\acc (k, v) -> acc & Wreq.param k .~ [v]) o ps
 httpExToError :: HttpException -> APIError
 httpExToError (HttpExceptionRequest req (StatusCodeException resp body)) =
   let code = resp ^. Wreq.responseStatus . Wreq.statusCode
-      statusMsg = decodeUtf8 $ resp ^. Wreq.responseStatus . Wreq.statusMessage
-      bodyTxt = T.strip (decodeUtf8 body)
+      -- Lenient decode: the body may be HTML, gzip leftovers, or arbitrary
+      -- bytes from a misconfigured upstream — never throw at the boundary.
+      decode = TE.decodeUtf8With lenientDecode
+      statusMsg = decode (resp ^. Wreq.responseStatus . Wreq.statusMessage)
+      bodyTxt = T.strip (decode body)
       -- Server validation errors (e.g. KQL parser) are returned in the body;
       -- prefer them over the generic status reason so agents can self-correct.
       msg = if T.null bodyTxt then statusMsg else bodyTxt
