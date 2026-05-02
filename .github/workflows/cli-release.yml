@@ -12,10 +12,10 @@ jobs:
     name: Build Frontend Assets
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '22'
 
@@ -51,7 +51,7 @@ jobs:
       env:
         CABAL_DIR: /root/.cabal
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Download frontend artifacts
         uses: actions/download-artifact@v8
@@ -60,7 +60,7 @@ jobs:
           path: static/public/assets
 
       - name: Cache dist-newstyle
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: dist-newstyle
           key: cli-linux-x64-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}-${{ github.sha }}
@@ -79,7 +79,7 @@ jobs:
           tar czf monoscope-linux-x86_64.tar.gz monoscope
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: monoscope-linux-x86_64
           path: monoscope-linux-x86_64.tar.gz
@@ -98,7 +98,7 @@ jobs:
       env:
         CABAL_DIR: /root/.cabal
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Download frontend artifacts
         uses: actions/download-artifact@v8
@@ -107,7 +107,7 @@ jobs:
           path: static/public/assets
 
       - name: Cache dist-newstyle
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: dist-newstyle
           key: cli-linux-arm64-dist-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}-${{ github.sha }}
@@ -126,7 +126,7 @@ jobs:
           tar czf monoscope-linux-arm64.tar.gz monoscope
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: monoscope-linux-arm64
           path: monoscope-linux-arm64.tar.gz
@@ -137,7 +137,7 @@ jobs:
     needs: build-frontend
     runs-on: blacksmith-6vcpu-macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Download frontend artifacts
         uses: actions/download-artifact@v8
@@ -152,14 +152,14 @@ jobs:
           cabal-version: '3.14'
 
       - name: Cache Cabal
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cabal
           key: cli-macos-arm64-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}
           restore-keys: cli-macos-arm64-cabal-
 
       - name: Cache dist-newstyle
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: dist-newstyle
           key: cli-macos-arm64-dist-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}
@@ -193,7 +193,7 @@ jobs:
           tar czf monoscope-darwin-arm64.tar.gz monoscope
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: monoscope-darwin-arm64
           path: monoscope-darwin-arm64.tar.gz
@@ -206,7 +206,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Download all artifacts
         uses: actions/download-artifact@v8
