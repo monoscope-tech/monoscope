@@ -218,7 +218,7 @@ newtype ServicesListOpts = ServicesListOpts
 -- and gives us a count + last-seen timestamp for free.
 runServicesList :: (HTTP :> es, Environment :> es, IOE :> es) => CLIConfig -> ServicesListOpts -> OutputMode -> Eff es ()
 runServicesList cfg opts mode = do
-  validateDurationOrDie opts.since
+  validateDurationOrDie "--since" opts.since
   let params = [("since", fromMaybe "24H" opts.since), ("limit", "10000")]
   withAPIResult cfg "/api/v1/events" params $ \val -> do
     let services = aggregateServices val
@@ -237,6 +237,11 @@ data ServiceRow = ServiceRow {name :: Text, events :: Int, lastSeen :: Text}
   deriving stock (Generic)
   deriving (AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] ServiceRow
 
+-- | The server aliases @resource.service.name@ (the OTel field path) to the
+-- short column name @"service"@ in the @logsData@/@colIdxMap@ envelope —
+-- see 'Pages.LogExplorer.Log.allCols'. Don't change this lookup to the dotted
+-- form; it would silently report zero services. The 'CLI.CLIE2ESpec'
+-- regression test pins this contract.
 aggregateServices :: AE.Value -> [ServiceRow]
 aggregateServices val = case val of
   AE.Object obj ->
@@ -350,7 +355,7 @@ emitFirstEventId v = case v of
 -- (D2). Failures print a clear message and exit non-zero (D5).
 validateEventsOpts :: IOE :> es => EventsSearchOpts -> Eff es EventsSearchOpts
 validateEventsOpts opts = do
-  validateDurationOrDie opts.since
+  validateDurationOrDie "--since" opts.since
   kindNorm <- validateAndNormalizeKind opts.kind
   -- DuplicateRecordFields makes record-update on @kind@ ambiguous
   -- (also a field on EventsTailOpts/EventsContextOpts) — bind to a typed let
@@ -410,7 +415,7 @@ runEventsTail cfg opts kindOverride = do
 
 runEventsContext :: (HTTP :> es, Environment :> es, IOE :> es) => CLIConfig -> EventsContextOpts -> Maybe Text -> OutputMode -> Eff es ()
 runEventsContext cfg opts kindOverride mode = do
-  validateDurationOrDie opts.window
+  validateDurationOrDie "--window" opts.window
   kindNorm <- validateAndNormalizeKind (opts.kind <|> kindOverride)
   let q = foldFiltersIntoQuery "" opts.service Nothing
       params =
@@ -421,8 +426,13 @@ runEventsContext cfg opts kindOverride mode = do
           , ("source",) <$> kindNorm
           ]
   withAPIResult cfg "/api/v1/events" params $ \val -> do
-    let normalized = normalizeEventsResponse val Nothing
-        enriched = if opts.summary then withTraceSummary val normalized else normalized
+    -- Decode once, share between normalize + summary (avoids walking
+    -- @logsData@ twice on large responses).
+    let enriched = case decodeEvents val of
+          Nothing -> val
+          Just d ->
+            let normalized = normalizeDecoded d Nothing
+             in if opts.summary then withTraceSummary d normalized else normalized
     renderWith mode enriched (renderEventsTable val Nothing)
 
 
@@ -437,28 +447,26 @@ runEventsContext cfg opts kindOverride mode = do
 -- @
 --
 -- Empty @trace_id@s are dropped. Services are deduplicated and sorted.
-withTraceSummary :: AE.Value -> AE.Value -> AE.Value
-withTraceSummary raw (AE.Object out) = case raw of
-  AE.Object obj ->
-    let idxMap = extractColIdxMap (KM.lookup "colIdxMap" obj)
-        rows = extractRows (KM.lookup "logsData" obj)
-        cell :: Text -> [Text] -> Maybe Text
-        cell field r = Map.lookup field idxMap >>= \i -> listToMaybe (drop i r)
-        isErr s = if T.toLower s `elem` ["error", "fatal", "critical"] then 1 :: Int else 0
-        merge (s1, c1, e1) (s2, c2, e2) = (s1 <> s2, c1 + c2, e1 + e2)
-        groups :: Map Text (Set Text, Int, Int)
-        groups = Map.fromListWith merge
-          [ (tid, (one (fromMaybe "" (cell "service" r)), 1, isErr (fromMaybe "" (cell "severity" r))))
-          | r <- rows
-          , let tid = fromMaybe "" (cell "context.trace_id" r <|> cell "trace_id" r)
-          , not (T.null tid)
-          ]
-        traces =
-          [ TraceSummary tid (sort (filter (not . T.null) (Set.toList svcs))) n errs
-          | (tid, (svcs, n, errs)) <- Map.toList groups
-          ]
-     in AE.Object (KM.insert "traces" (AE.toJSON traces) out)
-  _ -> AE.Object out
+-- Takes the pre-parsed 'DecodedEvents' so the caller doesn't pay for a
+-- second walk of @logsData@.
+withTraceSummary :: DecodedEvents -> AE.Value -> AE.Value
+withTraceSummary d (AE.Object out) =
+  let cell :: Text -> [Text] -> Maybe Text
+      cell field r = Map.lookup field d.idxMap >>= \i -> listToMaybe (drop i r)
+      isErr s = if T.toLower s `elem` ["error", "fatal", "critical"] then 1 :: Int else 0
+      merge (s1, c1, e1) (s2, c2, e2) = (s1 <> s2, c1 + c2, e1 + e2)
+      groups :: Map Text (Set Text, Int, Int)
+      groups = Map.fromListWith merge
+        [ (tid, (one (fromMaybe "" (cell "service" r)), 1, isErr (fromMaybe "" (cell "severity" r))))
+        | r <- d.rows
+        , let tid = fromMaybe "" (cell "context.trace_id" r <|> cell "trace_id" r)
+        , not (T.null tid)
+        ]
+      traces =
+        [ TraceSummary tid (sort (filter (not . T.null) (Set.toList svcs))) n errs
+        | (tid, (svcs, n, errs)) <- Map.toList groups
+        ]
+   in AE.Object (KM.insert "traces" (AE.toJSON traces) out)
 withTraceSummary _ v = v
 
 
@@ -529,27 +537,49 @@ foldFiltersIntoQuery query mService mLevel =
 -- | Project the server's positional row representation into named-field
 -- objects so agents/jq consumers don't need to thread 'colIdxMap'. The shape
 -- is intentionally documented and stable: '{events: [...], count, has_more, cursor}'.
+-- | Single decode of the events envelope. Sharing the parsed @colIdxMap@
+-- + @logsData@ between 'normalizeEventsResponse' and 'withTraceSummary'
+-- avoids walking the rows array twice for large payloads ('events context
+-- --summary' was the worst offender).
+data DecodedEvents = DecodedEvents
+  { idxMap :: Map Text Int
+  , rows :: [[Text]]
+  , raw :: KM.KeyMap AE.Value
+  }
+
+
+decodeEvents :: AE.Value -> Maybe DecodedEvents
+decodeEvents (AE.Object o) =
+  Just
+    DecodedEvents
+      { idxMap = extractColIdxMap (KM.lookup "colIdxMap" o)
+      , rows = extractRows (KM.lookup "logsData" o)
+      , raw = o
+      }
+decodeEvents _ = Nothing
+
+
 normalizeEventsResponse :: AE.Value -> Maybe Text -> AE.Value
-normalizeEventsResponse val mFields = case val of
-  AE.Object obj ->
-    let idxMap = extractColIdxMap (KM.lookup "colIdxMap" obj)
-        rows = extractRows (KM.lookup "logsData" obj)
-        keep = case mFields of
-          Nothing -> Map.keys idxMap
-          Just s -> filter (`Map.member` idxMap) (T.splitOn "," s)
-        toObj r =
-          AE.object
-            [ AK.fromText k AE..= fromMaybe "" (Map.lookup k idxMap >>= \i -> listToMaybe (drop i r))
-            | k <- keep
-            ]
-        events = map toObj rows
-     in AE.object
-          [ "events" AE..= events
-          , "count" AE..= extractInt (KM.lookup "count" obj)
-          , "has_more" AE..= fromMaybe AE.Null (KM.lookup "hasMore" obj)
-          , "cursor" AE..= fromMaybe AE.Null (KM.lookup "cursor" obj)
+normalizeEventsResponse val mFields = maybe val (`normalizeDecoded` mFields) (decodeEvents val)
+
+
+normalizeDecoded :: DecodedEvents -> Maybe Text -> AE.Value
+normalizeDecoded d mFields =
+  let keep = case mFields of
+        Nothing -> Map.keys d.idxMap
+        Just s -> filter (`Map.member` d.idxMap) (T.splitOn "," s)
+      toObj r =
+        AE.object
+          [ AK.fromText k AE..= fromMaybe "" (Map.lookup k d.idxMap >>= \i -> listToMaybe (drop i r))
+          | k <- keep
           ]
-  _ -> val
+      events = map toObj d.rows
+   in AE.object
+        [ "events" AE..= events
+        , "count" AE..= extractInt (KM.lookup "count" d.raw)
+        , "has_more" AE..= fromMaybe AE.Null (KM.lookup "hasMore" d.raw)
+        , "cursor" AE..= fromMaybe AE.Null (KM.lookup "cursor" d.raw)
+        ]
 
 renderEventsTable :: (IOE :> es) => AE.Value -> Maybe Text -> Eff es ()
 renderEventsTable val mFields = case val of

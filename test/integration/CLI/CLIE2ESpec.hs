@@ -247,6 +247,16 @@ spec = describe "CLI binary E2E (real server)" $ do
       code `shouldNotBe` ExitSuccess
       err `shouldSatisfy` (\e -> "HTTP 400" `isInfixOf` e || "parse" `isInfixOf` e || "expected" `isInfixOf` e)
 
+  describe "services" $ do
+    -- Pins the @"service"@ alias in @colIdxMap@: the CLI aggregates events
+    -- by that key. If the server ever reverts to the dotted form, this test
+    -- breaks before the bug ships (silent zero-services regression).
+    it "services list returns {services, count} envelope" $ withReachableServer $ \cfg -> do
+      (code, out, err) <- runMono cfg ["services", "list"]
+      when (code /= ExitSuccess) $ expectationFailure $ "stderr=" <> err
+      v <- decodeJsonOut out
+      v `shouldHaveKeys` ["services", "count"]
+
   describe "list resources return JSON" $ do
     let listCases =
           [ "issues"

@@ -589,7 +589,7 @@ A typical incident investigation, all in JSON, suitable for piping into `jq` or 
 
 ```bash
 # 1. What's on fire? List open issues, sorted by recency.
-monoscope issues list --status open -o json | jq '.items[] | {id,title,service,severity}'
+monoscope issues list --status open -o json | jq '.data[] | {id,title,service,severity}'
 
 # 2. Which services are active? (and which are quiet)
 monoscope services list -o json | jq '.services'
@@ -603,7 +603,7 @@ monoscope traces get <trace-id> --tree
 
 # 5. Find similar errors via log patterns
 monoscope log-patterns list --per-page 20 -o json \
-  | jq '.items[] | select(.state=="open") | {id, occurrence_count, service_name}'
+  | jq '.data[] | select(.state=="open") | {id, occurrence_count, service_name}'
 
 # 6. Check a specific symptom: which endpoints serve 5xx?
 monoscope events search 'attributes.http.response.status_code >= 500' --since 1h -o json \

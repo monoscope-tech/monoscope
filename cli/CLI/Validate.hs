@@ -21,38 +21,35 @@ import Effectful
 
 -- | Validate a relative-duration string of the form @\\d+(ms|s|m|h|d)@.
 -- Returns the (already trimmed) input on success or an error message.
+-- The @flag@ argument is the user-facing flag name (@--since@, @--window@)
+-- so the message points at what the user actually typed.
 --
--- >>> validateDuration "10s"
+-- >>> validateDurationFor "--since" "10s"
 -- Right "10s"
--- >>> validateDuration "30m"
--- Right "30m"
--- >>> validateDuration "2h"
--- Right "2h"
--- >>> validateDuration "7d"
--- Right "7d"
--- >>> validateDuration "500ms"
--- Right "500ms"
--- >>> validateDuration "1H"
+-- >>> validateDurationFor "--since" "1H"
 -- Right "1H"
--- >>> validateDuration "24H"
--- Right "24H"
--- >>> validateDuration "1xyz"
--- Left "--since must match Ns|Nm|Nh|Nd|Nms (e.g. 30m, 2h, 7d); got '1xyz'"
--- >>> validateDuration ""
+-- >>> validateDurationFor "--window" "1xyz"
+-- Left "--window must match Ns|Nm|Nh|Nd|Nms (e.g. 30m, 2h, 7d); got '1xyz'"
+-- >>> validateDurationFor "--since" ""
 -- Left "--since must not be empty"
 --
 -- Suffix matching is case-insensitive — the platform's TimePicker emits
 -- uppercase forms ("1H", "24H") and the server accepts either, so the
 -- validator should too. Original casing is preserved on success.
-validateDuration :: Text -> Either Text Text
-validateDuration t
-  | T.null t = Left "--since must not be empty"
+validateDurationFor :: Text -> Text -> Either Text Text
+validateDurationFor flag t
+  | T.null t = Left $ flag <> " must not be empty"
   | otherwise =
       let trimmed = T.strip t
           (digits, suffix) = T.span isDigit trimmed
        in if T.null digits || T.toLower suffix `notElem` ["ms", "s", "m", "h", "d"]
-            then Left $ "--since must match Ns|Nm|Nh|Nd|Nms (e.g. 30m, 2h, 7d); got '" <> t <> "'"
+            then Left $ flag <> " must match Ns|Nm|Nh|Nd|Nms (e.g. 30m, 2h, 7d); got '" <> t <> "'"
             else Right trimmed
+
+
+-- | Back-compat alias defaulting to @--since@.
+validateDuration :: Text -> Either Text Text
+validateDuration = validateDurationFor "--since"
 
 
 -- | Loose UUID syntax check (8-4-4-4-12 hex). Lets us fail fast on @--project foo@
@@ -115,9 +112,11 @@ validateOrDie = \case
   Right a -> pure a
 
 
--- | Validate an optional duration flag, exiting on failure.
-validateDurationOrDie :: IOE :> es => Maybe Text -> Eff es ()
-validateDurationOrDie = mapM_ (validateOrDie . validateDuration)
+-- | Validate an optional duration flag, exiting on failure. The first arg
+-- is the user-facing flag name (e.g. @"--since"@, @"--window"@) so error
+-- messages point at the right flag.
+validateDurationOrDie :: IOE :> es => Text -> Maybe Text -> Eff es ()
+validateDurationOrDie flag = mapM_ (validateOrDie . validateDurationFor flag)
 
 
 -- | Validate an optional @--kind@ flag and apply 'normalizeKind' so callers
