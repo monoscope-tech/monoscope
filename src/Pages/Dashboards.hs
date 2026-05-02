@@ -1762,9 +1762,7 @@ dashboardsPostH pid form = do
   did <- UUIDId <$> UUID.genUUID
   templates <- getDashboardTemplates appCtx.config.liveReloadDashboards
   if form.title == ""
-    then do
-      addErrorToast "Dashboard title is required" Nothing
-      addRespHeaders $ DashboardPostError "Dashboard title is required"
+    then toastError "Dashboard title is required" (DashboardPostError "Dashboard title is required")
     else do
       let dashM = find (\dashboard -> dashboard.file == Just form.file) templates
       let redirectURI = "/p/" <> pid.toText <> "/dashboards/" <> did.toText
@@ -1872,9 +1870,7 @@ dashboardRenamePatchH pid dashId form = do
   _ <- Projects.sessionAndProject pid
   mDashboard <- Dashboards.getDashboardById dashId
   case mDashboard of
-    Nothing -> do
-      addErrorToast "Dashboard not found or does not belong to this project" Nothing
-      addRespHeaders $ DashboardPostError "Dashboard not found or does not belong to this project"
+    Nothing -> toastError "Dashboard not found or does not belong to this project" (DashboardPostError "Dashboard not found or does not belong to this project")
     Just dashVM -> do
       _ <- Dashboards.updateTitle dashId form.title
 
@@ -1901,9 +1897,7 @@ dashboardDuplicatePostH pid dashId = do
   _ <- Projects.sessionAndProject pid
   mDashboard <- Dashboards.getDashboardById dashId
   case mDashboard of
-    Nothing -> do
-      addErrorToast "Dashboard not found or does not belong to this project" Nothing
-      addRespHeaders $ DashboardPostError "Dashboard not found or does not belong to this project"
+    Nothing -> toastError "Dashboard not found or does not belong to this project" (DashboardPostError "Dashboard not found or does not belong to this project")
     Just dashVM -> do
       sess <- Projects.getSession
       now <- Time.currentTime

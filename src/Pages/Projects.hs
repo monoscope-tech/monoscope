@@ -101,7 +101,7 @@ import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers)
 import Servant.Server (err302, errHeaders)
 import System.Config (AuthContext (..), EnvConfig (..))
-import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addReswap, addSuccessToast, addTriggerEvent, redirectCS)
+import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addReswap, addSuccessToast, addTriggerEvent, redirectCS, toastError)
 import UnliftIO.Exception (tryAny)
 import Utils (LoadingSize (..), faSprite_, htmxIndicator_, insertIfNotExist, isDemoAndNotSudo, lookupValueText)
 import Web.FormUrlEncoded (FromForm)
@@ -737,11 +737,11 @@ manageTeamPostH pid form tmView = do
   let validMemberIds = V.map (.userId) projMembers
       invalidMembers = V.filter (`V.notElem` validMemberIds) form.teamMembers
       teamDetails = ProjectMembers.TeamDetails form.teamName form.teamDescription form.teamHandle form.teamMembers form.notifEmails form.slackChannels form.discordChannels form.phoneNumbers form.pagerdutyServices V.empty
-      validationErr msg = addErrorToast msg Nothing >> addRespHeaders (ManageTeamsPostError msg)
+      validationErr msg = toastError msg (ManageTeamsPostError msg)
   case (userPermission == Just ProjectMembers.PAdmin, V.null invalidMembers, validateTeamDetails form.teamName form.teamHandle form.notifEmails, form.teamId) of
     (False, _, _, _) -> validationErr "Only admins can create or update teams"
     (_, False, _, _) -> validationErr "Some team members are not project members"
-    (_, _, Left e, _) -> addErrorToast e Nothing >> addReswap "" >> addRespHeaders (ManageTeamsPostError e)
+    (_, _, Left e, _) -> addReswap "" >> validationErr e
     (_, _, _, Just tid) -> do
       _ <- ProjectMembers.updateTeam pid tid teamDetails
       addSuccessToast "Team updated successfully" Nothing
@@ -780,12 +780,8 @@ manageTeamBulkActionH pid action TBulkActionForm{itemId} listViewM = do
           when (isNothing listViewM)
             $ redirectCS ("/p/" <> pid.toText <> "/manage_teams")
           addRespHeaders ManageTeamsDelete
-        else do
-          addErrorToast "You may only delete teams you own" Nothing
-          addRespHeaders $ ManageTeamsPostError "You may only delete teams you own"
-    _ -> do
-      addErrorToast "Invalid action" Nothing
-      addRespHeaders $ ManageTeamsPostError "Invalid action"
+        else toastError "You may only delete teams you own" (ManageTeamsPostError "You may only delete teams you own")
+    _ -> toastError "Invalid action" (ManageTeamsPostError "Invalid action")
 
 
 data ManageTeams
@@ -1110,14 +1106,10 @@ deleteMemberH pid memberId = do
   projMembers <- ProjectMembers.selectActiveProjectMembers pid
   let memberM = find (\m -> m.id == memberId) projMembers
   case memberM of
-    Nothing -> do
-      addErrorToast "Member not found" Nothing
-      addRespHeaders ""
+    Nothing -> toastError "Member not found" ""
     Just member ->
       if member.userId == currUserId
-        then do
-          addErrorToast "You cannot remove yourself" Nothing
-          addRespHeaders ""
+        then toastError "You cannot remove yourself" ""
         else do
           _ <- ProjectMembers.softDeleteProjectMembers (memberId :| [])
           Projects.logAuditS pid Projects.AEMemberRemoved sess
@@ -1140,14 +1132,14 @@ manageSubGetH pid = do
           portalUrlM <- liftIO $ Settings.createStripePortalSession envCfg.stripeSecretKey customerId returnUrl
           case portalUrlM of
             Just url -> redirectCS url >> addRespHeaders ""
-            Nothing -> addErrorToast "Failed to create billing portal" Nothing >> addRespHeaders ""
-        _ -> addErrorToast "Customer ID not found" Nothing >> addRespHeaders ""
+            Nothing -> toastError "Failed to create billing portal" ""
+        _ -> toastError "Customer ID not found" ""
     Projects.LemonSqueezyProvider -> do
       sub <- liftIO $ getSubscriptionPortalUrl project.subId envCfg.lemonSqueezyApiKey
       case sub of
-        Nothing -> addErrorToast "Subscription ID not found" Nothing >> addRespHeaders ""
+        Nothing -> toastError "Subscription ID not found" ""
         Just s -> redirectCS s.dataVal.attributes.urls.customerPortal >> addRespHeaders ""
-    Projects.NoBillingProvider -> addErrorToast "No active subscription" Nothing >> addRespHeaders ""
+    Projects.NoBillingProvider -> toastError "No active subscription" ""
 
 
 newtype StripeCheckoutForm = StripeCheckoutForm {plan :: Text}
@@ -1176,7 +1168,7 @@ stripeCheckoutInitH pid form = do
         envCfg.stripePriceIdByos
   case urlM of
     Just url -> redirectCS url >> addRespHeaders ""
-    Nothing -> addErrorToast "Failed to create checkout session" Nothing >> addRespHeaders ""
+    Nothing -> toastError "Failed to create checkout session" ""
 
 
 getSubscriptionPortalUrl :: Maybe Text -> Text -> IO (Maybe SubPortalResponse)
