@@ -470,6 +470,7 @@ executable monoscope
     , filepath
     , http-client
     , lens
+    , lens-aeson
     , monoscope
     , mtl
     , optparse-applicative

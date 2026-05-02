@@ -33,9 +33,11 @@ import CLI.Config (CLIConfig (..), ConfigKey (..), allConfigKeys, configDir, con
 import CLI.Core (OutputMode (..), apiGet, apiPostUnauth, isAgentMode, isInteractiveTTY, printDebug, printError, renderJSON, renderTable, renderWith, withAPIResult)
 import CLI.UI (inputForm, selectFromList, withSpinner)
 import CLI.Validate (validateAndNormalizeKind, validateDurationOrDie)
+import Control.Lens ((%~))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AK
 import Data.Aeson.KeyMap qualified as KM
+import Data.Aeson.Lens qualified as AL
 import Data.Effectful.Wreq (HTTP, runHTTPWreq)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
@@ -349,21 +351,11 @@ runEventsSearch cfg opts mode = do
 
 
 -- | Trim the normalised events envelope to the first event only, preserving
--- @count@/@cursor@/@has_more@ semantics for downstream pagination.
-takeFirstEvent :: AE.Value -> AE.Value
-takeFirstEvent (AE.Object obj) = case KM.lookup "events" obj of
-  Just (AE.Array arr) -> AE.Object (KM.insert "events" (AE.Array (V.take 1 arr)) obj)
-  _ -> AE.Object obj
-takeFirstEvent v = v
-
-
--- | Trim the raw response envelope's @logsData@ to its first row so table
--- output of '--first' renders one row, matching the JSON behaviour.
-takeFirstRow :: AE.Value -> AE.Value
-takeFirstRow (AE.Object obj) = case KM.lookup "logsData" obj of
-  Just (AE.Array arr) -> AE.Object (KM.insert "logsData" (AE.Array (V.take 1 arr)) obj)
-  _ -> AE.Object obj
-takeFirstRow v = v
+-- @count@/@cursor@/@has_more@ semantics for downstream pagination. The
+-- raw-envelope variant 'takeFirstRow' targets @logsData@ for table mode.
+takeFirstEvent, takeFirstRow :: AE.Value -> AE.Value
+takeFirstEvent v = v & AL.key "events" . AL._Array %~ V.take 1
+takeFirstRow v = v & AL.key "logsData" . AL._Array %~ V.take 1
 
 
 -- | Print the first event's @id@ to stdout; exit non-zero if there isn't one.
@@ -489,25 +481,24 @@ runEventsContext cfg opts kindOverride mode = do
 -- second walk of @logsData@.
 withTraceSummary :: DecodedEvents -> AE.Value -> AE.Value
 withTraceSummary d (AE.Object out) =
-  let cell :: Text -> [Text] -> Maybe Text
-      cell field r = Map.lookup field d.idxMap >>= \i -> listToMaybe (drop i r)
-      -- The colIdxMap exposes a curated column set
-      -- (Pages.LogExplorer.Log.allCols): "service" is the alias for
-      -- resource.service.name, and the only error signal is "errors"
-      -- (boolean rendered as "true"/"false"). Fall back to the dotted
-      -- form for service in case a future column-set change re-exposes it.
-      svc r = fromMaybe "" (cell "service" r <|> cell "resource.service.name" r)
-      isErr r = case cell "errors" r of
-        Just "true" -> 1 :: Int
-        _ -> 0
+  let -- Pre-resolve column indices once instead of Map.lookup'ing per cell
+      -- per row — matters on large @events context --summary@ payloads.
+      -- "service" is the alias for resource.service.name in the curated
+      -- column set (Pages.LogExplorer.Log.allCols); "errors" is a boolean
+      -- rendered as "true"/"false". Service has a dotted-form fallback in
+      -- case the column set is reshaped server-side.
+      svcIdx = Map.lookup "service" d.idxMap <|> Map.lookup "resource.service.name" d.idxMap
+      errIdx = Map.lookup "errors" d.idxMap
+      tidIdx = Map.lookup "context.trace_id" d.idxMap <|> Map.lookup "trace_id" d.idxMap
+      at idx r = idx >>= \i -> listToMaybe (drop i r)
       merge (s1, c1, e1) (s2, c2, e2) = (s1 <> s2, c1 + c2, e1 + e2)
       groups :: Map Text (Set Text, Int, Int)
       groups =
         Map.fromListWith
           merge
-          [ (tid, (one (svc r), 1, isErr r))
+          [ (tid, (one (fromMaybe "" (at svcIdx r)), 1, if at errIdx r == Just "true" then 1 else 0))
           | r <- d.rows
-          , let tid = fromMaybe "" (cell "context.trace_id" r <|> cell "trace_id" r)
+          , let tid = fromMaybe "" (at tidIdx r)
           , not (T.null tid)
           ]
       traces =
@@ -572,16 +563,16 @@ buildSearchParams opts =
 -- >>> foldFiltersIntoQuery "" (Just "my app") Nothing
 -- "resource.service.name==\"my app\""
 foldFiltersIntoQuery :: Text -> Maybe Text -> Maybe Text -> Text
-foldFiltersIntoQuery query mService mLevel =
-  let q v = "\"" <> T.replace "\"" "\\\"" v <> "\""
-      eq field val = field <> "==" <> q val
-      filters = catMaybes [eq "resource.service.name" <$> mService, eq "severity.text" <$> mLevel]
-      prefix = T.intercalate " and " filters
-      trimmed = T.strip query
-   in case (T.null prefix, T.null trimmed) of
-        (True, _) -> trimmed
-        (_, True) -> prefix
-        _ -> prefix <> " and (" <> trimmed <> ")"
+foldFiltersIntoQuery query mService mLevel
+  | T.null prefix = trimmed
+  | T.null trimmed = prefix
+  | otherwise = prefix <> " and (" <> trimmed <> ")"
+  where
+    q v = "\"" <> T.replace "\"" "\\\"" v <> "\""
+    eq field val = field <> "==" <> q val
+    filters = catMaybes [eq "resource.service.name" <$> mService, eq "severity.text" <$> mLevel]
+    prefix = T.intercalate " and " filters
+    trimmed = T.strip query
 
 
 -- | Single decode of the events envelope. Sharing the parsed @colIdxMap@
@@ -670,7 +661,10 @@ renderSummaryCell cell = case AE.eitherDecode @[Text] (encodeUtf8 cell) of
 
 extractColIdxMap :: Maybe AE.Value -> Map Text Int
 extractColIdxMap = \case
-  Just (AE.Object obj) -> Map.fromList [(AK.toText k, round n) | (k, AE.Number n) <- KM.toList obj]
+  -- Column indices are non-negative integers from the server; @floor@ over
+  -- @round@ documents that intent (no banker's rounding on a value that's
+  -- already integral).
+  Just (AE.Object obj) -> Map.fromList [(AK.toText k, floor n) | (k, AE.Number n) <- KM.toList obj]
   _ -> mempty
 
 
@@ -723,6 +717,8 @@ runMetricsQuery cfg opts mode = do
 
 runMetricsChart :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> MetricsChartOpts -> Eff es ()
 runMetricsChart cfg opts = do
+  -- Validate --watch up front so a typo doesn't silently fall back to 5s.
+  validateDurationOrDie "--watch" opts.watch
   let run = do
         let params = metricsParams opts.expression opts.since opts.from opts.to
         withAPIResult cfg "/api/v1/metrics" params $ \val ->
@@ -778,14 +774,16 @@ checkAssertion MetricsData{dataFloat} cond = case dataFloat of
 
 
 -- | Case-insensitive — matches 'validateDurationFor' so @--watch 5M@
--- works the same way as @--since 1H@.
+-- works the same way as @--since 1H@. Falls back to the 5-second default
+-- if the suffix is missing or unparseable; bare numbers are NOT accepted
+-- as seconds (validateDurationFor would have rejected them at flag parse).
 parseDurationMs :: Text -> Int
 parseDurationMs (T.toLower -> t)
   | Just n <- T.stripSuffix "ms" t = fromMaybe 5000 (readMaybe $ toString n)
   | Just n <- T.stripSuffix "s" t = maybe 5000 (* 1000) (readMaybe $ toString n)
   | Just n <- T.stripSuffix "m" t = maybe 5000 (* 60_000) (readMaybe $ toString n)
   | Just n <- T.stripSuffix "h" t = maybe 5000 (* 3_600_000) (readMaybe $ toString n)
-  | otherwise = maybe 5000 (* 1000) (readMaybe $ toString t)
+  | otherwise = 5000
 
 
 -- Device auth helpers

@@ -329,6 +329,7 @@ executables:
       - filepath
       - unix
       - lens
+      - lens-aeson
       - text
       - containers
       - unliftio

@@ -28,8 +28,10 @@ import Relude
 
 import CLI.Config (CLIConfig (..))
 import CLI.Core (APIError, OutputMode (..), apiDelete, apiGetJson, apiPatchJson, apiPostJson, apiPutJson, printError, renderAPIError, renderByMode)
+import Control.Lens (has)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEKM
+import Data.Aeson.Lens qualified as AL
 import Data.Effectful.Wreq (HTTP)
 import Data.Yaml qualified as Yaml
 import Effectful
@@ -114,31 +116,32 @@ runList cfg k params mode =
 --   2. Server's typed @Paged@ envelope (Web.ApiTypes.Paged) → repackaged
 --   3. Bare array → wrapped with empty pagination metadata
 normalizeListE :: AE.Value -> Either (AE.Value, Text) AE.Value
-normalizeListE v = case v of
-  AE.Object obj
-    | AEKM.member "data" obj && AEKM.member "pagination" obj -> Right v
-    | otherwise -> case AE.fromJSON @(Paged AE.Value) v of
-        AE.Success p ->
-          Right
-            $ AE.object
-              [ "data" AE..= p.items
-              , "pagination"
-                  AE..= AE.object
-                    [ "has_more" AE..= p.hasMore
-                    , "total" AE..= p.totalCount
-                    , "cursor" AE..= AE.Null
-                    , "page" AE..= p.page
-                    , "per_page" AE..= p.perPage
-                    ]
-              ]
-        AE.Error msg -> Left (v, "Paged decode failed: " <> toText msg)
-  AE.Array _ ->
-    Right
-      $ AE.object
-        [ "data" AE..= v
-        , "pagination" AE..= AE.object ["has_more" AE..= False, "total" AE..= AE.Null, "cursor" AE..= AE.Null]
-        ]
-  _ -> Left (v, "response is neither Object nor Array")
+normalizeListE v
+  | hasKey "data" && hasKey "pagination" = Right v
+  | AE.Array _ <- v =
+      Right
+        $ AE.object
+          [ "data" AE..= v
+          , "pagination" AE..= AE.object ["has_more" AE..= False, "total" AE..= AE.Null, "cursor" AE..= AE.Null]
+          ]
+  | AE.Object _ <- v = case AE.fromJSON @(Paged AE.Value) v of
+      AE.Success p ->
+        Right
+          $ AE.object
+            [ "data" AE..= p.items
+            , "pagination"
+                AE..= AE.object
+                  [ "has_more" AE..= p.hasMore
+                  , "total" AE..= p.totalCount
+                  , "cursor" AE..= AE.Null
+                  , "page" AE..= p.page
+                  , "per_page" AE..= p.perPage
+                  ]
+            ]
+      AE.Error msg -> Left (v, "Paged decode failed: " <> toText msg)
+  | otherwise = Left (v, "response is neither Object nor Array")
+  where
+    hasKey k = has (AL.key k) v
 
 
 -- | Pure normaliser kept for direct use; falls through to the original value
