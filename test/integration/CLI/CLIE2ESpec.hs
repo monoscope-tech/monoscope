@@ -51,26 +51,38 @@ data E2EConfig = E2EConfig
   }
 
 
--- | Look up the E2E env vars + binary path. Returns 'Nothing' if any of the
--- required variables are unset, in which case tests should mark themselves
--- pending rather than fail.
+-- | Defaults for the public demo project — anything else needs explicit env
+-- override. The demo project is always available at api.monoscope.tech and
+-- carries enough activity to exercise the CLI's read paths end-to-end. CI
+-- and local runs both pick this up by default; override via the
+-- @MONOSCOPE_API_URL@ / @MONOSCOPE_PROJECT@ env vars to point elsewhere.
+defaultBaseUrl, defaultProject :: Text
+defaultBaseUrl = "https://api.monoscope.tech"
+defaultProject = "00000000-0000-0000-0000-000000000000"
+
+
+-- | Look up the E2E env vars + binary path. Falls back to the public demo
+-- project on @api.monoscope.tech@ when the env vars are unset, so tests run
+-- against prod by default. Returns 'Nothing' only if @MONOSCOPE_API_KEY@ is
+-- missing — that one has no safe default. CI should set it from a secret
+-- with read-only access to the demo project.
 getE2EConfig :: IO (Maybe E2EConfig)
 getE2EConfig = do
   mUrl <- lookupEnv "MONOSCOPE_API_URL"
   mKey <- lookupEnv "MONOSCOPE_API_KEY"
   mPid <- lookupEnv "MONOSCOPE_PROJECT"
-  case (mUrl, mKey, mPid) of
-    (Just url, Just key, Just pid) -> do
+  case mKey of
+    Nothing -> pure Nothing
+    Just key -> do
       bin <- T.unpack . T.strip . toText <$> readProcOut "cabal" ["list-bin", "exe:monoscope"]
       pure $
         Just
           E2EConfig
-            { baseUrl = toText url
+            { baseUrl = maybe defaultBaseUrl toText mUrl
             , apiKey = toText key
-            , project = toText pid
+            , project = maybe defaultProject toText mPid
             , binPath = bin
             }
-    _ -> pure Nothing
 
 
 readProcOut :: FilePath -> [String] -> IO String
@@ -116,7 +128,13 @@ withReachableServer body = do
   mCfg <- getE2EConfig
   case mCfg of
     Nothing ->
-      pendingWith "Set MONOSCOPE_API_URL, MONOSCOPE_API_KEY, MONOSCOPE_PROJECT to enable"
+      pendingWith
+        $ "Set MONOSCOPE_API_KEY (the only env var without a safe default) to enable. "
+        <> "URL defaults to "
+        <> toString defaultBaseUrl
+        <> ", project to the demo "
+        <> toString defaultProject
+        <> "."
     Just cfg -> do
       mgr <- newManager defaultManagerSettings
       let req =

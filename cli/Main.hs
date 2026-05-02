@@ -249,7 +249,7 @@ commandParser =
           , command "members" (info (MembersCmd <$> membersParser <**> helper) (progDesc "Manage project members"))
           , command "schema" (info (SchemaCmd <$> schemaParser <**> helper) (progDesc "Fetch telemetry schema"))
           , command "facets" (info (FacetsCmd <$> facetsParser <**> helper) (progDesc "Discover popular field values (top-N per faceted field)" <> footer facetsExamples))
-          , command "completion" (info (CompletionCmd <$> strArgument (metavar "SHELL" <> help "bash|zsh|fish")) (progDesc "Emit shell completion script"))
+          , command "completion" (info (CompletionCmd <$> strArgument (metavar "SHELL" <> help "bash|zsh|fish") <**> helper) (progDesc "Emit shell completion script"))
           , command "version" (info (pure VersionCmd) (progDesc "Show CLI version"))
           ]
       )

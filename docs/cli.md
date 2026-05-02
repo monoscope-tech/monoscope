@@ -668,31 +668,39 @@ auth headers) — the bug class that motivated the audit.
 
 The suite reuses the **same env vars the CLI itself reads** (`MONOSCOPE_API_URL` /
 `MONOSCOPE_API_KEY` / `MONOSCOPE_PROJECT`) — so if you've configured your shell
-to drive `monoscope` against a local server for debugging, the e2e tests
-automatically pick that up. When the env vars are absent, every test marks
-itself `pending` so ordinary `make test` doesn't depend on a live server.
+to drive `monoscope` against any server, the e2e tests automatically pick
+that up.
 
-To turn it on against your local dev server:
+**Defaults:** when the env vars are unset, the suite targets the public
+demo project on prod — `MONOSCOPE_API_URL=https://api.monoscope.tech`,
+`MONOSCOPE_PROJECT=00000000-0000-0000-0000-000000000000`. Only
+`MONOSCOPE_API_KEY` has no safe default; set it to any read-only key
+minted against the demo project to enable the suite. Without a key the
+tests still mark themselves `pending` (with a message naming the missing
+variable) rather than fail.
 
 ```bash
-# 1. Start the server: in a separate pane, run `make live-reload` and wait
-#    until `Starting Monoscope server on http://localhost:8080` appears.
-# 2. Mint an API key for an existing project (one-time):
-monoscope --agent api-keys create "e2e-tests" | jq -r .key > /tmp/e2e.key
-# 3. Run the e2e suite:
+# Run against the prod demo project (default — only the key is needed):
+MONOSCOPE_API_KEY=<read-only demo key> \
+  USE_EXTERNAL_DB=true cabal test integration-tests \
+    --test-options='--match "CLI binary E2E"'
+
+# Or point at your local dev server:
 MONOSCOPE_API_URL=http://localhost:8080 \
-MONOSCOPE_API_KEY=$(cat /tmp/e2e.key) \
-MONOSCOPE_PROJECT=00000000-0000-0000-0000-000000000000 \
+MONOSCOPE_API_KEY=$(monoscope --agent api-keys create "e2e-tests" | jq -r .key) \
+MONOSCOPE_PROJECT=<your project uuid> \
   USE_EXTERNAL_DB=true cabal test integration-tests \
     --test-options='--match "CLI binary E2E"'
 ```
 
+CI on `main`/PRs reads the same `MONOSCOPE_API_KEY` from the
+`MONOSCOPE_DEMO_API_KEY` repo secret, so every push runs the e2e suite
+against prod. PRs from forks (where secrets aren't exposed) gracefully
+skip the suite — they still get the `CLIBinarySpec` smoke tests.
+
 Each spec checks a single audit finding (KQL operator, kind→source mapping,
 error-body surfacing, list envelope, agent-mode JSON, validation messages,
 etc.) — adding a new feature? Add the regression test alongside.
-
-The same env vars work against any deployment: a staging instance, a
-docker-compose stack, or production (`MONOSCOPE_API_URL=https://api.monoscope.tech`).
 
 ### When you add a new CLI feature
 
