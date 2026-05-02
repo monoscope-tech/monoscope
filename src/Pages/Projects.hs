@@ -1106,17 +1106,17 @@ deleteMemberH pid memberId = do
   projMembers <- ProjectMembers.selectActiveProjectMembers pid
   let memberM = find (\m -> m.id == memberId) projMembers
   case memberM of
-    Nothing -> toastError "Member not found" ""
+    Nothing -> toastError "Member not found" mempty
     Just member ->
       if member.userId == currUserId
-        then toastError "You cannot remove yourself" ""
+        then toastError "You cannot remove yourself" mempty
         else do
           _ <- ProjectMembers.softDeleteProjectMembers (memberId :| [])
           Projects.logAuditS pid Projects.AEMemberRemoved sess
             $ Just
             $ AE.object ["removed_email" AE..= CI.original member.email]
           addSuccessToast "Member removed" Nothing
-          addRespHeaders ""
+          addRespHeaders mempty
 
 
 manageSubGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
@@ -1131,15 +1131,15 @@ manageSubGetH pid = do
           let returnUrl = envCfg.hostUrl <> "p/" <> pid.toText <> "/manage_billing"
           portalUrlM <- liftIO $ Settings.createStripePortalSession envCfg.stripeSecretKey customerId returnUrl
           case portalUrlM of
-            Just url -> redirectCS url >> addRespHeaders ""
-            Nothing -> toastError "Failed to create billing portal" ""
-        _ -> toastError "Customer ID not found" ""
+            Just url -> redirectCS url >> addRespHeaders mempty
+            Nothing -> toastError "Failed to create billing portal" mempty
+        _ -> toastError "Customer ID not found" mempty
     Projects.LemonSqueezyProvider -> do
       sub <- liftIO $ getSubscriptionPortalUrl project.subId envCfg.lemonSqueezyApiKey
       case sub of
-        Nothing -> toastError "Subscription ID not found" ""
-        Just s -> redirectCS s.dataVal.attributes.urls.customerPortal >> addRespHeaders ""
-    Projects.NoBillingProvider -> toastError "No active subscription" ""
+        Nothing -> toastError "Subscription ID not found" mempty
+        Just s -> redirectCS s.dataVal.attributes.urls.customerPortal >> addRespHeaders mempty
+    Projects.NoBillingProvider -> toastError "No active subscription" mempty
 
 
 newtype StripeCheckoutForm = StripeCheckoutForm {plan :: Text}
@@ -1167,8 +1167,8 @@ stripeCheckoutInitH pid form = do
         envCfg.stripePriceIdGraduatedOverage
         envCfg.stripePriceIdByos
   case urlM of
-    Just url -> redirectCS url >> addRespHeaders ""
-    Nothing -> toastError "Failed to create checkout session" ""
+    Just url -> redirectCS url >> addRespHeaders mempty
+    Nothing -> toastError "Failed to create checkout session" mempty
 
 
 getSubscriptionPortalUrl :: Maybe Text -> Text -> IO (Maybe SubPortalResponse)
@@ -1455,11 +1455,11 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = do
   if project.paymentPlan == "ONBOARDING" || isOnboarding == Just True
     then do
       redirectCS $ "/p/" <> pid.toText <> "/"
-      addRespHeaders ""
+      addRespHeaders mempty
     else do
       addTriggerEvent "closeModal" ""
       addSuccessToast "Pricing updated successfully" Nothing
-      addRespHeaders ""
+      addRespHeaders mempty
 
 
 processProjectPostForm :: Valor.Valid CreateProjectForm -> Projects.ProjectId -> ATAuthCtx (RespHeaders CreateProject)

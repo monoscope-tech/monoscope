@@ -933,6 +933,8 @@ filterSchema opts s
 
 -- | Trim each field's value list to the top-N. The server already sorts by
 -- count descending, so a simple @take@ keeps the most popular values.
+-- The trailing @capFacets _ v = v@ catches the @Just n@ + non-Object case
+-- (the @Nothing@ branch is already handled by the first clause).
 capFacets :: Maybe Int -> AE.Value -> AE.Value
 capFacets Nothing v = v
 capFacets (Just n) (AE.Object obj) =
