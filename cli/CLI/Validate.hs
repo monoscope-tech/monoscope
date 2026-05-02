@@ -32,17 +32,25 @@ import Effectful
 -- Right "7d"
 -- >>> validateDuration "500ms"
 -- Right "500ms"
+-- >>> validateDuration "1H"
+-- Right "1H"
+-- >>> validateDuration "24H"
+-- Right "24H"
 -- >>> validateDuration "1xyz"
 -- Left "--since must match Ns|Nm|Nh|Nd|Nms (e.g. 30m, 2h, 7d); got '1xyz'"
 -- >>> validateDuration ""
 -- Left "--since must not be empty"
+--
+-- Suffix matching is case-insensitive — the platform's TimePicker emits
+-- uppercase forms ("1H", "24H") and the server accepts either, so the
+-- validator should too. Original casing is preserved on success.
 validateDuration :: Text -> Either Text Text
 validateDuration t
   | T.null t = Left "--since must not be empty"
   | otherwise =
       let trimmed = T.strip t
           (digits, suffix) = T.span isDigit trimmed
-       in if T.null digits || suffix `notElem` ["ms", "s", "m", "h", "d"]
+       in if T.null digits || T.toLower suffix `notElem` ["ms", "s", "m", "h", "d"]
             then Left $ "--since must match Ns|Nm|Nh|Nd|Nms (e.g. 30m, 2h, 7d); got '" <> t <> "'"
             else Right trimmed
 

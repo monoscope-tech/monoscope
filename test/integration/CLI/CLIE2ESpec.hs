@@ -228,6 +228,13 @@ spec = describe "CLI binary E2E (real server)" $ do
       code `shouldNotBe` ExitSuccess
       err `shouldSatisfy` ("--since" `isInfixOf`)
 
+    -- Regression: uppercase suffixes are valid (the platform's TimePicker
+    -- emits "1H", "24H" — the validator must not reject the defaults it ships).
+    it "events search --since 1H is accepted" $ withReachableServer $ \cfg -> do
+      (code, _, err) <- runMono cfg ["events", "search", "", "--since", "1H", "--limit", "1"]
+      code `shouldBe` ExitSuccess
+      err `shouldNotSatisfy` ("--since" `isInfixOf`)
+
     -- Audit B5: bad --kind rejected.
     it "events search --kind banana exits non-zero (D5)" $ withReachableServer $ \cfg -> do
       (code, _, err) <- runMono cfg ["events", "search", "", "--kind", "banana", "--since", "1h", "--limit", "1"]
