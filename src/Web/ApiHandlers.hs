@@ -96,7 +96,7 @@ import Data.Map.Strict qualified as Map
 import Data.OpenApi (ToSchema (..))
 import Data.Set qualified as S
 import Data.Text qualified as T
-import Data.Time (UTCTime, addUTCTime, zonedTimeToUTC)
+import Data.Time (UTCTime, addUTCTime, nominalDay, zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
@@ -1088,7 +1088,7 @@ apiFacets :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> May
 apiFacets pid sinceM fromM toM fieldM = do
   now <- Time.currentTime
   let (fromT, toT, _) = TP.parseTimeRange now (TP.TimePicker sinceM fromM toM)
-      defaultFrom = fromMaybe (addUTCTime (-86400) now) fromT
+      defaultFrom = fromMaybe (addUTCTime (negate nominalDay) now) fromT
       defaultTo = fromMaybe now toT
   summaryM <- Fields.getFacetSummary pid "otel_logs_and_spans" defaultFrom defaultTo
   let Fields.FacetData facetMap = maybe (Fields.FacetData mempty) (.facetJson) summaryM

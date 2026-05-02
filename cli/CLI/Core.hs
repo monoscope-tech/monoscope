@@ -152,11 +152,10 @@ renderAPIError e
 reqOpts :: CLIConfig -> [(Text, Text)] -> W.Options
 reqOpts cfg params =
   W.defaults
-    & W.header "Accept"
-    .~ ["application/json"]
-      & addAuth cfg.apiKey
-      & addProjectId cfg.projectId
-      & addParams params
+    & (W.header "Accept" .~ ["application/json"])
+    & addAuth cfg.apiKey
+    & addProjectId cfg.projectId
+    & addParams params
 
 
 apiGet :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> Text -> [(Text, Text)] -> Eff es (Either APIError LByteString)

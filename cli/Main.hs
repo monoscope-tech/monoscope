@@ -933,10 +933,9 @@ filterSchema opts s
 
 -- | Trim each field's value list to the top-N. The server already sorts by
 -- count descending, so a simple @take@ keeps the most popular values.
--- The trailing @capFacets _ v = v@ catches the @Just n@ + non-Object case
--- (the @Nothing@ branch is already handled by the first clause).
+-- The fallthrough handles @Nothing@ (no cap requested) and the @Just n@ +
+-- non-Object case (server returned an unexpected shape).
 capFacets :: Maybe Int -> AE.Value -> AE.Value
-capFacets Nothing v = v
 capFacets (Just n) (AE.Object obj) =
   AE.Object $ flip KM.map obj $ \case
     AE.Array xs -> AE.Array (V.take n xs)

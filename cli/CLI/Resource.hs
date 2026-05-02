@@ -27,7 +27,7 @@ module CLI.Resource (
 import Relude
 
 import CLI.Config (CLIConfig (..))
-import CLI.Core (APIError, OutputMode (..), apiDelete, apiGetJson, apiPatchJson, apiPostJson, apiPutJson, printDebug, printError, renderAPIError, renderByMode)
+import CLI.Core (APIError, OutputMode (..), apiDelete, apiGetJson, apiPatchJson, apiPostJson, apiPutJson, printError, renderAPIError, renderByMode)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Effectful.Wreq (HTTP)
@@ -96,10 +96,10 @@ runList cfg k params mode =
     Right v -> case normalizeListE v of
       Right normalised -> renderByMode mode Nothing normalised
       Left (raw, reason) -> do
-        -- Server returned an envelope shape we don't recognise; surface the
-        -- specific reason (typically an aeson decode error) under --debug so
-        -- contributors see *what* changed, not just "shape mismatch".
-        printDebug $ "list " <> resourcePath k <> ": " <> reason
+        -- Server returned an envelope shape we don't recognise. This is
+        -- always-on stderr (not printDebug): an agent expecting
+        -- {data, pagination} would silently get a broken shape otherwise.
+        printError $ "list " <> resourcePath k <> ": " <> reason
         renderByMode mode Nothing raw
 
 

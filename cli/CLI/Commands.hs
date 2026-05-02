@@ -130,16 +130,15 @@ runAuth = \case
             , apiUrl = cfg.apiUrl
             , project = cfg.projectId
             }
-      else case method of
-        Just "env" -> do
-          putTextLn "Authenticated via MONOSCOPE_API_KEY environment variable"
-          putTextLn $ "API URL: " <> cfg.apiUrl
-          whenJust cfg.projectId $ \p -> putTextLn $ "Project: " <> p
-        Just "token" -> do
-          putTextLn "Authenticated via stored token"
-          putTextLn $ "API URL: " <> cfg.apiUrl
-          whenJust cfg.projectId $ \p -> putTextLn $ "Project: " <> p
-        _ -> printError "Not authenticated. Run: monoscope auth login --token <token>"
+      else
+        let printStatus label = do
+              putTextLn label
+              putTextLn $ "API URL: " <> cfg.apiUrl
+              whenJust cfg.projectId $ \p -> putTextLn $ "Project: " <> p
+         in case method of
+              Just "env" -> printStatus "Authenticated via MONOSCOPE_API_KEY environment variable"
+              Just "token" -> printStatus "Authenticated via stored token"
+              _ -> printError "Not authenticated. Run: monoscope auth login --token <token>"
   AuthLogout -> do
     removeToken
     putTextLn "Logged out"
@@ -595,7 +594,9 @@ foldFiltersIntoQuery query mService mLevel =
 data DecodedEvents = DecodedEvents
   { idxMap :: Map Text Int
   , rows :: [[Text]]
-  , raw :: KM.KeyMap AE.Value
+  , count :: Int
+  , hasMore :: AE.Value
+  , cursor :: AE.Value
   }
 
 
@@ -605,7 +606,9 @@ decodeEvents (AE.Object o) =
     DecodedEvents
       { idxMap = extractColIdxMap (KM.lookup "colIdxMap" o)
       , rows = extractRows (KM.lookup "logsData" o)
-      , raw = o
+      , count = extractInt (KM.lookup "count" o)
+      , hasMore = fromMaybe AE.Null (KM.lookup "hasMore" o)
+      , cursor = fromMaybe AE.Null (KM.lookup "cursor" o)
       }
 decodeEvents _ = Nothing
 
@@ -631,9 +634,9 @@ normalizeDecoded d mFields =
       events = map toObj d.rows
    in AE.object
         [ "events" AE..= events
-        , "count" AE..= extractInt (KM.lookup "count" d.raw)
-        , "has_more" AE..= fromMaybe AE.Null (KM.lookup "hasMore" d.raw)
-        , "cursor" AE..= fromMaybe AE.Null (KM.lookup "cursor" d.raw)
+        , "count" AE..= d.count
+        , "has_more" AE..= d.hasMore
+        , "cursor" AE..= d.cursor
         ]
 
 
@@ -774,8 +777,10 @@ checkAssertion MetricsData{dataFloat} cond = case dataFloat of
   Nothing -> printError "Warning: --assert ignored, no numeric result to evaluate"
 
 
+-- | Case-insensitive — matches 'validateDurationFor' so @--watch 5M@
+-- works the same way as @--since 1H@.
 parseDurationMs :: Text -> Int
-parseDurationMs t
+parseDurationMs (T.toLower -> t)
   | Just n <- T.stripSuffix "ms" t = fromMaybe 5000 (readMaybe $ toString n)
   | Just n <- T.stripSuffix "s" t = maybe 5000 (* 1000) (readMaybe $ toString n)
   | Just n <- T.stripSuffix "m" t = maybe 5000 (* 60_000) (readMaybe $ toString n)

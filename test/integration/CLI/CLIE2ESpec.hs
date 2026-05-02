@@ -32,14 +32,13 @@ import Relude
 
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
-import Data.List (isInfixOf)
 import Data.Text qualified as T
 import Network.HTTP.Client (defaultManagerSettings, httpLbs, newManager, parseRequest_, requestHeaders, responseStatus)
 import Network.HTTP.Types.Status (statusCode)
 import System.Exit (ExitCode (..))
 import System.Process qualified as Proc
 import Test.Hspec
-import UnliftIO.Exception (try)
+import UnliftIO.Exception (tryAny)
 
 
 -- | Resolved E2E config. Populated from environment in 'getE2EConfig'.
@@ -126,7 +125,7 @@ withReachableServer body = do
                   , ("X-Project-Id", encodeUtf8 cfg.project)
                   ]
               }
-      eResp <- try @SomeException (httpLbs req mgr)
+      eResp <- tryAny (httpLbs req mgr)
       case eResp of
         Left e -> pendingWith $ "Server at " <> toString cfg.baseUrl <> " not reachable: " <> show e
         Right resp
