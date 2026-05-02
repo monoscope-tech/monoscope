@@ -104,6 +104,13 @@ jobs:
           TWILIO_ACCOUNT_SID: ${{ vars.TWILIO_ACCOUNT_SID }}
           DISCORD_CLIENT_ID: "1328384474395967631"
           LOG_LEVEL: warn
+          # CLI E2E tests run against the prod demo project by default
+          # (https://api.monoscope.tech, project 00000000-…). Only the API
+          # key has no safe default — set MONOSCOPE_API_KEY in repo secrets
+          # to a read-only key minted on that demo project. Tests gracefully
+          # mark themselves pending when the secret is absent (e.g. on PRs
+          # from forks where secrets aren't exposed).
+          MONOSCOPE_API_KEY: ${{ secrets.MONOSCOPE_DEMO_API_KEY }}
         run: cabal test integration-tests --ghc-options="-O0" --test-show-details=direct
 
   lint:

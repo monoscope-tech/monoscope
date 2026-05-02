@@ -7,19 +7,26 @@ import CLI.Config (CLIConfig (..), resolveConfig)
 import CLI.Core (OutputMode (..), apiDelete, apiGetJson, apiPostJson, detectOutputMode, renderAPIError)
 import CLI.Resource qualified as Resource
 import Data.Aeson qualified as AE
+import Data.Aeson.KeyMap qualified as KM
+import Data.Map.Strict qualified as Map
+import Data.Vector qualified as V
 import Data.Effectful.Wreq (HTTP, runHTTPWreq)
 import Data.Text qualified as T
+import Models.Telemetry.Schema qualified as Schema
+import Data.Text.IO qualified
 import Data.Version (showVersion)
 import Effectful
 import Effectful.Environment (Environment, runEnvironment)
 import Effectful.FileSystem (FileSystem, runFileSystem)
 import Options.Applicative
 import Paths_monoscope qualified as Paths
+import System.Environment (setEnv)
 
 
 data GlobalOpts = GlobalOpts
   { jsonFlag :: Bool
   , agentFlag :: Bool
+  , debugFlag :: Bool
   , outputFlag :: Maybe Text
   , projectFlag :: Maybe Text
   }
@@ -42,7 +49,8 @@ data Command
   | LogPatternsCmd LogPatternsCommand
   | TeamsCmd TeamsCommand
   | MembersCmd MembersCommand
-  | SchemaCmd
+  | SchemaCmd SchemaOpts
+  | FacetsCmd FacetsOpts
   | CompletionCmd Text
   | VersionCmd
 
@@ -112,11 +120,38 @@ data MetricsCommand
   deriving stock (Show)
 
 
-data ServicesCommand = SList ServicesListOpts
+newtype ServicesCommand = SList ServicesListOpts
   deriving stock (Show)
 
 
 data ConfigCommand = CInit | CSet ConfigSetOpts | CGet ConfigGetOpts
+  deriving stock (Show)
+
+
+-- | C3: filter the schema dump so agents don't burn context on irrelevant
+-- fields. The full schema is ~600 lines; @--search service@ trims to ~20.
+data SchemaOpts = SchemaOpts
+  { search :: Maybe Text
+  -- ^ Substring filter applied to field names (case-insensitive).
+  , schemaLimit :: Maybe Int
+  -- ^ Cap on returned fields (post-filter).
+  }
+  deriving stock (Show)
+
+
+-- | Facets — the precomputed top-N values per field. Hugely valuable for an
+-- agent: "what are the popular service names? what status codes have I seen?
+-- what severity levels do my logs even use?". The server already maintains
+-- these in @apis.facet_summaries@ via a background job.
+data FacetsOpts = FacetsOpts
+  { facetField :: Maybe Text
+  -- ^ Optional field path (e.g. @resource.service.name@). When set, only that
+  -- field's values are returned. Without it, every faceted field is dumped.
+  , facetSince :: Maybe Text
+  , facetTopN :: Maybe Int
+  -- ^ Cap on values per field — handy when a field has thousands of distinct
+  -- values and you only care about the head.
+  }
   deriving stock (Show)
 
 
@@ -176,6 +211,7 @@ globalOpts =
   GlobalOpts
     <$> switch (long "json" <> help "Force JSON output")
     <*> switch (long "agent" <> help "Force agent mode")
+    <*> switch (long "debug" <> help "Print outgoing requests to stderr (also: MONOSCOPE_DEBUG=1)")
     <*> optional (strOption (long "output" <> short 'o' <> metavar "FORMAT" <> help "Output format: json|yaml|table"))
     <*> optional (strOption (long "project" <> short 'p' <> metavar "PID" <> help "Project UUID override"))
 
@@ -211,8 +247,9 @@ commandParser =
           , command "log-patterns" (info (LogPatternsCmd <$> logPatternsParser <**> helper) (progDesc "Triage log patterns"))
           , command "teams" (info (TeamsCmd <$> teamsParser <**> helper) (progDesc "Manage teams"))
           , command "members" (info (MembersCmd <$> membersParser <**> helper) (progDesc "Manage project members"))
-          , command "schema" (info (pure SchemaCmd) (progDesc "Fetch telemetry schema"))
-          , command "completion" (info (CompletionCmd <$> strArgument (metavar "SHELL" <> help "bash|zsh|fish")) (progDesc "Emit shell completion script"))
+          , command "schema" (info (SchemaCmd <$> schemaParser <**> helper) (progDesc "Fetch telemetry schema"))
+          , command "facets" (info (FacetsCmd <$> facetsParser <**> helper) (progDesc "Discover popular field values (top-N per faceted field)" <> footer facetsExamples))
+          , command "completion" (info (CompletionCmd <$> strArgument (metavar "SHELL" <> help "bash|zsh|fish") <**> helper) (progDesc "Emit shell completion script"))
           , command "version" (info (pure VersionCmd) (progDesc "Show CLI version"))
           ]
       )
@@ -232,7 +269,7 @@ eventsParser :: Parser EventsCommand
 eventsParser =
   subparser $
     mconcat
-      [ command "search" (info (EvSearch <$> eventsSearchParser <**> helper) (progDesc "Search events"))
+      [ command "search" (info (EvSearch <$> eventsSearchParser <**> helper) (progDesc "Search events" <> footer eventsSearchExamples))
       , command "get" (info (EvGet <$> eventsGetParser <**> helper) (progDesc "Get event by ID"))
       , command "tail" (info (EvTail <$> eventsTailParser <**> helper) (progDesc "Stream events"))
       , command "context" (info (EvContext <$> eventsContextParser <**> helper) (progDesc "Context around timestamp"))
@@ -242,15 +279,35 @@ eventsParser =
 eventsSearchParser :: Parser EventsSearchOpts
 eventsSearchParser =
   EventsSearchOpts
-    <$> strArgument (metavar "QUERY" <> value "" <> help "Search query")
-    <*> optional (strOption (long "since" <> metavar "DURATION" <> help "Relative time (e.g. 1h, 30m)"))
+    <$> strArgument (metavar "QUERY" <> value "" <> help "KQL search query (use == for equality, see `monoscope schema`)")
+    <*> optional (strOption (long "since" <> metavar "DURATION" <> help "Relative time (e.g. 1h, 30m, 7d)"))
     <*> optional (strOption (long "from" <> metavar "TIMESTAMP" <> help "Start time (ISO 8601)"))
     <*> optional (strOption (long "to" <> metavar "TIMESTAMP" <> help "End time (ISO 8601)"))
-    <*> optional (strOption (long "kind" <> metavar "KIND" <> help "log or trace"))
-    <*> optional (strOption (long "service" <> metavar "SERVICE"))
-    <*> optional (strOption (long "level" <> metavar "LEVEL"))
+    <*> optional (strOption (long "kind" <> metavar "KIND" <> help "log|trace|span"))
+    <*> optional (strOption (long "service" <> metavar "SERVICE" <> help "Shorthand for resource.service.name=='SERVICE'"))
+    <*> optional (strOption (long "level" <> metavar "LEVEL" <> help "Shorthand for severity.text=='LEVEL'"))
     <*> optional (option auto (long "limit" <> short 'n' <> metavar "N" <> help "Max results"))
-    <*> optional (strOption (long "fields" <> metavar "FIELDS" <> help "Comma-separated fields"))
+    <*> optional (strOption (long "fields" <> metavar "FIELDS" <> help "Comma-separated fields to keep"))
+    <*> optional (strOption (long "cursor" <> metavar "CURSOR" <> help "Pagination cursor from a prior response"))
+    <*> switch (long "first" <> help "Return only the first matching event")
+    <*> switch (long "id-only" <> help "Print just the first event id (implies --first)")
+
+
+-- | C5: Concrete KQL examples in @--help@ — agents copy from here, so keep
+-- them up-to-date and runnable.
+eventsSearchExamples :: String
+eventsSearchExamples =
+  intercalate "\n"
+    [ "Examples:"
+    , "  monoscope events search 'severity.text==\"error\"' --since 1h"
+    , "  monoscope logs search --service checkout-api --level error --limit 50"
+    , "  monoscope events search 'attributes.http.response.status_code >= 500' --since 1h"
+    , "  monoscope traces search --since 30m --first --id-only   # one trace id"
+    , "  monoscope events search '' --since 1h --cursor <CURSOR>  # next page"
+    , ""
+    , "KQL operators: == != > >= < <=  |  combine with: and or  |  parens for grouping"
+    , "Run `monoscope schema --search service` to discover field names."
+    ]
 
 
 eventsGetParser :: Parser EventsGetOpts
@@ -276,6 +333,7 @@ eventsContextParser =
     <*> optional (strOption (long "service" <> metavar "SERVICE"))
     <*> optional (strOption (long "kind" <> metavar "KIND"))
     <*> optional (strOption (long "window" <> metavar "DURATION" <> help "Time window (default: 5m)"))
+    <*> switch (long "summary" <> help "Add per-trace summary to JSON output (trace_id, services, span_count, error_count)")
 
 
 metricsParser :: Parser MetricsCommand
@@ -340,6 +398,40 @@ configGetParser :: Parser ConfigGetOpts
 configGetParser = ConfigGetOpts <$> optional (strArgument (metavar "KEY" <> help "Config key"))
 
 
+schemaParser :: Parser SchemaOpts
+schemaParser =
+  SchemaOpts
+    <$> optional (strOption (long "search" <> metavar "TEXT" <> help "Filter fields whose name contains TEXT (case-insensitive)"))
+    <*> optional (option auto (long "limit" <> metavar "N" <> help "Limit number of fields returned"))
+
+
+facetsParser :: Parser FacetsOpts
+facetsParser =
+  FacetsOpts
+    <$> optional (strArgument (metavar "FIELD" <> help "Field path to drill into (e.g. resource.service.name). Omit to dump all fields."))
+    <*> optional (strOption (long "since" <> metavar "DURATION" <> help "Lookback window (default: 24h)"))
+    <*> optional (option auto (long "top" <> metavar "N" <> help "Limit values per field"))
+
+
+-- | Examples shown in `monoscope facets --help`. Mirrors the discovery
+-- workflow most agents follow: dump-everything → drill-into-one-field →
+-- pipe-into-search.
+facetsExamples :: String
+facetsExamples =
+  intercalate "\n"
+    [ "Examples:"
+    , "  monoscope facets                         # all faceted fields"
+    , "  monoscope facets resource.service.name   # values for one field"
+    , "  monoscope facets severity.text --top 5"
+    , "  monoscope facets resource.service.name | jq -r '.[\"resource.service.name\"][].value'"
+    , "  monoscope facets --since 7d              # widen the lookback"
+    , ""
+    , "Each value carries a `count`. Pop the top result into a search:"
+    , "  SVC=$(monoscope facets resource.service.name --top 1 | jq -r '.[\"resource.service.name\"][0].value')"
+    , "  monoscope events search '' --service \"$SVC\" --since 1h"
+    ]
+
+
 -- Plan A resource parsers
 
 idArg :: Parser Text
@@ -351,7 +443,7 @@ fileArg = strArgument (metavar "FILE" <> help "Path to YAML or JSON file")
 
 
 idsOpt :: Parser [Text]
-idsOpt = fmap (T.splitOn ",") $ strOption (long "ids" <> metavar "ID1,ID2,..." <> help "Comma-separated UUIDs")
+idsOpt = T.splitOn "," <$> strOption (long "ids" <> metavar "ID1,ID2,..." <> help "Comma-separated UUIDs")
 
 
 monitorsParser :: Parser MonitorsCommand
@@ -556,8 +648,8 @@ int64Arg = argument auto (metavar "ID" <> help "Pattern ID (integer)")
 
 int64IdsOpt :: Parser [Int64]
 int64IdsOpt =
-  fmap (mapMaybe (readMaybe . toString) . T.splitOn ",") $
-    strOption (long "ids" <> metavar "ID1,ID2,..." <> help "Comma-separated pattern IDs")
+  mapMaybe (readMaybe . toString) . T.splitOn ","
+    <$> strOption (long "ids" <> metavar "ID1,ID2,..." <> help "Comma-separated pattern IDs")
 
 
 logPatternsParser :: Parser LogPatternsCommand
@@ -567,7 +659,7 @@ logPatternsParser =
       [ command
           "list"
           ( info
-              ((\(p, pp) -> LPList p pp) <$> pageOpts <**> helper)
+              (uncurry LPList <$> pageOpts <**> helper)
               (progDesc "List log patterns")
           )
       , command "get" (info (LPGet <$> int64Arg <**> helper) (progDesc "Get log pattern by ID"))
@@ -660,6 +752,11 @@ main :: IO ()
 main = do
   hSetBuffering stdout LineBuffering
   (global, cmd) <- execParser parserInfo
+  -- Make --debug equivalent to MONOSCOPE_DEBUG=1 so 'CLI.Core.printDebug'
+  -- (which only sees the env) lights up either way. setEnv is process-global
+  -- and not thread-safe, but we set it exactly once here, before runCLI
+  -- starts any concurrent work, so the race window is empty.
+  when global.debugFlag $ setEnv "MONOSCOPE_DEBUG" "1"
   runCLI $ run global cmd
 
 
@@ -699,7 +796,9 @@ run global = \case
   ServicesCmd (SList opts) -> withCfgMode global $ \cfg mode -> runServicesList cfg opts mode
   ConfigCmd CInit -> runConfigInit
   ConfigCmd (CSet opts) -> runConfigSet opts
-  ConfigCmd (CGet opts) -> runConfigGet opts
+  ConfigCmd (CGet opts) -> do
+    mode <- resolveMode global
+    runConfigGet opts mode
   MonitorsCmd sub -> withCfgMode global $ \cfg mode -> case sub of
     MonList -> Resource.runList cfg Resource.Monitors [] mode
     MonGet i -> Resource.runGet cfg Resource.Monitors i mode
@@ -758,7 +857,7 @@ run global = \case
   IssuesCmd sub -> withCfgMode global $ \cfg mode -> case sub of
     IssueList statusM typeM svcM pageM perM ->
       let params = catMaybes [("status",) <$> statusM, ("type",) <$> typeM, ("service",) <$> svcM] <> pageParams pageM perM
-       in Resource.runAPI mode (apiGetJson @_ @AE.Value cfg "/api/v1/issues" params)
+       in Resource.runAPI mode (Resource.normalizeList <<$>> apiGetJson @_ @AE.Value cfg "/api/v1/issues" params)
     IssueGet i -> Resource.runAPI mode (apiGetJson @_ @AE.Value cfg ("/api/v1/issues/" <> i) [])
     IssueAck i -> Resource.writeJson cfg Resource.POST ("/api/v1/issues/" <> i <> "/ack") [] AE.Null mode
     IssueUnack i -> Resource.writeJson cfg Resource.POST ("/api/v1/issues/" <> i <> "/unack") [] AE.Null mode
@@ -769,11 +868,11 @@ run global = \case
   EndpointsCmd sub -> withCfgMode global $ \cfg mode -> case sub of
     EndList searchM outgoingM pageM perM ->
       let params = catMaybes [("search",) <$> searchM, ("outgoing",) . bool "false" "true" <$> outgoingM] <> pageParams pageM perM
-       in Resource.runAPI mode (apiGetJson @_ @AE.Value cfg "/api/v1/endpoints" params)
+       in Resource.runAPI mode (Resource.normalizeList <<$>> apiGetJson @_ @AE.Value cfg "/api/v1/endpoints" params)
     EndGet i -> Resource.runAPI mode (apiGetJson @_ @AE.Value cfg ("/api/v1/endpoints/" <> i) [])
   LogPatternsCmd sub -> withCfgMode global $ \cfg mode -> case sub of
     LPList pageM perM ->
-      Resource.runAPI mode (apiGetJson @_ @AE.Value cfg "/api/v1/log_patterns" (pageParams pageM perM))
+      Resource.runAPI mode (Resource.normalizeList <<$>> apiGetJson @_ @AE.Value cfg "/api/v1/log_patterns" (pageParams pageM perM))
     LPGet i -> Resource.runAPI mode (apiGetJson @_ @AE.Value cfg ("/api/v1/log_patterns/" <> show i) [])
     LPAck i -> Resource.writeJson cfg Resource.POST ("/api/v1/log_patterns/" <> show i <> "/ack") [] AE.Null mode
     LPBulk act ids ->
@@ -801,8 +900,11 @@ run global = \case
     MemberPatch uid perm ->
       Resource.writeJson cfg Resource.PATCH (Resource.resourceIdPath Resource.Members uid) [] (AE.object ["permission" AE..= perm]) mode
     MemberRemove uid -> Resource.runDelete cfg Resource.Members uid
-  SchemaCmd -> withCfgMode global $ \cfg mode ->
-    Resource.runAPI mode (apiGetJson @_ @AE.Value cfg "/api/v1/schema" [])
+  SchemaCmd schemaOpts -> withCfgMode global $ \cfg mode ->
+    Resource.runAPI mode (filterSchema schemaOpts <<$>> apiGetJson @_ @Schema.Schema cfg "/api/v1/schema" [])
+  FacetsCmd facetsOpts -> withCfgMode global $ \cfg mode -> do
+    let params = catMaybes [("since",) <$> facetsOpts.facetSince, ("field",) <$> facetsOpts.facetField]
+    Resource.runAPI mode (capFacets facetsOpts.facetTopN <<$>> apiGetJson @_ @AE.Value cfg "/api/v1/facets" params)
   CompletionCmd shell -> emitCompletion shell
   VersionCmd -> putTextLn $ "monoscope " <> toText (showVersion Paths.version)
 
@@ -813,13 +915,46 @@ resolveMode global
   | otherwise = detectOutputMode global.jsonFlag global.outputFlag
 
 
+-- | C3: post-process the @/api/v1/schema@ response so agents can fetch a
+-- focused slice. The full payload is huge — without filtering, an LLM agent
+-- spends 600+ tokens on field names that don't matter for the current
+-- investigation. Operates on the typed 'Schema.Schema' so a server-side
+-- field rename surfaces as a compile error, not a silent miss.
+filterSchema :: SchemaOpts -> Schema.Schema -> Schema.Schema
+filterSchema opts s
+  | isNothing opts.search && isNothing opts.schemaLimit = s
+  | otherwise =
+      let needle = T.toLower <$> opts.search
+          matches k = maybe True (`T.isInfixOf` T.toLower k) needle
+          filtered = Map.filterWithKey (\k _ -> matches k) s.fields
+          capped = maybe filtered (`Map.take` filtered) opts.schemaLimit
+       in Schema.Schema {fields = capped}
+
+
+-- | Trim each field's value list to the top-N. The server already sorts by
+-- count descending, so a simple @take@ keeps the most popular values.
+-- The fallthrough handles @Nothing@ (no cap requested) and the @Just n@ +
+-- non-Object case (server returned an unexpected shape).
+capFacets :: Maybe Int -> AE.Value -> AE.Value
+capFacets (Just n) (AE.Object obj) =
+  AE.Object $ flip KM.map obj $ \case
+    AE.Array xs -> AE.Array (V.take n xs)
+    other -> other
+capFacets _ v = v
+
+
 -- | Emit a shell completion script via optparse-applicative's built-in support.
+-- C12: Unknown shells used to silently fall back to bash, which is worse than
+-- failing — a user who typed @completion fis@ would get a bash script that
+-- silently doesn't work in their fish shell. Now we exit non-zero with a
+-- clear message that lists the supported shells.
 emitCompletion :: IOE :> es => Text -> Eff es ()
-emitCompletion shell = liftIO $ do
-  let shellArg = case shell of
-        "bash" -> "--bash-completion-script"
-        "zsh" -> "--zsh-completion-script"
-        "fish" -> "--fish-completion-script"
-        _ -> "--bash-completion-script"
-  -- Invoke ourselves with the completion flag so optparse emits the script.
-  void $ handleParseResult $ execParserPure defaultPrefs parserInfo [shellArg, "monoscope"]
+emitCompletion shell = liftIO $ case shell of
+  "bash" -> emit "--bash-completion-script"
+  "zsh" -> emit "--zsh-completion-script"
+  "fish" -> emit "--fish-completion-script"
+  other -> do
+    Data.Text.IO.hPutStrLn stderr $ "error: unknown shell '" <> other <> "'; supported: bash|zsh|fish"
+    exitFailure
+  where
+    emit shellArg = void $ handleParseResult $ execParserPure defaultPrefs parserInfo [shellArg, "monoscope"]

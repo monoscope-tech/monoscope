@@ -35,7 +35,7 @@ import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
-import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx)
 import Pages.Charts.Charts qualified as Charts
 import Pkg.Components.Widget (WidgetType (..))
 import Pkg.Components.Widget qualified as Widget
@@ -289,18 +289,15 @@ instance ToHtml ReportsPost where
   toHtmlRaw = toHtml
 
 
-wrapSingleResponse :: Projects.Session -> Projects.Project -> FreeTierStatus -> EnvConfig -> Text -> Maybe Text -> (Text, Text, Text) -> ATAuthCtx (RespHeaders ReportsGet)
-wrapSingleResponse sess project freeTierStatus config pageTitle hxRequestM content = case hxRequestM of
+wrapSingleResponse :: BWConfig -> FreeTierStatus -> Text -> Maybe Text -> (Text, Text, Text) -> ATAuthCtx (RespHeaders ReportsGet)
+wrapSingleResponse bw freeTierStatus pageTitle hxRequestM content = case hxRequestM of
   Just _ -> addRespHeaders $ ReportsGetSingle' content
-  _ -> do
-    let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle, freeTierStatus, config}
-    addRespHeaders $ ReportsGetSingle $ PageCtx bwconf content
+  _ -> addRespHeaders $ ReportsGetSingle $ PageCtx bw{pageTitle, freeTierStatus} content
 
 
 singleReportGetH :: Projects.ProjectId -> Issues.ReportId -> Maybe Text -> ATAuthCtx (RespHeaders ReportsGet)
 singleReportGetH pid rid hxRequestM = do
-  (sess, project) <- Projects.sessionAndProject pid
-  appCtx <- ask @AuthContext
+  (sess, project, bw) <- mkPageCtx pid
   reportM <- Issues.getReportById rid
   freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
   content <- case reportM of
@@ -308,23 +305,21 @@ singleReportGetH pid rid hxRequestM = do
     Just report -> do
       (dateLabel, emailHtml) <- reportToEmailHtml report project sess.user.firstName
       pure (report.reportType, dateLabel, emailHtml)
-  wrapSingleResponse sess project freeTierStatus appCtx.env "Report" hxRequestM content
+  wrapSingleResponse bw freeTierStatus "Report" hxRequestM content
 
 
 reportsLiveGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders ReportsGet)
 reportsLiveGetH pid hxRequestM = do
-  (sess, project) <- Projects.sessionAndProject pid
-  appCtx <- ask @AuthContext
+  (sess, project, bw) <- mkPageCtx pid
   (dateLabel, emailHtml) <- buildLiveReportEmailHtml pid project sess.user.firstName
   freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
   let content = ("weekly" :: Text, dateLabel, emailHtml)
-  wrapSingleResponse sess project freeTierStatus appCtx.env "Reports" hxRequestM content
+  wrapSingleResponse bw freeTierStatus "Reports" hxRequestM content
 
 
 reportsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders ReportsGet)
 reportsGetH pid page hxRequest hxBoosted = do
-  (sess, project) <- Projects.sessionAndProject pid
-  appCtx <- ask @AuthContext
+  (_, project, bw) <- mkPageCtx pid
   let p = toString (fromMaybe "0" page)
   let pg = fromMaybe 0 (readMaybe p :: Maybe Int)
 
@@ -338,14 +333,7 @@ reportsGetH pid page hxRequest hxBoosted = do
   case (hxRequest, hxBoosted) of
     (Just "true", Nothing) -> addRespHeaders $ ReportsGetList pid reports nextUrl
     _ -> do
-      let bwconf =
-            (def :: BWConfig)
-              { sessM = Just sess
-              , currProject = Just project
-              , pageTitle = "Reports"
-              , freeTierStatus = freeTierStatus
-              , config = appCtx.env
-              }
+      let bwconf = bw{pageTitle = "Reports", freeTierStatus = freeTierStatus}
       addRespHeaders $ ReportsGetMain $ PageCtx bwconf (pid, reports, nextUrl, project.dailyNotif, project.weeklyNotif)
 
 

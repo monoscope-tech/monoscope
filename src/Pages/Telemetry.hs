@@ -23,7 +23,6 @@ import Data.Time.Format (formatTime)
 import Data.Time.Format.ISO8601 (formatShow, iso8601Format)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Lucid
 import Lucid.Aria qualified as Aria
@@ -36,7 +35,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (SpanStatus (SSError))
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
-import Pages.BodyWrapper (BWConfig (..), PageCtx (..), navTabAttrs)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Components qualified as Components
 import Pages.LogExplorer.LogItem (getRequestDetails, getServiceColor, getServiceName, spanHasErrors)
 import Pages.LogExplorer.LogItem qualified as LogItem
@@ -46,7 +45,6 @@ import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (unAesonTextMaybe)
 import Relude hiding (ask)
-import System.Config (AuthContext (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils (LoadingSize (..), LoadingType (..), faSprite_, getDurationNSMS, getServiceColors, loadingIndicator_, onpointerdown_, parseTime, prettyPrintCount, utcTimeToNanoseconds)
 
@@ -226,19 +224,15 @@ instance ToHtml TraceDetailsGet where
 -- Metrics handlers
 metricsOverViewGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> ATAuthCtx (RespHeaders MetricsOverViewGet)
 metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM = do
-  (sess, project) <- Projects.sessionAndProject pid
-  appCtx <- ask @AuthContext
+  (_, _, bw) <- mkPageCtx pid
   now <- Time.currentTime
   let tab = maybe "charts" (\t -> if t == "charts" then t else "datapoints") tabM
   let (from, to, currentRange) = parseTime fromM toM sinceM now
       bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = Just project
-          , prePageTitle = Just "Explorer"
+        bw
+          { prePageTitle = Just "Explorer"
           , pageTitle = "Metrics"
           , menuItem = Just "Explorer"
-          , config = appCtx.env
           , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-outline items-center"] do
               a_ ([href_ $ "/p/" <> pid.toText <> "/log_explorer", role_ "tab", class_ "tab h-auto! "] <> navTabAttrs) "Events"
               a_ ([href_ $ "/p/" <> pid.toText <> "/metrics", role_ "tab", class_ "tab h-auto! tab-active text-textStrong"] <> navTabAttrs) "Metrics"
@@ -939,7 +933,7 @@ buildSpanTree spans =
                 , startTime = startNs
                 , endTime = Just endNs
                 , hasErrors = False
-                , attributes = Just (MapS.singleton syntheticMissingParentKey (AE.String missingPid))
+                , attributes = Just (one (syntheticMissingParentKey, AE.String missingPid))
                 }
          in Just (SpanTree rec (buildTree spanMap (Just missingPid) (startNs, endNs)))
       _ -> Nothing

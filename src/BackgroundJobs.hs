@@ -5,7 +5,7 @@ module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
 import Control.Concurrent.STM.TBQueue (isFullTBQueue, readTBQueue, writeTBQueue)
-import Control.Exception (ErrorCall (..))
+import Control.Exception qualified as CE
 import Control.Lens (view, (.~), (^.), (^?), _1, _3)
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens qualified as AL
@@ -481,7 +481,7 @@ processBackgroundJob authCtx bgJob =
                     -- rather than no-oping into Right () and being marked 'submitted'.
                     case mfilter (not . T.null) (project.customerId <|> project.orderId) of
                       Just custId -> liftIO $ reportUsageToStripe authCtx.config.stripeSecretKey custId "events_usage" qty
-                      Nothing -> throwIO $ ErrorCall "Stripe: project has no customerId or orderId"
+                      Nothing -> throwIO $ CE.ErrorCall "Stripe: project has no customerId or orderId"
                   Projects.LemonSqueezyProvider -> liftIO $ reportUsageToLemonsqueezy fSubId qty authCtx.config.lemonSqueezyApiKey
                 -- Wrap mark* in tryAny: a DB blip between a successful HTTP call
                 -- and the status UPDATE would re-select this row next tick and

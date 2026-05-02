@@ -40,7 +40,14 @@ spec = describe "CLI binary E2E tests" do
 
   it "auth status exits and shows status message" do
     (_, out, err) <- runMono ["auth", "status"]
-    (out <> err) `shouldSatisfy` \s -> "Not authenticated" `isInfixOf` s || "Authenticated" `isInfixOf` s || "error" `isInfixOf` s
+    -- Two valid shapes: human text ("Not authenticated" / "Authenticated") or
+    -- the agent-mode JSON envelope ("authenticated": …). CI sets CI=true,
+    -- which auto-enables agent-mode → JSON.
+    (out <> err) `shouldSatisfy` \s ->
+      "Not authenticated" `isInfixOf` s
+        || "Authenticated" `isInfixOf` s
+        || "\"authenticated\"" `isInfixOf` s
+        || "error" `isInfixOf` s
 
   it "logs search --help works as alias for events search" do
     (evCode, evOut, _) <- runMono ["events", "search", "--help"]
@@ -93,6 +100,16 @@ spec = describe "CLI binary E2E tests" do
           , ["members", "add", "--help"]
           , ["members", "patch", "--help"]
           , ["members", "remove", "--help"]
+          , ["schema", "--help"]
+          , ["facets", "--help"]
+          , ["services", "list", "--help"]
+          , ["events", "search", "--help"]
+          , ["events", "context", "--help"]
+          , ["events", "tail", "--help"]
+          , ["metrics", "query", "--help"]
+          , ["metrics", "chart", "--help"]
+          , ["auth", "login", "--help"]
+          , ["completion", "--help"]
           ]
     forM_ helpCases $ \args ->
       it (toString $ unwords $ map toText args) do

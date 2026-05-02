@@ -82,7 +82,7 @@ import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Network.Wreq (getWith)
 import OddJobs.Job (createJob)
-import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper, settingsContentTarget)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper, mkPageCtx, settingsContentTarget)
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as SlackP
 import Pages.Bots.Utils qualified as BotUtils
@@ -101,7 +101,7 @@ import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers)
 import Servant.Server (err302, errHeaders)
 import System.Config (AuthContext (..), EnvConfig (..))
-import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addReswap, addSuccessToast, addTriggerEvent, redirectCS)
+import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addReswap, addSuccessToast, addTriggerEvent, redirectCS, toastError)
 import UnliftIO.Exception (tryAny)
 import Utils (LoadingSize (..), faSprite_, htmxIndicator_, insertIfNotExist, isDemoAndNotSudo, lookupValueText)
 import Web.FormUrlEncoded (FromForm)
@@ -113,16 +113,9 @@ import Web.FormUrlEncoded (FromForm)
 
 listProjectsGetH :: ATAuthCtx (RespHeaders ListProjectsGet)
 listProjectsGetH = do
-  (sess, project) <- Projects.sessionAndProject (UUIDId RealUUID.nil)
+  (sess, project, bw) <- mkPageCtx (UUIDId RealUUID.nil)
   appCtx <- ask @AuthContext
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , pageTitle = "Projects"
-          , hideNavbar = True
-          , pageActions = Nothing
-          , config = appCtx.env
-          }
+  let bwconf = bw{currProject = Nothing, pageTitle = "Projects", hideNavbar = True, pageActions = Nothing}
 
   projects <- V.fromList <$> Projects.selectProjectsForUser sess.persistentSession.userId
   let demoProject =
@@ -243,7 +236,7 @@ data CreateProjectForm = CreateProjectForm
 
 integrationsSettingsGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 integrationsSettingsGetH pid = do
-  (sess, project) <- Projects.sessionAndProject pid
+  (sess, project, bw) <- mkPageCtx pid
   appCtx <- ask @AuthContext
   let createProj =
         CreateProjectForm
@@ -281,7 +274,7 @@ integrationsSettingsGetH pid = do
     Nothing -> pure []
   let extraSlackChannels = seededExtras <> fetchedExtras
 
-  let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle = "Integrations", isSettingsPage = True, config = appCtx.config}
+  let bwconf = bw{pageTitle = "Integrations", isSettingsPage = True}
   addRespHeaders
     $ bodyWrapper bwconf
     $ integrationsBody
@@ -744,11 +737,11 @@ manageTeamPostH pid form tmView = do
   let validMemberIds = V.map (.userId) projMembers
       invalidMembers = V.filter (`V.notElem` validMemberIds) form.teamMembers
       teamDetails = ProjectMembers.TeamDetails form.teamName form.teamDescription form.teamHandle form.teamMembers form.notifEmails form.slackChannels form.discordChannels form.phoneNumbers form.pagerdutyServices V.empty
-      validationErr msg = addErrorToast msg Nothing >> addRespHeaders (ManageTeamsPostError msg)
+      validationErr msg = toastError msg (ManageTeamsPostError msg)
   case (userPermission == Just ProjectMembers.PAdmin, V.null invalidMembers, validateTeamDetails form.teamName form.teamHandle form.notifEmails, form.teamId) of
     (False, _, _, _) -> validationErr "Only admins can create or update teams"
     (_, False, _, _) -> validationErr "Some team members are not project members"
-    (_, _, Left e, _) -> addErrorToast e Nothing >> addReswap "" >> addRespHeaders (ManageTeamsPostError e)
+    (_, _, Left e, _) -> addReswap "" >> validationErr e
     (_, _, _, Just tid) -> do
       _ <- ProjectMembers.updateTeam pid tid teamDetails
       addSuccessToast "Team updated successfully" Nothing
@@ -787,12 +780,8 @@ manageTeamBulkActionH pid action TBulkActionForm{itemId} listViewM = do
           when (isNothing listViewM)
             $ redirectCS ("/p/" <> pid.toText <> "/manage_teams")
           addRespHeaders ManageTeamsDelete
-        else do
-          addErrorToast "You may only delete teams you own" Nothing
-          addRespHeaders $ ManageTeamsPostError "You may only delete teams you own"
-    _ -> do
-      addErrorToast "Invalid action" Nothing
-      addRespHeaders $ ManageTeamsPostError "Invalid action"
+        else toastError "You may only delete teams you own" (ManageTeamsPostError "You may only delete teams you own")
+    _ -> toastError "Invalid action" (ManageTeamsPostError "Invalid action")
 
 
 data ManageTeams
@@ -818,20 +807,13 @@ instance ToHtml ManageTeams where
 
 manageTeamsGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders ManageTeams)
 manageTeamsGetH pid layoutM = do
-  (sess, project) <- Projects.sessionAndProject pid
+  (_, _, bw) <- mkPageCtx pid
   appCtx <- ask @AuthContext
   projMembers <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
   channels <- Integrations.getProjectSlackData pid >>= maybe (pure []) \d -> maybe [] (fromMaybe [] . (.channels)) <$> SlackP.getSlackChannels d.botToken d.teamId
   discordChannels <- Integrations.getDiscordDataByProjectId pid >>= maybe (pure []) (Discord.getDiscordChannels appCtx.env.discordBotToken . (.guildId))
   teams <- V.fromList <$> ProjectMembers.getTeamsVM pid
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , pageTitle = "Team"
-          , currProject = Just project
-          , isSettingsPage = True
-          , config = appCtx.config
-          }
+  let bwconf = bw{pageTitle = "Team", isSettingsPage = True}
   case layoutM of
     Just _ -> do
       addRespHeaders $ ManageTeamsGet' (pid, projMembers, channels, discordChannels, teams)
@@ -900,7 +882,7 @@ notifsCell team = div_ [class_ "flex items-center gap-2"] do
 
 teamGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders ManageTeams)
 teamGetH pid handle layoutM = do
-  (sess, project) <- Projects.sessionAndProject pid
+  (sess, _, bw) <- mkPageCtx pid
   appCtx <- ask @AuthContext
   teamVm <- ProjectMembers.getTeamByHandle pid handle
   projMembers <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
@@ -909,11 +891,8 @@ teamGetH pid handle layoutM = do
   case teamVm of
     Just team -> do
       let bwconf =
-            (def :: BWConfig)
-              { sessM = Just sess
-              , pageTitle = "Team details"
-              , currProject = Just project
-              , config = appCtx.config
+            bw
+              { pageTitle = "Team details"
               , pageActions =
                   if team.is_everyone
                     then Nothing
@@ -925,13 +904,7 @@ teamGetH pid handle layoutM = do
         Just _ -> addRespHeaders $ ManageTeamGet' (pid, team, projMembers, channels, discordChannels)
         _ -> addRespHeaders $ ManageTeamGet (PageCtx bwconf (pid, team, projMembers, channels, discordChannels))
     Nothing -> do
-      let bwconf =
-            (def :: BWConfig)
-              { sessM = Just sess
-              , pageTitle = "Team details"
-              , currProject = Just project
-              , config = appCtx.config
-              }
+      let bwconf = bw{pageTitle = "Team details"}
       addRespHeaders $ ManageTeamGetError (PageCtx bwconf (pid, handle))
 
 
@@ -1022,18 +995,10 @@ teamPageNF pid handle = do
 
 manageMembersGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders ManageMembers)
 manageMembersGetH pid = do
-  (sess, project) <- Projects.sessionAndProject pid
-  appCtx <- ask @AuthContext
+  (_, project, bw) <- mkPageCtx pid
   projMembers <- V.fromList <$> ProjectMembers.selectAllProjectMembers pid
   teamsCount <- length <$> ProjectMembers.getTeamsVM pid
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , pageTitle = "Team"
-          , currProject = Just project
-          , isSettingsPage = True
-          , config = appCtx.config
-          }
+  let bwconf = bw{pageTitle = "Team", isSettingsPage = True}
   addRespHeaders $ ManageMembersGet $ PageCtx bwconf (pid, projMembers, project.paymentPlan, teamsCount)
 
 
@@ -1141,21 +1106,17 @@ deleteMemberH pid memberId = do
   projMembers <- ProjectMembers.selectActiveProjectMembers pid
   let memberM = find (\m -> m.id == memberId) projMembers
   case memberM of
-    Nothing -> do
-      addErrorToast "Member not found" Nothing
-      addRespHeaders ""
+    Nothing -> toastError "Member not found" mempty
     Just member ->
       if member.userId == currUserId
-        then do
-          addErrorToast "You cannot remove yourself" Nothing
-          addRespHeaders ""
+        then toastError "You cannot remove yourself" mempty
         else do
           _ <- ProjectMembers.softDeleteProjectMembers (memberId :| [])
           Projects.logAuditS pid Projects.AEMemberRemoved sess
             $ Just
             $ AE.object ["removed_email" AE..= CI.original member.email]
           addSuccessToast "Member removed" Nothing
-          addRespHeaders ""
+          addRespHeaders mempty
 
 
 manageSubGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
@@ -1170,15 +1131,15 @@ manageSubGetH pid = do
           let returnUrl = envCfg.hostUrl <> "p/" <> pid.toText <> "/manage_billing"
           portalUrlM <- liftIO $ Settings.createStripePortalSession envCfg.stripeSecretKey customerId returnUrl
           case portalUrlM of
-            Just url -> redirectCS url >> addRespHeaders ""
-            Nothing -> addErrorToast "Failed to create billing portal" Nothing >> addRespHeaders ""
-        _ -> addErrorToast "Customer ID not found" Nothing >> addRespHeaders ""
+            Just url -> redirectCS url >> addRespHeaders mempty
+            Nothing -> toastError "Failed to create billing portal" mempty
+        _ -> toastError "Customer ID not found" mempty
     Projects.LemonSqueezyProvider -> do
       sub <- liftIO $ getSubscriptionPortalUrl project.subId envCfg.lemonSqueezyApiKey
       case sub of
-        Nothing -> addErrorToast "Subscription ID not found" Nothing >> addRespHeaders ""
-        Just s -> redirectCS s.dataVal.attributes.urls.customerPortal >> addRespHeaders ""
-    Projects.NoBillingProvider -> addErrorToast "No active subscription" Nothing >> addRespHeaders ""
+        Nothing -> toastError "Subscription ID not found" mempty
+        Just s -> redirectCS s.dataVal.attributes.urls.customerPortal >> addRespHeaders mempty
+    Projects.NoBillingProvider -> toastError "No active subscription" mempty
 
 
 newtype StripeCheckoutForm = StripeCheckoutForm {plan :: Text}
@@ -1206,8 +1167,8 @@ stripeCheckoutInitH pid form = do
         envCfg.stripePriceIdGraduatedOverage
         envCfg.stripePriceIdByos
   case urlM of
-    Just url -> redirectCS url >> addRespHeaders ""
-    Nothing -> addErrorToast "Failed to create checkout session" Nothing >> addRespHeaders ""
+    Just url -> redirectCS url >> addRespHeaders mempty
+    Nothing -> toastError "Failed to create checkout session" mempty
 
 
 getSubscriptionPortalUrl :: Maybe Text -> Text -> IO (Maybe SubPortalResponse)
@@ -1241,14 +1202,12 @@ newtype SubPortalDataVals = SubPortalDataVals {attributes :: SubPortalAttributes
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SubPortalDataVals
 
 
+-- | Lemon Squeezy responses come wrapped in @{"data": ...}@. The Haskell
+-- field is @dataVal@ (since @data@ is a keyword); 'Rename' maps it to the
+-- on-the-wire key without a manual instance.
 newtype SubPortalResponse = SubPortalResponse {dataVal :: SubPortalDataVals}
   deriving stock (Generic, Show)
-
-
-instance AE.FromJSON SubPortalResponse where
-  parseJSON = AE.withObject "SubPortalResponse" $ \obj -> do
-    dataVal <- obj AE..: "data"
-    return (SubPortalResponse{dataVal = dataVal})
+  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.Rename "dataVal" "data"]] SubPortalResponse
 
 
 --------------------------------------------------------------------------------
@@ -1348,7 +1307,7 @@ instance ToHtml CreateProject where
 
 projectSettingsGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders CreateProject)
 projectSettingsGetH pid = do
-  (sess, project) <- Projects.sessionAndProject pid
+  (sess, project, bw) <- mkPageCtx pid
   appCtx <- ask @AuthContext
   let createProj =
         CreateProjectForm
@@ -1363,14 +1322,7 @@ projectSettingsGetH pid = do
           , endpointAlerts = if project.endpointAlerts then Just "on" else Nothing
           }
 
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = Just project
-          , pageTitle = "Project"
-          , isSettingsPage = True
-          , config = appCtx.config
-          }
+  let bwconf = bw{pageTitle = "Project", isSettingsPage = True}
   addRespHeaders $ CreateProject $ PageCtx bwconf (sess.persistentSession, pid, appCtx.config, project.paymentPlan, True, createProj, def @CreateProjectFormError, project)
 
 
@@ -1420,12 +1372,7 @@ data SubDataVals = SubDataVals
 
 newtype SubResponse = SubResponse {dataVal :: [SubDataVals]}
   deriving stock (Generic, Show)
-
-
-instance AE.FromJSON SubResponse where
-  parseJSON = AE.withObject "SubResponse" $ \obj -> do
-    dataVal <- obj AE..: "data"
-    return (SubResponse{dataVal = dataVal})
+  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.Rename "dataVal" "data"]] SubResponse
 
 
 getSubscriptionId :: HTTP :> es => Maybe Text -> Text -> Eff es (Maybe SubResponse)
@@ -1508,11 +1455,11 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = do
   if project.paymentPlan == "ONBOARDING" || isOnboarding == Just True
     then do
       redirectCS $ "/p/" <> pid.toText <> "/"
-      addRespHeaders ""
+      addRespHeaders mempty
     else do
       addTriggerEvent "closeModal" ""
       addSuccessToast "Pricing updated successfully" Nothing
-      addRespHeaders ""
+      addRespHeaders mempty
 
 
 processProjectPostForm :: Valor.Valid CreateProjectForm -> Projects.ProjectId -> ATAuthCtx (RespHeaders CreateProject)

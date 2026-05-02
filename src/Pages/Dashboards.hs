@@ -1019,7 +1019,7 @@ getDashAndVM dashId fileM = do
 
 dashboardGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders (PageCtx DashboardGet))
 dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
-  (sess, project) <- Projects.sessionAndProject pid
+  (_, project, bw) <- mkPageCtx pid
   appCtx <- ask @AuthContext
   now <- Time.currentTime
   let (_fromD, _toD, currentRange) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
@@ -1046,19 +1046,16 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
       processedWidgets <- pooledForConcurrently dash'.widgets processWidgetWithDashboardId
       -- Populate alert statuses and PNG URLs for widgets
       widgetsWithAlerts <- populateWidgetAlertStatuses processedWidgets
-      widgetsWithPngUrls <- populateWidgetPngUrls appCtx.env.apiKeyEncryptionSecretKey appCtx.config.hostUrl pid timeParams widgetsWithAlerts
+      widgetsWithPngUrls <- populateWidgetPngUrls appCtx.env.apiKeyEncryptionSecretKey bw.config.hostUrl pid timeParams widgetsWithAlerts
       let dash'' = dash' & #widgets .~ widgetsWithPngUrls
 
       freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
 
       let bwconf =
-            (def :: BWConfig)
-              { sessM = Just sess
-              , currProject = Just project
-              , prePageTitle = Just "Dashboards"
+            bw
+              { prePageTitle = Just "Dashboards"
               , pageTitle = dashTitle dashVM.title
               , pageTitleModalId = Just "pageTitleModalId"
-              , config = appCtx.config
               , freeTierStatus = freeTierStatus
               , headContent = Just dashboardHeadContent_
               , pageActions = Just $ div_ [class_ "flex gap-3 max-md:gap-1 items-center"] do
@@ -1678,8 +1675,7 @@ activeFilters_ pid baseUrl filters = div_ [class_ "flex items-center gap-2 mb-4"
 
 dashboardsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UUID.UUID -> Maybe Text -> Maybe UUID.UUID -> Maybe Text -> DashboardFilters -> ATAuthCtx (RespHeaders DashboardsGet)
 dashboardsGetH pid sortM embeddedM teamIdM copyWidgetIdM sourceDashIdM newM filters = do
-  (sess, project) <- Projects.sessionAndProject pid
-  appCtx <- ask @AuthContext
+  (_, project, bw) <- mkPageCtx pid
 
   -- Sort and filter configuration
   let currentSort = fromMaybe "-updated_at" sortM
@@ -1706,19 +1702,16 @@ dashboardsGetH pid sortM embeddedM teamIdM copyWidgetIdM sourceDashIdM newM filt
       isTeamView = isJust teamIdM
       copyMode = (,) <$> copyWidgetIdM <*> (UUIDId <$> sourceDashIdM)
 
-  templates <- getDashboardTemplates appCtx.config.liveReloadDashboards
+  templates <- getDashboardTemplates bw.config.liveReloadDashboards
   if embedded || isTeamView
     then -- For embedded/team mode, use a minimal BWConfig that will still work with ToHtml instance
       addRespHeaders $ DashboardsGetSlim DashboardsGetD{dashboards, projectId = pid, embedded, hideActions = isTeamView, teams, tableActions = Nothing, filters, availableTags, copyMode, dashTemplates = templates, showNew = False}
     else do
       freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
       let bwconf =
-            (def :: BWConfig)
-              { sessM = Just sess
-              , currProject = Just project
-              , pageTitle = "Dashboards"
+            bw
+              { pageTitle = "Dashboards"
               , freeTierStatus = freeTierStatus
-              , config = appCtx.config
               , headContent = Just dashboardHeadContent_
               , pageActions = Just $ label_ [Lucid.for_ "newDashboardMdl", class_ "btn btn-sm btn-primary gap-2"] do
                   faSprite_ "plus" "regular" "h-4 w-4"
@@ -1768,9 +1761,7 @@ dashboardsPostH pid form = do
   did <- UUIDId <$> UUID.genUUID
   templates <- getDashboardTemplates appCtx.config.liveReloadDashboards
   if form.title == ""
-    then do
-      addErrorToast "Dashboard title is required" Nothing
-      addRespHeaders $ DashboardPostError "Dashboard title is required"
+    then toastError "Dashboard title is required" (DashboardPostError "Dashboard title is required")
     else do
       let dashM = find (\dashboard -> dashboard.file == Just form.file) templates
       let redirectURI = "/p/" <> pid.toText <> "/dashboards/" <> did.toText
@@ -1878,9 +1869,7 @@ dashboardRenamePatchH pid dashId form = do
   _ <- Projects.sessionAndProject pid
   mDashboard <- Dashboards.getDashboardById dashId
   case mDashboard of
-    Nothing -> do
-      addErrorToast "Dashboard not found or does not belong to this project" Nothing
-      addRespHeaders $ DashboardPostError "Dashboard not found or does not belong to this project"
+    Nothing -> toastError "Dashboard not found or does not belong to this project" (DashboardPostError "Dashboard not found or does not belong to this project")
     Just dashVM -> do
       _ <- Dashboards.updateTitle dashId form.title
 
@@ -1907,9 +1896,7 @@ dashboardDuplicatePostH pid dashId = do
   _ <- Projects.sessionAndProject pid
   mDashboard <- Dashboards.getDashboardById dashId
   case mDashboard of
-    Nothing -> do
-      addErrorToast "Dashboard not found or does not belong to this project" Nothing
-      addRespHeaders $ DashboardPostError "Dashboard not found or does not belong to this project"
+    Nothing -> toastError "Dashboard not found or does not belong to this project" (DashboardPostError "Dashboard not found or does not belong to this project")
     Just dashVM -> do
       sess <- Projects.getSession
       now <- Time.currentTime
@@ -2234,7 +2221,7 @@ mkWidgetProcessor pid dashId now timeParams paramsWithConstants =
 -- This renders the full page with the specified tab active
 dashboardTabGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders (PageCtx DashboardGet))
 dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = do
-  (sess, project) <- Projects.sessionAndProject pid
+  (_, project, bw) <- mkPageCtx pid
   appCtx <- ask @AuthContext
   now <- Time.currentTime
   let (_fromD, _toD, currentRange) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
@@ -2265,7 +2252,7 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = d
             -- Process widgets concurrently for faster initial page load
             processedWidgets <- pooledForConcurrently tab.widgets processWidgetWithDashboardId
             widgetsWithAlerts <- populateWidgetAlertStatuses processedWidgets
-            widgetsWithPngUrls <- populateWidgetPngUrls appCtx.env.apiKeyEncryptionSecretKey appCtx.config.hostUrl pid timeParams widgetsWithAlerts
+            widgetsWithPngUrls <- populateWidgetPngUrls appCtx.env.apiKeyEncryptionSecretKey bw.config.hostUrl pid timeParams widgetsWithAlerts
             pure $ tab & #widgets .~ widgetsWithPngUrls
           else pure tab -- Don't process widgets for inactive tabs
       pure $ dash' & #tabs ?~ processedTabs
@@ -2274,15 +2261,12 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = d
   freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
 
   let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = Just project
-          , prePageTitle = Just "Dashboards"
+        bw
+          { prePageTitle = Just "Dashboards"
           , pageTitle = dashTitle dashVM.title
           , pageTitleSuffix = activeTabName -- Show current tab in breadcrumbs
           , pageTitleModalId = Just "pageTitleModalId"
           , pageTitleSuffixModalId = Just "tabRenameModalId" -- Modal for renaming tab
-          , config = appCtx.config
           , freeTierStatus = freeTierStatus
           , headContent = Just dashboardHeadContent_
           , pageActions = Just $ div_ [class_ "flex gap-3 max-md:gap-1 items-center"] do

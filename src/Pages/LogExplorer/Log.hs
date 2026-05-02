@@ -43,7 +43,7 @@ import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Numeric (showFFloat)
-import Pages.BodyWrapper (BWConfig (..), PageCtx (..), currProject, navTabAttrs, pageActions, pageTitle, sessM)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs, pageActions, pageTitle)
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), logQueryBox_, queryEditorInitializationCode, queryLibrary_)
 import Pkg.Components.TimePicker qualified as Components
 import Pkg.Components.Widget (WidgetAxis (..), WidgetType (WTTimeseries, WTTimeseriesLine))
@@ -210,8 +210,8 @@ buildTraceTree colIdxMap queryResultCount rows = (adjustedRows, sortWith (Down .
           Just (s, d) ->
             let upd =
                   catMaybes
-                    [ (\j -> (j, AE.Number (fromIntegral s))) <$> stIdxM
-                    , (\j -> (j, AE.Number (fromIntegral d))) <$> durIdxM
+                    [ (,AE.Number (fromIntegral s)) <$> stIdxM
+                    , (,AE.Number (fromIntegral d)) <$> durIdxM
                     ]
              in if null upd then row else row V.// upd
 
@@ -658,7 +658,7 @@ queryEvents pid queryM sinceM fromM toM sourceM limitM = do
 
 apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
 apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM queryLibItemTitle queryLibItemID detailWM targetEventM showTraceM hxRequestM hxBoostedM jsonM vizTypeM alertM skipM pTargetM sortByM = do
-  (sess, project) <- Projects.sessionAndProject pid
+  (sess, project, bw) <- mkPageCtx pid
   let source = fromMaybe "spans" sourceM
   let summaryCols = T.splitOn "," (fromMaybe "" cols')
   let queryInput = maybeToMonoid queryM'
@@ -792,13 +792,10 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
             script_ [text|window.logDataPromise = fetch("$preloadUrl", {headers: {Accept: "application/json"}, credentials: "include"}).then(r => r.json());|]
 
       let bwconf =
-            (def :: BWConfig)
-              { sessM = Just sess
-              , currProject = Just project
-              , pageTitle = "Explorer"
+            bw
+              { pageTitle = "Explorer"
               , docsLink = Just "https://monoscope.tech/docs/dashboard/dashboard-pages/api-log-explorer/"
               , freeTierStatus = freeTierStatus
-              , config = authCtx.config
               , headContent = headContent
               , pageActions = Just $ div_ [class_ "flex gap-2 max-md:gap-1 items-center"] do
                   label_ [class_ "cursor-pointer border border-strokeWeak rounded-lg flex shadow-xs", role_ "switch", Aria.label_ "Stream live data", [__|on change from #streamLiveData if #streamLiveData.checked set @aria-checked to 'true' else set @aria-checked to 'false'|], term "aria-checked" "false"] do

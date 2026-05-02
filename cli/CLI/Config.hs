@@ -65,9 +65,9 @@ resolveConfig :: (FileSystem :> es, Environment :> es, IOE :> es) => Eff es CLIC
 resolveConfig = do
   global <- loadGlobalConfig
   projCfg <- loadLocalConfig
-  envApiUrl <- Env.lookupEnv "MONO_API_URL"
-  envApiKey <- Env.lookupEnv "MONO_API_KEY"
-  envProject <- Env.lookupEnv "MONO_PROJECT"
+  envApiUrl <- Env.lookupEnv "MONOSCOPE_API_URL"
+  envApiKey <- Env.lookupEnv "MONOSCOPE_API_KEY"
+  envProject <- Env.lookupEnv "MONOSCOPE_PROJECT"
   storedKey <- loadToken
   let merged = mergeConfigs [global, projCfg]
   pure
@@ -98,7 +98,7 @@ loadYaml :: (FileSystem :> es, IOE :> es) => FilePath -> Eff es FileConfig
 loadYaml path = do
   exists <- doesFileExist path
   if exists
-    then liftIO $ either (const emptyConfig) id <$> Yaml.decodeFileEither path
+    then liftIO $ fromRight emptyConfig <$> Yaml.decodeFileEither path
     else pure emptyConfig
 
 emptyConfig :: FileConfig

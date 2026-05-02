@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO="monoscope-tech/monoscope"
-INSTALL_DIR="${MONO_INSTALL_DIR:-$HOME/.local/bin}"
+INSTALL_DIR="${MONOSCOPE_INSTALL_DIR:-$HOME/.local/bin}"
 BINARY="monoscope"
 
 info()    { printf '\033[1;34m%s\033[0m\n' "$*"; }

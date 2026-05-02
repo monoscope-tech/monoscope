@@ -8,19 +8,17 @@ import Data.Time.LocalTime (ZonedTime, zonedTimeToUTC)
 import Data.Vector qualified as V
 import Effectful.Concurrent.Async (concurrently)
 import Effectful.Error.Static (throwError)
-import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Log (logAttention)
 import Lucid
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
-import Pages.BodyWrapper (BWConfig (..), PageCtx (..), navTabAttrs)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Components (compactTimeAgo, periodToggle_, sparkline_)
 import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features (..), Pagination (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableRows (..), ZeroState (..), col, withAttrs, withColHeaderExtra)
 import PyF qualified
 import Relude hiding (ask, asks)
 import Servant (err400, errBody)
-import System.Config (AuthContext (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
 import Text.Time.Pretty (prettyTimeAuto)
 import Utils (checkFreeTierStatus, faSprite_, formatWithCommas, toUriStr)
@@ -29,8 +27,7 @@ import Web.FormUrlEncoded (FromForm)
 
 apiCatalogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> ATAuthCtx (RespHeaders CatalogList)
 apiCatalogH pid sortM timeFilter currentTabM periodM skipM filterTabM = do
-  (sess, project) <- Projects.sessionAndProject pid
-  appCtx <- ask @AuthContext
+  (_, project, bw) <- mkPageCtx pid
 
   -- Legacy request_type=… kept alongside the unified ?filter=… for shared links.
   let normTab t = if t `elem` ["Incoming", "Outgoing", "Archived"] then Just t else Nothing
@@ -106,10 +103,8 @@ apiCatalogH pid sortM timeFilter currentTabM periodM skipM filterTabM = do
           }
 
   let bwconf =
-        def
-          { sessM = Just sess
-          , currProject = Just project
-          , pageTitle = "API Catalog"
+        bw
+          { pageTitle = "API Catalog"
           , freeTierStatus = freeTierStatus
           , navTabs =
               Just
@@ -208,8 +203,7 @@ endpointListGetH
   -> Maybe Text
   -> ATAuthCtx (RespHeaders EndpointRequestStatsVM)
 endpointListGetH pid pageM perPageM layoutM filterTM hostM currentTabM sortM periodM hxRequestM hxBoostedM hxCurrentURL loadMoreM searchM = do
-  (sess, project) <- Projects.sessionAndProject pid
-  appCtx <- ask @AuthContext
+  (_, project, bw) <- mkPageCtx pid
   let (archived, currentFilterTab) = case filterTM of
         Just "Archived" -> (True, "Archived")
         _ -> (False, "Endpoints")
@@ -237,13 +231,10 @@ endpointListGetH pid pageM perPageM layoutM filterTM hostM currentTabM sortM per
   let currentTab = fromMaybe "Incoming" currentTabM
       baseUrl = [PyF.fmt|/p/{pid.toText}/endpoints?filter={currentFilterTab}&request_type={currentTab}&host={host}&sort={currentSort}&period={period}|]
   let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = Just project
-          , prePageTitle = Just "API Catalog"
+        bw
+          { prePageTitle = Just "API Catalog"
           , pageTitle = "Endpoints for " <> host
           , freeTierStatus = freeTierStatus
-          , config = appCtx.env
           , navTabs =
               Just
                 $ toHtml

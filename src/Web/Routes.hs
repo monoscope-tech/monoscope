@@ -186,6 +186,14 @@ data ApiV1Routes mode = ApiV1Routes
           :> QPT "source"
           :> Get '[JSON] Charts.MetricsData
   , schemaGet :: mode :- "schema" :> Get '[JSON] Schema.Schema
+  , facetsGet
+      :: mode
+        :- "facets"
+          :> QPT "since"
+          :> QPT "from"
+          :> QPT "to"
+          :> QPT "field"
+          :> Get '[JSON] AE.Value
   , rrwebPost :: mode :- "rrweb" :> ReqBody '[JSON] Replay.ReplayPost :> Post '[JSON] AE.Value
   , -- Monitors (CRUD + lifecycle)
     monitorsList :: mode :- "monitors" :> Get '[JSON] [Monitors.QueryMonitor]
@@ -604,6 +612,7 @@ apiV1Server pid =
     , metricsQuery = \queryM dataTypeM sinceM fromM toM sourceM ->
         Charts.queryMetrics Nothing dataTypeM (Just pid) queryM Nothing sinceM fromM toM sourceM []
     , schemaGet = pure Schema.telemetrySchema
+    , facetsGet = ApiH.apiFacets pid
     , rrwebPost = Replay.replayPostH pid
     , -- Monitors
       monitorsList = ApiH.apiMonitorsList pid

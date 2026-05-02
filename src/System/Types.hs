@@ -10,6 +10,7 @@ module System.Types (
   addToast,
   addSuccessToast,
   addErrorToast,
+  toastError,
   addWidgetJSON,
   addReswap,
   HXRedirectDest,
@@ -284,6 +285,14 @@ addErrorToast :: (IOE :> es, Log :> es, State.State TriggerEvents :> es) => Text
 addErrorToast msg msg2 = do
   Logging.logAttention_ $ "ERROR: " <> msg <> " => " <> maybeToMonoid msg2
   addToast "error" msg msg2
+
+
+-- | Toast an error and short-circuit with the given response payload.
+-- Collapses the recurrent `addErrorToast msg Nothing >> addRespHeaders payload` pattern.
+toastError
+  :: (IOE :> es, Log :> es, State.State HXRedirectDest :> es, State.State TriggerEvents :> es, State.State XWidgetJSON :> es)
+  => Text -> a -> Eff es (RespHeaders a)
+toastError msg payload = addErrorToast msg Nothing *> addRespHeaders payload
 
 
 -- Add widget JSON for inclusion in response headers

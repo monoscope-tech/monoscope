@@ -242,7 +242,7 @@ spec = aroundAll withTestResources do
 
       -- Acknowledge existing issues so ON CONFLICT doesn't deduplicate the new spike issue
       (issues, _) <- runTestBg frozenTime tr $ Issues.selectIssues pid Nothing (Just False) Nothing 100 0 Nothing Nothing "24h" [] []
-      forM_ issues \issue -> runTestBg frozenTime tr $ Issues.acknowledgeIssue issue.id sess.user.id
+      forM_ issues \issue -> runTestBg frozenTime tr $ Issues.acknowledgeIssue issue.base.id sess.user.id
 
       -- Find an established pattern with stddev > 0
       errRates' <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternsWithCurrentRates pid frozenTime
@@ -307,7 +307,7 @@ spec = aroundAll withTestResources do
           -- Acknowledge existing RuntimeException issues to avoid ON CONFLICT dedup
           let sess = Servant.getResponse tr.trSessAndHeader
           (issues, _) <- runTestBg frozenTime tr $ Issues.selectIssues pid Nothing (Just False) Nothing 100 0 Nothing Nothing "24h" [] []
-          forM_ issues \issue -> runTestBg frozenTime tr $ Issues.acknowledgeIssue issue.id sess.user.id
+          forM_ issues \issue -> runTestBg frozenTime tr $ Issues.acknowledgeIssue issue.base.id sess.user.id
 
           -- Insert a massive spike (200, well above mean=100 + minAbsoluteDelta=50)
           let spikeTime = addUTCTime 7200 frozenTime
@@ -348,7 +348,7 @@ spec = aroundAll withTestResources do
           -- Acknowledge existing issues to avoid ON CONFLICT dedup
           let sess = Servant.getResponse tr.trSessAndHeader
           (issues, _) <- runTestBg frozenTime tr $ Issues.selectIssues pid Nothing (Just False) Nothing 100 0 Nothing Nothing "24h" [] []
-          forM_ issues \issue -> runTestBg frozenTime tr $ Issues.acknowledgeIssue issue.id sess.user.id
+          forM_ issues \issue -> runTestBg frozenTime tr $ Issues.acknowledgeIssue issue.base.id sess.user.id
 
           issuesBefore <- countIssues tr Issues.RuntimeException
           runTestBg spikeTime tr $ BackgroundJobs.detectErrorSpikes pid
@@ -379,7 +379,7 @@ spec = aroundAll withTestResources do
           -- Acknowledge existing issues to avoid ON CONFLICT dedup
           let sess = Servant.getResponse tr.trSessAndHeader
           (issues, _) <- runTestBg frozenTime tr $ Issues.selectIssues pid Nothing (Just False) Nothing 100 0 Nothing Nothing "24h" [] []
-          forM_ issues \issue -> runTestBg frozenTime tr $ Issues.acknowledgeIssue issue.id sess.user.id
+          forM_ issues \issue -> runTestBg frozenTime tr $ Issues.acknowledgeIssue issue.base.id sess.user.id
           -- Spike both patterns in the same hour bucket
           let concurrentTime = addUTCTime 14400 frozenTime
           forM_ [r1, r2] \r -> do
@@ -758,13 +758,14 @@ spec = aroundAll withTestResources do
         (PGS.Only canonId : PGS.Only childId : _) -> do
           void $ runTestBg frozenTime tr $ PatternMerge.assignErrorsToCanonical [(childId, canonId)]
 
-          -- Verify the similar TypeError got merged
-          mergedTypeErrors <- withResource tr.trPool \conn ->
+          -- Verify the specific child got assigned to the specific canonical.
+          -- Earlier tests may have merged unrelated TypeErrors, so assert on
+          -- the (childId, canonId) edge directly rather than a global count.
+          childCanonId <- withResource tr.trPool \conn ->
             PGS.query conn
-              [sql| SELECT id FROM apis.error_patterns
-                    WHERE project_id = ? AND error_type = 'TypeError' AND canonical_id IS NOT NULL |]
-              (PGS.Only pid) :: IO [PGS.Only ErrorPatterns.ErrorPatternId]
-          length mergedTypeErrors `shouldBe` 1
+              [sql| SELECT canonical_id FROM apis.error_patterns WHERE id = ? |]
+              (PGS.Only childId) :: IO [PGS.Only (Maybe ErrorPatterns.ErrorPatternId)]
+          childCanonId `shouldBe` [PGS.Only (Just canonId)]
 
           -- Verify ConnectionRefusedError remains separate
           connPatternsAfter <- withResource tr.trPool \conn ->

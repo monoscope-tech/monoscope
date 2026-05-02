@@ -45,7 +45,7 @@ import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
-import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx)
 import Pages.Components
 import Pkg.DeriveUtils (hashAssetFile)
 import Relude hiding (ask)
@@ -59,13 +59,9 @@ import Web.FormUrlEncoded
 -- 'Info', 'Survey', 'CreateMonitor','NotifChannel','Integration', 'Pricing', 'Complete'
 onboardingGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders OnboardingGet)
 onboardingGetH pid onboardingStepM = do
-  (sess, project) <- Projects.sessionAndProject pid
+  (sess, project, bw) <- mkPageCtx pid
   appCtx <- ask @AuthContext
-  let bodyConfig =
-        (def :: BWConfig)
-          { currProject = Nothing
-          , config = appCtx.config
-          }
+  let bodyConfig = bw{currProject = Nothing}
       questions = fromMaybe (AE.Object []) project.questions
       onboardingStep = fromMaybe "Info" onboardingStepM
   stepData <- case onboardingStep of

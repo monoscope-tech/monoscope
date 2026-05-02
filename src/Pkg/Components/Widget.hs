@@ -541,25 +541,38 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
               "Delete widget"
 
 
+-- | Shared card-shell for renderLogsWidget / renderTraceTable / renderTable:
+-- outer flex-col wrapper, optional widget header, flex-1 fill, surface-raised
+-- card with @id="<wid>_bordered"@.  When @flexCol@ is True the inner card adds
+-- @flex flex-col@. Pass @extraAction@ to attach an action button to the header.
+withCardFrame :: Bool -> Widget -> Maybe (Text, Text) -> Html () -> Html ()
+withCardFrame flexCol widget extraAction body = do
+  let wId = maybeToMonoid widget.id
+      naked = widget.naked == Just True
+      innerCls = "h-full w-full " <> (if flexCol then "flex flex-col " else "") <> if naked then "" else "surface-raised rounded-2xl"
+  div_ [class_ "gap-0.5 flex flex-col h-full"] do
+    unless naked
+      $ renderWidgetHeader widget wId widget.title Nothing Nothing Nothing extraAction (widget.hideSubtitle == Just True)
+    div_ [class_ "flex-1 flex min-h-0"]
+      $ div_ [class_ innerCls, id_ $ wId <> "_bordered"] body
+
+
 renderLogsWidget :: Widget -> Html ()
 renderLogsWidget widget = do
   let wId = maybeToMonoid widget.id
       pid = maybe "" (.toText) widget._projectId
       queryParam = maybe "" (\q -> "&query=" <> decodeUtf8 (urlEncode True (encodeUtf8 q))) widget.query
       fetchUrl = "/p/" <> pid <> "/log_explorer?json=true&layout=1" <> queryParam
-  div_ [class_ "gap-0.5 flex flex-col h-full"] do
-    unless (widget.naked == Just True)
-      $ renderWidgetHeader widget wId widget.title Nothing Nothing Nothing (Just ("Open in Explorer", "/p/" <> pid <> "/log_explorer" <> maybe "" ("?query=" <>) widget.query)) (widget.hideSubtitle == Just True)
-    div_ [class_ "flex-1 flex min-h-0"] do
-      div_ [class_ $ "h-full w-full " <> if widget.naked == Just True then "" else "surface-raised rounded-2xl", id_ $ wId <> "_bordered"] do
-        termRaw
-          "log-list"
-          [ id_ wId
-          , class_ "w-full flex flex-col h-full min-w-0"
-          , term "projectId" pid
-          , term "initialFetchUrl" fetchUrl
-          ]
-          ("" :: Text)
+      action = Just ("Open in Explorer", "/p/" <> pid <> "/log_explorer" <> maybe "" ("?query=" <>) widget.query)
+  withCardFrame False widget action
+    $ termRaw
+      "log-list"
+      [ id_ wId
+      , class_ "w-full flex flex-col h-full min-w-0"
+      , term "projectId" pid
+      , term "initialFetchUrl" fetchUrl
+      ]
+      ("" :: Text)
 
 
 renderTraceTable :: Widget -> Html ()
@@ -567,57 +580,38 @@ renderTraceTable widget = do
   let tableId = maybeToMonoid widget.id
   let eagerWidget = widget & #eager ?~ True & #pngUrl .~ Nothing & #html .~ Nothing & #dataset .~ Nothing
   let widgetJson = fromLazy $ AE.encode eagerWidget
-  div_ [class_ "gap-0.5 flex flex-col h-full"] do
-    -- Widget header outside the card
-    unless (widget.naked == Just True)
-      $ renderWidgetHeader widget tableId widget.title Nothing Nothing Nothing Nothing (widget.hideSubtitle == Just True)
-    -- Card container that takes remaining space
-    div_ [class_ "flex-1 flex min-h-0"] do
-      div_
-        [ class_
-            $ "h-full w-full flex flex-col "
-            <> if widget.naked == Just True then "" else "surface-raised rounded-2xl"
-        , id_ $ tableId <> "_bordered"
-        ]
-        do
-          -- Single scrollable table container
-          div_
-            [ class_ "h-full overflow-auto p-3"
-            , hxGet_ $ "/p/" <> maybe "" (.toText) widget._projectId <> "/widget?widgetJSON=" <> decodeUtf8 (urlEncode True widgetJson)
-            , hxTrigger_ "load, update-query from:window"
-            , hxTarget_ $ "#" <> tableId
-            , hxSelect_ $ "#" <> tableId
-            , hxSwap_ "outerHTML"
-            , hxExt_ "forward-page-params"
-            ]
-            do
-              case widget.html of
-                Just html -> toHtmlRaw html -- Use pre-rendered HTML if available
-                Nothing -> do
-                  table_
-                    [ class_ "table table-zebra table-sm w-full relative"
-                    , id_ tableId
-                    ]
-                    do
-                      -- Table header
-                      thead_ [class_ "sticky top-0 z-10 before:content-[''] before:absolute before:left-0 before:right-0 before:bottom-0 before:h-px before:bg-strokeWeak"] do
-                        tr_ [] do
-                          ifor_ (["Resource", "Span name", "Duration", "Latency breakdown"] :: [Text]) \idx col ->
-                            th_
-                              [ class_ "text-left bg-bgRaised sticky top-0 cursor-pointer hover:bg-fillWeak transition-colors group "
-                              , onclick_ $ "window.sortTable('" <> tableId <> "', " <> show (idx :: Int) <> ", this)"
-                              , data_ "sort-direction" "none"
-                              ]
-                              do
-                                div_ [class_ "flex items-center justify-between"] do
-                                  toHtml col
-                                  span_ [class_ "sort-arrow ml-1 text-iconNeutral opacity-0 group-hover:opacity-100", data_ "sort" "none"] "↕"
-                      -- Table body with loading indicator
-                      tbody_ []
-                        $ tr_ []
-                        $ td_ [colspan_ "100", class_ "text-center py-8"]
-                        $ loadingIndicator_ LdSM LdSpinner
-      script_ [type_ "text/javascript"] """htmx.process(".widget-target")"""
+  withCardFrame True widget Nothing do
+    div_
+      [ class_ "h-full overflow-auto p-3"
+      , hxGet_ $ "/p/" <> maybe "" (.toText) widget._projectId <> "/widget?widgetJSON=" <> decodeUtf8 (urlEncode True widgetJson)
+      , hxTrigger_ "load, update-query from:window"
+      , hxTarget_ $ "#" <> tableId
+      , hxSelect_ $ "#" <> tableId
+      , hxSwap_ "outerHTML"
+      , hxExt_ "forward-page-params"
+      ]
+      do
+        case widget.html of
+          Just html -> toHtmlRaw html
+          Nothing ->
+            table_ [class_ "table table-zebra table-sm w-full relative", id_ tableId] do
+              thead_ [class_ "sticky top-0 z-10 before:content-[''] before:absolute before:left-0 before:right-0 before:bottom-0 before:h-px before:bg-strokeWeak"] do
+                tr_ [] do
+                  ifor_ (["Resource", "Span name", "Duration", "Latency breakdown"] :: [Text]) \idx col ->
+                    th_
+                      [ class_ "text-left bg-bgRaised sticky top-0 cursor-pointer hover:bg-fillWeak transition-colors group "
+                      , onclick_ $ "window.sortTable('" <> tableId <> "', " <> show (idx :: Int) <> ", this)"
+                      , data_ "sort-direction" "none"
+                      ]
+                      do
+                        div_ [class_ "flex items-center justify-between"] do
+                          toHtml col
+                          span_ [class_ "sort-arrow ml-1 text-iconNeutral opacity-0 group-hover:opacity-100", data_ "sort" "none"] "↕"
+              tbody_ []
+                $ tr_ []
+                $ td_ [colspan_ "100", class_ "text-center py-8"]
+                $ loadingIndicator_ LdSM LdSpinner
+    script_ [type_ "text/javascript"] """htmx.process(".widget-target")"""
 
 
 -- Table widget rendering
@@ -625,62 +619,41 @@ renderTraceTable widget = do
 renderTable :: Widget -> Html ()
 renderTable widget = do
   let tableId = maybeToMonoid widget.id
-  -- Make table widget eager by default so it fetches data server-side
-  let eagerWidget = widget & #eager ?~ True & #pngUrl .~ Nothing & #html .~ Nothing & #dataset .~ Nothing
-  let widgetJson = encodeText eagerWidget
-  div_ [class_ "gap-0.5 flex flex-col h-full"] do
-    -- Widget header outside the card
-    unless (widget.naked == Just True)
-      $ renderWidgetHeader widget tableId widget.title Nothing Nothing Nothing Nothing (widget.hideSubtitle == Just True)
-    -- Card container that takes remaining space
-    div_ [class_ "flex-1 flex min-h-0"] do
-      div_
-        [ class_
-            $ "h-full w-full flex flex-col "
-            <> if widget.naked == Just True then "" else "surface-raised rounded-2xl"
-        , id_ $ tableId <> "_bordered"
-        ]
-        do
-          -- Single scrollable table container
-          div_
-            [ class_ "h-full overflow-auto p-3"
-            , hxGet_ $ "/p/" <> maybe "" (.toText) widget._projectId <> "/widget?widgetJSON=" <> widgetJson
-            , hxTrigger_ "load, update-query from:window"
-            , hxTarget_ $ "#" <> tableId
-            , hxSelect_ $ "#" <> tableId
-            , hxSwap_ "outerHTML"
-            , hxExt_ "forward-page-params"
-            ]
-            do
-              case widget.html of
-                Just html -> toHtmlRaw html -- Use pre-rendered HTML if available
-                Nothing -> do
-                  -- Otherwise render table structure with HTMX for updates
-                  table_
-                    ( [ class_ "table table-zebra table-sm w-full relative"
-                      , id_ tableId
-                      ]
-                        <> rowClickTableAttrs widget
-                    )
-                    do
-                      -- Table header
-                      thead_ [class_ "sticky top-0 z-10 before:content-[''] before:absolute before:left-0 before:right-0 before:bottom-0 before:h-px before:bg-strokeWeak"] do
-                        tr_ [] do
-                          ifor_ (fromMaybe [] widget.columns) \idx col ->
-                            th_
-                              [ class_ $ "text-left bg-bgRaised sticky top-0 cursor-pointer hover:bg-fillWeak transition-colors group " <> fromMaybe "" col.align
-                              , onclick_ $ "window.sortTable('" <> tableId <> "', " <> show (idx :: Int) <> ", this)"
-                              , data_ "sort-direction" "none"
-                              ]
-                              do
-                                div_ [class_ "flex items-center justify-between"] do
-                                  toHtml col.title
-                                  span_ [class_ "sort-arrow ml-1 text-iconNeutral opacity-0 group-hover:opacity-100", data_ "sort" "none"] "↕"
-                      -- Table body with loading indicator
-                      tbody_ []
-                        $ tr_ []
-                        $ td_ [colspan_ "100", class_ "text-center py-8"]
-                        $ loadingIndicator_ LdSM LdSpinner
+      eagerWidget = widget & #eager ?~ True & #pngUrl .~ Nothing & #html .~ Nothing & #dataset .~ Nothing
+      widgetJson = encodeText eagerWidget
+  withCardFrame True widget Nothing
+    $ div_
+      [ class_ "h-full overflow-auto p-3"
+      , hxGet_ $ "/p/" <> maybe "" (.toText) widget._projectId <> "/widget?widgetJSON=" <> widgetJson
+      , hxTrigger_ "load, update-query from:window"
+      , hxTarget_ $ "#" <> tableId
+      , hxSelect_ $ "#" <> tableId
+      , hxSwap_ "outerHTML"
+      , hxExt_ "forward-page-params"
+      ]
+      do
+        case widget.html of
+          Just html -> toHtmlRaw html
+          Nothing ->
+            table_
+              ([class_ "table table-zebra table-sm w-full relative", id_ tableId] <> rowClickTableAttrs widget)
+              do
+                thead_ [class_ "sticky top-0 z-10 before:content-[''] before:absolute before:left-0 before:right-0 before:bottom-0 before:h-px before:bg-strokeWeak"] do
+                  tr_ [] do
+                    ifor_ (fromMaybe [] widget.columns) \idx col ->
+                      th_
+                        [ class_ $ "text-left bg-bgRaised sticky top-0 cursor-pointer hover:bg-fillWeak transition-colors group " <> fromMaybe "" col.align
+                        , onclick_ $ "window.sortTable('" <> tableId <> "', " <> show (idx :: Int) <> ", this)"
+                        , data_ "sort-direction" "none"
+                        ]
+                        do
+                          div_ [class_ "flex items-center justify-between"] do
+                            toHtml col.title
+                            span_ [class_ "sort-arrow ml-1 text-iconNeutral opacity-0 group-hover:opacity-100", data_ "sort" "none"] "↕"
+                tbody_ []
+                  $ tr_ []
+                  $ td_ [colspan_ "100", class_ "text-center py-8"]
+                  $ loadingIndicator_ LdSM LdSpinner
 
 
 -- | Render stat widget content with HTMX lazy loading support

@@ -80,7 +80,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import Models.Telemetry.Telemetry qualified as Telemetry
 import OddJobs.Job (createJob)
-import Pages.BodyWrapper (BWConfig (..), PageCtx (..), navTabAttrs)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (colorChip_, compactTimeAgo, emptyState_, metadataChip_, periodToggle_, resizer_, sparkline_)
 import Pages.LogExplorer.Log (virtualTable)
@@ -202,11 +202,10 @@ anomalyDetailHashGetH pid issueId firstM sinceM = anomalyDetailCore pid firstM s
 
 anomalyDetailCore :: Projects.ProjectId -> Maybe Text -> Maybe Text -> (Projects.ProjectId -> ATAuthCtx (Maybe Issues.Issue)) -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
 anomalyDetailCore pid firstM sinceM fetchIssue = do
-  (sess, project) <- Projects.sessionAndProject pid
-  appCtx <- ask @AuthContext
+  (sess, project, bw) <- mkPageCtx pid
   issueM <- fetchIssue pid
   now <- Time.currentTime
-  let baseBwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle = "Issues", menuItem = Just "Issues", config = appCtx.config}
+  let baseBwconf = bw{pageTitle = "Issues", menuItem = Just "Issues"}
   case issueM of
     Nothing -> do
       addErrorToast "Issue not found" Nothing
@@ -357,7 +356,7 @@ extractBreadcrumbs spans =
           <> concatMap breadcrumbsFromSpanEvents recs
           <> concatMap (breadcrumbsFromTraceLogs errorSpanId) recs
       dedupKey bc = (bc.timestamp, bc.kind, T.take 80 $ fromMaybe "" bc.message)
-      deduped = map NE.head $ NE.groupBy ((==) `on` dedupKey) $ sortOn dedupKey raw
+      deduped = map head $ NE.groupBy ((==) `on` dedupKey) $ sortOn dedupKey raw
    in nonEmpty deduped
 
 
@@ -406,10 +405,12 @@ userJourneySection_ spans = whenJust (extractBreadcrumbs spans) \crumbs -> do
             div_ [class_ "flex items-center gap-2 flex-wrap"] do
               span_ [class_ "text-xs tabular-nums text-textWeak shrink-0"] $ toHtml timeLabel
               span_ [class_ $ "text-xs font-medium " <> iconColor] $ toHtml bc.kind
-            whenJust bc.message \msg ->
-              span_ [class_ "text-sm text-textStrong line-clamp-3 break-words"] $ toHtml msg
-            whenJust (bc.payload >>= breadcrumbDataSummary) \summary ->
-              span_ [class_ "font-mono text-xs text-textWeak line-clamp-2 break-all"] $ toHtml summary
+            whenJust bc.message
+              $ span_ [class_ "text-sm text-textStrong line-clamp-3 break-words"]
+              . toHtml
+            whenJust (bc.payload >>= breadcrumbDataSummary)
+              $ span_ [class_ "font-mono text-xs text-textWeak line-clamp-2 break-all"]
+              . toHtml
   div_ [class_ "border-t border-strokeWeak"] do
     div_ [class_ "px-4 py-2 flex items-center gap-2 bg-fillWeaker/40"] do
       faSprite_ "route" "regular" "w-3 h-3 text-textWeak"
@@ -681,7 +682,7 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
             (div_ [class_ "border border-r border-l w-max mx-auto"] $ termRaw "session-replay" [id_ "sessionReplay", term "initialSession" $ V.head withSessionIds, class_ "shrink-1 flex flex-col", term "projectId" pid.toText, term "containerId" "sessionPlayerWrapper"] ("" :: Text))
             (not $ V.null withSessionIds)
 
-      when (issue.issueType `notElem` [Issues.RuntimeException, Issues.ApiChange]) $ activityPanel_ pid issueId "" V.empty
+      unless (issue.issueType `elem` [Issues.RuntimeException, Issues.ApiChange]) $ activityPanel_ pid issueId "" V.empty
 
     -- RIGHT: Inline collapsible AI chat panel (checkbox + group-has CSS, persists to localStorage)
     input_ [type_ "checkbox", id_ "ai-panel-toggle", class_ "hidden", onchange_ "localStorage.setItem('ai-panel-open', this.checked); if(this.checked) htmx.trigger('#ai-response-container','load-chat')"]
@@ -1293,8 +1294,7 @@ anomalyListGetH
   -> Maybe Text
   -> ATAuthCtx (RespHeaders AnomalyListGet)
 anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpointM periodM serviceFilters typeFilters hxRequestM hxBoostedM = do
-  (sess, project) <- Projects.sessionAndProject pid
-  appCtx <- ask @AuthContext
+  (_, project, bw) <- mkPageCtx pid
   let (ackd, archived, currentFilterTab) = case filterTM of
         Just "Inbox" -> (Just False, Just False, "Inbox")
         Just "Acknowledged" -> (Just True, Nothing, "Acknowledged")
@@ -1383,13 +1383,10 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
                 }
           }
   let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = Just project
-          , pageTitle = "Issues"
+        bw
+          { pageTitle = "Issues"
           , menuItem = Just "Issues"
           , freeTierStatus = freeTierStatus
-          , config = appCtx.config
           , headContent = Just highlightJsHead_
           , navTabs =
               Just
