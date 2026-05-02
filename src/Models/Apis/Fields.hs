@@ -29,8 +29,8 @@ where
 
 import Control.Exception.Annotated (checkpoint)
 import Data.Aeson qualified as AE
-import Data.Char (toLower)
 import Data.Annotation (toAnnotation)
+import Data.Char (toLower)
 import Data.Default
 import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.Hasql qualified as Hasql
