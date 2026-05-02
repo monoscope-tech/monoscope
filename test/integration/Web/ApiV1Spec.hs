@@ -25,7 +25,12 @@ import Test.Hspec
 import Web.ApiHandlers qualified as ApiH
 import Web.ApiTypes qualified as ApiT
 import Web.Auth (resolveApiKeyProject)
-import Web.Routes (apiV1OpenApiSpec)
+import Web.MCP qualified as MCP
+import Web.Routes (apiV1OpenApiSpec, apiV1Server)
+
+import Servant qualified
+import Servant.Server.Generic (genericServeTWithContext)
+import System.Types (effToServantHandlerTest)
 
 
 specJson :: AE.Value
@@ -420,6 +425,90 @@ spec = aroundAll withTestResources do
       it "add without email or user_id is rejected" $ \tr -> do
         (runAsBase tr (ApiH.apiMemberAdd testPid ApiT.MemberAdd{ApiT.email = Nothing, ApiT.userId = Nothing, ApiT.permission = Nothing})
           >>= evaluateWHNF_) `shouldThrow` anyException
+
+    describe "MCP" do
+      let reg = MCP.mkToolsFromOpenApi apiV1OpenApiSpec
+          dummyApp _ = error "dummyApp invoked unexpectedly"
+          buildTestApp tr pid =
+            genericServeTWithContext
+              (effToServantHandlerTest tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
+              (apiV1Server tr.trLogger tr.trATCtx tr.trTracerProvider pid)
+              Servant.EmptyContext
+          rpcCall body =
+            AE.object
+              [ "jsonrpc" AE..= ("2.0" :: Text)
+              , "id" AE..= (1 :: Int)
+              , "method" AE..= ("tools/call" :: Text)
+              , "params" AE..= body
+              ]
+
+      it "registry contains canary tools derived from path+method" $ \_tr -> do
+        Map.member "monoscope_events_get" reg `shouldBe` True
+        Map.member "monoscope_monitors_monitor_id_get" reg `shouldBe` True
+        Map.member "monoscope_dashboards_apply_post" reg `shouldBe` True
+        Map.member "monoscope_schema_get" reg `shouldBe` True
+        Map.member "monoscope_me_get" reg `shouldBe` True
+
+      it "tools/list returns named tools with name/description/inputSchema" $ \tr -> do
+        let req =
+              AE.object
+                [ "jsonrpc" AE..= ("2.0" :: Text)
+                , "id" AE..= (1 :: Int)
+                , "method" AE..= ("tools/list" :: Text)
+                ]
+        resp <- runAsBase tr (MCP.handleJsonRpc reg dummyApp testPid req)
+        let tools = resp ^? key "result" . key "tools" . _Array
+        tools `shouldSatisfy` \case
+          Just arr -> not (null arr)
+          Nothing -> False
+        let firstTool = resp ^? key "result" . key "tools" . _Array . traverse
+        case firstTool of
+          Just _ -> do
+            (resp ^? key "result" . key "tools" . _Array . traverse . key "name") `shouldSatisfy` isJust
+            (resp ^? key "result" . key "tools" . _Array . traverse . key "description") `shouldSatisfy` isJust
+            (resp ^? key "result" . key "tools" . _Array . traverse . key "inputSchema") `shouldSatisfy` isJust
+          Nothing -> expectationFailure "expected at least one tool"
+
+      it "initialize returns protocolVersion + serverInfo" $ \tr -> do
+        let req =
+              AE.object
+                [ "jsonrpc" AE..= ("2.0" :: Text)
+                , "id" AE..= (1 :: Int)
+                , "method" AE..= ("initialize" :: Text)
+                ]
+        resp <- runAsBase tr (MCP.handleJsonRpc reg dummyApp testPid req)
+        (resp ^? key "result" . key "protocolVersion") `shouldSatisfy` isJust
+        (resp ^? key "result" . key "serverInfo" . key "name") `shouldSatisfy` isJust
+
+      it "tools/call monoscope_schema_get round-trips through to Schema.telemetrySchema" $ \tr -> do
+        let req =
+              rpcCall
+                $ AE.object
+                  [ "name" AE..= ("monoscope_schema_get" :: Text)
+                  , "arguments" AE..= AE.object []
+                  ]
+        resp <- runAsBase tr (MCP.handleJsonRpc reg (buildTestApp tr) testPid req)
+        let isErr = resp ^? key "result" . key "isError"
+            content = resp ^? key "result" . key "content" . _Array . traverse . key "text"
+        when (isErr /= Just (AE.Bool False))
+          $ expectationFailure ("schema_get returned isError; body: " <> show content)
+        let structured = resp ^? key "result" . key "structuredContent"
+        case structured of
+          Just v -> case AE.fromJSON @Schema.Schema v of
+            AE.Success s -> Map.keys s.fields `shouldMatchList` Map.keys Schema.telemetrySchema.fields
+            AE.Error e -> expectationFailure ("structuredContent did not decode as Schema: " <> e)
+          Nothing -> expectationFailure ("structuredContent missing; body: " <> show content)
+
+      it "tools/call with unknown tool name returns isError result, not JSON-RPC error" $ \tr -> do
+        let req =
+              rpcCall
+                $ AE.object
+                  [ "name" AE..= ("monoscope_does_not_exist" :: Text)
+                  , "arguments" AE..= AE.object []
+                  ]
+        resp <- runAsBase tr (MCP.handleJsonRpc reg dummyApp testPid req)
+        (resp ^? key "result" . key "isError") `shouldBe` Just (AE.Bool True)
+        (resp ^? key "error") `shouldBe` Nothing
 
     describe "Share link create" do
       it "returns id and url containing /share/r/<id>" $ \tr -> do

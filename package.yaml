@@ -287,6 +287,7 @@ library:
     - zlib
     - openapi3
     - servant-openapi3
+    - insert-ordered-containers
 
 executables:
   monoscope-server:
