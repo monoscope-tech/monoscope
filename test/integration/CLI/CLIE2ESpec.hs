@@ -36,7 +36,6 @@ import Data.List (isInfixOf)
 import Data.Text qualified as T
 import Network.HTTP.Client (defaultManagerSettings, httpLbs, newManager, parseRequest_, requestHeaders, responseStatus)
 import Network.HTTP.Types.Status (statusCode)
-import System.Environment (lookupEnv)
 import System.Exit (ExitCode (..))
 import System.Process qualified as Proc
 import Test.Hspec
