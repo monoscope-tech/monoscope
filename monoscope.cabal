@@ -425,6 +425,7 @@ executable monoscope
       CLI.Core
       CLI.Resource
       CLI.UI
+      CLI.Validate
       Paths_monoscope
   autogen-modules:
       Paths_monoscope
@@ -462,6 +463,7 @@ executable monoscope
     , base
     , brick
     , containers
+    , deriving-aeson
     , directory
     , effectful
     , effectful-core
@@ -564,6 +566,7 @@ test-suite integration-tests
   other-modules:
       BackgroundJobs.NotificationsSpec
       CLI.CLIBinarySpec
+      CLI.CLIE2ESpec
       CLI.CLISpec
       EndpointDiscoverySpec
       ExtractionWorkerSpec

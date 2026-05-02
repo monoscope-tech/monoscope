@@ -21,6 +21,7 @@ module CLI.Resource
   , resourceIdPath
   , withResult
   , runAPI
+  , normalizeList
   ) where
 
 import Relude
@@ -32,8 +33,10 @@ import Data.Aeson.KeyMap qualified as AEKM
 import Data.Effectful.Wreq (HTTP)
 import Data.Yaml qualified as Yaml
 import Effectful
+import Effectful.Environment (Environment)
 import Effectful.FileSystem (FileSystem, doesDirectoryExist, doesFileExist, listDirectory)
 import System.FilePath (takeExtension, (</>))
+import Web.ApiTypes (Paged (..))
 
 
 data ResourceKind = Monitors | Dashboards | ApiKeys | Teams | Members
@@ -78,22 +81,55 @@ runAPI :: (IOE :> es, AE.ToJSON a) => OutputMode -> Eff es (Either APIError a) -
 runAPI mode act = withResult act renderAPIError (renderByMode mode Nothing)
 
 
-runList :: (HTTP :> es, IOE :> es) => CLIConfig -> ResourceKind -> [(Text, Text)] -> OutputMode -> Eff es ()
-runList cfg k params mode = runAPI mode (apiGetJson @_ @AE.Value cfg (resourcePath k) params)
+-- | D4: every list endpoint returns the same shape from the CLI's perspective:
+-- @{data: [...], pagination: {has_more, total, cursor}}@. This is a CLI-side
+-- adapter — the server still returns its native envelope (bare arrays for some
+-- resources, @Paged@ for others). Centralising the normalisation here means
+-- agents can rely on a single shape across @issues list@, @monitors list@,
+-- @dashboards list@, @api-keys list@, @teams list@, @members list@,
+-- @endpoints list@, @log-patterns list@.
+runList :: (HTTP :> es, Environment :> es, IOE :> es) => CLIConfig -> ResourceKind -> [(Text, Text)] -> OutputMode -> Eff es ()
+runList cfg k params mode = runAPI mode $ fmap (fmap normalizeList) (apiGetJson @_ @AE.Value cfg (resourcePath k) params)
 
 
-runGet :: (HTTP :> es, IOE :> es) => CLIConfig -> ResourceKind -> Text -> OutputMode -> Eff es ()
+-- | Normalise a list response to @{data, pagination}@. Idempotent if the
+-- response already has @data@ + @pagination@. The 'Paged' branch decodes via
+-- the server's typed envelope ('Web.ApiTypes.Paged') so a wire shape change
+-- there shows up at compile time on the CLI side.
+normalizeList :: AE.Value -> AE.Value
+normalizeList v = case v of
+  AE.Object obj | AEKM.member "data" obj && AEKM.member "pagination" obj -> v
+  AE.Object _ | AE.Success (p :: Paged AE.Value) <- AE.fromJSON v ->
+    AE.object
+      [ "data" AE..= p.items
+      , "pagination" AE..= AE.object
+          [ "has_more" AE..= p.hasMore
+          , "total" AE..= p.totalCount
+          , "cursor" AE..= AE.Null
+          , "page" AE..= p.page
+          , "per_page" AE..= p.perPage
+          ]
+      ]
+  AE.Array _ ->
+    AE.object
+      [ "data" AE..= v
+      , "pagination" AE..= AE.object ["has_more" AE..= False, "total" AE..= AE.Null, "cursor" AE..= AE.Null]
+      ]
+  _ -> v
+
+
+runGet :: (HTTP :> es, Environment :> es, IOE :> es) => CLIConfig -> ResourceKind -> Text -> OutputMode -> Eff es ()
 runGet cfg k resId mode = runAPI mode (apiGetJson @_ @AE.Value cfg (resourceIdPath k resId) [])
 
 
-runDelete :: (HTTP :> es, IOE :> es) => CLIConfig -> ResourceKind -> Text -> Eff es ()
+runDelete :: (HTTP :> es, Environment :> es, IOE :> es) => CLIConfig -> ResourceKind -> Text -> Eff es ()
 runDelete cfg k resId =
   withResult (apiDelete cfg (resourceIdPath k resId)) renderAPIError (\_ -> putTextLn $ resourceIdPath k resId <> " deleted")
 
 
 -- | Lifecycle subcommands (mute, unmute, resolve, toggle_active, activate, deactivate, star).
 runLifecycle
-  :: (HTTP :> es, IOE :> es)
+  :: (HTTP :> es, Environment :> es, IOE :> es)
   => CLIConfig -> ResourceKind -> Text -> Text -> [(Text, Text)] -> OutputMode -> Eff es ()
 runLifecycle cfg k resId verb params mode =
   runAPI mode (apiPostJson @_ @AE.Value @AE.Value cfg (resourceIdPath k resId <> "/" <> verb) params AE.Null)
@@ -102,7 +138,7 @@ runLifecycle cfg k resId verb params mode =
 -- | Non-exiting write. Returns @Either APIError AE.Value@ so callers can
 -- decide whether to abort or continue (e.g. 'runApplyResource').
 writeJsonRaw
-  :: (HTTP :> es, IOE :> es)
+  :: (HTTP :> es, Environment :> es, IOE :> es)
   => CLIConfig -> WriteVerb -> Text -> [(Text, Text)] -> AE.Value -> Eff es (Either APIError AE.Value)
 writeJsonRaw cfg verb url params val = case verb of
   POST -> apiPostJson @_ @_ @AE.Value cfg url params val
@@ -112,14 +148,14 @@ writeJsonRaw cfg verb url params val = case verb of
 
 -- | Send an already-parsed JSON body at @url@ with the given verb and optional query params.
 writeJson
-  :: (HTTP :> es, IOE :> es)
+  :: (HTTP :> es, Environment :> es, IOE :> es)
   => CLIConfig -> WriteVerb -> Text -> [(Text, Text)] -> AE.Value -> OutputMode -> Eff es ()
 writeJson cfg verb url params val mode = runAPI mode (writeJsonRaw cfg verb url params val)
 
 
 -- | Read a YAML/JSON file and send it as @verb@ to @url@ with optional query params.
 runFromFile
-  :: (HTTP :> es, FileSystem :> es, IOE :> es)
+  :: (HTTP :> es, Environment :> es, FileSystem :> es, IOE :> es)
   => CLIConfig -> WriteVerb -> Text -> [(Text, Text)] -> FilePath -> OutputMode -> Eff es ()
 runFromFile cfg verb url params path mode = readYamlOrJson path >>= \v -> writeJson cfg verb url params v mode
 
@@ -134,7 +170,7 @@ runFromFile cfg verb url params path mode = readYamlOrJson path >>= \v -> writeJ
 -- root object has an @id@ field, POST otherwise) — there is no natural-key
 -- upsert, so a monitor file without an @id@ creates a new row on each apply.
 runApplyResource
-  :: (HTTP :> es, FileSystem :> es, IOE :> es)
+  :: (HTTP :> es, Environment :> es, FileSystem :> es, IOE :> es)
   => CLIConfig -> ResourceKind -> FilePath -> OutputMode -> Eff es ()
 runApplyResource cfg k path mode = do
   paths <- ifM (doesDirectoryExist path)
@@ -154,7 +190,7 @@ isApplyable fp = takeExtension fp `elem` [".yaml", ".yml", ".json"]
 
 -- | Apply a single file; returns @1@ on failure (already printed), @0@ on success.
 applyOne
-  :: (HTTP :> es, FileSystem :> es, IOE :> es)
+  :: (HTTP :> es, Environment :> es, FileSystem :> es, IOE :> es)
   => CLIConfig -> ResourceKind -> FilePath -> OutputMode -> Eff es Int
 applyOne cfg k path mode = do
   val <- readYamlOrJson path
@@ -194,7 +230,7 @@ readYamlOrJson path = do
 
 -- | POST /<resource>/bulk {action, ids, duration_minutes?}.
 runBulk
-  :: (HTTP :> es, IOE :> es)
+  :: (HTTP :> es, Environment :> es, IOE :> es)
   => CLIConfig -> ResourceKind -> Text -> [Text] -> Maybe Int -> OutputMode -> Eff es ()
 runBulk cfg k action ids dur mode =
   runAPI
@@ -208,7 +244,7 @@ runBulk cfg k action ids dur mode =
 
 
 -- | GET <resource>/:id/yaml and print as YAML — for `dashboards yaml ID`.
-runYamlDump :: (HTTP :> es, IOE :> es) => CLIConfig -> ResourceKind -> Text -> Eff es ()
+runYamlDump :: (HTTP :> es, Environment :> es, IOE :> es) => CLIConfig -> ResourceKind -> Text -> Eff es ()
 runYamlDump cfg k resId =
   withResult (apiGetJson @_ @AE.Value cfg (resourceIdPath k resId <> "/yaml") []) renderAPIError $ \v ->
     liftIO $ putBSLn (Yaml.encode v)

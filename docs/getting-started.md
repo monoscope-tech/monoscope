@@ -233,7 +233,7 @@ curl -fsSL https://monoscope.tech/install.sh | bash
 Then authenticate:
 
 ```bash
-export MONO_PROJECT=<your-project-uuid>
+export MONOSCOPE_PROJECT=<your-project-uuid>
 monoscope auth login --token <your-api-key>
 ```
 

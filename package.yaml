@@ -339,6 +339,7 @@ executables:
       - brick
       - vty
       - vector
+      - deriving-aeson
       - name: relude
         version: '>= 1.2.0.0'
 

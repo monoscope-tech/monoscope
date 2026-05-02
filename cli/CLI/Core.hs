@@ -2,12 +2,15 @@ module CLI.Core
   ( OutputMode (..)
   , detectOutputMode
   , isInteractiveTTY
+  , isAgentMode
   , renderJSON
   , renderYAML
   , renderByMode
   , renderWith
   , renderTable
   , printError
+  , printDebug
+  , isDebugMode
   , APIError (..)
   , renderAPIError
   , apiGet
@@ -63,7 +66,7 @@ isInteractiveTTY = do
   pure $ tty && not agent
 
 isAgentMode :: (Environment :> es) => Eff es Bool
-isAgentMode = any isJust <$> mapM Env.lookupEnv ["MONO_AGENT_MODE", "CLAUDE_CODE", "CI"]
+isAgentMode = any isJust <$> mapM Env.lookupEnv ["MONOSCOPE_AGENT_MODE", "CLAUDE_CODE", "CI"]
 
 renderJSON :: (AE.ToJSON a, IOE :> es) => a -> Eff es ()
 renderJSON = liftIO . putLBSLn . AE.encodePretty
@@ -99,6 +102,16 @@ printError msg = liftIO $ do
   Data.Text.IO.hPutStrLn stderr $ "error: " <> msg
   ANSI.hSetSGR stderr [ANSI.Reset]
 
+isDebugMode :: (Environment :> es) => Eff es Bool
+isDebugMode = isJust <$> Env.lookupEnv "MONOSCOPE_DEBUG"
+
+-- | Emit a debug line to stderr when MONOSCOPE_DEBUG is set.
+printDebug :: (Environment :> es, IOE :> es) => Text -> Eff es ()
+printDebug msg = whenM isDebugMode $ liftIO $ do
+  ANSI.hSetSGR stderr [ANSI.SetColor ANSI.Foreground ANSI.Vivid ANSI.Cyan]
+  Data.Text.IO.hPutStrLn stderr $ "debug: " <> msg
+  ANSI.hSetSGR stderr [ANSI.Reset]
+
 -- Client
 
 data APIError = APIError {statusCode :: Int, message :: Text}
@@ -120,13 +133,14 @@ reqOpts cfg params =
     & addProjectId cfg.projectId
     & addParams params
 
-apiGet :: (HTTP :> es, IOE :> es) => CLIConfig -> Text -> [(Text, Text)] -> Eff es (Either APIError LByteString)
-apiGet cfg path params =
+apiGet :: (HTTP :> es, Environment :> es, IOE :> es) => CLIConfig -> Text -> [(Text, Text)] -> Eff es (Either APIError LByteString)
+apiGet cfg path params = do
+  printDebug $ "GET " <> cfg.apiUrl <> path <> renderParams params
   catch
     (Right . (^. responseBody) <$> getWith (reqOpts cfg params) (toString $ cfg.apiUrl <> path))
     (pure . Left . httpExToError)
 
-apiGetJson :: (HTTP :> es, IOE :> es, AE.FromJSON a) => CLIConfig -> Text -> [(Text, Text)] -> Eff es (Either APIError a)
+apiGetJson :: (HTTP :> es, Environment :> es, IOE :> es, AE.FromJSON a) => CLIConfig -> Text -> [(Text, Text)] -> Eff es (Either APIError a)
 apiGetJson cfg path params = decodeBody <$> apiGet cfg path params
 
 -- | Unauthenticated POST for device-code auth bootstrap (pre-token flows).
@@ -141,31 +155,33 @@ apiPostUnauth baseUrl path params =
     (pure . Left . httpExToError)
 
 -- | POST JSON with optional query params (wreq URL-encodes them safely).
-apiPostJson :: (HTTP :> es, IOE :> es, AE.ToJSON a, AE.FromJSON b) => CLIConfig -> Text -> [(Text, Text)] -> a -> Eff es (Either APIError b)
+apiPostJson :: (HTTP :> es, Environment :> es, IOE :> es, AE.ToJSON a, AE.FromJSON b) => CLIConfig -> Text -> [(Text, Text)] -> a -> Eff es (Either APIError b)
 apiPostJson = jsonCall postWith
 
-apiPutJson :: (HTTP :> es, IOE :> es, AE.ToJSON a, AE.FromJSON b) => CLIConfig -> Text -> [(Text, Text)] -> a -> Eff es (Either APIError b)
+apiPutJson :: (HTTP :> es, Environment :> es, IOE :> es, AE.ToJSON a, AE.FromJSON b) => CLIConfig -> Text -> [(Text, Text)] -> a -> Eff es (Either APIError b)
 apiPutJson = jsonCall putWith
 
-apiPatchJson :: (HTTP :> es, IOE :> es, AE.ToJSON a, AE.FromJSON b) => CLIConfig -> Text -> [(Text, Text)] -> a -> Eff es (Either APIError b)
+apiPatchJson :: (HTTP :> es, Environment :> es, IOE :> es, AE.ToJSON a, AE.FromJSON b) => CLIConfig -> Text -> [(Text, Text)] -> a -> Eff es (Either APIError b)
 apiPatchJson = jsonCall patchWith
 
 -- | DELETE; discards response body (returns unit on success).
-apiDelete :: (HTTP :> es, IOE :> es) => CLIConfig -> Text -> Eff es (Either APIError ())
-apiDelete cfg path =
+apiDelete :: (HTTP :> es, Environment :> es, IOE :> es) => CLIConfig -> Text -> Eff es (Either APIError ())
+apiDelete cfg path = do
+  printDebug $ "DELETE " <> cfg.apiUrl <> path
   catch
     (deleteWith (reqOpts cfg []) (toString $ cfg.apiUrl <> path) $> Right ())
     (pure . Left . httpExToError)
 
 jsonCall
-  :: (IOE :> es, AE.ToJSON a, AE.FromJSON b)
+  :: (Environment :> es, IOE :> es, AE.ToJSON a, AE.FromJSON b)
   => (W.Options -> String -> LByteString -> Eff es (Wreq.Response LByteString))
   -> CLIConfig
   -> Text
   -> [(Text, Text)]
   -> a
   -> Eff es (Either APIError b)
-jsonCall action cfg path params body =
+jsonCall action cfg path params body = do
+  printDebug $ "POST/PUT/PATCH " <> cfg.apiUrl <> path <> renderParams params
   catch
     ( do
         let opts = reqOpts cfg params & W.header "Content-Type" .~ ["application/json"]
@@ -186,7 +202,7 @@ decodeBody (Right bs)
   | otherwise = first (APIError 0 . toText) (AE.eitherDecode bs)
 
 -- | Fetch JSON from API endpoint and apply a handler, printing errors on failure.
-withAPIResult :: (HTTP :> es, IOE :> es) => CLIConfig -> Text -> [(Text, Text)] -> (AE.Value -> Eff es ()) -> Eff es ()
+withAPIResult :: (HTTP :> es, Environment :> es, IOE :> es) => CLIConfig -> Text -> [(Text, Text)] -> (AE.Value -> Eff es ()) -> Eff es ()
 withAPIResult cfg path params onSuccess =
   apiGet cfg path params >>= \case
     Left err -> printError (renderAPIError err) >> liftIO exitFailure
@@ -206,9 +222,13 @@ addParams :: [(Text, Text)] -> W.Options -> W.Options
 addParams ps o = foldl' (\acc (k, v) -> acc & Wreq.param k .~ [v]) o ps
 
 httpExToError :: HttpException -> APIError
-httpExToError (HttpExceptionRequest req (StatusCodeException resp _)) =
+httpExToError (HttpExceptionRequest req (StatusCodeException resp body)) =
   let code = resp ^. Wreq.responseStatus . Wreq.statusCode
-      msg = decodeUtf8 $ resp ^. Wreq.responseStatus . Wreq.statusMessage
+      statusMsg = decodeUtf8 $ resp ^. Wreq.responseStatus . Wreq.statusMessage
+      bodyTxt = T.strip (decodeUtf8 body)
+      -- Server validation errors (e.g. KQL parser) are returned in the body;
+      -- prefer them over the generic status reason so agents can self-correct.
+      msg = if T.null bodyTxt then statusMsg else bodyTxt
    in APIError code (msg <> " (" <> reqSummary req <> ")")
 httpExToError (HttpExceptionRequest req (ConnectionFailure _)) =
   APIError 0 ("connection failed — is the server running? (" <> reqSummary req <> ")")
@@ -216,6 +236,10 @@ httpExToError (HttpExceptionRequest req content) =
   APIError 0 (show content <> " (" <> reqSummary req <> ")")
 httpExToError (InvalidUrlException url reason) =
   APIError 0 ("invalid URL " <> toText url <> ": " <> toText reason)
+
+renderParams :: [(Text, Text)] -> Text
+renderParams [] = ""
+renderParams ps = "?" <> T.intercalate "&" [k <> "=" <> v | (k, v) <- ps]
 
 -- | Compact "METHOD scheme://host:port/path" for error context.
 reqSummary :: Request -> Text

@@ -1202,14 +1202,12 @@ newtype SubPortalDataVals = SubPortalDataVals {attributes :: SubPortalAttributes
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SubPortalDataVals
 
 
+-- | Lemon Squeezy responses come wrapped in @{"data": ...}@. The Haskell
+-- field is @dataVal@ (since @data@ is a keyword); 'Rename' maps it to the
+-- on-the-wire key without a manual instance.
 newtype SubPortalResponse = SubPortalResponse {dataVal :: SubPortalDataVals}
   deriving stock (Generic, Show)
-
-
-instance AE.FromJSON SubPortalResponse where
-  parseJSON = AE.withObject "SubPortalResponse" $ \obj -> do
-    dataVal <- obj AE..: "data"
-    return (SubPortalResponse{dataVal = dataVal})
+  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.Rename "dataVal" "data"]] SubPortalResponse
 
 
 --------------------------------------------------------------------------------
@@ -1374,12 +1372,7 @@ data SubDataVals = SubDataVals
 
 newtype SubResponse = SubResponse {dataVal :: [SubDataVals]}
   deriving stock (Generic, Show)
-
-
-instance AE.FromJSON SubResponse where
-  parseJSON = AE.withObject "SubResponse" $ \obj -> do
-    dataVal <- obj AE..: "data"
-    return (SubResponse{dataVal = dataVal})
+  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.Rename "dataVal" "data"]] SubResponse
 
 
 getSubscriptionId :: HTTP :> es => Maybe Text -> Text -> Eff es (Maybe SubResponse)

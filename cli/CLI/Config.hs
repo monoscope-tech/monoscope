@@ -65,9 +65,9 @@ resolveConfig :: (FileSystem :> es, Environment :> es, IOE :> es) => Eff es CLIC
 resolveConfig = do
   global <- loadGlobalConfig
   projCfg <- loadLocalConfig
-  envApiUrl <- Env.lookupEnv "MONO_API_URL"
-  envApiKey <- Env.lookupEnv "MONO_API_KEY"
-  envProject <- Env.lookupEnv "MONO_PROJECT"
+  envApiUrl <- Env.lookupEnv "MONOSCOPE_API_URL"
+  envApiKey <- Env.lookupEnv "MONOSCOPE_API_KEY"
+  envProject <- Env.lookupEnv "MONOSCOPE_PROJECT"
   storedKey <- loadToken
   let merged = mergeConfigs [global, projCfg]
   pure
