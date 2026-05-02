@@ -333,7 +333,7 @@ spec = aroundAll withTestResources do
 
 
 isApiChangeSingleRow :: Issues.IssueType -> AnomalyList.IssueVM -> Bool
-isApiChangeSingleRow ty (AnomalyList.IssueVM _ _ _ _ c) = c.issueType == ty
+isApiChangeSingleRow ty (AnomalyList.IssueVM _ _ _ _ c) = c.base.issueType == ty
 
 
 -- | Pull the first ApiChange issue id created by earlier tests. Fails the test
