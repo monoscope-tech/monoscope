@@ -239,7 +239,6 @@ instance HI.DecodeValue ZonedTime where
   decodeValue = utcToZonedTime utc <$> D.timestamptz
 
 
-
 instance HI.EncodeValue ZonedTime where
   encodeValue = contramap zonedTimeToUTC E.timestamptz
 

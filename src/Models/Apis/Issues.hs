@@ -311,6 +311,7 @@ data IssueL = IssueL
   deriving stock (Generic, Show)
   deriving anyclass (NFData)
 
+
 -- Generic HI.DecodeRow can't derive this: Issue has DecodeRow but not DecodeValue.
 instance HI.DecodeRow IssueL where
   decodeRow = IssueL <$> HI.decodeRow <*> HI.decodeRow <*> HI.decodeRow <*> HI.decodeRow <*> HI.decodeRow
