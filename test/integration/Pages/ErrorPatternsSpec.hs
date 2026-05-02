@@ -758,13 +758,14 @@ spec = aroundAll withTestResources do
         (PGS.Only canonId : PGS.Only childId : _) -> do
           void $ runTestBg frozenTime tr $ PatternMerge.assignErrorsToCanonical [(childId, canonId)]
 
-          -- Verify the similar TypeError got merged
-          mergedTypeErrors <- withResource tr.trPool \conn ->
+          -- Verify the specific child got assigned to the specific canonical.
+          -- Earlier tests may have merged unrelated TypeErrors, so assert on
+          -- the (childId, canonId) edge directly rather than a global count.
+          childCanonId <- withResource tr.trPool \conn ->
             PGS.query conn
-              [sql| SELECT id FROM apis.error_patterns
-                    WHERE project_id = ? AND error_type = 'TypeError' AND canonical_id IS NOT NULL |]
-              (PGS.Only pid) :: IO [PGS.Only ErrorPatterns.ErrorPatternId]
-          length mergedTypeErrors `shouldBe` 1
+              [sql| SELECT canonical_id FROM apis.error_patterns WHERE id = ? |]
+              (PGS.Only childId) :: IO [PGS.Only (Maybe ErrorPatterns.ErrorPatternId)]
+          childCanonId `shouldBe` [PGS.Only (Just canonId)]
 
           -- Verify ConnectionRefusedError remains separate
           connPatternsAfter <- withResource tr.trPool \conn ->
