@@ -32,6 +32,7 @@ import Relude
 
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
+import Data.List (isInfixOf)
 import Data.Text qualified as T
 import Network.HTTP.Client (defaultManagerSettings, httpLbs, newManager, parseRequest_, requestHeaders, responseStatus)
 import Network.HTTP.Types.Status (statusCode)
