@@ -356,7 +356,7 @@ extractBreadcrumbs spans =
           <> concatMap breadcrumbsFromSpanEvents recs
           <> concatMap (breadcrumbsFromTraceLogs errorSpanId) recs
       dedupKey bc = (bc.timestamp, bc.kind, T.take 80 $ fromMaybe "" bc.message)
-      deduped = map NE.head $ NE.groupBy ((==) `on` dedupKey) $ sortOn dedupKey raw
+      deduped = map head $ NE.groupBy ((==) `on` dedupKey) $ sortOn dedupKey raw
    in nonEmpty deduped
 
 
@@ -405,10 +405,12 @@ userJourneySection_ spans = whenJust (extractBreadcrumbs spans) \crumbs -> do
             div_ [class_ "flex items-center gap-2 flex-wrap"] do
               span_ [class_ "text-xs tabular-nums text-textWeak shrink-0"] $ toHtml timeLabel
               span_ [class_ $ "text-xs font-medium " <> iconColor] $ toHtml bc.kind
-            whenJust bc.message \msg ->
-              span_ [class_ "text-sm text-textStrong line-clamp-3 break-words"] $ toHtml msg
-            whenJust (bc.payload >>= breadcrumbDataSummary) \summary ->
-              span_ [class_ "font-mono text-xs text-textWeak line-clamp-2 break-all"] $ toHtml summary
+            whenJust bc.message
+              $ span_ [class_ "text-sm text-textStrong line-clamp-3 break-words"]
+              . toHtml
+            whenJust (bc.payload >>= breadcrumbDataSummary)
+              $ span_ [class_ "font-mono text-xs text-textWeak line-clamp-2 break-all"]
+              . toHtml
   div_ [class_ "border-t border-strokeWeak"] do
     div_ [class_ "px-4 py-2 flex items-center gap-2 bg-fillWeaker/40"] do
       faSprite_ "route" "regular" "w-3 h-3 text-textWeak"
@@ -680,7 +682,7 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
             (div_ [class_ "border border-r border-l w-max mx-auto"] $ termRaw "session-replay" [id_ "sessionReplay", term "initialSession" $ V.head withSessionIds, class_ "shrink-1 flex flex-col", term "projectId" pid.toText, term "containerId" "sessionPlayerWrapper"] ("" :: Text))
             (not $ V.null withSessionIds)
 
-      when (issue.issueType `notElem` [Issues.RuntimeException, Issues.ApiChange]) $ activityPanel_ pid issueId "" V.empty
+      unless (issue.issueType `elem` [Issues.RuntimeException, Issues.ApiChange]) $ activityPanel_ pid issueId "" V.empty
 
     -- RIGHT: Inline collapsible AI chat panel (checkbox + group-has CSS, persists to localStorage)
     input_ [type_ "checkbox", id_ "ai-panel-toggle", class_ "hidden", onchange_ "localStorage.setItem('ai-panel-open', this.checked); if(this.checked) htmx.trigger('#ai-response-container','load-chat')"]

@@ -210,8 +210,8 @@ buildTraceTree colIdxMap queryResultCount rows = (adjustedRows, sortWith (Down .
           Just (s, d) ->
             let upd =
                   catMaybes
-                    [ (\j -> (j, AE.Number (fromIntegral s))) <$> stIdxM
-                    , (\j -> (j, AE.Number (fromIntegral d))) <$> durIdxM
+                    [ (,AE.Number (fromIntegral s)) <$> stIdxM
+                    , (,AE.Number (fromIntegral d)) <$> durIdxM
                     ]
              in if null upd then row else row V.// upd
 

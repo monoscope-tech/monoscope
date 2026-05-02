@@ -852,7 +852,7 @@ dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-s
       let activeDays = length rows
           included = 20_000_000 :: Int64
           maxDay = foldr (max . snd) 1 rows
-          ascending = sortOn fst rows
+          ascending = sortWith fst rows
           -- Running cumulative resets at cycleStartDay so pre-cycle rows (shown
           -- for context) don't inflate the included-tier counter and produce
           -- incorrect "Est. cost" for current-cycle days.

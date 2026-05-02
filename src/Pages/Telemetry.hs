@@ -933,7 +933,7 @@ buildSpanTree spans =
                 , startTime = startNs
                 , endTime = Just endNs
                 , hasErrors = False
-                , attributes = Just (MapS.singleton syntheticMissingParentKey (AE.String missingPid))
+                , attributes = Just (one (syntheticMissingParentKey, AE.String missingPid))
                 }
          in Just (SpanTree rec (buildTree spanMap (Just missingPid) (startNs, endNs)))
       _ -> Nothing
