@@ -13,18 +13,16 @@ module Web.MCP (
   handleJsonRpc,
 ) where
 
-import Control.Lens ((^.))
+import Control.Lens (preview, (^.))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AK
 import Data.Aeson.KeyMap qualified as KM
-import Data.ByteString.Lazy qualified as LBS
 import Data.HashMap.Strict.InsOrd qualified as IOH
 import Data.Map.Strict qualified as Map
 import Data.OpenApi (OpenApi)
 import Data.OpenApi qualified as OA
-import Data.Ord (Down (..))
+import Data.Ord (clamp)
 import Data.Text qualified as T
-import Data.Text.Encoding qualified as TE
 import Data.Time (addUTCTime)
 import Data.UUID qualified as UUID
 import Effectful.Error.Static qualified as Error
@@ -92,8 +90,8 @@ mkToolsFromOpenApi spec =
   Map.fromList
     [ (t.name, t)
     | (rawPath, item) <- IOH.toList (spec ^. OA.paths)
-    , (m, op) <- pathItemOps item
     , let p = toText rawPath
+    , (m, op) <- pathItemOps item
     , (m, p) /= ("POST", "/mcp") -- never expose MCP itself as a tool
     , let t = openApiTool p m op
     ]
@@ -101,10 +99,10 @@ mkToolsFromOpenApi spec =
 
 openApiTool :: Text -> ByteString -> OA.Operation -> Tool
 openApiTool p m op =
-  let params = mapMaybe deref (op ^. OA.parameters)
+  let params = mapMaybe (preview OA._Inline) (op ^. OA.parameters)
       pathParams' = [q ^. OA.name | q <- params, q ^. OA.in_ == OA.ParamPath]
       queryParams' = [q ^. OA.name | q <- params, q ^. OA.in_ == OA.ParamQuery]
-      mrb = op ^. OA.requestBody >>= deref
+      mrb = op ^. OA.requestBody >>= preview OA._Inline
       bodyReq = maybe False (\rb -> rb ^. OA.required == Just True) mrb
       desc = fromMaybe (decodeUtf8 m <> " " <> p) ((op ^. OA.summary) <|> (op ^. OA.description))
    in Tool
@@ -234,11 +232,6 @@ pathItemOps p =
     ]
 
 
-deref :: OA.Referenced a -> Maybe a
-deref (OA.Inline a) = Just a
-deref _ = Nothing
-
-
 mkInputSchema :: [OA.Param] -> Maybe OA.RequestBody -> Bool -> AE.Value
 mkInputSchema params mrb bodyReq =
   let paramProps =
@@ -246,7 +239,7 @@ mkInputSchema params mrb bodyReq =
       paramRequireds = [q ^. OA.name | q <- params, q ^. OA.required == Just True]
       bodySchema = mrb >>= bodyContentSchema
       allProps = maybe paramProps (\b -> KM.insert "body" b paramProps) bodySchema
-      requireds = paramRequireds <> [w | w <- ["body" | bodyReq], isJust bodySchema]
+      requireds = paramRequireds <> ["body" | bodyReq && isJust bodySchema]
    in AE.object
         [ "type" AE..= ("object" :: Text)
         , "properties" AE..= AE.Object allProps
@@ -263,9 +256,7 @@ paramSchemaJson p =
 
 
 bodyContentSchema :: OA.RequestBody -> Maybe AE.Value
-bodyContentSchema rb = case IOH.elems (rb ^. OA.content) of
-  (mto : _) -> AE.toJSON <$> (mto ^. OA.schema)
-  [] -> Nothing
+bodyContentSchema rb = listToMaybe (IOH.elems (rb ^. OA.content)) >>= fmap AE.toJSON . (^. OA.schema)
 
 
 -- =============================================================================
@@ -283,6 +274,9 @@ handleJsonRpc
 handleJsonRpc reg buildApp pid req = case parseRpcReq req of
   Nothing -> pure $ rpcError AE.Null (-32600) "Invalid Request"
   Just (mid, m, params)
+    -- MCP spec says notifications expect no response body. On a request/response
+    -- HTTP transport an empty body would break the JSON-RPC envelope, so we
+    -- return @null@; clients ignore the result. Revisit if/when we add SSE.
     | "notifications/" `T.isPrefixOf` m -> pure AE.Null
     | m == "initialize" -> pure $ rpcOk mid initializeResult
     | m == "tools/list" -> pure $ rpcOk mid (toolsListJson reg)
@@ -373,7 +367,7 @@ textContent t = AE.object ["type" AE..= ("text" :: Text), "text" AE..= t]
 
 
 renderJson :: AE.Value -> Text
-renderJson = decodeUtf8 . LBS.toStrict . AE.encode
+renderJson = decodeUtf8 . AE.encode
 
 
 rpcOk :: AE.Value -> AE.Value -> AE.Value
@@ -400,12 +394,12 @@ callOpenApi app b args = do
       bodyBs = AE.encode body
       hdrs = [(H.hContentType, "application/json")]
       baseReq = Wai.defaultRequest{Wai.requestMethod = b.method, Wai.requestHeaders = hdrs}
-      waiReq = WT.setPath baseReq (TE.encodeUtf8 url)
+      waiReq = WT.setPath baseReq (encodeUtf8 url)
       sreq = WT.SRequest waiReq bodyBs
   resp <- WT.runSession (WT.srequest sreq) app
   let code = H.statusCode (WT.simpleStatus resp)
       bodyLBS = WT.simpleBody resp
-      bodyTxt = decodeUtf8 (LBS.toStrict bodyLBS) :: Text
+      bodyTxt = decodeUtf8 bodyLBS :: Text
       isErr = code >= 400
       structured = AE.decode bodyLBS :: Maybe AE.Value
       base =
@@ -437,11 +431,11 @@ jsonToText (AE.String s) = s
 jsonToText AE.Null = ""
 jsonToText (AE.Bool True) = "true"
 jsonToText (AE.Bool False) = "false"
-jsonToText v = decodeUtf8 (LBS.toStrict (AE.encode v))
+jsonToText v = decodeUtf8 (AE.encode v)
 
 
 urlEncodeText :: Text -> Text
-urlEncodeText = TE.decodeUtf8 . H.urlEncode True . TE.encodeUtf8
+urlEncodeText = decodeUtf8 . H.urlEncode True . encodeUtf8
 
 
 -- =============================================================================
@@ -465,7 +459,7 @@ findErrorPatterns =
     \pid args -> do
       now <- Time.currentTime
       pats <- LogPatterns.getPatternsWithCurrentRates pid now
-      let lim = clamp 1 200 (fromMaybe 20 (intArg "limit" args))
+      let lim = clamp (1, 200) (fromMaybe 20 (intArg "limit" args))
           sorted = take lim $ sortOn (Down . (.currentHourCount)) pats
       pure $ okResult $ AE.object ["as_of" AE..= now, "patterns" AE..= sorted]
 
@@ -519,7 +513,7 @@ analyzeIssue =
         issue <- ApiH.apiIssueGet pid (UUIDId uuid)
         authCtx <- Reader.ask @AuthContext
         let prompt =
-              T.unlines
+              unlines
                 [ "You are a senior SRE diagnosing a production issue. Return concise markdown:"
                 , "- **Probable cause**: 1-2 sentences."
                 , "- **Key signals**: bullet list grounded in the issue payload."
@@ -563,5 +557,3 @@ intArg :: Text -> AE.Object -> Maybe Int
 intArg k o = KM.lookup (AK.fromText k) o >>= \case AE.Number n -> Just (round n); _ -> Nothing
 
 
-clamp :: Ord a => a -> a -> a -> a
-clamp lo hi = max lo . min hi
