@@ -111,11 +111,11 @@ import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.ShareEvents qualified as ShareEvents
-import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as PM
 import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.Telemetry qualified as Telemetry
 import Pages.LogExplorer.Log qualified as Log
 import Pkg.Components.TimePicker qualified as TP
 import Pkg.Components.Widget qualified as Widget
