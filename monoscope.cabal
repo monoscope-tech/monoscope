@@ -471,6 +471,7 @@ executable monoscope
     , effectful-core
     , filepath
     , http-client
+    , http-client-tls
     , lens
     , lens-aeson
     , monoscope

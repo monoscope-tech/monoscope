@@ -105,11 +105,13 @@ import Effectful.Error.Static (throwError)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Fields qualified as Fields
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.ShareEvents qualified as ShareEvents
+import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as PM
@@ -117,7 +119,7 @@ import Models.Projects.Projects qualified as Projects
 import Pages.LogExplorer.Log qualified as Log
 import Pkg.Components.TimePicker qualified as TP
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (SnakeSchema (..), UUIDId (..))
+import Pkg.DeriveUtils (AesonText (..), SnakeSchema (..), UUIDId (..))
 import Pkg.Parser qualified as Parser
 import Relude hiding (ask, id)
 import Servant (NoContent (..), ServerError (..), err400, err404)
@@ -809,7 +811,67 @@ fetchIssue pid iid = notFoundOr "Issue not found" =<< Issues.selectIssueByIdScop
 
 
 apiIssueGet :: Projects.ProjectId -> Issues.IssueId -> ATBaseCtx IssueApiFull
-apiIssueGet pid iid = issueToFull <$> fetchIssue pid iid
+apiIssueGet pid iid = issueToFull <$> (enrichIssue pid =<< fetchIssue pid iid)
+
+
+-- | Fill an empty @stack_trace@ on a runtime-exception issue with a synthesised
+-- one derived from the trace's span hierarchy. Most Haskell exceptions arrive
+-- with @exception.stacktrace=""@ because GHC doesn't capture a backtrace by
+-- default; without this fallback the API/CLI surfaces an empty string and the
+-- caller cannot tell whether the data is missing or just unhelpful.
+enrichIssue :: Projects.ProjectId -> Issues.Issue -> ATBaseCtx Issues.Issue
+enrichIssue pid issue
+  | issue.issueType /= Issues.RuntimeException = pure issue
+  | T.null (storedStack issue.issueData) = do
+      epM <- ErrorPatterns.getErrorPatternByHash pid issue.targetHash
+      case epM >>= (.recentTraceId) of
+        Nothing -> pure issue
+        Just trId -> do
+          now <- Time.currentTime
+          spans <- Telemetry.getSpanRecordsByTraceId pid trId Nothing now
+          let synth = synthStackFromSpans trId spans
+          pure
+            $ if T.null synth
+              then issue
+              else issue{Issues.issueData = patchStack synth issue.issueData}
+  | otherwise = pure issue
+  where
+    storedStack (Aeson (AE.Object o)) = case AEKM.lookup "stack_trace" o of
+      Just (AE.String s) -> s
+      _ -> ""
+    storedStack _ = ""
+    patchStack s (Aeson (AE.Object o)) = Aeson (AE.Object (AEKM.insert "stack_trace" (AE.String s) o))
+    patchStack _ x = x
+
+
+-- | Build a pseudo-stacktrace from a trace's spans, ordered by start time and
+-- annotated with service + span id. Errored span is marked with @!!@.
+synthStackFromSpans :: Text -> [Telemetry.OtelLogsAndSpans] -> Text
+synthStackFromSpans trId spans =
+  let ordered = List.sortOn (.start_time) spans
+      formatOne s =
+        let svc = case s.resource of
+              Just (AesonText m) ->
+                case Map.lookup "service" m of
+                  Just (AE.Object o) -> case AEKM.lookup "name" o of
+                    Just (AE.String n) -> Just n
+                    _ -> Nothing
+                  _ -> Nothing
+              _ -> Nothing
+            spanId = maybe "?" (fromMaybe "?" . (.span_id)) s.context
+            errored = s.status_code == Just "ERROR"
+            marker = if errored then "!! " else "   "
+            svcTxt = maybe "" (\v -> " [" <> v <> "]") svc
+            label = fromMaybe "<unnamed>" s.name
+         in marker <> "at " <> label <> svcTxt <> " (span=" <> spanId <> ")"
+      formatted = map formatOne ordered
+   in if null formatted
+        then ""
+        else
+          "(synthesized from trace "
+            <> trId
+            <> " — GHC backtrace unavailable; spans ordered by start time, !! marks the errored span)\n"
+            <> T.intercalate "\n" formatted
 
 
 issueMutate :: Projects.ProjectId -> Issues.IssueId -> (V.Vector Issues.IssueId -> ATBaseCtx Int64) -> ATBaseCtx IssueApiFull

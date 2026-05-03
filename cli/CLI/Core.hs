@@ -40,7 +40,9 @@ import Data.Yaml qualified as Yaml
 import Effectful
 import Effectful.Environment (Environment)
 import Effectful.Environment qualified as Env
-import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..), Request, host, method, path, port, secure)
+import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..), Request, host, method, path, port, responseTimeoutMicro, secure)
+import Network.HTTP.Client qualified as HC
+import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.Wreq qualified as Wreq
 import Pkg.CLIFormat (colWidths, formatRow)
 import System.Console.ANSI qualified as ANSI
@@ -149,9 +151,13 @@ renderAPIError e
 
 
 -- | Build common request options (auth + project header + query params).
+-- Bumps response timeout to 5 minutes — KQL searches over long ranges
+-- can legitimately take a while and the wreq/http-client default (30s)
+-- causes spurious 'ResponseTimeout' errors that look like server bugs.
 reqOpts :: CLIConfig -> [(Text, Text)] -> W.Options
 reqOpts cfg params =
   W.defaults
+    & (Wreq.manager .~ Left tlsManagerSettings{HC.managerResponseTimeout = responseTimeoutMicro (5 * 60 * 1_000_000)})
     & (W.header "Accept" .~ ["application/json"])
     & addAuth cfg.apiKey
     & addProjectId cfg.projectId
