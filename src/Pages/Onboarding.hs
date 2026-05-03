@@ -690,7 +690,7 @@ integrationsPage pid apikey =
             pre_ [class_ "bg-bgBase p-3 rounded monospace text-sm overflow-x-auto border border-strokeWeak", id_ "telemetrygen-cmd"]
               $ code_
               $ toHtml
-              "monoscope telemetrygen --kind=trace --count=10"
+                "monoscope telemetrygen --kind=trace --count=10"
             button_
               [ class_ "absolute top-2 right-2 px-3 py-1 text-xs bg-fillBrand-strong rounded text-textInverse-strong flex items-center gap-1 hover:bg-fillBrand-strong/90"
               , type_ "button"
