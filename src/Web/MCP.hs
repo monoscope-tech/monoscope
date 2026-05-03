@@ -14,10 +14,10 @@ module Web.MCP (
 ) where
 
 import Control.Lens (preview, (^.))
-import Data.Char (isAlphaNum)
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AK
 import Data.Aeson.KeyMap qualified as KM
+import Data.Char (isAlphaNum)
 import Data.HashMap.Strict.InsOrd qualified as IOH
 import Data.Map.Strict qualified as Map
 import Data.OpenApi (OpenApi)
@@ -592,5 +592,3 @@ sanitizeTimezone t
   where
     s = T.strip t
     badChar c = not (isAlphaNum c || c `elem` ("/_-+" :: String))
-
-
