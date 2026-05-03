@@ -1,7 +1,6 @@
 module Web.ApiHandlersSpec (spec) where
 
 import Data.Aeson qualified as AE
-import Data.List (findIndex)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime)
@@ -80,7 +79,7 @@ spec = describe "synthStackFromSpans" do
     let later = mkSpan (Just "later") (Just "L") Nothing Nothing (t 100)
     let earlier = mkSpan (Just "earlier") (Just "E") Nothing Nothing (t 1)
     let ls = T.lines (synthStackFromSpans "tr" [later, earlier])
-        idx needle = findIndex (T.isInfixOf needle) ls
+        idx needle = viaNonEmpty head [i | (i, l) <- zip [0 :: Int ..] ls, needle `T.isInfixOf` l]
     idx "earlier" `shouldSatisfy` (\e -> e < idx "later")
 
   it "omits the bracketed service suffix when service is missing" do
