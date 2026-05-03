@@ -856,7 +856,7 @@ synthStackFromSpans trId spans =
   "(synthesized from trace "
     <> trId
     <> " — GHC backtrace unavailable; spans ordered by start time, !! marks the errored span)\n"
-    <> T.intercalate "\n" (map formatOne (List.sortOn (.start_time) spans))
+    <> T.intercalate "\n" (map formatOne (sortOn (.start_time) spans))
   where
     formatOne s =
       let svc = Telemetry.spanServiceName s
