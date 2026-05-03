@@ -34,6 +34,7 @@ import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types qualified as H
 import Network.Wai qualified as Wai
+
 -- @Network.Wai.Test@ lives in @wai-extra@ (an explicit lib dep). Despite the
 -- "test" in its name, @runSession@ + @SRequest@ are stable and the cheapest
 -- way to drive a 'Wai.Application' synchronously and capture its full
@@ -427,10 +428,11 @@ rpcError mid code msg =
 -- =============================================================================
 
 callOpenApi :: Servant.Application -> OpenApiBinding -> AE.Object -> IO AE.Value
-callOpenApi _ b _ | b.path == "/mcp" =
-  -- Defensive: the registry filters /mcp out, but if a future change accidentally
-  -- adds an OpenApiBinding pointing at it, fail fast instead of recursing.
-  pure $ toolError "MCP endpoint cannot be invoked as a tool"
+callOpenApi _ b _
+  | b.path == "/mcp" =
+      -- Defensive: the registry filters /mcp out, but if a future change accidentally
+      -- adds an OpenApiBinding pointing at it, fail fast instead of recursing.
+      pure $ toolError "MCP endpoint cannot be invoked as a tool"
 callOpenApi app b args = do
   let (p, query, body) = splitArgs b args
       url = p <> if T.null query then "" else "?" <> query
