@@ -78,11 +78,9 @@ spec = describe "synthStackFromSpans" do
   it "orders spans by start_time regardless of input order" do
     let later = mkSpan (Just "later") (Just "L") Nothing Nothing (t 100)
     let earlier = mkSpan (Just "earlier") (Just "E") Nothing Nothing (t 1)
-    let out = synthStackFromSpans "tr" [later, earlier]
-    -- earlier should appear *before* later in the output: its remaining tail is longer.
-    let earlierTail = T.length (snd (T.breakOn "earlier" out))
-    let laterTail = T.length (snd (T.breakOn "later" out))
-    earlierTail `shouldSatisfy` (> laterTail)
+    let ls = T.lines (synthStackFromSpans "tr" [later, earlier])
+        idx needle = findIndex (T.isInfixOf needle) ls
+    idx "earlier" `shouldSatisfy` (\e -> e < idx "later")
 
   it "omits the bracketed service suffix when service is missing" do
     let s = mkSpan (Just "n") (Just "s") Nothing Nothing (t 0)

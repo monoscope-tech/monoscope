@@ -643,23 +643,6 @@ flattenedOtelAttributes =
     ]
 
 
--- | Exception fields that may live either on the span's flattened
--- @attributes___exception___*@ column or as a span event with
--- @event_name="exception"@. OTel SDKs (notably hs-opentelemetry) take the
--- latter path, so a query that only hits the flat column misses real
--- exceptions. We rewrite these subjects to COALESCE both sources.
---
--- Derived from 'flattenedOtelAttributes' so the invariant — every entry
--- here also appears under @attributes.exception.*@ there — is enforced
--- automatically rather than maintained by hand.
-exceptionFlattenedFields :: Set T.Text
-exceptionFlattenedFields =
-  S.fromList
-    . mapMaybe (T.stripPrefix "attributes.exception.")
-    . S.toList
-    $ flattenedOtelAttributes
-
-
 -- | Map user-facing output field names (SELECT aliases) to their real DB column names.
 -- These aliases appear in query results and the schema endpoint, so users naturally
 -- try to filter by them — without this map the WHERE clause would reference a
@@ -688,9 +671,12 @@ outputFieldAliases =
 
 -- Transform dot notation to triple-underscore notation for flattened attributes
 transformFlattenedAttribute :: T.Text -> T.Text
+-- Exception fields can live on the flattened attributes___exception___* column
+-- or as a span event (event_name="exception"); OTel SDKs (e.g. hs-opentelemetry)
+-- take the latter, so we COALESCE both sources.
 transformFlattenedAttribute entire
-  | Just field <- T.stripPrefix "attributes.exception." entire
-  , field `S.member` exceptionFlattenedFields =
+  | entire `S.member` flattenedOtelAttributes
+  , Just field <- T.stripPrefix "attributes.exception." entire =
       "COALESCE(attributes___exception___"
         <> field
         <> ", (jsonb_path_query_first(events, '$[*] ? (@.event_name == \"exception\").event_attributes.exception."

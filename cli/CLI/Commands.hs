@@ -405,7 +405,8 @@ runEventsGet cfg opts mode = case opts.at of
   Just raw -> case iso8601ParseM (toString raw) :: Maybe UTCTime of
     Nothing -> printError "--at: invalid ISO-8601 timestamp" >> liftIO exitFailure
     Just t
-      | T.any (== '/') opts.eventId -> printError "event id must not contain '/'" >> liftIO exitFailure
+      | T.any (`elem` ("/?#%" :: [Char])) opts.eventId ->
+          printError "event id must not contain any of '/', '?', '#', '%'" >> liftIO exitFailure
       | otherwise -> do
           -- Direct O(1) lookup: both id and timestamp known → single-partition query.
           -- Returns raw OtelLogsAndSpans JSON; always rendered as JSON (table view

@@ -157,6 +157,7 @@ renderAPIError e
 reqOpts :: CLIConfig -> [(Text, Text)] -> W.Options
 reqOpts cfg params =
   W.defaults
+    -- Override http-client's 30s default; long-running aggregates legitimately exceed it.
     & (Wreq.manager .~ Left tlsManagerSettings{HC.managerResponseTimeout = responseTimeoutMicro (5 * 60 * 1_000_000)})
     & (W.header "Accept" .~ ["application/json"])
     & addAuth cfg.apiKey
