@@ -1,4 +1,4 @@
-module Web.Routes (server, genAuthServerContext, KeepPrefixExp, widgetPngGetH, ApiV1Routes, apiV1OpenApiSpec) where
+module Web.Routes (server, genAuthServerContext, KeepPrefixExp, widgetPngGetH, ApiV1Routes, apiV1Server, apiV1OpenApiSpec) where
 
 -- Standard library imports
 import Control.Lens
@@ -7,7 +7,6 @@ import Data.ByteString qualified as BS
 import Data.Default (def)
 import Data.Map qualified as Map
 import Data.Ord (clamp)
-import Data.Pool (Pool)
 import Data.UUID qualified as UUID
 import GHC.TypeLits (Symbol)
 import Pkg.DeriveUtils (UUIDId (..))
@@ -15,7 +14,6 @@ import Relude hiding (ask)
 
 -- Database imports
 import Data.Effectful.Hasql qualified as Hasql
-import Database.PostgreSQL.Simple (Connection)
 import Hasql.Interpolate qualified as HI
 
 -- Effectful imports
@@ -36,7 +34,7 @@ import Servant.Htmx
 import Servant.QueryParam.Record (RecordParam)
 import Servant.QueryParam.Server.Record ()
 import Servant.QueryParam.TypeLevel (Eval, Exp)
-import Servant.Server.Generic (AsServerT)
+import Servant.Server.Generic (AsServerT, genericServeTWithContext)
 import Servant.Server.Internal.Delayed (passToServer)
 import Web.Cookie (SetCookie)
 
@@ -45,6 +43,7 @@ import Web.Cookie (SetCookie)
 import Data.OpenApi (OpenApi, SecurityDefinitions (..), SecurityScheme (..), SecuritySchemeType (..), components, description, info, security, securitySchemes, servers, title, version)
 import Data.OpenApi qualified as OA
 import Deriving.Aeson qualified as DAE
+import OpenTelemetry.Trace (TracerProvider)
 import Pages.Bots.Utils (verifyWidgetSignature)
 import Pages.CommandPalette qualified as CommandPalette
 import Servant.OpenApi (toOpenApi)
@@ -53,9 +52,10 @@ import System.Exit (ExitCode (..))
 import System.Logging qualified as Log
 import System.Process.Typed (byteStringInput, proc, readProcess, setStdin)
 import System.Timeout (timeout)
-import System.Types (ATAuthCtx, ATBaseCtx, HXRedirectDest, RespHeaders, TriggerEvents, XWidgetJSON, addRespHeaders)
+import System.Types (ATAuthCtx, ATBaseCtx, HXRedirectDest, RespHeaders, TriggerEvents, XWidgetJSON, addRespHeaders, effToServantHandler)
 import Web.Auth (APItoolkitAuthContext, ApiKeyAuthContext, apiKeyAuthHandler, authHandler, htmlServerError)
 import Web.Auth qualified as Auth
+import Web.MCP qualified as MCP
 
 -- Model imports
 
@@ -290,6 +290,8 @@ data ApiV1Routes mode = ApiV1Routes
   , memberAdd :: mode :- "members" :> ReqBody '[JSON] ApiT.MemberAdd :> Post '[JSON] ApiT.MemberSummary
   , memberPatch :: mode :- "members" :> Capture "user_id" UUID.UUID :> ReqBody '[JSON] ApiT.MemberPatch :> Patch '[JSON] ApiT.MemberSummary
   , memberRemove :: mode :- "members" :> Capture "user_id" UUID.UUID :> Delete '[JSON] NoContent
+  , -- Model Context Protocol endpoint (JSON-RPC; tools derived from this OpenAPI spec)
+    mcp :: mode :- "mcp" :> ReqBody '[JSON] AE.Value :> Post '[JSON] AE.Value
   }
   deriving stock (Generic)
 
@@ -550,8 +552,8 @@ data ProjectsRoutes' mode = ProjectsRoutes'
 -- =============================================================================
 
 -- Main server for the root routes
-server :: Pool Connection -> Routes (AsServerT ATBaseCtx)
-server pool =
+server :: Logger -> AuthContext -> TracerProvider -> Routes (AsServerT ATBaseCtx)
+server logger env tp =
   Routes
     { public = Servant.serveDirectoryWebApp "./static/public"
     , ping = pingH
@@ -586,7 +588,7 @@ server pool =
     , deviceToken = Auth.deviceTokenH
     , emailPreviewList = emailPreviewListH
     , emailPreview = emailPreviewH
-    , apiV1 = apiV1Server
+    , apiV1 = apiV1Server logger env tp
     , apiV1OpenApi = pure apiV1OpenApiSpec
     , cookieProtected = \sessionWithCookies ->
         Servant.hoistServerWithContext
@@ -605,8 +607,8 @@ server pool =
 
 
 -- API v1 server
-apiV1Server :: Projects.ProjectId -> Servant.ServerT (NamedRoutes ApiV1Routes) ATBaseCtx
-apiV1Server pid =
+apiV1Server :: Logger -> AuthContext -> TracerProvider -> Projects.ProjectId -> Servant.ServerT (NamedRoutes ApiV1Routes) ATBaseCtx
+apiV1Server logger env tp pid =
   ApiV1Routes
     { eventsSearch = Log.queryEvents pid
     , metricsQuery = \queryM dataTypeM sinceM fromM toM sourceM ->
@@ -682,7 +684,21 @@ apiV1Server pid =
     , memberAdd = ApiH.apiMemberAdd pid
     , memberPatch = ApiH.apiMemberPatch pid
     , memberRemove = ApiH.apiMemberRemove pid
+    , mcp = MCP.handleJsonRpc mcpToolRegistry mkApiV1App pid
     }
+  where
+    mkApiV1App p =
+      genericServeTWithContext
+        (effToServantHandler env logger tp)
+        (apiV1Server logger env tp p)
+        Servant.EmptyContext
+
+
+-- | MCP tool registry — REST tools (from OpenAPI) + composite workflow tools,
+-- built once at startup.
+{-# NOINLINE mcpToolRegistry #-}
+mcpToolRegistry :: Map Text MCP.Tool
+mcpToolRegistry = MCP.allTools apiV1OpenApiSpec
 
 
 apiV1OpenApiSpec :: OpenApi

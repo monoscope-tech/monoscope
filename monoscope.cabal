@@ -207,6 +207,7 @@ library
       Web.ApiHandlers
       Web.ApiTypes
       Web.Auth
+      Web.MCP
       Web.Routes
       Proto.Opentelemetry.Proto.Common.V1.Common
       Proto.Opentelemetry.Proto.Common.V1.Common_Fields
@@ -336,6 +337,7 @@ library
     , http-client
     , http-types
     , hw-kafka-client
+    , insert-ordered-containers
     , jose-jwt
     , ki-effectful
     , langchain-hs
@@ -685,6 +687,8 @@ test-suite integration-tests
     , uuid
     , uuid-quasi
     , vector
+    , wai
+    , wai-extra
     , wreq
   default-language: GHC2024
 

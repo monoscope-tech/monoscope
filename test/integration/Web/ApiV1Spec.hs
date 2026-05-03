@@ -1,9 +1,9 @@
 module Web.ApiV1Spec (spec) where
 
-import Control.Lens ((^.), (^?))
+import Control.Lens (_Just, (^.), (^..), (^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
-import Data.Aeson.Lens (key, _Array, _Number, _Object)
+import Data.Aeson.Lens (key, _Array, _Number, _Object, _String)
 import Data.Default (def)
 import Data.Map qualified as Map
 import Data.OpenApi (OpenApi, info, title, version)
@@ -25,7 +25,16 @@ import Test.Hspec
 import Web.ApiHandlers qualified as ApiH
 import Web.ApiTypes qualified as ApiT
 import Web.Auth (resolveApiKeyProject)
-import Web.Routes (apiV1OpenApiSpec)
+import Web.MCP qualified as MCP
+import Web.Routes (apiV1OpenApiSpec, apiV1Server)
+import Web.Routes qualified as Routes
+
+import Network.HTTP.Types qualified as H
+import Network.Wai qualified as Wai
+import Network.Wai.Test qualified as WT
+import Servant qualified
+import Servant.Server.Generic (genericServeTWithContext)
+import System.Types (effToServantHandlerTest)
 
 
 specJson :: AE.Value
@@ -420,6 +429,215 @@ spec = aroundAll withTestResources do
       it "add without email or user_id is rejected" $ \tr -> do
         (runAsBase tr (ApiH.apiMemberAdd testPid ApiT.MemberAdd{ApiT.email = Nothing, ApiT.userId = Nothing, ApiT.permission = Nothing})
           >>= evaluateWHNF_) `shouldThrow` anyException
+
+    describe "MCP" do
+      let reg = MCP.allTools apiV1OpenApiSpec
+          dummyApp _ = error "dummyApp invoked unexpectedly"
+          buildTestApp tr pid =
+            genericServeTWithContext
+              (effToServantHandlerTest tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
+              (apiV1Server tr.trLogger tr.trATCtx tr.trTracerProvider pid)
+              Servant.EmptyContext
+          -- Top-level Servant app for the e2e tests below — same wiring as
+          -- mkServer in production minus the WAI middleware stack. Hitting
+          -- /api/v1/mcp through this exercises auth + JSON-RPC + dispatch.
+          mkTopApp tr =
+            genericServeTWithContext
+              (effToServantHandlerTest tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
+              (Routes.server tr.trLogger tr.trATCtx tr.trTracerProvider)
+              (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
+          mcpHttp tr authHdr body =
+            let req =
+                  WT.setPath
+                    Wai.defaultRequest
+                      { Wai.requestMethod = H.methodPost
+                      , Wai.requestHeaders = ("Content-Type", "application/json") : authHdr
+                      }
+                    "/api/v1/mcp"
+             in WT.runSession (WT.srequest (WT.SRequest req (AE.encode body))) (mkTopApp tr)
+          rpcCall body =
+            AE.object
+              [ "jsonrpc" AE..= ("2.0" :: Text)
+              , "id" AE..= (1 :: Int)
+              , "method" AE..= ("tools/call" :: Text)
+              , "params" AE..= body
+              ]
+          rpcCallNamed name args =
+            rpcCall (AE.object ["name" AE..= (name :: Text), "arguments" AE..= args])
+          rpcSimple m =
+            AE.object
+              [ "jsonrpc" AE..= ("2.0" :: Text)
+              , "id" AE..= (1 :: Int)
+              , "method" AE..= (m :: Text)
+              ]
+
+      it "registry uses verb-first canonical tool names" $ \_tr -> do
+        Map.member "search_events" reg `shouldBe` True
+        Map.member "list_events" reg `shouldBe` True
+        Map.member "list_monitors" reg `shouldBe` True
+        Map.member "get_monitor" reg `shouldBe` True
+        Map.member "mute_monitor" reg `shouldBe` True
+        Map.member "apply_dashboard" reg `shouldBe` True
+        Map.member "get_dashboard_yaml" reg `shouldBe` True
+        Map.member "get_schema" reg `shouldBe` True
+        Map.member "whoami" reg `shouldBe` True
+
+      it "does not expose the MCP endpoint as its own tool" $ \_tr -> do
+        Map.member "post_mcp" reg `shouldBe` False
+        Map.member "mcp_post" reg `shouldBe` False
+
+      it "tools/list returns named tools with name/description/inputSchema" $ \tr -> do
+        let req =
+              AE.object
+                [ "jsonrpc" AE..= ("2.0" :: Text)
+                , "id" AE..= (1 :: Int)
+                , "method" AE..= ("tools/list" :: Text)
+                ]
+        resp <- runAsBase tr (MCP.handleJsonRpc reg dummyApp testPid req)
+        let tools = resp ^.. key "result" . key "tools" . _Array . traverse
+        tools `shouldSatisfy` (not . null)
+        case tools of
+          (t : _) -> for_ ["name", "description", "inputSchema"] $ \k ->
+            (t ^? key (AEK.fromText k)) `shouldSatisfy` isJust
+          [] -> expectationFailure "expected at least one tool"
+
+      it "initialize returns protocolVersion + serverInfo" $ \tr -> do
+        let req =
+              AE.object
+                [ "jsonrpc" AE..= ("2.0" :: Text)
+                , "id" AE..= (1 :: Int)
+                , "method" AE..= ("initialize" :: Text)
+                ]
+        resp <- runAsBase tr (MCP.handleJsonRpc reg dummyApp testPid req)
+        (resp ^? key "result" . key "protocolVersion") `shouldSatisfy` isJust
+        (resp ^? key "result" . key "serverInfo" . key "name") `shouldSatisfy` isJust
+
+      it "tools/call get_schema round-trips through to Schema.telemetrySchema" $ \tr -> do
+        let req =
+              rpcCall
+                $ AE.object
+                  [ "name" AE..= ("get_schema" :: Text)
+                  , "arguments" AE..= AE.object []
+                  ]
+        resp <- runAsBase tr (MCP.handleJsonRpc reg (buildTestApp tr) testPid req)
+        let isErr = resp ^? key "result" . key "isError"
+            content = resp ^? key "result" . key "content" . _Array . traverse . key "text"
+        when (isErr /= Just (AE.Bool False))
+          $ expectationFailure ("schema_get returned isError; body: " <> show content)
+        let structured = resp ^? key "result" . key "structuredContent"
+        case structured of
+          Just v -> case AE.fromJSON @Schema.Schema v of
+            AE.Success s -> Map.keys s.fields `shouldMatchList` Map.keys Schema.telemetrySchema.fields
+            AE.Error e -> expectationFailure ("structuredContent did not decode as Schema: " <> e)
+          Nothing -> expectationFailure ("structuredContent missing; body: " <> show content)
+
+      it "tools/call with unknown tool name returns isError result, not JSON-RPC error" $ \tr -> do
+        let req =
+              rpcCall
+                $ AE.object
+                  [ "name" AE..= ("does_not_exist" :: Text)
+                  , "arguments" AE..= AE.object []
+                  ]
+        resp <- runAsBase tr (MCP.handleJsonRpc reg dummyApp testPid req)
+        (resp ^? key "result" . key "isError") `shouldBe` Just (AE.Bool True)
+        (resp ^? key "error") `shouldBe` Nothing
+
+      it "tools/list includes composite workflow tools alongside REST tools" $ \tr -> do
+        let req =
+              AE.object
+                [ "jsonrpc" AE..= ("2.0" :: Text)
+                , "id" AE..= (1 :: Int)
+                , "method" AE..= ("tools/list" :: Text)
+                ]
+        resp <- runAsBase tr (MCP.handleJsonRpc reg dummyApp testPid req)
+        let names :: [Text]
+            names =
+              resp
+                ^.. key "result"
+                  . key "tools"
+                  . _Array
+                  . traverse
+                  . key "name"
+                  . _String
+        ("find_error_patterns" `elem` names) `shouldBe` True
+        ("search_events_nl" `elem` names) `shouldBe` True
+        ("analyze_issue" `elem` names) `shouldBe` True
+        -- And REST tools still present
+        ("get_schema" `elem` names) `shouldBe` True
+
+      it "tools/call find_error_patterns returns OK with patterns array" $ \tr -> do
+        let req =
+              rpcCall
+                $ AE.object
+                  [ "name" AE..= ("find_error_patterns" :: Text)
+                  , "arguments" AE..= AE.object ["limit" AE..= (5 :: Int)]
+                  ]
+        resp <- runAsBase tr (MCP.handleJsonRpc reg dummyApp testPid req)
+        (resp ^? key "result" . key "isError") `shouldBe` Just (AE.Bool False)
+        (resp ^? key "result" . key "structuredContent" . key "patterns" . _Array) `shouldSatisfy` isJust
+        (resp ^? key "result" . key "structuredContent" . key "as_of") `shouldSatisfy` isJust
+
+      it "tools/call search_events_nl with empty input returns isError" $ \tr -> do
+        let req =
+              rpcCall
+                $ AE.object
+                  [ "name" AE..= ("search_events_nl" :: Text)
+                  , "arguments" AE..= AE.object ["input" AE..= ("" :: Text)]
+                  ]
+        resp <- runAsBase tr (MCP.handleJsonRpc reg dummyApp testPid req)
+        (resp ^? key "result" . key "isError") `shouldBe` Just (AE.Bool True)
+
+      it "tools/call analyze_issue with bad UUID returns isError, not JSON-RPC error" $ \tr -> do
+        let req =
+              rpcCall
+                $ AE.object
+                  [ "name" AE..= ("analyze_issue" :: Text)
+                  , "arguments" AE..= AE.object ["issue_id" AE..= ("not-a-uuid" :: Text)]
+                  ]
+        resp <- runAsBase tr (MCP.handleJsonRpc reg dummyApp testPid req)
+        (resp ^? key "result" . key "isError") `shouldBe` Just (AE.Bool True)
+        (resp ^? key "error") `shouldBe` Nothing
+
+      it "e2e: rejects /api/v1/mcp without a valid API key" $ \tr -> do
+        resp <- mcpHttp tr [] (rpcSimple "tools/list")
+        H.statusCode (WT.simpleStatus resp) `shouldBe` 401
+
+      it "e2e: tools/list through real HTTP route returns the registry" $ \tr -> do
+        apiKey <- createTestAPIKey tr testPid "mcp-e2e-list"
+        resp <- mcpHttp tr [("Authorization", "Bearer " <> encodeUtf8 apiKey)] (rpcSimple "tools/list")
+        H.statusCode (WT.simpleStatus resp) `shouldBe` 200
+        let body = AE.decode (WT.simpleBody resp) :: Maybe AE.Value
+            names = body ^.. _Just . key "result" . key "tools" . _Array . traverse . key "name" . _String
+        for_ ["get_schema", "list_monitors", "find_error_patterns"] $ \n ->
+          (n `elem` (names :: [Text])) `shouldBe` True
+
+      it "e2e: tools/call get_schema through real HTTP route returns the schema" $ \tr -> do
+        apiKey <- createTestAPIKey tr testPid "mcp-e2e-call"
+        resp <-
+          mcpHttp tr
+            [("Authorization", "Bearer " <> encodeUtf8 apiKey)]
+            (rpcCallNamed "get_schema" (AE.object []))
+        H.statusCode (WT.simpleStatus resp) `shouldBe` 200
+        let body = AE.decode (WT.simpleBody resp) :: Maybe AE.Value
+        (body ^? _Just . key "result" . key "isError") `shouldBe` Just (AE.Bool False)
+        case body ^? _Just . key "result" . key "structuredContent" of
+          Just v -> case AE.fromJSON @Schema.Schema v of
+            AE.Success s -> Map.keys s.fields `shouldMatchList` Map.keys Schema.telemetrySchema.fields
+            AE.Error e -> expectationFailure ("structuredContent did not decode as Schema: " <> e)
+          Nothing -> expectationFailure ("structuredContent missing in body: " <> show body)
+
+      it "notifications/* return JSON null with no envelope" $ \tr -> do
+        let req = rpcSimple "notifications/initialized"
+        resp <- runAsBase tr (MCP.handleJsonRpc reg dummyApp testPid req)
+        resp `shouldBe` AE.Null
+
+      it "tools/call create_team forwards POST body and round-trips" $ \tr -> do
+        teamHandle <- ("body-test-" <>) . UUID.toText <$> UUIDV4.nextRandom
+        let body = AE.object ["name" AE..= teamHandle, "handle" AE..= teamHandle]
+            req = rpcCallNamed "create_team" (AE.object ["body" AE..= body])
+        resp <- runAsBase tr (MCP.handleJsonRpc reg (buildTestApp tr) testPid req)
+        (resp ^? key "result" . key "isError") `shouldBe` Just (AE.Bool False)
+        (resp ^? key "result" . key "structuredContent" . key "summary" . key "handle" . _String) `shouldBe` Just teamHandle
 
     describe "Share link create" do
       it "returns id and url containing /share/r/<id>" $ \tr -> do

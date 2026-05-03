@@ -152,7 +152,7 @@ mkServer :: LogBase.Logger -> AuthContext -> TracerProvider -> Servant.Applicati
 mkServer logger env tp = do
   genericServeTWithContext
     (effToServantHandler env logger tp)
-    (Routes.server env.pool)
+    (Routes.server logger env tp)
     (Routes.genAuthServerContext logger env)
 
 
