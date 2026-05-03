@@ -20,9 +20,9 @@ import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Lazy qualified as LBS
 import Data.HashMap.Strict.InsOrd qualified as IOH
 import Data.Map.Strict qualified as Map
-import Data.Ord (Down (..))
 import Data.OpenApi (OpenApi)
 import Data.OpenApi qualified as OA
+import Data.Ord (Down (..))
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Time (addUTCTime)
@@ -31,13 +31,13 @@ import Effectful.Error.Static qualified as Error
 import Effectful.Reader.Static qualified as Reader
 import Effectful.Time qualified as Time
 import Models.Apis.Fields qualified as Fields
-import Pkg.DeriveUtils (UUIDId (..))
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types qualified as H
 import Network.Wai qualified as Wai
 import Network.Wai.Test qualified as WT
 import Pkg.AI qualified as AI
+import Pkg.DeriveUtils (UUIDId (..))
 import Relude
 import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
@@ -421,7 +421,8 @@ splitArgs b args =
       pathStr = foldl' substPath b.path b.pathParams
       substPath acc k = maybe acc (\v -> T.replace ("{" <> k <> "}") (urlEncodeText (jsonToText v)) acc) (look k)
       qs =
-        T.intercalate "&"
+        T.intercalate
+          "&"
           [ k <> "=" <> urlEncodeText (jsonToText v)
           | k <- b.queryParams
           , Just v <- [look k]
@@ -457,7 +458,8 @@ compositeTools = [findErrorPatterns, searchEventsNL, analyzeIssue]
 -- | Top log/error patterns ranked by current-hour volume.
 findErrorPatterns :: Tool
 findErrorPatterns =
-  composite "find_error_patterns"
+  composite
+    "find_error_patterns"
     "Top established log patterns ranked by current-hour event count. Use to answer 'what is blowing up right now' without crafting a query."
     (objSchema [("limit", intProp "Max patterns to return (default 20).")] [])
     \pid args -> do
@@ -473,7 +475,8 @@ findErrorPatterns =
 -- run separately via @search_events@.
 searchEventsNL :: Tool
 searchEventsNL =
-  composite "search_events_nl"
+  composite
+    "search_events_nl"
     "Translate a natural-language description (e.g. 'failed payments in the last hour for service checkout') into a KQL query for the events index. Returns the suggested query, time range and an explanation; call search_events with the query to execute."
     ( objSchema
         [ ("input", strProp "The natural-language description of what to find.")
@@ -493,18 +496,21 @@ searchEventsNL =
             AI.runAgenticQuery cfg inputT authCtx.env.openaiModel authCtx.env.openaiApiKey >>= \case
               Left err -> pure $ toolError ("AI translation failed: " <> err)
               Right resp ->
-                pure $ okResult $ AE.object
-                  [ "query" AE..= resp.query
-                  , "visualization_type" AE..= resp.visualization
-                  , "commentary" AE..= resp.explanation
-                  , "time_range" AE..= resp.timeRange
-                  ]
+                pure
+                  $ okResult
+                  $ AE.object
+                    [ "query" AE..= resp.query
+                    , "visualization_type" AE..= resp.visualization
+                    , "commentary" AE..= resp.explanation
+                    , "time_range" AE..= resp.timeRange
+                    ]
 
 
 -- | Fetch an issue and ask the LLM to diagnose it.
 analyzeIssue :: Tool
 analyzeIssue =
-  composite "analyze_issue"
+  composite
+    "analyze_issue"
     "Fetch an issue by id and return both the issue payload and an LLM-generated diagnosis (probable cause, key signals, suggested next steps). Costs one LLM call."
     (objSchema [("issue_id", strProp "UUID of the issue to analyze.")] ["issue_id"])
     \pid args -> case textArg "issue_id" args >>= UUID.fromText of
