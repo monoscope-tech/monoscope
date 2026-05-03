@@ -315,6 +315,7 @@ eventsGetParser =
   EventsGetOpts
     <$> strArgument (metavar "ID" <> help "Event or trace ID")
     <*> switch (long "tree" <> help "Show trace tree view")
+    <*> optional (strOption (long "at" <> metavar "TIMESTAMP" <> help "ISO-8601 timestamp for a fast point-in-time lookup (avoids 90d range scan)"))
 
 
 eventsTailParser :: Parser EventsTailOpts

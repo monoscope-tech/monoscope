@@ -32,7 +32,7 @@ import Relude
 import CLI.Config (CLIConfig (..), ConfigKey (..), allConfigKeys, configDir, configFilePath, configKeyText, parseConfigKey, removeToken, resolveConfig, saveToken, setConfigValue)
 import CLI.Core (OutputMode (..), apiGet, apiPostUnauth, isAgentMode, isInteractiveTTY, printDebug, printError, renderJSON, renderTable, renderWith, withAPIResult)
 import CLI.UI (inputForm, selectFromList, withSpinner)
-import CLI.Validate (validateAndNormalizeKind, validateDurationOrDie)
+import CLI.Validate (validateAndNormalizeKind, validateDurationOrDie, validateQueryOrDie)
 import Control.Lens ((%~))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AK
@@ -42,6 +42,8 @@ import Data.Effectful.Wreq (HTTP, runHTTPWreq)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
+import Data.Time (UTCTime)
+import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful
@@ -298,6 +300,7 @@ data EventsSearchOpts = EventsSearchOpts
 data EventsGetOpts = EventsGetOpts
   { eventId :: Text
   , showTree :: Bool
+  , at :: Maybe Text -- ^ ISO-8601 timestamp for a fast point-in-time lookup
   }
   deriving stock (Show)
 
@@ -377,6 +380,7 @@ emitFirstEventId v = case v of
 validateEventsOpts :: IOE :> es => EventsSearchOpts -> Eff es EventsSearchOpts
 validateEventsOpts opts = do
   validateDurationOrDie "--since" opts.since
+  validateQueryOrDie opts.query
   kindNorm <- validateAndNormalizeKind opts.kind
   -- DuplicateRecordFields makes record-update on @kind@ ambiguous
   -- (also a field on EventsTailOpts/EventsContextOpts) — bind to a typed let
@@ -387,26 +391,28 @@ validateEventsOpts opts = do
 
 
 -- | 'events get ID' — fetch one event (or full trace tree with --tree).
--- Uses 'id==' for single-event lookup, 'context.trace_id==' when --tree.
--- Defaults to a 24h lookback so older trace IDs still resolve. The legacy
--- behaviour ('trace_id:<id>') used the wrong KQL operator AND the wrong
--- column name, so every call returned 400.
+-- When --at TIMESTAMP is given, uses GET /api/v1/events/{id}/time/{ts} for an
+-- O(1) timeseries point lookup. Without --at, falls back to a 90d KQL search.
 runEventsGet :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> EventsGetOpts -> OutputMode -> Eff es ()
-runEventsGet cfg opts mode = do
-  -- Event IDs are not always UUIDs (synthetic-… spans, integer log_pattern
-  -- ids, etc.) so we don't validate the format — but we DO escape the
-  -- backslash and double-quote so the value can't break out of the KQL
-  -- string literal and cause an opaque server-side parse failure.
-  let eid = T.replace "\"" "\\\"" (T.replace "\\" "\\\\" opts.eventId)
-      q =
+runEventsGet cfg opts mode =
+  case opts.at >>= iso8601ParseM . toString of
+    Just (t :: UTCTime) -> do
+      -- Direct O(1) lookup: both id and timestamp known → single-partition query.
+      -- Returns raw OtelLogsAndSpans JSON; always rendered as JSON (table view
+      -- is not applicable for a single denormalized span record).
+      let path = "/api/v1/events/" <> opts.eventId <> "/time/" <> toText (iso8601Show t)
+      withAPIResult cfg path [] renderJSON
+    Nothing -> do
+      -- Fallback: scan 90d, also match by trace_id so bare trace IDs work.
+      let eid = T.replace "\"" "\\\"" (T.replace "\\" "\\\\" opts.eventId)
+          q
+            | opts.showTree = "context.trace_id==\"" <> eid <> "\""
+            | otherwise = "(id==\"" <> eid <> "\") or (context.trace_id==\"" <> eid <> "\")"
+          params = [("query", q), ("since", "90d")]
+      withAPIResult cfg "/api/v1/events" params $ \val ->
         if opts.showTree
-          then "context.trace_id==\"" <> eid <> "\""
-          else "(id==\"" <> eid <> "\") or (context.trace_id==\"" <> eid <> "\")"
-      params = [("query", q), ("since", "24H")]
-  withAPIResult cfg "/api/v1/events" params $ \val ->
-    if opts.showTree
-      then renderTraceTree val
-      else renderWith mode (normalizeEventsResponse val Nothing) (renderEventsTable val Nothing)
+          then renderTraceTree val
+          else renderWith mode (normalizeEventsResponse val Nothing) (renderEventsTable val Nothing)
 
 
 runEventsTail :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> EventsTailOpts -> Maybe Text -> Eff es ()

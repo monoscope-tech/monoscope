@@ -175,6 +175,13 @@ data ApiV1Routes mode = ApiV1Routes
           :> QPT "source"
           :> QueryParam "limit" Int
           :> Get '[JSON] Log.LogResult
+  , eventGet
+      :: mode
+        :- "events"
+          :> Capture "event_id" UUID.UUID
+          :> "time"
+          :> Capture "timestamp" UTCTime
+          :> Get '[JSON] AE.Value
   , metricsQuery
       :: mode
         :- "metrics"
@@ -611,6 +618,7 @@ apiV1Server :: Logger -> AuthContext -> TracerProvider -> Projects.ProjectId -> 
 apiV1Server logger env tp pid =
   ApiV1Routes
     { eventsSearch = Log.queryEvents pid
+    , eventGet = ApiH.apiEventGet pid
     , metricsQuery = \queryM dataTypeM sinceM fromM toM sourceM ->
         Charts.queryMetrics Nothing dataTypeM (Just pid) queryM Nothing sinceM fromM toM sourceM []
     , schemaGet = pure Schema.telemetrySchema

@@ -345,6 +345,7 @@ executables:
       - deriving-aeson
       - name: relude
         version: '>= 1.2.0.0'
+      - time
 
 tests:
   doctests:

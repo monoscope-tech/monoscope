@@ -480,6 +480,7 @@ executable monoscope
     , process
     , relude >=1.2.0.0
     , text
+    , time
     , unix
     , unliftio
     , vector

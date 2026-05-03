@@ -81,6 +81,8 @@ module Web.ApiHandlers (
   apiMemberRemove,
   -- Facets
   apiFacets,
+  -- Direct event lookup by (id, timestamp)
+  apiEventGet,
 ) where
 
 import Control.Lens ((%~), _Just)
@@ -1146,6 +1148,17 @@ apiMemberRemove pid uid = do
 -- The response is always a JSON object keyed by field path, each value a
 -- @[{value, count}]@ list sorted by count descending. Missing/expired
 -- facets return @{}@ (not 404) — agents can rely on the shape regardless.
+-- | Direct O(1) event lookup by (id, timestamp). Uses the timeseries partition
+-- key so the DB can resolve a single row without a range scan.
+-- Returns 404 when the event is not found.
+apiEventGet :: Projects.ProjectId -> UUID.UUID -> UTCTime -> ATBaseCtx AE.Value
+apiEventGet pid eid ts = do
+  mItem <- Telemetry.logRecordByProjectAndId pid ts eid
+  case mItem of
+    Nothing -> throwError err404{errBody = encodeUtf8 ("event not found" :: Text)}
+    Just item -> pure (AE.toJSON item)
+
+
 apiFacets :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATBaseCtx AE.Value
 apiFacets pid sinceM fromM toM fieldM = do
   now <- Time.currentTime
