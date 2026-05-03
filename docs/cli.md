@@ -5,7 +5,7 @@ The `monoscope` CLI provides terminal access to your observability platform — 
 ## Installation
 
 ```bash
-curl -fsSL https://monoscope.tech/install.sh | bash
+curl monoscope.tech/install.sh | sh
 ```
 
 Detects your platform (Linux/macOS, x86_64/arm64), downloads the latest release, verifies the SHA256 checksum, and installs `monoscope` to `~/.local/bin`.
@@ -13,25 +13,25 @@ Detects your platform (Linux/macOS, x86_64/arm64), downloads the latest release,
 **Specific version:**
 
 ```bash
-curl -fsSL https://monoscope.tech/install.sh | bash -s v1.2.3
+curl monoscope.tech/install.sh | sh -s v1.2.3
 ```
 
 **Custom install directory:**
 
 ```bash
-MONOSCOPE_INSTALL_DIR=/usr/local/bin curl -fsSL https://monoscope.tech/install.sh | bash
+MONOSCOPE_INSTALL_DIR=/usr/local/bin curl monoscope.tech/install.sh | sh
 ```
 
 **Upgrade to latest** (re-running the install script upgrades automatically if a newer version exists):
 
 ```bash
-curl -fsSL https://monoscope.tech/install.sh | bash
+curl monoscope.tech/install.sh | sh
 ```
 
 If the installed version is already current, the script exits with "already up to date". To force reinstall the same version, pass `--force`:
 
 ```bash
-curl -fsSL https://monoscope.tech/install.sh | bash -s -- --force
+curl monoscope.tech/install.sh | sh -s -- --force
 ```
 
 ## Authentication

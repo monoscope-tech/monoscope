@@ -89,7 +89,7 @@ telemetrygen traces --otlp-endpoint localhost:4317 --otlp-insecure \
 Manage your Monoscope project from the terminal — search logs, query metrics, manage monitors and dashboards, triage issues, and more.
 
 ```bash
-curl -fsSL https://monoscope.tech/install.sh | bash
+curl monoscope.tech/install.sh | sh
 monoscope auth login
 ```
 
