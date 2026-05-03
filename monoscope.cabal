@@ -471,6 +471,7 @@ executable monoscope
     , effectful-core
     , filepath
     , http-client
+    , http-client-tls
     , lens
     , lens-aeson
     , monoscope
@@ -479,6 +480,7 @@ executable monoscope
     , process
     , relude >=1.2.0.0
     , text
+    , time
     , unix
     , unliftio
     , vector
@@ -703,6 +705,7 @@ test-suite unit-tests
       Pkg.ParserSpec
       Pkg.QueryCacheSpec
       RequestMessagesSpec
+      Web.ApiHandlersSpec
       Spec
   hs-source-dirs:
       test/unit
@@ -734,6 +737,7 @@ test-suite unit-tests
   build-depends:
       aeson
     , aeson-qq
+    , containers
     , effectful-core
     , extra
     , hs-opentelemetry-instrumentation-auto
@@ -743,6 +747,7 @@ test-suite unit-tests
     , monoscope
     , neat-interpolation
     , relude >=1.2.0.0
+    , text
     , time
     , uuid
     , uuid-quasi

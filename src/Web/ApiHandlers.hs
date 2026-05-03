@@ -81,6 +81,10 @@ module Web.ApiHandlers (
   apiMemberRemove,
   -- Facets
   apiFacets,
+  -- Direct event lookup by (id, timestamp)
+  apiEventGet,
+  -- Internals exposed for testing
+  synthStackFromSpans,
 ) where
 
 import Control.Lens ((%~), _Just)
@@ -99,12 +103,13 @@ import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, nominalDay, zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
+import Database.PostgreSQL.Simple.Newtypes (Aeson (..), getAeson)
 import Deriving.Aeson qualified as DAE
 import Effectful.Error.Static (throwError)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Fields qualified as Fields
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns qualified as LogPatterns
@@ -114,6 +119,7 @@ import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as PM
 import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.Telemetry qualified as Telemetry
 import Pages.LogExplorer.Log qualified as Log
 import Pkg.Components.TimePicker qualified as TP
 import Pkg.Components.Widget qualified as Widget
@@ -809,7 +815,51 @@ fetchIssue pid iid = notFoundOr "Issue not found" =<< Issues.selectIssueByIdScop
 
 
 apiIssueGet :: Projects.ProjectId -> Issues.IssueId -> ATBaseCtx IssueApiFull
-apiIssueGet pid iid = issueToFull <$> fetchIssue pid iid
+apiIssueGet pid iid = issueToFull <$> (enrichIssue pid =<< fetchIssue pid iid)
+
+
+-- | Fill an empty @stack_trace@ on a runtime-exception issue with a synthesised
+-- one derived from the trace's span hierarchy. GHC doesn't capture a backtrace
+-- by default, so without this fallback the API/CLI surfaces an empty string.
+-- TODO(perf): store the synth stack at ingestion to avoid these 2 extra queries.
+enrichIssue :: Projects.ProjectId -> Issues.Issue -> ATBaseCtx Issues.Issue
+enrichIssue pid issue
+  | issue.issueType /= Issues.RuntimeException = pure issue
+  | otherwise = case AE.fromJSON (getAeson issue.issueData) of
+      AE.Success (rd :: Issues.RuntimeExceptionData)
+        | T.null rd.stackTrace -> do
+            epM <- ErrorPatterns.getErrorPatternByHash pid issue.targetHash
+            case epM >>= (.recentTraceId) of
+              Nothing -> pure issue
+              Just trId -> do
+                now <- Time.currentTime
+                spans <- Telemetry.getSpanRecordsByTraceId pid trId Nothing now
+                let synth = synthStackFromSpans trId spans
+                pure
+                  $ if T.null synth
+                    then issue
+                    else issue{Issues.issueData = Aeson (AE.toJSON rd{Issues.stackTrace = synth})}
+      _ -> pure issue
+
+
+-- | Build a pseudo-stacktrace from a trace's spans, ordered by start time and
+-- annotated with service + span id. Errored span is marked with @!!@.
+synthStackFromSpans :: Text -> [Telemetry.OtelLogsAndSpans] -> Text
+synthStackFromSpans _ [] = ""
+synthStackFromSpans trId spans =
+  "(synthesized from trace "
+    <> trId
+    <> " — GHC backtrace unavailable; spans ordered by start time, !! marks the errored span)\n"
+    <> T.intercalate "\n" (map formatOne (sortOn (.start_time) spans))
+  where
+    formatOne s =
+      let svc = Telemetry.spanServiceName s
+          spanId = fromMaybe "?" (s.context >>= (.span_id))
+          errored = s.status_code == Just "ERROR"
+          marker = if errored then "!! " else "   "
+          svcTxt = foldMap (\v -> " [" <> v <> "]") svc
+          label = fromMaybe "<unnamed>" s.name
+       in marker <> "at " <> label <> svcTxt <> " (span=" <> spanId <> ")"
 
 
 issueMutate :: Projects.ProjectId -> Issues.IssueId -> (V.Vector Issues.IssueId -> ATBaseCtx Int64) -> ATBaseCtx IssueApiFull
@@ -1099,3 +1149,15 @@ apiFacets pid sinceM fromM toM fieldM = do
            in AE.Object (maybe mempty (AEKM.singleton k) (AEKM.lookup k o))
         _ -> asAeson
   pure filtered
+
+
+-- | GET /api/v1/events/{id}/time/{ts} — O(1) lookup using the timeseries
+-- partition key. Both id and timestamp must be supplied; the DB resolves the
+-- row via @timestamp BETWEEN ts-1s AND ts+1s AND id = ?@ without a range scan.
+-- Returns 404 when the event is not found.
+apiEventGet :: Projects.ProjectId -> UUID.UUID -> UTCTime -> ATBaseCtx AE.Value
+apiEventGet pid eid ts = do
+  mItem <- Telemetry.logRecordByProjectAndId pid ts eid
+  case mItem of
+    Nothing -> throwError err404{errBody = encodeUtf8 ("event not found" :: Text)}
+    Just item -> pure (AE.toJSON item)

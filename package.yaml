@@ -323,6 +323,7 @@ executables:
       - ansi-terminal
       - directory
       - http-client
+      - http-client-tls
       - wreq
       - yaml
       - aeson
@@ -344,6 +345,7 @@ executables:
       - deriving-aeson
       - name: relude
         version: '>= 1.2.0.0'
+      - time
 
 tests:
   doctests:
@@ -435,6 +437,8 @@ tests:
       - hspec
       - relude >= 1.2.0.0
       - aeson
+      - containers
+      - text
       - uuid
       - uuid-quasi
       - neat-interpolation

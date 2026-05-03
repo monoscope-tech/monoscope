@@ -154,6 +154,25 @@ See [github.com/monoscope-tech/skills](https://github.com/monoscope-tech/skills)
 
 <br/>
 
+## MCP Server
+
+Monoscope exposes itself as a [Model Context Protocol](https://modelcontextprotocol.io/) server at `/api/v1/mcp`, so any MCP-aware client (Claude Desktop, Cursor, Cline, custom agents) can search events, manage monitors and dashboards, triage issues, and run composite workflows like `search_events_nl` (natural-language → KQL) and `analyze_issue` (LLM-assisted root-cause).
+
+```json
+{
+  "mcpServers": {
+    "monoscope": {
+      "url": "https://api.monoscope.tech/api/v1/mcp",
+      "headers": { "Authorization": "Bearer YOUR_API_KEY" }
+    }
+  }
+}
+```
+
+Every public REST endpoint is auto-registered as a verb-first tool (`list_monitors`, `search_events`, `mute_monitor`, …). See the [MCP reference](docs/mcp.md) for the full protocol, tool catalog, and examples.
+
+<br/>
+
 ## Integration
 
 ### Auto-instrument your apps
@@ -336,6 +355,7 @@ Real-time metrics and performance monitoring with AI-powered insights.
 
 - [Getting Started Guide](docs/getting-started.md)
 - [CLI Reference](docs/cli.md)
+- [MCP Server](docs/mcp.md)
 - [Configuration](docs/configuration.md)
 - [Kubernetes Guide](docs/kubernetes.md)
 - [Development Guide](docs/DEVELOPMENT.md)

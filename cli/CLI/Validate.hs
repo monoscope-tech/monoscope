@@ -10,6 +10,7 @@ module CLI.Validate
   , validateOrDie
   , validateDurationOrDie
   , validateAndNormalizeKind
+  , validateQueryOrDie
   ) where
 
 import Relude
@@ -18,6 +19,7 @@ import CLI.Core (printError)
 import Data.Char (isDigit, isHexDigit)
 import Data.Text qualified as T
 import Effectful
+import Pkg.Parser (parseQueryToAST)
 
 
 -- | Validate a relative-duration string of the form @\\d+(ms|s|m|h|d)@.
@@ -124,3 +126,13 @@ validateDurationOrDie flag = mapM_ (validateOrDie . validateDurationFor flag)
 -- always get the wire-level @log@/@span@ value. Exits on failure.
 validateAndNormalizeKind :: IOE :> es => Maybe Text -> Eff es (Maybe Text)
 validateAndNormalizeKind = mapM (\k -> normalizeKind k <$ validateOrDie (validateKind k))
+
+
+-- | Parse the KQL query client-side; on failure print Megaparsec's pretty
+-- error and exit. Empty queries pass through — the server accepts them.
+validateQueryOrDie :: IOE :> es => Text -> Eff es ()
+validateQueryOrDie q
+  | T.null (T.strip q) = pure ()
+  | otherwise = case parseQueryToAST q of
+      Right _ -> pure ()
+      Left err -> printError ("invalid query: " <> err) >> liftIO exitFailure

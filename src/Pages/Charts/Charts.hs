@@ -120,7 +120,7 @@ queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (
   let (fromD, toD, _currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
   let mappngSQL = variablePresets (maybe "" (.toText) pidM) fromD toD allParams now
       mappngKQL = variablePresetsKQL (maybe "" (.toText) pidM) fromD toD allParams now
-  let parseQuery q = either (\err -> throwError err400{errBody = "Invalid signature; " <> show err}) pure (parseQueryToAST $ replacePlaceholders mappngKQL q)
+  let parseQuery q = either (\err -> throwError err400{errBody = encodeUtf8 $ "Invalid query: " <> err}) pure (parseQueryToAST $ replacePlaceholders mappngKQL q)
 
   case (queryM, querySQLM) of
     (_, Just querySQL) -> do

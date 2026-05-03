@@ -123,11 +123,12 @@ import Utils (extractMessageFromLog, getDurationNSMS, lookupValueText)
 getNestedValue :: [Text] -> Map Text AE.Value -> Maybe AE.Value
 getNestedValue [] _ = Nothing
 getNestedValue [k] m = Map.lookup k m
-getNestedValue (k : ks) m = do
-  v <- Map.lookup k m
-  case v of
-    AE.Object obj -> getNestedValue ks (KEM.toMapText obj)
-    _ -> Nothing
+getNestedValue ks@(k : rest) m =
+  Map.lookup (T.intercalate "." ks) m <|> do
+    v <- Map.lookup k m
+    case v of
+      AE.Object obj -> getNestedValue rest (KEM.toMapText obj)
+      _ -> Nothing
 
 
 -- Helper function to clean null bytes from text

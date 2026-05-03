@@ -789,6 +789,11 @@ renderSpanRecordRow spanRecords colors service = do
   let duration = sum $ (.spanDurationNs) <$> filterRecords
   let errCount = V.length $ V.filter spanHasErrors filterRecords
       hasErr = errCount > 0
+      -- Guard against divide-by-zero: a service group may have 0 records if
+      -- a caller passes a service name that no longer matches any span
+      -- (race, filter), and a trace of all-instant spans has totalDuration=0.
+      avgDuration = if listLen == 0 then 0 else duration `div` toInteger listLen
+      pctOfTotal = if totalDuration == 0 then 0 else duration * 100 `div` totalDuration
   tr_
     [ class_ $ "w-full overflow-x-hidden p-2 cursor-pointer font-medium hover:bg-fillWeaker border-b-2 last:border-b-0" <> (if hasErr then " bg-fillError-weak/30" else "")
     , [__|on click toggle .hidden on next <tr/> then toggle .rotate-90 on the first <svg/> in the first <td/> in me|]
@@ -806,9 +811,9 @@ renderSpanRecordRow spanRecords colors service = do
             span_ [class_ "w-1.5 h-1.5 rounded-full bg-fillError-strong"] pass
             toHtml $ show errCount
           else span_ [class_ "text-textWeak/60"] "—"
-      td_ [class_ "px-2 py-1 max-w-48 text-textWeak truncate pl-4 tabular-nums"] $ toHtml $ getDurationNSMS $ duration `div` toInteger listLen
+      td_ [class_ "px-2 py-1 max-w-48 text-textWeak truncate pl-4 tabular-nums"] $ toHtml $ getDurationNSMS avgDuration
       td_ [class_ "px-2 py-1 max-w-48 text-textWeak truncate pl-4 tabular-nums"] $ toHtml $ getDurationNSMS duration
-      td_ [class_ "px-2 py-1 max-w-48 text-textWeak truncate pl-4 tabular-nums"] $ toHtml $ show (duration * 100 `div` totalDuration) <> "%"
+      td_ [class_ "px-2 py-1 max-w-48 text-textWeak truncate pl-4 tabular-nums"] $ toHtml $ show pctOfTotal <> "%"
   tr_ [class_ "hidden p-0 m-0", [__|on click halt|]] do
     td_ [colspan_ "6", class_ "pl-[13px] overflow-x-hidden"] do
       spanTable filterRecords

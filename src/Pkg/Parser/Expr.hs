@@ -1,4 +1,4 @@
-module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), kqlTimespanToTimeBucket, FieldKey (..), pSquareBracketKey, pTerm, jsonPathQuery, display, pDuration, pNowFunction, pAgoFunction, pValues, Parser, symbol, sc, ToQueryText (..), flattenedOtelAttributes, transformFlattenedAttribute) where
+module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), kqlTimespanToTimeBucket, FieldKey (..), pSquareBracketKey, pTerm, jsonPathQuery, display, pDuration, pNowFunction, pAgoFunction, pValues, Parser, symbol, sc, ToQueryText (..), flattenedOtelAttributes, transformFlattenedAttribute, outputFieldAliases) where
 
 import Control.Monad.Combinators.Expr (
   Operator (InfixL),
@@ -636,12 +636,52 @@ flattenedOtelAttributes =
     , "attributes.user.email"
     , "attributes.user.name"
     , "attributes.user.full_name"
+    , "attributes.exception.type"
+    , "attributes.exception.message"
+    , "attributes.exception.stacktrace"
+    , "attributes.exception.escaped"
+    ]
+
+
+-- | Map user-facing output field names (SELECT aliases) to their real DB column names.
+-- These aliases appear in query results and the schema endpoint, so users naturally
+-- try to filter by them — without this map the WHERE clause would reference a
+-- non-existent column and return a 400.
+--
+-- This map is applied unconditionally by 'Display Subject', covering both WHERE
+-- predicates (the intended use case) and SELECT/EXTEND expressions. In an EXTEND
+-- context the rewrite is still correct: @| extend x = span_name@ emits
+-- @name as x@, referencing the right column. The only edge case is
+-- @| summarize … by span_name@ which would GROUP BY @name@ and surface the
+-- result column as @name@ rather than @span_name@; that is an acceptable
+-- trade-off given how rarely aggregations target these alias fields.
+--
+-- >>> outputFieldAliases M.! "span_name"
+-- "name"
+-- >>> outputFieldAliases M.! "service"
+-- "resource___service___name"
+outputFieldAliases :: M.Map T.Text T.Text
+outputFieldAliases =
+  M.fromList
+    [ ("span_name", "name")
+    , ("service", "resource___service___name")
+    , ("trace_id", "context___trace_id")
     ]
 
 
 -- Transform dot notation to triple-underscore notation for flattened attributes
 transformFlattenedAttribute :: T.Text -> T.Text
+-- Exception fields can live on the flattened attributes___exception___* column
+-- or as a span event (event_name="exception"); OTel SDKs (e.g. hs-opentelemetry)
+-- take the latter, so we COALESCE both sources.
 transformFlattenedAttribute entire
+  | entire `S.member` flattenedOtelAttributes
+  , Just field <- T.stripPrefix "attributes.exception." entire =
+      "COALESCE(attributes___exception___"
+        <> field
+        <> ", (jsonb_path_query_first(events, '$[*] ? (@.event_name == \"exception\").event_attributes.exception."
+        <> field
+        <> "') #>> '{}'))"
   | entire `S.member` flattenedOtelAttributes = T.replace "." "___" entire
   | entire == "url_path" = "attributes___url___path"
   | otherwise = entire
@@ -660,11 +700,13 @@ transformFlattenedAttribute entire
 -- "errors->0->>'message' as message"
 instance Display Subject where
   displayPrec prec (Subject entire x keys) =
-    if entire `S.member` flattenedOtelAttributes
-      then displayPrec prec (transformFlattenedAttribute entire)
-      else case keys of
-        [] -> displayPrec prec x
-        (y : ys) -> displayPrec prec $ buildQuerySequence x (y : ys)
+    case M.lookup entire outputFieldAliases of
+      Just col -> displayPrec prec col
+      Nothing
+        | entire `S.member` flattenedOtelAttributes -> displayPrec prec (transformFlattenedAttribute entire)
+        | otherwise -> case keys of
+            [] -> displayPrec prec x
+            (y : ys) -> displayPrec prec $ buildQuerySequence x (y : ys)
     where
       buildQuerySequence :: T.Text -> [FieldKey] -> T.Text
       buildQuerySequence acc [] = acc
