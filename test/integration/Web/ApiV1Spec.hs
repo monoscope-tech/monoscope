@@ -442,12 +442,21 @@ spec = aroundAll withTestResources do
               , "params" AE..= body
               ]
 
-      it "registry contains canary tools derived from path+method" $ \_tr -> do
-        Map.member "monoscope_events_get" reg `shouldBe` True
-        Map.member "monoscope_monitors_monitor_id_get" reg `shouldBe` True
-        Map.member "monoscope_dashboards_apply_post" reg `shouldBe` True
-        Map.member "monoscope_schema_get" reg `shouldBe` True
-        Map.member "monoscope_me_get" reg `shouldBe` True
+      it "registry uses verb-first canonical tool names" $ \_tr -> do
+        Map.member "search_events" reg `shouldBe` True
+        Map.member "list_events" reg `shouldBe` True
+        Map.member "list_monitors" reg `shouldBe` True
+        Map.member "get_monitor" reg `shouldBe` True
+        Map.member "mute_monitor" reg `shouldBe` True
+        Map.member "apply_dashboard" reg `shouldBe` True
+        Map.member "get_dashboard_yaml" reg `shouldBe` True
+        Map.member "get_schema" reg `shouldBe` True
+        Map.member "whoami" reg `shouldBe` True
+
+      it "does not expose the MCP endpoint as its own tool" $ \_tr -> do
+        Map.member "post_mcp" reg `shouldBe` False
+        Map.member "mcp_post" reg `shouldBe` False
+        any (\te -> te.tePath == "/mcp") (Map.elems reg) `shouldBe` False
 
       it "tools/list returns named tools with name/description/inputSchema" $ \tr -> do
         let req =
@@ -480,11 +489,11 @@ spec = aroundAll withTestResources do
         (resp ^? key "result" . key "protocolVersion") `shouldSatisfy` isJust
         (resp ^? key "result" . key "serverInfo" . key "name") `shouldSatisfy` isJust
 
-      it "tools/call monoscope_schema_get round-trips through to Schema.telemetrySchema" $ \tr -> do
+      it "tools/call get_schema round-trips through to Schema.telemetrySchema" $ \tr -> do
         let req =
               rpcCall
                 $ AE.object
-                  [ "name" AE..= ("monoscope_schema_get" :: Text)
+                  [ "name" AE..= ("get_schema" :: Text)
                   , "arguments" AE..= AE.object []
                   ]
         resp <- runAsBase tr (MCP.handleJsonRpc reg (buildTestApp tr) testPid req)
@@ -503,7 +512,7 @@ spec = aroundAll withTestResources do
         let req =
               rpcCall
                 $ AE.object
-                  [ "name" AE..= ("monoscope_does_not_exist" :: Text)
+                  [ "name" AE..= ("does_not_exist" :: Text)
                   , "arguments" AE..= AE.object []
                   ]
         resp <- runAsBase tr (MCP.handleJsonRpc reg dummyApp testPid req)
