@@ -1,6 +1,7 @@
 module Web.ApiHandlersSpec (spec) where
 
 import Data.Aeson qualified as AE
+import Data.List (findIndex)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime)
