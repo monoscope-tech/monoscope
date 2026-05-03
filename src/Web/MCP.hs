@@ -34,6 +34,11 @@ import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types qualified as H
 import Network.Wai qualified as Wai
+-- @Network.Wai.Test@ lives in @wai-extra@ (an explicit lib dep). Despite the
+-- "test" in its name, @runSession@ + @SRequest@ are stable and the cheapest
+-- way to drive a 'Wai.Application' synchronously and capture its full
+-- response. Replacing this with a hand-rolled helper would just re-implement
+-- the same logic without buying anything.
 import Network.Wai.Test qualified as WT
 import Pkg.AI qualified as AI
 import Pkg.DeriveUtils (UUIDId (..))
@@ -55,6 +60,13 @@ mcpProtocolVersion = "2025-06-18"
 -- entered, so it cannot save us).
 toolCallTimeoutMicros :: Int
 toolCallTimeoutMicros = 30_000_000 -- 30s
+
+
+-- | Truncate REST tool response bodies before stuffing them into MCP
+-- @content@. Large @search_events@ payloads can blow agent context windows;
+-- the @structuredContent@ field still carries the full JSON for typed clients.
+maxToolBodyBytes :: Int
+maxToolBodyBytes = 64 * 1024
 
 
 -- =============================================================================
@@ -268,11 +280,15 @@ paramSchemaJson p =
         _ -> s
 
 
--- | Picks the first declared media type. Safe today (every v1 route is
--- @application/json@); revisit if we ever add a multi-content endpoint and
--- prefer @application/json@ explicitly so the agent gets the JSON schema.
+-- | Prefer the JSON media-type entry; fall back to whatever's first if a
+-- route ever declares only e.g. multipart. Tools call back over JSON, so this
+-- ordering keeps the agent-visible schema accurate.
 bodyContentSchema :: OA.RequestBody -> Maybe AE.Value
-bodyContentSchema rb = listToMaybe (IOH.elems (rb ^. OA.content)) >>= fmap AE.toJSON . (^. OA.schema)
+bodyContentSchema rb =
+  let entries = IOH.toList (rb ^. OA.content)
+      isJson (mt, _) = "application/json" `T.isPrefixOf` show mt
+      mto = snd <$> (find isJson entries <|> listToMaybe entries)
+   in mto >>= fmap AE.toJSON . (^. OA.schema)
 
 
 -- =============================================================================
@@ -300,19 +316,22 @@ handleJsonRpc reg buildApp pid req = case parseRpcReq req of
         Nothing -> pure $ rpcError mid (-32602) "Invalid params"
         Just (toolName, args) -> case Map.lookup toolName reg of
           Nothing -> pure $ rpcOk mid (toolError ("Unknown tool: " <> toolName))
-          Just t -> rpcOk mid <$> runTool buildApp pid t args
+          -- Build the inner Servant Application once per tools/call so the
+          -- routing tree compiles a single time (was once per ViaOpenApi
+          -- dispatch inside runTool).
+          Just t -> rpcOk mid <$> runTool (buildApp pid) pid t args
     | otherwise -> pure $ rpcError mid (-32601) ("Method not found: " <> m)
 
 
 runTool
-  :: (Projects.ProjectId -> Servant.Application)
+  :: Servant.Application
   -> Projects.ProjectId
   -> Tool
   -> AE.Object
   -> ATBaseCtx AE.Value
-runTool buildApp pid t args = do
+runTool app pid t args = do
   let action = case t.dispatch of
-        ViaOpenApi b -> liftIO $ callOpenApi (buildApp pid) b args
+        ViaOpenApi b -> liftIO $ callOpenApi app b args
         ViaComposite run -> run pid args
       caught =
         action
@@ -408,6 +427,10 @@ rpcError mid code msg =
 -- =============================================================================
 
 callOpenApi :: Servant.Application -> OpenApiBinding -> AE.Object -> IO AE.Value
+callOpenApi _ b _ | b.path == "/mcp" =
+  -- Defensive: the registry filters /mcp out, but if a future change accidentally
+  -- adds an OpenApiBinding pointing at it, fail fast instead of recursing.
+  pure $ toolError "MCP endpoint cannot be invoked as a tool"
 callOpenApi app b args = do
   let (p, query, body) = splitArgs b args
       url = p <> if T.null query then "" else "?" <> query
@@ -419,7 +442,7 @@ callOpenApi app b args = do
   resp <- WT.runSession (WT.srequest sreq) app
   let code = H.statusCode (WT.simpleStatus resp)
       bodyLBS = WT.simpleBody resp
-      bodyTxt = decodeUtf8 bodyLBS :: Text
+      bodyTxt = truncateText maxToolBodyBytes (decodeUtf8 bodyLBS)
       isErr = code >= 400
       structured = AE.decode bodyLBS :: Maybe AE.Value
       base =
@@ -427,6 +450,15 @@ callOpenApi app b args = do
         , "isError" AE..= isErr
         ]
   pure $ AE.object $ base <> maybe [] (\v -> ["structuredContent" AE..= v]) structured
+
+
+-- | Truncate text to @n@ bytes (UTF-8) and append a marker. Cheap byte cap;
+-- we don't try to keep the result valid JSON since this is the human-readable
+-- @content@ side — the structured side has the full untruncated payload.
+truncateText :: Int -> Text -> Text
+truncateText n t
+  | T.length t <= n = t
+  | otherwise = T.take n t <> "\n…[truncated, full payload in structuredContent]"
 
 
 splitArgs :: OpenApiBinding -> AE.Object -> (Text, Text, AE.Value)
@@ -578,7 +610,7 @@ textArg k o = KM.lookup (AK.fromText k) o >>= \case AE.String s -> Just s; _ -> 
 
 
 intArg :: Text -> AE.Object -> Maybe Int
-intArg k o = KM.lookup (AK.fromText k) o >>= \case AE.Number n -> Just (round n); _ -> Nothing
+intArg k o = KM.lookup (AK.fromText k) o >>= \case AE.Number n -> Just (floor n); _ -> Nothing
 
 
 -- | Permissive IANA timezone validation: rejects empty/over-long input and

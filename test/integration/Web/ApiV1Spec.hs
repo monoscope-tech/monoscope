@@ -626,6 +626,19 @@ spec = aroundAll withTestResources do
             AE.Error e -> expectationFailure ("structuredContent did not decode as Schema: " <> e)
           Nothing -> expectationFailure ("structuredContent missing in body: " <> show body)
 
+      it "notifications/* return JSON null with no envelope" $ \tr -> do
+        let req = rpcSimple "notifications/initialized"
+        resp <- runAsBase tr (MCP.handleJsonRpc reg dummyApp testPid req)
+        resp `shouldBe` AE.Null
+
+      it "tools/call create_team forwards POST body and round-trips" $ \tr -> do
+        teamHandle <- ("body-test-" <>) . UUID.toText <$> UUIDV4.nextRandom
+        let body = AE.object ["name" AE..= teamHandle, "handle" AE..= teamHandle]
+            req = rpcCallNamed "create_team" (AE.object ["body" AE..= body])
+        resp <- runAsBase tr (MCP.handleJsonRpc reg (buildTestApp tr) testPid req)
+        (resp ^? key "result" . key "isError") `shouldBe` Just (AE.Bool False)
+        (resp ^? key "result" . key "structuredContent" . key "summary" . key "handle" . _String) `shouldBe` Just teamHandle
+
     describe "Share link create" do
       it "returns id and url containing /share/r/<id>" $ \tr -> do
         let runB :: ATBaseCtx a -> IO a
