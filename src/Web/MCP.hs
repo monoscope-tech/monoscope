@@ -555,5 +555,3 @@ textArg k o = KM.lookup (AK.fromText k) o >>= \case AE.String s -> Just s; _ -> 
 
 intArg :: Text -> AE.Object -> Maybe Int
 intArg k o = KM.lookup (AK.fromText k) o >>= \case AE.Number n -> Just (round n); _ -> Nothing
-
-
