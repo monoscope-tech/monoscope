@@ -438,6 +438,23 @@ spec = aroundAll withTestResources do
               (effToServantHandlerTest tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
               (apiV1Server tr.trLogger tr.trATCtx tr.trTracerProvider pid)
               Servant.EmptyContext
+          -- Top-level Servant app for the e2e tests below — same wiring as
+          -- mkServer in production minus the WAI middleware stack. Hitting
+          -- /api/v1/mcp through this exercises auth + JSON-RPC + dispatch.
+          mkTopApp tr =
+            genericServeTWithContext
+              (effToServantHandlerTest tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
+              (Routes.server tr.trLogger tr.trATCtx tr.trTracerProvider)
+              (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
+          mcpHttp tr authHdr body =
+            let req =
+                  WT.setPath
+                    Wai.defaultRequest
+                      { Wai.requestMethod = H.methodPost
+                      , Wai.requestHeaders = ("Content-Type", "application/json") : authHdr
+                      }
+                    "/api/v1/mcp"
+             in WT.runSession (WT.srequest (WT.SRequest req (AE.encode body))) (mkTopApp tr)
           rpcCall body =
             AE.object
               [ "jsonrpc" AE..= ("2.0" :: Text)
@@ -580,24 +597,6 @@ spec = aroundAll withTestResources do
         resp <- runAsBase tr (MCP.handleJsonRpc reg dummyApp testPid req)
         (resp ^? key "result" . key "isError") `shouldBe` Just (AE.Bool True)
         (resp ^? key "error") `shouldBe` Nothing
-
-      -- End-to-end: hit the real /api/v1/mcp HTTP route through the top-level
-      -- Servant app. Exercises auth (api-key-auth handler) + JSON-RPC + dispatch
-      -- + sub-app forwarding all in one path.
-      let mkTopApp tr =
-            genericServeTWithContext
-              (effToServantHandlerTest tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
-              (Routes.server tr.trLogger tr.trATCtx tr.trTracerProvider)
-              (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
-          mcpHttp tr authHdr body =
-            let req =
-                  WT.setPath
-                    Wai.defaultRequest
-                      { Wai.requestMethod = H.methodPost
-                      , Wai.requestHeaders = ("Content-Type", "application/json") : authHdr
-                      }
-                    "/api/v1/mcp"
-             in WT.runSession (WT.srequest (WT.SRequest req (AE.encode body))) (mkTopApp tr)
 
       it "e2e: rejects /api/v1/mcp without a valid API key" $ \tr -> do
         resp <- mcpHttp tr [] (rpcSimple "tools/list")
