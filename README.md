@@ -74,12 +74,13 @@ Visit `http://localhost:8080` (default: admin/changeme)
 Populate your dashboard with test telemetry:
 
 ```bash
-# Install telemetrygen
-go install github.com/open-telemetry/opentelemetry-collector-contrib/cmd/telemetrygen@latest
+monoscope auth login
 
-# Send test traces (replace YOUR_API_KEY from the UI)
-telemetrygen traces --otlp-endpoint localhost:4317 --otlp-insecure \
-  --otlp-header 'Authorization="Bearer YOUR_API_KEY"' --traces 10
+# Single event — see your message appear in the dashboard
+monoscope send-event -m "Hello from Monoscope"
+
+# Sustained load — stress-test the pipeline
+monoscope telemetrygen --kind=trace --rate=5 --count=50
 ```
 
 <br/>

@@ -25,6 +25,13 @@ module CLI.Commands (
   runMetricsChart,
   MetricsQueryOpts (..),
   MetricsChartOpts (..),
+  -- Telemetry generation
+  runTelemetryGen,
+  TelemetryGenOpts (..),
+  -- Send event
+  runSendEvent,
+  SendEventOpts (..),
+  parseKV,
 ) where
 
 import Relude
@@ -33,6 +40,7 @@ import CLI.Config (CLIConfig (..), ConfigKey (..), allConfigKeys, configDir, con
 import CLI.Core (OutputMode (..), apiGet, apiPostUnauth, isAgentMode, isInteractiveTTY, printDebug, printError, renderJSON, renderTable, renderWith, withAPIResult)
 import CLI.UI (inputForm, selectFromList, withSpinner)
 import CLI.Validate (validateAndNormalizeKind, validateDurationOrDie, validateQueryOrDie)
+import Control.Exception (bracket)
 import Control.Lens ((%~))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AK
@@ -51,8 +59,14 @@ import Effectful.Environment (Environment)
 import Effectful.Environment qualified as Env
 import Effectful.FileSystem (FileSystem)
 import Models.Apis.Fields qualified as Fields
+import Data.HashMap.Strict qualified as HM
+import OpenTelemetry.Attributes qualified as OA
+import OpenTelemetry.Context.ThreadLocal qualified as OtelCtx
+import OpenTelemetry.Trace (SpanArguments, SpanStatus (..), Tracer, TracerOptions (..), TracerProvider, defaultSpanArguments, initializeGlobalTracerProvider, makeTracer, shutdownTracerProvider)
+import OpenTelemetry.Trace qualified as Trace
 import Pages.Charts.Types (MetricsData (..))
 import Pkg.CLIFormat (evalCond, extractInt, extractRows, extractTextArray, renderSummaryItems, sparklineBar)
+import System.Environment (setEnv)
 import System.Process (spawnProcess)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (catch, tryAny)
@@ -841,3 +855,111 @@ tryOpenBrowser url =
     $ void (spawnProcess "open" [url])
     `catch` \(_ :: SomeException) ->
       void $ spawnProcess "xdg-open" [url]
+
+
+-- OTel send helpers
+
+withOtelProvider :: (TracerProvider -> IO a) -> IO a
+withOtelProvider = bracket initializeGlobalTracerProvider shutdownTracerProvider
+
+configureOtelEnv :: CLIConfig -> Text -> Text -> IO ()
+configureOtelEnv cfg service endpoint = do
+  setEnv "OTEL_EXPORTER_OTLP_ENDPOINT" (toString endpoint)
+  setEnv "OTEL_SERVICE_NAME" (toString service)
+  whenJust cfg.apiKey $ \k ->
+    setEnv "OTEL_EXPORTER_OTLP_HEADERS" ("x-api-key=" <> toString k)
+
+sendSpan :: Tracer -> Text -> SpanArguments -> IO ()
+sendSpan tracer name args = do
+  ctx <- OtelCtx.getContext
+  sp <- Trace.createSpan tracer ctx name args
+  Trace.endSpan sp Nothing
+
+
+data SendEventOpts = SendEventOpts
+  { messages :: [Text]
+  , kind :: Text
+  , level :: Text
+  , service :: Text
+  , tags :: [(Text, Text)]
+  , extras :: [(Text, Text)]
+  , resources :: [(Text, Text)]
+  }
+  deriving stock (Show)
+
+
+-- | Parse "KEY:VALUE" pairs for --tag / --extra flags.
+parseKV :: String -> Either String (Text, Text)
+parseKV s = case T.breakOn ":" (toText s) of
+  (k, rest) | not (T.null rest) -> Right (k, T.drop 1 rest)
+  _ -> Left $ "expected KEY:VALUE, got: " <> s
+
+
+runSendEvent :: IOE :> es => CLIConfig -> SendEventOpts -> Eff es ()
+runSendEvent cfg opts = liftIO $ do
+  let endpoint = otlpFromApiUrl cfg.apiUrl
+      msg = T.intercalate "\n" opts.messages
+      isError = opts.level == "error" || opts.kind == "error"
+      attrs =
+        HM.fromList $
+          [ ("log.message", OA.toAttribute msg)
+          , ("log.severity", OA.toAttribute opts.level)
+          , ("event.kind", OA.toAttribute opts.kind)
+          ]
+            <> map (second OA.toAttribute) (opts.tags <> opts.extras)
+  configureOtelEnv cfg opts.service endpoint
+  setResourceAttrs opts.resources
+  withOtelProvider $ \tp -> do
+    let tracer = makeTracer tp "monoscope-cli" (TracerOptions Nothing)
+    ctx <- OtelCtx.getContext
+    sp <- Trace.createSpan tracer ctx (T.take 200 msg) (defaultSpanArguments{Trace.attributes = attrs})
+    when isError $ Trace.setStatus sp (Error msg)
+    Trace.endSpan sp Nothing
+  putTextLn "Event sent."
+
+
+data TelemetryGenOpts = TelemetryGenOpts
+  { kind :: Text
+  , rate :: Double
+  , count :: Maybe Int
+  , service :: Text
+  , resources :: [(Text, Text)]
+  }
+  deriving stock (Show)
+
+
+setResourceAttrs :: [(Text, Text)] -> IO ()
+setResourceAttrs [] = pass
+setResourceAttrs rs =
+  setEnv "OTEL_RESOURCE_ATTRIBUTES" $ toString $ T.intercalate "," [k <> "=" <> v | (k, v) <- rs]
+
+
+-- | Derive the OTLP gRPC endpoint from the CLI's configured API URL.
+-- Strips the port (if any) and appends :4317 (the default OTLP gRPC port).
+--
+-- >>> otlpFromApiUrl "https://api.monoscope.tech"
+-- "https://api.monoscope.tech:4317"
+-- >>> otlpFromApiUrl "http://localhost:8080"
+-- "http://localhost:4317"
+otlpFromApiUrl :: Text -> Text
+otlpFromApiUrl apiUrl =
+  let scheme = if "https" `T.isPrefixOf` apiUrl then "https" else "http"
+      rest = fromMaybe apiUrl (T.stripPrefix (scheme <> "://") apiUrl)
+      host = T.takeWhile (\c -> c /= ':' && c /= '/') rest
+   in scheme <> "://" <> host <> ":4317"
+
+
+runTelemetryGen :: IOE :> es => CLIConfig -> TelemetryGenOpts -> Eff es ()
+runTelemetryGen cfg opts = liftIO $ do
+  let endpoint = otlpFromApiUrl cfg.apiUrl
+      delayUs = round (1_000_000 / opts.rate) :: Int
+  configureOtelEnv cfg opts.service endpoint
+  setResourceAttrs opts.resources
+  putTextLn $ "Generating " <> opts.kind <> " → " <> endpoint <> " at " <> show opts.rate <> "/s"
+  withOtelProvider $ \tp -> do
+    let tracer = makeTracer tp "monoscope-cli" (TracerOptions Nothing)
+        sendOne i = do
+          sendSpan tracer ("telemetrygen." <> opts.kind) defaultSpanArguments
+          putStrLn $ "Sent " <> show (i :: Int) <> " " <> toString opts.kind <> "(s)"
+          threadDelay delayUs
+    maybe (forM_ [1 ..] sendOne) (\n -> forM_ [1 .. n] sendOne) opts.count

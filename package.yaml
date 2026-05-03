@@ -346,6 +346,10 @@ executables:
       - name: relude
         version: '>= 1.2.0.0'
       - time
+      - hs-opentelemetry-sdk
+      - hs-opentelemetry-api
+      - hs-opentelemetry-instrumentation-auto
+      - unordered-containers
 
 tests:
   doctests:

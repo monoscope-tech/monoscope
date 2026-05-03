@@ -53,6 +53,8 @@ data Command
   | FacetsCmd FacetsOpts
   | CompletionCmd Text
   | VersionCmd
+  | TelemetryGenCmd TelemetryGenOpts
+  | SendEventCmd SendEventOpts
 
 
 data ProjectCommand
@@ -251,6 +253,8 @@ commandParser =
           , command "facets" (info (FacetsCmd <$> facetsParser <**> helper) (progDesc "Discover popular field values (top-N per faceted field)" <> footer facetsExamples))
           , command "completion" (info (CompletionCmd <$> strArgument (metavar "SHELL" <> help "bash|zsh|fish") <**> helper) (progDesc "Emit shell completion script"))
           , command "version" (info (pure VersionCmd) (progDesc "Show CLI version"))
+          , command "telemetrygen" (info (TelemetryGenCmd <$> telemetryGenParser <**> helper) (progDesc "Generate synthetic telemetry (traces/logs/metrics)" <> footer telemetryGenExamples))
+          , command "send-event" (info (SendEventCmd <$> sendEventParser <**> helper) (progDesc "Send a real event (log/trace/error) from a script or CI" <> footer sendEventExamples))
           ]
       )
 
@@ -732,6 +736,52 @@ membersParser =
       ]
 
 
+sendEventParser :: Parser SendEventOpts
+sendEventParser =
+  SendEventOpts
+    <$> some (strOption (long "message" <> short 'm' <> metavar "TEXT" <> help "Event message (repeatable)"))
+    <*> strOption (long "kind" <> metavar "KIND" <> value "log" <> showDefault <> help "log|trace|error")
+    <*> strOption (long "level" <> short 'l' <> metavar "LEVEL" <> value "info" <> showDefault <> help "debug|info|warn|error")
+    <*> strOption (long "service" <> metavar "NAME" <> value "monoscope-cli" <> showDefault <> help "Service name")
+    <*> many (option (eitherReader parseKV) (long "tag" <> short 't' <> metavar "KEY:VALUE" <> help "Tag attribute (repeatable)"))
+    <*> many (option (eitherReader parseKV) (long "extra" <> short 'e' <> metavar "KEY:VALUE" <> help "Extra attribute (repeatable)"))
+    <*> many (option (eitherReader parseKV) (long "resource" <> short 'r' <> metavar "KEY:VALUE" <> help "Resource attribute (repeatable, e.g. service.version:1.2.3)"))
+
+
+sendEventExamples :: String
+sendEventExamples =
+  intercalate "\n"
+    [ "Examples:"
+    , "  monoscope send-event -m \"Deploy completed\" --service api"
+    , "  monoscope send-event -m \"Payment failed\" --level error -t user.id:u_123 -t plan:pro"
+    , "  monoscope send-event -m \"Backup done\" -e duration:45s -e size:2.3GB"
+    , "  monoscope send-event -m \"Step 1 complete\" -m \"all checks passed\" --kind trace"
+    , ""
+    , "Tip: pipe into CI scripts or bash error handlers to capture events automatically."
+    ]
+
+
+telemetryGenParser :: Parser TelemetryGenOpts
+telemetryGenParser =
+  TelemetryGenOpts
+    <$> strOption (long "kind" <> metavar "KIND" <> value "trace" <> showDefault <> help "trace|log|metric")
+    <*> option auto (long "rate" <> metavar "N" <> value 1.0 <> showDefault <> help "Events per second")
+    <*> optional (option auto (long "count" <> short 'n' <> metavar "N" <> help "Total events to send (omit for continuous)"))
+    <*> strOption (long "service" <> metavar "NAME" <> value "telemetrygen" <> showDefault <> help "Service name")
+    <*> many (option (eitherReader parseKV) (long "resource" <> short 'r' <> metavar "KEY:VALUE" <> help "Resource attribute (repeatable, e.g. service.version:1.2.3)"))
+
+
+telemetryGenExamples :: String
+telemetryGenExamples =
+  intercalate "\n"
+    [ "Examples:"
+    , "  monoscope telemetrygen --kind=trace --rate=1"
+    , "  monoscope telemetrygen --kind=trace --rate=5 --count=100 --service=my-service"
+    , ""
+    , "OTLP endpoint is derived from the configured API URL (MONOSCOPE_API_URL)."
+    ]
+
+
 parserInfo :: ParserInfo (GlobalOpts, Command)
 parserInfo =
   info
@@ -908,6 +958,8 @@ run global = \case
     Resource.runAPI mode (capFacets facetsOpts.facetTopN <<$>> apiGetJson @_ @AE.Value cfg "/api/v1/facets" params)
   CompletionCmd shell -> emitCompletion shell
   VersionCmd -> putTextLn $ "monoscope " <> toText (showVersion Paths.version)
+  TelemetryGenCmd opts -> withCfgMode global $ \cfg _ -> runTelemetryGen cfg opts
+  SendEventCmd opts -> withCfgMode global $ \cfg _ -> runSendEvent cfg opts
 
 
 resolveMode :: (Environment :> es, IOE :> es) => GlobalOpts -> Eff es OutputMode

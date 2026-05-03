@@ -37,17 +37,8 @@ This will:
 Send test telemetry to verify your setup:
 
 ```bash
-# Install telemetrygen
-go install github.com/open-telemetry/opentelemetry-collector-contrib/cmd/telemetrygen@latest
-
-# Send test traces with API key
-telemetrygen traces --otlp-endpoint localhost:4317 \
-  --otlp-insecure \
-  --otlp-header 'Authorization="Bearer YOUR_API_KEY"' \
-  --traces 10 --duration 5s
+monoscope telemetrygen --kind=trace --count=10
 ```
-
-Replace `YOUR_API_KEY` with a valid API key from Monoscope's settings.
 
 ### 4. Configuration
 

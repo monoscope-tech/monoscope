@@ -667,20 +667,19 @@ integrationsPage pid apikey =
     modalWith_ "telemetrygen-modal" def{boxClass = "max-w-2xl", hideClose = True} Nothing do
       h3_ [class_ "text-lg font-bold text-textStrong flex items-center gap-2 mb-4"] do
         faSprite_ "flask-vial" "regular" "h-5 w-5"
-        span_ "Quick Test with Telemetrygen"
+        span_ "Quick Test with the CLI"
 
-      p_ [class_ "text-textWeak mb-6 leading-relaxed"] "Telemetrygen is a testing tool that generates OTLP telemetry data. Use it to quickly verify your setup is working correctly."
+      p_ [class_ "text-textWeak mb-6 leading-relaxed"] "Use the Monoscope CLI to send test traces and verify your setup is working. No extra tools needed."
 
       div_ [class_ "space-y-4"] do
-        -- Step 1: Install
+        -- Step 1: Install CLI (if needed)
         div_ [class_ "p-4 bg-fillWeak rounded-lg"] do
           div_ [class_ "text-textStrong font-medium mb-2 flex items-center gap-2"] do
             span_ [class_ "inline-flex items-center justify-center w-6 h-6 rounded-full bg-fillBrand-weak text-textBrand text-sm font-bold"] "1"
-            span_ "Install telemetrygen"
+            span_ "Install & authenticate (if you haven't)"
           div_
             [class_ "bg-bgBase p-3 rounded monospace text-sm overflow-x-auto border border-strokeWeak"]
-            "go install github.com/open-telemetry/opentelemetry-collector-contrib/cmd/telemetrygen@latest"
-          p_ [class_ "text-xs text-textWeak mt-2 leading-relaxed"] "Requires Go 1.20 or later"
+            "curl monoscope.tech/install.sh | sh && monoscope auth login"
 
         -- Step 2: Run command
         div_ [class_ "p-4 bg-fillWeak rounded-lg"] do
@@ -691,9 +690,7 @@ integrationsPage pid apikey =
             pre_ [class_ "bg-bgBase p-3 rounded monospace text-sm overflow-x-auto border border-strokeWeak", id_ "telemetrygen-cmd"]
               $ code_
               $ toHtml
-              $ "telemetrygen traces --otlp-endpoint localhost:4317 \\\n  --otlp-insecure \\\n  --otlp-header 'Authorization=\"Bearer "
-              <> apikey
-              <> "\"' \\\n  --traces 10 \\\n  --duration 5s"
+              "monoscope telemetrygen --kind=trace --count=10"
             button_
               [ class_ "absolute top-2 right-2 px-3 py-1 text-xs bg-fillBrand-strong rounded text-textInverse-strong flex items-center gap-1 hover:bg-fillBrand-strong/90"
               , type_ "button"

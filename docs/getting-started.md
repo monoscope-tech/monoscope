@@ -35,34 +35,17 @@ docker-compose ps
 
 ## Send Your First Telemetry Data
 
-### Option A: Using telemetrygen (Recommended for testing)
+### Option A: Using the Monoscope CLI (Recommended)
 
 ```bash
-# Install telemetrygen if you haven't
-go install github.com/open-telemetry/opentelemetry-collector-contrib/cmd/telemetrygen@latest
-
 # Send test traces
-telemetrygen traces \
-  --otlp-endpoint localhost:4317 \
-  --otlp-insecure \
-  --otlp-header 'X-API-Key="YOUR_API_KEY"' \
-  --traces 100 \
-  --duration 10s
+monoscope telemetrygen --kind=trace --count=100 --rate=10
 
 # Send test metrics
-telemetrygen metrics \
-  --otlp-endpoint localhost:4317 \
-  --otlp-insecure \
-  --otlp-header 'X-API-Key="YOUR_API_KEY"' \
-  --metrics 5 \
-  --duration 10s
+monoscope telemetrygen --kind=metric --count=5
 
 # Send test logs
-telemetrygen logs \
-  --otlp-endpoint localhost:4317 \
-  --otlp-insecure \
-  --otlp-header 'X-API-Key="YOUR_API_KEY"' \
-  --logs 100
+monoscope telemetrygen --kind=log --count=100
 ```
 
 ### Option B: Quick Python Script

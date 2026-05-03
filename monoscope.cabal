@@ -470,6 +470,9 @@ executable monoscope
     , effectful
     , effectful-core
     , filepath
+    , hs-opentelemetry-api
+    , hs-opentelemetry-instrumentation-auto
+    , hs-opentelemetry-sdk
     , http-client
     , http-client-tls
     , lens
@@ -483,6 +486,7 @@ executable monoscope
     , time
     , unix
     , unliftio
+    , unordered-containers
     , vector
     , vty
     , wreq
@@ -705,8 +709,8 @@ test-suite unit-tests
       Pkg.ParserSpec
       Pkg.QueryCacheSpec
       RequestMessagesSpec
-      Web.ApiHandlersSpec
       Spec
+      Web.ApiHandlersSpec
   hs-source-dirs:
       test/unit
   default-extensions:
