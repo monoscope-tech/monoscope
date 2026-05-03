@@ -377,6 +377,10 @@ emitFirstEventId v = case v of
 -- | Validate every flag on 'EventsSearchOpts' in one pass and apply
 -- 'normalizeKind' so the wire-level @source@ value is always @log@/@span@
 -- (D2). Failures print a clear message and exit non-zero (D5).
+-- | Validate search options before hitting the server. Note: EventsTailOpts
+-- and EventsContextOpts do not carry a user-supplied KQL query (tail uses
+-- structured --service/--level flags; context uses --at + structured flags),
+-- so validateQueryOrDie is not needed for those commands.
 validateEventsOpts :: IOE :> es => EventsSearchOpts -> Eff es EventsSearchOpts
 validateEventsOpts opts = do
   validateDurationOrDie "--since" opts.since

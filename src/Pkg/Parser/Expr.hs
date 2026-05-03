@@ -648,6 +648,10 @@ flattenedOtelAttributes =
 -- @event_name="exception"@. OTel SDKs (notably hs-opentelemetry) take the
 -- latter path, so a query that only hits the flat column misses real
 -- exceptions. We rewrite these subjects to COALESCE both sources.
+--
+-- Invariant: every member here must also appear under @attributes.exception.*@
+-- in 'flattenedOtelAttributes'. The two sets overlap by design — one controls
+-- dot→triple-underscore rewriting; this one adds the COALESCE over span events.
 exceptionFlattenedFields :: Set T.Text
 exceptionFlattenedFields = fromList ["type", "message", "stacktrace", "escaped"]
 
@@ -656,6 +660,14 @@ exceptionFlattenedFields = fromList ["type", "message", "stacktrace", "escaped"]
 -- These aliases appear in query results and the schema endpoint, so users naturally
 -- try to filter by them — without this map the WHERE clause would reference a
 -- non-existent column and return a 400.
+--
+-- This map is applied unconditionally by 'Display Subject', covering both WHERE
+-- predicates (the intended use case) and SELECT/EXTEND expressions. In an EXTEND
+-- context the rewrite is still correct: @| extend x = span_name@ emits
+-- @name as x@, referencing the right column. The only edge case is
+-- @| summarize … by span_name@ which would GROUP BY @name@ and surface the
+-- result column as @name@ rather than @span_name@; that is an acceptable
+-- trade-off given how rarely aggregations target these alias fields.
 --
 -- >>> outputFieldAliases M.! "span_name"
 -- "name"

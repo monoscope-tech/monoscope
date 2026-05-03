@@ -121,7 +121,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import Pages.LogExplorer.Log qualified as Log
 import Pkg.Components.TimePicker qualified as TP
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (AesonText (..), SnakeSchema (..), UUIDId (..))
+import Pkg.DeriveUtils (SnakeSchema (..), UUIDId (..))
 import Pkg.Parser qualified as Parser
 import Relude hiding (ask, id)
 import Servant (NoContent (..), ServerError (..), err400, err404)
@@ -821,6 +821,11 @@ apiIssueGet pid iid = issueToFull <$> (enrichIssue pid =<< fetchIssue pid iid)
 -- with @exception.stacktrace=""@ because GHC doesn't capture a backtrace by
 -- default; without this fallback the API/CLI surfaces an empty string and the
 -- caller cannot tell whether the data is missing or just unhelpful.
+-- TODO(perf): for busy projects this runs two extra queries per issue-detail
+-- call (getErrorPatternByHash then getSpanRecordsByTraceId). The right fix is
+-- to compute and store the synthetic stack at ingestion/upsert time so reads
+-- are zero-cost. Until then the guards keep it O(0) for non-RuntimeException
+-- issues and for RuntimeExceptions that already have a stored stack.
 enrichIssue :: Projects.ProjectId -> Issues.Issue -> ATBaseCtx Issues.Issue
 enrichIssue pid issue
   | issue.issueType /= Issues.RuntimeException = pure issue
@@ -852,14 +857,7 @@ synthStackFromSpans :: Text -> [Telemetry.OtelLogsAndSpans] -> Text
 synthStackFromSpans trId spans =
   let ordered = List.sortOn (.start_time) spans
       formatOne s =
-        let svc = case s.resource of
-              Just (AesonText m) ->
-                case Map.lookup "service" m of
-                  Just (AE.Object o) -> case AEKM.lookup "name" o of
-                    Just (AE.String n) -> Just n
-                    _ -> Nothing
-                  _ -> Nothing
-              _ -> Nothing
+        let svc = Telemetry.spanServiceName s
             spanId = maybe "?" (fromMaybe "?" . (.span_id)) s.context
             errored = s.status_code == Just "ERROR"
             marker = if errored then "!! " else "   "
@@ -1148,17 +1146,6 @@ apiMemberRemove pid uid = do
 -- The response is always a JSON object keyed by field path, each value a
 -- @[{value, count}]@ list sorted by count descending. Missing/expired
 -- facets return @{}@ (not 404) — agents can rely on the shape regardless.
--- | Direct O(1) event lookup by (id, timestamp). Uses the timeseries partition
--- key so the DB can resolve a single row without a range scan.
--- Returns 404 when the event is not found.
-apiEventGet :: Projects.ProjectId -> UUID.UUID -> UTCTime -> ATBaseCtx AE.Value
-apiEventGet pid eid ts = do
-  mItem <- Telemetry.logRecordByProjectAndId pid ts eid
-  case mItem of
-    Nothing -> throwError err404{errBody = encodeUtf8 ("event not found" :: Text)}
-    Just item -> pure (AE.toJSON item)
-
-
 apiFacets :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATBaseCtx AE.Value
 apiFacets pid sinceM fromM toM fieldM = do
   now <- Time.currentTime
@@ -1174,3 +1161,15 @@ apiFacets pid sinceM fromM toM fieldM = do
            in AE.Object (maybe mempty (AEKM.singleton k) (AEKM.lookup k o))
         _ -> asAeson
   pure filtered
+
+
+-- | GET /api/v1/events/{id}/time/{ts} — O(1) lookup using the timeseries
+-- partition key. Both id and timestamp must be supplied; the DB resolves the
+-- row via @timestamp BETWEEN ts-1s AND ts+1s AND id = ?@ without a range scan.
+-- Returns 404 when the event is not found.
+apiEventGet :: Projects.ProjectId -> UUID.UUID -> UTCTime -> ATBaseCtx AE.Value
+apiEventGet pid eid ts = do
+  mItem <- Telemetry.logRecordByProjectAndId pid ts eid
+  case mItem of
+    Nothing -> throwError err404{errBody = encodeUtf8 ("event not found" :: Text)}
+    Just item -> pure (AE.toJSON item)
