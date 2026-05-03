@@ -420,6 +420,8 @@ tests:
       - process
       - lucid
       - http-types
+      - wai
+      - wai-extra
   unit-tests:
     main: Main.hs
     source-dirs: test/unit

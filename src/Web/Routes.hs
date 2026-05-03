@@ -694,10 +694,11 @@ apiV1Server logger env tp pid =
         Servant.EmptyContext
 
 
--- | MCP tool registry, derived once from the OpenAPI spec at startup.
+-- | MCP tool registry — REST tools (from OpenAPI) + composite workflow tools,
+-- built once at startup.
 {-# NOINLINE mcpToolRegistry #-}
-mcpToolRegistry :: Map Text MCP.ToolEntry
-mcpToolRegistry = MCP.mkToolsFromOpenApi apiV1OpenApiSpec
+mcpToolRegistry :: Map Text MCP.Tool
+mcpToolRegistry = MCP.allTools apiV1OpenApiSpec
 
 
 apiV1OpenApiSpec :: OpenApi

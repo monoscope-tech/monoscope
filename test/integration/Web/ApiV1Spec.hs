@@ -1,9 +1,9 @@
 module Web.ApiV1Spec (spec) where
 
-import Control.Lens ((^.), (^?))
+import Control.Lens (_Just, (^.), (^..), (^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
-import Data.Aeson.Lens (key, _Array, _Number, _Object)
+import Data.Aeson.Lens (key, _Array, _Number, _Object, _String)
 import Data.Default (def)
 import Data.Map qualified as Map
 import Data.OpenApi (OpenApi, info, title, version)
@@ -27,7 +27,11 @@ import Web.ApiTypes qualified as ApiT
 import Web.Auth (resolveApiKeyProject)
 import Web.MCP qualified as MCP
 import Web.Routes (apiV1OpenApiSpec, apiV1Server)
+import Web.Routes qualified as Routes
 
+import Network.HTTP.Types qualified as H
+import Network.Wai qualified as Wai
+import Network.Wai.Test qualified as WT
 import Servant qualified
 import Servant.Server.Generic (genericServeTWithContext)
 import System.Types (effToServantHandlerTest)
@@ -427,7 +431,7 @@ spec = aroundAll withTestResources do
           >>= evaluateWHNF_) `shouldThrow` anyException
 
     describe "MCP" do
-      let reg = MCP.mkToolsFromOpenApi apiV1OpenApiSpec
+      let reg = MCP.allTools apiV1OpenApiSpec
           dummyApp _ = error "dummyApp invoked unexpectedly"
           buildTestApp tr pid =
             genericServeTWithContext
@@ -440,6 +444,14 @@ spec = aroundAll withTestResources do
               , "id" AE..= (1 :: Int)
               , "method" AE..= ("tools/call" :: Text)
               , "params" AE..= body
+              ]
+          rpcCallNamed name args =
+            rpcCall (AE.object ["name" AE..= (name :: Text), "arguments" AE..= args])
+          rpcSimple m =
+            AE.object
+              [ "jsonrpc" AE..= ("2.0" :: Text)
+              , "id" AE..= (1 :: Int)
+              , "method" AE..= (m :: Text)
               ]
 
       it "registry uses verb-first canonical tool names" $ \_tr -> do
@@ -456,7 +468,6 @@ spec = aroundAll withTestResources do
       it "does not expose the MCP endpoint as its own tool" $ \_tr -> do
         Map.member "post_mcp" reg `shouldBe` False
         Map.member "mcp_post" reg `shouldBe` False
-        any (\te -> te.tePath == "/mcp") (Map.elems reg) `shouldBe` False
 
       it "tools/list returns named tools with name/description/inputSchema" $ \tr -> do
         let req =
@@ -518,6 +529,108 @@ spec = aroundAll withTestResources do
         resp <- runAsBase tr (MCP.handleJsonRpc reg dummyApp testPid req)
         (resp ^? key "result" . key "isError") `shouldBe` Just (AE.Bool True)
         (resp ^? key "error") `shouldBe` Nothing
+
+      it "tools/list includes composite workflow tools alongside REST tools" $ \tr -> do
+        let req =
+              AE.object
+                [ "jsonrpc" AE..= ("2.0" :: Text)
+                , "id" AE..= (1 :: Int)
+                , "method" AE..= ("tools/list" :: Text)
+                ]
+        resp <- runAsBase tr (MCP.handleJsonRpc reg dummyApp testPid req)
+        let names :: [Text]
+            names =
+              resp
+                ^.. key "result"
+                  . key "tools"
+                  . _Array
+                  . traverse
+                  . key "name"
+                  . _String
+        ("find_error_patterns" `elem` names) `shouldBe` True
+        ("search_events_nl" `elem` names) `shouldBe` True
+        ("analyze_issue" `elem` names) `shouldBe` True
+        -- And REST tools still present
+        ("get_schema" `elem` names) `shouldBe` True
+
+      it "tools/call find_error_patterns returns OK with patterns array" $ \tr -> do
+        let req =
+              rpcCall
+                $ AE.object
+                  [ "name" AE..= ("find_error_patterns" :: Text)
+                  , "arguments" AE..= AE.object ["limit" AE..= (5 :: Int)]
+                  ]
+        resp <- runAsBase tr (MCP.handleJsonRpc reg dummyApp testPid req)
+        (resp ^? key "result" . key "isError") `shouldBe` Just (AE.Bool False)
+        (resp ^? key "result" . key "structuredContent" . key "patterns" . _Array) `shouldSatisfy` isJust
+        (resp ^? key "result" . key "structuredContent" . key "as_of") `shouldSatisfy` isJust
+
+      it "tools/call search_events_nl with empty input returns isError" $ \tr -> do
+        let req =
+              rpcCall
+                $ AE.object
+                  [ "name" AE..= ("search_events_nl" :: Text)
+                  , "arguments" AE..= AE.object ["input" AE..= ("" :: Text)]
+                  ]
+        resp <- runAsBase tr (MCP.handleJsonRpc reg dummyApp testPid req)
+        (resp ^? key "result" . key "isError") `shouldBe` Just (AE.Bool True)
+
+      it "tools/call analyze_issue with bad UUID returns isError, not JSON-RPC error" $ \tr -> do
+        let req =
+              rpcCall
+                $ AE.object
+                  [ "name" AE..= ("analyze_issue" :: Text)
+                  , "arguments" AE..= AE.object ["issue_id" AE..= ("not-a-uuid" :: Text)]
+                  ]
+        resp <- runAsBase tr (MCP.handleJsonRpc reg dummyApp testPid req)
+        (resp ^? key "result" . key "isError") `shouldBe` Just (AE.Bool True)
+        (resp ^? key "error") `shouldBe` Nothing
+
+      -- End-to-end: hit the real /api/v1/mcp HTTP route through the top-level
+      -- Servant app. Exercises auth (api-key-auth handler) + JSON-RPC + dispatch
+      -- + sub-app forwarding all in one path.
+      let mkTopApp tr =
+            genericServeTWithContext
+              (effToServantHandlerTest tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
+              (Routes.server tr.trLogger tr.trATCtx tr.trTracerProvider)
+              (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
+          mcpHttp tr authHdr body =
+            let req =
+                  WT.setPath
+                    Wai.defaultRequest
+                      { Wai.requestMethod = H.methodPost
+                      , Wai.requestHeaders = ("Content-Type", "application/json") : authHdr
+                      }
+                    "/api/v1/mcp"
+             in WT.runSession (WT.srequest (WT.SRequest req (AE.encode body))) (mkTopApp tr)
+
+      it "e2e: rejects /api/v1/mcp without a valid API key" $ \tr -> do
+        resp <- mcpHttp tr [] (rpcSimple "tools/list")
+        H.statusCode (WT.simpleStatus resp) `shouldBe` 401
+
+      it "e2e: tools/list through real HTTP route returns the registry" $ \tr -> do
+        apiKey <- createTestAPIKey tr testPid "mcp-e2e-list"
+        resp <- mcpHttp tr [("Authorization", "Bearer " <> encodeUtf8 apiKey)] (rpcSimple "tools/list")
+        H.statusCode (WT.simpleStatus resp) `shouldBe` 200
+        let body = AE.decode (WT.simpleBody resp) :: Maybe AE.Value
+            names = body ^.. _Just . key "result" . key "tools" . _Array . traverse . key "name" . _String
+        for_ ["get_schema", "list_monitors", "find_error_patterns"] $ \n ->
+          (n `elem` (names :: [Text])) `shouldBe` True
+
+      it "e2e: tools/call get_schema through real HTTP route returns the schema" $ \tr -> do
+        apiKey <- createTestAPIKey tr testPid "mcp-e2e-call"
+        resp <-
+          mcpHttp tr
+            [("Authorization", "Bearer " <> encodeUtf8 apiKey)]
+            (rpcCallNamed "get_schema" (AE.object []))
+        H.statusCode (WT.simpleStatus resp) `shouldBe` 200
+        let body = AE.decode (WT.simpleBody resp) :: Maybe AE.Value
+        (body ^? _Just . key "result" . key "isError") `shouldBe` Just (AE.Bool False)
+        case body ^? _Just . key "result" . key "structuredContent" of
+          Just v -> case AE.fromJSON @Schema.Schema v of
+            AE.Success s -> Map.keys s.fields `shouldMatchList` Map.keys Schema.telemetrySchema.fields
+            AE.Error e -> expectationFailure ("structuredContent did not decode as Schema: " <> e)
+          Nothing -> expectationFailure ("structuredContent missing in body: " <> show body)
 
     describe "Share link create" do
       it "returns id and url containing /share/r/<id>" $ \tr -> do

@@ -687,6 +687,8 @@ test-suite integration-tests
     , uuid
     , uuid-quasi
     , vector
+    , wai
+    , wai-extra
     , wreq
   default-language: GHC2024
 

@@ -1,12 +1,15 @@
 -- | Model Context Protocol (MCP) handler for the public API.
 --
 -- One JSON-RPC endpoint exposes every operation in 'Web.Routes.apiV1OpenApiSpec'
--- as an MCP tool. The registry is built from the OpenAPI spec at startup; tool
--- calls are dispatched by forwarding a synthesized WAI request into the inner
--- @ApiV1Routes@ application provided by the caller.
+-- as an MCP tool. The registry mixes OpenAPI-derived REST tools with hand-written
+-- composite (workflow) tools that bundle several internal calls into one
+-- agent-friendly verb. REST calls forward into a re-served inner @ApiV1Routes@
+-- 'Servant.Application'; composite calls run directly in 'ATBaseCtx'.
 module Web.MCP (
-  ToolEntry (..),
-  mkToolsFromOpenApi,
+  Tool (..),
+  Dispatch (..),
+  OpenApiBinding (..),
+  allTools,
   handleJsonRpc,
 ) where
 
@@ -17,69 +20,107 @@ import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Lazy qualified as LBS
 import Data.HashMap.Strict.InsOrd qualified as IOH
 import Data.Map.Strict qualified as Map
+import Data.Ord (Down (..))
 import Data.OpenApi (OpenApi)
 import Data.OpenApi qualified as OA
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
+import Data.Time (addUTCTime)
+import Data.UUID qualified as UUID
+import Effectful.Error.Static qualified as Error
+import Effectful.Reader.Static qualified as Reader
+import Effectful.Time qualified as Time
+import Models.Apis.Fields qualified as Fields
+import Pkg.DeriveUtils (UUIDId (..))
+import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types qualified as H
 import Network.Wai qualified as Wai
 import Network.Wai.Test qualified as WT
+import Pkg.AI qualified as AI
 import Relude
 import Servant qualified
+import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATBaseCtx)
+import Web.ApiHandlers qualified as ApiH
 
 
-data ToolEntry = ToolEntry
-  { teName :: !Text
-  , teMethod :: !ByteString
-  , tePath :: !Text
-  , teDesc :: !Text
-  , teInputSchema :: !AE.Value
-  , tePathParams :: ![Text]
-  , teQueryParams :: ![Text]
-  , teBodyRequired :: !Bool
+-- =============================================================================
+-- Types
+-- =============================================================================
+
+data Tool = Tool
+  { name :: !Text
+  , description :: !Text
+  , inputSchema :: !AE.Value
+  , dispatch :: !Dispatch
   }
 
 
--- | Build the MCP tool registry from an OpenAPI spec. Each operation becomes
--- one verb-first snake_case tool (e.g. @list_monitors@, @mute_monitor@). Names
--- come from a canonical override table keyed by (method, path); operations not
--- in the table fall back to a path-derived name. The MCP endpoint itself is
--- excluded so agents cannot recurse into it.
-mkToolsFromOpenApi :: OpenApi -> Map Text ToolEntry
+data Dispatch
+  = ViaOpenApi !OpenApiBinding
+  | -- | Composite handler runs directly in 'ATBaseCtx' and returns the body of
+    -- an MCP tool result envelope. ServerErrors thrown inside are caught by
+    -- the dispatcher and surfaced as @isError: true@ tool results.
+    ViaComposite !(Projects.ProjectId -> AE.Object -> ATBaseCtx AE.Value)
+
+
+-- | Everything we need to forward an MCP @tools/call@ into the inner sub-app.
+data OpenApiBinding = OpenApiBinding
+  { method :: !ByteString
+  , path :: !Text
+  , pathParams :: ![Text]
+  , queryParams :: ![Text]
+  , bodyRequired :: !Bool
+  }
+
+
+-- =============================================================================
+-- Registry
+-- =============================================================================
+
+-- | The full tool registry: every OpenAPI operation plus the composite tools.
+-- Composite tools shadow OpenAPI tools of the same name (none should clash —
+-- the override map and 'compositeTools' both pick distinct verbs).
+allTools :: OpenApi -> Map Text Tool
+allTools spec =
+  Map.fromList [(t.name, t) | t <- compositeTools] <> mkToolsFromOpenApi spec
+
+
+mkToolsFromOpenApi :: OpenApi -> Map Text Tool
 mkToolsFromOpenApi spec =
   Map.fromList
-    [ (te.teName, te)
+    [ (t.name, t)
     | (rawPath, item) <- IOH.toList (spec ^. OA.paths)
-    , (method, op) <- pathItemOps item
-    , let path = toText rawPath
-    , (method, path) /= ("POST", "/mcp")
-    , Just te <- [toEntry path method op]
+    , (m, op) <- pathItemOps item
+    , let p = toText rawPath
+    , (m, p) /= ("POST", "/mcp") -- never expose MCP itself as a tool
+    , let t = openApiTool p m op
     ]
-  where
-    toEntry path method op =
-      let params = mapMaybe deref (op ^. OA.parameters)
-          pathParams = [p ^. OA.name | p <- params, p ^. OA.in_ == OA.ParamPath]
-          queryParams = [p ^. OA.name | p <- params, p ^. OA.in_ == OA.ParamQuery]
-          mrb = op ^. OA.requestBody >>= deref
-          bodyReq = maybe False (\rb -> rb ^. OA.required == Just True) mrb
-          methodTxt = decodeUtf8 method :: Text
-          name = fromMaybe (deriveNameFromPath path method) (Map.lookup (method, path) toolNameOverrides)
-          desc =
-            fromMaybe (methodTxt <> " " <> path)
-              $ (op ^. OA.summary) <|> (op ^. OA.description)
-       in Just
-            ToolEntry
-              { teName = name
-              , teMethod = method
-              , tePath = path
-              , teDesc = desc
-              , teInputSchema = mkInputSchema params mrb bodyReq
-              , tePathParams = pathParams
-              , teQueryParams = queryParams
-              , teBodyRequired = bodyReq
-              }
+
+
+openApiTool :: Text -> ByteString -> OA.Operation -> Tool
+openApiTool p m op =
+  let params = mapMaybe deref (op ^. OA.parameters)
+      pathParams' = [q ^. OA.name | q <- params, q ^. OA.in_ == OA.ParamPath]
+      queryParams' = [q ^. OA.name | q <- params, q ^. OA.in_ == OA.ParamQuery]
+      mrb = op ^. OA.requestBody >>= deref
+      bodyReq = maybe False (\rb -> rb ^. OA.required == Just True) mrb
+      desc = fromMaybe (decodeUtf8 m <> " " <> p) ((op ^. OA.summary) <|> (op ^. OA.description))
+   in Tool
+        { name = fromMaybe (deriveNameFromPath p m) (Map.lookup (m, p) toolNameOverrides)
+        , description = desc
+        , inputSchema = mkInputSchema params mrb bodyReq
+        , dispatch =
+            ViaOpenApi
+              OpenApiBinding
+                { method = m
+                , path = p
+                , pathParams = pathParams'
+                , queryParams = queryParams'
+                , bodyRequired = bodyReq
+                }
+        }
 
 
 -- | Canonical verb-first names for every API v1 operation. Industry-standard
@@ -172,9 +213,9 @@ toolNameOverrides =
 -- | Fallback name when no override exists. Drops {id} braces, joins with
 -- underscores, and appends the lowercase method so names are unique.
 deriveNameFromPath :: Text -> ByteString -> Text
-deriveNameFromPath path method =
+deriveNameFromPath p method =
   let m = T.toLower (decodeUtf8 method)
-      cleaned = T.replace "{" "" $ T.replace "}" "" path
+      cleaned = T.replace "{" "" $ T.replace "}" "" p
       parts = filter (not . T.null) (T.splitOn "/" cleaned)
    in T.intercalate "_" (parts <> [m])
 
@@ -201,20 +242,15 @@ deref _ = Nothing
 mkInputSchema :: [OA.Param] -> Maybe OA.RequestBody -> Bool -> AE.Value
 mkInputSchema params mrb bodyReq =
   let paramProps =
-        KM.fromList
-          [ (AK.fromText (p ^. OA.name), paramSchemaJson p)
-          | p <- params
-          ]
-      paramRequireds = [p ^. OA.name | p <- params, p ^. OA.required == Just True]
+        KM.fromList [(AK.fromText (q ^. OA.name), paramSchemaJson q) | q <- params]
+      paramRequireds = [q ^. OA.name | q <- params, q ^. OA.required == Just True]
       bodySchema = mrb >>= bodyContentSchema
-      allProps = case bodySchema of
-        Just b -> KM.insert "body" b paramProps
-        Nothing -> paramProps
-      requireds = paramRequireds <> [if bodyReq then "body" else "" | isJust bodySchema, bodyReq]
+      allProps = maybe paramProps (\b -> KM.insert "body" b paramProps) bodySchema
+      requireds = paramRequireds <> [w | w <- ["body" | bodyReq], isJust bodySchema]
    in AE.object
         [ "type" AE..= ("object" :: Text)
         , "properties" AE..= AE.Object allProps
-        , "required" AE..= filter (not . T.null) requireds
+        , "required" AE..= requireds
         ]
 
 
@@ -227,17 +263,19 @@ paramSchemaJson p =
 
 
 bodyContentSchema :: OA.RequestBody -> Maybe AE.Value
-bodyContentSchema rb =
-  let contents = IOH.elems (rb ^. OA.content)
-   in case contents of
-        (mto : _) -> AE.toJSON <$> (mto ^. OA.schema)
-        [] -> Nothing
+bodyContentSchema rb = case IOH.elems (rb ^. OA.content) of
+  (mto : _) -> AE.toJSON <$> (mto ^. OA.schema)
+  [] -> Nothing
 
+
+-- =============================================================================
+-- JSON-RPC dispatcher
+-- =============================================================================
 
 -- | Top-level dispatcher. Handles JSON-RPC requests for the MCP protocol:
 -- @initialize@, @notifications/*@, @tools/list@, @tools/call@.
 handleJsonRpc
-  :: Map Text ToolEntry
+  :: Map Text Tool
   -> (Projects.ProjectId -> Servant.Application)
   -> Projects.ProjectId
   -> AE.Value
@@ -252,10 +290,22 @@ handleJsonRpc reg buildApp pid req = case parseRpcReq req of
         Nothing -> pure $ rpcError mid (-32602) "Invalid params"
         Just (toolName, args) -> case Map.lookup toolName reg of
           Nothing -> pure $ rpcOk mid (toolError ("Unknown tool: " <> toolName))
-          Just te -> do
-            r <- liftIO $ callTool (buildApp pid) te args
-            pure $ rpcOk mid r
+          Just t -> rpcOk mid <$> runTool buildApp pid t args
     | otherwise -> pure $ rpcError mid (-32601) ("Method not found: " <> m)
+
+
+runTool
+  :: (Projects.ProjectId -> Servant.Application)
+  -> Projects.ProjectId
+  -> Tool
+  -> AE.Object
+  -> ATBaseCtx AE.Value
+runTool buildApp pid t args = case t.dispatch of
+  ViaOpenApi b -> liftIO $ callOpenApi (buildApp pid) b args
+  ViaComposite run ->
+    run pid args
+      `Error.catchError` \_cs (e :: Servant.ServerError) ->
+        pure $ toolError $ decodeUtf8 $ Servant.errBody e
 
 
 parseRpcReq :: AE.Value -> Maybe (AE.Value, Text, AE.Value)
@@ -290,33 +340,44 @@ initializeResult =
     ]
 
 
-toolsListJson :: Map Text ToolEntry -> AE.Value
-toolsListJson reg =
-  AE.object ["tools" AE..= [toolJson e | e <- Map.elems reg]]
+toolsListJson :: Map Text Tool -> AE.Value
+toolsListJson reg = AE.object ["tools" AE..= map descriptor (Map.elems reg)]
   where
-    toolJson e =
+    descriptor t =
       AE.object
-        [ "name" AE..= e.teName
-        , "description" AE..= e.teDesc
-        , "inputSchema" AE..= e.teInputSchema
+        [ "name" AE..= t.name
+        , "description" AE..= t.description
+        , "inputSchema" AE..= t.inputSchema
         ]
 
 
 toolError :: Text -> AE.Value
 toolError msg =
   AE.object
-    [ "content" AE..= ([AE.object ["type" AE..= ("text" :: Text), "text" AE..= msg]] :: [AE.Value])
+    [ "content" AE..= ([textContent msg] :: [AE.Value])
     , "isError" AE..= True
     ]
 
 
-rpcOk :: AE.Value -> AE.Value -> AE.Value
-rpcOk mid r =
+okResult :: AE.Value -> AE.Value
+okResult v =
   AE.object
-    [ "jsonrpc" AE..= ("2.0" :: Text)
-    , "id" AE..= mid
-    , "result" AE..= r
+    [ "content" AE..= ([textContent (renderJson v)] :: [AE.Value])
+    , "isError" AE..= False
+    , "structuredContent" AE..= v
     ]
+
+
+textContent :: Text -> AE.Value
+textContent t = AE.object ["type" AE..= ("text" :: Text), "text" AE..= t]
+
+
+renderJson :: AE.Value -> Text
+renderJson = decodeUtf8 . LBS.toStrict . AE.encode
+
+
+rpcOk :: AE.Value -> AE.Value -> AE.Value
+rpcOk mid r = AE.object ["jsonrpc" AE..= ("2.0" :: Text), "id" AE..= mid, "result" AE..= r]
 
 
 rpcError :: AE.Value -> Int -> Text -> AE.Value
@@ -324,27 +385,21 @@ rpcError mid code msg =
   AE.object
     [ "jsonrpc" AE..= ("2.0" :: Text)
     , "id" AE..= mid
-    , "error"
-        AE..= AE.object
-          [ "code" AE..= code
-          , "message" AE..= msg
-          ]
+    , "error" AE..= AE.object ["code" AE..= code, "message" AE..= msg]
     ]
 
 
--- | Forward a tool call as a synthetic HTTP request into the inner @ApiV1Routes@
--- application, then wrap the response as an MCP tool result.
-callTool :: Servant.Application -> ToolEntry -> AE.Object -> IO AE.Value
-callTool app te args = do
-  let (path, query, body) = splitArgs te args
-      url = path <> if T.null query then "" else "?" <> query
+-- =============================================================================
+-- OpenAPI tool execution (forward as synthetic WAI request into sub-app)
+-- =============================================================================
+
+callOpenApi :: Servant.Application -> OpenApiBinding -> AE.Object -> IO AE.Value
+callOpenApi app b args = do
+  let (p, query, body) = splitArgs b args
+      url = p <> if T.null query then "" else "?" <> query
       bodyBs = AE.encode body
       hdrs = [(H.hContentType, "application/json")]
-      baseReq =
-        Wai.defaultRequest
-          { Wai.requestMethod = te.teMethod
-          , Wai.requestHeaders = hdrs
-          }
+      baseReq = Wai.defaultRequest{Wai.requestMethod = b.method, Wai.requestHeaders = hdrs}
       waiReq = WT.setPath baseReq (TE.encodeUtf8 url)
       sreq = WT.SRequest waiReq bodyBs
   resp <- WT.runSession (WT.srequest sreq) app
@@ -354,30 +409,21 @@ callTool app te args = do
       isErr = code >= 400
       structured = AE.decode bodyLBS :: Maybe AE.Value
       base =
-        [ "content"
-            AE..= ( [ AE.object
-                        [ "type" AE..= ("text" :: Text)
-                        , "text" AE..= bodyTxt
-                        ]
-                    ]
-                      :: [AE.Value]
-                  )
+        [ "content" AE..= ([textContent bodyTxt] :: [AE.Value])
         , "isError" AE..= isErr
         ]
   pure $ AE.object $ base <> maybe [] (\v -> ["structuredContent" AE..= v]) structured
 
 
-splitArgs :: ToolEntry -> AE.Object -> (Text, Text, AE.Value)
-splitArgs te args =
+splitArgs :: OpenApiBinding -> AE.Object -> (Text, Text, AE.Value)
+splitArgs b args =
   let look k = KM.lookup (AK.fromText k) args
-      pathStr = foldl' substPath te.tePath te.tePathParams
-      substPath acc k = case look k of
-        Just v -> T.replace ("{" <> k <> "}") (urlEncodeText (jsonToText v)) acc
-        Nothing -> acc
+      pathStr = foldl' substPath b.path b.pathParams
+      substPath acc k = maybe acc (\v -> T.replace ("{" <> k <> "}") (urlEncodeText (jsonToText v)) acc) (look k)
       qs =
         T.intercalate "&"
           [ k <> "=" <> urlEncodeText (jsonToText v)
-          | k <- te.teQueryParams
+          | k <- b.queryParams
           , Just v <- [look k]
           , v /= AE.Null
           ]
@@ -397,3 +443,119 @@ urlEncodeText :: Text -> Text
 urlEncodeText = TE.decodeUtf8 . H.urlEncode True . TE.encodeUtf8
 
 
+-- =============================================================================
+-- Composite (workflow) tools
+-- =============================================================================
+
+-- | Bundled, agent-friendly tools that combine several internal calls. Modeled
+-- after Sentry/Grafana Sift patterns: one verb the agent calls in place of an
+-- ad-hoc multi-step plan.
+compositeTools :: [Tool]
+compositeTools = [findErrorPatterns, searchEventsNL, analyzeIssue]
+
+
+-- | Top log/error patterns ranked by current-hour volume.
+findErrorPatterns :: Tool
+findErrorPatterns =
+  composite "find_error_patterns"
+    "Top established log patterns ranked by current-hour event count. Use to answer 'what is blowing up right now' without crafting a query."
+    (objSchema [("limit", intProp "Max patterns to return (default 20).")] [])
+    \pid args -> do
+      now <- Time.currentTime
+      pats <- LogPatterns.getPatternsWithCurrentRates pid now
+      let lim = clamp 1 200 (fromMaybe 20 (intArg "limit" args))
+          sorted = take lim $ sortOn (Down . (.currentHourCount)) pats
+      pure $ okResult $ AE.object ["as_of" AE..= now, "patterns" AE..= sorted]
+
+
+-- | Translate a natural-language description into a KQL query. Mirrors the
+-- existing aiSearch handler but returns the query string for the agent to
+-- run separately via @search_events@.
+searchEventsNL :: Tool
+searchEventsNL =
+  composite "search_events_nl"
+    "Translate a natural-language description (e.g. 'failed payments in the last hour for service checkout') into a KQL query for the events index. Returns the suggested query, time range and an explanation; call search_events with the query to execute."
+    ( objSchema
+        [ ("input", strProp "The natural-language description of what to find.")
+        , ("timezone", strProp "IANA timezone name for relative time interpretation (optional, e.g. 'America/Los_Angeles').")
+        ]
+        ["input"]
+    )
+    \pid args -> case T.strip <$> textArg "input" args of
+      Nothing -> pure $ toolError "input is required"
+      Just inputT
+        | T.null inputT -> pure $ toolError "input must be non-empty"
+        | otherwise -> do
+            authCtx <- Reader.ask @AuthContext
+            now <- Time.currentTime
+            facets <- Fields.getFacetSummary pid "otel_logs_and_spans" (addUTCTime (-86400) now) now
+            let cfg = (AI.defaultAgenticConfig pid){AI.facetContext = facets, AI.timezone = textArg "timezone" args, AI.maxIterations = 2}
+            AI.runAgenticQuery cfg inputT authCtx.env.openaiModel authCtx.env.openaiApiKey >>= \case
+              Left err -> pure $ toolError ("AI translation failed: " <> err)
+              Right resp ->
+                pure $ okResult $ AE.object
+                  [ "query" AE..= resp.query
+                  , "visualization_type" AE..= resp.visualization
+                  , "commentary" AE..= resp.explanation
+                  , "time_range" AE..= resp.timeRange
+                  ]
+
+
+-- | Fetch an issue and ask the LLM to diagnose it.
+analyzeIssue :: Tool
+analyzeIssue =
+  composite "analyze_issue"
+    "Fetch an issue by id and return both the issue payload and an LLM-generated diagnosis (probable cause, key signals, suggested next steps). Costs one LLM call."
+    (objSchema [("issue_id", strProp "UUID of the issue to analyze.")] ["issue_id"])
+    \pid args -> case textArg "issue_id" args >>= UUID.fromText of
+      Nothing -> pure $ toolError "issue_id is required and must be a valid UUID"
+      Just uuid -> do
+        issue <- ApiH.apiIssueGet pid (UUIDId uuid)
+        authCtx <- Reader.ask @AuthContext
+        let prompt =
+              T.unlines
+                [ "You are a senior SRE diagnosing a production issue. Return concise markdown:"
+                , "- **Probable cause**: 1-2 sentences."
+                , "- **Key signals**: bullet list grounded in the issue payload."
+                , "- **Next steps**: 3-5 short, actionable items."
+                , ""
+                , "Issue payload:"
+                , renderJson (AE.toJSON issue)
+                ]
+        AI.callOpenAIAPIEff authCtx.env.openaiModel prompt authCtx.env.openaiApiKey >>= \case
+          Left err -> pure $ toolError ("LLM call failed: " <> err)
+          Right analysis -> pure $ okResult $ AE.object ["issue" AE..= issue, "analysis" AE..= analysis]
+
+
+-- =============================================================================
+-- Composite tool helpers
+-- =============================================================================
+
+composite :: Text -> Text -> AE.Value -> (Projects.ProjectId -> AE.Object -> ATBaseCtx AE.Value) -> Tool
+composite n d schema run = Tool n d schema (ViaComposite run)
+
+
+objSchema :: [(Text, AE.Value)] -> [Text] -> AE.Value
+objSchema props requireds =
+  AE.object
+    [ "type" AE..= ("object" :: Text)
+    , "properties" AE..= AE.object [(AK.fromText k, v) | (k, v) <- props]
+    , "required" AE..= requireds
+    ]
+
+
+strProp, intProp :: Text -> AE.Value
+strProp d = AE.object ["type" AE..= ("string" :: Text), "description" AE..= d]
+intProp d = AE.object ["type" AE..= ("integer" :: Text), "description" AE..= d]
+
+
+textArg :: Text -> AE.Object -> Maybe Text
+textArg k o = KM.lookup (AK.fromText k) o >>= \case AE.String s -> Just s; _ -> Nothing
+
+
+intArg :: Text -> AE.Object -> Maybe Int
+intArg k o = KM.lookup (AK.fromText k) o >>= \case AE.Number n -> Just (round n); _ -> Nothing
+
+
+clamp :: Ord a => a -> a -> a -> a
+clamp lo hi = max lo . min hi

@@ -381,6 +381,7 @@ data LogPatternWithRate = LogPatternWithRate
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, HI.DecodeRow)
+  deriving (AE.ToJSON, AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] LogPatternWithRate
 
 
 -- | Get all established patterns with their current hour counts for spike detection.
