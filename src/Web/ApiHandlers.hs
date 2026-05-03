@@ -83,6 +83,8 @@ module Web.ApiHandlers (
   apiFacets,
   -- Direct event lookup by (id, timestamp)
   apiEventGet,
+  -- Internals exposed for testing
+  synthStackFromSpans,
 ) where
 
 import Control.Lens ((%~), _Just)
@@ -101,7 +103,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, nominalDay, zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
+import Database.PostgreSQL.Simple.Newtypes (Aeson (..), getAeson)
 import Deriving.Aeson qualified as DAE
 import Effectful.Error.Static (throwError)
 import Effectful.Reader.Static (ask)
@@ -829,49 +831,41 @@ apiIssueGet pid iid = issueToFull <$> (enrichIssue pid =<< fetchIssue pid iid)
 enrichIssue :: Projects.ProjectId -> Issues.Issue -> ATBaseCtx Issues.Issue
 enrichIssue pid issue
   | issue.issueType /= Issues.RuntimeException = pure issue
-  | T.null (storedStack issue.issueData) = do
-      epM <- ErrorPatterns.getErrorPatternByHash pid issue.targetHash
-      case epM >>= (.recentTraceId) of
-        Nothing -> pure issue
-        Just trId -> do
-          now <- Time.currentTime
-          spans <- Telemetry.getSpanRecordsByTraceId pid trId Nothing now
-          let synth = synthStackFromSpans trId spans
-          pure
-            $ if T.null synth
-              then issue
-              else issue{Issues.issueData = patchStack synth issue.issueData}
-  | otherwise = pure issue
-  where
-    storedStack (Aeson (AE.Object o)) = case AEKM.lookup "stack_trace" o of
-      Just (AE.String s) -> s
-      _ -> ""
-    storedStack _ = ""
-    patchStack s (Aeson (AE.Object o)) = Aeson (AE.Object (AEKM.insert "stack_trace" (AE.String s) o))
-    patchStack _ x = x
+  | otherwise = case AE.fromJSON (getAeson issue.issueData) of
+      AE.Success (rd :: Issues.RuntimeExceptionData)
+        | T.null rd.stackTrace -> do
+            epM <- ErrorPatterns.getErrorPatternByHash pid issue.targetHash
+            case epM >>= (.recentTraceId) of
+              Nothing -> pure issue
+              Just trId -> do
+                now <- Time.currentTime
+                spans <- Telemetry.getSpanRecordsByTraceId pid trId Nothing now
+                let synth = synthStackFromSpans trId spans
+                pure
+                  $ if T.null synth
+                    then issue
+                    else issue{Issues.issueData = Aeson (AE.toJSON rd{Issues.stackTrace = synth})}
+      _ -> pure issue
 
 
 -- | Build a pseudo-stacktrace from a trace's spans, ordered by start time and
 -- annotated with service + span id. Errored span is marked with @!!@.
 synthStackFromSpans :: Text -> [Telemetry.OtelLogsAndSpans] -> Text
+synthStackFromSpans _ [] = ""
 synthStackFromSpans trId spans =
-  let ordered = List.sortOn (.start_time) spans
-      formatOne s =
-        let svc = Telemetry.spanServiceName s
-            spanId = maybe "?" (fromMaybe "?" . (.span_id)) s.context
-            errored = s.status_code == Just "ERROR"
-            marker = if errored then "!! " else "   "
-            svcTxt = maybe "" (\v -> " [" <> v <> "]") svc
-            label = fromMaybe "<unnamed>" s.name
-         in marker <> "at " <> label <> svcTxt <> " (span=" <> spanId <> ")"
-      formatted = map formatOne ordered
-   in if null formatted
-        then ""
-        else
-          "(synthesized from trace "
-            <> trId
-            <> " — GHC backtrace unavailable; spans ordered by start time, !! marks the errored span)\n"
-            <> T.intercalate "\n" formatted
+  "(synthesized from trace "
+    <> trId
+    <> " — GHC backtrace unavailable; spans ordered by start time, !! marks the errored span)\n"
+    <> T.intercalate "\n" (map formatOne (List.sortOn (.start_time) spans))
+  where
+    formatOne s =
+      let svc = Telemetry.spanServiceName s
+          spanId = maybe "?" (fromMaybe "?" . (.span_id)) s.context
+          errored = s.status_code == Just "ERROR"
+          marker = if errored then "!! " else "   "
+          svcTxt = foldMap (\v -> " [" <> v <> "]") svc
+          label = fromMaybe "<unnamed>" s.name
+       in marker <> "at " <> label <> svcTxt <> " (span=" <> spanId <> ")"
 
 
 issueMutate :: Projects.ProjectId -> Issues.IssueId -> (V.Vector Issues.IssueId -> ATBaseCtx Int64) -> ATBaseCtx IssueApiFull

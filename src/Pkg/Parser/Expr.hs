@@ -649,11 +649,15 @@ flattenedOtelAttributes =
 -- latter path, so a query that only hits the flat column misses real
 -- exceptions. We rewrite these subjects to COALESCE both sources.
 --
--- Invariant: every member here must also appear under @attributes.exception.*@
--- in 'flattenedOtelAttributes'. The two sets overlap by design — one controls
--- dot→triple-underscore rewriting; this one adds the COALESCE over span events.
+-- Derived from 'flattenedOtelAttributes' so the invariant — every entry
+-- here also appears under @attributes.exception.*@ there — is enforced
+-- automatically rather than maintained by hand.
 exceptionFlattenedFields :: Set T.Text
-exceptionFlattenedFields = fromList ["type", "message", "stacktrace", "escaped"]
+exceptionFlattenedFields =
+  S.fromList
+    . mapMaybe (T.stripPrefix "attributes.exception.")
+    . S.toList
+    $ flattenedOtelAttributes
 
 
 -- | Map user-facing output field names (SELECT aliases) to their real DB column names.

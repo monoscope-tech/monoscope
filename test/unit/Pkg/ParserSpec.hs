@@ -12,7 +12,7 @@ import Pkg.Parser (
   parseQueryToAST,
  )
 import Relude
-import Test.Hspec (Spec, describe, it, shouldBe)
+import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 
 
 -- Normalize text by removing newlines, carriage returns, tabs, and extra spaces
@@ -617,4 +617,45 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
     it "handles complex arithmetic with multiple operators" do
       let result = parseQueryToAST "| summarize (count() + 10) * 2 / 5 by bin_auto(timestamp)"
       isRight result `shouldBe` True
+
+  describe "output field aliases" do
+    -- These three names appear in query results and the schema endpoint, so
+    -- users naturally try to filter by them. The alias map rewrites them to
+    -- the underlying DB columns so the WHERE clause hits a real column.
+    it "rewrites span_name → name in WHERE" do
+      let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "span_name==\"foo\""
+      query `shouldSatisfy` T.isInfixOf "name = 'foo'"
+      query `shouldSatisfy` not . T.isInfixOf "span_name = "
+
+    it "rewrites service → resource___service___name in WHERE" do
+      let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "service==\"api\""
+      query `shouldSatisfy` T.isInfixOf "resource___service___name = 'api'"
+
+    it "rewrites trace_id → context___trace_id in WHERE" do
+      let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "trace_id==\"abc\""
+      query `shouldSatisfy` T.isInfixOf "context___trace_id = 'abc'"
+
+  describe "exception COALESCE rewriting" do
+    -- OTel SDKs (notably hs-opentelemetry) record exceptions as span events
+    -- (event_name=\"exception\") rather than flat attributes, so a query that
+    -- only hits the flat column misses real exceptions. The rewrite COALESCEs
+    -- both sources so either path returns a match.
+    it "rewrites attributes.exception.message to COALESCE over events" do
+      let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "attributes.exception.message==\"boom\""
+      query `shouldSatisfy` T.isInfixOf "COALESCE(attributes___exception___message"
+      query `shouldSatisfy` T.isInfixOf "jsonb_path_query_first(events"
+      query `shouldSatisfy` T.isInfixOf "@.event_name == \"exception\""
+
+    it "rewrites attributes.exception.type with COALESCE" do
+      let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "attributes.exception.type==\"E\""
+      query `shouldSatisfy` T.isInfixOf "COALESCE(attributes___exception___type"
+
+    it "rewrites attributes.exception.stacktrace with COALESCE" do
+      let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "attributes.exception.stacktrace==\"x\""
+      query `shouldSatisfy` T.isInfixOf "COALESCE(attributes___exception___stacktrace"
+
+    it "leaves other flattened OTel attributes as plain triple-underscore (no COALESCE)" do
+      let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "attributes.http.request.method==\"GET\""
+      query `shouldSatisfy` T.isInfixOf "attributes___http___request___method = 'GET'"
+      query `shouldSatisfy` not . T.isInfixOf "COALESCE(attributes___http___request___method"
 

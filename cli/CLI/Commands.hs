@@ -377,10 +377,10 @@ emitFirstEventId v = case v of
 -- | Validate every flag on 'EventsSearchOpts' in one pass and apply
 -- 'normalizeKind' so the wire-level @source@ value is always @log@/@span@
 -- (D2). Failures print a clear message and exit non-zero (D5).
--- | Validate search options before hitting the server. Note: EventsTailOpts
--- and EventsContextOpts do not carry a user-supplied KQL query (tail uses
--- structured --service/--level flags; context uses --at + structured flags),
--- so validateQueryOrDie is not needed for those commands.
+--
+-- Note: EventsTailOpts and EventsContextOpts do not carry a user-supplied KQL
+-- query (tail uses structured --service/--level flags; context uses --at +
+-- structured flags), so validateQueryOrDie is not needed for those commands.
 validateEventsOpts :: IOE :> es => EventsSearchOpts -> Eff es EventsSearchOpts
 validateEventsOpts opts = do
   validateDurationOrDie "--since" opts.since
@@ -397,16 +397,21 @@ validateEventsOpts opts = do
 -- | 'events get ID' — fetch one event (or full trace tree with --tree).
 -- When --at TIMESTAMP is given, uses GET /api/v1/events/{id}/time/{ts} for an
 -- O(1) timeseries point lookup. Without --at, falls back to a 90d KQL search.
+-- An unparseable --at value is rejected up front so the user gets an immediate
+-- error instead of a slow range-scan fallback that hides the typo.
 runEventsGet :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> EventsGetOpts -> OutputMode -> Eff es ()
-runEventsGet cfg opts mode =
-  case opts.at >>= iso8601ParseM . toString of
-    Just (t :: UTCTime) -> do
+runEventsGet cfg opts mode = case opts.at of
+  Nothing -> rangeScan
+  Just raw -> case iso8601ParseM (toString raw) :: Maybe UTCTime of
+    Nothing -> printError "--at: invalid ISO-8601 timestamp" >> liftIO exitFailure
+    Just t -> do
       -- Direct O(1) lookup: both id and timestamp known → single-partition query.
       -- Returns raw OtelLogsAndSpans JSON; always rendered as JSON (table view
       -- is not applicable for a single denormalized span record).
       let path = "/api/v1/events/" <> opts.eventId <> "/time/" <> toText (iso8601Show t)
       withAPIResult cfg path [] renderJSON
-    Nothing -> do
+  where
+    rangeScan = do
       -- Fallback: scan 90d, also match by trace_id so bare trace IDs work.
       let eid = T.replace "\"" "\\\"" (T.replace "\\" "\\\\" opts.eventId)
           q
