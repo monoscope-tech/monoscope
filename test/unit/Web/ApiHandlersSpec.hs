@@ -1,7 +1,6 @@
 module Web.ApiHandlersSpec (spec) where
 
 import Data.Aeson qualified as AE
-import Data.Aeson.KeyMap qualified as AEKM
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime)
@@ -46,7 +45,7 @@ mkSpan name spanId service statusCode startTime =
     , events = Nothing
     , links = Nothing
     , attributes = Nothing
-    , resource = (\svc -> AesonText (Map.singleton "service" (AE.Object (AEKM.singleton "name" (AE.String svc))))) <$> service
+    , resource = (\svc -> AesonText (Map.singleton "service.name" (AE.String svc))) <$> service
     , summary = V.empty
     , date = startTime
     , errors = Nothing
@@ -62,11 +61,12 @@ spec = describe "synthStackFromSpans" do
   it "returns empty for an empty span list" do
     synthStackFromSpans "trace-1" [] `shouldBe` ""
 
-  it "includes the trace id and a header line" do
+  it "includes the trace id, header line, and bracketed service" do
     let s = mkSpan (Just "GET /") (Just "abc") (Just "api") Nothing (t 0)
     let out = synthStackFromSpans "trace-xyz" [s]
     out `shouldSatisfy` T.isInfixOf "trace-xyz"
     out `shouldSatisfy` T.isInfixOf "synthesized from trace"
+    out `shouldSatisfy` T.isInfixOf "[api]"
 
   it "marks errored spans with !! and non-errored with three spaces" do
     let ok = mkSpan (Just "ok") (Just "1") (Just "svc") (Just "OK") (t 0)

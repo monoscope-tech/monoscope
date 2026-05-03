@@ -543,7 +543,7 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "isnotnull(trace_id)"
       let expected =
             [text|
-      SELECT id,CASE WHEN RIGHT(TRIM('"' FROM CAST(to_json(timestamp at time zone 'UTC') AS VARCHAR)), 1) = 'Z' THEN TRIM('"' FROM CAST(to_json(timestamp at time zone 'UTC') AS VARCHAR)) ELSE TRIM('"' FROM CAST(to_json(timestamp at time zone 'UTC') AS VARCHAR)) || 'Z' END,context___trace_id,name,duration,resource___service___name,parent_id,CAST(EXTRACT(EPOCH FROM (start_time)) * 1000000000 AS BIGINT),errors is not null,to_jsonb(summary),context___span_id,kind FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((trace_id IS NOT NULL)) ORDER BY timestamp desc limit 501
+      SELECT id,CASE WHEN RIGHT(TRIM('"' FROM CAST(to_json(timestamp at time zone 'UTC') AS VARCHAR)), 1) = 'Z' THEN TRIM('"' FROM CAST(to_json(timestamp at time zone 'UTC') AS VARCHAR)) ELSE TRIM('"' FROM CAST(to_json(timestamp at time zone 'UTC') AS VARCHAR)) || 'Z' END,context___trace_id,name,duration,resource___service___name,parent_id,CAST(EXTRACT(EPOCH FROM (start_time)) * 1000000000 AS BIGINT),errors is not null,to_jsonb(summary),context___span_id,kind FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((context___trace_id IS NOT NULL)) ORDER BY timestamp desc limit 501
             |]
       normT query `shouldBe` normT expected
 

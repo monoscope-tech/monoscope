@@ -819,15 +819,9 @@ apiIssueGet pid iid = issueToFull <$> (enrichIssue pid =<< fetchIssue pid iid)
 
 
 -- | Fill an empty @stack_trace@ on a runtime-exception issue with a synthesised
--- one derived from the trace's span hierarchy. Most Haskell exceptions arrive
--- with @exception.stacktrace=""@ because GHC doesn't capture a backtrace by
--- default; without this fallback the API/CLI surfaces an empty string and the
--- caller cannot tell whether the data is missing or just unhelpful.
--- TODO(perf): for busy projects this runs two extra queries per issue-detail
--- call (getErrorPatternByHash then getSpanRecordsByTraceId). The right fix is
--- to compute and store the synthetic stack at ingestion/upsert time so reads
--- are zero-cost. Until then the guards keep it O(0) for non-RuntimeException
--- issues and for RuntimeExceptions that already have a stored stack.
+-- one derived from the trace's span hierarchy. GHC doesn't capture a backtrace
+-- by default, so without this fallback the API/CLI surfaces an empty string.
+-- TODO(perf): store the synth stack at ingestion to avoid these 2 extra queries.
 enrichIssue :: Projects.ProjectId -> Issues.Issue -> ATBaseCtx Issues.Issue
 enrichIssue pid issue
   | issue.issueType /= Issues.RuntimeException = pure issue
@@ -860,7 +854,7 @@ synthStackFromSpans trId spans =
   where
     formatOne s =
       let svc = Telemetry.spanServiceName s
-          spanId = maybe "?" (fromMaybe "?" . (.span_id)) s.context
+          spanId = fromMaybe "?" (s.context >>= (.span_id))
           errored = s.status_code == Just "ERROR"
           marker = if errored then "!! " else "   "
           svcTxt = foldMap (\v -> " [" <> v <> "]") svc

@@ -404,12 +404,14 @@ runEventsGet cfg opts mode = case opts.at of
   Nothing -> rangeScan
   Just raw -> case iso8601ParseM (toString raw) :: Maybe UTCTime of
     Nothing -> printError "--at: invalid ISO-8601 timestamp" >> liftIO exitFailure
-    Just t -> do
-      -- Direct O(1) lookup: both id and timestamp known → single-partition query.
-      -- Returns raw OtelLogsAndSpans JSON; always rendered as JSON (table view
-      -- is not applicable for a single denormalized span record).
-      let path = "/api/v1/events/" <> opts.eventId <> "/time/" <> toText (iso8601Show t)
-      withAPIResult cfg path [] renderJSON
+    Just t
+      | T.any (== '/') opts.eventId -> printError "event id must not contain '/'" >> liftIO exitFailure
+      | otherwise -> do
+          -- Direct O(1) lookup: both id and timestamp known → single-partition query.
+          -- Returns raw OtelLogsAndSpans JSON; always rendered as JSON (table view
+          -- is not applicable for a single denormalized span record).
+          let path = "/api/v1/events/" <> opts.eventId <> "/time/" <> toText (iso8601Show t)
+          withAPIResult cfg path [] renderJSON
   where
     rangeScan = do
       -- Fallback: scan 90d, also match by trace_id so bare trace IDs work.
