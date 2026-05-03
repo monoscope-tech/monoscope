@@ -477,17 +477,12 @@ spec = aroundAll withTestResources do
                 , "method" AE..= ("tools/list" :: Text)
                 ]
         resp <- runAsBase tr (MCP.handleJsonRpc reg dummyApp testPid req)
-        let tools = resp ^? key "result" . key "tools" . _Array
-        tools `shouldSatisfy` \case
-          Just arr -> not (null arr)
-          Nothing -> False
-        let firstTool = resp ^? key "result" . key "tools" . _Array . traverse
-        case firstTool of
-          Just _ -> do
-            (resp ^? key "result" . key "tools" . _Array . traverse . key "name") `shouldSatisfy` isJust
-            (resp ^? key "result" . key "tools" . _Array . traverse . key "description") `shouldSatisfy` isJust
-            (resp ^? key "result" . key "tools" . _Array . traverse . key "inputSchema") `shouldSatisfy` isJust
-          Nothing -> expectationFailure "expected at least one tool"
+        let tools = resp ^.. key "result" . key "tools" . _Array . traverse
+        tools `shouldSatisfy` (not . null)
+        case tools of
+          (t : _) -> for_ ["name", "description", "inputSchema"] $ \k ->
+            (t ^? key (AEK.fromText k)) `shouldSatisfy` isJust
+          [] -> expectationFailure "expected at least one tool"
 
       it "initialize returns protocolVersion + serverInfo" $ \tr -> do
         let req =
