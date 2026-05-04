@@ -1024,6 +1024,7 @@ createTestSpans TestResources{..} projectId numRequestsPerEndpoint = do
               , date = currentTime
               , summary = V.empty -- Will be generated
               , errors = Nothing
+              , message_size_bytes = 0
               }
       let summary = Telemetry.generateSummary otelRecord
       void $ withResource trPool \conn ->

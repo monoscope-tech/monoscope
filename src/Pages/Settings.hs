@@ -730,6 +730,7 @@ webhookPostH sigHeaderM rawBody = do
 data BillingData = BillingData
   { pid :: Projects.ProjectId
   , totalReqs :: Int64
+  , totalBytes :: Int64
   , lastReported :: Text
   , lemonUrl :: Text
   , critical :: Text
@@ -737,7 +738,8 @@ data BillingData = BillingData
   , enableFreetier :: Bool
   , basicAuthEnabled :: Bool
   , provider :: Projects.BillingProvider
-  , dailyUsage :: [(Day, Int64)]
+  , dailyUsage :: [(Day, Int64, Int64, Int64, Int64)]
+  -- ^ (day, total_requests, metrics, eventBytes, metricBytes); events = total_requests - metrics
   , cycleStart :: Day
   }
 
@@ -759,14 +761,14 @@ manageBillingGetH pid from = do
   let cycleStart = calculateCycleStartDate dat currentTime
       thirtyDaysAgo = addUTCTime (negate $ 30 * 86400) currentTime
       breakdownStart = min cycleStart thirtyDaysAgo
-  totalRequests <- Projects.getTotalUsage pid cycleStart
+  (totalRequests, totalBytes) <- Projects.getTotalUsage pid cycleStart
   dailyUsage <- Projects.getDailyUsageBreakdown pid breakdownStart
   let last_reported = toText (formatTime defaultTimeLocale "%b %-d" project.usageLastReported)
       bwconf = bw{pageTitle = "Billing", isSettingsPage = True}
   let lemonUrl = envCfg.lemonSqueezyUrl <> "&checkout[custom][project_id]=" <> pid.toText
       critical = envCfg.lemonSqueezyCriticalUrl <> "&checkout[custom][project_id]=" <> pid.toText
   let provider = if project.paymentPlan == "Free" then Projects.NoBillingProvider else Projects.billingProvider project.subId
-  addRespHeaders $ BillingGet $ PageCtx bwconf BillingData{pid, totalReqs = totalRequests, lastReported = last_reported, lemonUrl, critical, paymentPlan = project.paymentPlan, enableFreetier = envCfg.enableFreetier, basicAuthEnabled = envCfg.basicAuthEnabled, provider, dailyUsage, cycleStart = utctDay cycleStart}
+  addRespHeaders $ BillingGet $ PageCtx bwconf BillingData{pid, totalReqs = totalRequests, totalBytes, lastReported = last_reported, lemonUrl, critical, paymentPlan = project.paymentPlan, enableFreetier = envCfg.enableFreetier, basicAuthEnabled = envCfg.basicAuthEnabled, provider, dailyUsage, cycleStart = utctDay cycleStart}
 
 
 billingPage :: BillingData -> Html ()
@@ -813,11 +815,12 @@ billingPage d = div_ [] do
       div_ [] do
         div_ [class_ "text-2xl font-bold text-textStrong tabular-nums"] $ toHtml estCost
         div_ [class_ "text-sm text-textWeak mt-0.5"] "Estimated this cycle"
-        div_ [class_ "text-xs text-textWeak mt-1 tabular-nums"]
-          $ toHtml
-          $ if isFree || overageNum <= 0
-            then fmt (commaizeF reqs) <> " requests"
-            else "$" <> planPrice <> " plan + " <> fmtUSD overageCost <> " usage (" <> fmt (commaizeF reqs) <> " requests)"
+        let bytesSuffix = if d.totalBytes > 0 then " · " <> humanBytes d.totalBytes else ""
+            usageLine =
+              if isFree || overageNum <= 0
+                then fmt (commaizeF reqs) <> " requests" <> bytesSuffix
+                else "$" <> planPrice <> " plan + " <> fmtUSD overageCost <> " usage (" <> fmt (commaizeF reqs) <> " requests" <> bytesSuffix <> ")"
+        div_ [class_ "text-xs text-textWeak mt-1 tabular-nums"] $ toHtml usageLine
       unless (T.null last_reported)
         $ div_ [class_ "text-xs text-textWeak"]
         $ toHtml ("Last reported " <> last_reported)
@@ -838,31 +841,48 @@ billingPage d = div_ [] do
     paymentPlanPicker pid lemonUrl critical paymentPlan enableFreetier basicAuthEnabled False provider
 
 
+-- | Format a byte count with the largest unit it fits into. KB-step decimal
+-- (matches what most cloud billing pages render), one decimal past KB.
+humanBytes :: Int64 -> Text
+humanBytes b
+  | b < 1024 = show b <> " B"
+  | b < 1_048_576 = fmtNum (fromIntegral b / 1024 :: Double) <> " KB"
+  | b < 1_073_741_824 = fmtNum (fromIntegral b / 1_048_576 :: Double) <> " MB"
+  | otherwise = fmtNum (fromIntegral b / 1_073_741_824 :: Double) <> " GB"
+  where
+    fmtNum n = toText (printf "%.1f" n :: String)
+
+
 -- | Per-day usage table for the last 30 days. Cost shown is the marginal
 -- contribution past the 20M-included tier ($1 per 1M), assuming chronological
 -- accumulation across the cycle. Days entirely below the threshold show "—".
-dailyUsageBreakdown_ :: Bool -> Day -> [(Day, Int64)] -> Html ()
+dailyUsageBreakdown_ :: Bool -> Day -> [(Day, Int64, Int64, Int64, Int64)] -> Html ()
 dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-strokeWeak pt-6 space-y-3"] do
+  let totalReqs = sum [n | (_, n, _, _, _) <- rows]
+      totalBytes = sum [eb + mb | (_, _, _, eb, mb) <- rows]
+      summaryRight =
+        if totalBytes > 0
+          then fmt (commaizeF totalReqs) <> " rows · " <> humanBytes totalBytes
+          else fmt (commaizeF totalReqs) <> " rows"
   div_ [class_ "flex items-baseline justify-between"] do
     sectionLabel_ "Daily breakdown"
-    span_ [class_ "text-xs text-textWeak tabular-nums"] $ toHtml @Text $ fmt (commaizeF (sum (map snd rows))) <> " requests"
+    span_ [class_ "text-xs text-textWeak tabular-nums"] $ toHtml @Text summaryRight
   if null rows
     then div_ [class_ "text-sm text-textWeak py-4"] "No usage recorded yet this cycle."
     else do
       let activeDays = length rows
           included = 20_000_000 :: Int64
-          maxDay = foldr (max . snd) 1 rows
-          ascending = sortWith fst rows
+          maxDay = foldr (\(_, n, _, _, _) acc -> max n acc) 1 rows
+          ascending = sortWith (\(d, _, _, _, _) -> d) rows
           -- Running cumulative resets at cycleStartDay so pre-cycle rows (shown
           -- for context) don't inflate the included-tier counter and produce
           -- incorrect "Est. cost" for current-cycle days.
-          -- Fold over ascending order; cons prepends so the result is newest-first.
           withRunning =
             fst
               $ foldl'
-                ( \(xs, acc) (day, n) ->
+                ( \(xs, acc) (day, n, m, eb, mb) ->
                     let acc' = (if day < cycleStartDay then 0 else acc) + n
-                     in ((day, n, acc' - n, acc') : xs, acc')
+                     in ((day, n, m, eb, mb, acc' - n, acc') : xs, acc')
                 )
                 ([], 0 :: Int64)
                 ascending
@@ -873,19 +893,31 @@ dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-s
             where
               dayOverage = max 0 (cur - included) - max 0 (prev - included)
       div_ [class_ "border border-strokeWeak rounded-md overflow-hidden max-h-96 overflow-y-auto"] do
-        table_ [class_ "w-full text-sm tabular-nums"] do
-          thead_ [class_ "bg-fillWeak text-textWeak text-xs uppercase tracking-wide sticky top-0"] do
+        table_ [class_ "w-full text-sm tabular-nums border-separate border-spacing-0"] do
+          -- Sticky header: each <th> carries its own opaque background so that
+          -- body rows can't show through during scroll. `border-separate` keeps
+          -- the border-bottom rule from being clipped by sticky positioning.
+          let th_h cls = th_ [class_ ("font-medium px-3 py-2 sticky top-0 z-10 bg-fillWeak border-b border-strokeWeak " <> cls)]
+          thead_ [class_ "text-textWeak text-xs uppercase tracking-wide"] do
             tr_ do
-              th_ [class_ "text-left font-medium px-3 py-2"] "Date"
-              th_ [class_ "text-right font-medium px-3 py-2"] "Requests"
-              th_ [class_ "text-left font-medium px-3 py-2 w-1/3"] "Volume"
-              th_ [class_ "text-right font-medium px-3 py-2"] "Est. cost"
+              th_h "text-left" "Date"
+              th_h "text-right" "Events"
+              th_h "text-right" "Metrics"
+              th_h "text-right" "Data size"
+              th_h "text-left w-1/4" ""
+              th_h "text-right" "Est. cost"
           tbody_ do
-            forM_ withRunning \(day, n, prev, cur) -> do
+            forM_ withRunning \(day, n, metrics, eb, mb, prev, cur) -> do
               let pct = max 1 $ min 100 $ (n * 100) `div` maxDay
+                  events = max 0 (n - metrics)
+                  totalBytes' = eb + mb
+                  volumeText = if totalBytes' <= 0 then "—" else humanBytes totalBytes'
+                  metricsText = if metrics <= 0 then "—" else fmt (commaizeF metrics)
               tr_ [class_ "border-t border-strokeWeak"] do
                 td_ [class_ "px-3 py-2 text-textStrong"] $ toHtml $ toText (formatTime defaultTimeLocale "%a %b %e" day)
-                td_ [class_ "px-3 py-2 text-right text-textStrong"] $ toHtml @Text $ fmt (commaizeF n)
+                td_ [class_ "px-3 py-2 text-right text-textStrong"] $ toHtml @Text $ fmt (commaizeF events)
+                td_ [class_ "px-3 py-2 text-right text-textWeak"] $ toHtml @Text metricsText
+                td_ [class_ "px-3 py-2 text-right text-textWeak"] $ toHtml @Text volumeText
                 td_ [class_ "px-3 py-2"] do
                   div_ [class_ "h-1.5 bg-fillWeak rounded-full overflow-hidden"] do
                     div_ [class_ "h-full bg-fillBrand", style_ ("width: " <> show pct <> "%")] mempty

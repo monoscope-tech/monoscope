@@ -31,6 +31,7 @@ import Data.Aeson.Lens (key, _Number, _Object, _String)
 import Data.Aeson.Types (KeyValue ((.=)), object)
 import Data.Aeson.Types qualified as AE
 import Data.Aeson.Types qualified as AET
+import Data.ByteString qualified as BS
 import Data.ByteString.Lazy.Char8 qualified as BL
 import Data.Cache qualified as Cache
 import Data.Char (isAlpha, isAlphaNum, isDigit, isLower, isUpper)
@@ -164,8 +165,12 @@ processMessages msgs attrs = do
         pure $! zip projectIds cachePairs
       let projectCaches = HM.fromList caches
 
+      -- Map ackId → raw incoming bytes so we can attribute the original
+      -- (pre-decode) message size to the resulting span row.
+      let rawByAckId = HM.fromList [(ackId, BS.length raw) | (ackId, raw) <- msgs]
       spans <- forM rMsgs \(rmAckId, msg) -> do
         let pid = UUIDId msg.projectId
+            !msgSize = fromIntegral $ HM.lookupDefault 0 rmAckId rawByAckId
         case HM.lookup pid projectCaches of
           Just cache ->
             let !totalDailyEvents = fromIntegral cache.dailyEventCount + fromIntegral cache.dailyMetricCount
@@ -176,7 +181,7 @@ processMessages msgs attrs = do
                   else do
                     spanId <- UUID.genUUID
                     trId <- UUID.toText <$> UUID.genUUID
-                    let !span' = convertRequestMessageToSpan msg (spanId, trId)
+                    let !span' = convertRequestMessageToSpan msg msgSize (spanId, trId)
                     pure (Just span')
           Nothing -> pure Nothing
 
@@ -388,8 +393,8 @@ processSpanToEntities canonicalTemplates pjc otelSpan dumpId =
       _ -> Nothing
 
 
-convertRequestMessageToSpan :: RequestMessage -> (UUID.UUID, Text) -> Telemetry.OtelLogsAndSpans
-convertRequestMessageToSpan rm (spanId, trId) =
+convertRequestMessageToSpan :: RequestMessage -> Int64 -> (UUID.UUID, Text) -> Telemetry.OtelLogsAndSpans
+convertRequestMessageToSpan rm msgSize (spanId, trId) =
   let
     -- Convert parent_id, ensuring empty strings become Nothing
     !parentId = case (Just . UUID.toText) =<< rm.parentId of
@@ -433,6 +438,7 @@ convertRequestMessageToSpan rm (spanId, trId) =
         , summary = V.empty -- Will be populated below
         , date = zonedTimeToUTC rm.timestamp
         , errors = Nothing
+        , message_size_bytes = msgSize
         }
    in
     otelSpan{summary = generateSummary otelSpan}

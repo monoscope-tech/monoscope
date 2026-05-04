@@ -438,9 +438,9 @@ processBackgroundJob authCtx bgJob =
               wStart =
                 max project.usageLastReported
                   $ calculateCycleStartDate (fromMaybe project.createdAt project.billingDay) nowU
-            totalToReport <- Telemetry.getTotalEventsToReport pid wStart
-            totalMetricsCount <- Telemetry.getTotalMetricsCount pid wStart
+            (totalToReport, eventBytes, totalMetricsCount, metricBytes) <- Telemetry.getUsageTotals pid wStart
             let totalUsage = totalToReport + totalMetricsCount
+                totals = Projects.UsageTotals{events = totalToReport, eventBytes, metrics = totalMetricsCount, metricBytes}
                 chunks = case provider of
                   Projects.NoBillingProvider -> []
                   -- Both paid providers chunk identically. LS's 1M POST cap forces
@@ -448,8 +448,8 @@ processBackgroundJob authCtx bgJob =
                   -- the same meter+customer aggregate identically to one big event,
                   -- so we share the same code path for a single invariant surface.
                   _ -> Projects.splitUsageIntoChunks totalUsage
-            Log.logInfo "Usage to report" ("project_id", pid.toText, "events", totalToReport, "metrics", totalMetricsCount, "total", totalUsage, "chunks", length chunks)
-            Projects.recordUsageWindow pid wStart nowU totalUsage chunks
+            Log.logInfo "Usage to report" ("project_id", pid.toText, "events", totalToReport, "event_bytes", eventBytes, "metrics", totalMetricsCount, "metric_bytes", metricBytes, "total", totalUsage, "chunks", length chunks)
+            Projects.recordUsageWindow pid wStart nowU totals chunks
 
             -- 2) Drain any pending/failed chunks (new + backlog from previous runs).
             --    Provider failures are logged + recorded per-row; we never throw, so

@@ -9,6 +9,7 @@ module Models.Telemetry.Telemetry (
   getSpanRecordsByTraceIds,
   convertOtelLogsAndSpansToSpanRecord,
   getTotalEventsToReport,
+  getUsageTotals,
   SpanRecord (..),
   getAllATErrors,
   getProjectStatsForReport,
@@ -359,6 +360,7 @@ data MetricRecord = MetricRecord
   , flags :: Int
   , aggregationTemporality :: Maybe AggregationTemporality
   , isMonotonic :: Maybe Bool
+  , messageSizeBytes :: Int64
   }
   deriving (Generic, Show)
   deriving anyclass (FromRow, NFData, ToRow)
@@ -782,6 +784,17 @@ getTotalMetricsCount pid lastReported =
   fromMaybe 0 <$> Hasql.interpOne [HI.sql| SELECT count(*)::int FROM telemetry.metrics WHERE project_id=#{pid} AND timestamp > #{lastReported}|]
 
 
+-- | (eventCount, eventBytes, metricCount, metricBytes) for a project since
+-- `lastReported`. Single helper so ReportUsage stays a 1-call site instead of
+-- juggling four separate queries.
+getUsageTotals :: DB es => Projects.ProjectId -> UTCTime -> Eff es (Int, Int64, Int, Int64)
+getUsageTotals pid lastReported = do
+  let pidText = pid.toText
+  (eC, eB) <- fromMaybe (0, 0) <$> Hasql.interpOne [HI.sql| SELECT count(*)::int, COALESCE(SUM(message_size_bytes),0)::bigint FROM otel_logs_and_spans WHERE project_id=#{pidText} AND timestamp > #{lastReported}|]
+  (mC, mB) <- fromMaybe (0, 0) <$> Hasql.interpOne [HI.sql| SELECT count(*)::int, COALESCE(SUM(message_size_bytes),0)::bigint FROM telemetry.metrics WHERE project_id=#{pid} AND timestamp > #{lastReported}|]
+  pure (eC, eB, mC, mB)
+
+
 getMetricChartListData :: DB es => Projects.ProjectId -> Maybe Text -> Maybe Text -> Eff es [MetricChartListData]
 getMetricChartListData pid sourceM prefixM = do
   let sourceFilter = case sourceM of
@@ -811,17 +824,17 @@ getMetricServiceNames pid =
 
 bulkInsertMetrics :: DB es => V.Vector MetricRecord -> Eff es ()
 bulkInsertMetrics metrics = checkpoint "bulkInsertMetrics" $ unless (V.null metrics) do
-  -- 23 params per row; PostgreSQL limit is 65535 params → max ~2849 rows per INSERT
-  forM_ (chunksOf 2800 $ V.toList metrics) \chunk -> do
+  -- 24 params per row; PostgreSQL limit is 65535 params → max ~2730 rows per INSERT
+  forM_ (chunksOf 2700 $ V.toList metrics) \chunk -> do
     let metricRows = map metricRowSql chunk
-    Hasql.interpExecute_ $ "INSERT INTO telemetry.metrics (project_id, metric_name, metric_type, metric_unit, metric_description, metric_time, timestamp, attributes, resource, instrumentation_scope, metric_value, exemplars, flags, value, metric_sum, metric_count, bucket_counts, explicit_bounds, point_min, point_max, quantiles, aggregation_temporality, is_monotonic) VALUES " <> mconcat (intersperse ", " metricRows)
+    Hasql.interpExecute_ $ "INSERT INTO telemetry.metrics (project_id, metric_name, metric_type, metric_unit, metric_description, metric_time, timestamp, attributes, resource, instrumentation_scope, metric_value, exemplars, flags, value, metric_sum, metric_count, bucket_counts, explicit_bounds, point_min, point_max, quantiles, aggregation_temporality, is_monotonic, message_size_bytes) VALUES " <> mconcat (intersperse ", " metricRows)
   let metas = map metaRowSql $ removeDuplic $ V.toList $ V.map metaTuple metrics
   unless (null metas) $ Hasql.interpExecute_ $ "INSERT INTO telemetry.metrics_meta (project_id, metric_name, metric_type, metric_unit, metric_description, service_name) VALUES " <> mconcat (intersperse ", " metas) <> " ON CONFLICT (project_id, metric_name, service_name) DO UPDATE SET metric_type = EXCLUDED.metric_type, metric_unit = EXCLUDED.metric_unit, metric_description = EXCLUDED.metric_description, updated_at = current_timestamp"
   where
     metricRowSql (m :: MetricRecord) =
       let NativeMetricColumns{nValue, nSum, nCount, nBucketCounts, nExplicitBounds, nPointMin, nPointMax, nQuantiles} = metricValueToNative m.metricValue
-          MetricRecord{projectId, metricName, metricType, metricUnit, metricDescription, metricTime, timestamp, attributes, resource, instrumentationScope, metricValue, exemplars, flags, aggregationTemporality, isMonotonic} = m
-       in [HI.sql|(#{projectId}, #{metricName}, #{metricType}, #{metricUnit}, #{metricDescription}, #{metricTime}, #{timestamp}, #{attributes}, #{resource}, #{instrumentationScope}, #{metricValue}, #{exemplars}, #{flags}, #{nValue}, #{nSum}, #{nCount}, #{nBucketCounts}, #{nExplicitBounds}, #{nPointMin}, #{nPointMax}, #{nQuantiles}, #{aggregationTemporality}, #{isMonotonic})|]
+          MetricRecord{projectId, metricName, metricType, metricUnit, metricDescription, metricTime, timestamp, attributes, resource, instrumentationScope, metricValue, exemplars, flags, aggregationTemporality, isMonotonic, messageSizeBytes} = m
+       in [HI.sql|(#{projectId}, #{metricName}, #{metricType}, #{metricUnit}, #{metricDescription}, #{metricTime}, #{timestamp}, #{attributes}, #{resource}, #{instrumentationScope}, #{metricValue}, #{exemplars}, #{flags}, #{nValue}, #{nSum}, #{nCount}, #{nBucketCounts}, #{nExplicitBounds}, #{nPointMin}, #{nPointMax}, #{nQuantiles}, #{aggregationTemporality}, #{isMonotonic}, #{messageSizeBytes})|]
     metaTuple (m :: MetricRecord) =
       let svc = fromMaybe "unknown" $ lookupValueText m.resource "service.name"
           MetricRecord{projectId, metricName, metricType, metricUnit, metricDescription} = m
@@ -978,7 +991,7 @@ bulkInsertOtelLogsAndSpans records
   | V.null records = pure 0
   | otherwise = do
       rowSnippets <- V.mapM otelRowSnippet records
-      let chunkSize = 700 -- 700 * 87 = 60900 < 65535 PG bind-message limit
+      let chunkSize = 700 -- 700 * 88 = 61600 < 65535 PG bind-message limit
           chunks = unfoldr (\v -> if V.null v then Nothing else Just (V.splitAt chunkSize v)) rowSnippets
           chunkStmt c = dynamicallyParameterized (otelInsertHeader <> mconcat (intersperse ", " (V.toList c))) D.rowsAffected True
       case chunks of
@@ -1117,6 +1130,7 @@ otelColumns =
       , ("project_id", top (param . cleanNullBytes . (.project_id)))
       , ("summary", arr (.summary))
       , ("date", top (param . (.date)))
+      , ("message_size_bytes", top (param . (.message_size_bytes)))
       ]
 
 
@@ -1199,6 +1213,7 @@ data OtelLogsAndSpans = OtelLogsAndSpans
   , summary :: V.Vector Text
   , date :: UTCTime
   , errors :: Maybe AE.Value
+  , message_size_bytes :: Int64
   }
   deriving (Generic, Show)
   deriving anyclass (NFData)
@@ -1259,6 +1274,7 @@ instance HI.DecodeRow OtelLogsAndSpans where
         , summary = summary'
         , date = date'
         , errors = Nothing
+        , message_size_bytes = 0
         }
 
 
@@ -1313,6 +1329,7 @@ instance FromRow OtelLogsAndSpans where
         , summary = summary'
         , date = date'
         , errors = Nothing
+        , message_size_bytes = 0
         }
 
 
@@ -1632,6 +1649,7 @@ mkSystemLog (UUIDId pid) eventName sev bodyMsg attrs duration ts =
       , summary = V.empty -- Generated by caller via generateSummary
       , date = ts
       , errors = Nothing
+      , message_size_bytes = 0
       }
 
 

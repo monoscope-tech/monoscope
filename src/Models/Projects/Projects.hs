@@ -66,6 +66,7 @@ module Models.Projects.Projects (
   splitUsageIntoChunks,
   pendingUsageSubmissions,
   recordUsageWindow,
+  UsageTotals (..),
   markUsageSubmissionSucceeded,
   markUsageSubmissionFailed,
   upgradeToPaid,
@@ -710,24 +711,33 @@ addSubscription s = do
 -- | Sum of requests for the given project since `start`, using window_start
 -- (when events occurred) rather than created_at (when the job ran). Pre-migration
 -- rows without window_start are excluded from billing calculations.
-getTotalUsage :: DB es => ProjectId -> UTCTime -> Eff es Int64
+-- | (totalRequests, totalBytes) since `start`, using window_start (when events
+-- occurred) rather than created_at. Pre-migration rows without window_start
+-- are excluded from billing calculations.
+getTotalUsage :: DB es => ProjectId -> UTCTime -> Eff es (Int64, Int64)
 getTotalUsage pid start =
-  fromMaybe 0
+  fromMaybe (0, 0)
     <$> EHasql.interpOne
       [HI.sql|
-    SELECT COALESCE(SUM(total_requests), 0)::bigint
+    SELECT COALESCE(SUM(total_requests), 0)::bigint,
+           COALESCE(SUM(total_event_bytes + total_metric_bytes), 0)::bigint
     FROM apis.daily_usage
     WHERE project_id = #{pid} AND window_start >= #{start}
   |]
 
 
 -- | Per-day usage breakdown since `start`, grouped by the day the events
--- occurred (window_start), newest first. Hourly rows on the same day are summed.
-getDailyUsageBreakdown :: DB es => ProjectId -> UTCTime -> Eff es [(Day, Int64)]
+-- occurred (window_start), newest first. Returns
+-- (day, events, metrics, eventBytes, metricBytes).
+getDailyUsageBreakdown :: DB es => ProjectId -> UTCTime -> Eff es [(Day, Int64, Int64, Int64, Int64)]
 getDailyUsageBreakdown pid start =
   EHasql.interp
     [HI.sql|
-      SELECT (window_start AT TIME ZONE 'UTC')::date AS day, SUM(total_requests)::bigint
+      SELECT (window_start AT TIME ZONE 'UTC')::date AS day,
+             SUM(total_requests)::bigint,
+             SUM(total_metrics)::bigint,
+             SUM(total_event_bytes)::bigint,
+             SUM(total_metric_bytes)::bigint
       FROM apis.daily_usage
       WHERE project_id = #{pid} AND window_start >= #{start}
       GROUP BY day
@@ -854,20 +864,40 @@ pendingUsageSubmissions pid =
     |]
 
 
+-- | Per-window usage totals: row counts split between events (logs+spans) and
+-- metrics, plus the encoded-protobuf payload-byte sum for each. `total_requests`
+-- (= events + metrics) drives existing pricing/chunking; the per-bucket fields
+-- are visibility-only.
+data UsageTotals = UsageTotals
+  { events :: Int
+  , eventBytes :: Int64
+  , metrics :: Int
+  , metricBytes :: Int64
+  }
+  deriving stock (Eq, Show)
+
+
 recordUsageWindow
   :: (DB es, UUIDEff :> es)
-  => ProjectId -> UTCTime -> UTCTime -> Int -> [ChunkQuantity] -> Eff es ()
-recordUsageWindow pid wStart wEnd totalUsage chunks = do
+  => ProjectId -> UTCTime -> UTCTime -> UsageTotals -> [ChunkQuantity] -> Eff es ()
+recordUsageWindow pid wStart wEnd totals chunks = do
   chunkIds <- replicateM (length chunks) genUUID
   let exec :: HI.Sql -> Tx.Transaction ()
       exec s = Tx.statement () (HI.interp True s :: Statement () HI.RowsAffected) $> ()
+      -- total_requests historically = events + metrics (drives splitUsageIntoChunks
+      -- and getTotalUsage). Preserve that invariant; new columns are additive.
+      totalUsage = totals.events + totals.metrics
+      mC = totals.metrics
+      eB = totals.eventBytes
+      mB = totals.metricBytes
   EHasql.transaction TxS.ReadCommitted TxS.Write do
     -- usage_last_reported always advances (even on zero-usage days); otherwise
     -- the next tick re-scans an ever-growing window, which is the failure mode
     -- that produced the original 15-month poison loop.
     exec [HI.sql| UPDATE projects.projects SET usage_last_reported = #{wEnd} WHERE id = #{pid} |]
     when (totalUsage > 0) do
-      exec [HI.sql| INSERT INTO apis.daily_usage (project_id, total_requests, window_start, window_end) VALUES (#{pid}, #{totalUsage}, #{wStart}, #{wEnd}) |]
+      exec [HI.sql| INSERT INTO apis.daily_usage (project_id, total_requests, total_metrics, total_event_bytes, total_metric_bytes, window_start, window_end)
+                       VALUES (#{pid}, #{totalUsage}, #{mC}, #{eB}, #{mB}, #{wStart}, #{wEnd}) |]
       for_ (zip chunkIds chunks) \(cid, ChunkQuantity qty) ->
         exec
           [HI.sql| INSERT INTO projects.usage_report_submissions (id, project_id, window_start, window_end, quantity)

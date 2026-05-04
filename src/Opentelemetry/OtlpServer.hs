@@ -33,7 +33,7 @@ import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HS
 import Data.List qualified as L
 import Data.Map qualified as Map
-import Data.ProtoLens.Encoding (decodeMessage)
+import Data.ProtoLens.Encoding (decodeMessage, encodeMessage)
 import Data.Scientific (fromFloatDigits)
 import Data.Text qualified as T
 import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
@@ -895,6 +895,7 @@ convertLogRecordToOtelLog !fallbackTime !pid resourceM scopeM logRecord =
           , summary = V.empty -- Will be populated after creation
           , date = validTimestamp
           , errors = Nothing
+          , message_size_bytes = fromIntegral $ BS.length (encodeMessage logRecord)
           }
    in otelLog{summary = generateSummary otelLog}
 
@@ -1120,6 +1121,7 @@ convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
           , summary = V.empty -- Will be populated after creation
           , date = validStartTime
           , errors = Nothing
+          , message_size_bytes = fromIntegral $ BS.length (encodeMessage pSpan)
           }
    in otelSpan{summary = generateSummary otelSpan}
 
@@ -1186,7 +1188,7 @@ convertMetricToMetricRecords fallbackTime pid resourceM scopeM metric =
     pointTime timeNano = if timeNano >= minValidTimestampNanos && timeNano /= 0 then nanosecondsToUTC timeNano else fallbackTime
     pointAttrs point = keyValueToJSON (V.toList $ point ^. PMF.vec'attributes)
 
-    mkRecord validTime attrs mType mValue fls temporality_ monotonic_ =
+    mkRecord validTime attrs mType mValue fls temporality_ monotonic_ payloadBytes =
       Telemetry.MetricRecord
         { projectId = unUUIDId pid
         , id = Nothing
@@ -1205,6 +1207,7 @@ convertMetricToMetricRecords fallbackTime pid resourceM scopeM metric =
         , metricMetadata = metaJSON
         , aggregationTemporality = temporality_
         , isMonotonic = monotonic_
+        , messageSizeBytes = payloadBytes
         }
 
     convertNumberDataPoints points mType wrap temporality_ monotonic_ = map go points
@@ -1214,11 +1217,12 @@ convertMetricToMetricRecords fallbackTime pid resourceM scopeM metric =
                 Just (PM.NumberDataPoint'AsDouble d) -> d
                 Just (PM.NumberDataPoint'AsInt i) -> fromIntegral i
                 _ -> 0
-           in mkRecord (pointTime $ point ^. PMF.timeUnixNano) (pointAttrs point) mType (wrap $ Telemetry.GaugeSum{value}) (fromIntegral $ point ^. PMF.flags) temporality_ monotonic_
+              !pSize = fromIntegral $ BS.length (encodeMessage point)
+           in mkRecord (pointTime $ point ^. PMF.timeUnixNano) (pointAttrs point) mType (wrap $ Telemetry.GaugeSum{value}) (fromIntegral $ point ^. PMF.flags) temporality_ monotonic_ pSize
 
     convertHistogramPoint point
       | VU.length vBCounts /= VU.length vEBounds + 1 = Nothing -- OTLP spec: len(bucket_counts) == len(explicit_bounds) + 1
-      | otherwise = Just $ mkRecord (pointTime $ point ^. PMF.timeUnixNano) (pointAttrs point) Telemetry.MTHistogram (Telemetry.HistogramValue hval) (fromIntegral $ point ^. PMF.flags) Nothing Nothing
+      | otherwise = Just $ mkRecord (pointTime $ point ^. PMF.timeUnixNano) (pointAttrs point) Telemetry.MTHistogram (Telemetry.HistogramValue hval) (fromIntegral $ point ^. PMF.flags) Nothing Nothing (fromIntegral $ BS.length (encodeMessage point))
       where
         vBCounts = point ^. PMF.vec'bucketCounts
         vEBounds = point ^. PMF.vec'explicitBounds
@@ -1233,7 +1237,7 @@ convertMetricToMetricRecords fallbackTime pid resourceM scopeM metric =
             }
 
     convertExpHistogramPoint point =
-      mkRecord (pointTime $ point ^. PMF.timeUnixNano) (pointAttrs point) Telemetry.MTExponentialHistogram (Telemetry.ExponentialHistogramValue ehval) (fromIntegral $ point ^. PMF.flags) Nothing Nothing
+      mkRecord (pointTime $ point ^. PMF.timeUnixNano) (pointAttrs point) Telemetry.MTExponentialHistogram (Telemetry.ExponentialHistogramValue ehval) (fromIntegral $ point ^. PMF.flags) Nothing Nothing (fromIntegral $ BS.length (encodeMessage point))
       where
         toBucket b = Telemetry.EHBucket{bucketOffset = fromIntegral $ b ^. PMF.offset, bucketCounts = V.fromList $ map fromIntegral $ b ^. PMF.bucketCounts}
         !ehval =
@@ -1250,7 +1254,7 @@ convertMetricToMetricRecords fallbackTime pid resourceM scopeM metric =
             }
 
     convertSummaryPoint point =
-      mkRecord (pointTime $ point ^. PMF.timeUnixNano) (pointAttrs point) Telemetry.MTSummary (Telemetry.SummaryValue sval) (fromIntegral $ point ^. PMF.flags) Nothing Nothing
+      mkRecord (pointTime $ point ^. PMF.timeUnixNano) (pointAttrs point) Telemetry.MTSummary (Telemetry.SummaryValue sval) (fromIntegral $ point ^. PMF.flags) Nothing Nothing (fromIntegral $ BS.length (encodeMessage point))
       where
         !sval =
           Telemetry.Summary
