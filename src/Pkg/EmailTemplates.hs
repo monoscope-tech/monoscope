@@ -31,6 +31,9 @@ module Pkg.EmailTemplates (
   planDowngradedEmail,
   trialEndingEmail,
 
+  -- * Helpers
+  stripSummaryBadges,
+
   -- * Sample data for previews
   sampleProjectInvite,
   sampleProjectCreated,
@@ -407,7 +410,7 @@ logPatternEmail projectName issueUrl patternText sampleMessage logLevel serviceN
           ]
       emailDivider
       p_ [style_ "margin: 0 0 8px; font-weight: 600; color: #24292f;"] "Pattern"
-      pre_ [style_ "font-family: monospace; font-size: 13px; white-space: pre-wrap; margin: 0 0 16px 0;"] $ toHtml patternText
+      pre_ [style_ "font-family: monospace; font-size: 13px; white-space: pre-wrap; margin: 0 0 16px 0;"] $ toHtml $ stripSummaryBadges patternText
       whenJust sampleMessage \s -> do
         p_ [style_ "margin: 0 0 8px; font-weight: 600; color: #24292f;"] "Sample"
         pre_ [style_ "font-family: monospace; font-size: 13px; white-space: pre-wrap; margin: 0 0 16px 0;"] $ toHtml (truncateText 400 s)
@@ -440,7 +443,7 @@ logPatternRateChangeEmail projectName issueUrl patternText logLevel serviceName 
           ]
       emailDivider
       p_ [style_ "margin: 0 0 8px; font-weight: 600; color: #24292f;"] "Pattern"
-      pre_ [style_ "font-family: monospace; font-size: 13px; white-space: pre-wrap; margin: 0 0 16px 0;"] $ toHtml (truncateText 400 patternText)
+      pre_ [style_ "font-family: monospace; font-size: 13px; white-space: pre-wrap; margin: 0 0 16px 0;"] $ toHtml (truncateText 400 (stripSummaryBadges patternText))
       emailButton issueUrl "Open issue"
   )
 
@@ -458,7 +461,9 @@ digestEmail projectName inboxUrl summary total = emailBody do
     " to avoid spam. A sample is below."
   emailDivider
   pre_ [style_ "font-family: monospace; font-size: 13px; white-space: pre-wrap; margin: 0 0 16px 0;"]
-    $ toHtml summary
+    $ toHtml
+    $ T.unlines
+    $ map stripSummaryBadges (T.lines summary)
   emailButton inboxUrl "Open inbox"
 
 

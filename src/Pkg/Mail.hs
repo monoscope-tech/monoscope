@@ -26,7 +26,7 @@ import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
-import Pkg.EmailTemplates (EndpointAlertRow (..), groupedByContext)
+import Pkg.EmailTemplates (EndpointAlertRow (..), groupedByContext, stripSummaryBadges)
 import Relude hiding (Reader, ask)
 import System.Config (AuthContext (env))
 import System.Config qualified as Config
@@ -390,7 +390,7 @@ mkSlackLogPatternPayload patternText issueUrl logLevel serviceName sourceField o
     channelId
     "#3b82f6"
     [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("<" <> issueUrl <> "|:mag: *New log pattern* · " <> project <> ">")]]
-    , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("```" <> T.take 200 patternText <> "```")]]
+    , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("```" <> T.take 200 (stripSummaryBadges patternText) <> "```")]]
     , AE.object
         [ "type" AE..= "context"
         , "elements"
@@ -414,7 +414,7 @@ mkSlackLogPatternRateChangePayload patternText issueUrl logLevel serviceName dir
     channelId
     color
     [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("<" <> issueUrl <> "|" <> icon <> " *Log volume " <> direction <> "* · " <> project <> ">")]]
-    , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("```" <> T.take 200 patternText <> "```")]]
+    , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("```" <> T.take 200 (stripSummaryBadges patternText) <> "```")]]
     , AE.object
         [ "type" AE..= "context"
         , "elements"
@@ -559,7 +559,7 @@ mkDiscordLogPatternPayload patternText issueUrl logLevel serviceName sourceField
         AE..= AE.Array
           [ AE.object
               [ "title" AE..= ("🔍 New log pattern · " <> project)
-              , "description" AE..= ("```" <> T.take 200 patternText <> "```")
+              , "description" AE..= ("```" <> T.take 200 (stripSummaryBadges patternText) <> "```")
               , "color" AE..= (3901174 :: Int)
               , "fields"
                   AE..= AE.Array
@@ -586,7 +586,7 @@ mkDiscordLogPatternRateChangePayload patternText issueUrl logLevel serviceName d
         AE..= AE.Array
           [ AE.object
               [ "title" AE..= (icon <> " Log volume " <> direction <> " · " <> project)
-              , "description" AE..= ("```" <> T.take 200 patternText <> "```")
+              , "description" AE..= ("```" <> T.take 200 (stripSummaryBadges patternText) <> "```")
               , "color" AE..= color
               , "fields"
                   AE..= AE.Array
@@ -624,9 +624,11 @@ sendPagerdutyAlertToService integrationKey RuntimeErrorAlert{issueId, issueTitle
   let errorUrl = projectUrl <> "/issues/by_hash/" <> errorData.hash
    in Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-error-" <> issueId) (projectTitle <> ": " <> errorData.errorType <> " - " <> issueTitle) Notify.PDError (AE.object $ ["error_type" AE..= errorData.errorType, "message" AE..= errorData.message] <> maybeToList (("chart_url" AE..=) <$> chartUrl)) errorUrl
 sendPagerdutyAlertToService integrationKey LogPatternAlert{issueUrl, patternText, logLevel, serviceName} projectTitle _ =
-  Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-logpattern-" <> T.take 40 patternText) (projectTitle <> ": New Log Pattern - " <> T.take 80 patternText) (maybe Notify.PDWarning (\l -> if l == "error" then Notify.PDCritical else Notify.PDWarning) logLevel) (AE.object ["pattern" AE..= patternText, "service" AE..= serviceName, "level" AE..= logLevel]) issueUrl
+  let pat = stripSummaryBadges patternText
+   in Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-logpattern-" <> T.take 40 pat) (projectTitle <> ": New Log Pattern - " <> T.take 80 pat) (maybe Notify.PDWarning (\l -> if l == "error" then Notify.PDCritical else Notify.PDWarning) logLevel) (AE.object ["pattern" AE..= pat, "service" AE..= serviceName, "level" AE..= logLevel]) issueUrl
 sendPagerdutyAlertToService integrationKey LogPatternRateChangeAlert{issueUrl, patternText, logLevel, serviceName, direction, currentRate, baselineMean, changePercent} projectTitle _ =
-  Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-logpattern-rate-" <> T.take 40 patternText) (projectTitle <> ": Log Pattern " <> T.toTitle direction <> " - " <> T.take 60 patternText <> " (" <> show (round changePercent :: Int) <> "%)") (if direction == "spike" then Notify.PDCritical else Notify.PDWarning) (AE.object ["pattern" AE..= patternText, "direction" AE..= direction, "current_rate" AE..= currentRate, "baseline_mean" AE..= baselineMean, "service" AE..= serviceName]) issueUrl
+  let pat = stripSummaryBadges patternText
+   in Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-logpattern-rate-" <> T.take 40 pat) (projectTitle <> ": Log Pattern " <> T.toTitle direction <> " - " <> T.take 60 pat <> " (" <> show (round changePercent :: Int) <> "%)") (if direction == "spike" then Notify.PDCritical else Notify.PDWarning) (AE.object ["pattern" AE..= pat, "direction" AE..= direction, "current_rate" AE..= currentRate, "baseline_mean" AE..= baselineMean, "service" AE..= serviceName]) issueUrl
 sendPagerdutyAlertToService _ ReportAlert{} _ _ = pass
 sendPagerdutyAlertToService _ ShapeAlert _ _ = pass
 
