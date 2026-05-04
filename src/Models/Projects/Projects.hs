@@ -896,7 +896,8 @@ recordUsageWindow pid wStart wEnd totals chunks = do
     -- that produced the original 15-month poison loop.
     exec [HI.sql| UPDATE projects.projects SET usage_last_reported = #{wEnd} WHERE id = #{pid} |]
     when (totalUsage > 0) do
-      exec [HI.sql| INSERT INTO apis.daily_usage (project_id, total_requests, total_metrics, total_event_bytes, total_metric_bytes, window_start, window_end)
+      exec
+        [HI.sql| INSERT INTO apis.daily_usage (project_id, total_requests, total_metrics, total_event_bytes, total_metric_bytes, window_start, window_end)
                        VALUES (#{pid}, #{totalUsage}, #{mC}, #{eB}, #{mB}, #{wStart}, #{wEnd}) |]
       for_ (zip chunkIds chunks) \(cid, ChunkQuantity qty) ->
         exec
