@@ -49,6 +49,14 @@ processors:
       - key: x-api-key
         from_attribute: x-api-key
         action: upsert
+  # Translate every incoming signal to the latest OTel semantic conventions
+  # schema, regardless of the version the customer SDK emitted. This keeps
+  # downstream queries / dashboards stable as the spec evolves.
+  schema:
+    prefetch:
+      - https://opentelemetry.io/schemas/1.41.0
+    targets:
+      - https://opentelemetry.io/schemas/1.41.0
 
 exporters:
   debug:
@@ -84,13 +92,13 @@ service:
   pipelines:
     logs:
       receivers: [otlp]
-      processors: [attributes, resource, memory_limiter, batch]
+      processors: [attributes, resource, schema, memory_limiter, batch]
       exporters: [kafka]
     metrics:
       receivers: [otlp]
-      processors: [attributes, resource, memory_limiter, batch]
+      processors: [attributes, resource, schema, memory_limiter, batch]
       exporters: [kafka]
     traces:
       receivers: [otlp]
-      processors: [attributes, resource, memory_limiter, batch]
+      processors: [attributes, resource, schema, memory_limiter, batch]
       exporters: [kafka]
