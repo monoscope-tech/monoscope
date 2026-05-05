@@ -271,9 +271,35 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
                             AND #{patHash} = ANY(hashes)
                           ORDER BY timestamp DESC
                           LIMIT 1 |]
-            pure $ (T.intercalate " " . V.toList) <$> viaNonEmpty head rows
+            pure $ buildSampleFromSummary <$> viaNonEmpty head rows
           else pure Nothing
       addRespHeaders $ PageCtx bwconf $ anomalyDetailPage pid issue trItem spanRecs errorM now (isJust firstM) members tp sampleOverride
+
+
+-- | Build a compact, renderable sample from a span/log summary array.
+--
+-- Drops verbose attribute blobs (style @text-textWeak@) and right-rail
+-- metadata (style starting with @right-@) since they balloon the panel
+-- with JSON dumps and per-row sidebar fields. Any remaining value with
+-- internal whitespace gets quoted so the token-based renderer keeps it
+-- as a single chip instead of word-splitting on user-agent strings.
+buildSampleFromSummary :: V.Vector Text -> Text
+buildSampleFromSummary = T.intercalate " " . mapMaybe keepToken . V.toList
+  where
+    keepToken token = case T.breakOn "\8658" token of
+      (_, "") -> Just token
+      (left, rest) ->
+        let value = T.drop 1 rest
+            style = case T.breakOn ";" left of
+              (_, s) | not (T.null s) -> T.drop 1 s
+              _ -> ""
+            isVerbose = style == "text-textWeak"
+            isSidebar = "right-" `T.isPrefixOf` style
+            -- The token renderer splits on whitespace, so a value containing
+            -- spaces (user-agent, page title) would shred into garbage chips.
+            -- Skip those entirely — keep the panel scannable.
+            hasSpace = T.any (== ' ') value
+         in if isVerbose || isSidebar || hasSpace then Nothing else Just token
 
 
 -- | Smart default time range based on anomaly age.
