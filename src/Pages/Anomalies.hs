@@ -271,35 +271,36 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
                             AND #{patHash} = ANY(hashes)
                           ORDER BY timestamp DESC
                           LIMIT 1 |]
-            pure $ buildSampleFromSummary <$> viaNonEmpty head rows
+            pure $ viaNonEmpty head rows
           else pure Nothing
       addRespHeaders $ PageCtx bwconf $ anomalyDetailPage pid issue trItem spanRecs errorM now (isJust firstM) members tp sampleOverride
 
 
--- | Build a compact, renderable sample from a span/log summary array.
---
--- Drops verbose attribute blobs (style @text-textWeak@) and right-rail
--- metadata (style starting with @right-@) since they balloon the panel
--- with JSON dumps and per-row sidebar fields. Any remaining value with
--- internal whitespace gets quoted so the token-based renderer keeps it
--- as a single chip instead of word-splitting on user-agent strings.
-buildSampleFromSummary :: V.Vector Text -> Text
-buildSampleFromSummary = T.intercalate " " . mapMaybe keepToken . V.toList
+-- | Render a span/log @summary@ array element-wise as styled chips. Each
+-- element stays as a single chip even if its value contains internal
+-- whitespace (user-agent, page title). Right-rail metadata renders with a
+-- subdued style so the primary fields stay visually dominant.
+renderSummaryChips_ :: Monad m => V.Vector Text -> HtmlT m ()
+renderSummaryChips_ summary = V.forM_ summary \token ->
+  case T.breakOn "\8658" token of
+    (_, "") -> span_ [class_ "text-textWeak text-xs whitespace-pre-wrap break-words"] $ toHtml $ unesc token
+    (left, rest) -> do
+      let value = unesc $ T.drop 1 rest
+          (field, style) = case T.breakOn ";" left of
+            (f, s) | not (T.null s) -> (f, T.drop 1 s)
+            _ -> ("", left)
+          baseStyle = fromMaybe style $ T.stripPrefix "right-" style
+          cls = case baseStyle of
+            s | "badge-" `T.isPrefixOf` s -> "cbadge-sm " <> s <> " whitespace-pre-wrap break-all"
+            "neutral" -> "cbadge-sm badge-neutral whitespace-pre-wrap break-all"
+            "text-textWeak" -> "text-textWeak text-xs whitespace-pre-wrap break-words"
+            "text-weak" -> "text-textWeak text-xs whitespace-pre-wrap break-words"
+            "text-textStrong" -> "text-textStrong text-xs font-medium whitespace-pre-wrap break-words"
+            _ -> "cbadge-sm badge-neutral whitespace-pre-wrap break-all"
+          tipAttr = [term "data-tippy-content" field | not (T.null field)]
+      span_ ([class_ $ cls <> " inline-block max-w-full"] <> tipAttr) $ toHtml value
   where
-    keepToken token = case T.breakOn "\8658" token of
-      (_, "") -> Just token
-      (left, rest) ->
-        let value = T.drop 1 rest
-            style = case T.breakOn ";" left of
-              (_, s) | not (T.null s) -> T.drop 1 s
-              _ -> ""
-            isVerbose = style == "text-textWeak"
-            isSidebar = "right-" `T.isPrefixOf` style
-            -- The token renderer splits on whitespace, so a value containing
-            -- spaces (user-agent, page title) would shred into garbage chips.
-            -- Skip those entirely — keep the panel scannable.
-            hasSpace = T.any (== ' ') value
-         in if isVerbose || isSidebar || hasSpace then Nothing else Just token
+    unesc = T.replace "\\\"" "\"" . T.replace "\\n" " " . T.replace "\\t" " "
 
 
 -- | Smart default time range based on anomaly age.
@@ -490,7 +491,7 @@ activityPanel_ pid issueId extraClass spans = do
       $ loadingIndicator_ LdSM LdDots
 
 
-anomalyDetailPage :: Projects.ProjectId -> Issues.Issue -> Maybe Telemetry.Trace -> V.Vector Telemetry.SpanRecord -> Maybe ErrorPatterns.ErrorPatternL -> UTCTime -> Bool -> V.Vector ProjectMembers.ProjectMemberVM -> TimePicker.TimePicker -> Maybe Text -> Html ()
+anomalyDetailPage :: Projects.ProjectId -> Issues.Issue -> Maybe Telemetry.Trace -> V.Vector Telemetry.SpanRecord -> Maybe ErrorPatterns.ErrorPatternL -> UTCTime -> Bool -> V.Vector ProjectMembers.ProjectMemberVM -> TimePicker.TimePicker -> Maybe (V.Vector Text) -> Html ()
 anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp sampleOverride = do
   let (_, _, currentRange) = TimePicker.parseTimeRange now tp
       issueId = UUID.toText issue.id.unUUIDId
@@ -510,18 +511,23 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp sampleOverri
       let createdChip = colorChip_ "text-fillInformation-strong bg-fillInformation-weak" "calendar" $ "Created " <> toText (prettyTimeAuto now (zonedTimeToUTC issue.createdAt))
           -- Prefer a real captured log line (sampleOverride) over the stored
           -- sample, which the drain pipeline often normalises down to the same
-          -- placeholders as the template.
+          -- placeholders as the template. The override is the original summary
+          -- vector — render each element as a single chip so values with
+          -- internal whitespace (user-agents, page titles) stay intact.
           logPatternCards sourceField logPattern sampleMessage = div_ [class_ "flex flex-col gap-4"] do
             _ <- div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
               div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
                 span_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Log Pattern"
                 span_ [class_ "badge badge-sm badge-ghost"] $ toHtml $ sourceFieldLabel sourceField
               renderLogContent_ logPattern
-            let chosenSample = sampleOverride <|> (sampleMessage >>= \m -> if T.strip m == T.strip logPattern then Nothing else Just m)
-            whenJust chosenSample \msg ->
-              div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
-                div_ [class_ "px-4 py-3 border-b border-strokeWeak"] $ span_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Sample Message"
-                renderLogContent_ msg
+            let renderSample body = div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
+                  _ <- div_ [class_ "px-4 py-3 border-b border-strokeWeak"] $ span_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Sample Message"
+                  body
+            case sampleOverride of
+              Just summary | not (V.null summary) ->
+                renderSample $ div_ [class_ "flex flex-wrap items-center gap-1 p-4 max-h-80 overflow-y-auto"] $ renderSummaryChips_ summary
+              _ -> whenJust (sampleMessage >>= \m -> if T.strip m == T.strip logPattern then Nothing else Just m) \msg ->
+                renderSample (renderLogContent_ msg)
       div_ [class_ "flex flex-wrap gap-2 items-center"] do
         severityBadge issue.severity
         issueTypeLabel issue.issueType issue.critical
