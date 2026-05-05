@@ -257,7 +257,23 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
           traceItem <- MaybeT $ Telemetry.getTraceDetails pid tId Nothing now
           otelLogs <- lift $ Telemetry.getSpanRecordsByTraceId pid traceItem.traceId (Just traceItem.traceStartTime) now
           pure (Just traceItem, V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> V.fromList otelLogs)
-      addRespHeaders $ PageCtx bwconf $ anomalyDetailPage pid issue trItem spanRecs errorM now (isJust firstM) members tp
+      sampleOverride <-
+        if issue.issueType `elem` [Issues.LogPattern, Issues.LogPatternRateChange]
+          then do
+            let pidTxt = pid.toText
+                patHash = "pat:" <> issue.targetHash
+                windowStart = addUTCTime (-(7 * 24 * 3600)) now
+            rows :: [V.Vector Text] <-
+              Hasql.interp
+                [HI.sql| SELECT summary FROM otel_logs_and_spans
+                          WHERE project_id = #{pidTxt}
+                            AND timestamp BETWEEN #{windowStart} AND #{now}
+                            AND #{patHash} = ANY(hashes)
+                          ORDER BY timestamp DESC
+                          LIMIT 1 |]
+            pure $ (T.intercalate " " . V.toList) <$> viaNonEmpty head rows
+          else pure Nothing
+      addRespHeaders $ PageCtx bwconf $ anomalyDetailPage pid issue trItem spanRecs errorM now (isJust firstM) members tp sampleOverride
 
 
 -- | Smart default time range based on anomaly age.
@@ -448,8 +464,8 @@ activityPanel_ pid issueId extraClass spans = do
       $ loadingIndicator_ LdSM LdDots
 
 
-anomalyDetailPage :: Projects.ProjectId -> Issues.Issue -> Maybe Telemetry.Trace -> V.Vector Telemetry.SpanRecord -> Maybe ErrorPatterns.ErrorPatternL -> UTCTime -> Bool -> V.Vector ProjectMembers.ProjectMemberVM -> TimePicker.TimePicker -> Html ()
-anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
+anomalyDetailPage :: Projects.ProjectId -> Issues.Issue -> Maybe Telemetry.Trace -> V.Vector Telemetry.SpanRecord -> Maybe ErrorPatterns.ErrorPatternL -> UTCTime -> Bool -> V.Vector ProjectMembers.ProjectMemberVM -> TimePicker.TimePicker -> Maybe Text -> Html ()
+anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp sampleOverride = do
   let (_, _, currentRange) = TimePicker.parseTimeRange now tp
       issueId = UUID.toText issue.id.unUUIDId
       sevBase = "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 "
@@ -466,14 +482,17 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
         $ toHtml issue.recommendedAction
       -- Metadata chips + issue type content
       let createdChip = colorChip_ "text-fillInformation-strong bg-fillInformation-weak" "calendar" $ "Created " <> toText (prettyTimeAuto now (zonedTimeToUTC issue.createdAt))
+          -- Prefer a real captured log line (sampleOverride) over the stored
+          -- sample, which the drain pipeline often normalises down to the same
+          -- placeholders as the template.
           logPatternCards sourceField logPattern sampleMessage = div_ [class_ "flex flex-col gap-4"] do
             _ <- div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
               div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
                 span_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Log Pattern"
                 span_ [class_ "badge badge-sm badge-ghost"] $ toHtml $ sourceFieldLabel sourceField
               renderLogContent_ logPattern
-            -- Hide sample when it's identical to the templated pattern (no extra signal).
-            whenJust (sampleMessage >>= \m -> if T.strip m == T.strip logPattern then Nothing else Just m) \msg ->
+            let chosenSample = sampleOverride <|> (sampleMessage >>= \m -> if T.strip m == T.strip logPattern then Nothing else Just m)
+            whenJust chosenSample \msg ->
               div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
                 div_ [class_ "px-4 py-3 border-b border-strokeWeak"] $ span_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Sample Message"
                 renderLogContent_ msg
