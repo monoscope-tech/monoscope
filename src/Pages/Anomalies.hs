@@ -1730,9 +1730,12 @@ logLevelChip_ :: Monad m => Maybe Text -> Text -> HtmlT m ()
 logLevelChip_ logLevel pat =
   let normalized = T.toUpper <$> logLevel
       hasErrorStatus =
-        "status;badge-error⇒ERROR" `T.isInfixOf` pat
-          || "status_code;badge-4xx" `T.isInfixOf` pat
-          || "status_code;badge-5xx" `T.isInfixOf` pat
+        "status;badge-error⇒ERROR"
+          `T.isInfixOf` pat
+          || "status_code;badge-4xx"
+          `T.isInfixOf` pat
+          || "status_code;badge-5xx"
+          `T.isInfixOf` pat
       effective
         | normalized == Just "ERROR" || normalized == Just "FATAL" || normalized == Just "CRITICAL" = Just "ERROR"
         | normalized == Just "WARN" || normalized == Just "WARNING" = Just "WARN"
