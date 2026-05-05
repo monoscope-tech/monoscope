@@ -49,6 +49,7 @@ mkSpan name spanId service statusCode startTime =
     , summary = V.empty
     , date = startTime
     , errors = Nothing
+    , message_size_bytes = 0
     }
 
 

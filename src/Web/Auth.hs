@@ -254,6 +254,7 @@ resolveApiKeyProject bearerToken =
 apiKeyAuthHandler :: Logger -> AuthContext -> ApiKeyAuthContext
 apiKeyAuthHandler logger env = mkAuthHandler \req -> do
   let mbAuth = L.lookup hAuthorization (requestHeaders req) <&> decodeUtf8
+      mbHeaderPid = Projects.projectIdFromText . decodeUtf8 =<< L.lookup "X-Project-Id" (requestHeaders req)
       runEffs :: Eff '[Log, EHasql.Hasql, Effectful.Reader.Static.Reader AuthContext, IOE] a -> Handler a
       runEffs act =
         liftIO
@@ -262,24 +263,26 @@ apiKeyAuthHandler logger env = mkAuthHandler \req -> do
           & EHasql.runHasqlPool env.hasqlPool
           & Effectful.Reader.Static.runReader env
           & runEff
-  case mbAuth of
-    Nothing -> T.throwError err401{errBody = "Missing Authorization header"}
-    Just token -> do
-      result <- runEffs $ resolveApiKeyProject token
-      case result of
-        Just pid -> pure pid
-        Nothing -> do
-          -- Fallback for CLI clients that authenticate with session token + X-Project-Id
-          let rawToken = T.replace "Bearer " "" token
-              mbSessionId = Projects.PersistentSessionId <$> UUID.fromText rawToken
-              mbProjectId = Projects.projectIdFromText . decodeUtf8 =<< L.lookup "X-Project-Id" (requestHeaders req)
-          case (mbSessionId, mbProjectId) of
-            (Just sessId, Just pid) -> do
-              mbSession <- runEffs $ Projects.getPersistentSession sessId
-              case mbSession of
-                Just sess | V.any (\p -> p.id == pid) sess.projects.getProjects -> pure pid
-                _ -> T.throwError err401{errBody = "Invalid session or project access denied"}
-            _ -> T.throwError err401{errBody = "Invalid API key"}
+  -- Demo project: world-readable, mirrors the web UI bypass in `sessionByID`.
+  case mbHeaderPid of
+    Just pid | pid.toText == "00000000-0000-0000-0000-000000000000" -> pure pid
+    _ -> case mbAuth of
+      Nothing -> T.throwError err401{errBody = "Missing Authorization header"}
+      Just token -> do
+        result <- runEffs $ resolveApiKeyProject token
+        case result of
+          Just pid -> pure pid
+          Nothing -> do
+            -- Fallback for CLI clients that authenticate with session token + X-Project-Id
+            let rawToken = T.replace "Bearer " "" token
+                mbSessionId = Projects.PersistentSessionId <$> UUID.fromText rawToken
+            case (mbSessionId, mbHeaderPid) of
+              (Just sessId, Just pid) -> do
+                mbSession <- runEffs $ Projects.getPersistentSession sessId
+                case mbSession of
+                  Just sess | V.any (\p -> p.id == pid) sess.projects.getProjects -> pure pid
+                  _ -> T.throwError err401{errBody = "Invalid session or project access denied"}
+              _ -> T.throwError err401{errBody = "Invalid API key"}
 
 
 logoutH :: ATBaseCtx (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)

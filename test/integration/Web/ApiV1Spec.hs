@@ -139,6 +139,31 @@ spec = aroundAll withTestResources do
         emptyResult <- runQueryEffect tr $ resolveApiKeyProject ""
         emptyResult `shouldBe` Nothing
 
+      it "rejects API requests with no auth and no demo project header" $ \tr -> do
+        let mkTopApp =
+              genericServeTWithContext
+                (effToServantHandlerTest tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
+                (Routes.server tr.trLogger tr.trATCtx tr.trTracerProvider)
+                (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
+            req = WT.setPath Wai.defaultRequest "/api/v1/schema"
+        resp <- WT.runSession (WT.srequest (WT.SRequest req "")) mkTopApp
+        H.statusCode (WT.simpleStatus resp) `shouldBe` 401
+
+      it "allows unauthenticated access when X-Project-Id is the demo project" $ \tr -> do
+        let mkTopApp =
+              genericServeTWithContext
+                (effToServantHandlerTest tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
+                (Routes.server tr.trLogger tr.trATCtx tr.trTracerProvider)
+                (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
+            req =
+              WT.setPath
+                Wai.defaultRequest
+                  { Wai.requestHeaders = [("X-Project-Id", "00000000-0000-0000-0000-000000000000")]
+                  }
+                "/api/v1/schema"
+        resp <- WT.runSession (WT.srequest (WT.SRequest req "")) mkTopApp
+        H.statusCode (WT.simpleStatus resp) `shouldBe` 200
+
     describe "Schema endpoint" do
       it "returns schema with expected fields and valid JSON round-trip" $ \_tr -> do
         let schema = Schema.telemetrySchema
