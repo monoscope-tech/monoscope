@@ -472,7 +472,8 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
                 span_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Log Pattern"
                 span_ [class_ "badge badge-sm badge-ghost"] $ toHtml $ sourceFieldLabel sourceField
               renderLogContent_ logPattern
-            whenJust sampleMessage \msg ->
+            -- Hide sample when it's identical to the templated pattern (no extra signal).
+            whenJust (sampleMessage >>= \m -> if T.strip m == T.strip logPattern then Nothing else Just m) \msg ->
               div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
                 div_ [class_ "px-4 py-3 border-b border-strokeWeak"] $ span_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Sample Message"
                 renderLogContent_ msg
