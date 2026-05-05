@@ -413,7 +413,7 @@ logPatternEmail projectName issueUrl patternText sampleMessage logLevel serviceN
       pre_ [style_ "font-family: monospace; font-size: 13px; white-space: pre-wrap; margin: 0 0 16px 0;"] $ toHtml $ stripSummaryBadges patternText
       whenJust sampleMessage \s -> do
         p_ [style_ "margin: 0 0 8px; font-weight: 600; color: #24292f;"] "Sample"
-        pre_ [style_ "font-family: monospace; font-size: 13px; white-space: pre-wrap; margin: 0 0 16px 0;"] $ toHtml (truncateText 400 s)
+        pre_ [style_ "font-family: monospace; font-size: 13px; white-space: pre-wrap; margin: 0 0 16px 0;"] $ toHtml (truncateText 400 (stripSummaryBadges s))
       emailButton issueUrl "Open issue"
   )
 

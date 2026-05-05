@@ -569,7 +569,7 @@ mkDiscordLogPatternPayload patternText issueUrl logLevel serviceName sourceField
                           , Just $ AE.object ["name" AE..= "Service", "value" AE..= fromMaybe "—" serviceName, "inline" AE..= True]
                           , Just $ AE.object ["name" AE..= "Source", "value" AE..= sourceField, "inline" AE..= True]
                           , Just $ AE.object ["name" AE..= "Occurrences", "value" AE..= show occurrenceCount, "inline" AE..= True]
-                          , sampleMessage <&> \msg -> AE.object ["name" AE..= "Sample", "value" AE..= ("```" <> T.take 150 msg <> "```"), "inline" AE..= False]
+                          , sampleMessage <&> \msg -> AE.object ["name" AE..= "Sample", "value" AE..= ("```" <> T.take 150 (stripSummaryBadges msg) <> "```"), "inline" AE..= False]
                           ]
                     )
               , "url" AE..= issueUrl
