@@ -1,6 +1,6 @@
 module Web.ApiV1Spec (spec) where
 
-import Control.Lens (_Just, (^.), (^..), (^?))
+import Control.Lens ((^.), (^..), (^?), _Just)
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.Lens (key, _Array, _Number, _Object, _String)
@@ -192,9 +192,13 @@ spec = aroundAll withTestResources do
         (json ^? key "hasMore") `shouldSatisfy` isJust
 
       it "returns 400 for malformed query" $ \tr -> do
-        (toBaseServantResponse tr.trATCtx tr.trLogger
-          (Log.queryEvents testPid (Just "|| invalid {{") (Just "1h") Nothing Nothing Nothing Nothing)
-          >>= evaluateWHNF_) `shouldThrow` anyException
+        ( toBaseServantResponse
+            tr.trATCtx
+            tr.trLogger
+            (Log.queryEvents testPid (Just "|| invalid {{") (Just "1h") Nothing Nothing Nothing Nothing)
+            >>= evaluateWHNF_
+          )
+          `shouldThrow` anyException
 
     describe "Metrics endpoint" do
       it "returns valid MetricsData for count query with JSON round-trip" $ \tr -> do
@@ -302,7 +306,6 @@ spec = aroundAll withTestResources do
         d1 <- runB $ ApiH.apiDashboardApply testPid doc
         d2 <- runB $ ApiH.apiDashboardApply testPid doc
         d1.summary.id `shouldBe` d2.summary.id -- same row updated, not inserted again
-
     describe "API keys CRUD" do
       it "create returns plaintext once; list includes it; delete deactivates" $ \tr -> do
         let runB :: ATBaseCtx a -> IO a
@@ -452,8 +455,10 @@ spec = aroundAll withTestResources do
         pass
 
       it "add without email or user_id is rejected" $ \tr -> do
-        (runAsBase tr (ApiH.apiMemberAdd testPid ApiT.MemberAdd{ApiT.email = Nothing, ApiT.userId = Nothing, ApiT.permission = Nothing})
-          >>= evaluateWHNF_) `shouldThrow` anyException
+        ( runAsBase tr (ApiH.apiMemberAdd testPid ApiT.MemberAdd{ApiT.email = Nothing, ApiT.userId = Nothing, ApiT.permission = Nothing})
+            >>= evaluateWHNF_
+          )
+          `shouldThrow` anyException
 
     describe "MCP" do
       let reg = MCP.allTools apiV1OpenApiSpec
@@ -639,7 +644,8 @@ spec = aroundAll withTestResources do
       it "e2e: tools/call get_schema through real HTTP route returns the schema" $ \tr -> do
         apiKey <- createTestAPIKey tr testPid "mcp-e2e-call"
         resp <-
-          mcpHttp tr
+          mcpHttp
+            tr
             [("Authorization", "Bearer " <> encodeUtf8 apiKey)]
             (rpcCallNamed "get_schema" (AE.object []))
         H.statusCode (WT.simpleStatus resp) `shouldBe` 200

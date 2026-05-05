@@ -17,11 +17,16 @@ import Web.ApiHandlers (synthStackFromSpans)
 -- resource."service.name", start_time) are interesting; everything else gets a
 -- benign default.
 mkSpan
-  :: Maybe Text  -- ^ name
-  -> Maybe Text  -- ^ span_id
-  -> Maybe Text  -- ^ service.name
-  -> Maybe Text  -- ^ status_code
-  -> UTCTime     -- ^ start_time
+  :: Maybe Text
+  -- ^ name
+  -> Maybe Text
+  -- ^ span_id
+  -> Maybe Text
+  -- ^ service.name
+  -> Maybe Text
+  -- ^ status_code
+  -> UTCTime
+  -- ^ start_time
   -> Telemetry.OtelLogsAndSpans
 mkSpan name spanId service statusCode startTime =
   Telemetry.OtelLogsAndSpans
