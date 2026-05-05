@@ -73,6 +73,7 @@ import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Parser (parseQueryToAST)
 import Relude
+import System.Tracing (Tracing)
 import System.Types (DB)
 import Utils (unwrapJsonPrimValue)
 
@@ -623,7 +624,7 @@ parseResponse :: Text -> Either Text LLMResponse
 parseResponse = parseLLMResponse . stripCodeBlock
 
 
-runAgenticQuery :: (DB es, ELLM.LLM :> es, Log :> es, Time.Time :> es) => AgenticConfig -> Text -> Text -> Text -> Eff es (Either Text LLMResponse)
+runAgenticQuery :: (DB es, ELLM.LLM :> es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Text -> Text -> Text -> Eff es (Either Text LLMResponse)
 runAgenticQuery config userQuery model apiKey = do
   now <- Time.currentTime
   let sysPrompt = buildSystemPrompt config now
@@ -656,7 +657,7 @@ dbMessageToLLMMessage msg =
 -- | Run agentic chat with DB-persisted history, returns response with tool call info
 -- This is more flexible than runAgenticQueryWithHistory as it doesn't parse the response
 runAgenticChatWithHistory
-  :: (DB es, ELLM.LLM :> es, Log :> es, Time.Time :> es)
+  :: (DB es, ELLM.LLM :> es, Log :> es, Time.Time :> es, Tracing :> es)
   => AgenticConfig
   -> Text
   -> Text
@@ -684,7 +685,7 @@ runAgenticChatWithHistory config userQuery model apiKey = do
 
 
 -- | Raw agentic loop that returns the response with tool call history
-runAgenticLoopRaw :: (DB es, ELLM.LLM :> es, Log :> es, Time.Time :> es) => AgenticConfig -> Text -> LLM.ChatHistory -> OpenAIV1.CreateChatCompletion -> Int -> [ToolCallInfo] -> Eff es (Either Text AgenticChatResult)
+runAgenticLoopRaw :: (DB es, ELLM.LLM :> es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Text -> LLM.ChatHistory -> OpenAIV1.CreateChatCompletion -> Int -> [ToolCallInfo] -> Eff es (Either Text AgenticChatResult)
 runAgenticLoopRaw config apiKey chatHistory params iteration accumulated
   | iteration >= config.maxIterations = do
       Log.logTrace "AI agentic loop forcing final response" (AE.object ["iteration" AE..= iteration, "maxIterations" AE..= config.maxIterations])
@@ -723,7 +724,7 @@ mkToolCallInfo tc result =
     }
 
 
-runAgenticLoop :: (DB es, ELLM.LLM :> es, Log :> es, Time.Time :> es) => AgenticConfig -> Text -> LLM.ChatHistory -> OpenAIV1.CreateChatCompletion -> Int -> Eff es (Either Text LLMResponse)
+runAgenticLoop :: (DB es, ELLM.LLM :> es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Text -> LLM.ChatHistory -> OpenAIV1.CreateChatCompletion -> Int -> Eff es (Either Text LLMResponse)
 runAgenticLoop config apiKey chatHistory params iteration
   | iteration >= config.maxIterations = do
       Log.logTrace "AI agentic loop forcing final response" (AE.object ["iteration" AE..= iteration, "maxIterations" AE..= config.maxIterations])
@@ -766,7 +767,7 @@ addMessagesToMemory maxTokens history newMsgs = do
   pure $ fromMaybe allMsgs (rightToMaybe result)
 
 
-executeToolCall :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> LLM.ToolCall -> Eff es ToolResult
+executeToolCall :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> LLM.ToolCall -> Eff es ToolResult
 executeToolCall config tc = do
   let funcName = LLM.toolFunctionName (LLM.toolCallFunction tc)
       args = LLM.toolFunctionArguments (LLM.toolCallFunction tc)
@@ -793,7 +794,7 @@ toolError :: Text -> Text -> Map.Map Text AE.Value -> Text
 toolError tool msg args = "Error in " <> tool <> ": " <> msg <> " (received: " <> show (Map.keys args) <> ")"
 
 
-executeGetFieldValues :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
+executeGetFieldValues :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
 executeGetFieldValues config args = case getTextArg "field" args of
   Just field -> do
     let lim = getLimitArg "limit" config.limits.maxFieldValues config.limits.defaultFieldLimit args
@@ -803,14 +804,14 @@ executeGetFieldValues config args = case getTextArg "field" args of
   _ -> pure $ toolError "get_field_values" "missing 'field'" args
 
 
-executeGetServices :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> Eff es Text
+executeGetServices :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Eff es Text
 executeGetServices config = do
   let kqlQuery = "| summarize count() by resource.service.name | sort by count_ desc | take " <> show config.limits.maxServices
   runKqlAndFormat config kqlQuery [] $ \(results, _, _) ->
     "Available services: " <> formatSummarizeResults results
 
 
-executeCountQuery :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
+executeCountQuery :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
 executeCountQuery config args = case getTextArg "query" args of
   Just kqlQuery ->
     runKqlAndFormat config kqlQuery [] $ \(_, _, count) ->
@@ -818,7 +819,7 @@ executeCountQuery config args = case getTextArg "query" args of
   _ -> pure $ toolError "count_query" "missing 'query'" args
 
 
-executeSampleLogs :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
+executeSampleLogs :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
 executeSampleLogs config args = case getTextArg "query" args of
   Just kqlQuery -> do
     let lim = getLimitArg "limit" config.limits.maxSampleLogs config.limits.defaultSampleLimit args
@@ -833,7 +834,7 @@ executeGetFacets :: AgenticConfig -> Text
 executeGetFacets config = maybe "No facet data available" formatFacetSummary config.facetContext
 
 
-runKqlWithRawData :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> Text -> [Text] -> ((V.Vector (V.Vector AE.Value), [Text], Int) -> (Text, AE.Value)) -> Eff es ToolResult
+runKqlWithRawData :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Text -> [Text] -> ((V.Vector (V.Vector AE.Value), [Text], Int) -> (Text, AE.Value)) -> Eff es ToolResult
 runKqlWithRawData config kqlQuery cols formatResult = case parseQueryToAST kqlQuery of
   Left parseErr -> pure $ ToolResult ("Error: Query parse failed - " <> show parseErr) Nothing
   Right queryAST -> do
@@ -843,7 +844,7 @@ runKqlWithRawData config kqlQuery cols formatResult = case parseQueryToAST kqlQu
       Right res -> let (txt, raw) = formatResult res in ToolResult txt (Just raw)
 
 
-executeRunQuery :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es ToolResult
+executeRunQuery :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es ToolResult
 executeRunQuery config args = case getTextArg "query" args of
   Just query -> do
     let lim = getLimitArg "limit" config.limits.maxQueryResults config.limits.maxDisplayRows args
@@ -868,7 +869,7 @@ executeSqlQuery config args = case getTextArg "query" args of
   _ -> pure $ toolError "run_sql_query" "missing 'query'" args
 
 
-runKqlAndFormat :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> Text -> [Text] -> ((V.Vector (V.Vector AE.Value), [Text], Int) -> Text) -> Eff es Text
+runKqlAndFormat :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Text -> [Text] -> ((V.Vector (V.Vector AE.Value), [Text], Int) -> Text) -> Eff es Text
 runKqlAndFormat config kqlQuery cols formatResult = case parseQueryToAST kqlQuery of
   Left parseErr -> pure $ "Error: Query parse failed - " <> show parseErr
   Right queryAST -> do

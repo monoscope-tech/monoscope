@@ -53,13 +53,15 @@ import Hasql.Interpolate qualified as HI
 import Models.Apis.Fields ()
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Projects.Projects qualified as Projects
+import OpenTelemetry.Attributes qualified as OA
 import Pkg.DeriveUtils (DB, WrappedEnumShow (..), rawSql)
 import Pkg.Drain qualified as Drain
 import Pkg.Parser
 import Pkg.Parser.Expr (flattenedOtelAttributes, transformFlattenedAttribute)
-import Pkg.Parser.Stats (Section, Sources (SSpans))
+import Pkg.Parser.Stats (Section, Sources (..))
 import Relude hiding (many, some)
 import System.Logging qualified as Log
+import System.Tracing (Tracing, withSpan_)
 import Utils (replaceAllFormats)
 import Web.HttpApiData (ToHttpApiData (..))
 
@@ -277,7 +279,7 @@ validateSqlQuery query =
         `T.isInfixOf` lowerQuery
 
 
-selectLogTable :: (DB es, Log :> es, Time.Time :> es) => Projects.ProjectId -> [Section] -> Text -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector AE.Value), [Text], Int))
+selectLogTable :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => Projects.ProjectId -> [Section] -> Text -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector AE.Value), [Text], Int))
 selectLogTable pid queryAST queryText cursorM dateRange projectedColsByUser source targetSpansM = do
   now <- Time.currentTime
   let (q, queryComponents) = queryASTToComponents ((defSqlQueryCfg pid now source targetSpansM){cursorM, dateRange, projectedColsByUser, source, targetSpansM}) queryAST
@@ -297,7 +299,21 @@ selectLogTable pid queryAST queryText cursorM dateRange projectedColsByUser sour
         ]
     )
 
-  result <- try @SomeException $ checkpoint (toAnnotation ("selectLogTable", q)) $ executeArbitraryQuery (rawSql q)
+  let tbl = case source of
+        Just SMetrics -> "telemetry.metrics"
+        _ -> "otel_logs_and_spans"
+  result <- withSpan_
+    ("SELECT " <> tbl)
+    [ ("db.system.name", OA.toAttribute ("postgresql" :: Text))
+    , ("db.operation.name", OA.toAttribute ("SELECT" :: Text))
+    , ("db.collection.name", OA.toAttribute (tbl :: Text))
+    , ("db.query.text", OA.toAttribute q)
+    , ("monoscope.kql.query", OA.toAttribute queryText)
+    , ("monoscope.project.id", OA.toAttribute pid.toText)
+    , ("monoscope.kql.source", OA.toAttribute (maybe "" (toText . show) source :: Text))
+    , ("monoscope.kql.target_spans", OA.toAttribute (fromMaybe "" targetSpansM))
+    ]
+    $ try @SomeException $ checkpoint (toAnnotation ("selectLogTable", q)) $ executeArbitraryQuery (rawSql q)
   case result of
     Left e -> pure $ Left $ show e
     Right logItemsV -> do

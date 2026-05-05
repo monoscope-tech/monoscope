@@ -78,6 +78,7 @@ import Effectful.Ki qualified as Ki
 import OddJobs.Job (createJob)
 import Pkg.DeriveUtils (SnakeSchema (..))
 import System.Logging qualified as Log
+import System.Tracing (Tracing)
 import UnliftIO.Exception (tryAny)
 
 
@@ -638,7 +639,7 @@ buildLogResult pid now sinceM fromM toM summaryCols (requestVecs, colNames, resu
 
 -- | Standalone query function for the v1 API events endpoint.
 -- Returns 400 for parse errors, propagates DB errors instead of silently returning empty results.
-queryEvents :: (DB es, ELog.Log :> es, Error Servant.ServerError :> es, Time.Time :> es) => Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Eff es LogResult
+queryEvents :: (DB es, ELog.Log :> es, Error Servant.ServerError :> es, Time.Time :> es, Tracing :> es) => Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Eff es LogResult
 queryEvents pid queryM sinceM fromM toM sourceM limitM = do
   now <- Time.currentTime
   let queryInput = fromMaybe "" queryM

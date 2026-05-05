@@ -20,16 +20,18 @@ import Effectful.Error.Static (Error, throwError)
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
 import Models.Projects.Projects qualified as Projects
+import OpenTelemetry.Attributes qualified as OA
 import Pages.Charts.Types (DataType (..), MetricsData (..), MetricsStats (..))
 import Pkg.Components.TimePicker qualified as Components
 import Pkg.DeriveUtils (DB)
 import Pkg.Parser (QueryComponents (finalSummarizeQuery, whereClause), SqlQueryCfg (..), defSqlQueryCfg, pSource, parseQueryToAST, queryASTToComponents, replacePlaceholders, variablePresets, variablePresetsKQL)
-import Pkg.Parser.Stats (Section, Sources)
+import Pkg.Parser.Stats (Section, Sources (..))
 import Pkg.QueryCache qualified as QC
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Servant.Server (ServerError (errBody), err400)
 import System.Config (AuthContext (..), EnvConfig (..))
+import System.Tracing (Tracing, withSpan_)
 import Text.Megaparsec (parseMaybe)
 
 
@@ -106,6 +108,12 @@ statsTriple v
 type M = Maybe
 
 
+sourceTable :: Maybe Sources -> Text
+sourceTable = \case
+  Just SMetrics -> "telemetry.metrics"
+  _ -> "otel_logs_and_spans"
+
+
 -- Helper function: converts Just "" to Nothing.
 nonNull :: Maybe Text -> Maybe Text
 nonNull Nothing = Nothing
@@ -113,7 +121,7 @@ nonNull (Just "") = Nothing
 nonNull x = x
 
 
-queryMetrics :: (DB es, Effectful.Error.Static.Error ServerError :> es, Effectful.Reader.Static.Reader AuthContext :> es, Time.Time :> es) => M Text -> M DataType -> M Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> [(Text, Maybe Text)] -> Eff es MetricsData
+queryMetrics :: (DB es, Effectful.Error.Static.Error ServerError :> es, Effectful.Reader.Static.Reader AuthContext :> es, Time.Time :> es, Tracing :> es) => M Text -> M DataType -> M Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> [(Text, Maybe Text)] -> Eff es MetricsData
 queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (nonNull -> querySQLM) (nonNull -> sinceM) (nonNull -> fromM) (nonNull -> toM) (nonNull -> sourceM) allParams = do
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   now <- Time.currentTime
@@ -135,7 +143,20 @@ queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (
       let (_, qc) = queryASTToComponents sqlQueryComponents queryAST
       let mappngSQL' = mappngSQL <> M.fromList [("query_ast_filters", maybe "" (" AND " <>) qc.whereClause)]
       let sqlQuery = replacePlaceholders mappngSQL' querySQL
-      convertTimestampsToMs <$> liftIO (fetchMetricsData respDataType sqlQuery now fromD toD authCtx dbSource)
+      let tbl = sourceTable (parseMaybe pSource =<< sourceM)
+      convertTimestampsToMs
+        <$> withSpan_
+          ("SELECT " <> tbl)
+          [ ("db.system.name", OA.toAttribute ("postgresql" :: Text))
+          , ("db.operation.name", OA.toAttribute ("SELECT" :: Text))
+          , ("db.collection.name", OA.toAttribute tbl)
+          , ("db.query.text", OA.toAttribute sqlQuery)
+          , ("monoscope.kql.query", OA.toAttribute (maybeToMonoid queryM))
+          , ("monoscope.kql.mode", OA.toAttribute ("sql" :: Text))
+          , ("monoscope.kql.data_type", OA.toAttribute (toText (show respDataType) :: Text))
+          , ("monoscope.project.id", OA.toAttribute (maybe "" (.toText) pidM))
+          ]
+          (liftIO (fetchMetricsData respDataType sqlQuery now fromD toD authCtx dbSource))
     _ -> do
       queryAST <-
         checkpoint (toAnnotation ("queryMetrics", queryM))
@@ -149,7 +170,7 @@ queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (
 
 -- | Execute query with caching support for timeseries queries
 queryMetricsWithCache
-  :: (DB es, Time.Time :> es)
+  :: (DB es, Time.Time :> es, Tracing :> es)
   => AuthContext
   -> Maybe Text
   -> DataType
@@ -197,7 +218,20 @@ queryMetricsWithCache authCtx dbSource respDataType pid source queryAST sqlQuery
     executeQueryWith cfg ast = do
       let (_, qc) = queryASTToComponents cfg ast
       let sqlQuery = maybeToMonoid qc.finalSummarizeQuery
-      liftIO $ fetchMetricsData respDataType sqlQuery now fromD toD authCtx dbSource
+      let tbl = sourceTable source
+      withSpan_
+        ("SELECT " <> tbl)
+        [ ("db.system.name", OA.toAttribute ("postgresql" :: Text))
+        , ("db.operation.name", OA.toAttribute ("SELECT" :: Text))
+        , ("db.collection.name", OA.toAttribute tbl)
+        , ("db.query.text", OA.toAttribute sqlQuery)
+        , ("monoscope.kql.query", OA.toAttribute originalQuery)
+        , ("monoscope.kql.mode", OA.toAttribute ("kql" :: Text))
+        , ("monoscope.kql.data_type", OA.toAttribute (toText (show respDataType) :: Text))
+        , ("monoscope.project.id", OA.toAttribute pid.toText)
+        , ("monoscope.kql.source", OA.toAttribute (maybe "" (toText . show) source :: Text))
+        ]
+        (liftIO $ fetchMetricsData respDataType sqlQuery now fromD toD authCtx dbSource)
     refetchUnlessAdequate coversRange cached result
       | coversRange || not (V.null result.dataset) || V.null cached.dataset = pure result
       | otherwise = executeQueryWith sqlQueryCfg queryAST

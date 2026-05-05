@@ -102,6 +102,7 @@ import Servant.API.ResponseHeaders (Headers, addHeader)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.FilePath.Posix (takeDirectory)
 import System.Logging qualified as Log
+import System.Tracing (Tracing)
 import System.Types
 import Text.Slugify (slugify)
 import UnliftIO.Exception (try)
@@ -781,7 +782,7 @@ processWidget pid now timeRange allParams widgetBase = do
 
 
 -- | Fetch widget data based on widget type (for stat and chart widgets)
-fetchWidgetData :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServerError :> es, Time.Time :> es) => Projects.ProjectId -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> Eff es Widget.Widget
+fetchWidgetData :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServerError :> es, Time.Time :> es, Tracing :> es) => Projects.ProjectId -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> Eff es Widget.Widget
 fetchWidgetData pid (sinceStr, fromDStr, toDStr) allParams widget = case widget.wType of
   Widget.WTStat -> do
     stat <- Charts.queryMetrics widget.dbSource (Just Charts.DTFloat) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams

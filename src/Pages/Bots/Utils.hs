@@ -33,6 +33,7 @@ import Pkg.Parser (parseQueryToAST)
 import Relude
 import System.Config (EnvConfig (..))
 import System.Logging qualified as Log
+import System.Tracing (Tracing)
 import System.Types (DB)
 import Utils (faSprite_, getDurationNSMS, listToIndexHashMap, lookupVecBoolByKey, lookupVecIntByKey, lookupVecTextByKey, toUriStr)
 
@@ -266,7 +267,7 @@ data Channel = Channel
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "channel", DAE.CamelToSnake]] Channel
 
 
-processAIQuery :: (DB es, ELLM.LLM :> es, Log :> es, Time.Time :> es) => Projects.ProjectId -> Text -> Maybe Text -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
+processAIQuery :: (DB es, ELLM.LLM :> es, Log :> es, Time.Time :> es, Tracing :> es) => Projects.ProjectId -> Text -> Maybe Text -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
 processAIQuery pid userQuery threadCtx model apiKey = do
   now <- Time.currentTime
   let dayAgo = addUTCTime (-86400) now
@@ -436,7 +437,7 @@ formatTextResponse Slack txt =
 -- | Generic AI response dispatch — handles the (hasQuery, hasExplanation) 4-way
 -- pattern shared by all bot platforms, plus widget generation and table fallback.
 dispatchAIResponse
-  :: (DB es, Log :> es, Time.Time :> es)
+  :: (DB es, Log :> es, Time.Time :> es, Tracing :> es)
   => BotType
   -> EnvConfig
   -> Projects.ProjectId
