@@ -1623,6 +1623,9 @@ export class LogList extends LitElement {
       }
 
       const wrapClass = wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap';
+      // Plain body text preserves leading whitespace so multiline logs (where each
+      // indented line arrives as its own LogRecord) align visually in the list.
+      const plainWrapClass = wrapLines ? 'whitespace-pre-wrap' : 'whitespace-pre';
       const result: TemplateResult[] = [];
 
       // Optimized single pass with early continues
@@ -1634,9 +1637,9 @@ export class LogList extends LitElement {
 
         if (p.type === 'plain') {
           if (this.mode === 'patterns') {
-            result.push(html`<span class=${`fill-textStrong ${wrapClass}`}>${highlightPlaceholders(p.content)}</span>`);
+            result.push(html`<span class=${`fill-textStrong ${plainWrapClass}`}>${highlightPlaceholders(p.content)}</span>`);
           } else {
-            result.push(html`<span class=${`fill-textStrong ${wrapClass}`}>${unsafeHTML(getCachedUnescape(p.content))}</span>`);
+            result.push(html`<span class=${`fill-textStrong ${plainWrapClass}`}>${unsafeHTML(getCachedUnescape(p.content))}</span>`);
           }
           continue;
         }
