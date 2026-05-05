@@ -451,8 +451,8 @@ type AnomaliesRoutes = NamedRoutes AnomaliesRoutes'
 
 type AnomaliesRoutes' :: Type -> Type
 data AnomaliesRoutes' mode = AnomaliesRoutes'
-  { acknowlegeGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "acknowlege" :> QPT "host" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
-  , unAcknowlegeGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "unacknowlege" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
+  { acknowlegeGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "acknowledge" :> QPT "host" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
+  , unAcknowlegeGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "unacknowledge" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
   , archiveGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "archive" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
   , unarchiveGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "unarchive" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
   , bulkActionsPost :: mode :- "bulk_actions" :> Capture "action" Text :> ReqBody '[FormUrlEncoded] AnomalyList.AnomalyBulkForm :> Post '[HTML] (RespHeaders AnomalyList.AnomalyAction)

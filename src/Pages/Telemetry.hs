@@ -650,8 +650,8 @@ tracePage pid traceItem spanRecords = do
           div_ [class_ "flex flex-col gap-2"] do
             div_ [class_ "flex flex-wrap justify-between gap-y-1 mb-2"] do
               div_ [class_ "flex items-center gap-2 text-textWeak font-medium"] do
-                button_ [class_ "a-tab text-sm px-3 py-1.5 border-b-2 border-b-transparent t-tab-active", onpointerdown_ "navigatable(this, '#flame_graph', '#trace-tabs', 't-tab-active')"] "Timeline"
-                button_ [class_ "a-tab text-sm px-3 border-b-2 border-b-transparent py-1.5", onpointerdown_ "navigatable(this, '#water_fall', '#trace-tabs', 't-tab-active')"] "Waterfall"
+                button_ [class_ "a-tab text-sm px-3 py-1.5 border-b-2 border-b-transparent t-tab-active", onpointerdown_ "navigatable(this, '#water_fall', '#trace-tabs', 't-tab-active')"] "Waterfall"
+                button_ [class_ "a-tab text-sm px-3 border-b-2 border-b-transparent py-1.5", onpointerdown_ "navigatable(this, '#flame_graph', '#trace-tabs', 't-tab-active')"] "Timeline"
                 button_ [class_ "a-tab text-sm px-3 border-b-2 border-b-transparent py-1.5", onpointerdown_ "navigatable(this, '#span_list', '#trace-tabs', 't-tab-active')"] "Services"
               div_ [class_ "flex items-center gap-2"] do
                 stBox "Spans" (show $ length spanRecords) Nothing
@@ -682,7 +682,7 @@ tracePage pid traceItem spanRecords = do
                     do
                       faSprite_ "chevron-down" "regular" "h-3 w-3"
               button_ [class_ "btn border border-strokeWeak bg-fillWeaker h-9 hidden", id_ "reset-zoom-btn"] "Reset Zoom"
-          div_ [role_ "tabpanel", class_ "a-tab-content w-full", id_ "flame_graph"] do
+          div_ [role_ "tabpanel", class_ "a-tab-content w-full hidden", id_ "flame_graph"] do
             div_ [class_ "flex max-md:flex-col gap-2 w-full pt-2 relative", style_ "--tl-left:65%", id_ $ "timeline-layout-" <> traceItem.traceId] do
               div_
                 [ class_ "md:w-[var(--tl-left)] w-full group px-2 pt-4 border relative flex flex-col rounded-lg overflow-hidden"
@@ -716,7 +716,7 @@ tracePage pid traceItem spanRecords = do
                         div_ [class_ "w-[80px] h-2 bg-fillWeak rounded-sm overflow-hidden"]
                           $ div_ [class_ $ "h-full " <> color, style_ $ "width:" <> percent <> "%"] pass
 
-          div_ [role_ "tabpanel", class_ "a-tab-content pt-2 hidden", id_ "water_fall"] do
+          div_ [role_ "tabpanel", class_ "a-tab-content pt-2", id_ "water_fall"] do
             div_ [class_ "border border-strokeWeak w-full rounded-2xl min-h-[230px] overflow-y-auto overflow-x-hidden relative", style_ "--wf-left:35%", id_ $ "waterfall-container-" <> traceItem.traceId] do
               resizeDivider_ "--wf-left" 15 70 "waterfallResize" "waterfall-divider"
               div_ [class_ "h-full top-0 absolute z-30 hidden pointer-events-none", id_ $ "wf-time-indicator-" <> traceItem.traceId] do

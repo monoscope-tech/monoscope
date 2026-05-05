@@ -375,14 +375,18 @@ connectPostgreSQL connstr = do
 -- adds a version hash to file paths, to force cache invalidation when a new version appears
 hashAssetFile :: FilePath -> TH.Q TH.Exp
 hashAssetFile path = do
-  content <- TH.runIO $ readFileLBS ("static" <> path)
+  let fp = "static" <> path
+  TH.qAddDependentFile fp
+  content <- TH.runIO $ readFileLBS fp
   let hash = fromString $ showHex (xxHash content) ""
   [|$(TH.lift path) <> "?v=" <> $(TH.lift (toString hash))|]
 
 
 hashFile :: FilePath -> TH.Q TH.Exp
 hashFile path = do
-  content <- TH.runIO $ readFileLBS ("static" <> path)
+  let fp = "static" <> path
+  TH.qAddDependentFile fp
+  content <- TH.runIO $ readFileLBS fp
   let hash = fromString $ showHex (xxHash content) ""
   [|$(TH.lift (toString hash))|]
 

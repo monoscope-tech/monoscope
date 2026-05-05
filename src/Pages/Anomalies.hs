@@ -481,11 +481,12 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
         issueTypeLabel issue.issueType issue.critical
         case issue.issueType of
           Issues.LogPattern -> withIssueDataH @Issues.LogPatternData issue.issueData \d -> do
-            metadataChip_ "circle-dot" $ fromMaybe "Unknown" d.logLevel
+            logLevelChip_ d.logLevel d.logPattern
             metadataChip_ "server" $ fromMaybe "Unknown" d.serviceName
             metadataChip_ "tally" $ show d.occurrenceCount <> " occurrences"
             metadataChip_ "clock" $ "First seen " <> compactTimeAgo (toText $ prettyTimeAuto now d.firstSeenAt)
           Issues.LogPatternRateChange -> withIssueDataH @Issues.LogPatternRateChangeData issue.issueData \d -> do
+            logLevelChip_ d.logLevel d.logPattern
             metadataChip_ "arrow-trend-up" $ display d.changeDirection
             metadataChip_ "percent" $ Issues.showPct d.changePercent <> " change"
             metadataChip_ "gauge-high" $ Issues.showRate d.currentRatePerHour <> " current"
@@ -519,12 +520,18 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
                     , Widget.hideSubtitle = Just True
                     }
       case issue.issueType of
-        Issues.LogPattern -> withIssueDataH @Issues.LogPatternData issue.issueData \d -> do
-          volumeChart_ "Pattern Volume"
-          logPatternCards d.sourceField d.logPattern d.sampleMessage
-        Issues.LogPatternRateChange -> withIssueDataH @Issues.LogPatternRateChangeData issue.issueData \d -> do
-          volumeChart_ "Pattern Volume"
-          logPatternCards d.sourceField d.logPattern d.sampleMessage
+        Issues.LogPattern -> withIssueDataH @Issues.LogPatternData issue.issueData \d ->
+          div_ [class_ "flex flex-col lg:flex-row gap-4 lg:items-start"] do
+            div_ [class_ "min-w-0 flex-1 flex flex-col gap-4"] do
+              volumeChart_ "Pattern Volume"
+              logPatternCards d.sourceField d.logPattern d.sampleMessage
+            activityPanel_ pid issueId "lg:w-80 shrink-0" spanRecs
+        Issues.LogPatternRateChange -> withIssueDataH @Issues.LogPatternRateChangeData issue.issueData \d ->
+          div_ [class_ "flex flex-col lg:flex-row gap-4 lg:items-start"] do
+            div_ [class_ "min-w-0 flex-1 flex flex-col gap-4"] do
+              volumeChart_ "Pattern Volume"
+              logPatternCards d.sourceField d.logPattern d.sampleMessage
+            activityPanel_ pid issueId "lg:w-80 shrink-0" spanRecs
         Issues.RuntimeException -> withIssueDataH @Issues.RuntimeExceptionData issue.issueData \exceptionData -> do
           let trimmedStack = T.strip exceptionData.stackTrace
               hasStack = not $ T.null trimmedStack
@@ -654,6 +661,7 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
                     [class_ "text-xs text-textWeak max-w-sm"]
                     "This endpoint started receiving traffic. Inspect the originating request in Investigation below to see headers, body, and call site."
             activityPanel_ pid issueId "lg:w-80 shrink-0" spanRecs
+      let isLogPatternIssue = issue.issueType `elem` [Issues.LogPattern, Issues.LogPatternRateChange]
       div_ [class_ "surface-raised rounded-2xl overflow-hidden", id_ "error-details-container", makeAttribute "tabindex" "-1", onkeydown_ "if(event.key==='Escape'&&this.classList.contains('investigation-fullscreen'))document.getElementById('investigation-fullscreen-btn').click()"] do
         div_ [class_ "max-md:px-3 px-4 border-b border-strokeWeak flex max-md:flex-col md:items-center md:justify-between"] do
           div_ [class_ "flex items-center gap-2 max-md:py-1.5"] do
@@ -667,9 +675,9 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
                 tabBtn (target, lbl, isActive) = button_ [class_ $ "text-xs py-2.5 max-md:px-2 px-3 cursor-pointer err-tab font-medium" <> bool "" " t-tab-active" isActive, onclick_ $ "navigatable(this, '" <> target <> "', '#error-details-container', 't-tab-active', 'err')"] $ toHtml lbl
             forM_ [(aUrl <> "?first_occurrence=true", isFirst, "Show first trace the error occured" :: Text, "First" :: Text), (aUrl, not isFirst, "Show recent trace the error occured" :: Text, "Recent" :: Text)] navLink
             span_ [class_ "mx-3 w-px h-4 bg-strokeWeak max-md:mx-2"] pass
-            forM_ [("#span-content" :: Text, "Trace" :: Text, True), ("#log-content" :: Text, "Logs" :: Text, False)] tabBtn
+            forM_ [("#span-content" :: Text, "Trace" :: Text, not isLogPatternIssue), ("#log-content" :: Text, "Logs" :: Text, isLogPatternIssue)] tabBtn
         div_ [class_ "max-md:p-1 p-2 w-full overflow-x-hidden investigation-content"] do
-          div_ [class_ "flex flex-col lg:flex-row w-full err-tab-content", id_ "span-content"] do
+          div_ [class_ ((if isLogPatternIssue then "hidden " else "") <> "flex flex-col lg:flex-row w-full err-tab-content"), id_ "span-content"] do
             div_ [id_ "trace_container", class_ "grow-1 lg:max-w-[80%] lg:w-1/2 lg:min-w-[20%] shrink-1"]
               $ maybe
                 ( div_ [class_ "flex flex-col items-center justify-center h-48"] do
@@ -684,9 +692,12 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
               whenJust (spanRecs V.!? 0) \sr ->
                 div_ [hxGet_ $ "/p/" <> pid.toText <> "/log_explorer/" <> sr.uSpanId <> "/" <> formatUTC sr.timestamp <> "/detailed", hxTarget_ "#log_details_container", hxSwap_ "innerHtml", hxTrigger_ "intersect once", hxIndicator_ "#details_indicator", term "hx-sync" "this:replace"] pass
 
-        div_ [id_ "log-content", class_ "hidden err-tab-content"] do
+        div_ [id_ "log-content", class_ ((if isLogPatternIssue then "" else "hidden ") <> "err-tab-content")] do
           let logsTraceId = fromMaybe "" $ asum [errM >>= (.base.recentTraceId), (.traceId) <$> tr]
-          virtualTable pid (Just ("/p/" <> pid.toText <> "/log_explorer?json=true&query=" <> toUriStr ("kind==\"log\" AND context___trace_id==\"" <> logsTraceId <> "\""))) Nothing
+              logsQuery = case Issues.hashPrefix issue.issueType of
+                Just prefix | isLogPatternIssue -> "hashes[*]==\"" <> prefix <> issue.targetHash <> "\""
+                _ -> "kind==\"log\" AND context___trace_id==\"" <> logsTraceId <> "\""
+          virtualTable pid (Just ("/p/" <> pid.toText <> "/log_explorer?json=true&query=" <> toUriStr logsQuery)) Nothing
 
       let withSessionIds = V.catMaybes $ (\sr -> (`lookupValueText` "id") =<< Map.lookup "session" =<< sr.attributes) <$> spanRecs
       unless (V.null withSessionIds) $ div_ [class_ "surface-raised rounded-2xl overflow-hidden", id_ "replay-section"] do
@@ -695,7 +706,7 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
           h3_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Session Replay"
         termRaw "session-replay" [id_ "sessionReplay", term "initialSession" $ V.head withSessionIds, term "consoleOpen" "true", term "fullWidth" "true", class_ "block w-full", term "projectId" pid.toText, term "containerId" "sessionPlayerWrapper"] ("" :: Text)
 
-      unless (issue.issueType `elem` [Issues.RuntimeException, Issues.ApiChange]) $ activityPanel_ pid issueId "" V.empty
+      unless (issue.issueType `elem` [Issues.RuntimeException, Issues.ApiChange, Issues.LogPattern, Issues.LogPatternRateChange]) $ activityPanel_ pid issueId "" V.empty
 
     -- RIGHT: Inline collapsible AI chat panel (checkbox + group-has CSS, persists to localStorage)
     input_ [type_ "checkbox", id_ "ai-panel-toggle", class_ "hidden", onchange_ "localStorage.setItem('ai-panel-open', this.checked); if(this.checked) htmx.trigger('#ai-response-container','load-chat')"]
@@ -1710,6 +1721,29 @@ issueTypeBadge issueType critical = span_ [class_ $ "flex items-center gap-1 tex
       Issues.LogPattern -> "Log"
       Issues.LogPatternRateChange -> "Rate"
       _ -> fullTxt
+
+
+-- | Render a log level chip, inferring ERROR severity from the pattern when the
+-- log_level field is missing (e.g. http logs lacking an explicit level but with
+-- 4xx/5xx status). Mirrors @isIssueWorthy@ in BackgroundJobs.
+logLevelChip_ :: Monad m => Maybe Text -> Text -> HtmlT m ()
+logLevelChip_ logLevel pat =
+  let normalized = T.toUpper <$> logLevel
+      hasErrorStatus =
+        "status;badge-error⇒ERROR" `T.isInfixOf` pat
+          || "status_code;badge-4xx" `T.isInfixOf` pat
+          || "status_code;badge-5xx" `T.isInfixOf` pat
+      effective
+        | normalized == Just "ERROR" || normalized == Just "FATAL" || normalized == Just "CRITICAL" = Just "ERROR"
+        | normalized == Just "WARN" || normalized == Just "WARNING" = Just "WARN"
+        | hasErrorStatus = Just "ERROR"
+        | otherwise = normalized
+      (cls, icon, label) = case effective of
+        Just "ERROR" -> ("text-fillError-strong bg-fillError-weak", "triangle-alert", "ERROR")
+        Just "WARN" -> ("text-fillWarning-strong bg-fillWarning-weak", "triangle-alert", "WARN")
+        Just l -> ("", "circle-dot", l)
+        Nothing -> ("", "circle-dot", "Unknown")
+   in colorChip_ cls icon label
 
 
 issueTypeMeta :: Issues.IssueType -> Bool -> (Text, Text, Text)
