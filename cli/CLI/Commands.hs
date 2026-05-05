@@ -65,7 +65,7 @@ import OpenTelemetry.Context.ThreadLocal qualified as OtelCtx
 import OpenTelemetry.Trace (SpanArguments, SpanStatus (..), Tracer, TracerOptions (..), TracerProvider, defaultSpanArguments, initializeGlobalTracerProvider, makeTracer, shutdownTracerProvider)
 import OpenTelemetry.Trace qualified as Trace
 import Pages.Charts.Types (MetricsData (..))
-import Pkg.CLIFormat (evalCond, extractInt, extractRows, extractTextArray, renderSummaryItems, sparklineBar)
+import Pkg.CLIFormat (cleanSummaryValue, evalCond, extractInt, extractRawRows, extractRows, extractTextArray, renderSummaryItems, sparklineBar, valToText)
 import System.Environment (setEnv)
 import System.Process (spawnProcess)
 import UnliftIO.Concurrent (threadDelay)
@@ -616,7 +616,11 @@ foldFiltersIntoQuery query mService mLevel
 -- stable: @{events: [...], count, has_more, cursor}@.
 data DecodedEvents = DecodedEvents
   { idxMap :: Map Text Int
+  , rawRows :: [[AE.Value]]
+  -- ^ Cells with original JSON types preserved — feeds the JSON output path
+  -- so numbers/bools/arrays don't get stringified.
   , rows :: [[Text]]
+  -- ^ Text projection of 'rawRows' used by table rendering and trace summary.
   , count :: Int
   , hasMore :: AE.Value
   , cursor :: AE.Value
@@ -625,14 +629,16 @@ data DecodedEvents = DecodedEvents
 
 decodeEvents :: AE.Value -> Maybe DecodedEvents
 decodeEvents (AE.Object o) =
-  Just
-    DecodedEvents
-      { idxMap = extractColIdxMap (KM.lookup "colIdxMap" o)
-      , rows = extractRows (KM.lookup "logsData" o)
-      , count = extractInt (KM.lookup "count" o)
-      , hasMore = fromMaybe AE.Null (KM.lookup "hasMore" o)
-      , cursor = fromMaybe AE.Null (KM.lookup "cursor" o)
-      }
+  let raw = extractRawRows (KM.lookup "logsData" o)
+   in Just
+        DecodedEvents
+          { idxMap = extractColIdxMap (KM.lookup "colIdxMap" o)
+          , rawRows = raw
+          , rows = map (map valToText) raw
+          , count = extractInt (KM.lookup "count" o)
+          , hasMore = fromMaybe AE.Null (KM.lookup "hasMore" o)
+          , cursor = fromMaybe AE.Null (KM.lookup "cursor" o)
+          }
 decodeEvents _ = Nothing
 
 
@@ -640,21 +646,28 @@ normalizeEventsResponse :: AE.Value -> Maybe Text -> AE.Value
 normalizeEventsResponse val mFields = maybe val (`normalizeDecoded` mFields) (decodeEvents val)
 
 
--- | Project rows into named-field objects. Missing fields encode as @null@
--- (not @""@) so agents can distinguish "field present but empty" from
--- "field missing or row truncated".
+-- | Project rows into named-field objects, preserving JSON types from the
+-- raw response (numbers stay numbers, bools stay bools, the @summary@ array
+-- stays an array). Empty strings collapse to @null@ so agents can tell
+-- "field absent" from "field present with a value" without a special case
+-- per column. The @summary@/@latency_breakdown@ columns are run through
+-- 'cleanSummaryValue' to strip @field;style⇒value@ markup.
 normalizeDecoded :: DecodedEvents -> Maybe Text -> AE.Value
 normalizeDecoded d mFields =
   let keep = case mFields of
         Nothing -> Map.keys d.idxMap
         Just s -> filter (`Map.member` d.idxMap) (T.splitOn "," s)
       cellAt r k = Map.lookup k d.idxMap >>= \i -> listToMaybe (drop i r)
+      cleanCell k v
+        | k == "summary" || k == "latency_breakdown" = cleanSummaryValue v
+        | AE.String "" <- v = AE.Null
+        | otherwise = v
       toObj r =
         AE.object
-          [ AK.fromText k AE..= maybe AE.Null AE.String (cellAt r k)
+          [ AK.fromText k AE..= maybe AE.Null (cleanCell k) (cellAt r k)
           | k <- keep
           ]
-      events = map toObj d.rows
+      events = map toObj d.rawRows
    in AE.object
         [ "events" AE..= events
         , "count" AE..= d.count

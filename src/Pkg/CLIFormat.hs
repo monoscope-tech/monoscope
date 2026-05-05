@@ -3,11 +3,13 @@ module Pkg.CLIFormat (
   formatRow,
   extractTextArray,
   extractRows,
+  extractRawRows,
   extractInt,
   valToText,
   evalCond,
   sparklineBar,
   renderSummaryItems,
+  cleanSummaryValue,
 ) where
 
 import Relude
@@ -133,10 +135,47 @@ valToText v = decodeUtf8 $ AE.encode v
 -- >>> extractRows Nothing
 -- []
 extractRows :: Maybe AE.Value -> [[Text]]
-extractRows = withArray $ map extractRow . V.toList
+extractRows = map (map valToText) . extractRawRows
+
+
+-- | Like 'extractRows' but preserves the original JSON values (numbers stay
+-- numbers, bools stay bools, arrays stay arrays). Used for the JSON output
+-- path of @events search@ where re-stringifying every cell loses type info.
+--
+-- >>> extractRawRows (Just (AE.Array (V.fromList [AE.Array (V.fromList [AE.String "a", AE.Number 1])])))
+-- [[String "a",Number 1.0]]
+extractRawRows :: Maybe AE.Value -> [[AE.Value]]
+extractRawRows = withArray $ map extractRow . V.toList
   where
-    extractRow (AE.Array row) = map valToText (V.toList row)
+    extractRow (AE.Array row) = V.toList row
     extractRow _ = []
+
+
+-- | Clean a 'summary'/'latency_breakdown' cell for JSON output. The server
+-- emits these as arrays of @"field;style⇒value"@ markup strings; we strip the
+-- markup, drop styling-only items (@attributes@, @text-textWeak@), and trim
+-- whitespace so consumers get a clean @["GET", "200", "/api/x"]@ instead of
+-- @["method;badge-GET⇒GET", "status;badge-2xx⇒200", "path;...⇒/api/x"]@.
+--
+-- >>> cleanSummaryValue (AE.Array (V.fromList [AE.String "method;badge-GET⇒GET", AE.String "attributes;text-textWeak⇒{}"]))
+-- Array [String "GET"]
+-- >>> cleanSummaryValue (AE.String "plain")
+-- String "plain"
+cleanSummaryValue :: AE.Value -> AE.Value
+cleanSummaryValue (AE.Array arr) = AE.Array $ V.fromList $ mapMaybe clean (V.toList arr)
+  where
+    clean (AE.String s) = AE.String . T.strip <$> stripMarkup s
+    clean v = Just v
+    stripMarkup item = case T.splitOn ";" item of
+      [field, rest] -> case T.splitOn "⇒" rest of
+        [style, value]
+          | field == "attributes" -> Nothing
+          | "text-textWeak" `T.isPrefixOf` style -> Nothing
+          | "text-weak" `T.isPrefixOf` style -> Nothing
+          | otherwise -> Just value
+        _ -> Just item
+      _ -> Just item
+cleanSummaryValue v = v
 
 
 -- | Extract an integer from a JSON number value.
