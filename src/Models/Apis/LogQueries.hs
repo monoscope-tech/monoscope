@@ -302,18 +302,21 @@ selectLogTable pid queryAST queryText cursorM dateRange projectedColsByUser sour
   let tbl = case source of
         Just SMetrics -> "telemetry.metrics"
         _ -> "otel_logs_and_spans"
-  result <- withSpan_
-    ("SELECT " <> tbl)
-    [ ("db.system.name", OA.toAttribute ("postgresql" :: Text))
-    , ("db.operation.name", OA.toAttribute ("SELECT" :: Text))
-    , ("db.collection.name", OA.toAttribute (tbl :: Text))
-    , ("db.query.text", OA.toAttribute q)
-    , ("monoscope.kql.query", OA.toAttribute queryText)
-    , ("monoscope.project.id", OA.toAttribute pid.toText)
-    , ("monoscope.kql.source", OA.toAttribute (maybe "" (toText . show) source :: Text))
-    , ("monoscope.kql.target_spans", OA.toAttribute (fromMaybe "" targetSpansM))
-    ]
-    $ try @SomeException $ checkpoint (toAnnotation ("selectLogTable", q)) $ executeArbitraryQuery (rawSql q)
+  result <-
+    withSpan_
+      ("SELECT " <> tbl)
+      [ ("db.system.name", OA.toAttribute ("postgresql" :: Text))
+      , ("db.operation.name", OA.toAttribute ("SELECT" :: Text))
+      , ("db.collection.name", OA.toAttribute (tbl :: Text))
+      , ("db.query.text", OA.toAttribute q)
+      , ("monoscope.kql.query", OA.toAttribute queryText)
+      , ("monoscope.project.id", OA.toAttribute pid.toText)
+      , ("monoscope.kql.source", OA.toAttribute (maybe "" (toText . show) source :: Text))
+      , ("monoscope.kql.target_spans", OA.toAttribute (fromMaybe "" targetSpansM))
+      ]
+      $ try @SomeException
+      $ checkpoint (toAnnotation ("selectLogTable", q))
+      $ executeArbitraryQuery (rawSql q)
   case result of
     Left e -> pure $ Left $ show e
     Right logItemsV -> do
