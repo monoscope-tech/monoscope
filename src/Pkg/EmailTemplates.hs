@@ -585,29 +585,30 @@ anomalyEndpointEmail userName projectName anomalyUrl endpointRows =
 -- =============================================================================
 
 issueAssignedEmail :: Text -> Text -> Text -> Text -> Text -> Text -> (Text, Html ())
-issueAssignedEmail userName projectName issueTitle issueUrl errorType errorMessage =
-  ( "[···] Issue Assigned: " <> issueTitle
-  , emailBody do
-      emailGreeting (Just userName)
-      p_ do
-        "You have been assigned to an issue in the "
-        b_ $ toHtml projectName
-        " project."
-      table_ [class_ "error-card", width_ "100%", cellpadding_ "0", cellspacing_ "0"] do
-        tr_ $ td_ [style_ "padding: 15px 20px 5px 20px;"] do
-          p_ [class_ "error-card-header"] $ toHtml errorType
-          p_ [class_ "error-card-sub"] $ toHtml errorMessage
-        tr_
-          $ td_ [style_ "padding: 10px 20px 20px 20px;"]
-          $ table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"]
-          $ tr_ do
-            metaCell "Issue:" issueTitle
-            metaCell "Project:" projectName
-      emailButton issueUrl "View Issue"
-      emailDivider
-      emailSignoff
-      emailFallbackUrl issueUrl
-  )
+issueAssignedEmail userName projectName issueTitleRaw issueUrl errorType errorMessage =
+  let issueTitle = stripSummaryBadges issueTitleRaw
+   in ( "[···] Issue Assigned: " <> issueTitle
+      , emailBody do
+          emailGreeting (Just userName)
+          p_ do
+            "You have been assigned to an issue in the "
+            b_ $ toHtml projectName
+            " project."
+          table_ [class_ "error-card", width_ "100%", cellpadding_ "0", cellspacing_ "0"] do
+            tr_ $ td_ [style_ "padding: 15px 20px 5px 20px;"] do
+              p_ [class_ "error-card-header"] $ toHtml errorType
+              p_ [class_ "error-card-sub"] $ toHtml errorMessage
+            tr_
+              $ td_ [style_ "padding: 10px 20px 20px 20px;"]
+              $ table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"]
+              $ tr_ do
+                metaCell "Issue:" issueTitle
+                metaCell "Project:" projectName
+          emailButton issueUrl "View Issue"
+          emailDivider
+          emailSignoff
+          emailFallbackUrl issueUrl
+      )
 
 
 -- =============================================================================

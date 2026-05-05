@@ -197,7 +197,7 @@ sendWhatsAppAlert alert pid pTitle tos = do
     RuntimeErrorAlert{..} -> do
       let template = appCtx.config.whatsappErrorTemplate
           url = pid.toText <> "/issues/by_hash/" <> errorData.hash
-          contentVars = AE.object ["1" AE..= ("*" <> pTitle <> "*"), "2" AE..= ("*" <> issueTitle <> "*"), "3" AE..= ("`" <> errorData.message <> "`"), "4" AE..= url]
+          contentVars = AE.object ["1" AE..= ("*" <> pTitle <> "*"), "2" AE..= ("*" <> stripSummaryBadges issueTitle <> "*"), "3" AE..= ("`" <> errorData.message <> "`"), "4" AE..= url]
       sendAlert template contentVars
       pass
     EndpointAlert{..} -> do
@@ -622,7 +622,7 @@ sendPagerdutyAlertToService integrationKey (EndpointAlert project endpoints hash
    in Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-endpoint-" <> hash) (projectTitle <> ": New Endpoints - " <> endpointNames) Notify.PDWarning (AE.object ["project" AE..= project, "endpoints" AE..= (rowPayload <$> endpoints)]) endpointUrl
 sendPagerdutyAlertToService integrationKey RuntimeErrorAlert{issueId, issueTitle, errorData, chartUrl} projectTitle projectUrl =
   let errorUrl = projectUrl <> "/issues/by_hash/" <> errorData.hash
-   in Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-error-" <> issueId) (projectTitle <> ": " <> errorData.errorType <> " - " <> issueTitle) Notify.PDError (AE.object $ ["error_type" AE..= errorData.errorType, "message" AE..= errorData.message] <> maybeToList (("chart_url" AE..=) <$> chartUrl)) errorUrl
+   in Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-error-" <> issueId) (projectTitle <> ": " <> errorData.errorType <> " - " <> stripSummaryBadges issueTitle) Notify.PDError (AE.object $ ["error_type" AE..= errorData.errorType, "message" AE..= errorData.message] <> maybeToList (("chart_url" AE..=) <$> chartUrl)) errorUrl
 sendPagerdutyAlertToService integrationKey LogPatternAlert{issueUrl, patternText, logLevel, serviceName} projectTitle _ =
   let pat = stripSummaryBadges patternText
    in Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-logpattern-" <> T.take 40 pat) (projectTitle <> ": New Log Pattern - " <> T.take 80 pat) (maybe Notify.PDWarning (\l -> if l == "error" then Notify.PDCritical else Notify.PDWarning) logLevel) (AE.object ["pattern" AE..= pat, "service" AE..= serviceName, "level" AE..= logLevel]) issueUrl
