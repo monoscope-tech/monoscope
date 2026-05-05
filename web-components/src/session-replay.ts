@@ -20,6 +20,8 @@ export class SessionReplay extends LitElement {
   // Share-page override: replay API lives at a share-scoped URL in that context.
   @property({ type: String }) private sessionUrl: string = '';
   @property({ type: String }) private hideControls: string = '';
+  @property({ type: String }) private consoleOpen: string = '';
+  @property({ type: String }) private fullWidth: string = '';
 
   @state() private activityWidth = 0;
   @query('#replayerOuterContainer') private replayerOuterContainer: HTMLElement;
@@ -574,7 +576,14 @@ export class SessionReplay extends LitElement {
   };
 
   protected firstUpdated(_changedProperties: PropertyValues): void {
-    const mContainer = Number(getComputedStyle(this.replayerOuterContainer).width.replace('px', ''));
+    // Open the console panel by default when consoleOpen attr is set and the user hasn't saved a width yet.
+    if (this.consoleOpen && localStorage.getItem('replay-activity-width') === null && this.activityWidth === 0) {
+      this.activityWidth = 300;
+    }
+    // fullWidth: stretch to host element's available width (issue page) instead of the inner container's
+    // default min-w. Without this the player stays at min-w-[640px] regardless of available space.
+    const hostWidth = this.fullWidth ? this.getBoundingClientRect().width : 0;
+    const mContainer = hostWidth > 0 ? hostWidth : Number(getComputedStyle(this.replayerOuterContainer).width.replace('px', ''));
     this.containerWidth = mContainer - this.activityWidth;
     if (this.initialSession) {
       this.fetchNewSessionData(this.initialSession);
@@ -715,9 +724,9 @@ export class SessionReplay extends LitElement {
     // Demote the two utility buttons to icon-only; tooltips carry the label.
     const compactHeader = this.containerWidth + this.activityWidth < 760;
     return html`<div
-      class="flex overflow-hidden rr-block resize relative rounded shadow-lg min-w-[640px] max-w-[90vw] min-h-[400px]"
+      class="flex overflow-hidden rr-block relative rounded shadow-lg min-h-[400px] ${this.fullWidth ? 'w-full' : 'resize min-w-[640px] max-w-[90vw]'}"
       id="replayerOuterContainer"
-      style="height:${this.containerHeight + 124}px; width:${this.containerWidth + this.activityWidth}px"
+      style="height:${this.containerHeight + 124}px;${this.fullWidth ? '' : ` width:${this.containerWidth + this.activityWidth}px`}"
     >
       <!-- Intentional SE resize hint: the native handle still drives resize, this is just the affordance -->
       <div
@@ -829,7 +838,7 @@ export class SessionReplay extends LitElement {
                 ? html`<span class="text-textError tabular-nums">(${this.consoleTypesCounts.error})</span>`
                 : nothing}
             </button>
-            ${this.activityWidth === 0
+            ${this.activityWidth === 0 && !this.fullWidth
               ? html`<button
                   class="hover:bg-fillWeak cursor-pointer"
                   @click=${this.closePlayerWindow}
@@ -1167,7 +1176,7 @@ export class SessionReplay extends LitElement {
                 </ul>
               </div>
             </div>
-            ${this.activityWidth > 0
+            ${this.activityWidth > 0 && !this.fullWidth
               ? html`<button
                   class="cursor-pointer hover:bg-fillWeak"
                   @click=${this.closePlayerWindow}

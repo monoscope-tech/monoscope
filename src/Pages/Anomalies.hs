@@ -64,6 +64,7 @@ import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw), makeAttribute)
 import Lucid.Htmx (hxGet_, hxIndicator_, hxPost_, hxSwap_, hxTarget_, hxTrigger_)
+import Lucid.Hyperscript (__)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.ErrorPatterns (ErrorPatternId (..))
@@ -82,7 +83,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Charts.Charts qualified as Charts
-import Pages.Components (colorChip_, compactTimeAgo, emptyState_, metadataChip_, periodToggle_, resizer_, sparkline_)
+import Pages.Components (colorChip_, compactTimeAgo, metadataChip_, periodToggle_, resizer_, sparkline_)
 import Pages.LogExplorer.Log (virtualTable)
 import Pages.Telemetry (tracePage)
 import Pkg.AI qualified as AI
@@ -405,12 +406,21 @@ userJourneySection_ spans = whenJust (extractBreadcrumbs spans) \crumbs -> do
             div_ [class_ "flex items-center gap-2 flex-wrap"] do
               span_ [class_ "text-xs tabular-nums text-textWeak shrink-0"] $ toHtml timeLabel
               span_ [class_ $ "text-xs font-medium " <> iconColor] $ toHtml bc.kind
+            -- Long messages clamp to 3 lines; clicking the row toggles a `expanded` class via hyperscript
+            -- to remove the clamp. Plain class toggle is more reliable than relying on `details[open]`
+            -- propagating through Tailwind's named-group `open` variant for a `display:-webkit-box` reset.
+            let expandable cls val =
+                  div_
+                    [ class_ "group/bc cursor-pointer flex items-start gap-1"
+                    , [__|on click toggle .is-open on me|]
+                    ]
+                    do
+                      span_ [class_ $ cls <> " group-[.is-open]/bc:line-clamp-none group-[.is-open]/bc:!block min-w-0 flex-1"] $ toHtml val
+                      faSprite_ "chevron-down" "regular" "w-3 h-3 text-textWeak shrink-0 mt-1 group-[.is-open]/bc:rotate-180 transition-transform"
             whenJust bc.message
-              $ span_ [class_ "text-sm text-textStrong line-clamp-3 break-words"]
-              . toHtml
+              $ expandable "text-sm text-textStrong line-clamp-3 break-words whitespace-pre-wrap"
             whenJust (bc.payload >>= breadcrumbDataSummary)
-              $ span_ [class_ "font-mono text-xs text-textWeak line-clamp-2 break-all"]
-              . toHtml
+              $ expandable "font-mono text-xs text-textWeak line-clamp-2 break-all"
   div_ [class_ "border-t border-strokeWeak"] do
     div_ [class_ "px-4 py-2 flex items-center gap-2 bg-fillWeaker/40"] do
       faSprite_ "route" "regular" "w-3 h-3 text-textWeak"
@@ -557,20 +567,23 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
                 summary_ [class_ "px-4 py-3 flex items-center gap-2 cursor-pointer list-none [&::-webkit-details-marker]:hidden"] do
                   faSprite_ "code" "regular" "w-3.5 h-3.5 text-textWeak"
                   span_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide shrink-0"] "Stack Trace"
-                  span_ [class_ "text-xs text-fillError-strong truncate"] $ toHtml errorFirstLine
+                  span_ [class_ "text-xs text-fillError-strong truncate min-w-0 flex-1"] $ toHtml errorFirstLine
                   faSprite_ "chevron-down" "regular" "w-3 h-3 text-textWeak shrink-0 ml-auto group-open/details:rotate-180 transition-transform"
-                if hasStack
-                  then
-                    div_ [class_ "max-h-80 overflow-y-auto border-t border-strokeWeak"]
-                      $ pre_ [class_ "text-sm leading-relaxed overflow-x-auto whitespace-pre-wrap"]
-                      $ code_ []
-                      $ toHtml trimmedStack
-                  else div_ [class_ "border-t border-strokeWeak px-4 py-6 flex flex-col items-center gap-2 text-center"] do
-                    faSprite_ "circle-info" "regular" "w-5 h-5 text-textWeak"
-                    span_ [class_ "text-sm text-textStrong"] "No stack trace captured"
-                    span_
-                      [class_ "text-xs text-textWeak max-w-sm"]
-                      "This error was reported without a stack trace — common for browser console errors. Check the User Journey for the events that led up to it."
+                div_ [class_ "border-t border-strokeWeak"] do
+                  -- Full error message first — visible whether or not we have a stack trace, since the
+                  -- summary truncates and the user expanded specifically to read it in full.
+                  unless (T.null exceptionData.errorMessage) $ div_ [class_ "px-4 py-3 border-b border-strokeWeak"] do
+                    span_ [class_ "text-[11px] font-semibold text-textWeak uppercase tracking-wide block mb-1"] "Error message"
+                    pre_ [class_ "text-sm leading-relaxed text-fillError-strong whitespace-pre-wrap break-words font-mono"] $ toHtml exceptionData.errorMessage
+                  if hasStack
+                    then
+                      div_ [class_ "max-h-80 overflow-y-auto"]
+                        $ pre_ [class_ "text-sm leading-relaxed overflow-x-auto whitespace-pre-wrap px-4 py-3"]
+                        $ code_ []
+                        $ toHtml trimmedStack
+                    else div_ [class_ "px-4 py-4 flex items-start gap-2 text-textWeak"] do
+                      faSprite_ "circle-info" "regular" "w-4 h-4 shrink-0 mt-0.5"
+                      span_ [class_ "text-xs"] "No stack trace captured — common for browser console errors. Check the User Journey for the events that led up to it."
             activityPanel_ pid issueId "lg:w-80 shrink-0" spanRecs
           -- Similar patterns
           whenJust errM \errL -> similarPatternsSection_ pid errL.base.id
@@ -654,7 +667,7 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
                 tabBtn (target, lbl, isActive) = button_ [class_ $ "text-xs py-2.5 max-md:px-2 px-3 cursor-pointer err-tab font-medium" <> bool "" " t-tab-active" isActive, onclick_ $ "navigatable(this, '" <> target <> "', '#error-details-container', 't-tab-active', 'err')"] $ toHtml lbl
             forM_ [(aUrl <> "?first_occurrence=true", isFirst, "Show first trace the error occured" :: Text, "First" :: Text), (aUrl, not isFirst, "Show recent trace the error occured" :: Text, "Recent" :: Text)] navLink
             span_ [class_ "mx-3 w-px h-4 bg-strokeWeak max-md:mx-2"] pass
-            forM_ [("#span-content" :: Text, "Trace" :: Text, True), ("#log-content" :: Text, "Logs" :: Text, False), ("#replay-content" :: Text, "Replay" :: Text, False)] tabBtn
+            forM_ [("#span-content" :: Text, "Trace" :: Text, True), ("#log-content" :: Text, "Logs" :: Text, False)] tabBtn
         div_ [class_ "max-md:p-1 p-2 w-full overflow-x-hidden investigation-content"] do
           div_ [class_ "flex flex-col lg:flex-row w-full err-tab-content", id_ "span-content"] do
             div_ [id_ "trace_container", class_ "grow-1 lg:max-w-[80%] lg:w-1/2 lg:min-w-[20%] shrink-1"]
@@ -675,12 +688,12 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
           let logsTraceId = fromMaybe "" $ asum [errM >>= (.base.recentTraceId), (.traceId) <$> tr]
           virtualTable pid (Just ("/p/" <> pid.toText <> "/log_explorer?json=true&query=" <> toUriStr ("kind==\"log\" AND context___trace_id==\"" <> logsTraceId <> "\""))) Nothing
 
-        div_ [id_ "replay-content", class_ "hidden err-tab-content"] do
-          let withSessionIds = V.catMaybes $ (\sr -> (`lookupValueText` "id") =<< Map.lookup "session" =<< sr.attributes) <$> spanRecs
-          bool
-            (emptyState_ (Just "video") "No Replay Available" "No session replays associated with this trace" (Just "https://monoscope.tech/docs/sdks/Javascript/browser/") "Session Replay Guide")
-            (div_ [class_ "border border-r border-l w-max mx-auto"] $ termRaw "session-replay" [id_ "sessionReplay", term "initialSession" $ V.head withSessionIds, class_ "shrink-1 flex flex-col", term "projectId" pid.toText, term "containerId" "sessionPlayerWrapper"] ("" :: Text))
-            (not $ V.null withSessionIds)
+      let withSessionIds = V.catMaybes $ (\sr -> (`lookupValueText` "id") =<< Map.lookup "session" =<< sr.attributes) <$> spanRecs
+      unless (V.null withSessionIds) $ div_ [class_ "surface-raised rounded-2xl overflow-hidden", id_ "replay-section"] do
+        div_ [class_ "max-md:px-3 px-4 py-2.5 border-b border-strokeWeak flex items-center gap-2"] do
+          faSprite_ "video" "regular" "w-3.5 h-3.5 text-textWeak"
+          h3_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Session Replay"
+        termRaw "session-replay" [id_ "sessionReplay", term "initialSession" $ V.head withSessionIds, term "consoleOpen" "true", term "fullWidth" "true", class_ "block w-full", term "projectId" pid.toText, term "containerId" "sessionPlayerWrapper"] ("" :: Text)
 
       unless (issue.issueType `elem` [Issues.RuntimeException, Issues.ApiChange]) $ activityPanel_ pid issueId "" V.empty
 
