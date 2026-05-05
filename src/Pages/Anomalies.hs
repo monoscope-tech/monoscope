@@ -524,8 +524,9 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp sampleOverri
                   _ <- div_ [class_ "px-4 py-3 border-b border-strokeWeak"] $ span_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Sample Message"
                   body
             case sampleOverride of
-              Just summary | not (V.null summary) ->
-                renderSample $ div_ [class_ "flex flex-wrap items-center gap-1 p-4 max-h-80 overflow-y-auto"] $ renderSummaryChips_ summary
+              Just summary
+                | not (V.null summary) ->
+                    renderSample $ div_ [class_ "flex flex-wrap items-center gap-1 p-4 max-h-80 overflow-y-auto"] $ renderSummaryChips_ summary
               _ -> whenJust (sampleMessage >>= \m -> if T.strip m == T.strip logPattern then Nothing else Just m) \msg ->
                 renderSample (renderLogContent_ msg)
       div_ [class_ "flex flex-wrap gap-2 items-center"] do
