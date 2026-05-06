@@ -35,8 +35,9 @@ import Effectful.Log qualified as Log
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import Log (LogLevel (..), Logger)
+import Control.Exception.Safe qualified as Safe
 import Log.Backend.StandardOutput.Bulk qualified as LogBulk
-import Log.Internal.Logger (withLogger)
+import Log.Internal.Logger (Logger (..), withLogger)
 import OpenTelemetry.Context qualified as Context
 import OpenTelemetry.Context.ThreadLocal qualified as Context
 import OpenTelemetry.Trace.Core qualified as Trace
@@ -70,9 +71,23 @@ runLog envTxt = Log.runLog ("[AT]-" <> envTxt)
 
 
 makeLogger :: IOE :> es => LoggingDestination -> (Logger -> Eff es a) -> Eff es a
-makeLogger StdOut = LogBulk.withBulkStdOutLogger
-makeLogger Json = LogBulk.withBulkJsonStdOutLogger
-makeLogger JSONFile = withJSONFileBackend FileBackendConfig{destinationFile = "logs/monoscope.json"}
+makeLogger dest action = inner dest (action . tolerantLogger)
+  where
+    inner StdOut = LogBulk.withBulkStdOutLogger
+    inner Json = LogBulk.withBulkJsonStdOutLogger
+    inner JSONFile = withJSONFileBackend FileBackendConfig{destinationFile = "logs/monoscope.json"}
+
+
+-- | Wrap a `Logger` so that exceptions thrown by `loggerWriteMessage` are
+-- swallowed instead of escaping the caller. Without this, a `runLogT` against
+-- a logger that has shut down (bulk worker thread died, or `withLogger` is mid
+-- close while another thread still tries to log) raises `AssertionFailed:
+-- attempt to write to a shut down logger`. That assertion has been escaping
+-- through `supervise`'s own logExc call, the periodic error logger thread,
+-- and Warp's onException — taking the whole process down. Wrapping at the
+-- `Logger` boundary protects every log site at once.
+tolerantLogger :: Logger -> Logger
+tolerantLogger l = l{loggerWriteMessage = \m -> void $ Safe.tryAny (loggerWriteMessage l m)}
 
 
 newtype FileBackendConfig = FileBackendConfig
