@@ -563,7 +563,15 @@ firstEventTimestamp arr = fromMaybe 0 $ (arr V.!? 0) >>= AET.parseMaybe (AE.with
 
 
 mergeFileCountThreshold :: Int
-mergeFileCountThreshold = 20
+mergeFileCountThreshold = 14
+
+
+-- | Cap on file_keys processed per merge invocation. Sessions with backlog
+-- merge in multiple passes; subsequent passes are picked up by the threshold
+-- trigger or the periodic cron. Bounds heap per merge to ~25 raw blobs +
+-- existing merged.json.gz + concat + gzip output.
+maxFilesPerMerge :: Int
+maxFilesPerMerge = 25
 
 
 -- | Upload the events for one replay message. Takes the events sub-tree as
@@ -606,7 +614,11 @@ saveReplayMinio envCfg jobsPool ackId payload = do
                 RETURNING event_file_count
               |]
               let fileCount = fromMaybe 0 (listToMaybe countRows)
-              when (fileCount >= mergeFileCountThreshold) $ do
+              -- Enqueue at exact multiples of the threshold so a busy session
+              -- with N events past 14/28/42/... fires at most one merge per
+              -- threshold-window, rather than one per save (which under high
+              -- event rates piled up dozens of duplicate merges per session).
+              when (fileCount >= mergeFileCountThreshold && fileCount `mod` mergeFileCountThreshold == 0) $ do
                 -- Hand-rolled payload mirrors the derived Generic ToJSON shape for BgJobs;
                 -- cannot import BackgroundJobs here (BackgroundJobs imports Pages.Replay).
                 let jobPayload = AE.object ["tag" AE..= ("MergeReplaySession" :: Text), "contents" AE..= ([AE.toJSON payload.projectId, AE.toJSON payload.sessionId] :: [AE.Value])]
@@ -704,7 +716,8 @@ mergeOneSessionByKeys pid sessionId logSuffix afterMerge = do
       markMerged pid sessionId now'
     Just p -> do
       let (s3Conn, bucket) = projectMinioConn ctx.config p
-      fileKeys <- sessionFileKeys pid sessionId
+      allFileKeys <- sessionFileKeys pid sessionId
+      let fileKeys = take maxFilesPerMerge allFileKeys
       if null fileKeys
         then do
           -- No tracked files: reset counter so the threshold path doesn't re-trigger
@@ -752,6 +765,13 @@ mergeOneSessionByKeys pid sessionId logSuffix afterMerge = do
                 else do
                   afterMerge now'
                   Log.logInfo (maybe "Merged replay session" ("Merged replay session " <>) logSuffix) ("session_id", UUID.toText sessionId)
+                  -- We capped the merge at `maxFilesPerMerge`; re-enqueue while
+                  -- there's backlog so a session that fell behind drains in
+                  -- bounded-heap chunks instead of waiting for the 30-min cron.
+                  when (length allFileKeys > maxFilesPerMerge) $ do
+                    let jobPayload = AE.object ["tag" AE..= ("MergeReplaySession" :: Text), "contents" AE..= ([AE.toJSON pid, AE.toJSON sessionId] :: [AE.Value])]
+                    liftIO $ withResource ctx.jobsPool \conn' ->
+                      void $ createJob conn' "background_jobs" jobPayload
 
 
 -- | Merge the tracked S3 event files for a single session into one gzip-compressed file.
