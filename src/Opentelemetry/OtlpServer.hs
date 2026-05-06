@@ -63,6 +63,7 @@ import Network.GRPC.Server.Run hiding (runServer)
 import Network.GRPC.Server.StreamType (Methods (..), fromMethods)
 import OpenTelemetry.Trace (TracerProvider)
 import Pkg.DeriveUtils (AesonText (..), UUIDId (..), unUUIDId)
+import Pkg.ErrorMetrics (wireTypeErrorsRef)
 import Pkg.TraceSessionCache qualified as TSC
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService_Fields qualified as LSF
@@ -106,13 +107,6 @@ instance ParseMetadata OtlpRequestMetadata where
         stripBearer v = fromMaybe v $ T.stripPrefix "Bearer " v
         apiKey = (stripBearer . extractValue <$> findHeader "authorization") <|> (extractValue <$> findHeader "x-api-key")
     pure $ OtlpRequestMetadata{otlpApiKey = apiKey}
-
-
--- | Global error counters for common parsing errors (wire type, UTF-8, etc)
--- Second element tracks dropped categories when map is at capacity
-wireTypeErrorsRef :: IORef (HM.HashMap Text (Int, AE.Value), Int)
-{-# NOINLINE wireTypeErrorsRef #-}
-wireTypeErrorsRef = unsafePerformIO $ newIORef (HM.empty, 0)
 
 
 -- | OTLP common.proto v1.10 added `AnyValue.string_value_strindex`, a reference

@@ -164,6 +164,8 @@ library:
     - aeson
     - aeson-extra
     - aeson-qq
+    - attoparsec
+    - attoparsec-aeson
     - async
     - barbies
     - bytestring

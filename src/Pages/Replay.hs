@@ -4,16 +4,23 @@ import Codec.Compression.GZip qualified as GZip
 import Conduit (runConduit)
 import Control.Exception (throwIO, try)
 import Data.Aeson qualified as AE
+import Data.Aeson.Key qualified as AEKey
+import Data.Aeson.KeyMap qualified as KM
+import Data.Aeson.Parser qualified as AEP
 import Data.Aeson.Types qualified as AET
+import Data.Attoparsec.ByteString qualified as AB
+import Data.Attoparsec.ByteString.Char8 qualified as AC
+import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BL
 import Data.Conduit ((.|))
 import Data.Conduit.Combinators qualified as CC
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
+import Data.List (partition)
 import Data.OpenApi (ToSchema)
 import Data.Pool (Pool, withResource)
 import Data.Text qualified as T
-import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime, getCurrentTime)
+import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (Connection)
@@ -27,14 +34,13 @@ import Models.Projects.Projects qualified as Projects
 import Network.Minio (MinioErr (..), ServiceErr (..))
 import Network.Minio qualified as Minio
 import OddJobs.Job (createJob)
+import Pkg.ErrorMetrics qualified as Metrics
 import Pkg.Queue (publishJSONToKafka)
-import ProcessMessage (replaceNullChars)
 import Relude
 import System.Config (AuthContext (config, jobsPool), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, DB, RespHeaders, addRespHeaders)
 import UnliftIO.Exception (tryAny)
-import Utils (eitherStrToText)
 
 
 data ReplayPost = ReplayPost
@@ -49,58 +55,247 @@ data ReplayPost = ReplayPost
   deriving anyclass (AE.FromJSON, ToSchema)
 
 
-data ReplayPost' = ReplayPost'
-  { events :: AE.Value
-  , sessionId :: UUID.UUID
-  , timestamp :: UTCTime
-  , projectId :: Projects.ProjectId
-  , userId :: Maybe Text
-  , userEmail :: Maybe Text
-  , userName :: Maybe Text
-  }
-  deriving (Generic, Show)
-  deriving anyclass (AE.FromJSON)
-
-
 -- Helper function to publish to Pub/Sub using the queue service
 publishReplayEvent :: ReplayPost -> Projects.ProjectId -> ATBaseCtx (Either Text Text)
 publishReplayEvent replayData pid = do
   ctx <- Effectful.Reader.Static.ask @AuthContext
-  let envCfg = ctx.config
-  currentTime <- liftIO getCurrentTime
-
   let messagePayload = AE.object ["events" AE..= replayData.events, "sessionId" AE..= replayData.sessionId, "projectId" AE..= pid, "timestamp" AE..= replayData.timestamp, "userId" AE..= replayData.userId, "userEmail" AE..= replayData.userEmail, "userName" AE..= replayData.userName]
-  let attributes = HM.fromList [("eventType", "replay")]
-  case envCfg.rrwebTopics of
+      attributes = HM.fromList [("eventType", "replay")]
+  case ctx.config.rrwebTopics of
     [] -> pure $ Left "No rrweb pubsub topics configured"
-    (topicName : _) -> do
-      liftIO
-        $ publishJSONToKafka ctx topicName messagePayload attributes
-        >>= \case
-          Left err -> pure $ Left $ "Failed to publish replay event: " <> err
-          Right messageId -> pure $ Right messageId
+    (topicName : _) ->
+      liftIO $ first ("Failed to publish replay event: " <>) <$> publishJSONToKafka ctx topicName messagePayload attributes
 
 
 replayPostH :: Projects.ProjectId -> ReplayPost -> ATBaseCtx AE.Value
-replayPostH pid body@ReplayPost{..} = do
+replayPostH pid body = do
   pubResult <- publishReplayEvent body pid
-  case pubResult of
-    Left errMsg -> pure $ AE.object ["status" AE..= ("warning" :: Text), "message" AE..= errMsg, "sessionId" AE..= sessionId]
-    Right messageId -> do pure $ AE.object ["status" AE..= ("ok" :: Text), "messageId" AE..= messageId, "sessionId" AE..= sessionId]
+  pure $ AE.object $ ["sessionId" AE..= body.sessionId] <> case pubResult of
+    Left errMsg -> ["status" AE..= ("warning" :: Text), "message" AE..= errMsg]
+    Right messageId -> ["status" AE..= ("ok" :: Text), "messageId" AE..= messageId]
 
 
+-- | Replay events are multi-MB rrweb session payloads; the kafka batch sees
+-- 100s at a time. Without bounds, a single batch can pin 10+ GB after JSON
+-- decode. These caps target average-case heap behaviour:
+--
+-- * `maxReplayMessageBytes` — hard ceiling per kafka message, before any
+--   decode. Anything larger is from a buggy / non-chunking SDK and is dropped
+--   with a metric instead of allocating a multi-MB Value.
+-- * `replayBatchByteBudget` — soft ceiling for total bytes processed in one
+--   `processReplayEvents` call. We chunk the message list and run each chunk
+--   strictly, letting GC reclaim between chunks.
+maxReplayMessageBytes :: Int
+maxReplayMessageBytes = 10 * 1024 * 1024
+
+
+replayBatchByteBudget :: Int
+replayBatchByteBudget = 64 * 1024 * 1024
+
+
+-- | Strip the JSON-encoded null escape sequence (`\u0000`) directly on a
+-- ByteString. Avoids the three-pass decodeUtf8/replace/encodeUtf8 round-trip
+-- that allocated 3× the message size per event. Single linear scan via
+-- `BS.breakSubstring` followed by a strict left fold over the resulting
+-- chunks; for the common case (no nulls) it returns the input unchanged.
+--
+-- >>> stripJsonNullEscapes "ab"
+-- "ab"
+-- >>> stripJsonNullEscapes "ab\\u0000cd"
+-- "abcd"
+-- >>> stripJsonNullEscapes "\\u0000\\u0000end"
+-- "end"
+-- >>> stripJsonNullEscapes "no\\u0000tabs\\u0000here"
+-- "notabshere"
+stripJsonNullEscapes :: BS.ByteString -> BS.ByteString
+stripJsonNullEscapes bs0 = case BS.breakSubstring needle bs0 of
+  (_, rest) | BS.null rest -> bs0
+  (pre, rest) -> BS.concat (pre : go (BS.drop 6 rest))
+  where
+    needle = "\\u0000"
+    go bs = case BS.breakSubstring needle bs of
+      (pre, rest) | BS.null rest -> [pre]
+      (pre, rest) -> pre : go (BS.drop 6 rest)
+
+
+-- | Lightweight metadata extracted from a published replay message, plus the
+-- raw JSON bytes for the events array. We deliberately do NOT parse `events`
+-- into an `AE.Value` — for typical sessions that's 90%+ of the heap cost.
+data ReplayPayload = ReplayPayload
+  { sessionId :: !UUID.UUID
+  , projectId :: !Projects.ProjectId
+  , timestamp :: !UTCTime
+  , userId :: !(Maybe Text)
+  , userEmail :: !(Maybe Text)
+  , userName :: !(Maybe Text)
+  , eventsBytes :: !BS.ByteString
+  , eventsEmpty :: !Bool
+  }
+
+
+data ReplayMeta = ReplayMeta
+  { sessionId :: UUID.UUID
+  , projectId :: Projects.ProjectId
+  , timestamp :: UTCTime
+  , userId :: Maybe Text
+  , userEmail :: Maybe Text
+  , userName :: Maybe Text
+  }
+  deriving stock (Generic)
+  deriving anyclass (AE.FromJSON)
+
+
+-- | Walk a published replay JSON object byte-by-byte, capturing the raw byte
+-- range of `events` and aeson-decoding the small remaining metadata fields.
+-- This is the load-bearing optimisation: an SDK session with thousands of
+-- DOM-mutation events parses in O(bytes) here vs. O(bytes × ADT-overhead) for
+-- a full `AE.eitherDecode`, since we never realize `events` as `Value`.
+--
+-- >>> let go = fmap (\p -> (p.eventsBytes, p.eventsEmpty)) . splitReplayPayload
+-- >>> go "{\"sessionId\":\"00000000-0000-0000-0000-000000000001\",\"projectId\":\"00000000-0000-0000-0000-000000000002\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"events\":[1,2]}"
+-- Right ("[1,2]",False)
+-- >>> go "{\"events\":[ ],\"sessionId\":\"00000000-0000-0000-0000-000000000001\",\"projectId\":\"00000000-0000-0000-0000-000000000002\",\"timestamp\":\"2026-01-01T00:00:00Z\"}"
+-- Right ("[ ]",True)
+-- >>> isLeft (splitReplayPayload "{\"sessionId\":\"x\"}")
+-- True
+splitReplayPayload :: BS.ByteString -> Either String ReplayPayload
+splitReplayPayload = AB.parseOnly $ do
+  AC.skipSpace
+  _ <- AC.char '{'
+  AC.skipSpace
+  -- Empty object is invalid: must contain `events` plus metadata.
+  AC.peekChar' >>= \case
+    '}' -> fail "empty object"
+    _ -> go KM.empty Nothing
+  where
+    go !meta !mEv = do
+      AC.skipSpace
+      k <- AEP.jstring
+      AC.skipSpace
+      _ <- AC.char ':'
+      AC.skipSpace
+      (meta', mEv') <-
+        if k == "events"
+          then do
+            (raw, _) <- AC.match skipJsonValue
+            pure (meta, Just raw)
+          else do
+            v <- AEP.json'
+            pure (KM.insert (AEKey.fromText k) v meta, mEv)
+      AC.skipSpace
+      AC.anyChar >>= \case
+        ',' -> go meta' mEv'
+        '}' -> finalize meta' mEv'
+        c -> fail $ "expected , or } in object, got " <> [c]
+    finalize meta mEv = case mEv of
+      Nothing -> fail "missing events field"
+      Just raw -> case AE.fromJSON (AE.Object meta) of
+        AE.Error e -> fail e
+        AE.Success ReplayMeta{..} ->
+          pure ReplayPayload{eventsBytes = raw, eventsEmpty = isEmptyJsonArray raw, ..}
+
+
+-- | True if a JSON array byte-slice contains zero elements, regardless of
+-- whitespace padding. Cheap two-sided whitespace-trim; we don't need to parse.
+--
+-- >>> isEmptyJsonArray "[]"
+-- True
+-- >>> isEmptyJsonArray "[ \t\n]"
+-- True
+-- >>> isEmptyJsonArray "[1]"
+-- False
+-- >>> isEmptyJsonArray ""
+-- True
+isEmptyJsonArray :: BS.ByteString -> Bool
+isEmptyJsonArray raw = case BS.uncons (BS.dropWhile isWs raw) of
+  Nothing -> True
+  Just (0x5b, t) -> case BS.uncons (BS.dropWhile isWs t) of
+    Just (0x5d, rest) -> BS.all isWs rest
+    _ -> False
+  _ -> False
+  where
+    isWs c = c == 0x20 || c == 0x09 || c == 0x0a || c == 0x0d
+
+
+-- | Skip one JSON value without allocating it; bracket/quote-aware so we
+-- don't get confused by `]` or `,` inside strings or nested arrays. Used with
+-- `AC.match` to capture the raw bytes of the events array. The primitive
+-- branch (numbers/bool/null) consumes until a structural char so the caller
+-- can match a following `,`/`}`/`]` without backtracking.
+--
+-- >>> AB.parseOnly (fst <$> AC.match skipJsonValue) "[1,2,3] tail"
+-- Right "[1,2,3]"
+-- >>> AB.parseOnly (fst <$> AC.match skipJsonValue) "{\"a\":[1,{\"b\":2}],\"c\":\"]]}\"}"
+-- Right "{\"a\":[1,{\"b\":2}],\"c\":\"]]}\"}"
+-- >>> AB.parseOnly (fst <$> AC.match skipJsonValue) "\"escaped \\\"quote\\\" inside\""
+-- Right "\"escaped \\\"quote\\\" inside\""
+skipJsonValue :: AC.Parser ()
+skipJsonValue = do
+  AC.skipSpace
+  c <- AC.peekChar'
+  case c of
+    '{' -> skipBracketed '{' '}'
+    '[' -> skipBracketed '[' ']'
+    '"' -> skipJsonString
+    _ -> void $ AC.takeWhile1 (\ch -> ch `notElem` [',' :: Char, '}', ']', ' ', '\t', '\n', '\r'])
+
+
+skipBracketed :: Char -> Char -> AC.Parser ()
+skipBracketed open close = AC.anyChar *> loop (1 :: Int)
+  where
+    loop 0 = pass
+    loop n = do
+      _ <- AB.takeWhile (\b -> b /= o && b /= c && b /= q)
+      AC.anyChar >>= \case
+        ch | ch == open -> loop (n + 1)
+        ch | ch == close -> loop (n - 1)
+        '"' -> skipJsonString *> loop n
+        _ -> loop n
+    o = fromIntegral (fromEnum open)
+    c = fromIntegral (fromEnum close)
+    q = fromIntegral (fromEnum '"')
+
+
+skipJsonString :: AC.Parser ()
+skipJsonString = AC.anyChar *> loop
+  where
+    loop = AC.anyChar >>= \case
+      '"' -> pass
+      '\\' -> AC.anyChar *> loop
+      _ -> loop
+
+
+-- | Process a kafka batch of published replay messages. Sub-chunks the batch
+-- by total byte size so a single call cannot pin more than
+-- `replayBatchByteBudget` bytes; each chunk is processed with strict
+-- per-message handoff so finished messages are GC-eligible immediately.
+-- Drop counts feed `OtlpServer.bumpErrorCounter` so they roll up in the same
+-- minute-cadence summary as wire/UTF-8 parse errors — no per-event log spam.
 processReplayEvents :: [(Text, ByteString)] -> HashMap Text Text -> ATBackgroundCtx [Text]
 processReplayEvents [] _ = pure []
-processReplayEvents msgs attrs = do
+processReplayEvents msgs _attrs = do
   ctx <- Effectful.Reader.Static.ask @AuthContext
   let envCfg = ctx.config
-  let msgs' =
-        msgs <&> \(ackId, msg) -> do
-          let sanitizedJsonStr = replaceNullChars $ decodeUtf8 msg
-          rrMsg <- eitherStrToText $ AE.eitherDecode $ encodeUtf8 sanitizedJsonStr
-          Right (ackId, rrMsg)
-  vs <- mapM (saveReplayMinio envCfg ctx.jobsPool) (rights msgs')
-  pure $ catMaybes vs
+      (oversized, valid) = partition (\(_, b) -> BS.length b > maxReplayMessageBytes) msgs
+  traverse_ (\_ -> Metrics.bumpErrorCounter "replay:oversize_message") oversized
+  fmap concat $ mapM (handleChunk envCfg ctx.jobsPool) (chunkByBytes valid)
+  where
+    chunkByBytes = go 0 [] []
+      where
+        go _ chunk chunks [] = reverse (reverse chunk : chunks)
+        go sz chunk chunks (m : rest)
+          | sz + BS.length (snd m) > replayBatchByteBudget && not (null chunk) =
+              go (BS.length (snd m)) [m] (reverse chunk : chunks) rest
+          | otherwise = go (sz + BS.length (snd m)) (m : chunk) chunks rest
+
+    handleChunk envCfg jobsPool chunk = fmap catMaybes $ forM chunk $ \(!ackId, !body) ->
+      case splitReplayPayload (stripJsonNullEscapes body) of
+        Left _ -> do
+          -- Counter only — under a flood of corrupt payloads, a per-message
+          -- log call would be the heap-pressure source we just eliminated.
+          Metrics.bumpErrorCounter "replay:decode_error"
+          pure (Just ackId)
+        Right payload -> saveReplayMinio envCfg jobsPool ackId payload
 
 
 -- | Retrieve a legacy single-object replay blob. Returns `Left` on transport
@@ -128,6 +323,29 @@ isNoSuchKey (MErrService NoSuchKey) = True
 isNoSuchKey _ = False
 
 
+toObjKey :: Text -> Minio.Object
+toObjKey = fromString . toString
+
+
+mergedKeyFor :: UUID.UUID -> Minio.Object
+mergedKeyFor sid = toObjKey (UUID.toText sid <> "/merged.json.gz")
+
+
+sessionLogCtx :: Projects.ProjectId -> UUID.UUID -> HashMap Text Text
+sessionLogCtx pid sid = HM.fromList [("session_id", UUID.toText sid), ("project_id", pid.toText)]
+
+
+-- | Attach a rendered exception to a log context under the conventional
+-- "error" key. Used so call sites stop repeating the displayException dance.
+withError :: Exception e => e -> HashMap Text Text -> HashMap Text Text
+withError e = HM.insert "error" (toText $ displayException e)
+
+
+markMerged :: DB es => Projects.ProjectId -> UUID.UUID -> UTCTime -> Eff es ()
+markMerged pid sid now =
+  Hasql.interpExecute_ [HI.sql| UPDATE projects.replay_sessions SET merged = TRUE, updated_at = #{now} WHERE session_id = #{sid} AND project_id = #{pid} |]
+
+
 data MergeError
   = MergeDecodeFailed [(Text, String)]
   | MergeFetchFailed MinioErr
@@ -147,33 +365,31 @@ describeValue = \case
   AE.Null -> "null"
 
 
--- | Download one object as a JSON array. Transport errors propagate through the
--- `Minio` monad as `Left MinioErr`; decode failures are returned as `Left String`.
-fetchEventArray :: Minio.Bucket -> Minio.Object -> Bool -> Minio.Minio (Either String AE.Array)
-fetchEventArray bucket objKey gzipped = do
+-- | Download one object and decode as a JSON array, returning the decoded
+-- array alongside the raw decompressed bytes. Transport errors propagate
+-- through the `Minio` monad as `Left MinioErr`; decode failures are returned
+-- as `Left String`.
+loadJsonArray :: Minio.Bucket -> Minio.Object -> Bool -> Minio.Minio (Either String (AE.Array, BL.ByteString))
+loadJsonArray bucket objKey gzipped = do
   src <- Minio.getObject bucket objKey Minio.defaultGetObjectOptions
   bs <- runConduit $ Minio.gorObjectStream src .| CC.foldMap fromStrict
-  let decoded = if gzipped then GZip.decompress bs else bs
-  pure $ case AE.eitherDecode decoded of
-    Right (AE.Array arr) -> Right arr
+  let raw = if gzipped then GZip.decompress bs else bs
+  pure $ case AE.eitherDecode raw of
+    Right (AE.Array arr) -> Right (arr, raw)
     Right v -> Left $ "expected JSON array, got " <> describeValue v
     Left e -> Left e
+
+
+fetchEventArray :: Minio.Bucket -> Minio.Object -> Bool -> Minio.Minio (Either String AE.Array)
+fetchEventArray bucket objKey gzipped = fst <<$>> loadJsonArray bucket objKey gzipped
 
 
 -- | Fetch one S3 object as raw decompressed bytes plus the first event's
 -- timestamp (used to sort files before merging at the byte level).
 -- Avoids re-encoding events during merge — raw bytes go directly to the output.
 fetchRawForMerge :: Minio.Bucket -> Minio.Object -> Bool -> Minio.Minio (Either String (Double, BL.ByteString))
-fetchRawForMerge bucket objKey gzipped = do
-  src <- Minio.getObject bucket objKey Minio.defaultGetObjectOptions
-  bs <- runConduit $ Minio.gorObjectStream src .| CC.foldMap fromStrict
-  let raw = if gzipped then GZip.decompress bs else bs
-  pure $ case AE.eitherDecode raw of
-    Right (AE.Array arr) ->
-      let ts = fromMaybe 0 $ (arr V.!? 0) >>= AET.parseMaybe (AE.withObject "ev" (AE..: "timestamp"))
-       in Right (ts, raw)
-    Right v -> Left $ "expected JSON array, got " <> describeValue v
-    Left e -> Left e
+fetchRawForMerge bucket objKey gzipped =
+  (\(arr, raw) -> (firstEventTimestamp arr, raw)) <<$>> loadJsonArray bucket objKey gzipped
 
 
 -- | Concatenate pre-sorted raw JSON array byte strings into one flat JSON array
@@ -186,12 +402,13 @@ fetchRawForMerge bucket objKey gzipped = do
 -- >>> concatRawJsonArrays ["[]","[1]","[]"]
 -- "[1]"
 concatRawJsonArrays :: [BL.ByteString] -> BL.ByteString
-concatRawJsonArrays bss =
-  let filled = filter (\b -> BL.length b > 2) bss
-      inner = map (\b -> BL.drop 1 $ BL.take (BL.length b - 1) b) filled
-   in case inner of
-        [] -> "[]"
-        _ -> "[" <> BL.intercalate "," inner <> "]"
+concatRawJsonArrays bss = case mapMaybe trim bss of
+  [] -> "[]"
+  inner -> "[" <> BL.intercalate "," inner <> "]"
+  where
+    trim b
+      | BL.length b > 2 = Just $ BL.take (BL.length b - 2) (BL.drop 1 b)
+      | otherwise = Nothing
 
 
 -- | Resolve per-project or default S3 credentials into a connection + bucket.
@@ -221,7 +438,7 @@ fetchIndividuals
   -> Eff es (AE.Array, Bool, Int)
 fetchIndividuals conn bucket fileKeys logCtx = do
   perKey <- liftIO $ forM fileKeys $ \k ->
-    Minio.runMinio conn (fetchEventArray bucket (fromString $ toString k) False) <&> (k,)
+    Minio.runMinio conn (fetchEventArray bucket (toObjKey k) False) <&> (k,)
   let (arrs, decodeErrs, transportErrs, missing) = foldr classify ([], [], [], []) perKey
       classify (_, Right (Right a)) (as, ds, ts, ms) = (a : as, ds, ts, ms)
       classify (k, Right (Left de)) (as, ds, ts, ms) = (as, (k, de) : ds, ts, ms)
@@ -246,11 +463,11 @@ fetchIndividuals conn bucket fileKeys logCtx = do
 getSessionEvents :: (DB es, Log :> es) => Minio.ConnectInfo -> Projects.ProjectId -> Minio.Bucket -> UUID.UUID -> Eff es (Either Text (AE.Array, Bool))
 getSessionEvents conn pid bucket sessionId = do
   let sessionStr = UUID.toText sessionId
-      mergedKey = fromString $ toString $ sessionStr <> "/merged.json.gz"
+      mergedKey = mergedKeyFor sessionId
       logCtx = HM.fromList [("session", sessionStr), ("projectId", pid.toText)]
       legacy reason = do
         Log.logInfo "Falling back to legacy replay blob" (HM.insert "reason" reason logCtx)
-        legacyRes <- getMinioFile conn bucket (fromString $ toString $ sessionStr <> ".json")
+        legacyRes <- getMinioFile conn bucket (toObjKey (sessionStr <> ".json"))
         case legacyRes of
           Right a
             | V.null a -> do
@@ -273,7 +490,7 @@ getSessionEvents conn pid bucket sessionId = do
       Log.logError "Corrupt merged replay blob" (HM.insert "error" (toText decodeErr) logCtx)
       pure corruptedErr
     Left err | not (isNoSuchKey err) -> do
-      Log.logError "Failed to fetch merged replay events" (HM.insert "error" (toText $ displayException err) logCtx)
+      Log.logError "Failed to fetch merged replay events" (withError err logCtx)
       pure transientErr
     _ -> do
       let mergedEvents = case mergedRes of
@@ -335,69 +552,69 @@ sessionMetadata pid sessionId = do
 -- >>> mergeEventArrays [V.empty, V.fromList [ev 2]] == V.fromList [ev 2]
 -- True
 mergeEventArrays :: [AE.Array] -> AE.Array
-mergeEventArrays arrays = V.concat $ sortWith firstTimestamp $ filter (not . V.null) arrays
-  where
-    firstTimestamp :: AE.Array -> Double
-    firstTimestamp arr = fromMaybe 0 $ (arr V.!? 0) >>= AET.parseMaybe (AE.withObject "event" (AE..: "timestamp"))
+mergeEventArrays arrays = V.concat $ sortWith firstEventTimestamp $ filter (not . V.null) arrays
+
+
+-- | First event's `timestamp` field (0 if absent / array empty). Used to sort
+-- per-file event arrays before concatenating during merge.
+firstEventTimestamp :: AE.Array -> Double
+firstEventTimestamp arr = fromMaybe 0 $ (arr V.!? 0) >>= AET.parseMaybe (AE.withObject "event" (AE..: "timestamp"))
 
 
 mergeFileCountThreshold :: Int
 mergeFileCountThreshold = 20
 
 
-saveReplayMinio :: (DB es, Log :> es, Time :> es) => EnvConfig -> Pool Connection -> (Text, ReplayPost') -> Eff es (Maybe Text)
-saveReplayMinio envCfg jobsPool (ackId, replayData) = do
-  project <- Projects.projectById replayData.projectId
+-- | Upload the events for one replay message. Takes the events sub-tree as
+-- raw JSON bytes (already validated as a JSON value by the splitter) and
+-- streams them straight into MinIO with no AE.encode round-trip.
+saveReplayMinio :: (DB es, Log :> es, Time :> es) => EnvConfig -> Pool Connection -> Text -> ReplayPayload -> Eff es (Maybe Text)
+saveReplayMinio envCfg jobsPool ackId payload = do
+  project <- Projects.projectById payload.projectId
   case project of
-    Just p -> do
-      let session = UUID.toText replayData.sessionId
-          (conn, bucket) = projectMinioConn envCfg p
-      case replayData.events of
-        AE.Array newEvents
-          | V.null newEvents -> pure $ Just ackId
-          | otherwise -> do
-              now <- Time.currentTime
-              let timeStr = toText $ formatTime defaultTimeLocale "%Y%m%dT%H%M%S%q" now
-                  objKeyText = session <> "/" <> timeStr <> ".json"
-                  objKey = fromString $ toString objKeyText
-                  body = AE.encode (AE.Array newEvents)
-                  bodySize = BL.length body
-              res <- liftIO $ Minio.runMinio conn do
-                Minio.putObject bucket objKey (CC.sourceLazy body) (Just bodySize) Minio.defaultPutObjectOptions
-              case res of
-                Right _ -> do
-                  let (rSid, rPid) = (replayData.sessionId, replayData.projectId)
-                      (rUserId, rUserEmail, rUserName) = (replayData.userId, replayData.userEmail, replayData.userName)
-                  countRows :: [Int] <-
-                    Hasql.interp
-                      [HI.sql|
-                    INSERT INTO projects.replay_sessions (session_id, project_id, last_event_at, event_file_count, file_keys, user_id, user_email, user_name)
-                    VALUES (#{rSid}, #{rPid}, #{now}, 1, ARRAY[#{objKeyText}]::text[], #{rUserId}, #{rUserEmail}, #{rUserName})
-                    ON CONFLICT (session_id) DO UPDATE SET
-                      last_event_at = #{now}, merged = FALSE,
-                      event_file_count = projects.replay_sessions.event_file_count + 1,
-                      file_keys = array_append(projects.replay_sessions.file_keys, #{objKeyText}),
-                      user_id = COALESCE(EXCLUDED.user_id, projects.replay_sessions.user_id),
-                      user_email = COALESCE(EXCLUDED.user_email, projects.replay_sessions.user_email),
-                      user_name = COALESCE(EXCLUDED.user_name, projects.replay_sessions.user_name),
-                      updated_at = #{now}
-                    RETURNING event_file_count
-                  |]
-                  let fileCount = fromMaybe 0 (listToMaybe countRows)
-                  when (fileCount >= mergeFileCountThreshold) $ do
-                    -- Hand-rolled payload mirrors the derived Generic ToJSON shape for BgJobs;
-                    -- cannot import BackgroundJobs here (BackgroundJobs imports Pages.Replay).
-                    let jobPayload = AE.object ["tag" AE..= ("MergeReplaySession" :: Text), "contents" AE..= ([AE.toJSON replayData.projectId, AE.toJSON replayData.sessionId] :: [AE.Value])]
-                    liftIO $ withResource jobsPool \conn' ->
-                      void $ createJob conn' "background_jobs" jobPayload
-                  pure $ Just ackId
-                Left err -> do
-                  Log.logAttention "Failed to save replay events to MinIO" (HM.fromList [("session", session), ("projectId", replayData.projectId.toText), ("error", toText $ displayException err)])
-                  pure Nothing
-        _ -> do
-          Log.logAttention "Invalid events format - expected JSON array" (HM.fromList [("session", session), ("projectId", replayData.projectId.toText)])
-          pure $ Just ackId
     Nothing -> pure $ Just ackId
+    Just p
+      | payload.eventsEmpty -> pure $ Just ackId
+      | otherwise -> do
+          now <- Time.currentTime
+          let session = UUID.toText payload.sessionId
+              (conn, bucket) = projectMinioConn envCfg p
+              timeStr = toText $ formatTime defaultTimeLocale "%Y%m%dT%H%M%S%q" now
+              objKeyText = session <> "/" <> timeStr <> ".json"
+              objKey = toObjKey objKeyText
+              body = payload.eventsBytes
+              bodySize = fromIntegral (BS.length body)
+          res <- liftIO $ Minio.runMinio conn $ do
+            Minio.putObject bucket objKey (CC.sourceLazy (BL.fromStrict body)) (Just bodySize) Minio.defaultPutObjectOptions
+          case res of
+            Right _ -> do
+              let ReplayPayload{sessionId, projectId, userId, userEmail, userName} = payload
+              countRows :: [Int] <-
+                Hasql.interp
+                  [HI.sql|
+                INSERT INTO projects.replay_sessions (session_id, project_id, last_event_at, event_file_count, file_keys, user_id, user_email, user_name)
+                VALUES (#{sessionId}, #{projectId}, #{now}, 1, ARRAY[#{objKeyText}]::text[], #{userId}, #{userEmail}, #{userName})
+                ON CONFLICT (session_id) DO UPDATE SET
+                  last_event_at = #{now}, merged = FALSE,
+                  event_file_count = projects.replay_sessions.event_file_count + 1,
+                  file_keys = array_append(projects.replay_sessions.file_keys, #{objKeyText}),
+                  user_id = COALESCE(EXCLUDED.user_id, projects.replay_sessions.user_id),
+                  user_email = COALESCE(EXCLUDED.user_email, projects.replay_sessions.user_email),
+                  user_name = COALESCE(EXCLUDED.user_name, projects.replay_sessions.user_name),
+                  updated_at = #{now}
+                RETURNING event_file_count
+              |]
+              let fileCount = fromMaybe 0 (listToMaybe countRows)
+              when (fileCount >= mergeFileCountThreshold) $ do
+                -- Hand-rolled payload mirrors the derived Generic ToJSON shape for BgJobs;
+                -- cannot import BackgroundJobs here (BackgroundJobs imports Pages.Replay).
+                let jobPayload = AE.object ["tag" AE..= ("MergeReplaySession" :: Text), "contents" AE..= ([AE.toJSON payload.projectId, AE.toJSON payload.sessionId] :: [AE.Value])]
+                liftIO $ withResource jobsPool \conn' ->
+                  void $ createJob conn' "background_jobs" jobPayload
+              pure $ Just ackId
+            Left err -> do
+              Log.logAttention "Failed to save replay events to MinIO" (withError err $ HM.fromList [("session", session), ("projectId", payload.projectId.toText)])
+              pure Nothing
 
 
 replaySessionGetH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders AE.Value)
@@ -423,7 +640,7 @@ fetchReplaySession p sessionId = do
   meta <-
     tryAny (sessionMetadata pid sessionId)
       >>= either
-        (\err -> Nothing <$ Log.logAttention "sessionMetadata lookup failed; continuing without identity" (HM.insert "error" (toText $ displayException err) summaryCtx))
+        (\err -> Nothing <$ Log.logAttention "sessionMetadata lookup failed; continuing without identity" (withError err summaryCtx))
         pure
   let respond events extras = AE.object $ ["events" AE..= AE.Array events] <> extras <> metaPairs meta
   result <- tryAny $ getSessionEvents conn pid bucket sessionId
@@ -437,13 +654,13 @@ fetchReplaySession p sessionId = do
       Log.logInfo "Replay session served (user-facing error)" (summaryCtx <> HM.fromList [("outcome", "user_error"), ("user_msg", userMsg)])
       pure $ respond V.empty ["error" AE..= userMsg]
     Left err -> do
-      Log.logAttention "Unexpected exception fetching replay session" (HM.insert "error" (toText $ displayException err) summaryCtx)
+      Log.logAttention "Unexpected exception fetching replay session" (withError err summaryCtx)
       pure $ respond V.empty ["error" AE..= ("We couldn’t load this session right now. Check your connection and retry — if it keeps failing, copy the session ID and share it with support." :: Text)]
 
 
 -- | Merge a specific replay session's S3 event files (triggered when file count exceeds threshold)
 mergeReplaySession :: Projects.ProjectId -> UUID.UUID -> ATBackgroundCtx ()
-mergeReplaySession pid sessionId = mergeOneSessionByKeys pid sessionId "(file count threshold)" $ const pass
+mergeReplaySession pid sessionId = mergeOneSessionByKeys pid sessionId (Just "(file count threshold)") $ const pass
 
 
 -- | Find inactive sessions and compress & merge their S3 event files
@@ -460,12 +677,10 @@ compressAndMergeReplaySessions = do
 
   Log.logInfo "Starting replay session merge job" ("sessions_count", length sessions)
 
-  -- Process each session independently; a single failure must not stall the batch.
   forM_ sessions $ \(sessionId, projectId) -> do
-    r <- tryAny $ mergeOneSessionByKeys projectId sessionId "" $ \_ ->
-      Hasql.interpExecute_ [HI.sql| UPDATE projects.replay_sessions SET merged = TRUE, updated_at = #{now} WHERE session_id = #{sessionId} AND project_id = #{projectId} |]
+    r <- tryAny $ mergeOneSessionByKeys projectId sessionId Nothing $ \_ -> markMerged projectId sessionId now
     whenLeft_ r $ \err ->
-      Log.logAttention "Replay session merge threw; continuing batch" (HM.fromList [("session_id", UUID.toText sessionId), ("project_id", projectId.toText), ("error", toText $ displayException err)])
+      Log.logAttention "Replay session merge threw; continuing batch" (withError err (sessionLogCtx projectId sessionId))
 
 
 -- | Look up a project + its S3 settings + tracked file keys and merge them into merged.json.gz.
@@ -473,19 +688,19 @@ compressAndMergeReplaySessions = do
 mergeOneSessionByKeys
   :: Projects.ProjectId
   -> UUID.UUID
-  -> Text
+  -> Maybe Text
   -> (UTCTime -> ATBackgroundCtx ())
   -> ATBackgroundCtx ()
 mergeOneSessionByKeys pid sessionId logSuffix afterMerge = do
   ctx <- Effectful.Reader.Static.ask @AuthContext
-  let logCtx = HM.fromList [("session_id", UUID.toText sessionId), ("project_id", pid.toText)]
+  let logCtx = sessionLogCtx pid sessionId
   projectM <- Projects.projectById pid
   case projectM of
     Nothing -> do
       -- Orphaned row (project gone). Flip merged=TRUE so we stop re-picking it every run.
       Log.logAttention "Project not found for replay session merge; marking merged" logCtx
       now' <- Time.currentTime
-      Hasql.interpExecute_ [HI.sql| UPDATE projects.replay_sessions SET merged = TRUE, updated_at = #{now'} WHERE session_id = #{sessionId} AND project_id = #{pid} |]
+      markMerged pid sessionId now'
     Just p -> do
       let (s3Conn, bucket) = projectMinioConn ctx.config p
       fileKeys <- sessionFileKeys pid sessionId
@@ -501,14 +716,13 @@ mergeOneSessionByKeys pid sessionId logSuffix afterMerge = do
           result <- liftIO $ try @MergeError $ mergeOneSession s3Conn bucket sessionId fileKeys
           case result of
             Left merr -> do
-              let ctxWithErr = HM.insert "error" (toText $ displayException merr) logCtx
+              let ctxWithErr = withError merr logCtx
               case merr of
                 -- Fatal: corrupt data will never succeed. Mark merged so we stop
                 -- retrying forever and paging on-call.
                 MergeDecodeFailed _ -> do
                   Log.logError "Replay session merge aborted due to corrupt data; marking merged to stop retries" ctxWithErr
-                  now' <- Time.currentTime
-                  Hasql.interpExecute_ [HI.sql| UPDATE projects.replay_sessions SET merged = TRUE, updated_at = #{now'} WHERE session_id = #{sessionId} AND project_id = #{pid} |]
+                  Time.currentTime >>= markMerged pid sessionId
                 -- Transient: leave row untouched so next batch retries.
                 MergeFetchFailed _ -> Log.logAttention "Replay session merge transient fetch failure; will retry" ctxWithErr
                 MergePutFailed _ -> Log.logAttention "Replay session merge transient put failure; will retry" ctxWithErr
@@ -536,8 +750,7 @@ mergeOneSessionByKeys pid sessionId logSuffix afterMerge = do
                 then Log.logAttention "Post-merge UPDATE affected 0 rows; row vanished, skipping afterMerge" logCtx
                 else do
                   afterMerge now'
-                  let msg = if logSuffix == "" then "Merged replay session" else "Merged replay session " <> logSuffix
-                  Log.logInfo msg ("session_id", UUID.toText sessionId)
+                  Log.logInfo (maybe "Merged replay session" ("Merged replay session " <>) logSuffix) ("session_id", UUID.toText sessionId)
 
 
 -- | Merge the tracked S3 event files for a single session into one gzip-compressed file.
@@ -547,8 +760,8 @@ mergeOneSessionByKeys pid sessionId logSuffix afterMerge = do
 -- clobbering historical data.
 mergeOneSession :: Minio.ConnectInfo -> Minio.Bucket -> UUID.UUID -> [Text] -> IO ()
 mergeOneSession conn bucket sessionId fileKeys = do
-  let mergedKey = fromString $ toString $ UUID.toText sessionId <> "/merged.json.gz"
-      fileObjs = map (fromString . toString) fileKeys
+  let mergedKey = mergedKeyFor sessionId
+      fileObjs = map toObjKey fileKeys
 
   existingRes <- Minio.runMinio conn $ fetchRawForMerge bucket mergedKey True
   (mergedTs, mergedRaw) <- case existingRes of
@@ -574,8 +787,8 @@ mergeOneSession conn bucket sessionId fileKeys = do
     (firstErr : _) -> throwIO $ MergeFetchFailed firstErr
     [] -> unless (null decodeErrs) $ throwIO $ MergeDecodeFailed decodeErrs
 
-  -- Sort by first event timestamp, then concatenate raw JSON bytes.
-  -- Forces both results strictly so each is fully computed and released before the next.
+  -- Force `merged` then `compressed` in order so each is fully computed and released
+  -- before the next; otherwise `compressed` would retain the entire raw merged bytes.
   let sorted = sortWith fst $ (mergedTs, mergedRaw) : newRaws
       !merged = concatRawJsonArrays (map snd sorted)
       !compressed = GZip.compress merged
@@ -606,8 +819,6 @@ expireOldReplayData :: ATBackgroundCtx ()
 expireOldReplayData = do
   ctx <- Effectful.Reader.Static.ask @AuthContext
   now <- Time.currentTime
-  -- Retention window + batch size are compile-time constants, so inlining them
-  -- into the SQL avoids extra parameter-encoding ceremony.
   let cutoff = addUTCTime (negate $ fromIntegral replayRetentionDays * 86400) now
       batchLimit = fromIntegral expireReplayBatchSize :: Int64
   rows :: [(UUID.UUID, Projects.ProjectId, V.Vector Text)] <-
@@ -626,9 +837,8 @@ expireOldReplayData = do
     projectM <- Projects.projectById pid
     whenJust projectM $ \p -> do
       let (conn, bucket) = projectMinioConn ctx.config p
-          mergedKey = fromString $ toString $ UUID.toText sid <> "/merged.json.gz"
-          keyObjs = mergedKey : map (fromString . toString) (V.toList fileKeys)
-          logCtx = HM.fromList [("session_id", UUID.toText sid), ("project_id", pid.toText)]
+          keyObjs = mergedKeyFor sid : map toObjKey (V.toList fileKeys)
+          logCtx = sessionLogCtx pid sid
       -- Separate `runMinio` per key so one transport error doesn't abort siblings;
       -- mirrors the `fetchIndividuals` pattern elsewhere in this module.
       perKey <- liftIO $ forM keyObjs $ \o ->
@@ -638,7 +848,7 @@ expireOldReplayData = do
         _ : _ ->
           Log.logAttention
             "Replay expire: S3 delete failed, leaving row for retry"
-            (HM.insert "errors" (toText $ show $ map (\(o, e) -> (show o :: Text, toText $ displayException e)) fatal) logCtx)
+            (HM.insert "errors" (toText $ show $ map (bimap (show :: Minio.Object -> Text) (toText . displayException)) fatal) logCtx)
         [] -> do
           Hasql.interpExecute_
             [HI.sql| DELETE FROM projects.replay_sessions WHERE session_id = #{sid} AND project_id = #{pid} |]

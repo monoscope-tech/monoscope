@@ -187,6 +187,7 @@ library
       Pkg.Drain
       Pkg.EmailTemplates
       Pkg.ErrorFingerprint
+      Pkg.ErrorMetrics
       Pkg.ExtractionWorker
       Pkg.Mail
       Pkg.Parser
@@ -286,6 +287,8 @@ library
     , aeson-qq
     , annotated-exception
     , async
+    , attoparsec
+    , attoparsec-aeson
     , barbies
     , base
     , base16-bytestring
