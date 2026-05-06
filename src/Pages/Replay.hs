@@ -259,10 +259,11 @@ skipBracketed open close = AC.anyChar *> loop (1 :: Int)
 skipJsonString :: AC.Parser ()
 skipJsonString = AC.anyChar *> loop
   where
-    loop = AC.anyChar >>= \case
-      '"' -> pass
-      '\\' -> AC.anyChar *> loop
-      _ -> loop
+    loop =
+      AC.anyChar >>= \case
+        '"' -> pass
+        '\\' -> AC.anyChar *> loop
+        _ -> loop
 
 
 -- | Process a kafka batch of published replay messages. Sub-chunks the batch
