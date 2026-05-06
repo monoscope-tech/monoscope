@@ -16,6 +16,7 @@ module System.Logging (
 )
 where
 
+import Control.Exception.Safe qualified as Safe
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
@@ -35,7 +36,6 @@ import Effectful.Log qualified as Log
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import Log (LogLevel (..), Logger)
-import Control.Exception.Safe qualified as Safe
 import Log.Backend.StandardOutput.Bulk qualified as LogBulk
 import Log.Internal.Logger (Logger (..), withLogger)
 import OpenTelemetry.Context qualified as Context
