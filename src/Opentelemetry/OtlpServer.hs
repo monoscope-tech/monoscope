@@ -115,6 +115,24 @@ wireTypeErrorsRef :: IORef (HM.HashMap Text (Int, AE.Value), Int)
 wireTypeErrorsRef = unsafePerformIO $ newIORef (HM.empty, 0)
 
 
+-- | OTLP common.proto v1.10 added `AnyValue.string_value_strindex`, a reference
+-- into `ProfilesDictionary.string_table`. The spec scopes it to the Profiling
+-- signal and instructs non-profiling receivers to treat it as absent and emit
+-- a non-fatal warning. We don't ingest profiles, so we always treat it as
+-- absent. The counter is bumped from a pure context (anyValueToJSON), so we
+-- use the same unsafePerformIO+NOINLINE trick as `wireTypeErrorsRef` itself,
+-- and force evaluation by threading the value through.
+noteProfilingStrindex :: a -> a
+{-# NOINLINE noteProfilingStrindex #-}
+noteProfilingStrindex x = unsafePerformIO $ do
+  atomicModifyIORef' wireTypeErrorsRef $ \(m, dropped) ->
+    let example = AE.object ["spec" AE..= ("AnyValue.string_value_strindex is profiling-only per OTLP common.proto v1.10; treated as absent per spec" :: Text)]
+        bump Nothing = Just (1, example)
+        bump (Just (c, e)) = Just (c + 1, e)
+     in ((HM.alter bump "schema:profiling_strindex_in_telemetry" m, dropped), ())
+  pure x
+
+
 -- | Initialize periodic error logging
 initPeriodicErrorLogging :: Logger -> IO ()
 initPeriodicErrorLogging logger = void $ forkIO $ forever $ do
@@ -753,6 +771,9 @@ anyValueToJSON (Just av) = do
       -- if the bytes is a json string, decode it
       -- otherwise just return AE.string like it it nowl
       AE.String $ B64.extractBase64 $ B64.encodeBase64 bs
+    -- Profiling-signal-only field; per OTLP v1.10 spec, treat as absent for
+    -- non-profiling receivers. Counter feeds the periodic warning summary.
+    Just (PC.AnyValue'StringValueStrindex _) -> noteProfilingStrindex AE.Null
 
 
 -- Convert Resource to JSON

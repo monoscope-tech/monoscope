@@ -97,12 +97,29 @@ option go_package = "go.opentelemetry.io/proto/otlp/profiles/v1development";
 //
 
 // ProfilesDictionary represents the profiles data shared across the
-// entire message being sent.
+// entire message being sent. The following applies to all fields in this
+// message:
 //
-// Note that all fields in this message MUST have a zero value encoded as the first element.
-// This allows for _index fields pointing into the dictionary to use a 0 pointer value
-// to indicate 'null' / 'not set'. Unless otherwise defined, a 'zero value' message value
-// is one with all default field values, so as to minimize wire encoded size.
+// - A dictionary is an array of dictionary items. Users of the dictionary
+//   compactly reference the items using the index within the array.
+//
+// - A dictionary MUST have a zero value encoded as the first element. This
+//   allows for _index fields pointing into the dictionary to use a 0 pointer
+//   value to indicate 'null' / 'not set'. Unless otherwise defined, a 'zero
+//   value' message value is one with all default field values, so as to
+//   minimize wire encoded size.
+//
+// - There SHOULD NOT be dupes in a dictionary. The identity of dictionary
+//   items is based on their value, recursively as needed. If a particular
+//   implementation does emit duplicated items, it MUST NOT attempt to give them
+//   meaning based on the index or order. A profile processor may remove
+//   duplicate items and this MUST NOT have any observable effects for
+//   consumers.
+//
+// - There SHOULD NOT be orphaned (unreferenced) items in a dictionary. A
+//   profile processor may remove ("garbage-collect") orphaned items and this
+//   MUST NOT have any observable effects for consumers.
+//
 message ProfilesDictionary {
   // Mappings from address ranges to the image/binary/library mapped
   // into that address range referenced by locations via Location.mapping_index.
@@ -148,16 +165,6 @@ message ProfilesDictionary {
   //     "/http/user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_14_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/71.0.3578.98 Safari/537.36"
   //     "abc.com/myattribute": true
   //     "allocation_size": 128 bytes
-  //
-  // The attribute values SHOULD NOT contain empty values.
-  // The attribute values SHOULD NOT contain bytes values.
-  // The attribute values SHOULD NOT contain array values different than array of string values, bool values, int values,
-  // double values.
-  // The attribute values SHOULD NOT contain kvlist values.
-  // The behavior of software that receives attributes containing such values can be unpredictable.
-  // These restrictions can change in a minor release.
-  // The restrictions take origin from the OpenTelemetry specification:
-  // https://github.com/open-telemetry/opentelemetry-specification/blob/v1.47.0/specification/common/README.md#attribute.
   //
   // attribute_table[0] must always be zero value (KeyValueAndUnit{}) and present.
   repeated KeyValueAndUnit attribute_table = 6;
@@ -229,7 +236,8 @@ message ScopeProfiles {
   // is recorded in. Notably, the last part of the URL path is the version number of the
   // schema: http[s]://server[:port]/path/<version>. To learn more about Schema URL see
   // https://opentelemetry.io/docs/specs/otel/schemas/#schema-url
-  // This schema_url applies to all profiles in the "profiles" field.
+  // This schema_url applies to the data in the "scope" field and all profiles in the
+  // "profiles" field.
   string schema_url = 3;
 }
 
@@ -276,21 +284,20 @@ message Profile {
   // The following fields 3-12 are informational, do not affect
   // interpretation of results.
 
-  // Time of collection (UTC) represented as nanoseconds past the epoch.
+  // Time of collection. Value is UNIX Epoch time in nanoseconds since 00:00:00
+  // UTC on 1 January 1970.
   fixed64 time_unix_nano = 3;
-  // Duration of the profile, if a duration makes sense.
+  // Duration of the profile. For instant profiles like live heap snapshot, the
+  // duration can be zero but it may be preferable to set time_unix_nano to the
+  // process start time and duration_nano to the relative time when the profile
+  // was gathered. This ensures Sample.timestamps_unix_nano values such as
+  // allocation timestamp fall into the profile time range.
   uint64 duration_nano = 4;
   // The kind of events between sampled occurrences.
   // e.g [ "cpu","cycles" ] or [ "heap","bytes" ]
   ValueType period_type = 5;
   // The number of events between sampled occurrences.
   int64 period = 6;
-  // Free-form text associated with the profile. The text is displayed as is
-  // to the user by the tools that read profiles (e.g. by pprof). This field
-  // should not be used to store any machine-readable information, it is only
-  // for human-friendly content. The profile must stay functional if this field
-  // is cleaned.
-  repeated int32 comment_strindices = 7; // Indices into ProfilesDictionary.string_table.
 
   // A globally unique identifier for a profile. The ID is a 16-byte array. An ID with
   // all zeroes is considered invalid. It may be used for deduplication and signal
@@ -298,26 +305,39 @@ message Profile {
   // in this field as not equal, even if they represented the same object at an earlier
   // time.
   // This field is optional; an ID may be assigned to an ID-less profile in a later step.
-  bytes profile_id = 8;
+  bytes profile_id = 7;
 
   // The number of attributes that were discarded. Attributes
   // can be discarded because their keys are too long or because there are too many
   // attributes. If this value is 0, then no attributes were dropped.
-  uint32 dropped_attributes_count = 9;
+  uint32 dropped_attributes_count = 8;
 
-  // Specifies format of the original payload. Common values are defined in semantic conventions. [required if original_payload is present]
-  string original_payload_format = 10;
-
-  // Original payload can be stored in this field. This can be useful for users who want to get the original payload.
-  // Formats such as JFR are highly extensible and can contain more information than what is defined in this spec.
-  // Inclusion of original payload should be configurable by the user. Default behavior should be to not include the original payload.
-  // If the original payload is in pprof format, it SHOULD not be included in this field.
-  // The field is optional, however if it is present then equivalent converted data should be populated in other fields
-  // of this message as far as is practicable.
-  bytes original_payload = 11;
+  // The original payload format. See also original_payload. Optional, but the
+  // format and the bytes must be set or unset together.
+  //
+  // The allowed values for the format string are defined by the OpenTelemetry
+  // specification. Some examples are "jfr", "pprof", "linux_perf".
+  //
+  // The original payload may be optionally provided when the conversion to the
+  // OLTP format was done from a different format with some loss of the fidelity
+  // and the receiver may want to store the original payload to allow future
+  // lossless export or reinterpretation. Some examples of the original format
+  // are JFR (Java Flight Recorder), pprof, Linux perf.
+  //
+  // Even when the original payload is in a format that is semantically close to
+  // OTLP, such as pprof, a conversion may still be lossy in some cases (e.g. if
+  // the pprof file contains custom extensions or conventions).
+  //
+  // The original payload can be large in size, so including the original
+  // payload should be configurable by the profiler or collector options. The
+  // default behavior should be to not include the original payload.
+  string original_payload_format = 9;
+  // The original payload bytes. See also original_payload_format. Optional, but
+  // format and the bytes must be set or unset together.
+  bytes original_payload = 10;
 
   // References to attributes in attribute_table. [optional]
-  repeated int32 attribute_indices = 12;
+  repeated int32 attribute_indices = 11;
 }
 
 // A pointer from a profile Sample to a trace Span.
@@ -349,7 +369,11 @@ message ValueType {
 // both fields are populated, they MUST contain the same number of elements, and
 // the elements at the same index MUST refer to the same event.
 //
-// Examples of different ways of representing a sample with the total value of 10:
+// For the purposes of efficiently representing aggregated data observations, a Sample is regarded
+// as having a shared identity and an associated collection of per-observation data points.
+// Samples having the same identity SHOULD be combined by inserting timestamps and values to the data arrays.
+//
+// Examples of different ways ('shapes') of representing a sample with the total value of 10:
 //
 // Report of a stacktrace at 10 timestamps (consumers must assume the value is 1 for each point):
 //    values: []
@@ -362,20 +386,30 @@ message ValueType {
 // Report of a stacktrace at 4 timestamps where each point records a specific value:
 //    values: [2, 2, 3, 3]
 //    timestamps_unix_nano: [1, 2, 3, 4]
+//
+// All Samples for a Profile SHOULD have the same shape, i.e. all data observation series should consistently
+// adopt the same data recording style.
+//
 message Sample {
+
+  // A Sample's identity (i.e. 'primary key') is the tuple of {stack_index, set_of(attribute_indices), link_index}
+
   // Reference to stack in ProfilesDictionary.stack_table.
   int32 stack_index = 1;
-  // The type and unit of each value is defined by Profile.sample_type.
-  repeated int64 values = 2;
   // References to attributes in ProfilesDictionary.attribute_table. [optional]
-  repeated int32 attribute_indices = 3;
-
+  repeated int32 attribute_indices = 2;
   // Reference to link in ProfilesDictionary.link_table. [optional]
   // It can be unset / set to 0 if no link exists, as link_table[0] is always a 'null' default value.
-  int32 link_index = 4;
+  int32 link_index = 3;
 
-  // Timestamps associated with Sample represented in nanoseconds. These
-  // timestamps should fall within the Profile's time range.
+  // The following fields may contain per-observation data and do not form part of the Sample's identity.
+
+  // The type and unit of each value is defined by Profile.sample_type.
+  repeated int64 values = 4;
+  // Timestamps associated with Sample. Value is UNIX Epoch time in nanoseconds
+  // since 00:00:00 UTC on 1 January 1970. The timestamps should fall within the
+  // [Profile.time_unix_nano, Profile.time_unix_nano + Profile.duration_nano)
+  // time range.
   repeated fixed64 timestamps_unix_nano = 5;
 }
 

@@ -88,10 +88,30 @@ fix-lint:
 	find ./src -name '*.hs' | xargs -L1 hlint --refactor --refactor-options="--inplace"
 
 gen-proto:
-	protoc --plugin=protoc-gen-haskell=`which proto-lens-protoc` \
+	cd proto && protoc --plugin=protoc-gen-haskell=`which proto-lens-protoc` \
     --haskell_out=. \
     --proto_path=. \
-    opentelemetry/**/*.proto
+    $$(find opentelemetry -name '*.proto')
+
+# Sync proto/opentelemetry/ from upstream open-telemetry/opentelemetry-proto.
+# Defaults to the latest release tag; override with `make sync-otel-proto OTEL_PROTO_REF=main`.
+# Only the `opentelemetry/` tree is copied; nothing else from upstream lands here.
+sync-otel-proto:
+	@set -euo pipefail; \
+	REF=$${OTEL_PROTO_REF:-$$(git ls-remote --tags --refs https://github.com/open-telemetry/opentelemetry-proto.git \
+		| awk -F/ '{print $$NF}' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | sort -V | tail -1)}; \
+	echo "syncing opentelemetry-proto @ $$REF"; \
+	TMP=$$(mktemp -d); trap "rm -rf $$TMP" EXIT; \
+	git -C $$TMP clone --depth=1 --branch=$$REF https://github.com/open-telemetry/opentelemetry-proto.git src >/dev/null 2>&1; \
+	rm -rf proto/opentelemetry; \
+	mkdir -p proto/opentelemetry; \
+	cp -R $$TMP/src/opentelemetry/. proto/opentelemetry/; \
+	echo "$$REF" > proto/opentelemetry/.version; \
+	echo "wrote proto/opentelemetry/.version=$$REF — run 'make gen-proto && hpack' next"
+
+# Convenience alias — Haskell bindings are regenerated automatically by
+# proto-lens-setup at cabal build time, so syncing the .proto files is enough.
+update-otel-proto: sync-otel-proto
 
 timescaledb-docker:
 	docker run -it --rm --name=monoscope -p 5432:5432/tcp -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=monoscope -v $$HOME/pg-data:/home/postgres/pgdata \
@@ -159,4 +179,4 @@ test-e2e-real: e2e-install
 test-e2e-ui: e2e-install
 	cd e2e && npx playwright test --ui
 
-.PHONY: all test fmt lint fix-lint live-reload live-reload-cli live-reload-doctests build-chart-cli build-chart-cli-linux tmux-live-reload tmux-live-reload-cli web-components-watch e2e-install test-e2e test-e2e-real test-e2e-ui
+.PHONY: all test fmt lint fix-lint live-reload live-reload-cli live-reload-doctests build-chart-cli build-chart-cli-linux tmux-live-reload tmux-live-reload-cli web-components-watch e2e-install test-e2e test-e2e-real test-e2e-ui gen-proto sync-otel-proto update-otel-proto

@@ -78,13 +78,13 @@ message ScopeLogs {
   // is recorded in. Notably, the last part of the URL path is the version number of the
   // schema: http[s]://server[:port]/path/<version>. To learn more about Schema URL see
   // https://opentelemetry.io/docs/specs/otel/schemas/#schema-url
-  // This schema_url applies to all logs in the "logs" field.
+  // This schema_url applies to the data in the "scope" field and all logs in the
+  // "log_records" field.
   string schema_url = 3;
 }
 
 // Possible values for LogRecord.SeverityNumber.
 enum SeverityNumber {
-  // UNSPECIFIED is the default SeverityNumber, it MUST NOT be used.
   SEVERITY_NUMBER_UNSPECIFIED = 0;
   SEVERITY_NUMBER_TRACE  = 1;
   SEVERITY_NUMBER_TRACE2 = 2;
@@ -174,6 +174,7 @@ message LogRecord {
   // Additional attributes that describe the specific event occurrence. [Optional].
   // Attribute keys MUST be unique (it is not allowed to have more than one
   // attribute with the same key).
+  // The behavior of software that receives duplicated keys can be unpredictable.
   repeated opentelemetry.proto.common.v1.KeyValue attributes = 6;
   uint32 dropped_attributes_count = 7;
 
