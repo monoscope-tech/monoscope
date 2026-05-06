@@ -26,7 +26,6 @@ import OpenTelemetry.Instrumentation.Wai (newOpenTelemetryWaiMiddleware')
 import OpenTelemetry.Trace (TracerProvider)
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.Replay (processReplayEvents)
-import System.TimeManager (TimeoutThread)
 import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Pkg.Queue qualified as Queue
 import ProcessMessage (processMessages)
@@ -40,6 +39,7 @@ import System.Config (
   getAppContext,
  )
 import System.Logging qualified as Logging
+import System.TimeManager (TimeoutThread)
 import System.Types (effToServantHandler, runBackground)
 import Web.Auth qualified as Auth
 import Web.Routes qualified as Routes
