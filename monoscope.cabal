@@ -113,6 +113,7 @@ extra-source-files:
     static/migrations/0085_issues_last_notified_at.sql
     static/migrations/0086_daily_usage_window_timestamps.sql
     static/migrations/0087_apis_hosts.sql
+    static/migrations/0088_message_size_tracking.sql
 
 source-repository head
   type: git
@@ -397,6 +398,7 @@ library
     , text-builder-linear
     , text-display
     , time
+    , time-manager
     , tmp-postgres
     , typed-process
     , tz

@@ -26,6 +26,7 @@ import OpenTelemetry.Instrumentation.Wai (newOpenTelemetryWaiMiddleware')
 import OpenTelemetry.Trace (TracerProvider)
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.Replay (processReplayEvents)
+import System.TimeManager (TimeoutThread)
 import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Pkg.Queue qualified as Queue
 import ProcessMessage (processMessages)
@@ -75,7 +76,9 @@ runServer :: IOE :> es => LogBase.Logger -> AuthContext -> TracerProvider -> Eff
 runServer appLogger env tp = do
   loggingMiddleware <- Logging.runLog (show env.config.environment) appLogger env.config.logLevel WaiLog.mkLogMiddleware
   let server = mkServer appLogger env tp
-  let onExc _ exception = runLogT "monoscope" appLogger LogAttention do
+  -- Warp's request-handler threads can outlive `waitAnyCancel` and call
+  -- onException after the bulk logger has shut down; swallow that.
+  let onExc _ exception = void $ Safe.tryAny $ runLogT "monoscope" appLogger LogAttention do
         LogBase.logAttention "Unhandled exception" (AE.object ["exception" AE..= show @String exception])
   let onExcResp _ = responseLBS status500 [("Content-Type", "text/html; charset=utf-8")] (Auth.errorPageHtml env.config 500)
   let warpSettings =
@@ -184,13 +187,16 @@ logException envTxt logger logLevel name msg =
     $ LogBase.logAttention ("Service thread " <> name) msg
 
 
--- | Supervisor: restarts a service on crash with 1s delay. Re-throws async exceptions for clean shutdown.
+-- | Supervisor: restarts on crash with 1s delay. Rethrows async exceptions for
+-- shutdown, except `TimeoutThread` (per-HTTP-op timeout, not a shutdown signal).
 supervise :: (Text -> Text -> IO ()) -> Text -> IO () -> IO ()
 supervise logExc name action = forever $ do
-  Safe.tryAny action >>= \case
+  Safe.tryAsync action >>= \case
     Right () -> logExc name "exited cleanly, restarting"
-    Left e | Safe.isAsyncException e -> Safe.throwIO e
-    Left e -> logExc name ("crashed: " <> show @Text e)
+    Left e
+      | Just (_ :: TimeoutThread) <- Safe.fromException e -> logExc name ("recoverable timeout: " <> show @Text e)
+      | Safe.isAsyncException e -> Safe.throwIO e
+      | otherwise -> logExc name ("crashed: " <> show @Text e)
   threadDelay 1_000_000
 
 
