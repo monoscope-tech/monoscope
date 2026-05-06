@@ -1142,7 +1142,12 @@ apiFacets pid sinceM fromM toM fieldM = do
       defaultTo = fromMaybe now toT
   summaryM <- Fields.getFacetSummary pid "otel_logs_and_spans" defaultFrom defaultTo
   let Fields.FacetData facetMap = maybe (Fields.FacetData mempty) (.facetJson) summaryM
-      asAeson = AE.toJSON facetMap
+      -- Storage uses `___` as the path separator (raw column names like
+      -- `resource___service___name`); the public API contract is dotted.
+      dotKey = AEK.fromText . T.replace "___" "." . AEK.toText
+      asAeson = case AE.toJSON facetMap of
+        AE.Object o -> AE.Object (AEKM.mapKeyVal dotKey (\x -> x) o)
+        v -> v
       filtered = case (fieldM, asAeson) of
         (Just f, AE.Object o) ->
           let k = AEK.fromText f
