@@ -1,0 +1,38 @@
+{
+  "attributes": [
+    {
+      "key": "full_message",
+      "value": {
+        "stringValue": "java.net.ConnectException: Connection refused at..."
+      }
+    },
+    {
+      "key": "host",
+      "value": {
+        "stringValue": "web-1"
+      }
+    },
+    {
+      "key": "log.original",
+      "value": {
+        "stringValue": "{\"version\":\"1.1\",\"host\":\"web-1\",\"short_message\":\"Connection refused\",\"full_message\":\"java.net.ConnectException: Connection refused at...\",\"level\":3}"
+      }
+    },
+    {
+      "key": "short_message",
+      "value": {
+        "stringValue": "Connection refused"
+      }
+    },
+    {
+      "key": "version",
+      "value": {
+        "stringValue": "1.1"
+      }
+    }
+  ],
+  "body": {
+    "stringValue": "Connection refused"
+  },
+  "observedTimeUnixNano": "1700000000000000000"
+}

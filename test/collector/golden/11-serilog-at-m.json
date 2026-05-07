@@ -1,0 +1,38 @@
+{
+  "attributes": [
+    {
+      "key": "@l",
+      "value": {
+        "stringValue": "Information"
+      }
+    },
+    {
+      "key": "@m",
+      "value": {
+        "stringValue": "Order processed"
+      }
+    },
+    {
+      "key": "@t",
+      "value": {
+        "stringValue": "2023-11-14T22:00:00Z"
+      }
+    },
+    {
+      "key": "OrderId",
+      "value": {
+        "doubleValue": 1234
+      }
+    },
+    {
+      "key": "log.original",
+      "value": {
+        "stringValue": "{\"@l\":\"Information\",\"@m\":\"Order processed\",\"@t\":\"2023-11-14T22:00:00Z\",\"OrderId\":1234}"
+      }
+    }
+  ],
+  "body": {
+    "stringValue": "Order processed"
+  },
+  "observedTimeUnixNano": "1700000000000000000"
+}

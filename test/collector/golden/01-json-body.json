@@ -1,0 +1,28 @@
+{
+  "attributes": [
+    {
+      "key": "log.original",
+      "value": {
+        "stringValue": "{\"level\":\"error\",\"msg\":\"db down\",\"user_id\":42,\"trace\":\"abc\"}"
+      }
+    },
+    {
+      "key": "trace",
+      "value": {
+        "stringValue": "abc"
+      }
+    },
+    {
+      "key": "user_id",
+      "value": {
+        "doubleValue": 42
+      }
+    }
+  ],
+  "body": {
+    "stringValue": "db down"
+  },
+  "observedTimeUnixNano": "1700000000000000000",
+  "severityNumber": 17,
+  "severityText": "error"
+}

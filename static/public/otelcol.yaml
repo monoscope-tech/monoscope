@@ -58,6 +58,101 @@ processors:
     targets:
       - https://opentelemetry.io/schemas/1.41.0
 
+  # Tier-1 log parsing. Cheap, deterministic OTTL transforms applied to every
+  # incoming log record. Anything requiring stateful parsing, balanced-brace
+  # extraction, or learned templates lives in the Haskell tier-2 worker.
+  #
+  # Invariants this processor preserves:
+  #   - never overwrite a value the SDK set deliberately (uses `insert` merge,
+  #     and gates every set on the destination being unset)
+  #   - the raw body is always recoverable via attributes["log.original"]
+  #   - parse failures are silent (error_mode: ignore) — Tier 2 still sees the
+  #     untouched body
+  transform/tier1:
+    error_mode: ignore
+    log_statements:
+      - context: log
+        statements:
+          # Preserve raw body before any mutation. String-bodied logs only;
+          # already-structured (map) bodies are passed through untouched.
+          - set(attributes["log.original"], body) where IsString(body) and attributes["log.original"] == nil
+
+          # Whole-body JSON. Only objects (`{...}`) — arrays and scalars are
+          # not log records. `insert` guarantees we don't clobber SDK attrs.
+          - set(cache["parsed"], ParseJSON(body)) where IsString(body) and IsMatch(body, "^\\s*\\{")
+          - merge_maps(attributes, cache["parsed"], "insert") where cache["parsed"] != nil
+
+          # Whole-body logfmt. Skip if JSON already parsed, and require at
+          # least one `key=value` pair at the start so we don't false-match
+          # on free-form prose.
+          - set(cache["parsed"], ParseKeyValue(body, "=", " ")) where cache["parsed"] == nil and IsString(body) and IsMatch(body, "^[A-Za-z0-9_.-]+=\\S")
+          - merge_maps(attributes, cache["parsed"], "insert") where cache["parsed"] != nil
+
+          # Severity text — pull from the usual aliases when the SDK didn't
+          # set the dedicated severity_text field.
+          - set(severity_text, attributes["level"])     where severity_text == "" and attributes["level"] != nil
+          - set(severity_text, attributes["severity"])  where severity_text == "" and attributes["severity"] != nil
+          - set(severity_text, attributes["log.level"]) where severity_text == "" and attributes["log.level"] != nil
+
+          # Severity number. Only fill when SDK left it UNSPECIFIED (0).
+          # Anchored prefix match so "informational" → INFO, "errno" → ERROR.
+          - set(severity_number, SEVERITY_NUMBER_TRACE) where severity_number == 0 and IsMatch(severity_text, "(?i)^trace")
+          - set(severity_number, SEVERITY_NUMBER_DEBUG) where severity_number == 0 and IsMatch(severity_text, "(?i)^(debug|dbg)")
+          - set(severity_number, SEVERITY_NUMBER_INFO)  where severity_number == 0 and IsMatch(severity_text, "(?i)^(info|inf|notice)")
+          - set(severity_number, SEVERITY_NUMBER_WARN)  where severity_number == 0 and IsMatch(severity_text, "(?i)^(warn|warning)")
+          - set(severity_number, SEVERITY_NUMBER_ERROR) where severity_number == 0 and IsMatch(severity_text, "(?i)^(err|error|severe)")
+          - set(severity_number, SEVERITY_NUMBER_FATAL) where severity_number == 0 and IsMatch(severity_text, "(?i)^(fatal|crit|critical|emerg|panic|alert)")
+
+          # Timestamp extraction — only when SDK didn't set `time`. We probe
+          # the common attribute names, then try RFC3339 / RFC3339Nano /
+          # `YYYY-MM-DD HH:MM:SS`. Time() returns the zero value on miss, so
+          # successive attempts are safe.
+          - set(cache["ts"], attributes["timestamp"])  where time_unix_nano == 0 and attributes["timestamp"] != nil
+          - set(cache["ts"], attributes["@timestamp"]) where time_unix_nano == 0 and cache["ts"] == nil and attributes["@timestamp"] != nil
+          - set(cache["ts"], attributes["ts"])         where time_unix_nano == 0 and cache["ts"] == nil and attributes["ts"] != nil
+          - set(cache["ts"], attributes["time"])       where time_unix_nano == 0 and cache["ts"] == nil and attributes["time"] != nil
+          - set(time, Time(cache["ts"], "%Y-%m-%dT%H:%M:%S.%fZ")) where cache["ts"] != nil and time_unix_nano == 0
+          - set(time, Time(cache["ts"], "%Y-%m-%dT%H:%M:%SZ"))    where cache["ts"] != nil and time_unix_nano == 0
+          - set(time, Time(cache["ts"], "%Y-%m-%d %H:%M:%S"))     where cache["ts"] != nil and time_unix_nano == 0
+          # Sanity guard: parsed timestamps more than 24h from observed_time
+          # mean a bad client clock or wrong format — fall back to observed.
+          - set(time_unix_nano, observed_time_unix_nano) where time_unix_nano != 0 and (time_unix_nano - observed_time_unix_nano > 86400000000000 or observed_time_unix_nano - time_unix_nano > 86400000000000)
+
+          # Promote a "message-ish" field to body. Body is the canonical OTel
+          # field for the log line's text; we want the human-readable string
+          # there, not the raw JSON (which stays in attributes["log.original"]).
+          # The guard `body == attributes["log.original"]` ensures only the
+          # first match wins — once body is replaced, every later statement
+          # short-circuits.
+          #
+          # Intentionally limited to the top 10 most-common aliases — the full
+          # ~100-key list (Utils.messageKeys) would add ~10µs per record, and
+          # the long-tail aliases are still handled at display time by
+          # extractMessageFromLog. These ten must stay a *prefix* of
+          # Utils.messageKeys (priority order matters); enforced by
+          # test/collector/check-drift.sh.
+          - set(body, attributes["msg"]) where body == attributes["log.original"] and IsString(attributes["msg"])
+          - set(body, attributes["message"]) where body == attributes["log.original"] and IsString(attributes["message"])
+          - set(body, attributes["@message"]) where body == attributes["log.original"] and IsString(attributes["@message"])
+          - set(body, attributes["@m"]) where body == attributes["log.original"] and IsString(attributes["@m"])
+          - set(body, attributes["short_message"]) where body == attributes["log.original"] and IsString(attributes["short_message"])
+          - set(body, attributes["full_message"]) where body == attributes["log.original"] and IsString(attributes["full_message"])
+          - set(body, attributes["raw_message"]) where body == attributes["log.original"] and IsString(attributes["raw_message"])
+          - set(body, attributes["original_message"]) where body == attributes["log.original"] and IsString(attributes["original_message"])
+          - set(body, attributes["event"]) where body == attributes["log.original"] and IsString(attributes["event"])
+          - set(body, attributes["text"]) where body == attributes["log.original"] and IsString(attributes["text"])
+
+          # Drop the keys we promoted into first-class fields. Keeps the
+          # attribute set tight and avoids double-display in the UI.
+          - delete_key(attributes, "level")
+          - delete_key(attributes, "severity")
+          - delete_key(attributes, "log.level")
+          - delete_key(attributes, "timestamp")
+          - delete_key(attributes, "@timestamp")
+          - delete_key(attributes, "ts")
+          - delete_key(attributes, "msg")
+          - delete_key(attributes, "message")
+
 exporters:
   debug:
     verbosity: detailed
@@ -92,7 +187,7 @@ service:
   pipelines:
     logs:
       receivers: [otlp]
-      processors: [attributes, resource, schema, memory_limiter, batch]
+      processors: [attributes, resource, schema, transform/tier1, memory_limiter, batch]
       exporters: [kafka]
     metrics:
       receivers: [otlp]

@@ -1,0 +1,18 @@
+{
+  "resourceLogs": [{
+    "resource": {
+      "attributes": [{"key": "service.name", "value": {"stringValue": "tier1-test"}}]
+    },
+    "scopeLogs": [{
+      "scope": {"name": "11-serilog-at-m"},
+      "logRecords": [{
+        "timeUnixNano": "0",
+        "observedTimeUnixNano": "1700000000000000000",
+        "severityNumber": 0,
+        "severityText": "",
+        "body": {"stringValue": "{\"@l\":\"Information\",\"@m\":\"Order processed\",\"@t\":\"2023-11-14T22:00:00Z\",\"OrderId\":1234}"},
+        "attributes": []
+      }]
+    }]
+  }]
+}

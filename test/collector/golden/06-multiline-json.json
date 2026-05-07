@@ -1,0 +1,22 @@
+{
+  "attributes": [
+    {
+      "key": "count",
+      "value": {
+        "doubleValue": 3
+      }
+    },
+    {
+      "key": "log.original",
+      "value": {
+        "stringValue": "{\n  \"level\": \"info\",\n  \"msg\": \"line one\\nline two\",\n  \"count\": 3\n}"
+      }
+    }
+  ],
+  "body": {
+    "stringValue": "line one\nline two"
+  },
+  "observedTimeUnixNano": "1700000000000000000",
+  "severityNumber": 9,
+  "severityText": "info"
+}

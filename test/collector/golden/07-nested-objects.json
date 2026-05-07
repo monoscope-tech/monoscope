@@ -1,0 +1,73 @@
+{
+  "attributes": [
+    {
+      "key": "log.original",
+      "value": {
+        "stringValue": "{\"level\":\"info\",\"msg\":\"login\",\"user\":{\"id\":42,\"name\":\"alice\",\"roles\":[\"admin\",\"user\"]},\"meta\":{\"ip\":\"10.0.0.1\",\"region\":\"eu-west-1\"}}"
+      }
+    },
+    {
+      "key": "meta",
+      "value": {
+        "kvlistValue": {
+          "values": [
+            {
+              "key": "ip",
+              "value": {
+                "stringValue": "10.0.0.1"
+              }
+            },
+            {
+              "key": "region",
+              "value": {
+                "stringValue": "eu-west-1"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "key": "user",
+      "value": {
+        "kvlistValue": {
+          "values": [
+            {
+              "key": "id",
+              "value": {
+                "doubleValue": 42
+              }
+            },
+            {
+              "key": "name",
+              "value": {
+                "stringValue": "alice"
+              }
+            },
+            {
+              "key": "roles",
+              "value": {
+                "arrayValue": {
+                  "values": [
+                    {
+                      "stringValue": "admin"
+                    },
+                    {
+                      "stringValue": "user"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "body": {
+    "stringValue": "login"
+  },
+  "observedTimeUnixNano": "1700000000000000000",
+  "severityNumber": 9,
+  "severityText": "info"
+}

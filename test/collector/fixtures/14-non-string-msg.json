@@ -1,0 +1,18 @@
+{
+  "resourceLogs": [{
+    "resource": {
+      "attributes": [{"key": "service.name", "value": {"stringValue": "tier1-test"}}]
+    },
+    "scopeLogs": [{
+      "scope": {"name": "14-non-string-msg"},
+      "logRecords": [{
+        "timeUnixNano": "0",
+        "observedTimeUnixNano": "1700000000000000000",
+        "severityNumber": 0,
+        "severityText": "",
+        "body": {"stringValue": "{\"msg\":{\"nested\":\"obj\"},\"message\":\"fallback string\"}"},
+        "attributes": []
+      }]
+    }]
+  }]
+}

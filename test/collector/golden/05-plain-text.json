@@ -1,0 +1,14 @@
+{
+  "attributes": [
+    {
+      "key": "log.original",
+      "value": {
+        "stringValue": "GET /health 200 5ms"
+      }
+    }
+  ],
+  "body": {
+    "stringValue": "GET /health 200 5ms"
+  },
+  "observedTimeUnixNano": "1700000000000000000"
+}

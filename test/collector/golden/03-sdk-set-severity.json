@@ -1,0 +1,22 @@
+{
+  "attributes": [
+    {
+      "key": "extra",
+      "value": {
+        "stringValue": "x"
+      }
+    },
+    {
+      "key": "log.original",
+      "value": {
+        "stringValue": "{\"level\":\"error\",\"msg\":\"sdk-info-wins\",\"extra\":\"x\"}"
+      }
+    }
+  ],
+  "body": {
+    "stringValue": "sdk-info-wins"
+  },
+  "observedTimeUnixNano": "1700000000000000000",
+  "severityNumber": 9,
+  "severityText": "info"
+}

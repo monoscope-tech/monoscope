@@ -1,0 +1,17 @@
+{
+  "attributes": [
+    {
+      "key": "log.original",
+      "value": {
+        "stringValue": "{\"timestamp\":\"2023-11-14T22:00:00.123456789Z\",\"level\":\"info\",\"msg\":\"in window\"}"
+      }
+    }
+  ],
+  "body": {
+    "stringValue": "in window"
+  },
+  "observedTimeUnixNano": "1700000000000000000",
+  "severityNumber": 9,
+  "severityText": "info",
+  "timeUnixNano": "1699999200123456789"
+}

@@ -1,0 +1,18 @@
+{
+  "resourceLogs": [{
+    "resource": {
+      "attributes": [{"key": "service.name", "value": {"stringValue": "tier1-test"}}]
+    },
+    "scopeLogs": [{
+      "scope": {"name": "10-event-alias"},
+      "logRecords": [{
+        "timeUnixNano": "0",
+        "observedTimeUnixNano": "1700000000000000000",
+        "severityNumber": 0,
+        "severityText": "",
+        "body": {"stringValue": "{\"level\":\"warn\",\"event\":\"user clicked checkout\",\"user_id\":42}"},
+        "attributes": []
+      }]
+    }]
+  }]
+}

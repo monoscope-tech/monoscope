@@ -1,0 +1,14 @@
+{
+  "attributes": [
+    {
+      "key": "log.original",
+      "value": {
+        "stringValue": "{\"msg\":{\"nested\":\"obj\"},\"message\":\"fallback string\"}"
+      }
+    }
+  ],
+  "body": {
+    "stringValue": "fallback string"
+  },
+  "observedTimeUnixNano": "1700000000000000000"
+}

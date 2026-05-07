@@ -1,0 +1,18 @@
+{
+  "resourceLogs": [{
+    "resource": {
+      "attributes": [{"key": "service.name", "value": {"stringValue": "tier1-test"}}]
+    },
+    "scopeLogs": [{
+      "scope": {"name": "09-syslog-pri"},
+      "logRecords": [{
+        "timeUnixNano": "0",
+        "observedTimeUnixNano": "1700000000000000000",
+        "severityNumber": 0,
+        "severityText": "",
+        "body": {"stringValue": "<14>Oct 11 22:14:15 myhost sshd[1234]: Accepted password for alice from 10.0.0.1"},
+        "attributes": []
+      }]
+    }]
+  }]
+}

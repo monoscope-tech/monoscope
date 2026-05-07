@@ -1,0 +1,35 @@
+{
+  "resourceLogs": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "tier1-test"
+            }
+          }
+        ]
+      },
+      "scopeLogs": [
+        {
+          "scope": {
+            "name": "03-sdk-set-severity"
+          },
+          "logRecords": [
+            {
+              "timeUnixNano": "0",
+              "observedTimeUnixNano": "1700000000000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "{\"level\":\"error\",\"msg\":\"sdk-info-wins\",\"extra\":\"x\"}"
+              },
+              "attributes": []
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

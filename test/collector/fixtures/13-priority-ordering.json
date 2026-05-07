@@ -1,0 +1,18 @@
+{
+  "resourceLogs": [{
+    "resource": {
+      "attributes": [{"key": "service.name", "value": {"stringValue": "tier1-test"}}]
+    },
+    "scopeLogs": [{
+      "scope": {"name": "13-priority-ordering"},
+      "logRecords": [{
+        "timeUnixNano": "0",
+        "observedTimeUnixNano": "1700000000000000000",
+        "severityNumber": 0,
+        "severityText": "",
+        "body": {"stringValue": "{\"msg\":\"WINS_msg\",\"message\":\"loses_message\",\"event\":\"loses_event\",\"text\":\"loses_text\"}"},
+        "attributes": []
+      }]
+    }]
+  }]
+}

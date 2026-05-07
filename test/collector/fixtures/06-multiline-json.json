@@ -1,0 +1,18 @@
+{
+  "resourceLogs": [{
+    "resource": {
+      "attributes": [{"key": "service.name", "value": {"stringValue": "tier1-test"}}]
+    },
+    "scopeLogs": [{
+      "scope": {"name": "06-multiline-json"},
+      "logRecords": [{
+        "timeUnixNano": "0",
+        "observedTimeUnixNano": "1700000000000000000",
+        "severityNumber": 0,
+        "severityText": "",
+        "body": {"stringValue": "{\n  \"level\": \"info\",\n  \"msg\": \"line one\\nline two\",\n  \"count\": 3\n}"},
+        "attributes": []
+      }]
+    }]
+  }]
+}

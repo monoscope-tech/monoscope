@@ -1,0 +1,28 @@
+{
+  "attributes": [
+    {
+      "key": "event",
+      "value": {
+        "stringValue": "user clicked checkout"
+      }
+    },
+    {
+      "key": "log.original",
+      "value": {
+        "stringValue": "{\"level\":\"warn\",\"event\":\"user clicked checkout\",\"user_id\":42}"
+      }
+    },
+    {
+      "key": "user_id",
+      "value": {
+        "doubleValue": 42
+      }
+    }
+  ],
+  "body": {
+    "stringValue": "user clicked checkout"
+  },
+  "observedTimeUnixNano": "1700000000000000000",
+  "severityNumber": 13,
+  "severityText": "warn"
+}

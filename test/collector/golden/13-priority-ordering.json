@@ -1,0 +1,26 @@
+{
+  "attributes": [
+    {
+      "key": "event",
+      "value": {
+        "stringValue": "loses_event"
+      }
+    },
+    {
+      "key": "log.original",
+      "value": {
+        "stringValue": "{\"msg\":\"WINS_msg\",\"message\":\"loses_message\",\"event\":\"loses_event\",\"text\":\"loses_text\"}"
+      }
+    },
+    {
+      "key": "text",
+      "value": {
+        "stringValue": "loses_text"
+      }
+    }
+  ],
+  "body": {
+    "stringValue": "WINS_msg"
+  },
+  "observedTimeUnixNano": "1700000000000000000"
+}

@@ -1,0 +1,35 @@
+{
+  "resourceLogs": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "tier1-test"
+            }
+          }
+        ]
+      },
+      "scopeLogs": [
+        {
+          "scope": {
+            "name": "02-logfmt-body"
+          },
+          "logRecords": [
+            {
+              "timeUnixNano": "0",
+              "observedTimeUnixNano": "1700000000000000000",
+              "severityNumber": 0,
+              "severityText": "",
+              "body": {
+                "stringValue": "level=warn msg=\"slow query\" duration_ms=1532 service=api"
+              },
+              "attributes": []
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "resourceLogs": [{
+    "resource": {
+      "attributes": [{"key": "service.name", "value": {"stringValue": "tier1-test"}}]
+    },
+    "scopeLogs": [{
+      "scope": {"name": "08-rfc3339nano-in-window"},
+      "logRecords": [{
+        "timeUnixNano": "0",
+        "observedTimeUnixNano": "1700000000000000000",
+        "severityNumber": 0,
+        "severityText": "",
+        "body": {"stringValue": "{\"timestamp\":\"2023-11-14T22:00:00.123456789Z\",\"level\":\"info\",\"msg\":\"in window\"}"},
+        "attributes": []
+      }]
+    }]
+  }]
+}

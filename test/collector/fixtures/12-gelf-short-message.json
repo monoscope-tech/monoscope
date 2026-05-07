@@ -1,0 +1,18 @@
+{
+  "resourceLogs": [{
+    "resource": {
+      "attributes": [{"key": "service.name", "value": {"stringValue": "tier1-test"}}]
+    },
+    "scopeLogs": [{
+      "scope": {"name": "12-gelf-short-message"},
+      "logRecords": [{
+        "timeUnixNano": "0",
+        "observedTimeUnixNano": "1700000000000000000",
+        "severityNumber": 0,
+        "severityText": "",
+        "body": {"stringValue": "{\"version\":\"1.1\",\"host\":\"web-1\",\"short_message\":\"Connection refused\",\"full_message\":\"java.net.ConnectException: Connection refused at...\",\"level\":3}"},
+        "attributes": []
+      }]
+    }]
+  }]
+}

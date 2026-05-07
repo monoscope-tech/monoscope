@@ -1,0 +1,15 @@
+{
+  "attributes": [
+    {
+      "key": "log.original",
+      "value": {
+        "stringValue": "{\"timestamp\":\"1990-01-01T00:00:00Z\",\"msg\":\"old clock\"}"
+      }
+    }
+  ],
+  "body": {
+    "stringValue": "old clock"
+  },
+  "observedTimeUnixNano": "1700000000000000000",
+  "timeUnixNano": "1700000000000000000"
+}

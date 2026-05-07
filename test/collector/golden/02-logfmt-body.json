@@ -1,0 +1,28 @@
+{
+  "attributes": [
+    {
+      "key": "duration_ms",
+      "value": {
+        "stringValue": "1532"
+      }
+    },
+    {
+      "key": "log.original",
+      "value": {
+        "stringValue": "level=warn msg=\"slow query\" duration_ms=1532 service=api"
+      }
+    },
+    {
+      "key": "service",
+      "value": {
+        "stringValue": "api"
+      }
+    }
+  ],
+  "body": {
+    "stringValue": "slow query"
+  },
+  "observedTimeUnixNano": "1700000000000000000",
+  "severityNumber": 13,
+  "severityText": "warn"
+}

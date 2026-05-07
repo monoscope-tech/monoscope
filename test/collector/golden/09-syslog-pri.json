@@ -1,0 +1,14 @@
+{
+  "attributes": [
+    {
+      "key": "log.original",
+      "value": {
+        "stringValue": "<14>Oct 11 22:14:15 myhost sshd[1234]: Accepted password for alice from 10.0.0.1"
+      }
+    }
+  ],
+  "body": {
+    "stringValue": "<14>Oct 11 22:14:15 myhost sshd[1234]: Accepted password for alice from 10.0.0.1"
+  },
+  "observedTimeUnixNano": "1700000000000000000"
+}

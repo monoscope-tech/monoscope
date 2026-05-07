@@ -1,0 +1,30 @@
+# Tier-1 test collector config. The `transform/tier1` block is injected at
+# test time from static/public/otelcol.yaml via yq, so this file can never
+# drift from production.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  transform/tier1: {}  # injected at runtime — see test/collector/run.sh
+
+exporters:
+  file:
+    path: /out/logs.jsonl
+    rotation:
+      max_megabytes: 100
+      max_days: 1
+      max_backups: 1
+    format: json
+
+service:
+  telemetry:
+    logs:
+      level: warn
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors: [transform/tier1]
+      exporters: [file]

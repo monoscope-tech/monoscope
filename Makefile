@@ -69,6 +69,15 @@ test-doctests:
 test-integration:
 	LOG_LEVEL=attention USE_EXTERNAL_DB=true cabal test integration-tests -j --ghc-options="-O0" --test-show-details=direct --test-options='--color --jobs=$(NCPUS)'
 
+test-collector-tier1:
+	./test/collector/run.sh
+
+test-collector-drift:
+	./test/collector/check-drift.sh
+
+bench-collector-tier1:
+	./test/collector/bench.sh
+
 live-test-unit:
 	ghcid --test 'cabal test monoscope:unit-tests --test-show-details=streaming'
 
