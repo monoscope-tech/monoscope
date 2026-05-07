@@ -210,8 +210,8 @@ spec = aroundAll withTestResources do
         Log.LogsGetJson r -> do
           -- A (matched) + B + C (descendants). E and D share trace_id but
           -- are not in A's subtree — must not bleed in.
-          V.length r.logsData `shouldBe` 3
-          r.count `shouldBe` 1 -- predicate matched exactly one row
+          V.length r.logsData `shouldBe` 3 -- A + descendants B, C
+          r.count `shouldBe` 1 -- predicate hit count (just A); descendants are added to logsData but not to count
         _ -> error "Expected JSON response"
 
   describe "Query Error Handling" do

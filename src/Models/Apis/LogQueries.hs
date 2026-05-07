@@ -34,7 +34,6 @@ import Data.Default
 import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
-import Data.Map.Strict qualified as Map
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, diffUTCTime)
@@ -385,17 +384,24 @@ keepDescendantsOf colIdxMap seedSpanIds rows
   | otherwise =
       let sid r = lookupVecTextByKey r colIdxMap "latency_breakdown"
           pid' r = lookupVecTextByKey r colIdxMap "parent_id"
-          childrenByParent :: Map.Map Text [V.Vector AE.Value]
-          childrenByParent = Map.fromListWith (<>) [(p, [r]) | r <- rows, Just p <- [pid' r]]
-          bfs visited [] acc = (visited, acc)
+          childrenByParent :: HM.HashMap Text [V.Vector AE.Value]
+          childrenByParent = HM.fromListWith (<>) [(p, [r]) | r <- rows, Just p <- [pid' r]]
+          -- maybe False: rows missing a span_id (latency_breakdown) cannot be
+          -- the root of any further descent, and we have no key to dedup on,
+          -- so drop them rather than risk re-adding via another path.
+          --
+          -- Prepend kids and seeds to flip the standard "append-build, then
+          -- reverse" pattern into O(n) total instead of O(n²) from repeated
+          -- `acc <> newKids` / `rest <> newSids`.
+          seeds = V.toList seedSpanIds
+          bfs _ [] acc = reverse acc
           bfs visited (s : rest) acc =
-            let kids = fromMaybe [] (Map.lookup s childrenByParent)
-                newKids = filter (maybe True (`S.notMember` visited) . sid) kids
+            let kids = fromMaybe [] (HM.lookup s childrenByParent)
+                newKids = filter (maybe False (`S.notMember` visited) . sid) kids
                 newSids = mapMaybe sid newKids
                 visited' = foldr S.insert visited newSids
-             in bfs visited' (rest <> newSids) (acc <> newKids)
-          (_, kept) = bfs (S.fromList (V.toList seedSpanIds)) (V.toList seedSpanIds) []
-       in kept
+             in bfs visited' (newSids <> rest) (newKids <> acc)
+       in bfs (S.fromList seeds) seeds []
 
 
 valueToVector :: AE.Value -> Maybe (V.Vector AE.Value)

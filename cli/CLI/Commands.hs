@@ -575,7 +575,7 @@ buildSearchParams opts =
         , ("source",) <$> opts.kind
         , ("limit",) . show <$> opts.limit
         , ("cursor",) <$> opts.cursor
-        , if opts.withChildren then Just ("with_children", "true") else Nothing
+        , ("with_children", "true") <$ guard opts.withChildren
         ]
 
 
