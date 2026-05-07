@@ -390,7 +390,7 @@ keepDescendantsOf colIdxMap seedSpanIds rows
           bfs visited [] acc = (visited, acc)
           bfs visited (s : rest) acc =
             let kids = fromMaybe [] (Map.lookup s childrenByParent)
-                newKids = filter (\r -> maybe True (`S.notMember` visited) (sid r)) kids
+                newKids = filter (maybe True (`S.notMember` visited) . sid) kids
                 newSids = mapMaybe sid newKids
                 visited' = foldr S.insert visited newSids
              in bfs visited' (rest <> newSids) (acc <> newKids)
