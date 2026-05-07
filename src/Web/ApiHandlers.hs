@@ -574,7 +574,7 @@ apiKeyDelete pid kid = do
 
 
 apiEventsQuery :: Projects.ProjectId -> EventsQuery -> ATBaseCtx Log.LogResult
-apiEventsQuery pid q = Log.queryEvents pid q.query q.since q.from q.to q.source q.limit
+apiEventsQuery pid q = Log.queryEvents pid q.query q.since q.from q.to q.source q.limit q.withChildren
 
 
 -- | Bulk action: currently supports "delete".

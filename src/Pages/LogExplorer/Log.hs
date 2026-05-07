@@ -599,21 +599,26 @@ keepNonEmpty (Just a) = Just a
 
 
 -- | Core result builder shared by apiLogH and queryEvents.
-buildLogResult :: (DB es, Time.Time :> es) => Projects.ProjectId -> UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> (V.Vector (V.Vector AE.Value), [Text], Int) -> Eff es LogResult
-buildLogResult pid now sinceM fromM toM summaryCols (requestVecs, colNames, resultCount') = do
+-- When @withChildren@ is False, only rows matching the predicate are returned —
+-- no descendants of matches, no synthesised orphan headers (both are
+-- trace-tree concerns the UI wants but the API/CLI usually doesn't).
+buildLogResult :: (DB es, Time.Time :> es) => Bool -> Projects.ProjectId -> UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> (V.Vector (V.Vector AE.Value), [Text], Int) -> Eff es LogResult
+buildLogResult withChildren pid now sinceM fromM toM summaryCols (requestVecs, colNames, resultCount') = do
   let colIdxMap = listToIndexHashMap colNames
       reqLastCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? (V.length requestVecs - 1))
       reqFirstCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? 0)
       alreadyLoadedIds = V.mapMaybe (\v -> lookupVecTextByKey v colIdxMap "id") requestVecs
       (fromDD, toDD, _) = Components.parseTimeRange now (Components.TimePicker sinceM reqLastCreatedAtM reqFirstCreatedAtM)
   childSpansList <-
-    if V.length requestVecs > 100
+    if not withChildren || V.length requestVecs > 100
       then pure [] -- Skip expensive child span fetch for large result sets; traces load lazily on detail view
       else do
         let allTraceIds = V.filter (not . T.null) $ V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "trace_id") requestVecs
             traceIds = V.fromList $ take 50 $ nubOrd $ V.toList allTraceIds
-        LogQueries.selectChildSpansAndLogs pid summaryCols traceIds (fromDD, toDD) alreadyLoadedIds
-  let synthRows = synthesizeOrphanHeaders colIdxMap requestVecs
+            -- latency_breakdown is aliased from context___span_id (see Pkg.Parser).
+            seedSpanIds = V.mapMaybe (\v -> lookupVecTextByKey v colIdxMap "latency_breakdown") requestVecs
+        LogQueries.selectChildSpansAndLogs pid summaryCols traceIds seedSpanIds (fromDD, toDD) alreadyLoadedIds
+  let synthRows = if withChildren then synthesizeOrphanHeaders colIdxMap requestVecs else V.empty
       requestVecsAug = synthRows <> requestVecs
       rawLogsData = requestVecsAug <> V.fromList childSpansList
       cols = nubOrd $ curateCols summaryCols colNames
@@ -639,8 +644,8 @@ buildLogResult pid now sinceM fromM toM summaryCols (requestVecs, colNames, resu
 
 -- | Standalone query function for the v1 API events endpoint.
 -- Returns 400 for parse errors, propagates DB errors instead of silently returning empty results.
-queryEvents :: (DB es, ELog.Log :> es, Error Servant.ServerError :> es, Time.Time :> es, Tracing :> es) => Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Eff es LogResult
-queryEvents pid queryM sinceM fromM toM sourceM limitM = do
+queryEvents :: (DB es, ELog.Log :> es, Error Servant.ServerError :> es, Time.Time :> es, Tracing :> es) => Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Bool -> Eff es LogResult
+queryEvents pid queryM sinceM fromM toM sourceM limitM withChildrenM = do
   now <- Time.currentTime
   let queryInput = fromMaybe "" queryM
   queryAST <- case parseQueryToAST queryInput of
@@ -651,7 +656,8 @@ queryEvents pid queryM sinceM fromM toM sourceM limitM = do
   case result of
     Left err -> throwError Servant.err400{Servant.errBody = encodeUtf8 $ "Query failed: " <> err}
     Right r -> do
-      lr <- buildLogResult pid now sinceM fromM toM [] r
+      -- Default to exact-match (no trace expansion); UI passes True via apiLogH.
+      lr <- buildLogResult (fromMaybe False withChildrenM) pid now sinceM fromM toM [] r
       let limited = V.take (fromMaybe 100 limitM) lr.logsData
           qrc = V.length limited
       pure lr{logsData = limited, queryResultCount = qrc, hasMore = qrc < lr.count}
@@ -718,7 +724,8 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
   let isJsonFastPath = jsonM == Just "true" && layoutM /= Just "SaveQuery"
 
   let buildLogResult' tableData = do
-        lr <- buildLogResult pid now sinceM fromM toM summaryCols tableData
+        -- UI always wants the trace-tree context; the API/CLI defaults off.
+        lr <- buildLogResult True pid now sinceM fromM toM summaryCols tableData
         let lastFM = lr.cursor >>= textToUTC <&> toText . iso8601Show . addUTCTime (-0.001)
         pure
           (lr :: LogResult)
@@ -1503,7 +1510,8 @@ apiLogExpandH pid kindM keyM skipM queryM sinceM fromM toM = do
       else do
         let allTraceIds = V.filter (not . T.null) $ V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "trace_id") shown
             traceIds = V.fromList $ take 100 $ nubOrd $ V.toList allTraceIds
-        LogQueries.selectChildSpansAndLogs pid [] traceIds (fromD, toD) alreadyLoadedIds
+            seedSpanIds = V.mapMaybe (\v -> lookupVecTextByKey v colIdxMap "latency_breakdown") shown
+        LogQueries.selectChildSpansAndLogs pid [] traceIds seedSpanIds (fromD, toD) alreadyLoadedIds
   let rawLogsData = shown <> V.fromList childSpansList
       queryResultCount = V.length shown
       (logsData, traces) = buildTraceTree colIdxMap queryResultCount rawLogsData

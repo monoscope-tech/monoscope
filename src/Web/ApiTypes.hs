@@ -259,6 +259,10 @@ data EventsQuery = EventsQuery
   , to :: Maybe Text
   , source :: Maybe Text
   , limit :: Maybe Int
+  , -- | When true, also return descendants of each matched span (the
+    -- sub-tree). Default (Nothing/false) returns only rows that satisfy the
+    -- predicate — no sibling/parent spans bleed in.
+    withChildren :: Maybe Bool
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default)

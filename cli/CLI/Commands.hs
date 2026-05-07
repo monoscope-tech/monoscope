@@ -307,6 +307,9 @@ data EventsSearchOpts = EventsSearchOpts
     -- (Field is named @firstOnly@ to avoid colliding with @Relude.first@.)
     firstOnly :: Bool
   , idOnly :: Bool
+  , -- | Also return descendants (the sub-tree) of each matched span. Off by
+    -- default — predicate hits only.
+    withChildren :: Bool
   }
   deriving stock (Show)
 
@@ -572,6 +575,7 @@ buildSearchParams opts =
         , ("source",) <$> opts.kind
         , ("limit",) . show <$> opts.limit
         , ("cursor",) <$> opts.cursor
+        , if opts.withChildren then Just ("with_children", "true") else Nothing
         ]
 
 

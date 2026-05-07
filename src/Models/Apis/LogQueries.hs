@@ -34,6 +34,7 @@ import Data.Default
 import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
+import Data.Map.Strict qualified as Map
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, diffUTCTime)
@@ -62,7 +63,7 @@ import Pkg.Parser.Stats (Section, Sources (..))
 import Relude hiding (many, some)
 import System.Logging qualified as Log
 import System.Tracing (Tracing, withSpan_)
-import Utils (replaceAllFormats)
+import Utils (listToIndexHashMap, lookupVecTextByKey, replaceAllFormats)
 import Web.HttpApiData (ToHttpApiData (..))
 
 
@@ -338,11 +339,20 @@ selectLogTable pid queryAST queryText cursorM dateRange projectedColsByUser sour
           pure $ Right (rows, queryComponents.toColNames, count)
 
 
-selectChildSpansAndLogs :: (DB es, Time.Time :> es) => Projects.ProjectId -> [Text] -> V.Vector Text -> (Maybe UTCTime, Maybe UTCTime) -> V.Vector Text -> Eff es [V.Vector AE.Value]
-selectChildSpansAndLogs pid projectedColsByUser traceIds dateRange excludedSpanIds = do
+-- | Return spans that are transitive descendants of @seedSpanIds@ within
+-- @traceIds@. Strategy: one cheap index scan on @(project_id, trace_id)@ to
+-- pull all candidate spans in those traces, then walk
+-- @parent_id → context___span_id@ in memory to keep only true descendants.
+--
+-- Why not a recursive CTE in SQL: @otel_logs_and_spans@ is a huge
+-- partitioned table; a CTE would issue one indexed probe per tree level,
+-- whereas the bounded scan here is a single pass and the result set is
+-- already capped at 2000 rows so the in-memory walk is negligible.
+selectChildSpansAndLogs :: (DB es, Time.Time :> es) => Projects.ProjectId -> [Text] -> V.Vector Text -> V.Vector Text -> (Maybe UTCTime, Maybe UTCTime) -> V.Vector Text -> Eff es [V.Vector AE.Value]
+selectChildSpansAndLogs pid projectedColsByUser traceIds seedSpanIds dateRange excludedSpanIds = do
   now <- Time.currentTime
   let qConfig = defSqlQueryCfg pid now (Just SSpans) Nothing
-      (r, _) = getProcessedColumns projectedColsByUser qConfig.defaultSelect
+      (r, colNames) = getProcessedColumns projectedColsByUser qConfig.defaultSelect
   let pidText = pid.toText
       traceIdsList = V.toList traceIds
       excludedList = V.toList excludedSpanIds
@@ -350,8 +360,42 @@ selectChildSpansAndLogs pid projectedColsByUser traceIds dateRange excludedSpanI
         (Nothing, Just b) -> [HI.sql| AND timestamp BETWEEN #{b} AND #{now} |]
         (Just a, Just b) -> let a' = addUTCTime (-30) a; b' = addUTCTime 30 b in [HI.sql| AND timestamp BETWEEN #{a'} AND #{b'} |]
         _ -> mempty
-  results <- Hasql.interp $ rawSql ("SELECT json_build_array(" <> r <> ")::jsonb FROM otel_logs_and_spans WHERE project_id=") <> [HI.sql|#{pidText}::text|] <> dateRangeSql <> [HI.sql| AND context___trace_id=ANY(#{traceIdsList}) AND parent_id IS NOT NULL AND id::text != ALL(#{excludedList}) ORDER BY timestamp DESC LIMIT 2000|]
-  pure $ mapMaybe valueToVector results
+  if V.null seedSpanIds
+    then pure []
+    else do
+      results <- Hasql.interp $ rawSql ("SELECT json_build_array(" <> r <> ")::jsonb FROM otel_logs_and_spans WHERE project_id=") <> [HI.sql|#{pidText}::text|] <> dateRangeSql <> [HI.sql| AND context___trace_id=ANY(#{traceIdsList}) AND parent_id IS NOT NULL AND id::text != ALL(#{excludedList}) ORDER BY timestamp DESC LIMIT 2000|]
+      -- 'colNames' from getProcessedColumns retains "<expr> as <alias>" entries;
+      -- strip to bare aliases so the index map matches what callers / 'lookupVecTextByKey'
+      -- look up (e.g. "latency_breakdown", "parent_id").
+      pure $ keepDescendantsOf (listToIndexHashMap (listToColNames colNames)) seedSpanIds (mapMaybe valueToVector results)
+
+
+-- | Keep only rows that are transitive descendants of any @seedSpanIds@
+-- entry, walking @parent_id → context___span_id@ (the latter aliased as
+-- @latency_breakdown@ in projected results). Trims the broad SQL fetch in
+-- 'selectChildSpansAndLogs' to actual sub-trees rooted at the matched spans
+-- — never sibling/parent/uncle spans that share a trace_id but failed the
+-- predicate.
+--
+-- Builds a children adjacency on @parent_id@ and BFS-expands from the seed
+-- set. O(n) over the candidate set; cap is 2000 rows.
+keepDescendantsOf :: HM.HashMap Text Int -> V.Vector Text -> [V.Vector AE.Value] -> [V.Vector AE.Value]
+keepDescendantsOf colIdxMap seedSpanIds rows
+  | V.null seedSpanIds || null rows = []
+  | otherwise =
+      let sid r = lookupVecTextByKey r colIdxMap "latency_breakdown"
+          pid' r = lookupVecTextByKey r colIdxMap "parent_id"
+          childrenByParent :: Map.Map Text [V.Vector AE.Value]
+          childrenByParent = Map.fromListWith (<>) [(p, [r]) | r <- rows, Just p <- [pid' r]]
+          bfs visited [] acc = (visited, acc)
+          bfs visited (s : rest) acc =
+            let kids = fromMaybe [] (Map.lookup s childrenByParent)
+                newKids = filter (\r -> maybe True (`S.notMember` visited) (sid r)) kids
+                newSids = mapMaybe sid newKids
+                visited' = foldr S.insert visited newSids
+             in bfs visited' (rest <> newSids) (acc <> newKids)
+          (_, kept) = bfs (S.fromList (V.toList seedSpanIds)) (V.toList seedSpanIds) []
+       in kept
 
 
 valueToVector :: AE.Value -> Maybe (V.Vector AE.Value)

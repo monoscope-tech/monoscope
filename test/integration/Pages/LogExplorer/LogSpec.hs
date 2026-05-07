@@ -7,8 +7,16 @@ import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime)
 import Data.Time.Clock (addUTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
+import Data.UUID qualified as UUID
+import Data.UUID.V4 (nextRandom)
 import Data.Vector qualified as V
+import Database.PostgreSQL.Entity.DBT (withPool)
+import Database.PostgreSQL.Entity.DBT qualified as DBT
+import Database.PostgreSQL.Simple (Only (..))
+import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Projects.Projects qualified as Projects
+import Network.GRPC.Common.Protobuf (Proto (..))
+import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.LogExplorer.Log qualified as Log
 import Pkg.TestUtils
@@ -151,6 +159,60 @@ spec = aroundAll withTestResources do
           -- The system returns the requested columns plus default columns in a curated order
           r.cols `shouldBe` ["id", "timestamp", "name", "duration", "service", "summary", "latency_breakdown"]
         _ -> error "Expected JSON response but got something else"
+
+  describe "Trace tree expansion (apiLogH always sets withChildren=True)" do
+    -- Regression: search used to return every span in matching traces, even
+    -- siblings/uncles that failed the predicate. The UI now gets only the
+    -- predicate hits + their descendants — never sibling sub-trees that
+    -- happen to share a trace_id.
+    it "returns only matched spans plus their descendants, not unrelated siblings" \tr -> do
+      apiKey <- createTestAPIKey tr testPid "log-spec-tree-key"
+      -- Time effect is mocked to 'frozenTime' in tests; ingest just before it
+      -- so the rows fall into the (frozenTime - 60s, frozenTime + 60s) window
+      -- the test query uses.
+      let ts = addUTCTime (-30) frozenTime
+      trId <- show <$> nextRandom
+      spanA <- show <$> nextRandom
+      spanB <- show <$> nextRandom
+      spanC <- show <$> nextRandom
+      spanE <- show <$> nextRandom
+      spanD <- show <$> nextRandom
+      marker <- ("ui-" <>) . UUID.toText <$> nextRandom
+      let resource = mkResource apiKey []
+          ingest sid pidM name extras =
+            void $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider
+              $ Proto (mkSpanRequest trId sid pidM name [] Nothing extras resource ts)
+      ingest spanA Nothing "ui.tree.root" [mkAttr "ui.marker" marker]
+      ingest spanB (Just spanA) "ui.tree.child" []
+      ingest spanC (Just spanB) "ui.tree.grandchild" []
+      ingest spanE Nothing "ui.tree.unrelated.root" []
+      ingest spanD (Just spanE) "ui.tree.unrelated.child" [] -- same trace_id, NOT under A
+
+      -- Sanity check: confirm the parent/child topology actually persisted.
+      -- Without this, a 'returns 3 rows' assertion downstream silently
+      -- masks the case where ingestion dropped a span and the trace shape
+      -- on disk doesn't match what the test thinks it set up.
+      ingestedRows <- withPool tr.trPool $ DBT.query
+        [sql| SELECT name FROM otel_logs_and_spans WHERE project_id = ? AND name LIKE 'ui.tree.%' ORDER BY name |]
+        (Only testPid)
+        :: IO (V.Vector (Only Text))
+      V.toList (fmap (\(Only n) -> n) ingestedRows)
+        `shouldBe` ["ui.tree.child", "ui.tree.grandchild", "ui.tree.root", "ui.tree.unrelated.child", "ui.tree.unrelated.root"]
+
+      let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) ts
+          toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 ts
+          q = "attributes.ui.marker == \"" <> marker <> "\""
+
+      (_, pg) <- testServant tr
+        $ Log.apiLogH testPid (Just q) Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
+
+      case pg of
+        Log.LogsGetJson r -> do
+          -- A (matched) + B + C (descendants). E and D share trace_id but
+          -- are not in A's subtree — must not bleed in.
+          V.length r.logsData `shouldBe` 3
+          r.count `shouldBe` 1 -- predicate matched exactly one row
+        _ -> error "Expected JSON response"
 
   describe "Query Error Handling" do
     it "should handle invalid query syntax gracefully" \tr -> do
