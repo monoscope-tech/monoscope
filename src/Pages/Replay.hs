@@ -594,7 +594,7 @@ saveReplayMinio envCfg jobsPool ackId payload = do
               body = payload.eventsBytes
               bodySize = fromIntegral (BS.length body)
           res <- liftIO $ Minio.runMinio conn $ do
-            Minio.putObject bucket objKey (CC.sourceLazy (BL.fromStrict body)) (Just bodySize) Minio.defaultPutObjectOptions
+            Minio.putObject bucket objKey (CC.sourceLazy (fromStrict body)) (Just bodySize) Minio.defaultPutObjectOptions
           case res of
             Right _ -> do
               let ReplayPayload{sessionId, projectId, userId, userEmail, userName} = payload

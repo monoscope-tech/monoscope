@@ -462,8 +462,8 @@ digestEmail projectName inboxUrl summary total = emailBody do
   emailDivider
   pre_ [style_ "font-family: monospace; font-size: 13px; white-space: pre-wrap; margin: 0 0 16px 0;"]
     $ toHtml
-    $ T.unlines
-    $ map stripSummaryBadges (T.lines summary)
+    $ unlines
+    $ map stripSummaryBadges (lines summary)
   emailButton inboxUrl "Open inbox"
 
 

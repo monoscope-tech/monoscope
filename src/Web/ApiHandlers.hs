@@ -1146,7 +1146,7 @@ apiFacets pid sinceM fromM toM fieldM = do
       -- `resource___service___name`); the public API contract is dotted.
       dotKey = AEK.fromText . T.replace "___" "." . AEK.toText
       asAeson = case AE.toJSON facetMap of
-        AE.Object o -> AE.Object (AEKM.mapKeyVal dotKey (\x -> x) o)
+        AE.Object o -> AE.Object (AEKM.mapKeyVal dotKey id o)
         v -> v
       filtered = case (fieldM, asAeson) of
         (Just f, AE.Object o) ->
