@@ -359,6 +359,8 @@ selectChildSpansAndLogs pid projectedColsByUser traceIds seedSpanIds dateRange e
         (Nothing, Just b) -> [HI.sql| AND timestamp BETWEEN #{b} AND #{now} |]
         (Just a, Just b) -> let a' = addUTCTime (-30) a; b' = addUTCTime 30 b in [HI.sql| AND timestamp BETWEEN #{a'} AND #{b'} |]
         _ -> mempty
+  -- Skip the SQL round-trip when there's nothing to expand from;
+  -- 'keepDescendantsOf' would also return [] but we'd pay for the query first.
   if V.null seedSpanIds
     then pure []
     else do
@@ -376,8 +378,8 @@ selectChildSpansAndLogs pid projectedColsByUser traceIds seedSpanIds dateRange e
 -- — never sibling/parent/uncle spans that share a trace_id but failed the
 -- predicate.
 --
--- Builds a children adjacency on @parent_id@ and BFS-expands from the seed
--- set. O(n) over the candidate set; cap is 2000 rows.
+-- Seed rows themselves are NOT included in the output; callers already hold
+-- them (in 'requestVecs') and we only return strict descendants.
 keepDescendantsOf :: HM.HashMap Text Int -> V.Vector Text -> [V.Vector AE.Value] -> [V.Vector AE.Value]
 keepDescendantsOf colIdxMap seedSpanIds rows
   | V.null seedSpanIds || null rows = []
@@ -386,22 +388,15 @@ keepDescendantsOf colIdxMap seedSpanIds rows
           pid' r = lookupVecTextByKey r colIdxMap "parent_id"
           childrenByParent :: HM.HashMap Text [V.Vector AE.Value]
           childrenByParent = HM.fromListWith (<>) [(p, [r]) | r <- rows, Just p <- [pid' r]]
-          -- maybe False: rows missing a span_id (latency_breakdown) cannot be
-          -- the root of any further descent, and we have no key to dedup on,
-          -- so drop them rather than risk re-adding via another path.
-          --
-          -- Prepend kids and seeds to flip the standard "append-build, then
-          -- reverse" pattern into O(n) total instead of O(n²) from repeated
-          -- `acc <> newKids` / `rest <> newSids`.
           seeds = V.toList seedSpanIds
-          bfs _ [] acc = reverse acc
-          bfs visited (s : rest) acc =
-            let kids = fromMaybe [] (HM.lookup s childrenByParent)
+          go _ [] acc = reverse acc
+          go visited (s : rest) acc =
+            let kids = HM.findWithDefault [] s childrenByParent
                 newKids = filter (maybe False (`S.notMember` visited) . sid) kids
                 newSids = mapMaybe sid newKids
                 visited' = foldr S.insert visited newSids
-             in bfs visited' (newSids <> rest) (newKids <> acc)
-       in bfs (S.fromList seeds) seeds []
+             in go visited' (newSids <> rest) (newKids <> acc)
+       in go (S.fromList seeds) seeds []
 
 
 valueToVector :: AE.Value -> Maybe (V.Vector AE.Value)
