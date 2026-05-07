@@ -577,6 +577,7 @@ maxFilesPerMerge = 25
 -- | Upload the events for one replay message. Takes the events sub-tree as
 -- raw JSON bytes (already validated as a JSON value by the splitter) and
 -- streams them straight into MinIO with no AE.encode round-trip.
+{-# ANN saveReplayMinio ("HLint: ignore Use alternative" :: String) #-}
 saveReplayMinio :: (DB es, Log :> es, Time :> es) => EnvConfig -> Pool Connection -> Text -> ReplayPayload -> Eff es (Maybe Text)
 saveReplayMinio envCfg jobsPool ackId payload = do
   project <- Projects.projectById payload.projectId
@@ -594,7 +595,7 @@ saveReplayMinio envCfg jobsPool ackId payload = do
               body = payload.eventsBytes
               bodySize = fromIntegral (BS.length body)
           res <- liftIO $ Minio.runMinio conn $ do
-            Minio.putObject bucket objKey (CC.sourceLazy (fromStrict body)) (Just bodySize) Minio.defaultPutObjectOptions
+            Minio.putObject bucket objKey (CC.sourceLazy (BL.fromStrict body)) (Just bodySize) Minio.defaultPutObjectOptions
           case res of
             Right _ -> do
               let ReplayPayload{sessionId, projectId, userId, userEmail, userName} = payload
