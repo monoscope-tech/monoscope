@@ -295,6 +295,7 @@ eventsSearchParser =
     <*> optional (strOption (long "cursor" <> metavar "CURSOR" <> help "Pagination cursor from a prior response"))
     <*> switch (long "first" <> help "Return only the first matching event")
     <*> switch (long "id-only" <> help "Print just the first event id (implies --first)")
+    <*> switch (long "with-children" <> help "Also return descendants (the sub-tree) of each matched span (default: predicate hits only)")
 
 
 -- | C5: Concrete KQL examples in @--help@ — agents copy from here, so keep

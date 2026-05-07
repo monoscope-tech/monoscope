@@ -174,6 +174,7 @@ data ApiV1Routes mode = ApiV1Routes
           :> QPT "to"
           :> QPT "source"
           :> QueryParam "limit" Int
+          :> QueryParam "with_children" Bool
           :> Get '[JSON] Log.LogResult
   , eventGet
       :: mode

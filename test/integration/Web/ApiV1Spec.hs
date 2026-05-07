@@ -8,7 +8,7 @@ import Data.Default (def)
 import Data.Map qualified as Map
 import Data.OpenApi (OpenApi, info, title, version)
 import Data.Text qualified as T
-import Data.Time (getCurrentTime)
+import Data.Time (addUTCTime, getCurrentTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Models.Apis.Monitors qualified as Monitors
@@ -29,9 +29,12 @@ import Web.MCP qualified as MCP
 import Web.Routes (apiV1OpenApiSpec, apiV1Server)
 import Web.Routes qualified as Routes
 
+import Data.Vector qualified as V
+import Network.GRPC.Common.Protobuf (Proto (..))
 import Network.HTTP.Types qualified as H
 import Network.Wai qualified as Wai
 import Network.Wai.Test qualified as WT
+import Opentelemetry.OtlpServer qualified as OtlpServer
 import Servant qualified
 import Servant.Server.Generic (genericServeTWithContext)
 import System.Types (effToServantHandlerTest)
@@ -182,7 +185,7 @@ spec = aroundAll withTestResources do
       it "returns valid LogResult with expected JSON structure" $ \tr -> do
         result <-
           toBaseServantResponse tr.trATCtx tr.trLogger
-            $ Log.queryEvents testPid (Just "") (Just "1h") Nothing Nothing Nothing Nothing
+            $ Log.queryEvents testPid (Just "") (Just "1h") Nothing Nothing Nothing Nothing Nothing
         let json = AE.toJSON result
         (json ^? key "logsData" . _Array) `shouldSatisfy` isJust
         (json ^? key "cols" . _Array) `shouldSatisfy` isJust
@@ -195,7 +198,7 @@ spec = aroundAll withTestResources do
         ( toBaseServantResponse
             tr.trATCtx
             tr.trLogger
-            (Log.queryEvents testPid (Just "|| invalid {{") (Just "1h") Nothing Nothing Nothing Nothing)
+            (Log.queryEvents testPid (Just "|| invalid {{") (Just "1h") Nothing Nothing Nothing Nothing Nothing)
             >>= evaluateWHNF_
           )
           `shouldThrow` anyException
@@ -326,6 +329,45 @@ spec = aroundAll withTestResources do
         let json = AE.toJSON result
         (json ^? key "logsData" . _Array) `shouldSatisfy` isJust
         (json ^? key "count" . _Number) `shouldSatisfy` isJust
+
+      -- Regression: previously the search backend returned every span in a
+      -- matching trace, including siblings/parents/uncles that failed the
+      -- predicate. Default is now exact-match; @with_children=true@ opts
+      -- back into trace context, but only the descendants of each match.
+      it "with_children: default returns only predicate hits; flag adds descendants" $ \tr -> do
+        apiKey <- createTestAPIKey tr testPid "with-children-key"
+        -- Tests run with the Time effect frozen at 'frozenTime' (2025-01-01),
+        -- so spans must land inside the (frozenTime - 1h, frozenTime] window.
+        let ts = addUTCTime (-30) frozenTime
+        trId <- show <$> UUIDV4.nextRandom
+        spanA <- show <$> UUIDV4.nextRandom -- root, the predicate match
+        spanB <- show <$> UUIDV4.nextRandom -- child of A
+        spanC <- show <$> UUIDV4.nextRandom -- grandchild of A (child of B)
+        spanE <- show <$> UUIDV4.nextRandom -- sibling root in the same trace
+        spanD <- show <$> UUIDV4.nextRandom -- child of E — same trace, NOT a descendant of A
+        marker <- ("wc-" <>) . UUID.toText <$> UUIDV4.nextRandom
+        let resource = mkResource apiKey []
+            ingest sid pidM name extras =
+              void $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider
+                $ Proto (mkSpanRequest trId sid pidM name [] Nothing extras resource ts)
+        ingest spanA Nothing "tree.root" [mkAttr "wc.marker" marker]
+        ingest spanB (Just spanA) "tree.child" []
+        ingest spanC (Just spanB) "tree.grandchild" []
+        ingest spanE Nothing "tree.unrelated.root" []
+        ingest spanD (Just spanE) "tree.unrelated.child" [] -- shares trace_id with A but not in A's subtree
+
+        let q = "attributes.wc.marker == \"" <> marker <> "\""
+            base = (def :: ApiT.EventsQuery){ApiT.query = Just q, ApiT.since = Just "1h"}
+
+        rDefault <- toBaseServantResponse tr.trATCtx tr.trLogger $ ApiH.apiEventsQuery testPid base
+        V.length rDefault.logsData `shouldBe` 1 -- only A matches the predicate
+
+        rWith <- toBaseServantResponse tr.trATCtx tr.trLogger
+          $ ApiH.apiEventsQuery testPid base{ApiT.withChildren = Just True}
+        -- A + B + C. D is in the same trace but lives under E, not A — the
+        -- old buggy behaviour would have included it; the descendant filter
+        -- excludes it.
+        V.length rWith.logsData `shouldBe` 3
 
     describe "Plan B — /me + project singular" do
       it "returns project id and summary for /me" $ \tr -> do

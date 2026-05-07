@@ -7,8 +7,18 @@ import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime)
 import Data.Time.Clock (addUTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
+import Data.Time.Format.ISO8601 (iso8601ParseM)
+import Data.UUID qualified as UUID
+import Data.UUID.V4 (nextRandom)
 import Data.Vector qualified as V
+import Database.PostgreSQL.Entity.DBT (withPool)
+import Database.PostgreSQL.Entity.DBT qualified as DBT
+import Database.PostgreSQL.Simple (Only (..))
+import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Database.PostgreSQL.Simple.Types (PGArray (..))
 import Models.Projects.Projects qualified as Projects
+import Network.GRPC.Common.Protobuf (Proto (..))
+import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.LogExplorer.Log qualified as Log
 import Pkg.TestUtils
@@ -152,6 +162,60 @@ spec = aroundAll withTestResources do
           r.cols `shouldBe` ["id", "timestamp", "name", "duration", "service", "summary", "latency_breakdown"]
         _ -> error "Expected JSON response but got something else"
 
+  describe "Trace tree expansion (apiLogH always sets withChildren=True)" do
+    -- Regression: search used to return every span in matching traces, even
+    -- siblings/uncles that failed the predicate. The UI now gets only the
+    -- predicate hits + their descendants — never sibling sub-trees that
+    -- happen to share a trace_id.
+    it "returns only matched spans plus their descendants, not unrelated siblings" \tr -> do
+      apiKey <- createTestAPIKey tr testPid "log-spec-tree-key"
+      -- Time effect is mocked to 'frozenTime' in tests; ingest just before it
+      -- so the rows fall into the (frozenTime - 60s, frozenTime + 60s) window
+      -- the test query uses.
+      let ts = addUTCTime (-30) frozenTime
+      trId <- show <$> nextRandom
+      spanA <- show <$> nextRandom
+      spanB <- show <$> nextRandom
+      spanC <- show <$> nextRandom
+      spanE <- show <$> nextRandom
+      spanD <- show <$> nextRandom
+      marker <- ("ui-" <>) . UUID.toText <$> nextRandom
+      let resource = mkResource apiKey []
+          ingest sid pidM name extras =
+            void $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider
+              $ Proto (mkSpanRequest trId sid pidM name [] Nothing extras resource ts)
+      ingest spanA Nothing "ui.tree.root" [mkAttr "ui.marker" marker]
+      ingest spanB (Just spanA) "ui.tree.child" []
+      ingest spanC (Just spanB) "ui.tree.grandchild" []
+      ingest spanE Nothing "ui.tree.unrelated.root" []
+      ingest spanD (Just spanE) "ui.tree.unrelated.child" [] -- same trace_id, NOT under A
+
+      -- Sanity check: confirm the parent/child topology actually persisted.
+      -- Without this, a 'returns 3 rows' assertion downstream silently
+      -- masks the case where ingestion dropped a span and the trace shape
+      -- on disk doesn't match what the test thinks it set up.
+      ingestedRows <- withPool tr.trPool $ DBT.query
+        [sql| SELECT name FROM otel_logs_and_spans WHERE project_id = ? AND name LIKE 'ui.tree.%' ORDER BY name |]
+        (Only testPid)
+        :: IO (V.Vector (Only Text))
+      V.toList (fmap (\(Only n) -> n) ingestedRows)
+        `shouldBe` ["ui.tree.child", "ui.tree.grandchild", "ui.tree.root", "ui.tree.unrelated.child", "ui.tree.unrelated.root"]
+
+      let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) ts
+          toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 ts
+          q = "attributes.ui.marker == \"" <> marker <> "\""
+
+      (_, pg) <- testServant tr
+        $ Log.apiLogH testPid (Just q) Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
+
+      case pg of
+        Log.LogsGetJson r -> do
+          -- A (matched) + B + C (descendants). E and D share trace_id but
+          -- are not in A's subtree — must not bleed in.
+          V.length r.logsData `shouldBe` 3 -- A + descendants B, C
+          r.count `shouldBe` 1 -- predicate hit count (just A); descendants are added to logsData but not to count
+        _ -> error "Expected JSON response"
+
   describe "Query Error Handling" do
     it "should handle invalid query syntax gracefully" \tr -> do
       let invalidQuery = "status_code = 200"  -- Missing quotes around string value
@@ -180,6 +244,104 @@ spec = aroundAll withTestResources do
         _ -> error "Expected JSON response or error"
 
   describe "Pagination" do
+    -- Walk a real cursor from page 1 → 2 → 3, asserting:
+    --   * each page contains exactly the expected slice
+    --   * pages do not overlap (the cursor's -0.001s nudge correctly skips
+    --     the boundary item)
+    --   * hasMore flips to False on the final page
+    -- Uses `| limit 2` to force three pages from five rows so the math is
+    -- legible; ingests at distinct timestamps so cursor ordering is total
+    -- (the existing 1000-msg test has every row at frozenTime, which
+    -- silently masks ordering bugs).
+    it "cursor paginates correctly across multiple pages without overlap" \tr -> do
+      apiKey <- createTestAPIKey tr testPid "pagination-key"
+      pageMarker <- ("pg-" <>) . UUID.toText <$> nextRandom
+      let resource = mkResource apiKey []
+          -- 5 spans at T-1s, T-2s, T-3s, T-4s, T-5s. Newest first when
+          -- sorted by timestamp DESC.
+          rowAt :: Int -> IO ()
+          rowAt i = do
+            sid <- show <$> nextRandom
+            tid <- show <$> nextRandom
+            let ts = addUTCTime (fromIntegral (negate i)) frozenTime
+                attrs = [mkAttr "page.marker" pageMarker, mkAttr "page.idx" (show i)]
+            void $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider
+              $ Proto (mkSpanRequest tid sid Nothing ("pg.row." <> show i) [] Nothing attrs resource ts)
+      mapM_ rowAt [1 .. 5 :: Int]
+
+      ingested <- withPool tr.trPool $ DBT.query
+        [sql| SELECT count(*)::int FROM otel_logs_and_spans WHERE project_id = ? AND attributes->'page'->>'marker' = ? |]
+        (testPid, pageMarker)
+        :: IO (V.Vector (Only Int))
+      V.toList (fmap (\(Only n) -> n) ingested) `shouldBe` [5]
+
+      let q = Just $ "attributes.page.marker == \"" <> pageMarker <> "\" | limit 2"
+          fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) frozenTime
+          toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
+          -- Convert apiLogH's cursor (last-row timestamp text) into the
+          -- UTCTime upper-bound the next call expects, mirroring the
+          -- nextUrl construction in apiLogH (-0.001s to skip the boundary
+          -- row that would otherwise reappear on the next page).
+          nextCursor :: Text -> Maybe UTCTime
+          nextCursor t = addUTCTime (-0.001) <$> iso8601ParseM (toString t)
+          -- Pull each row's `page.idx` attribute by walking down to the
+          -- raw DB row (latency_breakdown=context___span_id is what the
+          -- predicate matches; we look up the attribute via SQL since
+          -- LogResult doesn't surface attributes in its column set).
+          pageIdsFor :: V.Vector (V.Vector AE.Value) -> HashMap.HashMap Text Int -> IO [Int]
+          pageIdsFor rows colIdxMap = do
+            let spanIdAt r = HashMap.lookup "latency_breakdown" colIdxMap >>= (r V.!?) >>= \case
+                  AE.String t -> Just t
+                  _ -> Nothing
+                spanIds = V.toList $ V.mapMaybe spanIdAt rows
+            -- Guard against latency_breakdown silently changing shape (e.g. an
+            -- object instead of a span_id string): fail here rather than at
+            -- the caller's `shouldBe [...]`, which would point the wrong way.
+            length spanIds `shouldBe` V.length rows
+            attrs <- withPool tr.trPool $ DBT.query
+              [sql| SELECT attributes->'page'->>'idx' FROM otel_logs_and_spans
+                    WHERE project_id = ? AND context___span_id = ANY(?) ORDER BY timestamp DESC |]
+              (testPid, PGArray spanIds)
+              :: IO (V.Vector (Only (Maybe Text)))
+            pure $ V.toList $ V.mapMaybe (\(Only m) -> m >>= readMaybe . toString) attrs
+
+          fetchPage cursor =
+            testServant tr
+              $ Log.apiLogH testPid q Nothing cursor Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
+
+      -- Page 1: newest two (idx 1, 2)
+      (_, pg1Resp) <- fetchPage Nothing
+      (page1Ids, page1Cursor, page1HasMore) <- case pg1Resp of
+        Log.LogsGetJson r -> do
+          ids <- pageIdsFor r.logsData r.colIdxMap
+          pure (ids, r.cursor, r.hasMore)
+        _ -> error "Expected JSON response"
+      page1Ids `shouldBe` [1, 2]
+      page1HasMore `shouldBe` True
+
+      -- Page 2: idx 3, 4
+      (_, pg2Resp) <- fetchPage (page1Cursor >>= nextCursor)
+      (page2Ids, page2Cursor, page2HasMore) <- case pg2Resp of
+        Log.LogsGetJson r -> do
+          ids <- pageIdsFor r.logsData r.colIdxMap
+          pure (ids, r.cursor, r.hasMore)
+        _ -> error "Expected JSON response"
+      page2Ids `shouldBe` [3, 4]
+      page2HasMore `shouldBe` True
+      -- Cheap regression hedge: if the cursor ever stops advancing, every
+      -- page would re-return the boundary row and this would catch it before
+      -- the [3,4] vs [1,2] assertion above does.
+      page2Cursor `shouldSatisfy` (/= page1Cursor)
+
+      -- Page 3: just idx 5; hasMore = False
+      (_, pg3Resp) <- fetchPage (page2Cursor >>= nextCursor)
+      case pg3Resp of
+        Log.LogsGetJson r -> do
+          page3Ids <- pageIdsFor r.logsData r.colIdxMap
+          page3Ids `shouldBe` [5]
+          r.hasMore `shouldBe` False
+        _ -> error "Expected JSON response"
+
     it "should paginate through multiple pages using cursor" \tr -> do
 
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
