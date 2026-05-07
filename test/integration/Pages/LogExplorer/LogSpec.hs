@@ -294,6 +294,10 @@ spec = aroundAll withTestResources do
                   AE.String t -> Just t
                   _ -> Nothing
                 spanIds = V.toList $ V.mapMaybe spanIdAt rows
+            -- Guard against latency_breakdown silently changing shape (e.g. an
+            -- object instead of a span_id string): fail here rather than at
+            -- the caller's `shouldBe [...]`, which would point the wrong way.
+            length spanIds `shouldBe` V.length rows
             attrs <- withPool tr.trPool $ DBT.query
               [sql| SELECT attributes->'page'->>'idx' FROM otel_logs_and_spans
                     WHERE project_id = ? AND context___span_id = ANY(?) ORDER BY timestamp DESC |]
@@ -324,6 +328,10 @@ spec = aroundAll withTestResources do
         _ -> error "Expected JSON response"
       page2Ids `shouldBe` [3, 4]
       page2HasMore `shouldBe` True
+      -- Cheap regression hedge: if the cursor ever stops advancing, every
+      -- page would re-return the boundary row and this would catch it before
+      -- the [3,4] vs [1,2] assertion above does.
+      page2Cursor `shouldSatisfy` (/= page1Cursor)
 
       -- Page 3: just idx 5; hasMore = False
       (_, pg3Resp) <- fetchPage (page2Cursor >>= nextCursor)
