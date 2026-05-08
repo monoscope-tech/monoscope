@@ -54,6 +54,9 @@ module Pkg.TestUtils (
   mkSpanRequest,
   mkResource,
   mkAttr,
+  -- MinIO test helpers
+  requireMinio,
+  minioAvailable,
 )
 where
 
@@ -113,6 +116,7 @@ import Network.GRPC.Common.Protobuf (Proto (..))
 import Network.HTTP.Client (createCookieJar, defaultRequest)
 import Network.HTTP.Client.Internal (Response (..), ResponseClose (..))
 import Network.HTTP.Types.Status (ok200)
+import Network.Minio qualified as Minio
 import Network.HTTP.Types.Version (http11)
 import Network.Wreq qualified as W
 import OddJobs.Job (Job (..))
@@ -602,7 +606,49 @@ data TestResources = TestResources
   , trTracerProvider :: TracerProvider
   , trUUIDRef :: IORef [UUID.UUID]
   -- ^ Pool of deterministic UUIDs shared across handler invocations in one test.
+  , trMinioAvailable :: Bool
+  -- ^ True if a reachable MinIO/S3 endpoint was probed at setup, the test
+  -- bucket exists, and the AuthContext has been configured against it.
+  -- Tests that exercise S3 paths should call `requireMinio` to skip
+  -- gracefully (`pendingWith`) when this is False.
   }
+
+
+-- | Probe a MinIO endpoint and ensure the test bucket exists. Returns the
+-- (endpoint, accessKey, secretKey, bucket, region) used, or Nothing if the
+-- endpoint is unreachable. Idempotent — safe to call repeatedly. Reads
+-- MINIO_ENDPOINT / MINIO_ACCESS_KEY / MINIO_SECRET_KEY / MINIO_BUCKET /
+-- MINIO_REGION env vars (with sensible defaults for `make minio-local`).
+setupTestMinio :: IO (Maybe (Text, Text, Text, Text, Text))
+setupTestMinio = do
+  endpoint <- toText . fromMaybe "http://127.0.0.1:9000" <$> lookupEnv "MINIO_ENDPOINT"
+  accessKey <- toText . fromMaybe "minioadmin" <$> lookupEnv "MINIO_ACCESS_KEY"
+  secretKey <- toText . fromMaybe "minioadmin" <$> lookupEnv "MINIO_SECRET_KEY"
+  bucket <- toText . fromMaybe "monoscope-test" <$> lookupEnv "MINIO_BUCKET"
+  region <- toText . fromMaybe "us-east-1" <$> lookupEnv "MINIO_REGION"
+  let creds = Minio.CredentialValue (fromString $ toString accessKey) (fromString $ toString secretKey) Nothing
+      conn = Minio.setCreds creds (Minio.setRegion (fromString $ toString region) (fromString $ toString endpoint))
+  result <- Safe.try @_ @SomeException $ Minio.runMinio conn $ do
+    exists <- Minio.bucketExists (fromString $ toString bucket)
+    unless exists $ Minio.makeBucket (fromString $ toString bucket) (Just $ fromString $ toString region)
+  case result of
+    Right (Right ()) -> pure $ Just (endpoint, accessKey, secretKey, bucket, region)
+    _ -> pure Nothing
+
+
+-- | Inside an `it` body: skip the spec via `pendingWith` if MinIO wasn't
+-- reachable during `withTestResources` setup. Use for tests that exercise
+-- real S3 round-trips. Pass `pendingWith` itself so this module doesn't
+-- need an hspec dependency on its action type.
+requireMinio :: TestResources -> (String -> f ()) -> f () -> f ()
+requireMinio tr pending action
+  | tr.trMinioAvailable = action
+  | otherwise = pending "MinIO not reachable — run `make minio-local` (or set MINIO_ENDPOINT)"
+
+
+-- | True if MinIO was probed and the test bucket prepared during setup.
+minioAvailable :: TestResources -> Bool
+minioAvailable = trMinioAvailable
 
 
 -- Compose withSetup with additional IO actions
@@ -622,7 +668,22 @@ withTestResources f = withSetup $ \pool cstr -> LogBulk.withBulkStdOutLogger \lo
   _ <- Safe.try (Dotenv.loadFile Dotenv.defaultConfig) :: IO (Either SomeException ())
 
   -- Load config from environment variables
-  envConfig <- decodeWithDefaults defConfig
+  envConfig0 <- decodeWithDefaults defConfig
+  -- Probe MinIO and populate s3* fields if it's up. Tests that depend on it
+  -- gate via `requireMinio`; everything else is unaffected.
+  minioInfo <- setupTestMinio
+  let (envConfig, minioReady) = case minioInfo of
+        Just (ep, ak, sk, bk, rg) ->
+          ( envConfig0
+              { s3Endpoint = ep
+              , s3AccessKey = ak
+              , s3SecretKey = sk
+              , s3Bucket = bk
+              , s3Region = rg
+              }
+          , True
+          )
+        Nothing -> (envConfig0, False)
   extractionWorker <- ExtractionWorker.initWorkerState envConfig.extractionWorkerShards envConfig.extractionQueueCapacity
   atomically $ writeTVar extractionWorker.acceptingBatches True
   traceSessionCache <- TSC.newTraceSessionCache
@@ -676,6 +737,7 @@ withTestResources f = withSetup $ \pool cstr -> LogBulk.withBulkStdOutLogger \lo
       , trLogger = logger
       , trTracerProvider = tp
       , trUUIDRef = uuidRef
+      , trMinioAvailable = minioReady
       }
 
 

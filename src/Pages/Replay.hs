@@ -1,4 +1,4 @@
-module Pages.Replay (replayPostH, ReplayPost (..), processReplayEvents, replaySessionGetH, fetchReplaySession, compressAndMergeReplaySessions, mergeReplaySession, expireOldReplayData, concatRawJsonArrays, mergeEventArrays, sessionFileKeys) where
+module Pages.Replay (replayPostH, ReplayPost (..), processReplayEvents, replaySessionGetH, fetchReplaySession, compressAndMergeReplaySessions, mergeReplaySession, expireOldReplayData, concatRawJsonArrays, mergeEventArrays, sessionFileKeys, splitReplayPayload, ReplayPayload (..), stripJsonNullEscapes) where
 
 import Codec.Compression.GZip qualified as GZip
 import Conduit (runConduit)
@@ -229,6 +229,8 @@ isEmptyJsonArray raw = case BS.uncons (BS.dropWhile isWs raw) of
 -- Right "{\"a\":[1,{\"b\":2}],\"c\":\"]]}\"}"
 -- >>> AB.parseOnly (fst <$> AC.match skipJsonValue) "\"escaped \\\"quote\\\" inside\""
 -- Right "\"escaped \\\"quote\\\" inside\""
+-- >>> AB.parseOnly (fst <$> AC.match skipJsonValue) "[\"\",{\"x\":\"\"},\"a\"] tail"
+-- Right "[\"\",{\"x\":\"\"},\"a\"]"
 skipJsonValue :: AC.Parser ()
 skipJsonValue = do
   AC.skipSpace
@@ -236,7 +238,7 @@ skipJsonValue = do
   case c of
     '{' -> skipBracketed '{' '}'
     '[' -> skipBracketed '[' ']'
-    '"' -> skipJsonString
+    '"' -> AC.anyChar *> skipStringBody
     _ -> void $ AC.takeWhile1 (\ch -> ch `notElem` [',' :: Char, '}', ']', ' ', '\t', '\n', '\r'])
 
 
@@ -249,21 +251,31 @@ skipBracketed open close = AC.anyChar *> loop (1 :: Int)
       AC.anyChar >>= \case
         ch | ch == open -> loop (n + 1)
         ch | ch == close -> loop (n - 1)
-        '"' -> skipJsonString *> loop n
+        -- Opening `"` already consumed; jump straight into the body so
+        -- empty strings (`""`) terminate immediately instead of swallowing
+        -- the closing `"` as if it were content.
+        '"' -> skipStringBody *> loop n
         _ -> loop n
     o = fromIntegral (fromEnum open)
     c = fromIntegral (fromEnum close)
     q = fromIntegral (fromEnum '"')
 
 
-skipJsonString :: AC.Parser ()
-skipJsonString = AC.anyChar *> loop
-  where
-    loop =
-      AC.anyChar >>= \case
-        '"' -> pass
-        '\\' -> AC.anyChar *> loop
-        _ -> loop
+-- | Skip a JSON string's body, assuming the opening `"` has already been
+-- consumed. Returns once the closing `"` is read.
+--
+-- >>> AB.parseOnly (skipStringBody *> AC.takeByteString) "\",rest"
+-- Right ",rest"
+-- >>> AB.parseOnly (skipStringBody *> AC.takeByteString) "abc\",rest"
+-- Right ",rest"
+-- >>> AB.parseOnly (skipStringBody *> AC.takeByteString) "a\\\"b\",rest"
+-- Right ",rest"
+skipStringBody :: AC.Parser ()
+skipStringBody =
+  AC.anyChar >>= \case
+    '"' -> pass
+    '\\' -> AC.anyChar *> skipStringBody
+    _ -> skipStringBody
 
 
 -- | Process a kafka batch of published replay messages. Sub-chunks the batch

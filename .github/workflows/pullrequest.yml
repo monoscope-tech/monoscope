@@ -64,6 +64,21 @@ jobs:
           --health-interval=10s
           --health-timeout=5s
           --health-retries=5
+      # bitnami/minio starts the server on :9000 by default (no custom CMD
+      # needed), so it works as a plain GitHub Actions service. Replay
+      # integration tests probe MINIO_ENDPOINT and `pendingWith` if not
+      # reachable, but in CI we want a hard guarantee — hence the service.
+      minio:
+        image: bitnami/minio:latest
+        env:
+          MINIO_ROOT_USER: minioadmin
+          MINIO_ROOT_PASSWORD: minioadmin
+          MINIO_DEFAULT_BUCKETS: monoscope-test
+        options: >-
+          --health-cmd="curl -fsS http://localhost:9000/minio/health/live"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=20
     steps:
       - uses: actions/checkout@v6
 
@@ -111,6 +126,11 @@ jobs:
           # mark themselves pending when the secret is absent (e.g. on PRs
           # from forks where secrets aren't exposed).
           MONOSCOPE_API_KEY: ${{ secrets.MONOSCOPE_DEMO_API_KEY }}
+          # Service container hostname inside the job's docker network.
+          MINIO_ENDPOINT: http://minio:9000
+          MINIO_ACCESS_KEY: minioadmin
+          MINIO_SECRET_KEY: minioadmin
+          MINIO_BUCKET: monoscope-test
         run: cabal test integration-tests --ghc-options="-O0" --test-show-details=direct
 
   lint:

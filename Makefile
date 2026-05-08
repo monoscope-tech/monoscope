@@ -139,6 +139,19 @@ timescaledb-docker-tmp:
 		    -c shared_preload_libraries='pg_stat_statements,timescaledb' \
 		    -c max_connections=200"
 
+# Local MinIO for replay/S3 integration tests. Requires the `minio` binary
+# (`brew install minio/stable/minio` on macOS, or
+# `curl -O https://dl.min.io/server/minio/release/linux-amd64/minio && chmod +x minio`).
+# Data dir is gitignored under .local/. Tests probe MINIO_ENDPOINT (default
+# http://127.0.0.1:9000) and pendingWith if it's not reachable.
+minio-local:
+	@mkdir -p .local/minio-data
+	@echo "Starting MinIO at http://127.0.0.1:9000 (console http://127.0.0.1:9001)"
+	@echo "  access key: minioadmin"
+	@echo "  secret key: minioadmin"
+	MINIO_ROOT_USER=minioadmin MINIO_ROOT_PASSWORD=minioadmin \
+	  minio server .local/minio-data --address ":9000" --console-address ":9001"
+
 update-service-worker:
 	npx workbox generateSW config/workbox-config.js
 
@@ -188,4 +201,4 @@ test-e2e-real: e2e-install
 test-e2e-ui: e2e-install
 	cd e2e && npx playwright test --ui
 
-.PHONY: all test fmt lint fix-lint live-reload live-reload-cli live-reload-doctests build-chart-cli build-chart-cli-linux tmux-live-reload tmux-live-reload-cli web-components-watch e2e-install test-e2e test-e2e-real test-e2e-ui gen-proto sync-otel-proto update-otel-proto
+.PHONY: all test fmt lint fix-lint live-reload live-reload-cli live-reload-doctests build-chart-cli build-chart-cli-linux tmux-live-reload tmux-live-reload-cli web-components-watch e2e-install test-e2e test-e2e-real test-e2e-ui gen-proto sync-otel-proto update-otel-proto minio-local
