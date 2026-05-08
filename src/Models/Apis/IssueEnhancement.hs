@@ -258,7 +258,7 @@ buildDescriptionPrompt issue =
           - Cover both immediate and long-term implications.
 
           ## Output Format (STRICT)
-          Exactly 3 lines, no headers, no blank lines, no markdown, no trailing prose.
+          Output ONLY the following 3 lines. No headers, no blank lines, no markdown, no code fences, no trailing prose.
           Line 1: What changed and why it matters (1–2 sentences).
           Line 2: Recommended action for developers (1 sentence).
           Line 3: Migration complexity — exactly one of: `low`, `medium`, `high`.
@@ -269,9 +269,6 @@ buildDescriptionPrompt issue =
           Update your API clients to include the new required fields before the deprecation deadline, and implement proper validation for the new schema.
           high
           </example>
-
-          ## Reminder
-          Output ONLY the 3 lines above. Do not wrap in code fences or quotes.
           |]
    in systemPrompt <> "\n\n<issue>\n" <> baseContext <> "\n</issue>"
 
@@ -331,7 +328,7 @@ buildCriticalityPrompt issue =
           - Non-breaking format updates
 
           ## Output Format (STRICT)
-          Exactly 3 lines, no headers, no blank lines, no markdown.
+          Output ONLY the following 3 lines. Lowercase severity. Plain integers (no words, no symbols, no markdown, no blank lines).
           Line 1: `critical` or `safe`
           Line 2: integer count of breaking changes
           Line 3: integer count of incremental/safe changes
@@ -342,9 +339,6 @@ buildCriticalityPrompt issue =
           3
           1
           </example>
-
-          ## Reminder
-          Output ONLY the 3 lines. Lowercase severity. Plain integers (no words, no symbols).
           |]
    in systemPrompt <> "\n\n<issue>\n" <> context <> "\n</issue>"
 
@@ -394,7 +388,7 @@ buildAnalysisPrompt issue =
               network, auth, validation, resource, config, dependency, runtime, data, timeout, permissions
 
               ## Output Format (STRICT)
-              Exactly 2 lines, no headers, no blank lines, no markdown.
+              Output ONLY the following 2 lines. No headers, no blank lines, no markdown. The category must be lowercase and from the allowed list above.
               Line 1: 1–2 sentence root cause (WHY it happens).
               Line 2: the lowercase category from the list above.
 
@@ -410,9 +404,6 @@ buildAnalysisPrompt issue =
               Stack trace: $stack
               Request: $req
               </error>
-
-              ## Reminder
-              Output ONLY the 2 lines. Category must be lowercase and from the allowed list.
               |]
     )
     ""

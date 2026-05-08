@@ -344,16 +344,14 @@ outputFormatInstructions =
     <example label="good">Traffic peaked at 15:20 with 985 events. The 'monoscope' service accounts for 45% of total volume.</example>
   </examples>
 
-  ## Response Skeleton
-  ```
-  {
-    "explanation": "<Data-driven analysis in markdown>",
-    "query": "<KQL query>",
-    "visualization": "<one of the allowed strings>",
-    "widgets": [{"type": "timeseries", "query": "...", "title": "..."}],
-    "time_range": {"since": "2H"}
-  }
-  ```
+  ## Response Skeleton (reference shape — do NOT include the surrounding fence in your output)
+      {
+        "explanation": "<Data-driven analysis in markdown>",
+        "query": "<KQL query>",
+        "visualization": "<one of the allowed strings>",
+        "widgets": [{"type": "timeseries", "query": "...", "title": "..."}],
+        "time_range": {"since": "2H"}
+      }
 
   ## Critical Rules
   - Output raw JSON only — no code blocks, no backticks, no surrounding prose.
@@ -379,11 +377,6 @@ systemPrompt =
     , kqlGuide
     , ""
     , outputFormatInstructions
-    , ""
-    , "## Reminders (must follow)"
-    , "- Use only fields from <schema>. If a field is missing, call `get_schema` or `get_field_values`."
-    , "- Never put timestamp filters in the query; set `time_range` instead."
-    , "- Output raw JSON only — no markdown fences, no commentary outside the JSON."
     ]
 
 
