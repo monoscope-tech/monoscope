@@ -1134,6 +1134,7 @@ apiMemberRemove pid uid = do
 -- The response is always a JSON object keyed by field path, each value a
 -- @[{value, count}]@ list sorted by count descending. Missing/expired
 -- facets return @{}@ (not 404) — agents can rely on the shape regardless.
+{-# ANN apiFacets ("HLint: ignore Use id" :: String) #-}
 apiFacets :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATBaseCtx AE.Value
 apiFacets pid sinceM fromM toM fieldM = do
   now <- Time.currentTime

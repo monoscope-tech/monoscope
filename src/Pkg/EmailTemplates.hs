@@ -450,6 +450,8 @@ logPatternRateChangeEmail projectName issueUrl patternText logLevel serviceName 
 
 -- | Summary digest body for the hourly notification flush (rate-limited
 -- overflow + low-signal issues). Subject is built at the call site.
+{-# ANN digestEmail ("HLint: ignore Use 'unlines' from Relude" :: String) #-}
+{-# ANN digestEmail ("HLint: ignore Use 'lines' from Relude" :: String) #-}
 digestEmail :: Text -> Text -> Text -> Int -> Html ()
 digestEmail projectName inboxUrl summary total = emailBody do
   h1_ "Batched notifications"
