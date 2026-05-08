@@ -116,8 +116,8 @@ import Network.GRPC.Common.Protobuf (Proto (..))
 import Network.HTTP.Client (createCookieJar, defaultRequest)
 import Network.HTTP.Client.Internal (Response (..), ResponseClose (..))
 import Network.HTTP.Types.Status (ok200)
-import Network.Minio qualified as Minio
 import Network.HTTP.Types.Version (http11)
+import Network.Minio qualified as Minio
 import Network.Wreq qualified as W
 import OddJobs.Job (Job (..))
 import OpenTelemetry.Trace (TracerProvider, getGlobalTracerProvider)
