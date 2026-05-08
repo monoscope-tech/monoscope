@@ -1134,7 +1134,6 @@ apiMemberRemove pid uid = do
 -- The response is always a JSON object keyed by field path, each value a
 -- @[{value, count}]@ list sorted by count descending. Missing/expired
 -- facets return @{}@ (not 404) — agents can rely on the shape regardless.
-{-# ANN apiFacets ("HLint: ignore Use id" :: String) #-}
 apiFacets :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATBaseCtx AE.Value
 apiFacets pid sinceM fromM toM fieldM = do
   now <- Time.currentTime
@@ -1147,7 +1146,7 @@ apiFacets pid sinceM fromM toM fieldM = do
       -- `resource___service___name`); the public API contract is dotted.
       dotKey = AEK.fromText . T.replace "___" "." . AEK.toText
       asAeson = case AE.toJSON facetMap of
-        AE.Object o -> AE.Object (AEKM.mapKeyVal dotKey (\x -> x) o)
+        AE.Object o -> AE.Object (AEKM.mapKeyVal dotKey id o)
         v -> v
       filtered = case (fieldM, asAeson) of
         (Just f, AE.Object o) ->

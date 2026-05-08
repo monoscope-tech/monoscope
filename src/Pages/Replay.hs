@@ -577,6 +577,12 @@ maxFilesPerMerge = 25
 -- | Upload the events for one replay message. Takes the events sub-tree as
 -- raw JSON bytes (already validated as a JSON value by the splitter) and
 -- streams them straight into MinIO with no AE.encode round-trip.
+--
+-- The HLint "Use alternative" hint suggests dropping the @BL.@ qualifier
+-- on @BL.fromStrict@. That is wrong here: Relude's unqualified
+-- @fromStrict@ is @Data.Text.Lazy.fromStrict :: Text -> LText@, not
+-- @Data.ByteString.Lazy.fromStrict :: ByteString -> LByteString@, so the
+-- naive refactor breaks the build. Keep the qualifier; suppress the hint.
 {-# ANN saveReplayMinio ("HLint: ignore Use alternative" :: String) #-}
 saveReplayMinio :: (DB es, Log :> es, Time :> es) => EnvConfig -> Pool Connection -> Text -> ReplayPayload -> Eff es (Maybe Text)
 saveReplayMinio envCfg jobsPool ackId payload = do
