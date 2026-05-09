@@ -934,19 +934,27 @@ export class LogList extends LitElement {
       this.expandSessionTrace(spanId);
       return;
     }
-    this.expandedTraces[spanId] = !this.expandedTraces[spanId];
-    const expanded = this.expandedTraces[spanId];
+    const expanded = !this.expandedTraces[spanId];
+    const nextExpanded: Record<string, boolean> = { ...this.expandedTraces, [spanId]: expanded };
     const toggleSpans = (spans: EventLine[]) => {
       for (const span of spans) {
         if (span.traceId !== tracId) continue;
         if (span.id === spanId) { span.expanded = expanded; span.show = true; }
         else if (span.parentIds?.includes(spanId)) {
           span.expanded = expanded; span.show = expanded;
-          this.expandedTraces[span.id] = expanded;
+          nextExpanded[span.id] = expanded;
         }
       }
     };
     toggleSpans(this.spanListTree);
+    // Also toggle inside any expanded aggregate-children groups so collapse
+    // affects spans rendered there (they live on expandedAggregates[*].eventLines,
+    // not on spanListTree).
+    for (const key of Object.keys(this.expandedAggregates)) {
+      const group = this.expandedAggregates[key];
+      if (group?.eventLines?.length) toggleSpans(group.eventLines);
+    }
+    this.expandedTraces = nextExpanded;
     this.updateVisibleItems();
     this.requestUpdate();
   };
@@ -959,7 +967,7 @@ export class LogList extends LitElement {
     }
     const parent = this.spanListTree[parentIdx];
     const wasExpanded = this.expandedTraces[sessionId];
-    this.expandedTraces[sessionId] = !wasExpanded;
+    const nextExpanded: Record<string, boolean> = { ...this.expandedTraces, [sessionId]: !wasExpanded };
     parent.expanded = !wasExpanded;
 
     if (wasExpanded) {
@@ -968,13 +976,15 @@ export class LogList extends LitElement {
         if (span.parentIds?.includes(sessionId)) {
           span.show = false;
           span.expanded = false;
-          this.expandedTraces[span.id] = false;
+          nextExpanded[span.id] = false;
         }
       }
+      this.expandedTraces = nextExpanded;
       this.updateVisibleItems();
       this.requestUpdate();
       return;
     }
+    this.expandedTraces = nextExpanded;
 
     // Check if children already loaded
     const hasChildren = this.spanListTree.some((e) => e.parentIds?.includes(sessionId));
@@ -1015,6 +1025,13 @@ export class LogList extends LitElement {
       this.requestUpdate();
     } catch (e) {
       console.error('Failed to load session children:', e);
+      // Roll back optimistic expansion so the next click retries the fetch
+      // instead of going down the (no-op) collapse branch.
+      parent.expanded = false;
+      const { [sessionId]: _dropped, ...rest } = this.expandedTraces;
+      this.expandedTraces = rest;
+      this.updateVisibleItems();
+      this.requestUpdate();
       this.showErrorToast((e as Error).message || 'Failed to load events');
     }
   }
@@ -2105,50 +2122,52 @@ export class LogList extends LitElement {
       // Synthetic placeholder rows (server tags id="synthetic-<parent_id>")
       // get muted styling so they don't compete with real spans.
       const isSynthetic = isSyntheticRowId(lookupVecValue<string>(rowData.data, this.colIdxMap, 'id'));
-      const rowHtml = html`
-        <tr
-          class=${clsx(
-            'item-row relative p-0 flex group whitespace-nowrap isolate cursor-pointer',
-            rowHoverBg,
-            !ov && 'contain-layout-style-paint content-visibility-auto',
-            isPatterns && 'items-start',
-            // All non-wrapping, non-aggregate rows (including sessions) use the
-            // dense 28px log row height for a consistent rhythm.
-            !this.wrapLines && !isAggregate && 'h-[28px] items-center',
-            isSynthetic && 'italic text-textWeak border-l-2 border-dashed border-strokeWeak',
-            isNew && 'animate-fadeBg'
-          )}
-          style=${Object.entries(columnStyles)
-            .map(([k, v]) => `${k}: ${v}`)
-            .join('; ')}
-          @click=${isAggregate
-            ? (event: any) => {
-                event.stopPropagation();
-                this.toggleAggregateRow(rowData);
-              }
-            : effectiveMode === 'sessions' && rowData.depth === 0
-              ? (event: any) => { event.stopPropagation(); this.expandTrace(rowData.traceId, rowData.id); }
-              : (event: any) => this.toggleLogRow(event, targetInfo, this.projectId)}
-        >
-          ${effectiveLogsColumns
-            .filter((v) => v !== 'latency_breakdown')
-            .map((column) => {
-              const hasWidth = this.columnMaxWidthMap[column] || this.fixedColumnWidths[column];
-              // In aggregate child rows (ov), skip fixed summary width so it flexes to fill remaining space
-              const skipFixedWidth = ov && column === 'summary';
-              return html`<td
-                class=${`${this.wrapLines ? 'break-all whitespace-break-spaces' : ''} ${cellBg} group-hover:bg-inherit relative pl-2 ${
-                  column === 'summary' ? `flex-1 min-w-0 ${ov ? 'overflow-hidden' : ''}` : 'flex-shrink-0'
-                } ${hasWidth && !(isAggregate && column === 'summary') && !skipFixedWidth ? `col-${column}` : ''}`}
-              >
-                ${this.logItemCol(rowData, column)}
-              </td>`;
-            })}
-          ${effectiveLogsColumns.includes('latency_breakdown')
-            ? html`<td class="${ov ? '' : 'sticky right-0 max-md:static z-10'} ${cellBg} group-hover:bg-inherit pl-2 shrink-0 ${ov ? 'col-latency_breakdown' : ''}">${this.logItemCol(rowData, 'latency_breakdown')}</td>`
-            : nothing}
-        </tr>
-      `;
+      // When rendered as an aggregate child (ov is set), the parent is a <div>
+      // inside a <td>, so emitting <tr>/<td> here produces invalid nesting and
+      // browsers reparent the orphan <tr>s. Use <div role="row|cell"> instead.
+      const rowClass = clsx(
+        'item-row relative p-0 flex group whitespace-nowrap isolate cursor-pointer',
+        rowHoverBg,
+        !ov && 'contain-layout-style-paint content-visibility-auto',
+        isPatterns && 'items-start',
+        // All non-wrapping, non-aggregate rows (including sessions) use the
+        // dense 28px log row height for a consistent rhythm.
+        !this.wrapLines && !isAggregate && 'h-[28px] items-center',
+        isSynthetic && 'italic text-textWeak border-l-2 border-dashed border-strokeWeak',
+        isNew && 'animate-fadeBg'
+      );
+      const rowStyle = Object.entries(columnStyles)
+        .map(([k, v]) => `${k}: ${v}`)
+        .join('; ');
+      const rowClick = isAggregate
+        ? (event: any) => {
+            event.stopPropagation();
+            this.toggleAggregateRow(rowData);
+          }
+        : effectiveMode === 'sessions' && rowData.depth === 0
+          ? (event: any) => { event.stopPropagation(); this.expandTrace(rowData.traceId, rowData.id); }
+          : (event: any) => this.toggleLogRow(event, targetInfo, this.projectId);
+      const cells = effectiveLogsColumns
+        .filter((v) => v !== 'latency_breakdown')
+        .map((column) => {
+          const hasWidth = this.columnMaxWidthMap[column] || this.fixedColumnWidths[column];
+          // In aggregate child rows (ov), skip fixed summary width so it flexes to fill remaining space
+          const skipFixedWidth = ov && column === 'summary';
+          const cellClass = `${this.wrapLines ? 'break-all whitespace-break-spaces' : ''} ${cellBg} group-hover:bg-inherit relative pl-2 ${
+            column === 'summary' ? `flex-1 min-w-0 ${ov ? 'overflow-hidden' : ''}` : 'flex-shrink-0'
+          } ${hasWidth && !(isAggregate && column === 'summary') && !skipFixedWidth ? `col-${column}` : ''}`;
+          return ov
+            ? html`<div role="cell" class=${cellClass}>${this.logItemCol(rowData, column)}</div>`
+            : html`<td class=${cellClass}>${this.logItemCol(rowData, column)}</td>`;
+        });
+      const latencyCell = effectiveLogsColumns.includes('latency_breakdown')
+        ? (ov
+            ? html`<div role="cell" class=${`${cellBg} group-hover:bg-inherit pl-2 shrink-0 col-latency_breakdown`}>${this.logItemCol(rowData, 'latency_breakdown')}</div>`
+            : html`<td class=${`sticky right-0 max-md:static z-10 ${cellBg} group-hover:bg-inherit pl-2 shrink-0`}>${this.logItemCol(rowData, 'latency_breakdown')}</td>`)
+        : nothing;
+      const rowHtml = ov
+        ? html`<div role="row" class=${rowClass} style=${rowStyle} @click=${rowClick}>${cells}${latencyCell}</div>`
+        : html`<tr class=${rowClass} style=${rowStyle} @click=${rowClick}>${cells}${latencyCell}</tr>`;
       return rowHtml;
     } catch (error) {
       console.error('logItemRow error:', error);
