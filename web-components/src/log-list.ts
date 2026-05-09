@@ -1789,7 +1789,13 @@ export class LogList extends LitElement {
             const badgeStyle = this.getStyleClass(style);
 
             if (field === 'session') {
-              rightAlignedBadges.push(this.createSessionButton(value, !!hasErrors));
+              // In tree mode, the play button only renders on tree roots
+              // (depth 0 or rows with children). Leaf children inherit the
+              // session from their parent — repeating the button on every
+              // resource row turns the whole right rail into noise.
+              if (depth === 0 || (children && children > 0)) {
+                rightAlignedBadges.push(this.createSessionButton(value, !!hasErrors));
+              }
             } else if (field === 'user email') {
               userEmail = value; userBadgeStyle = badgeStyle;
             } else if (field === 'user name') {
