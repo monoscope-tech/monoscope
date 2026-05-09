@@ -13,6 +13,7 @@ module Opentelemetry.OtlpServer (
   migrateHttpSemanticConventions,
   parseConnectionString,
   migrateElasticsearchPathParts,
+  deriveClientAddress,
 ) where
 
 import Control.Concurrent (forkIO, threadDelay)
