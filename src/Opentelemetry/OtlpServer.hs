@@ -649,8 +649,109 @@ migrateHttpSemanticConventions !keyVals =
        in emit "exception.type" (pick "error.name" <|> pick "error.type")
             ++ emit "exception.message" (pick "error.message")
             ++ emit "exception.stacktrace" (pick "error.stacktrace" <|> pick "error.stack")
+
+    -- Derive client.address from common proxy/CDN request headers when the
+    -- producer didn't already set it. Real client IPs land at the edge in
+    -- vendor-specific headers; without this, all spans behind a proxy show
+    -- the proxy's address (or nothing) in attributes___client___address.
+    migrateClientAddress = deriveClientAddress kvMap
    in
-    mgVals ++ migrateHttpTarget ++ migrateMethodOther ++ migrateConnectionString ++ migrateElasticsearchPaths ++ migrateRedisIndex ++ migrateBrowserError
+    mgVals ++ migrateHttpTarget ++ migrateMethodOther ++ migrateConnectionString ++ migrateElasticsearchPaths ++ migrateRedisIndex ++ migrateBrowserError ++ migrateClientAddress
+
+
+-- | Derive @client.address@ from common proxy/CDN headers when not explicitly set.
+-- Header values may be a String or an Array of Strings (OTel semconv uses arrays).
+-- For @x-forwarded-for@, takes the leftmost (originating client) IP.
+-- For @forwarded@ (RFC 7239), parses the first @for=@ parameter.
+--
+-- >>> import qualified Data.Aeson as AE
+-- >>> import qualified Data.HashMap.Strict as HM
+-- >>> import "monoscope" Opentelemetry.OtlpServer qualified as OS
+-- >>> OS.deriveClientAddress (HM.fromList [("http.request.header.cf-connecting-ip", AE.String "102.218.59.65")])
+-- [("client.address",String "102.218.59.65")]
+--
+-- Array form (OTel semconv):
+-- >>> import qualified Data.Vector as V
+-- >>> OS.deriveClientAddress (HM.fromList [("http.request.header.cf-connecting-ip", AE.Array (V.fromList [AE.String "102.218.59.65"]))])
+-- [("client.address",String "102.218.59.65")]
+--
+-- x-forwarded-for: leftmost IP wins:
+-- >>> OS.deriveClientAddress (HM.fromList [("http.request.header.x-forwarded-for", AE.String "203.0.113.1, 70.41.3.18, 150.172.238.178")])
+-- [("client.address",String "203.0.113.1")]
+--
+-- RFC 7239 forwarded header:
+-- >>> OS.deriveClientAddress (HM.fromList [("http.request.header.forwarded", AE.String "for=192.0.2.60;proto=http;by=203.0.113.43")])
+-- [("client.address",String "192.0.2.60")]
+--
+-- Forwarded with quoted IPv6:
+-- >>> OS.deriveClientAddress (HM.fromList [("http.request.header.forwarded", AE.String "for=\"[2001:db8::1]:4711\"")])
+-- [("client.address",String "2001:db8::1")]
+--
+-- Priority: cf-connecting-ip > true-client-ip > x-real-ip > x-forwarded-for:
+-- >>> OS.deriveClientAddress (HM.fromList [("http.request.header.x-forwarded-for", AE.String "9.9.9.9"), ("http.request.header.cf-connecting-ip", AE.String "1.1.1.1")])
+-- [("client.address",String "1.1.1.1")]
+--
+-- Existing client.address is never overwritten:
+-- >>> OS.deriveClientAddress (HM.fromList [("client.address", AE.String "5.5.5.5"), ("http.request.header.cf-connecting-ip", AE.String "1.1.1.1")])
+-- []
+--
+-- No header present:
+-- >>> OS.deriveClientAddress (HM.fromList [("http.request.method", AE.String "GET")])
+-- []
+--
+-- RFC 7239 obfuscated identifiers and "unknown" sentinels are skipped; lower-priority
+-- headers are tried next:
+-- >>> OS.deriveClientAddress (HM.fromList [("http.request.header.cf-connecting-ip", AE.String "unknown"), ("http.request.header.x-real-ip", AE.String "8.8.8.8")])
+-- [("client.address",String "8.8.8.8")]
+--
+-- >>> OS.deriveClientAddress (HM.fromList [("http.request.header.forwarded", AE.String "for=_hidden")])
+-- []
+deriveClientAddress :: HM.HashMap Text AE.Value -> [(Text, AE.Value)]
+deriveClientAddress kvMap
+  | HM.member "client.address" kvMap = []
+  | otherwise = case asum (map tryHeader clientIpHeaders) of
+      Just ip -> [("client.address", AE.String ip)]
+      Nothing -> []
+  where
+    -- Priority order: vendor-specific (single, trustworthy) before XFF (chainable, spoofable).
+    clientIpHeaders :: [(Text, Text -> Text)]
+    clientIpHeaders =
+      [ ("http.request.header.cf-connecting-ip", T.strip)
+      , ("http.request.header.true-client-ip", T.strip)
+      , ("http.request.header.fastly-client-ip", T.strip)
+      , ("http.request.header.x-real-ip", T.strip)
+      , ("http.request.header.x-client-ip", T.strip)
+      , ("http.request.header.x-cluster-client-ip", T.strip)
+      , ("http.request.header.x-forwarded-for", T.strip . fst . T.breakOn ",")
+      , ("http.request.header.forwarded", parseForwardedFor)
+      ]
+    tryHeader (key, parse) = do
+      raw <- headerString =<< HM.lookup key kvMap
+      let ip = parse raw
+      -- Reject RFC 7239 §6.3 obfuscated identifiers ("_hidden") and the legacy
+      -- nginx "unknown" sentinel — both are explicitly not IPs.
+      guard (not (T.null ip) && not ("_" `T.isPrefixOf` ip) && T.toLower ip /= "unknown")
+      pure ip
+    headerString = \case
+      AE.String t -> Just t
+      AE.Array xs | Just (AE.String t) <- xs V.!? 0 -> Just t
+      _ -> Nothing
+    -- RFC 7239: pick first 'for=' token; strip optional quotes, brackets, port.
+    parseForwardedFor s =
+      case [ T.drop 4 trimmed
+           | part <- T.splitOn ";" (fst (T.breakOn "," s))
+           , let trimmed = T.strip part
+           , "for=" `T.isPrefixOf` T.toLower trimmed
+           ] of
+        (v : _) ->
+          let unquoted = T.dropAround (== '"') (T.strip v)
+              -- "[ipv6]:port" → "ipv6"; "ipv4:port" → "ipv4"; bare host → unchanged.
+              stripped
+                | "[" `T.isPrefixOf` unquoted = T.takeWhile (/= ']') (T.drop 1 unquoted)
+                | T.count ":" unquoted == 1 = fst (T.breakOn ":" unquoted)
+                | otherwise = unquoted
+           in T.strip stripped
+        [] -> ""
 
 
 -- Extract structured information from protobuf decoding errors
