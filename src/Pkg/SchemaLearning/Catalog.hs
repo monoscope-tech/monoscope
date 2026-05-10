@@ -467,7 +467,8 @@ diffAnomalies kh priorM cur =
       isHttp = cur.template.keyKind == HttpEndpoint
       headline =
         [ ProducedAnomaly AKEndpoint kh kh Nothing
-        | isNew, isHttp
+        | isNew
+        , isHttp
         ]
       shapeChanged = case priorM of
         Nothing -> True
