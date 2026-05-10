@@ -323,9 +323,8 @@ rowCountDisplay_ suffix countText suffixText =
     dashSuffix = if T.null suffix then "" else "-" <> suffix
 
 
--- | Render facet data for Log Explorer sidebar in a compact format
--- | The facet counts are already scaled in the Fields.getFacetSummary function based on the selected time range
--- | Facets are normally generated for a 24-hour period, but will be proportionally adjusted for the user's time selection
+-- | Render facet data for Log Explorer sidebar in a compact format.
+-- | Facet counts are derived in-memory from 'SchemaCatalog.getFacetSummary'.
 renderFacets :: FacetSummary -> Html ()
 renderFacets facetSummary = do
   let (FacetData facetMap) = facetSummary.facetJson
@@ -787,12 +786,6 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
           teams = fromRight V.empty teamsE
           (patterns, sessions, sessionSummary) = fromRight (Nothing, Nothing, Nothing) aggregateE
           (queryLibRecent, queryLibSaved) = bimap V.fromList V.fromList $ L.partition (\x -> Projects.QLTHistory == x.queryType) queryLib
-
-      -- Queue facet generation if no precomputed facets exist (new projects)
-      when (isNothing facetSummary)
-        $ liftIO
-        $ withResource authCtx.jobsPool \conn ->
-          void $ createJob conn "background_jobs" $ BackgroundJobs.GenerateOtelFacetsBatch (V.singleton pid) now
 
       -- Build preload URL using the same function that builds the JSON URLs
       let preloadUrl = T.replace "\"" "%22" $ LogQueries.logExplorerUrlPath pid queryM' cols' (formatUTC <$> cursorM') sinceM fromM toM Nothing sourceM False

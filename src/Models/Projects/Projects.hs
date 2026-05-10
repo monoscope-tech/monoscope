@@ -329,11 +329,6 @@ data ProjectCache = ProjectCache
     hosts :: V.Vector Text
   , -- maybe we don't need this? See the next point.
     endpointHashes :: V.Vector Text
-  , -- We check if every request is part of the redact list, so it's better if we don't need to  hit the db for them with each request.
-    -- Since we have a need to redact fields by endpoint, we can simply have the fields paths be prepended by the endpoint hash.
-    -- [endpointHash]<>[field_category eg requestBody]<>[field_key_path]
-    -- Those redact fields that don't have endpoint or field_category attached, would be aplied to every endpoint and field category.
-    redactFieldslist :: V.Vector Text
   , -- Daily count of events from otel_logs_and_spans table for the last 24 hours
     dailyEventCount :: Int
   , -- Daily count of metrics for the last 24 hours
@@ -380,7 +375,6 @@ projectCacheById pid = do
     [HI.sql|
     select  coalesce(ARRAY_AGG(DISTINCT hosts ORDER BY hosts ASC),'{}') hosts,
             coalesce(ARRAY_AGG(DISTINCT endpoint_hashes ORDER BY endpoint_hashes ASC),'{}') endpoint_hashes,
-            coalesce(ARRAY_AGG(DISTINCT paths ORDER BY paths ASC),'{}') redacted_fields,
             ( SELECT count(*)::int FROM otel_logs_and_spans
              WHERE project_id=#{pidText} AND timestamp > #{now}::timestamptz - INTERVAL '1' DAY
             ) daily_event_count,
@@ -392,13 +386,9 @@ projectCacheById pid = do
              FROM apis.endpoints WHERE project_id = #{pid} AND canonical_path IS NOT NULL
             ) canonical_paths
     from
-      -- field_category column was dropped by the 0090 cascade (apis.field_category
-      -- enum was the type). The redact-list format keeps the '<>' separators so
-      -- consumers that split on them still see three segments.
-      (select e.host hosts, e.hash endpoint_hashes, concat(rf.endpoint_hash,'<>','<>', rf.path) paths
-        from apis.endpoints e
-        left join projects.redacted_fields rf ON rf.project_id = e.project_id
-        where e.project_id = #{pid}
+      (select e.host hosts, e.hash endpoint_hashes
+         from apis.endpoints e
+         where e.project_id = #{pid}
        ) enp; |]
 
 

@@ -1,6 +1,6 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl, sameSegmentCount) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl, sameSegmentCount) where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
@@ -22,7 +22,7 @@ import Data.Either qualified as Unsafe
 import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HashSet
 import Data.List as L (partition)
-import Data.List.Extra (chunksOf, groupBy)
+import Data.List.Extra (groupBy)
 import Data.Map.Strict qualified as Map
 import Data.Ord (clamp)
 import Data.Pool (withResource)
@@ -68,6 +68,7 @@ import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.PatternMerge qualified as PatternMergeDB
+import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitHub
 import Models.Projects.GitSync qualified as GitSync
@@ -131,7 +132,6 @@ data BgJobs
   | HourlyJob UTCTime Int
   | ReportUsage Projects.ProjectId
   | TrialEndingReminder Projects.ProjectId Int
-  | GenerateOtelFacetsBatch (V.Vector Projects.ProjectId) UTCTime
   | QueryMonitorsCheck
   | DeletedProject Projects.ProjectId
   | CleanupDemoProject
@@ -238,7 +238,6 @@ rescheduleSelf authCtx mkJob at =
 processBackgroundJob :: Config.AuthContext -> BgJobs -> ATBackgroundCtx ()
 processBackgroundJob authCtx bgJob =
   case bgJob of
-    GenerateOtelFacetsBatch pids timestamp -> generateOtelFacetsBatch pids timestamp
     NewAnomaly{projectId, createdAt, anomalyType, anomalyAction, targetHashes} -> newAnomalyJob projectId createdAt anomalyType anomalyAction (V.fromList targetHashes)
     InviteUserToProject userId projectId reciever projectTitle' -> do
       userM <- Projects.userById userId
@@ -837,15 +836,16 @@ runHourlyJob scheduledTime hour = do
                 AND ols.timestamp <= #{scheduledTime}::timestamptz |]
 
   Log.logTrace "Projects with new data in the last hour window" ("count", AE.toJSON $ length activeProjects)
-  let projectBatches = chunksOf 10 activeProjects
 
   liftIO $ withResource ctx.jobsPool \conn -> do
-    forM_ projectBatches \batch ->
-      createJob conn "background_jobs" $ BackgroundJobs.GenerateOtelFacetsBatch (V.fromList batch) scheduledTime
     forM_ activeProjects \pid -> do
       void $ createJob conn "background_jobs" $ BackgroundJobs.ReportUsage pid
       void $ createJob conn "background_jobs" $ ErrorBaselineCalculation pid
       void $ createJob conn "background_jobs" $ ErrorSpikeDetection pid
+
+  -- Drop schema_template rows no longer referenced by any catalog row.
+  templatesVacuumed <- SchemaCatalog.vacuumUnreferencedTemplates
+  Relude.when (templatesVacuumed > 0) $ Log.logInfo "Vacuumed unreferenced schema templates" ("deleted_count", AE.toJSON templatesVacuumed)
 
   -- Cleanup expired query cache entries
   deletedCount <- QueryCache.cleanupExpiredCache
@@ -896,36 +896,6 @@ checkFreeTierUsageNotifications pids now = forM_ pids \pid -> tryLog "free-tier-
         let billingUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/manage_billing"
             (subj, html) = ET.freeTierUsageEmail project.title billingUrl count limit exceeded
         forM_ users \user -> sendRenderedEmail (CI.original user.email) subj (ET.renderEmail subj html)
-
-
-generateOtelFacetsBatch :: (IOE :> es, Ki.StructuredConcurrency :> es, Log :> es, Tracing :> es) => V.Vector Projects.ProjectId -> UTCTime -> Eff es ()
-generateOtelFacetsBatch projectIds _timestamp = do
-  Log.logTrace "Starting batch OTLP facets generation" ("project_count", AE.toJSON $ V.length projectIds)
-
-  -- Process projects concurrently with individual error handling
-  results <- Ki.scoped \scope -> do
-    threads <- forM projectIds \pid -> Ki.fork scope $ do
-      -- Wrap each project's facet generation in a span
-      withSpan
-        "facet_generation.project"
-        [ ("project_id", OA.toAttribute pid.toText)
-        , ("batch_size", OA.toAttribute $ V.length projectIds)
-        ]
-        $ \sp -> do
-          addEvent sp "facet_generation.deprecated" []
-          setStatus sp Ok
-          pure $ Right pid
-    traverse (Ki.atomically . Ki.await) threads
-
-  let successes = V.length $ V.filter isRight results
-      failures = V.length $ V.filter isLeft results
-
-  Log.logTrace "Completed batch OTLP facets generation"
-    $ AE.object
-      [ "total_projects" AE..= V.length projectIds
-      , "successes" AE..= successes
-      , "failures" AE..= failures
-      ]
 
 
 -- | Input for Drain tree processing.
@@ -1588,7 +1558,7 @@ processEagerBatch batch shard
         let !canonicalTemplates = parseCanonicalPaths projectCache.canonicalPaths
             !results = V.zipWith (processSpanToEntities canonicalTemplates projectCache) spans entityIds
             !(endpoints, spanHashes, normalizedPaths) = V.unzip3 results
-            !observations = V.map (extractObservation projectCache) spans
+            !observations = V.map extractObservation spans
             !endpointsFinal = deduplicateByHash (.hash) $ V.mapMaybe id endpoints
 
         -- Stream into the in-memory schema catalog. Single-writer per shard;

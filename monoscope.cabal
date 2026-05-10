@@ -116,6 +116,7 @@ extra-source-files:
     static/migrations/0088_message_size_tracking.sql
     static/migrations/0089_schema_catalog.sql
     static/migrations/0090_drop_legacy_schema_tables.sql
+    static/migrations/0091_drop_redacted_fields.sql
 
 source-repository head
   type: git
