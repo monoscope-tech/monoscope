@@ -1588,7 +1588,7 @@ processEagerBatch batch shard
         let !canonicalTemplates = parseCanonicalPaths projectCache.canonicalPaths
             !results = V.zipWith (processSpanToEntities canonicalTemplates projectCache) spans entityIds
             !(endpoints, spanHashes, normalizedPaths) = V.unzip3 results
-            !observations = V.map (extractObservation projectCache) spans
+            !observations = V.map extractObservation spans
             !endpointsFinal = deduplicateByHash (.hash) $ V.mapMaybe id endpoints
 
         -- Stream into the in-memory schema catalog. Single-writer per shard;

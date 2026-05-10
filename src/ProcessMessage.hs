@@ -303,16 +303,17 @@ processSpanToEntities canonicalTemplates pjc otelSpan dumpId =
 -- them. Walks @attributes ∪ resource ∪ body ∪ events@ with redaction
 -- applied so PII never enters the catalog.
 extractObservation
-  :: Projects.ProjectCache
-  -> OtelLogsAndSpans
+  :: OtelLogsAndSpans
   -> SchemaHot.ObservationInput
-extractObservation pjc otelSpan =
+extractObservation otelSpan =
   let !projectIdText = otelSpan.project_id
       !attrMap = maybeToMonoid (unAesonTextMaybe otelSpan.attributes)
       !resMap = maybeToMonoid (unAesonTextMaybe otelSpan.resource)
       !attrValue = AE.Object $ AEKM.fromMapText attrMap
       !isHttpSpan = isJust $ attrValue ^? key "http" . key "request" . key "method" . _String
-      !redactList = pjc.redactFieldslist V.++ V.fromList [".set-cookie", ".password"]
+      -- Hard-coded ingestion-time redaction. Per-project rules were removed
+      -- with `projects.redacted_fields`; the management UI is gone.
+      !redactList = V.fromList [".set-cookie", ".password"]
       !redacted = redactJSON redactList
 
       -- HTTP keying parity with processSpanToEntities.
