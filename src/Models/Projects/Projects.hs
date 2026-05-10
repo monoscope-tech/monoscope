@@ -392,7 +392,10 @@ projectCacheById pid = do
              FROM apis.endpoints WHERE project_id = #{pid} AND canonical_path IS NOT NULL
             ) canonical_paths
     from
-      (select e.host hosts, e.hash endpoint_hashes, concat(rf.endpoint_hash,'<>', rf.field_category,'<>', rf.path) paths
+      -- field_category column was dropped by the 0090 cascade (apis.field_category
+      -- enum was the type). The redact-list format keeps the '<>' separators so
+      -- consumers that split on them still see three segments.
+      (select e.host hosts, e.hash endpoint_hashes, concat(rf.endpoint_hash,'<>','<>', rf.path) paths
         from apis.endpoints e
         left join projects.redacted_fields rf ON rf.project_id = e.project_id
         where e.project_id = #{pid}
