@@ -110,8 +110,9 @@ import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
-import Models.Apis.Fields qualified as Fields
 import Models.Apis.Issues qualified as Issues
+import Models.Apis.SchemaCatalog qualified as SchemaCatalog
+import Pkg.SchemaLearning.Catalog qualified as Fields
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.ShareEvents qualified as ShareEvents
@@ -1141,7 +1142,7 @@ apiFacets pid sinceM fromM toM fieldM = do
   let (fromT, toT, _) = TP.parseTimeRange now (TP.TimePicker sinceM fromM toM)
       defaultFrom = fromMaybe (addUTCTime (negate nominalDay) now) fromT
       defaultTo = fromMaybe now toT
-  summaryM <- Fields.getFacetSummary pid "otel_logs_and_spans" defaultFrom defaultTo
+  summaryM <- SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" defaultFrom defaultTo
   let Fields.FacetData facetMap = maybe (Fields.FacetData mempty) (.facetJson) summaryM
       -- Storage uses `___` as the path separator (raw column names like
       -- `resource___service___name`); the public API contract is dotted.

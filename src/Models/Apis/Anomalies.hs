@@ -47,7 +47,7 @@ import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
-import Models.Apis.Fields qualified as Fields (
+import Pkg.SchemaLearning.Catalog qualified as Fields (
   FieldCategoryEnum,
   FieldId,
   FieldTypes,
@@ -154,6 +154,14 @@ getAnomaliesVM pid hash
   | V.null hash = pure []
   | otherwise = do
       now <- Time.currentTime
+      -- Legacy apis.shapes / fields / formats joins removed (those tables
+      -- were dropped in 0090). The schema-learning catalog
+      -- (apis.schema_catalog) replaces them; per-field VM details
+      -- (key_path, format examples, etc.) currently surface as NULL on
+      -- legacy anomaly_type values and need a fresh query against the new
+      -- table — TODO once the anomaly producer in
+      -- @Pkg.SchemaLearning.Worker.flushDirty@ stamps target_hash
+      -- accordingly.
       Hasql.interp
         [HI.sql|
 SELECT
@@ -166,19 +174,19 @@ SELECT
     an.anomaly_type,
     an.action,
     an.target_hash,
-    shapes.id shape_id,
-    coalesce(shapes.new_unique_fields, '{}'::TEXT[]) new_unique_fields,
-    coalesce(shapes.deleted_fields, '{}'::TEXT[]) deleted_fields,
-    coalesce(shapes.updated_field_formats, '{}'::TEXT[]) updated_field_formats,
-    fields.id field_id,
-    fields.key field_key,
-    fields.key_path field_key_path,
-    fields.field_category field_category,
-    fields.format field_format,
-    formats.id format_id,
-    formats.field_type format_type,
-    formats.examples format_examples,
-    endpoints.id endpoint_id,
+    NULL::uuid     shape_id,
+    '{}'::TEXT[]   new_unique_fields,
+    '{}'::TEXT[]   deleted_fields,
+    '{}'::TEXT[]   updated_field_formats,
+    NULL::uuid     field_id,
+    NULL::text     field_key,
+    NULL::text     field_key_path,
+    NULL::text     field_category, -- placeholder; legacy field_category enum is dropped
+    NULL::text     field_format,
+    NULL::uuid     format_id,
+    NULL::text     format_type,    -- placeholder; legacy field_type enum is dropped
+    '{}'::jsonb[]  format_examples,
+    endpoints.id   endpoint_id,
     endpoints.method endpoint_method,
     endpoints.url_path endpoint_url_path,
     endpoints.service_name endpoint_service_name,
@@ -189,17 +197,9 @@ SELECT
 from
     apis.anomalies an
     LEFT JOIN apis.issues iss ON iss.target_hash = an.target_hash AND iss.project_id = an.project_id
-    LEFT JOIN apis.formats on (an.target_hash = formats.hash AND an.project_id = formats.project_id)
-    LEFT JOIN apis.fields on (
-        ((fields.hash = formats.field_hash ) AND an.project_id = fields.project_id)
-        OR fields.hash = formats.field_hash
-    )
-    LEFT JOIN apis.shapes on (an.target_hash = shapes.hash AND an.project_id = shapes.project_id)
     LEFT JOIN apis.endpoints ON (starts_with(an.target_hash, endpoints.hash) AND an.project_id = endpoints.project_id)
 where
   ((an.anomaly_type = 'endpoint')
-    OR (an.anomaly_type = 'shape' AND endpoints.project_id = an.project_id AND endpoints.created_at != an.created_at)
-    OR (an.anomaly_type = 'format' AND fields.project_id = an.project_id AND fields.created_at != an.created_at)
     OR NOT (an.anomaly_type = ANY('{"endpoint","shape","field","format"}'::apis.anomaly_type[]))
   ) AND an.project_id=#{pid} AND an.target_hash=ANY(#{hash})
       |]

@@ -130,6 +130,7 @@ runServer appLogger env tp = do
           <> [ fiber "drain-age-flush" $ BackgroundJobs.runDrainAgeFlushTimer appLogger env
              , fiber "error-decay" $ BackgroundJobs.runErrorDecayFiber appLogger env tp
              , fiber "session-backfill" $ BackgroundJobs.runSessionBackfillTimer appLogger env tp
+             , fiber "schema-flusher" $ void $ BackgroundJobs.runSchemaFlusherFiber appLogger env tp
              ]
   liftIO $ atomically $ writeTVar env.extractionWorker.acceptingBatches True
   asyncs <-

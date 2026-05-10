@@ -1,6 +1,6 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSessionBackfillTimer, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl, sameSegmentCount) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl, sameSegmentCount) where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
@@ -62,7 +62,6 @@ import Lucid (Html)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
-import Models.Apis.Fields qualified as Fields
 import Models.Apis.IssueEnhancement qualified as Enhancement
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns qualified as LogPatterns
@@ -91,12 +90,17 @@ import Pkg.DeriveUtils (BaselineState (..), UUIDId (..), rawSql)
 import Pkg.Drain qualified as Drain
 import Pkg.EmailTemplates qualified as ET
 import Pkg.ExtractionWorker qualified as ExtractionWorker
+import Pkg.SchemaLearning.Hot qualified as SchemaHot
+import Pkg.SchemaLearning.Worker qualified as SchemaWorker
+
+-- Fields module is being deleted; remove its import.
+-- (Old usages of Fields.bulkInsertX / Fields.generateAndSaveFacets are gone.)
 import Pkg.Mail (NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendDiscordAlertWith, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendSlackAlertWith, sendSlackMessage, sendWhatsAppAlert)
 import Pkg.Parser
 import Pkg.PatternMerge qualified as PatternMerge
 import Pkg.QueryCache qualified as QueryCache
 import Pkg.TraceSessionCache qualified as TSC
-import ProcessMessage (parseCanonicalPaths, processSpanToEntities, tokenizeUrlPath)
+import ProcessMessage (extractObservation, parseCanonicalPaths, processSpanToEntities, tokenizeUrlPath)
 import PyF (fmtTrim)
 import Relude hiding (ask)
 import Relude.Extra.Tuple (fmapToSnd)
@@ -344,7 +348,7 @@ processBackgroundJob authCtx bgJob =
               -- itself; the daily loop seeds a full day's ticks so a single restart
               -- can't leave a gap when the self-chain was broken.
               let seed :: Int -> Int -> (UTCTime -> BgJobs) -> IO ()
-                  seed count step mkJob = forM_ [0 .. count - 1] \i -> do
+                  seed count step mkJob = forM_ ([0 .. count - 1] :: [Int]) \i -> do
                     let at = addUTCTime (fromIntegral @Int $ i * step) currentTime
                     void $ scheduleJob conn "background_jobs" (mkJob at) at
               forM_ [0 .. 23 :: Int] \i -> do
@@ -894,10 +898,8 @@ checkFreeTierUsageNotifications pids now = forM_ pids \pid -> tryLog "free-tier-
         forM_ users \user -> sendRenderedEmail (CI.original user.email) subj (ET.renderEmail subj html)
 
 
-generateOtelFacetsBatch :: (DB es, Effectful.Reader.Static.Reader Config.AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es, Tracing :> es, UUID.UUIDEff :> es) => V.Vector Projects.ProjectId -> UTCTime -> Eff es ()
-generateOtelFacetsBatch projectIds timestamp = do
-  ctx <- ask @Config.AuthContext
-  let enableTfReads = ctx.env.enableTimefusionReads
+generateOtelFacetsBatch :: (IOE :> es, Ki.StructuredConcurrency :> es, Log :> es, Tracing :> es) => V.Vector Projects.ProjectId -> UTCTime -> Eff es ()
+generateOtelFacetsBatch projectIds _timestamp = do
   Log.logTrace "Starting batch OTLP facets generation" ("project_count", AE.toJSON $ V.length projectIds)
 
   -- Process projects concurrently with individual error handling
@@ -910,17 +912,9 @@ generateOtelFacetsBatch projectIds timestamp = do
         , ("batch_size", OA.toAttribute $ V.length projectIds)
         ]
         $ \sp -> do
-          addEvent sp "facet_generation.started" []
-          result <- try $ Fields.generateAndSaveFacets enableTfReads pid "otel_logs_and_spans" 50 timestamp
-          case result of
-            Left (e :: SomeException) -> do
-              addEvent sp "facet_generation.failed" [("error", OA.toAttribute $ toText $ show e)]
-              setStatus sp (Error $ toText $ show e)
-              pure $ Left (pid, show e)
-            Right _ -> do
-              addEvent sp "facet_generation.completed" []
-              setStatus sp Ok
-              pure $ Right pid
+          addEvent sp "facet_generation.deprecated" []
+          setStatus sp Ok
+          pure $ Right pid
     traverse (Ki.atomically . Ki.await) threads
 
   let successes = V.length $ V.filter isRight results
@@ -1593,11 +1587,19 @@ processEagerBatch batch shard
         !entityIds <- V.replicateM (V.length spans) UUID.genUUID
         let !canonicalTemplates = parseCanonicalPaths projectCache.canonicalPaths
             !results = V.zipWith (processSpanToEntities canonicalTemplates projectCache) spans entityIds
-            !(endpoints, shapes, fields, formats, spanHashes, normalizedPaths) = V.unzip6 results
+            !(endpoints, spanHashes, normalizedPaths) = V.unzip3 results
+            !observations = V.map (extractObservation projectCache) spans
             !endpointsFinal = deduplicateByHash (.hash) $ V.mapMaybe id endpoints
-            !shapesFinal = deduplicateByHash (.hash) $ V.mapMaybe id shapes
-            !fieldsFinal = deduplicateByHash (.hash) $ V.concatMap id fields
-            !formatsFinal = deduplicateByHash (.hash) $ V.concatMap id formats
+
+        -- Stream into the in-memory schema catalog. Single-writer per shard;
+        -- the schema-flusher fiber persists the dirty subset on its own tick.
+        let !policy =
+              SchemaHot.DecisionPolicy
+                { learnFullThreshold = fromIntegral ctx.config.schemaLearnFullThreshold
+                , learnSampleEveryN = fromIntegral ctx.config.schemaLearnSampleEveryN
+                , maxKeysPerProject = ctx.config.schemaCatalogMaxKeysPerProject
+                }
+        liftIO $ SchemaHot.observeSpans shard.schemaState policy pid observations
 
         -- Error extraction (pure).
         let !allErrors = Telemetry.getAllATErrors spans
@@ -1636,16 +1638,14 @@ processEagerBatch batch shard
             perRowErrorsJson =
               V.zipWith (\sid tid -> fromMaybe AE.Null (HM.lookup (sid, tid) errorsByKey)) spanIdsV traceIdsV
 
-        Relude.when (V.length endpointsFinal > 0 || V.length shapesFinal > 0 || V.length fieldsFinal > 0 || V.length formatsFinal > 0 || V.length allErrors > 0)
+        Relude.when (V.length endpointsFinal > 0 || V.length allErrors > 0)
           $ Log.logTrace
             "Eager-track derivations"
             ( AE.object
                 [ "project_id" AE..= pid.toText
                 , "spans" AE..= V.length spans
                 , "endpoints" AE..= V.length endpointsFinal
-                , "shapes" AE..= V.length shapesFinal
-                , "fields" AE..= V.length fieldsFinal
-                , "formats" AE..= V.length formatsFinal
+                , "observations" AE..= V.length observations
                 , "errors" AE..= V.length allErrors
                 ]
             )
@@ -1657,9 +1657,9 @@ processEagerBatch batch shard
           let forkNonEmpty :: V.Vector a -> (V.Vector a -> ATBackgroundCtx ()) -> ATBackgroundCtx ()
               forkNonEmpty v action = Relude.unless (V.null v) $ void $ Ki.fork scope $ action v
           forkNonEmpty endpointsFinal Endpoints.bulkInsertEndpoints
-          forkNonEmpty shapesFinal Fields.bulkInsertShapes
-          forkNonEmpty fieldsFinal Fields.bulkInsertFields
-          forkNonEmpty formatsFinal Fields.bulkInsertFormat
+          -- Legacy apis.shapes/fields/formats writes removed; the
+          -- in-memory schema-learning catalog (observeSpans above) +
+          -- runSchemaFlusherFiber replaces them.
           forkNonEmpty allErrors \_ -> liftIO $ withResource ctx.jobsPool \conn ->
             void $ createJob conn "background_jobs" $ ProcessProjectErrorsJob pid allErrors now
           Ki.atomically $ Ki.awaitAll scope
@@ -1722,6 +1722,18 @@ processEagerBatch batch shard
                       }
                   )
         liftIO $ ExtractionWorker.appendBufferedSpans shard pid ctx.config.drainFlushBatchSize now ctx.extractionWorker.droppedFlushTasks bufferedSpans
+
+
+-- | Periodic schema-learning flush fiber. Iterates each shard once per
+-- @schemaFlushIntervalSecs@, persists the dirty subset of catalog entries,
+-- and re-derives the per-project summary doc.
+runSchemaFlusherFiber :: Logger -> Config.AuthContext -> TracerProvider -> IO Void
+runSchemaFlusherFiber logger ctx tp = do
+  let refs = V.toList $ V.map (.schemaState) ctx.extractionWorker.shards
+      flushOne ref =
+        runBackground logger ctx tp (SchemaWorker.flushDirty ref)
+          >>= \r -> pure r
+  SchemaWorker.runSchemaFlusher ctx.config.schemaFlushIntervalSecs refs flushOne
 
 
 -- | 1-minute error-state decay tick. Owns `propagateMergedCounts` +

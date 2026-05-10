@@ -4,12 +4,12 @@
 module ProcessMessage (
   processMessages,
   processSpanToEntities,
+  extractObservation,
   RequestMessage (..),
   valueToFormatStr,
   valueToFields,
   redactJSON,
   replaceNullChars,
-  fieldsToFieldDTO,
   sortVector,
   ensureUrlParams,
   dedupFields,
@@ -41,9 +41,7 @@ import Data.Effectful.UUID qualified as UUID
 import Data.HashMap.Strict qualified as HM
 import Data.HashTable.Class qualified as HTC
 import Data.HashTable.ST.Cuckoo qualified as HT
-import Data.Scientific qualified as Scientific
 import Data.Text qualified as T
-import Data.Text.Display (display)
 import Data.Time (addUTCTime, zonedTimeToUTC)
 import Data.Time.LocalTime (ZonedTime)
 import Data.UUID qualified as UUID
@@ -57,12 +55,14 @@ import Effectful.Labeled (Labeled (..))
 import Effectful.Log (Log)
 import Effectful.Reader.Static qualified as Eff
 import Models.Apis.Endpoints qualified as Endpoints
-import Models.Apis.Fields qualified as Fields
 import Models.Apis.LogQueries qualified as LogQueries
+import Pkg.SchemaLearning.Catalog qualified as Fields
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (Context (trace_state), OtelLogsAndSpans (..), generateSummary)
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Pkg.DeriveUtils (AesonText (..), UUIDId (..), unAesonTextMaybe)
+import Pkg.SchemaLearning.Catalog qualified as Catalog
+import Pkg.SchemaLearning.Hot qualified as SchemaHot
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext (..), EnvConfig (..))
@@ -196,12 +196,16 @@ stripNulBytes :: Text -> Text
 stripNulBytes = T.replace "\NUL" ""
 
 
--- | Process a single span to extract entities for anomaly detection.
--- Returns @(endpoint, shape, fields, formats, hashes, normalizedPath)@.
--- The normalized path (@Just@ for HTTP spans) is stamped back onto the span's
+-- | Process a single span to extract entities for hash-stamping.
+-- Returns @(endpoint, hashes, normalizedPath)@. The normalized path
+-- (@Just@ for HTTP spans) is stamped back onto the span's
 -- @attributes.http.route@ and @attributes.url.path@ by the caller so that
 -- explorer queries match the template stored in @apis.endpoints@.
-processSpanToEntities :: HM.HashMap (Text, Text) [([Text], Text)] -> Projects.ProjectCache -> Telemetry.OtelLogsAndSpans -> UUID.UUID -> (Maybe Endpoints.Endpoint, Maybe Fields.Shape, V.Vector Fields.Field, V.Vector Fields.Format, V.Vector Text, Maybe Text)
+--
+-- Schema learning (fields/formats/shapes) now flows through
+-- 'extractObservation' + the schema-learning catalog; this function only
+-- handles endpoint discovery + hash stamping.
+processSpanToEntities :: HM.HashMap (Text, Text) [([Text], Text)] -> Projects.ProjectCache -> Telemetry.OtelLogsAndSpans -> UUID.UUID -> (Maybe Endpoints.Endpoint, V.Vector Text, Maybe Text)
 processSpanToEntities canonicalTemplates pjc otelSpan dumpId =
   let !projectId = UUIDId $ Unsafe.fromJust $ UUID.fromText otelSpan.project_id
 
@@ -249,77 +253,18 @@ processSpanToEntities canonicalTemplates pjc otelSpan dumpId =
 
       -- URL normalization and dynamic path parameter extraction
       !urlPath' = LogQueries.normalizeUrlPath sdkType statusCode method routePath
-      !(!urlPathDyn, !pathParamsDyn, !hasDyn) = ensureUrlParams urlPath'
-      !(!urlPath, !pathParams) =
+      !(!urlPathDyn, !_pathParamsDyn, !hasDyn) = ensureUrlParams urlPath'
+      !urlPath =
         if hasDyn
-          then (urlPathDyn, pathParamsDyn)
-          else
-            ( fromMaybe urlPath' $ matchCanonicalPath canonicalTemplates method host urlPath'
-            , fromMaybe AE.emptyObject $ attrValue ^? key "http" . key "request" . key "path_params"
-            )
+          then urlPathDyn
+          else fromMaybe urlPath' $ matchCanonicalPath canonicalTemplates method host urlPath'
 
-      -- Extract query params and headers from attributes
-      !queryParams = fromMaybe AE.emptyObject $ attrValue ^? key "http" . key "request" . key "query_params"
-      !requestHeaders = fromMaybe AE.emptyObject $ extractHeaders "http.request.headers" attrValue
-      !responseHeaders = fromMaybe AE.emptyObject $ extractHeaders "http.response.headers" attrValue
-
-      -- Generate endpoint hash - this uniquely identifies an API endpoint
-      -- Hash components: projectId + host + method + urlPath
-      -- This hash is used to detect new endpoints (endpoint anomalies)
+      -- Generate endpoint hash - this uniquely identifies an API endpoint.
       !endpointHash = toXXHash $ projectId.toText <> host <> method <> urlPath
-
-      -- Set up redaction to protect sensitive data
-      !redactFieldsList = pjc.redactFieldslist V.++ V.fromList [".set-cookie", ".password"]
-      !redacted = redactJSON redactFieldsList
-
-      -- Extract request/response bodies from span body
-      !bodyValue = fromMaybe AE.Null (unAesonTextMaybe otelSpan.body)
-      !requestBody = redacted $ fromMaybe AE.Null $ bodyValue ^? key "request_body"
-      !responseBody = redacted $ fromMaybe AE.Null $ bodyValue ^? key "response_body"
-
-      -- Extract and process all field categories
-      !pathParamFields = valueToFields $ redacted pathParams
-      !queryParamFields = valueToFields $ redacted queryParams
-      !reqHeaderFields = valueToFields $ redacted requestHeaders
-      !respHeaderFields = valueToFields $ redacted responseHeaders
-      !reqBodyFields = valueToFields requestBody
-      !respBodyFields = valueToFields responseBody
-
-      -- Extract key paths for shape hash calculation
-      !queryParamsKP = V.map fst queryParamFields
-      !requestHeadersKP = V.map fst reqHeaderFields
-      !responseHeadersKP = V.map fst respHeaderFields
-      !requestBodyKP = V.map fst reqBodyFields
-      !responseBodyKP = V.map fst respBodyFields
-
-      -- Calculate shape hash - identifies unique request/response structures
-      -- A shape represents the "schema" of an API call for a specific status code
-      -- Hash components: endpointHash + statusCode + sorted field paths
-      -- New shapes trigger shape anomalies indicating API structure changes
-      !representativeKP = sortVector $ queryParamsKP <> responseHeadersKP <> requestBodyKP <> responseBodyKP
-      !combinedKeyPathStr = T.concat $ V.toList representativeKP
-      !shapeHash = endpointHash <> show statusCode <> toXXHash combinedKeyPathStr
-
-      -- Convert all field categories to DTOs
-      !pathParamsFieldsDTO = V.map (fieldsToFieldDTO Fields.FCPathParam projectId endpointHash) pathParamFields
-      !queryParamsFieldsDTO = V.map (fieldsToFieldDTO Fields.FCQueryParam projectId endpointHash) queryParamFields
-      !reqHeadersFieldsDTO = V.map (fieldsToFieldDTO Fields.FCRequestHeader projectId endpointHash) reqHeaderFields
-      !respHeadersFieldsDTO = V.map (fieldsToFieldDTO Fields.FCResponseHeader projectId endpointHash) respHeaderFields
-      !reqBodyFieldsDTO = V.map (fieldsToFieldDTO Fields.FCRequestBody projectId endpointHash) reqBodyFields
-      !respBodyFieldsDTO = V.map (fieldsToFieldDTO Fields.FCResponseBody projectId endpointHash) respBodyFields
-      !fieldsDTO = V.concat [pathParamsFieldsDTO, queryParamsFieldsDTO, reqHeadersFieldsDTO, respHeadersFieldsDTO, reqBodyFieldsDTO, respBodyFieldsDTO]
-
-      !(!fields, !formats) = V.unzip fieldsDTO
-      !fieldHashes = sortVector $ V.map (.hash) fields
 
       -- Determine if request is outgoing based on span kind
       !outgoing = otelSpan.kind == Just "client"
 
-      -- Build endpoint if not in cache
-      -- Only create endpoint entity if:
-      -- 1. Not already in project cache (prevents duplicate anomalies)
-      -- 2. Not a 404 response (ignore missing routes)
-      -- When inserted, will trigger endpoints_created_anomaly in DB
       !endpoint =
         if endpointHash `elem` pjc.endpointHashes || statusCode == 404
           then Nothing
@@ -331,7 +276,7 @@ processSpanToEntities canonicalTemplates pjc otelSpan dumpId =
                 , id = UUIDId dumpId
                 , projectId = projectId
                 , urlPath = urlPath
-                , urlParams = AE.emptyObject -- TODO: Should this use pathParams?
+                , urlParams = AE.emptyObject
                 , method = method
                 , host = host
                 , hash = endpointHash
@@ -341,56 +286,159 @@ processSpanToEntities canonicalTemplates pjc otelSpan dumpId =
                 , environment = environment
                 }
 
-      -- Build shape if not in cache
-      -- Shape represents the structure of request/response for a specific endpoint+status
-      -- Only create if not cached and not 404
-      -- When inserted, will trigger shapes_created_anomaly in DB
-      !shape =
-        if shapeHash `elem` pjc.shapeHashes || statusCode == 404
-          then Nothing
-          else
-            Just
-              $ Fields.Shape
-                { id = UUIDId dumpId
-                , createdAt = otelSpan.timestamp
-                , updatedAt = otelSpan.timestamp
-                , approvedOn = Nothing
-                , projectId = projectId
-                , endpointHash = endpointHash
-                , queryParamsKeypaths = queryParamsKP
-                , requestBodyKeypaths = requestBodyKP
-                , responseBodyKeypaths = responseBodyKP
-                , requestHeadersKeypaths = requestHeadersKP
-                , responseHeadersKeypaths = responseHeadersKP
-                , fieldHashes = fieldHashes
-                , hash = shapeHash
-                , statusCode = statusCode
-                , responseDescription = ""
-                , requestDescription = ""
-                }
-
-      !fields' = if statusCode == 404 then V.empty else fields
-      !formats' = if statusCode == 404 then V.empty else formats
-
-      -- Collect hashes to update span with
-      !hashes =
-        V.cons endpointHash (if isJust shape then V.cons shapeHash fieldHashes else fieldHashes)
+      -- Span gets one stamped hash (the endpoint hash). Field/shape hashes
+      -- used to be stamped here for anomaly cascades; the schema-learning
+      -- catalog now owns that lookup, so a single hash per span is enough.
+      !hashes = V.singleton endpointHash
 
       -- Normalized path written into both attributes.http.route and attributes.url.path
       -- so new-endpoint notification links and the catalog UI can filter by the
       -- same template stored in apis.endpoints.
       !normalizedPathForSpan = if isHttpSpan then Just urlPath else Nothing
-   in (endpoint, shape, fields', formats', hashes, normalizedPathForSpan)
+   in (endpoint, hashes, normalizedPathForSpan)
+
+
+-- | Build a 'SchemaHot.ObservationInput' for the schema-learning catalog.
+-- Covers HTTP and non-HTTP spans uniformly; the keying tuple distinguishes
+-- them. Walks @attributes ∪ resource ∪ body ∪ events@ with redaction
+-- applied so PII never enters the catalog.
+extractObservation
+  :: Projects.ProjectCache
+  -> OtelLogsAndSpans
+  -> SchemaHot.ObservationInput
+extractObservation pjc otelSpan =
+  let !projectIdText = otelSpan.project_id
+      !attrMap = maybeToMonoid (unAesonTextMaybe otelSpan.attributes)
+      !resMap = maybeToMonoid (unAesonTextMaybe otelSpan.resource)
+      !attrValue = AE.Object $ AEKM.fromMapText attrMap
+      !isHttpSpan = isJust $ attrValue ^? key "http" . key "request" . key "method" . _String
+      !redactList = pjc.redactFieldslist V.++ V.fromList [".set-cookie", ".password"]
+      !redacted = redactJSON redactList
+
+      -- HTTP keying parity with processSpanToEntities.
+      !method = T.toUpper $ fromMaybe "GET" $ attrValue ^? key "http" . key "request" . key "method" . _String
+      !routePath = fromMaybe "/" $ asum [attrValue ^? key "http" . key "route" . _String, attrValue ^? key "url" . key "path" . _String]
+      !host =
+        fromMaybe ""
+          $ asum
+            [ attrValue ^? key "net" . key "host" . key "name" . _String
+            , attrValue ^? key "server" . key "address" . _String
+            , attrValue ^? key "http" . key "host" . _String
+            ]
+      !statusCode =
+        fromMaybe 0
+          $ asum
+            [ attrValue ^? key "http" . key "response" . key "status_code" . _String >>= readMaybe @Int . toString
+            , truncate <$> attrValue ^? key "http" . key "response" . key "status_code" . _Number
+            ]
+
+      !service = Telemetry.atMapText "service.name" (Just resMap) <|> Telemetry.atMapText "service.name" (Just attrMap)
+      !spanName = otelSpan.name
+      !spanKind = otelSpan.kind
+
+      !(keyKind, keyHash, scope) =
+        if isHttpSpan
+          then
+            let !endpointHash = toXXHash $ projectIdText <> host <> method <> routePath
+             in ( Catalog.HttpEndpoint
+                , endpointHash
+                , Catalog.Scope
+                    { Catalog.service = service
+                    , Catalog.spanName = spanName
+                    , Catalog.kind = spanKind
+                    , Catalog.host = if T.null host then Nothing else Just host
+                    , Catalog.method = Just method
+                    , Catalog.urlPath = Just routePath
+                    , Catalog.statusCodes = if statusCode > 0 then V.singleton statusCode else V.empty
+                    }
+                )
+          else
+            let !ident =
+                  toXXHash
+                    $ projectIdText
+                    <> "|"
+                    <> fromMaybe "" service
+                    <> "|"
+                    <> fromMaybe "" spanName
+                    <> "|"
+                    <> fromMaybe "" spanKind
+             in ( Catalog.SpanIdentity
+                , ident
+                , Catalog.Scope
+                    { Catalog.service = service
+                    , Catalog.spanName = spanName
+                    , Catalog.kind = spanKind
+                    , Catalog.host = Nothing
+                    , Catalog.method = Nothing
+                    , Catalog.urlPath = Nothing
+                    , Catalog.statusCodes = V.empty
+                    }
+                )
+
+      -- Walk every section of the span. For HTTP we keep the legacy
+      -- categorisation (header/body/etc.); for non-HTTP we tag attributes
+      -- and resource bag fields with FCAttribute / FCResource.
+      !bodyValue = fromMaybe AE.Null (unAesonTextMaybe otelSpan.body)
+      !eventsValue = fromMaybe AE.Null (unAesonTextMaybe otelSpan.events)
+
+      !walk
+        | isHttpSpan =
+            let !pathParams = fromMaybe AE.emptyObject $ attrValue ^? key "http" . key "request" . key "path_params"
+                !queryParams = fromMaybe AE.emptyObject $ attrValue ^? key "http" . key "request" . key "query_params"
+                !reqHeaders = fromMaybe AE.emptyObject $ extractHeadersV "http.request.headers" attrValue
+                !respHeaders = fromMaybe AE.emptyObject $ extractHeadersV "http.response.headers" attrValue
+                !reqBody = redacted $ fromMaybe AE.Null $ bodyValue ^? key "request_body"
+                !respBody = redacted $ fromMaybe AE.Null $ bodyValue ^? key "response_body"
+             in concat
+                  [ tagWalk Fields.FCPathParam (valueToFields $ redacted pathParams)
+                  , tagWalk Fields.FCQueryParam (valueToFields $ redacted queryParams)
+                  , tagWalk Fields.FCRequestHeader (valueToFields $ redacted reqHeaders)
+                  , tagWalk Fields.FCResponseHeader (valueToFields $ redacted respHeaders)
+                  , tagWalk Fields.FCRequestBody (valueToFields reqBody)
+                  , tagWalk Fields.FCResponseBody (valueToFields respBody)
+                  ]
+        | otherwise =
+            concat
+              [ tagWalk Fields.FCAttribute (valueToFields $ redacted attrValue)
+              , tagWalk Fields.FCResource (valueToFields $ redacted (AE.Object $ AEKM.fromMapText resMap))
+              , tagWalk Fields.FCRequestBody (valueToFields $ redacted bodyValue)
+              , tagWalk Fields.FCEvent (valueToFields $ redacted eventsValue)
+              ]
+   in SchemaHot.ObservationInput
+        { keyKind = keyKind
+        , keyHash = keyHash
+        , scope = scope
+        , walk = walk
+        , timestamp = otelSpan.timestamp
+        }
   where
-    -- Helper function to extract headers from nested attribute structure
-    extractHeaders :: Text -> AE.Value -> Maybe AE.Value
-    extractHeaders prefix obj = case obj of
+    -- Reuse-friendly local of the inline header extractor in
+    -- processSpanToEntities. Kept private to avoid a cycle with the
+    -- where-clause version above.
+    extractHeadersV :: Text -> AE.Value -> Maybe AE.Value
+    extractHeadersV prefix obj = case obj of
       AE.Object keyMap ->
         let !prefixDot = prefix <> "."
             !prefixDotLen = T.length prefixDot
             headerPairs = [(AEK.fromText (T.drop prefixDotLen (AEK.toText k)), v) | (k, v) <- AEKM.toList keyMap, T.isPrefixOf prefixDot (AEK.toText k)]
          in if null headerPairs then Nothing else Just $ AE.Object $ AEKM.fromList headerPairs
       _ -> Nothing
+
+    -- Pair each value with its format hint and tag the whole walk with a
+    -- field category. Format hint computation here is what costs us the
+    -- regex sweep — only invoked on the slow-path full walk.
+    tagWalk
+      :: Fields.FieldCategoryEnum
+      -> V.Vector (Text, V.Vector AE.Value)
+      -> [(Text, V.Vector (AE.Value, Maybe Text), Fields.FieldCategoryEnum)]
+    tagWalk cat fields0 =
+      [ (path, V.map (\v -> (v, formatHint v)) vs, cat)
+      | (path, vs) <- V.toList fields0
+      ]
+
+    formatHint :: AE.Value -> Maybe Text
+    formatHint (AE.String s) = valueToFormatStr s
+    formatHint _ = Nothing
 
 
 convertRequestMessageToSpan :: RequestMessage -> Int64 -> (UUID.UUID, Text) -> Telemetry.OtelLogsAndSpans
@@ -700,26 +748,6 @@ removeBlacklistedFields = V.map \(k, val) ->
     else (k, val)
 
 
--- >>> valueToFormat (AET.String "22")
--- "integer"
---
--- >>> valueToFormat (AET.String "22.33")
--- "float"
---
--- >>> valueToFormat (AET.String "22/02/2022")
--- "mm/dd/yyyy"
---
-valueToFormat :: AE.Value -> Text
-valueToFormat (AET.String val) = case valueToFormatStr val of
-  Just fmt -> T.drop 1 $ T.dropEnd 1 fmt -- Remove the curly braces
-  Nothing -> "text"
-valueToFormat (AET.Number val) = valueToFormatNum val
-valueToFormat (AET.Bool _) = "bool"
-valueToFormat AET.Null = "null"
-valueToFormat (AET.Object _) = "object"
-valueToFormat (AET.Array _) = "array"
-
-
 -- | Common format patterns used by both replaceAllFormats and valueToFormatStr
 -- The order matters: more specific patterns should come before more general ones
 commonFormatPatterns :: [(RE, Text)]
@@ -1011,83 +1039,6 @@ tokenizeUrlPath = V.fromList . map normalize . T.splitOn "/"
     normalize seg = fromMaybe (bool seg "<*>" $ isUrlIdLike seg) (valueToFormatStr seg)
 
 
--- >>> valueToFormatNum 22.3
--- "float"
--- >>> valueToFormatNum 22
--- "integer"
-valueToFormatNum :: Scientific.Scientific -> Text
-valueToFormatNum val
-  | Scientific.isFloating val = "float"
-  | Scientific.isInteger val = "integer"
-  | otherwise = "unknown"
 
-
--- fieldsToFieldDTO processes a field from monoscope clients into a field and format record,
--- which can then be converted into separate sql insert queries.
-fieldsToFieldDTO :: Fields.FieldCategoryEnum -> Projects.ProjectId -> Text -> (Text, V.Vector AE.Value) -> (Fields.Field, Fields.Format)
-fieldsToFieldDTO fieldCategory projectID endpointHash (keyPath, val) =
-  ( Fields.Field
-      { createdAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
-      , updatedAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
-      , id = Fields.FieldId UUID.nil
-      , endpointHash = endpointHash
-      , projectId = projectID
-      , key = snd $ T.breakOnEnd "." keyPath
-      , -- FIXME: We're discarding the field values of the others, if theer was more than 1 value.
-        -- FIXME: We should instead take all the fields into consideration
-        -- FIXME: when generating the field types and formats
-        fieldType = fieldType
-      , fieldTypeOverride = Nothing
-      , format = format
-      , formatOverride = Nothing
-      , description = ""
-      , keyPath = keyPath
-      , fieldCategory = fieldCategory
-      , hash = fieldHash
-      , isEnum = False
-      , isRequired = False
-      }
-  , Fields.Format
-      { id = UUIDId UUID.nil
-      , createdAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
-      , updatedAt = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
-      , projectId = projectID
-      , fieldHash = fieldHash
-      , fieldType = fieldType
-      , fieldFormat = format
-      , -- NOTE: A trailing question, is whether to store examples into a separate table.
-        -- It requires some more of a cost benefit analysis.
-        examples = boundedVal
-      , hash = formatHash
-      }
-  )
-  where
-    aeValueToFieldType :: AE.Value -> Fields.FieldTypes
-    aeValueToFieldType (AET.String _) = Fields.FTString
-    aeValueToFieldType (AET.Number _) = Fields.FTNumber
-    aeValueToFieldType AET.Null = Fields.FTNull
-    aeValueToFieldType (AET.Bool _) = Fields.FTBool
-    aeValueToFieldType (AET.Object _) = Fields.FTObject
-    aeValueToFieldType (AET.Array _) = Fields.FTList
-
-    -- Cap stored example/format-source values to avoid persisting large
-    -- payloads (e.g. HTML response bodies) into apis.fields/apis.formats.
-    -- Oversized strings are replaced with a sentinel; non-strings are kept as-is.
-    maxFieldValueSize :: Int
-    maxFieldValueSize = 256
-    boundVal :: AE.Value -> AE.Value
-    boundVal (AET.String s)
-      | T.length s > maxFieldValueSize = AET.String (T.take maxFieldValueSize s <> "…")
-    boundVal v = v
-    boundedVal = V.map boundVal val
-
-    fieldType :: Fields.FieldTypes
-    fieldType = fromMaybe Fields.FTUnknown $ V.map aeValueToFieldType boundedVal V.!? 0
-
-    -- field hash is <hash of the endpoint> + <the hash of <field_category><key_path_str><field_type>> (No space or comma between data)
-    !fieldHash = endpointHash <> toXXHash (display fieldCategory <> keyPath)
-    -- FIXME: We should rethink this value to format logic.
-    -- FIXME: Maybe it actually needs machine learning,
-    -- FIXME: or maybe it should operate on the entire list, and not just one value.
-    format = fromMaybe "" $ V.map valueToFormat boundedVal V.!? 0
-    !formatHash = fieldHash <> toXXHash format
+-- fieldsToFieldDTO removed: schema learning now flows through the
+-- in-memory catalog (see 'extractObservation' + Pkg.SchemaLearning).
