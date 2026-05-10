@@ -431,6 +431,7 @@ tests:
       - http-types
       - wai
       - wai-extra
+      - unordered-containers
   unit-tests:
     main: Main.hs
     source-dirs: test/unit

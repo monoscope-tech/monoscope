@@ -149,19 +149,23 @@ data AnomalyVM = AnomalyVM
     via (GenericEntity '[Schema "apis", TableName "anomalies_vm", PrimaryKey "id", FieldModifiers '[CamelToSnake]] AnomalyVM)
 
 
+-- | Read VM rows for the anomalies UI.
+--
+-- target_hash conventions (set by @Pkg.SchemaLearning.Worker@):
+--   * endpoint → @keyHash@                              (== endpoints.hash for HTTP)
+--   * shape    → @keyHash:s:<templateHash[:8]>@
+--   * field    → @keyHash:f:<xxhash(fieldPath)[:8]>@
+--   * format   → @keyHash:fmt:<xxhash(fieldPath)[:8]>@
+--
+-- Endpoint metadata joins via @endpoints.hash = split_part(target_hash,':',1)@.
+-- Per-field detail (key path, format) is fetched lazily by the caller via
+-- 'getAnomalyFieldDetail' — encoding the full path into target_hash would
+-- blow the unique-index size budget, and Postgres has no built-in xxhash.
 getAnomaliesVM :: (DB es, Time :> es) => Projects.ProjectId -> V.Vector Text -> Eff es [AnomalyVM]
 getAnomaliesVM pid hash
   | V.null hash = pure []
   | otherwise = do
       now <- Time.currentTime
-      -- Legacy apis.shapes / fields / formats joins removed (those tables
-      -- were dropped in 0090). The schema-learning catalog
-      -- (apis.schema_catalog) replaces them; per-field VM details
-      -- (key_path, format examples, etc.) currently surface as NULL on
-      -- legacy anomaly_type values and need a fresh query against the new
-      -- table — TODO once the anomaly producer in
-      -- @Pkg.SchemaLearning.Worker.flushDirty@ stamps target_hash
-      -- accordingly.
       Hasql.interp
         [HI.sql|
 SELECT
@@ -181,10 +185,10 @@ SELECT
     NULL::uuid     field_id,
     NULL::text     field_key,
     NULL::text     field_key_path,
-    NULL::text     field_category, -- placeholder; legacy field_category enum is dropped
+    NULL::text     field_category,
     NULL::text     field_format,
     NULL::uuid     format_id,
-    NULL::text     format_type,    -- placeholder; legacy field_type enum is dropped
+    NULL::text     format_type,
     '{}'::jsonb[]  format_examples,
     endpoints.id   endpoint_id,
     endpoints.method endpoint_method,
@@ -197,11 +201,10 @@ SELECT
 from
     apis.anomalies an
     LEFT JOIN apis.issues iss ON iss.target_hash = an.target_hash AND iss.project_id = an.project_id
-    LEFT JOIN apis.endpoints ON (starts_with(an.target_hash, endpoints.hash) AND an.project_id = endpoints.project_id)
+    LEFT JOIN apis.endpoints ON an.project_id = endpoints.project_id
+                            AND endpoints.hash = split_part(an.target_hash, ':', 1)
 where
-  ((an.anomaly_type = 'endpoint')
-    OR NOT (an.anomaly_type = ANY('{"endpoint","shape","field","format"}'::apis.anomaly_type[]))
-  ) AND an.project_id=#{pid} AND an.target_hash=ANY(#{hash})
+  an.project_id=#{pid} AND an.target_hash=ANY(#{hash})
       |]
 
 

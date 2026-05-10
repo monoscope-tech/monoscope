@@ -30,6 +30,11 @@ module Pkg.SchemaLearning.Catalog (
   mergeFullWalk,
   bumpSeen,
   classifyFormat,
+  -- Anomaly diffing.
+  AnomalyKind (..),
+  ProducedAnomaly (..),
+  diffAnomalies,
+  fieldHashSuffix,
   examplesCap,
   topKCap,
   exampleStringCap,
@@ -395,6 +400,98 @@ data SummaryDoc = SummaryDoc
 
 emptySummaryDoc :: SummaryDoc
 emptySummaryDoc = SummaryDoc HM.empty V.empty HM.empty
+
+
+-- ---------------------------------------------------------------------------
+-- Anomaly diffing.
+--
+-- Replaces the legacy DB-trigger fan-out (@new_anomaly_proc@). The flush
+-- worker calls 'diffAnomalies' for each dirty entry against its prior
+-- catalog row; emitted 'ProducedAnomaly's are inserted into
+-- @apis.anomalies@ and a @NewAnomaly@ background job is enqueued so the
+-- existing notification pipeline keeps firing.
+
+-- | Anomaly buckets matching @apis.anomaly_type@ minus runtime-exception
+-- (which the error-pattern path produces directly).
+data AnomalyKind = AKEndpoint | AKShape | AKField | AKFormat
+  deriving stock (Eq, Generic, Ord, Show)
+  deriving anyclass (NFData)
+
+
+-- | One emitted anomaly. 'targetHash' is shaped so 'getAnomaliesVM' can
+-- recover the endpoint via @starts_with(target_hash, endpoints.hash)@.
+data ProducedAnomaly = ProducedAnomaly
+  { kind :: !AnomalyKind
+  , targetHash :: !Text
+  , keyHash :: !Text
+  -- ^ owning catalog key — for joining back to apis.schema_catalog
+  , fieldPath :: !(Maybe Text)
+  -- ^ populated for AKField / AKFormat
+  }
+  deriving stock (Eq, Generic, Ord, Show)
+  deriving anyclass (NFData)
+
+
+-- | Stable 8-char suffix for a field path. Keeps target_hash bounded
+-- and gives the read path a deterministic way back to the field.
+fieldHashSuffix :: Text -> Text
+fieldHashSuffix path = T.take 8 (toXXHash path)
+
+
+-- | Diff a (possibly absent) prior entry against the current one.
+-- Order: endpoint > shape > field > format. Endpoint anomalies fire
+-- only on the @HttpEndpoint@ key kind — non-HTTP keys still get shape /
+-- field / format diffs, just not the "new endpoint" headline.
+--
+-- >>> let path = "request.body.user.id"
+-- >>> let fs1 = FieldStruct (HS.fromList [FTString]) (HS.fromList ["{uuid}"]) FCRequestBody False
+-- >>> let fs2 = FieldStruct (HS.fromList [FTString, FTNumber]) (HS.fromList ["{uuid}"]) FCRequestBody False
+-- >>> let mk fs = CatalogEntry emptyScope (Template HttpEndpoint (HM.fromList fs)) HM.empty HM.empty 1 t0 t0 True
+-- >>> let new = mk [(path, fs1)]
+-- >>> map (.kind) (diffAnomalies "kh" Nothing new)
+-- [AKEndpoint,AKShape,AKField,AKFormat]
+-- >>> map (.kind) (diffAnomalies "kh" (Just new) new)
+-- []
+-- >>> -- type widened on existing field → AKShape (template hash changed) + AKFormat
+-- >>> map (.kind) (diffAnomalies "kh" (Just new) (mk [(path, fs2)]))
+-- [AKShape,AKFormat]
+-- >>> -- new field added → AKShape + AKField + AKFormat
+-- >>> let new2 = mk [(path, fs1), ("request.body.email", fs1)]
+-- >>> sort (map (.kind) (diffAnomalies "kh" (Just new) new2))
+-- [AKShape,AKField,AKFormat]
+diffAnomalies :: Text -> Maybe CatalogEntry -> CatalogEntry -> [ProducedAnomaly]
+diffAnomalies kh priorM cur =
+  let priorFields = maybe HM.empty (.template.fields) priorM
+      curFields = cur.template.fields
+      isNew = isNothing priorM
+      isHttp = cur.template.keyKind == HttpEndpoint
+      headline =
+        [ ProducedAnomaly AKEndpoint kh kh Nothing
+        | isNew, isHttp
+        ]
+      shapeChanged = case priorM of
+        Nothing -> True
+        Just p -> templateHash p.template /= templateHash cur.template
+      shape =
+        [ ProducedAnomaly AKShape (kh <> ":s:" <> T.take 8 (templateHash cur.template)) kh Nothing
+        | shapeChanged
+        ]
+      newPaths = HS.toList $ HS.difference (HS.fromList (HM.keys curFields)) (HS.fromList (HM.keys priorFields))
+      fields =
+        [ ProducedAnomaly AKField (kh <> ":f:" <> fieldHashSuffix p) kh (Just p)
+        | p <- sort newPaths
+        ]
+      formatChanged path =
+        case (HM.lookup path priorFields, HM.lookup path curFields) of
+          (Just p, Just c) -> p.types /= c.types || p.formats /= c.formats
+          (Nothing, Just _) -> True
+          _ -> False
+      changedFormatPaths = filter formatChanged (HM.keys curFields)
+      formats =
+        [ ProducedAnomaly AKFormat (kh <> ":fmt:" <> fieldHashSuffix p) kh (Just p)
+        | p <- sort changedFormatPaths
+        ]
+   in headline <> shape <> fields <> formats
 
 
 -- ---------------------------------------------------------------------------

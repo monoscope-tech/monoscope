@@ -622,6 +622,7 @@ test-suite integration-tests
       Pages.ShareSpec
       ProcessMessageSpec
       ReplaySpec
+      SchemaLearningSpec
       Spec
       Web.ApiV1Spec
       Web.ClientMetadataSpec
@@ -701,6 +702,7 @@ test-suite integration-tests
     , text
     , time
     , unliftio
+    , unordered-containers
     , uuid
     , uuid-quasi
     , vector

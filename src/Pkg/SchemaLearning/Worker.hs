@@ -9,16 +9,17 @@
 --      'Catalog.templateHash') and 'CatalogRow's (per-project pointers).
 --   3. Upserts templates first, then catalog rows, then re-derives the
 --      per-project summary doc.
---   4. Hands the newly-acknowledged template hashes back to the shard so
+--   4. Diffs each dirty entry against its prior catalog row (one batched
+--      lookup) and inserts endpoint/shape/field/format anomalies into
+--      @apis.anomalies@ + a deduped @NewAnomaly@ background job. Replaces
+--      the legacy @new_anomaly_proc@ trigger fan-out.
+--   5. Hands the newly-acknowledged template hashes back to the shard so
 --      subsequent flushes can short-circuit unchanged-template upserts.
---
--- Anomaly diff/produce is not yet wired here — the legacy
--- @new_anomaly_proc@ trigger is being deprecated and the replacement
--- belongs in a follow-up (see TODO in 'flushDirty').
 module Pkg.SchemaLearning.Worker (
   FlushResult (..),
   flushDirty,
   runSchemaFlusher,
+  buildAnomalyRows,
 )
 where
 
@@ -44,6 +45,8 @@ data FlushResult = FlushResult
   , catalogRowsWritten :: !Int
   , summariesUpdated :: !Int
   , dirtyKeys :: !Int
+  , anomaliesEmitted :: !Int
+  -- ^ rows actually inserted into apis.anomalies (post-dedup)
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (NFData)
@@ -51,6 +54,10 @@ data FlushResult = FlushResult
 
 -- | One flush pass over a single shard. Pure-Eff except for the
 -- 'atomicModifyIORef'' inside 'Hot.takeDirty'.
+--
+-- Order matters: we diff against the prior catalog row /before/ upserting
+-- so we don't see our own write back as the "prior". Anomaly inserts race-
+-- safely on the @(project_id, target_hash)@ unique index.
 flushDirty
   :: DB es
   => IORef SchemaShardState
@@ -58,9 +65,15 @@ flushDirty
 flushDirty ref = do
   dirty <- liftIO $ Hot.takeDirty ref
   if V.null dirty
-    then pure FlushResult{templatesWritten = 0, catalogRowsWritten = 0, summariesUpdated = 0, dirtyKeys = 0}
+    then pure FlushResult{templatesWritten = 0, catalogRowsWritten = 0, summariesUpdated = 0, dirtyKeys = 0, anomaliesEmitted = 0}
     else do
       now <- liftIO getCurrentTime
+      -- 1. Anomaly diff (must precede upserts).
+      priors <- SC.getByKeysBatch (V.map (\(k, _) -> (k.projectId, k.keyHash)) dirty)
+      let anomalyRows = buildAnomalyRows priors dirty
+      anomaliesN <- SC.insertAnomalies anomalyRows
+      SC.enqueueAnomalyJobs anomalyRows
+      -- 2. Upserts.
       let templateRows = dedupTemplates $ V.map (templateRowOf now . snd) dirty
           catalogRows = V.map (uncurry catalogRowOf) dirty
           touchedProjects = HS.fromList [k.projectId | (k, _) <- V.toList dirty]
@@ -69,18 +82,34 @@ flushDirty ref = do
       summariesN <- regenerateSummaries touchedProjects
       let newHashes = HS.fromList $ V.toList $ V.map (.templateHash) templateRows
       liftIO $ Hot.pruneEvicted ref HS.empty newHashes
-      -- TODO(schema-anomalies): diff dirty entries vs prior catalog rows
-      -- (stale @apis.shapes@/@apis.fields@ triggers no longer fire). Emit
-      -- per-(project, key_hash) endpoint/shape/field/format anomalies into
-      -- @apis.anomalies@ + @background_jobs@ so the legacy notification
-      -- pipeline keeps working.
       pure
         FlushResult
           { templatesWritten = V.length templateRows
           , catalogRowsWritten = V.length catalogRows
           , summariesUpdated = summariesN
           , dirtyKeys = V.length dirty
+          , anomaliesEmitted = fromIntegral anomaliesN
           }
+
+
+-- | Build the anomaly insert rows for a dirty batch. Pure so it can be
+-- doctested independently of the DB.
+buildAnomalyRows
+  :: HM.HashMap (Projects.ProjectId, Text) CatalogEntry
+  -> V.Vector (SchemaKey, CatalogEntry)
+  -> V.Vector SC.AnomalyInsertRow
+buildAnomalyRows priors dirty =
+  V.fromList
+    [ SC.AnomalyInsertRow{projectId = k.projectId, anomalyType = kindLabel pa.kind, targetHash = pa.targetHash}
+    | (k, e) <- V.toList dirty
+    , pa <- Catalog.diffAnomalies k.keyHash (HM.lookup (k.projectId, k.keyHash) priors) e
+    ]
+  where
+    kindLabel = \case
+      Catalog.AKEndpoint -> "endpoint"
+      Catalog.AKShape -> "shape"
+      Catalog.AKField -> "field"
+      Catalog.AKFormat -> "format"
 
 
 templateRowOf :: UTCTime -> CatalogEntry -> SC.TemplateRow
