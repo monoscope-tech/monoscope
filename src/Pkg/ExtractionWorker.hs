@@ -91,10 +91,10 @@ data ShardState s = ShardState
   , drainBuffers :: !(IORef (HashMap (Projects.ProjectId, Text) ServiceBuffer))
   , drainTrees :: !(IORef (HashMap (Projects.ProjectId, Text) ServiceDrainTree))
   , pendingRehydrations :: !(IORef (HashSet (Projects.ProjectId, Text)))
-  , -- | Schema-learning catalog state, owned by this shard. Single-writer
-    -- (the shard fiber); the flush worker swaps the dirty subset via
-    -- 'atomicModifyIORef''.
-    schemaState :: !(IORef SchemaLearning.SchemaShardState)
+  , schemaState :: !(IORef SchemaLearning.SchemaShardState)
+  -- ^ Schema-learning catalog state, owned by this shard. Single-writer
+  -- (the shard fiber); the flush worker swaps the dirty subset via
+  -- 'atomicModifyIORef''.
   }
 
 

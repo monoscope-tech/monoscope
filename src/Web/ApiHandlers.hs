@@ -111,10 +111,9 @@ import Effectful.Time qualified as Time
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Issues qualified as Issues
-import Models.Apis.SchemaCatalog qualified as SchemaCatalog
-import Pkg.SchemaLearning.Catalog qualified as Fields
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.Monitors qualified as Monitors
+import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Apis.ShareEvents qualified as ShareEvents
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
@@ -126,6 +125,7 @@ import Pkg.Components.TimePicker qualified as TP
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (SnakeSchema (..), UUIDId (..))
 import Pkg.Parser qualified as Parser
+import Pkg.SchemaLearning.Catalog qualified as Fields
 import Relude hiding (ask, id)
 import Servant (NoContent (..), ServerError (..), err400, err404)
 import System.Config (AuthContext (..), EnvConfig (..))

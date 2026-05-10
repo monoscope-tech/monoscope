@@ -286,7 +286,8 @@ toFacetSummary pid tableName doc =
   where
     topKToFacetValues :: Catalog.TopK -> [Catalog.FacetValue]
     topKToFacetValues tk =
-      sortOn (negate . (.count))
+      sortOn
+        (negate . (.count))
         [ Catalog.FacetValue v (fromIntegral n) | (v, n) <- HM.toList tk.top
         ]
 

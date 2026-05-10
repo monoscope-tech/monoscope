@@ -48,22 +48,22 @@ where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AET
+import Data.Char (toLower)
+import Data.Default (Default)
 import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HS
 import Data.Scientific qualified as Scientific
 import Data.Text qualified as T
+import Data.Text.Display (Display)
 import Data.Time (UTCTime)
+import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple.FromField (FromField)
-import Database.PostgreSQL.Simple.ToField (ToField)
-import Deriving.Aeson qualified as DAE
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple (FromRow, ToRow)
+import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
-import Data.Char (toLower)
-import Data.Default (Default)
-import Data.Text.Display (Display)
-import Data.UUID qualified as UUID
+import Database.PostgreSQL.Simple.ToField (ToField)
+import Deriving.Aeson qualified as DAE
 import GHC.Records (HasField (getField))
 import Hasql.Interpolate qualified as HI
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
@@ -139,8 +139,8 @@ data Template = Template
 -- full, merging is a no-op.
 newtype Examples = Examples {values :: V.Vector AE.Value}
   deriving stock (Eq, Generic, Show)
-  deriving anyclass (NFData)
   deriving newtype (AE.FromJSON, AE.ToJSON)
+  deriving anyclass (NFData)
 
 
 -- | Per-field top-K cardinality / value counts. Summary input replacement for

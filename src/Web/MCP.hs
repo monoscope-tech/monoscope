@@ -29,8 +29,8 @@ import Data.UUID qualified as UUID
 import Effectful.Error.Static qualified as Error
 import Effectful.Reader.Static qualified as Reader
 import Effectful.Time qualified as Time
-import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Apis.LogPatterns qualified as LogPatterns
+import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Network.HTTP.Types qualified as H

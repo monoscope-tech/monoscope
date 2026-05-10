@@ -47,6 +47,8 @@ import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
+import Models.Projects.Projects qualified as Projects
+import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Pkg.SchemaLearning.Catalog qualified as Fields (
   FieldCategoryEnum,
   FieldId,
@@ -54,8 +56,6 @@ import Pkg.SchemaLearning.Catalog qualified as Fields (
   FormatId,
   ShapeId,
  )
-import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Relude hiding (id, many, some)
 import Servant (FromHttpApiData (..))
 import System.Types (DB)

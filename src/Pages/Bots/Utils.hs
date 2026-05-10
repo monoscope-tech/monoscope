@@ -20,8 +20,8 @@ import Effectful.Time qualified as Time
 import Langchain.LLM.Core qualified as LLM
 import Lucid
 import Models.Apis.Issues qualified as Reports
-import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Apis.LogQueries qualified as LogQueries
+import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
 import Pages.BodyWrapper (PageCtx (..))

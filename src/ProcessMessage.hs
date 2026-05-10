@@ -56,12 +56,12 @@ import Effectful.Log (Log)
 import Effectful.Reader.Static qualified as Eff
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.LogQueries qualified as LogQueries
-import Pkg.SchemaLearning.Catalog qualified as Fields
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (Context (trace_state), OtelLogsAndSpans (..), generateSummary)
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Pkg.DeriveUtils (AesonText (..), UUIDId (..), unAesonTextMaybe)
 import Pkg.SchemaLearning.Catalog qualified as Catalog
+import Pkg.SchemaLearning.Catalog qualified as Fields
 import Pkg.SchemaLearning.Hot qualified as SchemaHot
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
@@ -1037,8 +1037,6 @@ tokenizeUrlPath :: Text -> V.Vector Text
 tokenizeUrlPath = V.fromList . map normalize . T.splitOn "/"
   where
     normalize seg = fromMaybe (bool seg "<*>" $ isUrlIdLike seg) (valueToFormatStr seg)
-
-
 
 -- fieldsToFieldDTO removed: schema learning now flows through the
 -- in-memory catalog (see 'extractObservation' + Pkg.SchemaLearning).

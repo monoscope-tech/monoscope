@@ -22,11 +22,11 @@ module Pkg.SchemaLearning.Worker (
 )
 where
 
+import Control.Concurrent (threadDelay)
 import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HS
 import Data.Time (UTCTime, getCurrentTime)
 import Data.Vector qualified as V
-import Control.Concurrent (threadDelay)
 import Effectful (Eff)
 import Models.Apis.SchemaCatalog qualified as SC
 import Models.Projects.Projects qualified as Projects

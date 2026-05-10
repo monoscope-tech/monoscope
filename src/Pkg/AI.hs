@@ -59,7 +59,6 @@ import Effectful.Time qualified as Time
 import Langchain.LLM.Core qualified as LLM
 import Langchain.Memory.Core (BaseMemory (..))
 import Langchain.Memory.TokenBufferMemory (TokenBufferMemory (..))
-import Pkg.SchemaLearning.Catalog (FacetData (..), FacetSummary (..), FacetValue (..))
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogQueries (executeSecuredQuery, selectLogTable)
 import Models.Projects.Projects qualified as Projects
@@ -72,6 +71,7 @@ import Pkg.Components.TimePicker (TimePicker)
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Parser (parseQueryToAST)
+import Pkg.SchemaLearning.Catalog (FacetData (..), FacetSummary (..), FacetValue (..))
 import Relude
 import System.Tracing (Tracing)
 import System.Types (DB)
