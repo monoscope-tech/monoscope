@@ -19,9 +19,9 @@ import Effectful.Log (Log)
 import Effectful.Time qualified as Time
 import Langchain.LLM.Core qualified as LLM
 import Lucid
-import Models.Apis.Fields qualified as Fields
 import Models.Apis.Issues qualified as Reports
 import Models.Apis.LogQueries qualified as LogQueries
+import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
 import Pages.BodyWrapper (PageCtx (..))
@@ -271,7 +271,7 @@ processAIQuery :: (DB es, ELLM.LLM :> es, Log :> es, Time.Time :> es, Tracing :>
 processAIQuery pid userQuery threadCtx model apiKey = do
   now <- Time.currentTime
   let dayAgo = addUTCTime (-86400) now
-  facetSummaryM <- Fields.getFacetSummary pid "otel_logs_and_spans" dayAgo now
+  facetSummaryM <- SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" dayAgo now
   let config = (AI.defaultAgenticConfig pid){AI.facetContext = facetSummaryM, AI.customContext = threadCtx}
   result <- AI.runAgenticQuery config userQuery model apiKey
   case result of

@@ -329,9 +329,6 @@ data ProjectCache = ProjectCache
     hosts :: V.Vector Text
   , -- maybe we don't need this? See the next point.
     endpointHashes :: V.Vector Text
-  , -- Since shapes always have the endpoints hash prepended to them, maybe we don't need to store the hash of endpoints,
-    -- since we can derive that from the shapes.
-    shapeHashes :: V.Vector Text
   , -- We check if every request is part of the redact list, so it's better if we don't need to  hit the db for them with each request.
     -- Since we have a need to redact fields by endpoint, we can simply have the fields paths be prepended by the endpoint hash.
     -- [endpointHash]<>[field_category eg requestBody]<>[field_key_path]
@@ -383,7 +380,6 @@ projectCacheById pid = do
     [HI.sql|
     select  coalesce(ARRAY_AGG(DISTINCT hosts ORDER BY hosts ASC),'{}') hosts,
             coalesce(ARRAY_AGG(DISTINCT endpoint_hashes ORDER BY endpoint_hashes ASC),'{}') endpoint_hashes,
-            coalesce(ARRAY_AGG(DISTINCT shape_hashes ORDER BY shape_hashes ASC),'{}'::text[]) shape_hashes,
             coalesce(ARRAY_AGG(DISTINCT paths ORDER BY paths ASC),'{}') redacted_fields,
             ( SELECT count(*)::int FROM otel_logs_and_spans
              WHERE project_id=#{pidText} AND timestamp > #{now}::timestamptz - INTERVAL '1' DAY
@@ -396,11 +392,10 @@ projectCacheById pid = do
              FROM apis.endpoints WHERE project_id = #{pid} AND canonical_path IS NOT NULL
             ) canonical_paths
     from
-      (select e.host hosts, e.hash endpoint_hashes, sh.hash shape_hashes, concat(rf.endpoint_hash,'<>', rf.field_category,'<>', rf.path) paths
+      (select e.host hosts, e.hash endpoint_hashes, concat(rf.endpoint_hash,'<>', rf.field_category,'<>', rf.path) paths
         from apis.endpoints e
-        left join apis.shapes sh ON sh.endpoint_hash = e.hash
         left join projects.redacted_fields rf ON rf.project_id = e.project_id
-        where e.project_id = #{pid} AND sh.hash IS NOT null
+        where e.project_id = #{pid}
        ) enp; |]
 
 

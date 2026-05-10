@@ -47,15 +47,15 @@ import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
-import Models.Apis.Fields qualified as Fields (
+import Models.Projects.Projects qualified as Projects
+import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
+import Pkg.SchemaLearning.Catalog qualified as Fields (
   FieldCategoryEnum,
   FieldId,
   FieldTypes,
   FormatId,
   ShapeId,
  )
-import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Relude hiding (id, many, some)
 import Servant (FromHttpApiData (..))
 import System.Types (DB)
@@ -149,6 +149,18 @@ data AnomalyVM = AnomalyVM
     via (GenericEntity '[Schema "apis", TableName "anomalies_vm", PrimaryKey "id", FieldModifiers '[CamelToSnake]] AnomalyVM)
 
 
+-- | Read VM rows for the anomalies UI.
+--
+-- target_hash conventions (set by @Pkg.SchemaLearning.Worker@):
+--   * endpoint → @keyHash@                              (== endpoints.hash for HTTP)
+--   * shape    → @keyHash:s:<templateHash[:8]>@
+--   * field    → @keyHash:f:<xxhash(fieldPath)[:8]>@
+--   * format   → @keyHash:fmt:<xxhash(fieldPath)[:8]>@
+--
+-- Endpoint metadata joins via @endpoints.hash = split_part(target_hash,':',1)@.
+-- Per-field detail (key path, format) is fetched lazily by the caller via
+-- 'getAnomalyFieldDetail' — encoding the full path into target_hash would
+-- blow the unique-index size budget, and Postgres has no built-in xxhash.
 getAnomaliesVM :: (DB es, Time :> es) => Projects.ProjectId -> V.Vector Text -> Eff es [AnomalyVM]
 getAnomaliesVM pid hash
   | V.null hash = pure []
@@ -166,19 +178,19 @@ SELECT
     an.anomaly_type,
     an.action,
     an.target_hash,
-    shapes.id shape_id,
-    coalesce(shapes.new_unique_fields, '{}'::TEXT[]) new_unique_fields,
-    coalesce(shapes.deleted_fields, '{}'::TEXT[]) deleted_fields,
-    coalesce(shapes.updated_field_formats, '{}'::TEXT[]) updated_field_formats,
-    fields.id field_id,
-    fields.key field_key,
-    fields.key_path field_key_path,
-    fields.field_category field_category,
-    fields.format field_format,
-    formats.id format_id,
-    formats.field_type format_type,
-    formats.examples format_examples,
-    endpoints.id endpoint_id,
+    NULL::uuid     shape_id,
+    '{}'::TEXT[]   new_unique_fields,
+    '{}'::TEXT[]   deleted_fields,
+    '{}'::TEXT[]   updated_field_formats,
+    NULL::uuid     field_id,
+    NULL::text     field_key,
+    NULL::text     field_key_path,
+    NULL::text     field_category,
+    NULL::text     field_format,
+    NULL::uuid     format_id,
+    NULL::text     format_type,
+    '{}'::jsonb[]  format_examples,
+    endpoints.id   endpoint_id,
     endpoints.method endpoint_method,
     endpoints.url_path endpoint_url_path,
     endpoints.service_name endpoint_service_name,
@@ -189,19 +201,10 @@ SELECT
 from
     apis.anomalies an
     LEFT JOIN apis.issues iss ON iss.target_hash = an.target_hash AND iss.project_id = an.project_id
-    LEFT JOIN apis.formats on (an.target_hash = formats.hash AND an.project_id = formats.project_id)
-    LEFT JOIN apis.fields on (
-        ((fields.hash = formats.field_hash ) AND an.project_id = fields.project_id)
-        OR fields.hash = formats.field_hash
-    )
-    LEFT JOIN apis.shapes on (an.target_hash = shapes.hash AND an.project_id = shapes.project_id)
-    LEFT JOIN apis.endpoints ON (starts_with(an.target_hash, endpoints.hash) AND an.project_id = endpoints.project_id)
+    LEFT JOIN apis.endpoints ON an.project_id = endpoints.project_id
+                            AND endpoints.hash = split_part(an.target_hash, ':', 1)
 where
-  ((an.anomaly_type = 'endpoint')
-    OR (an.anomaly_type = 'shape' AND endpoints.project_id = an.project_id AND endpoints.created_at != an.created_at)
-    OR (an.anomaly_type = 'format' AND fields.project_id = an.project_id AND fields.created_at != an.created_at)
-    OR NOT (an.anomaly_type = ANY('{"endpoint","shape","field","format"}'::apis.anomaly_type[]))
-  ) AND an.project_id=#{pid} AND an.target_hash=ANY(#{hash})
+  an.project_id=#{pid} AND an.target_hash=ANY(#{hash})
       |]
 
 

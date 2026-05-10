@@ -36,6 +36,7 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Models.Projects.Projects qualified as Projects
 import Pkg.Drain qualified as Drain
+import Pkg.SchemaLearning.Hot qualified as SchemaLearning
 import Relude
 import Relude.Extra.Enum (next, prev)
 import UnliftIO (tryAny)
@@ -90,6 +91,10 @@ data ShardState s = ShardState
   , drainBuffers :: !(IORef (HashMap (Projects.ProjectId, Text) ServiceBuffer))
   , drainTrees :: !(IORef (HashMap (Projects.ProjectId, Text) ServiceDrainTree))
   , pendingRehydrations :: !(IORef (HashSet (Projects.ProjectId, Text)))
+  , schemaState :: !(IORef SchemaLearning.SchemaShardState)
+  -- ^ Schema-learning catalog state, owned by this shard. Single-writer
+  -- (the shard fiber); the flush worker swaps the dirty subset via
+  -- 'atomicModifyIORef''.
   }
 
 
@@ -148,7 +153,8 @@ initWorkerState numShards queueCapacity = do
       drainBuffers <- newIORef HM.empty
       drainTrees <- newIORef HM.empty
       pendingRehydrations <- newIORef HashSet.empty
-      pure ShardState{ingressQ, drainFlushQ, rehydrationQ, queueDepth, drainBuffers, drainTrees, pendingRehydrations}
+      schemaState <- newIORef SchemaLearning.emptySchemaShardState
+      pure ShardState{ingressQ, drainFlushQ, rehydrationQ, queueDepth, drainBuffers, drainTrees, pendingRehydrations, schemaState}
   acceptingBatches <- newTVarIO False
   droppedBatches <- newIORef 0
   droppedFlushTasks <- newIORef 0

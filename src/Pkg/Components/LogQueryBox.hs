@@ -13,12 +13,12 @@ import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
-import Models.Apis.Fields (FacetData (..), FacetValue (..))
 import Models.Apis.LogPatterns (knownPatternFields)
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import NeatInterpolation (text)
 import Pages.Components (modal_)
+import Pkg.SchemaLearning.Catalog (FacetData (..), FacetValue (..))
 import Relude
 import Utils (displayTimestamp, faSprite_, formatUTC, onpointerdown_)
 

@@ -37,9 +37,8 @@ import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
-import Models.Apis.Fields (FacetData (..), FacetSummary (..), FacetValue (..))
-import Models.Apis.Fields qualified as Fields
 import Models.Apis.LogQueries qualified as LogQueries
+import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Numeric (showFFloat)
@@ -49,6 +48,7 @@ import Pkg.Components.TimePicker qualified as Components
 import Pkg.Components.Widget (WidgetAxis (..), WidgetType (WTTimeseries, WTTimeseriesLine))
 import Pkg.Components.Widget qualified as Widget
 import Pkg.Parser (pSource, parseQueryToAST, toQText)
+import Pkg.SchemaLearning.Catalog (FacetData (..), FacetSummary (..), FacetValue (..))
 import Relude hiding (ask)
 import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
@@ -756,7 +756,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
         let aw = Ki.atomically . Ki.await
         t1 <- Ki.fork scope fetchOrSkip
         t2 <- Ki.fork scope $ tryAny $ Projects.queryLibHistoryForUser pid sess.persistentSession.userId
-        t3 <- Ki.fork scope $ tryAny $ Fields.getFacetSummary pid "otel_logs_and_spans" (fromMaybe (addUTCTime (-86400) now) fromD) (fromMaybe now toD)
+        t3 <- Ki.fork scope $ tryAny $ SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" (fromMaybe (addUTCTime (-86400) now) fromD) (fromMaybe now toD)
         t4 <- Ki.fork scope $ tryAny $ checkFreeTierStatus pid project.paymentPlan
         t5 <- Ki.fork scope $ tryAny $ V.fromList <$> ManageMembers.getTeams pid
         -- Patterns and sessions are mutually exclusive; a single fork suffices.
@@ -1546,7 +1546,7 @@ aiSearchH pid requestBody = do
         else do
           -- Fetch precomputed facets for context (last 24 hours)
           let dayAgo = addUTCTime (-86400) now
-          facetSummaryM <- Fields.getFacetSummary pid "otel_logs_and_spans" dayAgo now
+          facetSummaryM <- SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" dayAgo now
           let config = (AI.defaultAgenticConfig pid){AI.facetContext = facetSummaryM, AI.timezone = timezoneM, AI.maxIterations = 2}
           result <- AI.runAgenticQuery config inputText envCfg.openaiModel envCfg.openaiApiKey
 

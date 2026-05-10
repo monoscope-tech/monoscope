@@ -114,6 +114,8 @@ extra-source-files:
     static/migrations/0086_daily_usage_window_timestamps.sql
     static/migrations/0087_apis_hosts.sql
     static/migrations/0088_message_size_tracking.sql
+    static/migrations/0089_schema_catalog.sql
+    static/migrations/0090_drop_legacy_schema_tables.sql
 
 source-repository head
   type: git
@@ -137,7 +139,6 @@ library
       Models.Apis.Anomalies
       Models.Apis.Endpoints
       Models.Apis.ErrorPatterns
-      Models.Apis.Fields
       Models.Apis.Integrations
       Models.Apis.IssueEnhancement
       Models.Apis.Issues
@@ -145,6 +146,7 @@ library
       Models.Apis.LogQueries
       Models.Apis.Monitors
       Models.Apis.PatternMerge
+      Models.Apis.SchemaCatalog
       Models.Apis.ShareEvents
       Models.Projects.Dashboards
       Models.Projects.GitSync
@@ -196,6 +198,10 @@ library
       Pkg.PatternMerge
       Pkg.QueryCache
       Pkg.Queue
+      Pkg.SchemaLearning.Catalog
+      Pkg.SchemaLearning.Hot
+      Pkg.SchemaLearning.OpenApi
+      Pkg.SchemaLearning.Worker
       Pkg.TestUtils
       Pkg.TraceSessionCache
       ProcessMessage
@@ -616,6 +622,7 @@ test-suite integration-tests
       Pages.ShareSpec
       ProcessMessageSpec
       ReplaySpec
+      SchemaLearningSpec
       Spec
       Web.ApiV1Spec
       Web.ClientMetadataSpec
@@ -695,6 +702,7 @@ test-suite integration-tests
     , text
     , time
     , unliftio
+    , unordered-containers
     , uuid
     , uuid-quasi
     , vector

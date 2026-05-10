@@ -29,8 +29,8 @@ import Data.UUID qualified as UUID
 import Effectful.Error.Static qualified as Error
 import Effectful.Reader.Static qualified as Reader
 import Effectful.Time qualified as Time
-import Models.Apis.Fields qualified as Fields
 import Models.Apis.LogPatterns qualified as LogPatterns
+import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Network.HTTP.Types qualified as H
@@ -540,7 +540,7 @@ searchEventsNL =
         | otherwise -> do
             authCtx <- Reader.ask @AuthContext
             now <- Time.currentTime
-            facets <- Fields.getFacetSummary pid "otel_logs_and_spans" (addUTCTime (-86400) now) now
+            facets <- SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" (addUTCTime (-86400) now) now
             let cfg = (AI.defaultAgenticConfig pid){AI.facetContext = facets, AI.timezone = sanitizeTimezone =<< textArg "timezone" args, AI.maxIterations = 2}
             AI.runAgenticQuery cfg inputT authCtx.env.openaiModel authCtx.env.openaiApiKey >>= \case
               Left err -> pure $ toolError ("AI translation failed: " <> err)

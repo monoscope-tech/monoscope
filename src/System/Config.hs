@@ -157,6 +157,13 @@ data EnvConfig = EnvConfig
   , drainRehydrateIntervalSecs :: Int
   , maxBufferedSpans :: Int
   , maxDrainTrees :: Int
+  , -- Schema-learning knobs (see "Pkg.SchemaLearning.Hot").
+    schemaFlushIntervalSecs :: Int
+  , schemaCatalogExamples :: Int
+  , schemaCatalogMaxKeysPerProject :: Int
+  , schemaCatalogMaxBytesPerShard :: Int
+  , schemaLearnFullThreshold :: Int
+  , schemaLearnSampleEveryN :: Int
   , processedAtCutoff :: UTCTime
   -- ^ Must match the `timestamp >=` literal in migration 0064's partial index.
   -- The safety-net query and the partial-index WHERE clause both filter
@@ -192,6 +199,12 @@ instance DefConfig EnvConfig where
       , drainRehydrateIntervalSecs = 300
       , maxBufferedSpans = 100000
       , maxDrainTrees = 200
+      , schemaFlushIntervalSecs = 60
+      , schemaCatalogExamples = 20
+      , schemaCatalogMaxKeysPerProject = 5000
+      , schemaCatalogMaxBytesPerShard = 67108864
+      , schemaLearnFullThreshold = 200
+      , schemaLearnSampleEveryN = 200
       , -- MUST match the literal in static/migrations/0064_processed_at_safety_net.sql.
         -- The partial index `idx_otel_unprocessed` filters on `timestamp >= this`,
         -- so a mismatched default would silently orphan post-cutoff rows from the

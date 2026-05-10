@@ -50,7 +50,6 @@ import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
-import Models.Apis.Fields ()
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Projects.Projects qualified as Projects
 import OpenTelemetry.Attributes qualified as OA

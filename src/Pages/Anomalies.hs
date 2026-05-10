@@ -69,12 +69,11 @@ import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.ErrorPatterns (ErrorPatternId (..))
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
-import Models.Apis.Fields (FacetData (..), FacetSummary (..), FacetValue (..))
-import Models.Apis.Fields qualified as Fields
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns (sourceFieldLabel)
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.PatternMerge qualified as PatternMerge
+import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects (User (id))
 import Models.Projects.Projects qualified as Projects
@@ -91,6 +90,7 @@ import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), hashAssetFile)
+import Pkg.SchemaLearning.Catalog (FacetData (..), FacetSummary (..), FacetValue (..))
 import PyF (fmt)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
@@ -1060,7 +1060,7 @@ buildSystemPromptForIssue pid issue now = do
     _ -> pure Nothing
   let issueContext = unlines ["--- ISSUE CONTEXT ---", buildAIContext issue errorM traceDataM spans alertContextM]
       dayAgo = addUTCTime (-86400) now
-  facetSummaryM <- Fields.getFacetSummary pid "otel_logs_and_spans" dayAgo now
+  facetSummaryM <- SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" dayAgo now
   let systemPrompt = anomalySystemPrompt now
       fullSystemPrompt = unlines [systemPrompt, "", "--- FACET SUMMARY ---", maybe "" formatFacetSummaryForAI facetSummaryM, "", issueContext]
   pure fullSystemPrompt
