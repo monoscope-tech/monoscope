@@ -217,8 +217,12 @@ pruneEvicted ref droppedKeys newTemplates =
      in (st{entries = entries', knownTemplates = known'}, ())
 
 
--- | Bound the per-project key set by evicting LRU-by-lastSeen.
--- Pure on the shard state; called from the flush worker.
+-- | Bound the per-project key set by evicting LRU-by-lastSeen, and cap
+-- 'knownTemplates' so the dedup short-circuit set can't grow without bound.
+-- 'knownTemplates' is a pure performance optimisation (skipping the upsert
+-- when a template has already been persisted); dropping it just means the
+-- next flush will re-upsert, which is idempotent. Pure on the shard state;
+-- called from the flush worker.
 evictLRU :: DecisionPolicy -> SchemaShardState -> SchemaShardState
 evictLRU policy st =
   let byProject :: HashMap Projects.ProjectId [(SchemaKey, CatalogEntry)]
@@ -236,4 +240,12 @@ evictLRU policy st =
                 excess = length xs - policy.maxKeysPerProject
              in fst <$> take excess sorted
       entries' = HS.foldr HM.delete st.entries victims
-   in st{entries = entries'}
+      known' = if HS.size st.knownTemplates > knownTemplatesCap then HS.empty else st.knownTemplates
+   in st{entries = entries', knownTemplates = known'}
+
+
+-- | Hard cap on the per-shard 'knownTemplates' short-circuit set. When
+-- exceeded the set is dropped wholesale on the next eviction tick; the next
+-- flush re-upserts templates idempotently.
+knownTemplatesCap :: Int
+knownTemplatesCap = 50_000

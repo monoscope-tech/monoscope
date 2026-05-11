@@ -1599,7 +1599,9 @@ processEagerBatch batch shard
                 , learnSampleEveryN = fromIntegral ctx.config.schemaLearnSampleEveryN
                 , maxKeysPerProject = ctx.config.schemaCatalogMaxKeysPerProject
                 }
-        liftIO $ SchemaHot.observeSpans shard.schemaState policy pid observations
+        when ctx.config.enableSchemaLearning
+          $ liftIO
+          $ SchemaHot.observeSpans shard.schemaState policy pid observations
 
         -- Error extraction (pure).
         let !allErrors = Telemetry.getAllATErrors spans
@@ -1728,7 +1730,9 @@ processEagerBatch batch shard
 -- @schemaFlushIntervalSecs@, persists the dirty subset of catalog entries,
 -- and re-derives the per-project summary doc.
 runSchemaFlusherFiber :: Logger -> Config.AuthContext -> TracerProvider -> IO Void
-runSchemaFlusherFiber logger ctx tp = do
+runSchemaFlusherFiber logger ctx tp
+  | not ctx.config.enableSchemaLearning = forever (threadDelay maxBound)
+  | otherwise = do
   let refs = V.toList $ V.map (.schemaState) ctx.extractionWorker.shards
       flushOne ref = do
         r <- runBackground logger ctx tp (SchemaWorker.flushDirty ref)

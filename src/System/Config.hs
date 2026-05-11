@@ -158,7 +158,12 @@ data EnvConfig = EnvConfig
   , maxBufferedSpans :: Int
   , maxDrainTrees :: Int
   , -- Schema-learning knobs (see "Pkg.SchemaLearning.Hot").
-    schemaFlushIntervalSecs :: Int
+    enableSchemaLearning :: Bool
+  -- ^ Kill switch for the in-process schema-learning pipeline. When False,
+  -- 'observeSpans' is skipped on the hot path and the flush fiber doesn't
+  -- start. Use this if the catalog needs to be disabled in prod without a
+  -- redeploy.
+  , schemaFlushIntervalSecs :: Int
   , schemaCatalogExamples :: Int
   , schemaCatalogMaxKeysPerProject :: Int
   , schemaCatalogMaxBytesPerShard :: Int
@@ -199,6 +204,7 @@ instance DefConfig EnvConfig where
       , drainRehydrateIntervalSecs = 300
       , maxBufferedSpans = 100000
       , maxDrainTrees = 200
+      , enableSchemaLearning = True
       , schemaFlushIntervalSecs = 60
       , schemaCatalogExamples = 20
       , schemaCatalogMaxKeysPerProject = 5000

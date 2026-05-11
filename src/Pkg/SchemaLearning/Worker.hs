@@ -211,4 +211,11 @@ runSchemaFlusher
   -> IO Void
 runSchemaFlusher intervalSecs refs flushOne = forever do
   threadDelay (intervalSecs * 1_000_000)
-  forM_ refs \ref -> void $ flushOne ref
+  forM_ refs \ref -> do
+    void $ flushOne ref
+    -- Bound the in-memory shard state: LRU-evict per-project keys past
+    -- 'maxKeysPerProject' and drop the 'knownTemplates' short-circuit if it
+    -- grew past its cap. Without this the entries map grows unboundedly with
+    -- every distinct (project, keyHash) the shard has ever seen and eventually
+    -- exhausts the heap.
+    atomicModifyIORef' ref \st -> (Hot.evictLRU Hot.defaultPolicy st, ())
