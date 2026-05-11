@@ -72,12 +72,14 @@ flushDirty ref = do
       -- 1. Anomaly diff (must precede upserts).
       priors <- SC.getByKeysBatch (V.map (\(k, _) -> (k.projectId, k.keyHash)) dirty)
       let rawRows = buildAnomalyRows priors dirty
-      -- Suppress endpoint anomalies for endpoints already in apis.endpoints
-      -- (the legacy discovery path beat us to them) and for rows where we
-      -- couldn't resolve a url_path. Both classes would otherwise turn into
-      -- "new endpoint" Slack/Discord notifications for endpoints customers
-      -- already know about — the schema_catalog being empty at rollout
-      -- doesn't make them new.
+      -- "Is this endpoint new?" is owned by apis.endpoints, not by the
+      -- schema-learning catalog. The catalog tracks per-endpoint structural
+      -- learning (field types, formats, sample counts); it can't decide
+      -- newness because it starts empty for every project and gets pruned
+      -- by evictLRU. So before producing AKEndpoint anomalies, cross-check
+      -- against apis.endpoints — if the endpoint is already there, it's not
+      -- new. Also drop rows where url_path couldn't be resolved; those
+      -- would render as "GET " in notifications.
       let endpointPairs = V.mapMaybe (\r -> if r.anomalyType == "endpoint" then Just (r.projectId, r.targetHash) else Nothing) rawRows
       known <- SC.existingEndpointHashes endpointPairs
       let isSuppressed r =

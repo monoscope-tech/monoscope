@@ -387,10 +387,20 @@ data AnomalyInsertRow = AnomalyInsertRow
 
 
 -- | Of the given @(project_id, endpoint_hash)@ pairs, return those already
--- known to @apis.endpoints@. Used by the schema-learning flush to suppress
--- "new endpoint" anomalies for endpoints the legacy discovery path has
--- already recorded (otherwise customers get spammed with notifications for
--- endpoints that have existed for months).
+-- present in @apis.endpoints@ /and at least 5 minutes old/. Used by the
+-- schema-learning flush to skip emitting "new endpoint" anomalies for
+-- endpoints the project already knows about.
+--
+-- Endpoint newness is owned by @apis.endpoints@ (the canonical registry),
+-- not the in-memory schema catalog (which is empty for fresh projects and
+-- gets pruned by evictLRU). The grace window matters: every batch goes
+-- through 'processSpanToEntities' (writes @apis.endpoints@) and
+-- 'extractObservation' (feeds the catalog) in parallel; the schema flush
+-- runs ~'schemaFlushIntervalSecs' later, by which time a genuinely new
+-- endpoint is seconds-to-a-minute old. Without the cutoff we'd suppress
+-- those as "already known" and notifications for real new endpoints would
+-- never fire. With the cutoff, only endpoints discovered well before this
+-- flush cycle are treated as not-new.
 existingEndpointHashes
   :: DB es
   => V.Vector (Projects.ProjectId, Text)
@@ -405,7 +415,8 @@ existingEndpointHashes pairs
           [HI.sql| SELECT e.project_id, e.hash
                    FROM apis.endpoints e
                    JOIN unnest(#{pids}::uuid[], #{hashes}::text[]) m(pid, h)
-                     ON e.project_id = m.pid AND e.hash = m.h |]
+                     ON e.project_id = m.pid AND e.hash = m.h
+                   WHERE e.created_at < now() - interval '5 minutes' |]
       pure $ HS.fromList [(UUIDId pid, h) | (pid, h) <- rows]
 
 
