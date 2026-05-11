@@ -1733,23 +1733,23 @@ runSchemaFlusherFiber :: Logger -> Config.AuthContext -> TracerProvider -> IO Vo
 runSchemaFlusherFiber logger ctx tp
   | not ctx.config.enableSchemaLearning = forever (threadDelay maxBound)
   | otherwise = do
-  let refs = V.toList $ V.map (.schemaState) ctx.extractionWorker.shards
-      flushOne ref = do
-        r <- runBackground logger ctx tp (SchemaWorker.flushDirty ref)
-        when (r.dirtyKeys > 0)
-          $ runBackground logger ctx tp
-          $ Log.logTrace
-            "schema-flush"
-            ( AE.object
-                [ "dirty_keys" AE..= r.dirtyKeys
-                , "templates_written" AE..= r.templatesWritten
-                , "catalog_rows_written" AE..= r.catalogRowsWritten
-                , "summaries_updated" AE..= r.summariesUpdated
-                , "anomalies_emitted" AE..= r.anomaliesEmitted
-                ]
-            )
-        pure r
-  SchemaWorker.runSchemaFlusher ctx.config.schemaFlushIntervalSecs refs flushOne
+      let refs = V.toList $ V.map (.schemaState) ctx.extractionWorker.shards
+          flushOne ref = do
+            r <- runBackground logger ctx tp (SchemaWorker.flushDirty ref)
+            when (r.dirtyKeys > 0)
+              $ runBackground logger ctx tp
+              $ Log.logTrace
+                "schema-flush"
+                ( AE.object
+                    [ "dirty_keys" AE..= r.dirtyKeys
+                    , "templates_written" AE..= r.templatesWritten
+                    , "catalog_rows_written" AE..= r.catalogRowsWritten
+                    , "summaries_updated" AE..= r.summariesUpdated
+                    , "anomalies_emitted" AE..= r.anomaliesEmitted
+                    ]
+                )
+            pure r
+      SchemaWorker.runSchemaFlusher ctx.config.schemaFlushIntervalSecs refs flushOne
 
 
 -- | 1-minute error-state decay tick. Owns `propagateMergedCounts` +
