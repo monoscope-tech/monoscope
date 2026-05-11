@@ -48,7 +48,6 @@ import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
 import Effectful.Reader.Static (ask)
-import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Hasql.TH (resultlessStatement, singletonStatement)
