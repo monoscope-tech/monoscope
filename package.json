@@ -3,10 +3,10 @@
     "@tailwindcss/typography": "^0.5.19",
     "autoprefixer": "^10.5.0",
     "daisyui": "^5.5.19",
-    "jest": "^30.3.0",
-    "postcss": "^8.5.13",
-    "tailwindcss": "^4.2.4",
-    "workbox-cli": "^7.4.0"
+    "jest": "^30.4.2",
+    "postcss": "^8.5.14",
+    "tailwindcss": "^4.3.0",
+    "workbox-cli": "^7.4.1"
   },
   "dependencies": {
     "@opentelemetry/auto-instrumentations-node": "^0.74.0",
