@@ -26,6 +26,7 @@ where
 import Control.Concurrent (threadDelay)
 import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HS
+import Data.Text qualified as T
 import Data.Time (UTCTime, getCurrentTime)
 import Data.Vector qualified as V
 import Effectful (Eff)
@@ -70,7 +71,21 @@ flushDirty ref = do
       now <- liftIO getCurrentTime
       -- 1. Anomaly diff (must precede upserts).
       priors <- SC.getByKeysBatch (V.map (\(k, _) -> (k.projectId, k.keyHash)) dirty)
-      let anomalyRows = buildAnomalyRows priors dirty
+      let rawRows = buildAnomalyRows priors dirty
+      -- Suppress endpoint anomalies for endpoints already in apis.endpoints
+      -- (the legacy discovery path beat us to them) and for rows where we
+      -- couldn't resolve a url_path. Both classes would otherwise turn into
+      -- "new endpoint" Slack/Discord notifications for endpoints customers
+      -- already know about — the schema_catalog being empty at rollout
+      -- doesn't make them new.
+      let endpointPairs = V.mapMaybe (\r -> if r.anomalyType == "endpoint" then Just (r.projectId, r.targetHash) else Nothing) rawRows
+      known <- SC.existingEndpointHashes endpointPairs
+      let isSuppressed r =
+            r.anomalyType == "endpoint"
+              && ( HS.member (r.projectId, r.targetHash) known
+                    || maybe True T.null r.urlPath
+                 )
+          anomalyRows = V.filter (not . isSuppressed) rawRows
       anomaliesN <- SC.insertAnomalies anomalyRows
       SC.enqueueAnomalyJobs anomalyRows
       -- 2. Upserts.

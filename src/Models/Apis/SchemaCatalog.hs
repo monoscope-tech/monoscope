@@ -30,6 +30,7 @@ module Models.Apis.SchemaCatalog (
   AnomalyInsertRow (..),
   insertAnomalies,
   enqueueAnomalyJobs,
+  existingEndpointHashes,
   getCatalogFieldAt,
   -- Re-exports for reader migration.
   Catalog.FacetData (..),
@@ -40,7 +41,9 @@ where
 
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
+import Data.HashSet qualified as HS
 import Data.Time (UTCTime)
+import Data.UUID (UUID)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Effectful
@@ -381,6 +384,29 @@ data AnomalyInsertRow = AnomalyInsertRow
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (NFData)
+
+
+-- | Of the given @(project_id, endpoint_hash)@ pairs, return those already
+-- known to @apis.endpoints@. Used by the schema-learning flush to suppress
+-- "new endpoint" anomalies for endpoints the legacy discovery path has
+-- already recorded (otherwise customers get spammed with notifications for
+-- endpoints that have existed for months).
+existingEndpointHashes
+  :: DB es
+  => V.Vector (Projects.ProjectId, Text)
+  -> Eff es (HS.HashSet (Projects.ProjectId, Text))
+existingEndpointHashes pairs
+  | V.null pairs = pure HS.empty
+  | otherwise = do
+      let pids = V.map fst pairs
+          hashes = V.map snd pairs
+      rows :: [(UUID, Text)] <-
+        Hasql.interp
+          [HI.sql| SELECT e.project_id, e.hash
+                   FROM apis.endpoints e
+                   JOIN unnest(#{pids}::uuid[], #{hashes}::text[]) m(pid, h)
+                     ON e.project_id = m.pid AND e.hash = m.h |]
+      pure $ HS.fromList [(UUIDId pid, h) | (pid, h) <- rows]
 
 
 -- | Bulk-insert anomalies. The unique @(project_id, target_hash)@ index
