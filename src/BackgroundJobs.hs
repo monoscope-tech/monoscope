@@ -2449,27 +2449,33 @@ processAPIChangeAnomalies pid targetHashes = do
   preexisting <-
     SchemaCatalog.existingEndpointHashes
       (V.fromList [(pid, h) | (h, _, _, _) <- newEndpointInfos])
-  let notifiable =
-        [ (h, iid, row)
+  let candidates =
+        [ (iid, row)
         | (h, iid, row, unr) <- newEndpointInfos
         , not unr
         , not (HashSet.member (pid, h) preexisting)
         ]
-      notifiableRows = map (\(_, _, r) -> r) notifiable
-      notifiedIssueIds = V.fromList $ map (\(_, iid, _) -> iid) notifiable
-  Relude.when (not (null notifiableRows) && not authCtx.config.pauseNotifications) do
+      candidateIssueIds = V.fromList $ map fst candidates
+  Relude.when (not (null candidates) && not authCtx.config.pauseNotifications) do
     now <- Time.currentTime
-    -- Coarse per-project 30-min cooldown to absorb bursts. Still imperfect
-    -- (concurrent NewAnomaly jobs within 1 min can all pass) but combined
-    -- with the apis.endpoints check above it stops the bulk of the spam.
-    -- TODO: replace with proper per-issue last_notified_at gating once we
-    -- audit the cooldown design end-to-end.
-    recentIssueCount :: [Int] <-
+    -- Atomic per-issue claim. UPDATE-RETURNING is the only point at which an
+    -- issue commits to being notified — so two concurrent NewAnomaly jobs
+    -- can't both pass a read-then-write check and double-send. Each row is
+    -- claimed at most once per 30-min window (last_notified_at) and respects
+    -- any explicit cooldown_until set by the UI / LLM enhancement step.
+    claimedIds :: V.Vector Issues.IssueId <-
       Hasql.interp
-        [HI.sql| SELECT COUNT(*)::int FROM apis.issues
-            WHERE project_id = #{pid} AND issue_type = 'api_change'
-              AND last_notified_at >= #{now}::timestamptz - INTERVAL '30 minutes' |]
-    Relude.unless (any (> 0) recentIssueCount) do
+        [HI.sql|
+          UPDATE apis.issues
+          SET last_notified_at = #{now}
+          WHERE id = ANY(#{candidateIssueIds}::uuid[])
+            AND (last_notified_at IS NULL OR last_notified_at < #{now}::timestamptz - INTERVAL '30 minutes')
+            AND (cooldown_until IS NULL OR cooldown_until <= #{now}::timestamptz)
+          RETURNING id
+        |]
+    let claimedSet = HashSet.fromList (V.toList claimedIds)
+        notifiableRows = [row | (iid, row) <- candidates, HashSet.member iid claimedSet]
+    Relude.when (not (null notifiableRows)) do
       projectM <- Projects.projectById pid
       whenJust projectM \project -> do
         users <- Projects.usersByProjectId pid
@@ -2487,11 +2493,6 @@ processAPIChangeAnomalies pid targetHashes = do
               let anomalyUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues"
                   (subj, html) = ET.anomalyEndpointEmail u.firstName project.title anomalyUrl notifiableRows
               sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
-          -- Stamp last_notified_at so future 30-min cooldown checks see this
-          -- batch and rate-limit subsequent sends per project.
-          Hasql.interpExecute_
-            [HI.sql| UPDATE apis.issues SET last_notified_at = #{now}
-                     WHERE id = ANY(#{notifiedIssueIds}::uuid[]) |]
 
 
 -- | Group anomalies by endpoint hash
