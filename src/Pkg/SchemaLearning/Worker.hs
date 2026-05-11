@@ -26,7 +26,6 @@ where
 import Control.Concurrent (threadDelay)
 import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HS
-import Data.Text qualified as T
 import Data.Time (UTCTime, getCurrentTime)
 import Data.Vector qualified as V
 import Effectful (Eff)
@@ -69,26 +68,15 @@ flushDirty ref = do
     then pure FlushResult{templatesWritten = 0, catalogRowsWritten = 0, summariesUpdated = 0, dirtyKeys = 0, anomaliesEmitted = 0}
     else do
       now <- liftIO getCurrentTime
-      -- 1. Anomaly diff (must precede upserts).
+      -- 1. Anomaly diff (must precede upserts). Anomaly rows always go in —
+      -- they're the durable record consumed by the UI and downstream
+      -- analytics. Notification suppression (for endpoints already in
+      -- apis.endpoints, or where url_path didn't resolve) happens on the
+      -- *send* side in 'BackgroundJobs.processAPIChangeAnomalies', so the
+      -- platform UI still surfaces the change while we just decline to ping
+      -- the customer's Slack about it.
       priors <- SC.getByKeysBatch (V.map (\(k, _) -> (k.projectId, k.keyHash)) dirty)
-      let rawRows = buildAnomalyRows priors dirty
-      -- "Is this endpoint new?" is owned by apis.endpoints, not by the
-      -- schema-learning catalog. The catalog tracks per-endpoint structural
-      -- learning (field types, formats, sample counts); it can't decide
-      -- newness because it starts empty for every project and gets pruned
-      -- by evictLRU. So before producing AKEndpoint anomalies, cross-check
-      -- against apis.endpoints — if the endpoint is already there, it's not
-      -- new. Also drop rows where url_path couldn't be resolved; those
-      -- would render as "GET " in notifications.
-      let endpointPairs = V.mapMaybe (\r -> if r.anomalyType == "endpoint" then Just (r.projectId, r.targetHash) else Nothing) rawRows
-      known <- SC.existingEndpointHashes endpointPairs
-      let isSuppressed r =
-            r.anomalyType
-              == "endpoint"
-              && ( HS.member (r.projectId, r.targetHash) known
-                     || maybe True T.null r.urlPath
-                 )
-          anomalyRows = V.filter (not . isSuppressed) rawRows
+      let anomalyRows = buildAnomalyRows priors dirty
       anomaliesN <- SC.insertAnomalies anomalyRows
       SC.enqueueAnomalyJobs anomalyRows
       -- 2. Upserts.

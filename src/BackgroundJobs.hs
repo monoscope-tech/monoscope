@@ -68,6 +68,7 @@ import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.PatternMerge qualified as PatternMergeDB
+import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitHub
 import Models.Projects.GitSync qualified as GitSync
@@ -2420,43 +2421,60 @@ processAPIChangeAnomalies pid targetHashes = do
               hasNewEndpoint = V.any ((== Anomalies.ATEndpoint) . (.anomalyType)) anomalies
               hasChanges = hasNewEndpoint || not (V.null allNewFields && V.null allDeletedFields && V.null allModifiedFields)
           let firstAnom = V.head anomalies
-              -- Suppress notifications when we can't resolve method+path.
-              -- Pre-migration-0092 rows with a broken endpoints-table join
-              -- would render "UNKNOWN /" to customers; better to skip and
-              -- alert ourselves than ship garbage labels.
+              -- "Notifiable" tags whether this row should produce a customer
+              -- notification. The issue itself is always created (the UI
+              -- shows it); only the Slack/Discord/email send is gated.
               unresolved = isNothing firstAnom.endpointMethod && isNothing firstAnom.endpointUrlPath
           if not hasChanges
             then pure Nothing
-            else
-              if unresolved
-                then do
-                  Log.logAttention
-                    "Suppressed new-endpoint notification: anomaly missing method+url_path"
-                    (AE.object ["project_id" AE..= pid, "endpoint_hash" AE..= endpointHash, "anomaly_count" AE..= V.length anomalies])
-                  pure Nothing
-                else do
-                  issue <- Issues.createAPIChangeIssue pid endpointHash anomalies
-                  Issues.insertIssue issue
-                  _ <- liftIO $ withResource authCtx.jobsPool \conn ->
-                    createJob conn "background_jobs" $ BackgroundJobs.EnhanceIssuesWithLLM pid (V.singleton issue.id)
-                  let label = fromMaybe "UNKNOWN" firstAnom.endpointMethod <> " " <> fromMaybe "/" firstAnom.endpointUrlPath
-                  pure $ Just ET.EndpointAlertRow{label, host = firstAnom.endpointHost, service = firstAnom.endpointServiceName, environment = firstAnom.endpointEnvironment}
+            else do
+              issue <- Issues.createAPIChangeIssue pid endpointHash anomalies
+              Issues.insertIssue issue
+              _ <- liftIO $ withResource authCtx.jobsPool \conn ->
+                createJob conn "background_jobs" $ BackgroundJobs.EnhanceIssuesWithLLM pid (V.singleton issue.id)
+              Relude.when unresolved do
+                Log.logAttention
+                  "Suppressed new-endpoint notification: anomaly missing method+url_path"
+                  (AE.object ["project_id" AE..= pid, "endpoint_hash" AE..= endpointHash, "issue_id" AE..= issue.id])
+              let label = fromMaybe "UNKNOWN" firstAnom.endpointMethod <> " " <> fromMaybe "/" firstAnom.endpointUrlPath
+                  row = ET.EndpointAlertRow{label, host = firstAnom.endpointHost, service = firstAnom.endpointServiceName, environment = firstAnom.endpointEnvironment}
+              pure $ Just (endpointHash, issue.id, row, unresolved)
 
-  -- Only send notifications for newly created issues, with 30-minute cooldown
-  Relude.when (not (null newEndpointInfos) && not authCtx.config.pauseNotifications) do
+  -- Notification gate: only send for issues whose endpoint is genuinely new
+  -- (not in apis.endpoints >5min ago — that's the canonical "we already
+  -- knew about this" signal) and whose method/url_path resolved. The
+  -- schema-learning catalog is empty for fresh projects and gets pruned by
+  -- evictLRU, so "first time the catalog has seen this hash" is not the
+  -- same as "this endpoint is new to the project".
+  preexisting <-
+    SchemaCatalog.existingEndpointHashes
+      (V.fromList [(pid, h) | (h, _, _, _) <- newEndpointInfos])
+  let notifiable =
+        [ (h, iid, row)
+        | (h, iid, row, unr) <- newEndpointInfos
+        , not unr
+        , not (HashSet.member (pid, h) preexisting)
+        ]
+      notifiableRows = map (\(_, _, r) -> r) notifiable
+      notifiedIssueIds = V.fromList $ map (\(_, iid, _) -> iid) notifiable
+  Relude.when (not (null notifiableRows) && not authCtx.config.pauseNotifications) do
     now <- Time.currentTime
+    -- Coarse per-project 30-min cooldown to absorb bursts. Still imperfect
+    -- (concurrent NewAnomaly jobs within 1 min can all pass) but combined
+    -- with the apis.endpoints check above it stops the bulk of the spam.
+    -- TODO: replace with proper per-issue last_notified_at gating once we
+    -- audit the cooldown design end-to-end.
     recentIssueCount :: [Int] <-
       Hasql.interp
         [HI.sql| SELECT COUNT(*)::int FROM apis.issues
             WHERE project_id = #{pid} AND issue_type = 'api_change'
-              AND created_at >= #{now}::timestamptz - INTERVAL '30 minutes'
-              AND created_at < #{now}::timestamptz - INTERVAL '1 minute' |]
+              AND last_notified_at >= #{now}::timestamptz - INTERVAL '30 minutes' |]
     Relude.unless (any (> 0) recentIssueCount) do
       projectM <- Projects.projectById pid
       whenJust projectM \project -> do
         users <- Projects.usersByProjectId pid
         Relude.when project.endpointAlerts do
-          let alert = EndpointAlert{project = project.title, endpoints = V.fromList newEndpointInfos, endpointHash = fromMaybe "" $ viaNonEmpty head $ V.toList targetHashes}
+          let alert = EndpointAlert{project = project.title, endpoints = V.fromList notifiableRows, endpointHash = fromMaybe "" $ viaNonEmpty head $ V.toList targetHashes}
           teamM <- ProjectMembers.getEveryoneTeam pid
           let ifCh ch getField act = whenJust teamM \t ->
                 Relude.when (ProjectMembers.isChannelEnabled ch t && not (V.null (getField t))) (act t)
@@ -2467,8 +2485,13 @@ processAPIChangeAnomalies pid targetHashes = do
           Relude.when (maybe False (ProjectMembers.isChannelEnabled "email") teamM) do
             forM_ users \u -> do
               let anomalyUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues"
-                  (subj, html) = ET.anomalyEndpointEmail u.firstName project.title anomalyUrl newEndpointInfos
+                  (subj, html) = ET.anomalyEndpointEmail u.firstName project.title anomalyUrl notifiableRows
               sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
+          -- Stamp last_notified_at so future 30-min cooldown checks see this
+          -- batch and rate-limit subsequent sends per project.
+          Hasql.interpExecute_
+            [HI.sql| UPDATE apis.issues SET last_notified_at = #{now}
+                     WHERE id = ANY(#{notifiedIssueIds}::uuid[]) |]
 
 
 -- | Group anomalies by endpoint hash
