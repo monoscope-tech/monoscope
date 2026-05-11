@@ -72,7 +72,7 @@ flushDirty ref = do
       -- they're the durable record consumed by the UI and downstream
       -- analytics. Notification suppression (for endpoints already in
       -- apis.endpoints, or where url_path didn't resolve) happens on the
-      -- *send* side in 'BackgroundJobs.processAPIChangeAnomalies', so the
+      -- \*send* side in 'BackgroundJobs.processAPIChangeAnomalies', so the
       -- platform UI still surfaces the change while we just decline to ping
       -- the customer's Slack about it.
       priors <- SC.getByKeysBatch (V.map (\(k, _) -> (k.projectId, k.keyHash)) dirty)
