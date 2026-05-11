@@ -81,9 +81,10 @@ flushDirty ref = do
       let endpointPairs = V.mapMaybe (\r -> if r.anomalyType == "endpoint" then Just (r.projectId, r.targetHash) else Nothing) rawRows
       known <- SC.existingEndpointHashes endpointPairs
       let isSuppressed r =
-            r.anomalyType == "endpoint"
+            r.anomalyType
+              == "endpoint"
               && ( HS.member (r.projectId, r.targetHash) known
-                    || maybe True T.null r.urlPath
+                     || maybe True T.null r.urlPath
                  )
           anomalyRows = V.filter (not . isSuppressed) rawRows
       anomaliesN <- SC.insertAnomalies anomalyRows
