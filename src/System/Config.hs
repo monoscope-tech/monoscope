@@ -286,7 +286,20 @@ configToEnv config = do
     blueMessage ("migration initialized " <> show initializationRes)
     migrationRes <- Migrations.runMigration conn Migrations.defaultOptions $ Migrations.MigrationDirectory (toString config.migrationsDir :: FilePath)
     blueMessage ("migration result " <> show migrationRes)
-    pass
+    -- Fail-fast on MigrationError. postgresql-simple-migration stops at the
+    -- first failure (e.g. a checksum mismatch from an edited migration file)
+    -- and previously we logged + continued, so every later migration was
+    -- silently skipped and the app booted with a broken schema. Caused the
+    -- 2026-05-11 schema-flusher crash loop when an edit to 0091 blocked 0092.
+    case migrationRes of
+      Migrations.MigrationError msg ->
+        Relude.error
+          $ "migration failed: "
+          <> toText msg
+          <> " — refusing to start with a half-applied schema. \
+             \If you edited an already-applied migration, add a new \
+             \follow-up file instead of editing in place."
+      _ -> pass
   pool <- liftIO $ Pool.newPool (Pool.defaultPoolConfig createPgConnIO PG.close 30 20 & setNumStripes (Just 4))
   jobsPool <- liftIO $ Pool.newPool (Pool.defaultPoolConfig createPgConnIO PG.close 30 10 & setNumStripes (Just 2))
   timefusionPgPool <- liftIO $ Pool.newPool (Pool.defaultPoolConfig createTimefusionPgConnIO PG.close 30 10 & setNumStripes (Just 2))
