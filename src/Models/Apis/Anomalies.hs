@@ -191,11 +191,14 @@ SELECT
     NULL::text     format_type,
     '{}'::jsonb[]  format_examples,
     endpoints.id   endpoint_id,
-    endpoints.method endpoint_method,
-    endpoints.url_path endpoint_url_path,
+    -- Prefer values stored directly on the anomaly row (populated by the
+    -- schema-learning writer from the catalog 'Scope'); fall back to the
+    -- 'apis.endpoints' join for legacy rows written before migration 0092.
+    COALESCE(an.method, endpoints.method) endpoint_method,
+    COALESCE(an.url_path, endpoints.url_path) endpoint_url_path,
     endpoints.service_name endpoint_service_name,
     endpoints.environment endpoint_environment,
-    endpoints.host endpoint_host,
+    COALESCE(an.host, endpoints.host) endpoint_host,
     an.archived_at,
     COALESCE(iss.affected_requests, 0),#{now}::timestamptz
 from

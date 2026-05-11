@@ -100,7 +100,14 @@ buildAnomalyRows
   -> V.Vector SC.AnomalyInsertRow
 buildAnomalyRows priors dirty =
   V.fromList
-    [ SC.AnomalyInsertRow{projectId = k.projectId, anomalyType = kindLabel pa.kind, targetHash = pa.targetHash}
+    [ SC.AnomalyInsertRow
+        { projectId = k.projectId
+        , anomalyType = kindLabel pa.kind
+        , targetHash = pa.targetHash
+        , method = e.scope.method
+        , host = e.scope.host
+        , urlPath = e.scope.urlPath
+        }
     | (k, e) <- V.toList dirty
     , pa <- Catalog.diffAnomalies k.keyHash (HM.lookup (k.projectId, k.keyHash) priors) e
     ]

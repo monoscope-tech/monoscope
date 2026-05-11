@@ -1588,7 +1588,7 @@ processEagerBatch batch shard
         let !canonicalTemplates = parseCanonicalPaths projectCache.canonicalPaths
             !results = V.zipWith (processSpanToEntities canonicalTemplates projectCache) spans entityIds
             !(endpoints, spanHashes, normalizedPaths) = V.unzip3 results
-            !observations = V.map extractObservation spans
+            !observations = V.map (extractObservation canonicalTemplates) spans
             !endpointsFinal = deduplicateByHash (.hash) $ V.mapMaybe id endpoints
 
         -- Stream into the in-memory schema catalog. Single-writer per shard;
@@ -2419,16 +2419,28 @@ processAPIChangeAnomalies pid targetHashes = do
               allModifiedFields = V.concatMap (.shapeUpdatedFieldFormats) anomalies
               hasNewEndpoint = V.any ((== Anomalies.ATEndpoint) . (.anomalyType)) anomalies
               hasChanges = hasNewEndpoint || not (V.null allNewFields && V.null allDeletedFields && V.null allModifiedFields)
+          let firstAnom = V.head anomalies
+              -- Suppress notifications when we can't resolve method+path.
+              -- Pre-migration-0092 rows with a broken endpoints-table join
+              -- would render "UNKNOWN /" to customers; better to skip and
+              -- alert ourselves than ship garbage labels.
+              unresolved = isNothing firstAnom.endpointMethod && isNothing firstAnom.endpointUrlPath
           if not hasChanges
             then pure Nothing
-            else do
-              issue <- Issues.createAPIChangeIssue pid endpointHash anomalies
-              Issues.insertIssue issue
-              _ <- liftIO $ withResource authCtx.jobsPool \conn ->
-                createJob conn "background_jobs" $ BackgroundJobs.EnhanceIssuesWithLLM pid (V.singleton issue.id)
-              let firstAnom = V.head anomalies
-                  label = fromMaybe "UNKNOWN" firstAnom.endpointMethod <> " " <> fromMaybe "/" firstAnom.endpointUrlPath
-              pure $ Just ET.EndpointAlertRow{label, host = firstAnom.endpointHost, service = firstAnom.endpointServiceName, environment = firstAnom.endpointEnvironment}
+            else
+              if unresolved
+                then do
+                  Log.logAttention
+                    "Suppressed new-endpoint notification: anomaly missing method+url_path"
+                    (AE.object ["project_id" AE..= pid, "endpoint_hash" AE..= endpointHash, "anomaly_count" AE..= V.length anomalies])
+                  pure Nothing
+                else do
+                  issue <- Issues.createAPIChangeIssue pid endpointHash anomalies
+                  Issues.insertIssue issue
+                  _ <- liftIO $ withResource authCtx.jobsPool \conn ->
+                    createJob conn "background_jobs" $ BackgroundJobs.EnhanceIssuesWithLLM pid (V.singleton issue.id)
+                  let label = fromMaybe "UNKNOWN" firstAnom.endpointMethod <> " " <> fromMaybe "/" firstAnom.endpointUrlPath
+                  pure $ Just ET.EndpointAlertRow{label, host = firstAnom.endpointHost, service = firstAnom.endpointServiceName, environment = firstAnom.endpointEnvironment}
 
   -- Only send notifications for newly created issues, with 30-minute cooldown
   Relude.when (not (null newEndpointInfos) && not authCtx.config.pauseNotifications) do

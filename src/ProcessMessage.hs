@@ -205,22 +205,31 @@ stripNulBytes = T.replace "\NUL" ""
 -- Schema learning (fields/formats/shapes) now flows through
 -- 'extractObservation' + the schema-learning catalog; this function only
 -- handles endpoint discovery + hash stamping.
-processSpanToEntities :: HM.HashMap (Text, Text) [([Text], Text)] -> Projects.ProjectCache -> Telemetry.OtelLogsAndSpans -> UUID.UUID -> (Maybe Endpoints.Endpoint, V.Vector Text, Maybe Text)
-processSpanToEntities canonicalTemplates pjc otelSpan dumpId =
-  let !projectId = UUIDId $ Unsafe.fromJust $ UUID.fromText otelSpan.project_id
+-- | Shared HTTP-key derivation. Used by both 'processSpanToEntities' (which
+-- writes 'apis.endpoints') and 'extractObservation' (which feeds the
+-- schema-learning catalog) so the endpoint hash and url-path canonicalisation
+-- match byte-for-byte. Drift here is the root cause of "UNKNOWN /"
+-- new-endpoint notifications: when these two functions disagree on the
+-- canonical path, the schema-learning anomaly's @target_hash@ never matches
+-- @apis.endpoints.hash@ and the join in 'Anomalies.getAnomaliesVM' returns
+-- NULL for method/path.
+data HttpKey = HttpKey
+  { method :: !Text
+  , host :: !Text
+  , urlPath :: !Text
+  -- ^ canonical path: SDK-normalised, dyn-param-rewritten, canonical-template-matched.
+  , statusCode :: !Int
+  , isHttpSpan :: !Bool
+  }
 
-      -- Extract HTTP attributes from nested JSON structure
-      !attributes = maybeToMonoid (unAesonTextMaybe otelSpan.attributes)
+
+httpKeyOf :: HM.HashMap (Text, Text) [([Text], Text)] -> Telemetry.OtelLogsAndSpans -> HttpKey
+httpKeyOf canonicalTemplates otelSpan =
+  let !attributes = maybeToMonoid (unAesonTextMaybe otelSpan.attributes)
       !attrValue = AE.Object $ AEKM.fromMapText attributes
-
-      -- HTTP spans carry http.request.method; only these get endpoint/path normalization
       !isHttpSpan = isJust $ attrValue ^? key "http" . key "request" . key "method" . _String
-
-      -- Navigate nested JSON to extract values using lens
       !method = T.toUpper $ fromMaybe "GET" $ attrValue ^? key "http" . key "request" . key "method" . _String
-
       !routePath = fromMaybe "/" $ asum [attrValue ^? key "http" . key "route" . _String, attrValue ^? key "url" . key "path" . _String]
-
       !statusCode =
         fromMaybe 200
           $ asum
@@ -228,7 +237,6 @@ processSpanToEntities canonicalTemplates pjc otelSpan dumpId =
             , truncate <$> attrValue ^? key "http" . key "response" . key "status_code" . _Number
             ]
           >>= \c -> if c >= 100 && c < 600 then Just c else Nothing
-
       !host =
         fromMaybe ""
           $ asum
@@ -236,6 +244,26 @@ processSpanToEntities canonicalTemplates pjc otelSpan dumpId =
             , attrValue ^? key "server" . key "address" . _String
             , attrValue ^? key "http" . key "host" . _String
             ]
+      !sdkTypeStr =
+        fromMaybe "unknown"
+          $ (attrValue ^? key "monoscope" . key "sdk_type" . _String)
+          <|> (attrValue ^? key "apitoolkit" . key "sdk_type" . _String)
+      !sdkType = fromMaybe LogQueries.SDKUnknown $ readMaybe $ toString sdkTypeStr
+      !urlPath' = LogQueries.normalizeUrlPath sdkType statusCode method routePath
+      !(!urlPathDyn, !_pathParamsDyn, !hasDyn) = ensureUrlParams urlPath'
+      !urlPath =
+        if hasDyn
+          then urlPathDyn
+          else fromMaybe urlPath' $ matchCanonicalPath canonicalTemplates method host urlPath'
+   in HttpKey{method, host, urlPath, statusCode, isHttpSpan}
+
+
+processSpanToEntities :: HM.HashMap (Text, Text) [([Text], Text)] -> Projects.ProjectCache -> Telemetry.OtelLogsAndSpans -> UUID.UUID -> (Maybe Endpoints.Endpoint, V.Vector Text, Maybe Text)
+processSpanToEntities canonicalTemplates pjc otelSpan dumpId =
+  let !projectId = UUIDId $ Unsafe.fromJust $ UUID.fromText otelSpan.project_id
+      !attributes = maybeToMonoid (unAesonTextMaybe otelSpan.attributes)
+      !hk = httpKeyOf canonicalTemplates otelSpan
+      HttpKey{method, host, urlPath, statusCode, isHttpSpan} = hk
 
       -- Resolve service and environment from OTel resource attrs, falling back to span
       -- attributes for SDKs that put them there.
@@ -243,21 +271,6 @@ processSpanToEntities canonicalTemplates pjc otelSpan dumpId =
       lookupAttr k = Telemetry.atMapText k resourceMap <|> Telemetry.atMapText k (Just attributes)
       !serviceName = lookupAttr "service.name"
       !environment = asum $ lookupAttr <$> ["deployment.environment.name", "deployment.environment", "service.namespace", "k8s.namespace.name"]
-
-      -- Extract SDK type from attributes (needed for URL normalization)
-      !sdkTypeStr =
-        fromMaybe "unknown"
-          $ (attrValue ^? key "monoscope" . key "sdk_type" . _String)
-          <|> (attrValue ^? key "apitoolkit" . key "sdk_type" . _String)
-      !sdkType = fromMaybe LogQueries.SDKUnknown $ readMaybe $ toString sdkTypeStr
-
-      -- URL normalization and dynamic path parameter extraction
-      !urlPath' = LogQueries.normalizeUrlPath sdkType statusCode method routePath
-      !(!urlPathDyn, !_pathParamsDyn, !hasDyn) = ensureUrlParams urlPath'
-      !urlPath =
-        if hasDyn
-          then urlPathDyn
-          else fromMaybe urlPath' $ matchCanonicalPath canonicalTemplates method host urlPath'
 
       -- Generate endpoint hash - this uniquely identifies an API endpoint.
       !endpointHash = toXXHash $ projectId.toText <> host <> method <> urlPath
@@ -303,35 +316,24 @@ processSpanToEntities canonicalTemplates pjc otelSpan dumpId =
 -- them. Walks @attributes ∪ resource ∪ body ∪ events@ with redaction
 -- applied so PII never enters the catalog.
 extractObservation
-  :: OtelLogsAndSpans
+  :: HM.HashMap (Text, Text) [([Text], Text)]
+  -> OtelLogsAndSpans
   -> SchemaHot.ObservationInput
-extractObservation otelSpan =
+extractObservation canonicalTemplates otelSpan =
   let !projectIdText = otelSpan.project_id
       !attrMap = maybeToMonoid (unAesonTextMaybe otelSpan.attributes)
       !resMap = maybeToMonoid (unAesonTextMaybe otelSpan.resource)
       !attrValue = AE.Object $ AEKM.fromMapText attrMap
-      !isHttpSpan = isJust $ attrValue ^? key "http" . key "request" . key "method" . _String
       -- Hard-coded ingestion-time redaction. Per-project rules were removed
       -- with `projects.redacted_fields`; the management UI is gone.
       !redactList = V.fromList [".set-cookie", ".password"]
       !redacted = redactJSON redactList
 
-      -- HTTP keying parity with processSpanToEntities.
-      !method = T.toUpper $ fromMaybe "GET" $ attrValue ^? key "http" . key "request" . key "method" . _String
-      !routePath = fromMaybe "/" $ asum [attrValue ^? key "http" . key "route" . _String, attrValue ^? key "url" . key "path" . _String]
-      !host =
-        fromMaybe ""
-          $ asum
-            [ attrValue ^? key "net" . key "host" . key "name" . _String
-            , attrValue ^? key "server" . key "address" . _String
-            , attrValue ^? key "http" . key "host" . _String
-            ]
-      !statusCode =
-        fromMaybe 0
-          $ asum
-            [ attrValue ^? key "http" . key "response" . key "status_code" . _String >>= readMaybe @Int . toString
-            , truncate <$> attrValue ^? key "http" . key "response" . key "status_code" . _Number
-            ]
+      -- Shared HTTP-key derivation with 'processSpanToEntities'. Must stay
+      -- byte-identical or the schema-learning AKEndpoint target_hash won't
+      -- match apis.endpoints.hash and the notification join goes NULL → "UNKNOWN /".
+      !hk = httpKeyOf canonicalTemplates otelSpan
+      HttpKey{method, host, urlPath = canonicalPath, statusCode, isHttpSpan} = hk
 
       !service = Telemetry.atMapText "service.name" (Just resMap) <|> Telemetry.atMapText "service.name" (Just attrMap)
       !spanName = otelSpan.name
@@ -340,7 +342,7 @@ extractObservation otelSpan =
       !(keyKind, keyHash, scope) =
         if isHttpSpan
           then
-            let !endpointHash = toXXHash $ projectIdText <> host <> method <> routePath
+            let !endpointHash = toXXHash $ projectIdText <> host <> method <> canonicalPath
              in ( Catalog.HttpEndpoint
                 , endpointHash
                 , Catalog.Scope
@@ -349,7 +351,7 @@ extractObservation otelSpan =
                     , Catalog.kind = spanKind
                     , Catalog.host = if T.null host then Nothing else Just host
                     , Catalog.method = Just method
-                    , Catalog.urlPath = Just routePath
+                    , Catalog.urlPath = Just canonicalPath
                     , Catalog.statusCodes = if statusCode > 0 then V.singleton statusCode else V.empty
                     }
                 )

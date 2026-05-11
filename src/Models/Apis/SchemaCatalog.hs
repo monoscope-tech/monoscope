@@ -366,12 +366,18 @@ vacuumUnreferencedTemplates =
 -- ---------------------------------------------------------------------------
 -- Anomaly producer.
 
--- | Row shape for bulk inserts into @apis.anomalies@.
+-- | Row shape for bulk inserts into @apis.anomalies@. 'method', 'host', and
+-- 'urlPath' are only populated for endpoint anomalies; they let the read
+-- side render notifications without depending on a successful join back to
+-- @apis.endpoints@ (see migration 0092).
 data AnomalyInsertRow = AnomalyInsertRow
   { projectId :: !Projects.ProjectId
   , anomalyType :: !Text
   -- ^ matches @apis.anomaly_type@: "endpoint" | "shape" | "field" | "format"
   , targetHash :: !Text
+  , method :: !(Maybe Text)
+  , host :: !(Maybe Text)
+  , urlPath :: !(Maybe Text)
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (NFData)
@@ -385,14 +391,18 @@ insertAnomalies :: DB es => V.Vector AnomalyInsertRow -> Eff es Int64
 insertAnomalies rows | V.null rows = pure 0
 insertAnomalies rows =
   Hasql.interpExecute
-    [HI.sql| INSERT INTO apis.anomalies (project_id, anomaly_type, action, target_hash)
-             SELECT pid, atype::apis.anomaly_type, 'created'::apis.anomaly_action, th
-             FROM unnest(#{pids}::uuid[], #{atypes}::text[], #{ths}::text[]) AS m(pid, atype, th)
+    [HI.sql| INSERT INTO apis.anomalies (project_id, anomaly_type, action, target_hash, method, host, url_path)
+             SELECT pid, atype::apis.anomaly_type, 'created'::apis.anomaly_action, th, mth, hst, up
+             FROM unnest(#{pids}::uuid[], #{atypes}::text[], #{ths}::text[], #{methods}::text[], #{hosts}::text[], #{paths}::text[])
+                    AS m(pid, atype, th, mth, hst, up)
              ON CONFLICT (project_id, target_hash) DO NOTHING |]
   where
     pids = V.map (.projectId) rows
     atypes = V.map (.anomalyType) rows
     ths = V.map (.targetHash) rows
+    methods = V.map (.method) rows
+    hosts = V.map (.host) rows
+    paths = V.map (.urlPath) rows
 
 
 -- | Enqueue one @NewAnomaly@ background job per (project, anomalyType) group
