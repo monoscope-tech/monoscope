@@ -82,7 +82,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Charts.Charts qualified as Charts
-import Pages.Components (colorChip_, compactTimeAgo, metadataChip_, periodToggle_, resizer_, sparkline_)
+import Pages.Components (colorChip_, compactTimeAgo, emptyState_, metadataChip_, periodToggle_, resizer_, sparkline_)
 import Pages.LogExplorer.Log (virtualTable)
 import Pages.Telemetry (tracePage)
 import Pkg.AI qualified as AI
@@ -208,11 +208,15 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
   now <- Time.currentTime
   let baseBwconf = bw{pageTitle = "Issues", menuItem = Just "Issues"}
   case issueM of
-    Nothing -> do
-      addErrorToast "Issue not found" Nothing
+    Nothing ->
       addRespHeaders
-        $ PageCtx baseBwconf
-        $ toHtml ("Issue not found" :: Text)
+        $ PageCtx baseBwconf{pageTitle = "Issue Not Found"}
+        $ emptyState_
+          (Just "circle-xmark")
+          "Issue not found"
+          "This issue may have been resolved, merged, or the link may be outdated."
+          (Just $ "/p/" <> pid.toText <> "/issues")
+          "Back to Issues"
     Just issue -> do
       let tp = TimePicker.TimePicker (Just $ fromMaybe (defaultSinceRange issue.createdAt now) sinceM) Nothing Nothing
       errorM <-
