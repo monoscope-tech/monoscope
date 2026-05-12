@@ -1537,7 +1537,10 @@ safetyNetReprocess pid = do
 -- | Dual-fork an UPDATE to Postgres (blocking, deadlock-retried) + TimeFusion (best-effort, circuit-broken).
 dualExecPgTf :: (DB es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Config.AuthContext -> HI.Sql -> Eff es Int64
 dualExecPgTf ctx sql' = Ki.scoped \scope -> do
-  mainThread <- Ki.fork scope $ retryOnDeadlock 2 $ Hasql.interpExecute sql'
+  mainThread <- Ki.fork scope $ retryOnDeadlock 2 $ Hasql.transaction TxS.ReadCommitted TxS.Write $ do
+    Tx.sql "SET LOCAL lock_timeout = '30s'"
+    Tx.sql "SET LOCAL statement_timeout = '5min'"
+    HI.getRowsAffected <$> Tx.statement () (HI.interp True sql')
   _ <- Ki.fork scope $ Relude.when ctx.config.enableTimefusionWrites $ do
     now <- Time.currentTime
     shouldAttempt <- liftIO $ ExtractionWorker.shouldAttemptCircuit ctx.tfCircuit now
