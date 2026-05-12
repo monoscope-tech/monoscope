@@ -207,7 +207,7 @@ instance DefConfig EnvConfig where
       , enableSchemaLearning = True
       , schemaFlushIntervalSecs = 60
       , schemaCatalogExamples = 20
-      , schemaCatalogMaxKeysPerProject = 5000
+      , schemaCatalogMaxKeysPerProject = 500
       , schemaCatalogMaxBytesPerShard = 67108864
       , schemaLearnFullThreshold = 200
       , schemaLearnSampleEveryN = 200

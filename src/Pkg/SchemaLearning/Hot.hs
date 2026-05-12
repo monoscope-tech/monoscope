@@ -88,7 +88,7 @@ data DecisionPolicy = DecisionPolicy
 
 
 defaultPolicy :: DecisionPolicy
-defaultPolicy = DecisionPolicy{learnFullThreshold = 200, learnSampleEveryN = 200, maxKeysPerProject = 5000}
+defaultPolicy = DecisionPolicy{learnFullThreshold = 200, learnSampleEveryN = 200, maxKeysPerProject = 500}
 
 
 -- | Per-span keying tuple plus the leaf walk. The caller (in
@@ -147,7 +147,12 @@ mergeGroup policy pid keyHash grp st = fromMaybe st do
   let key = SchemaKey pid keyHash
       now = rep.timestamp
       curEntry = HM.lookup key st.entries
-      learnPhase = maybe True (\e -> e.sampleCount < policy.learnFullThreshold) curEntry
+      -- Hard cap on total shard size: new keys are dropped once the shard
+      -- holds maxEntriesPerShard entries. Existing keys always update.
+      -- evictLRU enforces the finer per-project cap every flush cycle; this
+      -- prevents unbounded growth in the 60-second windows between evictions.
+  guard (isJust curEntry || HM.size st.entries < maxEntriesPerShard)
+  let learnPhase = maybe True (\e -> e.sampleCount < policy.learnFullThreshold) curEntry
       sampleNow = case curEntry of
         Just e -> e.sampleCount `mod` policy.learnSampleEveryN == 0
         Nothing -> True
@@ -249,3 +254,11 @@ evictLRU policy st =
 -- flush re-upserts templates idempotently.
 knownTemplatesCap :: Int
 knownTemplatesCap = 50_000
+
+
+-- | Hard cap on total entries in a single shard. New keys are dropped once
+-- this limit is reached; existing keys always update. evictLRU applies the
+-- finer per-project cap on each flush cycle, but this O(1) guard prevents
+-- unbounded growth between 60-second eviction ticks.
+maxEntriesPerShard :: Int
+maxEntriesPerShard = 10_000
