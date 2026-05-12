@@ -147,10 +147,10 @@ mergeGroup policy pid keyHash grp st = fromMaybe st do
   let key = SchemaKey pid keyHash
       now = rep.timestamp
       curEntry = HM.lookup key st.entries
-      -- Hard cap on total shard size: new keys are dropped once the shard
-      -- holds maxEntriesPerShard entries. Existing keys always update.
-      -- evictLRU enforces the finer per-project cap every flush cycle; this
-      -- prevents unbounded growth in the 60-second windows between evictions.
+  -- Hard cap on total shard size: new keys are dropped once the shard
+  -- holds maxEntriesPerShard entries. Existing keys always update.
+  -- evictLRU enforces the finer per-project cap every flush cycle; this
+  -- prevents unbounded growth in the 60-second windows between evictions.
   guard (isJust curEntry || HM.size st.entries < maxEntriesPerShard)
   let learnPhase = maybe True (\e -> e.sampleCount < policy.learnFullThreshold) curEntry
       sampleNow = case curEntry of
