@@ -1012,7 +1012,8 @@ drainExtractionWorker TestResources{..} = do
   -- in tests we have to drive it explicitly so anomalies/issues land before
   -- runAllBackgroundJobs picks up the NewAnomaly jobs.
   for_ shards \shard ->
-    void $ runTestBackgroundWithLogger frozenTime trLogger trATCtx
+    void
+      $ runTestBackgroundWithLogger frozenTime trLogger trATCtx
       $ SchemaWorker.flushDirty shard.schemaState
   where
     drainSTM isEmpty pop process = do
