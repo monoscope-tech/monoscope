@@ -127,6 +127,7 @@ import Pages.LogExplorer.Log qualified as Log
 import Pages.Settings qualified as Api
 import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), mkHasqlPool)
 import Pkg.ExtractionWorker qualified as ExtractionWorker
+import Pkg.SchemaLearning.Worker qualified as SchemaWorker
 import Pkg.TraceSessionCache qualified as TSC
 import ProcessMessage qualified
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
@@ -1006,6 +1007,13 @@ drainExtractionWorker TestResources{..} = do
       (isEmptyTBQueue shard.drainFlushQ)
       (readTBQueue shard.drainFlushQ)
       (runTestBackgroundWithLogger frozenTime trLogger trATCtx . BackgroundJobs.flushDrainTask shard)
+  -- Persist the schema-learning catalog's dirty entries (and enqueue
+  -- NewAnomaly jobs). In prod runSchemaFlusherFiber does this on a timer;
+  -- in tests we have to drive it explicitly so anomalies/issues land before
+  -- runAllBackgroundJobs picks up the NewAnomaly jobs.
+  for_ shards \shard ->
+    void $ runTestBackgroundWithLogger frozenTime trLogger trATCtx
+      $ SchemaWorker.flushDirty shard.schemaState
   where
     drainSTM isEmpty pop process = do
       mItem <- atomically $ isEmpty >>= \case True -> pure Nothing; False -> Just <$> pop
