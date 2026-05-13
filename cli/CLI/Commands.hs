@@ -58,7 +58,7 @@ import Effectful
 import Effectful.Environment (Environment)
 import Effectful.Environment qualified as Env
 import Effectful.FileSystem (FileSystem)
-import Models.Apis.Fields qualified as Fields
+import Models.Apis.SchemaCatalog qualified as Fields
 import Data.HashMap.Strict qualified as HM
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Context.ThreadLocal qualified as OtelCtx

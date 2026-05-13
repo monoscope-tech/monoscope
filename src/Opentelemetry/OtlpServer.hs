@@ -237,19 +237,17 @@ stampOrPassthrough appCtx v =
 -- | Process a list of messages
 processList :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es, UUIDEff :> es) => [(Text, ByteString)] -> HM.HashMap Text Text -> Eff es [Text]
 processList [] _ = pure []
-processList msgs !attrs = checkpoint "processList" $ do
-  startTime <- liftIO getCurrentTime
-
+processList msgs !attrs = checkpoint "processList" do
+  startTime <- Time.currentTime
   (result, processingTime, dbInsertTime) <- process startTime `onException` handleException
+  endTime <- Time.currentTime
 
-  endTime <- liftIO getCurrentTime
   let duration = diffUTCTime endTime startTime
-      eventCount = length msgs
   Log.logTrace
     "processList: batch processing completed"
     ( AE.object
         [ "ce-type" AE..= HM.lookup "ce-type" attrs
-        , "event_count" AE..= eventCount
+        , "event_count" AE..= length msgs
         , "duration_seconds" AE..= realToFrac @_ @Double duration
         , "duration_ms" AE..= (round (duration * 1000) :: Int)
         , "processing_ms" AE..= processingTime
@@ -258,13 +256,12 @@ processList msgs !attrs = checkpoint "processList" $ do
     )
   pure result
   where
-    handleException = checkpoint "processList:exception" $ do
+    handleException = checkpoint "processList:exception" do
       Log.logAttention "processList: caught exception" (AE.object ["ce-type" AE..= HM.lookup "ce-type" attrs, "msg_count" AE..= length msgs, "attrs" AE..= attrs])
       pure (map fst msgs, 0, 0)
 
     process fallbackTime = do
       appCtx <- ask @AuthContext
-
       case HM.lookup "ce-type" attrs of
         Just "org.opentelemetry.otlp.logs.v1" ->
           processBatchPipeline @LS.ExportLogsServiceRequest
@@ -328,7 +325,7 @@ processList msgs !attrs = checkpoint "processList" $ do
 
 processBatchPipeline
   :: forall req res es
-   . (DB es, Eff.Reader AuthContext :> es, Log :> es, Message req)
+   . (DB es, Eff.Reader AuthContext :> es, Log :> es, Message req, Time.Time :> es)
   => Text
   -> [(Text, ByteString)]
   -> AuthContext
@@ -339,57 +336,48 @@ processBatchPipeline
   -> (HM.HashMap Projects.ProjectId Projects.ProjectCache -> V.Vector res -> Eff es ()) -- DB insert (caches threaded for worker hand-off)
   -> Eff es ([Text], Int, Int)
 processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds convert dbInsert =
-  checkpoint (cp "") $ do
-    processingStartTime <- liftIO getCurrentTime
-    let !decodedMsgs = [(ackId, decodeMessage msg :: Either String req) | (ackId, msg) <- msgs]
-        !allProjectKeys = V.concat [extractKeys req | (_, Right req) <- decodedMsgs]
-        !uniqueProjectKeys = V.fromList $ toList $ HS.fromList $ V.toList allProjectKeys
-        !atIds = concatMap extractIds [req | (_, Right req) <- decodedMsgs]
+  checkpoint (cp "") do
+    ((ackIds, dbInsertDuration), processingDuration) <- Log.timeAction do
+      let !decodedMsgs = [(ackId, decodeMessage msg :: Either String req) | (ackId, msg) <- msgs]
+          !allProjectKeys = V.concat [extractKeys req | (_, Right req) <- decodedMsgs]
+          !uniqueProjectKeys = V.fromList $ toList $ HS.fromList $ V.toList allProjectKeys
+          !atIds = concatMap extractIds [req | (_, Right req) <- decodedMsgs]
 
-    (!keyToIdMap, !projectCachesMap) <-
-      if V.null uniqueProjectKeys
-        then pure (HM.empty, HM.empty)
-        else do
-          projectIdsAndKeys <- checkpoint (cp ":getProjectIds") $ ProjectApiKeys.projectIdsByProjectApiKeys uniqueProjectKeys
-          let !keyToId = HM.fromList $ V.toList projectIdsAndKeys
-              !projectIds = toList $ HS.fromList $ atIds <> HM.elems keyToId
-          projectCaches <- checkpoint (cp ":getProjectCaches") $ do
-            caches <- liftIO $ do
-              cachePairs <- forM projectIds \pid ->
-                Cache.fetchWithCache appCtx.projectCache pid \pid' -> do
-                  mpjCache <- Projects.projectCacheByIdIO appCtx.hasqlJobsPool pid'
-                  pure $! fromMaybe Projects.defaultProjectCache mpjCache
-              pure $! zip projectIds cachePairs
-            pure $ HM.fromList caches
-          pure (keyToId, projectCaches)
+      (!keyToIdMap, !projectCachesMap) <-
+        if V.null uniqueProjectKeys
+          then pure (HM.empty, HM.empty)
+          else do
+            !projectIdsAndKeys <- checkpoint (cp ":getProjectIds") $ ProjectApiKeys.projectIdsByProjectApiKeys uniqueProjectKeys
+            let !keyToId = HM.fromList $ V.toList projectIdsAndKeys
+                -- fold values directly to avoid HM.elems intermediate list
+                !projectIds = HS.toList $ HM.foldr' HS.insert (HS.fromList atIds) keyToId
+            !projectCaches <- checkpoint (cp ":getProjectCaches")
+              $ liftIO
+              $ fmap HM.fromList
+              $ forM projectIds \pid -> do
+                !cache <- Cache.fetchWithCache appCtx.projectCache pid \pid' ->
+                  fromMaybe Projects.defaultProjectCache <$> Projects.projectCacheByIdIO appCtx.hasqlJobsPool pid'
+                pure $! (pid, cache)
+            pure (keyToId, projectCaches)
 
-    let !processedMsgs =
-          [ case decodeResult of
-              Left _ -> (ackId, V.empty)
-              Right req -> let !out = convert fallbackTime projectCachesMap keyToIdMap req in (ackId, out)
-          | (ackId, decodeResult) <- decodedMsgs
-          ]
+      let !processedMsgs =
+            [ case decodeResult of
+                Left _ -> (ackId, V.empty)
+                Right req -> let !out = convert fallbackTime projectCachesMap keyToIdMap req in (ackId, out)
+            | (ackId, decodeResult) <- decodedMsgs
+            ]
 
-    forM_ [(idx, err) | (idx, (_, Left err)) <- zip [0 ..] decodedMsgs] \(idx, err) ->
-      recordProtoError label err (snd $ msgs L.!! idx) Log.logAttention
+      forM_ [(idx, err) | (idx, (_, Left err)) <- zip [0 ..] decodedMsgs] \(idx, err) ->
+        recordProtoError label err (snd $ msgs L.!! idx) Log.logAttention
 
-    let !results = V.fromList processedMsgs
-        (!ackIds, !outputVectors) = V.unzip results
-        !allOutput = V.concatMap Relude.id outputVectors
+      let !results = V.fromList processedMsgs
+          (!ackIdsV, !outputVectors) = V.unzip results
+          !allOutput = V.concatMap Relude.id outputVectors
 
-    processingEndTime <- liftIO getCurrentTime
-    let processingDuration = diffUTCTime processingEndTime processingStartTime
+      (_, dbDur) <- Log.timeAction $ unless (V.null allOutput) $ dbInsert projectCachesMap allOutput
+      pure (V.toList ackIdsV, dbDur)
 
-    dbInsertDuration <-
-      if V.null allOutput
-        then pure 0
-        else do
-          dbInsertStartTime <- liftIO getCurrentTime
-          dbInsert projectCachesMap allOutput
-          dbInsertEndTime <- liftIO getCurrentTime
-          pure $ diffUTCTime dbInsertEndTime dbInsertStartTime
-
-    pure (V.toList ackIds, round (processingDuration * 1000), round (dbInsertDuration * 1000))
+    pure (ackIds, round (processingDuration * 1000), round (dbInsertDuration * 1000))
   where
     cp suffix = fromString $ toString $ "processList:" <> label <> suffix
 
@@ -1019,8 +1007,7 @@ convertLogRecordToOtelLog !fallbackTime !pid resourceM scopeM logRecord =
 
 -- | Convert ResourceSpans to OtelLogsAndSpans
 convertResourceSpansToOtelLogs :: UTCTime -> HM.HashMap Projects.ProjectId Projects.ProjectCache -> V.Vector (Text, Projects.ProjectId) -> V.Vector PT.ResourceSpans -> [OtelLogsAndSpans]
-convertResourceSpansToOtelLogs !fallbackTime !projectCaches !pids !resourceSpans =
-  concatMap convertOne (V.toList resourceSpans)
+convertResourceSpansToOtelLogs !fallbackTime !projectCaches !pids !resourceSpans = concatMap convertOne (V.toList resourceSpans)
   where
     convertOne rs =
       let projectKey = fromMaybe "" $ (V.!? 0) $ getSpanApiKey (V.singleton rs)

@@ -46,11 +46,36 @@ sharedKafkaProducer = unsafePerformIO (newMVar Nothing)
 
 
 getOrInitKafkaProducer :: EnvConfig -> IO KP.KafkaProducer
-getOrInitKafkaProducer cfg = modifyMVar sharedKafkaProducer $ \case
+getOrInitKafkaProducer envCfg = modifyMVar sharedKafkaProducer $ \case
   Just p -> pure (Just p, p)
   Nothing -> do
-    p <- either throwIO pure =<< KP.newProducer (kafkaProducerProps cfg)
+    p <- either throwIO pure =<< KP.newProducer (kafkaProducerProps envCfg)
     pure (Just p, p)
+  where
+    -- librdkafka producer settings. linger.ms/batch.size are tuned aggressively
+    -- because the producer is now reused process-wide (see sharedKafkaProducer);
+    -- larger batches amortize SASL/TCP/idempotence overhead across many messages.
+    kafkaProducerProps :: EnvConfig -> KP.ProducerProperties
+    kafkaProducerProps cfg =
+      KP.brokersList (map K.BrokerAddress cfg.kafkaBrokers)
+        <> KP.extraProp "security.protocol" "sasl_plaintext"
+        <> KP.extraProp "sasl.mechanism" "SCRAM-SHA-256"
+        <> KP.extraProp "sasl.username" cfg.kafkaUsername
+        <> KP.extraProp "sasl.password" cfg.kafkaPassword
+        <> KP.extraProp "acks" "all"
+        <> KP.extraProp "retries" "2147483647"
+        <> KP.extraProp "max.in.flight.requests.per.connection" "5"
+        <> KP.extraProp "enable.idempotence" "true"
+        <> KP.extraProp "compression.type" "snappy"
+        <> KP.extraProp "batch.size" "1048576" -- 1 MiB batches (was 16 KiB)
+        <> KP.extraProp "linger.ms" "50" -- wait up to 50ms to coalesce (was 5ms)
+        <> KP.extraProp "queue.buffering.max.messages" "1000000"
+        <> KP.extraProp "queue.buffering.max.kbytes" "1048576" -- 1 GiB librdkafka queue cap
+        <> KP.extraProp "request.timeout.ms" "30000"
+        <> KP.extraProp "delivery.timeout.ms" "120000"
+        <> KP.extraProp "message.max.bytes" "52428800"
+        <> KP.extraProp "receive.message.max.bytes" "104857600"
+        <> KP.logLevel KP.KafkaLogInfo
 
 
 -- | Flush any in-flight librdkafka batches and release the cached producer.
@@ -63,32 +88,6 @@ closeSharedKafkaProducer = modifyMVar sharedKafkaProducer $ \case
     _ <- tryAny $ KP.flushProducer p
     _ <- tryAny $ KP.closeProducer p
     pure (Nothing, ())
-
-
--- librdkafka producer settings. linger.ms/batch.size are tuned aggressively
--- because the producer is now reused process-wide (see sharedKafkaProducer);
--- larger batches amortize SASL/TCP/idempotence overhead across many messages.
-kafkaProducerProps :: EnvConfig -> KP.ProducerProperties
-kafkaProducerProps cfg =
-  KP.brokersList (map K.BrokerAddress cfg.kafkaBrokers)
-    <> KP.extraProp "security.protocol" "sasl_plaintext"
-    <> KP.extraProp "sasl.mechanism" "SCRAM-SHA-256"
-    <> KP.extraProp "sasl.username" cfg.kafkaUsername
-    <> KP.extraProp "sasl.password" cfg.kafkaPassword
-    <> KP.extraProp "acks" "all"
-    <> KP.extraProp "retries" "2147483647"
-    <> KP.extraProp "max.in.flight.requests.per.connection" "5"
-    <> KP.extraProp "enable.idempotence" "true"
-    <> KP.extraProp "compression.type" "snappy"
-    <> KP.extraProp "batch.size" "1048576" -- 1 MiB batches (was 16 KiB)
-    <> KP.extraProp "linger.ms" "50" -- wait up to 50ms to coalesce (was 5ms)
-    <> KP.extraProp "queue.buffering.max.messages" "1000000"
-    <> KP.extraProp "queue.buffering.max.kbytes" "1048576" -- 1 GiB librdkafka queue cap
-    <> KP.extraProp "request.timeout.ms" "30000"
-    <> KP.extraProp "delivery.timeout.ms" "120000"
-    <> KP.extraProp "message.max.bytes" "52428800"
-    <> KP.extraProp "receive.message.max.bytes" "104857600"
-    <> KP.logLevel KP.KafkaLogInfo
 
 
 -- pubsubService connects to the pubsub service and listens for  messages,
@@ -137,30 +136,31 @@ pubsubService appLogger appCtx tp topics fn = checkpoint "pubsubService" do
                   , ("subscription", OA.toAttribute subscription)
                   , ("ce-type", OA.toAttribute (fromMaybe "" ceType))
                   ]
-                $ \sp -> do
-                  addEvent sp "batch.started" []
-                  result <- try $ fn validMsgs (maybeToMonoid firstAttrs)
-                  case result of
-                    Left (e :: SomeException) -> do
-                      let !errText = toText $ show e
-                      addEvent sp "batch.failed" [("error", OA.toAttribute errText)]
-                      setStatus sp (Error errText)
-                      throwIO e
-                    Right ids -> do
-                      addEvent sp "batch.completed" [("processed_count", OA.toAttribute (length ids))]
-                      setStatus sp Ok
-                      pure ids
+                  \sp -> do
+                    addEvent sp "batch.started" []
+                    result <- try $ fn validMsgs (maybeToMonoid firstAttrs)
+                    case result of
+                      Left (e :: SomeException) -> do
+                        let !errText = toText $ show e
+                        addEvent sp "batch.failed" [("error", OA.toAttribute errText)]
+                        setStatus sp (Error errText)
+                        throwIO e
+                      Right ids -> do
+                        addEvent sp "batch.completed" [("processed_count", OA.toAttribute (length ids))]
+                        setStatus sp Ok
+                        pure ids
             )
             >>= \case
               Left e -> do
                 let !errText = toText $ show e
                 liftIO
-                  $ runLogT "monoscope" appLogger LogAttention
-                  $ LogBase.logAttention "pubsubService: CAUGHT EXCEPTION - Error processing messages" (AE.object ["error" AE..= errText, "message_count" AE..= length validMsgs, "first_attrs" AE..= firstAttrs, "checkpoint" AE..= ("pubsubService:exception" :: String)])
+                  $ runLogT "pubsub-service" appLogger LogAttention
+                  $ LogBase.logAttention "pubsubService: error processing batch"
+                  $ AE.object ["error" AE..= errText, "topic" AE..= topic, "message_count" AE..= length validMsgs]
 
                 unless (isUnrecoverableError e)
                   $ liftIO
-                  $ publishToDeadLetterQueue appCtx validMsgs (maybeToMonoid firstAttrs) errText
+                  $ publishToDeadLetterQueue appLogger appCtx validMsgs (maybeToMonoid firstAttrs) errText
 
                 pure $ map fst validMsgs
               Right ids -> pure ids
@@ -168,12 +168,12 @@ pubsubService appLogger appCtx tp topics fn = checkpoint "pubsubService" do
         let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ Just msgIds
         unless (null msgIds) $ void $ PubSub.newPubSubProjectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send env
       case result of
-        Left e -> do
-          liftIO $ runLogT "monoscope" appLogger LogAttention $ LogBase.logAttention "Run Pubsub exception" (show e)
-          pass
+        Left e ->
+          liftIO
+            $ runLogT "pubsub-service" appLogger LogAttention
+            $ LogBase.logAttention "pubsubService: outer loop exception" (show e)
         Right _ -> pass
   where
-    -- pubSubScope :: Proxy PubSub.Pubsub'FullControl
     pubSubScope :: Proxy '["https://www.googleapis.com/auth/pubsub"]
     pubSubScope = Proxy
 
@@ -203,60 +203,45 @@ publishJSONToKafka appCtx topicName jsonData attributes = checkpoint "publishJSO
 
 kafkaService :: Log.Logger -> AuthContext -> TracerProvider -> [Text] -> Int -> ([(Text, ByteString)] -> HM.HashMap Text Text -> ATBackgroundCtx [Text]) -> IO ()
 kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaService" do
-  -- Generate unique client ID for logging/metrics
   instanceUuid <- UUID.toText <$> UUID.nextRandom
   let clientId = "monoscope-" <> T.take 8 instanceUuid
-  -- Include dead letter topic in the list of topics to consume
-  let allTopics = kafkaTopics <> [appCtx.config.kafkaDeadLetterTopic]
+      allTopics = kafkaTopics <> [appCtx.config.kafkaDeadLetterTopic]
+      consumerSub = K.topics (map K.TopicName allTopics) <> K.offsetReset K.Earliest
 
+  -- Single LogT context for the whole service; client_id (and other static
+  -- consumer metadata) is attached via localData so every log entry below
+  -- carries it without per-call duplication.
   runLogT "kafka-service" appLogger LogInfo
-    $ LogBase.logInfo "Starting Kafka consumer service"
-    $ AE.object
+    $ LogBase.localData
       [ "client_id" AE..= clientId
-      , "topics" AE..= kafkaTopics
-      , "all_topics" AE..= allTopics
-      , "brokers" AE..= appCtx.config.kafkaBrokers
       , "group_id" AE..= appCtx.config.kafkaGroupId
       ]
+      do
+        LogBase.logInfo "Starting Kafka consumer service" (AE.object ["all_topics" AE..= allTopics, "topics" AE..= kafkaTopics, "brokers" AE..= appCtx.config.kafkaBrokers])
+        bracket
+          (either throwIO pure =<< K.newConsumer (consumerProps appCtx.config clientId) consumerSub)
+          K.closeConsumer
+          \consumer -> do
+            LogBase.logInfo_ "Kafka consumer connected, starting message polling loop"
+            forever do
+              (leftRecords, rightRecords) <- partitionEithers <$> K.pollMessageBatch consumer (K.Timeout 100) (K.BatchSize batchSize)
 
-  let consumerSub = K.topics (map K.TopicName allTopics) <> K.offsetReset K.Earliest
-  bracket
-    (either throwIO pure =<< K.newConsumer (consumerProps appCtx.config clientId) consumerSub)
-    K.closeConsumer
-    $ \consumer -> do
-      runLogT "kafka-service" appLogger LogInfo
-        $ LogBase.logInfo "Kafka consumer connected successfully, starting message polling loop"
-        $ AE.object ["client_id" AE..= clientId]
-      forever do
-        pollResult@(leftRecords, rightRecords) <- partitionEithers <$> K.pollMessageBatch consumer (K.Timeout 100) (K.BatchSize batchSize) -- timeout in milliseconds
+              unless (null leftRecords)
+                $ LogBase.logAttention "Kafka poll returned errors"
+                $ AE.object ["error_count" AE..= length leftRecords, "errors" AE..= map show leftRecords]
 
-        -- Log polling errors if any
-        unless (null leftRecords)
-          $ runLogT "kafka-service" appLogger LogAttention
-          $ LogBase.logAttention "Kafka poll returned errors"
-          $ AE.object
-            [ "error_count" AE..= length leftRecords
-            , "errors" AE..= map show leftRecords
-            ]
-
-        case rightRecords of
-          [] -> pass
-          (recc : _) -> do
-            let topic = recc.crTopic.unTopicName
-                headers = consumerRecordHeadersToHashMap recc
-                -- For dead letter queue messages, get ce-type from headers or derive from original-topic
-                ceType =
-                  if topic == appCtx.config.kafkaDeadLetterTopic
-                    then case HM.lookup "ce-type" headers of
-                      Just existingCeType -> existingCeType -- PubSub messages have ce-type
-                      Nothing -> maybe "" topicToCeType (HM.lookup "original-topic" headers) -- Kafka messages need derivation
-                    else topicToCeType topic
-                attributes = HM.insert "ce-type" ceType headers
-                allRecords = consumerRecordToTuple <$> rightRecords
-
-            msgIds <-
-              tryAny
-                ( runBackground appLogger appCtx tp
+              -- Group by topic: a single poll can interleave records from multiple
+              -- subscribed topics; each group needs its own ce-type and attributes.
+              let byTopic = foldr (\r -> HM.insertWith (<>) r.crTopic.unTopicName (r :| [])) HM.empty rightRecords
+              forM_ (HM.toList byTopic) \(topic, neRecords@(recc :| _)) -> do
+                let headers = consumerRecordHeadersToHashMap recc
+                    ceType = ceTypeFor appCtx.config.kafkaDeadLetterTopic topic headers
+                    attributes = HM.insert "ce-type" ceType headers
+                    allRecords = consumerRecordToTuple <$> toList neRecords
+                LogBase.localData ["topic" AE..= topic, "ce_type" AE..= ceType, "record_count" AE..= length allRecords] do
+                  result <- liftIO
+                    $ tryAny
+                    $ runBackground appLogger appCtx tp
                     $ withSpan
                       "kafka.process_batch"
                       [ ("topic", OA.toAttribute topic)
@@ -266,8 +251,8 @@ kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaSer
                       ]
                     $ \sp -> do
                       addEvent sp "batch.started" []
-                      result <- try $ fn allRecords attributes
-                      case result of
+                      res <- try $ fn allRecords attributes
+                      case res of
                         Left (e :: SomeException) -> do
                           let !errText = toText $ show e
                           addEvent sp "batch.failed" [("error", OA.toAttribute errText)]
@@ -277,30 +262,29 @@ kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaSer
                           addEvent sp "batch.completed" [("processed_count", OA.toAttribute (length ids))]
                           setStatus sp Ok
                           pure ids
-                )
-                >>= \case
-                  Left e -> do
-                    let !errText = toText $ show e
-                    runLogT "monoscope" appLogger LogAttention
-                      $ LogBase.logAttention "kafkaService: CAUGHT EXCEPTION - Error processing Kafka messages" (AE.object ["error" AE..= errText, "topic" AE..= topic, "ce-type" AE..= ceType, "record_count" AE..= length allRecords, "attributes" AE..= attributes, "checkpoint" AE..= ("kafkaService:exception" :: String)])
+                  case result of
+                    Right _ -> pass
+                    Left e -> do
+                      let !errText = toText $ show e
+                      LogBase.logAttention "kafkaService: error processing batch" (AE.object ["error" AE..= errText, "attributes" AE..= attributes])
+                      unless (isUnrecoverableError e)
+                        $ liftIO
+                        $ publishToDeadLetterQueue appLogger appCtx allRecords attributes errText
 
-                    unless (isUnrecoverableError e)
-                      $ liftIO
-                      $ publishToDeadLetterQueue appCtx allRecords attributes errText
-
-                    pure $ map fst allRecords
-                  Right ids -> pure ids
-
-            whenJustM (K.commitAllOffsets K.OffsetCommitAsync consumer) throwIO
-        pass
+              unless (null rightRecords)
+                $ whenJustM (K.commitAllOffsets K.OffsetCommitAsync consumer) throwIO
   where
-    -- TODO: How should errors and retries be handled and implemented?
-
     consumerRecordToTuple :: K.ConsumerRecord (Maybe ByteString) (Maybe ByteString) -> (Text, ByteString)
     consumerRecordToTuple record = (record.crTopic.unTopicName, fromMaybe "" record.crValue)
 
     consumerRecordHeadersToHashMap :: K.ConsumerRecord (Maybe ByteString) (Maybe ByteString) -> HashMap Text Text
     consumerRecordHeadersToHashMap record = HM.fromList $ map (bimap decodeUtf8 decodeUtf8) (K.headersToList record.crHeaders)
+
+    -- Dead-letter messages carry ce-type in headers (PubSub path) or derive from original-topic (Kafka path).
+    ceTypeFor :: Text -> Text -> HM.HashMap Text Text -> Text
+    ceTypeFor deadLetterTopic topic headers
+      | topic == deadLetterTopic = fromMaybe (maybe "" topicToCeType (HM.lookup "original-topic" headers)) (HM.lookup "ce-type" headers)
+      | otherwise = topicToCeType topic
 
     consumerProps :: EnvConfig -> Text -> K.ConsumerProperties
     consumerProps cfg clientId =
@@ -319,7 +303,6 @@ kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaSer
         <> K.extraProp "group.instance.id" clientId
         <> K.logLevel K.KafkaLogInfo
 
-    -- \| Maps Kafka topic names to their corresponding CloudEvent types
     topicToCeType :: Text -> Text
     topicToCeType topic = case topic of
       "otlp_spans" -> "org.opentelemetry.otlp.traces.v1"
@@ -328,22 +311,27 @@ kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaSer
       _ -> ""
 
 
--- | Publish failed messages to dead letter queue
-publishToDeadLetterQueue :: AuthContext -> [(Text, ByteString)] -> HM.HashMap Text Text -> Text -> IO ()
-publishToDeadLetterQueue appCtx messages attributes errorReason = do
+-- | Publish failed messages to dead letter queue, logging any publish failures.
+publishToDeadLetterQueue :: Log.Logger -> AuthContext -> [(Text, ByteString)] -> HM.HashMap Text Text -> Text -> IO ()
+publishToDeadLetterQueue appLogger appCtx messages attributes errorReason = do
   let deadLetterTopic = appCtx.config.kafkaDeadLetterTopic
   currentTime <- getCurrentTime
   forM_ messages \(origTopicOrAckId, msgData) -> do
     let deadLetterAttrs =
           attributes
             <> HM.fromList
-              [ ("original-topic", origTopicOrAckId) -- For Kafka, this stores the original topic name
-              , ("original-ack-id", origTopicOrAckId) -- For PubSub, this stores the ack ID
+              [ ("original-topic", origTopicOrAckId)
+              , ("original-ack-id", origTopicOrAckId)
               , ("error-reason", errorReason)
               , ("failed-at", toText $ show currentTime)
               ]
-    _ <- publishJSONToKafka appCtx deadLetterTopic (BC.unpack msgData) deadLetterAttrs
-    pass
+    result <- publishJSONToKafka appCtx deadLetterTopic (BC.unpack msgData) deadLetterAttrs
+    case result of
+      Left err ->
+        runLogT "dlq" appLogger LogAttention
+          $ LogBase.logAttention "publishToDeadLetterQueue: failed to publish"
+          $ AE.object ["error" AE..= err, "topic" AE..= deadLetterTopic, "original_topic" AE..= origTopicOrAckId]
+      Right _ -> pass
 
 
 -- | Check if exception is unrecoverable and should be discarded

@@ -13,16 +13,11 @@ import System.Server qualified as Server
 startApp :: IO ()
 startApp = do
   _ <- Safe.try (Dotenv.loadFile Dotenv.defaultConfig) :: IO (Either SomeException ())
-  withTracer $ \tracer -> do
-    tp <- getGlobalTracerProvider
-    Server.runMonoscope tp
-    pass
+  withTracer \tracer -> getGlobalTracerProvider >>= Server.runMonoscope
   where
     withTracer :: ((TracerOptions -> Tracer) -> IO c) -> IO c
     withTracer f =
       Safe.bracket
         initializeGlobalTracerProvider
         shutdownTracerProvider
-        ( \tracerProvider -> do
-            f $ makeTracer tracerProvider "monoscope-server"
-        )
+        (\tracerProvider -> f $ makeTracer tracerProvider "monoscope-server")
