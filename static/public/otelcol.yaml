@@ -90,9 +90,9 @@ processors:
 
           # Severity text — pull from the usual aliases when the SDK didn't
           # set the dedicated severity_text field.
-          - set(severity_text, attributes["level"])     where severity_text == "" and attributes["level"] != nil
-          - set(severity_text, attributes["severity"])  where severity_text == "" and attributes["severity"] != nil
-          - set(severity_text, attributes["log.level"]) where severity_text == "" and attributes["log.level"] != nil
+          - set(severity_text, String(attributes["level"]))     where severity_text == "" and attributes["level"] != nil
+          - set(severity_text, String(attributes["severity"]))  where severity_text == "" and attributes["severity"] != nil
+          - set(severity_text, String(attributes["log.level"])) where severity_text == "" and attributes["log.level"] != nil
 
           # Severity number. Only fill when SDK left it UNSPECIFIED (0).
           # Anchored prefix match so "informational" → INFO, "errno" → ERROR.
