@@ -873,6 +873,7 @@ dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-s
       let activeDays = length rows
           included = 20_000_000 :: Int64
           maxDay = foldr (\(_, n, _, _, _) acc -> max n acc) 1 rows
+          hasMetrics = any (\(_, _, m, _, _) -> m > 0) rows
           ascending = sortWith (\(d, _, _, _, _) -> d) rows
           -- Running cumulative resets at cycleStartDay so pre-cycle rows (shown
           -- for context) don't inflate the included-tier counter and produce
@@ -892,6 +893,10 @@ dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-s
             | otherwise = "$" <> toText (printf "%.2f" (fromIntegral dayOverage / 1_000_000 :: Double) :: String)
             where
               dayOverage = max 0 (cur - included) - max 0 (prev - included)
+      unless hasMetrics
+        $ div_ [class_ "flex items-center gap-2 text-xs text-textWeak bg-fillWeak/40 border border-strokeWeak rounded-md px-3 py-2"] do
+          span_ [class_ "text-textStrong"] "No metric ingestion this cycle."
+          span_ [] "Only logs and traces have been ingested."
       div_ [class_ "border border-strokeWeak rounded-md overflow-hidden max-h-96 overflow-y-auto"] do
         table_ [class_ "w-full text-sm tabular-nums border-separate border-spacing-0"] do
           -- Sticky header: each <th> carries its own opaque background so that
@@ -903,21 +908,24 @@ dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-s
               th_h "text-left" "Date"
               th_h "text-right" "Events"
               th_h "text-right" "Metrics"
-              th_h "text-right" "Data size"
               th_h "text-left w-1/4" ""
               th_h "text-right" "Est. cost"
+          let countCell :: Int64 -> Int64 -> Bool -> Html ()
+              countCell bytes n0 strong = td_ [class_ "px-3 py-2 text-right whitespace-nowrap"] do
+                div_ [class_ (if strong then "text-textStrong" else "text-textWeak")]
+                  $ toHtml @Text
+                  $ if n0 <= 0 then "—" else fmt (commaizeF n0)
+                when (bytes > 0)
+                  $ div_ [class_ "text-[11px] text-textWeak/80 leading-tight"]
+                  $ toHtml @Text (humanBytes bytes)
           tbody_ do
             forM_ withRunning \(day, n, metrics, eb, mb, prev, cur) -> do
               let pct = max 1 $ min 100 $ (n * 100) `div` maxDay
                   events = max 0 (n - metrics)
-                  totalBytes' = eb + mb
-                  volumeText = if totalBytes' <= 0 then "—" else humanBytes totalBytes'
-                  metricsText = if metrics <= 0 then "—" else fmt (commaizeF metrics)
-              tr_ [class_ "border-t border-strokeWeak"] do
+              tr_ [class_ "border-t border-strokeWeak align-top"] do
                 td_ [class_ "px-3 py-2 text-textStrong"] $ toHtml $ toText (formatTime defaultTimeLocale "%a %b %e" day)
-                td_ [class_ "px-3 py-2 text-right text-textStrong"] $ toHtml @Text $ fmt (commaizeF events)
-                td_ [class_ "px-3 py-2 text-right text-textWeak"] $ toHtml @Text metricsText
-                td_ [class_ "px-3 py-2 text-right text-textWeak"] $ toHtml @Text volumeText
+                countCell eb events True
+                countCell mb metrics False
                 td_ [class_ "px-3 py-2"] do
                   div_ [class_ "h-1.5 bg-fillWeak rounded-full overflow-hidden"] do
                     div_ [class_ "h-full bg-fillBrand", style_ ("width: " <> show pct <> "%")] mempty

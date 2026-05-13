@@ -642,7 +642,7 @@ metadataChip_ = colorChip_ ""
 -- | Standard settings page layout: scrollable container with padded, max-width section
 settingsSection_ :: Monad m => HtmlT m () -> HtmlT m ()
 settingsSection_ body = div_ [class_ "w-full h-full overflow-y-auto"] do
-  section_ [class_ "py-6 px-4 sm:py-8 sm:px-8 lg:px-12 max-w-2xl space-y-6"] body
+  section_ [class_ "py-6 px-4 sm:py-8 sm:px-8 lg:px-12 max-w-4xl space-y-6"] body
 
 
 settingsH2_ :: Monad m => Text -> HtmlT m ()
