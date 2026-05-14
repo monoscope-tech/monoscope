@@ -479,10 +479,12 @@ batchUpsertErrorPatterns pid errors now =
                        unnest(#{traceIds}::text[]) AS trace_id, unnest(#{counts}::int[]) AS cnt) u
           ON CONFLICT (project_id, hash) DO UPDATE SET
             updated_at = #{now},
-            message = EXCLUDED.message,
-            error_data = EXCLUDED.error_data,
+            -- Toastable columns (message, error_data, parent_hash) are content-derived from hash
+            -- and refreshed only on regression to avoid pg_toast bloat from per-occurrence rewrites.
+            message = CASE WHEN apis.error_patterns.state = 'resolved' THEN EXCLUDED.message ELSE apis.error_patterns.message END,
+            error_data = CASE WHEN apis.error_patterns.state = 'resolved' THEN EXCLUDED.error_data ELSE apis.error_patterns.error_data END,
+            parent_hash = CASE WHEN apis.error_patterns.state = 'resolved' THEN EXCLUDED.parent_hash ELSE apis.error_patterns.parent_hash END,
             recent_trace_id = EXCLUDED.recent_trace_id,
-            parent_hash = EXCLUDED.parent_hash,
             is_framework = EXCLUDED.is_framework,
             occurrences_1m = apis.error_patterns.occurrences_1m + EXCLUDED.occurrences_1m,
             occurrences_5m = apis.error_patterns.occurrences_5m + EXCLUDED.occurrences_1m,

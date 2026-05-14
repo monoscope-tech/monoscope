@@ -3,6 +3,7 @@ module Pages.ErrorPatternsSpec (spec) where
 import BackgroundJobs qualified
 import Data.Effectful.Notify (Notification (..), SlackData (..))
 import Data.Map.Strict qualified as Map
+import Data.Default (def)
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time (addUTCTime)
@@ -124,6 +125,35 @@ spec = aroundAll withTestResources do
       -- processOneMinuteErrors in test 1 already created issues synchronously
       issueCount <- countIssues tr Issues.RuntimeException
       issueCount `shouldSatisfy` (> 0)
+
+    it "2a. Repeat upsert on a non-resolved pattern does NOT rewrite toastable fields (TOAST bloat guard)" \tr -> do
+      -- Regression: ON CONFLICT DO UPDATE used to set message/error_data unconditionally,
+      -- which rewrites pg_toast on every occurrence and caused 157 GB of TOAST bloat in prod.
+      -- Now those fields refresh only when the pattern is in 'resolved' state (regression path).
+      patterns <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 10 0
+      case find (\p -> p.errorType == "TypeError" && p.state /= ESResolved) patterns of
+        Nothing -> expectationFailure "expected a non-resolved TypeError pattern from test 1"
+        Just pat -> do
+          let modified = (def :: ErrorPatterns.ATError)
+                { ErrorPatterns.when = frozenTime
+                , ErrorPatterns.errorType = pat.errorType
+                , ErrorPatterns.message = "MUTATED message — should not stick"
+                , ErrorPatterns.stackTrace = pat.stacktrace
+                , ErrorPatterns.hash = pat.hash
+                , ErrorPatterns.parentHash = Just "mutated-parent"
+                , ErrorPatterns.isFramework = not pat.isFramework
+                }
+          void $ runTestBg frozenTime tr $ ErrorPatterns.batchUpsertErrorPatterns pid (V.singleton modified) frozenTime
+          after <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
+          fmap (.message) after `shouldBe` Just pat.message
+          fmap (.parentHash) after `shouldBe` Just pat.parentHash
+
+          -- Resolve, then re-upsert with mutated values → regression path refreshes them
+          void $ runTestBg frozenTime tr $ ErrorPatterns.resolveErrorPattern pat.id frozenTime
+          void $ runTestBg frozenTime tr $ ErrorPatterns.batchUpsertErrorPatterns pid (V.singleton modified) frozenTime
+          afterRegress <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
+          fmap (.message) afterRegress `shouldBe` Just "MUTATED message — should not stick"
+          fmap (.state) afterRegress `shouldBe` Just ESRegressed
 
     it "3. Resolved → Regressed on new occurrence" \tr -> do
       apiKey <- createTestAPIKey tr pid "error-regression-key"
