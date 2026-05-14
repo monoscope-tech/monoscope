@@ -157,6 +157,17 @@ data EnvConfig = EnvConfig
   , drainRehydrateIntervalSecs :: Int
   , maxBufferedSpans :: Int
   , maxDrainTrees :: Int
+  , enableHashUpdates :: Bool
+  -- ^ Kill switch for UPDATE-1 (eager hash merge) and UPDATE-2 (drain `pat:*`
+  -- tag append) against `otel_logs_and_spans`. Set False to pause both writes
+  -- when the table is under decompression pressure from compressed-chunk
+  -- updates. The rest of the pipeline (schema learning, error extraction,
+  -- pattern persistence) keeps running.
+  , hashUpdateMaxAgeSecs :: Int
+  -- ^ Skip UPDATE-1/UPDATE-2 for rows whose `timestamp` is older than this
+  -- many seconds. Updates to already-compressed chunks force TimescaleDB to
+  -- decompress them; capping at ~2h keeps writes on the hot, uncompressed
+  -- tail.
   , -- Schema-learning knobs (see "Pkg.SchemaLearning.Hot").
     enableSchemaLearning :: Bool
   -- ^ Kill switch for the in-process schema-learning pipeline. When False,
@@ -204,6 +215,8 @@ instance DefConfig EnvConfig where
       , drainRehydrateIntervalSecs = 300
       , maxBufferedSpans = 100000
       , maxDrainTrees = 200
+      , enableHashUpdates = True
+      , hashUpdateMaxAgeSecs = 7200
       , enableSchemaLearning = True
       , schemaFlushIntervalSecs = 60
       , schemaCatalogExamples = 20

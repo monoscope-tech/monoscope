@@ -1670,7 +1670,11 @@ processEagerBatch batch shard
           Ki.atomically $ Ki.awaitAll scope
 
         -- UPDATE-1: non-destructive hash merge, dual-forked to PG + TimeFusion.
-        let dbSpanIds = V.toList spanIdsV
+        -- Gated by `enableHashUpdates`; bounded by `hashUpdateMaxAgeSecs` so we
+        -- never touch already-compressed chunks (which would force decompression).
+        let hashCutoff = addUTCTime (negate $ fromIntegral ctx.config.hashUpdateMaxAgeSecs) now
+            effectiveMinTs = max batchMinTs hashCutoff
+            dbSpanIds = V.toList spanIdsV
             dbTraceIds = V.toList traceIdsV
             dbHashesJson = V.toList perRowHashesJson
             dbErrorsJson = V.toList perRowErrorsJson
@@ -1704,12 +1708,15 @@ processEagerBatch batch shard
                       ORDER BY span_id, trace_id
                     ) u
                     WHERE o.project_id = #{pidText}
-                      AND o.timestamp >= #{batchMinTs}
+                      AND o.timestamp >= #{effectiveMinTs}
                       AND o.timestamp <  #{batchMaxTsPad}
                       AND o.context___span_id = u.span_id
                       AND o.context___trace_id = u.trace_id |]
-        rowsUpdated <- dualExecPgTf ctx update1Sql
-        Log.logTrace "Eager-track UPDATE-1 complete" (AE.object ["project_id" AE..= pid.toText, "span_count" AE..= V.length spans, "rows_updated" AE..= rowsUpdated])
+        rowsUpdated <-
+          if not ctx.config.enableHashUpdates || batch.batchMaxTs < hashCutoff
+            then pure 0
+            else dualExecPgTf ctx update1Sql
+        Log.logTrace "Eager-track UPDATE-1 complete" (AE.object ["project_id" AE..= pid.toText, "span_count" AE..= V.length spans, "rows_updated" AE..= rowsUpdated, "skipped" AE..= (not ctx.config.enableHashUpdates || batch.batchMaxTs < hashCutoff)])
 
         -- TODO(otel-metrics): emit counters for batches_processed, spans_processed here.
         -- Drain-track hand-off: buffer spans for pattern tagging (T.copy to unpin).
@@ -1961,11 +1968,13 @@ flushDrainTask shard task
             , Just tag <- [HM.lookup bs.spanCtxId tagByCtx]
             ]
       whenJust (nonEmpty taggedSpans) \taggedNE -> do
-        let spanIds' = [sid | (sid, _, _, _) <- taggedSpans]
+        let hashCutoff = addUTCTime (negate $ fromIntegral ctx.config.hashUpdateMaxAgeSecs) now
+            spanIds' = [sid | (sid, _, _, _) <- taggedSpans]
             traceIds' = [tid | (_, tid, _, _) <- taggedSpans]
             tagArr = [t | (_, _, t, _) <- taggedSpans]
             tsList = fmap (\(_, _, _, ts) -> ts) taggedNE
             (minTs, maxTs) = foldl' (\(!lo, !hi) t -> (min lo t, max hi t)) (head tsList, head tsList) tsList
+            effectiveMinTs = max minTs hashCutoff
             maxTsPad = addUTCTime 1 maxTs
             pidText = pid.toText
             update2Sql =
@@ -1976,12 +1985,14 @@ flushDrainTask shard task
                                  unnest(#{tagArr}::text[]) AS tag) raw
                                  ORDER BY span_id, trace_id) u
                     WHERE o.project_id = #{pidText}
-                      AND o.timestamp >= #{minTs}
+                      AND o.timestamp >= #{effectiveMinTs}
                       AND o.timestamp <  #{maxTsPad}
                       AND o.context___span_id = u.span_id
                       AND o.context___trace_id = u.trace_id
                       AND NOT (COALESCE(o.hashes, '{}'::text[]) @> ARRAY[u.tag]) |]
-        void $ dualExecPgTf ctx update2Sql
+        Relude.when (ctx.config.enableHashUpdates && maxTs >= hashCutoff)
+          $ void
+          $ dualExecPgTf ctx update2Sql
       -- TODO(otel-metrics): emit counters for drain_flushes_completed, spans_flushed, patterns_persisted.
       Log.logTrace "Drain-flush complete" (AE.object ["project_id" AE..= pid.toText, "service" AE..= svcName, "span_count" AE..= length task.spans, "pattern_count" AE..= length ups])
 
