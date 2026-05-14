@@ -2154,7 +2154,7 @@ export class LogList extends LitElement {
           // In aggregate child rows (ov), skip fixed summary width so it flexes to fill remaining space
           const skipFixedWidth = ov && column === 'summary';
           const cellClass = `${this.wrapLines ? 'break-all whitespace-break-spaces' : ''} ${cellBg} group-hover:bg-inherit relative pl-2 ${
-            column === 'summary' ? `flex-1 min-w-0 ${ov ? 'overflow-hidden' : ''}` : 'flex-shrink-0'
+            column === 'summary' ? `flex-1 min-w-0 ${ov ? 'overflow-hidden' : ''}` : 'flex-shrink-0 overflow-hidden hover:overflow-visible hover:z-30'
           } ${hasWidth && !(isAggregate && column === 'summary') && !skipFixedWidth ? `col-${column}` : ''}`;
           return ov
             ? html`<div role="cell" class=${cellClass}>${this.logItemCol(rowData, column)}</div>`

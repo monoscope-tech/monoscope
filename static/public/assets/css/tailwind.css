@@ -1463,7 +1463,7 @@ code, pre, .code, .monospace {
 }
 
 @utility badge-neutral {
-  @apply !bg-fillWeaker !text-textStrong;
+  @apply !bg-bgAlternate !text-textStrong;
 }
 
 @utility badge-info {
