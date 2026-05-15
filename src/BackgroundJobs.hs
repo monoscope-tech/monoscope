@@ -1744,21 +1744,30 @@ runSchemaFlusherFiber logger ctx tp
   | not ctx.config.enableSchemaLearning = forever (threadDelay maxBound)
   | otherwise = do
       let refs = V.toList $ V.map (.schemaState) ctx.extractionWorker.shards
-          flushOne ref = do
-            r <- runBackground logger ctx tp (SchemaWorker.flushDirty ref)
-            when (r.dirtyKeys > 0)
-              $ runBackground logger ctx tp
-              $ Log.logTrace
-                "schema-flush"
-                ( AE.object
-                    [ "dirty_keys" AE..= r.dirtyKeys
-                    , "templates_written" AE..= r.templatesWritten
-                    , "catalog_rows_written" AE..= r.catalogRowsWritten
-                    , "summaries_updated" AE..= r.summariesUpdated
-                    , "anomalies_emitted" AE..= r.anomaliesEmitted
-                    ]
-                )
-            pure r
+          emptyFR = SchemaWorker.FlushResult 0 0 0 0 0
+          flushOne ref =
+            -- Catch *here* so we keep the logger / tracer context and can
+            -- record the failure. Letting this propagate kills the fiber →
+            -- shard dirty set never drains → heap OOM.
+            tryAny (runBackground logger ctx tp (SchemaWorker.flushDirty ref)) >>= \case
+              Left e -> do
+                runBackground logger ctx tp
+                  $ LogLegacy.logAttention "schema-flusher batch failed" (show @Text e)
+                pure emptyFR
+              Right r -> do
+                when (r.dirtyKeys > 0)
+                  $ runBackground logger ctx tp
+                  $ Log.logTrace
+                    "schema-flush"
+                    ( AE.object
+                        [ "dirty_keys" AE..= r.dirtyKeys
+                        , "templates_written" AE..= r.templatesWritten
+                        , "catalog_rows_written" AE..= r.catalogRowsWritten
+                        , "summaries_updated" AE..= r.summariesUpdated
+                        , "anomalies_emitted" AE..= r.anomaliesEmitted
+                        ]
+                    )
+                pure r
       SchemaWorker.runSchemaFlusher ctx.config.schemaFlushIntervalSecs refs flushOne
 
 

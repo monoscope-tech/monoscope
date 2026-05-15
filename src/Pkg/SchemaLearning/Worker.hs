@@ -225,6 +225,9 @@ runSchemaFlusher
 runSchemaFlusher intervalSecs refs flushOne = forever do
   threadDelay (intervalSecs * 1_000_000)
   forM_ refs \ref -> do
+    -- `flushOne` MUST catch its own exceptions: if it ever lets one escape,
+    -- this fiber dies, the dirty set stops draining, and `entries` grows
+    -- unboundedly → heap OOM.
     void $ flushOne ref
     -- Bound the in-memory shard state: LRU-evict per-project keys past
     -- 'maxKeysPerProject' and drop the 'knownTemplates' short-circuit if it
