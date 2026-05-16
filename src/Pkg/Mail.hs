@@ -77,6 +77,7 @@ data NotificationAlerts
       , serviceName :: Maybe Text
       , sourceField :: Text
       , occurrenceCount :: Int
+      , isError :: Bool
       }
   | LogPatternRateChangeAlert
       { issueUrl :: Text
@@ -88,6 +89,7 @@ data NotificationAlerts
       , currentRate :: Double
       , baselineMean :: Double
       , changePercent :: Double
+      , isError :: Bool
       }
   | MonitorsRecoveryAlert
       { monitorTitle :: Text
@@ -132,8 +134,8 @@ sendDiscordAlertWith replyToMsgIdM alert pid pTitle channelIdM' = do
             ReportAlert{..} -> Just $ discordReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle reportUrl allChartUrl errorChartUrl
             MonitorsAlert{..} -> Just $ discordMonitorAlert monitorTitle monitorUrl chartUrl
             MonitorsRecoveryAlert{..} -> Just $ AE.object ["text" AE..= ("✅ *Alert resolved for `" <> monitorTitle <> "`* \n<" <> monitorUrl <> "|View Monitor>")]
-            LogPatternAlert{..} -> Just $ mkDiscordLogPatternPayload patternText issueUrl logLevel serviceName sourceField occurrenceCount sampleMessage pTitle
-            LogPatternRateChangeAlert{..} -> Just $ mkDiscordLogPatternRateChangePayload patternText issueUrl logLevel serviceName direction currentRate baselineMean changePercent pTitle
+            LogPatternAlert{..} -> Just $ mkDiscordLogPatternPayload patternText issueUrl logLevel serviceName sourceField occurrenceCount sampleMessage pTitle isError
+            LogPatternRateChangeAlert{..} -> Just $ mkDiscordLogPatternRateChangePayload patternText issueUrl logLevel serviceName direction currentRate baselineMean changePercent pTitle isError
             ShapeAlert -> Nothing
       case mkPayload alert of
         Nothing -> pure Nothing
@@ -171,8 +173,8 @@ sendSlackAlertWith threadTsM alert pid pTitle channelM = do
             ReportAlert{..} -> Just $ slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle cid reportUrl allChartUrl errorChartUrl
             MonitorsAlert{..} -> Just $ slackMonitorAlert monitorTitle monitorUrl chartUrl cid
             MonitorsRecoveryAlert{..} -> Just $ slackAttachment cid "#22c55e" [AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("✅ *Resolved:* <" <> monitorUrl <> "|" <> monitorTitle <> ">")]]]
-            LogPatternAlert{..} -> Just $ mkSlackLogPatternPayload patternText issueUrl logLevel serviceName sourceField occurrenceCount pTitle cid
-            LogPatternRateChangeAlert{..} -> Just $ mkSlackLogPatternRateChangePayload patternText issueUrl logLevel serviceName direction currentRate baselineMean changePercent pTitle cid
+            LogPatternAlert{..} -> Just $ mkSlackLogPatternPayload patternText issueUrl logLevel serviceName sourceField occurrenceCount sampleMessage pTitle cid isError
+            LogPatternRateChangeAlert{..} -> Just $ mkSlackLogPatternRateChangePayload patternText issueUrl logLevel serviceName direction currentRate baselineMean changePercent pTitle cid isError
             ShapeAlert -> Nothing
           isDefaultChannel = cid == sd.channelId
       case mkPayload alert of
@@ -384,36 +386,52 @@ newEndpointsExplorerUrl projectUrl endpoints =
     expr = "(" <> clause "attributes.http.route" <> " OR " <> clause "attributes.url.path" <> ")"
 
 
-mkSlackLogPatternPayload :: Text -> Text -> Maybe Text -> Maybe Text -> Text -> Int -> Text -> Text -> AE.Value
-mkSlackLogPatternPayload patternText issueUrl logLevel serviceName sourceField occurrenceCount project channelId =
-  slackAttachment
-    channelId
-    "#3b82f6"
-    [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("<" <> issueUrl <> "|:mag: *New log pattern* · " <> project <> ">")]]
-    , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("```" <> T.take 200 (stripSummaryBadges patternText) <> "```")]]
-    , AE.object
-        [ "type" AE..= "context"
-        , "elements"
-            AE..= AE.Array
-              [ AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Level:* " <> fromMaybe "—" logLevel)]
-              , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Service:* " <> fromMaybe "—" serviceName)]
-              , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Source:* " <> sourceField)]
-              , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Matched:* " <> show occurrenceCount)]
-              ]
-        ]
-    , AE.object
-        [ "type" AE..= "actions"
-        , "elements" AE..= AE.Array [AE.object ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= "🔍 Investigate", "emoji" AE..= True], "url" AE..= issueUrl, "style" AE..= "primary"]]
-        ]
-    ]
+-- | Pick title (emoji + label) and Slack/Discord accent color from severity signals.
+-- @isError@ is the authoritative flag (set at extraction; OR-merged on upsert);
+-- @logLevel@ only gates the "warning" branch since drain-derived rows don't set it.
+logPatternSeverity :: Bool -> Maybe Text -> (Text, Text, Int, Text)
+logPatternSeverity isError logLevel
+  | isError = ("🚨", "New error log pattern", 15278902, "#ef4444")
+  | maybe False (\l -> T.toLower l `elem` (["warn", "warning"] :: [Text])) logLevel =
+      ("⚠️", "New warning log pattern", 15909152, "#eab308")
+  | otherwise = ("🔍", "New log pattern", 3901174, "#3b82f6")
 
 
-mkSlackLogPatternRateChangePayload :: Text -> Text -> Maybe Text -> Maybe Text -> Text -> Double -> Double -> Double -> Text -> Text -> AE.Value
-mkSlackLogPatternRateChangePayload patternText issueUrl logLevel serviceName direction currentRate baselineMean changePercent project channelId =
+mkSlackLogPatternPayload :: Text -> Text -> Maybe Text -> Maybe Text -> Text -> Int -> Maybe Text -> Text -> Text -> Bool -> AE.Value
+mkSlackLogPatternPayload patternText issueUrl logLevel serviceName sourceField occurrenceCount sampleMessage project channelId isError =
   slackAttachment
     channelId
     color
-    [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("<" <> issueUrl <> "|" <> icon <> " *Log volume " <> direction <> "* · " <> project <> ">")]]
+    ( [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("<" <> issueUrl <> "|" <> emoji <> " *" <> label <> "* · " <> project <> ">")]]
+      , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("```" <> T.take 200 (stripSummaryBadges patternText) <> "```")]]
+      ]
+        <> maybeToList (sampleMessage <&> \msg -> AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Sample:*\n```" <> T.take 200 (stripSummaryBadges msg) <> "```")]])
+        <> [ AE.object
+              [ "type" AE..= "context"
+              , "elements"
+                  AE..= AE.Array
+                    [ AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Level:* " <> fromMaybe "—" logLevel)]
+                    , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Service:* " <> fromMaybe "—" serviceName)]
+                    , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Source:* " <> sourceField)]
+                    , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Matched:* " <> show occurrenceCount)]
+                    ]
+              ]
+           , AE.object
+              [ "type" AE..= "actions"
+              , "elements" AE..= AE.Array [AE.object ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= "🔍 Investigate", "emoji" AE..= True], "url" AE..= issueUrl, "style" AE..= "primary"]]
+              ]
+           ]
+    )
+  where
+    (emoji, label, _, color) = logPatternSeverity isError logLevel
+
+
+mkSlackLogPatternRateChangePayload :: Text -> Text -> Maybe Text -> Maybe Text -> Text -> Double -> Double -> Double -> Text -> Text -> Bool -> AE.Value
+mkSlackLogPatternRateChangePayload patternText issueUrl logLevel serviceName direction currentRate baselineMean changePercent project channelId isError =
+  slackAttachment
+    channelId
+    color
+    [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("<" <> issueUrl <> "|" <> icon <> " *" <> errPrefix <> "Log volume " <> direction <> "* · " <> project <> ">")]]
     , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("```" <> T.take 200 (stripSummaryBadges patternText) <> "```")]]
     , AE.object
         [ "type" AE..= "context"
@@ -432,9 +450,10 @@ mkSlackLogPatternRateChangePayload patternText issueUrl logLevel serviceName dir
         ]
     ]
   where
-    icon = if direction == "spike" then ":chart_with_upwards_trend:" else ":chart_with_downwards_trend:"
+    icon = if isError then ":rotating_light:" else if direction == "spike" then ":chart_with_upwards_trend:" else ":chart_with_downwards_trend:"
     sign = if direction == "spike" then "+" else "-"
-    color = if direction == "spike" then "#eab308" else "#3b82f6"
+    errPrefix = if isError then "Error " else "" :: Text
+    color = if isError then "#ef4444" else if direction == "spike" then "#eab308" else "#3b82f6"
 
 
 discordReportAlert :: Text -> Text -> Text -> Int -> Int -> V.Vector (Text, Int, Int) -> Text -> Text -> Text -> Text -> AE.Value
@@ -552,15 +571,15 @@ discordNewEndpointAlert projectName endpoints hash projectUrl =
         groupHeaderMd hostM ctxM <> bulletList labels
 
 
-mkDiscordLogPatternPayload :: Text -> Text -> Maybe Text -> Maybe Text -> Text -> Int -> Maybe Text -> Text -> AE.Value
-mkDiscordLogPatternPayload patternText issueUrl logLevel serviceName sourceField occurrenceCount sampleMessage project =
+mkDiscordLogPatternPayload :: Text -> Text -> Maybe Text -> Maybe Text -> Text -> Int -> Maybe Text -> Text -> Bool -> AE.Value
+mkDiscordLogPatternPayload patternText issueUrl logLevel serviceName sourceField occurrenceCount sampleMessage project isError =
   AE.object
     [ "embeds"
         AE..= AE.Array
           [ AE.object
-              [ "title" AE..= ("🔍 New log pattern · " <> project)
+              [ "title" AE..= (emoji <> " " <> label <> " · " <> project)
               , "description" AE..= ("```" <> T.take 200 (stripSummaryBadges patternText) <> "```")
-              , "color" AE..= (3901174 :: Int)
+              , "color" AE..= color
               , "fields"
                   AE..= AE.Array
                     ( fromList
@@ -575,17 +594,19 @@ mkDiscordLogPatternPayload patternText issueUrl logLevel serviceName sourceField
               , "url" AE..= issueUrl
               ]
           ]
-    , "content" AE..= "🔍 New Log Pattern"
+    , "content" AE..= (emoji <> " **" <> label <> "**")
     ]
+  where
+    (emoji, label, color, _) = logPatternSeverity isError logLevel
 
 
-mkDiscordLogPatternRateChangePayload :: Text -> Text -> Maybe Text -> Maybe Text -> Text -> Double -> Double -> Double -> Text -> AE.Value
-mkDiscordLogPatternRateChangePayload patternText issueUrl logLevel serviceName direction currentRate baselineMean changePercent project =
+mkDiscordLogPatternRateChangePayload :: Text -> Text -> Maybe Text -> Maybe Text -> Text -> Double -> Double -> Double -> Text -> Bool -> AE.Value
+mkDiscordLogPatternRateChangePayload patternText issueUrl logLevel serviceName direction currentRate baselineMean changePercent project isError =
   AE.object
     [ "embeds"
         AE..= AE.Array
           [ AE.object
-              [ "title" AE..= (icon <> " Log volume " <> direction <> " · " <> project)
+              [ "title" AE..= (icon <> " " <> errPrefix <> "Log volume " <> direction <> " · " <> project)
               , "description" AE..= ("```" <> T.take 200 (stripSummaryBadges patternText) <> "```")
               , "color" AE..= color
               , "fields"
@@ -601,11 +622,18 @@ mkDiscordLogPatternRateChangePayload patternText issueUrl logLevel serviceName d
               , "url" AE..= issueUrl
               ]
           ]
-    , "content" AE..= (icon <> " **Log volume " <> direction <> "**")
+    , "content" AE..= (icon <> " **" <> errPrefix <> "Log volume " <> direction <> "**")
     ]
   where
-    color = if direction == "spike" then 15381768 :: Int else 3901174 -- amber on spike, blue on drop
-    icon = if direction == "spike" then "📈" else "📉"
+    color
+      | isError = 15278902 :: Int -- red
+      | direction == "spike" = 15381768 -- amber on spike, blue on drop
+      | otherwise = 3901174
+    icon
+      | isError = "🚨"
+      | direction == "spike" = "📈"
+      | otherwise = "📉"
+    errPrefix = if isError then "Error " else "" :: Text
     sign = if direction == "spike" then "+" else "-"
 
 
@@ -623,12 +651,16 @@ sendPagerdutyAlertToService integrationKey (EndpointAlert project endpoints hash
 sendPagerdutyAlertToService integrationKey RuntimeErrorAlert{issueId, issueTitle, errorData, chartUrl} projectTitle projectUrl =
   let errorUrl = projectUrl <> "/issues/by_hash/" <> errorData.hash
    in Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-error-" <> issueId) (projectTitle <> ": " <> errorData.errorType <> " - " <> stripSummaryBadges issueTitle) Notify.PDError (AE.object $ ["error_type" AE..= errorData.errorType, "message" AE..= errorData.message] <> maybeToList (("chart_url" AE..=) <$> chartUrl)) errorUrl
-sendPagerdutyAlertToService integrationKey LogPatternAlert{issueUrl, patternText, logLevel, serviceName} projectTitle _ =
+sendPagerdutyAlertToService integrationKey LogPatternAlert{issueUrl, patternText, logLevel, serviceName, isError} projectTitle _ =
   let pat = stripSummaryBadges patternText
-   in Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-logpattern-" <> T.take 40 pat) (projectTitle <> ": New Log Pattern - " <> T.take 80 pat) (maybe Notify.PDWarning (\l -> if l == "error" then Notify.PDCritical else Notify.PDWarning) logLevel) (AE.object ["pattern" AE..= pat, "service" AE..= serviceName, "level" AE..= logLevel]) issueUrl
-sendPagerdutyAlertToService integrationKey LogPatternRateChangeAlert{issueUrl, patternText, logLevel, serviceName, direction, currentRate, baselineMean, changePercent} projectTitle _ =
+      kind = if isError then "Error Log Pattern" else "Log Pattern" :: Text
+      sev = if isError then Notify.PDCritical else maybe Notify.PDWarning (\l -> if l == "error" then Notify.PDCritical else Notify.PDWarning) logLevel
+   in Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-logpattern-" <> T.take 40 pat) (projectTitle <> ": New " <> kind <> " - " <> T.take 80 pat) sev (AE.object ["pattern" AE..= pat, "service" AE..= serviceName, "level" AE..= logLevel, "is_error" AE..= isError]) issueUrl
+sendPagerdutyAlertToService integrationKey LogPatternRateChangeAlert{issueUrl, patternText, logLevel, serviceName, direction, currentRate, baselineMean, changePercent, isError} projectTitle _ =
   let pat = stripSummaryBadges patternText
-   in Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-logpattern-rate-" <> T.take 40 pat) (projectTitle <> ": Log Pattern " <> T.toTitle direction <> " - " <> T.take 60 pat <> " (" <> show (round changePercent :: Int) <> "%)") (if direction == "spike" then Notify.PDCritical else Notify.PDWarning) (AE.object ["pattern" AE..= pat, "direction" AE..= direction, "current_rate" AE..= currentRate, "baseline_mean" AE..= baselineMean, "service" AE..= serviceName]) issueUrl
+      kind = if isError then "Error Log Pattern" else "Log Pattern" :: Text
+      sev = if isError || direction == "spike" then Notify.PDCritical else Notify.PDWarning
+   in Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-logpattern-rate-" <> T.take 40 pat) (projectTitle <> ": " <> kind <> " " <> T.toTitle direction <> " - " <> T.take 60 pat <> " (" <> show (round changePercent :: Int) <> "%)") sev (AE.object ["pattern" AE..= pat, "direction" AE..= direction, "current_rate" AE..= currentRate, "baseline_mean" AE..= baselineMean, "service" AE..= serviceName, "is_error" AE..= isError]) issueUrl
 sendPagerdutyAlertToService _ ReportAlert{} _ _ = pass
 sendPagerdutyAlertToService _ ShapeAlert _ _ = pass
 

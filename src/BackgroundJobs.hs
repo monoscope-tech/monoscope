@@ -1731,6 +1731,7 @@ processEagerBatch batch shard
                       , ExtractionWorker.traceId = T.copy traceId'
                       , ExtractionWorker.timestamp = s.timestamp
                       , ExtractionWorker.summary = summaryText
+                      , ExtractionWorker.isError = Telemetry.isErrorRecord s
                       }
                   )
         liftIO $ ExtractionWorker.appendBufferedSpans shard pid ctx.config.drainFlushBatchSize now ctx.extractionWorker.droppedFlushTasks bufferedSpans
@@ -1938,10 +1939,15 @@ flushDrainTask shard task
          in (HM.insert key newEntry m, ())
 
       -- Build a spanCtxId → patternHash tag map so each row can have its own
-      -- tag appended in UPDATE-2.
+      -- tag appended in UPDATE-2. Also build patternHash → isError so any error
+      -- span hitting a pattern flags the whole pattern as error-bearing.
       let tagFor lid = "pat:" <> toXXHash lid
           tagByCtx :: HM.HashMap Text Text
           tagByCtx = HM.fromList [(lid, tagFor tpl) | (lid, tpl) <- V.toList mapping]
+          errByCtx :: HM.HashMap Text Bool
+          errByCtx = HM.fromList [(bs.spanCtxId, bs.isError) | bs <- task.spans]
+          errByHash :: HM.HashMap Text Bool
+          errByHash = V.foldl' (\m (lid, tpl) -> HM.insertWith (||) (toXXHash tpl) (HM.lookupDefault False lid errByCtx) m) HM.empty mapping
 
       -- Persist log patterns + hourly stats.
       let allPatternsRaw = Drain.getAllLogGroups mergedTree
@@ -1963,6 +1969,7 @@ flushDrainTask shard task
                           , traceId = Nothing
                           , sampleMessage = Just dp.exampleLog
                           , eventCount
+                          , isError = HM.lookupDefault False patternHash errByHash
                           }
                       , (pid, "summary" :: Text, patternHash, task.flushedAt, eventCount)
                       )
@@ -3386,7 +3393,7 @@ detectLogPatternSpikes pid scheduledTime authCtx = do
     whenJust projectM \project -> do
       let issueUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> issue.id.toText
           changePct = if sr.mean > 0 then (sr.currentRate - sr.mean) / sr.mean * 100 else 0
-          alert = LogPatternRateChangeAlert{issueUrl, patternText = lpRate.logPattern, sampleMessage = Nothing, logLevel = lpRate.logLevel, serviceName = lpRate.serviceName, direction = dir, currentRate = sr.currentRate, baselineMean = sr.mean, changePercent = changePct}
+          alert = LogPatternRateChangeAlert{issueUrl, patternText = lpRate.logPattern, sampleMessage = Nothing, logLevel = lpRate.logLevel, serviceName = lpRate.serviceName, direction = dir, currentRate = sr.currentRate, baselineMean = sr.mean, changePercent = changePct, isError = lpRate.isError}
           (subj, html) = ET.logPatternRateChangeEmail project.title issueUrl lpRate.logPattern lpRate.logLevel lpRate.serviceName dir sr.currentRate sr.mean changePct
       void $ notifyIssue issue project users Issues.rateChangeCooldownHours "log_pattern_rate_change" alert issueUrl subj html
     pure issue.id
@@ -3434,8 +3441,8 @@ processNewLogPatterns pid authCtx = do
           whenJust projectM \project -> do
             let issueUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> issue.id.toText
                 occCount = fromIntegral lp.occurrenceCount :: Int
-                alert = LogPatternAlert{issueUrl, patternText = lp.logPattern, sampleMessage = lp.sampleMessage, logLevel = lp.logLevel, serviceName = lp.serviceName, sourceField = lp.sourceField, occurrenceCount = occCount}
-                (subj, html) = ET.logPatternEmail project.title issueUrl lp.logPattern lp.sampleMessage lp.logLevel lp.serviceName lp.sourceField occCount
+                alert = LogPatternAlert{issueUrl, patternText = lp.logPattern, sampleMessage = lp.sampleMessage, logLevel = lp.logLevel, serviceName = lp.serviceName, sourceField = lp.sourceField, occurrenceCount = occCount, isError = lp.isError}
+                (subj, html) = ET.logPatternEmail project.title issueUrl lp.logPattern lp.sampleMessage lp.logLevel lp.serviceName lp.sourceField occCount lp.isError
             void $ notifyIssue issue project users newPatternCooldownHours "log_pattern" alert issueUrl subj html
           pure issue.id
         unless (V.null results) $ liftIO $ withResource authCtx.jobsPool \conn ->

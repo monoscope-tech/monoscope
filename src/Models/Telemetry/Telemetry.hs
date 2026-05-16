@@ -12,6 +12,7 @@ module Models.Telemetry.Telemetry (
   getUsageTotals,
   SpanRecord (..),
   getAllATErrors,
+  isErrorRecord,
   getProjectStatsForReport,
   Trace (..),
   SeverityLevel (..),

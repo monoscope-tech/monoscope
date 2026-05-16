@@ -108,6 +108,7 @@ data LogPattern = LogPattern
   , mergeOverride :: Bool
   , pendingAnomalyDirection :: Maybe Text
   , pendingAnomalyDetectedAt :: Maybe UTCTime
+  , isError :: Bool
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, HI.DecodeRow, NFData, ToRow)
@@ -129,6 +130,7 @@ data UpsertPattern = UpsertPattern
   , traceId :: Maybe Text
   , sampleMessage :: Maybe Text
   , eventCount :: Int64
+  , isError :: Bool
   }
   deriving stock (Generic)
   deriving anyclass (HI.EncodeRow, ToRow)
@@ -268,18 +270,19 @@ upsertLogPatternBatch ups = do
       (dedup ups)
       ( \u' -> do
           let (u :: UpsertPattern) = cap u'
-          let (uPid, uPat, uHash, uSrc, uSvc, uLvl, uTid, uMsg, uCnt) =
-                (u.projectId, u.logPattern, u.hash, u.sourceField, u.serviceName, u.logLevel, u.traceId, u.sampleMessage, u.eventCount)
+          let (uPid, uPat, uHash, uSrc, uSvc, uLvl, uTid, uMsg, uCnt, uErr) =
+                (u.projectId, u.logPattern, u.hash, u.sourceField, u.serviceName, u.logLevel, u.traceId, u.sampleMessage, u.eventCount, u.isError)
           Hasql.interpExecute
-            [HI.sql| INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash, source_field, service_name, log_level, trace_id, sample_message, occurrence_count, last_seen_at)
-        VALUES (#{uPid}, #{uPat}, #{uHash}, #{uSrc}, #{uSvc}, #{uLvl}, #{uTid}, #{uMsg}, #{uCnt}, #{now})
+            [HI.sql| INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash, source_field, service_name, log_level, trace_id, sample_message, occurrence_count, last_seen_at, is_error)
+        VALUES (#{uPid}, #{uPat}, #{uHash}, #{uSrc}, #{uSvc}, #{uLvl}, #{uTid}, #{uMsg}, #{uCnt}, #{now}, #{uErr})
         ON CONFLICT (project_id, source_field, pattern_hash) DO UPDATE SET
           last_seen_at = EXCLUDED.last_seen_at,
           occurrence_count = apis.log_patterns.occurrence_count + EXCLUDED.occurrence_count,
           sample_message = COALESCE(EXCLUDED.sample_message, apis.log_patterns.sample_message),
           service_name = COALESCE(EXCLUDED.service_name, apis.log_patterns.service_name),
           log_level = COALESCE(EXCLUDED.log_level, apis.log_patterns.log_level),
-          trace_id = COALESCE(EXCLUDED.trace_id, apis.log_patterns.trace_id)
+          trace_id = COALESCE(EXCLUDED.trace_id, apis.log_patterns.trace_id),
+          is_error = apis.log_patterns.is_error OR EXCLUDED.is_error
   |]
       )
   where
@@ -287,7 +290,7 @@ upsertLogPatternBatch ups = do
     cap u = u{logPattern = T.take maxTextLen u.logPattern, sampleMessage = T.take maxTextLen <$> u.sampleMessage} :: UpsertPattern
     dedup = Map.elems . foldl' merge Map.empty
     merge acc u = Map.insertWith mergeUp (u.projectId, u.sourceField, u.hash) u acc
-    mergeUp new old = old{eventCount = old.eventCount + new.eventCount, sampleMessage = old.sampleMessage <|> new.sampleMessage, serviceName = old.serviceName <|> new.serviceName, logLevel = old.logLevel <|> new.logLevel, traceId = old.traceId <|> new.traceId}
+    mergeUp new old = old{eventCount = old.eventCount + new.eventCount, sampleMessage = old.sampleMessage <|> new.sampleMessage, serviceName = old.serviceName <|> new.serviceName, logLevel = old.logLevel <|> new.logLevel, traceId = old.traceId <|> new.traceId, isError = old.isError || new.isError}
 
 
 -- | Upsert hourly event count for a pattern into the pre-aggregated stats table.
@@ -378,6 +381,7 @@ data LogPatternWithRate = LogPatternWithRate
   , currentHourCount :: Int64
   , pendingAnomalyDirection :: Maybe Text
   , pendingAnomalyDetectedAt :: Maybe UTCTime
+  , isError :: Bool
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, HI.DecodeRow)
@@ -399,7 +403,7 @@ getPatternsWithCurrentRates pid now =
           lp.service_name, lp.log_level, LEFT(lp.sample_message, 2000),
           lp.baseline_state, lp.baseline_volume_hourly_mean, lp.baseline_volume_hourly_mad,
           COALESCE(hs.event_count, 0)::BIGINT + COALESCE(mhs.member_count, 0)::BIGINT AS current_hour_count,
-          lp.pending_anomaly_direction, lp.pending_anomaly_detected_at
+          lp.pending_anomaly_direction, lp.pending_anomaly_detected_at, lp.is_error
         FROM apis.log_patterns lp
         LEFT JOIN apis.log_pattern_hourly_stats hs
           ON hs.project_id = lp.project_id AND hs.source_field = lp.source_field
