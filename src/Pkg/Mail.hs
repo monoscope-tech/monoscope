@@ -407,19 +407,19 @@ mkSlackLogPatternPayload patternText issueUrl logLevel serviceName sourceField o
       ]
         <> maybeToList (sampleMessage <&> \msg -> AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Sample:*\n```" <> T.take 200 (stripSummaryBadges msg) <> "```")]])
         <> [ AE.object
-              [ "type" AE..= "context"
-              , "elements"
-                  AE..= AE.Array
-                    [ AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Level:* " <> fromMaybe "—" logLevel)]
-                    , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Service:* " <> fromMaybe "—" serviceName)]
-                    , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Source:* " <> sourceField)]
-                    , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Matched:* " <> show occurrenceCount)]
-                    ]
-              ]
+               [ "type" AE..= "context"
+               , "elements"
+                   AE..= AE.Array
+                     [ AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Level:* " <> fromMaybe "—" logLevel)]
+                     , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Service:* " <> fromMaybe "—" serviceName)]
+                     , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Source:* " <> sourceField)]
+                     , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Matched:* " <> show occurrenceCount)]
+                     ]
+               ]
            , AE.object
-              [ "type" AE..= "actions"
-              , "elements" AE..= AE.Array [AE.object ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= "🔍 Investigate", "emoji" AE..= True], "url" AE..= issueUrl, "style" AE..= "primary"]]
-              ]
+               [ "type" AE..= "actions"
+               , "elements" AE..= AE.Array [AE.object ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= "🔍 Investigate", "emoji" AE..= True], "url" AE..= issueUrl, "style" AE..= "primary"]]
+               ]
            ]
     )
   where
