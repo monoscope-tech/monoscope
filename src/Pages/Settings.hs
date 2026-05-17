@@ -741,6 +741,8 @@ data BillingData = BillingData
   , dailyUsage :: [(Day, Int64, Int64, Int64, Int64)]
   -- ^ (day, total_requests, metrics, eventBytes, metricBytes); events = total_requests - metrics
   , cycleStart :: Day
+  , pastCycles :: [(Day, Day, Int64, Int64)]
+  -- ^ (cycleStart, cycleEndExclusive, totalRequests, totalBytes) for prior cycles, newest first
   }
 
 
@@ -760,15 +762,34 @@ manageBillingGetH pid from = do
   currentTime <- Time.currentTime
   let cycleStart = calculateCycleStartDate dat currentTime
       thirtyDaysAgo = addUTCTime (negate $ 30 * 86400) currentTime
+      -- Walk cycle anchors backwards: each previous boundary is calculated by
+      -- evaluating the cycle that ended 1s before the current one started.
+      prevCycleStart cs = calculateCycleStartDate dat (addUTCTime (-1) cs)
+      pastCycleCount = 6 :: Int
+      pastBoundaries = take (pastCycleCount + 1) $ iterate prevCycleStart cycleStart
+      historyStart = fromMaybe cycleStart (viaNonEmpty last pastBoundaries)
       breakdownStart = min cycleStart thirtyDaysAgo
+      fetchStart = min breakdownStart historyStart
   (totalRequests, totalBytes) <- Projects.getTotalUsage pid cycleStart
-  dailyUsage <- Projects.getDailyUsageBreakdown pid breakdownStart
+  allDaily <- Projects.getDailyUsageBreakdown pid fetchStart
+  let breakdownDay = utctDay breakdownStart
+      dailyUsage = filter (\(day, _, _, _, _) -> day >= breakdownDay) allDaily
+      -- Bucket prior cycles. pastBoundaries is newest-first; pair each cycle's
+      -- start with the next-newer boundary as its exclusive end.
+      pastCycles =
+        [ (utctDay cStart, utctDay cEnd, sum [n | (_, n, _, _, _) <- inCycle], sum [eb + mb | (_, _, _, eb, mb) <- inCycle])
+        | (cEnd, cStart) <- zip pastBoundaries (drop 1 pastBoundaries)
+        , let s = utctDay cStart
+              e = utctDay cEnd
+              inCycle = filter (\(d, _, _, _, _) -> d >= s && d < e) allDaily
+        , not (null inCycle)
+        ]
   let last_reported = toText (formatTime defaultTimeLocale "%b %-d" project.usageLastReported)
       bwconf = bw{pageTitle = "Billing", isSettingsPage = True}
   let lemonUrl = envCfg.lemonSqueezyUrl <> "&checkout[custom][project_id]=" <> pid.toText
       critical = envCfg.lemonSqueezyCriticalUrl <> "&checkout[custom][project_id]=" <> pid.toText
   let provider = if project.paymentPlan == "Free" then Projects.NoBillingProvider else Projects.billingProvider project.subId
-  addRespHeaders $ BillingGet $ PageCtx bwconf BillingData{pid, totalReqs = totalRequests, totalBytes, lastReported = last_reported, lemonUrl, critical, paymentPlan = project.paymentPlan, enableFreetier = envCfg.enableFreetier, basicAuthEnabled = envCfg.basicAuthEnabled, provider, dailyUsage, cycleStart = utctDay cycleStart}
+  addRespHeaders $ BillingGet $ PageCtx bwconf BillingData{pid, totalReqs = totalRequests, totalBytes, lastReported = last_reported, lemonUrl, critical, paymentPlan = project.paymentPlan, enableFreetier = envCfg.enableFreetier, basicAuthEnabled = envCfg.basicAuthEnabled, provider, dailyUsage, cycleStart = utctDay cycleStart, pastCycles}
 
 
 billingPage :: BillingData -> Html ()
@@ -834,6 +855,9 @@ billingPage d = div_ [] do
     -- Daily breakdown
     dailyUsageBreakdown_ isFree d.cycleStart d.dailyUsage
 
+    -- Past cycles
+    pastCyclesSection_ isFree basePriceNum d.pastCycles
+
   modalWith_ "pricing-modal" def{boxClass = "w-[1250px] max-w-[1300px] py-16 px-32", wrapperClass = "p-8"} Nothing do
     div_ [class_ "text-center text-sm text-textWeak w-full mx-auto max-w-96"] do
       span_ [class_ "text-textStrong text-2xl font-semibold"] "Compare Plans"
@@ -858,8 +882,12 @@ humanBytes b
 -- accumulation across the cycle. Days entirely below the threshold show "—".
 dailyUsageBreakdown_ :: Bool -> Day -> [(Day, Int64, Int64, Int64, Int64)] -> Html ()
 dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-strokeWeak pt-6 space-y-3"] do
-  let totalReqs = sum [n | (_, n, _, _, _) <- rows]
-      totalBytes = sum [eb + mb | (_, _, _, eb, mb) <- rows]
+  -- Header total is scoped to current cycle so it matches the headline
+  -- "Estimated this cycle" figure. Pre-cycle rows are still rendered (dimmed)
+  -- below for context, but excluded from the totals.
+  let cycleRows = filter (\(d, _, _, _, _) -> d >= cycleStartDay) rows
+      totalReqs = sum [n | (_, n, _, _, _) <- cycleRows]
+      totalBytes = sum [eb + mb | (_, _, _, eb, mb) <- cycleRows]
       summaryRight =
         if totalBytes > 0
           then fmt (commaizeF totalReqs) <> " rows · " <> humanBytes totalBytes
@@ -922,8 +950,11 @@ dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-s
             forM_ withRunning \(day, n, metrics, eb, mb, prev, cur) -> do
               let pct = max 1 $ min 100 $ (n * 100) `div` maxDay
                   events = max 0 (n - metrics)
-              tr_ [class_ "border-t border-strokeWeak align-top"] do
-                td_ [class_ "px-3 py-2 text-textStrong"] $ toHtml $ toText (formatTime defaultTimeLocale "%a %b %e" day)
+                  preCycle = day < cycleStartDay
+                  rowCls = "border-t border-strokeWeak align-top" <> (if preCycle then " opacity-50" else "")
+                  dayCls = "px-3 py-2 " <> (if preCycle then "text-textWeak" else "text-textStrong")
+              tr_ [class_ rowCls, title_ (if preCycle then "Previous cycle — shown for context" else "")] do
+                td_ [class_ dayCls] $ toHtml $ toText (formatTime defaultTimeLocale "%a %b %e" day)
                 countCell eb events True
                 countCell mb metrics False
                 td_ [class_ "px-3 py-2"] do
@@ -944,6 +975,43 @@ dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-s
         if isFree
           then "Free plan — usage shown for reference only."
           else toHtml $ "Cycle started " <> cycleStartText <> ". First 20M requests are included in the $29 plan price. Overage is $1 per 1M requests."
+
+
+-- | Past billing cycles, newest first. Estimated cost is computed from the
+-- current plan's pricing (we don't snapshot the plan/price at cycle close), so
+-- it's an approximation when the plan has changed.
+pastCyclesSection_ :: Bool -> Int64 -> [(Day, Day, Int64, Int64)] -> Html ()
+pastCyclesSection_ _ _ [] = mempty
+pastCyclesSection_ isFree basePrice cycles = div_ [class_ "border-t border-strokeWeak pt-6 space-y-3"] do
+  div_ [class_ "flex items-baseline justify-between"] do
+    sectionLabel_ "Past cycles"
+    span_ [class_ "text-xs text-textWeak"] $ toHtml @Text (show (length cycles) <> " cycle" <> (if length cycles == 1 then "" else "s"))
+  div_ [class_ "border border-strokeWeak rounded-md overflow-hidden"] do
+    table_ [class_ "w-full text-sm tabular-nums border-separate border-spacing-0"] do
+      let th_h cls = th_ [class_ ("font-medium px-3 py-2 sticky top-0 z-10 bg-fillWeak border-b border-strokeWeak " <> cls)]
+      thead_ [class_ "text-textWeak text-xs uppercase tracking-wide"] do
+        tr_ do
+          th_h "text-left" "Cycle"
+          th_h "text-right" "Requests"
+          th_h "text-right" "Volume"
+          th_h "text-right" "Est. cost"
+      tbody_ do
+        forM_ cycles \(cs, ce, reqs, bytes) -> do
+          -- ce is exclusive end; subtract 1 day for the human-facing label.
+          let endLabel = toText (formatTime defaultTimeLocale "%b %-d" (pred ce))
+              startLabel = toText (formatTime defaultTimeLocale "%b %-d, %Y" cs)
+              overage = max 0 (reqs - 20_000_000)
+              cost = fromIntegral basePrice + (fromIntegral overage / 1_000_000 :: Double)
+              costText
+                | isFree = "—"
+                | otherwise = "$" <> toText (printf "%.2f" cost :: String)
+          tr_ [class_ "border-t border-strokeWeak"] do
+            td_ [class_ "px-3 py-2 text-textStrong"] $ toHtml @Text (startLabel <> " – " <> endLabel)
+            td_ [class_ "px-3 py-2 text-right text-textStrong"] $ toHtml @Text (fmt (commaizeF reqs))
+            td_ [class_ "px-3 py-2 text-right text-textWeak"] $ toHtml @Text (if bytes > 0 then humanBytes bytes else "—")
+            td_ [class_ "px-3 py-2 text-right text-textWeak"] $ toHtml costText
+  unless isFree
+    $ div_ [class_ "text-xs text-textWeak"] "Estimated cost uses the current plan's pricing; actual invoiced amounts may differ if your plan changed."
 
 
 ----------------------------------------------------------------------

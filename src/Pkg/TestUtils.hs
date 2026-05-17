@@ -659,10 +659,15 @@ withTestResources f = withSetup $ \pool cstr -> LogBulk.withBulkStdOutLogger \lo
   projectKeyCache <- newCache (Just $ TimeSpec (60 * 60) 0)
   logsPatternCache <- newCache (Just $ TimeSpec (30 * 60) 0) -- Cache for log patterns, 30 minutes TTL
   tp <- getGlobalTracerProvider
-  -- Parallel hasql pools sharing the same test DB
+  -- Parallel hasql pools sharing the same test DB. When TIMEFUSION_PG_TEST_URL
+  -- is set, point the labeled "timefusion" pool at that instance so the
+  -- dual-write path in bulkInsertOtelLogsAndSpansTF actually hits TimeFusion.
+  tfPgUrl <- lookupEnv "TIMEFUSION_PG_TEST_URL"
+  let tfCstr = maybe cstr (encodeUtf8 . toText) tfPgUrl
+      tfEnabled = isJust tfPgUrl
   hasqlMain <- mkHasqlPool 5 cstr
   hasqlJobs <- mkHasqlPool 5 cstr
-  hasqlTf <- mkHasqlPool 5 cstr
+  hasqlTf <- mkHasqlPool 5 tfCstr
   sessAndHeader <- testSessionHeader pool hasqlMain
 
   -- Load .env file for tests (to get OPENAI_API_KEY and other non-database configs)
@@ -673,7 +678,7 @@ withTestResources f = withSetup $ \pool cstr -> LogBulk.withBulkStdOutLogger \lo
   -- Probe MinIO and populate s3* fields if it's up. Tests that depend on it
   -- gate via `requireMinio`; everything else is unaffected.
   minioInfo <- setupTestMinio
-  let (envConfig, minioReady) = case minioInfo of
+  let (envConfig1, minioReady) = case minioInfo of
         Just (ep, ak, sk, bk, rg) ->
           ( envConfig0
               { s3Endpoint = ep
@@ -685,6 +690,9 @@ withTestResources f = withSetup $ \pool cstr -> LogBulk.withBulkStdOutLogger \lo
           , True
           )
         Nothing -> (envConfig0, False)
+      -- Flip the flag here (not just in the override at AuthContext.config) so the
+      -- AuthContext.env slot also sees it; OtlpServer reads from .env.enableTimefusionWrites.
+      envConfig = envConfig1 {enableTimefusionWrites = tfEnabled}
   extractionWorker <- ExtractionWorker.initWorkerState envConfig.extractionWorkerShards envConfig.extractionQueueCapacity
   atomically $ writeTVar extractionWorker.acceptingBatches True
   traceSessionCache <- TSC.newTraceSessionCache
@@ -717,6 +725,7 @@ withTestResources f = withSetup $ \pool cstr -> LogBulk.withBulkStdOutLogger \lo
               , enableEventsTableUpdates = True
               , enableDailyJobScheduling = False
               , processedAtCutoff = Unsafe.read "2020-01-01 00:00:00 UTC"
+              , enableTimefusionWrites = tfEnabled
               , -- Fallback values for external services (CI mode without .env)
                 -- .env values take priority if set, otherwise use test defaults
                 discordPublicKey = bool envConfig.discordPublicKey testDiscordPublicKeyHex (T.null envConfig.discordPublicKey)

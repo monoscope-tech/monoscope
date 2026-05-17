@@ -871,7 +871,7 @@ bulkInsertOtelLogsAndSpansTF enableTf records = do
   if enableTf
     then Ki.scoped \scope -> do
       mainThread <- Ki.fork scope $ void $ bulkInsertOtelLogsAndSpans records
-      _ <- Ki.fork scope do
+      tfThread <- Ki.fork scope do
         Log.logTrace "TimeFusion write enabled, attempting write" $ AE.object [("record_count", AE.toJSON $ V.length records)]
         tryAny (retryTimefusion 10 records) >>= \case
           Left e -> do
@@ -888,7 +888,12 @@ bulkInsertOtelLogsAndSpansTF enableTf records = do
                 , "error" AE..= show @Text e
                 ]
           Right _ -> pass
-      Ki.atomically $ Ki.await mainThread
+      -- Await BOTH forks before Ki.scoped closes. Awaiting only mainThread
+      -- meant the TF fork was killed mid-write whenever the PG side finished
+      -- first — silently dropping the majority of TF writes (no outcome log
+      -- ever fired). Now the OTLP handler blocks on the slower of the two,
+      -- which is what dual-write means.
+      Ki.atomically $ Ki.await mainThread *> Ki.await tfThread
     else void $ bulkInsertOtelLogsAndSpans records
   where
     -- Retry only transient HasqlException; non-Hasql exceptions (e.g. InvalidOtelRowIdException
@@ -898,6 +903,13 @@ bulkInsertOtelLogsAndSpansTF enableTf records = do
       tryAny (labeled @"timefusion" @Hasql $ bulkInsertOtelLogsAndSpans recs) >>= \case
         Right count -> Log.logTrace "TimeFusion write succeeded" $ AE.object [("rows_inserted", AE.toJSON count)]
         Left e
+          -- TimeFusion's PGWire returns TuplesOk (a row-count tuple) instead of
+          -- CommandOk for some INSERT shapes (multi-row VALUES via the extended
+          -- query protocol). The data does land — only the wire-protocol tag is
+          -- wrong — so swallow the spurious error rather than retry the write
+          -- (which would duplicate rows in TF).
+          | "TuplesOk" `T.isInfixOf` show e ->
+              Log.logTrace "TimeFusion write succeeded (TuplesOk wire-mismatch ignored)" $ AE.object [("record_count", AE.toJSON $ V.length recs)]
           | n > 0
           , maybe False Hasql.isTransientHasqlError (fromException e) -> do
               let attempt = 11 - n -- attempts: 1..10

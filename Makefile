@@ -69,6 +69,25 @@ test-doctests:
 test-integration:
 	LOG_LEVEL=attention USE_EXTERNAL_DB=true cabal test integration-tests -j --ghc-options="-O0" --test-show-details=direct --test-options='--color --jobs=$(NCPUS)'
 
+# TimeFusion bring-up for integration tests. Delegates to the timefusion repo.
+# Override TIMEFUSION_DIR if your checkout lives elsewhere.
+TIMEFUSION_DIR ?= ../timefusion
+TIMEFUSION_PG_TEST_URL ?= postgresql://postgres:postgres@localhost:12345/postgres
+
+timefusion-start:
+	$(MAKE) -C $(TIMEFUSION_DIR) tf-start
+
+timefusion-stop:
+	$(MAKE) -C $(TIMEFUSION_DIR) tf-stop
+
+# Run integration tests against a real TimeFusion (started + stopped automatically).
+test-integration-tf: timefusion-start
+	@rc=0; \
+	TIMEFUSION_PG_TEST_URL=$(TIMEFUSION_PG_TEST_URL) LOG_LEVEL=attention USE_EXTERNAL_DB=true \
+		cabal test integration-tests -j --ghc-options="-O0" --test-show-details=direct --test-options='--color --jobs=$(NCPUS)' || rc=$$?; \
+	$(MAKE) timefusion-stop; \
+	exit $$rc
+
 test-collector-tier1:
 	./test/collector/run.sh
 
@@ -201,4 +220,4 @@ test-e2e-real: e2e-install
 test-e2e-ui: e2e-install
 	cd e2e && npx playwright test --ui
 
-.PHONY: all test fmt lint fix-lint live-reload live-reload-cli live-reload-doctests build-chart-cli build-chart-cli-linux tmux-live-reload tmux-live-reload-cli web-components-watch e2e-install test-e2e test-e2e-real test-e2e-ui gen-proto sync-otel-proto update-otel-proto minio-local
+.PHONY: all test fmt lint fix-lint live-reload live-reload-cli live-reload-doctests build-chart-cli build-chart-cli-linux tmux-live-reload tmux-live-reload-cli web-components-watch e2e-install test-e2e test-e2e-real test-e2e-ui gen-proto sync-otel-proto update-otel-proto minio-local timefusion-start timefusion-stop test-integration-tf
