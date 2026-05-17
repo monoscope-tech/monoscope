@@ -103,7 +103,7 @@ cabal run monoscope-server
 
 ```bash
 # Code formatter
-brew install ormolu
+brew install fourmolu        # or: cabal install fourmolu
 
 # Linter
 brew install hlint
@@ -118,6 +118,17 @@ make fmt
 # Run linter
 make lint
 ```
+
+**Auto-format on commit:**
+
+A versioned pre-commit hook in `.githooks/pre-commit` runs `fourmolu` on staged
+`.hs` files. Activate it once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+To bypass for a single commit: `SKIP_FOURMOLU=1 git commit ...`.
 
 ### Automatic Recompilation with ghcid
 

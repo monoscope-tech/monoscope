@@ -1,10 +1,11 @@
 name: monoscope
 version: 0.1.0.0
-github: 'githubuser/monoscope'
-license: BSD3
-author: 'Author name here'
-maintainer: 'example@example.com'
-copyright: '2021 Author name here'
+github: 'monoscope-tech/monoscope'
+license: AGPL-3.0-only
+license-file: LICENSE
+author: 'Monoscope'
+maintainer: 'hello@monoscope.tech'
+copyright: '2021-2026 Monoscope'
 language: GHC2024
 spec-version: 0.36.0
 

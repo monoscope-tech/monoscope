@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Format staged Haskell files with fourmolu before commit.
+# Activate locally: git config core.hooksPath .githooks
+# Skip ad-hoc: SKIP_FOURMOLU=1 git commit ...
+
+set -euo pipefail
+
+if [ "${SKIP_FOURMOLU:-0}" = "1" ]; then
+    exit 0
+fi
+
+if ! command -v fourmolu >/dev/null 2>&1; then
+    echo "pre-commit: fourmolu not on PATH — skipping format check." >&2
+    echo "            install with: cabal install fourmolu  (or ghcup/stack)" >&2
+    exit 0
+fi
+
+mapfile -t HS_FILES < <(git diff --cached --name-only --diff-filter=ACM -z \
+    | tr '\0' '\n' \
+    | grep -E '\.hs$' || true)
+
+if [ ${#HS_FILES[@]} -eq 0 ]; then
+    exit 0
+fi
+
+# Only touch files that are fully staged; bail if a file has unstaged changes
+# on top of the staged version, since reformatting + re-adding would silently
+# swallow the working-tree edits.
+UNSAFE=()
+for f in "${HS_FILES[@]}"; do
+    if ! git diff --quiet -- "$f"; then
+        UNSAFE+=("$f")
+    fi
+done
+
+if [ ${#UNSAFE[@]} -gt 0 ]; then
+    echo "pre-commit: refusing to format — these staged files have unstaged" >&2
+    echo "            changes on top (commit or stash them first):" >&2
+    printf '              %s\n' "${UNSAFE[@]}" >&2
+    exit 1
+fi
+
+fourmolu --mode inplace "${HS_FILES[@]}"
+git add -- "${HS_FILES[@]}"
