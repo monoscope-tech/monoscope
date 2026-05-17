@@ -1740,7 +1740,7 @@ processEagerBatch batch shard
           if not ctx.config.enableHashUpdates || batch.batchMaxTs < hashCutoff
             then pure 0
             else pgOnlyExec update1Sql
-        -- ^ PG-only: TF can't run jsonb_build_object / jsonb_array_elements_text / now().
+        -- \^ PG-only: TF can't run jsonb_build_object / jsonb_array_elements_text / now().
         -- See comment on pgOnlyExec. UPDATE-2 below stays dual (CASE-rewritten).
         Log.logTrace "Eager-track UPDATE-1 complete" (AE.object ["project_id" AE..= pid.toText, "span_count" AE..= V.length spans, "rows_updated" AE..= rowsUpdated, "skipped" AE..= (not ctx.config.enableHashUpdates || batch.batchMaxTs < hashCutoff)])
 
