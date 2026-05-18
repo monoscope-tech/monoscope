@@ -293,6 +293,8 @@ bodyWrapper bcfg child = do
             const element = e.target.closest('[data-tippy-content]');
             if (!element || element._tippy) return;
 
+            const content = element.getAttribute('data-tippy-content') || '';
+            const isMultiline = content.length > 80 || content.includes('\n');
             const instance = tippy(element, {
               delay: [isTooltipWarm ? 0 : 100, 0],
               duration: 0,
@@ -304,6 +306,16 @@ bodyWrapper bcfg child = do
               followCursor: false,
               flipOnUpdate: false,
               lazy: true,
+              maxWidth: isMultiline ? 720 : 350,
+              // Preserve newlines / monospace alignment for SQL and other long text.
+              onCreate(inst) {
+                if (isMultiline) {
+                  inst.popper.querySelector('.tippy-content').style.whiteSpace = 'pre-wrap';
+                  inst.popper.querySelector('.tippy-content').style.fontFamily = 'ui-monospace, SFMono-Regular, Menlo, monospace';
+                  inst.popper.querySelector('.tippy-content').style.fontSize = '12px';
+                  inst.popper.querySelector('.tippy-content').style.textAlign = 'left';
+                }
+              },
               onShow() {
                 isTooltipWarm = true;
                 clearTimeout(tooltipWarmTimeout);

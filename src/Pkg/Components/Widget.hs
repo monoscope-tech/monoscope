@@ -1126,7 +1126,7 @@ renderTableWithDataAndParams widget dataRows params = do
                 td_ [class_ $ fromMaybe "" col.align <> if col.columnType `elem` [Just ("number" :: Text), Just ("duration" :: Text)] then " monospace" else ""] do
                   if isJust col.progress
                     then renderProgressCell col value maxValues valueWidths
-                    else renderCellValue col value
+                    else renderLongTextOr col value
 
 
 renderTraceDataTable :: Widget -> V.Vector (V.Vector Text) -> HashMap Text [(Text, Int, Int)] -> HashMap Text [Telemetry.SpanRecord] -> Text -> Html ()
@@ -1313,3 +1313,18 @@ renderCellValue col value
   | otherwise = toHtml formatted
   where
     formatted = formatColumnValue col value
+
+
+-- | Render a text cell. Long values get a truncated single-line view with a
+-- tippy tooltip (delegated body-wide in BodyWrapper) showing the full text on
+-- hover. Number/duration columns skip the wrapper since they're always short.
+renderLongTextOr :: TableColumn -> Text -> Html ()
+renderLongTextOr col value
+  | col.columnType `elem` [Just ("number" :: Text), Just "duration"] = renderCellValue col value
+  | T.length value > 60 =
+      div_
+        [ class_ "truncate max-w-2xl"
+        , term "data-tippy-content" value
+        ]
+        $ renderCellValue col value
+  | otherwise = renderCellValue col value

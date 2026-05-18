@@ -387,13 +387,21 @@ dashboardPage_ pid dashId dash dashVM allParams = do
                   }
                 }).observe(gridEl);
 
+                // Track real user interactions only — programmatic .update() calls
+                // (e.g. autoFitGroupToChildren on initial mount) emit 'change' but not
+                // dragstart/resizestart. Without this gate, every page load saves a
+                // template snapshot into the schema column, defeating YAML live-reload.
+                grid.on('dragstart resizestart', () => { gridEl._userInteracted = true; });
                 grid.on('removed change', debounce(() => {
                   if (grid.getColumn() === 1) return;
                   if (gridEl.offsetParent === null) return;
                   const collapsingWidget = gridEl.querySelector('[data-collapse-action]');
                   if (collapsingWidget) { delete collapsingWidget.dataset.collapseAction; return; }
+                  if (!gridEl._userInteracted) return;
                   htmx.trigger(document.body, 'widget-order-changed');
                 }, 500));
+                // 'removed' fires when a widget is deleted via DOM removal — that's a real edit.
+                grid.on('removed', () => { gridEl._userInteracted = true; });
                 gridEl.classList.add('grid-stack-initialized');
                 gridInstances.push(grid);
                 window.gridStackInstance = grid;
@@ -458,11 +466,13 @@ dashboardPage_ pid dashId dash dashVM allParams = do
 
               nestedInstance.on('change added removed', autoFitGroupToChildren);
               requestAnimationFrame(autoFitGroupToChildren);
+              nestedInstance.on('dragstart resizestart removed', () => { nestedEl._userInteracted = true; });
               nestedInstance.on('removed change', debounce(() => {
                 if (window.innerWidth < 768) return;
                 if (nestedEl.offsetParent === null) return;
                 const collapsingWidget = nestedEl.closest('[data-collapse-action]');
                 if (collapsingWidget) { delete collapsingWidget.dataset.collapseAction; return; }
+                if (!nestedEl._userInteracted) return;
                 htmx.trigger(document.body, 'widget-order-changed');
               }, 500));
 
@@ -782,7 +792,7 @@ processWidget pid now timeRange allParams widgetBase = do
 
 
 -- | Fetch widget data based on widget type (for stat and chart widgets)
-fetchWidgetData :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServerError :> es, Time.Time :> es, Tracing :> es) => Projects.ProjectId -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> Eff es Widget.Widget
+fetchWidgetData :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServerError :> es, Log :> es, Time.Time :> es, Tracing :> es) => Projects.ProjectId -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> Eff es Widget.Widget
 fetchWidgetData pid (sinceStr, fromDStr, toDStr) allParams widget = case widget.wType of
   Widget.WTStat -> do
     stat <- Charts.queryMetrics widget.dbSource (Just Charts.DTFloat) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
