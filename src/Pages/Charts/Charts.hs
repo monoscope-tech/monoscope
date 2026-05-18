@@ -244,7 +244,7 @@ queryMetricsWithCache authCtx dbSource respDataType pid source queryAST sqlQuery
 -- via the application Log effect (visible in build.log / prod logs) and the
 -- caller gets a benign empty MetricsData fallback.
 runFetchMetrics
-  :: (Log :> es, IOE :> es)
+  :: (IOE :> es, Log :> es)
   => DataType -> Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> AuthContext -> Maybe Text -> Eff es MetricsData
 runFetchMetrics respDataType sqlQuery now fromD toD authCtx dbSource = do
   result <- liftIO $ fetchMetricsData respDataType sqlQuery now fromD toD authCtx dbSource
