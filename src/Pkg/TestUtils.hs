@@ -826,17 +826,19 @@ freshUUIDRef = newIORef (map (UUID.fromWords 0 0 0) [1 .. 1000])
 -- | Run a query effect (like Charts.queryMetrics) in test context
 -- This is for effects that return data directly (not wrapped in RespHeaders)
 -- Uses frozen time to match background job context
-runQueryEffect :: TestResources -> (forall es. (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServantS.ServerError :> es, IOE :> es, Time :> es, Tracing :> es) => Eff es a) -> IO a
+runQueryEffect :: TestResources -> (forall es. (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServantS.ServerError :> es, IOE :> es, Log :> es, Time :> es, Tracing :> es) => Eff es a) -> IO a
 runQueryEffect TestResources{..} action = do
   tp <- getGlobalTracerProvider
-  action
-    & runErrorNoCallStack @ServantS.ServerError
-    & Effectful.Reader.Static.runReader trATCtx
-    & runHasqlPool trATCtx.hasqlPool
-    & runFrozenTime (Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime)
-    & Tracing.runTracing tp
-    & runEff
-    <&> fromRightShow
+  LogBulk.withBulkStdOutLogger \logger ->
+    action
+      & runErrorNoCallStack @ServantS.ServerError
+      & Effectful.Reader.Static.runReader trATCtx
+      & runHasqlPool trATCtx.hasqlPool
+      & runFrozenTime (Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime)
+      & Logging.runLog "test" logger trATCtx.config.logLevel
+      & Tracing.runTracing tp
+      & runEff
+      <&> fromRightShow
 
 
 -- | Hasql twin of `runQueryEffect`.

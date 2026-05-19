@@ -812,7 +812,7 @@ tabs:
             title: 'Slow Queries (>50ms)'
             icon: turtle
             sql: |
-              SELECT COALESCE(COUNT(*), 0)::text
+              SELECT COALESCE(COUNT(*), 0)::float8
               FROM otel_logs_and_spans
               WHERE project_id='{{project_id}}'
                 AND attributes___db___system___name IS NOT NULL
@@ -855,11 +855,11 @@ tabs:
         sql: |
           SELECT
             LEFT(COALESCE(
-              attributes___db___query___summary,
+              NULLIF(attributes___db___query___summary, ''),
               attributes___db___query___text,
               CASE WHEN attributes___db___system___name = 'redis' THEN SPLIT_PART(name, ' ', 1)
                    ELSE name END
-            ), 80) as query_pattern,
+            ), 2000) as query_pattern,
             COUNT(*)::text as count,
             ROUND((AVG(duration) / 1e6)::numeric, 2)::text as avg_ms,
             ROUND((approx_percentile(0.95, percentile_agg(duration)) / 1e6)::numeric, 2)::text as p95_ms,
@@ -970,38 +970,60 @@ tabs:
         unit: queries
         layout: { w: 6, h: 4 }
 
-      # Recent Slow Queries (individual)
+      # Slowest queries grouped by normalized pattern, sorted by peak (max) duration.
+      # Complements "Optimization Targets" (which sorts by total time spent) — this
+      # surfaces the queries with the worst worst-case latency.
       - type: table
-        title: 'Recent Slow Queries (>50ms)'
+        title: 'Slowest Query Patterns'
+        description: 'Queries grouped by their normalized pattern, ordered by peak duration. Use Optimization Targets above for total-time impact.'
         layout: { w: 12, h: 5 }
         columns:
-          - field: timestamp
-            title: Time
-          - field: query
-            title: Query
-          - field: duration_ms
-            title: Duration
+          - field: query_pattern
+            title: Query Pattern
+          - field: count
+            title: Count
+            columnType: number
+            progress: column_percent
+          - field: max_ms
+            title: Peak
             columnType: duration
             unit: ms
             progress: column_percent
-          - field: service
-            title: Service
-          - field: database
-            title: DB
+          - field: avg_ms
+            title: Avg
+            columnType: duration
+            unit: ms
+          - field: last_seen
+            title: Last Seen
         sql: |
+          -- Two-stage to keep aggregation cheap: top-500 slowest individual
+          -- executions, then collapse to patterns. Key stays short (300 chars)
+          -- so GROUP BY cardinality is bounded.
           SELECT
-            timestamp::text,
-            LEFT(COALESCE(attributes___db___query___text, attributes___db___query___summary, name), 80) as query,
-            ROUND((duration / 1e6)::numeric, 2) as duration_ms,
-            resource___service___name as service,
-            attributes___db___system___name as database
-          FROM otel_logs_and_spans
-          WHERE project_id='{{project_id}}'
-            AND attributes___db___system___name IS NOT NULL
-            AND duration > 50000000
-            AND attributes___db___system___name = '{{var-database}}'
-            {{time_filter}}
-          ORDER BY timestamp DESC
+            query_pattern,
+            COUNT(*)::text as count,
+            ROUND((MAX(duration) / 1e6)::numeric, 2)::text as max_ms,
+            ROUND((AVG(duration) / 1e6)::numeric, 2)::text as avg_ms,
+            MAX(timestamp)::text as last_seen
+          FROM (
+            SELECT
+              duration,
+              timestamp,
+              LEFT(COALESCE(
+                NULLIF(attributes___db___query___summary, ''),
+                CASE WHEN attributes___db___system___name = 'redis' THEN SPLIT_PART(name, ' ', 1)
+                     ELSE COALESCE(attributes___db___query___text, name) END
+              ), 300) as query_pattern
+            FROM otel_logs_and_spans
+            WHERE project_id='{{project_id}}'
+              AND attributes___db___system___name = '{{var-database}}'
+              AND duration IS NOT NULL
+              {{time_filter}}
+            ORDER BY duration DESC
+            LIMIT 500
+          ) top_slow
+          GROUP BY query_pattern
+          ORDER BY MAX(duration) DESC
           LIMIT 30
 
       # Database Errors

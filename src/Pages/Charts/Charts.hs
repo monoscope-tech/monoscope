@@ -3,6 +3,7 @@
 module Pages.Charts.Charts (queryMetrics, MetricsData (..), fetchMetricsData, MetricsStats (..), DataType (..), convertTimestampsToMs) where
 
 import Control.Exception.Annotated (checkpoint, try)
+import Data.Aeson qualified as AE
 import Data.Annotation (toAnnotation)
 import Data.Default
 import Data.List qualified as L (maximum)
@@ -15,10 +16,12 @@ import Data.Vector qualified as V
 import Data.Vector.Algorithms.Intro qualified as VA
 import Database.PostgreSQL.Simple (SomePostgreSqlException, query_)
 import Database.PostgreSQL.Simple.Types (Only (..), Query (Query), fromOnly)
-import Effectful (Eff, (:>))
+import Effectful (Eff, IOE, (:>))
 import Effectful.Error.Static (Error, throwError)
+import Effectful.Log (Log)
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
+import Log qualified
 import Models.Projects.Projects qualified as Projects
 import OpenTelemetry.Attributes qualified as OA
 import Pages.Charts.Types (DataType (..), MetricsData (..), MetricsStats (..))
@@ -121,7 +124,7 @@ nonNull (Just "") = Nothing
 nonNull x = x
 
 
-queryMetrics :: (DB es, Effectful.Error.Static.Error ServerError :> es, Effectful.Reader.Static.Reader AuthContext :> es, Time.Time :> es, Tracing :> es) => M Text -> M DataType -> M Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> [(Text, Maybe Text)] -> Eff es MetricsData
+queryMetrics :: (DB es, Effectful.Error.Static.Error ServerError :> es, Effectful.Reader.Static.Reader AuthContext :> es, Log :> es, Time.Time :> es, Tracing :> es) => M Text -> M DataType -> M Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> [(Text, Maybe Text)] -> Eff es MetricsData
 queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (nonNull -> querySQLM) (nonNull -> sinceM) (nonNull -> fromM) (nonNull -> toM) (nonNull -> sourceM) allParams = do
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   now <- Time.currentTime
@@ -156,7 +159,7 @@ queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (
           , ("monoscope.kql.data_type", OA.toAttribute (toText (show respDataType) :: Text))
           , ("monoscope.project.id", OA.toAttribute (maybe "" (.toText) pidM))
           ]
-          (liftIO (fetchMetricsData respDataType sqlQuery now fromD toD authCtx dbSource))
+          (runFetchMetrics respDataType sqlQuery now fromD toD authCtx dbSource)
     _ -> do
       queryAST <-
         checkpoint (toAnnotation ("queryMetrics", queryM))
@@ -170,7 +173,7 @@ queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (
 
 -- | Execute query with caching support for timeseries queries
 queryMetricsWithCache
-  :: (DB es, Time.Time :> es, Tracing :> es)
+  :: (DB es, Log :> es, Time.Time :> es, Tracing :> es)
   => AuthContext
   -> Maybe Text
   -> DataType
@@ -231,13 +234,34 @@ queryMetricsWithCache authCtx dbSource respDataType pid source queryAST sqlQuery
         , ("monoscope.project.id", OA.toAttribute pid.toText)
         , ("monoscope.kql.source", OA.toAttribute (maybe "" (toText . show) source :: Text))
         ]
-        (liftIO $ fetchMetricsData respDataType sqlQuery now fromD toD authCtx dbSource)
+        (runFetchMetrics respDataType sqlQuery now fromD toD authCtx dbSource)
     refetchUnlessAdequate coversRange cached result
       | coversRange || not (V.null result.dataset) || V.null cached.dataset = pure result
       | otherwise = executeQueryWith sqlQueryCfg queryAST
 
 
-fetchMetricsData :: DataType -> Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> AuthContext -> Maybe Text -> IO MetricsData
+-- | Wrap fetchMetricsData with logging: any swallowed SQL/decode error is logged
+-- via the application Log effect (visible in build.log / prod logs) and the
+-- caller gets a benign empty MetricsData fallback.
+runFetchMetrics
+  :: (IOE :> es, Log :> es)
+  => DataType -> Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> AuthContext -> Maybe Text -> Eff es MetricsData
+runFetchMetrics respDataType sqlQuery now fromD toD authCtx dbSource = do
+  result <- liftIO $ fetchMetricsData respDataType sqlQuery now fromD toD authCtx dbSource
+  case result of
+    Right md -> pure md
+    Left e -> do
+      Log.logAttention
+        "widget SQL execution failed; rendering empty result"
+        (AE.object ["error" AE..= show @Text e, "sql" AE..= unwords (words sqlQuery), "dataType" AE..= show @Text (toText (show respDataType))])
+      pure
+        $ def
+          { from = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe (addUTCTime (-86400) now) fromD
+          , to = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe now toD
+          }
+
+
+fetchMetricsData :: DataType -> Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> AuthContext -> Maybe Text -> IO (Either SomePostgreSqlException MetricsData)
 fetchMetricsData respDataType sqlQuery now fromD toD authCtx dbSource = do
   let pool = case dbSource of
         Just "postgres" -> authCtx.pool
@@ -283,7 +307,7 @@ fetchMetricsData respDataType sqlQuery now fromD toD authCtx dbSource = do
           { dataJSON = V.fromList chartData
           , rowsCount = fromIntegral $ length chartData
           }
-  pure $ fromRight baseMetricsData result
+  pure result
 
 
 -- | Convert timestamps in MetricsData from seconds to milliseconds for ECharts
