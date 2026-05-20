@@ -41,6 +41,8 @@ import Lucid.Aria qualified as Aria
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Apis.Integrations (getDiscordDataByProjectId, getProjectSlackData)
+import Web.I18n (Language)
+import Web.I18n qualified as I18n
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
@@ -196,13 +198,14 @@ newtype OnboardingGet = OnboardingGet (PageCtx OnboardingStepData)
 instance ToHtml OnboardingGet where
   toHtml (OnboardingGet (PageCtx bwconf stepData)) = toHtml $ PageCtx bwconf $ renderStep stepData
     where
+      lang = maybe I18n.En (\s -> s.lang) bwconf.sessM
       renderStep = \case
         CompleteStep{..} -> onboardingCompleteBody stepPid
         SurveyStep{..} -> onboardingConfigBody stepPid location functionality
         NotifChannelStep{..} -> notifChannelsWithUrls slackUrl discordUrl stepPid phoneNumber emails hasDiscord hasSlack
         IntegrationStep{..} -> integrationsPage stepPid apiKey
         PricingStep{..} -> pricingPage stepPid lemonUrl criticalUrl paymentPlan enableFreetier basicAuthEnabled Projects.NoBillingProvider
-        InfoStep{..} -> onboardingInfoBody stepPid firstName lastName companyName companySize foundUsFrom
+        InfoStep{..} -> onboardingInfoBody stepPid lang firstName lastName companyName companySize foundUsFrom
   toHtmlRaw = toHtml
 
 
@@ -910,21 +913,21 @@ notifChannelsWithUrls slackUrl discordUrl pid phone emails hasDiscord hasSlack =
         """
 
 
-onboardingInfoBody :: Projects.ProjectId -> Text -> Text -> Text -> Text -> Text -> Html ()
-onboardingInfoBody pid firstName lastName cName cSize fUsFrm = do
-  onboardingStepWrapper_ "" 1 "Tell us a little bit about you" ""
-    $ form_ [class_ "flex-col w-full gap-8 flex", hxPost_ $ "/p/" <> pid.toText <> "/onboarding/info", hxIndicator_ "#loadingIndicator"]
+onboardingInfoBody :: Projects.ProjectId -> Language -> Text -> Text -> Text -> Text -> Text -> Html ()
+onboardingInfoBody pid lang firstName lastName cName _cSize _fUsFrm = do
+  onboardingStepWrapper_ "" 1 (I18n.t lang "onboarding.project.title") ""
+    $ form_ [class_ "flex-col w-full gap-6 flex", hxPost_ $ "/p/" <> pid.toText <> "/onboarding/info", hxIndicator_ "#loadingIndicator"]
     $ do
-      div_ [class_ "flex-col w-full gap-4 mt-4 flex"] $ do
-        forM_ ([("First Name", "firstName", firstName), ("Last Name", "lastName", lastName), ("Company Name", "companyName", cName)] :: [(Text, Text, Text)]) \(label, name, val) ->
-          formField_ FieldMd def{value = val} label name True Nothing
-        let createSelectField selected label name (opts :: [(Text, Text)]) = formSelectField_ FieldMd label name True do
-              option_ [value_ ""] ""
-              forM_ opts \(k, v) -> option_ (value_ k : [selected_ selected | selected == k]) $ toHtml v
-        createSelectField cSize "Company Size" "companySize" [("1 - 4", "1 to 4"), ("5 - 10", "5 to 10"), ("11 - 25", "11 to 25"), ("26+", "26 and above")]
-        createSelectField fUsFrm "How Did You Hear About Us" "whereDidYouHearAboutUs" [("google", "Google"), ("twitter", "Twitter"), ("linkedin", "LinkedIn"), ("friend", "Friend"), ("other", "Other")]
+      p_ [class_ "text-textWeak"] $ toHtml $ I18n.t lang "onboarding.project.subtitle"
+      div_ [class_ "flex-col w-full gap-4 mt-2 flex"] $ do
+        formField_ FieldMd def{value = cName} (I18n.t lang "onboarding.project.name_label") "companyName" True Nothing
+        -- firstName/lastName collected at registration; persisted here as hidden to keep the existing onboarding POST contract.
+        input_ [type_ "hidden", name_ "firstName", value_ firstName]
+        input_ [type_ "hidden", name_ "lastName", value_ lastName]
+        input_ [type_ "hidden", name_ "companySize", value_ ""]
+        input_ [type_ "hidden", name_ "whereDidYouHearAboutUs", value_ ""]
       div_ [class_ "items-center gap-1 flex"] $ do
-        button_ [class_ "btn-primary px-6 py-4 text-xl rounded-lg cursor-pointer flex items-center"] "Proceed"
+        button_ [class_ "btn-primary px-6 py-4 text-xl rounded-lg cursor-pointer flex items-center"] $ toHtml $ I18n.t lang "onboarding.project.proceed"
 
 
 onboardingConfigBody :: Projects.ProjectId -> Text -> [Text] -> Html ()

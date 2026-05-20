@@ -171,6 +171,9 @@ data User = User
   , isSudo :: Bool
   , phoneNumber :: Maybe Text
   , passwordHash :: Maybe Text
+  , companyName :: Maybe Text
+  , companySize :: Maybe Text
+  , foundUsFrom :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromRow, HI.DecodeRow, NFData, ToRow)
@@ -204,14 +207,17 @@ createUser firstName lastName picture email = do
       , phoneNumber = Nothing
       , isSudo = False
       , passwordHash = Nothing
+      , companyName = Nothing
+      , companySize = Nothing
+      , foundUsFrom = Nothing
       }
 
 
 insertUser :: DB es => User -> Eff es ()
 insertUser u = do
-  let (uId, uCr, uUp, uDel, uAct, uFn, uLn, uImg, uEm, uSudo, uPh, uPw) =
-        (u.id, u.createdAt, u.updatedAt, u.deletedAt, u.active, u.firstName, u.lastName, u.displayImageUrl, u.email, u.isSudo, u.phoneNumber, u.passwordHash)
-  EHasql.interpExecute_ [HI.sql| INSERT INTO users.users (id, created_at, updated_at, deleted_at, active, first_name, last_name, display_image_url, email, is_sudo, phone_number, password_hash) VALUES (#{uId}, #{uCr}, #{uUp}, #{uDel}, #{uAct}, #{uFn}, #{uLn}, #{uImg}, #{uEm}, #{uSudo}, #{uPh}, #{uPw}) |]
+  let (uId, uCr, uUp, uDel, uAct, uFn, uLn, uImg, uEm, uSudo, uPh, uPw, uCo, uCs, uFu) =
+        (u.id, u.createdAt, u.updatedAt, u.deletedAt, u.active, u.firstName, u.lastName, u.displayImageUrl, u.email, u.isSudo, u.phoneNumber, u.passwordHash, u.companyName, u.companySize, u.foundUsFrom)
+  EHasql.interpExecute_ [HI.sql| INSERT INTO users.users (id, created_at, updated_at, deleted_at, active, first_name, last_name, display_image_url, email, is_sudo, phone_number, password_hash, company_name, company_size, found_us_from) VALUES (#{uId}, #{uCr}, #{uUp}, #{uDel}, #{uAct}, #{uFn}, #{uLn}, #{uImg}, #{uEm}, #{uSudo}, #{uPh}, #{uPw}, #{uCo}, #{uCs}, #{uFu}) |]
 
 
 setUserPassword :: DB es => UserId -> Text -> Eff es ()

@@ -18,6 +18,9 @@ data RegisterDefaults = RegisterDefaults
   { firstName :: Text
   , lastName :: Text
   , email :: Text
+  , companyName :: Text
+  , companySize :: Text
+  , foundUsFrom :: Text
   , redirectTo :: Maybe Text
   }
 
@@ -47,11 +50,31 @@ registerPage _envCfg lang firstUser errorMsg defaults =
     errorAlert errorMsg
     form_ [method_ "post", action_ "/register", class_ "flex flex-col gap-3"] do
       hiddenRedirect defaults.redirectTo
-      field_ (t lang "auth.register.first_name") "firstName" "text" defaults.firstName True
-      field_ (t lang "auth.register.last_name") "lastName" "text" defaults.lastName True
+      div_ [class_ "grid grid-cols-2 gap-3"] do
+        field_ (t lang "auth.register.first_name") "firstName" "text" defaults.firstName True
+        field_ (t lang "auth.register.last_name") "lastName" "text" defaults.lastName True
       field_ (t lang "auth.register.email") "email" "email" defaults.email True
       passwordField_ (t lang "auth.register.password") "password"
       passwordField_ (t lang "auth.register.password_confirm") "passwordConfirm"
+      div_ [class_ "border-t border-strokeWeak my-2"] mempty
+      p_ [class_ "text-xs text-textWeak"] $ toHtml $ t lang "auth.register.optional_section"
+      field_ (t lang "auth.register.company_name") "companyName" "text" defaults.companyName False
+      selectField_ (t lang "auth.register.company_size") "companySize" defaults.companySize
+        [ ("", "—")
+        , ("1-4", "1 – 4")
+        , ("5-10", "5 – 10")
+        , ("11-25", "11 – 25")
+        , ("26+", "26+")
+        ]
+      selectField_ (t lang "auth.register.found_us") "foundUsFrom" defaults.foundUsFrom
+        [ ("", "—")
+        , ("google", t lang "auth.register.found_us.google")
+        , ("github", t lang "auth.register.found_us.github")
+        , ("twitter", t lang "auth.register.found_us.twitter")
+        , ("linkedin", t lang "auth.register.found_us.linkedin")
+        , ("friend", t lang "auth.register.found_us.friend")
+        , ("other", t lang "auth.register.found_us.other")
+        ]
       button_ [type_ "submit", class_ "btn btn-primary w-full mt-2"] $ toHtml $ t lang "auth.register.submit"
     p_ [class_ "text-sm text-textWeak text-center mt-5"] do
       toHtml $ t lang "auth.register.have_account"
@@ -97,14 +120,23 @@ hiddenRedirect redirectTo =
 
 
 field_ :: Text -> Text -> Text -> Text -> Bool -> Html ()
-field_ label fieldName inputType val required =
+field_ labelTxt fieldName inputType val required =
   label_ [class_ "form-control w-full"] do
-    div_ [class_ "label"] $ span_ [class_ "label-text"] $ toHtml label
+    div_ [class_ "label"] $ span_ [class_ "label-text"] $ toHtml labelTxt
     input_ $ [type_ inputType, name_ fieldName, value_ val, class_ "input input-bordered w-full"] <> [required_ "required" | required]
 
 
 passwordField_ :: Text -> Text -> Html ()
-passwordField_ label fieldName =
+passwordField_ labelTxt fieldName =
   label_ [class_ "form-control w-full"] do
-    div_ [class_ "label"] $ span_ [class_ "label-text"] $ toHtml label
+    div_ [class_ "label"] $ span_ [class_ "label-text"] $ toHtml labelTxt
     input_ [type_ "password", name_ fieldName, class_ "input input-bordered w-full", required_ "required"]
+
+
+selectField_ :: Text -> Text -> Text -> [(Text, Text)] -> Html ()
+selectField_ labelTxt fieldName selectedVal opts =
+  label_ [class_ "form-control w-full"] do
+    div_ [class_ "label"] $ span_ [class_ "label-text"] $ toHtml labelTxt
+    select_ [name_ fieldName, class_ "select select-bordered w-full"] do
+      forM_ opts $ \(val, displ) ->
+        option_ (value_ val : [selected_ "selected" | val == selectedVal]) (toHtml displ)

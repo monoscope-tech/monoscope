@@ -108,6 +108,9 @@ data RegisterForm = RegisterForm
   , email :: Text
   , password :: Text
   , passwordConfirm :: Text
+  , companyName :: Maybe Text
+  , companySize :: Maybe Text
+  , foundUsFrom :: Maybe Text
   , redirectTo :: Maybe Text
   }
   deriving stock (Generic, Show)
@@ -456,7 +459,7 @@ registerGetH cookieHdr redirectToM = do
       lang
       (usersCount == 0)
       Nothing
-      AuthPages.RegisterDefaults{firstName = "", lastName = "", email = "", redirectTo = redirectToM}
+      AuthPages.RegisterDefaults{firstName = "", lastName = "", email = "", companyName = "", companySize = "", foundUsFrom = "", redirectTo = redirectToM}
 
 
 registerPostH
@@ -472,7 +475,16 @@ registerPostH cookieHdr form = do
   unless envCfg.localAuthEnabled $ throwError err404
   usersCount <- Projects.countUsers
   let lang = langFromCookieHeader envCfg cookieHdr
-      regDefaults = AuthPages.RegisterDefaults{firstName = form.firstName, lastName = form.lastName, email = form.email, redirectTo = form.redirectTo}
+      regDefaults =
+        AuthPages.RegisterDefaults
+          { firstName = form.firstName
+          , lastName = form.lastName
+          , email = form.email
+          , companyName = fromMaybe "" form.companyName
+          , companySize = fromMaybe "" form.companySize
+          , foundUsFrom = fromMaybe "" form.foundUsFrom
+          , redirectTo = form.redirectTo
+          }
       renderRegister err = pure $ addHeader "" $ addHeader emptySessionCookie $ AuthPages.registerPage envCfg lang (usersCount == 0) (Just err) regDefaults
       redirectTo = fromMaybe "/" form.redirectTo
   if usersCount > 0 && not envCfg.allowRegistration
@@ -487,7 +499,15 @@ registerPostH cookieHdr form = do
             Nothing -> do
               hash <- liftIO $ hashPwd form.password
               user <- Projects.createUser form.firstName form.lastName "" form.email
-              let userWithPassword = user{Projects.isSudo = usersCount == 0, Projects.passwordHash = Just hash}
+              let nonBlank x = case T.strip x of "" -> Nothing; s -> Just s
+                  userWithPassword =
+                    user
+                      { Projects.isSudo = usersCount == 0
+                      , Projects.passwordHash = Just hash
+                      , Projects.companyName = form.companyName >>= nonBlank
+                      , Projects.companySize = form.companySize >>= nonBlank
+                      , Projects.foundUsFrom = form.foundUsFrom >>= nonBlank
+                      }
               Projects.insertUser userWithPassword
               persistentSessId <- createPersistentSession userWithPassword.id
               pure $ addHeader redirectTo $ addHeader (craftSessionCookie persistentSessId True) (redirectHtml redirectTo)
@@ -596,7 +616,7 @@ verifyPwd plain hashed =
 
 
 emptyRegisterDefaults :: AuthPages.RegisterDefaults
-emptyRegisterDefaults = AuthPages.RegisterDefaults{firstName = "", lastName = "", email = "", redirectTo = Nothing}
+emptyRegisterDefaults = AuthPages.RegisterDefaults{firstName = "", lastName = "", email = "", companyName = "", companySize = "", foundUsFrom = "", redirectTo = Nothing}
 
 
 redirectHtml :: Text -> Html ()
