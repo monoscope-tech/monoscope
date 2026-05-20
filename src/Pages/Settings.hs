@@ -93,6 +93,7 @@ import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHe
 import Text.Printf (printf)
 import Utils (LoadingSize (..), calculateCycleStartDate, faSprite_, formatUTC, htmxIndicator_)
 import Web.FormUrlEncoded (FromForm)
+import Web.I18n qualified as I18n
 import "cryptonite" Crypto.Hash (SHA256)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
@@ -144,12 +145,12 @@ brings3RemoveH pid = do
 
 bringS3GetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 bringS3GetH pid = do
-  (_, project, bw) <- mkPageCtx pid
-  addRespHeaders $ bodyWrapper bw{pageTitle = "Integrations", isSettingsPage = True} $ bringS3Page pid project.s3Bucket
+  (sess, project, bw) <- mkPageCtx pid
+  addRespHeaders $ bodyWrapper bw{pageTitle = "Integrations", isSettingsPage = True} $ bringS3Page sess.lang pid project.s3Bucket
 
 
-bringS3Page :: Projects.ProjectId -> Maybe Projects.ProjectS3Bucket -> Html ()
-bringS3Page pid s3BucketM = settingsSection_ do
+bringS3Page :: I18n.Language -> Projects.ProjectId -> Maybe Projects.ProjectS3Bucket -> Html ()
+bringS3Page lang pid s3BucketM = settingsSection_ do
   div_ [class_ "flex items-center justify-between"] do
     settingsH2_ "S3 Bucket"
     div_ [id_ "connectedInd"] $ connectionBadge_ $ bool "Not connected" "Connected" (isJust s3BucketM)
@@ -170,9 +171,9 @@ bringS3Page pid s3BucketM = settingsSection_ do
           htmxIndicator_ "indicator" LdXS
       when (isJust s3BucketM) $ label_ [class_ "btn btn-sm btn-ghost text-textError hover:bg-fillError-weak", Lucid.for_ "remove-modal"] do
         faSprite_ "trash" "regular" "w-3 h-3"
-        span_ "Remove"
+        span_ $ toHtml $ I18n.t lang "common.remove"
 
-  confirmModal_ "remove-modal" "Remove bucket?" "This will disconnect your S3 bucket. Data already stored will remain in your bucket." [hxDelete_ "", hxSwap_ "innerHTML", hxTarget_ "#connectedInd"] "Remove bucket"
+  confirmModal_ lang "remove-modal" "Remove bucket?" "This will disconnect your S3 bucket. Data already stored will remain in your bucket." [hxDelete_ "", hxSwap_ "innerHTML", hxTarget_ "#connectedInd"] "Remove bucket"
 
 
 ----------------------------------------------------------------------
@@ -256,15 +257,17 @@ newtype ApiGet = ApiGet (PageCtx (Projects.ProjectId, V.Vector ProjectApiKeys.Pr
 
 
 instance ToHtml ApiGet where
-  toHtml (ApiGet (PageCtx bwconf (pid, apiKeys))) = toHtml $ PageCtx bwconf $ apiKeysPage pid apiKeys
+  toHtml (ApiGet (PageCtx bwconf (pid, apiKeys))) =
+    let lang = maybe I18n.En (.lang) bwconf.sessM
+     in toHtml $ PageCtx bwconf $ apiKeysPage lang pid apiKeys
   toHtmlRaw = toHtml
 
 
-apiKeysPage :: Projects.ProjectId -> V.Vector ProjectApiKeys.ProjectApiKey -> Html ()
-apiKeysPage pid apiKeys = do
+apiKeysPage :: I18n.Language -> Projects.ProjectId -> V.Vector ProjectApiKeys.ProjectApiKey -> Html ()
+apiKeysPage lang pid apiKeys = do
   settingsSection_ do
     div_ [class_ "flex justify-between items-center"] do
-      settingsH2_ "API Keys"
+      settingsH2_ $ I18n.t lang "settings.api_keys"
       modalWith_ "apikey-modal" def{boxClass = "p-8"} (Just $ span_ [class_ "btn btn-sm btn-primary gap-1.5"] $ do faSprite_ "plus" "regular" "w-3 h-3"; "New Key") do
         iconBadgeLg_ BrandBadge "key"
         span_ [class_ "text-textStrong text-2xl font-semibold mb-1"] "Generate an API key"
