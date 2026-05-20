@@ -753,7 +753,9 @@ newtype BillingGet = BillingGet (PageCtx BillingData)
 
 
 instance ToHtml BillingGet where
-  toHtml (BillingGet (PageCtx bwconf d)) = toHtml $ PageCtx bwconf $ billingPage d
+  toHtml (BillingGet (PageCtx bwconf d)) =
+    let lang = maybe I18n.En (.lang) bwconf.sessM
+     in toHtml $ PageCtx bwconf $ billingPage lang d
   toHtmlRaw = toHtml
 
 
@@ -795,8 +797,8 @@ manageBillingGetH pid from = do
   addRespHeaders $ BillingGet $ PageCtx bwconf BillingData{pid, totalReqs = totalRequests, totalBytes, lastReported = last_reported, lemonUrl, critical, paymentPlan = project.paymentPlan, enableFreetier = envCfg.enableFreetier, basicAuthEnabled = envCfg.basicAuthEnabled, provider, dailyUsage, cycleStart = utctDay cycleStart, pastCycles}
 
 
-billingPage :: BillingData -> Html ()
-billingPage d = div_ [] do
+billingPage :: I18n.Language -> BillingData -> Html ()
+billingPage lang d = div_ [] do
   let pid = d.pid
       reqs = d.totalReqs
       last_reported = d.lastReported
@@ -821,7 +823,7 @@ billingPage d = div_ [] do
       estCost = if isFree then "$0" else fmtUSD totalCost
       cycleStartText = toText (formatTime defaultTimeLocale "%b %-d" d.cycleStart)
   settingsSection_ do
-    settingsH2_ "Billing"
+    settingsH2_ $ I18n.t lang "settings.billing"
 
     -- Current plan row
     div_ [class_ "flex items-center justify-between"] do
