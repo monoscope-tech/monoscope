@@ -10,9 +10,8 @@ module Web.I18n
   )
 where
 
+import Data.List qualified as L
 import Data.Map.Strict qualified as Map
-import Data.Text (Text)
-import Data.Text.Encoding (encodeUtf8)
 import Data.Time.Clock (secondsToDiffTime)
 import Relude
 import Web.Cookie (Cookies, SetCookie (..), defaultSetCookie)
@@ -128,7 +127,7 @@ es =
 
 
 languageFromCookies :: Cookies -> Language
-languageFromCookies cs = case lookup "lang" cs of
+languageFromCookies cs = case L.lookup "lang" cs of
   Just "es" -> Es
   Just "en" -> En
   _ -> En

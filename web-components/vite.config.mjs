@@ -45,12 +45,13 @@ export default defineConfig({
         entryFileNames: `js/[name].js`,
         chunkFileNames: `js/[name].[hash].js`,
         assetFileNames: (assetInfo) => {
-          const info = assetInfo.name.split('.');
-          const ext = info[info.length - 1];
-          if (/\.(css)$/.test(assetInfo.name)) {
+          // Vite >=6 dropped `assetInfo.name` in favor of `assetInfo.names` (array).
+          const name = assetInfo.name ?? (Array.isArray(assetInfo.names) ? assetInfo.names[0] : '');
+          if (!name) return `[ext]/[name].[ext]`;
+          if (/\.(css)$/.test(name)) {
             return `css/[name].[ext]`;
           }
-          if (/\.(woff2?|eot|ttf|otf)$/.test(assetInfo.name)) {
+          if (/\.(woff2?|eot|ttf|otf)$/.test(name)) {
             return `fonts/[name].[ext]`;
           }
           return `[ext]/[name].[ext]`;
