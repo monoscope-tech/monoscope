@@ -281,6 +281,15 @@ graph LR
     H --> J[Alert Channels]
 ```
 
+### Project Structure
+
+Monoscope is organized into four primary components:
+
+- **`app/`** — Haskell server binary (WAI/Yesod web application)
+- **`cli/`** — Command-line interface for managing projects, querying data, and automating workflows
+- **`web-components/`** — Custom UI elements (Web Components) for dashboards and log exploration
+- **`src/`** — Core Haskell library exporting shared types, utilities, and business logic
+
 ### Powered by TimeFusion
 
 Monoscope is built on [**TimeFusion**](https://github.com/monoscope-tech/timefusion), our open-source time-series database for observability workloads.
