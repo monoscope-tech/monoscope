@@ -377,7 +377,7 @@ pricingPage pid lemon critical paymentPlan freeTierEnabled basicAuthEnabled prov
   div_ [class_ "w-full max-w-[1100px] mx-auto mt-[70px] mb-10 px-4 md:px-0"] $ do
     div_ [class_ "flex-col gap-4 flex w-full"] $ do
       div_ [class_ "w-full md:w-1/2"] $ do
-        stepIndicator 5 "Please pick a plan" $ "/p/" <> pid.toText <> "/onboarding?step=Integration"
+        stepIndicator 4 "Please pick a plan" $ "/p/" <> pid.toText <> "/onboarding?step=Integration"
       paymentPlanPicker pid lemon critical paymentPlan freeTierEnabled basicAuthEnabled True provider
       div_ [class_ "flex flex-col gap-2 w-full pb-20"] do
         span_ [class_ "text-textStrong text-2xl mt-20"] "FAQ"
@@ -513,7 +513,7 @@ integrationsPage pid apikey =
     div_ [class_ "w-full md:w-1/2 bg-bgRaised md:h-full flex flex-col"] do
       div_ [class_ "pt-14 md:pt-[156px] px-4 md:px-12 flex-shrink-0"]
         $ div_ [class_ "max-w-xl"]
-        $ stepIndicator 4 "Instrument your apps or servers"
+        $ stepIndicator 3 "Instrument your apps or servers"
         $ "/p/"
         <> pid.toText
         <> "/onboarding?step=NotifChannel"
@@ -875,7 +875,7 @@ notifChannelsWithUrls slackUrl discordUrl pid phone emails hasDiscord hasSlack l
     div_ [class_ "flex-col gap-4 flex w-full"] $ do
       -- After step 1 we now jump straight here (skipping the "where to host" survey),
       -- so the Back link points to Info, not Survey.
-      stepIndicator 3 (I18n.t lang "onboarding.notif.title") $ "/p/" <> pid.toText <> "/onboarding?step=Info"
+      stepIndicator' lang 2 (I18n.t lang "onboarding.notif.title") $ "/p/" <> pid.toText <> "/onboarding?step=Info"
       div_ [class_ "flex-col w-full gap-8 flex mt-4"] $ do
         div_ [class_ "w-full flex flex-col gap-8"] $ do
           div_ [class_ "w-full gap-2 grid grid-cols-1 md:grid-cols-2"] $ do
