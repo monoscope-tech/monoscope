@@ -67,7 +67,17 @@ onboardingGetH pid onboardingStepM = do
       questions = fromMaybe (AE.Object []) project.questions
       onboardingStep = fromMaybe "Info" onboardingStepM
   stepData <- case onboardingStep of
-    "Complete" -> pure $ CompleteStep pid
+    "Complete" -> do
+      -- Finalize onboarding for self-hosted: there's no pricing step, so
+      -- flip the project off ONBOARDING here. Idempotent.
+      _ <-
+        Hasql.interpExecute
+          [HI.sql|
+            update projects.projects
+            set payment_plan = CASE WHEN payment_plan = 'ONBOARDING' THEN 'Free' ELSE payment_plan END
+            where id = #{pid}
+          |]
+      pure $ CompleteStep pid
     "Survey" -> do
       let host = fromMaybe "" $ lookupValueText questions "location"
           func = case questions of
@@ -200,9 +210,9 @@ instance ToHtml OnboardingGet where
     where
       lang = maybe I18n.En (\s -> s.lang) bwconf.sessM
       renderStep = \case
-        CompleteStep{..} -> onboardingCompleteBody stepPid
-        SurveyStep{..} -> onboardingConfigBody stepPid location functionality
-        NotifChannelStep{..} -> notifChannelsWithUrls slackUrl discordUrl stepPid phoneNumber emails hasDiscord hasSlack
+        CompleteStep{..} -> onboardingCompleteBody lang stepPid
+        SurveyStep{..} -> onboardingConfigBody stepPid lang location functionality
+        NotifChannelStep{..} -> notifChannelsWithUrls slackUrl discordUrl stepPid phoneNumber emails hasDiscord hasSlack lang
         IntegrationStep{..} -> integrationsPage stepPid apiKey
         PricingStep{..} -> pricingPage stepPid lemonUrl criticalUrl paymentPlan enableFreetier basicAuthEnabled Projects.NoBillingProvider
         InfoStep{..} -> onboardingInfoBody stepPid lang firstName lastName companyName companySize foundUsFrom
@@ -267,8 +277,10 @@ dismissChecklistH pid = do
   addRespHeaders ""
 
 
+-- For self-hosted Monoscope the SaaS-only "Pricing" step is irrelevant, so
+-- Integration is the last step and lands on Complete directly.
 getNextStep :: Text -> Text
-getNextStep "Integration" = "Pricing"
+getNextStep "Integration" = "Complete"
 getNextStep _ = "Info"
 
 
@@ -303,7 +315,8 @@ checkIntegrationGet pid languageM = do
       case languageM of
         Just lg -> addRespHeaders verifiedCheck
         _ -> do
-          redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=Pricing"
+          -- Self-hosted: skip the Pricing step entirely.
+          redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=Complete"
           addRespHeaders ""
     else do
       addErrorToast "No events found yet" Nothing
@@ -319,27 +332,11 @@ verifiedCheck = div_ [class_ "flex items-center gap-2 text-textSuccess"] do
 onboardingInfoPostH :: Projects.ProjectId -> OnboardingInfoForm -> ATAuthCtx (RespHeaders OnboardingInfoPost)
 onboardingInfoPostH pid form = do
   (_sess, project) <- Projects.sessionAndProject pid
-  -- For the self-hosted refactor we collapsed onboarding to a single step
-  -- (project name). The remaining SaaS-only questions (where to host the
-  -- project, "which features", pricing) don't apply here, so we mark every
-  -- step as completed, flip payment_plan off ONBOARDING, and drop the user
-  -- straight into the project dashboard.
   let companyName = form.companyName
-      allSteps =
-        foldr
-          insertIfNotExist
-          project.onboardingStepsCompleted
-          ["Info", "Survey", "NotifChannel", "Integration", "Pricing"]
-  _ <-
-    Hasql.interpExecute
-      [HI.sql|
-        update projects.projects
-        set title = #{companyName},
-            onboarding_steps_completed = #{allSteps},
-            payment_plan = CASE WHEN payment_plan = 'ONBOARDING' THEN 'Free' ELSE payment_plan END
-        where id = #{pid}
-      |]
-  redirectCS $ "/p/" <> pid.toText <> "/"
+      stepsCompleted = project.onboardingStepsCompleted
+      newCompleted = insertIfNotExist "Info" stepsCompleted
+  _ <- Hasql.interpExecute [HI.sql| update projects.projects set title=#{companyName}, onboarding_steps_completed=#{newCompleted} where id=#{pid} |]
+  redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=NotifChannel"
   addRespHeaders $ OnboardingInfoPost ()
 
 
@@ -362,16 +359,16 @@ onboardingConfPostH pid form = do
   addRespHeaders $ OnboardingConfPost ()
 
 
-onboardingCompleteBody :: Projects.ProjectId -> Html ()
-onboardingCompleteBody pid = do
+onboardingCompleteBody :: Language -> Projects.ProjectId -> Html ()
+onboardingCompleteBody lang pid = do
   div_ [class_ "w-full max-w-xl h-full flex items-center mx-auto relative px-4 md:px-0"] $ do
     canvas_ [id_ "drawing_canvas", class_ "absolute top-0 left-0  w-full"] pass
     div_ [class_ "flex-col gap-4 flex w-full p-14 my-auto border border-weak rounded-2xl"] $ do
       iconBadgeWith_ "p-3" "h-8 w-8" "rounded-full" SuccessBadge "circle-check"
       div_ [class_ "flex flex-col gap-2"] do
-        h3_ [class_ " text-textStrong  text-2xl"] "Onboarding completed!"
-        p_ [class_ " text-textWeak text-sm"] "You're all set! You can now start exploring the monoscope dashboard by clicking the button below."
-      a_ [class_ "btn-primary py-2  rounded-lg text-center mt-1", href_ $ "/p/" <> pid.toText <> "/"] "Go to your dashboard"
+        h3_ [class_ " text-textStrong  text-2xl"] $ toHtml $ I18n.t lang "onboarding.complete.title"
+        p_ [class_ " text-textWeak text-sm"] $ toHtml $ I18n.t lang "onboarding.complete.subtitle"
+      a_ [class_ "btn-primary py-2  rounded-lg text-center mt-1", href_ $ "/p/" <> pid.toText <> "/"] $ toHtml $ I18n.t lang "onboarding.complete.go_dashboard"
   script_ [src_ "/public/assets/js/confetti.js"] ("" :: Text)
 
 
@@ -871,12 +868,14 @@ onboardingStepWrapper_ extraCls step title prevUrl content =
       content
 
 
-notifChannelsWithUrls :: Text -> Text -> Projects.ProjectId -> Text -> V.Vector Text -> Bool -> Bool -> Html ()
-notifChannelsWithUrls slackUrl discordUrl pid phone emails hasDiscord hasSlack = do
+notifChannelsWithUrls :: Text -> Text -> Projects.ProjectId -> Text -> V.Vector Text -> Bool -> Bool -> Language -> Html ()
+notifChannelsWithUrls slackUrl discordUrl pid phone emails hasDiscord hasSlack lang = do
   div_ [class_ "w-full max-w-xl mx-auto mt-20 md:mt-[156px] mb-10 px-4 md:px-0"] $ do
     div_ [id_ "inviteModalContainer"] pass
     div_ [class_ "flex-col gap-4 flex w-full"] $ do
-      stepIndicator 3 "How should we notify you about issues?" $ "/p/" <> pid.toText <> "/onboarding?step=Survey"
+      -- After step 1 we now jump straight here (skipping the "where to host" survey),
+      -- so the Back link points to Info, not Survey.
+      stepIndicator 3 (I18n.t lang "onboarding.notif.title") $ "/p/" <> pid.toText <> "/onboarding?step=Info"
       div_ [class_ "flex-col w-full gap-8 flex mt-4"] $ do
         div_ [class_ "w-full flex flex-col gap-8"] $ do
           div_ [class_ "w-full gap-2 grid grid-cols-1 md:grid-cols-2"] $ do
@@ -892,11 +891,11 @@ notifChannelsWithUrls slackUrl discordUrl pid phone emails hasDiscord hasSlack =
             , hxIndicator_ "#loadingIndicator"
             ]
             $ do
-              formField_ FieldMd def{inputType = "tel", value = phone} "Notify phone number" "phoneNumber" False Nothing
+              formField_ FieldMd def{inputType = "tel", value = phone} (I18n.t lang "onboarding.notif.phone") "phoneNumber" False Nothing
               let tgs = decodeUtf8 $ AE.encode $ V.toList emails
-              formField_ FieldMd def "Notify the following email address" "emails" False $ Just $ tagInput_ "emails" "" [data_ "tagify-initial" tgs]
+              formField_ FieldMd def (I18n.t lang "onboarding.notif.email") "emails" False $ Just $ tagInput_ "emails" "" [data_ "tagify-initial" tgs]
               div_ [class_ "items-center gap-4 flex"] $ do
-                button_ [class_ "btn-primary px-8 py-3 text-xl rounded-xl cursor-pointer flex items-center"] "Proceed"
+                button_ [class_ "btn-primary px-8 py-3 text-xl rounded-xl cursor-pointer flex items-center"] $ toHtml $ I18n.t lang "onboarding.notif.proceed"
       script_
         """
         function appendMember() {
@@ -932,26 +931,24 @@ onboardingInfoBody pid lang firstName lastName cName _cSize _fUsFrm = do
         button_ [class_ "btn-primary px-6 py-4 text-xl rounded-lg cursor-pointer flex items-center"] $ toHtml $ I18n.t lang "onboarding.project.proceed"
 
 
-onboardingConfigBody :: Projects.ProjectId -> Text -> [Text] -> Html ()
-onboardingConfigBody pid loca func = do
-  onboardingStepWrapper_ "" 2 "Let's configure your project" ("/p/" <> pid.toText <> "/onboarding?step=Info")
+onboardingConfigBody :: Projects.ProjectId -> Language -> Text -> [Text] -> Html ()
+onboardingConfigBody pid lang _loca func = do
+  onboardingStepWrapper_ "" 2 (I18n.t lang "onboarding.survey.title") ("/p/" <> pid.toText <> "/onboarding?step=Info")
     $ form_ [class_ "flex-col w-full gap-8 flex", hxPost_ $ "/p/" <> pid.toText <> "/onboarding/survey", hxIndicator_ "#loadingIndicator"]
     $ do
-      div_ [class_ "flex-col w-full gap-14 mt-4 flex"] $ do
-        div_ [class_ "flex-col gap-2 flex"] $ do
-          div_ [class_ "items-center gap-[2px] flex"] $ do
-            span_ [class_ " text-textStrong"] "Where should your project be hosted?"
-            span_ [class_ " text-textWeak"] "*"
-          div_ [class_ "pt-2 flex-col gap-4 flex text-sm  text-textStrong"] $ do
-            forM_ locations $ createBinaryField "radio" "location" [loca]
+      div_ [class_ "flex-col w-full gap-10 mt-4 flex"] $ do
+        -- "Where should your project be hosted?" was a SaaS-only question.
+        -- For a self-hosted instance there's only one location (this server),
+        -- so the question is hidden and a sentinel value is submitted.
+        input_ [type_ "hidden", name_ "location", value_ "self-hosted"]
         div_ [class_ "flex-col gap-2 flex"] $ do
           div_ [class_ "items-center flex gap-[2px]"] $ do
-            span_ [class_ " text-textStrong"] "Which Monoscope features will you be using?"
-            span_ [class_ " text-textWeak"] "*"
+            span_ [class_ "text-textStrong"] $ toHtml $ I18n.t lang "onboarding.survey.features"
+            span_ [class_ "text-textWeak"] "*"
           div_ [class_ "pt-2 flex-col gap-4 flex"] $ do
             forM_ functionalities $ createBinaryField "checkbox" "functionality" func
       div_ [class_ "items-center gap-1 flex"] $ do
-        button_ [class_ "btn-primary px-6 py-4 text-xl rounded-lg cursor-pointer flex items-center"] "Proceed"
+        button_ [class_ "btn-primary px-6 py-4 text-xl rounded-lg cursor-pointer flex items-center"] $ toHtml $ I18n.t lang "onboarding.survey.proceed"
 
 
 inviteTeamMemberModal :: Projects.ProjectId -> V.Vector Text -> Bool -> Html ()

@@ -834,10 +834,10 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
           div_ [class_ "text-textWeak text-xs truncate"] $ toHtml $ CI.original currUser.email
         div_ [class_ "divider my-0"] ""
         li_ [class_ "menu-title px-3 pt-2"] $ toHtml $ t sess.lang "nav.language"
-        li_ [] $ a_ [href_ "/set_language/en?redirect_to=/", class_ "flex items-center justify-between"] do
+        li_ [] $ a_ [href_ "/set_language/en?redirect_to=/", class_ "flex items-center justify-between", onclick_ "this.href='/set_language/en?redirect_to='+encodeURIComponent(location.pathname+location.search);return true;"] do
           toHtml $ t sess.lang "nav.language.english"
           when (sess.lang == I18n.En) $ faSprite_ "check" "regular" "w-3 h-3"
-        li_ [] $ a_ [href_ "/set_language/es?redirect_to=/", class_ "flex items-center justify-between"] do
+        li_ [] $ a_ [href_ "/set_language/es?redirect_to=/", class_ "flex items-center justify-between", onclick_ "this.href='/set_language/es?redirect_to='+encodeURIComponent(location.pathname+location.search);return true;"] do
           toHtml $ t sess.lang "nav.language.spanish"
           when (sess.lang == I18n.Es) $ faSprite_ "check" "regular" "w-3 h-3"
         div_ [class_ "divider my-0"] ""
