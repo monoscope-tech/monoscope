@@ -503,7 +503,7 @@ integrationsBody IntegrationsConfig{..} = do
             , hxSwap_ "outerHTML swap:0.3s"
             , [__| on change from closest <div/> put .btn-primary into my.className then put 'btn btn-sm btn-primary' into my.className end |]
             ]
-            toHtml $ I18n.t lang "common.save"
+            $ toHtml $ I18n.t lang "common.save"
 
     -- Developer tools
     div_ [class_ "pt-6 border-t border-strokeWeak space-y-2"] do
