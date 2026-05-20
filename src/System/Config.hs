@@ -99,6 +99,7 @@ data EnvConfig = EnvConfig
   , openaiBaseUrl :: Text
   , hostUrl :: Text
   , monoscopePusherServiceAccountB64 :: Text
+  , telegramBotToken :: Text -- TELEGRAM_BOT_TOKEN: bot token from @BotFather
   , twilioAccountSid :: Text
   , twilioAuthToken :: Text
   , whatsappFromNumber :: Text
