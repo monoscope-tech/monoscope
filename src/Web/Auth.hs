@@ -388,19 +388,31 @@ loginRedirectH redirectToM = do
       pure $ addHeader redirectTo $ addHeader emptySessionCookie NoContent
 
 
+langFromCookieHeader :: EnvConfig -> Maybe Text -> Language
+langFromCookieHeader envCfg cookieHdrM = case cookieHdrM of
+  Nothing -> parseLanguage envCfg.defaultLanguage
+  Just cookieTxt ->
+    let cookies = parseCookies (encodeUtf8 cookieTxt)
+     in case L.lookup "lang" cookies of
+          Just "es" -> Es
+          Just "en" -> En
+          _ -> parseLanguage envCfg.defaultLanguage
+
+
 -- loginH
 loginH
   :: Maybe Text
+  -> Maybe Text
   -> ATBaseCtx
        ( Headers
            '[Header "Location" Text, Header "Set-Cookie" SetCookie]
            (Html ())
        )
-loginH redirectToM = do
+loginH cookieHdr redirectToM = do
   envCfg <- asks env
   if envCfg.localAuthEnabled
     then do
-      let lang = parseLanguage envCfg.defaultLanguage
+      let lang = langFromCookieHeader envCfg cookieHdr
       pure $ addHeader "" $ addHeader emptySessionCookie $ AuthPages.loginPage envCfg lang Nothing redirectToM
     else if envCfg.basicAuthEnabled
     then throwError $ err401{errHeaders = [("WWW-Authenticate", "Basic realm=\"Monoscope\"")]}
@@ -412,16 +424,17 @@ loginH redirectToM = do
 
 
 loginPostH
-  :: LoginForm
+  :: Maybe Text
+  -> LoginForm
   -> ATBaseCtx
        ( Headers
            '[Header "Location" Text, Header "Set-Cookie" SetCookie]
            (Html ())
        )
-loginPostH form = do
+loginPostH cookieHdr form = do
   envCfg <- asks env
   unless envCfg.localAuthEnabled $ throwError err401
-  let lang = parseLanguage envCfg.defaultLanguage
+  let lang = langFromCookieHeader envCfg cookieHdr
       redirectTo = fromMaybe "/" form.redirectTo
       invalid = pure $ addHeader "" $ addHeader emptySessionCookie $ AuthPages.loginPage envCfg lang (Just $ t lang "auth.login.error_invalid") form.redirectTo
   Projects.userByEmail form.email >>= \case
@@ -431,12 +444,12 @@ loginPostH form = do
     _ -> invalid
 
 
-registerGetH :: Maybe Text -> ATBaseCtx (Html ())
-registerGetH redirectToM = do
+registerGetH :: Maybe Text -> Maybe Text -> ATBaseCtx (Html ())
+registerGetH cookieHdr redirectToM = do
   envCfg <- asks env
   unless envCfg.localAuthEnabled $ throwError err404
   usersCount <- Projects.countUsers
-  let lang = parseLanguage envCfg.defaultLanguage
+  let lang = langFromCookieHeader envCfg cookieHdr
   pure
     $ AuthPages.registerPage
       envCfg
@@ -447,17 +460,18 @@ registerGetH redirectToM = do
 
 
 registerPostH
-  :: RegisterForm
+  :: Maybe Text
+  -> RegisterForm
   -> ATBaseCtx
        ( Headers
            '[Header "Location" Text, Header "Set-Cookie" SetCookie]
            (Html ())
        )
-registerPostH form = do
+registerPostH cookieHdr form = do
   envCfg <- asks env
   unless envCfg.localAuthEnabled $ throwError err404
   usersCount <- Projects.countUsers
-  let lang = parseLanguage envCfg.defaultLanguage
+  let lang = langFromCookieHeader envCfg cookieHdr
       regDefaults = AuthPages.RegisterDefaults{firstName = form.firstName, lastName = form.lastName, email = form.email, redirectTo = form.redirectTo}
       renderRegister err = pure $ addHeader "" $ addHeader emptySessionCookie $ AuthPages.registerPage envCfg lang (usersCount == 0) (Just err) regDefaults
       redirectTo = fromMaybe "/" form.redirectTo

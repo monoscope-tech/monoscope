@@ -318,10 +318,10 @@ data Routes mode = Routes
   , cookieProtected :: mode :- AuthProtect "optional-cookie-auth" :> Servant.NamedRoutes CookieProtectedRoutes
   , ping :: mode :- "ping" :> Get '[PlainText] Text
   , status :: mode :- "status" :> Get '[JSON] Status
-  , login :: mode :- "login" :> QPT "redirect_to" :> Get '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] (Html ()))
-  , loginPost :: mode :- "login" :> ReqBody '[FormUrlEncoded] Auth.LoginForm :> Verb 'POST 200 '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] (Html ()))
-  , registerGet :: mode :- "register" :> QPT "redirect_to" :> Get '[HTML] (Html ())
-  , registerPost :: mode :- "register" :> ReqBody '[FormUrlEncoded] Auth.RegisterForm :> Verb 'POST 200 '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] (Html ()))
+  , login :: mode :- "login" :> Header "Cookie" Text :> QPT "redirect_to" :> Get '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] (Html ()))
+  , loginPost :: mode :- "login" :> Header "Cookie" Text :> ReqBody '[FormUrlEncoded] Auth.LoginForm :> Verb 'POST 200 '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] (Html ()))
+  , registerGet :: mode :- "register" :> Header "Cookie" Text :> QPT "redirect_to" :> Get '[HTML] (Html ())
+  , registerPost :: mode :- "register" :> Header "Cookie" Text :> ReqBody '[FormUrlEncoded] Auth.RegisterForm :> Verb 'POST 200 '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] (Html ()))
   , setLanguage :: mode :- "set_language" :> Capture "lang" Text :> QPT "redirect_to" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
   , toLogin :: mode :- "to_login" :> QPT "redirect_to" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
   , logout :: mode :- "logout" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
