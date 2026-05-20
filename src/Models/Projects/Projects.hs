@@ -500,7 +500,7 @@ selectProjectsForUser uid = do
 usersByProjectId :: DB es => ProjectId -> Eff es [User]
 usersByProjectId pid =
   EHasql.interp
-    [HI.sql| select u.id, u.created_at, u.updated_at, u.deleted_at, u.active, u.first_name, u.last_name, u.display_image_url, u.email, u.is_sudo, u.phone_number
+    [HI.sql| select u.id, u.created_at, u.updated_at, u.deleted_at, u.active, u.first_name, u.last_name, u.display_image_url, u.email, u.is_sudo, u.phone_number, u.password_hash, u.company_name, u.company_size, u.found_us_from
                 from users.users u join projects.project_members pm on (pm.user_id=u.id) where project_id=#{pid} and u.active IS True and pm.active = TRUE;|]
 
 

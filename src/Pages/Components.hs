@@ -13,6 +13,7 @@ import NeatInterpolation (text)
 import PyF qualified
 import Relude
 import Utils (LoadingSize (..), LoadingType (..), deleteParam, faSprite_, loadingIndicator_, onpointerdown_)
+import Web.I18n qualified as I18n
 
 
 -- | Empty state component with optional contextual icon
@@ -520,9 +521,9 @@ tagInput_ :: Monad m => Text -> Text -> [Attribute] -> HtmlT m ()
 tagInput_ inputId ph attrs = textarea_ ([class_ "textarea w-full min-h-12 resize-none", id_ inputId, placeholder_ ph, data_ "tagify" ""] <> attrs) ""
 
 
-formActionsModal_ :: Monad m => Text -> HtmlT m () -> HtmlT m ()
-formActionsModal_ modalId submitBtn = div_ [class_ "mt-3 flex justify-end gap-2"] do
-  label_ [Lucid.for_ modalId, class_ "btn btn-outline cursor-pointer"] "Cancel"
+formActionsModal_ :: Monad m => I18n.Language -> Text -> HtmlT m () -> HtmlT m ()
+formActionsModal_ lang modalId submitBtn = div_ [class_ "mt-3 flex justify-end gap-2"] do
+  label_ [Lucid.for_ modalId, class_ "btn btn-outline cursor-pointer"] $ toHtml $ I18n.t lang "common.cancel"
   submitBtn
 
 
@@ -616,8 +617,8 @@ modalWith_ modalId cfg triggerM contentHtml = do
           div_ [class_ "space-y-2"] contentHtml
 
 
-confirmModal_ :: Text -> Text -> Text -> [Attribute] -> Text -> Html ()
-confirmModal_ modalId title description confirmAttrs confirmText =
+confirmModal_ :: I18n.Language -> Text -> Text -> Text -> [Attribute] -> Text -> Html ()
+confirmModal_ lang modalId title description confirmAttrs confirmText =
   modalWith_ modalId def{boxClass = "p-6", hideClose = True} Nothing do
     div_ [class_ "flex items-start gap-3 mb-4"] do
       iconBadgeWith_ "p-2" "h-5 w-5" "rounded-full" ErrorBadge "triangle-alert"
@@ -625,7 +626,7 @@ confirmModal_ modalId title description confirmAttrs confirmText =
         h3_ [class_ "text-lg font-semibold text-textStrong"] $ toHtml title
         p_ [class_ "text-sm text-textWeak mt-1"] $ toHtml description
     div_ [class_ "flex justify-end gap-2 mt-6"] do
-      label_ [class_ "btn btn-sm btn-ghost", Lucid.for_ modalId] "Cancel"
+      label_ [class_ "btn btn-sm btn-ghost", Lucid.for_ modalId] $ toHtml $ I18n.t lang "common.cancel"
       button_ ([class_ "btn btn-sm bg-fillError-strong text-white hover:opacity-90"] <> confirmAttrs) $ toHtml confirmText
 
 

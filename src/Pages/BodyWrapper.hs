@@ -34,14 +34,14 @@ mkPageCtx pid = do
   pure (sess, project, def{sessM = Just sess, currProject = Just project, config = appCtx.config})
 
 
-menu :: Projects.ProjectId -> [(Text, Text, Text)]
-menu pid =
-  [ ("Dashboards", "/p/" <> pid.toText <> "/dashboards", "dashboard")
-  , ("Explorer", "/p/" <> pid.toText <> "/log_explorer", "explore")
-  , ("API Catalog", "/p/" <> pid.toText <> "/api_catalog", "swap")
-  , ("Issues", "/p/" <> pid.toText <> "/issues", "bug")
-  , ("Monitors", "/p/" <> pid.toText <> "/monitors", "list-check")
-  , ("Reports", "/p/" <> pid.toText <> "/reports", "chart-simple")
+menu :: I18n.Language -> Projects.ProjectId -> [(Text, Text, Text)]
+menu lang pid =
+  [ (I18n.t lang "nav.dashboards", "/p/" <> pid.toText <> "/dashboards", "dashboard")
+  , (I18n.t lang "nav.explorer", "/p/" <> pid.toText <> "/log_explorer", "explore")
+  , (I18n.t lang "nav.api_catalog", "/p/" <> pid.toText <> "/api_catalog", "swap")
+  , (I18n.t lang "nav.issues", "/p/" <> pid.toText <> "/issues", "bug")
+  , (I18n.t lang "nav.monitors", "/p/" <> pid.toText <> "/monitors", "list-check")
+  , (I18n.t lang "nav.reports", "/p/" <> pid.toText <> "/reports", "chart-simple")
   ]
 
 
@@ -515,11 +515,11 @@ bodyWrapper bcfg child = do
                           button_ [class_ "fixed top-4 right-4 btn btn-sm btn-ghost bg-base-200 gap-1.5 text-textWeak z-50", [__|on click send paletteToggle to #cmd-palette-global|]] do
                             faSprite_ "magnifying-glass" "regular" "w-3.5 h-3.5"
                             kbd_ [class_ "kbd kbd-xs"] "\x2318K"
-                      else navbar bcfg.currProject (maybe [] (\p -> menu p.id) bcfg.currProject) currUser bcfg.prePageTitle bcfg.pageTitle bcfg.pageTitleSuffix bcfg.pageTitleModalId bcfg.pageTitleSuffixModalId bcfg.docsLink bcfg.navTabs bcfg.pageActions
+                      else navbar bcfg.currProject (maybe [] (\p -> menu sess.lang p.id) bcfg.currProject) currUser bcfg.prePageTitle bcfg.pageTitle bcfg.pageTitleSuffix bcfg.pageTitleModalId bcfg.pageTitleSuffixModalId bcfg.docsLink bcfg.navTabs bcfg.pageActions
                     main_ [id_ "main-content", class_ "overflow-y-auto h-full grow"] do
                       whenJust bcfg.currProject (\p -> freeTierUsageBanner p.id.toText bcfg.freeTierStatus)
                       if bcfg.isSettingsPage
-                        then maybe child (\p -> settingsWrapper p.id bcfg.pageTitle child) bcfg.currProject
+                        then maybe child (\p -> settingsWrapper sess.lang p.id bcfg.pageTitle child) bcfg.currProject
                         else child
                     div_ [class_ "h-0 shrink"] do
                       Components.drawer_ "global-data-drawer" Nothing Nothing ""
@@ -774,25 +774,25 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
                   span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block whitespace-nowrap truncate"] $ toHtml mTitle
                   when hasFlyout $ span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block ml-auto text-textWeak"] $ faSprite_ "chevron-right" "regular" "w-3 h-3"
               when hasFlyout $ div_ [class_ flyoutCls] $ mapM_ flyoutLink flyoutItems
-      let items = menu project.id
+      let items = menu sess.lang project.id
           (primary, secondary) = splitAt 2 items
-      mapM_ (\(mTitle, mUrl, fIcon) -> renderNavItem mTitle mUrl fIcon (navFlyoutItems pidTxt mTitle)) primary
+      mapM_ (\(mTitle, mUrl, fIcon) -> renderNavItem mTitle mUrl fIcon (navFlyoutItems sess.lang pidTxt mTitle)) primary
       div_ [class_ "border-t border-strokeWeak/50 my-1.5 mx-2"] ""
-      mapM_ (\(mTitle, mUrl, fIcon) -> renderNavItem mTitle mUrl fIcon (navFlyoutItems pidTxt mTitle)) secondary
+      mapM_ (\(mTitle, mUrl, fIcon) -> renderNavItem mTitle mUrl fIcon (navFlyoutItems sess.lang pidTxt mTitle)) secondary
       onboardingChecklist_ project
       div_ [class_ "border-t border-strokeWeak my-2"] ""
-      renderNavItem "Settings" ("/p/" <> pidTxt <> "/settings") "gear" (map (\(_, title, l) -> (title, l)) $ navBottomList pidTxt)
+      renderNavItem (I18n.t sess.lang "nav.settings") ("/p/" <> pidTxt <> "/settings") "gear" (map (\(_, title, l) -> (title, l)) $ navBottomList sess.lang pidTxt)
       a_
         [ href_ "https://monoscope.tech/docs/"
         , target_ "blank"
         , term "data-tippy-placement" "right"
-        , term "data-tippy-content" "Docs"
+        , term "data-tippy-content" $ I18n.t sess.lang "nav.docs"
         , class_ $ navLinkCls ""
         ]
         do
           faSprite_ "circle-question" "regular" "nav-icon w-4 h-4 shrink-0"
           span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex items-center gap-1.5 whitespace-nowrap truncate"] do
-            "Docs"
+            toHtml $ I18n.t sess.lang "nav.docs"
             faSprite_ "arrow-up-right" "regular" "w-3 h-3 text-textWeaker"
 
   div_ [class_ "py-2.5 px-2 group-has-[#sidenav-toggle:checked]/pg:px-3 border-t border-strokeWeak flex flex-col gap-1"] do
@@ -927,43 +927,44 @@ loginBanner = do
       a_ [class_ "py-1 px-2.5 rounded-lg bg-fillBrand-strong hover:opacity-90 text-textInverse-strong text-xs font-medium", href_ "/login"] "Start Free Trial"
 
 
-settingsWrapper :: Projects.ProjectId -> Text -> Html () -> Html ()
-settingsWrapper pid current pageHtml = do
+settingsWrapper :: I18n.Language -> Projects.ProjectId -> Text -> Html () -> Html ()
+settingsWrapper lang pid current pageHtml = do
   let
     navActiveStyles = "[&_.settings-nav-link]:hover:bg-fillWeak [&_.settings-nav-link]:text-textWeak [&_.settings-nav-link.active]:bg-fillBrand-weak [&_.settings-nav-link.active]:text-textBrand [&_.settings-nav-link.active]:hover:bg-fillBrand-weak"
   section_ [class_ "flex max-md:flex-col h-full w-full"] do
     nav_ [id_ "settings-nav", class_ "md:w-52 shrink-0 md:h-full max-md:px-3 max-md:py-2.5 p-4 md:pt-8 max-md:border-b max-md:border-b-strokeWeak md:border-r md:border-r-strokeWeak max-md:overflow-x-auto max-md:scrollbar-hide", term "preload" "mouseover"] do
-      h1_ [class_ "text-lg pl-3 font-semibold text-textStrong max-md:hidden"] "Settings"
+      h1_ [class_ "text-lg pl-3 font-semibold text-textStrong max-md:hidden"] $ toHtml $ I18n.t lang "nav.settings"
       ul_ [class_ $ "flex max-md:flex-row max-md:flex-nowrap md:flex-col md:mt-4 gap-0.5 w-full " <> navActiveStyles] do
         li_ [class_ "md:hidden shrink-0"]
           $ div_ [class_ "flex items-center px-2.5 py-2 rounded-lg cursor-pointer text-strokeStrong hover:bg-fillWeak", Aria.label_ "Open menu", [__|on click set #mobile-nav-toggle.checked to true|]]
           $ faSprite_ "side-chevron-left-in-box" "regular" "shrink-0 h-4.5 w-4.5 rotate-180"
-        mapM_ (renderNavBottomItem current) $ navBottomList pid.toText
+        mapM_ (renderNavBottomItem current) $ navBottomList lang pid.toText
     main_ [id_ "settings-content", class_ "relative w-full h-full overflow-y-auto"] do
       div_ [id_ settingsLoadingId, class_ "htmx-indicator absolute inset-0 z-10 bg-bgBase/60 flex items-center justify-center"] do
         loadingIndicatorWith_ LdMD LdSpinner "text-textBrand"
       pageHtml
 
 
-navBottomList :: Text -> [(Text, Text, Text)]
-navBottomList pidTxt =
-  [ ("gear", "Project", "/p/" <> pidTxt <> "/settings")
-  , ("key", "API Keys", "/p/" <> pidTxt <> "/apis")
-  , ("users", "Team", "/p/" <> pidTxt <> "/manage_members")
-  , ("arrows-turn-right", "Integrations", "/p/" <> pidTxt <> "/settings/integrations")
-  , ("dollar", "Billing", "/p/" <> pidTxt <> "/manage_billing")
+navBottomList :: I18n.Language -> Text -> [(Text, Text, Text)]
+navBottomList lang pidTxt =
+  [ ("gear", I18n.t lang "nav.project", "/p/" <> pidTxt <> "/settings")
+  , ("key", I18n.t lang "nav.api_keys", "/p/" <> pidTxt <> "/apis")
+  , ("users", I18n.t lang "nav.team", "/p/" <> pidTxt <> "/manage_members")
+  , ("arrows-turn-right", I18n.t lang "nav.integrations", "/p/" <> pidTxt <> "/settings/integrations")
+  , ("dollar", I18n.t lang "nav.billing", "/p/" <> pidTxt <> "/manage_billing")
   ]
 
 
-navFlyoutItems :: Text -> Text -> [(Text, Text)]
-navFlyoutItems pidTxt = \case
-  "Explorer" -> [("Events", p "/log_explorer"), ("Metrics", p "/metrics")]
-  "API Catalog" -> [("Incoming", p "/api_catalog?request_type=Incoming"), ("Outgoing", p "/api_catalog?request_type=Outgoing")]
-  "Issues" -> [("Inbox", p "/issues?filter=Inbox"), ("Acknowledged", p "/issues?filter=Acknowledged"), ("Archived", p "/issues?filter=Archived")]
-  "Monitors" -> [("Active", p "/monitors?filter=Active"), ("Inactive", p "/monitors?filter=Inactive"), ("New Monitor", p "/log_explorer#create-alert-toggle")]
-  _ -> []
+navFlyoutItems :: I18n.Language -> Text -> Text -> [(Text, Text)]
+navFlyoutItems lang pidTxt name
+  | name == I18n.t lang "nav.explorer" = [(tr "events", p "/log_explorer"), (tr "metrics", p "/metrics")]
+  | name == I18n.t lang "nav.api_catalog" = [(tr "incoming", p "/api_catalog?request_type=Incoming"), (tr "outgoing", p "/api_catalog?request_type=Outgoing")]
+  | name == I18n.t lang "nav.issues" = [(tr "inbox", p "/issues?filter=Inbox"), (tr "acknowledged", p "/issues?filter=Acknowledged"), (tr "archived", p "/issues?filter=Archived")]
+  | name == I18n.t lang "nav.monitors" = [(tr "active", p "/monitors?filter=Active"), (tr "inactive", p "/monitors?filter=Inactive"), (tr "new_monitor", p "/log_explorer#create-alert-toggle")]
+  | otherwise = []
   where
     p path = "/p/" <> pidTxt <> path
+    tr key = I18n.t lang ("nav.flyout." <> key)
 
 
 settingsContentTarget :: Text
@@ -978,7 +979,7 @@ renderNavBottomItem :: Text -> (Text, Text, Text) -> Html ()
 renderNavBottomItem curr (iconName, linkText, link) =
   li_ [] do
     a_
-      [ class_ $ "settings-nav-link flex gap-2 md:gap-3 items-center px-2.5 md:px-3 py-2 rounded-lg whitespace-nowrap" <> if curr == linkText then " active" else ""
+      [ class_ $ "settings-nav-link flex gap-2 md:gap-3 items-center px-2.5 md:px-3 py-2 rounded-lg whitespace-nowrap" <> if curr `elem` activeNames then " active" else ""
       , term "data-tippy-placement" "right"
       , term "data-tippy-content" linkText
       , href_ link
@@ -994,6 +995,14 @@ renderNavBottomItem curr (iconName, linkText, link) =
       do
         faSprite_ iconName "regular" "shrink-0 h-4 w-4"
         span_ [class_ "text-sm font-medium"] (toHtml linkText)
+  where
+    activeNames = linkText : case iconName of
+      "gear" -> ["Project", "Project Settings"]
+      "key" -> ["API Keys"]
+      "users" -> ["Team", "Members"]
+      "arrows-turn-right" -> ["Integrations"]
+      "dollar" -> ["Billing"]
+      _ -> []
 
 
 externalHeadScripts_ :: EnvConfig -> Html ()
