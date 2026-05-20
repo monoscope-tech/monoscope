@@ -52,6 +52,15 @@ services:
       - SHOW_DEMO_PROJECT=False
       - AUTH0_LOGOUT_REDIRECT=${AUTH0_LOGOUT_REDIRECT:-}
       - AUTH0_CALLBACK=${AUTH0_CALLBACK:-}
+      # SMTP: empty SMTP_HOST falls back to Postmark; set a host to enable direct SMTP.
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_TLS=${SMTP_TLS:-False}
+      - SMTP_USERNAME=${SMTP_USERNAME:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SMTP_SENDER=${SMTP_SENDER:-notifications@monoscope.local}
+      # Telegram bot: create one via @BotFather and paste its token below.
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
     depends_on:
       timescaledb:
         condition: service_healthy

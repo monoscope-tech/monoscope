@@ -978,6 +978,8 @@ teamDetailsFromInput inp =
     , discordChannels = vml inp.discordChannels
     , phoneNumbers = vml inp.phoneNumbers
     , pagerdutyServices = vml inp.pagerdutyServices
+    , telegramChats = V.empty
+    , webhookUrls = V.empty
     , disabledChannels = V.empty
     }
   where

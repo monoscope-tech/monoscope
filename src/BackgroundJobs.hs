@@ -95,6 +95,7 @@ import Pkg.SchemaLearning.Worker qualified as SchemaWorker
 
 -- Fields module is being deleted; remove its import.
 -- (Old usages of Fields.bulkInsertX / Fields.generateAndSaveFacets are gone.)
+import Data.Effectful.Notify qualified as Notify
 import Pkg.Mail (NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendDiscordAlertWith, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendSlackAlertWith, sendSlackMessage, sendWhatsAppAlert)
 import Pkg.Parser
 import Pkg.PatternMerge qualified as PatternMerge
@@ -1011,9 +1012,45 @@ sendAlertToChannels alert pid project users alertUrl subj html (initSlackTs, ini
       when (enabled "email") do
         let rendered = ET.renderEmail subj html
         forM_ users \u -> sendRenderedEmail (CI.original u.email) subj rendered
+      when (enabled "telegram" && not (V.null team.telegram_chats)) do
+        let body = telegramAlertText project.title subj alertUrl
+        forM_ team.telegram_chats \chat -> Notify.sendNotification $ Notify.telegramNotification chat body
+      when (enabled "webhook" && not (V.null team.webhook_urls)) do
+        let body = webhookAlertJson pid project.title subj alertUrl
+        forM_ team.webhook_urls \webhookUrl -> Notify.sendNotification $ Notify.webhookNotification webhookUrl body
       when (enabled "pagerduty")
         $ forM_ team.pagerduty_services \k -> sendPagerdutyAlertToService k alert project.title alertUrl
       pure (slackTs, discordMsgId, True)
+
+
+-- | Generic plain-text body for Telegram. We use a tiny HTML formatting subset
+-- (link via @<a href="…">…</a>@) and rely on the bot's parse_mode=HTML setting.
+-- Telegram's HTML mode is very limited so we keep it to a single bolded
+-- subject + a link to the alert.
+telegramAlertText :: Text -> Text -> Text -> Text
+telegramAlertText projectTitle subj alertUrl =
+  "<b>" <> escapeHtml subj <> "</b>\n"
+    <> escapeHtml projectTitle
+    <> "\n\n"
+    <> "<a href=\""
+    <> alertUrl
+    <> "\">View in Monoscope</a>"
+  where
+    escapeHtml = T.replace "<" "&lt;" . T.replace ">" "&gt;" . T.replace "&" "&amp;"
+
+
+-- | Generic JSON body for outbound webhooks. Stable shape so receivers can
+-- pattern-match on @event@, project, and alert metadata.
+webhookAlertJson :: Projects.ProjectId -> Text -> Text -> Text -> AE.Value
+webhookAlertJson pid projectTitle subj alertUrl =
+  AE.object
+    [ "event" AE..= ("alert" :: Text)
+    , "project_id" AE..= pid.toText
+    , "project_title" AE..= projectTitle
+    , "title" AE..= subj
+    , "url" AE..= alertUrl
+    , "source" AE..= ("monoscope" :: Text)
+    ]
 
 
 trendChartUrl :: Log :> es => Config.AuthContext -> Projects.ProjectId -> Widget.Widget -> Text -> Text -> Eff es (Maybe Text)

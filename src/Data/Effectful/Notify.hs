@@ -16,6 +16,8 @@ module Data.Effectful.Notify (
   PagerdutyData (..),
   PagerdutyAction (..),
   PagerdutySeverity (..),
+  TelegramData (..),
+  WebhookData (..),
 
   -- * Interpreters
   runNotifyProduction,
@@ -31,6 +33,8 @@ module Data.Effectful.Notify (
   discordNotification,
   discordThreadedNotification,
   pagerdutyNotification,
+  telegramNotification,
+  webhookNotification,
 ) where
 
 import Control.Exception (try)
@@ -139,12 +143,40 @@ data PagerdutyData = PagerdutyData
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
+-- | Telegram bot delivery. Bot token comes from env (TELEGRAM_BOT_TOKEN).
+-- @chatId@ is the destination — for private chat with the user it's the
+-- numeric user id; for a group it's the negative numeric group id (or @-100…
+-- for supergroups); for a channel it's the @-100…@ form. The bot must have
+-- been started by the user (private) or added to the chat (group/channel)
+-- before any message can be sent.
+data TelegramData = TelegramData
+  { chatId :: Text
+  , text :: Text
+  , parseMode :: Text -- "HTML" | "MarkdownV2" | ""
+  }
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+-- | Generic outbound webhook. JSON payload POSTed to @url@. Used for
+-- self-service "send a JSON copy of every alert to this endpoint" wiring
+-- — the receiver gets the full event body and decides what to do with it.
+data WebhookData = WebhookData
+  { url :: Text
+  , payload :: AE.Value
+  }
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
 data Notification
   = EmailNotification EmailData
   | SlackNotification SlackData
   | DiscordNotification DiscordData
   | WhatsAppNotification WhatsAppData
   | PagerdutyNotification PagerdutyData
+  | TelegramNotification TelegramData
+  | WebhookNotification WebhookData
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -211,6 +243,17 @@ pagerdutyNotification integrationKey eventAction dedupKey summary severity custo
   PagerdutyNotification PagerdutyData{..}
 
 
+-- | Send plain or HTML-formatted text to a Telegram chat via the global bot.
+-- Default parse mode is "HTML" (Telegram's lightest markup).
+telegramNotification :: Text -> Text -> Notification
+telegramNotification chatId text = TelegramNotification TelegramData{chatId, text, parseMode = "HTML"}
+
+
+-- | POST an arbitrary JSON body to a user-supplied webhook URL.
+webhookNotification :: Text -> AE.Value -> Notification
+webhookNotification url payload = WebhookNotification WebhookData{url, payload}
+
+
 -- Production interpreter
 runNotifyProduction :: (IOE :> es, Log :> es, Reader Config.AuthContext :> es) => Eff (Notify ': es) a -> Eff es a
 runNotifyProduction = interpret $ \_ -> \case
@@ -262,6 +305,8 @@ runNotifyProduction = interpret $ \_ -> \case
               :: [FormParam]
       resp <- liftIO $ postWith opts url payload
       pass
+    TelegramNotification td -> sendTelegram td
+    WebhookNotification wd -> sendWebhook wd
     PagerdutyNotification PagerdutyData{..} -> do
       let actionText = display eventAction
           severityText = display severity
@@ -456,6 +501,54 @@ runNotifyProduction = interpret $ \_ -> \case
           pure Nothing
 
 
+    -- Telegram: POST to https://api.telegram.org/bot<token>/sendMessage
+    -- Bot token comes from global env var. If unset, skip with attention log
+    -- so the operator knows why notifications aren't firing.
+    sendTelegram :: (IOE :> es, Log :> es, Reader Config.AuthContext :> es) => TelegramData -> Eff es ()
+    sendTelegram TelegramData{chatId, text, parseMode} = do
+      appCtx <- ask @Config.AuthContext
+      let tok = appCtx.config.telegramBotToken
+      if tok == ""
+        then Log.logAttention "Telegram notification skipped: TELEGRAM_BOT_TOKEN not configured" (AE.object ["chat_id" AE..= chatId])
+        else do
+          let endpoint = toString $ "https://api.telegram.org/bot" <> tok <> "/sendMessage"
+              opts = defaults & header "Content-Type" .~ ["application/json"]
+              body =
+                AE.object
+                  $ catMaybes
+                    [ Just $ "chat_id" AE..= chatId
+                    , Just $ "text" AE..= text
+                    , if T.null parseMode then Nothing else Just $ "parse_mode" AE..= parseMode
+                    , Just $ "disable_web_page_preview" AE..= True
+                    ]
+          result <- liftIO $ try @SomeException $ postWith opts endpoint body
+          case result of
+            Right re | statusIsSuccessful (re ^. responseStatus) -> pass
+            Right re ->
+              Log.logAttention
+                "Telegram notification failed"
+                (AE.object ["chat_id" AE..= chatId, "status" AE..= show @Text (re ^. responseStatus), "body" AE..= decodeUtf8 @Text (toStrict (re ^. responseBody))])
+            Left ex ->
+              Log.logAttention "Telegram notification failed" (AE.object ["chat_id" AE..= chatId, "error" AE..= displayException ex])
+
+
+    -- Generic webhook: POST JSON payload to user-supplied URL.
+    sendWebhook :: (IOE :> es, Log :> es) => WebhookData -> Eff es ()
+    sendWebhook WebhookData{url, payload} = do
+      let opts = defaults & header "Content-Type" .~ ["application/json"] & header "User-Agent" .~ ["Monoscope/webhook"]
+      result <- liftIO $ try @SomeException $ timeout 15_000_000 $ postWith opts (toString url) payload
+      case result of
+        Right (Just re) | statusIsSuccessful (re ^. responseStatus) -> pass
+        Right (Just re) ->
+          Log.logAttention
+            "Webhook notification failed"
+            (AE.object ["url" AE..= url, "status" AE..= show @Text (re ^. responseStatus)])
+        Right Nothing ->
+          Log.logAttention "Webhook notification timed out after 15s" (AE.object ["url" AE..= url])
+        Left ex ->
+          Log.logAttention "Webhook notification failed" (AE.object ["url" AE..= url, "error" AE..= displayException ex])
+
+
 -- Test interpreter that stores notifications in provided IORef
 runNotifyTest :: (IOE :> es, Log :> es) => IORef [Notification] -> Eff (Notify ': es) a -> Eff es a
 runNotifyTest ref = interpret \_ -> \case
@@ -466,6 +559,8 @@ runNotifyTest ref = interpret \_ -> \case
           DiscordNotification discordData -> ("Discord" :: Text, discordData.channelId, Nothing :: Maybe Text)
           WhatsAppNotification whatsappData -> ("WhatsApp" :: Text, whatsappData.to, Just whatsappData.template)
           PagerdutyNotification pagerdutyData -> ("PagerDuty" :: Text, pagerdutyData.dedupKey, Just pagerdutyData.summary)
+          TelegramNotification td -> ("Telegram" :: Text, td.chatId, Just (T.take 80 td.text))
+          WebhookNotification wd -> ("Webhook" :: Text, wd.url, Nothing :: Maybe Text)
     Log.logTrace "Notification" notifInfo
     Log.logTrace "Notification payload" notification
     liftIO $ modifyIORef ref (notification :)

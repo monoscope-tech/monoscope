@@ -37,6 +37,8 @@ module Models.Projects.ProjectMembers (
   removePagerdutyServicesFromEveryoneTeam,
   setEveryoneTeamEmails,
   setEveryoneTeamPhones,
+  setEveryoneTeamTelegrams,
+  setEveryoneTeamWebhooks,
   setEveryoneTeamDisabledChannels,
   isChannelEnabled,
   isEveryoneChannelEnabled,
@@ -297,19 +299,21 @@ data TeamDetails = TeamDetails
   , discordChannels :: V.Vector Text
   , phoneNumbers :: V.Vector Text
   , pagerdutyServices :: V.Vector Text
+  , telegramChats :: V.Vector Text
+  , webhookUrls :: V.Vector Text
   , disabledChannels :: V.Vector Text
   }
   deriving stock (Eq, Generic, Show)
 
 
 createTeam :: DB es => Projects.ProjectId -> Maybe Projects.UserId -> TeamDetails -> Eff es (Maybe UUID.UUID)
-createTeam pid uidM TeamDetails{name, description, handle, members, notifyEmails, slackChannels, discordChannels, phoneNumbers, pagerdutyServices, disabledChannels}
+createTeam pid uidM TeamDetails{name, description, handle, members, notifyEmails, slackChannels, discordChannels, phoneNumbers, pagerdutyServices, telegramChats, webhookUrls, disabledChannels}
   | handle == "everyone" = pure Nothing -- Prevent creating team with reserved handle
   | otherwise =
       Hasql.interpOne
         [HI.sql| INSERT INTO projects.teams
-               (project_id, created_by, name, description, handle, members, notify_emails, slack_channels, discord_channels, phone_numbers, pagerduty_services, disabled_channels)
-               VALUES (#{pid}, #{uidM}, #{name}, #{description}, #{handle}, #{members}::uuid[], #{notifyEmails}, #{slackChannels}, #{discordChannels}, #{phoneNumbers}, #{pagerdutyServices}, #{disabledChannels})
+               (project_id, created_by, name, description, handle, members, notify_emails, slack_channels, discord_channels, phone_numbers, pagerduty_services, telegram_chats, webhook_urls, disabled_channels)
+               VALUES (#{pid}, #{uidM}, #{name}, #{description}, #{handle}, #{members}::uuid[], #{notifyEmails}, #{slackChannels}, #{discordChannels}, #{phoneNumbers}, #{pagerdutyServices}, #{telegramChats}, #{webhookUrls}, #{disabledChannels})
                ON CONFLICT (project_id, handle) DO NOTHING
                RETURNING id |]
 
@@ -318,9 +322,9 @@ createEveryoneTeam :: DB es => Projects.ProjectId -> Projects.UserId -> Eff es I
 createEveryoneTeam pid uid =
   Hasql.interpExecute
     [HI.sql| INSERT INTO projects.teams
-           (project_id, created_by, name, description, handle, is_everyone, members, notify_emails, slack_channels, discord_channels, phone_numbers, pagerduty_services, disabled_channels)
+           (project_id, created_by, name, description, handle, is_everyone, members, notify_emails, slack_channels, discord_channels, phone_numbers, pagerduty_services, telegram_chats, webhook_urls, disabled_channels)
            VALUES (#{pid}, #{uid}, 'Everyone', 'All project members and configured integrations', 'everyone', TRUE,
-                   '{}'::uuid[], '{}'::text[], '{}'::text[], '{}'::text[], '{}'::text[], '{}'::text[], '{}'::text[])
+                   '{}'::uuid[], '{}'::text[], '{}'::text[], '{}'::text[], '{}'::text[], '{}'::text[], '{}'::text[], '{}'::text[], '{}'::text[])
            ON CONFLICT (project_id, handle) DO NOTHING |]
 
 
@@ -331,10 +335,10 @@ getEveryoneTeam pid =
 
 
 updateTeam :: DB es => Projects.ProjectId -> UUID.UUID -> TeamDetails -> Eff es Int64
-updateTeam pid tid TeamDetails{name, description, handle, members, notifyEmails, slackChannels, discordChannels, phoneNumbers, pagerdutyServices, disabledChannels} =
+updateTeam pid tid TeamDetails{name, description, handle, members, notifyEmails, slackChannels, discordChannels, phoneNumbers, pagerdutyServices, telegramChats, webhookUrls, disabledChannels} =
   Hasql.interpExecute
     [HI.sql| UPDATE projects.teams
-           SET name = #{name}, description = #{description}, handle = #{handle}, members = #{members}::uuid[], notify_emails = #{notifyEmails}, slack_channels = #{slackChannels}, discord_channels = #{discordChannels}, phone_numbers = #{phoneNumbers}, pagerduty_services = #{pagerdutyServices}, disabled_channels = #{disabledChannels}
+           SET name = #{name}, description = #{description}, handle = #{handle}, members = #{members}::uuid[], notify_emails = #{notifyEmails}, slack_channels = #{slackChannels}, discord_channels = #{discordChannels}, phone_numbers = #{phoneNumbers}, pagerduty_services = #{pagerdutyServices}, telegram_chats = #{telegramChats}, webhook_urls = #{webhookUrls}, disabled_channels = #{disabledChannels}
            WHERE project_id = #{pid} AND id = #{tid} |]
 
 
@@ -354,6 +358,8 @@ data Team = Team
   , pagerduty_services :: V.Vector Text
   , disabled_channels :: V.Vector Text
   , is_everyone :: Bool
+  , telegram_chats :: V.Vector Text
+  , webhook_urls :: V.Vector Text
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (FromRow, HI.DecodeRow, NFData)
@@ -385,6 +391,8 @@ getTeamsVM pid =
         t.pagerduty_services,
         t.disabled_channels,
         t.is_everyone,
+        t.telegram_chats,
+        t.webhook_urls,
         COALESCE(
           array_agg(
             jsonb_build_object(
@@ -421,6 +429,8 @@ data TeamVM = TeamVM
   , pagerduty_services :: V.Vector Text
   , disabled_channels :: V.Vector Text
   , is_everyone :: Bool
+  , telegram_chats :: V.Vector Text
+  , webhook_urls :: V.Vector Text
   , members :: V.Vector TeamMemberVM
   }
   deriving stock (Eq, Generic, Show)
@@ -489,6 +499,8 @@ getTeamsByHandles pid handles =
         t.pagerduty_services,
         t.disabled_channels,
         t.is_everyone,
+        t.telegram_chats,
+        t.webhook_urls,
         COALESCE(
           array_agg(
             jsonb_build_object(
@@ -511,7 +523,7 @@ getTeamsByHandles pid handles =
 
 -- | Convert Team to TeamDetails for updates
 teamToDetails :: Team -> TeamDetails
-teamToDetails t = TeamDetails{name = t.name, description = t.description, handle = t.handle, members = t.members, notifyEmails = t.notify_emails, slackChannels = t.slack_channels, discordChannels = t.discord_channels, phoneNumbers = t.phone_numbers, pagerdutyServices = t.pagerduty_services, disabledChannels = t.disabled_channels}
+teamToDetails t = TeamDetails{name = t.name, description = t.description, handle = t.handle, members = t.members, notifyEmails = t.notify_emails, slackChannels = t.slack_channels, discordChannels = t.discord_channels, phoneNumbers = t.phone_numbers, pagerdutyServices = t.pagerduty_services, telegramChats = t.telegram_chats, webhookUrls = t.webhook_urls, disabledChannels = t.disabled_channels}
 
 
 -- | Run a TeamDetails update against the @everyone team. When the team is
@@ -566,10 +578,14 @@ removePagerdutyServicesFromEveryoneTeam pid = modifyEveryoneTeamDetails pid \d -
 
 setEveryoneTeamEmails
   , setEveryoneTeamPhones
+  , setEveryoneTeamTelegrams
+  , setEveryoneTeamWebhooks
   , setEveryoneTeamDisabledChannels
     :: (DB es, Log :> es) => Projects.ProjectId -> V.Vector Text -> Eff es ()
 setEveryoneTeamEmails pid v = modifyEveryoneTeamDetails pid \d -> d{notifyEmails = v}
 setEveryoneTeamPhones pid v = modifyEveryoneTeamDetails pid \d -> d{phoneNumbers = v}
+setEveryoneTeamTelegrams pid v = modifyEveryoneTeamDetails pid \d -> d{telegramChats = v}
+setEveryoneTeamWebhooks pid v = modifyEveryoneTeamDetails pid \d -> d{webhookUrls = v}
 setEveryoneTeamDisabledChannels pid v = modifyEveryoneTeamDetails pid \d -> d{disabledChannels = v}
 
 
@@ -608,6 +624,8 @@ teamHasAnyEnabledChannel t =
     , ("discord", t.discord_channels)
     , ("phone", t.phone_numbers)
     , ("pagerduty", t.pagerduty_services)
+    , ("telegram", t.telegram_chats)
+    , ("webhook", t.webhook_urls)
     ]
   where
     populatedAndEnabled (ch, xs) = not (V.null xs) && isChannelEnabled ch t

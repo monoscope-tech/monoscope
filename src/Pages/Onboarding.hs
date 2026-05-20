@@ -152,6 +152,8 @@ newtype DiscordForm = DiscordForm {url :: Text}
 data NotifChannelForm = NotifChannelForm
   { phoneNumber :: Text
   , emails :: [Text]
+  , telegramChats :: Maybe Text
+  , webhookUrls :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON, FromForm)
@@ -294,11 +296,20 @@ phoneEmailPostH pid form = do
       stepsCompleted = project.onboardingStepsCompleted
       newCompleted = insertIfNotExist "NotifChannel" stepsCompleted
       emailsVec = V.fromList emails
+      -- Telegram chat IDs and webhook URLs come in as newline / comma
+      -- separated text from the onboarding form. We split, trim, and drop
+      -- empties so the array we persist is clean and stable.
+      splitMulti :: Text -> [Text]
+      splitMulti = filter (not . T.null) . map T.strip . concatMap (T.splitOn ",") . T.lines
+      telegramChats = V.fromList $ splitMulti $ fromMaybe "" form.telegramChats
+      webhookUrls = V.fromList $ splitMulti $ fromMaybe "" form.webhookUrls
   projectMembers <- Projects.usersByProjectId pid
   let emails' = (\u -> CI.original u.email) <$> projectMembers
   _ <- Hasql.interpExecute [HI.sql| update projects.projects set onboarding_steps_completed=#{newCompleted} where id=#{pid} |]
   ProjectMembers.setEveryoneTeamEmails pid emailsVec
   when (phone /= "") $ ProjectMembers.setEveryoneTeamPhones pid (V.fromList [phone])
+  ProjectMembers.setEveryoneTeamTelegrams pid telegramChats
+  ProjectMembers.setEveryoneTeamWebhooks pid webhookUrls
   addRespHeaders $ OnboardingPhoneEmailsPost pid (V.fromList $ ordNub $ emails <> emails') envCfg.enableFreetier
 
 
@@ -885,7 +896,7 @@ notifChannelsWithUrls slackUrl discordUrl pid phone emails hasDiscord hasSlack l
             [ class_ "flex flex-col gap-8"
             , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/phone-emails"
             , hxExt_ "json-enc"
-            , hxVals_ "js:{phoneNumber: document.getElementById('phoneNumber').value , emails: window.getTagValues('#emails')}"
+            , hxVals_ "js:{phoneNumber: document.getElementById('phoneNumber').value, emails: window.getTagValues('#emails'), telegramChats: document.getElementById('telegramChats').value, webhookUrls: document.getElementById('webhookUrls').value}"
             , hxTarget_ "#inviteModalContainer"
             , hxSwap_ "innerHTML"
             , hxIndicator_ "#loadingIndicator"
@@ -894,6 +905,33 @@ notifChannelsWithUrls slackUrl discordUrl pid phone emails hasDiscord hasSlack l
               formField_ FieldMd def{inputType = "tel", value = phone} (I18n.t lang "onboarding.notif.phone") "phoneNumber" False Nothing
               let tgs = decodeUtf8 $ AE.encode $ V.toList emails
               formField_ FieldMd def (I18n.t lang "onboarding.notif.email") "emails" False $ Just $ tagInput_ "emails" "" [data_ "tagify-initial" tgs]
+              -- Telegram chat IDs (multi-line / comma-separated). To get a chat
+              -- id the user starts a chat with the configured bot (or adds it
+              -- to a group) and visits /getUpdates — the form just accepts a
+              -- list of ids and lets the bot deliver alerts later.
+              div_ [class_ "flex-col gap-2 flex"] $ do
+                label_ [Lucid.for_ "telegramChats", class_ "text-sm text-textStrong font-medium"] $ toHtml $ I18n.t lang "onboarding.notif.telegram"
+                textarea_
+                  [ id_ "telegramChats"
+                  , name_ "telegramChats"
+                  , rows_ "2"
+                  , placeholder_ "123456789, -1002022334455"
+                  , class_ "w-full border border-strokeWeak rounded-md p-2 text-sm font-mono bg-bgRaised"
+                  ]
+                  ""
+                p_ [class_ "text-xs text-textWeak"] $ toHtml $ I18n.t lang "onboarding.notif.telegram_help"
+              -- Generic outbound webhooks (one URL per line or comma-separated).
+              div_ [class_ "flex-col gap-2 flex"] $ do
+                label_ [Lucid.for_ "webhookUrls", class_ "text-sm text-textStrong font-medium"] $ toHtml $ I18n.t lang "onboarding.notif.webhooks"
+                textarea_
+                  [ id_ "webhookUrls"
+                  , name_ "webhookUrls"
+                  , rows_ "2"
+                  , placeholder_ "https://example.com/hooks/alerts"
+                  , class_ "w-full border border-strokeWeak rounded-md p-2 text-sm font-mono bg-bgRaised"
+                  ]
+                  ""
+                p_ [class_ "text-xs text-textWeak"] $ toHtml $ I18n.t lang "onboarding.notif.webhooks_help"
               div_ [class_ "items-center gap-4 flex"] $ do
                 button_ [class_ "btn-primary px-8 py-3 text-xl rounded-xl cursor-pointer flex items-center"] $ toHtml $ I18n.t lang "onboarding.notif.proceed"
       script_
