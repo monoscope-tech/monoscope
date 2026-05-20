@@ -1491,7 +1491,7 @@ processProjectPostForm cpRaw pid = do
 createProjectBody :: I18n.Language -> Projects.PersistentSession -> Projects.ProjectId -> EnvConfig -> Text -> CreateProjectForm -> CreateProjectFormError -> Projects.Project -> Html ()
 createProjectBody lang sess pid envCfg paymentPlan cp cpe proj = do
   settingsSection_ do
-    settingsH2_ $ I18n.t lang "nav.project"
+    settingsH2_ $ I18n.t lang "settings.general"
 
     form_
       [ class_ "space-y-5 sm:space-y-8"
