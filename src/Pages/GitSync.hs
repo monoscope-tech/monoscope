@@ -44,6 +44,7 @@ import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders)
 import Utils (LoadingSize (..), faSprite_, htmxIndicator_, renderMarkdown)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (parseUrlPiece)
+import Web.I18n qualified as I18n
 import "cryptonite" Crypto.Hash (SHA256)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
@@ -140,10 +141,10 @@ validateWebhookSignature (Just secret) (Just sig) body =
 
 gitSyncSettingsGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 gitSyncSettingsGetH pid = do
-  (_, _, bw) <- mkPageCtx pid
+  (sess, _, bw) <- mkPageCtx pid
   ctx <- ask @Config.AuthContext
   syncM <- GitSync.getGitHubSync pid
-  addRespHeaders $ bodyWrapper bw{pageTitle = "Integrations", isSettingsPage = True} $ gitSyncSettingsPage ctx.env.hostUrl pid syncM
+  addRespHeaders $ bodyWrapper bw{pageTitle = "Integrations", isSettingsPage = True} $ gitSyncSettingsPage sess.lang ctx.env.hostUrl pid syncM
 
 
 gitSyncSettingsPostH :: Projects.ProjectId -> GitSyncForm -> ATAuthCtx (RespHeaders (Html ()))
@@ -183,8 +184,8 @@ gitSyncSettingsDeleteH pid = do
   addRespHeaders $ gitSyncSettingsView ctx.env.hostUrl pid Nothing
 
 
-gitSyncSettingsPage :: Text -> Projects.ProjectId -> Maybe GitSync.GitHubSync -> Html ()
-gitSyncSettingsPage hostUrl pid syncM = settingsSection_ do
+gitSyncSettingsPage :: I18n.Language -> Text -> Projects.ProjectId -> Maybe GitSync.GitHubSync -> Html ()
+gitSyncSettingsPage lang hostUrl pid syncM = settingsSection_ do
   settingsH2_ "GitHub Sync"
   div_ [id_ "git-sync-content"] $ gitSyncSettingsView hostUrl pid syncM
 
@@ -272,7 +273,7 @@ connectedView hostUrl pid sync actionUrl webhookUrl isViaApp = do
         faSprite_ "link-slash" "regular" "w-3 h-3"
         span_ "Disconnect"
 
-  confirmModal_ "disconnect-modal" "Disconnect GitHub?" "This will stop syncing dashboards with your repository. Dashboards will remain unchanged." [hxDelete_ actionUrl, hxSwap_ "innerHTML", hxTarget_ "#git-sync-content"] "Disconnect"
+  confirmModal_ lang "disconnect-modal" "Disconnect GitHub?" "This will stop syncing dashboards with your repository. Dashboards will remain unchanged." [hxDelete_ actionUrl, hxSwap_ "innerHTML", hxTarget_ "#git-sync-content"] "Disconnect"
 
   -- Setup instructions for PAT users
   unless isViaApp $ div_ [class_ "pt-6 border-t border-strokeWeak"] do
