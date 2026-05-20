@@ -35,7 +35,7 @@ import Control.Monad.Except qualified as T
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens (key, _String)
 import Data.Aeson.Types (FromJSON, ToJSON)
-import Crypto.KDF.BCrypt qualified as BCrypt
+import "cryptonite" Crypto.KDF.BCrypt qualified as BCrypt
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as EHasql
 import Data.Effectful.UUID (UUIDEff, runUUID)
@@ -458,8 +458,8 @@ registerPostH form = do
   unless envCfg.localAuthEnabled $ throwError err404
   usersCount <- Projects.countUsers
   let lang = parseLanguage envCfg.defaultLanguage
-      defaults = AuthPages.RegisterDefaults{firstName = form.firstName, lastName = form.lastName, email = form.email, redirectTo = form.redirectTo}
-      renderRegister err = pure $ addHeader "" $ addHeader emptySessionCookie $ AuthPages.registerPage envCfg lang (usersCount == 0) (Just err) defaults
+      regDefaults = AuthPages.RegisterDefaults{firstName = form.firstName, lastName = form.lastName, email = form.email, redirectTo = form.redirectTo}
+      renderRegister err = pure $ addHeader "" $ addHeader emptySessionCookie $ AuthPages.registerPage envCfg lang (usersCount == 0) (Just err) regDefaults
       redirectTo = fromMaybe "/" form.redirectTo
   if usersCount > 0 && not envCfg.allowRegistration
     then renderRegister $ t lang "auth.register.error_closed"
@@ -568,11 +568,17 @@ createPersistentSession userId = do
 
 
 hashPwd :: Text -> IO Text
-hashPwd pw = decodeUtf8 <$> BCrypt.hashPassword 12 (encodeUtf8 pw)
+hashPwd pw = do
+  let pwBs = encodeUtf8 pw :: ByteString
+  hashed <- BCrypt.hashPassword 12 pwBs :: IO ByteString
+  pure $ decodeUtf8 hashed
 
 
 verifyPwd :: Text -> Text -> Bool
-verifyPwd plain hashed = BCrypt.validatePassword (encodeUtf8 plain) (encodeUtf8 hashed)
+verifyPwd plain hashed =
+  let plainBs = encodeUtf8 plain :: ByteString
+      hashedBs = encodeUtf8 hashed :: ByteString
+   in BCrypt.validatePassword plainBs hashedBs
 
 
 emptyRegisterDefaults :: AuthPages.RegisterDefaults

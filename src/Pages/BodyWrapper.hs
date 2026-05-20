@@ -781,7 +781,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
       mapM_ (\(mTitle, mUrl, fIcon) -> renderNavItem mTitle mUrl fIcon (navFlyoutItems pidTxt mTitle)) secondary
       onboardingChecklist_ project
       div_ [class_ "border-t border-strokeWeak my-2"] ""
-      renderNavItem "Settings" ("/p/" <> pidTxt <> "/settings") "gear" (map (\(_, t, l) -> (t, l)) $ navBottomList pidTxt)
+      renderNavItem "Settings" ("/p/" <> pidTxt <> "/settings") "gear" (map (\(_, title, l) -> (title, l)) $ navBottomList pidTxt)
       a_
         [ href_ "https://monoscope.tech/docs/"
         , target_ "blank"
