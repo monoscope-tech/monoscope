@@ -20,6 +20,8 @@ import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx)
 import Utils (FreeTierStatus (..), LoadingSize (..), LoadingType (..), faSprite_, fieldContextMenuItems_, freeTierUsageBanner, loadingIndicatorWith_, loadingIndicator_, navTabAttrs)
+import Web.I18n qualified as I18n
+import Web.I18n (t)
 
 
 -- | Page-handler bootstrap. Loads (session, project), reads AuthContext, and seeds
@@ -831,9 +833,17 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
           div_ [class_ "font-medium text-textStrong truncate"] $ toHtml userIdentifier
           div_ [class_ "text-textWeak text-xs truncate"] $ toHtml $ CI.original currUser.email
         div_ [class_ "divider my-0"] ""
+        li_ [class_ "menu-title px-3 pt-2"] $ toHtml $ t sess.lang "nav.language"
+        li_ [] $ a_ [href_ "/set_language/en?redirect_to=/", class_ "flex items-center justify-between"] do
+          toHtml $ t sess.lang "nav.language.english"
+          when (sess.lang == I18n.En) $ faSprite_ "check" "regular" "w-3 h-3"
+        li_ [] $ a_ [href_ "/set_language/es?redirect_to=/", class_ "flex items-center justify-between"] do
+          toHtml $ t sess.lang "nav.language.spanish"
+          when (sess.lang == I18n.Es) $ faSprite_ "check" "regular" "w-3 h-3"
+        div_ [class_ "divider my-0"] ""
         li_ [] $ a_ [href_ "/logout", class_ "flex items-center gap-2 text-textError", [__| on click js posthog.reset(); end |]] do
           faSprite_ "arrow-right-from-bracket" "regular" "w-4 h-4"
-          "Logout"
+          toHtml $ t sess.lang "nav.logout"
 
 
 -- mapM_ renderNavBottomItem $ navBottomList project.id.toText

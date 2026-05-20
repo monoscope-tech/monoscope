@@ -136,6 +136,9 @@ data EnvConfig = EnvConfig
   , basicAuthEnabled :: Bool
   , basicAuthUsername :: Text
   , basicAuthPassword :: Text
+  , localAuthEnabled :: Bool
+  , allowRegistration :: Bool
+  , defaultLanguage :: Text
   , telemetryApiKey :: Text
   , telemetryServiceName :: Text
   , enableEventsTableUpdates :: Bool
@@ -201,6 +204,9 @@ instance DefConfig EnvConfig where
       , replayBatchSize = 0 -- 0 = derive at runtime as messagesPerPubsubPullBatch `div` 2
       , loggingDestination = Logging.StdOut
       , logLevel = LogInfo -- Default to Info level
+      , localAuthEnabled = False
+      , allowRegistration = False
+      , defaultLanguage = "en"
       , smtpPort = 465
       , smtpTls = True
       , maxConcurrentJobs = 4 -- Sane default, can be increased based on CPU cores

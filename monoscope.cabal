@@ -158,6 +158,7 @@ library
       Models.Telemetry.Telemetry
       Opentelemetry.OtlpServer
       Pages.Anomalies
+      Pages.Auth
       Pages.BodyWrapper
       Pages.Bots.Discord
       Pages.Bots.Slack
@@ -216,6 +217,7 @@ library
       Web.ApiHandlers
       Web.ApiTypes
       Web.Auth
+      Web.I18n
       Web.MCP
       Web.Routes
       Proto.Opentelemetry.Proto.Common.V1.Common

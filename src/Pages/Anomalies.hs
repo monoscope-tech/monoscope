@@ -1832,7 +1832,7 @@ issueActivityGetH pid issueId = do
       then pure []
       else do
         let vUserIds = V.fromList userIds
-        Hasql.interp [HI.sql| SELECT id, created_at, updated_at, deleted_at, active, first_name, last_name, display_image_url, email, is_sudo, phone_number FROM users.users WHERE id = ANY(#{vUserIds}::uuid[]) |]
+        Hasql.interp [HI.sql| SELECT id, created_at, updated_at, deleted_at, active, first_name, last_name, display_image_url, email, is_sudo, phone_number, password_hash FROM users.users WHERE id = ANY(#{vUserIds}::uuid[]) |]
   let userMap = Map.fromList $ map (\u -> (u.id, u)) users
   addRespHeaders $ issueActivityTimeline_ userMap now activities
 

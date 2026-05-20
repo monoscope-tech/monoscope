@@ -2,6 +2,12 @@ module Web.Auth (
   logoutH,
   loginRedirectH,
   loginH,
+  loginPostH,
+  registerGetH,
+  registerPostH,
+  setLanguageH,
+  LoginForm (..),
+  RegisterForm (..),
   authCallbackH,
   sessionByID,
   authHandler,
@@ -29,6 +35,7 @@ import Control.Monad.Except qualified as T
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens (key, _String)
 import Data.Aeson.Types (FromJSON, ToJSON)
+import Crypto.KDF.BCrypt qualified as BCrypt
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as EHasql
 import Data.Effectful.UUID (UUIDEff, runUUID)
@@ -65,21 +72,46 @@ import Network.HTTP.Types (Status, hAuthorization, hCookie, statusCode)
 import Network.Wai (Request (rawPathInfo, rawQueryString, requestHeaders))
 import Network.Wreq (FormParam ((:=)), defaults, getWith, header, post, responseBody)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Pages.Auth qualified as AuthPages
 import Pkg.Mail (addConvertKitUser)
 import Relude hiding (ask, asks)
 import Servant (Header, Headers, NoContent (..), addHeader)
 import Servant qualified
-import Servant.Server (Handler, ServerError (..), err302, err401)
+import Servant.Server (Handler, ServerError (..), err302, err401, err404)
 import Servant.Server.Experimental.Auth (AuthHandler, mkAuthHandler)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Logging
 import System.Types (ATAuthCtx, ATBaseCtx, DB, RespHeaders, addRespHeaders)
 import Utils (escapedQueryPartial)
-import Web.Cookie (Cookies, SetCookie, parseCookies)
+import Web.Cookie (Cookies, SetCookie, parseCookies, renderSetCookieBS)
+import Web.FormUrlEncoded (FromForm)
+import Web.I18n qualified as I18n
+import Web.I18n (Language (..), languageFromCookies, parseLanguage, t)
 import "base64" Data.ByteString.Base64 qualified as B64
 
 
 type APItoolkitAuthContext = AuthHandler Request (Headers '[Header "Set-Cookie" SetCookie] Projects.Session)
+
+
+data LoginForm = LoginForm
+  { email :: Text
+  , password :: Text
+  , redirectTo :: Maybe Text
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (FromForm)
+
+
+data RegisterForm = RegisterForm
+  { firstName :: Text
+  , lastName :: Text
+  , email :: Text
+  , password :: Text
+  , passwordConfirm :: Text
+  , redirectTo :: Maybe Text
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (FromForm)
 
 
 validateBasicAuth :: EnvConfig -> ByteString -> Maybe (Text, Text)
@@ -110,8 +142,9 @@ authHandler logger env =
   where
     handler :: (DB es, Error ServerError :> es, HTTP :> es, Time :> es, UUIDEff :> es) => Request -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Projects.Session)
     handler req = do
-      -- Check if basic auth is enabled and try to authenticate
-      if env.config.basicAuthEnabled
+      if env.config.localAuthEnabled
+        then proceedWithLocalAuth req
+        else if env.config.basicAuthEnabled
         then do
           let authHeader = L.lookup hAuthorization $ requestHeaders req
           case authHeader >>= validateBasicAuth env.config of
@@ -119,10 +152,11 @@ authHandler logger env =
               -- Basic auth successful, create a session for the basic auth user
               let isSidebarClosed = sidebarClosedFromCookie $ getCookies req
               let theme = themeFromCookie $ getCookies req
+              let lang = languageFromCookies $ getCookies req
               requestID <- liftIO $ getRequestID req
               -- Use a fixed email for basic auth users
               sessId <- authorizeUserAndPersist Nothing "Basic" "Auth" "" (username <> "@basic-auth.local")
-              sessionByID (Just sessId) requestID isSidebarClosed theme Nothing env.config.basicAuthEnabled
+              sessionByID (Just sessId) requestID isSidebarClosed theme lang Nothing env.config.basicAuthEnabled
             Nothing -> do
               -- When basic auth is enabled, check if we have a valid cookie session
               -- If not, we should require basic auth instead of redirecting to Auth0
@@ -152,12 +186,31 @@ authHandler logger env =
       let mbPersistentSessionId = mbBearerSessionId <|> mbCookieSessionId
       let isSidebarClosed = sidebarClosedFromCookie cookies
       let theme = themeFromCookie cookies
+      let lang = languageFromCookies cookies
       requestID <- liftIO $ getRequestID req
-      sessionByID mbPersistentSessionId requestID isSidebarClosed theme (Just $ getRequestUrl req) basicAuthEnabledFlag
+      sessionByID mbPersistentSessionId requestID isSidebarClosed theme lang (Just $ getRequestUrl req) basicAuthEnabledFlag
+
+    proceedWithLocalAuth req = do
+      let cookies = getCookies req
+      mbCookieSessionId <- handlerToEff $ getSessionId cookies
+      mbPersistentSession <- join <$> mapM Projects.getPersistentSession mbCookieSessionId
+      let isSidebarClosed = sidebarClosedFromCookie cookies
+      let theme = themeFromCookie cookies
+      let lang = languageFromCookies cookies
+      requestID <- liftIO $ getRequestID req
+      case (mbCookieSessionId, mbPersistentSession) of
+        (Just sessId, Just _) ->
+          sessionByID (Just sessId) requestID isSidebarClosed theme lang (Just $ getRequestUrl req) False
+        _ -> do
+          usersCount <- Projects.countUsers
+          let requestUrl = decodeUtf8 (getRequestUrl req)
+          if usersCount == 0 && not (isLocalAuthBypass req)
+            then throwError $ err302{errHeaders = [("Location", "/register")]}
+            else throwError $ err302{errHeaders = [("Location", encodeUtf8 $ "/login?redirect_to=" <> escapedQueryPartial requestUrl)]}
 
 
-sessionByID :: (DB es, Error ServerError :> es, HTTP :> es, Time :> es, UUIDEff :> es) => Maybe Projects.PersistentSessionId -> Text -> Bool -> Text -> Maybe ByteString -> Bool -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Projects.Session)
-sessionByID mbPersistentSessionId requestID isSidebarClosed theme url basicAuthEnabled = do
+sessionByID :: (DB es, Error ServerError :> es, HTTP :> es, Time :> es, UUIDEff :> es) => Maybe Projects.PersistentSessionId -> Text -> Bool -> Text -> Language -> Maybe ByteString -> Bool -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Projects.Session)
+sessionByID mbPersistentSessionId requestID isSidebarClosed theme lang url basicAuthEnabled = do
   mbPersistentSession <- join <$> mapM Projects.getPersistentSession mbPersistentSessionId
   let mUser = mbPersistentSession <&> (.user.getUser)
   (user, sessionId, persistentSession) <- case (mUser, mbPersistentSession) of
@@ -186,6 +239,31 @@ sessionByID mbPersistentSessionId requestID isSidebarClosed theme url basicAuthE
             else throwError $ err302{errHeaders = [("Location", "/to_login?redirect_to=" <> fromMaybe "" url)]}
   let sessionCookie = Projects.craftSessionCookie sessionId False
   pure $ Projects.addCookie sessionCookie (Projects.Session{persistentSession, ..})
+
+
+isLocalAuthBypass :: Request -> Bool
+isLocalAuthBypass req =
+  path == "/register"
+    || path == "/login"
+    || path == "/ping"
+    || path == "/status"
+    || path == "/auth_callback"
+    || any (`T.isPrefixOf` path) prefixes
+  where
+    path = decodeUtf8 $ rawPathInfo req
+    prefixes =
+      [ "/public/"
+      , "/webhook/"
+      , "/api/"
+      , "/whatsapp/"
+      , "/slack/"
+      , "/discord/"
+      , "/interactions/"
+      , "/actions/"
+      , "/share/"
+      , "/dev/"
+      , "/proxy/"
+      ]
 
 
 getCookies :: Request -> Cookies
@@ -288,15 +366,22 @@ apiKeyAuthHandler logger env = mkAuthHandler \req -> do
 logoutH :: ATBaseCtx (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
 logoutH = do
   envCfg <- asks env
-  let redirectTo = envCfg.auth0Domain <> "/v2/logout?client_id=" <> envCfg.auth0ClientId <> "&returnTo=" <> envCfg.auth0LogoutRedirect
-  pure $ addHeader redirectTo $ addHeader Projects.emptySessionCookie NoContent
+  if envCfg.localAuthEnabled
+    then pure $ addHeader "/login" $ addHeader Projects.emptySessionCookie NoContent
+    else do
+      let redirectTo = envCfg.auth0Domain <> "/v2/logout?client_id=" <> envCfg.auth0ClientId <> "&returnTo=" <> envCfg.auth0LogoutRedirect
+      pure $ addHeader redirectTo $ addHeader Projects.emptySessionCookie NoContent
 
 
 loginRedirectH :: Maybe Text -> ATBaseCtx (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
 loginRedirectH redirectToM = do
   envCfg <- asks env
   -- If basic auth is enabled, return 401 instead of redirecting to /login
-  if envCfg.basicAuthEnabled
+  if envCfg.localAuthEnabled
+    then do
+      let redirectTo = "/login?redirect_to=" <> fromMaybe "/" redirectToM
+      pure $ addHeader redirectTo $ addHeader emptySessionCookie NoContent
+    else if envCfg.basicAuthEnabled
     then throwError $ err401{errHeaders = [("WWW-Authenticate", "Basic realm=\"Monoscope\"")]}
     else do
       let redirectTo = "/login?redirect_to=" <> fromMaybe "/" redirectToM
@@ -309,18 +394,98 @@ loginH
   -> ATBaseCtx
        ( Headers
            '[Header "Location" Text, Header "Set-Cookie" SetCookie]
-           NoContent
+           (Html ())
        )
 loginH redirectToM = do
   envCfg <- asks env
-  -- If basic auth is enabled, return 401 instead of redirecting to OAuth
-  if envCfg.basicAuthEnabled
+  if envCfg.localAuthEnabled
+    then do
+      let lang = parseLanguage envCfg.defaultLanguage
+      pure $ addHeader "" $ addHeader emptySessionCookie $ AuthPages.loginPage envCfg lang Nothing redirectToM
+    else if envCfg.basicAuthEnabled
     then throwError $ err401{errHeaders = [("WWW-Authenticate", "Basic realm=\"Monoscope\"")]}
     else do
       stateVar <- liftIO $ UUID.toText <$> UUIDV4.nextRandom
       let escapedUri = escapedQueryPartial $ envCfg.auth0Callback <> "?redirect_to=" <> fromMaybe "/" redirectToM
       let redirectTo = envCfg.auth0Domain <> "/authorize?response_type=code&client_id=" <> envCfg.auth0ClientId <> "&redirect_uri=" <> escapedUri <> "&state=" <> stateVar <> "&scope=openid profile email"
-      pure $ addHeader redirectTo $ addHeader emptySessionCookie NoContent
+      throwError $ err302{errHeaders = [("Location", encodeUtf8 redirectTo), ("Set-Cookie", renderSetCookieBS emptySessionCookie)]}
+
+
+loginPostH
+  :: LoginForm
+  -> ATBaseCtx
+       ( Headers
+           '[Header "Location" Text, Header "Set-Cookie" SetCookie]
+           (Html ())
+       )
+loginPostH form = do
+  envCfg <- asks env
+  unless envCfg.localAuthEnabled $ throwError err401
+  let lang = parseLanguage envCfg.defaultLanguage
+      redirectTo = fromMaybe "/" form.redirectTo
+      invalid = pure $ addHeader "" $ addHeader emptySessionCookie $ AuthPages.loginPage envCfg lang (Just $ t lang "auth.login.error_invalid") form.redirectTo
+  Projects.userByEmail form.email >>= \case
+    Just user | Just hashed <- user.passwordHash, verifyPwd form.password hashed -> do
+      persistentSessId <- createPersistentSession user.id
+      pure $ addHeader redirectTo $ addHeader (craftSessionCookie persistentSessId True) (redirectHtml redirectTo)
+    _ -> invalid
+
+
+registerGetH :: Maybe Text -> ATBaseCtx (Html ())
+registerGetH redirectToM = do
+  envCfg <- asks env
+  unless envCfg.localAuthEnabled $ throwError err404
+  usersCount <- Projects.countUsers
+  let lang = parseLanguage envCfg.defaultLanguage
+  pure
+    $ AuthPages.registerPage
+      envCfg
+      lang
+      (usersCount == 0)
+      Nothing
+      AuthPages.RegisterDefaults{firstName = "", lastName = "", email = "", redirectTo = redirectToM}
+
+
+registerPostH
+  :: RegisterForm
+  -> ATBaseCtx
+       ( Headers
+           '[Header "Location" Text, Header "Set-Cookie" SetCookie]
+           (Html ())
+       )
+registerPostH form = do
+  envCfg <- asks env
+  unless envCfg.localAuthEnabled $ throwError err404
+  usersCount <- Projects.countUsers
+  let lang = parseLanguage envCfg.defaultLanguage
+      defaults = AuthPages.RegisterDefaults{firstName = form.firstName, lastName = form.lastName, email = form.email, redirectTo = form.redirectTo}
+      renderRegister err = pure $ addHeader "" $ addHeader emptySessionCookie $ AuthPages.registerPage envCfg lang (usersCount == 0) (Just err) defaults
+      redirectTo = fromMaybe "/" form.redirectTo
+  if usersCount > 0 && not envCfg.allowRegistration
+    then renderRegister $ t lang "auth.register.error_closed"
+    else if T.length form.password < 8
+      then renderRegister $ t lang "auth.register.error_short"
+      else if form.password /= form.passwordConfirm
+        then renderRegister $ t lang "auth.register.error_mismatch"
+        else do
+          Projects.userByEmail form.email >>= \case
+            Just _ -> renderRegister $ t lang "auth.register.error_exists"
+            Nothing -> do
+              hash <- liftIO $ hashPwd form.password
+              user <- Projects.createUser form.firstName form.lastName "" form.email
+              let userWithPassword = user{Projects.isSudo = usersCount == 0, Projects.passwordHash = Just hash}
+              Projects.insertUser userWithPassword
+              persistentSessId <- createPersistentSession userWithPassword.id
+              pure $ addHeader redirectTo $ addHeader (craftSessionCookie persistentSessId True) (redirectHtml redirectTo)
+
+
+setLanguageH
+  :: Text
+  -> Maybe Text
+  -> ATBaseCtx (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
+setLanguageH langText redirectToM = do
+  let lang = parseLanguage langText
+  pure $ addHeader (fromMaybe "/" redirectToM) $ addHeader (I18n.languageSetCookieBS lang) NoContent
 
 
 -- authCallbackH will accept a request with code and state, and use that code to queery auth- for an auth token, and then for user info
@@ -395,6 +560,34 @@ authorizeUserAndPersist convertkitApiKeyM firstName lastName picture email = do
   pure persistentSessId
 
 
+createPersistentSession :: (DB es, UUIDEff :> es) => Projects.UserId -> Eff es Projects.PersistentSessionId
+createPersistentSession userId = do
+  persistentSessId <- Projects.newPersistentSessionId
+  Projects.insertSession persistentSessId userId (Projects.SessionData Map.empty)
+  pure persistentSessId
+
+
+hashPwd :: Text -> IO Text
+hashPwd pw = decodeUtf8 <$> BCrypt.hashPassword 12 (encodeUtf8 pw)
+
+
+verifyPwd :: Text -> Text -> Bool
+verifyPwd plain hashed = BCrypt.validatePassword (encodeUtf8 plain) (encodeUtf8 hashed)
+
+
+emptyRegisterDefaults :: AuthPages.RegisterDefaults
+emptyRegisterDefaults = AuthPages.RegisterDefaults{firstName = "", lastName = "", email = "", redirectTo = Nothing}
+
+
+redirectHtml :: Text -> Html ()
+redirectHtml redirectTo =
+  html_ do
+    head_ do
+      meta_ [httpEquiv_ "refresh", content_ $ "0;url=" <> redirectTo]
+    body_ do
+      a_ [href_ redirectTo] "Continue to Monoscope"
+
+
 renderError :: forall (es :: [Effect]) (a :: Type). Error ServerError :> es => AuthContext -> Status -> Eff es a
 renderError env status = throwError $ htmlServerError env.config (statusCode status)
 
@@ -411,19 +604,20 @@ errorPageHtml envCfg code = renderBS $ bodyWrapper def{pageTitle = title <> " �
     h2_ [class_ "text-2xl font-semibold"] $ toHtml title
     p_ [class_ "text-textWeak max-w-md"] $ toHtml desc
     div_ [class_ "flex gap-3 mt-4"] do
-      button_ [class_ "btn btn-outline", onclick_ "history.back()"] "Go Back"
-      a_ [href_ "/", class_ "btn btn-primary"] "Home"
+      button_ [class_ "btn btn-outline", onclick_ "history.back()"] $ toHtml $ t lang "error.go_back"
+      a_ [href_ "/", class_ "btn btn-primary"] $ toHtml $ t lang "error.home"
   where
-    (icon, title, desc) = errorInfo code
+    lang = parseLanguage envCfg.defaultLanguage
+    (icon, title, desc) = errorInfo lang code
 
 
-errorInfo :: Int -> (Html (), Text, Text)
-errorInfo = \case
+errorInfo :: Language -> Int -> (Html (), Text, Text)
+errorInfo lang = \case
   400 -> ("🚫", "Bad Request", "The request could not be understood. Please check and try again.")
-  401 -> ("🔒", "Unauthorized", "You need to be logged in to access this page.")
-  403 -> ("⛔", "Forbidden", "You don't have permission to access this resource.")
-  404 -> ("🔍", "Not Found", "The page you're looking for doesn't exist or has been moved.")
-  500 -> ("💥", "Internal Server Error", "Something went wrong on our end. Please try again later.")
+  401 -> ("🔒", t lang "error.401.title", t lang "error.401.desc")
+  403 -> ("⛔", t lang "error.403.title", t lang "error.403.desc")
+  404 -> ("🔍", t lang "error.404.title", t lang "error.404.desc")
+  500 -> ("💥", t lang "error.500.title", t lang "error.500.desc")
   502 -> ("🌐", "Bad Gateway", "We're having trouble connecting. Please try again shortly.")
   503 -> ("🔧", "Service Unavailable", "We're temporarily offline for maintenance. Please try again soon.")
   c -> ("⚠️", "Error " <> show c, "An unexpected error occurred.")

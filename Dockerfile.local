@@ -1,0 +1,127 @@
+# Self-contained build (no private deps image needed).
+# Starts from haskell:9.12.2 and builds everything from scratch.
+# Expect 60-120 min first time on a 6 vCPU / 11 GB RAM machine; subsequent
+# rebuilds with the BuildKit cache mount are minutes.
+
+FROM haskell:9.12.2 AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CABAL_DIR=/root/.cabal
+
+# System deps (apt) — kafka/postgres/ldap/sasl/zstd headers + cert chain.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      curl ca-certificates lsb-release gnupg \
+      libssl-dev librdkafka-dev libsnappy-dev libgrpc-dev \
+      libpq-dev libldap2-dev libsasl2-dev liblz4-dev libzstd-dev \
+      pkg-config git wget unzip xz-utils \
+    && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+       | gpg --dearmor -o /usr/share/keyrings/postgresql-keyring.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/postgresql-keyring.gpg] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+       > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update && apt-get install -y --no-install-recommends postgresql-client-16 \
+    && rm -rf /var/lib/apt/lists/*
+
+# protoc
+RUN PROTOC_VERSION=29.3 && \
+    ARCH=$(dpkg --print-architecture | sed 's/arm64/aarch_64/;s/amd64/x86_64/') && \
+    wget -q https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-${ARCH}.zip && \
+    unzip -q protoc-${PROTOC_VERSION}-linux-${ARCH}.zip -d /usr/local && \
+    rm protoc-${PROTOC_VERSION}-linux-${ARCH}.zip
+
+# Node.js 22 + bun + workbox-cli (for frontend build + chart-cli)
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && npm install -g bun workbox-cli@6.5.4 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Copy only files needed to resolve Haskell deps (best layer caching).
+COPY *.cabal cabal.project* Setup.hs LICENSE README.md auto-instrument-config.toml ./
+
+# Build all Haskell dependencies (this is the slow step on first run).
+RUN --mount=type=cache,target=/root/.cabal/store \
+    --mount=type=cache,target=/build/dist-newstyle \
+    cabal update && \
+    cabal build --only-dependencies exe:monoscope-server -j --semaphore
+
+# Frontend npm deps.
+COPY package*.json ./
+RUN npm ci --prefer-offline --no-audit
+
+COPY web-components/package*.json ./web-components/
+RUN cd web-components && npm ci --prefer-offline --no-audit
+
+# Build chart-cli (single-binary tool used by the app).
+COPY web-components ./web-components
+RUN cd web-components && \
+    bun build --compile src/chart-cli.ts --outfile /usr/local/bin/chart-cli && \
+    chmod +x /usr/local/bin/chart-cli
+
+# Copy source.
+COPY package.yaml ./
+COPY src ./src
+COPY test ./test
+COPY app ./app
+COPY cli ./cli
+COPY proto ./proto
+COPY config ./config
+COPY static ./static
+
+# Frontend assets (Tailwind + Vite + Workbox SW).
+RUN npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify && \
+    cd web-components && NODE_ENV=production npx vite build --mode production --sourcemap false && \
+    cd .. && workbox generateSW config/workbox-config.js
+
+# Build the Haskell server.
+RUN --mount=type=cache,target=/root/.cabal/store \
+    --mount=type=cache,target=/build/dist-newstyle \
+    (command -v hpack >/dev/null && hpack || echo "hpack not installed, using committed monoscope.cabal") && \
+    cabal build exe:monoscope-server -j --semaphore --ghc-options="+RTS -A64m -n2m -RTS" && \
+    mkdir -p /build/dist && \
+    find dist-newstyle -name monoscope-server -type f -executable | head -1 | xargs -I {} cp {} /build/dist/
+
+# ---------------------------------------------------------------------------
+# Runtime image (matches upstream Dockerfile's runtime stage).
+# ---------------------------------------------------------------------------
+FROM debian:12-slim
+
+ARG GIT_HASH=dev
+ARG GIT_COMMIT_DATE=dev
+ENV GIT_HASH=$GIT_HASH
+ENV GIT_COMMIT_DATE=$GIT_COMMIT_DATE
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates \
+      libgmp10 \
+      librdkafka1 \
+      libpq5 \
+      libsnappy1v5 \
+      liblz4-1 \
+      libzstd1 \
+      libsasl2-2 \
+      libldap-2.5-0 \
+      libcairo2 \
+      libpango-1.0-0 \
+      libpangocairo-1.0-0 \
+      libjpeg62-turbo \
+      libgif7 \
+      fontconfig \
+      fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd -m -U -s /bin/false monoscope
+
+WORKDIR /opt/monoscope
+
+COPY --from=builder /build/dist/monoscope-server ./
+COPY --from=builder /build/static ./static
+COPY --from=builder /usr/local/bin/chart-cli ./
+
+RUN chown -R monoscope:monoscope /opt/monoscope && \
+    chmod +x monoscope-server chart-cli
+
+USER monoscope
+
+EXPOSE 8080
+ENTRYPOINT ["./monoscope-server"]

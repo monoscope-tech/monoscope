@@ -6,6 +6,8 @@ module Models.Projects.Projects (
   userIdByEmail,
   createUserId,
   insertUser,
+  setUserPassword,
+  countUsers,
   userById,
   userByEmail,
   createEmptyUser,
@@ -129,6 +131,7 @@ import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumSC (..), idFromText, selectF
 import Pkg.Parser.Stats (Section)
 import Relude
 import Servant (FromHttpApiData, Header, Headers, ServerError, addHeader, err302, errHeaders, getResponse)
+import Web.I18n (Language (..))
 import Web.Cookie (SetCookie (setCookieHttpOnly, setCookieMaxAge, setCookieName, setCookiePath, setCookieSameSite, setCookieSecure, setCookieValue), defaultSetCookie, sameSiteLax)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (ToHttpApiData)
@@ -167,6 +170,7 @@ data User = User
   , email :: CI.CI Text
   , isSudo :: Bool
   , phoneNumber :: Maybe Text
+  , passwordHash :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromRow, HI.DecodeRow, NFData, ToRow)
@@ -199,14 +203,25 @@ createUser firstName lastName picture email = do
       , email = CI.mk email
       , phoneNumber = Nothing
       , isSudo = False
+      , passwordHash = Nothing
       }
 
 
 insertUser :: DB es => User -> Eff es ()
 insertUser u = do
-  let (uId, uCr, uUp, uDel, uAct, uFn, uLn, uImg, uEm, uPh, uSudo) =
-        (u.id, u.createdAt, u.updatedAt, u.deletedAt, u.active, u.firstName, u.lastName, u.displayImageUrl, u.email, u.phoneNumber, u.isSudo)
-  EHasql.interpExecute_ [HI.sql| INSERT INTO users.users (id, created_at, updated_at, deleted_at, active, first_name, last_name, display_image_url, email, phone_number, is_sudo) VALUES (#{uId}, #{uCr}, #{uUp}, #{uDel}, #{uAct}, #{uFn}, #{uLn}, #{uImg}, #{uEm}, #{uPh}, #{uSudo}) |]
+  let (uId, uCr, uUp, uDel, uAct, uFn, uLn, uImg, uEm, uSudo, uPh, uPw) =
+        (u.id, u.createdAt, u.updatedAt, u.deletedAt, u.active, u.firstName, u.lastName, u.displayImageUrl, u.email, u.isSudo, u.phoneNumber, u.passwordHash)
+  EHasql.interpExecute_ [HI.sql| INSERT INTO users.users (id, created_at, updated_at, deleted_at, active, first_name, last_name, display_image_url, email, is_sudo, phone_number, password_hash) VALUES (#{uId}, #{uCr}, #{uUp}, #{uDel}, #{uAct}, #{uFn}, #{uLn}, #{uImg}, #{uEm}, #{uSudo}, #{uPh}, #{uPw}) |]
+
+
+setUserPassword :: DB es => UserId -> Text -> Eff es ()
+setUserPassword uid hash =
+  EHasql.interpExecute_ [HI.sql| UPDATE users.users SET password_hash = #{hash}, updated_at = now() WHERE id = #{uid} |]
+
+
+countUsers :: DB es => Eff es Int
+countUsers =
+  fromMaybe 0 <$> EHasql.interpOne [HI.sql| SELECT count(*)::int FROM users.users WHERE deleted_at IS NULL |]
 
 
 userById :: DB es => UserId -> Eff es (Maybe User)
@@ -1099,6 +1114,7 @@ data Session = Session
   , requestID :: Text
   , isSidebarClosed :: Bool
   , theme :: Text
+  , lang :: Language
   }
   deriving stock (Generic, Show)
 

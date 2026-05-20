@@ -1,0 +1,67 @@
+services:
+  timescaledb:
+    image: timescale/timescaledb-ha:pg18-all
+    container_name: monoscope-timescaledb
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - TZ=UTC
+    command: >
+      postgres
+      -c shared_preload_libraries=pg_stat_statements,timescaledb
+      -c max_connections=200
+    volumes:
+      - timescale_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - monoscope_net
+
+  monoscope:
+    image: monoscope-local:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.local
+    container_name: monoscope-app
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=host=timescaledb user=${POSTGRES_USER} password=${POSTGRES_PASSWORD} dbname=${POSTGRES_DB} port=5432 sslmode=disable
+      - PORT=8080
+      - GRPC_PORT=4317
+      - MIGRATIONS_DIR=/opt/monoscope/static/migrations/
+      - ENVIRONMENT=PROD
+      - LOGGING_DESTINATION=StdOut
+      - LOCAL_AUTH_ENABLED=True
+      - ALLOW_REGISTRATION=False
+      - DEFAULT_LANGUAGE=en
+      - BASIC_AUTH_ENABLED=False
+      - BASIC_AUTH_USERNAME=${BASIC_AUTH_USERNAME:-admin}
+      - BASIC_AUTH_PASSWORD=${BASIC_AUTH_PASSWORD:-changeme}
+      - API_KEY_ENCRYPTION_SECRET_KEY=${API_KEY_ENCRYPTION_SECRET_KEY}
+      - MESSAGES_PER_PUBSUB_PULL_BATCH=100
+      - MIGRATE_AND_INITIALIZE_ON_START=True
+      - REQUEST_PUBSUB_TOPICS=monoscope-prod-1
+      - ENABLE_BACKGROUND_JOBS=True
+      - ENABLE_PUBSUB_SERVICE=False
+      - ENABLE_BROWSER_MONITORING=True
+      - SHOW_DEMO_PROJECT=False
+      - AUTH0_LOGOUT_REDIRECT=${AUTH0_LOGOUT_REDIRECT:-}
+      - AUTH0_CALLBACK=${AUTH0_CALLBACK:-}
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    networks:
+      - monoscope_net
+
+volumes:
+  timescale_data:
+    driver: local
+
+networks:
+  monoscope_net:
+    external: true
