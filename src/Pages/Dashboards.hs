@@ -108,6 +108,7 @@ import Text.Slugify (slugify)
 import UnliftIO.Exception (try)
 import Utils
 import Web.FormUrlEncoded (FromForm)
+import Web.I18n qualified as I18n
 
 
 -- | Head content for dashboard pages - loads highlight.js and sql-formatter for SQL preview
@@ -191,7 +192,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
     $ do
       formField_ FieldSm def{value = dashTitle dashVM.title, placeholder = "Insert new title"} "Dashboard Title" "title" False Nothing
       formField_ FieldSm def{value = folderFromPath dashVM.filePath, placeholder = "reports/"} "Folder" "fileDir" False Nothing
-      Components.formActionsModal_ "pageTitleModalId" $ button_ [type_ "submit", class_ "btn btn-primary"] "Save"
+      Components.formActionsModal_ I18n.En "pageTitleModalId" $ button_ [type_ "submit", class_ "btn btn-primary"] $ toHtml $ I18n.t I18n.En "common.save"
 
   -- Modal for renaming tab (only shown for dashboards with tabs)
   whenJust dash.tabs \tabs -> do
@@ -208,7 +209,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
         ]
       $ do
         formField_ FieldSm def{value = activeTabName, placeholder = "Enter tab name"} "Tab Name" "newName" False Nothing
-        Components.formActionsModal_ "tabRenameModalId" $ button_ [type_ "submit", class_ "btn btn-primary"] "Save"
+        Components.formActionsModal_ I18n.En "tabRenameModalId" $ button_ [type_ "submit", class_ "btn btn-primary"] $ toHtml $ I18n.t I18n.En "common.save"
 
   -- Variable picker modal - auto-opens when required vars are unset (from tab.requires or variable.required)
   whenJust dash.variables \variables -> do
