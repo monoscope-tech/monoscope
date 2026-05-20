@@ -1027,7 +1027,18 @@ createBinaryField kind name selectedValues (value, label) = do
 
 
 stepIndicator :: Int -> Text -> Text -> Html ()
-stepIndicator step title prevUrl = do
+stepIndicator step title prevUrl = stepIndicator' I18n.En step title prevUrl
+
+
+-- Self-hosted: there are 4 visible steps (Info, NotifChannel, Integration, Complete).
+-- The Survey + Pricing steps from the SaaS flow are skipped.
+onboardingStepTotal :: Int
+onboardingStepTotal = 4
+
+
+-- Translate Step N of M / Back labels when possible.
+stepIndicator' :: I18n.Language -> Int -> Text -> Text -> Html ()
+stepIndicator' lang step title prevUrl = do
   universalIndicator
   div_ [class_ "flex-col gap-2 md:gap-4 flex w-full"] $ do
     a_ [href_ "/", class_ "absolute top-4 left-4 md:top-10 md:left-10 py-2 pr-2 rounded-xs"] do
@@ -1035,17 +1046,19 @@ stepIndicator step title prevUrl = do
       img_ [class_ "h-7 hidden dark:block", src_ "/public/assets/svgs/logo_white.svg"]
     div_ [class_ "flex-col gap-1.5 md:gap-2 flex w-full"] $ do
       div_ [class_ "flex items-center justify-between"] do
-        div_ [class_ "text-textStrong text-sm md:text-base"] $ "Step " <> show step <> " of 5"
+        div_ [class_ "text-textStrong text-sm md:text-base"]
+          $ toHtml
+          $ I18n.t lang "onboarding.step_label" <> " " <> show step <> " " <> I18n.t lang "onboarding.step_of" <> " " <> show onboardingStepTotal
         when (step > 1)
           $ a_ [class_ "flex items-center gap-1.5 text-textBrand text-sm md:hidden", href_ prevUrl] do
             faSprite_ "arrow-left" "regular" "h-3.5 w-3.5"
-            span_ [] "Back"
-      div_ [class_ "grid grid-cols-5 w-full gap-1"] $ do
-        forM_ [1 .. 5] $ \i -> div_ [class_ $ "h-1.5 md:h-2 w-full rounded-sm " <> if step >= i then "btn-primary rounded-sm" else " bg-fillWeak shadow-sm border border-strokeWeak"] pass
+            span_ [] $ toHtml $ I18n.t lang "onboarding.back"
+      div_ [class_ "grid grid-cols-4 w-full gap-1"] $ do
+        forM_ [1 .. onboardingStepTotal] $ \i -> div_ [class_ $ "h-1.5 md:h-2 w-full rounded-sm " <> if step >= i then "btn-primary rounded-sm" else " bg-fillWeak shadow-sm border border-strokeWeak"] pass
       when (step > 1)
         $ a_ [class_ "max-md:hidden flex items-center gap-3 text-textBrand w-full mt-2", href_ prevUrl] do
           faSprite_ "arrow-left" "regular" "h-4 w-4"
-          span_ [] "Back"
+          span_ [] $ toHtml $ I18n.t lang "onboarding.back"
     span_ [class_ "text-textStrong text-xl md:text-4xl mt-1 md:mt-4"] $ toHtml title
 
 

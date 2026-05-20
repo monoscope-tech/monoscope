@@ -86,7 +86,7 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper, mkPageCtx, s
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as SlackP
 import Pages.Bots.Utils qualified as BotUtils
-import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), ModalCfg (..), PanelCfg (..), confirmModal_, dirtyFormSaveAttr_, formActionsModal_, formField_, formSelectField_, iconBadgeXs_, iconBadge_, infoBanner_, modalWith_, panel_, sectionLabel_, settingsH2_, settingsNavLink_, settingsSection_, tagInput_)
+import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), ModalCfg (..), PanelCfg (..), confirmModal_, dirtyFormSaveAttr_, emptyState_, formActionsModal_, formField_, formSelectField_, iconBadgeXs_, iconBadge_, infoBanner_, modalWith_, panel_, sectionLabel_, settingsH2_, settingsNavLink_, settingsSection_, tagInput_)
 import Pages.Settings qualified as Settings
 import Pkg.Components.Table (Table (..))
 import Pkg.Components.Table qualified as Table
@@ -105,6 +105,7 @@ import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addR
 import UnliftIO.Exception (tryAny)
 import Utils (LoadingSize (..), faSprite_, htmxIndicator_, insertIfNotExist, isDemoAndNotSudo, lookupValueText)
 import Web.FormUrlEncoded (FromForm)
+import Web.I18n qualified as I18n
 
 
 --------------------------------------------------------------------------------
@@ -141,6 +142,7 @@ instance ToHtml ListProjectsGet where
 
 listProjectsBody :: Maybe Projects.Session -> V.Vector Projects.Project' -> Projects.Project' -> Bool -> Html ()
 listProjectsBody sessM projects demoProject showDemoProject = do
+  let lang = maybe I18n.En (.lang) sessM
   nav_ [class_ "fixed top-0 left-0 right-0 bg-bgBase border-b border-strokeWeak z-50"] do
     div_ [class_ "flex items-center justify-between px-4 py-3"] do
       a_ [href_ "/", class_ "flex items-center"] do
@@ -158,13 +160,16 @@ listProjectsBody sessM projects demoProject showDemoProject = do
             )
           span_ [class_ "swap-off"] $ faSprite_ "sun-bright" "regular" "h-5 w-5"
           span_ [class_ "swap-on"] $ faSprite_ "moon-stars" "regular" "h-5 w-5"
-        a_ [class_ "btn btn-ghost btn-sm", href_ "https://monoscope.tech/docs/", target_ "_blank"] "Docs"
-        a_ [class_ "btn btn-ghost btn-sm text-textError", href_ "/logout"] "Logout"
+        a_ [class_ "btn btn-ghost btn-sm", href_ "https://monoscope.tech/docs/", target_ "_blank"] $ toHtml $ I18n.t lang "nav.docs"
+        a_ [class_ "btn btn-ghost btn-sm text-textError", href_ "/logout"] $ toHtml $ I18n.t lang "nav.logout"
 
   section_ [id_ "main-content", class_ "mx-auto max-md:px-2 px-4 py-6 pb-36 pt-20 overflow-y-auto h-full"] do
     div_ [class_ "flex justify-between items-center mb-8"] do
-      h2_ [class_ "text-textStrong text-3xl font-semibold"] "Projects"
-      a_ [class_ "btn btn-primary btn-sm", href_ "/p/new"] (faSprite_ "plus" "regular" "h-4 w-4 mr-2" >> "New Project")
+      h2_ [class_ "text-textStrong text-3xl font-semibold"] $ toHtml $ I18n.t lang "projects.title"
+      a_ [class_ "btn btn-primary btn-sm", href_ "/p/new"] (faSprite_ "plus" "regular" "h-4 w-4 mr-2" >> toHtml (I18n.t lang "projects.create_new"))
+
+    when (V.null projects && not showDemoProject) $
+      emptyState_ (Just "grid") (I18n.t lang "projects.empty.title") (I18n.t lang "projects.empty.subtitle") (Just "/p/new") (I18n.t lang "projects.empty.create_first")
 
     unless (V.null projects) $ div_ [class_ "mb-12"] do
       h3_ [class_ "text-textWeak text-lg font-medium mb-4"] "Your Projects"
@@ -1275,6 +1280,7 @@ projectOnboardingH = do
 
 data CreateProjectResp = CreateProjectResp
   { sess :: Projects.PersistentSession
+  , lang :: I18n.Language
   , pid :: Projects.ProjectId
   , env :: EnvConfig
   , paymentPlan :: Text
@@ -1299,9 +1305,11 @@ instance HasField "unwrapCreateProjectResp" CreateProject (Maybe CreateProjectRe
 
 
 instance ToHtml CreateProject where
-  toHtml (CreateProject (PageCtx bwconf (sess, pid, config, paymentPlan, isUpdate, prf, pref, pro))) = toHtml $ PageCtx bwconf $ createProjectBody sess pid config paymentPlan prf pref pro
+  toHtml (CreateProject (PageCtx bwconf (sess, pid, config, paymentPlan, isUpdate, prf, pref, pro))) =
+    let lang = maybe I18n.En (.lang) bwconf.sessM
+     in toHtml $ PageCtx bwconf $ createProjectBody lang sess pid config paymentPlan prf pref pro
   toHtml (PostNoContent message) = span_ [class_ ""] $ toHtml message
-  toHtml (ProjectPost cpr) = toHtml $ createProjectBody cpr.sess cpr.pid cpr.env cpr.paymentPlan cpr.form cpr.formError cpr.pro
+  toHtml (ProjectPost cpr) = toHtml $ createProjectBody cpr.lang cpr.sess cpr.pid cpr.env cpr.paymentPlan cpr.form cpr.formError cpr.pro
   toHtmlRaw = toHtml
 
 
@@ -1350,7 +1358,7 @@ createProjectPostH pid createP = do
   appCtx <- ask @AuthContext
   validationRes <- validateM createProjectFormV createP
   case validationRes of
-    Right cpe -> addRespHeaders $ ProjectPost (CreateProjectResp sess.persistentSession pid appCtx.config "" createP cpe project)
+    Right cpe -> addRespHeaders $ ProjectPost (CreateProjectResp sess.persistentSession sess.lang pid appCtx.config "" createP cpe project)
     Left cp -> processProjectPostForm cp pid
 
 
@@ -1472,18 +1480,18 @@ processProjectPostForm cpRaw pid = do
   if isDemoAndNotSudo pid sess.user.isSudo
     then do
       addErrorToast "Can't perform this action on the demo project" Nothing
-      addRespHeaders $ ProjectPost (CreateProjectResp sess.persistentSession pid envCfg "" cp (def @CreateProjectFormError) project)
+      addRespHeaders $ ProjectPost (CreateProjectResp sess.persistentSession sess.lang pid envCfg "" cp (def @CreateProjectFormError) project)
     else do
       _ <- Projects.updateProject (createProjectFormToModel pid project.subId project.firstSubItemId project.orderId project.paymentPlan cp)
       Projects.logAuditS pid Projects.AEProjectUpdated sess Nothing
       addSuccessToast "Updated Project Successfully" Nothing
-      addRespHeaders $ ProjectPost (CreateProjectResp sess.persistentSession pid envCfg "" cp (def @CreateProjectFormError) project)
+      addRespHeaders $ ProjectPost (CreateProjectResp sess.persistentSession sess.lang pid envCfg "" cp (def @CreateProjectFormError) project)
 
 
-createProjectBody :: Projects.PersistentSession -> Projects.ProjectId -> EnvConfig -> Text -> CreateProjectForm -> CreateProjectFormError -> Projects.Project -> Html ()
-createProjectBody sess pid envCfg paymentPlan cp cpe proj = do
+createProjectBody :: I18n.Language -> Projects.PersistentSession -> Projects.ProjectId -> EnvConfig -> Text -> CreateProjectForm -> CreateProjectFormError -> Projects.Project -> Html ()
+createProjectBody lang sess pid envCfg paymentPlan cp cpe proj = do
   settingsSection_ do
-    settingsH2_ "Project Settings"
+    settingsH2_ $ I18n.t lang "nav.project"
 
     form_
       [ class_ "space-y-5 sm:space-y-8"
@@ -1497,10 +1505,10 @@ createProjectBody sess pid envCfg paymentPlan cp cpe proj = do
       do
         -- Project details
         div_ [class_ "space-y-4"] do
-          formField_ FieldSm def{value = cp.title, placeholder = "My Project"} "Project Name" "title" True Nothing
-          formSelectField_ FieldSm "Timezone" "timeZone" False do
+          formField_ FieldSm def{value = cp.title, placeholder = "My Project"} (I18n.t lang "settings.project_name") "title" True Nothing
+          formSelectField_ FieldSm (I18n.t lang "settings.time_zone") "timeZone" False do
             option_ [value_ cp.timeZone] $ toHtml cp.timeZone
-          formField_ FieldSm def{inputType = "textarea", value = cp.description, placeholder = "What is this project about?", extraAttrs = [rows_ "3"]} "Description" "description" False Nothing
+          formField_ FieldSm def{inputType = "textarea", value = cp.description, placeholder = "What is this project about?", extraAttrs = [rows_ "3"]} (I18n.t lang "settings.description") "description" False Nothing
 
         -- Alert configuration
         div_ [class_ "border-t border-strokeWeak pt-1"]
@@ -1511,7 +1519,7 @@ createProjectBody sess pid envCfg paymentPlan cp cpe proj = do
           button_ [id_ "saveBtn", class_ "btn gap-1.5 btn-ghost text-textWeak max-sm:btn-block max-sm:btn-md sm:btn-sm", type_ "submit", disabled_ "true", dirtyFormSaveAttr_] do
             htmxIndicator_ "createIndicator" LdXS
             faSprite_ "floppy-disk" "regular" "w-3 h-3"
-            span_ "Save Changes"
+            span_ $ toHtml $ I18n.t lang "settings.save_changes"
 
     script_ do
       [text|
@@ -1532,7 +1540,7 @@ createProjectBody sess pid envCfg paymentPlan cp cpe proj = do
       div_ [class_ "flex items-center gap-3 min-w-0"] do
         iconBadge_ ErrorBadge "triangle-alert"
         div_ [class_ "min-w-0"] do
-          h3_ [class_ "text-sm font-medium text-textStrong"] "Delete project"
+          h3_ [class_ "text-sm font-medium text-textStrong"] $ toHtml $ I18n.t lang "settings.delete_project"
           p_ [class_ "text-xs text-textWeak"] "Permanently remove this project and all associated data."
       label_
         [ class_ "btn btn-sm bg-fillError-weak text-textError hover:bg-fillError-strong hover:text-white gap-1 shrink-0 max-sm:w-full"
@@ -1540,13 +1548,14 @@ createProjectBody sess pid envCfg paymentPlan cp cpe proj = do
         ]
         do
           faSprite_ "trash" "regular" "w-3 h-3"
-          span_ "Delete Project"
+          span_ $ toHtml $ I18n.t lang "settings.delete_project"
     confirmModal_
+      lang
       "delete-project-modal"
       "Delete project?"
       "This permanently removes the project and all associated data. This action cannot be undone."
       [type_ "button", hxDelete_ $ "/p/" <> pid.toText <> "/delete"]
-      "Delete project"
+      (I18n.t lang "settings.delete_project")
 
 
 alertConfiguration :: Bool -> Bool -> Bool -> Bool -> Html ()
@@ -1644,6 +1653,6 @@ teamModal pid team whiteList emailWhiteList channelWhiteList discordWhiteList is
                   li_ "Add 'Events API v2' integration"
                   li_ "Copy the Integration Key"
 
-      formActionsModal_ modalId
+      formActionsModal_ I18n.En modalId
         $ button_ [class_ "btn btn-sm btn-primary", type_ "submit"]
         $ toHtml (if isJust team then "Save Changes" else "Create Team" :: Text)
