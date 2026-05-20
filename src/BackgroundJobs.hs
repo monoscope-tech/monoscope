@@ -1567,6 +1567,30 @@ dualExecPgTf ctx sql' = Ki.scoped \scope -> do
         Left e -> throwIO e
 
 
+-- | PG-only variant of `dualExecPgTf` for statements TimeFusion can't run
+-- (e.g. those using `jsonb_build_object`, `jsonb_array_elements_text`, or
+-- `now()` in SET expressions). Same retry-on-deadlock and locking guards as
+-- the PG arm of `dualExecPgTf`, but no TF fork.
+pgOnlyExec :: (DB es, Log :> es) => HI.Sql -> Eff es Int64
+pgOnlyExec sql' = retryOnDeadlock 2 $ Hasql.transaction TxS.ReadCommitted TxS.Write $ do
+  Tx.sql "SET LOCAL lock_timeout = '30s'"
+  Tx.sql "SET LOCAL statement_timeout = '5min'"
+  HI.getRowsAffected <$> Tx.statement () (HI.interp True sql')
+  where
+    retryOnDeadlock :: (DB es, Log :> es) => Int -> Eff es Int64 -> Eff es Int64
+    retryOnDeadlock 0 action = action
+    retryOnDeadlock n action =
+      tryAny action >>= \case
+        Right r -> pure r
+        Left e
+          | Just he <- fromException @Hasql.HasqlException e
+          , Hasql.isDeadlockError he -> do
+              Log.logAttention "pgOnlyExec deadlock, retrying" (show @Text e)
+              liftIO $ threadDelay (50000 * (3 - n))
+              retryOnDeadlock (n - 1) action
+        Left e -> throwIO e
+
+
 processEagerBatch
   :: ExtractionWorker.ExtractionBatch Telemetry.OtelLogsAndSpans
   -> ExtractionWorker.ShardState Telemetry.OtelLogsAndSpans
@@ -1715,7 +1739,9 @@ processEagerBatch batch shard
         rowsUpdated <-
           if not ctx.config.enableHashUpdates || batch.batchMaxTs < hashCutoff
             then pure 0
-            else dualExecPgTf ctx update1Sql
+            else pgOnlyExec update1Sql
+        -- \^ PG-only: TF can't run jsonb_build_object / jsonb_array_elements_text / now().
+        -- See comment on pgOnlyExec. UPDATE-2 below stays dual (CASE-rewritten).
         Log.logTrace "Eager-track UPDATE-1 complete" (AE.object ["project_id" AE..= pid.toText, "span_count" AE..= V.length spans, "rows_updated" AE..= rowsUpdated, "skipped" AE..= (not ctx.config.enableHashUpdates || batch.batchMaxTs < hashCutoff)])
 
         -- TODO(otel-metrics): emit counters for batches_processed, spans_processed here.
@@ -1731,6 +1757,7 @@ processEagerBatch batch shard
                       , ExtractionWorker.traceId = T.copy traceId'
                       , ExtractionWorker.timestamp = s.timestamp
                       , ExtractionWorker.summary = summaryText
+                      , ExtractionWorker.isError = Telemetry.isErrorRecord s
                       }
                   )
         liftIO $ ExtractionWorker.appendBufferedSpans shard pid ctx.config.drainFlushBatchSize now ctx.extractionWorker.droppedFlushTasks bufferedSpans
@@ -1938,10 +1965,15 @@ flushDrainTask shard task
          in (HM.insert key newEntry m, ())
 
       -- Build a spanCtxId → patternHash tag map so each row can have its own
-      -- tag appended in UPDATE-2.
+      -- tag appended in UPDATE-2. Also build patternHash → isError so any error
+      -- span hitting a pattern flags the whole pattern as error-bearing.
       let tagFor lid = "pat:" <> toXXHash lid
           tagByCtx :: HM.HashMap Text Text
           tagByCtx = HM.fromList [(lid, tagFor tpl) | (lid, tpl) <- V.toList mapping]
+          errByCtx :: HM.HashMap Text Bool
+          errByCtx = HM.fromList [(bs.spanCtxId, bs.isError) | bs <- task.spans]
+          errByHash :: HM.HashMap Text Bool
+          errByHash = V.foldl' (\m (lid, tpl) -> HM.insertWith (||) (toXXHash tpl) (HM.lookupDefault False lid errByCtx) m) HM.empty mapping
 
       -- Persist log patterns + hourly stats.
       let allPatternsRaw = Drain.getAllLogGroups mergedTree
@@ -1963,6 +1995,7 @@ flushDrainTask shard task
                           , traceId = Nothing
                           , sampleMessage = Just dp.exampleLog
                           , eventCount
+                          , isError = HM.lookupDefault False patternHash errByHash
                           }
                       , (pid, "summary" :: Text, patternHash, task.flushedAt, eventCount)
                       )
@@ -1986,20 +2019,35 @@ flushDrainTask shard task
             effectiveMinTs = max minTs hashCutoff
             maxTsPad = addUTCTime 1 maxTs
             pidText = pid.toText
+            tuples = zip3 spanIds' traceIds' tagArr
+            -- CASE rewrite of the original `UPDATE ... FROM (unnest)` form so
+            -- TimeFusion's PGWire (which doesn't support UPDATE...FROM with a
+            -- joinable subquery) accepts the statement. One CASE branch per
+            -- tuple; idempotency check inline. Empty inputs short-circuit.
+            -- No table alias: TimeFusion's UPDATE planner doesn't resolve
+            -- alias-qualified column refs inside CASE/SET expressions.
+            -- Unqualified is unambiguous (single-table UPDATE) on both PG and TF.
+            whenBranch (s, t, tag) =
+              [HI.sql| WHEN context___span_id = #{s}
+                        AND context___trace_id = #{t}
+                        AND NOT (COALESCE(hashes, '{}'::text[]) @> ARRAY[#{tag}])
+                       THEN ARRAY[#{tag}] |]
+            -- TimeFusion doesn't accept row-constructor IN syntax
+            -- `(col1, col2) IN ((a,b), ...)`. Expand to explicit OR chain.
+            orMatch (s, t, _) =
+              [HI.sql| (context___span_id = #{s} AND context___trace_id = #{t}) |]
             update2Sql =
-              [HI.sql| UPDATE otel_logs_and_spans o
-                    SET hashes = COALESCE(o.hashes, '{}'::text[]) || ARRAY[u.tag]
-                    FROM (SELECT * FROM (SELECT unnest(#{spanIds'}::text[]) AS span_id,
-                                 unnest(#{traceIds'}::text[]) AS trace_id,
-                                 unnest(#{tagArr}::text[]) AS tag) raw
-                                 ORDER BY span_id, trace_id) u
-                    WHERE o.project_id = #{pidText}
-                      AND o.timestamp >= #{effectiveMinTs}
-                      AND o.timestamp <  #{maxTsPad}
-                      AND o.context___span_id = u.span_id
-                      AND o.context___trace_id = u.trace_id
-                      AND NOT (COALESCE(o.hashes, '{}'::text[]) @> ARRAY[u.tag]) |]
-        Relude.when (ctx.config.enableHashUpdates && maxTs >= hashCutoff)
+              [HI.sql| UPDATE otel_logs_and_spans
+                          SET hashes = COALESCE(hashes, '{}'::text[]) || (CASE |]
+                <> mconcat (whenBranch <$> tuples)
+                <> [HI.sql| ELSE ARRAY[]::text[] END)
+                        WHERE project_id = #{pidText}
+                          AND timestamp >= #{effectiveMinTs}
+                          AND timestamp <  #{maxTsPad}
+                          AND ( |]
+                <> mconcat (intersperse [HI.sql| OR |] (orMatch <$> tuples))
+                <> [HI.sql| ) |]
+        Relude.when (ctx.config.enableHashUpdates && maxTs >= hashCutoff && not (null tuples))
           $ void
           $ dualExecPgTf ctx update2Sql
       -- TODO(otel-metrics): emit counters for drain_flushes_completed, spans_flushed, patterns_persisted.
@@ -2267,8 +2315,8 @@ sendReportForProject pid rType = do
                 )
                 ( concurrently
                     ( concurrently
-                        (liftIO $ Charts.fetchMetricsData Charts.DTMetric (parseQ "| summarize count(*) by bin_auto(timestamp), resource___service___name") currentTime (Just startTime) (Just currentTime) ctx Nothing)
-                        (liftIO $ Charts.fetchMetricsData Charts.DTMetric (parseQ "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), resource___service___name") currentTime (Just startTime) (Just currentTime) ctx Nothing)
+                        (liftIO $ fromRight def <$> Charts.fetchMetricsData Charts.DTMetric (parseQ "| summarize count(*) by bin_auto(timestamp), resource___service___name") currentTime (Just startTime) (Just currentTime) ctx Nothing)
+                        (liftIO $ fromRight def <$> Charts.fetchMetricsData Charts.DTMetric (parseQ "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), resource___service___name") currentTime (Just startTime) (Just currentTime) ctx Nothing)
                     )
                     (Issues.selectIssues pid Nothing (Just False) Nothing 100 0 (Just (startTime, currentTime)) Nothing "7d" [] [])
                 )
@@ -3386,7 +3434,7 @@ detectLogPatternSpikes pid scheduledTime authCtx = do
     whenJust projectM \project -> do
       let issueUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> issue.id.toText
           changePct = if sr.mean > 0 then (sr.currentRate - sr.mean) / sr.mean * 100 else 0
-          alert = LogPatternRateChangeAlert{issueUrl, patternText = lpRate.logPattern, sampleMessage = Nothing, logLevel = lpRate.logLevel, serviceName = lpRate.serviceName, direction = dir, currentRate = sr.currentRate, baselineMean = sr.mean, changePercent = changePct}
+          alert = LogPatternRateChangeAlert{issueUrl, patternText = lpRate.logPattern, sampleMessage = Nothing, logLevel = lpRate.logLevel, serviceName = lpRate.serviceName, direction = dir, currentRate = sr.currentRate, baselineMean = sr.mean, changePercent = changePct, isError = lpRate.isError}
           (subj, html) = ET.logPatternRateChangeEmail project.title issueUrl lpRate.logPattern lpRate.logLevel lpRate.serviceName dir sr.currentRate sr.mean changePct
       void $ notifyIssue issue project users Issues.rateChangeCooldownHours "log_pattern_rate_change" alert issueUrl subj html
     pure issue.id
@@ -3434,8 +3482,8 @@ processNewLogPatterns pid authCtx = do
           whenJust projectM \project -> do
             let issueUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> issue.id.toText
                 occCount = fromIntegral lp.occurrenceCount :: Int
-                alert = LogPatternAlert{issueUrl, patternText = lp.logPattern, sampleMessage = lp.sampleMessage, logLevel = lp.logLevel, serviceName = lp.serviceName, sourceField = lp.sourceField, occurrenceCount = occCount}
-                (subj, html) = ET.logPatternEmail project.title issueUrl lp.logPattern lp.sampleMessage lp.logLevel lp.serviceName lp.sourceField occCount
+                alert = LogPatternAlert{issueUrl, patternText = lp.logPattern, sampleMessage = lp.sampleMessage, logLevel = lp.logLevel, serviceName = lp.serviceName, sourceField = lp.sourceField, occurrenceCount = occCount, isError = lp.isError}
+                (subj, html) = ET.logPatternEmail project.title issueUrl lp.logPattern lp.sampleMessage lp.logLevel lp.serviceName lp.sourceField occCount lp.isError
             void $ notifyIssue issue project users newPatternCooldownHours "log_pattern" alert issueUrl subj html
           pure issue.id
         unless (V.null results) $ liftIO $ withResource authCtx.jobsPool \conn ->

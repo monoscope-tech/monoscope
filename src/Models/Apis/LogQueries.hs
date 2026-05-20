@@ -404,7 +404,7 @@ valueToVector val = case val of
   _ -> Nothing
 
 
-data PatternRow = PatternRow {logPattern :: Text, count :: Int64, level :: Maybe Text, service :: Maybe Text, volume :: [Int], mergedCount :: Int}
+data PatternRow = PatternRow {logPattern :: Text, count :: Int64, level :: Maybe Text, service :: Maybe Text, volume :: [Int], mergedCount :: Int, isError :: Bool}
 
 
 -- | Display name for a session row: prefers email, then name, then user ID.
@@ -519,14 +519,14 @@ fetchLogPatterns enableTfReads pid queryAST dateRange sourceM targetM skip = do
     $ AE.object
       ["project_id" AE..= pid, "target" AE..= target, "skip" AE..= skip, "date_range" AE..= show dateRange]
   let (dateFrom, dateTo) = dateRange
-  precomputed :: [(Text, Int64, Maybe Text, Maybe Text, Text, Int, Int)] <-
+  precomputed :: [(Text, Int64, Maybe Text, Maybe Text, Text, Int, Int, Bool)] <-
     if target `elem` map fst LogPatterns.knownPatternFields
-      then Hasql.interp [HI.sql|SELECT lp.log_pattern, (lp.occurrence_count + COALESCE(m.member_count, 0))::BIGINT as total_count, lp.log_level, lp.service_name, lp.pattern_hash, COALESCE(m.member_cnt, 0)::INT as merged_count, COUNT(*) OVER()::INT as total_patterns FROM apis.log_patterns lp LEFT JOIN LATERAL (SELECT SUM(occurrence_count) as member_count, COUNT(*)::INT as member_cnt FROM apis.log_patterns WHERE canonical_id = lp.id) m ON TRUE WHERE lp.project_id = #{pid} AND lp.source_field = #{target} AND lp.canonical_id IS NULL AND (#{dateFrom} IS NULL OR lp.last_seen_at >= #{dateFrom}) AND (#{dateTo} IS NULL OR lp.last_seen_at <= #{dateTo}) ORDER BY total_count DESC OFFSET #{skip} LIMIT #{aggregatePageSize}|]
+      then Hasql.interp [HI.sql|SELECT lp.log_pattern, (lp.occurrence_count + COALESCE(m.member_count, 0))::BIGINT as total_count, lp.log_level, lp.service_name, lp.pattern_hash, COALESCE(m.member_cnt, 0)::INT as merged_count, COUNT(*) OVER()::INT as total_patterns, (lp.is_error OR COALESCE(m.member_err, FALSE)) as is_error FROM apis.log_patterns lp LEFT JOIN LATERAL (SELECT SUM(occurrence_count) as member_count, COUNT(*)::INT as member_cnt, bool_or(is_error) as member_err FROM apis.log_patterns WHERE canonical_id = lp.id) m ON TRUE WHERE lp.project_id = #{pid} AND lp.source_field = #{target} AND lp.canonical_id IS NULL AND (#{dateFrom} IS NULL OR lp.last_seen_at >= #{dateFrom}) AND (#{dateTo} IS NULL OR lp.last_seen_at <= #{dateTo}) ORDER BY total_count DESC OFFSET #{skip} LIMIT #{aggregatePageSize}|]
       else pure []
   if not (null precomputed)
     then do
       Log.logTrace "fetchLogPatterns: using precomputed" $ AE.object ["count" AE..= length precomputed]
-      let totalPatterns = maybe 0 (\(_, _, _, _, _, _, n) -> n) $ listToMaybe precomputed
+      let totalPatterns = maybe 0 (\(_, _, _, _, _, _, n, _) -> n) $ listToMaybe precomputed
           hashes = V.fromList $ map (view _5) precomputed
           hourlyFrom = fromMaybe (addUTCTime (-(24 * 3600)) now) dateFrom
           hourlyTo = fromMaybe now dateTo
@@ -536,7 +536,7 @@ fetchLogPatterns enableTfReads pid queryAST dateRange sourceM targetM skip = do
       hourlyRows :: [(Text, UTCTime, Int)] <- Hasql.interp [HI.sql|SELECT pattern_hash, hour_bucket, event_count::INT FROM apis.log_pattern_hourly_stats WHERE project_id = #{pid} AND source_field = #{target} AND pattern_hash = ANY(#{allHashes}) AND hour_bucket >= #{hourlyFrom} AND hour_bucket <= #{hourlyTo} ORDER BY pattern_hash, hour_bucket|]
       let volumeMap = HM.fromListWith (++) [(h, [(t, c)]) | (h, t, c) <- hourlyRows]
           lookupVolume h = buildHourlyBuckets now $ concatMap (\mh -> fromMaybe [] $ HM.lookup mh volumeMap) (h : fromMaybe [] (HM.lookup h memberHashMap))
-      pure (totalPatterns, [PatternRow{logPattern = pat, count = cnt, level = lvl, service = svc, volume = lookupVolume h, mergedCount = mc} | (pat, cnt, lvl, svc, h, mc, _) <- precomputed])
+      pure (totalPatterns, [PatternRow{logPattern = pat, count = cnt, level = lvl, service = svc, volume = lookupVolume h, mergedCount = mc, isError = isErr} | (pat, cnt, lvl, svc, h, mc, _, isErr) <- precomputed])
     else do
       Log.logTrace "fetchLogPatterns: falling back to on-the-fly query" $ AE.object ["full_where" AE..= fullWhere]
       let bucketW = bucketWidthSecs dateRange now
@@ -566,7 +566,7 @@ fetchLogPatterns enableTfReads pid queryAST dateRange sourceM targetM skip = do
           sorted = take 100 $ drop skip $ sortOn (Down . (\(c, _, _, _) -> c) . snd) $ HM.toList merged
           range = bucketRange [bi | (_, (_, _, _, bs)) <- sorted, (bi, _) <- bs]
       Log.logTrace "fetchLogPatterns: normalization done" $ AE.object ["patterns" AE..= HM.size merged]
-      pure (HM.size merged, [PatternRow{logPattern = pat, count = fromIntegral cnt, level = lvl, service = svc, volume = densifyBuckets range bs, mergedCount = 0} | (pat, (cnt, lvl, svc, bs)) <- sorted])
+      pure (HM.size merged, [PatternRow{logPattern = pat, count = fromIntegral cnt, level = lvl, service = svc, volume = densifyBuckets range bs, mergedCount = 0, isError = maybe False ((== "error") . T.toLower) lvl} | (pat, (cnt, lvl, svc, bs)) <- sorted])
   where
     -- SAFETY: All Left branches produce safe column names from hardcoded whitelists
     -- (flattenedOtelAttributes, rootColumns). Right branch uses parameterized #>> operator.

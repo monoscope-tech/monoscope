@@ -713,6 +713,7 @@ logPatternToSummary lp =
     , occurrenceCount = lp.occurrenceCount
     , firstSeenAt = zonedTimeToUTC lp.firstSeenAt
     , lastSeenAt = zonedTimeToUTC lp.lastSeenAt
+    , isError = lp.isError
     }
 
 

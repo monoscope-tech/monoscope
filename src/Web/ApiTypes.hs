@@ -447,6 +447,7 @@ data LogPatternSummary = LogPatternSummary
   , occurrenceCount :: Int64
   , firstSeenAt :: UTCTime
   , lastSeenAt :: UTCTime
+  , isError :: Bool
   }
   deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON LogPatternSummary

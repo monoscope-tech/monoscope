@@ -1870,7 +1870,11 @@ export class LogList extends LitElement {
         // upstream parent id (carried in the latency_breakdown column).
         const synthParentId = isSyntheticRow ? lookupVecValue<string>(dataArr, colIdxMap, 'latency_breakdown') ?? '' : '';
         if (this.mode === 'patterns') {
-          return html`<div class="break-all whitespace-break-spaces">${rowData._summaryCache.content}</div>`;
+          const patIsError = lookupVecValue<boolean>(dataArr, colIdxMap, 'is_error') === true;
+          return html`<div class="break-all whitespace-break-spaces">
+            ${patIsError ? html`<span class="cbadge-sm badge-error mr-1.5 align-middle" title="Pattern includes error-level events">error</span>` : nothing}
+            ${rowData._summaryCache.content}
+          </div>`;
         }
         const errClas = hasErrors
           ? 'bg-fillError-strong text-textInverse-strong fill-textInverse-strong stroke-strokeError-strong'

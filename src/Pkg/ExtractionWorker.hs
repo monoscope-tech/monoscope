@@ -123,6 +123,7 @@ data BufferedSpan = BufferedSpan
   , traceId :: !Text
   , timestamp :: !UTCTime
   , summary :: !Text
+  , isError :: !Bool
   }
 
 

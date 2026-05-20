@@ -1085,8 +1085,8 @@ instance AE.ToJSON LogsGet where
             go acc w | "⇒" `T.isInfixOf` w = [w] : acc
             go (cur : rest) w = (w : cur) : rest
         cols = ["id", "pattern_count", "volume", "level", "service", "summary"] :: [Text]
-        allCols = cols ++ ["merged_count"] :: [Text]
-        rows = V.map (\p -> AE.Array $ V.fromList [AE.Null, AE.toJSON p.count, AE.toJSON p.volume, AE.toJSON p.level, AE.toJSON p.service, patternToSummary p.logPattern, AE.toJSON p.mergedCount]) patterns
+        allCols = cols ++ ["merged_count", "is_error"] :: [Text]
+        rows = V.map (\p -> AE.Array $ V.fromList [AE.Null, AE.toJSON p.count, AE.toJSON p.volume, AE.toJSON p.level, AE.toJSON p.service, patternToSummary p.logPattern, AE.toJSON p.mergedCount, AE.toJSON p.isError]) patterns
         total = V.foldl' (\acc p -> acc + p.count) 0 patterns
      in aggregateEnvelope rows cols allCols total ["totalPatterns" AE..= totalPatterns]
   -- Sessions use the exact same column layout as logs so the same rendering code is reused.

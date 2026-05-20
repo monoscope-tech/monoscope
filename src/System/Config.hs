@@ -320,7 +320,7 @@ configToEnv config = do
       tfHasqlSettings = tfParams
   hasqlPool <- liftIO $ DeriveUtils.mkHasqlPool 20 mainHasqlSettings
   hasqlJobsPool <- liftIO $ DeriveUtils.mkHasqlPool 10 mainHasqlSettings
-  hasqlTimefusionPool <- liftIO $ DeriveUtils.mkHasqlPool 10 tfHasqlSettings
+  hasqlTimefusionPool <- liftIO $ DeriveUtils.mkHasqlPool 30 tfHasqlSettings
   projectCache <- liftIO $ newCache (Just $ TimeSpec (30 * 60) 0)
   projectKeyCache <- liftIO $ newCache (Just $ TimeSpec (30 * 60) 0)
   logsPatternCache <- liftIO $ newCache (Just $ TimeSpec (30 * 60) 0)

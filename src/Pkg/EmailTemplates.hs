@@ -337,7 +337,7 @@ data ProjectNotifKind = PNInvite | PNCreated | PNDeleted
 
 
 projectNotifEmail :: ProjectNotifKind -> Maybe Text -> Text -> Maybe (Text, Text) -> (Text, Html ())
-projectNotifEmail kind userNameM projectName ctaM =
+projectNotifEmail kindLabel userNameM projectName ctaM =
   ( subject
   , emailBody do
       emailGreeting userNameM
@@ -349,7 +349,7 @@ projectNotifEmail kind userNameM projectName ctaM =
       whenJust ctaM \(url, _) -> emailFallbackUrl url
   )
   where
-    (subject, message) = case kind of
+    (subject, message) = case kindLabel of
       PNInvite -> ("[···] Project Invitation", "<b>" <> fromMaybe "Someone" userNameM <> "</b> has invited you to the <b>" <> projectName <> "</b> project on Monoscope. We're excited to have you on board! All you need to do next is <a href=\"https://monoscope.tech/docs/sdks?utm_source=transac_emails\">integrate one of our SDKs</a> into your application so we can begin monitoring your API.")
       PNCreated -> ("[···] New Project Created", "You have created a new <b>" <> projectName <> "</b> project on Monoscope.")
       PNDeleted -> ("[···] Project Deleted", "You have successfully deleted the <b>" <> projectName <> "</b> project.")
@@ -396,11 +396,12 @@ logPatternEmail
   -> Maybe Text -- serviceName
   -> Text -- sourceField
   -> Int -- occurrenceCount
+  -> Bool -- isError
   -> (Text, Html ())
-logPatternEmail projectName issueUrl patternText sampleMessage logLevel serviceName sourceField occurrenceCount =
-  ( "[···] New " <> fromMaybe "log" logLevel <> " pattern - " <> projectName
+logPatternEmail projectName issueUrl patternText sampleMessage logLevel serviceName sourceField occurrenceCount isError =
+  ( "[···] New " <> kindLabel <> " pattern - " <> projectName
   , emailBody do
-      h1_ $ toHtml @Text ("New log pattern detected in " <> projectName)
+      h1_ $ toHtml @Text ("New " <> kindLabel <> " pattern detected in " <> projectName)
       emailStatRow
         $ catMaybes
           [ Just ("Level", fromMaybe "—" logLevel, Nothing)
@@ -416,6 +417,11 @@ logPatternEmail projectName issueUrl patternText sampleMessage logLevel serviceN
         pre_ [style_ "font-family: monospace; font-size: 13px; white-space: pre-wrap; margin: 0 0 16px 0;"] $ toHtml (truncateText 400 (stripSummaryBadges s))
       emailButton issueUrl "Open issue"
   )
+  where
+    kindLabel
+      | isError = "error log"
+      | maybe False (\l -> T.toLower l `elem` (["warn", "warning"] :: [Text])) logLevel = "warning log"
+      | otherwise = "log" :: Text
 
 
 logPatternRateChangeEmail
