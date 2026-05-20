@@ -318,26 +318,28 @@ verifiedCheck = div_ [class_ "flex items-center gap-2 text-textSuccess"] do
 
 onboardingInfoPostH :: Projects.ProjectId -> OnboardingInfoForm -> ATAuthCtx (RespHeaders OnboardingInfoPost)
 onboardingInfoPostH pid form = do
-  (sess, project) <- Projects.sessionAndProject pid
-  let firstName = form.firstName
-      lastName = form.lastName
-  let infoJson =
-        KM.fromList
-          [ ("companyName", AE.toJSON form.companyName)
-          , ("companySize", AE.toJSON form.companySize)
-          , ("foundUsFrom", AE.toJSON form.whereDidYouHearAboutUs)
-          ]
-      questions = case project.questions of
-        Just (AE.Object o) -> AE.Object $ infoJson <> o
-        _ -> AE.Object infoJson
-      jsonBytes = HI.AsJsonb questions
-      stepsCompleted = project.onboardingStepsCompleted
-      newCompleted = insertIfNotExist "Info" stepsCompleted
+  (_sess, project) <- Projects.sessionAndProject pid
+  -- For the self-hosted refactor we collapsed onboarding to a single step
+  -- (project name). The remaining SaaS-only questions (where to host the
+  -- project, "which features", pricing) don't apply here, so we mark every
+  -- step as completed, flip payment_plan off ONBOARDING, and drop the user
+  -- straight into the project dashboard.
   let companyName = form.companyName
-      userId = sess.user.id
-  _ <- Hasql.interpExecute [HI.sql| update projects.projects set title=#{companyName},questions=#{jsonBytes},onboarding_steps_completed=#{newCompleted} where id=#{pid} |]
-  _ <- Hasql.interpExecute [HI.sql| update users.users set first_name=#{firstName}, last_name=#{lastName} where id=#{userId} |]
-  redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=Survey"
+      allSteps =
+        foldr
+          insertIfNotExist
+          project.onboardingStepsCompleted
+          ["Info", "Survey", "NotifChannel", "Integration", "Pricing"]
+  _ <-
+    Hasql.interpExecute
+      [HI.sql|
+        update projects.projects
+        set title = #{companyName},
+            onboarding_steps_completed = #{allSteps},
+            payment_plan = CASE WHEN payment_plan = 'ONBOARDING' THEN 'Free' ELSE payment_plan END
+        where id = #{pid}
+      |]
+  redirectCS $ "/p/" <> pid.toText <> "/"
   addRespHeaders $ OnboardingInfoPost ()
 
 
