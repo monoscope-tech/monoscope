@@ -285,6 +285,7 @@ integrationsSettingsGetH pid = do
     $ integrationsBody
       IntegrationsConfig
         { session = sess.persistentSession
+        , lang = sess.lang
         , projectId = pid
         , envConfig = appCtx.env
         , isUpdate = True
@@ -440,6 +441,7 @@ slackDisconnectH pid = do
 
 data IntegrationsConfig = IntegrationsConfig
   { session :: Projects.PersistentSession
+  , lang :: I18n.Language
   , projectId :: Projects.ProjectId
   , envConfig :: EnvConfig
   , isUpdate :: Bool
@@ -461,7 +463,7 @@ integrationsBody :: IntegrationsConfig -> Html ()
 integrationsBody IntegrationsConfig{..} = do
   settingsSection_ do
     let pid = projectId.toText
-    settingsH2_ "Integrations"
+    settingsH2_ $ I18n.t lang "settings.integrations"
 
     infoBanner_ do
       "Channels configured here are automatically included in the "
@@ -501,7 +503,7 @@ integrationsBody IntegrationsConfig{..} = do
             , hxSwap_ "outerHTML swap:0.3s"
             , [__| on change from closest <div/> put .btn-primary into my.className then put 'btn btn-sm btn-primary' into my.className end |]
             ]
-            "Save"
+            toHtml $ I18n.t lang "common.save"
 
     -- Developer tools
     div_ [class_ "pt-6 border-t border-strokeWeak space-y-2"] do
@@ -514,7 +516,7 @@ integrationsBody IntegrationsConfig{..} = do
     div_ [class_ "pt-6 border-t border-strokeWeak space-y-2"] do
       sectionLabel_ "Test History"
       div_ [id_ "test-history", hxGet_ [text|/p/$pid/settings/integrations/history|], hxTrigger_ "load, testSent from:body", hxSwap_ "innerHTML"] do
-        p_ [class_ "text-textWeak text-sm py-4"] "Loading..."
+        p_ [class_ "text-textWeak text-sm py-4"] $ toHtml $ I18n.t lang "common.loading"
 
 
 renderInlineTestButton :: Text -> Text -> Maybe UUID.UUID -> Html ()
