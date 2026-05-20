@@ -169,7 +169,7 @@ gitSyncSettingsPostH pid form = do
           else GitSync.updateGitHubSync encKey existing.id form.owner form.repo branch form.accessToken True
       Log.logTrace "Updated GitHub sync config" (pid, form.owner, form.repo)
       pure result
-  addRespHeaders $ gitSyncSettingsView ctx.env.hostUrl pid syncM
+  addRespHeaders $ gitSyncSettingsView I18n.En ctx.env.hostUrl pid syncM
 
 
 gitSyncSettingsDeleteH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
@@ -181,17 +181,17 @@ gitSyncSettingsDeleteH pid = do
     Just existing -> do
       _ <- GitSync.deleteGitHubSync existing.id
       Log.logTrace "Deleted GitHub sync config" pid
-  addRespHeaders $ gitSyncSettingsView ctx.env.hostUrl pid Nothing
+  addRespHeaders $ gitSyncSettingsView I18n.En ctx.env.hostUrl pid Nothing
 
 
 gitSyncSettingsPage :: I18n.Language -> Text -> Projects.ProjectId -> Maybe GitSync.GitHubSync -> Html ()
 gitSyncSettingsPage lang hostUrl pid syncM = settingsSection_ do
   settingsH2_ "GitHub Sync"
-  div_ [id_ "git-sync-content"] $ gitSyncSettingsView hostUrl pid syncM
+  div_ [id_ "git-sync-content"] $ gitSyncSettingsView lang hostUrl pid syncM
 
 
-gitSyncSettingsView :: Text -> Projects.ProjectId -> Maybe GitSync.GitHubSync -> Html ()
-gitSyncSettingsView hostUrl pid syncM = do
+gitSyncSettingsView :: I18n.Language -> Text -> Projects.ProjectId -> Maybe GitSync.GitHubSync -> Html ()
+gitSyncSettingsView lang hostUrl pid syncM = do
   let webhookUrl = hostUrl <> "webhook/github"
       actionUrl = "/p/" <> pid.toText <> "/settings/git-sync"
       installUrl = "/p/" <> pid.toText <> "/settings/git-sync/install"
@@ -199,7 +199,7 @@ gitSyncSettingsView hostUrl pid syncM = do
   div_ [class_ "space-y-6"] do
     case syncM of
       Nothing -> notConnectedView pid actionUrl installUrl
-      Just sync -> connectedView hostUrl pid sync actionUrl webhookUrl isViaApp
+      Just sync -> connectedView lang hostUrl pid sync actionUrl webhookUrl isViaApp
 
 
 notConnectedView :: Projects.ProjectId -> Text -> Text -> Html ()
@@ -232,8 +232,8 @@ notConnectedView pid actionUrl installUrl = do
           htmxIndicator_ "indicator" LdXS
 
 
-connectedView :: Text -> Projects.ProjectId -> GitSync.GitHubSync -> Text -> Text -> Bool -> Html ()
-connectedView hostUrl pid sync actionUrl webhookUrl isViaApp = do
+connectedView :: I18n.Language -> Text -> Projects.ProjectId -> GitSync.GitHubSync -> Text -> Text -> Bool -> Html ()
+connectedView lang hostUrl pid sync actionUrl webhookUrl isViaApp = do
   -- Status line
   div_ [class_ "flex items-center justify-between"] do
     div_ [class_ "flex items-center gap-2 text-sm"] do
@@ -489,4 +489,4 @@ githubAppSelectRepoH pid form = do
   liftIO $ withResource ctx.jobsPool \conn ->
     void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncPushAllDashboards pid
   -- Return updated settings view
-  addRespHeaders $ gitSyncSettingsView ctx.env.hostUrl pid result
+  addRespHeaders $ gitSyncSettingsView I18n.En ctx.env.hostUrl pid result
