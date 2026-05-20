@@ -362,7 +362,7 @@ onboardingConfPostH pid form = do
 onboardingCompleteBody :: Language -> Projects.ProjectId -> Html ()
 onboardingCompleteBody lang pid = do
   div_ [class_ "w-full max-w-xl h-full flex items-center mx-auto relative px-4 md:px-0"] $ do
-    canvas_ [id_ "drawing_canvas", class_ "absolute top-0 left-0  w-full"] pass
+    canvas_ [id_ "drawing_canvas", class_ "absolute top-0 left-0 w-full h-full pointer-events-none"] pass
     div_ [class_ "flex-col gap-4 flex w-full p-14 my-auto border border-weak rounded-2xl"] $ do
       iconBadgeWith_ "p-3" "h-8 w-8" "rounded-full" SuccessBadge "circle-check"
       div_ [class_ "flex flex-col gap-2"] do
