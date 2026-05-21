@@ -841,6 +841,9 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
           toHtml $ t sess.lang "nav.language.spanish"
           when (sess.lang == I18n.Es) $ faSprite_ "check" "regular" "w-3 h-3"
         div_ [class_ "divider my-0"] ""
+        when currUser.isSudo $ li_ [] $ a_ [href_ "/admin/settings", class_ "flex items-center gap-2"] do
+          faSprite_ "gear" "regular" "w-4 h-4"
+          toHtml $ t sess.lang "admin.menu_link"
         li_ [] $ a_ [href_ "/logout", class_ "flex items-center gap-2 text-textError", [__| on click js posthog.reset(); end |]] do
           faSprite_ "arrow-right-from-bracket" "regular" "w-4 h-4"
           toHtml $ t sess.lang "nav.logout"

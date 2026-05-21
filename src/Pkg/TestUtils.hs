@@ -569,6 +569,10 @@ runTestBackgroundWithLogger t logger appCtx process = do
             ("WhatsApp" :: Text, Data.Effectful.Notify.to whatsappData, Just (Data.Effectful.Notify.template whatsappData))
           Data.Effectful.Notify.PagerdutyNotification pdData ->
             ("PagerDuty" :: Text, pdData.dedupKey, Just pdData.summary)
+          Data.Effectful.Notify.TelegramNotification td ->
+            ("Telegram" :: Text, td.chatId, Nothing :: Maybe Text)
+          Data.Effectful.Notify.WebhookNotification wd ->
+            ("Webhook" :: Text, wd.url, Nothing :: Maybe Text)
     Log.logInfo "Notification" notifInfo
       & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger appCtx.config.logLevel
       & Effectful.runEff

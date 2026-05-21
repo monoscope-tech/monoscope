@@ -88,6 +88,7 @@ import Pages.Bots.Whatsapp qualified as Whatsapp
 import Pages.Charts.Charts qualified as Charts
 import Pages.Dashboards qualified as Dashboards
 import Pages.Endpoints qualified as ApiCatalog
+import Pages.Admin qualified as Admin
 import Pages.GitSync qualified as GitSync
 import Pages.LogExplorer.Log qualified as Log
 import Pages.LogExplorer.LogItem qualified as LogItem
@@ -522,6 +523,9 @@ type ProjectsRoutes = NamedRoutes ProjectsRoutes'
 type ProjectsRoutes' :: Type -> Type
 data ProjectsRoutes' mode = ProjectsRoutes'
   { listGet :: mode :- Get '[HTML] (RespHeaders ListProjects.ListProjectsGet)
+  , adminSettingsGet :: mode :- "admin" :> "settings" :> Get '[HTML] (RespHeaders Admin.AdminSettingsGet)
+  , adminSmtpPost :: mode :- "admin" :> "settings" :> "smtp" :> ReqBody '[FormUrlEncoded] Admin.AdminSmtpForm :> Post '[HTML] (RespHeaders NoContent)
+  , adminTelegramPost :: mode :- "admin" :> "settings" :> "telegram" :> ReqBody '[FormUrlEncoded] Admin.AdminTelegramForm :> Post '[HTML] (RespHeaders NoContent)
   , onboardingProject :: mode :- "p" :> "new" :> GetRedirect '[HTML] (Headers '[Header "Location" Text] (PageCtx (Html ()))) -- p represents project
   , createPost :: mode :- "p" :> "update" :> Capture "projectId" Projects.ProjectId :> ReqBody '[FormUrlEncoded] CreateProject.CreateProjectForm :> Post '[HTML] (RespHeaders CreateProject.CreateProject)
   , settingsGet :: mode :- "p" :> Capture "projectID" Projects.ProjectId :> "settings" :> Get '[HTML] (RespHeaders CreateProject.CreateProject)
@@ -870,6 +874,9 @@ projectsServer :: Servant.ServerT ProjectsRoutes ATAuthCtx
 projectsServer =
   ProjectsRoutes'
     { listGet = ListProjects.listProjectsGetH
+    , adminSettingsGet = Admin.adminSettingsGetH
+    , adminSmtpPost = Admin.adminSmtpPostH
+    , adminTelegramPost = Admin.adminTelegramPostH
     , onboardingProject = CreateProject.projectOnboardingH
     , createPost = CreateProject.createProjectPostH
     , settingsGet = CreateProject.projectSettingsGetH

@@ -46,6 +46,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEK
 import Data.Aeson.Lens (key, _Bool, _String)
 import Data.Aeson.QQ (aesonQQ)
+import Data.Effectful.Hasql qualified as Hasql
 import Data.Text qualified as T
 import Data.Text.Display (Display, display)
 import Data.Vector qualified as V
@@ -54,6 +55,7 @@ import Effectful.Dispatch.Dynamic
 import Effectful.Log (Log)
 import Effectful.Reader.Static (Reader, ask)
 import Effectful.TH
+import Models.System.AppConfig qualified as AppCfg
 import Network.HTTP.Types (statusIsSuccessful)
 import Network.Mail.Mime (Address (..), Mail (..), htmlPart)
 import Network.Mail.SMTP (sendMailWithLoginSTARTTLS', sendMailWithLoginTLS')
@@ -255,33 +257,43 @@ webhookNotification url payload = WebhookNotification WebhookData{url, payload}
 
 
 -- Production interpreter
-runNotifyProduction :: (IOE :> es, Log :> es, Reader Config.AuthContext :> es) => Eff (Notify ': es) a -> Eff es a
+runNotifyProduction :: (IOE :> es, Log :> es, Hasql.Hasql :> es, Reader Config.AuthContext :> es) => Eff (Notify ': es) a -> Eff es a
 runNotifyProduction = interpret $ \_ -> \case
   SendNotification notification -> case notification of
     EmailNotification EmailData{..} -> do
       appCtx <- ask @Config.AuthContext
-      let cfg = appCtx.config
-          via = if cfg.smtpHost == "" then "api" :: Text else "smtp"
+      let envCfg = appCtx.config
+      -- DB-backed SMTP config takes priority. If absent or has empty host,
+      -- fall back to the env-var values (legacy / bootstrap). When neither
+      -- is set we still fall back to Postmark as before.
+      dbSmtp <- AppCfg.getSmtpConfig
+      let resolveSmtp = case dbSmtp of
+            Just sc | not (T.null sc.host) -> Just (sc.host, fromIntegral sc.port, sc.tls, sc.username, sc.password, sc.sender)
+            _
+              | not (T.null envCfg.smtpHost) -> Just (envCfg.smtpHost, fromIntegral envCfg.smtpPort, envCfg.smtpTls, envCfg.smtpUsername, envCfg.smtpPassword, envCfg.smtpSender)
+              | otherwise -> Nothing
+          via = case resolveSmtp of
+            Just _ -> "smtp" :: Text
+            Nothing -> "api"
       Log.logTrace "Sending email notification" (AE.object ["to" AE..= receiver, "subject" AE..= subject, "via" AE..= via])
       result <-
         liftIO
           $ try @SomeException
           $ timeout 30_000_000
-          $ if cfg.smtpHost == ""
-            then do
-              let apiKey = encodeUtf8 cfg.postmarkToken
-                  fromAddress = cfg.postmarkFromEmail
+          $ case resolveSmtp of
+            Nothing -> do
+              let apiKey = encodeUtf8 envCfg.postmarkToken
+                  fromAddress = envCfg.postmarkFromEmail
                   reqPayload = [aesonQQ|{ "From": #{fromAddress}, "Subject": #{subject}, "To": #{receiver}, "HtmlBody": #{htmlBody}, "MessageStream": "outbound" }|]
                   opts = defaults & header "Content-Type" .~ ["application/json"] & header "Accept" .~ ["application/json"] & header "X-Postmark-Server-Token" .~ [apiKey]
               re <- postWith opts "https://api.postmarkapp.com/email" reqPayload
               unless (statusIsSuccessful (re ^. responseStatus)) $ fail $ "Postmark returned " <> show (re ^. responseStatus)
-            else do
-              let from = Address Nothing cfg.smtpSender
+            Just (host, port, useTls, user, pwd, fromAddr) -> do
+              let from = Address Nothing fromAddr
                   to = Address Nothing receiver
                   mail = Mail from [to] [] [] [("Subject", subject)] [[htmlPart (toLazy htmlBody)]]
-                  port = fromIntegral cfg.smtpPort
-                  sendMail = if cfg.smtpTls then sendMailWithLoginTLS' else sendMailWithLoginSTARTTLS'
-              sendMail (toString cfg.smtpHost) port (toString cfg.smtpUsername) (toString cfg.smtpPassword) mail
+                  sendMail = if useTls then sendMailWithLoginTLS' else sendMailWithLoginSTARTTLS'
+              sendMail (toString host) port (toString user) (toString pwd) mail
       case result of
         Right (Just ()) -> Log.logTrace "Email sent successfully" (AE.object ["to" AE..= receiver, "via" AE..= via])
         Right Nothing -> Log.logAttention "Email send timed out after 30s" (AE.object ["to" AE..= receiver, "subject" AE..= subject, "via" AE..= via])
@@ -502,12 +514,16 @@ runNotifyProduction = interpret $ \_ -> \case
 
 
     -- Telegram: POST to https://api.telegram.org/bot<token>/sendMessage
-    -- Bot token comes from global env var. If unset, skip with attention log
-    -- so the operator knows why notifications aren't firing.
-    sendTelegram :: (IOE :> es, Log :> es, Reader Config.AuthContext :> es) => TelegramData -> Eff es ()
+    -- Bot token comes from DB (admin Settings) first, env var (TELEGRAM_BOT_TOKEN)
+    -- as fallback. If neither is set, skip with attention log.
+    sendTelegram :: (IOE :> es, Log :> es, Hasql.Hasql :> es, Reader Config.AuthContext :> es) => TelegramData -> Eff es ()
     sendTelegram TelegramData{chatId, text, parseMode} = do
       appCtx <- ask @Config.AuthContext
-      let tok = appCtx.config.telegramBotToken
+      dbCfg <- AppCfg.getTelegramConfig
+      let envTok = appCtx.config.telegramBotToken
+          tok = case dbCfg of
+            Just c | not (T.null c.botToken) -> c.botToken
+            _ -> envTok
       if tok == ""
         then Log.logAttention "Telegram notification skipped: TELEGRAM_BOT_TOKEN not configured" (AE.object ["chat_id" AE..= chatId])
         else do

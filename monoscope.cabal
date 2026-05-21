@@ -154,9 +154,11 @@ library
       Models.Projects.ProjectApiKeys
       Models.Projects.ProjectMembers
       Models.Projects.Projects
+      Models.System.AppConfig
       Models.Telemetry.Schema
       Models.Telemetry.Telemetry
       Opentelemetry.OtlpServer
+      Pages.Admin
       Pages.Anomalies
       Pages.Auth
       Pages.BodyWrapper

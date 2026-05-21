@@ -743,7 +743,7 @@ manageTeamPostH pid form tmView = do
   projMembers <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
   let validMemberIds = V.map (.userId) projMembers
       invalidMembers = V.filter (`V.notElem` validMemberIds) form.teamMembers
-      teamDetails = ProjectMembers.TeamDetails form.teamName form.teamDescription form.teamHandle form.teamMembers form.notifEmails form.slackChannels form.discordChannels form.phoneNumbers form.pagerdutyServices V.empty
+      teamDetails = ProjectMembers.TeamDetails form.teamName form.teamDescription form.teamHandle form.teamMembers form.notifEmails form.slackChannels form.discordChannels form.phoneNumbers form.pagerdutyServices V.empty V.empty V.empty
       validationErr msg = toastError msg (ManageTeamsPostError msg)
   case (userPermission == Just ProjectMembers.PAdmin, V.null invalidMembers, validateTeamDetails form.teamName form.teamHandle form.notifEmails, form.teamId) of
     (False, _, _, _) -> validationErr "Only admins can create or update teams"
