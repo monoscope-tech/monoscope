@@ -5,6 +5,10 @@ module Pages.Onboarding (
   onboardingInfoPostH,
   onboardingConfPostH,
   phoneEmailPostH,
+  notifTelegramAddH,
+  notifTelegramRemoveH,
+  notifWebhookAddH,
+  notifWebhookRemoveH,
   pricingPage,
   checkIntegrationGet,
   onboardingStepSkipped,
@@ -12,6 +16,7 @@ module Pages.Onboarding (
   proxyLandingH,
   DiscordForm (..),
   NotifChannelForm (..),
+  NotifValueForm (..),
   OnboardingInfoForm (..),
   OnboardingConfForm (..),
   OnboardingGet (..),
@@ -31,7 +36,7 @@ import Data.Effectful.Wreq (HTTP)
 import Data.Effectful.Wreq qualified as W (get, responseBody)
 import Data.Text qualified as T
 import Data.Tuple.Extra (thd3)
-import Data.Vector qualified as V (Vector, fromList, toList)
+import Data.Vector qualified as V (Vector, fromList, length, null, toList)
 import Effectful (Eff, (:>))
 import Effectful.Reader.Static (ask)
 import Effectful.State.Static.Local qualified as State
@@ -52,6 +57,7 @@ import Pages.Components
 import Pkg.DeriveUtils (hashAssetFile)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
+import Servant (Header, Headers, NoContent (..), addHeader)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, HXRedirectDest, RespHeaders, TriggerEvents, XWidgetJSON, addErrorToast, addRespHeaders, redirectCS)
 import Utils (LoadingSize (..), LoadingType (..), faSprite_, insertIfNotExist, loadingIndicator_, lookupValueText, onpointerdown_)
@@ -99,13 +105,15 @@ onboardingGetH pid onboardingStepM = do
       everyoneTeamM <- ProjectMembers.getEveryoneTeam pid
       let phone = fromMaybe "" $ everyoneTeamM >>= viaNonEmpty head . V.toList . (.phone_numbers)
           emails = maybe mempty (.notify_emails) everyoneTeamM
+          telegramChats = maybe mempty (.telegram_chats) everyoneTeamM
+          webhookUrls = maybe mempty (.webhook_urls) everyoneTeamM
           hasDiscord = isJust discord
           hasSlack = isJust slack
           slackRedirectUri = appCtx.env.slackRedirectUri
           discordRedirectUri = appCtx.env.discordRedirectUri
           slackUrl = "https://slack.com/oauth/v2/authorize?client_id=" <> appCtx.config.slackClientId <> "&scope=chat:write,commands,incoming-webhook,files:write,app_mentions:read,channels:read,groups:read,channels:history,groups:history,im:history,mpim:history,chat:write.public&user_scope=&redirect_uri=" <> slackRedirectUri <> "&state=" <> pid.toText <> "__onboarding"
           discordUrl = "https://discord.com/oauth2/authorize?response_type=code&client_id=" <> appCtx.config.discordClientId <> "&permissions=277025392640&integration_type=0&scope=bot+applications.commands" <> "&state=" <> pid.toText <> "__onboarding" <> "&redirect_uri=" <> discordRedirectUri
-      pure $ NotifChannelStep pid slackUrl discordUrl phone emails hasSlack hasDiscord
+      pure $ NotifChannelStep pid slackUrl discordUrl phone emails hasSlack hasDiscord telegramChats webhookUrls
     "Integration" -> do
       apiKey <- ProjectApiKeys.projectApiKeysByProjectId pid
       let key = maybe "<API_KEY>" (.keyPrefix) (listToMaybe apiKey)
@@ -159,6 +167,13 @@ data NotifChannelForm = NotifChannelForm
   deriving anyclass (AE.FromJSON, AE.ToJSON, FromForm)
 
 
+-- | Generic "single value" form used by the new per-item add/remove handlers
+-- for telegram chats and webhook URLs.
+newtype NotifValueForm = NotifValueForm {value :: Text}
+  deriving stock (Generic, Show)
+  deriving anyclass (FromForm)
+
+
 -- | Data type representing different onboarding steps
 data OnboardingStepData
   = InfoStep
@@ -182,6 +197,8 @@ data OnboardingStepData
       , emails :: V.Vector Text
       , hasSlack :: Bool
       , hasDiscord :: Bool
+      , telegramChats :: V.Vector Text
+      , webhookUrls :: V.Vector Text
       }
   | IntegrationStep
       { stepPid :: Projects.ProjectId
@@ -214,7 +231,7 @@ instance ToHtml OnboardingGet where
       renderStep = \case
         CompleteStep{..} -> onboardingCompleteBody lang stepPid
         SurveyStep{..} -> onboardingConfigBody stepPid lang location functionality
-        NotifChannelStep{..} -> notifChannelsWithUrls slackUrl discordUrl stepPid phoneNumber emails hasDiscord hasSlack lang
+        NotifChannelStep{..} -> notifChannelsWithUrls slackUrl discordUrl stepPid phoneNumber emails hasDiscord hasSlack telegramChats webhookUrls lang
         IntegrationStep{..} -> integrationsPage stepPid apiKey
         PricingStep{..} -> pricingPage stepPid lemonUrl criticalUrl paymentPlan enableFreetier basicAuthEnabled Projects.NoBillingProvider
         InfoStep{..} -> onboardingInfoBody stepPid lang firstName lastName companyName companySize foundUsFrom
@@ -269,6 +286,55 @@ onboardingStepSkipped pid stepM = do
     _ -> do
       redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=Info"
       addRespHeaders ""
+
+
+-- * Per-item add / remove handlers for Telegram & Webhook channels
+
+
+-- Common HTML body returned after a successful add/remove: a tiny page that
+-- meta-refreshes (or HX-redirects) back to the NotifChannel onboarding step.
+-- The actual navigation is set via 'redirectCS' which writes HX-Redirect; the
+-- meta-refresh is a fallback for plain HTML form submissions (no HTMX).
+notifRedirectHtml :: Projects.ProjectId -> Html ()
+notifRedirectHtml pid =
+  let target = "/p/" <> pid.toText <> "/onboarding?step=NotifChannel"
+   in html_ $ do
+        head_ $ meta_ [httpEquiv_ "refresh", content_ $ "0;url=" <> target]
+        body_ $ a_ [href_ target] "Continue"
+
+
+notifTelegramAddH :: Projects.ProjectId -> NotifValueForm -> ATAuthCtx (RespHeaders (Html ()))
+notifTelegramAddH pid form = do
+  _ <- Projects.sessionAndProject pid
+  let v = T.strip form.value
+  unless (T.null v) $ void $ ProjectMembers.addTelegramChatToEveryoneTeam pid v
+  redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=NotifChannel"
+  addRespHeaders $ notifRedirectHtml pid
+
+
+notifTelegramRemoveH :: Projects.ProjectId -> NotifValueForm -> ATAuthCtx (RespHeaders (Html ()))
+notifTelegramRemoveH pid form = do
+  _ <- Projects.sessionAndProject pid
+  _ <- ProjectMembers.removeTelegramChatFromEveryoneTeam pid form.value
+  redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=NotifChannel"
+  addRespHeaders $ notifRedirectHtml pid
+
+
+notifWebhookAddH :: Projects.ProjectId -> NotifValueForm -> ATAuthCtx (RespHeaders (Html ()))
+notifWebhookAddH pid form = do
+  _ <- Projects.sessionAndProject pid
+  let v = T.strip form.value
+  unless (T.null v) $ void $ ProjectMembers.addWebhookUrlToEveryoneTeam pid v
+  redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=NotifChannel"
+  addRespHeaders $ notifRedirectHtml pid
+
+
+notifWebhookRemoveH :: Projects.ProjectId -> NotifValueForm -> ATAuthCtx (RespHeaders (Html ()))
+notifWebhookRemoveH pid form = do
+  _ <- Projects.sessionAndProject pid
+  _ <- ProjectMembers.removeWebhookUrlFromEveryoneTeam pid form.value
+  redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=NotifChannel"
+  addRespHeaders $ notifRedirectHtml pid
 
 
 dismissChecklistH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
@@ -879,24 +945,30 @@ onboardingStepWrapper_ extraCls step title prevUrl content =
       content
 
 
-notifChannelsWithUrls :: Text -> Text -> Projects.ProjectId -> Text -> V.Vector Text -> Bool -> Bool -> Language -> Html ()
-notifChannelsWithUrls slackUrl discordUrl pid phone emails hasDiscord hasSlack lang = do
+notifChannelsWithUrls :: Text -> Text -> Projects.ProjectId -> Text -> V.Vector Text -> Bool -> Bool -> V.Vector Text -> V.Vector Text -> Language -> Html ()
+notifChannelsWithUrls slackUrl discordUrl pid phone emails hasDiscord hasSlack telegramChats webhookUrls lang = do
   div_ [class_ "w-full max-w-xl mx-auto mt-20 md:mt-[156px] mb-10 px-4 md:px-0"] $ do
     div_ [id_ "inviteModalContainer"] pass
     div_ [class_ "flex-col gap-4 flex w-full"] $ do
-      -- After step 1 we now jump straight here (skipping the "where to host" survey),
-      -- so the Back link points to Info, not Survey.
       stepIndicator' lang 2 (I18n.t lang "onboarding.notif.title") $ "/p/" <> pid.toText <> "/onboarding?step=Info"
       div_ [class_ "flex-col w-full gap-8 flex mt-4"] $ do
-        div_ [class_ "w-full flex flex-col gap-8"] $ do
+        div_ [class_ "w-full flex flex-col gap-6"] $ do
+          -- Four integration cards in a 2x2 grid. Slack/Discord are external
+          -- OAuth ("Connect" link); Telegram/Webhooks open a local modal that
+          -- adds one entry at a time to the @everyone team array.
           div_ [class_ "w-full gap-2 grid grid-cols-1 md:grid-cols-2"] $ do
             integrationCard "Slack" "/public/assets/svgs/slack.svg" hasSlack slackUrl
             integrationCard "Discord" "/public/assets/svgs/discord.svg" hasDiscord discordUrl
+            integrationModalCard "Telegram" "/public/assets/svgs/telegram.svg" "✈" (not (V.null telegramChats)) (V.length telegramChats) "telegram-add-modal"
+            integrationModalCard "Webhooks" "/public/assets/svgs/webhook.svg" "🔗" (not (V.null webhookUrls)) (V.length webhookUrls) "webhook-add-modal"
+          -- Already-configured Telegram chats and webhook URLs, with delete buttons.
+          configuredList_ pid lang "telegram" telegramChats
+          configuredList_ pid lang "webhook" webhookUrls
           form_
             [ class_ "flex flex-col gap-8"
             , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/phone-emails"
             , hxExt_ "json-enc"
-            , hxVals_ "js:{phoneNumber: document.getElementById('phoneNumber').value, emails: window.getTagValues('#emails'), telegramChats: document.getElementById('telegramChats').value, webhookUrls: document.getElementById('webhookUrls').value}"
+            , hxVals_ "js:{phoneNumber: document.getElementById('phoneNumber').value, emails: window.getTagValues('#emails')}"
             , hxTarget_ "#inviteModalContainer"
             , hxSwap_ "innerHTML"
             , hxIndicator_ "#loadingIndicator"
@@ -905,51 +977,101 @@ notifChannelsWithUrls slackUrl discordUrl pid phone emails hasDiscord hasSlack l
               formField_ FieldMd def{inputType = "tel", value = phone} (I18n.t lang "onboarding.notif.phone") "phoneNumber" False Nothing
               let tgs = decodeUtf8 $ AE.encode $ V.toList emails
               formField_ FieldMd def (I18n.t lang "onboarding.notif.email") "emails" False $ Just $ tagInput_ "emails" "" [data_ "tagify-initial" tgs]
-              -- Telegram chat IDs (multi-line / comma-separated). To get a chat
-              -- id the user starts a chat with the configured bot (or adds it
-              -- to a group) and visits /getUpdates — the form just accepts a
-              -- list of ids and lets the bot deliver alerts later.
-              div_ [class_ "flex-col gap-2 flex"] $ do
-                label_ [Lucid.for_ "telegramChats", class_ "text-sm text-textStrong font-medium"] $ toHtml $ I18n.t lang "onboarding.notif.telegram"
-                textarea_
-                  [ id_ "telegramChats"
-                  , name_ "telegramChats"
-                  , rows_ "2"
-                  , placeholder_ "123456789, -1002022334455"
-                  , class_ "w-full border border-strokeWeak rounded-md p-2 text-sm font-mono bg-bgRaised"
-                  ]
-                  ""
-                p_ [class_ "text-xs text-textWeak"] $ toHtml $ I18n.t lang "onboarding.notif.telegram_help"
-              -- Generic outbound webhooks (one URL per line or comma-separated).
-              div_ [class_ "flex-col gap-2 flex"] $ do
-                label_ [Lucid.for_ "webhookUrls", class_ "text-sm text-textStrong font-medium"] $ toHtml $ I18n.t lang "onboarding.notif.webhooks"
-                textarea_
-                  [ id_ "webhookUrls"
-                  , name_ "webhookUrls"
-                  , rows_ "2"
-                  , placeholder_ "https://example.com/hooks/alerts"
-                  , class_ "w-full border border-strokeWeak rounded-md p-2 text-sm font-mono bg-bgRaised"
-                  ]
-                  ""
-                p_ [class_ "text-xs text-textWeak"] $ toHtml $ I18n.t lang "onboarding.notif.webhooks_help"
               div_ [class_ "items-center gap-4 flex"] $ do
                 button_ [class_ "btn-primary px-8 py-3 text-xl rounded-xl cursor-pointer flex items-center"] $ toHtml $ I18n.t lang "onboarding.notif.proceed"
-      script_
-        """
-        function appendMember() {
-          const email = document.querySelector('#add-member-input').value
-          if(email.length < 1) return
-          const node = document.querySelector("#member-template").cloneNode(true)
-          node.removeAttribute('id')
-          node.querySelector('input').value = email
-          node.querySelector('input').setAttribute('name', 'emails')
-          node.querySelector('span').textContent = email
-          node.classList.remove('hidden')
-          document.querySelector('#members-container').appendChild(node)
-           _hyperscript.processNode(node)
-           document.querySelector('#add-member-input').value = ''
-        }
-        """
+    -- Modals (native <dialog>) — open via JS in the Connect button.
+    telegramAddModal_ pid lang
+    webhookAddModal_ pid lang
+
+
+-- | Variant of 'integrationCard' whose "Connect" button opens a local <dialog>
+-- modal instead of navigating to an external OAuth URL.
+integrationModalCard :: Text -> Text -> Text -> Bool -> Int -> Text -> Html ()
+integrationModalCard serviceName iconPath emojiFallback isConnected itemCount modalId = do
+  div_ [class_ "px-3 py-2 rounded-xl border border-strokeWeak bg-fillWeak justify-between items-center flex"] $ do
+    div_ [class_ "items-center gap-1.5 flex overflow-hidden"] $ do
+      img_ [src_ iconPath, alt_ serviceName, class_ "h-6 w-6", onerror_ "this.replaceWith(Object.assign(document.createElement('span'),{textContent:this.dataset.fb,className:'text-xl'}))", data_ "fb" emojiFallback]
+      span_ [class_ "text-center text-textStrong text-xl"] $ toHtml serviceName
+    if isConnected
+      then
+        button_
+          [ type_ "button"
+          , class_ "text-textSuccess text-sm font-medium"
+          , onclick_ $ "document.getElementById('" <> modalId <> "').showModal()"
+          ]
+          $ toHtml
+          $ "Conectado (" <> show itemCount <> ")"
+      else
+        button_
+          [ type_ "button"
+          , class_ "border px-3 h-8 flex items-center shadow-xs border-[var(--brand-color)] rounded-lg text-textBrand"
+          , onclick_ $ "document.getElementById('" <> modalId <> "').showModal()"
+          ]
+          "Connect"
+
+
+telegramAddModal_ :: Projects.ProjectId -> Language -> Html ()
+telegramAddModal_ pid lang =
+  term "dialog"
+    [id_ "telegram-add-modal", class_ "modal"]
+    $ div_ [class_ "modal-box bg-bgRaised max-w-md"]
+    $ do
+      form_ [method_ "dialog", class_ "flex justify-end"] $ button_ [class_ "btn btn-sm btn-circle btn-ghost"] "✕"
+      h3_ [class_ "text-lg font-semibold mb-1"] $ toHtml $ I18n.t lang "onboarding.notif.telegram.modal_title"
+      p_ [class_ "text-sm text-textWeak mb-4"] $ toHtml $ I18n.t lang "onboarding.notif.telegram.modal_help"
+      form_
+        [ method_ "post"
+        , action_ $ "/p/" <> pid.toText <> "/notif/telegram/add"
+        , class_ "flex flex-col gap-3"
+        ]
+        $ do
+          input_ [type_ "text", name_ "value", required_ "required", placeholder_ "123456789", class_ "input input-bordered w-full font-mono"]
+          div_ [class_ "flex justify-end gap-2 mt-2"] $ do
+            button_ [type_ "button", class_ "btn btn-ghost", onclick_ "document.getElementById('telegram-add-modal').close()"] $ toHtml $ I18n.t lang "common.cancel"
+            button_ [type_ "submit", class_ "btn btn-primary"] $ toHtml $ I18n.t lang "common.add"
+
+
+webhookAddModal_ :: Projects.ProjectId -> Language -> Html ()
+webhookAddModal_ pid lang =
+  term "dialog"
+    [id_ "webhook-add-modal", class_ "modal"]
+    $ div_ [class_ "modal-box bg-bgRaised max-w-md"]
+    $ do
+      form_ [method_ "dialog", class_ "flex justify-end"] $ button_ [class_ "btn btn-sm btn-circle btn-ghost"] "✕"
+      h3_ [class_ "text-lg font-semibold mb-1"] $ toHtml $ I18n.t lang "onboarding.notif.webhooks.modal_title"
+      p_ [class_ "text-sm text-textWeak mb-4"] $ toHtml $ I18n.t lang "onboarding.notif.webhooks.modal_help"
+      form_
+        [ method_ "post"
+        , action_ $ "/p/" <> pid.toText <> "/notif/webhook/add"
+        , class_ "flex flex-col gap-3"
+        ]
+        $ do
+          input_ [type_ "url", name_ "value", required_ "required", placeholder_ "https://example.com/hooks/alerts", class_ "input input-bordered w-full font-mono"]
+          div_ [class_ "flex justify-end gap-2 mt-2"] $ do
+            button_ [type_ "button", class_ "btn btn-ghost", onclick_ "document.getElementById('webhook-add-modal').close()"] $ toHtml $ I18n.t lang "common.cancel"
+            button_ [type_ "submit", class_ "btn btn-primary"] $ toHtml $ I18n.t lang "common.add"
+
+
+-- | List of currently configured Telegram chats / webhook URLs with a delete
+-- link per row. Empty list collapses to no output.
+configuredList_ :: Projects.ProjectId -> Language -> Text -> V.Vector Text -> Html ()
+configuredList_ _ _ _ xs | V.null xs = mempty
+configuredList_ pid lang kind xs =
+  div_ [class_ "flex flex-col gap-1 rounded-lg border border-strokeWeak bg-bgRaised p-3"] $ do
+    p_ [class_ "text-xs text-textWeak uppercase tracking-wide font-medium mb-1"]
+      $ toHtml
+      $ I18n.t lang ("onboarding.notif." <> kind <> ".configured")
+    forM_ xs $ \v ->
+      div_ [class_ "flex items-center justify-between gap-2 text-sm font-mono py-1"] $ do
+        span_ [class_ "truncate"] $ toHtml v
+        form_
+          [ method_ "post"
+          , action_ $ "/p/" <> pid.toText <> "/notif/" <> kind <> "/remove"
+          , class_ "inline"
+          ]
+          $ do
+            input_ [type_ "hidden", name_ "value", value_ v]
+            button_ [type_ "submit", class_ "text-textError text-xs hover:underline"] $ toHtml $ I18n.t lang "common.remove"
 
 
 onboardingInfoBody :: Projects.ProjectId -> Language -> Text -> Text -> Text -> Text -> Text -> Html ()

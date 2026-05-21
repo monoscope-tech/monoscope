@@ -554,6 +554,10 @@ data ProjectsRoutes' mode = ProjectsRoutes'
   , onboardingInfoPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "info" :> ReqBody '[FormUrlEncoded] Onboarding.OnboardingInfoForm :> Post '[HTML] (RespHeaders Onboarding.OnboardingInfoPost)
   , onboardingConfPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "survey" :> ReqBody '[FormUrlEncoded] Onboarding.OnboardingConfForm :> Post '[HTML] (RespHeaders Onboarding.OnboardingConfPost)
   , onboardingPhoneEmailsPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "phone-emails" :> ReqBody '[JSON] Onboarding.NotifChannelForm :> Post '[HTML] (RespHeaders Onboarding.OnboardingPhoneEmailsPost)
+  , notifTelegramAddPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "notif" :> "telegram" :> "add" :> ReqBody '[FormUrlEncoded] Onboarding.NotifValueForm :> Post '[HTML] (RespHeaders (Html ()))
+  , notifTelegramRemovePost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "notif" :> "telegram" :> "remove" :> ReqBody '[FormUrlEncoded] Onboarding.NotifValueForm :> Post '[HTML] (RespHeaders (Html ()))
+  , notifWebhookAddPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "notif" :> "webhook" :> "add" :> ReqBody '[FormUrlEncoded] Onboarding.NotifValueForm :> Post '[HTML] (RespHeaders (Html ()))
+  , notifWebhookRemovePost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "notif" :> "webhook" :> "remove" :> ReqBody '[FormUrlEncoded] Onboarding.NotifValueForm :> Post '[HTML] (RespHeaders (Html ()))
   , onboardingIntegrationCheck :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "integration-check" :> QPT "language" :> Get '[HTML] (RespHeaders (Html ()))
   , onboardingDismissChecklist :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "dismiss-checklist" :> Post '[HTML] (RespHeaders (Html ()))
   , onboardingSkipped :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "skip" :> QPT "step" :> Post '[HTML] (RespHeaders (Html ()))
@@ -901,6 +905,10 @@ projectsServer =
     , onboardingInfoPost = Onboarding.onboardingInfoPostH
     , onboardingConfPost = Onboarding.onboardingConfPostH
     , onboardingPhoneEmailsPost = Onboarding.phoneEmailPostH
+    , notifTelegramAddPost = Onboarding.notifTelegramAddH
+    , notifTelegramRemovePost = Onboarding.notifTelegramRemoveH
+    , notifWebhookAddPost = Onboarding.notifWebhookAddH
+    , notifWebhookRemovePost = Onboarding.notifWebhookRemoveH
     , onboardingIntegrationCheck = Onboarding.checkIntegrationGet
     , onboardingPricingUpdate = CreateProject.pricingUpdateH
     , onboardingDismissChecklist = Onboarding.dismissChecklistH

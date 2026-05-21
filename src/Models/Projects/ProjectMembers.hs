@@ -40,6 +40,10 @@ module Models.Projects.ProjectMembers (
   setEveryoneTeamTelegrams,
   setEveryoneTeamWebhooks,
   setEveryoneTeamDisabledChannels,
+  addTelegramChatToEveryoneTeam,
+  addWebhookUrlToEveryoneTeam,
+  removeTelegramChatFromEveryoneTeam,
+  removeWebhookUrlFromEveryoneTeam,
   isChannelEnabled,
   isEveryoneChannelEnabled,
   teamHasAnyEnabledChannel,
@@ -543,6 +547,8 @@ modifyEveryoneTeamDetails pid f =
 addSlackChannelToEveryoneTeam
   , addDiscordChannelToEveryoneTeam
   , addPagerdutyServiceToEveryoneTeam
+  , addTelegramChatToEveryoneTeam
+  , addWebhookUrlToEveryoneTeam
     :: DB es => Projects.ProjectId -> Text -> Eff es Bool
 addSlackChannelToEveryoneTeam pid val =
   (> 0)
@@ -565,6 +571,42 @@ addPagerdutyServiceToEveryoneTeam pid val =
     UPDATE projects.teams SET pagerduty_services = array_append(pagerduty_services, #{val})
     WHERE project_id = #{pid} AND is_everyone = TRUE AND deleted_at IS NULL
       AND NOT (#{val} = ANY(pagerduty_services))|]
+addTelegramChatToEveryoneTeam pid val =
+  (> 0)
+    <$> Hasql.interpExecute
+      [HI.sql|
+    UPDATE projects.teams SET telegram_chats = array_append(telegram_chats, #{val})
+    WHERE project_id = #{pid} AND is_everyone = TRUE AND deleted_at IS NULL
+      AND NOT (#{val} = ANY(telegram_chats))|]
+addWebhookUrlToEveryoneTeam pid val =
+  (> 0)
+    <$> Hasql.interpExecute
+      [HI.sql|
+    UPDATE projects.teams SET webhook_urls = array_append(webhook_urls, #{val})
+    WHERE project_id = #{pid} AND is_everyone = TRUE AND deleted_at IS NULL
+      AND NOT (#{val} = ANY(webhook_urls))|]
+
+
+-- | Remove a single entry from one of the @everyone team's text[] channel arrays.
+-- Idempotent: returns True if the value was actually present and got removed.
+removeTelegramChatFromEveryoneTeam :: DB es => Projects.ProjectId -> Text -> Eff es Bool
+removeTelegramChatFromEveryoneTeam pid val =
+  (> 0)
+    <$> Hasql.interpExecute
+      [HI.sql|
+    UPDATE projects.teams SET telegram_chats = array_remove(telegram_chats, #{val})
+    WHERE project_id = #{pid} AND is_everyone = TRUE AND deleted_at IS NULL
+      AND #{val} = ANY(telegram_chats)|]
+
+
+removeWebhookUrlFromEveryoneTeam :: DB es => Projects.ProjectId -> Text -> Eff es Bool
+removeWebhookUrlFromEveryoneTeam pid val =
+  (> 0)
+    <$> Hasql.interpExecute
+      [HI.sql|
+    UPDATE projects.teams SET webhook_urls = array_remove(webhook_urls, #{val})
+    WHERE project_id = #{pid} AND is_everyone = TRUE AND deleted_at IS NULL
+      AND #{val} = ANY(webhook_urls)|]
 
 
 removeSlackChannelsFromEveryoneTeam
