@@ -27,3 +27,39 @@ services:
     environment:
       - ENVIRONMENT=DEV
       - LOG_LEVEL=debug
+
+  # Optional: Enable persistent storage for development (default is tmpfs)
+  # Uncomment the volumes section below to use persistent volumes instead of tmpfs.
+  # This is useful when you need data to survive container restarts during development.
+  #
+  # timescaledb:
+  #   tmpfs: []  # Remove tmpfs to use persistent volume
+  #   volumes:
+  #     - timescale_data:/var/lib/postgresql/data
+
+  # Optional: MinIO for local S3-compatible storage (required for trace/metric ingestion)
+  # Uncomment to enable local object storage alongside the database.
+  # After enabling, set MINIO_ENDPOINT=http://minio:9000,
+  # MINIO_ACCESS_KEY, MINIO_SECRET_KEY, and MINIO_BUCKET in your .env file.
+  #
+  # minio:
+  #   image: bitnami/minio:latest
+  #   ports:
+  #     - '9000:9000'
+  #     - '9001:9001'
+  #   environment:
+  #     - MINIO_ROOT_USER=minioadmin
+  #     - MINIO_ROOT_PASSWORD=minioadmin
+  #     - MINIO_DEFAULT_BUCKETS=monoscope-dev
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
+  #     interval: 5s
+  #     timeout: 3s
+  #     retries: 10
+  #   networks:
+  #     - monoscope-network
+
+# Add persistent volume reference if using non-tmpfs storage above
+# volumes:
+#   timescale_data:
+#     driver: local
