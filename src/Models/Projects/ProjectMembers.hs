@@ -42,8 +42,10 @@ module Models.Projects.ProjectMembers (
   setEveryoneTeamDisabledChannels,
   addTelegramChatToEveryoneTeam,
   addWebhookUrlToEveryoneTeam,
+  addEmailToEveryoneTeam,
   removeTelegramChatFromEveryoneTeam,
   removeWebhookUrlFromEveryoneTeam,
+  removeEmailFromEveryoneTeam,
   isChannelEnabled,
   isEveryoneChannelEnabled,
   teamHasAnyEnabledChannel,
@@ -571,6 +573,26 @@ addPagerdutyServiceToEveryoneTeam pid val =
     UPDATE projects.teams SET pagerduty_services = array_append(pagerduty_services, #{val})
     WHERE project_id = #{pid} AND is_everyone = TRUE AND deleted_at IS NULL
       AND NOT (#{val} = ANY(pagerduty_services))|]
+addEmailToEveryoneTeam :: DB es => Projects.ProjectId -> Text -> Eff es Bool
+addEmailToEveryoneTeam pid val =
+  (> 0)
+    <$> Hasql.interpExecute
+      [HI.sql|
+    UPDATE projects.teams SET notify_emails = array_append(notify_emails, #{val})
+    WHERE project_id = #{pid} AND is_everyone = TRUE AND deleted_at IS NULL
+      AND NOT (#{val} = ANY(notify_emails))|]
+
+
+removeEmailFromEveryoneTeam :: DB es => Projects.ProjectId -> Text -> Eff es Bool
+removeEmailFromEveryoneTeam pid val =
+  (> 0)
+    <$> Hasql.interpExecute
+      [HI.sql|
+    UPDATE projects.teams SET notify_emails = array_remove(notify_emails, #{val})
+    WHERE project_id = #{pid} AND is_everyone = TRUE AND deleted_at IS NULL
+      AND #{val} = ANY(notify_emails)|]
+
+
 addTelegramChatToEveryoneTeam pid val =
   (> 0)
     <$> Hasql.interpExecute

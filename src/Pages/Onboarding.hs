@@ -9,6 +9,8 @@ module Pages.Onboarding (
   notifTelegramRemoveH,
   notifWebhookAddH,
   notifWebhookRemoveH,
+  notifEmailAddH,
+  notifEmailRemoveH,
   pricingPage,
   checkIntegrationGet,
   onboardingStepSkipped,
@@ -115,6 +117,11 @@ onboardingGetH pid onboardingStepM = do
           discordUrl = "https://discord.com/oauth2/authorize?response_type=code&client_id=" <> appCtx.config.discordClientId <> "&permissions=277025392640&integration_type=0&scope=bot+applications.commands" <> "&state=" <> pid.toText <> "__onboarding" <> "&redirect_uri=" <> discordRedirectUri
       pure $ NotifChannelStep pid slackUrl discordUrl phone emails hasSlack hasDiscord telegramChats webhookUrls
     "Integration" -> do
+      -- Mark NotifChannel as done on entry (the new UI no longer has a POST
+      -- on the Continuar button — it's just a link forward).
+      let stepsCompleted = project.onboardingStepsCompleted
+          newCompleted = insertIfNotExist "NotifChannel" stepsCompleted
+      _ <- Hasql.interpExecute [HI.sql| update projects.projects set onboarding_steps_completed=#{newCompleted} where id=#{pid} |]
       apiKey <- ProjectApiKeys.projectApiKeysByProjectId pid
       let key = maybe "<API_KEY>" (.keyPrefix) (listToMaybe apiKey)
       pure $ IntegrationStep pid key
@@ -333,6 +340,23 @@ notifWebhookRemoveH :: Projects.ProjectId -> NotifValueForm -> ATAuthCtx (RespHe
 notifWebhookRemoveH pid form = do
   _ <- Projects.sessionAndProject pid
   _ <- ProjectMembers.removeWebhookUrlFromEveryoneTeam pid form.value
+  redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=NotifChannel"
+  addRespHeaders $ notifRedirectHtml pid
+
+
+notifEmailAddH :: Projects.ProjectId -> NotifValueForm -> ATAuthCtx (RespHeaders (Html ()))
+notifEmailAddH pid form = do
+  _ <- Projects.sessionAndProject pid
+  let v = T.strip form.value
+  unless (T.null v) $ void $ ProjectMembers.addEmailToEveryoneTeam pid v
+  redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=NotifChannel"
+  addRespHeaders $ notifRedirectHtml pid
+
+
+notifEmailRemoveH :: Projects.ProjectId -> NotifValueForm -> ATAuthCtx (RespHeaders (Html ()))
+notifEmailRemoveH pid form = do
+  _ <- Projects.sessionAndProject pid
+  _ <- ProjectMembers.removeEmailFromEveryoneTeam pid form.value
   redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=NotifChannel"
   addRespHeaders $ notifRedirectHtml pid
 
@@ -946,42 +970,34 @@ onboardingStepWrapper_ extraCls step title prevUrl content =
 
 
 notifChannelsWithUrls :: Text -> Text -> Projects.ProjectId -> Text -> V.Vector Text -> Bool -> Bool -> V.Vector Text -> V.Vector Text -> Language -> Html ()
-notifChannelsWithUrls slackUrl discordUrl pid phone emails hasDiscord hasSlack telegramChats webhookUrls lang = do
+notifChannelsWithUrls slackUrl discordUrl pid _phone emails hasDiscord hasSlack telegramChats webhookUrls lang = do
   div_ [class_ "w-full max-w-xl mx-auto mt-20 md:mt-[156px] mb-10 px-4 md:px-0"] $ do
     div_ [id_ "inviteModalContainer"] pass
     div_ [class_ "flex-col gap-4 flex w-full"] $ do
       stepIndicator' lang 2 (I18n.t lang "onboarding.notif.title") $ "/p/" <> pid.toText <> "/onboarding?step=Info"
       div_ [class_ "flex-col w-full gap-8 flex mt-4"] $ do
         div_ [class_ "w-full flex flex-col gap-6"] $ do
-          -- Four integration cards in a 2x2 grid. Slack/Discord are external
-          -- OAuth ("Connect" link); Telegram/Webhooks open a local modal that
-          -- adds one entry at a time to the @everyone team array.
+          -- Five integration cards. Slack/Discord are external OAuth; Telegram /
+          -- Webhooks / Email open a local modal to add one entry at a time.
+          -- Email also shows a link to /admin/settings for SMTP credentials.
           div_ [class_ "w-full gap-2 grid grid-cols-1 md:grid-cols-2"] $ do
             integrationCard "Slack" "/public/assets/svgs/slack.svg" hasSlack slackUrl
             integrationCard "Discord" "/public/assets/svgs/discord.svg" hasDiscord discordUrl
             integrationModalCard "Telegram" "/public/assets/svgs/telegram.svg" "✈" (not (V.null telegramChats)) (V.length telegramChats) "telegram-add-modal"
             integrationModalCard "Webhooks" "/public/assets/svgs/webhook.svg" "🔗" (not (V.null webhookUrls)) (V.length webhookUrls) "webhook-add-modal"
-          -- Already-configured Telegram chats and webhook URLs, with delete buttons.
+            integrationModalCard "Email" "/public/assets/svgs/email.svg" "✉" (not (V.null emails)) (V.length emails) "email-add-modal"
+          -- Already-configured items with delete buttons.
+          configuredList_ pid lang "email" emails
           configuredList_ pid lang "telegram" telegramChats
           configuredList_ pid lang "webhook" webhookUrls
-          form_
-            [ class_ "flex flex-col gap-8"
-            , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/phone-emails"
-            , hxExt_ "json-enc"
-            , hxVals_ "js:{phoneNumber: document.getElementById('phoneNumber').value, emails: window.getTagValues('#emails')}"
-            , hxTarget_ "#inviteModalContainer"
-            , hxSwap_ "innerHTML"
-            , hxIndicator_ "#loadingIndicator"
-            ]
-            $ do
-              formField_ FieldMd def{inputType = "tel", value = phone} (I18n.t lang "onboarding.notif.phone") "phoneNumber" False Nothing
-              let tgs = decodeUtf8 $ AE.encode $ V.toList emails
-              formField_ FieldMd def (I18n.t lang "onboarding.notif.email") "emails" False $ Just $ tagInput_ "emails" "" [data_ "tagify-initial" tgs]
-              div_ [class_ "items-center gap-4 flex"] $ do
-                button_ [class_ "btn-primary px-8 py-3 text-xl rounded-xl cursor-pointer flex items-center"] $ toHtml $ I18n.t lang "onboarding.notif.proceed"
-    -- Modals (native <dialog>) — open via JS in the Connect button.
+          -- Plain link to the next step. Marking NotifChannel as done happens
+          -- on GET of the Integration step (idempotent).
+          div_ [class_ "items-center gap-4 flex mt-4"] $ do
+            a_ [href_ $ "/p/" <> pid.toText <> "/onboarding?step=Integration", class_ "btn-primary px-8 py-3 text-xl rounded-xl cursor-pointer flex items-center"] $ toHtml $ I18n.t lang "onboarding.notif.proceed"
+    -- Modals (native <dialog>) — opened via JS from the Connect button.
     telegramAddModal_ pid lang
     webhookAddModal_ pid lang
+    emailAddModal_ pid lang
 
 
 -- | Variant of 'integrationCard' whose "Connect" button opens a local <dialog>
@@ -1028,6 +1044,31 @@ telegramAddModal_ pid lang =
           input_ [type_ "text", name_ "value", required_ "required", placeholder_ "123456789", class_ "input input-bordered w-full font-mono"]
           div_ [class_ "flex justify-end gap-2 mt-2"] $ do
             button_ [type_ "button", class_ "btn btn-ghost", onclick_ "document.getElementById('telegram-add-modal').close()"] $ toHtml $ I18n.t lang "common.cancel"
+            button_ [type_ "submit", class_ "btn btn-primary"] $ toHtml $ I18n.t lang "common.add"
+
+
+emailAddModal_ :: Projects.ProjectId -> Language -> Html ()
+emailAddModal_ pid lang =
+  term "dialog"
+    [id_ "email-add-modal", class_ "modal"]
+    $ div_ [class_ "modal-box bg-bgRaised max-w-md"]
+    $ do
+      form_ [method_ "dialog", class_ "flex justify-end"] $ button_ [class_ "btn btn-sm btn-circle btn-ghost"] "✕"
+      h3_ [class_ "text-lg font-semibold mb-1"] $ toHtml $ I18n.t lang "onboarding.notif.email.modal_title"
+      p_ [class_ "text-sm text-textWeak mb-2"] $ toHtml $ I18n.t lang "onboarding.notif.email.modal_help"
+      -- Reminder about SMTP config — admins can click through to /admin/settings.
+      div_ [class_ "alert alert-info text-xs mb-4 flex items-center gap-2"] $ do
+        span_ [] $ toHtml $ I18n.t lang "onboarding.notif.email.smtp_hint"
+        a_ [href_ "/admin/settings", target_ "_blank", class_ "link link-primary ml-auto"] $ toHtml $ I18n.t lang "onboarding.notif.email.smtp_link"
+      form_
+        [ method_ "post"
+        , action_ $ "/p/" <> pid.toText <> "/notif/email/add"
+        , class_ "flex flex-col gap-3"
+        ]
+        $ do
+          input_ [type_ "email", name_ "value", required_ "required", placeholder_ "alguien@ejemplo.com", class_ "input input-bordered w-full"]
+          div_ [class_ "flex justify-end gap-2 mt-2"] $ do
+            button_ [type_ "button", class_ "btn btn-ghost", onclick_ "document.getElementById('email-add-modal').close()"] $ toHtml $ I18n.t lang "common.cancel"
             button_ [type_ "submit", class_ "btn btn-primary"] $ toHtml $ I18n.t lang "common.add"
 
 

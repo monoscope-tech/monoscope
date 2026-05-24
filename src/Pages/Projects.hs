@@ -293,6 +293,8 @@ integrationsSettingsGetH pid = do
         , disabledChannels = maybe V.empty (.disabled_channels) everyoneTeamM
         , phones = maybe V.empty (.phone_numbers) everyoneTeamM
         , emails = maybe V.empty (.notify_emails) everyoneTeamM
+        , telegramChats = maybe V.empty (.telegram_chats) everyoneTeamM
+        , webhookUrls = maybe V.empty (.webhook_urls) everyoneTeamM
         , slackData = slackInfo
         , pagerdutyKey = pagerdutyKey
         , discordConnected = hasDiscord
@@ -308,17 +310,21 @@ data NotifListForm = NotifListForm
   , phones :: [Text]
   , emails :: [Text]
   , slackChannels :: [Text]
+  , telegramChats :: Maybe [Text]
+  , webhookUrls :: Maybe [Text]
   }
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, FromForm)
 
 
 allChannels :: [Text]
-allChannels = ["email", "slack", "discord", "phone", "pagerduty"]
+allChannels = ["email", "slack", "discord", "phone", "pagerduty", "telegram", "webhook"]
 
 
 updateNotificationsChannel :: Projects.ProjectId -> NotifListForm -> ATAuthCtx (RespHeaders (Html ()))
-updateNotificationsChannel pid NotifListForm{enabledChannels, phones, emails, slackChannels} = do
+updateNotificationsChannel pid NotifListForm{enabledChannels, phones, emails, slackChannels, telegramChats = tgsM, webhookUrls = whsM} = do
+  let telegramChats = fromMaybe [] tgsM
+      webhookUrls = fromMaybe [] whsM
   validationResult <- validateNotificationChannels pid enabledChannels phones
   case validationResult of
     Left errorMessage -> do
@@ -367,6 +373,8 @@ updateNotificationsChannel pid NotifListForm{enabledChannels, phones, emails, sl
                 { ProjectMembers.slackChannels = finalSlack
                 , ProjectMembers.notifyEmails = V.fromList emails
                 , ProjectMembers.phoneNumbers = V.fromList phones
+                , ProjectMembers.telegramChats = V.fromList telegramChats
+                , ProjectMembers.webhookUrls = V.fromList webhookUrls
                 , ProjectMembers.disabledChannels = disabled
                 }
                 :: ProjectMembers.TeamDetails
@@ -449,6 +457,8 @@ data IntegrationsConfig = IntegrationsConfig
   , disabledChannels :: V.Vector Text
   , phones :: V.Vector Text
   , emails :: V.Vector Text
+  , telegramChats :: V.Vector Text
+  , webhookUrls :: V.Vector Text
   , slackData :: Maybe SlackData
   , pagerdutyKey :: Maybe Text
   , discordConnected :: Bool
@@ -474,16 +484,20 @@ integrationsBody IntegrationsConfig{..} = do
     -- The handler writes `disabled_channels = allChannels \\ enabledChannels` on @everyone.
     -- If a new channel type is ever added, it must also be added to `allChannels`
     -- or it will silently be treated as "enabled" for every project.
-    let notifVals = hxVals_ "js:{enabledChannels: Array.from(document.querySelectorAll('input[name=\"notifChannel\"]:checked')).map(i => i.value), phones: window.getTagValues('#phones_input'), emails: window.getTagValues('#emails_input'), slackChannels: window.getTagValues('#slack-channels-input')}"
+    let notifVals = hxVals_ "js:{enabledChannels: Array.from(document.querySelectorAll('input[name=\"notifChannel\"]:checked')).map(i => i.value), phones: window.getTagValues('#phones_input'), emails: window.getTagValues('#emails_input'), slackChannels: window.getTagValues('#slack-channels-input'), telegramChats: window.getTagValues('#telegram_chats_input'), webhookUrls: window.getTagValues('#webhook_urls_input')}"
     div_ [id_ "integrations-form-section"] do
       div_ [id_ "notifsForm"] do
         let ems = decodeUtf8 $ AE.encode $ V.toList emails
             tgs = decodeUtf8 $ AE.encode $ V.toList phones
+            tgChats = decodeUtf8 $ AE.encode $ V.toList telegramChats
+            whUrls = decodeUtf8 $ AE.encode $ V.toList webhookUrls
             disabledSet = S.fromList $ V.toList disabledChannels
             integrations =
               [ ("email", "Email", True, faSprite_ "envelope" "solid" "h-4 w-4", renderEmailIntegration ems)
               , ("slack", "Slack", isJust slackData, faSprite_ "slack" "solid" "h-4 w-4", renderSlackIntegration envConfig pid slackData slackChannels extraSlackChannels existingSlackChannels)
               , ("discord", "Discord", discordConnected, faSprite_ "discord" "solid" "h-4 w-4", renderDiscordIntegration envConfig pid)
+              , ("telegram", "Telegram", not $ V.null telegramChats, faSprite_ "paper-plane" "solid" "h-4 w-4", renderTelegramIntegration tgChats)
+              , ("webhook", "Webhooks", not $ V.null webhookUrls, faSprite_ "link" "solid" "h-4 w-4", renderWebhookIntegration whUrls)
               , ("phone", "WhatsApp", not $ V.null phones, faSprite_ "whatsapp" "solid" "h-4 w-4", renderWhatsappIntegration tgs)
               , ("pagerduty", "PagerDuty", isJust pagerdutyKey, faSprite_ "pager" "solid" "h-4 w-4", renderPagerdutyIntegration projectId.toText pagerdutyKey)
               ]
@@ -560,6 +574,18 @@ renderEmailIntegration ems = do
 
 renderWhatsappIntegration :: Text -> Html ()
 renderWhatsappIntegration tgs = formField_ FieldSm def "Phone numbers" "phones_input" False $ Just $ tagInput_ "phones_input" "Enter phone numbers" [data_ "tagify-initial" tgs]
+
+
+renderTelegramIntegration :: Text -> Html ()
+renderTelegramIntegration tgs = do
+  p_ [class_ "text-xs text-textWeak mb-2"] "Each chat ID receives Telegram alerts via the bot configured in Admin Settings. Groups start with -100…"
+  formField_ FieldSm def "Chat IDs" "telegram_chats_input" False $ Just $ tagInput_ "telegram_chats_input" "Add chat ID" [data_ "tagify-initial" tgs]
+
+
+renderWebhookIntegration :: Text -> Html ()
+renderWebhookIntegration tgs = do
+  p_ [class_ "text-xs text-textWeak mb-2"] "Each URL receives every alert as a JSON POST body."
+  formField_ FieldSm def "Webhook URLs" "webhook_urls_input" False $ Just $ tagInput_ "webhook_urls_input" "Add URL" [data_ "tagify-initial" tgs]
 
 
 renderSlackIntegration :: EnvConfig -> Text -> Maybe SlackData -> [BotUtils.Channel] -> [BotUtils.Channel] -> V.Vector Text -> Html ()

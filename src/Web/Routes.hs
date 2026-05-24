@@ -558,6 +558,8 @@ data ProjectsRoutes' mode = ProjectsRoutes'
   , notifTelegramRemovePost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "notif" :> "telegram" :> "remove" :> ReqBody '[FormUrlEncoded] Onboarding.NotifValueForm :> Post '[HTML] (RespHeaders (Html ()))
   , notifWebhookAddPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "notif" :> "webhook" :> "add" :> ReqBody '[FormUrlEncoded] Onboarding.NotifValueForm :> Post '[HTML] (RespHeaders (Html ()))
   , notifWebhookRemovePost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "notif" :> "webhook" :> "remove" :> ReqBody '[FormUrlEncoded] Onboarding.NotifValueForm :> Post '[HTML] (RespHeaders (Html ()))
+  , notifEmailAddPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "notif" :> "email" :> "add" :> ReqBody '[FormUrlEncoded] Onboarding.NotifValueForm :> Post '[HTML] (RespHeaders (Html ()))
+  , notifEmailRemovePost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "notif" :> "email" :> "remove" :> ReqBody '[FormUrlEncoded] Onboarding.NotifValueForm :> Post '[HTML] (RespHeaders (Html ()))
   , onboardingIntegrationCheck :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "integration-check" :> QPT "language" :> Get '[HTML] (RespHeaders (Html ()))
   , onboardingDismissChecklist :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "dismiss-checklist" :> Post '[HTML] (RespHeaders (Html ()))
   , onboardingSkipped :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "skip" :> QPT "step" :> Post '[HTML] (RespHeaders (Html ()))
@@ -909,6 +911,8 @@ projectsServer =
     , notifTelegramRemovePost = Onboarding.notifTelegramRemoveH
     , notifWebhookAddPost = Onboarding.notifWebhookAddH
     , notifWebhookRemovePost = Onboarding.notifWebhookRemoveH
+    , notifEmailAddPost = Onboarding.notifEmailAddH
+    , notifEmailRemovePost = Onboarding.notifEmailRemoveH
     , onboardingIntegrationCheck = Onboarding.checkIntegrationGet
     , onboardingPricingUpdate = CreateProject.pricingUpdateH
     , onboardingDismissChecklist = Onboarding.dismissChecklistH
