@@ -132,6 +132,7 @@ import Servant (FromHttpApiData, Header, Headers, ServerError, addHeader, err302
 import Web.Cookie (SetCookie (setCookieHttpOnly, setCookieMaxAge, setCookieName, setCookiePath, setCookieSameSite, setCookieSecure, setCookieValue), defaultSetCookie, sameSiteLax)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (ToHttpApiData)
+import Web.I18n qualified
 
 
 instance AE.FromJSON (CI.CI Text) where
@@ -1099,6 +1100,10 @@ data Session = Session
   , requestID :: Text
   , isSidebarClosed :: Bool
   , theme :: Text
+  , lang :: Web.I18n.Language
+  -- ^ User-selected UI language, read from the @lang@ cookie at auth time
+  -- and threaded down to templates so 'Web.I18n.t' calls can render the
+  -- right language without extra context plumbing.
   }
   deriving stock (Generic, Show)
 
