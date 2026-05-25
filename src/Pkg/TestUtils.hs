@@ -163,6 +163,7 @@ import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, RespHeaders, atAuthT
 import Unsafe.Coerce (unsafeCoerce)
 import Web.ApiHandlers qualified as ApiH
 import Web.Auth qualified as Auth
+import Web.I18n qualified as I18n
 import Web.Cookie (SetCookie)
 
 
@@ -496,7 +497,7 @@ testSessionHeader pool hpool = do
 
   tp <- liftIO getGlobalTracerProvider
   logger <- liftIO $ Log.mkLogger "test" (const pass)
-  runTestEffect pool hpool logger tp (Auth.sessionByID (Just pSessId) "requestID" True "light" Nothing False)
+  runTestEffect pool hpool logger tp (Auth.sessionByID (Just pSessId) "requestID" True "light" I18n.En Nothing False)
     & liftIO
     <&> fromRightShow
 
@@ -508,7 +509,7 @@ refreshSession pool hpool sessionHeaders = do
       pSessId = session.sessionId
   tp <- liftIO getGlobalTracerProvider
   logger <- liftIO $ Log.mkLogger "test" (const pass)
-  runTestEffect pool hpool logger tp (Auth.sessionByID (Just pSessId) "requestID" session.isSidebarClosed session.theme Nothing False)
+  runTestEffect pool hpool logger tp (Auth.sessionByID (Just pSessId) "requestID" session.isSidebarClosed session.theme session.lang Nothing False)
     & liftIO
     <&> fromRightShow
 

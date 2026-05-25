@@ -3,6 +3,7 @@ module Web.Auth (
   loginRedirectH,
   loginH,
   authCallbackH,
+  setLanguageH,
   sessionByID,
   authHandler,
   apiKeyAuthHandler,
@@ -76,6 +77,7 @@ import System.Logging qualified as Logging
 import System.Types (ATAuthCtx, ATBaseCtx, DB, RespHeaders, addRespHeaders)
 import Utils (escapedQueryPartial)
 import Web.Cookie (Cookies, SetCookie, parseCookies)
+import Web.I18n qualified as I18n
 import "base64" Data.ByteString.Base64 qualified as B64
 
 
@@ -119,10 +121,11 @@ authHandler logger env =
               -- Basic auth successful, create a session for the basic auth user
               let isSidebarClosed = sidebarClosedFromCookie $ getCookies req
               let theme = themeFromCookie $ getCookies req
+              let lang = I18n.languageFromCookies $ getCookies req
               requestID <- liftIO $ getRequestID req
               -- Use a fixed email for basic auth users
               sessId <- authorizeUserAndPersist Nothing "Basic" "Auth" "" (username <> "@basic-auth.local")
-              sessionByID (Just sessId) requestID isSidebarClosed theme Nothing env.config.basicAuthEnabled
+              sessionByID (Just sessId) requestID isSidebarClosed theme lang Nothing env.config.basicAuthEnabled
             Nothing -> do
               -- When basic auth is enabled, check if we have a valid cookie session
               -- If not, we should require basic auth instead of redirecting to Auth0
@@ -152,12 +155,13 @@ authHandler logger env =
       let mbPersistentSessionId = mbBearerSessionId <|> mbCookieSessionId
       let isSidebarClosed = sidebarClosedFromCookie cookies
       let theme = themeFromCookie cookies
+      let lang = I18n.languageFromCookies cookies
       requestID <- liftIO $ getRequestID req
-      sessionByID mbPersistentSessionId requestID isSidebarClosed theme (Just $ getRequestUrl req) basicAuthEnabledFlag
+      sessionByID mbPersistentSessionId requestID isSidebarClosed theme lang (Just $ getRequestUrl req) basicAuthEnabledFlag
 
 
-sessionByID :: (DB es, Error ServerError :> es, HTTP :> es, Time :> es, UUIDEff :> es) => Maybe Projects.PersistentSessionId -> Text -> Bool -> Text -> Maybe ByteString -> Bool -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Projects.Session)
-sessionByID mbPersistentSessionId requestID isSidebarClosed theme url basicAuthEnabled = do
+sessionByID :: (DB es, Error ServerError :> es, HTTP :> es, Time :> es, UUIDEff :> es) => Maybe Projects.PersistentSessionId -> Text -> Bool -> Text -> I18n.Language -> Maybe ByteString -> Bool -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Projects.Session)
+sessionByID mbPersistentSessionId requestID isSidebarClosed theme lang url basicAuthEnabled = do
   mbPersistentSession <- join <$> mapM Projects.getPersistentSession mbPersistentSessionId
   let mUser = mbPersistentSession <&> (.user.getUser)
   (user, sessionId, persistentSession) <- case (mUser, mbPersistentSession) of
@@ -290,6 +294,18 @@ logoutH = do
   envCfg <- asks env
   let redirectTo = envCfg.auth0Domain <> "/v2/logout?client_id=" <> envCfg.auth0ClientId <> "&returnTo=" <> envCfg.auth0LogoutRedirect
   pure $ addHeader redirectTo $ addHeader Projects.emptySessionCookie NoContent
+
+
+-- | Persist the user-selected language as a long-lived cookie, then bounce
+-- back to wherever they came from. Accessible without auth (the language
+-- switcher in the public auth pages must work pre-login).
+setLanguageH
+  :: Text
+  -> Maybe Text
+  -> ATBaseCtx (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
+setLanguageH langText redirectToM = do
+  let lang = I18n.parseLanguage langText
+  pure $ addHeader (fromMaybe "/" redirectToM) $ addHeader (I18n.languageSetCookieBS lang) NoContent
 
 
 loginRedirectH :: Maybe Text -> ATBaseCtx (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)

@@ -12,6 +12,7 @@ import Lucid.Htmx (hxGet_, hxIndicator_, hxPost_, hxPushUrl_, hxSelect_, hxSwap_
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
+import Web.I18n qualified as I18n
 import Pages.CommandPalette qualified as CommandPalette
 import Pages.Components qualified as Components
 import Pkg.DeriveUtils (hashAssetFile)
@@ -32,14 +33,14 @@ mkPageCtx pid = do
   pure (sess, project, def{sessM = Just sess, currProject = Just project, config = appCtx.config})
 
 
-menu :: Projects.ProjectId -> [(Text, Text, Text)]
-menu pid =
-  [ ("Dashboards", "/p/" <> pid.toText <> "/dashboards", "dashboard")
-  , ("Explorer", "/p/" <> pid.toText <> "/log_explorer", "explore")
-  , ("API Catalog", "/p/" <> pid.toText <> "/api_catalog", "swap")
-  , ("Issues", "/p/" <> pid.toText <> "/issues", "bug")
-  , ("Monitors", "/p/" <> pid.toText <> "/monitors", "list-check")
-  , ("Reports", "/p/" <> pid.toText <> "/reports", "chart-simple")
+menu :: I18n.Language -> Projects.ProjectId -> [(Text, Text, Text)]
+menu lang pid =
+  [ (I18n.t lang "nav.dashboards", "/p/" <> pid.toText <> "/dashboards", "dashboard")
+  , (I18n.t lang "nav.explorer", "/p/" <> pid.toText <> "/log_explorer", "explore")
+  , (I18n.t lang "nav.api_catalog", "/p/" <> pid.toText <> "/api_catalog", "swap")
+  , (I18n.t lang "nav.issues", "/p/" <> pid.toText <> "/issues", "bug")
+  , (I18n.t lang "nav.monitors", "/p/" <> pid.toText <> "/monitors", "list-check")
+  , (I18n.t lang "nav.reports", "/p/" <> pid.toText <> "/reports", "chart-simple")
   ]
 
 
@@ -513,7 +514,7 @@ bodyWrapper bcfg child = do
                           button_ [class_ "fixed top-4 right-4 btn btn-sm btn-ghost bg-base-200 gap-1.5 text-textWeak z-50", [__|on click send paletteToggle to #cmd-palette-global|]] do
                             faSprite_ "magnifying-glass" "regular" "w-3.5 h-3.5"
                             kbd_ [class_ "kbd kbd-xs"] "\x2318K"
-                      else navbar bcfg.currProject (maybe [] (\p -> menu p.id) bcfg.currProject) currUser bcfg.prePageTitle bcfg.pageTitle bcfg.pageTitleSuffix bcfg.pageTitleModalId bcfg.pageTitleSuffixModalId bcfg.docsLink bcfg.navTabs bcfg.pageActions
+                      else navbar bcfg.currProject (maybe [] (\p -> menu sess.lang p.id) bcfg.currProject) currUser bcfg.prePageTitle bcfg.pageTitle bcfg.pageTitleSuffix bcfg.pageTitleModalId bcfg.pageTitleSuffixModalId bcfg.docsLink bcfg.navTabs bcfg.pageActions
                     main_ [id_ "main-content", class_ "overflow-y-auto h-full grow"] do
                       whenJust bcfg.currProject (\p -> freeTierUsageBanner p.id.toText bcfg.freeTierStatus)
                       if bcfg.isSettingsPage
@@ -772,7 +773,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
                   span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block whitespace-nowrap truncate"] $ toHtml mTitle
                   when hasFlyout $ span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block ml-auto text-textWeak"] $ faSprite_ "chevron-right" "regular" "w-3 h-3"
               when hasFlyout $ div_ [class_ flyoutCls] $ mapM_ flyoutLink flyoutItems
-      let items = menu project.id
+      let items = menu sess.lang project.id
           (primary, secondary) = splitAt 2 items
       mapM_ (\(mTitle, mUrl, fIcon) -> renderNavItem mTitle mUrl fIcon (navFlyoutItems pidTxt mTitle)) primary
       div_ [class_ "border-t border-strokeWeak/50 my-1.5 mx-2"] ""
@@ -831,9 +832,27 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
           div_ [class_ "font-medium text-textStrong truncate"] $ toHtml userIdentifier
           div_ [class_ "text-textWeak text-xs truncate"] $ toHtml $ CI.original currUser.email
         div_ [class_ "divider my-0"] ""
+        li_ [class_ "menu-title px-3 pt-2"] $ toHtml $ I18n.t sess.lang "nav.language"
+        li_ [] $ a_
+          [ href_ "/set_language/en?redirect_to=/"
+          , class_ "flex items-center justify-between"
+          -- Rewrite the redirect to the current path on click so the user
+          -- stays where they were instead of being bounced to /.
+          , onclick_ "this.href='/set_language/en?redirect_to='+encodeURIComponent(location.pathname+location.search);return true;"
+          ] do
+            toHtml $ I18n.t sess.lang "nav.language.english"
+            when (sess.lang == I18n.En) $ faSprite_ "check" "regular" "w-3 h-3"
+        li_ [] $ a_
+          [ href_ "/set_language/es?redirect_to=/"
+          , class_ "flex items-center justify-between"
+          , onclick_ "this.href='/set_language/es?redirect_to='+encodeURIComponent(location.pathname+location.search);return true;"
+          ] do
+            toHtml $ I18n.t sess.lang "nav.language.spanish"
+            when (sess.lang == I18n.Es) $ faSprite_ "check" "regular" "w-3 h-3"
+        div_ [class_ "divider my-0"] ""
         li_ [] $ a_ [href_ "/logout", class_ "flex items-center gap-2 text-textError", [__| on click js posthog.reset(); end |]] do
           faSprite_ "arrow-right-from-bracket" "regular" "w-4 h-4"
-          "Logout"
+          toHtml $ I18n.t sess.lang "nav.logout"
 
 
 -- mapM_ renderNavBottomItem $ navBottomList project.id.toText

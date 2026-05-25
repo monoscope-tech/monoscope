@@ -216,6 +216,7 @@ library
       Web.ApiHandlers
       Web.ApiTypes
       Web.Auth
+      Web.I18n
       Web.MCP
       Web.Routes
       Proto.Opentelemetry.Proto.Common.V1.Common
@@ -325,6 +326,7 @@ library
     , envy
     , errors
     , extra
+    , file-embed
     , filepath
     , fmt
     , generic-lens
