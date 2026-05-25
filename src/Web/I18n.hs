@@ -8,14 +8,14 @@
 -- data-only change, so contributors don't need to read Haskell to add a new
 -- language: drop a @static/i18n/<code>.yaml@, wire its constructor into
 -- 'Language' + 'languageCode' + 'parseLanguage', and rebuild.
-module Web.I18n
-  ( Language (..)
-  , parseLanguage
-  , languageCode
-  , t
-  , languageFromCookies
-  , languageSetCookieBS
-  )
+module Web.I18n (
+  Language (..),
+  parseLanguage,
+  languageCode,
+  t,
+  languageFromCookies,
+  languageSetCookieBS,
+)
 where
 
 import Data.ByteString qualified as BS
@@ -28,7 +28,8 @@ import Relude
 import Web.Cookie (Cookies, SetCookie (..), defaultSetCookie)
 
 
-data Language = En | Es deriving stock (Eq, Generic, Read, Show)
+data Language = En | Es
+  deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
 
 

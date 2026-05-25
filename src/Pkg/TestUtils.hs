@@ -163,8 +163,8 @@ import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, RespHeaders, atAuthT
 import Unsafe.Coerce (unsafeCoerce)
 import Web.ApiHandlers qualified as ApiH
 import Web.Auth qualified as Auth
-import Web.I18n qualified as I18n
 import Web.Cookie (SetCookie)
+import Web.I18n qualified as I18n
 
 
 migrationsDirr :: FilePath

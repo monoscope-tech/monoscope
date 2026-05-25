@@ -12,7 +12,6 @@ import Lucid.Htmx (hxGet_, hxIndicator_, hxPost_, hxPushUrl_, hxSelect_, hxSwap_
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
-import Web.I18n qualified as I18n
 import Pages.CommandPalette qualified as CommandPalette
 import Pages.Components qualified as Components
 import Pkg.DeriveUtils (hashAssetFile)
@@ -21,6 +20,7 @@ import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx)
 import Utils (FreeTierStatus (..), LoadingSize (..), LoadingType (..), faSprite_, fieldContextMenuItems_, freeTierUsageBanner, loadingIndicatorWith_, loadingIndicator_, navTabAttrs)
+import Web.I18n qualified as I18n
 
 
 -- | Page-handler bootstrap. Loads (session, project), reads AuthContext, and seeds
@@ -836,17 +836,19 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
         li_ [] $ a_
           [ href_ "/set_language/en?redirect_to=/"
           , class_ "flex items-center justify-between"
-          -- Rewrite the redirect to the current path on click so the user
-          -- stays where they were instead of being bounced to /.
-          , onclick_ "this.href='/set_language/en?redirect_to='+encodeURIComponent(location.pathname+location.search);return true;"
-          ] do
+          , -- Rewrite the redirect to the current path on click so the user
+            -- stays where they were instead of being bounced to /.
+            onclick_ "this.href='/set_language/en?redirect_to='+encodeURIComponent(location.pathname+location.search);return true;"
+          ]
+          do
             toHtml $ I18n.t sess.lang "nav.language.english"
             when (sess.lang == I18n.En) $ faSprite_ "check" "regular" "w-3 h-3"
         li_ [] $ a_
           [ href_ "/set_language/es?redirect_to=/"
           , class_ "flex items-center justify-between"
           , onclick_ "this.href='/set_language/es?redirect_to='+encodeURIComponent(location.pathname+location.search);return true;"
-          ] do
+          ]
+          do
             toHtml $ I18n.t sess.lang "nav.language.spanish"
             when (sess.lang == I18n.Es) $ faSprite_ "check" "regular" "w-3 h-3"
         div_ [class_ "divider my-0"] ""
