@@ -84,13 +84,22 @@ source-repository-package
   tag: 3a5c00527bcda652a188ee7c54127eea90ce1bb7
   subdir: .
 
+-- GHC 9.12 promotes -Wmissing-strict-field to an error, and the strict-field
+-- bumps in http2-5.3.11 / 5.3.10 outpaced the http2 → warp coordination. Both
+-- packages compile cleanly with the warning back as a warning.
+package http2
+  ghc-options: -Wno-error=missing-strict-field
+
+package warp
+  ghc-options: -Wno-error=missing-strict-field
+
 constraints:
   streamly ^>=0.10.0,
   effectful-postgresql +enable-otel,
-  -- Pin pre-5.4 http2: grapesy 1.0.1 doesn't compile against 5.4 yet
-  -- (well-typed/grapesy#331). 5.3.11 specifically — 5.3.10's Aux record
-  -- construction trips -Werror=missing-strict-field under GHC 9.12.4.
-  http2 ==5.3.11,
+  -- Pre-5.4 http2: grapesy 1.0.1 doesn't compile against 5.4 yet
+  -- (well-typed/grapesy#331). The package-specific ghc-options above
+  -- demote http2/warp's strict-field warnings so 5.3.10/5.3.11 build clean.
+  http2 <5.4,
   -- Pin crypton: jose-jwt 0.10.0 uses ByteArrayAccess (HMAC SHA256), which
   -- newer crypton releases dropped. 1.0.6 is the last version that still
   -- exports that instance and is the one stackage curates.
