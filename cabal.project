@@ -84,14 +84,12 @@ source-repository-package
   tag: 3a5c00527bcda652a188ee7c54127eea90ce1bb7
   subdir: .
 
--- GHC 9.12 promotes -Wmissing-strict-field to an error, and the strict-field
--- bumps in http2-5.3.11 / 5.3.10 outpaced the http2 → warp coordination. Both
--- packages compile cleanly with the warning back as a warning.
-package http2
-  ghc-options: -Wno-error=missing-strict-field
-
-package warp
-  ghc-options: -Wno-error=missing-strict-field
+-- GHC 9.12 enables -Wmissing-strict-field by default; combined with http2's
+-- newly-added strict fields, several transitive deps (http2-tls, warp,
+-- servant-openapi3 …) don't compile. Apply the relaxation to every package
+-- so we don't have to enumerate which one cabal just elevated.
+package *
+  ghc-options: -Wno-missing-strict-field
 
 constraints:
   streamly ^>=0.10.0,
