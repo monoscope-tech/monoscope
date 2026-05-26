@@ -23,6 +23,7 @@ module Pkg.SchemaLearning.Catalog (
   templateHash,
   fieldKindOfValue,
   emptyTopK,
+  emptyScope,
   newEntry,
   mergeFullWalk,
   classifyFormat,
@@ -188,6 +189,12 @@ exampleStringCap = 256
 
 emptyTopK :: TopK
 emptyTopK = TopK 0 HM.empty
+
+
+-- | All-Nothing 'Scope'. Used in tests and as a baseline before merging
+-- real scopes in.
+emptyScope :: Scope
+emptyScope = Scope Nothing Nothing Nothing Nothing Nothing Nothing V.empty
 
 
 -- ---------------------------------------------------------------------------
@@ -421,6 +428,7 @@ fieldHashSuffix path = T.take 8 (toXXHash path)
 -- >>> let path = "request.body.user.id"
 -- >>> let fs1 = FieldStruct (HS.fromList [FTString]) (HS.fromList ["{uuid}"]) FCRequestBody False
 -- >>> let fs2 = FieldStruct (HS.fromList [FTString, FTNumber]) (HS.fromList ["{uuid}"]) FCRequestBody False
+-- >>> let emptyScope = Scope Nothing Nothing Nothing Nothing Nothing Nothing V.empty
 -- >>> let mk fs = CatalogEntry emptyScope (Template HttpEndpoint (HM.fromList fs)) HM.empty HM.empty 1 t0 t0 True
 -- >>> let new = mk [(path, fs1)]
 -- >>> map (.kind) (diffAnomalies "kh" Nothing new)
