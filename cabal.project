@@ -1,5 +1,5 @@
 packages: .
-with-compiler: ghc-9.12.2
+with-compiler: ghc-9.12.4
 multi-repl: True
 write-ghc-environment-files: always
 jobs: $ncpus
@@ -8,7 +8,7 @@ semaphore: True
 -- documentation: True
 
 -- with-compiler: ghc-9.8.2
-import: https://www.stackage.org/nightly-2025-11-17/cabal.config
+import: https://www.stackage.org/nightly-2026-05-24/cabal.config
 --import: https://www.stackage.org/lts-24.19/cabal.config
 
 

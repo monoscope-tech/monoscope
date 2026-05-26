@@ -18,20 +18,17 @@ module Models.Apis.SchemaCatalog (
   upsertTemplates,
   upsertCatalogRows,
   getByProject,
-  getByHost,
-  getByKey,
   getByKeysBatch,
   getSummary,
   upsertSummary,
-  vacuumUnreferencedTemplates,
   toFacetSummary,
   getFacetSummary,
+  vacuumUnreferencedTemplates,
   -- Anomaly producer support.
   AnomalyInsertRow (..),
   insertAnomalies,
   enqueueAnomalyJobs,
   existingEndpointHashes,
-  getCatalogFieldAt,
   -- Re-exports for reader migration.
   Catalog.FacetData (..),
   Catalog.FacetValue (..),
@@ -234,36 +231,6 @@ getByProject pid = do
   pure $ V.fromList $ readRowToEntry <$> rows
 
 
--- | Catalog rows for a project filtered to one host (HTTP keys only).
-getByHost :: DB es => Projects.ProjectId -> Text -> Eff es (V.Vector Catalog.CatalogEntry)
-getByHost pid host = do
-  rows :: [CatalogReadRow] <-
-    Hasql.interp
-      [HI.sql| SELECT c.project_id, c.key_kind, c.key_hash, c.template_hash,
-                      c.scope, t.fields, c.values_delta, c.counts,
-                      c.sample_count, c.first_seen, c.last_seen
-               FROM apis.schema_catalog c
-               JOIN apis.schema_template t ON c.template_hash = t.template_hash
-               WHERE c.project_id = #{pid}
-                 AND c.key_kind = 'http_endpoint'::apis.schema_key_kind
-                 AND c.scope->>'host' = #{host}
-               ORDER BY c.last_seen DESC |]
-  pure $ V.fromList $ readRowToEntry <$> rows
-
-
--- | One catalog row by primary key.
-getByKey :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Catalog.CatalogEntry)
-getByKey pid keyHash =
-  fmap readRowToEntry
-    <$> Hasql.interpOne
-      [HI.sql| SELECT c.project_id, c.key_kind, c.key_hash, c.template_hash,
-                      c.scope, t.fields, c.values_delta, c.counts,
-                      c.sample_count, c.first_seen, c.last_seen
-               FROM apis.schema_catalog c
-               JOIN apis.schema_template t ON c.template_hash = t.template_hash
-               WHERE c.project_id = #{pid} AND c.key_hash = #{keyHash} |]
-
-
 -- | Bulk variant: fetches catalog rows for a heterogeneous (project, key_hash)
 -- set in one round-trip. Used by the anomaly producer to load priors for an
 -- entire dirty batch before diffing.
@@ -286,31 +253,6 @@ getByKeysBatch pairs
                    JOIN unnest(#{pids}::uuid[], #{khs}::text[]) m(pid, kh)
                      ON c.project_id = m.pid AND c.key_hash = m.kh |]
       pure $ HM.fromList [((UUIDId r.projectId, r.keyHash), readRowToEntry r) | r <- rows]
-
-
--- | Fetch a single field's structure from a catalog row. Used by 'getAnomaliesVM'
--- so anomaly readers can surface per-field detail (key_path, format) without a
--- second join in SQL.
-getCatalogFieldAt
-  :: DB es
-  => Projects.ProjectId
-  -> Text
-  -- ^ key_hash
-  -> Text
-  -- ^ field path
-  -> Eff es (Maybe Catalog.FieldStruct)
-getCatalogFieldAt pid keyHash path = do
-  rowM :: Maybe FieldsRow <-
-    Hasql.interpOne
-      [HI.sql| SELECT t.fields FROM apis.schema_catalog c
-               JOIN apis.schema_template t ON c.template_hash = t.template_hash
-               WHERE c.project_id = #{pid} AND c.key_hash = #{keyHash} |]
-  pure $ rowM >>= \(FieldsRow (HI.AsJsonb m)) -> HM.lookup path m
-
-
-newtype FieldsRow = FieldsRow (HI.AsJsonb (HM.HashMap Text Catalog.FieldStruct))
-  deriving stock (Generic)
-  deriving anyclass (HI.DecodeRow)
 
 
 -- ---------------------------------------------------------------------------
@@ -381,13 +323,14 @@ toFacetSummary pid tableName doc =
 -- GC.
 
 -- | Drop @apis.schema_template@ rows no catalog row references and that
--- haven't been seen in 7 days (grace window for shards that just evicted but
--- haven't flushed yet). Returns rows deleted.
+-- haven't been seen in 40 days. Long grace window covers projects that
+-- paused ingestion (vacation, staging idle) so we don't churn templates
+-- they'd re-create on return. Returns rows deleted. Run from MonoscopeAdminDaily.
 vacuumUnreferencedTemplates :: DB es => Eff es Int64
 vacuumUnreferencedTemplates =
   Hasql.interpExecute
     [HI.sql| DELETE FROM apis.schema_template t
-             WHERE t.last_seen_at < now() - interval '7 days'
+             WHERE t.last_seen_at < now() - interval '40 days'
                AND NOT EXISTS (
                  SELECT 1 FROM apis.schema_catalog c
                  WHERE c.template_hash = t.template_hash) |]

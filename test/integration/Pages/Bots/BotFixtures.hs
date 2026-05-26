@@ -3,7 +3,6 @@ module Pages.Bots.BotFixtures (
   slackInteraction,
   slackEventCallback,
   slackThreadedEvent,
-  slackActionPayload,
 
   -- * Discord Fixtures
   discordPingPayload,
@@ -73,27 +72,6 @@ slackEventCallback teamId channelId userText ts threadTsM =
 slackThreadedEvent :: Text -> Text -> Text -> Text -> Text -> AE.Value
 slackThreadedEvent teamId channelId userText ts threadTs =
   slackEventCallback teamId channelId userText ts (Just threadTs)
-
-
-slackActionPayload :: Text -> AE.Value
-slackActionPayload actionType =
-  [aesonQQ|{
-    "type": #{actionType},
-    "token": "xoxb-test-fake-token-not-real",
-    "trigger_id": "T.13579.1234567890.abcdef1234567890abcdef1234567890",
-    "view": {
-      "private_metadata": "C0123ABCDEF___proj123",
-      "blocks": [],
-      "id": "V0123ABCDEF",
-      "state": null
-    },
-    "actions": null,
-    "user": {
-      "id": "U0123ABCDEF",
-      "username": "testuser",
-      "team_id": "T0123ABCDEF"
-    }
-  }|]
 
 
 -- * Discord Fixtures

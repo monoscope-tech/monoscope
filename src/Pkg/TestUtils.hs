@@ -56,7 +56,6 @@ module Pkg.TestUtils (
   mkAttr,
   -- MinIO test helpers
   requireMinio,
-  minioAvailable,
 )
 where
 
@@ -646,11 +645,6 @@ requireMinio :: TestResources -> (String -> f ()) -> f () -> f ()
 requireMinio tr pending action
   | tr.trMinioAvailable = action
   | otherwise = pending "MinIO not reachable — run `make minio-local` (or set MINIO_ENDPOINT)"
-
-
--- | True if MinIO was probed and the test bucket prepared during setup.
-minioAvailable :: TestResources -> Bool
-minioAvailable = trMinioAvailable
 
 
 -- Compose withSetup with additional IO actions

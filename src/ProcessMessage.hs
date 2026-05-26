@@ -9,8 +9,6 @@ module ProcessMessage (
   valueToFormatStr,
   valueToFields,
   redactJSON,
-  replaceNullChars,
-  sortVector,
   ensureUrlParams,
   dedupFields,
   isUrlIdLike,
@@ -46,7 +44,6 @@ import Data.Time (addUTCTime, zonedTimeToUTC)
 import Data.Time.LocalTime (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Data.Vector.Algorithms.Intro qualified as VA
 import Deriving.Aeson qualified as DAE
 import Effectful
 import Effectful.Concurrent (Concurrent)
@@ -543,23 +540,9 @@ createSpanAttributes rm =
     -- Process headers
     headersObj =
       let
-        -- Convert request headers using lens
-        reqHeaders =
-          fromMaybe (AE.object [])
-            $ rm.requestHeaders
-            ^? _Object
-              >>= \obj ->
-                let pairs = [("http.request.headers." <> AEK.toText k, v) | (k, v) <- AEKM.toList obj]
-                 in Just $ nestedJsonFromDotNotation pairs
-
-        -- Convert response headers using lens
-        respHeaders =
-          fromMaybe (AE.object [])
-            $ rm.responseHeaders
-            ^? _Object
-              >>= \obj ->
-                let pairs = [("http.response.headers." <> AEK.toText k, v) | (k, v) <- AEKM.toList obj]
-                 in Just $ nestedJsonFromDotNotation pairs
+        extractHeaders prefix = fromMaybe (AE.object []) . fmap (nestedJsonFromDotNotation . map (first (prefix <>)) . AEKM.toList) . (^? _Object)
+        reqHeaders = extractHeaders "http.request.headers." rm.requestHeaders
+        respHeaders = extractHeaders "http.response.headers." rm.responseHeaders
        in
         reqHeaders `mergeJsonObjects` respHeaders
 
@@ -647,17 +630,6 @@ redactJSON paths' = redactJSON' (map stripPrefixDot $ V.toList paths')
 
     matchKey !k = mapMaybe (\path -> T.stripPrefix (k <> ".") path <|> T.stripPrefix k path)
     stripPrefixDot !p = fromMaybe p (T.stripPrefix "." p)
-
-
-replaceNullChars :: Text -> Text
-replaceNullChars = T.replace "\\u0000" ""
-
-
-sortVector :: Ord a => V.Vector a -> V.Vector a
-sortVector vec = runST $ do
-  mvec <- V.thaw vec
-  VA.sort mvec
-  V.freeze mvec
 
 
 -- valueToFields takes an aeson object and converts it into a vector of paths to

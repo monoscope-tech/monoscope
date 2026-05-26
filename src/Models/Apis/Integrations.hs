@@ -12,7 +12,6 @@ module Models.Apis.Integrations (
   getDashboardsForWhatsapp,
   getDiscordData,
   deleteSlackData,
-  deleteDiscordData,
 ) where
 
 import Data.Effectful.Hasql qualified as Hasql
@@ -130,7 +129,3 @@ getDashboardsForDiscord guildId = Hasql.interp [HI.sql|SELECT d.title, d.id::tex
 
 deleteSlackData :: DB es => Projects.ProjectId -> Eff es Int64
 deleteSlackData pid = Hasql.interpExecute [HI.sql|DELETE FROM apis.slack WHERE project_id = #{pid}|]
-
-
-deleteDiscordData :: DB es => Projects.ProjectId -> Eff es Int64
-deleteDiscordData pid = Hasql.interpExecute [HI.sql|DELETE FROM apis.discord WHERE project_id = #{pid}|]

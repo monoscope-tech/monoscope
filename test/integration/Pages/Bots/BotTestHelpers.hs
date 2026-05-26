@@ -17,7 +17,6 @@ module Pages.Bots.BotTestHelpers (
   assertJsonGolden,
   writeGoldenFile,
   readGoldenFile,
-  shouldMatchGolden,
 
   -- * Discord Signature Helpers
   testDiscordPublicKeyHex,
@@ -26,7 +25,6 @@ module Pages.Bots.BotTestHelpers (
 
   -- * Response Extraction
   extractSlackBlocks,
-  extractDiscordComponents,
   extractResponseText,
 
   -- * Notification Helpers
@@ -35,7 +33,6 @@ module Pages.Bots.BotTestHelpers (
   -- * JSON Response Helpers
   isValidJsonResponse,
   isEmptyJsonObject,
-  getJsonField,
 
   -- * Slack Response Helpers
   extractResponseType,
@@ -174,10 +171,6 @@ readGoldenFile path = do
     else pure Nothing
 
 
-shouldMatchGolden :: AE.Value -> FilePath -> Expectation
-shouldMatchGolden actual path = assertJsonGolden path actual
-
-
 -- * Discord Signature Helpers
 -- Deterministic test keypair from a fixed 32-byte seed
 
@@ -221,12 +214,6 @@ extractSlackBlocks val = case val of
   _ -> Nothing
 
 
-extractDiscordComponents :: AE.Value -> Maybe AE.Value
-extractDiscordComponents val = case val of
-  AE.Object obj -> AEKM.lookup (AEK.fromText "components") obj
-  _ -> Nothing
-
-
 extractResponseText :: AE.Value -> Maybe Text
 extractResponseText val = case val of
   AE.Object obj ->
@@ -254,12 +241,6 @@ isValidJsonResponse _ = False
 isEmptyJsonObject :: AE.Value -> Bool
 isEmptyJsonObject (AE.Object obj) = AEKM.null obj
 isEmptyJsonObject _ = False
-
-
-getJsonField :: Text -> AE.Value -> Maybe AE.Value
-getJsonField field val = case val of
-  AE.Object obj -> AEKM.lookup (AEK.fromText field) obj
-  _ -> Nothing
 
 
 -- * Slack Response Helpers

@@ -24,7 +24,6 @@ module Utils (
   getAlertStatusColor,
   lookupVecTextByKey,
   deleteParam,
-  getSeverityColor,
   unwrapJsonPrimValue,
   listToIndexHashMap,
   b64ToJson,
@@ -41,7 +40,6 @@ module Utils (
   toXXHash,
   getServiceColors,
   serviceFillColor,
-  getGrpcStatusColor,
   -- Hex color mapping for ECharts server-side rendering
   themeColorsHex,
   getSeriesColorHex,
@@ -277,24 +275,6 @@ deleteParam key url
     fixQueryStart t = case T.breakOn "&" t of
       (before, after) | not (T.null after) && not ("?" `T.isInfixOf` before) -> before <> "?" <> T.drop 1 after
       _ -> t
-
-
-getGrpcStatusColor :: Int -> Text
-getGrpcStatusColor status
-  | status == 0 = "cbadge-sm badge-2xx" -- OK
-  | status >= 1 && status <= 16 = "cbadge-sm badge-4xx" -- Errors (1 to 16 are error codes)
-  | otherwise = "text-textWeak bg-fillStrong"
-
-
-getSeverityColor :: Text -> Text
-getSeverityColor "debug" = "text-textWeak border-strokeWeak bg-fillWeak"
-getSeverityColor "info" = "text-textBrand border-strokeBrand-strong bg-fillInformation-weak"
-getSeverityColor "warning" = "text-textWarning border-strokeWarning-strong bg-fillWarning-weak"
-getSeverityColor "error" = "text-textError border-strokeError-strong bg-fillError-weak"
-getSeverityColor "critical" = "text-textError border-strokeError-strong bg-fillError-strong font-bold"
-getSeverityColor "notice" = "text-textSuccess border-strokeSuccess-strong bg-fillSuccess-weak"
-getSeverityColor "alert" = "text-textWarning border-strokeWarning-strong bg-fillWarning-strong font-bold"
-getSeverityColor _ = "text-textStrong bg-fillWeaker"
 
 
 -- >>> replaceNumbers "response_body.0.completed"

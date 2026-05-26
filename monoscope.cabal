@@ -6,7 +6,7 @@ cabal-version: 2.2
 
 name:           monoscope
 version:        0.1.0.0
-description:    Please see the README on GitHub at <https://github.com/monoscope-tech/monoscope#readme>
+description:    Please see the README on GitHub at <https://github.com/githubuser/monoscope#readme>
 homepage:       https://github.com/monoscope-tech/monoscope#readme
 bug-reports:    https://github.com/monoscope-tech/monoscope/issues
 author:         Monoscope
@@ -117,10 +117,12 @@ extra-source-files:
     static/migrations/0089_schema_catalog.sql
     static/migrations/0090_drop_legacy_schema_tables.sql
     static/migrations/0091_drop_redacted_fields.sql
+    static/migrations/0092_anomalies_endpoint_metadata.sql
+    static/migrations/0093_log_patterns_is_error.sql
 
 source-repository head
   type: git
-  location: https://github.com/githubuser/monoscope
+  location: https://github.com/monoscope-tech/monoscope
 
 custom-setup
   setup-depends:
@@ -201,7 +203,6 @@ library
       Pkg.Queue
       Pkg.SchemaLearning.Catalog
       Pkg.SchemaLearning.Hot
-      Pkg.SchemaLearning.OpenApi
       Pkg.SchemaLearning.Worker
       Pkg.TestUtils
       Pkg.TraceSessionCache

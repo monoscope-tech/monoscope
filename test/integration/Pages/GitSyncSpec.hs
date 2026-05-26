@@ -38,13 +38,11 @@ import UnliftIO.Exception (try)
 
 
 
-isGitSyncPush, isGitSyncFromRepo, isGitSyncPushAll :: (a, BackgroundJobs.BgJobs) -> Bool
+isGitSyncPush, isGitSyncFromRepo :: (a, BackgroundJobs.BgJobs) -> Bool
 isGitSyncPush (_, BackgroundJobs.GitSyncPushDashboard{}) = True
 isGitSyncPush _ = False
 isGitSyncFromRepo (_, BackgroundJobs.GitSyncFromRepo{}) = True
 isGitSyncFromRepo _ = False
-isGitSyncPushAll (_, BackgroundJobs.GitSyncPushAllDashboards{}) = True
-isGitSyncPushAll _ = False
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -170,10 +168,6 @@ clearAllTestData tr = liftIO $ withResource tr.trPool \conn -> do
   void $ execute conn [sql|DELETE FROM background_jobs WHERE payload->>'tag' LIKE 'GitSync%'|] ()
   void $ execute conn [sql|DELETE FROM projects.dashboards WHERE project_id = ?|] (Only testPid)
   void $ execute conn [sql|DELETE FROM projects.github_sync WHERE project_id = ?|] (Only testPid)
-
-clearTestDashboards :: TestResources -> IO ()
-clearTestDashboards tr = liftIO $ withResource tr.trPool \conn -> do
-  void $ execute conn [sql|DELETE FROM projects.dashboards WHERE project_id = ?|] (Only testPid)
 
 createDash :: TestResources -> Text -> [Text] -> IO Dashboards.DashboardId
 createDash tr title tags = do

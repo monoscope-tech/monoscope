@@ -145,10 +145,14 @@ jobs:
           name: frontend-assets
           path: static/public/assets
 
+      - name: Read GHC version from cabal.project
+        id: ghc
+        run: echo "version=$(awk '/^with-compiler:[[:space:]]*ghc-/ {sub(/^ghc-/, "", $2); print $2}' cabal.project)" >> "$GITHUB_OUTPUT"
+
       - name: Install GHC and Cabal
         uses: haskell-actions/setup@v2
         with:
-          ghc-version: '9.12.2'
+          ghc-version: ${{ steps.ghc.outputs.version }}
           cabal-version: '3.14'
 
       - name: Cache Cabal

@@ -68,7 +68,6 @@ spec = aroundAll withTestProject do
 
   describe "LemonSqueezy Billing" do
     lemonSqueezyWebhookTests
-  -- billingUsageTests
 
   describe "Replay Session Recording" do
     replayTests
@@ -355,60 +354,6 @@ createWebhookPayload eventName pid =
     }
 
 
--- | Billing Usage Calculation Tests
-billingUsageTests :: SpecWith TestContext
-billingUsageTests = do
-  it "should calculate usage within billing cycle correctly" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
-    currentTime <- liftIO getCurrentTime
-    let cycleStart = addUTCTime (-(10 * 24 * 60 * 60)) currentTime -- 10 days ago
-
-    -- Configure project for billing: set payment_plan, first_sub_item_id, billing_day, and usage_last_reported
-    _ <- withResource tr.trPool \conn ->
-      PGS.execute conn
-        [sql|UPDATE projects.projects SET payment_plan = 'Pro', first_sub_item_id = 12345, billing_day = ?, usage_last_reported = ? WHERE id = ?|]
-        (cycleStart, cycleStart, testPid)
-
-    -- Ingest some test usage data
-    apiKey <- createTestAPIKey tr testPid "billing-test-key"
-    forM_ [1 .. 5] $ \(i :: Int) ->
-      ingestTrace tr apiKey ("test-span-" <> show i) currentTime
-
-    -- Run the ReportUsage background job to populate daily_usage
-    void $ runTestBg frozenTime tr $ BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.ReportUsage testPid)
-
-    -- Get billing info
-    (_, result) <- testServant tr $ LemonSqueezy.manageBillingGetH testPid Nothing
-
-    case result of
-      LemonSqueezy.BillingGet (PageCtx _ d) ->
-        d.totalReqs `shouldBe` (5 :: Int64) -- Should count the 5 spans we ingested
-  it "should handle cycle boundaries correctly" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
-    currentTime <- liftIO getCurrentTime
-    let cycleStart = addUTCTime (-(40 * 24 * 60 * 60)) currentTime -- 40 days ago (more than a month)
-        oldTime = addUTCTime (-(35 * 24 * 60 * 60)) currentTime
-
-    -- Configure project for billing: set payment_plan, first_sub_item_id, billing_day, and usage_last_reported
-    _ <- withResource tr.trPool \conn ->
-      PGS.execute conn
-        [sql|UPDATE projects.projects SET payment_plan = 'Pro', first_sub_item_id = 12345, billing_day = ?, usage_last_reported = ? WHERE id = ?|]
-        (cycleStart, cycleStart, testPid)
-
-    -- Ingest old data (outside current cycle) and new data (within current cycle)
-    apiKey <- createTestAPIKey tr testPid "cycle-test-key"
-    ingestTrace tr apiKey "old-span" oldTime
-    ingestTrace tr apiKey "new-span" currentTime
-
-    -- Run the ReportUsage background job to populate daily_usage
-    void $ runTestBg frozenTime tr $ BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.ReportUsage testPid)
-
-    -- Get billing info - should only count data from current cycle
-    (_, result) <- testServant tr $ LemonSqueezy.manageBillingGetH testPid Nothing
-
-    case result of
-      LemonSqueezy.BillingGet (PageCtx _ d) ->
-        d.totalReqs `shouldBe` (1 :: Int64) -- Should only count the recent span
-
-
 -- | Replay Session Recording Tests
 replayTests :: SpecWith TestContext
 replayTests = do
@@ -526,40 +471,3 @@ s3ConfigTests = do
       _ -> fail "S3 config was not removed"
 
 
--- | Test cases for S3 validation
-s3ValidationCases :: [(String, Projects.ProjectS3Bucket, Bool)]
-s3ValidationCases =
-  [
-    ( "should reject invalid credentials"
-    , Projects.ProjectS3Bucket
-        { accessKey = "invalid-key"
-        , secretKey = "invalid-secret"
-        , region = "us-east-1"
-        , bucket = "nonexistent-bucket"
-        , endpointUrl = ""
-        }
-    , False
-    )
-  ,
-    ( "should reject missing bucket"
-    , Projects.ProjectS3Bucket
-        { accessKey = "test-key"
-        , secretKey = "test-secret"
-        , region = "us-east-1"
-        , bucket = ""
-        , endpointUrl = ""
-        }
-    , False
-    )
-  ,
-    ( "should handle custom endpoints"
-    , Projects.ProjectS3Bucket
-        { accessKey = "test-key"
-        , secretKey = "test-secret"
-        , region = "us-east-1"
-        , bucket = "test-bucket"
-        , endpointUrl = "https://s3.custom.com"
-        }
-    , False -- Will fail unless actual endpoint is available
-    )
-  ]

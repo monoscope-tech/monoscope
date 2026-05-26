@@ -11,7 +11,6 @@ module Web.Auth (
   resolveApiKeyProject,
   APItoolkitAuthContext,
   authorizeUserAndPersist,
-  renderError,
   errorPageHtml,
   htmlServerError,
   ClientMetadata (..),
@@ -62,7 +61,7 @@ import Lucid.Html5
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects (craftSessionCookie, emptySessionCookie)
 import Models.Projects.Projects qualified as Projects
-import Network.HTTP.Types (Status, hAuthorization, hCookie, statusCode)
+import Network.HTTP.Types (hAuthorization, hCookie)
 import Network.Wai (Request (rawPathInfo, rawQueryString, requestHeaders))
 import Network.Wreq (FormParam ((:=)), defaults, getWith, header, post, responseBody)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
@@ -409,10 +408,6 @@ authorizeUserAndPersist convertkitApiKeyM firstName lastName picture email = do
   Projects.insertSession persistentSessId userId (Projects.SessionData Map.empty)
   _ <- whenJust convertkitApiKeyM \ckKey -> addConvertKitUser ckKey email firstName lastName "" "" ""
   pure persistentSessId
-
-
-renderError :: forall (es :: [Effect]) (a :: Type). Error ServerError :> es => AuthContext -> Status -> Eff es a
-renderError env status = throwError $ htmlServerError env.config (statusCode status)
 
 
 htmlServerError :: EnvConfig -> Int -> ServerError

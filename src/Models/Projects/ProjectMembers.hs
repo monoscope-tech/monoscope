@@ -33,11 +33,9 @@ module Models.Projects.ProjectMembers (
   addDiscordChannelToEveryoneTeam,
   addPagerdutyServiceToEveryoneTeam,
   removeSlackChannelsFromEveryoneTeam,
-  removeDiscordChannelsFromEveryoneTeam,
   removePagerdutyServicesFromEveryoneTeam,
   setEveryoneTeamEmails,
   setEveryoneTeamPhones,
-  setEveryoneTeamDisabledChannels,
   isChannelEnabled,
   isEveryoneChannelEnabled,
   teamHasAnyEnabledChannel,
@@ -556,21 +554,17 @@ addPagerdutyServiceToEveryoneTeam pid val =
 
 
 removeSlackChannelsFromEveryoneTeam
-  , removeDiscordChannelsFromEveryoneTeam
   , removePagerdutyServicesFromEveryoneTeam
     :: (DB es, Log :> es) => Projects.ProjectId -> Eff es ()
 removeSlackChannelsFromEveryoneTeam pid = modifyEveryoneTeamDetails pid \d -> d{slackChannels = mempty}
-removeDiscordChannelsFromEveryoneTeam pid = modifyEveryoneTeamDetails pid \d -> d{discordChannels = mempty}
 removePagerdutyServicesFromEveryoneTeam pid = modifyEveryoneTeamDetails pid \d -> d{pagerdutyServices = mempty}
 
 
 setEveryoneTeamEmails
   , setEveryoneTeamPhones
-  , setEveryoneTeamDisabledChannels
     :: (DB es, Log :> es) => Projects.ProjectId -> V.Vector Text -> Eff es ()
 setEveryoneTeamEmails pid v = modifyEveryoneTeamDetails pid \d -> d{notifyEmails = v}
 setEveryoneTeamPhones pid v = modifyEveryoneTeamDetails pid \d -> d{phoneNumbers = v}
-setEveryoneTeamDisabledChannels pid v = modifyEveryoneTeamDetails pid \d -> d{disabledChannels = v}
 
 
 -- | The notify_emails column is now the single source of truth for who gets

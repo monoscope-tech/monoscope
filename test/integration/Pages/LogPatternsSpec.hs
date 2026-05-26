@@ -26,19 +26,6 @@ pid :: Projects.ProjectId
 pid = UUIDId UUID.nil
 
 
--- | Insert a synthetic log row for pattern extraction to pick up
-insertTestLog :: TestResources -> Text -> Text -> UTCTime -> IO ()
-insertTestLog tr body serviceName ts = do
-  logId <- UUID.nextRandom
-  withResource tr.trPool \conn ->
-    void $ PGS.execute conn
-      [sql| INSERT INTO otel_logs_and_spans
-              (id, project_id, timestamp, start_time, kind, summary, resource___service___name, date, hashes)
-            VALUES (?::uuid, ?, ?, ?, 'log', string_to_array(?, ' '), ?, ?::date, '{}')
-            ON CONFLICT DO NOTHING |]
-      (show logId, pid.toText, ts, ts, body, serviceName, ts)
-
-
 -- | Insert pre-aggregated hourly stats for a pattern to build baselines quickly
 insertHourlyStat :: TestResources -> Text -> Text -> UTCTime -> Int64 -> IO ()
 insertHourlyStat tr sourceField patternHash hourBucket count =

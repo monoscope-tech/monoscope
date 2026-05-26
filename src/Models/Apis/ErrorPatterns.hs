@@ -9,7 +9,6 @@ module Models.Apis.ErrorPatterns (
   getErrorPatternById,
   getErrorPatternByHash,
   updateOccurrenceCounts,
-  propagateMergedCounts,
   updateOccurrenceCountsBatch,
   propagateMergedCountsBatch,
   updateErrorPatternState,
@@ -28,7 +27,6 @@ module Models.Apis.ErrorPatterns (
   ErrorPatternWithCurrentRate (..),
   getErrorPatternsWithCurrentRates,
   findCanonicalMatch,
-  getErrorPatternsByParentHash,
   -- Error Fingerprinting (re-exported from Pkg.ErrorFingerprint)
   EF.StackFrame (..),
   EF.ErrorHashes (..),
@@ -45,7 +43,6 @@ import Data.Aeson qualified as AE
 import Data.Default
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
-import Data.Text qualified as T
 import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -214,14 +211,6 @@ getErrorPatternByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Er
 getErrorPatternByHash pid eHash = Hasql.interpOne [HI.sql| SELECT * FROM apis.error_patterns WHERE project_id = #{pid} AND hash = #{eHash} |]
 
 
--- | Get all error pattern children belonging to a parent hash family (used for rollup views).
--- Returns [] for empty/missing parent hash rather than scanning for empty-string rows.
-getErrorPatternsByParentHash :: DB es => Projects.ProjectId -> Text -> Eff es [ErrorPattern]
-getErrorPatternsByParentHash _pid pHash | T.null pHash = pure []
-getErrorPatternsByParentHash pid pHash =
-  Hasql.interp [HI.sql| SELECT * FROM apis.error_patterns WHERE project_id = #{pid} AND parent_hash = #{pHash} ORDER BY created_at ASC |]
-
-
 getErrorPatternLByHash :: DB es => Projects.ProjectId -> Text -> UTCTime -> Eff es (Maybe ErrorPatternL)
 getErrorPatternLByHash pid eHash now =
   Hasql.interpOne
@@ -231,10 +220,6 @@ getErrorPatternLByHash pid eHash now =
       SELECT SUM(event_count) AS occurrences, SUM(user_count) AS user_count, MAX(hour_bucket) AS last_occurred_at
       FROM apis.error_hourly_stats WHERE error_id = e.id AND hour_bucket >= #{now}::timestamptz - INTERVAL '30 days'
     ) ev ON true WHERE e.project_id = #{pid} AND e.hash = #{eHash} |]
-
-
-propagateMergedCounts :: DB es => Projects.ProjectId -> Eff es Int64
-propagateMergedCounts pid = propagateMergedCountsBatch (V.singleton pid)
 
 
 updateOccurrenceCounts :: DB es => Projects.ProjectId -> UTCTime -> Eff es Int64

@@ -2,7 +2,9 @@
 # This image pre-compiles all Haskell dependencies
 # Rebuilt weekly or when cabal files change
 
-FROM haskell:9.12.2
+# Bump in lockstep with cabal.project's `with-compiler: ghc-X.Y.Z`.
+ARG GHC_VERSION=9.12.4
+FROM haskell:${GHC_VERSION}
 
 # Install system dependencies (combined into single layer)
 RUN apt-get update && apt-get install -y \
@@ -55,7 +57,7 @@ RUN cd web-components && bun build --compile src/chart-cli.ts --outfile /usr/loc
 
 # The resulting image contains:
 # - All system libraries
-# - GHC 9.12.2
+# - GHC (from ARG GHC_VERSION above)
 # - protoc
 # - Node.js, bun, workbox-cli, and pre-built chart-cli
 # - All npm dependencies pre-installed

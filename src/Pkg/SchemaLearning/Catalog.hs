@@ -14,21 +14,17 @@
 module Pkg.SchemaLearning.Catalog (
   KeyKind (..),
   Scope (..),
-  emptyScope,
   FieldStruct (..),
   Template (..),
   Examples (..),
   TopK (..),
   CatalogEntry (..),
   SummaryDoc (..),
-  emptySummaryDoc,
   templateHash,
   fieldKindOfValue,
-  emptyExamples,
   emptyTopK,
   newEntry,
   mergeFullWalk,
-  bumpSeen,
   classifyFormat,
   -- Anomaly diffing.
   AnomalyKind (..),
@@ -74,7 +70,6 @@ import Hasql.Interpolate qualified as HI
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Relude
 import Utils (toXXHash)
-import Web.HttpApiData (FromHttpApiData)
 
 
 -- $setup
@@ -109,11 +104,6 @@ data Scope = Scope
   deriving stock (Eq, Generic, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Scope
-
-
--- | Default 'Scope' — useful for callers that build scopes incrementally.
-emptyScope :: Scope
-emptyScope = Scope Nothing Nothing Nothing Nothing Nothing Nothing V.empty
 
 
 -- | Structural facts about one field path. Sets are ordered for deterministic
@@ -196,10 +186,6 @@ exampleStringCap :: Int
 exampleStringCap = 256
 
 
-emptyExamples :: Examples
-emptyExamples = Examples V.empty
-
-
 emptyTopK :: TopK
 emptyTopK = TopK 0 HM.empty
 
@@ -219,19 +205,17 @@ emptyTopK = TopK 0 HM.empty
 -- False
 templateHash :: Template -> Text
 templateHash t =
-  toXXHash $ T.intercalate "\n" $ render t.keyKind : sort (renderField <$> HM.toList t.fields)
+  toXXHash $ T.intercalate "\n" $ show t.keyKind : sort (renderField <$> HM.toList t.fields)
   where
-    render kk = T.pack (show kk)
     renderField (path, fs) =
-      path
-        <> "|"
-        <> T.intercalate "," (sort (T.pack . show <$> HS.toList fs.types))
-        <> "|"
-        <> T.intercalate "," (sort (HS.toList fs.formats))
-        <> "|"
-        <> T.pack (show fs.category)
-        <> "|"
-        <> bool "0" "1" fs.isEnum
+      T.intercalate
+        "|"
+        [ path
+        , T.intercalate "," (sort (show <$> HS.toList fs.types))
+        , T.intercalate "," (sort (HS.toList fs.formats))
+        , show fs.category
+        , bool "0" "1" fs.isEnum
+        ]
 
 
 -- ---------------------------------------------------------------------------
@@ -315,7 +299,7 @@ bumpTopK incoming (TopK d t) =
    in TopK newDistinct capped
   where
     valueAsText (AET.String s) = Just s
-    valueAsText (AET.Number n) = Just (T.pack (show n))
+    valueAsText (AET.Number n) = Just (show n)
     valueAsText (AET.Bool b) = Just (if b then "true" else "false")
     valueAsText _ = Nothing
 
@@ -360,11 +344,6 @@ mergeFullWalk newScope walk now e =
        in (flds', vals', cnts')
 
 
--- | Fast path: known key, past learning threshold. Just touches counters.
-bumpSeen :: UTCTime -> CatalogEntry -> CatalogEntry
-bumpSeen now e = e{sampleCount = e.sampleCount + 1, lastSeen = now, dirty = True}
-
-
 -- | Union scopes, preferring populated fields and union'ing observed status
 -- codes (capped to 32 distinct values).
 mergeScope :: Scope -> Scope -> Scope
@@ -396,10 +375,6 @@ data SummaryDoc = SummaryDoc
   deriving stock (Eq, Generic, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SummaryDoc
-
-
-emptySummaryDoc :: SummaryDoc
-emptySummaryDoc = SummaryDoc HM.empty V.empty HM.empty
 
 
 -- ---------------------------------------------------------------------------
@@ -576,9 +551,3 @@ data FacetSummary = FacetSummary
   deriving anyclass (FromRow, HI.DecodeRow, NFData, ToRow)
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "facet_summaries", PrimaryKey "id", FieldModifiers '[CamelToSnake]] FacetSummary)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] FacetSummary
-
-
--- Suppress warnings if FromHttpApiData / FromRow stay unused by direct
--- references — the deriving-via lines need them in scope.
-_keepFromHttpApiData :: Maybe (Proxy FromHttpApiData)
-_keepFromHttpApiData = Nothing

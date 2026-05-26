@@ -4,7 +4,6 @@ module System.Types (
   ATBackgroundCtx,
   DB,
   runBackground,
-  withHasqlTimefusion,
   addRespHeaders,
   addTriggerEvent,
   addToast,
@@ -29,7 +28,6 @@ where
 import Control.Monad.Except qualified as Except
 import Data.Aeson qualified as AE
 import Data.Effectful.Hasql (Hasql, runHasqlPool)
-import Data.Effectful.Hasql qualified
 import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.Notify qualified
 import Data.Effectful.UUID (UUIDEff, runStaticUUIDRef, runUUID)
@@ -215,15 +213,6 @@ runBackground logger appCtx tp process =
     & runConcurrent
     & Ki.runStructuredConcurrency
     & Effectful.runEff
-
-
--- | Route Hasql through the timefusion pool when enabled. Re-exported here so call sites can import a single module.
-withHasqlTimefusion
-  :: (Hasql :> es, Labeled "timefusion" Hasql :> es)
-  => Bool
-  -> Eff (Hasql ': es) a
-  -> Eff es a
-withHasqlTimefusion = Data.Effectful.Hasql.withHasqlTimefusion
 
 
 type instance

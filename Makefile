@@ -1,6 +1,7 @@
-# GHC_VERSION := $(shell stack ghc -- --version | awk '{print $$NF}')
-# GHC_VERSION := $(shell stack ghc -- --version | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -n 1)
-GHC_VERSION := 9.12.2
+# Single source of truth for GHC version: cabal.project's `with-compiler: ghc-X.Y.Z`.
+# Dockerfile.deps and .github/workflows/cli-release.yml must be kept in sync manually.
+GHC_VERSION := $(shell awk '/^with-compiler:[[:space:]]*ghc-/ {sub(/^ghc-/, "", $$2); print $$2}' cabal.project)
+GHC := ghc-$(GHC_VERSION)
 ARCH := $(shell uname -m | sed 's/arm64/aarch64/' | tr '[:upper:]' '[:lower:]')
 OS := $(shell uname -s | sed 's/Darwin/osx/' | tr '[:upper:]' '[:lower:]')
 OS_ARCH := $(ARCH)-$(OS)
@@ -22,13 +23,13 @@ cypress:
 	npx cypress run --record --key 2a2372e2-4ba1-4cd5-8bed-f39f4f047b3e
 
 live-reload:
-	ghcid --command 'cabal repl monoscope --ghc-options="-Wno-error=unused-imports -Wno-error=unused-top-binds" --with-compiler=ghc-9.12.2' --test ':run Start.startApp' --warnings
+	ghcid --command 'cabal repl monoscope --ghc-options="-Wno-error=unused-imports -Wno-error=unused-top-binds" --with-compiler=$(GHC)' --test ':run Start.startApp' --warnings
 
 live-reload-cli:
-	ghcid --command 'cabal repl exe:monoscope --ghc-options="-O0 -Wno-error=unused-imports -Wno-error=unused-top-binds" --with-compiler=ghc-9.12.2' --warnings 2>&1 | tee build-cli.log
+	ghcid --command 'cabal repl exe:monoscope --ghc-options="-O0 -Wno-error=unused-imports -Wno-error=unused-top-binds" --with-compiler=$(GHC)' --warnings 2>&1 | tee build-cli.log
 
 live-test-reload:
-	ghcid --command 'cabal repl lib:monoscope test/unit/Main.hs --with-compiler=ghc-9.12.2' --test ':run main' --warnings
+	ghcid --command 'cabal repl lib:monoscope test/unit/Main.hs --with-compiler=$(GHC)' --test ':run main' --warnings
 
 live-test-reload-unit:
 	ghcid --test 'cabal test monoscope:unit-tests --test-show-details=streaming'
@@ -101,7 +102,7 @@ live-test-unit:
 	ghcid --test 'cabal test monoscope:unit-tests --test-show-details=streaming'
 
 live-reload-doctests:
-	ghcid --command 'cabal repl lib:monoscope --with-compiler=ghc-9.12.2' --test ':! cabal test monoscope:doctests --ghc-options="-O0" --test-show-details=streaming'
+	ghcid --command 'cabal repl lib:monoscope --with-compiler=$(GHC)' --test ':! cabal test monoscope:doctests --ghc-options="-O0" --test-show-details=streaming'
 
 fmt:
 	fourmolu --mode inplace $$(find ./src/ -name '*.hs')

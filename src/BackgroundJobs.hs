@@ -587,6 +587,9 @@ processBackgroundJob authCtx bgJob =
       rescheduleSelf authCtx BackgroundJobs.NotificationDigestJob (addUTCTime 3600 scheduledTime)
       unlessStale "NotificationDigestJob" scheduledTime (2 * 3600) $ runNotificationDigest scheduledTime
     MonoscopeAdminDaily -> do
+      -- GC orphaned schema_template rows (no catalog refs, idle 7d)
+      deletedTemplates <- SchemaCatalog.vacuumUnreferencedTemplates
+      Log.logInfo "vacuumUnreferencedTemplates" deletedTemplates
       now <- Time.currentTime
       let since = addUTCTime (-86400) now
           dateStr = toText $ formatTime defaultTimeLocale "%Y-%m-%d" now
@@ -1798,7 +1801,7 @@ runSchemaFlusherFiber logger ctx tp
       SchemaWorker.runSchemaFlusher ctx.config.schemaFlushIntervalSecs refs flushOne
 
 
--- | 1-minute error-state decay tick. Owns `propagateMergedCounts` +
+-- | 1-minute error-state decay tick. Owns `propagateMergedCountsBatch` +
 -- `updateOccurrenceCounts` so errors auto-resolve once quiet long enough.
 -- Runs every minute per active project.
 runErrorDecayFiber :: Logger -> Config.AuthContext -> TracerProvider -> IO ()

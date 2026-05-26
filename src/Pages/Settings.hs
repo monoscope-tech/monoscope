@@ -33,7 +33,6 @@ module Pages.Settings (
   stripeWebhookPostH,
   createStripeCheckoutSession,
   createStripePortalSession,
-  cancelStripeSubscription,
   cancelLemonSqueezySubscription,
   lemonSqueezyOpts,
   verifyStripeSignature,
@@ -1085,11 +1084,6 @@ createStripePortalSession apiKey customerId returnUrl = do
       ]
   let body = resp ^. Wreq.responseBody
   pure $ AE.decode @AE.Value body >>= jsonField "url"
-
-
-cancelStripeSubscription :: Text -> Text -> IO ()
-cancelStripeSubscription apiKey subId =
-  void $ Wreq.deleteWith (stripeOpts apiKey) ("https://api.stripe.com/v1/subscriptions/" <> toString subId)
 
 
 lemonSqueezyOpts :: Text -> Wreq.Options

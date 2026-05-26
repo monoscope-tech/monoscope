@@ -35,7 +35,7 @@ import Pages.BodyWrapper (PageCtx (..))
 import Pages.Endpoints qualified as ApiCatalog
 import Pkg.Components.Table qualified as Table
 import Pkg.TestUtils
-import ProcessMessage (RequestMessage (..), processMessages, replaceNullChars, valueToFields)
+import ProcessMessage (RequestMessage (..), processMessages, valueToFields)
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Servant qualified

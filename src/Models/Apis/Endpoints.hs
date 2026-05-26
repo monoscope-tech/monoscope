@@ -10,10 +10,8 @@ module Models.Apis.Endpoints (
   dependenciesAndEventsCount,
   archiveHosts,
   unarchiveHosts,
-  isHostArchived,
   endpointRequestStatsByProject,
   countEndpointInbox,
-  countEndpointsByProject,
   listEndpointsPaged,
   getEndpointById,
   -- Endpoint template discovery
@@ -366,16 +364,6 @@ unarchiveHosts pid outgoingM hosts =
     <> directionClauseSql outgoingM
 
 
-isHostArchived :: DB es => Projects.ProjectId -> Bool -> Text -> Eff es Bool
-isHostArchived pid outgoing host =
-  fromMaybe False
-    <$> Hasql.interpOne
-      [HI.sql| SELECT EXISTS (
-          SELECT 1 FROM apis.hosts
-          WHERE project_id = #{pid} AND host = #{host} AND outgoing = #{outgoing}
-            AND archived_at IS NOT NULL) |]
-
-
 countEndpointInbox :: DB es => Projects.ProjectId -> Text -> Text -> Eff es Int
 countEndpointInbox pid host requestType = do
   let showCountBaseOnRequestType = case requestType of
@@ -391,13 +379,6 @@ countEndpointInbox pid host requestType = do
           <> rawSql showCountBaseOnRequestType
           <> [HI.sql| AND ann.id IS NOT NULL AND ann.acknowledged_at IS NULL AND host = #{host}|]
       )
-
-
-countEndpointsByProject :: DB es => Projects.ProjectId -> Bool -> Eff es Int
-countEndpointsByProject pid outgoing =
-  fromMaybe 0
-    <$> Hasql.interpOne
-      [HI.sql| SELECT COUNT(*)::int FROM apis.endpoints WHERE project_id = #{pid} AND outgoing = #{outgoing} |]
 
 
 -- | Count of endpoints under a (project, direction) optionally filtered by
