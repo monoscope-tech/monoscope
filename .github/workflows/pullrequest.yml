@@ -112,6 +112,11 @@ jobs:
         # Informational only for now — there's a real backlog of findings we
         # want to surface but not block PRs on. Flip to `false` once the
         # current src/ findings are triaged.
+        #
+        # weeder is baked into the monoscope-deps image (see Dockerfile.deps).
+        # The install fallback covers (a) the first run after the Dockerfile
+        # change before the deps image is rebuilt and (b) local reproduction
+        # outside the container.
         continue-on-error: true
         run: |
           command -v weeder >/dev/null 2>&1 \

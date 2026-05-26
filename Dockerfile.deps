@@ -43,6 +43,11 @@ RUN cabal update && \
   cabal configure --enable-tests --enable-benchmarks && \
   cabal build --only-dependencies all -j$(nproc)
 
+# Dead-code linter used by the PR workflow. Bake into the image so CI
+# doesn't pay an install hit on every run.
+RUN cabal install weeder \
+      --install-method=copy --installdir=/usr/local/bin --overwrite-policy=always
+
 # Pre-install npm dependencies for faster deploys
 COPY package*.json ./
 RUN npm ci --prefer-offline --no-audit
@@ -62,3 +67,4 @@ RUN cd web-components && bun build --compile src/chart-cli.ts --outfile /usr/loc
 # - Node.js, bun, workbox-cli, and pre-built chart-cli
 # - All npm dependencies pre-installed
 # - All Haskell dependencies pre-compiled in ~/.cabal/store
+# - weeder at /usr/local/bin/weeder
