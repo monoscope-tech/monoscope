@@ -331,6 +331,52 @@ spec = aroundAll withTestResources do
       -- The trace id should be embedded somewhere in the rendered investigation panel.
       html `shouldSatisfy` (traceIdText `T.isInfixOf`)
 
+    -- Migration 0095 swapped now() → app_now() in apis.log_auto_resolve_activity
+    -- so the auto-resolve activity row's created_at honours the test clock.
+    it "auto_resolved activity record uses app_now() (migration 0095)" \tr -> do
+      runTestBg frozenTime tr pass
+      let errHash = "test-095-auto-resolve-hash" :: Text
+          issueId = (UUIDId :: DataUUID.UUID -> Issues.IssueId) (Unsafe.fromJust $ DataUUID.fromText "00000000-0000-0000-0000-000000000095")
+      withResource tr.trPool \conn -> do
+        void $ PGS.execute conn
+          [sql| INSERT INTO apis.error_patterns
+                  (project_id, error_type, message, stacktrace, hash, state, created_at, updated_at)
+                VALUES (?, 'TestError', 'm', 's', ?, 'new', ?, ?)
+                ON CONFLICT (project_id, hash) DO UPDATE SET state='new' |]
+          (testPid, errHash, frozenTime, frozenTime)
+        void $ PGS.execute conn
+          [sql| INSERT INTO apis.issues
+                  (id, project_id, issue_type, target_hash, title, created_at, updated_at)
+                VALUES (?, ?, 'runtime_exception', ?, 'test issue 095', ?, ?)
+                ON CONFLICT (id) DO NOTHING |]
+          (issueId, testPid, errHash, frozenTime, frozenTime)
+        void $ PGS.execute conn
+          [sql| DELETE FROM apis.issue_activity_log
+                WHERE issue_id = ? AND event = 'auto_resolved' |]
+          (Only issueId)
+
+      advanceDays tr 5
+      expectedTime <- getTestTime tr.trTestClock
+
+      -- Sync the connection's app.current_time GUC (transaction-local) and run
+      -- the state UPDATE in the same transaction so the trigger sees the test clock.
+      withResource tr.trPool \conn -> PGS.withTransaction conn $ do
+        let timeStr = formatTime defaultTimeLocale "%F %T%Q+00" expectedTime
+        _ <- PGS.query conn
+          [sql| SELECT set_config('app.current_time', ?, true) |]
+          (Only (timeStr :: String)) :: IO [Only Text]
+        void $ PGS.execute conn
+          [sql| UPDATE apis.error_patterns SET state = 'resolved'
+                  WHERE project_id = ? AND hash = ? |]
+          (testPid, errHash)
+
+      rows <- withResource tr.trPool \conn ->
+        PGS.query conn
+          [sql| SELECT created_at FROM apis.issue_activity_log
+                WHERE issue_id = ? AND event = 'auto_resolved' |]
+          (Only issueId) :: IO [Only UTCTime]
+      rows `shouldBe` [Only expectedTime]
+
     -- selectIssues' 24h period uses Time.currentTime for the bucket window —
     -- after the test clock advances past created_at, the issue must drop out.
     it "selectIssues 24h period respects test clock" \tr -> do

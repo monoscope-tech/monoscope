@@ -401,6 +401,59 @@ spec = aroundAll withTestResources do
         m.alertLastTriggered `shouldBe` Nothing
         length notifs `shouldSatisfy` (> 0)
 
+      it "Muted monitor unmutes after the configured window" \tr -> do
+        let muteMonId = Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "66666666-6666-6666-6666-666666666666"
+            evalT = addUTCTime (200 * 60) t0
+        -- Deactivate other monitors and seed a fresh alerting monitor with no renotify configured
+        void $ withResource tr.trPool \conn ->
+          PGS.execute conn [sql|UPDATE monitors.query_monitors SET check_interval_mins = 99999 WHERE id != ?|] (PGS.Only muteMonId)
+        insertRenotifyMonitor tr muteMonId "SELECT 150::float8" 100
+        setMonitorRenotifyConfig tr muteMonId Nothing Nothing 0
+
+        -- Baseline: fires once at evalT
+        notifs0 <- evalMonitorsWithNotifs evalT tr
+        length notifs0 `shouldSatisfy` (> 0)
+
+        -- Mute for 60 minutes starting at evalT
+        void $ withResource tr.trPool \conn ->
+          PGS.execute conn [sql|UPDATE monitors.query_monitors SET muted_until = ?, notification_count = 0, alert_last_triggered = NULL WHERE id = ?|]
+            (addUTCTime 3600 evalT, muteMonId)
+
+        -- Inside mute window (+30m): no notifications
+        resetLastEvaluated tr muteMonId
+        notifs30 <- evalMonitorsWithNotifs (addUTCTime 1800 evalT) tr
+        length notifs30 `shouldBe` 0
+
+        -- Outside mute window (+61m): notifications resume
+        resetLastEvaluated tr muteMonId
+        notifs61 <- evalMonitorsWithNotifs (addUTCTime 3660 evalT) tr
+        length notifs61 `shouldSatisfy` (> 0)
+
+      it "Renotify reminder fires only after configured interval" \tr -> do
+        let reMonId = Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "77777777-7777-7777-7777-777777777777"
+            evalT = addUTCTime (300 * 60) t0
+        -- Deactivate other monitors so they don't fire / confound notification counts
+        void $ withResource tr.trPool \conn ->
+          PGS.execute conn [sql|UPDATE monitors.query_monitors SET check_interval_mins = 99999 WHERE id != ?|] (PGS.Only reMonId)
+        insertRenotifyMonitor tr reMonId "SELECT 150::float8" 100
+        setMonitorRenotifyConfig tr reMonId (Just 15) Nothing 0
+
+        -- First eval: initial alert
+        notifs0 <- evalMonitorsWithNotifs evalT tr
+        length notifs0 `shouldSatisfy` (> 0)
+        m0 <- fetchMonitor tr reMonId
+        m0.currentStatus `shouldBe` Monitors.MSAlerting
+
+        -- +14m: within renotify interval — no reminder
+        resetLastEvaluated tr reMonId
+        notifs14 <- evalMonitorsWithNotifs (addUTCTime (14 * 60) evalT) tr
+        length notifs14 `shouldBe` 0
+
+        -- +16m: renotify interval elapsed — reminder fires
+        resetLastEvaluated tr reMonId
+        notifs16 <- evalMonitorsWithNotifs (addUTCTime (16 * 60) evalT) tr
+        length notifs16 `shouldSatisfy` (> 0)
+
       it "Muted monitor: notifications suppressed but count does not increment" \tr -> do
         let evalTime = addUTCTime (80 * 60) t0
         setMonitorQuery tr renotifyMonId "SELECT 150::float8"
