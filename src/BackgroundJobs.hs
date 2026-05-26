@@ -1,6 +1,6 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl, sameSegmentCount) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl, sameSegmentCount) where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
@@ -558,8 +558,9 @@ processBackgroundJob authCtx bgJob =
     MergeReplaySession pid sid -> Replay.mergeReplaySession pid sid
     ExpireReplayData -> Replay.expireOldReplayData
     -- 48h expiry + 30d grace so "Link expired" still renders before deletion.
-    ExpireShareEvents ->
-      Hasql.statement () [resultlessStatement|DELETE FROM apis.share_events WHERE created_at < now() - interval '30 days' - interval '48 hours'|]
+    ExpireShareEvents -> do
+      now <- Time.currentTime
+      void $ Hasql.interpExecute [HI.sql| DELETE FROM apis.share_events WHERE created_at < #{now}::timestamptz - interval '30 days' - interval '48 hours' |]
     ErrorBaselineCalculation pid -> calculateErrorBaselines pid
     ErrorSpikeDetection pid -> detectErrorSpikes pid
     PatternEmbeddingAndMerge scheduledTime pid -> unlessStale "PatternEmbeddingAndMerge" scheduledTime (15 * 60) $ patternEmbeddingAndMerge pid
@@ -1119,13 +1120,14 @@ runNotificationDigest :: UTCTime -> ATBackgroundCtx ()
 runNotificationDigest _scheduledTime = do
   ctx <- ask @Config.AuthContext
   Relude.unless ctx.config.pauseNotifications do
+    now <- Time.currentTime
     projectIds :: [Projects.ProjectId] <-
       HI.getOneColumn
         <<$>> Hasql.interp
           [HI.sql|
             SELECT DISTINCT project_id FROM apis.notification_digest_queue
             WHERE sent_at IS NULL
-              AND created_at >= now() - interval '24 hours'
+              AND created_at >= #{now}::timestamptz - interval '24 hours'
           |]
     forM_ projectIds \pid -> do
       projectM <- Projects.projectById pid
@@ -1158,7 +1160,7 @@ runNotificationDigest _scheduledTime = do
           void
             $ Hasql.interpExecute
               [HI.sql|
-              UPDATE apis.notification_digest_queue SET sent_at = now()
+              UPDATE apis.notification_digest_queue SET sent_at = #{now}::timestamptz
               WHERE id = ANY(#{idsVec}::uuid[])
             |]
           Log.logInfo "notification_digest_sent" (AE.object ["project_id" AE..= pid.toText, "count" AE..= length rows])

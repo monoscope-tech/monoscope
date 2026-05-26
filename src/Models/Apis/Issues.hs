@@ -403,9 +403,14 @@ bumpIssueUpdatedAt issueId = do
 
 -- | Select issues with filters, returns issues and total count for pagination
 -- period: "24h" = 24 hourly buckets, "7d" = 7 daily buckets (default)
-selectIssues :: DB es => Projects.ProjectId -> Maybe IssueType -> Maybe Bool -> Maybe Bool -> Int -> Int -> Maybe (UTCTime, UTCTime) -> Maybe Text -> Text -> [Text] -> [Text] -> Eff es ([IssueL], Int)
+selectIssues :: (DB es, Time :> es) => Projects.ProjectId -> Maybe IssueType -> Maybe Bool -> Maybe Bool -> Int -> Int -> Maybe (UTCTime, UTCTime) -> Maybe Text -> Text -> [Text] -> [Text] -> Eff es ([IssueL], Int)
 selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM period serviceFilters typeFilters = do
-  issues <- Hasql.interp $ rawSql q <> [HI.sql| LIMIT #{limit} OFFSET #{offset}|]
+  now <- Time.currentTime
+  let nowSql = "'" <> formatUTC now <> "'::timestamptz" :: Text
+      (seriesStart, seriesStep, bucketSize) = case period of
+        "24h" -> (nowSql <> " - INTERVAL '23 hours'", "'1 hour'" :: Text, "INTERVAL '1 hour'" :: Text)
+        _ -> ("CURRENT_DATE - INTERVAL '6 days'", "'1 day'", "INTERVAL '1 day'")
+  issues <- Hasql.interp $ rawSql (q nowSql seriesStart seriesStep bucketSize) <> [HI.sql| LIMIT #{limit} OFFSET #{offset}|]
   countResult <- fromMaybe 0 <$> Hasql.interpOne (rawSql countQ)
   pure (issues, countResult)
   where
@@ -437,12 +442,10 @@ selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM 
       Just "-title" -> "ORDER BY i.title DESC"
       Just "+title" -> "ORDER BY i.title ASC"
       _ -> "ORDER BY i.critical DESC, i.created_at DESC"
-    -- period controls bucket granularity: "24h" = hourly, "7d" = daily
-    (seriesStart, seriesStep, bucketSize) = case period of
-      "24h" -> ("NOW() - INTERVAL '23 hours'" :: Text, "'1 hour'" :: Text, "INTERVAL '1 hour'" :: Text)
-      _ -> ("CURRENT_DATE - INTERVAL '6 days'", "'1 day'", "INTERVAL '1 day'")
+    -- period controls bucket granularity: "24h" = hourly, "7d" = daily; series
+    -- start/step/bucket are bound by the caller so the chart honours the test clock.
     pidTxt = pid.toText
-    q =
+    q nowSql seriesStart seriesStep bucketSize =
       [text|
       SELECT i.id, i.created_at, i.updated_at, i.project_id, i.issue_type::text,
         i.endpoint_hash, i.acknowledged_at, i.acknowledged_by, i.archived_at, i.title, i.service, i.critical,
@@ -469,7 +472,7 @@ selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM 
       LEFT JOIN LATERAL (
         SELECT SUM(day_cnt)::bigint AS cnt, array_agg(day_cnt ORDER BY day) AS buckets FROM (
           SELECT d AS day, COALESCE(SUM(ehs.event_count), 0)::int AS day_cnt
-          FROM generate_series($seriesStart, NOW(), $seriesStep) d
+          FROM generate_series($seriesStart, $nowSql, $seriesStep) d
           LEFT JOIN (apis.error_hourly_stats ehs
             JOIN apis.error_patterns ep ON ep.id = ehs.error_id AND ep.project_id = ehs.project_id
               AND ep.project_id = i.project_id
@@ -482,7 +485,7 @@ selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM 
       LEFT JOIN LATERAL (
         SELECT SUM(day_cnt)::bigint AS cnt, array_agg(day_cnt ORDER BY day) AS buckets FROM (
           SELECT d AS day, COALESCE(SUM(lhs.event_count), 0)::int AS day_cnt
-          FROM generate_series($seriesStart, NOW(), $seriesStep) d
+          FROM generate_series($seriesStart, $nowSql, $seriesStep) d
           LEFT JOIN apis.log_pattern_hourly_stats lhs
             ON lhs.pattern_hash = i.target_hash AND lhs.project_id = i.project_id
             AND lhs.hour_bucket >= d AND lhs.hour_bucket < d + $bucketSize

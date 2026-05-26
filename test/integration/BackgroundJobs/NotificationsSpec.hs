@@ -6,6 +6,7 @@ import Data.Time (addUTCTime)
 import Data.UUID qualified as UUID
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Effectful.Time qualified as Time
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId (..))
@@ -80,6 +81,34 @@ spec = aroundAll withTestResources do
         BackgroundJobs.consumeNotificationToken pid frozenTime
       length (filter id results) `shouldBe` 20
       length (filter not results) `shouldBe` 2
+
+    -- Same hour bucket → cap holds across mid-hour advances; new hour bucket → resets.
+    it "3a. Hourly rate-limit token bucket rolls over on test clock" \tr -> do
+      runTestBg frozenTime tr pass
+      withResource tr.trPool \conn ->
+        void $ PGS.execute conn [sql| DELETE FROM apis.notification_rate_limit WHERE project_id = ? |] (PGS.Only pid)
+
+      -- Saturate the hour bucket (20/hr cap)
+      now0 <- runTestBgNoReset tr $ do
+        t <- Time.currentTime
+        forM_ ([1 .. 20] :: [Int]) \_ -> void $ BackgroundJobs.consumeNotificationToken pid t
+        pure t
+      blocked <- runTestBgNoReset tr $ BackgroundJobs.consumeNotificationToken pid now0
+      blocked `shouldBe` False
+
+      -- 30 minutes later, still the same hour bucket → still blocked.
+      advanceMinutes tr 30
+      blocked2 <- runTestBgNoReset tr $ do
+        t <- Time.currentTime
+        BackgroundJobs.consumeNotificationToken pid t
+      blocked2 `shouldBe` False
+
+      -- 31 minutes more (total +61m): next hour bucket → allowed again.
+      advanceMinutes tr 31
+      allowed <- runTestBgNoReset tr $ do
+        t <- Time.currentTime
+        BackgroundJobs.consumeNotificationToken pid t
+      allowed `shouldBe` True
 
     it "3. Same Warp transport error from different stacks groups to one pattern (fingerprint regression)" \tr -> do
       apiKey <- createTestAPIKey tr pid "notif-transport-key"

@@ -18,7 +18,6 @@ module Web.I18n (
 )
 where
 
-import Data.ByteString qualified as BS
 import Data.FileEmbed (embedFile)
 import Data.List qualified as L
 import Data.Map.Strict qualified as Map

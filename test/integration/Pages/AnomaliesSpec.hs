@@ -331,6 +331,36 @@ spec = aroundAll withTestResources do
       -- The trace id should be embedded somewhere in the rendered investigation panel.
       html `shouldSatisfy` (traceIdText `T.isInfixOf`)
 
+    -- selectIssues' 24h period uses Time.currentTime for the bucket window —
+    -- after the test clock advances past created_at, the issue must drop out.
+    it "selectIssues 24h period respects test clock" \tr -> do
+      runTestBg frozenTime tr pass
+      iid <- (UUIDId :: DataUUID.UUID -> Issues.IssueId) <$> UUID.nextRandom
+      let tgt = "selectIssues-24h-target" :: Text
+      withResource tr.trPool \conn ->
+        void $ PGS.execute conn
+          [sql| INSERT INTO apis.issues
+                  (id, project_id, issue_type, target_hash, endpoint_hash, title,
+                   severity, critical, affected_requests, affected_clients,
+                   issue_data, created_at, updated_at)
+                VALUES (?, ?, 'runtime_exception', ?, ?, 't', 'warning',
+                        false, 1, 1, '{}'::jsonb, ?, ?) |]
+          (iid, testPid, tgt, tgt, frozenTime, frozenTime)
+
+      -- 23h in: still within the 24h window
+      advanceHours tr 23
+      (within, _) <- runHasqlEffect tr
+        $ Issues.selectIssues testPid Nothing Nothing Nothing 100 0 Nothing Nothing "24h" [] []
+      map (.base.id) within `shouldSatisfy` elem iid
+
+      -- 25h in: outside window — query still returns row, but activityBuckets all zero
+      advanceHours tr 2
+      (after, _) <- runHasqlEffect tr
+        $ Issues.selectIssues testPid Nothing Nothing Nothing 100 0 Nothing Nothing "24h" [] []
+      case find (\r -> r.base.id == iid) after of
+        Just row -> V.sum row.activityBuckets `shouldBe` 0
+        Nothing -> pure () -- also acceptable: filtered out entirely
+
 
 isApiChangeSingleRow :: Issues.IssueType -> AnomalyList.IssueVM -> Bool
 isApiChangeSingleRow ty (AnomalyList.IssueVM _ _ _ _ c) = c.base.issueType == ty

@@ -2,7 +2,8 @@ module Pages.LogPatternsSpec (spec) where
 
 import BackgroundJobs qualified
 import Data.Pool (withResource)
-import Data.Time (UTCTime, addUTCTime)
+import Data.Time (UTCTime, addUTCTime, zonedTimeToUTC)
+import Effectful.Time qualified as Time
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
@@ -608,3 +609,147 @@ spec = aroundAll withTestResources do
           let canonicalIds = map fst canonicals
           mergedId `shouldSatisfy` (`notElem` canonicalIds)
         [] -> expectationFailure "no merged log patterns found (test 9 may have failed)"
+
+    -- Regression: acknowledgeLogPatterns must observe the test clock so that
+    -- queries threading the Time effect can be exercised end-to-end. Proves
+    -- the PR #329 TestClock wiring (advanceHours → Time.currentTime → SQL
+    -- #{now} binding) is intact for the canonical converted function.
+    it "12. acknowledgeLogPatterns honours TestClock (PR #329)" \tr -> do
+      let mkP h = LogPatterns.UpsertPattern
+            { projectId = pid, logPattern = "ack-clock " <> h, hash = h
+            , sourceField = "summary", serviceName = Just "test-svc"
+            , logLevel = Just "INFO", traceId = Nothing
+            , sampleMessage = Just ("ack-clock " <> h), eventCount = 1
+            , isError = False }
+          readAckAt h = withResource tr.trPool \conn ->
+            PGS.query conn
+              [sql| SELECT acknowledged_at FROM apis.log_patterns
+                    WHERE project_id = ? AND source_field = 'summary' AND pattern_hash = ? |]
+              (pid, h) :: IO [PGS.Only (Maybe UTCTime)]
+      void $ runTestBg frozenTime tr $ LogPatterns.upsertLogPattern (mkP "ack-clock-1")
+      void $ runTestBg frozenTime tr $ LogPatterns.upsertLogPattern (mkP "ack-clock-2")
+
+      -- runHasqlEffect doesn't reset the clock; clock is still at frozenTime
+      -- from the last runTestBg setup call.
+      void $ runHasqlEffect tr
+        $ LogPatterns.acknowledgeLogPatterns pid Nothing (V.singleton ("summary", "ack-clock-1"))
+      ack1 <- readAckAt "ack-clock-1"
+      ack1 `shouldBe` [PGS.Only (Just frozenTime)]
+
+      advanceHours tr 25
+      void $ runHasqlEffect tr
+        $ LogPatterns.acknowledgeLogPatterns pid Nothing (V.singleton ("summary", "ack-clock-2"))
+      ack2 <- readAckAt "ack-clock-2"
+      ack2 `shouldBe` [PGS.Only (Just (addUTCTime (25 * 3600) frozenTime))]
+
+    -- Acks on rate-change issues open a 24h cooldown anchored to the test clock.
+    it "13. acknowledgeIssue opens 24h cooldown that expires on test clock" \tr -> do
+      runTestBg frozenTime tr pass
+      iid <- (UUIDId :: UUID.UUID -> Issues.IssueId) <$> UUID.nextRandom
+      let uid = (Servant.getResponse tr.trSessAndHeader).user.id
+      let targetHash = "issue-cooldown-tgt-001" :: Text
+      withResource tr.trPool \conn ->
+        void $ PGS.execute conn
+          [sql| INSERT INTO apis.issues
+                  (id, project_id, issue_type, target_hash, endpoint_hash, title,
+                   severity, critical, affected_requests, affected_clients,
+                   issue_data, created_at, updated_at)
+                VALUES (?, ?, 'log_pattern_rate_change', ?, ?, 't', 'warning',
+                        false, 1, 1, '{}'::jsonb, ?, ?) |]
+          (iid, pid, targetHash, targetHash, frozenTime, frozenTime)
+
+      runTestBg frozenTime tr $ Issues.acknowledgeIssue iid uid
+      let readCooldown = withResource tr.trPool \conn ->
+            PGS.query conn
+              [sql| SELECT cooldown_until FROM apis.issues WHERE id = ? |]
+              (PGS.Only iid) :: IO [PGS.Only (Maybe UTCTime)]
+      cd1 <- readCooldown
+      cd1 `shouldBe` [PGS.Only (Just (addUTCTime (24 * 3600) frozenTime))]
+
+      -- 12h in: cooldown still active relative to test clock
+      advanceHours tr 12
+      stillCooling <- runHasqlEffect tr
+        $ Issues.isInCooldown pid targetHash Issues.LogPatternRateChange
+        =<< Time.currentTime
+      stillCooling `shouldBe` True
+
+      -- +13h more (total +25h): cooldown expired
+      advanceHours tr 13
+      expired <- runHasqlEffect tr
+        $ Issues.isInCooldown pid targetHash Issues.LogPatternRateChange
+        =<< Time.currentTime
+      expired `shouldBe` False
+
+    -- pruneStalePatterns deletes only acked patterns past staleDays cutoff.
+    it "14. pruneStaleLogPatterns deletes acked patterns past 30 days" \tr -> do
+      runTestBg frozenTime tr pass
+      let srcField = "summary"
+          hA = "prune-stale-a" :: Text
+          hB = "prune-stale-b" :: Text
+          mkAcked h = do
+            void $ runTestBg frozenTime tr $ LogPatterns.upsertLogPattern $ mkPattern h ("Prune " <> h <> " <*>") srcField (Just "INFO") 5
+            void $ runTestBg frozenTime tr $ LogPatterns.acknowledgeLogPatterns pid Nothing (V.singleton (srcField, h))
+            -- Anchor last_seen_at at frozenTime so the test clock controls staleness.
+            withResource tr.trPool \conn ->
+              void $ PGS.execute conn
+                [sql| UPDATE apis.log_patterns SET last_seen_at = ?
+                      WHERE project_id = ? AND source_field = ? AND pattern_hash = ? |]
+                (frozenTime, pid, srcField, h)
+      mkAcked hA
+      mkAcked hB
+
+      let countPair = withResource tr.trPool \conn -> do
+            [PGS.Only n] <- PGS.query conn
+              [sql| SELECT COUNT(*)::INT FROM apis.log_patterns
+                    WHERE project_id = ? AND pattern_hash = ANY(?) |]
+              (pid, V.fromList [hA, hB]) :: IO [PGS.Only Int]
+            pure n
+
+      advanceDays tr 29
+      runTestBgNoReset tr $ BackgroundJobs.pruneStaleLogPatterns pid
+      remaining1 <- countPair
+      remaining1 `shouldBe` 2
+
+      -- Refresh hA's last_seen to "now" (still within window once we advance again)
+      let nowAfter29 = addUTCTime (29 * 86400) frozenTime
+      withResource tr.trPool \conn ->
+        void $ PGS.execute conn
+          [sql| UPDATE apis.log_patterns SET last_seen_at = ?
+                WHERE project_id = ? AND source_field = ? AND pattern_hash = ? |]
+          (nowAfter29, pid, srcField, hA)
+
+      advanceDays tr 2
+      runTestBgNoReset tr $ BackgroundJobs.pruneStaleLogPatterns pid
+      remaining2 <- countPair
+      remaining2 `shouldBe` 1
+      -- Confirm the touched one survived
+      survived <- withResource tr.trPool \conn ->
+        PGS.query conn
+          [sql| SELECT pattern_hash FROM apis.log_patterns
+                WHERE project_id = ? AND pattern_hash = ANY(?) |]
+          (pid, V.fromList [hA, hB]) :: IO [PGS.Only Text]
+      map PGS.fromOnly survived `shouldBe` [hA]
+
+    -- autoAcknowledgeStaleNewPatterns acks LPSNew patterns past 7d since creation.
+    it "15. autoAcknowledgeStaleNewPatterns acks new patterns past 7 days" \tr -> do
+      runTestBg frozenTime tr pass
+      let srcField = "summary"
+          h = "autoack-stale-new-001" :: Text
+      void $ runTestBg frozenTime tr $ LogPatterns.upsertLogPattern $ mkPattern h "Auto-ack new <*>" srcField (Just "INFO") 3
+      -- Anchor created_at at frozenTime so test clock controls staleness.
+      withResource tr.trPool \conn ->
+        void $ PGS.execute conn
+          [sql| UPDATE apis.log_patterns SET created_at = ?, state = 'new', acknowledged_at = NULL
+                WHERE project_id = ? AND source_field = ? AND pattern_hash = ? |]
+          (frozenTime, pid, srcField, h)
+
+      advanceDays tr 6
+      runTestBgNoReset tr $ BackgroundJobs.pruneStaleLogPatterns pid
+      Just p1 <- runHasqlEffect tr $ LogPatterns.getLogPatternByHash pid srcField h
+      p1.state `shouldBe` LPSNew
+
+      advanceDays tr 2
+      runTestBgNoReset tr $ BackgroundJobs.pruneStaleLogPatterns pid
+      Just p2 <- runHasqlEffect tr $ LogPatterns.getLogPatternByHash pid srcField h
+      p2.state `shouldBe` LPSAcknowledged
+      fmap zonedTimeToUTC p2.acknowledgedAt `shouldBe` Just (addUTCTime (8 * 86400) frozenTime)

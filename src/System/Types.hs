@@ -49,7 +49,6 @@ import OpenTelemetry.Trace (TracerProvider)
 import Pkg.DeriveUtils (DB)
 import Pkg.TestClock (TestClock, runMutableTime)
 import Relude
-import Relude.Unsafe qualified as Unsafe
 import Servant (AuthProtect, Header, Headers, ServerError, addHeader, noHeader)
 import Servant qualified
 import Servant.Htmx (HXRedirect, HXTriggerAfterSettle)

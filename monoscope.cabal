@@ -120,6 +120,7 @@ extra-source-files:
     static/migrations/0092_anomalies_endpoint_metadata.sql
     static/migrations/0093_log_patterns_is_error.sql
     static/migrations/0094_app_now_function.sql
+    static/migrations/0095_app_now_in_log_auto_resolve.sql
 
 source-repository head
   type: git
@@ -590,6 +591,8 @@ test-suite integration-tests
   type: exitcode-stdio-1.0
   main-is: Main.hs
   other-modules:
+      BackgroundJobs.DigestFlushSpec
+      BackgroundJobs.ExpirySpec
       BackgroundJobs.NotificationsSpec
       CLI.CLIBinarySpec
       CLI.CLIE2ESpec

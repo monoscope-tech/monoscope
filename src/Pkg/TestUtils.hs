@@ -12,9 +12,12 @@ module Pkg.TestUtils (
   runTestBackground,
   runTestBackgroundWithNotifications,
   runTestBg,
+  runTestBgNoReset,
+  captureNotifs,
   testServant,
   testServantWithNotifications,
   runAllBackgroundJobs,
+  runAllBackgroundJobsNoReset,
   getPendingBackgroundJobs,
   logBackgroundJobsInfo,
   runBackgroundJobsWhere,
@@ -41,8 +44,11 @@ module Pkg.TestUtils (
   -- OTLP/Telemetry helpers
   createTestAPIKey,
   ingestLog,
+  ingestLogAt,
   ingestErrorLog,
+  ingestErrorAt,
   ingestTrace,
+  ingestTraceAt,
   ingestMetric,
   ingestLogWithHeader,
   ingestTraceWithHeader,
@@ -611,6 +617,21 @@ runTestBg t TestResources{..} action = do
   pure result
 
 
+-- | Like 'runTestBg' but does NOT reset the clock. Use this in multi-tick
+-- specs that advance time with 'advanceMinutes' / 'advanceHours' / 'advanceDays'
+-- between job runs — otherwise 'runTestBg' would snap the clock back.
+runTestBgNoReset :: TestResources -> ATBackgroundCtx a -> IO a
+runTestBgNoReset TestResources{..} action = do
+  (notifications, result) <- runTestBackgroundWithClock trTestClock trLogger trATCtx action
+  logNotifications trATCtx trLogger notifications
+  pure result
+
+
+-- | Capture notifications without resetting the test clock.
+captureNotifs :: TestResources -> ATBackgroundCtx a -> IO ([Data.Effectful.Notify.Notification], a)
+captureNotifs TestResources{..} = runTestBackgroundWithClock trTestClock trLogger trATCtx
+
+
 -- | Log out notifications gathered during a background run. Lifted out
 -- of 'runTestBackgroundWithLogger' so 'runTestBg' can share the format.
 logNotifications :: Config.AuthContext -> Log.Logger -> [Data.Effectful.Notify.Notification] -> IO ()
@@ -1021,6 +1042,23 @@ runAllBackgroundJobs t authCtx = do
   pure jobs
 
 
+-- | Like 'runAllBackgroundJobs' but uses the live 'trTestClock' (no reset)
+-- so jobs see the advanced time. Multi-tick specs should call this instead
+-- of @runAllBackgroundJobs t tr.trATCtx@ which snaps the clock to @t@.
+runAllBackgroundJobsNoReset :: TestResources -> IO (V.Vector Job)
+runAllBackgroundJobsNoReset TestResources{..} = do
+  jobs <- withResource trATCtx.pool getBackgroundJobs
+  LogBulk.withBulkStdOutLogger \logger ->
+    runEff $ runConcurrent $ Ki.runStructuredConcurrency $ Ki.scoped \scope -> do
+      threads <- V.forM jobs \job -> Ki.fork scope $ liftIO $ do
+        Relude.when trATCtx.config.enableBackgroundJobs $ do
+          bgJob <- BackgroundJobs.throwParsePayload job
+          (notifs, _) <- runTestBackgroundWithClock trTestClock logger trATCtx (BackgroundJobs.processBackgroundJob trATCtx bgJob)
+          logNotifications trATCtx logger notifs
+      V.forM_ threads $ Ki.atomically . Ki.await
+  pure jobs
+
+
 -- | Run background jobs matching a predicate
 -- Useful for running only specific job types in tests
 runBackgroundJobsWhere :: UTCTime -> AuthContext -> (BackgroundJobs.BgJobs -> Bool) -> IO (V.Vector Job)
@@ -1210,6 +1248,21 @@ ingestLog tr apiKey bodyText timestamp =
   void $ OtlpServer.logsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ createOtelLogAtTime apiKey bodyText timestamp)
 ingestLogWithHeader tr apiKey bodyText timestamp =
   void $ runTestBg frozenTime tr $ OtlpServer.processLogsRequest (Just apiKey) (createOtelLogAtTime "" bodyText timestamp)
+
+
+-- | Like 'ingestLog' but timestamps the record with the current test-clock value.
+ingestLogAt :: TestResources -> Text -> Text -> IO ()
+ingestLogAt tr apiKey bodyText = getTestTime tr.trTestClock >>= ingestLog tr apiKey bodyText
+
+
+-- | Like 'ingestErrorLog' but timestamps the record with the current test-clock value.
+ingestErrorAt :: TestResources -> Text -> Text -> [(Text, Text)] -> IO ()
+ingestErrorAt tr apiKey bodyText extras = getTestTime tr.trTestClock >>= ingestErrorLog tr apiKey bodyText extras
+
+
+-- | Like 'ingestTrace' but timestamps the span with the current test-clock value.
+ingestTraceAt :: TestResources -> Text -> Text -> IO ()
+ingestTraceAt tr apiKey spanName = getTestTime tr.trTestClock >>= ingestTrace tr apiKey spanName
 
 
 -- | Ingest an ERROR-severity log record with optional @exception.*@ attributes.
