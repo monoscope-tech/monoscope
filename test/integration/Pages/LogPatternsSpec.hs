@@ -103,6 +103,7 @@ spec = aroundAll withTestResources do
         { projectId = pid, logPattern = "Test <*> pattern for baseline", hash = patHash
         , sourceField, serviceName = Just "test-svc", logLevel = Just "INFO"
         , traceId = Nothing, sampleMessage = Just "Test pattern baseline", eventCount = 100
+        , isError = False
         }
 
       -- Seed 50 hours of stats (exceeds baselineWindowHours=48) to get enough data
@@ -165,6 +166,7 @@ spec = aroundAll withTestResources do
             { projectId = pid, logPattern = "Spike test <*> pattern", hash = patHash
             , sourceField = srcField, serviceName = Just "test-svc", logLevel = Just "WARN"
             , traceId = Nothing, sampleMessage = Just "Spike test", eventCount = 50
+            , isError = False
             }
           -- Seed baseline: 48 hours at 600 events/hour with some variance
           forM_ ([-48 .. -1] :: [Int]) \h ->
@@ -191,6 +193,7 @@ spec = aroundAll withTestResources do
         { projectId = pid, logPattern = "Spike at :45 test <*>", hash = patHash
         , sourceField = srcField, serviceName = Just "test-svc", logLevel = Just "WARN"
         , traceId = Nothing, sampleMessage = Just "Spike at 45 test", eventCount = 100
+        , isError = False
         }
       forM_ ([-48 .. -1] :: [Int]) \h ->
         insertHourlyStat tr srcField patHash (addUTCTime (fromIntegral h * 3600) frozenTime) 600
@@ -220,6 +223,7 @@ spec = aroundAll withTestResources do
               { projectId = pid, logPattern = "Gate test " <> h <> " <*>", hash = h
               , sourceField = srcField, serviceName = Just "test-svc", logLevel = lvl
               , traceId = Nothing, sampleMessage = Just "Gate test", eventCount = 100
+              , isError = lvl == Just "ERROR"
               }
             forM_ ([-48 .. -1] :: [Int]) \hr ->
               insertHourlyStat tr srcField h (addUTCTime (fromIntegral hr * 3600) frozenTime) 600
@@ -314,6 +318,7 @@ spec = aroundAll withTestResources do
           { projectId = pid, logPattern = "New pattern " <> h <> " <*>", hash = h
           , sourceField = "summary", serviceName = Just "test-svc", logLevel = Just "WARN"
           , traceId = Nothing, sampleMessage = Just ("Sample " <> h), eventCount = 10
+          , isError = False
           }
         insertHourlyStat tr "summary" h frozenTime 1500
 
@@ -323,6 +328,7 @@ spec = aroundAll withTestResources do
         { projectId = pid, logPattern = "/api/users/<*>", hash = urlPathHash
         , sourceField = "url_path", serviceName = Just "test-svc", logLevel = Nothing
         , traceId = Nothing, sampleMessage = Just "/api/users/123", eventCount = 50
+        , isError = False
         }
       insertHourlyStat tr "url_path" urlPathHash frozenTime 1500
 
@@ -359,6 +365,7 @@ spec = aroundAll withTestResources do
           { projectId = pid, logPattern = "Ack test " <> h <> " <*>", hash = h
           , sourceField, serviceName = Just "test-svc", logLevel = Just "INFO"
           , traceId = Nothing, sampleMessage = Just ("Ack sample " <> h), eventCount = 5
+          , isError = False
           }
 
       let fieldHashPairs = V.fromList $ map (sourceField,) ackHashes
@@ -380,6 +387,7 @@ spec = aroundAll withTestResources do
         { projectId = pid, logPattern = "Stale pattern <*>", hash = staleHash
         , sourceField, serviceName = Just "test-svc", logLevel = Just "INFO"
         , traceId = Nothing, sampleMessage = Just "Stale test", eventCount = 5
+        , isError = False
         }
       -- Acknowledge it so it's eligible for pruning
       void $ runTestBg frozenTime tr $ LogPatterns.acknowledgeLogPatterns pid Nothing (V.singleton (sourceField, staleHash))
