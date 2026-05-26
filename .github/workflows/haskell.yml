@@ -111,6 +111,18 @@ jobs:
       - name: Build
         run: cabal build all -j --ghc-options="-O0 +RTS -A64m -n2m -RTS"
 
+      - name: Check unused code (weeder)
+        # Informational only: matches the PR workflow's stance. Master shouldn't
+        # gate on the unused-code backlog either — flip once it's triaged.
+        # weeder is baked into monoscope-deps (see Dockerfile.deps); the
+        # install fallback covers the first run after that change and local
+        # reproduction outside the container.
+        continue-on-error: true
+        run: |
+          command -v weeder >/dev/null 2>&1 \
+            || cabal install weeder --install-method=copy --installdir=/usr/local/bin --overwrite-policy=always
+          weeder --config config/weeder.toml --hie-directory dist-newstyle
+
       - name: Run doctests
         run: cabal test doctests --ghc-options="-O0" --test-show-details=direct
 
