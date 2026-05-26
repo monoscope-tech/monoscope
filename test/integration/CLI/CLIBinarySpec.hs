@@ -4,22 +4,35 @@ import Relude
 
 import Data.List (isInfixOf)
 import Data.Text qualified as T
+import System.Directory (doesFileExist)
 import System.Exit (ExitCode (..))
 import System.Process (readProcessWithExitCode)
 import Test.Hspec
 
-findBinary :: IO FilePath
-findBinary = T.unpack . T.strip . toText <$> readProcess "cabal" ["list-bin", "exe:monoscope"] ""
-
-readProcess :: FilePath -> [String] -> String -> IO String
-readProcess cmd args input' = do
-  (_, out, _) <- readProcessWithExitCode cmd args input'
-  pure out
+-- | Locate the monoscope CLI binary. CI can pass @MONOSCOPE_BIN@ directly;
+-- otherwise ask cabal where the exe lives. Returns 'Nothing' if the file
+-- isn't actually on disk so callers can skip rather than emit the cryptic
+-- @posix_spawnp: does not exist@ from System.Process.
+findBinary :: IO (Maybe FilePath)
+findBinary = do
+  envBin <- lookupEnv "MONOSCOPE_BIN"
+  candidate <- case envBin of
+    Just p -> pure p
+    Nothing -> do
+      (code, out, _) <- readProcessWithExitCode "cabal" ["list-bin", "exe:monoscope"] ""
+      pure $ if code == ExitSuccess then T.unpack (T.strip (toText out)) else ""
+  if null candidate then pure Nothing else do
+    exists <- doesFileExist candidate
+    pure $ if exists then Just candidate else Nothing
 
 runMono :: [String] -> IO (ExitCode, String, String)
 runMono args = do
-  bin <- findBinary
-  readProcessWithExitCode bin args ""
+  m <- findBinary
+  case m of
+    Just bin -> readProcessWithExitCode bin args ""
+    Nothing -> do
+      pendingWith "monoscope exe not built — set MONOSCOPE_BIN or run cabal build all first"
+      pure (ExitFailure 127, "", "") -- unreachable; pendingWith throws
 
 spec :: Spec
 spec = describe "CLI binary E2E tests" do
