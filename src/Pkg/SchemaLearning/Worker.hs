@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedRecordDot #-}
+
 {- HLINT ignore "Use unstableNub" -}
 {- HLINT ignore "Use atomicModifyIORef'_" -}
 
