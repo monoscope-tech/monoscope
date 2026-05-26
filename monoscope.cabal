@@ -119,6 +119,7 @@ extra-source-files:
     static/migrations/0091_drop_redacted_fields.sql
     static/migrations/0092_anomalies_endpoint_metadata.sql
     static/migrations/0093_log_patterns_is_error.sql
+    static/migrations/0094_app_now_function.sql
 
 source-repository head
   type: git
@@ -204,6 +205,7 @@ library
       Pkg.SchemaLearning.Catalog
       Pkg.SchemaLearning.Hot
       Pkg.SchemaLearning.Worker
+      Pkg.TestClock
       Pkg.TestUtils
       Pkg.TraceSessionCache
       ProcessMessage
