@@ -43,7 +43,7 @@ data TestContext = TestContext
 -- Create a new project for testing and provide it along with test resources
 withTestProject :: (TestContext -> IO ()) -> IO ()
 withTestProject action = withTestResources $ \tr -> do
-  headers <- (atAuthToBase tr.trSessAndHeader CreateProject.projectOnboardingH & effToServantHandlerTest tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider & ServantS.runHandler) <&> fromRightShow
+  headers <- (atAuthToBase tr.trSessAndHeader CreateProject.projectOnboardingH & effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider & ServantS.runHandler) <&> fromRightShow
   case lookupResponseHeader @"Location" headers of
     Header location -> do
       let pidText = T.takeWhile (/= '/') $ T.drop 3 location
@@ -253,7 +253,7 @@ lemonSqueezyWebhookTests = do
       it testDesc $ \TestContext{tcResources = tr, tcProjectId = testPid} -> do
         let payload = payloadFn testPid
         let rawBody = BL.toStrict (AE.encode payload)
-        let callWebhook = void $ toBaseServantResponse tr.trATCtx tr.trLogger $ LemonSqueezy.webhookPostH Nothing rawBody
+        let callWebhook = void $ toBaseServantResponse tr $ LemonSqueezy.webhookPostH Nothing rawBody
         testFn testPid tr.trPool callWebhook
 
 
@@ -371,7 +371,7 @@ replayTests = do
             , userName = Nothing
             }
 
-    result <- toBaseServantResponse tr.trATCtx tr.trLogger $ Replay.replayPostH testPid replayData
+    result <- toBaseServantResponse tr $ Replay.replayPostH testPid replayData
 
     case result of
       AE.Object obj -> do
@@ -397,7 +397,7 @@ replayTests = do
             , userName = Nothing
             }
 
-    result <- toBaseServantResponse tr.trATCtx tr.trLogger $ Replay.replayPostH testPid replayData
+    result <- toBaseServantResponse tr $ Replay.replayPostH testPid replayData
 
     case result of
       AE.Object obj -> do

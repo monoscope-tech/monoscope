@@ -325,7 +325,7 @@ spec = do
         setupSync tr GitHubTestConfig{pat = "fake", owner = "o", repo = "r", branch = "main"} Nothing
         clearJobs tr
         dashId <- UUIDId <$> liftIO UUID.nextRandom
-        _ <- toBaseServantResponse tr.trATCtx tr.trLogger $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
+        _ <- toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
         jobs <- getPendingBackgroundJobs tr.trATCtx
         V.length (V.filter isGitSyncPush jobs) `shouldSatisfy` (>= 1)
 
@@ -333,7 +333,7 @@ spec = do
         void $ testServant tr $ GitSyncPage.gitSyncSettingsDeleteH testPid
         clearJobs tr
         dashId <- UUIDId <$> liftIO UUID.nextRandom
-        _ <- toBaseServantResponse tr.trATCtx tr.trLogger $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
+        _ <- toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
         jobs <- getPendingBackgroundJobs tr.trATCtx
         V.length (V.filter isGitSyncPush jobs) `shouldBe` 0
 
@@ -346,21 +346,21 @@ spec = do
               , repository = Just $ GitHubRepo "webhook-owner/webhook-repo" "webhook-repo" (GitHubOwner "webhook-owner" Nothing)
               , pusher = Nothing, commits = Nothing
               }
-        _ <- toBaseServantResponse tr.trATCtx tr.trLogger $ GitSyncPage.githubWebhookPostH Nothing (Just "push") (toStrict $ AE.encode payload)
+        _ <- toBaseServantResponse tr $ GitSyncPage.githubWebhookPostH Nothing (Just "push") (toStrict $ AE.encode payload)
         jobs <- getPendingBackgroundJobs tr.trATCtx
         V.length (V.filter isGitSyncFromRepo jobs) `shouldSatisfy` (>= 1)
 
       it "ignores non-push events" \tr -> do
         clearJobs tr
         let payload = GitHubWebhookPayload{ref = Nothing, repository = Just $ GitHubRepo "o/r" "r" (GitHubOwner "o" Nothing), pusher = Nothing, commits = Nothing}
-        _ <- toBaseServantResponse tr.trATCtx tr.trLogger $ GitSyncPage.githubWebhookPostH Nothing (Just "ping") (toStrict $ AE.encode payload)
+        _ <- toBaseServantResponse tr $ GitSyncPage.githubWebhookPostH Nothing (Just "ping") (toStrict $ AE.encode payload)
         jobs <- getPendingBackgroundJobs tr.trATCtx
         V.length (V.filter isGitSyncFromRepo jobs) `shouldBe` 0
 
       it "ignores untracked repos" \tr -> do
         clearJobs tr
         let payload = GitHubWebhookPayload{ref = Just "refs/heads/main", repository = Just $ GitHubRepo "unknown/repo" "repo" (GitHubOwner "unknown" Nothing), pusher = Nothing, commits = Nothing}
-        _ <- toBaseServantResponse tr.trATCtx tr.trLogger $ GitSyncPage.githubWebhookPostH Nothing (Just "push") (toStrict $ AE.encode payload)
+        _ <- toBaseServantResponse tr $ GitSyncPage.githubWebhookPostH Nothing (Just "push") (toStrict $ AE.encode payload)
         jobs <- getPendingBackgroundJobs tr.trATCtx
         V.length (V.filter isGitSyncFromRepo jobs) `shouldBe` 0
 
@@ -381,7 +381,7 @@ spec = do
             path <- uniquePath "push-create"
             dashId <- createDash tr "Push Create Test" ["e2e"]
             _ <- runTestBg frozenTime tr $ GitSync.updateDashboardGitInfo dashId path ""  -- set path, empty sha = new file
-            _ <- toBaseServantResponse tr.trATCtx tr.trLogger $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
+            _ <- toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
             runSyncJobs tr
             exists <- ghFileExists cfg path
             exists `shouldBe` True
@@ -399,7 +399,7 @@ spec = do
             dashId <- createDash tr "Updated Title" ["updated"]
             _ <- runTestBg frozenTime tr $ GitSync.updateDashboardGitInfo dashId path sha1
             clearJobs tr
-            _ <- toBaseServantResponse tr.trATCtx tr.trLogger $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
+            _ <- toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
             runSyncJobs tr
             (content, _) <- fromRightShow <$> ghGetFile cfg path
             BS.isInfixOf "Updated Title" content `shouldBe` True
@@ -409,7 +409,7 @@ spec = do
             setupSync tr cfg Nothing
             dashId <- createDash tr "SHA Test" []
             let expectedPath = "dashboards/sha-test.yaml"
-            _ <- toBaseServantResponse tr.trATCtx tr.trLogger $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
+            _ <- toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
             runSyncJobs tr
             dashM <- runTestBg frozenTime tr $ Dashboards.getDashboardById dashId
             let dash = fromJust dashM
@@ -489,7 +489,7 @@ spec = do
             -- Create and push
             dashId <- createDash tr "Round Trip Original" ["local"]
             _ <- runTestBg frozenTime tr $ GitSync.updateDashboardGitInfo dashId path ""  -- set path for push
-            _ <- toBaseServantResponse tr.trATCtx tr.trLogger $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
+            _ <- toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
             runSyncJobs tr
             -- Verify in GitHub
             (content1, sha1) <- fromRightShow <$> ghGetFile cfg path
@@ -534,7 +534,7 @@ spec = do
             setupSync tr cfg (Just "test-prefix")
             dashId <- createDash tr "Prefixed Push" []
             let path = "test-prefix/dashboards/prefixed-push.yaml"
-            _ <- toBaseServantResponse tr.trATCtx tr.trLogger $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
+            _ <- toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
             runSyncJobs tr
             exists <- ghFileExists cfg path
             exists `shouldBe` True
@@ -552,7 +552,7 @@ spec = do
             -- Create dashboard with wrong SHA
             dashId <- createDash tr "Conflict Test" []
             _ <- runTestBg frozenTime tr $ GitSync.updateDashboardGitInfo dashId path "wrong-sha-12345"
-            _ <- toBaseServantResponse tr.trATCtx tr.trLogger $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
+            _ <- toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
             -- Should not crash, just log error
             runSyncJobs tr
             -- Original file unchanged

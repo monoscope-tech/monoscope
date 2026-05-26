@@ -81,7 +81,6 @@ import Effectful.Concurrent (runConcurrent)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (runLabeled)
 import Effectful.Reader.Static qualified as Effectful.Reader
-import Effectful.Time (runFrozenTime)
 import Models.Apis.Integrations qualified as Slack
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects

@@ -145,7 +145,7 @@ spec = aroundAll withTestResources do
       it "rejects API requests with no auth and no demo project header" $ \tr -> do
         let mkTopApp =
               genericServeTWithContext
-                (effToServantHandlerTest tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
+                (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
                 (Routes.server tr.trLogger tr.trATCtx tr.trTracerProvider)
                 (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
             req = WT.setPath Wai.defaultRequest "/api/v1/schema"
@@ -155,7 +155,7 @@ spec = aroundAll withTestResources do
       it "allows unauthenticated access when X-Project-Id is the demo project" $ \tr -> do
         let mkTopApp =
               genericServeTWithContext
-                (effToServantHandlerTest tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
+                (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
                 (Routes.server tr.trLogger tr.trATCtx tr.trTracerProvider)
                 (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
             req =
@@ -184,7 +184,7 @@ spec = aroundAll withTestResources do
     describe "Events endpoint" do
       it "returns valid LogResult with expected JSON structure" $ \tr -> do
         result <-
-          toBaseServantResponse tr.trATCtx tr.trLogger
+          toBaseServantResponse tr
             $ Log.queryEvents testPid (Just "") (Just "1h") Nothing Nothing Nothing Nothing Nothing
         let json = AE.toJSON result
         (json ^? key "logsData" . _Array) `shouldSatisfy` isJust
@@ -195,10 +195,7 @@ spec = aroundAll withTestResources do
         (json ^? key "hasMore") `shouldSatisfy` isJust
 
       it "returns 400 for malformed query" $ \tr -> do
-        ( toBaseServantResponse
-            tr.trATCtx
-            tr.trLogger
-            (Log.queryEvents testPid (Just "|| invalid {{") (Just "1h") Nothing Nothing Nothing Nothing Nothing)
+        ( toBaseServantResponse tr (Log.queryEvents testPid (Just "|| invalid {{") (Just "1h") Nothing Nothing Nothing Nothing Nothing)
             >>= evaluateWHNF_
           )
           `shouldThrow` anyException
@@ -206,7 +203,7 @@ spec = aroundAll withTestResources do
     describe "Metrics endpoint" do
       it "returns valid MetricsData for count query with JSON round-trip" $ \tr -> do
         result <-
-          toBaseServantResponse tr.trATCtx tr.trLogger
+          toBaseServantResponse tr
             $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just testPid) (Just "summarize count(*) by bin_auto(timestamp)") Nothing (Just "1h") Nothing Nothing (Just "spans") []
         result.rowsCount `shouldSatisfy` (>= 0)
         AE.eitherDecode @MetricsData (AE.encode result) `shouldSatisfy` isRight
@@ -324,7 +321,7 @@ spec = aroundAll withTestResources do
     describe "Events body query" do
       it "accepts EventsQuery payload and returns LogResult" $ \tr -> do
         result <-
-          toBaseServantResponse tr.trATCtx tr.trLogger
+          toBaseServantResponse tr
             $ ApiH.apiEventsQuery testPid (def :: ApiT.EventsQuery){ApiT.query = Just "", ApiT.since = Just "1h"}
         let json = AE.toJSON result
         (json ^? key "logsData" . _Array) `shouldSatisfy` isJust
@@ -359,10 +356,10 @@ spec = aroundAll withTestResources do
         let q = "attributes.wc.marker == \"" <> marker <> "\""
             base = (def :: ApiT.EventsQuery){ApiT.query = Just q, ApiT.since = Just "1h"}
 
-        rDefault <- toBaseServantResponse tr.trATCtx tr.trLogger $ ApiH.apiEventsQuery testPid base
+        rDefault <- toBaseServantResponse tr $ ApiH.apiEventsQuery testPid base
         V.length rDefault.logsData `shouldBe` 1 -- only A matches the predicate
 
-        rWith <- toBaseServantResponse tr.trATCtx tr.trLogger
+        rWith <- toBaseServantResponse tr
           $ ApiH.apiEventsQuery testPid base{ApiT.withChildren = Just True}
         -- A + B + C. D is in the same trace but lives under E, not A — the
         -- old buggy behaviour would have included it; the descendant filter
@@ -507,7 +504,7 @@ spec = aroundAll withTestResources do
           dummyApp _ = error "dummyApp invoked unexpectedly"
           buildTestApp tr pid =
             genericServeTWithContext
-              (effToServantHandlerTest tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
+              (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
               (apiV1Server tr.trLogger tr.trATCtx tr.trTracerProvider pid)
               Servant.EmptyContext
           -- Top-level Servant app for the e2e tests below — same wiring as
@@ -515,7 +512,7 @@ spec = aroundAll withTestResources do
           -- /api/v1/mcp through this exercises auth + JSON-RPC + dispatch.
           mkTopApp tr =
             genericServeTWithContext
-              (effToServantHandlerTest tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
+              (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
               (Routes.server tr.trLogger tr.trATCtx tr.trTracerProvider)
               (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
           mcpHttp tr authHdr body =

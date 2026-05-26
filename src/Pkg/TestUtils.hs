@@ -27,6 +27,13 @@ module Pkg.TestUtils (
   runQueryEffect,
   runHasqlEffect,
   frozenTime,
+  -- Mutable test clock — advance time within a single spec to exercise
+  -- time-dependent behaviour without re-creating the AuthContext / pool.
+  advanceTestTime,
+  advanceMinutes,
+  advanceHours,
+  advanceDays,
+  getTestTime,
   -- Helper functions for tests
   drainExtractionWorker,
   processMessagesAndBackgroundJobs,
@@ -83,7 +90,7 @@ import Data.HashMap.Strict qualified as HM
 import Data.Pool (Pool, defaultPoolConfig, destroyAllResources, newPool, withResource)
 import Data.ProtoLens (defMessage)
 import Data.Text qualified as T
-import Data.Time (UTCTime, getCurrentTime)
+import Data.Time (NominalDiffTime, UTCTime, getCurrentTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 (nextRandom)
@@ -104,7 +111,7 @@ import Effectful.Ki qualified as Ki
 import Effectful.Labeled (runLabeled)
 import Effectful.Log (Log)
 import Effectful.Reader.Static qualified
-import Effectful.Time (Time, runFrozenTime, runTime)
+import Effectful.Time (Time, runTime)
 import Hasql.Pool qualified as HPool
 import Log qualified
 import Log.Backend.StandardOutput.Bulk qualified as LogBulk
@@ -127,6 +134,7 @@ import Pages.Settings qualified as Api
 import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), mkHasqlPool)
 import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Pkg.SchemaLearning.Worker qualified as SchemaWorker
+import Pkg.TestClock (TestClock, advanceTime, getTestTime, newTestClock, runMutableTime, setTestTime, syncConnectionTime)
 import Pkg.TraceSessionCache qualified as TSC
 import ProcessMessage qualified
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
@@ -528,9 +536,23 @@ runTestBackground t authCtx action = LogBulk.withBulkStdOutLogger \logger ->
   runTestBackgroundWithLogger t logger authCtx action
 
 
--- | Run background context and return both notifications and result
+-- | Run background context and return both notifications and result.
+--
+-- Backwards-compatible signature: takes a 'UTCTime' which is used to /seed/
+-- a fresh mutable clock for this run. Code that wants to advance time
+-- inside the run should switch to 'runTestBgClock' and the 'TestClock'
+-- helpers ('advanceMinutes', etc.).
 runTestBackgroundWithNotifications :: UTCTime -> Log.Logger -> Config.AuthContext -> ATBackgroundCtx a -> IO ([Data.Effectful.Notify.Notification], a)
 runTestBackgroundWithNotifications t logger appCtx process = do
+  clock <- newTestClock t
+  runTestBackgroundWithClock clock logger appCtx process
+
+
+-- | Like 'runTestBackgroundWithNotifications' but takes an externally-managed
+-- 'TestClock' so callers can advance time across multiple runs in the same
+-- spec.
+runTestBackgroundWithClock :: TestClock -> Log.Logger -> Config.AuthContext -> ATBackgroundCtx a -> IO ([Data.Effectful.Notify.Notification], a)
+runTestBackgroundWithClock clock logger appCtx process = do
   tp <- getGlobalTracerProvider
   notifRef <- newIORef []
   result <-
@@ -539,7 +561,7 @@ runTestBackgroundWithNotifications t logger appCtx process = do
       & Effectful.Reader.Static.runReader appCtx
       & runHasqlPool appCtx.hasqlPool
       & runLabeled @"timefusion" (runHasqlPool appCtx.hasqlTimefusionPool)
-      & runFrozenTime t
+      & runMutableTime clock
       & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger appCtx.config.logLevel
       & Tracing.runTracing tp
       & runUUID
@@ -555,25 +577,7 @@ runTestBackgroundWithNotifications t logger appCtx process = do
 runTestBackgroundWithLogger :: UTCTime -> Log.Logger -> Config.AuthContext -> ATBackgroundCtx a -> IO a
 runTestBackgroundWithLogger t logger appCtx process = do
   (notifications, result) <- runTestBackgroundWithNotifications t logger appCtx process
-  -- Log the notifications that would have been sent
-  forM_ notifications \notification -> do
-    let notifInfo = case notification of
-          Data.Effectful.Notify.EmailNotification emailData ->
-            ("Email" :: Text, Data.Effectful.Notify.receiver emailData, Just (Data.Effectful.Notify.subject emailData))
-          Data.Effectful.Notify.SlackNotification slackData ->
-            ("Slack" :: Text, slackData.channelId, Nothing :: Maybe Text)
-          Data.Effectful.Notify.DiscordNotification discordData ->
-            ("Discord" :: Text, discordData.channelId, Nothing :: Maybe Text)
-          Data.Effectful.Notify.WhatsAppNotification whatsappData ->
-            ("WhatsApp" :: Text, Data.Effectful.Notify.to whatsappData, Just (Data.Effectful.Notify.template whatsappData))
-          Data.Effectful.Notify.PagerdutyNotification pdData ->
-            ("PagerDuty" :: Text, pdData.dedupKey, Just pdData.summary)
-    Log.logInfo "Notification" notifInfo
-      & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger appCtx.config.logLevel
-      & Effectful.runEff
-    Log.logTrace "Notification payload" notification
-      & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger appCtx.config.logLevel
-      & Effectful.runEff
+  logNotifications appCtx logger notifications
   pure result
 
 
@@ -592,9 +596,43 @@ runTestEffect pool hpool logger tp action = do
     & runEff
 
 
--- | Run a background job action using TestResources
+-- | Run a background job action using TestResources.
+--
+-- Seeds the shared 'trTestClock' to @t@ before running so subsequent
+-- 'advanceTestTime' / 'advanceMinutes' / etc. calls (and any further
+-- 'runTestBg' in the same spec) observe the advanced clock. SQL queries
+-- that go through @app_now()@ on a connection that's been synced via
+-- 'syncConnectionTime' see the same clock too.
 runTestBg :: UTCTime -> TestResources -> ATBackgroundCtx a -> IO a
-runTestBg t TestResources{..} = runTestBackgroundWithLogger t trLogger trATCtx
+runTestBg t TestResources{..} action = do
+  setTestTime trTestClock t
+  (notifications, result) <- runTestBackgroundWithClock trTestClock trLogger trATCtx action
+  logNotifications trATCtx trLogger notifications
+  pure result
+
+
+-- | Log out notifications gathered during a background run. Lifted out
+-- of 'runTestBackgroundWithLogger' so 'runTestBg' can share the format.
+logNotifications :: Config.AuthContext -> Log.Logger -> [Data.Effectful.Notify.Notification] -> IO ()
+logNotifications appCtx logger notifications =
+  forM_ notifications \notification -> do
+    let notifInfo = case notification of
+          Data.Effectful.Notify.EmailNotification emailData ->
+            ("Email" :: Text, Data.Effectful.Notify.receiver emailData, Just (Data.Effectful.Notify.subject emailData))
+          Data.Effectful.Notify.SlackNotification slackData ->
+            ("Slack" :: Text, slackData.channelId, Nothing :: Maybe Text)
+          Data.Effectful.Notify.DiscordNotification discordData ->
+            ("Discord" :: Text, discordData.channelId, Nothing :: Maybe Text)
+          Data.Effectful.Notify.WhatsAppNotification whatsappData ->
+            ("WhatsApp" :: Text, Data.Effectful.Notify.to whatsappData, Just (Data.Effectful.Notify.template whatsappData))
+          Data.Effectful.Notify.PagerdutyNotification pdData ->
+            ("PagerDuty" :: Text, pdData.dedupKey, Just pdData.summary)
+    Log.logInfo "Notification" notifInfo
+      & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger appCtx.config.logLevel
+      & Effectful.runEff
+    Log.logTrace "Notification payload" notification
+      & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger appCtx.config.logLevel
+      & Effectful.runEff
 
 
 -- New type to hold all our resources
@@ -612,7 +650,35 @@ data TestResources = TestResources
   -- bucket exists, and the AuthContext has been configured against it.
   -- Tests that exercise S3 paths should call `requireMinio` to skip
   -- gracefully (`pendingWith`) when this is False.
+  , trTestClock :: TestClock
+  -- ^ Mutable clock that drives the 'Time' effect inside test runs. Starts
+  -- at 'frozenTime'; advance with 'advanceTestTime' / 'advanceMinutes' /
+  -- 'advanceHours' / 'advanceDays' to exercise time-dependent behaviour.
+  -- @runTestBg t tr@ resets the clock to @t@ at entry so existing tests
+  -- that pin a specific time continue to work unchanged.
   }
+
+
+-- | Advance the test clock by an arbitrary duration. The next 'currentTime'
+-- inside an effect run (including SQL queries that call @app_now()@ on a
+-- synced connection) sees the new value.
+advanceTestTime :: TestResources -> NominalDiffTime -> IO ()
+advanceTestTime tr = advanceTime tr.trTestClock
+
+
+-- | @advanceMinutes tr n@ — convenience for @advanceTestTime tr (n * 60)@.
+advanceMinutes :: TestResources -> Int -> IO ()
+advanceMinutes tr n = advanceTestTime tr (fromIntegral n * 60)
+
+
+-- | @advanceHours tr n@ — convenience for @advanceTestTime tr (n * 3600)@.
+advanceHours :: TestResources -> Int -> IO ()
+advanceHours tr n = advanceTestTime tr (fromIntegral n * 3600)
+
+
+-- | @advanceDays tr n@ — convenience for @advanceTestTime tr (n * 86400)@.
+advanceDays :: TestResources -> Int -> IO ()
+advanceDays tr n = advanceTestTime tr (fromIntegral n * 86400)
 
 
 -- | Probe a MinIO endpoint and ensure the test bucket exists. Returns the
@@ -733,6 +799,7 @@ withTestResources f = withSetup $ \pool cstr -> LogBulk.withBulkStdOutLogger \lo
               }
           )
   uuidRef <- newIORef (map (UUID.fromWords 0 0 0) [1 .. 100000])
+  testClock <- newTestClock frozenTime
   f
     TestResources
       { trPool = pool
@@ -743,21 +810,17 @@ withTestResources f = withSetup $ \pool cstr -> LogBulk.withBulkStdOutLogger \lo
       , trTracerProvider = tp
       , trUUIDRef = uuidRef
       , trMinioAvailable = minioReady
+      , trTestClock = testClock
       }
 
 
-toServantResponse
-  :: AuthContext
-  -> Servant.Headers '[Servant.Header "Set-Cookie" SetCookie] Projects.Session
-  -> Log.Logger
-  -> ATAuthCtx (RespHeaders a)
-  -> IO (RespHeaders a, a)
-toServantResponse trATCtx trSessAndHeader trLogger k = do
+toServantResponse :: TestResources -> ATAuthCtx (RespHeaders a) -> IO (RespHeaders a, a)
+toServantResponse TestResources{..} k = do
   tp <- getGlobalTracerProvider
   uuidRef <- freshUUIDRef
   headersResp <-
     ( atAuthToBase trSessAndHeader k
-        & effToServantHandlerTest uuidRef trATCtx trLogger tp
+        & effToServantHandlerTest trTestClock uuidRef trATCtx trLogger tp
         & ServantS.runHandler
     )
       <&> fromRightShow
@@ -765,7 +828,7 @@ toServantResponse trATCtx trSessAndHeader trLogger k = do
 
 
 testServant :: TestResources -> ATAuthCtx (RespHeaders a) -> IO (RespHeaders a, a)
-testServant tr = toServantResponse tr.trATCtx tr.trSessAndHeader tr.trLogger
+testServant = toServantResponse
 
 
 -- | Like testServant but also captures notifications sent during handler execution
@@ -776,7 +839,7 @@ testServantWithNotifications TestResources{..} k = do
   notifRef <- newIORef []
   headersResp <-
     ( atAuthToBaseTest notifRef trSessAndHeader k
-        & effToServantHandlerTest uuidRef trATCtx trLogger tp
+        & effToServantHandlerTest trTestClock uuidRef trATCtx trLogger tp
         & ServantS.runHandler
     )
       <&> fromRightShow
@@ -787,16 +850,12 @@ testServantWithNotifications TestResources{..} k = do
 -- | Run a base context handler (like webhookPostH, replayPostH) in test context.
 -- Each call gets a fresh UUID pool; use `runAsBase` when you need IDs persisted
 -- across multiple handler invocations within the same test.
-toBaseServantResponse
-  :: AuthContext
-  -> Log.Logger
-  -> ATBaseCtx a
-  -> IO a
-toBaseServantResponse trATCtx trLogger k = do
+toBaseServantResponse :: TestResources -> ATBaseCtx a -> IO a
+toBaseServantResponse TestResources{..} k = do
   tp <- getGlobalTracerProvider
   uuidRef <- freshUUIDRef
   ( k
-      & effToServantHandlerTest uuidRef trATCtx trLogger tp
+      & effToServantHandlerTest trTestClock uuidRef trATCtx trLogger tp
       & ServantS.runHandler
     )
     <&> fromRightShow
@@ -809,7 +868,7 @@ runAsBase :: TestResources -> ATBaseCtx a -> IO a
 runAsBase TestResources{..} k = do
   tp <- getGlobalTracerProvider
   k
-    & effToServantHandlerTest trUUIDRef trATCtx trLogger tp
+    & effToServantHandlerTest trTestClock trUUIDRef trATCtx trLogger tp
     & ServantS.runHandler
     >>= either (fail . ("Servant error: " <>) . show) pure
 
@@ -829,7 +888,7 @@ runQueryEffect TestResources{..} action = do
       & runErrorNoCallStack @ServantS.ServerError
       & Effectful.Reader.Static.runReader trATCtx
       & runHasqlPool trATCtx.hasqlPool
-      & runFrozenTime (Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime)
+      & runMutableTime trTestClock
       & Logging.runLog "test" logger trATCtx.config.logLevel
       & Tracing.runTracing tp
       & runEff
@@ -843,7 +902,7 @@ runHasqlEffect TestResources{..} action = do
     & runErrorNoCallStack @ServantS.ServerError
     & Effectful.Reader.Static.runReader trATCtx
     & runHasqlPool trATCtx.hasqlPool
-    & runFrozenTime (Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime)
+    & runMutableTime trTestClock
     & runEff
     <&> fromRightShow
 
@@ -1139,7 +1198,7 @@ createTestSpans TestResources{..} projectId numRequestsPerEndpoint = do
 -- | Helper to create an API key for testing using handler
 createTestAPIKey :: TestResources -> Projects.ProjectId -> Text -> IO Text
 createTestAPIKey tr projectId keyName = do
-  (_, result) <- toServantResponse tr.trATCtx tr.trSessAndHeader tr.trLogger $ Api.apiPostH projectId (Api.GenerateAPIKeyForm keyName Nothing)
+  (_, result) <- toServantResponse tr $ Api.apiPostH projectId (Api.GenerateAPIKeyForm keyName Nothing)
   case result of
     Api.ApiPost _ _ (Just (_, keyText)) -> pure keyText
     _ -> error "Failed to create API key via handler"
