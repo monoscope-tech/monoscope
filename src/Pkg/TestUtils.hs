@@ -140,7 +140,7 @@ import Pages.Settings qualified as Api
 import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), mkHasqlPool)
 import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Pkg.SchemaLearning.Worker qualified as SchemaWorker
-import Pkg.TestClock (TestClock, advanceTime, getTestTime, newTestClock, runMutableTime, setTestTime, syncConnectionTime)
+import Pkg.TestClock (TestClock, advanceTime, getTestTime, newTestClock, runHasqlPoolSynced, runMutableTime, setTestTime, syncConnectionTime)
 import Pkg.TraceSessionCache qualified as TSC
 import ProcessMessage qualified
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
@@ -565,7 +565,7 @@ runTestBackgroundWithClock clock logger appCtx process = do
     process
       & Data.Effectful.Notify.runNotifyTest notifRef
       & Effectful.Reader.Static.runReader appCtx
-      & runHasqlPool appCtx.hasqlPool
+      & runHasqlPoolSynced clock appCtx.hasqlPool
       & runLabeled @"timefusion" (runHasqlPool appCtx.hasqlTimefusionPool)
       & runMutableTime clock
       & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger appCtx.config.logLevel
@@ -908,7 +908,7 @@ runQueryEffect TestResources{..} action = do
     action
       & runErrorNoCallStack @ServantS.ServerError
       & Effectful.Reader.Static.runReader trATCtx
-      & runHasqlPool trATCtx.hasqlPool
+      & runHasqlPoolSynced trTestClock trATCtx.hasqlPool
       & runMutableTime trTestClock
       & Logging.runLog "test" logger trATCtx.config.logLevel
       & Tracing.runTracing tp
@@ -922,7 +922,7 @@ runHasqlEffect TestResources{..} action = do
   action
     & runErrorNoCallStack @ServantS.ServerError
     & Effectful.Reader.Static.runReader trATCtx
-    & runHasqlPool trATCtx.hasqlPool
+    & runHasqlPoolSynced trTestClock trATCtx.hasqlPool
     & runMutableTime trTestClock
     & runEff
     <&> fromRightShow

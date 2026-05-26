@@ -10,10 +10,12 @@ import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.QQ (aesonQQ)
 import Data.Base64.Types qualified as B64T
 import Data.ByteString.Lazy qualified as BL
+import Data.Effectful.Hasql qualified as EHasql
 import Data.HashMap.Strict qualified as HashMap
 import Data.Int (Int64)
 import Data.Text qualified as T
 import Data.Time (UTCTime, ZonedTime, addUTCTime, defaultTimeLocale, formatTime, getCurrentTime)
+import Hasql.Interpolate qualified as HI
 import Data.UUID qualified as DataUUID
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
@@ -358,17 +360,11 @@ spec = aroundAll withTestResources do
       advanceDays tr 5
       expectedTime <- getTestTime tr.trTestClock
 
-      -- Sync the connection's app.current_time GUC (transaction-local) and run
-      -- the state UPDATE in the same transaction so the trigger sees the test clock.
-      withResource tr.trPool \conn -> PGS.withTransaction conn $ do
-        let timeStr = formatTime defaultTimeLocale "%F %T%Q+00" expectedTime
-        _ <- PGS.query conn
-          [sql| SELECT set_config('app.current_time', ?, true) |]
-          (Only (timeStr :: String)) :: IO [Only Text]
-        void $ PGS.execute conn
-          [sql| UPDATE apis.error_patterns SET state = 'resolved'
-                  WHERE project_id = ? AND hash = ? |]
-          (testPid, errHash)
+      -- runHasqlEffect now syncs app.current_time on every Session via
+      -- runHasqlPoolSynced, so the trigger reads app_now() = expectedTime.
+      runHasqlEffect tr $ EHasql.interpExecute_
+        [HI.sql| UPDATE apis.error_patterns SET state = 'resolved'
+                  WHERE project_id = #{testPid} AND hash = #{errHash} |]
 
       rows <- withResource tr.trPool \conn ->
         PGS.query conn

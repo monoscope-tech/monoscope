@@ -17,8 +17,10 @@ module Pkg.TestClock (
   getTestTime,
   runMutableTime,
   syncConnectionTime,
+  runHasqlPoolSynced,
 ) where
 
+import Data.Effectful.Hasql (Hasql (..))
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime, defaultTimeLocale, formatTime)
 import Database.PostgreSQL.Simple (Connection)
 import Database.PostgreSQL.Simple qualified as PGS
@@ -26,6 +28,8 @@ import Effectful (Eff, IOE, (:>))
 import Effectful.Dispatch.Dynamic (interpret)
 import Effectful.Time (Time (..))
 import GHC.Clock (getMonotonicTime)
+import Hasql.Pool (Pool, use)
+import Hasql.Session qualified as Session
 import Relude
 
 
@@ -76,3 +80,18 @@ syncConnectionTime clock conn = do
   t <- getTestTime clock
   let timeStr = formatTime defaultTimeLocale "%F %T%Q+00" t
   void $ PGS.execute conn "SELECT set_config('app.current_time', ?, true)" (PGS.Only timeStr)
+
+
+-- | Hasql twin of 'runHasqlPool' that pushes the test clock into the
+-- @app.current_time@ GUC before each Session. Use in tests that exercise
+-- triggers / stored procedures going through @app_now()@. The setting is
+-- session-scoped (@is_local=false@) so it survives the auto-commit boundary
+-- between the @SET@ and the user's Session, but every call re-sets it so
+-- the pool may freely rotate connections without contaminating tests.
+runHasqlPoolSynced :: IOE :> es => TestClock -> Pool -> Eff (Hasql ': es) a -> Eff es a
+runHasqlPoolSynced clock pool = interpret \_ -> \case
+  UseSession s -> liftIO $ do
+    t <- getTestTime clock
+    let timeStr = formatTime defaultTimeLocale "%F %T%Q+00" t
+        setStmt = "SELECT set_config('app.current_time', '" <> encodeUtf8 (toText timeStr) <> "', false)"
+    use pool $ Session.sql setStmt *> s

@@ -364,6 +364,7 @@ tests:
       - -threaded
       - -rtsopts
       - -with-rtsopts=-N
+      - -O0
     dependencies:
       - base
       - monoscope
@@ -377,6 +378,7 @@ tests:
       - -threaded
       - -rtsopts
       - -with-rtsopts=-N
+      - -O0
     build-tools:
       - hspec-discover:hspec-discover
     dependencies:
@@ -441,6 +443,7 @@ tests:
       - -threaded
       - -rtsopts
       - -with-rtsopts=-N
+      - -O0
     dependencies:
       - monoscope
       - hs-opentelemetry-instrumentation-auto
