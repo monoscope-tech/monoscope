@@ -97,9 +97,13 @@ constraints:
   streamly ^>=0.10.0,
   effectful-postgresql +enable-otel,
   -- Pre-5.4 http2: grapesy 1.0.1 doesn't compile against 5.4 yet
-  -- (well-typed/grapesy#331). The package-specific ghc-options above
-  -- demote http2/warp's strict-field warnings so 5.3.10/5.3.11 build clean.
-  http2 <5.4,
+  -- (well-typed/grapesy#331). Must be 5.3.11 specifically — 5.3.10's
+  -- internal Aux record construction is missing a strict field, which
+  -- GHC 9.12 rejects unconditionally (GHC-95909). 5.3.11 ships with
+  -- defaultAux that covers the field. The warp warning relaxation above
+  -- handles 5.3.11's *own* added strict field (confReadNTimeout) that
+  -- warp 3.4.9 doesn't set.
+  http2 ==5.3.11,
   -- Pin crypton: jose-jwt 0.10.0 uses ByteArrayAccess (HMAC SHA256), which
   -- newer crypton releases dropped. 1.0.6 is the last version that still
   -- exports that instance and is the one stackage curates.
