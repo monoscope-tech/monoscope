@@ -1,9 +1,29 @@
-roots = ["^Main.main$"]
-type-class-roots = true
-hie_directory = ".hiefiles"
-root-modules = [
-  "src/Data/Effectful/Wreq.hs",
-  "src/Data/Effectful/LLM.hs",
-  "src/System/Tracing.hs",
+# Weeder picks up entry points from `roots` (regex over symbols) and walks
+# everything reachable from there.
+roots = [
+  "^Main\\.main$",
+  "^Paths_",
+  "^Spec\\.main$",
+  "^Spec\\.spec$",
 ]
+type-class-roots = true
 unused-types = true
+
+# Modules whose every export is treated as a root — used for genuine API
+# surfaces / generated code / SDK-style wrappers where individual unused
+# exports are noise rather than dead code.
+#
+# Entries are regex patterns matched against module names.
+root-modules = [
+  # CLI binary's own modules (separate entry point from monoscope-server)
+  "^CLI\\.",
+  # Auto-generated proto-lens bindings
+  "^Proto\\.",
+  "^Data\\.ProtoLens",
+  # Dev-mode REPL helpers, instrumented logging/tracing, effect wrappers —
+  # surfaces shaped as APIs.
+  "^Devel$",
+  "^System\\.Logging$",
+  "^System\\.Tracing$",
+  "^Data\\.Effectful\\.",
+]

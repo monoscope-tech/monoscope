@@ -104,7 +104,19 @@ jobs:
           mkdir -p static/public/assets/web-components/dist/css
 
       - name: Build
+        # package.yaml already passes -fwrite-ide-info; the build emits .hie
+        # files alongside .o files in dist-newstyle, which weeder walks below.
         run: cabal build all -j --ghc-options="-O0 +RTS -A64m -n2m -RTS"
+
+      - name: Check unused code (weeder)
+        # Informational only for now — there's a real backlog of findings we
+        # want to surface but not block PRs on. Flip to `false` once the
+        # current src/ findings are triaged.
+        continue-on-error: true
+        run: |
+          command -v weeder >/dev/null 2>&1 \
+            || cabal install weeder --install-method=copy --installdir=/usr/local/bin --overwrite-policy=always
+          weeder --config config/weeder.toml --hie-directory dist-newstyle
 
       - name: Run doctests
         run: cabal test doctests --ghc-options="-O0" --test-show-details=direct
