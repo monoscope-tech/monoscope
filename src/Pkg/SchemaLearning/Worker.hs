@@ -1,4 +1,6 @@
 {-# LANGUAGE OverloadedRecordDot #-}
+{- HLINT ignore "Use unstableNub" -}
+{- HLINT ignore "Use atomicModifyIORef'_" -}
 
 -- | Periodic flush worker for the schema-learning catalog.
 --
@@ -37,7 +39,6 @@ import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Pkg.SchemaLearning.Hot (SchemaKey, SchemaShardState)
 import Pkg.SchemaLearning.Hot qualified as Hot
 import Relude
-import Relude.Extra (atomicModifyIORef'_, unstableNub)
 
 
 -- | Summary stats from one flush pass — useful for telemetry / log lines.
@@ -184,7 +185,8 @@ summariseEntries entries =
           $ V.map ((.template.fields)) entries
       svcs =
         V.fromList
-          $ unstableNub
+          $ HS.toList
+          $ HS.fromList
           $ catMaybes [e.scope.service | e <- V.toList entries]
       topVals :: HashMap Text TopK
       topVals = V.foldl' mergeCounts HM.empty (V.map (.counts) entries)
@@ -234,4 +236,4 @@ runSchemaFlusher intervalSecs refs flushOne = forever do
     -- grew past its cap. Without this the entries map grows unboundedly with
     -- every distinct (project, keyHash) the shard has ever seen and eventually
     -- exhausts the heap.
-    atomicModifyIORef'_ ref (Hot.evictLRU Hot.defaultPolicy)
+    atomicModifyIORef' ref \st -> (Hot.evictLRU Hot.defaultPolicy st, ())

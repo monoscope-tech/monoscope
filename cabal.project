@@ -1,5 +1,5 @@
 packages: .
-with-compiler: ghc-9.12.2
+with-compiler: ghc-9.12.4
 multi-repl: True
 write-ghc-environment-files: always
 jobs: $ncpus
@@ -8,7 +8,7 @@ semaphore: True
 -- documentation: True
 
 -- with-compiler: ghc-9.8.2
-import: https://www.stackage.org/nightly-2025-11-17/cabal.config
+import: https://www.stackage.org/nightly-2026-05-24/cabal.config
 --import: https://www.stackage.org/lts-24.19/cabal.config
 
 
@@ -39,15 +39,18 @@ source-repository-package
   tag: 893368e6010a87c3a2d33227af675b4fb8fe411f
   subdir: .
 
-source-repository-package
-  type: git
-  location: https://github.com/tonyalaribe/proto-lens
-  tag: 0199b421a2e5ae03285adcd59711f9fbca7c126e
-  subdir: proto-lens-setup
-  subdir: proto-lens-protoc
-  subdir: proto-lens-runtime
-  subdir: proto-lens
-  subdir: proto-lens-protobuf-types
+-- proto-lens 0.7.1.7 now lives in stackage nightly-2026-05-24; the tonyalaribe
+-- fork pinned 0.7.1.6 which conflicts. Re-introduce the fork only if a
+-- protoc-side patch is needed again.
+-- source-repository-package
+--   type: git
+--   location: https://github.com/tonyalaribe/proto-lens
+--   tag: 0199b421a2e5ae03285adcd59711f9fbca7c126e
+--   subdir: proto-lens-setup
+--   subdir: proto-lens-protoc
+--   subdir: proto-lens-runtime
+--   subdir: proto-lens
+--   subdir: proto-lens-protobuf-types
 
 source-repository-package
   type: git
@@ -64,11 +67,13 @@ source-repository-package
 --   tag: 24ffca5c10b23d90775f6fb2570db052fb57a948
 --   subdir: .
 
-source-repository-package
-  type: git
-  location: https://github.com/google/ghc-source-gen.git
-  tag: 79ecc01213131da03a7198fc377606ce72ac037a
-  subdir: .
+-- ghc-source-gen 0.4.7.0 now lives in stackage nightly-2026-05-24; the google
+-- pin gave 0.4.6.0 which conflicts.
+-- source-repository-package
+--   type: git
+--   location: https://github.com/google/ghc-source-gen.git
+--   tag: 79ecc01213131da03a7198fc377606ce72ac037a
+--   subdir: .
 
 -- source-repository-package
 --   type: git

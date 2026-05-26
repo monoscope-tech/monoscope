@@ -226,21 +226,21 @@ httpKeyOf canonicalTemplates otelSpan =
       !attrValue = AE.Object $ AEKM.fromMapText attributes
       !isHttpSpan = isJust $ attrValue ^? key "http" . key "request" . key "method" . _String
       !method = T.toUpper $ fromMaybe "GET" $ attrValue ^? key "http" . key "request" . key "method" . _String
-      !routePath = fromMaybe "/" $ asum [attrValue ^? key "http" . key "route" . _String, attrValue ^? key "url" . key "path" . _String]
+      !routePath =
+        fromMaybe "/"
+          $ (attrValue ^? key "http" . key "route" . _String)
+          <|> (attrValue ^? key "url" . key "path" . _String)
       !statusCode =
         fromMaybe 200
-          $ asum
-            [ attrValue ^? key "http" . key "response" . key "status_code" . _String >>= readMaybe @Int . toString
-            , truncate <$> attrValue ^? key "http" . key "response" . key "status_code" . _Number
-            ]
+          $ ( (attrValue ^? key "http" . key "response" . key "status_code" . _String >>= readMaybe @Int . toString)
+                <|> (truncate <$> attrValue ^? key "http" . key "response" . key "status_code" . _Number)
+            )
           >>= \c -> if c >= 100 && c < 600 then Just c else Nothing
       !host =
         fromMaybe ""
-          $ asum
-            [ attrValue ^? key "net" . key "host" . key "name" . _String
-            , attrValue ^? key "server" . key "address" . _String
-            , attrValue ^? key "http" . key "host" . _String
-            ]
+          $ (attrValue ^? key "net" . key "host" . key "name" . _String)
+          <|> (attrValue ^? key "server" . key "address" . _String)
+          <|> (attrValue ^? key "http" . key "host" . _String)
       !sdkTypeStr =
         fromMaybe "unknown"
           $ (attrValue ^? key "monoscope" . key "sdk_type" . _String)
@@ -389,7 +389,7 @@ extractObservation canonicalTemplates otelSpan =
                 !respHeaders = fromMaybe AE.emptyObject $ extractHeadersV "http.response.headers" attrValue
                 !reqBody = redacted $ fromMaybe AE.Null $ bodyValue ^? key "request_body"
                 !respBody = redacted $ fromMaybe AE.Null $ bodyValue ^? key "response_body"
-             in concat
+             in mconcat
                   [ tagWalk Fields.FCPathParam (valueToFields $ redacted pathParams)
                   , tagWalk Fields.FCQueryParam (valueToFields $ redacted queryParams)
                   , tagWalk Fields.FCRequestHeader (valueToFields $ redacted reqHeaders)
@@ -398,7 +398,7 @@ extractObservation canonicalTemplates otelSpan =
                   , tagWalk Fields.FCResponseBody (valueToFields respBody)
                   ]
         | otherwise =
-            concat
+            mconcat
               [ tagWalk Fields.FCAttribute (valueToFields $ redacted attrValue)
               , tagWalk Fields.FCResource (valueToFields $ redacted (AE.Object $ AEKM.fromMapText resMap))
               , tagWalk Fields.FCRequestBody (valueToFields $ redacted bodyValue)
@@ -540,7 +540,7 @@ createSpanAttributes rm =
     -- Process headers
     headersObj =
       let
-        extractHeaders prefix = maybe (AE.object []) (nestedJsonFromDotNotation . map (first (prefix <>)) . AEKM.toList) . (^? _Object)
+        extractHeaders prefix = maybe (AE.object []) (nestedJsonFromDotNotation . map (first ((prefix <>) . AEK.toText)) . AEKM.toList) . (^? _Object)
         reqHeaders = extractHeaders "http.request.headers." rm.requestHeaders
         respHeaders = extractHeaders "http.response.headers." rm.responseHeaders
        in
