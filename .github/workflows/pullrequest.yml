@@ -139,23 +139,29 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Pin to the PR head SHA instead of head_ref: head_ref is the branch
+      # name, which checkout fetches with a glob refspec that 404s on deleted
+      # or fork branches (see i18n-yaml PR fetch failure).
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.head_ref }}
+          ref: ${{ github.event.pull_request.head.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
       - uses: haskell-actions/hlint-setup@v2
       - name: Run hlint and apply refactorings
         id: hlint
         run: |
           hlint src/ --refactor --refactor-options="--inplace" || true
+      # Dependabot PRs run with a read-only token; pushing autorefactors 403s.
+      # Skip the push for them (and forks) but still run hlint below.
       - name: Commit and push refactorings
+        if: github.actor != 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           if [[ -n $(git status -s) ]]; then
             git add -A
             git commit -m "Apply hlint refactorings"
-            git push
+            git push origin HEAD:${{ github.event.pull_request.head.ref }}
           fi
       - uses: haskell-actions/hlint-run@v2
         with:

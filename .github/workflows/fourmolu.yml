@@ -1,8 +1,18 @@
 name: fourmolu
 on: push
+
+# Serialise per-branch so two pushes can't race for the same fast-forward.
+concurrency:
+  group: fourmolu-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   format:
+    # Dependabot pushes use a read-only GITHUB_TOKEN; skip rather than 403.
+    if: github.actor != 'dependabot[bot]'
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v6
         with:
@@ -28,15 +38,19 @@ jobs:
       - name: Format code
         run: make fmt
 
-      - name: Commit formatted code
+      - name: Commit & push formatted code
         run: |
+          if git diff --quiet; then
+            echo "no formatting changes"
+            exit 0
+          fi
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add -A
-          git diff --staged --quiet || git commit -m "Auto-format code with fourmolu"
-
-      - name: Push changes
-        uses: ad-m/github-push-action@master
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          branch: ${{ github.ref }}
+          git commit -m "Auto-format code with fourmolu"
+          # Race-safe push: if upstream moved while we were formatting, rebase and retry once.
+          for i in 1 2 3; do
+            if git push origin HEAD:${GITHUB_REF#refs/heads/}; then exit 0; fi
+            git pull --rebase origin ${GITHUB_REF#refs/heads/}
+          done
+          exit 1
