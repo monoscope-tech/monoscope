@@ -1,5 +1,5 @@
 packages: .
-with-compiler: ghc-9.12.4
+with-compiler: ghc-9.12.2
 multi-repl: True
 write-ghc-environment-files: always
 jobs: $ncpus
@@ -8,7 +8,7 @@ semaphore: True
 -- documentation: True
 
 -- with-compiler: ghc-9.8.2
-import: https://www.stackage.org/nightly-2026-05-24/cabal.config
+import: https://www.stackage.org/nightly-2025-11-17/cabal.config
 --import: https://www.stackage.org/lts-24.19/cabal.config
 
 
@@ -86,7 +86,7 @@ source-repository-package
 --   subdir:   propagators/b3
 
 source-repository-package
-  type: git 
+  type: git
   location: https://github.com/minio/minio-hs
   tag: 3e665784228cba7261560c104b8f1d928e7b5bd4
   subdir: .
@@ -98,15 +98,15 @@ source-repository-package
   subdir: .
 
 source-repository-package
-  type: git 
+  type: git
   location: https://github.com/tusharad/ollama-haskell
   tag: 33807a3a5a507e99d92b26e245c0aed582fde581
   subdir: .
 
 source-repository-package
-  type: git 
+  type: git
   location: https://github.com/MercuryTechnologies/openai
-  tag: 3a5c00527bcda652a188ee7c54127eea90ce1bb7 
+  tag: 3a5c00527bcda652a188ee7c54127eea90ce1bb7
   subdir: .
 
 constraints:

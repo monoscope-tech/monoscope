@@ -37,6 +37,7 @@ import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Pkg.SchemaLearning.Hot (SchemaKey, SchemaShardState)
 import Pkg.SchemaLearning.Hot qualified as Hot
 import Relude
+import Relude.Extra (atomicModifyIORef'_, unstableNub)
 
 
 -- | Summary stats from one flush pass — useful for telemetry / log lines.
@@ -183,14 +184,13 @@ summariseEntries entries =
           $ V.map ((.template.fields)) entries
       svcs =
         V.fromList
-          $ HS.toList
-          $ HS.fromList
+          $ unstableNub
           $ catMaybes [e.scope.service | e <- V.toList entries]
       topVals :: HashMap Text TopK
       topVals = V.foldl' mergeCounts HM.empty (V.map (.counts) entries)
    in SummaryDoc{fields = fieldsAcc, services = svcs, topValuesByField = topVals}
   where
-    mergeFields acc fs = HM.unionWith mergeStruct acc fs
+    mergeFields = HM.unionWith mergeStruct
     mergeStruct a b =
       a
         { Catalog.types = a.types <> b.types
@@ -234,4 +234,4 @@ runSchemaFlusher intervalSecs refs flushOne = forever do
     -- grew past its cap. Without this the entries map grows unboundedly with
     -- every distinct (project, keyHash) the shard has ever seen and eventually
     -- exhausts the heap.
-    atomicModifyIORef' ref \st -> (Hot.evictLRU Hot.defaultPolicy st, ())
+    atomicModifyIORef'_ ref (Hot.evictLRU Hot.defaultPolicy)

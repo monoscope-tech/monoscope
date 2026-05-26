@@ -353,11 +353,11 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds conv
                 !projectIds = HS.toList $ HM.foldr' HS.insert (HS.fromList atIds) keyToId
             !projectCaches <- checkpoint (cp ":getProjectCaches")
               $ liftIO
-              $ fmap HM.fromList
-              $ forM projectIds \pid -> do
+              $ HM.fromList
+              <$> forM projectIds \pid -> do
                 !cache <- Cache.fetchWithCache appCtx.projectCache pid \pid' ->
                   fromMaybe Projects.defaultProjectCache <$> Projects.projectCacheByIdIO appCtx.hasqlJobsPool pid'
-                pure $! (pid, cache)
+                pure (pid, cache)
             pure (keyToId, projectCaches)
 
       let !processedMsgs =

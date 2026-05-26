@@ -540,7 +540,7 @@ createSpanAttributes rm =
     -- Process headers
     headersObj =
       let
-        extractHeaders prefix = fromMaybe (AE.object []) . fmap (nestedJsonFromDotNotation . map (first (prefix <>)) . AEKM.toList) . (^? _Object)
+        extractHeaders prefix = maybe (AE.object []) (nestedJsonFromDotNotation . map (first (prefix <>)) . AEKM.toList) . (^? _Object)
         reqHeaders = extractHeaders "http.request.headers." rm.requestHeaders
         respHeaders = extractHeaders "http.response.headers." rm.responseHeaders
        in

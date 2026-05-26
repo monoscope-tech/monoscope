@@ -273,7 +273,7 @@ fetchMetricsData respDataType sqlQuery now fromD toD authCtx dbSource = do
           , to = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe now toD
           }
 
-  result <- try @SomePostgreSqlException $ checkpoint (toAnnotation (respDataType, sqlQuery)) $ case respDataType of
+  try @SomePostgreSqlException $ checkpoint (toAnnotation (respDataType, sqlQuery)) $ case respDataType of
     DTFloat -> do
       chartData <- withResource pool \conn -> query_ conn (Query $ encodeUtf8 sqlQuery) :: IO [Only Double]
       pure
@@ -307,7 +307,6 @@ fetchMetricsData respDataType sqlQuery now fromD toD authCtx dbSource = do
           { dataJSON = V.fromList chartData
           , rowsCount = fromIntegral $ length chartData
           }
-  pure result
 
 
 -- | Convert timestamps in MetricsData from seconds to milliseconds for ECharts
