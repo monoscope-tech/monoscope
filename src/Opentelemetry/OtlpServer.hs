@@ -351,13 +351,14 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds conv
             let !keyToId = HM.fromList $ V.toList projectIdsAndKeys
                 -- fold values directly to avoid HM.elems intermediate list
                 !projectIds = HS.toList $ HM.foldr' HS.insert (HS.fromList atIds) keyToId
-            !projectCaches <- checkpoint (cp ":getProjectCaches")
-              $ liftIO
-              $ HM.fromList
-              <$> forM projectIds \pid -> do
-                !cache <- Cache.fetchWithCache appCtx.projectCache pid \pid' ->
-                  fromMaybe Projects.defaultProjectCache <$> Projects.projectCacheByIdIO appCtx.hasqlJobsPool pid'
-                pure (pid, cache)
+            !projectCaches <-
+              checkpoint (cp ":getProjectCaches")
+                $ liftIO
+                $ HM.fromList
+                <$> forM projectIds \pid -> do
+                  !cache <- Cache.fetchWithCache appCtx.projectCache pid \pid' ->
+                    fromMaybe Projects.defaultProjectCache <$> Projects.projectCacheByIdIO appCtx.hasqlJobsPool pid'
+                  pure (pid, cache)
             pure (keyToId, projectCaches)
 
       let !processedMsgs =
