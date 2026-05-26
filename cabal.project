@@ -111,11 +111,5 @@ source-repository-package
 
 constraints:
   streamly ^>=0.10.0,
-  effectful-postgresql +enable-otel,
-  jose-jwt +use-crypton,
-  http2 >=5.4.0,
-  warp >=3.4.13,
-  http2-tls >=0.5.3,
-  openapi3 ==3.2.4
-
+  effectful-postgresql +enable-otel
 allow-newer: all
