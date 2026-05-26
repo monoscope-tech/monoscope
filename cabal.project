@@ -90,4 +90,8 @@ constraints:
   -- Pin pre-5.4 http2: grapesy 1.0.1 doesn't compile against 5.4 yet
   -- (well-typed/grapesy#331). 5.3.11 specifically — 5.3.10's Aux record
   -- construction trips -Werror=missing-strict-field under GHC 9.12.4.
-  http2 ==5.3.11
+  http2 ==5.3.11,
+  -- Pin crypton: jose-jwt 0.10.0 uses ByteArrayAccess (HMAC SHA256), which
+  -- newer crypton releases dropped. 1.0.6 is the last version that still
+  -- exports that instance and is the one stackage curates.
+  crypton ==1.0.6
