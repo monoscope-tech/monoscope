@@ -1,16 +1,18 @@
 packages: .
-with-compiler: ghc-9.12.4
+with-compiler: ghc-9.12.2
 multi-repl: True
 write-ghc-environment-files: always
 jobs: $ncpus
 semaphore: True
+-- import: https://www.stackage.org/nightly-2025-01-20/cabal.config
+-- documentation: True
 
--- Hackage state pinned for reproducibility. Bump along with stackage refresh.
--- Mirrors nightly-2026-05-24's index publication.
-index-state: hackage.haskell.org 2026-05-24T00:00:00Z
+-- with-compiler: ghc-9.8.2
+import: https://www.stackage.org/nightly-2025-11-17/cabal.config
+--import: https://www.stackage.org/lts-24.19/cabal.config
 
--- Loosen build-dep upper bounds across the world. Lets grapesy use newer
--- http2 etc.
+
+-- Override dependencies from stack.yaml
 allow-newer: all
 
 source-repository-package
@@ -51,14 +53,37 @@ source-repository-package
   type: git
   location: https://github.com/well-typed/grapesy.git
   tag: 411b3e173575275cb2c745992dfe6782d2d87115
+  -- tag: 5d51f1e605a184bb426d4be39b90bd5e912a8230
+  -- tag: 51ca5d197147cd2b9a3baf81db4c04c8c7d33fec
   subdir: grapesy
   subdir: grpc-spec
+
+-- source-repository-package
+--   type: git
+--   location: https://github.com/tonyalaribe/opentelemetry-auto
+--   tag: 24ffca5c10b23d90775f6fb2570db052fb57a948
+--   subdir: .
 
 source-repository-package
   type: git
   location: https://github.com/google/ghc-source-gen.git
   tag: 79ecc01213131da03a7198fc377606ce72ac037a
   subdir: .
+
+-- source-repository-package
+--   type: git
+--   location: https://github.com/iand675/hs-opentelemetry
+--   tag: ee8a6dad7db306eb67748ddcd77df4974ad8259e
+--   subdir:   api
+--   subdir:   sdk
+--   subdir:   otlp
+--   subdir:   exporters/otlp
+--   subdir:   propagators/w3c
+--   subdir:   instrumentation/postgresql-simple
+--   subdir:   instrumentation/wai
+--   subdir:   utils/exceptions
+--   subdir:   propagators/datadog
+--   subdir:   propagators/b3
 
 source-repository-package
   type: git
@@ -84,25 +109,13 @@ source-repository-package
   tag: 3a5c00527bcda652a188ee7c54127eea90ce1bb7
   subdir: .
 
--- GHC 9.12 enables -Wmissing-strict-field by default; combined with http2's
--- newly-added strict fields, several transitive deps (http2-tls, warp,
--- servant-openapi3 …) don't compile. Apply the relaxation to every package
--- so we don't have to enumerate which one cabal just elevated.
-package *
-  ghc-options: -Wno-missing-strict-field
-
 constraints:
   streamly ^>=0.10.0,
   effectful-postgresql +enable-otel,
-  -- Pre-5.4 http2: grapesy 1.0.1 doesn't compile against 5.4 yet
-  -- (well-typed/grapesy#331). Must be 5.3.11 specifically — 5.3.10's
-  -- internal Aux record construction is missing a strict field, which
-  -- GHC 9.12 rejects unconditionally (GHC-95909). 5.3.11 ships with
-  -- defaultAux that covers the field. The warp warning relaxation above
-  -- handles 5.3.11's *own* added strict field (confReadNTimeout) that
-  -- warp 3.4.9 doesn't set.
-  http2 ==5.3.11,
-  -- Pin crypton: jose-jwt 0.10.0 uses ByteArrayAccess (HMAC SHA256), which
-  -- newer crypton releases dropped. 1.0.6 is the last version that still
-  -- exports that instance and is the one stackage curates.
-  crypton ==1.0.6
+  jose-jwt +use-crypton,
+  http2 >=5.4.0,
+  warp >=3.4.13,
+  http2-tls >=0.5.3,
+  openapi3 ==3.2.4
+
+allow-newer: all

@@ -3,7 +3,7 @@
 # Rebuilt weekly or when cabal files change
 
 # Bump in lockstep with cabal.project's `with-compiler: ghc-X.Y.Z`.
-ARG GHC_VERSION=9.12.4
+ARG GHC_VERSION=9.12.2
 FROM haskell:${GHC_VERSION}
 
 # Install system dependencies (combined into single layer)
