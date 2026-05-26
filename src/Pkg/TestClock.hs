@@ -9,15 +9,15 @@
 -- through 'syncConnectionTime' before issuing time-sensitive SQL and the
 -- triggers / stored procedures will see the same clock as the Haskell
 -- effect.
-module Pkg.TestClock
-  ( TestClock (..)
-  , newTestClock
-  , advanceTime
-  , setTestTime
-  , getTestTime
-  , runMutableTime
-  , syncConnectionTime
-  ) where
+module Pkg.TestClock (
+  TestClock (..),
+  newTestClock,
+  advanceTime,
+  setTestTime,
+  getTestTime,
+  runMutableTime,
+  syncConnectionTime,
+) where
 
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime, defaultTimeLocale, formatTime)
 import Database.PostgreSQL.Simple (Connection)
