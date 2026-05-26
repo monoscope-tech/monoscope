@@ -253,7 +253,7 @@ lemonSqueezyWebhookTests = do
       it testDesc $ \TestContext{tcResources = tr, tcProjectId = testPid} -> do
         let payload = payloadFn testPid
         let rawBody = BL.toStrict (AE.encode payload)
-        let callWebhook = void $ toBaseServantResponse tr.trATCtx tr.trLogger $ LemonSqueezy.webhookPostH Nothing rawBody
+        let callWebhook = void $ toBaseServantResponse tr $ LemonSqueezy.webhookPostH Nothing rawBody
         testFn testPid tr.trPool callWebhook
 
 
@@ -371,7 +371,7 @@ replayTests = do
             , userName = Nothing
             }
 
-    result <- toBaseServantResponse tr.trATCtx tr.trLogger $ Replay.replayPostH testPid replayData
+    result <- toBaseServantResponse tr $ Replay.replayPostH testPid replayData
 
     case result of
       AE.Object obj -> do
@@ -397,7 +397,7 @@ replayTests = do
             , userName = Nothing
             }
 
-    result <- toBaseServantResponse tr.trATCtx tr.trLogger $ Replay.replayPostH testPid replayData
+    result <- toBaseServantResponse tr $ Replay.replayPostH testPid replayData
 
     case result of
       AE.Object obj -> do

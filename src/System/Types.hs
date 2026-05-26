@@ -33,7 +33,6 @@ import Data.Effectful.Notify qualified
 import Data.Effectful.UUID (UUIDEff, runStaticUUIDRef, runUUID)
 import Data.Effectful.Wreq (HTTP, runHTTPGolden, runHTTPWreq)
 import Data.Map qualified as Map
-import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Effectful
 import Effectful.Concurrent.Async (Concurrent, runConcurrent)
@@ -43,7 +42,8 @@ import Effectful.Labeled (Labeled, runLabeled)
 import Effectful.Log (Log)
 import Effectful.Reader.Static qualified
 import Effectful.State.Static.Local qualified as State
-import Effectful.Time (Time, runFrozenTime, runTime)
+import Effectful.Time (Time, runTime)
+import Pkg.TestClock (TestClock, runMutableTime)
 import Log qualified
 import Models.Projects.Projects qualified as Sessions
 import OpenTelemetry.Trace (TracerProvider)
@@ -148,11 +148,13 @@ effToServantHandler env logger tp app =
 
 
 -- | `effToServantHandler` exists specifically to be used in tests,
--- so the UUID and Time effects are fixed to constants. The IORef holds a
+-- so the UUID effect is fixed to a deterministic pool. The IORef holds a
 -- pre-populated pool of deterministic UUIDs shared across multiple handler
 -- invocations in the same test (so creates in a loop get distinct ids).
-effToServantHandlerTest :: IORef [UUID.UUID] -> AuthContext -> Log.Logger -> TracerProvider -> ATBaseCtx a -> Servant.Handler a
-effToServantHandlerTest uuidRef env logger tp app =
+-- The 'TestClock' drives the 'Time' effect and is shared across handler
+-- invocations so tests can advance time between calls.
+effToServantHandlerTest :: TestClock -> IORef [UUID.UUID] -> AuthContext -> Log.Logger -> TracerProvider -> ATBaseCtx a -> Servant.Handler a
+effToServantHandlerTest clock uuidRef env logger tp app =
   app
     & ELLM.runLLMGolden "./tests/golden/"
     & Effectful.Reader.Static.runReader env
@@ -160,7 +162,7 @@ effToServantHandlerTest uuidRef env logger tp app =
     & runHTTPGolden "./tests/golden/"
     & runHasqlPool env.hasqlPool
     & runLabeled @"timefusion" (runHasqlPool env.hasqlTimefusionPool)
-    & runFrozenTime (Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime)
+    & runMutableTime clock
     & Logging.runLog (show env.config.environment) logger env.config.logLevel
     & Tracing.runTracing tp
     & runConcurrent

@@ -39,7 +39,7 @@ spec = aroundAll withTestResources do
 
       response <-
         clientMetadataH (Just apiKey)
-          & effToServantHandlerTest trUUIDRef trATCtx trLogger trTracerProvider
+          & effToServantHandlerTest trTestClock trUUIDRef trATCtx trLogger trTracerProvider
           & ServantS.runHandler
           <&> fromRightShow
       response.projectId `shouldBe` expectedClientMetadata.projectId
@@ -50,7 +50,7 @@ spec = aroundAll withTestResources do
       let invalidApiKey = Just "invalid-api-key"
       response <-
         clientMetadataH invalidApiKey
-          & effToServantHandlerTest trUUIDRef trATCtx trLogger trTracerProvider
+          & effToServantHandlerTest trTestClock trUUIDRef trATCtx trLogger trTracerProvider
           & ServantS.runHandler
 
       response `shouldSatisfy` isLeft
