@@ -266,6 +266,7 @@ library:
     - network-uri
     - scotty
     - filepath
+    - file-embed
     - http-client
     - wai-middleware-static
     - template-haskell

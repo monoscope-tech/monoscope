@@ -44,13 +44,15 @@ mkPattern :: Text -> Text -> Text -> Maybe Text -> Int64 -> LogPatterns.UpsertPa
 mkPattern hash pat srcField lvl cnt = LogPatterns.UpsertPattern
   { projectId = pid, logPattern = pat, hash, sourceField = srcField
   , serviceName = Just "test-svc", logLevel = lvl
-  , traceId = Nothing, sampleMessage = Just pat, eventCount = cnt }
+  , traceId = Nothing, sampleMessage = Just pat, eventCount = cnt
+  , isError = lvl == Just "ERROR" }
 
 mkPatternWithSample :: Text -> Text -> Text -> Maybe Text -> Int64 -> Text -> LogPatterns.UpsertPattern
 mkPatternWithSample hash pat srcField lvl cnt sample = LogPatterns.UpsertPattern
   { projectId = pid, logPattern = pat, hash, sourceField = srcField
   , serviceName = Just "test-svc", logLevel = lvl
-  , traceId = Nothing, sampleMessage = Just sample, eventCount = cnt }
+  , traceId = Nothing, sampleMessage = Just sample, eventCount = cnt
+  , isError = lvl == Just "ERROR" }
 
 
 -- | Count issues of a given type
