@@ -112,7 +112,6 @@ import Effectful.Labeled (runLabeled)
 import Effectful.Log (Log)
 import Effectful.Reader.Static qualified
 import Effectful.Time (Time, runTime)
-import Pkg.TestClock (TestClock, advanceTime, getTestTime, newTestClock, runMutableTime, setTestTime, syncConnectionTime)
 import Hasql.Pool qualified as HPool
 import Log qualified
 import Log.Backend.StandardOutput.Bulk qualified as LogBulk
@@ -135,6 +134,7 @@ import Pages.Settings qualified as Api
 import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), mkHasqlPool)
 import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Pkg.SchemaLearning.Worker qualified as SchemaWorker
+import Pkg.TestClock (TestClock, advanceTime, getTestTime, newTestClock, runMutableTime, setTestTime, syncConnectionTime)
 import Pkg.TraceSessionCache qualified as TSC
 import ProcessMessage qualified
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
