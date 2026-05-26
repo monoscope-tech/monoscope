@@ -4,15 +4,13 @@ multi-repl: True
 write-ghc-environment-files: always
 jobs: $ncpus
 semaphore: True
--- import: https://www.stackage.org/nightly-2025-01-20/cabal.config
--- documentation: True
 
--- with-compiler: ghc-9.8.2
-import: https://www.stackage.org/nightly-2026-05-24/cabal.config
---import: https://www.stackage.org/lts-24.19/cabal.config
+-- Hackage state pinned for reproducibility. Bump along with stackage refresh.
+-- Mirrors nightly-2026-05-24's index publication.
+index-state: hackage.haskell.org 2026-05-24T00:00:00Z
 
-
--- Override dependencies from stack.yaml
+-- Loosen build-dep upper bounds across the world. Lets grapesy use newer
+-- http2 etc.
 allow-newer: all
 
 source-repository-package
@@ -39,56 +37,28 @@ source-repository-package
   tag: 893368e6010a87c3a2d33227af675b4fb8fe411f
   subdir: .
 
--- proto-lens 0.7.1.7 now lives in stackage nightly-2026-05-24; the tonyalaribe
--- fork pinned 0.7.1.6 which conflicts. Re-introduce the fork only if a
--- protoc-side patch is needed again.
--- source-repository-package
---   type: git
---   location: https://github.com/tonyalaribe/proto-lens
---   tag: 0199b421a2e5ae03285adcd59711f9fbca7c126e
---   subdir: proto-lens-setup
---   subdir: proto-lens-protoc
---   subdir: proto-lens-runtime
---   subdir: proto-lens
---   subdir: proto-lens-protobuf-types
+source-repository-package
+  type: git
+  location: https://github.com/tonyalaribe/proto-lens
+  tag: 0199b421a2e5ae03285adcd59711f9fbca7c126e
+  subdir: proto-lens-setup
+  subdir: proto-lens-protoc
+  subdir: proto-lens-runtime
+  subdir: proto-lens
+  subdir: proto-lens-protobuf-types
 
 source-repository-package
   type: git
   location: https://github.com/well-typed/grapesy.git
   tag: 411b3e173575275cb2c745992dfe6782d2d87115
-  -- tag: 5d51f1e605a184bb426d4be39b90bd5e912a8230
-  -- tag: 51ca5d197147cd2b9a3baf81db4c04c8c7d33fec
   subdir: grapesy
   subdir: grpc-spec
 
--- source-repository-package
---   type: git
---   location: https://github.com/tonyalaribe/opentelemetry-auto
---   tag: 24ffca5c10b23d90775f6fb2570db052fb57a948
---   subdir: .
-
--- ghc-source-gen 0.4.7.0 now lives in stackage nightly-2026-05-24; the google
--- pin gave 0.4.6.0 which conflicts.
--- source-repository-package
---   type: git
---   location: https://github.com/google/ghc-source-gen.git
---   tag: 79ecc01213131da03a7198fc377606ce72ac037a
---   subdir: .
-
--- source-repository-package
---   type: git
---   location: https://github.com/iand675/hs-opentelemetry
---   tag: ee8a6dad7db306eb67748ddcd77df4974ad8259e
---   subdir:   api
---   subdir:   sdk
---   subdir:   otlp
---   subdir:   exporters/otlp
---   subdir:   propagators/w3c
---   subdir:   instrumentation/postgresql-simple
---   subdir:   instrumentation/wai
---   subdir:   utils/exceptions
---   subdir:   propagators/datadog
---   subdir:   propagators/b3
+source-repository-package
+  type: git
+  location: https://github.com/google/ghc-source-gen.git
+  tag: 79ecc01213131da03a7198fc377606ce72ac037a
+  subdir: .
 
 source-repository-package
   type: git
@@ -116,5 +86,6 @@ source-repository-package
 
 constraints:
   streamly ^>=0.10.0,
-  effectful-postgresql +enable-otel
-allow-newer: all
+  effectful-postgresql +enable-otel,
+  -- http2 5.4 has API breaks grapesy hasn't adopted yet (well-typed/grapesy#331).
+  http2 <5.4
