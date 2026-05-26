@@ -604,7 +604,7 @@ runTestEffect pool hpool logger tp action = do
 -- that go through @app_now()@ on a connection that's been synced via
 -- 'syncConnectionTime' see the same clock too.
 runTestBg :: UTCTime -> TestResources -> ATBackgroundCtx a -> IO a
-runTestBg t TestResources{..} = \action -> do
+runTestBg t TestResources{..} action = do
   setTestTime trTestClock t
   (notifications, result) <- runTestBackgroundWithClock trTestClock trLogger trATCtx action
   logNotifications trATCtx trLogger notifications

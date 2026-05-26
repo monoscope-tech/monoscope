@@ -43,7 +43,7 @@ testTimeRange = (toText $ iso8601Show $ addUTCTime (-3600) frozenTime, toText $ 
 queryLogs :: TestResources -> Maybe Text -> IO Log.LogsGet
 queryLogs tr queryM = do
   let (timeFrom, timeTo) = testTimeRange
-  (_, result) <- toServantResponse tr.trATCtx tr.trSessAndHeader tr.trLogger
+  (_, result) <- toServantResponse tr
     $ Log.apiLogH pid queryM Nothing Nothing Nothing (Just timeFrom) (Just timeTo) Nothing (Just "spans") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
   pure result
 
@@ -54,7 +54,7 @@ queryLogsViz tr queryM vizType = queryLogsVizSorted tr queryM vizType Nothing
 queryLogsVizSorted :: TestResources -> Maybe Text -> Text -> Maybe Text -> IO Log.LogsGet
 queryLogsVizSorted tr queryM vizType sortByM = do
   let (timeFrom, timeTo) = testTimeRange
-  (_, result) <- toServantResponse tr.trATCtx tr.trSessAndHeader tr.trLogger
+  (_, result) <- toServantResponse tr
     $ Log.apiLogH pid queryM Nothing Nothing Nothing (Just timeFrom) (Just timeTo) Nothing (Just "spans") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") (Just vizType) Nothing Nothing Nothing sortByM
   pure result
 
@@ -316,7 +316,7 @@ spec = aroundAll withTestResources do
           ingestSessionEvent tr key ("GET /expand/" <> show i) [("session.id", "expand-sess"), ("user.id", "eu1")] False frozenTime
         void $ runAllBackgroundJobs frozenTime tr.trATCtx
         let (timeFrom, timeTo) = testTimeRange
-        (_, expandResult) <- toServantResponse tr.trATCtx tr.trSessAndHeader tr.trLogger
+        (_, expandResult) <- toServantResponse tr
           $ Log.apiLogExpandH pid (Just "session") (Just "expand-sess") Nothing Nothing Nothing (Just timeFrom) (Just timeTo)
         let field k = case expandResult of AE.Object o -> KM.lookup (fromText k) o; _ -> Nothing
             rows = fromMaybe [] $ AE.decode @[AE.Value] . AE.encode =<< field "rows"
@@ -328,14 +328,14 @@ spec = aroundAll withTestResources do
 
       it "Test 11.5: expand endpoint rejects missing key with 400" $ \tr -> do
         let (timeFrom, timeTo) = testTimeRange
-        (do (h, _) <- toServantResponse tr.trATCtx tr.trSessAndHeader tr.trLogger
+        (do (h, _) <- toServantResponse tr
               (Log.apiLogExpandH pid (Just "session") Nothing Nothing Nothing Nothing (Just timeFrom) (Just timeTo))
             evaluate h >> pass)
           `shouldThrow` \(ErrorCall msg) -> "400" `isInfixOf` msg
 
       it "Test 11.6: expand endpoint rejects invalid kind with 400" $ \tr -> do
         let (timeFrom, timeTo) = testTimeRange
-        (do (h, _) <- toServantResponse tr.trATCtx tr.trSessAndHeader tr.trLogger
+        (do (h, _) <- toServantResponse tr
               (Log.apiLogExpandH pid (Just "invalid") (Just "some-key") Nothing Nothing Nothing (Just timeFrom) (Just timeTo))
             evaluate h >> pass)
           `shouldThrow` \(ErrorCall msg) -> "400" `isInfixOf` msg
@@ -388,7 +388,7 @@ spec = aroundAll withTestResources do
         -- Expanding the shared session with the external-email filter must
         -- also return zero rows (fetchEventExamples path).
         let (timeFrom, timeTo) = testTimeRange
-        (_, expandResult) <- toServantResponse tr.trATCtx tr.trSessAndHeader tr.trLogger
+        (_, expandResult) <- toServantResponse tr
           $ Log.apiLogExpandH pid (Just "session") (Just leakSess)
               Nothing
               (Just ("attributes.user.email == \"" <> leakEmail <> "\""))
@@ -439,7 +439,7 @@ spec = aroundAll withTestResources do
                   (session_id, project_id, last_event_at, user_id, user_email, user_name)
                 VALUES (?, ?, ?, 'leaked-user', 'leaked@external.com', 'Leaked Name') |]
           (sharedSessionId, otherPid, frozenTime)
-        (_, result) <- toServantResponse tr.trATCtx tr.trSessAndHeader tr.trLogger
+        (_, result) <- toServantResponse tr
           $ Replay.replaySessionGetH pid sharedSessionId
         let lookupKey k = case result of AE.Object o -> KM.lookup (fromText k) o; _ -> Nothing
         lookupKey "userEmail" `shouldSatisfy` (`elem` [Nothing, Just AE.Null])
