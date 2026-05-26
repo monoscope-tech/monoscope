@@ -87,5 +87,7 @@ source-repository-package
 constraints:
   streamly ^>=0.10.0,
   effectful-postgresql +enable-otel,
-  -- http2 5.4 has API breaks grapesy hasn't adopted yet (well-typed/grapesy#331).
-  http2 <5.4
+  -- Pin pre-5.4 http2: grapesy 1.0.1 doesn't compile against 5.4 yet
+  -- (well-typed/grapesy#331). 5.3.11 specifically — 5.3.10's Aux record
+  -- construction trips -Werror=missing-strict-field under GHC 9.12.4.
+  http2 ==5.3.11
