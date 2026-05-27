@@ -1618,9 +1618,10 @@ code, pre, .code, .monospace {
     display: none !important;
   }
 
-  /* Like surface-raised but transparent — border, radius, and shadow only */
+  /* Table panel surface — matches surface-raised so list/table pages elevate
+     above the page background in dark mode. */
   .surface-table {
-    @apply border border-strokeWeak rounded-xl;
+    @apply bg-fillWeaker border border-strokeWeak rounded-xl;
   }
 
   :root {
