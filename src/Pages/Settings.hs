@@ -1058,9 +1058,16 @@ createStripeCheckoutSession trialEligible apiKey hostUrl pid plan priceIdGraduat
         , ("line_items[1][price]", encodeUtf8 priceIdOverage)
         ]
       trialParams = [("subscription_data[trial_period_days]", "30") | trialEligible && plan /= "SystemsPricing"]
+      -- Stripe Managed Payments (MoR): Stripe collects + remits tax, needs address + tax IDs.
+      managedPaymentsParams =
+        [ ("automatic_tax[enabled]", "true")
+        , ("billing_address_collection", "required")
+        , ("tax_id_collection[enabled]", "true")
+        ]
       params =
         prices
           <> trialParams
+          <> managedPaymentsParams
           <> [ ("mode", "subscription")
              , ("client_reference_id", encodeUtf8 pid.toText)
              , ("metadata[project_id]", encodeUtf8 pid.toText)
