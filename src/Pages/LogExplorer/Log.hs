@@ -429,12 +429,15 @@ facetDefs =
 
 -- | Render facet data for Log Explorer sidebar in a compact format.
 -- The facet counts are scaled in the upstream summary based on the selected time range.
+-- | 'facetDefs' bucketed by 'FacetGroup', built once at module load time.
+-- 'flip (<>)' preserves source order under Map.fromListWith (which calls f new old).
+facetsByGroup :: Map.Map FacetGroup [Facet]
+facetsByGroup = Map.fromListWith (flip (<>)) [(f.group, [f]) | f <- facetDefs]
+
+
 renderFacets :: FacetSummary -> Html ()
 renderFacets facetSummary = do
   let (FacetData facetMap) = facetSummary.facetJson
-      -- flip (<>) preserves source order under Map.fromListWith (which calls f new old).
-      byGroup :: Map.Map FacetGroup [Facet]
-      byGroup = Map.fromListWith (flip (<>)) [(f.group, [f]) | f <- facetDefs]
 
   -- JS: emit / sync canonical KQL fragments using dotted paths.
   script_
@@ -471,7 +474,7 @@ renderFacets facetSummary = do
   {- HLINT ignore "Use universe" -}
   let allGroups = [minBound .. maxBound] :: [FacetGroup]
   forM_ allGroups \g ->
-    renderFacetSection (facetGroupLabel g) (Map.findWithDefault [] g byGroup) facetMap (g /= FGCommon)
+    renderFacetSection (facetGroupLabel g) (Map.findWithDefault [] g facetsByGroup) facetMap (g /= FGCommon)
   where
     renderFacetSection :: Text -> [Facet] -> HM.HashMap Text [FacetValue] -> Bool -> Html ()
     renderFacetSection sectionName fs facetMap collapsed = do

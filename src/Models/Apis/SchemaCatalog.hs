@@ -276,18 +276,10 @@ upsertSummary rows = unless (V.null rows) $ do
              SET doc = EXCLUDED.doc, generated_at = EXCLUDED.generated_at |]
 
 
--- | Skip a project if its summary was updated this recently — coalesces
--- many flush passes on noisy projects into one write. Shorter than the
--- flush interval; well within facet-UI staleness tolerance.
---
--- 'Text' because Hasql's @::interval@ SQL cast accepts a string literal and
--- no @NominalDiffTime@-to-@interval@ encoder is registered in this codebase.
-summaryFreshnessCutoff :: Text
-summaryFreshnessCutoff = "30 seconds"
-
-
 -- | Of the supplied projects, returns those whose @apis.schema_summary@ was
--- updated within 'summaryFreshnessCutoff'.
+-- updated within the last 30 s. The window coalesces many flush passes on
+-- noisy projects into one write; shorter than the flush interval and well
+-- within facet-UI staleness tolerance.
 freshSummaryProjects
   :: DB es
   => V.Vector Projects.ProjectId
@@ -299,7 +291,7 @@ freshSummaryProjects pids
         Hasql.interp
           [HI.sql| SELECT project_id FROM apis.schema_summary
                    WHERE project_id = ANY(#{pids}::uuid[])
-                     AND generated_at > now() - (#{summaryFreshnessCutoff} :: interval) |]
+                     AND generated_at > now() - interval '30 seconds' |]
       pure $ HS.fromList (coerce rows)
 
 

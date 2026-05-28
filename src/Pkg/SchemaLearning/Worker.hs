@@ -212,11 +212,7 @@ summariseEntries entries =
   let fieldsAcc =
         V.foldl' mergeFields HM.empty
           $ V.map ((.template.fields)) entries
-      svcs =
-        V.fromList
-          $ HS.toList
-          $ HS.fromList
-          $ catMaybes [e.scope.service | e <- V.toList entries]
+      svcs = V.fromList . ordNub . mapMaybe (.scope.service) $ V.toList entries
       topVals :: HashMap Text TopK
       topVals = V.foldl' mergeCounts HM.empty (V.map (.counts) entries)
    in SummaryDoc{fields = fieldsAcc, services = svcs, topValuesByField = topVals}
