@@ -335,11 +335,11 @@ toFacetSummary pid tableName doc =
             [ (prefixed cat path, [(v, fromIntegral n :: Int)])
             | (path, tk) <- HM.toList doc.topValuesByField
             , -- Fallback: a path in topValuesByField but absent from
-              -- doc.fields is an internal invariant violation (the walker
-              -- always co-records both). FCAttribute is the common case;
-              -- worst outcome is a wrong prefix → unmatched in the renderer,
-              -- not data loss.
-              let cat = maybe Catalog.FCAttribute (.category) (HM.lookup path doc.fields)
+            -- doc.fields is an internal invariant violation (the walker
+            -- always co-records both). FCAttribute is the common case;
+            -- worst outcome is a wrong prefix → unmatched in the renderer,
+            -- not data loss.
+            let cat = maybe Catalog.FCAttribute (.category) (HM.lookup path doc.fields)
             , (v, n) <- HM.toList tk.top
             ]
     }
