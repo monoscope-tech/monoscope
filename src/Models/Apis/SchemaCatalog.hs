@@ -329,18 +329,22 @@ toFacetSummary pid tableName doc =
     , tableName = tableName
     , facetJson =
         Catalog.FacetData
-          $ HM.fromList
-            [ (prefixed cat path, topKToFacetValues tk)
+          $ fmap mergeAndSort
+          $ HM.fromListWith (<>)
+            [ (prefixed cat path, [(v, fromIntegral n :: Int)])
             | (path, tk) <- HM.toList doc.topValuesByField
             , let cat = maybe Catalog.FCAttribute (.category) (HM.lookup path doc.fields)
+            , (v, n) <- HM.toList tk.top
             ]
     }
   where
-    topKToFacetValues :: Catalog.TopK -> [Catalog.FacetValue]
-    topKToFacetValues tk =
-      sortOn
-        (negate . (.count))
-        [Catalog.FacetValue v (fromIntegral n) | (v, n) <- HM.toList tk.top]
+    -- Two distinct catalog paths could in principle prefix to the same key
+    -- (a category mismatch would do it). Merge their counts rather than
+    -- silently dropping one, then sort descending.
+    mergeAndSort :: [(Text, Int)] -> [Catalog.FacetValue]
+    mergeAndSort pairs =
+      sortOn (negate . (.count))
+        [Catalog.FacetValue v n | (v, n) <- HM.toList (HM.fromListWith (+) pairs)]
 
     prefixed :: Catalog.FieldCategoryEnum -> Text -> Text
     prefixed cat path = case cat of

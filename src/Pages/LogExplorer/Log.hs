@@ -325,7 +325,7 @@ rowCountDisplay_ suffix countText suffixText =
 
 -- | Visual grouping for the sidebar. Each group renders one collapsible section.
 data FacetGroup = FGCommon | FGHTTP | FGResource | FGUserSession | FGDatabase | FGErrors
-  deriving stock (Bounded, Enum, Eq, Ord, Show)
+  deriving stock (Bounded, Enum, Eq, Ord)
 
 
 facetGroupLabel :: FacetGroup -> Text

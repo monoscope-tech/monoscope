@@ -23,8 +23,7 @@ import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Simple.ToRow qualified
-import Database.PostgreSQL.Simple.Types qualified
+import Database.PostgreSQL.Simple.Types (PGArray (..))
 import Models.Apis.SchemaCatalog qualified as SC
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId (..))
@@ -48,25 +47,25 @@ mkPid n = UUIDId (UUID.fromWords 0 0 0 (fromIntegral n))
 
 clearAll :: TestResources -> [Projects.ProjectId] -> IO ()
 clearAll tr pids = do
-  let exec :: forall ps. Database.PostgreSQL.Simple.ToRow.ToRow ps => Database.PostgreSQL.Simple.Types.Query -> ps -> IO ()
-      exec q ps = void $ withPool tr.trPool $ DBT.execute q ps
+  let arr = PGArray pids
   -- FK targets: every test pid needs a row in projects.projects, otherwise
-  -- anomaly + summary inserts fail with FK violations.
-  forM_ pids \p ->
-    exec
-      [sql| INSERT INTO projects.projects (id, title, payment_plan, active, deleted_at, weekly_notif, daily_notif)
-            VALUES (?, 'facets-test', 'Free', true, NULL, false, false)
-            ON CONFLICT (id) DO NOTHING |]
-      (Only p)
-  forM_ pids \p -> do
-    exec [sql| DELETE FROM apis.schema_catalog WHERE project_id = ? |] (Only p)
-    exec [sql| DELETE FROM apis.schema_summary WHERE project_id = ? |] (Only p)
-    exec [sql| DELETE FROM apis.anomalies WHERE project_id = ? |] (Only p)
-  exec
-    [sql| DELETE FROM apis.schema_template
-          WHERE NOT EXISTS (SELECT 1 FROM apis.schema_catalog
-                            WHERE template_hash = apis.schema_template.template_hash) |]
-    ()
+  -- anomaly + summary inserts fail with FK violations. One round-trip each.
+  void $ withPool tr.trPool $ do
+    _ <-
+      DBT.execute
+        [sql| INSERT INTO projects.projects (id, title, payment_plan, active, deleted_at, weekly_notif, daily_notif)
+              SELECT id, 'facets-test', 'Free', true, NULL, false, false
+              FROM unnest(?::uuid[]) AS id
+              ON CONFLICT (id) DO NOTHING |]
+        (Only arr)
+    _ <- DBT.execute [sql| DELETE FROM apis.schema_catalog WHERE project_id = ANY(?::uuid[]) |] (Only arr)
+    _ <- DBT.execute [sql| DELETE FROM apis.schema_summary WHERE project_id = ANY(?::uuid[]) |] (Only arr)
+    _ <- DBT.execute [sql| DELETE FROM apis.anomalies WHERE project_id = ANY(?::uuid[]) |] (Only arr)
+    DBT.execute
+      [sql| DELETE FROM apis.schema_template
+            WHERE NOT EXISTS (SELECT 1 FROM apis.schema_catalog
+                              WHERE template_hash = apis.schema_template.template_hash) |]
+      ()
 
 
 keyHashFor :: Projects.ProjectId -> Text -> Text -> Text -> Text
