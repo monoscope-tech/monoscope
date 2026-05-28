@@ -333,7 +333,11 @@ toFacetSummary pid tableName doc =
           $ HM.fromListWith
             (<>)
             [ (prefixed cat path, [(v, fromIntegral n :: Int)])
-            | (path, tk) <- HM.toList doc.topValuesByField
+            | -- @n :: Word64@ → @Int@ is safe in practice: Int is 64-bit
+              -- everywhere we run; values are top-K bag counts capped well
+              -- below @maxBound :: Int@. Truncation would only matter at
+              -- ~9.2e18 occurrences.
+              (path, tk) <- HM.toList doc.topValuesByField
             , -- Fallback: a path in topValuesByField but absent from
             -- doc.fields is an internal invariant violation (the walker
             -- always co-records both). FCAttribute is the common case;
@@ -353,6 +357,12 @@ toFacetSummary pid tableName doc =
         (negate . (.count))
         [Catalog.FacetValue v n | (v, n) <- HM.toList (HM.fromListWith (+) pairs)]
 
+    -- 'FacetData' has two consumers: the Log Explorer sidebar (only renders
+    -- entries that match 'facetDefs', all of which are in
+    -- 'flattenedOtelAttributes') and the AI prompt context, which wants the
+    -- full shape including request/response body keys. So
+    -- @body.request.*@ / @body.response.*@ keys are intentionally emitted
+    -- here even though they're unreachable from the sidebar.
     prefixed :: Catalog.FieldCategoryEnum -> Text -> Text
     prefixed cat path = case cat of
       Catalog.FCAttribute -> "attributes." <> path

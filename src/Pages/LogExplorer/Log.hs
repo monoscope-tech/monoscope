@@ -481,9 +481,12 @@ renderFacets facetSummary = do
         div_ [class_ "facets-container mt-1 max-h-0 overflow-hidden peer-checked:max-h-[2000px] transition-[max-height] duration-300"] do
           forM_ (zip [0 ..] fs) \(idx :: Int, f) ->
             whenJust (HM.lookup f.path facetMap) \values -> do
-              let shouldBeExpanded = f.group == FGCommon && idx < 5
-                  key = f.path -- bound once for use across the inner HTML/JS attrs below
-              label_ [class_ "facet-section border-t border-strokeWeak group/facet block contain-[layout_style]", term "data-facet" key] do
+              -- @key@ is f.path aliased once because the field is repeated
+              -- 8+ times across nested HTML attrs + hyperscript below;
+              -- inlining doubles vertical noise without buying anything.
+              let key = f.path
+                  shouldBeExpanded = f.group == FGCommon && idx < 5
+              label_ [class_ "facet-section border-t border-strokeWeak group/facet block contain-[layout_style]"] do
                 input_ $ [type_ "checkbox", class_ "hidden", id_ $ "facet-toggle-" <> key] ++ [checked_ | shouldBeExpanded]
                 div_ [class_ "flex items-center justify-between hover:bg-fillWeak rounded"] do
                   div_ [class_ "p-2 flex items-center gap-2 cursor-pointer flex-1"] do

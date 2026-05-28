@@ -47,26 +47,25 @@ mkPid n = UUIDId (UUID.fromWords 0 0 0 (fromIntegral n))
 
 
 clearAll :: TestResources -> [Projects.ProjectId] -> IO ()
-clearAll tr pids = do
+clearAll tr pids = withPool tr.trPool $ do
   let arr = PGArray pids
+      exec q ps = void (DBT.execute q ps)
   -- FK targets: every test pid needs a row in projects.projects, otherwise
   -- anomaly + summary inserts fail with FK violations. One round-trip each.
-  void $ withPool tr.trPool $ do
-    _ <-
-      DBT.execute
-        [sql| INSERT INTO projects.projects (id, title, payment_plan, active, deleted_at, weekly_notif, daily_notif)
-              SELECT id, 'facets-test', 'Free', true, NULL, false, false
-              FROM unnest(?::uuid[]) AS id
-              ON CONFLICT (id) DO NOTHING |]
-        (Only arr)
-    _ <- DBT.execute [sql| DELETE FROM apis.schema_catalog WHERE project_id = ANY(?::uuid[]) |] (Only arr)
-    _ <- DBT.execute [sql| DELETE FROM apis.schema_summary WHERE project_id = ANY(?::uuid[]) |] (Only arr)
-    _ <- DBT.execute [sql| DELETE FROM apis.anomalies WHERE project_id = ANY(?::uuid[]) |] (Only arr)
-    DBT.execute
-      [sql| DELETE FROM apis.schema_template
-            WHERE NOT EXISTS (SELECT 1 FROM apis.schema_catalog
-                              WHERE template_hash = apis.schema_template.template_hash) |]
-      ()
+  exec
+    [sql| INSERT INTO projects.projects (id, title, payment_plan, active, deleted_at, weekly_notif, daily_notif)
+          SELECT id, 'facets-test', 'Free', true, NULL, false, false
+          FROM unnest(?::uuid[]) AS id
+          ON CONFLICT (id) DO NOTHING |]
+    (Only arr)
+  exec [sql| DELETE FROM apis.schema_catalog WHERE project_id = ANY(?::uuid[]) |] (Only arr)
+  exec [sql| DELETE FROM apis.schema_summary WHERE project_id = ANY(?::uuid[]) |] (Only arr)
+  exec [sql| DELETE FROM apis.anomalies WHERE project_id = ANY(?::uuid[]) |] (Only arr)
+  exec
+    [sql| DELETE FROM apis.schema_template
+          WHERE NOT EXISTS (SELECT 1 FROM apis.schema_catalog
+                            WHERE template_hash = apis.schema_template.template_hash) |]
+    ()
 
 
 keyHashFor :: Projects.ProjectId -> Text -> Text -> Text -> Text
