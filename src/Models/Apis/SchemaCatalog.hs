@@ -330,7 +330,8 @@ toFacetSummary pid tableName doc =
     , facetJson =
         Catalog.FacetData
           $ fmap mergeAndSort
-          $ HM.fromListWith (<>)
+          $ HM.fromListWith
+            (<>)
             [ (prefixed cat path, [(v, fromIntegral n :: Int)])
             | (path, tk) <- HM.toList doc.topValuesByField
             , let cat = maybe Catalog.FCAttribute (.category) (HM.lookup path doc.fields)
@@ -343,7 +344,8 @@ toFacetSummary pid tableName doc =
     -- silently dropping one, then sort descending.
     mergeAndSort :: [(Text, Int)] -> [Catalog.FacetValue]
     mergeAndSort pairs =
-      sortOn (negate . (.count))
+      sortOn
+        (negate . (.count))
         [Catalog.FacetValue v n | (v, n) <- HM.toList (HM.fromListWith (+) pairs)]
 
     prefixed :: Catalog.FieldCategoryEnum -> Text -> Text
