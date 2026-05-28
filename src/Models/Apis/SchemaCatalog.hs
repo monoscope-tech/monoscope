@@ -334,10 +334,10 @@ toFacetSummary pid tableName doc =
             (<>)
             [ (prefixed cat path, [(v, fromIntegral n :: Int)])
             | -- @n :: Word64@ → @Int@ is safe in practice: Int is 64-bit
-              -- everywhere we run; values are top-K bag counts capped well
-              -- below @maxBound :: Int@. Truncation would only matter at
-              -- ~9.2e18 occurrences.
-              (path, tk) <- HM.toList doc.topValuesByField
+            -- everywhere we run; values are top-K bag counts capped well
+            -- below @maxBound :: Int@. Truncation would only matter at
+            -- ~9.2e18 occurrences.
+            (path, tk) <- HM.toList doc.topValuesByField
             , -- Fallback: a path in topValuesByField but absent from
             -- doc.fields is an internal invariant violation (the walker
             -- always co-records both). FCAttribute is the common case;
