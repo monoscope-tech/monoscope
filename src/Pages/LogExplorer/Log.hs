@@ -468,8 +468,9 @@ renderFacets facetSummary = do
     });
   |]
 
-  forM_ universe \g ->
-    renderFacetSection (facetGroupLabel g) (Map.findWithDefault [] g facetsByGroup) facetMap (g /= FGCommon)
+  forM_ universe \g -> do
+    let fs = filter (\f -> HM.member f.path facetMap) (Map.findWithDefault [] g facetsByGroup)
+    unless (null fs) $ renderFacetSection (facetGroupLabel g) fs facetMap (g /= FGCommon)
   where
     renderFacetSection :: Text -> [Facet] -> HM.HashMap Text [FacetValue] -> Bool -> Html ()
     renderFacetSection sectionName fs facetMap collapsed = do
