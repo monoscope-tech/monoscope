@@ -361,12 +361,25 @@ data Facet = Facet
 -- | The full facet list. Order within each group is preserved in the sidebar.
 --
 -- Every entry must be in 'Pkg.Parser.Expr.flattenedOtelAttributes' so KQL
--- compiles the click-to-filter expression to a flat-column scan. Some
--- otherwise-natural facets are deliberately absent because they live in
--- top-level columns rather than @attributes.@ / @resource.@ — `level`,
--- `name` (Operation Name), `kind`, `status_code`, `status_message`, and
--- the `severity.*` group are flat columns the catalog walk doesn't emit
--- yet. Adding a naive entry for them would fail 'prop_facetsAreFast'.
+-- compiles the click-to-filter expression to a flat-column scan rather than
+-- a jsonb_path lookup.
+--
+-- A few facets that existed in the prior tuple-based sidebar are
+-- intentionally absent here:
+--
+--   * @level@, @name@ (Operation Name), @kind@, @status_code@,
+--     @status_message@, @severity.*@ — flat columns at the top level of
+--     @otel_logs_and_spans@. The schema-learning walk doesn't emit these
+--     paths (it walks @attributes@ / @resource@ / @body@ / @events@), so
+--     they'd render empty even if listed.
+--   * @attributes.network.*@, @attributes.client.address@,
+--     @attributes.server.address@, @attributes.error.type@,
+--     @attributes.session.previous.id@, @attributes.db.response.status_code@,
+--     @attributes.http.response.status_code@ subgroups beyond what's listed,
+--     etc. — not yet in 'flattenedOtelAttributes'. Adding them naively here
+--     fails 'prop_facetsAreFast'. The right path is to (a) confirm the flat
+--     column exists, (b) add the dotted path to the whitelist, (c) then list
+--     it here.
 --
 -- >>> import qualified Pkg.Parser.Expr as PE
 -- >>> import qualified Data.Set as S
@@ -418,6 +431,12 @@ facetDefs =
 renderFacets :: FacetSummary -> Html ()
 renderFacets facetSummary = do
   let (FacetData facetMap) = facetSummary.facetJson
+      -- One pass over facetDefs → Map FacetGroup [Facet], then O(1) lookups
+      -- below. Keeps the render loop linear regardless of list growth.
+      -- @flip (<>)@ preserves source order: fromListWith calls
+      -- @f new old@, so we want @old <> new@ to keep earlier-listed facets first.
+      byGroup :: Map.Map FacetGroup [Facet]
+      byGroup = Map.fromListWith (flip (<>)) [(f.group, [f]) | f <- facetDefs]
 
   -- JS: emit / sync canonical KQL fragments using dotted paths.
   script_
@@ -449,7 +468,7 @@ renderFacets facetSummary = do
   |]
 
   forM_ [minBound .. maxBound :: FacetGroup] \g ->
-    renderFacetSection (facetGroupLabel g) (filter ((== g) . (.group)) facetDefs) facetMap (g /= FGCommon)
+    renderFacetSection (facetGroupLabel g) (Map.findWithDefault [] g byGroup) facetMap (g /= FGCommon)
   where
     renderFacetSection :: Text -> [Facet] -> HM.HashMap Text [FacetValue] -> Bool -> Html ()
     renderFacetSection sectionName fs facetMap collapsed = do
@@ -463,7 +482,7 @@ renderFacets facetSummary = do
           forM_ (zip [0 ..] fs) \(idx :: Int, f) ->
             whenJust (HM.lookup f.path facetMap) \values -> do
               let shouldBeExpanded = f.group == FGCommon && idx < 5
-                  key = f.path
+                  key = f.path -- bound once for use across the inner HTML/JS attrs below
               label_ [class_ "facet-section border-t border-strokeWeak group/facet block contain-[layout_style]", term "data-facet" key] do
                 input_ $ [type_ "checkbox", class_ "hidden", id_ $ "facet-toggle-" <> key] ++ [checked_ | shouldBeExpanded]
                 div_ [class_ "flex items-center justify-between hover:bg-fillWeak rounded"] do

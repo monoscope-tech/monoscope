@@ -260,7 +260,9 @@ getSummary pid =
 
 -- | Batched per-project summary upsert. One round trip regardless of how many
 -- projects were touched in the flush. Callers feed a vector of (project, doc)
--- pairs; empty input is a no-op.
+-- pairs; **an empty vector is a no-op** (no SQL emitted) — important for
+-- callers that build the batch eagerly and might end up with zero rows after
+-- filtering (e.g. all touched projects were skip-if-fresh).
 upsertSummary :: DB es => V.Vector (Projects.ProjectId, Catalog.SummaryDoc) -> Eff es ()
 upsertSummary rows = unless (V.null rows) $ do
   let pids = V.map fst rows
@@ -332,7 +334,12 @@ toFacetSummary pid tableName doc =
             (<>)
             [ (prefixed cat path, [(v, fromIntegral n :: Int)])
             | (path, tk) <- HM.toList doc.topValuesByField
-            , let cat = maybe Catalog.FCAttribute (.category) (HM.lookup path doc.fields)
+            , -- Fallback: a path in topValuesByField but absent from
+              -- doc.fields is an internal invariant violation (the walker
+              -- always co-records both). FCAttribute is the common case;
+              -- worst outcome is a wrong prefix → unmatched in the renderer,
+              -- not data loss.
+              let cat = maybe Catalog.FCAttribute (.category) (HM.lookup path doc.fields)
             , (v, n) <- HM.toList tk.top
             ]
     }
