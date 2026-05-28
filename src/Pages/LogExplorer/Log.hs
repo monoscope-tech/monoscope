@@ -545,6 +545,9 @@ renderFacets facetSummary = do
                   let valuesWithIndices = zip [0 :: Int ..] values
                       (visibleValues, hiddenValues) = splitAt 5 valuesWithIndices
                       hiddenCount = length hiddenValues
+                      -- val is an observed attribute value; jsEscape it
+                      -- before embedding in the JS single-quoted onclick.
+                      jsEscape t = T.replace "'" "\\'" (T.replace "\\" "\\\\" t)
                       renderFacetValue (FacetValue val count) =
                         label_ [class_ "facet-item flex items-center justify-between py-0.5 max-md:py-1.5 px-1 hover:bg-fillWeak rounded cursor-pointer will-change-[background-color]"] do
                           div_ [class_ "flex items-center gap-2 min-w-0 flex-1"] do
@@ -552,7 +555,7 @@ renderFacets facetSummary = do
                               [ type_ "checkbox"
                               , class_ "checkbox checkbox-xs max-md:checkbox-sm"
                               , name_ f.path
-                              , onclick_ $ "filterByFacet('" <> f.path <> "', '" <> val <> "')"
+                              , onclick_ $ "filterByFacet('" <> f.path <> "', '" <> jsEscape val <> "')"
                               , term "data-tippy-content" (f.path <> " == \"" <> val <> "\"")
                               , term "data-field" f.path
                               , term "data-value" val

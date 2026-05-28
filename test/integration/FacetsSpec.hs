@@ -189,6 +189,9 @@ spec = aroundAll withTestResources $
           sumM <- runHasqlEffect tr $ SC.getSummary p
           sumM `shouldSatisfy` isJust
 
+      -- Relies on 'upsertSummary' stamping @now()@ at seed time and the
+      -- whole test completing well inside the 30 s freshness window —
+      -- both safe in practice.
       it "skip-if-fresh: projects refreshed within 30s are excluded from the next pass" $ \tr -> do
         let freshP = mkPid 11
             otherPs = [mkPid 12, mkPid 13]

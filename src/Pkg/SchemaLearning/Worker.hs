@@ -186,6 +186,10 @@ regenerateSummaries projects entriesMap = do
       -- Partition entries by project_id, restricted to projects we'll
       -- actually summarise. List (<>) keeps per-insert O(1); V.++ would be
       -- quadratic.
+      -- TODO(perf): O(|entriesMap|) — scans every entry in the shard even
+      -- when only a few projects are stale. Acceptable while shards hold
+      -- thousands of entries; revisit once the shard grows large enough that
+      -- a per-project index in 'SchemaShardState' is worth carrying.
       byProject :: HM.HashMap Projects.ProjectId (V.Vector CatalogEntry)
       byProject =
         V.fromList

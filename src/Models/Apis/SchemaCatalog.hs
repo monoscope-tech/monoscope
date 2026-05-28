@@ -327,15 +327,18 @@ toFacetSummary pid tableName doc =
     { id = UUID.nil -- summary is not row-identified; legacy callers don't depend on this
     , projectId = pid.toText
     , tableName = tableName
-    , facetJson =
+    , -- Each (path, category) deterministically produces a unique prefixed
+      -- key (paths are unique in topValuesByField; @prefixed@ is injective
+      -- per-category), so plain HM.fromList suffices — no collision merge
+      -- needed. Word64→Int on counts is safe: bag sizes are well below
+      -- maxBound.
+      facetJson =
         Catalog.FacetData
-          $ mergeAndSort
-          <$> HM.fromListWith
-            (<>)
-            -- Word64→Int safe: counts are bag sizes well below maxBound.
-            [ (prefixed (fieldCat path) path, [(v, fromIntegral n :: Int)])
+          $ HM.fromList
+            [ ( prefixed (fieldCat path) path
+              , sortFacets [Catalog.FacetValue v (fromIntegral n :: Int) | (v, n) <- HM.toList tk.top]
+              )
             | (path, tk) <- HM.toList doc.topValuesByField
-            , (v, n) <- HM.toList tk.top
             ]
     }
   where
@@ -345,11 +348,8 @@ toFacetSummary pid tableName doc =
     fieldCat :: Text -> Catalog.FieldCategoryEnum
     fieldCat path = maybe Catalog.FCAttribute (.category) (HM.lookup path doc.fields)
 
-    -- Outer fromListWith already groups by prefixed key, and each (path, tk)
-    -- contributes a unique source so values within a key are already unique
-    -- by @v@. Just sort descending.
-    mergeAndSort :: [(Text, Int)] -> [Catalog.FacetValue]
-    mergeAndSort = sortOn (Down . (.count)) . fmap (uncurry Catalog.FacetValue)
+    sortFacets :: [Catalog.FacetValue] -> [Catalog.FacetValue]
+    sortFacets = sortOn (Down . (.count))
 
     -- 'FacetData' has two consumers: the Log Explorer sidebar (only renders
     -- entries that match 'facetDefs', all of which are in
