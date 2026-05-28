@@ -599,6 +599,7 @@ test-suite integration-tests
       CLI.CLISpec
       EndpointDiscoverySpec
       ExtractionWorkerSpec
+      FacetsSpec
       Lifecycle.LogPatternIncidentSpec
       MonitoringSpec
       Opentelemetry.GrpcIngestionSpec
