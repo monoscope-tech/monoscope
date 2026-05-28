@@ -375,11 +375,11 @@ data Facet = Facet
 --   * @attributes.network.*@, @attributes.client.address@,
 --     @attributes.server.address@, @attributes.error.type@,
 --     @attributes.session.previous.id@, @attributes.db.response.status_code@,
---     @attributes.http.response.status_code@ subgroups beyond what's listed,
---     etc. — not yet in 'flattenedOtelAttributes'. Adding them naively here
---     fails 'prop_facetsAreFast'. The right path is to (a) confirm the flat
---     column exists, (b) add the dotted path to the whitelist, (c) then list
---     it here.
+--     subgroups beyond what's listed, etc. — not yet in
+--     'flattenedOtelAttributes'. Adding them naively here fails the
+--     in-whitelist doctest. The right path is to (a) confirm the flat
+--     column exists, (b) add the dotted path to the whitelist, (c) then
+--     list it here.
 --
 -- >>> import qualified Pkg.Parser.Expr as PE
 -- >>> import qualified Data.Set as S
@@ -387,43 +387,44 @@ data Facet = Facet
 -- True
 facetDefs :: [Facet]
 facetDefs =
-  -- Common
-  [ Facet "resource.service.name" "Service" FGCommon serviceFillColor
-  , Facet "attributes.http.request.method" "HTTP Method" FGCommon methodFillColor
-  , Facet "attributes.http.response.status_code" "HTTP Status" FGCommon statusFillColorText
-  , Facet "attributes.db.operation.name" "DB Operation" FGCommon (const "")
-  , -- HTTP
-    Facet "attributes.http.request.method_original" "Original Method" FGHTTP methodFillColor
-  , Facet "attributes.http.request.resend_count" "Resend Count" FGHTTP (const "")
-  , Facet "attributes.http.request.body.size" "Request Body Size" FGHTTP (const "")
-  , Facet "attributes.url.path" "URL Path" FGHTTP (const "")
-  , Facet "attributes.url.scheme" "URL Scheme" FGHTTP (const "")
-  , Facet "attributes.url.full" "Full URL" FGHTTP (const "")
-  , Facet "attributes.url.fragment" "URL Fragment" FGHTTP (const "")
-  , Facet "attributes.url.query" "URL Query" FGHTTP (const "")
-  , Facet "attributes.user_agent.original" "User Agent" FGHTTP (const "")
-  , -- Resource
-    Facet "resource.service.version" "Service Version" FGResource (const "")
-  , Facet "resource.service.instance.id" "Service Instance ID" FGResource (const "")
-  , Facet "resource.service.namespace" "Service Namespace" FGResource (const "")
-  , Facet "resource.telemetry.sdk.language" "SDK Language" FGResource (const "")
-  , Facet "resource.telemetry.sdk.name" "SDK Name" FGResource (const "")
-  , Facet "resource.telemetry.sdk.version" "SDK Version" FGResource (const "")
-  , -- User & Session
-    Facet "attributes.session.id" "Session ID" FGUserSession (const "")
-  , Facet "attributes.user.id" "User ID" FGUserSession (const "")
-  , Facet "attributes.user.email" "User Email" FGUserSession (const "")
-  , Facet "attributes.user.name" "Username" FGUserSession (const "")
-  , Facet "attributes.user.full_name" "Full Name" FGUserSession (const "")
-  , -- Database
-    Facet "attributes.db.system.name" "Database System" FGDatabase (const "")
-  , Facet "attributes.db.collection.name" "Collection Name" FGDatabase (const "")
-  , Facet "attributes.db.namespace" "Database Namespace" FGDatabase (const "")
-  , Facet "attributes.db.operation.batch.size" "Batch Size" FGDatabase (const "")
-  , -- Errors & Exceptions
-    Facet "attributes.exception.type" "Exception Type" FGErrors (const "bg-fillError-strong")
-  , Facet "attributes.exception.message" "Exception Message" FGErrors (const "")
-  ]
+  let nc = const "" -- shorthand for "no fill color" — used 13× below
+   in -- Common
+      [ Facet "resource.service.name" "Service" FGCommon serviceFillColor
+      , Facet "attributes.http.request.method" "HTTP Method" FGCommon methodFillColor
+      , Facet "attributes.http.response.status_code" "HTTP Status" FGCommon statusFillColorText
+      , Facet "attributes.db.operation.name" "DB Operation" FGCommon nc
+      , -- HTTP
+        Facet "attributes.http.request.method_original" "Original Method" FGHTTP methodFillColor
+      , Facet "attributes.http.request.resend_count" "Resend Count" FGHTTP nc
+      , Facet "attributes.http.request.body.size" "Request Body Size" FGHTTP nc
+      , Facet "attributes.url.path" "URL Path" FGHTTP nc
+      , Facet "attributes.url.scheme" "URL Scheme" FGHTTP nc
+      , Facet "attributes.url.full" "Full URL" FGHTTP nc
+      , Facet "attributes.url.fragment" "URL Fragment" FGHTTP nc
+      , Facet "attributes.url.query" "URL Query" FGHTTP nc
+      , Facet "attributes.user_agent.original" "User Agent" FGHTTP nc
+      , -- Resource
+        Facet "resource.service.version" "Service Version" FGResource nc
+      , Facet "resource.service.instance.id" "Service Instance ID" FGResource nc
+      , Facet "resource.service.namespace" "Service Namespace" FGResource nc
+      , Facet "resource.telemetry.sdk.language" "SDK Language" FGResource nc
+      , Facet "resource.telemetry.sdk.name" "SDK Name" FGResource nc
+      , Facet "resource.telemetry.sdk.version" "SDK Version" FGResource nc
+      , -- User & Session
+        Facet "attributes.session.id" "Session ID" FGUserSession nc
+      , Facet "attributes.user.id" "User ID" FGUserSession nc
+      , Facet "attributes.user.email" "User Email" FGUserSession nc
+      , Facet "attributes.user.name" "Username" FGUserSession nc
+      , Facet "attributes.user.full_name" "Full Name" FGUserSession nc
+      , -- Database
+        Facet "attributes.db.system.name" "Database System" FGDatabase nc
+      , Facet "attributes.db.collection.name" "Collection Name" FGDatabase nc
+      , Facet "attributes.db.namespace" "Database Namespace" FGDatabase nc
+      , Facet "attributes.db.operation.batch.size" "Batch Size" FGDatabase nc
+      , -- Errors & Exceptions
+        Facet "attributes.exception.type" "Exception Type" FGErrors (const "bg-fillError-strong")
+      , Facet "attributes.exception.message" "Exception Message" FGErrors nc
+      ]
 
 
 -- | Render facet data for Log Explorer sidebar in a compact format.

@@ -67,6 +67,9 @@ clearAll tr pids = withPool tr.trPool $ do
   -- and isn't load-bearing for these tests.
 
 
+-- | Mirrors the HTTP endpoint hash construction in
+-- 'ProcessMessage.extractObservation' (httpKeyOf branch). If that
+-- production function changes shape, this needs to follow.
 keyHashFor :: Projects.ProjectId -> Text -> Text -> Text -> Text
 keyHashFor p host method path = toXXHash (T.intercalate "\0" [p.toText, host, method, path])
 

@@ -42,6 +42,7 @@ import Data.Aeson.KeyMap qualified as KM
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HS
+import Data.Ord (Down (..))
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.UUID (UUID)
@@ -279,6 +280,9 @@ upsertSummary rows = unless (V.null rows) $ do
 -- | Skip a project if its summary was updated this recently — coalesces
 -- many flush passes on noisy projects into one write. Shorter than the
 -- flush interval; well within facet-UI staleness tolerance.
+--
+-- 'Text' because Hasql's @::interval@ SQL cast accepts a string literal and
+-- no @NominalDiffTime@-to-@interval@ encoder is registered in this codebase.
 summaryFreshnessCutoff :: Text
 summaryFreshnessCutoff = "30 seconds"
 
@@ -347,14 +351,11 @@ toFacetSummary pid tableName doc =
             ]
     }
   where
-    -- Defensive: two paths could prefix to the same key (category mismatch);
-    -- merge counts rather than drop one. Sort descending.
+    -- Outer fromListWith already groups by prefixed key, and each (path, tk)
+    -- contributes a unique source so values within a key are already unique
+    -- by @v@. Just sort descending.
     mergeAndSort :: [(Text, Int)] -> [Catalog.FacetValue]
-    mergeAndSort =
-      sortOn (negate . (.count))
-        . fmap (uncurry Catalog.FacetValue)
-        . HM.toList
-        . HM.fromListWith (+)
+    mergeAndSort = sortOn (Down . (.count)) . fmap (uncurry Catalog.FacetValue)
 
     -- 'FacetData' has two consumers: the Log Explorer sidebar (only renders
     -- entries that match 'facetDefs', all of which are in
