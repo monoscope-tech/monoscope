@@ -334,7 +334,6 @@ toFacetSummary pid tableName doc =
             ]
     }
   where
-
     -- 'FacetData' has two consumers: the Log Explorer sidebar (only renders
     -- entries that match 'facetDefs', all of which are in
     -- 'flattenedOtelAttributes') and the AI prompt context, which wants the
