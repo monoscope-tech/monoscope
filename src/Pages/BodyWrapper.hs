@@ -510,10 +510,6 @@ bodyWrapper bcfg child = do
                       then do
                         -- Empty navbar anchor so OOB morph can remove non-settings navbar
                         nav_ [id_ "main-navbar", class_ "hidden"] ""
-                        whenJust bcfg.currProject \_ ->
-                          button_ [class_ "fixed top-4 right-4 btn btn-sm btn-ghost bg-base-200 gap-1.5 text-textWeak z-50", [__|on click send paletteToggle to #cmd-palette-global|]] do
-                            faSprite_ "magnifying-glass" "regular" "w-3.5 h-3.5"
-                            kbd_ [class_ "kbd kbd-xs"] "\x2318K"
                       else navbar bcfg.currProject (maybe [] (\p -> menu sess.lang p.id) bcfg.currProject) currUser bcfg.prePageTitle bcfg.pageTitle bcfg.pageTitleSuffix bcfg.pageTitleModalId bcfg.pageTitleSuffixModalId bcfg.docsLink bcfg.navTabs bcfg.pageActions
                     main_ [id_ "main-content", class_ "overflow-y-auto h-full grow"] do
                       whenJust bcfg.currProject (\p -> freeTierUsageBanner p.id.toText bcfg.freeTierStatus)
