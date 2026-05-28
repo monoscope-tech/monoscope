@@ -182,8 +182,8 @@ regenerateSummaries
 regenerateSummaries projects entriesMap = do
   let touched = V.fromList (HS.toList projects)
   fresh <- SC.freshSummaryProjects touched
-  let stale = V.filter (not . (`HS.member` fresh)) touched
-      staleSet = HS.fromList (V.toList stale)
+  let staleSet = HS.difference projects fresh
+      stale = V.fromList (HS.toList staleSet)
       -- Partition entries by project_id, restricting up-front to projects
       -- we'll actually summarise. Without this filter we'd build per-project
       -- bags for fresh projects and immediately discard them on lookup.

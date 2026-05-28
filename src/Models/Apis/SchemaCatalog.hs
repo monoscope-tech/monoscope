@@ -273,7 +273,7 @@ upsertSummary rows = unless (V.null rows) $ do
                #{pids}::uuid[],
                #{docs}::jsonb[])
              ON CONFLICT (project_id) DO UPDATE
-             SET doc = EXCLUDED.doc, generated_at = now() |]
+             SET doc = EXCLUDED.doc, generated_at = EXCLUDED.generated_at |]
 
 
 -- | Of the supplied projects, returns those whose @apis.schema_summary@ was

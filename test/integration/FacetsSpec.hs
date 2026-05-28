@@ -61,11 +61,10 @@ clearAll tr pids = withPool tr.trPool $ do
   exec [sql| DELETE FROM apis.schema_catalog WHERE project_id = ANY(?::uuid[]) |] (Only arr)
   exec [sql| DELETE FROM apis.schema_summary WHERE project_id = ANY(?::uuid[]) |] (Only arr)
   exec [sql| DELETE FROM apis.anomalies WHERE project_id = ANY(?::uuid[]) |] (Only arr)
-  exec
-    [sql| DELETE FROM apis.schema_template
-          WHERE NOT EXISTS (SELECT 1 FROM apis.schema_catalog
-                            WHERE template_hash = apis.schema_template.template_hash) |]
-    ()
+  -- Template cleanup is intentionally omitted here: deleting orphan
+  -- templates would race with other specs whose catalog rows still
+  -- reference them. The dead-template GC is a daily job in production
+  -- and isn't load-bearing for these tests.
 
 
 keyHashFor :: Projects.ProjectId -> Text -> Text -> Text -> Text
