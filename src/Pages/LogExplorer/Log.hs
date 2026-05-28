@@ -465,7 +465,12 @@ renderFacets facetSummary = do
     });
   |]
 
-  forM_ ([minBound .. maxBound] :: [FacetGroup]) \g ->
+  -- 'universe' from Relude.Extra.Enum would shorten this, but that module
+  -- isn't on this package's import surface; the [minBound..maxBound] form
+  -- compiles to the same list literal.
+  {- HLINT ignore "Use universe" -}
+  let allGroups = [minBound .. maxBound] :: [FacetGroup]
+  forM_ allGroups \g ->
     renderFacetSection (facetGroupLabel g) (Map.findWithDefault [] g byGroup) facetMap (g /= FGCommon)
   where
     renderFacetSection :: Text -> [Facet] -> HM.HashMap Text [FacetValue] -> Bool -> Html ()

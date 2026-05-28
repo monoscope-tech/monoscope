@@ -42,7 +42,6 @@ import Data.Aeson.KeyMap qualified as KM
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HS
-import Data.Ord (Down (..))
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.UUID (UUID)
@@ -338,8 +337,8 @@ toFacetSummary pid tableName doc =
     , tableName = tableName
     , facetJson =
         Catalog.FacetData
-          $ fmap mergeAndSort
-          $ HM.fromListWith
+          $ mergeAndSort
+          <$> HM.fromListWith
             (<>)
             [ (prefixed cat path, [(v, fromIntegral n :: Int)])
             | -- Word64→Int safe: counts are bag sizes well below maxBound.

@@ -188,8 +188,8 @@ regenerateSummaries projects entriesMap = do
       -- quadratic.
       byProject :: HM.HashMap Projects.ProjectId (V.Vector CatalogEntry)
       byProject =
-        fmap V.fromList
-          $ HM.foldlWithKey'
+        V.fromList
+          <$> HM.foldlWithKey'
             ( \acc k e ->
                 if HS.member k.projectId staleSet
                   then HM.insertWith (<>) k.projectId [e] acc
