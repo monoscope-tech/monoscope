@@ -17,6 +17,7 @@ module FacetsSpec (spec) where
 
 import Data.Aeson qualified as AE
 import Data.HashMap.Strict qualified as HM
+import Data.Text qualified as T
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
@@ -69,7 +70,7 @@ clearAll tr pids = do
 
 
 keyHashFor :: Projects.ProjectId -> Text -> Text -> Text -> Text
-keyHashFor p host method path = toXXHash (p.toText <> host <> method <> path)
+keyHashFor p host method path = toXXHash (T.intercalate "\0" [p.toText, host, method, path])
 
 
 httpScope :: Text -> Text -> Text -> Catalog.Scope

@@ -262,8 +262,9 @@ getSummary pid =
 -- projects were touched in the flush. Callers feed a vector of (project, doc)
 -- pairs; empty input is a no-op.
 upsertSummary :: DB es => V.Vector (Projects.ProjectId, Catalog.SummaryDoc) -> Eff es ()
-upsertSummary rows | V.null rows = pass
-upsertSummary rows =
+upsertSummary rows = unless (V.null rows) $ do
+  let pids = V.map fst rows
+      docs = V.map (HI.AsJsonb . snd) rows
   Hasql.interpExecute_
     [HI.sql| INSERT INTO apis.schema_summary (project_id, doc, generated_at)
              SELECT *, now() FROM unnest(
@@ -271,9 +272,6 @@ upsertSummary rows =
                #{docs}::jsonb[])
              ON CONFLICT (project_id) DO UPDATE
              SET doc = EXCLUDED.doc, generated_at = now() |]
-  where
-    pids = V.map fst rows
-    docs = V.map (HI.AsJsonb . snd) rows
 
 
 -- | Of the supplied projects, returns those whose @apis.schema_summary@ was

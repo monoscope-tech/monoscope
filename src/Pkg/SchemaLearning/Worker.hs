@@ -182,16 +182,15 @@ regenerateSummaries
 regenerateSummaries projects entriesMap = do
   let touched = V.fromList (HS.toList projects)
   fresh <- SC.freshSummaryProjects touched
-  let stale = V.filter (\p -> not (HS.member p fresh)) touched
+  let stale = V.filter (not . (`HS.member` fresh)) touched
       -- Partition entries by project_id in one O(|entriesMap|) pass so the
-      -- per-project fold below is an O(1) lookup rather than O(|entriesMap|)
-      -- per stale project.
+      -- per-project fold below is an O(1) lookup. Accumulate via list (<>)
+      -- which is O(1) amortised, then convert once — V.++ here would be
+      -- quadratic across N entries.
       byProject :: HM.HashMap Projects.ProjectId (V.Vector CatalogEntry)
       byProject =
-        HM.foldlWithKey'
-          (\acc k e -> HM.insertWith (V.++) k.projectId (V.singleton e) acc)
-          HM.empty
-          entriesMap
+        fmap V.fromList
+          $ HM.fromListWith (<>) [(k.projectId, [e]) | (k, e) <- HM.toList entriesMap]
       rows =
         V.mapMaybe
           (\pid -> (pid,) . summariseEntries <$> HM.lookup pid byProject)

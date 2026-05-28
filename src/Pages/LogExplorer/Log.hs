@@ -360,6 +360,14 @@ data Facet = Facet
 
 -- | The full facet list. Order within each group is preserved in the sidebar.
 --
+-- Every entry must be in 'Pkg.Parser.Expr.flattenedOtelAttributes' so KQL
+-- compiles the click-to-filter expression to a flat-column scan. Some
+-- otherwise-natural facets are deliberately absent because they live in
+-- top-level columns rather than @attributes.@ / @resource.@ — `level`,
+-- `name` (Operation Name), `kind`, `status_code`, `status_message`, and
+-- the `severity.*` group are flat columns the catalog walk doesn't emit
+-- yet. Adding a naive entry for them would fail 'prop_facetsAreFast'.
+--
 -- >>> import qualified Pkg.Parser.Expr as PE
 -- >>> import qualified Data.Set as S
 -- >>> all (\f -> S.member f.path PE.flattenedOtelAttributes) facetDefs
@@ -441,7 +449,7 @@ renderFacets facetSummary = do
   |]
 
   forM_ [minBound .. maxBound :: FacetGroup] \g ->
-    renderFacetSection (facetGroupLabel g) (filter (\f -> f.group == g) facetDefs) facetMap (g /= FGCommon)
+    renderFacetSection (facetGroupLabel g) (filter ((== g) . (.group)) facetDefs) facetMap (g /= FGCommon)
   where
     renderFacetSection :: Text -> [Facet] -> HM.HashMap Text [FacetValue] -> Bool -> Html ()
     renderFacetSection sectionName fs facetMap collapsed = do
