@@ -332,16 +332,19 @@ toFacetSummary pid tableName doc =
           $ mergeAndSort
           <$> HM.fromListWith
             (<>)
-            [ (prefixed cat path, [(v, fromIntegral n :: Int)])
-            | -- Word64→Int safe: counts are bag sizes well below maxBound.
-            (path, tk) <- HM.toList doc.topValuesByField
-            , -- Missing fields entry → assume FCAttribute (walker always
-            -- co-records both; worst case is wrong prefix, not data loss).
-            let cat = maybe Catalog.FCAttribute (.category) (HM.lookup path doc.fields)
+            -- Word64→Int safe: counts are bag sizes well below maxBound.
+            [ (prefixed (fieldCat path) path, [(v, fromIntegral n :: Int)])
+            | (path, tk) <- HM.toList doc.topValuesByField
             , (v, n) <- HM.toList tk.top
             ]
     }
   where
+    -- Walker always co-records a path in both topValuesByField and fields,
+    -- but be defensive: a missing entry defaults to FCAttribute. Worst case
+    -- is a wrong section prefix, not data loss.
+    fieldCat :: Text -> Catalog.FieldCategoryEnum
+    fieldCat path = maybe Catalog.FCAttribute (.category) (HM.lookup path doc.fields)
+
     -- Outer fromListWith already groups by prefixed key, and each (path, tk)
     -- contributes a unique source so values within a key are already unique
     -- by @v@. Just sort descending.

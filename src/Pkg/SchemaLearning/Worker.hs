@@ -189,14 +189,9 @@ regenerateSummaries projects entriesMap = do
       byProject :: HM.HashMap Projects.ProjectId (V.Vector CatalogEntry)
       byProject =
         V.fromList
-          <$> HM.foldlWithKey'
-            ( \acc k e ->
-                if HS.member k.projectId staleSet
-                  then HM.insertWith (<>) k.projectId [e] acc
-                  else acc
-            )
-            HM.empty
-            entriesMap
+          <$> HM.fromListWith
+            (<>)
+            [(k.projectId, [e]) | (k, e) <- HM.toList entriesMap, HS.member k.projectId staleSet]
       rows =
         V.fromList
           $ mapMaybe (\pid -> (pid,) . summariseEntries <$> HM.lookup pid byProject) (HS.toList staleSet)
