@@ -259,10 +259,7 @@ getSummary pid =
 
 
 -- | Batched per-project summary upsert. One round trip regardless of how many
--- projects were touched in the flush. Callers feed a vector of (project, doc)
--- pairs; **an empty vector is a no-op** (no SQL emitted) — important for
--- callers that build the batch eagerly and might end up with zero rows after
--- filtering (e.g. all touched projects were skip-if-fresh).
+-- projects were touched. An empty vector is a no-op (no SQL emitted).
 upsertSummary :: DB es => V.Vector (Projects.ProjectId, Catalog.SummaryDoc) -> Eff es ()
 upsertSummary rows = unless (V.null rows) $ do
   let (pids, rawDocs) = V.unzip rows
@@ -327,29 +324,16 @@ toFacetSummary pid tableName doc =
     { id = UUID.nil -- summary is not row-identified; legacy callers don't depend on this
     , projectId = pid.toText
     , tableName = tableName
-    , -- Each (path, category) deterministically produces a unique prefixed
-      -- key (paths are unique in topValuesByField; @prefixed@ is injective
-      -- per-category), so plain HM.fromList suffices — no collision merge
-      -- needed. Word64→Int on counts is safe: bag sizes are well below
-      -- maxBound.
-      facetJson =
+    , facetJson =
         Catalog.FacetData
           $ HM.fromList
-            [ ( prefixed (fieldCat path) path
-              , sortFacets [Catalog.FacetValue v (fromIntegral n :: Int) | (v, n) <- HM.toList tk.top]
+            [ ( prefixed (maybe Catalog.FCAttribute (.category) (HM.lookup path doc.fields)) path
+              , sortOn (Down . (.count)) [Catalog.FacetValue v (fromIntegral n :: Int) | (v, n) <- HM.toList tk.top]
               )
             | (path, tk) <- HM.toList doc.topValuesByField
             ]
     }
   where
-    -- Walker always co-records a path in both topValuesByField and fields,
-    -- but be defensive: a missing entry defaults to FCAttribute. Worst case
-    -- is a wrong section prefix, not data loss.
-    fieldCat :: Text -> Catalog.FieldCategoryEnum
-    fieldCat path = maybe Catalog.FCAttribute (.category) (HM.lookup path doc.fields)
-
-    sortFacets :: [Catalog.FacetValue] -> [Catalog.FacetValue]
-    sortFacets = sortOn (Down . (.count))
 
     -- 'FacetData' has two consumers: the Log Explorer sidebar (only renders
     -- entries that match 'facetDefs', all of which are in

@@ -387,7 +387,7 @@ data Facet = Facet
 -- True
 facetDefs :: [Facet]
 facetDefs =
-  let nc = const "" -- shorthand for "no fill color" — used 13× below
+  let nc = const "" -- no fill color
    in -- Common
       [ Facet "resource.service.name" "Service" FGCommon serviceFillColor
       , Facet "attributes.http.request.method" "HTTP Method" FGCommon methodFillColor
@@ -547,7 +547,14 @@ renderFacets facetSummary = do
                       hiddenCount = length hiddenValues
                       -- val is an observed attribute value; jsEscape it
                       -- before embedding in the JS single-quoted onclick.
-                      jsEscape t = T.replace "'" "\\'" (T.replace "\\" "\\\\" t)
+                      -- Order matters: backslash first, then single quote,
+                      -- then CR (drop) and LF (translate) so a value with
+                      -- "\n</script>..." can't break out.
+                      jsEscape =
+                        T.replace "\n" "\\n"
+                          . T.replace "\r" ""
+                          . T.replace "'" "\\'"
+                          . T.replace "\\" "\\\\"
                       renderFacetValue (FacetValue val count) =
                         label_ [class_ "facet-item flex items-center justify-between py-0.5 max-md:py-1.5 px-1 hover:bg-fillWeak rounded cursor-pointer will-change-[background-color]"] do
                           div_ [class_ "flex items-center gap-2 min-w-0 flex-1"] do
