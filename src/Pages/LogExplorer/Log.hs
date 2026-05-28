@@ -431,10 +431,7 @@ facetDefs =
 renderFacets :: FacetSummary -> Html ()
 renderFacets facetSummary = do
   let (FacetData facetMap) = facetSummary.facetJson
-      -- One pass over facetDefs → Map FacetGroup [Facet], then O(1) lookups
-      -- below. Keeps the render loop linear regardless of list growth.
-      -- @flip (<>)@ preserves source order: fromListWith calls
-      -- @f new old@, so we want @old <> new@ to keep earlier-listed facets first.
+      -- flip (<>) preserves source order under Map.fromListWith (which calls f new old).
       byGroup :: Map.Map FacetGroup [Facet]
       byGroup = Map.fromListWith (flip (<>)) [(f.group, [f]) | f <- facetDefs]
 
@@ -467,7 +464,7 @@ renderFacets facetSummary = do
     });
   |]
 
-  forM_ [minBound .. maxBound :: FacetGroup] \g ->
+  forM_ ([minBound .. maxBound] :: [FacetGroup]) \g ->
     renderFacetSection (facetGroupLabel g) (Map.findWithDefault [] g byGroup) facetMap (g /= FGCommon)
   where
     renderFacetSection :: Text -> [Facet] -> HM.HashMap Text [FacetValue] -> Bool -> Html ()
@@ -479,19 +476,15 @@ renderFacets facetSummary = do
           span_ [class_ "font-medium text-sm"] (toHtml sectionName)
 
         div_ [class_ "facets-container mt-1 max-h-0 overflow-hidden peer-checked:max-h-[2000px] transition-[max-height] duration-300"] do
-          forM_ (zip [0 ..] fs) \(idx :: Int, f) ->
+          forM_ (zip [0 :: Int ..] fs) \(idx, f) ->
             whenJust (HM.lookup f.path facetMap) \values -> do
-              -- @key@ is f.path aliased once because the field is repeated
-              -- 8+ times across nested HTML attrs + hyperscript below;
-              -- inlining doubles vertical noise without buying anything.
-              let key = f.path
-                  shouldBeExpanded = f.group == FGCommon && idx < 5
+              let shouldBeExpanded = f.group == FGCommon && idx < 5
               label_ [class_ "facet-section border-t border-strokeWeak group/facet block contain-[layout_style]"] do
-                input_ $ [type_ "checkbox", class_ "hidden", id_ $ "facet-toggle-" <> key] ++ [checked_ | shouldBeExpanded]
+                input_ $ [type_ "checkbox", class_ "hidden", id_ $ "facet-toggle-" <> f.path] ++ [checked_ | shouldBeExpanded]
                 div_ [class_ "flex items-center justify-between hover:bg-fillWeak rounded"] do
                   div_ [class_ "p-2 flex items-center gap-2 cursor-pointer flex-1"] do
                     faSprite_ "chevron-down" "regular" "w-2.5 h-2.5 transition-transform group-has-[:checked]/facet:rotate-0 -rotate-90"
-                    span_ [class_ "text-sm", term "data-tippy-content" key] (toHtml f.label)
+                    span_ [class_ "text-sm", term "data-tippy-content" f.path] (toHtml f.label)
 
                   div_ [class_ "dropdown dropdown-end contain-[layout_style]", onclick_ "event.stopPropagation()"] do
                     a_ [tabindex_ "0", class_ "cursor-pointer p-2 hover:bg-fillWeak rounded", Aria.label_ "Facet options", role_ "button"] do
@@ -499,7 +492,7 @@ renderFacets facetSummary = do
                     ul_ [tabindex_ "0", class_ "dropdown-content z-10 menu p-2 shadow-sm bg-bgRaised rounded-box w-52"] do
                       li_
                         $ a_
-                          [ term "data-field" key
+                          [ term "data-field" f.path
                           , class_ "flex gap-2 items-center"
                           , [__|
                              init
@@ -524,8 +517,8 @@ renderFacets facetSummary = do
                             span_ [] "Add as table column"
                       li_
                         $ a_
-                          [ term "data-field" key
-                          , term "data-key" key
+                          [ term "data-field" f.path
+                          , term "data-key" f.path
                           , class_ "flex gap-2 items-center"
                           , [__|
                               init call window.updateGroupByButtonText(event, me) end
@@ -540,7 +533,7 @@ renderFacets facetSummary = do
                           do
                             faSprite_ "group-by" "regular" "w-4 h-4 text-iconNeutral"
                             span_ [] "Group by"
-                      li_ $ a_ [class_ "flex gap-2 items-center", onclick_ $ "viewFieldPatterns('" <> key <> "')"] do
+                      li_ $ a_ [class_ "flex gap-2 items-center", onclick_ $ "viewFieldPatterns('" <> f.path <> "')"] do
                         faSprite_ "chart-bar" "regular" "w-4 h-4 text-iconNeutral"
                         span_ [] "View patterns"
 
@@ -554,10 +547,10 @@ renderFacets facetSummary = do
                             input_
                               [ type_ "checkbox"
                               , class_ "checkbox checkbox-xs max-md:checkbox-sm"
-                              , name_ key
-                              , onclick_ $ "filterByFacet('" <> key <> "', '" <> val <> "')"
-                              , term "data-tippy-content" (key <> " == \"" <> val <> "\"")
-                              , term "data-field" key
+                              , name_ f.path
+                              , onclick_ $ "filterByFacet('" <> f.path <> "', '" <> val <> "')"
+                              , term "data-tippy-content" (f.path <> " == \"" <> val <> "\"")
+                              , term "data-field" f.path
                               , term "data-value" val
                               ]
                             let colorClass = f.color val
@@ -567,7 +560,7 @@ renderFacets facetSummary = do
                   forM_ visibleValues \(_, value) -> renderFacetValue value
 
                   when (hiddenCount > 0) do
-                    let moreId = "more-" <> key
+                    let moreId = "more-" <> f.path
                     input_ [type_ "checkbox", class_ "hidden peer/more", id_ moreId]
                     label_ [class_ "text-textBrand text-xs px-1 py-0.5 cursor-pointer hover:underline", Lucid.for_ moreId] do
                       span_ [class_ "peer-checked/more:hidden"] $ toHtml $ "+ More (" <> prettyPrintCount hiddenCount <> ")"

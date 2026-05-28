@@ -265,8 +265,8 @@ getSummary pid =
 -- filtering (e.g. all touched projects were skip-if-fresh).
 upsertSummary :: DB es => V.Vector (Projects.ProjectId, Catalog.SummaryDoc) -> Eff es ()
 upsertSummary rows = unless (V.null rows) $ do
-  let pids = V.map fst rows
-      docs = V.map (HI.AsJsonb . snd) rows
+  let (pids, rawDocs) = V.unzip rows
+      docs = HI.AsJsonb <$> rawDocs
   Hasql.interpExecute_
     [HI.sql| INSERT INTO apis.schema_summary (project_id, doc, generated_at)
              SELECT *, now() FROM unnest(
@@ -276,10 +276,15 @@ upsertSummary rows = unless (V.null rows) $ do
              SET doc = EXCLUDED.doc, generated_at = EXCLUDED.generated_at |]
 
 
+-- | Skip a project if its summary was updated this recently — coalesces
+-- many flush passes on noisy projects into one write. Shorter than the
+-- flush interval; well within facet-UI staleness tolerance.
+summaryFreshnessCutoff :: Text
+summaryFreshnessCutoff = "30 seconds"
+
+
 -- | Of the supplied projects, returns those whose @apis.schema_summary@ was
--- updated within the last 30 s. Callers skip these so many flush passes on
--- noisy projects coalesce into one summary write. The window is shorter than
--- typical flush intervals and well within facet UI staleness tolerance.
+-- updated within 'summaryFreshnessCutoff'.
 freshSummaryProjects
   :: DB es
   => V.Vector Projects.ProjectId
@@ -291,8 +296,8 @@ freshSummaryProjects pids
         Hasql.interp
           [HI.sql| SELECT project_id FROM apis.schema_summary
                    WHERE project_id = ANY(#{pids}::uuid[])
-                     AND generated_at > now() - interval '30 seconds' |]
-      pure $ HS.fromList $ map UUIDId rows
+                     AND generated_at > now() - (#{summaryFreshnessCutoff} :: interval) |]
+      pure $ HS.fromList (coerce rows)
 
 
 -- | Drop-in replacement for the legacy @Fields.getFacetSummary@: same
@@ -333,29 +338,23 @@ toFacetSummary pid tableName doc =
           $ HM.fromListWith
             (<>)
             [ (prefixed cat path, [(v, fromIntegral n :: Int)])
-            | -- @n :: Word64@ → @Int@ is safe in practice: Int is 64-bit
-            -- everywhere we run; values are top-K bag counts capped well
-            -- below @maxBound :: Int@. Truncation would only matter at
-            -- ~9.2e18 occurrences.
+            | -- Word64→Int safe: counts are bag sizes well below maxBound.
             (path, tk) <- HM.toList doc.topValuesByField
-            , -- Fallback: a path in topValuesByField but absent from
-            -- doc.fields is an internal invariant violation (the walker
-            -- always co-records both). FCAttribute is the common case;
-            -- worst outcome is a wrong prefix → unmatched in the renderer,
-            -- not data loss.
+            , -- Missing fields entry → assume FCAttribute (walker always
+            -- co-records both; worst case is wrong prefix, not data loss).
             let cat = maybe Catalog.FCAttribute (.category) (HM.lookup path doc.fields)
             , (v, n) <- HM.toList tk.top
             ]
     }
   where
-    -- Two distinct catalog paths could in principle prefix to the same key
-    -- (a category mismatch would do it). Merge their counts rather than
-    -- silently dropping one, then sort descending.
+    -- Defensive: two paths could prefix to the same key (category mismatch);
+    -- merge counts rather than drop one. Sort descending.
     mergeAndSort :: [(Text, Int)] -> [Catalog.FacetValue]
-    mergeAndSort pairs =
-      sortOn
-        (negate . (.count))
-        [Catalog.FacetValue v n | (v, n) <- HM.toList (HM.fromListWith (+) pairs)]
+    mergeAndSort =
+      sortOn (negate . (.count))
+        . fmap (uncurry Catalog.FacetValue)
+        . HM.toList
+        . HM.fromListWith (+)
 
     -- 'FacetData' has two consumers: the Log Explorer sidebar (only renders
     -- entries that match 'facetDefs', all of which are in

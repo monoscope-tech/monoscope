@@ -183,12 +183,9 @@ regenerateSummaries projects entriesMap = do
   let touched = V.fromList (HS.toList projects)
   fresh <- SC.freshSummaryProjects touched
   let staleSet = HS.difference projects fresh
-      stale = V.fromList (HS.toList staleSet)
-      -- Partition entries by project_id, restricting up-front to projects
-      -- we'll actually summarise. Without this filter we'd build per-project
-      -- bags for fresh projects and immediately discard them on lookup.
-      -- Each combine prepends a singleton list (O(1)); whole partition is
-      -- O(|entriesMap|). V.++ here would be quadratic.
+      -- Partition entries by project_id, restricted to projects we'll
+      -- actually summarise. List (<>) keeps per-insert O(1); V.++ would be
+      -- quadratic.
       byProject :: HM.HashMap Projects.ProjectId (V.Vector CatalogEntry)
       byProject =
         fmap V.fromList
@@ -196,9 +193,8 @@ regenerateSummaries projects entriesMap = do
             (<>)
             [(k.projectId, [e]) | (k, e) <- HM.toList entriesMap, HS.member k.projectId staleSet]
       rows =
-        V.mapMaybe
-          (\pid -> (pid,) . summariseEntries <$> HM.lookup pid byProject)
-          stale
+        V.fromList
+          $ mapMaybe (\pid -> (pid,) . summariseEntries <$> HM.lookup pid byProject) (HS.toList staleSet)
   SC.upsertSummary rows
   pure (V.length rows)
 
