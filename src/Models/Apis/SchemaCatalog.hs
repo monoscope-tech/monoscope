@@ -292,7 +292,7 @@ freshSummaryProjects pids
           [HI.sql| SELECT project_id FROM apis.schema_summary
                    WHERE project_id = ANY(#{pids}::uuid[])
                      AND generated_at > now() - interval '30 seconds' |]
-      pure $ HS.fromList (coerce rows)
+      pure $ HS.fromList (UUIDId <$> rows)
 
 
 -- | Drop-in replacement for the legacy @Fields.getFacetSummary@: same

@@ -427,14 +427,14 @@ facetDefs =
       ]
 
 
--- | Render facet data for Log Explorer sidebar in a compact format.
--- The facet counts are scaled in the upstream summary based on the selected time range.
 -- | 'facetDefs' bucketed by 'FacetGroup', built once at module load time.
 -- 'flip (<>)' preserves source order under Map.fromListWith (which calls f new old).
 facetsByGroup :: Map.Map FacetGroup [Facet]
 facetsByGroup = Map.fromListWith (flip (<>)) [(f.group, [f]) | f <- facetDefs]
 
 
+-- | Render facet data for Log Explorer sidebar in a compact format.
+-- The facet counts are scaled in the upstream summary based on the selected time range.
 renderFacets :: FacetSummary -> Html ()
 renderFacets facetSummary = do
   let (FacetData facetMap) = facetSummary.facetJson
@@ -468,12 +468,7 @@ renderFacets facetSummary = do
     });
   |]
 
-  -- 'universe' from Relude.Extra.Enum would shorten this, but that module
-  -- isn't on this package's import surface; the [minBound..maxBound] form
-  -- compiles to the same list literal.
-  {- HLINT ignore "Use universe" -}
-  let allGroups = [minBound .. maxBound] :: [FacetGroup]
-  forM_ allGroups \g ->
+  forM_ universe \g ->
     renderFacetSection (facetGroupLabel g) (Map.findWithDefault [] g facetsByGroup) facetMap (g /= FGCommon)
   where
     renderFacetSection :: Text -> [Facet] -> HM.HashMap Text [FacetValue] -> Bool -> Html ()
