@@ -122,9 +122,9 @@ import Effectful.Time (Time, currentTime, runTime)
 import GHC.Records (HasField (getField))
 import Hasql.Interpolate qualified as HI
 import Hasql.Statement (Statement)
-import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
+import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumSC (..), idFromText, selectFrom)
 import Pkg.Parser.Stats (Section)
 import Relude

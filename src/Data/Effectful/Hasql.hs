@@ -23,12 +23,12 @@ import Effectful.Labeled (Labeled, labeled)
 import Hasql.Interpolate qualified as HI
 import Hasql.Pool (UsageError (..))
 import Hasql.Session (CommandError (..), ResultError (..), Session, SessionError (..))
-import OpenTelemetry.Instrumentation.Hasql (TracedPool)
-import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Hasql.Session qualified as Session
 import Hasql.Statement (Statement)
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
+import OpenTelemetry.Instrumentation.Hasql (TracedPool)
+import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Relude
 
 

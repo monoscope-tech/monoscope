@@ -37,8 +37,8 @@ import Effectful.Time qualified as Time
 import GHC.Records (HasField (getField))
 import Hasql.Interpolate qualified as HI
 import Hasql.Session qualified as Session
-import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Models.Projects.Projects qualified as Projects
+import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Pkg.DeriveUtils (selectFrom)
 import Relude hiding (ask, id)
 import Servant.API (FromHttpApiData)

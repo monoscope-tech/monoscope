@@ -68,11 +68,11 @@ import Hasql.Decoders qualified as D
 import Hasql.Encoders qualified as E
 import Hasql.Interpolate qualified as HI
 import Hasql.Pool.Config qualified as HPC
-import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Language.Haskell.TH qualified as TH
 import Language.Haskell.TH.Syntax qualified as TH
 import Language.Haskell.TH.Syntax qualified as THS
 import Numeric (showHex)
+import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Servant (FromHttpApiData (..))

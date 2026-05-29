@@ -118,7 +118,6 @@ import Effectful.Labeled (runLabeled)
 import Effectful.Log (Log)
 import Effectful.Reader.Static qualified
 import Effectful.Time (Time, runTime)
-import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Log qualified
 import Log.Backend.StandardOutput.Bulk qualified as LogBulk
 import Models.Projects.Projects qualified as Projects
@@ -132,6 +131,7 @@ import Network.HTTP.Types.Version (http11)
 import Network.Minio qualified as Minio
 import Network.Wreq qualified as W
 import OddJobs.Job (Job (..))
+import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import OpenTelemetry.Trace (TracerProvider, getGlobalTracerProvider)
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.Charts.Charts qualified as Charts

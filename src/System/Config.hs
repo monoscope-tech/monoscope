@@ -14,10 +14,10 @@ import Database.PostgreSQL.Simple qualified as PG
 import Database.PostgreSQL.Simple.Migration qualified as Migrations
 import Effectful
 import Effectful.Fail (Fail)
-import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Log (LogLevel (..))
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
+import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Pkg.DeriveUtils qualified as DeriveUtils
 import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Pkg.TraceSessionCache qualified as TraceSessionCache
