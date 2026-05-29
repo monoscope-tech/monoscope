@@ -16,7 +16,10 @@
 module FacetsSpec (spec) where
 
 import Data.Aeson qualified as AE
+import Data.Aeson.Key qualified as AEK
+import Data.Aeson.KeyMap qualified as AEKM
 import Data.HashMap.Strict qualified as HM
+import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -25,16 +28,20 @@ import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types (PGArray (..))
+import Lucid (renderText)
 import Models.Apis.SchemaCatalog qualified as SC
 import Models.Projects.Projects qualified as Projects
+import Pages.LogExplorer.Log qualified as LogPage
 import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.Parser.Expr qualified as PE
 import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Pkg.SchemaLearning.Hot qualified as Hot
 import Pkg.SchemaLearning.Worker qualified as Worker
-import Pkg.TestUtils (TestResources (..), frozenTime, runHasqlEffect, withTestResources)
+import Pkg.TestUtils (TestResources (..), frozenTime, runAsBase, runHasqlEffect, withTestResources)
 import Relude
-import Test.Hspec (Spec, aroundAll, describe, it, shouldBe, shouldContain, shouldSatisfy)
+import Test.Hspec (Spec, aroundAll, describe, it, shouldBe, shouldContain, shouldNotContain, shouldSatisfy)
 import Utils (toXXHash)
+import Web.ApiHandlers qualified as ApiH
 
 
 pid :: Projects.ProjectId
@@ -102,6 +109,22 @@ richObs p method =
         , ("service.name", V.singleton (AE.String "checkout-svc", Nothing), Catalog.FCResource)
         ]
     , timestamp = frozenTime
+    }
+
+
+-- | Variant that adds FCTopLevel leaves so we can assert the walker carries
+-- top-level columns (name/kind/level/status_code/severity.*) through the
+-- summary pipeline.
+richObsWithTopLevel :: Projects.ProjectId -> Text -> Hot.ObservationInput
+richObsWithTopLevel p method =
+  (richObs p method)
+    { Hot.walk =
+        (richObs p method).walk
+          <> [ ("name", V.singleton (AE.String ("POST /orders" :: Text), Nothing), Catalog.FCTopLevel)
+             , ("level", V.singleton (AE.String ("INFO" :: Text), Nothing), Catalog.FCTopLevel)
+             , ("kind", V.singleton (AE.String ("server" :: Text), Nothing), Catalog.FCTopLevel)
+             , ("severity.severity_text", V.singleton (AE.String ("INFO" :: Text), Nothing), Catalog.FCTopLevel)
+             ]
     }
 
 
@@ -176,6 +199,22 @@ spec = aroundAll withTestResources $
               Just vs -> map (.value) vs `shouldSatisfy` \xs -> "GET" `elem` xs && "POST" `elem` xs
               Nothing -> fail "missing attributes.http.request.method after flush"
 
+      it "top-level columns (name, level, kind, severity.*) flow through the walker" $ \tr -> do
+        clearAll tr [pid]
+        ref <- newIORef Hot.emptySchemaShardState
+        let obs = richObsWithTopLevel pid "POST"
+        Hot.observeSpans ref Hot.defaultPolicy pid (V.singleton obs)
+        _ <- runHasqlEffect tr (Worker.flushDirty ref)
+        sumM <- runHasqlEffect tr $ SC.getFacetSummary pid "otel_logs_and_spans" frozenTime frozenTime
+        case sumM of
+          Nothing -> fail "expected a summary"
+          Just s -> do
+            let Catalog.FacetData m = s.facetJson
+                keys = HM.keys m
+            keys `shouldContain` ["name"]
+            keys `shouldContain` ["level"]
+            keys `shouldContain` ["severity.severity_text"]
+
     describe "Layer C — bulk refresh" $ do
       it "K projects, K dirty keys: one flushDirty pass refreshes all summaries" $ \tr -> do
         let projs = [mkPid i | i <- [1 .. 5]]
@@ -208,3 +247,50 @@ spec = aroundAll withTestResources $
         forM_ otherPs \p -> do
           s <- runHasqlEffect tr $ SC.getSummary p
           s `shouldSatisfy` isJust
+
+    describe "Layer A — handler wire shape" $ do
+      it "GET /api/v1/facets returns dotted keys only (no triple-underscore)" $ \tr -> do
+        clearAll tr [pid]
+        seedSummary tr pid
+        body <- runAsBase tr $ ApiH.apiFacets pid Nothing Nothing Nothing Nothing
+        case body of
+          AE.Object o -> do
+            let keys = AEK.toText <$> AEKM.keys o
+            keys `shouldContain` ["attributes.http.request.method"]
+            keys `shouldNotContain` ["attributes___http___request___method"]
+            not (any (T.isInfixOf "___") keys) `shouldBe` True
+          _ -> fail "apiFacets did not return a JSON object"
+
+    describe "Layer A — sidebar HTML render" $ do
+      it "renderFacets emits one row per Facet.path, keyed by the canonical dotted form" $ \_ -> do
+        let m =
+              HM.fromList
+                [ ("attributes.http.request.method", [Catalog.FacetValue "GET" 3])
+                , ("resource.service.name", [Catalog.FacetValue "checkout-svc" 5])
+                , ("level", [Catalog.FacetValue "INFO" 7])
+                ]
+            summary =
+              Catalog.FacetSummary
+                { id = UUID.nil
+                , projectId = pid.toText
+                , tableName = "otel_logs_and_spans"
+                , facetJson = Catalog.FacetData m
+                }
+            html = toText $ renderText (LogPage.renderFacets summary)
+        T.isInfixOf "data-field=\"attributes.http.request.method\"" html `shouldBe` True
+        T.isInfixOf "data-field=\"resource.service.name\"" html `shouldBe` True
+        T.isInfixOf "data-field=\"level\"" html `shouldBe` True
+        -- jsEscape contract: the onclick wires the facet path + value through
+        -- filterByFacet. Lucid HTML-escapes attribute values, so the single
+        -- quotes round-trip as &#39;.
+        T.isInfixOf "filterByFacet(&#39;attributes.http.request.method&#39;, &#39;GET&#39;)" html `shouldBe` True
+        -- Section headers for groups that have populated facets show up.
+        T.isInfixOf "Common Filters" html `shouldBe` True
+        -- Facets without values still render with the empty-state row.
+        T.isInfixOf "no values in window" html `shouldBe` True
+
+      it "every Facet.path is fast (in flattenedOtelAttributes or topLevelOtelColumns)" $ \_ ->
+        all
+          (\f -> S.member f.path PE.flattenedOtelAttributes || S.member f.path PE.topLevelOtelColumns)
+          LogPage.facetDefs
+          `shouldBe` True

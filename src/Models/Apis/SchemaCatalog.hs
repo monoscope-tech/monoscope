@@ -351,6 +351,7 @@ toFacetSummary pid tableName doc =
       Catalog.FCPathParam -> "attributes.url.path_param." <> path
       Catalog.FCRequestBody -> "body.request." <> path
       Catalog.FCResponseBody -> "body.response." <> path
+      Catalog.FCTopLevel -> path -- bare flat column (e.g. "level", "name", "severity.severity_text")
 
 
 -- ---------------------------------------------------------------------------

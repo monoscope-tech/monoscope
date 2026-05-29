@@ -1,4 +1,4 @@
-module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), kqlTimespanToTimeBucket, FieldKey (..), pSquareBracketKey, pTerm, jsonPathQuery, display, pDuration, pNowFunction, pAgoFunction, pValues, Parser, symbol, sc, ToQueryText (..), flattenedOtelAttributes, transformFlattenedAttribute, outputFieldAliases) where
+module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), kqlTimespanToTimeBucket, FieldKey (..), pSquareBracketKey, pTerm, jsonPathQuery, display, pDuration, pNowFunction, pAgoFunction, pValues, Parser, symbol, sc, ToQueryText (..), flattenedOtelAttributes, topLevelOtelColumns, transformFlattenedAttribute, outputFieldAliases) where
 
 import Control.Monad.Combinators.Expr (
   Operator (InfixL),
@@ -640,7 +640,16 @@ flattenedOtelAttributes =
     , "attributes.exception.message"
     , "attributes.exception.stacktrace"
     , "attributes.exception.escaped"
+    , "severity.severity_text"
+    , "severity.severity_number"
     ]
+
+
+-- | Bare top-level columns on @otel_logs_and_spans@. KQL accepts these
+-- without translation (no @___@); listed here so the facet doctest
+-- ('prop_facetsAreFast') can gate them as fast-filter columns too.
+topLevelOtelColumns :: Set T.Text
+topLevelOtelColumns = fromList ["level", "name", "kind", "status_code", "status_message"]
 
 
 -- | Map user-facing output field names (SELECT aliases) to their real DB column names.
