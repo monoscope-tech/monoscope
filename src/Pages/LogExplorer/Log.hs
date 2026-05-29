@@ -54,7 +54,7 @@ import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Megaparsec (parseMaybe)
-import Utils (FreeTierStatus (..), LoadingSize (..), LoadingType (..), checkFreeTierStatus, faSprite_, formatUTC, getDurationNSMS, getServiceColors, htmxOverlayIndicator_, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecTextByKey, methodFillColor, prettyPrintCount, serviceFillColor, statusFillColorText)
+import Utils (FreeTierStatus (..), LoadingSize (..), LoadingType (..), checkFreeTierStatus, faSprite_, formatUTC, getDurationNSMS, getServiceColors, htmxOverlayIndicator_, listToIndexHashMap, loadingIndicator_, lookupVecTextByKey, methodFillColor, prettyPrintCount, serviceFillColor, statusFillColorText)
 
 import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.UUID qualified as UUID
@@ -323,138 +323,134 @@ rowCountDisplay_ suffix countText suffixText =
     dashSuffix = if T.null suffix then "" else "-" <> suffix
 
 
--- | Render facet data for Log Explorer sidebar in a compact format
--- | The facet counts are already scaled in the Fields.getFacetSummary function based on the selected time range
--- | Facets are normally generated for a 24-hour period, but will be proportionally adjusted for the user's time selection
+-- | Visual grouping for the sidebar. Each group renders one collapsible section.
+data FacetGroup = FGCommon | FGHTTP | FGResource | FGUserSession | FGDatabase | FGErrors
+  deriving stock (Bounded, Enum, Eq, Ord, Show)
+
+
+facetGroupLabel :: FacetGroup -> Text
+facetGroupLabel = \case
+  FGCommon -> "Common Filters"
+  FGHTTP -> "HTTP"
+  FGResource -> "Resource"
+  FGUserSession -> "User & Session"
+  FGDatabase -> "Database"
+  FGErrors -> "Errors & Exceptions"
+
+
+-- | A facet entry the sidebar can render.
+--
+-- @path@ is the canonical KQL field name (dotted OTel form, e.g.
+-- @attributes.http.request.method@). It is the lookup key in 'FacetData' (the
+-- adapter in "Models.Apis.SchemaCatalog" prefixes catalog paths by category to
+-- produce this form) AND the field the user types in KQL — so click-to-filter
+-- emits a query the parser compiles to a flat-column scan via
+-- 'Pkg.Parser.Expr.transformFlattenedAttribute'.
+--
+-- Invariant ('prop_facetsAreFast'): every @path@ must be a member of
+-- 'Pkg.Parser.Expr.flattenedOtelAttributes' so the executed SQL is a direct
+-- column reference, never a jsonb_path fallback.
+data Facet = Facet
+  { path :: Text
+  , label :: Text
+  , group :: FacetGroup
+  , color :: Text -> Text
+  }
+
+
+-- | The full facet list. Order within each group is preserved in the sidebar.
+--
+-- Every entry must be in 'Pkg.Parser.Expr.flattenedOtelAttributes' so KQL
+-- compiles the click-to-filter expression to a flat-column scan rather than
+-- a jsonb_path lookup.
+--
+-- A few facets that existed in the prior tuple-based sidebar are
+-- intentionally absent here:
+--
+--   * @level@, @name@ (Operation Name), @kind@, @status_code@,
+--     @status_message@, @severity.*@ — flat columns at the top level of
+--     @otel_logs_and_spans@. The schema-learning walk doesn't emit these
+--     paths (it walks @attributes@ / @resource@ / @body@ / @events@), so
+--     they'd render empty even if listed.
+--   * @attributes.network.*@, @attributes.client.address@,
+--     @attributes.server.address@, @attributes.error.type@,
+--     @attributes.session.previous.id@, @attributes.db.response.status_code@,
+--     subgroups beyond what's listed, etc. — not yet in
+--     'flattenedOtelAttributes'. Adding them naively here fails the
+--     in-whitelist doctest. The right path is to (a) confirm the flat
+--     column exists, (b) add the dotted path to the whitelist, (c) then
+--     list it here.
+--
+-- >>> import qualified Pkg.Parser.Expr as PE
+-- >>> import qualified Data.Set as S
+-- >>> all (\f -> S.member f.path PE.flattenedOtelAttributes) facetDefs
+-- True
+facetDefs :: [Facet]
+facetDefs =
+  let nc = const "" -- no fill color
+   in -- Common
+      [ Facet "resource.service.name" "Service" FGCommon serviceFillColor
+      , Facet "attributes.http.request.method" "HTTP Method" FGCommon methodFillColor
+      , Facet "attributes.http.response.status_code" "HTTP Status" FGCommon statusFillColorText
+      , Facet "attributes.db.operation.name" "DB Operation" FGCommon nc
+      , -- HTTP
+        Facet "attributes.http.request.method_original" "Original Method" FGHTTP methodFillColor
+      , Facet "attributes.http.request.resend_count" "Resend Count" FGHTTP nc
+      , Facet "attributes.http.request.body.size" "Request Body Size" FGHTTP nc
+      , Facet "attributes.url.path" "URL Path" FGHTTP nc
+      , Facet "attributes.url.scheme" "URL Scheme" FGHTTP nc
+      , Facet "attributes.url.full" "Full URL" FGHTTP nc
+      , Facet "attributes.url.fragment" "URL Fragment" FGHTTP nc
+      , Facet "attributes.url.query" "URL Query" FGHTTP nc
+      , Facet "attributes.user_agent.original" "User Agent" FGHTTP nc
+      , -- Resource
+        Facet "resource.service.version" "Service Version" FGResource nc
+      , Facet "resource.service.instance.id" "Service Instance ID" FGResource nc
+      , Facet "resource.service.namespace" "Service Namespace" FGResource nc
+      , Facet "resource.telemetry.sdk.language" "SDK Language" FGResource nc
+      , Facet "resource.telemetry.sdk.name" "SDK Name" FGResource nc
+      , Facet "resource.telemetry.sdk.version" "SDK Version" FGResource nc
+      , -- User & Session
+        Facet "attributes.session.id" "Session ID" FGUserSession nc
+      , Facet "attributes.user.id" "User ID" FGUserSession nc
+      , Facet "attributes.user.email" "User Email" FGUserSession nc
+      , Facet "attributes.user.name" "Username" FGUserSession nc
+      , Facet "attributes.user.full_name" "Full Name" FGUserSession nc
+      , -- Database
+        Facet "attributes.db.system.name" "Database System" FGDatabase nc
+      , Facet "attributes.db.collection.name" "Collection Name" FGDatabase nc
+      , Facet "attributes.db.namespace" "Database Namespace" FGDatabase nc
+      , Facet "attributes.db.operation.batch.size" "Batch Size" FGDatabase nc
+      , -- Errors & Exceptions
+        Facet "attributes.exception.type" "Exception Type" FGErrors (const "bg-fillError-strong")
+      , Facet "attributes.exception.message" "Exception Message" FGErrors nc
+      ]
+
+
+-- | 'facetDefs' bucketed by 'FacetGroup', built once at module load time.
+-- 'flip (<>)' preserves source order under Map.fromListWith (which calls f new old).
+facetsByGroup :: Map.Map FacetGroup [Facet]
+facetsByGroup = Map.fromListWith (flip (<>)) [(f.group, [f]) | f <- facetDefs]
+
+
+-- | Render facet data for Log Explorer sidebar in a compact format.
+-- The facet counts are scaled in the upstream summary based on the selected time range.
 renderFacets :: FacetSummary -> Html ()
 renderFacets facetSummary = do
   let (FacetData facetMap) = facetSummary.facetJson
 
-      -- Color functions for different facet types (using shared Utils)
-      statusColorFn = statusFillColorText
-      methodColorFn = methodFillColor
-      levelColorFn = levelFillColor
-
-      -- Group facet fields by category
-      -- Define mapping of field keys to display names and color functions
-
-      -- Root level facets (displayed at the top)
-      rootFacets :: [(Text, Text, Text -> Text)]
-      rootFacets =
-        [ ("level", "Log Level", levelColorFn)
-        ,
-          ( "status_code"
-          , "Status Code"
-          , \val -> case T.toUpper val of
-              "OK" -> "bg-fillSuccess-strong"
-              "ERROR" -> "bg-fillError-strong"
-              "UNSET" -> "bg-fillWeak"
-              _ -> "bg-fillStrong"
-          )
-        , ("resource___service___name", "Service", serviceFillColor)
-        , ("name", "Operation Name", const "")
-        , ("kind", "Kind", const "")
-        , ("resource___service___version", "Service Version", const "")
-        , ("attributes___http___request___method", "HTTP Method", methodColorFn)
-        , ("attributes___http___response___status_code", "HTTP Status", statusColorFn)
-        , ("attributes___error___type", "Error Type", const "bg-fillError-strong")
-        ]
-
-      -- Grouped facets for better organization
-      facetGroups :: [(Text, [(Text, Text, Text -> Text)])]
-      facetGroups =
-        [
-          ( "HTTP"
-          ,
-            [ ("attributes___http___request___method_original", "Original Method", methodColorFn)
-            , ("attributes___http___request___resend_count", "Resend Count", const "")
-            , ("attributes___http___request___body___size", "Request Body Size", const "")
-            , ("attributes___url___path", "URL Path", const "")
-            , ("attributes___url___scheme", "URL Scheme", const "")
-            , ("attributes___url___full", "Full URL", const "")
-            , ("attributes___url___fragment", "URL Fragment", const "")
-            , ("attributes___url___query", "URL Query", const "")
-            , ("attributes___user_agent___original", "User Agent", const "")
-            ]
-          )
-        ,
-          ( "Severity"
-          ,
-            [ ("severity___severity_text", "Severity Text", levelColorFn)
-            , ("severity___severity_number", "Severity Number", const "")
-            , ("status_message", "Status Message", const "")
-            ]
-          )
-        ,
-          ( "Resource"
-          ,
-            [ ("resource___service___instance___id", "Service Instance ID", const "")
-            , ("resource___service___namespace", "Service Namespace", const "")
-            , ("resource___telemetry___sdk___language", "SDK Language", const "")
-            , ("resource___telemetry___sdk___name", "SDK Name", const "")
-            , ("resource___telemetry___sdk___version", "SDK Version", const "")
-            ]
-          )
-        ,
-          ( "Network"
-          ,
-            [ ("attributes___network___protocol___name", "Protocol Name", const "")
-            , ("attributes___network___protocol___version", "Protocol Version", const "")
-            , ("attributes___network___transport", "Transport", const "")
-            , ("attributes___network___type", "Network Type", const "")
-            , ("attributes___client___address", "Client Address", const "")
-            , ("attributes___server___address", "Server Address", const "")
-            ]
-          )
-        ,
-          ( "User & Session"
-          ,
-            [ ("attributes___user___id", "User ID", const "")
-            , ("attributes___user___email", "User Email", const "")
-            , ("attributes___user___name", "Username", const "")
-            , ("attributes___user___full_name", "Full Name", const "")
-            , ("attributes___session___id", "Session ID", const "")
-            , ("attributes___session___previous___id", "Previous Session", const "")
-            ]
-          )
-        ,
-          ( "Database"
-          ,
-            [ ("attributes___db___system___name", "Database System", const "")
-            , ("attributes___db___collection___name", "Collection Name", const "")
-            , ("attributes___db___namespace", "Database Namespace", const "")
-            , ("attributes___db___operation___name", "DB Operation", const "")
-            , ("attributes___db___response___status_code", "DB Status Code", const "")
-            , ("attributes___db___operation___batch___size", "Batch Size", const "")
-            ]
-          )
-        ,
-          ( "Errors & Exceptions"
-          ,
-            [ ("attributes___error___type", "Error Type", const "bg-fillError-strong")
-            , ("attributes___exception___type", "Exception Type", const "bg-fillError-strong")
-            , ("attributes___exception___message", "Exception Message", const "")
-            ]
-          )
-        ]
-
-  -- Add JS for filtering with checkbox sync
+  -- JS: emit / sync canonical KQL fragments using dotted paths.
   script_
     [text|
     function filterByFacet(field, value) {
       const queryFragment = field + ' == "' + value + '"';
       document.getElementById("filterElement").toggleSubQuery(queryFragment);
     }
-    
-    // Function to update facet checkboxes based on query content
+
     function syncFacetCheckboxes() {
       const filterEl = document.getElementById("filterElement");
       if (!filterEl) return;
-      
-      // Need to get the query directly from the monaco editor
       const query = filterEl.editor ? filterEl.editor.getValue() : "";
-      
-      // Batch DOM updates using requestAnimationFrame
       requestAnimationFrame(() => {
         const checkboxes = document.querySelectorAll('input[type="checkbox"][data-field][data-value]');
         checkboxes.forEach(cb => {
@@ -465,55 +461,47 @@ renderFacets facetSummary = do
         });
       });
     }
-    
-    // Initialize and set up event listeners
+
     document.addEventListener('DOMContentLoaded', () => {
       setTimeout(syncFacetCheckboxes, 100);
-      
-      // Listen for query changes via the custom event
       window.addEventListener('update-query', syncFacetCheckboxes);
     });
   |]
 
-  renderFacetSection "Common Filters" rootFacets facetMap False
-
-  forM_ facetGroups $ \(groupName, facetDisplays) -> renderFacetSection groupName facetDisplays facetMap True
+  forM_ universe \g -> do
+    let fs = filter (\f -> HM.member f.path facetMap) (Map.findWithDefault [] g facetsByGroup)
+    unless (null fs) $ renderFacetSection (facetGroupLabel g) fs facetMap (g /= FGCommon)
   where
-    renderFacetSection :: Text -> [(Text, Text, Text -> Text)] -> HM.HashMap Text [FacetValue] -> Bool -> Html ()
-    renderFacetSection sectionName facetDisplays facetMap collapsed = do
-      -- Use div with group for section
+    renderFacetSection :: Text -> [Facet] -> HM.HashMap Text [FacetValue] -> Bool -> Html ()
+    renderFacetSection sectionName fs facetMap collapsed = do
       div_ [class_ "facet-section-group group/section block contain-[layout_style]"] do
         input_ $ [type_ "checkbox", class_ "hidden peer", id_ $ "toggle-" <> T.replace " " "-" sectionName] ++ [checked_ | not collapsed]
-        -- Section header - use label to toggle checkbox
         label_ [class_ "p-2 bg-fillWeak rounded-lg cursor-pointer flex gap-2 items-center peer-checked:[&>svg]:rotate-0", role_ "button", Lucid.for_ $ "toggle-" <> T.replace " " "-" sectionName, Aria.expanded_ (if collapsed then "false" else "true"), [__|on change from previous <input/> if the checked of previous <input/> set @aria-expanded to 'true' else set @aria-expanded to 'false'|]] do
           faSprite_ "chevron-down" "regular" "w-3 h-3 transition-transform -rotate-90"
           span_ [class_ "font-medium text-sm"] (toHtml sectionName)
 
-        -- Facets container
         div_ [class_ "facets-container mt-1 max-h-0 overflow-hidden peer-checked:max-h-[2000px] transition-[max-height] duration-300"] do
-          forM_ (zip [0 ..] facetDisplays) \(idx, (key, displayName, colorFn)) ->
-            whenJust (HM.lookup key facetMap) \values -> do
-              let shouldBeExpanded = sectionName == "Common Filters" && idx < 5
+          forM_ (zip [0 :: Int ..] fs) \(idx, f) ->
+            whenJust (HM.lookup f.path facetMap) \values -> do
+              let shouldBeExpanded = f.group == FGCommon && idx < 5
               label_ [class_ "facet-section border-t border-strokeWeak group/facet block contain-[layout_style]"] do
-                input_ $ [type_ "checkbox", class_ "hidden", id_ $ "facet-toggle-" <> key] ++ [checked_ | shouldBeExpanded]
-                -- Facet header with actions
+                input_ $ [type_ "checkbox", class_ "hidden", id_ $ "facet-toggle-" <> f.path] ++ [checked_ | shouldBeExpanded]
                 div_ [class_ "flex items-center justify-between hover:bg-fillWeak rounded"] do
                   div_ [class_ "p-2 flex items-center gap-2 cursor-pointer flex-1"] do
                     faSprite_ "chevron-down" "regular" "w-2.5 h-2.5 transition-transform group-has-[:checked]/facet:rotate-0 -rotate-90"
-                    span_ [class_ "text-sm", term "data-tippy-content" (T.replace "___" "." key)] (toHtml displayName)
+                    span_ [class_ "text-sm", term "data-tippy-content" f.path] (toHtml f.label)
 
-                  -- Dropdown menu for actions
                   div_ [class_ "dropdown dropdown-end contain-[layout_style]", onclick_ "event.stopPropagation()"] do
                     a_ [tabindex_ "0", class_ "cursor-pointer p-2 hover:bg-fillWeak rounded", Aria.label_ "Facet options", role_ "button"] do
                       faSprite_ "ellipsis-vertical" "regular" "w-3 h-3"
                     ul_ [tabindex_ "0", class_ "dropdown-content z-10 menu p-2 shadow-sm bg-bgRaised rounded-box w-52"] do
                       li_
                         $ a_
-                          [ term "data-field" (T.replace "___" "." key)
+                          [ term "data-field" f.path
                           , class_ "flex gap-2 items-center"
                           , [__|
-                             init 
-                                set cols to params().cols or '' then 
+                             init
+                                set cols to params().cols or '' then
                                 set colsX to cols.split(',') then
                                 if colsX contains @data-field
                                   set innerHTML of first <span/> in me to 'Remove column'
@@ -534,8 +522,8 @@ renderFacets facetSummary = do
                             span_ [] "Add as table column"
                       li_
                         $ a_
-                          [ term "data-field" (T.replace "___" "." key)
-                          , term "data-key" key
+                          [ term "data-field" f.path
+                          , term "data-key" f.path
                           , class_ "flex gap-2 items-center"
                           , [__|
                               init call window.updateGroupByButtonText(event, me) end
@@ -550,40 +538,44 @@ renderFacets facetSummary = do
                           do
                             faSprite_ "group-by" "regular" "w-4 h-4 text-iconNeutral"
                             span_ [] "Group by"
-                      li_ $ a_ [class_ "flex gap-2 items-center", onclick_ $ "viewFieldPatterns('" <> T.replace "___" "." key <> "')"] do
+                      li_ $ a_ [class_ "flex gap-2 items-center", onclick_ $ "viewFieldPatterns('" <> f.path <> "')"] do
                         faSprite_ "chart-bar" "regular" "w-4 h-4 text-iconNeutral"
                         span_ [] "View patterns"
 
-                -- Render facet values (uses group-has-checked to show/hide)
                 div_ [class_ "facet-values pl-7 pr-2 mb-1 space-y-1 max-h-0 overflow-hidden group-has-[:checked]/facet:max-h-[1000px] transition-[max-height] duration-200"] do
-                  let valuesWithIndices = zip [0 ..] values
+                  let valuesWithIndices = zip [0 :: Int ..] values
                       (visibleValues, hiddenValues) = splitAt 5 valuesWithIndices
                       hiddenCount = length hiddenValues
-                      -- Helper function to render a facet value item
+                      -- val is an observed attribute value; jsEscape it
+                      -- before embedding in the JS single-quoted onclick.
+                      -- Order matters: backslash first, then single quote,
+                      -- then CR (drop) and LF (translate) so a value with
+                      -- "\n</script>..." can't break out.
+                      jsEscape =
+                        T.replace "\n" "\\n"
+                          . T.replace "\r" ""
+                          . T.replace "'" "\\'"
+                          . T.replace "\\" "\\\\"
                       renderFacetValue (FacetValue val count) =
                         label_ [class_ "facet-item flex items-center justify-between py-0.5 max-md:py-1.5 px-1 hover:bg-fillWeak rounded cursor-pointer will-change-[background-color]"] do
                           div_ [class_ "flex items-center gap-2 min-w-0 flex-1"] do
                             input_
                               [ type_ "checkbox"
                               , class_ "checkbox checkbox-xs max-md:checkbox-sm"
-                              , name_ key
-                              , onclick_ $ "filterByFacet('" <> T.replace "___" "." key <> "', '" <> val <> "')"
-                              , term "data-tippy-content" (T.replace "___" "." key <> " == \"" <> val <> "\"")
-                              , term "data-field" (T.replace "___" "." key)
+                              , name_ f.path
+                              , onclick_ $ "filterByFacet('" <> f.path <> "', '" <> jsEscape val <> "')"
+                              , term "data-tippy-content" (f.path <> " == \"" <> val <> "\"")
+                              , term "data-field" f.path
                               , term "data-value" val
                               ]
-
-                            let colorClass = colorFn val
+                            let colorClass = f.color val
                             unless (T.null colorClass) $ span_ [class_ $ colorClass <> " shrink-0 w-0.5 h-3 rounded-sm"] ""
                             span_ [class_ "facet-value truncate text-xs", term "data-tippy-content" val] (toHtml val)
-
                           span_ [class_ "facet-count text-xs text-textWeak shrink-0 tabular-nums"] $ toHtml $ prettyPrintCount count
-                  -- Render visible values
                   forM_ visibleValues \(_, value) -> renderFacetValue value
 
-                  -- Show more/less toggle for hidden values
                   when (hiddenCount > 0) do
-                    let moreId = "more-" <> key
+                    let moreId = "more-" <> f.path
                     input_ [type_ "checkbox", class_ "hidden peer/more", id_ moreId]
                     label_ [class_ "text-textBrand text-xs px-1 py-0.5 cursor-pointer hover:underline", Lucid.for_ moreId] do
                       span_ [class_ "peer-checked/more:hidden"] $ toHtml $ "+ More (" <> prettyPrintCount hiddenCount <> ")"

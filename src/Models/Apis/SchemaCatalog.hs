@@ -17,10 +17,10 @@ module Models.Apis.SchemaCatalog (
   CatalogRow (..),
   upsertTemplates,
   upsertCatalogRows,
-  getByProject,
   getByKeysBatch,
   getSummary,
   upsertSummary,
+  freshSummaryProjects,
   toFacetSummary,
   getFacetSummary,
   vacuumUnreferencedTemplates,
@@ -216,21 +216,6 @@ readRowToEntry r =
         }
 
 
--- | All catalog rows for a project, ordered by most-recently-seen.
-getByProject :: DB es => Projects.ProjectId -> Eff es (V.Vector Catalog.CatalogEntry)
-getByProject pid = do
-  rows :: [CatalogReadRow] <-
-    Hasql.interp
-      [HI.sql| SELECT c.project_id, c.key_kind, c.key_hash, c.template_hash,
-                      c.scope, t.fields, c.values_delta, c.counts,
-                      c.sample_count, c.first_seen, c.last_seen
-               FROM apis.schema_catalog c
-               JOIN apis.schema_template t ON c.template_hash = t.template_hash
-               WHERE c.project_id = #{pid}
-               ORDER BY c.last_seen DESC |]
-  pure $ V.fromList $ readRowToEntry <$> rows
-
-
 -- | Bulk variant: fetches catalog rows for a heterogeneous (project, key_hash)
 -- set in one round-trip. Used by the anomaly producer to load priors for an
 -- entire dirty batch before diffing.
@@ -273,14 +258,38 @@ getSummary pid =
     unwrap (SummaryRow (HI.AsJsonb d)) = d
 
 
-upsertSummary :: DB es => Projects.ProjectId -> Catalog.SummaryDoc -> Eff es ()
-upsertSummary pid doc = do
-  let docJson = HI.AsJsonb doc
+-- | Batched per-project summary upsert. One round trip regardless of how many
+-- projects were touched. An empty vector is a no-op (no SQL emitted).
+upsertSummary :: DB es => V.Vector (Projects.ProjectId, Catalog.SummaryDoc) -> Eff es ()
+upsertSummary rows = unless (V.null rows) $ do
+  let (pids, rawDocs) = V.unzip rows
+      docs = HI.AsJsonb <$> rawDocs
   Hasql.interpExecute_
     [HI.sql| INSERT INTO apis.schema_summary (project_id, doc, generated_at)
-             VALUES (#{pid}, #{docJson}, now())
+             SELECT *, now() FROM unnest(
+               #{pids}::uuid[],
+               #{docs}::jsonb[])
              ON CONFLICT (project_id) DO UPDATE
-             SET doc = EXCLUDED.doc, generated_at = now() |]
+             SET doc = EXCLUDED.doc, generated_at = EXCLUDED.generated_at |]
+
+
+-- | Of the supplied projects, returns those whose @apis.schema_summary@ was
+-- updated within the last 30 s. The window coalesces many flush passes on
+-- noisy projects into one write; shorter than the flush interval and well
+-- within facet-UI staleness tolerance.
+freshSummaryProjects
+  :: DB es
+  => V.Vector Projects.ProjectId
+  -> Eff es (HS.HashSet Projects.ProjectId)
+freshSummaryProjects pids
+  | V.null pids = pure HS.empty
+  | otherwise = do
+      rows :: [UUID.UUID] <-
+        Hasql.interp
+          [HI.sql| SELECT project_id FROM apis.schema_summary
+                   WHERE project_id = ANY(#{pids}::uuid[])
+                     AND generated_at > now() - interval '30 seconds' |]
+      pure $ HS.fromList (UUIDId <$> rows)
 
 
 -- | Drop-in replacement for the legacy @Fields.getFacetSummary@: same
@@ -302,21 +311,46 @@ getFacetSummary pid tableName _from _to =
 -- 'Catalog.FacetSummary' shape so existing callers (AI prompt, query editor)
 -- don't need to change. The @tableName@ argument is ignored — schema is now
 -- unified per project.
+--
+-- Catalog 'topValuesByField' paths are bare (e.g. @http.request.method@)
+-- because each walk strips its section. To match the KQL parser's
+-- 'flattenedOtelAttributes' whitelist (and therefore compile to a flat-column
+-- scan), we prefix each path with its field category: attributes → @attributes.@,
+-- resource → @resource.@, event → @events.@, body/header/param walks get their
+-- standard OTel prefixes. Result keys line up with what users type in KQL.
 toFacetSummary :: Projects.ProjectId -> Text -> Catalog.SummaryDoc -> Catalog.FacetSummary
 toFacetSummary pid tableName doc =
   Catalog.FacetSummary
     { id = UUID.nil -- summary is not row-identified; legacy callers don't depend on this
     , projectId = pid.toText
     , tableName = tableName
-    , facetJson = Catalog.FacetData $ HM.map topKToFacetValues doc.topValuesByField
+    , facetJson =
+        Catalog.FacetData
+          $ HM.fromList
+            [ ( prefixed (maybe Catalog.FCAttribute (.category) (HM.lookup path doc.fields)) path
+              , sortOn (Down . (.count)) [Catalog.FacetValue v (fromIntegral n :: Int) | (v, n) <- HM.toList tk.top]
+              )
+            | (path, tk) <- HM.toList doc.topValuesByField
+            ]
     }
   where
-    topKToFacetValues :: Catalog.TopK -> [Catalog.FacetValue]
-    topKToFacetValues tk =
-      sortOn
-        (negate . (.count))
-        [ Catalog.FacetValue v (fromIntegral n) | (v, n) <- HM.toList tk.top
-        ]
+    -- 'FacetData' has two consumers: the Log Explorer sidebar (only renders
+    -- entries that match 'facetDefs', all of which are in
+    -- 'flattenedOtelAttributes') and the AI prompt context, which wants the
+    -- full shape including request/response body keys. So
+    -- @body.request.*@ / @body.response.*@ keys are intentionally emitted
+    -- here even though they're unreachable from the sidebar.
+    prefixed :: Catalog.FieldCategoryEnum -> Text -> Text
+    prefixed cat path = case cat of
+      Catalog.FCAttribute -> "attributes." <> path
+      Catalog.FCResource -> "resource." <> path
+      Catalog.FCEvent -> "events." <> path
+      Catalog.FCRequestHeader -> "attributes.http.request.header." <> path
+      Catalog.FCResponseHeader -> "attributes.http.response.header." <> path
+      Catalog.FCQueryParam -> "attributes.url.query." <> path
+      Catalog.FCPathParam -> "attributes.url.path_param." <> path
+      Catalog.FCRequestBody -> "body.request." <> path
+      Catalog.FCResponseBody -> "body.response." <> path
 
 
 -- ---------------------------------------------------------------------------

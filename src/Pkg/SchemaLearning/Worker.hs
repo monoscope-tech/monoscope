@@ -88,7 +88,12 @@ flushDirty ref = do
           touchedProjects = HS.fromList [k.projectId | (k, _) <- V.toList dirty]
       SC.upsertTemplates templateRows
       SC.upsertCatalogRows catalogRows
-      summariesN <- regenerateSummaries touchedProjects
+      -- Snapshot the shard's entries after our upserts so the summary fold
+      -- sees the freshly-merged catalog state without reading it back from
+      -- Postgres. Slightly newer than the dirty set (concurrent writers may
+      -- have added more keys), which is fine — the map only grows.
+      entries <- liftIO $ (.entries) <$> readIORef ref
+      summariesN <- regenerateSummaries touchedProjects entries
       let newHashes = HS.fromList $ V.toList $ V.map (.templateHash) templateRows
       liftIO $ Hot.pruneEvicted ref HS.empty newHashes
       pure
@@ -161,19 +166,41 @@ dedupTemplates = V.fromList . HM.elems . V.foldl' step HM.empty
 
 
 -- | Re-derive @apis.schema_summary.doc@ for each project that had at least
--- one dirty key this pass. Reads back the full per-project catalog so the
--- summary reflects all known structure, not just what changed in the batch.
+-- one dirty key this pass.
+--
+-- The fold uses the live in-memory shard slice (caller passes
+-- 'SchemaShardState.entries'), so the bulk refresh costs O(dirty projects ×
+-- avg entries-per-project) of pure work plus exactly two round-trips: one
+-- @SELECT@ to find which touched projects were summarised within the
+-- staleness window, one batched @UPSERT@. No per-project catalog read; no
+-- per-project upsert.
 regenerateSummaries
   :: DB es
   => HS.HashSet Projects.ProjectId
+  -> HM.HashMap SchemaKey CatalogEntry
   -> Eff es Int
-regenerateSummaries projects = do
-  let pids = HS.toList projects
-  forM_ pids \pid -> do
-    entries <- SC.getByProject pid
-    let doc = summariseEntries entries
-    SC.upsertSummary pid doc
-  pure (length pids)
+regenerateSummaries projects entriesMap = do
+  let touched = V.fromList (HS.toList projects)
+  fresh <- SC.freshSummaryProjects touched
+  let staleSet = HS.difference projects fresh
+      -- Partition entries by project_id, restricted to projects we'll
+      -- actually summarise. List (<>) keeps per-insert O(1); V.++ would be
+      -- quadratic.
+      -- TODO(perf): O(|entriesMap|) — scans every entry in the shard even
+      -- when only a few projects are stale. Acceptable while shards hold
+      -- thousands of entries; revisit once the shard grows large enough that
+      -- a per-project index in 'SchemaShardState' is worth carrying.
+      byProject :: HM.HashMap Projects.ProjectId (V.Vector CatalogEntry)
+      byProject =
+        V.fromList
+          <$> HM.fromListWith
+            (<>)
+            [(k.projectId, [e]) | (k, e) <- HM.toList entriesMap, HS.member k.projectId staleSet]
+      rows =
+        V.fromList
+          $ mapMaybe (\pid -> (pid,) . summariseEntries <$> HM.lookup pid byProject) (HS.toList staleSet)
+  SC.upsertSummary rows
+  pure (V.length rows)
 
 
 -- | Project-scoped roll-up of catalog entries into a 'SummaryDoc'.
@@ -184,11 +211,7 @@ summariseEntries entries =
   let fieldsAcc =
         V.foldl' mergeFields HM.empty
           $ V.map ((.template.fields)) entries
-      svcs =
-        V.fromList
-          $ HS.toList
-          $ HS.fromList
-          $ catMaybes [e.scope.service | e <- V.toList entries]
+      svcs = V.fromList . ordNub . mapMaybe (.scope.service) $ V.toList entries
       topVals :: HashMap Text TopK
       topVals = V.foldl' mergeCounts HM.empty (V.map (.counts) entries)
    in SummaryDoc{fields = fieldsAcc, services = svcs, topValuesByField = topVals}
