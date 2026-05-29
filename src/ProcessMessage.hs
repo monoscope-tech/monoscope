@@ -399,6 +399,29 @@ extractObservation canonicalTemplates otelSpan =
                   ]
             ]
 
+      -- OTel attribute + resource bags use flat dotted keys
+      -- (e.g. @{"http.request.method": "GET"}@). 'valueToFields' walks
+      -- object keys as single segments and runs 'normalizeKey' on each —
+      -- which matches @http.request.method@ against the @{hostname}@
+      -- regex and collapses it. Nest the bag by dots first so the walker
+      -- sees @http → request → method@ and normalises segment-wise.
+      nestObject v = case v of
+        AE.Object km ->
+          nestedJsonFromDotNotation
+            [(AEK.toText k, val) | (k, val) <- AEKM.toList km]
+        other -> other
+      -- Common walks fire for every span. The HTTP branch only *adds* the
+      -- specialised header / body / param sub-walks; it does not replace the
+      -- generic attribute / resource walk. Dropping the generic attribute
+      -- walk on HTTP spans was the bug behind empty facets (#401 follow-up):
+      -- keys like http.request.method / db.operation.name live in the top
+      -- attribute bag, not in any sub-bucket, so they never reached the catalog.
+      !commonWalk =
+        [ tagWalk Fields.FCAttribute (valueToFields $ redacted $ nestObject attrValue)
+        , tagWalk Fields.FCResource (valueToFields $ redacted $ nestObject (AE.Object $ AEKM.fromMapText resMap))
+        , tagWalk Fields.FCEvent (valueToFields $ redacted eventsValue)
+        , tagWalk Fields.FCTopLevel (valueToFields topLevelValue)
+        ]
       !walk
         | isHttpSpan =
             let !pathParams = fromMaybe AE.emptyObject $ attrValue ^? key "http" . key "request" . key "path_params"
@@ -408,22 +431,18 @@ extractObservation canonicalTemplates otelSpan =
                 !reqBody = redacted $ fromMaybe AE.Null $ bodyValue ^? key "request_body"
                 !respBody = redacted $ fromMaybe AE.Null $ bodyValue ^? key "response_body"
              in mconcat
-                  [ tagWalk Fields.FCPathParam (valueToFields $ redacted pathParams)
-                  , tagWalk Fields.FCQueryParam (valueToFields $ redacted queryParams)
-                  , tagWalk Fields.FCRequestHeader (valueToFields $ redacted reqHeaders)
-                  , tagWalk Fields.FCResponseHeader (valueToFields $ redacted respHeaders)
-                  , tagWalk Fields.FCRequestBody (valueToFields reqBody)
-                  , tagWalk Fields.FCResponseBody (valueToFields respBody)
-                  , tagWalk Fields.FCTopLevel (valueToFields topLevelValue)
-                  ]
+                  $ commonWalk
+                  <> [ tagWalk Fields.FCPathParam (valueToFields $ redacted pathParams)
+                     , tagWalk Fields.FCQueryParam (valueToFields $ redacted queryParams)
+                     , tagWalk Fields.FCRequestHeader (valueToFields $ redacted reqHeaders)
+                     , tagWalk Fields.FCResponseHeader (valueToFields $ redacted respHeaders)
+                     , tagWalk Fields.FCRequestBody (valueToFields reqBody)
+                     , tagWalk Fields.FCResponseBody (valueToFields respBody)
+                     ]
         | otherwise =
             mconcat
-              [ tagWalk Fields.FCAttribute (valueToFields $ redacted attrValue)
-              , tagWalk Fields.FCResource (valueToFields $ redacted (AE.Object $ AEKM.fromMapText resMap))
-              , tagWalk Fields.FCRequestBody (valueToFields $ redacted bodyValue)
-              , tagWalk Fields.FCEvent (valueToFields $ redacted eventsValue)
-              , tagWalk Fields.FCTopLevel (valueToFields topLevelValue)
-              ]
+              $ commonWalk
+              <> [tagWalk Fields.FCRequestBody (valueToFields $ redacted bodyValue)]
    in SchemaHot.ObservationInput
         { keyKind = keyKind
         , keyHash = keyHash

@@ -19,6 +19,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.HashMap.Strict qualified as HM
+import Data.Map.Strict qualified as Map
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.UUID qualified as UUID
@@ -31,16 +32,17 @@ import Database.PostgreSQL.Simple.Types (PGArray (..))
 import Lucid (renderText)
 import Models.Apis.SchemaCatalog qualified as SC
 import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.Telemetry qualified as Telemetry
 import Pages.LogExplorer.Log qualified as LogPage
-import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.DeriveUtils (AesonText (..), UUIDId (..))
 import Pkg.Parser.Expr qualified as PE
 import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Pkg.SchemaLearning.Hot qualified as Hot
 import Pkg.SchemaLearning.Worker qualified as Worker
 import Pkg.TestUtils (TestResources (..), frozenTime, runAsBase, runHasqlEffect, withTestResources)
+import ProcessMessage qualified
 import Relude
 import Test.Hspec (Spec, aroundAll, describe, it, shouldBe, shouldContain, shouldNotContain, shouldSatisfy)
-import Utils (toXXHash)
 import Web.ApiHandlers qualified as ApiH
 
 
@@ -74,58 +76,90 @@ clearAll tr pids = withPool tr.trPool $ do
   -- and isn't load-bearing for these tests.
 
 
--- | Mirrors the HTTP endpoint hash construction in
--- 'ProcessMessage.extractObservation' (httpKeyOf branch). If that
--- production function changes shape, this needs to follow.
-keyHashFor :: Projects.ProjectId -> Text -> Text -> Text -> Text
-keyHashFor p host method path = toXXHash (T.intercalate "\0" [p.toText, host, method, path])
-
-
-httpScope :: Text -> Text -> Text -> Catalog.Scope
-httpScope host method path =
-  Catalog.Scope
-    { Catalog.service = Just "checkout-svc"
-    , Catalog.spanName = Just (method <> " " <> path)
-    , Catalog.kind = Just "server"
-    , Catalog.host = Just host
-    , Catalog.method = Just method
-    , Catalog.urlPath = Just path
-    , Catalog.statusCodes = V.singleton 200
+-- | Build a realistic 'OtelLogsAndSpans' row. Callers override attributes,
+-- resource, and top-level columns; everything else is a sensible default.
+-- The whole point of going through this builder (and 'extractObservation'
+-- below) is that the tests then exercise the same code path production does.
+mkSpan
+  :: Projects.ProjectId
+  -> Map Text AE.Value
+  -- ^ attributes (e.g. http.request.method → "GET")
+  -> Map Text AE.Value
+  -- ^ resource (e.g. service.name → "checkout-svc")
+  -> (Maybe Text, Maybe Text, Maybe Text, Maybe Text)
+  -- ^ (name, kind, status_code, level)
+  -> Maybe Telemetry.Severity
+  -> Telemetry.OtelLogsAndSpans
+mkSpan p attrs resMap (name, kind, statusCode, level) sev =
+  Telemetry.OtelLogsAndSpans
+    { id = UUID.toText UUID.nil
+    , project_id = p.toText
+    , timestamp = frozenTime
+    , parent_id = Nothing
+    , observed_timestamp = Nothing
+    , hashes = V.empty
+    , name = name
+    , kind = kind
+    , status_code = statusCode
+    , status_message = Nothing
+    , level = level
+    , severity = sev
+    , body = Nothing
+    , duration = Just 1
+    , start_time = frozenTime
+    , end_time = Nothing
+    , context = Nothing
+    , events = Nothing
+    , links = Nothing
+    , attributes = if Map.null attrs then Nothing else Just (AesonText attrs)
+    , resource = if Map.null resMap then Nothing else Just (AesonText resMap)
+    , summary = V.empty
+    , date = frozenTime
+    , errors = Nothing
+    , message_size_bytes = 0
     }
 
 
--- | One ObservationInput with rich attribute + resource leaves so the
--- catalog walks paths the renderer cares about (http.request.method,
--- service.name, db.operation.name, ...).
+-- | A canonical HTTP span — the kind otel-demo produces non-stop. Runs through
+-- the real 'extractObservation' walker.
 richObs :: Projects.ProjectId -> Text -> Hot.ObservationInput
 richObs p method =
-  Hot.ObservationInput
-    { keyKind = Catalog.HttpEndpoint
-    , keyHash = keyHashFor p "api.test" method "/orders"
-    , scope = httpScope "api.test" method "/orders"
-    , walk =
-        [ ("http.request.method", V.singleton (AE.String method, Nothing), Catalog.FCAttribute)
-        , ("db.operation.name", V.singleton (AE.String "SELECT", Nothing), Catalog.FCAttribute)
-        , ("service.name", V.singleton (AE.String "checkout-svc", Nothing), Catalog.FCResource)
-        ]
-    , timestamp = frozenTime
-    }
+  ProcessMessage.extractObservation HM.empty
+    $ mkSpan
+      p
+      ( Map.fromList
+          [ ("http.request.method", AE.String method)
+          , ("http.response.status_code", AE.Number 200)
+          , ("db.operation.name", AE.String "SELECT")
+          , ("url.path", AE.String "/orders")
+          ]
+      )
+      (Map.singleton "service.name" (AE.String "checkout-svc"))
+      (Just (method <> " /orders"), Just "server", Just "200", Nothing)
+      Nothing
 
 
--- | Variant that adds FCTopLevel leaves so we can assert the walker carries
--- top-level columns (name/kind/level/status_code/severity.*) through the
+-- | Variant that also populates log-level columns so we can assert the
+-- top-level walk (name/kind/level/status_code/severity.*) reaches the
 -- summary pipeline.
 richObsWithTopLevel :: Projects.ProjectId -> Text -> Hot.ObservationInput
 richObsWithTopLevel p method =
-  (richObs p method)
-    { Hot.walk =
-        (richObs p method).walk
-          <> [ ("name", V.singleton (AE.String ("POST /orders" :: Text), Nothing), Catalog.FCTopLevel)
-             , ("level", V.singleton (AE.String ("INFO" :: Text), Nothing), Catalog.FCTopLevel)
-             , ("kind", V.singleton (AE.String ("server" :: Text), Nothing), Catalog.FCTopLevel)
-             , ("severity.severity_text", V.singleton (AE.String ("INFO" :: Text), Nothing), Catalog.FCTopLevel)
-             ]
-    }
+  ProcessMessage.extractObservation HM.empty
+    $ mkSpan
+      p
+      ( Map.fromList
+          [ ("http.request.method", AE.String method)
+          , ("db.operation.name", AE.String "SELECT")
+          ]
+      )
+      (Map.singleton "service.name" (AE.String "checkout-svc"))
+      (Just (method <> " /orders"), Just "server", Just "200", Just "INFO")
+      ( Just
+          Telemetry.Severity
+            { severity_text = Just Telemetry.SLInfo
+            , severity_number = 9
+            }
+      )
 
 
 -- | Seed an apis.schema_summary row whose doc carries the canonical bare
@@ -181,7 +215,11 @@ spec = aroundAll withTestResources $
         sumM `shouldSatisfy` isNothing
 
     describe "Layer C — ingestion → flush → summary" $ do
-      it "rich attribute + resource walk produces all expected dotted facet keys" $ \tr -> do
+      -- This test goes through the production walker ('extractObservation'),
+      -- not a hand-built ObservationInput. That's the only way to catch
+      -- under-walking bugs like #401's HTTP branch dropping the generic
+      -- attribute + resource walks.
+      it "every Facet.path the sidebar advertises is populated after a real HTTP span flush" $ \tr -> do
         clearAll tr [pid]
         ref <- newIORef Hot.emptySchemaShardState
         Hot.observeSpans ref Hot.defaultPolicy pid (V.fromList [richObs pid "GET", richObs pid "POST"])
@@ -192,18 +230,30 @@ spec = aroundAll withTestResources $
           Just s -> do
             let Catalog.FacetData m = s.facetJson
                 keys = HM.keys m
-            keys `shouldContain` ["attributes.http.request.method"]
-            keys `shouldContain` ["attributes.db.operation.name"]
-            keys `shouldContain` ["resource.service.name"]
+                -- The full set of paths a real HTTP span must populate.
+                -- Asserting one-by-one keeps the failure message specific.
+                mustHave =
+                  [ "attributes.http.request.method"
+                  , "attributes.http.response.status_code"
+                  , "attributes.db.operation.name"
+                  , "attributes.url.path"
+                  , "resource.service.name"
+                  , "name"
+                  , "kind"
+                  , "status_code"
+                  ]
+            forM_ mustHave $ \k -> keys `shouldContain` [k]
             case HM.lookup "attributes.http.request.method" m of
               Just vs -> map (.value) vs `shouldSatisfy` \xs -> "GET" `elem` xs && "POST" `elem` xs
               Nothing -> fail "missing attributes.http.request.method after flush"
+            case HM.lookup "resource.service.name" m of
+              Just vs -> map (.value) vs `shouldContain` ["checkout-svc"]
+              Nothing -> fail "missing resource.service.name after flush"
 
-      it "top-level columns (name, level, kind, severity.*) flow through the walker" $ \tr -> do
+      it "log-style spans expose severity + level facets through the top-level walk" $ \tr -> do
         clearAll tr [pid]
         ref <- newIORef Hot.emptySchemaShardState
-        let obs = richObsWithTopLevel pid "POST"
-        Hot.observeSpans ref Hot.defaultPolicy pid (V.singleton obs)
+        Hot.observeSpans ref Hot.defaultPolicy pid (V.singleton (richObsWithTopLevel pid "POST"))
         _ <- runHasqlEffect tr (Worker.flushDirty ref)
         sumM <- runHasqlEffect tr $ SC.getFacetSummary pid "otel_logs_and_spans" frozenTime frozenTime
         case sumM of
@@ -211,9 +261,11 @@ spec = aroundAll withTestResources $
           Just s -> do
             let Catalog.FacetData m = s.facetJson
                 keys = HM.keys m
-            keys `shouldContain` ["name"]
-            keys `shouldContain` ["level"]
-            keys `shouldContain` ["severity.severity_text"]
+            forM_ ["name", "kind", "level", "status_code", "severity.severity_text", "severity.severity_number"] $ \k ->
+              keys `shouldContain` [k]
+            case HM.lookup "level" m of
+              Just vs -> map (.value) vs `shouldContain` ["INFO"]
+              Nothing -> fail "missing level values"
 
     describe "Layer C — bulk refresh" $ do
       it "K projects, K dirty keys: one flushDirty pass refreshes all summaries" $ \tr -> do
