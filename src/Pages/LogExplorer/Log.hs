@@ -472,21 +472,21 @@ renderFacets facetSummary = do
             let values = HM.lookupDefault [] f.path facetMap
                 shouldBeExpanded = f.group == FGCommon && idx < 5 && not (null values)
             label_ [class_ "facet-section border-t border-strokeWeak group/facet block contain-[layout_style]"] do
-                input_ $ [type_ "checkbox", class_ "hidden", id_ $ "facet-toggle-" <> f.path] ++ [checked_ | shouldBeExpanded]
-                div_ [class_ "flex items-center justify-between hover:bg-fillWeak rounded"] do
-                  div_ [class_ "p-2 flex items-center gap-2 cursor-pointer flex-1"] do
-                    faSprite_ "chevron-down" "regular" "w-2.5 h-2.5 transition-transform group-has-[:checked]/facet:rotate-0 -rotate-90"
-                    span_ [class_ "text-sm", term "data-tippy-content" f.path] (toHtml f.label)
+              input_ $ [type_ "checkbox", class_ "hidden", id_ $ "facet-toggle-" <> f.path] ++ [checked_ | shouldBeExpanded]
+              div_ [class_ "flex items-center justify-between hover:bg-fillWeak rounded"] do
+                div_ [class_ "p-2 flex items-center gap-2 cursor-pointer flex-1"] do
+                  faSprite_ "chevron-down" "regular" "w-2.5 h-2.5 transition-transform group-has-[:checked]/facet:rotate-0 -rotate-90"
+                  span_ [class_ "text-sm", term "data-tippy-content" f.path] (toHtml f.label)
 
-                  div_ [class_ "dropdown dropdown-end contain-[layout_style]", onclick_ "event.stopPropagation()"] do
-                    a_ [tabindex_ "0", class_ "cursor-pointer p-2 hover:bg-fillWeak rounded", Aria.label_ "Facet options", role_ "button"] do
-                      faSprite_ "ellipsis-vertical" "regular" "w-3 h-3"
-                    ul_ [tabindex_ "0", class_ "dropdown-content z-10 menu p-2 shadow-sm bg-bgRaised rounded-box w-52"] do
-                      li_
-                        $ a_
-                          [ term "data-field" f.path
-                          , class_ "flex gap-2 items-center"
-                          , [__|
+                div_ [class_ "dropdown dropdown-end contain-[layout_style]", onclick_ "event.stopPropagation()"] do
+                  a_ [tabindex_ "0", class_ "cursor-pointer p-2 hover:bg-fillWeak rounded", Aria.label_ "Facet options", role_ "button"] do
+                    faSprite_ "ellipsis-vertical" "regular" "w-3 h-3"
+                  ul_ [tabindex_ "0", class_ "dropdown-content z-10 menu p-2 shadow-sm bg-bgRaised rounded-box w-52"] do
+                    li_
+                      $ a_
+                        [ term "data-field" f.path
+                        , class_ "flex gap-2 items-center"
+                        , [__|
                              init
                                 set cols to params().cols or '' then
                                 set colsX to cols.split(',') then
@@ -503,16 +503,16 @@ renderFacets facetSummary = do
                                   set innerHTML of first <span/> in me to 'Add as table column'
                                 end
                               |]
-                          ]
-                          do
-                            faSprite_ "table-column" "regular" "w-4 h-4 text-iconNeutral"
-                            span_ [] "Add as table column"
-                      li_
-                        $ a_
-                          [ term "data-field" f.path
-                          , term "data-key" f.path
-                          , class_ "flex gap-2 items-center"
-                          , [__|
+                        ]
+                        do
+                          faSprite_ "table-column" "regular" "w-4 h-4 text-iconNeutral"
+                          span_ [] "Add as table column"
+                    li_
+                      $ a_
+                        [ term "data-field" f.path
+                        , term "data-key" f.path
+                        , class_ "flex gap-2 items-center"
+                        , [__|
                               init call window.updateGroupByButtonText(event, me) end
                               on refreshItem call window.updateGroupByButtonText(event, me) end
 
@@ -521,55 +521,55 @@ renderFacets facetSummary = do
                                 trigger refreshItem on me
                               end
                           |]
-                          ]
-                          do
-                            faSprite_ "group-by" "regular" "w-4 h-4 text-iconNeutral"
-                            span_ [] "Group by"
-                      li_ $ a_ [class_ "flex gap-2 items-center", onclick_ $ "viewFieldPatterns('" <> f.path <> "')"] do
-                        faSprite_ "chart-bar" "regular" "w-4 h-4 text-iconNeutral"
-                        span_ [] "View patterns"
+                        ]
+                        do
+                          faSprite_ "group-by" "regular" "w-4 h-4 text-iconNeutral"
+                          span_ [] "Group by"
+                    li_ $ a_ [class_ "flex gap-2 items-center", onclick_ $ "viewFieldPatterns('" <> f.path <> "')"] do
+                      faSprite_ "chart-bar" "regular" "w-4 h-4 text-iconNeutral"
+                      span_ [] "View patterns"
 
-                div_ [class_ "facet-values pl-7 pr-2 mb-1 space-y-1 max-h-0 overflow-hidden group-has-[:checked]/facet:max-h-[1000px] transition-[max-height] duration-200"] do
-                  let valuesWithIndices = zip [0 :: Int ..] values
-                      (visibleValues, hiddenValues) = splitAt 5 valuesWithIndices
-                      hiddenCount = length hiddenValues
-                      -- jsEscape an observed value before embedding in the JS
-                      -- single-quoted onclick. Order: backslash, single quote,
-                      -- CR (drop), LF (translate) — so a value containing
-                      -- "\n</script>..." can't break out of the surrounding tag.
-                      jsEscape =
-                        T.replace "\n" "\\n"
-                          . T.replace "\r" ""
-                          . T.replace "'" "\\'"
-                          . T.replace "\\" "\\\\"
-                      renderFacetValue (FacetValue val count) =
-                        label_ [class_ "facet-item flex items-center justify-between py-0.5 max-md:py-1.5 px-1 hover:bg-fillWeak rounded cursor-pointer will-change-[background-color]"] do
-                          div_ [class_ "flex items-center gap-2 min-w-0 flex-1"] do
-                            input_
-                              [ type_ "checkbox"
-                              , class_ "checkbox checkbox-xs max-md:checkbox-sm"
-                              , name_ f.path
-                              , onclick_ $ "filterByFacet('" <> f.path <> "', '" <> jsEscape val <> "')"
-                              , term "data-tippy-content" (f.path <> " == \"" <> val <> "\"")
-                              , term "data-field" f.path
-                              , term "data-value" val
-                              ]
-                            let colorClass = f.color val
-                            unless (T.null colorClass) $ span_ [class_ $ colorClass <> " shrink-0 w-0.5 h-3 rounded-sm"] ""
-                            span_ [class_ "facet-value truncate text-xs", term "data-tippy-content" val] (toHtml val)
-                          span_ [class_ "facet-count text-xs text-textWeak shrink-0 tabular-nums"] $ toHtml $ prettyPrintCount count
-                  if null values
-                    then div_ [class_ "facet-empty px-1 py-1 text-xs italic text-textWeak"] "no values in window"
-                    else forM_ visibleValues \(_, value) -> renderFacetValue value
+              div_ [class_ "facet-values pl-7 pr-2 mb-1 space-y-1 max-h-0 overflow-hidden group-has-[:checked]/facet:max-h-[1000px] transition-[max-height] duration-200"] do
+                let valuesWithIndices = zip [0 :: Int ..] values
+                    (visibleValues, hiddenValues) = splitAt 5 valuesWithIndices
+                    hiddenCount = length hiddenValues
+                    -- jsEscape an observed value before embedding in the JS
+                    -- single-quoted onclick. Order: backslash, single quote,
+                    -- CR (drop), LF (translate) — so a value containing
+                    -- "\n</script>..." can't break out of the surrounding tag.
+                    jsEscape =
+                      T.replace "\n" "\\n"
+                        . T.replace "\r" ""
+                        . T.replace "'" "\\'"
+                        . T.replace "\\" "\\\\"
+                    renderFacetValue (FacetValue val count) =
+                      label_ [class_ "facet-item flex items-center justify-between py-0.5 max-md:py-1.5 px-1 hover:bg-fillWeak rounded cursor-pointer will-change-[background-color]"] do
+                        div_ [class_ "flex items-center gap-2 min-w-0 flex-1"] do
+                          input_
+                            [ type_ "checkbox"
+                            , class_ "checkbox checkbox-xs max-md:checkbox-sm"
+                            , name_ f.path
+                            , onclick_ $ "filterByFacet('" <> f.path <> "', '" <> jsEscape val <> "')"
+                            , term "data-tippy-content" (f.path <> " == \"" <> val <> "\"")
+                            , term "data-field" f.path
+                            , term "data-value" val
+                            ]
+                          let colorClass = f.color val
+                          unless (T.null colorClass) $ span_ [class_ $ colorClass <> " shrink-0 w-0.5 h-3 rounded-sm"] ""
+                          span_ [class_ "facet-value truncate text-xs", term "data-tippy-content" val] (toHtml val)
+                        span_ [class_ "facet-count text-xs text-textWeak shrink-0 tabular-nums"] $ toHtml $ prettyPrintCount count
+                if null values
+                  then div_ [class_ "facet-empty px-1 py-1 text-xs italic text-textWeak"] "no values in window"
+                  else forM_ visibleValues \(_, value) -> renderFacetValue value
 
-                  when (hiddenCount > 0) do
-                    let moreId = "more-" <> f.path
-                    input_ [type_ "checkbox", class_ "hidden peer/more", id_ moreId]
-                    label_ [class_ "text-textBrand text-xs px-1 py-0.5 cursor-pointer hover:underline", Lucid.for_ moreId] do
-                      span_ [class_ "peer-checked/more:hidden"] $ toHtml $ "+ More (" <> prettyPrintCount hiddenCount <> ")"
-                      span_ [class_ "hidden peer-checked/more:inline"] $ toHtml $ "- Less (" <> prettyPrintCount hiddenCount <> ")"
+                when (hiddenCount > 0) do
+                  let moreId = "more-" <> f.path
+                  input_ [type_ "checkbox", class_ "hidden peer/more", id_ moreId]
+                  label_ [class_ "text-textBrand text-xs px-1 py-0.5 cursor-pointer hover:underline", Lucid.for_ moreId] do
+                    span_ [class_ "peer-checked/more:hidden"] $ toHtml $ "+ More (" <> prettyPrintCount hiddenCount <> ")"
+                    span_ [class_ "hidden peer-checked/more:inline"] $ toHtml $ "- Less (" <> prettyPrintCount hiddenCount <> ")"
 
-                    div_ [class_ "hidden peer-checked/more:block space-y-1"] $ forM_ hiddenValues \(_, value) -> renderFacetValue value
+                  div_ [class_ "hidden peer-checked/more:block space-y-1"] $ forM_ hiddenValues \(_, value) -> renderFacetValue value
 
 
 keepNonEmpty :: Maybe Text -> Maybe Text
