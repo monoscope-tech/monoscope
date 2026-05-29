@@ -348,6 +348,7 @@ library
     , hasql-transaction
     , hs-opentelemetry-api
     , hs-opentelemetry-instrumentation-auto
+    , hs-opentelemetry-instrumentation-hasql
     , hs-opentelemetry-instrumentation-wai
     , hs-opentelemetry-sdk
     , http-api-data
