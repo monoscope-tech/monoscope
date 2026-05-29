@@ -381,6 +381,24 @@ extractObservation canonicalTemplates otelSpan =
       !bodyValue = fromMaybe AE.Null (unAesonTextMaybe otelSpan.body)
       !eventsValue = fromMaybe AE.Null (unAesonTextMaybe otelSpan.events)
 
+      -- Top-level flat columns: level/kind/name/status_code/status_message
+      -- and the severity sub-record. Emitted bare so the facet adapter
+      -- doesn't prefix them with @attributes.@ / @resource.@.
+      !topLevelValue =
+        AE.Object
+          $ AEKM.fromList
+            [ (AEK.fromText k, v)
+            | (k, v) <-
+                catMaybes
+                  [ ("name",) . AE.String <$> otelSpan.name
+                  , ("kind",) . AE.String <$> otelSpan.kind
+                  , ("level",) . AE.String <$> otelSpan.level
+                  , ("status_code",) . AE.String <$> otelSpan.status_code
+                  , ("status_message",) . AE.String <$> otelSpan.status_message
+                  , ("severity",) . AE.toJSON <$> otelSpan.severity
+                  ]
+            ]
+
       !walk
         | isHttpSpan =
             let !pathParams = fromMaybe AE.emptyObject $ attrValue ^? key "http" . key "request" . key "path_params"
@@ -396,6 +414,7 @@ extractObservation canonicalTemplates otelSpan =
                   , tagWalk Fields.FCResponseHeader (valueToFields $ redacted respHeaders)
                   , tagWalk Fields.FCRequestBody (valueToFields reqBody)
                   , tagWalk Fields.FCResponseBody (valueToFields respBody)
+                  , tagWalk Fields.FCTopLevel (valueToFields topLevelValue)
                   ]
         | otherwise =
             mconcat
@@ -403,6 +422,7 @@ extractObservation canonicalTemplates otelSpan =
               , tagWalk Fields.FCResource (valueToFields $ redacted (AE.Object $ AEKM.fromMapText resMap))
               , tagWalk Fields.FCRequestBody (valueToFields $ redacted bodyValue)
               , tagWalk Fields.FCEvent (valueToFields $ redacted eventsValue)
+              , tagWalk Fields.FCTopLevel (valueToFields topLevelValue)
               ]
    in SchemaHot.ObservationInput
         { keyKind = keyKind

@@ -510,6 +510,10 @@ data FieldCategoryEnum
   | FCAttribute
   | FCResource
   | FCEvent
+  | -- | Top-level columns on @otel_logs_and_spans@ (level, name, kind,
+    -- status_code, severity_*). Emitted bare in the facet output — no
+    -- @attributes.@/@resource.@ prefix.
+    FCTopLevel
   deriving stock (Eq, Generic, Ord, Read, Show)
   deriving anyclass (Default, NFData)
   deriving (AE.FromJSON, AE.ToJSON, Display, FromField, ToField) via WrappedEnumSC "FC" FieldCategoryEnum

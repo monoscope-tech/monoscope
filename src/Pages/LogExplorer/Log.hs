@@ -12,6 +12,11 @@ module Pages.LogExplorer.Log (
   TraceTreeEntry (..),
   buildTraceTree,
   fmtPct1,
+  -- Sidebar facet definitions — exported for high-level tests.
+  Facet (..),
+  FacetGroup (..),
+  facetDefs,
+  renderFacets,
 )
 where
 
@@ -54,7 +59,7 @@ import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Megaparsec (parseMaybe)
-import Utils (FreeTierStatus (..), LoadingSize (..), LoadingType (..), checkFreeTierStatus, faSprite_, formatUTC, getDurationNSMS, getServiceColors, htmxOverlayIndicator_, listToIndexHashMap, loadingIndicator_, lookupVecTextByKey, methodFillColor, prettyPrintCount, serviceFillColor, statusFillColorText)
+import Utils (FreeTierStatus (..), LoadingSize (..), LoadingType (..), checkFreeTierStatus, faSprite_, formatUTC, getDurationNSMS, getServiceColors, htmxOverlayIndicator_, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecTextByKey, methodFillColor, prettyPrintCount, serviceFillColor, statusFillColorText)
 
 import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.UUID qualified as UUID
@@ -324,7 +329,7 @@ rowCountDisplay_ suffix countText suffixText =
 
 
 -- | Visual grouping for the sidebar. Each group renders one collapsible section.
-data FacetGroup = FGCommon | FGHTTP | FGResource | FGUserSession | FGDatabase | FGErrors
+data FacetGroup = FGCommon | FGHTTP | FGSeverity | FGResource | FGUserSession | FGDatabase | FGErrors
   deriving stock (Bounded, Enum, Eq, Ord, Show)
 
 
@@ -332,6 +337,7 @@ facetGroupLabel :: FacetGroup -> Text
 facetGroupLabel = \case
   FGCommon -> "Common Filters"
   FGHTTP -> "HTTP"
+  FGSeverity -> "Severity"
   FGResource -> "Resource"
   FGUserSession -> "User & Session"
   FGDatabase -> "Database"
@@ -340,16 +346,11 @@ facetGroupLabel = \case
 
 -- | A facet entry the sidebar can render.
 --
--- @path@ is the canonical KQL field name (dotted OTel form, e.g.
--- @attributes.http.request.method@). It is the lookup key in 'FacetData' (the
--- adapter in "Models.Apis.SchemaCatalog" prefixes catalog paths by category to
--- produce this form) AND the field the user types in KQL — so click-to-filter
--- emits a query the parser compiles to a flat-column scan via
--- 'Pkg.Parser.Expr.transformFlattenedAttribute'.
---
--- Invariant ('prop_facetsAreFast'): every @path@ must be a member of
--- 'Pkg.Parser.Expr.flattenedOtelAttributes' so the executed SQL is a direct
--- column reference, never a jsonb_path fallback.
+-- @path@ is the canonical KQL field name — the lookup key in 'FacetData' AND
+-- the field a user types in KQL. Invariant ('prop_facetsAreFast'): @path@ must
+-- be a flat-column reference (in 'Pkg.Parser.Expr.flattenedOtelAttributes' or
+-- 'Pkg.Parser.Expr.topLevelOtelColumns') so click-to-filter compiles to a
+-- direct column scan, not a jsonb_path fallback.
 data Facet = Facet
   { path :: Text
   , label :: Text
@@ -358,38 +359,21 @@ data Facet = Facet
   }
 
 
--- | The full facet list. Order within each group is preserved in the sidebar.
---
--- Every entry must be in 'Pkg.Parser.Expr.flattenedOtelAttributes' so KQL
--- compiles the click-to-filter expression to a flat-column scan rather than
--- a jsonb_path lookup.
---
--- A few facets that existed in the prior tuple-based sidebar are
--- intentionally absent here:
---
---   * @level@, @name@ (Operation Name), @kind@, @status_code@,
---     @status_message@, @severity.*@ — flat columns at the top level of
---     @otel_logs_and_spans@. The schema-learning walk doesn't emit these
---     paths (it walks @attributes@ / @resource@ / @body@ / @events@), so
---     they'd render empty even if listed.
---   * @attributes.network.*@, @attributes.client.address@,
---     @attributes.server.address@, @attributes.error.type@,
---     @attributes.session.previous.id@, @attributes.db.response.status_code@,
---     subgroups beyond what's listed, etc. — not yet in
---     'flattenedOtelAttributes'. Adding them naively here fails the
---     in-whitelist doctest. The right path is to (a) confirm the flat
---     column exists, (b) add the dotted path to the whitelist, (c) then
---     list it here.
+-- | The full facet list. Source order is preserved within each group.
 --
 -- >>> import qualified Pkg.Parser.Expr as PE
 -- >>> import qualified Data.Set as S
--- >>> all (\f -> S.member f.path PE.flattenedOtelAttributes) facetDefs
+-- >>> all (\f -> S.member f.path PE.flattenedOtelAttributes || S.member f.path PE.topLevelOtelColumns) facetDefs
 -- True
 facetDefs :: [Facet]
 facetDefs =
   let nc = const "" -- no fill color
    in -- Common
       [ Facet "resource.service.name" "Service" FGCommon serviceFillColor
+      , Facet "name" "Operation Name" FGCommon nc
+      , Facet "level" "Log Level" FGCommon levelFillColor
+      , Facet "status_code" "Status Code" FGCommon statusFillColorText
+      , Facet "kind" "Kind" FGCommon nc
       , Facet "attributes.http.request.method" "HTTP Method" FGCommon methodFillColor
       , Facet "attributes.http.response.status_code" "HTTP Status" FGCommon statusFillColorText
       , Facet "attributes.db.operation.name" "DB Operation" FGCommon nc
@@ -403,6 +387,10 @@ facetDefs =
       , Facet "attributes.url.fragment" "URL Fragment" FGHTTP nc
       , Facet "attributes.url.query" "URL Query" FGHTTP nc
       , Facet "attributes.user_agent.original" "User Agent" FGHTTP nc
+      , -- Severity
+        Facet "severity.severity_text" "Severity Text" FGSeverity levelFillColor
+      , Facet "severity.severity_number" "Severity Number" FGSeverity nc
+      , Facet "status_message" "Status Message" FGSeverity nc
       , -- Resource
         Facet "resource.service.version" "Service Version" FGResource nc
       , Facet "resource.service.instance.id" "Service Instance ID" FGResource nc
@@ -468,9 +456,8 @@ renderFacets facetSummary = do
     });
   |]
 
-  forM_ universe \g -> do
-    let fs = filter (\f -> HM.member f.path facetMap) (Map.findWithDefault [] g facetsByGroup)
-    unless (null fs) $ renderFacetSection (facetGroupLabel g) fs facetMap (g /= FGCommon)
+  forM_ universe \g ->
+    renderFacetSection (facetGroupLabel g) (Map.findWithDefault [] g facetsByGroup) facetMap (g /= FGCommon)
   where
     renderFacetSection :: Text -> [Facet] -> HM.HashMap Text [FacetValue] -> Bool -> Html ()
     renderFacetSection sectionName fs facetMap collapsed = do
@@ -481,10 +468,10 @@ renderFacets facetSummary = do
           span_ [class_ "font-medium text-sm"] (toHtml sectionName)
 
         div_ [class_ "facets-container mt-1 max-h-0 overflow-hidden peer-checked:max-h-[2000px] transition-[max-height] duration-300"] do
-          forM_ (zip [0 :: Int ..] fs) \(idx, f) ->
-            whenJust (HM.lookup f.path facetMap) \values -> do
-              let shouldBeExpanded = f.group == FGCommon && idx < 5
-              label_ [class_ "facet-section border-t border-strokeWeak group/facet block contain-[layout_style]"] do
+          forM_ (zip [0 :: Int ..] fs) \(idx, f) -> do
+            let values = HM.lookupDefault [] f.path facetMap
+                shouldBeExpanded = f.group == FGCommon && idx < 5 && not (null values)
+            label_ [class_ "facet-section border-t border-strokeWeak group/facet block contain-[layout_style]"] do
                 input_ $ [type_ "checkbox", class_ "hidden", id_ $ "facet-toggle-" <> f.path] ++ [checked_ | shouldBeExpanded]
                 div_ [class_ "flex items-center justify-between hover:bg-fillWeak rounded"] do
                   div_ [class_ "p-2 flex items-center gap-2 cursor-pointer flex-1"] do
@@ -546,11 +533,10 @@ renderFacets facetSummary = do
                   let valuesWithIndices = zip [0 :: Int ..] values
                       (visibleValues, hiddenValues) = splitAt 5 valuesWithIndices
                       hiddenCount = length hiddenValues
-                      -- val is an observed attribute value; jsEscape it
-                      -- before embedding in the JS single-quoted onclick.
-                      -- Order matters: backslash first, then single quote,
-                      -- then CR (drop) and LF (translate) so a value with
-                      -- "\n</script>..." can't break out.
+                      -- jsEscape an observed value before embedding in the JS
+                      -- single-quoted onclick. Order: backslash, single quote,
+                      -- CR (drop), LF (translate) — so a value containing
+                      -- "\n</script>..." can't break out of the surrounding tag.
                       jsEscape =
                         T.replace "\n" "\\n"
                           . T.replace "\r" ""
@@ -572,7 +558,9 @@ renderFacets facetSummary = do
                             unless (T.null colorClass) $ span_ [class_ $ colorClass <> " shrink-0 w-0.5 h-3 rounded-sm"] ""
                             span_ [class_ "facet-value truncate text-xs", term "data-tippy-content" val] (toHtml val)
                           span_ [class_ "facet-count text-xs text-textWeak shrink-0 tabular-nums"] $ toHtml $ prettyPrintCount count
-                  forM_ visibleValues \(_, value) -> renderFacetValue value
+                  if null values
+                    then div_ [class_ "facet-empty px-1 py-1 text-xs italic text-textWeak"] "no values in window"
+                    else forM_ visibleValues \(_, value) -> renderFacetValue value
 
                   when (hiddenCount > 0) do
                     let moreId = "more-" <> f.path
