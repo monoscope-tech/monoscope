@@ -36,8 +36,8 @@ import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import GHC.Records (HasField (getField))
 import Hasql.Interpolate qualified as HI
-import Hasql.Pool qualified as HPool
 import Hasql.Session qualified as Session
+import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (selectFrom)
 import Relude hiding (ask, id)
@@ -139,11 +139,11 @@ projectIdsByProjectApiKeys projectKeys = do
 
 
 -- | IO-level helper for cache callbacks that need to query hasql directly.
-queryProjectIdByKey :: HPool.Pool -> Text -> IO (Maybe Projects.ProjectId)
+queryProjectIdByKey :: OHasql.TracedPool -> Text -> IO (Maybe Projects.ProjectId)
 queryProjectIdByKey hpool key =
   whenRightM
     Nothing
-    (HPool.use hpool (Session.statement () (HI.interp True [HI.sql| SELECT project_id FROM projects.project_api_keys WHERE key_prefix = #{key} |])))
+    (OHasql.use hpool (Session.statement () (HI.interp True [HI.sql| SELECT project_id FROM projects.project_api_keys WHERE key_prefix = #{key} |])))
     pure
 
 

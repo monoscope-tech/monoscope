@@ -118,7 +118,7 @@ import Effectful.Labeled (runLabeled)
 import Effectful.Log (Log)
 import Effectful.Reader.Static qualified
 import Effectful.Time (Time, runTime)
-import Hasql.Pool qualified as HPool
+import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Log qualified
 import Log.Backend.StandardOutput.Bulk qualified as LogBulk
 import Models.Projects.Projects qualified as Projects
@@ -140,7 +140,7 @@ import Pages.Settings qualified as Api
 import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), mkHasqlPool)
 import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Pkg.SchemaLearning.Worker qualified as SchemaWorker
-import Pkg.TestClock (TestClock, advanceTime, getTestTime, newTestClock, runHasqlPoolSynced, runMutableTime, setTestTime, syncConnectionTime)
+import Pkg.TestClock (TestClock, advanceTime, getTestTime, newTestClock, runHasqlPoolSynced, runMutableTime, setTestTime)
 import Pkg.TraceSessionCache qualified as TSC
 import ProcessMessage qualified
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
@@ -460,7 +460,7 @@ ensureTemplateDatabase connInfo templateDbName = do
 
 -- | `testSessionHeader` would log a user in and automatically generate a session header
 -- which can be reused in subsequent tests
-testSessionHeader :: MonadIO m => Pool Connection -> HPool.Pool -> m (Servant.Headers '[Servant.Header "Set-Cookie" SetCookie] Projects.Session)
+testSessionHeader :: MonadIO m => Pool Connection -> OHasql.TracedPool -> m (Servant.Headers '[Servant.Header "Set-Cookie" SetCookie] Projects.Session)
 testSessionHeader pool hpool = do
   pSessId <-
     Auth.authorizeUserAndPersist Nothing "firstName" "lastName" "https://placehold.it/500x500" "test@monoscope.tech"
@@ -516,7 +516,7 @@ testSessionHeader pool hpool = do
 
 
 -- | Refresh a session to pick up any new projects added to the user
-refreshSession :: MonadIO m => Pool Connection -> HPool.Pool -> Servant.Headers '[Servant.Header "Set-Cookie" SetCookie] Projects.Session -> m (Servant.Headers '[Servant.Header "Set-Cookie" SetCookie] Projects.Session)
+refreshSession :: MonadIO m => Pool Connection -> OHasql.TracedPool -> Servant.Headers '[Servant.Header "Set-Cookie" SetCookie] Projects.Session -> m (Servant.Headers '[Servant.Header "Set-Cookie" SetCookie] Projects.Session)
 refreshSession pool hpool sessionHeaders = do
   let session = Servant.getResponse sessionHeaders
       pSessId = session.sessionId
@@ -588,7 +588,7 @@ runTestBackgroundWithLogger t logger appCtx process = do
 
 
 -- | Run an effect action in test context (for non-servant handlers like Auth.sessionByID)
-runTestEffect :: Pool Connection -> HPool.Pool -> Log.Logger -> TracerProvider -> (forall es. (DB es, Error ServantS.ServerError :> es, HTTP :> es, Log :> es, Time :> es, Tracing :> es, UUIDEff :> es) => Eff es a) -> IO (Either ServantS.ServerError a)
+runTestEffect :: Pool Connection -> OHasql.TracedPool -> Log.Logger -> TracerProvider -> (forall es. (DB es, Error ServantS.ServerError :> es, HTTP :> es, Log :> es, Time :> es, Tracing :> es, UUIDEff :> es) => Eff es a) -> IO (Either ServantS.ServerError a)
 runTestEffect pool hpool logger tp action = do
   logLevel <- Logging.getLogLevelFromEnv
   action

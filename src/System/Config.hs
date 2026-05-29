@@ -14,7 +14,7 @@ import Database.PostgreSQL.Simple qualified as PG
 import Database.PostgreSQL.Simple.Migration qualified as Migrations
 import Effectful
 import Effectful.Fail (Fail)
-import Hasql.Pool qualified as HPool
+import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Log (LogLevel (..))
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
@@ -259,9 +259,9 @@ data AuthContext = AuthContext
   , pool :: Pool.Pool Connection
   , jobsPool :: Pool.Pool Connection
   , timefusionPgPool :: Pool.Pool Connection
-  , hasqlPool :: HPool.Pool
-  , hasqlJobsPool :: HPool.Pool
-  , hasqlTimefusionPool :: HPool.Pool
+  , hasqlPool :: OHasql.TracedPool
+  , hasqlJobsPool :: OHasql.TracedPool
+  , hasqlTimefusionPool :: OHasql.TracedPool
   , projectCache :: Cache Projects.ProjectId Projects.ProjectCache
   , logsPatternCache :: Cache Projects.ProjectId (V.Vector Text)
   , projectKeyCache :: Cache Text (Maybe Projects.ProjectId)

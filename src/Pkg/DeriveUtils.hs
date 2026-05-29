@@ -67,8 +67,8 @@ import Hasql.Connection.Setting.Connection qualified as HCSC
 import Hasql.Decoders qualified as D
 import Hasql.Encoders qualified as E
 import Hasql.Interpolate qualified as HI
-import Hasql.Pool qualified as HPool
 import Hasql.Pool.Config qualified as HPC
+import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Language.Haskell.TH qualified as TH
 import Language.Haskell.TH.Syntax qualified as TH
 import Language.Haskell.TH.Syntax qualified as THS
@@ -554,16 +554,21 @@ textArrayEnc = E.array (E.dimension foldl' (E.element (E.nonNullable E.text)))
 
 -- | Build a hasql pool. Timeouts are `DiffTime` (seconds): 30s acquisition,
 -- 30min aging/idleness — matches the postgresql-simple pool's lifetime envelope.
-mkHasqlPool :: Int -> ByteString -> IO HPool.Pool
+-- | Returns an OTel-instrumented pool: every session opens a Client span with
+-- the OTel db semantic-convention attributes (db.system, db.namespace, server.address,
+-- server.port, db.user) parsed from the connection string.
+mkHasqlPool :: Int -> ByteString -> IO OHasql.TracedPool
 mkHasqlPool sz cstr =
-  HPool.acquire
-    $ HPC.settings
-      [ HPC.size sz
-      , HPC.acquisitionTimeout 30
-      , HPC.agingTimeout 1800
-      , HPC.idlenessTimeout 1800
-      , HPC.staticConnectionSettings [HCS.connection (HCSC.string (decodeUtf8 cstr))]
-      ]
+  OHasql.acquireFromConnString
+    ( HPC.settings
+        [ HPC.size sz
+        , HPC.acquisitionTimeout 30
+        , HPC.agingTimeout 1800
+        , HPC.idlenessTimeout 1800
+        , HPC.staticConnectionSettings [HCS.connection (HCSC.string (decodeUtf8 cstr))]
+        ]
+    )
+    cstr
 
 
 -- | Embed a raw @Text@ value as a literal SQL fragment (no escaping/parameterization).

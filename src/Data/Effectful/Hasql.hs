@@ -21,8 +21,10 @@ import Effectful
 import Effectful.Dispatch.Dynamic (interpret, send)
 import Effectful.Labeled (Labeled, labeled)
 import Hasql.Interpolate qualified as HI
-import Hasql.Pool (Pool, UsageError (..), use)
+import Hasql.Pool (UsageError (..))
 import Hasql.Session (CommandError (..), ResultError (..), Session, SessionError (..))
+import OpenTelemetry.Instrumentation.Hasql (TracedPool)
+import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Hasql.Session qualified as Session
 import Hasql.Statement (Statement)
 import Hasql.Transaction qualified as Tx
@@ -73,9 +75,9 @@ isDeadlockError (HasqlException ue) = case ue of
   _ -> False
 
 
-runHasqlPool :: IOE :> es => Pool -> Eff (Hasql ': es) a -> Eff es a
+runHasqlPool :: IOE :> es => TracedPool -> Eff (Hasql ': es) a -> Eff es a
 runHasqlPool pool = interpret \_ -> \case
-  UseSession s -> liftIO (use pool s)
+  UseSession s -> OHasql.use pool s
 
 
 -- | Run a `Session`, throwing `HasqlException` on `UsageError`.

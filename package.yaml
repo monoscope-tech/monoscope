@@ -228,6 +228,7 @@ library:
     - hasql-transaction
     - hasql-interpolate
     - hasql-dynamic-statements
+    - hs-opentelemetry-instrumentation-hasql
     - regex-tdfa
     - regex
     - resource-pool

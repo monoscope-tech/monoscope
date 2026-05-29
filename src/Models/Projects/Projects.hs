@@ -121,8 +121,8 @@ import Effectful.Reader.Static qualified as EffReader
 import Effectful.Time (Time, currentTime, runTime)
 import GHC.Records (HasField (getField))
 import Hasql.Interpolate qualified as HI
-import Hasql.Pool qualified as HPool
 import Hasql.Statement (Statement)
+import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
 import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumSC (..), idFromText, selectFrom)
@@ -393,7 +393,7 @@ projectCacheById pid = do
        ) enp; |]
 
 
-projectCacheByIdIO :: HPool.Pool -> ProjectId -> IO (Maybe ProjectCache)
+projectCacheByIdIO :: OHasql.TracedPool -> ProjectId -> IO (Maybe ProjectCache)
 projectCacheByIdIO hpool pid = runEff $ EHasql.runHasqlPool hpool $ runTime $ projectCacheById pid
 
 

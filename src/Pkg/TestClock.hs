@@ -28,8 +28,9 @@ import Effectful (Eff, IOE, (:>))
 import Effectful.Dispatch.Dynamic (interpret)
 import Effectful.Time (Time (..))
 import GHC.Clock (getMonotonicTime)
-import Hasql.Pool (Pool, use)
 import Hasql.Session qualified as Session
+import OpenTelemetry.Instrumentation.Hasql (TracedPool)
+import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Relude
 
 
@@ -88,10 +89,10 @@ syncConnectionTime clock conn = do
 -- session-scoped (@is_local=false@) so it survives the auto-commit boundary
 -- between the @SET@ and the user's Session, but every call re-sets it so
 -- the pool may freely rotate connections without contaminating tests.
-runHasqlPoolSynced :: IOE :> es => TestClock -> Pool -> Eff (Hasql ': es) a -> Eff es a
+runHasqlPoolSynced :: IOE :> es => TestClock -> TracedPool -> Eff (Hasql ': es) a -> Eff es a
 runHasqlPoolSynced clock pool = interpret \_ -> \case
-  UseSession s -> liftIO $ do
-    t <- getTestTime clock
+  UseSession s -> do
+    t <- liftIO $ getTestTime clock
     let timeStr = formatTime defaultTimeLocale "%F %T%Q+00" t
         setStmt = "SELECT set_config('app.current_time', '" <> encodeUtf8 (toText timeStr) <> "', false)"
-    use pool $ Session.sql setStmt *> s
+    OHasql.use pool (Session.sql setStmt *> s)
