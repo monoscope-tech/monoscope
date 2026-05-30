@@ -75,19 +75,9 @@ flushDirty ref = do
     then pure FlushResult{templatesWritten = 0, catalogRowsWritten = 0, summariesUpdated = 0, dirtyKeys = 0, anomaliesEmitted = 0}
     else do
       now <- liftIO getCurrentTime
-      -- 1. Anomaly diff (must precede upserts). Anomaly rows always go in —
-      -- they're the durable record consumed by the UI and downstream
-      -- analytics. Notification suppression (for endpoints already in
-      -- apis.endpoints, or where url_path didn't resolve) happens on the
-      -- \*send* side in 'BackgroundJobs.processAPIChangeAnomalies', so the
-      -- platform UI still surfaces the change while we just decline to ping
-      -- the customer's Slack about it.
-      --
-      -- Priors are sourced first from the in-process snapshot (entries we
-      -- persisted in a previous flush). Only the keys we've never written
-      -- in this process — typically just on cold-start — fall through to a
-      -- 'getByKeysBatch' DB round trip. After the first flush of any given
-      -- key, all subsequent flushes are DB-free for anomaly diffing.
+      -- 1. Anomaly diff (must precede upserts so we don't see our own write
+      -- back as the prior). Priors come from the in-process snapshot;
+      -- cold-start keys fall through to a 'getByKeysBatch' round trip.
       (priorEntries, priorSummaryHashes) <- liftIO $ Hot.snapshotForFlush ref
       let inMemoryPriors =
             HM.fromList
@@ -202,18 +192,11 @@ regenerateSummaries
   => HS.HashSet Projects.ProjectId
   -> HM.HashMap SchemaKey CatalogEntry
   -> HM.HashMap Projects.ProjectId Text
-  -- ^ Previously-persisted SummaryDoc hashes. Projects whose newly-computed
-  -- doc hashes match are skipped entirely — no DB write, no TOAST churn.
-  -- This replaces the older 'freshSummaryProjects' SELECT (which gated on
-  -- @generated_at < 30 s ago@) with an in-memory hash check that's both
-  -- cheaper and a tighter no-op gate.
+  -- ^ Per-replica content-hash gate; skips unchanged-doc rewrites.
   -> Eff es (Int, HM.HashMap Projects.ProjectId Text)
 regenerateSummaries projects entriesMap priorHashes = do
-  -- Multi-replica safety: 'freshSummaryProjects' SELECTs the 30 s freshness
-  -- window in Postgres so concurrent replicas don't all rewrite the same
-  -- doc. The in-process hash gate below is tighter (skips truly unchanged
-  -- docs even if the freshness window expired) but only deduplicates within
-  -- a single replica's IORef, so we keep both.
+  -- 'freshSummaryProjects' gates cross-replica races (30 s window in PG);
+  -- 'priorHashes' gates per-replica unchanged docs. Both are load-bearing.
   let touched = V.fromList (HS.toList projects)
   fresh <- SC.freshSummaryProjects touched
   let staleSet = HS.difference projects fresh

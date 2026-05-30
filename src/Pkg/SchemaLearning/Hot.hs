@@ -67,16 +67,11 @@ data SchemaShardState = SchemaShardState
   , knownTemplates :: !(HS.HashSet Text)
   , dirtyKeys :: !(HS.HashSet SchemaKey)
   , bytesEstimate :: !Int
-  -- ^ Cheap running approximation of the in-memory footprint of 'entries'.
-  -- Updated incrementally on each merge; used by 'observeSpans' to fire
-  -- 'evictLRU' between flush ticks when 'maxBytesPerShard' is exceeded.
+  -- ^ Running footprint estimate; drives between-tick eviction.
   , flushedSummaryHashes :: !(HashMap Projects.ProjectId Text)
-  -- ^ Last-persisted SummaryDoc hash per project. Lets the flush worker
-  -- skip the @apis.schema_summary@ rewrite when nothing changed since the
-  -- previous tick — typical for stable projects, biggest TOAST win.
+  -- ^ Last-persisted SummaryDoc hash per project — skip unchanged rewrites.
   , flushedEntries :: !(HashMap SchemaKey CatalogEntry)
-  -- ^ Last-persisted CatalogEntry per key. The anomaly differ uses this
-  -- snapshot instead of issuing a per-flush @SELECT@ over all dirty keys.
+  -- ^ Last-persisted entries; the anomaly differ reads this instead of DB.
   }
   deriving stock (Generic)
   deriving anyclass (NFData)
@@ -126,10 +121,8 @@ data ObservationInput = ObservationInput
   , keyHash :: !Text
   , scope :: !Scope
   , walk :: () -> [(Text, V.Vector (AE.Value, Maybe Text), FieldCategoryEnum)]
-  -- ^ Lazy walk thunk. See 'Catalog.mergeFullWalk' — leaf-walked fields
-  -- with per-value format hints. Held as a thunk so 'mergeGroup' only
-  -- forces the (expensive) JSON traversal + regex sweep when the sample
-  -- gate fires; the 99% of spans that bump-only never pay for the walk.
+  -- ^ Lazy walk thunk — only forced when 'mergeGroup' decides to learn.
+  -- Bump-only spans (the 99% past 'learnFullThreshold') never pay it.
   , timestamp :: !UTCTime
   }
   deriving stock (Generic)
@@ -159,14 +152,13 @@ observeSpans ref policy pid inputs
               ]
       atomicModifyIORef' ref \st ->
         let merged = HM.foldlWithKey' (\acc kh grp -> mergeGroup policy pid kh grp acc) st groups
-            -- Between-tick eviction: if this batch pushed us over budget,
-            -- run evictLRU now instead of waiting up to 60 s for the flush
-            -- fiber. Bounded amortised cost — eviction only fires when the
-            -- shard is actually large.
-            st' =
-              if merged.bytesEstimate > policy.maxBytesPerShard
-                then evictLRU policy merged
-                else merged
+            -- Between-tick eviction fires only when we're meaningfully over
+            -- budget (20% slack), so a shard hovering near the cap doesn't
+            -- pay for an O(N log N) sort on every batch.
+            evictTrigger = policy.maxBytesPerShard + policy.maxBytesPerShard `div` 5
+            st'
+              | merged.bytesEstimate > evictTrigger = evictLRU policy merged
+              | otherwise = merged
          in (st', ())
 
 
@@ -210,12 +202,13 @@ mergeGroup policy pid keyHash grp st = fromMaybe st do
           }
       entries' = HM.insert key newEntry' st.entries
       dirty' = HS.insert key st.dirtyKeys
-      -- Incremental byte tracking. Sample-bumped spans don't grow the
-      -- entry, so skip the recompute on that hot path.
-      bytes' =
-        if learnPhase || sampleNow
-          then st.bytesEstimate - maybe 0 entryBytes curEntry + entryBytes newEntry'
-          else st.bytesEstimate
+      -- Bump-only spans don't change entry size — skip the recompute.
+      bytes'
+        | learnPhase || sampleNow =
+            let oldBytes = maybe 0 entryBytes curEntry
+                newBytes = entryBytes newEntry'
+             in st.bytesEstimate - oldBytes + newBytes
+        | otherwise = st.bytesEstimate
   pure st{entries = entries', dirtyKeys = dirty', bytesEstimate = bytes'}
 
 
@@ -285,21 +278,25 @@ evictLRU policy st =
         | otherwise =
             let sorted = sortOn (\(_, e) -> e.lastSeen) xs
                 excess = length xs - policy.maxKeysPerProject
-             in fst <$> take excess sorted
-      afterPerProject = HS.foldr HM.delete st.entries (HS.fromList perProjectVictims)
-      -- Byte-budget pass: if we're still over budget after the per-project
-      -- LRU, keep dropping the globally-oldest entries until we fit. This is
-      -- what stops a single high-cardinality project from exhausting the
+             in take excess sorted
+      perProjBytes = sum [entryBytes e | (_, e) <- perProjectVictims]
+      afterPerProject = HS.foldr HM.delete st.entries (HS.fromList (fst <$> perProjectVictims))
+      bytesAfterPerProj = st.bytesEstimate - perProjBytes
+      -- Byte-budget pass: if a single high-cardinality project is still
+      -- over budget after the per-project LRU, drop globally-oldest
+      -- entries until we fit. This is what stops it from exhausting the
       -- shard between flush ticks.
-      bytesPerProjPass = HM.foldl' (\acc e -> acc + entryBytes e) 0 afterPerProject
       (entries', bytesFinal) =
-        if bytesPerProjPass <= policy.maxBytesPerShard
-          then (afterPerProject, bytesPerProjPass)
-          else evictUntilUnderBudget policy.maxBytesPerShard afterPerProject bytesPerProjPass
+        if bytesAfterPerProj <= policy.maxBytesPerShard
+          then (afterPerProject, bytesAfterPerProj)
+          else evictUntilUnderBudget policy.maxBytesPerShard afterPerProject bytesAfterPerProj
       -- Evicted keys also drop from the flushed-state snapshot. If a key
       -- comes back later it'll be treated as new — same correctness as
       -- after a process restart, and bounded memory.
-      droppedKeys = HS.difference (HS.fromList (HM.keys st.entries)) (HS.fromList (HM.keys entries'))
+      droppedKeys =
+        HS.difference
+          (HS.fromList (HM.keys st.entries))
+          (HS.fromList (HM.keys entries'))
       flushed' = HS.foldr HM.delete st.flushedEntries droppedKeys
       known' = if HS.size st.knownTemplates > knownTemplatesCap then HS.empty else st.knownTemplates
    in st

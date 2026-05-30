@@ -410,16 +410,11 @@ extractObservation canonicalTemplates otelSpan =
           nestedJsonFromDotNotation
             [(AEK.toText k, val) | (k, val) <- AEKM.toList km]
         other -> other
-      -- Lazy walk thunk — only forced when 'Hot.mergeGroup' decides to learn
-      -- (sample gate). The 99% of spans that bump-only never pay for the
-      -- valueToFields traversal + per-leaf regex sweep.
-      --
-      -- Common walks fire for every span. The HTTP branch only *adds* the
-      -- specialised header / body / param sub-walks; it does not replace the
-      -- generic attribute / resource walk. Dropping the generic attribute
-      -- walk on HTTP spans was the bug behind empty facets (#401 follow-up):
-      -- keys like http.request.method / db.operation.name live in the top
-      -- attribute bag, not in any sub-bucket, so they never reached the catalog.
+      -- Lazy walk thunk — only forced inside the sample gate.
+      -- HTTP branch *adds* specialised sub-walks; it does not replace the
+      -- common attribute/resource walk (dropping the latter on HTTP spans
+      -- was the bug behind empty facets — http.request.method etc. live
+      -- in the top attribute bag, not in any sub-bucket).
       walkThunk () =
         let commonWalk =
               [ tagWalk Fields.FCAttribute (valueToFields $ redacted $ nestObject attrValue)
