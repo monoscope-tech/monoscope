@@ -274,7 +274,16 @@ updateOccurrenceCountsBatch pids now =
           WHEN state IN ('new', 'escalating', 'ongoing', 'regressed') AND quiet_minutes + 1 >= resolution_threshold_minutes THEN #{now}
           ELSE resolved_at
         END
-      WHERE project_id = ANY(#{pids}) AND (state != 'resolved' OR occurrences_24h > 0)
+      WHERE project_id = ANY(#{pids})
+        AND (state != 'resolved' OR occurrences_24h > 0)
+        -- Skip rows where every SET clause would be a no-op: counters all zero
+        -- AND no pending state transition. Cuts ~95% of per-minute writes on
+        -- quiet patterns and stops the TOAST relation from outrunning autovacuum.
+        AND (
+          occurrences_1m > 0 OR occurrences_5m > 0 OR occurrences_1h > 0 OR occurrences_24h > 0
+          OR (state IN ('new','escalating','ongoing','regressed') AND quiet_minutes + 1 >= resolution_threshold_minutes)
+          OR (state = 'regressed' AND regressed_at IS NOT NULL AND #{now}::timestamptz - regressed_at >= INTERVAL '7 days')
+        )
     |]
 
 
@@ -469,7 +478,14 @@ batchUpsertErrorPatterns pid errors now =
             message = CASE WHEN apis.error_patterns.state = 'resolved' THEN EXCLUDED.message ELSE apis.error_patterns.message END,
             error_data = CASE WHEN apis.error_patterns.state = 'resolved' THEN EXCLUDED.error_data ELSE apis.error_patterns.error_data END,
             parent_hash = CASE WHEN apis.error_patterns.state = 'resolved' THEN EXCLUDED.parent_hash ELSE apis.error_patterns.parent_hash END,
-            recent_trace_id = EXCLUDED.recent_trace_id,
+            -- Refresh recent_trace_id at most once every 5 minutes per pattern.
+            -- Without this guard a busy pattern rewrites this column on every
+            -- occurrence, breaking HOT and bloating the heap/TOAST relation.
+            recent_trace_id = CASE
+              WHEN apis.error_patterns.updated_at < #{now}::timestamptz - INTERVAL '5 minutes'
+                THEN EXCLUDED.recent_trace_id
+              ELSE apis.error_patterns.recent_trace_id
+            END,
             is_framework = EXCLUDED.is_framework,
             occurrences_1m = apis.error_patterns.occurrences_1m + EXCLUDED.occurrences_1m,
             occurrences_5m = apis.error_patterns.occurrences_5m + EXCLUDED.occurrences_1m,

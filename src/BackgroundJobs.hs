@@ -1234,6 +1234,8 @@ claimDueErrorNotifications pid mHashes now =
           FROM candidates c
           WHERE e.id = c.id
             AND e.last_notified_at IS NOT DISTINCT FROM c.last_notified_at
+            -- Idempotency: same tick re-run shouldn't rewrite the row.
+            AND e.last_notified_at IS DISTINCT FROM #{now}::timestamptz
           RETURNING c.id, c.error_data, c.state, c.issue_id, c.title,
                     c.slack_thread_ts, c.discord_message_id, c.occurrences_1h,
                     c.created_at, c.last_notified_at
