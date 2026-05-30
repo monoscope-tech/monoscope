@@ -1630,6 +1630,8 @@ processEagerBatch batch shard
                 { learnFullThreshold = fromIntegral ctx.config.schemaLearnFullThreshold
                 , learnSampleEveryN = fromIntegral ctx.config.schemaLearnSampleEveryN
                 , maxKeysPerProject = ctx.config.schemaCatalogMaxKeysPerProject
+                , maxFieldsPerEntry = ctx.config.schemaCatalogMaxFieldsPerEntry
+                , maxBytesPerShard = ctx.config.schemaCatalogMaxBytesPerShard
                 }
         when ctx.config.enableSchemaLearning
           $ liftIO

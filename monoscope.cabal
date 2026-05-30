@@ -634,6 +634,7 @@ test-suite integration-tests
       Pages.ShareSpec
       ProcessMessageSpec
       ReplaySpec
+      SchemaLearningPerfSpec
       SchemaLearningSpec
       Spec
       Web.ApiV1Spec

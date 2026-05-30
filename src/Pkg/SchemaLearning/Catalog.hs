@@ -321,12 +321,16 @@ bumpTopK incoming (TopK d t) =
 -- Commutative: the result of merging spans @a@ then @b@ equals @b@ then @a@
 -- modulo example reservoir ordering (capped + dedup'd).
 mergeFullWalk
-  :: Scope
+  :: Int
+  -- ^ Per-entry field cap (see 'Hot.DecisionPolicy.maxFieldsPerEntry').
+  -- New paths beyond this size are silently dropped. Existing paths
+  -- always update — we keep refining what we already know.
+  -> Scope
   -> [(Text, V.Vector (AE.Value, Maybe Text), FieldCategoryEnum)]
   -> UTCTime
   -> CatalogEntry
   -> CatalogEntry
-mergeFullWalk newScope walk now e =
+mergeFullWalk fieldsCap newScope walk now e =
   let (newFields, newValues, newCounts) = foldl' step (e.template.fields, e.valuesDelta, e.counts) walk
       newTemplate = Template e.template.keyKind newFields
    in e
@@ -339,7 +343,13 @@ mergeFullWalk newScope walk now e =
         , dirty = True
         }
   where
-    step (flds, vals, cnts) (path, vhs, cat) =
+    step acc@(flds, vals, cnts) (path, vhs, cat)
+      -- Path already present → always refine (cheap; no growth).
+      | HM.member path flds = update flds vals cnts path vhs cat
+      -- New path but at cap → drop.
+      | HM.size flds >= fieldsCap = acc
+      | otherwise = update flds vals cnts path vhs cat
+    update flds vals cnts path vhs cat =
       let bareValues = V.map fst vhs
           kinds = HS.fromList $ V.toList $ V.map fieldKindOfValue bareValues
           fmts = HS.fromList $ V.toList $ V.map (uncurry classifyFormat) vhs

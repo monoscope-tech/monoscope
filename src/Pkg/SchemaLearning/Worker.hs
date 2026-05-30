@@ -27,8 +27,11 @@ module Pkg.SchemaLearning.Worker (
 where
 
 import Control.Concurrent (threadDelay)
+import Data.Aeson qualified as AE
+import Data.ByteString.Lazy qualified as BSL
 import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HS
+import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime, getCurrentTime)
 import Data.Vector qualified as V
 import Effectful (Eff)
@@ -40,6 +43,7 @@ import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Pkg.SchemaLearning.Hot (SchemaKey, SchemaShardState)
 import Pkg.SchemaLearning.Hot qualified as Hot
 import Relude
+import Utils (toXXHash)
 
 
 -- | Summary stats from one flush pass — useful for telemetry / log lines.
@@ -78,8 +82,25 @@ flushDirty ref = do
       -- \*send* side in 'BackgroundJobs.processAPIChangeAnomalies', so the
       -- platform UI still surfaces the change while we just decline to ping
       -- the customer's Slack about it.
-      priors <- SC.getByKeysBatch (V.map (\(k, _) -> (k.projectId, k.keyHash)) dirty)
-      let anomalyRows = buildAnomalyRows priors dirty
+      --
+      -- Priors are sourced first from the in-process snapshot (entries we
+      -- persisted in a previous flush). Only the keys we've never written
+      -- in this process — typically just on cold-start — fall through to a
+      -- 'getByKeysBatch' DB round trip. After the first flush of any given
+      -- key, all subsequent flushes are DB-free for anomaly diffing.
+      (priorEntries, priorSummaryHashes) <- liftIO $ Hot.snapshotForFlush ref
+      let inMemoryPriors = HM.fromList
+            [ ((k.projectId, k.keyHash), e)
+            | (k, _) <- V.toList dirty
+            , Just e <- [HM.lookup k priorEntries]
+            ]
+          unknownKeys = V.filter (\(k, _) -> not (HM.member k priorEntries)) dirty
+      dbPriors <-
+        if V.null unknownKeys
+          then pure HM.empty
+          else SC.getByKeysBatch (V.map (\(k, _) -> (k.projectId, k.keyHash)) unknownKeys)
+      let priors = HM.union inMemoryPriors dbPriors
+          anomalyRows = buildAnomalyRows priors dirty
       anomaliesN <- SC.insertAnomalies anomalyRows
       SC.enqueueAnomalyJobs anomalyRows
       -- 2. Upserts.
@@ -93,9 +114,10 @@ flushDirty ref = do
       -- Postgres. Slightly newer than the dirty set (concurrent writers may
       -- have added more keys), which is fine — the map only grows.
       entries <- liftIO $ (.entries) <$> readIORef ref
-      summariesN <- regenerateSummaries touchedProjects entries
-      let newHashes = HS.fromList $ V.toList $ V.map (.templateHash) templateRows
-      liftIO $ Hot.pruneEvicted ref HS.empty newHashes
+      (summariesN, newSummaryHashes) <- regenerateSummaries touchedProjects entries priorSummaryHashes
+      let newTemplateHashes = HS.fromList $ V.toList $ V.map (.templateHash) templateRows
+      liftIO $ Hot.pruneEvicted ref HS.empty newTemplateHashes
+      liftIO $ Hot.commitFlushedSnapshot ref dirty newSummaryHashes
       pure
         FlushResult
           { templatesWritten = V.length templateRows
@@ -178,29 +200,50 @@ regenerateSummaries
   :: DB es
   => HS.HashSet Projects.ProjectId
   -> HM.HashMap SchemaKey CatalogEntry
-  -> Eff es Int
-regenerateSummaries projects entriesMap = do
+  -> HM.HashMap Projects.ProjectId Text
+  -- ^ Previously-persisted SummaryDoc hashes. Projects whose newly-computed
+  -- doc hashes match are skipped entirely — no DB write, no TOAST churn.
+  -- This replaces the older 'freshSummaryProjects' SELECT (which gated on
+  -- @generated_at < 30 s ago@) with an in-memory hash check that's both
+  -- cheaper and a tighter no-op gate.
+  -> Eff es (Int, HM.HashMap Projects.ProjectId Text)
+regenerateSummaries projects entriesMap priorHashes = do
+  -- Multi-replica safety: 'freshSummaryProjects' SELECTs the 30 s freshness
+  -- window in Postgres so concurrent replicas don't all rewrite the same
+  -- doc. The in-process hash gate below is tighter (skips truly unchanged
+  -- docs even if the freshness window expired) but only deduplicates within
+  -- a single replica's IORef, so we keep both.
   let touched = V.fromList (HS.toList projects)
   fresh <- SC.freshSummaryProjects touched
   let staleSet = HS.difference projects fresh
-      -- Partition entries by project_id, restricted to projects we'll
-      -- actually summarise. List (<>) keeps per-insert O(1); V.++ would be
-      -- quadratic.
-      -- TODO(perf): O(|entriesMap|) — scans every entry in the shard even
-      -- when only a few projects are stale. Acceptable while shards hold
-      -- thousands of entries; revisit once the shard grows large enough that
-      -- a per-project index in 'SchemaShardState' is worth carrying.
       byProject :: HM.HashMap Projects.ProjectId (V.Vector CatalogEntry)
       byProject =
         V.fromList
           <$> HM.fromListWith
             (<>)
             [(k.projectId, [e]) | (k, e) <- HM.toList entriesMap, HS.member k.projectId staleSet]
-      rows =
-        V.fromList
-          $ mapMaybe (\pid -> (pid,) . summariseEntries <$> HM.lookup pid byProject) (HS.toList staleSet)
-  SC.upsertSummary rows
-  pure (V.length rows)
+      candidates =
+        [ (pid, doc, summaryDocHash doc)
+        | pid <- HS.toList staleSet
+        , Just es <- [HM.lookup pid byProject]
+        , let doc = summariseEntries es
+        ]
+      changed =
+        [ (pid, doc, h)
+        | (pid, doc, h) <- candidates
+        , HM.lookup pid priorHashes /= Just h
+        ]
+      writeRows = V.fromList [(pid, doc) | (pid, doc, _) <- changed]
+      newHashes = HM.fromList [(pid, h) | (pid, _, h) <- changed]
+  SC.upsertSummary writeRows
+  pure (V.length writeRows, newHashes)
+
+
+-- | Stable content hash of a 'SummaryDoc' for the skip-unchanged gate.
+-- Uses the canonical-ish aeson encoding — the same encoding the upsert
+-- would serialise to JSONB, so equal hash ⇔ equal persisted bytes.
+summaryDocHash :: SummaryDoc -> Text
+summaryDocHash = toXXHash . TE.decodeUtf8 . BSL.toStrict . AE.encode
 
 
 -- | Project-scoped roll-up of catalog entries into a 'SummaryDoc'.

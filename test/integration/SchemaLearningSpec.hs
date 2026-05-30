@@ -87,7 +87,7 @@ mkObs ts host method path leaves =
     { keyKind = Catalog.HttpEndpoint
     , keyHash = keyHashFor host method path
     , scope = httpScope host method path
-    , walk = [(p, V.singleton (v, Nothing), c) | (p, v, c) <- leaves]
+    , walk = \_ -> [(p, V.singleton (v, Nothing), c) | (p, v, c) <- leaves]
     , timestamp = ts
     }
 

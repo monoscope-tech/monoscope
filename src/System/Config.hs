@@ -178,6 +178,11 @@ data EnvConfig = EnvConfig
   , schemaCatalogExamples :: Int
   , schemaCatalogMaxKeysPerProject :: Int
   , schemaCatalogMaxBytesPerShard :: Int
+  , schemaCatalogMaxFieldsPerEntry :: Int
+  -- ^ Hard cap on @template.fields@ size for a single catalog entry. Past
+  -- this, new field paths from the walk are silently dropped. Prevents one
+  -- pathological span (deeply-nested vendor payload, high-cardinality JSON
+  -- key) from blowing the shard.
   , schemaLearnFullThreshold :: Int
   , schemaLearnSampleEveryN :: Int
   , processedAtCutoff :: UTCTime
@@ -222,6 +227,7 @@ instance DefConfig EnvConfig where
       , schemaCatalogExamples = 20
       , schemaCatalogMaxKeysPerProject = 500
       , schemaCatalogMaxBytesPerShard = 67108864
+      , schemaCatalogMaxFieldsPerEntry = 2000
       , schemaLearnFullThreshold = 200
       , schemaLearnSampleEveryN = 200
       , -- MUST match the literal in static/migrations/0064_processed_at_safety_net.sql.
