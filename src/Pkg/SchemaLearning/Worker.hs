@@ -89,11 +89,12 @@ flushDirty ref = do
       -- 'getByKeysBatch' DB round trip. After the first flush of any given
       -- key, all subsequent flushes are DB-free for anomaly diffing.
       (priorEntries, priorSummaryHashes) <- liftIO $ Hot.snapshotForFlush ref
-      let inMemoryPriors = HM.fromList
-            [ ((k.projectId, k.keyHash), e)
-            | (k, _) <- V.toList dirty
-            , Just e <- [HM.lookup k priorEntries]
-            ]
+      let inMemoryPriors =
+            HM.fromList
+              [ ((k.projectId, k.keyHash), e)
+              | (k, _) <- V.toList dirty
+              , Just e <- [HM.lookup k priorEntries]
+              ]
           unknownKeys = V.filter (\(k, _) -> not (HM.member k priorEntries)) dirty
       dbPriors <-
         if V.null unknownKeys
