@@ -484,7 +484,7 @@ runtimeErrorVariantEmail heading subjectPrefix intro projectName errorsUrl error
   , emailBody do
       h1_ $ toHtml $ maybe heading ("Still firing: " <>) ongoingForM
       p_ do
-        toHtml intro
+        toHtml $ maybe intro (const ("This error is still firing in your " :: Text)) ongoingForM
         b_ $ toHtml projectName
         "."
       whenJust ongoingForM $ \d ->
