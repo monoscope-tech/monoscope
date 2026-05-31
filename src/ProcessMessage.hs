@@ -67,7 +67,7 @@ import System.Logging qualified as Log
 import System.Types (DB)
 import Text.RE.Replace (matched)
 import Text.RE.TDFA (RE, re, (?=~))
-import Utils (b64ToJson, eitherStrToText, freeTierDailyMaxEvents, jsonToMap, nestedJsonFromDotNotation, replaceAllFormats, toXXHash)
+import Utils (b64ToJson, eitherStrToText, freeTierDailyMaxEvents, jsonToMap, nestedJsonFromDotNotation, replaceAllFormats, scrubNulText, toXXHash)
 
 
 {--
@@ -140,7 +140,7 @@ processMessages msgs attrs = do
   appCtx <- Eff.ask @AuthContext
   let msgs' =
         msgs <&> \(ackId, msg) -> do
-          let sanitizedJsonStr = stripNulBytes $ decodeUtf8 msg
+          let sanitizedJsonStr = scrubNulText $ decodeUtf8 msg
           recMsg <- eitherStrToText $ AE.eitherDecode $ BL.fromStrict $ encodeUtf8 sanitizedJsonStr
           Right (ackId, recMsg)
 
@@ -186,11 +186,6 @@ processMessages msgs attrs = do
       Telemetry.insertAndHandOff appCtx.env.enableTimefusionWrites appCtx.extractionWorker projectCaches spanVec
 
       pure $ map fst rMsgs
-
-
--- Strip literal NUL bytes from Text
-stripNulBytes :: Text -> Text
-stripNulBytes = T.replace "\NUL" ""
 
 
 -- | Process a single span to extract entities for hash-stamping.

@@ -37,8 +37,6 @@ module Models.Apis.SchemaCatalog (
 where
 
 import Data.Aeson qualified as AE
-import Data.Aeson.Key qualified as K
-import Data.Aeson.KeyMap qualified as KM
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HS
@@ -53,6 +51,8 @@ import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (DB, UUIDId (..))
 import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Relude
+import UnliftIO.Exception (tryAny)
+import Utils (scrubNulValue)
 
 
 -- ---------------------------------------------------------------------------
@@ -156,27 +156,6 @@ upsertCatalogRows rows =
     lasts = V.map (.lastSeen) rows
 
 
--- | Recursively replace NUL characters in JSON strings (and object keys) with
--- the Unicode replacement char. Postgres' jsonb rejects NUL in text contexts
--- (SQLSTATE 22P05); user-supplied request data occasionally carries one.
-scrubNulValue :: AE.Value -> AE.Value
-scrubNulValue = \case
-  AE.String t -> AE.String (scrubNulText t)
-  AE.Array xs -> AE.Array (fmap scrubNulValue xs)
-  AE.Object o
-    -- Hot path: untouched objects keep their KeyMap; only rebuild when a key
-    -- actually contains a NUL byte.
-    | any (hasNul . K.toText) (KM.keys o) ->
-        AE.Object
-          $ KM.fromList
-            [(K.fromText (scrubNulText (K.toText k)), scrubNulValue v) | (k, v) <- KM.toList o]
-    | otherwise -> AE.Object (fmap scrubNulValue o)
-  v -> v
-  where
-    hasNul = T.any (== '\NUL')
-    scrubNulText t = if hasNul t then T.replace "\NUL" "\xFFFD" t else t
-
-
 -- ---------------------------------------------------------------------------
 -- Lookups.
 
@@ -260,17 +239,31 @@ getSummary pid =
 
 -- | Batched per-project summary upsert. One round trip regardless of how many
 -- projects were touched. An empty vector is a no-op (no SQL emitted).
+--
+-- Two failure modes this guards against, both seen in the 2026-05-30 outage:
+-- (a) NUL bytes in observed values render as the valid JSON escape @\\u0000@,
+-- which PG @jsonb@ rejects with @22P05@, poisoning the entire @unnest@ batch;
+-- (b) one rogue project then blocks every other project's summary write until
+-- the bad value ages out (it never does — the in-memory shard keeps it
+-- forever). 'scrubNulValue' strips NULs throughout the doc; if the sanitised
+-- batch still fails, we fall back to per-row inserts so a single hostile
+-- project can't block the rest.
 upsertSummary :: DB es => V.Vector (Projects.ProjectId, Catalog.SummaryDoc) -> Eff es ()
-upsertSummary rows = unless (V.null rows) $ do
-  let (pids, rawDocs) = V.unzip rows
-      docs = HI.AsJsonb <$> rawDocs
-  Hasql.interpExecute_
-    [HI.sql| INSERT INTO apis.schema_summary (project_id, doc, generated_at)
-             SELECT *, now() FROM unnest(
-               #{pids}::uuid[],
-               #{docs}::jsonb[])
-             ON CONFLICT (project_id) DO UPDATE
-             SET doc = EXCLUDED.doc, generated_at = EXCLUDED.generated_at |]
+upsertSummary rows0 = unless (V.null rows0) $ do
+  let rows = V.map (second (HI.AsJsonb . scrubNulValue . AE.toJSON)) rows0
+  tryAny (batch rows) >>= \case
+    Right () -> pass
+    Left _ -> V.forM_ rows \r -> tryAny (batch (V.singleton r)) >>= either (const pass) (const pass)
+  where
+    batch xs =
+      let (pids, docs) = V.unzip xs
+       in Hasql.interpExecute_
+            [HI.sql| INSERT INTO apis.schema_summary (project_id, doc, generated_at)
+                     SELECT *, now() FROM unnest(
+                       #{pids}::uuid[],
+                       #{docs}::jsonb[])
+                     ON CONFLICT (project_id) DO UPDATE
+                     SET doc = EXCLUDED.doc, generated_at = EXCLUDED.generated_at |]
 
 
 -- | Of the supplied projects, returns those whose @apis.schema_summary@ was

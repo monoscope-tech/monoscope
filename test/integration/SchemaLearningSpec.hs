@@ -220,3 +220,50 @@ spec = aroundAll withTestResources $
           priors = HM.fromList [((pid, kh), entry)]
           rows = Worker.buildAnomalyRows priors (V.singleton (k, entry))
       V.length rows `shouldBe` 0
+
+    -- 2026-05-31 incident: a span attribute value containing a NUL byte
+    -- (observed from kubernetes events with base64-flagged fields)
+    -- propagated into the SummaryDoc, where AE.encode serialised it as the
+    -- valid JSON escape ' '. PG's jsonb parser rejects this with
+    -- '22P05 unsupported Unicode escape sequence', poisoning every
+    -- regenerateSummaries batch the rogue project participated in. With
+    -- summary writes permanently failing, monoscope OOM'd at 14 GB in
+    -- ~28 min, looping for 11 h overnight.
+    it "regression: NUL byte in observed value must not crash schema_summary upsert" $ \tr -> do
+      clearAll tr
+      ref <- newIORef Hot.emptySchemaShardState
+      let obs = mkObs frozenTime "api.example.com" "GET" "/k8s"
+            [ ("resource.container.image.name", AE.String "ghcr.io/foo/bar\NULextra", Catalog.FCResource)
+            , ("resource.container.restart_count", AE.String "0\NUL", Catalog.FCResource)
+            ]
+      -- Pre-fix, the upsert throws 22P05 inside flushDirty.
+      -- Post-fix, flushDirty returns cleanly with one summary written.
+      r <- observeAndFlush tr ref [obs]
+      r.summariesUpdated `shouldBe` 1
+
+    it "regression: one project's NUL-tainted doc must not block other projects' summary writes" $ \tr -> do
+      clearAll tr
+      let pidGood = UUIDId (fromMaybe UUID.nil (UUID.fromString "11111111-1111-1111-1111-111111111111"))
+      void $ withPool tr.trPool $ DBT.execute
+        [sql| INSERT INTO projects.projects (id, title, payment_plan, active, deleted_at, weekly_notif, daily_notif)
+              VALUES (?, 'NUL Resilience Project', 'Startup', true, NULL, false, false)
+              ON CONFLICT (id) DO UPDATE SET active = true, deleted_at = NULL |]
+          (Only pidGood)
+      void $ withPool tr.trPool $ DBT.execute
+        [sql| DELETE FROM apis.schema_summary WHERE project_id = ? |] (Only pidGood)
+      void $ withPool tr.trPool $ DBT.execute
+        [sql| DELETE FROM apis.anomalies WHERE project_id = ? |] (Only pidGood)
+      ref <- newIORef Hot.emptySchemaShardState
+      -- Tainted observation on the default pid.
+      let tainted = mkObs frozenTime "api.example.com" "GET" "/bad"
+            [("k", AE.String "x\NULy", Catalog.FCRequestBody)]
+      -- Clean observation on a different project — both flushed in the same pass.
+      let clean = mkObs frozenTime "api.example.com" "GET" "/ok"
+            [("k", AE.String "hello", Catalog.FCRequestBody)]
+      Hot.observeSpans ref Hot.defaultPolicy pid (V.singleton tainted)
+      Hot.observeSpans ref Hot.defaultPolicy pidGood (V.singleton clean)
+      r <- runHasqlEffect tr (Worker.flushDirty ref)
+      -- Both projects' summaries must land. Pre-fix, the whole `unnest` batch
+      -- failed once one project carried a NUL; with scrubNulValue + per-row
+      -- fallback the resilient path returns both.
+      r.summariesUpdated `shouldBe` 2

@@ -63,6 +63,9 @@ module Utils (
   renderSummaryElements,
   summaryForDetailView,
   calculateCycleStartDate,
+  -- NUL-byte scrubbing for PG `jsonb` ingest paths.
+  scrubNulText,
+  scrubNulValue,
 )
 where
 
@@ -1620,3 +1623,28 @@ calculateCycleStartDate start current =
         | currentMonth == 1 = fromGregorian (currentYear - 1) 12 startDay
         | otherwise = fromGregorian currentYear (currentMonth - 1) startDay
    in UTCTime cycleStartDay (timeOfDayToTime timeOfDay)
+
+
+-- | Replace NUL bytes in a 'Text' with the Unicode replacement char (U+FFFD).
+-- Postgres' @jsonb@ rejects NUL in text contexts (SQLSTATE @22P05@); span
+-- attributes occasionally carry one (k8s events, base64-flagged fields).
+--
+-- The 'hasNul' guard makes the common case (no NUL) a single linear scan with
+-- no allocation.
+scrubNulText :: T.Text -> T.Text
+scrubNulText t = if T.any (== '\NUL') t then T.replace "\NUL" "\xFFFD" t else t
+
+
+-- | Recursive 'scrubNulText' over an 'AE.Value' — strings, array elements,
+-- and object keys+values. Untouched objects keep their underlying 'KeyMap'.
+scrubNulValue :: AE.Value -> AE.Value
+scrubNulValue = \case
+  AE.String t -> AE.String (scrubNulText t)
+  AE.Array xs -> AE.Array (fmap scrubNulValue xs)
+  AE.Object o
+    | Relude.any (T.any (== '\NUL') . AEK.toText) (AEKM.keys o) ->
+        AE.Object
+          $ AEKM.fromList
+            [(AEK.fromText (scrubNulText (AEK.toText k)), scrubNulValue v) | (k, v) <- AEKM.toList o]
+    | otherwise -> AE.Object (fmap scrubNulValue o)
+  v -> v
