@@ -8,7 +8,9 @@ semaphore: True
 -- documentation: True
 
 -- with-compiler: ghc-9.8.2
-import: https://www.stackage.org/nightly-2025-11-17/cabal.config
+-- Local copy of https://www.stackage.org/nightly-2025-11-17/cabal.config with
+-- hs-opentelemetry-* pins stripped so we can pull 1.0.0.0 from the monorepo.
+import: stackage-pins.config
 --import: https://www.stackage.org/lts-24.19/cabal.config
 
 
@@ -70,20 +72,26 @@ source-repository-package
   tag: 79ecc01213131da03a7198fc377606ce72ac037a
   subdir: .
 
--- source-repository-package
---   type: git
---   location: https://github.com/iand675/hs-opentelemetry
---   tag: ee8a6dad7db306eb67748ddcd77df4974ad8259e
---   subdir:   api
---   subdir:   sdk
---   subdir:   otlp
---   subdir:   exporters/otlp
---   subdir:   propagators/w3c
---   subdir:   instrumentation/postgresql-simple
---   subdir:   instrumentation/wai
---   subdir:   utils/exceptions
---   subdir:   propagators/datadog
---   subdir:   propagators/b3
+source-repository-package
+  type: git
+  location: https://github.com/iand675/hs-opentelemetry
+  tag: 484370c7faf8af6ca4cb7bede8f5f29099ede5c0
+  subdir: api-types
+  subdir: semantic-conventions
+  subdir: api
+  subdir: sdk
+  subdir: otlp
+  subdir: exporters/otlp
+  subdir: exporters/handle
+  subdir: exporters/in-memory
+  subdir: exporters/prometheus
+  subdir: propagators/w3c
+  subdir: propagators/b3
+  subdir: propagators/datadog
+  subdir: propagators/jaeger
+  subdir: propagators/xray
+  subdir: instrumentation/wai
+  subdir: utils/exceptions
 
 source-repository-package
   type: git
@@ -117,5 +125,6 @@ source-repository-package
 
 constraints:
   streamly ^>=0.10.0,
-  effectful-postgresql +enable-otel
+  effectful-postgresql +enable-otel,
+  thread-utils-context >=0.4
 allow-newer: all

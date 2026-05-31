@@ -19,5 +19,5 @@ startApp = do
     withTracer f =
       Safe.bracket
         initializeGlobalTracerProvider
-        shutdownTracerProvider
+        (\tp -> void $ shutdownTracerProvider tp Nothing)
         (\tracerProvider -> f $ makeTracer tracerProvider "monoscope-server")

@@ -22,7 +22,7 @@ import Network.Wai.Handler.Warp (defaultSettings, runSettings, setGracefulShutdo
 import Network.Wai.Log qualified as WaiLog
 import Network.Wai.Middleware.Cors
 import Network.Wai.Middleware.Gzip (GzipFiles (..), GzipSettings (..), defaultGzipSettings, gzip)
-import OpenTelemetry.Instrumentation.Wai (newOpenTelemetryWaiMiddleware')
+import OpenTelemetry.Instrumentation.Wai (newOpenTelemetryWaiMiddleware)
 import OpenTelemetry.Trace (TracerProvider)
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.Replay (processReplayEvents)
@@ -101,12 +101,13 @@ runServer appLogger env tp = do
           , corsExposedHeaders = Nothing
           , corsMaxAge = Just 86400
           }
+  otelWaiMw <- liftIO newOpenTelemetryWaiMiddleware
   let wrappedServer =
         optionsMiddleware
           . cors (const $ Just corsPolicy)
           . heartbeatMiddleware
           . gzip compressionSettings
-          . newOpenTelemetryWaiMiddleware' tp
+          . otelWaiMw
           -- . loggingMiddleware
           $ server
   let bgJobWorker = BackgroundJobs.jobsWorkerInit appLogger env tp

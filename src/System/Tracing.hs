@@ -43,7 +43,7 @@ makeEffect ''Tracing
 runTracing :: IOE :> es => TracerProvider -> Eff (Tracing ': es) a -> Eff es a
 runTracing tp = interpret $ \env -> \case
   WithSpan name attrs f -> do
-    let tracer = Trace.makeTracer tp "monoscope" $ Trace.TracerOptions Nothing
+    let tracer = Trace.makeTracer tp "monoscope" Trace.tracerOptions
         attrMap = HM.fromList attrs
     -- Properly propagate context through the span lifecycle
     localSeqUnliftIO env $ \unlift -> liftIO $ do
