@@ -5,10 +5,10 @@ import Control.Lens ((^?), _Just)
 import Control.Lens qualified as L
 import Control.Monad.Trans.Resource (runResourceT)
 import Data.Aeson qualified as AE
-import Data.Effectful.Hasql qualified as Hasql
 import Data.Annotation (toAnnotation)
 import Data.ByteString.Char8 qualified as BC
 import Data.ByteString.Lazy.Base64 qualified as LB64
+import Data.Effectful.Hasql qualified as Hasql
 import Data.Generics.Product (field)
 import Data.HashMap.Strict qualified as HM
 import Data.Map.Strict qualified as Map
