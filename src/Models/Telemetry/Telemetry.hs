@@ -1009,33 +1009,11 @@ handOffBatches worker caches records = do
           unless ok $ atomicModifyIORef' worker.droppedBatches \n -> (n + 1, ())
 
 
--- | Hasql-backed bulk insert for OtelLogsAndSpans. Multi-row VALUES INSERT
--- chunked to fit the 65535-parameter PG bind-message limit (700 * 88 = 61600).
--- Row 'id's MUST be parseable UUIDs — callers ('bulkInsertOtelLogsAndSpansTF')
--- guarantee this via 'mintOtelLogIds'.
---
--- On a non-transient failure we bisect to isolate poison rows: good rows still
--- land, the single bad row is logged and dropped, so a bad row from the binary
--- protocol (e.g. encoding edge case past 'cleanNullBytes') doesn't wedge the
--- Kafka partition. Transient Hasql errors propagate so the surrounding retry
--- logic can act. Bisection cap: 10 levels (1024 rows) — comfortably above
--- 'chunkSize = 700'; reaching the cap logs 'BISECT_DEPTH_EXHAUSTED' and
--- re-raises.
---
--- Snippet construction is hoisted above 'go' so each row's snippet (and its
--- otelRowSnippet log effects, e.g. OTEL_UNPARSEABLE_IS_REMOTE) fires exactly
--- once even when bisection recurses O(log N) levels.
---
--- Known edge case (non-TF mode only): mid-bisection, if the left half lands
--- and the right half hits a TRANSIENT error, the transient propagates and the
--- caller retries the whole batch with freshly minted UUIDs (Kafka redelivery
--- → 'mintOtelLogIds' again). The already-landed left-half rows then duplicate.
--- The hypertable has no UUID-only unique constraint (would have to include
--- 'timestamp' per Timescale partitioning), so we can't 'ON CONFLICT' our way
--- out. Under TF-strict semantics (production), a PG failure is logged via
--- 'PG_WRITE_FAILED_TF_OK' and never triggers a retry — the bug only surfaces
--- when 'enableTimefusionWrites=False' (tests / legacy), which is being phased
--- out with the dual-write migration.
+-- | Hasql bulk insert for OtelLogsAndSpans, chunked to fit the 65535-param PG
+-- bind limit (700 * 88 = 61600). On a non-transient failure bisects to isolate
+-- poison rows (cap: 10 levels). Transient errors propagate so the caller can
+-- retry. Row snippets are built once above 'go' so otelRowSnippet effects fire
+-- exactly once regardless of bisection depth.
 bulkInsertOtelLogsAndSpans :: (Hasql :> es, IOE :> es, Log :> es) => V.Vector OtelLogsAndSpans -> Eff es Int64
 bulkInsertOtelLogsAndSpans records
   | V.null records = pure 0
@@ -1044,13 +1022,13 @@ bulkInsertOtelLogsAndSpans records
       go (10 :: Int) pairs
   where
     rawInsert pairs =
-      let chunkSize = 700
-          snippets = V.map snd pairs
-          chunks = unfoldr (\v -> if V.null v then Nothing else Just (V.splitAt chunkSize v)) snippets
-          chunkStmt c = dynamicallyParameterized (otelInsertHeader <> mconcat (intersperse ", " (V.toList c))) D.rowsAffected True
-       in case chunks of
-            [single] -> Hasql.session (HSession.statement () (chunkStmt single))
-            _ -> Hasql.transaction TxS.ReadCommitted TxS.Write $ Relude.sum <$> traverse (Tx.statement () . chunkStmt) chunks
+      case chunks of
+        [single] -> Hasql.session (HSession.statement () (chunkStmt single))
+        _ -> Hasql.transaction TxS.ReadCommitted TxS.Write $ Relude.sum <$> traverse (Tx.statement () . chunkStmt) chunks
+      where
+        chunkSize = 700
+        chunks = unfoldr (\v -> if V.null v then Nothing else Just (V.splitAt chunkSize v)) (V.map snd pairs)
+        chunkStmt c = dynamicallyParameterized (otelInsertHeader <> mconcat (intersperse ", " (V.toList c))) D.rowsAffected True
 
     -- Outer guards V.null; the single-row branch handles 1; recursive calls
     -- always split a ≥2 vector — so 'go' never sees an empty vector and

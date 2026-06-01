@@ -248,8 +248,9 @@ kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaSer
                   -- OffsetInvalid, etc.) — they shouldn't appear in pollMessageBatch
                   -- results but committing one would rewind us to the start.
                   tpsFor topic neRecords =
-                    let maxByPart = Map.fromListWith max [(r.crPartition, K.unOffset r.crOffset + 1) | r <- toList neRecords, K.unOffset r.crOffset >= 0]
-                     in [K.TopicPartition (K.TopicName topic) p (K.PartitionOffset o) | (p, o) <- Map.toList maxByPart]
+                    map (uncurry (K.TopicPartition (K.TopicName topic)) . second K.PartitionOffset)
+                      $ Map.toList
+                      $ Map.fromListWith max [(r.crPartition, K.unOffset r.crOffset + 1) | r <- toList neRecords, K.unOffset r.crOffset >= 0]
               -- Per-partition commit: only topic-groups whose batch succeeded
               -- (or whose poison content was successfully DLQ'd) contribute to
               -- the offset commit. Failed groups leave their partitions alone;
