@@ -313,8 +313,11 @@ kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaSer
     tpsFor :: Foldable f => Text -> f (K.ConsumerRecord k v) -> [K.TopicPartition]
     tpsFor topic neRecords =
       [ K.TopicPartition (K.TopicName topic) p (K.PartitionOffset o)
-      | (p, o) <- Map.toList $ Map.fromListWith max
-          [(r.crPartition, K.unOffset r.crOffset + 1) | r <- toList neRecords, K.unOffset r.crOffset >= 0]
+      | (p, o) <-
+          Map.toList
+            $ Map.fromListWith
+              max
+              [(r.crPartition, K.unOffset r.crOffset + 1) | r <- toList neRecords, K.unOffset r.crOffset >= 0]
       ]
 
     -- Dead-letter messages carry ce-type in headers (PubSub path) or derive from original-topic (Kafka path).
