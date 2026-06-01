@@ -378,4 +378,7 @@ publishToDeadLetterQueue appLogger appCtx messages attributes errorReason = do
           $ AE.object ["error" AE..= err, "topic" AE..= deadLetterTopic, "original_topic" AE..= origTopicOrAckId]
         pure (Left err)
       Right _ -> pure (Right ())
-  pure (sequence_ results)
+  -- sequence_ over [Either Text ()] yields the FIRST Left (and pure ()
+  -- otherwise). Subsequent failures only appear in the dlq log above.
+  let firstFailure = sequence_ results
+  pure firstFailure

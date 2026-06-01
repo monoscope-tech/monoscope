@@ -874,19 +874,17 @@ bulkInsertOtelLogsAndSpansTF enableTf records = do
       tfThread <- Ki.fork scope do
         Log.logTrace "TimeFusion write enabled, attempting write" $ AE.object [("record_count", AE.toJSON $ V.length records)]
         res <- tryAny (retryTimefusion 10 records)
-        case res of
-          Left e -> do
-            let isHasql = isJust (fromException @Hasql.HasqlException e)
-                errId = if isHasql then "TIMEFUSION_WRITE_FAILED" else "TIMEFUSION_WRITE_BUG" :: Text
-                kind = if isHasql then "infra" else "programmer_error" :: Text
-            Log.logAttention errId
-              $ AE.object
-                [ "error_id" AE..= errId
-                , "kind" AE..= kind
-                , "record_count" AE..= V.length records
-                , "error" AE..= show @Text e
-                ]
-          Right _ -> pass
+        whenLeft_ res \e -> do
+          let isHasql = isJust (fromException @Hasql.HasqlException e)
+              errId = if isHasql then "TIMEFUSION_WRITE_FAILED" else "TIMEFUSION_WRITE_BUG" :: Text
+              kind = if isHasql then "infra" else "programmer_error" :: Text
+          Log.logAttention errId
+            $ AE.object
+              [ "error_id" AE..= errId
+              , "kind" AE..= kind
+              , "record_count" AE..= V.length records
+              , "error" AE..= show @Text e
+              ]
         pure res
       -- TF-strict commit semantics: TF is the long-term store; PG is being
       -- phased out (dual-write is temporary). A TF gap is forever; a PG gap
@@ -1011,13 +1009,21 @@ handOffBatches worker caches records = do
 
 -- | Hasql bulk insert for OtelLogsAndSpans, chunked to fit the 65535-param PG
 -- bind limit (700 * 88 = 61600). On a non-transient failure bisects to isolate
--- poison rows (cap: 10 levels). Transient errors propagate so the caller can
--- retry. Row snippets are built once above 'go' so otelRowSnippet effects fire
--- exactly once regardless of bisection depth.
+-- poison rows (cap: 10 levels → isolates single rows for batches ≤ 1024).
+-- Transient errors propagate so the caller can retry. Row snippets are built
+-- once above 'go' so otelRowSnippet effects fire exactly once regardless of
+-- bisection depth.
+--
+-- The 1024 cap is set by 'messagesPerPubsubPullBatch' (default 200) and the
+-- Kafka batchSize: raise the cap if either grows past 1024 or a poison row
+-- will only get BISECT_DEPTH_EXHAUSTED instead of POISON_ROW_DROPPED.
 bulkInsertOtelLogsAndSpans :: (Hasql :> es, IOE :> es, Log :> es) => V.Vector OtelLogsAndSpans -> Eff es Int64
 bulkInsertOtelLogsAndSpans records
   | V.null records = pure 0
   | otherwise = do
+      Relude.when (V.length records > 1024)
+        $ Log.logAttention "BISECT_CAP_MAY_NOT_ISOLATE"
+        $ AE.object ["record_count" AE..= V.length records, "cap" AE..= (1024 :: Int)]
       pairs <- V.mapM (\r -> (r,) <$> otelRowSnippet r) records
       go (10 :: Int) pairs
   where
