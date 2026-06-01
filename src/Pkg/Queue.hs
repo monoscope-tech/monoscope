@@ -243,9 +243,12 @@ kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaSer
               -- subscribed topics; each group needs its own ce-type and attributes.
               let byTopic = foldr (\r -> HM.insertWith (<>) r.crTopic.unTopicName (r :| [])) HM.empty rightRecords
                   -- Max consumed offset + 1 per partition for the topic-group's
-                  -- records, shaped for K.commitPartitionsOffsets.
+                  -- records, shaped for K.commitPartitionsOffsets. The
+                  -- >= 0 guard rules out librdkafka sentinels (OffsetEnd = -1,
+                  -- OffsetInvalid, etc.) — they shouldn't appear in pollMessageBatch
+                  -- results but committing one would rewind us to the start.
                   tpsFor topic neRecords =
-                    let maxByPart = Map.fromListWith max [(r.crPartition, K.unOffset r.crOffset + 1) | r <- toList neRecords]
+                    let maxByPart = Map.fromListWith max [(r.crPartition, K.unOffset r.crOffset + 1) | r <- toList neRecords, K.unOffset r.crOffset >= 0]
                      in [K.TopicPartition (K.TopicName topic) p (K.PartitionOffset o) | (p, o) <- Map.toList maxByPart]
               -- Per-partition commit: only topic-groups whose batch succeeded
               -- (or whose poison content was successfully DLQ'd) contribute to
@@ -343,14 +346,21 @@ kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaSer
       _ -> ""
 
 
--- | Publish failed messages to dead letter queue. Returns Left if any
--- individual publish failed so the caller can refuse to advance the upstream
--- offset/ack — otherwise a broken DLQ silently drops poison data.
+-- | Publish failed messages to dead letter queue. Returns the first Left if
+-- any individual publish failed so the caller can refuse to advance the
+-- upstream offset/ack — otherwise a broken DLQ silently drops poison data.
+--
+-- Partial-failure semantics: if N-1 messages publish and the last fails, this
+-- returns Left and the caller holds the whole batch's offsets. On the next
+-- poll librdkafka redelivers all N messages and the N-1 already-DLQ'd ones
+-- get DLQ'd again, duplicating in DLQ. The trade — duplicate DLQ entries
+-- vs. losing poison data — favors duplicates: DLQ is rare and replay tooling
+-- can dedupe by 'original-ack-id'.
 publishToDeadLetterQueue :: Log.Logger -> AuthContext -> [(Text, ByteString)] -> HM.HashMap Text Text -> Text -> IO (Either Text ())
 publishToDeadLetterQueue appLogger appCtx messages attributes errorReason = do
   let deadLetterTopic = appCtx.config.kafkaDeadLetterTopic
   currentTime <- getCurrentTime
-  results <- forM messages \(origTopicOrAckId, msgData) -> do
+  fmap sequence_ $ forM messages \(origTopicOrAckId, msgData) -> do
     let deadLetterAttrs =
           attributes
             <> HM.fromList
@@ -367,4 +377,3 @@ publishToDeadLetterQueue appLogger appCtx messages attributes errorReason = do
           $ AE.object ["error" AE..= err, "topic" AE..= deadLetterTopic, "original_topic" AE..= origTopicOrAckId]
         pure (Left err)
       Right _ -> pure (Right ())
-  pure $ maybe (Right ()) Left $ listToMaybe $ lefts results

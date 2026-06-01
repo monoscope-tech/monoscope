@@ -1014,43 +1014,61 @@ handOffBatches worker caches records = do
 -- Row 'id's MUST be parseable UUIDs — callers ('bulkInsertOtelLogsAndSpansTF')
 -- guarantee this via 'mintOtelLogIds'.
 --
--- On a non-transient failure we bisect the vector to isolate poison rows: good
--- rows still land, the single bad row is logged at attention and dropped, so a
--- bad row from the binary protocol (e.g. encoding edge case past
--- 'cleanNullBytes') doesn't wedge the Kafka partition. Transient Hasql errors
--- propagate so the surrounding retry logic can act. Bisection recursion is
--- capped at 10 levels (1024 rows) — well above 'chunkSize = 700', so the cap
--- is only reached on pathological splitting and logs 'BISECT_DEPTH_EXHAUSTED'
--- before re-raising.
+-- On a non-transient failure we bisect to isolate poison rows: good rows still
+-- land, the single bad row is logged and dropped, so a bad row from the binary
+-- protocol (e.g. encoding edge case past 'cleanNullBytes') doesn't wedge the
+-- Kafka partition. Transient Hasql errors propagate so the surrounding retry
+-- logic can act. Bisection cap: 10 levels (1024 rows) — comfortably above
+-- 'chunkSize = 700'; reaching the cap logs 'BISECT_DEPTH_EXHAUSTED' and
+-- re-raises.
+--
+-- Snippet construction is hoisted above 'go' so each row's snippet (and its
+-- otelRowSnippet log effects, e.g. OTEL_UNPARSEABLE_IS_REMOTE) fires exactly
+-- once even when bisection recurses O(log N) levels.
+--
+-- Known edge case (non-TF mode only): mid-bisection, if the left half lands
+-- and the right half hits a TRANSIENT error, the transient propagates and the
+-- caller retries the whole batch with freshly minted UUIDs (Kafka redelivery
+-- → 'mintOtelLogIds' again). The already-landed left-half rows then duplicate.
+-- The hypertable has no UUID-only unique constraint (would have to include
+-- 'timestamp' per Timescale partitioning), so we can't 'ON CONFLICT' our way
+-- out. Under TF-strict semantics (production), a PG failure is logged via
+-- 'PG_WRITE_FAILED_TF_OK' and never triggers a retry — the bug only surfaces
+-- when 'enableTimefusionWrites=False' (tests / legacy), which is being phased
+-- out with the dual-write migration.
 bulkInsertOtelLogsAndSpans :: (Hasql :> es, IOE :> es, Log :> es) => V.Vector OtelLogsAndSpans -> Eff es Int64
-bulkInsertOtelLogsAndSpans = go (10 :: Int)
+bulkInsertOtelLogsAndSpans records
+  | V.null records = pure 0
+  | otherwise = do
+      pairs <- V.mapM (\r -> (r,) <$> otelRowSnippet r) records
+      go (10 :: Int) pairs
   where
-    rawInsert recs = do
-      rowSnippets <- V.mapM otelRowSnippet recs
+    rawInsert pairs =
       let chunkSize = 700
-          chunks = unfoldr (\v -> if V.null v then Nothing else Just (V.splitAt chunkSize v)) rowSnippets
+          snippets = V.map snd pairs
+          chunks = unfoldr (\v -> if V.null v then Nothing else Just (V.splitAt chunkSize v)) snippets
           chunkStmt c = dynamicallyParameterized (otelInsertHeader <> mconcat (intersperse ", " (V.toList c))) D.rowsAffected True
-      case chunks of
-        [single] -> Hasql.session (HSession.statement () (chunkStmt single))
-        _ -> Hasql.transaction TxS.ReadCommitted TxS.Write $ Relude.sum <$> traverse (Tx.statement () . chunkStmt) chunks
+       in case chunks of
+            [single] -> Hasql.session (HSession.statement () (chunkStmt single))
+            _ -> Hasql.transaction TxS.ReadCommitted TxS.Write $ Relude.sum <$> traverse (Tx.statement () . chunkStmt) chunks
 
-    go _ recs | V.null recs = pure 0
-    go d recs =
-      tryAny (rawInsert recs) >>= \case
+    go _ pairs | V.null pairs = pure 0
+    go d pairs =
+      tryAny (rawInsert pairs) >>= \case
         Right n -> pure n
         Left e
           | Hasql.isTransientException e -> throwIO e
-          | V.length recs == 1 ->
+          | V.length pairs == 1 ->
               Log.logAttention
                 "POISON_ROW_DROPPED"
-                (AE.object ["id" AE..= (V.head recs).id, "error" AE..= show @Text e])
+                (AE.object ["id" AE..= (fst (V.head pairs)).id, "error" AE..= show @Text e])
                 $> 0
           | d <= 0 -> do
               Log.logAttention "BISECT_DEPTH_EXHAUSTED"
-                $ AE.object ["record_count" AE..= V.length recs, "error" AE..= show @Text e]
+                $ AE.object ["record_count" AE..= V.length pairs, "error" AE..= show @Text e]
               throwIO e
           | otherwise ->
-              let (l, r) = V.splitAt (V.length recs `div` 2) recs
+              let (l, r) = V.splitAt (V.length pairs `div` 2) pairs
                in (+) <$> go (d - 1) l <*> go (d - 1) r
 
 
