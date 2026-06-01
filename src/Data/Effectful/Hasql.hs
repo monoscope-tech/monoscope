@@ -3,6 +3,7 @@ module Data.Effectful.Hasql (
   Hasql (..),
   HasqlException (..),
   isTransientHasqlError,
+  isTransientException,
   isDeadlockError,
   runHasqlPool,
   session,
@@ -67,6 +68,13 @@ isTransientUsageError = \case
 
 isTransientHasqlError :: HasqlException -> Bool
 isTransientHasqlError (HasqlException ue) = isTransientUsageError ue
+
+
+-- | True iff @e@ is a transient 'HasqlException'. Sugar for the
+-- 'maybe False isTransientHasqlError . fromException' idiom callers would
+-- otherwise repeat at every fault-classifying call site.
+isTransientException :: SomeException -> Bool
+isTransientException = maybe False isTransientHasqlError . fromException
 
 
 isDeadlockError :: HasqlException -> Bool

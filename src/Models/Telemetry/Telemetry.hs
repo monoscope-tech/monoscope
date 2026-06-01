@@ -928,7 +928,7 @@ bulkInsertOtelLogsAndSpansTF enableTf records = do
           | "TuplesOk" `T.isInfixOf` show e ->
               Log.logTrace "TimeFusion write succeeded (TuplesOk wire-mismatch ignored)" $ AE.object [("record_count", AE.toJSON $ V.length recs)]
           | n > 0
-          , maybe False Hasql.isTransientHasqlError (fromException e) -> do
+          , Hasql.isTransientException e -> do
               let attempt = 11 - n -- attempts: 1..10
                   delayMicros = min 5000000 (100000 * (2 ^ (attempt - 1) :: Int)) -- 100ms,200ms,...,cap 5s
               Log.logAttention "Retrying bulkInsertOtelLogsAndSpans"
@@ -1039,7 +1039,7 @@ bulkInsertOtelLogsAndSpans = go (10 :: Int)
       tryAny (rawInsert recs) >>= \case
         Right n -> pure n
         Left e
-          | maybe False Hasql.isTransientHasqlError (fromException e) -> throwIO e
+          | Hasql.isTransientException e -> throwIO e
           | V.length recs == 1 ->
               0
                 <$ Log.logAttention

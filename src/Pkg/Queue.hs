@@ -162,7 +162,7 @@ pubsubService appLogger appCtx tp topics fn = checkpoint "pubsubService" do
                 -- Transient (Hasql infra) → ack nothing; PubSub redelivers
                 -- after the ack deadline. Anything else is treated as poison
                 -- → park in DLQ; ack only if DLQ accepted.
-                if maybe False Hasql.isTransientHasqlError (fromException e)
+                if Hasql.isTransientException e
                   then pure []
                   else do
                     dlqRes <- liftIO $ publishToDeadLetterQueue appLogger appCtx validMsgs (maybeToMonoid firstAttrs) errText
@@ -241,22 +241,23 @@ kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaSer
               -- Group by topic: a single poll can interleave records from multiple
               -- subscribed topics; each group needs its own ce-type and attributes.
               let byTopic = foldr (\r -> HM.insertWith (<>) r.crTopic.unTopicName (r :| [])) HM.empty rightRecords
-              -- Per-partition commit: only partitions whose batch succeeded
-              -- (or whose poison content was successfully DLQ'd) contribute to
-              -- the offset commit. Failed topic-groups leave their partitions
-              -- alone; librdkafka redelivers them next poll, surfacing the
-              -- outage as consumer-group lag on those partitions only — healthy
-              -- partitions advance unaffected.
-              commitTPs <- liftIO $ newIORef []
-              let recordSuccess neRecords topic = do
+                  -- Max consumed offset + 1 per partition for the topic-group's
+                  -- records, shaped for K.commitPartitionsOffsets.
+                  tpsFor topic neRecords =
                     let maxByPart = Map.fromListWith max [(r.crPartition, K.unOffset r.crOffset + 1) | r <- toList neRecords]
-                        tps = [K.TopicPartition (K.TopicName topic) p (K.PartitionOffset o) | (p, o) <- Map.toList maxByPart]
-                    liftIO $ modifyIORef' commitTPs (tps ++)
-              forM_ (HM.toList byTopic) \(topic, neRecords@(recc :| _)) -> do
+                     in [K.TopicPartition (K.TopicName topic) p (K.PartitionOffset o) | (p, o) <- Map.toList maxByPart]
+              -- Per-partition commit: only topic-groups whose batch succeeded
+              -- (or whose poison content was successfully DLQ'd) contribute to
+              -- the offset commit. Failed groups leave their partitions alone;
+              -- librdkafka redelivers them next poll, surfacing the outage as
+              -- consumer-group lag on those partitions only — healthy
+              -- partitions advance unaffected.
+              tps <- fmap concat $ forM (HM.toList byTopic) \(topic, neRecords@(recc :| _)) -> do
                 let headers = consumerRecordHeadersToHashMap recc
                     ceType = ceTypeFor appCtx.config.kafkaDeadLetterTopic topic headers
                     attributes = HM.insert "ce-type" ceType headers
                     allRecords = consumerRecordToTuple <$> toList neRecords
+                    successTps = tpsFor topic neRecords
                 LogBase.localData ["topic" AE..= topic, "ce_type" AE..= ceType, "record_count" AE..= length allRecords] do
                   result <- liftIO
                     $ tryAny
@@ -282,20 +283,24 @@ kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaSer
                           setStatus sp Ok
                           pure ids
                   case result of
-                    Right _ -> recordSuccess neRecords topic
+                    Right _ -> pure successTps
                     Left e -> do
                       let !errText = toText $ show e
                       LogBase.logAttention "kafkaService: error processing batch" (AE.object ["error" AE..= errText, "attributes" AE..= attributes])
                       -- Hasql transient → don't commit (lag grows, librdkafka
                       -- redelivers). Anything else is poison → park in DLQ
                       -- and commit only if the DLQ publish succeeded.
-                      unless (maybe False Hasql.isTransientHasqlError (fromException e)) do
-                        dlqRes <- liftIO $ publishToDeadLetterQueue appLogger appCtx allRecords attributes errText
-                        case dlqRes of
-                          Right _ -> recordSuccess neRecords topic
-                          Left _ -> pass
+                      if Hasql.isTransientException e
+                        then pure []
+                        else do
+                          dlqRes <- liftIO $ publishToDeadLetterQueue appLogger appCtx allRecords attributes errText
+                          pure $ case dlqRes of
+                            Right _ -> successTps
+                            Left _ -> []
 
-              tps <- liftIO $ readIORef commitTPs
+              -- No poll-thread backoff: lag growth is the outage signal under
+              -- per-partition commits. A reintroduced `threadDelay` here races
+              -- max.poll.interval.ms and triggers cooperative-sticky rebalances.
               unless (null tps)
                 $ whenJustM (K.commitPartitionsOffsets K.OffsetCommitAsync consumer tps) throwIO
   where
@@ -360,4 +365,5 @@ publishToDeadLetterQueue appLogger appCtx messages attributes errorReason = do
           $ AE.object ["error" AE..= err, "topic" AE..= deadLetterTopic, "original_topic" AE..= origTopicOrAckId]
         pure (Left err)
       Right _ -> pure (Right ())
-  pure . maybe (Right ()) Left . listToMaybe $ lefts results
+  let (errs, _) = partitionEithers results
+  pure $ maybe (Right ()) Left (listToMaybe errs)
