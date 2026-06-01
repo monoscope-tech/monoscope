@@ -12,7 +12,7 @@ import Relude
 
 
 data IngestError = TransientInfra | PoisonBatch
-  deriving stock (Show, Eq)
+  deriving stock (Eq, Show)
 
 
 classify :: SomeException -> IngestError

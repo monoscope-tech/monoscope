@@ -1029,15 +1029,20 @@ bulkInsertOtelLogsAndSpans = go (12 :: Int)
         _ -> Hasql.transaction TxS.ReadCommitted TxS.Write $ Relude.sum <$> traverse (Tx.statement () . chunkStmt) chunks
 
     go _ recs | V.null recs = pure 0
-    go d recs = tryAny (rawInsert recs) >>= \case
-      Right n -> pure n
-      Left e
-        | maybe False Hasql.isTransientHasqlError (fromException e) -> throwIO e
-        | V.length recs == 1 -> 0 <$ Log.logAttention "POISON_ROW_DROPPED"
-            (AE.object ["id" AE..= (V.head recs).id, "error" AE..= show @Text e])
-        | d <= 0 -> throwIO e
-        | otherwise -> let (l, r) = V.splitAt (V.length recs `div` 2) recs
-                       in (+) <$> go (d - 1) l <*> go (d - 1) r
+    go d recs =
+      tryAny (rawInsert recs) >>= \case
+        Right n -> pure n
+        Left e
+          | maybe False Hasql.isTransientHasqlError (fromException e) -> throwIO e
+          | V.length recs == 1 ->
+              0
+                <$ Log.logAttention
+                  "POISON_ROW_DROPPED"
+                  (AE.object ["id" AE..= (V.head recs).id, "error" AE..= show @Text e])
+          | d <= 0 -> throwIO e
+          | otherwise ->
+              let (l, r) = V.splitAt (V.length recs `div` 2) recs
+               in (+) <$> go (d - 1) l <*> go (d - 1) r
 
 
 -- | Thrown when an OtelLogsAndSpans row reaches the bulk insert path with an

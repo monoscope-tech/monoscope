@@ -361,5 +361,3 @@ publishToDeadLetterQueue appLogger appCtx messages attributes errorReason = do
   pure $ case lefts results of
     [] -> Right ()
     (err : _) -> Left err
-
-
