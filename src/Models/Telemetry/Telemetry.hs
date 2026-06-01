@@ -888,25 +888,29 @@ bulkInsertOtelLogsAndSpansTF enableTf records = do
                 ]
           Right _ -> pass
         pure res
-      -- TF-strict commit semantics: TF is the long-term store (PG is being
-      -- phased out, see CLAUDE.md "Storage migration: PG + TF dual-write is
-      -- temporary"). A TF gap is forever; a PG gap evaporates with the
-      -- migration. So:
+      -- TF-strict commit semantics: TF is the long-term store; PG is being
+      -- phased out (dual-write is temporary). A TF gap is forever; a PG gap
+      -- evaporates with the migration. So:
       --   - TF success required for the caller to commit the Kafka offset.
       --   - PG failures are logged but never block the commit.
       -- Delta Lake INSERTs are atomic per batch, so a successful TF write
-      -- never leaves partial rows; retries happen only when TF itself
-      -- failed, in which case there are no rows to dedupe.
+      -- never leaves partial rows; retries happen only when TF itself failed,
+      -- in which case there are no rows to dedupe.
       (pgRes, tfRes) <- Ki.atomically $ (,) <$> Ki.await pgThread <*> Ki.await tfThread
       case (pgRes, tfRes) of
         (Right _, Right _) -> pass
         (Left ePg, Right _) ->
           Log.logAttention "PG_WRITE_FAILED_TF_OK"
+            $ AE.object ["record_count" AE..= V.length records, "error" AE..= show @Text ePg]
+        (Right _, Left eTf) -> throwIO eTf
+        (Left ePg, Left eTf) -> do
+          Log.logAttention "BOTH_WRITES_FAILED"
             $ AE.object
               [ "record_count" AE..= V.length records
-              , "error" AE..= show @Text ePg
+              , "pg_error" AE..= show @Text ePg
+              , "tf_error" AE..= show @Text eTf
               ]
-        (_, Left eTf) -> throwIO eTf
+          throwIO eTf
     else void $ bulkInsertOtelLogsAndSpans records
   where
     -- Retry only transient HasqlException; non-Hasql exceptions (e.g. InvalidOtelRowIdException
@@ -1014,10 +1018,12 @@ handOffBatches worker caches records = do
 -- rows still land, the single bad row is logged at attention and dropped, so a
 -- bad row from the binary protocol (e.g. encoding edge case past
 -- 'cleanNullBytes') doesn't wedge the Kafka partition. Transient Hasql errors
--- propagate so the surrounding retry/breaker logic can act. Bisection recursion
--- is capped at 12 levels (4096-row coverage).
+-- propagate so the surrounding retry logic can act. Bisection recursion is
+-- capped at 10 levels (1024 rows) — well above 'chunkSize = 700', so the cap
+-- is only reached on pathological splitting and logs 'BISECT_DEPTH_EXHAUSTED'
+-- before re-raising.
 bulkInsertOtelLogsAndSpans :: (Hasql :> es, IOE :> es, Log :> es) => V.Vector OtelLogsAndSpans -> Eff es Int64
-bulkInsertOtelLogsAndSpans = go (12 :: Int)
+bulkInsertOtelLogsAndSpans = go (10 :: Int)
   where
     rawInsert recs = do
       rowSnippets <- V.mapM otelRowSnippet recs
@@ -1039,7 +1045,10 @@ bulkInsertOtelLogsAndSpans = go (12 :: Int)
                 <$ Log.logAttention
                   "POISON_ROW_DROPPED"
                   (AE.object ["id" AE..= (V.head recs).id, "error" AE..= show @Text e])
-          | d <= 0 -> throwIO e
+          | d <= 0 -> do
+              Log.logAttention "BISECT_DEPTH_EXHAUSTED"
+                $ AE.object ["record_count" AE..= V.length recs, "error" AE..= show @Text e]
+              throwIO e
           | otherwise ->
               let (l, r) = V.splitAt (V.length recs `div` 2) recs
                in (+) <$> go (d - 1) l <*> go (d - 1) r

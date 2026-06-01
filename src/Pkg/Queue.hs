@@ -5,6 +5,7 @@ import Control.Lens ((^?), _Just)
 import Control.Lens qualified as L
 import Control.Monad.Trans.Resource (runResourceT)
 import Data.Aeson qualified as AE
+import Data.Effectful.Hasql qualified as Hasql
 import Data.Annotation (toAnnotation)
 import Data.ByteString.Char8 qualified as BC
 import Data.ByteString.Lazy.Base64 qualified as LB64
@@ -27,7 +28,6 @@ import Log (LogLevel (..), Logger, runLogT)
 import Log qualified as LogBase
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
-import Pkg.IngestError qualified as IE
 import Relude
 import System.Config
 import System.IO.Unsafe (unsafePerformIO)
@@ -159,16 +159,16 @@ pubsubService appLogger appCtx tp topics fn = checkpoint "pubsubService" do
                   $ runLogT "pubsub-service" appLogger LogAttention
                   $ LogBase.logAttention "pubsubService: error processing batch"
                   $ AE.object ["error" AE..= errText, "topic" AE..= topic, "message_count" AE..= length validMsgs]
-                -- Poison → park in DLQ; ack only if DLQ accepted. Transient →
-                -- ack nothing; PubSub redelivers after the ack deadline so
-                -- the batch is retried once the downstream recovers.
-                if IE.isPoison (IE.classify e)
-                  then do
+                -- Transient (Hasql infra) → ack nothing; PubSub redelivers
+                -- after the ack deadline. Anything else is treated as poison
+                -- → park in DLQ; ack only if DLQ accepted.
+                if maybe False Hasql.isTransientHasqlError (fromException e)
+                  then pure []
+                  else do
                     dlqRes <- liftIO $ publishToDeadLetterQueue appLogger appCtx validMsgs (maybeToMonoid firstAttrs) errText
                     case dlqRes of
                       Right _ -> pure $ map fst validMsgs
                       Left _ -> pure []
-                  else pure []
               Right ids -> pure ids
 
         let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ Just msgIds
@@ -214,8 +214,7 @@ kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaSer
       -- DLQ is intentionally NOT subscribed: re-consuming our own dead letters
       -- in the live loop just amplifies pain during a sustained downstream
       -- outage. Drain it via a separate one-off script when needed.
-      allTopics = kafkaTopics
-      consumerSub = K.topics (map K.TopicName allTopics) <> K.offsetReset K.Earliest
+      consumerSub = K.topics (map K.TopicName kafkaTopics) <> K.offsetReset K.Earliest
 
   -- Single LogT context for the whole service; client_id (and other static
   -- consumer metadata) is attached via localData so every log entry below
@@ -226,7 +225,7 @@ kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaSer
       , "group_id" AE..= appCtx.config.kafkaGroupId
       ]
       do
-        LogBase.logInfo "Starting Kafka consumer service" (AE.object ["all_topics" AE..= allTopics, "topics" AE..= kafkaTopics, "brokers" AE..= appCtx.config.kafkaBrokers])
+        LogBase.logInfo "Starting Kafka consumer service" (AE.object ["topics" AE..= kafkaTopics, "brokers" AE..= appCtx.config.kafkaBrokers])
         bracket
           (either throwIO pure =<< K.newConsumer (consumerProps appCtx.config clientId) consumerSub)
           K.closeConsumer
@@ -287,7 +286,10 @@ kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaSer
                     Left e -> do
                       let !errText = toText $ show e
                       LogBase.logAttention "kafkaService: error processing batch" (AE.object ["error" AE..= errText, "attributes" AE..= attributes])
-                      Relude.when (IE.isPoison (IE.classify e)) do
+                      -- Hasql transient → don't commit (lag grows, librdkafka
+                      -- redelivers). Anything else is poison → park in DLQ
+                      -- and commit only if the DLQ publish succeeded.
+                      unless (maybe False Hasql.isTransientHasqlError (fromException e)) do
                         dlqRes <- liftIO $ publishToDeadLetterQueue appLogger appCtx allRecords attributes errText
                         case dlqRes of
                           Right _ -> recordSuccess neRecords topic
@@ -358,6 +360,4 @@ publishToDeadLetterQueue appLogger appCtx messages attributes errorReason = do
           $ AE.object ["error" AE..= err, "topic" AE..= deadLetterTopic, "original_topic" AE..= origTopicOrAckId]
         pure (Left err)
       Right _ -> pure (Right ())
-  pure $ case lefts results of
-    [] -> Right ()
-    (err : _) -> Left err
+  pure . maybe (Right ()) Left . listToMaybe $ lefts results
