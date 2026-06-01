@@ -870,13 +870,12 @@ bulkInsertOtelLogsAndSpansTF enableTf records = do
   Log.logTrace "bulkInsertOtelLogsAndSpansTF called" $ AE.object [("record_count", AE.toJSON $ V.length records), ("enableTimefusionWrites", AE.toJSON enableTf)]
   if enableTf
     then Ki.scoped \scope -> do
-      mainThread <- Ki.fork scope $ void $ bulkInsertOtelLogsAndSpans records
+      pgThread <- Ki.fork scope $ tryAny $ void $ bulkInsertOtelLogsAndSpans records
       tfThread <- Ki.fork scope do
         Log.logTrace "TimeFusion write enabled, attempting write" $ AE.object [("record_count", AE.toJSON $ V.length records)]
-        tryAny (retryTimefusion 10 records) >>= \case
+        res <- tryAny (retryTimefusion 10 records)
+        case res of
           Left e -> do
-            -- Distinguish infra failures (HasqlException) from programmer bugs so on-call
-            -- can triage: infra → page storage; bug → file an issue.
             let isHasql = isJust (fromException @Hasql.HasqlException e)
                 errId = if isHasql then "TIMEFUSION_WRITE_FAILED" else "TIMEFUSION_WRITE_BUG" :: Text
                 kind = if isHasql then "infra" else "programmer_error" :: Text
@@ -888,12 +887,26 @@ bulkInsertOtelLogsAndSpansTF enableTf records = do
                 , "error" AE..= show @Text e
                 ]
           Right _ -> pass
-      -- Await BOTH forks before Ki.scoped closes. Awaiting only mainThread
-      -- meant the TF fork was killed mid-write whenever the PG side finished
-      -- first — silently dropping the majority of TF writes (no outcome log
-      -- ever fired). Now the OTLP handler blocks on the slower of the two,
-      -- which is what dual-write means.
-      Ki.atomically $ Ki.await mainThread *> Ki.await tfThread
+        pure res
+      -- TF-strict commit semantics: TF is the long-term store (PG is being
+      -- phased out, see CLAUDE.md "Storage migration: PG + TF dual-write is
+      -- temporary"). A TF gap is forever; a PG gap evaporates with the
+      -- migration. So:
+      --   - TF success required for the caller to commit the Kafka offset.
+      --   - PG failures are logged but never block the commit.
+      -- Delta Lake INSERTs are atomic per batch, so a successful TF write
+      -- never leaves partial rows; retries happen only when TF itself
+      -- failed, in which case there are no rows to dedupe.
+      (pgRes, tfRes) <- Ki.atomically $ (,) <$> Ki.await pgThread <*> Ki.await tfThread
+      case (pgRes, tfRes) of
+        (Right _, Right _) -> pass
+        (Left ePg, Right _) ->
+          Log.logAttention "PG_WRITE_FAILED_TF_OK"
+            $ AE.object
+              [ "record_count" AE..= V.length records
+              , "error" AE..= show @Text ePg
+              ]
+        (_, Left eTf) -> throwIO eTf
     else void $ bulkInsertOtelLogsAndSpans records
   where
     -- Retry only transient HasqlException; non-Hasql exceptions (e.g. InvalidOtelRowIdException
@@ -992,29 +1005,39 @@ handOffBatches worker caches records = do
           unless ok $ atomicModifyIORef' worker.droppedBatches \n -> (n + 1, ())
 
 
--- | Hasql-backed bulk insert for OtelLogsAndSpans.
+-- | Hasql-backed bulk insert for OtelLogsAndSpans. Multi-row VALUES INSERT
+-- chunked to fit the 65535-parameter PG bind-message limit (700 * 88 = 61600).
+-- Row 'id's MUST be parseable UUIDs — callers ('bulkInsertOtelLogsAndSpansTF')
+-- guarantee this via 'mintOtelLogIds'.
 --
--- Sends all 87 columns of every row as binary parameters via a multi-row VALUES
--- INSERT built with hasql-dynamic-statements. Postgres caps the bind protocol at
--- 65535 parameters per statement, so we chunk to keep `chunkSize * 87 < 65535`.
--- Each row's `id` MUST be a parseable UUID — callers (`bulkInsertOtelLogsAndSpansTF`)
--- guarantee this by minting fresh UUIDs upfront.
+-- On a non-transient failure we bisect the vector to isolate poison rows: good
+-- rows still land, the single bad row is logged at attention and dropped, so a
+-- bad row from the binary protocol (e.g. encoding edge case past
+-- 'cleanNullBytes') doesn't wedge the Kafka partition. Transient Hasql errors
+-- propagate so the surrounding retry/breaker logic can act. Bisection recursion
+-- is capped at 12 levels (4096-row coverage).
 bulkInsertOtelLogsAndSpans :: (Hasql :> es, IOE :> es, Log :> es) => V.Vector OtelLogsAndSpans -> Eff es Int64
-bulkInsertOtelLogsAndSpans records
-  | V.null records = pure 0
-  | otherwise = do
-      rowSnippets <- V.mapM otelRowSnippet records
-      let chunkSize = 700 -- 700 * 88 = 61600 < 65535 PG bind-message limit
+bulkInsertOtelLogsAndSpans = go (12 :: Int)
+  where
+    rawInsert recs = do
+      rowSnippets <- V.mapM otelRowSnippet recs
+      let chunkSize = 700
           chunks = unfoldr (\v -> if V.null v then Nothing else Just (V.splitAt chunkSize v)) rowSnippets
           chunkStmt c = dynamicallyParameterized (otelInsertHeader <> mconcat (intersperse ", " (V.toList c))) D.rowsAffected True
       case chunks of
         [single] -> Hasql.session (HSession.statement () (chunkStmt single))
-        _ ->
-          -- Multi-chunk insert: wrap in a single transaction so a mid-stream failure
-          -- cannot leave a partial write.
-          Hasql.transaction TxS.ReadCommitted TxS.Write
-            $ Relude.sum
-            <$> traverse (Tx.statement () . chunkStmt) chunks
+        _ -> Hasql.transaction TxS.ReadCommitted TxS.Write $ Relude.sum <$> traverse (Tx.statement () . chunkStmt) chunks
+
+    go _ recs | V.null recs = pure 0
+    go d recs = tryAny (rawInsert recs) >>= \case
+      Right n -> pure n
+      Left e
+        | maybe False Hasql.isTransientHasqlError (fromException e) -> throwIO e
+        | V.length recs == 1 -> 0 <$ Log.logAttention "POISON_ROW_DROPPED"
+            (AE.object ["id" AE..= (V.head recs).id, "error" AE..= show @Text e])
+        | d <= 0 -> throwIO e
+        | otherwise -> let (l, r) = V.splitAt (V.length recs `div` 2) recs
+                       in (+) <$> go (d - 1) l <*> go (d - 1) r
 
 
 -- | Thrown when an OtelLogsAndSpans row reaches the bulk insert path with an

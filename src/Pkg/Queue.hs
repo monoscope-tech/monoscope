@@ -10,6 +10,7 @@ import Data.ByteString.Char8 qualified as BC
 import Data.ByteString.Lazy.Base64 qualified as LB64
 import Data.Generics.Product (field)
 import Data.HashMap.Strict qualified as HM
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Text.Lazy.Encoding qualified as LT
 import Data.Time (getCurrentTime)
@@ -26,6 +27,7 @@ import Log (LogLevel (..), Logger, runLogT)
 import Log qualified as LogBase
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
+import Pkg.IngestError qualified as IE
 import Relude
 import System.Config
 import System.IO.Unsafe (unsafePerformIO)
@@ -157,12 +159,16 @@ pubsubService appLogger appCtx tp topics fn = checkpoint "pubsubService" do
                   $ runLogT "pubsub-service" appLogger LogAttention
                   $ LogBase.logAttention "pubsubService: error processing batch"
                   $ AE.object ["error" AE..= errText, "topic" AE..= topic, "message_count" AE..= length validMsgs]
-
-                unless (isUnrecoverableError e)
-                  $ liftIO
-                  $ publishToDeadLetterQueue appLogger appCtx validMsgs (maybeToMonoid firstAttrs) errText
-
-                pure $ map fst validMsgs
+                -- Poison → park in DLQ; ack only if DLQ accepted. Transient →
+                -- ack nothing; PubSub redelivers after the ack deadline so
+                -- the batch is retried once the downstream recovers.
+                if IE.isPoison (IE.classify e)
+                  then do
+                    dlqRes <- liftIO $ publishToDeadLetterQueue appLogger appCtx validMsgs (maybeToMonoid firstAttrs) errText
+                    case dlqRes of
+                      Right _ -> pure $ map fst validMsgs
+                      Left _ -> pure []
+                  else pure []
               Right ids -> pure ids
 
         let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ Just msgIds
@@ -205,7 +211,10 @@ kafkaService :: Log.Logger -> AuthContext -> TracerProvider -> [Text] -> Int -> 
 kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaService" do
   instanceUuid <- UUID.toText <$> UUID.nextRandom
   let clientId = "monoscope-" <> T.take 8 instanceUuid
-      allTopics = kafkaTopics <> [appCtx.config.kafkaDeadLetterTopic]
+      -- DLQ is intentionally NOT subscribed: re-consuming our own dead letters
+      -- in the live loop just amplifies pain during a sustained downstream
+      -- outage. Drain it via a separate one-off script when needed.
+      allTopics = kafkaTopics
       consumerSub = K.topics (map K.TopicName allTopics) <> K.offsetReset K.Earliest
 
   -- Single LogT context for the whole service; client_id (and other static
@@ -233,6 +242,17 @@ kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaSer
               -- Group by topic: a single poll can interleave records from multiple
               -- subscribed topics; each group needs its own ce-type and attributes.
               let byTopic = foldr (\r -> HM.insertWith (<>) r.crTopic.unTopicName (r :| [])) HM.empty rightRecords
+              -- Per-partition commit: only partitions whose batch succeeded
+              -- (or whose poison content was successfully DLQ'd) contribute to
+              -- the offset commit. Failed topic-groups leave their partitions
+              -- alone; librdkafka redelivers them next poll, surfacing the
+              -- outage as consumer-group lag on those partitions only — healthy
+              -- partitions advance unaffected.
+              commitTPs <- liftIO $ newIORef []
+              let recordSuccess neRecords topic = do
+                    let maxByPart = Map.fromListWith max [(r.crPartition, K.unOffset r.crOffset + 1) | r <- toList neRecords]
+                        tps = [K.TopicPartition (K.TopicName topic) p (K.PartitionOffset o) | (p, o) <- Map.toList maxByPart]
+                    liftIO $ modifyIORef' commitTPs (tps ++)
               forM_ (HM.toList byTopic) \(topic, neRecords@(recc :| _)) -> do
                 let headers = consumerRecordHeadersToHashMap recc
                     ceType = ceTypeFor appCtx.config.kafkaDeadLetterTopic topic headers
@@ -263,16 +283,19 @@ kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaSer
                           setStatus sp Ok
                           pure ids
                   case result of
-                    Right _ -> pass
+                    Right _ -> recordSuccess neRecords topic
                     Left e -> do
                       let !errText = toText $ show e
                       LogBase.logAttention "kafkaService: error processing batch" (AE.object ["error" AE..= errText, "attributes" AE..= attributes])
-                      unless (isUnrecoverableError e)
-                        $ liftIO
-                        $ publishToDeadLetterQueue appLogger appCtx allRecords attributes errText
+                      Relude.when (IE.isPoison (IE.classify e)) do
+                        dlqRes <- liftIO $ publishToDeadLetterQueue appLogger appCtx allRecords attributes errText
+                        case dlqRes of
+                          Right _ -> recordSuccess neRecords topic
+                          Left _ -> pass
 
-              unless (null rightRecords)
-                $ whenJustM (K.commitAllOffsets K.OffsetCommitAsync consumer) throwIO
+              tps <- liftIO $ readIORef commitTPs
+              unless (null tps)
+                $ whenJustM (K.commitPartitionsOffsets K.OffsetCommitAsync consumer tps) throwIO
   where
     consumerRecordToTuple :: K.ConsumerRecord (Maybe ByteString) (Maybe ByteString) -> (Text, ByteString)
     consumerRecordToTuple record = (record.crTopic.unTopicName, fromMaybe "" record.crValue)
@@ -311,12 +334,14 @@ kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaSer
       _ -> ""
 
 
--- | Publish failed messages to dead letter queue, logging any publish failures.
-publishToDeadLetterQueue :: Log.Logger -> AuthContext -> [(Text, ByteString)] -> HM.HashMap Text Text -> Text -> IO ()
+-- | Publish failed messages to dead letter queue. Returns Left if any
+-- individual publish failed so the caller can refuse to advance the upstream
+-- offset/ack — otherwise a broken DLQ silently drops poison data.
+publishToDeadLetterQueue :: Log.Logger -> AuthContext -> [(Text, ByteString)] -> HM.HashMap Text Text -> Text -> IO (Either Text ())
 publishToDeadLetterQueue appLogger appCtx messages attributes errorReason = do
   let deadLetterTopic = appCtx.config.kafkaDeadLetterTopic
   currentTime <- getCurrentTime
-  forM_ messages \(origTopicOrAckId, msgData) -> do
+  results <- forM messages \(origTopicOrAckId, msgData) -> do
     let deadLetterAttrs =
           attributes
             <> HM.fromList
@@ -327,21 +352,14 @@ publishToDeadLetterQueue appLogger appCtx messages attributes errorReason = do
               ]
     result <- publishJSONToKafka appCtx deadLetterTopic (BC.unpack msgData) deadLetterAttrs
     case result of
-      Left err ->
+      Left err -> do
         runLogT "dlq" appLogger LogAttention
           $ LogBase.logAttention "publishToDeadLetterQueue: failed to publish"
           $ AE.object ["error" AE..= err, "topic" AE..= deadLetterTopic, "original_topic" AE..= origTopicOrAckId]
-      Right _ -> pass
+        pure (Left err)
+      Right _ -> pure (Right ())
+  pure $ case lefts results of
+    [] -> Right ()
+    (err : _) -> Left err
 
 
--- | Check if exception is unrecoverable and should be discarded
-isUnrecoverableError :: SomeException -> Bool
-isUnrecoverableError e =
-  let errorMsg = show e
-   in any
-        (`T.isInfixOf` toText errorMsg)
-        [ "Unknown wire type"
-        , "project API Key and project ID not available"
-        , "Unexpected end of input"
-        , "Invalid UTF-8 stream"
-        ]

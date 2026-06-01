@@ -196,6 +196,7 @@ library
       Pkg.ErrorFingerprint
       Pkg.ErrorMetrics
       Pkg.ExtractionWorker
+      Pkg.IngestError
       Pkg.Mail
       Pkg.Parser
       Pkg.Parser.Expr
