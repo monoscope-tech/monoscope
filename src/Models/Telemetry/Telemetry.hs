@@ -1022,15 +1022,14 @@ bulkInsertOtelLogsAndSpans records
   | V.null records = pure 0
   | otherwise = do
       when (V.length records > 1024)
-        $ Log.logAttention "BISECT_CAP_MAY_NOT_ISOLATE"
+        $ Log.logInfo "BISECT_CAP_MAY_NOT_ISOLATE"
         $ AE.object ["record_count" AE..= V.length records, "cap" AE..= (1024 :: Int)]
       pairs <- V.mapM (\r -> (r,) <$> otelRowSnippet r) records
       go (10 :: Int) pairs
   where
-    rawInsert pairs =
-      case chunks of
-        [single] -> Hasql.session (HSession.statement () (chunkStmt single))
-        _ -> Hasql.transaction TxS.ReadCommitted TxS.Write $ Relude.sum <$> traverse (Tx.statement () . chunkStmt) chunks
+    rawInsert pairs
+      | [single] <- chunks = Hasql.session (HSession.statement () (chunkStmt single))
+      | otherwise = Hasql.transaction TxS.ReadCommitted TxS.Write $ Relude.sum <$> traverse (Tx.statement () . chunkStmt) chunks
       where
         chunkSize = 700
         chunks = unfoldr (\v -> if V.null v then Nothing else Just (V.splitAt chunkSize v)) (V.map snd pairs)

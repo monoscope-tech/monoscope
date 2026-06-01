@@ -3,6 +3,7 @@ module Pkg.Queue (pubsubService, kafkaService, publishJSONToKafka, publishToDead
 import Control.Exception.Annotated (checkpoint)
 import Control.Lens ((^?), _Just)
 import Control.Lens qualified as L
+import Control.Monad.Extra (concatMapM)
 import Control.Monad.Trans.Resource (runResourceT)
 import Data.Aeson qualified as AE
 import Data.Annotation (toAnnotation)
@@ -292,7 +293,7 @@ kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaSer
                               pure $ case dlqRes of
                                 Right _ -> successTps
                                 Left _ -> []
-              tps <- concat <$> mapM processGroup (HM.toList byTopic)
+              tps <- concatMapM processGroup (HM.toList byTopic)
 
               -- No poll-thread backoff: lag growth is the outage signal under
               -- per-partition commits. A reintroduced `threadDelay` here races

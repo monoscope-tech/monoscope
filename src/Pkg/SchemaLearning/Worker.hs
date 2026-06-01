@@ -28,10 +28,8 @@ where
 
 import Control.Concurrent (threadDelay)
 import Data.Aeson qualified as AE
-import Data.ByteString.Lazy qualified as BSL
 import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HS
-import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime, getCurrentTime)
 import Data.Vector qualified as V
 import Effectful (Eff)
@@ -227,7 +225,7 @@ regenerateSummaries projects entriesMap priorHashes = do
 -- Uses the canonical-ish aeson encoding — the same encoding the upsert
 -- would serialise to JSONB, so equal hash ⇔ equal persisted bytes.
 summaryDocHash :: SummaryDoc -> Text
-summaryDocHash = toXXHash . TE.decodeUtf8 . BSL.toStrict . AE.encode
+summaryDocHash = toXXHash . decodeUtf8 . AE.encode
 
 
 -- | Project-scoped roll-up of catalog entries into a 'SummaryDoc'.
