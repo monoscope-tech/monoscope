@@ -3,7 +3,6 @@ module Pkg.Queue (pubsubService, kafkaService, publishJSONToKafka, publishToDead
 import Control.Exception.Annotated (checkpoint)
 import Control.Lens ((^?), _Just)
 import Control.Lens qualified as L
-import Control.Monad.Extra (concatMapM)
 import Control.Monad.Trans.Resource (runResourceT)
 import Data.Aeson qualified as AE
 import Data.Annotation (toAnnotation)
@@ -241,23 +240,14 @@ kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaSer
 
               -- Group by topic: a single poll can interleave records from multiple
               -- subscribed topics; each group needs its own ce-type and attributes.
-              let byTopic = foldr (\r -> HM.insertWith (<>) r.crTopic.unTopicName (r :| [])) HM.empty rightRecords
-                  -- Max consumed offset + 1 per partition for the topic-group's
-                  -- records, shaped for K.commitPartitionsOffsets. The
-                  -- >= 0 guard rules out librdkafka sentinels (OffsetEnd = -1,
-                  -- OffsetInvalid, etc.) — they shouldn't appear in pollMessageBatch
-                  -- results but committing one would rewind us to the start.
-                  tpsFor topic neRecords =
-                    map (uncurry (K.TopicPartition (K.TopicName topic)) . second K.PartitionOffset)
-                      $ Map.toList
-                      $ Map.fromListWith max [(r.crPartition, K.unOffset r.crOffset + 1) | r <- toList neRecords, K.unOffset r.crOffset >= 0]
               -- Per-partition commit: only topic-groups whose batch succeeded
               -- (or whose poison content was successfully DLQ'd) contribute to
               -- the offset commit. Failed groups leave their partitions alone;
               -- librdkafka redelivers them next poll, surfacing the outage as
               -- consumer-group lag on those partitions only — healthy
               -- partitions advance unaffected.
-              let processGroup (topic, neRecords@(recc :| _)) = do
+              let byTopic = foldr (\r -> HM.insertWith (<>) r.crTopic.unTopicName (r :| [])) HM.empty rightRecords
+                  processGroup (topic, neRecords@(recc :| _)) = do
                     let headers = consumerRecordHeadersToHashMap recc
                         ceType = ceTypeFor appCtx.config.kafkaDeadLetterTopic topic headers
                         attributes = HM.insert "ce-type" ceType headers
@@ -302,7 +292,7 @@ kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaSer
                               pure $ case dlqRes of
                                 Right _ -> successTps
                                 Left _ -> []
-              tps <- concatMapM processGroup (HM.toList byTopic)
+              tps <- concat <$> mapM processGroup (HM.toList byTopic)
 
               -- No poll-thread backoff: lag growth is the outage signal under
               -- per-partition commits. A reintroduced `threadDelay` here races
@@ -315,6 +305,17 @@ kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaSer
 
     consumerRecordHeadersToHashMap :: K.ConsumerRecord (Maybe ByteString) (Maybe ByteString) -> HashMap Text Text
     consumerRecordHeadersToHashMap record = HM.fromList $ map (bimap decodeUtf8 decodeUtf8) (K.headersToList record.crHeaders)
+
+    -- Max consumed offset + 1 per partition for a topic-group's records, shaped
+    -- for K.commitPartitionsOffsets. The >= 0 guard rules out librdkafka
+    -- sentinels (OffsetEnd = -1, OffsetInvalid) which shouldn't appear in
+    -- pollMessageBatch output but would rewind us to the start if committed.
+    tpsFor :: Foldable f => Text -> f (K.ConsumerRecord k v) -> [K.TopicPartition]
+    tpsFor topic neRecords =
+      [ K.TopicPartition (K.TopicName topic) p (K.PartitionOffset o)
+      | (p, o) <- Map.toList $ Map.fromListWith max
+          [(r.crPartition, K.unOffset r.crOffset + 1) | r <- toList neRecords, K.unOffset r.crOffset >= 0]
+      ]
 
     -- Dead-letter messages carry ce-type in headers (PubSub path) or derive from original-topic (Kafka path).
     ceTypeFor :: Text -> Text -> HM.HashMap Text Text -> Text
@@ -380,5 +381,4 @@ publishToDeadLetterQueue appLogger appCtx messages attributes errorReason = do
       Right _ -> pure (Right ())
   -- sequence_ over [Either Text ()] yields the FIRST Left (and pure ()
   -- otherwise). Subsequent failures only appear in the dlq log above.
-  let firstFailure = sequence_ results
-  pure firstFailure
+  pure $ sequence_ results

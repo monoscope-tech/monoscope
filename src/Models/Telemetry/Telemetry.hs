@@ -1021,7 +1021,7 @@ bulkInsertOtelLogsAndSpans :: (Hasql :> es, IOE :> es, Log :> es) => V.Vector Ot
 bulkInsertOtelLogsAndSpans records
   | V.null records = pure 0
   | otherwise = do
-      Relude.when (V.length records > 1024)
+      when (V.length records > 1024)
         $ Log.logAttention "BISECT_CAP_MAY_NOT_ISOLATE"
         $ AE.object ["record_count" AE..= V.length records, "cap" AE..= (1024 :: Int)]
       pairs <- V.mapM (\r -> (r,) <$> otelRowSnippet r) records
