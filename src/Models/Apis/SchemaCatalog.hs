@@ -40,7 +40,6 @@ import Data.Aeson qualified as AE
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HS
-import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.UUID (UUID)
 import Data.UUID qualified as UUID
@@ -253,7 +252,7 @@ upsertSummary rows0 = unless (V.null rows0) $ do
   let rows = V.map (second (HI.AsJsonb . scrubNulValue . AE.toJSON)) rows0
   tryAny (batch rows) >>= \case
     Right () -> pass
-    Left _ -> V.forM_ rows \r -> tryAny (batch (V.singleton r)) >>= either (const pass) (const pass)
+    Left _ -> V.forM_ rows \r -> void $ tryAny (batch (V.singleton r))
   where
     batch xs =
       let (pids, docs) = V.unzip xs
