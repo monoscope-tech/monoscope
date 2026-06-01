@@ -360,7 +360,7 @@ publishToDeadLetterQueue :: Log.Logger -> AuthContext -> [(Text, ByteString)] ->
 publishToDeadLetterQueue appLogger appCtx messages attributes errorReason = do
   let deadLetterTopic = appCtx.config.kafkaDeadLetterTopic
   currentTime <- getCurrentTime
-  fmap sequence_ $ forM messages \(origTopicOrAckId, msgData) -> do
+  results <- forM messages \(origTopicOrAckId, msgData) -> do
     let deadLetterAttrs =
           attributes
             <> HM.fromList
@@ -377,3 +377,4 @@ publishToDeadLetterQueue appLogger appCtx messages attributes errorReason = do
           $ AE.object ["error" AE..= err, "topic" AE..= deadLetterTopic, "original_topic" AE..= origTopicOrAckId]
         pure (Left err)
       Right _ -> pure (Right ())
+  pure (sequence_ results)

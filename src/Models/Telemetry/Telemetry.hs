@@ -1052,7 +1052,9 @@ bulkInsertOtelLogsAndSpans records
             [single] -> Hasql.session (HSession.statement () (chunkStmt single))
             _ -> Hasql.transaction TxS.ReadCommitted TxS.Write $ Relude.sum <$> traverse (Tx.statement () . chunkStmt) chunks
 
-    go _ pairs | V.null pairs = pure 0
+    -- Outer guards V.null; the single-row branch handles 1; recursive calls
+    -- always split a ≥2 vector — so 'go' never sees an empty vector and
+    -- never recurses past V.length == 1. No V.null guard needed here.
     go d pairs =
       tryAny (rawInsert pairs) >>= \case
         Right n -> pure n
@@ -1068,6 +1070,11 @@ bulkInsertOtelLogsAndSpans records
                 $ AE.object ["record_count" AE..= V.length pairs, "error" AE..= show @Text e]
               throwIO e
           | otherwise ->
+              -- <*> is sequential in Eff es: a throw from the left half
+              -- short-circuits and skips the right half. Correct for
+              -- transients (whole batch must retry); also means a
+              -- depth-exhausted left half doesn't attempt the right.
+              -- Don't introduce parallelism here without revisiting that.
               let (l, r) = V.splitAt (V.length pairs `div` 2) pairs
                in (+) <$> go (d - 1) l <*> go (d - 1) r
 
