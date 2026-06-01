@@ -2,8 +2,8 @@ module Pkg.Queue (pubsubService, kafkaService, publishJSONToKafka, publishToDead
 
 import Control.Exception.Annotated (checkpoint)
 import Control.Lens ((^?), _Just)
-import Control.Monad.Extra (concatMapM)
 import Control.Lens qualified as L
+import Control.Monad.Extra (concatMapM)
 import Control.Monad.Trans.Resource (runResourceT)
 import Data.Aeson qualified as AE
 import Data.Annotation (toAnnotation)
