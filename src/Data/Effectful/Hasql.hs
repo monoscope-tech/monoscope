@@ -70,9 +70,7 @@ isTransientHasqlError :: HasqlException -> Bool
 isTransientHasqlError (HasqlException ue) = isTransientUsageError ue
 
 
--- | True iff @e@ is a transient 'HasqlException'. Sugar for the
--- 'maybe False isTransientHasqlError . fromException' idiom callers would
--- otherwise repeat at every fault-classifying call site.
+-- | Exported so callers stop repeating @maybe False isTransientHasqlError . fromException@.
 isTransientException :: SomeException -> Bool
 isTransientException = maybe False isTransientHasqlError . fromException
 

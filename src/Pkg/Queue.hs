@@ -2,6 +2,7 @@ module Pkg.Queue (pubsubService, kafkaService, publishJSONToKafka, publishToDead
 
 import Control.Exception.Annotated (checkpoint)
 import Control.Lens ((^?), _Just)
+import Control.Monad.Extra (concatMapM)
 import Control.Lens qualified as L
 import Control.Monad.Trans.Resource (runResourceT)
 import Data.Aeson qualified as AE
@@ -252,51 +253,52 @@ kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaSer
               -- librdkafka redelivers them next poll, surfacing the outage as
               -- consumer-group lag on those partitions only — healthy
               -- partitions advance unaffected.
-              tps <- fmap concat $ forM (HM.toList byTopic) \(topic, neRecords@(recc :| _)) -> do
-                let headers = consumerRecordHeadersToHashMap recc
-                    ceType = ceTypeFor appCtx.config.kafkaDeadLetterTopic topic headers
-                    attributes = HM.insert "ce-type" ceType headers
-                    allRecords = consumerRecordToTuple <$> toList neRecords
-                    successTps = tpsFor topic neRecords
-                LogBase.localData ["topic" AE..= topic, "ce_type" AE..= ceType, "record_count" AE..= length allRecords] do
-                  result <- liftIO
-                    $ tryAny
-                    $ runBackground appLogger appCtx tp
-                    $ withSpan
-                      "kafka.process_batch"
-                      [ ("topic", OA.toAttribute topic)
-                      , ("message_count", OA.toAttribute (length allRecords))
-                      , ("ce-type", OA.toAttribute ceType)
-                      , ("client_id", OA.toAttribute clientId)
-                      ]
-                    $ \sp -> do
-                      addEvent sp "batch.started" []
-                      res <- try $ fn allRecords attributes
-                      case res of
-                        Left (e :: SomeException) -> do
+              let processGroup (topic, neRecords@(recc :| _)) = do
+                    let headers = consumerRecordHeadersToHashMap recc
+                        ceType = ceTypeFor appCtx.config.kafkaDeadLetterTopic topic headers
+                        attributes = HM.insert "ce-type" ceType headers
+                        allRecords = consumerRecordToTuple <$> toList neRecords
+                        successTps = tpsFor topic neRecords
+                    LogBase.localData ["topic" AE..= topic, "ce_type" AE..= ceType, "record_count" AE..= length allRecords] do
+                      result <- liftIO
+                        $ tryAny
+                        $ runBackground appLogger appCtx tp
+                        $ withSpan
+                          "kafka.process_batch"
+                          [ ("topic", OA.toAttribute topic)
+                          , ("message_count", OA.toAttribute (length allRecords))
+                          , ("ce-type", OA.toAttribute ceType)
+                          , ("client_id", OA.toAttribute clientId)
+                          ]
+                        $ \sp -> do
+                          addEvent sp "batch.started" []
+                          res <- try $ fn allRecords attributes
+                          case res of
+                            Left (e :: SomeException) -> do
+                              let !errText = toText $ show e
+                              addEvent sp "batch.failed" [("error", OA.toAttribute errText)]
+                              setStatus sp (Error errText)
+                              throwIO e
+                            Right ids -> do
+                              addEvent sp "batch.completed" [("processed_count", OA.toAttribute (length ids))]
+                              setStatus sp Ok
+                              pure ids
+                      case result of
+                        Right _ -> pure successTps
+                        Left e -> do
                           let !errText = toText $ show e
-                          addEvent sp "batch.failed" [("error", OA.toAttribute errText)]
-                          setStatus sp (Error errText)
-                          throwIO e
-                        Right ids -> do
-                          addEvent sp "batch.completed" [("processed_count", OA.toAttribute (length ids))]
-                          setStatus sp Ok
-                          pure ids
-                  case result of
-                    Right _ -> pure successTps
-                    Left e -> do
-                      let !errText = toText $ show e
-                      LogBase.logAttention "kafkaService: error processing batch" (AE.object ["error" AE..= errText, "attributes" AE..= attributes])
-                      -- Hasql transient → don't commit (lag grows, librdkafka
-                      -- redelivers). Anything else is poison → park in DLQ
-                      -- and commit only if the DLQ publish succeeded.
-                      if Hasql.isTransientException e
-                        then pure []
-                        else do
-                          dlqRes <- liftIO $ publishToDeadLetterQueue appLogger appCtx allRecords attributes errText
-                          pure $ case dlqRes of
-                            Right _ -> successTps
-                            Left _ -> []
+                          LogBase.logAttention "kafkaService: error processing batch" (AE.object ["error" AE..= errText, "attributes" AE..= attributes])
+                          -- Hasql transient → don't commit (lag grows, librdkafka
+                          -- redelivers). Anything else is poison → park in DLQ
+                          -- and commit only if the DLQ publish succeeded.
+                          if Hasql.isTransientException e
+                            then pure []
+                            else do
+                              dlqRes <- liftIO $ publishToDeadLetterQueue appLogger appCtx allRecords attributes errText
+                              pure $ case dlqRes of
+                                Right _ -> successTps
+                                Left _ -> []
+              tps <- concatMapM processGroup (HM.toList byTopic)
 
               -- No poll-thread backoff: lag growth is the outage signal under
               -- per-partition commits. A reintroduced `threadDelay` here races
@@ -365,5 +367,4 @@ publishToDeadLetterQueue appLogger appCtx messages attributes errorReason = do
           $ AE.object ["error" AE..= err, "topic" AE..= deadLetterTopic, "original_topic" AE..= origTopicOrAckId]
         pure (Left err)
       Right _ -> pure (Right ())
-  let (errs, _) = partitionEithers results
-  pure $ maybe (Right ()) Left (listToMaybe errs)
+  pure $ maybe (Right ()) Left $ listToMaybe $ lefts results

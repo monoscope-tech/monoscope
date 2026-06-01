@@ -1041,10 +1041,10 @@ bulkInsertOtelLogsAndSpans = go (10 :: Int)
         Left e
           | Hasql.isTransientException e -> throwIO e
           | V.length recs == 1 ->
-              0
-                <$ Log.logAttention
-                  "POISON_ROW_DROPPED"
-                  (AE.object ["id" AE..= (V.head recs).id, "error" AE..= show @Text e])
+              Log.logAttention
+                "POISON_ROW_DROPPED"
+                (AE.object ["id" AE..= (V.head recs).id, "error" AE..= show @Text e])
+                $> 0
           | d <= 0 -> do
               Log.logAttention "BISECT_DEPTH_EXHAUSTED"
                 $ AE.object ["record_count" AE..= V.length recs, "error" AE..= show @Text e]
