@@ -584,7 +584,7 @@ queryLibHistoryForUser pid uid =
   EHasql.interp
     [HI.sql|
       (
-        SELECT id, project_id, created_at, updated_at, user_id, query_type, query_text, query_ast, title,  user_id=#{uid}::uuid as byMe
+        SELECT id, project_id, created_at, updated_at, user_id, query_type::text, query_text, query_ast, title,  user_id=#{uid}::uuid as byMe
         FROM projects.query_library
         WHERE user_id = #{uid}::uuid AND project_id = #{pid}::uuid AND query_type = 'history'
         ORDER BY created_at DESC
@@ -600,7 +600,7 @@ queryLibHistoryForUser pid uid =
       )
       UNION ALL
       (
-        SELECT id, project_id, created_at, updated_at, user_id, query_type, query_text, query_ast,title, user_id=#{uid}::uuid as byMe
+        SELECT id, project_id, created_at, updated_at, user_id, query_type::text, query_text, query_ast,title, user_id=#{uid}::uuid as byMe
         FROM projects.query_library
         WHERE project_id = #{pid}::uuid AND user_id != #{uid}::uuid AND query_type = 'saved'
         ORDER BY created_at DESC
