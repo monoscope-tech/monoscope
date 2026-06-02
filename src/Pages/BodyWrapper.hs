@@ -737,7 +737,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
       button_ [class_ "group-has-[#sidenav-toggle:checked]/pg:hidden flex items-center justify-center p-2 rounded-lg border border-strokeWeak hover:border-strokeStrong hover:bg-fillWeak text-textWeak cursor-pointer transition-colors", searchScript, Aria.label_ "Search", term "data-tippy-placement" "right", term "data-tippy-content" "Search (\x2318K)"] do
         faSprite_ "magnifying-glass" "regular" "w-4 h-4"
     let mainNavActiveStyles = "[&_.main-nav-link.active]:bg-fillBrand-weak [&_.main-nav-link.active]:text-textStrong [&_.main-nav-link.active]:font-medium [&_.main-nav-link.active]:border-l-strokeBrand-strong [&_.main-nav-link.active]:border-y-transparent [&_.main-nav-link.active]:border-r-transparent [&_.main-nav-link.active_.nav-icon]:text-textBrand"
-    nav_ [id_ "main-sidenav", class_ $ "mt-2 flex flex-col gap-1 text-textWeak " <> mainNavActiveStyles, [__|on click set #mobile-nav-toggle.checked to false end on htmx:pushedIntoHistory from window or popstate from window settle then set p to window.location.pathname then for link in .main-nav-link set h to link.getAttribute('href') if p is h or p.startsWith(h + '/') add .active to link else remove .active from link end end|]] do
+    nav_ [id_ "main-sidenav", class_ $ "mt-2 flex flex-col gap-1 text-textWeak " <> mainNavActiveStyles, [__|on click set #mobile-nav-toggle.checked to false end on htmx:pushedIntoHistory from window or popstate from window settle then set p to window.location.pathname then for link in .main-nav-link set h to link.getAttribute('href') set extra to (link.getAttribute('data-match') or '') set matched to (p is h or p.startsWith(h + '/')) if not matched and extra is not '' for m in extra.split(' ') if m is not '' and (p is m or p.startsWith(m + '/')) set matched to true end end end if matched add .active to link else remove .active from link end end|]] do
       let navLinkCls activeCls = "main-nav-link relative group-has-[#sidenav-toggle:checked]/pg:px-4 gap-3 py-2 flex no-wrap shrink-0 justify-center group-has-[#sidenav-toggle:checked]/pg:justify-start items-center rounded-lg overflow-x-hidden overflow-y-hidden hover:bg-fillWeak hover:text-textStrong transition-colors duration-100" <> activeCls
       let pidTxt = project.id.toText
           flyoutCls = "invisible opacity-0 group-hover/flyout:visible group-hover/flyout:opacity-100 absolute left-full top-0 ml-1 z-50 min-w-44 bg-bgRaised border border-strokeWeak rounded-lg shadow-md py-1.5 transition-all duration-150"
@@ -753,11 +753,15 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
             let isActive = maybe (pageTitle == mTitle) (== mTitle) menuItem
                 activeCls = if isActive then " active" else ""
                 hasFlyout = not (null flyoutItems)
+                extraMatch
+                  | "/api_catalog" `T.isSuffixOf` mUrl = [term "data-match" $ "/p/" <> pidTxt <> "/endpoints"]
+                  | otherwise = []
             (if hasFlyout then div_ [class_ "relative group/flyout"] else id) do
               a_
                 ( [ href_ mUrl
                   , class_ $ navLinkCls activeCls
                   ]
+                    <> extraMatch
                     <> if hasFlyout
                       then []
                       else
