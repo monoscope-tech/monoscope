@@ -764,7 +764,7 @@ fetchSessionSummary enableTfReads pid queryAST dateRange = do
           COALESCE((SELECT ARRAY_AGG(c  ORDER BY bi) FROM bkt), '{}'::BIGINT[]),
           COALESCE((SELECT ARRAY_AGG(e  ORDER BY bi) FROM bkt), '{}'::BIGINT[])
         FROM per_session|]
-  rows :: [(Int64, Int64, Int64, Int64, Int64, Int64, Int64, Int64, V.Vector Int32, V.Vector Int32, V.Vector Int32)] <-
+  rows :: [(Int64, Int64, Int64, Int64, Int64, Int64, Int64, Int64, V.Vector Int64, V.Vector Int64, V.Vector Int64)] <-
     Hasql.withHasqlTimefusion enableTfReads $ Hasql.interp q
   -- A no-GROUP-BY aggregate always produces exactly one row; zero rows would
   -- indicate a decoder/arity drift, not a legitimate "no sessions" case.

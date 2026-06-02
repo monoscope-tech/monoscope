@@ -120,7 +120,7 @@ anomalyTypeCounts getType =
     (0, 0, 0, 0, 0)
 
 
-buildReportJson' :: Int -> Int -> Double -> Double -> V.Vector (Text, Int, Double, Int, Double) -> V.Vector (Text, Text, Text, Int, Double, Int, Double) -> V.Vector (Text, Int, Int) -> Charts.MetricsData -> Charts.MetricsData -> V.Vector Issues.IssueSummary -> AE.Value
+buildReportJson' :: Int -> Int -> Double -> Double -> V.Vector (Text, Int, Double, Int, Double) -> V.Vector (Text, Text, Text, Int64, Double, Int64, Double) -> V.Vector (Text, Int, Int) -> Charts.MetricsData -> Charts.MetricsData -> V.Vector Issues.IssueSummary -> AE.Value
 buildReportJson' totalEvents totalErrors eventsChange errorsChange spanTypeStatsDiff' endpointsPerformance slowDbQueries chartEv chartErr issues =
   let spanStatsDiff = (\(t, e, chang, dur, durChange) -> AE.object ["spanType" AE..= t, "eventCount" AE..= e, "eventChange" AE..= chang, "averageDuration" AE..= dur, "durationChange" AE..= durChange]) <$> spanTypeStatsDiff'
       perf = (\(u, m, p, d, dc, req, cc) -> AE.object ["host" AE..= u, "urlPath" AE..= p, "method" AE..= m, "averageDuration" AE..= d, "durationDiffPct" AE..= dc, "requestCount" AE..= req, "requestDiffPct" AE..= cc]) <$> V.take 10 endpointsPerformance
@@ -138,7 +138,7 @@ buildReportJson' totalEvents totalErrors eventsChange errorsChange spanTypeStats
 
 
 -- | Moved from BackgroundJobs
-type EndpointStatsTuple = (Text, Text, Text, Int, Int)
+type EndpointStatsTuple = (Text, Text, Text, Int64, Int64)
 
 
 getSpanTypeStats :: V.Vector (Text, Int, Int) -> V.Vector (Text, Int, Int) -> V.Vector (Text, Int, Double, Int, Double)
@@ -157,11 +157,11 @@ getSpanTypeStats current prev =
    in V.fromList (map getStats spanTypes)
 
 
-computeDurationChanges :: V.Vector EndpointStatsTuple -> V.Vector EndpointStatsTuple -> V.Vector (Text, Text, Text, Int, Double, Int, Double)
+computeDurationChanges :: V.Vector EndpointStatsTuple -> V.Vector EndpointStatsTuple -> V.Vector (Text, Text, Text, Int64, Double, Int64, Double)
 computeDurationChanges current prev =
-  let prevMap :: Map.Map (Text, Text, Text) Int
+  let prevMap :: Map.Map (Text, Text, Text) Int64
       prevMap = Map.fromList [((h, m, u), dur) | (h, m, u, dur, _req) <- V.toList prev]
-      prevMapReq :: Map.Map (Text, Text, Text) Int
+      prevMapReq :: Map.Map (Text, Text, Text) Int64
       prevMapReq = Map.fromList [((h, m, u), req) | (h, m, u, _dur, req) <- V.toList prev]
       compute (h, m, u, dur, req) =
         let change = case Map.lookup (h, m, u) prevMap of
@@ -176,7 +176,7 @@ computeDurationChanges current prev =
 
 -- | Shared email rendering: builds WeeklyReportData from inputs, generates chart URLs, renders email
 -- Returns (dateLabel based on endTime, rendered email HTML)
-renderWeeklyEmail :: Text -> Projects.Project -> Projects.ProjectId -> Text -> UTCTime -> UTCTime -> Int -> Int -> Double -> Double -> V.Vector Issues.IssueSummary -> V.Vector (Text, Text, Text, Int, Double, Int, Double) -> V.Vector (Text, Int, Int) -> V.Vector (Text, Int64, Text) -> Bool -> ATAuthCtx (Text, Text)
+renderWeeklyEmail :: Text -> Projects.Project -> Projects.ProjectId -> Text -> UTCTime -> UTCTime -> Int -> Int -> Double -> Double -> V.Vector Issues.IssueSummary -> V.Vector (Text, Text, Text, Int64, Double, Int64, Double) -> V.Vector (Text, Int, Int) -> V.Vector (Text, Int64, Text) -> Bool -> ATAuthCtx (Text, Text)
 renderWeeklyEmail reportUrl project pid userName startTime endTime totalEvents totalErrors eventsChangePct errorsChangePct anomalies performance slowQueries topPatterns freeTierExceeded = do
   ctx <- ask @AuthContext
   tz <- liftIO $ loadTZFromDB (toString $ if T.null project.timeZone then "UTC" else project.timeZone)
@@ -224,7 +224,7 @@ reportToEmailHtml report project userName = case AE.fromJSON @ReportData report.
   AE.Error _ -> pure ("", "Error: Could not parse report data")
   AE.Success rd -> do
     let anomalies' = V.fromList rd.issues
-        performance = V.fromList $ (\ep -> (ep.host, ep.method, ep.urlPath, fromIntegral ep.averageDuration :: Int, ep.durationDiffPct, ep.requestCount, ep.requestDiffPct)) <$> rd.endpoints
+        performance = V.fromList $ (\ep -> (ep.host, ep.method, ep.urlPath, fromIntegral ep.averageDuration :: Int64, ep.durationDiffPct, fromIntegral ep.requestCount :: Int64, ep.requestDiffPct)) <$> rd.endpoints
         slowQueries = V.fromList $ (\q -> (q.query, round q.averageDuration :: Int, fromIntegral q.totalEvents :: Int)) <$> rd.slowDbQueries
         reportUrl = "/p/" <> project.id.toText <> "/reports/" <> report.id.toText
     renderWeeklyEmail reportUrl project project.id userName report.startTime report.endTime (fromIntegral rd.events.total) (fromIntegral rd.errors.total) rd.events.change rd.errors.change anomalies' performance slowQueries V.empty False

@@ -642,7 +642,7 @@ data WeeklyReportData = WeeklyReportData
   , logPatternCount :: Int
   , rateChangeCount :: Int
   , anomalies :: V.Vector Issues.IssueSummary
-  , performance :: V.Vector (Text, Text, Text, Int, Double, Int, Double)
+  , performance :: V.Vector (Text, Text, Text, Int64, Double, Int64, Double)
   , slowQueries :: V.Vector (Text, Int, Int)
   , topPatterns :: V.Vector (Text, Int64, Text)
   , freeTierExceeded :: Bool
