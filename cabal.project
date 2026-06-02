@@ -119,12 +119,12 @@ source-repository-package
   tag: bb90850a0eeed02a0b03244283a1236b5ce03471
   subdir: .
 
--- Fork: swap haskell-src-meta -> ghc-hs-meta so #{x.y} record-dot
--- splices parse correctly. Drop once upstream merges (PR open).
+-- Upstream merge of haskell-src-meta -> ghc-hs-meta (PR #32) not yet on
+-- Hackage; pin to the merge commit until next release.
 source-repository-package
   type: git
-  location: https://github.com/tonyalaribe/hasql-interpolate
-  tag: 22909b5316bb314cbb495208061b8f0f268bf0aa
+  location: https://github.com/awkward-squad/hasql-interpolate
+  tag: 8a13a8b06babc569ffd216fd9561aae58818b66f
 
 constraints:
   streamly ^>=0.10.0,

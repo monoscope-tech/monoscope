@@ -45,7 +45,6 @@ import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
-import NeatInterpolation (text)
 import Pkg.DeriveUtils (UUIDId (..), rawSql, showPGFloatArray)
 import Relude
 import System.Types (DB)
@@ -163,9 +162,9 @@ hostCoalesceExpr prefix =
     <> "resource___service___name,''), '')"
 
 
-periodBuckets :: Text -> (Text, Text)
-periodBuckets "7d" = ("(CURRENT_DATE - INTERVAL '6 days')", "7")
-periodBuckets _ = ("(NOW() - INTERVAL '23 hours')", "24")
+periodBuckets :: Text -> (Text, Int)
+periodBuckets "7d" = ("(CURRENT_DATE - INTERVAL '6 days')", 7)
+periodBuckets _ = ("(NOW() - INTERVAL '23 hours')", 24)
 
 
 -- | @AND outgoing = ?@ when a direction is specified, empty otherwise.
@@ -186,67 +185,52 @@ endpointRequestStatsByProject pid archived pHostM sortM searchM page perPage req
     isOutgoing = requestType == "Outgoing"
     offset = page * perPage
     (seriesStart, numBuckets) = periodBuckets period
-    hostFilter = maybe "" (\h -> [HI.sql| AND (|] <> rawSql (hostCoalesceExpr "") <> [HI.sql| = #{h})|]) pHostM
-    pHostQuery = maybe "" (\h -> [HI.sql| AND enp.host = #{h}|]) pHostM
-    search = maybe "" (\s -> let pat = "%" <> s <> "%" in [HI.sql| AND enp.url_path LIKE #{pat}|]) searchM
-    orderBy = case fromMaybe "" sortM of "first_seen" -> "enp.created_at ASC"; "last_seen" -> "enp.created_at DESC"; _ -> "coalesce(es.eventsCount, 0) DESC"
     seriesStartSql = rawSql seriesStart
-    numBucketsSql = rawSql numBuckets
+    hostFilter = foldMap (\h -> [HI.sql| AND (^{rawSql (hostCoalesceExpr "")} = #{h})|]) pHostM
+    pHostQuery = foldMap (\h -> [HI.sql| AND enp.host = #{h}|]) pHostM
+    search = foldMap (\s -> let pat = "%" <> s <> "%" in [HI.sql| AND enp.url_path LIKE #{pat}|]) searchM
+    archivedClause = archivedHostClauseSql archived
+    orderBy = rawSql case fromMaybe "" sortM of
+      "first_seen" -> "enp.created_at ASC"
+      "last_seen" -> "enp.created_at DESC"
+      _ -> "coalesce(es.eventsCount, 0) DESC"
     query =
-      "WITH combined AS (\
-      \ SELECT COALESCE(NULLIF(attributes->'http'->>'route', ''), attributes___url___path, '/') AS url_path,\
-      \        attributes___http___request___method AS method,\
-      \        resource___service___name AS service,\
-      \        COUNT(*) AS eventsCount,\
-      \        MAX(timestamp) AS last_seen,\
-      \        LEAST(width_bucket(EXTRACT(EPOCH FROM timestamp), EXTRACT(EPOCH FROM "
-        <> seriesStartSql
-        <> "::timestamptz), EXTRACT(EPOCH FROM NOW()), "
-        <> numBucketsSql
-        <> "), "
-        <> numBucketsSql
-        <> ") AS bucket_idx,\
-           \        COUNT(*)::bigint AS cnt\
-           \ FROM otel_logs_and_spans\
-           \ WHERE project_id = "
-        <> [HI.sql|#{pid}::text|]
-        <> " AND attributes___http___request___method IS NOT NULL"
-        <> hostFilter
-        <> " AND timestamp >= "
-        <> seriesStartSql
-        <> "::timestamptz\
-           \ GROUP BY url_path, method, service, bucket_idx\
-           \), endpoint_stats AS (\
-           \ SELECT url_path, method, SUM(eventsCount)::bigint AS eventsCount, MAX(last_seen) AS last_seen,\
-           \        COALESCE(ARRAY_AGG(DISTINCT service) FILTER (WHERE service IS NOT NULL AND service != ''), ARRAY[]::text[]) AS services\
-           \ FROM combined GROUP BY url_path, method\
-           \), bucketed_agg AS (\
-           \ SELECT c.url_path, c.method, ARRAY_AGG(COALESCE(c2.cnt, 0) ORDER BY s.idx) AS activity_buckets\
-           \ FROM (SELECT DISTINCT url_path, method FROM combined) c\
-           \ CROSS JOIN generate_series(1, "
-        <> numBucketsSql
-        <> ") AS s(idx)\
-           \ LEFT JOIN combined c2 ON c2.url_path = c.url_path AND c2.method = c.method AND c2.bucket_idx = s.idx\
-           \ GROUP BY c.url_path, c.method\
-           \) SELECT enp.id endpoint_id, enp.hash endpoint_hash, enp.project_id, enp.url_path, enp.method, enp.host,\
-           \        coalesce(es.eventsCount, 0) as total_requests, es.last_seen,\
-           \        COALESCE(ba.activity_buckets, ARRAY[]::bigint[]) AS activity_buckets,\
-           \        COALESCE(es.services, ARRAY[]::text[]) AS services\
-           \ FROM apis.endpoints enp\
-           \ JOIN apis.hosts h ON (h.project_id = enp.project_id AND h.host = enp.host AND h.outgoing = enp.outgoing)\
-           \ LEFT JOIN endpoint_stats es ON (enp.url_path=es.url_path AND enp.method=es.method)\
-           \ LEFT JOIN bucketed_agg ba ON (enp.url_path=ba.url_path AND enp.method=ba.method)\
-           \ WHERE enp.project_id="
-        <> [HI.sql|#{pid}|]
-        <> " AND enp.outgoing="
-        <> [HI.sql|#{isOutgoing}|]
-        <> pHostQuery
-        <> search
-        <> archivedHostClauseSql archived
-        <> " ORDER BY "
-        <> rawSql orderBy
-        <> ", url_path ASC OFFSET "
-        <> [HI.sql|#{offset} LIMIT #{perPage}|]
+      [HI.sql|
+        WITH combined AS (
+          SELECT COALESCE(NULLIF(attributes->'http'->>'route', ''), attributes___url___path, '/') AS url_path,
+                 attributes___http___request___method AS method,
+                 resource___service___name AS service,
+                 COUNT(*) AS eventsCount,
+                 MAX(timestamp) AS last_seen,
+                 LEAST(width_bucket(EXTRACT(EPOCH FROM timestamp), EXTRACT(EPOCH FROM ^{seriesStartSql}::timestamptz), EXTRACT(EPOCH FROM NOW()), #{numBuckets}::int), #{numBuckets}::int) AS bucket_idx,
+                 COUNT(*)::bigint AS cnt
+          FROM otel_logs_and_spans
+          WHERE project_id = #{pid}::text
+            AND attributes___http___request___method IS NOT NULL
+            ^{hostFilter}
+            AND timestamp >= ^{seriesStartSql}::timestamptz
+          GROUP BY url_path, method, service, bucket_idx
+        ), endpoint_stats AS (
+          SELECT url_path, method, SUM(eventsCount)::bigint AS eventsCount, MAX(last_seen) AS last_seen,
+                 COALESCE(ARRAY_AGG(DISTINCT service) FILTER (WHERE service IS NOT NULL AND service != ''), ARRAY[]::text[]) AS services
+          FROM combined GROUP BY url_path, method
+        ), bucketed_agg AS (
+          SELECT c.url_path, c.method, ARRAY_AGG(COALESCE(c2.cnt, 0) ORDER BY s.idx) AS activity_buckets
+          FROM (SELECT DISTINCT url_path, method FROM combined) c
+          CROSS JOIN generate_series(1, #{numBuckets}::int) AS s(idx)
+          LEFT JOIN combined c2 ON c2.url_path = c.url_path AND c2.method = c.method AND c2.bucket_idx = s.idx
+          GROUP BY c.url_path, c.method
+        )
+        SELECT enp.id endpoint_id, enp.hash endpoint_hash, enp.project_id, enp.url_path, enp.method, enp.host,
+               coalesce(es.eventsCount, 0) as total_requests, es.last_seen,
+               COALESCE(ba.activity_buckets, ARRAY[]::bigint[]) AS activity_buckets,
+               COALESCE(es.services, ARRAY[]::text[]) AS services
+        FROM apis.endpoints enp
+        JOIN apis.hosts h ON (h.project_id = enp.project_id AND h.host = enp.host AND h.outgoing = enp.outgoing)
+        LEFT JOIN endpoint_stats es ON (enp.url_path=es.url_path AND enp.method=es.method)
+        LEFT JOIN bucketed_agg ba ON (enp.url_path=ba.url_path AND enp.method=ba.method)
+        WHERE enp.project_id = #{pid} AND enp.outgoing = #{isOutgoing} ^{pHostQuery} ^{search} ^{archivedClause}
+        ORDER BY ^{orderBy}, url_path ASC OFFSET #{offset} LIMIT #{perPage}|]
 
 
 data HostEvents = HostEvents
@@ -269,71 +253,58 @@ data HostEvents = HostEvents
 dependenciesAndEventsCount :: (DB es, Time :> es) => Projects.ProjectId -> Maybe Bool -> Text -> Int -> Text -> Text -> Bool -> Eff es [HostEvents]
 dependenciesAndEventsCount pid outgoingM sortT skip timeF period showArchived = do
   now <- Time.currentTime
-  let timeRangeSql = case timeF of
-        "14D" -> [HI.sql|s.timestamp > #{now}::timestamptz - interval '14 day'|]
-        _ -> [HI.sql|s.timestamp > #{now}::timestamptz - interval '1 day'|]
+  let intervalDays = if timeF == "14D" then 14 else 1 :: Int
       (seriesStart, numBuckets) = periodBuckets period
-      orderBy = case sortT of
+      seriesStartSql = rawSql seriesStart
+      directionClause = directionClauseSql outgoingM
+      hostExpr = rawSql (hostCoalesceExpr "s.")
+      archivedClause = rawSql if showArchived then "archived_at IS NOT NULL" else "archived_at IS NULL"
+      orderBy = rawSql case sortT of
         "first_seen" -> "first_seen ASC"
         "last_seen" -> "last_seen DESC"
         _ -> "eventsCount DESC"
-      directionClause = directionClauseSql outgoingM
-      archivedClause = if showArchived then "archived_at IS NOT NULL" else "archived_at IS NULL" :: Text
-      hostExprT = hostCoalesceExpr "s."
-      outgoingExprT = "(s.kind = 'client')" :: Text
   Hasql.interp
-    $ rawSql
-      [text|
-WITH endpoint_hosts AS (
-    SELECT host, outgoing FROM apis.hosts
-    WHERE project_id = |]
-    <> [HI.sql|#{pid} |]
-    <> rawSql [text| AND host != ''|]
-    <> directionClause
-    <> rawSql
-      [text| AND $archivedClause
-), combined AS (
-    SELECT $hostExprT AS host,
-           $outgoingExprT AS outgoing,
-           s.resource___service___name AS service,
-           s.timestamp AS ts,
-           LEAST(width_bucket(EXTRACT(EPOCH FROM s.timestamp), EXTRACT(EPOCH FROM $seriesStart::timestamptz), EXTRACT(EPOCH FROM NOW()), $numBuckets), $numBuckets) AS bucket_idx
-    FROM otel_logs_and_spans s
-    WHERE s.project_id = |]
-    <> [HI.sql|#{pid}::text AND |]
-    <> timeRangeSql
-    <> rawSql
-      [text| AND s.attributes___http___request___method IS NOT NULL
-), aggregated AS (
-    SELECT host, outgoing, service, bucket_idx,
-           COUNT(*)::bigint AS cnt, MAX(ts) AS last_seen, MIN(ts) AS first_seen
-    FROM combined WHERE host != '' GROUP BY host, outgoing, service, bucket_idx
-), host_stats AS (
-    SELECT host, outgoing,
-           SUM(cnt)::bigint AS eventsCount,
-           MAX(last_seen) AS last_seen,
-           MIN(first_seen) AS first_seen,
-           COALESCE(ARRAY_AGG(DISTINCT service) FILTER (WHERE service IS NOT NULL AND service != '' AND service != host), ARRAY[]::text[]) AS services
-    FROM aggregated GROUP BY host, outgoing
-), bucketed_agg AS (|]
-    <> rawSql
-      [text|
-    SELECT c.host, c.outgoing, ARRAY_AGG(COALESCE(b.cnt, 0) ORDER BY g.idx) AS activity_buckets
-    FROM (SELECT DISTINCT host, outgoing FROM aggregated) c
-    CROSS JOIN generate_series(1, $numBuckets) AS g(idx)
-    LEFT JOIN (SELECT host, outgoing, bucket_idx, SUM(cnt)::bigint AS cnt FROM aggregated GROUP BY host, outgoing, bucket_idx) b
-      ON b.host = c.host AND b.outgoing = c.outgoing AND b.bucket_idx = g.idx
-    GROUP BY c.host, c.outgoing
-)
-SELECT eh.host, eh.outgoing, COALESCE(hs.eventsCount, 0) AS eventsCount, hs.last_seen, hs.first_seen,
-       COALESCE(ba.activity_buckets, ARRAY[]::bigint[]) AS activity_buckets,
-       COALESCE(hs.services, ARRAY[]::text[]) AS services
-FROM endpoint_hosts eh
-LEFT JOIN host_stats hs ON (eh.host = hs.host AND eh.outgoing = hs.outgoing)
-LEFT JOIN bucketed_agg ba ON (ba.host = eh.host AND ba.outgoing = eh.outgoing)
-ORDER BY $orderBy
-LIMIT 200 OFFSET |]
-    <> [HI.sql| #{skip}|]
+    [HI.sql|
+      WITH endpoint_hosts AS (
+          SELECT host, outgoing FROM apis.hosts
+          WHERE project_id = #{pid} AND host != '' ^{directionClause} AND ^{archivedClause}
+      ), combined AS (
+          SELECT ^{hostExpr} AS host,
+                 (s.kind = 'client') AS outgoing,
+                 s.resource___service___name AS service,
+                 s.timestamp AS ts,
+                 LEAST(width_bucket(EXTRACT(EPOCH FROM s.timestamp), EXTRACT(EPOCH FROM ^{seriesStartSql}::timestamptz), EXTRACT(EPOCH FROM NOW()), #{numBuckets}::int), #{numBuckets}::int) AS bucket_idx
+          FROM otel_logs_and_spans s
+          WHERE s.project_id = #{pid}::text
+            AND s.timestamp > #{now}::timestamptz - make_interval(days => #{intervalDays}::int)
+            AND s.attributes___http___request___method IS NOT NULL
+      ), aggregated AS (
+          SELECT host, outgoing, service, bucket_idx,
+                 COUNT(*)::bigint AS cnt, MAX(ts) AS last_seen, MIN(ts) AS first_seen
+          FROM combined WHERE host != '' GROUP BY host, outgoing, service, bucket_idx
+      ), host_stats AS (
+          SELECT host, outgoing,
+                 SUM(cnt)::bigint AS eventsCount,
+                 MAX(last_seen) AS last_seen,
+                 MIN(first_seen) AS first_seen,
+                 COALESCE(ARRAY_AGG(DISTINCT service) FILTER (WHERE service IS NOT NULL AND service != '' AND service != host), ARRAY[]::text[]) AS services
+          FROM aggregated GROUP BY host, outgoing
+      ), bucketed_agg AS (
+          SELECT c.host, c.outgoing, ARRAY_AGG(COALESCE(b.cnt, 0) ORDER BY g.idx) AS activity_buckets
+          FROM (SELECT DISTINCT host, outgoing FROM aggregated) c
+          CROSS JOIN generate_series(1, #{numBuckets}::int) AS g(idx)
+          LEFT JOIN (SELECT host, outgoing, bucket_idx, SUM(cnt)::bigint AS cnt FROM aggregated GROUP BY host, outgoing, bucket_idx) b
+            ON b.host = c.host AND b.outgoing = c.outgoing AND b.bucket_idx = g.idx
+          GROUP BY c.host, c.outgoing
+      )
+      SELECT eh.host, eh.outgoing, COALESCE(hs.eventsCount, 0) AS eventsCount, hs.last_seen, hs.first_seen,
+             COALESCE(ba.activity_buckets, ARRAY[]::bigint[]) AS activity_buckets,
+             COALESCE(hs.services, ARRAY[]::text[]) AS services
+      FROM endpoint_hosts eh
+      LEFT JOIN host_stats hs ON (eh.host = hs.host AND eh.outgoing = hs.outgoing)
+      LEFT JOIN bucketed_agg ba ON (ba.host = eh.host AND ba.outgoing = eh.outgoing)
+      ORDER BY ^{orderBy}
+      LIMIT 200 OFFSET #{skip}|]
 
 
 -- | Mark hosts as archived. When @outgoingM@ is @Nothing@ both directions for
@@ -341,60 +312,60 @@ LIMIT 200 OFFSET |]
 archiveHosts :: DB es => Projects.ProjectId -> Maybe Bool -> Maybe Projects.UserId -> [Text] -> Eff es Int64
 archiveHosts _ _ _ [] = pure 0
 archiveHosts pid outgoingM byM hosts =
-  Hasql.interpExecute
-    $ [HI.sql|
-      UPDATE apis.hosts
-         SET archived_at = NOW(), archived_by = #{byM}, updated_at = NOW()
-       WHERE project_id = #{pid}
-         AND host = ANY(#{hosts}::text[])
-         AND archived_at IS NULL |]
-    <> directionClauseSql outgoingM
+  let dir = directionClauseSql outgoingM
+   in Hasql.interpExecute
+        [HI.sql|
+          UPDATE apis.hosts
+             SET archived_at = NOW(), archived_by = #{byM}, updated_at = NOW()
+           WHERE project_id = #{pid}
+             AND host = ANY(#{hosts}::text[])
+             AND archived_at IS NULL ^{dir} |]
 
 
 unarchiveHosts :: DB es => Projects.ProjectId -> Maybe Bool -> [Text] -> Eff es Int64
 unarchiveHosts _ _ [] = pure 0
 unarchiveHosts pid outgoingM hosts =
-  Hasql.interpExecute
-    $ [HI.sql|
-      UPDATE apis.hosts
-         SET archived_at = NULL, archived_by = NULL, updated_at = NOW()
-       WHERE project_id = #{pid}
-         AND host = ANY(#{hosts}::text[])
-         AND archived_at IS NOT NULL |]
-    <> directionClauseSql outgoingM
+  let dir = directionClauseSql outgoingM
+   in Hasql.interpExecute
+        [HI.sql|
+          UPDATE apis.hosts
+             SET archived_at = NULL, archived_by = NULL, updated_at = NOW()
+           WHERE project_id = #{pid}
+             AND host = ANY(#{hosts}::text[])
+             AND archived_at IS NOT NULL ^{dir} |]
 
 
 countEndpointInbox :: DB es => Projects.ProjectId -> Text -> Text -> Eff es Int
-countEndpointInbox pid host requestType = do
-  let showCountBaseOnRequestType = case requestType of
+countEndpointInbox pid host requestType =
+  let dirClause = rawSql case requestType of
         "Outgoing" -> "enp.outgoing = true"
-        "Incoming" -> "enp.outgoing = false"
-        _ -> "ep.outgoing =  false"
-  fromMaybe 0
-    <$> Hasql.interpOne
-      ( [HI.sql|SELECT coalesce(COUNT(*)::BIGINT, 0)
-        FROM apis.endpoints enp
-        LEFT JOIN apis.issues ann ON (ann.issue_type = 'api_change' AND ann.endpoint_hash = enp.hash)
-        WHERE enp.project_id = #{pid} AND |]
-          <> rawSql showCountBaseOnRequestType
-          <> [HI.sql| AND ann.id IS NOT NULL AND ann.acknowledged_at IS NULL AND host = #{host}|]
-      )
+        _ -> "enp.outgoing = false"
+   in fromMaybe 0
+        <$> Hasql.interpOne
+          [HI.sql|
+            SELECT coalesce(COUNT(*)::BIGINT, 0)
+            FROM apis.endpoints enp
+            LEFT JOIN apis.issues ann ON (ann.issue_type = 'api_change' AND ann.endpoint_hash = enp.hash)
+            WHERE enp.project_id = #{pid} AND ^{dirClause}
+              AND ann.id IS NOT NULL AND ann.acknowledged_at IS NULL AND host = #{host} |]
 
 
 -- | Count of endpoints under a (project, direction) optionally filtered by
 -- host, url_path search, and archived status — mirrors the row filters used by
 -- 'endpointRequestStatsByProject' so paginators stay in sync.
 countEndpointsForHost :: DB es => Projects.ProjectId -> Bool -> Bool -> Maybe Text -> Maybe Text -> Eff es Int
-countEndpointsForHost pid outgoing archived pHostM searchM = do
-  let hostQ = maybe "" (\h -> [HI.sql| AND enp.host = #{h}|]) pHostM
-      searchQ = maybe "" (\s -> let pat = "%" <> s <> "%" in [HI.sql| AND enp.url_path LIKE #{pat}|]) searchM
-  fromMaybe 0
-    <$> Hasql.interpOne
-      ( [HI.sql| SELECT COUNT(*)::bigint FROM apis.endpoints enp JOIN apis.hosts h ON (h.project_id = enp.project_id AND h.host = enp.host AND h.outgoing = enp.outgoing) WHERE enp.project_id = #{pid} AND enp.outgoing = #{outgoing}|]
-          <> hostQ
-          <> searchQ
-          <> archivedHostClauseSql archived
-      )
+countEndpointsForHost pid outgoing archived pHostM searchM =
+  let hostQ = foldMap (\h -> [HI.sql| AND enp.host = #{h}|]) pHostM
+      searchQ = foldMap (\s -> let pat = "%" <> s <> "%" in [HI.sql| AND enp.url_path LIKE #{pat}|]) searchM
+      archivedQ = archivedHostClauseSql archived
+   in fromMaybe 0
+        <$> Hasql.interpOne
+          [HI.sql|
+            SELECT COUNT(*)::bigint
+            FROM apis.endpoints enp
+            JOIN apis.hosts h ON (h.project_id = enp.project_id AND h.host = enp.host AND h.outgoing = enp.outgoing)
+            WHERE enp.project_id = #{pid} AND enp.outgoing = #{outgoing}
+              ^{hostQ} ^{searchQ} ^{archivedQ} |]
 
 
 -- | Paginated endpoint list with optional url_path LIKE filter. Returns (rows, total count).
@@ -409,13 +380,11 @@ listEndpointsPaged pid outgoing searchM limit offset = do
         |]
   rows <-
     Hasql.interp
-      ( [HI.sql|
-          SELECT id, created_at, updated_at, project_id, url_path, url_params, method, host, hash, outgoing, description, service_name, environment
-          FROM apis.endpoints |]
-          <> whereSql
-          <> [HI.sql| ORDER BY url_path ASC LIMIT #{limit} OFFSET #{offset} |]
-      )
-  total <- fromMaybe 0 <$> Hasql.interpOne ([HI.sql| SELECT COUNT(*)::bigint FROM apis.endpoints |] <> whereSql)
+      [HI.sql|
+        SELECT id, created_at, updated_at, project_id, url_path, url_params, method, host, hash, outgoing, description, service_name, environment
+        FROM apis.endpoints ^{whereSql}
+        ORDER BY url_path ASC LIMIT #{limit} OFFSET #{offset} |]
+  total <- fromMaybe 0 <$> Hasql.interpOne [HI.sql| SELECT COUNT(*)::bigint FROM apis.endpoints ^{whereSql} |]
   pure (rows, total)
 
 

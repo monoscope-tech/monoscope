@@ -275,10 +275,10 @@ fetchMetricsData respDataType sqlQuery now fromD toD authCtx dbSource = do
 
   try @SomePostgreSqlException $ checkpoint (toAnnotation (respDataType, sqlQuery)) $ case respDataType of
     DTFloat -> do
-      chartData <- withResource pool \conn -> query_ conn (Query $ encodeUtf8 sqlQuery) :: IO [Only Double]
+      chartData <- withResource pool \conn -> query_ conn (Query $ encodeUtf8 sqlQuery) :: IO [Only (Maybe Double)]
       pure
         baseMetricsData
-          { dataFloat = fromOnly <$> listToMaybe chartData
+          { dataFloat = listToMaybe chartData >>= fromOnly
           , rowsCount = 1
           }
     DTMetric -> do

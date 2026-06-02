@@ -1239,8 +1239,14 @@ data Context = Context
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Context
 
 
--- Field order matches 'otelSpanColsSql' (and the INSERT path in 'otelColumns')
+-- | Field order matches 'otelSpanColsSql' (and the INSERT path in 'otelColumns')
 -- so FromRow / DecodeRow can be derived generically. Reorder both in lockstep.
+--
+-- Field count is pinned via doctest so any add/remove fails CI unless
+-- 'otelSpanColsSql' + 'otelColumns' are touched in the same change:
+--
+-- >>> length otelColumns
+-- 25
 data OtelLogsAndSpans = OtelLogsAndSpans
   { project_id :: Text
   , id :: Text -- UUID

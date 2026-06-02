@@ -210,12 +210,18 @@ insertUser :: DB es => User -> Eff es ()
 insertUser u = EHasql.interpExecute_ [HI.sql| INSERT INTO users.users (id, created_at, updated_at, deleted_at, active, first_name, last_name, display_image_url, email, phone_number, is_sudo) VALUES (#{u.id}, #{u.createdAt}, #{u.updatedAt}, #{u.deletedAt}, #{u.active}, #{u.firstName}, #{u.lastName}, #{u.displayImageUrl}, #{u.email}, #{u.phoneNumber}, #{u.isSudo}) |]
 
 
+-- | hasql-interpolate's strict OID check rejects the @email@ domain (OID ≠ text);
+-- list columns explicitly and cast @email::text@ so the generic 'DecodeRow' just works.
+userColsSql :: HI.Sql
+userColsSql = [HI.sql| id, created_at, updated_at, deleted_at, active, first_name, last_name, display_image_url, email::text, is_sudo, phone_number |]
+
+
 userById :: DB es => UserId -> Eff es (Maybe User)
-userById uid = EHasql.interpOne [HI.sql| SELECT * FROM users.users WHERE id = #{uid} |]
+userById uid = EHasql.interpOne $ [HI.sql| SELECT |] <> userColsSql <> [HI.sql| FROM users.users WHERE id = #{uid} |]
 
 
 userByEmail :: DB es => Text -> Eff es (Maybe User)
-userByEmail email = EHasql.interpOne [HI.sql| SELECT * FROM users.users WHERE email = #{email} |]
+userByEmail email = EHasql.interpOne $ [HI.sql| SELECT |] <> userColsSql <> [HI.sql| FROM users.users WHERE email = #{email} |]
 
 
 userIdByEmail :: DB es => Text -> Eff es (Maybe UserId)
@@ -592,7 +598,7 @@ queryLibHistoryForUser pid uid =
       )
       UNION ALL
       (
-        SELECT id, project_id, created_at, updated_at, user_id, query_type, query_text, query_ast, title, user_id=#{uid}::uuid as byMe
+        SELECT id, project_id, created_at, updated_at, user_id, query_type::text, query_text, query_ast, title, user_id=#{uid}::uuid as byMe
         FROM projects.query_library
         WHERE user_id = #{uid}::uuid AND project_id = #{pid}::uuid AND query_type = 'saved'
         ORDER BY created_at DESC

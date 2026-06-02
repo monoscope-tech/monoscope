@@ -190,14 +190,14 @@ instance (KnownSymbol prefix, Show a) => HI.EncodeValue (WrappedEnum prefix a) w
   encodeValue = (\(WrappedEnum a) -> T.toUpper $ toText $ drop (length $ symbolVal (Proxy @prefix)) $ show a) `contramap` E.text
 
 
+-- | Shared helper for hasql 'D.DecodeValue' instances that parse text and refine into a Haskell value.
+refineText :: Text -> (Text -> Maybe a) -> D.Value a
+refineText ctx f = D.refine (\t -> maybe (Left (ctx <> ": cannot parse " <> t)) Right (f t)) D.text
+
+
 instance (KnownSymbol prefix, Read a) => HI.DecodeValue (WrappedEnum prefix a) where
-  decodeValue =
-    D.refine
-      ( \t -> case readMaybe (symbolVal (Proxy @prefix) <> toString (T.toTitle t)) of
-          Just a -> Right (WrappedEnum a)
-          Nothing -> Left ("WrappedEnum: cannot parse " <> t)
-      )
-      D.text
+  decodeValue = refineText "WrappedEnum" \t ->
+    WrappedEnum <$> readMaybe (symbolVal (Proxy @prefix) <> toString (T.toTitle t))
 
 
 instance (KnownSymbol prefix, Read a) => HI.DecodeRow (WrappedEnum prefix a) where
@@ -233,13 +233,7 @@ instance (KnownSymbol prefix, Show a) => HI.EncodeValue (WrappedEnumSC prefix a)
 
 
 instance (KnownSymbol prefix, Read a) => HI.DecodeValue (WrappedEnumSC prefix a) where
-  decodeValue =
-    D.refine
-      ( \t -> case decodeEnumSC @prefix (toString t) of
-          Just a -> Right (WrappedEnumSC a)
-          Nothing -> Left ("WrappedEnumSC: cannot parse " <> t)
-      )
-      D.text
+  decodeValue = refineText "WrappedEnumSC" (fmap WrappedEnumSC . decodeEnumSC @prefix . toString)
 
 
 instance (KnownSymbol prefix, Read a) => HI.DecodeRow (WrappedEnumSC prefix a) where
@@ -334,13 +328,7 @@ instance Show a => HI.EncodeValue (WrappedEnumShow a) where
 
 
 instance Read a => HI.DecodeValue (WrappedEnumShow a) where
-  decodeValue =
-    D.refine
-      ( \t -> case readMaybe (toString t) of
-          Just a -> Right (WrappedEnumShow a)
-          Nothing -> Left ("WrappedEnumShow: cannot parse " <> t)
-      )
-      D.text
+  decodeValue = refineText "WrappedEnumShow" (fmap WrappedEnumShow . readMaybe . toString)
 
 
 data BaselineState = BSLearning | BSEstablished
