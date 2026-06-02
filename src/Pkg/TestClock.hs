@@ -94,5 +94,5 @@ runHasqlPoolSynced clock pool = interpret \_ -> \case
   UseSession s -> do
     t <- liftIO $ getTestTime clock
     let timeStr = formatTime defaultTimeLocale "%F %T%Q+00" t
-        setStmt = "SELECT set_config('app.current_time', '" <> encodeUtf8 (toText timeStr) <> "', false)"
-    OHasql.use pool (Session.sql setStmt *> s)
+        setStmt = "SELECT set_config('app.current_time', '" <> toText timeStr <> "', false)"
+    OHasql.use pool (Session.script setStmt *> s)

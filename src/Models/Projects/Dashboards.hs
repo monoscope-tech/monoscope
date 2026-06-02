@@ -228,21 +228,15 @@ replaceConstantVariables pid mf mt allParams currentTime c = c & #sql . _Just %~
 
 
 getDashboardById :: DB es => DashboardId -> Eff es (Maybe DashboardVM)
-getDashboardById did =
-  Hasql.interpOne
-    (selectFrom @DashboardVM <> [HI.sql| WHERE id = #{did} |])
+getDashboardById did = Hasql.interpOne (selectFrom @DashboardVM <> [HI.sql| WHERE id = #{did} |])
 
 
 getDashboardByFilePath :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe DashboardVM)
-getDashboardByFilePath pid fp =
-  Hasql.interpOne
-    (selectFrom @DashboardVM <> [HI.sql| WHERE project_id = #{pid} AND file_path = #{fp} LIMIT 1 |])
+getDashboardByFilePath pid fp = Hasql.interpOne (selectFrom @DashboardVM <> [HI.sql| WHERE project_id = #{pid} AND file_path = #{fp} LIMIT 1 |])
 
 
 deleteDashboardsByIds :: DB es => Projects.ProjectId -> V.Vector DashboardId -> Eff es Int64
-deleteDashboardsByIds pid dids =
-  Hasql.interpExecute
-    [HI.sql| DELETE FROM projects.dashboards WHERE project_id = #{pid} AND id = ANY(#{dids}::uuid[]) |]
+deleteDashboardsByIds pid dids = Hasql.interpExecute [HI.sql| DELETE FROM projects.dashboards WHERE project_id = #{pid} AND id = ANY(#{dids}::uuid[]) |]
 
 
 addTeamsToDashboards :: DB es => Projects.ProjectId -> V.Vector DashboardId -> V.Vector UUID.UUID -> Eff es Int64
@@ -273,39 +267,27 @@ selectDashboardsSortedBy pid orderByParam =
 
 
 updateSchema :: DB es => DashboardId -> Dashboard -> Eff es Int64
-updateSchema dashId dashboard =
-  Hasql.interpExecute
-    [HI.sql| UPDATE projects.dashboards SET schema = #{dashboard} WHERE id = #{dashId} |]
+updateSchema dashId dashboard = Hasql.interpExecute [HI.sql| UPDATE projects.dashboards SET schema = #{dashboard} WHERE id = #{dashId} |]
 
 
 updateTitle :: DB es => DashboardId -> Text -> Eff es Int64
-updateTitle dashId title =
-  Hasql.interpExecute
-    [HI.sql| UPDATE projects.dashboards SET title = #{title} WHERE id = #{dashId} |]
+updateTitle dashId title = Hasql.interpExecute [HI.sql| UPDATE projects.dashboards SET title = #{title} WHERE id = #{dashId} |]
 
 
 updateTags :: DB es => DashboardId -> V.Vector Text -> Eff es Int64
-updateTags dashId tags =
-  Hasql.interpExecute
-    [HI.sql| UPDATE projects.dashboards SET tags = #{tags} WHERE id = #{dashId} |]
+updateTags dashId tags = Hasql.interpExecute [HI.sql| UPDATE projects.dashboards SET tags = #{tags} WHERE id = #{dashId} |]
 
 
 updateSchemaAndUpdatedAt :: DB es => DashboardId -> Dashboard -> UTCTime -> Eff es Int64
-updateSchemaAndUpdatedAt dashId dashboard updatedAt =
-  Hasql.interpExecute
-    [HI.sql| UPDATE projects.dashboards SET schema = #{dashboard}, updated_at = #{updatedAt} WHERE id = #{dashId} |]
+updateSchemaAndUpdatedAt dashId dashboard updatedAt = Hasql.interpExecute [HI.sql| UPDATE projects.dashboards SET schema = #{dashboard}, updated_at = #{updatedAt} WHERE id = #{dashId} |]
 
 
 updateStarredSince :: DB es => DashboardId -> Maybe UTCTime -> Eff es Int64
-updateStarredSince dashId starredSince =
-  Hasql.interpExecute
-    [HI.sql| UPDATE projects.dashboards SET starred_since = #{starredSince} WHERE id = #{dashId} |]
+updateStarredSince dashId starredSince = Hasql.interpExecute [HI.sql| UPDATE projects.dashboards SET starred_since = #{starredSince} WHERE id = #{dashId} |]
 
 
 deleteDashboard :: DB es => DashboardId -> Eff es Int64
-deleteDashboard dashId =
-  Hasql.interpExecute
-    [HI.sql| DELETE FROM projects.dashboards WHERE id = #{dashId} |]
+deleteDashboard dashId = Hasql.interpExecute [HI.sql| DELETE FROM projects.dashboards WHERE id = #{dashId} |]
 
 
 getDashboardByBaseTemplate :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe DashboardId)

@@ -48,11 +48,9 @@ updateErrorEmbeddings :: DB es => [(ErrorPatternId, [Float])] -> Eff es Int64
 updateErrorEmbeddings [] = pure 0
 updateErrorEmbeddings pairs = do
   let (ids, embs) = unzip $ map (second showPGFloatArray) pairs
-      vIds = V.fromList ids
-      vEmbs = V.fromList embs
   Hasql.interpExecute
     [HI.sql| UPDATE apis.error_patterns SET embedding = u.emb::float4[], embedding_at = NOW()
-        FROM ROWS FROM (unnest(#{vIds}::uuid[]), unnest(#{vEmbs}::text[])) AS u(id, emb)
+        FROM ROWS FROM (unnest(#{ids}::uuid[]), unnest(#{embs}::text[])) AS u(id, emb)
         WHERE apis.error_patterns.id = u.id |]
 
 
@@ -70,11 +68,9 @@ assignErrorsToCanonical :: DB es => [(ErrorPatternId, ErrorPatternId)] -> Eff es
 assignErrorsToCanonical [] = pure 0
 assignErrorsToCanonical pairs = do
   let (pids, cids) = unzip pairs
-      vPids = V.fromList pids
-      vCids = V.fromList cids
   Hasql.interpExecute
     [HI.sql| UPDATE apis.error_patterns SET canonical_id = u.canonical
-        FROM (SELECT unnest(#{vPids}::uuid[]) AS id, unnest(#{vCids}::uuid[]) AS canonical) u
+        FROM (SELECT unnest(#{pids}::uuid[]) AS id, unnest(#{cids}::uuid[]) AS canonical) u
         WHERE apis.error_patterns.id = u.id |]
 
 
@@ -95,11 +91,10 @@ getErrorPatternGroupMembers eid =
 
 fetchErrorTexts :: DB es => [ErrorPatternId] -> Eff es (Map ErrorPatternId Text)
 fetchErrorTexts [] = pure mempty
-fetchErrorTexts ids = do
-  let vIds = V.fromList ids
+fetchErrorTexts ids =
   Map.fromList
     . map (\(eid, et, msg) -> (eid, embeddingTextForError et msg))
-    <$> Hasql.interp [HI.sql| SELECT id, error_type, message FROM apis.error_patterns WHERE id = ANY(#{vIds}) |]
+    <$> Hasql.interp [HI.sql| SELECT id, error_type, message FROM apis.error_patterns WHERE id = ANY(#{ids}) |]
 
 
 -- Log pattern operations
@@ -116,11 +111,9 @@ updateLogEmbeddings :: DB es => [(LogPatternId, [Float])] -> Eff es Int64
 updateLogEmbeddings [] = pure 0
 updateLogEmbeddings pairs = do
   let (ids, embs) = unzip $ map (second showPGFloatArray) pairs
-      vIds = V.fromList ids
-      vEmbs = V.fromList embs
   Hasql.interpExecute
     [HI.sql| UPDATE apis.log_patterns SET embedding = u.emb::float4[], embedding_at = NOW()
-        FROM ROWS FROM (unnest(#{vIds}::bigint[]), unnest(#{vEmbs}::text[])) AS u(id, emb)
+        FROM ROWS FROM (unnest(#{ids}::bigint[]), unnest(#{embs}::text[])) AS u(id, emb)
         WHERE apis.log_patterns.id = u.id |]
 
 
@@ -138,11 +131,9 @@ assignLogsToCanonical :: DB es => [(LogPatternId, LogPatternId)] -> Eff es Int64
 assignLogsToCanonical [] = pure 0
 assignLogsToCanonical pairs = do
   let (pids, cids) = unzip pairs
-      vPids = V.fromList pids
-      vCids = V.fromList cids
   Hasql.interpExecute
     [HI.sql| UPDATE apis.log_patterns SET canonical_id = u.canonical
-        FROM (SELECT unnest(#{vPids}::bigint[]) AS id, unnest(#{vCids}::bigint[]) AS canonical) u
+        FROM (SELECT unnest(#{pids}::bigint[]) AS id, unnest(#{cids}::bigint[]) AS canonical) u
         WHERE apis.log_patterns.id = u.id |]
 
 
@@ -158,16 +149,14 @@ getLogPatternGroupMembers lid =
 
 fetchLogTexts :: DB es => [LogPatternId] -> Eff es (Map LogPatternId Text)
 fetchLogTexts [] = pure mempty
-fetchLogTexts ids = do
-  let vIds = V.fromList ids
+fetchLogTexts ids =
   Map.fromList
-    <$> Hasql.interp [HI.sql| SELECT id, log_pattern FROM apis.log_patterns WHERE id = ANY(#{vIds}) |]
+    <$> Hasql.interp [HI.sql| SELECT id, log_pattern FROM apis.log_patterns WHERE id = ANY(#{ids}) |]
 
 
 fetchLogSamples :: DB es => [LogPatternId] -> Eff es (Map LogPatternId Text)
 fetchLogSamples [] = pure mempty
-fetchLogSamples ids = do
-  let vIds = V.fromList ids
+fetchLogSamples ids =
   Map.fromList
     . mapMaybe (\(pid, mSample) -> (pid,) <$> mSample)
-    <$> Hasql.interp [HI.sql| SELECT id, sample_message FROM apis.log_patterns WHERE id = ANY(#{vIds}) |]
+    <$> Hasql.interp [HI.sql| SELECT id, sample_message FROM apis.log_patterns WHERE id = ANY(#{ids}) |]

@@ -102,7 +102,7 @@ import Effectful.Log (Log)
 import Effectful.Time qualified as Time
 import Hasql.Decoders qualified as D
 import Hasql.DynamicStatements.Snippet (Snippet, encoderAndParam, param)
-import Hasql.DynamicStatements.Statement (dynamicallyParameterized)
+import Hasql.DynamicStatements.Snippet (toPreparableStatement)
 import Hasql.Encoders qualified as E
 import Hasql.Interpolate qualified as HI
 import Hasql.Session qualified as HSession
@@ -541,7 +541,6 @@ data MetricChartListData = MetricChartListData
 
 getTraceDetails :: (Hasql :> es, IOE :> es) => Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Eff es (Maybe Trace)
 getTraceDetails pid trId tme now = do
-  let pidTxt = pid.toText
   rows :: V.Vector (Text, UTCTime, UTCTime, Int64, Int64, Maybe (V.Vector Text)) <-
     Hasql.interp
       [HI.sql| SELECT
@@ -552,7 +551,7 @@ getTraceDetails pid trId tme now = do
               COUNT(context->>'span_id')::int8 AS total_spans,
               ARRAY_REMOVE(ARRAY_AGG(DISTINCT jsonb_extract_path_text(resource, 'service.name')), NULL) AS service_names
             FROM otel_logs_and_spans
-            WHERE project_id = #{pidTxt} AND timestamp BETWEEN #{start} AND #{end} AND context___trace_id = #{trId}
+            WHERE project_id = #{pid.toText} AND timestamp BETWEEN #{start} AND #{end} AND context___trace_id = #{trId}
             GROUP BY context___trace_id |]
   pure $ (\(tid, ts, te, dur, ns, sn) -> Trace tid ts te (fromIntegral dur) (fromIntegral ns) sn) <$> (rows V.!? 0)
   where
@@ -609,7 +608,6 @@ getEndpointTraceId pid method urlPath isFirst now =
     <> orderSql
     <> [HI.sql| LIMIT 1 |]
   where
-    pidTxt = pid.toText
     windowStart = addUTCTime (-(7 * 24 * 3600)) now
     orderSql =
       if isFirst
@@ -617,7 +615,7 @@ getEndpointTraceId pid method urlPath isFirst now =
         else [HI.sql| ORDER BY start_time DESC, id DESC |]
     branch pathPred =
       [HI.sql| (SELECT context___trace_id, start_time, id FROM otel_logs_and_spans
-                WHERE project_id = #{pidTxt}
+                WHERE project_id = #{pid.toText}
                   AND timestamp BETWEEN #{windowStart} AND #{now}
                   AND attributes___http___request___method = #{method}
                   AND |]
@@ -642,8 +640,7 @@ orphanParentIds rs =
 
 getSpanRecordsByTraceId :: (DB es, Log :> es) => Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Eff es [OtelLogsAndSpans]
 getSpanRecordsByTraceId pid trId tme now = do
-  let pidTxt = pid.toText
-      baseT = fromMaybe now tme
+  let baseT = fromMaybe now tme
       (start, end) = case tme of
         Nothing -> (addUTCTime (-(14 * 24 * 3600)) now, now)
         Just ts -> (addUTCTime (-300) ts, addUTCTime 300 ts)
@@ -653,7 +650,7 @@ getSpanRecordsByTraceId pid trId tme now = do
           $ [HI.sql|SELECT |]
           <> otelSpanColsSql
           <> [HI.sql| FROM otel_logs_and_spans
-                       WHERE project_id=#{pidTxt}
+                       WHERE project_id=#{pid.toText}
                          AND timestamp BETWEEN #{wideStart} AND #{wideEnd}
                          AND context___trace_id=#{trId}
                          AND context___span_id = ANY(#{ids})|]
@@ -662,7 +659,7 @@ getSpanRecordsByTraceId pid trId tme now = do
       $ [HI.sql|SELECT |]
       <> otelSpanColsSql
       <> [HI.sql| FROM otel_logs_and_spans
-                   WHERE project_id=#{pidTxt}
+                   WHERE project_id=#{pid.toText}
                      AND timestamp BETWEEN #{start} AND #{end}
                      AND context___trace_id=#{trId}
                    ORDER BY start_time ASC|]
@@ -683,7 +680,7 @@ getSpanRecordsByTraceId pid trId tme now = do
   whenNotNull (orphanParentIds resolved) \stillMissing ->
     Log.logAttention "TRACE_ORPHAN_PARENTS_UNRESOLVED"
       $ AE.object
-        [ "project_id" AE..= pidTxt
+        [ "project_id" AE..= pid.toText
         , "trace_id" AE..= trId
         , "missing_count" AE..= length stillMissing
         , "missing_sample" AE..= NE.take 5 stillMissing
@@ -697,13 +694,12 @@ getSpanRecordsByTraceIds pid traceIds tme = do
   let (start, end') = case tme of
         Nothing -> (addUTCTime (-86400) now, now)
         Just ts -> (addUTCTime (-300) ts, addUTCTime 300 ts)
-      pidText = pid.toText
       traceIdsList = V.toList traceIds
   Hasql.interp
     $ [HI.sql|SELECT |]
     <> otelSpanColsSql
     <> [HI.sql| FROM otel_logs_and_spans
-                 WHERE project_id = #{pidText}
+                 WHERE project_id = #{pid.toText}
                    AND timestamp >= #{start}
                    AND timestamp <= #{end'}
                    AND context___trace_id = ANY(#{traceIdsList})
@@ -716,11 +712,10 @@ spanRecordByProjectAndId pid = lookupOtelRecord (Just pid.toText)
 
 spanRecordByName :: DB es => Projects.ProjectId -> Text -> Text -> Eff es (Maybe OtelLogsAndSpans)
 spanRecordByName pid trId spanName = do
-  let pidTxt = pid.toText
   Hasql.interpOne
     [HI.sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource,
                 COALESCE(hashes, '{}'), kind, status_code, status_message, COALESCE(start_time, timestamp), end_time, events, links, duration, name, parent_id, summary, date::timestamptz
-            FROM otel_logs_and_spans where project_id=#{pidTxt} and context___trace_id = #{trId} and name=#{spanName} LIMIT 1|]
+            FROM otel_logs_and_spans where project_id=#{pid.toText} and context___trace_id = #{trId} and name=#{spanName} LIMIT 1|]
 
 
 getDataPointsData :: (DB es, Time.Time :> es) => Projects.ProjectId -> (Maybe UTCTime, Maybe UTCTime) -> Eff es [MetricDataPoint]
@@ -732,7 +727,7 @@ getDataPointsData pid dateRange = do
         _ -> mempty
   Hasql.interp
     $ [HI.sql| WITH metrics_aggregated AS (
-        SELECT project_id, metric_name, COUNT(*)::int AS data_points
+        SELECT project_id, metric_name, COUNT(*)::bigint AS data_points
         FROM telemetry.metrics
         WHERE project_id = #{pid} |]
     <> dateFilter
@@ -757,7 +752,7 @@ getMetricData pid metricName =
            COALESCE(m.metric_labels, ARRAY[]::text[]) AS metric_labels
       FROM telemetry.metrics_meta mm
       LEFT JOIN LATERAL (
-          SELECT COUNT(*)::int AS data_points,
+          SELECT COUNT(*)::bigint AS data_points,
               ARRAY_AGG(DISTINCT COALESCE(resource->>'service.name', 'unknown'))::text[] AS service_names,
               COALESCE(
                   (SELECT ARRAY_AGG(DISTINCT key)
@@ -776,13 +771,12 @@ getMetricData pid metricName =
 
 getTotalEventsToReport :: DB es => Projects.ProjectId -> UTCTime -> Eff es Int
 getTotalEventsToReport pid lastReported = do
-  let pidText = pid.toText
-  fromMaybe 0 <$> Hasql.interpOne [HI.sql| SELECT count(*)::int FROM otel_logs_and_spans WHERE project_id=#{pidText} AND timestamp > #{lastReported}|]
+  fromMaybe 0 <$> Hasql.interpOne [HI.sql| SELECT count(*)::bigint FROM otel_logs_and_spans WHERE project_id=#{pid.toText} AND timestamp > #{lastReported}|]
 
 
 getTotalMetricsCount :: DB es => Projects.ProjectId -> UTCTime -> Eff es Int
 getTotalMetricsCount pid lastReported =
-  fromMaybe 0 <$> Hasql.interpOne [HI.sql| SELECT count(*)::int FROM telemetry.metrics WHERE project_id=#{pid} AND timestamp > #{lastReported}|]
+  fromMaybe 0 <$> Hasql.interpOne [HI.sql| SELECT count(*)::bigint FROM telemetry.metrics WHERE project_id=#{pid} AND timestamp > #{lastReported}|]
 
 
 -- | (eventCount, eventBytes, metricCount, metricBytes) for a project since
@@ -790,9 +784,8 @@ getTotalMetricsCount pid lastReported =
 -- juggling four separate queries.
 getUsageTotals :: DB es => Projects.ProjectId -> UTCTime -> Eff es (Int, Int64, Int, Int64)
 getUsageTotals pid lastReported = do
-  let pidText = pid.toText
-  (eC, eB) <- fromMaybe (0, 0) <$> Hasql.interpOne [HI.sql| SELECT count(*)::int, COALESCE(SUM(message_size_bytes),0)::bigint FROM otel_logs_and_spans WHERE project_id=#{pidText} AND timestamp > #{lastReported}|]
-  (mC, mB) <- fromMaybe (0, 0) <$> Hasql.interpOne [HI.sql| SELECT count(*)::int, COALESCE(SUM(message_size_bytes),0)::bigint FROM telemetry.metrics WHERE project_id=#{pid} AND timestamp > #{lastReported}|]
+  (eC, eB) <- fromMaybe (0, 0) <$> Hasql.interpOne [HI.sql| SELECT count(*)::bigint, COALESCE(SUM(message_size_bytes),0)::bigint FROM otel_logs_and_spans WHERE project_id=#{pid.toText} AND timestamp > #{lastReported}|]
+  (mC, mB) <- fromMaybe (0, 0) <$> Hasql.interpOne [HI.sql| SELECT count(*)::bigint, COALESCE(SUM(message_size_bytes),0)::bigint FROM telemetry.metrics WHERE project_id=#{pid} AND timestamp > #{lastReported}|]
   pure (eC, eB, mC, mB)
 
 
@@ -1033,7 +1026,7 @@ bulkInsertOtelLogsAndSpans records
       where
         chunkSize = 700
         chunks = unfoldr (\v -> if V.null v then Nothing else Just (V.splitAt chunkSize v)) (V.map snd pairs)
-        chunkStmt c = dynamicallyParameterized (otelInsertHeader <> mconcat (intersperse ", " (V.toList c))) D.rowsAffected True
+        chunkStmt c = toPreparableStatement (otelInsertHeader <> mconcat (intersperse ", " (V.toList c))) D.rowsAffected
 
     -- Outer guards V.null; the single-row branch handles 1; recursive calls
     -- always split a ≥2 vector — so 'go' never sees an empty vector and
@@ -1282,58 +1275,60 @@ data OtelLogsAndSpans = OtelLogsAndSpans
 -- project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource,
 -- hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
 instance HI.DecodeRow OtelLogsAndSpans where
-  decodeRow = do
-    project_id' <- HI.decodeRow
-    id' <- HI.decodeRow
-    timestamp' <- HI.decodeRow
-    observed_timestamp' <- HI.decodeRow
-    context' <- HI.decodeRow
-    level' <- HI.decodeRow
-    severity' <- HI.decodeRow
-    body' <- HI.decodeRow
-    attributes' <- HI.decodeRow
-    resource' <- HI.decodeRow
-    hashes' <- HI.decodeRow
-    kind' <- HI.decodeRow
-    status_code' <- HI.decodeRow
-    status_message' <- HI.decodeRow
-    start_time' <- HI.decodeRow
-    end_time' <- HI.decodeRow
-    events' <- HI.decodeRow
-    links' <- HI.decodeRow
-    duration' <- HI.decodeRow
-    name' <- HI.decodeRow
-    parent_id' <- HI.decodeRow
-    summary' <- HI.decodeRow
-    date' <- HI.decodeRow
-    pure
-      OtelLogsAndSpans
-        { id = id'
-        , project_id = project_id'
-        , timestamp = timestamp'
-        , parent_id = parent_id'
-        , observed_timestamp = observed_timestamp'
-        , hashes = hashes'
-        , name = name'
-        , kind = kind'
-        , status_code = status_code'
-        , status_message = status_message'
-        , level = level'
-        , severity = severity'
-        , body = body'
-        , duration = duration'
-        , start_time = start_time'
-        , end_time = end_time'
-        , context = context'
-        , events = events'
-        , links = links'
-        , attributes = attributes'
-        , resource = resource'
-        , summary = summary'
-        , date = date'
-        , errors = Nothing
-        , message_size_bytes = 0
-        }
+  decodeRow =
+    mk
+      <$> HI.decodeRow
+      <*> HI.decodeRow
+      <*> HI.decodeRow
+      <*> HI.decodeRow
+      <*> HI.decodeRow
+      <*> HI.decodeRow
+      <*> HI.decodeRow
+      <*> HI.decodeRow
+      <*> HI.decodeRow
+      <*> HI.decodeRow
+      <*> HI.decodeRow
+      <*> HI.decodeRow
+      <*> HI.decodeRow
+      <*> HI.decodeRow
+      <*> HI.decodeRow
+      <*> HI.decodeRow
+      <*> HI.decodeRow
+      <*> HI.decodeRow
+      <*> HI.decodeRow
+      <*> HI.decodeRow
+      <*> HI.decodeRow
+      <*> HI.decodeRow
+      <*> HI.decodeRow
+    where
+      mk project_id' id' timestamp' observed_timestamp' context' level' severity' body' attributes' resource' hashes' kind' status_code' status_message' start_time' end_time' events' links' duration' name' parent_id' summary' date' =
+        OtelLogsAndSpans
+          { id = id'
+          , project_id = project_id'
+          , timestamp = timestamp'
+          , parent_id = parent_id'
+          , observed_timestamp = observed_timestamp'
+          , hashes = hashes'
+          , name = name'
+          , kind = kind'
+          , status_code = status_code'
+          , status_message = status_message'
+          , level = level'
+          , severity = severity'
+          , body = body'
+          , duration = duration'
+          , start_time = start_time'
+          , end_time = end_time'
+          , context = context'
+          , events = events'
+          , links = links'
+          , attributes = attributes'
+          , resource = resource'
+          , summary = summary'
+          , date = date'
+          , errors = Nothing
+          , message_size_bytes = 0
+          }
 
 
 instance FromRow OtelLogsAndSpans where
@@ -1529,11 +1524,10 @@ atErrorFrom spanObj typ msg stack =
 
 getProjectStatsForReport :: DB es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [(Text, Int, Int)]
 getProjectStatsForReport projectId start end = do
-  let pidTxt = projectId.toText
   Hasql.interp
-    [HI.sql| SELECT resource___service___name AS service_name,  (COUNT(*) FILTER ( WHERE status_code = 'ERROR' OR attributes___exception___type IS NOT NULL))::int AS total_error_events, COUNT(*)::int AS total_events
+    [HI.sql| SELECT resource___service___name AS service_name,  (COUNT(*) FILTER ( WHERE status_code = 'ERROR' OR attributes___exception___type IS NOT NULL))::bigint AS total_error_events, COUNT(*)::bigint AS total_events
          FROM otel_logs_and_spans
-         WHERE project_id = #{pidTxt} AND timestamp >= #{start} AND timestamp <= #{end} AND resource___service___name is not null
+         WHERE project_id = #{projectId.toText} AND timestamp >= #{start} AND timestamp <= #{end} AND resource___service___name is not null
          GROUP BY resource___service___name
          ORDER BY total_events DESC
       |]
@@ -1541,7 +1535,6 @@ getProjectStatsForReport projectId start end = do
 
 getProjectStatsBySpanType :: DB es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [(Text, Int, Int)]
 getProjectStatsBySpanType projectId start end = do
-  let pidTxt = projectId.toText
   Hasql.interp
     [HI.sql|
         SELECT
@@ -1553,10 +1546,10 @@ getProjectStatsBySpanType projectId start end = do
             WHEN kind = 'internal' THEN 'internal'
             ELSE 'other'
           END AS span_type,
-          COUNT(*)::int AS total_events,
-          AVG(duration)::int AS avg_duration
+          COUNT(*)::bigint AS total_events,
+          AVG(duration)::bigint AS avg_duration
         FROM otel_logs_and_spans
-        WHERE project_id = #{pidTxt}
+        WHERE project_id = #{projectId.toText}
           AND timestamp >= #{start}
           AND timestamp <= #{end}
           AND kind != 'log'
@@ -1574,7 +1567,7 @@ SELECT
     COALESCE(attributes___http___request___method, 'GET') AS method,
     COALESCE(attributes___url___path, '') AS url_path,
     CAST(ROUND(AVG(COALESCE(duration, 0))) AS INT) AS average_duration,
-    COUNT(*)::int AS request_count
+    COUNT(*)::bigint AS request_count
 FROM otel_logs_and_spans
 WHERE
     project_id = #{projectId}::text
@@ -1590,7 +1583,6 @@ ORDER BY
 
 getDBQueryStats :: (Hasql :> es, IOE :> es) => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [(Text, Int, Int)]
 getDBQueryStats projectId start end = do
-  let pidTxt = projectId.toText
   rows :: V.Vector (Text, Int64, Int64) <-
     Hasql.interp
       [HI.sql| SELECT
@@ -1598,7 +1590,7 @@ getDBQueryStats projectId start end = do
         ROUND(AVG(duration))::int8 AS avg_duration,
         COUNT(*)::int8 AS count
       FROM otel_logs_and_spans
-      WHERE project_id = #{pidTxt}
+      WHERE project_id = #{projectId.toText}
         AND timestamp >= #{start}
         AND timestamp <= #{end}
         AND kind != 'log'
@@ -1612,13 +1604,12 @@ getDBQueryStats projectId start end = do
 getTraceShapes :: (DB es, Time.Time :> es) => Projects.ProjectId -> V.Vector Text -> Eff es [(Text, Text, Int, Int)]
 getTraceShapes pid trIds = do
   now <- Time.currentTime
-  let pidTxt = pid.toText
   Hasql.interp
     [HI.sql|
       WITH target_trace_spans AS (
         SELECT DISTINCT context___trace_id, name
         FROM otel_logs_and_spans
-        WHERE project_id = #{pidTxt}
+        WHERE project_id = #{pid.toText}
           AND timestamp > #{now}::timestamptz - interval '1 hour'
           AND context___trace_id = ANY(#{trIds})
       ),
@@ -1634,7 +1625,7 @@ getTraceShapes pid trIds = do
           context___trace_id AS trace_id,
           ARRAY_AGG(DISTINCT name ORDER BY name) AS span_names
         FROM otel_logs_and_spans
-        WHERE project_id = #{pidTxt}
+        WHERE project_id = #{pid.toText}
           AND timestamp > #{now}::timestamptz - interval '1 hour'
           AND context___trace_id IS NOT NULL
         GROUP BY context___trace_id
@@ -1650,12 +1641,12 @@ getTraceShapes pid trIds = do
       SELECT
         m.target_trace_id,
         s.name,
-        AVG(s.duration)::int AS avg_duration,
-        COUNT(*)::int AS span_count
+        AVG(s.duration)::bigint AS avg_duration,
+        COUNT(*)::bigint AS span_count
       FROM otel_logs_and_spans s
       JOIN matching_traces m
         ON s.context___trace_id = m.trace_id
-      WHERE s.project_id = #{pidTxt}
+      WHERE s.project_id = #{pid.toText}
         AND s.timestamp > #{now}::timestamptz - interval '1 hour' and s.name IS NOT NULL
       GROUP BY m.target_trace_id, s.name
       ORDER BY m.target_trace_id, s.name
@@ -1736,84 +1727,61 @@ generateSummary otel =
     _ -> generateSpanSummary otel
 
 
+-- Shared summary-element helpers (used by both log and span summarizers).
+tag :: T.Text -> T.Text -> T.Text -> T.Text
+tag n s v = n <> ";" <> s <> "⇒" <> v
+
+truncT :: Int -> T.Text -> T.Text
+truncT n t = if T.length t > n then T.take (n - 3) t <> "..." else t
+
+encTrunc :: AE.ToJSON a => Int -> a -> T.Text
+encTrunc n = truncT n . decodeUtf8 . AE.encode
+
+nonEmptyT :: Maybe T.Text -> Maybe T.Text
+nonEmptyT = mfilter (not . T.null)
+
+
 generateLogSummary :: OtelLogsAndSpans -> V.Vector T.Text
 generateLogSummary otel =
   let
-    isRawDataLog =
-      isNothing otel.body
-        && isNothing otel.severity
-        && maybe True Map.null (unAesonTextMaybe otel.attributes)
+    attrsM = unAesonTextMaybe otel.attributes
+    bodyV  = unAesonTextMaybe otel.body
+    resM   = unAesonTextMaybe otel.resource
+    isRawDataLog = isNothing otel.body && isNothing otel.severity && maybe True Map.null attrsM
 
-    elements = if isRawDataLog then rawDataLogElements else normalLogElements
-    resourceFallback = case unAesonTextMaybe otel.resource of
-      Just res
-        | not (Map.null res) ->
-            let resText = decodeUtf8 (AE.encode res)
-                truncated =
-                  if T.length resText > 500
-                    then T.take 497 resText <> "..."
-                    else resText
-             in "resource;text-textWeak⇒" <> truncated
-      _ -> "resource;text-textWeak⇒{}"
-    rawDataLogElements =
-      catMaybes
-        [ case otel.context of
-            Just ctx -> case ctx.trace_state of
-              Just ts | ts /= "" -> Just $ "trace_state;neutral⇒" <> ts
-              _ -> Nothing
-            _ -> Nothing
-        , otel.context >>= \ctx ->
-            ctx.trace_id >>= \tid ->
-              if tid /= ""
-                then Just $ "trace_id;right-badge-neutral⇒" <> T.take 16 tid
-                else Nothing
-        , Just resourceFallback
-        ]
+    severityBadge = \case
+      SLTrace -> ("badge-neutral", "TRACE")
+      SLDebug -> ("badge-neutral", "DEBUG")
+      SLInfo  -> ("badge-info",    "INFO")
+      SLWarn  -> ("badge-warning", "WARN")
+      SLError -> ("badge-error",   "ERROR")
+      SLFatal -> ("badge-fatal",   "FATAL")
 
-    normalLogElements =
-      catMaybes
-        [ case otel.severity of
-            Just Severity{severity_text = Just sev} ->
-              Just $ "severity_text;" <> severityStyle sev <> "⇒" <> severityText sev
-            _ -> Nothing
-        , case unAesonTextMaybe otel.body of
-            Just (AE.String txt) -> Just txt
-            Just (AE.Object obj) -> case extractMessageFromLog (AE.Object obj) of
-              Just v -> Just v
-              _ -> Just $ decodeUtf8 (AE.encode obj)
-            Just val -> case val of
-              AE.Null -> Nothing
-              _ -> Just $ T.take 200 $ toText $ show val
-            Nothing -> Nothing
-        , case unAesonTextMaybe otel.attributes of
-            Just attrs
-              | not (Map.null attrs) ->
-                  let attrText = decodeUtf8 (AE.encode attrs)
-                      truncated =
-                        if T.length attrText > 500
-                          then T.take 497 attrText <> "..."
-                          else attrText
-                   in Just $ "attributes;text-textWeak⇒" <> truncated
-            _ -> Nothing
-        ]
+    -- Always emits a single element; falls back to "{}" when resource is missing/empty.
+    resourceFallback = tag "resource" "text-textWeak" $
+      maybe "{}" (encTrunc 500) (mfilter (not . Map.null) resM)
+
+    rawDataLogElements = catMaybes
+      [ tag "trace_state" "neutral"             <$> (otel.context >>= nonEmptyT . (.trace_state))
+      , tag "trace_id" "right-badge-neutral" . T.take 16 <$> (otel.context >>= nonEmptyT . (.trace_id))
+      , Just resourceFallback
+      ]
+
+    -- Body: raw string passes through verbatim; objects prefer extractMessageFromLog
+    -- then fall back to encoded JSON; primitives use `show` truncated to 200; Null drops.
+    bodyElt = bodyV >>= \case
+      AE.String t   -> Just t
+      AE.Object obj -> Just $ fromMaybe (decodeUtf8 (AE.encode obj)) (extractMessageFromLog (AE.Object obj))
+      AE.Null       -> Nothing
+      v             -> Just $ T.take 200 (toText (show v))
+
+    normalLogElements = catMaybes
+      [ (\(style, txt) -> tag "severity_text" style txt) . severityBadge <$> (otel.severity >>= (.severity_text))
+      , bodyElt
+      , tag "attributes" "text-textWeak" . encTrunc 500 <$> mfilter (not . Map.null) attrsM
+      ]
    in
-    V.fromList $ if null elements then rawDataLogElements else elements
-  where
-    severityStyle sev = case sev of
-      SLTrace -> "badge-neutral"
-      SLDebug -> "badge-neutral"
-      SLInfo -> "badge-info"
-      SLWarn -> "badge-warning"
-      SLError -> "badge-error"
-      SLFatal -> "badge-fatal"
-
-    severityText sev = case sev of
-      SLTrace -> "TRACE"
-      SLDebug -> "DEBUG"
-      SLInfo -> "INFO"
-      SLWarn -> "WARN"
-      SLError -> "ERROR"
-      SLFatal -> "FATAL"
+    V.fromList $ if isRawDataLog || null normalLogElements then rawDataLogElements else normalLogElements
 
 
 -- | Classify a browser/frontend span by name into a product-level display category.
@@ -1915,226 +1883,105 @@ humanBytes n
 generateSpanSummary :: OtelLogsAndSpans -> V.Vector T.Text
 generateSpanSummary otel =
   let
-    hasHttp = case unAesonTextMaybe otel.attributes of
-      Just attrs ->
-        isJust (atMapText "http.request.method" (Just attrs))
-          || isJust (atMapInt "http.response.status_code" (Just attrs))
-      _ -> False
-
     attrsM = unAesonTextMaybe otel.attributes
+    resM = unAesonTextMaybe otel.resource
     spanNameT = fromMaybe "" otel.name
     frontendCat = classifyFrontendSpan spanNameT
-    -- Fallback URL: prefer already-short url.path; else shorten url.full.
     urlFull = atMapText "url.full" attrsM
-    urlPathOrFull = atMapText "url.path" attrsM <|> fmap shortenUrl urlFull
+    urlPathOrFull = atMapText "url.path" attrsM <|> shortenUrl <$> urlFull
+    httpRoute = atMapText "http.route" attrsM
+    dbSys = atMapText "db.system.name" attrsM <|> atMapText "db.system" attrsM
+    rpcMethod = atMapText "rpc.method" attrsM
+    httpStatus = atMapInt "http.response.status_code" attrsM
+    httpMethod = atMapText "http.request.method" attrsM
+    hasHttp = isJust httpMethod || isJust httpStatus
 
-    isEmptySpan =
-      (isNothing otel.name || otel.name == Just "")
-        && maybe True Map.null attrsM
+    durMs d = toText (getDurationNSMS (fromIntegral d))
+    -- ERROR badge is dropped when http status >=400 already conveys it.
+    errorStatus style = case (otel.status_code, httpStatus) of
+      (Just "ERROR", Just s) | s >= 400 -> Nothing
+      (Just "ERROR", _) -> Just $ tag "status" style "ERROR"
+      _ -> Nothing
+    dbBadge = \case
+      "postgresql"    -> tag "db.system" "right-badge-postgres" "postgres"
+      "mysql"         -> tag "db.system" "right-badge-mysql"    "mysql"
+      "redis"         -> tag "db.system" "right-badge-redis"    "redis"
+      "mongodb"       -> tag "db.system" "right-badge-mongo"    "mongodb"
+      "elasticsearch" -> tag "db.system" "right-badge-elastic"  "elastic"
+      s               -> tag "db.system" "right-badge-neutral"  s
 
-    elements = if isEmptySpan then resourceFallbackElements else normalElements
+    isEmptySpan = (isNothing otel.name || otel.name == Just "") && maybe True Map.null attrsM
 
-    resourceFallbackElements =
-      catMaybes
-        [ case unAesonTextMaybe otel.resource of
-            Just res ->
-              case Map.lookup "process" res of
-                Just (AE.Object procObj) ->
-                  let procMap = Map.fromList [(AEK.toText k, v) | (k, v) <- KEM.toList procObj]
-                   in case Map.lookup "executable" procMap of
-                        Just (AE.Object execObj) ->
-                          let execMap = Map.fromList [(AEK.toText k, v) | (k, v) <- KEM.toList execObj]
-                           in case Map.lookup "name" execMap of
-                                Just (AE.String name)
-                                  | name /= "" ->
-                                      Just $ "process;neutral⇒" <> name
-                                _ ->
-                                  case Map.lookup "pid" procMap of
-                                    Just (AE.Number n) ->
-                                      Just $ "process;neutral⇒PID " <> toText (show (round n :: Int))
-                                    _ -> Nothing
-                        _ ->
-                          case Map.lookup "pid" procMap of
-                            Just (AE.Number n) ->
-                              Just $ "process;neutral⇒PID " <> toText (show (round n :: Int))
-                            _ -> Nothing
-                _ -> Nothing
-            _ -> Nothing
-        , unAesonTextMaybe otel.resource
-            >>= atMapText "service.name"
-            . Just
-            <&> ("service;neutral⇒" <>)
-        , case unAesonTextMaybe otel.resource of
-            Just attrs
-              | not (Map.null attrs) ->
-                  let filtered = Map.filterWithKey (\k _ -> k /= "process") attrs
-                      attrText = decodeUtf8 (AE.encode filtered)
-                      truncated =
-                        if T.length attrText > 300
-                          then T.take 297 attrText <> "..."
-                          else attrText
-                   in if Map.null filtered
-                        then Nothing
-                        else Just $ "resource;text-textWeak⇒" <> truncated
-            _ -> Nothing
-        , otel.context >>= \ctx ->
-            ctx.trace_id >>= \tid ->
-              if tid /= ""
-                then Just $ "trace_id;right-badge-neutral⇒" <> T.take 16 tid
-                else Nothing
-        , otel.duration <&> \dur ->
-            "duration;right-badge-neutral⇒" <> toText (getDurationNSMS (fromIntegral dur))
-        ]
+    resourceFallbackElements = catMaybes
+      [ tag "process"  "neutral" <$> (nonEmptyT (atMapText "process.executable.name" resM) <|> ("PID " <>) . show <$> atMapInt "process.pid" resM)
+      , tag "service"  "neutral" <$> atMapText "service.name" resM
+      , tag "resource" "text-textWeak" . encTrunc 300 <$> mfilter (not . Map.null) (Map.filterWithKey (\k _ -> k /= "process") <$> resM)
+      , tag "trace_id" "right-badge-neutral" . T.take 16 <$> (otel.context >>= nonEmptyT . (.trace_id))
+      , tag "duration" "right-badge-neutral" . durMs <$> otel.duration
+      ]
 
-    -- Primary readable label for a frontend span — derived from attributes, not the protocol span name.
-    -- `frontendCat *>` short-circuits to Nothing when the span is not classified as frontend.
-    -- Resource basename falls back to url.path if url.full is missing (some SDKs only set one).
-    frontendLabel =
-      frontendCat *> case spanNameT of
-        n
-          | n `elem` ["documentLoad", "documentFetch", "navigation", "route.change"] ->
-              ("url;text-textStrong⇒" <>) <$> urlPathOrFull
-        n
-          | n == "resourceFetch" || n == "resource" ->
-              ("resource;text-textStrong⇒" <>) . urlBasename <$> (urlFull <|> urlPathOrFull)
-        n
-          | n `elem` ["click", "submit", "keydown", "keyup"] ->
-              ("target;text-textStrong⇒" <>) <$> clickTargetLabel attrsM
-        "longtask" ->
-          otel.duration <&> \dur ->
-            "blocked;text-textStrong⇒main thread " <> toText (getDurationNSMS (fromIntegral dur))
-        n
-          | T.isPrefixOf "web-vital." n ->
-              (\v -> "value;text-textStrong⇒" <> v <> "ms") <$> atMapText "value" attrsM
-        _ -> Nothing
-
-    -- Resource size badge (for resourceFetch / document fetches)
-    resourceSizeElt = case atMapInt "http.response.body.size" attrsM <|> atMapInt "http.response_content_length" attrsM of
-      Just n | n > 0 -> Just $ "size;right-badge-neutral⇒" <> humanBytes n
+    -- Frontend-derived label (suppressed via `frontendCat *>` when span isn't classified frontend).
+    frontendLabel = frontendCat *> case spanNameT of
+      n | n `elem` ["documentLoad", "documentFetch", "navigation", "route.change"] -> tag "url" "text-textStrong" <$> urlPathOrFull
+      n | n == "resourceFetch" || n == "resource"                                  -> tag "resource" "text-textStrong" . urlBasename <$> (urlFull <|> urlPathOrFull)
+      n | n `elem` ["click", "submit", "keydown", "keyup"]                         -> tag "target" "text-textStrong" <$> clickTargetLabel attrsM
+      "longtask"                                                                   -> tag "blocked" "text-textStrong" . ("main thread " <>) . durMs <$> otel.duration
+      n | "web-vital." `T.isPrefixOf` n -> (\v -> tag "value" "text-textStrong" (v <> "ms")) <$> atMapText "value" attrsM
       _ -> Nothing
 
-    normalElements =
-      catMaybes
-        $ [ case frontendCat of
-              Just (cat, style) -> Just $ "kind;" <> style <> "⇒" <> cat
-              Nothing -> case (otel.kind, hasHttp, atMapText "component" attrsM) of
-                (Just "server", True, _) -> Just "request_type;neutral⇒incoming"
-                (Just "client", True, _) -> Just "request_type;neutral⇒outgoing"
-                (_, True, Just comp) | "proxy" `T.isInfixOf` comp -> Just "request_type;neutral⇒incoming"
-                (_, True, Just "frontend") -> Just "request_type;neutral⇒outgoing"
-                (_, True, _) -> Just "request_type;neutral⇒outgoing"
-                (Just "server", _, _) | isJust (atMapText "rpc.method" attrsM) -> Just "request_type;neutral⇒incoming"
-                (Just "client", _, _) | isJust (atMapText "rpc.method" attrsM) -> Just "request_type;neutral⇒outgoing"
-                (_, _, _) | isJust (atMapText "db.system.name" attrsM <|> atMapText "db.system" attrsM) -> Just "kind;neutral⇒database"
-                (Just "internal", _, _) -> Just "kind;neutral⇒internal"
-                _ -> Nothing
-          , frontendLabel
-          ]
-        ++ [ case atMapInt "http.response.status_code" attrsM of
-               Just code -> Just $ "status_code;" <> statusCodeStyle code <> "⇒" <> toText (show code)
-               _ -> Nothing
-           ]
-        ++ [ case atMapText "http.request.method" attrsM of
-               Just method -> Just $ "method;" <> methodStyle method <> "⇒" <> method
-               _ -> Nothing
-           ]
-        -- Suppress the raw url element when a frontend label already showed it,
-        -- otherwise show route → url.path → shortened url.full.
-        ++ [ case (atMapText "http.route" attrsM, urlPathOrFull, frontendLabel) of
-               (_, _, Just _) -> Nothing
-               (Just route, _, _) -> Just $ "route;neutral⇒" <> route
-               (_, Just url, _) -> Just $ "url;neutral⇒" <> url
-               _ -> Nothing
-           ]
-        ++ [ case (atMapText "db.system.name" attrsM, atMapText "db.system" attrsM) of
-               (Just system, _) -> Just $ "db.system;neutral⇒" <> system
-               (_, Just system) -> Just $ "db.system;neutral⇒" <> system
-               _ -> Nothing
-           , case ( atMapText "db.system.name" attrsM <|> atMapText "db.system" attrsM
-                  , atMapText "db.query.text" attrsM
-                  ) of
-               (Just _, Just queryText) -> Just $ "db.query.text;text-textStrong⇒" <> T.take 200 queryText
-               _ -> Nothing
-           , case atMapText "db.statement" attrsM of
-               Just stmt -> Just $ "db.statement;neutral⇒" <> T.take 200 stmt
-               _ -> Nothing
-           ]
-        ++ [ case atMapText "rpc.method" attrsM of
-               Just method -> Just $ "rpc.method;neutral⇒" <> method
-               _ -> Nothing
-           , case atMapText "rpc.service" attrsM of
-               Just service -> Just $ "rpc.service;neutral⇒" <> service
-               _ -> Nothing
-           ]
-        -- Span-name safety net: when nothing else described this row (no route, no url,
-        -- no frontend label), fall back to the raw span name so rows are never blank.
-        ++ [ case otel.name of
-               Just n
-                 | isNothing (atMapText "http.route" attrsM)
-                 , isNothing urlPathOrFull
-                 , isNothing frontendLabel ->
-                     Just $ "span_name;neutral⇒" <> n
-               _ -> Nothing
-           ]
-        ++ [ case (otel.status_code, atMapInt "http.response.status_code" attrsM) of
-               (Just "ERROR", Just httpStatus) | httpStatus >= 400 -> Nothing
-               (Just "ERROR", _) -> Just "status;badge-error⇒ERROR"
-               _ -> Nothing
-           ]
-        ++ [ case unAesonTextMaybe otel.attributes of
-               Just attrs
-                 | not (Map.null attrs) ->
-                     let attrText = decodeUtf8 (AE.encode attrs)
-                         truncated =
-                           if T.length attrText > 500
-                             then T.take 497 attrText <> "..."
-                             else attrText
-                      in Just $ "attributes;text-textWeak⇒" <> truncated
-               _ -> Nothing
-           ]
-        ++ [ case atMapText "session.id" attrsM of
-               Just v -> Just $ "session;right-badge-neutral⇒" <> v
-               _ -> Nothing
-           , case atMapText "user.email" attrsM of
-               Just eml -> Just $ "user email;right-badge-neutral⇒" <> eml
-               _ -> case atMapText "user.id" attrsM of
-                 Just s -> Just $ "user name;right-badge-neutral⇒" <> s
-                 _ -> Nothing
-           , case atMapText "user.full_name" attrsM of
-               Just s -> Just $ "user name;right-badge-neutral⇒" <> s
-               _ -> case atMapText "user.name" attrsM of
-                 Just s -> Just $ "user name;right-badge-neutral⇒" <> s
-                 _ -> Nothing
-           , case (otel.status_code, atMapInt "http.response.status_code" attrsM) of
-               (Just "ERROR", Just httpStatus) | httpStatus >= 400 -> Nothing
-               (Just "ERROR", _) -> Just "status;right-badge-error⇒ERROR"
-               _ -> Nothing
-           , case (atMapText "db.system.name" attrsM, atMapText "db.system" attrsM) of
-               (Just "postgresql", _) -> Just "db.system;right-badge-postgres⇒postgres"
-               (_, Just "postgresql") -> Just "db.system;right-badge-postgres⇒postgres"
-               (Just "mysql", _) -> Just "db.system;right-badge-mysql⇒mysql"
-               (_, Just "mysql") -> Just "db.system;right-badge-mysql⇒mysql"
-               (Just "redis", _) -> Just "db.system;right-badge-redis⇒redis"
-               (_, Just "redis") -> Just "db.system;right-badge-redis⇒redis"
-               (Just "mongodb", _) -> Just "db.system;right-badge-mongo⇒mongodb"
-               (_, Just "mongodb") -> Just "db.system;right-badge-mongo⇒mongodb"
-               (Just "elasticsearch", _) -> Just "db.system;right-badge-elastic⇒elastic"
-               (_, Just "elasticsearch") -> Just "db.system;right-badge-elastic⇒elastic"
-               (Just system, _) -> Just $ "db.system;right-badge-neutral⇒" <> system
-               (_, Just system) -> Just $ "db.system;right-badge-neutral⇒" <> system
-               _ -> Nothing
-           , resourceSizeElt
-           , if hasHttp then Just "protocol;right-badge-neutral⇒http" else Nothing
-           , case atMapText "rpc.method" attrsM of
-               Just _ -> Just "protocol;right-badge-neutral⇒rpc"
-               _ -> Nothing
-           , case otel.duration of
-               Just dur -> Just $ "duration;right-badge-neutral⇒" <> toText (getDurationNSMS (fromIntegral dur))
-               _ ->
-                 Nothing
-           ]
+    -- Original arm order preserved: request_type wins before database/internal.
+    requestType = case (otel.kind, hasHttp, atMapText "component" attrsM) of
+      (Just "server", True, _)                                       -> Just "incoming"
+      (Just "client", True, _)                                       -> Just "outgoing"
+      (_, True, Just comp) | "proxy" `T.isInfixOf` comp              -> Just "incoming"
+      (_, True, _)                                                   -> Just "outgoing"
+      (Just "server", _, _) | isJust rpcMethod                       -> Just "incoming"
+      (Just "client", _, _) | isJust rpcMethod                       -> Just "outgoing"
+      _ -> Nothing
+    kindElt = case frontendCat of
+      Just (cat, style) -> Just $ tag "kind" style cat
+      Nothing ->
+        tag "request_type" "neutral" <$> requestType
+          <|> tag "kind" "neutral" "database" <$ guard (isJust dbSys)
+          <|> tag "kind" "neutral" "internal" <$ guard (otel.kind == Just "internal")
+
+    routeOrUrl = case (httpRoute, urlPathOrFull, frontendLabel) of
+      (_, _, Just _)     -> Nothing
+      (Just route, _, _) -> Just $ tag "route" "neutral" route
+      (_, Just url, _)   -> Just $ tag "url"   "neutral" url
+      _                  -> Nothing
+
+    spanNameFallback = do
+      n <- otel.name
+      guard (all isNothing [httpRoute, urlPathOrFull, frontendLabel])
+      pure $ tag "span_name" "neutral" n
+
+    normalElements = catMaybes
+      [ kindElt
+      , frontendLabel
+      , (\c -> tag "status_code" (statusCodeStyle c) (toText (show c))) <$> httpStatus
+      , (\m -> tag "method" (methodStyle m) m) <$> httpMethod
+      , routeOrUrl
+      , tag "db.system"     "neutral"         <$> dbSys
+      , tag "db.query.text" "text-textStrong" . T.take 200 <$> (dbSys *> atMapText "db.query.text" attrsM)
+      , tag "db.statement"  "neutral"         . T.take 200 <$> atMapText "db.statement" attrsM
+      , tag "rpc.method"    "neutral" <$> rpcMethod
+      , tag "rpc.service"   "neutral" <$> atMapText "rpc.service" attrsM
+      , spanNameFallback
+      , errorStatus "badge-error"
+      , tag "attributes" "text-textWeak" . encTrunc 500 <$> mfilter (not . Map.null) attrsM
+      , tag "session"    "right-badge-neutral" <$> atMapText "session.id" attrsM
+      , tag "user email" "right-badge-neutral" <$> atMapText "user.email" attrsM <|> tag "user name" "right-badge-neutral" <$> atMapText "user.id" attrsM
+      , tag "user name"  "right-badge-neutral" <$> (atMapText "user.full_name" attrsM <|> atMapText "user.name" attrsM)
+      , errorStatus "right-badge-error"
+      , dbBadge <$> dbSys
+      , (atMapInt "http.response.body.size" attrsM <|> atMapInt "http.response_content_length" attrsM) >>= \n -> guard (n > 0) $> tag "size" "right-badge-neutral" (humanBytes n)
+      , tag "protocol" "right-badge-neutral" "http" <$ guard hasHttp
+      , tag "protocol" "right-badge-neutral" "rpc"  <$  rpcMethod
+      , tag "duration" "right-badge-neutral" . durMs <$> otel.duration
+      ]
    in
-    V.fromList elements
+    V.fromList (if isEmptySpan then resourceFallbackElements else normalElements)
 
 
 statusCodeStyle :: Int -> T.Text

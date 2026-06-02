@@ -351,8 +351,7 @@ selectChildSpansAndLogs pid projectedColsByUser traceIds seedSpanIds dateRange e
   now <- Time.currentTime
   let qConfig = defSqlQueryCfg pid now (Just SSpans) Nothing
       (r, colNames) = getProcessedColumns projectedColsByUser qConfig.defaultSelect
-  let pidText = pid.toText
-      traceIdsList = V.toList traceIds
+  let traceIdsList = V.toList traceIds
       excludedList = V.toList excludedSpanIds
       dateRangeSql = case dateRange of
         (Nothing, Just b) -> [HI.sql| AND timestamp BETWEEN #{b} AND #{now} |]
@@ -363,7 +362,7 @@ selectChildSpansAndLogs pid projectedColsByUser traceIds seedSpanIds dateRange e
   if V.null seedSpanIds
     then pure []
     else do
-      results <- Hasql.interp $ rawSql ("SELECT json_build_array(" <> r <> ")::jsonb FROM otel_logs_and_spans WHERE project_id=") <> [HI.sql|#{pidText}::text|] <> dateRangeSql <> [HI.sql| AND context___trace_id=ANY(#{traceIdsList}) AND parent_id IS NOT NULL AND id::text != ALL(#{excludedList}) ORDER BY timestamp DESC LIMIT 2000|]
+      results <- Hasql.interp $ rawSql ("SELECT json_build_array(" <> r <> ")::jsonb FROM otel_logs_and_spans WHERE project_id=") <> [HI.sql|#{pid.toText}::text|] <> dateRangeSql <> [HI.sql| AND context___trace_id=ANY(#{traceIdsList}) AND parent_id IS NOT NULL AND id::text != ALL(#{excludedList}) ORDER BY timestamp DESC LIMIT 2000|]
       -- 'colNames' from getProcessedColumns retains "<expr> as <alias>" entries;
       -- strip to bare aliases so the index map matches what callers / 'lookupVecTextByKey'
       -- look up (e.g. "latency_breakdown", "parent_id").
@@ -521,7 +520,7 @@ fetchLogPatterns enableTfReads pid queryAST dateRange sourceM targetM skip = do
   let (dateFrom, dateTo) = dateRange
   precomputed :: [(Text, Int64, Maybe Text, Maybe Text, Text, Int, Int, Bool)] <-
     if target `elem` map fst LogPatterns.knownPatternFields
-      then Hasql.interp [HI.sql|SELECT lp.log_pattern, (lp.occurrence_count + COALESCE(m.member_count, 0))::BIGINT as total_count, lp.log_level, lp.service_name, lp.pattern_hash, COALESCE(m.member_cnt, 0)::INT as merged_count, COUNT(*) OVER()::INT as total_patterns, (lp.is_error OR COALESCE(m.member_err, FALSE)) as is_error FROM apis.log_patterns lp LEFT JOIN LATERAL (SELECT SUM(occurrence_count) as member_count, COUNT(*)::INT as member_cnt, bool_or(is_error) as member_err FROM apis.log_patterns WHERE canonical_id = lp.id) m ON TRUE WHERE lp.project_id = #{pid} AND lp.source_field = #{target} AND lp.canonical_id IS NULL AND (#{dateFrom} IS NULL OR lp.last_seen_at >= #{dateFrom}) AND (#{dateTo} IS NULL OR lp.last_seen_at <= #{dateTo}) ORDER BY total_count DESC OFFSET #{skip} LIMIT #{aggregatePageSize}|]
+      then Hasql.interp [HI.sql|SELECT lp.log_pattern, (lp.occurrence_count + COALESCE(m.member_count, 0))::BIGINT as total_count, lp.log_level, lp.service_name, lp.pattern_hash, COALESCE(m.member_cnt, 0)::BIGINT as merged_count, COUNT(*) OVER()::BIGINT as total_patterns, (lp.is_error OR COALESCE(m.member_err, FALSE)) as is_error FROM apis.log_patterns lp LEFT JOIN LATERAL (SELECT SUM(occurrence_count) as member_count, COUNT(*)::BIGINT as member_cnt, bool_or(is_error) as member_err FROM apis.log_patterns WHERE canonical_id = lp.id) m ON TRUE WHERE lp.project_id = #{pid} AND lp.source_field = #{target} AND lp.canonical_id IS NULL AND (#{dateFrom} IS NULL OR lp.last_seen_at >= #{dateFrom}) AND (#{dateTo} IS NULL OR lp.last_seen_at <= #{dateTo}) ORDER BY total_count DESC OFFSET #{skip} LIMIT #{aggregatePageSize}|]
       else pure []
   if not (null precomputed)
     then do
@@ -533,20 +532,20 @@ fetchLogPatterns enableTfReads pid queryAST dateRange sourceM targetM skip = do
       -- Fetch member hashes for merged patterns so their hourly stats are included
       memberHashMap :: HM.HashMap Text [Text] <- HM.fromListWith (++) . map (\(canonical, mHash) -> (canonical, [mHash])) <$> Hasql.interp [HI.sql|SELECT c.pattern_hash, m.pattern_hash FROM apis.log_patterns m JOIN apis.log_patterns c ON m.canonical_id = c.id WHERE c.project_id = #{pid} AND c.source_field = #{target} AND c.pattern_hash = ANY(#{hashes})|]
       let allHashes = V.fromList $ concatMap (\h -> h : fromMaybe [] (HM.lookup h memberHashMap)) $ V.toList hashes
-      hourlyRows :: [(Text, UTCTime, Int)] <- Hasql.interp [HI.sql|SELECT pattern_hash, hour_bucket, event_count::INT FROM apis.log_pattern_hourly_stats WHERE project_id = #{pid} AND source_field = #{target} AND pattern_hash = ANY(#{allHashes}) AND hour_bucket >= #{hourlyFrom} AND hour_bucket <= #{hourlyTo} ORDER BY pattern_hash, hour_bucket|]
+      hourlyRows :: [(Text, UTCTime, Int)] <- Hasql.interp [HI.sql|SELECT pattern_hash, hour_bucket, event_count::BIGINT FROM apis.log_pattern_hourly_stats WHERE project_id = #{pid} AND source_field = #{target} AND pattern_hash = ANY(#{allHashes}) AND hour_bucket >= #{hourlyFrom} AND hour_bucket <= #{hourlyTo} ORDER BY pattern_hash, hour_bucket|]
       let volumeMap = HM.fromListWith (++) [(h, [(t, c)]) | (h, t, c) <- hourlyRows]
           lookupVolume h = buildHourlyBuckets now $ concatMap (\mh -> fromMaybe [] $ HM.lookup mh volumeMap) (h : fromMaybe [] (HM.lookup h memberHashMap))
       pure (totalPatterns, [PatternRow{logPattern = pat, count = cnt, level = lvl, service = svc, volume = lookupVolume h, mergedCount = mc, isError = isErr} | (pat, cnt, lvl, svc, h, mc, _, isErr) <- precomputed])
     else do
       Log.logTrace "fetchLogPatterns: falling back to on-the-fly query" $ AE.object ["full_where" AE..= fullWhere]
       let bucketW = bucketWidthSecs dateRange now
-          bucketCol = "floor(extract(epoch from timestamp) / " <> show bucketW <> ")::INT"
+          bucketCol = "floor(extract(epoch from timestamp) / " <> show bucketW <> ")::BIGINT"
       rawResults :: [(Text, Int, Int, Maybe Text, Maybe Text)] <- Hasql.withHasqlTimefusion enableTfReads case resolveFieldExpr target of
         Just (Left colExpr) ->
-          Hasql.interp $ rawSql ("SELECT " <> colExpr <> "::text, " <> bucketCol <> " as bi, count(*)::INT as cnt, mode() WITHIN GROUP (ORDER BY level) as lvl, mode() WITHIN GROUP (ORDER BY resource___service___name) as svc FROM otel_logs_and_spans WHERE project_id=") <> [HI.sql|#{pidTxt} |] <> rawSql (" AND " <> fullWhere <> " AND " <> colExpr <> " IS NOT NULL GROUP BY 1, 2 ORDER BY cnt DESC LIMIT 20000")
+          Hasql.interp $ rawSql ("SELECT " <> colExpr <> "::text, " <> bucketCol <> " as bi, count(*)::BIGINT as cnt, mode() WITHIN GROUP (ORDER BY level) as lvl, mode() WITHIN GROUP (ORDER BY resource___service___name) as svc FROM otel_logs_and_spans WHERE project_id=") <> [HI.sql|#{pidTxt} |] <> rawSql (" AND " <> fullWhere <> " AND " <> colExpr <> " IS NOT NULL GROUP BY 1, 2 ORDER BY cnt DESC LIMIT 20000")
         Just (Right pathParts) ->
           let pathPartsList = V.toList pathParts
-           in Hasql.interp $ [HI.sql|SELECT attributes #>> #{pathPartsList}, |] <> rawSql (bucketCol <> " as bi, count(*)::INT as cnt, mode() WITHIN GROUP (ORDER BY level) as lvl, mode() WITHIN GROUP (ORDER BY resource___service___name) as svc FROM otel_logs_and_spans WHERE project_id=") <> [HI.sql|#{pidTxt} |] <> rawSql (" AND " <> fullWhere) <> [HI.sql| AND attributes #>> #{pathPartsList} IS NOT NULL GROUP BY 1, 2 ORDER BY cnt DESC LIMIT 20000|]
+           in Hasql.interp $ [HI.sql|SELECT attributes #>> #{pathPartsList}, |] <> rawSql (bucketCol <> " as bi, count(*)::BIGINT as cnt, mode() WITHIN GROUP (ORDER BY level) as lvl, mode() WITHIN GROUP (ORDER BY resource___service___name) as svc FROM otel_logs_and_spans WHERE project_id=") <> [HI.sql|#{pidTxt} |] <> rawSql (" AND " <> fullWhere) <> [HI.sql| AND attributes #>> #{pathPartsList} IS NOT NULL GROUP BY 1, 2 ORDER BY cnt DESC LIMIT 20000|]
         Nothing -> pure []
       Log.logTrace "fetchLogPatterns: on-the-fly query done" $ AE.object ["raw_results" AE..= length rawResults]
       let agg (c1, l1, s1, b1) (c2, l2, s2, b2) = (c1 + c2, l1 <|> l2, s1 <|> s2, b1 ++ b2)
@@ -619,7 +618,7 @@ fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
             COALESCE(NULLIF(status_message, ''), NULLIF(body::text, '')) AS error_text,
             (lower(level) = 'error' OR severity___severity_number >= 17 OR status_code = 'ERROR') AS is_error,
             timestamp, end_time, level, severity___severity_number, status_code,
-            floor(extract(epoch from timestamp) / #{bucketW})::INT AS bi
+            floor(extract(epoch from timestamp) / #{bucketW})::BIGINT AS bi
           FROM otel_logs_and_spans
           WHERE |]
           <> whereSql
@@ -640,7 +639,7 @@ fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
             (ARRAY_AGG(url_path ORDER BY timestamp) FILTER (WHERE url_path IS NOT NULL AND url_path <> ''))[1] AS landing_url,
             (ARRAY_AGG(user_agent ORDER BY timestamp) FILTER (WHERE user_agent IS NOT NULL AND user_agent <> ''))[1] AS user_agent,
             (ARRAY_AGG(error_text ORDER BY timestamp) FILTER (WHERE is_error AND error_text IS NOT NULL AND error_text <> ''))[1] AS first_error,
-            COUNT(*) OVER()::INT AS total_sessions
+            COUNT(*) OVER()::BIGINT AS total_sessions
           FROM filtered GROUP BY session_id
         ), page AS (
           SELECT * FROM agg ORDER BY |]
@@ -650,7 +649,7 @@ fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
           SELECT session_id, ARRAY_REMOVE(ARRAY_AGG(DISTINCT service_name), NULL) AS services
           FROM filtered WHERE session_id IN (SELECT session_id FROM page) GROUP BY session_id
         ), hourly AS (
-          SELECT session_id, bi, COUNT(*)::INT AS cnt
+          SELECT session_id, bi, COUNT(*)::BIGINT AS cnt
           FROM filtered WHERE session_id IN (SELECT session_id FROM page) GROUP BY session_id, bi
         ), hourly_agg AS (
           SELECT session_id, ARRAY_AGG(bi ORDER BY bi) AS bis, ARRAY_AGG(cnt ORDER BY bi) AS cnts
@@ -659,7 +658,7 @@ fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
             p.event_count, p.error_count, p.first_seen,
             p.last_seen, p.duration_ns, p.trace_count, p.total_sessions,
             COALESCE(s.services, '{}'::TEXT[]),
-            COALESCE(h.bis, '{}'::INT[]), COALESCE(h.cnts, '{}'::INT[]),
+            COALESCE(h.bis, '{}'::BIGINT[]), COALESCE(h.cnts, '{}'::BIGINT[]),
             p.landing_url, p.user_agent, p.first_error
           FROM page p LEFT JOIN svcs s USING (session_id) LEFT JOIN hourly_agg h USING (session_id)
           ORDER BY p.|]
@@ -748,10 +747,10 @@ fetchSessionSummary enableTfReads pid queryAST dateRange = do
           -- error bars even when most traffic is clean.
           SELECT MAX(user_key) AS user_key, COUNT(*)::BIGINT AS events, COALESCE(BOOL_OR(is_err), FALSE) AS has_err,
             (EXTRACT(EPOCH FROM (MAX(COALESCE(end_time, timestamp)) - MIN(timestamp))) * 1e9)::BIGINT AS dur_ns,
-            floor(extract(epoch from MIN(timestamp)) / #{bucketW})::INT AS bi
+            floor(extract(epoch from MIN(timestamp)) / #{bucketW})::BIGINT AS bi
           FROM filtered GROUP BY sid
         ), bkt AS (
-          SELECT bi, COUNT(*) FILTER (WHERE NOT has_err)::INT AS c, COUNT(*) FILTER (WHERE has_err)::INT AS e
+          SELECT bi, COUNT(*) FILTER (WHERE NOT has_err)::BIGINT AS c, COUNT(*) FILTER (WHERE has_err)::BIGINT AS e
           FROM per_session GROUP BY bi
         )
         SELECT COUNT(*)::BIGINT, COUNT(*) FILTER (WHERE has_err)::BIGINT,
@@ -761,9 +760,9 @@ fetchSessionSummary enableTfReads pid queryAST dateRange = do
           COALESCE(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY dur_ns), 0)::BIGINT,
           COALESCE(PERCENTILE_CONT(0.5)  WITHIN GROUP (ORDER BY events),  0)::BIGINT,
           COALESCE(SUM(events), 0)::BIGINT,
-          COALESCE((SELECT ARRAY_AGG(bi ORDER BY bi) FROM bkt), '{}'::INT[]),
-          COALESCE((SELECT ARRAY_AGG(c  ORDER BY bi) FROM bkt), '{}'::INT[]),
-          COALESCE((SELECT ARRAY_AGG(e  ORDER BY bi) FROM bkt), '{}'::INT[])
+          COALESCE((SELECT ARRAY_AGG(bi ORDER BY bi) FROM bkt), '{}'::BIGINT[]),
+          COALESCE((SELECT ARRAY_AGG(c  ORDER BY bi) FROM bkt), '{}'::BIGINT[]),
+          COALESCE((SELECT ARRAY_AGG(e  ORDER BY bi) FROM bkt), '{}'::BIGINT[])
         FROM per_session|]
   rows :: [(Int64, Int64, Int64, Int64, Int64, Int64, Int64, Int64, V.Vector Int32, V.Vector Int32, V.Vector Int32)] <-
     Hasql.withHasqlTimefusion enableTfReads $ Hasql.interp q
@@ -849,12 +848,12 @@ fetchEventExamples enableTfReads pid queryAST dateRange expandKind skip limitN =
           rawSql ("SELECT " <> selectClause <> " FROM (SELECT DISTINCT ON (context___trace_id) * FROM otel_logs_and_spans WHERE ")
             <> fullWhereSql
             <> expandFilter
-            <> [HI.sql| ORDER BY context___trace_id, parent_id ASC NULLS FIRST, timestamp ASC) sub ORDER BY timestamp ASC OFFSET #{skip}::INT LIMIT #{limitN}::INT|]
+            <> [HI.sql| ORDER BY context___trace_id, parent_id ASC NULLS FIRST, timestamp ASC) sub ORDER BY timestamp ASC OFFSET #{skip}::BIGINT LIMIT #{limitN}::BIGINT|]
         _ ->
           rawSql ("SELECT " <> selectClause <> " FROM otel_logs_and_spans WHERE ")
             <> fullWhereSql
             <> expandFilter
-            <> [HI.sql| ORDER BY timestamp ASC OFFSET #{skip}::INT LIMIT #{limitN}::INT|]
+            <> [HI.sql| ORDER BY timestamp ASC OFFSET #{skip}::BIGINT LIMIT #{limitN}::BIGINT|]
   Log.logTrace "fetchEventExamples: query" $ AE.object ["project_id" AE..= pid]
   rows <- Hasql.withHasqlTimefusion enableTfReads $ checkpoint (toAnnotation ("fetchEventExamples" :: Text, pid)) $ executeArbitraryQuery q
   pure (rows, listToColNames cols)
@@ -940,5 +939,4 @@ getLastSevenDaysTotalRequest = getRequestCountForInterval "7 days"
 getRequestCountForInterval :: (DB es, Time.Time :> es) => Text -> Projects.ProjectId -> Eff es Int
 getRequestCountForInterval interval pid = do
   now <- Time.currentTime
-  let pidText = pid.toText
-  fromMaybe 0 <$> Hasql.interpOne ([HI.sql| SELECT count(*)::INT FROM otel_logs_and_spans WHERE project_id=#{pidText}::text AND timestamp > #{now}::timestamptz - interval |] <> rawSql ("'" <> interval <> "'"))
+  fromMaybe 0 <$> Hasql.interpOne ([HI.sql| SELECT count(*)::BIGINT FROM otel_logs_and_spans WHERE project_id=#{pid.toText}::text AND timestamp > #{now}::timestamptz - interval |] <> rawSql ("'" <> interval <> "'"))

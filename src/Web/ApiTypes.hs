@@ -29,7 +29,6 @@ module Web.ApiTypes (
   UserRef (..),
   ProjectSummary (..),
   ProjectFull (..),
-  ProjectPatch (..),
   MeResponse (..),
   -- Endpoints
   EndpointSummary (..),
@@ -369,20 +368,6 @@ data ProjectFull = ProjectFull
   deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON ProjectFull
   deriving (ToSchema) via SnakeSchema ProjectFull
-
-
-data ProjectPatch = ProjectPatch
-  { title :: Maybe Text
-  , description :: Maybe Text
-  , timeZone :: Maybe Text
-  , dailyNotif :: Maybe Bool
-  , weeklyNotif :: Maybe Bool
-  , endpointAlerts :: Maybe Bool
-  , errorAlerts :: Maybe Bool
-  }
-  deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON ProjectPatch
-  deriving (ToSchema) via SnakeSchema ProjectPatch
 
 
 -- =============================================================================

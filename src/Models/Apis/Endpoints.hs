@@ -206,7 +206,7 @@ endpointRequestStatsByProject pid archived pHostM sortM searchM page perPage req
         <> "), "
         <> numBucketsSql
         <> ") AS bucket_idx,\
-           \        COUNT(*)::int AS cnt\
+           \        COUNT(*)::bigint AS cnt\
            \ FROM otel_logs_and_spans\
            \ WHERE project_id = "
         <> [HI.sql|#{pid}::text|]
@@ -230,7 +230,7 @@ endpointRequestStatsByProject pid archived pHostM sortM searchM page perPage req
            \ GROUP BY c.url_path, c.method\
            \) SELECT enp.id endpoint_id, enp.hash endpoint_hash, enp.project_id, enp.url_path, enp.method, enp.host,\
            \        coalesce(es.eventsCount, 0) as total_requests, es.last_seen,\
-           \        COALESCE(ba.activity_buckets, ARRAY[]::int[]) AS activity_buckets,\
+           \        COALESCE(ba.activity_buckets, ARRAY[]::bigint[]) AS activity_buckets,\
            \        COALESCE(es.services, ARRAY[]::text[]) AS services\
            \ FROM apis.endpoints enp\
            \ JOIN apis.hosts h ON (h.project_id = enp.project_id AND h.host = enp.host AND h.outgoing = enp.outgoing)\
@@ -306,7 +306,7 @@ WITH endpoint_hosts AS (
       [text| AND s.attributes___http___request___method IS NOT NULL
 ), aggregated AS (
     SELECT host, outgoing, service, bucket_idx,
-           COUNT(*)::int AS cnt, MAX(ts) AS last_seen, MIN(ts) AS first_seen
+           COUNT(*)::bigint AS cnt, MAX(ts) AS last_seen, MIN(ts) AS first_seen
     FROM combined WHERE host != '' GROUP BY host, outgoing, service, bucket_idx
 ), host_stats AS (
     SELECT host, outgoing,
@@ -321,12 +321,12 @@ WITH endpoint_hosts AS (
     SELECT c.host, c.outgoing, ARRAY_AGG(COALESCE(b.cnt, 0) ORDER BY g.idx) AS activity_buckets
     FROM (SELECT DISTINCT host, outgoing FROM aggregated) c
     CROSS JOIN generate_series(1, $numBuckets) AS g(idx)
-    LEFT JOIN (SELECT host, outgoing, bucket_idx, SUM(cnt)::int AS cnt FROM aggregated GROUP BY host, outgoing, bucket_idx) b
+    LEFT JOIN (SELECT host, outgoing, bucket_idx, SUM(cnt)::bigint AS cnt FROM aggregated GROUP BY host, outgoing, bucket_idx) b
       ON b.host = c.host AND b.outgoing = c.outgoing AND b.bucket_idx = g.idx
     GROUP BY c.host, c.outgoing
 )
 SELECT eh.host, eh.outgoing, COALESCE(hs.eventsCount, 0) AS eventsCount, hs.last_seen, hs.first_seen,
-       COALESCE(ba.activity_buckets, ARRAY[]::int[]) AS activity_buckets,
+       COALESCE(ba.activity_buckets, ARRAY[]::bigint[]) AS activity_buckets,
        COALESCE(hs.services, ARRAY[]::text[]) AS services
 FROM endpoint_hosts eh
 LEFT JOIN host_stats hs ON (eh.host = hs.host AND eh.outgoing = hs.outgoing)
@@ -346,7 +346,7 @@ archiveHosts pid outgoingM byM hosts =
       UPDATE apis.hosts
          SET archived_at = NOW(), archived_by = #{byM}, updated_at = NOW()
        WHERE project_id = #{pid}
-         AND host = ANY(#{V.fromList hosts}::text[])
+         AND host = ANY(#{hosts}::text[])
          AND archived_at IS NULL |]
     <> directionClauseSql outgoingM
 
@@ -359,7 +359,7 @@ unarchiveHosts pid outgoingM hosts =
       UPDATE apis.hosts
          SET archived_at = NULL, archived_by = NULL, updated_at = NOW()
        WHERE project_id = #{pid}
-         AND host = ANY(#{V.fromList hosts}::text[])
+         AND host = ANY(#{hosts}::text[])
          AND archived_at IS NOT NULL |]
     <> directionClauseSql outgoingM
 
@@ -372,7 +372,7 @@ countEndpointInbox pid host requestType = do
         _ -> "ep.outgoing =  false"
   fromMaybe 0
     <$> Hasql.interpOne
-      ( [HI.sql|SELECT coalesce(COUNT(*)::INT, 0)
+      ( [HI.sql|SELECT coalesce(COUNT(*)::BIGINT, 0)
         FROM apis.endpoints enp
         LEFT JOIN apis.issues ann ON (ann.issue_type = 'api_change' AND ann.endpoint_hash = enp.hash)
         WHERE enp.project_id = #{pid} AND |]
@@ -390,7 +390,7 @@ countEndpointsForHost pid outgoing archived pHostM searchM = do
       searchQ = maybe "" (\s -> let pat = "%" <> s <> "%" in [HI.sql| AND enp.url_path LIKE #{pat}|]) searchM
   fromMaybe 0
     <$> Hasql.interpOne
-      ( [HI.sql| SELECT COUNT(*)::int FROM apis.endpoints enp JOIN apis.hosts h ON (h.project_id = enp.project_id AND h.host = enp.host AND h.outgoing = enp.outgoing) WHERE enp.project_id = #{pid} AND enp.outgoing = #{outgoing}|]
+      ( [HI.sql| SELECT COUNT(*)::bigint FROM apis.endpoints enp JOIN apis.hosts h ON (h.project_id = enp.project_id AND h.host = enp.host AND h.outgoing = enp.outgoing) WHERE enp.project_id = #{pid} AND enp.outgoing = #{outgoing}|]
           <> hostQ
           <> searchQ
           <> archivedHostClauseSql archived
@@ -415,7 +415,7 @@ listEndpointsPaged pid outgoing searchM limit offset = do
           <> whereSql
           <> [HI.sql| ORDER BY url_path ASC LIMIT #{limit} OFFSET #{offset} |]
       )
-  total <- fromMaybe 0 <$> Hasql.interpOne ([HI.sql| SELECT COUNT(*)::int FROM apis.endpoints |] <> whereSql)
+  total <- fromMaybe 0 <$> Hasql.interpOne ([HI.sql| SELECT COUNT(*)::bigint FROM apis.endpoints |] <> whereSql)
   pure (rows, total)
 
 
@@ -441,11 +441,10 @@ setEndpointCanonical [] = pure 0
 setEndpointCanonical triples =
   Hasql.interpExecute
     [HI.sql| UPDATE apis.endpoints SET canonical_hash = u.chash, canonical_path = u.cpath
-        FROM (SELECT unnest(#{hashesV}::text[]) AS hash, unnest(#{chashesV}::text[]) AS chash, unnest(#{cpathsV}::text[]) AS cpath) u
+        FROM (SELECT unnest(#{hashes}::text[]) AS hash, unnest(#{chashes}::text[]) AS chash, unnest(#{cpaths}::text[]) AS cpath) u
         WHERE apis.endpoints.hash = u.hash |]
   where
     (hashes, chashes, cpaths) = unzip3 triples
-    (hashesV, chashesV, cpathsV) = (V.fromList hashes, V.fromList chashes, V.fromList cpaths)
 
 
 insertCanonicalEndpoints :: DB es => [(Projects.ProjectId, Text, Text, Text, Text)] -> Eff es ()
@@ -454,15 +453,14 @@ insertCanonicalEndpoints rows =
   Hasql.interpExecute_
     [HI.sql| INSERT INTO apis.endpoints (project_id, url_path, url_params, method, host, hash, outgoing, canonical_hash, canonical_path)
            SELECT p, tp, '{}'::jsonb, m, h, eh, FALSE, eh, tp
-           FROM unnest(#{pidsV}::uuid[], #{tplsV}::text[], #{methodsV}::text[], #{hostsV}::text[], #{hashesV}::text[]) AS t(p, tp, m, h, eh)
+           FROM unnest(#{pids}::uuid[], #{tpls}::text[], #{methods}::text[], #{hosts}::text[], #{hashes}::text[]) AS t(p, tp, m, h, eh)
            ON CONFLICT (hash) DO UPDATE SET canonical_hash = EXCLUDED.canonical_hash, canonical_path = EXCLUDED.canonical_path |]
   where
-    v = V.fromList rows
-    pidsV = V.map (\(p, _, _, _, _) -> p) v
-    tplsV = V.map (\(_, t, _, _, _) -> t) v
-    methodsV = V.map (\(_, _, m, _, _) -> m) v
-    hostsV = V.map (\(_, _, _, h, _) -> h) v
-    hashesV = V.map (\(_, _, _, _, e) -> e) v
+    pids = [p | (p, _, _, _, _) <- rows]
+    tpls = [t | (_, t, _, _, _) <- rows]
+    methods = [m | (_, _, m, _, _) <- rows]
+    hosts = [h | (_, _, _, h, _) <- rows]
+    hashes = [eh | (_, _, _, _, eh) <- rows]
 
 
 -- Endpoint embedding + merge ---------------------------------------------------
@@ -471,7 +469,7 @@ fetchEndpointTexts :: DB es => [EndpointId] -> Eff es (Map EndpointId Text)
 fetchEndpointTexts [] = pure mempty
 fetchEndpointTexts ids =
   Map.fromList
-    <$> Hasql.interp [HI.sql| SELECT id, url_path FROM apis.endpoints WHERE id = ANY(#{V.fromList ids}) |]
+    <$> Hasql.interp [HI.sql| SELECT id, url_path FROM apis.endpoints WHERE id = ANY(#{ids}) |]
 
 
 getUnembeddedEndpoints :: DB es => Projects.ProjectId -> Eff es [(EndpointId, Text, Text)]
@@ -490,11 +488,10 @@ updateEndpointEmbeddings pairs =
     [HI.sql| UPDATE apis.endpoints SET
           embedding = u.emb::float4[],
           embedding_at = NOW()
-        FROM ROWS FROM (unnest(#{idsV}::uuid[]), unnest(#{embsV}::text[])) AS u(id, emb)
+        FROM ROWS FROM (unnest(#{ids}::uuid[]), unnest(#{embs}::text[])) AS u(id, emb)
         WHERE apis.endpoints.id = u.id |]
   where
     (ids, embs) = unzip $ map (second showPGFloatArray) pairs
-    (idsV, embsV) = (V.fromList ids, V.fromList embs)
 
 
 getCanonicalEndpoints :: DB es => Projects.ProjectId -> Eff es [(EndpointId, [Float])]
@@ -512,12 +509,11 @@ assignEndpointsToCanonical [] = pure 0
 assignEndpointsToCanonical pairs =
   Hasql.interpExecute
     [HI.sql| UPDATE apis.endpoints e SET canonical_hash = canon.hash
-        FROM (SELECT unnest(#{pidsV}::uuid[]) AS id, unnest(#{cidsV}::uuid[]) AS canonical) u
+        FROM (SELECT unnest(#{pids}::uuid[]) AS id, unnest(#{cids}::uuid[]) AS canonical) u
         JOIN apis.endpoints canon ON canon.id = u.canonical
         WHERE e.id = u.id |]
   where
     (pids, cids) = unzip pairs
-    (pidsV, cidsV) = (V.fromList pids, V.fromList cids)
 
 
 -- | Set a centroid endpoint's url_path and canonical_path to an LLM-suggested template.

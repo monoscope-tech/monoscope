@@ -62,8 +62,7 @@ import Effectful (IOE, type (:>))
 import GHC.Generics (Rep)
 import GHC.Records (HasField (getField))
 import GHC.TypeLits (KnownSymbol, Symbol, symbolVal)
-import Hasql.Connection.Setting qualified as HCS
-import Hasql.Connection.Setting.Connection qualified as HCSC
+import Hasql.Connection.Settings qualified as HCS
 import Hasql.Decoders qualified as D
 import Hasql.Encoders qualified as E
 import Hasql.Interpolate qualified as HI
@@ -188,11 +187,17 @@ instance (KnownSymbol prefix, Read a, Typeable a) => FromField (WrappedEnum pref
 
 
 instance (KnownSymbol prefix, Show a) => HI.EncodeValue (WrappedEnum prefix a) where
-  encodeValue = E.enum (\(WrappedEnum a) -> T.toUpper $ toText $ drop (length $ symbolVal (Proxy @prefix)) $ show a)
+  encodeValue = (\(WrappedEnum a) -> T.toUpper $ toText $ drop (length $ symbolVal (Proxy @prefix)) $ show a) `contramap` E.text
 
 
 instance (KnownSymbol prefix, Read a) => HI.DecodeValue (WrappedEnum prefix a) where
-  decodeValue = D.enum \t -> WrappedEnum <$> readMaybe (symbolVal (Proxy @prefix) <> toString (T.toTitle t))
+  decodeValue =
+    D.refine
+      ( \t -> case readMaybe (symbolVal (Proxy @prefix) <> toString (T.toTitle t)) of
+          Just a -> Right (WrappedEnum a)
+          Nothing -> Left ("WrappedEnum: cannot parse " <> t)
+      )
+      D.text
 
 
 instance (KnownSymbol prefix, Read a) => HI.DecodeRow (WrappedEnum prefix a) where
@@ -224,11 +229,17 @@ instance (KnownSymbol prefix, Read a, Typeable a) => FromField (WrappedEnumSC pr
 
 
 instance (KnownSymbol prefix, Show a) => HI.EncodeValue (WrappedEnumSC prefix a) where
-  encodeValue = E.enum (\(WrappedEnumSC a) -> toText $ encodeEnumSC @prefix a)
+  encodeValue = (\(WrappedEnumSC a) -> toText $ encodeEnumSC @prefix a) `contramap` E.text
 
 
 instance (KnownSymbol prefix, Read a) => HI.DecodeValue (WrappedEnumSC prefix a) where
-  decodeValue = D.enum (fmap WrappedEnumSC . decodeEnumSC @prefix . toString)
+  decodeValue =
+    D.refine
+      ( \t -> case decodeEnumSC @prefix (toString t) of
+          Just a -> Right (WrappedEnumSC a)
+          Nothing -> Left ("WrappedEnumSC: cannot parse " <> t)
+      )
+      D.text
 
 
 instance (KnownSymbol prefix, Read a) => HI.DecodeRow (WrappedEnumSC prefix a) where
@@ -319,11 +330,17 @@ instance (Read a, Typeable a) => FromField (WrappedEnumShow a) where
 
 
 instance Show a => HI.EncodeValue (WrappedEnumShow a) where
-  encodeValue = E.enum (\(WrappedEnumShow a) -> toText $ show a)
+  encodeValue = (\(WrappedEnumShow a) -> toText $ show a) `contramap` E.text
 
 
 instance Read a => HI.DecodeValue (WrappedEnumShow a) where
-  decodeValue = D.enum (fmap WrappedEnumShow . readMaybe . toString)
+  decodeValue =
+    D.refine
+      ( \t -> case readMaybe (toString t) of
+          Just a -> Right (WrappedEnumShow a)
+          Nothing -> Left ("WrappedEnumShow: cannot parse " <> t)
+      )
+      D.text
 
 
 data BaselineState = BSLearning | BSEstablished
@@ -565,7 +582,7 @@ mkHasqlPool sz cstr =
         , HPC.acquisitionTimeout 30
         , HPC.agingTimeout 1800
         , HPC.idlenessTimeout 1800
-        , HPC.staticConnectionSettings [HCS.connection (HCSC.string (decodeUtf8 cstr))]
+        , HPC.staticConnectionSettings (HCS.connectionString (decodeUtf8 cstr))
         ]
     )
     cstr

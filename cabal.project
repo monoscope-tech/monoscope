@@ -120,8 +120,15 @@ source-repository-package
 source-repository-package
   type: git
   location: https://github.com/tonyalaribe/hs-opentelemetry-instrumentation-hasql
-  tag: 037ef4331f8861059c234e6057cafbf8ef8ced83
+  tag: bb90850a0eeed02a0b03244283a1236b5ce03471
   subdir: .
+
+-- Fork: swap haskell-src-meta -> ghc-hs-meta so #{x.y} record-dot
+-- splices parse correctly. Drop once upstream merges (PR open).
+source-repository-package
+  type: git
+  location: https://github.com/tonyalaribe/hasql-interpolate
+  tag: 22909b5316bb314cbb495208061b8f0f268bf0aa
 
 constraints:
   streamly ^>=0.10.0,

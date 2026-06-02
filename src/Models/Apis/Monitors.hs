@@ -136,11 +136,7 @@ data QueryMonitor = QueryMonitor
 
 
 queryMonitorUpsert :: DB es => QueryMonitor -> Eff es Int64
-queryMonitorUpsert qm = do
-  let (qId, qPid, qAT, qWT, qLQ, qLQS, qLE, qWLT, qALT, qTLT) =
-        (qm.id, qm.projectId, qm.alertThreshold, qm.warningThreshold, qm.logQuery, qm.logQueryAsSql, qm.lastEvaluated, qm.warningLastTriggered, qm.alertLastTriggered, qm.triggerLessThan)
-      (qTSFM, qAC, qCIM, qVT, qTeams, qWId, qDId, qART, qWRT, qRIM, qSAC, qTWM) =
-        (qm.thresholdSustainedForMins, qm.alertConfig, qm.checkIntervalMins, qm.visualizationType, qm.teams, qm.widgetId, qm.dashboardId, qm.alertRecoveryThreshold, qm.warningRecoveryThreshold, qm.renotifyIntervalMins, qm.stopAfterCount, qm.timeWindowMins)
+queryMonitorUpsert qm =
   Hasql.interpExecute
     [HI.sql|
     INSERT INTO monitors.query_monitors (id, project_id, alert_threshold, warning_threshold, log_query,
@@ -148,7 +144,7 @@ queryMonitorUpsert qm = do
                   threshold_sustained_for_mins, alert_config, check_interval_mins, visualization_type, teams,
                   widget_id, dashboard_id, alert_recovery_threshold, warning_recovery_threshold,
                   renotify_interval_mins, stop_after_count, time_window_mins)
-    VALUES (#{qId},#{qPid},#{qAT},#{qWT},#{qLQ},#{qLQS},#{qLE},#{qWLT},#{qALT},#{qTLT},#{qTSFM},#{qAC},#{qCIM},#{qVT},#{qTeams}::uuid[],#{qWId},#{qDId},#{qART},#{qWRT},#{qRIM},#{qSAC},#{qTWM})
+    VALUES (#{qm.id},#{qm.projectId},#{qm.alertThreshold},#{qm.warningThreshold},#{qm.logQuery},#{qm.logQueryAsSql},#{qm.lastEvaluated},#{qm.warningLastTriggered},#{qm.alertLastTriggered},#{qm.triggerLessThan},#{qm.thresholdSustainedForMins},#{qm.alertConfig},#{qm.checkIntervalMins},#{qm.visualizationType},#{qm.teams}::uuid[],#{qm.widgetId},#{qm.dashboardId},#{qm.alertRecoveryThreshold},#{qm.warningRecoveryThreshold},#{qm.renotifyIntervalMins},#{qm.stopAfterCount},#{qm.timeWindowMins})
     ON CONFLICT (id) DO UPDATE SET
                   alert_threshold=EXCLUDED.alert_threshold,
                   warning_threshold=EXCLUDED.warning_threshold,
@@ -192,14 +188,12 @@ monitorToggleActiveById mid = do
 monitorDeactivateByIds :: (DB es, Time :> es) => [QueryMonitorId] -> Eff es Int64
 monitorDeactivateByIds ids = do
   now <- Time.currentTime
-  let vIds = V.fromList ids
-  Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET deactivated_at = #{now} WHERE id = ANY(#{vIds}::uuid[]) AND deactivated_at IS NULL |]
+  Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET deactivated_at = #{now} WHERE id = ANY(#{ids}::uuid[]) AND deactivated_at IS NULL |]
 
 
 monitorReactivateByIds :: DB es => [QueryMonitorId] -> Eff es Int64
-monitorReactivateByIds ids = do
-  let vIds = V.fromList ids
-  Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET deactivated_at = NULL WHERE id = ANY(#{vIds}::uuid[]) AND deactivated_at IS NOT NULL |]
+monitorReactivateByIds ids =
+  Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET deactivated_at = NULL WHERE id = ANY(#{ids}::uuid[]) AND deactivated_at IS NOT NULL |]
 
 
 -- | Mute monitors until a future time. Pass Nothing for indefinite mute.
@@ -207,27 +201,23 @@ monitorMuteByIds :: (DB es, Time :> es) => Maybe Int -> [QueryMonitorId] -> Eff 
 monitorMuteByIds durationMinsM ids = do
   now <- Time.currentTime
   let mutedUntil = maybe (UTCTime (ModifiedJulianDay 100000) 0) (\mins -> addUTCTime (fromIntegral mins * 60) now) durationMinsM
-      vIds = V.fromList ids
-  Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET muted_until = #{mutedUntil} WHERE id = ANY(#{vIds}::uuid[]) |]
+  Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET muted_until = #{mutedUntil} WHERE id = ANY(#{ids}::uuid[]) |]
 
 
 monitorUnmuteByIds :: DB es => [QueryMonitorId] -> Eff es Int64
-monitorUnmuteByIds ids = do
-  let vIds = V.fromList ids
-  Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET muted_until = NULL WHERE id = ANY(#{vIds}::uuid[]) AND muted_until IS NOT NULL |]
+monitorUnmuteByIds ids =
+  Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET muted_until = NULL WHERE id = ANY(#{ids}::uuid[]) AND muted_until IS NOT NULL |]
 
 
 monitorResolveByIds :: DB es => [QueryMonitorId] -> Eff es Int64
-monitorResolveByIds ids = do
-  let vIds = V.fromList ids
-  Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET current_status = 'normal', alert_last_triggered = NULL, warning_last_triggered = NULL, notification_count = 0 WHERE id = ANY(#{vIds}::uuid[]) AND current_status != 'normal' |]
+monitorResolveByIds ids =
+  Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET current_status = 'normal', alert_last_triggered = NULL, warning_last_triggered = NULL, notification_count = 0 WHERE id = ANY(#{ids}::uuid[]) AND current_status != 'normal' |]
 
 
 monitorSoftDeleteByIds :: (DB es, Time :> es) => [QueryMonitorId] -> Eff es Int64
 monitorSoftDeleteByIds ids = do
   now <- Time.currentTime
-  let vIds = V.fromList ids
-  Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET deleted_at = #{now} WHERE id = ANY(#{vIds}::uuid[]) AND deleted_at IS NULL |]
+  Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET deleted_at = #{now} WHERE id = ANY(#{ids}::uuid[]) AND deleted_at IS NULL |]
 
 
 queryMonitorsAll :: DB es => Projects.ProjectId -> Eff es [QueryMonitor]
@@ -261,9 +251,8 @@ queryMonitorByWidgetId wId = Hasql.interpOne [HI.sql| SELECT * FROM monitors.que
 
 
 deleteMonitorsByWidgetIds :: DB es => [Text] -> Eff es Int64
-deleteMonitorsByWidgetIds widgetIds = do
-  let vIds = V.fromList widgetIds
-  Hasql.interpExecute [HI.sql|DELETE FROM monitors.query_monitors WHERE widget_id = ANY(#{vIds}::text[])|]
+deleteMonitorsByWidgetIds widgetIds =
+  Hasql.interpExecute [HI.sql|DELETE FROM monitors.query_monitors WHERE widget_id = ANY(#{widgetIds}::text[])|]
 
 
 data WidgetAlertStatus = WidgetAlertStatus

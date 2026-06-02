@@ -293,5 +293,5 @@ cleanupExpiredCache = do
         WHERE last_accessed_at < #{now}::timestamptz - interval '4 hours'
         RETURNING id
       )
-      SELECT COUNT(*)::int FROM deleted
+      SELECT COUNT(*)::bigint FROM deleted
     |]

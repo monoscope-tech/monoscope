@@ -321,15 +321,7 @@ instance HI.DecodeRow IssueL where
 -- ON CONFLICT dedup applies to all issue types on (project_id, target_hash, issue_type)
 -- but only for open issues (not acknowledged/archived). Preserves occurrence_count and first_seen.
 insertIssue :: DB es => Issue -> Eff es ()
-insertIssue (i :: Issue) = do
-  -- DuplicateRecordFields: bind before TH quasi-quote which can't disambiguate
-  let (iId, iCreated, iUpdated, iPid, iType, iTgt, iPHash, iFrame, iEHash) =
-        (i.id, i.createdAt, i.updatedAt, i.projectId, i.issueType, i.targetHash, i.parentHash, i.isFramework, i.endpointHash)
-      (iAckAt, iAckBy, iArchAt, iTitle, iSvc, iEnv, iCrit, iSev) =
-        (i.acknowledgedAt, i.acknowledgedBy, i.archivedAt, i.title, i.service, i.environment, i.critical, i.severity)
-      (iAction, iComplex, iData, iReqP, iResP, iLlmAt, iLlmVer, iSeq) =
-        (i.recommendedAction, i.migrationComplexity, i.issueData, i.requestPayloads, i.responsePayloads, i.llmEnhancedAt, i.llmEnhancementVersion, i.seqNum)
-      (iAffReq, iAffCli) = (max 1 i.affectedRequests, max 1 i.affectedClients)
+insertIssue (i :: Issue) =
   Hasql.interpExecute_
     [HI.sql|
 INSERT INTO apis.issues (
@@ -340,10 +332,10 @@ INSERT INTO apis.issues (
   issue_data, request_payloads, response_payloads,
   llm_enhanced_at, llm_enhancement_version, seq_num,
   affected_requests, affected_clients
-) VALUES (#{iId}, #{iCreated}, #{iUpdated}, #{iPid}, #{iType}::apis.issue_type, #{iTgt}, #{iPHash}, #{iFrame}, #{iEHash},
-  #{iAckAt}, #{iAckBy}, #{iArchAt}, #{iTitle}, #{iSvc}, #{iEnv}, #{iCrit}, #{iSev},
-  #{iAction}, #{iComplex}, #{iData}, #{iReqP}, #{iResP}, #{iLlmAt}, #{iLlmVer}, #{iSeq},
-  #{iAffReq}, #{iAffCli})
+) VALUES (#{i.id}, #{i.createdAt}, #{i.updatedAt}, #{i.projectId}, #{i.issueType}::apis.issue_type, #{i.targetHash}, #{i.parentHash}, #{i.isFramework}, #{i.endpointHash},
+  #{i.acknowledgedAt}, #{i.acknowledgedBy}, #{i.archivedAt}, #{i.title}, #{i.service}, #{i.environment}, #{i.critical}, #{i.severity},
+  #{i.recommendedAction}, #{i.migrationComplexity}, #{i.issueData}, #{i.requestPayloads}, #{i.responsePayloads}, #{i.llmEnhancedAt}, #{i.llmEnhancementVersion}, #{i.seqNum},
+  #{max 1 i.affectedRequests}, #{max 1 i.affectedClients})
 ON CONFLICT (project_id, target_hash, issue_type)
   WHERE acknowledged_at IS NULL AND archived_at IS NULL
 DO UPDATE SET
@@ -352,7 +344,7 @@ DO UPDATE SET
   affected_clients = apis.issues.affected_clients + EXCLUDED.affected_clients,
   issue_data = EXCLUDED.issue_data
     || CASE WHEN jsonb_exists(apis.issues.issue_data, 'occurrence_count')
-       THEN jsonb_build_object('occurrence_count', (apis.issues.issue_data->>'occurrence_count')::int + COALESCE((EXCLUDED.issue_data->>'occurrence_count')::int, 1))
+       THEN jsonb_build_object('occurrence_count', (apis.issues.issue_data->>'occurrence_count')::bigint + COALESCE((EXCLUDED.issue_data->>'occurrence_count')::bigint, 1))
        ELSE '{}'::jsonb END
     || CASE WHEN jsonb_exists(apis.issues.issue_data, 'first_seen')
        THEN jsonb_build_object('first_seen', apis.issues.issue_data->'first_seen')
@@ -386,7 +378,7 @@ reopenIssue issueId = do
     [HI.sql| UPDATE apis.issues SET
             acknowledged_at = NULL, acknowledged_by = NULL, archived_at = NULL, updated_at = #{now},
             issue_data = issue_data || jsonb_build_object('occurrence_count',
-              COALESCE((issue_data->>'occurrence_count')::int, 1) + 1)
+              COALESCE((issue_data->>'occurrence_count')::bigint, 1) + 1)
           WHERE id = #{issueId} |]
 
 
@@ -397,7 +389,7 @@ bumpIssueUpdatedAt issueId = do
   Hasql.interpExecute_
     [HI.sql| UPDATE apis.issues SET updated_at = #{now},
             issue_data = issue_data || jsonb_build_object('occurrence_count',
-              COALESCE((issue_data->>'occurrence_count')::int, 1) + 1)
+              COALESCE((issue_data->>'occurrence_count')::bigint, 1) + 1)
           WHERE id = #{issueId} |]
 
 
@@ -455,7 +447,7 @@ selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM 
         COALESCE(NULLIF(i.severity, ''), CASE WHEN i.critical THEN 'critical' ELSE 'info' END),
         i.affected_requests, i.affected_clients, NULL::double precision,
         i.recommended_action, i.migration_complexity, i.issue_data, i.request_payloads, i.response_payloads,
-        NULL::timestamp with time zone, NULL::int,
+        NULL::timestamp with time zone, NULL::bigint,
         i.target_hash, NULL::text, i.seq_num, i.parent_hash, i.is_framework,
         CASE
           WHEN i.issue_type = 'runtime_exception' THEN COALESCE(err_ev.cnt, 0)
@@ -464,14 +456,14 @@ selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM 
         END::bigint,
         i.updated_at, lat.event,
         CASE
-          WHEN i.issue_type = 'runtime_exception' THEN COALESCE(err_ev.buckets, '{}'::int[])
-          WHEN i.issue_type IN ('log_pattern', 'log_pattern_rate_change') THEN COALESCE(lp_ev.buckets, '{}'::int[])
-          ELSE '{}'::int[]
+          WHEN i.issue_type = 'runtime_exception' THEN COALESCE(err_ev.buckets, '{}'::bigint[])
+          WHEN i.issue_type IN ('log_pattern', 'log_pattern_rate_change') THEN COALESCE(lp_ev.buckets, '{}'::bigint[])
+          ELSE '{}'::bigint[]
         END
       FROM apis.issues i
       LEFT JOIN LATERAL (
         SELECT SUM(day_cnt)::bigint AS cnt, array_agg(day_cnt ORDER BY day) AS buckets FROM (
-          SELECT d AS day, COALESCE(SUM(ehs.event_count), 0)::int AS day_cnt
+          SELECT d AS day, COALESCE(SUM(ehs.event_count), 0)::bigint AS day_cnt
           FROM generate_series($seriesStart, $nowSql, $seriesStep) d
           LEFT JOIN (apis.error_hourly_stats ehs
             JOIN apis.error_patterns ep ON ep.id = ehs.error_id AND ep.project_id = ehs.project_id
@@ -484,7 +476,7 @@ selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM 
       ) err_ev ON i.issue_type = 'runtime_exception'
       LEFT JOIN LATERAL (
         SELECT SUM(day_cnt)::bigint AS cnt, array_agg(day_cnt ORDER BY day) AS buckets FROM (
-          SELECT d AS day, COALESCE(SUM(lhs.event_count), 0)::int AS day_cnt
+          SELECT d AS day, COALESCE(SUM(lhs.event_count), 0)::bigint AS day_cnt
           FROM generate_series($seriesStart, $nowSql, $seriesStep) d
           LEFT JOIN apis.log_pattern_hourly_stats lhs
             ON lhs.pattern_hash = i.target_hash AND lhs.project_id = i.project_id
@@ -512,7 +504,7 @@ selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM 
         <> typF
         <> " "
         <> orderBy
-    countQ = "SELECT COUNT(*)::INT FROM apis.issues WHERE project_id = '" <> pidTxt <> "'::uuid " <> cTimefilter <> " " <> cAckF <> " " <> cArchF <> " " <> cSvcF <> " " <> cTypF
+    countQ = "SELECT COUNT(*)::BIGINT FROM apis.issues WHERE project_id = '" <> pidTxt <> "'::uuid " <> cTimefilter <> " " <> cAckF <> " " <> cArchF <> " " <> cSvcF <> " " <> cTypF
 
 
 -- | Find open issue for endpoint
@@ -583,9 +575,9 @@ acknowledgeIssue issueId userId = do
 -- | Set ack/unack on a batch of issues. Pass @Just now@ to ack (records @acknowledged_by@);
 -- pass @Nothing@ to unack (clears both timestamp and actor). Rate-change acks
 -- also set a 24h cooldown; unacks clear it.
-setAckState :: DB es => Projects.ProjectId -> V.Vector IssueId -> Maybe UTCTime -> Maybe Projects.UserId -> Eff es Int64
+setAckState :: DB es => Projects.ProjectId -> [IssueId] -> Maybe UTCTime -> Maybe Projects.UserId -> Eff es Int64
 setAckState pid iids mTs mUid
-  | V.null iids = pure 0
+  | null iids = pure 0
   | otherwise =
       let hrs = rateChangeCooldownHours
        in Hasql.interpExecute
@@ -620,9 +612,9 @@ isInCooldown pid tgt ty now =
 
 
 -- | Set archive state on a batch of issues. @Just now@ archives, @Nothing@ unarchives.
-setArchiveState :: DB es => Projects.ProjectId -> V.Vector IssueId -> Maybe UTCTime -> Eff es Int64
+setArchiveState :: DB es => Projects.ProjectId -> [IssueId] -> Maybe UTCTime -> Eff es Int64
 setArchiveState pid iids mTs
-  | V.null iids = pure 0
+  | null iids = pure 0
   | otherwise =
       Hasql.interpExecute
         [HI.sql|
@@ -695,7 +687,7 @@ selectIssuesByFilters pid isAck isArch tyM svcM limit offset = do
             AND (#{anySvc} OR service = #{svc})
         |]
   rows <- Hasql.interp (selectFrom @Issue <> whereSql <> [HI.sql| ORDER BY updated_at DESC LIMIT #{limit} OFFSET #{offset} |])
-  total <- fromMaybe 0 <$> Hasql.interpOne ([HI.sql| SELECT COUNT(*)::int FROM apis.issues |] <> whereSql)
+  total <- fromMaybe 0 <$> Hasql.interpOne ([HI.sql| SELECT COUNT(*)::bigint FROM apis.issues |] <> whereSql)
   pure (rows, total)
 
 
@@ -1208,12 +1200,10 @@ data ReportListItem = ReportListItem
 
 
 addReport :: DB es => Report -> Eff es ()
-addReport (r :: Report) = do
-  let (rId, rCreated, rUpdated, rPid, rType, rJson, rStart, rEnd) =
-        (r.id, r.createdAt, r.updatedAt, r.projectId, r.reportType, r.reportJson, r.startTime, r.endTime)
+addReport (r :: Report) =
   Hasql.interpExecute_
     [HI.sql| INSERT INTO apis.reports (id, created_at, updated_at, project_id, report_type, report_json, start_time, end_time)
-      VALUES (#{rId}, #{rCreated}, #{rUpdated}, #{rPid}, #{rType}, #{rJson}, #{rStart}, #{rEnd}) |]
+      VALUES (#{r.id}, #{r.createdAt}, #{r.updatedAt}, #{r.projectId}, #{r.reportType}, #{r.reportJson}, #{r.startTime}, #{r.endTime}) |]
 
 
 getReportById :: DB es => ReportId -> Eff es (Maybe Report)
