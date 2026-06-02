@@ -192,7 +192,7 @@ instance (KnownSymbol prefix, Show a) => HI.EncodeValue (WrappedEnum prefix a) w
 
 -- | Shared helper for hasql 'D.DecodeValue' instances that parse text and refine into a Haskell value.
 refineText :: Text -> (Text -> Maybe a) -> D.Value a
-refineText ctx f = D.refine (\t -> maybe (Left (ctx <> ": cannot parse " <> t)) Right (f t)) D.text
+refineText ctx f = D.refine (\t -> maybeToRight (ctx <> ": cannot parse " <> t) (f t)) D.text
 
 
 instance (KnownSymbol prefix, Read a) => HI.DecodeValue (WrappedEnum prefix a) where
