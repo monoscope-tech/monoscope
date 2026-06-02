@@ -7,11 +7,7 @@ semaphore: True
 -- import: https://www.stackage.org/nightly-2025-01-20/cabal.config
 -- documentation: True
 
--- with-compiler: ghc-9.8.2
--- Local copy of https://www.stackage.org/nightly-2025-11-17/cabal.config with
--- hs-opentelemetry-* pins stripped so we can pull 1.0.0.0 from the monorepo.
-import: stackage-pins.config
---import: https://www.stackage.org/lts-24.19/cabal.config
+-- Dependency versions are pinned via cabal.project.freeze. Refresh with `cabal freeze`.
 
 
 -- Override dependencies from stack.yaml
