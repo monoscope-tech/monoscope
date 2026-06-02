@@ -111,7 +111,7 @@ import Data.Hashable (hash)
 import Data.OpenApi (ToSchema)
 import Data.Text qualified as T
 import Data.Text.Display (Display, display)
-import Data.Time (UTCTime)
+import Data.Time (UTCTime (..), addDays, addUTCTime)
 import Data.Time.LocalTime (ZonedTime, utc, utcToZonedTime, zonedTimeToUTC)
 import Data.UUID.V5 qualified as UUID5
 import Data.Vector qualified as V
@@ -131,12 +131,10 @@ import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Projects.Projects qualified as Projects
-import NeatInterpolation (text)
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), idToText, rawSql, selectFrom)
 import Relude hiding (id)
 import Servant (FromHttpApiData (..), ServerError, err500, errBody)
 import System.Types (DB)
-import Utils (formatUTC)
 
 
 type IssueId = UUIDId "issue"
@@ -155,7 +153,7 @@ data IssueType
   | LogPatternRateChange
   deriving stock (Bounded, Enum, Eq, Generic, Ord, Read, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField, ToSchema) via WrappedEnumSC "" IssueType
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField, ToSchema) via WrappedEnumSC ('Just "apis.issue_type") "" IssueType
 
 
 -- | Hash prefix used in otel_logs_and_spans hashes column
@@ -293,6 +291,11 @@ data Issue = Issue
   , seqNum :: Int
   , parentHash :: Maybe Text
   , isFramework :: Bool
+  , -- DB columns added after the original 0007 schema. Order matches attnum
+    -- (cooldown_until from 0075, last_notified_at from 0085) so generic
+    -- 'DecodeRow' against @SELECT *@ resolves them in the right slots.
+    cooldownUntil :: Maybe ZonedTime
+  , lastNotifiedAt :: Maybe ZonedTime
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, HI.DecodeRow, HI.EncodeRow, NFData, ToRow)
@@ -398,113 +401,87 @@ bumpIssueUpdatedAt issueId = do
 selectIssues :: (DB es, Time :> es) => Projects.ProjectId -> Maybe IssueType -> Maybe Bool -> Maybe Bool -> Int -> Int -> Maybe (UTCTime, UTCTime) -> Maybe Text -> Text -> [Text] -> [Text] -> Eff es ([IssueL], Int)
 selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM period serviceFilters typeFilters = do
   now <- Time.currentTime
-  let nowSql = "'" <> formatUTC now <> "'::timestamptz" :: Text
-      (seriesStart, seriesStep, bucketSize) = case period of
-        "24h" -> (nowSql <> " - INTERVAL '23 hours'", "'1 hour'" :: Text, "INTERVAL '1 hour'" :: Text)
-        _ -> ("CURRENT_DATE - INTERVAL '6 days'", "'1 day'", "INTERVAL '1 day'")
-  issues <- Hasql.interp $ rawSql (q nowSql seriesStart seriesStep bucketSize) <> [HI.sql| LIMIT #{limit} OFFSET #{offset}|]
-  countResult <- fromMaybe 0 <$> Hasql.interpOne (rawSql countQ)
-  pure (issues, countResult)
-  where
-    -- Inbox tab (unacked + unarchived) hides severity='low' so demoted silent
-    -- drops don't clutter the incident view. Other tabs leave them visible.
-    isInbox = isAcknowledged == Just False && isArchived == Just False
-    mkFilters pfx =
-      let timeF = maybe "" (\(st, end) -> " AND " <> pfx <> "created_at >= '" <> formatUTC st <> "' AND " <> pfx <> "created_at <= '" <> formatUTC end <> "'") timeRangeM
-          ackF' = maybe "" (bool (" AND " <> pfx <> "acknowledged_at IS NULL") (" AND " <> pfx <> "acknowledged_at IS NOT NULL")) isAcknowledged
-          archF' = maybe "" (bool (" AND " <> pfx <> "archived_at IS NULL") (" AND " <> pfx <> "archived_at IS NOT NULL")) isArchived
-          sevF = if isInbox then " AND (" <> pfx <> "severity IS NULL OR " <> pfx <> "severity != 'low')" else ""
-          sqlArr col vals = if null vals then "" else " AND " <> pfx <> col <> " = ANY(ARRAY[" <> T.intercalate "," (map (\v -> "'" <> T.replace "'" "''" v <> "'") vals) <> "]::text[])"
-       in timeF <> ackF' <> archF' <> sevF <> sqlArr "service" serviceFilters <> sqlArr "issue_type::text" typeFilters
-    timefilter = mkFilters "i."
-    ackF = ""
-    archF = ""
-    svcF = ""
-    typF = ""
-    cTimefilter = mkFilters ""
-    cAckF = ""
-    cArchF = ""
-    cSvcF = ""
-    cTypF = ""
-    orderBy = case sortM of
-      Just "-created_at" -> "ORDER BY i.created_at DESC"
-      Just "+created_at" -> "ORDER BY i.created_at ASC"
-      Just "-updated_at" -> "ORDER BY i.updated_at DESC"
-      Just "+updated_at" -> "ORDER BY i.updated_at ASC"
-      Just "-title" -> "ORDER BY i.title DESC"
-      Just "+title" -> "ORDER BY i.title ASC"
-      _ -> "ORDER BY i.critical DESC, i.created_at DESC"
-    -- period controls bucket granularity: "24h" = hourly, "7d" = daily; series
-    -- start/step/bucket are bound by the caller so the chart honours the test clock.
-    pidTxt = pid.toText
-    q nowSql seriesStart seriesStep bucketSize =
-      [text|
-      SELECT i.id, i.created_at, i.updated_at, i.project_id, i.issue_type::text,
-        i.endpoint_hash, i.acknowledged_at, i.acknowledged_by, i.archived_at, i.title, i.service, i.critical,
-        -- Columns 1-28 must match Issue's field declaration order so that Generic
-        -- FromRow/DecodeRow for Issue decodes the base row correctly.
-        -- Prefer the stored severity (e.g. 'low' for silent drops); fall back to critical flag.
-        COALESCE(NULLIF(i.severity, ''), CASE WHEN i.critical THEN 'critical' ELSE 'info' END),
-        i.affected_requests::bigint, i.affected_clients::bigint, NULL::double precision,
-        i.recommended_action, i.migration_complexity, i.issue_data, i.request_payloads, i.response_payloads,
-        NULL::timestamp with time zone, NULL::bigint,
-        i.target_hash, NULL::text, i.seq_num::bigint, i.parent_hash, i.is_framework,
-        CASE
-          WHEN i.issue_type = 'runtime_exception' THEN COALESCE(err_ev.cnt, 0)
-          WHEN i.issue_type IN ('log_pattern', 'log_pattern_rate_change') THEN COALESCE(lp_ev.cnt, 0)
-          ELSE i.affected_requests
-        END::bigint,
-        i.updated_at, lat.event,
-        CASE
-          WHEN i.issue_type = 'runtime_exception' THEN COALESCE(err_ev.buckets, '{}'::bigint[])
-          WHEN i.issue_type IN ('log_pattern', 'log_pattern_rate_change') THEN COALESCE(lp_ev.buckets, '{}'::bigint[])
-          ELSE '{}'::bigint[]
-        END
-      FROM apis.issues i
-      LEFT JOIN LATERAL (
-        SELECT SUM(day_cnt)::bigint AS cnt, array_agg(day_cnt ORDER BY day) AS buckets FROM (
-          SELECT d AS day, COALESCE(SUM(ehs.event_count), 0)::bigint AS day_cnt
-          FROM generate_series($seriesStart, $nowSql, $seriesStep) d
-          LEFT JOIN (apis.error_hourly_stats ehs
-            JOIN apis.error_patterns ep ON ep.id = ehs.error_id AND ep.project_id = ehs.project_id
-              AND ep.project_id = i.project_id
-              AND ((i.is_framework AND ep.parent_hash = i.target_hash)
-                OR (NOT i.is_framework AND ep.hash = i.target_hash))
-          ) ON ehs.hour_bucket >= d AND ehs.hour_bucket < d + $bucketSize
-          GROUP BY d
-        ) sub
-      ) err_ev ON i.issue_type = 'runtime_exception'
-      LEFT JOIN LATERAL (
-        SELECT SUM(day_cnt)::bigint AS cnt, array_agg(day_cnt ORDER BY day) AS buckets FROM (
-          SELECT d AS day, COALESCE(SUM(lhs.event_count), 0)::bigint AS day_cnt
-          FROM generate_series($seriesStart, $nowSql, $seriesStep) d
-          LEFT JOIN apis.log_pattern_hourly_stats lhs
-            ON lhs.pattern_hash = i.target_hash AND lhs.project_id = i.project_id
-            AND lhs.hour_bucket >= d AND lhs.hour_bucket < d + $bucketSize
-          GROUP BY d
-        ) sub
-      ) lp_ev ON i.issue_type IN ('log_pattern', 'log_pattern_rate_change')
-      LEFT JOIN LATERAL (
-        SELECT a.event FROM apis.issue_activity_log a
-        WHERE a.issue_id = i.id AND a.event IN ('resolved', 'auto_resolved', 'reopened', 'regressed', 'escalated')
-        ORDER BY a.created_at DESC LIMIT 1
-      ) lat ON TRUE
-      WHERE i.project_id = |]
-        <> "'"
-        <> pidTxt
-        <> "'::uuid "
-        <> timefilter
-        <> " "
-        <> ackF
-        <> " "
-        <> archF
-        <> " "
-        <> svcF
-        <> " "
-        <> typF
-        <> " "
-        <> orderBy
-    countQ = "SELECT COUNT(*)::BIGINT FROM apis.issues WHERE project_id = '" <> pidTxt <> "'::uuid " <> cTimefilter <> " " <> cAckF <> " " <> cArchF <> " " <> cSvcF <> " " <> cTypF
+  -- period controls bucket granularity: "24h" = hourly, "7d" = daily.
+  -- seriesStart/step are bound here (not via SQL NOW()) so charts honour the test clock.
+  let (seriesStart, stepSql) = case period of
+        "24h" -> (addUTCTime (-(23 * 3600)) now, [HI.sql|interval '1 hour'|])
+        _ -> (UTCTime (addDays (-6) (utctDay now)) 0, [HI.sql|interval '1 day'|])
+      -- Inbox tab (unacked + unarchived) hides severity='low' so demoted silent drops don't clutter the view.
+      isInbox = isAcknowledged == Just False && isArchived == Just False
+      orderBy = rawSql case T.uncons =<< sortM of
+        Just (s, c) | s == '-' || s == '+', c `elem` ["created_at", "updated_at", "title"] -> "i." <> c <> bool " ASC" " DESC" (s == '-')
+        _ -> "i.critical DESC, i.created_at DESC"
+      nullF pfx col = foldMap (bool [HI.sql| AND ^{pfx}^{col} IS NULL|] [HI.sql| AND ^{pfx}^{col} IS NOT NULL|])
+      arrF pfx col xs = if null xs then mempty else [HI.sql| AND ^{pfx}^{col} = ANY(#{xs}::text[])|]
+      mkFilters pfx =
+        foldMap (\(s, e) -> [HI.sql| AND ^{pfx}created_at >= #{s} AND ^{pfx}created_at <= #{e}|]) timeRangeM
+          <> nullF pfx [HI.sql|acknowledged_at|] isAcknowledged
+          <> nullF pfx [HI.sql|archived_at|] isArchived
+          <> bool mempty [HI.sql| AND (^{pfx}severity IS NULL OR ^{pfx}severity != 'low')|] isInbox
+          <> arrF pfx [HI.sql|service|] serviceFilters
+          <> arrF pfx [HI.sql|issue_type::text|] typeFilters
+      iFilters = mkFilters [HI.sql|i.|]
+      cFilters = mkFilters mempty
+  issues <-
+    Hasql.interp
+      [HI.sql|
+        SELECT i.id, i.created_at, i.updated_at, i.project_id, i.issue_type,
+          i.endpoint_hash, i.acknowledged_at, i.acknowledged_by, i.archived_at, i.title, i.service, i.critical,
+          -- Columns 1-28 must match Issue's field declaration order so Generic decodeRow lines up.
+          -- Prefer stored severity (e.g. 'low' for silent drops); fall back to critical flag.
+          COALESCE(NULLIF(i.severity, ''), CASE WHEN i.critical THEN 'critical' ELSE 'info' END),
+          i.affected_requests::bigint, i.affected_clients::bigint, NULL::double precision,
+          i.recommended_action, i.migration_complexity, i.issue_data, i.request_payloads, i.response_payloads,
+          NULL::timestamp with time zone, NULL::bigint,
+          i.target_hash, NULL::text, i.seq_num::bigint, i.parent_hash, i.is_framework, i.cooldown_until, i.last_notified_at,
+          CASE
+            WHEN i.issue_type = 'runtime_exception' THEN COALESCE(err_ev.cnt, 0)
+            WHEN i.issue_type IN ('log_pattern', 'log_pattern_rate_change') THEN COALESCE(lp_ev.cnt, 0)
+            ELSE i.affected_requests
+          END::bigint,
+          i.updated_at, lat.event,
+          CASE
+            WHEN i.issue_type = 'runtime_exception' THEN COALESCE(err_ev.buckets, '{}'::bigint[])
+            WHEN i.issue_type IN ('log_pattern', 'log_pattern_rate_change') THEN COALESCE(lp_ev.buckets, '{}'::bigint[])
+            ELSE '{}'::bigint[]
+          END
+        FROM apis.issues i
+        LEFT JOIN LATERAL (
+          SELECT SUM(day_cnt)::bigint AS cnt, array_agg(day_cnt ORDER BY day) AS buckets FROM (
+            SELECT d AS day, COALESCE(SUM(ehs.event_count), 0)::bigint AS day_cnt
+            FROM generate_series(#{seriesStart}::timestamptz, #{now}::timestamptz, ^{stepSql}) d
+            LEFT JOIN (apis.error_hourly_stats ehs
+              JOIN apis.error_patterns ep ON ep.id = ehs.error_id AND ep.project_id = ehs.project_id
+                AND ep.project_id = i.project_id
+                AND ((i.is_framework AND ep.parent_hash = i.target_hash)
+                  OR (NOT i.is_framework AND ep.hash = i.target_hash))
+            ) ON ehs.hour_bucket >= d AND ehs.hour_bucket < d + ^{stepSql}
+            GROUP BY d
+          ) sub
+        ) err_ev ON i.issue_type = 'runtime_exception'
+        LEFT JOIN LATERAL (
+          SELECT SUM(day_cnt)::bigint AS cnt, array_agg(day_cnt ORDER BY day) AS buckets FROM (
+            SELECT d AS day, COALESCE(SUM(lhs.event_count), 0)::bigint AS day_cnt
+            FROM generate_series(#{seriesStart}::timestamptz, #{now}::timestamptz, ^{stepSql}) d
+            LEFT JOIN apis.log_pattern_hourly_stats lhs
+              ON lhs.pattern_hash = i.target_hash AND lhs.project_id = i.project_id
+              AND lhs.hour_bucket >= d AND lhs.hour_bucket < d + ^{stepSql}
+            GROUP BY d
+          ) sub
+        ) lp_ev ON i.issue_type IN ('log_pattern', 'log_pattern_rate_change')
+        LEFT JOIN LATERAL (
+          SELECT a.event FROM apis.issue_activity_log a
+          WHERE a.issue_id = i.id AND a.event IN ('resolved', 'auto_resolved', 'reopened', 'regressed', 'escalated')
+          ORDER BY a.created_at DESC LIMIT 1
+        ) lat ON TRUE
+        WHERE i.project_id = #{pid} ^{iFilters}
+        ORDER BY ^{orderBy}
+        LIMIT #{limit} OFFSET #{offset} |]
+  total <-
+    fromMaybe 0
+      <$> Hasql.interpOne
+        [HI.sql| SELECT COUNT(*)::bigint FROM apis.issues WHERE project_id = #{pid} ^{cFilters} |]
+  pure (issues, total)
 
 
 -- | Find open issue for endpoint
@@ -602,7 +579,7 @@ isInCooldown pid tgt ty now =
   where
     q =
       [HI.sql|
-        SELECT 1 FROM apis.issues
+        SELECT 1::bigint FROM apis.issues
         WHERE project_id = #{pid}
           AND target_hash = #{tgt}
           AND issue_type = #{ty}::apis.issue_type
@@ -765,7 +742,7 @@ createQueryAlertIssue projectId queryId queryName queryExpr threshold actual thr
 data ConversationType = CTAnomaly | CTTrace | CTLogExplorer | CTDashboard | CTSlackThread | CTDiscordThread
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (Default) -- required by Default AIConversation; first constructor = CTAnomaly
-  deriving (Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC "CT" ConversationType
+  deriving (Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "CT" ConversationType
 
 
 -- | AI Conversation metadata
@@ -1027,7 +1004,7 @@ data LogPatternData = LogPatternData
 data RateChangeDirection = Spike | Drop
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON, Display) via WrappedEnumSC "" RateChangeDirection
+  deriving (AE.FromJSON, AE.ToJSON, Display) via WrappedEnumSC 'Nothing "" RateChangeDirection
 
 
 data SpikeResult = SpikeResult
@@ -1113,6 +1090,8 @@ mkIssue opts = do
       , llmEnhancedAt = Nothing
       , llmEnhancementVersion = Nothing
       , seqNum = 0 -- Auto-assigned by DB trigger
+      , cooldownUntil = Nothing
+      , lastNotifiedAt = Nothing
       }
 
 
@@ -1133,7 +1112,7 @@ data IssueEvent
   | IEEscalated
   deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField, ToSchema) via WrappedEnumSC "IE" IssueEvent
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField, ToSchema) via WrappedEnumSC 'Nothing "IE" IssueEvent
 
 
 data IssueActivity = IssueActivity

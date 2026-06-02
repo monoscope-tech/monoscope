@@ -67,7 +67,7 @@ instance ToParamSchema QueryMonitorId where
 data MonitorStatus = MSNormal | MSWarning | MSAlerting
   deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
   deriving anyclass (Default, NFData)
-  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField, ToSchema) via WrappedEnumSC "MS" MonitorStatus
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField, ToSchema) via WrappedEnumSC 'Nothing "MS" MonitorStatus
 
 
 instance HI.DecodeRow MonitorStatus where

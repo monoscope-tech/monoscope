@@ -204,8 +204,41 @@ instance (KnownSymbol prefix, Read a) => HI.DecodeRow (WrappedEnum prefix a) whe
   decodeRow = HI.getOneColumn <$> HI.decodeRow
 
 
-newtype WrappedEnumSC (prefix :: Symbol) a = WrappedEnumSC a
+-- | DerivingVia wrapper for snake-case-stringified enums.
+--
+-- The first parameter pins the backing Postgres column type for the hasql
+-- instances:
+--
+--   * @''Nothing@ — column is plain @TEXT@; hasql decodes via 'D.text'.
+--   * @('Just "schema.type_name")@ — column is a real @CREATE TYPE … AS ENUM@;
+--     hasql decodes via 'D.enum' with the matching OID lookup. The leading
+--     @schema.@ is required (use @"public.foo"@ if it lives in the default
+--     schema).
+--
+-- The second @Symbol@ is the Haskell-side constructor prefix to strip (e.g.
+-- @"P"@ for @PAdmin/PView@ → @admin/view@).
+newtype WrappedEnumSC (qualType :: Maybe Symbol) (prefix :: Symbol) a = WrappedEnumSC a
   deriving (Generic)
+
+
+-- | Reflect a type-level @Maybe Symbol@ to a runtime @Maybe Text@.
+class KnownMaybeSymbol (m :: Maybe Symbol) where
+  maybeSymbolVal :: Proxy m -> Maybe Text
+
+
+instance KnownMaybeSymbol 'Nothing where
+  maybeSymbolVal _ = Nothing
+
+
+instance KnownSymbol s => KnownMaybeSymbol ('Just s) where
+  maybeSymbolVal _ = Just (toText (symbolVal (Proxy @s)))
+
+
+-- | Split @"schema.type_name"@ into @(Just schema, type_name)@.
+splitQualType :: Text -> (Maybe Text, Text)
+splitQualType qn = case T.break (== '.') qn of
+  (sch, dotTyp) | Just typ <- T.stripPrefix "." dotTyp -> (Just sch, typ)
+  _ -> (Nothing, qn)
 
 
 encodeEnumSC :: forall prefix a. (KnownSymbol prefix, Show a) => a -> String
@@ -216,11 +249,11 @@ decodeEnumSC :: forall prefix a. (KnownSymbol prefix, Read a) => String -> Maybe
 decodeEnumSC s = readMaybe $ symbolVal (Proxy @prefix) <> toPascal (fromSnake s)
 
 
-instance (KnownSymbol prefix, Show a) => ToField (WrappedEnumSC prefix a) where
+instance (KnownSymbol prefix, Show a) => ToField (WrappedEnumSC qualType prefix a) where
   toField (WrappedEnumSC a) = toField $ encodeEnumSC @prefix a
 
 
-instance (KnownSymbol prefix, Read a, Typeable a) => FromField (WrappedEnumSC prefix a) where
+instance (Typeable qualType, KnownSymbol prefix, Read a, Typeable a) => FromField (WrappedEnumSC qualType prefix a) where
   fromField f = \case
     Nothing -> returnError UnexpectedNull f ""
     Just bss -> maybe (returnError ConversionFailed f $ "Cannot parse: " <> str) (pure . WrappedEnumSC) $ decodeEnumSC @prefix str
@@ -228,15 +261,23 @@ instance (KnownSymbol prefix, Read a, Typeable a) => FromField (WrappedEnumSC pr
         str = toString @Text (decodeUtf8 bss)
 
 
-instance (KnownSymbol prefix, Show a) => HI.EncodeValue (WrappedEnumSC prefix a) where
-  encodeValue = (\(WrappedEnumSC a) -> toText $ encodeEnumSC @prefix a) `contramap` E.text
+instance (KnownMaybeSymbol qualType, KnownSymbol prefix, Show a) => HI.EncodeValue (WrappedEnumSC qualType prefix a) where
+  encodeValue = case maybeSymbolVal (Proxy @qualType) of
+    Nothing -> contramap (\(WrappedEnumSC a) -> toText (encodeEnumSC @prefix a)) E.text
+    Just qn ->
+      let (sch, typ) = splitQualType qn
+       in contramap (\(WrappedEnumSC a) -> toText (encodeEnumSC @prefix a)) (E.enum sch typ id)
 
 
-instance (KnownSymbol prefix, Read a) => HI.DecodeValue (WrappedEnumSC prefix a) where
-  decodeValue = refineText "WrappedEnumSC" (fmap WrappedEnumSC . decodeEnumSC @prefix . toString)
+instance (KnownMaybeSymbol qualType, KnownSymbol prefix, Read a) => HI.DecodeValue (WrappedEnumSC qualType prefix a) where
+  decodeValue = case maybeSymbolVal (Proxy @qualType) of
+    Nothing -> refineText "WrappedEnumSC" (fmap WrappedEnumSC . decodeEnumSC @prefix . toString)
+    Just qn ->
+      let (sch, typ) = splitQualType qn
+       in WrappedEnumSC <$> D.enum sch typ (decodeEnumSC @prefix . toString)
 
 
-instance (KnownSymbol prefix, Read a) => HI.DecodeRow (WrappedEnumSC prefix a) where
+instance (KnownMaybeSymbol qualType, KnownSymbol prefix, Read a) => HI.DecodeRow (WrappedEnumSC qualType prefix a) where
   decodeRow = HI.getOneColumn <$> HI.decodeRow
 
 
@@ -248,25 +289,25 @@ instance HI.EncodeValue ZonedTime where
   encodeValue = contramap zonedTimeToUTC E.timestamptz
 
 
-instance (KnownSymbol prefix, Show a) => Display (WrappedEnumSC prefix a) where
+instance (KnownSymbol prefix, Show a) => Display (WrappedEnumSC qualType prefix a) where
   displayBuilder (WrappedEnumSC a) = fromString $ encodeEnumSC @prefix a
 
 
-instance (KnownSymbol prefix, Show a) => AE.ToJSON (WrappedEnumSC prefix a) where
+instance (KnownSymbol prefix, Show a) => AE.ToJSON (WrappedEnumSC qualType prefix a) where
   toJSON (WrappedEnumSC a) = AE.String . toText $ encodeEnumSC @prefix a
 
 
-instance (KnownSymbol prefix, Read a, Show a) => AE.FromJSON (WrappedEnumSC prefix a) where
+instance (KnownSymbol prefix, Read a, Show a) => AE.FromJSON (WrappedEnumSC qualType prefix a) where
   parseJSON = AE.withText "WrappedEnumSC" \t ->
     maybe (fail $ "Invalid value: " <> toString t) (pure . WrappedEnumSC) $ decodeEnumSC @prefix (toString t)
 
 
-instance (KnownSymbol prefix, Read a, Show a) => FromHttpApiData (WrappedEnumSC prefix a) where
+instance (KnownSymbol prefix, Read a, Show a) => FromHttpApiData (WrappedEnumSC qualType prefix a) where
   parseUrlPiece t = maybe (Left $ "Invalid " <> fromString (symbolVal (Proxy @prefix)) <> " value: " <> t) (Right . WrappedEnumSC) $ decodeEnumSC @prefix (toString @Text t)
 
 
-instance {-# OVERLAPPABLE #-} (Bounded a, Enum a, KnownSymbol prefix, Show a, Typeable a) => ToSchema (WrappedEnumSC prefix a) where
-  declareNamedSchema (_ :: proxy (WrappedEnumSC prefix a)) =
+instance {-# OVERLAPPABLE #-} (Typeable qualType, Bounded a, Enum a, KnownSymbol prefix, Show a, Typeable a) => ToSchema (WrappedEnumSC qualType prefix a) where
+  declareNamedSchema (_ :: proxy (WrappedEnumSC qualType prefix a)) =
     pure
       $ NamedSchema Nothing
       $ mempty
@@ -276,8 +317,8 @@ instance {-# OVERLAPPABLE #-} (Bounded a, Enum a, KnownSymbol prefix, Show a, Ty
       ?~ [AE.String (toText $ encodeEnumSC @prefix v) | v <- [minBound @a .. maxBound @a]]
 
 
-instance (Bounded a, Enum a, KnownSymbol prefix, Show a) => ToParamSchema (WrappedEnumSC prefix a) where
-  toParamSchema (_ :: proxy (WrappedEnumSC prefix a)) =
+instance (Bounded a, Enum a, KnownSymbol prefix, Show a) => ToParamSchema (WrappedEnumSC qualType prefix a) where
+  toParamSchema (_ :: proxy (WrappedEnumSC qualType prefix a)) =
     mempty
       & type_
       ?~ OpenApi.OpenApiString
@@ -334,7 +375,7 @@ instance Read a => HI.DecodeValue (WrappedEnumShow a) where
 data BaselineState = BSLearning | BSEstablished
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (Default, NFData)
-  deriving (AE.FromJSON, AE.ToJSON, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC "BS" BaselineState
+  deriving (AE.FromJSON, AE.ToJSON, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "BS" BaselineState
 
 
 -- | Append libpq connection parameters, handling both URI
@@ -524,8 +565,11 @@ instance AET.ToJSON a => HI.EncodeValue (Aeson a) where
   encodeValue = contramap (\(Aeson a) -> AET.toJSON a) E.jsonb
 
 
+-- | Decode @CITEXT@ (and the @email@ domain over it, which Postgres reports as
+-- citext to libpq). DB columns are routinely @citext@/@email@ rather than plain
+-- @text@; using 'D.text' here fails with @UnexpectedColumnTypeStatementError@.
 instance HI.DecodeValue (CI Text) where
-  decodeValue = CI.mk <$> D.text
+  decodeValue = CI.mk <$> D.citext
 
 
 instance HI.EncodeValue (CI Text) where

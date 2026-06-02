@@ -1326,7 +1326,7 @@ consumeNotificationToken pid now = do
           VALUES (#{pid}, date_trunc('hour', #{now}::timestamptz), 1)
           ON CONFLICT (project_id, window_start)
           DO UPDATE SET count = apis.notification_rate_limit.count + 1
-          RETURNING count :: int
+          RETURNING count
         |]
   pure $ maybe True (<= notificationsPerProjectPerHour) countM
 
@@ -1362,7 +1362,7 @@ claimIssueNotification iid now cooldownHours =
         UPDATE apis.issues SET last_notified_at = #{now}
         WHERE id = #{iid}
           AND (last_notified_at IS NULL
-               OR last_notified_at < #{now}::timestamptz - make_interval(hours => #{cooldownHours}::bigint))
+               OR last_notified_at < #{now}::timestamptz - make_interval(hours => #{cooldownHours}::int))
         RETURNING 1::bigint
       |]
 
@@ -1520,11 +1520,9 @@ safetyNetReprocess pid = do
   rows <-
     V.fromList
       <$> Hasql.interp
-        [HI.sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity,
-                     body, attributes, resource, COALESCE(hashes, '{}'::text[]) AS hashes,
-                     kind, status_code, status_message, start_time, end_time, events,
-                     links, duration, name, parent_id, COALESCE(summary, '{}'::text[]) AS summary, date
-              FROM otel_logs_and_spans
+        ( [HI.sql| SELECT |]
+            <> Telemetry.otelSpanColsSql
+            <> [HI.sql| FROM otel_logs_and_spans
               WHERE project_id = #{pid.toText}
                 AND processed_at IS NULL
                 AND timestamp >= #{cutoff}
@@ -1532,6 +1530,7 @@ safetyNetReprocess pid = do
                 AND timestamp >  now() - interval '6 hours'
               ORDER BY timestamp
               LIMIT 1000 |]
+        )
   Relude.unless (V.null rows) $ do
     Log.logTrace "SafetyNetReprocess re-driving unprocessed rows" (AE.object ["project_id" AE..= pid.toText, "row_count" AE..= V.length rows])
     liftIO $ Telemetry.handOffBatches ctx.extractionWorker caches rows

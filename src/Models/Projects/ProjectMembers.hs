@@ -83,8 +83,7 @@ data Permissions
   | PAdmin
   deriving stock (Bounded, Enum, Eq, Generic, Ord, Read, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, ToField, ToSchema) via WrappedEnumSC "P" Permissions
-  deriving (HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC "P" Permissions
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField, ToSchema) via WrappedEnumSC ('Just "projects.project_permissions") "P" Permissions
 
 
 instance HI.DecodeRow Permissions where

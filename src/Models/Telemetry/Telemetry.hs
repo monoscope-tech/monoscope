@@ -59,6 +59,7 @@ module Models.Telemetry.Telemetry (
   mkSystemLog,
   insertSystemLog,
   generateSummary,
+  otelSpanColsSql,
 )
 where
 
@@ -176,19 +177,19 @@ spanServiceName s = atMapText "service.name" (unAesonTextMaybe s.resource)
 data SeverityLevel = SLTrace | SLDebug | SLInfo | SLWarn | SLError | SLFatal
   deriving (Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC "SL" SeverityLevel
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "SL" SeverityLevel
 
 
 data SpanStatus = SSOk | SSError | SSUnset
   deriving (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC "SS" SpanStatus
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "SS" SpanStatus
 
 
 data SpanKind = SKInternal | SKServer | SKClient | SKProducer | SKConsumer | SKUnspecified
   deriving (Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC "SK" SpanKind
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "SK" SpanKind
 
 
 data Trace = Trace

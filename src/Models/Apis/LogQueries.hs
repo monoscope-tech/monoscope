@@ -460,10 +460,10 @@ data RawSessionRow = RawSessionRow
   , lastSeen :: UTCTime
   , durationNs :: Int64
   , traceCount :: Int64
-  , totalSessions :: Int32
+  , totalSessions :: Int64
   , services :: V.Vector Text
-  , bis :: V.Vector Int32
-  , cnts :: V.Vector Int32
+  , bis :: V.Vector Int64
+  , cnts :: V.Vector Int64
   , landingUrl :: Maybe Text
   , userAgent :: Maybe Text
   , firstError :: Maybe Text

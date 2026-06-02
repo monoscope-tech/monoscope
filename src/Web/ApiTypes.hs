@@ -461,7 +461,7 @@ data IssueStatus
   | ISArchived
   | ISAll
   deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
-  deriving (AE.FromJSON, AE.ToJSON, FromHttpApiData, ToParamSchema, ToSchema) via WrappedEnumSC "IS" IssueStatus
+  deriving (AE.FromJSON, AE.ToJSON, FromHttpApiData, ToParamSchema, ToSchema) via WrappedEnumSC 'Nothing "IS" IssueStatus
 
 
 data IssueApiSummary = IssueApiSummary

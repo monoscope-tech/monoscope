@@ -79,8 +79,7 @@ data AnomalyTypes
   deriving
     (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "FT", DAE.CamelToSnake]] AnomalyTypes
-  deriving (Display, FromField, ToField) via WrappedEnumSC "AT" AnomalyTypes
-  deriving (HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC "AT" AnomalyTypes
+  deriving (Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC ('Just "apis.anomaly_type") "AT" AnomalyTypes
 
 
 parseAnomalyTypes :: (Eq s, IsString s) => s -> Maybe AnomalyTypes
@@ -101,8 +100,7 @@ data AnomalyActions
   deriving
     (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "FT", DAE.CamelToSnake]] AnomalyActions
-  deriving (Display, FromField, ToField) via WrappedEnumSC "AA" AnomalyActions
-  deriving (HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC "AA" AnomalyActions
+  deriving (Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC ('Just "apis.anomaly_action") "AA" AnomalyActions
 
 
 data AnomalyVM = AnomalyVM
@@ -189,7 +187,7 @@ SELECT
     NULL::text     field_format,
     NULL::uuid     format_id,
     NULL::text     format_type,
-    '{}'::jsonb[]  format_examples,
+    '{}'::TEXT[]   format_examples,
     endpoints.id   endpoint_id,
     -- Prefer values stored directly on the anomaly row (populated by the
     -- schema-learning writer from the catalog 'Scope'); fall back to the

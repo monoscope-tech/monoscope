@@ -210,18 +210,12 @@ insertUser :: DB es => User -> Eff es ()
 insertUser u = EHasql.interpExecute_ [HI.sql| INSERT INTO users.users (id, created_at, updated_at, deleted_at, active, first_name, last_name, display_image_url, email, phone_number, is_sudo) VALUES (#{u.id}, #{u.createdAt}, #{u.updatedAt}, #{u.deletedAt}, #{u.active}, #{u.firstName}, #{u.lastName}, #{u.displayImageUrl}, #{u.email}, #{u.phoneNumber}, #{u.isSudo}) |]
 
 
--- | hasql-interpolate's strict OID check rejects the @email@ domain (OID ≠ text);
--- list columns explicitly and cast @email::text@ so the generic 'DecodeRow' just works.
-userColsSql :: HI.Sql
-userColsSql = [HI.sql| id, created_at, updated_at, deleted_at, active, first_name, last_name, display_image_url, email::text, is_sudo, phone_number |]
-
-
 userById :: DB es => UserId -> Eff es (Maybe User)
-userById uid = EHasql.interpOne $ [HI.sql| SELECT |] <> userColsSql <> [HI.sql| FROM users.users WHERE id = #{uid} |]
+userById uid = EHasql.interpOne [HI.sql| SELECT * FROM users.users WHERE id = #{uid} |]
 
 
 userByEmail :: DB es => Text -> Eff es (Maybe User)
-userByEmail email = EHasql.interpOne $ [HI.sql| SELECT |] <> userColsSql <> [HI.sql| FROM users.users WHERE email = #{email} |]
+userByEmail email = EHasql.interpOne [HI.sql| SELECT * FROM users.users WHERE email = #{email} |]
 
 
 userIdByEmail :: DB es => Text -> Eff es (Maybe UserId)
@@ -566,7 +560,7 @@ type QueryLibItemId = UUIDId "querylib"
 
 data QueryLibType = QLTHistory | QLTSaved
   deriving (Eq, Generic, NFData, Read, Show)
-  deriving (AE.FromJSON, AE.ToJSON, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC "QLT" QueryLibType
+  deriving (AE.FromJSON, AE.ToJSON, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC ('Just "projects.query_library_kind") "QLT" QueryLibType
 
 
 data QueryLibItem = QueryLibItem
@@ -590,7 +584,7 @@ queryLibHistoryForUser pid uid =
   EHasql.interp
     [HI.sql|
       (
-        SELECT id, project_id, created_at, updated_at, user_id, query_type::text, query_text, query_ast, title,  user_id=#{uid}::uuid as byMe
+        SELECT id, project_id, created_at, updated_at, user_id, query_type, query_text, query_ast, title,  user_id=#{uid}::uuid as byMe
         FROM projects.query_library
         WHERE user_id = #{uid}::uuid AND project_id = #{pid}::uuid AND query_type = 'history'
         ORDER BY created_at DESC
@@ -598,7 +592,7 @@ queryLibHistoryForUser pid uid =
       )
       UNION ALL
       (
-        SELECT id, project_id, created_at, updated_at, user_id, query_type::text, query_text, query_ast, title, user_id=#{uid}::uuid as byMe
+        SELECT id, project_id, created_at, updated_at, user_id, query_type, query_text, query_ast, title, user_id=#{uid}::uuid as byMe
         FROM projects.query_library
         WHERE user_id = #{uid}::uuid AND project_id = #{pid}::uuid AND query_type = 'saved'
         ORDER BY created_at DESC
@@ -606,7 +600,7 @@ queryLibHistoryForUser pid uid =
       )
       UNION ALL
       (
-        SELECT id, project_id, created_at, updated_at, user_id, query_type::text, query_text, query_ast,title, user_id=#{uid}::uuid as byMe
+        SELECT id, project_id, created_at, updated_at, user_id, query_type, query_text, query_ast,title, user_id=#{uid}::uuid as byMe
         FROM projects.query_library
         WHERE project_id = #{pid}::uuid AND user_id != #{uid}::uuid AND query_type = 'saved'
         ORDER BY created_at DESC
@@ -904,7 +898,9 @@ markUsageSubmissionFailed sid err =
 
 -- Keep sub_id/order_id/first_sub_item_id intact on downgrade so resume/payment_success can re-upgrade without a new checkout.
 downgradeToFree :: DB es => Int -> Int -> Int -> Eff es Int64
-downgradeToFree orderId _subId _subItemId = EHasql.interpExecute [HI.sql|UPDATE projects.projects SET payment_plan = 'Free' WHERE order_id = #{orderId}|]
+-- @projects.projects.order_id@ is TEXT but callers (LemonSqueezy webhooks) pass a
+-- numeric id; cast the bind parameter so PG doesn't reject @text = bigint@.
+downgradeToFree orderId _subId _subItemId = EHasql.interpExecute [HI.sql|UPDATE projects.projects SET payment_plan = 'Free' WHERE order_id = #{orderId}::text|]
 
 
 -- Match on sub_id when available (stable across plan/order changes), else fall back to order_id.
@@ -916,7 +912,7 @@ upgradeToPaid orderId subId subItemId plan =
       UPDATE projects.projects
          SET payment_plan = #{plan}, sub_id = #{subId}::text, first_sub_item_id = #{subItemId}::text
        WHERE sub_id = #{subId}::text
-          OR (sub_id IS NULL AND order_id = #{orderId}) |]
+          OR (sub_id IS NULL AND order_id = #{orderId}::text) |]
 
 
 data BillingProvider = StripeProvider | LemonSqueezyProvider | NoBillingProvider
@@ -1133,7 +1129,7 @@ data AuditEvent
   | AEPlanChanged
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC "AE" AuditEvent
+  deriving (Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "AE" AuditEvent
 
 
 logAudit :: DB es => ProjectId -> AuditEvent -> Maybe UserId -> Maybe Text -> Maybe AE.Value -> Eff es ()

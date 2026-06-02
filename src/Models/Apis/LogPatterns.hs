@@ -76,7 +76,7 @@ data LogPatternState
   | LPSIgnored
   deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON, FromField, HI.DecodeValue, HI.EncodeValue, ToField, ToSchema) via WrappedEnumSC "LPS" LogPatternState
+  deriving (AE.FromJSON, AE.ToJSON, FromField, HI.DecodeValue, HI.EncodeValue, ToField, ToSchema) via WrappedEnumSC 'Nothing "LPS" LogPatternState
 
 
 data LogPattern = LogPattern

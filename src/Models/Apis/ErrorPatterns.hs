@@ -77,7 +77,7 @@ data ErrorState
   | ESRegressed
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC "ES" ErrorState
+  deriving (AE.FromJSON, AE.ToJSON, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "ES" ErrorState
 
 
 data ErrorPattern = ErrorPattern

@@ -88,8 +88,7 @@ import Utils (toXXHash)
 data KeyKind = HttpEndpoint | SpanIdentity
   deriving stock (Bounded, Enum, Eq, Generic, Ord, Read, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON, FromField, ToField) via WrappedEnumSC "" KeyKind
-  deriving (HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC "" KeyKind
+  deriving (AE.FromJSON, AE.ToJSON, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC ('Just "apis.schema_key_kind") "" KeyKind
 
 
 -- | The per-tenant identity of a key. Stored as JSON in @apis.schema_catalog.scope@.
@@ -497,8 +496,8 @@ diffAnomalies kh priorM cur =
 data FieldTypes = FTUnknown | FTString | FTNumber | FTBool | FTObject | FTList | FTNull
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (Default, Hashable, NFData)
-  deriving (AE.FromJSON, AE.ToJSON, FromField, ToField) via WrappedEnumSC "FT" FieldTypes
-  deriving (HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC "FT" FieldTypes
+  deriving (AE.FromJSON, AE.ToJSON, FromField, ToField) via WrappedEnumSC 'Nothing "FT" FieldTypes
+  deriving (HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "FT" FieldTypes
 
 
 instance HasField "toText" FieldTypes Text where
@@ -526,8 +525,8 @@ data FieldCategoryEnum
     FCTopLevel
   deriving stock (Eq, Generic, Ord, Read, Show)
   deriving anyclass (Default, NFData)
-  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, ToField) via WrappedEnumSC "FC" FieldCategoryEnum
-  deriving (HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC "FC" FieldCategoryEnum
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, ToField) via WrappedEnumSC 'Nothing "FC" FieldCategoryEnum
+  deriving (HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "FC" FieldCategoryEnum
 
 
 -- Type aliases for the legacy ID newtypes — VM types in

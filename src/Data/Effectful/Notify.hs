@@ -117,13 +117,13 @@ data WhatsAppData = WhatsAppData
 data PagerdutyAction = PDTrigger | PDResolve
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
-  deriving (Display) via WrappedEnumSC "PD" PagerdutyAction
+  deriving (Display) via WrappedEnumSC 'Nothing "PD" PagerdutyAction
 
 
 data PagerdutySeverity = PDCritical | PDError | PDWarning | PDInfo
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
-  deriving (Display) via WrappedEnumSC "PD" PagerdutySeverity
+  deriving (Display) via WrappedEnumSC 'Nothing "PD" PagerdutySeverity
 
 
 data PagerdutyData = PagerdutyData
