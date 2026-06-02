@@ -445,7 +445,7 @@ selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM 
         -- FromRow/DecodeRow for Issue decodes the base row correctly.
         -- Prefer the stored severity (e.g. 'low' for silent drops); fall back to critical flag.
         COALESCE(NULLIF(i.severity, ''), CASE WHEN i.critical THEN 'critical' ELSE 'info' END),
-        i.affected_requests, i.affected_clients, NULL::double precision,
+        i.affected_requests::bigint, i.affected_clients::bigint, NULL::double precision,
         i.recommended_action, i.migration_complexity, i.issue_data, i.request_payloads, i.response_payloads,
         NULL::timestamp with time zone, NULL::bigint,
         i.target_hash, NULL::text, i.seq_num, i.parent_hash, i.is_framework,

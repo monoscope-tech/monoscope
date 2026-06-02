@@ -148,7 +148,7 @@ lookupCache key (reqFrom, reqTo) = do
   Hasql.interp
     [HI.sql|
       SELECT project_id, source, query_hash, bin_interval, original_query,
-             cached_from, cached_to, cached_data, hit_count
+             cached_from, cached_to, cached_data, hit_count::bigint
       FROM query_cache
       WHERE project_id = #{kPid} AND source = #{kSrc} AND query_hash = #{kHash} AND bin_interval = #{kBin}
       LIMIT 1
