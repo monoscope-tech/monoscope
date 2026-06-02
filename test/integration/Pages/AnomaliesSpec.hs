@@ -3,18 +3,11 @@
 module Pages.AnomaliesSpec (spec) where
 
 import BackgroundJobs qualified
-import Control.Concurrent (threadDelay)
-import Data.Aeson (Value)
 import Data.Aeson qualified as AE
-import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.QQ (aesonQQ)
-import Data.Base64.Types qualified as B64T
-import Data.ByteString.Lazy qualified as BL
 import Data.Effectful.Hasql qualified as EHasql
-import Data.HashMap.Strict qualified as HashMap
-import Data.Int (Int64)
 import Data.Text qualified as T
-import Data.Time (UTCTime, ZonedTime, addUTCTime, defaultTimeLocale, formatTime, getCurrentTime)
+import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime)
 import Hasql.Interpolate qualified as HI
 import Data.UUID qualified as DataUUID
 import Data.UUID.V4 qualified as UUID
@@ -26,24 +19,17 @@ import Data.Pool (withResource)
 import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Models.Apis.Anomalies (AnomalyId)
-import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Projects (Session (..))
 import Models.Projects.Projects qualified as Projects
-import OddJobs.Job (Job (..))
 import Pages.Anomalies qualified as AnomalyList
 import Pages.BodyWrapper (PageCtx (..))
-import Pages.Endpoints qualified as ApiCatalog
 import Pkg.Components.Table qualified as Table
 import Pkg.TestUtils
-import ProcessMessage (RequestMessage (..), processMessages, valueToFields)
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Servant qualified
-import Test.Hspec (Spec, aroundAll, describe, it, pendingWith, shouldBe, shouldSatisfy, xdescribe)
-import Utils (toXXHash)
-import "base64" Data.ByteString.Base64 qualified as B64
+import Test.Hspec (Spec, aroundAll, describe, it, shouldBe, shouldSatisfy)
 
 
 

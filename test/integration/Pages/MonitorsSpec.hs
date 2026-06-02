@@ -5,7 +5,6 @@ import Models.Apis.Monitors
 import Test.Hspec
 
 import Data.UUID qualified as UUID
-import Models.Projects.Projects qualified as Projects
 import Pkg.TestUtils
 
 import Pages.Monitors qualified as Alerts

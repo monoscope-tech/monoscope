@@ -65,36 +65,20 @@ import Data.Aeson.Lens (key, _Array, _Number)
 import Data.ByteArray qualified as BA
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as Base16
-import Data.Effectful.LLM qualified as ELLM
-import Data.Effectful.Notify (Notification (..))
-import Data.Effectful.Notify qualified as Notify
-import Data.Effectful.UUID (runUUID)
-import Data.Effectful.Wreq (runHTTPWreq)
 import Data.Pool (withResource)
 import Data.Text qualified as T
-import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Effectful (Eff, runEff, (:>))
-import Effectful.Concurrent (runConcurrent)
-import Effectful.Ki qualified as Ki
-import Effectful.Labeled (runLabeled)
-import Effectful.Reader.Static qualified as Effectful.Reader
 import Models.Apis.Integrations qualified as Slack
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
-import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext (..))
 import System.Config qualified as Config
 import System.Directory (createDirectoryIfMissing, doesFileExist)
-import System.Logging qualified as Logging
-import System.Tracing qualified as Tracing
-import System.Types (ATBackgroundCtx)
-import Test.Hspec (Expectation, expectationFailure, pendingWith, shouldBe, shouldSatisfy)
+import Test.Hspec (expectationFailure, shouldBe)
 
 
 

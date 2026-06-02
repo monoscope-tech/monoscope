@@ -11,7 +11,7 @@ import Pages.Bots.Whatsapp (whatsappIncomingPostH)
 import Pkg.TestUtils
 import Relude
 import System.Config qualified as Config
-import Test.Hspec (Spec, anyException, aroundAll, describe, expectationFailure, it, shouldBe, shouldSatisfy, shouldThrow)
+import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, shouldBe, shouldSatisfy)
 
 
 spec :: Spec

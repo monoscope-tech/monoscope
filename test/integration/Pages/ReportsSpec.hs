@@ -2,29 +2,12 @@ module Pages.ReportsSpec (spec) where
 
 import Test.Hspec
 
-import OddJobs.Job (createJob)
-
-import Data.Pool (withResource)
-import Data.Time (addUTCTime, defaultTimeLocale, formatTime, getCurrentTime)
-import Models.Apis.Issues qualified as Reports
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Reports qualified as PageReports
 
-import BackgroundJobs qualified
-import Data.Aeson qualified as AE
-import Data.Aeson.KeyMap qualified as KeyMap
-import Data.ByteString.Lazy qualified as BL
-import Data.HashMap.Strict qualified as HashMap
-import Database.PostgreSQL.Entity.DBT (withPool)
-import Database.PostgreSQL.Entity.DBT qualified as DBT
-import Database.PostgreSQL.Simple (Only (..))
-import Database.PostgreSQL.Simple qualified as PGS
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Pkg.TestUtils
-import ProcessMessage (processMessages)
 import Relude
-import Relude.Unsafe qualified as Unsafe
 
 
 spec :: Spec

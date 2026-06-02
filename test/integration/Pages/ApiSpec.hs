@@ -1,11 +1,8 @@
 module Pages.ApiSpec (spec) where
 
-import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Models.Projects.ProjectApiKeys (ProjectApiKey (..))
-import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
-import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
 import Relude.Unsafe qualified as Unsafe

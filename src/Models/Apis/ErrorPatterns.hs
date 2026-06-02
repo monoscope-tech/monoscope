@@ -77,7 +77,7 @@ data ErrorState
   | ESRegressed
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC "ES" ErrorState
+  deriving (AE.FromJSON, AE.ToJSON, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "ES" ErrorState
 
 
 data ErrorPattern = ErrorPattern
@@ -215,7 +215,7 @@ getErrorPatternLByHash :: DB es => Projects.ProjectId -> Text -> UTCTime -> Eff 
 getErrorPatternLByHash pid eHash now =
   Hasql.interpOne
     [HI.sql|
-    SELECT e.*, COALESCE(ev.occurrences, 0)::INT, COALESCE(ev.user_count, 0)::INT, ev.last_occurred_at
+    SELECT e.*, COALESCE(ev.occurrences, 0)::BIGINT, COALESCE(ev.user_count, 0)::BIGINT, ev.last_occurred_at
     FROM apis.error_patterns e LEFT JOIN LATERAL (
       SELECT SUM(event_count) AS occurrences, SUM(user_count) AS user_count, MAX(hour_bucket) AS last_occurred_at
       FROM apis.error_hourly_stats WHERE error_id = e.id AND hour_bucket >= #{now}::timestamptz - INTERVAL '30 days'
@@ -384,7 +384,7 @@ bulkCalculateAndUpdateBaselines pid now =
       UPDATE apis.error_patterns SET
         baseline_error_rate_mean = s.median_val,
         baseline_error_rate_stddev = COALESCE(m.mad_scaled, 0),
-        baseline_samples = s.total_hours::INT,
+        baseline_samples = s.total_hours::BIGINT,
         baseline_state = CASE WHEN s.total_hours >= 24 THEN 'established' ELSE 'learning' END,
         baseline_updated_at = #{now}
       FROM stats s LEFT JOIN mad m ON m.error_id = s.error_id
@@ -426,7 +426,7 @@ getErrorPatternsWithCurrentRates pid now =
         SELECT
           e.id, e.project_id, e.error_type, LEFT(e.message, 2000), e.service, e.state,
           e.baseline_state, e.baseline_error_rate_mean, e.baseline_error_rate_stddev,
-          COALESCE(counts.event_count, 0)::INT AS current_hour_count,
+          COALESCE(counts.event_count, 0)::BIGINT AS current_hour_count,
           e.error_data, LEFT(e.stacktrace, 8000), e.hash, e.parent_hash, e.is_framework, e.slack_thread_ts, e.discord_message_id
         FROM apis.error_patterns e
         LEFT JOIN apis.error_hourly_stats counts
@@ -470,7 +470,7 @@ batchUpsertErrorPatterns pid errors now =
                        unnest(#{parentHashes}::text[]) AS parent_hash, unnest(#{isFrameworks}::bool[]) AS is_framework,
                        unnest(#{environments}::text[]) AS environment, unnest(#{services}::text[]) AS service,
                        unnest(#{runtimes}::text[]) AS runtime, unnest(#{errorDatas}::jsonb[]) AS error_data,
-                       unnest(#{traceIds}::text[]) AS trace_id, unnest(#{counts}::int[]) AS cnt) u
+                       unnest(#{traceIds}::text[]) AS trace_id, unnest(#{counts}::bigint[]) AS cnt) u
           ON CONFLICT (project_id, hash) DO UPDATE SET
             updated_at = #{now},
             -- Toastable columns (message, error_data, parent_hash) are content-derived from hash
@@ -527,7 +527,7 @@ upsertErrorPatternHourlyStats pid now stats =
     [HI.sql|
           INSERT INTO apis.error_hourly_stats (project_id, error_id, hour_bucket, event_count, user_count)
           SELECT e.project_id, e.id, #{hourBucket}, u.event_count, u.user_count
-          FROM (SELECT unnest(#{hashes}::text[]) AS hash, unnest(#{eventCounts}::int[]) AS event_count, unnest(#{userCounts}::int[]) AS user_count) u
+          FROM (SELECT unnest(#{hashes}::text[]) AS hash, unnest(#{eventCounts}::bigint[]) AS event_count, unnest(#{userCounts}::bigint[]) AS user_count) u
           JOIN apis.error_patterns e ON e.project_id = #{pid} AND e.hash = u.hash
           ON CONFLICT (project_id, error_id, hour_bucket)
           DO UPDATE SET event_count = apis.error_hourly_stats.event_count + EXCLUDED.event_count,

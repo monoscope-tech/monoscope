@@ -121,6 +121,9 @@ extra-source-files:
     static/migrations/0093_log_patterns_is_error.sql
     static/migrations/0094_app_now_function.sql
     static/migrations/0095_app_now_in_log_auto_resolve.sql
+    static/migrations/0096_varchar_to_text.sql
+    static/migrations/0097_hasql_decoder_alignment.sql
+    static/migrations/0098_widen_int_to_bigint.sql
 
 source-repository head
   type: git
@@ -577,7 +580,7 @@ test-suite doctests
       TypeFamilies
       UndecidableInstances
       ViewPatterns
-  ghc-options: -fwrite-ide-info -threaded -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -Wno-ambiguous-fields -threaded -rtsopts -with-rtsopts=-N -O0
+  ghc-options: -fwrite-ide-info -threaded -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -Wno-ambiguous-fields -fno-write-ide-info -threaded -rtsopts "-with-rtsopts=-N -A64m" -O0
   build-tool-depends:
       proto-lens-protoc:proto-lens-protoc
   build-depends:
@@ -663,7 +666,7 @@ test-suite integration-tests
       TypeFamilies
       UndecidableInstances
       ViewPatterns
-  ghc-options: -fwrite-ide-info -threaded -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -Wno-ambiguous-fields -threaded -rtsopts -with-rtsopts=-N -O0
+  ghc-options: -fwrite-ide-info -threaded -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -Wno-ambiguous-fields -fno-write-ide-info -threaded -rtsopts "-with-rtsopts=-N -A64m" -O0
   build-tool-depends:
       hspec-discover:hspec-discover
     , proto-lens-protoc:proto-lens-protoc
@@ -761,7 +764,7 @@ test-suite unit-tests
       TypeFamilies
       UndecidableInstances
       ViewPatterns
-  ghc-options: -fwrite-ide-info -threaded -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -Wno-ambiguous-fields -threaded -rtsopts -with-rtsopts=-N -O0
+  ghc-options: -fwrite-ide-info -threaded -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -Wno-ambiguous-fields -fno-write-ide-info -threaded -rtsopts "-with-rtsopts=-N -A64m" -O0
   build-tool-depends:
       proto-lens-protoc:proto-lens-protoc
   build-depends:

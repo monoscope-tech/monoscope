@@ -1,6 +1,5 @@
 module Pages.Bots.DiscordSpec (spec) where
 
-import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
 import Pages.Bots.BotFixtures
 import Pages.Bots.BotTestHelpers

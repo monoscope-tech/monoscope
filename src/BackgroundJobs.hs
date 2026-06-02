@@ -369,14 +369,13 @@ processBackgroundJob authCtx bgJob =
           let guardTag = "SafetyNetReprocess" :: Text
               guardThreshold = 24 :: Int64
           forM_ projects \p -> do
-            let pTxt = p.toText
             projectJobsExistCount <-
               HI.getOneColumn
                 . HI.getOneRow
                 <$> Hasql.interp
                   [HI.sql|SELECT COUNT(*)::int8 FROM background_jobs
                  WHERE payload->>'tag' = #{guardTag}
-                   AND payload->>'projectId' = #{pTxt}
+                   AND payload->>'projectId' = #{p.toText}
                    AND run_at >= date_trunc('day', #{currentTime}::timestamptz)
                    AND run_at < date_trunc('day', #{currentTime}::timestamptz) + interval '1 day'
                    AND status IN ('queued', 'locked')|]
@@ -409,7 +408,7 @@ processBackgroundJob authCtx bgJob =
               existing <-
                 SimplePG.query
                   conn
-                  [sql|SELECT COUNT(*)::int FROM background_jobs
+                  [sql|SELECT COUNT(*)::bigint FROM background_jobs
                        WHERE payload->>'tag' = 'WeeklyReports'
                          AND payload->>'projectId' = ?
                          AND run_at >= date_trunc('day', ?::timestamptz)
@@ -656,7 +655,7 @@ processBackgroundJob authCtx bgJob =
       tryLog "newIssues" do
         issueCounts :: [(Projects.ProjectId, Text, Int)] <-
           Hasql.interp
-            [HI.sql|SELECT project_id::uuid, issue_type, COUNT(*)::int FROM apis.issues WHERE created_at > #{since}::timestamptz GROUP BY project_id, issue_type ORDER BY COUNT(*) DESC|]
+            [HI.sql|SELECT project_id::uuid, issue_type, COUNT(*)::bigint FROM apis.issues WHERE created_at > #{since}::timestamptz GROUP BY project_id, issue_type ORDER BY COUNT(*) DESC|]
         unless (null issueCounts) do
           let total = sum $ map (view _3) issueCounts
               byProject = Map.toDescList $ Map.fromListWith (<>) $ map (\(pid, itype, cnt) -> (pid, [(itype, cnt)])) issueCounts
@@ -677,7 +676,7 @@ processBackgroundJob authCtx bgJob =
       tryLog "monitorAlerts" do
         alertCounts :: [(Projects.ProjectId, Text, Int)] <-
           Hasql.interp
-            [HI.sql|SELECT m.project_id::uuid, m.current_status, COUNT(*)::int FROM monitors.query_monitors m
+            [HI.sql|SELECT m.project_id::uuid, m.current_status, COUNT(*)::bigint FROM monitors.query_monitors m
                WHERE m.deactivated_at IS NULL AND m.deleted_at IS NULL AND m.current_status != 'normal'
                GROUP BY m.project_id, m.current_status|]
         unless (null alertCounts) do
@@ -698,9 +697,8 @@ processBackgroundJob authCtx bgJob =
 
       -- Section 6: Background job health
       tryLog "jobHealth" do
-        jobStats :: [(Text, Int)] <- Hasql.interp [HI.sql|SELECT status, COUNT(*)::int FROM background_jobs WHERE created_at >= #{since}::timestamptz GROUP BY status|]
-        let stuckThreshold = addUTCTime (-1800) now
-        stuckJobs :: [Int] <- Hasql.interp [HI.sql|SELECT COUNT(*)::int FROM background_jobs WHERE status = 'locked' AND locked_at < #{stuckThreshold}::timestamptz|]
+        jobStats :: [(Text, Int)] <- Hasql.interp [HI.sql|SELECT status, COUNT(*)::bigint FROM background_jobs WHERE created_at >= #{since}::timestamptz GROUP BY status|]
+        stuckJobs :: [Int] <- Hasql.interp [HI.sql|SELECT COUNT(*)::bigint FROM background_jobs WHERE status = 'locked' AND locked_at < #{addUTCTime (-1800) now}::timestamptz|]
         let statsLine = T.intercalate " | " $ map (\(s, c) -> s <> ": " <> show c) jobStats
             stuck = fromMaybe 0 $ listToMaybe stuckJobs
         send
@@ -713,8 +711,8 @@ processBackgroundJob authCtx bgJob =
         growthData :: [(Projects.ProjectId, Int, Int)] <-
           Hasql.interp
             [HI.sql|SELECT du.project_id::uuid,
-                 COALESCE(SUM(CASE WHEN du.created_at >= (#{now}::date - interval '1 day') THEN du.total_requests ELSE 0 END), 0)::int as yesterday,
-                 COALESCE(SUM(CASE WHEN du.created_at < (#{now}::date - interval '1 day') AND du.created_at >= (#{now}::date - interval '2 days') THEN du.total_requests ELSE 0 END), 0)::int as day_before
+                 COALESCE(SUM(CASE WHEN du.created_at >= (#{now}::date - interval '1 day') THEN du.total_requests ELSE 0 END), 0)::bigint as yesterday,
+                 COALESCE(SUM(CASE WHEN du.created_at < (#{now}::date - interval '1 day') AND du.created_at >= (#{now}::date - interval '2 days') THEN du.total_requests ELSE 0 END), 0)::bigint as day_before
                FROM apis.daily_usage du WHERE du.created_at >= (#{now}::date - interval '2 days')
                GROUP BY du.project_id|]
         let withGrowth = sortOn (\(_, _, _, g) -> negate g) [(pid, y, db, y - db) | (pid, y, db) <- growthData, y > db, db > 0]
@@ -760,26 +758,26 @@ processBackgroundJob authCtx bgJob =
         Hasql.interp
           [HI.sql|
             WITH reported AS (
-              SELECT project_id::uuid AS pid, COALESCE(SUM(total_requests),0)::int AS r
+              SELECT project_id::uuid AS pid, COALESCE(SUM(total_requests),0)::bigint AS r
                 FROM apis.daily_usage
                WHERE created_at >= #{since}::timestamptz
                GROUP BY project_id
             ),
             ingested_events AS (
-              SELECT project_id::uuid AS pid, COUNT(*)::int AS c
+              SELECT project_id::uuid AS pid, COUNT(*)::bigint AS c
                 FROM public.otel_logs_and_spans
                WHERE timestamp >= #{since}::timestamptz
                GROUP BY project_id
             ),
             ingested_metrics AS (
-              SELECT project_id::uuid AS pid, COUNT(*)::int AS c
+              SELECT project_id::uuid AS pid, COUNT(*)::bigint AS c
                 FROM telemetry.metrics
                WHERE time >= #{since}::timestamptz
                GROUP BY project_id
             )
             SELECT p.id::uuid, p.title, p.payment_plan,
-                   COALESCE(r.r, 0)::int AS reported,
-                   (COALESCE(ie.c, 0) + COALESCE(im.c, 0))::int AS ingested
+                   COALESCE(r.r, 0)::bigint AS reported,
+                   (COALESCE(ie.c, 0) + COALESCE(im.c, 0))::bigint AS ingested
               FROM projects.projects p
               LEFT JOIN reported r ON r.pid = p.id
               LEFT JOIN ingested_events ie ON ie.pid = p.id
@@ -885,10 +883,9 @@ checkFreeTierUsageNotifications pids now = forM_ pids \pid -> tryLog "free-tier-
     Relude.when (warning || exceeded) do
       -- Dedup: skip if we already logged this event for this project today
       alreadyNotified <-
-        let pidText = pid.toText
-         in fromMaybe False
-              <$> Hasql.interpOne
-                [HI.sql| SELECT EXISTS(SELECT 1 FROM otel_logs_and_spans WHERE project_id=#{pidText} AND name=#{eventName} AND timestamp > #{now}::timestamptz - interval '1 day') |]
+        fromMaybe False
+          <$> Hasql.interpOne
+            [HI.sql| SELECT EXISTS(SELECT 1 FROM otel_logs_and_spans WHERE project_id=#{pid.toText} AND name=#{eventName} AND timestamp > #{now}::timestamptz - interval '1 day') |]
       Relude.unless alreadyNotified do
         ctx <- ask @Config.AuthContext
         let sev = if exceeded then SLError else SLWarn
@@ -1329,7 +1326,7 @@ consumeNotificationToken pid now = do
           VALUES (#{pid}, date_trunc('hour', #{now}::timestamptz), 1)
           ON CONFLICT (project_id, window_start)
           DO UPDATE SET count = apis.notification_rate_limit.count + 1
-          RETURNING count :: int
+          RETURNING count
         |]
   pure $ maybe True (<= notificationsPerProjectPerHour) countM
 
@@ -1366,7 +1363,7 @@ claimIssueNotification iid now cooldownHours =
         WHERE id = #{iid}
           AND (last_notified_at IS NULL
                OR last_notified_at < #{now}::timestamptz - make_interval(hours => #{cooldownHours}::int))
-        RETURNING 1 :: int
+        RETURNING 1::bigint
       |]
 
 
@@ -1520,22 +1517,20 @@ safetyNetReprocess pid = do
     pure $ fromMaybe Projects.defaultProjectCache mpjCache
   let caches = one (pid, projectCacheVal)
   -- Single page per tick (1000 rows); next hourly tick picks up any remainder.
-  let pidText = pid.toText
   rows <-
     V.fromList
       <$> Hasql.interp
-        [HI.sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity,
-                     body, attributes, resource, COALESCE(hashes, '{}'::text[]) AS hashes,
-                     kind, status_code, status_message, start_time, end_time, events,
-                     links, duration, name, parent_id, COALESCE(summary, '{}'::text[]) AS summary, date
-              FROM otel_logs_and_spans
-              WHERE project_id = #{pidText}
+        ( [HI.sql| SELECT |]
+            <> Telemetry.otelSpanColsSql
+            <> [HI.sql| FROM otel_logs_and_spans
+              WHERE project_id = #{pid.toText}
                 AND processed_at IS NULL
                 AND timestamp >= #{cutoff}
                 AND timestamp <  now() - interval '10 minutes'
                 AND timestamp >  now() - interval '6 hours'
               ORDER BY timestamp
               LIMIT 1000 |]
+        )
   Relude.unless (V.null rows) $ do
     Log.logTrace "SafetyNetReprocess re-driving unprocessed rows" (AE.object ["project_id" AE..= pid.toText, "row_count" AE..= V.length rows])
     liftIO $ Telemetry.handOffBatches ctx.extractionWorker caches rows
@@ -1712,7 +1707,6 @@ processEagerBatch batch shard
             dbHashesJson = V.toList perRowHashesJson
             dbErrorsJson = V.toList perRowErrorsJson
             dbNormPaths = V.toList normalizedPaths
-            pidText = pid.toText
             update1Sql =
               [HI.sql| UPDATE otel_logs_and_spans o
                     SET hashes = ARRAY(
@@ -1740,7 +1734,7 @@ processEagerBatch batch shard
                       ) raw
                       ORDER BY span_id, trace_id
                     ) u
-                    WHERE o.project_id = #{pidText}
+                    WHERE o.project_id = #{pid.toText}
                       AND o.timestamp >= #{effectiveMinTs}
                       AND o.timestamp <  #{batchMaxTsPad}
                       AND o.context___span_id = u.span_id
@@ -2027,7 +2021,6 @@ flushDrainTask shard task
             (minTs, maxTs) = foldl' (\(!lo, !hi) t -> (min lo t, max hi t)) (head tsList, head tsList) tsList
             effectiveMinTs = max minTs hashCutoff
             maxTsPad = addUTCTime 1 maxTs
-            pidText = pid.toText
             tuples = zip3 spanIds' traceIds' tagArr
             -- CASE rewrite of the original `UPDATE ... FROM (unnest)` form so
             -- TimeFusion's PGWire (which doesn't support UPDATE...FROM with a
@@ -2050,7 +2043,7 @@ flushDrainTask shard task
                           SET hashes = COALESCE(hashes, '{}'::text[]) || (CASE |]
                 <> mconcat (whenBranch <$> tuples)
                 <> [HI.sql| ELSE ARRAY[]::text[] END)
-                        WHERE project_id = #{pidText}
+                        WHERE project_id = #{pid.toText}
                           AND timestamp >= #{effectiveMinTs}
                           AND timestamp <  #{maxTsPad}
                           AND ( |]
@@ -2275,7 +2268,7 @@ ensureDailyJobScheduled appCtx = withResource appCtx.jobsPool \conn -> do
                  AND run_at >= date_trunc('day', now())
              )
              RETURNING 1
-           ) SELECT COUNT(*)::int FROM ins|]
+           ) SELECT COUNT(*)::bigint FROM ins|]
   Relude.when (inserted > 0) $ putTextLn "Scheduled DailyJob for today"
 
 

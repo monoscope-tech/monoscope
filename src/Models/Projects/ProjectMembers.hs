@@ -83,8 +83,7 @@ data Permissions
   | PAdmin
   deriving stock (Bounded, Enum, Eq, Generic, Ord, Read, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, ToField, ToSchema) via WrappedEnumSC "P" Permissions
-  deriving (HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC "P" Permissions
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField, ToSchema) via WrappedEnumSC ('Just "projects.project_permissions") "P" Permissions
 
 
 instance HI.DecodeRow Permissions where
@@ -120,46 +119,36 @@ data CreateProjectMembers = CreateProjectMembers
     via (GenericEntity '[Schema "projects", TableName "project_members", PrimaryKey "id", FieldModifiers '[CamelToSnake]] CreateProjectMembers)
 
 
--- | Insert members AND sync their emails into each project's @everyone notify_emails
--- atomically. @everyone.notify_emails is the authoritative alert audience (see
--- resolveTeamEmails) — inserting without this sync would leave the new member silently
--- unreachable. Single CTE so the insert and sync succeed or fail together.
--- Emails are stored lower-cased to match the soft-delete/deactivate paths and the
--- backfill migration, avoiding case-duplicate entries.
+-- | Insert members and sync their (lower-cased) emails into each project's @everyone
+-- team in one CTE — @everyone.notify_emails is the alert audience (see resolveTeamEmails),
+-- so a missed sync silently mutes the new member.
 insertProjectMembers :: (DB es, Log :> es) => [CreateProjectMembers] -> Eff es Int64
 insertProjectMembers [] = pure 0
 insertProjectMembers members = do
-  n <-
+  let pids = map (.projectId) members
+  teamsUpdated <-
     Hasql.interpExecute
       [HI.sql|
         WITH ins AS (
           INSERT INTO projects.project_members(project_id, user_id, permission)
-          SELECT * FROM unnest(#{pidsV}::uuid[], #{uidsV}::uuid[], #{permsV}::projects.project_permissions[])
+          SELECT * FROM unnest(#{pids}::uuid[], #{map (.userId) members}::uuid[], #{map (.permission) members}::projects.project_permissions[])
           ON CONFLICT (project_id, user_id) DO UPDATE SET active = TRUE, deleted_at = NULL
           RETURNING project_id, user_id
         ),
         added AS (
-          SELECT DISTINCT ins.project_id, lower(u.email::text) AS email
+          SELECT ins.project_id, array_agg(DISTINCT lower(u.email::text)) AS emails
           FROM ins JOIN users.users u ON u.id = ins.user_id
+          GROUP BY ins.project_id
         )
-        UPDATE projects.teams t SET notify_emails = ARRAY(
-          SELECT DISTINCT e FROM unnest(
-            t.notify_emails || ARRAY(SELECT email FROM added WHERE project_id = t.project_id)
-          ) e
-        )
-        WHERE t.is_everyone = TRUE AND t.deleted_at IS NULL
-          AND t.project_id IN (SELECT project_id FROM added) |]
-  -- Surface projects without an @everyone row so members don't silently become unreachable.
-  let distinctPids = ordNub (V.toList pidsV)
-  when (n < fromIntegral (length distinctPids))
+        UPDATE projects.teams t
+          SET notify_emails = ARRAY(SELECT DISTINCT unnest(t.notify_emails || a.emails))
+          FROM added a
+          WHERE t.project_id = a.project_id AND t.is_everyone AND t.deleted_at IS NULL |]
+  let distinctPids = ordNub pids
+  when (teamsUpdated < fromIntegral (length distinctPids))
     $ Log.logAttention "insertProjectMembers: @everyone sync updated fewer teams than projects — some members may be unreachable"
-    $ AE.object ["project_ids" AE..= distinctPids, "teams_updated" AE..= n]
-  pure n
-  where
-    v = V.fromList members
-    pidsV = V.map (.projectId) v
-    uidsV = V.map (.userId) v
-    permsV = V.map (.permission) v
+    $ AE.object ["project_ids" AE..= distinctPids, "teams_updated" AE..= teamsUpdated]
+  pure teamsUpdated
 
 
 data ProjectMemberVM = ProjectMemberVM
@@ -205,11 +194,10 @@ updateProjectMembersPermissons vals =
   Hasql.interpExecute_
     [HI.sql| UPDATE projects.project_members pm
            SET permission = u.perm::projects.project_permissions
-           FROM unnest(#{idsV}::uuid[], #{permsV}::text[]) AS u(id, perm)
+           FROM unnest(#{ids}::uuid[], #{perms}::text[]) AS u(id, perm)
            WHERE pm.id = u.id |]
   where
     (ids, perms) = unzip vals
-    (idsV, permsV) = (V.fromList ids, V.fromList perms)
 
 
 -- | Soft-delete members and strip their emails from the matching @everyone
@@ -218,12 +206,11 @@ updateProjectMembersPermissons vals =
 softDeleteProjectMembers :: (DB es, Time :> es) => NonEmpty UUID.UUID -> Eff es ()
 softDeleteProjectMembers ids = do
   now <- Time.currentTime
-  let idsVec = V.fromList $ toList ids
   Hasql.interpExecute_
     [HI.sql|
       WITH del AS (
         UPDATE projects.project_members SET active = FALSE, deleted_at = #{now}
-        WHERE id = ANY(#{idsVec}::uuid[])
+        WHERE id = ANY(#{toList ids}::uuid[])
         RETURNING project_id, user_id
       ),
       affected AS (
@@ -259,9 +246,7 @@ deactivateNonOwnerMembers pid =
 
 
 activateAllMembers :: DB es => Projects.ProjectId -> Eff es Int64
-activateAllMembers pid =
-  Hasql.interpExecute
-    [HI.sql| UPDATE projects.project_members SET active = TRUE WHERE project_id = #{pid} |]
+activateAllMembers pid = Hasql.interpExecute [HI.sql| UPDATE projects.project_members SET active = TRUE WHERE project_id = #{pid} |]
 
 
 data ProjectMemberWithStatusVM = ProjectMemberWithStatusVM
@@ -470,8 +455,7 @@ getTeamsByHandles :: DB es => Projects.ProjectId -> [Text] -> Eff es [TeamVM]
 getTeamsByHandles _ [] = pure []
 getTeamsByHandles pid handles =
   Hasql.interp
-    $ let handlesVec = V.fromList handles
-       in [HI.sql|
+    [HI.sql|
       SELECT
         t.id,
         t.created_at,
@@ -501,7 +485,7 @@ getTeamsByHandles pid handles =
       FROM projects.teams t
       LEFT JOIN unnest(t.members) AS mid ON true
       LEFT JOIN users.users u ON u.id = mid
-      WHERE t.project_id = #{pid} AND t.handle = ANY(#{handlesVec}) AND t.deleted_at IS NULL
+      WHERE t.project_id = #{pid} AND t.handle = ANY(#{handles}) AND t.deleted_at IS NULL
       GROUP BY t.id, t.created_at, t.updated_at, t.created_by, t.name, t.handle,
                t.description, t.notify_emails, t.slack_channels, t.discord_channels, t.phone_numbers, t.pagerduty_services, t.disabled_channels, t.is_everyone
     |]

@@ -29,7 +29,6 @@ module Web.ApiTypes (
   UserRef (..),
   ProjectSummary (..),
   ProjectFull (..),
-  ProjectPatch (..),
   MeResponse (..),
   -- Endpoints
   EndpointSummary (..),
@@ -371,20 +370,6 @@ data ProjectFull = ProjectFull
   deriving (ToSchema) via SnakeSchema ProjectFull
 
 
-data ProjectPatch = ProjectPatch
-  { title :: Maybe Text
-  , description :: Maybe Text
-  , timeZone :: Maybe Text
-  , dailyNotif :: Maybe Bool
-  , weeklyNotif :: Maybe Bool
-  , endpointAlerts :: Maybe Bool
-  , errorAlerts :: Maybe Bool
-  }
-  deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON ProjectPatch
-  deriving (ToSchema) via SnakeSchema ProjectPatch
-
-
 -- =============================================================================
 -- /me
 -- =============================================================================
@@ -476,7 +461,7 @@ data IssueStatus
   | ISArchived
   | ISAll
   deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
-  deriving (AE.FromJSON, AE.ToJSON, FromHttpApiData, ToParamSchema, ToSchema) via WrappedEnumSC "IS" IssueStatus
+  deriving (AE.FromJSON, AE.ToJSON, FromHttpApiData, ToParamSchema, ToSchema) via WrappedEnumSC 'Nothing "IS" IssueStatus
 
 
 data IssueApiSummary = IssueApiSummary

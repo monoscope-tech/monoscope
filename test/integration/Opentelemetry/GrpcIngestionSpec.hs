@@ -20,7 +20,6 @@ import Pages.BodyWrapper (PageCtx (..))
 import Pages.Charts.Charts qualified as Charts
 import Pages.LogExplorer.Log qualified as Log
 import Pages.Replay qualified as Replay
-import Pages.Settings qualified as Api
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
@@ -28,7 +27,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Key (fromText)
 import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, shouldBe, shouldContain, shouldSatisfy, shouldThrow)
-import Data.List (isInfixOf, sortBy)
+import Data.List (isInfixOf)
 import Data.Set qualified as Set
 import Control.Exception (ErrorCall (..), evaluate)
 

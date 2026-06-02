@@ -10,7 +10,6 @@ module SchemaLearningPerfSpec (spec) where
 
 import Data.Aeson qualified as AE
 import Data.HashMap.Strict qualified as HM
-import Data.IORef (atomicModifyIORef')
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.UUID qualified as UUID
@@ -20,7 +19,6 @@ import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types (PGArray (..))
-import Models.Apis.SchemaCatalog qualified as SC
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Pkg.DeriveUtils (AesonText (..), UUIDId (..))

@@ -21,9 +21,10 @@ import Control.Exception (throwIO)
 import Effectful
 import Effectful.Dispatch.Dynamic (interpret, send)
 import Effectful.Labeled (Labeled, labeled)
+import Hasql.Errors (IsError (..), ServerError (..), SessionError (..), StatementError (..), toDetailedText)
 import Hasql.Interpolate qualified as HI
 import Hasql.Pool (UsageError (..))
-import Hasql.Session (CommandError (..), ResultError (..), Session, SessionError (..))
+import Hasql.Session (Session)
 import Hasql.Session qualified as Session
 import Hasql.Statement (Statement)
 import Hasql.Transaction qualified as Tx
@@ -47,23 +48,17 @@ newtype HasqlException = HasqlException UsageError
 instance Exception HasqlException where
   displayException (HasqlException ue) = case ue of
     AcquisitionTimeoutUsageError -> "Hasql: pool acquisition timeout"
-    ConnectionUsageError e -> "Hasql connection error: " <> show e
-    SessionUsageError se -> "Hasql session error: " <> show se
+    ConnectionUsageError e -> "Hasql connection error: " <> toString (toDetailedText e)
+    SessionUsageError e -> "Hasql session error: " <> toString (toDetailedText e)
 
 
--- | True for transient infra failures (acquisition timeout, dropped connection,
--- libpq client error). Server errors / decode errors are programmer bugs, never retry.
--- Exhaustive pattern (no wildcard) so a future hasql-pool upgrade triggers a compile
--- error rather than silently misclassifying new error variants as non-retriable.
+-- | True for transient infra failures (acquisition timeout, dropped connection).
+-- Defers to hasql 1.10's @IsError.isTransient@ classification.
 isTransientUsageError :: UsageError -> Bool
 isTransientUsageError = \case
   AcquisitionTimeoutUsageError -> True
-  ConnectionUsageError _ -> True
-  SessionUsageError se -> case se of
-    QueryError _ _ (ClientError _) -> True
-    QueryError _ _ (ResultError _) -> False
-    PipelineError (ClientError _) -> True
-    PipelineError (ResultError _) -> False
+  ConnectionUsageError e -> isTransient e
+  SessionUsageError e -> isTransient e
 
 
 isTransientHasqlError :: HasqlException -> Bool
@@ -77,7 +72,7 @@ isTransientException = maybe False isTransientHasqlError . fromException
 
 isDeadlockError :: HasqlException -> Bool
 isDeadlockError (HasqlException ue) = case ue of
-  SessionUsageError (QueryError _ _ (ResultError (ServerError code _ _ _ _))) -> code == "40P01"
+  SessionUsageError (StatementSessionError _ _ _ _ _ (ServerStatementError (ServerError code _ _ _ _))) -> code == "40P01"
   _ -> False
 
 

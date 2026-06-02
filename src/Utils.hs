@@ -503,8 +503,7 @@ checkFreeTierStatus pid paymentPlan =
   if paymentPlan == "Free"
     then do
       now <- Time.currentTime
-      let pidText = pid.toText
-      count <- fromMaybe (0 :: Int) <$> Hasql.interpOne [HI.sql| SELECT count(*)::INT FROM otel_logs_and_spans WHERE project_id=#{pidText} AND timestamp > #{now}::timestamptz - interval '1 day'|]
+      count <- fromMaybe (0 :: Int) <$> Hasql.interpOne [HI.sql| SELECT count(*)::BIGINT FROM otel_logs_and_spans WHERE project_id=#{pid.toText} AND timestamp > #{now}::timestamptz - interval '1 day'|]
       let limit = fromInteger freeTierDailyMaxEvents
       pure $ if count >= limit then FreeTierExceeded count limit else if count >= (limit * 80) `div` 100 then FreeTierWarning count limit else FreeTierOk
     else pure NotFreeTier

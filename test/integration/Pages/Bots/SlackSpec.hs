@@ -1,6 +1,6 @@
 module Pages.Bots.SlackSpec (spec) where
 
-import Control.Exception (SomeException, try)
+import Control.Exception (try)
 import Data.Aeson qualified as AE
 import Data.Text qualified as T
 import Data.Vector qualified as V

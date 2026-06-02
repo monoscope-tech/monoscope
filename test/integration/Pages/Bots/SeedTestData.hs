@@ -3,7 +3,7 @@ module Pages.Bots.SeedTestData (seedTelemetryData, cleanupTelemetryData) where
 import Data.Aeson qualified as AE
 import Data.Pool (withResource)
 import Data.Time (UTCTime, addUTCTime)
-import Database.PostgreSQL.Simple (Only (..), execute)
+import Database.PostgreSQL.Simple (execute)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Pkg.TestUtils (TestResources (..))
 import Relude

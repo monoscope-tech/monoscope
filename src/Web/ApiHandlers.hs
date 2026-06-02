@@ -655,10 +655,10 @@ apiProjectGet pid = do
 
 
 -- | Partial update: only provided fields change. 0 rows affected ⇒ 404.
-apiProjectPatch :: Projects.ProjectId -> ProjectPatch -> ATBaseCtx ProjectFull
+apiProjectPatch :: Projects.ProjectId -> Projects.ProjectPatch -> ATBaseCtx ProjectFull
 apiProjectPatch pid patch = do
   now <- Time.currentTime
-  n <- Projects.patchProjectSettings pid patch.title patch.description patch.timeZone patch.dailyNotif patch.weeklyNotif patch.endpointAlerts patch.errorAlerts now
+  n <- Projects.patchProjectSettings pid patch now
   when (n == 0) $ throwError err404{errBody = "Project not found"}
   apiProjectGet pid
 
@@ -864,8 +864,8 @@ synthStackFromSpans trId spans =
        in marker <> "at " <> label <> svcTxt <> " (span=" <> spanId <> ")"
 
 
-issueMutate :: Projects.ProjectId -> Issues.IssueId -> (V.Vector Issues.IssueId -> ATBaseCtx Int64) -> ATBaseCtx IssueApiFull
-issueMutate pid iid op = fetchIssue pid iid *> op (V.singleton iid) *> apiIssueGet pid iid
+issueMutate :: Projects.ProjectId -> Issues.IssueId -> ([Issues.IssueId] -> ATBaseCtx Int64) -> ATBaseCtx IssueApiFull
+issueMutate pid iid op = fetchIssue pid iid *> op [iid] *> apiIssueGet pid iid
 
 
 apiIssueAck :: Projects.ProjectId -> Issues.IssueId -> ATBaseCtx IssueApiFull
@@ -891,11 +891,10 @@ apiIssueUnarchive pid iid = issueMutate pid iid $ \ids -> Issues.setArchiveState
 apiIssuesBulk :: Projects.ProjectId -> BulkAction Issues.IssueId -> ATBaseCtx (BulkResult Issues.IssueId)
 apiIssuesBulk pid ba = do
   now <- Time.currentTime
-  let vIds = V.fromList ba.ids
-      ack = Issues.setAckState pid vIds (Just now) Nothing
-      unack = Issues.setAckState pid vIds Nothing Nothing
-      archive = Issues.setArchiveState pid vIds (Just now)
-      unarchive = Issues.setArchiveState pid vIds Nothing
+  let ack = Issues.setAckState pid ba.ids (Just now) Nothing
+      unack = Issues.setAckState pid ba.ids Nothing Nothing
+      archive = Issues.setArchiveState pid ba.ids (Just now)
+      unarchive = Issues.setArchiveState pid ba.ids Nothing
   bulkExec
     ba
     [ ("acknowledge", ack)

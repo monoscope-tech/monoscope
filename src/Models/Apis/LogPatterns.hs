@@ -76,7 +76,7 @@ data LogPatternState
   | LPSIgnored
   deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON, FromField, HI.DecodeValue, HI.EncodeValue, ToField, ToSchema) via WrappedEnumSC "LPS" LogPatternState
+  deriving (AE.FromJSON, AE.ToJSON, FromField, HI.DecodeValue, HI.EncodeValue, ToField, ToSchema) via WrappedEnumSC 'Nothing "LPS" LogPatternState
 
 
 data LogPattern = LogPattern
@@ -220,7 +220,7 @@ setLogPatternStatesByIds pid uid lpids st
 countLogPatterns :: DB es => Projects.ProjectId -> Eff es Int
 countLogPatterns pid =
   fromMaybe 0
-    <$> Hasql.interpOne [HI.sql| SELECT COUNT(*)::int FROM apis.log_patterns WHERE project_id = #{pid} AND canonical_id IS NULL |]
+    <$> Hasql.interpOne [HI.sql| SELECT COUNT(*)::bigint FROM apis.log_patterns WHERE project_id = #{pid} AND canonical_id IS NULL |]
 
 
 getLogPatternByIdScoped :: DB es => Projects.ProjectId -> Int64 -> Eff es (Maybe LogPattern)
@@ -253,7 +253,7 @@ updateBaselineBatch pid rows
                   baseline_volume_hourly_mad = v.mad,
                   baseline_samples = v.samples,
                   baseline_updated_at = #{now}
-              FROM (SELECT unnest(#{srcFields}::text[]) AS source_field, unnest(#{hashes}::text[]) AS hash, unnest(#{states}::text[]) AS state, unnest(#{means}::float8[]) AS mean, unnest(#{mads}::float8[]) AS mad, unnest(#{samples}::int[]) AS samples) v
+              FROM (SELECT unnest(#{srcFields}::text[]) AS source_field, unnest(#{hashes}::text[]) AS hash, unnest(#{states}::text[]) AS state, unnest(#{means}::float8[]) AS mean, unnest(#{mads}::float8[]) AS mad, unnest(#{samples}::bigint[]) AS samples) v
               WHERE lp.project_id = #{pid} AND lp.source_field = v.source_field AND lp.pattern_hash = v.hash
             |]
 
@@ -270,11 +270,9 @@ upsertLogPatternBatch ups = do
       (dedup ups)
       ( \u' -> do
           let (u :: UpsertPattern) = cap u'
-          let (uPid, uPat, uHash, uSrc, uSvc, uLvl, uTid, uMsg, uCnt, uErr) =
-                (u.projectId, u.logPattern, u.hash, u.sourceField, u.serviceName, u.logLevel, u.traceId, u.sampleMessage, u.eventCount, u.isError)
           Hasql.interpExecute
             [HI.sql| INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash, source_field, service_name, log_level, trace_id, sample_message, occurrence_count, last_seen_at, is_error)
-        VALUES (#{uPid}, #{uPat}, #{uHash}, #{uSrc}, #{uSvc}, #{uLvl}, #{uTid}, #{uMsg}, #{uCnt}, #{now}, #{uErr})
+        VALUES (#{u.projectId}, #{u.logPattern}, #{u.hash}, #{u.sourceField}, #{u.serviceName}, #{u.logLevel}, #{u.traceId}, #{u.sampleMessage}, #{u.eventCount}, #{now}, #{u.isError})
         ON CONFLICT (project_id, source_field, pattern_hash) DO UPDATE SET
           last_seen_at = EXCLUDED.last_seen_at,
           occurrence_count = apis.log_patterns.occurrence_count + EXCLUDED.occurrence_count,
@@ -353,7 +351,7 @@ getBatchPatternStats pid now hoursBack = Hasql.interp q
           GROUP BY hc.source_field, hc.pattern_hash
         ),
         totals AS (
-          SELECT source_field, pattern_hash, COUNT(*)::INT AS total_hours, COALESCE(SUM(event_count), 0)::BIGINT AS total_events
+          SELECT source_field, pattern_hash, COUNT(*)::BIGINT AS total_hours, COALESCE(SUM(event_count), 0)::BIGINT AS total_events
           FROM hourly_counts GROUP BY source_field, pattern_hash
         )
         -- 1.4826 = consistency factor (1/Φ⁻¹(3/4)) to convert MAD to std-dev equivalent under normality

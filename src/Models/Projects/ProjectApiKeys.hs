@@ -115,9 +115,7 @@ activateApiKey kid =
 
 
 getProjectApiKey :: DB es => ProjectApiKeyId -> Eff es (Maybe ProjectApiKey)
-getProjectApiKey kid =
-  Hasql.interp
-    (selectFrom @ProjectApiKey <> [HI.sql| WHERE id = #{kid} AND active = true |])
+getProjectApiKey kid = Hasql.interp (selectFrom @ProjectApiKey <> [HI.sql| WHERE id = #{kid} AND active = true |])
 
 
 getProjectIdByApiKey :: (DB es, Effectful.Reader Config.AuthContext :> es) => Text -> Eff es (Maybe Projects.ProjectId)

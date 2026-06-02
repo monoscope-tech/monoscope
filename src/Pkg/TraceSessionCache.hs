@@ -164,6 +164,6 @@ backfillSessionAttributes = do
             OR o.attributes___user___email IS NULL OR o.attributes___user___name IS NULL
             OR o.attributes___user___full_name IS NULL)
           AND (s.sid IS NOT NULL OR s.uid IS NOT NULL)
-        RETURNING 1
+        RETURNING 1::bigint
       |]
   pure $ length rows

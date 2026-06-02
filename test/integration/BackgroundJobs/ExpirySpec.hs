@@ -2,7 +2,6 @@ module BackgroundJobs.ExpirySpec (spec) where
 
 import BackgroundJobs qualified
 import Data.Pool (withResource)
-import Data.Time (UTCTime, addUTCTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
 import Database.PostgreSQL.Simple qualified as PGS

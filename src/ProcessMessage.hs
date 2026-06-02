@@ -30,7 +30,6 @@ import Data.Aeson.Types (KeyValue ((.=)), object)
 import Data.Aeson.Types qualified as AE
 import Data.Aeson.Types qualified as AET
 import Data.ByteString qualified as BS
-import Data.ByteString.Lazy.Char8 qualified as BL
 import Data.Cache qualified as Cache
 import Data.Char (isAlpha, isAlphaNum, isDigit, isLower, isUpper)
 import Data.Effectful.Hasql qualified as Hasql
@@ -42,6 +41,7 @@ import Data.HashTable.ST.Cuckoo qualified as HT
 import Data.Text qualified as T
 import Data.Time (addUTCTime, zonedTimeToUTC)
 import Data.Time.LocalTime (ZonedTime)
+import Data.Tuple.Extra (fst3)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
@@ -67,7 +67,7 @@ import System.Logging qualified as Log
 import System.Types (DB)
 import Text.RE.Replace (matched)
 import Text.RE.TDFA (RE, re, (?=~))
-import Utils (b64ToJson, eitherStrToText, freeTierDailyMaxEvents, jsonToMap, nestedJsonFromDotNotation, replaceAllFormats, scrubNulText, toXXHash)
+import Utils (b64ToJson, freeTierDailyMaxEvents, jsonToMap, nestedJsonFromDotNotation, replaceAllFormats, toXXHash)
 
 
 {--
@@ -138,36 +138,27 @@ processMessages
 processMessages [] _ = pure []
 processMessages msgs attrs = do
   appCtx <- Eff.ask @AuthContext
-  let msgs' =
-        msgs <&> \(ackId, msg) -> do
-          let sanitizedJsonStr = scrubNulText $ decodeUtf8 msg
-          recMsg <- eitherStrToText $ AE.eitherDecode $ BL.fromStrict $ encodeUtf8 sanitizedJsonStr
-          Right (ackId, recMsg)
+  rMsgs <-
+    catMaybes <$> forM msgs \(ackId, msg) -> case AE.eitherDecodeStrict (BS.filter (/= 0) msg) of
+      Left err -> Nothing <$ Log.logAttention "Error parsing json msgs" (object ["AckId" .= ackId, "Error" .= err, "OriginalMsg" .= decodeUtf8 @Text msg])
+      Right m -> pure $ Just (ackId, BS.length msg, m)
 
-  unless (null $ lefts msgs') do
-    let leftMsgs = [(a, b) | (Left a, b) <- zip msgs' msgs]
-    forM_ leftMsgs \(a, (ackId, msg)) -> Log.logAttention "Error parsing json msgs" (object ["AckId" .= ackId, "Error" .= a, "OriginalMsg" .= decodeUtf8 @Text msg])
-
-  let rMsgs = rights msgs'
   if null rMsgs
     then pure []
     else do
-      caches <- liftIO $ do
-        -- Use parallel evaluation for cache fetching
-        let projectIds = (\(_, m) -> UUIDId m.projectId) <$> rMsgs
-        cachePairs <- forM projectIds $ \pid ->
-          Cache.fetchWithCache appCtx.projectCache pid $ \pid' -> do
-            mpjCache <- Projects.projectCacheByIdIO appCtx.hasqlJobsPool pid'
-            pure $! fromMaybe Projects.defaultProjectCache mpjCache
-        pure $! zip projectIds cachePairs
-      let projectCaches = HM.fromList caches
+      projectCaches <-
+        HM.fromList <$> liftIO do
+          -- Use parallel evaluation for cache fetching
+          let projectIds = (\(_, _, m) -> UUIDId m.projectId) <$> rMsgs
+          cachePairs <- forM projectIds $ \pid ->
+            Cache.fetchWithCache appCtx.projectCache pid $ \pid' -> do
+              mpjCache <- Projects.projectCacheByIdIO appCtx.hasqlJobsPool pid'
+              pure $! fromMaybe Projects.defaultProjectCache mpjCache
+          pure $! zip projectIds cachePairs
 
-      -- Map ackId → raw incoming bytes so we can attribute the original
-      -- (pre-decode) message size to the resulting span row.
-      let rawByAckId = HM.fromList [(ackId, BS.length raw) | (ackId, raw) <- msgs]
-      spans <- forM rMsgs \(rmAckId, msg) -> do
+      spans <- forM rMsgs \(rmAckId, rawSize, msg) -> do
         let pid = UUIDId msg.projectId
-            !msgSize = fromIntegral $ HM.lookupDefault 0 rmAckId rawByAckId
+            !msgSize = fromIntegral rawSize
         case HM.lookup pid projectCaches of
           Just cache ->
             let !totalDailyEvents = fromIntegral cache.dailyEventCount + fromIntegral cache.dailyMetricCount
@@ -185,7 +176,7 @@ processMessages msgs attrs = do
       let !spanVec = V.fromList (catMaybes spans)
       Telemetry.insertAndHandOff appCtx.env.enableTimefusionWrites appCtx.extractionWorker projectCaches spanVec
 
-      pure $ map fst rMsgs
+      pure $ map fst3 rMsgs
 
 
 -- | Process a single span to extract entities for hash-stamping.

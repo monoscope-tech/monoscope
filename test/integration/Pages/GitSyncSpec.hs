@@ -31,8 +31,6 @@ import Pages.GitSync qualified as GitSyncPage
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude hiding (head)
-import Relude.Unsafe (head)
-import System.Types (atAuthToBase)
 import Test.Hspec
 import UnliftIO.Exception (try)
 

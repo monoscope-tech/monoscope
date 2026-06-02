@@ -767,7 +767,7 @@ mergeOneSessionByKeys pid sessionId logSuffix afterMerge = do
                         '{}'::text[]
                       ),
                       event_file_count = COALESCE(
-                        (SELECT count(*) FROM unnest(file_keys) AS k WHERE k <> ALL(#{vFileKeys}::text[]))::int,
+                        (SELECT count(*) FROM unnest(file_keys) AS k WHERE k <> ALL(#{vFileKeys}::text[]))::bigint,
                         0
                       ),
                       updated_at = #{now'}

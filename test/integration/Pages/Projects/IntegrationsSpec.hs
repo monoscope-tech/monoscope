@@ -6,7 +6,6 @@ import Data.Effectful.Notify (Notification (..))
 import Data.Effectful.Notify qualified as Notify
 import Data.Effectful.UUID qualified as UUID
 import Data.Text qualified as T
-import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Hasql.Interpolate qualified as HI
 import Models.Apis.Integrations qualified as ApisInt

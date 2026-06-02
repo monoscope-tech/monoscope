@@ -13,6 +13,7 @@ import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.ProjectMembers qualified as PM
+import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import Pages.Charts.Charts qualified as Charts
 import Pages.Charts.Types (MetricsData (..))
@@ -37,7 +38,6 @@ import Network.Wai.Test qualified as WT
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Servant qualified
 import Servant.Server.Generic (genericServeTWithContext)
-import System.Types (effToServantHandlerTest)
 
 
 specJson :: AE.Value
@@ -375,11 +375,11 @@ spec = aroundAll withTestResources do
       it "project get/patch round-trip updates title" $ \tr -> do
         let runB :: ATBaseCtx a -> IO a
             runB k = runAsBase tr k
-            emptyPatch = ApiT.ProjectPatch Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+            emptyPatch = Projects.ProjectPatch Nothing Nothing Nothing Nothing Nothing Nothing Nothing
         original <- runB (ApiH.apiProjectGet testPid)
-        patched <- runB (ApiH.apiProjectPatch testPid emptyPatch{ApiT.title = Just "Plan B Patched"})
+        patched <- runB (ApiH.apiProjectPatch testPid emptyPatch{Projects.title = Just "Plan B Patched"})
         patched.summary.title `shouldBe` "Plan B Patched"
-        _ <- runB (ApiH.apiProjectPatch testPid emptyPatch{ApiT.title = Just original.summary.title})
+        _ <- runB (ApiH.apiProjectPatch testPid emptyPatch{Projects.title = Just original.summary.title})
         pass
 
     describe "Plan B — issues/endpoints/log-patterns listing" do

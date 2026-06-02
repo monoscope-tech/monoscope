@@ -354,7 +354,7 @@ sqlFromQueryComponents sqlCfg qc =
               {groupByClause}{orderClause} {limitPart}|]
 
     -- FIXME: render this based on the aggregations, but without the aliases
-    alertSelect = [fmt| count(*)::integer|] :: Text
+    alertSelect = [fmt| count(*)::float8|] :: Text
     resolvedGroupByCols = let extColsMap = Map.fromList nq.nqExtendedColumns in map (resolveExtendedColumn extColsMap) qc.groupByClause
     alertGroupByClause = if null qc.groupByClause then "" else " GROUP BY " <> T.intercalate "," resolvedGroupByCols
     -- For alert queries, we use a simplified whereCondition without the time range/cursor

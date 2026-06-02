@@ -292,8 +292,7 @@ checkIntegrationGet pid languageM = do
   (sess, project) <- Projects.sessionAndProject pid
   let stepsCompleted = project.onboardingStepsCompleted
       newCompleted = insertIfNotExist "Integration" stepsCompleted
-  let pidText = pid.toText
-  v :: Maybe Text <- Hasql.interpOne [HI.sql|SELECT context___span_id FROM otel_logs_and_spans WHERE project_id = #{pidText} LIMIT 1|]
+  v :: Maybe Text <- Hasql.interpOne [HI.sql|SELECT context___span_id FROM otel_logs_and_spans WHERE project_id = #{pid.toText} LIMIT 1|]
   if isJust v
     then do
       _ <- Hasql.interpExecute [HI.sql|update projects.projects set onboarding_steps_completed=#{newCompleted} where id=#{pid}|]

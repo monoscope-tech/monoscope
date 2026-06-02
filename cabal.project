@@ -7,11 +7,7 @@ semaphore: True
 -- import: https://www.stackage.org/nightly-2025-01-20/cabal.config
 -- documentation: True
 
--- with-compiler: ghc-9.8.2
--- Local copy of https://www.stackage.org/nightly-2025-11-17/cabal.config with
--- hs-opentelemetry-* pins stripped so we can pull 1.0.0.0 from the monorepo.
-import: stackage-pins.config
---import: https://www.stackage.org/lts-24.19/cabal.config
+-- Dependency versions are pinned via cabal.project.freeze. Refresh with `cabal freeze`.
 
 
 -- Override dependencies from stack.yaml
@@ -120,8 +116,15 @@ source-repository-package
 source-repository-package
   type: git
   location: https://github.com/tonyalaribe/hs-opentelemetry-instrumentation-hasql
-  tag: 037ef4331f8861059c234e6057cafbf8ef8ced83
+  tag: bb90850a0eeed02a0b03244283a1236b5ce03471
   subdir: .
+
+-- Upstream merge of haskell-src-meta -> ghc-hs-meta (PR #32) not yet on
+-- Hackage; pin to the merge commit until next release.
+source-repository-package
+  type: git
+  location: https://github.com/awkward-squad/hasql-interpolate
+  tag: 8a13a8b06babc569ffd216fd9561aae58818b66f
 
 constraints:
   streamly ^>=0.10.0,

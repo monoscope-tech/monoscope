@@ -1,12 +1,10 @@
 module Pages.DashboardsSpec (spec) where
 
-import Data.Aeson qualified as AE
 import Data.Vector qualified as V
-import Models.Projects.Dashboards (Dashboard (tags), DashboardVM (..))
+import Models.Projects.Dashboards (DashboardVM (..))
 import Models.Projects.ProjectMembers (TeamVM (..))
-import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
-import Pages.Dashboards (DashboardFilters (..), DashboardForm)
+import Pages.Dashboards (DashboardFilters (..))
 import Pages.Dashboards qualified as Dashboards
 import Pages.Projects (TeamForm (..))
 import Pages.Projects qualified as ManageMembers

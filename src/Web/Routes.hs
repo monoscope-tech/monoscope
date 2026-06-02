@@ -250,7 +250,7 @@ data ApiV1Routes mode = ApiV1Routes
   , -- Plan B: /me + /project (singular) + /issues + /endpoints + /log_patterns
     meGet :: mode :- "me" :> Get '[JSON] ApiT.MeResponse
   , projectGet :: mode :- "project" :> Get '[JSON] ApiT.ProjectFull
-  , projectPatch :: mode :- "project" :> ReqBody '[JSON] ApiT.ProjectPatch :> Patch '[JSON] ApiT.ProjectFull
+  , projectPatch :: mode :- "project" :> ReqBody '[JSON] Projects.ProjectPatch :> Patch '[JSON] ApiT.ProjectFull
   , endpointsList
       :: mode
         :- "endpoints"

@@ -28,6 +28,7 @@ module Models.Projects.Projects (
   newProjectsSince,
   updateProject,
   patchProjectSettings,
+  ProjectPatch (..),
   deleteProject,
   updateProjectPricing,
   updateProjectBilling,
@@ -60,6 +61,7 @@ module Models.Projects.Projects (
   -- Usage report submissions (chunked provider submissions)
   UsageSubmission (..),
   SubmissionOutcome (..),
+  submissionOutcome,
   ChunkQuantity,
   mkChunkQuantity,
   chunkQuantityInt,
@@ -103,6 +105,7 @@ import Data.Default
 import Data.Effectful.Hasql qualified as EHasql
 import Data.Effectful.UUID (UUIDEff, genUUID)
 import Data.Effectful.UUID qualified as UUID
+import Data.OpenApi (ToSchema)
 import Data.Text qualified as T
 import Data.Text.Display
 import Data.Time (Day, UTCTime, ZonedTime)
@@ -125,7 +128,7 @@ import Hasql.Statement (Statement)
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
-import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumSC (..), idFromText, selectFrom)
+import Pkg.DeriveUtils (DB, SnakeSchema (..), UUIDId (..), WrappedEnumSC (..), idFromText, selectFrom)
 import Pkg.Parser.Stats (Section)
 import Relude
 import Servant (FromHttpApiData, Header, Headers, ServerError, addHeader, err302, errHeaders, getResponse)
@@ -153,7 +156,7 @@ newtype UserId = UserId {getUserId :: UUID.UUID}
 
 
 instance HasField "toText" UserId Text where
-  getField = UUID.toText . getUserId
+  getField u = UUID.toText u.getUserId
 
 
 data User = User
@@ -204,10 +207,7 @@ createUser firstName lastName picture email = do
 
 
 insertUser :: DB es => User -> Eff es ()
-insertUser u = do
-  let (uId, uCr, uUp, uDel, uAct, uFn, uLn, uImg, uEm, uPh, uSudo) =
-        (u.id, u.createdAt, u.updatedAt, u.deletedAt, u.active, u.firstName, u.lastName, u.displayImageUrl, u.email, u.phoneNumber, u.isSudo)
-  EHasql.interpExecute_ [HI.sql| INSERT INTO users.users (id, created_at, updated_at, deleted_at, active, first_name, last_name, display_image_url, email, phone_number, is_sudo) VALUES (#{uId}, #{uCr}, #{uUp}, #{uDel}, #{uAct}, #{uFn}, #{uLn}, #{uImg}, #{uEm}, #{uPh}, #{uSudo}) |]
+insertUser u = EHasql.interpExecute_ [HI.sql| INSERT INTO users.users (id, created_at, updated_at, deleted_at, active, first_name, last_name, display_image_url, email, phone_number, is_sudo) VALUES (#{u.id}, #{u.createdAt}, #{u.updatedAt}, #{u.deletedAt}, #{u.active}, #{u.firstName}, #{u.lastName}, #{u.displayImageUrl}, #{u.email}, #{u.phoneNumber}, #{u.isSudo}) |]
 
 
 userById :: DB es => UserId -> Eff es (Maybe User)
@@ -371,15 +371,14 @@ data CreateProject = CreateProject
 projectCacheById :: (DB es, Time :> es) => ProjectId -> Eff es (Maybe ProjectCache)
 projectCacheById pid = do
   now <- currentTime
-  let pidText = pid.toText
   EHasql.interpOne
     [HI.sql|
     select  coalesce(ARRAY_AGG(DISTINCT hosts ORDER BY hosts ASC),'{}') hosts,
             coalesce(ARRAY_AGG(DISTINCT endpoint_hashes ORDER BY endpoint_hashes ASC),'{}') endpoint_hashes,
-            ( SELECT count(*)::int FROM otel_logs_and_spans
-             WHERE project_id=#{pidText} AND timestamp > #{now}::timestamptz - INTERVAL '1' DAY
+            ( SELECT count(*)::bigint FROM otel_logs_and_spans
+             WHERE project_id=#{pid.toText} AND timestamp > #{now}::timestamptz - INTERVAL '1' DAY
             ) daily_event_count,
-            ( SELECT count(*)::int FROM telemetry.metrics
+            ( SELECT count(*)::bigint FROM telemetry.metrics
              WHERE project_id=#{pid} AND timestamp > #{now}::timestamptz - INTERVAL '1' DAY
             ) daily_metric_count,
             (SELECT COALESCE((SELECT payment_plan FROM projects.projects WHERE id = #{pid}),'Free')) payment_plan,
@@ -398,10 +397,7 @@ projectCacheByIdIO hpool pid = runEff $ EHasql.runHasqlPool hpool $ runTime $ pr
 
 
 insertProject :: DB es => CreateProject -> Eff es ()
-insertProject p = do
-  let (pId, pT, pD, pPP, pTZ, pSub, pFSI, pOrd, pDN, pWN, pEA, pErA) =
-        (p.id, p.title, p.description, p.paymentPlan, p.timeZone, p.subId, p.firstSubItemId, p.orderId, p.dailyNotif, p.weeklyNotif, p.endpointAlerts, p.errorAlerts)
-  EHasql.interpExecute_ [HI.sql| INSERT INTO projects.projects (id, title, description, payment_plan, time_zone, sub_id, first_sub_item_id, order_id, daily_notif, weekly_notif, endpoint_alerts, error_alerts) VALUES (#{pId}, #{pT}, #{pD}, #{pPP}, #{pTZ}, #{pSub}, #{pFSI}, #{pOrd}, #{pDN}, #{pWN}, #{pEA}, #{pErA}) |]
+insertProject p = EHasql.interpExecute_ [HI.sql| INSERT INTO projects.projects (id, title, description, payment_plan, time_zone, sub_id, first_sub_item_id, order_id, daily_notif, weekly_notif, endpoint_alerts, error_alerts) VALUES (#{p.id}, #{p.title}, #{p.description}, #{p.paymentPlan}, #{p.timeZone}, #{p.subId}, #{p.firstSubItemId}, #{p.orderId}, #{p.dailyNotif}, #{p.weeklyNotif}, #{p.endpointAlerts}, #{p.errorAlerts}) |]
 
 
 projectById :: DB es => ProjectId -> Eff es (Maybe Project)
@@ -421,8 +417,7 @@ projectBySubId subId = EHasql.interpOne [HI.sql| select p.* from projects.projec
 
 
 updateSubItemIdBySubId :: DB es => Text -> Text -> Eff es Int64
-updateSubItemIdBySubId newItemId subId =
-  EHasql.interpExecute [HI.sql| update projects.projects set first_sub_item_id=#{newItemId} where sub_id=#{subId}|]
+updateSubItemIdBySubId newItemId subId = EHasql.interpExecute [HI.sql| update projects.projects set first_sub_item_id=#{newItemId} where sub_id=#{subId}|]
 
 
 getProjectByPhoneNumber :: DB es => Text -> Eff es (Maybe Project)
@@ -452,8 +447,7 @@ recentlyActiveProjectIds since =
 
 
 newProjectsSince :: DB es => UTCTime -> Eff es [Project]
-newProjectsSince since =
-  EHasql.interp [HI.sql|SELECT p.* FROM projects.projects p WHERE p.created_at >= #{since}::timestamptz AND p.deleted_at IS NULL ORDER BY p.created_at DESC|]
+newProjectsSince since = EHasql.interp [HI.sql|SELECT p.* FROM projects.projects p WHERE p.created_at >= #{since}::timestamptz AND p.deleted_at IS NULL ORDER BY p.created_at DESC|]
 
 
 selectProjectsForUser :: (DB es, Time :> es) => UserId -> Eff es [Project']
@@ -491,42 +485,43 @@ usersByIds uids
 
 
 updateProject :: DB es => CreateProject -> Eff es Int64
-updateProject cp = do
-  let (cT, cD, cPP, cSub, cFSI, cOrd, cTZ, cWN, cDN, cEA, cErA, cId) =
-        (cp.title, cp.description, cp.paymentPlan, cp.subId, cp.firstSubItemId, cp.orderId, cp.timeZone, cp.weeklyNotif, cp.dailyNotif, cp.endpointAlerts, cp.errorAlerts, cp.id)
+updateProject cp =
   EHasql.interpExecute
     [HI.sql|
-       UPDATE projects.projects SET title=#{cT}, description=#{cD},
-        payment_plan=#{cPP}, sub_id=#{cSub}, first_sub_item_id=#{cFSI}, order_id=#{cOrd},
-        time_zone=#{cTZ}, weekly_notif=#{cWN}, daily_notif=#{cDN}, endpoint_alerts=#{cEA}, error_alerts=#{cErA} where id=#{cId};
+       UPDATE projects.projects SET title=#{cp.title}, description=#{cp.description},
+        payment_plan=#{cp.paymentPlan}, sub_id=#{cp.subId}, first_sub_item_id=#{cp.firstSubItemId}, order_id=#{cp.orderId},
+        time_zone=#{cp.timeZone}, weekly_notif=#{cp.weeklyNotif}, daily_notif=#{cp.dailyNotif}, endpoint_alerts=#{cp.endpointAlerts}, error_alerts=#{cp.errorAlerts} where id=#{cp.id};
         |]
 
 
 -- | Partial project update. Unspecified fields keep their current value (via COALESCE).
 -- Returns the number of rows affected (0 ⇒ project not found).
-patchProjectSettings
-  :: DB es
-  => ProjectId
-  -> Maybe Text
-  -> Maybe Text
-  -> Maybe Text
-  -> Maybe Bool
-  -> Maybe Bool
-  -> Maybe Bool
-  -> Maybe Bool
-  -> UTCTime
-  -> Eff es Int64
-patchProjectSettings pid title descr tz daily weekly endpointAlerts errorAlerts now =
+data ProjectPatch = ProjectPatch
+  { title :: Maybe Text
+  , description :: Maybe Text
+  , timeZone :: Maybe Text
+  , dailyNotif :: Maybe Bool
+  , weeklyNotif :: Maybe Bool
+  , endpointAlerts :: Maybe Bool
+  , errorAlerts :: Maybe Bool
+  }
+  deriving stock (Generic, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ProjectPatch
+  deriving (ToSchema) via SnakeSchema ProjectPatch
+
+
+patchProjectSettings :: DB es => ProjectId -> ProjectPatch -> UTCTime -> Eff es Int64
+patchProjectSettings pid p now =
   EHasql.interpExecute
     [HI.sql|
       UPDATE projects.projects SET
-        title = COALESCE(#{title}, title),
-        description = COALESCE(#{descr}, description),
-        time_zone = COALESCE(#{tz}, time_zone),
-        daily_notif = COALESCE(#{daily}, daily_notif),
-        weekly_notif = COALESCE(#{weekly}, weekly_notif),
-        endpoint_alerts = COALESCE(#{endpointAlerts}, endpoint_alerts),
-        error_alerts = COALESCE(#{errorAlerts}, error_alerts),
+        title = COALESCE(#{p.title}, title),
+        description = COALESCE(#{p.description}, description),
+        time_zone = COALESCE(#{p.timeZone}, time_zone),
+        daily_notif = COALESCE(#{p.dailyNotif}, daily_notif),
+        weekly_notif = COALESCE(#{p.weeklyNotif}, weekly_notif),
+        endpoint_alerts = COALESCE(#{p.endpointAlerts}, endpoint_alerts),
+        error_alerts = COALESCE(#{p.errorAlerts}, error_alerts),
         updated_at = #{now}
       WHERE id = #{pid}
     |]
@@ -556,8 +551,7 @@ deleteProject pid = do
 
 
 updateProjectS3Bucket :: DB es => ProjectId -> Maybe ProjectS3Bucket -> Eff es Int64
-updateProjectS3Bucket pid bucket =
-  EHasql.interpExecute [HI.sql| UPDATE projects.projects SET s3_bucket=#{bucket} WHERE id=#{pid}|]
+updateProjectS3Bucket pid bucket = EHasql.interpExecute [HI.sql| UPDATE projects.projects SET s3_bucket=#{bucket} WHERE id=#{pid}|]
 
 
 ---------------------------------
@@ -566,7 +560,7 @@ type QueryLibItemId = UUIDId "querylib"
 
 data QueryLibType = QLTHistory | QLTSaved
   deriving (Eq, Generic, NFData, Read, Show)
-  deriving (AE.FromJSON, AE.ToJSON, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC "QLT" QueryLibType
+  deriving (AE.FromJSON, AE.ToJSON, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC ('Just "projects.query_library_kind") "QLT" QueryLibType
 
 
 data QueryLibItem = QueryLibItem
@@ -589,58 +583,57 @@ queryLibHistoryForUser :: DB es => ProjectId -> UserId -> Eff es [QueryLibItem]
 queryLibHistoryForUser pid uid =
   EHasql.interp
     [HI.sql|
-(
-  SELECT id, project_id, created_at, updated_at, user_id, query_type, query_text, query_ast, title,  user_id=#{uid}::uuid as byMe
-  FROM projects.query_library
-  WHERE user_id = #{uid}::uuid AND project_id = #{pid}::uuid AND query_type = 'history'
-  ORDER BY created_at DESC
-  LIMIT 50
-)
-UNION ALL
-(
-  SELECT id, project_id, created_at, updated_at, user_id, query_type, query_text, query_ast, title, user_id=#{uid}::uuid as byMe
-  FROM projects.query_library
-  WHERE user_id = #{uid}::uuid AND project_id = #{pid}::uuid AND query_type = 'saved'
-  ORDER BY created_at DESC
-  LIMIT 50
-)
-UNION ALL
-(
-  SELECT id, project_id, created_at, updated_at, user_id, query_type, query_text, query_ast,title, user_id=#{uid}::uuid as byMe
-  FROM projects.query_library
-  WHERE project_id = #{pid}::uuid AND user_id != #{uid}::uuid AND query_type = 'saved'
-  ORDER BY created_at DESC
-  LIMIT 50
-);
+      (
+        SELECT id, project_id, created_at, updated_at, user_id, query_type, query_text, query_ast, title,  user_id=#{uid}::uuid as byMe
+        FROM projects.query_library
+        WHERE user_id = #{uid}::uuid AND project_id = #{pid}::uuid AND query_type = 'history'
+        ORDER BY created_at DESC
+        LIMIT 50
+      )
+      UNION ALL
+      (
+        SELECT id, project_id, created_at, updated_at, user_id, query_type, query_text, query_ast, title, user_id=#{uid}::uuid as byMe
+        FROM projects.query_library
+        WHERE user_id = #{uid}::uuid AND project_id = #{pid}::uuid AND query_type = 'saved'
+        ORDER BY created_at DESC
+        LIMIT 50
+      )
+      UNION ALL
+      (
+        SELECT id, project_id, created_at, updated_at, user_id, query_type, query_text, query_ast,title, user_id=#{uid}::uuid as byMe
+        FROM projects.query_library
+        WHERE project_id = #{pid}::uuid AND user_id != #{uid}::uuid AND query_type = 'saved'
+        ORDER BY created_at DESC
+        LIMIT 50
+      );
     |]
 
 
 queryLibInsert :: DB es => QueryLibType -> ProjectId -> UserId -> Text -> [Section] -> Maybe Text -> Eff es ()
-queryLibInsert qKind pid uid qt qast title = do
-  let qastJson = HI.AsJsonb qast
+queryLibInsert qKind pid uid qt qast title =
   EHasql.interpExecute_
     [HI.sql|
-WITH removed_old AS (
-  DELETE FROM projects.query_library
-  WHERE id IN (
-    SELECT id
-    FROM projects.query_library
-    WHERE project_id = #{pid} AND user_id = #{uid} AND query_type = #{qKind}::projects.query_library_kind
-    ORDER BY created_at ASC
-    OFFSET 49
-  )
-)
-INSERT INTO projects.query_library (project_id, user_id, query_type, query_text, query_ast, title)
-SELECT #{pid}, #{uid}, #{qKind}::projects.query_library_kind, #{qt}, #{qastJson}, #{title}
-WHERE NOT EXISTS (
-  SELECT 1
-  FROM projects.query_library
-  WHERE project_id = #{pid} AND user_id = #{uid} AND query_type = #{qKind}::projects.query_library_kind
-  AND query_text = #{qt}
-  ORDER BY created_at DESC
-  LIMIT 1
-)
-ON CONFLICT DO NOTHING;
+      WITH removed_old AS (
+        DELETE FROM projects.query_library
+        WHERE id IN (
+          SELECT id
+          FROM projects.query_library
+          WHERE project_id = #{pid} AND user_id = #{uid} AND query_type = #{qKind}::projects.query_library_kind
+          ORDER BY created_at ASC
+          OFFSET 49
+        )
+      )
+      INSERT INTO projects.query_library (project_id, user_id, query_type, query_text, query_ast, title)
+      SELECT #{pid}, #{uid}, #{qKind}::projects.query_library_kind, #{qt}, #{HI.AsJsonb qast}, #{title}
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM projects.query_library
+        WHERE project_id = #{pid} AND user_id = #{uid} AND query_type = #{qKind}::projects.query_library_kind
+        AND query_text = #{qt}
+        ORDER BY created_at DESC
+        LIMIT 1
+      )
+      ON CONFLICT DO NOTHING;
     |]
 
 
@@ -660,7 +653,7 @@ newtype LemonSubId = LemonSubId {lemonSubId :: UUID.UUID}
 
 
 instance HasField "toText" LemonSubId Text where
-  getField = UUID.toText . lemonSubId
+  getField l = UUID.toText l.lemonSubId
 
 
 data LemonSub = LemonSub
@@ -680,13 +673,11 @@ data LemonSub = LemonSub
 
 
 addSubscription :: DB es => LemonSub -> Eff es ()
-addSubscription s = do
-  let (sId, sCr, sUp, sPid, sSub, sOrd, sFSub, sProd, sEmail) =
-        (s.id, s.createdAt, s.updatedAt, s.projectId, s.subscriptionId, s.orderId, s.firstSubId, s.productName, s.userEmail)
+addSubscription s =
   EHasql.interpExecute_
     [HI.sql|
       INSERT INTO apis.subscriptions (id, created_at, updated_at, project_id, subscription_id, order_id, first_sub_id, product_name, user_email)
-      VALUES (#{sId}, #{sCr}, #{sUp}, #{sPid}, #{sSub}, #{sOrd}, #{sFSub}, #{sProd}, #{sEmail})
+      VALUES (#{s.id}, #{s.createdAt}, #{s.updatedAt}, #{s.projectId}, #{s.subscriptionId}, #{s.orderId}, #{s.firstSubId}, #{s.productName}, #{s.userEmail})
       ON CONFLICT (subscription_id) DO UPDATE SET
         updated_at = now(),
         order_id = EXCLUDED.order_id,
@@ -793,32 +784,23 @@ data UsageSubmission = UsageSubmission
   , windowStart :: UTCTime
   , windowEnd :: UTCTime
   , quantity :: ChunkQuantity
-  , outcome :: SubmissionOutcome
+  , status :: Text
+  , submittedAt :: Maybe UTCTime
+  , lastError :: Maybe Text
   , createdAt :: UTCTime
   }
   deriving stock (Generic, Show)
-  deriving anyclass (NFData)
+  deriving anyclass (HI.DecodeRow, NFData)
 
 
--- Manual DecodeRow: collapses the 3 DB columns (status, submitted_at, last_error)
--- into one SubmissionOutcome. Safe because DB CHECK constraints guarantee the
--- triples that can reach us — see migration 0084.
-instance HI.DecodeRow UsageSubmission where
-  decodeRow = do
-    id_ <- HI.decodeRow
-    projectId <- HI.decodeRow
-    windowStart <- HI.decodeRow
-    windowEnd <- HI.decodeRow
-    quantity <- HI.decodeRow
-    status <- HI.decodeRow @Text
-    submittedAt <- HI.decodeRow @(Maybe UTCTime)
-    lastError <- HI.decodeRow @(Maybe Text)
-    createdAt <- HI.decodeRow
-    let outcome = case (status, submittedAt, lastError) of
-          ("submitted", Just t, _) -> Submitted t
-          ("failed", _, Just e) -> Failed e
-          _ -> Pending
-    pure UsageSubmission{id = id_, ..}
+-- | Collapse the raw (status, submitted_at, last_error) triple into a
+-- 'SubmissionOutcome'. Safe because DB CHECK constraints (migration 0084)
+-- guarantee the triples that can reach us.
+submissionOutcome :: UsageSubmission -> SubmissionOutcome
+submissionOutcome s = case (s.status, s.submittedAt, s.lastError) of
+  ("submitted", Just t, _) -> Submitted t
+  ("failed", _, Just e) -> Failed e
+  _ -> Pending
 
 
 -- | >>> splitUsageIntoChunks 0
@@ -916,23 +898,25 @@ markUsageSubmissionFailed sid err =
 
 -- Keep sub_id/order_id/first_sub_item_id intact on downgrade so resume/payment_success can re-upgrade without a new checkout.
 downgradeToFree :: DB es => Int -> Int -> Int -> Eff es Int64
-downgradeToFree orderId' _subId _subItemId = do
-  let oid = show orderId' :: Text
-  EHasql.interpExecute [HI.sql|UPDATE projects.projects SET payment_plan = 'Free' WHERE order_id = #{oid}|]
+-- @projects.projects.order_id@ is TEXT but callers (LemonSqueezy webhooks) pass a
+-- numeric id; cast the bind parameter so PG doesn't reject @text = bigint@.
+downgradeToFree orderId _subId _subItemId = EHasql.interpExecute [HI.sql|UPDATE projects.projects SET payment_plan = 'Free' WHERE order_id = #{orderId}::text|]
 
 
 -- Match on sub_id when available (stable across plan/order changes), else fall back to order_id.
 -- Using OR with both risks matching a stale preserved row on a different project after downgrade.
 upgradeToPaid :: DB es => Int -> Int -> Int -> Text -> Eff es Int64
-upgradeToPaid orderId' subId subItemId plan = do
-  let (sId, sItemId, oId) = (show subId :: Text, show subItemId :: Text, show orderId' :: Text)
+upgradeToPaid orderId subId subItemId plan =
   EHasql.interpExecute
     [HI.sql|
       UPDATE projects.projects
-         SET payment_plan = #{plan}, sub_id = #{sId}, first_sub_item_id = #{sItemId}
-       WHERE sub_id = #{sId}
-          OR (sub_id IS NULL AND order_id = #{oId})
-    |]
+         SET payment_plan = #{plan}, sub_id = #{subId}::text, first_sub_item_id = #{subItemId}::text
+       WHERE sub_id = #{subId}::text
+          OR (sub_id IS NULL AND order_id = #{orderId}::text) |]
+
+
+data BillingProvider = StripeProvider | LemonSqueezyProvider | NoBillingProvider
+  deriving stock (Eq, Show)
 
 
 -- | >>> billingProvider (Just "sub_abc123")
@@ -943,10 +927,6 @@ upgradeToPaid orderId' subId subItemId plan = do
 -- NoBillingProvider
 -- >>> billingProvider (Just "")
 -- NoBillingProvider
-data BillingProvider = StripeProvider | LemonSqueezyProvider | NoBillingProvider
-  deriving stock (Eq, Show)
-
-
 billingProvider :: Maybe Text -> BillingProvider
 billingProvider = \case
   Just sid
@@ -1061,9 +1041,7 @@ getPersistentSession sessionId =
         GROUP BY ps.created_at, ps.updated_at, ps.id, ps.user_id, ps.session_data, u.* ,u.is_sudo; |]
 
 
-getSession
-  :: EffReader.Reader (Headers '[Header "Set-Cookie" SetCookie] Session) :> es
-  => Eff es Session
+getSession :: EffReader.Reader (Headers '[Header "Set-Cookie" SetCookie] Session) :> es => Eff es Session
 getSession = EffReader.asks (getResponse @'[Header "Set-Cookie" SetCookie])
 
 
@@ -1151,7 +1129,7 @@ data AuditEvent
   | AEPlanChanged
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC "AE" AuditEvent
+  deriving (Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "AE" AuditEvent
 
 
 logAudit :: DB es => ProjectId -> AuditEvent -> Maybe UserId -> Maybe Text -> Maybe AE.Value -> Eff es ()
