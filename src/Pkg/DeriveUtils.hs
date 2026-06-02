@@ -253,7 +253,7 @@ instance (KnownSymbol prefix, Show a) => ToField (WrappedEnumSC qualType prefix 
   toField (WrappedEnumSC a) = toField $ encodeEnumSC @prefix a
 
 
-instance (Typeable qualType, KnownSymbol prefix, Read a, Typeable a) => FromField (WrappedEnumSC qualType prefix a) where
+instance (KnownSymbol prefix, Read a, Typeable a, Typeable qualType) => FromField (WrappedEnumSC qualType prefix a) where
   fromField f = \case
     Nothing -> returnError UnexpectedNull f ""
     Just bss -> maybe (returnError ConversionFailed f $ "Cannot parse: " <> str) (pure . WrappedEnumSC) $ decodeEnumSC @prefix str
@@ -306,7 +306,7 @@ instance (KnownSymbol prefix, Read a, Show a) => FromHttpApiData (WrappedEnumSC 
   parseUrlPiece t = maybe (Left $ "Invalid " <> fromString (symbolVal (Proxy @prefix)) <> " value: " <> t) (Right . WrappedEnumSC) $ decodeEnumSC @prefix (toString @Text t)
 
 
-instance {-# OVERLAPPABLE #-} (Typeable qualType, Bounded a, Enum a, KnownSymbol prefix, Show a, Typeable a) => ToSchema (WrappedEnumSC qualType prefix a) where
+instance {-# OVERLAPPABLE #-} (Bounded a, Enum a, KnownSymbol prefix, Show a, Typeable a, Typeable qualType) => ToSchema (WrappedEnumSC qualType prefix a) where
   declareNamedSchema (_ :: proxy (WrappedEnumSC qualType prefix a)) =
     pure
       $ NamedSchema Nothing
