@@ -21,8 +21,8 @@ import Control.Exception (throwIO)
 import Effectful
 import Effectful.Dispatch.Dynamic (interpret, send)
 import Effectful.Labeled (Labeled, labeled)
-import Hasql.Interpolate qualified as HI
 import Hasql.Errors (IsError (..), ServerError (..), SessionError (..), StatementError (..), toDetailedText)
+import Hasql.Interpolate qualified as HI
 import Hasql.Pool (UsageError (..))
 import Hasql.Session (Session)
 import Hasql.Session qualified as Session

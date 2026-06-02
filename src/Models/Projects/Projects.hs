@@ -105,6 +105,7 @@ import Data.Default
 import Data.Effectful.Hasql qualified as EHasql
 import Data.Effectful.UUID (UUIDEff, genUUID)
 import Data.Effectful.UUID qualified as UUID
+import Data.OpenApi (ToSchema)
 import Data.Text qualified as T
 import Data.Text.Display
 import Data.Time (Day, UTCTime, ZonedTime)
@@ -127,7 +128,6 @@ import Hasql.Statement (Statement)
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
-import Data.OpenApi (ToSchema)
 import Pkg.DeriveUtils (DB, SnakeSchema (..), UUIDId (..), WrappedEnumSC (..), idFromText, selectFrom)
 import Pkg.Parser.Stats (Section)
 import Relude

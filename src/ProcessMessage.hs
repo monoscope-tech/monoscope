@@ -29,7 +29,6 @@ import Data.Aeson.Lens (key, _Number, _Object, _String)
 import Data.Aeson.Types (KeyValue ((.=)), object)
 import Data.Aeson.Types qualified as AE
 import Data.Aeson.Types qualified as AET
-import Data.Tuple.Extra (fst3)
 import Data.ByteString qualified as BS
 import Data.Cache qualified as Cache
 import Data.Char (isAlpha, isAlphaNum, isDigit, isLower, isUpper)
@@ -42,6 +41,7 @@ import Data.HashTable.ST.Cuckoo qualified as HT
 import Data.Text qualified as T
 import Data.Time (addUTCTime, zonedTimeToUTC)
 import Data.Time.LocalTime (ZonedTime)
+import Data.Tuple.Extra (fst3)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE

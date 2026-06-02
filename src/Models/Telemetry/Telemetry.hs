@@ -101,8 +101,7 @@ import Effectful.Labeled (Labeled, labeled)
 import Effectful.Log (Log)
 import Effectful.Time qualified as Time
 import Hasql.Decoders qualified as D
-import Hasql.DynamicStatements.Snippet (Snippet, encoderAndParam, param)
-import Hasql.DynamicStatements.Snippet (toPreparableStatement)
+import Hasql.DynamicStatements.Snippet (Snippet, encoderAndParam, param, toPreparableStatement)
 import Hasql.Encoders qualified as E
 import Hasql.Interpolate qualified as HI
 import Hasql.Session qualified as HSession
@@ -1619,11 +1618,14 @@ generateSummary otel =
 tag :: T.Text -> T.Text -> T.Text -> T.Text
 tag n s v = n <> ";" <> s <> "⇒" <> v
 
+
 truncT :: Int -> T.Text -> T.Text
 truncT n t = if T.length t > n then T.take (n - 3) t <> "..." else t
 
+
 encTrunc :: AE.ToJSON a => Int -> a -> T.Text
 encTrunc n = truncT n . decodeUtf8 . AE.encode
+
 
 nonEmptyT :: Maybe T.Text -> Maybe T.Text
 nonEmptyT = mfilter (not . T.null)
@@ -1633,41 +1635,45 @@ generateLogSummary :: OtelLogsAndSpans -> V.Vector T.Text
 generateLogSummary otel =
   let
     attrsM = unAesonTextMaybe otel.attributes
-    bodyV  = unAesonTextMaybe otel.body
-    resM   = unAesonTextMaybe otel.resource
+    bodyV = unAesonTextMaybe otel.body
+    resM = unAesonTextMaybe otel.resource
     isRawDataLog = isNothing otel.body && isNothing otel.severity && maybe True Map.null attrsM
 
     severityBadge = \case
       SLTrace -> ("badge-neutral", "TRACE")
       SLDebug -> ("badge-neutral", "DEBUG")
-      SLInfo  -> ("badge-info",    "INFO")
-      SLWarn  -> ("badge-warning", "WARN")
-      SLError -> ("badge-error",   "ERROR")
-      SLFatal -> ("badge-fatal",   "FATAL")
+      SLInfo -> ("badge-info", "INFO")
+      SLWarn -> ("badge-warning", "WARN")
+      SLError -> ("badge-error", "ERROR")
+      SLFatal -> ("badge-fatal", "FATAL")
 
     -- Always emits a single element; falls back to "{}" when resource is missing/empty.
-    resourceFallback = tag "resource" "text-textWeak" $
-      maybe "{}" (encTrunc 500) (mfilter (not . Map.null) resM)
+    resourceFallback =
+      tag "resource" "text-textWeak"
+        $ maybe "{}" (encTrunc 500) (mfilter (not . Map.null) resM)
 
-    rawDataLogElements = catMaybes
-      [ tag "trace_state" "neutral"             <$> (otel.context >>= nonEmptyT . (.trace_state))
-      , tag "trace_id" "right-badge-neutral" . T.take 16 <$> (otel.context >>= nonEmptyT . (.trace_id))
-      , Just resourceFallback
-      ]
+    rawDataLogElements =
+      catMaybes
+        [ tag "trace_state" "neutral" <$> (otel.context >>= nonEmptyT . (.trace_state))
+        , tag "trace_id" "right-badge-neutral" . T.take 16 <$> (otel.context >>= nonEmptyT . (.trace_id))
+        , Just resourceFallback
+        ]
 
     -- Body: raw string passes through verbatim; objects prefer extractMessageFromLog
     -- then fall back to encoded JSON; primitives use `show` truncated to 200; Null drops.
-    bodyElt = bodyV >>= \case
-      AE.String t   -> Just t
-      AE.Object obj -> Just $ fromMaybe (decodeUtf8 (AE.encode obj)) (extractMessageFromLog (AE.Object obj))
-      AE.Null       -> Nothing
-      v             -> Just $ T.take 200 (toText (show v))
+    bodyElt =
+      bodyV >>= \case
+        AE.String t -> Just t
+        AE.Object obj -> Just $ fromMaybe (decodeUtf8 (AE.encode obj)) (extractMessageFromLog (AE.Object obj))
+        AE.Null -> Nothing
+        v -> Just $ T.take 200 (toText (show v))
 
-    normalLogElements = catMaybes
-      [ (\(style, txt) -> tag "severity_text" style txt) . severityBadge <$> (otel.severity >>= (.severity_text))
-      , bodyElt
-      , tag "attributes" "text-textWeak" . encTrunc 500 <$> mfilter (not . Map.null) attrsM
-      ]
+    normalLogElements =
+      catMaybes
+        [ (\(style, txt) -> tag "severity_text" style txt) . severityBadge <$> (otel.severity >>= (.severity_text))
+        , bodyElt
+        , tag "attributes" "text-textWeak" . encTrunc 500 <$> mfilter (not . Map.null) attrsM
+        ]
    in
     V.fromList $ if isRawDataLog || null normalLogElements then rawDataLogElements else normalLogElements
 
@@ -1791,83 +1797,89 @@ generateSpanSummary otel =
       (Just "ERROR", _) -> Just $ tag "status" style "ERROR"
       _ -> Nothing
     dbBadge = \case
-      "postgresql"    -> tag "db.system" "right-badge-postgres" "postgres"
-      "mysql"         -> tag "db.system" "right-badge-mysql"    "mysql"
-      "redis"         -> tag "db.system" "right-badge-redis"    "redis"
-      "mongodb"       -> tag "db.system" "right-badge-mongo"    "mongodb"
-      "elasticsearch" -> tag "db.system" "right-badge-elastic"  "elastic"
-      s               -> tag "db.system" "right-badge-neutral"  s
+      "postgresql" -> tag "db.system" "right-badge-postgres" "postgres"
+      "mysql" -> tag "db.system" "right-badge-mysql" "mysql"
+      "redis" -> tag "db.system" "right-badge-redis" "redis"
+      "mongodb" -> tag "db.system" "right-badge-mongo" "mongodb"
+      "elasticsearch" -> tag "db.system" "right-badge-elastic" "elastic"
+      s -> tag "db.system" "right-badge-neutral" s
 
     isEmptySpan = (isNothing otel.name || otel.name == Just "") && maybe True Map.null attrsM
 
-    resourceFallbackElements = catMaybes
-      [ tag "process"  "neutral" <$> (nonEmptyT (atMapText "process.executable.name" resM) <|> ("PID " <>) . show <$> atMapInt "process.pid" resM)
-      , tag "service"  "neutral" <$> atMapText "service.name" resM
-      , tag "resource" "text-textWeak" . encTrunc 300 <$> mfilter (not . Map.null) (Map.filterWithKey (\k _ -> k /= "process") <$> resM)
-      , tag "trace_id" "right-badge-neutral" . T.take 16 <$> (otel.context >>= nonEmptyT . (.trace_id))
-      , tag "duration" "right-badge-neutral" . durMs <$> otel.duration
-      ]
+    resourceFallbackElements =
+      catMaybes
+        [ tag "process" "neutral" <$> (nonEmptyT (atMapText "process.executable.name" resM) <|> ("PID " <>) . show <$> atMapInt "process.pid" resM)
+        , tag "service" "neutral" <$> atMapText "service.name" resM
+        , tag "resource" "text-textWeak" . encTrunc 300 <$> mfilter (not . Map.null) (Map.filterWithKey (\k _ -> k /= "process") <$> resM)
+        , tag "trace_id" "right-badge-neutral" . T.take 16 <$> (otel.context >>= nonEmptyT . (.trace_id))
+        , tag "duration" "right-badge-neutral" . durMs <$> otel.duration
+        ]
 
     -- Frontend-derived label (suppressed via `frontendCat *>` when span isn't classified frontend).
-    frontendLabel = frontendCat *> case spanNameT of
-      n | n `elem` ["documentLoad", "documentFetch", "navigation", "route.change"] -> tag "url" "text-textStrong" <$> urlPathOrFull
-      n | n == "resourceFetch" || n == "resource"                                  -> tag "resource" "text-textStrong" . urlBasename <$> (urlFull <|> urlPathOrFull)
-      n | n `elem` ["click", "submit", "keydown", "keyup"]                         -> tag "target" "text-textStrong" <$> clickTargetLabel attrsM
-      "longtask"                                                                   -> tag "blocked" "text-textStrong" . ("main thread " <>) . durMs <$> otel.duration
-      n | "web-vital." `T.isPrefixOf` n -> (\v -> tag "value" "text-textStrong" (v <> "ms")) <$> atMapText "value" attrsM
-      _ -> Nothing
+    frontendLabel =
+      frontendCat *> case spanNameT of
+        n | n `elem` ["documentLoad", "documentFetch", "navigation", "route.change"] -> tag "url" "text-textStrong" <$> urlPathOrFull
+        n | n == "resourceFetch" || n == "resource" -> tag "resource" "text-textStrong" . urlBasename <$> (urlFull <|> urlPathOrFull)
+        n | n `elem` ["click", "submit", "keydown", "keyup"] -> tag "target" "text-textStrong" <$> clickTargetLabel attrsM
+        "longtask" -> tag "blocked" "text-textStrong" . ("main thread " <>) . durMs <$> otel.duration
+        n | "web-vital." `T.isPrefixOf` n -> (\v -> tag "value" "text-textStrong" (v <> "ms")) <$> atMapText "value" attrsM
+        _ -> Nothing
 
     -- Original arm order preserved: request_type wins before database/internal.
     requestType = case (otel.kind, hasHttp, atMapText "component" attrsM) of
-      (Just "server", True, _)                                       -> Just "incoming"
-      (Just "client", True, _)                                       -> Just "outgoing"
-      (_, True, Just comp) | "proxy" `T.isInfixOf` comp              -> Just "incoming"
-      (_, True, _)                                                   -> Just "outgoing"
-      (Just "server", _, _) | isJust rpcMethod                       -> Just "incoming"
-      (Just "client", _, _) | isJust rpcMethod                       -> Just "outgoing"
+      (Just "server", True, _) -> Just "incoming"
+      (Just "client", True, _) -> Just "outgoing"
+      (_, True, Just comp) | "proxy" `T.isInfixOf` comp -> Just "incoming"
+      (_, True, _) -> Just "outgoing"
+      (Just "server", _, _) | isJust rpcMethod -> Just "incoming"
+      (Just "client", _, _) | isJust rpcMethod -> Just "outgoing"
       _ -> Nothing
     kindElt = case frontendCat of
       Just (cat, style) -> Just $ tag "kind" style cat
       Nothing ->
-        tag "request_type" "neutral" <$> requestType
-          <|> tag "kind" "neutral" "database" <$ guard (isJust dbSys)
-          <|> tag "kind" "neutral" "internal" <$ guard (otel.kind == Just "internal")
+        tag "request_type" "neutral"
+          <$> requestType
+          <|> tag "kind" "neutral" "database"
+          <$ guard (isJust dbSys)
+          <|> tag "kind" "neutral" "internal"
+          <$ guard (otel.kind == Just "internal")
 
     routeOrUrl = case (httpRoute, urlPathOrFull, frontendLabel) of
-      (_, _, Just _)     -> Nothing
+      (_, _, Just _) -> Nothing
       (Just route, _, _) -> Just $ tag "route" "neutral" route
-      (_, Just url, _)   -> Just $ tag "url"   "neutral" url
-      _                  -> Nothing
+      (_, Just url, _) -> Just $ tag "url" "neutral" url
+      _ -> Nothing
 
     spanNameFallback = do
       n <- otel.name
       guard (all isNothing [httpRoute, urlPathOrFull, frontendLabel])
       pure $ tag "span_name" "neutral" n
 
-    normalElements = catMaybes
-      [ kindElt
-      , frontendLabel
-      , (\c -> tag "status_code" (statusCodeStyle c) (toText (show c))) <$> httpStatus
-      , (\m -> tag "method" (methodStyle m) m) <$> httpMethod
-      , routeOrUrl
-      , tag "db.system"     "neutral"         <$> dbSys
-      , tag "db.query.text" "text-textStrong" . T.take 200 <$> (dbSys *> atMapText "db.query.text" attrsM)
-      , tag "db.statement"  "neutral"         . T.take 200 <$> atMapText "db.statement" attrsM
-      , tag "rpc.method"    "neutral" <$> rpcMethod
-      , tag "rpc.service"   "neutral" <$> atMapText "rpc.service" attrsM
-      , spanNameFallback
-      , errorStatus "badge-error"
-      , tag "attributes" "text-textWeak" . encTrunc 500 <$> mfilter (not . Map.null) attrsM
-      , tag "session"    "right-badge-neutral" <$> atMapText "session.id" attrsM
-      , tag "user email" "right-badge-neutral" <$> atMapText "user.email" attrsM <|> tag "user name" "right-badge-neutral" <$> atMapText "user.id" attrsM
-      , tag "user name"  "right-badge-neutral" <$> (atMapText "user.full_name" attrsM <|> atMapText "user.name" attrsM)
-      , errorStatus "right-badge-error"
-      , dbBadge <$> dbSys
-      , (atMapInt "http.response.body.size" attrsM <|> atMapInt "http.response_content_length" attrsM) >>= \n -> guard (n > 0) $> tag "size" "right-badge-neutral" (humanBytes n)
-      , tag "protocol" "right-badge-neutral" "http" <$ guard hasHttp
-      , tag "protocol" "right-badge-neutral" "rpc"  <$  rpcMethod
-      , tag "duration" "right-badge-neutral" . durMs <$> otel.duration
-      ]
+    normalElements =
+      catMaybes
+        [ kindElt
+        , frontendLabel
+        , (\c -> tag "status_code" (statusCodeStyle c) (toText (show c))) <$> httpStatus
+        , (\m -> tag "method" (methodStyle m) m) <$> httpMethod
+        , routeOrUrl
+        , tag "db.system" "neutral" <$> dbSys
+        , tag "db.query.text" "text-textStrong" . T.take 200 <$> (dbSys *> atMapText "db.query.text" attrsM)
+        , tag "db.statement" "neutral" . T.take 200 <$> atMapText "db.statement" attrsM
+        , tag "rpc.method" "neutral" <$> rpcMethod
+        , tag "rpc.service" "neutral" <$> atMapText "rpc.service" attrsM
+        , spanNameFallback
+        , errorStatus "badge-error"
+        , tag "attributes" "text-textWeak" . encTrunc 500 <$> mfilter (not . Map.null) attrsM
+        , tag "session" "right-badge-neutral" <$> atMapText "session.id" attrsM
+        , tag "user email" "right-badge-neutral" <$> atMapText "user.email" attrsM <|> tag "user name" "right-badge-neutral" <$> atMapText "user.id" attrsM
+        , tag "user name" "right-badge-neutral" <$> (atMapText "user.full_name" attrsM <|> atMapText "user.name" attrsM)
+        , errorStatus "right-badge-error"
+        , dbBadge <$> dbSys
+        , (atMapInt "http.response.body.size" attrsM <|> atMapInt "http.response_content_length" attrsM) >>= \n -> guard (n > 0) $> tag "size" "right-badge-neutral" (humanBytes n)
+        , tag "protocol" "right-badge-neutral" "http" <$ guard hasHttp
+        , tag "protocol" "right-badge-neutral" "rpc" <$ rpcMethod
+        , tag "duration" "right-badge-neutral" . durMs <$> otel.duration
+        ]
    in
     V.fromList (if isEmptySpan then resourceFallbackElements else normalElements)
 
