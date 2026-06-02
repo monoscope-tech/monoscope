@@ -312,27 +312,25 @@ dependenciesAndEventsCount pid outgoingM sortT skip timeF period showArchived = 
 archiveHosts :: DB es => Projects.ProjectId -> Maybe Bool -> Maybe Projects.UserId -> [Text] -> Eff es Int64
 archiveHosts _ _ _ [] = pure 0
 archiveHosts pid outgoingM byM hosts =
-  let dir = directionClauseSql outgoingM
-   in Hasql.interpExecute
-        [HI.sql|
-          UPDATE apis.hosts
-             SET archived_at = NOW(), archived_by = #{byM}, updated_at = NOW()
-           WHERE project_id = #{pid}
-             AND host = ANY(#{hosts}::text[])
-             AND archived_at IS NULL ^{dir} |]
+  Hasql.interpExecute
+    [HI.sql|
+      UPDATE apis.hosts
+         SET archived_at = NOW(), archived_by = #{byM}, updated_at = NOW()
+       WHERE project_id = #{pid}
+         AND host = ANY(#{hosts}::text[])
+         AND archived_at IS NULL ^{directionClauseSql outgoingM} |]
 
 
 unarchiveHosts :: DB es => Projects.ProjectId -> Maybe Bool -> [Text] -> Eff es Int64
 unarchiveHosts _ _ [] = pure 0
 unarchiveHosts pid outgoingM hosts =
-  let dir = directionClauseSql outgoingM
-   in Hasql.interpExecute
-        [HI.sql|
-          UPDATE apis.hosts
-             SET archived_at = NULL, archived_by = NULL, updated_at = NOW()
-           WHERE project_id = #{pid}
-             AND host = ANY(#{hosts}::text[])
-             AND archived_at IS NOT NULL ^{dir} |]
+  Hasql.interpExecute
+    [HI.sql|
+      UPDATE apis.hosts
+         SET archived_at = NULL, archived_by = NULL, updated_at = NOW()
+       WHERE project_id = #{pid}
+         AND host = ANY(#{hosts}::text[])
+         AND archived_at IS NOT NULL ^{directionClauseSql outgoingM} |]
 
 
 countEndpointInbox :: DB es => Projects.ProjectId -> Text -> Text -> Eff es Int

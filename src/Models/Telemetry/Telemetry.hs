@@ -1677,7 +1677,7 @@ generateLogSummary otel =
 
     normalLogElements =
       catMaybes
-        [ (\(style, txt) -> tag "severity_text" style txt) . severityBadge <$> (otel.severity >>= (.severity_text))
+        [ uncurry (tag "severity_text") . severityBadge <$> (otel.severity >>= (.severity_text))
         , bodyElt
         , tag "attributes" "text-textWeak" . encTrunc 500 <$> mfilter (not . Map.null) attrsM
         ]
