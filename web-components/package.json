@@ -38,7 +38,7 @@
     "@types/js-yaml": "^4.0.9",
     "@types/jsonpath": "^0.2.4",
     "@types/node": "^25.9.1",
-    "@vitest/browser": "^4.1.7",
+    "@vitest/browser": "^4.1.8",
     "happy-dom": "^20.7.0",
     "jsdom": "^29.1.1",
     "typescript": "^6.0.3",
