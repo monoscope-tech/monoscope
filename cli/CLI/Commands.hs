@@ -877,7 +877,7 @@ tryOpenBrowser url =
 -- OTel send helpers
 
 withOtelProvider :: (TracerProvider -> IO a) -> IO a
-withOtelProvider = bracket initializeGlobalTracerProvider shutdownTracerProvider
+withOtelProvider = bracket initializeGlobalTracerProvider (`shutdownTracerProvider` Nothing)
 
 configureOtelEnv :: CLIConfig -> Text -> Text -> IO ()
 configureOtelEnv cfg service endpoint = do
@@ -927,7 +927,7 @@ runSendEvent cfg opts = liftIO $ do
   configureOtelEnv cfg opts.service endpoint
   setResourceAttrs opts.resources
   withOtelProvider $ \tp -> do
-    let tracer = makeTracer tp "monoscope-cli" (TracerOptions Nothing)
+    let tracer = makeTracer tp "monoscope-cli" (TracerOptions Nothing [])
     ctx <- OtelCtx.getContext
     sp <- Trace.createSpan tracer ctx (T.take 200 msg) (defaultSpanArguments{Trace.attributes = attrs})
     when isError $ Trace.setStatus sp (Error msg)
@@ -974,7 +974,7 @@ runTelemetryGen cfg opts = liftIO $ do
   setResourceAttrs opts.resources
   putTextLn $ "Generating " <> opts.kind <> " → " <> endpoint <> " at " <> show opts.rate <> "/s"
   withOtelProvider $ \tp -> do
-    let tracer = makeTracer tp "monoscope-cli" (TracerOptions Nothing)
+    let tracer = makeTracer tp "monoscope-cli" (TracerOptions Nothing [])
         sendOne i = do
           sendSpan tracer ("telemetrygen." <> opts.kind) defaultSpanArguments
           putStrLn $ "Sent " <> show (i :: Int) <> " " <> toString opts.kind <> "(s)"

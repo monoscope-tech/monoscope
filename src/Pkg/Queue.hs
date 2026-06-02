@@ -3,13 +3,16 @@ module Pkg.Queue (pubsubService, kafkaService, publishJSONToKafka, publishToDead
 import Control.Exception.Annotated (checkpoint)
 import Control.Lens ((^?), _Just)
 import Control.Lens qualified as L
+import Control.Monad.Extra (concatMapM)
 import Control.Monad.Trans.Resource (runResourceT)
 import Data.Aeson qualified as AE
 import Data.Annotation (toAnnotation)
 import Data.ByteString.Char8 qualified as BC
 import Data.ByteString.Lazy.Base64 qualified as LB64
+import Data.Effectful.Hasql qualified as Hasql
 import Data.Generics.Product (field)
 import Data.HashMap.Strict qualified as HM
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Text.Lazy.Encoding qualified as LT
 import Data.Time (getCurrentTime)
@@ -157,12 +160,16 @@ pubsubService appLogger appCtx tp topics fn = checkpoint "pubsubService" do
                   $ runLogT "pubsub-service" appLogger LogAttention
                   $ LogBase.logAttention "pubsubService: error processing batch"
                   $ AE.object ["error" AE..= errText, "topic" AE..= topic, "message_count" AE..= length validMsgs]
-
-                unless (isUnrecoverableError e)
-                  $ liftIO
-                  $ publishToDeadLetterQueue appLogger appCtx validMsgs (maybeToMonoid firstAttrs) errText
-
-                pure $ map fst validMsgs
+                -- Transient (Hasql infra) → ack nothing; PubSub redelivers
+                -- after the ack deadline. Anything else is treated as poison
+                -- → park in DLQ; ack only if DLQ accepted.
+                if Hasql.isTransientException e
+                  then pure []
+                  else do
+                    dlqRes <- liftIO $ publishToDeadLetterQueue appLogger appCtx validMsgs (maybeToMonoid firstAttrs) errText
+                    case dlqRes of
+                      Right _ -> pure $ map fst validMsgs
+                      Left _ -> pure []
               Right ids -> pure ids
 
         let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ Just msgIds
@@ -205,8 +212,10 @@ kafkaService :: Log.Logger -> AuthContext -> TracerProvider -> [Text] -> Int -> 
 kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaService" do
   instanceUuid <- UUID.toText <$> UUID.nextRandom
   let clientId = "monoscope-" <> T.take 8 instanceUuid
-      allTopics = kafkaTopics <> [appCtx.config.kafkaDeadLetterTopic]
-      consumerSub = K.topics (map K.TopicName allTopics) <> K.offsetReset K.Earliest
+      -- DLQ is intentionally NOT subscribed: re-consuming our own dead letters
+      -- in the live loop just amplifies pain during a sustained downstream
+      -- outage. Drain it via a separate one-off script when needed.
+      consumerSub = K.topics (map K.TopicName kafkaTopics) <> K.offsetReset K.Earliest
 
   -- Single LogT context for the whole service; client_id (and other static
   -- consumer metadata) is attached via localData so every log entry below
@@ -217,7 +226,7 @@ kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaSer
       , "group_id" AE..= appCtx.config.kafkaGroupId
       ]
       do
-        LogBase.logInfo "Starting Kafka consumer service" (AE.object ["all_topics" AE..= allTopics, "topics" AE..= kafkaTopics, "brokers" AE..= appCtx.config.kafkaBrokers])
+        LogBase.logInfo "Starting Kafka consumer service" (AE.object ["topics" AE..= kafkaTopics, "brokers" AE..= appCtx.config.kafkaBrokers])
         bracket
           (either throwIO pure =<< K.newConsumer (consumerProps appCtx.config clientId) consumerSub)
           K.closeConsumer
@@ -232,53 +241,85 @@ kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaSer
 
               -- Group by topic: a single poll can interleave records from multiple
               -- subscribed topics; each group needs its own ce-type and attributes.
+              -- Per-partition commit: only topic-groups whose batch succeeded
+              -- (or whose poison content was successfully DLQ'd) contribute to
+              -- the offset commit. Failed groups leave their partitions alone;
+              -- librdkafka redelivers them next poll, surfacing the outage as
+              -- consumer-group lag on those partitions only — healthy
+              -- partitions advance unaffected.
               let byTopic = foldr (\r -> HM.insertWith (<>) r.crTopic.unTopicName (r :| [])) HM.empty rightRecords
-              forM_ (HM.toList byTopic) \(topic, neRecords@(recc :| _)) -> do
-                let headers = consumerRecordHeadersToHashMap recc
-                    ceType = ceTypeFor appCtx.config.kafkaDeadLetterTopic topic headers
-                    attributes = HM.insert "ce-type" ceType headers
-                    allRecords = consumerRecordToTuple <$> toList neRecords
-                LogBase.localData ["topic" AE..= topic, "ce_type" AE..= ceType, "record_count" AE..= length allRecords] do
-                  result <- liftIO
-                    $ tryAny
-                    $ runBackground appLogger appCtx tp
-                    $ withSpan
-                      "kafka.process_batch"
-                      [ ("topic", OA.toAttribute topic)
-                      , ("message_count", OA.toAttribute (length allRecords))
-                      , ("ce-type", OA.toAttribute ceType)
-                      , ("client_id", OA.toAttribute clientId)
-                      ]
-                    $ \sp -> do
-                      addEvent sp "batch.started" []
-                      res <- try $ fn allRecords attributes
-                      case res of
-                        Left (e :: SomeException) -> do
+                  processGroup (topic, neRecords@(recc :| _)) = do
+                    let headers = consumerRecordHeadersToHashMap recc
+                        ceType = ceTypeFor appCtx.config.kafkaDeadLetterTopic topic headers
+                        attributes = HM.insert "ce-type" ceType headers
+                        allRecords = consumerRecordToTuple <$> toList neRecords
+                        successTps = tpsFor topic neRecords
+                    LogBase.localData ["topic" AE..= topic, "ce_type" AE..= ceType, "record_count" AE..= length allRecords] do
+                      result <- liftIO
+                        $ tryAny
+                        $ runBackground appLogger appCtx tp
+                        $ withSpan
+                          "kafka.process_batch"
+                          [ ("topic", OA.toAttribute topic)
+                          , ("message_count", OA.toAttribute (length allRecords))
+                          , ("ce-type", OA.toAttribute ceType)
+                          , ("client_id", OA.toAttribute clientId)
+                          ]
+                        $ \sp -> do
+                          addEvent sp "batch.started" []
+                          res <- try $ fn allRecords attributes
+                          case res of
+                            Left (e :: SomeException) -> do
+                              let !errText = toText $ show e
+                              addEvent sp "batch.failed" [("error", OA.toAttribute errText)]
+                              setStatus sp (Error errText)
+                              throwIO e
+                            Right ids -> do
+                              addEvent sp "batch.completed" [("processed_count", OA.toAttribute (length ids))]
+                              setStatus sp Ok
+                              pure ids
+                      case result of
+                        Right _ -> pure successTps
+                        Left e -> do
                           let !errText = toText $ show e
-                          addEvent sp "batch.failed" [("error", OA.toAttribute errText)]
-                          setStatus sp (Error errText)
-                          throwIO e
-                        Right ids -> do
-                          addEvent sp "batch.completed" [("processed_count", OA.toAttribute (length ids))]
-                          setStatus sp Ok
-                          pure ids
-                  case result of
-                    Right _ -> pass
-                    Left e -> do
-                      let !errText = toText $ show e
-                      LogBase.logAttention "kafkaService: error processing batch" (AE.object ["error" AE..= errText, "attributes" AE..= attributes])
-                      unless (isUnrecoverableError e)
-                        $ liftIO
-                        $ publishToDeadLetterQueue appLogger appCtx allRecords attributes errText
+                          LogBase.logAttention "kafkaService: error processing batch" (AE.object ["error" AE..= errText, "attributes" AE..= attributes])
+                          -- Hasql transient → don't commit (lag grows, librdkafka
+                          -- redelivers). Anything else is poison → park in DLQ
+                          -- and commit only if the DLQ publish succeeded.
+                          if Hasql.isTransientException e
+                            then pure []
+                            else do
+                              dlqRes <- liftIO $ publishToDeadLetterQueue appLogger appCtx allRecords attributes errText
+                              pure $ case dlqRes of
+                                Right _ -> successTps
+                                Left _ -> []
+              tps <- concatMapM processGroup (HM.toList byTopic)
 
-              unless (null rightRecords)
-                $ whenJustM (K.commitAllOffsets K.OffsetCommitAsync consumer) throwIO
+              -- No poll-thread backoff: lag growth is the outage signal under
+              -- per-partition commits. A reintroduced `threadDelay` here races
+              -- max.poll.interval.ms and triggers cooperative-sticky rebalances.
+              unless (null tps)
+                $ whenJustM (K.commitPartitionsOffsets K.OffsetCommitAsync consumer tps) throwIO
   where
     consumerRecordToTuple :: K.ConsumerRecord (Maybe ByteString) (Maybe ByteString) -> (Text, ByteString)
     consumerRecordToTuple record = (record.crTopic.unTopicName, fromMaybe "" record.crValue)
 
     consumerRecordHeadersToHashMap :: K.ConsumerRecord (Maybe ByteString) (Maybe ByteString) -> HashMap Text Text
     consumerRecordHeadersToHashMap record = HM.fromList $ map (bimap decodeUtf8 decodeUtf8) (K.headersToList record.crHeaders)
+
+    -- Max consumed offset + 1 per partition for a topic-group's records, shaped
+    -- for K.commitPartitionsOffsets. The >= 0 guard rules out librdkafka
+    -- sentinels (OffsetEnd = -1, OffsetInvalid) which shouldn't appear in
+    -- pollMessageBatch output but would rewind us to the start if committed.
+    tpsFor :: Foldable f => Text -> f (K.ConsumerRecord k v) -> [K.TopicPartition]
+    tpsFor topic neRecords =
+      [ K.TopicPartition (K.TopicName topic) p (K.PartitionOffset o)
+      | (p, o) <-
+          Map.toList
+            $ Map.fromListWith
+              max
+              [(r.crPartition, K.unOffset r.crOffset + 1) | r <- toList neRecords, K.unOffset r.crOffset >= 0]
+      ]
 
     -- Dead-letter messages carry ce-type in headers (PubSub path) or derive from original-topic (Kafka path).
     ceTypeFor :: Text -> Text -> HM.HashMap Text Text -> Text
@@ -311,12 +352,21 @@ kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaSer
       _ -> ""
 
 
--- | Publish failed messages to dead letter queue, logging any publish failures.
-publishToDeadLetterQueue :: Log.Logger -> AuthContext -> [(Text, ByteString)] -> HM.HashMap Text Text -> Text -> IO ()
+-- | Publish failed messages to dead letter queue. Returns the first Left if
+-- any individual publish failed so the caller can refuse to advance the
+-- upstream offset/ack — otherwise a broken DLQ silently drops poison data.
+--
+-- Partial-failure semantics: if N-1 messages publish and the last fails, this
+-- returns Left and the caller holds the whole batch's offsets. On the next
+-- poll librdkafka redelivers all N messages and the N-1 already-DLQ'd ones
+-- get DLQ'd again, duplicating in DLQ. The trade — duplicate DLQ entries
+-- vs. losing poison data — favors duplicates: DLQ is rare and replay tooling
+-- can dedupe by 'original-ack-id'.
+publishToDeadLetterQueue :: Log.Logger -> AuthContext -> [(Text, ByteString)] -> HM.HashMap Text Text -> Text -> IO (Either Text ())
 publishToDeadLetterQueue appLogger appCtx messages attributes errorReason = do
   let deadLetterTopic = appCtx.config.kafkaDeadLetterTopic
   currentTime <- getCurrentTime
-  forM_ messages \(origTopicOrAckId, msgData) -> do
+  results <- forM messages \(origTopicOrAckId, msgData) -> do
     let deadLetterAttrs =
           attributes
             <> HM.fromList
@@ -327,21 +377,12 @@ publishToDeadLetterQueue appLogger appCtx messages attributes errorReason = do
               ]
     result <- publishJSONToKafka appCtx deadLetterTopic (BC.unpack msgData) deadLetterAttrs
     case result of
-      Left err ->
+      Left err -> do
         runLogT "dlq" appLogger LogAttention
           $ LogBase.logAttention "publishToDeadLetterQueue: failed to publish"
           $ AE.object ["error" AE..= err, "topic" AE..= deadLetterTopic, "original_topic" AE..= origTopicOrAckId]
-      Right _ -> pass
-
-
--- | Check if exception is unrecoverable and should be discarded
-isUnrecoverableError :: SomeException -> Bool
-isUnrecoverableError e =
-  let errorMsg = show e
-   in any
-        (`T.isInfixOf` toText errorMsg)
-        [ "Unknown wire type"
-        , "project API Key and project ID not available"
-        , "Unexpected end of input"
-        , "Invalid UTF-8 stream"
-        ]
+        pure (Left err)
+      Right _ -> pure (Right ())
+  -- sequence_ over [Either Text ()] yields the FIRST Left (and pure ()
+  -- otherwise). Subsequent failures only appear in the dlq log above.
+  pure $ sequence_ results
