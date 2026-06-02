@@ -576,7 +576,7 @@ logRecordById = lookupOtelRecord Nothing
 otelSpanColsSql :: HI.Sql
 otelSpanColsSql =
   [HI.sql|project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource,
-          COALESCE(hashes, '{}'), kind, status_code, status_message, COALESCE(start_time, timestamp), end_time, events, links, duration, name, parent_id, summary, date::timestamptz|]
+          COALESCE(hashes, '{}'), kind, status_code, status_message, COALESCE(start_time, timestamp), end_time, events, links, duration, name, parent_id, summary, date::timestamptz, errors, COALESCE(message_size_bytes, 0)|]
 
 
 lookupOtelRecord :: DB es => Maybe Text -> UTCTime -> UUID.UUID -> Eff es (Maybe OtelLogsAndSpans)
@@ -713,9 +713,9 @@ spanRecordByProjectAndId pid = lookupOtelRecord (Just pid.toText)
 spanRecordByName :: DB es => Projects.ProjectId -> Text -> Text -> Eff es (Maybe OtelLogsAndSpans)
 spanRecordByName pid trId spanName = do
   Hasql.interpOne
-    [HI.sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource,
-                COALESCE(hashes, '{}'), kind, status_code, status_message, COALESCE(start_time, timestamp), end_time, events, links, duration, name, parent_id, summary, date::timestamptz
-            FROM otel_logs_and_spans where project_id=#{pid.toText} and context___trace_id = #{trId} and name=#{spanName} LIMIT 1|]
+    $ [HI.sql| SELECT |]
+    <> otelSpanColsSql
+    <> [HI.sql| FROM otel_logs_and_spans where project_id=#{pid.toText} and context___trace_id = #{trId} and name=#{spanName} LIMIT 1|]
 
 
 getDataPointsData :: (DB es, Time.Time :> es) => Projects.ProjectId -> (Maybe UTCTime, Maybe UTCTime) -> Eff es [MetricDataPoint]
@@ -1182,6 +1182,7 @@ otelColumns =
       , ("summary", arr (.summary))
       , ("date", top (param . (.date)))
       , ("message_size_bytes", top (param . (.message_size_bytes)))
+      , ("errors", aeson (.errors))
       ]
 
 
@@ -1239,151 +1240,38 @@ data Context = Context
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Context
 
 
+-- Field order matches 'otelSpanColsSql' (and the INSERT path in 'otelColumns')
+-- so FromRow / DecodeRow can be derived generically. Reorder both in lockstep.
 data OtelLogsAndSpans = OtelLogsAndSpans
-  { id :: Text -- UUID
-  , project_id :: Text
+  { project_id :: Text
+  , id :: Text -- UUID
   , timestamp :: UTCTime
-  , parent_id :: Maybe Text
   , observed_timestamp :: Maybe UTCTime
-  , hashes :: V.Vector Text
-  , name :: Maybe Text
-  , kind :: Maybe Text
-  , status_code :: Maybe Text
-  , status_message :: Maybe Text
+  , context :: Maybe Context
   , level :: Maybe Text
   , severity :: Maybe Severity
   , body :: Maybe (AesonText AE.Value)
-  , duration :: Maybe Int64
-  , start_time :: UTCTime
-  , end_time :: Maybe UTCTime
-  , context :: Maybe Context
-  , events :: Maybe (AesonText AE.Value)
-  , links :: Maybe Text
   , attributes :: Maybe (AesonText (Map Text AE.Value))
   , resource :: Maybe (AesonText (Map Text AE.Value))
+  , hashes :: V.Vector Text
+  , kind :: Maybe Text
+  , status_code :: Maybe Text
+  , status_message :: Maybe Text
+  , start_time :: UTCTime
+  , end_time :: Maybe UTCTime
+  , events :: Maybe (AesonText AE.Value)
+  , links :: Maybe Text
+  , duration :: Maybe Int64
+  , name :: Maybe Text
+  , parent_id :: Maybe Text
   , summary :: V.Vector Text
   , date :: UTCTime
-  , errors :: Maybe AE.Value
+  , errors :: Maybe (AesonText AE.Value)
   , message_size_bytes :: Int64
   }
   deriving (Generic, Show)
-  deriving anyclass (NFData)
+  deriving anyclass (FromRow, HI.DecodeRow, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake OtelLogsAndSpans
-
-
--- Custom FromRow/DecodeRow instances match the column order in SELECT queries:
--- project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource,
--- hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
-instance HI.DecodeRow OtelLogsAndSpans where
-  decodeRow =
-    mk
-      <$> HI.decodeRow
-      <*> HI.decodeRow
-      <*> HI.decodeRow
-      <*> HI.decodeRow
-      <*> HI.decodeRow
-      <*> HI.decodeRow
-      <*> HI.decodeRow
-      <*> HI.decodeRow
-      <*> HI.decodeRow
-      <*> HI.decodeRow
-      <*> HI.decodeRow
-      <*> HI.decodeRow
-      <*> HI.decodeRow
-      <*> HI.decodeRow
-      <*> HI.decodeRow
-      <*> HI.decodeRow
-      <*> HI.decodeRow
-      <*> HI.decodeRow
-      <*> HI.decodeRow
-      <*> HI.decodeRow
-      <*> HI.decodeRow
-      <*> HI.decodeRow
-      <*> HI.decodeRow
-    where
-      mk project_id' id' timestamp' observed_timestamp' context' level' severity' body' attributes' resource' hashes' kind' status_code' status_message' start_time' end_time' events' links' duration' name' parent_id' summary' date' =
-        OtelLogsAndSpans
-          { id = id'
-          , project_id = project_id'
-          , timestamp = timestamp'
-          , parent_id = parent_id'
-          , observed_timestamp = observed_timestamp'
-          , hashes = hashes'
-          , name = name'
-          , kind = kind'
-          , status_code = status_code'
-          , status_message = status_message'
-          , level = level'
-          , severity = severity'
-          , body = body'
-          , duration = duration'
-          , start_time = start_time'
-          , end_time = end_time'
-          , context = context'
-          , events = events'
-          , links = links'
-          , attributes = attributes'
-          , resource = resource'
-          , summary = summary'
-          , date = date'
-          , errors = Nothing
-          , message_size_bytes = 0
-          }
-
-
-instance FromRow OtelLogsAndSpans where
-  fromRow = do
-    project_id' <- field
-    id' <- field
-    timestamp' <- field
-    observed_timestamp' <- field
-    context' <- field
-    level' <- field
-    severity' <- field
-    body' <- field
-    attributes' <- field
-    resource' <- field
-    hashes' <- field
-    kind' <- field
-    status_code' <- field
-    status_message' <- field
-    start_time' <- field
-    end_time' <- field
-    events' <- field
-    links' <- field
-    duration' <- field
-    name' <- field
-    parent_id' <- field
-    summary' <- field
-    date' <- field
-    return
-      $ OtelLogsAndSpans
-        { id = id'
-        , project_id = project_id'
-        , timestamp = timestamp'
-        , parent_id = parent_id'
-        , observed_timestamp = observed_timestamp'
-        , hashes = hashes'
-        , name = name'
-        , kind = kind'
-        , status_code = status_code'
-        , status_message = status_message'
-        , level = level'
-        , severity = severity'
-        , body = body'
-        , duration = duration'
-        , start_time = start_time'
-        , end_time = end_time'
-        , context = context'
-        , events = events'
-        , links = links'
-        , attributes = attributes'
-        , resource = resource'
-        , summary = summary'
-        , date = date'
-        , errors = Nothing
-        , message_size_bytes = 0
-        }
 
 
 -- | Extract error events from OpenTelemetry span events
