@@ -38,7 +38,6 @@ import Network.Wai.Test qualified as WT
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Servant qualified
 import Servant.Server.Generic (genericServeTWithContext)
-import System.Types (effToServantHandlerTest)
 
 
 specJson :: AE.Value

@@ -2,7 +2,7 @@ module CLI.CLISpec (spec) where
 
 import Relude hiding (get, put)
 
-import Control.Lens ((&), (.~), (^.))
+import Control.Lens ((.~), (^.))
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Lazy qualified as LBS

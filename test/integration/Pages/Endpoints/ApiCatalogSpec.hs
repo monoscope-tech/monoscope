@@ -1,37 +1,24 @@
 module Pages.Endpoints.ApiCatalogSpec (spec) where
 
-import Control.Concurrent (threadDelay)
-import Data.Aeson (Value)
 import Data.Default (def)
-import Data.List (sort)
 import Data.Aeson qualified as AE
-import Data.Aeson.KeyMap qualified as AEKM
-import Data.ByteString.Lazy qualified as BL
-import Data.HashMap.Strict qualified as HashMap
-import Data.List (find)
-import Data.Int (Int64)
-import Data.Time (UTCTime, ZonedTime, addUTCTime, defaultTimeLocale, formatTime, getCurrentTime)
+import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as UUID
-import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
-import Database.PostgreSQL.Simple (Only (..), query)
+import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Models.Apis.Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
-import OddJobs.Job (Job (..))
-import Pages.Anomalies qualified as AnomalyList
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Endpoints qualified as ApiCatalog
 import Pkg.Components.Table qualified as Table
 import Pkg.TestUtils
-import ProcessMessage (processMessages)
 import BackgroundJobs qualified
 import Relude
 import Relude.Unsafe qualified as Unsafe
-import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, pendingWith, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, shouldBe, shouldSatisfy)
 import Utils (toXXHash)
 
 

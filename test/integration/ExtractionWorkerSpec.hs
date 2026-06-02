@@ -14,7 +14,7 @@ import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Pkg.TestUtils
 import Relude
 import System.Config (AuthContext (..))
-import Test.Hspec (Spec, aroundAll, describe, it, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, aroundAll, describe, it, shouldSatisfy)
 
 
 pid :: Projects.ProjectId

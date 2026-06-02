@@ -8,7 +8,6 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Transact qualified as PGT
 import Models.Projects.ProjectMembers (TeamMemberVM (..), TeamVM (..))
 import Models.Projects.ProjectMembers qualified as ProjectMembers
-import Models.Projects.Projects (UserId (..))
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper
 import Pages.Projects (TBulkActionForm (..), TeamForm (..))

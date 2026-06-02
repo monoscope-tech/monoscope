@@ -3,10 +3,8 @@ module MonitoringSpec (spec) where
 import BackgroundJobs (checkTriggeredQueryMonitors)
 import Data.Aeson qualified as AE
 import Data.Effectful.Notify (Notification (..))
-import Data.ByteString.Lazy qualified as BL
 import Data.Default (def)
 import Data.HashMap.Strict qualified as HashMap
-import Data.Map.Strict qualified as Map
 import Data.Pool (withResource)
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as UUID
@@ -15,7 +13,6 @@ import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Dashboards (DashboardVM (..))
-import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Dashboards qualified as Dashboards
 import Pages.Monitors (AlertUpsertForm (..), convertToQueryMonitor)

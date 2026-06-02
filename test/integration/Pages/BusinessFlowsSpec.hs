@@ -1,14 +1,12 @@
 module Pages.BusinessFlowsSpec (spec) where
 
-import BackgroundJobs qualified
 import Data.Aeson qualified as AE
-import Data.Int (Int64)
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Lazy qualified as BL
 import Data.Pool (Pool, withResource)
 import System.Config qualified
 import Data.Text qualified as T
-import Data.Time (UTCTime, addUTCTime, getCurrentTime, getZonedTime)
+import Data.Time (getCurrentTime, getZonedTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
@@ -16,7 +14,6 @@ import Database.PostgreSQL.Simple (Connection, Only (..))
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Projects.Projects qualified as Projects
-import OddJobs.Job (Job (..))
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Settings qualified as LemonSqueezy
 import Pages.Onboarding qualified as Onboarding
@@ -28,7 +25,6 @@ import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils hiding (testPid)
 import Relude
 import Servant.API (ResponseHeader (..), lookupResponseHeader)
-import Servant.Htmx
 import Servant.Server qualified as ServantS
 import Test.Hspec
 

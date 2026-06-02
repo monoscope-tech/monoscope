@@ -1,7 +1,7 @@
 module Opentelemetry.TraceSessionPropagationSpec (spec) where
 
 import Data.HashMap.Strict qualified as HM
-import Data.Time (UTCTime, addUTCTime, getCurrentTime)
+import Data.Time (addUTCTime, getCurrentTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
