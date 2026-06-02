@@ -279,9 +279,8 @@ buildDescriptionPrompt issue =
 classifyIssueCriticality :: ELLM.LLM :> es => AuthContext -> Issues.Issue -> Eff es (Either Text (Bool, Int, Int))
 classifyIssueCriticality authCtx issue = runExceptT do
   res <- ExceptT $ AI.callOpenAIAPIEff authCtx.config.openaiSmallModel (buildCriticalityPrompt issue) authCtx.config.openaiApiKey
-  (response, _) <- hoistEither $ AI.getNormalTupleReponse res
-  case lines response of
-    [criticalStr, breakingStr, incrementalStr] ->
+  case T.strip <$> lines (T.strip res) of
+    (criticalStr : breakingStr : incrementalStr : _) ->
       pure (T.toLower criticalStr == "critical", fromMaybe 0 $ readMaybe $ toString breakingStr, fromMaybe 0 $ readMaybe $ toString incrementalStr)
     _ -> hoistEither $ Left "Invalid response format from LLM"
 
