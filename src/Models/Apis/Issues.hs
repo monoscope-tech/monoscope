@@ -298,7 +298,7 @@ data Issue = Issue
   , lastNotifiedAt :: Maybe ZonedTime
   }
   deriving stock (Generic, Show)
-  deriving anyclass (FromRow, HI.DecodeRow, HI.EncodeRow, NFData, ToRow)
+  deriving anyclass (FromRow, HI.DecodeRow, NFData)
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "issues", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Issue)
 
 
@@ -1163,7 +1163,7 @@ data Report = Report
   , endTime :: UTCTime
   }
   deriving stock (Generic, Show)
-  deriving anyclass (FromRow, HI.DecodeRow, HI.EncodeRow, NFData, ToRow)
+  deriving anyclass (FromRow, HI.DecodeRow, NFData)
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "reports", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Report)
 
 
