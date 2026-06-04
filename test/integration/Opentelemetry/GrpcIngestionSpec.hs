@@ -4,7 +4,7 @@ module Opentelemetry.GrpcIngestionSpec (spec) where
 
 import Control.Lens ((.~))
 import Data.Effectful.Hasql qualified as Hasql
-import Data.Generics.Product (field)
+import Data.Generics.Product qualified as GL
 import Data.Map.Strict qualified as Map
 import Data.Time (addUTCTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
@@ -178,7 +178,7 @@ spec = aroundAll withTestResources do
             (Map.singleton "test.tag" (AE.String tag)) Nothing frozenTime
       rows <- Telemetry.mintOtelLogIds (V.generate bulkN mkRow) & runTestBg frozenTime tr
       let firstId = (rows V.! 0).id
-          rows' = rows V.// [(poisonIdx, (rows V.! poisonIdx) & field @"id" .~ firstId)]
+          rows' = rows V.// [(poisonIdx, (rows V.! poisonIdx) & GL.field @"id" .~ firstId)]
       runTestBg frozenTime tr $ Telemetry.bulkInsertOtelLogsAndSpansTF False rows'
       counts :: [Int64] <- runQueryEffect tr
         $ Hasql.interp [HI.sql|SELECT count(*)::bigint FROM otel_logs_and_spans WHERE attributes ->> 'test.tag' = #{tag}|]
