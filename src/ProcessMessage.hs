@@ -658,17 +658,19 @@ redactJSON ps0 = go [fromMaybe p (T.stripPrefix "." p) | p <- V.toList ps0]
       AET.Array xs
         | null cps -> v
         | otherwise -> AET.Array $ V.map (go cps) xs
-        where cps = mapMaybe (\p -> T.stripPrefix "[]." p <|> T.stripPrefix "[]" p) ps
+        where
+          cps = mapMaybe (\p -> T.stripPrefix "[]." p <|> T.stripPrefix "[]" p) ps
       AET.String{} | any T.null ps -> AET.String "[REDACTED]"
       AET.Number{} | any T.null ps -> AET.String "[REDACTED]"
       _ -> v
 
     -- Match @k@ against a path on a @.@ boundary, returning the remainder.
     -- Avoids allocating @k <> "."@ per (key, path) pair.
-    matchKey !k path = T.stripPrefix k path >>= \rest -> case T.uncons rest of
-      Nothing -> Just ""
-      Just ('.', rest') -> Just rest'
-      _ -> Nothing
+    matchKey !k path =
+      T.stripPrefix k path >>= \rest -> case T.uncons rest of
+        Nothing -> Just ""
+        Just ('.', rest') -> Just rest'
+        _ -> Nothing
 
 
 -- valueToFields takes an aeson object and converts it into a vector of paths to
