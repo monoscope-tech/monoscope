@@ -326,8 +326,8 @@ tests:
       - src
       - test/integration
     ghc-options:
+      # -threaded is already in the global ghc-options; do not repeat it here.
       - -fno-write-ide-info
-      - -threaded
       - -rtsopts
       - '"-with-rtsopts=-N -A64m"'
       - -O0

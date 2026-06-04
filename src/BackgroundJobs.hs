@@ -22,7 +22,7 @@ import Data.Either qualified as Unsafe
 import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HashSet
 import Data.List as L (partition)
-import Data.List.Extra (chunksOf, groupBy)
+import Data.List.Extra (chunksOf, groupBy, headDef)
 import Data.Map.Strict qualified as Map
 import Data.Ord (clamp)
 import Data.Pool (withResource)
@@ -700,7 +700,7 @@ processBackgroundJob authCtx bgJob =
         jobStats :: [(Text, Int64)] <- Hasql.interp [HI.sql|SELECT status, COUNT(*)::bigint FROM background_jobs WHERE created_at >= #{since}::timestamptz GROUP BY status|]
         stuckJobs :: [Int64] <- Hasql.interp [HI.sql|SELECT COUNT(*)::bigint FROM background_jobs WHERE status = 'locked' AND locked_at < #{addUTCTime (-1800) now}::timestamptz|]
         let statsLine = T.intercalate " | " $ map (\(s, c) -> s <> ": " <> show c) jobStats
-            stuck = fromMaybe 0 $ listToMaybe stuckJobs
+            stuck = headDef 0 stuckJobs
         send
           $ "**Job Health** (last 24h)\n"
           <> statsLine

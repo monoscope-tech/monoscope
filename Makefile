@@ -202,14 +202,14 @@ build-chart-cli-linux:
 # every tmux-live-reload* reuses it. Pin survives ghcid restarts because we
 # track the pane id in a tmux user option instead of grepping for the command.
 define tmux_run
-	@PANE=$$(tmux show-option -v -q @build-pane 2>/dev/null); \
+	@PANE=$$(tmux show-option -wv -q @build-pane 2>/dev/null); \
 	if [ -n "$$PANE" ] && tmux list-panes -a -F '#{pane_id}' | grep -qx "$$PANE"; then \
 		echo "Reusing pinned pane $$PANE"; \
 		tmux send-keys -t "$$PANE" C-c; sleep 0.5; \
 		tmux send-keys -t "$$PANE" '$(1)' Enter; \
 	elif [ -n "$$TMUX" ]; then \
 		PANE=$$(tmux split-window -d -h -P -F '#{pane_id}' '$(1)'); \
-		tmux set-option -g @build-pane "$$PANE"; \
+		tmux set-option -w @build-pane "$$PANE"; \
 		echo "Pinned new pane $$PANE (use 'make tmux-unpin' to clear)"; \
 	else \
 		echo "Not in tmux — running in foreground"; \
@@ -218,10 +218,10 @@ define tmux_run
 endef
 
 tmux-pin-here:
-	@tmux set-option -g @build-pane "$$TMUX_PANE" && echo "Pinned build pane to $$TMUX_PANE"
+	@tmux set-option -w @build-pane "$$TMUX_PANE" && echo "Pinned build pane to $$TMUX_PANE"
 
 tmux-unpin:
-	@tmux set-option -gu @build-pane && echo "Unpinned build pane"
+	@tmux set-option -wu @build-pane && echo "Unpinned build pane"
 
 tmux-live-reload:
 	$(call tmux_run,make live-reload 2>&1 | tee build.log)
