@@ -153,29 +153,29 @@ spec = aroundAll withTestResources do
 
     -- 2 * bisectCap + 1 → 3 slices including a singleton tail; poisonIdx
     -- lands mid second slice. Tracks bisectCap in Telemetry.hs.
-    let n = 1025
+    let bulkN = 1025
         poisonIdx = 519
 
     it "Test 8.1: slices and persists a >bisectCap OTLP request" $ \tr -> do
       key <- createTestAPIKey tr pid "Bulk Test Key"
       let tag = "bulk-8.1"
-          bodies = [tag <> "/" <> show i | i <- [1 .. n] :: [Int]]
+          bodies = [tag <> "/" <> show i | i <- [1 .. bulkN] :: [Int]]
       void $ OtlpServer.logsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ createOtelLogAtTime key bodies frozenTime)
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
       counts :: [Int64] <- runQueryEffect tr
         $ Hasql.interp [HI.sql|SELECT count(*)::bigint FROM otel_logs_and_spans WHERE body::text LIKE '%' || #{tag} || '%'|]
-      counts `shouldBe` [fromIntegral n]
+      counts `shouldBe` [fromIntegral bulkN]
 
-    it "Test 8.2: isolates one poison row in a >bisectCap batch (count == n-1)" $ \tr -> do
+    it "Test 8.2: isolates one poison row in a >bisectCap batch (count == bulkN-1)" $ \tr -> do
       -- NUL in flat text attr bypasses JSONB cleaning → server reject → bisection drops.
       let tag = "bulk-8.2"
           mkRow i = Telemetry.mkSystemLog pid "bulk-poison-test" Telemetry.SLInfo (show i)
             (Map.fromList (("test.tag", AE.String tag) : [("code.function.name", AE.String "G\NULET") | i == poisonIdx]))
             Nothing frozenTime
-      runTestBg frozenTime tr $ Telemetry.bulkInsertOtelLogsAndSpansTF False =<< Telemetry.mintOtelLogIds (V.generate n mkRow)
+      runTestBg frozenTime tr $ Telemetry.bulkInsertOtelLogsAndSpansTF False =<< Telemetry.mintOtelLogIds (V.generate bulkN mkRow)
       counts :: [Int64] <- runQueryEffect tr
         $ Hasql.interp [HI.sql|SELECT count(*)::bigint FROM otel_logs_and_spans WHERE attributes ->> 'test.tag' = #{tag}|]
-      counts `shouldBe` [fromIntegral (n - 1)]
+      counts `shouldBe` [fromIntegral (bulkN - 1)]
 
     -- Tests for gRPC Authorization header authentication (NEW!)
     describe "gRPC Authorization Header Authentication" do
