@@ -51,7 +51,6 @@ import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled (..))
 import Effectful.Log (Log)
 import Effectful.Reader.Static qualified as Eff
-import GHC.Clock (getMonotonicTime)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
@@ -140,41 +139,40 @@ processMessages
 processMessages [] _ = pure []
 processMessages msgs attrs = do
   appCtx <- Eff.ask @AuthContext
-  t0 <- liftIO getMonotonicTime
-  rMsgs <-
-    catMaybes <$> forM msgs \(ackId, msg) -> case AE.eitherDecodeStrict (BS.filter (/= 0) msg) of
-      Left err -> Nothing <$ Log.logAttention "Error parsing json msgs" (object ["AckId" .= ackId, "Error" .= err, "OriginalMsg" .= decodeUtf8 @Text msg])
-      Right m -> pure $ Just (ackId, BS.length msg, m)
+  (rMsgs, mWrite) <- Metrics.timed Metrics.ingestDecodeHist [] do
+    rMsgs <-
+      catMaybes <$> forM msgs \(ackId, msg) -> case AE.eitherDecodeStrict (BS.filter (/= 0) msg) of
+        Left err -> Nothing <$ Log.logAttention "Error parsing json msgs" (object ["AckId" .= ackId, "Error" .= err, "OriginalMsg" .= decodeUtf8 @Text msg])
+        Right m -> pure $ Just (ackId, BS.length msg, m)
+    if null rMsgs
+      then pure (rMsgs, Nothing)
+      else do
+        projectCaches <-
+          liftIO $ HM.fromList <$> forM (ordNub $ (\(_, _, m) -> UUIDId m.projectId) <$> rMsgs) \pid -> do
+            cache <-
+              Cache.fetchWithCache appCtx.projectCache pid
+                $ fmap (fromMaybe Projects.defaultProjectCache)
+                . Projects.projectCacheByIdIO appCtx.hasqlJobsPool
+            pure (pid, cache)
 
-  if null rMsgs
-    then pure []
-    else do
-      projectCaches <-
-        liftIO $ HM.fromList <$> forM (ordNub $ (\(_, _, m) -> UUIDId m.projectId) <$> rMsgs) \pid -> do
-          cache <-
-            Cache.fetchWithCache appCtx.projectCache pid
-              $ fmap (fromMaybe Projects.defaultProjectCache)
-              . Projects.projectCacheByIdIO appCtx.hasqlJobsPool
-          pure (pid, cache)
+        spans <- forM rMsgs \(rmAckId, rawSize, msg) -> runMaybeT do
+          let pid = UUIDId msg.projectId
+              !msgSize = fromIntegral rawSize
+          cache <- hoistMaybe $ HM.lookup pid projectCaches
+          let !totalDailyEvents = fromIntegral cache.dailyEventCount + fromIntegral cache.dailyMetricCount
+              !isFreeTier = cache.paymentPlan == "Free"
+          guard $ not (isFreeTier && totalDailyEvents >= freeTierDailyMaxEvents)
+          spanId <- lift UUID.genUUID
+          trId <- lift $ UUID.toText <$> UUID.genUUID
+          pure $! convertRequestMessageToSpan msg msgSize (spanId, trId)
 
-      spans <- forM rMsgs \(rmAckId, rawSize, msg) -> runMaybeT do
-        let pid = UUIDId msg.projectId
-            !msgSize = fromIntegral rawSize
-        cache <- hoistMaybe $ HM.lookup pid projectCaches
-        let !totalDailyEvents = fromIntegral cache.dailyEventCount + fromIntegral cache.dailyMetricCount
-            !isFreeTier = cache.paymentPlan == "Free"
-        guard $ not (isFreeTier && totalDailyEvents >= freeTierDailyMaxEvents)
-        spanId <- lift UUID.genUUID
-        trId <- lift $ UUID.toText <$> UUID.genUUID
-        pure $! convertRequestMessageToSpan msg msgSize (spanId, trId)
+        pure (rMsgs, Just (projectCaches, V.fromList (catMaybes spans)))
 
-      let !spanVec = V.fromList (catMaybes spans)
-      tDecode <- liftIO getMonotonicTime
-      Metrics.recordMs Metrics.ingestDecodeHist ((tDecode - t0) * 1000) []
-      Metrics.timed Metrics.ingestWriteHist []
-        $ Telemetry.insertAndHandOff appCtx.env.enableTimefusionWrites appCtx.extractionWorker projectCaches spanVec
+  forM_ mWrite \(projectCaches, spanVec) ->
+    Metrics.timed Metrics.ingestWriteHist []
+      $ Telemetry.insertAndHandOff appCtx.env.enableTimefusionWrites appCtx.extractionWorker projectCaches spanVec
 
-      pure $ map fst3 rMsgs
+  pure $ map fst3 rMsgs
 
 
 -- | Process a single span to extract entities for hash-stamping.
@@ -660,8 +658,8 @@ redactJSON ps0 = go [fromMaybe p (T.stripPrefix "." p) | p <- V.toList ps0]
         | otherwise -> AET.Array $ V.map (go cps) xs
         where
           cps = mapMaybe (\p -> T.stripPrefix "[]." p <|> T.stripPrefix "[]" p) ps
-      AET.String{} | any T.null ps -> AET.String "[REDACTED]"
-      AET.Number{} | any T.null ps -> AET.String "[REDACTED]"
+      AET.String{} | "" `elem` ps -> AET.String "[REDACTED]"
+      AET.Number{} | "" `elem` ps -> AET.String "[REDACTED]"
       _ -> v
 
     -- Match @k@ against a path on a @.@ boundary, returning the remainder.
