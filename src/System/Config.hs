@@ -56,6 +56,7 @@ data EnvConfig = EnvConfig
   , kafkaUsername :: Text
   , kafkaPassword :: Text
   , enableKafkaService :: Bool
+  , kafkaGroupConcurrency :: Int
   , smtpHost :: Text
   , smtpPort :: Int
   , smtpTls :: Bool
@@ -213,6 +214,7 @@ instance DefConfig EnvConfig where
       , postmarkFromEmail = "hello@monoscope.tech"
       , openaiModel = "gpt-5.4-mini"
       , openaiSmallModel = "gpt-5.4-nano"
+      , kafkaGroupConcurrency = 4
       , extractionWorkerShards = 4
       , extractionQueueCapacity = 64
       , drainFlushBatchSize = 1000

@@ -57,6 +57,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (Context (trace_state), OtelLogsAndSpans (..), generateSummary)
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Pkg.DeriveUtils (AesonText (..), UUIDId (..), unAesonTextMaybe)
+import Pkg.Metrics qualified as Metrics
 import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Pkg.SchemaLearning.Catalog qualified as Fields
 import Pkg.SchemaLearning.Hot qualified as SchemaHot
@@ -138,45 +139,40 @@ processMessages
 processMessages [] _ = pure []
 processMessages msgs attrs = do
   appCtx <- Eff.ask @AuthContext
-  rMsgs <-
-    catMaybes <$> forM msgs \(ackId, msg) -> case AE.eitherDecodeStrict (BS.filter (/= 0) msg) of
-      Left err -> Nothing <$ Log.logAttention "Error parsing json msgs" (object ["AckId" .= ackId, "Error" .= err, "OriginalMsg" .= decodeUtf8 @Text msg])
-      Right m -> pure $ Just (ackId, BS.length msg, m)
+  (rMsgs, mWrite) <- Metrics.timed Metrics.ingestDecodeHist [] do
+    rMsgs <-
+      catMaybes <$> forM msgs \(ackId, msg) -> case AE.eitherDecodeStrict (BS.filter (/= 0) msg) of
+        Left err -> Nothing <$ Log.logAttention "Error parsing json msgs" (object ["AckId" .= ackId, "Error" .= err, "OriginalMsg" .= decodeUtf8 @Text msg])
+        Right m -> pure $ Just (ackId, BS.length msg, m)
+    if null rMsgs
+      then pure (rMsgs, Nothing)
+      else do
+        projectCaches <-
+          liftIO $ HM.fromList <$> forM (ordNub $ (\(_, _, m) -> UUIDId m.projectId) <$> rMsgs) \pid -> do
+            cache <-
+              Cache.fetchWithCache appCtx.projectCache pid
+                $ fmap (fromMaybe Projects.defaultProjectCache)
+                . Projects.projectCacheByIdIO appCtx.hasqlJobsPool
+            pure (pid, cache)
 
-  if null rMsgs
-    then pure []
-    else do
-      projectCaches <-
-        HM.fromList <$> liftIO do
-          -- Use parallel evaluation for cache fetching
-          let projectIds = (\(_, _, m) -> UUIDId m.projectId) <$> rMsgs
-          cachePairs <- forM projectIds $ \pid ->
-            Cache.fetchWithCache appCtx.projectCache pid $ \pid' -> do
-              mpjCache <- Projects.projectCacheByIdIO appCtx.hasqlJobsPool pid'
-              pure $! fromMaybe Projects.defaultProjectCache mpjCache
-          pure $! zip projectIds cachePairs
+        spans <- forM rMsgs \(rmAckId, rawSize, msg) -> runMaybeT do
+          let pid = UUIDId msg.projectId
+              !msgSize = fromIntegral rawSize
+          cache <- hoistMaybe $ HM.lookup pid projectCaches
+          let !totalDailyEvents = fromIntegral cache.dailyEventCount + fromIntegral cache.dailyMetricCount
+              !isFreeTier = cache.paymentPlan == "Free"
+          guard $ not (isFreeTier && totalDailyEvents >= freeTierDailyMaxEvents)
+          spanId <- lift UUID.genUUID
+          trId <- lift $ UUID.toText <$> UUID.genUUID
+          pure $! convertRequestMessageToSpan msg msgSize (spanId, trId)
 
-      spans <- forM rMsgs \(rmAckId, rawSize, msg) -> do
-        let pid = UUIDId msg.projectId
-            !msgSize = fromIntegral rawSize
-        case HM.lookup pid projectCaches of
-          Just cache ->
-            let !totalDailyEvents = fromIntegral cache.dailyEventCount + fromIntegral cache.dailyMetricCount
-                !isFreeTier = cache.paymentPlan == "Free"
-                !hasExceededLimit = isFreeTier && totalDailyEvents >= freeTierDailyMaxEvents
-             in if hasExceededLimit
-                  then pure Nothing
-                  else do
-                    spanId <- UUID.genUUID
-                    trId <- UUID.toText <$> UUID.genUUID
-                    let !span' = convertRequestMessageToSpan msg msgSize (spanId, trId)
-                    pure (Just span')
-          Nothing -> pure Nothing
+        pure (rMsgs, Just (projectCaches, V.fromList (catMaybes spans)))
 
-      let !spanVec = V.fromList (catMaybes spans)
-      Telemetry.insertAndHandOff appCtx.env.enableTimefusionWrites appCtx.extractionWorker projectCaches spanVec
+  forM_ mWrite \(projectCaches, spanVec) ->
+    Metrics.timed Metrics.ingestWriteHist []
+      $ Telemetry.insertAndHandOff appCtx.env.enableTimefusionWrites appCtx.extractionWorker projectCaches spanVec
 
-      pure $ map fst3 rMsgs
+  pure $ map fst3 rMsgs
 
 
 -- | Process a single span to extract entities for hash-stamping.
@@ -631,6 +627,10 @@ instance {-# OVERLAPPING #-} AE.FromJSON (Either Text [Text]) where
 
 -- | Walk the JSON once, redact any fields which are in the list of json paths to be redacted.
 --
+-- Empty paths short-circuits to structural sharing: subtrees with no live path
+-- are returned by pointer instead of rebuilt. Key matching requires a @.@
+-- boundary (tightening over a prior prefix-match implementation).
+--
 -- >>> redactJSON (V.fromList ["menu.id."]) [aesonQQ| {"menu":{"id":"file", "name":"John"}} |]
 -- Object (fromList [("menu",Object (fromList [("id",String "[REDACTED]"),("name",String "John")]))])
 --
@@ -642,19 +642,33 @@ instance {-# OVERLAPPING #-} AE.FromJSON (Either Text [Text]) where
 --
 -- >>> redactJSON (V.fromList ["menu.[].id", "menu.[].names.[]"]) [aesonQQ| {"menu":[{"id":"i1", "names":["John","okon"]}, {"id":"i2"}]} |]
 -- Object (fromList [("menu",Array [Object (fromList [("id",String "[REDACTED]"),("names",Array [String "[REDACTED]",String "[REDACTED]"])]),Object (fromList [("id",String "[REDACTED]")])])])
+--
+-- Prefix without a path-boundary does NOT match:
+--
+-- >>> redactJSON (V.fromList ["password"]) [aesonQQ| {"pass":{"word":"secret"}} |]
+-- Object (fromList [("pass",Object (fromList [("word",String "secret")]))])
 redactJSON :: V.Vector Text -> AE.Value -> AE.Value
-redactJSON paths' = redactJSON' (map stripPrefixDot $ V.toList paths')
+redactJSON ps0 = go [fromMaybe p (T.stripPrefix "." p) | p <- V.toList ps0]
   where
-    redactJSON' !paths value = case value of
-      AET.String v -> if any T.null paths then AET.String "[REDACTED]" else AET.String v
-      AET.Number v -> if any T.null paths then AET.String "[REDACTED]" else AET.Number v
-      AET.Null -> AET.Null
-      AET.Bool v -> AET.Bool v
-      AET.Object objMap -> AET.Object $ AEKM.mapWithKey (\k v -> redactJSON' (matchKey (AEK.toText k) paths) v) objMap
-      AET.Array jsonList -> AET.Array $ V.map (redactJSON' (mapMaybe (\path -> T.stripPrefix "[]." path <|> T.stripPrefix "[]" path) paths)) jsonList
+    go [] v = v
+    go ps v = case v of
+      AET.Object om -> AET.Object $ AEKM.mapWithKey (\k -> go (mapMaybe (matchKey (AEK.toText k)) ps)) om
+      AET.Array xs
+        | null cps -> v
+        | otherwise -> AET.Array $ V.map (go cps) xs
+        where
+          cps = mapMaybe (\p -> T.stripPrefix "[]." p <|> T.stripPrefix "[]" p) ps
+      AET.String{} | "" `elem` ps -> AET.String "[REDACTED]"
+      AET.Number{} | "" `elem` ps -> AET.String "[REDACTED]"
+      _ -> v
 
-    matchKey !k = mapMaybe (\path -> T.stripPrefix (k <> ".") path <|> T.stripPrefix k path)
-    stripPrefixDot !p = fromMaybe p (T.stripPrefix "." p)
+    -- Match @k@ against a path on a @.@ boundary, returning the remainder.
+    -- Avoids allocating @k <> "."@ per (key, path) pair.
+    matchKey !k path =
+      T.stripPrefix k path >>= \rest -> case T.uncons rest of
+        Nothing -> Just ""
+        Just ('.', rest') -> Just rest'
+        _ -> Nothing
 
 
 -- valueToFields takes an aeson object and converts it into a vector of paths to

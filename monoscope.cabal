@@ -200,6 +200,7 @@ library
       Pkg.ErrorMetrics
       Pkg.ExtractionWorker
       Pkg.Mail
+      Pkg.Metrics
       Pkg.Parser
       Pkg.Parser.Expr
       Pkg.Parser.Stats
@@ -801,6 +802,7 @@ test-suite test-dev
       Pkg.ErrorMetrics
       Pkg.ExtractionWorker
       Pkg.Mail
+      Pkg.Metrics
       Pkg.Parser
       Pkg.Parser.Expr
       Pkg.Parser.Stats
