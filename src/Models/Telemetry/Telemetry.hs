@@ -1015,7 +1015,7 @@ bisectCap = 2 ^ maxBisectDepth
 -- path (enableTf=False) accepts the same per-slice contract — partial commit
 -- on failure, no rollback across slices.
 --
--- >>> bisectCap * length otelColumns <= maxParamsPerStmt
+-- >>> bisectCap * length otelColumns <= 65535  -- libpq Bind param ceiling
 -- True
 bulkInsertOtelLogsAndSpans :: (Hasql :> es, IOE :> es, Log :> es) => V.Vector OtelLogsAndSpans -> Eff es Int64
 bulkInsertOtelLogsAndSpans = fmap Relude.sum . traverse insertSlice . VS.chunksOf bisectCap
