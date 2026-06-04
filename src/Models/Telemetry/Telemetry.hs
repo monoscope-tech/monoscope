@@ -85,6 +85,7 @@ import Data.Time (UTCTime)
 import Data.Time.Clock (addUTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import Data.Vector.Split qualified as VS
 import Database.PostgreSQL.Simple (ResultError (ConversionFailed))
 
 import Data.Effectful.Hasql (Hasql)
@@ -999,10 +1000,7 @@ handOffBatches worker caches records = do
           unless ok $ atomicModifyIORef' worker.droppedBatches \n -> (n + 1, ())
 
 
--- 'maxParamsPerStmt' anchors the doctest invariant below; if you raise depth,
--- the doctest catches the overflow.
-maxParamsPerStmt, maxBisectDepth, bisectCap :: Int
-maxParamsPerStmt = 65535
+maxBisectDepth, bisectCap :: Int
 maxBisectDepth = 9
 bisectCap = 2 ^ maxBisectDepth
 
@@ -1020,8 +1018,7 @@ bisectCap = 2 ^ maxBisectDepth
 -- >>> bisectCap * length otelColumns <= maxParamsPerStmt
 -- True
 bulkInsertOtelLogsAndSpans :: (Hasql :> es, IOE :> es, Log :> es) => V.Vector OtelLogsAndSpans -> Eff es Int64
-bulkInsertOtelLogsAndSpans =
-  fmap Relude.sum . traverse insertSlice . unfoldr (\v -> if V.null v then Nothing else Just (V.splitAt bisectCap v))
+bulkInsertOtelLogsAndSpans = fmap Relude.sum . traverse insertSlice . VS.chunksOf bisectCap
   where
     insertSlice rs = V.mapM (\r -> (r,) <$> otelRowSnippet r) rs >>= go maxBisectDepth
 

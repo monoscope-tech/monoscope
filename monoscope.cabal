@@ -429,6 +429,7 @@ library
     , valor >=1.0.0.0
     , vector
     , vector-algorithms
+    , vector-split
     , wai
     , wai-cors
     , wai-extra

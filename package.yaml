@@ -151,6 +151,7 @@ library:
     - proto-lens
     - proto-lens-runtime
     - vector-algorithms
+    - vector-split
     - effectful
     - effectful-core
     - effectful-th
