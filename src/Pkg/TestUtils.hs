@@ -1245,9 +1245,9 @@ createTestAPIKey tr projectId keyName = do
 -- | Ingest via resource attribute (key embedded in payload) or via header (key in Authorization header)
 ingestLog, ingestLogWithHeader :: TestResources -> Text -> Text -> UTCTime -> IO ()
 ingestLog tr apiKey bodyText timestamp =
-  void $ OtlpServer.logsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ createOtelLogAtTime apiKey bodyText timestamp)
+  void $ OtlpServer.logsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ createOtelLogAtTime apiKey [bodyText] timestamp)
 ingestLogWithHeader tr apiKey bodyText timestamp =
-  void $ runTestBg frozenTime tr $ OtlpServer.processLogsRequest (Just apiKey) (createOtelLogAtTime "" bodyText timestamp)
+  void $ runTestBg frozenTime tr $ OtlpServer.processLogsRequest (Just apiKey) (createOtelLogAtTime "" [bodyText] timestamp)
 
 
 -- | Like 'ingestLog' but timestamps the record with the current test-clock value.
@@ -1498,10 +1498,10 @@ mkResource :: Text -> [PC.KeyValue] -> PR.Resource
 mkResource apiKey extras = defMessage & PRF.attributes .~ ([mkAttr "service.name" "test-service", mkAttr "at-project-key" apiKey] <> extras)
 
 
-createOtelLogAtTime :: Text -> Text -> UTCTime -> LS.ExportLogsServiceRequest
-createOtelLogAtTime apiKey bodyText timestamp =
-  let logRecord = defMessage & PLF.timeUnixNano .~ toNanos timestamp & PLF.body .~ (defMessage & PCF.stringValue .~ bodyText) & PLF.severityText .~ "INFO"
-      scopeLog = defMessage & PLF.logRecords .~ [logRecord]
+createOtelLogAtTime :: Text -> [Text] -> UTCTime -> LS.ExportLogsServiceRequest
+createOtelLogAtTime apiKey bodyTexts timestamp =
+  let mkRec b = defMessage & PLF.timeUnixNano .~ toNanos timestamp & PLF.body .~ (defMessage & PCF.stringValue .~ b) & PLF.severityText .~ "INFO"
+      scopeLog = defMessage & PLF.logRecords .~ map mkRec bodyTexts
    in defMessage & LSF.resourceLogs .~ [defMessage & PLF.resource .~ mkResource apiKey [] & PLF.scopeLogs .~ [scopeLog]]
 
 

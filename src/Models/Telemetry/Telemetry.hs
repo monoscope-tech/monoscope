@@ -106,8 +106,6 @@ import Hasql.DynamicStatements.Snippet (Snippet, encoderAndParam, param, toPrepa
 import Hasql.Encoders qualified as E
 import Hasql.Interpolate qualified as HI
 import Hasql.Session qualified as HSession
-import Hasql.Transaction qualified as Tx
-import Hasql.Transaction.Sessions qualified as TxS
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), WrappedEnum (..), WrappedEnumSC (..), encodeEnumSC, idFromText, textArrayEnc, unAesonTextMaybe)
@@ -1000,59 +998,40 @@ handOffBatches worker caches records = do
           unless ok $ atomicModifyIORef' worker.droppedBatches \n -> (n + 1, ())
 
 
--- | Hasql bulk insert for OtelLogsAndSpans, chunked to fit the 65535-param PG
--- bind limit (700 * 88 = 61600). On a non-transient failure bisects to isolate
--- poison rows (cap: 10 levels → isolates single rows for batches ≤ 1024).
--- Transient errors propagate so the caller can retry. Row snippets are built
--- once above 'go' so otelRowSnippet effects fire exactly once regardless of
--- bisection depth.
---
--- The 1024 cap is set by 'messagesPerPubsubPullBatch' (default 200) and the
--- Kafka batchSize: raise the cap if either grows past 1024 or a poison row
--- will only get BISECT_DEPTH_EXHAUSTED instead of POISON_ROW_DROPPED.
-bulkInsertOtelLogsAndSpans :: (Hasql :> es, IOE :> es, Log :> es) => V.Vector OtelLogsAndSpans -> Eff es Int64
-bulkInsertOtelLogsAndSpans records
-  | V.null records = pure 0
-  | otherwise = do
-      when (V.length records > 1024)
-        $ Log.logInfo "BISECT_CAP_MAY_NOT_ISOLATE"
-        $ AE.object ["record_count" AE..= V.length records, "cap" AE..= (1024 :: Int)]
-      pairs <- V.mapM (\r -> (r,) <$> otelRowSnippet r) records
-      go (10 :: Int) pairs
-  where
-    rawInsert pairs
-      | [single] <- chunks = Hasql.session (HSession.statement () (chunkStmt single))
-      | otherwise = Hasql.transaction TxS.ReadCommitted TxS.Write $ Relude.sum <$> traverse (Tx.statement () . chunkStmt) chunks
-      where
-        chunkSize = 700
-        chunks = unfoldr (\v -> if V.null v then Nothing else Just (V.splitAt chunkSize v)) (V.map snd pairs)
-        chunkStmt c = toPreparableStatement (otelInsertHeader <> mconcat (intersperse ", " (V.toList c))) D.rowsAffected
+maxParamsPerStmt, maxBisectDepth, bisectCap :: Int
+maxParamsPerStmt = 65535
+maxBisectDepth = 9
+bisectCap = 2 ^ maxBisectDepth
 
-    -- Outer guards V.null; the single-row branch handles 1; recursive calls
-    -- always split a ≥2 vector — so 'go' never sees an empty vector and
-    -- never recurses past V.length == 1. No V.null guard needed here.
-    go d pairs =
-      tryAny (rawInsert pairs) >>= \case
-        Right n -> pure n
-        Left e
-          | Hasql.isTransientException e -> throwIO e
-          | V.length pairs == 1 ->
-              Log.logAttention
-                "POISON_ROW_DROPPED"
-                (AE.object ["id" AE..= (fst (V.head pairs)).id, "error" AE..= show @Text e])
-                $> 0
-          | d <= 0 -> do
-              Log.logAttention "BISECT_DEPTH_EXHAUSTED"
-                $ AE.object ["record_count" AE..= V.length pairs, "error" AE..= show @Text e]
-              throwIO e
-          | otherwise ->
-              -- <*> is sequential in Eff es: a throw from the left half
-              -- short-circuits and skips the right half. Correct for
-              -- transients (whole batch must retry); also means a
-              -- depth-exhausted left half doesn't attempt the right.
-              -- Don't introduce parallelism here without revisiting that.
-              let (l, r) = V.splitAt (V.length pairs `div` 2) pairs
-               in (+) <$> go (d - 1) l <*> go (d - 1) r
+
+-- | Bulk-insert with row-level poison isolation. Slices oversized inputs so
+-- every Bind fits libpq's 65 535-param ceiling; the bisector then has enough
+-- depth (log2 bisectCap) to drill any failing slice to the offending row.
+--
+-- >>> bisectCap * length otelColumns <= maxParamsPerStmt
+-- True
+bulkInsertOtelLogsAndSpans :: (Hasql :> es, IOE :> es, Log :> es) => V.Vector OtelLogsAndSpans -> Eff es Int64
+bulkInsertOtelLogsAndSpans = fmap Relude.sum . traverse insertSlice . unfoldr step
+  where
+    step v = if V.null v then Nothing else Just (V.splitAt bisectCap v)
+    insertSlice rs = V.mapM (\r -> (r,) <$> otelRowSnippet r) rs >>= go maxBisectDepth
+
+    go d pairs = tryAny (Hasql.session $ HSession.statement () (stmt pairs)) >>= \case
+      Right n -> pure n
+      Left e
+        | Hasql.isTransientException e -> throwIO e
+        | V.length pairs == 1 ->
+            Log.logAttention "POISON_ROW_DROPPED"
+              (AE.object ["id" AE..= (fst (V.head pairs)).id, "error" AE..= show @Text e]) $> 0
+        | d <= 0 ->
+            Log.logAttention "BISECT_DEPTH_EXHAUSTED"
+              (AE.object ["record_count" AE..= V.length pairs, "error" AE..= show @Text e]) >> throwIO e
+        | otherwise ->
+            let (l, r) = V.splitAt (V.length pairs `div` 2) pairs
+             in (+) <$> go (d - 1) l <*> go (d - 1) r
+
+    stmt pairs = toPreparableStatement
+      (otelInsertHeader <> mconcat (intersperse ", " (V.toList (V.map snd pairs)))) D.rowsAffected
 
 
 -- | Thrown when an OtelLogsAndSpans row reaches the bulk insert path with an
