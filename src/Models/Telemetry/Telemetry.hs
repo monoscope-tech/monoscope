@@ -60,6 +60,7 @@ module Models.Telemetry.Telemetry (
   insertSystemLog,
   generateSummary,
   otelSpanColsSql,
+  bisectCap,
 )
 where
 
@@ -998,6 +999,8 @@ handOffBatches worker caches records = do
           unless ok $ atomicModifyIORef' worker.droppedBatches \n -> (n + 1, ())
 
 
+-- 'maxParamsPerStmt' anchors the doctest invariant below; if you raise depth,
+-- the doctest catches the overflow.
 maxParamsPerStmt, maxBisectDepth, bisectCap :: Int
 maxParamsPerStmt = 65535
 maxBisectDepth = 9
@@ -1032,6 +1035,7 @@ bulkInsertOtelLogsAndSpans = fmap Relude.sum . traverse insertSlice . unfoldr st
                 (AE.object ["record_count" AE..= V.length pairs, "error" AE..= show @Text e])
                 >> throwIO e
           | otherwise ->
+              -- <*> is sequential in Eff: a throw from the left short-circuits the right. Do not parallelize.
               let (l, r) = V.splitAt (V.length pairs `div` 2) pairs
                in (+) <$> go (d - 1) l <*> go (d - 1) r
 
