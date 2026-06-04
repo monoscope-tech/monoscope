@@ -1016,22 +1016,29 @@ bulkInsertOtelLogsAndSpans = fmap Relude.sum . traverse insertSlice . unfoldr st
     step v = if V.null v then Nothing else Just (V.splitAt bisectCap v)
     insertSlice rs = V.mapM (\r -> (r,) <$> otelRowSnippet r) rs >>= go maxBisectDepth
 
-    go d pairs = tryAny (Hasql.session $ HSession.statement () (stmt pairs)) >>= \case
-      Right n -> pure n
-      Left e
-        | Hasql.isTransientException e -> throwIO e
-        | V.length pairs == 1 ->
-            Log.logAttention "POISON_ROW_DROPPED"
-              (AE.object ["id" AE..= (fst (V.head pairs)).id, "error" AE..= show @Text e]) $> 0
-        | d <= 0 ->
-            Log.logAttention "BISECT_DEPTH_EXHAUSTED"
-              (AE.object ["record_count" AE..= V.length pairs, "error" AE..= show @Text e]) >> throwIO e
-        | otherwise ->
-            let (l, r) = V.splitAt (V.length pairs `div` 2) pairs
-             in (+) <$> go (d - 1) l <*> go (d - 1) r
+    go d pairs =
+      tryAny (Hasql.session $ HSession.statement () (stmt pairs)) >>= \case
+        Right n -> pure n
+        Left e
+          | Hasql.isTransientException e -> throwIO e
+          | V.length pairs == 1 ->
+              Log.logAttention
+                "POISON_ROW_DROPPED"
+                (AE.object ["id" AE..= (fst (V.head pairs)).id, "error" AE..= show @Text e])
+                $> 0
+          | d <= 0 ->
+              Log.logAttention
+                "BISECT_DEPTH_EXHAUSTED"
+                (AE.object ["record_count" AE..= V.length pairs, "error" AE..= show @Text e])
+                >> throwIO e
+          | otherwise ->
+              let (l, r) = V.splitAt (V.length pairs `div` 2) pairs
+               in (+) <$> go (d - 1) l <*> go (d - 1) r
 
-    stmt pairs = toPreparableStatement
-      (otelInsertHeader <> mconcat (intersperse ", " (V.toList (V.map snd pairs)))) D.rowsAffected
+    stmt pairs =
+      toPreparableStatement
+        (otelInsertHeader <> mconcat (intersperse ", " (V.toList (V.map snd pairs))))
+        D.rowsAffected
 
 
 -- | Thrown when an OtelLogsAndSpans row reaches the bulk insert path with an
