@@ -1010,8 +1010,9 @@ bisectCap = 2 ^ maxBisectDepth
 -- every Bind fits libpq's 65 535-param ceiling; the bisector then has enough
 -- depth (log2 bisectCap) to drill any failing slice to the offending row.
 --
--- Slices commit independently. A transient mid-traverse leaves earlier slices
--- durable; caller-level retry duplicates them (no ON CONFLICT).
+-- Slices commit independently — no enclosing transaction, since TF doesn't
+-- support real transactions and PG matches. Retry duplicates are absorbed by
+-- TF dedup on (id, timestamp) at flush time; PG doesn't retry.
 --
 -- >>> bisectCap * length otelColumns <= maxParamsPerStmt
 -- True
