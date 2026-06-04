@@ -45,7 +45,7 @@ TEST_MATCH ?=
 live-test-dev:
 	USE_EXTERNAL_DB=true LOG_LEVEL=attention \
 	ghcid --command 'cabal repl monoscope:test:test-dev --ghc-options="-osuf dyn_o -hisuf dyn_hi -O0" --with-compiler=$(GHC)' \
-		--test ':main $(if $(TEST_MATCH),--match=$(TEST_MATCH))' --warnings 2>&1 | tee build-test-dev.log
+		--test ':main $(if $(TEST_MATCH),--match="$(TEST_MATCH)")' --warnings 2>&1 | tee build-test-dev.log
 
 hot-reload:
 	livereload -f reload.trigger static/public/ & \
@@ -241,4 +241,4 @@ test-e2e-real: e2e-install
 test-e2e-ui: e2e-install
 	cd e2e && npx playwright test --ui
 
-.PHONY: all test fmt lint fix-lint live-reload live-reload-cli live-reload-doctests build-chart-cli build-chart-cli-linux tmux-live-reload tmux-live-reload-cli tmux-pin-here tmux-unpin web-components-watch e2e-install test-e2e test-e2e-real test-e2e-ui gen-proto sync-otel-proto update-otel-proto minio-local timefusion-start timefusion-stop test-integration-tf
+.PHONY: all test fmt lint fix-lint live-reload live-reload-cli live-reload-doctests live-test-dev build-chart-cli build-chart-cli-linux tmux-live-reload tmux-live-reload-cli tmux-pin-here tmux-unpin web-components-watch e2e-install test-e2e test-e2e-real test-e2e-ui gen-proto sync-otel-proto update-otel-proto minio-local timefusion-start timefusion-stop test-integration-tf

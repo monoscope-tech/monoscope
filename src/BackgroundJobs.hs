@@ -653,7 +653,7 @@ processBackgroundJob authCtx bgJob =
 
       -- Section 4: New issues
       tryLog "newIssues" do
-        issueCounts :: [(Projects.ProjectId, Text, Int)] <-
+        issueCounts :: [(Projects.ProjectId, Text, Int64)] <-
           Hasql.interp
             [HI.sql|SELECT project_id::uuid, issue_type, COUNT(*)::bigint FROM apis.issues WHERE created_at > #{since}::timestamptz GROUP BY project_id, issue_type ORDER BY COUNT(*) DESC|]
         unless (null issueCounts) do
@@ -674,7 +674,7 @@ processBackgroundJob authCtx bgJob =
 
       -- Section 5: Monitor alerts
       tryLog "monitorAlerts" do
-        alertCounts :: [(Projects.ProjectId, Text, Int)] <-
+        alertCounts :: [(Projects.ProjectId, Text, Int64)] <-
           Hasql.interp
             [HI.sql|SELECT m.project_id::uuid, m.current_status, COUNT(*)::bigint FROM monitors.query_monitors m
                WHERE m.deactivated_at IS NULL AND m.deleted_at IS NULL AND m.current_status != 'normal'
@@ -754,7 +754,7 @@ processBackgroundJob authCtx bgJob =
       let since = addUTCTime (-86400) now
           send msg = sendMessageToDiscord msg authCtx.config.discordWebhookUrl
       -- Paying projects only; cross-check reported (apis.daily_usage) vs ingested (otel + metrics) over last 24h.
-      rows :: [(Projects.ProjectId, Text, Text, Int, Int)] <-
+      rows :: [(Projects.ProjectId, Text, Text, Int64, Int64)] <-
         Hasql.interp
           [HI.sql|
             WITH reported AS (
