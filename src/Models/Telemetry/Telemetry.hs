@@ -60,6 +60,7 @@ module Models.Telemetry.Telemetry (
   insertSystemLog,
   generateSummary,
   otelSpanColsSql,
+  bisectCap,
 )
 where
 
@@ -1244,7 +1245,7 @@ data Context = Context
 -- 'otelSpanColsSql' + 'otelColumns' are touched in the same change:
 --
 -- >>> length otelColumns
--- 25
+-- 89
 data OtelLogsAndSpans = OtelLogsAndSpans
   { project_id :: Text
   , id :: Text -- UUID

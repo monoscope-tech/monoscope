@@ -152,9 +152,9 @@ spec = aroundAll withTestResources do
       V.length metricResult.dataset `shouldSatisfy` (> 0)
 
     -- 2 * bisectCap + 1 → 3 slices including a singleton tail; poisonIdx
-    -- lands mid second slice. Tracks bisectCap in Telemetry.hs.
-    let bulkN = 1025
-        poisonIdx = 519
+    -- lands mid second slice.
+    let bulkN = 2 * Telemetry.bisectCap + 1
+        poisonIdx = Telemetry.bisectCap + 7
 
     it "Test 8.1: slices and persists a >bisectCap OTLP request" $ \tr -> do
       key <- createTestAPIKey tr pid "Bulk Test Key"
