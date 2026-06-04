@@ -3,7 +3,6 @@ module Pkg.Queue (pubsubService, kafkaService, publishJSONToKafka, publishToDead
 import Control.Exception.Annotated (checkpoint)
 import Control.Lens ((^?), _Just)
 import Control.Lens qualified as L
-import Control.Monad.Extra (concatMapM)
 import Control.Monad.Trans.Resource (runResourceT)
 import Data.Aeson qualified as AE
 import Data.Annotation (toAnnotation)
@@ -35,6 +34,7 @@ import System.IO.Unsafe (unsafePerformIO)
 import System.Tracing (SpanStatus (..), addEvent, setStatus, withSpan)
 import System.Types (ATBackgroundCtx, runBackground)
 import UnliftIO (throwIO)
+import UnliftIO.Async (pooledForConcurrentlyN)
 import UnliftIO.Exception (bracket, try, tryAny)
 import UnliftIO.MVar (modifyMVar)
 
@@ -239,16 +239,11 @@ kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaSer
                 $ LogBase.logAttention "Kafka poll returned errors"
                 $ AE.object ["error_count" AE..= length leftRecords, "errors" AE..= map show leftRecords]
 
-              -- Group by topic: a single poll can interleave records from multiple
-              -- subscribed topics; each group needs its own ce-type and attributes.
-              -- Per-partition commit: only topic-groups whose batch succeeded
-              -- (or whose poison content was successfully DLQ'd) contribute to
-              -- the offset commit. Failed groups leave their partitions alone;
-              -- librdkafka redelivers them next poll, surfacing the outage as
-              -- consumer-group lag on those partitions only — healthy
-              -- partitions advance unaffected.
-              let byTopic = foldr (\r -> HM.insertWith (<>) r.crTopic.unTopicName (r :| [])) HM.empty rightRecords
-                  processGroup (topic, neRecords@(recc :| _)) = do
+              -- Group per (topic, partition) so groups can run concurrently
+              -- below while each tpsFor still yields exactly one TP — failed
+              -- groups stall only their own partition's commits.
+              let byTP = foldr (\r -> Map.insertWith (<>) (r.crTopic.unTopicName, r.crPartition) (r :| [])) Map.empty rightRecords
+                  processGroup ((topic, _partition), neRecords@(recc :| _)) = do
                     let headers = consumerRecordHeadersToHashMap recc
                         ceType = ceTypeFor appCtx.config.kafkaDeadLetterTopic topic headers
                         attributes = HM.insert "ce-type" ceType headers
@@ -293,7 +288,11 @@ kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaSer
                               pure $ case dlqRes of
                                 Right _ -> successTps
                                 Left _ -> []
-              tps <- concatMapM processGroup (HM.toList byTopic)
+              -- Bound must stay well under the hasql pool (shared with web) —
+              -- AcquisitionTimeout (→ Hasql.isTransientException → no commit →
+              -- redelivery storm) is the failure mode to avoid. Single committer
+              -- (this thread) below — no concurrent commitPartitionsOffsets.
+              tps <- concat <$> pooledForConcurrentlyN appCtx.config.kafkaGroupConcurrency (Map.toList byTP) processGroup
 
               -- No poll-thread backoff: lag growth is the outage signal under
               -- per-partition commits. A reintroduced `threadDelay` here races
