@@ -22,7 +22,7 @@ import Data.Either qualified as Unsafe
 import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HashSet
 import Data.List as L (partition)
-import Data.List.Extra (chunksOf, groupBy)
+import Data.List.Extra (chunksOf, groupBy, headDef)
 import Data.Map.Strict qualified as Map
 import Data.Ord (clamp)
 import Data.Pool (withResource)
@@ -653,7 +653,7 @@ processBackgroundJob authCtx bgJob =
 
       -- Section 4: New issues
       tryLog "newIssues" do
-        issueCounts :: [(Projects.ProjectId, Text, Int)] <-
+        issueCounts :: [(Projects.ProjectId, Text, Int64)] <-
           Hasql.interp
             [HI.sql|SELECT project_id::uuid, issue_type, COUNT(*)::bigint FROM apis.issues WHERE created_at > #{since}::timestamptz GROUP BY project_id, issue_type ORDER BY COUNT(*) DESC|]
         unless (null issueCounts) do
@@ -674,7 +674,7 @@ processBackgroundJob authCtx bgJob =
 
       -- Section 5: Monitor alerts
       tryLog "monitorAlerts" do
-        alertCounts :: [(Projects.ProjectId, Text, Int)] <-
+        alertCounts :: [(Projects.ProjectId, Text, Int64)] <-
           Hasql.interp
             [HI.sql|SELECT m.project_id::uuid, m.current_status, COUNT(*)::bigint FROM monitors.query_monitors m
                WHERE m.deactivated_at IS NULL AND m.deleted_at IS NULL AND m.current_status != 'normal'
@@ -697,10 +697,10 @@ processBackgroundJob authCtx bgJob =
 
       -- Section 6: Background job health
       tryLog "jobHealth" do
-        jobStats :: [(Text, Int)] <- Hasql.interp [HI.sql|SELECT status, COUNT(*)::bigint FROM background_jobs WHERE created_at >= #{since}::timestamptz GROUP BY status|]
-        stuckJobs :: [Int] <- Hasql.interp [HI.sql|SELECT COUNT(*)::bigint FROM background_jobs WHERE status = 'locked' AND locked_at < #{addUTCTime (-1800) now}::timestamptz|]
+        jobStats :: [(Text, Int64)] <- Hasql.interp [HI.sql|SELECT status, COUNT(*)::bigint FROM background_jobs WHERE created_at >= #{since}::timestamptz GROUP BY status|]
+        stuckJobs :: [Int64] <- Hasql.interp [HI.sql|SELECT COUNT(*)::bigint FROM background_jobs WHERE status = 'locked' AND locked_at < #{addUTCTime (-1800) now}::timestamptz|]
         let statsLine = T.intercalate " | " $ map (\(s, c) -> s <> ": " <> show c) jobStats
-            stuck = fromMaybe 0 $ listToMaybe stuckJobs
+            stuck = headDef 0 stuckJobs
         send
           $ "**Job Health** (last 24h)\n"
           <> statsLine
@@ -754,7 +754,7 @@ processBackgroundJob authCtx bgJob =
       let since = addUTCTime (-86400) now
           send msg = sendMessageToDiscord msg authCtx.config.discordWebhookUrl
       -- Paying projects only; cross-check reported (apis.daily_usage) vs ingested (otel + metrics) over last 24h.
-      rows :: [(Projects.ProjectId, Text, Text, Int, Int)] <-
+      rows :: [(Projects.ProjectId, Text, Text, Int64, Int64)] <-
         Hasql.interp
           [HI.sql|
             WITH reported AS (

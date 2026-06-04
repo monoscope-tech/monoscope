@@ -168,6 +168,8 @@ idFromText :: Text -> Maybe (UUIDId name)
 idFromText = fmap UUIDId . UUID.fromText
 
 
+-- | DerivingVia wrapper for enum-like sum types stored in TEXT columns.
+-- Decoders use @D.text@; for a real PG ENUM column use 'WrappedEnumSC' with @'Just "schema.type"@ instead.
 newtype WrappedEnum (prefix :: Symbol) a = WrappedEnum a
   deriving (Generic)
 
@@ -346,6 +348,7 @@ instance Typeable a => ToSchema (JsonValueSchema a) where
   declareNamedSchema _ = declareNamedSchema (Proxy @AET.Value)
 
 
+-- | Like 'WrappedEnum' but uses the unmodified @Show@/@Read@ representation. TEXT columns only.
 newtype WrappedEnumShow a = WrappedEnumShow a
   deriving (Generic)
 
