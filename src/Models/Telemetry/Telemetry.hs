@@ -60,7 +60,6 @@ module Models.Telemetry.Telemetry (
   insertSystemLog,
   generateSummary,
   otelSpanColsSql,
-  bisectCap,
 )
 where
 
@@ -1011,12 +1010,17 @@ bisectCap = 2 ^ maxBisectDepth
 -- every Bind fits libpq's 65 535-param ceiling; the bisector then has enough
 -- depth (log2 bisectCap) to drill any failing slice to the offending row.
 --
+-- Slices commit independently. A transient mid-traverse leaves earlier slices
+-- durable; caller-level retry duplicates them (no ON CONFLICT).
+--
 -- >>> bisectCap * length otelColumns <= maxParamsPerStmt
 -- True
 bulkInsertOtelLogsAndSpans :: (Hasql :> es, IOE :> es, Log :> es) => V.Vector OtelLogsAndSpans -> Eff es Int64
 bulkInsertOtelLogsAndSpans = fmap Relude.sum . traverse insertSlice . unfoldr step
   where
-    step v = if V.null v then Nothing else Just (V.splitAt bisectCap v)
+    step v
+      | V.null v = Nothing
+      | otherwise = Just (V.splitAt bisectCap v)
     insertSlice rs = V.mapM (\r -> (r,) <$> otelRowSnippet r) rs >>= go maxBisectDepth
 
     go d pairs =
@@ -1041,7 +1045,7 @@ bulkInsertOtelLogsAndSpans = fmap Relude.sum . traverse insertSlice . unfoldr st
 
     stmt pairs =
       toPreparableStatement
-        (otelInsertHeader <> mconcat (intersperse ", " (V.toList (V.map snd pairs))))
+        (otelInsertHeader <> mconcat (intersperse ", " (V.toList (snd <$> pairs))))
         D.rowsAffected
 
 

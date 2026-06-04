@@ -151,8 +151,10 @@ spec = aroundAll withTestResources do
       metricResult <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just "summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") []
       V.length metricResult.dataset `shouldSatisfy` (> 0)
 
-    -- n = 2 * bisectCap + 1 exposes slicing off-by-one and the singleton-tail slice.
-    let n = 2 * Telemetry.bisectCap + 1
+    -- 2 * bisectCap + 1 → 3 slices including a singleton tail; poisonIdx
+    -- lands mid second slice. Tracks bisectCap in Telemetry.hs.
+    let n = 1025
+        poisonIdx = 519
 
     it "Test 8.1: slices and persists a >bisectCap OTLP request" $ \tr -> do
       key <- createTestAPIKey tr pid "Bulk Test Key"
@@ -167,7 +169,6 @@ spec = aroundAll withTestResources do
     it "Test 8.2: isolates one poison row in a >bisectCap batch (count == n-1)" $ \tr -> do
       -- NUL in flat text attr bypasses JSONB cleaning → server reject → bisection drops.
       let tag = "bulk-8.2"
-          poisonIdx = Telemetry.bisectCap + 7 -- mid-batch, second slice
           mkRow i = Telemetry.mkSystemLog pid "bulk-poison-test" Telemetry.SLInfo (show i)
             (Map.fromList (("test.tag", AE.String tag) : [("code.function.name", AE.String "G\NULET") | i == poisonIdx]))
             Nothing frozenTime
