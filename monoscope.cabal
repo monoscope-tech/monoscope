@@ -299,6 +299,7 @@ library
     , Unique
     , aeson
     , aeson-extra
+    , aeson-pretty
     , aeson-qq
     , annotated-exception
     , async
@@ -354,12 +355,14 @@ library
     , hs-opentelemetry-instrumentation-hasql
     , hs-opentelemetry-instrumentation-wai
     , hs-opentelemetry-sdk
+    , hspec
     , http-api-data
     , http-client
     , http-types
     , hw-kafka-client
     , insert-ordered-containers
     , jose-jwt
+    , ki
     , ki-effectful
     , langchain-hs
     , lens
@@ -386,10 +389,12 @@ library
     , parallel
     , parser-combinators
     , pg-entity
+    , pg-transact
     , postgresql-libpq
     , postgresql-migration
     , postgresql-simple
     , pretty-relative-time
+    , process
     , proto-lens
     , proto-lens-runtime
     , regex
@@ -426,6 +431,7 @@ library
     , unliftio-pool
     , unordered-containers
     , uuid
+    , uuid-quasi
     , valor >=1.0.0.0
     , vector
     , vector-algorithms
@@ -1013,7 +1019,7 @@ test-suite test-dev
     , lens-aeson
     , log-base
     , log-effectful
-    , lucid
+    , lucid >=2.9.12.1
     , lucid-aria >=0.1.0.1
     , lucid-htmx >=0.1.0.7
     , lucid-hyperscript >=0.1.0.2
@@ -1079,6 +1085,7 @@ test-suite test-dev
     , valor >=1.0.0.0
     , vector
     , vector-algorithms
+    , vector-split
     , wai
     , wai-cors
     , wai-extra
