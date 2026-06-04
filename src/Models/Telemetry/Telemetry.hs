@@ -1020,10 +1020,10 @@ bisectCap = 2 ^ maxBisectDepth
 -- >>> bisectCap * length otelColumns <= maxParamsPerStmt
 -- True
 bulkInsertOtelLogsAndSpans :: (Hasql :> es, IOE :> es, Log :> es) => V.Vector OtelLogsAndSpans -> Eff es Int64
-bulkInsertOtelLogsAndSpans records =
-  fmap Relude.sum . traverse insertSlice $ chunksOf bisectCap (V.toList records)
+bulkInsertOtelLogsAndSpans =
+  fmap Relude.sum . traverse insertSlice . unfoldr (\v -> if V.null v then Nothing else Just (V.splitAt bisectCap v))
   where
-    insertSlice chunk = V.mapM (\r -> (r,) <$> otelRowSnippet r) (V.fromList chunk) >>= go maxBisectDepth
+    insertSlice rs = V.mapM (\r -> (r,) <$> otelRowSnippet r) rs >>= go maxBisectDepth
 
     go d pairs =
       tryAny (Hasql.session $ HSession.statement () (stmt pairs)) >>= \case
@@ -1047,7 +1047,7 @@ bulkInsertOtelLogsAndSpans records =
 
     stmt pairs =
       toPreparableStatement
-        (otelInsertHeader <> mconcat (intersperse ", " (V.toList (snd <$> pairs))))
+        (otelInsertHeader <> mconcat (intersperse ", " (map snd (V.toList pairs))))
         D.rowsAffected
 
 
