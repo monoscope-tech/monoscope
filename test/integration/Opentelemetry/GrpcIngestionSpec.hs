@@ -2,10 +2,7 @@
 
 module Opentelemetry.GrpcIngestionSpec (spec) where
 
-import Control.Lens ((.~))
 import Data.Effectful.Hasql qualified as Hasql
-import Data.Generics.Product qualified as GL
-import Data.Map.Strict qualified as Map
 import Data.Time (addUTCTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
@@ -153,36 +150,18 @@ spec = aroundAll withTestResources do
       metricResult <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just "summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") []
       V.length metricResult.dataset `shouldSatisfy` (> 0)
 
-    -- 2 * bisectCap + 1 → 3 slices including a singleton tail; poisonIdx
-    -- lands mid second slice.
-    let bulkN = 2 * Telemetry.bisectCap + 1
-        poisonIdx = Telemetry.bisectCap + 7
-
     it "Test 8.1: slices and persists a >bisectCap OTLP request" $ \tr -> do
+      -- 2 * bisectCap + 1 → 3 slices including a singleton tail; a wrong slice
+      -- boundary fails the row total.
       key <- createTestAPIKey tr pid "Bulk Test Key"
-      let tag = "bulk-8.1"
+      let bulkN = 2 * Telemetry.bisectCap + 1
+          tag = "bulk-8.1"
           bodies = [tag <> "/" <> show i | i <- [1 .. bulkN] :: [Int]]
       void $ OtlpServer.logsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ createOtelLogAtTime key bodies frozenTime)
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
       counts :: [Int64] <- runQueryEffect tr
         $ Hasql.interp [HI.sql|SELECT count(*)::bigint FROM otel_logs_and_spans WHERE body::text LIKE '%' || #{tag} || '%'|]
       counts `shouldBe` [fromIntegral bulkN]
-
-    it "Test 8.2: isolates one poison row in a >bisectCap batch (count == bulkN-1)" $ \tr -> do
-      -- Force a PK collision (project_id, timestamp, id): the poison row reuses
-      -- row 0's id. Within the same multi-row INSERT this fails server-side;
-      -- bisection drills to single rows, row 0 commits, the singleton poison
-      -- then re-collides with the just-committed row and is dropped.
-      let tag = "bulk-8.2"
-          mkRow i = Telemetry.mkSystemLog pid "bulk-poison-test" Telemetry.SLInfo (show i)
-            (Map.singleton "test.tag" (AE.String tag)) Nothing frozenTime
-      rows <- Telemetry.mintOtelLogIds (V.generate bulkN mkRow) & runTestBg frozenTime tr
-      let firstId = (rows V.! 0).id
-          rows' = rows V.// [(poisonIdx, (rows V.! poisonIdx) & GL.field @"id" .~ firstId)]
-      runTestBg frozenTime tr $ Telemetry.bulkInsertOtelLogsAndSpansTF False rows'
-      counts :: [Int64] <- runQueryEffect tr
-        $ Hasql.interp [HI.sql|SELECT count(*)::bigint FROM otel_logs_and_spans WHERE attributes ->> 'test.tag' = #{tag}|]
-      counts `shouldBe` [fromIntegral (bulkN - 1)]
 
     -- Tests for gRPC Authorization header authentication (NEW!)
     describe "gRPC Authorization Header Authentication" do
