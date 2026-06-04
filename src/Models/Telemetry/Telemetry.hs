@@ -1012,7 +1012,9 @@ bisectCap = 2 ^ maxBisectDepth
 --
 -- Slices commit independently — no enclosing transaction, since TF doesn't
 -- support real transactions and PG matches. Retry duplicates are absorbed by
--- TF dedup on (id, timestamp) at flush time; PG doesn't retry.
+-- TF dedup on (id, timestamp) at flush time; PG doesn't retry. The PG-only
+-- path (enableTf=False) accepts the same per-slice contract — partial commit
+-- on failure, no rollback across slices.
 --
 -- >>> bisectCap * length otelColumns <= maxParamsPerStmt
 -- True
@@ -1046,7 +1048,7 @@ bulkInsertOtelLogsAndSpans = fmap Relude.sum . traverse insertSlice . unfoldr st
 
     stmt pairs =
       toPreparableStatement
-        (otelInsertHeader <> mconcat (intersperse ", " (V.toList (snd <$> pairs))))
+        (otelInsertHeader <> mconcat (intersperse ", " (map snd (V.toList pairs))))
         D.rowsAffected
 
 
