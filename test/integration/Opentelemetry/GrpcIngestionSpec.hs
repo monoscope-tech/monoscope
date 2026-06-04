@@ -2,6 +2,7 @@
 
 module Opentelemetry.GrpcIngestionSpec (spec) where
 
+import Data.Effectful.Hasql qualified as Hasql
 import Data.Time (addUTCTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
@@ -11,8 +12,10 @@ import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Hasql.Interpolate qualified as HI
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.GRPC.Common (GrpcError (..), GrpcException (..))
 import Network.GRPC.Common.Protobuf (Proto (..))
 import Opentelemetry.OtlpServer qualified as OtlpServer
@@ -85,7 +88,7 @@ spec = aroundAll withTestResources do
       V.length dataset `shouldSatisfy` (>= 3)
 
     it "Test 2.2: should reject log ingestion with invalid API key" $ \tr -> do
-      OtlpServer.logsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ createOtelLogAtTime "invalid-key-that-does-not-exist" "Should not be stored" frozenTime)
+      OtlpServer.logsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ createOtelLogAtTime "invalid-key-that-does-not-exist" ["Should not be stored"] frozenTime)
         `shouldThrow` \case GrpcException{grpcError = GrpcUnauthenticated} -> True; _ -> False
 
     it "Test 3.1: should ingest traces via all 3 keys using traceServiceExport" $ \tr -> do
@@ -147,13 +150,18 @@ spec = aroundAll withTestResources do
       metricResult <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just "summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") []
       V.length metricResult.dataset `shouldSatisfy` (> 0)
 
-    it "Test 8.1: should handle bulk ingestion (50+ messages)" $ \tr -> do
+    it "Test 8.1: slices and persists a >bisectCap OTLP request" $ \tr -> do
+      -- 2 * bisectCap + 1 → 3 slices including a singleton tail; a wrong slice
+      -- boundary fails the row total.
       key <- createTestAPIKey tr pid "Bulk Test Key"
-      forM_ ([1 .. 50] :: [Int]) $ \i -> ingestLog tr key ("Bulk log " <> show i) frozenTime
+      let bulkN = 2 * Telemetry.bisectCap + 1
+          tag = "bulk-8.1"
+          bodies = [tag <> "/" <> show i | i <- [1 .. bulkN] :: [Int]]
+      void $ OtlpServer.logsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ createOtelLogAtTime key bodies frozenTime)
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
-      result <- queryLogs tr (Just "kind == \"log\"")
-      dataset <- expectLogsJson result
-      V.length dataset `shouldSatisfy` (>= 50)
+      counts :: [Int64] <- runQueryEffect tr
+        $ Hasql.interp [HI.sql|SELECT count(*)::bigint FROM otel_logs_and_spans WHERE body::text LIKE '%' || #{tag} || '%'|]
+      counts `shouldBe` [fromIntegral bulkN]
 
     -- Tests for gRPC Authorization header authentication (NEW!)
     describe "gRPC Authorization Header Authentication" do
@@ -187,7 +195,7 @@ spec = aroundAll withTestResources do
         headerKey <- createTestAPIKey tr pid "header-key"
 
         -- Process with both keys - resource should take precedence
-        void $ runTestBg frozenTime tr $ OtlpServer.processLogsRequest (Just headerKey) (createOtelLogAtTime resourceKey "Dual auth log" frozenTime)
+        void $ runTestBg frozenTime tr $ OtlpServer.processLogsRequest (Just headerKey) (createOtelLogAtTime resourceKey ["Dual auth log"] frozenTime)
         void $ runAllBackgroundJobs frozenTime tr.trATCtx
 
         result <- queryLogs tr (Just "kind == \"log\"")
@@ -195,7 +203,7 @@ spec = aroundAll withTestResources do
         V.length dataset `shouldSatisfy` (>= 1)
 
       it "Test 9.5: should reject logs with invalid Authorization header" $ \tr -> do
-        runTestBg frozenTime tr (OtlpServer.processLogsRequest (Just "invalid-header-key") (createOtelLogAtTime "" "Should not be stored" frozenTime))
+        runTestBg frozenTime tr (OtlpServer.processLogsRequest (Just "invalid-header-key") (createOtelLogAtTime "" ["Should not be stored"] frozenTime))
           `shouldThrow` \case GrpcException{grpcError = GrpcUnauthenticated} -> True; _ -> False
 
       it "Test 9.6: should handle mixed authentication methods in bulk" $ \tr -> do
