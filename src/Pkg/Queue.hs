@@ -11,7 +11,6 @@ import Data.ByteString.Lazy.Base64 qualified as LB64
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Generics.Product (field)
 import Data.HashMap.Strict qualified as HM
-import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Text.Lazy.Encoding qualified as LT
 import Data.Time (getCurrentTime)
@@ -242,7 +241,7 @@ kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaSer
               -- Group per (topic, partition) so groups can run concurrently
               -- below while each tpsFor still yields exactly one TP — failed
               -- groups stall only their own partition's commits.
-              let byTP = foldr (\r -> Map.insertWith (<>) (r.crTopic.unTopicName, r.crPartition) (r :| [])) Map.empty rightRecords
+              let byTP = foldr (\r -> HM.insertWith (<>) (r.crTopic.unTopicName, r.crPartition) (r :| [])) HM.empty rightRecords
                   processGroup ((topic, _partition), neRecords@(recc :| _)) = do
                     let headers = consumerRecordHeadersToHashMap recc
                         ceType = ceTypeFor appCtx.config.kafkaDeadLetterTopic topic headers
@@ -292,7 +291,7 @@ kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaSer
               -- AcquisitionTimeout (→ Hasql.isTransientException → no commit →
               -- redelivery storm) is the failure mode to avoid. Single committer
               -- (this thread) below — no concurrent commitPartitionsOffsets.
-              tps <- concat <$> pooledForConcurrentlyN appCtx.config.kafkaGroupConcurrency (Map.toList byTP) processGroup
+              tps <- concat <$> pooledForConcurrentlyN appCtx.config.kafkaGroupConcurrency (HM.toList byTP) processGroup
 
               -- No poll-thread backoff: lag growth is the outage signal under
               -- per-partition commits. A reintroduced `threadDelay` here races
@@ -314,8 +313,8 @@ kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaSer
     tpsFor topic neRecords =
       [ K.TopicPartition (K.TopicName topic) p (K.PartitionOffset o)
       | (p, o) <-
-          Map.toList
-            $ Map.fromListWith
+          HM.toList
+            $ HM.fromListWith
               max
               [(r.crPartition, K.unOffset r.crOffset + 1) | r <- toList neRecords, K.unOffset r.crOffset >= 0]
       ]
