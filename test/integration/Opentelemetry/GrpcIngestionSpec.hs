@@ -2,6 +2,7 @@
 
 module Opentelemetry.GrpcIngestionSpec (spec) where
 
+import Control.Lens ((.~))
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Map.Strict qualified as Map
 import Data.Time (addUTCTime)
@@ -167,12 +168,17 @@ spec = aroundAll withTestResources do
       counts `shouldBe` [fromIntegral bulkN]
 
     it "Test 8.2: isolates one poison row in a >bisectCap batch (count == bulkN-1)" $ \tr -> do
-      -- NUL in flat text attr bypasses JSONB cleaning → server reject → bisection drops.
+      -- Force a PK collision (project_id, timestamp, id): the poison row reuses
+      -- row 0's id. Within the same multi-row INSERT this fails server-side;
+      -- bisection drills to single rows, row 0 commits, the singleton poison
+      -- then re-collides with the just-committed row and is dropped.
       let tag = "bulk-8.2"
           mkRow i = Telemetry.mkSystemLog pid "bulk-poison-test" Telemetry.SLInfo (show i)
-            (Map.fromList (("test.tag", AE.String tag) : [("code.function.name", AE.String "G\NULET") | i == poisonIdx]))
-            Nothing frozenTime
-      runTestBg frozenTime tr $ Telemetry.bulkInsertOtelLogsAndSpansTF False =<< Telemetry.mintOtelLogIds (V.generate bulkN mkRow)
+            (Map.singleton "test.tag" (AE.String tag)) Nothing frozenTime
+      rows <- Telemetry.mintOtelLogIds (V.generate bulkN mkRow) & runTestBg frozenTime tr
+      let firstId = (rows V.! 0).id
+          rows' = rows V.// [(poisonIdx, (rows V.! poisonIdx) & #id .~ firstId)]
+      runTestBg frozenTime tr $ Telemetry.bulkInsertOtelLogsAndSpansTF False rows'
       counts :: [Int64] <- runQueryEffect tr
         $ Hasql.interp [HI.sql|SELECT count(*)::bigint FROM otel_logs_and_spans WHERE attributes ->> 'test.tag' = #{tag}|]
       counts `shouldBe` [fromIntegral (bulkN - 1)]
