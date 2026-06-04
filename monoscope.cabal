@@ -728,6 +728,369 @@ test-suite integration-tests
     , wreq
   default-language: GHC2024
 
+test-suite test-dev
+  type: exitcode-stdio-1.0
+  main-is: Main.hs
+  other-modules:
+      BackgroundJobs
+      Data.Effectful.Hasql
+      Data.Effectful.LLM
+      Data.Effectful.Notify
+      Data.Effectful.UUID
+      Data.Effectful.Wreq
+      Devel
+      Models.Apis.Anomalies
+      Models.Apis.Endpoints
+      Models.Apis.ErrorPatterns
+      Models.Apis.Integrations
+      Models.Apis.IssueEnhancement
+      Models.Apis.Issues
+      Models.Apis.LogPatterns
+      Models.Apis.LogQueries
+      Models.Apis.Monitors
+      Models.Apis.PatternMerge
+      Models.Apis.SchemaCatalog
+      Models.Apis.ShareEvents
+      Models.Projects.Dashboards
+      Models.Projects.GitSync
+      Models.Projects.ProjectApiKeys
+      Models.Projects.ProjectMembers
+      Models.Projects.Projects
+      Models.Telemetry.Schema
+      Models.Telemetry.Telemetry
+      Opentelemetry.OtlpServer
+      Pages.Anomalies
+      Pages.BodyWrapper
+      Pages.Bots.Discord
+      Pages.Bots.Slack
+      Pages.Bots.Utils
+      Pages.Bots.Whatsapp
+      Pages.Charts.Charts
+      Pages.Charts.Types
+      Pages.CommandPalette
+      Pages.Components
+      Pages.Dashboards
+      Pages.Endpoints
+      Pages.GitSync
+      Pages.LogExplorer.Log
+      Pages.LogExplorer.LogItem
+      Pages.Monitors
+      Pages.Onboarding
+      Pages.Projects
+      Pages.Replay
+      Pages.Reports
+      Pages.Settings
+      Pages.Share
+      Pages.Telemetry
+      Pkg.AI
+      Pkg.CLIFormat
+      Pkg.Components.LogQueryBox
+      Pkg.Components.Table
+      Pkg.Components.TimePicker
+      Pkg.Components.Widget
+      Pkg.DeriveUtils
+      Pkg.Drain
+      Pkg.EmailTemplates
+      Pkg.ErrorFingerprint
+      Pkg.ErrorMetrics
+      Pkg.ExtractionWorker
+      Pkg.Mail
+      Pkg.Parser
+      Pkg.Parser.Expr
+      Pkg.Parser.Stats
+      Pkg.PatternMerge
+      Pkg.QueryCache
+      Pkg.Queue
+      Pkg.SchemaLearning.Catalog
+      Pkg.SchemaLearning.Hot
+      Pkg.SchemaLearning.Worker
+      Pkg.TestClock
+      Pkg.TestUtils
+      Pkg.TraceSessionCache
+      ProcessMessage
+      Start
+      System.Config
+      System.Logging
+      System.Server
+      System.Tracing
+      System.Types
+      Utils
+      Web.ApiHandlers
+      Web.ApiTypes
+      Web.Auth
+      Web.I18n
+      Web.MCP
+      Web.Routes
+      BackgroundJobs.DigestFlushSpec
+      BackgroundJobs.ExpirySpec
+      BackgroundJobs.NotificationsSpec
+      CLI.CLIBinarySpec
+      CLI.CLIE2ESpec
+      CLI.CLISpec
+      EndpointDiscoverySpec
+      ExtractionWorkerSpec
+      FacetsSpec
+      Lifecycle.LogPatternIncidentSpec
+      MonitoringSpec
+      Opentelemetry.GrpcIngestionSpec
+      Opentelemetry.OtlpServerSpec
+      Opentelemetry.StandardOtelSpansSpec
+      Opentelemetry.TraceSessionPropagationSpec
+      Pages.AnomaliesSpec
+      Pages.ApiSpec
+      Pages.Bots.AgenticSpec
+      Pages.Bots.BotFixtures
+      Pages.Bots.BotTestHelpers
+      Pages.Bots.DiscordSpec
+      Pages.Bots.SeedTestData
+      Pages.Bots.SlackSpec
+      Pages.Bots.WhatsappSpec
+      Pages.Bots.WorkflowsSpec
+      Pages.BusinessFlowsSpec
+      Pages.DashboardsSpec
+      Pages.Endpoints.ApiCatalogSpec
+      Pages.ErrorPatternsSpec
+      Pages.GitSyncSpec
+      Pages.LogExplorer.LogSpec
+      Pages.LogPatternsSpec
+      Pages.MonitorsSpec
+      Pages.Projects.EveryoneSyncSpec
+      Pages.Projects.IntegrationsSpec
+      Pages.Projects.ManageMembersSpec
+      Pages.Projects.ProjectsSpec
+      Pages.QueryCacheSpec
+      Pages.ReportsSpec
+      Pages.ShareSpec
+      ProcessMessageSpec
+      ReplaySpec
+      SchemaLearningPerfSpec
+      SchemaLearningSpec
+      Spec
+      Web.ApiV1Spec
+      Web.ClientMetadataSpec
+      Proto.Opentelemetry.Proto.Common.V1.Common
+      Proto.Opentelemetry.Proto.Common.V1.Common_Fields
+      Proto.Opentelemetry.Proto.Resource.V1.Resource
+      Proto.Opentelemetry.Proto.Resource.V1.Resource_Fields
+      Proto.Opentelemetry.Proto.Trace.V1.Trace
+      Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields
+      Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService
+      Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService_Fields
+      Proto.Opentelemetry.Proto.Logs.V1.Logs
+      Proto.Opentelemetry.Proto.Logs.V1.Logs_Fields
+      Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService
+      Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService_Fields
+      Proto.Opentelemetry.Proto.Metrics.V1.Metrics
+      Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields
+      Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService
+      Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields
+      Proto.Opentelemetry.Proto.Profiles.V1development.Profiles
+      Proto.Opentelemetry.Proto.Profiles.V1development.Profiles_Fields
+      Proto.Opentelemetry.Proto.Collector.Profiles.V1development.ProfilesService
+      Proto.Opentelemetry.Proto.Collector.Profiles.V1development.ProfilesService_Fields
+  autogen-modules:
+      Proto.Opentelemetry.Proto.Common.V1.Common
+      Proto.Opentelemetry.Proto.Common.V1.Common_Fields
+      Proto.Opentelemetry.Proto.Resource.V1.Resource
+      Proto.Opentelemetry.Proto.Resource.V1.Resource_Fields
+      Proto.Opentelemetry.Proto.Trace.V1.Trace
+      Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields
+      Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService
+      Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService_Fields
+      Proto.Opentelemetry.Proto.Logs.V1.Logs
+      Proto.Opentelemetry.Proto.Logs.V1.Logs_Fields
+      Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService
+      Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService_Fields
+      Proto.Opentelemetry.Proto.Metrics.V1.Metrics
+      Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields
+      Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService
+      Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields
+      Proto.Opentelemetry.Proto.Profiles.V1development.Profiles
+      Proto.Opentelemetry.Proto.Profiles.V1development.Profiles_Fields
+      Proto.Opentelemetry.Proto.Collector.Profiles.V1development.ProfilesService
+      Proto.Opentelemetry.Proto.Collector.Profiles.V1development.ProfilesService_Fields
+  hs-source-dirs:
+      src
+      test/integration
+  default-extensions:
+      AllowAmbiguousTypes
+      BlockArguments
+      DeriveAnyClass
+      DerivingVia
+      DuplicateRecordFields
+      ExtendedDefaultRules
+      MultilineStrings
+      MultiWayIf
+      NoImplicitPrelude
+      OverloadedLabels
+      OverloadedLists
+      OverloadedRecordDot
+      OverloadedStrings
+      PackageImports
+      PatternSynonyms
+      QuasiQuotes
+      RecordWildCards
+      TemplateHaskell
+      TypeFamilies
+      UndecidableInstances
+      ViewPatterns
+  ghc-options: -fwrite-ide-info -threaded -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -Wno-ambiguous-fields -fno-write-ide-info -threaded -rtsopts "-with-rtsopts=-N -A64m" -O0
+  build-tool-depends:
+      hspec-discover:hspec-discover
+    , proto-lens-protoc:proto-lens-protoc
+  build-depends:
+      PyF
+    , Unique
+    , aeson
+    , aeson-extra
+    , aeson-pretty
+    , aeson-qq
+    , annotated-exception
+    , async
+    , attoparsec
+    , attoparsec-aeson
+    , barbies
+    , base
+    , base16-bytestring
+    , base64
+    , bytestring
+    , cache >=0.1.3.0
+    , case-insensitive
+    , casing
+    , clock
+    , colourista
+    , conduit
+    , containers
+    , cookie
+    , cryptohash-md5
+    , crypton
+    , crypton-x509
+    , crypton-x509-store
+    , cryptonite
+    , data-default
+    , deriving-aeson
+    , directory
+    , dotenv
+    , effectful
+    , effectful-core
+    , effectful-postgresql
+    , effectful-th
+    , envy
+    , errors
+    , extra
+    , file-embed
+    , filepath
+    , fmt
+    , generic-lens
+    , gogol
+    , gogol-core
+    , gogol-pubsub
+    , grapesy
+    , hashable
+    , hashtables
+    , hasql
+    , hasql-dynamic-statements
+    , hasql-interpolate
+    , hasql-pool
+    , hasql-th
+    , hasql-transaction
+    , hs-opentelemetry-api
+    , hs-opentelemetry-instrumentation-auto
+    , hs-opentelemetry-instrumentation-hasql
+    , hs-opentelemetry-instrumentation-wai
+    , hs-opentelemetry-sdk
+    , hspec
+    , http-api-data
+    , http-client
+    , http-types
+    , hw-kafka-client
+    , insert-ordered-containers
+    , jose-jwt
+    , ki
+    , ki-effectful
+    , langchain-hs
+    , lens
+    , lens-aeson
+    , log-base
+    , log-effectful
+    , lucid
+    , lucid-aria >=0.1.0.1
+    , lucid-htmx >=0.1.0.7
+    , lucid-hyperscript >=0.1.0.2
+    , lucid-svg >=0.7.1.1
+    , megaparsec
+    , memory
+    , mime-mail
+    , minio-hs
+    , mmark
+    , monad-time-effectful
+    , mtl
+    , neat-interpolation
+    , network-uri
+    , odd-jobs
+    , openai
+    , openapi3
+    , parallel
+    , parser-combinators
+    , pg-entity
+    , pg-transact
+    , postgresql-libpq
+    , postgresql-migration
+    , postgresql-simple
+    , pretty-relative-time
+    , process
+    , proto-lens
+    , proto-lens-runtime
+    , regex
+    , regex-tdfa
+    , relude >=1.2.0.0
+    , resource-pool
+    , resourcet
+    , retry
+    , safe
+    , safe-exceptions
+    , scientific
+    , scotty
+    , servant
+    , servant-htmx
+    , servant-lucid
+    , servant-openapi3
+    , servant-queryparam-core
+    , servant-queryparam-server
+    , servant-server
+    , slugify
+    , smtp-mail
+    , stm
+    , template-haskell
+    , temporary
+    , text
+    , text-builder-linear
+    , text-display
+    , time
+    , time-manager
+    , tmp-postgres
+    , typed-process
+    , tz
+    , unliftio
+    , unliftio-pool
+    , unordered-containers
+    , uuid
+    , uuid-quasi
+    , valor >=1.0.0.0
+    , vector
+    , vector-algorithms
+    , wai
+    , wai-cors
+    , wai-extra
+    , wai-log
+    , wai-middleware-static
+    , warp
+    , wreq
+    , xxhash
+    , yaml
+    , zlib
+  default-language: GHC2024
+
 test-suite unit-tests
   type: exitcode-stdio-1.0
   main-is: Main.hs

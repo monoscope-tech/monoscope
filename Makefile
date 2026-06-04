@@ -37,6 +37,16 @@ live-test-reload-unit:
 live-test-reload-all:
 	ghcid --test 'cabal test monoscope:tests --test-show-details=streaming'
 
+# Integration tests with lib+test in ONE GHCi target (Jade's "cabal test-dev" trick).
+# `:reload` crosses src/<->test/ boundaries — no relink between iterations.
+# `-osuf dyn_o -hisuf dyn_hi` reuses .dyn_o artifacts cabal already wrote.
+# Filter with: TEST_MATCH=/MonitoringSpec/ make live-test-dev
+TEST_MATCH ?=
+live-test-dev:
+	USE_EXTERNAL_DB=true LOG_LEVEL=attention \
+	ghcid --command 'cabal repl monoscope:test:test-dev --ghc-options="-osuf dyn_o -hisuf dyn_hi -O0" --with-compiler=$(GHC)' \
+		--test ':main $(if $(TEST_MATCH),--match=$(TEST_MATCH))' --warnings 2>&1 | tee build-test-dev.log
+
 hot-reload:
 	livereload -f reload.trigger static/public/ & \
 	ghcid --command 'cabal repl' --test ':run Start.startApp' --test ':! (sleep 1 && touch static/public/reload.trigger)'  --warnings
@@ -188,20 +198,30 @@ build-chart-cli:
 build-chart-cli-linux:
 	cd web-components && bun build --compile --target=bun-linux-x64 src/chart-cli.ts --outfile ../chart-cli
 
+# Pin a build pane once (`make tmux-pin-here` from the pane you want), then
+# every tmux-live-reload* reuses it. Pin survives ghcid restarts because we
+# track the pane id in a tmux user option instead of grepping for the command.
 define tmux_run
-	@PANE=$$(tmux list-panes -F '#{pane_id} #{pane_current_command}' 2>/dev/null | grep -E 'ghcid|make|tee' | head -1 | awk '{print $$1}'); \
-	if [ -n "$$PANE" ]; then \
-		echo "Reusing pane $$PANE (sending C-c first)"; \
+	@PANE=$$(tmux show-option -v -q @build-pane 2>/dev/null); \
+	if [ -n "$$PANE" ] && tmux list-panes -a -F '#{pane_id}' | grep -qx "$$PANE"; then \
+		echo "Reusing pinned pane $$PANE"; \
 		tmux send-keys -t "$$PANE" C-c; sleep 0.5; \
 		tmux send-keys -t "$$PANE" '$(1)' Enter; \
 	elif [ -n "$$TMUX" ]; then \
-		echo "Splitting a new pane"; \
-		tmux split-window -d -h '$(1)'; \
+		PANE=$$(tmux split-window -d -h -P -F '#{pane_id}' '$(1)'); \
+		tmux set-option -g @build-pane "$$PANE"; \
+		echo "Pinned new pane $$PANE (use 'make tmux-unpin' to clear)"; \
 	else \
 		echo "Not in tmux — running in foreground"; \
 		$(1); \
 	fi
 endef
+
+tmux-pin-here:
+	@tmux set-option -g @build-pane "$$TMUX_PANE" && echo "Pinned build pane to $$TMUX_PANE"
+
+tmux-unpin:
+	@tmux set-option -gu @build-pane && echo "Unpinned build pane"
 
 tmux-live-reload:
 	$(call tmux_run,make live-reload 2>&1 | tee build.log)
@@ -221,4 +241,4 @@ test-e2e-real: e2e-install
 test-e2e-ui: e2e-install
 	cd e2e && npx playwright test --ui
 
-.PHONY: all test fmt lint fix-lint live-reload live-reload-cli live-reload-doctests build-chart-cli build-chart-cli-linux tmux-live-reload tmux-live-reload-cli web-components-watch e2e-install test-e2e test-e2e-real test-e2e-ui gen-proto sync-otel-proto update-otel-proto minio-local timefusion-start timefusion-stop test-integration-tf
+.PHONY: all test fmt lint fix-lint live-reload live-reload-cli live-reload-doctests build-chart-cli build-chart-cli-linux tmux-live-reload tmux-live-reload-cli tmux-pin-here tmux-unpin web-components-watch e2e-install test-e2e test-e2e-real test-e2e-ui gen-proto sync-otel-proto update-otel-proto minio-local timefusion-start timefusion-stop test-integration-tf

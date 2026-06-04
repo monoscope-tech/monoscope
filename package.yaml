@@ -467,6 +467,197 @@ tests:
       - log-base
       - vector
       - time
+  # test-dev: lib + integration tests as ONE GHCi target (Jade's cabal test-dev trick).
+  # Use via `make live-test-dev`. Deps = union of library + integration-tests deps.
+  # Keep in sync when adding deps to either. Not run by `make test` / CI.
+  test-dev:
+    main: Main.hs
+    source-dirs:
+      - src
+      - test/integration
+    ghc-options:
+      - -fno-write-ide-info
+      - -threaded
+      - -rtsopts
+      - '"-with-rtsopts=-N -A64m"'
+      - -O0
+    build-tools:
+      - hspec-discover:hspec-discover
+    generated-other-modules:
+      - Proto.Opentelemetry.Proto.Common.V1.Common
+      - Proto.Opentelemetry.Proto.Common.V1.Common_Fields
+      - Proto.Opentelemetry.Proto.Resource.V1.Resource
+      - Proto.Opentelemetry.Proto.Resource.V1.Resource_Fields
+      - Proto.Opentelemetry.Proto.Trace.V1.Trace
+      - Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields
+      - Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService
+      - Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService_Fields
+      - Proto.Opentelemetry.Proto.Logs.V1.Logs
+      - Proto.Opentelemetry.Proto.Logs.V1.Logs_Fields
+      - Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService
+      - Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService_Fields
+      - Proto.Opentelemetry.Proto.Metrics.V1.Metrics
+      - Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields
+      - Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService
+      - Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields
+      - Proto.Opentelemetry.Proto.Profiles.V1development.Profiles
+      - Proto.Opentelemetry.Proto.Profiles.V1development.Profiles_Fields
+      - Proto.Opentelemetry.Proto.Collector.Profiles.V1development.ProfilesService
+      - Proto.Opentelemetry.Proto.Collector.Profiles.V1development.ProfilesService_Fields
+    dependencies:
+      # === library deps (mirror of `library.dependencies`) ===
+      - base
+      - relude >= 1.2.0.0
+      - colourista
+      - proto-lens
+      - proto-lens-runtime
+      - vector-algorithms
+      - effectful
+      - effectful-core
+      - effectful-th
+      - effectful-postgresql
+      - monad-time-effectful
+      - wai-log
+      - log-base
+      - log-effectful
+      - Unique
+      - aeson
+      - aeson-extra
+      - aeson-qq
+      - attoparsec
+      - attoparsec-aeson
+      - async
+      - barbies
+      - bytestring
+      - base64
+      - mtl
+      - base16-bytestring
+      - http-types
+      - cache >= 0.1.3.0
+      - case-insensitive
+      - clock
+      - containers
+      - cookie
+      - safe-exceptions
+      - annotated-exception
+      - safe
+      - cryptonite
+      - jose-jwt
+      - crypton
+      - crypton-x509
+      - crypton-x509-store
+      - temporary
+      - memory
+      - data-default
+      - deriving-aeson
+      - dotenv
+      - envy
+      - errors
+      - mmark
+      - extra
+      - slugify
+      - fmt
+      - PyF
+      - retry
+      - generic-lens
+      - gogol
+      - gogol-core
+      - gogol-pubsub
+      - hw-kafka-client
+      - hashable
+      - hashtables
+      - http-api-data
+      - lens
+      - lens-aeson
+      - lucid >= 2.9.12.1
+      - lucid-aria >= 0.1.0.1
+      - lucid-htmx >= 0.1.0.7
+      - lucid-hyperscript >= 0.1.0.2
+      - lucid-svg >= 0.7.1.1
+      - megaparsec
+      - neat-interpolation
+      - odd-jobs
+      - parser-combinators
+      - pg-entity
+      - postgresql-migration
+      - postgresql-simple
+      - hasql
+      - hasql-pool
+      - hasql-th
+      - hasql-transaction
+      - hasql-interpolate
+      - hasql-dynamic-statements
+      - hs-opentelemetry-instrumentation-hasql
+      - regex-tdfa
+      - regex
+      - resource-pool
+      - resourcet
+      - unliftio-pool
+      - scientific
+      - servant
+      - servant-htmx
+      - servant-lucid
+      - servant-server
+      - servant-queryparam-core
+      - servant-queryparam-server
+      - text
+      - text-display
+      - text-builder-linear
+      - typed-process
+      - unliftio
+      - time
+      - tz
+      - unordered-containers
+      - uuid
+      - valor >= 1.0.0.0
+      - vector
+      - wai
+      - wai-cors
+      - wai-extra
+      - warp
+      - time-manager
+      - wreq
+      - xxhash
+      - parallel
+      - pretty-relative-time
+      - tmp-postgres
+      - directory
+      - network-uri
+      - scotty
+      - filepath
+      - file-embed
+      - http-client
+      - wai-middleware-static
+      - template-haskell
+      - cryptohash-md5
+      - casing
+      - yaml
+      - hs-opentelemetry-sdk
+      - hs-opentelemetry-api
+      - hs-opentelemetry-instrumentation-wai
+      - hs-opentelemetry-instrumentation-auto
+      - postgresql-libpq
+      - ki-effectful
+      - grapesy
+      - langchain-hs
+      - openai
+      - minio-hs
+      - conduit
+      - mime-mail
+      - smtp-mail
+      - stm
+      - zlib
+      - openapi3
+      - servant-openapi3
+      - insert-ordered-containers
+      # === integration-tests extras (deps NOT already in library) ===
+      - hspec
+      - uuid-quasi
+      - ki
+      - pg-transact
+      - aeson-pretty
+      - process
+      - lucid
 
 benchmarks:
   utils-bench:

@@ -1240,7 +1240,7 @@ data Context = Context
 -- 'otelSpanColsSql' + 'otelColumns' are touched in the same change:
 --
 -- >>> length otelColumns
--- 89
+-- 88
 data OtelLogsAndSpans = OtelLogsAndSpans
   { project_id :: Text
   , id :: Text -- UUID

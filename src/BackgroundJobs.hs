@@ -697,8 +697,8 @@ processBackgroundJob authCtx bgJob =
 
       -- Section 6: Background job health
       tryLog "jobHealth" do
-        jobStats :: [(Text, Int)] <- Hasql.interp [HI.sql|SELECT status, COUNT(*)::bigint FROM background_jobs WHERE created_at >= #{since}::timestamptz GROUP BY status|]
-        stuckJobs :: [Int] <- Hasql.interp [HI.sql|SELECT COUNT(*)::bigint FROM background_jobs WHERE status = 'locked' AND locked_at < #{addUTCTime (-1800) now}::timestamptz|]
+        jobStats :: [(Text, Int64)] <- Hasql.interp [HI.sql|SELECT status, COUNT(*)::bigint FROM background_jobs WHERE created_at >= #{since}::timestamptz GROUP BY status|]
+        stuckJobs :: [Int64] <- Hasql.interp [HI.sql|SELECT COUNT(*)::bigint FROM background_jobs WHERE status = 'locked' AND locked_at < #{addUTCTime (-1800) now}::timestamptz|]
         let statsLine = T.intercalate " | " $ map (\(s, c) -> s <> ": " <> show c) jobStats
             stuck = fromMaybe 0 $ listToMaybe stuckJobs
         send
