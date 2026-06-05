@@ -43,9 +43,12 @@ withPageWrapper pid build = do
 
 
 -- | Shortcut for settings sub-pages: sets pageTitle + isSettingsPage = True.
-withSettingsPage :: Projects.ProjectId -> Text -> (Projects.Project -> Html ()) -> ATAuthCtx (RespHeaders (Html ()))
-withSettingsPage pid title content =
-  withPageWrapper pid \p bw -> (bw{pageTitle = title, isSettingsPage = True}, content p)
+-- Content builder runs in ATAuthCtx so handlers can do DB/HTTP work for the body.
+withSettingsPage :: Projects.ProjectId -> Text -> (Projects.Project -> ATAuthCtx (Html ())) -> ATAuthCtx (RespHeaders (Html ()))
+withSettingsPage pid title build = do
+  (_, project, bw) <- mkPageCtx pid
+  body <- build project
+  addRespHeaders $ bodyWrapper bw{pageTitle = title, isSettingsPage = True} body
 
 
 menu :: I18n.Language -> Projects.ProjectId -> [(Text, Text, Text)]

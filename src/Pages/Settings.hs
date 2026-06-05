@@ -142,7 +142,7 @@ brings3RemoveH pid = do
 
 
 bringS3GetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
-bringS3GetH pid = withSettingsPage pid "Integrations" \project -> bringS3Page pid project.s3Bucket
+bringS3GetH pid = withSettingsPage pid "Integrations" \project -> pure $ bringS3Page pid project.s3Bucket
 
 
 bringS3Page :: Projects.ProjectId -> Maybe Projects.ProjectS3Bucket -> Html ()

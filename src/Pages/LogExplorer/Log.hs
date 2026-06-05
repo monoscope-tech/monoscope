@@ -78,6 +78,7 @@ import Data.OpenApi qualified as OA
 import Data.Pool (withResource)
 import Data.Scientific (toBoundedInteger)
 import Data.Set qualified as S
+import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful.Ki qualified as Ki
 import OddJobs.Job (createJob)

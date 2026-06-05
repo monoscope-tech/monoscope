@@ -34,7 +34,7 @@ import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import OddJobs.Job (createJob)
-import Pages.BodyWrapper (BWConfig (..), bodyWrapper, mkPageCtx, withSettingsPage)
+import Pages.BodyWrapper (BWConfig (..), bodyWrapper, withSettingsPage)
 import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), confirmModal_, connectionBadge_, formField_, headerRow_, iconBadgeLg_, iconBadge_, primaryButton_, sectionLabel_, settingsH2_, settingsSection_)
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude hiding (ask)
@@ -142,7 +142,7 @@ gitSyncSettingsGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 gitSyncSettingsGetH pid = do
   ctx <- ask @Config.AuthContext
   syncM <- GitSync.getGitHubSync pid
-  withSettingsPage pid "Integrations" \_ -> gitSyncSettingsPage ctx.env.hostUrl pid syncM
+  withSettingsPage pid "Integrations" \_ -> pure $ gitSyncSettingsPage ctx.env.hostUrl pid syncM
 
 
 gitSyncSettingsPostH :: Projects.ProjectId -> GitSyncForm -> ATAuthCtx (RespHeaders (Html ()))
@@ -421,8 +421,7 @@ projectSelectorView instId projects = div_ [class_ "min-h-screen bg-bgBase flex 
 
 -- | List repositories from GitHub App installation (full page with BodyWrapper)
 githubAppReposH :: Projects.ProjectId -> Maybe Int64 -> ATAuthCtx (RespHeaders (Html ()))
-githubAppReposH pid instIdParam = do
-  (_, _, bw) <- mkPageCtx pid
+githubAppReposH pid instIdParam = withSettingsPage pid "Integrations" \_ -> do
   ctx <- ask @Config.AuthContext
   syncM <- GitSync.getGitHubSync pid
   let instIdM = instIdParam <|> (syncM >>= (.installationId))
@@ -437,7 +436,7 @@ githubAppReposH pid instIdParam = do
           case reposResult of
             Left err -> pure $ div_ [class_ "text-textError p-4"] $ toHtml $ "Failed to list repos: " <> err
             Right repos -> pure $ repoSelectionView pid instId repos
-  addRespHeaders $ bodyWrapper bw{pageTitle = "Integrations", isSettingsPage = True} $ repoSelectionPage content
+  pure $ repoSelectionPage content
 
 
 -- | Page structure for repo selection
