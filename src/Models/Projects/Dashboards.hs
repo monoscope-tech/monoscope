@@ -49,7 +49,6 @@ import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
-import Deriving.Aeson.Stock qualified as DAES
 import Effectful
 import Effectful.Error.Static (Error, throwError)
 import Hasql.Interpolate qualified as HI
@@ -111,7 +110,7 @@ data Dashboard = Dashboard
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, NFData)
   deriving (FromField, ToField) via Aeson Dashboard
-  deriving (AE.FromJSON, AE.ToJSON) via DAES.Snake Dashboard
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Dashboard
   deriving (HI.DecodeValue, HI.EncodeValue) via HI.AsJsonb Dashboard
 
 
@@ -164,7 +163,7 @@ data Tab = Tab
   }
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAES.Snake Tab
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Tab
 
 
 insert :: DB es => DashboardVM -> Eff es Int64
