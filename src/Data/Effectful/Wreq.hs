@@ -5,16 +5,16 @@ module Data.Effectful.Wreq (
   put,
   patch,
   delete,
-  W.header,
-  W.options,
-  W.head_,
+  options,
+  head_,
   getWith,
   postWith,
   putWith,
   patchWith,
   deleteWith,
-  W.optionsWith,
-  W.headWith,
+  optionsWith,
+  headWith,
+  W.header,
   runHTTPWreq,
   runHTTPGolden,
   Options,
@@ -31,6 +31,7 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive qualified as CI
 import Effectful
 import Effectful.Dispatch.Dynamic
+import Effectful.TH
 import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..), createCookieJar, defaultRequest)
 import Network.HTTP.Client.Internal (Response (..), ResponseClose (..))
 import Network.HTTP.Types.Status (Status (..), statusCode, statusMessage)
@@ -62,7 +63,7 @@ data HTTP :: Effect where
   Patch :: Patchable a => String -> a -> HTTP m (Response LBS.ByteString)
   Delete :: String -> HTTP m (Response LBS.ByteString)
   Options :: String -> HTTP m (Response LBS.ByteString)
-  Head :: String -> HTTP m (Response LBS.ByteString)
+  Head_ :: String -> HTTP m (Response LBS.ByteString)
   GetWith :: Options -> String -> HTTP m (Response LBS.ByteString)
   PostWith :: Postable a => Options -> String -> a -> HTTP m (Response LBS.ByteString)
   PutWith :: Putable a => Options -> String -> a -> HTTP m (Response LBS.ByteString)
@@ -75,45 +76,7 @@ data HTTP :: Effect where
 type instance DispatchOf HTTP = 'Dynamic
 
 
--- API functions
-get :: HTTP :> es => String -> Eff es (Response LBS.ByteString)
-get url = send (Get url)
-
-
-post :: (HTTP :> es, Postable a) => String -> a -> Eff es (Response LBS.ByteString)
-post url body = send (Post url body)
-
-
-put :: (HTTP :> es, Putable a) => String -> a -> Eff es (Response LBS.ByteString)
-put url body = send (Put url body)
-
-
-patch :: (HTTP :> es, Patchable a) => String -> a -> Eff es (Response LBS.ByteString)
-patch url body = send (Patch url body)
-
-
-delete :: HTTP :> es => String -> Eff es (Response LBS.ByteString)
-delete url = send (Delete url)
-
-
-getWith :: HTTP :> es => Options -> String -> Eff es (Response LBS.ByteString)
-getWith opts url = send (GetWith opts url)
-
-
-postWith :: (HTTP :> es, Postable a) => Options -> String -> a -> Eff es (Response LBS.ByteString)
-postWith opts url body = send (PostWith opts url body)
-
-
-putWith :: (HTTP :> es, Putable a) => Options -> String -> a -> Eff es (Response LBS.ByteString)
-putWith opts url body = send (PutWith opts url body)
-
-
-patchWith :: (HTTP :> es, Patchable a) => Options -> String -> a -> Eff es (Response LBS.ByteString)
-patchWith opts url body = send (PatchWith opts url body)
-
-
-deleteWith :: HTTP :> es => Options -> String -> Eff es (Response LBS.ByteString)
-deleteWith opts url = send (DeleteWith opts url)
+makeEffect ''HTTP
 
 
 -- Interpreters

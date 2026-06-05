@@ -16,7 +16,7 @@ module Models.Apis.Integrations (
 
 import Data.Effectful.Hasql qualified as Hasql
 import Deriving.Aeson qualified as AE
-import Deriving.Aeson qualified as DAE
+import Deriving.Aeson.Stock qualified as DAE
 import Effectful
 import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
@@ -47,7 +47,7 @@ data SlackData = SlackData
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (HI.DecodeRow, NFData)
-  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SlackData
+  deriving (AE.FromJSON) via DAE.Snake SlackData
 
 
 insertAccessToken :: DB es => Projects.ProjectId -> Text -> Text -> Text -> Text -> Text -> Text -> Eff es Int64
@@ -89,7 +89,7 @@ data DiscordData = DiscordData
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (HI.DecodeRow, NFData)
-  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] DiscordData
+  deriving (AE.FromJSON) via DAE.Snake DiscordData
 
 
 insertDiscordData :: DB es => Projects.ProjectId -> Text -> Eff es Int64

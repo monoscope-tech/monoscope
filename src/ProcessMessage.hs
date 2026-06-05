@@ -44,7 +44,7 @@ import Data.Time.LocalTime (ZonedTime)
 import Data.Tuple.Extra (fst3)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Deriving.Aeson qualified as DAE
+import Deriving.Aeson.Stock qualified as DAE
 import Effectful
 import Effectful.Concurrent (Concurrent)
 import Effectful.Ki qualified as Ki
@@ -606,9 +606,7 @@ data RequestMessage = RequestMessage
   , tags :: Maybe [Text]
   }
   deriving stock (Generic, Show)
-  deriving
-    (AE.FromJSON, AE.ToJSON)
-    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] RequestMessage
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake RequestMessage
 
 
 -- Custom ToJSON for Either Text [Text]

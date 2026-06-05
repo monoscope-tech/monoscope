@@ -40,7 +40,7 @@ import Database.PostgreSQL.Simple.FromField (FromField, ResultError (ConversionF
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.Time (parseUTCTime)
 import Database.PostgreSQL.Simple.ToField (ToField)
-import Deriving.Aeson qualified as DAE
+import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, type (:>))
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
@@ -276,9 +276,7 @@ data NewShapeIssue = NewShapeIssue
   }
   deriving stock (Generic, Show)
   deriving anyclass (NFData)
-  deriving
-    (AE.FromJSON, AE.ToJSON)
-    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] NewShapeIssue
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake NewShapeIssue
 
 
 data NewFieldIssue = NewFieldIssue
@@ -294,9 +292,7 @@ data NewFieldIssue = NewFieldIssue
   }
   deriving stock (Generic, Show)
   deriving anyclass (NFData)
-  deriving
-    (AE.FromJSON, AE.ToJSON)
-    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] NewFieldIssue
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake NewFieldIssue
 
 
 data NewFormatIssue = NewFormatIssue
@@ -312,9 +308,7 @@ data NewFormatIssue = NewFormatIssue
   }
   deriving stock (Generic, Show)
   deriving anyclass (NFData)
-  deriving
-    (AE.FromJSON, AE.ToJSON)
-    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] NewFormatIssue
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake NewFormatIssue
 
 
 data NewEndpointIssue = NewEndpointIssue
@@ -325,9 +319,7 @@ data NewEndpointIssue = NewEndpointIssue
   }
   deriving stock (Generic, Show)
   deriving anyclass (NFData)
-  deriving
-    (AE.FromJSON, AE.ToJSON)
-    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] NewEndpointIssue
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake NewEndpointIssue
 
 
 data IssuesData
@@ -340,9 +332,7 @@ data IssuesData
   deriving stock (Generic, Show)
   deriving anyclass (NFData)
   deriving (FromField, ToField) via Aeson IssuesData
-  deriving
-    (AE.FromJSON, AE.ToJSON)
-    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] IssuesData
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake IssuesData
 
 
 instance Default IssuesData where
@@ -538,4 +528,4 @@ data ATError = ATError
   deriving anyclass (Default, FromRow, NFData, ToRow)
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "error_patterns", PrimaryKey "id", FieldModifiers '[CamelToSnake]] ATError)
   deriving (FromField, ToField) via Aeson ATError
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ATError
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake ATError

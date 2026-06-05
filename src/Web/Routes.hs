@@ -8,6 +8,7 @@ import Data.Default (def)
 import Data.Map qualified as Map
 import Data.Ord (clamp)
 import Data.UUID qualified as UUID
+import Deriving.Aeson.Stock qualified as DAE
 import GHC.TypeLits (Symbol)
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude hiding (ask)
@@ -42,7 +43,6 @@ import Web.Cookie (SetCookie)
 
 import Data.OpenApi (OpenApi, SecurityDefinitions (..), SecurityScheme (..), SecuritySchemeType (..), components, description, info, security, securitySchemes, servers, title, version)
 import Data.OpenApi qualified as OA
-import Deriving.Aeson qualified as DAE
 import OpenTelemetry.Trace (TracerProvider)
 import Pages.Bots.Utils (verifyWidgetSignature)
 import Pages.CommandPalette qualified as CommandPalette
@@ -905,9 +905,7 @@ data Status = Status
   , gitCommitDate :: Text
   }
   deriving stock (Generic)
-  deriving
-    (AE.FromJSON, AE.ToJSON)
-    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Status
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Status
 
 
 statusH :: ATBaseCtx Status

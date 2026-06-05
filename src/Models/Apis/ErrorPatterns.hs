@@ -52,7 +52,7 @@ import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.FromRow qualified as FR
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (ToField)
-import Deriving.Aeson qualified as DAE
+import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff)
 import Hasql.Interpolate qualified as HI
 import Models.Apis.LogQueries qualified as LogQueries
@@ -135,9 +135,7 @@ data ErrorPattern = ErrorPattern
   deriving
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "error_patterns", PrimaryKey "id", FieldModifiers '[CamelToSnake]] ErrorPattern)
-  deriving
-    (AE.FromJSON, AE.ToJSON)
-    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ErrorPattern
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake ErrorPattern
 
 
 -- error pattern aggregated with number of occurrences and affected users
@@ -188,9 +186,7 @@ data ATError = ATError
   deriving stock (Generic, Show)
   deriving anyclass (Default, NFData)
   deriving (FromField, ToField) via Aeson ATError
-  deriving
-    (AE.FromJSON, AE.ToJSON)
-    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ATError
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake ATError
   deriving (HI.DecodeValue, HI.EncodeValue) via HI.AsJsonb ATError
 
 

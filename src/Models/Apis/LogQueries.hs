@@ -44,7 +44,7 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (ToField)
-import Deriving.Aeson qualified as DAE
+import Deriving.Aeson.Stock qualified as DAE
 import Effectful
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
@@ -163,9 +163,7 @@ data ATError = ATError
   deriving stock (Generic, Show)
   deriving anyclass (Default, NFData)
   deriving (FromField, ToField) via Aeson ATError
-  deriving
-    (AE.FromJSON, AE.ToJSON)
-    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ATError
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake ATError
 
 
 incrementByOneMillisecond :: String -> String

@@ -18,8 +18,7 @@ import Data.Text qualified as T
 import Data.Time (ZonedTime, defaultTimeLocale, parseTimeM)
 import Data.Time.Format (formatTime)
 import Data.Vector qualified as V
-import Deriving.Aeson qualified as DAE
-import Deriving.Aeson.Stock qualified as DAES
+import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, (:>))
 import Effectful.Log (Log)
 import Effectful.Reader.Static qualified
@@ -35,6 +34,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation
 import Network.HTTP.Types (urlEncode)
 import Pages.Charts.Charts qualified as Charts
+import Pages.Components (headerRow_)
 import Pages.LogExplorer.LogItem (getServiceName, spanHasErrors)
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
@@ -65,7 +65,7 @@ data Query = Query
   }
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, FromForm, NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAES.Snake Query
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Query
 
 
 data Layout = Layout
@@ -76,7 +76,7 @@ data Layout = Layout
   }
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, FromForm, NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAES.Snake Layout
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Layout
 
 
 data WidgetType
@@ -234,7 +234,7 @@ data TableColumn = TableColumn
   }
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, FromForm, NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] TableColumn
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake TableColumn
 
 
 data RowClickAction = RowClickAction
@@ -244,7 +244,7 @@ data RowClickAction = RowClickAction
   }
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, FromForm, NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] RowClickAction
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake RowClickAction
 
 
 -- | Encode a value as JSON Text (used for data attributes, widget JSON, etc.)
@@ -604,7 +604,7 @@ renderTraceTable widget = do
                       , data_ "sort-direction" "none"
                       ]
                       do
-                        div_ [class_ "flex items-center justify-between"] do
+                        headerRow_ [] do
                           toHtml col
                           span_ [class_ "sort-arrow ml-1 text-iconNeutral opacity-0 group-hover:opacity-100", data_ "sort" "none"] "↕"
               tbody_ []
@@ -647,7 +647,7 @@ renderTable widget = do
                         , data_ "sort-direction" "none"
                         ]
                         do
-                          div_ [class_ "flex items-center justify-between"] do
+                          headerRow_ [] do
                             toHtml col.title
                             span_ [class_ "sort-arrow ml-1 text-iconNeutral opacity-0 group-hover:opacity-100", data_ "sort" "none"] "↕"
                 tbody_ []
@@ -1090,7 +1090,7 @@ renderTableWithDataAndParams widget dataRows params = do
               , data_ "sort-direction" "none"
               ]
               do
-                div_ [class_ "flex items-center justify-between"] do
+                headerRow_ [] do
                   toHtml col.title
                   span_ [class_ "sort-arrow ml-1 text-iconNeutral opacity-0 group-hover:opacity-100", data_ "sort" "none"] "↕"
 
@@ -1144,7 +1144,7 @@ renderTraceDataTable widget dataRows spGroup spansGrouped colorsJson = do
             , data_ "sort-direction" "none"
             ]
             do
-              div_ [class_ "flex items-center justify-between"] do
+              headerRow_ [] do
                 toHtml col.title
     tbody_ [] do
       V.forM_ dataRows \row -> do

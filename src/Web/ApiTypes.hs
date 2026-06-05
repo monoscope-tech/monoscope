@@ -58,7 +58,7 @@ import Data.OpenApi (ToParamSchema, ToSchema (..))
 import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Deriving.Aeson qualified as DAE
+import Deriving.Aeson.Stock qualified as DAE
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns qualified as LogPatterns
@@ -74,10 +74,6 @@ import Servant (FromHttpApiData)
 
 -- | Phantom-tagged team id.
 type TeamId = UUIDId "team"
-
-
--- | Default JSON encoding for wire types: snake_case fields, omit @Nothing@.
-type SnakeJSON a = DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] a
 
 
 -- Orphan: Widget's nested types don't have ToSchema — emit an open-value schema.
@@ -111,7 +107,7 @@ data MonitorInput = MonitorInput
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default)
-  deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON MonitorInput
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MonitorInput
   deriving (ToSchema) via SnakeSchema MonitorInput
 
 
@@ -141,7 +137,7 @@ data MonitorPatch = MonitorPatch
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default)
-  deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON MonitorPatch
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MonitorPatch
   deriving (ToSchema) via SnakeSchema MonitorPatch
 
 
@@ -156,7 +152,7 @@ data DashboardSummary = DashboardSummary
   , filePath :: Maybe Text
   }
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON DashboardSummary
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake DashboardSummary
   deriving (ToSchema) via SnakeSchema DashboardSummary
 
 
@@ -167,8 +163,8 @@ data DashboardFull = DashboardFull
   , schema :: Maybe Dashboards.Dashboard
   }
   deriving stock (Generic, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake DashboardFull
   deriving (ToSchema) via JsonValueSchema DashboardFull
-  deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON DashboardFull
 
 
 -- | Input for create/replace.
@@ -180,8 +176,8 @@ data DashboardInput = DashboardInput
   , schema :: Maybe Dashboards.Dashboard
   }
   deriving stock (Generic, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake DashboardInput
   deriving (ToSchema) via JsonValueSchema DashboardInput
-  deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON DashboardInput
 
 
 -- | PATCH — all fields optional.
@@ -193,8 +189,8 @@ data DashboardPatch = DashboardPatch
   , schema :: Maybe Dashboards.Dashboard
   }
   deriving stock (Generic, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake DashboardPatch
   deriving (ToSchema) via JsonValueSchema DashboardPatch
-  deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON DashboardPatch
 
 
 -- | Upsert-by-file-path payload for `monoscope dashboards apply`.
@@ -206,8 +202,8 @@ data DashboardYAMLDoc = DashboardYAMLDoc
   , schema :: Dashboards.Dashboard
   }
   deriving stock (Generic, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake DashboardYAMLDoc
   deriving (ToSchema) via JsonValueSchema DashboardYAMLDoc
-  deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON DashboardYAMLDoc
 
 
 -- | x/y/w/h used by widget reorder endpoint.
@@ -230,7 +226,7 @@ data ApiKeySummary = ApiKeySummary
   , createdAt :: UTCTime
   }
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON ApiKeySummary
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake ApiKeySummary
   deriving (ToSchema) via SnakeSchema ApiKeySummary
 
 
@@ -265,7 +261,7 @@ data EventsQuery = EventsQuery
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default)
-  deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON EventsQuery
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake EventsQuery
   deriving (ToSchema) via SnakeSchema EventsQuery
 
 
@@ -277,7 +273,7 @@ data BulkAction a = BulkAction
   , durationMinutes :: Maybe Int
   }
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON (BulkAction a)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake (BulkAction a)
 
 
 instance ToSchema a => ToSchema (BulkAction a) where
@@ -322,7 +318,7 @@ data Paged a = Paged
   , hasMore :: Bool
   }
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON (Paged a)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake (Paged a)
 
 
 instance ToSchema a => ToSchema (Paged a) where
@@ -335,7 +331,7 @@ data UserRef = UserRef
   , name :: Maybe Text
   }
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON UserRef
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake UserRef
   deriving (ToSchema) via SnakeSchema UserRef
 
 
@@ -353,7 +349,7 @@ data ProjectSummary = ProjectSummary
   , updatedAt :: UTCTime
   }
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON ProjectSummary
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake ProjectSummary
   deriving (ToSchema) via SnakeSchema ProjectSummary
 
 
@@ -366,7 +362,7 @@ data ProjectFull = ProjectFull
   , errorAlerts :: Bool
   }
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON ProjectFull
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake ProjectFull
   deriving (ToSchema) via SnakeSchema ProjectFull
 
 
@@ -379,7 +375,7 @@ data MeResponse = MeResponse
   , project :: ProjectSummary
   }
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON MeResponse
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MeResponse
   deriving (ToSchema) via SnakeSchema MeResponse
 
 
@@ -402,7 +398,7 @@ data EndpointSummary = EndpointSummary
   , lastSeen :: Maybe Text
   }
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON EndpointSummary
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake EndpointSummary
   deriving (ToSchema) via SnakeSchema EndpointSummary
 
 
@@ -413,8 +409,8 @@ data EndpointFull = EndpointFull
   , updatedAt :: UTCTime
   }
   deriving stock (Generic, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake EndpointFull
   deriving (ToSchema) via JsonValueSchema EndpointFull
-  deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON EndpointFull
 
 
 -- =============================================================================
@@ -435,7 +431,7 @@ data LogPatternSummary = LogPatternSummary
   , isError :: Bool
   }
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON LogPatternSummary
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake LogPatternSummary
   deriving (ToSchema) via SnakeSchema LogPatternSummary
 
 
@@ -445,7 +441,7 @@ data LogPatternFull = LogPatternFull
   , sampleMessage :: Maybe Text
   }
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON LogPatternFull
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake LogPatternFull
   deriving (ToSchema) via SnakeSchema LogPatternFull
 
 
@@ -480,7 +476,7 @@ data IssueApiSummary = IssueApiSummary
   , updatedAt :: UTCTime
   }
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON IssueApiSummary
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake IssueApiSummary
   deriving (ToSchema) via SnakeSchema IssueApiSummary
 
 
@@ -491,8 +487,8 @@ data IssueApiFull = IssueApiFull
   , issueData :: AE.Value
   }
   deriving stock (Generic, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake IssueApiFull
   deriving (ToSchema) via JsonValueSchema IssueApiFull
-  deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON IssueApiFull
 
 
 -- =============================================================================
@@ -510,7 +506,7 @@ data TeamSummary = TeamSummary
   , updatedAt :: UTCTime
   }
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON TeamSummary
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake TeamSummary
   deriving (ToSchema) via SnakeSchema TeamSummary
 
 
@@ -524,7 +520,7 @@ data TeamFull = TeamFull
   , pagerdutyServices :: [Text]
   }
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON TeamFull
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake TeamFull
   deriving (ToSchema) via SnakeSchema TeamFull
 
 
@@ -540,7 +536,7 @@ data TeamInput = TeamInput
   , pagerdutyServices :: Maybe [Text]
   }
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON TeamInput
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake TeamInput
   deriving (ToSchema) via SnakeSchema TeamInput
 
 
@@ -556,7 +552,7 @@ data TeamPatch = TeamPatch
   , pagerdutyServices :: Maybe [Text]
   }
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON TeamPatch
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake TeamPatch
   deriving (ToSchema) via SnakeSchema TeamPatch
 
 
@@ -569,7 +565,7 @@ data MemberSummary = MemberSummary
   , permission :: PM.Permissions
   }
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON MemberSummary
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MemberSummary
   deriving (ToSchema) via SnakeSchema MemberSummary
 
 
@@ -582,7 +578,7 @@ data MemberAdd = MemberAdd
   , permission :: Maybe PM.Permissions
   }
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON MemberAdd
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MemberAdd
   deriving (ToSchema) via SnakeSchema MemberAdd
 
 

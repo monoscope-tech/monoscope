@@ -86,7 +86,7 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper, mkPageCtx, s
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as SlackP
 import Pages.Bots.Utils qualified as BotUtils
-import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), ModalCfg (..), PanelCfg (..), confirmModal_, dirtyFormSaveAttr_, formActionsModal_, formField_, formSelectField_, iconBadgeXs_, iconBadge_, infoBanner_, modalWith_, panel_, sectionLabel_, settingsH2_, settingsNavLink_, settingsSection_, tagInput_)
+import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), ModalCfg (..), PanelCfg (..), confirmModal_, dirtyFormSaveAttr_, formActionsModal_, formField_, formSelectField_, headerRowPad_, headerRow_, iconBadgeXs_, iconBadge_, infoBanner_, modalWith_, panel_, sectionLabel_, settingsH2_, settingsNavLink_, settingsSection_, tagInput_)
 import Pages.Settings qualified as Settings
 import Pkg.Components.Table (Table (..))
 import Pkg.Components.Table qualified as Table
@@ -142,7 +142,7 @@ instance ToHtml ListProjectsGet where
 listProjectsBody :: Maybe Projects.Session -> V.Vector Projects.Project' -> Projects.Project' -> Bool -> Html ()
 listProjectsBody sessM projects demoProject showDemoProject = do
   nav_ [class_ "fixed top-0 left-0 right-0 bg-bgBase border-b border-strokeWeak z-50"] do
-    div_ [class_ "flex items-center justify-between px-4 py-3"] do
+    headerRowPad_ [] do
       a_ [href_ "/", class_ "flex items-center"] do
         img_ [class_ "h-6 dark:hidden", src_ "/public/assets/svgs/logo_black.svg"]
         img_ [class_ "h-6 hidden dark:block", src_ "/public/assets/svgs/logo_white.svg"]
@@ -1067,7 +1067,7 @@ manageMembersBody pid projMembers paymentPlan teamsCount =
           p_ [class_ "text-xs text-textWeak"] $ toHtml roleTooltip
 
         div_ [class_ "space-y-3"] do
-          div_ [class_ "flex items-center justify-between"] do
+          headerRow_ [] do
             h3_ [class_ "text-sm font-medium text-textStrong"] $ toHtml $ "Members (" <> show (V.length projMembers) <> ")"
             when (V.length projMembers > 0) $ button_ [class_ "btn btn-sm btn-outline gap-1.5", disabled_ "true", id_ "saveMembersBtn", dirtyFormSaveAttr_] do
               faSprite_ "check" "regular" "w-3 h-3"; "Save changes"

@@ -65,7 +65,7 @@ import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (ToField)
-import Deriving.Aeson qualified as DAE
+import Deriving.Aeson.Stock qualified as DAE
 import GHC.Records (HasField (getField))
 import Hasql.Interpolate qualified as HI
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
@@ -103,7 +103,7 @@ data Scope = Scope
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Scope
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Scope
 
 
 -- | Structural facts about one field path. Sets are ordered for deterministic
@@ -116,7 +116,7 @@ data FieldStruct = FieldStruct
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] FieldStruct
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake FieldStruct
 
 
 -- | The structure of a span family. Stored once per unique 'templateHash'
@@ -127,7 +127,7 @@ data Template = Template
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Template
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Template
 
 
 -- | Per-field example reservoir. Capped at 'examplesCap' to bound memory; once
@@ -146,7 +146,7 @@ data TopK = TopK
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] TopK
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake TopK
 
 
 -- | Per-(project, key_hash) row. Mirrors @apis.schema_catalog@ plus a transient
@@ -390,7 +390,7 @@ data SummaryDoc = SummaryDoc
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SummaryDoc
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake SummaryDoc
 
 
 -- ---------------------------------------------------------------------------
@@ -549,7 +549,7 @@ data FacetValue = FacetValue
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] FacetValue
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake FacetValue
 
 
 newtype FacetData = FacetData (HM.HashMap Text [FacetValue])
@@ -569,4 +569,4 @@ data FacetSummary = FacetSummary
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, HI.DecodeRow, NFData, ToRow)
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "facet_summaries", PrimaryKey "id", FieldModifiers '[CamelToSnake]] FacetSummary)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] FacetSummary
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake FacetSummary

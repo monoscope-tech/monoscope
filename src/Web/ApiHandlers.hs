@@ -104,7 +104,7 @@ import Data.Time (UTCTime, addUTCTime, nominalDay, zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..), getAeson)
-import Deriving.Aeson qualified as DAE
+import Deriving.Aeson.Stock qualified as DAE
 import Effectful.Error.Static (throwError)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
@@ -591,7 +591,7 @@ data ShareLinkCreate = ShareLinkCreate
   , eventType :: Maybe Text
   }
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ShareLinkCreate
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake ShareLinkCreate
   deriving (ToSchema) via SnakeSchema ShareLinkCreate
 
 

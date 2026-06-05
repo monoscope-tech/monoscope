@@ -79,8 +79,8 @@ import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Network.Minio qualified as Minio
 import Network.Wreq qualified as Wreq
-import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper, mkPageCtx, settingsContentTarget)
-import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), ModalCfg (..), confirmModal_, connectionBadge_, formField_, iconBadgeLg_, modalWith_, paymentPlanPicker, sectionLabel_, settingsH2_, settingsSection_)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, settingsContentTarget, withSettingsPage)
+import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), ModalCfg (..), confirmModal_, connectionBadge_, formField_, headerRow_, iconBadgeLg_, modalWith_, paymentPlanPicker, sectionLabel_, settingsH2_, settingsSection_)
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.EmailTemplates qualified as ET
@@ -142,14 +142,12 @@ brings3RemoveH pid = do
 
 
 bringS3GetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
-bringS3GetH pid = do
-  (_, project, bw) <- mkPageCtx pid
-  addRespHeaders $ bodyWrapper bw{pageTitle = "Integrations", isSettingsPage = True} $ bringS3Page pid project.s3Bucket
+bringS3GetH pid = withSettingsPage pid "Integrations" \project -> bringS3Page pid project.s3Bucket
 
 
 bringS3Page :: Projects.ProjectId -> Maybe Projects.ProjectS3Bucket -> Html ()
 bringS3Page pid s3BucketM = settingsSection_ do
-  div_ [class_ "flex items-center justify-between"] do
+  headerRow_ [] do
     settingsH2_ "S3 Bucket"
     div_ [id_ "connectedInd"] $ connectionBadge_ $ bool "Not connected" "Connected" (isJust s3BucketM)
 
@@ -820,7 +818,7 @@ billingPage d = div_ [] do
     settingsH2_ "Billing"
 
     -- Current plan row
-    div_ [class_ "flex items-center justify-between"] do
+    headerRow_ [] do
       div_ [class_ "flex items-center gap-3"] do
         span_ [class_ "text-sm font-medium text-textStrong"] $ toHtml paymentPlan
         span_ [class_ "rounded-md text-textWeak bg-fillWeak border border-strokeWeak py-0.5 px-2 text-xs"] "Active"
