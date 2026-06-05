@@ -143,6 +143,7 @@ runServer appLogger env tp = do
         , Just $ async $ supervise logExc "background-jobs" bgJobWorker
         , Just $ async $ supervise logExc "otlp-grpc" $ OtlpServer.runServer appLogger env tp
         , guard (env.config.enableKafkaService && not (any T.null env.config.kafkaTopics)) $> async (supervise logExc "kafka" $ Queue.kafkaService appLogger env tp env.config.kafkaTopics env.config.messagesPerPubsubPullBatch OtlpServer.processList)
+        , guard (env.config.enableKafkaService && not (any T.null env.config.kafkaTopics)) $> async (supervise logExc "kafka" $ Queue.kafkaService appLogger env tp env.config.kafkaTopics env.config.messagesPerPubsubPullBatch OtlpServer.processList)
         , guard env.config.enableReplayService $> async (supervise logExc "kafka-replay" $ Queue.kafkaService appLogger env tp env.config.rrwebTopics effectiveReplayBatch processReplayEvents)
         ]
       <> fmap Just workerFibers

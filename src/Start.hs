@@ -33,4 +33,4 @@ startApp = do
       Safe.bracket
         initializeGlobalMeterProvider
         (\mp -> void $ shutdownMeterProvider mp Nothing)
-        (\_ -> action)
+        (const action)
