@@ -6,7 +6,7 @@ module Data.Effectful.Wreq (
   patch,
   delete,
   options,
-  head_,
+  head,
   getWith,
   postWith,
   putWith,
@@ -38,7 +38,7 @@ import Network.HTTP.Types.Status (Status (..), statusCode, statusMessage)
 import Network.HTTP.Types.Version (http11)
 import Network.Wreq qualified as W
 import Network.Wreq.Types qualified as W
-import Relude hiding (get, put)
+import Relude hiding (get, head, put)
 import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.FilePath ((</>))
 import Text.Regex.TDFA ((=~))
@@ -63,7 +63,7 @@ data HTTP :: Effect where
   Patch :: Patchable a => String -> a -> HTTP m (Response LBS.ByteString)
   Delete :: String -> HTTP m (Response LBS.ByteString)
   Options :: String -> HTTP m (Response LBS.ByteString)
-  Head_ :: String -> HTTP m (Response LBS.ByteString)
+  Head :: String -> HTTP m (Response LBS.ByteString)
   GetWith :: Options -> String -> HTTP m (Response LBS.ByteString)
   PostWith :: Postable a => Options -> String -> a -> HTTP m (Response LBS.ByteString)
   PutWith :: Putable a => Options -> String -> a -> HTTP m (Response LBS.ByteString)
