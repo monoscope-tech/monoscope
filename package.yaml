@@ -154,7 +154,7 @@ executables:
       - -threaded
       - -fplugin AutoInstrument
       - -rtsopts
-      - '"-with-rtsopts=-N8 -M14G -A32m -I5 -Fd2"'
+      - '"-with-rtsopts=-N8 -M14G -A32m -I5 -Iw60 -Fd2"'
       # - -O2
       # - -fPIC
     dependencies:
