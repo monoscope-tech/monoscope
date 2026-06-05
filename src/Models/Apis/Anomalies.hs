@@ -277,9 +277,7 @@ data NewShapeIssue = NewShapeIssue
   }
   deriving stock (Generic, Show)
   deriving anyclass (NFData)
-  deriving
-    (AE.FromJSON, AE.ToJSON)
-    via DAE.Snake NewShapeIssue
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake NewShapeIssue
 
 
 data NewFieldIssue = NewFieldIssue
@@ -295,9 +293,7 @@ data NewFieldIssue = NewFieldIssue
   }
   deriving stock (Generic, Show)
   deriving anyclass (NFData)
-  deriving
-    (AE.FromJSON, AE.ToJSON)
-    via DAE.Snake NewFieldIssue
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake NewFieldIssue
 
 
 data NewFormatIssue = NewFormatIssue
@@ -313,9 +309,7 @@ data NewFormatIssue = NewFormatIssue
   }
   deriving stock (Generic, Show)
   deriving anyclass (NFData)
-  deriving
-    (AE.FromJSON, AE.ToJSON)
-    via DAE.Snake NewFormatIssue
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake NewFormatIssue
 
 
 data NewEndpointIssue = NewEndpointIssue
@@ -326,9 +320,7 @@ data NewEndpointIssue = NewEndpointIssue
   }
   deriving stock (Generic, Show)
   deriving anyclass (NFData)
-  deriving
-    (AE.FromJSON, AE.ToJSON)
-    via DAE.Snake NewEndpointIssue
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake NewEndpointIssue
 
 
 data IssuesData
@@ -341,9 +333,7 @@ data IssuesData
   deriving stock (Generic, Show)
   deriving anyclass (NFData)
   deriving (FromField, ToField) via Aeson IssuesData
-  deriving
-    (AE.FromJSON, AE.ToJSON)
-    via DAE.Snake IssuesData
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake IssuesData
 
 
 instance Default IssuesData where

@@ -177,9 +177,7 @@ data User = User
   deriving
     (Entity)
     via (GenericEntity '[Schema "users", TableName "users", PrimaryKey "id", FieldModifiers '[CamelToSnake]] User)
-  deriving
-    (AE.FromJSON, AE.ToJSON)
-    via DAE.Snake User
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake User
 
 
 createUserId :: UUIDEff :> es => Eff es UserId
@@ -270,9 +268,7 @@ data Project = Project
   deriving
     (Entity)
     via (GenericEntity '[Schema "projects", TableName "projects", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Project)
-  deriving
-    (AE.FromJSON, AE.ToJSON)
-    via DAE.Snake Project
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Project
 
 
 -- FIXME: Why was this record created? And not the regular projects record?

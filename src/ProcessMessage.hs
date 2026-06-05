@@ -606,9 +606,7 @@ data RequestMessage = RequestMessage
   , tags :: Maybe [Text]
   }
   deriving stock (Generic, Show)
-  deriving
-    (AE.FromJSON, AE.ToJSON)
-    via DAE.Snake RequestMessage
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake RequestMessage
 
 
 -- Custom ToJSON for Either Text [Text]

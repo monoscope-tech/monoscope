@@ -115,9 +115,7 @@ data LogPattern = LogPattern
   deriving
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "log_patterns", PrimaryKey "id", FieldModifiers '[CamelToSnake]] LogPattern)
-  deriving
-    (AE.FromJSON, AE.ToJSON)
-    via DAE.Snake LogPattern
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake LogPattern
 
 
 data UpsertPattern = UpsertPattern

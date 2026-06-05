@@ -164,9 +164,7 @@ data ATError = ATError
   deriving stock (Generic, Show)
   deriving anyclass (Default, NFData)
   deriving (FromField, ToField) via Aeson ATError
-  deriving
-    (AE.FromJSON, AE.ToJSON)
-    via DAE.Snake ATError
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake ATError
 
 
 incrementByOneMillisecond :: String -> String

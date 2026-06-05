@@ -905,9 +905,7 @@ data Status = Status
   , gitCommitDate :: Text
   }
   deriving stock (Generic)
-  deriving
-    (AE.FromJSON, AE.ToJSON)
-    via DAE.Snake Status
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Status
 
 
 statusH :: ATBaseCtx Status
