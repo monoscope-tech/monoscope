@@ -59,6 +59,7 @@ import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
+import Deriving.Aeson.Stock qualified as DAE
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns qualified as LogPatterns
@@ -77,7 +78,7 @@ type TeamId = UUIDId "team"
 
 
 -- | Default JSON encoding for wire types: snake_case fields, omit @Nothing@.
-type SnakeJSON a = DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] a
+type SnakeJSON a = DAE.Snake a
 
 
 -- Orphan: Widget's nested types don't have ToSchema — emit an open-value schema.

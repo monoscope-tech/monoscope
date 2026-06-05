@@ -1031,7 +1031,7 @@ stepIndicator step title prevUrl = do
       img_ [class_ "h-7 dark:hidden", src_ "/public/assets/svgs/logo_black.svg"]
       img_ [class_ "h-7 hidden dark:block", src_ "/public/assets/svgs/logo_white.svg"]
     div_ [class_ "flex-col gap-1.5 md:gap-2 flex w-full"] $ do
-      div_ [class_ "flex items-center justify-between"] do
+      headerRow_ [] do
         div_ [class_ "text-textStrong text-sm md:text-base"] $ "Step " <> show step <> " of 5"
         when (step > 1)
           $ a_ [class_ "flex items-center gap-1.5 text-textBrand text-sm md:hidden", href_ prevUrl] do

@@ -116,7 +116,7 @@ import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes
 import Database.PostgreSQL.Simple.ToField (ToField)
-import Deriving.Aeson qualified as DAE
+import Deriving.Aeson.Stock qualified as DAE
 import Effectful
 import Effectful.Error.Static (throwError)
 import Effectful.Error.Static qualified as EffError
@@ -179,7 +179,7 @@ data User = User
     via (GenericEntity '[Schema "users", TableName "users", PrimaryKey "id", FieldModifiers '[CamelToSnake]] User)
   deriving
     (AE.FromJSON, AE.ToJSON)
-    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] User
+    via DAE.Snake User
 
 
 createUserId :: UUIDEff :> es => Eff es UserId
@@ -272,7 +272,7 @@ data Project = Project
     via (GenericEntity '[Schema "projects", TableName "projects", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Project)
   deriving
     (AE.FromJSON, AE.ToJSON)
-    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Project
+    via DAE.Snake Project
 
 
 -- FIXME: Why was this record created? And not the regular projects record?
@@ -506,7 +506,7 @@ data ProjectPatch = ProjectPatch
   , errorAlerts :: Maybe Bool
   }
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ProjectPatch
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake ProjectPatch
   deriving (ToSchema) via SnakeSchema ProjectPatch
 
 

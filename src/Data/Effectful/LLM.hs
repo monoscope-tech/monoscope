@@ -15,6 +15,7 @@ import Data.Text qualified as T
 import Data.Vector qualified as V
 import Effectful
 import Effectful.Dispatch.Dynamic
+import Effectful.TH
 import Langchain.DocumentLoader.Core qualified as DocLoader
 import Langchain.Embeddings.Core qualified as EmbCore
 import Langchain.Embeddings.OpenAI qualified as EmbOAI
@@ -66,19 +67,7 @@ data LLM :: Effect where
 type instance DispatchOf LLM = 'Dynamic
 
 
--- | API function to call LLM with a specific model
-callLLM :: LLM :> es => Text -> Text -> Text -> Eff es (Either Text Text)
-callLLM model prompt apiKey = send (CallLLM model prompt apiKey)
-
-
--- | API function to call agentic chat
-callAgenticChat :: LLM :> es => LLMCore.ChatHistory -> OpenAIV1.CreateChatCompletion -> Text -> Eff es (Either Text LLMCore.Message)
-callAgenticChat history params apiKey = send (CallAgenticChat history params apiKey)
-
-
--- | API function to embed documents via OpenAI embeddings
-embedDocuments :: LLM :> es => EmbOAI.OpenAIEmbeddings -> [DocLoader.Document] -> Eff es (Either Text [[Float]])
-embedDocuments config docs = send (EmbedDocuments config docs)
+makeEffect ''LLM
 
 
 -- | Real interpreter that makes actual OpenAI API calls

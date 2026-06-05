@@ -53,7 +53,7 @@ import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, G
 import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.ToField (ToField)
-import Deriving.Aeson qualified as DAE
+import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, type (:>))
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
@@ -117,7 +117,7 @@ data LogPattern = LogPattern
     via (GenericEntity '[Schema "apis", TableName "log_patterns", PrimaryKey "id", FieldModifiers '[CamelToSnake]] LogPattern)
   deriving
     (AE.FromJSON, AE.ToJSON)
-    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] LogPattern
+    via DAE.Snake LogPattern
 
 
 data UpsertPattern = UpsertPattern
@@ -383,7 +383,7 @@ data LogPatternWithRate = LogPatternWithRate
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, HI.DecodeRow)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] LogPatternWithRate
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake LogPatternWithRate
 
 
 -- | Get all established patterns with their current hour counts for spike detection.

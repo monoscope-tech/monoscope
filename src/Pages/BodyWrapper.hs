@@ -1,4 +1,4 @@
-module Pages.BodyWrapper (bodyWrapper, BWConfig (..), PageCtx (..), mkPageCtx, onboardingChecklist_, settingsContentTarget, navTabAttrs) where
+module Pages.BodyWrapper (bodyWrapper, BWConfig (..), PageCtx (..), mkPageCtx, withPageWrapper, withSettingsPage, onboardingChecklist_, settingsContentTarget, navTabAttrs) where
 
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default, def)
@@ -18,7 +18,7 @@ import Pkg.DeriveUtils (hashAssetFile)
 import PyF
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
-import System.Types (ATAuthCtx)
+import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils (FreeTierStatus (..), LoadingSize (..), LoadingType (..), faSprite_, fieldContextMenuItems_, freeTierUsageBanner, loadingIndicatorWith_, loadingIndicator_, navTabAttrs)
 import Web.I18n qualified as I18n
 
@@ -31,6 +31,21 @@ mkPageCtx pid = do
   (sess, project) <- Projects.sessionAndProject pid
   appCtx <- EffReader.ask @AuthContext
   pure (sess, project, def{sessM = Just sess, currProject = Just project, config = appCtx.config})
+
+
+-- | Build a full page response: bootstraps page ctx, lets the caller tweak
+-- BWConfig (page title, flags, etc.) given the project, then wraps the body.
+withPageWrapper :: Projects.ProjectId -> (Projects.Project -> BWConfig -> (BWConfig, Html ())) -> ATAuthCtx (RespHeaders (Html ()))
+withPageWrapper pid build = do
+  (_, project, bw) <- mkPageCtx pid
+  let (bw', body) = build project bw
+  addRespHeaders $ bodyWrapper bw' body
+
+
+-- | Shortcut for settings sub-pages: sets pageTitle + isSettingsPage = True.
+withSettingsPage :: Projects.ProjectId -> Text -> (Projects.Project -> Html ()) -> ATAuthCtx (RespHeaders (Html ()))
+withSettingsPage pid title content =
+  withPageWrapper pid \p bw -> (bw{pageTitle = title, isSettingsPage = True}, content p)
 
 
 menu :: I18n.Language -> Projects.ProjectId -> [(Text, Text, Text)]

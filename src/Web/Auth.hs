@@ -41,6 +41,7 @@ import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
+import Deriving.Aeson.Stock qualified as DAE
 import Effectful (
   Eff,
   Effect,
@@ -447,7 +448,7 @@ data ClientMetadata = ClientMetadata
   , pubsubPushServiceAccount :: AE.Value
   }
   deriving stock (Generic, Show)
-  deriving (ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ClientMetadata
+  deriving (ToJSON) via DAE.Snake ClientMetadata
 
 
 clientMetadataH :: Maybe Text -> ATBaseCtx ClientMetadata
@@ -492,7 +493,7 @@ data DeviceCodeResponse = DeviceCodeResponse
   , expiresIn :: Int
   }
   deriving stock (Generic, Show)
-  deriving (FromJSON, ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] DeviceCodeResponse
+  deriving (FromJSON, ToJSON) via DAE.Snake DeviceCodeResponse
 
 
 data ProjectInfo = ProjectInfo {id :: Text, name :: Text}

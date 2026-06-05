@@ -48,6 +48,7 @@ import Database.PostgreSQL.Simple.FromField
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField
 import Deriving.Aeson qualified as DAE
+import Deriving.Aeson.Stock qualified as DAE
 import Deriving.Aeson.Stock qualified as DAES
 import Effectful
 import Effectful.Error.Static (Error, throwError)
@@ -152,7 +153,7 @@ data Constant = Constant
   }
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Constant
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Constant
 
 
 data Tab = Tab

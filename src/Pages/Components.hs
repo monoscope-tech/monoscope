@@ -1,4 +1,4 @@
-module Pages.Components (drawer_, emptyState_, resizer_, dateTime, paymentPlanPicker, navBar, modal_, modalCloseButton_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_, sparkline_, periodToggle_, abbreviateUnit, compactTimeAgo) where
+module Pages.Components (drawer_, emptyState_, resizer_, dateTime, paymentPlanPicker, navBar, modal_, modalCloseButton_, primaryButton_, ghostButton_, headerRow_, headerRowPad_, sectionHeader_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_, sparkline_, periodToggle_, abbreviateUnit, compactTimeAgo) where
 
 import Data.Default (Default (..))
 import Data.Text qualified as T
@@ -326,6 +326,26 @@ modal_ modalId btnTrigger = modalWith_ modalId def (Just btnTrigger)
 
 modalCloseButton_ :: Monad m => Text -> HtmlT m ()
 modalCloseButton_ modalId = label_ [Lucid.for_ modalId, Aria.label_ "Close modal", class_ "btn btn-sm btn-circle btn-ghost !absolute right-2 top-2 tap-target"] "✕"
+
+
+primaryButton_ :: Monad m => [Attribute] -> HtmlT m () -> HtmlT m ()
+primaryButton_ attrs = button_ (class_ "btn btn-primary btn-sm" : attrs)
+
+
+ghostButton_ :: Monad m => [Attribute] -> HtmlT m () -> HtmlT m ()
+ghostButton_ attrs = button_ (class_ "btn btn-ghost btn-sm" : attrs)
+
+
+headerRow_ :: Monad m => [Attribute] -> HtmlT m () -> HtmlT m ()
+headerRow_ attrs = div_ (class_ "flex items-center justify-between" : attrs)
+
+
+headerRowPad_ :: Monad m => [Attribute] -> HtmlT m () -> HtmlT m ()
+headerRowPad_ attrs = div_ (class_ "flex items-center justify-between px-4 py-3" : attrs)
+
+
+sectionHeader_ :: Monad m => [Attribute] -> HtmlT m () -> HtmlT m ()
+sectionHeader_ attrs = div_ (class_ "flex items-center justify-between mb-4" : attrs)
 
 
 resizer_ :: Text -> Text -> Bool -> Html ()

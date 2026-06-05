@@ -37,7 +37,7 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.FromField (FromField (..))
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (ToField (..))
-import Deriving.Aeson qualified as DAE
+import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, type (:>))
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
@@ -89,7 +89,7 @@ data MonitorAlertConfig = MonitorAlertConfig
   deriving stock (Generic, Show)
   deriving anyclass (Default, NFData)
   deriving (FromField, ToField) via Aeson MonitorAlertConfig
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] MonitorAlertConfig
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MonitorAlertConfig
   deriving (ToSchema) via SnakeSchema MonitorAlertConfig
 
 
@@ -131,7 +131,7 @@ data QueryMonitor = QueryMonitor
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, HI.DecodeRow, NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] QueryMonitor
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake QueryMonitor
   deriving (ToSchema) via SnakeSchema QueryMonitor
 
 
@@ -266,7 +266,7 @@ data WidgetAlertStatus = WidgetAlertStatus
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, HI.DecodeRow, NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] WidgetAlertStatus
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake WidgetAlertStatus
 
 
 getWidgetAlertStatuses :: DB es => V.Vector Text -> Eff es [WidgetAlertStatus]

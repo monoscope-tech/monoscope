@@ -75,6 +75,7 @@ import Data.Aeson.Key (fromText)
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap (lookup)
 import Data.Aeson.KeyMap qualified as AEKM
+import Data.Aeson.Types qualified as AET
 import Data.ByteString qualified as BS
 import Data.Char (isAlpha, isAlphaNum, isDigit)
 import Data.Default (Default (..))
@@ -82,7 +83,6 @@ import Data.Digest.XXHash (xxHash)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HS
-import Data.Scientific (toBoundedInteger)
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Lazy.Builder qualified as TLB
@@ -415,29 +415,34 @@ unwrapJsonPrimValue stripped = \case
   AE.Array items -> "[" <> toText (show (length items)) <> "]"
 
 
+-- | Positional vector lookup: decode the i-th element via FromJSON.
+lookupVec :: AE.FromJSON a => V.Vector AE.Value -> Int -> Maybe a
+lookupVec vec idx = vec V.!? idx >>= AET.parseMaybe AE.parseJSON
+
+
+-- | Key-indexed vector lookup via a column-index map.
+lookupVecBy :: AE.FromJSON a => V.Vector AE.Value -> HM.HashMap Text Int -> Text -> Maybe a
+lookupVecBy vec colIdxMap key = HM.lookup key colIdxMap >>= lookupVec vec
+
+
 lookupVecText :: V.Vector AE.Value -> Int -> Maybe Text
-lookupVecText vec idx = case vec V.!? idx of
-  Just (AE.String textValue) -> Just textValue -- Extract text from Value if it's a String
-  _ -> Nothing
+lookupVecText = lookupVec
 
 
 lookupVecInt :: V.Vector AE.Value -> Int -> Int
-lookupVecInt vec idx = case vec V.!? idx of
-  Just (AE.Number val) -> fromMaybe 0 $ toBoundedInteger val -- Extract text from Value if it's a String
-  _ -> 0
+lookupVecInt vec idx = fromMaybe 0 (lookupVec vec idx)
 
 
 lookupVecTextByKey :: V.Vector AE.Value -> HM.HashMap Text Int -> Text -> Maybe Text
-lookupVecTextByKey vec colIdxMap key = HM.lookup key colIdxMap >>= lookupVecText vec
+lookupVecTextByKey = lookupVecBy
 
 
 lookupVecBoolByKey :: V.Vector AE.Value -> HM.HashMap Text Int -> Text -> Bool
-lookupVecBoolByKey vec colIdxMap key =
-  fromMaybe False $ HM.lookup key colIdxMap >>= ((vec V.!?) >=> \case AE.Bool b -> Just b; _ -> Nothing)
+lookupVecBoolByKey v m k = fromMaybe False (lookupVecBy v m k)
 
 
 lookupVecIntByKey :: V.Vector AE.Value -> HM.HashMap Text Int -> Text -> Int
-lookupVecIntByKey vec colIdxMap key = maybe 0 (lookupVecInt vec) (HM.lookup key colIdxMap)
+lookupVecIntByKey v m k = fromMaybe 0 (lookupVecBy v m k)
 
 
 lookupValueText :: AE.Value -> Text -> Maybe Text

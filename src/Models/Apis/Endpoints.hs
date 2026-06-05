@@ -39,7 +39,7 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
-import Deriving.Aeson qualified as DAE
+import Deriving.Aeson.Stock qualified as DAE
 import Effectful
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
@@ -77,7 +77,7 @@ data Endpoint = Endpoint
   deriving stock (Eq, Generic, Show)
   deriving anyclass (Default, FromRow, HI.DecodeRow, NFData, ToRow)
   deriving (FromField) via Aeson Endpoint
-  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Endpoint
+  deriving (AE.FromJSON) via DAE.Snake Endpoint
 
 
 -- | Persist newly discovered endpoints and their host records together. Both

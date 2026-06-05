@@ -121,6 +121,7 @@ import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..), getAeson)
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Deriving.Aeson qualified as DAE
+import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, type (:>))
 import Effectful.Error.Static (Error, throwError)
 import Effectful.Time (Time)
@@ -225,7 +226,7 @@ data APIChangeData = APIChangeData
   deriving stock (Generic, Show)
   deriving anyclass (NFData)
   deriving (FromField, ToField) via Aeson APIChangeData
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] APIChangeData
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake APIChangeData
 
 
 -- | Runtime Exception issue data
@@ -242,7 +243,7 @@ data RuntimeExceptionData = RuntimeExceptionData
   deriving stock (Generic, Show)
   deriving anyclass (NFData)
   deriving (FromField, ToField) via Aeson RuntimeExceptionData
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] RuntimeExceptionData
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake RuntimeExceptionData
 
 
 -- | Query Alert issue data
@@ -258,7 +259,7 @@ data QueryAlertData = QueryAlertData
   deriving stock (Generic, Show)
   deriving anyclass (NFData)
   deriving (FromField, ToField) via Aeson QueryAlertData
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] QueryAlertData
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake QueryAlertData
 
 
 -- | Main Issue type
@@ -998,7 +999,7 @@ data LogPatternData = LogPatternData
   deriving stock (Generic, Show)
   deriving anyclass (NFData)
   deriving (FromField, ToField) via Aeson LogPatternData
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] LogPatternData
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake LogPatternData
 
 
 data RateChangeDirection = Spike | Drop
@@ -1036,7 +1037,7 @@ data LogPatternRateChangeData = LogPatternRateChangeData
   deriving stock (Generic, Show)
   deriving anyclass (NFData)
   deriving (FromField, ToField) via Aeson LogPatternRateChangeData
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] LogPatternRateChangeData
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake LogPatternRateChangeData
 
 
 data MkIssueOpts a = MkIssueOpts

@@ -79,6 +79,7 @@ import Data.Pool (withResource)
 import Data.Scientific (toBoundedInteger)
 import Data.Set qualified as S
 import Deriving.Aeson qualified as DAE
+import Deriving.Aeson.Stock qualified as DAE
 import Effectful.Ki qualified as Ki
 import OddJobs.Job (createJob)
 import Pkg.DeriveUtils (SnakeSchema (..))
@@ -96,7 +97,7 @@ data TraceTreeEntry = TraceTreeEntry
   , children :: Map.Map Text [Text]
   }
   deriving stock (Generic, Show)
-  deriving (AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] TraceTreeEntry
+  deriving (AE.ToJSON) via DAE.Snake TraceTreeEntry
   deriving (ToSchema) via SnakeSchema TraceTreeEntry
 
 

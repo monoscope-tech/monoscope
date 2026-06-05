@@ -82,7 +82,7 @@ import Network.HTTP.Types.URI qualified as URI
 import Pages.Anomalies qualified as AnomalyList
 import Pages.BodyWrapper
 import Pages.Charts.Charts qualified as Charts
-import Pages.Components (FieldCfg (..), FieldSize (..), ModalCfg (..), formField_, tagInput_)
+import Pages.Components (FieldCfg (..), FieldSize (..), ModalCfg (..), formField_, primaryButton_, tagInput_)
 import Pages.Components qualified as Components
 import Pages.GitSync qualified as GitSyncPage
 import Pages.LogExplorer.LogItem (getServiceName)
@@ -1327,7 +1327,7 @@ widgetAlertConfig_ _pid paymentPlan alertFormId alertEndpoint chartTargetId widg
       -- Action buttons
       div_ [class_ "flex items-center justify-end gap-2 pt-4 pb-20 mt-4 border-t border-strokeWeak"] do
         when hasAlert $ button_ [type_ "button", class_ "btn btn-ghost btn-sm", hxDelete_ alertEndpoint, hxSwap_ "none"] "Remove monitor"
-        button_ [type_ "submit", class_ "btn btn-primary btn-sm"] do
+        primaryButton_ [type_ "submit"] do
           faSprite_ "plus" "regular" "w-3.5 h-3.5"
           if hasAlert then "Update monitor" else "Create monitor"
 
@@ -1552,7 +1552,7 @@ dashboardsGet_ dg = do
             let teamList = Widget.encodeText $ (\x -> AE.object ["name" AE..= x.handle, "value" AE..= x.id]) <$> dg.teams
             formField_ FieldSm def{placeholder = "Add teams"} "Teams" "teamHandlesInput" False $ Just $ tagInput_ "teamHandlesInput" "Add teams" [data_ "tagify-text-prop" "name", data_ "tagify-whitelist" teamList]
             formField_ FieldSm def{placeholder = "reports/"} "Folder" "fileDir" False Nothing
-          div_ [class_ "shrink"] $ button_ [class_ "btn btn-primary btn-sm", type_ "submit"] "Create"
+          div_ [class_ "shrink"] $ primaryButton_ [type_ "submit"] "Create"
         div_ [class_ "py-2 border-b border-b-strokeWeak"] do
           span_ [class_ "text-sm "] "Using "
           span_ [class_ "text-sm font-medium", id_ "dItemTitle"] "Custom Dashboard"

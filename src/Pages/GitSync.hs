@@ -34,8 +34,8 @@ import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import OddJobs.Job (createJob)
-import Pages.BodyWrapper (BWConfig (..), bodyWrapper, mkPageCtx)
-import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), confirmModal_, connectionBadge_, formField_, iconBadgeLg_, iconBadge_, sectionLabel_, settingsH2_, settingsSection_)
+import Pages.BodyWrapper (BWConfig (..), bodyWrapper, mkPageCtx, withSettingsPage)
+import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), confirmModal_, connectionBadge_, formField_, headerRow_, iconBadgeLg_, iconBadge_, primaryButton_, sectionLabel_, settingsH2_, settingsSection_)
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude hiding (ask)
 import System.Config qualified as Config
@@ -140,10 +140,9 @@ validateWebhookSignature (Just secret) (Just sig) body =
 
 gitSyncSettingsGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 gitSyncSettingsGetH pid = do
-  (_, _, bw) <- mkPageCtx pid
   ctx <- ask @Config.AuthContext
   syncM <- GitSync.getGitHubSync pid
-  addRespHeaders $ bodyWrapper bw{pageTitle = "Integrations", isSettingsPage = True} $ gitSyncSettingsPage ctx.env.hostUrl pid syncM
+  withSettingsPage pid "Integrations" \_ -> gitSyncSettingsPage ctx.env.hostUrl pid syncM
 
 
 gitSyncSettingsPostH :: Projects.ProjectId -> GitSyncForm -> ATAuthCtx (RespHeaders (Html ()))
@@ -234,7 +233,7 @@ notConnectedView pid actionUrl installUrl = do
 connectedView :: Text -> Projects.ProjectId -> GitSync.GitHubSync -> Text -> Text -> Bool -> Html ()
 connectedView hostUrl pid sync actionUrl webhookUrl isViaApp = do
   -- Status line
-  div_ [class_ "flex items-center justify-between"] do
+  headerRow_ [] do
     div_ [class_ "flex items-center gap-2 text-sm"] do
       faSprite_ "circle-check" "solid" "w-3.5 h-3.5 text-iconSuccess"
       span_ [class_ "font-medium text-textStrong"] $ toHtml $ sync.owner <> "/" <> sync.repo
@@ -255,7 +254,7 @@ connectedView hostUrl pid sync actionUrl webhookUrl isViaApp = do
 
     -- Webhook URL
     div_ [class_ "pt-4 border-t border-strokeWeak space-y-2"] do
-      div_ [class_ "flex items-center justify-between"] do
+      headerRow_ [] do
         sectionLabel_ "Webhook URL"
         button_ [type_ "button", class_ "btn btn-xs btn-ghost gap-1", onclick_ ("navigator.clipboard.writeText('" <> webhookUrl <> "'); this.querySelector('span').textContent='Copied!'; setTimeout(() => this.querySelector('span').textContent='Copy', 2000)")] do
           faSprite_ "copy" "regular" "w-3 h-3"
@@ -466,7 +465,7 @@ repoSelectionView pid instId repos = div_ [class_ "space-y-4"] do
     div_ [class_ "grid grid-cols-2 gap-4"] do
       formField_ FieldSm def{value = "main", placeholder = "main"} "Branch" "branch" False Nothing
       formField_ FieldSm def{placeholder = "monoscope"} "Path Prefix (optional)" "pathPrefix" False Nothing
-    button_ [type_ "submit", class_ "btn btn-primary btn-sm"] "Connect Repository"
+    primaryButton_ [type_ "submit"] "Connect Repository"
 
 
 -- | Handle repo selection from GitHub App

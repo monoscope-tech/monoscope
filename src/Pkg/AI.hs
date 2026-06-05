@@ -51,7 +51,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Vector qualified as V
-import Deriving.Aeson qualified as DAE
+import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, (:>))
 import Effectful.Log (Log)
 import Effectful.Log qualified as Log
@@ -86,7 +86,7 @@ data ToolCallInfo = ToolCallInfo
   , rawData :: Maybe AE.Value -- Structured query results for widget data reuse
   }
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ToolCallInfo
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake ToolCallInfo
 
 
 -- | Result of tool execution with optional raw data for widget reuse
@@ -113,7 +113,7 @@ data LLMResponse = LLMResponse
   , toolCalls :: Maybe [ToolCallInfo] -- Tool execution results (for widget data reuse)
   }
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] LLMResponse
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake LLMResponse
 
 
 callOpenAIAPIEff :: ELLM.LLM :> es => Text -> Text -> Text -> Eff es (Either Text Text)
