@@ -341,7 +341,7 @@ headerRowPad_ attrs = div_ (class_ " flex items-center justify-between px-4 py-3
 
 
 sectionHeader_ :: Monad m => [Attribute] -> HtmlT m () -> HtmlT m ()
-sectionHeader_ attrs = headerRow_ (class_ " mb-4 " : attrs)
+sectionHeader_ attrs = div_ (class_ " flex items-center justify-between mb-4 " : attrs)
 
 
 resizer_ :: Text -> Text -> Bool -> Html ()

@@ -47,7 +47,6 @@ import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField
-import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
 import Effectful.Error.Static (Error, throwError)

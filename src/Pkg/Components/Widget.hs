@@ -18,8 +18,7 @@ import Data.Text qualified as T
 import Data.Time (ZonedTime, defaultTimeLocale, parseTimeM)
 import Data.Time.Format (formatTime)
 import Data.Vector qualified as V
-import Deriving.Aeson qualified as DAE
-import Deriving.Aeson.Stock qualified as DAES
+import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, (:>))
 import Effectful.Log (Log)
 import Effectful.Reader.Static qualified
@@ -66,7 +65,7 @@ data Query = Query
   }
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, FromForm, NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAES.Snake Query
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Query
 
 
 data Layout = Layout
@@ -77,7 +76,7 @@ data Layout = Layout
   }
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, FromForm, NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAES.Snake Layout
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Layout
 
 
 data WidgetType
@@ -235,7 +234,7 @@ data TableColumn = TableColumn
   }
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, FromForm, NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAES.Snake TableColumn
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake TableColumn
 
 
 data RowClickAction = RowClickAction
@@ -245,7 +244,7 @@ data RowClickAction = RowClickAction
   }
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, FromForm, NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAES.Snake RowClickAction
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake RowClickAction
 
 
 -- | Encode a value as JSON Text (used for data attributes, widget JSON, etc.)
