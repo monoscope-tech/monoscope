@@ -329,19 +329,19 @@ modalCloseButton_ modalId = label_ [Lucid.for_ modalId, Aria.label_ "Close modal
 
 
 primaryButton_ :: Monad m => [Attribute] -> HtmlT m () -> HtmlT m ()
-primaryButton_ attrs = button_ (class_ "btn btn-primary btn-sm" : attrs)
+primaryButton_ attrs = button_ (class_ " btn btn-primary btn-sm " : attrs)
 
 
 headerRow_ :: Monad m => [Attribute] -> HtmlT m () -> HtmlT m ()
-headerRow_ attrs = div_ (class_ "flex items-center justify-between" : attrs)
+headerRow_ attrs = div_ (class_ " flex items-center justify-between " : attrs)
 
 
 headerRowPad_ :: Monad m => [Attribute] -> HtmlT m () -> HtmlT m ()
-headerRowPad_ attrs = div_ (class_ "flex items-center justify-between px-4 py-3" : attrs)
+headerRowPad_ attrs = div_ (class_ " flex items-center justify-between px-4 py-3 " : attrs)
 
 
 sectionHeader_ :: Monad m => [Attribute] -> HtmlT m () -> HtmlT m ()
-sectionHeader_ attrs = headerRow_ (class_ "mb-4" : attrs)
+sectionHeader_ attrs = headerRow_ (class_ " mb-4 " : attrs)
 
 
 resizer_ :: Text -> Text -> Bool -> Html ()
