@@ -1553,7 +1553,9 @@ dualExecPgTf ctx sql' = Ki.scoped \scope -> do
         Left e -> do
           opened <- liftIO $ ExtractionWorker.recordCircuitFailure ctx.tfCircuit now
           Log.logAttention (if opened then "TimeFusion circuit opened" else "TimeFusion write failed") (show @Text e)
-  Ki.atomically $ Ki.await mainThread
+  -- Await BOTH threads: scope-close cancellation of an in-flight Hasql session
+  -- segfaults libpq.
+  Ki.atomically (Ki.awaitAll scope *> Ki.await mainThread)
   where
     retryOnDeadlock :: (DB es, Log :> es) => Int -> Eff es Int64 -> Eff es Int64
     retryOnDeadlock 0 action = action
