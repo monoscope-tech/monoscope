@@ -28,7 +28,7 @@ import Data.Effectful.Wreq (
   responseBody,
  )
 import Data.Time qualified as Time
-import Effectful (Eff, type (:>))
+import Effectful (Eff, IOE, type (:>))
 import Effectful.Log qualified as Log
 import Effectful.Time qualified as Time
 import Models.Apis.Issues qualified as Issues
@@ -454,7 +454,7 @@ data DiscordMessage = DiscordMessage
   deriving anyclass (AE.FromJSON)
 
 
-getThreadStarterMessage :: (HTTP :> es, Ki.StructuredConcurrency :> es, Log.Log :> es) => DiscordInteraction -> Text -> Eff es (Maybe [DiscordMessage])
+getThreadStarterMessage :: (HTTP :> es, IOE :> es, Ki.StructuredConcurrency :> es, Log.Log :> es) => DiscordInteraction -> Text -> Eff es (Maybe [DiscordMessage])
 getThreadStarterMessage interaction botToken = do
   case interaction.channel_id of
     Just channelId -> case interaction.channel of
