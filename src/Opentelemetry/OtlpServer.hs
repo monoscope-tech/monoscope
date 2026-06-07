@@ -241,7 +241,7 @@ processList :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.Struct
 processList [] _ = pure []
 processList msgs !attrs =
   withSpan_
-    "otlp.processList"
+    "otlp.process_list"
     [ ("messaging.batch.message_count", OA.toAttribute (length msgs))
     , ("ce.type", OA.toAttribute (fromMaybe "" (HM.lookup "ce-type" attrs)))
     ]
