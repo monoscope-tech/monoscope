@@ -29,7 +29,7 @@ import OpenTelemetry.Trace (
  )
 import OpenTelemetry.Trace qualified as Trace
 import Relude hiding (span)
-import UnliftIO.Exception (bracket, finally)
+import UnliftIO.Exception (bracket, finally, withException)
 
 
 data Tracing :: Effect where
@@ -55,11 +55,13 @@ runTracing tp = interpret $ \env -> \case
       ctx <- Context.getContext
       sp <- Trace.createSpan tracer ctx name (defaultSpanArguments{Trace.kind = Server, Trace.attributes = attrMap})
       Context.adjustContext (Context.insertSpan sp)
-      -- bracket so the span is closed and the context restored even if
-      -- the body throws (otherwise we silently leak open spans).
-      unlift (f sp) `finally` liftIO do
-        Context.adjustContext (const ctx)
-        Trace.endSpan sp Nothing
+      -- Mark the span Error on exception, then always close it + restore
+      -- context (otherwise failed operations show as green spans and we
+      -- silently leak unclosed spans).
+      withException (unlift (f sp)) (\(e :: SomeException) -> Trace.setStatus sp (Error (toText (displayException e))))
+        `finally` do
+          Context.adjustContext (const ctx)
+          Trace.endSpan sp Nothing
   AddEvent span event attrs -> liftIO $ Trace.addEvent span $ Trace.NewEvent event (HM.fromList attrs) Nothing
   AddAttribute span k v -> liftIO $ Trace.addAttribute span k v
   SetStatus span status -> liftIO $ Trace.setStatus span status

@@ -142,9 +142,9 @@ processMessages [] _ = pure []
 processMessages msgs attrs =
   withSpan_
     "pubsub.process_messages"
-    [ ("messaging.batch.message_count", OA.toAttribute (length msgs))
-    , ("ce.type", OA.toAttribute @Text $ fold (HM.lookup "ce-type" attrs))
-    ]
+    ( ("messaging.batch.message_count", OA.toAttribute (length msgs))
+        : foldMap (\v -> [("ce.type", OA.toAttribute @Text v)]) (HM.lookup "ce-type" attrs)
+    )
     do
       appCtx <- Eff.ask @AuthContext
       (rMsgs, mWrite) <- Metrics.timed Metrics.ingestDecodeHist [] do

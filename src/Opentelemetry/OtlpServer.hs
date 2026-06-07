@@ -242,9 +242,9 @@ processList [] _ = pure []
 processList msgs !attrs =
   withSpan_
     "otlp.process_list"
-    [ ("messaging.batch.message_count", OA.toAttribute (length msgs))
-    , ("ce.type", OA.toAttribute @Text $ fold (HM.lookup "ce-type" attrs))
-    ]
+    ( ("messaging.batch.message_count", OA.toAttribute (length msgs))
+        : foldMap (\v -> [("ce.type", OA.toAttribute @Text v)]) (HM.lookup "ce-type" attrs)
+    )
     $ checkpoint "processList" do
       startTime <- Time.currentTime
       (result, processingTime, dbInsertTime) <- process startTime `onException` handleException
