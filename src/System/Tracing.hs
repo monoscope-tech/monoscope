@@ -97,5 +97,7 @@ forkWithCtx scope action = do
 -- @ce.type@ only when present in the CloudEvents header map.
 batchSpanAttrs :: Int -> HM.HashMap Text Text -> [(Text, Attribute)]
 batchSpanAttrs n attrs =
-  ("messaging.batch.message_count", OA.toAttribute n)
-    : maybeToList (("ce.type",) . OA.toAttribute <$> HM.lookup "ce-type" attrs)
+  catMaybes
+    [ Just ("messaging.batch.message_count", OA.toAttribute n)
+    , ("ce.type",) . OA.toAttribute <$> HM.lookup "ce-type" attrs
+    ]
