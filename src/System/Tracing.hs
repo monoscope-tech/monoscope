@@ -98,4 +98,4 @@ forkWithCtx scope action = do
 batchSpanAttrs :: Int -> HM.HashMap Text Text -> [(Text, Attribute)]
 batchSpanAttrs n attrs =
   ("messaging.batch.message_count", OA.toAttribute n)
-    : toList (("ce.type",) . OA.toAttribute @Text <$> HM.lookup "ce-type" attrs)
+    : maybeToList (("ce.type",) . OA.toAttribute @Text <$> HM.lookup "ce-type" attrs)
