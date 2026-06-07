@@ -242,7 +242,7 @@ processList [] _ = pure []
 processList msgs !attrs =
   withSpan_
     "otlp.process_list"
-    [ ("messaging.batch.message_count", OA.toAttribute (fromIntegral @Int @Int64 $ length msgs))
+    [ ("messaging.batch.message_count", OA.toAttribute (length msgs))
     , ("ce.type", OA.toAttribute @Text $ fold (HM.lookup "ce-type" attrs))
     ]
     $ checkpoint "processList" do

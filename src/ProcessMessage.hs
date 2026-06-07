@@ -142,7 +142,7 @@ processMessages [] _ = pure []
 processMessages msgs attrs =
   withSpan_
     "pubsub.process_messages"
-    [ ("messaging.batch.message_count", OA.toAttribute (fromIntegral @Int @Int64 $ length msgs))
+    [ ("messaging.batch.message_count", OA.toAttribute (length msgs))
     , ("ce.type", OA.toAttribute @Text $ fold (HM.lookup "ce-type" attrs))
     ]
     do
