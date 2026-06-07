@@ -10,6 +10,9 @@ module System.Tracing (
 
   -- * Cross-thread context propagation
   forkWithCtx,
+
+  -- * Common attribute builders
+  batchSpanAttrs,
 ) where
 
 import Data.HashMap.Strict qualified as HM
@@ -18,6 +21,7 @@ import Effectful.Dispatch.Dynamic
 import Effectful.Ki qualified as Ki
 import Effectful.TH
 import OpenTelemetry.Attributes (Attribute)
+import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Context qualified as Context
 import OpenTelemetry.Context.ThreadLocal qualified as Context
 import OpenTelemetry.Trace (
@@ -86,3 +90,12 @@ forkWithCtx scope action = do
       (liftIO $ Context.attachContext ctx)
       (liftIO . Context.detachContext)
       (const action)
+
+
+-- | Standard attributes for batch-processing root spans (queue consumers,
+-- gRPC handlers). Always emits @messaging.batch.message_count@; emits
+-- @ce.type@ only when present in the CloudEvents header map.
+batchSpanAttrs :: Int -> HM.HashMap Text Text -> [(Text, Attribute)]
+batchSpanAttrs n attrs =
+  ("messaging.batch.message_count", OA.toAttribute n)
+    : toList (("ce.type",) . OA.toAttribute @Text <$> HM.lookup "ce-type" attrs)

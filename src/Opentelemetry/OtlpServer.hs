@@ -88,7 +88,7 @@ import Relude.Extra.Enum (safeToEnum)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.IO.Unsafe (unsafePerformIO)
 import System.Logging qualified as Log
-import System.Tracing (Tracing, withSpan_)
+import System.Tracing (Tracing, batchSpanAttrs, withSpan_)
 import System.Types (ATBackgroundCtx, DB, runBackground)
 import UnliftIO.Exception (tryAny)
 import Utils (b64ToJson, freeTierDailyMaxEvents, jsonToMap, nestedJsonFromDotNotation)
@@ -240,11 +240,7 @@ stampOrPassthrough appCtx v =
 processList :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es, UUIDEff :> es) => [(Text, ByteString)] -> HM.HashMap Text Text -> Eff es [Text]
 processList [] _ = pure []
 processList msgs !attrs =
-  withSpan_
-    "otlp.process_list"
-    ( ("messaging.batch.message_count", OA.toAttribute (length msgs))
-        : foldMap (\v -> [("ce.type", OA.toAttribute @Text v)]) (HM.lookup "ce-type" attrs)
-    )
+  withSpan_ "otlp.process_list" (batchSpanAttrs (length msgs) attrs)
     $ checkpoint "processList" do
       startTime <- Time.currentTime
       (result, processingTime, dbInsertTime) <- process startTime `onException` handleException
