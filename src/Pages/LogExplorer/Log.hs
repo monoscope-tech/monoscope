@@ -84,7 +84,7 @@ import Effectful.Ki qualified as Ki
 import OddJobs.Job (createJob)
 import Pkg.DeriveUtils (SnakeSchema (..))
 import System.Logging qualified as Log
-import System.Tracing (Tracing)
+import System.Tracing (Tracing, forkWithCtx)
 import UnliftIO.Exception (tryAny)
 
 
@@ -735,15 +735,15 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
       -- Full HTML path: parallelize independent DB queries
       (tableAsVecE, queryLibE, facetSummaryE, freeTierStatusE, teamsE, aggregateE) <- Ki.scoped \scope -> do
         let aw = Ki.atomically . Ki.await
-        t1 <- Ki.fork scope fetchOrSkip
-        t2 <- Ki.fork scope $ tryAny $ Projects.queryLibHistoryForUser pid sess.persistentSession.userId
-        t3 <- Ki.fork scope $ tryAny $ SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" (fromMaybe (addUTCTime (-86400) now) fromD) (fromMaybe now toD)
-        t4 <- Ki.fork scope $ tryAny $ checkFreeTierStatus pid project.paymentPlan
-        t5 <- Ki.fork scope $ tryAny $ V.fromList <$> ManageMembers.getTeams pid
+        t1 <- forkWithCtx scope fetchOrSkip
+        t2 <- forkWithCtx scope $ tryAny $ Projects.queryLibHistoryForUser pid sess.persistentSession.userId
+        t3 <- forkWithCtx scope $ tryAny $ SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" (fromMaybe (addUTCTime (-86400) now) fromD) (fromMaybe now toD)
+        t4 <- forkWithCtx scope $ tryAny $ checkFreeTierStatus pid project.paymentPlan
+        t5 <- forkWithCtx scope $ tryAny $ V.fromList <$> ManageMembers.getTeams pid
         -- Patterns and sessions are mutually exclusive; a single fork suffices.
         -- The summary is tried independently so its failure doesn't drop the
         -- sessions table with it.
-        t6 <- Ki.fork scope $ tryAny $ case effectiveVizType of
+        t6 <- forkWithCtx scope $ tryAny $ case effectiveVizType of
           Just "patterns" -> (,Nothing,Nothing) . Just . second V.fromList <$> LogQueries.fetchLogPatterns authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) (parseMaybe pSource =<< sourceM) pTargetM (fromMaybe 0 skipM)
           Just "sessions" -> do
             rows <- second V.fromList <$> LogQueries.fetchSessions authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) sortByM (fromMaybe 0 skipM)

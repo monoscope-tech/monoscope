@@ -62,6 +62,7 @@ import Network.GRPC.Common.Protobuf
 import Network.GRPC.Server (RpcHandler, SomeRpcHandler, getRequestMetadata, mkRpcHandler, recvFinalInput, sendFinalOutput)
 import Network.GRPC.Server.Run hiding (runServer)
 import Network.GRPC.Server.StreamType (Methods (..), fromMethods)
+import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
 import Pkg.DeriveUtils (AesonText (..), UUIDId (..), unUUIDId)
 import Pkg.ErrorMetrics (wireTypeErrorsRef)
@@ -87,6 +88,7 @@ import Relude.Extra.Enum (safeToEnum)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.IO.Unsafe (unsafePerformIO)
 import System.Logging qualified as Log
+import System.Tracing (Tracing, withSpan_)
 import System.Types (ATBackgroundCtx, DB, runBackground)
 import UnliftIO.Exception (tryAny)
 import Utils (b64ToJson, freeTierDailyMaxEvents, jsonToMap, nestedJsonFromDotNotation)
@@ -235,26 +237,32 @@ stampOrPassthrough appCtx v =
 
 
 -- | Process a list of messages
-processList :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es, UUIDEff :> es) => [(Text, ByteString)] -> HM.HashMap Text Text -> Eff es [Text]
+processList :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es, UUIDEff :> es) => [(Text, ByteString)] -> HM.HashMap Text Text -> Eff es [Text]
 processList [] _ = pure []
-processList msgs !attrs = checkpoint "processList" do
-  startTime <- Time.currentTime
-  (result, processingTime, dbInsertTime) <- process startTime `onException` handleException
-  endTime <- Time.currentTime
-
-  let duration = diffUTCTime endTime startTime
-  Log.logTrace
-    "processList: batch processing completed"
-    ( AE.object
-        [ "ce-type" AE..= HM.lookup "ce-type" attrs
-        , "event_count" AE..= length msgs
-        , "duration_seconds" AE..= realToFrac @_ @Double duration
-        , "duration_ms" AE..= (round (duration * 1000) :: Int)
-        , "processing_ms" AE..= processingTime
-        , "db_insert_ms" AE..= dbInsertTime
-        ]
+processList msgs !attrs =
+  withSpan_
+    "otlp.process_list"
+    ( ("messaging.batch.message_count", OA.toAttribute (length msgs))
+        : foldMap (\v -> [("ce.type", OA.toAttribute @Text v)]) (HM.lookup "ce-type" attrs)
     )
-  pure result
+    $ checkpoint "processList" do
+      startTime <- Time.currentTime
+      (result, processingTime, dbInsertTime) <- process startTime `onException` handleException
+      endTime <- Time.currentTime
+
+      let duration = diffUTCTime endTime startTime
+      Log.logTrace
+        "processList: batch processing completed"
+        ( AE.object
+            [ "ce-type" AE..= HM.lookup "ce-type" attrs
+            , "event_count" AE..= length msgs
+            , "duration_seconds" AE..= realToFrac @_ @Double duration
+            , "duration_ms" AE..= (round (duration * 1000) :: Int)
+            , "processing_ms" AE..= processingTime
+            , "db_insert_ms" AE..= dbInsertTime
+            ]
+        )
+      pure result
   where
     handleException = checkpoint "processList:exception" do
       Log.logAttention "processList: caught exception" (AE.object ["ce-type" AE..= HM.lookup "ce-type" attrs, "msg_count" AE..= length msgs, "attrs" AE..= attrs])
@@ -1680,7 +1688,7 @@ metricsServiceRpcHandler appLogger appCtx tp = mkRpcHandler $ \call -> do
 -- client will resend rather than seeing an INTERNAL status.
 grpcRunBackground :: Logger -> AuthContext -> TracerProvider -> Text -> ATBackgroundCtx () -> IO ()
 grpcRunBackground appLogger appCtx tp label task =
-  tryAny (runBackground appLogger appCtx tp task) >>= \case
+  tryAny (runBackground appLogger appCtx tp $ withSpan_ ("otlp.grpc." <> label) [("otlp.signal", OA.toAttribute label)] task) >>= \case
     Right _ -> pass
     Left e ->
       let kind = if isJust (fromException @Hasql.HasqlException e) then "hasql" else "other" :: Text

@@ -462,6 +462,10 @@ getThreadStarterMessage interaction botToken = do
             url = toString $ baseUrl <> channelId <> "/messages?limit=50"
             starterMessageUrl = toString $ baseUrl <> pId <> "/messages/" <> channelId
             opts = defaults & authHeader botToken & contentTypeHeader "application/json"
+        -- Plain Ki.fork (not forkWithCtx): Data.Effectful.Wreq.getWith is not
+        -- OTel-instrumented, so the child fibers emit no spans — there is
+        -- nothing to parent and propagation would only add IOE constraint
+        -- noise to this signature.
         (response, response') <- Ki.scoped \scope -> do
           t1 <- Ki.fork scope $ getWith opts url
           t2 <- Ki.fork scope $ getWith opts starterMessageUrl

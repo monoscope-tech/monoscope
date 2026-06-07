@@ -107,7 +107,7 @@ import Relude.Extra.Tuple (fmapToSnd)
 import System.Clock (Clock (Monotonic), diffTimeSpec, getTime, toNanoSecs)
 import System.Config qualified as Config
 import System.Logging qualified as Log
-import System.Tracing (SpanStatus (..), Tracing, addEvent, setStatus, withSpan)
+import System.Tracing (SpanStatus (..), Tracing, addEvent, forkWithCtx, setStatus, withSpan)
 import System.Types (ATBackgroundCtx, DB, runBackground)
 import UnliftIO.Exception (bracket, catch, throwIO, try, tryAny)
 import Utils (calculateCycleStartDate, formatUTC, freeTierDailyMaxEvents, toXXHash)
@@ -931,7 +931,7 @@ generateOtelFacetsBatch projectIds _timestamp = do
 
   -- Process projects concurrently with individual error handling
   results <- Ki.scoped \scope -> do
-    threads <- forM projectIds \pid -> Ki.fork scope $ do
+    threads <- forM projectIds \pid -> forkWithCtx scope $ do
       -- Wrap each project's facet generation in a span
       withSpan
         "facet_generation.project"
@@ -1565,11 +1565,11 @@ safetyNetReprocess pid = do
 -- | Dual-fork an UPDATE to Postgres (blocking, deadlock-retried) + TimeFusion (best-effort, circuit-broken).
 dualExecPgTf :: (DB es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Config.AuthContext -> HI.Sql -> Eff es Int64
 dualExecPgTf ctx sql' = Ki.scoped \scope -> do
-  mainThread <- Ki.fork scope $ retryOnDeadlock "UPDATE-1" $ Hasql.transaction TxS.ReadCommitted TxS.Write $ do
+  mainThread <- forkWithCtx scope $ retryOnDeadlock "UPDATE-1" $ Hasql.transaction TxS.ReadCommitted TxS.Write $ do
     Tx.sql "SET LOCAL lock_timeout = '30s'"
     Tx.sql "SET LOCAL statement_timeout = '5min'"
     HI.getRowsAffected <$> Tx.statement () (HI.interp True sql')
-  _ <- Ki.fork scope $ Relude.when ctx.config.enableTimefusionWrites $ do
+  _ <- forkWithCtx scope $ Relude.when ctx.config.enableTimefusionWrites $ do
     now <- Time.currentTime
     shouldAttempt <- liftIO $ ExtractionWorker.shouldAttemptCircuit ctx.tfCircuit now
     Relude.when shouldAttempt
@@ -1690,7 +1690,7 @@ processEagerBatch batch shard
         -- to avoid double-upsert (which would return 'unchanged' and skip issue creation).
         Ki.scoped \scope -> do
           let forkNonEmpty :: V.Vector a -> (V.Vector a -> ATBackgroundCtx ()) -> ATBackgroundCtx ()
-              forkNonEmpty v action = Relude.unless (V.null v) $ void $ Ki.fork scope $ action v
+              forkNonEmpty v action = Relude.unless (V.null v) $ void $ forkWithCtx scope $ action v
           forkNonEmpty endpointsFinal Endpoints.bulkInsertEndpoints
           -- Legacy apis.shapes/fields/formats writes removed; the
           -- in-memory schema-learning catalog (observeSpans above) +
@@ -2894,7 +2894,7 @@ gitSyncFromRepo pid = do
                   -- Fetch file contents in parallel for creates and updates
                   let fetchActions = creates <> updates
                   Ki.scoped \scope -> do
-                    forM_ fetchActions $ Ki.fork scope . processGitSyncAction pid token sync teamMap
+                    forM_ fetchActions $ forkWithCtx scope . processGitSyncAction pid token sync teamMap
                     Ki.atomically $ Ki.awaitAll scope
                   -- Process deletes (no HTTP needed)
                   forM_ deletes \(path, dashId) -> do

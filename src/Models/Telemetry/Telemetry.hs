@@ -116,6 +116,7 @@ import Relude hiding (ask)
 import Relude.Extra.Enum (safeToEnum)
 import System.IO (hPutStrLn)
 import System.Logging qualified as Log
+import System.Tracing (forkWithCtx)
 import Text.Regex.TDFA.Text ()
 import UnliftIO (throwIO, tryAny)
 import Utils (extractMessageFromLog, getDurationNSMS, lookupValueText)
@@ -863,8 +864,8 @@ bulkInsertOtelLogsAndSpansTF enableTf records = do
   Log.logTrace "bulkInsertOtelLogsAndSpansTF called" $ AE.object [("record_count", AE.toJSON $ V.length records), ("enableTimefusionWrites", AE.toJSON enableTf)]
   if enableTf
     then Ki.scoped \scope -> do
-      pgThread <- Ki.fork scope $ tryAny $ void $ bulkInsertOtelLogsAndSpans records
-      tfThread <- Ki.fork scope do
+      pgThread <- forkWithCtx scope $ tryAny $ void $ bulkInsertOtelLogsAndSpans records
+      tfThread <- forkWithCtx scope do
         Log.logTrace "TimeFusion write enabled, attempting write" $ AE.object [("record_count", AE.toJSON $ V.length records)]
         res <- tryAny (retryTimefusion 10 records)
         whenLeft_ res \e -> do

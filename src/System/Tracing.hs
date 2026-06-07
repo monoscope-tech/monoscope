@@ -7,11 +7,15 @@ module System.Tracing (
   addAttribute,
   setStatus,
   SpanStatus (..),
+
+  -- * Cross-thread context propagation
+  forkWithCtx,
 ) where
 
 import Data.HashMap.Strict qualified as HM
 import Effectful
 import Effectful.Dispatch.Dynamic
+import Effectful.Ki qualified as Ki
 import Effectful.TH
 import OpenTelemetry.Attributes (Attribute)
 import OpenTelemetry.Context qualified as Context
@@ -25,6 +29,7 @@ import OpenTelemetry.Trace (
  )
 import OpenTelemetry.Trace qualified as Trace
 import Relude hiding (span)
+import UnliftIO.Exception (bracket, finally, withException)
 
 
 data Tracing :: Effect where
@@ -47,21 +52,16 @@ runTracing tp = interpret $ \env -> \case
         attrMap = HM.fromList attrs
     -- Properly propagate context through the span lifecycle
     localSeqUnliftIO env $ \unlift -> liftIO $ do
-      -- Get current context
       ctx <- Context.getContext
-      -- Create span with current context
       sp <- Trace.createSpan tracer ctx name (defaultSpanArguments{Trace.kind = Server, Trace.attributes = attrMap})
-      -- Insert span into context for propagation
-      let newCtx = Context.insertSpan sp ctx
-      -- Set the new context
-      Context.adjustContext (const newCtx)
-      -- Run the action with the new context
-      result <- unlift (f sp)
-      -- Restore the original context
-      Context.adjustContext (const ctx)
-      -- End the span
-      Trace.endSpan sp Nothing
-      pure result
+      Context.adjustContext (Context.insertSpan sp)
+      -- Mark the span Error on exception, then always close it + restore
+      -- context (otherwise failed operations show as green spans and we
+      -- silently leak unclosed spans).
+      withException (unlift (f sp)) (\(e :: SomeException) -> Trace.setStatus sp (Error (toText (displayException e))))
+        `finally` do
+          Context.adjustContext (const ctx)
+          Trace.endSpan sp Nothing
   AddEvent span event attrs -> liftIO $ Trace.addEvent span $ Trace.NewEvent event (HM.fromList attrs) Nothing
   AddAttribute span k v -> liftIO $ Trace.addAttribute span k v
   SetStatus span status -> liftIO $ Trace.setStatus span status
@@ -69,3 +69,20 @@ runTracing tp = interpret $ \env -> \case
 
 withSpan_ :: Tracing :> es => Text -> [(Text, Attribute)] -> Eff es a -> Eff es a
 withSpan_ name attrs action = withSpan name attrs $ const action
+
+
+-- | Effectful 'Ki.fork' that copies the OTel thread-local context into the
+-- child fiber. Without this, hasql/inSpan spans emitted from the child have
+-- no parent because 'Context.ThreadLocal' is keyed by 'ThreadId'. The detach
+-- token returned by 'attachContext' is restored on exit so the entry doesn't
+-- linger if the runtime ever pools fork threads.
+forkWithCtx
+  :: (IOE :> es, Ki.StructuredConcurrency :> es)
+  => Ki.Scope -> Eff es a -> Eff es (Ki.Thread a)
+forkWithCtx scope action = do
+  ctx <- liftIO Context.getContext
+  Ki.fork scope
+    $ bracket
+      (liftIO $ Context.attachContext ctx)
+      (liftIO . Context.detachContext)
+      (const action)
