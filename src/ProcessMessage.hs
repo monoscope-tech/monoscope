@@ -157,7 +157,7 @@ processMessages msgs attrs =
                   . Projects.projectCacheByIdIO appCtx.hasqlJobsPool
               pure (pid, cache)
 
-          spans <- forM rMsgs \(_ackId, rawSize, msg) -> runMaybeT do
+          spans <- forM rMsgs \(_, rawSize, msg) -> runMaybeT do
             let pid = UUIDId msg.projectId
                 !msgSize = fromIntegral rawSize
             cache <- hoistMaybe $ HM.lookup pid projectCaches

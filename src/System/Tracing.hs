@@ -94,7 +94,8 @@ forkWithCtx scope action = do
 
 -- | Standard attributes for batch-processing root spans (queue consumers,
 -- gRPC handlers). Always emits @messaging.batch.message_count@; emits
--- @ce.type@ only when present in the CloudEvents header map.
+-- @ce.type@ (OTel attribute name, dot) only when @"ce-type"@ (CloudEvents
+-- header name, hyphen) is present in the headers map.
 batchSpanAttrs :: Int -> HM.HashMap Text Text -> [(Text, Attribute)]
 batchSpanAttrs n attrs =
   catMaybes
