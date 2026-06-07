@@ -20,18 +20,18 @@ module Data.Effectful.Hasql (
 ) where
 
 import Control.Exception (throwIO)
+import Data.HashMap.Strict (HashMap)
 import Effectful
 import Effectful.Dispatch.Dynamic (interpret, send)
 import Effectful.Labeled (Labeled, labeled)
 import Hasql.Errors (IsError (..), ServerError (..), SessionError (..), StatementError (..), toDetailedText)
 import Hasql.Interpolate qualified as HI
-import Data.HashMap.Strict (HashMap)
 import Hasql.Pool (UsageError (..))
 import Hasql.Session (Session)
 import Hasql.Statement (Statement)
-import OpenTelemetry.Attributes (Attribute)
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
+import OpenTelemetry.Attributes (Attribute)
 import OpenTelemetry.Instrumentation.Hasql (TracedPool)
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Relude
