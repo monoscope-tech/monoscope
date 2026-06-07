@@ -6,9 +6,11 @@ module Data.Effectful.Hasql (
   isTransientException,
   isDeadlockError,
   runHasqlPool,
-  session,
+  use,
   statement,
   transaction,
+  labeledSession,
+  labeledTransaction,
   interp,
   interpOne,
   interpExecute,
@@ -23,10 +25,11 @@ import Effectful.Dispatch.Dynamic (interpret, send)
 import Effectful.Labeled (Labeled, labeled)
 import Hasql.Errors (IsError (..), ServerError (..), SessionError (..), StatementError (..), toDetailedText)
 import Hasql.Interpolate qualified as HI
+import Data.HashMap.Strict (HashMap)
 import Hasql.Pool (UsageError (..))
 import Hasql.Session (Session)
-import Hasql.Session qualified as Session
 import Hasql.Statement (Statement)
+import OpenTelemetry.Attributes (Attribute)
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
 import OpenTelemetry.Instrumentation.Hasql (TracedPool)
@@ -36,6 +39,12 @@ import Relude
 
 data Hasql :: Effect where
   UseSession :: Session a -> Hasql m (Either UsageError a)
+  -- | Run a single Statement so the instrumentation wrapper can attach
+  -- db.statement / db.operation.name to the span.
+  UseStatement :: params -> Statement params a -> Hasql m (Either UsageError a)
+  -- | Run an opaque Session under a caller-chosen span name + extra attributes.
+  -- Use for transactions and multi-statement scripts where SQL can't be auto-extracted.
+  UseLabeledSession :: Text -> HashMap Text Attribute -> Session a -> Hasql m (Either UsageError a)
 
 
 type instance DispatchOf Hasql = 'Dynamic
@@ -79,15 +88,18 @@ isDeadlockError (HasqlException ue) = case ue of
 runHasqlPool :: IOE :> es => TracedPool -> Eff (Hasql ': es) a -> Eff es a
 runHasqlPool pool = interpret \_ -> \case
   UseSession s -> OHasql.use pool s
+  UseStatement p st -> OHasql.useStatement pool p st
+  UseLabeledSession n xs s -> OHasql.useSession pool n xs s
 
 
--- | Run a `Session`, throwing `HasqlException` on `UsageError`.
-session :: (Hasql :> es, IOE :> es) => Session a -> Eff es a
-session s = send (UseSession s) >>= either (liftIO . throwIO . HasqlException) pure
+-- | Run a `Session`, throwing `HasqlException` on `UsageError`. Mirrors
+-- `Hasql.Pool.use` — opaque sessions get the generic `hasql.session <db>` span.
+use :: (Hasql :> es, IOE :> es) => Session a -> Eff es a
+use s = send (UseSession s) >>= either (liftIO . throwIO . HasqlException) pure
 
 
 statement :: (Hasql :> es, IOE :> es) => params -> Statement params a -> Eff es a
-statement p st = session (Session.statement p st)
+statement p st = send (UseStatement p st) >>= either (liftIO . throwIO . HasqlException) pure
 
 
 -- | Run a `hasql-interpolate` `Sql` value as a prepared statement.
@@ -111,7 +123,20 @@ interpExecute_ s = void $ interpExecute s
 
 
 transaction :: (Hasql :> es, IOE :> es) => TxS.IsolationLevel -> TxS.Mode -> Tx.Transaction a -> Eff es a
-transaction iso mode tx = session (TxS.transaction iso mode tx)
+transaction iso mode tx = use (TxS.transaction iso mode tx)
+
+
+-- | Like 'session' but carries a caller-chosen span name + extra attributes.
+labeledSession :: (Hasql :> es, IOE :> es) => Text -> HashMap Text Attribute -> Session a -> Eff es a
+labeledSession name attrs s =
+  send (UseLabeledSession name attrs s) >>= either (liftIO . throwIO . HasqlException) pure
+
+
+-- | Like 'transaction' but tags the span with a name describing the unit of work.
+labeledTransaction
+  :: (Hasql :> es, IOE :> es)
+  => Text -> TxS.IsolationLevel -> TxS.Mode -> Tx.Transaction a -> Eff es a
+labeledTransaction name iso mode tx = labeledSession name mempty (TxS.transaction iso mode tx)
 
 
 -- | Generic helper: route an effect through a labelled variant when a flag is on.

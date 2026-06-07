@@ -1023,7 +1023,7 @@ bulkInsertOtelLogsAndSpans = fmap Relude.sum . traverse insertSlice . VS.chunksO
     insertSlice rs = V.mapM (\r -> (r,) <$> otelRowSnippet r) rs >>= go maxBisectDepth
 
     go d pairs =
-      tryAny (Hasql.session $ HSession.statement () (stmt pairs)) >>= \case
+      tryAny (Hasql.use $ HSession.statement () (stmt pairs)) >>= \case
         Right n -> pure n
         Left e
           | Hasql.isTransientException e -> throwIO e
