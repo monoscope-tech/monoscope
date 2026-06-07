@@ -20,7 +20,7 @@ module Data.Effectful.Hasql (
 ) where
 
 import Control.Exception (throwIO)
-import Data.HashMap.Strict (HashMap)
+import Data.HashMap.Strict qualified as HM
 import Effectful
 import Effectful.Dispatch.Dynamic (interpret, send)
 import Effectful.Labeled (Labeled, labeled)
@@ -44,7 +44,7 @@ data Hasql :: Effect where
   UseStatement :: params -> Statement params a -> Hasql m (Either UsageError a)
   -- | Run an opaque Session under a caller-chosen span name + extra attributes.
   -- Use for transactions and multi-statement scripts where SQL can't be auto-extracted.
-  UseLabeledSession :: Text -> HashMap Text Attribute -> Session a -> Hasql m (Either UsageError a)
+  UseLabeledSession :: Text -> HM.HashMap Text Attribute -> Session a -> Hasql m (Either UsageError a)
 
 
 type instance DispatchOf Hasql = 'Dynamic
@@ -127,7 +127,7 @@ transaction iso mode tx = use (TxS.transaction iso mode tx)
 
 
 -- | Like 'session' but carries a caller-chosen span name + extra attributes.
-labeledSession :: (Hasql :> es, IOE :> es) => Text -> HashMap Text Attribute -> Session a -> Eff es a
+labeledSession :: (Hasql :> es, IOE :> es) => Text -> HM.HashMap Text Attribute -> Session a -> Eff es a
 labeledSession name attrs s =
   send (UseLabeledSession name attrs s) >>= either (liftIO . throwIO . HasqlException) pure
 
