@@ -89,5 +89,5 @@ forkWithCtx scope action = do
   Ki.fork scope
     $ bracket
       (liftIO $ Context.attachContext ctx)
-      (\prevCtx -> liftIO $ Context.adjustContext (const prevCtx))
+      (liftIO . Context.detachContext)
       (const action)
