@@ -43,6 +43,7 @@ import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
 import Servant.Server (ServerError (errBody), err400, err401, err404)
 import System.Config (AuthContext (env), EnvConfig (..))
+import System.Tracing (forkWithCtx)
 import System.Types (ATBaseCtx)
 
 
@@ -463,8 +464,8 @@ getThreadStarterMessage interaction botToken = do
             starterMessageUrl = toString $ baseUrl <> pId <> "/messages/" <> channelId
             opts = defaults & authHeader botToken & contentTypeHeader "application/json"
         (response, response') <- Ki.scoped \scope -> do
-          t1 <- Ki.fork scope $ getWith opts url
-          t2 <- Ki.fork scope $ getWith opts starterMessageUrl
+          t1 <- forkWithCtx scope $ getWith opts url
+          t2 <- forkWithCtx scope $ getWith opts starterMessageUrl
           liftA2 (,) (Ki.atomically $ Ki.await t1) (Ki.atomically $ Ki.await t2)
         case AE.eitherDecode (response ^. responseBody) of
           Left err -> do

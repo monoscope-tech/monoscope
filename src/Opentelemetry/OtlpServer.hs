@@ -62,6 +62,7 @@ import Network.GRPC.Common.Protobuf
 import Network.GRPC.Server (RpcHandler, SomeRpcHandler, getRequestMetadata, mkRpcHandler, recvFinalInput, sendFinalOutput)
 import Network.GRPC.Server.Run hiding (runServer)
 import Network.GRPC.Server.StreamType (Methods (..), fromMethods)
+import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
 import Pkg.DeriveUtils (AesonText (..), UUIDId (..), unUUIDId)
 import Pkg.ErrorMetrics (wireTypeErrorsRef)
@@ -238,7 +239,13 @@ stampOrPassthrough appCtx v =
 -- | Process a list of messages
 processList :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es, UUIDEff :> es) => [(Text, ByteString)] -> HM.HashMap Text Text -> Eff es [Text]
 processList [] _ = pure []
-processList msgs !attrs = withSpan_ "otlp.processList" [] $ checkpoint "processList" do
+processList msgs !attrs =
+  withSpan_
+    "otlp.processList"
+    [ ("messaging.batch.message_count", OA.toAttribute (length msgs))
+    , ("ce.type", OA.toAttribute (fromMaybe "" (HM.lookup "ce-type" attrs)))
+    ]
+    $ checkpoint "processList" do
   startTime <- Time.currentTime
   (result, processingTime, dbInsertTime) <- process startTime `onException` handleException
   endTime <- Time.currentTime
@@ -1681,7 +1688,7 @@ metricsServiceRpcHandler appLogger appCtx tp = mkRpcHandler $ \call -> do
 -- client will resend rather than seeing an INTERNAL status.
 grpcRunBackground :: Logger -> AuthContext -> TracerProvider -> Text -> ATBackgroundCtx () -> IO ()
 grpcRunBackground appLogger appCtx tp label task =
-  tryAny (runBackground appLogger appCtx tp $ withSpan_ ("otlp.grpc." <> label) [] task) >>= \case
+  tryAny (runBackground appLogger appCtx tp $ withSpan_ ("otlp.grpc." <> label) [("otlp.signal", OA.toAttribute label)] task) >>= \case
     Right _ -> pass
     Left e ->
       let kind = if isJust (fromException @Hasql.HasqlException e) then "hasql" else "other" :: Text

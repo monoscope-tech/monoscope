@@ -29,7 +29,7 @@ import OpenTelemetry.Trace (
  )
 import OpenTelemetry.Trace qualified as Trace
 import Relude hiding (span)
-import UnliftIO.Exception (finally)
+import UnliftIO.Exception (bracket)
 
 
 data Tracing :: Effect where
@@ -86,6 +86,8 @@ forkWithCtx
   => Ki.Scope -> Eff es a -> Eff es (Ki.Thread a)
 forkWithCtx scope action = do
   ctx <- liftIO Context.getContext
-  Ki.fork scope do
-    prevCtx <- liftIO $ Context.attachContext ctx
-    action `finally` liftIO (Context.adjustContext (const prevCtx))
+  Ki.fork scope
+    $ bracket
+      (liftIO $ Context.attachContext ctx)
+      (\prevCtx -> liftIO $ Context.adjustContext (const prevCtx))
+      (const action)

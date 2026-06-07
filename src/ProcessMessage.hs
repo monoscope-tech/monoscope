@@ -64,6 +64,7 @@ import Pkg.SchemaLearning.Hot qualified as SchemaHot
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext (..), EnvConfig (..))
+import OpenTelemetry.Attributes qualified as OA
 import System.Logging qualified as Log
 import System.Tracing (Tracing, withSpan_)
 import System.Types (DB)
@@ -138,7 +139,13 @@ processMessages
   -> HM.HashMap Text Text
   -> Eff es [Text]
 processMessages [] _ = pure []
-processMessages msgs attrs = withSpan_ "pubsub.processMessages" [] do
+processMessages msgs attrs =
+  withSpan_
+    "pubsub.processMessages"
+    [ ("messaging.batch.message_count", OA.toAttribute (length msgs))
+    , ("ce.type", OA.toAttribute (fromMaybe "" (HM.lookup "ce-type" attrs)))
+    ]
+    do
   appCtx <- Eff.ask @AuthContext
   (rMsgs, mWrite) <- Metrics.timed Metrics.ingestDecodeHist [] do
     rMsgs <-
