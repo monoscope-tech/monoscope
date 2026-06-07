@@ -87,6 +87,7 @@ import Relude.Extra.Enum (safeToEnum)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.IO.Unsafe (unsafePerformIO)
 import System.Logging qualified as Log
+import System.Tracing (Tracing, withSpan_)
 import System.Types (ATBackgroundCtx, DB, runBackground)
 import UnliftIO.Exception (tryAny)
 import Utils (b64ToJson, freeTierDailyMaxEvents, jsonToMap, nestedJsonFromDotNotation)
@@ -235,9 +236,9 @@ stampOrPassthrough appCtx v =
 
 
 -- | Process a list of messages
-processList :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es, UUIDEff :> es) => [(Text, ByteString)] -> HM.HashMap Text Text -> Eff es [Text]
+processList :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es, UUIDEff :> es) => [(Text, ByteString)] -> HM.HashMap Text Text -> Eff es [Text]
 processList [] _ = pure []
-processList msgs !attrs = checkpoint "processList" do
+processList msgs !attrs = withSpan_ "otlp.processList" [] $ checkpoint "processList" do
   startTime <- Time.currentTime
   (result, processingTime, dbInsertTime) <- process startTime `onException` handleException
   endTime <- Time.currentTime
@@ -1680,7 +1681,7 @@ metricsServiceRpcHandler appLogger appCtx tp = mkRpcHandler $ \call -> do
 -- client will resend rather than seeing an INTERNAL status.
 grpcRunBackground :: Logger -> AuthContext -> TracerProvider -> Text -> ATBackgroundCtx () -> IO ()
 grpcRunBackground appLogger appCtx tp label task =
-  tryAny (runBackground appLogger appCtx tp task) >>= \case
+  tryAny (runBackground appLogger appCtx tp $ withSpan_ ("otlp.grpc." <> label) [] task) >>= \case
     Right _ -> pass
     Left e ->
       let kind = if isJust (fromException @Hasql.HasqlException e) then "hasql" else "other" :: Text

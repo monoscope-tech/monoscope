@@ -65,6 +65,7 @@ import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
+import System.Tracing (Tracing, withSpan_)
 import System.Types (DB)
 import Text.RE.Replace (matched)
 import Text.RE.TDFA (RE, re, (?=~))
@@ -132,12 +133,12 @@ import Utils (b64ToJson, freeTierDailyMaxEvents, jsonToMap, nestedJsonFromDotNot
  --}
 
 processMessages
-  :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, UUIDEff :> es)
+  :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Tracing :> es, UUIDEff :> es)
   => [(Text, ByteString)]
   -> HM.HashMap Text Text
   -> Eff es [Text]
 processMessages [] _ = pure []
-processMessages msgs attrs = do
+processMessages msgs attrs = withSpan_ "pubsub.processMessages" [] do
   appCtx <- Eff.ask @AuthContext
   (rMsgs, mWrite) <- Metrics.timed Metrics.ingestDecodeHist [] do
     rMsgs <-

@@ -7,11 +7,15 @@ module System.Tracing (
   addAttribute,
   setStatus,
   SpanStatus (..),
+
+  -- * Cross-thread context propagation
+  forkWithCtx,
 ) where
 
 import Data.HashMap.Strict qualified as HM
 import Effectful
 import Effectful.Dispatch.Dynamic
+import Effectful.Ki qualified as Ki
 import Effectful.TH
 import OpenTelemetry.Attributes (Attribute)
 import OpenTelemetry.Context qualified as Context
@@ -69,3 +73,14 @@ runTracing tp = interpret $ \env -> \case
 
 withSpan_ :: Tracing :> es => Text -> [(Text, Attribute)] -> Eff es a -> Eff es a
 withSpan_ name attrs action = withSpan name attrs $ const action
+
+
+-- | Effectful 'Ki.fork' that copies the OTel thread-local context into the
+-- child fiber. Without this, hasql/inSpan spans emitted from the child have
+-- no parent because 'Context.ThreadLocal' is keyed by 'ThreadId'.
+forkWithCtx
+  :: (IOE :> es, Ki.StructuredConcurrency :> es)
+  => Ki.Scope -> Eff es a -> Eff es (Ki.Thread a)
+forkWithCtx scope action = do
+  ctx <- liftIO Context.getContext
+  Ki.fork scope $ liftIO (void $ Context.attachContext ctx) >> action
