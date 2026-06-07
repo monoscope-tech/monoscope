@@ -29,6 +29,7 @@ import OpenTelemetry.Trace (
  )
 import OpenTelemetry.Trace qualified as Trace
 import Relude hiding (span)
+import UnliftIO.Exception (finally)
 
 
 data Tracing :: Effect where
@@ -77,10 +78,14 @@ withSpan_ name attrs action = withSpan name attrs $ const action
 
 -- | Effectful 'Ki.fork' that copies the OTel thread-local context into the
 -- child fiber. Without this, hasql/inSpan spans emitted from the child have
--- no parent because 'Context.ThreadLocal' is keyed by 'ThreadId'.
+-- no parent because 'Context.ThreadLocal' is keyed by 'ThreadId'. The detach
+-- token returned by 'attachContext' is restored on exit so the entry doesn't
+-- linger if the runtime ever pools fork threads.
 forkWithCtx
   :: (IOE :> es, Ki.StructuredConcurrency :> es)
   => Ki.Scope -> Eff es a -> Eff es (Ki.Thread a)
 forkWithCtx scope action = do
   ctx <- liftIO Context.getContext
-  Ki.fork scope $ liftIO (void $ Context.attachContext ctx) >> action
+  Ki.fork scope do
+    prevCtx <- liftIO $ Context.attachContext ctx
+    action `finally` liftIO (Context.adjustContext (const prevCtx))
