@@ -234,18 +234,25 @@ rescheduleSelf authCtx mkJob at =
     void $ scheduleJob conn "background_jobs" (mkJob at) at
 
 
+-- | URL for a project's main view.
+projectUrl :: Config.AuthContext -> Projects.ProjectId -> Text
+projectUrl ctx pid = ctx.env.hostUrl <> "p/" <> pid.toText
+
+
+-- | Render a (subject, body) pair and send it to the given address.
+renderAndSend :: Text -> (Text, Html ()) -> ATBackgroundCtx ()
+renderAndSend to (subj, html) = sendRenderedEmail to subj (ET.renderEmail subj html)
+
+
 -- | Process a background job - extracted so it can be run with different effect interpreters
 processBackgroundJob :: Config.AuthContext -> BgJobs -> ATBackgroundCtx ()
 processBackgroundJob authCtx bgJob =
   case bgJob of
     GenerateOtelFacetsBatch pids timestamp -> generateOtelFacetsBatch pids timestamp
     NewAnomaly{projectId, createdAt, anomalyType, anomalyAction, targetHashes} -> newAnomalyJob projectId createdAt anomalyType anomalyAction (V.fromList targetHashes)
-    InviteUserToProject userId projectId reciever projectTitle' -> do
-      userM <- Projects.userById userId
-      whenJust userM \user -> do
-        let projectUrl = authCtx.env.hostUrl <> "p/" <> projectId.toText
-            (subj, html) = ET.projectInviteEmail user.firstName projectTitle' projectUrl
-        sendRenderedEmail reciever subj (ET.renderEmail subj html)
+    InviteUserToProject userId projectId reciever projectTitle' ->
+      whenJustM (Projects.userById userId) \user ->
+        renderAndSend reciever (ET.projectInviteEmail user.firstName projectTitle' (projectUrl authCtx projectId))
     SendDiscordData userId projectId fullName stack foundUsFrom -> whenJustM (Projects.projectById projectId) \project -> do
       users <- Projects.usersByProjectId projectId
       let stackString = intercalate ", " $ map toString stack
@@ -265,18 +272,13 @@ processBackgroundJob authCtx bgJob =
   - **Found us from**: {foundUsFrom}
   |]
         sendMessageToDiscord msg authCtx.config.discordWebhookUrl
-    CreatedProjectSuccessfully userId projectId reciever projectTitle -> do
-      userM <- Projects.userById userId
-      whenJust userM \user -> do
-        let projectUrl = authCtx.env.hostUrl <> "p/" <> projectId.toText
-            (subj, html) = ET.projectCreatedEmail user.firstName projectTitle projectUrl
-        sendRenderedEmail reciever subj (ET.renderEmail subj html)
-    DeletedProject pid -> do
+    CreatedProjectSuccessfully userId projectId reciever projectTitle ->
+      whenJustM (Projects.userById userId) \user ->
+        renderAndSend reciever (ET.projectCreatedEmail user.firstName projectTitle (projectUrl authCtx projectId))
+    DeletedProject pid -> whenJustM (Projects.projectById pid) \pr -> do
       users <- Projects.usersByProjectId pid
-      projectM <- Projects.projectById pid
-      forM_ projectM \pr -> forM_ users \user -> do
-        let (subj, html) = ET.projectDeletedEmail user.firstName pr.title
-        sendRenderedEmail (CI.original user.email) subj (ET.renderEmail subj html)
+      forM_ users \user ->
+        renderAndSend (CI.original user.email) (ET.projectDeletedEmail user.firstName pr.title)
     ErrorAssigned pid errId assigneeId -> do
       errM <- ErrorPatterns.getErrorPatternById errId
       userM <- Projects.userById assigneeId
@@ -289,12 +291,8 @@ processBackgroundJob authCtx bgJob =
           let (issueTitle, issuePath) = case issueM of
                 Just issue -> (issue.title, issue.id.toText)
                 Nothing -> (err.errorType <> ": " <> err.message, "by_hash/" <> err.hash)
-              issueUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> issuePath
-              projectTitle = project.title
-              errorType = err.errorType
-              errorMessage = err.message
-              (subj, html) = ET.issueAssignedEmail userName projectTitle issueTitle issueUrl errorType errorMessage
-          sendRenderedEmail userEmail subj (ET.renderEmail subj html)
+              issueUrl = projectUrl authCtx pid <> "/issues/" <> issuePath
+          renderAndSend userEmail (ET.issueAssignedEmail userName project.title issueTitle issueUrl err.errorType err.message)
         _ -> pass
     DailyJob ->
       unless authCtx.config.enableDailyJobScheduling (Log.logInfo "Daily job scheduling is disabled, skipping" ())
@@ -566,12 +564,12 @@ processBackgroundJob authCtx bgJob =
     EndpointTemplateDiscovery scheduledTime pid -> unlessStale "EndpointTemplateDiscovery" scheduledTime 3600 $ endpointTemplateDiscovery pid
     LogPatternPeriodicProcessing scheduledTime pid ->
       unlessStale "LogPatternPeriodicProcessing" scheduledTime (15 * 60)
-        $ tryLog "detectLogPatternSpikes"
+        $ tryStep "detectLogPatternSpikes"
         $ detectLogPatternSpikes pid scheduledTime authCtx
     LogPatternHourlyProcessing _scheduledTime pid -> do
-      tryLog "calculateLogPatternBaselines" $ calculateLogPatternBaselines pid
-      tryLog "processNewLogPatterns" $ processNewLogPatterns pid authCtx
-      tryLog "pruneStaleLogPatterns" $ pruneStaleLogPatterns pid
+      tryStep "calculateLogPatternBaselines" $ calculateLogPatternBaselines pid
+      tryStep "processNewLogPatterns" $ processNewLogPatterns pid authCtx
+      tryStep "pruneStaleLogPatterns" $ pruneStaleLogPatterns pid
     SafetyNetReprocess pid -> safetyNetReprocess pid
     ProcessProjectErrorsJob pid errors now -> do
       -- Preserves today's legacy issue-creation + alert-dispatch semantics, now
@@ -630,7 +628,7 @@ processBackgroundJob authCtx bgJob =
       send $ "```\n" <> unlines tableBody <> "```"
 
       -- Section 2: New projects (created in last 24h)
-      tryLog "newProjects" do
+      tryStep "newProjects" do
         newProjects <- Projects.newProjectsSince since
         let fmtNew (p :: Projects.Project) =
               let hoursAgo = show (round (diffUTCTime now p.createdAt / 3600) :: Int)
@@ -642,7 +640,7 @@ processBackgroundJob authCtx bgJob =
             (null newProjects)
 
       -- Section 3: Inactive projects (non-ONBOARDING with 0 events)
-      tryLog "churnSignals" do
+      tryStep "churnSignals" do
         let churn = filter (\(p, _, _, _) -> p.paymentPlan /= "ONBOARDING") inactiveRows
         unless (null churn)
           $ send
@@ -652,7 +650,7 @@ processBackgroundJob authCtx bgJob =
           <> unlines (map (\(p, _, _, _) -> "- " <> p.title <> " (" <> p.paymentPlan <> ")") churn)
 
       -- Section 4: New issues
-      tryLog "newIssues" do
+      tryStep "newIssues" do
         issueCounts :: [(Projects.ProjectId, Text, Int64)] <-
           Hasql.interp
             [HI.sql|SELECT project_id::uuid, issue_type, COUNT(*)::bigint FROM apis.issues WHERE created_at > #{since}::timestamptz GROUP BY project_id, issue_type ORDER BY COUNT(*) DESC|]
@@ -673,7 +671,7 @@ processBackgroundJob authCtx bgJob =
             <> unlines (map fmtProject $ take 10 byProject)
 
       -- Section 5: Monitor alerts
-      tryLog "monitorAlerts" do
+      tryStep "monitorAlerts" do
         alertCounts :: [(Projects.ProjectId, Text, Int64)] <-
           Hasql.interp
             [HI.sql|SELECT m.project_id::uuid, m.current_status, COUNT(*)::bigint FROM monitors.query_monitors m
@@ -696,7 +694,7 @@ processBackgroundJob authCtx bgJob =
             <> unlines (map fmtProject $ take 10 byProject)
 
       -- Section 6: Background job health
-      tryLog "jobHealth" do
+      tryStep "jobHealth" do
         jobStats :: [(Text, Int64)] <- Hasql.interp [HI.sql|SELECT status, COUNT(*)::bigint FROM background_jobs WHERE created_at >= #{since}::timestamptz GROUP BY status|]
         stuckJobs :: [Int64] <- Hasql.interp [HI.sql|SELECT COUNT(*)::bigint FROM background_jobs WHERE status = 'locked' AND locked_at < #{addUTCTime (-1800) now}::timestamptz|]
         let statsLine = T.intercalate " | " $ map (\(s, c) -> s <> ": " <> show c) jobStats
@@ -707,7 +705,7 @@ processBackgroundJob authCtx bgJob =
           <> bool ("\n!! " <> show stuck <> " stuck jobs (locked > 30min)") "" (stuck == 0)
 
       -- Section 7: Top growing projects (day-over-day)
-      tryLog "topGrowing" do
+      tryStep "topGrowing" do
         growthData :: [(Projects.ProjectId, Int, Int)] <-
           Hasql.interp
             [HI.sql|SELECT du.project_id::uuid,
@@ -725,7 +723,7 @@ processBackgroundJob authCtx bgJob =
           <> unlines (map fmtGrowth $ take 5 withGrowth)
 
       -- Section 8: Active users (last 24h)
-      tryLog "activeUsers" do
+      tryStep "activeUsers" do
         activeUsers :: [(Text, Text, Text, V.Vector Projects.ProjectId)] <-
           Hasql.interp
             [HI.sql|SELECT u.email, u.first_name, u.last_name, array_agg(DISTINCT pm.project_id)::uuid[] as project_ids
@@ -822,8 +820,36 @@ processBackgroundJob authCtx bgJob =
       Log.logInfo "Usage audit complete" ("mismatch_count", length sorted)
 
 
-tryLog :: Text -> ATBackgroundCtx () -> ATBackgroundCtx ()
-tryLog label = (`catch` \(e :: SomeException) -> Log.logAttention ("LogPattern pipeline step failed: " <> label) (show e))
+-- | Run a step; if it throws, log the failure with the given label and continue.
+tryStep :: Text -> ATBackgroundCtx () -> ATBackgroundCtx ()
+tryStep label = (`catch` \(e :: SomeException) -> Log.logAttention ("step failed: " <> label) (show e))
+
+
+-- | IO-flavoured 'tryStep' for fibers that run outside the Eff stack and must
+-- log through 'runLogT'. Swallows + logs failures; never re-throws.
+tryStepIO :: Logger -> Config.AuthContext -> Text -> IO () -> IO ()
+tryStepIO logger ctx label action =
+  tryAny action >>= \case
+    Right () -> pass
+    Left e -> runLogT (show ctx.config.environment) logger ctx.config.logLevel $ LogLegacy.logAttention label (show @Text e)
+
+
+-- | Retry a Hasql action on deadlock up to 2 times with 50ms/100ms backoff.
+-- Non-deadlock exceptions are re-thrown.
+retryOnDeadlock :: (DB es, Log :> es) => Text -> Eff es a -> Eff es a
+retryOnDeadlock label = go 2
+  where
+    go 0 action = action
+    go n action =
+      tryAny action >>= \case
+        Right r -> pure r
+        Left e
+          | Just he <- fromException @Hasql.HasqlException e
+          , Hasql.isDeadlockError he -> do
+              Log.logAttention (label <> " deadlock, retrying") (show @Text e)
+              liftIO $ threadDelay (50000 * (3 - n)) -- 50ms, 100ms backoff
+              go (n - 1) action
+        Left e -> throwIO e
 
 
 -- | Run hourly scheduled tasks for all projects
@@ -870,7 +896,7 @@ runHourlyJob scheduledTime hour = do
 -- | For each active free-tier project, check usage and send system log + email at 80% and 100% thresholds.
 -- Deduplication: only notifies if no system log with the same event name exists for this project in the last 24h.
 checkFreeTierUsageNotifications :: [Projects.ProjectId] -> UTCTime -> ATBackgroundCtx ()
-checkFreeTierUsageNotifications pids now = forM_ pids \pid -> tryLog "free-tier-check" do
+checkFreeTierUsageNotifications pids now = forM_ pids \pid -> tryStep "free-tier-check" do
   projectM <- Projects.projectById pid
   forM_ projectM \project -> Relude.when (project.paymentPlan == "Free") do
     -- Use the TTL-cached daily event count to avoid a full 24-hour count(*) scan.
@@ -1539,7 +1565,7 @@ safetyNetReprocess pid = do
 -- | Dual-fork an UPDATE to Postgres (blocking, deadlock-retried) + TimeFusion (best-effort, circuit-broken).
 dualExecPgTf :: (DB es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Config.AuthContext -> HI.Sql -> Eff es Int64
 dualExecPgTf ctx sql' = Ki.scoped \scope -> do
-  mainThread <- Ki.fork scope $ retryOnDeadlock 2 $ Hasql.transaction TxS.ReadCommitted TxS.Write $ do
+  mainThread <- Ki.fork scope $ retryOnDeadlock "UPDATE-1" $ Hasql.transaction TxS.ReadCommitted TxS.Write $ do
     Tx.sql "SET LOCAL lock_timeout = '30s'"
     Tx.sql "SET LOCAL statement_timeout = '5min'"
     HI.getRowsAffected <$> Tx.statement () (HI.interp True sql')
@@ -1556,19 +1582,6 @@ dualExecPgTf ctx sql' = Ki.scoped \scope -> do
   -- Await BOTH threads: scope-close cancellation of an in-flight Hasql session
   -- segfaults libpq.
   Ki.atomically (Ki.awaitAll scope *> Ki.await mainThread)
-  where
-    retryOnDeadlock :: (DB es, Log :> es) => Int -> Eff es Int64 -> Eff es Int64
-    retryOnDeadlock 0 action = action
-    retryOnDeadlock n action =
-      tryAny action >>= \case
-        Right r -> pure r
-        Left e
-          | Just he <- fromException @Hasql.HasqlException e
-          , Hasql.isDeadlockError he -> do
-              Log.logAttention "UPDATE-1 deadlock, retrying" (show @Text e)
-              liftIO $ threadDelay (50000 * (3 - n)) -- 50ms, 100ms backoff
-              retryOnDeadlock (n - 1) action
-        Left e -> throwIO e
 
 
 -- | PG-only variant of `dualExecPgTf` for statements TimeFusion can't run
@@ -1576,23 +1589,10 @@ dualExecPgTf ctx sql' = Ki.scoped \scope -> do
 -- `now()` in SET expressions). Same retry-on-deadlock and locking guards as
 -- the PG arm of `dualExecPgTf`, but no TF fork.
 pgOnlyExec :: (DB es, Log :> es) => HI.Sql -> Eff es Int64
-pgOnlyExec sql' = retryOnDeadlock 2 $ Hasql.transaction TxS.ReadCommitted TxS.Write $ do
+pgOnlyExec sql' = retryOnDeadlock "pgOnlyExec" $ Hasql.transaction TxS.ReadCommitted TxS.Write $ do
   Tx.sql "SET LOCAL lock_timeout = '30s'"
   Tx.sql "SET LOCAL statement_timeout = '5min'"
   HI.getRowsAffected <$> Tx.statement () (HI.interp True sql')
-  where
-    retryOnDeadlock :: (DB es, Log :> es) => Int -> Eff es Int64 -> Eff es Int64
-    retryOnDeadlock 0 action = action
-    retryOnDeadlock n action =
-      tryAny action >>= \case
-        Right r -> pure r
-        Left e
-          | Just he <- fromException @Hasql.HasqlException e
-          , Hasql.isDeadlockError he -> do
-              Log.logAttention "pgOnlyExec deadlock, retrying" (show @Text e)
-              liftIO $ threadDelay (50000 * (3 - n))
-              retryOnDeadlock (n - 1) action
-        Left e -> throwIO e
 
 
 processEagerBatch
@@ -1812,8 +1812,8 @@ runErrorDecayFiber logger ctx tp = forever $ do
   runBackground logger ctx tp $ do
     now <- Time.currentTime
     projects <- Projects.activeNonOnboardingProjectIds
-    tryLog "propagateMergedCountsBatch" $ void $ ErrorPatterns.propagateMergedCountsBatch projects
-    tryLog "updateOccurrenceCountsBatch" $ void $ ErrorPatterns.updateOccurrenceCountsBatch projects now
+    tryStep "propagateMergedCountsBatch" $ void $ ErrorPatterns.propagateMergedCountsBatch projects
+    tryStep "updateOccurrenceCountsBatch" $ void $ ErrorPatterns.updateOccurrenceCountsBatch projects now
 
 
 -- | Drain-flusher shard fiber: pulls `DrainFlushTask`s from the shard's
@@ -1830,16 +1830,8 @@ runDrainFlusher
   -> IO ()
 runDrainFlusher logger ctx tp shard = forever $ do
   task <- atomically $ readTBQueue shard.drainFlushQ
-  tryAny (maybeSpawnRehydration logger ctx tp shard (task.projectId, task.serviceName)) >>= \case
-    Right () -> pass
-    Left e -> logExc "drain-flusher:rehydration" e
-  tryAny (runBackground logger ctx tp $ flushDrainTask shard task) >>= \case
-    Right () -> pass
-    Left e -> logExc "drain-flusher:task" e
-  where
-    logExc label e =
-      runLogT (show ctx.config.environment) logger ctx.config.logLevel
-        $ LogLegacy.logAttention label (show @Text e)
+  tryStepIO logger ctx "drain-flusher:rehydration" $ maybeSpawnRehydration logger ctx tp shard (task.projectId, task.serviceName)
+  tryStepIO logger ctx "drain-flusher:task" $ runBackground logger ctx tp $ flushDrainTask shard task
 
 
 -- | Spawn async rehydration for a (project, service) tree if stale and not
@@ -1864,11 +1856,7 @@ maybeSpawnRehydration logger ctx tp shard key@(pid, svcName) = do
     pending <- readIORef shard.pendingRehydrations
     unless (HashSet.member key pending) $ do
       let job = do
-            tryAny (runBackground logger ctx tp $ rehydrateTree shard key now existing) >>= \case
-              Right () -> pass
-              Left e ->
-                runLogT (show ctx.config.environment) logger ctx.config.logLevel
-                  $ LogLegacy.logAttention "drain-rehydrate failed" (show @Text e)
+            tryStepIO logger ctx "drain-rehydrate failed" $ runBackground logger ctx tp $ rehydrateTree shard key now existing
             atomicModifyIORef' shard.pendingRehydrations \s -> (HashSet.delete key s, ())
       atomicModifyIORef' shard.pendingRehydrations \s -> (HashSet.insert key s, ())
       enqueued <- atomically $ do
@@ -2068,33 +2056,20 @@ runDrainAgeFlushTimer logger ctx = forever $ do
   threadDelay 10_000_000 -- 10 s
   now <- getCurrentTime
   let worker = ctx.extractionWorker
-      tryOp name action =
-        tryAny action >>= \case
-          Right () -> pass
-          Left e ->
-            runLogT (show ctx.config.environment) logger ctx.config.logLevel
-              $ LogLegacy.logAttention ("drain-age-flush:" <> name) (show @Text e)
-  tryOp "collectAgedFlushes" $ ExtractionWorker.collectAgedFlushes worker ctx.config.drainFlushMaxAgeSecs now
-  tryOp "enforceBufferBound" $ ExtractionWorker.enforceBufferBound worker ctx.config.maxBufferedSpans now
-  tryOp "evictStaleTrees" $ ExtractionWorker.evictStaleTrees worker ctx.config.maxDrainTrees now
-  tryAny (TSC.evictStaleEntries ctx.traceSessionCache 300 50_000 now) >>= \case
-    Right n ->
-      when (n > 0)
-        $ runLogT (show ctx.config.environment) logger ctx.config.logLevel
-        $ LogLegacy.logTrace "drain-age-flush:evictTraceSessions" (show @Text n)
-    Left e ->
-      runLogT (show ctx.config.environment) logger ctx.config.logLevel
-        $ LogLegacy.logAttention "drain-age-flush:evictTraceSessions" (show @Text e)
+  tryStepIO logger ctx "drain-age-flush:collectAgedFlushes" $ ExtractionWorker.collectAgedFlushes worker ctx.config.drainFlushMaxAgeSecs now
+  tryStepIO logger ctx "drain-age-flush:enforceBufferBound" $ ExtractionWorker.enforceBufferBound worker ctx.config.maxBufferedSpans now
+  tryStepIO logger ctx "drain-age-flush:evictStaleTrees" $ ExtractionWorker.evictStaleTrees worker ctx.config.maxDrainTrees now
+  tryStepIO logger ctx "drain-age-flush:evictTraceSessions" $ do
+    n <- TSC.evictStaleEntries ctx.traceSessionCache 300 50_000 now
+    when (n > 0)
+      $ runLogT (show ctx.config.environment) logger ctx.config.logLevel
+      $ LogLegacy.logTrace "drain-age-flush:evictTraceSessions" (show @Text n)
 
 
 runSessionBackfillTimer :: Logger -> Config.AuthContext -> TracerProvider -> IO ()
 runSessionBackfillTimer logger ctx tp = forever $ do
   threadDelay 90_000_000 -- 90 s
-  tryAny (runBackground logger ctx tp go) >>= \case
-    Right () -> pass
-    Left e ->
-      runLogT (show ctx.config.environment) logger ctx.config.logLevel
-        $ LogLegacy.logAttention "session-backfill" (show @Text e)
+  tryStepIO logger ctx "session-backfill" $ runBackground logger ctx tp go
   where
     go = do
       n <- TSC.backfillSessionAttributes
@@ -2675,8 +2650,8 @@ patternEmbeddingAndMerge pid = do
   if T.null ctx.config.openaiApiKey
     then Log.logAttention "OpenAI API key not configured, skipping pattern embedding" pid
     else do
-      tryLog "errorPatternEmbedding" $ embedAndMergeErrors pid ctx
-      tryLog "logPatternEmbedding" $ embedAndMergeLogPatterns pid ctx
+      tryStep "errorPatternEmbedding" $ embedAndMergeErrors pid ctx
+      tryStep "logPatternEmbedding" $ embedAndMergeLogPatterns pid ctx
 
 
 embedAndMergeErrors :: Projects.ProjectId -> Config.AuthContext -> ATBackgroundCtx ()
@@ -2847,7 +2822,7 @@ endpointTemplateDiscovery pid = do
     Log.logInfo "Endpoint template discovery complete" ("project_id", pid.toText, "endpoint_count", length endpoints)
   -- Step 2: Embedding + LLM merge for remaining ambiguous endpoints
   ctx <- ask @Config.AuthContext
-  unless (T.null ctx.config.openaiApiKey) $ tryLog "endpointEmbedding" do
+  unless (T.null ctx.config.openaiApiKey) $ tryStep "endpointEmbedding" do
     unembedded <- Endpoints.getUnembeddedEndpoints pid
     embedAndMerge
       pid
