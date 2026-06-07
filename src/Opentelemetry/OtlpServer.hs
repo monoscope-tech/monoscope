@@ -246,23 +246,23 @@ processList msgs !attrs =
     , ("ce.type", OA.toAttribute (fromMaybe "" (HM.lookup "ce-type" attrs)))
     ]
     $ checkpoint "processList" do
-  startTime <- Time.currentTime
-  (result, processingTime, dbInsertTime) <- process startTime `onException` handleException
-  endTime <- Time.currentTime
+      startTime <- Time.currentTime
+      (result, processingTime, dbInsertTime) <- process startTime `onException` handleException
+      endTime <- Time.currentTime
 
-  let duration = diffUTCTime endTime startTime
-  Log.logTrace
-    "processList: batch processing completed"
-    ( AE.object
-        [ "ce-type" AE..= HM.lookup "ce-type" attrs
-        , "event_count" AE..= length msgs
-        , "duration_seconds" AE..= realToFrac @_ @Double duration
-        , "duration_ms" AE..= (round (duration * 1000) :: Int)
-        , "processing_ms" AE..= processingTime
-        , "db_insert_ms" AE..= dbInsertTime
-        ]
-    )
-  pure result
+      let duration = diffUTCTime endTime startTime
+      Log.logTrace
+        "processList: batch processing completed"
+        ( AE.object
+            [ "ce-type" AE..= HM.lookup "ce-type" attrs
+            , "event_count" AE..= length msgs
+            , "duration_seconds" AE..= realToFrac @_ @Double duration
+            , "duration_ms" AE..= (round (duration * 1000) :: Int)
+            , "processing_ms" AE..= processingTime
+            , "db_insert_ms" AE..= dbInsertTime
+            ]
+        )
+      pure result
   where
     handleException = checkpoint "processList:exception" do
       Log.logAttention "processList: caught exception" (AE.object ["ce-type" AE..= HM.lookup "ce-type" attrs, "msg_count" AE..= length msgs, "attrs" AE..= attrs])

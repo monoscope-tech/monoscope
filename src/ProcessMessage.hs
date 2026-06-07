@@ -56,6 +56,7 @@ import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (Context (trace_state), OtelLogsAndSpans (..), generateSummary)
 import Models.Telemetry.Telemetry qualified as Telemetry
+import OpenTelemetry.Attributes qualified as OA
 import Pkg.DeriveUtils (AesonText (..), UUIDId (..), unAesonTextMaybe)
 import Pkg.Metrics qualified as Metrics
 import Pkg.SchemaLearning.Catalog qualified as Catalog
@@ -64,7 +65,6 @@ import Pkg.SchemaLearning.Hot qualified as SchemaHot
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext (..), EnvConfig (..))
-import OpenTelemetry.Attributes qualified as OA
 import System.Logging qualified as Log
 import System.Tracing (Tracing, withSpan_)
 import System.Types (DB)
@@ -146,41 +146,41 @@ processMessages msgs attrs =
     , ("ce.type", OA.toAttribute (fromMaybe "" (HM.lookup "ce-type" attrs)))
     ]
     do
-  appCtx <- Eff.ask @AuthContext
-  (rMsgs, mWrite) <- Metrics.timed Metrics.ingestDecodeHist [] do
-    rMsgs <-
-      catMaybes <$> forM msgs \(ackId, msg) -> case AE.eitherDecodeStrict (BS.filter (/= 0) msg) of
-        Left err -> Nothing <$ Log.logAttention "Error parsing json msgs" (object ["AckId" .= ackId, "Error" .= err, "OriginalMsg" .= decodeUtf8 @Text msg])
-        Right m -> pure $ Just (ackId, BS.length msg, m)
-    if null rMsgs
-      then pure (rMsgs, Nothing)
-      else do
-        projectCaches <-
-          liftIO $ HM.fromList <$> forM (ordNub $ (\(_, _, m) -> UUIDId m.projectId) <$> rMsgs) \pid -> do
-            cache <-
-              Cache.fetchWithCache appCtx.projectCache pid
-                $ fmap (fromMaybe Projects.defaultProjectCache)
-                . Projects.projectCacheByIdIO appCtx.hasqlJobsPool
-            pure (pid, cache)
+      appCtx <- Eff.ask @AuthContext
+      (rMsgs, mWrite) <- Metrics.timed Metrics.ingestDecodeHist [] do
+        rMsgs <-
+          catMaybes <$> forM msgs \(ackId, msg) -> case AE.eitherDecodeStrict (BS.filter (/= 0) msg) of
+            Left err -> Nothing <$ Log.logAttention "Error parsing json msgs" (object ["AckId" .= ackId, "Error" .= err, "OriginalMsg" .= decodeUtf8 @Text msg])
+            Right m -> pure $ Just (ackId, BS.length msg, m)
+        if null rMsgs
+          then pure (rMsgs, Nothing)
+          else do
+            projectCaches <-
+              liftIO $ HM.fromList <$> forM (ordNub $ (\(_, _, m) -> UUIDId m.projectId) <$> rMsgs) \pid -> do
+                cache <-
+                  Cache.fetchWithCache appCtx.projectCache pid
+                    $ fmap (fromMaybe Projects.defaultProjectCache)
+                    . Projects.projectCacheByIdIO appCtx.hasqlJobsPool
+                pure (pid, cache)
 
-        spans <- forM rMsgs \(rmAckId, rawSize, msg) -> runMaybeT do
-          let pid = UUIDId msg.projectId
-              !msgSize = fromIntegral rawSize
-          cache <- hoistMaybe $ HM.lookup pid projectCaches
-          let !totalDailyEvents = fromIntegral cache.dailyEventCount + fromIntegral cache.dailyMetricCount
-              !isFreeTier = cache.paymentPlan == "Free"
-          guard $ not (isFreeTier && totalDailyEvents >= freeTierDailyMaxEvents)
-          spanId <- lift UUID.genUUID
-          trId <- lift $ UUID.toText <$> UUID.genUUID
-          pure $! convertRequestMessageToSpan msg msgSize (spanId, trId)
+            spans <- forM rMsgs \(rmAckId, rawSize, msg) -> runMaybeT do
+              let pid = UUIDId msg.projectId
+                  !msgSize = fromIntegral rawSize
+              cache <- hoistMaybe $ HM.lookup pid projectCaches
+              let !totalDailyEvents = fromIntegral cache.dailyEventCount + fromIntegral cache.dailyMetricCount
+                  !isFreeTier = cache.paymentPlan == "Free"
+              guard $ not (isFreeTier && totalDailyEvents >= freeTierDailyMaxEvents)
+              spanId <- lift UUID.genUUID
+              trId <- lift $ UUID.toText <$> UUID.genUUID
+              pure $! convertRequestMessageToSpan msg msgSize (spanId, trId)
 
-        pure (rMsgs, Just (projectCaches, V.fromList (catMaybes spans)))
+            pure (rMsgs, Just (projectCaches, V.fromList (catMaybes spans)))
 
-  forM_ mWrite \(projectCaches, spanVec) ->
-    Metrics.timed Metrics.ingestWriteHist []
-      $ Telemetry.insertAndHandOff appCtx.env.enableTimefusionWrites appCtx.extractionWorker projectCaches spanVec
+      forM_ mWrite \(projectCaches, spanVec) ->
+        Metrics.timed Metrics.ingestWriteHist []
+          $ Telemetry.insertAndHandOff appCtx.env.enableTimefusionWrites appCtx.extractionWorker projectCaches spanVec
 
-  pure $ map fst3 rMsgs
+      pure $ map fst3 rMsgs
 
 
 -- | Process a single span to extract entities for hash-stamping.
