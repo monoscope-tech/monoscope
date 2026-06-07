@@ -91,8 +91,12 @@ syncConnectionTime clock conn = do
 -- the pool may freely rotate connections without contaminating tests.
 runHasqlPoolSynced :: IOE :> es => TestClock -> TracedPool -> Eff (Hasql ': es) a -> Eff es a
 runHasqlPoolSynced clock pool = interpret \_ -> \case
-  UseSession s -> do
-    t <- liftIO $ getTestTime clock
-    let timeStr = formatTime defaultTimeLocale "%F %T%Q+00" t
-        setStmt = "SELECT set_config('app.current_time', '" <> toText timeStr <> "', false)"
-    OHasql.use pool (Session.script setStmt *> s)
+  UseSession s -> withClock $ \pre -> OHasql.use pool (pre *> s)
+  UseStatement p st -> withClock $ \pre -> OHasql.use pool (pre *> Session.statement p st)
+  UseLabeledSession n xs s -> withClock $ \pre -> OHasql.useSession pool n xs (pre *> s)
+  where
+    withClock run = do
+      t <- liftIO $ getTestTime clock
+      let timeStr = formatTime defaultTimeLocale "%F %T%Q+00" t
+          setStmt = "SELECT set_config('app.current_time', '" <> toText timeStr <> "', false)"
+      run (Session.script setStmt)
