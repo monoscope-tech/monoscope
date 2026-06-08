@@ -820,13 +820,19 @@ splitUsageIntoChunks total
        in replicate fulls (ChunkQuantity cap) <> [ChunkQuantity rem_ | rem_ > 0]
 
 
+-- Failed chunks back off linearly: skip until LEAST(attempt_count, 14) days
+-- have passed since last_attempt_at. Pending rows (attempt_count = 0) are
+-- always due, so the first attempt happens on the next tick as before.
 pendingUsageSubmissions :: DB es => ProjectId -> Eff es [UsageSubmission]
 pendingUsageSubmissions pid =
   EHasql.interp
     [HI.sql|
       SELECT id, project_id, window_start, window_end, quantity::int8, status, submitted_at, last_error, created_at
       FROM projects.usage_report_submissions
-      WHERE project_id = #{pid} AND status <> 'submitted'
+      WHERE project_id = #{pid}
+        AND status <> 'submitted'
+        AND (last_attempt_at IS NULL
+             OR last_attempt_at < now() - (LEAST(attempt_count, 14) * interval '1 day'))
       ORDER BY created_at ASC
     |]
 
@@ -887,7 +893,10 @@ markUsageSubmissionFailed sid err =
   EHasql.interpExecute
     [HI.sql|
       UPDATE projects.usage_report_submissions
-      SET status = 'failed', last_error = #{err}
+      SET status = 'failed',
+          last_error = #{err},
+          attempt_count = attempt_count + 1,
+          last_attempt_at = now()
       WHERE id = #{sid}
     |]
 
