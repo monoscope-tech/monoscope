@@ -208,14 +208,15 @@ publishJSONToKafka appCtx topicName jsonData attributes = checkpoint "publishJSO
     Right res -> pure res
 
 
-kafkaService :: Log.Logger -> AuthContext -> TracerProvider -> [Text] -> Int -> ([(Text, ByteString)] -> HM.HashMap Text Text -> ATBackgroundCtx [Text]) -> IO ()
-kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaService" do
+kafkaService :: Log.Logger -> AuthContext -> TracerProvider -> Text -> [Text] -> Int -> ([(Text, ByteString)] -> HM.HashMap Text Text -> ATBackgroundCtx [Text]) -> IO ()
+kafkaService appLogger appCtx tp groupId kafkaTopics batchSize fn = checkpoint "kafkaService" do
   instanceUuid <- UUID.toText <$> UUID.nextRandom
   let clientId = "monoscope-" <> T.take 8 instanceUuid
-      -- DLQ is intentionally NOT subscribed: re-consuming our own dead letters
-      -- in the live loop just amplifies pain during a sustained downstream
-      -- outage. Drain it via a separate one-off script when needed.
+      -- DLQ replay runs under a separate group (see Server.hs) so its
+      -- partitions don't get rebalanced onto primary consumers. Failures on
+      -- DLQ messages drop+log (below) instead of re-DLQ'ing — see processGroup.
       consumerSub = K.topics (map K.TopicName kafkaTopics) <> K.offsetReset K.Earliest
+      isDlqConsumer = kafkaTopics == [appCtx.config.kafkaDeadLetterTopic]
 
   -- Single LogT context for the whole service; client_id (and other static
   -- consumer metadata) is attached via localData so every log entry below
@@ -223,7 +224,7 @@ kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaSer
   runLogT "kafka-service" appLogger LogInfo
     $ LogBase.localData
       [ "client_id" AE..= clientId
-      , "group_id" AE..= appCtx.config.kafkaGroupId
+      , "group_id" AE..= groupId
       ]
       do
         LogBase.logInfo "Starting Kafka consumer service" (AE.object ["topics" AE..= kafkaTopics, "brokers" AE..= appCtx.config.kafkaBrokers])
@@ -284,11 +285,20 @@ kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaSer
                           -- and commit only if the DLQ publish succeeded.
                           if Hasql.isTransientException e
                             then pure []
-                            else do
-                              dlqRes <- liftIO $ publishToDeadLetterQueue appLogger appCtx allRecords attributes errText
-                              pure $ case dlqRes of
-                                Right _ -> successTps
-                                Left _ -> []
+                            else
+                              if isDlqConsumer
+                                then do
+                                  -- DLQ replay: a poison message that failed on the
+                                  -- primary topic AND again here is permanent. Drop +
+                                  -- commit (otherwise it loops forever). Original
+                                  -- error-reason / failed-at headers preserve forensics.
+                                  LogBase.logAttention "kafkaService: permanent failure on DLQ replay — dropping" (AE.object ["error" AE..= errText, "attributes" AE..= attributes, "record_count" AE..= length allRecords])
+                                  pure successTps
+                                else do
+                                  dlqRes <- liftIO $ publishToDeadLetterQueue appLogger appCtx allRecords attributes errText
+                                  pure $ case dlqRes of
+                                    Right _ -> successTps
+                                    Left _ -> []
               -- Bound must stay well under the hasql pool (shared with web) —
               -- AcquisitionTimeout (→ Hasql.isTransientException → no commit →
               -- redelivery storm) is the failure mode to avoid. Single committer
@@ -330,7 +340,7 @@ kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaSer
     consumerProps :: EnvConfig -> Text -> K.ConsumerProperties
     consumerProps cfg clientId =
       K.brokersList (map K.BrokerAddress cfg.kafkaBrokers)
-        <> K.groupId (K.ConsumerGroupId cfg.kafkaGroupId)
+        <> K.groupId (K.ConsumerGroupId groupId)
         <> K.clientId (K.ClientId clientId)
         <> K.extraProp "security.protocol" "sasl_plaintext"
         <> K.extraProp "sasl.mechanism" "SCRAM-SHA-256"

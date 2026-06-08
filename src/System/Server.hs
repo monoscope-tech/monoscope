@@ -115,6 +115,9 @@ runServer appLogger env tp = do
         if env.config.replayBatchSize == 0
           then max 1 (env.config.messagesPerPubsubPullBatch `div` 2)
           else env.config.replayBatchSize
+      -- Separate consumer group for DLQ replay — must differ from kafkaGroupId
+      -- so the DLQ partitions don't rebalance onto primary consumers.
+      dlqGroupId cfg = if T.null cfg.kafkaDeadLetterGroupId then cfg.kafkaGroupId <> "_dlq" else cfg.kafkaDeadLetterGroupId
   let logExc = logException env.config.environment appLogger env.config.logLevel
   -- Extraction worker shard fibers. Each shard runs `processEagerBatch` per
   -- batch inside its own `runBackground` effect stack. The error-decay fiber
@@ -142,9 +145,11 @@ runServer appLogger env tp = do
         , guard env.config.enablePubsubService $> async (supervise logExc "pubsub" $ Queue.pubsubService appLogger env tp env.config.requestPubsubTopics processMessages)
         , Just $ async $ supervise logExc "background-jobs" bgJobWorker
         , Just $ async $ supervise logExc "otlp-grpc" $ OtlpServer.runServer appLogger env tp
-        , guard (env.config.enableKafkaService && not (any T.null env.config.kafkaTopics)) $> async (supervise logExc "kafka" $ Queue.kafkaService appLogger env tp env.config.kafkaTopics env.config.messagesPerPubsubPullBatch OtlpServer.processList)
-        , guard (env.config.enableKafkaService && not (any T.null env.config.kafkaTopics)) $> async (supervise logExc "kafka" $ Queue.kafkaService appLogger env tp env.config.kafkaTopics env.config.messagesPerPubsubPullBatch OtlpServer.processList)
-        , guard env.config.enableReplayService $> async (supervise logExc "kafka-replay" $ Queue.kafkaService appLogger env tp env.config.rrwebTopics effectiveReplayBatch processReplayEvents)
+        , guard (env.config.enableKafkaService && not (any T.null env.config.kafkaTopics)) $> async (supervise logExc "kafka" $ Queue.kafkaService appLogger env tp env.config.kafkaGroupId env.config.kafkaTopics env.config.messagesPerPubsubPullBatch OtlpServer.processList)
+        , guard (env.config.enableKafkaService && not (any T.null env.config.kafkaTopics)) $> async (supervise logExc "kafka" $ Queue.kafkaService appLogger env tp env.config.kafkaGroupId env.config.kafkaTopics env.config.messagesPerPubsubPullBatch OtlpServer.processList)
+        , guard (env.config.enableKafkaService && env.config.enableKafkaDeadLetterService && not (T.null env.config.kafkaDeadLetterTopic))
+            $> async (supervise logExc "kafka-dlq" $ Queue.kafkaService appLogger env tp (dlqGroupId env.config) [env.config.kafkaDeadLetterTopic] env.config.kafkaDeadLetterBatchSize OtlpServer.processList)
+        , guard env.config.enableReplayService $> async (supervise logExc "kafka-replay" $ Queue.kafkaService appLogger env tp env.config.kafkaGroupId env.config.rrwebTopics effectiveReplayBatch processReplayEvents)
         ]
       <> fmap Just workerFibers
   void $ liftIO $ waitAnyCancel asyncs

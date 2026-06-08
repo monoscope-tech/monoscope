@@ -122,6 +122,18 @@ data EnvConfig = EnvConfig
   , enableTimefusionReads :: Bool
   , enableTimefusionWrites :: Bool
   , kafkaDeadLetterTopic :: Text
+  , kafkaDeadLetterGroupId :: Text
+  -- ^ Consumer group for DLQ replay. Must NOT equal 'kafkaGroupId' — a shared
+  -- group would rebalance DLQ partitions onto primary consumers and double-DLQ
+  -- on failure. Empty string falls back at runtime to "<kafkaGroupId>_dlq".
+  , enableKafkaDeadLetterService :: Bool
+  -- ^ Wire a consumer that drains 'kafkaDeadLetterTopic' back through
+  -- 'processList' (routing via the preserved 'ce-type' / 'original-topic'
+  -- headers). Failures on DLQ messages drop+log instead of re-DLQ'ing —
+  -- poison can't loop. Requires 'enableKafkaService'.
+  , kafkaDeadLetterBatchSize :: Int
+  -- ^ Poll batch size for the DLQ consumer. Kept small (DLQ traffic is
+  -- replay, not steady-state) so a poison batch can't stall a large window.
   , enableFreetier :: Bool
   , enableBrowserMonitoring :: Bool
   , enableSessionReplay :: Bool
@@ -215,6 +227,8 @@ instance DefConfig EnvConfig where
       , openaiModel = "gpt-5.4-mini"
       , openaiSmallModel = "gpt-5.4-nano"
       , kafkaGroupConcurrency = 4
+      , enableKafkaDeadLetterService = True
+      , kafkaDeadLetterBatchSize = 50
       , extractionWorkerShards = 4
       , extractionQueueCapacity = 64
       , drainFlushBatchSize = 1000
