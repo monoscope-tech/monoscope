@@ -1997,6 +1997,11 @@ flushDrainTask shard task
       Relude.unless (null hss) $ void $ LogPatterns.upsertHourlyStatBatch hss
 
       -- UPDATE-2: additive per-row tag append. Dual-forked to Postgres + TimeFusion.
+      -- TimeFusion now supports `UPDATE ... FROM (unnest)` natively (see the
+      -- TF DmlQueryPlanner + MergeBuilder dispatch and the vendored
+      -- datafusion-sql guard removal). Both backends consume the same shape;
+      -- the `NOT @>` predicate makes re-extraction of the same pattern a
+      -- no-op (zero rows touched) on both engines.
       let taggedSpans =
             [ (bs.spanCtxId, bs.traceId, tag, bs.timestamp)
             | bs <- task.spans
@@ -2011,35 +2016,21 @@ flushDrainTask shard task
             (minTs, maxTs) = foldl' (\(!lo, !hi) t -> (min lo t, max hi t)) (head tsList, head tsList) tsList
             effectiveMinTs = max minTs hashCutoff
             maxTsPad = addUTCTime 1 maxTs
-            tuples = zip3 spanIds' traceIds' tagArr
-            -- CASE rewrite of the original `UPDATE ... FROM (unnest)` form so
-            -- TimeFusion's PGWire (which doesn't support UPDATE...FROM with a
-            -- joinable subquery) accepts the statement. One CASE branch per
-            -- tuple; idempotency check inline. Empty inputs short-circuit.
-            -- No table alias: TimeFusion's UPDATE planner doesn't resolve
-            -- alias-qualified column refs inside CASE/SET expressions.
-            -- Unqualified is unambiguous (single-table UPDATE) on both PG and TF.
-            whenBranch (s, t, tag) =
-              [HI.sql| WHEN context___span_id = #{s}
-                        AND context___trace_id = #{t}
-                        AND NOT (COALESCE(hashes, '{}'::text[]) @> ARRAY[#{tag}])
-                       THEN ARRAY[#{tag}] |]
-            -- TimeFusion doesn't accept row-constructor IN syntax
-            -- `(col1, col2) IN ((a,b), ...)`. Expand to explicit OR chain.
-            orMatch (s, t, _) =
-              [HI.sql| (context___span_id = #{s} AND context___trace_id = #{t}) |]
             update2Sql =
-              [HI.sql| UPDATE otel_logs_and_spans
-                          SET hashes = COALESCE(hashes, '{}'::text[]) || (CASE |]
-                <> mconcat (whenBranch <$> tuples)
-                <> [HI.sql| ELSE ARRAY[]::text[] END)
-                        WHERE project_id = #{pid.toText}
-                          AND timestamp >= #{effectiveMinTs}
-                          AND timestamp <  #{maxTsPad}
-                          AND ( |]
-                <> mconcat (intersperse [HI.sql| OR |] (orMatch <$> tuples))
-                <> [HI.sql| ) |]
-        Relude.when (ctx.config.enableHashUpdates && maxTs >= hashCutoff && not (null tuples))
+              [HI.sql| UPDATE otel_logs_and_spans o
+                          SET hashes = COALESCE(o.hashes, '{}'::text[]) || ARRAY[u.tag]
+                          FROM (
+                            SELECT unnest(#{spanIds'}::text[]) AS span_id,
+                                   unnest(#{traceIds'}::text[]) AS trace_id,
+                                   unnest(#{tagArr}::text[])    AS tag
+                          ) u
+                          WHERE o.project_id = #{pid.toText}
+                            AND o.timestamp >= #{effectiveMinTs}
+                            AND o.timestamp <  #{maxTsPad}
+                            AND o.context___span_id = u.span_id
+                            AND o.context___trace_id = u.trace_id
+                            AND NOT (COALESCE(o.hashes, '{}'::text[]) @> ARRAY[u.tag]) |]
+        Relude.when (ctx.config.enableHashUpdates && maxTs >= hashCutoff)
           $ void
           $ dualExecPgTf ctx update2Sql
       -- TODO(otel-metrics): emit counters for drain_flushes_completed, spans_flushed, patterns_persisted.
