@@ -17,7 +17,8 @@ instance ToHtml HardwareGet where
   toHtmlRaw = toHtml
   toHtml (HardwareGet project) =
     div_ [class_ "w-full bg-bgBase", style_ "height:calc(100vh - 56px)"]
-      $ term "hardware-monitor"
+      $ term
+        "hardware-monitor"
         [ data_ "project-id" project.id.toText
         , class_ "block w-full h-full"
         ]
