@@ -678,7 +678,7 @@ integrationsPage pid apikey =
             span_ "Install & authenticate (if you haven't)"
           div_
             [class_ "bg-bgBase p-3 rounded monospace text-sm overflow-x-auto border border-strokeWeak"]
-            "curl monoscope.tech/install.sh | sh && monoscope auth login"
+            "curl https://monoscope.tech/install.sh | sh && monoscope auth login"
 
         -- Step 2: Run command
         div_ [class_ "p-4 bg-fillWeak rounded-lg"] do
