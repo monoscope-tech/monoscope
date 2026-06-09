@@ -418,7 +418,11 @@ parseQueryToComponents sqlCfg q = bimap (toText . errorBundlePretty) (queryASTTo
 
 
 queryASTToComponents :: SqlQueryCfg -> [Section] -> (Text, QueryComponents)
-queryASTToComponents sqlCfg = sqlFromQueryComponents sqlCfg . sectionsToComponents sqlCfg
+queryASTToComponents sqlCfg sections =
+  let effectiveSource = sqlCfg.source <|> viaNonEmpty Relude.head [s | Source s <- sections]
+   in sqlFromQueryComponents sqlCfg
+        . sectionsToComponents sqlCfg
+        $ rewriteSectionsForSource effectiveSource sections
 
 
 parseQueryToAST :: Text -> Either Text [Section]

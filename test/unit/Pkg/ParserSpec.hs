@@ -11,6 +11,7 @@ import Pkg.Parser (
   parseQueryToComponents,
   parseQueryToAST,
  )
+import Pkg.Parser.Stats (Sources (..))
 import Relude
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 
@@ -100,6 +101,25 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', c
             [text|
       SELECT extract(epoch from time_bucket('6 hours', timestamp))::integer, count(*)::float AS count_, count(*) OVER() as _total_count FROM telemetry.metrics WHERE project_id='00000000-0000-0000-0000-000000000000' and ((metric_name = 'app_recommendations_counter')) GROUP BY time_bucket('6 hours', timestamp) ORDER BY time_bucket('6 hours', timestamp) DESC |]
       normT query `shouldBe` normT expected
+
+    -- Regression: metrics-source queries used to emit `resource___service___name`,
+    -- which does not exist on telemetry.metrics (only `resource JSONB`). The
+    -- source-aware rewrite in queryASTToComponents converts it to the JSONB path.
+    it "metrics source rewrites service filter to resource->>'service.name'" do
+      let cfg = defSqlQueryCfg defPid fixedUTCTime (Just SMetrics) Nothing
+      let (query, _) = fromRight' $ parseQueryToComponents cfg "| where service == \"accounting\" and metric_name == \"k8s.container.cpu_request\""
+      query `shouldSatisfy` T.isInfixOf "resource->>'service.name' = 'accounting'"
+      T.isInfixOf "resource___service___name" query `shouldBe` False
+
+    it "metrics source rewrites attributes.* filter to JSONB lookup" do
+      let cfg = defSqlQueryCfg defPid fixedUTCTime (Just SMetrics) Nothing
+      let (query, _) = fromRight' $ parseQueryToComponents cfg "| where attributes.http.request.method == \"GET\""
+      query `shouldSatisfy` T.isInfixOf "attributes->>'http.request.method' = 'GET'"
+      T.isInfixOf "attributes___http___request___method" query `shouldBe` False
+
+    it "spans source leaves service filter as a flat column" do
+      let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| where service == \"accounting\""
+      query `shouldSatisfy` T.isInfixOf "resource___service___name = 'accounting'"
 
   describe "percentile parsing" do
     it "parses percentile(duration, 95) via full query" do
