@@ -1,3 +1,10 @@
+// Named import + visible use of the class — pure side-effect imports were being
+// tree-shaken in production builds.
+import { HardwareMonitor } from './hardware-monitor';
+if (typeof customElements !== 'undefined' && !customElements.get('hardware-monitor')) {
+  customElements.define('hardware-monitor', HardwareMonitor);
+}
+
 (window as any).htmx.defineExtension('debug', {
   onEvent: function (name: string, evt: any) {
     if (console.debug) {

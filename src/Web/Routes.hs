@@ -89,6 +89,7 @@ import Pages.Charts.Charts qualified as Charts
 import Pages.Dashboards qualified as Dashboards
 import Pages.Endpoints qualified as ApiCatalog
 import Pages.GitSync qualified as GitSync
+import Pages.Hardware qualified as Hardware
 import Pages.LogExplorer.Log qualified as Log
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Monitors qualified as Alerts
@@ -418,6 +419,8 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , -- Command palette
     commandPaletteGet :: mode :- "p" :> ProjectId :> "command-palette" :> Get '[HTML] (RespHeaders (Html ())) -- dynamic items only
   , commandPaletteRecentPost :: mode :- "p" :> ProjectId :> "command-palette" :> "recents" :> ReqBody '[FormUrlEncoded] CommandPalette.RecentForm :> Post '[HTML] (RespHeaders NoContent)
+  , -- Hardware / digital twin
+    hardwareGet :: mode :- "p" :> ProjectId :> "hardware" :> Get '[HTML] (RespHeaders (PageCtx Hardware.HardwareGet))
   , -- Device auth
     deviceApprove :: mode :- "device" :> QPT "code" :> QPT "action" :> Get '[HTML] (RespHeaders (Html ()))
   , -- Sub-route groups
@@ -783,6 +786,8 @@ cookieProtectedServer =
     , -- Command palette
       commandPaletteGet = CommandPalette.commandPaletteItemsH
     , commandPaletteRecentPost = CommandPalette.commandPaletteRecentPostH
+    , -- Hardware
+      hardwareGet = Hardware.hardwareGetH
     , -- Device auth
       deviceApprove = Auth.deviceApproveH
     , -- Sub-route handlers
