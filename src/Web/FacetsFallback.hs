@@ -66,8 +66,8 @@ facetsFallback pid field fromT toT
       let values =
             AE.toJSON
               [AE.object ["value" AE..= v, "count" AE..= c] | (v, c) <- rows]
-      pure $
-        AE.object
+      pure
+        $ AE.object
           [ AEK.fromText field AE..= values
           , "source" AE..= ("fallback" :: Text)
           ]

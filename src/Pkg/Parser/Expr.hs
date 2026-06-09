@@ -13,8 +13,8 @@ import Data.Text qualified as T
 import Data.Text.Builder.Linear (Builder)
 import Data.Text.Display (Display, display, displayBuilder, displayParen, displayPrec)
 import Data.Vector qualified as V
-import System.IO.Unsafe (unsafePerformIO)
 import Relude hiding (GT, LT, Sum, many, some)
+import System.IO.Unsafe (unsafePerformIO)
 import Text.Megaparsec
 import Text.Megaparsec.Char (alphaNumChar, char, space, space1, string)
 import Text.Megaparsec.Char.Lexer qualified as L

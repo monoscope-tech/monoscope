@@ -659,29 +659,31 @@ queryEvents pid queryM sinceM fromM toM sourceM limitM withChildrenM = do
 -- excerpt is too short to be helpful).
 translateQueryError :: Text -> Servant.ServerError
 translateQueryError raw =
-  let -- The Hasql @show@ output usually contains the bare PG error somewhere;
-      -- pluck the first reasonable summary line so the user doesn't see a
-      -- paragraph of Haskell record syntax.
-      firstLine = T.strip $ T.takeWhile (/= '\n') raw
-      summary
-        | T.null firstLine = "Query execution failed"
-        | T.length firstLine > 240 = T.take 237 firstLine <> "…"
-        | otherwise = firstLine
-   in case extractMissingColumn raw of
-        Just col ->
-          kqlError400
-            "unknown_field"
-            ("Unknown field \"" <> col <> "\"")
-            (Just col)
-            (Just $ "wrap as 'body has \"" <> col <> "\"' for full-text, or use 'field == value' for equality")
-            (Just raw)
-        Nothing ->
-          kqlError400
-            "query_failed"
-            summary
-            Nothing
-            Nothing
-            (Just raw)
+  let
+    -- The Hasql @show@ output usually contains the bare PG error somewhere;
+    -- pluck the first reasonable summary line so the user doesn't see a
+    -- paragraph of Haskell record syntax.
+    firstLine = T.strip $ T.takeWhile (/= '\n') raw
+    summary
+      | T.null firstLine = "Query execution failed"
+      | T.length firstLine > 240 = T.take 237 firstLine <> "…"
+      | otherwise = firstLine
+   in
+    case extractMissingColumn raw of
+      Just col ->
+        kqlError400
+          "unknown_field"
+          ("Unknown field \"" <> col <> "\"")
+          (Just col)
+          (Just $ "wrap as 'body has \"" <> col <> "\"' for full-text, or use 'field == value' for equality")
+          (Just raw)
+      Nothing ->
+        kqlError400
+          "query_failed"
+          summary
+          Nothing
+          Nothing
+          (Just raw)
 
 
 -- | Build a 400 with a JSON-shaped body the CLI's 'renderAPIError' decodes.
@@ -695,8 +697,8 @@ kqlError400 code msg fieldM suggestionM detailsM =
     }
   where
     errBody =
-      AE.object $
-        catMaybes
+      AE.object
+        $ catMaybes
           [ Just ("code" AE..= code)
           , Just ("message" AE..= msg)
           , ("field" AE..=) <$> fieldM

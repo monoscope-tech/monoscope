@@ -308,4 +308,4 @@ deriveSchema liveAttrs =
       -- For any live column not already in 'kept', add a bare entry.
       missing = [k | k <- toList liveAttrs, not (Map.member k kept)]
       enriched = foldl' (\m k -> Map.insert k bareDefault m) kept missing
-   in Schema {fields = enriched}
+   in Schema{fields = enriched}

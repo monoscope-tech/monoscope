@@ -1,9 +1,12 @@
 module System.Config (EnvConfig (..), AuthContext (..), getAppContext, configToEnv, DeploymentEnv (..)) where
 
 import Colourista.IO (blueMessage)
+import Control.Exception.Safe qualified as Safe
 import Data.Cache (Cache, newCache)
 import Data.Default (Default (..))
 import Data.Pool as Pool (Pool, defaultPoolConfig, newPool, setNumStripes)
+import Data.Pool qualified as Pool
+import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as TL
 import Data.Time.Calendar (fromGregorian)
@@ -22,10 +25,6 @@ import Pkg.DeriveUtils qualified as DeriveUtils
 import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Pkg.Parser.Expr qualified as ParserExpr
 import Pkg.TraceSessionCache qualified as TraceSessionCache
-import Data.Set qualified as S
-import Data.Text qualified as T
-import Control.Exception.Safe qualified as Safe
-import Data.Pool qualified as Pool
 import Relude
 import System.Clock (TimeSpec (TimeSpec))
 import System.Envy (DefConfig (..), FromEnv (..), ReadShowVar (..), Var (..), decodeWithDefaults, fromVar, toVar)
@@ -379,7 +378,8 @@ introspectAndCacheOtelColumns :: Pool.Pool Connection -> IO ()
 introspectAndCacheOtelColumns pool = do
   result <- Safe.try $ Pool.withResource pool $ \conn -> do
     rows <-
-      PG.query_ conn
+      PG.query_
+        conn
         "SELECT column_name::text FROM information_schema.columns \
         \WHERE table_schema = 'public' AND table_name = 'otel_logs_and_spans'"
         :: IO [PG.Only Text]

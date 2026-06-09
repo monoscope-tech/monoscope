@@ -94,7 +94,6 @@ import Data.Aeson.KeyMap qualified as AEKM
 import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
 import Data.Effectful.UUID qualified as UUID
-import Web.FacetsFallback (facetsFallback)
 import Data.Generics.Labels ()
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
@@ -133,6 +132,7 @@ import Servant (NoContent (..), ServerError (..), err400, err404)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATBaseCtx)
 import Web.ApiTypes
+import Web.FacetsFallback (facetsFallback)
 
 
 -- | Return the value or throw a 404 with a given message.
