@@ -3,12 +3,14 @@
 module Pages.Charts.Charts (queryMetrics, MetricsData (..), fetchMetricsData, MetricsStats (..), DataType (..), convertTimestampsToMs) where
 
 import Control.Exception.Annotated (checkpoint, try)
+import UnliftIO.Exception (catch, throwIO)
 import Data.Aeson qualified as AE
 import Data.Annotation (toAnnotation)
 import Data.Default
 import Data.List qualified as L (maximum)
 import Data.Map.Strict qualified as M
 import Data.Pool (withResource)
+import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Tuple.Extra (fst3, snd3, thd3)
@@ -148,17 +150,15 @@ queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (
       let sqlQuery = replacePlaceholders mappngSQL' querySQL
       let tbl = sourceTable (parseMaybe pSource =<< sourceM)
       convertTimestampsToMs
-        <$> withSpan_
-          ("SELECT " <> tbl)
-          [ ("db.system.name", OA.toAttribute ("postgresql" :: Text))
-          , ("db.operation.name", OA.toAttribute ("SELECT" :: Text))
-          , ("db.collection.name", OA.toAttribute tbl)
-          , ("db.query.text", OA.toAttribute sqlQuery)
-          , ("monoscope.kql.query", OA.toAttribute (maybeToMonoid queryM))
-          , ("monoscope.kql.mode", OA.toAttribute ("sql" :: Text))
-          , ("monoscope.kql.data_type", OA.toAttribute (toText (show respDataType) :: Text))
-          , ("monoscope.project.id", OA.toAttribute (maybe "" (.toText) pidM))
-          ]
+        <$> withChartSpan
+          tbl
+          ( chartSpanAttrs tbl sqlQuery respDataType (maybe "" (.toText) pidM)
+              <> [ ("monoscope.kql.query", OA.toAttribute (maybeToMonoid queryM))
+                 , ("monoscope.kql.mode", OA.toAttribute ("sql" :: Text))
+                 ]
+          )
+          sqlQuery
+          (emptyMetricsFor now fromD toD)
           (runFetchMetrics respDataType sqlQuery now fromD toD authCtx dbSource)
     _ -> do
       queryAST <-
@@ -222,43 +222,98 @@ queryMetricsWithCache authCtx dbSource respDataType pid source queryAST sqlQuery
       let (_, qc) = queryASTToComponents cfg ast
       let sqlQuery = maybeToMonoid qc.finalSummarizeQuery
       let tbl = sourceTable source
-      withSpan_
-        ("SELECT " <> tbl)
-        [ ("db.system.name", OA.toAttribute ("postgresql" :: Text))
-        , ("db.operation.name", OA.toAttribute ("SELECT" :: Text))
-        , ("db.collection.name", OA.toAttribute tbl)
-        , ("db.query.text", OA.toAttribute sqlQuery)
-        , ("monoscope.kql.query", OA.toAttribute originalQuery)
-        , ("monoscope.kql.mode", OA.toAttribute ("kql" :: Text))
-        , ("monoscope.kql.data_type", OA.toAttribute (toText (show respDataType) :: Text))
-        , ("monoscope.project.id", OA.toAttribute pid.toText)
-        , ("monoscope.kql.source", OA.toAttribute (maybe "" (toText . show) source :: Text))
-        ]
+      withChartSpan
+        tbl
+        ( chartSpanAttrs tbl sqlQuery respDataType pid.toText
+            <> [ ("monoscope.kql.query", OA.toAttribute originalQuery)
+               , ("monoscope.kql.mode", OA.toAttribute ("kql" :: Text))
+               , ("monoscope.kql.source", OA.toAttribute (maybe "" (toText . show) source :: Text))
+               ]
+        )
+        sqlQuery
+        (emptyMetricsFor now fromD toD)
         (runFetchMetrics respDataType sqlQuery now fromD toD authCtx dbSource)
     refetchUnlessAdequate coversRange cached result
       | coversRange || not (V.null result.dataset) || V.null cached.dataset = pure result
       | otherwise = executeQueryWith sqlQueryCfg queryAST
 
 
--- | Wrap fetchMetricsData with logging: any swallowed SQL/decode error is logged
--- via the application Log effect (visible in build.log / prod logs) and the
--- caller gets a benign empty MetricsData fallback.
+-- | Run fetchMetricsData; rethrow on failure so the surrounding 'withSpan_'
+-- marks the span 'Error' via its 'withException' handler (System/Tracing.hs).
+-- The outer 'withChartSpan' catches and produces a user-visible error payload.
 runFetchMetrics
-  :: (IOE :> es, Log :> es)
+  :: IOE :> es
   => DataType -> Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> AuthContext -> Maybe Text -> Eff es MetricsData
-runFetchMetrics respDataType sqlQuery now fromD toD authCtx dbSource = do
-  result <- liftIO $ fetchMetricsData respDataType sqlQuery now fromD toD authCtx dbSource
-  case result of
-    Right md -> pure md
-    Left e -> do
-      Log.logAttention
-        "widget SQL execution failed; rendering empty result"
-        (AE.object ["error" AE..= show @Text e, "sql" AE..= unwords (words sqlQuery), "dataType" AE..= show @Text (toText (show respDataType))])
-      pure
-        $ def
-          { from = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe (addUTCTime (-86400) now) fromD
-          , to = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe now toD
-          }
+runFetchMetrics respDataType sqlQuery now fromD toD authCtx dbSource = liftIO do
+  fetchMetricsData respDataType sqlQuery now fromD toD authCtx dbSource >>= either throwIO pure
+
+
+-- | Six attributes every chart span carries. Each call-site appends its own
+-- mode-specific (sql vs kql) extras.
+chartSpanAttrs :: Text -> Text -> DataType -> Text -> [(Text, OA.Attribute)]
+chartSpanAttrs tbl sqlQuery respDataType pidText =
+  [ ("db.system.name", OA.toAttribute ("postgresql" :: Text))
+  , ("db.operation.name", OA.toAttribute ("SELECT" :: Text))
+  , ("db.collection.name", OA.toAttribute tbl)
+  , ("db.query.text", OA.toAttribute sqlQuery)
+  , ("monoscope.kql.data_type", OA.toAttribute (show @Text respDataType))
+  , ("monoscope.project.id", OA.toAttribute pidText)
+  ]
+
+
+-- | Build the empty-result 'MetricsData' the catch handler returns on failure.
+-- Pre-computed at the call site so 'withChartSpan' doesn't need now/fromD/toD.
+emptyMetricsFor :: UTCTime -> Maybe UTCTime -> Maybe UTCTime -> MetricsData
+emptyMetricsFor now fromD toD =
+  def
+    { from = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe (addUTCTime (-86400) now) fromD
+    , to = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe now toD
+    }
+
+
+-- | Map common backend failure modes to a short user-facing label. Covers both
+-- Postgres ("column \"x\" does not exist") and TimeFusion's wrapped form
+-- ("External error: Kernel error: Predicate references unknown column: x")
+-- since prod chart reads can hit either backend. Raw error stays in the OTEL
+-- span + log line.
+sanitizeChartError :: SomePostgreSqlException -> Text
+sanitizeChartError e
+  | columnNotFound = "Column not found"
+  | tableNotFound = "Table not found"
+  | "canceling statement due to" `T.isInfixOf` msg = "Query timed out"
+  | "connection" `T.isInfixOf` msg && ("refused" `T.isInfixOf` msg || "closed" `T.isInfixOf` msg) = "Database unavailable"
+  | otherwise = "Query execution failed"
+  where
+    msg = T.toLower $ toText $ displayException e
+    columnNotFound =
+      -- Postgres: column "x" does not exist
+      ("does not exist" `T.isInfixOf` msg && "column" `T.isInfixOf` msg)
+        -- DataFusion / TimeFusion: "Schema error: No field named x"
+        || "no field named" `T.isInfixOf` msg
+        || "unknown column" `T.isInfixOf` msg
+    tableNotFound =
+      ("does not exist" `T.isInfixOf` msg && "relation" `T.isInfixOf` msg)
+        || "unknown table" `T.isInfixOf` msg
+        || ("table" `T.isInfixOf` msg && "not found" `T.isInfixOf` msg)
+
+
+-- | Wrap a chart-data fetch with its OTEL span and turn any SQL failure into
+-- an error-tagged empty 'MetricsData' so the dashboard keeps rendering. The
+-- exception is rethrown through 'withSpan_' first, so the span gets
+-- 'Error' status + 'exception.*' attributes from
+-- @System.Tracing.withException@ before we catch it here.
+withChartSpan
+  :: (IOE :> es, Log :> es, Tracing :> es)
+  => Text -> [(Text, OA.Attribute)] -> Text -> MetricsData
+  -> Eff es MetricsData -> Eff es MetricsData
+withChartSpan tbl attrs sqlQuery fallback action =
+  withSpan_ ("SELECT " <> tbl) attrs action `catch` \(e :: SomePostgreSqlException) -> do
+    let userMsg = sanitizeChartError e
+    -- TODO(otel-metrics): widget_sql_error{project_id, error_class=userMsg}
+    Log.logAttention
+      "widget SQL execution failed; rendering error overlay"
+      (AE.object ["error" AE..= show @Text e, "sql" AE..= unwords (words sqlQuery), "error_message" AE..= userMsg])
+    pure fallback{error = Just userMsg}
 
 
 fetchMetricsData :: DataType -> Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> AuthContext -> Maybe Text -> IO (Either SomePostgreSqlException MetricsData)

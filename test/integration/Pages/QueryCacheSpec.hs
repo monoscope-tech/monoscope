@@ -135,3 +135,16 @@ spec = aroundAll withTestResources do
       V.length resultMerged.headers `shouldSatisfy` (>= 3)
       -- Stats must match - catches bugs where only first column was used for stats
       compareResults resultMerged resultFresh `shouldBe` True
+
+  -- Regression: chart SQL failures used to be silently swallowed into empty
+  -- datasets, hiding broken widgets behind the same "no data" overlay as a
+  -- legitimately empty time range. The response must now carry an explicit
+  -- `error` field, and the request must not crash the page.
+  describe "Widget SQL failures" do
+    it "non-existent column surfaces a sanitized error instead of empty data" $ \tr -> do
+      clearAllTestData tr
+      -- Reference a column that does not exist on otel_logs_and_spans.
+      let q = "totally_made_up_column == \"x\" | summarize count(*) by bin_auto(timestamp)"
+      result <- queryMetrics tr q (timeAt (-1800)) (timeAt 1800)
+      result.error `shouldBe` Just "Column not found"
+      V.length result.dataset `shouldBe` 0

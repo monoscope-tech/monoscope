@@ -28,11 +28,12 @@ mkMetrics rows = MetricsData
   , from = floor . fst <$> viaNonEmpty head rows
   , to = floor . fst <$> viaNonEmpty last rows
   , stats = Nothing
+  , error = Nothing
   }
 
 
 emptyMetrics :: MetricsData
-emptyMetrics = MetricsData V.empty Nothing V.empty V.empty V.empty 0 Nothing Nothing Nothing Nothing
+emptyMetrics = MetricsData V.empty Nothing V.empty V.empty V.empty 0 Nothing Nothing Nothing Nothing Nothing
 
 
 timestampSubject :: Subject

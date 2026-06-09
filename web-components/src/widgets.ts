@@ -184,7 +184,7 @@ export const getChartStyles = () => {
   };
 };
 
-const showNoDataOverlay = (chartId: string, message?: string) => {
+const showNoDataOverlay = (chartId: string, message?: string, variant: 'empty' | 'error' = 'empty') => {
   const el = $(`${chartId}`);
   if (!el) return;
   const parent = el.parentElement;
@@ -197,7 +197,13 @@ const showNoDataOverlay = (chartId: string, message?: string) => {
     parent.style.position = 'relative';
     parent.appendChild(overlay);
   }
-  overlay.innerHTML = `<div class="text-center text-textWeak"><svg class="w-6 h-6 mx-auto mb-2 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 13h4l3-8 4 16 3-8h4"/></svg><p class="text-sm">${msg}</p></div>`;
+  if (variant === 'error') {
+    // Distinct from "no data": error triangle + textError tone so users can tell
+    // a failed widget from a legitimately empty time range.
+    overlay.innerHTML = `<div class="text-center text-textError"><svg class="w-6 h-6 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"/></svg><p class="text-sm font-medium">${msg}</p></div>`;
+  } else {
+    overlay.innerHTML = `<div class="text-center text-textWeak"><svg class="w-6 h-6 mx-auto mb-2 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 13h4l3-8 4 16 3-8h4"/></svg><p class="text-sm">${msg}</p></div>`;
+  }
   overlay.classList.remove('hidden');
 };
 
@@ -327,7 +333,14 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
       params.set('query_sql', querySQL);
     }
 
-    const { from, to, headers, dataset, rows_per_min, stats } = await limitedFetch(`/chart_data?${params}`).then((res) => res.json());
+    const { from, to, headers, dataset, rows_per_min, stats, error } = await limitedFetch(`/chart_data?${params}`).then((res) => res.json());
+    if (error) {
+      // Server-reported SQL failure: show distinct error overlay (not the generic
+      // "no data" one) so the user can distinguish a broken widget from an empty range.
+      chart.hideLoading();
+      showNoDataOverlay(chartId, error, 'error');
+      return;
+    }
     const trmHeaders = headers?.map((h: string) => {
       if (h === 'timestamp' || h === 'created_at') {
         return h;
@@ -380,7 +393,7 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
   } catch (e) {
     console.error('Failed to fetch new data:', e);
     chart.hideLoading();
-    showNoDataOverlay(chartId, 'Failed to load data');
+    showNoDataOverlay(chartId, 'Failed to load data', 'error');
   } finally {
     // Batch DOM updates after fetch completes
     requestAnimationFrame(() => {
