@@ -69,7 +69,7 @@ monoscope auth logout
 | `MONOSCOPE_API_KEY` | API key — takes precedence over stored token |
 | `MONOSCOPE_PROJECT` | Default project UUID |
 | `MONOSCOPE_API_URL` | API base URL (default: `https://api.monoscope.tech`) |
-| `MONOSCOPE_AGENT_MODE` | Set to `1` to force JSON output (also triggered by `CI` or `CLAUDE_CODE`) |
+| `MONOSCOPE_FORCE_COLOR` | Set to `1` to keep colored table output when stdout is piped (otherwise auto-detect switches to JSON) |
 | `MONOSCOPE_DEBUG` | Set to `1` to print every outgoing request to stderr (same as `--debug`) |
 
 ### Config files
@@ -104,16 +104,22 @@ Every command accepts these flags:
 | Flag | Description |
 |---|---|
 | `--project/-p <uuid>` | Override the project for this invocation |
-| `--output/-o json\|yaml\|table` | Force output format |
-| `--json` | Shorthand for `--output json` |
-| `--agent` | Force JSON output (same as `MONOSCOPE_AGENT_MODE=1`) |
+| `--json` | Emit JSON (forced anyway when stdout is piped) |
+| `--yaml` | Emit YAML |
+| `--table` | Force pretty-printed table (overrides pipe → JSON auto-detect) |
 | `--debug` | Print every outgoing request URL to stderr |
+
+When more than one output flag is set, precedence is `--json` > `--yaml` > `--table`.
 
 ## Output modes
 
-- `table` — default when stdout is a TTY; human-readable aligned columns
-- `json` — default when stdout is a pipe or in CI; ideal for piping into `jq`
-- `yaml` — config-friendly; round-trips cleanly through `apply`
+- `table` — default when stdout is a TTY. Sentry-style Unicode box-drawing renderer
+  with severity colouring, terminal-width truncation, and a pagination cue under
+  list output. Set `MONOSCOPE_FORCE_COLOR=1` to keep colours when piping.
+- `json` — default when stdout is a pipe. Pretty-printed JSON envelope, stable
+  shape for `jq` and agent consumption.
+- `yaml` — config-friendly. Round-trips cleanly through `apply` for monitors and
+  dashboards.
 
 ---
 
@@ -123,13 +129,16 @@ Logs and traces share the same event storage. `logs` and `traces` are aliases fo
 
 ### Search
 
-The positional `QUERY` argument is **KQL** (the same query language used in the web UI). Equality uses `==` with double-quoted strings; combine with `and`/`or`/parens.
+The positional `QUERY` argument is **KQL** (the same query language used in the web UI). Equality uses `==` with double-quoted strings; combine with `and`/`or`/parens. **Bare strings (no KQL operators) are auto-rewritten to `body has "X" or summary has "X"`**, so `monoscope logs search POISON_ROW_DROPPED` just works.
 
 ```bash
+# Bare-string full-text search (rewritten to body has "..." or summary has "...")
+monoscope logs search POISON_ROW_DROPPED --since 24h
+
 # All events from a service in the last hour (default --since=1H, matching the UI)
 monoscope logs search --service checkout-api
 
-# Only error-level logs in the last 30 minutes
+# Only error-level logs in the last 30 minutes (--level normalises to upper-case)
 monoscope logs search --level error --since 30m --limit 50
 
 # Free-text search inside the log body
@@ -152,15 +161,22 @@ Options:
 | `--from <timestamp>` | Start time (ISO 8601) — pairs with `--to`, overrides `--since` |
 | `--to <timestamp>` | End time (ISO 8601) |
 | `--kind log\|trace` | Filter by event kind (mapped to the `source` query param) |
-| `--service <name>` | Shorthand for `resource.service.name=="<name>"` |
-| `--level <level>` | Shorthand for `severity.text=="<level>"` |
+| `--service <name>` | Shorthand for `resource.service.name=="<name>"`. **Repeatable** — `--service a --service b` expands to `in (a, b)` |
+| `--level <level>` | Shorthand for `severity.text=="<LEVEL>"` (auto-uppercased) |
 | `--limit/-n <N>` | Max results to return |
 | `--fields <f1,f2>` | Comma-separated columns to keep in JSON / table output |
 | `--cursor <value>` | Pagination: pass the `cursor` field from a previous response |
 | `--first` | Return only the first matching event (the JSON envelope still carries `count`/`has_more`) |
 | `--id-only` | Print just the first event's `id` to stdout — natural input for `events get`/`share-link`. Implies `--first` |
+| `--with-children` | Also return descendants of each matched span (default: predicate hits only) |
+| `--chunk-hours <H>` | Hours per slice when auto-chunking long `--since` windows (default `1`). See *Auto-chunking* below |
+| `--no-chunk` | Disable auto-chunking (single round-trip, original behaviour) |
 
 The JSON output envelope is stable: `{events: [...], count, has_more, cursor}`. Use `cursor` to drive pagination loops, `count` for the total matching, and `has_more` to terminate.
+
+#### Auto-chunking long `--since` windows
+
+`events search` / `logs search` split any window wider than `--chunk-hours` (default `1`) into 1-hour slices anchored on a single `now` and stream each slice's response as a separate JSON object on stdout (NDJSON). This sidesteps Cloudflare's 504 on multi-day queries and short-circuits on `--first` / `--id-only`. Pass `--no-chunk` to restore the single-request path.
 
 ### Get a single event or trace
 
@@ -168,9 +184,24 @@ The JSON output envelope is stable: `{events: [...], count, has_more, cursor}`. 
 # Single event by id (default --since=24H)
 monoscope events get <event-id>
 
+# Project a specific field out of the event JSON (repeatable, no jq needed)
+monoscope events get <event-id> --field body --field summary
+
+# Common case: just the message text
+monoscope events get <event-id> --show-body
+
 # All spans of a trace
 monoscope traces get <trace-id> --tree
 ```
+
+Options for `events get`:
+
+| Flag | Description |
+|---|---|
+| `--tree` | Render as a trace tree (only relevant for span IDs) |
+| `--at <timestamp>` | ISO-8601 hint for a fast point-in-time lookup (skips the 90d range scan) |
+| `--field <name>` | Project a single field out of the JSON. **Repeatable** |
+| `--show-body` | Shorthand for `--field body --field summary` |
 
 ### Live tail
 
@@ -511,11 +542,11 @@ shape regardless.
 
 ## Auth status (machine-readable)
 
-`auth status` emits structured output in agent mode (`--agent`, `--json`,
-`MONOSCOPE_AGENT_MODE=1`, `CI=1`, or `CLAUDE_CODE=1`):
+`auth status` emits structured output whenever stdout isn't a TTY, or with an
+explicit `--json` / `--yaml`:
 
 ```bash
-monoscope --agent auth status
+monoscope --json auth status
 # {
 #   "authenticated": true,
 #   "method": "token",          # "token" | "env" | null
@@ -524,9 +555,25 @@ monoscope --agent auth status
 # }
 ```
 
-In agent mode `auth login` (without `--token`) refuses to start the
+In non-interactive mode `auth login` (without `--token`) refuses to start the
 interactive device-code flow and exits non-zero — pass `--token <key>` from
-your secret store instead.
+your secret store instead. `CI=1` and `CLAUDE_CODE=1` are still honoured as
+auto-detect hints for non-interactivity.
+
+---
+
+## Resilience & error handling
+
+- **Gateway errors** (`502`/`503`/`504`, Cloudflare HTML) are collapsed into a
+  single-line message with a hint to narrow `--since`; the CLI retries the
+  request once with jittered backoff before giving up.
+- **Structured errors on stderr in non-table mode** — `printError` emits
+  `{"error": {"code", "message", "field?", "suggestion?", "details?"}}` as
+  NDJSON on stderr. ANSI is suppressed automatically whenever stdout isn't a
+  TTY (override with `MONOSCOPE_FORCE_COLOR=1`).
+- **`--debug`** sets an `X-Debug: 1` header so the server includes the raw SQL
+  / Hasql exception text under `error.details`. Combine with `MONOSCOPE_DEBUG=1`
+  for outgoing-request tracing.
 
 ---
 
@@ -687,7 +734,7 @@ MONOSCOPE_API_KEY=<read-only demo key> \
 
 # Or point at your local dev server:
 MONOSCOPE_API_URL=http://localhost:8080 \
-MONOSCOPE_API_KEY=$(monoscope --agent api-keys create "e2e-tests" | jq -r .key) \
+MONOSCOPE_API_KEY=$(monoscope --json api-keys create "e2e-tests" | jq -r .key) \
 MONOSCOPE_PROJECT=<your project uuid> \
   USE_EXTERNAL_DB=true cabal test integration-tests \
     --test-options='--match "CLI binary E2E"'
