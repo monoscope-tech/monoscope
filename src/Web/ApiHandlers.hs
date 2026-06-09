@@ -94,6 +94,7 @@ import Data.Aeson.KeyMap qualified as AEKM
 import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
 import Data.Effectful.UUID qualified as UUID
+import Web.FacetsFallback (facetsFallback)
 import Data.Generics.Labels ()
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
@@ -1156,7 +1157,13 @@ apiFacets pid sinceM fromM toM fieldM = do
           let k = AEK.fromText f
            in AE.Object (maybe mempty (AEKM.singleton k) (AEKM.lookup k o))
         _ -> asAeson
-  pure filtered
+  -- C2: when a specific @field@ was requested and the cache had nothing,
+  -- compute the top values on-the-fly. Only fields confirmed by C1's
+  -- introspection are admissible (prevents SQL injection via @field=...@).
+  -- Tag the response so the CLI can surface "computed live."
+  case (fieldM, filtered) of
+    (Just f, AE.Object o) | AEKM.null o -> facetsFallback pid f defaultFrom defaultTo
+    _ -> pure filtered
 
 
 -- | GET /api/v1/events/{id}/time/{ts} — O(1) lookup using the timeseries

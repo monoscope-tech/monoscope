@@ -1,4 +1,4 @@
-module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), kqlTimespanToTimeBucket, FieldKey (..), pSquareBracketKey, pTerm, jsonPathQuery, display, pDuration, pNowFunction, pAgoFunction, pValues, Parser, symbol, sc, ToQueryText (..), flattenedOtelAttributes, topLevelOtelColumns, transformFlattenedAttribute, outputFieldAliases) where
+module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), kqlTimespanToTimeBucket, FieldKey (..), pSquareBracketKey, pTerm, jsonPathQuery, display, pDuration, pNowFunction, pAgoFunction, pValues, Parser, symbol, sc, ToQueryText (..), flattenedOtelAttributes, flattenedOtelAttributesBuiltin, setFlattenedOtelColumns, topLevelOtelColumns, transformFlattenedAttribute, outputFieldAliases) where
 
 import Control.Monad.Combinators.Expr (
   Operator (InfixL),
@@ -13,6 +13,7 @@ import Data.Text qualified as T
 import Data.Text.Builder.Linear (Builder)
 import Data.Text.Display (Display, display, displayBuilder, displayParen, displayPrec)
 import Data.Vector qualified as V
+import System.IO.Unsafe (unsafePerformIO)
 import Relude hiding (GT, LT, Sum, many, some)
 import Text.Megaparsec
 import Text.Megaparsec.Char (alphaNumChar, char, space, space1, string)
@@ -597,9 +598,13 @@ subjectHasWildcard (Subject _ _ keys) = any isArrayWildcard keys
     isArrayWildcard _ = False
 
 
--- Set of OpenTelemetry attribute paths that have been flattened in the database schema (O(log n) lookup)
-flattenedOtelAttributes :: Set T.Text
-flattenedOtelAttributes =
+-- | Hand-coded fallback for the flattened OTel attribute set. Used at
+-- bootstrap and by any code that runs before 'setFlattenedOtelColumns'
+-- (unit tests, scripts). The runtime set is read via
+-- 'flattenedOtelAttributes' which prefers whatever was populated from the
+-- live introspection of @otel_logs_and_spans@.
+flattenedOtelAttributesBuiltin :: Set T.Text
+flattenedOtelAttributesBuiltin =
   fromList
     [ "attributes.http.request.method"
     , "attributes.http.request.method_original"
@@ -643,6 +648,39 @@ flattenedOtelAttributes =
     , "severity.severity_text"
     , "severity.severity_number"
     ]
+
+
+-- | Cache for the introspected column set. Initialised to the hand-coded
+-- fallback so anything that runs before the bootstrap (e.g. unit tests, the
+-- KQL parser invoked from a script) still sees a sensible value.
+--
+-- Set by 'setFlattenedOtelColumns' at server startup. After that it is
+-- effectively immutable for the process lifetime — the parser's hot path
+-- ('transformFlattenedAttribute' below) reads from it via
+-- 'flattenedOtelAttributes', which inlines an 'unsafePerformIO' read.
+-- The 'unsafePerformIO' is safe because writes happen exactly once at boot
+-- before any query handler runs.
+{-# NOINLINE flattenedOtelColumnsRef #-}
+flattenedOtelColumnsRef :: IORef (Set T.Text)
+flattenedOtelColumnsRef = unsafePerformIO (newIORef flattenedOtelAttributesBuiltin)
+
+
+-- | Replace the cached flattened-attribute set. Called from 'Start.hs' after
+-- the introspection query against @information_schema.columns@ resolves.
+-- The new set is unioned with the hand-coded fallback so unknown
+-- attributes (a missing live introspection, a schema-learning gap) still
+-- behave correctly.
+setFlattenedOtelColumns :: Set T.Text -> IO ()
+setFlattenedOtelColumns live = writeIORef flattenedOtelColumnsRef (live <> flattenedOtelAttributesBuiltin)
+
+
+-- | The runtime flattened-attribute set. Reads from the bootstrap-once
+-- cache. Stays a pure value so existing call sites (which are themselves
+-- pure: 'transformFlattenedAttribute', 'Display Subject' codegen) don't need
+-- to change.
+flattenedOtelAttributes :: Set T.Text
+flattenedOtelAttributes = unsafePerformIO (readIORef flattenedOtelColumnsRef)
+{-# NOINLINE flattenedOtelAttributes #-}
 
 
 -- | Bare top-level columns on @otel_logs_and_spans@. KQL accepts these

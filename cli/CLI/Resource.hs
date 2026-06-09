@@ -7,6 +7,8 @@ module CLI.Resource (
   ResourceKind (..),
   WriteVerb (..),
   runList,
+  runListVia,
+  renderListPayload,
   runGet,
   runDelete,
   runLifecycle,
@@ -27,12 +29,15 @@ module CLI.Resource (
 import Relude
 
 import CLI.Config (CLIConfig (..))
-import CLI.Core (APIError, OutputMode (..), apiDelete, apiGetJson, apiPatchJson, apiPostJson, apiPutJson, printError, renderAPIError, renderByMode)
+import CLI.Core (APIError, OutputMode (..), apiDelete, apiGetJson, apiPatchJson, apiPostJson, apiPutJson, printError, renderAPIError, renderByMode, renderWith)
+import CLI.Table (Align (..), CellStyle (..), RichTableOpts (..), brand, defaultRichTableOpts, level, muted, numeric, paginationFooter, parseSeverity, plain, renderRichTableWith)
 import Control.Lens (has)
 import Data.Aeson qualified as AE
+import Data.Aeson.Key qualified as AK
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.Lens qualified as AL
 import Data.Effectful.Wreq (HTTP)
+import Data.Text qualified as T
 import Data.Yaml qualified as Yaml
 import Effectful
 import Effectful.Environment (Environment)
@@ -41,7 +46,18 @@ import System.FilePath (takeExtension, (</>))
 import Web.ApiTypes (Paged (..))
 
 
-data ResourceKind = Monitors | Dashboards | ApiKeys | Teams | Members
+data ResourceKind
+  = Monitors
+  | Dashboards
+  | ApiKeys
+  | Teams
+  | Members
+  | -- | Listing-only kinds; used by 'renderListPayload' / 'runListVia' to pick
+    -- a column set for resources whose CRUD lives outside this module
+    -- (issues, endpoints, log-patterns). They don't appear in 'resourcePath'.
+    Issues
+  | Endpoints
+  | LogPatterns
   deriving stock (Eq, Show)
 
 
@@ -53,6 +69,9 @@ data WriteVerb = POST | PUT | PATCH
 
 
 -- | URL prefix for a given kind under /api/v1.
+-- Issues / Endpoints / LogPatterns are list-only here (the call sites in
+-- Main.hs hit their own URLs); 'resourcePath' returns "" for them so a stray
+-- lookup is harmless rather than crashing the CLI.
 resourcePath :: ResourceKind -> Text
 resourcePath =
   ("/api/v1" <>) . \case
@@ -61,6 +80,9 @@ resourcePath =
     ApiKeys -> "/api_keys"
     Teams -> "/teams"
     Members -> "/members"
+    Issues -> "/issues"
+    Endpoints -> "/endpoints"
+    LogPatterns -> "/log_patterns"
 
 
 -- | @resourceIdPath k id@ → @"/<kind>/<id>"@.
@@ -84,25 +106,180 @@ runAPI :: (AE.ToJSON a, IOE :> es) => OutputMode -> Eff es (Either APIError a) -
 runAPI mode act = withResult act renderAPIError (renderByMode mode Nothing)
 
 
--- | D4: every list endpoint returns the same shape from the CLI's perspective:
--- @{data: [...], pagination: {has_more, total, cursor}}@. This is a CLI-side
--- adapter — the server still returns its native envelope (bare arrays for some
--- resources, @Paged@ for others). Centralising the normalisation here means
--- agents can rely on a single shape across @issues list@, @monitors list@,
--- @dashboards list@, @api-keys list@, @teams list@, @members list@,
--- @endpoints list@, @log-patterns list@.
+-- | Every list endpoint returns the same shape from the CLI's perspective:
+-- @{data: [...], pagination: {has_more, total, cursor}}@. The server still
+-- returns its native envelope (bare arrays for some resources, @Paged@ for
+-- others); the normalisation lives here so agents see one shape across
+-- @issues list@, @monitors list@, @dashboards list@, @api-keys list@,
+-- @teams list@, @members list@, @endpoints list@, @log-patterns list@.
+--
+-- In table mode the per-resource column set in 'buildResourceTable' decides
+-- which fields show, plus a "… N more" pagination cue below.
 runList :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> ResourceKind -> [(Text, Text)] -> OutputMode -> Eff es ()
 runList cfg k params mode =
   apiGetJson @_ @AE.Value cfg (resourcePath k) params >>= \case
     Left e -> printError (renderAPIError e) >> liftIO exitFailure
     Right v -> case normalizeListE v of
-      Right normalised -> renderByMode mode Nothing normalised
+      Right normalised -> renderListPayload k mode normalised
       Left (raw, reason) -> do
         -- Server returned an envelope shape we don't recognise. This is
         -- always-on stderr (not printDebug): an agent expecting
         -- {data, pagination} would silently get a broken shape otherwise.
         printError $ "list " <> resourcePath k <> ": " <> reason
         renderByMode mode Nothing raw
+
+
+-- | Variant of 'runList' for resources whose URL differs from 'resourcePath'
+-- (e.g. issues hits the legacy @apiGetJson \@_ \@AE.Value@ flow from Main.hs
+-- with custom query params). Re-uses the same normalisation + table builder
+-- so the per-kind columns are defined in one place.
+runListVia :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> ResourceKind -> Text -> [(Text, Text)] -> OutputMode -> Eff es ()
+runListVia cfg k url params mode =
+  apiGetJson @_ @AE.Value cfg url params >>= \case
+    Left e -> printError (renderAPIError e) >> liftIO exitFailure
+    Right v -> case normalizeListE v of
+      Right normalised -> renderListPayload k mode normalised
+      Left (raw, reason) -> do
+        printError $ "list " <> url <> ": " <> reason
+        renderByMode mode Nothing raw
+
+
+-- | Render a normalised list payload — JSON/YAML pass through to the encoder;
+-- 'OutputTable' delegates to per-resource column builders below.
+renderListPayload :: IOE :> es => ResourceKind -> OutputMode -> AE.Value -> Eff es ()
+renderListPayload k mode payload =
+  renderWith mode payload $ do
+    let items = case payload of
+          AE.Object o -> case AEKM.lookup "data" o of
+            Just (AE.Array xs) -> toList xs
+            _ -> []
+          _ -> []
+        (headers, rows) = buildResourceTable k items
+        rightAligned = headerIsNumeric <$> headers
+        opts = defaultRichTableOpts {alignments = rightAligned}
+    renderRichTableWith opts headers rows
+    case payload of
+      AE.Object o
+        | Just (AE.Object p) <- AEKM.lookup "pagination" o
+        , Just (AE.Bool True) <- AEKM.lookup "has_more" p ->
+            paginationFooter "… more — pass --limit / --page or use --json to see the cursor"
+      _ -> pass
+  where
+    headerIsNumeric h
+      | T.toLower h `elem` ["count", "events", "widgets", "seen", "first_seen", "last_seen"] = AlignRight
+      | otherwise = AlignLeft
+
+
+-- | Per-resource column set. Keep the default narrow (5-7 columns) so the
+-- TITLE-ish column has room to breathe on a typical 120-col terminal.
+-- Unknown resource kinds fall back to a key/value dump of the first object.
+buildResourceTable :: ResourceKind -> [AE.Value] -> ([Text], [[(CellStyle, Text)]])
+buildResourceTable kind items = case kind of
+  Monitors ->
+    ( ["state", "name", "condition", "last_triggered"]
+    , [ [ pickLevelCell o ["state", "status"]
+        , brand (lookupText o "name")
+        , plain (lookupText o "condition")
+        , muted (lookupText o "last_triggered_at")
+        ]
+      | AE.Object o <- items
+      ]
+    )
+  Dashboards ->
+    ( ["name", "widgets", "updated"]
+    , [ [ brand (lookupText o "name")
+        , numeric (lookupText o "widget_count")
+        , muted (lookupText o "updated_at")
+        ]
+      | AE.Object o <- items
+      ]
+    )
+  ApiKeys ->
+    ( ["title", "status", "last_used"]
+    , [ [ brand (lookupText o "title")
+        , pickStatus o
+        , muted (lookupText o "last_used_at")
+        ]
+      | AE.Object o <- items
+      ]
+    )
+  Teams ->
+    ( ["name", "members", "created"]
+    , [ [ brand (lookupText o "name")
+        , numeric (lookupText o "member_count")
+        , muted (lookupText o "created_at")
+        ]
+      | AE.Object o <- items
+      ]
+    )
+  Members ->
+    ( ["user", "email", "permission"]
+    , [ [ plain (lookupText o "name")
+        , brand (lookupText o "email")
+        , plain (lookupText o "permission")
+        ]
+      | AE.Object o <- items
+      ]
+    )
+  Issues ->
+    ( ["level", "id", "count", "seen", "title"]
+    , [ [ pickLevelCell o ["severity", "level"]
+        , brand (firstNonEmpty [lookupText o "short_id", lookupText o "id"])
+        , numeric (lookupText o "event_count")
+        , muted (firstNonEmpty [lookupText o "last_seen", lookupText o "updated_at"])
+        , plain (firstNonEmpty [lookupText o "title", lookupText o "issue_type"])
+        ]
+      | AE.Object o <- items
+      ]
+    )
+  Endpoints ->
+    ( ["method", "host", "url_path", "service"]
+    , [ [ plain (lookupText o "method")
+        , brand (lookupText o "host")
+        , plain (lookupText o "url_path")
+        , muted (lookupText o "service")
+        ]
+      | AE.Object o <- items
+      ]
+    )
+  LogPatterns ->
+    ( ["count", "last", "pattern"]
+    , [ [ numeric (firstNonEmpty [lookupText o "count", lookupText o "event_count"])
+        , muted (lookupText o "last_seen")
+        , plain (lookupText o "pattern")
+        ]
+      | AE.Object o <- items
+      ]
+    )
+  where
+    pickLevelCell o keys =
+      let v = T.toUpper $ firstNonEmpty [lookupText o k | k <- keys]
+       in case parseSeverity v of
+            Just sev -> level sev v
+            Nothing
+              | v == "OK" || v == "RESOLVED" -> (Success, v)
+              | v == "FAILED" || v == "ALERTING" -> (Failure, v)
+              | T.null v -> muted "-"
+              | otherwise -> plain v
+    pickStatus o = case lookupText o "active" of
+      "true" -> (Success, "active")
+      "false" -> muted "inactive"
+      _ -> plain (lookupText o "status")
+
+
+lookupText :: AEKM.KeyMap AE.Value -> Text -> Text
+lookupText o k = case AEKM.lookup (AK.fromText k) o of
+  Just (AE.String s) -> s
+  Just (AE.Number n) -> show n
+  Just (AE.Bool b) -> if b then "true" else "false"
+  Just AE.Null -> ""
+  Just (AE.Array _) -> "…"
+  Just (AE.Object _) -> "…"
+  Nothing -> ""
+
+
+firstNonEmpty :: [Text] -> Text
+firstNonEmpty = fromMaybe "" . find (not . T.null)
 
 
 -- | Normalise a list response to @{data, pagination}@. Returns 'Right' with

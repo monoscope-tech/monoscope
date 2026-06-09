@@ -1448,6 +1448,13 @@ summaryFilterPath = \case
   "trace_id" -> Just "context.trace_id"
   "span_id" -> Just "context.span_id"
   "severity_text" -> Just "severity.severity_text"
+  -- B3: accept the dotted OTel-style form the schema endpoint advertises so
+  -- @severity.text == "ERROR"@ and @severity_text == "ERROR"@ both resolve
+  -- to the actual column. Previously only the underscore form mapped.
+  "severity.text" -> Just "severity.severity_text"
+  "severity.severity_text" -> Just "severity.severity_text"
+  "level" -> Just "severity.severity_text"
+  "name" -> Just "name"
   "db.system" -> Just "attributes.db.system.name"
   "db.statement" -> Just "attributes.db.statement"
   "db.query.text" -> Just "attributes.db.query.text"

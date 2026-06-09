@@ -207,6 +207,7 @@ executables:
       - hs-opentelemetry-api
       - hs-opentelemetry-instrumentation-auto
       - unordered-containers
+      - random
 
 tests:
   doctests:

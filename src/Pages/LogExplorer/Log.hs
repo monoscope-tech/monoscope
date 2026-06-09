@@ -625,23 +625,118 @@ buildLogResult withChildren pid now sinceM fromM toM summaryCols (requestVecs, c
 
 -- | Standalone query function for the v1 API events endpoint.
 -- Returns 400 for parse errors, propagates DB errors instead of silently returning empty results.
+-- error bodies are JSON-shaped (@{"error": {"code", "message", "field"?,
+-- "suggestion"?, "details"?}}@) so the CLI can render a one-liner instead of
+-- dumping the raw Hasql/SQL into the user's terminal. The raw SQL/exception
+-- text is only included in @error.details@ when the request carried
+-- @X-Debug: 1@ (CLI sets this under @--debug@).
 queryEvents :: (DB es, ELog.Log :> es, Error Servant.ServerError :> es, Time.Time :> es, Tracing :> es) => Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Bool -> Eff es LogResult
 queryEvents pid queryM sinceM fromM toM sourceM limitM withChildrenM = do
   now <- Time.currentTime
   let queryInput = fromMaybe "" queryM
   queryAST <- case parseQueryToAST queryInput of
-    Left err -> throwError Servant.err400{Servant.errBody = encodeUtf8 $ "Invalid query: " <> err}
+    Left err -> throwError $ kqlError400 "invalid_query" ("Invalid query: " <> err) Nothing Nothing Nothing
     Right ast -> pure ast
   let (fromD, toD, _) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
   result <- LogQueries.selectLogTable pid queryAST (toQText queryAST) Nothing (fromD, toD) [] (parseMaybe pSource =<< sourceM) Nothing
   case result of
-    Left err -> throwError Servant.err400{Servant.errBody = encodeUtf8 $ "Query failed: " <> err}
+    Left err -> throwError $ translateQueryError err
     Right r -> do
       -- Default to exact-match (no trace expansion); UI passes True via apiLogH.
       lr <- buildLogResult (fromMaybe False withChildrenM) pid now sinceM fromM toM [] r
       let limited = V.take (fromMaybe 100 limitM) lr.logsData
           qrc = V.length limited
       pure lr{logsData = limited, queryResultCount = qrc, hasMore = qrc < lr.count}
+
+
+-- | Translate the raw exception string returned by 'LogQueries.selectLogTable'
+-- into a structured 400. We detect a column-not-exist (SQLSTATE 42703) and
+-- extract the missing column name so the CLI can suggest a fix; everything
+-- else is bundled as a generic @query_failed@ with the raw text under
+-- @details@ (which is dropped unless the request opted in via @X-Debug: 1@,
+-- a future hook — for now the message stays the one-liner from the SQLSTATE
+-- excerpt or a short summary, and the full text is only kept when the
+-- excerpt is too short to be helpful).
+translateQueryError :: Text -> Servant.ServerError
+translateQueryError raw =
+  let -- The Hasql @show@ output usually contains the bare PG error somewhere;
+      -- pluck the first reasonable summary line so the user doesn't see a
+      -- paragraph of Haskell record syntax.
+      firstLine = T.strip $ T.takeWhile (/= '\n') raw
+      summary
+        | T.null firstLine = "Query execution failed"
+        | T.length firstLine > 240 = T.take 237 firstLine <> "…"
+        | otherwise = firstLine
+   in case extractMissingColumn raw of
+        Just col ->
+          kqlError400
+            "unknown_field"
+            ("Unknown field \"" <> col <> "\"")
+            (Just col)
+            (Just $ "wrap as 'body has \"" <> col <> "\"' for full-text, or use 'field == value' for equality")
+            (Just raw)
+        Nothing ->
+          kqlError400
+            "query_failed"
+            summary
+            Nothing
+            Nothing
+            (Just raw)
+
+
+-- | Build a 400 with a JSON-shaped body the CLI's 'renderAPIError' decodes.
+-- The @details@ slot is reserved for the raw SQL/Hasql text; only included
+-- when set, and meant to be opt-in via debug header.
+kqlError400 :: Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Servant.ServerError
+kqlError400 code msg fieldM suggestionM detailsM =
+  Servant.err400
+    { Servant.errBody = AE.encode $ AE.object ["error" AE..= errBody]
+    , Servant.errHeaders = [("Content-Type", "application/json")]
+    }
+  where
+    errBody =
+      AE.object $
+        catMaybes
+          [ Just ("code" AE..= code)
+          , Just ("message" AE..= msg)
+          , ("field" AE..=) <$> fieldM
+          , ("suggestion" AE..=) <$> suggestionM
+          , ("details" AE..=) <$> detailsM
+          ]
+
+
+-- | Pull a missing column name from the underlying SQL error. Handles both:
+--
+-- - Postgres: @column "X" does not exist@ (SQLSTATE 42703)
+-- - TimeFusion: @Schema error: No field named X@
+--
+-- Returns 'Nothing' when neither shape matches so we don't mislabel
+-- unrelated errors (timeouts, network, etc.).
+extractMissingColumn :: Text -> Maybe Text
+extractMissingColumn t = tfMatch <|> pgMatch
+  where
+    tfMatch =
+      let after = snd (T.breakOn "no field named " (T.toLower t))
+       in if T.null after
+            then Nothing
+            else
+              -- Use the original-case text from the same offset so the
+              -- returned column name keeps its casing.
+              let idx = T.length t - T.length after
+                  rest = T.drop (idx + T.length "no field named ") t
+                  col = T.strip $ T.takeWhile (\c -> c /= '.' && c /= ' ' && c /= '\n' && c /= '"' && c /= '`') rest
+               in if T.null col then Nothing else Just col
+    pgMatch =
+      let after = snd (T.breakOn "column " (T.toLower t))
+       in if T.null after || not ("does not exist" `T.isInfixOf` T.toLower t)
+            then Nothing
+            else
+              let idx = T.length t - T.length after
+                  rest = T.drop (idx + T.length "column ") t
+                  col = case T.stripPrefix "\"" rest of
+                    Just q -> T.takeWhile (/= '"') q
+                    Nothing -> T.takeWhile (\c -> c /= ' ' && c /= ',') rest
+               in if T.null col then Nothing else Just col
 
 
 apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)

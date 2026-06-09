@@ -20,7 +20,12 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Pkg.DeriveUtils qualified as DeriveUtils
 import Pkg.ExtractionWorker qualified as ExtractionWorker
+import Pkg.Parser.Expr qualified as ParserExpr
 import Pkg.TraceSessionCache qualified as TraceSessionCache
+import Data.Set qualified as S
+import Data.Text qualified as T
+import Control.Exception.Safe qualified as Safe
+import Data.Pool qualified as Pool
 import Relude
 import System.Clock (TimeSpec (TimeSpec))
 import System.Envy (DefConfig (..), FromEnv (..), ReadShowVar (..), Var (..), decodeWithDefaults, fromVar, toVar)
@@ -335,6 +340,11 @@ configToEnv config = do
   extractionWorker <- liftIO $ ExtractionWorker.initWorkerState config.extractionWorkerShards config.extractionQueueCapacity
   traceSessionCache <- liftIO TraceSessionCache.newTraceSessionCache
   tfCircuit <- liftIO ExtractionWorker.newCircuitBreaker
+  -- Seed the parser whitelist + /api/v1/schema handler from a live
+  -- introspection of @otel_logs_and_spans@. Non-fatal: a missing table
+  -- during partial migration falls back to 'flattenedOtelAttributesBuiltin'
+  -- so the server still boots.
+  liftIO $ introspectAndCacheOtelColumns pool
   pure
     AuthContext
       { pool
@@ -358,3 +368,25 @@ getAppContext :: Eff '[Fail, IOE] AuthContext
 getAppContext = do
   config <- liftIO (decodeWithDefaults defConfig)
   configToEnv config
+
+
+-- | Query 'information_schema.columns' for @otel_logs_and_spans@ once at
+-- startup and seed 'ParserExpr.setFlattenedOtelColumns' with the dotted
+-- form (@___@ → @.@). Best-effort: any exception (missing table during
+-- migration, lost pg conn) logs a warning and falls back to the hand-coded
+-- builtin so the server still boots.
+introspectAndCacheOtelColumns :: Pool.Pool Connection -> IO ()
+introspectAndCacheOtelColumns pool = do
+  result <- Safe.try $ Pool.withResource pool $ \conn -> do
+    rows <-
+      PG.query_ conn
+        "SELECT column_name::text FROM information_schema.columns \
+        \WHERE table_schema = 'public' AND table_name = 'otel_logs_and_spans'"
+        :: IO [PG.Only Text]
+    pure [c | PG.Only c <- rows]
+  case result of
+    Right cols ->
+      let dotted = S.fromList [T.replace "___" "." c | c <- cols, "___" `T.isInfixOf` c]
+       in ParserExpr.setFlattenedOtelColumns dotted
+    Left (e :: SomeException) ->
+      blueMessage $ "C1: otel_logs_and_spans introspection failed, using builtin attribute set: " <> show e

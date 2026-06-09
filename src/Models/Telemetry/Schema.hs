@@ -7,11 +7,13 @@ module Models.Telemetry.Schema (
   generateSchemaForAI,
   popularOtelQueries,
   popularOtelQueriesJson,
+  deriveSchema,
 ) where
 
 import Data.Aeson qualified as AE
 import Data.Map qualified as Map
 import Data.OpenApi (ToSchema)
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
@@ -282,3 +284,28 @@ popularOtelQueries =
 -- | Convert popular OTEL queries to JSON for frontend consumption
 popularOtelQueriesJson :: AE.Value
 popularOtelQueriesJson = AE.toJSON popularOtelQueries
+
+
+-- | Derive a 'Schema' from the live dotted-form attribute set introspected
+-- at startup from @otel_logs_and_spans@. Each live column gets the
+-- hand-coded 'FieldInfo' from 'telemetrySchema' if present, otherwise a
+-- bare entry — so a new column is queryable + schema-visible without a
+-- code edit. Dotted-form 'telemetrySchema' entries that no longer match a
+-- live column are dropped (they'd give the "advertised field returns 0
+-- rows" surprise). Top-level bare columns (timestamp, name, kind, level,
+-- duration, body) aren't in the flattened set and are kept unconditionally.
+deriveSchema :: Set Text -> Schema
+deriveSchema liveAttrs =
+  let handCoded = telemetrySchema.fields
+      bareDefault = FieldInfo "text" "" Nothing
+      -- Top-level fields aren't in the flattened set; keep their hand-coded
+      -- entries (timestamp, name, kind, severity.text → severity.severity_text,
+      -- duration, body, etc.). Drop only the dotted-form entries that the
+      -- live set doesn't confirm.
+      isTopLevel k = not ("." `T.isInfixOf` k)
+      keepHand k _ = isTopLevel k || k `Set.member` liveAttrs
+      kept = Map.filterWithKey keepHand handCoded
+      -- For any live column not already in 'kept', add a bare entry.
+      missing = [k | k <- toList liveAttrs, not (Map.member k kept)]
+      enriched = foldl' (\m k -> Map.insert k bareDefault m) kept missing
+   in Schema {fields = enriched}

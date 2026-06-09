@@ -224,6 +224,7 @@ library
       Web.ApiHandlers
       Web.ApiTypes
       Web.Auth
+      Web.FacetsFallback
       Web.I18n
       Web.MCP
       Web.Routes
@@ -456,6 +457,7 @@ executable monoscope
       CLI.Config
       CLI.Core
       CLI.Resource
+      CLI.Table
       CLI.UI
       CLI.Validate
       Paths_monoscope
@@ -511,6 +513,7 @@ executable monoscope
     , mtl
     , optparse-applicative
     , process
+    , random
     , relude >=1.2.0.0
     , text
     , time
@@ -549,7 +552,7 @@ executable monoscope-server
       TypeFamilies
       UndecidableInstances
       ViewPatterns
-  ghc-options: -fwrite-ide-info -threaded -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -Wno-ambiguous-fields -threaded -fplugin AutoInstrument -rtsopts "-with-rtsopts=-N8 -M14G -A32m -I5 -Fd2"
+  ghc-options: -fwrite-ide-info -threaded -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -Wno-ambiguous-fields -threaded -fplugin AutoInstrument -rtsopts "-with-rtsopts=-N8 -M14G -A32m -I5 -Iw60 -Fd2"
   build-tool-depends:
       proto-lens-protoc:proto-lens-protoc
   build-depends:
@@ -826,6 +829,7 @@ test-suite test-dev
       Web.ApiHandlers
       Web.ApiTypes
       Web.Auth
+      Web.FacetsFallback
       Web.I18n
       Web.MCP
       Web.Routes

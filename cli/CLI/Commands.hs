@@ -37,7 +37,7 @@ module CLI.Commands (
 import Relude
 
 import CLI.Config (CLIConfig (..), ConfigKey (..), allConfigKeys, configDir, configFilePath, configKeyText, parseConfigKey, removeToken, resolveConfig, saveToken, setConfigValue)
-import CLI.Core (OutputMode (..), apiGet, apiPostUnauth, isAgentMode, isInteractiveTTY, printDebug, printError, renderJSON, renderTable, renderWith, withAPIResult)
+import CLI.Core (OutputMode (..), apiGet, apiPostUnauth, isInteractiveTTY, isJsonOutput, printDebug, printError, renderJSON, renderTable, renderWith, withAPIResult)
 import CLI.UI (inputForm, selectFromList, withSpinner)
 import CLI.Validate (validateAndNormalizeKind, validateDurationOrDie, validateQueryOrDie)
 import Control.Exception (bracket)
@@ -50,7 +50,8 @@ import Data.Effectful.Wreq (HTTP, runHTTPWreq)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
-import Data.Time (UTCTime)
+import Data.Time (NominalDiffTime, UTCTime, addUTCTime)
+import Data.Time qualified
 import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
@@ -99,11 +100,13 @@ runAuth = \case
     dir <- configDir
     putTextLn $ "Token saved to " <> toText dir <> "/tokens.json"
   AuthLogin Nothing -> do
-    -- C7: Agent mode is non-interactive by design — refuse the device-code
-    -- flow (5-min poll, browser launch) and direct the caller to --token.
-    -- Otherwise an LLM agent will hang the session waiting for human input.
-    whenM isAgentMode $ do
-      printError "agent mode (MONOSCOPE_AGENT_MODE/CI/CLAUDE_CODE) requires --token; interactive login is disabled"
+    -- C7: When output is JSON/YAML (or stdout is piped — same signal post
+    -- mode-collapse) the session is non-interactive by design: refuse the
+    -- device-code flow (5-min poll, browser launch) and direct the caller to
+    -- --token. Otherwise a script or LLM agent will hang waiting for human
+    -- input.
+    whenM isJsonOutput $ do
+      printError "non-interactive output mode (--json/--yaml or piped stdout): pass --token; interactive login is disabled"
       liftIO exitFailure
     cfg <- resolveConfig
     let baseUrl = cfg.apiUrl
@@ -131,15 +134,15 @@ runAuth = \case
   AuthStatus -> do
     cfg <- resolveConfig
     envKey <- Env.lookupEnv "MONOSCOPE_API_KEY"
-    -- C8: agent mode emits a stable JSON shape so a script doesn't have to
-    -- regex stdout. The shape is intentionally narrow — adding fields is
-    -- safe; renaming or removing them is a breaking change.
-    agent <- isAgentMode
+    -- C8: JSON/YAML output emits a stable JSON shape so a script doesn't
+    -- have to regex stdout. The shape is intentionally narrow — adding
+    -- fields is safe; renaming or removing them is a breaking change.
+    json <- isJsonOutput
     let method = case (envKey, cfg.apiKey) of
           (Just _, _) -> Just ("env" :: Text)
           (_, Just _) -> Just "token"
           _ -> Nothing
-    if agent
+    if json
       then
         renderJSON
           AuthStatusJson
@@ -294,7 +297,9 @@ data EventsSearchOpts = EventsSearchOpts
   , from :: Maybe Text
   , to :: Maybe Text
   , kind :: Maybe Text
-  , service :: Maybe Text
+  , -- | repeatable. One value → @resource.service.name=="x"@. Multiple
+    -- values → @resource.service.name in ("x", "y")@. Empty → no filter.
+    service :: [Text]
   , level :: Maybe Text
   , limit :: Maybe Int
   , fields :: Maybe Text
@@ -310,6 +315,12 @@ data EventsSearchOpts = EventsSearchOpts
   , -- | Also return descendants (the sub-tree) of each matched span. Off by
     -- default — predicate hits only.
     withChildren :: Bool
+  , -- | disable auto-chunking of long --since windows. Default behaviour
+    -- chunks effective windows > chunkHours into 1h slices so the CF edge
+    -- doesn't 504; @--no-chunk@ restores the legacy single-request path.
+    noChunk :: Bool
+  , chunkHours :: Maybe Int
+  -- ^ Hours per slice when auto-chunking. Defaults to 1.
   }
   deriving stock (Show)
 
@@ -318,6 +329,11 @@ data EventsGetOpts = EventsGetOpts
   { eventId :: Text
   , showTree :: Bool
   , at :: Maybe Text -- ^ ISO-8601 timestamp for a fast point-in-time lookup
+  , projectFields :: [Text]
+  -- ^ when non-empty, project these top-level fields out of the event
+  -- JSON instead of dumping the full blob.
+  , showBody :: Bool
+  -- ^ shorthand for @--field body --field summary@.
   }
   deriving stock (Show)
 
@@ -350,7 +366,14 @@ runEventsSearch cfg opts mode = do
   -- D5: Validate user input client-side so agents get a clear, actionable
   -- error instead of an opaque server-side HTTP 400.
   validatedOpts <- validateEventsOpts opts
-  let params = buildSearchParams validatedOpts
+  case planChunks validatedOpts of
+    [] -> runOneSearch cfg validatedOpts mode (buildSearchParams validatedOpts)
+    chunks -> runChunkedSearch cfg validatedOpts mode chunks
+
+
+-- | Single (legacy) search request.
+runOneSearch :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> EventsSearchOpts -> OutputMode -> [(Text, Text)] -> Eff es ()
+runOneSearch cfg validatedOpts mode params =
   withAPIResult cfg "/api/v1/events" params $ \val -> do
     -- Decode once, share between the JSON projection and (when --first is
     -- set) the table projection.
@@ -368,6 +391,122 @@ runEventsSearch cfg opts mode = do
       -- input for "search → get" pipelines, no jq required.
       (True, _) -> emitFirstEventId sliced
       (False, _) -> renderWith mode sliced (renderEventsTable valForTable validatedOpts.fields)
+
+
+-- | chunked search. Each slice is one HTTP request; results stream out
+-- (NDJSON in JSON mode, one table per slice in table mode). Stops early on
+-- @--first@ / @--id-only@ as soon as a slice has a hit. Pagination within a
+-- slice still uses @--cursor@.
+runChunkedSearch
+  :: (Environment :> es, HTTP :> es, IOE :> es)
+  => CLIConfig -> EventsSearchOpts -> OutputMode -> [(Text, Text)] -> Eff es ()
+runChunkedSearch cfg validatedOpts mode slices = do
+  let nSlices = length slices `div` 2
+  printDebug $ "auto-chunk: " <> show nSlices <> " slices (use --no-chunk to disable)"
+  -- Resolve sentinel offsets ("Nh") to absolute ISO 8601 strings now so each
+  -- slice uses the same clock; otherwise a slow first request could nudge
+  -- later slice boundaries forward.
+  now <- liftIO Data.Time.getCurrentTime
+  let resolved = map (resolveOffsetPair now) (groupSlices slices)
+  hitRef <- newIORef False
+  forM_ resolved $ \chunkParams -> do
+    alreadyHit <- readIORef hitRef
+    let firstOnly = validatedOpts.firstOnly || validatedOpts.idOnly
+    unless (firstOnly && alreadyHit) $ do
+      -- Override since/from/to with the slice's absolute window; everything
+      -- else (query, level, etc.) flows through buildSearchParams normally.
+      let baseOpts :: EventsSearchOpts
+          baseOpts = validatedOpts {since = Nothing, from = Nothing, to = Nothing}
+          baseParams = filter (\(k, _) -> k `notElem` ["since", "from", "to"]) (buildSearchParams baseOpts)
+          params = baseParams <> chunkParams
+      withAPIResult cfg "/api/v1/events" params $ \val -> do
+        let normalized = case decodeEvents val of
+              Nothing -> val
+              Just d -> normalizeDecoded d validatedOpts.fields
+            hadHit = case normalized of
+              AE.Object o -> case KM.lookup "events" o of
+                Just (AE.Array a) -> not (V.null a)
+                _ -> False
+              _ -> False
+        when hadHit $ writeIORef hitRef True
+        let sliced = if firstOnly then takeFirstEvent normalized else normalized
+            valForTable = if firstOnly then takeFirstRow val else val
+        case (validatedOpts.idOnly, mode) of
+          (True, _) -> when hadHit $ emitFirstEventId sliced
+          (False, _) -> renderWith mode sliced (renderEventsTable valForTable validatedOpts.fields)
+
+
+groupSlices :: [a] -> [[a]]
+groupSlices = go
+  where
+    go (a : b : rest) = [a, b] : go rest
+    go [a] = [[a]]
+    go [] = []
+
+
+-- | Decide whether to chunk. Returns:
+--
+-- - @[]@ when chunking is off, --from/--to are explicit, or --since is short.
+-- - Otherwise a flat list of @("from", iso), ("to", iso), ...@ pairs, one
+--   pair per slice, oldest first. Timestamps are computed client-side so the
+--   server endpoint can stay on its native ISO-8601 from/to parsing.
+--
+-- We do the time math in pure code (no IO) by passing 'now' separately —
+-- but since 'runEventsSearch' calls 'planChunks' before any IO, we can't.
+-- Compromise: the planner returns the *duration-relative offsets* and the
+-- caller resolves them to ISO timestamps via 'getCurrentTime'. This keeps
+-- the slicing logic testable.
+planChunks :: EventsSearchOpts -> [(Text, Text)]
+planChunks opts
+  | opts.noChunk = []
+  | isJust opts.from || isJust opts.to = []
+  | otherwise = case parseDurationHours =<< opts.since of
+      Just totalHours
+        | totalHours > chunkH -> sliceOffsets totalHours chunkH
+      _ -> []
+  where
+    chunkH = max 1 (fromMaybe 1 opts.chunkHours)
+
+
+parseDurationHours :: Text -> Maybe Int
+parseDurationHours (T.toLower . T.strip -> t)
+  | Just n <- T.stripSuffix "h" t = readMaybe (toString n)
+  | Just n <- T.stripSuffix "d" t = (* 24) <$> readMaybe (toString n)
+  | Just n <- T.stripSuffix "m" t = (`div` 60) <$> readMaybe (toString n)
+  | Just n <- T.stripSuffix "s" t = (`div` 3600) <$> readMaybe (toString n)
+  | otherwise = Nothing
+
+
+-- | Emit @[("from", "Xh"), ("to", "Yh"), …]@ sentinel pairs that the
+-- chunked runner converts to absolute ISO 8601 timestamps using
+-- 'getCurrentTime'. Format: @"<hours>h"@ means "now minus that many
+-- hours"; this is a CLI-internal protocol, never sent to the server as-is.
+sliceOffsets :: Int -> Int -> [(Text, Text)]
+sliceOffsets totalH chunkH =
+  let nSlices = (totalH + chunkH - 1) `div` chunkH
+      upper i = totalH - i * chunkH
+      lower i = max 0 (totalH - (i + 1) * chunkH)
+   in concat
+        [ [("from", show (upper i) <> "h"), ("to", show (lower i) <> "h")]
+        | i <- [nSlices - 1, nSlices - 2 .. 0]
+        ]
+
+
+-- | Resolve a sentinel @"<N>h"@ offset pair to absolute ISO 8601 timestamps
+-- anchored on the given 'now'. Slices use the same @now@ so a slow first
+-- request can't drift boundaries on later slices.
+resolveOffsetPair :: UTCTime -> [(Text, Text)] -> [(Text, Text)]
+resolveOffsetPair now = map (second resolve)
+  where
+    resolve t = case T.stripSuffix "h" t of
+      Just hs -> case readMaybe (toString hs) :: Maybe Int of
+        Just hours ->
+          let -- negate so offset is in the past
+              dt = fromIntegral (-hours * 3600) :: NominalDiffTime
+              ts = addUTCTime dt now
+           in toText (iso8601Show ts)
+        Nothing -> t
+      Nothing -> t
 
 
 -- | Trim the normalised events envelope to the first event only, preserving
@@ -429,7 +568,7 @@ runEventsGet cfg opts mode = case opts.at of
           -- Returns raw OtelLogsAndSpans JSON; always rendered as JSON (table view
           -- is not applicable for a single denormalized span record).
           let path = "/api/v1/events/" <> opts.eventId <> "/time/" <> toText (iso8601Show t)
-          withAPIResult cfg path [] renderJSON
+          withAPIResult cfg path [] (renderJSON . applyProjection opts)
   where
     rangeScan = do
       -- Fallback: scan 90d, also match by trace_id so bare trace IDs work.
@@ -441,7 +580,24 @@ runEventsGet cfg opts mode = case opts.at of
       withAPIResult cfg "/api/v1/events" params $ \val ->
         if opts.showTree
           then renderTraceTree val
-          else renderWith mode (normalizeEventsResponse val Nothing) (renderEventsTable val Nothing)
+          else
+            let projected = applyProjection opts (normalizeEventsResponse val Nothing)
+             in renderWith mode projected (renderEventsTable val Nothing)
+
+
+-- | filter the top-level JSON to just @opts.projectFields@ (and/or the
+-- @--show-body@ shorthand). When neither flag is set we return the value
+-- unchanged so existing pipelines keep working.
+applyProjection :: EventsGetOpts -> AE.Value -> AE.Value
+applyProjection opts v
+  | null wanted = v
+  | otherwise = case v of
+      AE.Object o -> AE.Object (KM.filterWithKey (\k _ -> AK.toText k `elem` wanted) o)
+      _ -> v
+  where
+    wanted =
+      opts.projectFields
+        <> [b | opts.showBody, b <- ["body", "summary"]]
 
 
 runEventsTail :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> EventsTailOpts -> Maybe Text -> Eff es ()
@@ -451,7 +607,7 @@ runEventsTail cfg opts kindOverride = do
   kindNorm <- validateAndNormalizeKind (opts.kind <|> kindOverride)
   seenRef <- newIORef (Set.empty :: Set Text)
   forever $ do
-    let q = foldFiltersIntoQuery "" opts.service opts.level
+    let q = foldFiltersIntoQuery "" (maybeToList opts.service) opts.level
         params =
           catMaybes
             [ if T.null q then Nothing else Just ("query", q)
@@ -482,7 +638,7 @@ runEventsContext :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> E
 runEventsContext cfg opts kindOverride mode = do
   validateDurationOrDie "--window" opts.window
   kindNorm <- validateAndNormalizeKind (opts.kind <|> kindOverride)
-  let q = foldFiltersIntoQuery "" opts.service Nothing
+  let q = foldFiltersIntoQuery "" (maybeToList opts.service) Nothing
       params =
         catMaybes
           [ if T.null q then Nothing else Just ("query", q)
@@ -586,29 +742,79 @@ buildSearchParams opts =
 -- server rejected with HTTP 400 — leaving --service and --level effectively
 -- broken. Filters are AND-combined with the user's positional query.
 --
--- >>> foldFiltersIntoQuery "" Nothing Nothing
+-- @--service@ is repeatable (D2). One value uses @==@; two or more become
+-- @resource.service.name in (\"a\", \"b\")@ (the parser supports @in@; see
+-- 'Pkg.Parser.Expr.pTerm').
+--
+-- A bareword/phrase query (no KQL operators) is rewritten to a full-text
+-- search via 'rewriteBareQuery' — @POISON_ROW_DROPPED@ becomes
+-- @body has "POISON_ROW_DROPPED" or summary has "POISON_ROW_DROPPED"@,
+-- matching what a developer naturally types (and reads in a Sentry-style
+-- search UI).
+--
+-- --level normalizes to upper-case (B2) so @--level error@ and @--level
+-- ERROR@ both match the canonical OTel severity strings.
+--
+-- >>> foldFiltersIntoQuery "" [] Nothing
 -- ""
--- >>> foldFiltersIntoQuery "errors > 0" Nothing Nothing
+-- >>> foldFiltersIntoQuery "errors > 0" [] Nothing
 -- "errors > 0"
--- >>> foldFiltersIntoQuery "" (Just "web") Nothing
+-- >>> foldFiltersIntoQuery "" ["web"] Nothing
 -- "resource.service.name==\"web\""
--- >>> foldFiltersIntoQuery "" Nothing (Just "warn")
--- "severity.text==\"warn\""
--- >>> foldFiltersIntoQuery "errors > 0" (Just "web") (Just "error")
--- "resource.service.name==\"web\" and severity.text==\"error\" and (errors > 0)"
--- >>> foldFiltersIntoQuery "" (Just "my app") Nothing
--- "resource.service.name==\"my app\""
-foldFiltersIntoQuery :: Text -> Maybe Text -> Maybe Text -> Text
-foldFiltersIntoQuery query mService mLevel
-  | T.null prefix = trimmed
-  | T.null trimmed = prefix
-  | otherwise = prefix <> " and (" <> trimmed <> ")"
+-- >>> foldFiltersIntoQuery "" ["web", "worker"] Nothing
+-- "resource.service.name in (\"web\", \"worker\")"
+-- >>> foldFiltersIntoQuery "" [] (Just "warn")
+-- "severity.text==\"WARN\""
+-- >>> foldFiltersIntoQuery "errors > 0" ["web"] (Just "error")
+-- "resource.service.name==\"web\" and severity.text==\"ERROR\" and (errors > 0)"
+-- >>> foldFiltersIntoQuery "POISON_ROW_DROPPED" [] Nothing
+-- "body has \"POISON_ROW_DROPPED\" or summary has \"POISON_ROW_DROPPED\""
+foldFiltersIntoQuery :: Text -> [Text] -> Maybe Text -> Text
+foldFiltersIntoQuery query services mLevel
+  | T.null prefix = rewritten
+  | T.null rewritten = prefix
+  | otherwise = prefix <> " and (" <> rewritten <> ")"
   where
     q v = "\"" <> T.replace "\"" "\\\"" v <> "\""
     eq field val = field <> "==" <> q val
-    filters = catMaybes [eq "resource.service.name" <$> mService, eq "severity.text" <$> mLevel]
+    serviceFilter = case services of
+      [] -> Nothing
+      [s] -> Just (eq "resource.service.name" s)
+      ss -> Just ("resource.service.name in (" <> T.intercalate ", " (map q ss) <> ")")
+    filters = catMaybes [serviceFilter, eq "severity.text" . T.toUpper <$> mLevel]
     prefix = T.intercalate " and " filters
-    trimmed = T.strip query
+    rewritten = rewriteBareQuery (T.strip query)
+
+
+-- | When the user types a single bareword (or quoted phrase) without any KQL
+-- operator, treat it as a full-text search across @body@ and @summary@. The
+-- previous behaviour parsed the bareword as a column reference, producing a
+-- useless @column "X" does not exist@ error.
+--
+-- A query containing any of @== != >= <= > < has and or " (@ is passed
+-- through unchanged.
+--
+-- >>> rewriteBareQuery ""
+-- ""
+-- >>> rewriteBareQuery "POISON_ROW_DROPPED"
+-- "body has \"POISON_ROW_DROPPED\" or summary has \"POISON_ROW_DROPPED\""
+-- >>> rewriteBareQuery "errors > 0"
+-- "errors > 0"
+-- >>> rewriteBareQuery "context.trace_id==\"abc\""
+-- "context.trace_id==\"abc\""
+rewriteBareQuery :: Text -> Text
+rewriteBareQuery t
+  | T.null t = t
+  | hasOperator t = t
+  | otherwise =
+      let escaped = T.replace "\"" "\\\"" t
+       in "body has \"" <> escaped <> "\" or summary has \"" <> escaped <> "\""
+  where
+    -- Operators / grouping disable the rewrite; multi-word phrases ("foo
+    -- bar") are still rewritten so a phrase search Just Works.
+    hasOperator x =
+      any (`T.isInfixOf` x) ["==", "!=", ">=", "<=", " has ", " and ", " or "]
+        || T.any (`elem` ("><\"(" :: [Char])) x
 
 
 -- | Single decode of the events envelope. Sharing the parsed @colIdxMap@

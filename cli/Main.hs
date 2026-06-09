@@ -4,7 +4,7 @@ import Relude
 
 import CLI.Commands hiding (value)
 import CLI.Config (CLIConfig (..), resolveConfig)
-import CLI.Core (OutputMode (..), apiDelete, apiGetJson, apiPostJson, detectOutputMode, renderAPIError)
+import CLI.Core (OutputMode (..), apiDelete, apiGetJson, apiPostJson, detectOutputMode, renderAPIError, setOutputMode)
 import CLI.Resource qualified as Resource
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
@@ -25,9 +25,9 @@ import System.Environment (setEnv)
 
 data GlobalOpts = GlobalOpts
   { jsonFlag :: Bool
-  , agentFlag :: Bool
+  , yamlFlag :: Bool
+  , tableFlag :: Bool
   , debugFlag :: Bool
-  , outputFlag :: Maybe Text
   , projectFlag :: Maybe Text
   }
 
@@ -208,13 +208,17 @@ data ShareLinkCommand
   deriving stock (Show)
 
 
+-- | Output is picked from three mutually-exclusive flags. Precedence when more
+-- than one is set: @--json > --yaml > --table@. With none set, output is
+-- auto-detected from stdout: TTY → table, pipe/redirect → JSON. This replaces
+-- the older @--output FORMAT@ + @--agent@ + @MONOSCOPE_AGENT_MODE@ stack.
 globalOpts :: Parser GlobalOpts
 globalOpts =
   GlobalOpts
-    <$> switch (long "json" <> help "Force JSON output")
-    <*> switch (long "agent" <> help "Force agent mode")
+    <$> switch (long "json" <> help "Emit JSON (also forced when stdout is piped)")
+    <*> switch (long "yaml" <> help "Emit YAML")
+    <*> switch (long "table" <> help "Force pretty-printed table (overrides pipe auto-detect)")
     <*> switch (long "debug" <> help "Print outgoing requests to stderr (also: MONOSCOPE_DEBUG=1)")
-    <*> optional (strOption (long "output" <> short 'o' <> metavar "FORMAT" <> help "Output format: json|yaml|table"))
     <*> optional (strOption (long "project" <> short 'p' <> metavar "PID" <> help "Project UUID override"))
 
 
@@ -288,7 +292,7 @@ eventsSearchParser =
     <*> optional (strOption (long "from" <> metavar "TIMESTAMP" <> help "Start time (ISO 8601)"))
     <*> optional (strOption (long "to" <> metavar "TIMESTAMP" <> help "End time (ISO 8601)"))
     <*> optional (strOption (long "kind" <> metavar "KIND" <> help "log|trace|span"))
-    <*> optional (strOption (long "service" <> metavar "SERVICE" <> help "Shorthand for resource.service.name=='SERVICE'"))
+    <*> many (strOption (long "service" <> metavar "SERVICE" <> help "Filter by service (repeatable: --service api --service worker → in (api, worker))"))
     <*> optional (strOption (long "level" <> metavar "LEVEL" <> help "Shorthand for severity.text=='LEVEL'"))
     <*> optional (option auto (long "limit" <> short 'n' <> metavar "N" <> help "Max results"))
     <*> optional (strOption (long "fields" <> metavar "FIELDS" <> help "Comma-separated fields to keep"))
@@ -296,6 +300,13 @@ eventsSearchParser =
     <*> switch (long "first" <> help "Return only the first matching event")
     <*> switch (long "id-only" <> help "Print just the first event id (implies --first)")
     <*> switch (long "with-children" <> help "Also return descendants (the sub-tree) of each matched span (default: predicate hits only)")
+    -- auto-chunk long --since to dodge the CF 504 timeout. When the
+    -- effective window is wider than --chunk-hours (default 1h) and chunking
+    -- is enabled, the CLI slices the window into 1h pieces and streams each
+    -- slice's response as a separate JSON object on stdout (NDJSON in JSON
+    -- mode). --no-chunk disables it.
+    <*> switch (long "no-chunk" <> help "Disable auto-chunking of long --since windows")
+    <*> optional (option auto (long "chunk-hours" <> metavar "H" <> help "Hours per slice when auto-chunking (default: 1)"))
 
 
 -- | C5: Concrete KQL examples in @--help@ — agents copy from here, so keep
@@ -304,12 +315,14 @@ eventsSearchExamples :: String
 eventsSearchExamples =
   intercalate "\n"
     [ "Examples:"
-    , "  monoscope events search 'severity.text==\"error\"' --since 1h"
+    , "  monoscope logs search POISON_ROW_DROPPED --since 24h   # bare strings = full-text"
+    , "  monoscope events search 'severity.text==\"ERROR\"' --since 1h"
     , "  monoscope logs search --service checkout-api --level error --limit 50"
     , "  monoscope events search 'attributes.http.response.status_code >= 500' --since 1h"
     , "  monoscope traces search --since 30m --first --id-only   # one trace id"
     , "  monoscope events search '' --since 1h --cursor <CURSOR>  # next page"
     , ""
+    , "Bare strings (no KQL operators) are searched in body+summary automatically."
     , "KQL operators: == != > >= < <=  |  combine with: and or  |  parens for grouping"
     , "Run `monoscope schema --search service` to discover field names."
     ]
@@ -321,6 +334,11 @@ eventsGetParser =
     <$> strArgument (metavar "ID" <> help "Event or trace ID")
     <*> switch (long "tree" <> help "Show trace tree view")
     <*> optional (strOption (long "at" <> metavar "TIMESTAMP" <> help "ISO-8601 timestamp for a fast point-in-time lookup (avoids 90d range scan)"))
+    -- project specific fields out of the JSON blob without forcing jq.
+    -- @--field body --field summary@ prints only those keys; @--show-body@
+    -- is a one-flag shorthand for the common "I just want the message" case.
+    <*> many (strOption (long "field" <> metavar "FIELD" <> help "Project a single field from the event JSON (repeatable)"))
+    <*> switch (long "show-body" <> help "Shorthand for --field body --field summary")
 
 
 eventsTailParser :: Parser EventsTailOpts
@@ -416,7 +434,8 @@ facetsParser =
   FacetsOpts
     <$> optional (strArgument (metavar "FIELD" <> help "Field path to drill into (e.g. resource.service.name). Omit to dump all fields."))
     <*> optional (strOption (long "since" <> metavar "DURATION" <> help "Lookback window (default: 24h)"))
-    <*> optional (option auto (long "top" <> metavar "N" <> help "Limit values per field"))
+    -- D1: accept --limit alongside --top so every listing shares the same flag.
+    <*> optional (option auto (long "limit" <> long "top" <> short 'n' <> metavar "N" <> help "Cap values per field (alias: --top)"))
 
 
 -- | Examples shown in `monoscope facets --help`. Mirrors the discovery
@@ -587,11 +606,22 @@ projectParser =
       ]
 
 
+-- | Page + per-page parser. @--limit@ is accepted as an alias for @--per-page@
+-- (D1) so the CLI is consistent across listings — every listing now accepts
+-- @--limit N@.
 pageOpts :: Parser (Maybe Int, Maybe Int)
 pageOpts =
   (,)
     <$> optional (option auto (long "page" <> metavar "N" <> help "Page number (0-based, default: 0)"))
-    <*> optional (option auto (long "per-page" <> metavar "N" <> help "Items per page"))
+    <*> optional
+      ( option auto
+          ( long "limit"
+              <> long "per-page"
+              <> short 'n'
+              <> metavar "N"
+              <> help "Items per page (alias: --per-page)"
+          )
+      )
 
 
 -- | Serialise page/per_page into query-string pairs.
@@ -909,7 +939,7 @@ run global = \case
   IssuesCmd sub -> withCfgMode global $ \cfg mode -> case sub of
     IssueList statusM typeM svcM pageM perM ->
       let params = catMaybes [("status",) <$> statusM, ("type",) <$> typeM, ("service",) <$> svcM] <> pageParams pageM perM
-       in Resource.runAPI mode (Resource.normalizeList <<$>> apiGetJson @_ @AE.Value cfg "/api/v1/issues" params)
+       in Resource.runListVia cfg Resource.Issues "/api/v1/issues" params mode
     IssueGet i -> Resource.runAPI mode (apiGetJson @_ @AE.Value cfg ("/api/v1/issues/" <> i) [])
     IssueAck i -> Resource.writeJson cfg Resource.POST ("/api/v1/issues/" <> i <> "/ack") [] AE.Null mode
     IssueUnack i -> Resource.writeJson cfg Resource.POST ("/api/v1/issues/" <> i <> "/unack") [] AE.Null mode
@@ -920,11 +950,11 @@ run global = \case
   EndpointsCmd sub -> withCfgMode global $ \cfg mode -> case sub of
     EndList searchM outgoingM pageM perM ->
       let params = catMaybes [("search",) <$> searchM, ("outgoing",) . bool "false" "true" <$> outgoingM] <> pageParams pageM perM
-       in Resource.runAPI mode (Resource.normalizeList <<$>> apiGetJson @_ @AE.Value cfg "/api/v1/endpoints" params)
+       in Resource.runListVia cfg Resource.Endpoints "/api/v1/endpoints" params mode
     EndGet i -> Resource.runAPI mode (apiGetJson @_ @AE.Value cfg ("/api/v1/endpoints/" <> i) [])
   LogPatternsCmd sub -> withCfgMode global $ \cfg mode -> case sub of
     LPList pageM perM ->
-      Resource.runAPI mode (Resource.normalizeList <<$>> apiGetJson @_ @AE.Value cfg "/api/v1/log_patterns" (pageParams pageM perM))
+      Resource.runListVia cfg Resource.LogPatterns "/api/v1/log_patterns" (pageParams pageM perM) mode
     LPGet i -> Resource.runAPI mode (apiGetJson @_ @AE.Value cfg ("/api/v1/log_patterns/" <> show i) [])
     LPAck i -> Resource.writeJson cfg Resource.POST ("/api/v1/log_patterns/" <> show i <> "/ack") [] AE.Null mode
     LPBulk act ids ->
@@ -963,10 +993,14 @@ run global = \case
   SendEventCmd opts -> withCfgMode global $ \cfg _ -> runSendEvent cfg opts
 
 
+-- | Resolve and cache the output mode for this process. The cache (Core.hs
+-- 'setOutputMode') lets 'printError' / 'printDebug' suppress ANSI under
+-- JSON/YAML without each call site threading a mode argument.
 resolveMode :: (Environment :> es, IOE :> es) => GlobalOpts -> Eff es OutputMode
-resolveMode global
-  | global.agentFlag = pure OutputJSON
-  | otherwise = detectOutputMode global.jsonFlag global.outputFlag
+resolveMode global = do
+  m <- detectOutputMode global.jsonFlag global.yamlFlag global.tableFlag
+  setOutputMode m
+  pure m
 
 
 -- | C3: post-process the @/api/v1/schema@ response so agents can fetch a

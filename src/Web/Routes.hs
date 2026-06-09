@@ -70,6 +70,7 @@ import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
+import Pkg.Parser.Expr qualified as ParserExpr
 import UnliftIO.Exception (handle)
 import "base64" Data.ByteString.Base64.URL qualified as B64URL
 import "cryptohash-md5" Crypto.Hash.MD5 qualified as MD5
@@ -624,7 +625,13 @@ apiV1Server logger env tp pid =
     , eventGet = ApiH.apiEventGet pid
     , metricsQuery = \queryM dataTypeM sinceM fromM toM sourceM ->
         Charts.queryMetrics Nothing dataTypeM (Just pid) queryM Nothing sinceM fromM toM sourceM []
-    , schemaGet = pure Schema.telemetrySchema
+    , -- C1: derive schema from the live introspected column set (seeded at
+      -- startup) and decorate with the hand-coded descriptions / examples in
+      -- 'Schema.telemetrySchema'. Live entries without a decoration get a
+      -- bare {type:"text", description:"", examples:null} entry — so a new
+      -- column added to otel_logs_and_spans is queryable + visible in the
+      -- schema response without a code edit.
+      schemaGet = pure (Schema.deriveSchema ParserExpr.flattenedOtelAttributes)
     , facetsGet = ApiH.apiFacets pid
     , rrwebPost = Replay.replayPostH pid
     , -- Monitors
