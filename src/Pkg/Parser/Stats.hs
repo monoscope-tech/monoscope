@@ -293,22 +293,35 @@ mapSubjects f = map goSec
       s@TakeCommand{} -> s
       s@Source{} -> s
     goE = \case
-      Eq s v -> Eq (f s) (goV v); NotEq s v -> NotEq (f s) (goV v)
-      GT s v -> GT (f s) (goV v); LT s v -> LT (f s) (goV v)
-      GTEq s v -> GTEq (f s) (goV v); LTEq s v -> LTEq (f s) (goV v)
+      Eq s v -> Eq (f s) (goV v)
+      NotEq s v -> NotEq (f s) (goV v)
+      GT s v -> GT (f s) (goV v)
+      LT s v -> LT (f s) (goV v)
+      GTEq s v -> GTEq (f s) (goV v)
+      LTEq s v -> LTEq (f s) (goV v)
       Regex s t -> Regex (f s) t
-      In s v -> In (f s) (goV v); NotIn s v -> NotIn (f s) (goV v)
-      Has s v -> Has (f s) (goV v); NotHas s v -> NotHas (f s) (goV v)
-      HasAny s v -> HasAny (f s) (goV v); HasAll s v -> HasAll (f s) (goV v)
-      Contains s v -> Contains (f s) (goV v); NotContains s v -> NotContains (f s) (goV v)
-      StartsWith s v -> StartsWith (f s) (goV v); NotStartsWith s v -> NotStartsWith (f s) (goV v)
-      EndsWith s v -> EndsWith (f s) (goV v); NotEndsWith s v -> NotEndsWith (f s) (goV v)
+      In s v -> In (f s) (goV v)
+      NotIn s v -> NotIn (f s) (goV v)
+      Has s v -> Has (f s) (goV v)
+      NotHas s v -> NotHas (f s) (goV v)
+      HasAny s v -> HasAny (f s) (goV v)
+      HasAll s v -> HasAll (f s) (goV v)
+      Contains s v -> Contains (f s) (goV v)
+      NotContains s v -> NotContains (f s) (goV v)
+      StartsWith s v -> StartsWith (f s) (goV v)
+      NotStartsWith s v -> NotStartsWith (f s) (goV v)
+      EndsWith s v -> EndsWith (f s) (goV v)
+      NotEndsWith s v -> NotEndsWith (f s) (goV v)
       Matches s t -> Matches (f s) t
       Paren e -> Paren (goE e)
-      And a b -> And (goE a) (goE b); Or a b -> Or (goE a) (goE b)
-      ValEq a b -> ValEq (goV a) (goV b); ValNotEq a b -> ValNotEq (goV a) (goV b)
-      ValGT a b -> ValGT (goV a) (goV b); ValLT a b -> ValLT (goV a) (goV b)
-      ValGTEq a b -> ValGTEq (goV a) (goV b); ValLTEq a b -> ValLTEq (goV a) (goV b)
+      And a b -> And (goE a) (goE b)
+      Or a b -> Or (goE a) (goE b)
+      ValEq a b -> ValEq (goV a) (goV b)
+      ValNotEq a b -> ValNotEq (goV a) (goV b)
+      ValGT a b -> ValGT (goV a) (goV b)
+      ValLT a b -> ValLT (goV a) (goV b)
+      ValGTEq a b -> ValGTEq (goV a) (goV b)
+      ValLTEq a b -> ValLTEq (goV a) (goV b)
       BoolFunc v -> BoolFunc (goV v)
     goV = \case
       Field s -> Field (f s)
@@ -324,13 +337,21 @@ mapSubjects f = map goSec
       Count s t -> Count (f s) t
       CountIf e t -> CountIf (goE e) t
       DCount s a t -> DCount (f s) a t
-      P50 s t -> P50 (f s) t; P75 s t -> P75 (f s) t; P90 s t -> P90 (f s) t
-      P95 s t -> P95 (f s) t; P99 s t -> P99 (f s) t; P100 s t -> P100 (f s) t
+      P50 s t -> P50 (f s) t
+      P75 s t -> P75 (f s) t
+      P90 s t -> P90 (f s) t
+      P95 s t -> P95 (f s) t
+      P99 s t -> P99 (f s) t
+      P100 s t -> P100 (f s) t
       Percentile se d t -> Percentile (goSE se) d t
       Percentiles se ds t -> Percentiles (goSE se) ds t
-      Sum s t -> Sum (f s) t; Avg s t -> Avg (f s) t
-      Min s t -> Min (f s) t; Max s t -> Max (f s) t
-      Median s t -> Median (f s) t; Stdev s t -> Stdev (f s) t; Range s t -> Range (f s) t
+      Sum s t -> Sum (f s) t
+      Avg s t -> Avg (f s) t
+      Min s t -> Min (f s) t
+      Max s t -> Max (f s) t
+      Median s t -> Median (f s) t
+      Stdev s t -> Stdev (f s) t
+      Range s t -> Range (f s) t
       Coalesce vs t -> Coalesce (map goV vs) t
       Strcat vs t -> Strcat (map goV vs) t
       Iff e a b t -> Iff (goE e) (goV a) (goV b) t

@@ -3,7 +3,6 @@
 module Pages.Charts.Charts (queryMetrics, MetricsData (..), fetchMetricsData, MetricsStats (..), DataType (..), convertTimestampsToMs) where
 
 import Control.Exception.Annotated (checkpoint, try)
-import UnliftIO.Exception (catch, throwIO)
 import Data.Aeson qualified as AE
 import Data.Annotation (toAnnotation)
 import Data.Default
@@ -38,6 +37,7 @@ import Servant.Server (ServerError (errBody), err400)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Tracing (Tracing, withSpan_)
 import Text.Megaparsec (parseMaybe)
+import UnliftIO.Exception (catch, throwIO)
 
 
 pivot' :: V.Vector (Int, Text, Double) -> (V.Vector Text, V.Vector (V.Vector (Maybe Double)), Double, Double)
@@ -289,11 +289,14 @@ sanitizeChartError e
       -- Postgres: column "x" does not exist
       ("does not exist" `T.isInfixOf` msg && "column" `T.isInfixOf` msg)
         -- DataFusion / TimeFusion: "Schema error: No field named x"
-        || "no field named" `T.isInfixOf` msg
-        || "unknown column" `T.isInfixOf` msg
+        || "no field named"
+        `T.isInfixOf` msg
+        || "unknown column"
+        `T.isInfixOf` msg
     tableNotFound =
       ("does not exist" `T.isInfixOf` msg && "relation" `T.isInfixOf` msg)
-        || "unknown table" `T.isInfixOf` msg
+        || "unknown table"
+        `T.isInfixOf` msg
         || ("table" `T.isInfixOf` msg && "not found" `T.isInfixOf` msg)
 
 
@@ -304,8 +307,12 @@ sanitizeChartError e
 -- @System.Tracing.withException@ before we catch it here.
 withChartSpan
   :: (IOE :> es, Log :> es, Tracing :> es)
-  => Text -> [(Text, OA.Attribute)] -> Text -> MetricsData
-  -> Eff es MetricsData -> Eff es MetricsData
+  => Text
+  -> [(Text, OA.Attribute)]
+  -> Text
+  -> MetricsData
+  -> Eff es MetricsData
+  -> Eff es MetricsData
 withChartSpan tbl attrs sqlQuery fallback action =
   withSpan_ ("SELECT " <> tbl) attrs action `catch` \(e :: SomePostgreSqlException) -> do
     let userMsg = sanitizeChartError e

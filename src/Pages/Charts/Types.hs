@@ -44,10 +44,10 @@ data MetricsData = MetricsData
   , from :: Maybe Int
   , to :: Maybe Int
   , stats :: Maybe MetricsStats
-  , -- | Populated when the underlying SQL query failed; widget renderers should
-    -- show a distinct error overlay rather than the generic "no data" state.
-    -- Sanitized message only — full detail lives in the OTEL span + log.
-    error :: Maybe Text
+  , error :: Maybe Text
+  -- ^ Populated when the underlying SQL query failed; widget renderers should
+  -- show a distinct error overlay rather than the generic "no data" state.
+  -- Sanitized message only — full detail lives in the OTEL span + log.
   }
   deriving (Generic, Show)
   deriving anyclass (Default, NFData)
