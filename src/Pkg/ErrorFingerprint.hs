@@ -503,7 +503,7 @@ normalizeStackTrace runtime stackText =
     normalizeContextLine ctx =
       let normalized = unwords $ words ctx
        in if T.length normalized > 120
-            then "" -- Skip overly long context lines (like Sentry does)
+            then "" -- Skip overly long context lines to keep fingerprints stable
             else normalized
 
 
@@ -530,7 +530,7 @@ normalizeMessage msg =
    in T.strip normalized
 
 
--- | Compute the error fingerprint hash using Sentry-style prioritization
+-- | Compute the error fingerprint hash using stack-trace-first prioritization
 -- Priority:
 -- 1. Stack trace (if has meaningful in-app frames)
 -- 2. Exception type + message

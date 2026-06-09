@@ -1,4 +1,4 @@
--- | Sentry-style pretty-printed tables for the CLI.
+-- | Pretty-printed Unicode-box tables for the CLI.
 --
 -- Renders a Unicode box-drawing table with per-cell colors (severity →
 -- red/yellow/blue/gray, brand identifiers in cyan, muted footers in dim).

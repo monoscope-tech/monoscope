@@ -160,7 +160,7 @@ renderWith mode v tableAction = case mode of
 
 
 -- | Legacy plain-Text renderer. Retained so unmigrated commands still work,
--- but new code should call 'CLI.Table.renderRichTable' for the Sentry-style
+-- but new code should call 'CLI.Table.renderRichTable' for the Unicode
 -- box-drawing + per-cell color output. Suppresses ANSI in JSON mode so a
 -- non-TTY pipe never sees escape codes.
 renderTable :: IOE :> es => [Text] -> [[Text]] -> Eff es ()

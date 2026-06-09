@@ -322,8 +322,8 @@ defaultSinceRange createdAt now
     ageH = diffUTCTime now (zonedTimeToUTC createdAt) / 3600
 
 
--- | A single user-journey event (Sentry-style) attached to a span as a JSON-encoded array
--- under the @breadcrumbs@ attribute. @kind@/@payload@ stand in for the JSON keys @type@/@data@
+-- | A single user-journey event attached to a span as a JSON-encoded array under the
+-- @breadcrumbs@ attribute. @kind@/@payload@ stand in for the JSON keys @type@/@data@
 -- (renamed because @type_@ would clash with @Lucid.type_@ since field selectors are enabled).
 data Breadcrumb = Breadcrumb
   { kind :: Text
@@ -346,16 +346,16 @@ utcToEpochMs :: UTCTime -> Integer
 utcToEpochMs = floor . (* 1000) . POSIX.utcTimeToPOSIXSeconds
 
 
--- | Source 1: legacy Sentry-style stringified JSON array under @attributes.breadcrumbs@.
+-- | Source 1: legacy stringified JSON array under @attributes.breadcrumbs@.
 breadcrumbsFromCustomAttr :: Telemetry.SpanRecord -> [Breadcrumb]
 breadcrumbsFromCustomAttr sr = fromMaybe [] do
   raw <- Telemetry.atMapText "breadcrumbs" sr.attributes
   AE.decodeStrict (encodeUtf8 raw)
 
 
--- | Source 2: OTel-native span events. Sentry's modern OTel SDK records breadcrumbs as
--- span events with attribute keys prefixed @sentry.breadcrumb.*@; we also handle plain
--- OTel events (using the event name as the kind and @attributes.message\/body@ as the message).
+-- | Source 2: OTel-native span events. Some SDKs record breadcrumbs as span events with
+-- attribute keys prefixed @sentry.breadcrumb.*@; we also handle plain OTel events
+-- (using the event name as the kind and @attributes.message\/body@ as the message).
 breadcrumbsFromSpanEvents :: Telemetry.SpanRecord -> [Breadcrumb]
 breadcrumbsFromSpanEvents sr = case AE.fromJSON sr.events of
   AE.Success (events :: [Telemetry.SpanEvent]) -> map toBreadcrumb events
@@ -392,7 +392,7 @@ breadcrumbsFromTraceLogs errorSpanId sr =
 
 
 -- | Combine all breadcrumb sources for a trace, dedupe near-duplicates emitted by
--- overlapping instrumentation (e.g. Sentry SDK that ships both legacy attr + OTel events),
+-- overlapping instrumentation (e.g. an SDK that ships both legacy attr + OTel events),
 -- and sort chronologically. Duplicates land adjacent after sorting on the dedup key,
 -- so 'groupBy' suffices.
 extractBreadcrumbs :: V.Vector Telemetry.SpanRecord -> Maybe (NonEmpty Breadcrumb)

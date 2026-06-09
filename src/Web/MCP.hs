@@ -150,9 +150,9 @@ openApiTool p m op =
 
 
 -- | Canonical verb-first names for every API v1 operation. Industry-standard
--- naming (Sentry/Grafana/Datadog patterns): @list_X@, @get_X@, @create_X@,
--- @update_X@, @<action>_<resource>@. New routes get a path-derived fallback;
--- to give them a canonical name, add an entry here.
+-- naming: @list_X@, @get_X@, @create_X@, @update_X@, @<action>_<resource>@.
+-- New routes get a path-derived fallback; to give them a canonical name, add
+-- an entry here.
 toolNameOverrides :: Map (ByteString, Text) Text
 toolNameOverrides =
   Map.fromList
@@ -497,9 +497,8 @@ urlEncodeText = decodeUtf8 . H.urlEncode True . encodeUtf8
 -- Composite (workflow) tools
 -- =============================================================================
 
--- | Bundled, agent-friendly tools that combine several internal calls. Modeled
--- after Sentry/Grafana Sift patterns: one verb the agent calls in place of an
--- ad-hoc multi-step plan.
+-- | Bundled, agent-friendly tools that combine several internal calls: one
+-- verb the agent calls in place of an ad-hoc multi-step plan.
 compositeTools :: [Tool]
 compositeTools = [findErrorPatterns, searchEventsNL, analyzeIssue]
 

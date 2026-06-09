@@ -57,9 +57,9 @@ config or a settings UI for adding HTTP MCP servers.
 
 ## Tools
 
-Tool names follow the verb-first snake_case convention used by Sentry,
-Grafana, Datadog, and Honeycomb (`list_monitors`, `search_events`,
-`mute_monitor`, …). Run `tools/list` for the live, authoritative set.
+Tool names follow a verb-first snake_case convention (`list_monitors`,
+`search_events`, `mute_monitor`, …). Run `tools/list` for the live,
+authoritative set.
 
 **REST-derived tools** mirror the OpenAPI spec — `list_events`,
 `search_events`, `get_schema`, `list_facets`, `list_monitors`,

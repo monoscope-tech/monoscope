@@ -381,7 +381,7 @@ pricingPage pid lemon critical paymentPlan freeTierEnabled basicAuthEnabled prov
         div_ [class_ "join join-vertical w-full mt-4"] do
           faQ "What is an event?" "An event is any of span, log, or metric that you send to Monoscope."
           faQ "How do you handle security and sensitive data?" "We employ encryption and authentication measures to ensure the security of your data during transmission and storage. All our SDKs also support redacting data. You can simply specify the JSONPath to the fields that you don't want the SDKs to forward to Monoscope, and those sensitive fields will be stripped out/redacted before the data even leaves your servers and replaced with the text \"CLIENT REDACTED\" on our end. We will never see anything you don't want us to see."
-          faQ "What makes us better than others?" "Aside the observerbility features like traces, logs, metrics etc. Monoscope takes it a step further by monitoring request payloads for both incoming and outgoing requests, automatic error reportings like sentry and payload changes detections which gives engineering teams with all the information the need to seamlessly debug and fix issues in their servers."
+          faQ "What makes us better than others?" "Aside from the standard observability features like traces, logs, and metrics, Monoscope takes it a step further by monitoring request payloads for both incoming and outgoing requests, automatic error reporting, and payload-change detection — giving engineering teams all the information they need to seamlessly debug and fix issues in their servers."
 
 
 -- Group is a tuple of (Group Name, List of languages in that group)

@@ -749,8 +749,7 @@ buildSearchParams opts =
 -- A bareword/phrase query (no KQL operators) is rewritten to a full-text
 -- search via 'rewriteBareQuery' — @POISON_ROW_DROPPED@ becomes
 -- @body has "POISON_ROW_DROPPED" or summary has "POISON_ROW_DROPPED"@,
--- matching what a developer naturally types (and reads in a Sentry-style
--- search UI).
+-- matching what a developer naturally types.
 --
 -- --level normalizes to upper-case (B2) so @--level error@ and @--level
 -- ERROR@ both match the canonical OTel severity strings.
