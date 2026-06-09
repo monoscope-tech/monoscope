@@ -317,6 +317,8 @@ tests:
       - log-base
       - vector
       - time
+      - hasql
+      - hasql-pool
   # test-dev: lib + integration tests as ONE GHCi target (Jade's cabal test-dev trick).
   # Use via `make live-test-dev`. Library deps come from hpack-includes/lib-deps.yaml
   # (shared with `library`); integration-only extras listed inline. Not run by `make test` / CI.

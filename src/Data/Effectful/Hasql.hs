@@ -62,11 +62,18 @@ instance Exception HasqlException where
 
 
 -- | True for transient infra failures (acquisition timeout, dropped connection).
--- Defers to hasql 1.10's @IsError.isTransient@ classification.
+-- ConnectionUsageError is *always* transient: the server never saw the row, so
+-- it can't be a data/poison fault — hasql's IsError.isTransient returns False
+-- for the free-form @OtherConnectionError@ bucket (e.g. "the database system
+-- is starting up"), which previously caused the bisector to log
+-- POISON_ROW_DROPPED and silently drop logs when TF/PG was restarting.
+--
+-- >>> isTransientUsageError AcquisitionTimeoutUsageError
+-- True
 isTransientUsageError :: UsageError -> Bool
 isTransientUsageError = \case
   AcquisitionTimeoutUsageError -> True
-  ConnectionUsageError e -> isTransient e
+  ConnectionUsageError _ -> True
   SessionUsageError e -> isTransient e
 
 

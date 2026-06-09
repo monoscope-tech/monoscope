@@ -1105,6 +1105,7 @@ test-suite unit-tests
   main-is: Main.hs
   other-modules:
       BackgroundJobs.SpikeDetectionSpec
+      Data.Effectful.HasqlSpec
       Data.Effectful.NotifySpec
       Pkg.DrainSpec
       Pkg.Parser.ExprSpec
@@ -1146,6 +1147,8 @@ test-suite unit-tests
     , containers
     , effectful-core
     , extra
+    , hasql
+    , hasql-pool
     , hs-opentelemetry-instrumentation-auto
     , hspec
     , log-base
