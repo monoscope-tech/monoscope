@@ -113,7 +113,7 @@ When more than one output flag is set, precedence is `--json` > `--yaml` > `--ta
 
 ## Output modes
 
-- `table` — default when stdout is a TTY. Sentry-style Unicode box-drawing renderer
+- `table` — default when stdout is a TTY. Unicode box-drawing renderer
   with severity colouring, terminal-width truncation, and a pagination cue under
   list output. Set `MONOSCOPE_FORCE_COLOR=1` to keep colours when piping.
 - `json` — default when stdout is a pipe. Pretty-printed JSON envelope, stable
