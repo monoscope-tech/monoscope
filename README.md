@@ -90,7 +90,7 @@ monoscope telemetrygen --kind=trace --rate=5 --count=50
 Manage your Monoscope project from the terminal — search logs, query metrics, manage monitors and dashboards, triage issues, and more.
 
 ```bash
-curl monoscope.tech/install.sh | sh
+curl https://monoscope.tech/install.sh | sh
 monoscope auth login
 ```
 
