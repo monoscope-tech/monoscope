@@ -587,8 +587,11 @@ logRecordById = lookupOtelRecord Nothing
 -- below can't drift out of sync.
 otelSpanColsSql :: HI.Sql
 otelSpanColsSql =
+  -- NB: no COALESCE(hashes, '{}') — DataFusion can't coerce a Utf8 literal to
+  -- List(Utf8View), which 500s every TF-routed lookup. NULL (legacy PG rows)
+  -- is absorbed by the Maybe on the 'hashes' field instead.
   [HI.sql|project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource,
-          COALESCE(hashes, '{}'), kind, status_code, status_message, COALESCE(start_time, timestamp), end_time, events, links, duration, name, parent_id, summary, date::timestamptz, errors, COALESCE(message_size_bytes, 0)|]
+          hashes, kind, status_code, status_message, COALESCE(start_time, timestamp), end_time, events, links, duration, name, parent_id, summary, date::timestamptz, errors, COALESCE(message_size_bytes, 0)|]
 
 
 lookupOtelRecord :: DB es => Maybe Text -> UTCTime -> UUID.UUID -> Eff es (Maybe OtelLogsAndSpans)
@@ -1225,7 +1228,7 @@ otelColumns =
       , ("observed_timestamp", top (param . (.observed_timestamp)))
       , ("id", (.uuidP))
       , ("parent_id", txt (.parent_id))
-      , ("hashes", arr (.hashes))
+      , ("hashes", arr (fromMaybe V.empty . (.hashes)))
       , ("name", txt (fmap (T.take 500) . (.name)))
       , ("kind", txt (.kind))
       , ("status_code", txt (.status_code))
@@ -1386,7 +1389,7 @@ data OtelLogsAndSpans = OtelLogsAndSpans
   , body :: Maybe (AesonText AE.Value)
   , attributes :: Maybe (AesonText (Map Text AE.Value))
   , resource :: Maybe (AesonText (Map Text AE.Value))
-  , hashes :: V.Vector Text
+  , hashes :: Maybe (V.Vector Text)
   , kind :: Maybe Text
   , status_code :: Maybe Text
   , status_message :: Maybe Text
@@ -1700,7 +1703,7 @@ mkSystemLog (UUIDId pid) eventName sev bodyMsg attrs duration ts =
       , timestamp = ts
       , parent_id = Nothing
       , observed_timestamp = Just ts
-      , hashes = V.empty
+      , hashes = Just V.empty
       , name = Just eventName
       , kind = Just "log"
       , status_code = Nothing

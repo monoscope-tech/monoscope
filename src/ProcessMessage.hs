@@ -48,7 +48,6 @@ import Data.HashTable.ST.Cuckoo qualified as HT
 import Data.Text qualified as T
 import Data.Time (addUTCTime, zonedTimeToUTC)
 import Data.Time.LocalTime (ZonedTime)
-import Data.Tuple.Extra (fst3)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Deriving.Aeson.Stock qualified as DAE
@@ -526,7 +525,7 @@ convertRequestMessageToSpan rm msgSize (spanId, trId) =
               | sc >= 400 -> "Error"
               | otherwise -> "OK"
         , status_code = Just $ show rm.statusCode
-        , hashes = []
+        , hashes = Just []
         , observed_timestamp = Just $ zonedTimeToUTC rm.timestamp
         , attributes = fmap AesonText $ jsonToMap $ createSpanAttributes rm
         , events = Just $ AesonText $ AE.Array V.empty

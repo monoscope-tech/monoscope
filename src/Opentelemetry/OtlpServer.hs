@@ -1078,7 +1078,7 @@ convertLogRecordToOtelLog !fallbackTime !pid resourceM scopeM logRecord =
           , body = fmap AesonText $ Just $ anyValueToJSON $ Just $ logRecord ^. PLF.body
           , attributes = fmap AesonText $ jsonToMap $ removeProjectId $ keyValueToJSON $ logRecord ^. PLF.attributes
           , resource = fmap AesonText $ jsonToMap $ removeProjectId $ resourceToJSON resourceM
-          , hashes = V.empty
+          , hashes = Just V.empty
           , kind = Just "log"
           , status_code = Nothing
           , status_message = Nothing
@@ -1303,7 +1303,7 @@ convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
           , body = fmap AesonText body
           , attributes = fmap AesonText newAttributes
           , resource = fmap AesonText resourceAttrs
-          , hashes = V.empty
+          , hashes = Just V.empty
           , kind = if spanName' == "apitoolkit-http-span" then Just "server" else spanKindText
           , status_code = statusCodeText
           , status_message = statusMsgText

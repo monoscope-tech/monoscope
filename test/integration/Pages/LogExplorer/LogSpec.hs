@@ -17,10 +17,12 @@ import Database.PostgreSQL.Simple.Types (PGArray (..))
 import Network.GRPC.Common.Protobuf (Proto (..))
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.LogExplorer.Log qualified as Log
+import Pages.LogExplorer.LogItem qualified as LogItem
 import Pkg.TestUtils
 import ProcessMessage (processMessages)
 import Relude
 import Relude.Unsafe qualified as Unsafe
+import System.Config (AuthContext (..), EnvConfig (..))
 import Test.Hspec
 
 
@@ -551,3 +553,34 @@ spec = aroundAll withTestResources do
                   forM_ childIds \cid -> allSpanIds `shouldContain` [cid]
             _ -> pass
         _ -> error "Expected JSON response"
+
+  describe "Log item detail (expandAPIlogItemH)" do
+    -- Regression: otelSpanColsSql's COALESCE(hashes, '{}') fails DataFusion planning
+    -- ("coalesce(List(Utf8View), Utf8)") when the lookup routes through the TimeFusion
+    -- read path, 500-ing the log item page. Reproduces only against a real TF
+    -- (make test-integration-tf); on plain PG the TF pool aliases the test DB.
+    it "loads a span via the TimeFusion read path, and decodes legacy NULL hashes on PG" \tr -> do
+      apiKey <- createTestAPIKey tr testPid "log-item-tf-key"
+      ingestTrace tr apiKey "GET /api/log-item/tf" frozenTime
+      rows <-
+        withPool tr.trPool
+          $ DBT.query
+            [sql| SELECT id, timestamp FROM otel_logs_and_spans WHERE project_id = ? AND name = ? |]
+            (testPid, "GET /api/log-item/tf" :: Text)
+          :: IO (V.Vector (UUID.UUID, UTCTime))
+      (rid, ts) <- maybe (error "ingested span missing from otel_logs_and_spans") pure (rows V.!? 0)
+
+      let expectFound item = case item of
+            LogItem.ItemDetailedNotFound msg -> expectationFailure $ "expected record, got not-found: " <> toString msg
+            LogItem.SpanItemExpanded _ rec _ -> rec.name `shouldBe` Just "GET /api/log-item/tf"
+            LogItem.LogItemExpanded _ rec -> rec.name `shouldBe` Just "GET /api/log-item/tf"
+
+      let ctx = tr.trATCtx
+          withTfReads b = tr{trATCtx = ctx{env = ctx.env{enableTimefusionReads = b}}}
+      (_, item) <- testServant (withTfReads True) $ LogItem.expandAPIlogItemH testPid rid ts Nothing
+      expectFound item
+
+      -- Legacy PG rows can have NULL hashes; the lookup must still decode them.
+      void $ withPool tr.trPool $ DBT.execute [sql| UPDATE otel_logs_and_spans SET hashes = NULL WHERE id = ? |] (Only rid)
+      (_, item2) <- testServant (withTfReads False) $ LogItem.expandAPIlogItemH testPid rid ts Nothing
+      expectFound item2
