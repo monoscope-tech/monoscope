@@ -423,8 +423,10 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds conv
               $ liftIO
               $ HM.fromList
               <$> forM projectIds \pid -> do
-                !cache <- Cache.fetchWithCache appCtx.projectCache pid
-                  $ fmap (fromMaybe Projects.defaultProjectCache) . Projects.projectCacheByIdIO appCtx.hasqlJobsPool
+                !cache <-
+                  Cache.fetchWithCache appCtx.projectCache pid
+                    $ fmap (fromMaybe Projects.defaultProjectCache)
+                    . Projects.projectCacheByIdIO appCtx.hasqlJobsPool
                 pure (pid, cache)
           pure (keyToId, projectCaches)
 
