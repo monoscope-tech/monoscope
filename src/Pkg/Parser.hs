@@ -546,7 +546,7 @@ instance HasField "toColNames" QueryComponents [Text] where
 -- JSON-parser hazard on TEXT columns containing NULL bytes or lone surrogates.
 wrapForRowExtraction :: Int -> Text -> Text
 wrapForRowExtraction n inner =
-  let aliases = T.intercalate "," [ "c" <> show i | i <- [1 .. n] ]
+  let aliases = T.intercalate "," ["c" <> show i | i <- [1 .. n]]
    in "SELECT jsonb_build_array(" <> aliases <> ") FROM (" <> inner <> ") sub(" <> aliases <> ")"
 
 
