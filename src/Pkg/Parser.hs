@@ -258,11 +258,9 @@ sqlFromQueryComponents sqlCfg qc =
 
     -- count(*) OVER() goes inside the array as the LAST element when
     -- hasCountOver = True; 'selectLogTable' peels it back off via dropLast.
-    -- ::text cast normalizes the wire OID across PG (jsonb 3802) and TF
-    -- (Utf8View 25); the Haskell decoder parses the text-encoded JSON.
     countOver = "count(*) OVER()" :: Text
     wrap :: Text -> Text
-    wrap cols = "jsonb_build_array(" <> cols <> ")::text"
+    wrap cols = "jsonb_build_array(" <> cols <> ")"
     -- Standard data queries skip count(*) OVER() and use LIMIT+1 to detect hasMore
     overflowLimitClause = case qc.takeLimit of
       Just limit -> "limit " <> show (limit + 1)

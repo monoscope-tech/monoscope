@@ -208,22 +208,19 @@ executeSecuredQuery pid userQuery limit
   | not (validateSqlQuery userQuery) = pure $ Left "Query contains disallowed operations"
   | not (hasProjectIdFilter userQuery pid) = pure $ Left "Query must filter by project_id"
   | otherwise = do
-      let wrapped = rawSql ("SELECT jsonb_build_array(sub.*)::text FROM (" <> userQuery <> ") sub") <> [HI.sql| LIMIT #{limit}|]
+      let wrapped = rawSql ("SELECT jsonb_build_array(sub.*) FROM (" <> userQuery <> ") sub") <> [HI.sql| LIMIT #{limit}|]
       resultE <- try @Hasql.HasqlException $ do
-        rows :: [Text] <- Hasql.interp wrapped
+        rows :: [AE.Value] <- Hasql.interp wrapped
         pure $ V.fromList $ mapMaybe jsonArrayToVector rows
       pure $ first (\e -> "Query execution failed: " <> toText (displayException e)) resultE
 
 
--- | Each query path projects a single @jsonb_build_array(...)::text@ column per
--- row. We cast to text on the SQL side because TimeFusion returns Utf8View
--- (PG wire OID 25) for jsonb_build_array — hasql's jsonb decoder (OID 3802)
--- rejects that. ::text normalizes the wire shape to text on both backends;
--- we parse the JSON here.
-jsonArrayToVector :: Text -> Maybe (V.Vector AE.Value)
-jsonArrayToVector t = case AE.eitherDecodeStrict (encodeUtf8 t) of
-  Right (AE.Array arr) -> Just arr
-  _ -> Nothing
+-- | Each query path projects a single jsonb-array column per row (via
+-- inlined @jsonb_build_array(...)@); this decodes that wire shape into
+-- the positional 'V.Vector AE.Value' callers index into.
+jsonArrayToVector :: AE.Value -> Maybe (V.Vector AE.Value)
+jsonArrayToVector (AE.Array arr) = Just arr
+jsonArrayToVector _ = Nothing
 
 
 -- | Check that query contains a project_id filter with the correct project ID
@@ -312,7 +309,7 @@ selectLogTable pid queryAST queryText cursorM dateRange projectedColsByUser sour
       ]
       $ try @SomeException
       $ checkpoint (toAnnotation ("selectLogTable", q)) do
-        rows :: [Text] <- Hasql.interp (rawSql q)
+        rows :: [AE.Value] <- Hasql.interp (rawSql q)
         pure $ V.fromList $ mapMaybe jsonArrayToVector rows
   case result of
     Left e -> pure $ Left $ show e
@@ -361,11 +358,11 @@ selectChildSpansAndLogs pid projectedColsByUser traceIds seedSpanIds dateRange e
     then pure []
     else do
       let inner =
-            rawSql ("SELECT jsonb_build_array(" <> r <> ")::text FROM otel_logs_and_spans WHERE project_id=")
+            rawSql ("SELECT jsonb_build_array(" <> r <> ") FROM otel_logs_and_spans WHERE project_id=")
               <> [HI.sql|#{pid.toText}::text|]
               <> dateRangeSql
               <> [HI.sql| AND context___trace_id=ANY(#{traceIdsList}) AND parent_id IS NOT NULL AND id::text != ALL(#{excludedList}) ORDER BY timestamp DESC LIMIT 2000|]
-      rawRows :: [Text] <- Hasql.interp inner
+      rawRows :: [AE.Value] <- Hasql.interp inner
       let results = V.fromList $ mapMaybe jsonArrayToVector rawRows
       -- 'colNames' from getProcessedColumns retains "<expr> as <alias>" entries;
       -- strip to bare aliases so the index map matches what callers / 'lookupVecTextByKey'
@@ -844,17 +841,17 @@ fetchEventExamples enableTfReads pid queryAST dateRange expandKind skip limitN =
       -- covers all traces.  Patterns/other: fetch raw events as before.
       q = case expandKind of
         ExpandSession _ ->
-          rawSql ("SELECT jsonb_build_array(" <> selectClause <> ")::text FROM (SELECT DISTINCT ON (context___trace_id) * FROM otel_logs_and_spans WHERE ")
+          rawSql ("SELECT jsonb_build_array(" <> selectClause <> ") FROM (SELECT DISTINCT ON (context___trace_id) * FROM otel_logs_and_spans WHERE ")
             <> fullWhereSql
             <> expandFilter
             <> [HI.sql| ORDER BY context___trace_id, parent_id ASC NULLS FIRST, timestamp ASC) sub ORDER BY timestamp ASC OFFSET #{skip}::BIGINT LIMIT #{limitN}::BIGINT|]
         _ ->
-          rawSql ("SELECT jsonb_build_array(" <> selectClause <> ")::text FROM otel_logs_and_spans WHERE ")
+          rawSql ("SELECT jsonb_build_array(" <> selectClause <> ") FROM otel_logs_and_spans WHERE ")
             <> fullWhereSql
             <> expandFilter
             <> [HI.sql| ORDER BY timestamp ASC OFFSET #{skip}::BIGINT LIMIT #{limitN}::BIGINT|]
   Log.logTrace "fetchEventExamples: query" $ AE.object ["project_id" AE..= pid]
-  rawRows :: [Text] <-
+  rawRows :: [AE.Value] <-
     Hasql.withHasqlTimefusion enableTfReads
       $ checkpoint (toAnnotation ("fetchEventExamples" :: Text, pid))
       $ Hasql.interp q
