@@ -158,7 +158,7 @@ processMessages msgs attrs =
       forM_ poison \(ackId, msg, err) ->
         Log.logAttention "Error parsing json msgs" (object ["AckId" .= ackId, "Error" .= err, "OriginalMsg" .= decodeUtf8 @Text msg])
       if null rMsgs
-        then pure (map (\(a, _, _) -> a) rMsgs, poison, Nothing)
+        then pure ([], poison, Nothing)
         else do
           projectCaches <-
             liftIO $ HM.fromList <$> forM (ordNub $ (\(_, _, m) -> UUIDId m.projectId) <$> rMsgs) \pid -> do
@@ -195,8 +195,8 @@ processMessages msgs attrs =
       Left wf -> Left wf
       Right rowPoison ->
         let writePoison =
-              [ (ackId, raw, "row insert failed")
-              | (s, _) <- V.toList rowPoison
+              [ (ackId, raw, Telemetry.poisonReason info)
+              | (s, info) <- V.toList rowPoison
               , Just (ackId, raw) <- [HM.lookup s.id idToSource]
               ]
             poisonAcks = HS.fromList [a | (a, _, _) <- writePoison]

@@ -160,9 +160,6 @@ spec = aroundAll withTestResources $ beforeWith mkResWithKey do
         res <- runTestBg frozenTime tr' $ OtlpServer.processList msgs logsAttrs
         expectLeftMatching "TF-only failure on mixed batch" isThat res
 
-    -- TODO(dlq-decode-failures): pre-existing gap — decode failures are
-    -- log-and-acked rather than DLQ'd. See feedback memory
-    -- `data-loss-must-be-manual` for the policy this still needs to satisfy.
     it "corrupt-only batch + TF healthy → Right ([], [poison]); Pkg.Queue DLQs it" \(tr, _) -> do
       res <- runTestBg frozenTime tr $ OtlpServer.processList [corruptMsg "ack-poison"] logsAttrs
       case res of

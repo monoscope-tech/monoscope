@@ -47,7 +47,8 @@ module Models.Telemetry.Telemetry (
   writeFailureDlqHeaders,
   PoisonMsg,
   BulkInsertResult (..),
-  RowPoisonInfo (..),
+  RowPoisonInfo,
+  poisonReason,
   handOffBatches,
   mintOtelLogIds,
   getMetricChartListData,
@@ -869,13 +870,21 @@ type PoisonMsg =
   -- ^ @(ackId, rawBytes, errorReason)@
 
 
--- | Per-row outcome from a dual-write. At least one of @pgError@ / @tfError@ is
--- 'Just'; if a row is fully successful it never appears here.
-data RowPoisonInfo = RowPoisonInfo
-  { pgError :: Maybe SomeException
-  , tfError :: Maybe SomeException
-  }
-  deriving stock (Generic)
+-- | Per-row outcome from a dual-write. @This pgErr@ = PG-only failure;
+-- @That tfErr@ = TF-only failure; @These pgErr tfErr@ = both failed. A row
+-- accepted by both stores never appears here, so the no-error case is
+-- structurally absent (no need for a defensive Nothing-Nothing branch in callers).
+type RowPoisonInfo = These SomeException SomeException
+
+
+-- | Human-readable per-row error reason for DLQ payload. Threads exception
+-- detail through so DLQ operators can triage without cross-referencing logs.
+poisonReason :: RowPoisonInfo -> Text
+poisonReason =
+  These.these
+    (\pg -> "row insert failed (pg-only): " <> show pg)
+    (\tf -> "row insert failed (tf-only): " <> show tf)
+    (\pg tf -> "row insert failed (both): pg=" <> show pg <> "; tf=" <> show tf)
 
 
 -- | Result of a single-side ('bulkInsertOtelLogsAndSpans') bulk write. Rows
@@ -936,8 +945,11 @@ retryHasqlWrite maxAttempts store act = go 1
         Right a -> pure (Right a)
         Left e
           | "TuplesOk" `T.isInfixOf` show e -> do
-              -- Rows DID land; we just lack the row count (mempty is a safe
-              -- approximation since the caller cares about poison, not the count).
+              -- Rows DID land — only the PGWire status tag is wrong. We return
+              -- 'mempty' because we lack the count; the poison-rows field is
+              -- correctly empty. Any caller that watches @rowsInserted@ for
+              -- monitoring will see 0 here on TF batches; treat that as
+              -- "wire-mismatch swallowed", not "zero rows inserted".
               Log.logTrace "retryHasqlWrite: TuplesOk wire-mismatch ignored" $ AE.object ["store" AE..= store]
               pure (Right mempty)
           | attempt < maxAttempts
@@ -987,7 +999,7 @@ bulkInsertOtelLogsAndSpansTF enableTf records = do
     else do
       pgRes <- retryHasqlWrite 10 "pg" (bulkInsertOtelLogsAndSpans records)
       case pgRes of
-        Right bir -> pure (Right (V.map (\(r, e) -> (r, RowPoisonInfo (Just e) Nothing)) bir.poisonRows))
+        Right bir -> pure (Right (V.map (\(r, e) -> (r, This e)) bir.poisonRows))
         Left e -> do
           Log.logAttention "PG_WRITE_FAILED"
             $ AE.object ["record_count" AE..= V.length records, "error" AE..= show @Text e]
@@ -1018,9 +1030,9 @@ bulkInsertOtelLogsAndSpansTF enableTf records = do
       let mkMap bir = HM.fromList [(r.id, (r, e)) | (r, e) <- V.toList bir.poisonRows]
           pgMap = mkMap pg
           tfMap = mkMap tf
-          both = HM.intersectionWith (\(r, pe) (_, te) -> (r, RowPoisonInfo (Just pe) (Just te))) pgMap tfMap
-          pgOnly = HM.map (\(r, e) -> (r, RowPoisonInfo (Just e) Nothing)) (pgMap `HM.difference` tfMap)
-          tfOnly = HM.map (\(r, e) -> (r, RowPoisonInfo Nothing (Just e))) (tfMap `HM.difference` pgMap)
+          both = HM.intersectionWith (\(r, pe) (_, te) -> (r, These pe te)) pgMap tfMap
+          pgOnly = HM.map (\(r, e) -> (r, This e)) (pgMap `HM.difference` tfMap)
+          tfOnly = HM.map (\(r, e) -> (r, That e)) (tfMap `HM.difference` pgMap)
        in V.fromList $ HM.elems (both <> pgOnly <> tfOnly)
 
 

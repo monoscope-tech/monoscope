@@ -274,16 +274,10 @@ dualWriteWithPoisonMapping appCtx label caches perMsg = do
       Left wf -> Left wf
       Right rowPoison ->
         Right
-          [ (ackId, raw, reasonFor info)
+          [ (ackId, raw, Telemetry.poisonReason info)
           | (r, info) <- V.toList rowPoison
           , Just (ackId, raw) <- [HM.lookup r.id idToSource]
           ]
-  where
-    reasonFor info = case (info.pgError, info.tfError) of
-      (Just pg, Just tf) -> "row insert failed (both): pg=" <> show pg <> "; tf=" <> show tf
-      (Just pg, Nothing) -> "row insert failed (pg-only): " <> show pg
-      (Nothing, Just tf) -> "row insert failed (tf-only): " <> show tf
-      (Nothing, Nothing) -> "row insert failed (unknown — both sides null)"
 
 
 -- | Boundary adapter: convert a 'WriteFailure' to a gRPC INTERNAL error.
@@ -400,7 +394,7 @@ processList msgs !attrs =
 
 processBatchPipeline
   :: forall req res es
-   . (DB es, Eff.Reader AuthContext :> es, Log :> es, Message req)
+   . (DB es, Eff.Reader AuthContext :> es, Log :> es, Message req, Time.Time :> es)
   => Text
   -> [(Text, ByteString)]
   -> AuthContext
@@ -443,8 +437,14 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds conv
 
     if allEmpty
       then pure (Right (writeAckIds, decodePoison))
-      else
-        dbInsert projectCachesMap writeReady <&> \case
+      else do
+        -- Emit dbInsert duration as a separate trace line so dashboards that
+        -- alert on per-batch DB latency keep working. The outer processList
+        -- log records overall batch duration; this carries the dbInsert slice.
+        (result, dbDur) <- Log.timeAction (dbInsert projectCachesMap writeReady)
+        Log.logTrace "processBatchPipeline: dbInsert complete"
+          $ AE.object ["label" AE..= label, "db_insert_ms" AE..= (round (dbDur * 1000) :: Int)]
+        pure $ case result of
           Left wf -> Left wf
           Right writePoison ->
             -- Successfully-written rows are acked; write-poisoned rows are removed
