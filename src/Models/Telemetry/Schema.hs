@@ -13,7 +13,7 @@ module Models.Telemetry.Schema (
 import Data.Aeson qualified as AE
 import Data.Map qualified as Map
 import Data.OpenApi (ToSchema)
-import Data.Set qualified as Set
+import Data.Set qualified as S
 import Data.Text qualified as T
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
@@ -303,7 +303,7 @@ deriveSchema liveAttrs =
       -- duration, body, etc.). Drop only the dotted-form entries that the
       -- live set doesn't confirm.
       isTopLevel k = not ("." `T.isInfixOf` k)
-      keepHand k _ = isTopLevel k || k `Set.member` liveAttrs
+      keepHand k _ = isTopLevel k || k `S.member` liveAttrs
       kept = Map.filterWithKey keepHand handCoded
       -- For any live column not already in 'kept', add a bare entry.
       missing = [k | k <- toList liveAttrs, not (Map.member k kept)]

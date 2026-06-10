@@ -87,7 +87,7 @@ makeLogger dest action = inner dest (action . tolerantLogger)
 -- and Warp's onException — taking the whole process down. Wrapping at the
 -- `Logger` boundary protects every log site at once.
 tolerantLogger :: Logger -> Logger
-tolerantLogger l = l{loggerWriteMessage = \m -> void $ Safe.tryAny (loggerWriteMessage l m)}
+tolerantLogger l = l{loggerWriteMessage = void . Safe.tryAny . loggerWriteMessage l}
 
 
 newtype FileBackendConfig = FileBackendConfig

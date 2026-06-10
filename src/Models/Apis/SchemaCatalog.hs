@@ -252,7 +252,7 @@ upsertSummary rows0 = unless (V.null rows0) $ do
   let rows = V.map (second (HI.AsJsonb . scrubNulValue . AE.toJSON)) rows0
   tryAny (batch rows) >>= \case
     Right () -> pass
-    Left _ -> V.forM_ rows \r -> void $ tryAny (batch (V.singleton r))
+    Left _ -> V.forM_ rows (void . tryAny . batch . V.singleton)
   where
     batch xs =
       let (pids, docs) = V.unzip xs

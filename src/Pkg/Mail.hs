@@ -450,10 +450,16 @@ mkSlackLogPatternRateChangePayload patternText issueUrl logLevel serviceName dir
         ]
     ]
   where
-    icon = if isError then ":rotating_light:" else if direction == "spike" then ":chart_with_upwards_trend:" else ":chart_with_downwards_trend:"
+    icon
+      | isError = ":rotating_light:"
+      | direction == "spike" = ":chart_with_upwards_trend:"
+      | otherwise = ":chart_with_downwards_trend:"
     sign = if direction == "spike" then "+" else "-"
     errPrefix = if isError then "Error " else "" :: Text
-    color = if isError then "#ef4444" else if direction == "spike" then "#eab308" else "#3b82f6"
+    color
+      | isError = "#ef4444"
+      | direction == "spike" = "#eab308"
+      | otherwise = "#3b82f6"
 
 
 discordReportAlert :: Text -> Text -> Text -> Int -> Int -> V.Vector (Text, Int, Int) -> Text -> Text -> Text -> Text -> AE.Value

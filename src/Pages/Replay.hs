@@ -413,7 +413,7 @@ fetchEventArray bucket objKey gzipped = fst <<$>> loadJsonArray bucket objKey gz
 -- Avoids re-encoding events during merge — raw bytes go directly to the output.
 fetchRawForMerge :: Minio.Bucket -> Minio.Object -> Bool -> Minio.Minio (Either String (Double, BL.ByteString))
 fetchRawForMerge bucket objKey gzipped =
-  (\(arr, raw) -> (firstEventTimestamp arr, raw)) <<$>> loadJsonArray bucket objKey gzipped
+  first firstEventTimestamp <<$>> loadJsonArray bucket objKey gzipped
 
 
 -- | Concatenate pre-sorted raw JSON array byte strings into one flat JSON array

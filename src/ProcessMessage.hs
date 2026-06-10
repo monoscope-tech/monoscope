@@ -69,6 +69,7 @@ import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Pkg.SchemaLearning.Catalog qualified as Fields
 import Pkg.SchemaLearning.Hot qualified as SchemaHot
 import Relude hiding (ask)
+import Relude.Extra.Tuple (toSnd)
 import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
@@ -482,7 +483,7 @@ extractObservation canonicalTemplates otelSpan =
       -> V.Vector (Text, V.Vector AE.Value)
       -> [(Text, V.Vector (AE.Value, Maybe Text), Fields.FieldCategoryEnum)]
     tagWalk cat fields0 =
-      [ (path, V.map (\v -> (v, formatHint v)) vs, cat)
+      [ (path, V.map (toSnd formatHint) vs, cat)
       | (path, vs) <- V.toList fields0
       ]
 
