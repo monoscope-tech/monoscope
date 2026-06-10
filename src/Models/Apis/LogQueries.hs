@@ -834,7 +834,7 @@ fetchEventExamples enableTfReads pid queryAST dateRange expandKind skip limitN =
         ExpandPattern tpl -> [HI.sql| AND array_to_string(summary, chr(30)) ILIKE #{templateToLike tpl}|]
       cols = defaultSelectSqlQuery (Just SSpans)
       -- Mirror selectLogTable's summary column handling: wrap TEXT[] as JSON for row output.
-      processedCols = map (\c -> if c == "summary" || "summary" `T.isSuffixOf` c then "to_json(summary)" else c) (colsNoAsClause cols)
+      processedCols = map (\c -> if c == "summary" || "summary" `T.isSuffixOf` c then "to_json(summary)" else c) $ colsNoAsClause cols
       selectClause = T.intercalate ", " processedCols
       -- Sessions: fetch one root event per trace via DISTINCT ON so [+N] expansion
       -- covers all traces.  Patterns/other: fetch raw events as before.
