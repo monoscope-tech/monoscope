@@ -359,11 +359,16 @@ selectChildSpansAndLogs pid projectedColsByUser traceIds seedSpanIds dateRange e
   if V.null seedSpanIds
     then pure []
     else do
-      results <- Hasql.interp $ rawSql ("SELECT json_build_array(" <> r <> ")::jsonb FROM otel_logs_and_spans WHERE project_id=") <> [HI.sql|#{pid.toText}::text|] <> dateRangeSql <> [HI.sql| AND context___trace_id=ANY(#{traceIdsList}) AND parent_id IS NOT NULL AND id::text != ALL(#{excludedList}) ORDER BY timestamp DESC LIMIT 2000|]
+      let inner =
+            rawSql ("SELECT " <> r <> " FROM otel_logs_and_spans WHERE project_id=")
+              <> [HI.sql|#{pid.toText}::text|]
+              <> dateRangeSql
+              <> [HI.sql| AND context___trace_id=ANY(#{traceIdsList}) AND parent_id IS NOT NULL AND id::text != ALL(#{excludedList}) ORDER BY timestamp DESC LIMIT 2000|]
+      results <- executeArbitraryQuery inner
       -- 'colNames' from getProcessedColumns retains "<expr> as <alias>" entries;
       -- strip to bare aliases so the index map matches what callers / 'lookupVecTextByKey'
       -- look up (e.g. "latency_breakdown", "parent_id").
-      pure $ keepDescendantsOf (listToIndexHashMap (listToColNames colNames)) seedSpanIds (mapMaybe valueToVector results)
+      pure $ keepDescendantsOf (listToIndexHashMap (listToColNames colNames)) seedSpanIds (V.toList results)
 
 
 -- | Keep only rows that are transitive descendants of any @seedSpanIds@
