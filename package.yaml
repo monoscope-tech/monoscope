@@ -239,6 +239,7 @@ tests:
     dependencies:
       - base
       - monoscope
+      - these
       - hs-opentelemetry-instrumentation-auto
       - hspec
       - relude >= 1.2.0.0

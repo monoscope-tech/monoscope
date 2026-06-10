@@ -45,9 +45,7 @@ languageCode Es = "es"
 -- | Translate a key in the given language. Missing keys return the key itself
 -- so typos surface visibly in the UI (rather than rendering empty strings).
 t :: Language -> Text -> Text
-t lang key = case Map.lookup key (dict lang) of
-  Just v -> v
-  Nothing -> key
+t lang key = fromMaybe key (Map.lookup key (dict lang))
 
 
 dict :: Language -> Map.Map Text Text

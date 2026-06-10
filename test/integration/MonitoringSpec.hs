@@ -76,7 +76,9 @@ spec = aroundAll withTestResources do
             , ("m5", toStrict $ AE.encode reqMsg2)
             ]
       r <- runTestBg frozenTime tr $ processMessages msgs HashMap.empty
-      r `shouldBe` ["m1", "m2", "m4", "m5", "m5"]
+      case r of
+        Right (ids, _poison) -> ids `shouldBe` ["m1", "m2", "m4", "m5", "m5"]
+        Left _ -> expectationFailure "processMessages returned Left WriteFailure"
 
       pendingJobs <- getPendingBackgroundJobs tr.trATCtx
       logBackgroundJobsInfo tr.trLogger pendingJobs

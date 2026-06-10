@@ -17,6 +17,7 @@ module Models.Projects.ProjectApiKeys (
 )
 where
 
+import Control.Exception (throwIO)
 import Data.Aeson qualified as AE
 import Data.Base64.Types qualified as B64T
 import Data.Cache qualified as Cache
@@ -137,12 +138,14 @@ projectIdsByProjectApiKeys projectKeys = do
 
 
 -- | IO-level helper for cache callbacks that need to query hasql directly.
+-- DB-level failures (connection refused, pool exhausted, …) throw
+-- 'Hasql.HasqlException' so the caller (and ultimately 'Pkg.Queue') can route
+-- the batch to the DLQ. A clean @Right Nothing@ is preserved as the
+-- legitimate "key not in DB" signal — only infrastructure failures throw.
 queryProjectIdByKey :: OHasql.TracedPool -> Text -> IO (Maybe Projects.ProjectId)
 queryProjectIdByKey hpool key =
-  whenRightM
-    Nothing
-    (OHasql.use hpool (Session.statement () (HI.interp True [HI.sql| SELECT project_id FROM projects.project_api_keys WHERE key_prefix = #{key} |])))
-    pure
+  OHasql.use hpool (Session.statement () (HI.interp True [HI.sql| SELECT project_id FROM projects.project_api_keys WHERE key_prefix = #{key} |]))
+    >>= either (throwIO . Hasql.HasqlException) pure
 
 
 -- AES256 encryption

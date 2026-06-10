@@ -196,30 +196,28 @@ logExplorerUrlPath pid q cols cursor since fromV toV layout source recent = "/p/
         ]
 
 
--- | Execute arbitrary SQL query and return results as vector of vectors.
--- Wraps in row_to_json + json_each to preserve column order via hasql.
+-- | Wrap the inner SELECT so each row arrives as a jsonb array of column values.
+-- Relies on Postgres-parity `qualifier.*` expansion inside `jsonb_build_array`,
+-- which works natively on PG and on TimeFusion via the WildcardFnArgExpander
+-- analyzer rule. No client-side column count needed.
 executeArbitraryQuery :: DB es => HI.Sql -> Eff es (V.Vector (V.Vector AE.Value))
 executeArbitraryQuery querySql = do
   results :: [AE.Value] <-
-    Hasql.interp
-      $ rawSql "SELECT (SELECT json_agg(x.value ORDER BY x.ordinality)::jsonb FROM json_each(row_to_json(sub.*)) WITH ORDINALITY AS x) FROM ("
-      <> querySql
-      <> rawSql ") AS sub"
+    Hasql.interp $ rawSql "SELECT jsonb_build_array(sub.*) FROM (" <> querySql <> rawSql ") sub"
   pure $ V.fromList $ mapMaybe jsonArrayToVector results
 
 
 -- | Execute a user-provided SQL query with mandatory project_id filtering.
--- SECURITY: Validates query for dangerous patterns and verifies project_id filter is present in query.
--- Note: The query must already contain project_id='<pid>' filtering (via {{project_id}} placeholder substitution done before calling this function)
+-- SECURITY: Validates query for dangerous patterns and verifies project_id filter is present.
+-- The query must already contain `project_id='<pid>'` filtering (via {{project_id}}
+-- placeholder substitution done before calling this function).
 executeSecuredQuery :: DB es => Projects.ProjectId -> Text -> Int -> Eff es (Either Text (V.Vector (V.Vector AE.Value)))
 executeSecuredQuery pid userQuery limit
   | not (validateSqlQuery userQuery) = pure $ Left "Query contains disallowed operations"
   | not (hasProjectIdFilter userQuery pid) = pure $ Left "Query must filter by project_id"
   | otherwise = do
-      let selectQuery = "SELECT (SELECT json_agg(x.value ORDER BY x.ordinality)::jsonb FROM json_each(row_to_json(sub.*)) WITH ORDINALITY AS x) FROM (SELECT * FROM (" <> userQuery <> ") AS subq LIMIT " <> show limit <> ") AS sub"
-      resultE <- try @Hasql.HasqlException do
-        results :: [AE.Value] <- Hasql.interp $ rawSql selectQuery
-        pure $ V.fromList $ mapMaybe jsonArrayToVector results
+      let limited = rawSql ("SELECT * FROM (" <> userQuery <> ") AS subq") <> [HI.sql| LIMIT #{limit}|]
+      resultE <- try @Hasql.HasqlException $ executeArbitraryQuery limited
       pure $ first (\e -> "Query execution failed: " <> toText (displayException e)) resultE
 
 
@@ -361,11 +359,16 @@ selectChildSpansAndLogs pid projectedColsByUser traceIds seedSpanIds dateRange e
   if V.null seedSpanIds
     then pure []
     else do
-      results <- Hasql.interp $ rawSql ("SELECT json_build_array(" <> r <> ")::jsonb FROM otel_logs_and_spans WHERE project_id=") <> [HI.sql|#{pid.toText}::text|] <> dateRangeSql <> [HI.sql| AND context___trace_id=ANY(#{traceIdsList}) AND parent_id IS NOT NULL AND id::text != ALL(#{excludedList}) ORDER BY timestamp DESC LIMIT 2000|]
+      let inner =
+            rawSql ("SELECT " <> r <> " FROM otel_logs_and_spans WHERE project_id=")
+              <> [HI.sql|#{pid.toText}::text|]
+              <> dateRangeSql
+              <> [HI.sql| AND context___trace_id=ANY(#{traceIdsList}) AND parent_id IS NOT NULL AND id::text != ALL(#{excludedList}) ORDER BY timestamp DESC LIMIT 2000|]
+      results <- executeArbitraryQuery inner
       -- 'colNames' from getProcessedColumns retains "<expr> as <alias>" entries;
       -- strip to bare aliases so the index map matches what callers / 'lookupVecTextByKey'
       -- look up (e.g. "latency_breakdown", "parent_id").
-      pure $ keepDescendantsOf (listToIndexHashMap (listToColNames colNames)) seedSpanIds (mapMaybe valueToVector results)
+      pure $ keepDescendantsOf (listToIndexHashMap (listToColNames colNames)) seedSpanIds results
 
 
 -- | Keep only rows that are transitive descendants of any @seedSpanIds@
@@ -377,14 +380,14 @@ selectChildSpansAndLogs pid projectedColsByUser traceIds seedSpanIds dateRange e
 --
 -- Seed rows themselves are NOT included in the output; callers already hold
 -- them (in 'requestVecs') and we only return strict descendants.
-keepDescendantsOf :: HM.HashMap Text Int -> V.Vector Text -> [V.Vector AE.Value] -> [V.Vector AE.Value]
+keepDescendantsOf :: HM.HashMap Text Int -> V.Vector Text -> V.Vector (V.Vector AE.Value) -> [V.Vector AE.Value]
 keepDescendantsOf colIdxMap seedSpanIds rows
-  | V.null seedSpanIds || null rows = []
+  | V.null seedSpanIds || V.null rows = []
   | otherwise =
       let sid r = lookupVecTextByKey r colIdxMap "latency_breakdown"
           pid' r = lookupVecTextByKey r colIdxMap "parent_id"
           childrenByParent :: HM.HashMap Text [V.Vector AE.Value]
-          childrenByParent = HM.fromListWith (<>) [(p, [r]) | r <- rows, Just p <- [pid' r]]
+          childrenByParent = HM.fromListWith (<>) [(p, [r]) | r <- V.toList rows, Just p <- [pid' r]]
           seeds = V.toList seedSpanIds
           go _ [] acc = reverse acc
           go visited (s : rest) acc =
@@ -394,12 +397,6 @@ keepDescendantsOf colIdxMap seedSpanIds rows
                 visited' = foldr S.insert visited newSids
              in go visited' (newSids <> rest) (newKids <> acc)
        in go (S.fromList seeds) seeds []
-
-
-valueToVector :: AE.Value -> Maybe (V.Vector AE.Value)
-valueToVector val = case val of
-  AE.Array arr -> Just arr
-  _ -> Nothing
 
 
 data PatternRow = PatternRow {logPattern :: Text, count :: Int64, level :: Maybe Text, service :: Maybe Text, volume :: [Int], mergedCount :: Int, isError :: Bool}
@@ -444,10 +441,11 @@ data SessionRow = SessionRow
 
 
 -- | Mirrors the column order of the SELECT in 'fetchSessions'. Decoded
--- directly via hasql to bypass the row_to_json/json_each wrapper used by
--- 'executeArbitraryQuery' — that wrapper trips PostgreSQL's JSON parser
--- whenever a TEXT value (e.g. a user_agent or url_path captured from raw
--- OTLP) contains characters JSON forbids (NULL bytes, lone surrogates).
+-- directly via hasql to bypass the jsonb wrapper entirely — Postgres'
+-- jsonb type still rejects NULL bytes / lone surrogates in TEXT values
+-- regardless of which function builds it, so the only safe path for raw
+-- OTLP text (user_agent, url_path, ...) is to never round-trip through
+-- jsonb at all.
 data RawSessionRow = RawSessionRow
   { sessionId :: Text
   , userId :: Maybe Text

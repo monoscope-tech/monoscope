@@ -424,6 +424,7 @@ library
     , text
     , text-builder-linear
     , text-display
+    , these
     , time
     , time-manager
     , tmp-postgres
@@ -620,6 +621,7 @@ test-suite integration-tests
       Opentelemetry.GrpcIngestionSpec
       Opentelemetry.OtlpServerSpec
       Opentelemetry.StandardOtelSpansSpec
+      Opentelemetry.TimefusionWriteFailureSpec
       Opentelemetry.TraceSessionPropagationSpec
       Pages.AnomaliesSpec
       Pages.ApiSpec
@@ -727,6 +729,7 @@ test-suite integration-tests
     , servant-htmx
     , servant-server
     , text
+    , these
     , time
     , unliftio
     , unordered-containers
@@ -847,6 +850,7 @@ test-suite test-dev
       Opentelemetry.GrpcIngestionSpec
       Opentelemetry.OtlpServerSpec
       Opentelemetry.StandardOtelSpansSpec
+      Opentelemetry.TimefusionWriteFailureSpec
       Opentelemetry.TraceSessionPropagationSpec
       Pages.AnomaliesSpec
       Pages.ApiSpec
@@ -1078,6 +1082,7 @@ test-suite test-dev
     , text
     , text-builder-linear
     , text-display
+    , these
     , time
     , time-manager
     , tmp-postgres

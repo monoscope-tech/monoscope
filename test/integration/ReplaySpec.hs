@@ -18,7 +18,7 @@ import Pkg.ErrorMetrics (wireTypeErrorsRef)
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
-import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, pendingWith, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, pendingWith, shouldBe, shouldContain, shouldSatisfy)
 
 
 pid :: Projects.ProjectId
@@ -246,13 +246,17 @@ spec = aroundAll withTestResources do
             , ("ack-oversized", oversize)
             ]
           frozen = UTCTime (fromGregorian 2026 5 8) 0
-      acked <- runTestBg frozen tr $ processReplayEvents batch HM.empty
+      ackedRes <- runTestBg frozen tr $ processReplayEvents batch HM.empty
       decodeAfter <- readCounter "replay:decode_error"
       oversizeAfter <- readCounter "replay:oversize_message"
-      -- Parser-valid messages (good + empty-strings) AND the corrupt one are
-      -- all acknowledged. Oversized is dropped pre-parse and not in the
-      -- returned ack list (pre-existing behavior; redelivered by kafka).
-      sort acked `shouldBe` sort ["ack-good", "ack-empty-strings", "ack-corrupt"]
+      -- Parser-valid messages (good + empty-strings) land in the ack list;
+      -- the truly corrupt one goes to the poison list so Pkg.Queue can DLQ
+      -- it (no silent drop). Oversized is also poison.
+      case ackedRes of
+        Right (acked, poison) -> do
+          sort acked `shouldBe` sort ["ack-good", "ack-empty-strings"]
+          sort (map (\(a, _, _) -> a) poison) `shouldContain` ["ack-corrupt"]
+        Left _ -> expectationFailure "processReplayEvents returned Left; replay path never surfaces WriteFailure"
       -- The load-bearing assertion: only the truly-corrupt JSON bumped the
       -- decode counter. Before the fix this would be 2.
       decodeAfter - decodeBefore `shouldBe` 1
@@ -265,7 +269,11 @@ spec = aroundAll withTestResources do
       acked <- runTestBg frozen tr $ processReplayEvents [] HM.empty
       decodeAfter <- readCounter "replay:decode_error"
       oversizeAfter <- readCounter "replay:oversize_message"
-      acked `shouldBe` []
+      case acked of
+        Right (ids, poison) -> do
+          ids `shouldBe` []
+          poison `shouldBe` []
+        Left _ -> expectationFailure "processReplayEvents returned Left WriteFailure"
       decodeAfter `shouldBe` decodeBefore
       oversizeAfter `shouldBe` oversizeBefore
 
@@ -325,7 +333,9 @@ spec = aroundAll withTestResources do
         sid <- UUID.fromWords 0 0 0 100 & pure
         clearSessionRow tr sid
         acked <- runTestBg frozen tr $ processReplayEvents [("ack-1", mkBody sid nonEmptyEvents)] HM.empty
-        acked `shouldBe` ["ack-1"]
+        case acked of
+          Right (ids, _poison) -> ids `shouldBe` ["ack-1"]
+          Left _ -> expectationFailure "processReplayEvents returned Left WriteFailure"
         events <- fetchEventsFor tr sid
         -- Ingested array must come back byte-equivalent (rrweb relies on
         -- exact event objects + timestamp ordering).
@@ -341,7 +351,9 @@ spec = aroundAll withTestResources do
         sid <- UUID.fromWords 0 0 0 101 & pure
         clearSessionRow tr sid
         acked <- runTestBg frozen tr $ processReplayEvents [("ack-empty", mkBody sid emptyStringEvents)] HM.empty
-        acked `shouldBe` ["ack-empty"]
+        case acked of
+          Right (ids, _poison) -> ids `shouldBe` ["ack-empty"]
+          Left _ -> expectationFailure "processReplayEvents returned Left WriteFailure"
         events <- fetchEventsFor tr sid
         AE.Array events `shouldBe` emptyStringEvents
         clearSessionRow tr sid

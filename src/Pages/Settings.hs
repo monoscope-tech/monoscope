@@ -50,7 +50,7 @@ import Data.Default
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Notify qualified as Notify
 import Data.Text qualified as T
-import Data.Time (Day, UTCTime (..), addUTCTime, getZonedTime)
+import Data.Time (Day, UTCTime (..), addDays, addUTCTime, getZonedTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.UUID qualified as UUID
@@ -995,7 +995,7 @@ pastCyclesSection_ isFree basePrice cycles = div_ [class_ "border-t border-strok
       tbody_ do
         forM_ cycles \(cs, ce, reqs, bytes) -> do
           -- ce is exclusive end; subtract 1 day for the human-facing label.
-          let endLabel = toText (formatTime defaultTimeLocale "%b %-d" (pred ce))
+          let endLabel = toText (formatTime defaultTimeLocale "%b %-d" (addDays (-1) ce))
               startLabel = toText (formatTime defaultTimeLocale "%b %-d, %Y" cs)
               overage = max 0 (reqs - 20_000_000)
               cost = fromIntegral basePrice + (fromIntegral overage / 1_000_000 :: Double)
