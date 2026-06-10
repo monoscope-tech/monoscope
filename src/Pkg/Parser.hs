@@ -258,9 +258,11 @@ sqlFromQueryComponents sqlCfg qc =
 
     -- count(*) OVER() goes inside the array as the LAST element when
     -- hasCountOver = True; 'selectLogTable' peels it back off via dropLast.
+    -- ::text cast normalizes the wire OID across PG (jsonb 3802) and TF
+    -- (Utf8View 25); the Haskell decoder parses the text-encoded JSON.
     countOver = "count(*) OVER()" :: Text
     wrap :: Text -> Text
-    wrap cols = "jsonb_build_array(" <> cols <> ")"
+    wrap cols = "jsonb_build_array(" <> cols <> ")::text"
     -- Standard data queries skip count(*) OVER() and use LIMIT+1 to detect hasMore
     overflowLimitClause = case qc.takeLimit of
       Just limit -> "limit " <> show (limit + 1)
@@ -509,13 +511,9 @@ defSqlQueryCfg pid currentTime source spanT =
     }
 
 
+-- ISO 8601 with explicit Z suffix; works natively on both PG and TF.
 timestampLogFmt :: Text -> Text
-timestampLogFmt colName =
-  [fmt|CASE 
-        WHEN RIGHT(TRIM('"' FROM CAST(to_json({colName} at time zone 'UTC') AS VARCHAR)), 1) = 'Z'
-        THEN TRIM('"' FROM CAST(to_json({colName} at time zone 'UTC') AS VARCHAR))
-        ELSE TRIM('"' FROM CAST(to_json({colName} at time zone 'UTC') AS VARCHAR)) || 'Z'
-    END as {colName}|]
+timestampLogFmt colName = [fmt|to_char({colName} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as {colName}|]
 
 
 defaultSelectSqlQuery :: Maybe Sources -> [Text]
