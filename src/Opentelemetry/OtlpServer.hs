@@ -275,16 +275,25 @@ dualWriteWithPoisonMapping appCtx label caches perMsg = do
     $ ErrorCall
       ("dualWriteWithPoisonMapping: record count mismatch after stamp/mint (sources=" <> show (length perRecordSource) <> ", minted=" <> show (V.length minted) <> ")")
   let !idToSource = HM.fromList (zipWith (\(ackId, raw) r -> (r.id, (ackId, raw))) perRecordSource (V.toList minted))
-  checkpoint
-    (fromString $ "processList:" <> toString label <> ":bulkInsert")
-    (Telemetry.insertAndHandOff appCtx.env.enableTimefusionWrites appCtx.extractionWorker caches minted)
-    <&> \case
-      Left wf -> Left wf
-      Right rowPoison ->
-        Right
+  res <-
+    checkpoint
+      (fromString $ "processList:" <> toString label <> ":bulkInsert")
+      (Telemetry.insertAndHandOff appCtx.env.enableTimefusionWrites appCtx.extractionWorker caches minted)
+  case res of
+    Left wf -> pure (Left wf)
+    Right rowPoison -> do
+      -- Lookup miss = silent data loss (poison row neither acked nor DLQ'd).
+      -- The length-equality guard above proves it can't happen today; log
+      -- loud if a future change ever breaks the invariant.
+      let lookedUp = [(HM.lookup r.id idToSource, r, info) | (r, info) <- V.toList rowPoison]
+          missing = [r.id | (Nothing, r, _) <- lookedUp]
+      unless (null missing)
+        $ Log.logAttention "dualWriteWithPoisonMapping: poison row missing source mapping"
+        $ AE.object ["missing_count" AE..= length missing, "ids" AE..= missing]
+      pure
+        $ Right
           [ (ackId, raw, Telemetry.poisonReason info)
-          | (r, info) <- V.toList rowPoison
-          , Just (ackId, raw) <- [HM.lookup r.id idToSource]
+          | (Just (ackId, raw), _, info) <- lookedUp
           ]
 
 

@@ -898,7 +898,6 @@ data BulkInsertResult = BulkInsertResult
   { rowsInserted :: !Int64
   , poisonRows :: !(V.Vector (OtelLogsAndSpans, SomeException))
   }
-  deriving stock (Generic)
 
 
 instance Semigroup BulkInsertResult where
@@ -925,6 +924,13 @@ writeFailureDlqHeaders wf =
         ]
 
 
+-- | Cap on retry attempts per store inside 'retryHasqlWrite'. ~25s of wall
+-- time at the exponential backoff used here. Both PG and TF call sites pass
+-- this so a future tuning change moves both in lock-step.
+maxWriteAttempts :: Int
+maxWriteAttempts = 10
+
+
 -- | Retry a Hasql write up to @n@ times on transient errors with exponential
 -- backoff (100ms → 5s cap; ~25s total at n=10). Non-transient errors return
 -- 'Left' immediately. TimeFusion's PGWire "TuplesOk" wire-mismatch is treated
@@ -933,13 +939,6 @@ writeFailureDlqHeaders wf =
 --
 -- Generic over PG vs TF: both call sites are symmetric. Programmer-bug
 -- exceptions (non-Hasql) propagate as Left without retry.
--- | Cap on retry attempts per store inside 'retryHasqlWrite'. ~25s of wall
--- time at the exponential backoff used here. Both PG and TF call sites pass
--- this so a future tuning change moves both in lock-step.
-maxWriteAttempts :: Int
-maxWriteAttempts = 10
-
-
 retryHasqlWrite
   :: (Concurrent :> es, IOE :> es, Log :> es, Monoid a)
   => Int
