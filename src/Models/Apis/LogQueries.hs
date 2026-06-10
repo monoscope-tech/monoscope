@@ -216,8 +216,8 @@ executeSecuredQuery pid userQuery limit
   | not (validateSqlQuery userQuery) = pure $ Left "Query contains disallowed operations"
   | not (hasProjectIdFilter userQuery pid) = pure $ Left "Query must filter by project_id"
   | otherwise = do
-      let limited = "SELECT * FROM (" <> userQuery <> ") AS subq LIMIT " <> show limit
-      resultE <- try @Hasql.HasqlException $ executeArbitraryQuery (rawSql limited)
+      let limited = rawSql ("SELECT * FROM (" <> userQuery <> ") AS subq") <> [HI.sql| LIMIT #{limit}|]
+      resultE <- try @Hasql.HasqlException $ executeArbitraryQuery limited
       pure $ first (\e -> "Query execution failed: " <> toText (displayException e)) resultE
 
 
