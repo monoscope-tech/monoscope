@@ -196,18 +196,11 @@ logExplorerUrlPath pid q cols cursor since fromV toV layout source recent = "/p/
         ]
 
 
--- | Execute arbitrary SQL query and return results as vector of vectors.
--- Wraps the inner SELECT with `jsonb_build_array` so each row is returned as a
--- single jsonb array of its column values, in declared column order. Replaces
--- the legacy `(SELECT json_agg(x.value ORDER BY x.ordinality)::jsonb FROM
--- json_each(row_to_json(sub.*)) WITH ORDINALITY AS x)` wrapper: same wire
--- output, but works on TimeFusion (no json_each / row_to_json / WITH ORDINALITY
--- / row-correlated UDTF needed) and dodges PostgreSQL's JSON-parser hazard on
--- TEXT columns containing NULL bytes or lone surrogates.
---
--- Caller passes the expected column count of the inner SELECT. `colCount <= 0`
--- returns an empty vector without touching the database — `sub()` with zero
--- column aliases is not valid SQL.
+-- | Wrap the inner SELECT so each row arrives as a jsonb array of column values.
+-- Uses jsonb_build_array(c1,…,cN) instead of json_each / row_to_json / WITH
+-- ORDINALITY — the latter is unsupported on TimeFusion and trips PG's JSON
+-- parser on NULL bytes. `colCount <= 0` short-circuits to V.empty since sub()
+-- with zero aliases is invalid SQL.
 executeArbitraryQuery :: DB es => Int -> HI.Sql -> Eff es (V.Vector (V.Vector AE.Value))
 executeArbitraryQuery colCount _ | colCount <= 0 = pure V.empty
 executeArbitraryQuery colCount querySql = do
@@ -327,10 +320,7 @@ selectLogTable pid queryAST queryText cursorM dateRange projectedColsByUser sour
       ]
       $ try @SomeException
       $ checkpoint (toAnnotation ("selectLogTable", q))
-      -- hasCountOver appends a count(*) OVER() column to the SELECT but it isn't
-      -- in `toColNames` (display columns only). Include it in the alias list or
-      -- PG rejects with "column alias list must be the same length as the number
-      -- of output columns".
+      -- +1 for count(*) OVER() appended to SELECT but absent from toColNames.
       $ executeArbitraryQuery (length queryComponents.toColNames + fromEnum queryComponents.hasCountOver) (rawSql q)
   case result of
     Left e -> pure $ Left $ show e
