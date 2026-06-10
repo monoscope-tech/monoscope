@@ -423,8 +423,8 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds conv
               $ liftIO
               $ HM.fromList
               <$> forM projectIds \pid -> do
-                !cache <- Cache.fetchWithCache appCtx.projectCache pid \pid' ->
-                  fromMaybe Projects.defaultProjectCache <$> Projects.projectCacheByIdIO appCtx.hasqlJobsPool pid'
+                !cache <- Cache.fetchWithCache appCtx.projectCache pid
+                  $ fmap (fromMaybe Projects.defaultProjectCache) . Projects.projectCacheByIdIO appCtx.hasqlJobsPool
                 pure (pid, cache)
           pure (keyToId, projectCaches)
 
@@ -438,9 +438,8 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds conv
     if allEmpty
       then pure (Right (writeAckIds, decodePoison))
       else do
-        -- Emit dbInsert duration as a separate trace line so dashboards that
-        -- alert on per-batch DB latency keep working. The outer processList
-        -- log records overall batch duration; this carries the dbInsert slice.
+        -- dbInsert duration is emitted as a separate trace line so dashboards
+        -- alerting on per-batch DB latency keep their metric.
         (result, dbDur) <- Log.timeAction (dbInsert projectCachesMap writeReady)
         Log.logTrace "processBatchPipeline: dbInsert complete"
           $ AE.object ["label" AE..= label, "db_insert_ms" AE..= (round (dbDur * 1000) :: Int)]

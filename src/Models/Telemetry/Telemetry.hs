@@ -124,6 +124,7 @@ import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), WrappedEnum (..), Wrapp
 import Pkg.ExtractionWorker qualified as EW
 import Relude hiding (ask)
 import Relude.Extra.Enum (safeToEnum)
+import Relude.Extra.Tuple (traverseToSnd)
 import System.IO (hPutStrLn)
 import System.Logging qualified as Log
 import System.Tracing (forkWithCtx)
@@ -877,14 +878,17 @@ type PoisonMsg =
 type RowPoisonInfo = These SomeException SomeException
 
 
--- | Human-readable per-row error reason for DLQ payload. Threads exception
--- detail through so DLQ operators can triage without cross-referencing logs.
+-- | Human-readable per-row error reason for DLQ payload. Capped at 2 KiB per
+-- side so a multi-MB nested exception can't blow past broker message limits;
+-- the full stack stays in the logAttention emitted at the write site.
 poisonReason :: RowPoisonInfo -> Text
 poisonReason =
   These.these
-    (\pg -> "row insert failed (pg-only): " <> show pg)
-    (\tf -> "row insert failed (tf-only): " <> show tf)
-    (\pg tf -> "row insert failed (both): pg=" <> show pg <> "; tf=" <> show tf)
+    (\pg -> "row insert failed (pg-only): " <> truncErr pg)
+    (\tf -> "row insert failed (tf-only): " <> truncErr tf)
+    (\pg tf -> "row insert failed (both): pg=" <> truncErr pg <> "; tf=" <> truncErr tf)
+  where
+    truncErr = T.take 2048 . toText . displayException
 
 
 -- | Result of a single-side ('bulkInsertOtelLogsAndSpans') bulk write. Rows
@@ -945,11 +949,9 @@ retryHasqlWrite maxAttempts store act = go 1
         Right a -> pure (Right a)
         Left e
           | "TuplesOk" `T.isInfixOf` show e -> do
-              -- Rows DID land — only the PGWire status tag is wrong. We return
-              -- 'mempty' because we lack the count; the poison-rows field is
-              -- correctly empty. Any caller that watches @rowsInserted@ for
-              -- monitoring will see 0 here on TF batches; treat that as
-              -- "wire-mismatch swallowed", not "zero rows inserted".
+              -- Rows landed; only the PGWire status tag is wrong. Returning
+              -- 'mempty' loses the row count — callers watching rowsInserted
+              -- here see 0 for "wire-mismatch swallowed", not "zero inserted".
               Log.logTrace "retryHasqlWrite: TuplesOk wire-mismatch ignored" $ AE.object ["store" AE..= store]
               pure (Right mempty)
           | attempt < maxAttempts
@@ -999,7 +1001,7 @@ bulkInsertOtelLogsAndSpansTF enableTf records = do
     else do
       pgRes <- retryHasqlWrite 10 "pg" (bulkInsertOtelLogsAndSpans records)
       case pgRes of
-        Right bir -> pure (Right (V.map (\(r, e) -> (r, This e)) bir.poisonRows))
+        Right bir -> pure (Right (V.map (second This) bir.poisonRows))
         Left e -> do
           Log.logAttention "PG_WRITE_FAILED"
             $ AE.object ["record_count" AE..= V.length records, "error" AE..= show @Text e]
@@ -1024,16 +1026,23 @@ bulkInsertOtelLogsAndSpansTF enableTf records = do
       pure (Left (These ePg eTf))
 
     -- Per-row attribution: a row appears in the result iff at least one side
-    -- rejected it. Rows accepted by both stores are silently absent (full success).
+    -- rejected it. Rows accepted by both stores are silently absent (full
+    -- success). The two single-side branches short-circuit the HashMap
+    -- machinery for the common case where only one store rejected rows
+    -- (and the empty-both case which runs on every successful batch).
     combinePoison :: BulkInsertResult -> BulkInsertResult -> V.Vector (OtelLogsAndSpans, RowPoisonInfo)
-    combinePoison pg tf =
-      let mkMap bir = HM.fromList [(r.id, (r, e)) | (r, e) <- V.toList bir.poisonRows]
-          pgMap = mkMap pg
-          tfMap = mkMap tf
-          both = HM.intersectionWith (\(r, pe) (_, te) -> (r, These pe te)) pgMap tfMap
-          pgOnly = HM.map (\(r, e) -> (r, This e)) (pgMap `HM.difference` tfMap)
-          tfOnly = HM.map (\(r, e) -> (r, That e)) (tfMap `HM.difference` pgMap)
-       in V.fromList $ HM.elems (both <> pgOnly <> tfOnly)
+    combinePoison pg tf
+      | V.null pg.poisonRows && V.null tf.poisonRows = V.empty
+      | V.null tf.poisonRows = V.map (second This) pg.poisonRows
+      | V.null pg.poisonRows = V.map (second That) tf.poisonRows
+      | otherwise =
+          let mkMap bir = HM.fromList [(r.id, (r, e)) | (r, e) <- V.toList bir.poisonRows]
+              pgMap = mkMap pg
+              tfMap = mkMap tf
+              both = HM.intersectionWith (\(r, pe) (_, te) -> (r, These pe te)) pgMap tfMap
+              pgOnly = HM.map (second This) (pgMap `HM.difference` tfMap)
+              tfOnly = HM.map (second That) (tfMap `HM.difference` pgMap)
+           in V.fromList $ HM.elems (both <> pgOnly <> tfOnly)
 
 
 -- | Persist `records` to Postgres (+TimeFusion when enabled) and hand each
@@ -1136,7 +1145,7 @@ bisectCap = 2 ^ maxBisectDepth
 bulkInsertOtelLogsAndSpans :: (Hasql :> es, IOE :> es, Log :> es) => V.Vector OtelLogsAndSpans -> Eff es BulkInsertResult
 bulkInsertOtelLogsAndSpans = fmap mconcat . traverse insertSlice . VS.chunksOf bisectCap
   where
-    insertSlice rs = V.mapM (\r -> (r,) <$> otelRowSnippet r) rs >>= go maxBisectDepth
+    insertSlice rs = V.mapM (traverseToSnd otelRowSnippet) rs >>= go maxBisectDepth
 
     go d pairs =
       tryAny (Hasql.use $ HSession.statement () (stmt pairs)) >>= \case
