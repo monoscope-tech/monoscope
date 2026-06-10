@@ -204,7 +204,7 @@ executeArbitraryQuery :: DB es => HI.Sql -> Eff es (V.Vector (V.Vector AE.Value)
 executeArbitraryQuery querySql = do
   results :: [AE.Value] <-
     Hasql.interp $ rawSql "SELECT jsonb_build_array(sub.*) FROM (" <> querySql <> rawSql ") sub"
-  pure $ fromList $ mapMaybe jsonArrayToVector results
+  pure $ V.fromList $ mapMaybe jsonArrayToVector results
 
 
 -- | Execute a user-provided SQL query with mandatory project_id filtering.
@@ -441,9 +441,11 @@ data SessionRow = SessionRow
 
 
 -- | Mirrors the column order of the SELECT in 'fetchSessions'. Decoded
--- directly via hasql as a perf-oriented typed path; 'executeArbitraryQuery'
--- now uses 'jsonb_build_array' which is safe for NULL bytes and lone
--- surrogates, so this no longer doubles as a parser-bug workaround.
+-- directly via hasql to bypass the jsonb wrapper entirely — Postgres'
+-- jsonb type still rejects NULL bytes / lone surrogates in TEXT values
+-- regardless of which function builds it, so the only safe path for raw
+-- OTLP text (user_agent, url_path, ...) is to never round-trip through
+-- jsonb at all.
 data RawSessionRow = RawSessionRow
   { sessionId :: Text
   , userId :: Maybe Text
