@@ -197,35 +197,27 @@ logExplorerUrlPath pid q cols cursor since fromV toV layout source recent = "/p/
 
 
 -- | Wrap the inner SELECT so each row arrives as a jsonb array of column values.
--- Uses jsonb_build_array(c1,…,cN) instead of json_each / row_to_json / WITH
--- ORDINALITY — the latter is unsupported on TimeFusion and trips PG's JSON
--- parser on NULL bytes. `colCount <= 0` short-circuits to V.empty since sub()
--- with zero aliases is invalid SQL.
-executeArbitraryQuery :: DB es => Int -> HI.Sql -> Eff es (V.Vector (V.Vector AE.Value))
-executeArbitraryQuery colCount _ | colCount <= 0 = pure V.empty
-executeArbitraryQuery colCount querySql = do
-  let aliases = T.intercalate "," ["c" <> show i | i <- [1 .. colCount]]
+-- Relies on Postgres-parity `qualifier.*` expansion inside `jsonb_build_array`,
+-- which works natively on PG and on TimeFusion via the WildcardFnArgExpander
+-- analyzer rule. No client-side column count needed.
+executeArbitraryQuery :: DB es => HI.Sql -> Eff es (V.Vector (V.Vector AE.Value))
+executeArbitraryQuery querySql = do
   results :: [AE.Value] <-
-    Hasql.interp
-      $ rawSql ("SELECT jsonb_build_array(" <> aliases <> ") FROM (")
-      <> querySql
-      <> rawSql (") sub(" <> aliases <> ")")
+    Hasql.interp $ rawSql "SELECT jsonb_build_array(sub.*) FROM (" <> querySql <> rawSql ") sub"
   pure $ V.fromList $ mapMaybe jsonArrayToVector results
 
 
 -- | Execute a user-provided SQL query with mandatory project_id filtering.
--- SECURITY: Validates query for dangerous patterns and verifies project_id filter is present in query.
--- Note: The query must already contain project_id='<pid>' filtering (via {{project_id}} placeholder substitution done before calling this function)
--- TODO: migrate to jsonb_build_array once column count is derivable for arbitrary user/LLM SQL.
+-- SECURITY: Validates query for dangerous patterns and verifies project_id filter is present.
+-- The query must already contain `project_id='<pid>'` filtering (via {{project_id}}
+-- placeholder substitution done before calling this function).
 executeSecuredQuery :: DB es => Projects.ProjectId -> Text -> Int -> Eff es (Either Text (V.Vector (V.Vector AE.Value)))
 executeSecuredQuery pid userQuery limit
   | not (validateSqlQuery userQuery) = pure $ Left "Query contains disallowed operations"
   | not (hasProjectIdFilter userQuery pid) = pure $ Left "Query must filter by project_id"
   | otherwise = do
-      let selectQuery = "SELECT (SELECT json_agg(x.value ORDER BY x.ordinality)::jsonb FROM json_each(row_to_json(sub.*)) WITH ORDINALITY AS x) FROM (SELECT * FROM (" <> userQuery <> ") AS subq LIMIT " <> show limit <> ") AS sub"
-      resultE <- try @Hasql.HasqlException do
-        results :: [AE.Value] <- Hasql.interp $ rawSql selectQuery
-        pure $ V.fromList $ mapMaybe jsonArrayToVector results
+      let limited = "SELECT * FROM (" <> userQuery <> ") AS subq LIMIT " <> show limit
+      resultE <- try @Hasql.HasqlException $ executeArbitraryQuery (rawSql limited)
       pure $ first (\e -> "Query execution failed: " <> toText (displayException e)) resultE
 
 
@@ -320,8 +312,7 @@ selectLogTable pid queryAST queryText cursorM dateRange projectedColsByUser sour
       ]
       $ try @SomeException
       $ checkpoint (toAnnotation ("selectLogTable", q))
-      -- +1 for count(*) OVER() appended to SELECT but absent from toColNames.
-      $ executeArbitraryQuery (length queryComponents.toColNames + fromEnum queryComponents.hasCountOver) (rawSql q)
+      $ executeArbitraryQuery (rawSql q)
   case result of
     Left e -> pure $ Left $ show e
     Right logItemsV -> do
@@ -861,7 +852,7 @@ fetchEventExamples enableTfReads pid queryAST dateRange expandKind skip limitN =
             <> expandFilter
             <> [HI.sql| ORDER BY timestamp ASC OFFSET #{skip}::BIGINT LIMIT #{limitN}::BIGINT|]
   Log.logTrace "fetchEventExamples: query" $ AE.object ["project_id" AE..= pid]
-  rows <- Hasql.withHasqlTimefusion enableTfReads $ checkpoint (toAnnotation ("fetchEventExamples" :: Text, pid)) $ executeArbitraryQuery (length rawCols) q
+  rows <- Hasql.withHasqlTimefusion enableTfReads $ checkpoint (toAnnotation ("fetchEventExamples" :: Text, pid)) $ executeArbitraryQuery q
   pure (rows, listToColNames cols)
 
 
