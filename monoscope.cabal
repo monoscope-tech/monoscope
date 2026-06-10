@@ -620,6 +620,7 @@ test-suite integration-tests
       Opentelemetry.GrpcIngestionSpec
       Opentelemetry.OtlpServerSpec
       Opentelemetry.StandardOtelSpansSpec
+      Opentelemetry.TimefusionWriteFailureSpec
       Opentelemetry.TraceSessionPropagationSpec
       Pages.AnomaliesSpec
       Pages.ApiSpec
@@ -847,6 +848,7 @@ test-suite test-dev
       Opentelemetry.GrpcIngestionSpec
       Opentelemetry.OtlpServerSpec
       Opentelemetry.StandardOtelSpansSpec
+      Opentelemetry.TimefusionWriteFailureSpec
       Opentelemetry.TraceSessionPropagationSpec
       Pages.AnomaliesSpec
       Pages.ApiSpec

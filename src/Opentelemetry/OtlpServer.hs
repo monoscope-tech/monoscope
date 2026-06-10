@@ -44,7 +44,7 @@ import Data.Vector qualified as V
 import Data.Vector.Unboxed qualified as VU
 import Effectful
 import Effectful.Concurrent (Concurrent)
-import Effectful.Exception (onException, try)
+import Effectful.Exception (try)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
@@ -243,7 +243,13 @@ processList msgs !attrs =
   withSpan_ "otlp.process_list" (batchSpanAttrs (length msgs) attrs)
     $ checkpoint "processList" do
       startTime <- Time.currentTime
-      (result, processingTime, dbInsertTime) <- process startTime `onException` handleException
+      -- Exceptions from `process` (most importantly dbInsert / TF write failures)
+      -- MUST propagate so Pkg.Queue's batch-failure handler can route the batch:
+      -- Hasql-transient → no ack (broker redelivers); anything else → DLQ via
+      -- publishToDeadLetterQueue, ack only if DLQ accepted. Wrapping in
+      -- onException + returning ackIds here would silently drop the entire
+      -- batch (see TimefusionWriteFailureSpec for the regression).
+      (result, processingTime, dbInsertTime) <- process startTime
       endTime <- Time.currentTime
 
       let duration = diffUTCTime endTime startTime
@@ -260,10 +266,6 @@ processList msgs !attrs =
         )
       pure result
   where
-    handleException = checkpoint "processList:exception" do
-      Log.logAttention "processList: caught exception" (AE.object ["ce-type" AE..= HM.lookup "ce-type" attrs, "msg_count" AE..= length msgs, "attrs" AE..= attrs])
-      pure (map fst msgs, 0, 0)
-
     process fallbackTime = do
       appCtx <- ask @AuthContext
       case HM.lookup "ce-type" attrs of
@@ -379,6 +381,10 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds conv
           (!ackIdsV, !outputVectors) = V.unzip results
           !allOutput = V.concatMap Relude.id outputVectors
 
+      -- dbInsert exceptions intentionally PROPAGATE: Pkg.Queue.{kafka,pubsub}Service
+      -- catches them and routes Hasql-transient → no-ack (broker redelivers),
+      -- anything else → DLQ via publishToDeadLetterQueue, ack only on DLQ success.
+      -- Do NOT wrap in tryAny here — that would re-introduce the silent-drop bug.
       (_, dbDur) <- Log.timeAction $ unless (V.null allOutput) $ dbInsert projectCachesMap allOutput
       pure (V.toList ackIdsV, dbDur)
 
