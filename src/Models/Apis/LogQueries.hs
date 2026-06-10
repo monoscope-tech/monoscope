@@ -204,7 +204,7 @@ executeArbitraryQuery :: DB es => HI.Sql -> Eff es (V.Vector (V.Vector AE.Value)
 executeArbitraryQuery querySql = do
   results :: [AE.Value] <-
     Hasql.interp $ rawSql "SELECT jsonb_build_array(sub.*) FROM (" <> querySql <> rawSql ") sub"
-  pure $ V.fromList $ mapMaybe jsonArrayToVector results
+  pure $ fromList $ mapMaybe jsonArrayToVector results
 
 
 -- | Execute a user-provided SQL query with mandatory project_id filtering.
@@ -368,7 +368,7 @@ selectChildSpansAndLogs pid projectedColsByUser traceIds seedSpanIds dateRange e
       -- 'colNames' from getProcessedColumns retains "<expr> as <alias>" entries;
       -- strip to bare aliases so the index map matches what callers / 'lookupVecTextByKey'
       -- look up (e.g. "latency_breakdown", "parent_id").
-      pure $ keepDescendantsOf (listToIndexHashMap (listToColNames colNames)) seedSpanIds (V.toList results)
+      pure $ keepDescendantsOf (listToIndexHashMap (listToColNames colNames)) seedSpanIds results
 
 
 -- | Keep only rows that are transitive descendants of any @seedSpanIds@
@@ -380,14 +380,14 @@ selectChildSpansAndLogs pid projectedColsByUser traceIds seedSpanIds dateRange e
 --
 -- Seed rows themselves are NOT included in the output; callers already hold
 -- them (in 'requestVecs') and we only return strict descendants.
-keepDescendantsOf :: HM.HashMap Text Int -> V.Vector Text -> [V.Vector AE.Value] -> [V.Vector AE.Value]
+keepDescendantsOf :: HM.HashMap Text Int -> V.Vector Text -> V.Vector (V.Vector AE.Value) -> [V.Vector AE.Value]
 keepDescendantsOf colIdxMap seedSpanIds rows
-  | V.null seedSpanIds || null rows = []
+  | V.null seedSpanIds || V.null rows = []
   | otherwise =
       let sid r = lookupVecTextByKey r colIdxMap "latency_breakdown"
           pid' r = lookupVecTextByKey r colIdxMap "parent_id"
           childrenByParent :: HM.HashMap Text [V.Vector AE.Value]
-          childrenByParent = HM.fromListWith (<>) [(p, [r]) | r <- rows, Just p <- [pid' r]]
+          childrenByParent = HM.fromListWith (<>) [(p, [r]) | r <- V.toList rows, Just p <- [pid' r]]
           seeds = V.toList seedSpanIds
           go _ [] acc = reverse acc
           go visited (s : rest) acc =
