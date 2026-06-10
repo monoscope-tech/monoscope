@@ -198,10 +198,18 @@ logExplorerUrlPath pid q cols cursor since fromV toV layout source recent = "/p/
 
 -- | Execute arbitrary SQL query and return results as vector of vectors.
 -- Wraps the inner SELECT with `jsonb_build_array` so each row is returned as a
--- single jsonb array of its column values. Works on both Postgres and
--- TimeFusion (both ship `jsonb_build_array(VARIADIC any)`). Caller passes the
--- expected column count — see `Pkg.Parser.wrapForRowExtraction`.
+-- single jsonb array of its column values, in declared column order. Replaces
+-- the legacy `(SELECT json_agg(x.value ORDER BY x.ordinality)::jsonb FROM
+-- json_each(row_to_json(sub.*)) WITH ORDINALITY AS x)` wrapper: same wire
+-- output, but works on TimeFusion (no json_each / row_to_json / WITH ORDINALITY
+-- / row-correlated UDTF needed) and dodges PostgreSQL's JSON-parser hazard on
+-- TEXT columns containing NULL bytes or lone surrogates.
+--
+-- Caller passes the expected column count of the inner SELECT. `colCount <= 0`
+-- returns an empty vector without touching the database — `sub()` with zero
+-- column aliases is not valid SQL.
 executeArbitraryQuery :: DB es => Int -> HI.Sql -> Eff es (V.Vector (V.Vector AE.Value))
+executeArbitraryQuery colCount _ | colCount <= 0 = pure V.empty
 executeArbitraryQuery colCount querySql = do
   let aliases = T.intercalate "," ["c" <> show i | i <- [1 .. colCount]]
   results :: [AE.Value] <-
@@ -215,6 +223,7 @@ executeArbitraryQuery colCount querySql = do
 -- | Execute a user-provided SQL query with mandatory project_id filtering.
 -- SECURITY: Validates query for dangerous patterns and verifies project_id filter is present in query.
 -- Note: The query must already contain project_id='<pid>' filtering (via {{project_id}} placeholder substitution done before calling this function)
+-- TODO: Still uses the legacy json_each/row_to_json wrapper since callers (Dashboards, AI raw-SQL) pass arbitrary user/LLM SQL without a known column count. Migrate to jsonb_build_array once column counts can be derived (e.g. via a parsing pass or a probe).
 executeSecuredQuery :: DB es => Projects.ProjectId -> Text -> Int -> Eff es (Either Text (V.Vector (V.Vector AE.Value)))
 executeSecuredQuery pid userQuery limit
   | not (validateSqlQuery userQuery) = pure $ Left "Query contains disallowed operations"
