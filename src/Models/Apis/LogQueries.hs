@@ -217,7 +217,7 @@ executeArbitraryQuery colCount querySql = do
       $ rawSql ("SELECT jsonb_build_array(" <> aliases <> ") FROM (")
       <> querySql
       <> rawSql (") sub(" <> aliases <> ")")
-  pure $ V.fromList $ mapMaybe jsonArrayToVector results
+  pure $ V.mapMaybe jsonArrayToVector (V.fromList results)
 
 
 -- | Execute a user-provided SQL query with mandatory project_id filtering.
@@ -331,7 +331,7 @@ selectLogTable pid queryAST queryText cursorM dateRange projectedColsByUser sour
       -- in `toColNames` (display columns only). Include it in the alias list or
       -- PG rejects with "column alias list must be the same length as the number
       -- of output columns".
-      $ executeArbitraryQuery (length queryComponents.toColNames + if queryComponents.hasCountOver then 1 else 0) (rawSql q)
+      $ executeArbitraryQuery (length queryComponents.toColNames + fromEnum queryComponents.hasCountOver) (rawSql q)
   case result of
     Left e -> pure $ Left $ show e
     Right logItemsV -> do
