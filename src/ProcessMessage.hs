@@ -190,7 +190,7 @@ processMessages msgs attrs =
         Metrics.timed Metrics.ingestWriteHist []
           $ Telemetry.insertAndHandOff appCtx.env.enableTimefusionWrites appCtx.extractionWorker projectCaches (V.map (\(_, _, s) -> s) paired)
 
-    let pairedSpans = case mWrite of Just (_, p) -> p; Nothing -> V.empty
+    let pairedSpans = maybe V.empty snd mWrite
         idToSource = HM.fromList [(s.id, (a, r)) | (a, r, s) <- V.toList pairedSpans]
     pure $ case writeRes of
       Left wf -> Left wf

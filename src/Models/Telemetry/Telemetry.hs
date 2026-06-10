@@ -933,6 +933,13 @@ writeFailureDlqHeaders wf =
 --
 -- Generic over PG vs TF: both call sites are symmetric. Programmer-bug
 -- exceptions (non-Hasql) propagate as Left without retry.
+-- | Cap on retry attempts per store inside 'retryHasqlWrite'. ~25s of wall
+-- time at the exponential backoff used here. Both PG and TF call sites pass
+-- this so a future tuning change moves both in lock-step.
+maxWriteAttempts :: Int
+maxWriteAttempts = 10
+
+
 retryHasqlWrite
   :: (Concurrent :> es, IOE :> es, Log :> es, Monoid a)
   => Int
@@ -994,12 +1001,12 @@ bulkInsertOtelLogsAndSpansTF enableTf records = do
     $ AE.object [("record_count", AE.toJSON $ V.length records), ("enableTimefusionWrites", AE.toJSON enableTf)]
   if enableTf
     then Ki.scoped \scope -> do
-      pgThread <- forkWithCtx scope $ retryHasqlWrite 10 "pg" (bulkInsertOtelLogsAndSpans records)
-      tfThread <- forkWithCtx scope $ retryHasqlWrite 10 "tf" (labeled @"timefusion" @Hasql $ bulkInsertOtelLogsAndSpans records)
+      pgThread <- forkWithCtx scope $ retryHasqlWrite maxWriteAttempts "pg" (bulkInsertOtelLogsAndSpans records)
+      tfThread <- forkWithCtx scope $ retryHasqlWrite maxWriteAttempts "tf" (labeled @"timefusion" @Hasql $ bulkInsertOtelLogsAndSpans records)
       (pgRes, tfRes) <- Ki.atomically $ (,) <$> Ki.await pgThread <*> Ki.await tfThread
       classify pgRes tfRes
     else do
-      pgRes <- retryHasqlWrite 10 "pg" (bulkInsertOtelLogsAndSpans records)
+      pgRes <- retryHasqlWrite maxWriteAttempts "pg" (bulkInsertOtelLogsAndSpans records)
       case pgRes of
         Right bir -> pure (Right (V.map (second This) bir.poisonRows))
         Left e -> do
@@ -1027,9 +1034,8 @@ bulkInsertOtelLogsAndSpansTF enableTf records = do
 
     -- Per-row attribution: a row appears in the result iff at least one side
     -- rejected it. Rows accepted by both stores are silently absent (full
-    -- success). The two single-side branches short-circuit the HashMap
-    -- machinery for the common case where only one store rejected rows
-    -- (and the empty-both case which runs on every successful batch).
+    -- success). Result order is HashMap-iteration order — DLQ consumers
+    -- process entries independently, so order is irrelevant downstream.
     combinePoison :: BulkInsertResult -> BulkInsertResult -> V.Vector (OtelLogsAndSpans, RowPoisonInfo)
     combinePoison pg tf
       | V.null pg.poisonRows && V.null tf.poisonRows = V.empty
@@ -1042,7 +1048,7 @@ bulkInsertOtelLogsAndSpansTF enableTf records = do
               both = HM.intersectionWith (\(r, pe) (_, te) -> (r, These pe te)) pgMap tfMap
               pgOnly = HM.map (second This) (pgMap `HM.difference` tfMap)
               tfOnly = HM.map (second That) (tfMap `HM.difference` pgMap)
-           in V.fromList $ HM.elems (both <> pgOnly <> tfOnly)
+           in V.fromList $ HM.elems (HM.unions [both, pgOnly, tfOnly])
 
 
 -- | Persist `records` to Postgres (+TimeFusion when enabled) and hand each

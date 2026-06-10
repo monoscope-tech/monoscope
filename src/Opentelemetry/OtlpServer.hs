@@ -17,7 +17,7 @@ module Opentelemetry.OtlpServer (
 ) where
 
 import Control.Concurrent (forkIO, threadDelay)
-import Control.Exception (throwIO)
+import Control.Exception (ErrorCall (..), throwIO)
 import Control.Exception.Annotated (checkpoint)
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
@@ -266,6 +266,14 @@ dualWriteWithPoisonMapping appCtx label caches perMsg = do
       !perRecordSource = concat [replicate (V.length rs) (ackId, raw) | (ackId, raw, rs) <- perMsg]
   stamped <- stampOrPassthrough appCtx allRecords
   minted <- Telemetry.mintOtelLogIds stamped
+  -- Guard the 1:1 ordering invariant explicitly: if either upstream step ever
+  -- drops or reorders records, silent zipWith misalignment would associate the
+  -- wrong (ackId, raw) with a record. Fail loud at the boundary instead.
+  when (length perRecordSource /= V.length minted)
+    $ liftIO
+    $ throwIO
+    $ ErrorCall
+      ("dualWriteWithPoisonMapping: record count mismatch after stamp/mint (sources=" <> show (length perRecordSource) <> ", minted=" <> show (V.length minted) <> ")")
   let !idToSource = HM.fromList (zipWith (\(ackId, raw) r -> (r.id, (ackId, raw))) perRecordSource (V.toList minted))
   checkpoint
     (fromString $ "processList:" <> toString label <> ":bulkInsert")
