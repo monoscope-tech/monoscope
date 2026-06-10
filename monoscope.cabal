@@ -424,6 +424,7 @@ library
     , text
     , text-builder-linear
     , text-display
+    , these
     , time
     , time-manager
     , tmp-postgres
@@ -728,6 +729,7 @@ test-suite integration-tests
     , servant-htmx
     , servant-server
     , text
+    , these
     , time
     , unliftio
     , unordered-containers
@@ -1080,6 +1082,7 @@ test-suite test-dev
     , text
     , text-builder-linear
     , text-display
+    , these
     , time
     , time-manager
     , tmp-postgres

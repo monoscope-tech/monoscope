@@ -3,6 +3,7 @@ module Pages.Replay (replayPostH, ReplayPost (..), processReplayEvents, replaySe
 import Codec.Compression.GZip qualified as GZip
 import Conduit (runConduit)
 import Control.Exception (throwIO, try)
+import Models.Telemetry.Telemetry qualified as Telemetry
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEKey
 import Data.Aeson.KeyMap qualified as KM
@@ -284,14 +285,20 @@ skipStringBody =
 -- per-message handoff so finished messages are GC-eligible immediately.
 -- Drop counts feed `OtlpServer.bumpErrorCounter` so they roll up in the same
 -- minute-cadence summary as wire/UTF-8 parse errors — no per-event log spam.
-processReplayEvents :: [(Text, ByteString)] -> HashMap Text Text -> ATBackgroundCtx [Text]
-processReplayEvents [] _ = pure []
+-- | Replay doesn't dual-write so it can't surface a 'Telemetry.WriteFailure'.
+-- Oversize + decode-failed messages are returned as 'PoisonMsg' so Pkg.Queue
+-- can DLQ their raw bytes before committing offsets (no silent drop). S3/Minio
+-- transport errors still propagate as exceptions through the outer tryAny.
+processReplayEvents :: [(Text, ByteString)] -> HashMap Text Text -> ATBackgroundCtx (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))
+processReplayEvents [] _ = pure (Right ([], []))
 processReplayEvents msgs _attrs = do
   ctx <- Effectful.Reader.Static.ask @AuthContext
   let envCfg = ctx.config
       (oversized, valid) = partition (\(_, b) -> BS.length b > maxReplayMessageBytes) msgs
+      oversizePoison = [(ackId, body, "replay:oversize_message") | (ackId, body) <- oversized]
   traverse_ (\_ -> Metrics.bumpErrorCounter "replay:oversize_message") oversized
-  fmap concat $ mapM (handleChunk envCfg ctx.jobsPool) (chunkByBytes valid)
+  (acks, decodePoison) <- mconcat <$> mapM (handleChunk envCfg ctx.jobsPool) (chunkByBytes valid)
+  pure $ Right (acks, oversizePoison <> decodePoison)
   where
     chunkByBytes = go 0 [] []
       where
@@ -301,14 +308,17 @@ processReplayEvents msgs _attrs = do
               go (BS.length (snd m)) [m] (reverse chunk : chunks) rest
           | otherwise = go (sz + BS.length (snd m)) (m : chunk) chunks rest
 
-    handleChunk envCfg jobsPool chunk = fmap catMaybes $ forM chunk $ \(!ackId, !body) ->
+    -- Returns @(acks, poison)@ for one chunk so the caller can DLQ poison and
+    -- ack only the successfully-saved + DLQ'd ackIds.
+    handleChunk envCfg jobsPool chunk = mconcat <$> forM chunk \(!ackId, !body) ->
       case splitReplayPayload (stripJsonNullEscapes body) of
-        Left _ -> do
-          -- Counter only — under a flood of corrupt payloads, a per-message
-          -- log call would be the heap-pressure source we just eliminated.
+        Left err -> do
           Metrics.bumpErrorCounter "replay:decode_error"
-          pure (Just ackId)
-        Right payload -> saveReplayMinio envCfg jobsPool ackId payload
+          pure ([], [(ackId, body, "replay:decode_error: " <> toText err)])
+        Right payload ->
+          saveReplayMinio envCfg jobsPool ackId payload <&> \case
+            Just acked -> ([acked], [])
+            Nothing -> ([], [])
 
 
 -- | Retrieve a legacy single-object replay blob. Returns `Left` on transport

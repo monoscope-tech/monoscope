@@ -41,6 +41,7 @@ import Data.HashTable.ST.Cuckoo qualified as HT
 import Data.Text qualified as T
 import Data.Time (addUTCTime, zonedTimeToUTC)
 import Data.Time.LocalTime (ZonedTime)
+import Data.HashSet qualified as HS
 import Data.Tuple.Extra (fst3)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -136,18 +137,22 @@ processMessages
   :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Tracing :> es, UUIDEff :> es)
   => [(Text, ByteString)]
   -> HM.HashMap Text Text
-  -> Eff es [Text]
-processMessages [] _ = pure []
+  -> Eff es (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))
+processMessages [] _ = pure (Right ([], []))
 processMessages msgs attrs =
   withSpan_ "pubsub.process_messages" (batchSpanAttrs (length msgs) attrs) do
     appCtx <- Eff.ask @AuthContext
-    (rMsgs, mWrite) <- Metrics.timed Metrics.ingestDecodeHist [] do
-      rMsgs <-
-        catMaybes <$> forM msgs \(ackId, msg) -> case AE.eitherDecodeStrict (BS.filter (/= 0) msg) of
-          Left err -> Nothing <$ Log.logAttention "Error parsing json msgs" (object ["AckId" .= ackId, "Error" .= err, "OriginalMsg" .= decodeUtf8 @Text msg])
-          Right m -> pure $ Just (ackId, BS.length msg, m)
+    (rAckIds, poison, mWrite) <- Metrics.timed Metrics.ingestDecodeHist [] do
+      let decoded =
+            [ (ackId, msg, AE.eitherDecodeStrict (BS.filter (/= 0) msg))
+            | (ackId, msg) <- msgs
+            ]
+          rMsgs = [(ackId, msg, m) | (ackId, msg, Right m) <- decoded]
+          poison = [(ackId, msg, toText err) | (ackId, msg, Left err) <- decoded]
+      forM_ poison \(ackId, msg, err) ->
+        Log.logAttention "Error parsing json msgs" (object ["AckId" .= ackId, "Error" .= err, "OriginalMsg" .= decodeUtf8 @Text msg])
       if null rMsgs
-        then pure (rMsgs, Nothing)
+        then pure (map (\(a, _, _) -> a) rMsgs, poison, Nothing)
         else do
           projectCaches <-
             liftIO $ HM.fromList <$> forM (ordNub $ (\(_, _, m) -> UUIDId m.projectId) <$> rMsgs) \pid -> do
@@ -157,24 +162,40 @@ processMessages msgs attrs =
                   . Projects.projectCacheByIdIO appCtx.hasqlJobsPool
               pure (pid, cache)
 
-          spans <- forM rMsgs \(_, rawSize, msg) -> runMaybeT do
+          -- Track (ackId, raw) alongside each emitted span so we can map any
+          -- per-row write poison back to the source message for DLQ routing.
+          paired <- forM rMsgs \(ackId, raw, msg) -> runMaybeT do
             let pid = UUIDId msg.projectId
-                !msgSize = fromIntegral rawSize
+                !msgSize = fromIntegral (BS.length raw)
             cache <- hoistMaybe $ HM.lookup pid projectCaches
             let !totalDailyEvents = fromIntegral cache.dailyEventCount + fromIntegral cache.dailyMetricCount
                 !isFreeTier = cache.paymentPlan == "Free"
             guard $ not (isFreeTier && totalDailyEvents >= freeTierDailyMaxEvents)
             spanId <- lift UUID.genUUID
             trId <- lift $ UUID.toText <$> UUID.genUUID
-            pure $! convertRequestMessageToSpan msg msgSize (spanId, trId)
+            pure $! (ackId, raw, convertRequestMessageToSpan msg msgSize (spanId, trId))
 
-          pure (rMsgs, Just (projectCaches, V.fromList (catMaybes spans)))
+          pure (map (\(a, _, _) -> a) rMsgs, poison, Just (projectCaches, V.fromList (catMaybes paired)))
 
-    forM_ mWrite \(projectCaches, spanVec) ->
-      Metrics.timed Metrics.ingestWriteHist []
-        $ Telemetry.insertAndHandOff appCtx.env.enableTimefusionWrites appCtx.extractionWorker projectCaches spanVec
+    writeRes <- case mWrite of
+      Nothing -> pure (Right V.empty)
+      Just (projectCaches, paired) ->
+        Metrics.timed Metrics.ingestWriteHist []
+          $ Telemetry.insertAndHandOff appCtx.env.enableTimefusionWrites appCtx.extractionWorker projectCaches (V.map (\(_, _, s) -> s) paired)
 
-    pure $ map fst3 rMsgs
+    let pairedSpans = case mWrite of Just (_, p) -> p; Nothing -> V.empty
+        idToSource = HM.fromList [(s.id, (a, r)) | (a, r, s) <- V.toList pairedSpans]
+    pure $ case writeRes of
+      Left wf -> Left wf
+      Right rowPoison ->
+        let writePoison =
+              [ (ackId, raw, "row insert failed")
+              | (s, _) <- V.toList rowPoison
+              , Just (ackId, raw) <- [HM.lookup s.id idToSource]
+              ]
+            poisonAcks = HS.fromList [a | (a, _, _) <- writePoison]
+            successAcks = filter (\a -> not (HS.member a poisonAcks)) rAckIds
+         in Right (successAcks, poison <> writePoison)
 
 
 -- | Process a single span to extract entities for hash-stamping.

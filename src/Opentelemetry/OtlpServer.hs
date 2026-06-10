@@ -35,6 +35,7 @@ import Data.HashSet qualified as HS
 import Data.List qualified as L
 import Data.Map qualified as Map
 import Data.ProtoLens.Encoding (decodeMessage, encodeMessage)
+import Data.These (These (..))
 import Data.Scientific (fromFloatDigits)
 import Data.Text qualified as T
 import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
@@ -236,20 +237,90 @@ stampOrPassthrough appCtx v =
       pure v
 
 
--- | Process a list of messages
-processList :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es, UUIDEff :> es) => [(Text, ByteString)] -> HM.HashMap Text Text -> Eff es [Text]
-processList [] _ = pure []
+-- | The dbInsert callback for the logs/traces paths in 'processBatchPipeline'.
+-- Flattens per-msg records for the dual-write, then maps any per-row poison
+-- back to its source @(ackId, rawBytes)@ so Pkg.Queue can DLQ those exact
+-- source messages (not the bulk batch).
+--
+-- Index-alignment assumes 'stampOrPassthrough' and 'mintOtelLogIds' preserve
+-- record order and length (both are V-mapped 1:1 today).
+dualWriteWithPoisonMapping
+  :: ( Concurrent :> es
+     , Hasql.Hasql :> es
+     , IOE :> es
+     , Ki.StructuredConcurrency :> es
+     , Labeled "timefusion" Hasql.Hasql :> es
+     , Log :> es
+     , Time.Time :> es
+     , UUIDEff :> es
+     )
+  => AuthContext
+  -> Text
+  -- ^ label for checkpoint ("logs" / "traces")
+  -> HM.HashMap Projects.ProjectId Projects.ProjectCache
+  -> [(Text, ByteString, V.Vector Telemetry.OtelLogsAndSpans)]
+  -- ^ per source-message records
+  -> Eff es (Either Telemetry.WriteFailure [Telemetry.PoisonMsg])
+dualWriteWithPoisonMapping appCtx label caches perMsg = do
+  let !allRecords = V.concat [rs | (_, _, rs) <- perMsg]
+      !perRecordSource = concat [replicate (V.length rs) (ackId, raw) | (ackId, raw, rs) <- perMsg]
+  stamped <- stampOrPassthrough appCtx allRecords
+  minted <- Telemetry.mintOtelLogIds stamped
+  let !idToSource = HM.fromList (zipWith (\(ackId, raw) r -> (r.id, (ackId, raw))) perRecordSource (V.toList minted))
+  checkpoint (fromString $ "processList:" <> toString label <> ":bulkInsert")
+    (Telemetry.insertAndHandOff appCtx.env.enableTimefusionWrites appCtx.extractionWorker caches minted)
+    <&> \case
+      Left wf -> Left wf
+      Right rowPoison ->
+        Right
+          [ (ackId, raw, reasonFor info)
+          | (r, info) <- V.toList rowPoison
+          , Just (ackId, raw) <- [HM.lookup r.id idToSource]
+          ]
+  where
+    reasonFor info = case (info.pgError, info.tfError) of
+      (Just pg, Just tf) -> "row insert failed (both): pg=" <> show pg <> "; tf=" <> show tf
+      (Just pg, Nothing) -> "row insert failed (pg-only): " <> show pg
+      (Nothing, Just tf) -> "row insert failed (tf-only): " <> show tf
+      (Nothing, Nothing) -> "row insert failed (unknown — both sides null)"
+
+
+-- | Boundary adapter: convert a 'WriteFailure' to a gRPC INTERNAL error.
+-- Used at the gRPC handler edge where clients expect status codes via throw,
+-- not Either. Internal pipeline code stays Either-based.
+throwOnWriteFailure :: (IOE :> es, Log :> es) => Either Telemetry.WriteFailure (V.Vector (Telemetry.OtelLogsAndSpans, Telemetry.RowPoisonInfo)) -> Eff es ()
+throwOnWriteFailure = \case
+  Right rowPoison
+    | V.null rowPoison -> pass
+    | otherwise ->
+        -- Whole-side write succeeded but some rows had per-row failures (TF
+        -- rejected a row PG accepted, or vice versa). gRPC clients can't act
+        -- on per-row state — log loudly so the discrepancy is visible.
+        Log.logAttention "OTLP_GRPC_ROW_POISON_BUT_RETURNING_OK"
+          $ AE.object ["poison_count" AE..= V.length rowPoison]
+  Left wf ->
+    liftIO
+      $ throwIO
+      $ GrpcException
+        { grpcError = GrpcInternal
+        , grpcErrorMessage = Just $ "OTLP write failed: " <> Telemetry.writeFailureSummary wf
+        , grpcErrorMetadata = []
+        , grpcErrorDetails = Nothing
+        }
+
+
+-- | Process a list of OTLP-encoded messages. On success, returns
+-- @(writeAckIds, poisonMsgs)@: writeAckIds are the messages that landed in
+-- both stores; poisonMsgs are decode failures whose raw bytes must be DLQ'd
+-- by Pkg.Queue before committing offsets. On dual-write failure, returns
+-- 'Left WriteFailure'. Never throws on write/decode failure.
+processList :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es, UUIDEff :> es) => [(Text, ByteString)] -> HM.HashMap Text Text -> Eff es (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))
+processList [] _ = pure (Right ([], []))
 processList msgs !attrs =
   withSpan_ "otlp.process_list" (batchSpanAttrs (length msgs) attrs)
     $ checkpoint "processList" do
       startTime <- Time.currentTime
-      -- Exceptions from `process` (most importantly dbInsert / TF write failures)
-      -- MUST propagate so Pkg.Queue's batch-failure handler can route the batch:
-      -- Hasql-transient → no ack (broker redelivers); anything else → DLQ via
-      -- publishToDeadLetterQueue, ack only if DLQ accepted. Wrapping in
-      -- onException + returning ackIds here would silently drop the entire
-      -- batch (see TimefusionWriteFailureSpec for the regression).
-      (result, processingTime, dbInsertTime) <- process startTime
+      result <- process startTime
       endTime <- Time.currentTime
 
       let duration = diffUTCTime endTime startTime
@@ -260,8 +331,7 @@ processList msgs !attrs =
             , "event_count" AE..= length msgs
             , "duration_seconds" AE..= realToFrac @_ @Double duration
             , "duration_ms" AE..= (round (duration * 1000) :: Int)
-            , "processing_ms" AE..= processingTime
-            , "db_insert_ms" AE..= dbInsertTime
+            , "outcome" AE..= either Telemetry.writeFailureSummary (const "ok") result
             ]
         )
       pure result
@@ -283,12 +353,7 @@ processList msgs !attrs =
                     !pids = V.fromList [(k, pid) | (k, pid) <- HM.toList keyToId, k `V.elem` pkeys]
                  in V.concatMap (V.fromList . convertResourceLogsToOtelLogs ft caches pids) rls
             )
-            ( \caches v -> do
-                stamped <- stampOrPassthrough appCtx v
-                Telemetry.mintOtelLogIds stamped
-                  >>= checkpoint "processList:logs:bulkInsert"
-                  . Telemetry.insertAndHandOff appCtx.env.enableTimefusionWrites appCtx.extractionWorker caches
-            )
+            (dualWriteWithPoisonMapping appCtx "logs")
         Just "org.opentelemetry.otlp.traces.v1" ->
           processBatchPipeline @TS.ExportTraceServiceRequest
             "traces"
@@ -303,12 +368,7 @@ processList msgs !attrs =
                     !pids = V.fromList [(k, pid) | (k, pid) <- HM.toList keyToId, k `V.elem` pkeys]
                  in V.fromList $ convertResourceSpansToOtelLogs ft caches pids rss
             )
-            ( \caches v -> do
-                stamped <- stampOrPassthrough appCtx v
-                Telemetry.mintOtelLogIds stamped
-                  >>= checkpoint "processList:traces:bulkInsert"
-                  . Telemetry.insertAndHandOff appCtx.env.enableTimefusionWrites appCtx.extractionWorker caches
-            )
+            (dualWriteWithPoisonMapping appCtx "traces")
         Just "org.opentelemetry.otlp.metrics.v1" ->
           processBatchPipeline @MS.ExportMetricsServiceRequest
             "metrics"
@@ -323,15 +383,23 @@ processList msgs !attrs =
                     !pid2M = Projects.projectIdFromText =<< getMetricAttributeValue "at-project-id" rms
                  in maybe V.empty (\pid -> V.fromList $ convertResourceMetricsToMetricRecords ft caches pid rms) (pidM <|> pid2M)
             )
-            (\_caches -> checkpoint "processList:metrics:bulkInsert" . Telemetry.bulkInsertMetrics)
+            ( \_caches perMsg ->
+                -- Metrics don't dual-write yet; surface a whole-batch Left on
+                -- failure (no per-row poison). Per-row attribution comes when
+                -- metrics adopts the dual-write path.
+                let flat = V.concat [recs | (_, _, recs) <- perMsg]
+                 in tryAny (checkpoint "processList:metrics:bulkInsert" $ Telemetry.bulkInsertMetrics flat) <&> \case
+                      Right _ -> Right []
+                      Left e -> Left (This e)
+            )
         _ -> do
           Log.logAttention "processList: unsupported opentelemetry data type" (AE.object ["ce-type" AE..= HM.lookup "ce-type" attrs])
-          pure ([], 0, 0)
+          pure (Right ([], []))
 
 
 processBatchPipeline
   :: forall req res es
-   . (DB es, Eff.Reader AuthContext :> es, Log :> es, Message req, Time.Time :> es)
+   . (DB es, Eff.Reader AuthContext :> es, Log :> es, Message req)
   => Text
   -> [(Text, ByteString)]
   -> AuthContext
@@ -339,56 +407,49 @@ processBatchPipeline
   -> (req -> V.Vector Text) -- extract project keys
   -> (req -> [Projects.ProjectId]) -- extract project IDs
   -> (UTCTime -> HM.HashMap Projects.ProjectId Projects.ProjectCache -> HM.HashMap Text Projects.ProjectId -> req -> V.Vector res) -- per-message converter
-  -> (HM.HashMap Projects.ProjectId Projects.ProjectCache -> V.Vector res -> Eff es ()) -- DB insert (caches threaded for worker hand-off)
-  -> Eff es ([Text], Int, Int)
+  -> (HM.HashMap Projects.ProjectId Projects.ProjectCache -> [(Text, ByteString, V.Vector res)] -> Eff es (Either Telemetry.WriteFailure [Telemetry.PoisonMsg])) -- DB insert; returns per-row poison resolved to source ackId+raw
+  -> Eff es (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))
 processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds convert dbInsert =
   checkpoint (cp "") do
-    ((ackIds, dbInsertDuration), processingDuration) <- Log.timeAction do
-      let !decodedMsgs = [(ackId, decodeMessage msg :: Either String req) | (ackId, msg) <- msgs]
-          !allProjectKeys = V.concat [extractKeys req | (_, Right req) <- decodedMsgs]
-          !uniqueProjectKeys = V.fromList $ toList $ HS.fromList $ V.toList allProjectKeys
-          !atIds = concatMap extractIds [req | (_, Right req) <- decodedMsgs]
+    let !decodedMsgs = [(ackId, msg, decodeMessage msg :: Either String req) | (ackId, msg) <- msgs]
+        !allProjectKeys = V.concat [extractKeys req | (_, _, Right req) <- decodedMsgs]
+        !uniqueProjectKeys = V.fromList $ toList $ HS.fromList $ V.toList allProjectKeys
+        !atIds = concatMap extractIds [req | (_, _, Right req) <- decodedMsgs]
 
-      (!keyToIdMap, !projectCachesMap) <-
-        if V.null uniqueProjectKeys
-          then pure (HM.empty, HM.empty)
-          else do
-            !projectIdsAndKeys <- checkpoint (cp ":getProjectIds") $ ProjectApiKeys.projectIdsByProjectApiKeys uniqueProjectKeys
-            let !keyToId = HM.fromList $ V.toList projectIdsAndKeys
-                -- fold values directly to avoid HM.elems intermediate list
-                !projectIds = HS.toList $ HM.foldr' HS.insert (HS.fromList atIds) keyToId
-            !projectCaches <-
-              checkpoint (cp ":getProjectCaches")
-                $ liftIO
-                $ HM.fromList
-                <$> forM projectIds \pid -> do
-                  !cache <- Cache.fetchWithCache appCtx.projectCache pid \pid' ->
-                    fromMaybe Projects.defaultProjectCache <$> Projects.projectCacheByIdIO appCtx.hasqlJobsPool pid'
-                  pure (pid, cache)
-            pure (keyToId, projectCaches)
+    (!keyToIdMap, !projectCachesMap) <-
+      if V.null uniqueProjectKeys
+        then pure (HM.empty, HM.empty)
+        else do
+          !projectIdsAndKeys <- checkpoint (cp ":getProjectIds") $ ProjectApiKeys.projectIdsByProjectApiKeys uniqueProjectKeys
+          let !keyToId = HM.fromList $ V.toList projectIdsAndKeys
+              !projectIds = HS.toList $ HM.foldr' HS.insert (HS.fromList atIds) keyToId
+          !projectCaches <-
+            checkpoint (cp ":getProjectCaches")
+              $ liftIO
+              $ HM.fromList
+              <$> forM projectIds \pid -> do
+                !cache <- Cache.fetchWithCache appCtx.projectCache pid \pid' ->
+                  fromMaybe Projects.defaultProjectCache <$> Projects.projectCacheByIdIO appCtx.hasqlJobsPool pid'
+                pure (pid, cache)
+          pure (keyToId, projectCaches)
 
-      let !processedMsgs =
-            [ case decodeResult of
-                Left _ -> (ackId, V.empty)
-                Right req -> let !out = convert fallbackTime projectCachesMap keyToIdMap req in (ackId, out)
-            | (ackId, decodeResult) <- decodedMsgs
-            ]
+    let !decodePoison = [(ackId, raw, toText err) | (ackId, raw, Left err) <- decodedMsgs]
+        !writeReady = [(ackId, raw, convert fallbackTime projectCachesMap keyToIdMap req) | (ackId, raw, Right req) <- decodedMsgs]
+        !writeAckIds = [ackId | (ackId, _, _) <- writeReady]
+        !anyRows = any (not . V.null) [recs | (_, _, recs) <- writeReady]
 
-      forM_ [(idx, err) | (idx, (_, Left err)) <- zip [0 ..] decodedMsgs] \(idx, err) ->
-        recordProtoError label err (snd $ msgs L.!! idx) Log.logAttention
+    forM_ decodePoison \(_, raw, err) -> recordProtoError label (toString err) raw Log.logAttention
 
-      let !results = V.fromList processedMsgs
-          (!ackIdsV, !outputVectors) = V.unzip results
-          !allOutput = V.concatMap Relude.id outputVectors
-
-      -- dbInsert exceptions intentionally PROPAGATE: Pkg.Queue.{kafka,pubsub}Service
-      -- catches them and routes Hasql-transient → no-ack (broker redelivers),
-      -- anything else → DLQ via publishToDeadLetterQueue, ack only on DLQ success.
-      -- Do NOT wrap in tryAny here — that would re-introduce the silent-drop bug.
-      (_, dbDur) <- Log.timeAction $ unless (V.null allOutput) $ dbInsert projectCachesMap allOutput
-      pure (V.toList ackIdsV, dbDur)
-
-    pure (ackIds, round (processingDuration * 1000), round (dbInsertDuration * 1000))
+    if not anyRows
+      then pure (Right (writeAckIds, decodePoison))
+      else dbInsert projectCachesMap writeReady <&> \case
+        Left wf -> Left wf
+        Right writePoison ->
+          -- Successfully-written rows are acked; write-poisoned rows are removed
+          -- from acks and added to the poison list (Pkg.Queue DLQs them).
+          let writePoisonAcks = HS.fromList [a | (a, _, _) <- writePoison]
+              successAcks = filter (\a -> not (HS.member a writePoisonAcks)) writeAckIds
+           in Right (successAcks, decodePoison <> writePoison)
   where
     cp suffix = fromString $ toString $ "processList:" <> label <> suffix
 
@@ -1456,6 +1517,7 @@ processTraceRequest metadataApiKey req = do
     stampedSpans <- stampOrPassthrough appCtx spans'
     mintedSpans <- Telemetry.mintOtelLogIds stampedSpans
     Telemetry.insertAndHandOff appCtx.env.enableTimefusionWrites appCtx.extractionWorker projectCaches mintedSpans
+      >>= throwOnWriteFailure
     Log.logTrace
       "Traces: Successfully inserted spans into database"
       (AE.object ["inserted_count" AE..= V.length mintedSpans])
@@ -1527,6 +1589,7 @@ processLogsRequest metadataApiKey req = do
     stampedLogs <- stampOrPassthrough appCtx logs
     mintedLogs <- Telemetry.mintOtelLogIds stampedLogs
     Telemetry.insertAndHandOff appCtx.env.enableTimefusionWrites appCtx.extractionWorker projectCaches mintedLogs
+      >>= throwOnWriteFailure
     Log.logTrace
       "Logs: Successfully inserted logs into database"
       (AE.object ["inserted_count" AE..= V.length mintedLogs])

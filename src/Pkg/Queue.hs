@@ -9,6 +9,7 @@ import Data.Annotation (toAnnotation)
 import Data.ByteString.Char8 qualified as BC
 import Data.ByteString.Lazy.Base64 qualified as LB64
 import Data.Effectful.Hasql qualified as Hasql
+import Models.Telemetry.Telemetry qualified as Telemetry
 import Data.Generics.Product (field)
 import Data.HashMap.Strict qualified as HM
 import Data.Map.Strict qualified as Map
@@ -35,7 +36,7 @@ import System.Tracing (SpanStatus (..), addEvent, setStatus, withSpan)
 import System.Types (ATBackgroundCtx, runBackground)
 import UnliftIO (throwIO)
 import UnliftIO.Async (pooledForConcurrentlyN)
-import UnliftIO.Exception (bracket, try, tryAny)
+import UnliftIO.Exception (bracket, tryAny)
 import UnliftIO.MVar (modifyMVar)
 
 
@@ -96,7 +97,7 @@ closeSharedKafkaProducer = modifyMVar sharedKafkaProducer $ \case
 -- pubsubService connects to the pubsub service and listens for  messages,
 -- then it calls the processMessage function to process the messages, and
 -- acknoleges the list message in one request.
-pubsubService :: Log.Logger -> AuthContext -> TracerProvider -> [Text] -> ([(Text, ByteString)] -> HM.HashMap Text Text -> ATBackgroundCtx [Text]) -> IO ()
+pubsubService :: Log.Logger -> AuthContext -> TracerProvider -> [Text] -> ([(Text, ByteString)] -> HM.HashMap Text Text -> ATBackgroundCtx (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))) -> IO ()
 pubsubService appLogger appCtx tp topics fn = checkpoint "pubsubService" do
   let envConfig = appCtx.config
   env <- case envConfig.googleServiceAccountB64 of
@@ -141,36 +142,19 @@ pubsubService appLogger appCtx tp topics fn = checkpoint "pubsubService" do
                   ]
                   \sp -> do
                     addEvent sp "batch.started" []
-                    result <- try $ fn validMsgs (maybeToMonoid firstAttrs)
-                    case result of
-                      Left (e :: SomeException) -> do
-                        let !errText = toText $ show e
-                        addEvent sp "batch.failed" [("error", OA.toAttribute errText)]
-                        setStatus sp (Error errText)
-                        throwIO e
-                      Right ids -> do
-                        addEvent sp "batch.completed" [("processed_count", OA.toAttribute (length ids))]
+                    res <- fn validMsgs (maybeToMonoid firstAttrs)
+                    case res of
+                      Right (ids, poison) -> do
+                        addEvent sp "batch.completed" [("processed_count", OA.toAttribute (length ids)), ("poison_count", OA.toAttribute (length poison))]
                         setStatus sp Ok
-                        pure ids
+                        pure (Right (ids, poison))
+                      Left wf -> do
+                        let !summary = Telemetry.writeFailureSummary wf
+                        addEvent sp "batch.write_failed" [("write_failure", OA.toAttribute summary)]
+                        setStatus sp (Error summary)
+                        pure (Left wf)
             )
-            >>= \case
-              Left e -> do
-                let !errText = toText $ show e
-                liftIO
-                  $ runLogT "pubsub-service" appLogger LogAttention
-                  $ LogBase.logAttention "pubsubService: error processing batch"
-                  $ AE.object ["error" AE..= errText, "topic" AE..= topic, "message_count" AE..= length validMsgs]
-                -- Transient (Hasql infra) → ack nothing; PubSub redelivers
-                -- after the ack deadline. Anything else is treated as poison
-                -- → park in DLQ; ack only if DLQ accepted.
-                if Hasql.isTransientException e
-                  then pure []
-                  else do
-                    dlqRes <- liftIO $ publishToDeadLetterQueue appLogger appCtx validMsgs (maybeToMonoid firstAttrs) errText
-                    case dlqRes of
-                      Right _ -> pure $ map fst validMsgs
-                      Left _ -> pure []
-              Right ids -> pure ids
+            >>= liftIO . routeBatchOutcome appLogger appCtx "pubsub-service" topic validMsgs (maybeToMonoid firstAttrs)
 
         let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ Just msgIds
         unless (null msgIds) $ void $ PubSub.newPubSubProjectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send env
@@ -208,7 +192,7 @@ publishJSONToKafka appCtx topicName jsonData attributes = checkpoint "publishJSO
     Right res -> pure res
 
 
-kafkaService :: Log.Logger -> AuthContext -> TracerProvider -> [Text] -> Int -> ([(Text, ByteString)] -> HM.HashMap Text Text -> ATBackgroundCtx [Text]) -> IO ()
+kafkaService :: Log.Logger -> AuthContext -> TracerProvider -> [Text] -> Int -> ([(Text, ByteString)] -> HM.HashMap Text Text -> ATBackgroundCtx (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))) -> IO ()
 kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaService" do
   instanceUuid <- UUID.toText <$> UUID.nextRandom
   let clientId = "monoscope-" <> T.take 8 instanceUuid
@@ -263,32 +247,23 @@ kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaSer
                           ]
                         $ \sp -> do
                           addEvent sp "batch.started" []
-                          res <- try $ fn allRecords attributes
+                          res <- fn allRecords attributes
                           case res of
-                            Left (e :: SomeException) -> do
-                              let !errText = toText $ show e
-                              addEvent sp "batch.failed" [("error", OA.toAttribute errText)]
-                              setStatus sp (Error errText)
-                              throwIO e
-                            Right ids -> do
-                              addEvent sp "batch.completed" [("processed_count", OA.toAttribute (length ids))]
+                            Right (ids, poison) -> do
+                              addEvent sp "batch.completed" [("processed_count", OA.toAttribute (length ids)), ("poison_count", OA.toAttribute (length poison))]
                               setStatus sp Ok
-                              pure ids
-                      case result of
-                        Right _ -> pure successTps
-                        Left e -> do
-                          let !errText = toText $ show e
-                          LogBase.logAttention "kafkaService: error processing batch" (AE.object ["error" AE..= errText, "attributes" AE..= attributes])
-                          -- Hasql transient → don't commit (lag grows, librdkafka
-                          -- redelivers). Anything else is poison → park in DLQ
-                          -- and commit only if the DLQ publish succeeded.
-                          if Hasql.isTransientException e
-                            then pure []
-                            else do
-                              dlqRes <- liftIO $ publishToDeadLetterQueue appLogger appCtx allRecords attributes errText
-                              pure $ case dlqRes of
-                                Right _ -> successTps
-                                Left _ -> []
+                              pure (Right (ids, poison))
+                            Left wf -> do
+                              let !summary = Telemetry.writeFailureSummary wf
+                              addEvent sp "batch.write_failed" [("write_failure", OA.toAttribute summary)]
+                              setStatus sp (Error summary)
+                              pure (Left wf)
+                      -- Empty ack list = no commit (broker redelivers); non-empty
+                      -- = all source offsets in this (topic, partition) group are
+                      -- durable (either written or DLQ'd). Kafka can't partial-ack
+                      -- within a partition so we commit all-or-nothing here.
+                      acks <- liftIO $ routeBatchOutcome appLogger appCtx "kafka-service" topic allRecords attributes result
+                      pure $ if null acks then [] else successTps
               -- Bound must stay well under the hasql pool (shared with web) —
               -- AcquisitionTimeout (→ Hasql.isTransientException → no commit →
               -- redelivery storm) is the failure mode to avoid. Single committer
@@ -386,3 +361,62 @@ publishToDeadLetterQueue appLogger appCtx messages attributes errorReason = do
   -- sequence_ over [Either Text ()] yields the FIRST Left (and pure ()
   -- otherwise). Subsequent failures only appear in the dlq log above.
   pure $ sequence_ results
+
+
+-- | Decide which source-topic acks to commit given a batch's outcome.
+-- Returns an empty list when nothing should be committed (broker redelivers).
+--
+-- Semantics:
+--   * Right (writeAcks, []) — happy path; commit writeAcks.
+--   * Right (writeAcks, poison) — DLQ poison first; commit writeAcks ++ poisonAckIds
+--     only if DLQ accepted. On DLQ failure, commit nothing → broker redelivers.
+--   * Left WriteFailure — bounded retries exhausted inside retryHasqlWrite.
+--     DLQ the whole batch with side-tracking headers; commit only if DLQ accepted.
+--   * Left SomeException (non-write) — Hasql-transient: no commit, broker redelivers.
+--     Otherwise: DLQ the whole batch as opaque poison; commit only if DLQ accepted.
+routeBatchOutcome
+  :: Log.Logger
+  -> AuthContext
+  -> Text
+  -- ^ service name for log context ("pubsub-service" / "kafka-service")
+  -> Text
+  -- ^ topic for log context
+  -> [(Text, ByteString)]
+  -- ^ original validMsgs (used when we have to DLQ the whole batch)
+  -> HM.HashMap Text Text
+  -- ^ base attrs (ce-type etc.)
+  -> Either SomeException (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))
+  -> IO [Text]
+routeBatchOutcome appLogger appCtx svc topic validMsgs attrs = \case
+  Right (Right (writeAcks, [])) -> pure writeAcks
+  Right (Right (writeAcks, poison)) -> do
+    let poisonBytes = [(ackId, raw) | (ackId, raw, _) <- poison]
+        poisonAckIds = [ackId | (ackId, _, _) <- poison]
+        firstReason = case poison of (_, _, r) : _ -> r
+        poisonAttrs = attrs <> HM.singleton "monoscope-poison-reason" firstReason
+    runLogT svc appLogger LogAttention
+      $ LogBase.logAttention "routeBatchOutcome: poison messages → DLQ"
+      $ AE.object ["topic" AE..= topic, "poison_count" AE..= length poison, "write_acks" AE..= length writeAcks]
+    publishToDeadLetterQueue appLogger appCtx poisonBytes poisonAttrs firstReason >>= \case
+      Right _ -> pure (writeAcks <> poisonAckIds)
+      Left _ -> pure [] -- broker redelivers; on retry the writes are repeated (need idempotency)
+  Right (Left wf) -> do
+    let summary = Telemetry.writeFailureSummary wf
+        dlqAttrs = attrs <> Telemetry.writeFailureDlqHeaders wf
+    runLogT svc appLogger LogAttention
+      $ LogBase.logAttention "routeBatchOutcome: write failure → DLQ"
+      $ AE.object ["topic" AE..= topic, "write_failure" AE..= summary, "message_count" AE..= length validMsgs]
+    publishToDeadLetterQueue appLogger appCtx validMsgs dlqAttrs summary >>= \case
+      Right _ -> pure (map fst validMsgs)
+      Left _ -> pure []
+  Left e -> do
+    let errText = toText (show e)
+    runLogT svc appLogger LogAttention
+      $ LogBase.logAttention "routeBatchOutcome: non-write exception"
+      $ AE.object ["topic" AE..= topic, "error" AE..= errText, "message_count" AE..= length validMsgs]
+    if Hasql.isTransientException e
+      then pure []
+      else
+        publishToDeadLetterQueue appLogger appCtx validMsgs attrs errText >>= \case
+          Right _ -> pure (map fst validMsgs)
+          Left _ -> pure []

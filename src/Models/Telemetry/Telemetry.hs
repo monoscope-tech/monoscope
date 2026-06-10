@@ -42,6 +42,13 @@ module Models.Telemetry.Telemetry (
   bulkInsertMetrics,
   bulkInsertOtelLogsAndSpansTF,
   insertAndHandOff,
+  WriteFailure,
+  writeFailureSummary,
+  writeFailureDlqHeaders,
+  PoisonMsg,
+  BulkInsertResult (..),
+  RowPoisonInfo (..),
+  rowPoisonInfo,
   handOffBatches,
   mintOtelLogIds,
   getMetricChartListData,
@@ -78,9 +85,13 @@ import Data.List qualified as L (groupBy)
 import Data.List.Extra (chunksOf)
 import Data.List.NonEmpty qualified as NE
 import Data.Map qualified as Map
+import Data.HashSet qualified as HS
+import Data.Maybe (fromJust)
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (Display)
+import Data.These (These (..))
+import Data.These qualified as These
 import Data.Time (UTCTime)
 import Data.Time.Clock (addUTCTime)
 import Data.UUID qualified as UUID
@@ -846,6 +857,118 @@ mintOtelLogIds :: UUIDEff :> es => V.Vector OtelLogsAndSpans -> Eff es (V.Vector
 mintOtelLogIds = V.mapM \r -> genUUID <&> \uid -> r & #id .~ UUID.toText uid
 
 
+-- | This = PG failed; That = TF failed; These = both. Both stores are mandatory
+-- because dashboards still read from PG; any failure must reach the DLQ via
+-- 'Pkg.Queue' — never silent-ack.
+type WriteFailure = These SomeException SomeException
+
+
+-- | A message that couldn't be parsed/converted. Callers MUST publish these to
+-- the DLQ before committing source-topic offsets so the bytes are preserved
+-- for manual investigation (never silent-drop).
+type PoisonMsg = (Text, ByteString, Text)
+  -- ^ @(ackId, rawBytes, errorReason)@
+
+
+-- | Per-row outcome from a dual-write. At least one of @pgError@ / @tfError@ is
+-- 'Just'; if a row is fully successful it never appears here.
+data RowPoisonInfo = RowPoisonInfo
+  { pgError :: Maybe SomeException
+  , tfError :: Maybe SomeException
+  }
+  deriving stock (Generic)
+
+
+-- | Construct from per-side errors. At least one must be 'Just'.
+rowPoisonInfo :: Maybe SomeException -> Maybe SomeException -> RowPoisonInfo
+rowPoisonInfo = RowPoisonInfo
+
+
+-- | Result of a single-side ('bulkInsertOtelLogsAndSpans') bulk write. Rows
+-- that bisect-isolated to a non-transient failure are surfaced here instead of
+-- silently dropped — caller routes them to the DLQ.
+data BulkInsertResult = BulkInsertResult
+  { rowsInserted :: !Int64
+  , poisonRows :: !(V.Vector (OtelLogsAndSpans, SomeException))
+  }
+  deriving stock (Generic)
+
+
+instance Semigroup BulkInsertResult where
+  BulkInsertResult n1 p1 <> BulkInsertResult n2 p2 = BulkInsertResult (n1 + n2) (p1 <> p2)
+
+
+instance Monoid BulkInsertResult where
+  mempty = BulkInsertResult 0 V.empty
+
+
+writeFailureSummary :: WriteFailure -> Text
+writeFailureSummary = These.these (const "pg-failed") (const "tf-failed") (\_ _ -> "both-failed")
+
+
+-- | DLQ headers a replay tool reads to rewrite only the missing side(s) and
+-- avoid duplicating rows on the successful side.
+writeFailureDlqHeaders :: WriteFailure -> HM.HashMap Text Text
+writeFailureDlqHeaders wf =
+  let (pgOk, tfOk) = These.these (\_ -> ("false", "true")) (\_ -> ("true", "false")) (\_ _ -> ("false", "false")) wf
+   in HM.fromList
+        [ ("monoscope-write-failure", writeFailureSummary wf)
+        , ("monoscope-pg-succeeded", pgOk)
+        , ("monoscope-tf-succeeded", tfOk)
+        ]
+
+
+-- | Retry a Hasql write up to @n@ times on transient errors with exponential
+-- backoff (100ms → 5s cap; ~25s total at n=10). Non-transient errors return
+-- 'Left' immediately. TimeFusion's PGWire "TuplesOk" wire-mismatch is treated
+-- as success (rows landed; only the wire tag is wrong) — retrying would
+-- duplicate rows. PG never produces "TuplesOk" so the swallow is a no-op there.
+--
+-- Generic over PG vs TF: both call sites are symmetric. Programmer-bug
+-- exceptions (non-Hasql) propagate as Left without retry.
+retryHasqlWrite
+  :: (Concurrent :> es, IOE :> es, Log :> es, Monoid a)
+  => Int
+  -- ^ max attempts (must be >= 1)
+  -> Text
+  -- ^ store label for log lines ("pg" / "tf")
+  -> Eff es a
+  -- ^ write action; throws on transient failure (will retry)
+  -> Eff es (Either SomeException a)
+retryHasqlWrite maxAttempts store act = go 1
+  where
+    go attempt =
+      tryAny act >>= \case
+        Right a -> pure (Right a)
+        Left e
+          | "TuplesOk" `T.isInfixOf` show e -> do
+              -- Rows DID land; we just lack the row count (mempty is a safe
+              -- approximation since the caller cares about poison, not the count).
+              Log.logTrace "retryHasqlWrite: TuplesOk wire-mismatch ignored" $ AE.object ["store" AE..= store]
+              pure (Right mempty)
+          | attempt < maxAttempts, Hasql.isTransientException e -> do
+              let delayMicros = min 5000000 (100000 * (2 ^ (attempt - 1) :: Int)) -- 100ms,200ms,…cap 5s
+              Log.logAttention "retryHasqlWrite: transient error, retrying"
+                $ AE.object
+                  [ "store" AE..= store
+                  , "attempt" AE..= attempt
+                  , "max_attempts" AE..= maxAttempts
+                  , "backoff_us" AE..= delayMicros
+                  , "error" AE..= show @Text e
+                  ]
+              threadDelay delayMicros
+              go (attempt + 1)
+          | otherwise -> pure (Left e)
+
+
+-- | Dual-write to PG + TimeFusion concurrently. Both stores are mandatory.
+--
+--   * 'Left WriteFailure' — bounded transient-retry budget exhausted on at
+--     least one side; the whole batch needs to be DLQ'd as a unit.
+--   * 'Right' poisonRows — per-side bulk-insert returned poison rows
+--     (constraint violations, schema mismatch, etc.). Each row carries
+--     'RowPoisonInfo' saying which side(s) rejected it so the DLQ replay tool
+--     can rewrite only the missing side. Empty vector = full success.
 bulkInsertOtelLogsAndSpansTF
   :: ( Concurrent :> es
      , Hasql :> es
@@ -855,79 +978,57 @@ bulkInsertOtelLogsAndSpansTF
      , Log :> es
      )
   => Bool
-  -- ^ enableTimefusionWrites (passed by caller to avoid a `Reader AuthContext`
-  -- constraint here — keeps this module a leaf of `System.Config` so the
-  -- extraction worker in `AuthContext` can be typed against `OtelLogsAndSpans`).
   -> V.Vector OtelLogsAndSpans
-  -> Eff es ()
+  -> Eff es (Either WriteFailure (V.Vector (OtelLogsAndSpans, RowPoisonInfo)))
 bulkInsertOtelLogsAndSpansTF enableTf records = do
-  Log.logTrace "bulkInsertOtelLogsAndSpansTF called" $ AE.object [("record_count", AE.toJSON $ V.length records), ("enableTimefusionWrites", AE.toJSON enableTf)]
+  Log.logTrace "bulkInsertOtelLogsAndSpansTF called"
+    $ AE.object [("record_count", AE.toJSON $ V.length records), ("enableTimefusionWrites", AE.toJSON enableTf)]
   if enableTf
     then Ki.scoped \scope -> do
-      pgThread <- forkWithCtx scope $ tryAny $ void $ bulkInsertOtelLogsAndSpans records
-      tfThread <- forkWithCtx scope do
-        Log.logTrace "TimeFusion write enabled, attempting write" $ AE.object [("record_count", AE.toJSON $ V.length records)]
-        res <- tryAny (retryTimefusion 10 records)
-        whenLeft_ res \e -> do
-          let isHasql = isJust (fromException @Hasql.HasqlException e)
-              errId = if isHasql then "TIMEFUSION_WRITE_FAILED" else "TIMEFUSION_WRITE_BUG" :: Text
-              kind = if isHasql then "infra" else "programmer_error" :: Text
-          Log.logAttention errId
-            $ AE.object
-              [ "error_id" AE..= errId
-              , "kind" AE..= kind
-              , "record_count" AE..= V.length records
-              , "error" AE..= show @Text e
-              ]
-        pure res
-      -- TF-strict commit semantics: TF is the long-term store; PG is being
-      -- phased out (dual-write is temporary). A TF gap is forever; a PG gap
-      -- evaporates with the migration. So:
-      --   - TF success required for the caller to commit the Kafka offset.
-      --   - PG failures are logged but never block the commit.
-      -- Delta Lake INSERTs are atomic per batch, so a successful TF write
-      -- never leaves partial rows; retries happen only when TF itself failed,
-      -- in which case there are no rows to dedupe.
+      pgThread <- forkWithCtx scope $ retryHasqlWrite 10 "pg" (bulkInsertOtelLogsAndSpans records)
+      tfThread <- forkWithCtx scope $ retryHasqlWrite 10 "tf" (labeled @"timefusion" @Hasql $ bulkInsertOtelLogsAndSpans records)
       (pgRes, tfRes) <- Ki.atomically $ (,) <$> Ki.await pgThread <*> Ki.await tfThread
-      case (pgRes, tfRes) of
-        (Right _, Right _) -> pass
-        (Left ePg, Right _) ->
-          Log.logAttention "PG_WRITE_FAILED_TF_OK"
-            $ AE.object ["record_count" AE..= V.length records, "error" AE..= show @Text ePg]
-        (Right _, Left eTf) -> throwIO eTf
-        (Left ePg, Left eTf) -> do
-          Log.logAttention "BOTH_WRITES_FAILED"
-            $ AE.object
-              [ "record_count" AE..= V.length records
-              , "pg_error" AE..= show @Text ePg
-              , "tf_error" AE..= show @Text eTf
-              ]
-          throwIO eTf
-    else void $ bulkInsertOtelLogsAndSpans records
+      classify pgRes tfRes
+    else do
+      pgRes <- retryHasqlWrite 10 "pg" (bulkInsertOtelLogsAndSpans records)
+      case pgRes of
+        Right bir -> pure (Right (V.map (\(r, e) -> (r, RowPoisonInfo (Just e) Nothing)) bir.poisonRows))
+        Left e -> do
+          Log.logAttention "PG_WRITE_FAILED"
+            $ AE.object ["record_count" AE..= V.length records, "error" AE..= show @Text e]
+          pure (Left (This e))
   where
-    -- Retry only transient HasqlException; non-Hasql exceptions (e.g. InvalidOtelRowIdException
-    -- from bad UUIDs, encode panics) are programmer bugs and must propagate immediately.
-    -- Do NOT widen to tryAny-style retry — that would re-raise programmer bugs in a loop.
-    retryTimefusion n recs =
-      tryAny (labeled @"timefusion" @Hasql $ bulkInsertOtelLogsAndSpans recs) >>= \case
-        Right count -> Log.logTrace "TimeFusion write succeeded" $ AE.object [("rows_inserted", AE.toJSON count)]
-        Left e
-          -- TimeFusion's PGWire returns TuplesOk (a row-count tuple) instead of
-          -- CommandOk for some INSERT shapes (multi-row VALUES via the extended
-          -- query protocol). The data does land — only the wire-protocol tag is
-          -- wrong — so swallow the spurious error rather than retry the write
-          -- (which would duplicate rows in TF).
-          | "TuplesOk" `T.isInfixOf` show e ->
-              Log.logTrace "TimeFusion write succeeded (TuplesOk wire-mismatch ignored)" $ AE.object [("record_count", AE.toJSON $ V.length recs)]
-          | n > 0
-          , Hasql.isTransientException e -> do
-              let attempt = 11 - n -- attempts: 1..10
-                  delayMicros = min 5000000 (100000 * (2 ^ (attempt - 1) :: Int)) -- 100ms,200ms,...,cap 5s
-              Log.logAttention "Retrying bulkInsertOtelLogsAndSpans"
-                $ AE.object [("attempt", AE.toJSON attempt), ("max_attempts", AE.toJSON (10 :: Int)), ("backoff_us", AE.toJSON delayMicros), ("error", AE.toJSON $ show @Text e)]
-              threadDelay delayMicros
-              retryTimefusion (n - 1) recs
-        Left e -> throwIO e
+    classify (Right pgBir) (Right tfBir) = pure (Right (combinePoison pgBir tfBir))
+    classify (Left ePg) (Right _) = do
+      Log.logAttention "PG_WRITE_FAILED"
+        $ AE.object ["record_count" AE..= V.length records, "error" AE..= show @Text ePg]
+      pure (Left (This ePg))
+    classify (Right _) (Left eTf) = do
+      Log.logAttention "TF_WRITE_FAILED"
+        $ AE.object ["record_count" AE..= V.length records, "error" AE..= show @Text eTf]
+      pure (Left (That eTf))
+    classify (Left ePg) (Left eTf) = do
+      Log.logAttention "BOTH_WRITES_FAILED"
+        $ AE.object
+          [ "record_count" AE..= V.length records
+          , "pg_error" AE..= show @Text ePg
+          , "tf_error" AE..= show @Text eTf
+          ]
+      pure (Left (These ePg eTf))
+
+    -- Per-row attribution: a row appears in the result iff at least one side
+    -- rejected it. Rows accepted by both stores are silently absent (full success).
+    combinePoison :: BulkInsertResult -> BulkInsertResult -> V.Vector (OtelLogsAndSpans, RowPoisonInfo)
+    combinePoison pg tf =
+      let pgMap = HM.fromList [(r.id, (r, e)) | (r, e) <- V.toList pg.poisonRows]
+          tfMap = HM.fromList [(r.id, (r, e)) | (r, e) <- V.toList tf.poisonRows]
+       in V.fromList
+            [ (row, RowPoisonInfo (fmap snd pgEntry) (fmap snd tfEntry))
+            | rid <- HM.keys (HM.union (() <$ pgMap) (() <$ tfMap))
+            , let pgEntry = HM.lookup rid pgMap
+                  tfEntry = HM.lookup rid tfMap
+                  row = maybe (fst (fromJust tfEntry)) fst pgEntry
+            ]
 
 
 -- | Persist `records` to Postgres (+TimeFusion when enabled) and hand each
@@ -947,14 +1048,23 @@ insertAndHandOff
      )
   => Bool
   -> EW.WorkerState OtelLogsAndSpans
+  -- ^ NB: returns 'Left WriteFailure' if either store failed. Hand-off to the
+  -- extraction worker only happens on full success; a failed batch goes to DLQ.
   -> HM.HashMap Projects.ProjectId Projects.ProjectCache
   -> V.Vector OtelLogsAndSpans
-  -> Eff es ()
+  -> Eff es (Either WriteFailure (V.Vector (OtelLogsAndSpans, RowPoisonInfo)))
 insertAndHandOff enableTf worker caches records
-  | V.null records = pass
-  | otherwise = do
-      bulkInsertOtelLogsAndSpansTF enableTf records
-      liftIO $ handOffBatches worker caches records
+  | V.null records = pure (Right V.empty)
+  | otherwise =
+      bulkInsertOtelLogsAndSpansTF enableTf records >>= \case
+        Left wf -> pure (Left wf)
+        Right rowPoison -> do
+          -- Hand off only the fully-successful rows — don't let downstream
+          -- extraction observe records that landed in only one store.
+          let poisonIds = HS.fromList [r.id | (r, _) <- V.toList rowPoison]
+              fullyOk = V.filter (\r -> not (HS.member r.id poisonIds)) records
+          liftIO $ handOffBatches worker caches fullyOk
+          pure (Right rowPoison)
 
 
 -- | Group `records` by `project_id`, build one `ExtractionBatch` per group, and
@@ -1018,30 +1128,34 @@ bisectCap = 2 ^ maxBisectDepth
 --
 -- >>> bisectCap * length otelColumns <= 65535  -- libpq Bind param ceiling
 -- True
-bulkInsertOtelLogsAndSpans :: (Hasql :> es, IOE :> es, Log :> es) => V.Vector OtelLogsAndSpans -> Eff es Int64
-bulkInsertOtelLogsAndSpans = fmap Relude.sum . traverse insertSlice . VS.chunksOf bisectCap
+bulkInsertOtelLogsAndSpans :: (Hasql :> es, IOE :> es, Log :> es) => V.Vector OtelLogsAndSpans -> Eff es BulkInsertResult
+bulkInsertOtelLogsAndSpans = fmap mconcat . traverse insertSlice . VS.chunksOf bisectCap
   where
     insertSlice rs = V.mapM (\r -> (r,) <$> otelRowSnippet r) rs >>= go maxBisectDepth
 
     go d pairs =
       tryAny (Hasql.use $ HSession.statement () (stmt pairs)) >>= \case
-        Right n -> pure n
+        Right n -> pure (BulkInsertResult n V.empty)
         Left e
           | Hasql.isTransientException e -> throwIO e
-          | V.length pairs == 1 ->
+          | V.length pairs == 1 -> do
+              -- Single row failed non-transiently: surface as poison so caller
+              -- can DLQ. Previous behaviour was to drop + log (silent loss).
               Log.logAttention
-                "POISON_ROW_DROPPED"
+                "ROW_INSERT_FAILED"
                 (AE.object ["id" AE..= (fst (V.head pairs)).id, "error" AE..= show @Text e])
-                $> 0
-          | d <= 0 ->
+              pure (BulkInsertResult 0 (V.map (\(r, _) -> (r, e)) pairs))
+          | d <= 0 -> do
+              -- Couldn't isolate within bisect budget. Treat the whole
+              -- remaining slice as poison so the rows still reach the DLQ.
               Log.logAttention
                 "BISECT_DEPTH_EXHAUSTED"
                 (AE.object ["record_count" AE..= V.length pairs, "error" AE..= show @Text e])
-                >> throwIO e
+              pure (BulkInsertResult 0 (V.map (\(r, _) -> (r, e)) pairs))
           | otherwise ->
               -- <*> is sequential in Eff: a throw from the left short-circuits the right. Do not parallelize.
               let (l, r) = V.splitAt (V.length pairs `div` 2) pairs
-               in (+) <$> go (d - 1) l <*> go (d - 1) r
+               in (<>) <$> go (d - 1) l <*> go (d - 1) r
 
     stmt pairs =
       toPreparableStatement
@@ -1598,7 +1712,10 @@ insertSystemLog
   -> Eff es ()
 insertSystemLog enableTf otelLog = do
   minted <- mintOtelLogIds (V.singleton otelLog)
-  bulkInsertOtelLogsAndSpansTF enableTf minted
+  -- System logs are best-effort: failure here would just shadow whatever
+  -- caused the original log. Discard the WriteFailure rather than throw or
+  -- propagate — it's already been logAttention'd by bulkInsertOtelLogsAndSpansTF.
+  void $ bulkInsertOtelLogsAndSpansTF enableTf minted
 
 
 -- | Generate summary array for an OtelLogsAndSpans record
