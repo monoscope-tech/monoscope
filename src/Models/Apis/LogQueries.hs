@@ -210,7 +210,7 @@ executeArbitraryQuery colCount querySql = do
       $ rawSql ("SELECT jsonb_build_array(" <> aliases <> ") FROM (")
       <> querySql
       <> rawSql (") sub(" <> aliases <> ")")
-  pure $ V.mapMaybe jsonArrayToVector (V.fromList results)
+  pure $ V.fromList $ mapMaybe jsonArrayToVector results
 
 
 -- | Execute a user-provided SQL query with mandatory project_id filtering.
