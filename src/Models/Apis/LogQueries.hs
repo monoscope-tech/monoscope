@@ -399,12 +399,6 @@ keepDescendantsOf colIdxMap seedSpanIds rows
        in go (S.fromList seeds) seeds []
 
 
-valueToVector :: AE.Value -> Maybe (V.Vector AE.Value)
-valueToVector val = case val of
-  AE.Array arr -> Just arr
-  _ -> Nothing
-
-
 data PatternRow = PatternRow {logPattern :: Text, count :: Int64, level :: Maybe Text, service :: Maybe Text, volume :: [Int], mergedCount :: Int, isError :: Bool}
 
 
@@ -839,9 +833,8 @@ fetchEventExamples enableTfReads pid queryAST dateRange expandKind skip limitN =
         ExpandSession sid -> [HI.sql| AND attributes___session___id = #{sid}|]
         ExpandPattern tpl -> [HI.sql| AND array_to_string(summary, chr(30)) ILIKE #{templateToLike tpl}|]
       cols = defaultSelectSqlQuery (Just SSpans)
-      rawCols = colsNoAsClause cols
       -- Mirror selectLogTable's summary column handling: wrap TEXT[] as JSON for row output.
-      processedCols = map (\c -> if c == "summary" || "summary" `T.isSuffixOf` c then "to_json(summary)" else c) rawCols
+      processedCols = map (\c -> if c == "summary" || "summary" `T.isSuffixOf` c then "to_json(summary)" else c) (colsNoAsClause cols)
       selectClause = T.intercalate ", " processedCols
       -- Sessions: fetch one root event per trace via DISTINCT ON so [+N] expansion
       -- covers all traces.  Patterns/other: fetch raw events as before.
