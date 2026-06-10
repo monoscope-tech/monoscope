@@ -216,7 +216,7 @@ executeArbitraryQuery colCount querySql = do
 -- | Execute a user-provided SQL query with mandatory project_id filtering.
 -- SECURITY: Validates query for dangerous patterns and verifies project_id filter is present in query.
 -- Note: The query must already contain project_id='<pid>' filtering (via {{project_id}} placeholder substitution done before calling this function)
--- TODO: Still uses the legacy json_each/row_to_json wrapper since callers (Dashboards, AI raw-SQL) pass arbitrary user/LLM SQL without a known column count. Migrate to jsonb_build_array once column counts can be derived (e.g. via a parsing pass or a probe).
+-- TODO: migrate to jsonb_build_array once column count is derivable for arbitrary user/LLM SQL.
 executeSecuredQuery :: DB es => Projects.ProjectId -> Text -> Int -> Eff es (Either Text (V.Vector (V.Vector AE.Value)))
 executeSecuredQuery pid userQuery limit
   | not (validateSqlQuery userQuery) = pure $ Left "Query contains disallowed operations"
