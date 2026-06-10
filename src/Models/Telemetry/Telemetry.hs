@@ -48,7 +48,6 @@ module Models.Telemetry.Telemetry (
   PoisonMsg,
   BulkInsertResult (..),
   RowPoisonInfo (..),
-  rowPoisonInfo,
   handOffBatches,
   mintOtelLogIds,
   getMetricChartListData,
@@ -86,7 +85,7 @@ import Data.List qualified as L (groupBy)
 import Data.List.Extra (chunksOf)
 import Data.List.NonEmpty qualified as NE
 import Data.Map qualified as Map
-import Data.Maybe (fromJust)
+import Data.HashSet qualified as HS
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (Display)
@@ -880,11 +879,6 @@ data RowPoisonInfo = RowPoisonInfo
   deriving stock (Generic)
 
 
--- | Construct from per-side errors. At least one must be 'Just'.
-rowPoisonInfo :: Maybe SomeException -> Maybe SomeException -> RowPoisonInfo
-rowPoisonInfo = RowPoisonInfo
-
-
 -- | Result of a single-side ('bulkInsertOtelLogsAndSpans') bulk write. Rows
 -- that bisect-isolated to a non-transient failure are surfaced here instead of
 -- silently dropped — caller routes them to the DLQ.
@@ -911,7 +905,7 @@ writeFailureSummary = These.these (const "pg-failed") (const "tf-failed") (\_ _ 
 -- avoid duplicating rows on the successful side.
 writeFailureDlqHeaders :: WriteFailure -> HM.HashMap Text Text
 writeFailureDlqHeaders wf =
-  let (pgOk, tfOk) = These.these (\_ -> ("false", "true")) (\_ -> ("true", "false")) (\_ _ -> ("false", "false")) wf
+  let (pgOk, tfOk) = These.these (const ("false", "true")) (const ("true", "false")) (\_ _ -> ("false", "false")) wf
    in HM.fromList
         [ ("monoscope-write-failure", writeFailureSummary wf)
         , ("monoscope-pg-succeeded", pgOk)
@@ -1022,15 +1016,13 @@ bulkInsertOtelLogsAndSpansTF enableTf records = do
     -- rejected it. Rows accepted by both stores are silently absent (full success).
     combinePoison :: BulkInsertResult -> BulkInsertResult -> V.Vector (OtelLogsAndSpans, RowPoisonInfo)
     combinePoison pg tf =
-      let pgMap = HM.fromList [(r.id, (r, e)) | (r, e) <- V.toList pg.poisonRows]
-          tfMap = HM.fromList [(r.id, (r, e)) | (r, e) <- V.toList tf.poisonRows]
-       in V.fromList
-            [ (row, RowPoisonInfo (fmap snd pgEntry) (fmap snd tfEntry))
-            | rid <- HM.keys (HM.union (() <$ pgMap) (() <$ tfMap))
-            , let pgEntry = HM.lookup rid pgMap
-                  tfEntry = HM.lookup rid tfMap
-                  row = maybe (fst (fromJust tfEntry)) fst pgEntry
-            ]
+      let mkMap bir = HM.fromList [(r.id, (r, e)) | (r, e) <- V.toList bir.poisonRows]
+          pgMap = mkMap pg
+          tfMap = mkMap tf
+          both = HM.intersectionWith (\(r, pe) (_, te) -> (r, RowPoisonInfo (Just pe) (Just te))) pgMap tfMap
+          pgOnly = HM.map (\(r, e) -> (r, RowPoisonInfo (Just e) Nothing)) (pgMap `HM.difference` tfMap)
+          tfOnly = HM.map (\(r, e) -> (r, RowPoisonInfo Nothing (Just e))) (tfMap `HM.difference` pgMap)
+       in V.fromList $ HM.elems (both <> pgOnly <> tfOnly)
 
 
 -- | Persist `records` to Postgres (+TimeFusion when enabled) and hand each
@@ -1714,10 +1706,13 @@ insertSystemLog
   -> Eff es ()
 insertSystemLog enableTf otelLog = do
   minted <- mintOtelLogIds (V.singleton otelLog)
-  -- System logs are best-effort: failure here would just shadow whatever
-  -- caused the original log. Discard the WriteFailure rather than throw or
-  -- propagate — it's already been logAttention'd by bulkInsertOtelLogsAndSpansTF.
-  void $ bulkInsertOtelLogsAndSpansTF enableTf minted
+  -- System logs are best-effort. The inner write logs its own failure via
+  -- logAttention; surface a higher-level "system log dropped" so an incident
+  -- triager investigating the original event can see that its trail was lost.
+  bulkInsertOtelLogsAndSpansTF enableTf minted >>= \case
+    Right _ -> pass
+    Left wf ->
+      Log.logAttention "SYSTEM_LOG_DROPPED" (AE.object ["reason" AE..= writeFailureSummary wf])
 
 
 -- | Generate summary array for an OtelLogsAndSpans record

@@ -437,11 +437,11 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds conv
     let !decodePoison = [(ackId, raw, toText err) | (ackId, raw, Left err) <- decodedMsgs]
         !writeReady = [(ackId, raw, convert fallbackTime projectCachesMap keyToIdMap req) | (ackId, raw, Right req) <- decodedMsgs]
         !writeAckIds = [ackId | (ackId, _, _) <- writeReady]
-        !anyRows = any (not . V.null) [recs | (_, _, recs) <- writeReady]
+        !allEmpty = all (\(_, _, recs) -> V.null recs) writeReady
 
     forM_ decodePoison \(_, raw, err) -> recordProtoError label (toString err) raw Log.logAttention
 
-    if not anyRows
+    if allEmpty
       then pure (Right (writeAckIds, decodePoison))
       else
         dbInsert projectCachesMap writeReady <&> \case

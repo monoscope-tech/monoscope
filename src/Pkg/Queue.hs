@@ -393,8 +393,8 @@ routeBatchOutcome appLogger appCtx svc topic validMsgs attrs = \case
   Right (Right (writeAcks, poison)) -> do
     let poisonBytes = [(ackId, raw) | (ackId, raw, _) <- poison]
         poisonAckIds = [ackId | (ackId, _, _) <- poison]
-        firstReason = case poison of (_, _, r) : _ -> r
-        poisonAttrs = attrs <> HM.singleton "monoscope-poison-reason" firstReason
+        firstReason = maybe "" (\(_, _, r) -> r) (listToMaybe poison)
+        poisonAttrs = attrs <> one ("monoscope-poison-reason", firstReason)
     runLogT svc appLogger LogAttention
       $ LogBase.logAttention "routeBatchOutcome: poison messages → DLQ"
       $ AE.object ["topic" AE..= topic, "poison_count" AE..= length poison, "write_acks" AE..= length writeAcks]

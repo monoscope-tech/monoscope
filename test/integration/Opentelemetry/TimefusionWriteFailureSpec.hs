@@ -3,10 +3,6 @@
 -- pubsubService pattern-match on the result and route 'Left' to the DLQ with
 -- side-tracking headers (which side(s) succeeded / failed) so the replay tool
 -- can rewrite only the missing side.
---
--- Regression target: the 2026-06-10 40-min outage where the previous
--- onException + return-all-ackIds path silently dropped every batch whose TF
--- write failed.
 module Opentelemetry.TimefusionWriteFailureSpec (spec) where
 
 import Control.Exception (ErrorCall (..), evaluate)
