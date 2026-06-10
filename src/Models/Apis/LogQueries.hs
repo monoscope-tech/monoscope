@@ -327,7 +327,11 @@ selectLogTable pid queryAST queryText cursorM dateRange projectedColsByUser sour
       ]
       $ try @SomeException
       $ checkpoint (toAnnotation ("selectLogTable", q))
-      $ executeArbitraryQuery (length queryComponents.toColNames) (rawSql q)
+      -- hasCountOver appends a count(*) OVER() column to the SELECT but it isn't
+      -- in `toColNames` (display columns only). Include it in the alias list or
+      -- PG rejects with "column alias list must be the same length as the number
+      -- of output columns".
+      $ executeArbitraryQuery (length queryComponents.toColNames + if queryComponents.hasCountOver then 1 else 0) (rawSql q)
   case result of
     Left e -> pure $ Left $ show e
     Right logItemsV -> do
@@ -849,8 +853,9 @@ fetchEventExamples enableTfReads pid queryAST dateRange expandKind skip limitN =
         ExpandSession sid -> [HI.sql| AND attributes___session___id = #{sid}|]
         ExpandPattern tpl -> [HI.sql| AND array_to_string(summary, chr(30)) ILIKE #{templateToLike tpl}|]
       cols = defaultSelectSqlQuery (Just SSpans)
+      rawCols = colsNoAsClause cols
       -- Mirror selectLogTable's summary column handling: wrap TEXT[] as JSON for row output.
-      processedCols = map (\c -> if c == "summary" || "summary" `T.isSuffixOf` c then "to_json(summary)" else c) $ colsNoAsClause cols
+      processedCols = map (\c -> if c == "summary" || "summary" `T.isSuffixOf` c then "to_json(summary)" else c) rawCols
       selectClause = T.intercalate ", " processedCols
       -- Sessions: fetch one root event per trace via DISTINCT ON so [+N] expansion
       -- covers all traces.  Patterns/other: fetch raw events as before.
@@ -866,7 +871,7 @@ fetchEventExamples enableTfReads pid queryAST dateRange expandKind skip limitN =
             <> expandFilter
             <> [HI.sql| ORDER BY timestamp ASC OFFSET #{skip}::BIGINT LIMIT #{limitN}::BIGINT|]
   Log.logTrace "fetchEventExamples: query" $ AE.object ["project_id" AE..= pid]
-  rows <- Hasql.withHasqlTimefusion enableTfReads $ checkpoint (toAnnotation ("fetchEventExamples" :: Text, pid)) $ executeArbitraryQuery (length (colsNoAsClause cols)) q
+  rows <- Hasql.withHasqlTimefusion enableTfReads $ checkpoint (toAnnotation ("fetchEventExamples" :: Text, pid)) $ executeArbitraryQuery (length rawCols) q
   pure (rows, listToColNames cols)
 
 
