@@ -2,6 +2,7 @@
 module Pkg.Parser (queryASTToComponents, parseQueryToComponents, getProcessedColumns, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, SqlQueryCfg (..), QueryComponents (..), NormalizedQuery (..), normalizeQuery, buildDateRange, buildGroupBy, buildOrderBy, buildLimit, buildWhereCondition, listToColNames, colsNoAsClause, defaultSelectSqlQuery, pSource, parseQueryToAST, ToQueryText (..), calculateAutoBinWidth, replacePlaceholders, variablePresets, variablePresetsKQL, constantToSQLList, constantToKQLList, defaultQueryLimit) where
 
 import Control.Error (hush)
+import Data.Char (isAlphaNum)
 import Data.Default (Default (def))
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -14,7 +15,6 @@ import Pkg.Parser.Expr
 import Pkg.Parser.Stats
 import PyF (fmt)
 import Relude
-import Safe qualified
 import Text.Megaparsec (errorBundlePretty, parse)
 import Utils (formatUTC)
 
@@ -522,16 +522,37 @@ defaultSelectSqlQuery (Just SSpans) =
   ]
 
 
+-- | Split on a *trailing* @ as <ident>@ — leaves internal @as@ untouched
+-- (so @CAST(x AS VARCHAR)@ and @'$.id as ref'@ inside literals are safe).
+--
+-- >>> splitTrailingAlias "JSONB_ARRAY_LENGTH(errors) as errors_count"
+-- ("JSONB_ARRAY_LENGTH(errors)",Just "errors_count")
+-- >>> splitTrailingAlias "CAST(x AS VARCHAR)"
+-- ("CAST(x AS VARCHAR)",Nothing)
+splitTrailingAlias :: Text -> (Text, Maybe Text)
+splitTrailingAlias (T.strip -> t) = case T.breakOnEnd asNeedle t of
+  (pre, T.strip -> alias)
+    | not (T.null pre)
+    , not (T.null alias)
+    , T.all (\c -> isAlphaNum c || c == '_') alias ->
+        (T.strip $ T.dropEnd (T.length asNeedle) pre, Just alias)
+  _ -> (t, Nothing)
+  where
+    asNeedle = " as "
+
+
 -- >>> listToColNames ["id", "JSONB_ARRAY_LENGTH(errors) as errors_count"]
 -- ["id","errors_count"]
 listToColNames :: [Text] -> [Text]
-listToColNames = map \x -> T.strip $ last $ "" :| T.splitOn "as" x
+listToColNames = map \x -> case splitTrailingAlias x of
+  (expr, Nothing) -> expr
+  (_, Just alias) -> alias
 
 
 -- >>> colsNoAsClause ["id", "JSONB_ARRAY_LENGTH(errors) as errors_count"]
 -- ["id","JSONB_ARRAY_LENGTH(errors)"]
 colsNoAsClause :: [Text] -> [Text]
-colsNoAsClause = mapMaybe (\x -> Safe.headMay $ T.strip <$> T.splitOn "as" x)
+colsNoAsClause = map (fst . splitTrailingAlias)
 
 
 instance HasField "toColNames" QueryComponents [Text] where
