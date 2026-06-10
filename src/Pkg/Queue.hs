@@ -9,7 +9,6 @@ import Data.Annotation (toAnnotation)
 import Data.ByteString.Char8 qualified as BC
 import Data.ByteString.Lazy.Base64 qualified as LB64
 import Data.Effectful.Hasql qualified as Hasql
-import Models.Telemetry.Telemetry qualified as Telemetry
 import Data.Generics.Product (field)
 import Data.HashMap.Strict qualified as HM
 import Data.Map.Strict qualified as Map
@@ -27,6 +26,7 @@ import Kafka.Consumer qualified as K
 import Kafka.Producer qualified as KP
 import Log (LogLevel (..), Logger, runLogT)
 import Log qualified as LogBase
+import Models.Telemetry.Telemetry qualified as Telemetry
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
 import Relude
@@ -154,7 +154,8 @@ pubsubService appLogger appCtx tp topics fn = checkpoint "pubsubService" do
                         setStatus sp (Error summary)
                         pure (Left wf)
             )
-            >>= liftIO . routeBatchOutcome appLogger appCtx "pubsub-service" topic validMsgs (maybeToMonoid firstAttrs)
+            >>= liftIO
+            . routeBatchOutcome appLogger appCtx "pubsub-service" topic validMsgs (maybeToMonoid firstAttrs)
 
         let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ Just msgIds
         unless (null msgIds) $ void $ PubSub.newPubSubProjectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send env

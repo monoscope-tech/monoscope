@@ -36,12 +36,12 @@ import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.UUID (UUIDEff)
 import Data.Effectful.UUID qualified as UUID
 import Data.HashMap.Strict qualified as HM
+import Data.HashSet qualified as HS
 import Data.HashTable.Class qualified as HTC
 import Data.HashTable.ST.Cuckoo qualified as HT
 import Data.Text qualified as T
 import Data.Time (addUTCTime, zonedTimeToUTC)
 import Data.Time.LocalTime (ZonedTime)
-import Data.HashSet qualified as HS
 import Data.Tuple.Extra (fst3)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V

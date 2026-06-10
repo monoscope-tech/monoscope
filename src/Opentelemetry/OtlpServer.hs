@@ -35,9 +35,9 @@ import Data.HashSet qualified as HS
 import Data.List qualified as L
 import Data.Map qualified as Map
 import Data.ProtoLens.Encoding (decodeMessage, encodeMessage)
-import Data.These (These (..))
 import Data.Scientific (fromFloatDigits)
 import Data.Text qualified as T
+import Data.These (These (..))
 import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.UUID qualified as UUID
@@ -267,7 +267,8 @@ dualWriteWithPoisonMapping appCtx label caches perMsg = do
   stamped <- stampOrPassthrough appCtx allRecords
   minted <- Telemetry.mintOtelLogIds stamped
   let !idToSource = HM.fromList (zipWith (\(ackId, raw) r -> (r.id, (ackId, raw))) perRecordSource (V.toList minted))
-  checkpoint (fromString $ "processList:" <> toString label <> ":bulkInsert")
+  checkpoint
+    (fromString $ "processList:" <> toString label <> ":bulkInsert")
     (Telemetry.insertAndHandOff appCtx.env.enableTimefusionWrites appCtx.extractionWorker caches minted)
     <&> \case
       Left wf -> Left wf
@@ -442,14 +443,15 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds conv
 
     if not anyRows
       then pure (Right (writeAckIds, decodePoison))
-      else dbInsert projectCachesMap writeReady <&> \case
-        Left wf -> Left wf
-        Right writePoison ->
-          -- Successfully-written rows are acked; write-poisoned rows are removed
-          -- from acks and added to the poison list (Pkg.Queue DLQs them).
-          let writePoisonAcks = HS.fromList [a | (a, _, _) <- writePoison]
-              successAcks = filter (\a -> not (HS.member a writePoisonAcks)) writeAckIds
-           in Right (successAcks, decodePoison <> writePoison)
+      else
+        dbInsert projectCachesMap writeReady <&> \case
+          Left wf -> Left wf
+          Right writePoison ->
+            -- Successfully-written rows are acked; write-poisoned rows are removed
+            -- from acks and added to the poison list (Pkg.Queue DLQs them).
+            let writePoisonAcks = HS.fromList [a | (a, _, _) <- writePoison]
+                successAcks = filter (\a -> not (HS.member a writePoisonAcks)) writeAckIds
+             in Right (successAcks, decodePoison <> writePoison)
   where
     cp suffix = fromString $ toString $ "processList:" <> label <> suffix
 

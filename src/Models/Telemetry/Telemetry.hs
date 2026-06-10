@@ -81,11 +81,11 @@ import Data.Default (Default (..))
 import Data.Effectful.UUID (UUIDEff, genUUID)
 import Data.Generics.Labels ()
 import Data.HashMap.Strict qualified as HM
+import Data.HashSet qualified as HS
 import Data.List qualified as L (groupBy)
 import Data.List.Extra (chunksOf)
 import Data.List.NonEmpty qualified as NE
 import Data.Map qualified as Map
-import Data.HashSet qualified as HS
 import Data.Maybe (fromJust)
 import Data.Set qualified as S
 import Data.Text qualified as T
@@ -866,7 +866,8 @@ type WriteFailure = These SomeException SomeException
 -- | A message that couldn't be parsed/converted. Callers MUST publish these to
 -- the DLQ before committing source-topic offsets so the bytes are preserved
 -- for manual investigation (never silent-drop).
-type PoisonMsg = (Text, ByteString, Text)
+type PoisonMsg =
+  (Text, ByteString, Text)
   -- ^ @(ackId, rawBytes, errorReason)@
 
 
@@ -946,7 +947,8 @@ retryHasqlWrite maxAttempts store act = go 1
               -- approximation since the caller cares about poison, not the count).
               Log.logTrace "retryHasqlWrite: TuplesOk wire-mismatch ignored" $ AE.object ["store" AE..= store]
               pure (Right mempty)
-          | attempt < maxAttempts, Hasql.isTransientException e -> do
+          | attempt < maxAttempts
+          , Hasql.isTransientException e -> do
               let delayMicros = min 5000000 (100000 * (2 ^ (attempt - 1) :: Int)) -- 100ms,200ms,…cap 5s
               Log.logAttention "retryHasqlWrite: transient error, retrying"
                 $ AE.object

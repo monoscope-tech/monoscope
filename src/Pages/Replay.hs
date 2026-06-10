@@ -3,7 +3,6 @@ module Pages.Replay (replayPostH, ReplayPost (..), processReplayEvents, replaySe
 import Codec.Compression.GZip qualified as GZip
 import Conduit (runConduit)
 import Control.Exception (throwIO, try)
-import Models.Telemetry.Telemetry qualified as Telemetry
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEKey
 import Data.Aeson.KeyMap qualified as KM
@@ -32,6 +31,7 @@ import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.Minio (MinioErr (..), ServiceErr (..))
 import Network.Minio qualified as Minio
 import OddJobs.Job (createJob)
@@ -310,15 +310,16 @@ processReplayEvents msgs _attrs = do
 
     -- Returns @(acks, poison)@ for one chunk so the caller can DLQ poison and
     -- ack only the successfully-saved + DLQ'd ackIds.
-    handleChunk envCfg jobsPool chunk = mconcat <$> forM chunk \(!ackId, !body) ->
-      case splitReplayPayload (stripJsonNullEscapes body) of
-        Left err -> do
-          Metrics.bumpErrorCounter "replay:decode_error"
-          pure ([], [(ackId, body, "replay:decode_error: " <> toText err)])
-        Right payload ->
-          saveReplayMinio envCfg jobsPool ackId payload <&> \case
-            Just acked -> ([acked], [])
-            Nothing -> ([], [])
+    handleChunk envCfg jobsPool chunk =
+      mconcat <$> forM chunk \(!ackId, !body) ->
+        case splitReplayPayload (stripJsonNullEscapes body) of
+          Left err -> do
+            Metrics.bumpErrorCounter "replay:decode_error"
+            pure ([], [(ackId, body, "replay:decode_error: " <> toText err)])
+          Right payload ->
+            saveReplayMinio envCfg jobsPool ackId payload <&> \case
+              Just acked -> ([acked], [])
+              Nothing -> ([], [])
 
 
 -- | Retrieve a legacy single-object replay blob. Returns `Left` on transport

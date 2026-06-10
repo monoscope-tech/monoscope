@@ -17,11 +17,11 @@ module Models.Projects.ProjectApiKeys (
 )
 where
 
+import Control.Exception (throwIO)
 import Data.Aeson qualified as AE
 import Data.Base64.Types qualified as B64T
 import Data.Cache qualified as Cache
 import Data.Default (Default)
-import Control.Exception (throwIO)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.OpenApi (ToParamSchema (..), ToSchema (..), declareNamedSchema)
 import Data.Time (UTCTime)
