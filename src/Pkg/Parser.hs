@@ -1,5 +1,5 @@
 -- Parser implemented with help and code from: https://markkarpov.com/tutorial/megaparsec.html
-module Pkg.Parser (queryASTToComponents, parseQueryToComponents, getProcessedColumns, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, SqlQueryCfg (..), QueryComponents (..), NormalizedQuery (..), normalizeQuery, buildDateRange, buildGroupBy, buildOrderBy, buildLimit, buildWhereCondition, listToColNames, colsNoAsClause, defaultSelectSqlQuery, pSource, parseQueryToAST, ToQueryText (..), calculateAutoBinWidth, replacePlaceholders, variablePresets, variablePresetsKQL, constantToSQLList, constantToKQLList, defaultQueryLimit) where
+module Pkg.Parser (queryASTToComponents, parseQueryToComponents, getProcessedColumns, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, SqlQueryCfg (..), QueryComponents (..), NormalizedQuery (..), normalizeQuery, buildDateRange, buildGroupBy, buildOrderBy, buildLimit, buildWhereCondition, listToColNames, colsNoAsClause, defaultSelectSqlQuery, pSource, parseQueryToAST, ToQueryText (..), calculateAutoBinWidth, replacePlaceholders, variablePresets, variablePresetsKQL, constantToSQLList, constantToKQLList, defaultQueryLimit, wrapForRowExtraction) where
 
 import Control.Error (hush)
 import Data.Default (Default (def))
@@ -536,6 +536,18 @@ colsNoAsClause = mapMaybe (\x -> Safe.headMay $ T.strip <$> T.splitOn "as" x)
 
 instance HasField "toColNames" QueryComponents [Text] where
   getField qc = qc.finalColumns
+
+
+-- | Wrap an inner SELECT producing N columns in a single jsonb-array projection.
+-- Replaces the legacy `json_agg(json_each(row_to_json(sub.*)) WITH ORDINALITY)`
+-- idiom: both Postgres and TimeFusion ship `jsonb_build_array(VARIADIC any)`,
+-- and derived-column aliases (`sub(c1..cN)`) decouple us from the inner SELECT
+-- expression shapes. Same wire output as the legacy wrapper but avoids the
+-- JSON-parser hazard on TEXT columns containing NULL bytes or lone surrogates.
+wrapForRowExtraction :: Int -> Text -> Text
+wrapForRowExtraction n inner =
+  let aliases = T.intercalate "," [ "c" <> show i | i <- [1 .. n] ]
+   in "SELECT jsonb_build_array(" <> aliases <> ") FROM (" <> inner <> ") sub(" <> aliases <> ")"
 
 
 -- | Replace all occurrences of {{key}} in the input text using the provided mapping.

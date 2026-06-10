@@ -197,14 +197,18 @@ logExplorerUrlPath pid q cols cursor since fromV toV layout source recent = "/p/
 
 
 -- | Execute arbitrary SQL query and return results as vector of vectors.
--- Wraps in row_to_json + json_each to preserve column order via hasql.
-executeArbitraryQuery :: DB es => HI.Sql -> Eff es (V.Vector (V.Vector AE.Value))
-executeArbitraryQuery querySql = do
+-- Wraps the inner SELECT with `jsonb_build_array` so each row is returned as a
+-- single jsonb array of its column values. Works on both Postgres and
+-- TimeFusion (both ship `jsonb_build_array(VARIADIC any)`). Caller passes the
+-- expected column count — see `Pkg.Parser.wrapForRowExtraction`.
+executeArbitraryQuery :: DB es => Int -> HI.Sql -> Eff es (V.Vector (V.Vector AE.Value))
+executeArbitraryQuery colCount querySql = do
+  let aliases = T.intercalate "," ["c" <> show i | i <- [1 .. colCount]]
   results :: [AE.Value] <-
     Hasql.interp
-      $ rawSql "SELECT (SELECT json_agg(x.value ORDER BY x.ordinality)::jsonb FROM json_each(row_to_json(sub.*)) WITH ORDINALITY AS x) FROM ("
+      $ rawSql ("SELECT jsonb_build_array(" <> aliases <> ") FROM (")
       <> querySql
-      <> rawSql ") AS sub"
+      <> rawSql (") sub(" <> aliases <> ")")
   pure $ V.fromList $ mapMaybe jsonArrayToVector results
 
 
@@ -314,7 +318,7 @@ selectLogTable pid queryAST queryText cursorM dateRange projectedColsByUser sour
       ]
       $ try @SomeException
       $ checkpoint (toAnnotation ("selectLogTable", q))
-      $ executeArbitraryQuery (rawSql q)
+      $ executeArbitraryQuery (length queryComponents.toColNames) (rawSql q)
   case result of
     Left e -> pure $ Left $ show e
     Right logItemsV -> do
@@ -444,10 +448,9 @@ data SessionRow = SessionRow
 
 
 -- | Mirrors the column order of the SELECT in 'fetchSessions'. Decoded
--- directly via hasql to bypass the row_to_json/json_each wrapper used by
--- 'executeArbitraryQuery' — that wrapper trips PostgreSQL's JSON parser
--- whenever a TEXT value (e.g. a user_agent or url_path captured from raw
--- OTLP) contains characters JSON forbids (NULL bytes, lone surrogates).
+-- directly via hasql as a perf-oriented typed path; 'executeArbitraryQuery'
+-- now uses 'jsonb_build_array' which is safe for NULL bytes and lone
+-- surrogates, so this no longer doubles as a parser-bug workaround.
 data RawSessionRow = RawSessionRow
   { sessionId :: Text
   , userId :: Maybe Text
@@ -854,7 +857,7 @@ fetchEventExamples enableTfReads pid queryAST dateRange expandKind skip limitN =
             <> expandFilter
             <> [HI.sql| ORDER BY timestamp ASC OFFSET #{skip}::BIGINT LIMIT #{limitN}::BIGINT|]
   Log.logTrace "fetchEventExamples: query" $ AE.object ["project_id" AE..= pid]
-  rows <- Hasql.withHasqlTimefusion enableTfReads $ checkpoint (toAnnotation ("fetchEventExamples" :: Text, pid)) $ executeArbitraryQuery q
+  rows <- Hasql.withHasqlTimefusion enableTfReads $ checkpoint (toAnnotation ("fetchEventExamples" :: Text, pid)) $ executeArbitraryQuery (length (colsNoAsClause cols)) q
   pure (rows, listToColNames cols)
 
 
