@@ -531,8 +531,10 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp sampleOverri
               Just summary
                 | not (V.null summary) ->
                     renderSample $ div_ [class_ "flex flex-wrap items-center gap-1 p-4 max-h-80 overflow-y-auto"] $ renderSummaryChips_ summary
-              _ -> whenJust (sampleMessage >>= \m -> if T.strip m == T.strip logPattern then Nothing else Just m)
-                (renderSample . renderLogContent_)
+              _ ->
+                whenJust
+                  (sampleMessage >>= \m -> if T.strip m == T.strip logPattern then Nothing else Just m)
+                  (renderSample . renderLogContent_)
       div_ [class_ "flex flex-wrap gap-2 items-center"] do
         severityBadge issue.severity
         issueTypeLabel issue.issueType issue.critical
