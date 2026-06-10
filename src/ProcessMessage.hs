@@ -1,6 +1,7 @@
 {-# LANGUAGE PartialTypeSignatures #-}
 {-# LANGUAGE StrictData #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+
 -- processMessages uses @pure $!@ to force the (ackId, raw, span) tuple to
 -- WHNF immediately, preventing thunk accumulation across forM. hlint flags
 -- it as "Redundant $!" but it's load-bearing here.
