@@ -163,11 +163,9 @@ applySectionToComponent sqlCfg qc (SummarizeCommand aggs byClauseM) =
    in applySummarizeByClauseToQC sqlCfg byClauseM $ qc{aggregations = qc.aggregations <> map display aggs, percentilesInfo = pctInfo}
 -- extend adds computed columns (appends to defaults) AND tracks mappings for GROUP BY resolution
 applySectionToComponent _ qc (ExtendCommand cols) =
-  let colMappings = [(name, stripAlias $ display expr) | (name, expr) <- cols]
+  let colMappings = [(name, fst $ splitTrailingAlias $ display expr) | (name, expr) <- cols]
       extendCols = map (display . snd) cols
    in qc{extendedColumns = qc.extendedColumns <> colMappings, extendSelect = qc.extendSelect <> extendCols}
-  where
-    stripAlias expr = let (pre, post) = T.breakOn " AS " expr in if T.null post then expr else pre
 -- project replaces select with only the specified columns
 applySectionToComponent _ qc (ProjectCommand cols) = qc{select = map (display . snd) cols}
 applySectionToComponent _ qc (SortCommand sortFields) = qc{sortFields = Just sortFields}
@@ -258,7 +256,11 @@ sqlFromQueryComponents sqlCfg qc =
     -- Build complete WHERE clause for data queries
     buildWhere = T.intercalate " and " $ filter (not . T.null) ["project_id='" <> nq.nqProjectId <> "'", dateRangeStr, "(" <> whereCondition <> ")"]
 
-    countOver = "count(*) OVER() as _total_count" :: Text
+    -- count(*) OVER() goes inside the array as the LAST element when
+    -- hasCountOver = True; 'selectLogTable' peels it back off via dropLast.
+    countOver = "count(*) OVER()" :: Text
+    wrap :: Text -> Text
+    wrap cols = "jsonb_build_array(" <> cols <> ")"
     -- Standard data queries skip count(*) OVER() and use LIMIT+1 to detect hasMore
     overflowLimitClause = case qc.takeLimit of
       Just limit -> "limit " <> show (limit + 1)
@@ -270,7 +272,7 @@ sqlFromQueryComponents sqlCfg qc =
                 FROM otel_logs_and_spans where {buildWhere}
                 {groupByClause}
                 )
-               SELECT {selectClause}, {countOver} FROM ranked_spans
+               SELECT {wrap (selectClause <> ", " <> countOver)} FROM ranked_spans
                   WHERE rn = 1 {sortOrder} {limitClause} |]
         , True
         )
@@ -278,10 +280,13 @@ sqlFromQueryComponents sqlCfg qc =
         case qc.finalSummarizeQuery of
           Just binInterval ->
             let timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
-                cols = if null qc.aggregations then qc.select else qc.aggregations
+                -- jsonb_build_array(...) args cannot carry @AS alias@, so strip
+                -- trailing aliases from aggregations / projected cols here.
+                cols = colsNoAsClause $ if null qc.aggregations then qc.select else qc.aggregations
                 selectCols = T.intercalate "," $ filter (not . T.isInfixOf "time_bucket") cols
                 selectPart = if T.null selectCols then "" else selectCols <> ", "
-             in ( [fmt|SELECT extract(epoch from {timeBucketExpr})::integer, {selectPart}{countOver}
+                args = "extract(epoch from " <> timeBucketExpr <> ")::integer, " <> selectPart <> countOver
+             in ( [fmt|SELECT {wrap args}
                    FROM {fromTable}
                    WHERE {buildWhere}
                    GROUP BY {timeBucketExpr}
@@ -291,16 +296,19 @@ sqlFromQueryComponents sqlCfg qc =
                 )
           Nothing ->
             let useAggregations = not (null qc.aggregations) && not (null qc.groupByClause)
-                selectPart = if useAggregations then T.intercalate "," qc.aggregations else selectClause
+                selectPart =
+                  if useAggregations
+                    then T.intercalate "," (colsNoAsClause qc.aggregations)
+                    else selectClause
              in if useAggregations
                   then
-                    ( [fmt|SELECT {selectPart}, {countOver} FROM {fromTable}
+                    ( [fmt|SELECT {wrap (selectPart <> ", " <> countOver)} FROM {fromTable}
                        WHERE {buildWhere}
                        {groupByClause} {sortOrder} {limitClause} |]
                     , True
                     )
                   else
-                    ( [fmt|SELECT {selectPart} FROM {fromTable}
+                    ( [fmt|SELECT {wrap selectPart} FROM {fromTable}
                        WHERE {buildWhere}
                        {groupByClause} {sortOrder} {overflowLimitClause} |]
                     , False
@@ -394,25 +402,32 @@ sqlFromQueryComponents sqlCfg qc =
     )
 
 
-----------------------------------------------------------------------------------
--- parseQueryToComponents converts a monoscope query to components which can be executed directly against a database
-----------------------------------------------------------------------------------
--- >>> Right (q, cmp) = parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime) "request_body.message!=\"blabla\" AND method==\"GET\""
--- >>> q
--- "SELECT json_build_array(id::text,to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),request_type,host,status_code,method,url_path,JSONB_ARRAY_LENGTH(errors),LEFT(\n        CONCAT(\n            'url=', COALESCE(raw_url, 'null'),\n            ' response_body=', COALESCE(response_body, 'null'),\n            ' request_body=', COALESCE(request_body, 'null') \n        ),\n        255\n    )) FROM  \n          WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid  and ( created_at > NOW() - interval '14 days' \n             AND (request_body->>'message'!='blabla' AND method='GET') )\n           ORDER BY created_at desc limit 200 "
+-- | Parse a monoscope query to components ready for database execution.
 --
--- >>> Right (q2, cmp2) = parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime) "request_body.message!=\"blabla\" AND method==\"GET\""
--- >>> q2
--- "SELECT json_build_array(id::text,to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),request_type,host,status_code,method,url_path,JSONB_ARRAY_LENGTH(errors),LEFT(\n        CONCAT(\n            'url=', COALESCE(raw_url, 'null'),\n            ' response_body=', COALESCE(response_body, 'null'),\n            ' request_body=', COALESCE(request_body, 'null') \n        ),\n        255\n    )) FROM  \n          WHERE project_id='00000000-0000-0000-0000-000000000000'::uuid  and ( created_at > NOW() - interval '14 days' \n             AND (request_body->>'message'!='blabla' AND method='GET') )\n           ORDER BY created_at desc limit 200 "
+-- >>> let cfg = defSqlQueryCfg defPid fixedUTCTime Nothing Nothing
+-- >>> let Right (q, c) = parseQueryToComponents cfg "method == \"GET\""
+-- >>> T.isPrefixOf "SELECT jsonb_build_array(" (T.stripStart q)
+-- True
+-- >>> c.hasCountOver
+-- False
+-- >>> T.isInfixOf "method = 'GET'" q
+-- True
 --
--- >>> Right (q3, cmp3) = parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime) "errors[*].error_type==[]"
--- >>> cmp3.whereClause
+-- >>> let Right (q2, c2) = parseQueryToComponents cfg "method == \"GET\" | summarize count(*) by bin(timestamp, 1h)"
+-- >>> c2.hasCountOver
+-- True
+-- >>> T.isInfixOf "count(*) OVER()" q2
+-- True
+-- >>> T.isInfixOf "as _total_count" q2
+-- False
+--
+-- >>> let Right (_, c3) = parseQueryToComponents cfg "errors[*].error_type == []"
+-- >>> c3.whereClause
 -- Just "jsonb_path_exists(errors, $$$[*].\"error_type\" ? (@ == {} )$$::jsonpath)"
 --
--- >>> Right (q4, cmp4) = parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime) "errors[*].error_type=~/^ab.*c/"
--- >>> cmp4.whereClause
+-- >>> let Right (_, c4) = parseQueryToComponents cfg "errors[*].error_type =~ /^ab.*c/"
+-- >>> c4.whereClause
 -- Just "jsonb_path_exists(errors, $$$[*].\"error_type\" ? (@ = \"^ab.*c\")$$::jsonpath)"
---
 parseQueryToComponents :: SqlQueryCfg -> Text -> Either Text (Text, QueryComponents)
 parseQueryToComponents sqlCfg q = bimap (toText . errorBundlePretty) (queryASTToComponents sqlCfg) (parse parseQuery "" (T.strip q))
 
@@ -522,23 +537,29 @@ defaultSelectSqlQuery (Just SSpans) =
   ]
 
 
--- | Split on a *trailing* @ as <ident>@ — leaves internal @as@ untouched
--- (so @CAST(x AS VARCHAR)@ and @'$.id as ref'@ inside literals are safe).
+-- | Split on a *trailing* @ as <ident>@ — case-insensitive (aggregations
+-- emit @AS@, projections emit @as@). Internal @AS@ inside @CAST(x AS T)@
+-- or string literals stays untouched.
 --
 -- >>> splitTrailingAlias "JSONB_ARRAY_LENGTH(errors) as errors_count"
 -- ("JSONB_ARRAY_LENGTH(errors)",Just "errors_count")
+-- >>> splitTrailingAlias "sum(x)::float AS total"
+-- ("sum(x)::float",Just "total")
 -- >>> splitTrailingAlias "CAST(x AS VARCHAR)"
 -- ("CAST(x AS VARCHAR)",Nothing)
 splitTrailingAlias :: Text -> (Text, Maybe Text)
-splitTrailingAlias (T.strip -> t) = case T.breakOnEnd asNeedle t of
-  (pre, T.strip -> alias)
-    | not (T.null pre)
-    , not (T.null alias)
-    , T.all (\c -> isAlphaNum c || c == '_') alias ->
-        (T.strip $ T.dropEnd (T.length asNeedle) pre, Just alias)
-  _ -> (t, Nothing)
-  where
-    asNeedle = " as "
+splitTrailingAlias (T.strip -> t) =
+  let asNeedle = " as "
+      (preLower, _) = T.breakOnEnd asNeedle (T.toLower t)
+      preLen = T.length preLower
+   in if T.null preLower
+        then (t, Nothing)
+        else
+          let pre = T.take preLen t
+              alias = T.strip $ T.drop preLen t
+           in if T.null alias || not (T.all (\c -> isAlphaNum c || c == '_') alias)
+                then (t, Nothing)
+                else (T.strip $ T.dropEnd (T.length asNeedle) pre, Just alias)
 
 
 -- >>> listToColNames ["id", "JSONB_ARRAY_LENGTH(errors) as errors_count"]
