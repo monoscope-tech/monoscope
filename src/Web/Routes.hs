@@ -237,9 +237,9 @@ data ApiV1Routes mode = ApiV1Routes
   , monitorGet :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> Get '[JSON] Monitors.QueryMonitor
   , monitorCreate :: mode :- "monitors" :> ReqBody '[JSON] ApiT.MonitorInput :> Post '[JSON] Monitors.QueryMonitor
   , monitorApply :: mode :- "monitors" :> "apply" :> ReqBody '[JSON] ApiT.MonitorInput :> Post '[JSON] Monitors.QueryMonitor
-  , -- | /yaml returns the applyable MonitorInput as JSON (same for dashboards);
-    -- the CLI renders it as YAML client-side via runYamlDump.
-    monitorYaml :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> "yaml" :> Get '[JSON] ApiT.MonitorInput
+  , monitorYaml :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> "yaml" :> Get '[JSON] ApiT.MonitorInput
+  -- ^ /yaml returns the applyable MonitorInput as JSON (same for dashboards);
+  -- the CLI renders it as YAML client-side via runYamlDump.
   , monitorUpdate :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> ReqBody '[JSON] ApiT.MonitorInput :> Put '[JSON] Monitors.QueryMonitor
   , monitorPatch :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> ReqBody '[JSON] ApiT.MonitorPatch :> Patch '[JSON] Monitors.QueryMonitor
   , monitorDelete :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> Delete '[JSON] NoContent
