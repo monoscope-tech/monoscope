@@ -6,6 +6,8 @@
 module Opentelemetry.OtlpServer (
   processList,
   runServer,
+  httpTracesExport,
+  httpLogsExport,
   -- Exported for testing
   logsServiceExport,
   traceServiceExport,
@@ -1547,6 +1549,23 @@ processTraceRequest metadataApiKey req = do
 
 
 -- | Trace service handler (Export)
+-- | OTLP/HTTP (application/x-protobuf) ingestion — same processing pipeline
+-- as the gRPC handlers, for SDK exporters that speak http/protobuf
+-- (hs-opentelemetry's does) and self-hosted setups without a collector in
+-- front. The x-api-key HTTP header plays the role of gRPC metadata auth.
+httpTracesExport, httpLogsExport :: Logger -> AuthContext -> TracerProvider -> Maybe Text -> BS.ByteString -> IO (Either Text BS.ByteString)
+httpTracesExport appLogger appCtx tp keyM body = case decodeMessage body of
+  Left err -> pure $ Left ("invalid ExportTraceServiceRequest protobuf: " <> toText err)
+  Right (req :: TS.ExportTraceServiceRequest) -> do
+    _ <- runBackground appLogger appCtx tp $ processTraceRequest keyM req
+    pure $ Right (encodeMessage (defMessage :: TS.ExportTraceServiceResponse))
+httpLogsExport appLogger appCtx tp keyM body = case decodeMessage body of
+  Left err -> pure $ Left ("invalid ExportLogsServiceRequest protobuf: " <> toText err)
+  Right (req :: LS.ExportLogsServiceRequest) -> do
+    _ <- runBackground appLogger appCtx tp $ processLogsRequest keyM req
+    pure $ Right (encodeMessage (defMessage :: LS.ExportLogsServiceResponse))
+
+
 traceServiceExport :: Logger -> AuthContext -> TracerProvider -> Proto TS.ExportTraceServiceRequest -> IO (Proto TS.ExportTraceServiceResponse)
 traceServiceExport appLogger appCtx tp (Proto req) = do
   -- Note: This version is for backwards compatibility when called directly in tests

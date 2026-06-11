@@ -169,14 +169,9 @@ Options:
 | `--first` | Return only the first matching event (the JSON envelope still carries `count`/`has_more`) |
 | `--id-only` | Print just the first event's `id` to stdout — natural input for `events get`/`share-link`. Implies `--first` |
 | `--with-children` | Also return descendants of each matched span (default: predicate hits only) |
-| `--chunk-hours <H>` | Hours per slice when auto-chunking long `--since` windows (default `1`). See *Auto-chunking* below |
-| `--no-chunk` | Disable auto-chunking (single round-trip, original behaviour) |
+| `--chunk-hours <H>` | Hours per internal fetch slice for wide `--since` windows (default `1`; `0` = single request) |
 
-The JSON output envelope is stable: `{events: [...], count, has_more, cursor}`. Use `cursor` to drive pagination loops, `count` for the total matching, and `has_more` to terminate.
-
-#### Auto-chunking long `--since` windows
-
-`events search` / `logs search` split any window wider than `--chunk-hours` (default `1`) into 1-hour slices anchored on a single `now` and stream each slice's response as a separate JSON object on stdout (NDJSON). This sidesteps Cloudflare's 504 on multi-day queries and short-circuits on `--first` / `--id-only`. Pass `--no-chunk` to restore the single-request path.
+The JSON output envelope is stable: `{events: [...], count, has_more, cursor}`. Use `cursor` to drive pagination loops, `count` for the total matching, and `has_more` to terminate. Windows wider than `--chunk-hours` are fetched in slices internally (sidestepping gateway timeouts on multi-day queries) and merged client-side — the output is always that single envelope, with events deduplicated at slice boundaries and `--limit` applied across the whole window.
 
 ### Get a single event or trace
 

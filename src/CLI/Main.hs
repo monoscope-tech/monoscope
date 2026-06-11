@@ -303,13 +303,10 @@ eventsSearchParser =
     <*> switch (long "first" <> help "Return only the first matching event")
     <*> switch (long "id-only" <> help "Print just the first event id (implies --first)")
     <*> switch (long "with-children" <> help "Also return descendants (the sub-tree) of each matched span (default: predicate hits only)")
-    -- auto-chunk long --since to dodge the CF 504 timeout. When the
-    -- effective window is wider than --chunk-hours (default 1h) and chunking
-    -- is enabled, the CLI slices the window into 1h pieces and streams each
-    -- slice's response as a separate JSON object on stdout (NDJSON in JSON
-    -- mode). --no-chunk disables it.
-    <*> switch (long "no-chunk" <> help "Disable auto-chunking of long --since windows")
-    <*> optional (option auto (long "chunk-hours" <> metavar "H" <> help "Hours per slice when auto-chunking (default: 1)"))
+    -- Wide --since windows are fetched in --chunk-hours slices internally (to
+    -- dodge the CF 504 timeout) and merged client-side: the output is always
+    -- a single envelope, identical to a single-request search.
+    <*> optional (option auto (long "chunk-hours" <> metavar "H" <> help "Hours per internal fetch slice for wide --since windows (default: 1; 0 = single request)"))
 
 
 -- | C5: Concrete KQL examples in @--help@ — agents copy from here, so keep

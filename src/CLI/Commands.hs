@@ -47,6 +47,7 @@ import Data.Aeson.Key qualified as AK
 import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Lens qualified as AL
 import Data.Effectful.Wreq (HTTP, runHTTPWreq)
+import Data.HashMap.Strict qualified as HM
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
@@ -60,7 +61,6 @@ import Effectful.Environment (Environment)
 import Effectful.Environment qualified as Env
 import Effectful.FileSystem (FileSystem)
 import Models.Apis.SchemaCatalog qualified as Fields
-import Data.HashMap.Strict qualified as HM
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Context.ThreadLocal qualified as OtelCtx
 import OpenTelemetry.Trace (SpanArguments, SpanStatus (..), Tracer, TracerOptions (..), TracerProvider, defaultSpanArguments, initializeGlobalTracerProvider, makeTracer, shutdownTracerProvider)
@@ -297,9 +297,9 @@ data EventsSearchOpts = EventsSearchOpts
   , from :: Maybe Text
   , to :: Maybe Text
   , kind :: Maybe Text
-  , -- | repeatable. One value → @resource.service.name=="x"@. Multiple
-    -- values → @resource.service.name in ("x", "y")@. Empty → no filter.
-    service :: [Text]
+  , service :: [Text]
+  -- ^ repeatable. One value → @resource.service.name=="x"@. Multiple
+  -- values → @resource.service.name in ("x", "y")@. Empty → no filter.
   , level :: Maybe Text
   , limit :: Maybe Int
   , fields :: Maybe Text
@@ -312,15 +312,13 @@ data EventsSearchOpts = EventsSearchOpts
     -- (Field is named @firstOnly@ to avoid colliding with @Relude.first@.)
     firstOnly :: Bool
   , idOnly :: Bool
-  , -- | Also return descendants (the sub-tree) of each matched span. Off by
-    -- default — predicate hits only.
-    withChildren :: Bool
-  , -- | disable auto-chunking of long --since windows. Default behaviour
-    -- chunks effective windows > chunkHours into 1h slices so the CF edge
-    -- doesn't 504; @--no-chunk@ restores the legacy single-request path.
-    noChunk :: Bool
+  , withChildren :: Bool
+  -- ^ Also return descendants (the sub-tree) of each matched span. Off by
+  -- default — predicate hits only.
   , chunkHours :: Maybe Int
-  -- ^ Hours per slice when auto-chunking. Defaults to 1.
+  -- ^ Hours per transport slice when fetching wide --since windows (the CF
+  -- edge 504s on multi-day single requests). Purely a transport knob — the
+  -- output is always a single envelope. Defaults to 1; @0@ disables slicing.
   }
   deriving stock (Show)
 
@@ -328,7 +326,8 @@ data EventsSearchOpts = EventsSearchOpts
 data EventsGetOpts = EventsGetOpts
   { eventId :: Text
   , showTree :: Bool
-  , at :: Maybe Text -- ^ ISO-8601 timestamp for a fast point-in-time lookup
+  , at :: Maybe Text
+  -- ^ ISO-8601 timestamp for a fast point-in-time lookup
   , projectFields :: [Text]
   -- ^ when non-empty, project these top-level fields out of the event
   -- JSON instead of dumping the full blob.
@@ -374,66 +373,109 @@ runEventsSearch cfg opts mode = do
 -- | Single (legacy) search request.
 runOneSearch :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> EventsSearchOpts -> OutputMode -> [(Text, Text)] -> Eff es ()
 runOneSearch cfg validatedOpts mode params =
-  withAPIResult cfg "/api/v1/events" params $ \val -> do
-    -- Decode once, share between the JSON projection and (when --first is
-    -- set) the table projection.
-    let firstOnly = validatedOpts.firstOnly || validatedOpts.idOnly
-        normalized = case decodeEvents val of
-          Nothing -> val
-          Just d -> normalizeDecoded d validatedOpts.fields
-        sliced = if firstOnly then takeFirstEvent normalized else normalized
-        -- Mirror --first into the raw envelope so table mode also shows
-        -- one row instead of all-of-them (the JSON path used to slice and
-        -- the table path didn't, leading to inconsistent output).
-        valForTable = if firstOnly then takeFirstRow val else val
-    case (validatedOpts.idOnly, mode) of
-      -- C11: --id-only short-circuits to a bare id on stdout — the natural
-      -- input for "search → get" pipelines, no jq required.
-      (True, _) -> emitFirstEventId sliced
-      (False, _) -> renderWith mode sliced (renderEventsTable valForTable validatedOpts.fields)
+  withAPIResult cfg "/api/v1/events" params (renderSearchResult validatedOpts mode)
 
 
--- | chunked search. Each slice is one HTTP request; results stream out
--- (NDJSON in JSON mode, one table per slice in table mode). Stops early on
--- @--first@ / @--id-only@ as soon as a slice has a hit. Pagination within a
--- slice still uses @--cursor@.
+-- | Shared rendering tail for single and chunked searches — the output
+-- contract (exactly one envelope; @--first@/@--id-only@ slicing) lives here
+-- and only here.
+renderSearchResult :: IOE :> es => EventsSearchOpts -> OutputMode -> AE.Value -> Eff es ()
+renderSearchResult validatedOpts mode val = do
+  -- Decode once, share between the JSON projection and (when --first is
+  -- set) the table projection.
+  let firstOnly = validatedOpts.firstOnly || validatedOpts.idOnly
+      normalized = case decodeEvents val of
+        Nothing -> val
+        Just d -> normalizeDecoded d validatedOpts.fields
+      sliced = if firstOnly then takeFirstEvent normalized else normalized
+      -- Mirror --first into the raw envelope so table mode also shows
+      -- one row instead of all-of-them (the JSON path used to slice and
+      -- the table path didn't, leading to inconsistent output).
+      valForTable = if firstOnly then takeFirstRow val else val
+  if validatedOpts.idOnly
+    -- C11: --id-only short-circuits to a bare id on stdout — the natural
+    -- input for "search → get" pipelines, no jq required.
+    then emitFirstEventId sliced
+    else renderWith mode sliced (renderEventsTable valForTable validatedOpts.fields)
+
+
+-- | Merge accumulator for 'runChunkedSearch'.
+data ChunkMerge = ChunkMerge
+  { template :: Maybe AE.Value
+  -- ^ first slice's raw envelope — carries colIdxMap etc. for the merge
+  , rows :: [[AE.Value]]
+  -- ^ merged raw logsData rows, newest slice first
+  , seen :: Set Text
+  -- ^ event ids already kept (dedupes slice-boundary overlap)
+  , more :: Bool
+  , cur :: AE.Value
+  , stopped :: Bool
+  }
+
+
+-- | Chunked search. Slices are an internal transport detail — one HTTP
+-- request per slice so wide windows don't 504 at the CF edge — and never an
+-- output shape: the result is exactly one 'renderSearchResult' envelope,
+-- identical to the single-request path. Slices are fetched newest-first with
+-- the remaining @--limit@ budget passed through; rows are deduped by event id
+-- at slice boundaries. When a slice reports hasMore — or the budget runs out
+-- with older slices unfetched — the merged envelope reports hasMore (with the
+-- stopping slice's cursor when available) and older slices are skipped, so
+-- following the cursor continues into them without duplicates.
 runChunkedSearch
   :: (Environment :> es, HTTP :> es, IOE :> es)
   => CLIConfig -> EventsSearchOpts -> OutputMode -> [(Text, Text)] -> Eff es ()
 runChunkedSearch cfg validatedOpts mode slices = do
-  let nSlices = length slices `div` 2
-  printDebug $ "auto-chunk: " <> show nSlices <> " slices (use --no-chunk to disable)"
-  -- Resolve sentinel offsets ("Nh") to absolute ISO 8601 strings now so each
-  -- slice uses the same clock; otherwise a slow first request could nudge
-  -- later slice boundaries forward.
+  printDebug $ "auto-chunk: " <> show (length slices `div` 2) <> " slices (use --chunk-hours 0 to disable)"
+  -- Resolve sentinel offsets ("Nh") to absolute ISO 8601 strings anchored on
+  -- one clock so a slow first request can't nudge later slice boundaries.
   now <- liftIO Data.Time.getCurrentTime
-  let resolved = map (resolveOffsetPair now) (groupSlices slices)
-  hitRef <- newIORef False
-  forM_ resolved $ \chunkParams -> do
-    alreadyHit <- readIORef hitRef
-    let firstOnly = validatedOpts.firstOnly || validatedOpts.idOnly
-    unless (firstOnly && alreadyHit) $ do
-      -- Override since/from/to with the slice's absolute window; everything
-      -- else (query, level, etc.) flows through buildSearchParams normally.
-      let baseOpts :: EventsSearchOpts
-          baseOpts = validatedOpts {since = Nothing, from = Nothing, to = Nothing}
-          baseParams = filter (\(k, _) -> k `notElem` ["since", "from", "to"]) (buildSearchParams baseOpts)
-          params = baseParams <> chunkParams
-      withAPIResult cfg "/api/v1/events" params $ \val -> do
-        let normalized = case decodeEvents val of
-              Nothing -> val
-              Just d -> normalizeDecoded d validatedOpts.fields
-            hadHit = case normalized of
-              AE.Object o -> case KM.lookup "events" o of
-                Just (AE.Array a) -> not (V.null a)
-                _ -> False
-              _ -> False
-        when hadHit $ writeIORef hitRef True
-        let sliced = if firstOnly then takeFirstEvent normalized else normalized
-            valForTable = if firstOnly then takeFirstRow val else val
-        case (validatedOpts.idOnly, mode) of
-          (True, _) -> when hadHit $ emitFirstEventId sliced
-          (False, _) -> renderWith mode sliced (renderEventsTable valForTable validatedOpts.fields)
+  let firstOnly = validatedOpts.firstOnly || validatedOpts.idOnly
+      -- sliceOffsets emits slices newest-first already (i counts down)
+      newestFirst = map (resolveOffsetPair now) (groupSlices slices)
+      baseOpts :: EventsSearchOpts
+      baseOpts = validatedOpts{since = Nothing, from = Nothing, to = Nothing}
+      baseParams = filter (\(k, _) -> k `notElem` ["since", "from", "to", "limit"]) (buildSearchParams baseOpts)
+  ref <- newIORef (ChunkMerge Nothing [] mempty False AE.Null False)
+  forM_ newestFirst $ \chunkParams -> do
+    st <- readIORef ref
+    let remaining = validatedOpts.limit <&> subtract (length st.rows)
+    if st.stopped || (firstOnly && not (null st.rows))
+      then pass
+      else case remaining of
+        Just r | r <= 0 -> writeIORef ref st{stopped = True, more = True}
+        _ -> do
+          let params = baseParams <> chunkParams <> maybe [] (\r -> [("limit", show r)]) remaining
+          withAPIResult cfg "/api/v1/events" params $ \val ->
+            whenJust (decodeEvents val) $ \d -> do
+              st' <- readIORef ref
+              let keyOf r = case Map.lookup "id" d.idxMap >>= \i -> listToMaybe (drop i r) of
+                    Just v -> valToText v
+                    Nothing -> decodeUtf8 (AE.encode r)
+                  fresh = filter (\r -> keyOf r `Set.notMember` st'.seen) d.rawRows
+                  sliceMore = d.hasMore == AE.Bool True
+              writeIORef
+                ref
+                st'
+                  { template = st'.template <|> Just val
+                  , rows = st'.rows <> fresh
+                  , seen = st'.seen <> Set.fromList (map keyOf fresh)
+                  , more = st'.more || sliceMore
+                  , cur = if sliceMore then d.cursor else st'.cur
+                  , stopped = sliceMore || (firstOnly && not (null fresh))
+                  }
+  final <- readIORef ref
+  let keptRows = maybe final.rows (`take` final.rows) validatedOpts.limit
+      patch o =
+        KM.insert "logsData" (AE.toJSON keptRows)
+          . KM.insert "count" (AE.toJSON (length keptRows))
+          . KM.insert "hasMore" (AE.Bool final.more)
+          . KM.insert "cursor" final.cur
+          $ o
+      merged = case final.template of
+        Just (AE.Object o) -> AE.Object (patch o)
+        _ -> AE.Object (patch mempty)
+  renderSearchResult validatedOpts mode merged
 
 
 groupSlices :: [a] -> [[a]]
@@ -448,7 +490,7 @@ groupSlices = go
 --
 -- - @[]@ when chunking is off, --from/--to are explicit, or --since is short.
 -- - Otherwise a flat list of @("from", iso), ("to", iso), ...@ pairs, one
---   pair per slice, oldest first. Timestamps are computed client-side so the
+--   pair per slice, newest first. Timestamps are computed client-side so the
 --   server endpoint can stay on its native ISO-8601 from/to parsing.
 --
 -- We do the time math in pure code (no IO) by passing 'now' separately —
@@ -458,14 +500,14 @@ groupSlices = go
 -- the slicing logic testable.
 planChunks :: EventsSearchOpts -> [(Text, Text)]
 planChunks opts
-  | opts.noChunk = []
+  | chunkH <= 0 = []
   | isJust opts.from || isJust opts.to = []
   | otherwise = case parseDurationHours =<< opts.since of
       Just totalHours
         | totalHours > chunkH -> sliceOffsets totalHours chunkH
       _ -> []
   where
-    chunkH = max 1 (fromMaybe 1 opts.chunkHours)
+    chunkH = fromMaybe 1 opts.chunkHours
 
 
 parseDurationHours :: Text -> Maybe Int
@@ -501,10 +543,12 @@ resolveOffsetPair now = map (second resolve)
     resolve t = case T.stripSuffix "h" t of
       Just hs -> case readMaybe (toString hs) :: Maybe Int of
         Just hours ->
-          let -- negate so offset is in the past
-              dt = fromIntegral (-hours * 3600) :: NominalDiffTime
-              ts = addUTCTime dt now
-           in toText (iso8601Show ts)
+          let
+            -- negate so offset is in the past
+            dt = fromIntegral (-hours * 3600) :: NominalDiffTime
+            ts = addUTCTime dt now
+           in
+            toText (iso8601Show ts)
         Nothing -> t
       Nothing -> t
 
@@ -672,31 +716,33 @@ runEventsContext cfg opts kindOverride mode = do
 -- second walk of @logsData@.
 withTraceSummary :: DecodedEvents -> AE.Value -> AE.Value
 withTraceSummary d (AE.Object out) =
-  let -- Pre-resolve column indices once instead of Map.lookup'ing per cell
-      -- per row — matters on large @events context --summary@ payloads.
-      -- "service" is the alias for resource.service.name in the curated
-      -- column set (Pages.LogExplorer.Log.allCols); "errors" is a boolean
-      -- rendered as "true"/"false". Service has a dotted-form fallback in
-      -- case the column set is reshaped server-side.
-      svcIdx = Map.lookup "service" d.idxMap <|> Map.lookup "resource.service.name" d.idxMap
-      errIdx = Map.lookup "errors" d.idxMap
-      tidIdx = Map.lookup "context.trace_id" d.idxMap <|> Map.lookup "trace_id" d.idxMap
-      at idx r = idx >>= \i -> listToMaybe (drop i r)
-      merge (s1, c1, e1) (s2, c2, e2) = (s1 <> s2, c1 + c2, e1 + e2)
-      groups :: Map Text (Set Text, Int, Int)
-      groups =
-        Map.fromListWith
-          merge
-          [ (tid, (one (fromMaybe "" (at svcIdx r)), 1, if at errIdx r == Just "true" then 1 else 0))
-          | r <- d.rows
-          , let tid = fromMaybe "" (at tidIdx r)
-          , not (T.null tid)
-          ]
-      traces =
-        [ TraceSummary tid (sort (filter (not . T.null) (Set.toList svcs))) n errs
-        | (tid, (svcs, n, errs)) <- Map.toList groups
+  let
+    -- Pre-resolve column indices once instead of Map.lookup'ing per cell
+    -- per row — matters on large @events context --summary@ payloads.
+    -- "service" is the alias for resource.service.name in the curated
+    -- column set (Pages.LogExplorer.Log.allCols); "errors" is a boolean
+    -- rendered as "true"/"false". Service has a dotted-form fallback in
+    -- case the column set is reshaped server-side.
+    svcIdx = Map.lookup "service" d.idxMap <|> Map.lookup "resource.service.name" d.idxMap
+    errIdx = Map.lookup "errors" d.idxMap
+    tidIdx = Map.lookup "context.trace_id" d.idxMap <|> Map.lookup "trace_id" d.idxMap
+    at idx r = idx >>= \i -> listToMaybe (drop i r)
+    merge (s1, c1, e1) (s2, c2, e2) = (s1 <> s2, c1 + c2, e1 + e2)
+    groups :: Map Text (Set Text, Int, Int)
+    groups =
+      Map.fromListWith
+        merge
+        [ (tid, (one (fromMaybe "" (at svcIdx r)), 1, if at errIdx r == Just "true" then 1 else 0))
+        | r <- d.rows
+        , let tid = fromMaybe "" (at tidIdx r)
+        , not (T.null tid)
         ]
-   in AE.Object (KM.insert "traces" (AE.toJSON traces) out)
+    traces =
+      [ TraceSummary tid (sort (filter (not . T.null) (Set.toList svcs))) n errs
+      | (tid, (svcs, n, errs)) <- Map.toList groups
+      ]
+   in
+    AE.Object (KM.insert "traces" (AE.toJSON traces) out)
 withTraceSummary _ v = v
 
 
@@ -1084,12 +1130,17 @@ tryOpenBrowser url =
 withOtelProvider :: (TracerProvider -> IO a) -> IO a
 withOtelProvider = bracket initializeGlobalTracerProvider (`shutdownTracerProvider` Nothing)
 
+
 configureOtelEnv :: CLIConfig -> Text -> Text -> IO ()
 configureOtelEnv cfg service endpoint = do
-  setEnv "OTEL_EXPORTER_OTLP_ENDPOINT" (toString endpoint)
+  -- The standard OTel env var wins over the API-URL-derived endpoint, so a
+  -- collector on a non-default port (or a test server) can be targeted.
+  lookupEnv "OTEL_EXPORTER_OTLP_ENDPOINT"
+    >>= maybe (setEnv "OTEL_EXPORTER_OTLP_ENDPOINT" (toString endpoint)) (const pass)
   setEnv "OTEL_SERVICE_NAME" (toString service)
   whenJust cfg.apiKey $ \k ->
     setEnv "OTEL_EXPORTER_OTLP_HEADERS" ("x-api-key=" <> toString k)
+
 
 sendSpan :: Tracer -> Text -> SpanArguments -> IO ()
 sendSpan tracer name args = do
@@ -1123,12 +1174,12 @@ runSendEvent cfg opts = liftIO $ do
       msg = T.intercalate "\n" opts.messages
       isError = opts.level == "error" || opts.kind == "error"
       attrs =
-        HM.fromList $
-          [ ("log.message", OA.toAttribute msg)
-          , ("log.severity", OA.toAttribute opts.level)
-          , ("event.kind", OA.toAttribute opts.kind)
-          ]
-            <> map (second OA.toAttribute) (opts.tags <> opts.extras)
+        HM.fromList
+          $ [ ("log.message", OA.toAttribute msg)
+            , ("log.severity", OA.toAttribute opts.level)
+            , ("event.kind", OA.toAttribute opts.kind)
+            ]
+          <> map (second OA.toAttribute) (opts.tags <> opts.extras)
   configureOtelEnv cfg opts.service endpoint
   setResourceAttrs opts.resources
   withOtelProvider $ \tp -> do

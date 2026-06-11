@@ -71,7 +71,7 @@ import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import Pkg.Parser.Expr qualified as ParserExpr
-import UnliftIO.Exception (handle)
+import UnliftIO.Exception (handle, throwIO)
 import "base64" Data.ByteString.Base64.URL qualified as B64URL
 import "cryptohash-md5" Crypto.Hash.MD5 qualified as MD5
 
@@ -152,6 +152,34 @@ instance Accept RawJSON where
 
 instance MimeUnrender RawJSON BS.ByteString where
   mimeUnrender _ = Right . toStrict
+
+
+-- | OTLP/HTTP wire format (raw protobuf bytes; decoding happens in the handler).
+data OTLPProto
+
+
+instance Accept OTLPProto where
+  contentType _ = "application/x-protobuf"
+
+
+instance MimeUnrender OTLPProto BS.ByteString where
+  mimeUnrender _ = Right . toStrict
+
+
+instance MimeRender OTLPProto BS.ByteString where
+  mimeRender _ = fromStrict
+
+
+-- | OTLP/HTTP export action, injected from System.Server. Kept abstract here:
+-- importing Opentelemetry.OtlpServer would drag proto-lens's orphan IsLabel
+-- instances into scope and break the generic-lens #labels used by widget code.
+type OtlpHttpHandler = Maybe Text -> BS.ByteString -> IO (Either Text BS.ByteString)
+
+
+-- | Run an OTLP/HTTP export handler; protobuf decode failures surface as 400.
+otlpHttpH :: OtlpHttpHandler -> Maybe Text -> BS.ByteString -> ATBaseCtx BS.ByteString
+otlpHttpH export keyM body =
+  liftIO (export keyM body) >>= either (\e -> throwIO err400{errBody = fromStrict (encodeUtf8 e)}) pure
 
 
 -- When bytestring is returned for json, simply return the bytestring
@@ -326,6 +354,9 @@ data Routes mode = Routes
   , logout :: mode :- "logout" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
   , setLanguage :: mode :- "set_language" :> Capture "lang" Text :> QPT "redirect_to" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
   , authCallback :: mode :- "auth_callback" :> QPT "code" :> QPT "state" :> QPT "redirect_to" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] (Html ()))
+  , -- OTLP/HTTP ingestion (protobuf) — collector-less SDK exporters
+    otlpTracesPost :: mode :- "v1" :> "traces" :> Header "x-api-key" Text :> ReqBody '[OTLPProto] BS.ByteString :> Post '[OTLPProto] BS.ByteString
+  , otlpLogsPost :: mode :- "v1" :> "logs" :> Header "x-api-key" Text :> ReqBody '[OTLPProto] BS.ByteString :> Post '[OTLPProto] BS.ByteString
   , shareLinkGet :: mode :- "share" :> "r" :> Capture "shareID" UUID.UUID :> Get '[HTML] Share.ShareLinkGet
   , shareReplaySessionGet :: mode :- "share" :> "r" :> Capture "shareID" UUID.UUID :> "replay_session" :> Capture "sessionId" UUID.UUID :> Get '[JSON] AE.Value
   , slackLinkProjectGet :: mode :- "slack" :> "oauth" :> "callback" :> QPT "code" :> QPT "state" :> GetRedirect '[HTML] (Headers '[Header "Location" Text] BotUtils.BotResponse)
@@ -564,8 +595,8 @@ data ProjectsRoutes' mode = ProjectsRoutes'
 -- =============================================================================
 
 -- Main server for the root routes
-server :: Logger -> AuthContext -> TracerProvider -> Routes (AsServerT ATBaseCtx)
-server logger env tp =
+server :: Logger -> AuthContext -> TracerProvider -> OtlpHttpHandler -> OtlpHttpHandler -> Routes (AsServerT ATBaseCtx)
+server logger env tp otlpTraces otlpLogs =
   Routes
     { public = Servant.serveDirectoryWebApp "./static/public"
     , ping = pingH
@@ -575,6 +606,8 @@ server logger env tp =
     , logout = Auth.logoutH
     , setLanguage = Auth.setLanguageH
     , authCallback = Auth.authCallbackH
+    , otlpTracesPost = otlpHttpH otlpTraces
+    , otlpLogsPost = otlpHttpH otlpLogs
     , shareLinkGet = Share.shareLinkGetH
     , shareReplaySessionGet = Share.shareReplaySessionGetH
     , slackLinkProjectGet = Slack.linkProjectGetH

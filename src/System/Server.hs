@@ -1,4 +1,4 @@
-module System.Server (runMonoscope) where
+module System.Server (runMonoscope, mkServer) where
 
 import BackgroundJobs qualified
 import Colourista.IO (blueMessage)
@@ -158,7 +158,9 @@ mkServer :: LogBase.Logger -> AuthContext -> TracerProvider -> Servant.Applicati
 mkServer logger env tp = do
   genericServeTWithContext
     (effToServantHandler env logger tp)
-    (Routes.server logger env tp)
+    -- OTLP/HTTP handlers injected here: Routes can't import OtlpServer
+    -- (proto-lens orphan IsLabel instances clash with generic-lens #labels)
+    (Routes.server logger env tp (OtlpServer.httpTracesExport logger env tp) (OtlpServer.httpLogsExport logger env tp))
     (Routes.genAuthServerContext logger env)
 
 

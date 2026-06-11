@@ -58,6 +58,7 @@ module Pkg.TestUtils (
   -- CLI test helpers
   runHTTPtoServant,
   runCLILifecycle,
+  withLiveServer,
   testPid,
   -- OTLP mock data constructors
   createOtelLogAtTime,
@@ -136,6 +137,7 @@ import Network.HTTP.Client.Internal (Response (..), ResponseClose (..))
 import Network.HTTP.Types.Status (ok200)
 import Network.HTTP.Types.Version (http11)
 import Network.Minio qualified as Minio
+import Network.Wai.Handler.Warp qualified as Warp
 import Network.Wreq qualified as W
 import OddJobs.Job (Job (..))
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
@@ -181,6 +183,7 @@ import System.Envy (DefConfig (..), decodeWithDefaults)
 import System.Exit (ExitCode (..))
 import System.IO.Silently qualified as Silently
 import System.Logging qualified as Logging
+import System.Server qualified as Server
 import System.Tracing (Tracing)
 import System.Tracing qualified as Tracing
 import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, RespHeaders, atAuthToBase, atAuthToBaseTest, effToServantHandlerTest)
@@ -1386,7 +1389,9 @@ runHTTPtoServant tr = interpret $ \_ -> \case
 -- Pass @--json@ in args for deterministic output regardless of TTY state.
 runCLILifecycle :: TestResources -> [String] -> IO (ExitCode, Text)
 runCLILifecycle tr args = do
-  setEnv "MONOSCOPE_API_KEY" "test-key"
+  -- MONOSCOPE_TEST_API_KEY lets a test inject a real project key (needed by
+  -- ingestion paths that authenticate the key, e.g. send-event → OTLP).
+  setEnv "MONOSCOPE_API_KEY" . fromMaybe "test-key" =<< lookupEnv "MONOSCOPE_TEST_API_KEY"
   setEnv "MONOSCOPE_PROJECT" (UUID.toString UUID.nil)
   (global, cmd) <- case OA.execParserPure OA.defaultPrefs (CLIMain.parserInfo testVersion) args of
     OA.Success r -> pure r
@@ -1403,6 +1408,13 @@ runCLILifecycle tr args = do
   pure (either id (const ExitSuccess) res, toText out)
   where
     testVersion = makeVersion [0, 0, 0]
+
+
+-- | Boot the real WAI app ('Server.mkServer') on an ephemeral port for tests
+-- that need a real HTTP listener — e.g. the OTel SDK exporter inside
+-- @send-event@, which ships OTLP/HTTP outside the 'HTTP' effect.
+withLiveServer :: TestResources -> (Int -> IO a) -> IO a
+withLiveServer tr = Warp.testWithApplication (pure (Server.mkServer tr.trLogger tr.trATCtx tr.trTracerProvider))
 
 
 extractPath :: String -> Text
