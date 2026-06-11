@@ -42,7 +42,6 @@ allConfigKeys :: [ConfigKey]
 allConfigKeys = universe
 
 
-
 configKeyText :: ConfigKey -> Text
 configKeyText = \case CKApiUrl -> "api_url"; CKProject -> "project"; CKApiKey -> "api_key"
 
