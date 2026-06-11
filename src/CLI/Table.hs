@@ -37,7 +37,6 @@ module CLI.Table (
 ) where
 
 import Relude
-import Relude qualified
 
 import CLI.Core (OutputMode (..), getOutputMode, isJsonOutput)
 import Data.Char (toUpper)
@@ -107,7 +106,7 @@ data RichTableOpts = RichTableOpts
 
 
 defaultRichTableOpts :: RichTableOpts
-defaultRichTableOpts = RichTableOpts {alignments = [], maxWidth = Nothing, wrapRightmost = True}
+defaultRichTableOpts = RichTableOpts{alignments = [], maxWidth = Nothing, wrapRightmost = True}
 
 
 -- | The vanilla renderer: defaults for alignment + width. Use this for most
@@ -180,7 +179,7 @@ layout wrapRight cap headers rows =
               truncRow r = case nonEmpty r of
                 Nothing -> r
                 Just ne ->
-                  let (sty, t) = Relude.last ne
+                  let (sty, t) = last ne
                       rest = fromMaybe [] (viaNonEmpty init r)
                    in rest <> [(sty, truncateCell widthLast t)]
            in (widths, map truncRow rows)
@@ -194,7 +193,6 @@ truncateCell w t
 
 
 -- Relude already exports `!!?`; use it directly above.
-
 
 -- Borders
 

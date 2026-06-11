@@ -124,6 +124,7 @@ extra-source-files:
     static/migrations/0096_varchar_to_text.sql
     static/migrations/0097_hasql_decoder_alignment.sql
     static/migrations/0098_widen_int_to_bigint.sql
+    static/migrations/0099_jsonb_build_array_record_overload.sql
 
 source-repository head
   type: git
@@ -138,6 +139,14 @@ custom-setup
 library
   exposed-modules:
       BackgroundJobs
+      CLI.Commands
+      CLI.Config
+      CLI.Core
+      CLI.Main
+      CLI.Resource
+      CLI.Table
+      CLI.UI
+      CLI.Validate
       Data.Effectful.Hasql
       Data.Effectful.LLM
       Data.Effectful.Notify
@@ -304,6 +313,7 @@ library
     , aeson-pretty
     , aeson-qq
     , annotated-exception
+    , ansi-terminal
     , async
     , attoparsec
     , attoparsec-aeson
@@ -311,6 +321,7 @@ library
     , base
     , base16-bytestring
     , base64
+    , brick
     , bytestring
     , cache >=0.1.3.0
     , case-insensitive
@@ -360,6 +371,7 @@ library
     , hspec
     , http-api-data
     , http-client
+    , http-client-tls
     , http-types
     , hw-kafka-client
     , insert-ordered-containers
@@ -388,6 +400,7 @@ library
     , odd-jobs
     , openai
     , openapi3
+    , optparse-applicative
     , parallel
     , parser-combinators
     , pg-entity
@@ -399,6 +412,7 @@ library
     , process
     , proto-lens
     , proto-lens-runtime
+    , random
     , regex
     , regex-tdfa
     , relude >=1.2.0.0
@@ -416,6 +430,7 @@ library
     , servant-queryparam-core
     , servant-queryparam-server
     , servant-server
+    , silently
     , slugify
     , smtp-mail
     , stm
@@ -430,6 +445,7 @@ library
     , tmp-postgres
     , typed-process
     , tz
+    , unix
     , unliftio
     , unliftio-pool
     , unordered-containers
@@ -439,6 +455,7 @@ library
     , vector
     , vector-algorithms
     , vector-split
+    , vty
     , wai
     , wai-cors
     , wai-extra
@@ -454,13 +471,6 @@ library
 executable monoscope
   main-is: Main.hs
   other-modules:
-      CLI.Commands
-      CLI.Config
-      CLI.Core
-      CLI.Resource
-      CLI.Table
-      CLI.UI
-      CLI.Validate
       Paths_monoscope
   autogen-modules:
       Paths_monoscope
@@ -492,39 +502,9 @@ executable monoscope
   build-tool-depends:
       proto-lens-protoc:proto-lens-protoc
   build-depends:
-      aeson
-    , aeson-pretty
-    , ansi-terminal
-    , base
-    , brick
-    , containers
-    , deriving-aeson
-    , directory
-    , effectful
-    , effectful-core
-    , filepath
-    , hs-opentelemetry-api
-    , hs-opentelemetry-instrumentation-auto
-    , hs-opentelemetry-sdk
-    , http-client
-    , http-client-tls
-    , lens
-    , lens-aeson
+      base
     , monoscope
-    , mtl
-    , optparse-applicative
-    , process
-    , random
     , relude >=1.2.0.0
-    , text
-    , time
-    , unix
-    , unliftio
-    , unordered-containers
-    , vector
-    , vty
-    , wreq
-    , yaml
   default-language: GHC2024
 
 executable monoscope-server
@@ -612,6 +592,7 @@ test-suite integration-tests
       BackgroundJobs.NotificationsSpec
       CLI.CLIBinarySpec
       CLI.CLIE2ESpec
+      CLI.CLILifecycleSpec
       CLI.CLISpec
       EndpointDiscoverySpec
       ExtractionWorkerSpec
@@ -746,6 +727,14 @@ test-suite test-dev
   main-is: Main.hs
   other-modules:
       BackgroundJobs
+      CLI.Commands
+      CLI.Config
+      CLI.Core
+      CLI.Main
+      CLI.Resource
+      CLI.Table
+      CLI.UI
+      CLI.Validate
       Data.Effectful.Hasql
       Data.Effectful.LLM
       Data.Effectful.Notify
@@ -841,6 +830,7 @@ test-suite test-dev
       BackgroundJobs.NotificationsSpec
       CLI.CLIBinarySpec
       CLI.CLIE2ESpec
+      CLI.CLILifecycleSpec
       CLI.CLISpec
       EndpointDiscoverySpec
       ExtractionWorkerSpec
@@ -962,6 +952,7 @@ test-suite test-dev
     , aeson-pretty
     , aeson-qq
     , annotated-exception
+    , ansi-terminal
     , async
     , attoparsec
     , attoparsec-aeson
@@ -969,6 +960,7 @@ test-suite test-dev
     , base
     , base16-bytestring
     , base64
+    , brick
     , bytestring
     , cache >=0.1.3.0
     , case-insensitive
@@ -1018,6 +1010,7 @@ test-suite test-dev
     , hspec
     , http-api-data
     , http-client
+    , http-client-tls
     , http-types
     , hw-kafka-client
     , insert-ordered-containers
@@ -1046,6 +1039,7 @@ test-suite test-dev
     , odd-jobs
     , openai
     , openapi3
+    , optparse-applicative
     , parallel
     , parser-combinators
     , pg-entity
@@ -1057,6 +1051,7 @@ test-suite test-dev
     , process
     , proto-lens
     , proto-lens-runtime
+    , random
     , regex
     , regex-tdfa
     , relude >=1.2.0.0
@@ -1074,6 +1069,7 @@ test-suite test-dev
     , servant-queryparam-core
     , servant-queryparam-server
     , servant-server
+    , silently
     , slugify
     , smtp-mail
     , stm
@@ -1088,6 +1084,7 @@ test-suite test-dev
     , tmp-postgres
     , typed-process
     , tz
+    , unix
     , unliftio
     , unliftio-pool
     , unordered-containers
@@ -1097,6 +1094,7 @@ test-suite test-dev
     , vector
     , vector-algorithms
     , vector-split
+    , vty
     , wai
     , wai-cors
     , wai-extra

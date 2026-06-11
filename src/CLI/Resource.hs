@@ -156,7 +156,7 @@ renderListPayload k mode payload =
           _ -> []
         (headers, rows) = buildResourceTable k items
         rightAligned = headerIsNumeric <$> headers
-        opts = defaultRichTableOpts {alignments = rightAligned}
+        opts = defaultRichTableOpts{alignments = rightAligned}
     renderRichTableWith opts headers rows
     case payload of
       AE.Object o
@@ -375,10 +375,9 @@ runFromFile cfg verb url params path mode = readYamlOrJson path >>= \v -> writeJ
 -- printed but do not abort the batch; the overall command exits non-zero at
 -- the end iff any file failed.
 --
--- For dashboards this calls POST /dashboards/apply. For monitors, since there
--- is no dedicated apply endpoint yet, it replaces by id (PUT if the file's
--- root object has an @id@ field, POST otherwise) — there is no natural-key
--- upsert, so a monitor file without an @id@ creates a new row on each apply.
+-- Dashboards and monitors POST to their /apply endpoints (server-side upsert
+-- keyed on file_path / title respectively). Other kinds replace by id (PUT if
+-- the file's root object has an @id@ field, POST otherwise).
 runApplyResource
   :: (Environment :> es, FileSystem :> es, HTTP :> es, IOE :> es)
   => CLIConfig -> ResourceKind -> FilePath -> OutputMode -> Eff es ()
@@ -413,7 +412,7 @@ applyOne cfg k path mode = do
   val <- readYamlOrJson path
   let base = resourcePath k
   case (k, val) of
-    (Dashboards, _) -> runAndCount (writeJsonRaw cfg POST (base <> "/apply") [] val)
+    _ | k `elem` [Dashboards, Monitors] -> runAndCount (writeJsonRaw cfg POST (base <> "/apply") [] val)
     (_, AE.Object o) ->
       let (verb, url) = case AEKM.lookup "id" o of
             Just (AE.String rid) -> (PUT, base <> "/" <> rid)

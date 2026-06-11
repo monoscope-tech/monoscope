@@ -57,6 +57,7 @@ module Pkg.TestUtils (
   ingestSessionEvent,
   -- CLI test helpers
   runHTTPtoServant,
+  runCLILifecycle,
   testPid,
   -- OTLP mock data constructors
   createOtelLogAtTime,
@@ -73,6 +74,7 @@ module Pkg.TestUtils (
 where
 
 import BackgroundJobs qualified
+import CLI.Main qualified as CLIMain
 import Configuration.Dotenv qualified as Dotenv
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.STM.TBQueue (isEmptyTBQueue, readTBQueue)
@@ -98,9 +100,11 @@ import Data.ProtoLens (defMessage)
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, getCurrentTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
+import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 (nextRandom)
 import Data.Vector qualified as V
+import Data.Version (makeVersion)
 import Database.PostgreSQL.Simple (ConnectInfo (..), Connection, Only (..), close, connect, connectPostgreSQL, defaultConnectInfo, execute, execute_)
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.Migration (MigrationCommand (MigrationDirectory, MigrationInitialization))
@@ -112,7 +116,9 @@ import Database.Postgres.Temp qualified as TmpPostgres
 import Effectful
 import Effectful.Concurrent (runConcurrent)
 import Effectful.Dispatch.Dynamic
+import Effectful.Environment (runEnvironment)
 import Effectful.Error.Static (Error, runErrorNoCallStack)
+import Effectful.FileSystem (runFileSystem)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (runLabeled)
 import Effectful.Log (Log)
@@ -120,6 +126,7 @@ import Effectful.Reader.Static qualified
 import Effectful.Time (Time, runTime)
 import Log qualified
 import Log.Backend.StandardOutput.Bulk qualified as LogBulk
+import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import Models.Telemetry.Telemetry qualified as Telemetry
@@ -134,6 +141,7 @@ import OddJobs.Job (Job (..))
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import OpenTelemetry.Trace (TracerProvider, getGlobalTracerProvider)
 import Opentelemetry.OtlpServer qualified as OtlpServer
+import Options.Applicative qualified as OA
 import Pages.Charts.Charts qualified as Charts
 import Pages.LogExplorer.Log qualified as Log
 import Pages.Settings qualified as Api
@@ -168,7 +176,10 @@ import System.Clock (TimeSpec (TimeSpec))
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Config qualified as Config
 import System.Directory (getFileSize, listDirectory)
+import System.Environment (setEnv)
 import System.Envy (DefConfig (..), decodeWithDefaults)
+import System.Exit (ExitCode (..))
+import System.IO.Silently qualified as Silently
 import System.Logging qualified as Logging
 import System.Tracing (Tracing)
 import System.Tracing qualified as Tracing
@@ -1357,15 +1368,41 @@ runHTTPtoServant tr = interpret $ \_ -> \case
   GetWith opts url -> liftIO $ routeRequest tr (extractPath url) (extractParams opts)
   Get url -> liftIO $ routeRequest tr (extractPath url) []
   -- CLI always sends LBS via AE.encode; the coerce is safe in the test interpreter
-  PostWith _opts url body -> liftIO $ routeWriteRequest tr (extractPath url) (unsafeCoerce body)
-  Post url body -> liftIO $ routeWriteRequest tr (extractPath url) (unsafeCoerce body)
-  PutWith _opts url body -> liftIO $ routeWriteRequest tr (extractPath url) (unsafeCoerce body)
-  Put url body -> liftIO $ routeWriteRequest tr (extractPath url) (unsafeCoerce body)
-  PatchWith _opts url body -> liftIO $ routeWriteRequest tr (extractPath url) (unsafeCoerce body)
-  Patch url body -> liftIO $ routeWriteRequest tr (extractPath url) (unsafeCoerce body)
+  PostWith opts url body -> liftIO $ routeWriteRequest tr "POST" (extractPath url) (extractParams opts) (unsafeCoerce body)
+  Post url body -> liftIO $ routeWriteRequest tr "POST" (extractPath url) [] (unsafeCoerce body)
+  PutWith opts url body -> liftIO $ routeWriteRequest tr "PUT" (extractPath url) (extractParams opts) (unsafeCoerce body)
+  Put url body -> liftIO $ routeWriteRequest tr "PUT" (extractPath url) [] (unsafeCoerce body)
+  PatchWith opts url body -> liftIO $ routeWriteRequest tr "PATCH" (extractPath url) (extractParams opts) (unsafeCoerce body)
+  Patch url body -> liftIO $ routeWriteRequest tr "PATCH" (extractPath url) [] (unsafeCoerce body)
   DeleteWith _opts url -> liftIO $ routeDeleteRequest tr (extractPath url)
   Delete url -> liftIO $ routeDeleteRequest tr (extractPath url)
   _ -> error "runHTTPtoServant: unsupported HTTP method (Options/Head not routed)"
+
+
+-- | Drive the real CLI top-down in-process: the actual optparse parser, the
+-- actual command pipeline, with the HTTP effect routed to handlers via
+-- 'runHTTPtoServant'. Returns captured stdout plus the exit code (a command's
+-- @exitFailure@ surfaces as @ExitFailure 1@; anything else as 'ExitSuccess').
+-- Pass @--json@ in args for deterministic output regardless of TTY state.
+runCLILifecycle :: TestResources -> [String] -> IO (ExitCode, Text)
+runCLILifecycle tr args = do
+  setEnv "MONOSCOPE_API_KEY" "test-key"
+  setEnv "MONOSCOPE_PROJECT" (UUID.toString UUID.nil)
+  (global, cmd) <- case OA.execParserPure OA.defaultPrefs (CLIMain.parserInfo testVersion) args of
+    OA.Success r -> pure r
+    OA.Failure f -> error $ "CLI parse failure: " <> toText (fst (OA.renderFailure f "monoscope"))
+    OA.CompletionInvoked _ -> error "CLI completion invoked in test"
+  (out, res) <-
+    Silently.capture
+      $ try @ExitCode
+      $ runEff
+      $ runHTTPtoServant tr
+      $ runEnvironment
+      $ runFileSystem
+      $ CLIMain.run testVersion global cmd
+  pure (either id (const ExitSuccess) res, toText out)
+  where
+    testVersion = makeVersion [0, 0, 0]
 
 
 extractPath :: String -> Text
@@ -1436,40 +1473,117 @@ routeApiV1Get tr rest params = case T.splitOn "/" rest of
     mockResponse . AE.encode <$> runAsBase tr (ApiH.apiLogPatternsList testPid (pInt "page" params) (pInt "per_page" params))
   ["log_patterns", lpid] ->
     mockResponse . AE.encode <$> runAsBase tr (ApiH.apiLogPatternGet testPid (parseIntId lpid))
+  ["events"] ->
+    mockResponse
+      . AE.encode
+      <$> runAsBase
+        tr
+        (Log.queryEvents testPid (lookupParam "query" params) (lookupParam "since" params) (lookupParam "from" params) (lookupParam "to" params) (lookupParam "source" params) (pInt "limit" params) (pBool "with_children" params))
+  ["events", eid, "time", ts] ->
+    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiEventGet testPid (rawUUID eid) (parseISOTime ts))
+  ["facets"] ->
+    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiFacets testPid (lookupParam "since" params) (lookupParam "from" params) (lookupParam "to" params) (lookupParam "field" params))
+  ["metrics"] -> do
+    result <-
+      runQueryEffect tr
+        $ Charts.queryMetrics Nothing Nothing (Just testPid) (lookupParam "query" params) Nothing (lookupParam "since" params) (lookupParam "from" params) (lookupParam "to" params) (lookupParam "source" params) []
+    pure $ mockResponse $ AE.encode result
+  ["monitors"] ->
+    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiMonitorsList testPid)
+  ["monitors", mid] ->
+    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiMonitorGet testPid (monitorId mid))
+  ["monitors", mid, "yaml"] ->
+    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiMonitorYaml testPid (monitorId mid))
+  ["dashboards"] ->
+    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiDashboardsList testPid (lookupParam "sort" params) (lookupParam "team_id" params))
+  ["dashboards", did] ->
+    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiDashboardGet testPid (parseUUIDId did))
+  ["dashboards", did, "yaml"] ->
+    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiDashboardYaml testPid (parseUUIDId did))
   ["me"] -> mockResponse . AE.encode <$> runAsBase tr (ApiH.apiMe testPid)
   ["project"] -> mockResponse . AE.encode <$> runAsBase tr (ApiH.apiProjectGet testPid)
   _ -> error $ "runHTTPtoServant: unhandled GET api/v1/" <> rest
 
 
-routeWriteRequest :: TestResources -> Text -> LBS.ByteString -> IO (Response LBS.ByteString)
-routeWriteRequest tr path body
-  | "/api/v1/" `T.isPrefixOf` path = routeApiV1Write tr (T.drop 8 path) body
+routeWriteRequest :: TestResources -> Text -> Text -> [(Text, Text)] -> LBS.ByteString -> IO (Response LBS.ByteString)
+routeWriteRequest tr verb path params body
+  | "/api/v1/" `T.isPrefixOf` path = routeApiV1Write tr verb (T.drop 8 path) params body
   | otherwise = error $ "runHTTPtoServant: unhandled write path: " <> path
 
 
-routeApiV1Write :: TestResources -> Text -> LBS.ByteString -> IO (Response LBS.ByteString)
-routeApiV1Write tr rest body = case T.splitOn "/" rest of
-  ["issues", iid, "ack"] ->
+routeApiV1Write :: TestResources -> Text -> Text -> [(Text, Text)] -> LBS.ByteString -> IO (Response LBS.ByteString)
+routeApiV1Write tr verb rest params body = case (verb, T.splitOn "/" rest) of
+  ("POST", ["issues", iid, "ack"]) ->
     mockResponse . AE.encode <$> runAsBase tr (ApiH.apiIssueAck testPid (parseUUIDId iid))
-  ["issues", iid, "unack"] ->
+  ("POST", ["issues", iid, "unack"]) ->
     mockResponse . AE.encode <$> runAsBase tr (ApiH.apiIssueUnack testPid (parseUUIDId iid))
-  ["issues", iid, "archive"] ->
+  ("POST", ["issues", iid, "archive"]) ->
     mockResponse . AE.encode <$> runAsBase tr (ApiH.apiIssueArchive testPid (parseUUIDId iid))
-  ["issues", iid, "unarchive"] ->
+  ("POST", ["issues", iid, "unarchive"]) ->
     mockResponse . AE.encode <$> runAsBase tr (ApiH.apiIssueUnarchive testPid (parseUUIDId iid))
-  ["issues", "bulk"] ->
-    let ba = fromMaybe (error "routeApiV1Write: failed to decode BulkAction IssueId") (AE.decode body)
-     in mockResponse . AE.encode <$> runAsBase tr (ApiH.apiIssuesBulk testPid ba)
-  ["log_patterns", lpid, "ack"] ->
+  ("POST", ["issues", "bulk"]) ->
+    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiIssuesBulk testPid (decodeBody "BulkAction IssueId"))
+  ("POST", ["log_patterns", lpid, "ack"]) ->
     mockResponse . AE.encode <$> runAsBase tr (ApiH.apiLogPatternAck testPid (parseIntId lpid))
-  ["log_patterns", "bulk"] ->
-    let ba = fromMaybe (error "routeApiV1Write: failed to decode BulkAction Int64") (AE.decode body)
-     in mockResponse . AE.encode <$> runAsBase tr (ApiH.apiLogPatternsBulk testPid ba)
-  _ -> error $ "runHTTPtoServant: unhandled write api/v1/" <> rest
+  ("POST", ["log_patterns", "bulk"]) ->
+    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiLogPatternsBulk testPid (decodeBody "BulkAction Int64"))
+  ("POST", ["monitors"]) ->
+    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiMonitorCreate testPid (decodeBody "MonitorInput"))
+  ("POST", ["monitors", "apply"]) ->
+    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiMonitorApply testPid (decodeBody "MonitorInput"))
+  ("POST", ["share"]) ->
+    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiShareLinkCreate testPid (decodeBody "ShareLinkCreate"))
+  ("POST", ["dashboards"]) ->
+    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiDashboardCreate testPid (decodeBody "DashboardInput"))
+  ("POST", ["dashboards", "apply"]) ->
+    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiDashboardApply testPid (decodeBody "DashboardYAMLDoc"))
+  ("PUT", ["dashboards", did]) ->
+    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiDashboardUpdate testPid (parseUUIDId did) (decodeBody "DashboardInput"))
+  ("POST", ["dashboards", did, "duplicate"]) ->
+    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiDashboardDuplicate testPid (parseUUIDId did))
+  ("POST", ["dashboards", did, "star"]) ->
+    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiDashboardStar testPid (parseUUIDId did))
+  ("PUT", ["dashboards", did, "widgets"]) ->
+    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiDashboardWidgetUpsert testPid (parseUUIDId did) (decodeBody "Widget"))
+  ("PUT", ["monitors", mid]) ->
+    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiMonitorUpdate testPid (monitorId mid) (decodeBody "MonitorInput"))
+  ("POST", ["monitors", mid, "mute"]) ->
+    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiMonitorMute testPid (monitorId mid) (pInt "duration_minutes" params))
+  ("POST", ["monitors", mid, "unmute"]) ->
+    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiMonitorUnmute testPid (monitorId mid))
+  ("POST", ["monitors", mid, "resolve"]) ->
+    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiMonitorResolve testPid (monitorId mid))
+  ("POST", ["monitors", mid, "toggle_active"]) ->
+    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiMonitorToggleActive testPid (monitorId mid))
+  _ -> error $ "runHTTPtoServant: unhandled " <> verb <> " api/v1/" <> rest
+  where
+    decodeBody :: AE.FromJSON a => Text -> a
+    decodeBody label = fromMaybe (error $ "routeApiV1Write: failed to decode " <> label <> " from: " <> decodeUtf8 body) (AE.decode body)
+
+
+monitorId :: Text -> Monitors.QueryMonitorId
+monitorId t = Monitors.QueryMonitorId (rawUUID t)
+
+
+rawUUID :: Text -> UUID.UUID
+rawUUID t = fromMaybe (error $ "invalid UUID in CLI test path: " <> t) (UUID.fromText t)
+
+
+parseISOTime :: Text -> UTCTime
+parseISOTime t = fromMaybe (error $ "invalid ISO-8601 timestamp in CLI test path: " <> t) (iso8601ParseM (toString t))
 
 
 routeDeleteRequest :: TestResources -> Text -> IO (Response LBS.ByteString)
-routeDeleteRequest _tr path = error $ "runHTTPtoServant: DELETE not yet routed — use runAsBase for: " <> path
+routeDeleteRequest tr path
+  | "/api/v1/" `T.isPrefixOf` path = case T.splitOn "/" (T.drop 8 path) of
+      ["monitors", mid] ->
+        runAsBase tr (ApiH.apiMonitorDelete testPid (monitorId mid)) $> mockResponse (AE.encode AE.Null)
+      ["dashboards", did] ->
+        runAsBase tr (ApiH.apiDashboardDelete testPid (parseUUIDId did)) $> mockResponse (AE.encode AE.Null)
+      ["dashboards", did, "star"] ->
+        runAsBase tr (ApiH.apiDashboardUnstar testPid (parseUUIDId did)) $> mockResponse (AE.encode AE.Null)
+      other -> error $ "runHTTPtoServant: unhandled DELETE api/v1/" <> T.intercalate "/" other
+  | otherwise = error $ "runHTTPtoServant: unhandled DELETE path: " <> path
 
 
 ----------------------------------------------------------------------

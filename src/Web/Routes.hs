@@ -208,6 +208,8 @@ data ApiV1Routes mode = ApiV1Routes
     monitorsList :: mode :- "monitors" :> Get '[JSON] [Monitors.QueryMonitor]
   , monitorGet :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> Get '[JSON] Monitors.QueryMonitor
   , monitorCreate :: mode :- "monitors" :> ReqBody '[JSON] ApiT.MonitorInput :> Post '[JSON] Monitors.QueryMonitor
+  , monitorApply :: mode :- "monitors" :> "apply" :> ReqBody '[JSON] ApiT.MonitorInput :> Post '[JSON] Monitors.QueryMonitor
+  , monitorYaml :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> "yaml" :> Get '[JSON] ApiT.MonitorInput
   , monitorUpdate :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> ReqBody '[JSON] ApiT.MonitorInput :> Put '[JSON] Monitors.QueryMonitor
   , monitorPatch :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> ReqBody '[JSON] ApiT.MonitorPatch :> Patch '[JSON] Monitors.QueryMonitor
   , monitorDelete :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> Delete '[JSON] NoContent
@@ -638,6 +640,8 @@ apiV1Server logger env tp pid =
       monitorsList = ApiH.apiMonitorsList pid
     , monitorGet = ApiH.apiMonitorGet pid
     , monitorCreate = ApiH.apiMonitorCreate pid
+    , monitorApply = ApiH.apiMonitorApply pid
+    , monitorYaml = ApiH.apiMonitorYaml pid
     , monitorUpdate = ApiH.apiMonitorUpdate pid
     , monitorPatch = ApiH.apiMonitorPatch pid
     , monitorDelete = ApiH.apiMonitorDelete pid

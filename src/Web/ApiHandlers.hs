@@ -11,6 +11,8 @@ module Web.ApiHandlers (
   apiMonitorsList,
   apiMonitorGet,
   apiMonitorCreate,
+  apiMonitorApply,
+  apiMonitorYaml,
   apiMonitorUpdate,
   apiMonitorPatch,
   apiMonitorDelete,
@@ -249,6 +251,46 @@ apiMonitorUpdate pid mid inp = do
   let mon = monitorFromInput pid now mid (Just existing) inp
   _ <- Monitors.queryMonitorUpsert mon
   pure mon
+
+
+-- | Upsert keyed by alert title — the monitors-as-code analogue of
+-- 'apiDashboardApply' (dashboards key on file_path; monitors on title).
+apiMonitorApply :: Projects.ProjectId -> MonitorInput -> ATBaseCtx Monitors.QueryMonitor
+apiMonitorApply pid inp =
+  Monitors.queryMonitorByTitle pid inp.title >>= \case
+    Just existing -> apiMonitorUpdate pid existing.id inp
+    Nothing -> apiMonitorCreate pid inp
+
+
+-- | Inverse of 'monitorFromInput': dump a monitor as the applyable input
+-- shape, so `monitors yaml ID > m.yaml && monitors apply m.yaml` round-trips.
+apiMonitorYaml :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATBaseCtx MonitorInput
+apiMonitorYaml pid mid = do
+  m <- apiMonitorGet pid mid
+  pure
+    MonitorInput
+      { title = m.alertConfig.title
+      , query = m.logQuery
+      , severity = Just m.alertConfig.severity
+      , subject = Just m.alertConfig.subject
+      , message = Just m.alertConfig.message
+      , alertThreshold = m.alertThreshold
+      , warningThreshold = m.warningThreshold
+      , triggerLessThan = m.triggerLessThan
+      , checkIntervalMins = m.checkIntervalMins
+      , timeWindowMins = m.timeWindowMins
+      , thresholdSustainedForMins = Just m.thresholdSustainedForMins
+      , notifyAfterMins = m.renotifyIntervalMins
+      , stopAfterCount = m.stopAfterCount
+      , emails = V.toList (CI.original <$> m.alertConfig.emails)
+      , emailAll = Just m.alertConfig.emailAll
+      , slackChannels = V.toList m.alertConfig.slackChannels
+      , teams = V.toList m.teams
+      , visualizationType = Just m.visualizationType
+      , alertRecoveryThreshold = m.alertRecoveryThreshold
+      , warningRecoveryThreshold = m.warningRecoveryThreshold
+      , active = Just (isNothing m.deactivatedAt)
+      }
 
 
 -- | PATCH — merge fields into existing monitor.

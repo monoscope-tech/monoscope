@@ -1,5 +1,6 @@
 module Models.Apis.Monitors (
   queryMonitorsAll,
+  queryMonitorByTitle,
   queryMonitorById,
   queryMonitorUpsert,
   monitorToggleActiveById,
@@ -222,6 +223,13 @@ monitorSoftDeleteByIds ids = do
 
 queryMonitorsAll :: DB es => Projects.ProjectId -> Eff es [QueryMonitor]
 queryMonitorsAll pid = Hasql.interp [HI.sql| SELECT * FROM monitors.query_monitors WHERE project_id = #{pid} AND deleted_at IS NULL |]
+
+
+-- | Natural-key lookup for monitors-as-code apply (title is the analogue of
+-- dashboards' file_path). Oldest wins if titles ever collide.
+queryMonitorByTitle :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe QueryMonitor)
+queryMonitorByTitle pid title =
+  Hasql.interpOne [HI.sql| SELECT * FROM monitors.query_monitors WHERE project_id = #{pid} AND alert_config->>'title' = #{title} AND deleted_at IS NULL ORDER BY created_at LIMIT 1 |]
 
 
 getAlertsByTeamHandle :: DB es => Projects.ProjectId -> UUID.UUID -> Eff es [QueryMonitor]

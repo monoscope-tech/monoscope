@@ -153,3 +153,12 @@
 - pg-transact
 - aeson-pretty
 - process
+# CLI (src/CLI/) deps — the monoscope exe is a thin wrapper over CLI.Main
+- optparse-applicative
+- ansi-terminal
+- http-client-tls
+- unix
+- brick
+- vty
+- random
+- silently
