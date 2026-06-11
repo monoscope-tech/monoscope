@@ -1,4 +1,5 @@
 {-# LANGUAGE StrictData #-}
+
 -- The Relude redirect rule self-matches the bare 'fromException' (no-op rewrite).
 {- HLINT ignore "Use 'fromException' from Relude" -}
 
