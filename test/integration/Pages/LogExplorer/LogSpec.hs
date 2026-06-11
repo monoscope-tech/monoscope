@@ -14,6 +14,7 @@ import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types (PGArray (..))
+import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.GRPC.Common.Protobuf (Proto (..))
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.LogExplorer.Log qualified as Log
@@ -573,7 +574,7 @@ spec = aroundAll withTestResources do
 
       let expectFound item = case item of
             LogItem.ItemDetailedNotFound msg -> expectationFailure $ "expected record, got not-found: " <> toString msg
-            LogItem.SpanItemExpanded _ rec _ -> rec.name `shouldBe` Just spanName
+            LogItem.SpanItemExpanded _ (rec :: Telemetry.OtelLogsAndSpans) _ -> rec.name `shouldBe` Just spanName
             LogItem.LogItemExpanded _ rec -> rec.name `shouldBe` Just spanName
 
       let ctx = tr.trATCtx

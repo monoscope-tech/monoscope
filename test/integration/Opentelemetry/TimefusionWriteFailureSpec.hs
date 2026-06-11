@@ -11,7 +11,7 @@ import Data.HashMap.Strict qualified as HM
 import Data.List qualified as L
 import Data.ProtoLens (encodeMessage)
 import Data.These (These (..))
-import Data.These.Combinators (isThat, isThese, isThis)
+import Data.These.Combinators (isThat)
 import Data.UUID qualified as UUID
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
@@ -20,7 +20,7 @@ import Pkg.DeriveUtils (UUIDId (..), mkHasqlPool)
 import Pkg.TestUtils
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
-import Test.Hspec (HasCallStack, SpecWith, aroundAll, beforeWith, describe, expectationFailure, it, pendingWith, shouldBe)
+import Test.Hspec (SpecWith, aroundAll, beforeWith, describe, expectationFailure, it, shouldBe)
 
 
 -- | A closed loopback port. Pool acquire fails with ECONNREFUSED so we
