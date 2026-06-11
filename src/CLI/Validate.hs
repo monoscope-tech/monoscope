@@ -132,7 +132,7 @@ validateAndNormalizeKind = mapM (\k -> normalizeKind k <$ validateOrDie (validat
 -- error and exit. Empty queries pass through — the server accepts them.
 validateQueryOrDie :: IOE :> es => Text -> Eff es ()
 validateQueryOrDie q
-  | T.null (T.strip q) = pure ()
+  | T.null (T.strip q) = pass
   | otherwise = case parseQueryToAST q of
-      Right _ -> pure ()
+      Right _ -> pass
       Left err -> printError ("invalid query: " <> err) >> liftIO exitFailure

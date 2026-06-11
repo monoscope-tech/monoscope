@@ -44,7 +44,6 @@ import Data.Effectful.Wreq qualified as W
 -- Don't import Data.IORef directly — Relude's atomicModifyIORef' lifts into
 -- MonadIO and our import would shadow it.
 import Data.Text qualified as T
-import Data.Text.Encoding qualified as TE
 import Data.Text.IO qualified
 import Data.Yaml qualified as Yaml
 import Deriving.Aeson qualified as DAE
@@ -424,7 +423,7 @@ httpExToError (HttpExceptionRequest req (StatusCodeException resp body)) =
   let code = resp ^. Wreq.responseStatus . Wreq.statusCode
       -- Lenient decode: the body may be HTML, gzip leftovers, or arbitrary
       -- bytes from a misconfigured upstream — never throw at the boundary.
-      decode = TE.decodeUtf8With lenientDecode
+      decode = decodeUtf8
       statusMsg = decode (resp ^. Wreq.responseStatus . Wreq.statusMessage)
       bodyTxt = T.strip (decode body)
       -- Gateway/edge errors (CF, nginx) send HTML; collapsing it into the

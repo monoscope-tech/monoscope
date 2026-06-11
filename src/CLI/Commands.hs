@@ -49,7 +49,7 @@ import Data.Aeson.Lens qualified as AL
 import Data.Effectful.Wreq (HTTP, runHTTPWreq)
 import Data.HashMap.Strict qualified as HM
 import Data.Map.Strict qualified as Map
-import Data.Set qualified as Set
+import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime)
 import Data.Time qualified
@@ -452,26 +452,25 @@ runChunkedSearch cfg validatedOpts mode slices = do
               let keyOf r = case Map.lookup "id" d.idxMap >>= \i -> listToMaybe (drop i r) of
                     Just v -> valToText v
                     Nothing -> decodeUtf8 (AE.encode r)
-                  fresh = filter (\r -> keyOf r `Set.notMember` st'.seen) d.rawRows
+                  fresh = filter (\r -> keyOf r `S.notMember` st'.seen) d.rawRows
                   sliceMore = d.hasMore == AE.Bool True
               writeIORef
                 ref
                 st'
                   { template = st'.template <|> Just val
                   , rows = st'.rows <> fresh
-                  , seen = st'.seen <> Set.fromList (map keyOf fresh)
+                  , seen = st'.seen <> S.fromList (map keyOf fresh)
                   , more = st'.more || sliceMore
                   , cur = if sliceMore then d.cursor else st'.cur
                   , stopped = sliceMore || (firstOnly && not (null fresh))
                   }
   final <- readIORef ref
   let keptRows = maybe final.rows (`take` final.rows) validatedOpts.limit
-      patch o =
+      patch =
         KM.insert "logsData" (AE.toJSON keptRows)
           . KM.insert "count" (AE.toJSON (length keptRows))
           . KM.insert "hasMore" (AE.Bool final.more)
           . KM.insert "cursor" final.cur
-          $ o
       merged = case final.template of
         Just (AE.Object o) -> AE.Object (patch o)
         _ -> AE.Object (patch mempty)
@@ -545,7 +544,7 @@ resolveOffsetPair now = map (second resolve)
         Just hours ->
           let
             -- negate so offset is in the past
-            dt = fromIntegral (-hours * 3600) :: NominalDiffTime
+            dt = fromIntegral (negate hours * 3600) :: NominalDiffTime
             ts = addUTCTime dt now
            in
             toText (iso8601Show ts)
@@ -649,7 +648,7 @@ runEventsTail cfg opts kindOverride = do
   -- D2/D5: validate + normalize kind before entering the poll loop so a
   -- typo doesn't burn HTTP requests every 2 seconds.
   kindNorm <- validateAndNormalizeKind (opts.kind <|> kindOverride)
-  seenRef <- newIORef (Set.empty :: Set Text)
+  seenRef <- newIORef (S.empty :: Set Text)
   forever $ do
     let q = foldFiltersIntoQuery "" (maybeToList opts.service) opts.level
         params =
@@ -665,10 +664,10 @@ runEventsTail cfg opts kindOverride = do
         Right val -> do
           seen <- readIORef seenRef
           let rows = extractRowsWithId val
-              newRows = filter (\(rid, _) -> not $ Set.member rid seen) rows
-              newIds = Set.fromList (map fst newRows)
+              newRows = filter (\(rid, _) -> not $ S.member rid seen) rows
+              newIds = S.fromList (map fst newRows)
               -- Cap seen set: keep most recent half when exceeding limit
-              updated = let s = seen <> newIds in if Set.size s > 10000 then Set.drop (Set.size s `div` 2) s else s
+              updated = let s = seen <> newIds in if S.size s > 10000 then S.drop (S.size s `div` 2) s else s
           writeIORef seenRef updated
           forM_ newRows $ \(_, row) -> do
             let filtered = case opts.grep of
@@ -738,7 +737,7 @@ withTraceSummary d (AE.Object out) =
         , not (T.null tid)
         ]
     traces =
-      [ TraceSummary tid (sort (filter (not . T.null) (Set.toList svcs))) n errs
+      [ TraceSummary tid (sort (filter (not . T.null) (S.toList svcs))) n errs
       | (tid, (svcs, n, errs)) <- Map.toList groups
       ]
    in
@@ -940,12 +939,12 @@ renderEventsTable val mFields = case val of
         count = extractInt $ KM.lookup "count" obj
         filteredCols = maybe cols (\f -> filter (`elem` T.splitOn "," f) cols) mFields
         colIdxs = mapMaybe (`Map.lookup` idxMap) filteredCols
-        summaryCols = Set.fromList [i | (c, i) <- zip filteredCols [0 :: Int ..], c `elem` ["summary", "latency_breakdown"]]
+        summaryCols = S.fromList [i | (c, i) <- zip filteredCols [0 :: Int ..], c `elem` ["summary", "latency_breakdown"]]
         filteredRows =
           map
             ( \r ->
                 let raw = map (\i -> fromMaybe "" $ listToMaybe (drop i r)) colIdxs
-                 in [if Set.member ci summaryCols then renderSummaryCell cell else cell | (ci, cell) <- zip [0 ..] raw]
+                 in [if S.member ci summaryCols then renderSummaryCell cell else cell | (ci, cell) <- zip [0 ..] raw]
             )
             rows
     renderTable filteredCols filteredRows
@@ -1135,8 +1134,8 @@ configureOtelEnv :: CLIConfig -> Text -> Text -> IO ()
 configureOtelEnv cfg service endpoint = do
   -- The standard OTel env var wins over the API-URL-derived endpoint, so a
   -- collector on a non-default port (or a test server) can be targeted.
-  lookupEnv "OTEL_EXPORTER_OTLP_ENDPOINT"
-    >>= maybe (setEnv "OTEL_EXPORTER_OTLP_ENDPOINT" (toString endpoint)) (const pass)
+  whenNothingM_ (lookupEnv "OTEL_EXPORTER_OTLP_ENDPOINT")
+    $ setEnv "OTEL_EXPORTER_OTLP_ENDPOINT" (toString endpoint)
   setEnv "OTEL_SERVICE_NAME" (toString service)
   whenJust cfg.apiKey $ \k ->
     setEnv "OTEL_EXPORTER_OTLP_HEADERS" ("x-api-key=" <> toString k)

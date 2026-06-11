@@ -39,7 +39,8 @@ data ConfigKey = CKApiUrl | CKProject | CKApiKey
 
 
 allConfigKeys :: [ConfigKey]
-allConfigKeys = [minBound .. maxBound]
+allConfigKeys = universe
+
 
 
 configKeyText :: ConfigKey -> Text

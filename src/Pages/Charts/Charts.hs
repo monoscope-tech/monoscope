@@ -178,7 +178,7 @@ queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (
 
 -- | A summarize with no @by@ clause at all — yields one scalar row.
 isScalarSummarize :: [Section] -> Bool
-isScalarSummarize sections = any isScalar sections
+isScalarSummarize = any isScalar
   where
     isScalar = \case
       SummarizeCommand _ Nothing -> True

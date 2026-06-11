@@ -41,7 +41,6 @@ import Relude
 import CLI.Core (OutputMode (..), getOutputMode, isJsonOutput)
 import Data.Char (toUpper)
 import Data.Text qualified as T
-import Data.Text.IO qualified
 import Effectful
 import System.Console.ANSI qualified as ANSI
 
@@ -134,12 +133,12 @@ renderRichTableWith opts headers rows = do
       let cap = fromMaybe termW opts.maxWidth
           aligns = zipWith const (opts.alignments <> repeat AlignLeft) headers
           (widths, normalized) = layout opts.wrapRightmost cap headers rows
-      liftIO $ Data.Text.IO.putStrLn (topBorder widths)
-      liftIO $ Data.Text.IO.putStrLn (renderHeaderRow ansi aligns widths headers)
-      liftIO $ Data.Text.IO.putStrLn (midBorder widths)
+      liftIO $ putTextLn (topBorder widths)
+      liftIO $ putTextLn (renderHeaderRow ansi aligns widths headers)
+      liftIO $ putTextLn (midBorder widths)
       forM_ normalized $ \r ->
-        liftIO $ Data.Text.IO.putStrLn (renderRow ansi aligns widths r)
-      liftIO $ Data.Text.IO.putStrLn (bottomBorder widths)
+        liftIO $ putTextLn (renderRow ansi aligns widths r)
+      liftIO $ putTextLn (bottomBorder widths)
 
 
 -- | One line of muted text, intended for "… N more — use --limit / --cursor"
@@ -150,7 +149,7 @@ paginationFooter msg = do
   mode <- getOutputMode
   when (mode == OutputTable) $ liftIO $ do
     ANSI.setSGR [ANSI.SetColor ANSI.Foreground ANSI.Dull ANSI.Black]
-    Data.Text.IO.putStrLn msg
+    putTextLn msg
     ANSI.setSGR [ANSI.Reset]
 
 
@@ -241,12 +240,12 @@ pad a w t =
 boldStyled :: Bool -> Text -> Text
 boldStyled True t = sgr ANSI.BoldIntensity Nothing <> t <> reset
   where
-    sgr i _ = T.pack (ANSI.setSGRCode [ANSI.SetConsoleIntensity i])
+    sgr i _ = toText (ANSI.setSGRCode [ANSI.SetConsoleIntensity i])
 boldStyled False t = t
 
 
 reset :: Text
-reset = T.pack (ANSI.setSGRCode [ANSI.Reset])
+reset = toText (ANSI.setSGRCode [ANSI.Reset])
 
 
 styled :: Bool -> CellStyle -> Text -> Text
@@ -255,7 +254,7 @@ styled True s t = wrap (sgrFor s) t
   where
     wrap codes x
       | null codes = x
-      | otherwise = T.pack (ANSI.setSGRCode codes) <> x <> reset
+      | otherwise = toText (ANSI.setSGRCode codes) <> x <> reset
 
 
 sgrFor :: CellStyle -> [ANSI.SGR]

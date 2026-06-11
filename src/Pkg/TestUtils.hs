@@ -1405,7 +1405,7 @@ runCLILifecycle tr args = do
       $ runEnvironment
       $ runFileSystem
       $ CLIMain.run testVersion global cmd
-  pure (either id (const ExitSuccess) res, toText out)
+  pure (fromLeft ExitSuccess res, toText out)
   where
     testVersion = makeVersion [0, 0, 0]
 
