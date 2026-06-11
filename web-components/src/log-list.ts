@@ -1583,7 +1583,7 @@ export class LogList extends LitElement {
     const summary = lookupVecValue<string[] | string>(dataArr, cim, 'summary');
     // Coerce non-string elements (e.g. a TF to_jsonb that re-parsed JSON-looking
     // text) so one bad element can't throw and blank the whole row.
-    if (Array.isArray(summary)) return summary.map((e) => (typeof e === 'string' ? e : JSON.stringify(e)));
+    if (Array.isArray(summary)) return summary.map((e) => (typeof e === 'string' ? e : JSON.stringify(e) ?? ''));
     try {
       return typeof summary === 'string' ? JSON.parse(summary) : [];
     } catch (err) {
