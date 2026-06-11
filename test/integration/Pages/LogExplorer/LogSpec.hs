@@ -560,20 +560,21 @@ spec = aroundAll withTestResources do
     -- read path, 500-ing the log item page. Reproduces only against a real TF
     -- (make test-integration-tf); on plain PG the TF pool aliases the test DB.
     it "loads a span via the TimeFusion read path, and decodes legacy NULL hashes on PG" \tr -> do
+      let spanName = "GET /api/log-item/tf" :: Text
       apiKey <- createTestAPIKey tr testPid "log-item-tf-key"
-      ingestTrace tr apiKey "GET /api/log-item/tf" frozenTime
+      ingestTrace tr apiKey spanName frozenTime
       rows <-
         withPool tr.trPool
           $ DBT.query
             [sql| SELECT id, timestamp FROM otel_logs_and_spans WHERE project_id = ? AND name = ? |]
-            (testPid, "GET /api/log-item/tf" :: Text)
+            (testPid, spanName)
           :: IO (V.Vector (UUID.UUID, UTCTime))
       (rid, ts) <- maybe (error "ingested span missing from otel_logs_and_spans") pure (rows V.!? 0)
 
       let expectFound item = case item of
             LogItem.ItemDetailedNotFound msg -> expectationFailure $ "expected record, got not-found: " <> toString msg
-            LogItem.SpanItemExpanded _ rec _ -> rec.name `shouldBe` Just "GET /api/log-item/tf"
-            LogItem.LogItemExpanded _ rec -> rec.name `shouldBe` Just "GET /api/log-item/tf"
+            LogItem.SpanItemExpanded _ rec _ -> rec.name `shouldBe` Just spanName
+            LogItem.LogItemExpanded _ rec -> rec.name `shouldBe` Just spanName
 
       let ctx = tr.trATCtx
           withTfReads b = tr{trATCtx = ctx{env = ctx.env{enableTimefusionReads = b}}}
