@@ -205,10 +205,14 @@ data KafkaRole = KafkaPrimary | KafkaDlqReplay
   deriving stock (Eq)
 
 
-kafkaService :: Log.Logger -> AuthContext -> TracerProvider -> KafkaRole -> [Text] -> Int -> ([(Text, ByteString)] -> HM.HashMap Text Text -> ATBackgroundCtx (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))) -> IO ()
-kafkaService appLogger appCtx tp role kafkaTopics batchSize fn = checkpoint "kafkaService" do
-  instanceUuid <- UUID.toText <$> UUID.nextRandom
-  let clientId = "monoscope-" <> T.take 8 instanceUuid
+kafkaService :: Log.Logger -> AuthContext -> TracerProvider -> KafkaRole -> Text -> [Text] -> Int -> ([(Text, ByteString)] -> HM.HashMap Text Text -> ATBackgroundCtx (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))) -> IO ()
+kafkaService appLogger appCtx tp role label kafkaTopics batchSize fn = checkpoint "kafkaService" do
+  -- client.id / group.instance.id: a human-readable label (which consumer this
+  -- is) plus a short nonce to keep the two identical in-process ingest
+  -- consumers distinct. This is the CLIENT-ID/INSTANCE-ID `rpk group describe`
+  -- shows; the broker still appends its own UUID to form the long member.id.
+  nonce <- T.take 6 . UUID.toText <$> UUID.nextRandom
+  let clientId = "mono-" <> label <> "-" <> nonce
       consumerSub = K.topics (map K.TopicName kafkaTopics) <> K.offsetReset K.Earliest
 
   -- Single LogT context for the whole service; client_id (and other static
