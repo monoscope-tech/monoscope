@@ -492,11 +492,11 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
       normT sql `shouldBe` normT expected
 
   describe "project SQL output" do
-    it "project generates correct alias" do
+    it "project strips alias inside jsonb_build_array projection" do
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| project service = resource.service.name"
       let expected =
             [text|
-      SELECT resource___service___name AS service FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) ORDER BY timestamp desc limit 501
+      SELECT jsonb_build_array(resource___service___name) FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) ORDER BY timestamp desc limit 501
             |]
       normT query `shouldBe` normT expected
 
