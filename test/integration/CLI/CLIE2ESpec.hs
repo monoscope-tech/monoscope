@@ -295,9 +295,10 @@ spec = describe "CLI binary E2E (real server)" $ do
 
   describe "auth (no real server required)" $ do
     -- Audit B11: error message used to say "mono auth login"; must say "monoscope".
+    -- --table forces human output; piped stdout otherwise auto-selects the C8 JSON shape.
     it "auth status with no credentials hints at 'monoscope auth login' (B11)" $ do
       bin <- findBin
-      (_, out, err) <- runMonoNoAuth bin ["auth", "status"]
+      (_, out, err) <- runMonoNoAuth bin ["--table", "auth", "status"]
       let combined = out <> err
       combined `shouldSatisfy` (\s -> "monoscope auth login" `isInfixOf` s || "Authenticated" `isInfixOf` s)
 
