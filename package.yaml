@@ -166,6 +166,7 @@ executables:
           - (Relude as Prelude)
           - ''
 
+  # Thin wrapper around library's CLI.Main so tests can drive the CLI in-process.
   monoscope:
     main: Main.hs
     source-dirs: cli/
@@ -176,38 +177,8 @@ executables:
     dependencies:
       - base
       - monoscope
-      - optparse-applicative
-      - ansi-terminal
-      - directory
-      - http-client
-      - http-client-tls
-      - wreq
-      - yaml
-      - aeson
-      - aeson-pretty
-      - filepath
-      - unix
-      - lens
-      - lens-aeson
-      - text
-      - containers
-      - unliftio
-      - effectful
-      - effectful-core
-      - process
-      - mtl
-      - brick
-      - vty
-      - vector
-      - deriving-aeson
       - name: relude
         version: '>= 1.2.0.0'
-      - time
-      - hs-opentelemetry-sdk
-      - hs-opentelemetry-api
-      - hs-opentelemetry-instrumentation-auto
-      - unordered-containers
-      - random
 
 tests:
   doctests:

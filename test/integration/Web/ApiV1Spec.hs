@@ -78,6 +78,8 @@ spec = aroundAll withTestResources do
               , "/monitors/{monitor_id}/unmute"
               , "/monitors/{monitor_id}/resolve"
               , "/monitors/{monitor_id}/toggle_active"
+              , "/monitors/{monitor_id}/yaml"
+              , "/monitors/apply"
               , "/monitors/bulk"
               , "/dashboards"
               , "/dashboards/{dashboard_id}"
@@ -147,7 +149,7 @@ spec = aroundAll withTestResources do
         let mkTopApp =
               genericServeTWithContext
                 (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
-                (Routes.server tr.trLogger tr.trATCtx tr.trTracerProvider)
+                (Routes.server tr.trLogger tr.trATCtx tr.trTracerProvider (OtlpServer.httpTracesExport tr.trLogger tr.trATCtx tr.trTracerProvider) (OtlpServer.httpLogsExport tr.trLogger tr.trATCtx tr.trTracerProvider))
                 (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
             req = WT.setPath Wai.defaultRequest "/api/v1/schema"
         resp <- WT.runSession (WT.srequest (WT.SRequest req "")) mkTopApp
@@ -157,7 +159,7 @@ spec = aroundAll withTestResources do
         let mkTopApp =
               genericServeTWithContext
                 (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
-                (Routes.server tr.trLogger tr.trATCtx tr.trTracerProvider)
+                (Routes.server tr.trLogger tr.trATCtx tr.trTracerProvider (OtlpServer.httpTracesExport tr.trLogger tr.trATCtx tr.trTracerProvider) (OtlpServer.httpLogsExport tr.trLogger tr.trATCtx tr.trTracerProvider))
                 (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
             req =
               WT.setPath
@@ -346,22 +348,22 @@ spec = aroundAll withTestResources do
         marker <- ("wc-" <>) . UUID.toText <$> UUIDV4.nextRandom
         let resource = mkResource apiKey []
             ingest sid pidM name extras =
-              void $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider
+              void
+                $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider
                 $ Proto (mkSpanRequest trId sid pidM name [] Nothing extras resource ts)
         ingest spanA Nothing "tree.root" [mkAttr "wc.marker" marker]
         ingest spanB (Just spanA) "tree.child" []
         ingest spanC (Just spanB) "tree.grandchild" []
         ingest spanE Nothing "tree.unrelated.root" []
         ingest spanD (Just spanE) "tree.unrelated.child" [] -- shares trace_id with A but not in A's subtree
-
         let q = "attributes.wc.marker == \"" <> marker <> "\""
             base = (def :: ApiT.EventsQuery){ApiT.query = Just q, ApiT.since = Just "1h"}
 
         rDefault <- toBaseServantResponse tr $ ApiH.apiEventsQuery testPid base
         V.length rDefault.logsData `shouldBe` 1 -- only A matches the predicate
-
-        rWith <- toBaseServantResponse tr
-          $ ApiH.apiEventsQuery testPid base{ApiT.withChildren = Just True}
+        rWith <-
+          toBaseServantResponse tr
+            $ ApiH.apiEventsQuery testPid base{ApiT.withChildren = Just True}
         -- A + B + C. D is in the same trace but lives under E, not A — the
         -- old buggy behaviour would have included it; the descendant filter
         -- excludes it.
@@ -514,7 +516,7 @@ spec = aroundAll withTestResources do
           mkTopApp tr =
             genericServeTWithContext
               (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
-              (Routes.server tr.trLogger tr.trATCtx tr.trTracerProvider)
+              (Routes.server tr.trLogger tr.trATCtx tr.trTracerProvider (OtlpServer.httpTracesExport tr.trLogger tr.trATCtx tr.trTracerProvider) (OtlpServer.httpLogsExport tr.trLogger tr.trATCtx tr.trTracerProvider))
               (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
           mcpHttp tr authHdr body =
             let req =

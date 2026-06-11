@@ -48,7 +48,11 @@ TEST_MATCH ?=
 live-test-dev:
 	USE_EXTERNAL_DB=true LOG_LEVEL=attention \
 	ghcid --command 'cabal repl monoscope:test:test-dev --ghc-options="-osuf dyn_o -hisuf dyn_hi -O0" --with-compiler=$(GHC)' \
+<<<<<<< cli-lifecycle-as-code
+		--test ':main $(if $(TEST_MATCH),--match $(TEST_MATCH))' --warnings 2>&1 | tee build-test-dev.log
+=======
 		--test ':main $(if $(TEST_MATCH),--match "$(TEST_MATCH)")' --warnings 2>&1 | tee build-test-dev.log
+>>>>>>> master
 
 hot-reload:
 	livereload -f reload.trigger static/public/ & \

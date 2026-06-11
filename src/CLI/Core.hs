@@ -39,11 +39,11 @@ import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Lazy qualified as LBS
 import Data.Effectful.Wreq (HTTP, deleteWith, getWith, patchWith, postWith, putWith, responseBody)
 import Data.Effectful.Wreq qualified as W
+
 -- IORef is re-exported from Relude (including atomicModifyIORef').
 -- Don't import Data.IORef directly — Relude's atomicModifyIORef' lifts into
 -- MonadIO and our import would shadow it.
 import Data.Text qualified as T
-import Data.Text.Encoding qualified as TE
 import Data.Text.IO qualified
 import Data.Yaml qualified as Yaml
 import Deriving.Aeson qualified as DAE
@@ -183,12 +183,13 @@ renderTable headers rows = do
 printError :: IOE :> es => Text -> Eff es ()
 printError msg = do
   jsonMode <- isJsonOutput
-  liftIO $ if jsonMode
-    then LBS.hPutStr stderr (AE.encode (ErrorPayload "error" msg Nothing Nothing) <> "\n")
-    else do
-      ANSI.hSetSGR stderr [ANSI.SetColor ANSI.Foreground ANSI.Vivid ANSI.Red]
-      Data.Text.IO.hPutStrLn stderr $ "error: " <> msg
-      ANSI.hSetSGR stderr [ANSI.Reset]
+  liftIO
+    $ if jsonMode
+      then LBS.hPutStr stderr (AE.encode (ErrorPayload "error" msg Nothing Nothing) <> "\n")
+      else do
+        ANSI.hSetSGR stderr [ANSI.SetColor ANSI.Foreground ANSI.Vivid ANSI.Red]
+        Data.Text.IO.hPutStrLn stderr $ "error: " <> msg
+        ANSI.hSetSGR stderr [ANSI.Reset]
 
 
 isDebugMode :: Environment :> es => Eff es Bool
@@ -201,12 +202,13 @@ isDebugMode = isJust <$> Env.lookupEnv "MONOSCOPE_DEBUG"
 printDebug :: (Environment :> es, IOE :> es) => Text -> Eff es ()
 printDebug msg = whenM isDebugMode $ do
   jsonMode <- isJsonOutput
-  liftIO $ if jsonMode
-    then Data.Text.IO.hPutStrLn stderr $ "debug: " <> msg
-    else do
-      ANSI.hSetSGR stderr [ANSI.SetColor ANSI.Foreground ANSI.Vivid ANSI.Cyan]
-      Data.Text.IO.hPutStrLn stderr $ "debug: " <> msg
-      ANSI.hSetSGR stderr [ANSI.Reset]
+  liftIO
+    $ if jsonMode
+      then Data.Text.IO.hPutStrLn stderr $ "debug: " <> msg
+      else do
+        ANSI.hSetSGR stderr [ANSI.SetColor ANSI.Foreground ANSI.Vivid ANSI.Cyan]
+        Data.Text.IO.hPutStrLn stderr $ "debug: " <> msg
+        ANSI.hSetSGR stderr [ANSI.Reset]
 
 
 -- | Structured error envelope emitted on stderr under JSON mode.
@@ -268,7 +270,8 @@ renderAPIError e
 reqOpts :: Environment :> es => CLIConfig -> [(Text, Text)] -> Eff es W.Options
 reqOpts cfg params = do
   dbg <- isDebugMode
-  pure $ W.defaults
+  pure
+    $ W.defaults
     -- Override http-client's 30s default; long-running aggregates legitimately exceed it.
     & (Wreq.manager .~ Left tlsManagerSettings{HC.managerResponseTimeout = responseTimeoutMicro (5 * 60 * 1_000_000)})
     & (W.header "Accept" .~ ["application/json"])
@@ -282,8 +285,8 @@ apiGet :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> Text -> [(T
 apiGet cfg path params = do
   printDebug $ "GET " <> cfg.apiUrl <> path <> renderParams params
   opts <- reqOpts cfg params
-  withRetry 2 $
-    catch
+  withRetry 2
+    $ catch
       (Right . (^. responseBody) <$> getWith opts (toString $ cfg.apiUrl <> path))
       (pure . Left . httpExToError)
 
@@ -420,7 +423,7 @@ httpExToError (HttpExceptionRequest req (StatusCodeException resp body)) =
   let code = resp ^. Wreq.responseStatus . Wreq.statusCode
       -- Lenient decode: the body may be HTML, gzip leftovers, or arbitrary
       -- bytes from a misconfigured upstream — never throw at the boundary.
-      decode = TE.decodeUtf8With lenientDecode
+      decode = decodeUtf8
       statusMsg = decode (resp ^. Wreq.responseStatus . Wreq.statusMessage)
       bodyTxt = T.strip (decode body)
       -- Gateway/edge errors (CF, nginx) send HTML; collapsing it into the
@@ -451,10 +454,14 @@ httpExToError (InvalidUrlException url reason) =
 isHtml :: Text -> Bool
 isHtml t =
   let s = T.toLower (T.take 256 (T.stripStart t))
-   in "<!doctype html" `T.isPrefixOf` s
-        || "<html" `T.isPrefixOf` s
-        || "<!doctype" `T.isPrefixOf` s
-        || "cloudflare" `T.isInfixOf` s
+   in "<!doctype html"
+        `T.isPrefixOf` s
+        || "<html"
+        `T.isPrefixOf` s
+        || "<!doctype"
+        `T.isPrefixOf` s
+        || "cloudflare"
+        `T.isInfixOf` s
 
 
 -- | Debug-only query-string formatter — values are NOT URL-encoded so the

@@ -29,7 +29,7 @@ import Pages.Charts.Types (DataType (..), MetricsData (..), MetricsStats (..))
 import Pkg.Components.TimePicker qualified as Components
 import Pkg.DeriveUtils (DB)
 import Pkg.Parser (QueryComponents (finalSummarizeQuery, whereClause), SqlQueryCfg (..), defSqlQueryCfg, pSource, parseQueryToAST, queryASTToComponents, replacePlaceholders, variablePresets, variablePresetsKQL)
-import Pkg.Parser.Stats (Section, Sources (..))
+import Pkg.Parser.Stats (Section (..), Sources (..))
 import Pkg.QueryCache qualified as QC
 import Relude
 import Relude.Unsafe qualified as Unsafe
@@ -168,7 +168,21 @@ queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (
       let pid = Unsafe.fromJust pidM
       let source = parseMaybe pSource =<< sourceM
       let sqlQueryCfg = (defSqlQueryCfg pid now source Nothing){dateRange = (fromD, toD)}
-      convertTimestampsToMs <$> queryMetricsWithCache authCtx dbSource respDataType pid source queryAST sqlQueryCfg (maybeToMonoid queryM) now fromD toD
+      -- Scalar aggregates (summarize with no `by` clause) produce a single
+      -- float row; decoding them with the default DTMetric (timestamp-first
+      -- pivot) raises a type error. Callers that don't pass data_type — the
+      -- CLI's `metrics query ... --assert` flow — get the right decoder here.
+      let respDataType' = if respDataType == DTMetric && isScalarSummarize queryAST then DTFloat else respDataType
+      convertTimestampsToMs <$> queryMetricsWithCache authCtx dbSource respDataType' pid source queryAST sqlQueryCfg (maybeToMonoid queryM) now fromD toD
+
+
+-- | A summarize with no @by@ clause at all — yields one scalar row.
+isScalarSummarize :: [Section] -> Bool
+isScalarSummarize = any isScalar
+  where
+    isScalar = \case
+      SummarizeCommand _ Nothing -> True
+      _ -> False
 
 
 -- | Execute query with caching support for timeseries queries
