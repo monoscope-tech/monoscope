@@ -178,7 +178,7 @@ import System.Clock (TimeSpec (TimeSpec))
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Config qualified as Config
 import System.Directory (getFileSize, listDirectory)
-import System.Environment (setEnv)
+import System.Environment (setEnv, unsetEnv)
 import System.Envy (DefConfig (..), decodeWithDefaults)
 import System.Exit (ExitCode (..))
 import System.IO.Silently qualified as Silently
@@ -1391,21 +1391,24 @@ runCLILifecycle :: TestResources -> [String] -> IO (ExitCode, Text)
 runCLILifecycle tr args = do
   -- MONOSCOPE_TEST_API_KEY lets a test inject a real project key (needed by
   -- ingestion paths that authenticate the key, e.g. send-event → OTLP).
-  setEnv "MONOSCOPE_API_KEY" . fromMaybe "test-key" =<< lookupEnv "MONOSCOPE_TEST_API_KEY"
-  setEnv "MONOSCOPE_PROJECT" (UUID.toString UUID.nil)
-  (global, cmd) <- case OA.execParserPure OA.defaultPrefs (CLIMain.parserInfo testVersion) args of
-    OA.Success r -> pure r
-    OA.Failure f -> error $ "CLI parse failure: " <> toText (fst (OA.renderFailure f "monoscope"))
-    OA.CompletionInvoked _ -> error "CLI completion invoked in test"
-  (out, res) <-
-    Silently.capture
-      $ try @ExitCode
-      $ runEff
-      $ runHTTPtoServant tr
-      $ runEnvironment
-      $ runFileSystem
-      $ CLIMain.run testVersion global cmd
-  pure (fromLeft ExitSuccess res, toText out)
+  key <- fromMaybe "test-key" <$> lookupEnv "MONOSCOPE_TEST_API_KEY"
+  Safe.bracket_
+    (setEnv "MONOSCOPE_API_KEY" key >> setEnv "MONOSCOPE_PROJECT" (UUID.toString UUID.nil))
+    (unsetEnv "MONOSCOPE_API_KEY" >> unsetEnv "MONOSCOPE_PROJECT")
+    do
+      (global, cmd) <- case OA.execParserPure OA.defaultPrefs (CLIMain.parserInfo testVersion) args of
+        OA.Success r -> pure r
+        OA.Failure f -> error $ "CLI parse failure: " <> toText (fst (OA.renderFailure f "monoscope"))
+        OA.CompletionInvoked _ -> error "CLI completion invoked in test"
+      (out, res) <-
+        Silently.capture
+          $ try @ExitCode
+          $ runEff
+          $ runHTTPtoServant tr
+          $ runEnvironment
+          $ runFileSystem
+          $ CLIMain.run testVersion global cmd
+      pure (fromLeft ExitSuccess res, toText out)
   where
     testVersion = makeVersion [0, 0, 0]
 
@@ -1438,7 +1441,7 @@ pBool k ps = lookupParam k ps >>= \case "true" -> Just True; "false" -> Just Fal
 
 
 parseUUIDId :: Text -> UUIDId t
-parseUUIDId t = UUIDId $ fromMaybe (error $ "invalid UUID in CLI test path: " <> t) (UUID.fromText t)
+parseUUIDId = UUIDId . rawUUID
 
 
 parseIntId :: Text -> Int64

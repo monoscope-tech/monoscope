@@ -421,8 +421,9 @@ addParams ps o = foldl' (\acc (k, v) -> acc & Wreq.param k .~ [v]) o ps
 httpExToError :: HttpException -> APIError
 httpExToError (HttpExceptionRequest req (StatusCodeException resp body)) =
   let code = resp ^. Wreq.responseStatus . Wreq.statusCode
-      -- Lenient decode: the body may be HTML, gzip leftovers, or arbitrary
-      -- bytes from a misconfigured upstream — never throw at the boundary.
+      -- Lenient decode (relude's decodeUtf8 @Text is decodeUtf8With
+      -- lenientDecode — total): the body may be HTML, gzip leftovers, or
+      -- arbitrary bytes from a misconfigured upstream — never throw here.
       decode = decodeUtf8
       statusMsg = decode (resp ^. Wreq.responseStatus . Wreq.statusMessage)
       bodyTxt = T.strip (decode body)

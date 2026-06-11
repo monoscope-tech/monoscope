@@ -255,6 +255,9 @@ apiMonitorUpdate pid mid inp = do
 
 -- | Upsert keyed by alert title — the monitors-as-code analogue of
 -- 'apiDashboardApply' (dashboards key on file_path; monitors on title).
+-- Lookup+insert is racy under concurrent same-title applies (no unique index
+-- on title to hang ON CONFLICT off); accepted for this human/CI-driven path —
+-- the loser just creates a duplicate to clean up.
 apiMonitorApply :: Projects.ProjectId -> MonitorInput -> ATBaseCtx Monitors.QueryMonitor
 apiMonitorApply pid inp =
   Monitors.queryMonitorByTitle pid inp.title >>= \case

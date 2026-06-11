@@ -83,7 +83,7 @@ data EndpointsCommand
 
 
 data LogPatternsCommand
-  = LPList (Maybe Int) (Maybe Int)
+  = LPList {page, perPage :: Maybe Int}
   | LPGet Int64
   | LPAck Int64
   | LPBulk Text [Int64]
@@ -306,7 +306,10 @@ eventsSearchParser =
     -- Wide --since windows are fetched in --chunk-hours slices internally (to
     -- dodge the CF 504 timeout) and merged client-side: the output is always
     -- a single envelope, identical to a single-request search.
-    <*> optional (option auto (long "chunk-hours" <> metavar "H" <> help "Hours per internal fetch slice for wide --since windows (default: 1; 0 = single request)"))
+    <*> ( (\h legacy -> h <|> (0 <$ guard legacy)) -- --no-chunk: hidden back-compat alias for --chunk-hours 0
+            <$> optional (option auto (long "chunk-hours" <> metavar "H" <> help "Hours per internal fetch slice for wide --since windows (default: 1; 0 = single request)"))
+            <*> switch (long "no-chunk" <> internal)
+        )
 
 
 -- | C5: Concrete KQL examples in @--help@ — agents copy from here, so keep
@@ -965,8 +968,8 @@ run version global = \case
        in Resource.runListVia cfg Resource.Endpoints "/api/v1/endpoints" params mode
     EndGet i -> Resource.runAPI mode (apiGetJson @_ @AE.Value cfg ("/api/v1/endpoints/" <> i) [])
   LogPatternsCmd sub -> withCfgMode global $ \cfg mode -> case sub of
-    LPList pageM perM ->
-      Resource.runListVia cfg Resource.LogPatterns "/api/v1/log_patterns" (pageParams pageM perM) mode
+    LPList{..} ->
+      Resource.runListVia cfg Resource.LogPatterns "/api/v1/log_patterns" (pageParams page perPage) mode
     LPGet i -> Resource.runAPI mode (apiGetJson @_ @AE.Value cfg ("/api/v1/log_patterns/" <> show i) [])
     LPAck i -> Resource.writeJson cfg Resource.POST ("/api/v1/log_patterns/" <> show i <> "/ack") [] AE.Null mode
     LPBulk act ids ->

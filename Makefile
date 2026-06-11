@@ -19,8 +19,9 @@ web-components-watch:
 run:
 	cabal run
 
+# CYPRESS_RECORD_KEY comes from .env (Cypress reads it natively)
 cypress:
-	npx cypress run --record --key 2a2372e2-4ba1-4cd5-8bed-f39f4f047b3e
+	set -a && . ./.env && npx cypress run --record
 
 live-reload:
 	ghcid --command 'cabal repl monoscope --ghc-options="-Wno-error=unused-imports -Wno-error=unused-top-binds" --with-compiler=$(GHC)' --test ':run Start.startApp' --warnings
@@ -48,11 +49,7 @@ TEST_MATCH ?=
 live-test-dev:
 	USE_EXTERNAL_DB=true LOG_LEVEL=attention \
 	ghcid --command 'cabal repl monoscope:test:test-dev --ghc-options="-osuf dyn_o -hisuf dyn_hi -O0" --with-compiler=$(GHC)' \
-<<<<<<< cli-lifecycle-as-code
 		--test ':main $(if $(TEST_MATCH),--match $(TEST_MATCH))' --warnings 2>&1 | tee build-test-dev.log
-=======
-		--test ':main $(if $(TEST_MATCH),--match "$(TEST_MATCH)")' --warnings 2>&1 | tee build-test-dev.log
->>>>>>> master
 
 hot-reload:
 	livereload -f reload.trigger static/public/ & \
