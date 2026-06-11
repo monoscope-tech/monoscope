@@ -50,7 +50,9 @@ jobs:
       image: ghcr.io/monoscope-tech/monoscope-deps:latest
       credentials:
         username: ${{ github.repository_owner }}
-        password: ${{ secrets.GH_TOKEN }}
+        # Dependabot-triggered runs don't get repo secrets; an empty password
+        # is a template error, so fall back to the workflow token.
+        password: ${{ secrets.GH_TOKEN || github.token }}
       env:
         CABAL_DIR: /root/.cabal
     services:

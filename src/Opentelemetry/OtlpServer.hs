@@ -1,4 +1,6 @@
 {-# LANGUAGE StrictData #-}
+-- The Relude redirect rule self-matches the bare 'fromException' (no-op rewrite).
+{- HLINT ignore "Use 'fromException' from Relude" -}
 
 module Opentelemetry.OtlpServer (
   processList,
@@ -17,7 +19,6 @@ module Opentelemetry.OtlpServer (
 ) where
 
 import Control.Concurrent (forkIO, threadDelay)
-import Control.Exception (ErrorCall (..), throwIO)
 import Control.Exception.Annotated (checkpoint)
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
@@ -52,6 +53,7 @@ import Effectful.Log (Log)
 import Effectful.Reader.Static (ask)
 import Effectful.Reader.Static qualified as Eff
 import Effectful.Time qualified as Time
+import GHC.Exception (ErrorCall (..))
 import Log (LogLevel (..), Logger, runLogT)
 import Log qualified as LogBase
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
@@ -91,7 +93,7 @@ import System.IO.Unsafe (unsafePerformIO)
 import System.Logging qualified as Log
 import System.Tracing (Tracing, batchSpanAttrs, withSpan_)
 import System.Types (ATBackgroundCtx, DB, runBackground)
-import UnliftIO.Exception (tryAny)
+import UnliftIO.Exception (throwIO, tryAny)
 import Utils (b64ToJson, freeTierDailyMaxEvents, jsonToMap, nestedJsonFromDotNotation)
 import "base64" Data.ByteString.Base64 qualified as B64
 
