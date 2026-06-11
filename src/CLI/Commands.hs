@@ -449,11 +449,14 @@ runChunkedSearch cfg validatedOpts mode slices = do
           withAPIResult cfg "/api/v1/events" params $ \val ->
             whenJust (decodeEvents val) $ \d -> do
               st' <- readIORef ref
-              let keyOf r = case Map.lookup "id" d.idxMap >>= \i -> listToMaybe (drop i r) of
-                    Just v -> valToText v
-                    Nothing -> decodeUtf8 (AE.encode r)
+              -- Server contract: /api/v1/events rows carry an id column. If it's
+              -- missing, fall back to whole-row JSON as the dedup key (correct
+              -- but O(rowSize) per row) and surface the violation in debug output.
+              let idIdxM = Map.lookup "id" d.idxMap
+                  keyOf r = maybe (decodeUtf8 (AE.encode r)) valToText (idIdxM >>= \i -> listToMaybe (drop i r))
                   fresh = filter (\r -> keyOf r `S.notMember` st'.seen) d.rawRows
                   sliceMore = d.hasMore == AE.Bool True
+              when (isNothing idIdxM) $ printDebug "auto-chunk: response has no 'id' column; deduping by full-row JSON"
               writeIORef
                 ref
                 st'

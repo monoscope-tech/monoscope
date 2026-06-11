@@ -66,7 +66,7 @@ data ProjectCommand
 
 
 data IssuesCommand
-  = IssueList (Maybe Text) (Maybe Text) (Maybe Text) (Maybe Int) (Maybe Int)
+  = IssueList {status, issueType, service :: Maybe Text, page, perPage :: Maybe Int}
   | IssueGet Text
   | IssueAck Text
   | IssueUnack Text
@@ -77,7 +77,7 @@ data IssuesCommand
 
 
 data EndpointsCommand
-  = EndList (Maybe Text) (Maybe Bool) (Maybe Int) (Maybe Int)
+  = EndList {search :: Maybe Text, outgoing :: Maybe Bool, page, perPage :: Maybe Int}
   | EndGet Text
   deriving stock (Show)
 
@@ -104,7 +104,7 @@ data TeamsCommand
 data MembersCommand
   = MemberList
   | MemberGet Text
-  | MemberAdd (Maybe Text) (Maybe Text) (Maybe Text) -- email, userId, permission
+  | MemberAdd {email, userId, permission :: Maybe Text}
   | MemberPatch Text Text -- userId, permission
   | MemberRemove Text
   deriving stock (Show)
@@ -640,7 +640,7 @@ issuesParser =
       [ command
           "list"
           ( info
-              ( (\(p, pp) s t svc -> IssueList s t svc p pp)
+              ( (\(page, perPage) status issueType service -> IssueList{..})
                   <$> pageOpts
                   <*> optional (strOption (long "status" <> metavar "STATUS" <> help "open|acknowledged|archived|all"))
                   <*> optional (strOption (long "type" <> metavar "TYPE" <> help "Filter by issue_type"))
@@ -670,7 +670,7 @@ endpointsParser =
       [ command
           "list"
           ( info
-              ( (\(p, pp) s o -> EndList s o p pp)
+              ( (\(page, perPage) search outgoing -> EndList{..})
                   <$> pageOpts
                   <*> optional (strOption (long "search" <> metavar "TEXT" <> help "Substring filter"))
                   <*> optional (switch (long "outgoing" <> help "Only outgoing endpoints"))
@@ -750,7 +750,7 @@ membersParser =
       , command
           "add"
           ( info
-              ( MemberAdd
+              ( (\email userId permission -> MemberAdd{..})
                   <$> optional (strOption (long "email" <> metavar "EMAIL" <> help "Email (creates user if missing)"))
                   <*> optional (strOption (long "user-id" <> metavar "UUID" <> help "Existing user ID"))
                   <*> optional (strOption (long "permission" <> metavar "PERM" <> help "view|edit|admin (default: view)"))
@@ -912,6 +912,8 @@ run version global = \case
     DashPatch i path -> Resource.runFromFile cfg Resource.PATCH (Resource.resourceIdPath Resource.Dashboards i) [] path mode
     DashDelete i -> Resource.runDelete cfg Resource.Dashboards i
     DashStar i -> Resource.runLifecycle cfg Resource.Dashboards i "star" [] mode
+    -- unstar is DELETE /star (Routes.dashboardUnstar), not a POST lifecycle
+    -- verb, so it can't go through runLifecycle.
     DashUnstar i ->
       Resource.withResult (apiDelete cfg ("/api/v1/dashboards/" <> i <> "/star")) renderAPIError $ \() ->
         putTextLn $ "/api/v1/dashboards/" <> i <> "/star unstarred"
@@ -947,8 +949,8 @@ run version global = \case
     ProjGet -> Resource.runAPI mode (apiGetJson @_ @AE.Value cfg "/api/v1/project" [])
     ProjPatch path -> Resource.runFromFile cfg Resource.PATCH "/api/v1/project" [] path mode
   IssuesCmd sub -> withCfgMode global $ \cfg mode -> case sub of
-    IssueList statusM typeM svcM pageM perM ->
-      let params = catMaybes [("status",) <$> statusM, ("type",) <$> typeM, ("service",) <$> svcM] <> pageParams pageM perM
+    IssueList{..} ->
+      let params = catMaybes [("status",) <$> status, ("type",) <$> issueType, ("service",) <$> service] <> pageParams page perPage
        in Resource.runListVia cfg Resource.Issues "/api/v1/issues" params mode
     IssueGet i -> Resource.runAPI mode (apiGetJson @_ @AE.Value cfg ("/api/v1/issues/" <> i) [])
     IssueAck i -> Resource.writeJson cfg Resource.POST ("/api/v1/issues/" <> i <> "/ack") [] AE.Null mode
@@ -958,8 +960,8 @@ run version global = \case
     IssueBulk act ids ->
       Resource.writeJson cfg Resource.POST "/api/v1/issues/bulk" [] (AE.object ["action" AE..= act, "ids" AE..= ids]) mode
   EndpointsCmd sub -> withCfgMode global $ \cfg mode -> case sub of
-    EndList searchM outgoingM pageM perM ->
-      let params = catMaybes [("search",) <$> searchM, ("outgoing",) . bool "false" "true" <$> outgoingM] <> pageParams pageM perM
+    EndList{..} ->
+      let params = catMaybes [("search",) <$> search, ("outgoing",) . bool "false" "true" <$> outgoing] <> pageParams page perPage
        in Resource.runListVia cfg Resource.Endpoints "/api/v1/endpoints" params mode
     EndGet i -> Resource.runAPI mode (apiGetJson @_ @AE.Value cfg ("/api/v1/endpoints/" <> i) [])
   LogPatternsCmd sub -> withCfgMode global $ \cfg mode -> case sub of
@@ -980,13 +982,13 @@ run version global = \case
   MembersCmd sub -> withCfgMode global $ \cfg mode -> case sub of
     MemberList -> Resource.runList cfg Resource.Members [] mode
     MemberGet i -> Resource.runGet cfg Resource.Members i mode
-    MemberAdd emailM uidM permM ->
+    MemberAdd{..} ->
       let body =
             AE.object
               $ catMaybes
-                [ ("email" AE..=) <$> emailM
-                , ("user_id" AE..=) <$> uidM
-                , ("permission" AE..=) <$> permM
+                [ ("email" AE..=) <$> email
+                , ("user_id" AE..=) <$> userId
+                , ("permission" AE..=) <$> permission
                 ]
        in Resource.writeJson cfg Resource.POST (Resource.resourcePath Resource.Members) [] body mode
     MemberPatch uid perm ->
