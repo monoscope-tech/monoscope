@@ -40,12 +40,19 @@ live-test-reload-all:
 # Integration tests with lib+test in ONE GHCi target (Jade's "cabal test-dev" trick).
 # `:reload` crosses src/<->test/ boundaries — no relink between iterations.
 # `-osuf dyn_o -hisuf dyn_hi` reuses .dyn_o artifacts cabal already wrote.
-# Filter with: TEST_MATCH=/MonitoringSpec/ make live-test-dev
+# Filter with: TEST_MATCH=Monitoring make live-test-dev
+# (hspec-discover node names drop the module's "Spec" suffix)
+# NB: GHCi's :main only strips quotes at token start, so `--match="X"` would
+# pass the quote chars to hspec and silently match nothing — keep the space form.
 TEST_MATCH ?=
 live-test-dev:
 	USE_EXTERNAL_DB=true LOG_LEVEL=attention \
 	ghcid --command 'cabal repl monoscope:test:test-dev --ghc-options="-osuf dyn_o -hisuf dyn_hi -O0" --with-compiler=$(GHC)' \
+<<<<<<< cli-lifecycle-as-code
 		--test ':main $(if $(TEST_MATCH),--match $(TEST_MATCH))' --warnings 2>&1 | tee build-test-dev.log
+=======
+		--test ':main $(if $(TEST_MATCH),--match "$(TEST_MATCH)")' --warnings 2>&1 | tee build-test-dev.log
+>>>>>>> master
 
 hot-reload:
 	livereload -f reload.trigger static/public/ & \

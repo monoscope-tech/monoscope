@@ -411,7 +411,10 @@ processList msgs !attrs =
             )
         _ -> do
           Log.logAttention "processList: unsupported opentelemetry data type" (AE.object ["ce-type" AE..= HM.lookup "ce-type" attrs])
-          pure (Right ([], []))
+          -- Poison (→ DLQ) instead of Right ([], []): empty acks never
+          -- commit/ack, which would stall the partition on these records
+          -- forever (hot redelivery loop).
+          pure (Right ([], [(ackId, raw, "unsupported ce-type") | (ackId, raw) <- msgs]))
 
 
 processBatchPipeline

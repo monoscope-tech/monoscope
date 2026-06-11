@@ -126,6 +126,11 @@ data EnvConfig = EnvConfig
   , enableTimefusionReads :: Bool
   , enableTimefusionWrites :: Bool
   , kafkaDeadLetterTopic :: Text
+  , enableKafkaDeadLetterService :: Bool
+  -- ^ Consume 'kafkaDeadLetterTopic' back through processList under its own
+  -- consumer group. Failures requeue to the DLQ tail with a bumped
+  -- attempt-count header — messages loop until they succeed or an engineer
+  -- prunes them manually.
   , enableFreetier :: Bool
   , enableBrowserMonitoring :: Bool
   , enableSessionReplay :: Bool
@@ -219,6 +224,7 @@ instance DefConfig EnvConfig where
       , openaiModel = "gpt-5.4-mini"
       , openaiSmallModel = "gpt-5.4-nano"
       , kafkaGroupConcurrency = 4
+      , enableKafkaDeadLetterService = True
       , extractionWorkerShards = 4
       , extractionQueueCapacity = 64
       , drainFlushBatchSize = 1000
