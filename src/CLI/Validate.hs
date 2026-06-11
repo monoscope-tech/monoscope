@@ -1,17 +1,17 @@
 -- | Pure client-side validators used by the CLI before hitting the API.
 -- Catching malformed input here gives agents a clear, actionable error
 -- message instead of an opaque server-side HTTP 400.
-module CLI.Validate
-  ( validateDuration
-  , validateDurationFor
-  , validateUuid
-  , validateKind
-  , normalizeKind
-  , validateOrDie
-  , validateDurationOrDie
-  , validateAndNormalizeKind
-  , validateQueryOrDie
-  ) where
+module CLI.Validate (
+  validateDuration,
+  validateDurationFor,
+  validateUuid,
+  validateKind,
+  normalizeKind,
+  validateOrDie,
+  validateDurationOrDie,
+  validateAndNormalizeKind,
+  validateQueryOrDie,
+) where
 
 import Relude
 
