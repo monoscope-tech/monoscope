@@ -160,6 +160,18 @@ spec = aroundAll withTestResources $ beforeWith mkResWithKey do
         res <- runTestBg frozenTime tr' $ OtlpServer.processList msgs logsAttrs
         expectLeftMatching "TF-only failure on mixed batch" isThat res
 
+    -- Regression: this used to return Right ([], []) — no acks, no poison —
+    -- which never commits/acks and stalls the partition on these records
+    -- forever (hot redelivery loop, hit by DLQ replay of e.g. rrweb messages).
+    it "unsupported ce-type → whole batch poisoned (→ DLQ), never an uncommittable no-op" \(tr, key) -> do
+      let msgs = [validLogMsg key "ack-unsup-1", corruptMsg "ack-unsup-2"]
+      res <- runTestBg frozenTime tr $ OtlpServer.processList msgs (HM.fromList [("ce-type", "org.rrweb.events.v1")])
+      case res of
+        Right (acks, poison) -> do
+          acks `shouldBe` []
+          map (\(a, _, r) -> (a, r)) poison `shouldBe` [("ack-unsup-1", "unsupported ce-type"), ("ack-unsup-2", "unsupported ce-type")]
+        Left wf -> expectationFailure $ "expected Right; got Left " <> toString (Telemetry.writeFailureSummary wf)
+
     it "corrupt-only batch + TF healthy → Right ([], [poison]); Pkg.Queue DLQs it" \(tr, _) -> do
       res <- runTestBg frozenTime tr $ OtlpServer.processList [corruptMsg "ack-poison"] logsAttrs
       case res of

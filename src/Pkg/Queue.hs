@@ -1,4 +1,4 @@
-module Pkg.Queue (pubsubService, kafkaService, publishJSONToKafka, publishToDeadLetterQueue, closeSharedKafkaProducer) where
+module Pkg.Queue (pubsubService, kafkaService, KafkaRole (..), publishJSONToKafka, publishToDeadLetterQueue, closeSharedKafkaProducer) where
 
 import Control.Exception.Annotated (checkpoint)
 import Control.Lens ((^?), _Just)
@@ -36,6 +36,7 @@ import System.Tracing (SpanStatus (..), addEvent, setStatus, withSpan)
 import System.Types (ATBackgroundCtx, runBackground)
 import UnliftIO (throwIO)
 import UnliftIO.Async (pooledForConcurrentlyN)
+import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (bracket, tryAny)
 import UnliftIO.MVar (modifyMVar)
 
@@ -193,13 +194,21 @@ publishJSONToKafka appCtx topicName jsonData attributes = checkpoint "publishJSO
     Right res -> pure res
 
 
-kafkaService :: Log.Logger -> AuthContext -> TracerProvider -> [Text] -> Int -> ([(Text, ByteString)] -> HM.HashMap Text Text -> ATBackgroundCtx (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))) -> IO ()
-kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaService" do
+-- | Which consumer loop this is. 'KafkaDlqReplay' consumes the dead-letter
+-- topic under its own consumer group (\"\<kafkaGroupId\>_dlq\" — a shared group
+-- would rebalance DLQ partitions onto primary consumers). Failures there
+-- republish to the DLQ tail with a bumped @monoscope-attempt-count@ header and
+-- commit, so every message retries in a loop and none is ever dropped; a
+-- growing DLQ with rising attempt counts is the signal for an engineer to
+-- inspect and prune manually.
+data KafkaRole = KafkaPrimary | KafkaDlqReplay
+  deriving stock (Eq)
+
+
+kafkaService :: Log.Logger -> AuthContext -> TracerProvider -> KafkaRole -> [Text] -> Int -> ([(Text, ByteString)] -> HM.HashMap Text Text -> ATBackgroundCtx (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))) -> IO ()
+kafkaService appLogger appCtx tp role kafkaTopics batchSize fn = checkpoint "kafkaService" do
   instanceUuid <- UUID.toText <$> UUID.nextRandom
   let clientId = "monoscope-" <> T.take 8 instanceUuid
-      -- DLQ is intentionally NOT subscribed: re-consuming our own dead letters
-      -- in the live loop just amplifies pain during a sustained downstream
-      -- outage. Drain it via a separate one-off script when needed.
       consumerSub = K.topics (map K.TopicName kafkaTopics) <> K.offsetReset K.Earliest
 
   -- Single LogT context for the whole service; client_id (and other static
@@ -208,7 +217,7 @@ kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaSer
   runLogT "kafka-service" appLogger LogInfo
     $ LogBase.localData
       [ "client_id" AE..= clientId
-      , "group_id" AE..= appCtx.config.kafkaGroupId
+      , "group_id" AE..= groupId
       ]
       do
         LogBase.logInfo "Starting Kafka consumer service" (AE.object ["topics" AE..= kafkaTopics, "brokers" AE..= appCtx.config.kafkaBrokers])
@@ -229,26 +238,26 @@ kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaSer
               -- groups stall only their own partition's commits.
               -- Map (not HashMap): KP.PartitionId has Ord but no Hashable instance.
               let byTP = foldr (\r -> Map.insertWith (<>) (r.crTopic.unTopicName, r.crPartition) (r :| [])) Map.empty rightRecords
-                  processGroup ((topic, _partition), neRecords@(recc :| _)) = do
-                    let headers = consumerRecordHeadersToHashMap recc
-                        ceType = ceTypeFor appCtx.config.kafkaDeadLetterTopic topic headers
-                        attributes = HM.insert "ce-type" ceType headers
-                        allRecords = consumerRecordToTuple <$> toList neRecords
-                        successTps = tpsFor topic neRecords
-                    LogBase.localData ["topic" AE..= topic, "ce_type" AE..= ceType, "record_count" AE..= length allRecords] do
+                  attrsFor topic r = let h = consumerRecordHeadersToHashMap r in HM.insert "ce-type" (ceTypeFor appCtx.config.kafkaDeadLetterTopic topic h) h
+                  -- One fn invocation + outcome routing for records sharing one
+                  -- header set. True ⇔ every record is durable (written or DLQ'd)
+                  -- and its offset may advance.
+                  runChunk topic records attrs = do
+                    let ceType = HM.lookupDefault "" "ce-type" attrs
+                    LogBase.localData ["topic" AE..= topic, "ce_type" AE..= ceType, "record_count" AE..= length records] do
                       result <- liftIO
                         $ tryAny
                         $ runBackground appLogger appCtx tp
                         $ withSpan
                           "kafka.process_batch"
                           [ ("topic", OA.toAttribute topic)
-                          , ("message_count", OA.toAttribute (length allRecords))
+                          , ("message_count", OA.toAttribute (length records))
                           , ("ce-type", OA.toAttribute ceType)
                           , ("client_id", OA.toAttribute clientId)
                           ]
                         $ \sp -> do
                           addEvent sp "batch.started" []
-                          res <- fn allRecords attributes
+                          res <- fn records attrs
                           case res of
                             Right (ids, poison) -> do
                               addEvent sp "batch.completed" [("processed_count", OA.toAttribute (length ids)), ("poison_count", OA.toAttribute (length poison))]
@@ -260,23 +269,46 @@ kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaSer
                               setStatus sp (Error summary)
                               pure (Left wf)
                       -- Empty ack list = no commit (broker redelivers); non-empty
-                      -- = all source offsets in this (topic, partition) group are
-                      -- durable (either written or DLQ'd). Kafka can't partial-ack
-                      -- within a partition so we commit all-or-nothing here.
-                      acks <- liftIO $ routeBatchOutcome appLogger appCtx "kafka-service" topic allRecords attributes result
-                      pure $ if null acks then [] else successTps
+                      -- = durable. Kafka can't partial-ack within a partition so
+                      -- processGroup commits all-or-nothing per partition group.
+                      not . null <$> liftIO (routeBatchOutcome appLogger appCtx "kafka-service" topic records attrs result)
+                  processGroup ((topic, _partition), neRecords@(recc :| _)) = do
+                    committable <- case role of
+                      KafkaPrimary -> runChunk topic (consumerRecordToTuple <$> toList neRecords) (attrsFor topic recc)
+                      -- DLQ partitions interleave requeues from different source
+                      -- topics (round-robin publish), so one batch-level ce-type
+                      -- would mis-decode the minority and bake the wrong ce-type
+                      -- into their requeued headers. Process per record under its
+                      -- own headers; short-circuit on the first non-durable record
+                      -- (the rest redelivers with it — duplicates over loss).
+                      KafkaDlqReplay -> allM (\r -> runChunk topic [consumerRecordToTuple r] (attrsFor topic r)) (toList neRecords)
+                    pure $ if committable then tpsFor topic neRecords else []
               -- Bound must stay well under the hasql pool (shared with web) —
               -- AcquisitionTimeout (→ Hasql.isTransientException → no commit →
               -- redelivery storm) is the failure mode to avoid. Single committer
               -- (this thread) below — no concurrent commitPartitionsOffsets.
               tps <- concat <$> pooledForConcurrentlyN appCtx.config.kafkaGroupConcurrency (Map.toList byTP) processGroup
 
-              -- No poll-thread backoff: lag growth is the outage signal under
-              -- per-partition commits. A reintroduced `threadDelay` here races
-              -- max.poll.interval.ms and triggers cooperative-sticky rebalances.
+              -- No poll-thread backoff on primary topics: lag growth is the outage
+              -- signal under per-partition commits. A reintroduced `threadDelay`
+              -- here races max.poll.interval.ms and triggers cooperative-sticky
+              -- rebalances.
               unless (null tps)
                 $ whenJustM (K.commitPartitionsOffsets K.OffsetCommitAsync consumer tps) throwIO
+
+              -- DLQ replay is a requeue carousel: failures republish to the tail
+              -- and commit, so on a short queue a poison message would otherwise
+              -- cycle consume→fail→requeue several times a second. Pause when the
+              -- poll came back short (at the tail, i.e. mostly just-requeued
+              -- records); full batches — a real backlog drain — run at full
+              -- speed. 30s stays well under max.poll.interval.ms (300s).
+              when (role == KafkaDlqReplay && length rightRecords < batchSize)
+                $ threadDelay 30_000_000
   where
+    groupId = case role of
+      KafkaPrimary -> appCtx.config.kafkaGroupId
+      KafkaDlqReplay -> appCtx.config.kafkaGroupId <> "_dlq"
+
     consumerRecordToTuple :: K.ConsumerRecord (Maybe ByteString) (Maybe ByteString) -> (Text, ByteString)
     consumerRecordToTuple record = (record.crTopic.unTopicName, fromMaybe "" record.crValue)
 
@@ -306,7 +338,7 @@ kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaSer
     consumerProps :: EnvConfig -> Text -> K.ConsumerProperties
     consumerProps cfg clientId =
       K.brokersList (map K.BrokerAddress cfg.kafkaBrokers)
-        <> K.groupId (K.ConsumerGroupId cfg.kafkaGroupId)
+        <> K.groupId (K.ConsumerGroupId groupId)
         <> K.clientId (K.ClientId clientId)
         <> K.extraProp "security.protocol" "sasl_plaintext"
         <> K.extraProp "sasl.mechanism" "SCRAM-SHA-256"
@@ -328,6 +360,33 @@ kafkaService appLogger appCtx tp kafkaTopics batchSize fn = checkpoint "kafkaSer
       _ -> ""
 
 
+-- | Headers stamped on every DLQ publish. Left-biased '<>' keeps first-failure
+-- forensics (original-topic, original-ack-id, failed-at) intact across
+-- DLQ-replay requeues, while attempt-count, error-reason and last-failed-at
+-- refresh on every pass — an engineer inspecting a growing DLQ sees how often
+-- and why each message keeps failing.
+--
+-- >>> let requeued = dlqHeaders "tf down" "t1" "otlp_logs" mempty
+-- >>> let again = dlqHeaders "pg down" "t2" "monoscope-dlq" requeued
+-- >>> (HM.lookup "monoscope-attempt-count" again, HM.lookup "error-reason" again, HM.lookup "last-failed-at" again)
+-- (Just "2",Just "pg down",Just "t2")
+-- >>> (HM.lookup "original-topic" again, HM.lookup "failed-at" again)
+-- (Just "otlp_logs",Just "t1")
+dlqHeaders :: Text -> Text -> Text -> HM.HashMap Text Text -> HM.HashMap Text Text
+dlqHeaders errorReason failedAt origTopicOrAckId attributes =
+  HM.fromList
+    [ ("monoscope-attempt-count", show (1 + fromMaybe 0 (readMaybe . toString =<< HM.lookup "monoscope-attempt-count" attributes) :: Int))
+    , ("error-reason", errorReason)
+    , ("last-failed-at", failedAt)
+    ]
+    <> attributes
+    <> HM.fromList
+      [ ("original-topic", origTopicOrAckId)
+      , ("original-ack-id", origTopicOrAckId)
+      , ("failed-at", failedAt)
+      ]
+
+
 -- | Publish failed messages to dead letter queue. Returns the first Left if
 -- any individual publish failed so the caller can refuse to advance the
 -- upstream offset/ack — otherwise a broken DLQ silently drops poison data.
@@ -343,14 +402,7 @@ publishToDeadLetterQueue appLogger appCtx messages attributes errorReason = do
   let deadLetterTopic = appCtx.config.kafkaDeadLetterTopic
   currentTime <- getCurrentTime
   results <- forM messages \(origTopicOrAckId, msgData) -> do
-    let deadLetterAttrs =
-          attributes
-            <> HM.fromList
-              [ ("original-topic", origTopicOrAckId)
-              , ("original-ack-id", origTopicOrAckId)
-              , ("error-reason", errorReason)
-              , ("failed-at", toText $ show currentTime)
-              ]
+    let deadLetterAttrs = dlqHeaders errorReason (toText $ show currentTime) origTopicOrAckId attributes
     result <- publishJSONToKafka appCtx deadLetterTopic (BC.unpack msgData) deadLetterAttrs
     case result of
       Left err -> do
