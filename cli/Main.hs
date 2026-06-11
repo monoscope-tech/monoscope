@@ -864,7 +864,9 @@ withCfgMode global k = do
 
 run :: (FileSystem :> es, Environment :> es, HTTP :> es, IOE :> es) => GlobalOpts -> Command -> Eff es ()
 run global = \case
-  AuthCmd c -> runAuth c
+  -- C7: resolve the output mode before auth too — 'runAuth' relies on
+  -- 'isJsonOutput' to refuse the interactive device flow when piped.
+  AuthCmd c -> void (resolveMode global) >> runAuth c
   EventsCmd kindOverride evCmd -> withCfgMode global $ \cfg mode -> case evCmd of
     EvSearch opts ->
       let finalOpts = (opts :: EventsSearchOpts){kind = opts.kind <|> kindOverride}

@@ -18,6 +18,7 @@ import Models.Telemetry.Schema qualified as Schema
 import Pages.Charts.Charts qualified as Charts
 import Pages.Charts.Types (MetricsData (..))
 import Pages.LogExplorer.Log qualified as Log
+import Pkg.Parser.Expr qualified as ParserExpr
 import Pkg.TestUtils
 import Relude
 import Servant (NoContent (..))
@@ -581,7 +582,7 @@ spec = aroundAll withTestResources do
         (resp ^? key "result" . key "protocolVersion") `shouldSatisfy` isJust
         (resp ^? key "result" . key "serverInfo" . key "name") `shouldSatisfy` isJust
 
-      it "tools/call get_schema round-trips through to Schema.telemetrySchema" $ \tr -> do
+      it "tools/call get_schema round-trips through to the derived live schema" $ \tr -> do
         let req =
               rpcCall
                 $ AE.object
@@ -596,7 +597,7 @@ spec = aroundAll withTestResources do
         let structured = resp ^? key "result" . key "structuredContent"
         case structured of
           Just v -> case AE.fromJSON @Schema.Schema v of
-            AE.Success s -> Map.keys s.fields `shouldMatchList` Map.keys Schema.telemetrySchema.fields
+            AE.Success s -> Map.keys s.fields `shouldMatchList` Map.keys (Schema.deriveSchema ParserExpr.flattenedOtelAttributes).fields
             AE.Error e -> expectationFailure ("structuredContent did not decode as Schema: " <> e)
           Nothing -> expectationFailure ("structuredContent missing; body: " <> show content)
 
@@ -692,7 +693,7 @@ spec = aroundAll withTestResources do
         (body ^? _Just . key "result" . key "isError") `shouldBe` Just (AE.Bool False)
         case body ^? _Just . key "result" . key "structuredContent" of
           Just v -> case AE.fromJSON @Schema.Schema v of
-            AE.Success s -> Map.keys s.fields `shouldMatchList` Map.keys Schema.telemetrySchema.fields
+            AE.Success s -> Map.keys s.fields `shouldMatchList` Map.keys (Schema.deriveSchema ParserExpr.flattenedOtelAttributes).fields
             AE.Error e -> expectationFailure ("structuredContent did not decode as Schema: " <> e)
           Nothing -> expectationFailure ("structuredContent missing in body: " <> show body)
 

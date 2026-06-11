@@ -59,7 +59,7 @@ spec = aroundAll withTestResources do
 
       let msgs = concat (replicate 100 [("m1", toStrict $ AE.encode reqMsg1), ("m2", toStrict $ AE.encode reqMsg2)]) ++ [("m3", toStrict $ AE.encode reqMsg3), ("m4", toStrict $ AE.encode reqMsg4)]
       res <- runTestBackground frozenTime tr.trATCtx $ processMessages msgs HashMap.empty
-      length res `shouldBe` 202
+      bimap (show @Text) (length . fst) res `shouldBe` Right 202
       
       -- Get time range that includes all messages (3 days ago to 1 day from now)
       let threeDaysAgo = addUTCTime (-259200) frozenTime  -- 3 days in seconds
@@ -94,7 +94,7 @@ spec = aroundAll withTestResources do
       -- Process some test messages
       let msgs = [("m1", toStrict $ AE.encode reqMsg1), ("m2", toStrict $ AE.encode reqMsg2)]
       res <- runTestBackground frozenTime tr.trATCtx $ processMessages msgs HashMap.empty
-      length res `shouldBe` 2
+      bimap (show @Text) (length . fst) res `shouldBe` Right 2
       
       -- Get time range that includes the messages we just processed
       let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) frozenTime
@@ -120,7 +120,7 @@ spec = aroundAll withTestResources do
       -- Create many messages to test pagination
       let msgs = take 200 $ map ((, toStrict $ AE.encode reqMsg) . (\i -> "m" <> show i)) [1..]
       res <- runTestBackground frozenTime tr.trATCtx $ processMessages msgs HashMap.empty
-      length res `shouldBe` 200
+      bimap (show @Text) (length . fst) res `shouldBe` Right 200
       
       -- Get time range that includes the messages we just processed
       let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) frozenTime
