@@ -423,11 +423,11 @@ sqlFromQueryComponents sqlCfg qc =
 --
 -- >>> let Right (_, c3) = parseQueryToComponents cfg "errors[*].error_type == []"
 -- >>> c3.whereClause
--- Just "jsonb_path_exists(errors, $$$[*].\"error_type\" ? (@ == {} )$$::jsonpath)"
+-- Just "(jsonb_path_exists(to_jsonb(errors), $$$[*].\"error_type\" ? (@ == [])$$::jsonpath))"
 --
 -- >>> let Right (_, c4) = parseQueryToComponents cfg "errors[*].error_type =~ /^ab.*c/"
 -- >>> c4.whereClause
--- Just "jsonb_path_exists(errors, $$$[*].\"error_type\" ? (@ = \"^ab.*c\")$$::jsonpath)"
+-- Just "(jsonb_path_exists(to_jsonb(errors), $$$[*].\"error_type\" ? (@ like_regex \"^ab.*c\" flag \"i\" )$$::jsonpath))"
 parseQueryToComponents :: SqlQueryCfg -> Text -> Either Text (Text, QueryComponents)
 parseQueryToComponents sqlCfg q = bimap (toText . errorBundlePretty) (queryASTToComponents sqlCfg) (parse parseQuery "" (T.strip q))
 
