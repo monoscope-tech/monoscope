@@ -132,10 +132,19 @@ jobs:
           path: monoscope-linux-arm64.tar.gz
           retention-days: 5
 
-  build-macos-arm64:
-    name: Build macOS ARM64
+  build-macos:
+    name: Build macOS ${{ matrix.arch }}
     needs: build-frontend
-    runs-on: blacksmith-6vcpu-macos-15
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: blacksmith-6vcpu-macos-15
+          # GitHub's Intel image (replaces retired macos-13); available until Aug 2027
+          - arch: x86_64
+            runner: macos-15-intel
     steps:
       - uses: actions/checkout@v6
 
@@ -159,15 +168,15 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.cabal
-          key: cli-macos-arm64-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}
-          restore-keys: cli-macos-arm64-cabal-
+          key: cli-macos-${{ matrix.arch }}-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}
+          restore-keys: cli-macos-${{ matrix.arch }}-cabal-
 
       - name: Cache dist-newstyle
         uses: actions/cache@v5
         with:
           path: dist-newstyle
-          key: cli-macos-arm64-dist-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}
-          restore-keys: cli-macos-arm64-dist-
+          key: cli-macos-${{ matrix.arch }}-dist-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}
+          restore-keys: cli-macos-${{ matrix.arch }}-dist-
 
       - name: Install system deps
         run: |
@@ -194,18 +203,18 @@ jobs:
           BIN=$(cabal list-bin exe:monoscope | tail -n1)
           strip "$BIN"
           cp "$BIN" monoscope
-          tar czf monoscope-darwin-arm64.tar.gz monoscope
+          tar czf monoscope-darwin-${{ matrix.arch }}.tar.gz monoscope
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: monoscope-darwin-arm64
-          path: monoscope-darwin-arm64.tar.gz
+          name: monoscope-darwin-${{ matrix.arch }}
+          path: monoscope-darwin-${{ matrix.arch }}.tar.gz
           retention-days: 5
 
   release:
     name: Create GitHub Release
-    needs: [build-linux-x64, build-linux-arm64, build-macos-arm64]
+    needs: [build-linux-x64, build-linux-arm64, build-macos]
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: write
