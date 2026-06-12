@@ -673,6 +673,9 @@ logNotifications appCtx logger notifications =
 -- New type to hold all our resources
 data TestResources = TestResources
   { trPool :: Pool Connection
+  , trConnStr :: ByteString
+  -- ^ libpq connection string for the test DB, so tests can stand up extra
+  -- pools (e.g. a deliberately-misbehaving TimeFusion pool) against it.
   , trProjectCache :: Cache Projects.ProjectId Projects.ProjectCache
   , trSessAndHeader :: Servant.Headers '[Servant.Header "Set-Cookie" SetCookie] Projects.Session
   , trATCtx :: AuthContext
@@ -838,6 +841,7 @@ withTestResources f = withSetup $ \pool cstr -> LogBulk.withBulkStdOutLogger \lo
   f
     TestResources
       { trPool = pool
+      , trConnStr = cstr
       , trProjectCache = projectCache
       , trSessAndHeader = sessAndHeader
       , trATCtx = atAuthCtx

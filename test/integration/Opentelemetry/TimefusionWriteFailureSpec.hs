@@ -6,13 +6,15 @@
 module Opentelemetry.TimefusionWriteFailureSpec (spec) where
 
 import Control.Exception (ErrorCall (..), evaluate)
-import UnliftIO.Exception (try)
 import Data.HashMap.Strict qualified as HM
 import Data.List qualified as L
+import Data.Pool (withResource)
 import Data.ProtoLens (encodeMessage)
 import Data.These (These (..))
 import Data.These.Combinators (isThat)
 import Data.UUID qualified as UUID
+import Database.PostgreSQL.Simple (Query, execute_)
+import UnliftIO.Exception (finally, throwIO, try)
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Opentelemetry.OtlpServer qualified as OtlpServer
@@ -78,6 +80,41 @@ withBrokenPg tr k = do
   k tr {trATCtx = ctx}
 
 
+-- | A TimeFusion pool that is fully reachable and accepts inserts WITHOUT
+-- error, yet silently persists nothing: a BEFORE INSERT row trigger, keyed on a
+-- per-connection GUC carried only by this pool's connection string, discards
+-- every row (RETURN NULL → 0 rows affected, no exception). The PG pool has no
+-- GUC so its writes land normally.
+--
+-- This is the faithful repro of the 2026-06-12 incident: PG held the data, TF
+-- did not, and nothing errored. Before the 'unaccountedRows' cross-check the
+-- dual-write reported this as a clean success and the batch was acked (silent
+-- loss); after it, the missing-rows count surfaces as Left (That tfErr) → DLQ.
+silentTfDDL :: [Query]
+silentTfDDL =
+  [ "CREATE OR REPLACE FUNCTION test_silent_tf_discard() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF current_setting('test.silent_tf', true) = 'on' THEN RETURN NULL; END IF; RETURN NEW; END $$"
+  , "DROP TRIGGER IF EXISTS test_silent_tf ON otel_logs_and_spans"
+  , "CREATE TRIGGER test_silent_tf BEFORE INSERT ON otel_logs_and_spans FOR EACH ROW EXECUTE FUNCTION test_silent_tf_discard()"
+  ]
+
+
+withSilentTf :: TestResources -> (TestResources -> IO ()) -> IO ()
+withSilentTf tr k = do
+  withResource tr.trPool \c -> mapM_ (execute_ c) silentTfDDL
+  -- Keyword-form conninfo (host=… dbname=…); carry the per-connection GUC via
+  -- the `options` keyword so ONLY this pool's backend discards inserts.
+  silentPool <- mkHasqlPool 1 (tr.trConnStr <> " options='-c test.silent_tf=on'")
+  let origCtx = tr.trATCtx
+      ctx =
+        origCtx
+          { hasqlTimefusionPool = silentPool
+          , env = origCtx.env {enableTimefusionWrites = True}
+          , config = origCtx.config {enableTimefusionWrites = True}
+          }
+  k tr {trATCtx = ctx}
+    `finally` withResource tr.trPool \c -> void (execute_ c "DROP TRIGGER IF EXISTS test_silent_tf ON otel_logs_and_spans")
+
+
 mkResWithKey :: TestResources -> IO (TestResources, Text)
 mkResWithKey tr = do
   key <- createTestAPIKey tr demoProjectId "tf-write-failure-spec"
@@ -125,6 +162,33 @@ spec = aroundAll withTestResources $ beforeWith mkResWithKey do
         tr'.trATCtx.env.enableTimefusionWrites `shouldBe` True
         res <- runTestBg frozenTime tr' $ OtlpServer.processList [validLogMsg key "ack-1"] logsAttrs
         expectLeftMatching "TF-only failure" isThat res
+
+    -- THE TuplesOk behavior, at the TimeFusion write layer. TimeFusion's PGWire
+    -- emulation answers an INSERT with a `TuplesOk` status tag instead of
+    -- `CommandComplete`; hasql's rowsAffected decoder throws on that, and
+    -- `retryHasqlWrite` *swallows it into a 0-row `Right mempty`* on the
+    -- assumption the rows landed — WITHOUT reading anything back. This test pins
+    -- that swallow: a TuplesOk failure becomes a reported success with
+    -- rowsInserted == 0. That fabricated "success" is exactly what made the
+    -- 2026-06-12 loss silent (PG had the rows, TF didn't, nothing errored).
+    it "TuplesOk wire-mismatch is swallowed into a 0-row success (no persistence check)" \(tr, _) -> do
+      res <-
+        runTestBg frozenTime tr
+          $ Telemetry.retryHasqlWrite 3 "tf" (throwIO (ErrorCall "TimeFusion PGWire: Unexpected result status: TuplesOk"))
+      case res :: Either SomeException Telemetry.BulkInsertResult of
+        Right bir -> bir.rowsInserted `shouldBe` 0 -- reported success, yet zero rows accounted for
+        Left e -> expectationFailure $ "expected the TuplesOk swallow (Right mempty); got Left " <> show e
+
+    -- The consequence + the fix. The 0-row "success" the TuplesOk swallow above
+    -- produces is indistinguishable from a store that accepted the write and
+    -- dropped it. Here a reachable TF pool persists nothing (rows submitted but
+    -- 0 land, no error) — pre-fix the dual-write returned Right (acks, no poison)
+    -- and acked the batch (silent loss past the DLQ); the 'unaccountedRows'
+    -- cross-check now turns "reported success but rows missing" into Left (That).
+    it "TF reports success but persists nothing → Left (That tfErr), never a silent ack" \(tr, key) ->
+      withSilentTf tr \tr' -> do
+        res <- runTestBg frozenTime tr' $ OtlpServer.processList [validLogMsg key "ack-silent-tf"] logsAttrs
+        expectLeftMatching "TF silent under-persist (rows-persisted cross-check)" isThat res
 
     -- PG-down trips the project-key lookup before any write attempt. With
     -- queryProjectIdByKey now propagating Hasql errors (silent-swallow fix),

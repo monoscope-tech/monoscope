@@ -48,6 +48,10 @@ module Models.Telemetry.Telemetry (
   PoisonMsg,
   BulkInsertResult (..),
   RowPoisonInfo,
+  SilentUnderPersistError (..),
+  unaccountedRows,
+  retryHasqlWrite,
+  maxWriteAttempts,
   poisonReason,
   handOffBatches,
   mintOtelLogIds,
@@ -911,6 +915,37 @@ instance Monoid BulkInsertResult where
   mempty = BulkInsertResult 0 V.empty
 
 
+-- | A store accepted a bulk write without raising an error, yet persisted
+-- fewer rows than were submitted and returned no per-row poison to isolate the
+-- gap — the "accept-but-drop" class: TimeFusion's PGWire @TuplesOk@ wire-tag
+-- swallow, or any backend that silently discards. A reported success is NOT
+-- proof the rows landed; surfacing this as a 'WriteFailure' forces the batch to
+-- the DLQ instead of a silent ack. @lostRows@ vanished out of @submittedRows@.
+data SilentUnderPersistError = SilentUnderPersistError
+  { store :: !Text
+  , lostRows :: !Int
+  , submittedRows :: !Int
+  }
+  deriving stock (Show)
+  deriving anyclass (Exception)
+
+
+-- | Rows a single-side bulk write failed to account for: every submitted record
+-- must either land ('rowsInserted') or be isolated as poison ('poisonRows'). A
+-- positive result means the store reported success yet silently dropped that
+-- many rows — the gap that bypasses every DLQ safety net.
+--
+-- >>> unaccountedRows 3 (BulkInsertResult 3 V.empty)
+-- 0
+-- >>> unaccountedRows 3 (BulkInsertResult 0 V.empty)
+-- 3
+-- >>> unaccountedRows 5 (BulkInsertResult 2 V.empty)
+-- 3
+unaccountedRows :: Int -> BulkInsertResult -> Int
+unaccountedRows submitted bir =
+  max 0 (submitted - fromIntegral bir.rowsInserted - V.length bir.poisonRows)
+
+
 writeFailureSummary :: WriteFailure -> Text
 writeFailureSummary = These.these (const "pg-failed") (const "tf-failed") (\_ _ -> "both-failed")
 
@@ -958,10 +993,15 @@ retryHasqlWrite maxAttempts store act = go 1
         Right a -> pure (Right a)
         Left e
           | "TuplesOk" `T.isInfixOf` show e -> do
-              -- Rows landed; only the PGWire status tag is wrong. Returning
-              -- 'mempty' loses the row count — callers watching rowsInserted
-              -- here see 0 for "wire-mismatch swallowed", not "zero inserted".
-              Log.logTrace "retryHasqlWrite: TuplesOk wire-mismatch ignored" $ AE.object ["store" AE..= store]
+              -- PGWire status tag is wrong; the rows MAY have landed. We can't
+              -- tell from here, so we return a 0-row success rather than retry
+              -- (which would duplicate any rows that did land). This deliberately
+              -- loses the row count — the dual-write cross-check ('unaccountedRows'
+              -- in 'bulkInsertOtelLogsAndSpansTF') is what verifies persistence and
+              -- DLQs the batch if these rows are actually missing. Logged at
+              -- attention (not trace) because a silent swallow here was the root of
+              -- the 2026-06-12 TF gap where PG had the data and TF did not.
+              Log.logAttention "retryHasqlWrite: TuplesOk wire-mismatch — 0-row success, persistence verified by cross-check" $ AE.object ["store" AE..= store]
               pure (Right mempty)
           | attempt < maxAttempts
           , Hasql.isTransientException e -> do
@@ -1010,13 +1050,27 @@ bulkInsertOtelLogsAndSpansTF enableTf records = do
     else do
       pgRes <- retryHasqlWrite maxWriteAttempts "pg" (bulkInsertOtelLogsAndSpans records)
       case pgRes of
-        Right bir -> pure (Right (V.map (second This) bir.poisonRows))
+        Right bir
+          | lost <- unaccountedRows (V.length records) bir
+          , lost > 0 ->
+              underPersist (lost, "pg") (0, "tf")
+          | otherwise -> pure (Right (V.map (second This) bir.poisonRows))
         Left e -> do
           Log.logAttention "PG_WRITE_FAILED"
             $ AE.object ["record_count" AE..= V.length records, "error" AE..= show @Text e]
           pure (Left (This e))
   where
-    classify (Right pgBir) (Right tfBir) = pure (Right (combinePoison pgBir tfBir))
+    -- Cross-check persistence on a Right/Right dual-write: a store that reported
+    -- success but didn't account for every submitted row (inserted + poison <
+    -- submitted) silently dropped data. Convert to a WriteFailure so Pkg.Queue
+    -- DLQs the batch instead of acking it. Without this a TuplesOk-swallow /
+    -- accept-but-drop reads as a clean success and the rows are lost with no
+    -- trace (the 2026-06-12 TF-only gap).
+    classify (Right pgBir) (Right tfBir) =
+      let n = V.length records
+       in case (unaccountedRows n pgBir, unaccountedRows n tfBir) of
+            (0, 0) -> pure (Right (combinePoison pgBir tfBir))
+            (pgLost, tfLost) -> underPersist (pgLost, "pg") (tfLost, "tf")
     classify (Left ePg) (Right _) = do
       Log.logAttention "PG_WRITE_FAILED"
         $ AE.object ["record_count" AE..= V.length records, "error" AE..= show @Text ePg]
@@ -1033,6 +1087,18 @@ bulkInsertOtelLogsAndSpansTF enableTf records = do
           , "tf_error" AE..= show @Text eTf
           ]
       pure (Left (These ePg eTf))
+
+    -- Build the Left WriteFailure for a detected silent under-persist. A side
+    -- with lost == 0 is healthy and dropped from the These.
+    underPersist (pgLost, pgStore) (tfLost, tfStore) = do
+      let n = V.length records
+          mkErr store lost = toException (SilentUnderPersistError store lost n)
+      Log.logAttention "WRITE_UNDERPERSIST_DETECTED"
+        $ AE.object ["record_count" AE..= n, "pg_lost" AE..= pgLost, "tf_lost" AE..= tfLost]
+      pure . Left $ case (pgLost > 0, tfLost > 0) of
+        (True, True) -> These (mkErr pgStore pgLost) (mkErr tfStore tfLost)
+        (False, True) -> That (mkErr tfStore tfLost)
+        _ -> This (mkErr pgStore pgLost)
 
     -- Per-row attribution: a row appears in the result iff at least one side
     -- rejected it. Rows accepted by both stores are silently absent (full
