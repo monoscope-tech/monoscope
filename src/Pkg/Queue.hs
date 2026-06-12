@@ -78,7 +78,11 @@ getOrInitKafkaProducer envCfg = modifyMVar sharedKafkaProducer $ \case
         <> KP.extraProp "queue.buffering.max.kbytes" "1048576" -- 1 GiB librdkafka queue cap
         <> KP.extraProp "request.timeout.ms" "30000"
         <> KP.extraProp "delivery.timeout.ms" "120000"
-        <> KP.extraProp "message.max.bytes" "52428800"
+        -- Must track the broker's kafka_batch_max_bytes / topic max.message.bytes
+        -- (64 MiB). DLQ re-publishes re-stamp headers onto messages already near
+        -- the original cap; a tighter limit rejects the enqueue (MsgSizeTooLarge,
+        -- a librdkafka-local per-message check) and wedges the partition.
+        <> KP.extraProp "message.max.bytes" "67108864"
         <> KP.extraProp "receive.message.max.bytes" "104857600"
         <> KP.logLevel KP.KafkaLogInfo
 
