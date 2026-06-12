@@ -13,6 +13,7 @@ export * from './log-list';
 export * from './widgets';
 export * from './charts';
 export * from './main';
+export * from './hardware-monitor';
 export * from './yaml-editor';
 
 export * from './session-replay';

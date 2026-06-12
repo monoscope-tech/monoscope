@@ -186,6 +186,7 @@ library
       Pages.Dashboards
       Pages.Endpoints
       Pages.GitSync
+      Pages.Hardware
       Pages.LogExplorer.Log
       Pages.LogExplorer.LogItem
       Pages.Monitors
@@ -774,6 +775,7 @@ test-suite test-dev
       Pages.Dashboards
       Pages.Endpoints
       Pages.GitSync
+      Pages.Hardware
       Pages.LogExplorer.Log
       Pages.LogExplorer.LogItem
       Pages.Monitors

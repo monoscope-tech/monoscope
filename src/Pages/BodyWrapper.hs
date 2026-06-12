@@ -59,6 +59,7 @@ menu lang pid =
   , (I18n.t lang "nav.issues", "/p/" <> pid.toText <> "/issues", "bug")
   , (I18n.t lang "nav.monitors", "/p/" <> pid.toText <> "/monitors", "list-check")
   , (I18n.t lang "nav.reports", "/p/" <> pid.toText <> "/reports", "chart-simple")
+  , ("Hardware", "/p/" <> pid.toText <> "/hardware", "objects-column")
   ]
 
 
