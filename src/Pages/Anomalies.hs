@@ -1288,7 +1288,7 @@ toolDataToDataset json = flip parseMaybe json $ AE.withObject "RawData" \obj -> 
 aiChatHistoryView_ :: Projects.ProjectId -> [Issues.AIChatMessage] -> Html ()
 aiChatHistoryView_ pid msgs = forM_ (pairUserAssistant msgs) \(u, a) -> do
   let (explanation, widgets) = parseStoredContent a.content a.widgets
-  aiChatResponse_ pid u.content explanation widgets (a.metadata >>= parseMaybe AE.parseJSON . getAeson) Nothing
+  aiChatResponse_ pid u.content explanation widgets (parseStoredJSON @[AI.ToolCallInfo] a.metadata) Nothing
 
 
 -- | Render chat history with system prompt as first message
@@ -1310,12 +1310,17 @@ pairUserAssistant (_ : rest) = pairUserAssistant rest
 pairUserAssistant [] = []
 
 
+-- | Decode a stored JSONB value (anomaly metadata, widget lists) into a typed payload.
+parseStoredJSON :: AE.FromJSON a => Maybe (Aeson AE.Value) -> Maybe a
+parseStoredJSON = (>>= parseMaybe AE.parseJSON . getAeson)
+
+
 -- | Parse stored content - try JSON format first (stripping code blocks), fall back to plain text
 parseStoredContent :: Text -> Maybe (Aeson AE.Value) -> (Text, Maybe [Widget.Widget])
 parseStoredContent content storedWidgets =
   case AI.parseLLMResponse content of
     Right aiResp -> (fromMaybe "" aiResp.explanation, if null aiResp.widgets then Nothing else Just aiResp.widgets)
-    Left _ -> (content, storedWidgets >>= parseMaybe AE.parseJSON . getAeson)
+    Left _ -> (content, parseStoredJSON @[Widget.Widget] storedWidgets)
 
 
 -- | AI Chat body (response container + input bar, no header)

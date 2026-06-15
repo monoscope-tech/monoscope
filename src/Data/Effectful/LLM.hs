@@ -99,7 +99,7 @@ data LLMResponse = LLMResponse
 -- | Get or create a golden response for an LLM call
 getOrCreateGoldenResponse :: FilePath -> Text -> Text -> Text -> IO (Either Text Text)
 getOrCreateGoldenResponse goldenDir model prompt apiKey =
-  withGoldenCache goldenDir (promptToFilename prompt) (\fp -> "Failed to decode LLM response from file: " <> fp) (.llmResponse) $ do
+  withGoldenCache goldenDir (promptToFilename prompt) ("Failed to decode LLM response from file: " <>) (.llmResponse) $ do
     response <- callOpenAIAPI model prompt apiKey
     pure (LLMResponse{llmPrompt = prompt, llmResponse = response}, response)
 
@@ -156,7 +156,7 @@ hasToolsInParams p = isJust $ AE.toJSON p ^? key "tools"
 -- | Get or create a golden response for an agentic chat call
 getOrCreateAgenticGoldenResponse :: FilePath -> LLMCore.ChatHistory -> OpenAIV1.CreateChatCompletion -> Text -> IO (Either Text LLMCore.Message)
 getOrCreateAgenticGoldenResponse goldenDir history params apiKey =
-  withGoldenCache goldenDir (cacheKeyFromQuery historyMessages hasTools <> ".json") (\fp -> "Failed to decode agentic chat cache from: " <> fp) (.accResponse) $ do
+  withGoldenCache goldenDir (cacheKeyFromQuery historyMessages hasTools <> ".json") ("Failed to decode agentic chat cache from: " <>) (.accResponse) $ do
     let openAI = OpenAI.OpenAI{apiKey, callbacks = [], baseUrl = Nothing}
         Models.Model modelName = params.model
     response <- first show <$> LLMCore.chat openAI history (Just params)
@@ -177,7 +177,7 @@ data EmbeddingCache = EmbeddingCache
 
 getOrCreateEmbeddingGoldenResponse :: FilePath -> EmbOAI.OpenAIEmbeddings -> [DocLoader.Document] -> IO (Either Text [[Float]])
 getOrCreateEmbeddingGoldenResponse goldenDir config docs =
-  withGoldenCache goldenDir (cacheKey <> ".json") (\fp -> "Failed to decode embedding cache from: " <> fp) (.result) $ do
+  withGoldenCache goldenDir (cacheKey <> ".json") ("Failed to decode embedding cache from: " <>) (.result) $ do
     result <- first show <$> EmbCore.embedDocuments config docs
     pure (EmbeddingCache{texts, result}, result)
   where

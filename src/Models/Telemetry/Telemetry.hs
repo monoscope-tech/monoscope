@@ -163,7 +163,7 @@ atMapInt key maybeMap = do
   m <- maybeMap
   val <- getNestedValue (T.split (== '.') key) m
   case val of
-    AE.Number n -> toBoundedInteger n
+    AE.Number n -> Just $ round n
     AE.String t -> readMaybe $ toString t
     _ -> Nothing
 

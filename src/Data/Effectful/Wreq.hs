@@ -225,7 +225,7 @@ withGoldenCache goldenDir fileName decodeErr decodeResult action = do
 
 getOrCreateGoldenResponse :: FilePath -> String -> IO (W.Response LBS.ByteString) -> IO (W.Response LBS.ByteString)
 getOrCreateGoldenResponse goldenDir fileName action =
-  withGoldenCache goldenDir fileName (\fp -> "Failed to decode response from file: " <> fp) toWreqResponse $ do
+  withGoldenCache goldenDir fileName ("Failed to decode response from file: " <>) toWreqResponse $ do
     -- Catch HTTP exceptions and convert them to responses
     result <- try action
     response <- case result of

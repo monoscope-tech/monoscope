@@ -1042,7 +1042,7 @@ billingNotifEmail subject heading body ctaLabel billingUrl =
 
 
 planUpgradedEmail :: Text -> Text -> Text -> (Text, Html ())
-planUpgradedEmail projectName newPlan billingUrl =
+planUpgradedEmail projectName newPlan =
   billingNotifEmail
     ("[···] Plan upgraded to " <> newPlan <> " - " <> projectName)
     "Plan Upgraded"
@@ -1054,11 +1054,10 @@ planUpgradedEmail projectName newPlan billingUrl =
         " plan. Thank you for your support!"
     )
     "View Billing"
-    billingUrl
 
 
 trialEndingEmail :: Text -> Int -> Text -> (Text, Html ())
-trialEndingEmail projectName daysLeft billingUrl =
+trialEndingEmail projectName daysLeft =
   billingNotifEmail
     ("[···] Your free trial ends in " <> show daysLeft <> " days - " <> projectName)
     (toHtml $ "Your trial ends in " <> show @Text daysLeft <> " days")
@@ -1072,11 +1071,10 @@ trialEndingEmail projectName daysLeft billingUrl =
         p_ "If you'd like to cancel before the trial ends, you can do so from the billing page."
     )
     "Manage Billing"
-    billingUrl
 
 
 planDowngradedEmail :: Text -> Text -> Text -> (Text, Html ())
-planDowngradedEmail projectName reason billingUrl =
+planDowngradedEmail projectName reason =
   billingNotifEmail
     ("[···] Plan downgraded to Free - " <> projectName)
     "Plan Downgraded to Free"
@@ -1090,4 +1088,3 @@ planDowngradedEmail projectName reason billingUrl =
         p_ "On the Free plan, daily event limits apply and additional team members will be deactivated. You can re-subscribe at any time to restore full access."
     )
     "Upgrade Plan"
-    billingUrl

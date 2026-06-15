@@ -1620,14 +1620,12 @@ calculateCycleStartDate start current =
    in UTCTime cycleStartDay (timeOfDayToTime timeOfDay)
 
 
--- | Replace NUL bytes in a 'Text' with the Unicode replacement char (U+FFFD).
--- Postgres' @jsonb@ rejects NUL in text contexts (SQLSTATE @22P05@); span
--- attributes occasionally carry one (k8s events, base64-flagged fields).
---
--- The 'hasNul' guard makes the common case (no NUL) a single linear scan with
--- no allocation.
+-- | Strip NUL bytes from a 'Text'. Postgres' @jsonb@ rejects NUL in text
+-- contexts (SQLSTATE @22P05@); span attributes occasionally carry one (k8s
+-- events, base64-flagged fields). The guard makes the common case (no NUL) a
+-- single linear scan with no allocation.
 scrubNulText :: T.Text -> T.Text
-scrubNulText t = if T.any (== '\NUL') t then T.replace "\NUL" "\xFFFD" t else t
+scrubNulText t = if T.any (== '\NUL') t then T.filter (/= '\NUL') t else t
 
 
 -- | Recursive 'scrubNulText' over an 'AE.Value' — strings, array elements,
