@@ -2,9 +2,6 @@ module CLI.Core (
   OutputMode (..),
   detectOutputMode,
   isInteractiveTTY,
-  -- | Deprecated; kept as an alias for back-compat in case any caller still
-  -- imports it. Always returns False — the CLI no longer auto-detects agents.
-  isAgentMode,
   setOutputMode,
   getOutputMode,
   renderJSON,
@@ -100,13 +97,6 @@ isInteractiveTTY = do
     else liftIO $ ANSI.hSupportsANSIColor stdout
 
 
--- | Deprecated. Old code paths that branched on agent mode now branch on
--- 'isJsonOutput' (set once per command via the mode cache below). Kept as
--- @pure False@ so any straggler import compiles.
-isAgentMode :: Eff es Bool
-isAgentMode = pure False
-
-
 -- | Process-wide cache of the resolved 'OutputMode'. Set once by @main@ before
 -- any command handler runs; read by 'printError' / 'printDebug' / table
 -- renderers that need to know "am I in JSON mode?" without threading the mode
@@ -160,7 +150,7 @@ renderWith mode v tableAction = case mode of
 
 
 -- | Legacy plain-Text renderer. Retained so unmigrated commands still work,
--- but new code should call 'CLI.Table.renderRichTable' for the Unicode
+-- but new code should call 'CLI.Table.renderRichTableWith' for the Unicode
 -- box-drawing + per-cell color output. Suppresses ANSI in JSON mode so a
 -- non-TTY pipe never sees escape codes.
 renderTable :: IOE :> es => [Text] -> [[Text]] -> Eff es ()
@@ -395,13 +385,14 @@ decodeBody (Right bs)
 
 
 -- | Fetch JSON from API endpoint and apply a handler, printing errors on failure.
+-- Decode failures (including empty bodies) surface through 'apiGetJson' /
+-- 'decodeBody' as @APIError 0@, rendered by 'renderAPIError' as the bare
+-- message — same as the connection-error branch.
 withAPIResult :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> Text -> [(Text, Text)] -> (AE.Value -> Eff es ()) -> Eff es ()
 withAPIResult cfg path params onSuccess =
-  apiGet cfg path params >>= \case
+  apiGetJson @_ @AE.Value cfg path params >>= \case
     Left err -> printError (renderAPIError err) >> liftIO exitFailure
-    Right bs -> case AE.eitherDecode @AE.Value bs of
-      Left err -> printError (toText err) >> liftIO exitFailure
-      Right val -> onSuccess val
+    Right val -> onSuccess val
 
 
 addAuth :: Maybe Text -> W.Options -> W.Options

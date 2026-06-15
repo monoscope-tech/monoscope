@@ -44,7 +44,7 @@ module Pages.Projects (
 where
 
 import BackgroundJobs qualified
-import Control.Lens ((.~), (^.))
+import Control.Lens ((^.))
 import Data.Aeson qualified as AE
 import Data.CaseInsensitive (original)
 import Data.CaseInsensitive qualified as CI
@@ -80,7 +80,6 @@ import Models.Projects.ProjectMembers (TeamMemberVM (..), TeamVM (..))
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
-import Network.Wreq (getWith)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper, mkPageCtx, settingsContentTarget)
 import Pages.Bots.Discord qualified as Discord
@@ -252,7 +251,7 @@ integrationsSettingsGetH pid = do
           }
   slackInfo <- getProjectSlackData pid
   discordInfo <- getDiscordDataByProjectId pid
-  channels <- maybe (pure []) (\d -> maybe [] (fromMaybe [] . (.channels)) <$> SlackP.getSlackChannels d.botToken d.teamId) slackInfo
+  channels <- resolveSlackChannels slackInfo
   -- Converge @everyone.slack_channels with the OAuth-time default on every render.
   -- Idempotent (addSlackChannelToEveryoneTeam no-ops when present). Covers legacy
   -- installs that pre-date the OAuth-side add, plus out-of-band updates to
@@ -378,6 +377,29 @@ validateNotificationChannels pid enabledChannels phones = do
   slack <- requireIntegration "slack" "You need to connect Slack to this project first." enabledChannels (getProjectSlackData pid)
   let whatsapp = if "phone" `elem` enabledChannels && null phones then Left "Provide at least one whatsapp number" else Right ()
   pure $ discord *> slack *> whatsapp
+
+
+-- | Resolve the live Slack channel list for an (already-fetched) SlackData.
+resolveSlackChannels :: Maybe SlackData -> ATAuthCtx [BotUtils.Channel]
+resolveSlackChannels = maybe (pure []) \d -> maybe [] (fromMaybe [] . (.channels)) <$> SlackP.getSlackChannels d.botToken d.teamId
+
+projectSlackChannels :: Projects.ProjectId -> ATAuthCtx [BotUtils.Channel]
+projectSlackChannels pid = getProjectSlackData pid >>= resolveSlackChannels
+
+
+projectDiscordChannels :: EnvConfig -> Projects.ProjectId -> ATAuthCtx [BotUtils.Channel]
+projectDiscordChannels env pid = getDiscordDataByProjectId pid >>= maybe (pure []) (Discord.getDiscordChannels env.discordBotToken . (.guildId))
+
+
+-- | Shared prologue for the team list and team detail pages: project members
+-- plus the project's resolved Slack and Discord channels.
+teamPageData :: Projects.ProjectId -> ATAuthCtx (V.Vector ProjectMembers.ProjectMemberVM, [BotUtils.Channel], [BotUtils.Channel])
+teamPageData pid = do
+  appCtx <- ask @AuthContext
+  projMembers <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
+  channels <- projectSlackChannels pid
+  discordChannels <- projectDiscordChannels appCtx.env pid
+  pure (projMembers, channels, discordChannels)
 
 
 -- | When @channel@ is toggled on, the corresponding integration row must exist.
@@ -808,10 +830,7 @@ instance ToHtml ManageTeams where
 manageTeamsGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders ManageTeams)
 manageTeamsGetH pid layoutM = do
   (_, _, bw) <- mkPageCtx pid
-  appCtx <- ask @AuthContext
-  projMembers <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
-  channels <- Integrations.getProjectSlackData pid >>= maybe (pure []) \d -> maybe [] (fromMaybe [] . (.channels)) <$> SlackP.getSlackChannels d.botToken d.teamId
-  discordChannels <- Integrations.getDiscordDataByProjectId pid >>= maybe (pure []) (Discord.getDiscordChannels appCtx.env.discordBotToken . (.guildId))
+  (projMembers, channels, discordChannels) <- teamPageData pid
   teams <- V.fromList <$> ProjectMembers.getTeamsVM pid
   let bwconf = bw{pageTitle = "Team", isSettingsPage = True}
   case layoutM of
@@ -882,12 +901,9 @@ notifsCell team = div_ [class_ "flex items-center gap-2"] do
 
 teamGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders ManageTeams)
 teamGetH pid handle layoutM = do
-  (sess, _, bw) <- mkPageCtx pid
-  appCtx <- ask @AuthContext
+  (_, _, bw) <- mkPageCtx pid
   teamVm <- ProjectMembers.getTeamByHandle pid handle
-  projMembers <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
-  channels <- Integrations.getProjectSlackData pid >>= maybe (pure []) \d -> maybe [] (fromMaybe [] . (.channels)) <$> SlackP.getSlackChannels d.botToken d.teamId
-  discordChannels <- Integrations.getDiscordDataByProjectId pid >>= maybe (pure []) (Discord.getDiscordChannels appCtx.env.discordBotToken . (.guildId))
+  (projMembers, channels, discordChannels) <- teamPageData pid
   case teamVm of
     Just team -> do
       let bwconf =
@@ -1135,7 +1151,9 @@ manageSubGetH pid = do
             Nothing -> toastError "Failed to create billing portal" mempty
         _ -> toastError "Customer ID not found" mempty
     Projects.LemonSqueezyProvider -> do
-      sub <- liftIO $ getSubscriptionPortalUrl project.subId envCfg.lemonSqueezyApiKey
+      sub <- case project.subId of
+        Nothing -> pure Nothing
+        Just sid -> lsGet @SubPortalDataVals envCfg.lemonSqueezyApiKey ("https://api.lemonsqueezy.com/v1/subscriptions/" <> sid)
       case sub of
         Nothing -> toastError "Subscription ID not found" mempty
         Just s -> redirectCS s.dataVal.attributes.urls.customerPortal >> addRespHeaders mempty
@@ -1171,17 +1189,19 @@ stripeCheckoutInitH pid form = do
     Nothing -> toastError "Failed to create checkout session" mempty
 
 
-getSubscriptionPortalUrl :: Maybe Text -> Text -> IO (Maybe SubPortalResponse)
-getSubscriptionPortalUrl subId apiKey = do
-  case subId of
-    Nothing -> return Nothing
-    Just sid -> do
-      let hds = W.header "Authorization" .~ ["Bearer " <> encodeUtf8 @Text @ByteString apiKey]
-      response <- liftIO $ Network.Wreq.getWith (defaults & hds) ("https://api.lemonsqueezy.com/v1/subscriptions/" <> toString sid)
-      let responseBdy = response ^. responseBody
-      case AE.eitherDecode responseBdy of
-        Right res -> return $ Just res
-        Left err -> return Nothing
+-- | Lemon Squeezy responses come wrapped in @{"data": ...}@. The Haskell
+-- field is @dataVal@ (since @data@ is a keyword); 'Rename' maps it to the
+-- on-the-wire key without a manual instance.
+newtype LSData a = LSData {dataVal :: a}
+  deriving stock (Generic, Show)
+  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.Rename "dataVal" "data"]] (LSData a)
+
+
+-- | Bearer GET against api.lemonsqueezy.com, decoding the @{data: ...}@ wrapper.
+lsGet :: forall a es. (HTTP :> es, AE.FromJSON a) => Text -> Text -> Eff es (Maybe (LSData a))
+lsGet apiKey url = do
+  response <- W.getWith (Settings.lemonSqueezyOpts apiKey) (toString url)
+  pure $ rightToMaybe $ AE.eitherDecode $ response ^. responseBody
 
 
 data SubUrls = SubUrls
@@ -1200,14 +1220,6 @@ newtype SubPortalAttributes = SubPortalAttributes {urls :: SubUrls}
 newtype SubPortalDataVals = SubPortalDataVals {attributes :: SubPortalAttributes}
   deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SubPortalDataVals
-
-
--- | Lemon Squeezy responses come wrapped in @{"data": ...}@. The Haskell
--- field is @dataVal@ (since @data@ is a keyword); 'Rename' maps it to the
--- on-the-wire key without a manual instance.
-newtype SubPortalResponse = SubPortalResponse {dataVal :: SubPortalDataVals}
-  deriving stock (Generic, Show)
-  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.Rename "dataVal" "data"]] SubPortalResponse
 
 
 --------------------------------------------------------------------------------
@@ -1370,22 +1382,10 @@ data SubDataVals = SubDataVals
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SubDataVals
 
 
-newtype SubResponse = SubResponse {dataVal :: [SubDataVals]}
-  deriving stock (Generic, Show)
-  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.Rename "dataVal" "data"]] SubResponse
-
-
-getSubscriptionId :: HTTP :> es => Maybe Text -> Text -> Eff es (Maybe SubResponse)
-getSubscriptionId orderId apiKey = do
-  case orderId of
-    Nothing -> pure Nothing
-    Just ordId -> do
-      let hds = W.header "Authorization" .~ ["Bearer " <> encodeUtf8 @Text @ByteString apiKey]
-      response <- W.getWith (defaults & hds) ("https://api.lemonsqueezy.com/v1/orders/" <> toString ordId <> "/subscriptions")
-      let responseBdy = response ^. responseBody
-      case AE.eitherDecode responseBdy of
-        Right res -> return $ Just res
-        Left err -> return Nothing
+getSubscriptionId :: HTTP :> es => Maybe Text -> Text -> Eff es (Maybe (LSData [SubDataVals]))
+getSubscriptionId orderId apiKey = case orderId of
+  Nothing -> pure Nothing
+  Just ordId -> lsGet apiKey ("https://api.lemonsqueezy.com/v1/orders/" <> ordId <> "/subscriptions")
 
 
 data PricingUpdateForm = PricingUpdateForm

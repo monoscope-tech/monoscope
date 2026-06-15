@@ -856,10 +856,10 @@ logExplorerServer pid =
 anomaliesServer :: Projects.ProjectId -> Servant.ServerT AnomaliesRoutes ATAuthCtx
 anomaliesServer pid =
   AnomaliesRoutes'
-    { acknowlegeGet = AnomalyList.acknowledgeAnomalyGetH pid
-    , unAcknowlegeGet = AnomalyList.unAcknowledgeAnomalyGetH pid
-    , archiveGet = AnomalyList.archiveAnomalyGetH pid
-    , unarchiveGet = AnomalyList.unArchiveAnomalyGetH pid
+    { acknowlegeGet = AnomalyList.acknowledgeAnomalyGetH pid True
+    , unAcknowlegeGet = \aid -> AnomalyList.acknowledgeAnomalyGetH pid False aid Nothing
+    , archiveGet = AnomalyList.archiveAnomalyGetH pid True
+    , unarchiveGet = AnomalyList.archiveAnomalyGetH pid False
     , bulkActionsPost = AnomalyList.anomalyBulkActionsPostH pid
     , listGet = AnomalyList.anomalyListGetH pid
     , anomalyGet = AnomalyList.anomalyDetailGetH pid

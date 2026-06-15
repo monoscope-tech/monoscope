@@ -197,7 +197,7 @@ slackInteractionsH interaction = do
       let dashboards = V.fromList dashboardsList
       when (V.null dashboards) $ throwError err400{errBody = "No dashboards found for this project"}
       slackDataM <- withSlackDataByTeam "/dashboard" interaction.team_id \slackData ->
-        triggerSlackModal slackData.botToken "open" $ AE.object ["trigger_id" AE..= interaction.trigger_id, "view" AE..= dashboardView interaction.channel_id (V.fromList [dashboardViewOne dashboards])]
+        triggerSlackModal slackData.botToken "open" $ AE.object ["trigger_id" AE..= interaction.trigger_id, "view" AE..= dashboardView interaction.channel_id (V.fromList [dashboardSelectBlock "dashboard-select" "*Select dashboard*" dashboards])]
       case slackDataM of
         Nothing -> throwError err400{errBody = "This Slack workspace is not linked to a Monoscope project. Please reinstall the Monoscope app."}
         Just () -> do
@@ -421,7 +421,7 @@ slackActionsH action = do
               channelId = fromMaybe "" $ viaNonEmpty head $ T.splitOn "___" slackAction.view.private_metadata
               pMeta = channelId <> "___" <> dashboardVM.projectId.toText <> "___" <> baseTemplate
           void $ withProjectSlackDataLogged "slackActionsH.updateDashboardModal" dashboardVM.projectId \sd ->
-            triggerSlackModal sd.botToken "update" $ AE.object ["view_id" AE..= slackAction.view.id, "view" AE..= dashboardView pMeta (V.fromList [dashboardViewOne widgets, dashboardViewTwo widgets])]
+            triggerSlackModal sd.botToken "update" $ AE.object ["view_id" AE..= slackAction.view.id, "view" AE..= dashboardView pMeta (V.fromList [dashboardSelectBlock "dashboard-select" "*Select dashboard*" widgets, dashboardSelectBlock "widget-select" "*Select widget*" widgets])]
       pure $ AE.object ["text" AE..= ("Selected dashboard: " <> show dashboardText), "replace_original" AE..= True, "delete_original" AE..= True]
 
     updateWidgetModal authCtx slackAction widgetTitle = do
@@ -440,7 +440,7 @@ slackActionsH action = do
               widget = find (\w -> fromMaybe "Untitled-" w.title == widgetTitle) dashboard.widgets
           whenJust widget $ \w -> whenJust (idFromText pid) $ \projectId -> do
             chartUrl' <- widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl projectId w Nothing Nothing Nothing
-            let blocks = V.fromList [dashboardViewOne widgets, dashboardViewTwo widgets, dashboardWidgetView chartUrl' widgetTitle]
+            let blocks = V.fromList [dashboardSelectBlock "dashboard-select" "*Select dashboard*" widgets, dashboardSelectBlock "widget-select" "*Select widget*" widgets, dashboardWidgetView chartUrl' widgetTitle]
                 privateMeta = channelId <> "___" <> pid <> "___" <> baseTemplate <> "___" <> chartUrl'
             void $ withProjectSlackDataLogged "slackActionsH.updateWidgetModal" projectId \sd ->
               triggerSlackModal sd.botToken "update" $ AE.object ["view_id" AE..= slackAction.view.id, "view" AE..= dashboardView privateMeta blocks]
@@ -545,15 +545,15 @@ dashboardView privateData blocks =
     ]
 
 
-dashboardViewOne :: V.Vector (Text, Text) -> AE.Value
-dashboardViewOne options =
+dashboardSelectBlock :: Text -> Text -> V.Vector (Text, Text) -> AE.Value
+dashboardSelectBlock selectId heading options =
   AE.object
     [ "type" AE..= "section"
-    , "block_id" AE..= "dashboard-select"
-    , "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= "*Select dashboard*"]
+    , "block_id" AE..= selectId
+    , "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= heading]
     , "accessory"
         AE..= AE.object
-          [ "action_id" AE..= "dashboard-select"
+          [ "action_id" AE..= selectId
           , "type" AE..= "static_select"
           , "placeholder" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= "Select a dashboard template"]
           , "options" AE..= AE.Array opts
@@ -561,24 +561,6 @@ dashboardViewOne options =
     ]
   where
     opts = V.map (\(text, value) -> AE.object ["text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= if T.null text then "Untitled" else text], "value" AE..= value]) options
-
-
-dashboardViewTwo :: V.Vector (Text, Text) -> AE.Value
-dashboardViewTwo options =
-  AE.object
-    [ "type" AE..= "section"
-    , "block_id" AE..= "widget-select"
-    , "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= "*Select widget*"]
-    , "accessory"
-        AE..= AE.object
-          [ "action_id" AE..= "widget-select"
-          , "type" AE..= "static_select"
-          , "placeholder" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= "Select a dashboard template"]
-          , "options" AE..= AE.Array opts
-          ]
-    ]
-  where
-    opts = V.map (\(text, value) -> AE.object ["text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= text], "value" AE..= value]) options
 
 
 dashboardWidgetView :: Text -> Text -> AE.Value

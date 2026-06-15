@@ -99,6 +99,29 @@ closeSharedKafkaProducer = modifyMVar sharedKafkaProducer $ \case
     pure (Nothing, ())
 
 
+-- | Shared batch-processing span for both ingest paths: wraps the fn invocation
+-- in a withSpan with batch.started/completed/write_failed events and Ok/Error
+-- status. Only the span name and attribute list differ between pubsub and kafka.
+runBatchSpan
+  :: Text
+  -> [(Text, OA.Attribute)]
+  -> ATBackgroundCtx (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))
+  -> ATBackgroundCtx (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))
+runBatchSpan spanName attrs run = withSpan spanName attrs \sp -> do
+  addEvent sp "batch.started" []
+  res <- run
+  case res of
+    Right (ids, poison) -> do
+      addEvent sp "batch.completed" [("processed_count", OA.toAttribute (length ids)), ("poison_count", OA.toAttribute (length poison))]
+      setStatus sp Ok
+      pure (Right (ids, poison))
+    Left wf -> do
+      let !summary = Telemetry.writeFailureSummary wf
+      addEvent sp "batch.write_failed" [("write_failure", OA.toAttribute summary)]
+      setStatus sp (Error summary)
+      pure (Left wf)
+
+
 -- pubsubService connects to the pubsub service and listens for  messages,
 -- then it calls the processMessage function to process the messages, and
 -- acknoleges the list message in one request.
@@ -138,26 +161,14 @@ pubsubService appLogger appCtx tp topics fn = checkpoint "pubsubService" do
           tryAny
             ( liftIO
                 $ runBackground appLogger appCtx tp
-                $ withSpan
+                $ runBatchSpan
                   "pubsub.process_batch"
                   [ ("topic", OA.toAttribute topic)
                   , ("message_count", OA.toAttribute (length validMsgs))
                   , ("subscription", OA.toAttribute subscription)
                   , ("ce-type", OA.toAttribute (fromMaybe "" ceType))
                   ]
-                  \sp -> do
-                    addEvent sp "batch.started" []
-                    res <- fn validMsgs (maybeToMonoid firstAttrs)
-                    case res of
-                      Right (ids, poison) -> do
-                        addEvent sp "batch.completed" [("processed_count", OA.toAttribute (length ids)), ("poison_count", OA.toAttribute (length poison))]
-                        setStatus sp Ok
-                        pure (Right (ids, poison))
-                      Left wf -> do
-                        let !summary = Telemetry.writeFailureSummary wf
-                        addEvent sp "batch.write_failed" [("write_failure", OA.toAttribute summary)]
-                        setStatus sp (Error summary)
-                        pure (Left wf)
+                  (fn validMsgs (maybeToMonoid firstAttrs))
             )
             >>= liftIO
             . routeBatchOutcome appLogger appCtx "pubsub-service" topic validMsgs (maybeToMonoid firstAttrs)
@@ -256,26 +267,14 @@ kafkaService appLogger appCtx tp role label kafkaTopics batchSize fn = checkpoin
                       result <- liftIO
                         $ tryAny
                         $ runBackground appLogger appCtx tp
-                        $ withSpan
+                        $ runBatchSpan
                           "kafka.process_batch"
                           [ ("topic", OA.toAttribute topic)
                           , ("message_count", OA.toAttribute (length records))
                           , ("ce-type", OA.toAttribute ceType)
                           , ("client_id", OA.toAttribute clientId)
                           ]
-                        $ \sp -> do
-                          addEvent sp "batch.started" []
-                          res <- fn records attrs
-                          case res of
-                            Right (ids, poison) -> do
-                              addEvent sp "batch.completed" [("processed_count", OA.toAttribute (length ids)), ("poison_count", OA.toAttribute (length poison))]
-                              setStatus sp Ok
-                              pure (Right (ids, poison))
-                            Left wf -> do
-                              let !summary = Telemetry.writeFailureSummary wf
-                              addEvent sp "batch.write_failed" [("write_failure", OA.toAttribute summary)]
-                              setStatus sp (Error summary)
-                              pure (Left wf)
+                          (fn records attrs)
                       -- Empty ack list = no commit (broker redelivers); non-empty
                       -- = durable. Kafka can't partial-ack within a partition so
                       -- processGroup commits all-or-nothing per partition group.

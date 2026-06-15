@@ -88,17 +88,6 @@ data SpanMin = SpanMin
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
--- | Lookup a dotted attribute key — try flat key first, then nested-object traversal.
-attrLookup :: Text -> Maybe (Map Text AE.Value) -> Maybe Text
-attrLookup key attrs =
-  (attrs >>= Map.lookup key >>= textOfValue) <|> Telemetry.atMapText key attrs
-  where
-    textOfValue = \case
-      AE.String t -> Just t
-      AE.Number n -> Just (show n)
-      _ -> Nothing
-
-
 -- | Extract a human-readable label from span attributes (db query, http route, rpc method, messaging).
 -- Order matches semantic precedence: db query > http method+route > rpc > messaging > exception.
 spanDisplayLabel :: Maybe (Map Text AE.Value) -> Maybe Text
@@ -112,7 +101,7 @@ spanDisplayLabel attrs =
     <|> joinWith " " (look "messaging.operation") (look "messaging.destination.name" <|> look "messaging.destination")
     <|> look "exception.type"
   where
-    look k = attrLookup k attrs
+    look k = Telemetry.atMapText k attrs
     joinWith sep = liftA2 (\a b -> a <> sep <> b)
 
 
@@ -393,15 +382,29 @@ metricDetailUrl :: Projects.ProjectId -> Text -> Text -> Text
 metricDetailUrl pid metricName source = "/p/" <> pid.toText <> "/metrics/details/" <> metricName <> "/?source=" <> source
 
 
+-- | Shared WTTimeseriesLine widget for a metric. @mTitle@/@mId@/@mExpandBtn@/@mDescription@
+-- carry the per-callsite differences between the chart-list card and the details page.
+metricWidget :: Projects.ProjectId -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Widget.Widget
+metricWidget pid metricName metricUnit mTitle mId mExpandBtn mDescription =
+  def
+    { Widget.wType = Widget.WTTimeseriesLine
+    , Widget.title = mTitle
+    , Widget.query = Just $ "metrics | where metric_name == \"" <> metricName <> "\" | summarize avg(metric_value.contents.value) by bin_auto(timestamp),attributes"
+    , Widget.layout = Just $ Widget.Layout{x = Just 0, y = Just 0, w = Just 2, h = Just 1}
+    , Widget.unit = Just metricUnit
+    , Widget.hideLegend = Nothing
+    , Widget.eager = Just True
+    , Widget._projectId = Just pid
+    , Widget.id = mId
+    , Widget.expandBtnFn = mExpandBtn
+    , Widget.description = mDescription
+    }
+
+
 drawerExpandScript :: Text -> Text
 drawerExpandScript detailUrl =
-  [text|on pointerdown or click set #global-data-drawer.checked to true
-        then set #global-data-drawer-content.innerHTML to #loader-tmp.innerHTML
-        then fetch $detailUrl
-        then set #global-data-drawer-content.innerHTML to it
-        then htmx.process(#global-data-drawer-content)
-        then _hyperscript.processNode(#global-data-drawer-content)
-        then window.evalScriptsFromContent(#global-data-drawer-content)|]
+  let fetchTail = LogItem.fetchIntoScript "global-data-drawer-content" detailUrl
+   in [text|on pointerdown or click set #global-data-drawer.checked to true then $fetchTail|]
 
 
 chartList :: Projects.ProjectId -> Text -> V.Vector Telemetry.MetricChartListData -> Maybe Text -> Html ()
@@ -413,18 +416,7 @@ chartList pid source metricList nextUrl = do
       let lastSeenStr = formatTime defaultTimeLocale "%b %d, %Y %H:%M" metric.lastSeen
       div_ [class_ "h-52"]
         $ toHtml
-        $ def
-          { Widget.wType = Widget.WTTimeseriesLine
-          , Widget.title = Just metric.metricName
-          , Widget.query = Just $ "metrics | where metric_name == \"" <> metric.metricName <> "\" | summarize avg(metric_value.contents.value) by bin_auto(timestamp),attributes"
-          , Widget.layout = Just $ Widget.Layout{x = Just 0, y = Just 0, w = Just 2, h = Just 1}
-          , Widget.unit = Just metric.metricUnit
-          , Widget.hideLegend = Nothing
-          , Widget.eager = Just True
-          , Widget._projectId = Just pid
-          , Widget.expandBtnFn = Just expandBtn
-          , Widget.description = Just $ "Last seen: " <> toText lastSeenStr
-          }
+        $ metricWidget pid metric.metricName metric.metricUnit (Just metric.metricName) Nothing (Just expandBtn) (Just $ "Last seen: " <> toText lastSeenStr)
   whenJust nextUrl \url ->
     a_ [hxTrigger_ "intersect once", hxSwap_ "outerHTML", hxGet_ url] pass
 
@@ -536,18 +528,7 @@ metricsDetailsPage pid sources metric source currentRange = do
       div_ [class_ "flex items-center text-sm"] $ span_ [] $ toHtml metric.metricName
       div_ [class_ "h-64 w-full"]
         $ toHtml
-        $ def
-          { Widget.wType = Widget.WTTimeseriesLine
-          , Widget.title = Nothing
-          , Widget.query = Just $ "metrics | where metric_name == \"" <> metric.metricName <> "\" | summarize avg(metric_value.contents.value) by bin_auto(timestamp),attributes"
-          , Widget.layout = Just $ Widget.Layout{x = Just 0, y = Just 0, w = Just 2, h = Just 1}
-          , Widget.unit = Just metric.metricUnit
-          , Widget.hideLegend = Nothing
-          , Widget.eager = Just True
-          , Widget._projectId = Just pid
-          , Widget.id = Just $ "details_" <> T.replace "." "_" metric.metricName
-          , Widget.expandBtnFn = Nothing
-          }
+        $ metricWidget pid metric.metricName metric.metricUnit Nothing (Just $ "details_" <> T.replace "." "_" metric.metricName) Nothing Nothing
 
     div_ [class_ "flex flex-col gap-2 rounded-2xl border border-strokeWeak", id_ "metric-tabs-container"] $ do
       div_ [class_ "flex", [__|on click halt|]] $ do

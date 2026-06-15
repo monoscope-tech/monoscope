@@ -23,7 +23,6 @@ module CLI.Resource (
   resourceIdPath,
   withResult,
   runAPI,
-  normalizeList,
 ) where
 
 import Relude
@@ -116,23 +115,15 @@ runAPI mode act = withResult act renderAPIError (renderByMode mode Nothing)
 -- In table mode the per-resource column set in 'buildResourceTable' decides
 -- which fields show, plus a "… N more" pagination cue below.
 runList :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> ResourceKind -> [(Text, Text)] -> OutputMode -> Eff es ()
-runList cfg k params mode =
-  apiGetJson @_ @AE.Value cfg (resourcePath k) params >>= \case
-    Left e -> printError (renderAPIError e) >> liftIO exitFailure
-    Right v -> case normalizeListE v of
-      Right normalised -> renderListPayload k mode normalised
-      Left (raw, reason) -> do
-        -- Server returned an envelope shape we don't recognise. This is
-        -- always-on stderr (not printDebug): an agent expecting
-        -- {data, pagination} would silently get a broken shape otherwise.
-        printError $ "list " <> resourcePath k <> ": " <> reason
-        renderByMode mode Nothing raw
+runList cfg k = runListVia cfg k (resourcePath k)
 
 
--- | Variant of 'runList' for resources whose URL differs from 'resourcePath'
--- (e.g. issues hits the legacy @apiGetJson \@_ \@AE.Value@ flow from Main.hs
--- with custom query params). Re-uses the same normalisation + table builder
--- so the per-kind columns are defined in one place.
+-- | Fetch + normalise a list endpoint at an explicit @url@ (which may differ
+-- from 'resourcePath', e.g. issues hits the legacy @apiGetJson \@_ \@AE.Value@
+-- flow from Main.hs with custom query params). 'runList' delegates here with
+-- @resourcePath k@. Server envelope shapes we don't recognise go to always-on
+-- stderr (not printDebug): an agent expecting {data, pagination} would
+-- silently get a broken shape otherwise.
 runListVia :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> ResourceKind -> Text -> [(Text, Text)] -> OutputMode -> Eff es ()
 runListVia cfg k url params mode =
   apiGetJson @_ @AE.Value cfg url params >>= \case
@@ -319,13 +310,6 @@ normalizeListE v
   | otherwise = Left (v, "response is neither Object nor Array")
   where
     hasKey k = has (AL.key k) v
-
-
--- | Pure normaliser kept for direct use; falls through to the original value
--- on shape mismatch (without warning). Prefer 'normalizeListE' from new code
--- so the caller can flag unexpected payloads.
-normalizeList :: AE.Value -> AE.Value
-normalizeList = either fst id . normalizeListE
 
 
 runGet :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> ResourceKind -> Text -> OutputMode -> Eff es ()

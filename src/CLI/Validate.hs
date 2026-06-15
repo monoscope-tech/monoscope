@@ -2,9 +2,7 @@
 -- Catching malformed input here gives agents a clear, actionable error
 -- message instead of an opaque server-side HTTP 400.
 module CLI.Validate (
-  validateDuration,
   validateDurationFor,
-  validateUuid,
   validateKind,
   normalizeKind,
   validateOrDie,
@@ -16,7 +14,7 @@ module CLI.Validate (
 import Relude
 
 import CLI.Core (printError)
-import Data.Char (isDigit, isHexDigit)
+import Data.Char (isDigit)
 import Data.Text qualified as T
 import Effectful
 import Pkg.Parser (parseQueryToAST)
@@ -48,30 +46,6 @@ validateDurationFor flag t
        in if T.null digits || T.toLower suffix `notElem` ["ms", "s", "m", "h", "d"]
             then Left $ flag <> " must match Ns|Nm|Nh|Nd|Nms (e.g. 30m, 2h, 7d); got '" <> t <> "'"
             else Right trimmed
-
-
--- | Back-compat alias defaulting to @--since@.
-validateDuration :: Text -> Either Text Text
-validateDuration = validateDurationFor "--since"
-
-
--- | Loose UUID syntax check (8-4-4-4-12 hex). Lets us fail fast on @--project foo@
--- etc. rather than waiting for the server to return a 4xx.
---
--- >>> validateUuid "00000000-0000-0000-0000-000000000000"
--- Right "00000000-0000-0000-0000-000000000000"
--- >>> validateUuid "not-a-uuid"
--- Left "expected UUID (8-4-4-4-12 hex); got 'not-a-uuid'"
--- >>> validateUuid ""
--- Left "expected UUID; got empty string"
-validateUuid :: Text -> Either Text Text
-validateUuid t
-  | T.null t = Left "expected UUID; got empty string"
-  | otherwise =
-      let parts = T.splitOn "-" t
-       in if map T.length parts == [8, 4, 4, 4, 12] && T.all isHexDigit (T.concat parts)
-            then Right t
-            else Left $ "expected UUID (8-4-4-4-12 hex); got '" <> t <> "'"
 
 
 -- | Whitelist for @--kind@ values accepted at the CLI surface.

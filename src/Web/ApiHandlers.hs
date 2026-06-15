@@ -100,7 +100,6 @@ import Data.Generics.Labels ()
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
 import Data.OpenApi (ToSchema (..))
-import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, nominalDay, zonedTimeToUTC)
 import Data.UUID qualified as UUID
@@ -142,18 +141,30 @@ notFoundOr :: Text -> Maybe a -> ATBaseCtx a
 notFoundOr msg = maybe (throwError err404{errBody = encodeUtf8 msg}) pure
 
 
--- | Dispatch a 'BulkAction' against a table of named operations. Each op returns
--- the count of rows affected; when @0@, every id is reported as "not applied".
--- Ops that cannot report a count can @pure (length ba.ids)@ to mark all as succeeded.
-bulkExec :: BulkAction a -> [(Text, ATBaseCtx Int64)] -> ATBaseCtx (BulkResult a)
+-- | Result an op reports back to 'bulkExec': either an affected-row count
+-- (all-or-nothing across @ba.ids@) or the explicit list of succeeded ids
+-- (the complement of @ba.ids@ is reported as "not applied").
+data BulkOpResult a = BulkCount Int64 | BulkSucceeded [a]
+
+
+-- | Lift a count-returning op into a 'BulkOpResult'.
+count :: Functor f => f Int64 -> f (BulkOpResult a)
+count = fmap BulkCount
+
+
+-- | Dispatch a 'BulkAction' against a table of named operations. A 'BulkCount'
+-- op marks every id succeeded when the count is @>0@, else all "not applied";
+-- a 'BulkSucceeded' op reports per-id partial success.
+-- Ops that cannot report a count can @pure (BulkCount (length ba.ids))@.
+bulkExec :: Eq a => BulkAction a -> [(Text, ATBaseCtx (BulkOpResult a))] -> ATBaseCtx (BulkResult a)
 bulkExec ba ops = do
-  n <- case List.lookup (T.toLower ba.action) ops of
+  r <- case List.lookup (T.toLower ba.action) ops of
     Just op -> op
     Nothing -> throwError err400{errBody = encodeUtf8 $ "Unknown bulk action: " <> ba.action}
-  pure
-    $ if n > 0
-      then BulkResult{succeeded = ba.ids, failed = []}
-      else BulkResult{succeeded = [], failed = [BulkFailure{id = i, error = "not applied"} | i <- ba.ids]}
+  let mkResult ok = BulkResult{succeeded = ok, failed = [BulkFailure{id = i, error = "not applied"} | i <- ba.ids, i `notElem` ok]}
+  pure $ case r of
+    BulkCount n -> if n > 0 then mkResult ba.ids else mkResult []
+    BulkSucceeded ok -> mkResult ok
 
 
 -- | Paginated list helper: normalises page/per_page with caps and constructs
@@ -341,10 +352,7 @@ apiMonitorPatch pid mid patch = do
 
 
 apiMonitorDelete :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATBaseCtx NoContent
-apiMonitorDelete pid mid = do
-  _ <- apiMonitorGet pid mid -- ensures monitor belongs to project
-  _ <- Monitors.monitorSoftDeleteByIds [mid]
-  pure NoContent
+apiMonitorDelete pid mid = withRefetchNoContent (apiMonitorGet pid mid) (Monitors.monitorSoftDeleteByIds [mid])
 
 
 -- | Verify a resource belongs to the project via @fetch@, run a mutation,
@@ -352,6 +360,12 @@ apiMonitorDelete pid mid = do
 -- style lifecycle endpoints.
 withRefetch :: Monad m => m a -> m b -> m a
 withRefetch fetch mutate = fetch *> mutate *> fetch
+
+
+-- | @fetch@ (ownership/validation) then @mutate@, returning 'NoContent'. The
+-- delete/unstar/remove lifecycle counterpart of 'withRefetch'.
+withRefetchNoContent :: Applicative m => m a -> m b -> m NoContent
+withRefetchNoContent fetch mutate = fetch *> mutate $> NoContent
 
 
 apiMonitorToggleActive :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATBaseCtx Monitors.QueryMonitor
@@ -374,12 +388,12 @@ apiMonitorBulk :: Projects.ProjectId -> BulkAction UUID.UUID -> ATBaseCtx (BulkR
 apiMonitorBulk _pid ba =
   bulkExec
     ba
-    [ ("delete", Monitors.monitorSoftDeleteByIds qIds)
-    , ("activate", Monitors.monitorReactivateByIds qIds)
-    , ("deactivate", Monitors.monitorDeactivateByIds qIds)
-    , ("mute", Monitors.monitorMuteByIds ba.durationMinutes qIds)
-    , ("unmute", Monitors.monitorUnmuteByIds qIds)
-    , ("resolve", Monitors.monitorResolveByIds qIds)
+    [ ("delete", count $ Monitors.monitorSoftDeleteByIds qIds)
+    , ("activate", count $ Monitors.monitorReactivateByIds qIds)
+    , ("deactivate", count $ Monitors.monitorDeactivateByIds qIds)
+    , ("mute", count $ Monitors.monitorMuteByIds ba.durationMinutes qIds)
+    , ("unmute", count $ Monitors.monitorUnmuteByIds qIds)
+    , ("resolve", count $ Monitors.monitorResolveByIds qIds)
     ]
   where
     qIds = Monitors.QueryMonitorId <$> ba.ids
@@ -489,10 +503,7 @@ apiDashboardPatch pid did patch = do
 
 
 apiDashboardDelete :: Projects.ProjectId -> Dashboards.DashboardId -> ATBaseCtx NoContent
-apiDashboardDelete pid did = do
-  _ <- apiDashboardGet pid did
-  _ <- Dashboards.deleteDashboard did
-  pure NoContent
+apiDashboardDelete pid did = withRefetchNoContent (apiDashboardGet pid did) (Dashboards.deleteDashboard did)
 
 
 apiDashboardDuplicate :: Projects.ProjectId -> Dashboards.DashboardId -> ATBaseCtx DashboardFull
@@ -511,10 +522,7 @@ apiDashboardStar pid did =
 
 
 apiDashboardUnstar :: Projects.ProjectId -> Dashboards.DashboardId -> ATBaseCtx NoContent
-apiDashboardUnstar pid did = do
-  _ <- apiDashboardGet pid did
-  _ <- Dashboards.updateStarredSince did Nothing
-  pure NoContent
+apiDashboardUnstar pid did = withRefetchNoContent (apiDashboardGet pid did) (Dashboards.updateStarredSince did Nothing)
 
 
 apiDashboardYaml :: Projects.ProjectId -> Dashboards.DashboardId -> ATBaseCtx DashboardYAMLDoc
@@ -615,10 +623,7 @@ apiKeyDeactivate pid kid = do
 
 
 apiKeyDelete :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATBaseCtx NoContent
-apiKeyDelete pid kid = do
-  _ <- apiKeyGet pid kid
-  _ <- ProjectApiKeys.revokeApiKey kid
-  pure NoContent
+apiKeyDelete pid kid = withRefetchNoContent (apiKeyGet pid kid) (ProjectApiKeys.revokeApiKey kid)
 
 
 apiEventsQuery :: Projects.ProjectId -> EventsQuery -> ATBaseCtx Log.LogResult
@@ -628,7 +633,7 @@ apiEventsQuery pid q = Log.queryEvents pid q.query q.since q.from q.to q.source 
 -- | Bulk action: currently supports "delete".
 apiDashboardBulk :: Projects.ProjectId -> BulkAction UUID.UUID -> ATBaseCtx (BulkResult UUID.UUID)
 apiDashboardBulk pid ba =
-  bulkExec ba [("delete", Dashboards.deleteDashboardsByIds pid (V.fromList $ UUIDId <$> ba.ids))]
+  bulkExec ba [("delete", count $ Dashboards.deleteDashboardsByIds pid (V.fromList $ UUIDId <$> ba.ids))]
 
 
 -- | Payload for POST /share. event_type defaults to "request" (log/span also accepted).
@@ -795,18 +800,14 @@ apiLogPatternAck pid lpid = do
 
 
 apiLogPatternsBulk :: Projects.ProjectId -> BulkAction Int64 -> ATBaseCtx (BulkResult Int64)
-apiLogPatternsBulk pid ba = do
-  st <- case T.toLower ba.action of
-    "acknowledge" -> pure LogPatterns.LPSAcknowledged
-    "ignore" -> pure LogPatterns.LPSIgnored
-    _ -> throwError err400{errBody = encodeUtf8 $ "Unknown bulk action: " <> ba.action}
-  updated <- LogPatterns.setLogPatternStatesByIds pid Nothing (V.fromList ba.ids) st
-  let updatedSet = S.fromList updated
-  pure
-    BulkResult
-      { succeeded = updated
-      , failed = [BulkFailure{id = i, error = "not applied"} | i <- ba.ids, not (S.member i updatedSet)]
-      }
+apiLogPatternsBulk pid ba =
+  bulkExec
+    ba
+    [ ("acknowledge", setState LogPatterns.LPSAcknowledged)
+    , ("ignore", setState LogPatterns.LPSIgnored)
+    ]
+  where
+    setState st = BulkSucceeded <$> LogPatterns.setLogPatternStatesByIds pid Nothing (V.fromList ba.ids) st
 
 
 issueToSummary :: Issues.Issue -> IssueApiSummary
@@ -938,10 +939,10 @@ apiIssueUnarchive pid iid = issueMutate pid iid $ \ids -> Issues.setArchiveState
 apiIssuesBulk :: Projects.ProjectId -> BulkAction Issues.IssueId -> ATBaseCtx (BulkResult Issues.IssueId)
 apiIssuesBulk pid ba = do
   now <- Time.currentTime
-  let ack = Issues.setAckState pid ba.ids (Just now) Nothing
-      unack = Issues.setAckState pid ba.ids Nothing Nothing
-      archive = Issues.setArchiveState pid ba.ids (Just now)
-      unarchive = Issues.setArchiveState pid ba.ids Nothing
+  let ack = count $ Issues.setAckState pid ba.ids (Just now) Nothing
+      unack = count $ Issues.setAckState pid ba.ids Nothing Nothing
+      archive = count $ Issues.setArchiveState pid ba.ids (Just now)
+      unarchive = count $ Issues.setArchiveState pid ba.ids Nothing
   bulkExec
     ba
     [ ("acknowledge", ack)

@@ -110,7 +110,7 @@ import System.Logging qualified as Log
 import System.Tracing (SpanStatus (..), Tracing, addEvent, forkWithCtx, setStatus, withSpan)
 import System.Types (ATBackgroundCtx, DB, runBackground)
 import UnliftIO.Exception (bracket, catch, throwIO, try, tryAny)
-import Utils (calculateCycleStartDate, formatUTC, freeTierDailyMaxEvents, toXXHash)
+import Utils (calculateCycleStartDate, formatUTC, formatUTCMicros, freeTierDailyMaxEvents, toXXHash)
 
 
 data BgJobs
@@ -2322,8 +2322,8 @@ sendReportForProject pid rType = do
     Log.logInfo "Completed report generation for" pid
     unless ((typTxt == "daily" && not pr.dailyNotif) || (typTxt == "weekly" && not pr.weeklyNotif)) $ do
       Log.logInfo "Sending report notifications for" pid
-      let stmTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" startTime
-          currentTimeTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" currentTime
+      let stmTxt = formatUTCMicros startTime
+          currentTimeTxt = formatUTCMicros currentTime
           reportUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/reports/" <> report.id.toText
           eventsWidget = RP.eventsWidget
           errorsWidget = RP.errorsWidget

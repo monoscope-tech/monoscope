@@ -48,6 +48,7 @@ import Relude
 import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATBaseCtx)
+import Utils (toUriStr)
 import UnliftIO qualified
 import Web.ApiHandlers qualified as ApiH
 
@@ -386,21 +387,22 @@ toolsListJson reg = AE.object ["tools" AE..= map descriptor (Map.elems reg)]
         ]
 
 
-toolError :: Text -> AE.Value
-toolError msg =
-  AE.object
-    [ "content" AE..= ([textContent msg] :: [AE.Value])
-    , "isError" AE..= True
+-- | MCP tool-result envelope: text content + isError, with optional structuredContent.
+toolResult :: Bool -> Text -> Maybe AE.Value -> AE.Value
+toolResult isErr txt structured =
+  AE.object $
+    [ "content" AE..= ([textContent txt] :: [AE.Value])
+    , "isError" AE..= isErr
     ]
+      <> maybe [] (\v -> ["structuredContent" AE..= v]) structured
+
+
+toolError :: Text -> AE.Value
+toolError msg = toolResult True msg Nothing
 
 
 okResult :: AE.Value -> AE.Value
-okResult v =
-  AE.object
-    [ "content" AE..= ([textContent (renderJson v)] :: [AE.Value])
-    , "isError" AE..= False
-    , "structuredContent" AE..= v
-    ]
+okResult v = toolResult False (renderJson v) (Just v)
 
 
 textContent :: Text -> AE.Value
@@ -448,11 +450,7 @@ callOpenApi app b args = do
       bodyTxt = truncateText maxToolBodyBytes (decodeUtf8 bodyLBS)
       isErr = code >= 400
       structured = AE.decode bodyLBS :: Maybe AE.Value
-      base =
-        [ "content" AE..= ([textContent bodyTxt] :: [AE.Value])
-        , "isError" AE..= isErr
-        ]
-  pure $ AE.object $ base <> maybe [] (\v -> ["structuredContent" AE..= v]) structured
+  pure $ toolResult isErr bodyTxt structured
 
 
 -- | Truncate text to @n@ bytes (UTF-8) and append a marker. Cheap byte cap;
@@ -468,11 +466,11 @@ splitArgs :: OpenApiBinding -> AE.Object -> (Text, Text, AE.Value)
 splitArgs b args =
   let look k = KM.lookup (AK.fromText k) args
       pathStr = foldl' substPath b.path b.pathParams
-      substPath acc k = maybe acc (\v -> T.replace ("{" <> k <> "}") (urlEncodeText (jsonToText v)) acc) (look k)
+      substPath acc k = maybe acc (\v -> T.replace ("{" <> k <> "}") (toUriStr (jsonToText v)) acc) (look k)
       qs =
         T.intercalate
           "&"
-          [ k <> "=" <> urlEncodeText (jsonToText v)
+          [ k <> "=" <> toUriStr (jsonToText v)
           | k <- b.queryParams
           , Just v <- [look k]
           , v /= AE.Null
@@ -487,10 +485,6 @@ jsonToText AE.Null = ""
 jsonToText (AE.Bool True) = "true"
 jsonToText (AE.Bool False) = "false"
 jsonToText v = decodeUtf8 (AE.encode v)
-
-
-urlEncodeText :: Text -> Text
-urlEncodeText = decodeUtf8 . H.urlEncode True . encodeUtf8
 
 
 -- =============================================================================

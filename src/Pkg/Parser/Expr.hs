@@ -357,22 +357,30 @@ pScalarFunc = do
 
 -- | pValuesNoFunc: pValues without scalar function parsing (avoids left recursion)
 pValuesNoFunc :: Parser Values
-pValuesNoFunc =
+pValuesNoFunc = pValuesWith pValuesNoFunc []
+
+
+-- | Shared body of pValues / pValuesNoFunc. @self@ ties the recursion for
+-- nested list elements (so the no-func variant stays no-func inside lists);
+-- @extra@ prepends the leading scalar-func alternative for pValues.
+pValuesWith :: Parser Values -> [Parser Values] -> Parser Values
+pValuesWith self extra =
   choice @[]
-    [ Null <$ string "null"
-    , Boolean <$> (True <$ string "true" <|> False <$ string "false" <|> False <$ string "FALSE" <|> True <$ string "TRUE")
-    , Str . toText <$> (char '\"' *> manyTill L.charLiteral (char '\"'))
-    , Str . toText <$> (char '\'' *> manyTill L.charLiteral (char '\''))
-    , List [] <$ string "[]"
-    , List <$> sqParens (pValuesNoFunc `sepBy` (space *> char ',' <* space))
-    , List [] <$ string "()"
-    , List <$> parens (pValuesNoFunc `sepBy` (space *> char ',' <* space))
-    , try pNowFunction
-    , try pAgoFunction
-    , try pDuration
-    , try (Num . toText . show <$> L.signed pass L.float)
-    , Num . toText . show <$> L.signed pass L.decimal
-    ]
+    $ extra
+    <> [ Null <$ string "null"
+       , Boolean <$> (True <$ string "true" <|> False <$ string "false" <|> False <$ string "FALSE" <|> True <$ string "TRUE")
+       , Str . toText <$> (char '\"' *> manyTill L.charLiteral (char '\"'))
+       , Str . toText <$> (char '\'' *> manyTill L.charLiteral (char '\''))
+       , List [] <$ string "[]"
+       , List <$> sqParens (self `sepBy` (space *> char ',' <* space))
+       , List [] <$ string "()"
+       , List <$> parens (self `sepBy` (space *> char ',' <* space))
+       , try pNowFunction
+       , try pAgoFunction
+       , try pDuration
+       , try (Num . toText . show <$> L.signed pass L.float)
+       , Num . toText . show <$> L.signed pass L.decimal
+       ]
 
 
 -- | parse values into our internal AST representation. Int, Str, Num, Bool, List, etc
@@ -417,23 +425,7 @@ pValuesNoFunc =
 -- >>> parse pValues "" "['SELECT','INSERT']"
 -- Right (List [Str "SELECT",Str "INSERT"])
 pValues :: Parser Values
-pValues =
-  choice @[]
-    [ try pScalarFunc -- Must come first to handle coalesce(), iff(), etc.
-    , Null <$ string "null"
-    , Boolean <$> (True <$ string "true" <|> False <$ string "false" <|> False <$ string "FALSE" <|> True <$ string "TRUE")
-    , Str . toText <$> (char '\"' *> manyTill L.charLiteral (char '\"'))
-    , Str . toText <$> (char '\'' *> manyTill L.charLiteral (char '\''))
-    , List [] <$ string "[]"
-    , List <$> sqParens (pValues `sepBy` (space *> char ',' <* space))
-    , List [] <$ string "()"
-    , List <$> parens (pValues `sepBy` (space *> char ',' <* space))
-    , try pNowFunction
-    , try pAgoFunction
-    , try pDuration
-    , try (Num . toText . show <$> L.signed pass L.float)
-    , Num . toText . show <$> L.signed pass L.decimal
-    ]
+pValues = pValuesWith pValues [try pScalarFunc] -- try pScalarFunc must come first to handle coalesce(), iff(), etc.
 
 
 -- | pTerm is the main entry point that desides what tree lines to decend
@@ -497,34 +489,56 @@ pValues =
 pTerm :: Parser Expr
 pTerm =
   (Paren <$> parens pExpr)
-    <|> try (ValEq <$> pValues <* space <* void (symbol "==") <* space <*> pValues)
-    <|> try (ValNotEq <$> pValues <* space <* void (symbol "!=") <* space <*> pValues)
-    <|> try (ValGTEq <$> pValues <* space <* void (symbol ">=") <* space <*> pValues)
-    <|> try (ValLTEq <$> pValues <* space <* void (symbol "<=") <* space <*> pValues)
-    <|> try (ValGT <$> pValues <* space <* void (symbol ">") <* space <*> pValues)
-    <|> try (ValLT <$> pValues <* space <* void (symbol "<") <* space <*> pValues)
-    <|> try (Eq <$> pSubject <* space <* void (symbol "==") <* space <*> pValues)
-    <|> try (NotEq <$> pSubject <* space <* void (symbol "!=") <* space <*> pValues)
-    <|> try (GTEq <$> pSubject <* space <* void (symbol ">=") <* space <*> pValues)
-    <|> try (LTEq <$> pSubject <* space <* void (symbol "<=") <* space <*> pValues)
-    <|> try (GT <$> pSubject <* space <* void (symbol ">") <* space <*> pValues)
-    <|> try (LT <$> pSubject <* space <* void (symbol "<") <* space <*> pValues)
-    <|> try (NotIn <$> pSubject <* space <* void (symbol "!in") <* space <*> pValues)
-    <|> try (In <$> pSubject <* space <* void (symbol "in") <* space <*> pValues)
-    <|> try (NotHas <$> pSubject <* space <* void (symbol "!has") <* space <*> pValues)
-    <|> try (HasAll <$> pSubject <* space <* void (symbol "has_all") <* space <*> pValues)
-    <|> try (HasAny <$> pSubject <* space <* void (symbol "has_any") <* space <*> pValues)
-    <|> try (Has <$> pSubject <* space <* void (symbol "has") <* space <*> pValues)
-    <|> try (NotContains <$> pSubject <* space <* void (symbol "!contains") <* space <*> pValues)
-    <|> try (Contains <$> pSubject <* space <* void (symbol "contains") <* space <*> pValues)
-    <|> try (NotStartsWith <$> pSubject <* space <* void (symbol "!startswith") <* space <*> pValues)
-    <|> try (StartsWith <$> pSubject <* space <* void (symbol "startswith") <* space <*> pValues)
-    <|> try (NotEndsWith <$> pSubject <* space <* void (symbol "!endswith") <* space <*> pValues)
-    <|> try (EndsWith <$> pSubject <* space <* void (symbol "endswith") <* space <*> pValues)
+    <|> asum [binTerm pValues ctor sym | (ctor, sym, _, _) <- valBinOps]
+    <|> asum [binTerm pSubject ctor sym | (ctor, sym, _, _) <- subjectBinOps]
     <|> try (Matches <$> pSubject <* space <* void (symbol "matches") <* space <*> (toText <$> (char '/' *> manyTill L.charLiteral (char '/'))))
     <|> try regexParser
     <|> try (BoolFunc <$> pBoolScalarFunc) -- Standalone boolean functions: isnull(x), isnotnull(x), etc.
     <|> (BoolFunc . ScalarFunc "isnotempty" . pure . Field <$> pSubject) -- Standalone subject = isnotempty check per KQL spec
+
+
+-- | One try-based binary alternative: @lhs OP pValues@.
+binTerm :: Parser a -> (a -> Values -> Expr) -> Text -> Parser Expr
+binTerm pLhs ctor sym = try (ctor <$> pLhs <* space <* void (symbol sym) <* space <*> pValues)
+
+
+-- | The shared binary-operator tables, each row carrying:
+-- (constructor, KQL parse symbol, ToQueryText infix token, Display op-string).
+-- Ordering is significant for 'pTerm' (try-based, longest token first, e.g.
+-- @>=@ before @>@, @!in@ before @in@). The same rows drive 'ToQueryText Expr'
+-- and 'Display Expr' so the constructor->token map lives in one place.
+valBinOps :: [(Values -> Values -> Expr, Text, Text, Text)]
+valBinOps =
+  [ (ValEq, "==", " == ", "=")
+  , (ValNotEq, "!=", " != ", "!=")
+  , (ValGTEq, ">=", " >= ", ">=")
+  , (ValLTEq, "<=", " <= ", "<=")
+  , (ValGT, ">", " > ", ">")
+  , (ValLT, "<", " < ", "<")
+  ]
+
+
+subjectBinOps :: [(Subject -> Values -> Expr, Text, Text, Text)]
+subjectBinOps =
+  [ (Eq, "==", " == ", "=")
+  , (NotEq, "!=", " != ", "!=")
+  , (GTEq, ">=", " >= ", ">=")
+  , (LTEq, "<=", " <= ", "<=")
+  , (GT, ">", " > ", ">")
+  , (LT, "<", " < ", "<")
+  , (NotIn, "!in", " !in ", "NOT IN")
+  , (In, "in", " in ", "IN")
+  , (NotHas, "!has", " !has ", "NOT HAS")
+  , (HasAll, "has_all", " has_all ", "HAS_ALL")
+  , (HasAny, "has_any", " has_any ", "HAS_ANY")
+  , (Has, "has", " has ", "HAS")
+  , (NotContains, "!contains", " !contains ", "NOT CONTAINS")
+  , (Contains, "contains", " contains ", "CONTAINS")
+  , (NotStartsWith, "!startswith", " !startswith ", "NOT STARTSWITH")
+  , (StartsWith, "startswith", " startswith ", "STARTSWITH")
+  , (NotEndsWith, "!endswith", " !endswith ", "NOT ENDSWITH")
+  , (EndsWith, "endswith", " endswith ", "ENDSWITH")
+  ]
 
 
 -- >>> parse regexParser "" "abc=~/abc.*/"
@@ -970,71 +984,63 @@ scalarFuncToSQL name args
 --
 -- >>> display (Matches (Subject "" "email" []) ".*@company\\.com")
 -- "jsonb_path_exists(to_jsonb(email), $$$ ? (@ like_regex \".*@company\\.com\" flag \"i\" )$$::jsonpath)"
+
+-- | Decompose a binary Expr into its operands plus the (display op-string,
+-- toQText infix token) drawn from the shared operator tables, so Display and
+-- ToQueryText reuse a single constructor->token map. The bespoke cases
+-- (Matches/Paren/And/Or/Regex/BoolFunc) are handled directly in the instances.
+subBinaryParts :: Expr -> Maybe (Subject, Values, Text, Text)
+subBinaryParts e = do
+  (s, v, sym) <- case e of
+    Eq s v -> at s v "=="; NotEq s v -> at s v "!="; GTEq s v -> at s v ">="; LTEq s v -> at s v "<="
+    GT s v -> at s v ">"; LT s v -> at s v "<"; NotIn s v -> at s v "!in"; In s v -> at s v "in"
+    NotHas s v -> at s v "!has"; HasAll s v -> at s v "has_all"; HasAny s v -> at s v "has_any"; Has s v -> at s v "has"
+    NotContains s v -> at s v "!contains"; Contains s v -> at s v "contains"; NotStartsWith s v -> at s v "!startswith"
+    StartsWith s v -> at s v "startswith"; NotEndsWith s v -> at s v "!endswith"; EndsWith s v -> at s v "endswith"
+    _ -> Nothing
+  (_, _, qtok, dop) <- find (\(_, sym', _, _) -> sym' == sym) subjectBinOps
+  pure (s, v, dop, qtok)
+  where
+    at s v sym = Just (s, v, sym :: Text)
+
+
+valBinaryParts :: Expr -> Maybe (Values, Values, Text, Text)
+valBinaryParts e = do
+  (a, b, sym) <- case e of
+    ValEq a b -> at a b "=="; ValNotEq a b -> at a b "!="; ValGTEq a b -> at a b ">="
+    ValLTEq a b -> at a b "<="; ValGT a b -> at a b ">"; ValLT a b -> at a b "<"
+    _ -> Nothing
+  (_, _, qtok, dop) <- find (\(_, sym', _, _) -> sym' == sym) valBinOps
+  pure (a, b, dop, qtok)
+  where
+    at a b sym = Just (a, b, sym :: Text)
+
+
 instance Display Expr where
-  displayPrec prec expr@(Eq sub val) = displayExprHelper "=" prec sub val
-  displayPrec prec (NotEq sub val) = displayExprHelper "!=" prec sub val
-  displayPrec prec (GT sub val) = displayExprHelper ">" prec sub val
-  displayPrec prec (LT sub val) = displayExprHelper "<" prec sub val
-  displayPrec prec (GTEq sub val) = displayExprHelper ">=" prec sub val
-  displayPrec prec (LTEq sub val) = displayExprHelper "<=" prec sub val
-  displayPrec prec (In sub val) = displayExprHelper "IN" prec sub val
-  displayPrec prec (NotIn sub val) = displayExprHelper "NOT IN" prec sub val
-  displayPrec prec (Has sub val) = displayExprHelper "HAS" prec sub val
-  displayPrec prec (NotHas sub val) = displayExprHelper "NOT HAS" prec sub val
-  displayPrec prec (HasAny sub val) = displayExprHelper "HAS_ANY" prec sub val
-  displayPrec prec (HasAll sub val) = displayExprHelper "HAS_ALL" prec sub val
-  displayPrec prec (Contains sub val) = displayExprHelper "CONTAINS" prec sub val
-  displayPrec prec (NotContains sub val) = displayExprHelper "NOT CONTAINS" prec sub val
-  displayPrec prec (StartsWith sub val) = displayExprHelper "STARTSWITH" prec sub val
-  displayPrec prec (NotStartsWith sub val) = displayExprHelper "NOT STARTSWITH" prec sub val
-  displayPrec prec (EndsWith sub val) = displayExprHelper "ENDSWITH" prec sub val
-  displayPrec prec (NotEndsWith sub val) = displayExprHelper "NOT ENDSWITH" prec sub val
+  displayPrec prec e
+    | Just (sub, val, op, _) <- subBinaryParts e = displayExprHelper op prec sub val
+    | Just (v1, v2, op, _) <- valBinaryParts e = displayParen (prec > 0) $ displayPrec prec v1 <> " " <> displayBuilder op <> " " <> displayPrec prec v2
   displayPrec prec (Matches sub val) = displayPrec prec $ jsonPathQuery "like_regex" sub (Str val)
   displayPrec prec (Paren u1) = displayParen True $ displayPrec prec u1
   displayPrec prec (And u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " AND " <> displayPrec prec u2
   displayPrec prec (Or u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " OR " <> displayPrec prec u2
   displayPrec prec (Regex sub val) = displayPrec prec $ jsonPathQuery "like_regex" sub (Str val)
-  displayPrec prec (ValEq v1 v2) = displayParen (prec > 0) $ displayPrec prec v1 <> " = " <> displayPrec prec v2
-  displayPrec prec (ValNotEq v1 v2) = displayParen (prec > 0) $ displayPrec prec v1 <> " != " <> displayPrec prec v2
-  displayPrec prec (ValGT v1 v2) = displayParen (prec > 0) $ displayPrec prec v1 <> " > " <> displayPrec prec v2
-  displayPrec prec (ValLT v1 v2) = displayParen (prec > 0) $ displayPrec prec v1 <> " < " <> displayPrec prec v2
-  displayPrec prec (ValGTEq v1 v2) = displayParen (prec > 0) $ displayPrec prec v1 <> " >= " <> displayPrec prec v2
-  displayPrec prec (ValLTEq v1 v2) = displayParen (prec > 0) $ displayPrec prec v1 <> " <= " <> displayPrec prec v2
   displayPrec prec (BoolFunc v) = displayPrec prec v -- Boolean scalar function renders directly to SQL
+  displayPrec _ _ = error "Display Expr: unreachable"
 
 
 -- To be used when generating the text query given an ast
 instance ToQueryText Expr where
-  toQText (Eq sub val) = toQText sub <> " == " <> toQText val
-  toQText (NotEq sub val) = toQText sub <> " != " <> toQText val
-  toQText (GT sub val) = toQText sub <> " > " <> toQText val
-  toQText (LT sub val) = toQText sub <> " < " <> toQText val
-  toQText (GTEq sub val) = toQText sub <> " >= " <> toQText val
-  toQText (LTEq sub val) = toQText sub <> " <= " <> toQText val
-  toQText (In sub val) = toQText sub <> " in " <> toQText val
-  toQText (NotIn sub val) = toQText sub <> " !in " <> toQText val
-  toQText (Has sub val) = toQText sub <> " has " <> toQText val
-  toQText (NotHas sub val) = toQText sub <> " !has " <> toQText val
-  toQText (HasAny sub val) = toQText sub <> " has_any " <> toQText val
-  toQText (HasAll sub val) = toQText sub <> " has_all " <> toQText val
-  toQText (Contains sub val) = toQText sub <> " contains " <> toQText val
-  toQText (NotContains sub val) = toQText sub <> " !contains " <> toQText val
-  toQText (StartsWith sub val) = toQText sub <> " startswith " <> toQText val
-  toQText (NotStartsWith sub val) = toQText sub <> " !startswith " <> toQText val
-  toQText (EndsWith sub val) = toQText sub <> " endswith " <> toQText val
-  toQText (NotEndsWith sub val) = toQText sub <> " !endswith " <> toQText val
+  toQText e
+    | Just (sub, val, _, tok) <- subBinaryParts e = toQText sub <> tok <> toQText val
+    | Just (v1, v2, _, tok) <- valBinaryParts e = toQText v1 <> tok <> toQText v2
   toQText (Matches sub val) = toQText sub <> " matches /" <> val <> "/"
   toQText (Paren expr) = "(" <> toQText expr <> ")"
   toQText (And left right) = toQText left <> " AND " <> toQText right
   toQText (Or left right) = toQText left <> " OR " <> toQText right
   toQText (Regex sub val) = toQText sub <> " =~ " <> toQText (Str val)
-  toQText (ValEq v1 v2) = toQText v1 <> " == " <> toQText v2
-  toQText (ValNotEq v1 v2) = toQText v1 <> " != " <> toQText v2
-  toQText (ValGT v1 v2) = toQText v1 <> " > " <> toQText v2
-  toQText (ValLT v1 v2) = toQText v1 <> " < " <> toQText v2
-  toQText (ValGTEq v1 v2) = toQText v1 <> " >= " <> toQText v2
-  toQText (ValLTEq v1 v2) = toQText v1 <> " <= " <> toQText v2
   toQText (BoolFunc v) = toQText v
+  toQText _ = error "ToQueryText Expr: unreachable"
 
 
 -- Helper function to handle the common display logic

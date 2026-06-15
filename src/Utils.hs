@@ -1,5 +1,4 @@
 module Utils (
-  eitherStrToText,
   onpointerdown_,
   jsonValueToHtmlTree,
   freeTierDailyMaxEvents,
@@ -14,12 +13,11 @@ module Utils (
   htmxIndicator_,
   htmxIndicatorWith_,
   htmxOverlayIndicator_,
-  lookupVecInt,
-  lookupVecText,
   lookupVecIntByKey,
   lookupVecBoolByKey,
   lookupValueText,
   formatUTC,
+  formatUTCMicros,
   insertIfNotExist,
   getAlertStatusColor,
   lookupVecTextByKey,
@@ -123,13 +121,6 @@ import "base64" Data.ByteString.Base64 qualified as B64
 -- Added only for satisfying the tests
 instance Eq ZonedTime where
   (==) _ _ = True
-
-
--- | eitherStrToText helps to convert Either String a to Either Text a,
--- to allow using both of them via do notation in the same monad.
-eitherStrToText :: Either String a -> Either Text a
-eitherStrToText (Left str) = Left $ toText str
-eitherStrToText (Right a) = Right a
 
 
 escapedQueryPartial :: Text -> Text
@@ -425,14 +416,6 @@ lookupVecBy :: AE.FromJSON a => V.Vector AE.Value -> HM.HashMap Text Int -> Text
 lookupVecBy vec colIdxMap key = HM.lookup key colIdxMap >>= lookupVec vec
 
 
-lookupVecText :: V.Vector AE.Value -> Int -> Maybe Text
-lookupVecText = lookupVec
-
-
-lookupVecInt :: V.Vector AE.Value -> Int -> Int
-lookupVecInt vec idx = fromMaybe 0 (lookupVec vec idx)
-
-
 lookupVecTextByKey :: V.Vector AE.Value -> HM.HashMap Text Int -> Text -> Maybe Text
 lookupVecTextByKey = lookupVecBy
 
@@ -481,6 +464,11 @@ displayTimestamp inputDateString =
 formatUTC :: UTCTime -> Text
 formatUTC utcTime =
   toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" utcTime
+
+
+-- | ISO-8601 with fixed 6-digit (microsecond) fractional seconds.
+formatUTCMicros :: UTCTime -> Text
+formatUTCMicros = toText . formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ"
 
 
 data FreeTierStatus = NotFreeTier | FreeTierOk | FreeTierWarning Int Int | FreeTierExceeded Int Int
@@ -546,11 +534,7 @@ serviceColors =
 
 
 getServiceColors :: V.Vector Text -> HashMap Text Text
-getServiceColors = V.foldl' assign HM.empty
-  where
-    assign colors service =
-      let colorIdx = fromIntegral (xxHash (encodeUtf8 service)) `mod` V.length serviceColors
-       in HM.insert service (serviceColors V.! colorIdx) colors
+getServiceColors = V.foldl' (\m s -> HM.insert s (serviceFillColor s) m) HM.empty
 
 
 -- | Theme colors (hex) for ECharts - matches colorMapping.ts THEME_COLORS

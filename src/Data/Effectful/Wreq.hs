@@ -24,6 +24,7 @@ module Data.Effectful.Wreq (
   Postable,
   Putable,
   Patchable,
+  withGoldenCache,
 ) where
 
 import Data.Aeson qualified as AE
@@ -177,19 +178,35 @@ toWreqResponse wr =
     }
 
 
-getOrCreateGoldenResponse :: FilePath -> String -> IO (W.Response LBS.ByteString) -> IO (W.Response LBS.ByteString)
-getOrCreateGoldenResponse goldenDir fileName action = do
+-- | Generic golden-cache read-or-create. When the golden file exists (and we're
+-- not refreshing) it's decoded into the cache type @c@ and projected to the
+-- result via @decodeResult@; if the file is missing it errors with the standard
+-- UPDATE_GOLDEN hint; on UPDATE_GOLDEN it runs @action@ to produce the cache
+-- value and the live result, encodes the cache value, and returns the live
+-- result (so capture-path behaviour matches each caller, not the round-trip).
+withGoldenCache
+  :: (AE.FromJSON c, AE.ToJSON c)
+  => FilePath
+  -- ^ golden dir
+  -> String
+  -- ^ file name (within dir)
+  -> (FilePath -> String)
+  -- ^ build the decode-failure message from the file path
+  -> (c -> a)
+  -- ^ project cached value to result (cached-read path)
+  -> IO (c, a)
+  -- ^ produce the cache value (to persist) and the live result (to return)
+  -> IO a
+withGoldenCache goldenDir fileName decodeErr decodeResult action = do
   let filePath = goldenDir </> fileName
   exists <- doesFileExist filePath
   updateGolden <- isJust <$> lookupEnv "UPDATE_GOLDEN"
-
   if exists && not updateGolden
     then do
-      -- Read cached response
       content <- readFileLBS filePath
       case AE.decode content of
-        Just response -> return $ toWreqResponse response
-        Nothing -> error $ fromString $ "Failed to decode response from file: " <> filePath
+        Just cached -> return $ decodeResult cached
+        Nothing -> error $ fromString $ decodeErr filePath
     else
       if not exists && not updateGolden
         then
@@ -200,15 +217,21 @@ getOrCreateGoldenResponse goldenDir fileName action = do
             <> "\nRun tests with UPDATE_GOLDEN=true to create it:\n"
             <> "  UPDATE_GOLDEN=true USE_EXTERNAL_DB=true cabal test integration-tests"
         else do
-          -- UPDATE_GOLDEN=true: create or update golden file
           createDirectoryIfMissing True goldenDir
-          -- Catch HTTP exceptions and convert them to responses
-          result <- try action
-          response <- case result of
-            Right resp -> return resp
-            Left (HttpExceptionRequest _ (StatusCodeException resp body)) ->
-              -- Convert 4xx/5xx responses to normal responses for golden files
-              return resp{responseBody = fromStrict body}
-            Left (ex :: HttpException) -> throwIO ex -- Re-throw other exceptions
-          writeFileLBS filePath (AE.encode $ fromWreqResponse response)
-          return response
+          (cached, result) <- action
+          writeFileLBS filePath (AE.encode cached)
+          return result
+
+
+getOrCreateGoldenResponse :: FilePath -> String -> IO (W.Response LBS.ByteString) -> IO (W.Response LBS.ByteString)
+getOrCreateGoldenResponse goldenDir fileName action =
+  withGoldenCache goldenDir fileName (\fp -> "Failed to decode response from file: " <> fp) toWreqResponse $ do
+    -- Catch HTTP exceptions and convert them to responses
+    result <- try action
+    response <- case result of
+      Right resp -> return resp
+      Left (HttpExceptionRequest _ (StatusCodeException resp body)) ->
+        -- Convert 4xx/5xx responses to normal responses for golden files
+        return resp{responseBody = fromStrict body}
+      Left (ex :: HttpException) -> throwIO ex -- Re-throw other exceptions
+    pure (fromWreqResponse response, response)

@@ -10,6 +10,7 @@ module Pkg.DeriveUtils (
   UUIDId (..),
   WrappedEnum (..),
   WrappedEnumSC (..),
+  WrappedEnumInt (..),
   encodeEnumSC,
   WrappedEnumShow (..),
   addKeepaliveParams,
@@ -73,6 +74,7 @@ import Language.Haskell.TH.Syntax qualified as THS
 import Numeric (showHex)
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Relude
+import Relude.Extra.Enum (safeToEnum)
 import Relude.Unsafe qualified as Unsafe
 import Servant (FromHttpApiData (..))
 import Text.Casing (fromSnake, quietSnake, toPascal)
@@ -308,24 +310,19 @@ instance (KnownSymbol prefix, Read a, Show a) => FromHttpApiData (WrappedEnumSC 
   parseUrlPiece t = maybe (Left $ "Invalid " <> fromString (symbolVal (Proxy @prefix)) <> " value: " <> t) (Right . WrappedEnumSC) $ decodeEnumSC @prefix (toString @Text t)
 
 
+-- | Shared enum value list for a 'WrappedEnumSC' OpenApi schema.
+enumSCValues :: forall prefix a. (Bounded a, Enum a, KnownSymbol prefix, Show a) => [AE.Value]
+enumSCValues = [AE.String (toText $ encodeEnumSC @prefix v) | v <- [minBound @a .. maxBound @a]]
+
+
 instance {-# OVERLAPPABLE #-} (Bounded a, Enum a, KnownSymbol prefix, Show a, Typeable a, Typeable qualType) => ToSchema (WrappedEnumSC qualType prefix a) where
   declareNamedSchema (_ :: proxy (WrappedEnumSC qualType prefix a)) =
-    pure
-      $ NamedSchema Nothing
-      $ mempty
-      & type_
-      ?~ OpenApi.OpenApiString
-        & enum_
-      ?~ [AE.String (toText $ encodeEnumSC @prefix v) | v <- [minBound @a .. maxBound @a]]
+    pure $ NamedSchema Nothing $ mempty & type_ ?~ OpenApi.OpenApiString & enum_ ?~ enumSCValues @prefix @a
 
 
 instance (Bounded a, Enum a, KnownSymbol prefix, Show a) => ToParamSchema (WrappedEnumSC qualType prefix a) where
   toParamSchema (_ :: proxy (WrappedEnumSC qualType prefix a)) =
-    mempty
-      & type_
-      ?~ OpenApi.OpenApiString
-        & enum_
-      ?~ [AE.String (toText $ encodeEnumSC @prefix v) | v <- [minBound @a .. maxBound @a]]
+    mempty & type_ ?~ OpenApi.OpenApiString & enum_ ?~ enumSCValues @prefix @a
 
 
 -- | DerivingVia wrapper: produces ToSchema with snake_case field names matching DAE.Snake's ToJSON output.
@@ -373,6 +370,30 @@ instance Show a => HI.EncodeValue (WrappedEnumShow a) where
 
 instance Read a => HI.DecodeValue (WrappedEnumShow a) where
   decodeValue = refineText "WrappedEnumShow" (fmap WrappedEnumShow . readMaybe . toString)
+
+
+-- | Encode a @Bounded@/@Enum@ type as its 'fromEnum' 'Int' for INT columns / JSON-less
+-- DB round-trips. Use via @deriving (ToField, FromField, HI.EncodeValue, HI.DecodeValue) via WrappedEnumInt Foo@.
+newtype WrappedEnumInt a = WrappedEnumInt a
+  deriving (Generic)
+
+
+instance Enum a => ToField (WrappedEnumInt a) where
+  toField (WrappedEnumInt a) = toField (fromEnum a)
+
+
+instance (Bounded a, Enum a, Typeable a) => FromField (WrappedEnumInt a) where
+  fromField f bs =
+    fromField @Int f bs
+      >>= \n -> maybe (returnError ConversionFailed f ("Invalid enum int: " <> show n)) (pure . WrappedEnumInt) (safeToEnum n)
+
+
+instance Enum a => HI.EncodeValue (WrappedEnumInt a) where
+  encodeValue = contramap (\(WrappedEnumInt a) -> fromEnum a) HI.encodeValue
+
+
+instance (Bounded a, Enum a) => HI.DecodeValue (WrappedEnumInt a) where
+  decodeValue = WrappedEnumInt . fromMaybe minBound . safeToEnum <$> HI.decodeValue
 
 
 data BaselineState = BSLearning | BSEstablished
