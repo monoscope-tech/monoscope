@@ -383,6 +383,7 @@ validateNotificationChannels pid enabledChannels phones = do
 resolveSlackChannels :: Maybe SlackData -> ATAuthCtx [BotUtils.Channel]
 resolveSlackChannels = maybe (pure []) \d -> maybe [] (fromMaybe [] . (.channels)) <$> SlackP.getSlackChannels d.botToken d.teamId
 
+
 projectSlackChannels :: Projects.ProjectId -> ATAuthCtx [BotUtils.Channel]
 projectSlackChannels pid = getProjectSlackData pid >>= resolveSlackChannels
 
@@ -1198,7 +1199,7 @@ newtype LSData a = LSData {dataVal :: a}
 
 
 -- | Bearer GET against api.lemonsqueezy.com, decoding the @{data: ...}@ wrapper.
-lsGet :: forall a es. (HTTP :> es, AE.FromJSON a) => Text -> Text -> Eff es (Maybe (LSData a))
+lsGet :: forall a es. (AE.FromJSON a, HTTP :> es) => Text -> Text -> Eff es (Maybe (LSData a))
 lsGet apiKey url = do
   response <- W.getWith (Settings.lemonSqueezyOpts apiKey) (toString url)
   pure $ rightToMaybe $ AE.eitherDecode $ response ^. responseBody

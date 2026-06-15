@@ -992,11 +992,24 @@ scalarFuncToSQL name args
 subBinaryParts :: Expr -> Maybe (Subject, Values, Text, Text)
 subBinaryParts e = do
   (s, v, sym) <- case e of
-    Eq s v -> at s v "=="; NotEq s v -> at s v "!="; GTEq s v -> at s v ">="; LTEq s v -> at s v "<="
-    GT s v -> at s v ">"; LT s v -> at s v "<"; NotIn s v -> at s v "!in"; In s v -> at s v "in"
-    NotHas s v -> at s v "!has"; HasAll s v -> at s v "has_all"; HasAny s v -> at s v "has_any"; Has s v -> at s v "has"
-    NotContains s v -> at s v "!contains"; Contains s v -> at s v "contains"; NotStartsWith s v -> at s v "!startswith"
-    StartsWith s v -> at s v "startswith"; NotEndsWith s v -> at s v "!endswith"; EndsWith s v -> at s v "endswith"
+    Eq s v -> at s v "=="
+    NotEq s v -> at s v "!="
+    GTEq s v -> at s v ">="
+    LTEq s v -> at s v "<="
+    GT s v -> at s v ">"
+    LT s v -> at s v "<"
+    NotIn s v -> at s v "!in"
+    In s v -> at s v "in"
+    NotHas s v -> at s v "!has"
+    HasAll s v -> at s v "has_all"
+    HasAny s v -> at s v "has_any"
+    Has s v -> at s v "has"
+    NotContains s v -> at s v "!contains"
+    Contains s v -> at s v "contains"
+    NotStartsWith s v -> at s v "!startswith"
+    StartsWith s v -> at s v "startswith"
+    NotEndsWith s v -> at s v "!endswith"
+    EndsWith s v -> at s v "endswith"
     _ -> Nothing
   (_, _, qtok, dop) <- find (\(_, sym', _, _) -> sym' == sym) subjectBinOps
   pure (s, v, dop, qtok)
@@ -1007,8 +1020,12 @@ subBinaryParts e = do
 valBinaryParts :: Expr -> Maybe (Values, Values, Text, Text)
 valBinaryParts e = do
   (a, b, sym) <- case e of
-    ValEq a b -> at a b "=="; ValNotEq a b -> at a b "!="; ValGTEq a b -> at a b ">="
-    ValLTEq a b -> at a b "<="; ValGT a b -> at a b ">"; ValLT a b -> at a b "<"
+    ValEq a b -> at a b "=="
+    ValNotEq a b -> at a b "!="
+    ValGTEq a b -> at a b ">="
+    ValLTEq a b -> at a b "<="
+    ValGT a b -> at a b ">"
+    ValLT a b -> at a b "<"
     _ -> Nothing
   (_, _, qtok, dop) <- find (\(_, sym', _, _) -> sym' == sym) valBinOps
   pure (a, b, dop, qtok)

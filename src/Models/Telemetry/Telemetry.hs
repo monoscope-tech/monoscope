@@ -80,9 +80,10 @@ import Control.Lens ((.~))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
-import Data.Scientific (toBoundedInteger)
 import Data.ByteString.Base16 qualified as B16
 import Data.Default (Default (..))
+import Data.Effectful.Hasql (Hasql)
+import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.UUID (UUIDEff, genUUID)
 import Data.Generics.Labels ()
 import Data.HashMap.Strict qualified as HM
@@ -91,6 +92,7 @@ import Data.List qualified as L (groupBy)
 import Data.List.Extra (chunksOf)
 import Data.List.NonEmpty qualified as NE
 import Data.Map qualified as Map
+import Data.Scientific (toBoundedInteger)
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (Display)
@@ -101,8 +103,6 @@ import Data.Time.Clock (addUTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Data.Vector.Split qualified as VS
-import Data.Effectful.Hasql (Hasql)
-import Data.Effectful.Hasql qualified as Hasql
 import Database.PostgreSQL.Simple.FromField (Conversion, FromField (..))
 import Database.PostgreSQL.Simple.FromRow
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
@@ -634,11 +634,17 @@ getSpanRecordsByTraceId pid trId tme now = do
       (wideStart, wideEnd) = (addUTCTime (-86400) baseT, addUTCTime 86400 baseT)
       resolveHop ids =
         Hasql.interp
-          $ selectOtelSpans pid.toText wideStart wideEnd
+          $ selectOtelSpans
+            pid.toText
+            wideStart
+            wideEnd
             [HI.sql| AND context___trace_id=#{trId} AND context___span_id = ANY(#{ids})|]
   initial :: [OtelLogsAndSpans] <-
     Hasql.interp
-      $ selectOtelSpans pid.toText start end
+      $ selectOtelSpans
+        pid.toText
+        start
+        end
         [HI.sql| AND context___trace_id=#{trId} ORDER BY start_time ASC|]
   -- Resolve missing parents iteratively: a parent ingested outside ±5min
   -- (clock skew, late ingestion, async batch) is looked up via
@@ -673,7 +679,10 @@ getSpanRecordsByTraceIds pid traceIds tme = do
         Just ts -> (addUTCTime (-300) ts, addUTCTime 300 ts)
       traceIdsList = V.toList traceIds
   Hasql.interp
-    $ selectOtelSpans pid.toText start end'
+    $ selectOtelSpans
+      pid.toText
+      start
+      end'
       [HI.sql| AND context___trace_id = ANY(#{traceIdsList}) ORDER BY context___trace_id ASC, start_time ASC|]
 
 

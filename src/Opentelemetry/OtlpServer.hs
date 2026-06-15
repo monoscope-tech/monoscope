@@ -23,10 +23,10 @@ module Opentelemetry.OtlpServer (
 
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Exception.Annotated (checkpoint)
-import Data.Annotation (toAnnotation)
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
+import Data.Annotation (toAnnotation)
 import Data.Base64.Types qualified as B64
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
@@ -1480,12 +1480,14 @@ processTraceRequest metadataApiKey req =
    in processSignalRequest "Traces" "traces" "Received trace export request" "spans" "span_count" metadataApiKey (getSpanApiKey resourceSpans) (V.toList $ getSpanAttributeValue "at-project-id" resourceSpans) $ \currentTime projectCaches projectIdsAndKeys ->
         V.fromList $ convertResourceSpansToOtelLogs currentTime projectCaches projectIdsAndKeys resourceSpans
 
+
 -- | Process logs request with optional API key from gRPC metadata (extracted for testing)
 processLogsRequest :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es, UUIDEff :> es) => Maybe Text -> LS.ExportLogsServiceRequest -> Eff es ()
 processLogsRequest metadataApiKey req =
   let !resourceLogs = V.fromList $ req ^. PLF.resourceLogs
    in processSignalRequest "Logs" "logs" "Received logs export request" "logs" "log_count" metadataApiKey (getLogApiKey resourceLogs) (V.toList $ getLogAttributeValue "at-project-id" resourceLogs) $ \currentTime projectCaches projectIdsAndKeys ->
         V.fromList $ concatMap (convertResourceLogsToOtelLogs currentTime projectCaches projectIdsAndKeys) (V.toList resourceLogs)
+
 
 -- | Shared gRPC-direct ingestion pipeline for traces and logs: auth-verify, cache-fetch,
 -- convert (via the signal-specific converter), then stamp/mint/insert. Throws GrpcUnauthenticated
@@ -1697,8 +1699,8 @@ isFreeTierExceededCached appCtx = \case
 -- The per-signal parts are the rejected-count fn, the rejection-response builder,
 -- the dispatch label, and the process fn.
 mkOtlpRpcHandler
-  :: ( Message (Output (Protobuf service meth))
-     , Input (Protobuf service meth) ~ Proto req
+  :: ( Input (Protobuf service meth) ~ Proto req
+     , Message (Output (Protobuf service meth))
      , RequestMetadata (Protobuf service meth) ~ OtlpRequestMetadata
      , ResponseInitialMetadata (Protobuf service meth) ~ NoMetadata
      , ResponseTrailingMetadata (Protobuf service meth) ~ NoMetadata
@@ -1726,7 +1728,11 @@ mkOtlpRpcHandler appLogger appCtx tp label countFn rejectResp process = mkRpcHan
 -- | RpcHandler for trace service with metadata access
 traceServiceRpcHandler :: Logger -> AuthContext -> TracerProvider -> RpcHandler IO (Protobuf TS.TraceService "export")
 traceServiceRpcHandler appLogger appCtx tp =
-  mkOtlpRpcHandler appLogger appCtx tp "traces"
+  mkOtlpRpcHandler
+    appLogger
+    appCtx
+    tp
+    "traces"
     (\req -> fromIntegral $ sum [length (ss ^. PTF.spans) | rs <- req ^. TSF.resourceSpans, ss <- rs ^. PTF.scopeSpans])
     (\count -> defMessage & TSF.partialSuccess .~ (defMessage & TSF.rejectedSpans .~ count & TSF.errorMessage .~ "Free tier daily event limit exceeded"))
     processTraceRequest
@@ -1735,7 +1741,11 @@ traceServiceRpcHandler appLogger appCtx tp =
 -- | RpcHandler for logs service with metadata access
 logsServiceRpcHandler :: Logger -> AuthContext -> TracerProvider -> RpcHandler IO (Protobuf LS.LogsService "export")
 logsServiceRpcHandler appLogger appCtx tp =
-  mkOtlpRpcHandler appLogger appCtx tp "logs"
+  mkOtlpRpcHandler
+    appLogger
+    appCtx
+    tp
+    "logs"
     (\req -> fromIntegral $ sum [length (sl ^. PLF.logRecords) | rl <- req ^. LSF.resourceLogs, sl <- rl ^. PLF.scopeLogs])
     (\count -> defMessage & LSF.partialSuccess .~ (defMessage & LSF.rejectedLogRecords .~ count & LSF.errorMessage .~ "Free tier daily event limit exceeded"))
     processLogsRequest
@@ -1744,7 +1754,11 @@ logsServiceRpcHandler appLogger appCtx tp =
 -- | RpcHandler for metrics service with metadata access
 metricsServiceRpcHandler :: Logger -> AuthContext -> TracerProvider -> RpcHandler IO (Protobuf MS.MetricsService "export")
 metricsServiceRpcHandler appLogger appCtx tp =
-  mkOtlpRpcHandler appLogger appCtx tp "metrics"
+  mkOtlpRpcHandler
+    appLogger
+    appCtx
+    tp
+    "metrics"
     (\req -> fromIntegral $ sum [length (sm ^. PMF.metrics) | rm <- req ^. MSF.resourceMetrics, sm <- rm ^. PMF.scopeMetrics])
     (\count -> defMessage & MSF.partialSuccess .~ (defMessage & MSF.rejectedDataPoints .~ count & MSF.errorMessage .~ "Free tier daily event limit exceeded"))
     processMetricsRequest

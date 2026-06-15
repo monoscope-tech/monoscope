@@ -48,8 +48,8 @@ import Relude
 import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATBaseCtx)
-import Utils (toUriStr)
 import UnliftIO qualified
+import Utils (toUriStr)
 import Web.ApiHandlers qualified as ApiH
 
 
@@ -390,11 +390,11 @@ toolsListJson reg = AE.object ["tools" AE..= map descriptor (Map.elems reg)]
 -- | MCP tool-result envelope: text content + isError, with optional structuredContent.
 toolResult :: Bool -> Text -> Maybe AE.Value -> AE.Value
 toolResult isErr txt structured =
-  AE.object $
-    [ "content" AE..= ([textContent txt] :: [AE.Value])
-    , "isError" AE..= isErr
-    ]
-      <> maybe [] (\v -> ["structuredContent" AE..= v]) structured
+  AE.object
+    $ [ "content" AE..= ([textContent txt] :: [AE.Value])
+      , "isError" AE..= isErr
+      ]
+    <> maybe [] (\v -> ["structuredContent" AE..= v]) structured
 
 
 toolError :: Text -> AE.Value

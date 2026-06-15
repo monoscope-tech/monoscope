@@ -798,23 +798,41 @@ executeGetFieldValues config args = case getTextArg "field" args of
   Just field -> do
     let lim = getLimitArg "limit" config.limits.maxFieldValues config.limits.defaultFieldLimit args
         kqlQuery = "| summarize count() by " <> field <> " | sort by count_ desc | take " <> show lim
-    (.formatted) <$> runKqlWithRawData config kqlQuery [] (\(results, _, _) ->
-      ("Values for '" <> field <> "': " <> formatSummarizeResults results, AE.Null))
+    (.formatted)
+      <$> runKqlWithRawData
+        config
+        kqlQuery
+        []
+        ( \(results, _, _) ->
+            ("Values for '" <> field <> "': " <> formatSummarizeResults results, AE.Null)
+        )
   _ -> pure $ toolError "get_field_values" "missing 'field'" args
 
 
 executeGetServices :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Eff es Text
 executeGetServices config = do
   let kqlQuery = "| summarize count() by resource.service.name | sort by count_ desc | take " <> show config.limits.maxServices
-  (.formatted) <$> runKqlWithRawData config kqlQuery [] (\(results, _, _) ->
-    ("Available services: " <> formatSummarizeResults results, AE.Null))
+  (.formatted)
+    <$> runKqlWithRawData
+      config
+      kqlQuery
+      []
+      ( \(results, _, _) ->
+          ("Available services: " <> formatSummarizeResults results, AE.Null)
+      )
 
 
 executeCountQuery :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
 executeCountQuery config args = case getTextArg "query" args of
   Just kqlQuery ->
-    (.formatted) <$> runKqlWithRawData config kqlQuery [] (\(_, _, count) ->
-      ("Query '" <> kqlQuery <> "' matches " <> show count <> " entries", AE.Null))
+    (.formatted)
+      <$> runKqlWithRawData
+        config
+        kqlQuery
+        []
+        ( \(_, _, count) ->
+            ("Query '" <> kqlQuery <> "' matches " <> show count <> " entries", AE.Null)
+        )
   _ -> pure $ toolError "count_query" "missing 'query'" args
 
 
@@ -824,8 +842,14 @@ executeSampleLogs config args = case getTextArg "query" args of
     let lim = getLimitArg "limit" config.limits.maxSampleLogs config.limits.defaultSampleLimit args
         fullQuery = if "| take" `T.isInfixOf` kqlQuery then kqlQuery else kqlQuery <> " | take " <> show lim
         sampleColumns = ["level", "name", "resource.service.name", "body"]
-    (.formatted) <$> runKqlWithRawData config fullQuery sampleColumns (\(results, _, _) ->
-      ("Sample logs:\n" <> formatSampleLogs config.limits.maxBodyPreview results, AE.Null))
+    (.formatted)
+      <$> runKqlWithRawData
+        config
+        fullQuery
+        sampleColumns
+        ( \(results, _, _) ->
+            ("Sample logs:\n" <> formatSampleLogs config.limits.maxBodyPreview results, AE.Null)
+        )
   _ -> pure $ toolError "sample_logs" "missing 'query'" args
 
 

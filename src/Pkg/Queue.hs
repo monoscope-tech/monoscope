@@ -264,17 +264,18 @@ kafkaService appLogger appCtx tp role label kafkaTopics batchSize fn = checkpoin
                   runChunk topic records attrs = do
                     let ceType = HM.lookupDefault "" "ce-type" attrs
                     LogBase.localData ["topic" AE..= topic, "ce_type" AE..= ceType, "record_count" AE..= length records] do
-                      result <- liftIO
-                        $ tryAny
-                        $ runBackground appLogger appCtx tp
-                        $ runBatchSpan
-                          "kafka.process_batch"
-                          [ ("topic", OA.toAttribute topic)
-                          , ("message_count", OA.toAttribute (length records))
-                          , ("ce-type", OA.toAttribute ceType)
-                          , ("client_id", OA.toAttribute clientId)
-                          ]
-                          (fn records attrs)
+                      result <-
+                        liftIO
+                          $ tryAny
+                          $ runBackground appLogger appCtx tp
+                          $ runBatchSpan
+                            "kafka.process_batch"
+                            [ ("topic", OA.toAttribute topic)
+                            , ("message_count", OA.toAttribute (length records))
+                            , ("ce-type", OA.toAttribute ceType)
+                            , ("client_id", OA.toAttribute clientId)
+                            ]
+                            (fn records attrs)
                       -- Empty ack list = no commit (broker redelivers); non-empty
                       -- = durable. Kafka can't partial-ack within a partition so
                       -- processGroup commits all-or-nothing per partition group.
