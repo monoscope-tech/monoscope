@@ -43,7 +43,7 @@ import Pkg.EmailTemplates qualified as ET
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
-import Utils (FreeTierStatus, LoadingSize (..), LoadingType (..), checkFreeTierStatus, faSprite_, loadingIndicatorWith_)
+import Utils (FreeTierStatus, LoadingSize (..), LoadingType (..), checkFreeTierStatus, faSprite_, formatUTCMicros, loadingIndicatorWith_)
 
 
 data PerformanceReport = PerformanceReport
@@ -64,7 +64,7 @@ data StatData = StatData
   , change :: Double
   }
   deriving stock (Generic, Show)
-  deriving anyclass (AE.FromJSON)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 data SpanTypeStats = SpanTypeStats
@@ -75,7 +75,7 @@ data SpanTypeStats = SpanTypeStats
   , durationChange :: Double
   }
   deriving stock (Generic, Show)
-  deriving anyclass (AE.FromJSON)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 data DBQueryStat = DBQueryStat
@@ -84,7 +84,7 @@ data DBQueryStat = DBQueryStat
   , totalEvents :: Integer
   }
   deriving stock (Generic, Show)
-  deriving anyclass (AE.FromJSON)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 data ReportData = ReportData
@@ -98,7 +98,7 @@ data ReportData = ReportData
   , issues :: [Issues.IssueSummary]
   }
   deriving stock (Generic, Show)
-  deriving anyclass (AE.FromJSON)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 -- | Shared widget definitions for chart URL generation
@@ -122,19 +122,17 @@ anomalyTypeCounts getType =
 
 buildReportJson' :: Int -> Int -> Double -> Double -> V.Vector (Text, Int, Double, Int, Double) -> V.Vector (Text, Text, Text, Int64, Double, Int64, Double) -> V.Vector (Text, Int, Int) -> Charts.MetricsData -> Charts.MetricsData -> V.Vector Issues.IssueSummary -> AE.Value
 buildReportJson' totalEvents totalErrors eventsChange errorsChange spanTypeStatsDiff' endpointsPerformance slowDbQueries chartEv chartErr issues =
-  let spanStatsDiff = (\(t, e, chang, dur, durChange) -> AE.object ["spanType" AE..= t, "eventCount" AE..= e, "eventChange" AE..= chang, "averageDuration" AE..= dur, "durationChange" AE..= durChange]) <$> spanTypeStatsDiff'
-      perf = (\(u, m, p, d, dc, req, cc) -> AE.object ["host" AE..= u, "urlPath" AE..= p, "method" AE..= m, "averageDuration" AE..= d, "durationDiffPct" AE..= dc, "requestCount" AE..= req, "requestDiffPct" AE..= cc]) <$> V.take 10 endpointsPerformance
-      slowDbQueries' = (\(q, d, c) -> AE.object ["query" AE..= q, "averageDuration" AE..= d, "totalEvents" AE..= c]) <$> slowDbQueries
-   in AE.object
-        [ "endpoints" AE..= perf
-        , "events" AE..= AE.object ["total" AE..= totalEvents, "change" AE..= eventsChange]
-        , "errors" AE..= AE.object ["total" AE..= totalErrors, "change" AE..= errorsChange]
-        , "spanTypeStats" AE..= spanStatsDiff
-        , "slowDbQueries" AE..= slowDbQueries'
-        , "errorDataset" AE..= Widget.toWidgetDataset chartErr
-        , "eventsDataset" AE..= Widget.toWidgetDataset chartEv
-        , "issues" AE..= issues
-        ]
+  AE.toJSON
+    ReportData
+      { endpoints = (\(u, m, p, d, dc, req, cc) -> PerformanceReport{host = u, urlPath = p, method = m, averageDuration = fromIntegral d, durationDiffPct = dc, requestCount = fromIntegral req, requestDiffPct = cc}) <$> V.toList (V.take 10 endpointsPerformance)
+      , events = StatData{total = fromIntegral totalEvents, change = eventsChange}
+      , errors = StatData{total = fromIntegral totalErrors, change = errorsChange}
+      , spanTypeStats = (\(t, e, chang, dur, durChange) -> SpanTypeStats{spanType = t, eventCount = fromIntegral e, eventChange = chang, averageDuration = fromIntegral dur, durationChange = durChange}) <$> V.toList spanTypeStatsDiff'
+      , slowDbQueries = (\(q, d, c) -> DBQueryStat{query = q, averageDuration = fromIntegral d, totalEvents = fromIntegral c}) <$> V.toList slowDbQueries
+      , errorDataset = Widget.toWidgetDataset chartErr
+      , eventsDataset = Widget.toWidgetDataset chartEv
+      , issues = V.toList issues
+      }
 
 
 -- | Moved from BackgroundJobs
@@ -183,8 +181,8 @@ renderWeeklyEmail reportUrl project pid userName startTime endTime totalEvents t
   let reportUrl' = ctx.env.hostUrl <> reportUrl
       dayStart = show $ localDay (utcToLocalTimeTZ tz startTime)
       dayEnd = show $ localDay (utcToLocalTimeTZ tz endTime)
-      stmTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" startTime
-      endTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" endTime
+      stmTxt = formatUTCMicros startTime
+      endTxt = formatUTCMicros endTime
       (errTotal, apiTotal, qTotal, lpTotal, rcTotal) = anomalyTypeCounts (.issueType) anomalies
   eventsUrl <- Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid eventsWidget Nothing (Just stmTxt) (Just endTxt)
   errorsUrl <- Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid errorsWidget Nothing (Just stmTxt) (Just endTxt)

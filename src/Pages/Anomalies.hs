@@ -3,9 +3,7 @@ module Pages.Anomalies (
   anomalyBulkActionsPostH,
   escapedQueryPartial,
   acknowledgeAnomalyGetH,
-  unAcknowledgeAnomalyGetH,
   archiveAnomalyGetH,
-  unArchiveAnomalyGetH,
   anomalyDetailGetH,
   AnomalyBulkForm (..),
   AnomalyListGet (..),
@@ -109,45 +107,36 @@ newtype AnomalyBulkForm = AnomalyBulk
   deriving anyclass (FromForm)
 
 
-acknowledgeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> Maybe Text -> ATAuthCtx (RespHeaders AnomalyAction)
-acknowledgeAnomalyGetH pid aid hostM = do
+-- | Acknowledge (on=True) or un-acknowledge (on=False) an anomaly/issue.
+-- The acknowledge path cascades via the model helpers; the clear path resets the columns directly.
+acknowledgeAnomalyGetH :: Projects.ProjectId -> Bool -> Anomalies.AnomalyId -> Maybe Text -> ATAuthCtx (RespHeaders AnomalyAction)
+acknowledgeAnomalyGetH pid enable aid _hostM = do
   (sess, project) <- Projects.sessionAndProject pid
-  appCtx <- ask @AuthContext
   let issueId = UUIDId aid.unUUIDId
-  _ <- Issues.acknowledgeIssue issueId sess.user.id
-  Issues.logIssueActivity issueId Issues.IEAcknowledged (Just sess.user.id) Nothing
-  let text_id = V.fromList [UUID.toText aid.unUUIDId]
-  v <- Anomalies.acknowledgeAnomalies sess.user.id text_id
-  _ <- Anomalies.acknowlegeCascade sess.user.id (V.fromList v)
-  addRespHeaders $ Acknowlege pid (UUIDId aid.unUUIDId) True
+  if enable
+    then do
+      _ <- Issues.acknowledgeIssue issueId sess.user.id
+      Issues.logIssueActivity issueId Issues.IEAcknowledged (Just sess.user.id) Nothing
+      let text_id = V.fromList [UUID.toText aid.unUUIDId]
+      v <- Anomalies.acknowledgeAnomalies sess.user.id text_id
+      _ <- Anomalies.acknowlegeCascade sess.user.id (V.fromList v)
+      pass
+    else do
+      _ <- Hasql.interpExecute [HI.sql| update apis.issues set acknowledged_by=null, acknowledged_at=null where id=#{aid} |]
+      _ <- Hasql.interpExecute [HI.sql| update apis.anomalies set acknowledged_by=null, acknowledged_at=null where id=#{aid} |]
+      Issues.logIssueActivity issueId Issues.IEUnacknowledged (Just sess.user.id) Nothing
+  addRespHeaders $ Acknowlege pid issueId enable
 
 
-unAcknowledgeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (RespHeaders AnomalyAction)
-unAcknowledgeAnomalyGetH pid aid = do
+-- | Archive (on=True) or un-archive (on=False) an anomaly/issue.
+archiveAnomalyGetH :: Projects.ProjectId -> Bool -> Anomalies.AnomalyId -> ATAuthCtx (RespHeaders AnomalyAction)
+archiveAnomalyGetH pid enable aid = do
   (sess, project) <- Projects.sessionAndProject pid
-  _ <- Hasql.interpExecute [HI.sql| update apis.issues set acknowledged_by=null, acknowledged_at=null where id=#{aid} |]
-  _ <- Hasql.interpExecute [HI.sql| update apis.anomalies set acknowledged_by=null, acknowledged_at=null where id=#{aid} |]
-  Issues.logIssueActivity (UUIDId aid.unUUIDId) Issues.IEUnacknowledged (Just sess.user.id) Nothing
-  addRespHeaders $ Acknowlege pid (UUIDId aid.unUUIDId) False
-
-
-archiveAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (RespHeaders AnomalyAction)
-archiveAnomalyGetH pid aid = do
-  (sess, project) <- Projects.sessionAndProject pid
-  now <- Time.currentTime
-  _ <- Hasql.interpExecute [HI.sql| update apis.issues set archived_at=#{now} where id=#{aid} |]
-  _ <- Hasql.interpExecute [HI.sql| update apis.anomalies set archived_at=#{now} where id=#{aid} |]
-  Issues.logIssueActivity (UUIDId aid.unUUIDId) Issues.IEArchived (Just sess.user.id) Nothing
-  addRespHeaders $ Archive pid (UUIDId aid.unUUIDId) True
-
-
-unArchiveAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (RespHeaders AnomalyAction)
-unArchiveAnomalyGetH pid aid = do
-  (sess, project) <- Projects.sessionAndProject pid
-  _ <- Hasql.interpExecute [HI.sql| update apis.issues set archived_at=null where id=#{aid} |]
-  _ <- Hasql.interpExecute [HI.sql| update apis.anomalies set archived_at=null where id=#{aid} |]
-  Issues.logIssueActivity (UUIDId aid.unUUIDId) Issues.IEUnarchived (Just sess.user.id) Nothing
-  addRespHeaders $ Archive pid (UUIDId aid.unUUIDId) False
+  archivedAt <- if enable then Just <$> Time.currentTime else pure Nothing
+  _ <- Hasql.interpExecute [HI.sql| update apis.issues set archived_at=#{archivedAt} where id=#{aid} |]
+  _ <- Hasql.interpExecute [HI.sql| update apis.anomalies set archived_at=#{archivedAt} where id=#{aid} |]
+  Issues.logIssueActivity (UUIDId aid.unUUIDId) (if enable then Issues.IEArchived else Issues.IEUnarchived) (Just sess.user.id) Nothing
+  addRespHeaders $ Archive pid (UUIDId aid.unUUIDId) enable
 
 
 data AnomalyAction
@@ -284,27 +273,39 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
 -- element stays as a single chip even if its value contains internal
 -- whitespace (user-agent, page title). Right-rail metadata renders with a
 -- subdued style so the primary fields stay visually dominant.
+-- | Unescape JSON-ish whitespace/quotes embedded in summary tokens.
+unescSummary :: Text -> Text
+unescSummary = T.replace "\\\"" "\"" . T.replace "\\n" " " . T.replace "\\t" " "
+
+
+-- | Style->class mapping shared by the chip and inline-text summary renderers.
+-- When @wrap@ is True (chips) the classes gain whitespace-pre-wrap/break-* suffixes.
+summaryTokenClass :: Bool -> Text -> Text
+summaryTokenClass wrap style = case style of
+  s | "badge-" `T.isPrefixOf` s -> "cbadge-sm " <> s <> badgeWrap
+  "neutral" -> "cbadge-sm badge-neutral" <> badgeWrap
+  "text-textWeak" -> "text-textWeak text-xs" <> textWrap
+  "text-weak" -> "text-textWeak text-xs" <> textWrap
+  "text-textStrong" -> "text-textStrong text-xs font-medium" <> textWrap
+  _ -> "cbadge-sm badge-neutral" <> badgeWrap
+  where
+    badgeWrap = if wrap then " whitespace-pre-wrap break-all" else ""
+    textWrap = if wrap then " whitespace-pre-wrap break-words" else ""
+
+
 renderSummaryChips_ :: Monad m => V.Vector Text -> HtmlT m ()
 renderSummaryChips_ summary = V.forM_ summary \token ->
   case T.breakOn "\8658" token of
-    (_, "") -> span_ [class_ "text-textWeak text-xs whitespace-pre-wrap break-words"] $ toHtml $ unesc token
+    (_, "") -> span_ [class_ "text-textWeak text-xs whitespace-pre-wrap break-words"] $ toHtml $ unescSummary token
     (left, rest) -> do
-      let value = unesc $ T.drop 1 rest
+      let value = unescSummary $ T.drop 1 rest
           (field, style) = case T.breakOn ";" left of
             (f, s) | not (T.null s) -> (f, T.drop 1 s)
             _ -> ("", left)
           baseStyle = fromMaybe style $ T.stripPrefix "right-" style
-          cls = case baseStyle of
-            s | "badge-" `T.isPrefixOf` s -> "cbadge-sm " <> s <> " whitespace-pre-wrap break-all"
-            "neutral" -> "cbadge-sm badge-neutral whitespace-pre-wrap break-all"
-            "text-textWeak" -> "text-textWeak text-xs whitespace-pre-wrap break-words"
-            "text-weak" -> "text-textWeak text-xs whitespace-pre-wrap break-words"
-            "text-textStrong" -> "text-textStrong text-xs font-medium whitespace-pre-wrap break-words"
-            _ -> "cbadge-sm badge-neutral whitespace-pre-wrap break-all"
+          cls = summaryTokenClass True baseStyle
           tipAttr = [term "data-tippy-content" field | not (T.null field)]
       span_ ([class_ $ cls <> " inline-block max-w-full"] <> tipAttr) $ toHtml value
-  where
-    unesc = T.replace "\\\"" "\"" . T.replace "\\n" " " . T.replace "\\t" " "
 
 
 -- | Smart default time range based on anomaly age.
@@ -495,6 +496,14 @@ activityPanel_ pid issueId extraClass spans = do
       $ loadingIndicator_ LdSM LdDots
 
 
+-- | One labelled icon+value row used in the Error/Endpoint detail panels.
+detailItem_ :: (Text, Text, Text, Text) -> Html ()
+detailItem_ (icn, iconColor, lbl, value) = div_ [class_ "flex items-center gap-1.5 whitespace-nowrap"] do
+  faSprite_ icn "regular" $ "w-3 h-3 " <> iconColor
+  span_ [class_ "text-xs text-textWeak"] $ toHtml lbl <> ":"
+  span_ [class_ "text-xs font-medium"] $ toHtml value
+
+
 anomalyDetailPage :: Projects.ProjectId -> Issues.Issue -> Maybe Telemetry.Trace -> V.Vector Telemetry.SpanRecord -> Maybe ErrorPatterns.ErrorPatternL -> UTCTime -> Bool -> V.Vector ProjectMembers.ProjectMemberVM -> TimePicker.TimePicker -> Maybe (V.Vector Text) -> Html ()
 anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp sampleOverride = do
   let (_, _, currentRange) = TimePicker.parseTimeRange now tp
@@ -595,10 +604,6 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp sampleOverri
           let trimmedStack = T.strip exceptionData.stackTrace
               hasStack = not $ T.null trimmedStack
               errorFirstLine = if hasStack then fromMaybe trimmedStack $ viaNonEmpty head $ lines trimmedStack else exceptionData.errorMessage
-              detailItem (icn, iconColor, lbl, value) = div_ [class_ "flex items-center gap-1.5 whitespace-nowrap"] do
-                faSprite_ icn "regular" $ "w-3 h-3 " <> iconColor
-                span_ [class_ "text-xs text-textWeak"] $ toHtml lbl <> ":"
-                span_ [class_ "text-xs font-medium"] $ toHtml value
           -- Chart + Error Details in one row
           div_ [class_ "flex flex-col lg:flex-row gap-4 lg:items-start"] do
             div_ [class_ "min-w-0 flex-1"] $ volumeChart_ "Error Frequency"
@@ -618,13 +623,13 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp sampleOverri
                       [ ("calendar" :: Text, "text-fillBrand-strong" :: Text, "First seen" :: Text, compactTimeAgo $ toText $ prettyTimeAuto now (zonedTimeToUTC err.createdAt))
                       , ("calendar" :: Text, "text-fillBrand-strong" :: Text, "Last seen" :: Text, compactTimeAgo $ toText $ prettyTimeAuto now (zonedTimeToUTC err.updatedAt))
                       ]
-                      detailItem
+                      detailItem_
                   div_ [class_ "flex flex-wrap items-center gap-x-5 gap-y-2"]
                     $ forM_
                       [ ("code" :: Text, "text-fillWarning-strong" :: Text, "Stack" :: Text, fromMaybe "Unknown stack" err.errorData.runtime)
                       , ("server" :: Text, "text-fillSuccess-strong" :: Text, "Service" :: Text, fromMaybe "Unknown service" err.errorData.serviceName)
                       ]
-                      detailItem
+                      detailItem_
           -- Stack trace + Activity (Activity column merges User Journey + issue events)
           div_ [class_ "flex flex-col lg:flex-row gap-4 lg:items-start"] do
             div_ [class_ "min-w-0 flex-1"]
@@ -658,11 +663,7 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp sampleOverri
             span_ [class_ "text-xs text-textWeak mb-2 block font-semibold uppercase tracking-wide"] "Query"
             div_ [class_ "bg-fillInformation-weak border border-strokeInformation-weak rounded-lg p-3 text-sm font-mono text-fillInformation-strong max-w-2xl overflow-x-auto"] $ toHtml alertData.queryExpression
         Issues.ApiChange -> withIssueDataH @Issues.APIChangeData issue.issueData \d -> do
-          let detailItem (icn, iconColor, lbl, value) = div_ [class_ "flex items-center gap-1.5 whitespace-nowrap"] do
-                faSprite_ icn "regular" $ "w-3 h-3 " <> iconColor
-                span_ [class_ "text-xs text-textWeak"] $ toHtml lbl <> ":"
-                span_ [class_ "text-xs font-medium"] $ toHtml value
-              fieldChip color f = span_ [class_ $ "font-mono text-xs px-2 py-0.5 rounded bg-fillWeaker " <> color] $ toHtml f
+          let fieldChip color f = span_ [class_ $ "font-mono text-xs px-2 py-0.5 rounded bg-fillWeaker " <> color] $ toHtml f
               fieldList :: Text -> Text -> Text -> V.Vector Text -> Html ()
               fieldList lbl color icn fields
                 | V.null fields = pass
@@ -694,13 +695,13 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp sampleOverri
                     [ ("calendar" :: Text, "text-fillBrand-strong" :: Text, "First seen" :: Text, compactTimeAgo $ toText $ prettyTimeAuto now (zonedTimeToUTC issue.createdAt))
                     , ("calendar" :: Text, "text-fillBrand-strong" :: Text, "Last seen" :: Text, compactTimeAgo $ toText $ prettyTimeAuto now (zonedTimeToUTC issue.updatedAt))
                     ]
-                    detailItem
+                    detailItem_
                 div_ [class_ "flex flex-wrap items-center gap-x-5 gap-y-2"]
                   $ forM_
                     [ ("server" :: Text, "text-fillSuccess-strong" :: Text, "Service" :: Text, fromMaybe "Unknown service" issue.service)
                     , ("hashtag" :: Text, "text-fillBrand-strong" :: Text, "Requests" :: Text, formatWithCommas (fromIntegral issue.affectedRequests :: Double))
                     ]
-                    detailItem
+                    detailItem_
           -- Field changes (or "new endpoint" hint) + Activity panel
           div_ [class_ "flex flex-col lg:flex-row gap-4 lg:items-start"] do
             div_ [class_ "min-w-0 flex-1"]
@@ -1251,10 +1252,6 @@ toolCallView_ tc =
     unless (T.null tc.resultPreview) $ div_ [class_ "text-xs text-textWeak font-mono pl-4 whitespace-pre-wrap break-all"] $ toHtml $ "→ " <> tc.resultPreview
 
 
-parseStoredJSON :: AE.FromJSON a => Maybe (Aeson AE.Value) -> Maybe a
-parseStoredJSON = (>>= parseMaybe AE.parseJSON . getAeson)
-
-
 withIssueDataH :: (AE.FromJSON a, Applicative m) => Aeson AE.Value -> (a -> m ()) -> m ()
 withIssueDataH d f = case AE.fromJSON (getAeson d) of
   AE.Success v -> f v
@@ -1270,15 +1267,11 @@ processWidgetsWithToolData toolCalls = map \w -> case w.query >>= findToolCallDa
 
 -- | Find matching tool call data for a widget query
 findToolCallData :: [AI.ToolCallInfo] -> Text -> Maybe AE.Value
-findToolCallData toolCalls widgetQuery = listToMaybe [rd | tc <- toolCalls, tc.name == "run_query", Just q <- [Map.lookup "query" tc.args >>= getText], normalizeQuery q == normalizeQuery widgetQuery, Just rd <- [tc.rawData]]
+findToolCallData toolCalls widgetQuery = listToMaybe [rd | tc <- toolCalls, tc.name == "run_query", Just q <- [Map.lookup "query" tc.args >>= getText], norm q == norm widgetQuery, Just rd <- [tc.rawData]]
   where
     getText (AE.String t) = Just t
     getText _ = Nothing
-
-
--- | Normalize query for comparison (remove whitespace variations)
-normalizeQuery :: Text -> Text
-normalizeQuery = unwords . words
+    norm = unwords . words -- normalize for comparison (whitespace-insensitive)
 
 
 -- | Convert tool call raw data to WidgetDataset
@@ -1315,6 +1308,11 @@ pairUserAssistant :: [Issues.AIChatMessage] -> [(Issues.AIChatMessage, Issues.AI
 pairUserAssistant (u : a : rest) | u.role == "user" && a.role == "assistant" = (u, a) : pairUserAssistant rest
 pairUserAssistant (_ : rest) = pairUserAssistant rest
 pairUserAssistant [] = []
+
+
+-- | Decode a stored JSONB value (anomaly metadata, widget lists) into a typed payload.
+parseStoredJSON :: AE.FromJSON a => Maybe (Aeson AE.Value) -> Maybe a
+parseStoredJSON = (>>= parseMaybe AE.parseJSON . getAeson)
 
 
 -- | Parse stored content - try JSON format first (stripping code blocks), fall back to plain text
@@ -1596,23 +1594,15 @@ renderLogContent_ txt =
 renderSummaryText_ :: Monad m => Text -> HtmlT m ()
 renderSummaryText_ txt = forM_ (words txt) \token ->
   case T.breakOn "⇒" token of
-    (_, "") -> span_ [class_ "mr-1"] $ toHtml $ unesc token
+    (_, "") -> span_ [class_ "mr-1"] $ toHtml $ unescSummary token
     (left, rest) -> do
-      let value = unesc $ T.drop 1 rest
+      let value = unescSummary $ T.drop 1 rest
           (field, style) = case T.breakOn ";" left of
             (f, s) | not (T.null s) -> (f, T.drop 1 s)
             _ -> ("", left)
-          cls = case style of
-            s | "badge-" `T.isPrefixOf` s -> "cbadge-sm " <> s
-            "neutral" -> "cbadge-sm badge-neutral"
-            "text-textWeak" -> "text-textWeak text-xs"
-            "text-weak" -> "text-textWeak text-xs"
-            "text-textStrong" -> "text-textStrong text-xs font-medium"
-            _ -> "cbadge-sm badge-neutral"
+          cls = summaryTokenClass False style
           tipAttr = [term "data-tippy-content" field | not (T.null field)]
       span_ ([class_ $ cls <> " mr-1 inline-block"] <> tipAttr) $ toHtml value
-  where
-    unesc = T.replace "\\\"" "\"" . T.replace "\\n" " " . T.replace "\\t" " "
 
 
 renderIssueTitle_ :: Issues.IssueL -> Html ()
@@ -1730,13 +1720,12 @@ issuePreview_ Issues.IssueL{base} = div_ [class_ "flex items-center gap-2 min-w-
         logPatternPreview d.logPattern d.sampleMessage
       Issues.ApiChange -> withIssueDataH @Issues.APIChangeData base.issueData \d ->
         previewSnippet $ d.endpointMethod <> " " <> d.endpointPath <> if T.null d.endpointHost then "" else " on " <> d.endpointHost
-    previewSnippet txt = span_ [class_ "font-mono truncate min-w-0", term "data-tippy-content" txt] $ renderWithPlaceholders_ $ unescapeJson txt
+    previewSnippet txt = span_ [class_ "font-mono truncate min-w-0", term "data-tippy-content" txt] $ renderWithPlaceholders_ $ unescSummary txt
     summaryPreview txt = span_ [class_ "truncate min-w-0"] $ renderSummaryText_ txt
     logPatternPreview pat sampleMsg
       | "⇒" `T.isInfixOf` pat = summaryPreview pat
       | Just msg <- sampleMsg, not (T.null msg) = previewSnippet msg
       | otherwise = previewSnippet pat
-    unescapeJson = T.replace "\\\"" "\"" . T.replace "\\n" " " . T.replace "\\t" " "
 
 
 anomalyAcknowledgeButton :: Projects.ProjectId -> Issues.IssueId -> Bool -> Text -> Html ()

@@ -349,13 +349,20 @@ processReportQuery pid reportType envCfg = do
       pure $ Right (report, eventsUrl, errorsUrl)
 
 
--- | Format report for Slack
-formatReportForSlack :: Reports.Report -> Projects.ProjectId -> EnvConfig -> Text -> Text -> Text -> AE.Value
-formatReportForSlack report pid envCfg eventsUrl errorsUrl channelId =
+-- | Shared report-render preamble: (reportUrl, startTxt, endTxt, totalEvents, totalErrors)
+reportHeader :: Reports.Report -> Projects.ProjectId -> EnvConfig -> (Text, Text, Text, Int, Int)
+reportHeader report pid envCfg =
   let reportUrl = envCfg.hostUrl <> "p/" <> pid.toText <> "/reports/" <> report.id.toText
       startTxt = T.take 10 $ toText $ formatTime defaultTimeLocale "%Y-%m-%d" report.startTime
       endTxt = T.take 10 $ toText $ formatTime defaultTimeLocale "%Y-%m-%d" report.endTime
       (totalEvents, totalErrors) = parseReportStats report.reportJson
+   in (reportUrl, startTxt, endTxt, totalEvents, totalErrors)
+
+
+-- | Format report for Slack
+formatReportForSlack :: Reports.Report -> Projects.ProjectId -> EnvConfig -> Text -> Text -> Text -> AE.Value
+formatReportForSlack report pid envCfg eventsUrl errorsUrl channelId =
+  let (reportUrl, startTxt, endTxt, totalEvents, totalErrors) = reportHeader report pid envCfg
    in AE.object
         [ "blocks"
             AE..= AE.Array
@@ -378,10 +385,7 @@ formatReportForSlack report pid envCfg eventsUrl errorsUrl channelId =
 -- | Format report for Discord
 formatReportForDiscord :: Reports.Report -> Projects.ProjectId -> EnvConfig -> Text -> Text -> AE.Value
 formatReportForDiscord report pid envCfg eventsUrl errorsUrl =
-  let reportUrl = envCfg.hostUrl <> "p/" <> pid.toText <> "/reports/" <> report.id.toText
-      startTxt = T.take 10 $ toText $ formatTime defaultTimeLocale "%Y-%m-%d" report.startTime
-      endTxt = T.take 10 $ toText $ formatTime defaultTimeLocale "%Y-%m-%d" report.endTime
-      (totalEvents, totalErrors) = parseReportStats report.reportJson
+  let (reportUrl, startTxt, endTxt, totalEvents, totalErrors) = reportHeader report pid envCfg
    in AE.object
         [ "flags" AE..= (32768 :: Int)
         , "components"
@@ -408,10 +412,7 @@ formatReportForDiscord report pid envCfg eventsUrl errorsUrl =
 -- | Format report for WhatsApp
 formatReportForWhatsApp :: Reports.Report -> Projects.ProjectId -> EnvConfig -> Text
 formatReportForWhatsApp report pid envCfg =
-  let reportUrl = envCfg.hostUrl <> "p/" <> pid.toText <> "/reports/" <> report.id.toText
-      startTxt = T.take 10 $ toText $ formatTime defaultTimeLocale "%Y-%m-%d" report.startTime
-      endTxt = T.take 10 $ toText $ formatTime defaultTimeLocale "%Y-%m-%d" report.endTime
-      (totalEvents, totalErrors) = parseReportStats report.reportJson
+  let (reportUrl, startTxt, endTxt, totalEvents, totalErrors) = reportHeader report pid envCfg
    in "📊 " <> T.toTitle report.reportType <> " Report\nPeriod: " <> startTxt <> " - " <> endTxt <> "\nTotal Events: " <> show totalEvents <> "\nTotal Errors: " <> show totalErrors <> "\nView: " <> reportUrl
 
 

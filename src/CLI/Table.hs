@@ -20,11 +20,8 @@ module CLI.Table (
   numeric,
   muted,
   brand,
-  success,
-  failure,
 
   -- * Rendering
-  renderRichTable,
   renderRichTableWith,
   RichTableOpts (..),
   defaultRichTableOpts,
@@ -74,13 +71,11 @@ data Align = AlignLeft | AlignRight | AlignCenter
 type Cell = (CellStyle, Text)
 
 
-plain, numeric, muted, brand, success, failure :: Text -> Cell
+plain, numeric, muted, brand :: Text -> Cell
 plain t = (Plain, t)
 numeric t = (Numeric, t)
 muted t = (Muted, t)
 brand t = (Brand, t)
-success t = (Success, t)
-failure t = (Failure, t)
 
 
 -- | Wrap a severity-typed cell. Lower-cased input is tolerated.
@@ -108,12 +103,6 @@ defaultRichTableOpts :: RichTableOpts
 defaultRichTableOpts = RichTableOpts{alignments = [], maxWidth = Nothing, wrapRightmost = True}
 
 
--- | The vanilla renderer: defaults for alignment + width. Use this for most
--- list commands.
-renderRichTable :: IOE :> es => [Text] -> [[Cell]] -> Eff es ()
-renderRichTable = renderRichTableWith defaultRichTableOpts
-
-
 -- | Render with explicit knobs.
 --
 -- - In JSON/YAML mode this is a no-op (rendering goes through 'renderJSON'
@@ -133,12 +122,12 @@ renderRichTableWith opts headers rows = do
       let cap = fromMaybe termW opts.maxWidth
           aligns = zipWith const (opts.alignments <> repeat AlignLeft) headers
           (widths, normalized) = layout opts.wrapRightmost cap headers rows
-      liftIO $ putTextLn (topBorder widths)
+      liftIO $ putTextLn (border ("╭", "┬", "╮") widths)
       liftIO $ putTextLn (renderHeaderRow ansi aligns widths headers)
-      liftIO $ putTextLn (midBorder widths)
+      liftIO $ putTextLn (border ("├", "┼", "┤") widths)
       forM_ normalized $ \r ->
         liftIO $ putTextLn (renderRow ansi aligns widths r)
-      liftIO $ putTextLn (bottomBorder widths)
+      liftIO $ putTextLn (border ("╰", "┴", "╯") widths)
 
 
 -- | One line of muted text, intended for "… N more — use --limit / --cursor"
@@ -195,10 +184,8 @@ truncateCell w t
 
 -- Borders
 
-topBorder, midBorder, bottomBorder :: [Int] -> Text
-topBorder ws = "╭" <> T.intercalate "┬" [T.replicate (w + 2) "─" | w <- ws] <> "╮"
-midBorder ws = "├" <> T.intercalate "┼" [T.replicate (w + 2) "─" | w <- ws] <> "┤"
-bottomBorder ws = "╰" <> T.intercalate "┴" [T.replicate (w + 2) "─" | w <- ws] <> "╯"
+border :: (Text, Text, Text) -> [Int] -> Text
+border (l, j, r) ws = l <> T.intercalate j [T.replicate (w + 2) "─" | w <- ws] <> r
 
 
 -- Rows

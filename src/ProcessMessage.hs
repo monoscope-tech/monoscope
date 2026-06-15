@@ -551,12 +551,6 @@ convertRequestMessageToSpan rm msgSize (spanId, trId) =
 
 -- Using nestedJsonFromDotNotation from Utils module
 
--- Helper function to merge JSON objects
--- Now using lodashMerge from aeson-extra which properly handles nested objects
-mergeJsonObjects :: AE.Value -> AE.Value -> AE.Value
-mergeJsonObjects = lodashMerge
-
-
 createSpanAttributes :: RequestMessage -> AE.Value
 createSpanAttributes rm =
   let baseAttrs =
@@ -601,7 +595,7 @@ createSpanAttributes rm =
         reqHeaders = extractHeaders "http.request.headers." rm.requestHeaders
         respHeaders = extractHeaders "http.response.headers." rm.responseHeaders
        in
-        reqHeaders `mergeJsonObjects` respHeaders
+        reqHeaders `lodashMerge` respHeaders
 
 
 -- $setup
@@ -917,18 +911,7 @@ commonFormatPatterns =
 -- >>> map valueToFormatStr ["v1"]
 --
 valueToFormatStr :: Text -> Maybe Text
-valueToFormatStr val = checkFormats formatChecks
-  where
-    checkFormats :: [(RE, Text)] -> Maybe Text
-    checkFormats [] = Nothing
-    checkFormats ((regex, format) : rest) =
-      if matched (val ?=~ regex)
-        then Just format
-        else checkFormats rest
-
-    -- Use exact match patterns first, then fallback to common patterns
-    formatChecks :: [(RE, Text)]
-    formatChecks = commonFormatPatterns
+valueToFormatStr val = snd <$> find (\(regex, _) -> matched (val ?=~ regex)) commonFormatPatterns
 
 
 -- | Detect dynamic URL segments and replace them with named parameters.

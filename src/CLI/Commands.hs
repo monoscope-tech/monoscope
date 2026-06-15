@@ -387,11 +387,11 @@ renderSearchResult validatedOpts mode val = do
       normalized = case decodeEvents val of
         Nothing -> val
         Just d -> normalizeDecoded d validatedOpts.fields
-      sliced = if firstOnly then takeFirstEvent normalized else normalized
+      sliced = if firstOnly then takeFirst "events" normalized else normalized
       -- Mirror --first into the raw envelope so table mode also shows
       -- one row instead of all-of-them (the JSON path used to slice and
       -- the table path didn't, leading to inconsistent output).
-      valForTable = if firstOnly then takeFirstRow val else val
+      valForTable = if firstOnly then takeFirst "logsData" val else val
   if validatedOpts.idOnly
     -- C11: --id-only short-circuits to a bare id on stdout — the natural
     -- input for "search → get" pipelines, no jq required.
@@ -555,12 +555,11 @@ resolveOffsetPair now = map (second resolve)
       Nothing -> t
 
 
--- | Trim the normalised events envelope to the first event only, preserving
--- @count@/@cursor@/@has_more@ semantics for downstream pagination. The
--- raw-envelope variant 'takeFirstRow' targets @logsData@ for table mode.
-takeFirstEvent, takeFirstRow :: AE.Value -> AE.Value
-takeFirstEvent v = v & AL.key "events" . AL._Array %~ V.take 1
-takeFirstRow v = v & AL.key "logsData" . AL._Array %~ V.take 1
+-- | Trim an envelope to its first array element under key @k@, preserving
+-- @count@/@cursor@/@has_more@ semantics for downstream pagination. Use
+-- @"events"@ for the normalised envelope and @"logsData"@ for table mode.
+takeFirst :: AE.Key -> AE.Value -> AE.Value
+takeFirst k v = v & AL.key k . AL._Array %~ V.take 1
 
 
 -- | Print the first event's @id@ to stdout; exit non-zero if there isn't one.

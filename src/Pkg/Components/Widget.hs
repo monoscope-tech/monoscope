@@ -253,6 +253,12 @@ encodeText :: AE.ToJSON a => a -> Text
 encodeText = decodeUtf8 . fromLazy . AE.encode
 
 
+-- | HTMX fetch URL for a (already eager-prepared) widget: the project-scoped
+-- /widget endpoint with the widget JSON url-encoded as a query param.
+widgetFetchUrl :: Widget -> Text
+widgetFetchUrl w = "/p/" <> maybe "" (.toText) w._projectId <> "/widget?widgetJSON=" <> decodeUtf8 (urlEncode True $ encodeUtf8 $ encodeText w)
+
+
 -- | Data attributes for table row click handling (delegated via global JS handler in widgets.ts)
 rowClickTableAttrs :: Widget -> [Attribute]
 rowClickTableAttrs widget = flip foldMap widget.onRowClick \action ->
@@ -576,56 +582,49 @@ renderLogsWidget widget = do
       ("" :: Text)
 
 
+-- | Shared sticky table @thead@ with sortable column headers. Each column is a
+-- (title, optional align-class) pair. When @sortable@ is True the @th@ gets the
+-- @window.sortTable@ onclick + a hover sort-arrow; otherwise it's a plain header.
+sortableTableHead_ :: Text -> Bool -> [(Text, Maybe Text)] -> Html ()
+sortableTableHead_ tableId sortable cols =
+  thead_ [class_ "sticky top-0 z-10 before:content-[''] before:absolute before:left-0 before:right-0 before:bottom-0 before:h-px before:bg-strokeWeak"]
+    $ tr_ []
+    $ ifor_ cols \idx (title, align) ->
+      th_
+        ( [ class_ $ "text-left bg-bgRaised sticky top-0 cursor-pointer hover:bg-fillWeak transition-colors group " <> fromMaybe "" align
+          , data_ "sort-direction" "none"
+          ]
+            <> [onclick_ $ "window.sortTable('" <> tableId <> "', " <> show (idx :: Int) <> ", this)" | sortable]
+        )
+        $ headerRow_ [] do
+          toHtml title
+          when sortable $ span_ [class_ "sort-arrow ml-1 text-iconNeutral opacity-0 group-hover:opacity-100", data_ "sort" "none"] "↕"
+
+
 renderTraceTable :: Widget -> Html ()
 renderTraceTable widget = do
-  let tableId = maybeToMonoid widget.id
-  let eagerWidget = widget & #eager ?~ True & #pngUrl .~ Nothing & #html .~ Nothing & #dataset .~ Nothing
-  let widgetJson = fromLazy $ AE.encode eagerWidget
-  withCardFrame True widget Nothing do
-    div_
-      [ class_ "h-full overflow-auto p-3"
-      , hxGet_ $ "/p/" <> maybe "" (.toText) widget._projectId <> "/widget?widgetJSON=" <> decodeUtf8 (urlEncode True widgetJson)
-      , hxTrigger_ "load, update-query from:window"
-      , hxTarget_ $ "#" <> tableId
-      , hxSelect_ $ "#" <> tableId
-      , hxSwap_ "outerHTML"
-      , hxExt_ "forward-page-params"
-      ]
-      do
-        case widget.html of
-          Just html -> toHtmlRaw html
-          Nothing ->
-            table_ [class_ "table table-zebra table-sm w-full relative", id_ tableId] do
-              thead_ [class_ "sticky top-0 z-10 before:content-[''] before:absolute before:left-0 before:right-0 before:bottom-0 before:h-px before:bg-strokeWeak"] do
-                tr_ [] do
-                  ifor_ (["Resource", "Span name", "Duration", "Latency breakdown"] :: [Text]) \idx col ->
-                    th_
-                      [ class_ "text-left bg-bgRaised sticky top-0 cursor-pointer hover:bg-fillWeak transition-colors group "
-                      , onclick_ $ "window.sortTable('" <> tableId <> "', " <> show (idx :: Int) <> ", this)"
-                      , data_ "sort-direction" "none"
-                      ]
-                      do
-                        headerRow_ [] do
-                          toHtml col
-                          span_ [class_ "sort-arrow ml-1 text-iconNeutral opacity-0 group-hover:opacity-100", data_ "sort" "none"] "↕"
-              tbody_ []
-                $ tr_ []
-                $ td_ [colspan_ "100", class_ "text-center py-8"]
-                $ loadingIndicator_ LdSM LdSpinner
-    script_ [type_ "text/javascript"] """htmx.process(".widget-target")"""
+  renderTableShell widget [(c, Nothing) | c <- ["Resource", "Span name", "Duration", "Latency breakdown"] :: [Text]] []
+  script_ [type_ "text/javascript"] """htmx.process(".widget-target")"""
 
 
 -- Table widget rendering
 -- class_ "progress-brand "
 renderTable :: Widget -> Html ()
-renderTable widget = do
+renderTable widget = renderTableShell widget [(col.title, col.align) | col <- fromMaybe [] widget.columns] (rowClickTableAttrs widget)
+
+
+-- | Shared eager-fetch shell for renderTable / renderTraceTable: HTMX-loaded
+-- card whose body is either the already-rendered @widget.html@ or a loading
+-- table whose @thead@ uses the given column headers (+ optional extra @table@
+-- attrs, e.g. row-click data attributes).
+renderTableShell :: Widget -> [(Text, Maybe Text)] -> [Attribute] -> Html ()
+renderTableShell widget headerCols tableAttrs = do
   let tableId = maybeToMonoid widget.id
       eagerWidget = widget & #eager ?~ True & #pngUrl .~ Nothing & #html .~ Nothing & #dataset .~ Nothing
-      widgetJson = encodeText eagerWidget
   withCardFrame True widget Nothing
     $ div_
       [ class_ "h-full overflow-auto p-3"
-      , hxGet_ $ "/p/" <> maybe "" (.toText) widget._projectId <> "/widget?widgetJSON=" <> widgetJson
+      , hxGet_ $ widgetFetchUrl eagerWidget
       , hxTrigger_ "load, update-query from:window"
       , hxTarget_ $ "#" <> tableId
       , hxSelect_ $ "#" <> tableId
@@ -637,20 +636,9 @@ renderTable widget = do
           Just html -> toHtmlRaw html
           Nothing ->
             table_
-              ([class_ "table table-zebra table-sm w-full relative", id_ tableId] <> rowClickTableAttrs widget)
+              ([class_ "table table-zebra table-sm w-full relative", id_ tableId] <> tableAttrs)
               do
-                thead_ [class_ "sticky top-0 z-10 before:content-[''] before:absolute before:left-0 before:right-0 before:bottom-0 before:h-px before:bg-strokeWeak"] do
-                  tr_ [] do
-                    ifor_ (fromMaybe [] widget.columns) \idx col ->
-                      th_
-                        [ class_ $ "text-left bg-bgRaised sticky top-0 cursor-pointer hover:bg-fillWeak transition-colors group " <> fromMaybe "" col.align
-                        , onclick_ $ "window.sortTable('" <> tableId <> "', " <> show (idx :: Int) <> ", this)"
-                        , data_ "sort-direction" "none"
-                        ]
-                        do
-                          headerRow_ [] do
-                            toHtml col.title
-                            span_ [class_ "sort-arrow ml-1 text-iconNeutral opacity-0 group-hover:opacity-100", data_ "sort" "none"] "↕"
+                sortableTableHead_ tableId True headerCols
                 tbody_ []
                   $ tr_ []
                   $ td_ [colspan_ "100", class_ "text-center py-8"]
@@ -666,12 +654,11 @@ renderStatContent widget chartId valueM = do
       paddingClass = "px-3 flex flex-col " <> bool "py-3 " "py-2 " (widget._isNested == Just True)
       -- Always use eager widget JSON for HTMX requests
       eagerWidget = widget & #eager ?~ True
-      widgetJson = fromLazy $ AE.encode eagerWidget
   -- Always include HTMX attributes for refresh capability
   div_
     [ id_ statContentId
     , class_ paddingClass
-    , hxGet_ $ "/p/" <> maybe "" (.toText) widget._projectId <> "/widget?widgetJSON=" <> decodeUtf8 (urlEncode True widgetJson)
+    , hxGet_ $ widgetFetchUrl eagerWidget
     , hxTrigger_ $ if hasData then "update-query from:window" else "load, update-query from:window"
     , hxTarget_ $ "#" <> statContentId
     , hxSelect_ $ "#" <> statContentId
@@ -835,6 +822,17 @@ extractSeriesNamesFromDataset (Just wd) = case wd.source of
 extractSeriesNamesFromDataset Nothing = []
 
 
+-- | JS expression formatting a numeric @value@ for a widget's unit: duration
+-- units convert+format, everything else uses formatNumber. Shared by the
+-- tooltip valueFormatter and the yAxis axisLabel formatter.
+unitValueExprJS :: Maybe Text -> Text
+unitValueExprJS unitM =
+  let durationUnits = [Just "ns", Just "μs", Just "us", Just "ms", Just "s", Just "m", Just "h"] :: [Maybe Text]
+   in if unitM `elem` durationUnits
+        then "formatDuration(convertToNanoseconds(value, '" <> fromMaybe "" unitM <> "'))"
+        else "formatNumber(value)"
+
+
 -- Function to convert Widget to ECharts options
 widgetToECharts :: Widget -> AE.Value
 widgetToECharts widget =
@@ -856,12 +854,7 @@ widgetToECharts widget =
                   AE..= AE.object
                     ["type" AE..= ("shadow" :: Text)]
               , "valueFormatter"
-                  AE..= let durationUnits = [Just "ns", Just "μs", Just "us", Just "ms", Just "s", Just "m", Just "h"] :: [Maybe Text]
-                            isDuration = widget.unit `elem` durationUnits
-                            unit = fromMaybe "" widget.unit
-                         in if isDuration
-                              then "function(value) { return formatDuration(convertToNanoseconds(value, '" <> unit <> "')); }"
-                              else "function(value) { return formatNumber(value); }"
+                  AE..= ("function(value) { return " <> unitValueExprJS widget.unit <> "; }")
               ]
         , "legend"
             AE..= AE.object
@@ -935,10 +928,7 @@ widgetToECharts widget =
                     [ "show" AE..= (axisVisibility && fromMaybe True (widget ^? #yAxis . _Just . #showAxisLabel . _Just))
                     , "inside" AE..= False
                     , "formatter"
-                        AE..= let durationUnits = [Just "ns", Just "μs", Just "us", Just "ms", Just "s", Just "m", Just "h"] :: [Maybe Text]
-                                  isDuration = widget.unit `elem` durationUnits
-                                  unit = fromMaybe "" widget.unit
-                                  fmt = if isDuration then "formatDuration(convertToNanoseconds(value, '" <> unit <> "'))" else "formatNumber(value)"
+                        AE..= let fmt = unitValueExprJS widget.unit
                                   showOnlyMax = fromMaybe False $ widget ^? #yAxis . _Just . #showOnlyMaxLabel . _Just
                                in if showOnlyMax
                                     then "function(value, index) { return (value === this.yAxis.max || value == 0) ? " <> fmt <> " : ''; }"
@@ -1082,18 +1072,7 @@ renderTableWithDataAndParams widget dataRows params = do
     )
     do
       -- Table header
-      thead_ [class_ "sticky top-0 z-10 before:content-[''] before:absolute before:left-0 before:right-0 before:bottom-0 before:h-px before:bg-strokeWeak"] do
-        tr_ [] do
-          ifor_ columns \idx col ->
-            th_
-              [ class_ $ "text-left bg-bgRaised sticky top-0 cursor-pointer hover:bg-fillWeak transition-colors group " <> fromMaybe "" col.align
-              , onclick_ $ "window.sortTable('" <> tableId <> "', " <> show (idx :: Int) <> ", this)"
-              , data_ "sort-direction" "none"
-              ]
-              do
-                headerRow_ [] do
-                  toHtml col.title
-                  span_ [class_ "sort-arrow ml-1 text-iconNeutral opacity-0 group-hover:opacity-100", data_ "sort" "none"] "↕"
+      sortableTableHead_ tableId True [(col.title, col.align) | col <- columns]
 
       -- Table body with data
       tbody_ [] do
@@ -1110,8 +1089,8 @@ renderTableWithDataAndParams widget dataRows params = do
 
         -- Render table rows
         V.forM_ dataRows \row -> do
-          let rowData = AE.object [(K.fromText col.field, AE.String $ getRowValue col idx row) | (col, idx) <- zip columns [0 ..]]
-          let firstColValue = maybe "" (\c -> getRowValue c 0 row) (listToMaybe columns)
+          let rowData = AE.object [(K.fromText col.field, AE.String $ getRowValue idx row) | (col, idx) <- zip columns [0 ..]]
+          let firstColValue = maybe "" (const $ getRowValue 0 row) (listToMaybe columns)
           let rowValue = case widget.onRowClick >>= (.value) of
                 Just tmpl -> T.replace "{{row.resource_name}}" firstColValue tmpl
                 Nothing -> firstColValue
@@ -1123,7 +1102,7 @@ renderTableWithDataAndParams widget dataRows params = do
             ]
             do
               ifor_ columns \idx col -> do
-                let value = getRowValue col idx row
+                let value = getRowValue idx row
                 td_ [class_ $ fromMaybe "" col.align <> if col.columnType `elem` [Just ("number" :: Text), Just ("duration" :: Text)] then " monospace" else ""] do
                   if isJust col.progress
                     then renderProgressCell col value maxValues valueWidths
@@ -1137,16 +1116,7 @@ renderTraceDataTable widget dataRows spGroup spansGrouped colorsJson = do
 
   -- Render complete table with data
   table_ [class_ "table table-sm w-full relative", id_ tableId] do
-    thead_ [class_ "sticky top-0 z-10 before:content-[''] before:absolute before:left-0 before:right-0 before:bottom-0 before:h-px before:bg-strokeWeak"] do
-      tr_ [] do
-        forM_ columns \col ->
-          th_
-            [ class_ $ "text-left bg-bgRaised sticky top-0 cursor-pointer hover:bg-fillWeak transition-colors group " <> fromMaybe "" col.align
-            , data_ "sort-direction" "none"
-            ]
-            do
-              headerRow_ [] do
-                toHtml col.title
+    sortableTableHead_ tableId False [(col.title, col.align) | col <- columns]
     tbody_ [] do
       V.forM_ dataRows \row -> do
         let val = V.last row
@@ -1161,7 +1131,7 @@ renderTraceDataTable widget dataRows spGroup spansGrouped colorsJson = do
         let clcFun = [text|on click toggle .hidden on the next <tr/> then call flameGraphChart($spjson, "$val", $colorsJson)|]
         tr_ [term "_" clcFun, class_ "cursor-pointer"] do
           ifor_ columns \idx col -> do
-            let value = getRowValue col idx row
+            let value = getRowValue idx row
             if col.field == "latency_breakdown"
               then td_ [class_ "py-2"] do
                 renderLatencyBreakdown cdrn
@@ -1223,9 +1193,9 @@ renderLatencyBreakdown groups = do
       div_ [class_ ("h-full absolute top-0 border  " <> color), title_ tooltip, style_ $ "width:" <> show width <> "px;" <> "left:" <> show left <> "px;"] pass
 
 
--- Helper to get row value by column index or field name
-getRowValue :: TableColumn -> Int -> V.Vector Text -> Text
-getRowValue col idx row = fromMaybe "" $ row V.!? idx
+-- Helper to get row value by column index
+getRowValue :: Int -> V.Vector Text -> Text
+getRowValue idx row = fromMaybe "" $ row V.!? idx
 
 
 -- Calculate max values for column percentage progress bars

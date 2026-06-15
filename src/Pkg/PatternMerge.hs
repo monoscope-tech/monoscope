@@ -118,17 +118,28 @@ wrapTag :: Text -> [Text] -> Text
 wrapTag tag items = unlines $ ("<" <> tag <> ">") : items <> ["</" <> tag <> ">"]
 
 
+-- | Shared judge-prompt scaffolding: dedups items into a numbered list, formats
+-- each pair as index references, and prepends the type-specific system prompt.
+buildJudgePrompt :: Text -> Text -> [(Text, Text)] -> Text
+buildJudgePrompt systemPart itemTag pairs = systemPart <> "\n\n" <> itemsPart <> "\n" <> pairsPart
+  where
+    allItems = ordNub $ concatMap (\(a, b) -> [a, b]) pairs
+    itemIndex = Map.fromList $ zip allItems [0 :: Int ..]
+    itemsPart = wrapTag itemTag $ zipWith (\i t -> "  [" <> show i <> "] " <> t) [0 :: Int ..] allItems
+    pairsPart = wrapTag "pairs" $ zipWith formatPair [0 :: Int ..] pairs
+    formatPair i (a, b) =
+      let aIdx = fromMaybe 0 $ Map.lookup a itemIndex
+          bIdx = fromMaybe 0 $ Map.lookup b itemIndex
+       in "  Pair " <> show i <> ": [" <> show aIdx <> "] vs [" <> show bIdx <> "]"
+
+
 -- | Build an LLM judge prompt for ambiguous endpoint URL pairs.
 -- Deduplicates all paths into a numbered list so the LLM can see the full picture
 -- and cluster endpoints that share centroids, rather than evaluating pairs in isolation.
 buildEndpointJudgePrompt :: [(Text, Text)] -> Text
-buildEndpointJudgePrompt pairs = systemPart <> "\n\n" <> pathsPart <> "\n" <> pairsPart
-  where
-    -- Deduplicate all paths and assign indices
-    allPaths = ordNub $ concatMap (\(a, b) -> [a, b]) pairs
-    pathIndex = Map.fromList $ zip allPaths [0 :: Int ..]
-    systemPart =
-      [text|
+buildEndpointJudgePrompt =
+  buildJudgePrompt
+    [text|
         You are Monoscope's API-route deduplication judge. You decide whether HTTP endpoint URL paths represent the same route (and should be merged into one canonical template) or genuinely distinct routes (and should be kept separate).
 
         Tone: deterministic and structured — your output is parsed as JSON by downstream code.
@@ -163,12 +174,7 @@ buildEndpointJudgePrompt pairs = systemPart <> "\n\n" <> pathsPart <> "\n" <> pa
 
         Example: [{"index": 0, "decision": "MERGE", "canonical": "/api/v1/users/{param}"}, {"index": 1, "decision": "KEEP_SEPARATE"}]
         |]
-    pathsPart = wrapTag "endpoints" $ zipWith (\i p -> "  [" <> show i <> "] " <> p) [0 :: Int ..] allPaths
-    pairsPart = wrapTag "pairs" $ zipWith formatPair [0 :: Int ..] pairs
-    formatPair i (a, b) =
-      let aIdx = fromMaybe 0 $ Map.lookup a pathIndex
-          bIdx = fromMaybe 0 $ Map.lookup b pathIndex
-       in "  Pair " <> show i <> ": [" <> show aIdx <> "] vs [" <> show bIdx <> "]"
+    "endpoints"
 
 
 -- | Token considered a placeholder (excluded from Jaccard comparison).
@@ -258,12 +264,9 @@ mergeByJaccard threshold results = V.fromList $ map (\(dr, _, _) -> dr) $ toList
 -- and Lemur (Chain-of-Thought reasoning). Shows all templates in context with sample logs,
 -- then asks for structured Structure→Semantics→Decision reasoning per pair.
 buildLogClusterJudgePrompt :: [(Text, Text)] -> Text
-buildLogClusterJudgePrompt pairs = systemPart <> "\n\n" <> templatesPart <> "\n" <> pairsPart
-  where
-    allTemplates = ordNub $ concatMap (\(a, b) -> [a, b]) pairs
-    templateIndex = Map.fromList $ zip allTemplates [0 :: Int ..]
-    systemPart =
-      [text|
+buildLogClusterJudgePrompt =
+  buildJudgePrompt
+    [text|
         You are Monoscope's log-pattern deduplication judge. You decide whether two log templates describe the same operational event (MERGE) or distinct events (KEEP_SEPARATE).
 
         Tone: deterministic and structured — your output is parsed as JSON by downstream code.
@@ -298,12 +301,7 @@ buildLogClusterJudgePrompt pairs = systemPart <> "\n\n" <> templatesPart <> "\n"
 
         Example: [{"index": 0, "decision": "MERGE"}, {"index": 1, "decision": "KEEP_SEPARATE"}]
         |]
-    templatesPart = wrapTag "templates" $ zipWith (\i t -> "  [" <> show i <> "] " <> t) [0 :: Int ..] allTemplates
-    pairsPart = wrapTag "pairs" $ zipWith formatPair [0 :: Int ..] pairs
-    formatPair i (a, b) =
-      let aIdx = fromMaybe 0 $ Map.lookup a templateIndex
-          bIdx = fromMaybe 0 $ Map.lookup b templateIndex
-       in "  Pair " <> show i <> ": [" <> show aIdx <> "] vs [" <> show bIdx <> "]"
+    "templates"
 
 
 -- | Shared trivial tokens excluded from meaningful comparison across all pattern types.
@@ -445,12 +443,9 @@ errorCanMerge a b =
 -- | Error-aware CoT judge prompt. Shows all error patterns in a numbered list,
 -- then pairs. Reasoning: Structure (error type match?) -> Semantics (same root cause?) -> Decision.
 buildErrorJudgePrompt :: [(Text, Text)] -> Text
-buildErrorJudgePrompt pairs = systemPart <> "\n\n" <> patternsPart <> "\n" <> pairsPart
-  where
-    allPatterns = ordNub $ concatMap (\(a, b) -> [a, b]) pairs
-    patternIndex = Map.fromList $ zip allPatterns [0 :: Int ..]
-    systemPart =
-      [text|
+buildErrorJudgePrompt =
+  buildJudgePrompt
+    [text|
         You are Monoscope's error-pattern deduplication judge. You decide whether two error patterns describe the same underlying bug (MERGE) or genuinely different failures (KEEP_SEPARATE).
 
         Tone: deterministic and structured — your output is parsed as JSON by downstream code.
@@ -484,9 +479,4 @@ buildErrorJudgePrompt pairs = systemPart <> "\n\n" <> patternsPart <> "\n" <> pa
 
         Example: [{"index": 0, "decision": "MERGE"}, {"index": 1, "decision": "KEEP_SEPARATE"}]
         |]
-    patternsPart = wrapTag "patterns" $ zipWith (\i p -> "  [" <> show i <> "] " <> p) [0 :: Int ..] allPatterns
-    pairsPart = wrapTag "pairs" $ zipWith formatPair [0 :: Int ..] pairs
-    formatPair i (a, b) =
-      let aIdx = fromMaybe 0 $ Map.lookup a patternIndex
-          bIdx = fromMaybe 0 $ Map.lookup b patternIndex
-       in "  Pair " <> show i <> ": [" <> show aIdx <> "] vs [" <> show bIdx <> "]"
+    "patterns"

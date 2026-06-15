@@ -311,6 +311,15 @@ emailFallbackUrl url = do
   p_ [class_ "sub"] $ toHtml url
 
 
+-- | Standard email footer: divider, optional help links, signoff, fallback URL.
+emailFooter :: Bool -> Text -> Html ()
+emailFooter withHelp url = do
+  emailDivider
+  when withHelp (emailHelpLinks >> br_ [])
+  emailSignoff
+  emailFallbackUrl url
+
+
 emailStatRow :: [(Text, Text, Maybe Text)] -> Html ()
 emailStatRow cols =
   p_ [style_ "margin: 8px 0 20px; font-size: 13px; color: #57606a; line-height: 1.8;"]
@@ -581,10 +590,7 @@ anomalyEndpointEmail userName projectName anomalyUrl endpointRows =
             when (isNothing hostM) $ whenJust ctxM (tr_ . td_ [style_ "padding: 10px 0 2px 0; color: #6b7280; font-size: 13px;"] . toHtml)
             forM_ labels (tr_ . td_ [style_ "padding: 3px 0 3px 18px;"] . span_ [class_ "monoscope-code"] . toHtml)
       emailButton anomalyUrl "Explore the Endpoint"
-      emailHelpLinks
-      br_ []
-      emailSignoff
-      emailFallbackUrl anomalyUrl
+      emailFooter True anomalyUrl
   )
 
 
@@ -613,9 +619,7 @@ issueAssignedEmail userName projectName issueTitleRaw issueUrl errorType errorMe
                 metaCell "Issue:" issueTitle
                 metaCell "Project:" projectName
           emailButton issueUrl "View Issue"
-          emailDivider
-          emailSignoff
-          emailFallbackUrl issueUrl
+          emailFooter False issueUrl
       )
 
 
@@ -982,11 +986,7 @@ monitorAlertEmail projectName monitorTitle monitorUrl currentValue threshold dir
         ]
       whenJust chartUrlM $ chartBlock "Monitor Trend"
       emailButton monitorUrl "View Monitor"
-      emailDivider
-      emailHelpLinks
-      br_ []
-      emailSignoff
-      emailFallbackUrl monitorUrl
+      emailFooter True monitorUrl
   )
 
 
@@ -1002,97 +1002,89 @@ monitorRecoveryEmail projectName monitorTitle monitorUrl =
         b_ $ toHtml projectName
         " project has recovered and is back to normal."
       emailButton monitorUrl "View Monitor"
-      emailDivider
-      emailHelpLinks
-      br_ []
-      emailSignoff
-      emailFallbackUrl monitorUrl
+      emailFooter True monitorUrl
   )
 
 
 freeTierUsageEmail :: Text -> Text -> Int -> Int -> Bool -> (Text, Html ())
 freeTierUsageEmail projectName billingUrl used limit exceeded =
-  let pct = (used * 100) `div` max 1 limit
-   in ( "[···] " <> (if exceeded then "Daily event limit reached" else "Approaching daily event limit") <> " - " <> projectName
-      , emailBody do
-          h1_ $ if exceeded then "Daily Event Limit Reached" else "Approaching Daily Event Limit"
-          p_ do
-            "Your "
-            b_ $ toHtml projectName
-            if exceeded
-              then " project has hit its daily free tier limit. New events are being dropped."
-              else " project is approaching its daily free tier limit."
-          emailStatRow
-            [ ("Events Today", formatWithCommas (fromIntegral used), if exceeded then Just "#cf222e" else Just "#bf8700")
-            , ("Daily Limit", formatWithCommas (fromIntegral limit), Nothing)
-            , ("Usage", show pct <> "%", if exceeded then Just "#cf222e" else Just "#bf8700")
-            ]
-          emailButton billingUrl "Upgrade Plan"
-          emailDivider
-          emailHelpLinks
-          br_ []
-          emailSignoff
-          emailFallbackUrl billingUrl
-      )
+  billingNotifEmail
+    ("[···] " <> (if exceeded then "Daily event limit reached" else "Approaching daily event limit") <> " - " <> projectName)
+    (if exceeded then "Daily Event Limit Reached" else "Approaching Daily Event Limit")
+    ( do
+        p_ do
+          "Your "
+          b_ $ toHtml projectName
+          if exceeded
+            then " project has hit its daily free tier limit. New events are being dropped."
+            else " project is approaching its daily free tier limit."
+        emailStatRow
+          [ ("Events Today", formatWithCommas (fromIntegral used), if exceeded then Just "#cf222e" else Just "#bf8700")
+          , ("Daily Limit", formatWithCommas (fromIntegral limit), Nothing)
+          , ("Usage", show ((used * 100) `div` max 1 limit) <> "%", if exceeded then Just "#cf222e" else Just "#bf8700")
+          ]
+    )
+    "Upgrade Plan"
+    billingUrl
+
+
+-- | Shared skeleton for the plan-change billing emails: h1 heading, body
+-- paragraph(s), CTA button, standard footer (all with @withHelp=True@).
+billingNotifEmail :: Text -> Html () -> Html () -> Text -> Text -> (Text, Html ())
+billingNotifEmail subject heading body ctaLabel billingUrl =
+  ( subject
+  , emailBody do
+      h1_ heading
+      body
+      emailButton billingUrl ctaLabel
+      emailFooter True billingUrl
+  )
 
 
 planUpgradedEmail :: Text -> Text -> Text -> (Text, Html ())
-planUpgradedEmail projectName newPlan billingUrl =
-  ( "[···] Plan upgraded to " <> newPlan <> " - " <> projectName
-  , emailBody do
-      h1_ "Plan Upgraded"
-      p_ do
+planUpgradedEmail projectName newPlan =
+  billingNotifEmail
+    ("[···] Plan upgraded to " <> newPlan <> " - " <> projectName)
+    "Plan Upgraded"
+    ( p_ do
         "Your "
         b_ $ toHtml projectName
         " project has been upgraded to the "
         b_ $ toHtml newPlan
         " plan. Thank you for your support!"
-      emailButton billingUrl "View Billing"
-      emailDivider
-      emailHelpLinks
-      br_ []
-      emailSignoff
-      emailFallbackUrl billingUrl
-  )
+    )
+    "View Billing"
 
 
 trialEndingEmail :: Text -> Int -> Text -> (Text, Html ())
-trialEndingEmail projectName daysLeft billingUrl =
-  ( "[···] Your free trial ends in " <> show daysLeft <> " days - " <> projectName
-  , emailBody do
-      h1_ $ toHtml $ "Your trial ends in " <> show @Text daysLeft <> " days"
-      p_ do
-        "The 30-day free trial on "
-        b_ $ toHtml projectName
-        " ends in "
-        b_ $ toHtml (show @Text daysLeft)
-        " days. Your subscription will renew automatically and you'll be billed for usage accrued during the trial."
-      p_ "If you'd like to cancel before the trial ends, you can do so from the billing page."
-      emailButton billingUrl "Manage Billing"
-      emailDivider
-      emailHelpLinks
-      br_ []
-      emailSignoff
-      emailFallbackUrl billingUrl
-  )
+trialEndingEmail projectName daysLeft =
+  billingNotifEmail
+    ("[···] Your free trial ends in " <> show daysLeft <> " days - " <> projectName)
+    (toHtml $ "Your trial ends in " <> show @Text daysLeft <> " days")
+    ( do
+        p_ do
+          "The 30-day free trial on "
+          b_ $ toHtml projectName
+          " ends in "
+          b_ $ toHtml (show @Text daysLeft)
+          " days. Your subscription will renew automatically and you'll be billed for usage accrued during the trial."
+        p_ "If you'd like to cancel before the trial ends, you can do so from the billing page."
+    )
+    "Manage Billing"
 
 
 planDowngradedEmail :: Text -> Text -> Text -> (Text, Html ())
-planDowngradedEmail projectName reason billingUrl =
-  ( "[···] Plan downgraded to Free - " <> projectName
-  , emailBody do
-      h1_ "Plan Downgraded to Free"
-      p_ do
-        "Your "
-        b_ $ toHtml projectName
-        " project has been downgraded to the Free plan because your subscription "
-        toHtml reason
-        "."
-      p_ "On the Free plan, daily event limits apply and additional team members will be deactivated. You can re-subscribe at any time to restore full access."
-      emailButton billingUrl "Upgrade Plan"
-      emailDivider
-      emailHelpLinks
-      br_ []
-      emailSignoff
-      emailFallbackUrl billingUrl
-  )
+planDowngradedEmail projectName reason =
+  billingNotifEmail
+    ("[···] Plan downgraded to Free - " <> projectName)
+    "Plan Downgraded to Free"
+    ( do
+        p_ do
+          "Your "
+          b_ $ toHtml projectName
+          " project has been downgraded to the Free plan because your subscription "
+          toHtml reason
+          "."
+        p_ "On the Free plan, daily event limits apply and additional team members will be deactivated. You can re-subscribe at any time to restore full access."
+    )
+    "Upgrade Plan"

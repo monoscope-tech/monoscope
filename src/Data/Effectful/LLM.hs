@@ -11,6 +11,7 @@ module Data.Effectful.LLM (
 import Control.Lens ((^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens (key)
+import Data.Effectful.Wreq (withGoldenCache)
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Effectful
@@ -24,26 +25,13 @@ import Langchain.LLM.OpenAI qualified as OpenAI
 import OpenAI.V1.Chat.Completions qualified as OpenAIV1
 import OpenAI.V1.Models qualified as Models
 import Relude
-import System.Directory (createDirectoryIfMissing, doesFileExist)
-import System.FilePath ((</>))
 
 
--- Manual JSON instances for LLMCore.Message (can't use Generic due to type structure)
-instance AE.ToJSON LLMCore.Message where
-  toJSON msg =
-    AE.object
-      [ "role" AE..= LLMCore.role msg
-      , "content" AE..= LLMCore.content msg
-      , "messageData" AE..= LLMCore.messageData msg
-      ]
-
-
-instance AE.FromJSON LLMCore.Message where
-  parseJSON = AE.withObject "Message" \o ->
-    LLMCore.Message
-      <$> (o AE..: "role")
-      <*> (o AE..: "content")
-      <*> (o AE..: "messageData")
+-- Generic-derived JSON for LLMCore.Message (record field names match the prior
+-- hand-written keys, so this is byte-identical to the old manual instances).
+deriving stock instance Generic LLMCore.Message
+deriving anyclass instance AE.ToJSON LLMCore.Message
+deriving anyclass instance AE.FromJSON LLMCore.Message
 
 
 -- Cache entry for agentic chat calls
@@ -110,35 +98,10 @@ data LLMResponse = LLMResponse
 
 -- | Get or create a golden response for an LLM call
 getOrCreateGoldenResponse :: FilePath -> Text -> Text -> Text -> IO (Either Text Text)
-getOrCreateGoldenResponse goldenDir model prompt apiKey = do
-  let fileName = promptToFilename prompt
-      filePath = goldenDir </> fileName
-  exists <- doesFileExist filePath
-  updateGolden <- isJust <$> lookupEnv "UPDATE_GOLDEN"
-
-  if exists && not updateGolden
-    then do
-      -- Read cached response
-      content <- readFileLBS filePath
-      case AE.decode content of
-        Just (llmResp :: LLMResponse) -> return llmResp.llmResponse
-        Nothing -> error $ fromString $ "Failed to decode LLM response from file: " <> filePath
-    else
-      if not exists && not updateGolden
-        then
-          error
-            $ fromString
-            $ "Golden file not found: "
-            <> filePath
-            <> "\nRun tests with UPDATE_GOLDEN=true to create it:\n"
-            <> "  UPDATE_GOLDEN=true USE_EXTERNAL_DB=true cabal test integration-tests"
-        else do
-          -- UPDATE_GOLDEN=true: create or update golden file
-          createDirectoryIfMissing True goldenDir
-          response <- callOpenAIAPI model prompt apiKey
-          let llmResp = LLMResponse{llmPrompt = prompt, llmResponse = response}
-          writeFileLBS filePath (AE.encode llmResp)
-          return response
+getOrCreateGoldenResponse goldenDir model prompt apiKey =
+  withGoldenCache goldenDir (promptToFilename prompt) ("Failed to decode LLM response from file: " <>) (.llmResponse) $ do
+    response <- callOpenAIAPI model prompt apiKey
+    pure (LLMResponse{llmPrompt = prompt, llmResponse = response}, response)
 
 
 -- | Actual OpenAI API call implementation
@@ -192,37 +155,15 @@ hasToolsInParams p = isJust $ AE.toJSON p ^? key "tools"
 
 -- | Get or create a golden response for an agentic chat call
 getOrCreateAgenticGoldenResponse :: FilePath -> LLMCore.ChatHistory -> OpenAIV1.CreateChatCompletion -> Text -> IO (Either Text LLMCore.Message)
-getOrCreateAgenticGoldenResponse goldenDir history params apiKey = do
-  let historyMessages = toList history
-      hasTools = hasToolsInParams params
-      cacheKey = cacheKeyFromQuery historyMessages hasTools
-      fileName = cacheKey <> ".json"
-      filePath = goldenDir </> fileName
-  exists <- doesFileExist filePath
-  updateGolden <- isJust <$> lookupEnv "UPDATE_GOLDEN"
-  if exists && not updateGolden
-    then do
-      content <- readFileLBS filePath
-      case AE.decode content of
-        Just (cached :: AgenticChatCache) -> return cached.accResponse
-        Nothing -> error $ toText $ "Failed to decode agentic chat cache from: " <> filePath
-    else
-      if not exists && not updateGolden
-        then
-          error
-            $ toText
-            $ "Golden file not found: "
-            <> filePath
-            <> "\nRun tests with UPDATE_GOLDEN=true to create it:\n"
-            <> "  UPDATE_GOLDEN=true USE_EXTERNAL_DB=true cabal test integration-tests"
-        else do
-          createDirectoryIfMissing True goldenDir
-          let openAI = OpenAI.OpenAI{apiKey, callbacks = [], baseUrl = Nothing}
-              Models.Model modelName = params.model
-          response <- first show <$> LLMCore.chat openAI history (Just params)
-          let cached = AgenticChatCache{accHistory = historyMessages, accModel = modelName, accHasTools = hasTools, accResponse = response}
-          writeFileLBS filePath (AE.encode cached)
-          return response
+getOrCreateAgenticGoldenResponse goldenDir history params apiKey =
+  withGoldenCache goldenDir (cacheKeyFromQuery historyMessages hasTools <> ".json") ("Failed to decode agentic chat cache from: " <>) (.accResponse) $ do
+    let openAI = OpenAI.OpenAI{apiKey, callbacks = [], baseUrl = Nothing}
+        Models.Model modelName = params.model
+    response <- first show <$> LLMCore.chat openAI history (Just params)
+    pure (AgenticChatCache{accHistory = historyMessages, accModel = modelName, accHasTools = hasTools, accResponse = response}, response)
+  where
+    historyMessages = toList history
+    hasTools = hasToolsInParams params
 
 
 -- Embedding golden cache
@@ -235,29 +176,10 @@ data EmbeddingCache = EmbeddingCache
 
 
 getOrCreateEmbeddingGoldenResponse :: FilePath -> EmbOAI.OpenAIEmbeddings -> [DocLoader.Document] -> IO (Either Text [[Float]])
-getOrCreateEmbeddingGoldenResponse goldenDir config docs = do
-  let texts = map (toStrict . DocLoader.pageContent) docs
-      cacheKey = "emb_" <> sanitizeForFilename (T.intercalate "__" $ take 3 texts) <> "_n" <> show (length docs)
-      filePath = goldenDir </> cacheKey <> ".json"
-  exists <- doesFileExist filePath
-  updateGolden <- isJust <$> lookupEnv "UPDATE_GOLDEN"
-  if exists && not updateGolden
-    then do
-      content <- readFileLBS filePath
-      case AE.decode content of
-        Just (cached :: EmbeddingCache) -> return cached.result
-        Nothing -> error $ fromString $ "Failed to decode embedding cache from: " <> filePath
-    else
-      if not exists && not updateGolden
-        then
-          error
-            $ fromString
-            $ "Golden file not found: "
-            <> filePath
-            <> "\nRun tests with UPDATE_GOLDEN=true to create it:\n"
-            <> "  UPDATE_GOLDEN=true USE_EXTERNAL_DB=true cabal test integration-tests"
-        else do
-          createDirectoryIfMissing True goldenDir
-          result <- first show <$> EmbCore.embedDocuments config docs
-          writeFileLBS filePath $ AE.encode EmbeddingCache{texts, result}
-          return result
+getOrCreateEmbeddingGoldenResponse goldenDir config docs =
+  withGoldenCache goldenDir (cacheKey <> ".json") ("Failed to decode embedding cache from: " <>) (.result) $ do
+    result <- first show <$> EmbCore.embedDocuments config docs
+    pure (EmbeddingCache{texts, result}, result)
+  where
+    texts = map (toStrict . DocLoader.pageContent) docs
+    cacheKey = "emb_" <> sanitizeForFilename (T.intercalate "__" $ take 3 texts) <> "_n" <> show (length docs)

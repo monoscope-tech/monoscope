@@ -115,25 +115,21 @@ data ScalarExpr = SVal Values | SAgg AggFunction | SArith ScalarExpr ArithOp Sca
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
-arithOpToSQL :: ArithOp -> Text
-arithOpToSQL = \case Mul -> " * "; Div -> " / "; Add -> " + "; Sub -> " - "
+arithOpText :: ArithOp -> Text
+arithOpText = \case Mul -> " * "; Div -> " / "; Add -> " + "; Sub -> " - "
 
 
 instance Display ScalarExpr where
   displayPrec p (SVal v) = displayPrec p v
   displayPrec _ (SAgg agg) = displayBuilder $ aggToSqlNoAlias agg
   displayPrec _ (SArith l Div r) = displayBuilder $ "COALESCE((" <> display l <> " / NULLIF(" <> display r <> ", 0)), 0)"
-  displayPrec _ (SArith l op r) = displayBuilder $ "(" <> display l <> arithOpToSQL op <> display r <> ")"
-
-
-arithOpToKQL :: ArithOp -> Text
-arithOpToKQL = \case Mul -> " * "; Div -> " / "; Add -> " + "; Sub -> " - "
+  displayPrec _ (SArith l op r) = displayBuilder $ "(" <> display l <> arithOpText op <> display r <> ")"
 
 
 instance ToQueryText ScalarExpr where
   toQText (SVal v) = toQText v
   toQText (SAgg agg) = toQText agg
-  toQText (SArith l op r) = toQText l <> arithOpToKQL op <> toQText r
+  toQText (SArith l op r) = toQText l <> arithOpText op <> toQText r
 
 
 -- | SQL pattern for simple aggregations: fn((subject)::float)

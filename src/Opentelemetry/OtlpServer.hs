@@ -26,6 +26,7 @@ import Control.Exception.Annotated (checkpoint)
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
+import Data.Annotation (toAnnotation)
 import Data.Base64.Types qualified as B64
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
@@ -198,12 +199,19 @@ getApiKeyAttr kvs =
     <|> getNestedAttr "http.headers" "x-api-key" kvs
 
 
+-- | Per-resource attribute lookup: resource-level attrs, falling back to the
+-- first record's attrs that carries the key. Parameterized by the resource-attrs
+-- accessor and the flattened per-record attrs accessor so spans/logs share it.
+resourceAttributeValue :: (r -> [PC.KeyValue]) -> (r -> [[PC.KeyValue]]) -> Text -> V.Vector r -> V.Vector Text
+resourceAttributeValue resAttrs recAttrs !attribute =
+  V.mapMaybe (\r -> getAttr attribute (resAttrs r) <|> listToMaybe (mapMaybe (getAttr attribute) (recAttrs r)))
+
+
 getSpanAttributeValue :: Text -> V.Vector PT.ResourceSpans -> V.Vector Text
-getSpanAttributeValue !attribute = V.mapMaybe (\rs -> getAttr attribute (rs ^. PTF.resource . PRF.attributes) <|> getSpanAttr rs)
-  where
-    getSpanAttr rs =
-      let spans = V.fromList (rs ^. PTF.scopeSpans) >>= (\s -> V.fromList (s ^. PTF.spans))
-       in V.mapMaybe (getAttr attribute . (^. PTF.attributes)) spans V.!? 0
+getSpanAttributeValue =
+  resourceAttributeValue
+    (^. PTF.resource . PRF.attributes)
+    (\rs -> [s' ^. PTF.attributes | ss <- rs ^. PTF.scopeSpans, s' <- ss ^. PTF.spans])
 
 
 getSpanApiKey :: V.Vector PT.ResourceSpans -> V.Vector Text
@@ -211,11 +219,10 @@ getSpanApiKey = V.mapMaybe (\rs -> getApiKeyAttr (rs ^. PTF.resource . PRF.attri
 
 
 getLogAttributeValue :: Text -> V.Vector PL.ResourceLogs -> V.Vector Text
-getLogAttributeValue !attribute = V.mapMaybe (\rl -> getAttr attribute (rl ^. PLF.resource . PRF.attributes) <|> getLogAttr rl)
-  where
-    getLogAttr rl =
-      let logs = V.fromList (rl ^. PLF.scopeLogs) >>= (\s -> V.fromList (s ^. PLF.logRecords))
-       in V.mapMaybe (getAttr attribute . (^. PLF.attributes)) logs V.!? 0
+getLogAttributeValue =
+  resourceAttributeValue
+    (^. PLF.resource . PRF.attributes)
+    (\rl -> [r' ^. PLF.attributes | sl <- rl ^. PLF.scopeLogs, r' <- sl ^. PLF.logRecords])
 
 
 getLogApiKey :: V.Vector PL.ResourceLogs -> V.Vector Text
@@ -223,9 +230,7 @@ getLogApiKey = V.mapMaybe (\rl -> getApiKeyAttr (rl ^. PLF.resource . PRF.attrib
 
 
 getMetricAttributeValue :: Text -> V.Vector PM.ResourceMetrics -> Maybe Text
-getMetricAttributeValue !attribute !rms = V.mapMaybe getResourceAttr rms V.!? 0
-  where
-    getResourceAttr rm = getAttr attribute (rm ^. PMF.resource . PRF.attributes)
+getMetricAttributeValue !attribute !rms = V.mapMaybe (\rm -> getAttr attribute (rm ^. PMF.resource . PRF.attributes)) rms V.!? 0
 
 
 getMetricApiKey :: V.Vector PM.ResourceMetrics -> Maybe Text
@@ -843,21 +848,15 @@ deriveClientAddress kvMap
         [] -> ""
 
 
--- Extract structured information from protobuf decoding errors
-createProtoErrorInfo :: String -> ByteString -> AE.Value
-createProtoErrorInfo err msg =
-  case T.splitOn ":" (toText err) of
-    (firstPart : details) ->
-      let fieldPath = T.takeWhile (/= ':') (T.strip (unwords details))
-          errorType = T.takeWhileEnd (/= ':') (T.strip (unwords details))
-       in AE.object ["err_type" AE..= errorType, "field_path" AE..= fieldPath, "full_err" AE..= err, "msg_size" AE..= BS.length msg]
-    _ -> AE.object ["full_err" AE..= err, "msg_size" AE..= BS.length msg]
-
-
 -- | Record a protobuf decode error, categorizing wire type, UTF-8, and EOF errors
 recordProtoError :: MonadIO m => Text -> String -> ByteString -> (Text -> AE.Value -> m ()) -> m ()
 recordProtoError prefix err msg logFn = do
-  let errorInfo = createProtoErrorInfo err msg
+  let errorInfo = case T.splitOn ":" (toText err) of
+        (firstPart : details) ->
+          let fieldPath = T.takeWhile (/= ':') (T.strip (unwords details))
+              errorType = T.takeWhileEnd (/= ':') (T.strip (unwords details))
+           in AE.object ["err_type" AE..= errorType, "field_path" AE..= fieldPath, "full_err" AE..= err, "msg_size" AE..= BS.length msg]
+        _ -> AE.object ["full_err" AE..= err, "msg_size" AE..= BS.length msg]
       categorize
         | "Unknown wire type" `L.isInfixOf` err = Just (prefix <> ":wire_type_error")
         | "Cannot decode byte" `L.isInfixOf` err && "Invalid UTF-8 stream" `L.isInfixOf` err = Just (prefix <> ":utf8_decode_error")
@@ -881,17 +880,17 @@ nanosecondsToUTC :: Word64 -> UTCTime
 nanosecondsToUTC !ns = posixSecondsToUTCTime (fromIntegral ns / 1e9)
 
 
+-- | Convert a nanosecond timestamp to UTC, falling back when it's unset/invalid
+-- (before the Year-2000 floor or exactly zero).
+validTsOr :: UTCTime -> Word64 -> UTCTime
+validTsOr fallback ns = if ns >= minValidTimestampNanos && ns /= 0 then nanosecondsToUTC ns else fallback
+
+
 -- | Get a valid timestamp with fallback logic
 -- Priority: timestamp -> observed_timestamp -> fallback time
 getValidTimestamp :: UTCTime -> Word64 -> Word64 -> UTCTime
 getValidTimestamp !fallbackTime !timeNano !observedTimeNano =
-  let isValid ns = ns >= minValidTimestampNanos && ns /= 0
-   in if isValid timeNano
-        then nanosecondsToUTC timeNano
-        else
-          if isValid observedTimeNano
-            then nanosecondsToUTC observedTimeNano
-            else fallbackTime
+  validTsOr (validTsOr fallbackTime observedTimeNano) timeNano
 
 
 -- Convert ByteString to hex Text
@@ -1054,10 +1053,7 @@ convertLogRecordToOtelLog !fallbackTime !pid resourceM scopeM logRecord =
       !severityText = logRecord ^. PLF.severityText
       !severityNumber = fromEnum (logRecord ^. PLF.severityNumber)
       !validTimestamp = getValidTimestamp fallbackTime timeNano observedTimeNano
-      !validObservedTimestamp =
-        if observedTimeNano >= minValidTimestampNanos && observedTimeNano /= 0
-          then nanosecondsToUTC observedTimeNano
-          else fallbackTime
+      !validObservedTimestamp = validTsOr fallbackTime observedTimeNano
 
       !parentId = hexIdMaybe (logRecord ^. PLF.spanId)
 
@@ -1149,14 +1145,8 @@ convertSpanToOtelLog :: UTCTime -> Projects.ProjectId -> Maybe PR.Resource -> Ma
 convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
   let !startTimeNano = pSpan ^. PTF.startTimeUnixNano
       !endTimeNano = pSpan ^. PTF.endTimeUnixNano
-      !validStartTime =
-        if startTimeNano >= minValidTimestampNanos && startTimeNano /= 0
-          then nanosecondsToUTC startTimeNano
-          else fallbackTime
-      !validEndTime =
-        if endTimeNano >= minValidTimestampNanos && endTimeNano /= 0
-          then nanosecondsToUTC endTimeNano
-          else validStartTime -- If end time is invalid, use start time
+      !validStartTime = validTsOr fallbackTime startTimeNano
+      !validEndTime = validTsOr validStartTime endTimeNano -- If end time is invalid, use start time
       !durationNanos =
         if startTimeNano > 0 && endTimeNano > startTimeNano
           then endTimeNano - startTimeNano
@@ -1193,11 +1183,7 @@ convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
                     ( \ev ->
                         AE.object
                           [ "event_name" AE..= (ev ^. PTF.name)
-                          , "event_time"
-                              AE..= let evTimeNano = ev ^. PTF.timeUnixNano
-                                     in if evTimeNano >= minValidTimestampNanos && evTimeNano /= 0
-                                          then nanosecondsToUTC evTimeNano
-                                          else fallbackTime
+                          , "event_time" AE..= validTsOr fallbackTime (ev ^. PTF.timeUnixNano)
                           , "event_attributes" AE..= keyValueToJSON (ev ^. PTF.attributes)
                           , "event_dropped_attributes_count" AE..= (ev ^. PTF.droppedAttributesCount)
                           ]
@@ -1389,7 +1375,7 @@ convertMetricToMetricRecords fallbackTime pid resourceM scopeM metric =
       Just scope -> AE.object ["scope" AE..= (scope ^. PCF.name)]
       Nothing -> AE.Null
 
-    pointTime timeNano = if timeNano >= minValidTimestampNanos && timeNano /= 0 then nanosecondsToUTC timeNano else fallbackTime
+    pointTime = validTsOr fallbackTime
     pointAttrs point = keyValueToJSON (V.toList $ point ^. PMF.vec'attributes)
 
     mkRecord validTime attrs mType mValue fls temporality_ monotonic_ payloadBytes =
@@ -1489,16 +1475,44 @@ runServer appLogger appCtx tp = do
 
 -- | Process trace request with optional API key from gRPC metadata (extracted for testing)
 processTraceRequest :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es, UUIDEff :> es) => Maybe Text -> TS.ExportTraceServiceRequest -> Eff es ()
-processTraceRequest metadataApiKey req = do
-  Log.logTrace "Received trace export request" AE.Null
+processTraceRequest metadataApiKey req =
+  let !resourceSpans = V.fromList $ req ^. TSF.resourceSpans
+   in processSignalRequest "Traces" "traces" "Received trace export request" "spans" "span_count" metadataApiKey (getSpanApiKey resourceSpans) (V.toList $ getSpanAttributeValue "at-project-id" resourceSpans) $ \currentTime projectCaches projectIdsAndKeys ->
+        V.fromList $ convertResourceSpansToOtelLogs currentTime projectCaches projectIdsAndKeys resourceSpans
+
+
+-- | Process logs request with optional API key from gRPC metadata (extracted for testing)
+processLogsRequest :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es, UUIDEff :> es) => Maybe Text -> LS.ExportLogsServiceRequest -> Eff es ()
+processLogsRequest metadataApiKey req =
+  let !resourceLogs = V.fromList $ req ^. PLF.resourceLogs
+   in processSignalRequest "Logs" "logs" "Received logs export request" "logs" "log_count" metadataApiKey (getLogApiKey resourceLogs) (V.toList $ getLogAttributeValue "at-project-id" resourceLogs) $ \currentTime projectCaches projectIdsAndKeys ->
+        V.fromList $ concatMap (convertResourceLogsToOtelLogs currentTime projectCaches projectIdsAndKeys) (V.toList resourceLogs)
+
+
+-- | Shared gRPC-direct ingestion pipeline for traces and logs: auth-verify, cache-fetch,
+-- convert (via the signal-specific converter), then stamp/mint/insert. Throws GrpcUnauthenticated
+-- on bad auth and throwOnWriteFailure on write failure. @label@ is the human log prefix
+-- ("Traces"/"Logs"), @signal@ the checkpoint/span label ("traces"/"logs"), @noun@/@countKey@
+-- the converted/inserted record noun and its log count key ("spans"/"span_count").
+processSignalRequest
+  :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es, UUIDEff :> es)
+  => Text
+  -> Text
+  -> Text
+  -> Text
+  -> AE.Key
+  -> Maybe Text
+  -> V.Vector Text
+  -> [Text]
+  -> (UTCTime -> HM.HashMap Projects.ProjectId Projects.ProjectCache -> V.Vector (Text, Projects.ProjectId) -> V.Vector OtelLogsAndSpans)
+  -> Eff es ()
+processSignalRequest label signal receivedMsg noun countKey metadataApiKey projectKeys atIds' convert = do
+  Log.logTrace receivedMsg AE.Null
 
   currentTime <- liftIO getCurrentTime
   appCtx <- ask @AuthContext
 
-  let !resourceSpans = V.fromList $ req ^. TSF.resourceSpans
-      !projectKeys = getSpanApiKey resourceSpans
-      atIds' = getSpanAttributeValue "at-project-id" resourceSpans
-      atIds = V.catMaybes $ Projects.projectIdFromText <$> atIds'
+  let atIds = V.catMaybes $ Projects.projectIdFromText <$> V.fromList atIds'
 
       -- Combine API key from metadata with keys from resource attributes
       !allApiKeys = case metadataApiKey of
@@ -1519,14 +1533,14 @@ processTraceRequest metadataApiKey req = do
         , grpcErrorDetails = Nothing
         }
     Log.logTrace
-      "Traces: Authentication successful"
+      (label <> ": Authentication successful")
       (AE.object ["project_ids" AE..= map unUUIDId allProjectIds, "project_keys" AE..= V.toList allApiKeys, "metadata_auth" AE..= isJust metadataApiKey])
 
   projectIdsAndKeys <-
-    checkpoint "processList:traces:getProjectIds"
+    checkpoint (toAnnotation $ "processList:" <> signal <> ":getProjectIds")
       $ ProjectApiKeys.projectIdsByProjectApiKeys allApiKeys
   -- Fetch project caches for limit checking
-  projectCaches <- checkpoint "processList:traces:getProjectCaches" $ do
+  projectCaches <- checkpoint (toAnnotation $ "processList:" <> signal <> ":getProjectCaches") $ do
     let projectIds = toList . HS.fromList $ V.toList atIds <> [pid | (_, pid) <- V.toList projectIdsAndKeys]
 
     caches <- forM projectIds $ \pid -> do
@@ -1535,20 +1549,20 @@ processTraceRequest metadataApiKey req = do
         pure $ fromMaybe Projects.defaultProjectCache mpjCache
       pure (pid, cache)
     pure $ HM.fromList caches
-  let !spans' = V.fromList $ convertResourceSpansToOtelLogs currentTime projectCaches projectIdsAndKeys resourceSpans
+  let !records = convert currentTime projectCaches projectIdsAndKeys
 
   Log.logTrace
-    "Traces: Converted resource spans to OtelLogs"
-    (AE.object ["span_count" AE..= V.length spans'])
+    (label <> ": Converted resource " <> noun <> " to OtelLogs")
+    (AE.object [countKey AE..= V.length records])
 
-  unless (V.null spans') do
-    stampedSpans <- stampOrPassthrough appCtx spans'
-    mintedSpans <- Telemetry.mintOtelLogIds stampedSpans
-    Telemetry.insertAndHandOff appCtx.env.enableTimefusionWrites appCtx.extractionWorker projectCaches mintedSpans
+  unless (V.null records) do
+    stamped <- stampOrPassthrough appCtx records
+    minted <- Telemetry.mintOtelLogIds stamped
+    Telemetry.insertAndHandOff appCtx.env.enableTimefusionWrites appCtx.extractionWorker projectCaches minted
       >>= throwOnWriteFailure
     Log.logTrace
-      "Traces: Successfully inserted spans into database"
-      (AE.object ["inserted_count" AE..= V.length mintedSpans])
+      (label <> ": Successfully inserted " <> noun <> " into database")
+      (AE.object ["inserted_count" AE..= V.length minted])
 
 
 -- | Trace service handler (Export)
@@ -1576,68 +1590,6 @@ traceServiceExport appLogger appCtx tp (Proto req) = do
   _ <- runBackground appLogger appCtx tp $ processTraceRequest Nothing req
   -- Return an empty response
   pure defMessage
-
-
--- | Process logs request with optional API key from gRPC metadata (extracted for testing)
-processLogsRequest :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es, UUIDEff :> es) => Maybe Text -> LS.ExportLogsServiceRequest -> Eff es ()
-processLogsRequest metadataApiKey req = do
-  Log.logTrace "Received logs export request" AE.Null
-  currentTime <- liftIO getCurrentTime
-  appCtx <- ask @AuthContext
-
-  let !resourceLogs = V.fromList $ req ^. PLF.resourceLogs
-      !projectKeys = getLogApiKey resourceLogs
-      atIds' = getLogAttributeValue "at-project-id" resourceLogs
-      atIds = V.catMaybes $ Projects.projectIdFromText <$> atIds'
-
-      -- Combine API key from metadata with keys from resource attributes
-      !allApiKeys = case metadataApiKey of
-        Just key -> V.cons key projectKeys
-        Nothing -> projectKeys
-
-  -- Verify authentication: if project keys or IDs are present, they must resolve to valid projects
-  when (not (V.null allApiKeys) || not (V.null atIds)) $ do
-    projectIdsAndKeys <- ProjectApiKeys.projectIdsByProjectApiKeys allApiKeys
-    let allProjectIds = toList . HS.fromList $ V.toList atIds <> [pid | (_, pid) <- V.toList projectIdsAndKeys]
-    when (null allProjectIds)
-      $ liftIO
-      $ throwIO
-      $ GrpcException
-        { grpcError = GrpcUnauthenticated
-        , grpcErrorMessage = Just "Invalid or missing project API key"
-        , grpcErrorMetadata = []
-        , grpcErrorDetails = Nothing
-        }
-    Log.logTrace
-      "Logs: Authentication successful"
-      (AE.object ["project_ids" AE..= map unUUIDId allProjectIds, "project_keys" AE..= V.toList allApiKeys, "metadata_auth" AE..= isJust metadataApiKey])
-
-  projectIdsAndKeys <- ProjectApiKeys.projectIdsByProjectApiKeys allApiKeys
-
-  -- Fetch project caches using cache pattern
-  projectCaches <- checkpoint "processList:logs:getProjectCaches" $ do
-    let projectIds = toList . HS.fromList $ V.toList atIds <> [pid | (_, pid) <- V.toList projectIdsAndKeys]
-    caches <- forM projectIds $ \pid -> do
-      cache <- liftIO $ Cache.fetchWithCache appCtx.projectCache pid $ \pid' -> do
-        mpjCache <- Projects.projectCacheByIdIO appCtx.hasqlJobsPool pid'
-        pure $ fromMaybe Projects.defaultProjectCache mpjCache
-      pure (pid, cache)
-    pure $ HM.fromList caches
-
-  let !logs = V.fromList $ concatMap (convertResourceLogsToOtelLogs currentTime projectCaches projectIdsAndKeys) (V.toList resourceLogs)
-
-  Log.logTrace
-    "Logs: Converted resource logs to OtelLogs"
-    (AE.object ["log_count" AE..= V.length logs])
-
-  unless (V.null logs) do
-    stampedLogs <- stampOrPassthrough appCtx logs
-    mintedLogs <- Telemetry.mintOtelLogIds stampedLogs
-    Telemetry.insertAndHandOff appCtx.env.enableTimefusionWrites appCtx.extractionWorker projectCaches mintedLogs
-      >>= throwOnWriteFailure
-    Log.logTrace
-      "Logs: Successfully inserted logs into database"
-      (AE.object ["inserted_count" AE..= V.length mintedLogs])
 
 
 -- | Logs service handler (Export)
@@ -1741,55 +1693,75 @@ isFreeTierExceededCached appCtx = \case
           Nothing -> False
 
 
--- | RpcHandler for trace service with metadata access
-traceServiceRpcHandler :: Logger -> AuthContext -> TracerProvider -> RpcHandler IO (Protobuf TS.TraceService "export")
-traceServiceRpcHandler appLogger appCtx tp = mkRpcHandler $ \call -> do
+-- | Shared skeleton for the three OTLP export RpcHandlers: read metadata/api-key,
+-- recv the request, and either reject (free-tier exceeded) with a per-signal
+-- partialSuccess response or dispatch the per-signal processing in the background.
+-- The per-signal parts are the rejected-count fn, the rejection-response builder,
+-- the dispatch label, and the process fn.
+mkOtlpRpcHandler
+  :: ( Input (Protobuf service meth) ~ Proto req
+     , Message (Output (Protobuf service meth))
+     , RequestMetadata (Protobuf service meth) ~ OtlpRequestMetadata
+     , ResponseInitialMetadata (Protobuf service meth) ~ NoMetadata
+     , ResponseTrailingMetadata (Protobuf service meth) ~ NoMetadata
+     )
+  => Logger
+  -> AuthContext
+  -> TracerProvider
+  -> Text
+  -> (req -> Int64)
+  -> (Int64 -> Output (Protobuf service meth))
+  -> (Maybe Text -> req -> ATBackgroundCtx ())
+  -> RpcHandler IO (Protobuf service meth)
+mkOtlpRpcHandler appLogger appCtx tp label countFn rejectResp process = mkRpcHandler $ \call -> do
   metadata <- getRequestMetadata call
   let apiKey = otlpApiKey metadata
   Proto req <- recvFinalInput call
   exceeded <- isFreeTierExceededCached appCtx apiKey
   if exceeded
-    then do
-      let count = fromIntegral $ sum [length (ss ^. PTF.spans) | rs <- req ^. TSF.resourceSpans, ss <- rs ^. PTF.scopeSpans]
-          resp = defMessage & TSF.partialSuccess .~ (defMessage & TSF.rejectedSpans .~ count & TSF.errorMessage .~ "Free tier daily event limit exceeded")
-      sendFinalOutput call (resp, NoMetadata)
+    then sendFinalOutput call (rejectResp (countFn req), NoMetadata)
     else do
-      grpcRunBackground appLogger appCtx tp "traces" $ processTraceRequest apiKey req
+      grpcRunBackground appLogger appCtx tp label $ process apiKey req
       sendFinalOutput call (defMessage, NoMetadata)
+
+
+-- | RpcHandler for trace service with metadata access
+traceServiceRpcHandler :: Logger -> AuthContext -> TracerProvider -> RpcHandler IO (Protobuf TS.TraceService "export")
+traceServiceRpcHandler appLogger appCtx tp =
+  mkOtlpRpcHandler
+    appLogger
+    appCtx
+    tp
+    "traces"
+    (\req -> fromIntegral $ sum [length (ss ^. PTF.spans) | rs <- req ^. TSF.resourceSpans, ss <- rs ^. PTF.scopeSpans])
+    (\count -> defMessage & TSF.partialSuccess .~ (defMessage & TSF.rejectedSpans .~ count & TSF.errorMessage .~ "Free tier daily event limit exceeded"))
+    processTraceRequest
 
 
 -- | RpcHandler for logs service with metadata access
 logsServiceRpcHandler :: Logger -> AuthContext -> TracerProvider -> RpcHandler IO (Protobuf LS.LogsService "export")
-logsServiceRpcHandler appLogger appCtx tp = mkRpcHandler $ \call -> do
-  metadata <- getRequestMetadata call
-  let apiKey = otlpApiKey metadata
-  Proto req <- recvFinalInput call
-  exceeded <- isFreeTierExceededCached appCtx apiKey
-  if exceeded
-    then do
-      let count = fromIntegral $ sum [length (sl ^. PLF.logRecords) | rl <- req ^. LSF.resourceLogs, sl <- rl ^. PLF.scopeLogs]
-          resp = defMessage & LSF.partialSuccess .~ (defMessage & LSF.rejectedLogRecords .~ count & LSF.errorMessage .~ "Free tier daily event limit exceeded")
-      sendFinalOutput call (resp, NoMetadata)
-    else do
-      grpcRunBackground appLogger appCtx tp "logs" $ processLogsRequest apiKey req
-      sendFinalOutput call (defMessage, NoMetadata)
+logsServiceRpcHandler appLogger appCtx tp =
+  mkOtlpRpcHandler
+    appLogger
+    appCtx
+    tp
+    "logs"
+    (\req -> fromIntegral $ sum [length (sl ^. PLF.logRecords) | rl <- req ^. LSF.resourceLogs, sl <- rl ^. PLF.scopeLogs])
+    (\count -> defMessage & LSF.partialSuccess .~ (defMessage & LSF.rejectedLogRecords .~ count & LSF.errorMessage .~ "Free tier daily event limit exceeded"))
+    processLogsRequest
 
 
 -- | RpcHandler for metrics service with metadata access
 metricsServiceRpcHandler :: Logger -> AuthContext -> TracerProvider -> RpcHandler IO (Protobuf MS.MetricsService "export")
-metricsServiceRpcHandler appLogger appCtx tp = mkRpcHandler $ \call -> do
-  metadata <- getRequestMetadata call
-  let apiKey = otlpApiKey metadata
-  Proto req <- recvFinalInput call
-  exceeded <- isFreeTierExceededCached appCtx apiKey
-  if exceeded
-    then do
-      let count = fromIntegral $ sum [length (sm ^. PMF.metrics) | rm <- req ^. MSF.resourceMetrics, sm <- rm ^. PMF.scopeMetrics]
-          resp = defMessage & MSF.partialSuccess .~ (defMessage & MSF.rejectedDataPoints .~ count & MSF.errorMessage .~ "Free tier daily event limit exceeded")
-      sendFinalOutput call (resp, NoMetadata)
-    else do
-      grpcRunBackground appLogger appCtx tp "metrics" $ processMetricsRequest apiKey req
-      sendFinalOutput call (defMessage, NoMetadata)
+metricsServiceRpcHandler appLogger appCtx tp =
+  mkOtlpRpcHandler
+    appLogger
+    appCtx
+    tp
+    "metrics"
+    (\req -> fromIntegral $ sum [length (sm ^. PMF.metrics) | rm <- req ^. MSF.resourceMetrics, sm <- rm ^. PMF.scopeMetrics])
+    (\count -> defMessage & MSF.partialSuccess .~ (defMessage & MSF.rejectedDataPoints .~ count & MSF.errorMessage .~ "Free tier daily event limit exceeded"))
+    processMetricsRequest
 
 
 -- | Run a background task for gRPC handlers, catching exceptions to prevent server crash.

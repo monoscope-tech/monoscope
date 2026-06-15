@@ -82,6 +82,8 @@ import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
 import Data.ByteString.Base16 qualified as B16
 import Data.Default (Default (..))
+import Data.Effectful.Hasql (Hasql)
+import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.UUID (UUIDEff, genUUID)
 import Data.Generics.Labels ()
 import Data.HashMap.Strict qualified as HM
@@ -90,6 +92,7 @@ import Data.List qualified as L (groupBy)
 import Data.List.Extra (chunksOf)
 import Data.List.NonEmpty qualified as NE
 import Data.Map qualified as Map
+import Data.Scientific (toBoundedInteger)
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (Display)
@@ -100,11 +103,7 @@ import Data.Time.Clock (addUTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Data.Vector.Split qualified as VS
-import Database.PostgreSQL.Simple (ResultError (ConversionFailed))
-
-import Data.Effectful.Hasql (Hasql)
-import Data.Effectful.Hasql qualified as Hasql
-import Database.PostgreSQL.Simple.FromField (Conversion (..), FromField (..), returnError)
+import Database.PostgreSQL.Simple.FromField (Conversion, FromField (..))
 import Database.PostgreSQL.Simple.FromRow
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (ToField (toField))
@@ -124,17 +123,16 @@ import Hasql.Interpolate qualified as HI
 import Hasql.Session qualified as HSession
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), WrappedEnum (..), WrappedEnumSC (..), encodeEnumSC, idFromText, textArrayEnc, unAesonTextMaybe)
+import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), WrappedEnum (..), WrappedEnumInt (..), WrappedEnumSC (..), encodeEnumSC, idFromText, textArrayEnc, unAesonTextMaybe)
 import Pkg.ExtractionWorker qualified as EW
 import Relude hiding (ask)
-import Relude.Extra.Enum (safeToEnum)
 import Relude.Extra.Tuple (traverseToSnd)
 import System.IO (hPutStrLn)
 import System.Logging qualified as Log
 import System.Tracing (forkWithCtx)
 import Text.Regex.TDFA.Text ()
 import UnliftIO (throwIO, tryAny)
-import Utils (extractMessageFromLog, getDurationNSMS, lookupValueText)
+import Utils (extractMessageFromLog, getDurationNSMS, lookupValueText, scrubNulText, scrubNulValue)
 
 
 -- Helper function to get nested value from a map using dot notation
@@ -149,29 +147,13 @@ getNestedValue ks@(k : rest) m =
       _ -> Nothing
 
 
--- Helper function to clean null bytes from text
-cleanNullBytes :: Text -> Text
-cleanNullBytes !t =
-  if T.any (== '\NUL') t
-    then T.filter (/= '\NUL') t
-    else t
-
-
--- Helper function to clean null bytes from JSON values
-cleanNullBytesFromJSON :: AE.Value -> AE.Value
-cleanNullBytesFromJSON (AE.String t) = AE.String $ cleanNullBytes t
-cleanNullBytesFromJSON (AE.Object o) = AE.Object $ KEM.map cleanNullBytesFromJSON o
-cleanNullBytesFromJSON (AE.Array a) = AE.Array $ V.map cleanNullBytesFromJSON a
-cleanNullBytesFromJSON v = v
-
-
 -- Lens-like access helpers for Map Text AE.Value fields
 atMapText :: Text -> Maybe (Map Text AE.Value) -> Maybe Text
 atMapText key maybeMap = do
   m <- maybeMap
   val <- getNestedValue (T.split (== '.') key) m
   case val of
-    AE.String t -> Just $ cleanNullBytes t
+    AE.String t -> Just $ scrubNulText t
     AE.Number n -> Just $ show n
     _ -> Nothing
 
@@ -251,28 +233,13 @@ instance AE.ToJSON ByteString where
   toJSON = AE.String . decodeUtf8 . B16.encode
 
 
--- Custom FromField instance for Map Text AE.Value that handles both JSONB and varchar/text
+-- JSONB/text decode for Map Text Value reuses the generic AesonText decoder in DeriveUtils.
 instance FromField (Map Text AE.Value) where
-  fromField f mdata = do
-    -- Try to parse as JSONB first
-    let tryJsonb = do
-          v <- fromField f mdata :: Conversion AE.Value
-          case v of
-            AE.Object o -> pure $ KEM.toMapText o
-            _ -> returnError ConversionFailed f "Expected a JSON object"
-    -- If that fails, try parsing as text/varchar
-    let tryText = do
-          txt <- fromField f mdata :: Conversion Text
-          case AE.eitherDecodeStrict (encodeUtf8 txt) of
-            Right (AE.Object o) -> return $ KEM.toMapText o
-            Right _ -> returnError ConversionFailed f "Expected a JSON object"
-            Left err -> returnError ConversionFailed f ("Failed to parse JSON from text: " ++ err)
-    tryJsonb <|> tryText
+  fromField f mdata = coerce (fromField f mdata :: Conversion (AesonText (Map Text AE.Value)))
 
 
--- Custom ToField instance for Map Text AE.Value
 instance ToField (Map Text AE.Value) where
-  toField = toField . AE.Object . KEM.fromMapText
+  toField = toField . AesonText
 
 
 data SpanRecord = SpanRecord
@@ -518,17 +485,7 @@ data AggregationTemporality = ATUnspecified | ATDelta | ATCumulative
   deriving (Bounded, Enum, Eq, Generic, Read, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake AggregationTemporality
-
-
-instance ToField AggregationTemporality where toField = toField . fromEnum
-instance HI.EncodeValue AggregationTemporality where encodeValue = contramap fromEnum HI.encodeValue
-
-
-instance FromField AggregationTemporality where
-  fromField f bs =
-    fromField @Int f bs
-      >>= \n -> maybe (returnError ConversionFailed f ("Invalid aggregation_temporality: " <> show n)) pure (safeToEnum n)
-instance HI.DecodeValue AggregationTemporality where decodeValue = fromMaybe minBound . safeToEnum <$> HI.decodeValue
+  deriving (FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumInt AggregationTemporality
 
 
 data MetricDataPoint = MetricDataPoint
@@ -596,6 +553,17 @@ otelSpanColsSql =
   -- is absorbed by the Maybe on the 'hashes' field instead.
   [HI.sql|project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource,
           hashes, kind, status_code, status_message, COALESCE(start_time, timestamp), end_time, events, links, duration, name, parent_id, summary, date::timestamptz, errors, COALESCE(message_size_bytes, 0)|]
+
+
+-- | Shared SELECT prefix for span fetchers: full column list, project + timestamp window.
+-- The caller appends its own trailing clause, including the leading @AND@ for any extra
+-- predicate (so an empty @predSql@ still yields valid SQL).
+selectOtelSpans :: Text -> UTCTime -> UTCTime -> HI.Sql -> HI.Sql
+selectOtelSpans pidTxt lo hi predSql =
+  [HI.sql|SELECT |]
+    <> otelSpanColsSql
+    <> [HI.sql| FROM otel_logs_and_spans WHERE project_id=#{pidTxt} AND timestamp BETWEEN #{lo} AND #{hi} |]
+    <> predSql
 
 
 lookupOtelRecord :: DB es => Maybe Text -> UTCTime -> UUID.UUID -> Eff es (Maybe OtelLogsAndSpans)
@@ -666,22 +634,18 @@ getSpanRecordsByTraceId pid trId tme now = do
       (wideStart, wideEnd) = (addUTCTime (-86400) baseT, addUTCTime 86400 baseT)
       resolveHop ids =
         Hasql.interp
-          $ [HI.sql|SELECT |]
-          <> otelSpanColsSql
-          <> [HI.sql| FROM otel_logs_and_spans
-                       WHERE project_id=#{pid.toText}
-                         AND timestamp BETWEEN #{wideStart} AND #{wideEnd}
-                         AND context___trace_id=#{trId}
-                         AND context___span_id = ANY(#{ids})|]
+          $ selectOtelSpans
+            pid.toText
+            wideStart
+            wideEnd
+            [HI.sql| AND context___trace_id=#{trId} AND context___span_id = ANY(#{ids})|]
   initial :: [OtelLogsAndSpans] <-
     Hasql.interp
-      $ [HI.sql|SELECT |]
-      <> otelSpanColsSql
-      <> [HI.sql| FROM otel_logs_and_spans
-                   WHERE project_id=#{pid.toText}
-                     AND timestamp BETWEEN #{start} AND #{end}
-                     AND context___trace_id=#{trId}
-                   ORDER BY start_time ASC|]
+      $ selectOtelSpans
+        pid.toText
+        start
+        end
+        [HI.sql| AND context___trace_id=#{trId} ORDER BY start_time ASC|]
   -- Resolve missing parents iteratively: a parent ingested outside ±5min
   -- (clock skew, late ingestion, async batch) is looked up via
   -- context___span_id within ±24h. Recovered spans may themselves have a
@@ -715,14 +679,11 @@ getSpanRecordsByTraceIds pid traceIds tme = do
         Just ts -> (addUTCTime (-300) ts, addUTCTime 300 ts)
       traceIdsList = V.toList traceIds
   Hasql.interp
-    $ [HI.sql|SELECT |]
-    <> otelSpanColsSql
-    <> [HI.sql| FROM otel_logs_and_spans
-                 WHERE project_id = #{pid.toText}
-                   AND timestamp >= #{start}
-                   AND timestamp <= #{end'}
-                   AND context___trace_id = ANY(#{traceIdsList})
-                 ORDER BY context___trace_id ASC, start_time ASC|]
+    $ selectOtelSpans
+      pid.toText
+      start
+      end'
+      [HI.sql| AND context___trace_id = ANY(#{traceIdsList}) ORDER BY context___trace_id ASC, start_time ASC|]
 
 
 spanRecordByProjectAndId :: DB es => Projects.ProjectId -> UTCTime -> UUID.UUID -> Eff es (Maybe OtelLogsAndSpans)
@@ -1281,13 +1242,13 @@ otelColumns =
       aI8 k c = param (fmap (fromIntegral :: Int -> Int64) (atMapInt k c.am))
       rT k c = param (atMapText k c.rm)
       top f c = f c.row
-      txt g = top (param . fmap cleanNullBytes . g)
+      txt g = top (param . fmap scrubNulText . g)
       jp :: AE.ToJSON a => (OtelLogsAndSpans -> Maybe a) -> OtelRowCtx -> Snippet
-      jp g = top (param . fmap (cleanNullBytesFromJSON . AE.toJSON) . g)
-      aeson g = top (param . fmap cleanNullBytesFromJSON . unAesonTextMaybe . g)
-      arr g = top (encoderAndParam (E.nonNullable textArrayEnc) . V.map cleanNullBytes . g)
-      ctxT f = top (\e -> param (fmap cleanNullBytes (e.context >>= f)))
-      sevText e = e.severity >>= \s -> cleanNullBytes . toText . encodeEnumSC @"SL" <$> s.severity_text
+      jp g = top (param . fmap (scrubNulValue . AE.toJSON) . g)
+      aeson g = top (param . fmap scrubNulValue . unAesonTextMaybe . g)
+      arr g = top (encoderAndParam (E.nonNullable textArrayEnc) . V.map scrubNulText . g)
+      ctxT f = top (\e -> param (fmap scrubNulText (e.context >>= f)))
+      sevText e = e.severity >>= \s -> scrubNulText . toText . encodeEnumSC @"SL" <$> s.severity_text
       sevNum :: OtelLogsAndSpans -> Maybe Int32
       sevNum e = fromIntegral . severity_number <$> e.severity
    in [ ("timestamp", top (param . (.timestamp)))
@@ -1315,7 +1276,7 @@ otelColumns =
       , ("context___is_remote", (.isRemoteP))
       , ("events", aeson (.events))
       , ("links", txt (.links))
-      , ("attributes", \c -> param (fmap (cleanNullBytesFromJSON . AE.Object . KEM.fromMapText) c.am))
+      , ("attributes", \c -> param (fmap (scrubNulValue . AE.Object . KEM.fromMapText) c.am))
       , ("attributes___client___address", aT "client.address")
       , ("attributes___client___port", aI "client.port")
       , ("attributes___server___address", aT "server.address")
@@ -1365,7 +1326,7 @@ otelColumns =
       , ("attributes___user___full_name", aT "user.full_name")
       , ("attributes___user___name", aT "user.name")
       , ("attributes___user___hash", aT "user.hash")
-      , ("resource", \c -> param (fmap (cleanNullBytesFromJSON . AE.Object . KEM.fromMapText) c.rm))
+      , ("resource", \c -> param (fmap (scrubNulValue . AE.Object . KEM.fromMapText) c.rm))
       , ("resource___service___name", rT "service.name")
       , ("resource___service___version", rT "service.version")
       , ("resource___service___instance___id", rT "service.instance.id")
@@ -1374,7 +1335,7 @@ otelColumns =
       , ("resource___telemetry___sdk___name", rT "telemetry.sdk.name")
       , ("resource___telemetry___sdk___version", rT "telemetry.sdk.version")
       , ("resource___user_agent___original", rT "user_agent.original")
-      , ("project_id", top (param . cleanNullBytes . (.project_id)))
+      , ("project_id", top (param . scrubNulText . (.project_id)))
       , ("summary", arr (.summary))
       , ("date", top (param . (.date)))
       , ("message_size_bytes", top (param . (.message_size_bytes)))

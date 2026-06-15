@@ -7,6 +7,7 @@ module Pages.LogExplorer.LogItem (
   getRequestDetails,
   spanHasErrors,
   spanBadge,
+  fetchIntoScript,
 ) where
 
 import Data.Aeson qualified as AE
@@ -16,7 +17,6 @@ import Data.Char (isSpace)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
 import Data.Map qualified as Map
-import Data.Scientific (toBoundedInteger)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
@@ -53,68 +53,52 @@ getServiceColor s serviceColors = fromMaybe "bg-fillNeutral-strong" $ HM.lookup 
 getRequestDetails :: Maybe (Map Text AE.Value) -> Maybe (Text, Text, Text, Int)
 getRequestDetails spanRecord = do
   m <- spanRecord
-  case Map.lookup "http" m of
-    Just (AE.Object o) ->
+  if Map.member "http" m
+    then
       Just
         ( "HTTP"
-        , case KEM.lookup "request" o of
-            Just (AE.Object r) -> getText "method" r
-            _ -> ""
-        , case getUrl o of
-            Just u -> u
-            Nothing -> case Map.lookup "url" m of
-              Just (AE.Object p) -> fromMaybe "/" $ getUrl p
-              _ -> "/"
-        , case KEM.lookup "response" o of
-            Just (AE.Object r) -> getStatus r
-            _ -> 0
+        , txt "http.request.method"
+        , fromMaybe "/" $ url "http" <|> url "url"
+        , status "http.response"
         )
-    _ -> case Map.lookup "rpc" m of
-      Just (AE.Object o) -> Just ("GRPC", getText "service" o, getText "method" o, getStatus o)
-      _ -> case Map.lookup "db" m of
-        Just (AE.Object o) -> Just ("DB", getText "system" o, if T.null query then statement else query, getStatus o)
-          where
-            statement = getText "statement" o
-            query = getText "query" o
-        _ -> Nothing
+    else
+      if Map.member "rpc" m
+        then Just ("GRPC", txt "rpc.service", txt "rpc.method", status "rpc")
+        else
+          if Map.member "db" m
+            then Just ("DB", txt "db.system", if T.null query then txt "db.statement" else query, status "db")
+            else Nothing
   where
-    getText :: Text -> AE.Object -> Text
-    getText key v = case KEM.lookup (AEKey.fromText key) v of
-      Just (AE.String s) -> s
-      _ -> ""
-    getInt :: Text -> AE.Object -> Maybe Int
-    getInt key v = case KEM.lookup (AEKey.fromText key) v of
-      Just (AE.Number n) -> toBoundedInteger n
-      Just (AE.String s) -> readMaybe $ toString s
-      _ -> Nothing
-    getUrl :: AE.Object -> Maybe Text
-    getUrl v =
-      let opts = [getText "route" v, getText "path" v, getText "url" v, getText "target" v]
-       in viaNonEmpty head $ Relude.filter (not . T.null) opts
-    getStatus :: AE.Object -> Int
-    getStatus v = fromMaybe 0 $ getInt "status_code" v
+    txt k = fromMaybe "" $ atMapText k spanRecord
+    query = txt "db.query"
+    status pfx = fromMaybe 0 $ Telemetry.atMapInt (pfx <> ".status_code") spanRecord
+    url pfx = viaNonEmpty head $ Relude.filter (not . T.null) [txt (pfx <> "." <> k) | k <- ["route", "path", "url", "target"]]
+
+
+-- | Exception events (event_name == "exception") within a span's events array.
+getSpanErrors :: AE.Value -> [AE.Value]
+getSpanErrors (AE.Array a) = Relude.filter isExceptionEvent (V.toList a)
+  where
+    isExceptionEvent (AE.Object obj) = KEM.lookup "event_name" obj == Just (AE.String "exception")
+    isExceptionEvent _ = False
+getSpanErrors _ = []
 
 
 spanHasErrors :: Telemetry.SpanRecord -> Bool
-spanHasErrors spanRecord = case spanRecord.events of
-  AE.Array a ->
-    let hasExceptionEvent event = case event of
-          AE.Object obj -> KEM.lookup "event_name" obj == Just (AE.String "exception")
-          _ -> False
-     in Relude.any hasExceptionEvent (V.toList a)
-  _ -> False
+spanHasErrors = not . null . getSpanErrors . (.events)
 
 
-getSpanErrors :: AE.Value -> [AE.Value]
-getSpanErrors evs = case evs of
-  AE.Array a ->
-    let events = V.toList a
-        hasExceptionEvent :: AE.Value -> Bool
-        hasExceptionEvent event = case event of
-          AE.Object obj -> KEM.lookup "event_name" obj == Just (AE.String "exception")
-          _ -> False
-     in Relude.filter hasExceptionEvent events
-  _ -> []
+-- | Hyperscript tail that loads a spinner into @#target@, fetches @url@ and swaps
+-- the response in, then re-processes htmx/hyperscript/inline scripts. Shared by the
+-- trace-expand button (here) and the drawer-expand script (Pages.Telemetry).
+fetchIntoScript :: Text -> Text -> Text
+fetchIntoScript target url =
+  [text|set #$target.innerHTML to #loader-tmp.innerHTML
+        then fetch $url
+        then set #$target.innerHTML to it
+        then htmx.process(#$target)
+        then _hyperscript.processNode(#$target)
+        then window.evalScriptsFromContent(#$target)|]
 
 
 getErrorDetails :: AE.Value -> (Text, Text, Text)
@@ -300,6 +284,7 @@ expandedItemView pid item aptSp leftM rightM = do
         let createdAt = formatUTC item.timestamp
         whenJust (item.context >>= (.trace_id) >>= guarded (not . T.null)) $ \trId -> do
           let tracePath = "/p/" <> pid.toText <> "/traces/" <> trId <> "/?timestamp=" <> createdAt
+              fetchTail = fetchIntoScript "trace_expanded_view" tracePath
           button_
             ( actBtn
                 <> [ term "data-share-hide" "1"
@@ -307,11 +292,7 @@ expandedItemView pid item aptSp leftM rightM = do
                        "_"
                        [text|on click remove .hidden from #trace_expanded_view
                             then call updateUrlState('showTrace', "$trId/?timestamp=$createdAt")
-                            then set #trace_expanded_view.innerHTML to #loader-tmp.innerHTML
-                            then fetch $tracePath
-                            then set #trace_expanded_view.innerHTML to it
-                            then htmx.process(#trace_expanded_view)
-                            then _hyperscript.processNode(#trace_expanded_view) then window.evalScriptsFromContent(#trace_expanded_view)|]
+                            then $fetchTail|]
                    ]
             )
             do
@@ -407,29 +388,15 @@ expandedItemView pid item aptSp leftM rightM = do
                             _ -> AE.object []
                           _ -> AE.object []
                     jsonValueToHtmlTree b $ Just "body.response_body"
+                  let httpSub :: [AEKey.Key] -> Maybe AE.Value
+                      httpSub = foldlM (\v k -> case v of AE.Object o -> KEM.lookup k o; _ -> Nothing) (AE.Object $ maybe mempty (\case AE.Object o -> o; _ -> mempty) (unAesonTextMaybe cSp.attributes >>= Map.lookup "http"))
                   div_ [id_ "hed_content", class_ "hidden a-tab-content http"] do
-                    let reqHeaders = case unAesonTextMaybe cSp.attributes >>= Map.lookup "http" of
-                          Just (AE.Object httpAtts) -> case KEM.lookup "request" httpAtts of
-                            Just (AE.Object reqAtts) -> KEM.lookup "header" reqAtts
-                            _ -> Nothing
-                          _ -> Nothing
-                        resHeaders = case unAesonTextMaybe cSp.attributes >>= Map.lookup "http" of
-                          Just (AE.Object httpAtts) -> case KEM.lookup "response" httpAtts of
-                            Just (AE.Object resAtts) -> KEM.lookup "header" resAtts
-                            _ -> Nothing
-                          _ -> Nothing
+                    let reqHeaders = httpSub ["request", "header"]
+                        resHeaders = httpSub ["response", "header"]
                     jsonValueToHtmlTree (AE.object ["request_headers" AE..= fromMaybe AE.Null reqHeaders, "response_headers" AE..= fromMaybe AE.Null resHeaders]) Nothing
                   div_ [id_ "par_content", class_ "hidden a-tab-content http"] do
-                    let queryParams = case unAesonTextMaybe cSp.attributes >>= Map.lookup "http" of
-                          Just (AE.Object httpAtts) -> case KEM.lookup "request" httpAtts of
-                            Just (AE.Object reqAtts) -> KEM.lookup "query_params" reqAtts
-                            _ -> Nothing
-                          _ -> Nothing
-                        pathParams = case unAesonTextMaybe cSp.attributes >>= Map.lookup "http" of
-                          Just (AE.Object httpAtts) -> case KEM.lookup "request" httpAtts of
-                            Just (AE.Object reqAtts) -> KEM.lookup "path_params" reqAtts
-                            _ -> Nothing
-                          _ -> Nothing
+                    let queryParams = httpSub ["request", "query_params"]
+                        pathParams = httpSub ["request", "path_params"]
                     jsonValueToHtmlTree (AE.object ["query_params" AE..= fromMaybe AE.Null queryParams, "path_params" AE..= fromMaybe AE.Null pathParams]) Nothing
           _ -> pass
 

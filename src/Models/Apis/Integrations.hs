@@ -110,21 +110,26 @@ getDiscordDataByProjectId :: DB es => Projects.ProjectId -> Eff es (Maybe Discor
 getDiscordDataByProjectId pid = Hasql.interpOne [HI.sql|SELECT project_id, guild_id FROM apis.discord WHERE project_id = #{pid} |]
 
 
+-- | Shared (d.title, d.id::text) dashboard lookup; each caller supplies the
+-- platform-specific JOIN + WHERE fragment (Slack/Discord share the same shape).
+dashboardsByProjectJoin :: DB es => HI.Sql -> Eff es [(Text, Text)]
+dashboardsByProjectJoin joinWhere = Hasql.interp ([HI.sql|SELECT d.title, d.id::text FROM projects.dashboards d |] <> joinWhere)
+
+
 getDashboardsForSlack :: DB es => Text -> Eff es [(Text, Text)]
-getDashboardsForSlack teamId = Hasql.interp [HI.sql|SELECT d.title, d.id::text FROM projects.dashboards d JOIN apis.slack s ON d.project_id = s.project_id WHERE s.team_id = #{teamId}|]
+getDashboardsForSlack teamId = dashboardsByProjectJoin [HI.sql|JOIN apis.slack s ON d.project_id = s.project_id WHERE s.team_id = #{teamId}|]
 
 
 getDashboardsForWhatsapp :: DB es => Text -> Eff es [(Text, Text)]
 getDashboardsForWhatsapp number =
-  Hasql.interp
-    [HI.sql|SELECT d.title, d.id::text FROM projects.dashboards d
-            JOIN projects.teams t ON t.project_id = d.project_id
+  dashboardsByProjectJoin
+    [HI.sql|JOIN projects.teams t ON t.project_id = d.project_id
             WHERE t.is_everyone = TRUE AND t.deleted_at IS NULL
               AND #{number} = ANY(t.phone_numbers)|]
 
 
 getDashboardsForDiscord :: DB es => Text -> Eff es [(Text, Text)]
-getDashboardsForDiscord guildId = Hasql.interp [HI.sql|SELECT d.title, d.id::text FROM projects.dashboards d JOIN apis.discord dd ON d.project_id = dd.project_id where guild_id=#{guildId}|]
+getDashboardsForDiscord guildId = dashboardsByProjectJoin [HI.sql|JOIN apis.discord dd ON d.project_id = dd.project_id where guild_id=#{guildId}|]
 
 
 deleteSlackData :: DB es => Projects.ProjectId -> Eff es Int64
