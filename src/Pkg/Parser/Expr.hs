@@ -507,6 +507,13 @@ binTerm pLhs ctor sym = try (ctor <$> pLhs <* space <* void (symbol sym) <* spac
 -- Ordering is significant for 'pTerm' (try-based, longest token first, e.g.
 -- @>=@ before @>@, @!in@ before @in@). The same rows drive 'ToQueryText Expr'
 -- and 'Display Expr' so the constructor->token map lives in one place.
+--
+-- NOTE: 'subBinaryParts'/'valBinaryParts' map each binary 'Expr' constructor to
+-- its row here, and 'Display Expr'/'ToQueryText Expr' fall through to
+-- @error "...unreachable"@ for anything not covered. Because the tables are
+-- decoupled from the constructor definitions, adding a new binary 'Expr'
+-- constructor compiles cleanly but crashes at render until you add its row here
+-- AND its case in those two helpers — GHC's exhaustiveness check won't catch it.
 valBinOps :: [(Values -> Values -> Expr, Text, Text, Text)]
 valBinOps =
   [ (ValEq, "==", " == ", "=")
