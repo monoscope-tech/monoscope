@@ -1,8 +1,9 @@
-module Pages.Components (drawer_, emptyState_, resizer_, dateTime, paymentPlanPicker, navBar, modal_, modalCloseButton_, primaryButton_, headerRow_, headerRowPad_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_, sparkline_, periodToggle_, abbreviateUnit, compactTimeAgo) where
+module Pages.Components (drawer_, emptyState_, resizer_, dateTime, localTime_, localTimeFmt_, paymentPlanPicker, navBar, modal_, modalCloseButton_, primaryButton_, headerRow_, headerRowPad_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_, sparkline_, periodToggle_, abbreviateUnit, compactTimeAgo) where
 
 import Data.Default (Default (..))
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
+import Data.Time.Format.ISO8601 (iso8601Show)
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (makeAttribute, makeElement)
@@ -74,18 +75,35 @@ drawer_ drawerId urlM content trigger = div_ [class_ "drawer drawer-end inline-b
 
 dateTime :: UTCTime -> Maybe UTCTime -> Html ()
 dateTime t endTM = do
-  let fullIso = formatTime defaultTimeLocale "%Y-%m-%d %H:%M:%S UTC" t
-      fullIsoEnd = fmap (formatTime defaultTimeLocale "%Y-%m-%d %H:%M:%S UTC") endTM
-      title = maybe fullIso (\e -> fullIso <> " — " <> e) fullIsoEnd
+  let utcOf = formatTime defaultTimeLocale "%Y-%m-%d %H:%M:%S UTC"
+      title = maybe (utcOf t) (\e -> utcOf t <> " — " <> utcOf e) endTM
   span_
     [ class_ "flex items-center rounded-lg px-2 py-1.5 text-xs gap-2 border border-strokeWeak bg-fillWeaker text-textStrong"
     , Lucid.title_ (toText title)
     ]
     do
       faSprite_ "calendar" "regular" "w-4 h-4 fill-none"
-      toHtml $ formatTime defaultTimeLocale "%b %d, %H:%M:%S" t
-      whenJust endTM \endT ->
-        toHtml $ " - " <> formatTime defaultTimeLocale "%b %d, %H:%M:%S" endT
+      localTime_ t
+      whenJust endTM \endT -> " - " >> localTime_ endT
+
+
+-- | A UTC instant rendered as a <local-time> custom element, which reformats it
+-- into the viewer's timezone client-side (matching the virtual log list). The
+-- server-rendered UTC text is the no-JS fallback; the ISO @datetime@ is the
+-- machine value the element reads.
+localTime_ :: UTCTime -> Html ()
+localTime_ = localTimeFmt_ "MMM dd, HH:mm:ss"
+
+
+-- | 'localTime_' with an explicit date-fns @dfFmt@ pattern the <local-time> element
+-- applies client-side (in the viewer's zone). The no-JS fallback is the instant in
+-- UTC — a fixed readable form, so callers never hand-maintain a second pattern.
+localTimeFmt_ :: Text -> UTCTime -> Html ()
+localTimeFmt_ dfFmt ts =
+  with
+    (makeElement "local-time")
+    [makeAttribute "datetime" (toText $ iso8601Show ts), makeAttribute "format" dfFmt]
+    (toHtml $ formatTime defaultTimeLocale "%b %d, %H:%M:%S UTC" ts)
 
 
 paymentPlanPicker :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Bool -> Bool -> Projects.BillingProvider -> Html ()

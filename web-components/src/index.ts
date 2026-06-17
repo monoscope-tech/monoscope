@@ -2,6 +2,8 @@
 import './query-editor/query-editor';
 // Then import yaml-editor which registers YAML language on the global monaco instance
 import './yaml-editor';
+// Registers the <local-time> custom element (side-effect only, no exports)
+import './local-time';
 
 // Re-export everything from query-editor
 export * from './query-editor/query-editor';

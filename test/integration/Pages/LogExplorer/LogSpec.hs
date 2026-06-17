@@ -558,8 +558,11 @@ spec = aroundAll withTestResources do
   describe "Log item detail (expandAPIlogItemH)" do
     -- Regression: otelSpanColsSql's COALESCE(hashes, '{}') fails DataFusion planning
     -- ("coalesce(List(Utf8View), Utf8)") when the lookup routes through the TimeFusion
-    -- read path, 500-ing the log item page. Reproduces only against a real TF
-    -- (make test-integration-tf); on plain PG the TF pool aliases the test DB.
+    -- read path, 500-ing the log item page. Also guards the 'date' partition column:
+    -- on TF it's a Date32 and date::timestamptz drops the tz → wire OID 1114, which
+    -- the UTCTime decoder (1184) rejects with UnexpectedColumnTypeStatementError.
+    -- Both reproduce only against a real TF (make test-integration-tf); on plain PG
+    -- the TF pool aliases the test DB.
     it "loads a span via the TimeFusion read path, and decodes legacy NULL hashes on PG" \tr -> do
       let spanName = "GET /api/log-item/tf" :: Text
       apiKey <- createTestAPIKey tr testPid "log-item-tf-key"

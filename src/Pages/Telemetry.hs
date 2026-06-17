@@ -842,7 +842,7 @@ spanTable records =
             , hxIndicator_ "#loading-span-list"
             ]
             $ do
-              td_ $ toHtml $ formatTime defaultTimeLocale "%b %d %Y %H:%M:%S%Q" spanRecord.timestamp
+              td_ $ Components.localTimeFmt_ "MMM dd yyyy HH:mm:ss.SSS" spanRecord.timestamp
               td_ $ toHtml spanRecord.spanName
               td_ do
                 span_ [class_ "cbadge-sm badge-neutral"] $ toHtml reqType

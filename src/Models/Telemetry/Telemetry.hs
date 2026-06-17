@@ -551,8 +551,15 @@ otelSpanColsSql =
   -- NB: no COALESCE(hashes, '{}') — DataFusion can't coerce a Utf8 literal to
   -- List(Utf8View), which 500s every TF-routed lookup. NULL (legacy PG rows)
   -- is absorbed by the Maybe on the 'hashes' field instead.
+  --
+  -- 'date' fills the partition column position. On PG it's TIMESTAMPTZ, but on
+  -- TF it's the Date32 Hive partition key, and DataFusion's date::timestamptz
+  -- drops the tz → wire OID 1114 (timestamp) ≠ the UTCTime decoder's 1184
+  -- (timestamptz), crashing every TF-routed lookup at this column. Since 'date'
+  -- equals 'timestamp' on write and the decoded value is never read, project
+  -- the already-tz-aware 'timestamp' here so both stores agree on 1184.
   [HI.sql|project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource,
-          hashes, kind, status_code, status_message, COALESCE(start_time, timestamp), end_time, events, links, duration, name, parent_id, summary, date::timestamptz, errors, COALESCE(message_size_bytes, 0)|]
+          hashes, kind, status_code, status_message, COALESCE(start_time, timestamp), end_time, events, links, duration, name, parent_id, summary, timestamp AS date, errors, COALESCE(message_size_bytes, 0)|]
 
 
 -- | Shared SELECT prefix for span fetchers: full column list, project + timestamp window.
