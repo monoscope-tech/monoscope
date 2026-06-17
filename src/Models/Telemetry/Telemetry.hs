@@ -92,7 +92,6 @@ import Data.List qualified as L (groupBy)
 import Data.List.Extra (chunksOf)
 import Data.List.NonEmpty qualified as NE
 import Data.Map qualified as Map
-import Data.Scientific (toBoundedInteger)
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (Display)
