@@ -1,4 +1,4 @@
-module Pkg.Queue (pubsubService, kafkaService, KafkaRole (..), publishJSONToKafka, publishToDeadLetterQueue, closeSharedKafkaProducer) where
+module Pkg.Queue (pubsubService, kafkaService, KafkaRole (..), publishJSONToKafka, publishToDeadLetterQueue, dlqRecordValue, closeSharedKafkaProducer) where
 
 import Control.Exception.Annotated (checkpoint)
 import Control.Lens ((^?), _Just)
@@ -186,11 +186,14 @@ pubsubService appLogger appCtx tp topics fn = checkpoint "pubsubService" do
     pubSubScope = Proxy
 
 
-publishJSONToKafka :: AE.ToJSON a => AuthContext -> Text -> a -> HM.HashMap Text Text -> IO (Either Text Text)
-publishJSONToKafka appCtx topicName jsonData attributes = checkpoint "publishJSONToKafka" do
-  result <- tryAny $ checkpoint (toAnnotation $ "publishJSONToKafka: " <> topicName) do
+-- | Publish a value to a Kafka topic verbatim, with the given headers. The
+-- bytes are written exactly as given — structured-data callers must encode
+-- themselves ('publishJSONToKafka'); binary callers (the DLQ) pass the original
+-- message bytes so the consumer decodes them unchanged.
+publishRawToKafka :: AuthContext -> Text -> ByteString -> HM.HashMap Text Text -> IO (Either Text Text)
+publishRawToKafka appCtx topicName messageData attributes = checkpoint "publishRawToKafka" do
+  result <- tryAny $ checkpoint (toAnnotation $ "publishRawToKafka: " <> topicName) do
     producer <- getOrInitKafkaProducer appCtx.config
-    let messageData = BC.toStrict $ LT.encodeUtf8 $ LT.decodeUtf8 $ AE.encode jsonData
     let headers = KP.headersFromList $ map (\(k, v) -> (BC.pack $ toString k, BC.pack $ toString v)) $ HM.toList attributes
     let record =
           KP.ProducerRecord
@@ -207,6 +210,27 @@ publishJSONToKafka appCtx topicName jsonData attributes = checkpoint "publishJSO
   case result of
     Left e -> pure $ Left $ toText $ show e
     Right res -> pure res
+
+
+-- | Publish JSON-encoded structured data. ONLY for genuine JSON payloads —
+-- never raw binary (protobuf): JSON-string-encoding quotes and escapes the
+-- bytes into an undecodable blob (see 'dlqRecordValue').
+publishJSONToKafka :: AE.ToJSON a => AuthContext -> Text -> a -> HM.HashMap Text Text -> IO (Either Text Text)
+publishJSONToKafka appCtx topicName jsonData = publishRawToKafka appCtx topicName (BC.toStrict $ AE.encode jsonData)
+
+
+-- | The bytes a DLQ record carries: the original message verbatim, so the
+-- replay consumer protobuf-decodes them exactly as the primary consumer would.
+-- Historical bug: the payload went through 'publishJSONToKafka', so binary
+-- protobuf was JSON-string-encoded — quoted and escaped into "Unknown wire type
+-- N" garbage, and re-escaped on every requeue until the message ballooned and
+-- cycled forever. Identity, but a named contract: never JSON-wrap DLQ payloads.
+--
+-- >>> let raw = BC.pack "\x0a\x22\x5c\xff"
+-- >>> dlqRecordValue raw == raw
+-- True
+dlqRecordValue :: ByteString -> ByteString
+dlqRecordValue = id
 
 
 -- | Which consumer loop this is. 'KafkaDlqReplay' consumes the dead-letter
@@ -356,14 +380,6 @@ kafkaService appLogger appCtx tp role label kafkaTopics batchSize fn = checkpoin
         <> K.extraProp "heartbeat.interval.ms" "3000"
         <> K.extraProp "max.poll.interval.ms" "300000"
         <> K.extraProp "fetch.min.bytes" "1024"
-        -- Re-stamped DLQ records (and large legit OTLP batches) sit near the
-        -- 64 MiB broker/producer cap (see kafkaProducerProps message.max.bytes).
-        -- The consumer's fetch ceilings must clear a single full message, else
-        -- librdkafka returns it truncated, the valid protobuf fails to decode as
-        -- "Unknown wire type 6/7", and a write-failure replay re-DLQs forever.
-        <> K.extraProp "fetch.message.max.bytes" "67108864" -- 64 MiB per partition (matches producer cap)
-        <> K.extraProp "fetch.max.bytes" "100663296" -- 96 MiB total fetch response
-        <> K.extraProp "receive.message.max.bytes" "134217728" -- 128 MiB; must be >= fetch.max.bytes + overhead
         <> K.extraProp "partition.assignment.strategy" "cooperative-sticky"
         <> K.extraProp "group.instance.id" clientId
         <> K.logLevel K.KafkaLogInfo
@@ -419,7 +435,7 @@ publishToDeadLetterQueue appLogger appCtx messages attributes errorReason = do
   currentTime <- getCurrentTime
   results <- forM messages \(origTopicOrAckId, msgData) -> do
     let deadLetterAttrs = dlqHeaders errorReason (toText $ show currentTime) origTopicOrAckId attributes
-    result <- publishJSONToKafka appCtx deadLetterTopic (BC.unpack msgData) deadLetterAttrs
+    result <- publishRawToKafka appCtx deadLetterTopic (dlqRecordValue msgData) deadLetterAttrs
     case result of
       Left err -> do
         runLogT "dlq" appLogger LogAttention

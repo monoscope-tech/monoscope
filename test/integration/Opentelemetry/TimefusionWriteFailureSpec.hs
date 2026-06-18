@@ -6,6 +6,8 @@
 module Opentelemetry.TimefusionWriteFailureSpec (spec) where
 
 import Control.Exception (ErrorCall (..), evaluate)
+import Data.Aeson qualified as AE
+import Data.ByteString.Char8 qualified as BC
 import Data.HashMap.Strict qualified as HM
 import Data.List qualified as L
 import Data.Pool (withResource)
@@ -19,10 +21,11 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pkg.DeriveUtils (UUIDId (..), mkHasqlPool)
+import Pkg.Queue qualified as Queue
 import Pkg.TestUtils
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
-import Test.Hspec (SpecWith, aroundAll, beforeWith, describe, expectationFailure, it, shouldBe)
+import Test.Hspec (SpecWith, aroundAll, beforeWith, describe, expectationFailure, it, shouldBe, shouldNotBe)
 
 
 -- | A closed loopback port. Pool acquire fails with ECONNREFUSED so we
@@ -254,6 +257,17 @@ spec = aroundAll withTestResources $ beforeWith mkResWithKey do
         Left wf ->
           expectationFailure
             $ "expected Right; got Left " <> toString (Telemetry.writeFailureSummary wf)
+
+  -- Regression: the DLQ published payloads via publishJSONToKafka (BC.unpack →
+  -- AE.encode), JSON-string-encoding the binary protobuf. The replay consumer
+  -- then failed to protobuf-decode it ("Unknown wire type N"), re-DLQ'd it, and
+  -- re-escaped it on every pass until it ballooned (8+ MiB) and cycled forever.
+  -- The fix publishes the original bytes verbatim ('dlqRecordValue').
+  describe "DLQ binary payload safety (Pkg.Queue)" do
+    it "stores message bytes verbatim; the old JSON-wrap corrupted protobuf" \(_, key) -> do
+      let original = snd (validLogMsg key "ack-bytes") -- a real encoded OTLP logs proto
+      Queue.dlqRecordValue original `shouldBe` original -- fix: verbatim → replay can decode it
+      BC.toStrict (AE.encode (BC.unpack original)) `shouldNotBe` original -- bug: JSON-wrap mangles binary
 
   describe "DLQ side-tracking headers (writeFailureDlqHeaders)" do
     it "PG-only failure → pg-succeeded=false, tf-succeeded=true" \(_, _) -> do
