@@ -1,4 +1,4 @@
-module Pkg.Queue (pubsubService, kafkaService, KafkaRole (..), publishJSONToKafka, publishToDeadLetterQueue, dlqRecordValue, closeSharedKafkaProducer) where
+module Pkg.Queue (pubsubService, kafkaService, KafkaRole (..), publishJSONToKafka, publishToDeadLetterQueue, closeSharedKafkaProducer) where
 
 import Control.Exception.Annotated (checkpoint)
 import Control.Lens ((^?), _Just)
@@ -214,19 +214,9 @@ publishRawToKafka appCtx topicName messageData attributes = checkpoint "publishR
 
 -- | Publish JSON-encoded structured data. ONLY for genuine JSON payloads —
 -- never raw binary (protobuf): JSON-string-encoding quotes and escapes the
--- bytes into an undecodable blob (see 'dlqRecordValue').
+-- bytes into an undecodable blob (the DLQ uses 'publishRawToKafka' directly).
 publishJSONToKafka :: AE.ToJSON a => AuthContext -> Text -> a -> HM.HashMap Text Text -> IO (Either Text Text)
 publishJSONToKafka appCtx topicName jsonData = publishRawToKafka appCtx topicName (BC.toStrict $ AE.encode jsonData)
-
-
--- | The bytes a DLQ record carries: the original message verbatim, so the
--- replay consumer protobuf-decodes them exactly as the primary consumer would.
--- Historical bug: the payload went through 'publishJSONToKafka', so binary
--- protobuf was JSON-string-encoded — quoted and escaped into "Unknown wire type
--- N" garbage, and re-escaped on every requeue until the message ballooned and
--- cycled forever. Identity, but a named contract: never JSON-wrap DLQ payloads.
-dlqRecordValue :: ByteString -> ByteString
-dlqRecordValue = id
 
 
 -- | Which consumer loop this is. 'KafkaDlqReplay' consumes the dead-letter
@@ -431,7 +421,9 @@ publishToDeadLetterQueue appLogger appCtx messages attributes errorReason = do
   currentTime <- getCurrentTime
   results <- forM messages \(origTopicOrAckId, msgData) -> do
     let deadLetterAttrs = dlqHeaders errorReason (toText $ show currentTime) origTopicOrAckId attributes
-    result <- publishRawToKafka appCtx deadLetterTopic (dlqRecordValue msgData) deadLetterAttrs
+    -- Raw message bytes verbatim — NEVER via publishJSONToKafka, which would
+    -- JSON-string-encode the binary protobuf into an undecodable, re-escaping blob.
+    result <- publishRawToKafka appCtx deadLetterTopic msgData deadLetterAttrs
     case result of
       Left err -> do
         runLogT "dlq" appLogger LogAttention
