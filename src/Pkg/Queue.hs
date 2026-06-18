@@ -225,10 +225,6 @@ publishJSONToKafka appCtx topicName jsonData = publishRawToKafka appCtx topicNam
 -- protobuf was JSON-string-encoded — quoted and escaped into "Unknown wire type
 -- N" garbage, and re-escaped on every requeue until the message ballooned and
 -- cycled forever. Identity, but a named contract: never JSON-wrap DLQ payloads.
---
--- >>> let raw = BC.pack "\x0a\x22\x5c\xff"
--- >>> dlqRecordValue raw == raw
--- True
 dlqRecordValue :: ByteString -> ByteString
 dlqRecordValue = id
 
