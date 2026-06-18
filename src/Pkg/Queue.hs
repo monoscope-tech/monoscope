@@ -356,6 +356,14 @@ kafkaService appLogger appCtx tp role label kafkaTopics batchSize fn = checkpoin
         <> K.extraProp "heartbeat.interval.ms" "3000"
         <> K.extraProp "max.poll.interval.ms" "300000"
         <> K.extraProp "fetch.min.bytes" "1024"
+        -- Re-stamped DLQ records (and large legit OTLP batches) sit near the
+        -- 64 MiB broker/producer cap (see kafkaProducerProps message.max.bytes).
+        -- The consumer's fetch ceilings must clear a single full message, else
+        -- librdkafka returns it truncated, the valid protobuf fails to decode as
+        -- "Unknown wire type 6/7", and a write-failure replay re-DLQs forever.
+        <> K.extraProp "fetch.message.max.bytes" "67108864" -- 64 MiB per partition (matches producer cap)
+        <> K.extraProp "fetch.max.bytes" "100663296" -- 96 MiB total fetch response
+        <> K.extraProp "receive.message.max.bytes" "134217728" -- 128 MiB; must be >= fetch.max.bytes + overhead
         <> K.extraProp "partition.assignment.strategy" "cooperative-sticky"
         <> K.extraProp "group.instance.id" clientId
         <> K.logLevel K.KafkaLogInfo
