@@ -365,7 +365,13 @@ kafkaService appLogger appCtx tp role label kafkaTopics batchSize fn = checkpoin
         <> K.extraProp "session.timeout.ms" "45000"
         <> K.extraProp "heartbeat.interval.ms" "3000"
         <> K.extraProp "max.poll.interval.ms" "300000"
-        <> K.extraProp "fetch.min.bytes" "1024"
+        -- Let the broker coalesce a fetch up to 64 KiB (or 250ms, whichever first)
+        -- before responding, instead of returning on the first 1 KiB available.
+        -- Fatter fetches fill each poll batch → larger per-partition groups →
+        -- fewer, bigger bulk INSERTs (amortizes the dominant per-batch DB
+        -- round-trip cost). 250ms stays well under session/poll timeouts.
+        <> K.extraProp "fetch.min.bytes" "65536"
+        <> K.extraProp "fetch.wait.max.ms" "250"
         <> K.extraProp "partition.assignment.strategy" "cooperative-sticky"
         <> K.extraProp "group.instance.id" clientId
         <> K.logLevel K.KafkaLogInfo

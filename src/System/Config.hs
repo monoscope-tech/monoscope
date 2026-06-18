@@ -60,6 +60,14 @@ data EnvConfig = EnvConfig
   , kafkaUsername :: Text
   , kafkaPassword :: Text
   , enableKafkaService :: Bool
+  , consumerOnly :: Bool
+  -- ^ CONSUMER_ONLY=True runs the message-queue consumers (Kafka/PubSub) plus
+  -- the extraction / schema-learning pipeline (it flushes the spans this
+  -- instance ingested, and powers stats/facets — so it must run wherever
+  -- ingestion runs). Skips only the Warp HTTP server, gRPC OTLP server,
+  -- odd-jobs runner and the global periodic-job timers. Lets you spin up an
+  -- ingest-only instance without binding PORT/GRPC_PORT or clashing with a
+  -- running server.
   , kafkaGroupConcurrency :: Int
   , smtpHost :: Text
   , smtpPort :: Int
@@ -211,7 +219,7 @@ instance DefConfig EnvConfig where
       { port = 8080
       , environment = "DEV"
       , migrationsDir = "./static/migrations/"
-      , messagesPerPubsubPullBatch = 200
+      , messagesPerPubsubPullBatch = 1000
       , rrwebTopics = ["rrweb-client"]
       , replayBatchSize = 0 -- 0 = derive at runtime as messagesPerPubsubPullBatch `div` 2
       , loggingDestination = Logging.StdOut

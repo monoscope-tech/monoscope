@@ -122,26 +122,35 @@ runServer appLogger env tp = do
   let runEager batch shard = void $ runBackground appLogger env tp $ BackgroundJobs.processEagerBatch batch shard
   let shardsIndexed = zip [0 :: Int ..] (V.toList env.extractionWorker.shards)
   let fiber name = async . supervise logExc name
-  let workerFibers =
+  -- Per-instance buffer drainers: the extraction / schema-learning pipeline
+  -- flushes the spans THIS instance ingested, so it must run anywhere ingestion
+  -- runs — including CONSUMER_ONLY replicas (schema learning powers stats/facets).
+  let schemaFibers =
         [ fiber ("extraction-worker-" <> show i) $ ExtractionWorker.runShardWorker (logExc ("extraction-worker-" <> show i)) runEager shard
         | (i, shard) <- shardsIndexed
         ]
           <> [fiber ("drain-flusher-" <> show i) $ BackgroundJobs.runDrainFlusher appLogger env tp shard | (i, shard) <- shardsIndexed]
           <> [fiber ("rehydration-worker-" <> show i) $ ExtractionWorker.runRehydrationWorker (logExc ("rehydration-worker-" <> show i)) shard | (i, shard) <- shardsIndexed]
           <> [ fiber "drain-age-flush" $ BackgroundJobs.runDrainAgeFlushTimer appLogger env
-             , fiber "error-decay" $ BackgroundJobs.runErrorDecayFiber appLogger env tp
-             , fiber "session-backfill" $ BackgroundJobs.runSessionBackfillTimer appLogger env tp
              , fiber "schema-flusher" $ void $ BackgroundJobs.runSchemaFlusherFiber appLogger env tp
              ]
+  -- Global periodic-job timers operating on shared DB state — single-owner,
+  -- so they belong with the main server and are skipped on CONSUMER_ONLY replicas.
+  let jobFibers =
+        [ fiber "error-decay" $ BackgroundJobs.runErrorDecayFiber appLogger env tp
+        , fiber "session-backfill" $ BackgroundJobs.runSessionBackfillTimer appLogger env tp
+        ]
+  let consumerOnly = env.config.consumerOnly -- CONSUMER_ONLY: queue consumers + schema-learning workers; skip Warp/gRPC/odd-jobs/global-timers
+  -- Always accept hand-offs: every ingesting instance (incl. CONSUMER_ONLY) feeds its extraction worker.
   liftIO $ atomically $ writeTVar env.extractionWorker.acceptingBatches True
   asyncs <-
     liftIO
       $ sequenceA
       $ catMaybes
-      $ [ Just $ async $ runSettings warpSettings wrappedServer -- intentionally unsupervised: Warp crash triggers waitAnyCancel → process exit
+      $ [ guard (not consumerOnly) $> async (runSettings warpSettings wrappedServer) -- intentionally unsupervised: Warp crash triggers waitAnyCancel → process exit
         , guard env.config.enablePubsubService $> async (supervise logExc "pubsub" $ Queue.pubsubService appLogger env tp env.config.requestPubsubTopics processMessages)
-        , Just $ async $ supervise logExc "background-jobs" bgJobWorker
-        , Just $ async $ supervise logExc "otlp-grpc" $ OtlpServer.runServer appLogger env tp
+        , guard (not consumerOnly) $> async (supervise logExc "background-jobs" bgJobWorker)
+        , guard (not consumerOnly) $> async (supervise logExc "otlp-grpc" $ OtlpServer.runServer appLogger env tp)
         , guard (env.config.enableKafkaService && not (any T.null env.config.kafkaTopics)) $> async (supervise logExc "kafka" $ Queue.kafkaService appLogger env tp Queue.KafkaPrimary "ingest" env.config.kafkaTopics env.config.messagesPerPubsubPullBatch OtlpServer.processList)
         , guard (env.config.enableKafkaService && not (any T.null env.config.kafkaTopics)) $> async (supervise logExc "kafka" $ Queue.kafkaService appLogger env tp Queue.KafkaPrimary "ingest" env.config.kafkaTopics env.config.messagesPerPubsubPullBatch OtlpServer.processList)
         , -- Small batch: DLQ replay is a retry carousel, not steady-state ingest;
@@ -149,7 +158,8 @@ runServer appLogger env tp = do
           guard (env.config.enableKafkaService && env.config.enableKafkaDeadLetterService && not (T.null env.config.kafkaDeadLetterTopic)) $> async (supervise logExc "kafka-dlq" $ Queue.kafkaService appLogger env tp Queue.KafkaDlqReplay "dlq" [env.config.kafkaDeadLetterTopic] 50 OtlpServer.processList)
         , guard env.config.enableReplayService $> async (supervise logExc "kafka-replay" $ Queue.kafkaService appLogger env tp Queue.KafkaPrimary "replay" env.config.rrwebTopics effectiveReplayBatch processReplayEvents)
         ]
-      <> fmap Just workerFibers
+      <> fmap Just schemaFibers
+      <> (if consumerOnly then [] else fmap Just jobFibers)
   void $ liftIO $ waitAnyCancel asyncs
 
 
