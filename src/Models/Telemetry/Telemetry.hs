@@ -98,7 +98,7 @@ import Data.Text.Display (Display)
 import Data.These (These (..))
 import Data.These qualified as These
 import Data.Time (UTCTime)
-import Data.Time.Clock (addUTCTime)
+import Data.Time.Clock (addUTCTime, utctDay)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Data.Vector.Split qualified as VS
@@ -1343,7 +1343,11 @@ otelColumns =
       , ("resource___user_agent___original", rT "user_agent.original")
       , ("project_id", top (param . scrubNulText . (.project_id)))
       , ("summary", arr (.summary))
-      , ("date", top (param . (.date)))
+      , -- Send the partition column as a Day (PG `date` OID 1082): TF's `date` is a
+        -- Date32 Hive key and its pgwire decoder can't coerce TIMESTAMPTZ→Date32, so a
+        -- raw UTCTime drops the whole row on the TF leg. PG's `date` is TIMESTAMPTZ and
+        -- coerces the Day to midnight, but that value is never read (see otelSpanColsSql).
+        ("date", top (param . utctDay . (.date)))
       , ("message_size_bytes", top (param . (.message_size_bytes)))
       , ("errors", aeson (.errors))
       ]
