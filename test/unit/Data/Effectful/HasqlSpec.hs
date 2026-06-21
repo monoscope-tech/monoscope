@@ -34,6 +34,21 @@ spec = describe "isTransientException" $ do
 
   it "marks AcquisitionTimeoutUsageError as transient" $
     EHasql.isTransientException (asExc HP.AcquisitionTimeoutUsageError) `shouldBe` True
+
+  -- Regression for the 2026-06-21 DLQ flood: pgdog / datafusion-postgres reset a
+  -- backend connection mid-statement and reply with a server error carrying an
+  -- EMPTY SQLSTATE. hasql classes every StatementSessionError as non-transient,
+  -- so the dual-write/read-gate retry treated the reset as poison and
+  -- dead-lettered writable data. An empty code is never a real PG execution
+  -- error (those always carry a 5-char SQLSTATE) → treat as transient.
+  it "marks an empty-SQLSTATE ServerError as transient (pgdog/pgwire reset)" $
+    EHasql.isTransientException (asExc emptySqlStateError) `shouldBe` True
+
+  it "keeps a real-SQLSTATE ServerError non-transient (genuine poison still routes to DLQ)" $
+    EHasql.isTransientException (asExc realSqlStateError) `shouldBe` False
+
+  it "marks an empty-SQLSTATE ScriptSessionError as transient (reset mid-script)" $
+    EHasql.isTransientException (asExc emptyScriptError) `shouldBe` True
   where
     allConnectionErrors =
       [ HE.NetworkingConnectionError "ECONNREFUSED"
@@ -41,3 +56,9 @@ spec = describe "isTransientException" $ do
       , HE.CompatibilityConnectionError "server_version_num parse error"
       , HE.OtherConnectionError "FATAL: the database system is starting up\n"
       ]
+    emptySqlStateError =
+      HP.SessionUsageError (HE.StatementSessionError 1 0 "insert into otel_logs_and_spans ..." [] True (HE.ServerStatementError (HE.ServerError "" "Server error" Nothing Nothing Nothing)))
+    realSqlStateError =
+      HP.SessionUsageError (HE.StatementSessionError 1 0 "insert into otel_logs_and_spans ..." [] True (HE.ServerStatementError (HE.ServerError "23505" "duplicate key value violates unique constraint" Nothing Nothing Nothing)))
+    emptyScriptError =
+      HP.SessionUsageError (HE.ScriptSessionError "vacuum analyze" (HE.ServerError "" "Server error" Nothing Nothing Nothing))

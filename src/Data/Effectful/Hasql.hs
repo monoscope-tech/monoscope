@@ -74,7 +74,19 @@ isTransientUsageError :: UsageError -> Bool
 isTransientUsageError = \case
   AcquisitionTimeoutUsageError -> True
   ConnectionUsageError _ -> True
-  SessionUsageError e -> isTransient e
+  SessionUsageError e -> isTransient e || emptySqlState e
+  where
+    -- A real PG/TimescaleDB execution error always carries a 5-char SQLSTATE.
+    -- An empty code is what pgdog / datafusion-postgres emit when a backend
+    -- connection is reset or a statement can't be routed mid-flight — an infra
+    -- fault wearing a server-error costume. hasql buckets every
+    -- StatementSessionError as non-transient, so without this the dual-write
+    -- retry treats the reset as poison and dead-letters writable data (the
+    -- 2026-06-21 DLQ flood). Same incident class as ConnectionUsageError above.
+    emptySqlState = \case
+      StatementSessionError _ _ _ _ _ (ServerStatementError (ServerError code _ _ _ _)) -> code == ""
+      ScriptSessionError _ (ServerError code _ _ _ _) -> code == ""
+      _ -> False
 
 
 isTransientHasqlError :: HasqlException -> Bool

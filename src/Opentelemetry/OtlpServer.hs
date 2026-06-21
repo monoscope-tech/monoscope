@@ -424,7 +424,7 @@ processList msgs !attrs =
 
 processBatchPipeline
   :: forall req res es
-   . (DB es, Eff.Reader AuthContext :> es, Log :> es, Message req, Time.Time :> es)
+   . (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Log :> es, Message req, Time.Time :> es)
   => Text
   -> [(Text, ByteString)]
   -> AuthContext
@@ -444,7 +444,11 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds conv
     (!keyToIdMap, !projectCachesMap) <-
       if V.null uniqueProjectKeys
         then pure (HM.empty, HM.empty)
-        else do
+        -- A single transient blip (dropped conn / empty-SQLSTATE pgdog reset) on
+        -- these read-side lookups used to dead-letter the whole batch before the
+        -- TF write was even attempted (2026-06-21 DLQ flood). Retry transient
+        -- errors; a non-transient/exhausted failure still throws → Pkg.Queue DLQs.
+        else Telemetry.retryTransientEff Telemetry.maxReadAttempts "getProjectCaches" do
           !projectIdsAndKeys <- checkpoint (cp ":getProjectIds") $ ProjectApiKeys.projectIdsByProjectApiKeys uniqueProjectKeys
           let !keyToId = HM.fromList $ V.toList projectIdsAndKeys
               !projectIds = HS.toList $ HM.foldr' HS.insert (HS.fromList atIds) keyToId

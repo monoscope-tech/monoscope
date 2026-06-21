@@ -13,7 +13,10 @@ import Data.ProtoLens (encodeMessage)
 import Data.These (These (..))
 import Data.These.Combinators (isThat)
 import Data.UUID qualified as UUID
+import Data.Effectful.Hasql qualified as EHasql
 import Database.PostgreSQL.Simple (Query, execute_)
+import Hasql.Errors qualified as HE
+import Hasql.Pool qualified as HP
 import UnliftIO.Exception (finally, throwIO, try)
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
@@ -143,8 +146,45 @@ expectLeftMatching what predicate = \case
           $ "expected " <> what <> "; got Left with summary: " <> Telemetry.writeFailureSummary wf
 
 
+-- | The exact 2026-06-21 prod failure shape: a server-sent statement error with
+-- an EMPTY SQLSTATE (pgdog / datafusion-postgres reset a backend mid-statement).
+-- hasql classes every StatementSessionError as non-transient, so pre-fix one
+-- blip dead-lettered the whole batch before the write was even attempted.
+emptyResetError :: HP.UsageError
+emptyResetError =
+  HP.SessionUsageError (HE.StatementSessionError 1 0 "select 1" [] True (HE.ServerStatementError (HE.ServerError "" "Server error" Nothing Nothing Nothing)))
+
+
+-- | A genuine poison error (real SQLSTATE) must stay non-transient: fail fast → DLQ.
+poisonError :: HP.UsageError
+poisonError =
+  HP.SessionUsageError (HE.StatementSessionError 1 0 "select 1" [] True (HE.ServerStatementError (HE.ServerError "23505" "duplicate key" Nothing Nothing Nothing)))
+
+
 spec :: SpecWith ()
 spec = aroundAll withTestResources $ beforeWith mkResWithKey do
+  -- B1 of the 2026-06-21 fix: the per-batch project-id / cache lookups are
+  -- wrapped in 'retryTransientEff', so a transient connection reset retries
+  -- instead of dead-lettering a whole batch that the write path would accept.
+  describe "read-gate transient retry (retryTransientEff)" do
+    it "retries an empty-SQLSTATE reset, then succeeds (a blip no longer DLQs the batch)" \(tr, _) -> do
+      counter <- newIORef (0 :: Int)
+      let flakyRead = do
+            n <- atomicModifyIORef' counter \c -> (c + 1, c + 1)
+            if n < 3 then throwIO (EHasql.HasqlException emptyResetError) else pure n
+      res <- runTestBg frozenTime tr $ Telemetry.retryTransientEff 5 "read-gate" flakyRead
+      res `shouldBe` 3
+      readIORef counter >>= (`shouldBe` 3)
+
+    it "does NOT retry a real-SQLSTATE poison error (fails fast → DLQ)" \(tr, _) -> do
+      counter <- newIORef (0 :: Int)
+      let poisonRead = do
+            void $ atomicModifyIORef' counter \c -> (c + 1, ())
+            throwIO (EHasql.HasqlException poisonError)
+      res <- try @_ @SomeException (runTestBg frozenTime tr (Telemetry.retryTransientEff 5 "read-gate" poisonRead) :: IO Int)
+      isLeft res `shouldBe` True
+      readIORef counter >>= (`shouldBe` 1)
+
   describe "processList Either contract (dual-write outcome surfaces to Pkg.Queue)" do
     it "writes succeed → Right (acks, no poison)" \(tr, key) -> do
       let msgs = [validLogMsg key "ack-good-1", validLogMsg key "ack-good-2"]

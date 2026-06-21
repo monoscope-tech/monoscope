@@ -51,7 +51,9 @@ module Models.Telemetry.Telemetry (
   SilentUnderPersistError (..),
   unaccountedRows,
   retryHasqlWrite,
+  retryTransientEff,
   maxWriteAttempts,
+  maxReadAttempts,
   poisonReason,
   handOffBatches,
   mintOtelLogIds,
@@ -936,6 +938,12 @@ maxWriteAttempts :: Int
 maxWriteAttempts = 10
 
 
+-- | Exponential backoff schedule shared by the write ('retryHasqlWrite') and
+-- read ('retryTransientEff') retry loops: 100ms, 200ms, 400ms … capped at 5s.
+transientBackoffMicros :: Int -> Int
+transientBackoffMicros attempt = min 5000000 (100000 * (2 ^ (attempt - 1)))
+
+
 -- | Retry a Hasql write up to @n@ times on transient errors with exponential
 -- backoff (100ms → 5s cap; ~25s total at n=10). Non-transient errors return
 -- 'Left' immediately. TimeFusion's PGWire "TuplesOk" wire-mismatch is treated
@@ -972,7 +980,7 @@ retryHasqlWrite maxAttempts store act = go 1
               pure (Right mempty)
           | attempt < maxAttempts
           , Hasql.isTransientException e -> do
-              let delayMicros = min 5000000 (100000 * (2 ^ (attempt - 1) :: Int)) -- 100ms,200ms,…cap 5s
+              let delayMicros = transientBackoffMicros attempt
               Log.logAttention "retryHasqlWrite: transient error, retrying"
                 $ AE.object
                   [ "store" AE..= store
@@ -984,6 +992,42 @@ retryHasqlWrite maxAttempts store act = go 1
               threadDelay delayMicros
               go (attempt + 1)
           | otherwise -> pure (Left e)
+
+
+-- | Read-side transient-retry budget. Smaller than 'maxWriteAttempts' (10):
+-- a read blip blocking the consumer for the full ~25s write budget would stall
+-- the partition, and the DLQ is a fine backstop for a read that won't recover.
+maxReadAttempts :: Int
+maxReadAttempts = 5
+
+
+-- | Retry a read action on transient Hasql errors (dropped connection, empty
+-- SQLSTATE from a pgdog/pgwire reset — see 'Data.Effectful.Hasql.isTransientUsageError')
+-- with the same 100ms→5s backoff as 'retryHasqlWrite'. Rethrows the final
+-- exception when the budget is exhausted or the error is non-transient, so the
+-- caller's existing catch still routes the batch to the DLQ as the last resort.
+-- Guards the per-batch project-id / cache lookups that previously dead-lettered
+-- a whole batch on a single connection blip (the 2026-06-21 DLQ flood).
+retryTransientEff :: (Concurrent :> es, IOE :> es, Log :> es) => Int -> Text -> Eff es a -> Eff es a
+retryTransientEff maxAttempts op act = go 1
+  where
+    go attempt =
+      tryAny act >>= \case
+        Right a -> pure a
+        Left e
+          | attempt < maxAttempts, Hasql.isTransientException e -> do
+              let delayMicros = transientBackoffMicros attempt
+              Log.logAttention "retryTransientEff: transient read error, retrying"
+                $ AE.object
+                  [ "op" AE..= op
+                  , "attempt" AE..= attempt
+                  , "max_attempts" AE..= maxAttempts
+                  , "backoff_us" AE..= delayMicros
+                  , "error" AE..= show @Text e
+                  ]
+              threadDelay delayMicros
+              go (attempt + 1)
+          | otherwise -> throwIO e
 
 
 -- | Dual-write to PG + TimeFusion concurrently. Both stores are mandatory.
