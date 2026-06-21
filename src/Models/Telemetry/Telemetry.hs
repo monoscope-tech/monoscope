@@ -1015,7 +1015,8 @@ retryTransientEff maxAttempts op act = go 1
       tryAny act >>= \case
         Right a -> pure a
         Left e
-          | attempt < maxAttempts, Hasql.isTransientException e -> do
+          | attempt < maxAttempts
+          , Hasql.isTransientException e -> do
               let delayMicros = transientBackoffMicros attempt
               Log.logAttention "retryTransientEff: transient read error, retrying"
                 $ AE.object
