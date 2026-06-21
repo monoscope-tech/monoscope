@@ -58,6 +58,7 @@
 - gogol-core
 - gogol-pubsub
 - hw-kafka-client
+- kafka-effectful
 - hashable
 - hashtables
 - http-api-data

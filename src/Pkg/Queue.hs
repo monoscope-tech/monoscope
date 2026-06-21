@@ -1,5 +1,24 @@
-module Pkg.Queue (pubsubService, kafkaService, KafkaRole (..), publishJSONToKafka, publishToDeadLetterQueue, closeSharedKafkaProducer) where
+module Pkg.Queue (
+  pubsubService,
+  kafkaService,
+  KafkaRole (..),
+  decoupledLoop,
+  ConsumerEff,
+  publishJSONToKafka,
+  publishToDeadLetterQueue,
+  runSharedProducer,
+  closeSharedKafkaProducer,
+  -- exposed for unit tests: the pure consumer logic
+  chunksByBytes,
+  PartProgress (..),
+  completeOffsets,
+  retryTiers,
+  parkingTopicFor,
+  RetryRoute (..),
+  retryDestination,
+) where
 
+import Control.Concurrent.STM.TBQueue (newTBQueueIO, readTBQueue, writeTBQueue)
 import Control.Exception.Annotated (checkpoint)
 import Control.Lens ((^?), _Just)
 import Control.Lens qualified as L
@@ -11,19 +30,28 @@ import Data.ByteString.Lazy.Base64 qualified as LB64
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Generics.Product (field)
 import Data.HashMap.Strict qualified as HM
+import Data.IntSet qualified as IntSet
+import Data.List.Extra (minimum)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Text.Lazy.Encoding qualified as LT
-import Data.Time (getCurrentTime)
+import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
 import Effectful
+import Effectful.Dispatch.Dynamic (interpret)
+import Effectful.Error.Static (Error, runErrorNoCallStack, throwError, tryError)
+import Effectful.Ki qualified as Ki
+import Effectful.Time qualified as Time
 import Gogol qualified as Google
 import Gogol.Auth.ApplicationDefault qualified as Google
 import Gogol.Data.Base64 (_Base64)
 import Gogol.PubSub qualified as PubSub
 import Kafka.Consumer qualified as K
+import Kafka.Effectful qualified as KE
+import Kafka.Effectful.Producer.Effect qualified as KEP
 import Kafka.Producer qualified as KP
+import Effectful.Log (Log)
 import Log (LogLevel (..), Logger, runLogT)
 import Log qualified as LogBase
 import Models.Telemetry.Telemetry qualified as Telemetry
@@ -33,11 +61,10 @@ import Relude
 import System.Config
 import System.IO.Unsafe (unsafePerformIO)
 import System.Tracing (SpanStatus (..), addEvent, setStatus, withSpan)
-import System.Types (ATBackgroundCtx, runBackground)
+import System.Types (ATBackgroundCtx, ATBackgroundEffects, runBackground)
 import UnliftIO (throwIO)
-import UnliftIO.Async (pooledForConcurrentlyN)
 import UnliftIO.Concurrent (threadDelay)
-import UnliftIO.Exception (bracket, tryAny)
+import UnliftIO.Exception (tryAny)
 import UnliftIO.MVar (modifyMVar)
 
 
@@ -97,6 +124,28 @@ closeSharedKafkaProducer = modifyMVar sharedKafkaProducer $ \case
     _ <- tryAny $ KP.flushProducer p
     _ <- tryAny $ KP.closeProducer p
     pure (Nothing, ())
+
+
+-- | Interpret kafka-effectful's 'KE.KafkaProducer' effect against the
+-- process-wide cached producer, rather than creating one per scope (the
+-- librdkafka producer is heavyweight; web handlers publish per-request). All
+-- producers — consumer DLQ path, PubSub, replay — go through this; tests swap in
+-- a no-op interpreter. ProduceMessage throws 'K.KafkaError' via the Error effect
+-- on enqueue failure, so the caller refuses to advance the offset/ack.
+runSharedKafkaProducer :: (IOE :> es, Error K.KafkaError :> es) => AuthContext -> Eff (KE.KafkaProducer ': es) a -> Eff es a
+runSharedKafkaProducer appCtx = interpret \_ -> \case
+  KEP.ProduceMessage rec -> liftIO (getOrInitKafkaProducer appCtx.config >>= \p -> KP.produceMessage p rec) >>= maybe pass throwError
+  KEP.FlushProducer -> liftIO (getOrInitKafkaProducer appCtx.config >>= KP.flushProducer)
+  KEP.AskProducerHandle -> liftIO (getOrInitKafkaProducer appCtx.config)
+  _ -> error "runSharedKafkaProducer: unsupported KafkaProducer operation"
+
+
+-- | One-shot producer for callers not already in a producer scope (web
+-- handlers): runs the action against the shared producer and surfaces a
+-- KafkaError as @Left@ text. Wraps the producer + error interpreters so callers
+-- need no Kafka imports.
+runSharedProducer :: (IOE :> es) => AuthContext -> Eff (KE.KafkaProducer ': Error K.KafkaError ': es) a -> Eff es (Either Text a)
+runSharedProducer appCtx act = first (toText . show) <$> runErrorNoCallStack @K.KafkaError (runSharedKafkaProducer appCtx act)
 
 
 -- | Shared batch-processing span for both ingest paths: wraps the fn invocation
@@ -170,8 +219,10 @@ pubsubService appLogger appCtx tp topics fn = checkpoint "pubsubService" do
                   ]
                   (fn validMsgs (maybeToMonoid firstAttrs))
             )
-            >>= liftIO
-            . routeBatchOutcome appLogger appCtx "pubsub-service" topic validMsgs (maybeToMonoid firstAttrs)
+            >>= \result ->
+              liftIO
+                $ fromRight []
+                <$> runBackground appLogger appCtx tp (runErrorNoCallStack @K.KafkaError (runSharedKafkaProducer appCtx (routeBatchOutcome appCtx "pubsub-service" topic validMsgs (maybeToMonoid firstAttrs) result)))
 
         let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ Just msgIds
         unless (null msgIds) $ void $ PubSub.newPubSubProjectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send env
@@ -190,33 +241,23 @@ pubsubService appLogger appCtx tp topics fn = checkpoint "pubsubService" do
 -- bytes are written exactly as given — structured-data callers must encode
 -- themselves ('publishJSONToKafka'); binary callers (the DLQ) pass the original
 -- message bytes so the consumer decodes them unchanged.
-publishRawToKafka :: AuthContext -> Text -> ByteString -> HM.HashMap Text Text -> IO (Either Text Text)
-publishRawToKafka appCtx topicName messageData attributes = checkpoint "publishRawToKafka" do
-  result <- tryAny $ checkpoint (toAnnotation $ "publishRawToKafka: " <> topicName) do
-    producer <- getOrInitKafkaProducer appCtx.config
-    let headers = KP.headersFromList $ map (\(k, v) -> (BC.pack $ toString k, BC.pack $ toString v)) $ HM.toList attributes
-    let record =
-          KP.ProducerRecord
-            { prTopic = K.TopicName topicName
-            , prPartition = KP.UnassignedPartition
-            , prKey = Nothing
-            , prValue = Just messageData
-            , prHeaders = headers
-            }
-    sendResult <- KP.produceMessage producer record
-    case sendResult of
-      Just er -> pure $ Left $ "Failed to send message to Kafka: " <> toText (show er)
-      _ -> pure $ Right ""
-  case result of
-    Left e -> pure $ Left $ toText $ show e
-    Right res -> pure res
+publishRawToKafka :: (KE.KafkaProducer :> es) => Text -> ByteString -> HM.HashMap Text Text -> Eff es ()
+publishRawToKafka topicName messageData attributes =
+  KE.produceMessage
+    KP.ProducerRecord
+      { prTopic = K.TopicName topicName
+      , prPartition = KP.UnassignedPartition
+      , prKey = Nothing
+      , prValue = Just messageData
+      , prHeaders = KP.headersFromList $ map (\(k, v) -> (BC.pack $ toString k, BC.pack $ toString v)) $ HM.toList attributes
+      }
 
 
 -- | Publish JSON-encoded structured data. ONLY for genuine JSON payloads —
 -- never raw binary (protobuf): JSON-string-encoding quotes and escapes the
 -- bytes into an undecodable blob (the DLQ uses 'publishRawToKafka' directly).
-publishJSONToKafka :: AE.ToJSON a => AuthContext -> Text -> a -> HM.HashMap Text Text -> IO (Either Text Text)
-publishJSONToKafka appCtx topicName jsonData = publishRawToKafka appCtx topicName (BC.toStrict $ AE.encode jsonData)
+publishJSONToKafka :: (KE.KafkaProducer :> es, AE.ToJSON a) => Text -> a -> HM.HashMap Text Text -> Eff es ()
+publishJSONToKafka topicName jsonData = publishRawToKafka topicName (BC.toStrict $ AE.encode jsonData)
 
 
 -- | Which consumer loop this is. 'KafkaDlqReplay' consumes the dead-letter
@@ -228,6 +269,108 @@ publishJSONToKafka appCtx topicName jsonData = publishRawToKafka appCtx topicNam
 -- inspect and prune manually.
 data KafkaRole = KafkaPrimary | KafkaDlqReplay
   deriving stock (Eq)
+
+
+-- | Greedy split of an offset-ordered group into sub-chunks whose serialized
+-- payloads sum to ~targetBytes. Always emits at least one element per chunk, so
+-- a single over-target record becomes its own chunk (no infinite loop, no
+-- dropped record). Strict byte accumulator — no thunk buildup over a large batch.
+--
+-- >>> map (map fst) $ chunksByBytes 10 snd [('a',6),('b',5),('c',3),('d',20),('e',1)]
+-- ["a","bc","d","e"]
+chunksByBytes :: Int -> (a -> Int) -> [a] -> [[a]]
+chunksByBytes target size = go [] 0
+  where
+    go acc _ [] = [reverse acc | not (null acc)]
+    go acc !n (x : xs)
+      | null acc = go [x] (size x) xs
+      | n + size x > target = reverse acc : go [x] (size x) xs
+      | otherwise = go (x : acc) (n + size x) xs
+
+
+-- | Per-sub-chunk payload-byte target. One sub-chunk becomes one bulk INSERT /
+-- Delta write; sizing by bytes (not record count) bounds write granularity and
+-- keeps Delta file sizes off the small-files OOM path.
+kafkaChunkTargetBytes :: Int
+kafkaChunkTargetBytes = 64 * 1024 * 1024
+
+
+data RetryRoute = RetryTier Text Int | Parking Text
+  deriving stock (Eq, Show)
+
+
+-- | Escalating retry tiers derived from the base DLQ topic. Tier 0 is the base
+-- topic itself (first failures still land where ops already watch), then backoff
+-- topics with growing min-delays (seconds). Ops must provision the -retry-*
+-- and -parking topics. Attempts past the last tier are terminal: they go to the
+-- parking topic and are never auto-replayed (DLQ stays a forensic archive).
+retryTiers :: Text -> [(Text, Int)]
+retryTiers base = [(base, 5), (base <> "-retry-60s", 60), (base <> "-retry-600s", 600)]
+
+
+parkingTopicFor :: Text -> Text
+parkingTopicFor base = base <> "-parking"
+
+
+-- | Destination for a message that has now failed @attempt@ times (1-based):
+-- the matching tier, or the parking topic once the tiers are exhausted.
+--
+-- >>> retryDestination (retryTiers "dlq") (parkingTopicFor "dlq") 1
+-- RetryTier "dlq" 5
+-- >>> retryDestination (retryTiers "dlq") (parkingTopicFor "dlq") 3
+-- RetryTier "dlq-retry-600s" 600
+-- >>> retryDestination (retryTiers "dlq") (parkingTopicFor "dlq") 4
+-- Parking "dlq-parking"
+retryDestination :: [(Text, Int)] -> Text -> Int -> RetryRoute
+retryDestination tiers park attempt = maybe (Parking park) (uncurry RetryTier) (tiers !!? (attempt - 1))
+
+
+-- | Per-partition commit progress for the decoupled committer. @base@ is the
+-- next offset to commit (every offset below it is durable); @ahead@ holds
+-- completed offsets ≥ @base@ not yet contiguous (a gap sits at @base@).
+-- Self-pruning: offsets leave @ahead@ as @base@ walks over them, so one stalled
+-- offset can't make the set grow without bound.
+data PartProgress = PartProgress {base :: !Int64, ahead :: !IntSet.IntSet}
+  deriving stock (Eq, Show)
+
+
+-- | Record completed offsets, advancing @base@ across the now-contiguous run.
+-- Offsets below @base@ (already committed — e.g. a redelivered duplicate) drop
+-- out. Strict throughout (foldl' + IntSet): no thunk accretion over a long run.
+--
+-- >>> (completeOffsets [10,11,12] (PartProgress 10 mempty)).base
+-- 13
+-- >>> let p = completeOffsets [12,11] (PartProgress 10 mempty)
+-- >>> (p.base, IntSet.toList p.ahead)
+-- (10,[11,12])
+-- >>> (completeOffsets [10] p).base
+-- 13
+completeOffsets :: [Int64] -> PartProgress -> PartProgress
+completeOffsets offs (PartProgress base0 ahead0) = advance base0 (foldl' ins ahead0 offs)
+  where
+    ins s o = if o >= base0 then IntSet.insert (fromIntegral o) s else s
+    advance b s = case IntSet.minView s of
+      Just (m, s') | fromIntegral m == b -> advance (b + 1) s'
+      _ -> PartProgress b s
+
+
+-- | Pure committer step: for each partition whose watermark advanced past the
+-- last committed offset, emit a commit at the new base and carry it forward. The
+-- committed map dedupes — an unchanged partition isn't re-committed each tick.
+--
+-- >>> let tr = Map.fromList [(("t", K.PartitionId 0), PartProgress 5 mempty), (("t", K.PartitionId 1), PartProgress 0 mempty)]
+-- >>> [(t, o) | K.TopicPartition (K.TopicName t) _ (K.PartitionOffset o) <- fst (committableCommits tr mempty)]
+-- [("t",5)]
+committableCommits
+  :: Map (Text, K.PartitionId) PartProgress
+  -> Map (Text, K.PartitionId) Int64
+  -> ([K.TopicPartition], Map (Text, K.PartitionId) Int64)
+committableCommits tracker committed =
+  ( [K.TopicPartition (K.TopicName t) p (K.PartitionOffset b) | ((t, p), b) <- advanced]
+  , foldl' (\m (tp, b) -> Map.insert tp b m) committed advanced
+  )
+  where
+    advanced = [(tp, b) | (tp, PartProgress b _) <- Map.toList tracker, b > 0, b > Map.findWithDefault (-1) tp committed]
 
 
 kafkaService :: Log.Logger -> AuthContext -> TracerProvider -> KafkaRole -> Text -> [Text] -> Int -> ([(Text, ByteString)] -> HM.HashMap Text Text -> ATBackgroundCtx (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))) -> IO ()
@@ -250,108 +393,17 @@ kafkaService appLogger appCtx tp role label kafkaTopics batchSize fn = checkpoin
       ]
       do
         LogBase.logInfo "Starting Kafka consumer service" (AE.object ["topics" AE..= kafkaTopics, "brokers" AE..= appCtx.config.kafkaBrokers])
-        bracket
-          (either throwIO pure =<< K.newConsumer (consumerProps appCtx.config clientId) consumerSub)
-          K.closeConsumer
-          \consumer -> do
-            LogBase.logInfo_ "Kafka consumer connected, starting message polling loop"
-            forever do
-              (leftRecords, rightRecords) <- partitionEithers <$> K.pollMessageBatch consumer (K.Timeout 100) (K.BatchSize batchSize)
-
-              unless (null leftRecords)
-                $ LogBase.logAttention "Kafka poll returned errors"
-                $ AE.object ["error_count" AE..= length leftRecords, "errors" AE..= map show leftRecords]
-
-              -- Group per (topic, partition) so groups can run concurrently
-              -- below while each tpsFor still yields exactly one TP — failed
-              -- groups stall only their own partition's commits.
-              -- Map (not HashMap): KP.PartitionId has Ord but no Hashable instance.
-              let byTP = foldr (\r -> Map.insertWith (<>) (r.crTopic.unTopicName, r.crPartition) (r :| [])) Map.empty rightRecords
-                  attrsFor topic r = let h = consumerRecordHeadersToHashMap r in HM.insert "ce-type" (ceTypeFor appCtx.config.kafkaDeadLetterTopic topic h) h
-                  -- One fn invocation + outcome routing for records sharing one
-                  -- header set. True ⇔ every record is durable (written or DLQ'd)
-                  -- and its offset may advance.
-                  runChunk topic records attrs = do
-                    let ceType = HM.lookupDefault "" "ce-type" attrs
-                    LogBase.localData ["topic" AE..= topic, "ce_type" AE..= ceType, "record_count" AE..= length records] do
-                      result <-
-                        liftIO
-                          $ tryAny
-                          $ runBackground appLogger appCtx tp
-                          $ runBatchSpan
-                            "kafka.process_batch"
-                            [ ("topic", OA.toAttribute topic)
-                            , ("message_count", OA.toAttribute (length records))
-                            , ("ce-type", OA.toAttribute ceType)
-                            , ("client_id", OA.toAttribute clientId)
-                            ]
-                            (fn records attrs)
-                      -- Empty ack list = no commit (broker redelivers); non-empty
-                      -- = durable. Kafka can't partial-ack within a partition so
-                      -- processGroup commits all-or-nothing per partition group.
-                      not . null <$> liftIO (routeBatchOutcome appLogger appCtx "kafka-service" topic records attrs result)
-                  processGroup ((topic, _partition), neRecords@(recc :| _)) = do
-                    committable <- case role of
-                      KafkaPrimary -> runChunk topic (consumerRecordToTuple <$> toList neRecords) (attrsFor topic recc)
-                      -- DLQ partitions interleave requeues from different source
-                      -- topics (round-robin publish), so one batch-level ce-type
-                      -- would mis-decode the minority and bake the wrong ce-type
-                      -- into their requeued headers. Process per record under its
-                      -- own headers; short-circuit on the first non-durable record
-                      -- (the rest redelivers with it — duplicates over loss).
-                      KafkaDlqReplay -> allM (\r -> runChunk topic [consumerRecordToTuple r] (attrsFor topic r)) (toList neRecords)
-                    pure $ if committable then tpsFor topic neRecords else []
-              -- Bound must stay well under the hasql pool (shared with web) —
-              -- AcquisitionTimeout (→ Hasql.isTransientException → no commit →
-              -- redelivery storm) is the failure mode to avoid. Single committer
-              -- (this thread) below — no concurrent commitPartitionsOffsets.
-              tps <- concat <$> pooledForConcurrentlyN appCtx.config.kafkaGroupConcurrency (Map.toList byTP) processGroup
-
-              -- No poll-thread backoff on primary topics: lag growth is the outage
-              -- signal under per-partition commits. A reintroduced `threadDelay`
-              -- here races max.poll.interval.ms and triggers cooperative-sticky
-              -- rebalances.
-              unless (null tps)
-                $ whenJustM (K.commitPartitionsOffsets K.OffsetCommitAsync consumer tps) throwIO
-
-              -- DLQ replay is a requeue carousel: failures republish to the tail
-              -- and commit, so on a short queue a poison message would otherwise
-              -- cycle consume→fail→requeue several times a second. Pause when the
-              -- poll came back short (at the tail, i.e. mostly just-requeued
-              -- records); full batches — a real backlog drain — run at full
-              -- speed. 30s stays well under max.poll.interval.ms (300s).
-              when (role == KafkaDlqReplay && length rightRecords < batchSize)
-                $ threadDelay 30_000_000
+        -- KE.runKafkaConsumer owns connect/close and interprets the KafkaConsumer
+        -- effect; the loop runs in ATBackgroundCtx extended with that effect so it
+        -- can still call `fn` directly (via inject). A broker error surfaces as a
+        -- Left from runErrorNoCallStack and is rethrown to the supervisor.
+        liftIO
+          $ either throwIO pure
+          =<< runBackground appLogger appCtx tp (runErrorNoCallStack @K.KafkaError (runSharedKafkaProducer appCtx (KE.runKafkaConsumer (consumerProps appCtx.config clientId) consumerSub (decoupledLoop appLogger appCtx tp role batchSize clientId fn))))
   where
     groupId = case role of
       KafkaPrimary -> appCtx.config.kafkaGroupId
       KafkaDlqReplay -> appCtx.config.kafkaGroupId <> "_dlq"
-
-    consumerRecordToTuple :: K.ConsumerRecord (Maybe ByteString) (Maybe ByteString) -> (Text, ByteString)
-    consumerRecordToTuple record = (record.crTopic.unTopicName, fromMaybe "" record.crValue)
-
-    consumerRecordHeadersToHashMap :: K.ConsumerRecord (Maybe ByteString) (Maybe ByteString) -> HashMap Text Text
-    consumerRecordHeadersToHashMap record = HM.fromList $ map (bimap decodeUtf8 decodeUtf8) (K.headersToList record.crHeaders)
-
-    -- Max consumed offset + 1 per partition for a topic-group's records, shaped
-    -- for K.commitPartitionsOffsets. The >= 0 guard rules out librdkafka
-    -- sentinels (OffsetEnd = -1, OffsetInvalid) which shouldn't appear in
-    -- pollMessageBatch output but would rewind us to the start if committed.
-    tpsFor :: Foldable f => Text -> f (K.ConsumerRecord k v) -> [K.TopicPartition]
-    tpsFor topic neRecords =
-      [ K.TopicPartition (K.TopicName topic) p (K.PartitionOffset o)
-      | (p, o) <-
-          Map.toList
-            $ Map.fromListWith
-              max
-              [(r.crPartition, K.unOffset r.crOffset + 1) | r <- toList neRecords, K.unOffset r.crOffset >= 0]
-      ]
-
-    -- Dead-letter messages carry ce-type in headers (PubSub path) or derive from original-topic (Kafka path).
-    ceTypeFor :: Text -> Text -> HM.HashMap Text Text -> Text
-    ceTypeFor deadLetterTopic topic headers
-      | topic == deadLetterTopic = fromMaybe (maybe "" topicToCeType (HM.lookup "original-topic" headers)) (HM.lookup "ce-type" headers)
-      | otherwise = topicToCeType topic
 
     consumerProps :: EnvConfig -> Text -> K.ConsumerProperties
     consumerProps cfg clientId =
@@ -376,6 +428,116 @@ kafkaService appLogger appCtx tp role label kafkaTopics batchSize fn = checkpoin
         <> K.extraProp "group.instance.id" clientId
         <> K.logLevel K.KafkaLogInfo
 
+
+-- | The consumer loop's effect stack: ATBackgroundCtx plus the kafka-effectful
+-- KafkaConsumer effect (poll/commit/pause/resume/assignment) and the Error
+-- channel its interpreter throws into. Production runs it under
+-- 'KE.runKafkaConsumer'; tests swap in an in-memory interpreter (the whole point
+-- of going through the effect).
+type ConsumerEff = Eff (KE.KafkaConsumer ': KE.KafkaProducer ': Error K.KafkaError ': ATBackgroundEffects)
+
+
+-- | The Kafka consumer loop (primary ingest + DLQ replay), over the
+-- 'KE.KafkaConsumer' effect. Three Ki threads share one effect env: workers
+-- drain a bounded queue and process sub-chunks; the poll thread never blocks on
+-- the DB and pauses partitions when in-flight bytes are high (resumes when they
+-- drain) so processing latency can't stall heartbeats into a rebalance; a 1s
+-- committer drains the per-partition watermark and commits the contiguous offset
+-- prefix across polls (consumer metrics ride the same tick). Decision logic is
+-- pure (subChunksFor / chunksByBytes / completeOffsets / committableCommits);
+-- only poll/commit/pause/assignment touch Kafka. Role differs only in how a poll
+-- becomes sub-chunks (subChunksFor); everything downstream is shared.
+decoupledLoop
+  :: Log.Logger
+  -> AuthContext
+  -> TracerProvider
+  -> KafkaRole
+  -> Int
+  -> Text
+  -> ([(Text, ByteString)] -> HM.HashMap Text Text -> ATBackgroundCtx (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg])))
+  -> ConsumerEff ()
+decoupledLoop appLogger appCtx tp role batchSize clientId fn = do
+  let highWaterBytes = 4 * kafkaChunkTargetBytes
+      lowWaterBytes = kafkaChunkTargetBytes
+      deadLetterTopic = appCtx.config.kafkaDeadLetterTopic
+  workQ <- liftIO (newTBQueueIO 64)
+  trackerVar <- newTVarIO (Map.empty :: Map (Text, K.PartitionId) PartProgress)
+  committedVar <- newTVarIO (Map.empty :: Map (Text, K.PartitionId) Int64)
+  inflightVar <- newTVarIO (0 :: Int)
+  pausedVar <- newTVarIO False
+  let assigned = KE.assignment <&> \m -> [(t, p) | (t, ps) <- Map.toList m, p <- ps]
+      worker = forever do
+        (tpKey, recc, tuples, offs, bytes) <- atomically (readTBQueue workQ)
+        let topic = fst tpKey
+            attrs = attrsFor deadLetterTopic topic recc
+        -- `inject` lifts the ATBackgroundCtx processing action into the
+        -- KafkaConsumer-extended stack; workers never touch the Kafka effect.
+        result <-
+          tryAny
+            $ inject
+            $ runBatchSpan
+              "kafka.process_batch"
+              [("topic", OA.toAttribute topic), ("message_count", OA.toAttribute (length tuples)), ("client_id", OA.toAttribute clientId)]
+              (fn tuples attrs)
+        acks <- routeBatchOutcome appCtx "kafka-service" topic tuples attrs result
+        atomically do
+          unless (null acks) $ modifyTVar' trackerVar (Map.adjust (completeOffsets offs) tpKey)
+          modifyTVar' inflightVar (subtract bytes)
+      committer = forever do
+        threadDelay 1_000_000
+        (commits, tracked, inflight) <- atomically do
+          (cs, committed') <- committableCommits <$> readTVar trackerVar <*> readTVar committedVar
+          writeTVar committedVar committed'
+          (cs,,) . Map.size <$> readTVar trackerVar <*> readTVar inflightVar
+        -- Commit throws KafkaError into the Error effect on failure (no commit →
+        -- redelivery). Metrics emit on progress OR while work is in flight, so a
+        -- stall (commits dry up but inflight_bytes stays high) is visible.
+        unless (null commits) $ KE.commitPartitionsOffsets K.OffsetCommitAsync commits
+        when (not (null commits) || inflight > 0)
+          $ LogBase.logInfo "kafka.consumer.metrics"
+          $ AE.object ["client_id" AE..= clientId, "committed_partitions" AE..= length commits, "tracked_partitions" AE..= tracked, "inflight_bytes" AE..= inflight]
+      pollOnce = do
+        inflight <- readTVarIO inflightVar
+        paused <- readTVarIO pausedVar
+        when (inflight >= highWaterBytes && not paused) do
+          ps <- assigned
+          unless (null ps) $ KE.pausePartitions ps
+          atomically (writeTVar pausedVar True)
+        when (inflight <= lowWaterBytes && paused) do
+          ps <- assigned
+          unless (null ps) $ KE.resumePartitions ps
+          atomically (writeTVar pausedVar False)
+        (pollErrs, rs) <- partitionEithers <$> KE.pollMessageBatch (K.Timeout 100) (K.BatchSize batchSize)
+        unless (null pollErrs) $ LogBase.logAttention "Kafka poll returned errors" (AE.object ["error_count" AE..= length pollErrs, "errors" AE..= map show pollErrs])
+        nowEpoch <- floor . utcTimeToPOSIXSeconds <$> Time.currentTime
+        let byTP = Map.fromListWith (<>) [((r.crTopic.unTopicName, r.crPartition), r :| []) | r <- rs]
+            subChunks = subChunksFor role nowEpoch byTP
+        for_ subChunks \work@(tpKey, _, _, offs, bytes) ->
+          atomically do
+            modifyTVar' trackerVar (Map.insertWith (\_ old -> old) tpKey (PartProgress (minimum offs) mempty))
+            modifyTVar' inflightVar (+ bytes)
+            writeTBQueue workQ work
+        -- DLQ backoff: records present but none due → avoid a 10Hz re-poll of
+        -- not-yet-due retries. Primary never hits this (chunks ≥1 when records
+        -- exist) and uses lag, not naps, as its outage signal.
+        when (role == KafkaDlqReplay && null subChunks && not (null rs)) (threadDelay 5_000_000)
+  Ki.scoped \scope -> do
+    replicateM_ (max 1 appCtx.config.kafkaGroupConcurrency) (Ki.fork_ scope worker)
+    Ki.fork_ scope committer
+    forever pollOnce
+  where
+    attrsFor :: Text -> Text -> K.ConsumerRecord (Maybe ByteString) (Maybe ByteString) -> HM.HashMap Text Text
+    attrsFor deadLetterTopic topic r = let h = consumerRecordHeadersToHashMap r in HM.insert "ce-type" (ceTypeFor deadLetterTopic topic h) h
+
+    consumerRecordHeadersToHashMap :: K.ConsumerRecord (Maybe ByteString) (Maybe ByteString) -> HashMap Text Text
+    consumerRecordHeadersToHashMap record = HM.fromList $ map (bimap decodeUtf8 decodeUtf8) (K.headersToList record.crHeaders)
+
+    -- Dead-letter messages carry ce-type in headers (PubSub path) or derive from original-topic (Kafka path).
+    ceTypeFor :: Text -> Text -> HM.HashMap Text Text -> Text
+    ceTypeFor deadLetterTopic topic headers
+      | topic == deadLetterTopic = fromMaybe (maybe "" topicToCeType (HM.lookup "original-topic" headers)) (HM.lookup "ce-type" headers)
+      | otherwise = topicToCeType topic
+
     topicToCeType :: Text -> Text
     topicToCeType topic = case topic of
       "otlp_spans" -> "org.opentelemetry.otlp.traces.v1"
@@ -384,31 +546,39 @@ kafkaService appLogger appCtx tp role label kafkaTopics batchSize fn = checkpoin
       _ -> ""
 
 
--- | Headers stamped on every DLQ publish. Left-biased '<>' keeps first-failure
--- forensics (original-topic, original-ack-id, failed-at) intact across
--- DLQ-replay requeues, while attempt-count, error-reason and last-failed-at
--- refresh on every pass — an engineer inspecting a growing DLQ sees how often
--- and why each message keeps failing.
---
--- >>> let requeued = dlqHeaders "tf down" "t1" "otlp_logs" mempty
--- >>> let again = dlqHeaders "pg down" "t2" "monoscope-dlq" requeued
--- >>> (HM.lookup "monoscope-attempt-count" again, HM.lookup "error-reason" again, HM.lookup "last-failed-at" again)
--- (Just "2",Just "pg down",Just "t2")
--- >>> (HM.lookup "original-topic" again, HM.lookup "failed-at" again)
--- (Just "otlp_logs",Just "t1")
-dlqHeaders :: Text -> Text -> Text -> HM.HashMap Text Text -> HM.HashMap Text Text
-dlqHeaders errorReason failedAt origTopicOrAckId attributes =
-  HM.fromList
-    [ ("monoscope-attempt-count", show (1 + fromMaybe 0 (readMaybe . toString =<< HM.lookup "monoscope-attempt-count" attributes) :: Int))
-    , ("error-reason", errorReason)
-    , ("last-failed-at", failedAt)
+-- | Turn one poll's records into work items (tpKey, header-record, payloads,
+-- offsets, bytes). Primary: byte-sized chunks per partition under the
+-- partition-head's headers. DLQ replay: one chunk per *due* record under its own
+-- headers — retry tiers interleave source topics with different ce-types, and
+-- offset = failure-time = due-time order, so due records are a prefix;
+-- not-yet-due ones stay uncommitted and redeliver (duplicates over loss).
+subChunksFor
+  :: KafkaRole
+  -> Int
+  -> Map (Text, K.PartitionId) (NonEmpty (K.ConsumerRecord (Maybe ByteString) (Maybe ByteString)))
+  -> [((Text, K.PartitionId), K.ConsumerRecord (Maybe ByteString) (Maybe ByteString), [(Text, ByteString)], [Int64], Int)]
+subChunksFor role nowEpoch byTP = case role of
+  KafkaPrimary ->
+    [ (tpKey, recc, consumerRecordToTuple <$> chunk, K.unOffset . (.crOffset) <$> chunk, sum (recordBytes <$> chunk))
+    | (tpKey, recs@(recc :| _)) <- Map.toList byTP
+    , chunk <- chunksByBytes kafkaChunkTargetBytes recordBytes (sortOn (.crOffset) (toList recs))
     ]
-    <> attributes
-    <> HM.fromList
-      [ ("original-topic", origTopicOrAckId)
-      , ("original-ack-id", origTopicOrAckId)
-      , ("failed-at", failedAt)
-      ]
+  KafkaDlqReplay ->
+    [ (tpKey, r, [consumerRecordToTuple r], [K.unOffset r.crOffset], recordBytes r)
+    | (tpKey, recs) <- Map.toList byTP
+    , r <- takeWhile (isDue nowEpoch) (sortOn (.crOffset) (toList recs))
+    ]
+  where
+    -- A retry-tier message is due once now ≥ its stamped due epoch. Missing /
+    -- unparseable header ⇒ due (process rather than strand it).
+    isDue :: Int -> K.ConsumerRecord (Maybe ByteString) (Maybe ByteString) -> Bool
+    isDue now r = maybe True (now >=) (readMaybe . toString . decodeUtf8 @Text . snd =<< find ((== "monoscope-next-due-at") . fst) (K.headersToList r.crHeaders))
+
+    consumerRecordToTuple :: K.ConsumerRecord (Maybe ByteString) (Maybe ByteString) -> (Text, ByteString)
+    consumerRecordToTuple record = (record.crTopic.unTopicName, fromMaybe "" record.crValue)
+
+    recordBytes :: K.ConsumerRecord (Maybe ByteString) (Maybe ByteString) -> Int
+    recordBytes = maybe 0 BC.length . (.crValue)
 
 
 -- | Publish failed messages to dead letter queue. Returns the first Left if
@@ -421,25 +591,53 @@ dlqHeaders errorReason failedAt origTopicOrAckId attributes =
 -- get DLQ'd again, duplicating in DLQ. The trade — duplicate DLQ entries
 -- vs. losing poison data — favors duplicates: DLQ is rare and replay tooling
 -- can dedupe by 'original-ack-id'.
-publishToDeadLetterQueue :: Log.Logger -> AuthContext -> [(Text, ByteString)] -> HM.HashMap Text Text -> Text -> IO (Either Text ())
-publishToDeadLetterQueue appLogger appCtx messages attributes errorReason = do
-  let deadLetterTopic = appCtx.config.kafkaDeadLetterTopic
-  currentTime <- getCurrentTime
-  results <- forM messages \(origTopicOrAckId, msgData) -> do
-    let deadLetterAttrs = dlqHeaders errorReason (toText $ show currentTime) origTopicOrAckId attributes
+publishToDeadLetterQueue :: (KE.KafkaProducer :> es, Time.Time :> es) => AuthContext -> [(Text, ByteString)] -> HM.HashMap Text Text -> Text -> Eff es ()
+publishToDeadLetterQueue appCtx messages attributes errorReason = do
+  let base = appCtx.config.kafkaDeadLetterTopic
+      tiers = retryTiers base
+      park = parkingTopicFor base
+  currentTime <- Time.currentTime
+  let nowEpoch = floor (utcTimeToPOSIXSeconds currentTime) :: Int
+  -- Throws K.KafkaError on the first enqueue failure (via the producer
+  -- interpreter); the caller catches it and refuses to advance offsets.
+  for_ messages \(origTopicOrAckId, msgData) -> do
+    -- dlqHeaders bumps monoscope-attempt-count; route by the *new* count to the
+    -- matching retry tier (or parking once exhausted) and stamp the per-message
+    -- due time so the replay consumer enforces the tier's backoff.
+    let baseAttrs = dlqHeaders errorReason (toText $ show currentTime) origTopicOrAckId attributes
+        attempt = fromMaybe 1 (readMaybe . toString =<< HM.lookup "monoscope-attempt-count" baseAttrs)
+        (topic, attrs) = case retryDestination tiers park attempt of
+          RetryTier t delay -> (t, HM.insert "monoscope-next-due-at" (show (nowEpoch + delay)) baseAttrs)
+          Parking t -> (t, baseAttrs)
     -- Raw message bytes verbatim — NEVER via publishJSONToKafka, which would
     -- JSON-string-encode the binary protobuf into an undecodable, re-escaping blob.
-    result <- publishRawToKafka appCtx deadLetterTopic msgData deadLetterAttrs
-    case result of
-      Left err -> do
-        runLogT "dlq" appLogger LogAttention
-          $ LogBase.logAttention "publishToDeadLetterQueue: failed to publish"
-          $ AE.object ["error" AE..= err, "topic" AE..= deadLetterTopic, "original_topic" AE..= origTopicOrAckId]
-        pure (Left err)
-      Right _ -> pure (Right ())
-  -- sequence_ over [Either Text ()] yields the FIRST Left (and pure ()
-  -- otherwise). Subsequent failures only appear in the dlq log above.
-  pure $ sequence_ results
+    publishRawToKafka topic msgData attrs
+  where
+    -- \| Headers stamped on every DLQ publish. Left-biased '<>' keeps first-failure
+    -- forensics (original-topic, original-ack-id, failed-at) intact across
+    -- DLQ-replay requeues, while attempt-count, error-reason and last-failed-at
+    -- refresh on every pass — an engineer inspecting a growing DLQ sees how often
+    -- and why each message keeps failing.
+    --
+    -- >>> let requeued = dlqHeaders "tf down" "t1" "otlp_logs" mempty
+    -- >>> let again = dlqHeaders "pg down" "t2" "monoscope-dlq" requeued
+    -- >>> (HM.lookup "monoscope-attempt-count" again, HM.lookup "error-reason" again, HM.lookup "last-failed-at" again)
+    -- (Just "2",Just "pg down",Just "t2")
+    -- >>> (HM.lookup "original-topic" again, HM.lookup "failed-at" again)
+    -- (Just "otlp_logs",Just "t1")
+    dlqHeaders :: Text -> Text -> Text -> HM.HashMap Text Text -> HM.HashMap Text Text
+    dlqHeaders reason failedAt origTopicOrAckId priorHeaders =
+      HM.fromList
+        [ ("monoscope-attempt-count", show (1 + fromMaybe 0 (readMaybe . toString =<< HM.lookup "monoscope-attempt-count" priorHeaders) :: Int))
+        , ("error-reason", reason)
+        , ("last-failed-at", failedAt)
+        ]
+        <> priorHeaders
+        <> HM.fromList
+          [ ("original-topic", origTopicOrAckId)
+          , ("original-ack-id", origTopicOrAckId)
+          , ("failed-at", failedAt)
+          ]
 
 
 -- | Decide which source-topic acks to commit given a batch's outcome.
@@ -454,8 +652,8 @@ publishToDeadLetterQueue appLogger appCtx messages attributes errorReason = do
 --   * Left SomeException (non-write) — Hasql-transient: no commit, broker redelivers.
 --     Otherwise: DLQ the whole batch as opaque poison; commit only if DLQ accepted.
 routeBatchOutcome
-  :: Log.Logger
-  -> AuthContext
+  :: (KE.KafkaProducer :> es, Time.Time :> es, Log :> es, Error K.KafkaError :> es)
+  => AuthContext
   -> Text
   -- ^ service name for log context ("pubsub-service" / "kafka-service")
   -> Text
@@ -465,37 +663,36 @@ routeBatchOutcome
   -> HM.HashMap Text Text
   -- ^ base attrs (ce-type etc.)
   -> Either SomeException (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))
-  -> IO [Text]
-routeBatchOutcome appLogger appCtx svc topic validMsgs attrs = \case
+  -> Eff es [Text]
+routeBatchOutcome appCtx svc topic validMsgs attrs = \case
   Right (Right (writeAcks, [])) -> pure writeAcks
   Right (Right (writeAcks, poison)) -> do
     let poisonBytes = [(ackId, raw) | (ackId, raw, _) <- poison]
         poisonAckIds = [ackId | (ackId, _, _) <- poison]
         firstReason = maybe "" (\(_, _, r) -> r) (listToMaybe poison)
         poisonAttrs = attrs <> one ("monoscope-poison-reason", firstReason)
-    runLogT svc appLogger LogAttention
-      $ LogBase.logAttention "routeBatchOutcome: poison messages → DLQ"
-      $ AE.object ["topic" AE..= topic, "poison_count" AE..= length poison, "write_acks" AE..= length writeAcks]
-    publishToDeadLetterQueue appLogger appCtx poisonBytes poisonAttrs firstReason >>= \case
-      Right _ -> pure (writeAcks <> poisonAckIds)
-      Left _ -> pure [] -- broker redelivers; on retry the writes are repeated (need idempotency)
+    LogBase.logAttention "routeBatchOutcome: poison messages → DLQ"
+      $ AE.object ["service" AE..= svc, "topic" AE..= topic, "poison_count" AE..= length poison, "write_acks" AE..= length writeAcks]
+    -- DLQ publish throws KafkaError on enqueue failure; on failure commit nothing
+    -- → broker redelivers (writes repeated on retry; need idempotency downstream).
+    tryError @K.KafkaError (publishToDeadLetterQueue appCtx poisonBytes poisonAttrs firstReason) >>= \case
+      Right () -> pure (writeAcks <> poisonAckIds)
+      Left _ -> pure []
   Right (Left wf) -> do
     let summary = Telemetry.writeFailureSummary wf
         dlqAttrs = attrs <> Telemetry.writeFailureDlqHeaders wf
-    runLogT svc appLogger LogAttention
-      $ LogBase.logAttention "routeBatchOutcome: write failure → DLQ"
-      $ AE.object ["topic" AE..= topic, "write_failure" AE..= summary, "message_count" AE..= length validMsgs]
-    publishToDeadLetterQueue appLogger appCtx validMsgs dlqAttrs summary >>= \case
-      Right _ -> pure (map fst validMsgs)
+    LogBase.logAttention "routeBatchOutcome: write failure → DLQ"
+      $ AE.object ["service" AE..= svc, "topic" AE..= topic, "write_failure" AE..= summary, "message_count" AE..= length validMsgs]
+    tryError @K.KafkaError (publishToDeadLetterQueue appCtx validMsgs dlqAttrs summary) >>= \case
+      Right () -> pure (map fst validMsgs)
       Left _ -> pure []
   Left e -> do
     let errText = toText (show e)
-    runLogT svc appLogger LogAttention
-      $ LogBase.logAttention "routeBatchOutcome: non-write exception"
-      $ AE.object ["topic" AE..= topic, "error" AE..= errText, "message_count" AE..= length validMsgs]
+    LogBase.logAttention "routeBatchOutcome: non-write exception"
+      $ AE.object ["service" AE..= svc, "topic" AE..= topic, "error" AE..= errText, "message_count" AE..= length validMsgs]
     if Hasql.isTransientException e
       then pure []
       else
-        publishToDeadLetterQueue appLogger appCtx validMsgs attrs errText >>= \case
-          Right _ -> pure (map fst validMsgs)
+        tryError @K.KafkaError (publishToDeadLetterQueue appCtx validMsgs attrs errText) >>= \case
+          Right () -> pure (map fst validMsgs)
           Left _ -> pure []
