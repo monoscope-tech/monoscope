@@ -42,6 +42,7 @@ import Effectful
 import Effectful.Dispatch.Dynamic (interpret)
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError, tryError)
 import Effectful.Ki qualified as Ki
+import Effectful.Log (Log)
 import Effectful.Time qualified as Time
 import Gogol qualified as Google
 import Gogol.Auth.ApplicationDefault qualified as Google
@@ -51,7 +52,6 @@ import Kafka.Consumer qualified as K
 import Kafka.Effectful qualified as KE
 import Kafka.Effectful.Producer.Effect qualified as KEP
 import Kafka.Producer qualified as KP
-import Effectful.Log (Log)
 import Log (LogLevel (..), Logger, runLogT)
 import Log qualified as LogBase
 import Models.Telemetry.Telemetry qualified as Telemetry
@@ -132,7 +132,7 @@ closeSharedKafkaProducer = modifyMVar sharedKafkaProducer $ \case
 -- producers — consumer DLQ path, PubSub, replay — go through this; tests swap in
 -- a no-op interpreter. ProduceMessage throws 'K.KafkaError' via the Error effect
 -- on enqueue failure, so the caller refuses to advance the offset/ack.
-runSharedKafkaProducer :: (IOE :> es, Error K.KafkaError :> es) => AuthContext -> Eff (KE.KafkaProducer ': es) a -> Eff es a
+runSharedKafkaProducer :: (Error K.KafkaError :> es, IOE :> es) => AuthContext -> Eff (KE.KafkaProducer ': es) a -> Eff es a
 runSharedKafkaProducer appCtx = interpret \_ -> \case
   KEP.ProduceMessage rec -> liftIO (getOrInitKafkaProducer appCtx.config >>= \p -> KP.produceMessage p rec) >>= maybe pass throwError
   KEP.FlushProducer -> liftIO (getOrInitKafkaProducer appCtx.config >>= KP.flushProducer)
@@ -144,7 +144,7 @@ runSharedKafkaProducer appCtx = interpret \_ -> \case
 -- handlers): runs the action against the shared producer and surfaces a
 -- KafkaError as @Left@ text. Wraps the producer + error interpreters so callers
 -- need no Kafka imports.
-runSharedProducer :: (IOE :> es) => AuthContext -> Eff (KE.KafkaProducer ': Error K.KafkaError ': es) a -> Eff es (Either Text a)
+runSharedProducer :: IOE :> es => AuthContext -> Eff (KE.KafkaProducer ': Error K.KafkaError ': es) a -> Eff es (Either Text a)
 runSharedProducer appCtx act = first (toText . show) <$> runErrorNoCallStack @K.KafkaError (runSharedKafkaProducer appCtx act)
 
 
@@ -241,7 +241,7 @@ pubsubService appLogger appCtx tp topics fn = checkpoint "pubsubService" do
 -- bytes are written exactly as given — structured-data callers must encode
 -- themselves ('publishJSONToKafka'); binary callers (the DLQ) pass the original
 -- message bytes so the consumer decodes them unchanged.
-publishRawToKafka :: (KE.KafkaProducer :> es) => Text -> ByteString -> HM.HashMap Text Text -> Eff es ()
+publishRawToKafka :: KE.KafkaProducer :> es => Text -> ByteString -> HM.HashMap Text Text -> Eff es ()
 publishRawToKafka topicName messageData attributes =
   KE.produceMessage
     KP.ProducerRecord
@@ -256,7 +256,7 @@ publishRawToKafka topicName messageData attributes =
 -- | Publish JSON-encoded structured data. ONLY for genuine JSON payloads —
 -- never raw binary (protobuf): JSON-string-encoding quotes and escapes the
 -- bytes into an undecodable blob (the DLQ uses 'publishRawToKafka' directly).
-publishJSONToKafka :: (KE.KafkaProducer :> es, AE.ToJSON a) => Text -> a -> HM.HashMap Text Text -> Eff es ()
+publishJSONToKafka :: (AE.ToJSON a, KE.KafkaProducer :> es) => Text -> a -> HM.HashMap Text Text -> Eff es ()
 publishJSONToKafka topicName jsonData = publishRawToKafka topicName (BC.toStrict $ AE.encode jsonData)
 
 
@@ -652,7 +652,7 @@ publishToDeadLetterQueue appCtx messages attributes errorReason = do
 --   * Left SomeException (non-write) — Hasql-transient: no commit, broker redelivers.
 --     Otherwise: DLQ the whole batch as opaque poison; commit only if DLQ accepted.
 routeBatchOutcome
-  :: (KE.KafkaProducer :> es, Time.Time :> es, Log :> es, Error K.KafkaError :> es)
+  :: (Error K.KafkaError :> es, KE.KafkaProducer :> es, Log :> es, Time.Time :> es)
   => AuthContext
   -> Text
   -- ^ service name for log context ("pubsub-service" / "kafka-service")
