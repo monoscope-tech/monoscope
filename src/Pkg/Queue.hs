@@ -18,7 +18,7 @@ module Pkg.Queue (
   retryDestination,
 ) where
 
-import Control.Concurrent.STM.TBQueue (newTBQueueIO, readTBQueue, writeTBQueue)
+import Control.Concurrent.STM.TBQueue (TBQueue, newTBQueueIO, readTBQueue, writeTBQueue)
 import Control.Exception.Annotated (checkpoint)
 import Control.Lens ((^?), _Just)
 import Control.Lens qualified as L
@@ -349,6 +349,16 @@ retryDestination tiers park attempt = maybe (Parking park) (uncurry RetryTier) (
 data PartProgress = PartProgress {base :: !Int64, ahead :: !IntSet.IntSet}
   deriving stock (Eq, Show)
 
+-- | One unit of decoupled-consumer work: partition key, the header-bearing
+-- record, the chunk's payloads, its offsets, and its byte size.
+type WorkItem =
+  ( (Text, K.PartitionId)
+  , K.ConsumerRecord (Maybe ByteString) (Maybe ByteString)
+  , [(Text, ByteString)]
+  , [Int64]
+  , Int
+  )
+
 
 -- | Record completed offsets, advancing @base@ across the now-contiguous run.
 -- Offsets below @base@ (already committed — e.g. a redelivered duplicate) drop
@@ -486,7 +496,7 @@ decoupledLoop appLogger appCtx tp role batchSize clientId fn = do
   let highWaterBytes = 4 * kafkaChunkTargetBytes
       lowWaterBytes = kafkaChunkTargetBytes
       deadLetterTopic = appCtx.config.kafkaDeadLetterTopic
-  workQ <- liftIO (newTBQueueIO 64)
+  workQ <- liftIO (newTBQueueIO 64 :: IO (TBQueue WorkItem))
   trackerVar <- newTVarIO (Map.empty :: Map (Text, K.PartitionId) PartProgress)
   committedVar <- newTVarIO (Map.empty :: Map (Text, K.PartitionId) Int64)
   inflightVar <- newTVarIO (0 :: Int)
@@ -555,7 +565,7 @@ decoupledLoop appLogger appCtx tp role batchSize clientId fn = do
             subChunks = subChunksFor role nowEpoch byTP
         for_ subChunks \work@(tpKey, _, _, offs, bytes) ->
           atomically do
-            modifyTVar' trackerVar (Map.insertWith (\_ old -> old) tpKey (PartProgress (minimum offs) mempty))
+            modifyTVar' trackerVar (Map.insertWith (flip const) tpKey (PartProgress (minimum offs) mempty))
             modifyTVar' inflightVar (+ bytes)
             writeTBQueue workQ work
         -- DLQ backoff: records present but none due → avoid a 10Hz re-poll of
@@ -597,7 +607,7 @@ decoupledLoop appLogger appCtx tp role batchSize clientId fn = do
 -- DLQ replay emits only the offset-ordered due prefix (the primary byte-chunking
 -- is just 'chunksByBytes', covered there). At now=10, due=5/9 fire, due=99 holds:
 --
--- >>> let r off due = K.ConsumerRecord (K.TopicName "dlq") (K.PartitionId 0) (K.Offset off) K.NoTimestamp (K.headersFromList [("monoscope-next-due-at", BC.pack (show @Int due))]) Nothing (Just "x")
+-- >>> let r off due = K.ConsumerRecord (K.TopicName "dlq") (K.PartitionId 0) (K.Offset off) K.NoTimestamp (K.headersFromList [("monoscope-next-due-at", BC.pack (show @Int due))]) Nothing (Just "x") :: K.ConsumerRecord (Maybe ByteString) (Maybe ByteString)
 -- >>> let m = Map.fromList [(("dlq", K.PartitionId 0), r 0 5 :| [r 1 9, r 2 99])]
 -- >>> [o | (_, _, _, o, _) <- subChunksFor KafkaDlqReplay 10 m]
 -- [[0],[1]]
@@ -605,7 +615,7 @@ subChunksFor
   :: KafkaRole
   -> Int
   -> Map (Text, K.PartitionId) (NonEmpty (K.ConsumerRecord (Maybe ByteString) (Maybe ByteString)))
-  -> [((Text, K.PartitionId), K.ConsumerRecord (Maybe ByteString) (Maybe ByteString), [(Text, ByteString)], [Int64], Int)]
+  -> [WorkItem]
 subChunksFor role nowEpoch byTP = case role of
   KafkaPrimary ->
     [ (tpKey, recc, consumerRecordToTuple <$> chunk, K.unOffset . (.crOffset) <$> chunk, sum (recordBytes <$> chunk))
@@ -621,7 +631,7 @@ subChunksFor role nowEpoch byTP = case role of
     -- A retry-tier message is due once now ≥ its stamped due epoch. Missing /
     -- unparseable header ⇒ due (process rather than strand it).
     isDue :: Int -> K.ConsumerRecord (Maybe ByteString) (Maybe ByteString) -> Bool
-    isDue now r = maybe True (now >=) (readMaybe . toString . decodeUtf8 @Text . snd =<< find ((== "monoscope-next-due-at") . fst) (K.headersToList r.crHeaders))
+    isDue now r = maybe True (now >=) (readMaybe . BC.unpack . snd =<< find ((== "monoscope-next-due-at") . fst) (K.headersToList r.crHeaders))
 
     consumerRecordToTuple :: K.ConsumerRecord (Maybe ByteString) (Maybe ByteString) -> (Text, ByteString)
     consumerRecordToTuple record = (record.crTopic.unTopicName, fromMaybe "" record.crValue)
