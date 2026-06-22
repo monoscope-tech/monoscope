@@ -1127,7 +1127,6 @@ test-suite unit-tests
       Pkg.Parser.ExprSpec
       Pkg.ParserSpec
       Pkg.QueryCacheSpec
-      Pkg.QueueSpec
       RequestMessagesSpec
       Spec
       Web.ApiHandlersSpec

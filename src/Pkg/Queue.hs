@@ -140,7 +140,7 @@ closeSharedKafkaProducer = modifyMVar sharedKafkaProducer $ \case
 -- on enqueue failure, so the caller refuses to advance the offset/ack.
 runSharedKafkaProducer :: (Error K.KafkaError :> es, IOE :> es) => AuthContext -> Eff (KE.KafkaProducer ': es) a -> Eff es a
 runSharedKafkaProducer appCtx = interpret \_ -> \case
-  KEP.ProduceMessage rec -> liftIO (getOrInitKafkaProducer appCtx.config >>= \p -> KP.produceMessage p rec) >>= maybe pass throwError
+  KEP.ProduceMessage rec -> whenJustM (liftIO (getOrInitKafkaProducer appCtx.config >>= \p -> KP.produceMessage p rec)) throwError
   KEP.FlushProducer -> liftIO (getOrInitKafkaProducer appCtx.config >>= KP.flushProducer)
   KEP.AskProducerHandle -> liftIO (getOrInitKafkaProducer appCtx.config)
   _ -> error "runSharedKafkaProducer: unsupported KafkaProducer operation"
@@ -284,6 +284,8 @@ data KafkaRole = KafkaPrimary | KafkaDlqReplay
 --
 -- >>> map (map fst) $ chunksByBytes 10 snd [('a',6),('b',5),('c',3),('d',20),('e',1)]
 -- ["a","bc","d","e"]
+-- >>> chunksByBytes 10 id ([] :: [Int])
+-- []
 chunksByBytes :: Int -> (a -> Int) -> [a] -> [[a]]
 chunksByBytes target size = go [] 0
   where
@@ -323,9 +325,13 @@ parkingTopicFor base = base <> "-parking"
 --
 -- >>> retryDestination (retryTiers "dlq") (parkingTopicFor "dlq") 1
 -- RetryTier "dlq" 5
+-- >>> retryDestination (retryTiers "dlq") (parkingTopicFor "dlq") 2
+-- RetryTier "dlq-retry-60s" 60
 -- >>> retryDestination (retryTiers "dlq") (parkingTopicFor "dlq") 3
 -- RetryTier "dlq-retry-600s" 600
 -- >>> retryDestination (retryTiers "dlq") (parkingTopicFor "dlq") 4
+-- Parking "dlq-parking"
+-- >>> retryDestination (retryTiers "dlq") (parkingTopicFor "dlq") 99
 -- Parking "dlq-parking"
 retryDestination :: [(Text, Int)] -> Text -> Int -> RetryRoute
 retryDestination tiers park attempt = maybe (Parking park) (uncurry RetryTier) (tiers !!? (attempt - 1))
@@ -351,6 +357,16 @@ data PartProgress = PartProgress {base :: !Int64, ahead :: !IntSet.IntSet}
 -- (10,[11,12])
 -- >>> (completeOffsets [10] p).base
 -- 13
+--
+-- Already-committed (redelivered) offsets below base drop out; a permanent gap
+-- pins base; and the pending set self-prunes as base walks over it:
+--
+-- >>> (completeOffsets [8,9,10] (PartProgress 10 mempty)).base
+-- 11
+-- >>> (foldr completeOffsets (PartProgress 10 mempty) [[10],[11],[12],[14],[15]]).base
+-- 13
+-- >>> IntSet.null (completeOffsets [10,11,12] (PartProgress 10 mempty)).ahead
+-- True
 completeOffsets :: [Int64] -> PartProgress -> PartProgress
 completeOffsets offs (PartProgress base0 ahead0) = advance base0 (foldl' ins ahead0 offs)
   where
