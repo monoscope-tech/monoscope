@@ -566,7 +566,7 @@ decoupledLoop appLogger appCtx tp role batchSize clientId fn = do
             subChunks = subChunksFor role nowEpoch byTP
         for_ subChunks \work@(tpKey, _, _, offs, bytes) ->
           atomically do
-            modifyTVar' trackerVar (Map.insertWith (flip const) tpKey (PartProgress (minimum offs) mempty))
+            modifyTVar' trackerVar (Map.insertWith (const id) tpKey (PartProgress (minimum offs) mempty))
             modifyTVar' inflightVar (+ bytes)
             writeTBQueue workQ work
         -- DLQ backoff: records present but none due → avoid a 10Hz re-poll of
