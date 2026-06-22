@@ -155,7 +155,7 @@ runServer appLogger env tp = do
         , guard (env.config.enableKafkaService && not (any T.null env.config.kafkaTopics)) $> async (supervise logExc "kafka" $ Queue.kafkaService appLogger env tp Queue.KafkaPrimary "ingest" env.config.kafkaTopics env.config.messagesPerPubsubPullBatch OtlpServer.processList)
         , -- Small batch: DLQ replay is a retry carousel, not steady-state ingest;
           -- a poison-heavy batch should not stall a large offset window.
-          guard (env.config.enableKafkaService && env.config.enableKafkaDeadLetterService && not (T.null env.config.kafkaDeadLetterTopic)) $> async (supervise logExc "kafka-dlq" $ Queue.kafkaService appLogger env tp Queue.KafkaDlqReplay "dlq" [env.config.kafkaDeadLetterTopic] 50 OtlpServer.processList)
+          guard (env.config.enableKafkaService && env.config.enableKafkaDeadLetterService && not (T.null env.config.kafkaDeadLetterTopic)) $> async (supervise logExc "kafka-dlq" $ Queue.kafkaService appLogger env tp Queue.KafkaDlqReplay "dlq" (map fst (Queue.retryTiers env.config.kafkaDeadLetterTopic)) 50 OtlpServer.processList)
         , guard env.config.enableReplayService $> async (supervise logExc "kafka-replay" $ Queue.kafkaService appLogger env tp Queue.KafkaPrimary "replay" env.config.rrwebTopics effectiveReplayBatch processReplayEvents)
         ]
       <> fmap Just schemaFibers

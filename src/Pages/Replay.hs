@@ -36,7 +36,7 @@ import Network.Minio (MinioErr (..), ServiceErr (..))
 import Network.Minio qualified as Minio
 import OddJobs.Job (createJob)
 import Pkg.ErrorMetrics qualified as Metrics
-import Pkg.Queue (publishJSONToKafka)
+import Pkg.Queue (chunksByBytes, publishJSONToKafka, runSharedProducer)
 import Relude
 import System.Config (AuthContext (config, jobsPool), EnvConfig (..))
 import System.Logging qualified as Log
@@ -57,15 +57,14 @@ data ReplayPost = ReplayPost
 
 
 -- Helper function to publish to Pub/Sub using the queue service
-publishReplayEvent :: ReplayPost -> Projects.ProjectId -> ATBaseCtx (Either Text Text)
+publishReplayEvent :: ReplayPost -> Projects.ProjectId -> ATBaseCtx (Either Text ())
 publishReplayEvent replayData pid = do
   ctx <- Effectful.Reader.Static.ask @AuthContext
   let messagePayload = AE.object ["events" AE..= replayData.events, "sessionId" AE..= replayData.sessionId, "projectId" AE..= pid, "timestamp" AE..= replayData.timestamp, "userId" AE..= replayData.userId, "userEmail" AE..= replayData.userEmail, "userName" AE..= replayData.userName]
       attributes = HM.fromList [("eventType", "replay")]
   case ctx.config.rrwebTopics of
     [] -> pure $ Left "No rrweb pubsub topics configured"
-    (topicName : _) ->
-      liftIO $ first ("Failed to publish replay event: " <>) <$> publishJSONToKafka ctx topicName messagePayload attributes
+    (topicName : _) -> first ("Failed to publish replay event: " <>) <$> runSharedProducer ctx (publishJSONToKafka topicName messagePayload attributes)
 
 
 replayPostH :: Projects.ProjectId -> ReplayPost -> ATBaseCtx AE.Value
@@ -73,7 +72,7 @@ replayPostH pid body = do
   pubResult <- publishReplayEvent body pid
   pure $ AE.object $ ["sessionId" AE..= body.sessionId] <> case pubResult of
     Left errMsg -> ["status" AE..= ("warning" :: Text), "message" AE..= errMsg]
-    Right messageId -> ["status" AE..= ("ok" :: Text), "messageId" AE..= messageId]
+    Right () -> ["status" AE..= ("ok" :: Text)]
 
 
 -- | Replay events are multi-MB rrweb session payloads; the kafka batch sees
@@ -297,17 +296,9 @@ processReplayEvents msgs _attrs = do
       (oversized, valid) = partition (\(_, b) -> BS.length b > maxReplayMessageBytes) msgs
       oversizePoison = [(ackId, body, "replay:oversize_message") | (ackId, body) <- oversized]
   traverse_ (\_ -> Metrics.bumpErrorCounter "replay:oversize_message") oversized
-  (acks, decodePoison) <- mconcat <$> mapM (handleChunk envCfg ctx.jobsPool) (chunkByBytes valid)
+  (acks, decodePoison) <- mconcat <$> mapM (handleChunk envCfg ctx.jobsPool) (chunksByBytes replayBatchByteBudget (BS.length . snd) valid)
   pure $ Right (acks, oversizePoison <> decodePoison)
   where
-    chunkByBytes = go 0 [] []
-      where
-        go _ chunk chunks [] = reverse (reverse chunk : chunks)
-        go sz chunk chunks (m : rest)
-          | sz + BS.length (snd m) > replayBatchByteBudget && not (null chunk) =
-              go (BS.length (snd m)) [m] (reverse chunk : chunks) rest
-          | otherwise = go (sz + BS.length (snd m)) (m : chunk) chunks rest
-
     -- Returns @(acks, poison)@ for one chunk so the caller can DLQ poison and
     -- ack only the successfully-saved + DLQ'd ackIds.
     handleChunk envCfg jobsPool chunk =

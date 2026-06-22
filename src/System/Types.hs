@@ -2,6 +2,7 @@ module System.Types (
   ATBaseCtx,
   ATAuthCtx,
   ATBackgroundCtx,
+  ATBackgroundEffects,
   DB,
   runBackground,
   addRespHeaders,
@@ -179,23 +180,28 @@ effToHandler computation = do
   either Except.throwError pure v
 
 
+-- Effect list factored out so consumers (e.g. Pkg.Queue's Kafka loop) can layer
+-- extra effects on top: @Eff (KafkaConsumer : Error e : ATBackgroundEffects)@.
+type ATBackgroundEffects :: [Effect]
+type ATBackgroundEffects =
+  '[ Data.Effectful.Notify.Notify
+   , Effectful.Reader.Static.Reader AuthContext
+   , Hasql
+   , Labeled "timefusion" Hasql
+   , Time
+   , Log
+   , Tracing
+   , UUIDEff
+   , HTTP
+   , ELLM.LLM
+   , Concurrent
+   , Ki.StructuredConcurrency
+   , Effectful.IOE
+   ]
+
+
 type ATBackgroundCtx :: Type -> Type
-type ATBackgroundCtx =
-  Effectful.Eff
-    '[ Data.Effectful.Notify.Notify
-     , Effectful.Reader.Static.Reader AuthContext
-     , Hasql
-     , Labeled "timefusion" Hasql
-     , Time
-     , Log
-     , Tracing
-     , UUIDEff
-     , HTTP
-     , ELLM.LLM
-     , Concurrent
-     , Ki.StructuredConcurrency
-     , Effectful.IOE
-     ]
+type ATBackgroundCtx = Effectful.Eff ATBackgroundEffects
 
 
 runBackground :: Log.Logger -> AuthContext -> TracerProvider -> ATBackgroundCtx a -> IO a

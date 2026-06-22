@@ -215,6 +215,7 @@ tests:
       - hspec
       - relude >= 1.2.0.0
       - aeson
+      - hasql
       - hasql-interpolate
       - hasql-pool
       - pg-entity
@@ -263,6 +264,9 @@ tests:
       - wai
       - wai-extra
       - unordered-containers
+      - stm
+      - hw-kafka-client
+      - kafka-effectful
   unit-tests:
     main: Main.hs
     source-dirs: test/unit

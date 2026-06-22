@@ -125,6 +125,7 @@ extra-source-files:
     static/migrations/0097_hasql_decoder_alignment.sql
     static/migrations/0098_widen_int_to_bigint.sql
     static/migrations/0099_jsonb_build_array_record_overload.sql
+    static/migrations/0100_db_response_status_code_to_text.sql
 
 source-repository head
   type: git
@@ -376,6 +377,7 @@ library
     , hw-kafka-client
     , insert-ordered-containers
     , jose-jwt
+    , kafka-effectful
     , ki
     , ki-effectful
     , langchain-hs
@@ -629,6 +631,7 @@ test-suite integration-tests
       Pages.QueryCacheSpec
       Pages.ReportsSpec
       Pages.ShareSpec
+      Pkg.KafkaConsumerSpec
       ProcessMessageSpec
       ReplaySpec
       SchemaLearningPerfSpec
@@ -683,12 +686,15 @@ test-suite integration-tests
     , effectful-postgresql
     , generic-lens
     , grapesy
+    , hasql
     , hasql-interpolate
     , hasql-pool
     , hs-opentelemetry-instrumentation-auto
     , hspec
     , http-client
     , http-types
+    , hw-kafka-client
+    , kafka-effectful
     , ki
     , ki-effectful
     , lens
@@ -709,6 +715,7 @@ test-suite integration-tests
     , servant
     , servant-htmx
     , servant-server
+    , stm
     , text
     , these
     , time
@@ -867,6 +874,7 @@ test-suite test-dev
       Pages.QueryCacheSpec
       Pages.ReportsSpec
       Pages.ShareSpec
+      Pkg.KafkaConsumerSpec
       ProcessMessageSpec
       ReplaySpec
       SchemaLearningPerfSpec
@@ -1015,6 +1023,7 @@ test-suite test-dev
     , hw-kafka-client
     , insert-ordered-containers
     , jose-jwt
+    , kafka-effectful
     , ki
     , ki-effectful
     , langchain-hs
