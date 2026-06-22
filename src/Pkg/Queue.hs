@@ -470,14 +470,11 @@ kafkaService appLogger appCtx tp role label kafkaTopics batchSize fn = checkpoin
         -- round-trip cost). 250ms stays well under session/poll timeouts.
         <> K.extraProp "fetch.min.bytes" "65536"
         <> K.extraProp "fetch.wait.max.ms" "250"
-        -- Consumer fetch ceiling MUST match the producer/broker 64 MiB max.message.bytes.
-        -- librdkafka defaults max.partition.fetch.bytes to 1 MiB and fetch.max.bytes to
-        -- 50 MiB — both below the 64 MiB a DLQ re-publish can reach — so an oversized-but-
-        -- valid record (esp. header-restamped DLQ messages) is accepted and stored by the
-        -- broker yet MSG_SIZE_TOO_LARGE wedges the partition on consume, re-seeking forever.
-        <> K.extraProp "max.partition.fetch.bytes" "67108864"
-        <> K.extraProp "fetch.max.bytes" "67108864"
-        <> K.extraProp "receive.message.max.bytes" "104857600"
+        -- Fetch ceiling must match broker 64 MiB max.message.bytes, else an oversized-but-valid
+        -- record (e.g. a header-restamped DLQ re-publish) wedges the partition with MSG_SIZE_TOO_LARGE.
+        <> K.extraProp "max.partition.fetch.bytes" "67108864" -- 64 MiB (librdkafka default 1 MiB)
+        <> K.extraProp "fetch.max.bytes" "67108864" -- 64 MiB total per fetch (default 50 MiB)
+        <> K.extraProp "receive.message.max.bytes" "104857600" -- 100 MiB socket buffer (> fetch.max.bytes)
         <> K.extraProp "partition.assignment.strategy" "cooperative-sticky"
         <> K.extraProp "group.instance.id" clientId
         <> K.logLevel K.KafkaLogInfo
