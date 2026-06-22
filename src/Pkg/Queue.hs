@@ -30,9 +30,9 @@ import Data.ByteString.Lazy.Base64 qualified as LB64
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Generics.Product (field)
 import Data.HashMap.Strict qualified as HM
-import Data.Set qualified as Set
 import Data.List.Extra (lookup, minimum)
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Text.Lazy.Encoding qualified as LT
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
@@ -702,7 +702,7 @@ publishToDeadLetterQueue appCtx messages attributes errorReason = do
     -- JSON-string-encode the binary protobuf into an undecodable, re-escaping blob.
     publishRawToKafka topic msgData attrs
   where
-    -- | Headers stamped on every DLQ publish. Left-biased '<>' keeps first-failure
+    -- \| Headers stamped on every DLQ publish. Left-biased '<>' keeps first-failure
     -- forensics (original-topic, original-ack-id, failed-at) intact across
     -- DLQ-replay requeues, while attempt-count, error-reason and last-failed-at
     -- refresh on every pass — an engineer inspecting a growing DLQ sees how often
