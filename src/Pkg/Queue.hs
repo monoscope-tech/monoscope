@@ -628,7 +628,7 @@ decoupledLoop appLogger appCtx tp role batchSize clientId fn = do
 -- DLQ replay emits only the offset-ordered due prefix (the primary byte-chunking
 -- is just 'chunksByBytes', covered there). At now=10, due=5/9 fire, due=99 holds:
 --
--- >>> let r off due = K.ConsumerRecord (K.TopicName "dlq") (K.PartitionId 0) (K.Offset off) K.NoTimestamp (K.headersFromList [("monoscope-next-due-at", BC.pack (show @Int due))]) Nothing (Just "x") :: K.ConsumerRecord (Maybe ByteString) (Maybe ByteString)
+-- >>> let r off due = K.ConsumerRecord (K.TopicName "dlq") (K.PartitionId 0) (K.Offset off) K.NoTimestamp (K.headersFromList [("monoscope-next-due-at", BC.pack (show $ due::Int))]) Nothing (Just "x") :: K.ConsumerRecord (Maybe ByteString) (Maybe ByteString)
 -- >>> let m = Map.fromList [(("dlq", K.PartitionId 0), r 0 5 :| [r 1 9, r 2 99])]
 -- >>> [w.offsets | w <- subChunksFor KafkaDlqReplay 10 m]
 -- [[0],[1]]
