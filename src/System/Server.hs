@@ -1,9 +1,9 @@
-module System.Server (runMonoscope, mkServer) where
+module System.Server (runMonoscope, mkServer, cancelAllConcurrently) where
 
 import BackgroundJobs qualified
 import Colourista.IO (blueMessage)
 import Control.Concurrent (threadDelay)
-import Control.Concurrent.Async (async, waitAnyCancel)
+import Control.Concurrent.Async (Async, async, cancel, mapConcurrently_, race, waitAny)
 import Control.Exception.Safe qualified as Safe
 import Data.Aeson qualified as AE
 import Data.Pool as Pool (destroyAllResources)
@@ -39,7 +39,9 @@ import System.Config (
   getAppContext,
  )
 import System.Logging qualified as Logging
+import System.Posix.Signals (Handler (Catch), installHandler, sigINT, sigTERM)
 import System.TimeManager (TimeoutThread)
+import System.Timeout (timeout)
 import System.Types (effToServantHandler, runBackground)
 import Web.Auth qualified as Auth
 import Web.Routes qualified as Routes
@@ -160,7 +162,37 @@ runServer appLogger env tp = do
         ]
       <> fmap Just schemaFibers
       <> (if consumerOnly then [] else fmap Just jobFibers)
-  void $ liftIO $ waitAnyCancel asyncs
+  liftIO $ awaitShutdown asyncs
+
+
+-- | Wall-clock budget for tearing every service fiber down once shutdown
+-- begins. A backstop only: a well-behaved fiber dies on the first
+-- AsyncCancelled, so this caps the wait when one is wedged (uninterruptible
+-- librdkafka poll, Warp mid-drain) and guarantees the process eventually exits.
+shutdownDeadlineUs :: Int
+shutdownDeadlineUs = 15_000_000
+
+
+-- | Block until either a service fiber exits on its own or we receive
+-- SIGINT/SIGTERM, then cancel every fiber. Replaces async's @waitAnyCancel@,
+-- whose @mapM_ cancel@ cancels sequentially and blocks on each fiber's death
+-- before signalling the next — so one slow fiber (Warp's graceful drain, a
+-- stuck poll) kept every other fiber alive, which is why Ctrl-C left the kafka
+-- workers retrying dead-DB writes instead of exiting. Catching SIGTERM also lets
+-- @docker stop@/k8s drain gracefully (flush buffers, close pools) rather than
+-- SIGKILL-dropping in-flight data.
+awaitShutdown :: [Async a] -> IO ()
+awaitShutdown asyncs = do
+  stop <- newEmptyMVar
+  for_ [sigINT, sigTERM] \s -> installHandler s (Catch (void (tryPutMVar stop ()))) Nothing
+  void $ race (takeMVar stop) (waitAny asyncs)
+  cancelAllConcurrently shutdownDeadlineUs asyncs
+
+
+-- | Cancel every fiber CONCURRENTLY (vs async's sequential @mapM_ cancel@),
+-- bounded by @deadlineUs@ so a fiber that refuses to die can't hang shutdown.
+cancelAllConcurrently :: Int -> [Async a] -> IO ()
+cancelAllConcurrently deadlineUs asyncs = void $ timeout deadlineUs $ mapConcurrently_ cancel asyncs
 
 
 instance FromHttpApiData ByteString where

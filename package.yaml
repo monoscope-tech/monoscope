@@ -282,6 +282,7 @@ tests:
       - hspec
       - relude >= 1.2.0.0
       - aeson
+      - async
       - containers
       - text
       - uuid
