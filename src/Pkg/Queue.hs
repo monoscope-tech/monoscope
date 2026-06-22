@@ -349,6 +349,7 @@ retryDestination tiers park attempt = maybe (Parking park) (uncurry RetryTier) (
 data PartProgress = PartProgress {base :: !Int64, ahead :: !IntSet.IntSet}
   deriving stock (Eq, Show)
 
+
 -- | One unit of decoupled-consumer work: partition key, the header-bearing
 -- record, the chunk's payloads, its offsets, and its byte size.
 type WorkItem =
