@@ -1129,6 +1129,7 @@ test-suite unit-tests
       Pkg.QueryCacheSpec
       RequestMessagesSpec
       Spec
+      System.ServerSpec
       Web.ApiHandlersSpec
   hs-source-dirs:
       test/unit
@@ -1160,6 +1161,7 @@ test-suite unit-tests
   build-depends:
       aeson
     , aeson-qq
+    , async
     , containers
     , effectful-core
     , extra
