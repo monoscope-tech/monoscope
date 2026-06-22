@@ -853,6 +853,11 @@ data WriteTarget = WriteBoth | WritePgOnly | WriteTfOnly
 -- @monoscope-write-failure@ header (present on DLQ replay). A 'tf-failed' replay
 -- presumes TF was enabled when it failed, so it always targets TF; everything
 -- else honours @enableTf@ (TF off ⇒ PG only).
+--
+-- >>> map (writeTargetFor True) [Just "tf-failed", Just "pg-failed", Just "both-failed", Nothing]
+-- [WriteTfOnly,WritePgOnly,WriteBoth,WriteBoth]
+-- >>> writeTargetFor False Nothing
+-- WritePgOnly
 writeTargetFor :: Bool -> Maybe Text -> WriteTarget
 writeTargetFor enableTf = \case
   Just "tf-failed" -> WriteTfOnly
@@ -942,6 +947,11 @@ writeFailureSummary = These.these (const "pg-failed") (const "tf-failed") (\_ _ 
 
 -- | DLQ headers a replay tool reads to rewrite only the missing side(s) and
 -- avoid duplicating rows on the successful side.
+--
+-- >>> let e = toException (SilentUnderPersistError "x" 1 1)
+-- >>> let look h = [HM.lookup k (writeFailureDlqHeaders h) | k <- ["monoscope-write-failure", "monoscope-pg-succeeded", "monoscope-tf-succeeded"]]
+-- >>> (look (This e), look (That e), look (These e e))
+-- ([Just "pg-failed",Just "false",Just "true"],[Just "tf-failed",Just "true",Just "false"],[Just "both-failed",Just "false",Just "false"])
 writeFailureDlqHeaders :: WriteFailure -> HM.HashMap Text Text
 writeFailureDlqHeaders wf =
   let (pgOk, tfOk) = These.these (const ("false", "true")) (const ("true", "false")) (\_ _ -> ("false", "false")) wf
