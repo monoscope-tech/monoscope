@@ -187,7 +187,7 @@ processMessages msgs attrs =
       Nothing -> pure (Right V.empty)
       Just (projectCaches, paired) ->
         Metrics.timed Metrics.ingestWriteHist []
-          $ Telemetry.insertAndHandOff appCtx.env.enableTimefusionWrites appCtx.extractionWorker projectCaches (V.map (\(_, _, s) -> s) paired)
+          $ Telemetry.insertAndHandOff (Telemetry.writeTargetFor appCtx.env.enableTimefusionWrites Nothing) appCtx.extractionWorker projectCaches (V.map (\(_, _, s) -> s) paired)
 
     let pairedSpans = maybe V.empty snd mWrite
         idToSource = HM.fromList [(s.id, (a, r)) | (a, r, s) <- V.toList pairedSpans]
