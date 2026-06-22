@@ -12,7 +12,7 @@ jobs:
     name: Build Frontend Assets
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -51,7 +51,7 @@ jobs:
       env:
         CABAL_DIR: /root/.cabal
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Download frontend artifacts
         uses: actions/download-artifact@v8
@@ -98,7 +98,7 @@ jobs:
       env:
         CABAL_DIR: /root/.cabal
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Download frontend artifacts
         uses: actions/download-artifact@v8
@@ -146,7 +146,7 @@ jobs:
           - arch: x86_64
             runner: macos-15-intel
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Download frontend artifacts
         uses: actions/download-artifact@v8
@@ -219,7 +219,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Download all artifacts
         uses: actions/download-artifact@v8
