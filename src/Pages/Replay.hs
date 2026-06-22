@@ -57,16 +57,14 @@ data ReplayPost = ReplayPost
 
 
 -- Helper function to publish to Pub/Sub using the queue service
-publishReplayEvent :: ReplayPost -> Projects.ProjectId -> ATBaseCtx (Either Text Text)
+publishReplayEvent :: ReplayPost -> Projects.ProjectId -> ATBaseCtx (Either Text ())
 publishReplayEvent replayData pid = do
   ctx <- Effectful.Reader.Static.ask @AuthContext
   let messagePayload = AE.object ["events" AE..= replayData.events, "sessionId" AE..= replayData.sessionId, "projectId" AE..= pid, "timestamp" AE..= replayData.timestamp, "userId" AE..= replayData.userId, "userEmail" AE..= replayData.userEmail, "userName" AE..= replayData.userName]
       attributes = HM.fromList [("eventType", "replay")]
   case ctx.config.rrwebTopics of
     [] -> pure $ Left "No rrweb pubsub topics configured"
-    (topicName : _) -> do
-      result <- runSharedProducer ctx (publishJSONToKafka topicName messagePayload attributes)
-      pure $ first ("Failed to publish replay event: " <>) ("" <$ result)
+    (topicName : _) -> first ("Failed to publish replay event: " <>) <$> runSharedProducer ctx (publishJSONToKafka topicName messagePayload attributes)
 
 
 replayPostH :: Projects.ProjectId -> ReplayPost -> ATBaseCtx AE.Value
@@ -74,7 +72,7 @@ replayPostH pid body = do
   pubResult <- publishReplayEvent body pid
   pure $ AE.object $ ["sessionId" AE..= body.sessionId] <> case pubResult of
     Left errMsg -> ["status" AE..= ("warning" :: Text), "message" AE..= errMsg]
-    Right messageId -> ["status" AE..= ("ok" :: Text), "messageId" AE..= messageId]
+    Right () -> ["status" AE..= ("ok" :: Text)]
 
 
 -- | Replay events are multi-MB rrweb session payloads; the kafka batch sees

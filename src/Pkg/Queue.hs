@@ -143,6 +143,10 @@ runSharedKafkaProducer appCtx = interpret \_ -> \case
   KEP.ProduceMessage rec -> whenJustM (liftIO (getOrInitKafkaProducer appCtx.config >>= \p -> KP.produceMessage p rec)) throwError
   KEP.FlushProducer -> liftIO (getOrInitKafkaProducer appCtx.config >>= KP.flushProducer)
   KEP.AskProducerHandle -> liftIO (getOrInitKafkaProducer appCtx.config)
+  -- Non-exhaustive by design: we interpret exactly the three ops we use. If a
+  -- kafka-effectful upgrade adds a KafkaProducer op (e.g. transactions), this
+  -- panics at runtime rather than failing to compile — revisit this case (and
+  -- the mock in KafkaConsumerSpec) when bumping kafka-effectful.
   _ -> error "runSharedKafkaProducer: unsupported KafkaProducer operation"
 
 
@@ -255,7 +259,7 @@ publishRawToKafka topicName messageData attributes =
       , prPartition = KP.UnassignedPartition
       , prKey = Nothing
       , prValue = Just messageData
-      , prHeaders = KP.headersFromList $ map (\(k, v) -> (BC.pack $ toString k, BC.pack $ toString v)) $ HM.toList attributes
+      , prHeaders = KP.headersFromList $ map (bimap (BC.pack . toString) (BC.pack . toString)) $ HM.toList attributes
       }
 
 
@@ -530,7 +534,7 @@ decoupledLoop appLogger appCtx tp role batchSize clientId fn = do
         unless (null commits) do
           KE.flushProducer
           KE.commitPartitionsOffsets K.OffsetCommitAsync commits
-        when (not (null commits) || inflight > 0)
+        unless (null commits && inflight == 0)
           $ LogBase.logInfo "kafka.consumer.metrics"
           $ AE.object ["client_id" AE..= clientId, "committed_partitions" AE..= length commits, "tracked_partitions" AE..= tracked, "inflight_bytes" AE..= inflight]
       pollOnce = do
@@ -589,6 +593,14 @@ decoupledLoop appLogger appCtx tp role batchSize clientId fn = do
 -- headers — retry tiers interleave source topics with different ce-types, and
 -- offset = failure-time = due-time order, so due records are a prefix;
 -- not-yet-due ones stay uncommitted and redeliver (duplicates over loss).
+--
+-- DLQ replay emits only the offset-ordered due prefix (the primary byte-chunking
+-- is just 'chunksByBytes', covered there). At now=10, due=5/9 fire, due=99 holds:
+--
+-- >>> let r off due = K.ConsumerRecord (K.TopicName "dlq") (K.PartitionId 0) (K.Offset off) K.NoTimestamp (K.headersFromList [("monoscope-next-due-at", BC.pack (show @Int due))]) Nothing (Just "x")
+-- >>> let m = Map.fromList [(("dlq", K.PartitionId 0), r 0 5 :| [r 1 9, r 2 99])]
+-- >>> [o | (_, _, _, o, _) <- subChunksFor KafkaDlqReplay 10 m]
+-- [[0],[1]]
 subChunksFor
   :: KafkaRole
   -> Int
