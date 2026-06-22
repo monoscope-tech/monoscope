@@ -20,19 +20,21 @@ import UnliftIO.Async (race_)
 import UnliftIO.Concurrent (threadDelay)
 
 -- | An in-memory Kafka shared by the producer and consumer interpreters: each
--- topic is an append-only log (offset = index). The mock producer appends; the
--- mock consumer reads from a per-topic cursor and records committed offsets. One
--- TVar, so producer→consumer round-trips behave like a real broker — notably the
--- DLQ path: a poisoned batch is published by the producer and lands on the
--- dead-letter topic, observable in the same store.
+-- topic is an append-only log (offset = index). The mock producer enqueues to a
+-- @pending@ buffer (modelling librdkafka's async send queue) and only
+-- 'FlushProducer' makes those records durable on their topic log — so the
+-- consumer's flush-before-commit gate is exercised end-to-end: a DLQ publish is
+-- visible on the dead-letter topic only once the committer has flushed. One
+-- TVar, so producer→consumer round-trips behave like a real broker.
 data Broker = Broker
   { logs :: Map Text [K.ConsumerRecord (Maybe ByteString) (Maybe ByteString)]
+  , pending :: [(Text, Maybe ByteString, K.Headers)] -- produced, awaiting FlushProducer
   , cursor :: Map Text Int -- next index the consumer reads per topic
   , committed :: Map (Text, Int) Int64
   }
 
 emptyBroker :: Broker
-emptyBroker = Broker mempty mempty mempty
+emptyBroker = Broker mempty mempty mempty mempty
 
 -- Append a record to a topic's log, assigning the next sequential offset.
 appendRecord :: Text -> Maybe ByteString -> K.Headers -> Broker -> Broker
@@ -45,7 +47,10 @@ appendRecord topic val hdrs b =
 runMockProducer :: (IOE :> es) => TVar Broker -> Eff (KafkaProducer ': es) a -> Eff es a
 runMockProducer bVar = interpret \_ -> \case
   ProduceMessage KP.ProducerRecord {KP.prTopic = topic, KP.prValue = val, KP.prHeaders = hdrs} ->
-    atomically $ modifyTVar' bVar (appendRecord topic.unTopicName val hdrs)
+    atomically $ modifyTVar' bVar \b -> b {pending = b.pending <> [(topic.unTopicName, val, hdrs)]}
+  -- Flush makes every buffered record durable on its topic log (offset order).
+  FlushProducer ->
+    atomically $ modifyTVar' bVar \b -> (foldl' (\acc (t, v, h) -> appendRecord t v h acc) b b.pending) {pending = []}
   _ -> error "runMockProducer: unexpected producer op"
 
 -- The consumer reads from the subscribed @topics@, advancing each topic's cursor
@@ -117,19 +122,23 @@ spec = aroundAll withTestResources $ describe "Kafka decoupledLoop (in-memory br
     sort received `shouldBe` sort (map (encodeUtf8 . show) [0 .. 4 :: Int64]) -- each record processed once
     Map.lookup ("otlp_logs", 0) b.committed `shouldBe` Just 5 -- watermark = max offset + 1
 
-  it "round-trips a poisoned batch to the dead-letter topic via the producer" \tr -> do
+  it "flushes DLQ publishes durable before committing the source offset (no commit-before-send loss window)" \tr -> do
     bVar <- newTVarIO emptyBroker
     seedTopic bVar "otlp_logs" [0 .. 4]
     -- Every record is poison → routeBatchOutcome publishes it to the DLQ topic.
     let testFn tuples _ = pure (Right ([], [(t, raw, "forced poison") | (t, raw) <- tuples]))
     b <-
-      -- Wait for the commit (the offset only advances *after* the DLQ publish
-      -- succeeds), so both the dead-letter write and the commit have landed.
+      -- Wait for the commit. With the flush-before-commit gate the DLQ records
+      -- are only durable (moved out of `pending` onto the log) once the committer
+      -- has flushed; the commit fires immediately after. Drop the gate and the
+      -- DLQ records stay stuck in `pending` (FlushProducer never runs), so the
+      -- assertions below fail — that is the regression this test guards.
       drive tr bVar ["otlp_logs"] Queue.KafkaPrimary testFn $ do
         s <- readTVar bVar
         check (Map.lookup ("otlp_logs", 0) s.committed == Just 5)
     let dlq = Map.findWithDefault [] "otlp_deadletter" b.logs
     length dlq `shouldBe` 5 -- all five poisoned records landed on the dead-letter topic
+    null b.pending `shouldBe` True -- flushed before commit: nothing left buffered in the producer
     -- and they carry the bumped attempt-count header the replay consumer keys on
     let hdrs = foldMap (K.headersToList . (.crHeaders)) (take 1 dlq)
     (snd <$> find ((== "monoscope-attempt-count") . fst) hdrs) `shouldBe` Just "1"

@@ -78,11 +78,17 @@ sharedKafkaProducer = unsafePerformIO (newMVar Nothing)
 
 
 getOrInitKafkaProducer :: EnvConfig -> IO KP.KafkaProducer
-getOrInitKafkaProducer envCfg = modifyMVar sharedKafkaProducer $ \case
-  Just p -> pure (Just p, p)
-  Nothing -> do
-    p <- either throwIO pure =<< KP.newProducer (kafkaProducerProps envCfg)
-    pure (Just p, p)
+getOrInitKafkaProducer envCfg =
+  -- Fast path: once initialized, every produce hits a lock-free readMVar rather
+  -- than serializing on modifyMVar (librdkafka's produceMessage is already
+  -- thread-safe + non-blocking; the global lock would be pure contention).
+  readMVar sharedKafkaProducer >>= \case
+    Just p -> pure p
+    Nothing -> modifyMVar sharedKafkaProducer $ \case
+      Just p -> pure (Just p, p)
+      Nothing -> do
+        p <- either throwIO pure =<< KP.newProducer (kafkaProducerProps envCfg)
+        pure (Just p, p)
   where
     -- librdkafka producer settings. linger.ms/batch.size are tuned aggressively
     -- because the producer is now reused process-wide (see sharedKafkaProducer);
@@ -489,10 +495,25 @@ decoupledLoop appLogger appCtx tp role batchSize clientId fn = do
           (cs, committed') <- committableCommits <$> readTVar trackerVar <*> readTVar committedVar
           writeTVar committedVar committed'
           (cs,,) . Map.size <$> readTVar trackerVar <*> readTVar inflightVar
-        -- Commit throws KafkaError into the Error effect on failure (no commit →
-        -- redelivery). Metrics emit on progress OR while work is in flight, so a
+        -- Flush-before-commit durability gate: drain the shared producer
+        -- (KafkaProducer enqueues are async — linger.ms/batching) so every DLQ
+        -- or replay publish whose ack advanced the watermark above is broker-acked
+        -- before we commit its source offset. Closes the crash-loss window where
+        -- a SIGKILL between enqueue and delivery would lose the buffered poison
+        -- copy while the source offset is already committed. No-op on the happy
+        -- path (empty buffer ⇒ instant), so steady-state ingest is unaffected;
+        -- under broker degradation it blocks ≤ delivery.timeout.ms, stalling
+        -- commits (safe: redelivery) rather than processing.
+        --
+        -- Async commit: the throw only covers enqueue failure; a real commit
+        -- failure is delivered out-of-band, so committedVar is optimistic. The
+        -- cost of a silently-lost commit is redelivery from a stale offset on the
+        -- next rebalance (duplicates, never loss — downstream writes are
+        -- idempotent). Metrics emit on progress OR while work is in flight, so a
         -- stall (commits dry up but inflight_bytes stays high) is visible.
-        unless (null commits) $ KE.commitPartitionsOffsets K.OffsetCommitAsync commits
+        unless (null commits) do
+          KE.flushProducer
+          KE.commitPartitionsOffsets K.OffsetCommitAsync commits
         when (not (null commits) || inflight > 0)
           $ LogBase.logInfo "kafka.consumer.metrics"
           $ AE.object ["client_id" AE..= clientId, "committed_partitions" AE..= length commits, "tracked_partitions" AE..= tracked, "inflight_bytes" AE..= inflight]
@@ -584,6 +605,15 @@ subChunksFor role nowEpoch byTP = case role of
 -- | Publish failed messages to dead letter queue. Returns the first Left if
 -- any individual publish failed so the caller can refuse to advance the
 -- upstream offset/ack — otherwise a broken DLQ silently drops poison data.
+--
+-- Durability: a successful publish only means the record is queued in
+-- librdkafka's async buffer (linger.ms/batching), not broker-acked. The Kafka
+-- consumer path closes the gap by flushing the producer before committing source
+-- offsets (see decoupledLoop's committer), so a crash can't lose a buffered
+-- poison copy whose source offset was committed. The PubSub path (pubsubService)
+-- acks to Google right after this returns, without a flush, so it retains that
+-- SIGKILL/OOM window — acks=all + idempotence + retries cover broker hiccups, but
+-- a hard crash before delivery can still drop the buffered copy there.
 --
 -- Partial-failure semantics: if N-1 messages publish and the last fails, this
 -- returns Left and the caller holds the whole batch's offsets. On the next
