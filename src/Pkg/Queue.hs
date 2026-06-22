@@ -32,7 +32,7 @@ import Data.Generics.Product (field)
 import Data.HashMap.Strict qualified as HM
 import Data.List.Extra (lookup, minimum)
 import Data.Map.Strict qualified as Map
-import Data.Set qualified as Set
+import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Lazy.Encoding qualified as LT
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
@@ -375,7 +375,7 @@ data WorkItem = WorkItem
 -- >>> (completeOffsets [10,11,12] (PartProgress 10 mempty)).base
 -- 13
 -- >>> let p = completeOffsets [12,11] (PartProgress 10 mempty)
--- >>> (p.base, Set.toList p.ahead)
+-- >>> (p.base, S.toList p.ahead)
 -- (10,[11,12])
 -- >>> (completeOffsets [10] p).base
 -- 13
@@ -387,13 +387,13 @@ data WorkItem = WorkItem
 -- 11
 -- >>> (foldr completeOffsets (PartProgress 10 mempty) [[10],[11],[12],[14],[15]]).base
 -- 13
--- >>> Set.null (completeOffsets [10,11,12] (PartProgress 10 mempty)).ahead
+-- >>> S.null (completeOffsets [10,11,12] (PartProgress 10 mempty)).ahead
 -- True
 completeOffsets :: [Int64] -> PartProgress -> PartProgress
 completeOffsets offs (PartProgress base0 ahead0) = advance base0 (foldl' ins ahead0 offs)
   where
-    ins s o = if o >= base0 then Set.insert o s else s
-    advance b s = case Set.minView s of
+    ins s o = if o >= base0 then S.insert o s else s
+    advance b s = case S.minView s of
       Just (m, s') | m == b -> advance (b + 1) s'
       _ -> PartProgress b s
 
@@ -539,9 +539,9 @@ decoupledLoop appLogger appCtx tp role batchSize clientId fn = do
           -- don't grow unbounded over the consumer's lifetime. Skip when assignment
           -- momentarily reads empty mid-rebalance, to avoid wiping still-live work.
           unless (null asg) do
-            let live = Set.fromList [(t.unTopicName, p) | (t, p) <- asg]
-            modifyTVar' trackerVar (Map.filterWithKey \k _ -> Set.member k live)
-            modifyTVar' committedVar (Map.filterWithKey \k _ -> Set.member k live)
+            let live = S.fromList [(t.unTopicName, p) | (t, p) <- asg]
+            modifyTVar' trackerVar (Map.filterWithKey \k _ -> S.member k live)
+            modifyTVar' committedVar (Map.filterWithKey \k _ -> S.member k live)
           (cs,,) . Map.size <$> readTVar trackerVar <*> readTVar inflightVar
         -- Flush-before-commit durability gate: drain the shared producer
         -- (KafkaProducer enqueues are async — linger.ms/batching) so every DLQ
