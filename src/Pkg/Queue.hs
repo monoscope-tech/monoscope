@@ -470,6 +470,11 @@ kafkaService appLogger appCtx tp role label kafkaTopics batchSize fn = checkpoin
         -- round-trip cost). 250ms stays well under session/poll timeouts.
         <> K.extraProp "fetch.min.bytes" "65536"
         <> K.extraProp "fetch.wait.max.ms" "250"
+        -- Fetch ceiling must match broker 64 MiB max.message.bytes, else an oversized-but-valid
+        -- record (e.g. a header-restamped DLQ re-publish) wedges the partition with MSG_SIZE_TOO_LARGE.
+        <> K.extraProp "max.partition.fetch.bytes" "67108864" -- 64 MiB (librdkafka default 1 MiB)
+        <> K.extraProp "fetch.max.bytes" "67108864" -- 64 MiB total per fetch (default 50 MiB)
+        <> K.extraProp "receive.message.max.bytes" "104857600" -- 100 MiB socket buffer (> fetch.max.bytes)
         <> K.extraProp "partition.assignment.strategy" "cooperative-sticky"
         <> K.extraProp "group.instance.id" clientId
         <> K.logLevel K.KafkaLogInfo

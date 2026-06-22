@@ -1,6 +1,8 @@
 module System.ServerSpec (spec) where
 
+import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async, race, wait)
+import Control.Exception (catch, finally)
 import Relude
 import System.Server (cancelAllConcurrently)
 import Test.Hspec
