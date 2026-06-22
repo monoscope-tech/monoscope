@@ -42,6 +42,8 @@ module Models.Telemetry.Telemetry (
   bulkInsertMetrics,
   bulkInsertOtelLogsAndSpansTF,
   insertAndHandOff,
+  WriteTarget (..),
+  writeTargetFor,
   WriteFailure,
   writeFailureSummary,
   writeFailureDlqHeaders,
@@ -839,6 +841,30 @@ mintOtelLogIds = V.mapM \r -> genUUID <&> \uid -> r & #id .~ UUID.toText uid
 type WriteFailure = These SomeException SomeException
 
 
+-- | Which stores a (re)write should attempt. Live ingest writes both; DLQ
+-- replay narrows to the leg that originally failed so the still-durable leg
+-- isn't duplicated (PG inserts aren't idempotent — a 'tf-failed' message is
+-- already in PG, dual-write replay would double the row).
+data WriteTarget = WriteBoth | WritePgOnly | WriteTfOnly
+  deriving stock (Eq, Ord, Show)
+
+
+-- | Derive the write target from the global TF flag and an optional
+-- @monoscope-write-failure@ header (present on DLQ replay). A 'tf-failed' replay
+-- presumes TF was enabled when it failed, so it always targets TF; everything
+-- else honours @enableTf@ (TF off ⇒ PG only).
+--
+-- >>> map (writeTargetFor True) [Just "tf-failed", Just "pg-failed", Just "both-failed", Nothing]
+-- [WriteTfOnly,WritePgOnly,WriteBoth,WriteBoth]
+-- >>> writeTargetFor False Nothing
+-- WritePgOnly
+writeTargetFor :: Bool -> Maybe Text -> WriteTarget
+writeTargetFor enableTf = \case
+  Just "tf-failed" -> WriteTfOnly
+  Just "pg-failed" -> WritePgOnly
+  _ -> if enableTf then WriteBoth else WritePgOnly
+
+
 -- | A message that couldn't be parsed/converted. Callers MUST publish these to
 -- the DLQ before committing source-topic offsets so the bytes are preserved
 -- for manual investigation (never silent-drop).
@@ -921,6 +947,11 @@ writeFailureSummary = These.these (const "pg-failed") (const "tf-failed") (\_ _ 
 
 -- | DLQ headers a replay tool reads to rewrite only the missing side(s) and
 -- avoid duplicating rows on the successful side.
+--
+-- >>> let e = toException (SilentUnderPersistError "x" 1 1)
+-- >>> let look h = [HM.lookup k (writeFailureDlqHeaders h) | k <- ["monoscope-write-failure", "monoscope-pg-succeeded", "monoscope-tf-succeeded"]]
+-- >>> (look (This e), look (That e), look (These e e))
+-- ([Just "pg-failed",Just "false",Just "true"],[Just "tf-failed",Just "true",Just "false"],[Just "both-failed",Just "false",Just "false"])
 writeFailureDlqHeaders :: WriteFailure -> HM.HashMap Text Text
 writeFailureDlqHeaders wf =
   let (pgOk, tfOk) = These.these (const ("false", "true")) (const ("true", "false")) (\_ _ -> ("false", "false")) wf
@@ -1047,31 +1078,32 @@ bulkInsertOtelLogsAndSpansTF
      , Labeled "timefusion" Hasql :> es
      , Log :> es
      )
-  => Bool
+  => WriteTarget
   -> V.Vector OtelLogsAndSpans
   -> Eff es (Either WriteFailure (V.Vector (OtelLogsAndSpans, RowPoisonInfo)))
-bulkInsertOtelLogsAndSpansTF enableTf records = do
+bulkInsertOtelLogsAndSpansTF target records = do
   Log.logTrace "bulkInsertOtelLogsAndSpansTF called"
-    $ AE.object [("record_count", AE.toJSON $ V.length records), ("enableTimefusionWrites", AE.toJSON enableTf)]
-  if enableTf
-    then Ki.scoped \scope -> do
+    $ AE.object [("record_count", AE.toJSON $ V.length records), ("write_target", AE.toJSON $ show @Text target)]
+  case target of
+    WriteBoth -> Ki.scoped \scope -> do
       pgThread <- forkWithCtx scope $ retryHasqlWrite maxWriteAttempts "pg" (bulkInsertOtelLogsAndSpans records)
       tfThread <- forkWithCtx scope $ retryHasqlWrite maxWriteAttempts "tf" (labeled @"timefusion" @Hasql $ bulkInsertOtelLogsAndSpans records)
       (pgRes, tfRes) <- Ki.atomically $ (,) <$> Ki.await pgThread <*> Ki.await tfThread
       classify pgRes tfRes
-    else do
-      pgRes <- retryHasqlWrite maxWriteAttempts "pg" (bulkInsertOtelLogsAndSpans records)
-      case pgRes of
-        Right bir
-          | lost <- unaccountedRows (V.length records) bir
-          , lost > 0 ->
-              underPersist (lost, "pg") (0, "tf")
-          | otherwise -> pure (Right (V.map (second This) bir.poisonRows))
-        Left e -> do
-          Log.logAttention "PG_WRITE_FAILED"
-            $ AE.object ["record_count" AE..= V.length records, "error" AE..= show @Text e]
-          pure (Left (This e))
+    -- Single-leg replay: only the store that originally failed is rewritten, so
+    -- the durable leg keeps its single copy.
+    WritePgOnly -> singleLeg "pg" This (\l -> (l, 0)) =<< retryHasqlWrite maxWriteAttempts "pg" (bulkInsertOtelLogsAndSpans records)
+    WriteTfOnly -> singleLeg "tf" That (\l -> (0, l)) =<< retryHasqlWrite maxWriteAttempts "tf" (labeled @"timefusion" @Hasql $ bulkInsertOtelLogsAndSpans records)
   where
+    -- Classify one store's result; @side@ is 'This'/'That' for the written leg,
+    -- @losts@ places the under-persist count on that leg ((l,0) for pg, (0,l) for tf).
+    singleLeg store side losts = \case
+      Right bir
+        | lost <- unaccountedRows (V.length records) bir, lost > 0 -> let (pgL, tfL) = losts lost in underPersist (pgL, "pg") (tfL, "tf")
+        | otherwise -> pure (Right (V.map (second side) bir.poisonRows))
+      Left e -> do
+        Log.logAttention (T.toUpper store <> "_WRITE_FAILED") (AE.object ["record_count" AE..= V.length records, "error" AE..= show @Text e])
+        pure (Left (side e))
     -- Cross-check persistence on a Right/Right dual-write: a store that reported
     -- success but didn't account for every submitted row (inserted + poison <
     -- submitted) silently dropped data. Convert to a WriteFailure so Pkg.Queue
@@ -1146,17 +1178,17 @@ insertAndHandOff
      , Labeled "timefusion" Hasql :> es
      , Log :> es
      )
-  => Bool
+  => WriteTarget
   -> EW.WorkerState OtelLogsAndSpans
   -- ^ NB: returns 'Left WriteFailure' if either store failed. Hand-off to the
   -- extraction worker only happens on full success; a failed batch goes to DLQ.
   -> HM.HashMap Projects.ProjectId Projects.ProjectCache
   -> V.Vector OtelLogsAndSpans
   -> Eff es (Either WriteFailure (V.Vector (OtelLogsAndSpans, RowPoisonInfo)))
-insertAndHandOff enableTf worker caches records
+insertAndHandOff target worker caches records
   | V.null records = pure (Right V.empty)
   | otherwise =
-      bulkInsertOtelLogsAndSpansTF enableTf records >>= \case
+      bulkInsertOtelLogsAndSpansTF target records >>= \case
         Left wf -> pure (Left wf)
         Right rowPoison -> do
           -- Hand off only the fully-successful rows — don't let downstream
@@ -1819,7 +1851,7 @@ insertSystemLog enableTf otelLog = do
   -- System logs are best-effort. The inner write logs its own failure via
   -- logAttention; surface a higher-level "system log dropped" so an incident
   -- triager investigating the original event can see that its trail was lost.
-  bulkInsertOtelLogsAndSpansTF enableTf minted >>= \case
+  bulkInsertOtelLogsAndSpansTF (writeTargetFor enableTf Nothing) minted >>= \case
     Right _ -> pass
     Left wf ->
       Log.logAttention "SYSTEM_LOG_DROPPED" (AE.object ["reason" AE..= writeFailureSummary wf])

@@ -579,7 +579,12 @@ decoupledLoop appLogger appCtx tp role batchSize clientId fn = do
         unless (null pollErrs) $ LogBase.logAttention "Kafka poll returned errors" (AE.object ["error_count" AE..= length pollErrs, "errors" AE..= map show pollErrs])
         nowEpoch <- floor . utcTimeToPOSIXSeconds <$> Time.currentTime
         let byTP = Map.fromListWith (<>) [((r.crTopic.unTopicName, r.crPartition), r :| []) | r <- rs]
-            subChunks = subChunksFor role nowEpoch byTP
+            -- Batch key = (ce-type, write-target): a chunk decodes under one
+            -- ce-type (processList) and rewrites one store-set. Sharing
+            -- 'writeTargetFor' with the writer keeps the leg semantics in one
+            -- place and batches both-failed/normal together (both → WriteBoth).
+            dlqGroupKey r = let h = consumerRecordHeadersToHashMap r in (ceTypeFor deadLetterTopic r.crTopic.unTopicName h, Telemetry.writeTargetFor appCtx.env.enableTimefusionWrites (HM.lookup "monoscope-write-failure" h))
+            subChunks = subChunksFor role dlqGroupKey nowEpoch byTP
         for_ subChunks \work ->
           atomically do
             -- (const id) keeps the existing watermark if the partition is already
@@ -625,28 +630,36 @@ decoupledLoop appLogger appCtx tp role batchSize clientId fn = do
 -- offset = failure-time = due-time order, so due records are a prefix;
 -- not-yet-due ones stay uncommitted and redeliver (duplicates over loss).
 --
--- DLQ replay emits only the offset-ordered due prefix (the primary byte-chunking
--- is just 'chunksByBytes', covered there). At now=10, due=5/9 fire, due=99 holds:
+-- DLQ replay byte-chunks the offset-ordered due prefix too, but grouped by
+-- ce-type first: 'processList' decodes a whole chunk under one ce-type, and
+-- retry tiers interleave source topics, so each chunk must be single-ce-type.
+-- The watermark tracks offsets individually, so grouping non-contiguous offsets
+-- is safe (a chunk's offsets just complete together). At now=10, due=5/9 fire
+-- and batch into one chunk, due=99 holds:
 --
 -- >>> let r off due = K.ConsumerRecord (K.TopicName "dlq") (K.PartitionId 0) (K.Offset off) K.NoTimestamp (K.headersFromList [("monoscope-next-due-at", BC.pack (show (due::Int)))]) Nothing (Just "x") :: K.ConsumerRecord (Maybe ByteString) (Maybe ByteString)
 -- >>> let m = Map.fromList [(("dlq", K.PartitionId 0), r 0 5 :| [r 1 9, r 2 99])]
--- >>> [w.offsets | w <- subChunksFor KafkaDlqReplay 10 m]
--- [[0],[1]]
+-- >>> [w.offsets | w <- subChunksFor KafkaDlqReplay (const "x") 10 m]
+-- [[0,1]]
 subChunksFor
-  :: KafkaRole
+  :: Ord k
+  => KafkaRole
+  -> (K.ConsumerRecord (Maybe ByteString) (Maybe ByteString) -> k)
   -> Int
   -> Map (Text, K.PartitionId) (NonEmpty (K.ConsumerRecord (Maybe ByteString) (Maybe ByteString)))
   -> [WorkItem]
-subChunksFor role nowEpoch byTP = case role of
+subChunksFor role dlqGroupKey nowEpoch byTP = case role of
   KafkaPrimary ->
     [ WorkItem tpKey recc (consumerRecordToTuple <$> chunk) (K.unOffset . (.crOffset) <$> chunk) (sum (recordBytes <$> chunk))
     | (tpKey, recs@(recc :| _)) <- Map.toList byTP
     , chunk <- chunksByBytes kafkaChunkTargetBytes recordBytes (sortOn (.crOffset) (toList recs))
     ]
   KafkaDlqReplay ->
-    [ WorkItem tpKey r [consumerRecordToTuple r] [K.unOffset r.crOffset] (recordBytes r)
+    [ WorkItem tpKey recc (consumerRecordToTuple <$> chunk) (K.unOffset . (.crOffset) <$> chunk) (sum (recordBytes <$> chunk))
     | (tpKey, recs) <- Map.toList byTP
-    , r <- takeWhile (isDue nowEpoch) (sortOn (.crOffset) (toList recs))
+    , let due = takeWhile (isDue nowEpoch) (sortOn (.crOffset) (toList recs))
+    , grp <- Map.elems (Map.fromListWith (<>) [(dlqGroupKey r, [r]) | r <- due])
+    , chunk@(recc : _) <- chunksByBytes kafkaChunkTargetBytes recordBytes (sortOn (.crOffset) grp)
     ]
   where
     -- A retry-tier message is due once now ≥ its stamped due epoch. Missing /

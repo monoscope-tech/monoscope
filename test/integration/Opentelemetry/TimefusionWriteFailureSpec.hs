@@ -5,16 +5,15 @@
 -- can rewrite only the missing side.
 module Opentelemetry.TimefusionWriteFailureSpec (spec) where
 
-import Control.Exception (ErrorCall (..), evaluate)
+import Control.Exception (ErrorCall (..))
 import Data.HashMap.Strict qualified as HM
 import Data.List qualified as L
 import Data.Pool (withResource)
 import Data.ProtoLens (encodeMessage)
-import Data.These (These (..))
 import Data.These.Combinators (isThat)
 import Data.UUID qualified as UUID
 import Data.Effectful.Hasql qualified as EHasql
-import Database.PostgreSQL.Simple (Query, execute_)
+import Database.PostgreSQL.Simple (Only (..), Query, execute_, query)
 import Hasql.Errors qualified as HE
 import Hasql.Pool qualified as HP
 import UnliftIO.Exception (finally, throwIO, try)
@@ -52,6 +51,23 @@ corruptMsg ackId = (ackId, "this is not a valid protobuf payload")
 
 demoProjectId :: Projects.ProjectId
 demoProjectId = UUIDId UUID.nil
+
+
+-- | Rows the demo project currently holds in otel_logs_and_spans. Used as a
+-- before/after delta so leg-targeting can be asserted without a DB reset.
+countDemoSpans :: TestResources -> IO Int
+countDemoSpans tr =
+  withResource tr.trPool \c ->
+    query c "SELECT count(*)::int FROM otel_logs_and_spans WHERE project_id = ?" (Only demoProjectId)
+      <&> \rows -> sum [n | Only n <- rows]
+
+
+-- | Force the dual-write on (both pools point at the shared test DB unless
+-- TIMEFUSION_PG_TEST_URL is set), so a WriteBoth visibly writes twice.
+withTfEnabled :: TestResources -> TestResources
+withTfEnabled tr =
+  let ctx = tr.trATCtx
+   in tr {trATCtx = ctx {env = ctx.env {enableTimefusionWrites = True}, config = ctx.config {enableTimefusionWrites = True}}}
 
 
 withBrokenTf :: TestResources -> (TestResources -> IO ()) -> IO ()
@@ -295,25 +311,35 @@ spec = aroundAll withTestResources $ beforeWith mkResWithKey do
           expectationFailure
             $ "expected Right; got Left " <> toString (Telemetry.writeFailureSummary wf)
 
-  describe "DLQ side-tracking headers (writeFailureDlqHeaders)" do
-    it "PG-only failure → pg-succeeded=false, tf-succeeded=true" \(_, _) -> do
-      pgErr <- toException <$> evaluate (ErrorCall "synthetic pg")
-      let hdrs = Telemetry.writeFailureDlqHeaders (This pgErr)
-      HM.lookup "monoscope-write-failure" hdrs `shouldBe` Just "pg-failed"
-      HM.lookup "monoscope-pg-succeeded" hdrs `shouldBe` Just "false"
-      HM.lookup "monoscope-tf-succeeded" hdrs `shouldBe` Just "true"
+  -- DLQ replay must rewrite ONLY the leg that originally failed: the durable leg
+  -- already holds the row and PG inserts aren't idempotent, so a dual-write
+  -- replay duplicates it. (The header → target mapping itself is covered by the
+  -- 'writeTargetFor' / 'writeFailureDlqHeaders' doctests; these pin the
+  -- row-level effect end-to-end.)
+  describe "DLQ replay leg-targeting (single-leg rewrite)" do
+    -- The core regression. Both pools hit the shared test DB, so a (pre-fix)
+    -- WriteBoth replay writes the record twice; the fix writes it once.
+    it "tf-failed replay rewrites only TF — adds exactly one row, never a duplicate" \(tr, key) -> do
+      let tr' = withTfEnabled tr
+          replayAttrs = HM.insert "monoscope-write-failure" "tf-failed" logsAttrs
+      before <- countDemoSpans tr'
+      res <- runTestBg frozenTime tr' $ OtlpServer.processList [validLogMsg key "ack-tf-replay"] replayAttrs
+      after <- countDemoSpans tr'
+      case res of
+        Right (acks, poison) -> do
+          acks `shouldBe` ["ack-tf-replay"]
+          poison `shouldBe` []
+          (after - before) `shouldBe` 1
+        Left wf -> expectationFailure $ "expected Right; got Left " <> toString (Telemetry.writeFailureSummary wf)
 
-    it "TF-only failure → pg-succeeded=true, tf-succeeded=false" \(_, _) -> do
-      tfErr <- toException <$> evaluate (ErrorCall "synthetic tf")
-      let hdrs = Telemetry.writeFailureDlqHeaders (That tfErr)
-      HM.lookup "monoscope-write-failure" hdrs `shouldBe` Just "tf-failed"
-      HM.lookup "monoscope-pg-succeeded" hdrs `shouldBe` Just "true"
-      HM.lookup "monoscope-tf-succeeded" hdrs `shouldBe` Just "false"
-
-    it "both failed → both sides false" \(_, _) -> do
-      pgErr <- toException <$> evaluate (ErrorCall "synthetic pg")
-      tfErr <- toException <$> evaluate (ErrorCall "synthetic tf")
-      let hdrs = Telemetry.writeFailureDlqHeaders (These pgErr tfErr)
-      HM.lookup "monoscope-write-failure" hdrs `shouldBe` Just "both-failed"
-      HM.lookup "monoscope-pg-succeeded" hdrs `shouldBe` Just "false"
-      HM.lookup "monoscope-tf-succeeded" hdrs `shouldBe` Just "false"
+    -- A pg-failed replay rewrites only PG, so a DOWN TimeFusion leg is skipped
+    -- and the replay succeeds — whereas a normal message with TF down DLQs
+    -- (Left That, the "TF down" case above). Proves the leg is skipped, not just
+    -- tolerated.
+    it "pg-failed replay skips a down TimeFusion leg → Right (a normal msg would DLQ)" \(tr, key) ->
+      withBrokenTf tr \tr' -> do
+        let replayAttrs = HM.insert "monoscope-write-failure" "pg-failed" logsAttrs
+        res <- runTestBg frozenTime tr' $ OtlpServer.processList [validLogMsg key "ack-pg-replay"] replayAttrs
+        case res of
+          Right (acks, _) -> acks `shouldBe` ["ack-pg-replay"]
+          Left wf -> expectationFailure $ "expected Right (TF leg skipped); got Left " <> toString (Telemetry.writeFailureSummary wf)

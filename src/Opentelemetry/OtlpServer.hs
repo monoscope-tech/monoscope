@@ -265,13 +265,15 @@ dualWriteWithPoisonMapping
      , UUIDEff :> es
      )
   => AuthContext
+  -> Telemetry.WriteTarget
+  -- ^ stores to (re)write; DLQ replay narrows to the originally-failed leg
   -> Text
   -- ^ label for checkpoint ("logs" / "traces")
   -> HM.HashMap Projects.ProjectId Projects.ProjectCache
   -> [(Text, ByteString, V.Vector Telemetry.OtelLogsAndSpans)]
   -- ^ per source-message records
   -> Eff es (Either Telemetry.WriteFailure [Telemetry.PoisonMsg])
-dualWriteWithPoisonMapping appCtx label caches perMsg = do
+dualWriteWithPoisonMapping appCtx target label caches perMsg = do
   let !allRecords = V.concat [rs | (_, _, rs) <- perMsg]
       !perRecordSource = concat [replicate (V.length rs) (ackId, raw) | (ackId, raw, rs) <- perMsg]
   stamped <- stampOrPassthrough appCtx allRecords
@@ -288,7 +290,7 @@ dualWriteWithPoisonMapping appCtx label caches perMsg = do
   res <-
     checkpoint
       (fromString $ "processList:" <> toString label <> ":bulkInsert")
-      (Telemetry.insertAndHandOff appCtx.env.enableTimefusionWrites appCtx.extractionWorker caches minted)
+      (Telemetry.insertAndHandOff target appCtx.extractionWorker caches minted)
   case res of
     Left wf -> pure (Left wf)
     Right rowPoison -> do
@@ -360,6 +362,9 @@ processList msgs !attrs =
   where
     process fallbackTime = do
       appCtx <- ask @AuthContext
+      -- DLQ replay stamps monoscope-write-failure; rewrite only the failed leg
+      -- so the durable store isn't duplicated. Live ingest has no header → both.
+      let target = Telemetry.writeTargetFor appCtx.env.enableTimefusionWrites (HM.lookup "monoscope-write-failure" attrs)
       case HM.lookup "ce-type" attrs of
         Just "org.opentelemetry.otlp.logs.v1" ->
           processBatchPipeline @LS.ExportLogsServiceRequest
@@ -375,7 +380,7 @@ processList msgs !attrs =
                     !pids = V.fromList [(k, pid) | (k, pid) <- HM.toList keyToId, k `V.elem` pkeys]
                  in V.concatMap (V.fromList . convertResourceLogsToOtelLogs ft caches pids) rls
             )
-            (dualWriteWithPoisonMapping appCtx "logs")
+            (dualWriteWithPoisonMapping appCtx target "logs")
         Just "org.opentelemetry.otlp.traces.v1" ->
           processBatchPipeline @TS.ExportTraceServiceRequest
             "traces"
@@ -390,7 +395,7 @@ processList msgs !attrs =
                     !pids = V.fromList [(k, pid) | (k, pid) <- HM.toList keyToId, k `V.elem` pkeys]
                  in V.fromList $ convertResourceSpansToOtelLogs ft caches pids rss
             )
-            (dualWriteWithPoisonMapping appCtx "traces")
+            (dualWriteWithPoisonMapping appCtx target "traces")
         Just "org.opentelemetry.otlp.metrics.v1" ->
           processBatchPipeline @MS.ExportMetricsServiceRequest
             "metrics"
@@ -1562,7 +1567,7 @@ processSignalRequest label signal receivedMsg noun countKey metadataApiKey proje
   unless (V.null records) do
     stamped <- stampOrPassthrough appCtx records
     minted <- Telemetry.mintOtelLogIds stamped
-    Telemetry.insertAndHandOff appCtx.env.enableTimefusionWrites appCtx.extractionWorker projectCaches minted
+    Telemetry.insertAndHandOff (Telemetry.writeTargetFor appCtx.env.enableTimefusionWrites Nothing) appCtx.extractionWorker projectCaches minted
       >>= throwOnWriteFailure
     Log.logTrace
       (label <> ": Successfully inserted " <> noun <> " into database")
