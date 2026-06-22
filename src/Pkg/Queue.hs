@@ -30,8 +30,8 @@ import Data.ByteString.Lazy.Base64 qualified as LB64
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Generics.Product (field)
 import Data.HashMap.Strict qualified as HM
-import Data.IntSet qualified as IntSet
-import Data.List.Extra (minimum)
+import Data.Set qualified as Set
+import Data.List.Extra (lookup, minimum)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Text.Lazy.Encoding qualified as LT
@@ -295,8 +295,7 @@ chunksByBytes target size = go [] 0
   where
     go acc _ [] = [reverse acc | not (null acc)]
     go acc !n (x : xs)
-      | null acc = go [x] (size x) xs
-      | n + size x > target = reverse acc : go [x] (size x) xs
+      | n + size x > target, not (null acc) = reverse acc : go [x] (size x) xs
       | otherwise = go (x : acc) (n + size x) xs
 
 
@@ -305,6 +304,13 @@ chunksByBytes target size = go [] 0
 -- keeps Delta file sizes off the small-files OOM path.
 kafkaChunkTargetBytes :: Int
 kafkaChunkTargetBytes = 64 * 1024 * 1024
+
+
+-- | Bounded hand-off between poller and workers. At ~kafkaChunkTargetBytes per
+-- item this caps in-flight work at ~4 GiB; the poller blocks on a full queue,
+-- which (with the high-water pause) is the backpressure ceiling.
+workQueueBound :: Natural
+workQueueBound = 64
 
 
 data RetryRoute = RetryTier Text Int | Parking Text
@@ -346,29 +352,30 @@ retryDestination tiers park attempt = maybe (Parking park) (uncurry RetryTier) (
 -- completed offsets ≥ @base@ not yet contiguous (a gap sits at @base@).
 -- Self-pruning: offsets leave @ahead@ as @base@ walks over them, so one stalled
 -- offset can't make the set grow without bound.
-data PartProgress = PartProgress {base :: !Int64, ahead :: !IntSet.IntSet}
+data PartProgress = PartProgress {base :: !Int64, ahead :: !(Set Int64)}
   deriving stock (Eq, Show)
 
 
 -- | One unit of decoupled-consumer work: partition key, the header-bearing
--- record, the chunk's payloads, its offsets, and its byte size.
-type WorkItem =
-  ( (Text, K.PartitionId)
-  , K.ConsumerRecord (Maybe ByteString) (Maybe ByteString)
-  , [(Text, ByteString)]
-  , [Int64]
-  , Int
-  )
+-- record (carries DLQ ce-type/headers), the chunk's payloads, its offsets, and
+-- its byte size (for the inflight/backpressure accounting).
+data WorkItem = WorkItem
+  { tpKey :: !(Text, K.PartitionId)
+  , recc :: !(K.ConsumerRecord (Maybe ByteString) (Maybe ByteString))
+  , payloads :: ![(Text, ByteString)]
+  , offsets :: ![Int64]
+  , bytes :: !Int
+  }
 
 
 -- | Record completed offsets, advancing @base@ across the now-contiguous run.
 -- Offsets below @base@ (already committed — e.g. a redelivered duplicate) drop
--- out. Strict throughout (foldl' + IntSet): no thunk accretion over a long run.
+-- out. Strict throughout (foldl' + Set): no thunk accretion over a long run.
 --
 -- >>> (completeOffsets [10,11,12] (PartProgress 10 mempty)).base
 -- 13
 -- >>> let p = completeOffsets [12,11] (PartProgress 10 mempty)
--- >>> (p.base, IntSet.toList p.ahead)
+-- >>> (p.base, Set.toList p.ahead)
 -- (10,[11,12])
 -- >>> (completeOffsets [10] p).base
 -- 13
@@ -380,14 +387,14 @@ type WorkItem =
 -- 11
 -- >>> (foldr completeOffsets (PartProgress 10 mempty) [[10],[11],[12],[14],[15]]).base
 -- 13
--- >>> IntSet.null (completeOffsets [10,11,12] (PartProgress 10 mempty)).ahead
+-- >>> Set.null (completeOffsets [10,11,12] (PartProgress 10 mempty)).ahead
 -- True
 completeOffsets :: [Int64] -> PartProgress -> PartProgress
 completeOffsets offs (PartProgress base0 ahead0) = advance base0 (foldl' ins ahead0 offs)
   where
-    ins s o = if o >= base0 then IntSet.insert (fromIntegral o) s else s
-    advance b s = case IntSet.minView s of
-      Just (m, s') | fromIntegral m == b -> advance (b + 1) s'
+    ins s o = if o >= base0 then Set.insert o s else s
+    advance b s = case Set.minView s of
+      Just (m, s') | m == b -> advance (b + 1) s'
       _ -> PartProgress b s
 
 
@@ -404,9 +411,11 @@ committableCommits
   -> ([K.TopicPartition], Map (Text, K.PartitionId) Int64)
 committableCommits tracker committed =
   ( [K.TopicPartition (K.TopicName t) p (K.PartitionOffset b) | ((t, p), b) <- advanced]
-  , foldl' (\m (tp, b) -> Map.insert tp b m) committed advanced
+  , Map.fromList advanced <> committed
   )
   where
+    -- b > 0 skips untouched partitions (base starts at 0 = nothing completed yet);
+    -- b > last-committed skips partitions whose watermark hasn't moved since.
     advanced = [(tp, b) | (tp, PartProgress b _) <- Map.toList tracker, b > 0, b > Map.findWithDefault (-1) tp committed]
 
 
@@ -497,16 +506,16 @@ decoupledLoop appLogger appCtx tp role batchSize clientId fn = do
   let highWaterBytes = 4 * kafkaChunkTargetBytes
       lowWaterBytes = kafkaChunkTargetBytes
       deadLetterTopic = appCtx.config.kafkaDeadLetterTopic
-  workQ <- liftIO (newTBQueueIO 64 :: IO (TBQueue WorkItem))
+  workQ <- liftIO (newTBQueueIO workQueueBound :: IO (TBQueue WorkItem))
   trackerVar <- newTVarIO (Map.empty :: Map (Text, K.PartitionId) PartProgress)
   committedVar <- newTVarIO (Map.empty :: Map (Text, K.PartitionId) Int64)
   inflightVar <- newTVarIO (0 :: Int)
   pausedVar <- newTVarIO False
   let assigned = KE.assignment <&> \m -> [(t, p) | (t, ps) <- Map.toList m, p <- ps]
       worker = forever do
-        (tpKey, recc, tuples, offs, bytes) <- atomically (readTBQueue workQ)
-        let topic = fst tpKey
-            attrs = attrsFor deadLetterTopic topic recc
+        w <- atomically (readTBQueue workQ)
+        let topic = fst w.tpKey
+            attrs = attrsFor deadLetterTopic topic w.recc
         -- `inject` lifts the ATBackgroundCtx processing action into the
         -- KafkaConsumer-extended stack; workers never touch the Kafka effect.
         result <-
@@ -514,17 +523,25 @@ decoupledLoop appLogger appCtx tp role batchSize clientId fn = do
             $ inject
             $ runBatchSpan
               "kafka.process_batch"
-              [("topic", OA.toAttribute topic), ("message_count", OA.toAttribute (length tuples)), ("client_id", OA.toAttribute clientId)]
-              (fn tuples attrs)
-        acks <- routeBatchOutcome appCtx "kafka-service" topic tuples attrs result
+              [("topic", OA.toAttribute topic), ("message_count", OA.toAttribute (length w.payloads)), ("client_id", OA.toAttribute clientId)]
+              (fn w.payloads attrs)
+        acks <- routeBatchOutcome appCtx "kafka-service" topic w.payloads attrs result
         atomically do
-          unless (null acks) $ modifyTVar' trackerVar (Map.adjust (completeOffsets offs) tpKey)
-          modifyTVar' inflightVar (subtract bytes)
+          unless (null acks) $ modifyTVar' trackerVar (Map.adjust (completeOffsets w.offsets) w.tpKey)
+          modifyTVar' inflightVar (subtract w.bytes)
       committer = forever do
         threadDelay 1_000_000
+        asg <- assigned
         (commits, tracked, inflight) <- atomically do
           (cs, committed') <- committableCommits <$> readTVar trackerVar <*> readTVar committedVar
           writeTVar committedVar committed'
+          -- Drop partitions no longer assigned (rebalance) so tracker/committed
+          -- don't grow unbounded over the consumer's lifetime. Skip when assignment
+          -- momentarily reads empty mid-rebalance, to avoid wiping still-live work.
+          unless (null asg) do
+            let live = Set.fromList [(t.unTopicName, p) | (t, p) <- asg]
+            modifyTVar' trackerVar (Map.filterWithKey \k _ -> Set.member k live)
+            modifyTVar' committedVar (Map.filterWithKey \k _ -> Set.member k live)
           (cs,,) . Map.size <$> readTVar trackerVar <*> readTVar inflightVar
         -- Flush-before-commit durability gate: drain the shared producer
         -- (KafkaProducer enqueues are async — linger.ms/batching) so every DLQ
@@ -549,8 +566,7 @@ decoupledLoop appLogger appCtx tp role batchSize clientId fn = do
           $ LogBase.logInfo "kafka.consumer.metrics"
           $ AE.object ["client_id" AE..= clientId, "committed_partitions" AE..= length commits, "tracked_partitions" AE..= tracked, "inflight_bytes" AE..= inflight]
       pollOnce = do
-        inflight <- readTVarIO inflightVar
-        paused <- readTVarIO pausedVar
+        (inflight, paused) <- atomically $ (,) <$> readTVar inflightVar <*> readTVar pausedVar
         when (inflight >= highWaterBytes && not paused) do
           ps <- assigned
           unless (null ps) $ KE.pausePartitions ps
@@ -564,10 +580,14 @@ decoupledLoop appLogger appCtx tp role batchSize clientId fn = do
         nowEpoch <- floor . utcTimeToPOSIXSeconds <$> Time.currentTime
         let byTP = Map.fromListWith (<>) [((r.crTopic.unTopicName, r.crPartition), r :| []) | r <- rs]
             subChunks = subChunksFor role nowEpoch byTP
-        for_ subChunks \work@(tpKey, _, _, offs, bytes) ->
+        for_ subChunks \work ->
           atomically do
-            modifyTVar' trackerVar (Map.insertWith (const id) tpKey (PartProgress (minimum offs) mempty))
-            modifyTVar' inflightVar (+ bytes)
+            -- (const id) keeps the existing watermark if the partition is already
+            -- tracked; a fresh entry seeds base at this chunk's lowest offset. On
+            -- reassignment after a rebalance the partition was pruned from the
+            -- tracker (see committer), so it re-seeds rather than pinning a stale base.
+            modifyTVar' trackerVar (Map.insertWith (const id) work.tpKey (PartProgress (minimum work.offsets) mempty))
+            modifyTVar' inflightVar (+ work.bytes)
             writeTBQueue workQ work
         -- DLQ backoff: records present but none due → avoid a 10Hz re-poll of
         -- not-yet-due retries. Primary never hits this (chunks ≥1 when records
@@ -610,7 +630,7 @@ decoupledLoop appLogger appCtx tp role batchSize clientId fn = do
 --
 -- >>> let r off due = K.ConsumerRecord (K.TopicName "dlq") (K.PartitionId 0) (K.Offset off) K.NoTimestamp (K.headersFromList [("monoscope-next-due-at", BC.pack (show @Int due))]) Nothing (Just "x") :: K.ConsumerRecord (Maybe ByteString) (Maybe ByteString)
 -- >>> let m = Map.fromList [(("dlq", K.PartitionId 0), r 0 5 :| [r 1 9, r 2 99])]
--- >>> [o | (_, _, _, o, _) <- subChunksFor KafkaDlqReplay 10 m]
+-- >>> [w.offsets | w <- subChunksFor KafkaDlqReplay 10 m]
 -- [[0],[1]]
 subChunksFor
   :: KafkaRole
@@ -619,12 +639,12 @@ subChunksFor
   -> [WorkItem]
 subChunksFor role nowEpoch byTP = case role of
   KafkaPrimary ->
-    [ (tpKey, recc, consumerRecordToTuple <$> chunk, K.unOffset . (.crOffset) <$> chunk, sum (recordBytes <$> chunk))
+    [ WorkItem tpKey recc (consumerRecordToTuple <$> chunk) (K.unOffset . (.crOffset) <$> chunk) (sum (recordBytes <$> chunk))
     | (tpKey, recs@(recc :| _)) <- Map.toList byTP
     , chunk <- chunksByBytes kafkaChunkTargetBytes recordBytes (sortOn (.crOffset) (toList recs))
     ]
   KafkaDlqReplay ->
-    [ (tpKey, r, [consumerRecordToTuple r], [K.unOffset r.crOffset], recordBytes r)
+    [ WorkItem tpKey r [consumerRecordToTuple r] [K.unOffset r.crOffset] (recordBytes r)
     | (tpKey, recs) <- Map.toList byTP
     , r <- takeWhile (isDue nowEpoch) (sortOn (.crOffset) (toList recs))
     ]
@@ -632,7 +652,7 @@ subChunksFor role nowEpoch byTP = case role of
     -- A retry-tier message is due once now ≥ its stamped due epoch. Missing /
     -- unparseable header ⇒ due (process rather than strand it).
     isDue :: Int -> K.ConsumerRecord (Maybe ByteString) (Maybe ByteString) -> Bool
-    isDue now r = maybe True (now >=) (readMaybe . BC.unpack . snd =<< find ((== "monoscope-next-due-at") . fst) (K.headersToList r.crHeaders))
+    isDue now r = maybe True (now >=) (readMaybe . BC.unpack =<< lookup "monoscope-next-due-at" (K.headersToList r.crHeaders))
 
     consumerRecordToTuple :: K.ConsumerRecord (Maybe ByteString) (Maybe ByteString) -> (Text, ByteString)
     consumerRecordToTuple record = (record.crTopic.unTopicName, fromMaybe "" record.crValue)
@@ -682,7 +702,7 @@ publishToDeadLetterQueue appCtx messages attributes errorReason = do
     -- JSON-string-encode the binary protobuf into an undecodable, re-escaping blob.
     publishRawToKafka topic msgData attrs
   where
-    -- \| Headers stamped on every DLQ publish. Left-biased '<>' keeps first-failure
+    -- | Headers stamped on every DLQ publish. Left-biased '<>' keeps first-failure
     -- forensics (original-topic, original-ack-id, failed-at) intact across
     -- DLQ-replay requeues, while attempt-count, error-reason and last-failed-at
     -- refresh on every pass — an engineer inspecting a growing DLQ sees how often

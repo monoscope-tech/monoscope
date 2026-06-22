@@ -72,6 +72,10 @@ source-repository-package
 -- hw-kafka-client). Pulled from git, not Hackage, because 0.3.0.0 — the only
 -- release that supports hs-opentelemetry-api 1.0 — was published after our
 -- pinned index-state (0.2.0.0 still wants otel-api 0.3.x).
+-- NB: when bumping this tag, audit runSharedKafkaProducer in src/Pkg/Queue.hs —
+-- it interprets the KafkaProducer effect with a wildcard fallback that `error`s
+-- at runtime, so a newly-added constructor here panics in prod rather than
+-- failing to compile. Add the new case (and the mock in KafkaConsumerSpec).
 source-repository-package
   type: git
   location: https://github.com/shinzui/kafka-effectful.git
