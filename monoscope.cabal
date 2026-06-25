@@ -1123,6 +1123,7 @@ test-suite unit-tests
       BackgroundJobs.SpikeDetectionSpec
       Data.Effectful.HasqlSpec
       Data.Effectful.NotifySpec
+      Models.Telemetry.DeterministicIdSpec
       Pkg.DrainSpec
       Pkg.Parser.ExprSpec
       Pkg.ParserSpec

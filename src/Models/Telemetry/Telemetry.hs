@@ -84,15 +84,16 @@ import Control.Lens ((.~))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
+import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
+import Data.ByteString.Lazy qualified as BSL
 import Data.Default (Default (..))
 import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.Hasql qualified as Hasql
-import Data.Effectful.UUID (UUIDEff, genUUID)
 import Data.Generics.Labels ()
 import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HS
-import Data.List qualified as L (groupBy)
+import Data.List qualified as L (groupBy, intercalate)
 import Data.List.Extra (chunksOf)
 import Data.List.NonEmpty qualified as NE
 import Data.Map qualified as Map
@@ -104,6 +105,8 @@ import Data.These qualified as These
 import Data.Time (UTCTime)
 import Data.Time.Clock (addUTCTime, utctDay)
 import Data.UUID qualified as UUID
+import Data.UUID.Quasi (uuid)
+import Data.UUID.V5 qualified as UUIDv5
 import Data.Vector qualified as V
 import Data.Vector.Split qualified as VS
 import Database.PostgreSQL.Simple.FromField (Conversion, FromField (..))
@@ -827,12 +830,58 @@ bulkInsertMetrics metrics = checkpoint "bulkInsertMetrics" $ unless (V.null metr
       [HI.sql|(#{pid}, #{mName}, #{mType}, #{mUnit}, #{mDesc}, #{svc})|]
 
 
--- | Mint a fresh UUID for every row's `id` field. Call this once at the ingestion
--- call site BEFORE handing the vector to `bulkInsertOtelLogsAndSpansTF`, so the
--- caller holds a vector whose ids match what lands in the DB (needed by the
--- in-process extraction worker hand-off — see plan notes).
-mintOtelLogIds :: UUIDEff :> es => V.Vector OtelLogsAndSpans -> Eff es (V.Vector OtelLogsAndSpans)
-mintOtelLogIds = V.mapM \r -> genUUID <&> \uid -> r & #id .~ UUID.toText uid
+-- | Fixed namespace for the content-derived (v5) row ids below. Arbitrary but
+-- stable — changing it re-ids every row, so don't.
+otelIdNamespace :: UUID.UUID
+otelIdNamespace = [uuid|6f1a7c30-9b2d-5e84-8a3f-0c1d2e3f4a5b|]
+
+
+-- | Content-derived UUID (v5) for a row's `id`. Reprocessing a dead-letter
+-- message re-parses the original payload and re-derives the SAME id it would
+-- have had on first ingest, so TF's @(id, timestamp)@ dedup (flush + read-side
+-- row_number) collapses the replay instead of appending a fresh random row —
+-- the source of the 06-19 duplicate pile-up. Random v4 (the old behaviour)
+-- defeated that dedup because every replay produced a new id.
+--
+-- Identity: spans key on the OTel-unique @(project_id, trace_id, span_id)@,
+-- matching TF's "same span id at the same timestamp collapses retries" intent
+-- regardless of attribute drift; logs (no span_id) key on stable content
+-- @(project_id, body, name, severity, attributes, resource)@ so distinct logs
+-- that merely share a timestamp stay separate while true repeats collapse.
+-- Deliberately excludes @timestamp@ (it is the *other* dedup key, so it
+-- distinguishes same-content/different-time events) and the parse-time fallback
+-- fields (@observed_timestamp@/@start_time@ → currentTime) which aren't stable
+-- across reprocessing.
+deterministicOtelId :: OtelLogsAndSpans -> Text
+deterministicOtelId r = UUID.toText $ UUIDv5.generateNamed otelIdNamespace $ L.intercalate [0x1f] (map BS.unpack keyParts)
+  where
+    -- JSON-encode every part (incl. project_id/name) so the 0x1f delimiter can
+    -- never appear inside a part (Aeson escapes it). Raw encodeUtf8 would let two
+    -- distinct records collide on the same key via separator injection.
+    enc :: AE.ToJSON a => Maybe a -> BS.ByteString
+    enc = maybe "" (BSL.toStrict . AE.encode)
+    keyParts = case r.context >>= (.span_id) of
+      Just sid
+        | not (T.null sid) ->
+            [enc (Just r.project_id), enc (r.context >>= (.trace_id)), enc (Just sid)]
+      _ ->
+        [ enc (Just r.project_id)
+        , enc (unAesonTextMaybe r.body)
+        , enc r.name
+        , enc r.severity
+        , enc (unAesonTextMaybe r.attributes)
+        , enc (unAesonTextMaybe r.resource)
+        ]
+
+
+-- | Assign every row a deterministic, content-derived `id` (see
+-- 'deterministicOtelId'). Pure and idempotent: same input record ⇒ same id, so
+-- the dead-letter replay path lands ids that dedup against the original ingest.
+-- Call once at the ingestion call site BEFORE 'bulkInsertOtelLogsAndSpansTF' so
+-- the caller's vector ids match what lands in the DB (the extraction-worker
+-- hand-off relies on this).
+mintOtelLogIds :: V.Vector OtelLogsAndSpans -> V.Vector OtelLogsAndSpans
+mintOtelLogIds = V.map \r -> r & #id .~ deterministicOtelId r
 
 
 -- | This = PG failed; That = TF failed; These = both. Both stores are mandatory
@@ -1841,13 +1890,13 @@ mkSystemLog (UUIDId pid) eventName sev bodyMsg attrs duration ts =
 
 
 insertSystemLog
-  :: (Concurrent :> es, Hasql :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es, UUIDEff :> es)
+  :: (Concurrent :> es, Hasql :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es)
   => Bool
   -- ^ enableTimefusionWrites
   -> OtelLogsAndSpans
   -> Eff es ()
 insertSystemLog enableTf otelLog = do
-  minted <- mintOtelLogIds (V.singleton otelLog)
+  let minted = mintOtelLogIds (V.singleton otelLog)
   -- System logs are best-effort. The inner write logs its own failure via
   -- logAttention; surface a higher-level "system log dropped" so an incident
   -- triager investigating the original event can see that its trail was lost.
