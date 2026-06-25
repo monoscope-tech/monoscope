@@ -861,8 +861,9 @@ deterministicOtelId r = UUID.toText $ UUIDv5.generateNamed otelIdNamespace $ L.i
     enc :: AE.ToJSON a => Maybe a -> BS.ByteString
     enc = maybe "" (BSL.toStrict . AE.encode)
     keyParts = case r.context >>= (.span_id) of
-      Just sid | not (T.null sid) ->
-        [enc (Just r.project_id), enc (r.context >>= (.trace_id)), enc (Just sid)]
+      Just sid
+        | not (T.null sid) ->
+            [enc (Just r.project_id), enc (r.context >>= (.trace_id)), enc (Just sid)]
       _ ->
         [ enc (Just r.project_id)
         , enc (unAesonTextMaybe r.body)
