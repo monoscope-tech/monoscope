@@ -34,7 +34,6 @@ import Data.Cache qualified as Cache
 import Data.CaseInsensitive qualified as CI
 import Data.Char (isDigit)
 import Data.Effectful.Hasql qualified as Hasql
-import Data.Effectful.UUID (UUIDEff)
 import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HS
 import Data.List qualified as L
@@ -262,7 +261,7 @@ dualWriteWithPoisonMapping
      , Labeled "timefusion" Hasql.Hasql :> es
      , Log :> es
      , Time.Time :> es
-     , UUIDEff :> es
+     
      )
   => AuthContext
   -> Telemetry.WriteTarget
@@ -277,7 +276,7 @@ dualWriteWithPoisonMapping appCtx target label caches perMsg = do
   let !allRecords = V.concat [rs | (_, _, rs) <- perMsg]
       !perRecordSource = concat [replicate (V.length rs) (ackId, raw) | (ackId, raw, rs) <- perMsg]
   stamped <- stampOrPassthrough appCtx allRecords
-  minted <- Telemetry.mintOtelLogIds stamped
+  let minted = Telemetry.mintOtelLogIds stamped
   -- Guard the 1:1 ordering invariant explicitly: if either upstream step ever
   -- drops or reorders records, silent zipWith misalignment would associate the
   -- wrong (ackId, raw) with a record. Fail loud at the boundary instead.
@@ -338,7 +337,7 @@ throwOnWriteFailure = \case
 -- both stores; poisonMsgs are decode failures whose raw bytes must be DLQ'd
 -- by Pkg.Queue before committing offsets. On dual-write failure, returns
 -- 'Left WriteFailure'. Never throws on write/decode failure.
-processList :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es, UUIDEff :> es) => [(Text, ByteString)] -> HM.HashMap Text Text -> Eff es (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))
+processList :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => [(Text, ByteString)] -> HM.HashMap Text Text -> Eff es (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))
 processList [] _ = pure (Right ([], []))
 processList msgs !attrs =
   withSpan_ "otlp.process_list" (batchSpanAttrs (length msgs) attrs)
@@ -1483,7 +1482,7 @@ runServer appLogger appCtx tp = do
 
 
 -- | Process trace request with optional API key from gRPC metadata (extracted for testing)
-processTraceRequest :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es, UUIDEff :> es) => Maybe Text -> TS.ExportTraceServiceRequest -> Eff es ()
+processTraceRequest :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es) => Maybe Text -> TS.ExportTraceServiceRequest -> Eff es ()
 processTraceRequest metadataApiKey req =
   let !resourceSpans = V.fromList $ req ^. TSF.resourceSpans
    in processSignalRequest "Traces" "traces" "Received trace export request" "spans" "span_count" metadataApiKey (getSpanApiKey resourceSpans) (V.toList $ getSpanAttributeValue "at-project-id" resourceSpans) $ \currentTime projectCaches projectIdsAndKeys ->
@@ -1491,7 +1490,7 @@ processTraceRequest metadataApiKey req =
 
 
 -- | Process logs request with optional API key from gRPC metadata (extracted for testing)
-processLogsRequest :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es, UUIDEff :> es) => Maybe Text -> LS.ExportLogsServiceRequest -> Eff es ()
+processLogsRequest :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es) => Maybe Text -> LS.ExportLogsServiceRequest -> Eff es ()
 processLogsRequest metadataApiKey req =
   let !resourceLogs = V.fromList $ req ^. PLF.resourceLogs
    in processSignalRequest "Logs" "logs" "Received logs export request" "logs" "log_count" metadataApiKey (getLogApiKey resourceLogs) (V.toList $ getLogAttributeValue "at-project-id" resourceLogs) $ \currentTime projectCaches projectIdsAndKeys ->
@@ -1504,7 +1503,7 @@ processLogsRequest metadataApiKey req =
 -- ("Traces"/"Logs"), @signal@ the checkpoint/span label ("traces"/"logs"), @noun@/@countKey@
 -- the converted/inserted record noun and its log count key ("spans"/"span_count").
 processSignalRequest
-  :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es, UUIDEff :> es)
+  :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es)
   => Text
   -> Text
   -> Text
@@ -1566,7 +1565,7 @@ processSignalRequest label signal receivedMsg noun countKey metadataApiKey proje
 
   unless (V.null records) do
     stamped <- stampOrPassthrough appCtx records
-    minted <- Telemetry.mintOtelLogIds stamped
+    let minted = Telemetry.mintOtelLogIds stamped
     Telemetry.insertAndHandOff (Telemetry.writeTargetFor appCtx.env.enableTimefusionWrites Nothing) appCtx.extractionWorker projectCaches minted
       >>= throwOnWriteFailure
     Log.logTrace
