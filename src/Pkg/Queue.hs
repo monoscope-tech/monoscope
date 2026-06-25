@@ -18,6 +18,7 @@ module Pkg.Queue (
   retryDestination,
 ) where
 
+import Control.Concurrent.STM (swapTVar)
 import Control.Concurrent.STM.TBQueue (TBQueue, newTBQueueIO, readTBQueue, writeTBQueue)
 import Control.Exception.Annotated (checkpoint)
 import Control.Lens ((^?), _Just)
@@ -516,6 +517,9 @@ decoupledLoop appLogger appCtx tp role batchSize clientId fn = do
   committedVar <- newTVarIO (Map.empty :: Map (Text, K.PartitionId) Int64)
   inflightVar <- newTVarIO (0 :: Int)
   pausedVar <- newTVarIO False
+  -- Partitions a worker couldn't ack (transient failure): the poll thread reseeks
+  -- each back to the recorded base so its un-acked chunk is redelivered+retried.
+  reseekVar <- newTVarIO (Map.empty :: Map (Text, K.PartitionId) Int64)
   let assigned = KE.assignment <&> \m -> [(t, p) | (t, ps) <- Map.toList m, p <- ps]
       worker = forever do
         w <- atomically (readTBQueue workQ)
@@ -532,7 +536,14 @@ decoupledLoop appLogger appCtx tp role batchSize clientId fn = do
               (fn w.payloads attrs)
         acks <- routeBatchOutcome appCtx "kafka-service" topic w.payloads attrs result
         atomically do
-          unless (null acks) $ modifyTVar' trackerVar (Map.adjust (completeOffsets w.offsets) w.tpKey)
+          -- No-ack (transient write/DLQ failure → routeBatchOutcome []): the chunk's
+          -- offsets won't advance the commit base, yet the poll position has already
+          -- moved past them and librdkafka won't redeliver uncommitted offsets
+          -- in-session — so base pins forever (the 2026-06-25 DLQ commit-starvation
+          -- wedge). Record the lowest un-acked offset for the poll thread to reseek.
+          if null acks
+            then modifyTVar' reseekVar (Map.insertWith min w.tpKey (minimum w.offsets))
+            else modifyTVar' trackerVar (Map.adjust (completeOffsets w.offsets) w.tpKey)
           modifyTVar' inflightVar (subtract w.bytes)
       committer = forever do
         threadDelay 1_000_000
@@ -547,6 +558,10 @@ decoupledLoop appLogger appCtx tp role batchSize clientId fn = do
             let live = S.fromList [(t.unTopicName, p) | (t, p) <- asg]
             modifyTVar' trackerVar (Map.filterWithKey \k _ -> S.member k live)
             modifyTVar' committedVar (Map.filterWithKey \k _ -> S.member k live)
+            -- Drop reseeks for revoked partitions too, else the poll thread would
+            -- seek a partition this consumer no longer owns and re-seed a stale
+            -- tracker entry that the prune above can never reach again.
+            modifyTVar' reseekVar (Map.filterWithKey \k _ -> S.member k live)
           (cs,,) . Map.size <$> readTVar trackerVar <*> readTVar inflightVar
         -- Flush-before-commit durability gate: drain the shared producer
         -- (KafkaProducer enqueues are async — linger.ms/batching) so every DLQ
@@ -571,6 +586,17 @@ decoupledLoop appLogger appCtx tp role batchSize clientId fn = do
           $ LogBase.logInfo "kafka.consumer.metrics"
           $ AE.object ["client_id" AE..= clientId, "committed_partitions" AE..= length commits, "tracked_partitions" AE..= tracked, "inflight_bytes" AE..= inflight]
       pollOnce = do
+        -- Self-heal commit-starvation: redeliver chunks workers couldn't ack by
+        -- seeking each partition back to its recorded base, and reset that
+        -- partition's tracker (base ← reseek offset, ahead cleared) so the
+        -- re-fetched offsets re-fill cleanly. Seeking backward only — never past
+        -- the committed base — so this never skips (loss); worst case redelivers
+        -- already-processed offsets (idempotent downstream).
+        reseeks <- atomically $ swapTVar reseekVar Map.empty
+        unless (Map.null reseeks) do
+          KE.seekPartitions [K.TopicPartition (K.TopicName t) p (K.PartitionOffset o) | ((t, p), o) <- Map.toList reseeks] (K.Timeout 5000)
+          atomically $ modifyTVar' trackerVar \tk -> Map.map (`PartProgress` mempty) reseeks <> tk -- left-biased: reseek bases override
+          LogBase.logInfo "kafka.consumer.reseek" $ AE.object ["client_id" AE..= clientId, "partitions" AE..= Map.size reseeks]
         (inflight, paused) <- atomically $ (,) <$> readTVar inflightVar <*> readTVar pausedVar
         when (inflight >= highWaterBytes && not paused) do
           ps <- assigned

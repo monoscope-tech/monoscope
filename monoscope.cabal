@@ -1162,6 +1162,7 @@ test-suite unit-tests
       aeson
     , aeson-qq
     , async
+    , base
     , containers
     , effectful-core
     , extra

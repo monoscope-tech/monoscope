@@ -1,6 +1,6 @@
 module Pkg.KafkaConsumerSpec (spec) where
 
-import Control.Concurrent.STM (check)
+import Control.Concurrent.STM (check, stateTVar)
 import Data.Map.Strict qualified as Map
 import Effectful (Eff, IOE, (:>))
 import Effectful.Dispatch.Dynamic (interpret)
@@ -19,6 +19,7 @@ import Test.Hspec
 import UnliftIO.Async (race_)
 import UnliftIO.Concurrent (threadDelay)
 
+
 -- | An in-memory Kafka shared by the producer and consumer interpreters: each
 -- topic is an append-only log (offset = index). The mock producer enqueues to a
 -- @pending@ buffer (modelling librdkafka's async send queue) and only
@@ -29,12 +30,14 @@ import UnliftIO.Concurrent (threadDelay)
 data Broker = Broker
   { logs :: Map Text [K.ConsumerRecord (Maybe ByteString) (Maybe ByteString)]
   , pending :: [(Text, Maybe ByteString, K.Headers)] -- produced, awaiting FlushProducer
-  , cursor :: Map Text Int -- next index the consumer reads per topic
+  , cursor :: Map (Text, Int) Int -- next index the consumer reads per (topic, partition)
   , committed :: Map (Text, Int) Int64
   }
 
+
 emptyBroker :: Broker
 emptyBroker = Broker mempty mempty mempty mempty
+
 
 -- Append a record to a topic's log, assigning the next sequential offset.
 appendRecord :: Text -> Maybe ByteString -> K.Headers -> Broker -> Broker
@@ -42,20 +45,22 @@ appendRecord topic val hdrs b =
   let existing = Map.findWithDefault [] topic b.logs
       off = fromIntegral (length existing)
       cr = K.ConsumerRecord (K.TopicName topic) (K.PartitionId 0) (K.Offset off) K.NoTimestamp hdrs Nothing val
-   in b {logs = Map.insert topic (existing <> [cr]) b.logs}
+   in b{logs = Map.insert topic (existing <> [cr]) b.logs}
 
-runMockProducer :: (IOE :> es) => TVar Broker -> Eff (KafkaProducer ': es) a -> Eff es a
+
+runMockProducer :: IOE :> es => TVar Broker -> Eff (KafkaProducer ': es) a -> Eff es a
 runMockProducer bVar = interpret \_ -> \case
-  ProduceMessage KP.ProducerRecord {KP.prTopic = topic, KP.prValue = val, KP.prHeaders = hdrs} ->
-    atomically $ modifyTVar' bVar \b -> b {pending = b.pending <> [(topic.unTopicName, val, hdrs)]}
+  ProduceMessage KP.ProducerRecord{KP.prTopic = topic, KP.prValue = val, KP.prHeaders = hdrs} ->
+    atomically $ modifyTVar' bVar \b -> b{pending = b.pending <> [(topic.unTopicName, val, hdrs)]}
   -- Flush makes every buffered record durable on its topic log (offset order).
   FlushProducer ->
-    atomically $ modifyTVar' bVar \b -> (foldl' (\acc (t, v, h) -> appendRecord t v h acc) b b.pending) {pending = []}
+    atomically $ modifyTVar' bVar \b -> (foldl' (\acc (t, v, h) -> appendRecord t v h acc) b b.pending){pending = []}
   _ -> error "runMockProducer: unexpected producer op"
+
 
 -- The consumer reads from the subscribed @topics@, advancing each topic's cursor
 -- (offset order), and commit records the high-water offset per (topic, 0).
-runMockConsumer :: (IOE :> es) => [Text] -> TVar Broker -> Eff (KafkaConsumer ': es) a -> Eff es a
+runMockConsumer :: IOE :> es => [Text] -> TVar Broker -> Eff (KafkaConsumer ': es) a -> Eff es a
 runMockConsumer topics bVar = interpret \_ -> \case
   PollMessageBatch _ (K.BatchSize n) -> do
     batch <- atomically do
@@ -63,15 +68,19 @@ runMockConsumer topics bVar = interpret \_ -> \case
       let pull (acc, st) topic
             | length acc >= n = (acc, st)
             | otherwise =
-                let c = Map.findWithDefault 0 topic st
+                let c = Map.findWithDefault 0 (topic, 0) st -- records are all partition 0 (appendRecord)
                     taken = take (n - length acc) (drop c (Map.findWithDefault [] topic b.logs))
-                 in (acc <> taken, Map.insert topic (c + length taken) st)
+                 in (acc <> taken, Map.insert (topic, 0) (c + length taken) st)
           (recs, cursor') = foldl' pull ([], b.cursor) topics
-      writeTVar bVar b {cursor = cursor'}
+      writeTVar bVar b{cursor = cursor'}
       pure recs
     when (null batch) (threadDelay 20_000) -- don't busy-spin once drained
     pure (map Right batch)
-  CommitPartitionsOffsets _ tps -> atomically $ modifyTVar' bVar \b -> b {committed = foldl' recordTp b.committed tps}
+  CommitPartitionsOffsets _ tps -> atomically $ modifyTVar' bVar \b -> b{committed = foldl' recordTp b.committed tps}
+  -- Seek rewinds the per-topic read cursor so the offsets from the target are
+  -- re-delivered on the next poll — models librdkafka redelivering uncommitted
+  -- offsets only after a seek (never mid-session otherwise).
+  SeekPartitions tps _ -> atomically $ modifyTVar' bVar \b -> b{cursor = foldl' seekCursor b.cursor tps}
   PausePartitions _ -> pass
   ResumePartitions _ -> pass
   Assignment -> pure $ Map.fromList [(K.TopicName t, [K.PartitionId 0]) | t <- topics]
@@ -79,6 +88,9 @@ runMockConsumer topics bVar = interpret \_ -> \case
   where
     recordTp m (K.TopicPartition (K.TopicName t) (K.PartitionId p) (K.PartitionOffset o)) = Map.insertWith max (t, p) o m
     recordTp m _ = m
+    seekCursor c (K.TopicPartition (K.TopicName t) (K.PartitionId p) (K.PartitionOffset o)) = Map.insert (t, fromIntegral p) (fromIntegral o) c
+    seekCursor c _ = c
+
 
 -- Run decoupledLoop against the in-memory broker until `done` fires, with a hard
 -- timeout backstop. Returns the final broker state.
@@ -101,9 +113,11 @@ drive tr bVar topics role fn done = do
   void $ timeout 15_000_000 $ race_ loop (atomically done)
   readTVarIO bVar
 
+
 seedTopic :: TVar Broker -> Text -> [Int64] -> IO ()
 seedTopic bVar topic offs =
   atomically $ modifyTVar' bVar \b -> foldl' (\acc o -> appendRecord topic (Just (encodeUtf8 (show o))) (K.headersFromList []) acc) b offs
+
 
 spec :: Spec
 spec = aroundAll withTestResources $ describe "Kafka decoupledLoop (in-memory broker)" do
@@ -121,7 +135,6 @@ spec = aroundAll withTestResources $ describe "Kafka decoupledLoop (in-memory br
     received <- readTVarIO receivedVar
     sort received `shouldBe` sort (map (encodeUtf8 . show) [0 .. 4 :: Int64]) -- each record processed once
     Map.lookup ("otlp_logs", 0) b.committed `shouldBe` Just 5 -- watermark = max offset + 1
-
   it "flushes DLQ publishes durable before committing the source offset (no commit-before-send loss window)" \tr -> do
     bVar <- newTVarIO emptyBroker
     seedTopic bVar "otlp_logs" [0 .. 4]
@@ -143,3 +156,28 @@ spec = aroundAll withTestResources $ describe "Kafka decoupledLoop (in-memory br
     let hdrs = foldMap (K.headersToList . (.crHeaders)) (take 1 dlq)
     (snd <$> find ((== "monoscope-attempt-count") . fst) hdrs) `shouldBe` Just "1"
     Map.lookup ("otlp_logs", 0) b.committed `shouldBe` Just 5 -- DLQ accepted → offsets advanced
+
+  -- Regression guard for the 2026-06-25 DLQ commit-starvation wedge: a chunk that
+  -- returns no acks (transient write failure → routeBatchOutcome []) pins the
+  -- commit base while the poll cursor advances past it. librdkafka never
+  -- redelivers uncommitted offsets in-session, so without a self-heal the base
+  -- pins forever (the whole 7.6M-lag stall). The fix seeks the partition back to
+  -- the un-acked base so it is re-fetched and retried once the failure clears.
+  it "reseeks and recommits a chunk whose first processing returned no acks (commit-starvation self-heal)" \tr -> do
+    bVar <- newTVarIO emptyBroker
+    seedTopic bVar "otlp_logs" [0 .. 4]
+    attemptVar <- newTVarIO (0 :: Int)
+    -- First processing of the chunk no-acks (models a transient TF outage);
+    -- once healed, the redelivered chunk acks and the base advances.
+    let testFn tuples _ = do
+          n <- atomically $ stateTVar attemptVar \k -> (k, k + 1)
+          pure $ Right $ if n == 0 then ([], []) else (map fst tuples, [])
+    b <-
+      drive tr bVar ["otlp_logs"] Queue.KafkaPrimary testFn $ do
+        s <- readTVar bVar
+        check (Map.lookup ("otlp_logs", 0) s.committed == Just 5)
+    Map.lookup ("otlp_logs", 0) b.committed `shouldBe` Just 5 -- reseek redelivered the chunk → watermark recovered
+    -- Prove the retry actually fired (≥2 calls): without it the watermark would be
+    -- unreachable. Guards against the no-ack branch being silently removed (which
+    -- would ack on the first call and pass the assertion above trivially).
+    readTVarIO attemptVar >>= (`shouldSatisfy` (>= 2))
