@@ -86,6 +86,7 @@ import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
+import Data.ByteString.Lazy qualified as BSL
 import Data.Default (Default (..))
 import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.Hasql qualified as Hasql
@@ -104,6 +105,7 @@ import Data.These qualified as These
 import Data.Time (UTCTime)
 import Data.Time.Clock (addUTCTime, utctDay)
 import Data.UUID qualified as UUID
+import Data.UUID.Quasi (uuid)
 import Data.UUID.V5 qualified as UUIDv5
 import Data.Vector qualified as V
 import Data.Vector.Split qualified as VS
@@ -831,7 +833,7 @@ bulkInsertMetrics metrics = checkpoint "bulkInsertMetrics" $ unless (V.null metr
 -- | Fixed namespace for the content-derived (v5) row ids below. Arbitrary but
 -- stable — changing it re-ids every row, so don't.
 otelIdNamespace :: UUID.UUID
-otelIdNamespace = fromMaybe UUID.nil (UUID.fromString "6f1a7c30-9b2d-5e84-8a3f-0c1d2e3f4a5b")
+otelIdNamespace = [uuid|6f1a7c30-9b2d-5e84-8a3f-0c1d2e3f4a5b|]
 
 
 -- | Content-derived UUID (v5) for a row's `id`. Reprocessing a dead-letter
@@ -851,13 +853,13 @@ otelIdNamespace = fromMaybe UUID.nil (UUID.fromString "6f1a7c30-9b2d-5e84-8a3f-0
 -- fields (@observed_timestamp@/@start_time@ → currentTime) which aren't stable
 -- across reprocessing.
 deterministicOtelId :: OtelLogsAndSpans -> Text
-deterministicOtelId r = UUID.toText $ UUIDv5.generateNamed otelIdNamespace $ BS.unpack $ encodeUtf8 $ T.intercalate "\US" keyParts
+deterministicOtelId r = UUID.toText $ UUIDv5.generateNamed otelIdNamespace $ BS.unpack $ BS.intercalate "\US" keyParts
   where
-    enc :: AE.ToJSON a => Maybe a -> Text
-    enc = maybe "" (decodeUtf8 . AE.encode)
+    enc :: AE.ToJSON a => Maybe a -> BS.ByteString
+    enc = maybe "" (BSL.toStrict . AE.encode)
     keyParts = case r.context >>= (.span_id) of
-      Just sid | not (T.null sid) -> [r.project_id, fromMaybe "" (r.context >>= (.trace_id)), sid]
-      _ -> [r.project_id, enc (unAesonTextMaybe r.body), fromMaybe "" r.name, enc r.severity, enc (unAesonTextMaybe r.attributes), enc (unAesonTextMaybe r.resource)]
+      Just sid | not (T.null sid) -> [encodeUtf8 r.project_id, encodeUtf8 $ fromMaybe "" (r.context >>= (.trace_id)), encodeUtf8 sid]
+      _ -> [encodeUtf8 r.project_id, enc (unAesonTextMaybe r.body), encodeUtf8 $ fromMaybe "" r.name, enc r.severity, enc (unAesonTextMaybe r.attributes), enc (unAesonTextMaybe r.resource)]
 
 
 -- | Assign every row a deterministic, content-derived `id` (see
