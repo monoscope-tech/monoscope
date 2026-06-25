@@ -558,6 +558,10 @@ decoupledLoop appLogger appCtx tp role batchSize clientId fn = do
             let live = S.fromList [(t.unTopicName, p) | (t, p) <- asg]
             modifyTVar' trackerVar (Map.filterWithKey \k _ -> S.member k live)
             modifyTVar' committedVar (Map.filterWithKey \k _ -> S.member k live)
+            -- Drop reseeks for revoked partitions too, else the poll thread would
+            -- seek a partition this consumer no longer owns and re-seed a stale
+            -- tracker entry that the prune above can never reach again.
+            modifyTVar' reseekVar (Map.filterWithKey \k _ -> S.member k live)
           (cs,,) . Map.size <$> readTVar trackerVar <*> readTVar inflightVar
         -- Flush-before-commit durability gate: drain the shared producer
         -- (KafkaProducer enqueues are async — linger.ms/batching) so every DLQ
@@ -591,7 +595,7 @@ decoupledLoop appLogger appCtx tp role batchSize clientId fn = do
         reseeks <- atomically $ swapTVar reseekVar Map.empty
         unless (Map.null reseeks) do
           KE.seekPartitions [K.TopicPartition (K.TopicName t) p (K.PartitionOffset o) | ((t, p), o) <- Map.toList reseeks] (K.Timeout 5000)
-          atomically $ modifyTVar' trackerVar \tk -> foldl' (\m (k, o) -> Map.insert k (PartProgress o mempty) m) tk (Map.toList reseeks)
+          atomically $ modifyTVar' trackerVar \tk -> Map.map (`PartProgress` mempty) reseeks <> tk -- left-biased: reseek bases override
           LogBase.logInfo "kafka.consumer.reseek" $ AE.object ["client_id" AE..= clientId, "partitions" AE..= Map.size reseeks]
         (inflight, paused) <- atomically $ (,) <$> readTVar inflightVar <*> readTVar pausedVar
         when (inflight >= highWaterBytes && not paused) do
