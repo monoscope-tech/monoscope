@@ -93,7 +93,7 @@ import Data.Effectful.Hasql qualified as Hasql
 import Data.Generics.Labels ()
 import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HS
-import Data.List qualified as L (groupBy)
+import Data.List qualified as L (groupBy, intercalate)
 import Data.List.Extra (chunksOf)
 import Data.List.NonEmpty qualified as NE
 import Data.Map qualified as Map
@@ -853,13 +853,24 @@ otelIdNamespace = [uuid|6f1a7c30-9b2d-5e84-8a3f-0c1d2e3f4a5b|]
 -- fields (@observed_timestamp@/@start_time@ → currentTime) which aren't stable
 -- across reprocessing.
 deterministicOtelId :: OtelLogsAndSpans -> Text
-deterministicOtelId r = UUID.toText $ UUIDv5.generateNamed otelIdNamespace $ BS.unpack $ BS.intercalate "\US" keyParts
+deterministicOtelId r = UUID.toText $ UUIDv5.generateNamed otelIdNamespace $ L.intercalate [0x1f] (map BS.unpack keyParts)
   where
+    -- JSON-encode every part (incl. project_id/name) so the 0x1f delimiter can
+    -- never appear inside a part (Aeson escapes it). Raw encodeUtf8 would let two
+    -- distinct records collide on the same key via separator injection.
     enc :: AE.ToJSON a => Maybe a -> BS.ByteString
     enc = maybe "" (BSL.toStrict . AE.encode)
     keyParts = case r.context >>= (.span_id) of
-      Just sid | not (T.null sid) -> [encodeUtf8 r.project_id, encodeUtf8 $ fromMaybe "" (r.context >>= (.trace_id)), encodeUtf8 sid]
-      _ -> [encodeUtf8 r.project_id, enc (unAesonTextMaybe r.body), encodeUtf8 $ fromMaybe "" r.name, enc r.severity, enc (unAesonTextMaybe r.attributes), enc (unAesonTextMaybe r.resource)]
+      Just sid | not (T.null sid) ->
+        [enc (Just r.project_id), enc (r.context >>= (.trace_id)), enc (Just sid)]
+      _ ->
+        [ enc (Just r.project_id)
+        , enc (unAesonTextMaybe r.body)
+        , enc r.name
+        , enc r.severity
+        , enc (unAesonTextMaybe r.attributes)
+        , enc (unAesonTextMaybe r.resource)
+        ]
 
 
 -- | Assign every row a deterministic, content-derived `id` (see

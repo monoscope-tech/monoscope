@@ -65,3 +65,9 @@ spec = describe "deterministic OTel row id" do
     let a = base{body = jsonBody "oom", resource = jsonMap [("host", AE.String "pod-a")]}
         b = base{body = jsonBody "oom", resource = jsonMap [("host", AE.String "pod-b")]}
     idOf a `shouldNotBe` idOf b
+
+  -- Parts are joined by a 0x1f delimiter; a raw (unescaped) field containing 0x1f
+  -- could shift the delimiter boundary and collide two distinct records. JSON
+  -- encoding every part escapes 0x1f, keeping boundaries unambiguous.
+  it "separator injection: a field containing the 0x1f delimiter does not collide with a shifted boundary" do
+    idOf base{project_id = "x\x1f", name = Just "y"} `shouldNotBe` idOf base{project_id = "x", name = Just "\x1fy"}
