@@ -833,6 +833,7 @@ bulkInsertMetrics metrics = checkpoint "bulkInsertMetrics" $ unless (V.null metr
 otelIdNamespace :: UUID.UUID
 otelIdNamespace = fromMaybe UUID.nil (UUID.fromString "6f1a7c30-9b2d-5e84-8a3f-0c1d2e3f4a5b")
 
+
 -- | Content-derived UUID (v5) for a row's `id`. Reprocessing a dead-letter
 -- message re-parses the original payload and re-derives the SAME id it would
 -- have had on first ingest, so TF's @(id, timestamp)@ dedup (flush + read-side
@@ -857,6 +858,7 @@ deterministicOtelId r = UUID.toText $ UUIDv5.generateNamed otelIdNamespace $ BS.
     keyParts = case r.context >>= (.span_id) of
       Just sid | not (T.null sid) -> [r.project_id, fromMaybe "" (r.context >>= (.trace_id)), sid]
       _ -> [r.project_id, enc (unAesonTextMaybe r.body), fromMaybe "" r.name, enc r.severity, enc (unAesonTextMaybe r.attributes), enc (unAesonTextMaybe r.resource)]
+
 
 -- | Assign every row a deterministic, content-derived `id` (see
 -- 'deterministicOtelId'). Pure and idempotent: same input record ⇒ same id, so

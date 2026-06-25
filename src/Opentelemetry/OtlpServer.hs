@@ -261,7 +261,6 @@ dualWriteWithPoisonMapping
      , Labeled "timefusion" Hasql.Hasql :> es
      , Log :> es
      , Time.Time :> es
-     
      )
   => AuthContext
   -> Telemetry.WriteTarget
