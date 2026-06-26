@@ -385,7 +385,7 @@ export class LogList extends LitElement {
   // newest → live-tail lower bound.
   private oldestCursor(offsetMs: number) { return this.edgeCursor(oldestRowTimestamp, offsetMs); }
   private newestCursor(offsetMs: number) { return this.edgeCursor(newestRowTimestamp, offsetMs); }
-  private edgeCursor(pick: typeof oldestRowTimestamp, offsetMs: number): string | null {
+  private edgeCursor(pick: (rows: EventLine[], colIdxMap: ColIdxMap) => string | number | undefined, offsetMs: number): string | null {
     const ts = pick(this.spanListTree, this.colIdxMap);
     return ts == null ? null : cursorFromTimestamp(ts, offsetMs);
   }
