@@ -13,7 +13,7 @@ import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
-import Test.Hspec (Spec, aroundAll, describe, it, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, around, describe, it, shouldBe, shouldSatisfy)
 
 
 pid :: Projects.ProjectId
@@ -37,7 +37,7 @@ ingestStdOtelSpan tr apiKey spanName method urlPath statusCode serverAddr = do
 
 
 spec :: Spec
-spec = aroundAll withTestResources do
+spec = around withTestResources do
   describe "Standard OpenTelemetry HTTP Spans" do
     it "ingests standard OTel HTTP span preserving original name" \tr -> do
       apiKey <- createTestAPIKey tr pid "std-otel-key"

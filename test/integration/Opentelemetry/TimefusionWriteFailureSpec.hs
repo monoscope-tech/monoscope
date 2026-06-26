@@ -24,7 +24,7 @@ import Pkg.DeriveUtils (UUIDId (..), mkHasqlPool)
 import Pkg.TestUtils
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
-import Test.Hspec (SpecWith, aroundAll, beforeWith, describe, expectationFailure, it, shouldBe)
+import Test.Hspec (SpecWith, around, beforeWith, describe, expectationFailure, it, shouldBe)
 
 
 -- | A closed loopback port. Pool acquire fails with ECONNREFUSED so we
@@ -178,7 +178,7 @@ poisonError =
 
 
 spec :: SpecWith ()
-spec = aroundAll withTestResources $ beforeWith mkResWithKey do
+spec = around withTestResources $ beforeWith mkResWithKey do
   -- B1 of the 2026-06-21 fix: the per-batch project-id / cache lookups are
   -- wrapped in 'retryTransientEff', so a transient connection reset retries
   -- instead of dead-lettering a whole batch that the write path would accept.

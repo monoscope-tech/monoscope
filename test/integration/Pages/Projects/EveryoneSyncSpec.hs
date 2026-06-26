@@ -55,7 +55,7 @@ uidFor n = UserId (Unsafe.fromJust $ UUID.fromString $ "00000000-0000-0000-0000-
 
 
 spec :: Spec
-spec = aroundAll withTestResources $ describe "@everyone notify_emails is authoritative" do
+spec = around withTestResources $ describe "@everyone notify_emails is authoritative" do
   it "insertProjectMembers appends the member's (lower-cased) email" \tr -> do
     resetState tr
     let u1 = uidFor 2

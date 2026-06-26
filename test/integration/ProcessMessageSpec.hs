@@ -12,7 +12,7 @@ import Pkg.TestUtils
 import ProcessMessage (processMessages)
 import Relude
 import Relude.Unsafe qualified as Unsafe
-import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, shouldBe, shouldContain)
+import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldBe, shouldContain)
 
 
 pid :: Projects.ProjectId
@@ -20,7 +20,7 @@ pid = UUIDId UUID.nil
 
 
 spec :: Spec
-spec = aroundAll withTestResources do
+spec = around withTestResources do
   describe "process request to db" do
     it "test processing raw request message string" $ \tr -> do
       currentTime <- getCurrentTime

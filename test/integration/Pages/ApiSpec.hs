@@ -13,7 +13,7 @@ import Pages.Settings qualified as Api
 
 
 spec :: Spec
-spec = aroundAll withTestResources do
+spec = around withTestResources do
   describe "Check API Keys" do
     it "should have one default apikey" \tr -> do
       (_, Api.ApiGet (PageCtx bwconf (pid, apiKeys))) <- testServant tr $ Api.apiGetH testPid

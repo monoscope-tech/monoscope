@@ -29,7 +29,7 @@ import Pkg.TestUtils
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Servant qualified
-import Test.Hspec (Spec, aroundAll, describe, it, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, around, describe, it, shouldBe, shouldSatisfy)
 
 
 
@@ -44,7 +44,7 @@ getAnomalies tr = do
 
 
 spec :: Spec
-spec = aroundAll withTestResources do
+spec = around withTestResources do
   describe "Check Anomaly List" do
     it "should return an empty list" \tr -> do
       (_, pg) <-

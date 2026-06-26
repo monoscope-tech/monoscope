@@ -24,7 +24,7 @@ import Pkg.ErrorFingerprint qualified as EF
 import Pkg.TestUtils
 import Relude
 import Servant qualified
-import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldBe, shouldSatisfy)
 
 
 pid :: Projects.ProjectId
@@ -40,7 +40,7 @@ countIssues tr issueType = withResource tr.trPool \conn -> do
 
 
 spec :: Spec
-spec = aroundAll withTestResources do
+spec = around withTestResources do
   describe "Error Pattern Pipeline" do
 
     it "1. Ingest spans with exceptions → extract error patterns" \tr -> do

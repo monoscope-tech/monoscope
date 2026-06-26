@@ -12,7 +12,7 @@ import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
-import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldBe, shouldSatisfy)
 
 
 pid :: Projects.ProjectId
@@ -38,7 +38,7 @@ seedSlackChannel tr = withResource tr.trPool \conn -> do
 
 
 spec :: Spec
-spec = aroundAll withTestResources do
+spec = around withTestResources do
   describe "Error notification sweep + rate limiting" do
 
     it "1. Orphan patterns older than 1h are still picked up by the sweep (regression guard for 60-min cutoff bug)" \tr -> do

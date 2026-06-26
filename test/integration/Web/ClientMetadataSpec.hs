@@ -30,7 +30,7 @@ testId = Unsafe.fromJust $ UUIDId <$> UUID.fromText "00000000-0000-0000-0000-000
 
 
 spec :: Spec
-spec = aroundAll withTestResources do
+spec = around withTestResources do
   describe "Get clientMetaData" do
     it "returns client metadata for a valid API key" $ \TestResources{..} -> do
       apiKey <- createAndSaveApiKey trPool trATCtx

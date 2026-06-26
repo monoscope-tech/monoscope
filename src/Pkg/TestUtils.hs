@@ -259,7 +259,7 @@ withLocalSetup f = do
     migratedConfig <- throwE $ cacheAction ("./.tmp/postgres/" <> show dirSize) migrate combinedConfig
     withConfig migratedConfig $ \db -> do
       let cstr = toConnectionString db
-      pool <- newPool (defaultPoolConfig (connectPostgreSQL cstr) close 60 50)
+      pool <- newPool (defaultPoolConfig (connectPostgreSQL cstr) close 60 5)
       f pool cstr
 
 
@@ -300,7 +300,9 @@ withExternalDBSetup f = do
   close masterConn
 
   -- Connect to the new test database
-  pool <- newPool (defaultPoolConfig (connect $ connInfo (toString testDbName)) close 60 10)
+  -- Small per-test pool: under `parallel` many test DBs are live at once and the CI
+  -- Postgres caps at 100 connections (3 pg + 3×2 hasql ≈ 9 per test).
+  pool <- newPool (defaultPoolConfig (connect $ connInfo (toString testDbName)) close 60 3)
   let cstr =
         encodeUtf8
           ( "host="
@@ -694,9 +696,9 @@ withTestResources f = withSetup $ \pool cstr -> LogBulk.withBulkStdOutLogger \lo
   tfPgUrl <- lookupEnv "TIMEFUSION_PG_TEST_URL"
   let tfCstr = maybe cstr (encodeUtf8 . toText) tfPgUrl
       tfEnabled = isJust tfPgUrl
-  hasqlMain <- mkHasqlPool 5 cstr
-  hasqlJobs <- mkHasqlPool 5 cstr
-  hasqlTf <- mkHasqlPool 5 tfCstr
+  hasqlMain <- mkHasqlPool 2 cstr
+  hasqlJobs <- mkHasqlPool 2 cstr
+  hasqlTf <- mkHasqlPool 2 tfCstr
   sessAndHeader <- testSessionHeader pool hasqlMain
 
   -- Load .env file for tests (to get OPENAI_API_KEY and other non-database configs)

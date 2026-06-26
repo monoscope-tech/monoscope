@@ -29,7 +29,7 @@ import Test.Hspec
 
 
 spec :: Spec
-spec = aroundAll withTestResources do
+spec = around withTestResources do
   describe "Check Log Page" do
     it "should return an empty list" \tr -> do
       (_, pg) <-

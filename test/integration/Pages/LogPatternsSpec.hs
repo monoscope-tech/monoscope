@@ -20,7 +20,7 @@ import Pkg.TestUtils
 import Relude
 import Servant qualified
 import Database.PostgreSQL.Simple.Types (PGArray (..))
-import Test.Hspec (Spec, aroundAll, describe, it, shouldBe, shouldSatisfy, expectationFailure)
+import Test.Hspec (Spec, around, describe, it, shouldBe, shouldSatisfy, expectationFailure)
 
 
 pid :: Projects.ProjectId
@@ -66,7 +66,7 @@ countIssues tr issueType = withResource tr.trPool \conn -> do
 
 
 spec :: Spec
-spec = aroundAll withTestResources do
+spec = around withTestResources do
   describe "Log Pattern Pipeline" do
 
     it "1. Extract patterns from ingested logs" \tr -> do

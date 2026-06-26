@@ -7,7 +7,7 @@ import Test.Hspec
 
 -- Mock data generators
 spec :: Spec
-spec = aroundAll withTestResources do
+spec = around withTestResources do
   describe "processList" do
     it "should process a request" $ const pending
 

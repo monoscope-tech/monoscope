@@ -7,11 +7,11 @@ import Pages.Bots.BotTestHelpers
 import Pages.Bots.Whatsapp (TwilioWhatsAppMessage (..), whatsappIncomingPostH)
 import Pkg.TestUtils
 import Relude
-import Test.Hspec (Spec, aroundAll, describe, it, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, around, describe, it, shouldBe, shouldSatisfy)
 
 
 spec :: Spec
-spec = aroundAll withTestResources do
+spec = around withTestResources do
   describe "WhatsApp Bot" do
     describe "Message parsing" do
       it "parses /dashboard command" \tr -> do

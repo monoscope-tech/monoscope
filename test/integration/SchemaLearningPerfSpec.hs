@@ -28,7 +28,7 @@ import Pkg.SchemaLearning.Worker qualified as Worker
 import Pkg.TestUtils (TestResources (..), frozenTime, runHasqlEffect, withTestResources)
 import ProcessMessage qualified
 import Relude
-import Test.Hspec (Spec, aroundAll, describe, it, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, around, describe, it, shouldBe, shouldSatisfy)
 
 
 pid :: Projects.ProjectId
@@ -119,7 +119,7 @@ observe spans ref = do
 
 
 spec :: Spec
-spec = aroundAll withTestResources $
+spec = around withTestResources $
   describe "SchemaLearning efficiency" $ do
     it "10k spans through the real walker keep shard bytes under the policy budget" $ \tr -> do
       clearAll tr

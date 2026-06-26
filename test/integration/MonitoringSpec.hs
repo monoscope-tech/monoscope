@@ -26,7 +26,7 @@ import Test.Hspec
 
 
 spec :: Spec
-spec = aroundAll withTestResources do
+spec = around withTestResources do
   describe "Query Log Monitors" do
     it "should create monitor with no triggers" $ \tr -> do
       currentTime <- getCurrentTime
@@ -141,7 +141,7 @@ spec = aroundAll withTestResources do
 
   describe "Widget Alert Query Sync" do
     it "should sync alert query when widget query changes" \tr -> do
-      -- Reuse dashboard from previous test (tests share state via aroundAll)
+      -- Reuse dashboard from previous test (tests share state via around)
       (_, dashboardsResp) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing (Dashboards.DashboardFilters [])
       dashId <- case dashboardsResp of
         Dashboards.DashboardsGet (PageCtx _ Dashboards.DashboardsGetD{dashboards}) -> do

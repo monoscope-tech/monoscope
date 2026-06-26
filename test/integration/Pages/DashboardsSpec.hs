@@ -23,7 +23,7 @@ filters =
 
 
 spec :: Spec
-spec = aroundAll withTestResources do
+spec = around withTestResources do
   describe "Dashboards Tests" do
     let mkDashboard t = Dashboards.DashboardForm{Dashboards.title = t, Dashboards.file = "overview.yaml", Dashboards.teams = [], Dashboards.fileDir = Nothing}
         dashboard = mkDashboard "Test Dashboard"
