@@ -23,7 +23,6 @@
     "@rrweb/types": "^2.0.0-alpha.18",
     "@types/lodash": "^4.17.24",
     "ansi-up": "^1.0.0",
-    "ansi_up": "^6.0.6",
     "clsx": "^2.1.1",
     "date-fns": "^4.3.0",
     "echarts": "^6.1.0",
@@ -44,7 +43,8 @@
     "typescript": "^6.0.3",
     "vite-plugin-monaco-editor": "^1.1.0",
     "vite-plugin-node-polyfills": "^0.28.0",
-    "vitest": "^4.0.16"
+    "vitest": "^4.0.16",
+    "vitest-canvas-mock": "^1.1.4"
   },
   "overrides": {
     "dompurify": "^3.3.2",

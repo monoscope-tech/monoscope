@@ -5,13 +5,14 @@ export default defineConfig({
     // jsdom has better compatibility with Monaco Editor
     environment: 'jsdom',
     globals: true,
-    // Use existing setup file
-    setupFiles: './test/setup.ts',
+    // vitest-canvas-mock gives a realistic 2D context (echarts/canvas run for real);
+    // then our own setup (globals + controllable observers).
+    setupFiles: ['vitest-canvas-mock', './test/setup.ts'],
     deps: {
       optimizer: {
         web: {
           // force Vitest to bundle Monaco instead of trying to stub it
-          include: ['monaco-editor'],
+          include: ['monaco-editor', 'vitest-canvas-mock'],
         }
       }
     },

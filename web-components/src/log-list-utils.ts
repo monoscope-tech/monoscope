@@ -236,6 +236,49 @@ export const createCachedIconRenderer = () => {
 
 export const generateId = (): string => Math.random().toString(36).substring(2, 15);
 
+// Drop rows whose id was already seen, keeping first occurrence (preserves order
+// and any expand state on the kept row). Cursor/recent pagination uses inclusive
+// timestamp boundaries, so the boundary row recurs across pages — without this,
+// "load more" / live-tail appends a duplicate of the last/first visible row.
+// id is widened to allow null/undefined: rows are built from untyped server data,
+// so the guard against a missing id is a real runtime check, not dead code.
+export const dedupeById = <T extends { id: string | null | undefined }>(items: T[]): T[] => {
+  const seen = new Set<string>();
+  return items.filter((it) => {
+    if (it.id == null || seen.has(it.id)) return false;
+    seen.add(it.id);
+    return true;
+  });
+};
+
+// Whether a live-stream batch should be buffered ("N new" pill) instead of inserted
+// immediately. Buffer whenever the user has scrolled away from the edge new rows
+// appear at — any scroll-off (>0), not an arbitrary 30px, so reading position
+// never jumps under them. Newest-first (non-flip): rows enter at top → buffer if
+// scrollTop>0. Oldest-first (flip): rows enter at bottom → buffer unless at bottom.
+export const shouldBufferRecent = (
+  isLiveStreaming: boolean,
+  scrollTop: number,
+  scrolledToBottom: boolean,
+  flipDirection: boolean,
+): boolean => isLiveStreaming && (flipDirection ? !scrolledToBottom : scrollTop > 0);
+
+// Pagination cursor (ISO) from a row timestamp ± offset. Tolerates ISO strings and
+// numeric epochs in ns/µs/ms — `new Date(epochNs)` otherwise reads ns as ms and
+// produces a year-~55000 cursor that returns nothing, stalling load-more.
+export const cursorFromTimestamp = (timestamp: string | number, offsetMs: number): string => {
+  let ms: number;
+  if (typeof timestamp === 'number' || /^\d+$/.test(String(timestamp))) {
+    const n = Number(timestamp);
+    // Magnitude disambiguates the unit; assumes wall-clock log times in
+    // ~2001–5138 (ms ∈ [1e11,1e14)), so the thresholds never collide in practice.
+    ms = n > 1e17 ? n / 1e6 : n > 1e14 ? n / 1e3 : n; // ns→ms, µs→ms, else ms
+  } else {
+    ms = new Date(timestamp).getTime();
+  }
+  return new Date(ms + offsetMs).toISOString();
+};
+
 export const getColumnWidth = (column: string): string =>
   COLUMN_WIDTHS[column as keyof typeof COLUMN_WIDTHS] || (column === 'id' ? '' : 'w-[16ch] shrink-0');
 

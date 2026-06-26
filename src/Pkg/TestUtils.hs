@@ -106,7 +106,7 @@ import Data.UUID qualified as UUID
 import Data.UUID.V4 (nextRandom)
 import Data.Vector qualified as V
 import Data.Version (makeVersion)
-import Database.PostgreSQL.Simple (ConnectInfo (..), Connection, Only (..), close, connect, connectPostgreSQL, defaultConnectInfo, execute, execute_)
+import Database.PostgreSQL.Simple (ConnectInfo (..), Connection, Only (..), close, connect, connectPostgreSQL, defaultConnectInfo, execute)
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.Migration (MigrationCommand (MigrationDirectory, MigrationInitialization))
 import Database.PostgreSQL.Simple.Migration qualified as Migration
@@ -339,135 +339,65 @@ withExternalDBSetup f = do
     close masterConn'
 
 
--- Helper function to ensure template database exists and is up to date
+-- | Ensure the template database exists and matches the current migrations.
+--
+-- The template is kept @ALLOW_CONNECTIONS false@ (exactly like Postgres's own
+-- @template0@). This is the key to fast tests: TimescaleDB's background-worker
+-- scheduler periodically attaches to every DB carrying the extension, and
+-- @CREATE DATABASE ... TEMPLATE@ fails outright if *any* session is connected to
+-- the source. With connections disabled the scheduler can't attach, so each
+-- spec's @CREATE DATABASE@ goes from ~5s of terminate/retry churn to ~0.1s.
+--
+-- The migration fingerprint is stamped as the template's DB comment (not a table
+-- inside it) so cache-invalidation can be checked from the master connection
+-- without ever connecting to the locked-down template.
 ensureTemplateDatabase :: (String -> ConnectInfo) -> Text -> IO ()
 ensureTemplateDatabase connInfo templateDbName = do
   masterConn <- connect $ connInfo "postgres"
+  let alter clause = void $ execute masterConn (Query $ encodeUtf8 $ "ALTER DATABASE " <> templateDbName <> " WITH " <> clause) ()
 
-  -- Check if template database exists
-  [Only exists] <-
-    PGS.query
-      masterConn
-      "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = ?)"
-      (Only templateDbName)
-
-  -- Get current migration directory checksum for cache invalidation
-  -- Use per-file sizes (sorted by name) so content changes that preserve total size are detected
+  -- Per-file sizes (sorted by name) so content changes that preserve total size still invalidate.
   files <- sort <$> listDirectory migrationsDirr
   sizes <- mapM (getFileSize . (migrationsDirr <>)) files
-  let migrationChecksum = show (zip files sizes)
+  let migrationChecksum = toText (show (zip files sizes))
 
-  -- Check if template needs updating
-  needsUpdate <-
-    if exists
-      then do
-        -- Try to connect to template and check a marker we'll set
-        templateConn <- connect $ connInfo (toString templateDbName)
+  -- Read the checksum we stamped as the template's DB comment — from master, no
+  -- connection to the template (it disallows them). Nothing/mismatch ⇒ (re)build.
+  stamped <-
+    PGS.query masterConn "SELECT shobj_description(oid, 'pg_database') FROM pg_database WHERE datname = ?" (Only templateDbName)
+      :: IO [Only (Maybe Text)]
+  let existing = case stamped of [Only c] -> Just c; _ -> Nothing
 
-        -- Check if our migration checksum marker exists and matches
-        markerExists <-
-          PGS.query
-            templateConn
-            "SELECT EXISTS(SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = 'template_db_info')"
-            ()
-            :: IO [Only Bool]
+  when (existing /= Just (Just migrationChecksum)) $ do
+    -- Drop a stale template (unlock first: a template DB can't be dropped, and FORCE clears stragglers).
+    when (isJust existing) $ do
+      alter "IS_TEMPLATE false ALLOW_CONNECTIONS true"
+      void $ execute masterConn (Query $ encodeUtf8 $ "DROP DATABASE IF EXISTS " <> templateDbName <> " WITH (FORCE)") ()
 
-        case markerExists of
-          [Only True] -> do
-            checksums <-
-              PGS.query
-                templateConn
-                "SELECT migration_checksum FROM template_db_info LIMIT 1"
-                ()
-                :: IO [Only Text]
-            close templateConn
-            pure $ case checksums of
-              [Only checksum] -> checksum /= toText migrationChecksum
-              _ -> True
-          _ -> do
-            close templateConn
-            pure True
-      else pure True
-
-  when needsUpdate $ do
-    -- Drop existing template if it exists
-    when exists $ do
-      -- First, terminate any connections to the template database
-      void
-        $ execute
-          masterConn
-          ( Query
-              $ encodeUtf8
-              $ "DO $$ BEGIN  PERFORM pg_terminate_backend(pid) FROM pg_stat_activity  WHERE datname = '"
-              <> templateDbName
-              <> "' AND pid <> pg_backend_pid(); END $$;"
-          )
-          ()
-
-      -- Mark database as template
-      _ <-
-        execute
-          masterConn
-          (Query $ encodeUtf8 $ "ALTER DATABASE " <> templateDbName <> " is_template = false")
-          ()
-      _ <-
-        execute
-          masterConn
-          (Query $ encodeUtf8 $ "DROP DATABASE IF EXISTS " <> templateDbName)
-          ()
-      pass
-
-    -- Create fresh template database
-    _ <-
-      execute
-        masterConn
-        (Query $ encodeUtf8 $ "CREATE DATABASE " <> templateDbName)
-        ()
-
-    -- Connect to template database and set up schema
+    void $ execute masterConn (Query $ encodeUtf8 $ "CREATE DATABASE " <> templateDbName) ()
     templateConn <- connect $ connInfo (toString templateDbName)
-
-    -- Run migrations
     _ <- Migration.runMigration templateConn Migration.defaultOptions MigrationInitialization
     _ <- Migration.runMigration templateConn Migration.defaultOptions $ MigrationDirectory migrationsDirr
-
-    -- Set nil user as sudo for tests and create test project
-    let setupData =
-          [sql| UPDATE users.users SET is_sudo = true WHERE id = '00000000-0000-0000-0000-000000000000';
-
-                INSERT INTO projects.projects (id, title, payment_plan, active, deleted_at, weekly_notif, daily_notif)
-                VALUES ('00000000-0000-0000-0000-000000000000', 'Demo Project', 'FREE', true, NULL, true, true)
-                ON CONFLICT (id) DO UPDATE SET payment_plan = 'FREE', active = true, deleted_at = NULL;
-                
-                INSERT into projects.project_api_keys (active, project_id, title, key_prefix) 
-                SELECT True, '00000000-0000-0000-0000-000000000000', 'test', 'z6YeJcRJNH0zy9JOg6ZsQzxM9GHBHdSeu+7ugOpZ9jtR94qV'
-                WHERE NOT EXISTS (
-                  SELECT 1 FROM projects.project_api_keys 
-                  WHERE key_prefix = 'z6YeJcRJNH0zy9JOg6ZsQzxM9GHBHdSeu+7ugOpZ9jtR94qV'
-                );
-          |]
-    _ <- execute templateConn setupData ()
-
-    -- Create marker table with migration checksum
-    _ <-
-      execute_
-        templateConn
-        "CREATE TABLE IF NOT EXISTS template_db_info (migration_checksum TEXT)"
+    -- Nil user as sudo + demo project + test API key.
     _ <-
       execute
         templateConn
-        "INSERT INTO template_db_info (migration_checksum) VALUES (?)"
-        (Only $ toText migrationChecksum)
+        [sql| UPDATE users.users SET is_sudo = true WHERE id = '00000000-0000-0000-0000-000000000000';
 
+              INSERT INTO projects.projects (id, title, payment_plan, active, deleted_at, weekly_notif, daily_notif)
+              VALUES ('00000000-0000-0000-0000-000000000000', 'Demo Project', 'FREE', true, NULL, true, true)
+              ON CONFLICT (id) DO UPDATE SET payment_plan = 'FREE', active = true, deleted_at = NULL;
+
+              INSERT into projects.project_api_keys (active, project_id, title, key_prefix)
+              SELECT True, '00000000-0000-0000-0000-000000000000', 'test', 'z6YeJcRJNH0zy9JOg6ZsQzxM9GHBHdSeu+7ugOpZ9jtR94qV'
+              WHERE NOT EXISTS (SELECT 1 FROM projects.project_api_keys WHERE key_prefix = 'z6YeJcRJNH0zy9JOg6ZsQzxM9GHBHdSeu+7ugOpZ9jtR94qV');
+          |]
+        ()
     close templateConn
 
-    -- Mark database as template
-    _ <-
-      execute
-        masterConn
-        (Query $ encodeUtf8 $ "ALTER DATABASE " <> templateDbName <> " is_template = true")
-        ()
-    pass
+    -- Stamp the checksum (escape quotes defensively) then lock: template + no connections.
+    void $ execute masterConn (Query $ encodeUtf8 $ "COMMENT ON DATABASE " <> templateDbName <> " IS '" <> T.replace "'" "''" migrationChecksum <> "'") ()
+    alter "IS_TEMPLATE true ALLOW_CONNECTIONS false"
 
   close masterConn
 
@@ -820,6 +750,9 @@ withTestResources f = withSetup $ \pool cstr -> LogBulk.withBulkStdOutLogger \lo
               , convertkitApiKey = ""
               , convertkitApiSecret = ""
               , requestPubsubTopics = ["monoscope-prod-default"]
+              , -- Without this the field defaults to "" (no .env in CI), so DLQ poison
+                -- routes to topic "" and KafkaConsumerSpec's "otlp_deadletter" lookup finds nothing.
+                kafkaDeadLetterTopic = bool envConfig.kafkaDeadLetterTopic "otlp_deadletter" (T.null envConfig.kafkaDeadLetterTopic)
               , enableBackgroundJobs = True
               , enableEventsTableUpdates = True
               , enableDailyJobScheduling = False

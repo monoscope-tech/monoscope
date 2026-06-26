@@ -30,6 +30,9 @@ import {
   formatPatternCount,
   highlightPlaceholders,
   generateId,
+  dedupeById,
+  shouldBufferRecent,
+  cursorFromTimestamp,
   renderSparkline,
   parseUserAgent,
   isBotUserAgent,
@@ -73,6 +76,11 @@ export class LogList extends LitElement {
   @state() private expandedTraces: Record<string, boolean> = {};
   @state() private flipDirection: boolean = false;
   @state() private spanListTree: EventLine[] = [];
+  // Ids currently in spanListTree, kept so paginated/live appends dedupe the
+  // incoming page in O(page) instead of re-scanning the whole merged list each
+  // call (which was O(pages²·rows) over a long scroll). Rebuilt on full
+  // fetch/refresh; extended on child-expand splices and tree merges.
+  private seenIds = new Set<string>();
   @state() private recentDataToBeAdded: EventLine[] = [];
   @state() private view: 'tree' | 'list' = 'tree';
   @state() private shouldScrollToBottom: boolean = false;
@@ -126,6 +134,8 @@ export class LogList extends LitElement {
   private sessionPlayerWrapper: HTMLElement | null = null;
   private containerRef = createRef<HTMLDivElement>();
   private nextFetchUrl = '';
+  private fetchGeneration = 0;
+  private isNewResetTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Debounced functions
   private debouncedFetchData: any;
@@ -144,6 +154,32 @@ export class LogList extends LitElement {
     if (source === 'expand-timerange') return;
     this.debouncedRefetchLogs();
   };
+  private liveBtn: HTMLInputElement | null = null;
+  // Named (not anonymous) so they can be removed on disconnect — see setupEventListeners.
+  private handleLiveToggle = (e: Event) => {
+    if ((e.target as HTMLInputElement).checked) {
+      this.isLiveStreaming = true;
+      if (!this.liveStreamInterval)
+        this.liveStreamInterval = setInterval(() => this.fetchData(this.buildRecentFetchUrl(), false, true), 5000);
+    } else {
+      this.stopLiveStream();
+    }
+    this.requestUpdate();
+  };
+  // Tear down live-tail polling and reflect it in the toggle; optional toast when
+  // stopped automatically (e.g. the live window reached the range's upper bound).
+  private stopLiveStream(message?: string) {
+    if (this.liveStreamInterval) clearInterval(this.liveStreamInterval);
+    this.liveStreamInterval = null;
+    this.isLiveStreaming = false;
+    if (this.liveBtn) this.liveBtn.checked = false;
+    if (message) this.showErrorToast(message);
+    this.requestUpdate();
+  }
+  private handlePageHide = () => {
+    if (this.liveStreamInterval) clearInterval(this.liveStreamInterval);
+    this.liveStreamInterval = null;
+  };
   private isCalculatingWidths: boolean = false;
   private lastVisibilityRange: { first: number; last: number } | null = null;
   private isScrolling = false;
@@ -151,23 +187,26 @@ export class LogList extends LitElement {
   private worker: Worker | null = null;
   private workerReqId = 0;
   private workerCallbacks = new Map<number, { resolve: Function; reject: Function }>();
+  // Seam for tests: the fetch+group step. Defaults to the worker-backed path;
+  // tests override it to feed canned {tree, meta} responses deterministically.
+  transport: (url: string) => Promise<{ tree: any[]; meta: any }> = (url) => this.workerFetch(url);
 
   constructor() {
     super();
-
-    this.worker = new Worker(LogWorkerUrl, { type: 'module' });
-    this.worker.onmessage = (e) => this.handleWorkerMsg(e);
-    this.worker.onerror = (e: ErrorEvent) => {
-      console.error('[Worker] Error:', e.message, e.filename, e.lineno);
-    };
-
     this.debouncedFetchData = debounce(this.fetchData.bind(this), 300);
     this.debouncedUpdateChartMarkArea = debounce(this.updateChartMarkArea.bind(this), 100);
     // Bind resize handler for immediate feedback
     this.boundHandleResize = this.handleResize.bind(this);
-
     this.expandTrace = this.expandTrace.bind(this);
-    this.setupEventListeners();
+  }
+
+  // Worker + listeners are set up on connect (not in the constructor) so they are
+  // symmetric with disconnectedCallback teardown and survive disconnect→reconnect.
+  private initWorker() {
+    if (this.worker) return;
+    this.worker = new Worker(LogWorkerUrl, { type: 'module' });
+    this.worker.onmessage = (e) => this.handleWorkerMsg(e);
+    this.worker.onerror = (e: ErrorEvent) => console.error('[Worker] Error:', e.message, e.filename, e.lineno);
   }
 
   private handleWorkerMsg(e: MessageEvent) {
@@ -202,7 +241,7 @@ export class LogList extends LitElement {
           childrenTimeSpans: [], type: 'log' as const,
         };
       });
-      return { tree, meta: { serviceColors: {}, nextUrl: '', cols: data.cols || [], colIdxMap, count: data.count || 0, totalPatterns: data.totalPatterns ?? 0, totalSessions: data.totalSessions ?? 0, traces: [], hasMore: data.hasMore ?? false, queryResultCount: data.queryResultCount ?? 0 } };
+      return { tree, meta: { serviceColors: {}, nextUrl: '', cols: data.cols || [], colIdxMap, count: data.count || 0, totalPatterns: data.totalPatterns ?? 0, totalSessions: data.totalSessions ?? 0, traces: [], hasMore: data.hasMore ?? ((data.logsData || []).length > 0), queryResultCount: data.queryResultCount ?? 0 } };
     }
 
     // Use early fetch promise if available (set by server-rendered script in head)
@@ -236,24 +275,10 @@ export class LogList extends LitElement {
   }
 
   private setupEventListeners() {
-    // Live streaming button — disabled for aggregate views (patterns/sessions)
-    const liveBtn = document.querySelector('#streamLiveData') as HTMLInputElement;
-    if (liveBtn && !this.isAggregate) {
-      liveBtn.addEventListener('change', () => {
-        if (liveBtn.checked) {
-          this.isLiveStreaming = true;
-          this.liveStreamInterval = setInterval(() => {
-            this.fetchData(this.buildRecentFetchUrl(), false, true);
-          }, 5000);
-        } else {
-          if (this.liveStreamInterval) {
-            clearInterval(this.liveStreamInterval);
-          }
-          this.isLiveStreaming = false;
-        }
-        this.requestUpdate();
-      });
-    }
+    // Live streaming button — disabled for aggregate views (patterns/sessions).
+    // Handler is bound + stored so it can be removed in disconnectedCallback.
+    this.liveBtn = document.querySelector('#streamLiveData') as HTMLInputElement | null;
+    if (this.liveBtn && !this.isAggregate) this.liveBtn.addEventListener('change', this.handleLiveToggle);
 
     // Global event listeners
     ['submit', 'add-query'].forEach((ev) => window.addEventListener(ev, this.debouncedRefetchLogs));
@@ -265,9 +290,7 @@ export class LogList extends LitElement {
     document.addEventListener('update-query', this.handleUpdateQuery);
 
     // Window lifecycle events
-    window.addEventListener('pagehide', () => {
-      if (this.liveStreamInterval) clearInterval(this.liveStreamInterval);
-    });
+    window.addEventListener('pagehide', this.handlePageHide);
 
     // Pointer events for resizing (supports mouse + touch)
     this.handleMouseUp = () => {
@@ -334,16 +357,26 @@ export class LogList extends LitElement {
     // If we have data, update the 'from' parameter to fetch newer data
     if (this.spanListTree.length > 0) {
       const firstItem = this.flipDirection ? this.spanListTree[this.spanListTree.length - 1] : this.spanListTree[0];
-      const timestamp = firstItem?.data?.[this.colIdxMap['timestamp'] || this.colIdxMap['created_at']];
+      const timestamp = firstItem?.data?.[this.colIdxMap['timestamp'] ?? this.colIdxMap['created_at']];
 
       if (timestamp) {
-        const date = new Date(timestamp);
-        date.setTime(date.getTime() + 10); // Add 10ms
-        url.searchParams.set('from', date.toISOString());
-        // Remove cursor, since, and to params for recent fetch
+        // cursorFromTimestamp tolerates ISO + ns/µs/ms epochs (+10ms so we skip the newest row);
+        // a raw `new Date(epochNs)` would read ns as ms → a year-~55000 `from` → empty live-tail.
+        const from = cursorFromTimestamp(timestamp, 10);
+        url.searchParams.set('from', from);
+        // Recompute the lower bound from the newest loaded row; drop cursor/since.
+        // Keep `to`: on a bounded historical range, live-tail must stay within it
+        // rather than silently pulling rows newer than the user's upper bound.
         url.searchParams.delete('cursor');
         url.searchParams.delete('since');
-        url.searchParams.delete('to');
+        // Edge case: once the newest loaded row reaches the upper bound, `from`
+        // (newest+10ms) lands at/after `to`, so every tick fetches an empty
+        // [from,to] window — the live banner would hang forever with no rows and
+        // no error. Stop live-tail instead of polling a guaranteed-empty range.
+        const to = url.searchParams.get('to');
+        const toMs = to ? Date.parse(to) : NaN;
+        if (!isNaN(toMs) && Date.parse(from) >= toMs)
+          this.stopLiveStream('Reached the end of the selected time range — live tail paused.');
       }
     }
 
@@ -388,14 +421,9 @@ export class LogList extends LitElement {
     const url = new URL(baseUrl, window.location.origin + window.location.pathname);
     url.searchParams.set('json', 'true');
 
-    // Calculate cursor based on actual oldest timestamp
-    const date = new Date(timestamp);
-    date.setTime(date.getTime() - 10); // Subtract 10ms buffer to avoid missing items
-
-    // Update cursor for pagination while preserving time range filters (from/to/since)
-    // The cursor tells the server where to start pagination
-    // The from/to/since tell the server what time range to query within
-    url.searchParams.set('cursor', date.toISOString());
+    // Cursor from the oldest row, -10ms buffer; preserves from/to/since filters.
+    // cursorFromTimestamp handles ISO or numeric ns/µs/ms timestamps.
+    url.searchParams.set('cursor', cursorFromTimestamp(timestamp, -10));
 
     return url.toString();
   }
@@ -425,10 +453,11 @@ export class LogList extends LitElement {
     // This ensures we fetch older logs when expanding the time range
     if (this.spanListTree.length > 0) {
       const oldestItem = this.flipDirection ? this.spanListTree[0] : this.spanListTree[this.spanListTree.length - 1];
-      const oldestTimestamp = oldestItem?.data?.[this.colIdxMap['timestamp'] || this.colIdxMap['created_at']];
+      const oldestTimestamp = oldestItem?.data?.[this.colIdxMap['timestamp'] ?? this.colIdxMap['created_at']];
 
       if (oldestTimestamp) {
-        url.searchParams.set('cursor', String(oldestTimestamp));
+        // Same ns/µs/ms tolerance as load-more; String(epochNs) would stall the server cursor.
+        url.searchParams.set('cursor', cursorFromTimestamp(oldestTimestamp, 0));
       }
     }
 
@@ -521,11 +550,14 @@ export class LogList extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
+    this.initWorker();
+    this.setupEventListeners();
     // Initialize empty state
     this.logsColumns = [];
     this.colIdxMap = {};
     this.serviceColors = {};
     this.spanListTree = [];
+    this.seenIds.clear();
     this.visibleItems = [];
     this.hasMore = false;
 
@@ -621,6 +653,7 @@ export class LogList extends LitElement {
     // Stop live streaming when switching to an aggregate view
     if (changedProperties.has('mode') && this.isAggregate && this.liveStreamInterval) {
       clearInterval(this.liveStreamInterval);
+      this.liveStreamInterval = null; // else handleLiveToggle's !interval guard skips restart on switch-back
       this.isLiveStreaming = false;
     }
 
@@ -628,15 +661,15 @@ export class LogList extends LitElement {
       requestAnimationFrame(() => this.scrollToBottom());
     }
 
-    // Reset isNew flag after animation
-    if (changedProperties.has('spanListTree') && this.fetchedNew) {
-      setTimeout(() => {
-        this.spanListTree.forEach((span) => {
-          if (span.isNew) {
-            span.isNew = false;
-          }
-        });
+    // Reset isNew flag after animation. Keyed on new rows actually being PRESENT in
+    // spanListTree (not on fetchedNew), so rows that arrive via the buffer→"N new"
+    // concatenation path still get cleared — fetchedNew may already be false by then.
+    if (changedProperties.has('spanListTree') && this.spanListTree.some((s) => s.isNew)) {
+      if (this.isNewResetTimer) clearTimeout(this.isNewResetTimer);
+      this.isNewResetTimer = setTimeout(() => {
+        this.spanListTree.forEach((span) => { span.isNew = false; });
         this.fetchedNew = false;
+        this.isNewResetTimer = null;
         this.requestUpdate();
       }, 4000); // Match the animation duration
     }
@@ -660,6 +693,10 @@ export class LogList extends LitElement {
       this.worker.terminate();
       this.worker = null;
     }
+    // Drop (don't reject) in-flight worker callbacks: the worker is gone, and a
+    // late reject would touch a torn-down component. The pending 120s timeouts
+    // see an empty map and no-op.
+    this.workerCallbacks.clear();
 
     // Clean up all observers and timers
     if (this._loadMoreObserver) {
@@ -691,6 +728,9 @@ export class LogList extends LitElement {
     ['submit', 'add-query'].forEach((ev) => window.removeEventListener(ev, this.debouncedRefetchLogs));
     document.removeEventListener('submit', this.handleFormSubmit);
     document.removeEventListener('update-query', this.handleUpdateQuery);
+    this.liveBtn?.removeEventListener('change', this.handleLiveToggle);
+    this.liveBtn = null;
+    window.removeEventListener('pagehide', this.handlePageHide);
 
     // Clean up chart event handlers
     if (this.barChart) {
@@ -709,13 +749,11 @@ export class LogList extends LitElement {
   private handleResize(event: MouseEvent) {
     if (this.resizeTarget === null) return;
     const diff = event.clientX - this.mouseState.x;
-    let width = this.columnMaxWidthMap[this.resizeTarget];
-    if (!width) width = 16;
-    width += diff;
-    if (width > 100) {
-      this.columnMaxWidthMap[this.resizeTarget] = width;
-      this.requestUpdate();
-    }
+    // Seed from the column's actual current width (custom → fixed → min), not a
+    // hardcoded 16 that snapped fixed-width columns to ~100px on first drag.
+    const start = this.columnMaxWidthMap[this.resizeTarget] ?? this.fixedColumnWidths[this.resizeTarget] ?? MIN_COLUMN_WIDTH;
+    this.columnMaxWidthMap[this.resizeTarget] = Math.max(MIN_COLUMN_WIDTH, start + diff);
+    this.requestUpdate();
     this.mouseState = { x: event.clientX };
   }
 
@@ -866,19 +904,22 @@ export class LogList extends LitElement {
       // Build trace tree from rows + server traces for full tree rendering
       const traces = data.traces || [];
       const eventLines = mergedRows.length
-        ? groupSpans(mergedRows, childIdxMap, {}, false, traces)
+        ? dedupeById(groupSpans(mergedRows, childIdxMap, {}, false, traces))
         : [];
       eventLines.forEach((el) => { el.show = true; el.expanded = true; });
-      const qrc = data.queryResultCount ?? mergedRows.length;
+      // skip is a CUMULATIVE offset for the next page. queryResultCount is this
+      // page's count, so advance by it — storing it directly pinned skip to the
+      // page size and refetched (and duplicated) the same window every load-more.
+      const nextSkip = skip + (data.queryResultCount ?? newRows.length);
       this.expandedAggregates = {
         ...this.expandedAggregates,
         [key]: {
           rows: mergedRows,
           cols,
           colIdxMap: childIdxMap,
-          hasMore: !!data.hasMore && qrc < 500,
+          hasMore: !!data.hasMore && nextSkip < 500,
           loading: false,
-          skip: qrc,
+          skip: nextSkip,
           eventLines,
         },
       };
@@ -1020,6 +1061,7 @@ export class LogList extends LitElement {
       }
       // Insert children after parent and update children count to actual loaded count
       this.spanListTree.splice(parentIdx + 1, 0, ...eventLines);
+      eventLines.forEach((el) => this.seenIds.add(el.id));
       parent.children = eventLines.filter((el) => el.depth === 1).length;
       this.updateVisibleItems();
       this.requestUpdate();
@@ -1045,16 +1087,44 @@ export class LogList extends LitElement {
     else if (isLoadMore) this.isLoadingMore = true;
     else this.isLoading = true;
 
+    // A refresh or initial load replaces the whole result set; load-more/recent
+    // append to it. Several decisions below hinge on that distinction.
+    const isFullFetch = !isLoadMore && !isRecentFetch;
+
+    // A full fetch bumps the generation; a load-more/recent captures it and bails
+    // on resolve if a refresh has since replaced the data — otherwise its rows
+    // (from the OLD query) get merged into the NEW query's results.
+    if (isFullFetch) this.fetchGeneration++;
+    const gen = this.fetchGeneration;
+
     this.showLoadingSpinner(true);
 
     try {
-      const { tree, meta } = await this.workerFetch(url);
+      const { tree, meta } = await this.transport(url);
+      if ((isLoadMore || isRecentFetch) && gen !== this.fetchGeneration) return; // superseded by a refresh
       this.fetchError = null;
 
       // Handle results
       if (tree.length === 0) {
-        this.hasMore = meta.hasMore || false;
-        this.expandTimeRange = !meta.hasMore;
+        // An empty load-more page means we've hit the end of older data: stop
+        // paginating even if the server still reports hasMore, otherwise the
+        // load-more sentinel keeps re-firing and refetches (and, pre-dedup,
+        // re-appends) the same window. Initial/refresh fetches keep trusting meta.
+        this.hasMore = isLoadMore ? false : meta.hasMore || false;
+        // A quiet live-tail tick (no new rows) isn't "history exhausted" — don't flash
+        // the "Show earlier events" button on every empty 5s recent fetch.
+        if (!isRecentFetch) this.expandTimeRange = !this.hasMore;
+        // A full fetch (new query, filter or time-range change) that returns
+        // nothing is the FULL result set — clear stale rows so the empty state
+        // shows, instead of leaving the previous query's results on screen.
+        if (isFullFetch) {
+          this.spanListTree = [];
+          this.seenIds.clear();
+          this.loadedCount = 0;
+          if (meta.count !== undefined) this.totalCount = meta.count;
+          this.updateVisibleItems();
+          this.updateRowCountDisplay();
+        }
         return;
       }
 
@@ -1062,17 +1132,14 @@ export class LogList extends LitElement {
       if (!this.hasMore) this.expandTimeRange = true;
       if (isLoadMore || isRefresh || !this.spanListTree.length) this.nextFetchUrl = meta.nextUrl;
       if (isRecentFetch || !this.spanListTree.length) this.recentFetchUrl = meta.recentUrl;
-      if (isLoadMore) {
-        this.loadedCount += meta.queryResultCount ?? 0;
-      } else {
-        this.loadedCount = meta.queryResultCount ?? 0;
-      }
       if (meta.count !== undefined && !isLoadMore) this.totalCount = meta.count;
       if (meta.totalPatterns !== undefined && !isLoadMore) this.totalPatterns = meta.totalPatterns;
       if (meta.totalSessions !== undefined && !isLoadMore) this.totalSessions = meta.totalSessions;
-      this.updateRowCountDisplay();
       if (meta.serviceColors) Object.assign(this.serviceColors, meta.serviceColors);
-      this.logsColumns = meta.cols;
+      // Only a new query / refresh redefines the column set. Load-more pages and
+      // 5s live-stream ticks return the same server cols, so adopting them here
+      // would silently undo a user's hideColumn / reorder on every tick.
+      if (isFullFetch) this.logsColumns = meta.cols;
       this.colIdxMap = meta.colIdxMap;
       // Cache server traces for re-render (expand/collapse, flip direction)
       // Cap at 5000 entries to prevent unbounded growth during pagination
@@ -1083,7 +1150,11 @@ export class LogList extends LitElement {
       }
 
       if (isRefresh) {
+        // New query/filter/time-range: drop inline-expanded aggregate children so
+        // they don't render stale rows from the previous query under a surviving key.
+        this.expandedAggregates = {};
         this.spanListTree = tree;
+        this.seenIds = new Set(tree.map((r) => r.id));
         this.updateVisibleItems();
         if (tree.length > 0) {
           requestAnimationFrame(() => {
@@ -1101,19 +1172,21 @@ export class LogList extends LitElement {
           const scrollHeight = container.scrollHeight;
           const scrolledToBottom = scrollTop + clientHeight >= scrollHeight - 1;
           if (scrolledToBottom) this.shouldScrollToBottom = true;
-          const shouldBuffer =
-            this.isLiveStreaming && ((scrollTop > 30 && !this.flipDirection) || (!scrolledToBottom && this.flipDirection));
-          if (shouldBuffer) {
+          if (shouldBufferRecent(this.isLiveStreaming, scrollTop, scrolledToBottom, this.flipDirection)) {
             this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree, isRecentFetch);
           } else {
-            this.spanListTree = this.addWithFlipDirection(this.spanListTree, tree, isRecentFetch);
+            this.spanListTree = this.mergeIntoTree(tree, isRecentFetch);
             this.updateVisibleItems();
           }
         }
       } else {
-        this.spanListTree = this.addWithFlipDirection(this.spanListTree, tree, isRecentFetch);
+        this.spanListTree = this.mergeIntoTree(tree, isRecentFetch);
         this.updateVisibleItems();
       }
+      // Count what's actually visible. queryResultCount over-counts because the
+      // dedup-dropped boundary row is re-reported on every paginated page.
+      this.loadedCount = this.spanListTree.length;
+      this.updateRowCountDisplay();
 
       // Defer column width calculation
       if ('requestIdleCallback' in window) {
@@ -1136,9 +1209,12 @@ export class LogList extends LitElement {
         this.showErrorToast(msg);
       }
     } finally {
-      this.isLoading = false;
-      this.isFetchingRecent = false;
-      this.isLoadingMore = false;
+      // Reset only THIS fetch's guard — the three kinds run concurrently, so
+      // clearing all of them would let an in-flight load-more re-fire when an
+      // unrelated recent/refresh finishes first.
+      if (isRecentFetch) this.isFetchingRecent = false;
+      else if (isLoadMore) this.isLoadingMore = false;
+      else this.isLoading = false;
       this.showLoadingSpinner(false);
       this.requestUpdate();
     }
@@ -1156,10 +1232,14 @@ export class LogList extends LitElement {
 
   hideColumn(column: string) {
     this.logsColumns = this.logsColumns.filter((col) => col !== column);
+    delete this.columnMaxWidthMap[column]; // don't leak a stale width for a removed column
     this.requestUpdate();
   }
   handleColumnsChanged(e: { detail: string[] }) {
-    this.logsColumns = e.detail;
+    const next = e.detail;
+    const nextSet = new Set(next);
+    for (const c of Object.keys(this.columnMaxWidthMap)) if (!nextSet.has(c)) delete this.columnMaxWidthMap[c];
+    this.logsColumns = next;
     this.requestUpdate();
   }
   updateColumnMaxWidthMap = (recVecs: any[][]) => {
@@ -1249,15 +1329,30 @@ export class LogList extends LitElement {
     this.requestUpdate();
   }
 
-  private addWithFlipDirection(current: any[], newData: any[], isRecentFetch: boolean) {
-    const result = this.flipDirection
+  // New rows enter at the top for recent/live fetches and the bottom for load-more,
+  // flipped when oldest-first is on.
+  private orderMerge(current: any[], newData: any[], isRecentFetch: boolean) {
+    return this.flipDirection
       ? isRecentFetch
         ? [...current, ...newData]
         : [...newData, ...current]
       : isRecentFetch
       ? [...newData, ...current]
       : [...current, ...newData];
-    return result;
+  }
+
+  // Buffer accumulation ("N new" pill) — small bounded list, full dedupe is fine.
+  private addWithFlipDirection(current: any[], newData: any[], isRecentFetch: boolean) {
+    return dedupeById(this.orderMerge(current, newData, isRecentFetch));
+  }
+
+  // Merge a freshly fetched page into spanListTree, dropping ids already present
+  // (boundary row recurs across inclusive-cursor pages) using the persistent
+  // seenIds set so the cost is O(page), not O(whole tree).
+  private mergeIntoTree(newData: EventLine[], isRecentFetch: boolean) {
+    const fresh = newData.filter((r) => !this.seenIds.has(r.id));
+    fresh.forEach((r) => this.seenIds.add(r.id));
+    return this.orderMerge(this.spanListTree, fresh, isRecentFetch);
   }
 
   handleRecentClick() {
@@ -1270,8 +1365,7 @@ export class LogList extends LitElement {
 
   handleRecentConcatenation() {
     if (this.recentDataToBeAdded.length === 0) return;
-    // Use addWithFlipDirection for consistent ordering
-    this.spanListTree = this.addWithFlipDirection(this.spanListTree, this.recentDataToBeAdded, true);
+    this.spanListTree = this.mergeIntoTree(this.recentDataToBeAdded, true);
     this.recentDataToBeAdded = [];
     this.updateVisibleItems();
     this.batchRequestUpdate('recentConcatenation');
@@ -2385,7 +2479,7 @@ export class LogList extends LitElement {
               this.spanListTree = this.buildSpanListTree(this.spanListTree.map((sp) => sp.data));
               this.recentDataToBeAdded = this.buildSpanListTree(this.recentDataToBeAdded.map((sp) => sp.data));
               if (this.recentDataToBeAdded.length > 0) {
-                this.spanListTree = this.addWithFlipDirection(this.spanListTree, this.recentDataToBeAdded, true);
+                this.spanListTree = this.mergeIntoTree(this.recentDataToBeAdded, true);
                 this.recentDataToBeAdded = [];
               }
               this.requestUpdate();

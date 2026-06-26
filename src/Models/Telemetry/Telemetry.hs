@@ -86,14 +86,13 @@ import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
-import Data.ByteString.Lazy qualified as BSL
 import Data.Default (Default (..))
 import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Generics.Labels ()
 import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HS
-import Data.List qualified as L (groupBy, intercalate)
+import Data.List qualified as L (groupBy)
 import Data.List.Extra (chunksOf)
 import Data.List.NonEmpty qualified as NE
 import Data.Map qualified as Map
@@ -853,13 +852,13 @@ otelIdNamespace = [uuid|6f1a7c30-9b2d-5e84-8a3f-0c1d2e3f4a5b|]
 -- fields (@observed_timestamp@/@start_time@ → currentTime) which aren't stable
 -- across reprocessing.
 deterministicOtelId :: OtelLogsAndSpans -> Text
-deterministicOtelId r = UUID.toText $ UUIDv5.generateNamed otelIdNamespace $ L.intercalate [0x1f] (map BS.unpack keyParts)
+deterministicOtelId r = UUID.toText $ UUIDv5.generateNamed otelIdNamespace $ intercalate [0x1f] (map BS.unpack keyParts)
   where
     -- JSON-encode every part (incl. project_id/name) so the 0x1f delimiter can
     -- never appear inside a part (Aeson escapes it). Raw encodeUtf8 would let two
     -- distinct records collide on the same key via separator injection.
     enc :: AE.ToJSON a => Maybe a -> BS.ByteString
-    enc = maybe "" (BSL.toStrict . AE.encode)
+    enc = maybe "" (toStrict . AE.encode)
     keyParts = case r.context >>= (.span_id) of
       Just sid
         | not (T.null sid) ->
@@ -1141,8 +1140,8 @@ bulkInsertOtelLogsAndSpansTF target records = do
       classify pgRes tfRes
     -- Single-leg replay: only the store that originally failed is rewritten, so
     -- the durable leg keeps its single copy.
-    WritePgOnly -> singleLeg "pg" This (\l -> (l, 0)) =<< retryHasqlWrite maxWriteAttempts "pg" (bulkInsertOtelLogsAndSpans records)
-    WriteTfOnly -> singleLeg "tf" That (\l -> (0, l)) =<< retryHasqlWrite maxWriteAttempts "tf" (labeled @"timefusion" @Hasql $ bulkInsertOtelLogsAndSpans records)
+    WritePgOnly -> singleLeg "pg" This (,0) =<< retryHasqlWrite maxWriteAttempts "pg" (bulkInsertOtelLogsAndSpans records)
+    WriteTfOnly -> singleLeg "tf" That (0,) =<< retryHasqlWrite maxWriteAttempts "tf" (labeled @"timefusion" @Hasql $ bulkInsertOtelLogsAndSpans records)
   where
     -- Classify one store's result; @side@ is 'This'/'That' for the written leg,
     -- @losts@ places the under-persist count on that leg ((l,0) for pg, (0,l) for tf).

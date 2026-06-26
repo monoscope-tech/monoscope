@@ -1,6 +1,7 @@
 'use strict';
 import { params } from './main';
 import { getSeriesColor } from './colorMapping';
+import { beginChartFetch } from './chart-fetch-seq';
 const INITIAL_FETCH_INTERVAL = 5000;
 const $ = (id: string) => document.getElementById(id);
 
@@ -288,6 +289,7 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
   if (!shouldFetch) return;
 
   const { query, querySQL, pid, chartId, summarizeBy, summarizeByPrefix } = widgetData;
+  const isStale = beginChartFetch(chartId);
   // Batch DOM updates before fetch
   requestAnimationFrame(() => {
     const loader = $(`${chartId}_loader`);
@@ -334,6 +336,7 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
     }
 
     const { from, to, headers, dataset, rows_per_min, stats, error } = await limitedFetch(`/chart_data?${params}`).then((res) => res.json());
+    if (isStale()) return; // a newer fetch already won; don't overwrite its state
     if (error) {
       // Server-reported SQL failure: show distinct error overlay (not the generic
       // "no data" one) so the user can distinguish a broken widget from an empty range.
@@ -393,7 +396,7 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
   } catch (e) {
     console.error('Failed to fetch new data:', e);
     chart.hideLoading();
-    showNoDataOverlay(chartId, 'Failed to load data', 'error');
+    if (!isStale()) showNoDataOverlay(chartId, 'Failed to load data', 'error');
   } finally {
     // Batch DOM updates after fetch completes
     requestAnimationFrame(() => {
