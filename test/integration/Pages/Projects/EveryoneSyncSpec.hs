@@ -55,7 +55,10 @@ uidFor n = UserId (Unsafe.fromJust $ UUID.fromString $ "00000000-0000-0000-0000-
 
 
 spec :: Spec
-spec = around withTestResources $ describe "@everyone notify_emails is authoritative" do
+-- The second example seeds its precondition from the first, so this keeps aroundAll
+-- and runs sequentially — opting out of the suite's per-test isolation + parallelism
+-- (same as GitSyncSpec).
+spec = sequential $ aroundAll withTestResources $ describe "@everyone notify_emails is authoritative" do
   it "insertProjectMembers appends the member's (lower-cased) email" \tr -> do
     resetState tr
     let u1 = uidFor 2

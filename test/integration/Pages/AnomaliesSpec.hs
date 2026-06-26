@@ -29,7 +29,7 @@ import Pkg.TestUtils
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Servant qualified
-import Test.Hspec (Spec, around, describe, it, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, aroundAll, sequential, describe, it, shouldBe, shouldSatisfy)
 
 
 
@@ -44,7 +44,10 @@ getAnomalies tr = do
 
 
 spec :: Spec
-spec = around withTestResources do
+-- Examples seed state for later ones ("previous test" assertions below), so this
+-- keeps aroundAll and runs sequentially — opting out of the suite's per-test
+-- isolation + parallelism (same as GitSyncSpec).
+spec = sequential $ aroundAll withTestResources do
   describe "Check Anomaly List" do
     it "should return an empty list" \tr -> do
       (_, pg) <-

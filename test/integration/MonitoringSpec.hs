@@ -26,7 +26,10 @@ import Test.Hspec
 
 
 spec :: Spec
-spec = around withTestResources do
+-- Examples share state across the file (later tests reuse rows earlier ones create),
+-- so this keeps aroundAll and runs sequentially — opting out of the suite's per-test
+-- isolation + parallelism (same as GitSyncSpec).
+spec = sequential $ aroundAll withTestResources do
   describe "Query Log Monitors" do
     it "should create monitor with no triggers" $ \tr -> do
       currentTime <- getCurrentTime
@@ -141,7 +144,7 @@ spec = around withTestResources do
 
   describe "Widget Alert Query Sync" do
     it "should sync alert query when widget query changes" \tr -> do
-      -- Reuse dashboard from previous test (tests share state via around)
+      -- Reuse dashboard from previous test (tests share state via aroundAll)
       (_, dashboardsResp) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing (Dashboards.DashboardFilters [])
       dashId <- case dashboardsResp of
         Dashboards.DashboardsGet (PageCtx _ Dashboards.DashboardsGetD{dashboards}) -> do
