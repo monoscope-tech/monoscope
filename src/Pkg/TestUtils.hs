@@ -820,6 +820,9 @@ withTestResources f = withSetup $ \pool cstr -> LogBulk.withBulkStdOutLogger \lo
               , convertkitApiKey = ""
               , convertkitApiSecret = ""
               , requestPubsubTopics = ["monoscope-prod-default"]
+              , -- Without this the field defaults to "" (no .env in CI), so DLQ poison
+                -- routes to topic "" and KafkaConsumerSpec's "otlp_deadletter" lookup finds nothing.
+                kafkaDeadLetterTopic = bool envConfig.kafkaDeadLetterTopic "otlp_deadletter" (T.null envConfig.kafkaDeadLetterTopic)
               , enableBackgroundJobs = True
               , enableEventsTableUpdates = True
               , enableDailyJobScheduling = False

@@ -152,11 +152,17 @@ runSharedKafkaProducer appCtx = interpret \_ -> \case
 
 
 -- | One-shot producer for callers not already in a producer scope (web
--- handlers): runs the action against the shared producer and surfaces a
--- KafkaError as @Left@ text. Wraps the producer + error interpreters so callers
--- need no Kafka imports.
+-- handlers): runs the action against the shared producer and surfaces failure as
+-- @Left@ text. Wraps the producer + error interpreters so callers need no Kafka
+-- imports. 'tryAny' is essential: producer init throws an IO 'K.KafkaError'
+-- (e.g. "sasl.username and sasl.password must be set" when Kafka is unconfigured,
+-- or a broker that's down) which 'runErrorNoCallStack' does NOT catch — without
+-- this the handler crashes instead of degrading to a "warning" for the client.
 runSharedProducer :: IOE :> es => AuthContext -> Eff (KE.KafkaProducer ': Error K.KafkaError ': es) a -> Eff es (Either Text a)
-runSharedProducer appCtx act = first (toText . show) <$> runErrorNoCallStack @K.KafkaError (runSharedKafkaProducer appCtx act)
+runSharedProducer appCtx act =
+  tryAny (runErrorNoCallStack @K.KafkaError (runSharedKafkaProducer appCtx act)) <&> \case
+    Left e -> Left (toText (show e)) -- init/enqueue threw (unconfigured/unreachable Kafka)
+    Right r -> first (toText . show) r -- enqueue surfaced KafkaError via the Error effect
 
 
 -- | Shared batch-processing span for both ingest paths: wraps the fn invocation
