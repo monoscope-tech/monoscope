@@ -380,7 +380,8 @@ ensureTemplateDatabase connInfo templateDbName = do
     _ <- Migration.runMigration templateConn Migration.defaultOptions $ MigrationDirectory migrationsDirr
     -- Nil user as sudo + demo project + test API key.
     _ <-
-      execute templateConn
+      execute
+        templateConn
         [sql| UPDATE users.users SET is_sudo = true WHERE id = '00000000-0000-0000-0000-000000000000';
 
               INSERT INTO projects.projects (id, title, payment_plan, active, deleted_at, weekly_notif, daily_notif)
@@ -390,7 +391,8 @@ ensureTemplateDatabase connInfo templateDbName = do
               INSERT into projects.project_api_keys (active, project_id, title, key_prefix)
               SELECT True, '00000000-0000-0000-0000-000000000000', 'test', 'z6YeJcRJNH0zy9JOg6ZsQzxM9GHBHdSeu+7ugOpZ9jtR94qV'
               WHERE NOT EXISTS (SELECT 1 FROM projects.project_api_keys WHERE key_prefix = 'z6YeJcRJNH0zy9JOg6ZsQzxM9GHBHdSeu+7ugOpZ9jtR94qV');
-          |] ()
+          |]
+        ()
     close templateConn
 
     -- Stamp the checksum (escape quotes defensively) then lock: template + no connections.
