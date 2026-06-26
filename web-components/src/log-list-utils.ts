@@ -266,17 +266,38 @@ export const shouldBufferRecent = (
 // Pagination cursor (ISO) from a row timestamp ± offset. Tolerates ISO strings and
 // numeric epochs in ns/µs/ms — `new Date(epochNs)` otherwise reads ns as ms and
 // produces a year-~55000 cursor that returns nothing, stalling load-more.
-export const cursorFromTimestamp = (timestamp: string | number, offsetMs: number): string => {
-  let ms: number;
+// Magnitude disambiguates the unit; assumes wall-clock log times in
+// ~2001–5138 (ms ∈ [1e11,1e14)), so the thresholds never collide in practice.
+const tsToMs = (timestamp: string | number): number => {
   if (typeof timestamp === 'number' || /^\d+$/.test(String(timestamp))) {
     const n = Number(timestamp);
-    // Magnitude disambiguates the unit; assumes wall-clock log times in
-    // ~2001–5138 (ms ∈ [1e11,1e14)), so the thresholds never collide in practice.
-    ms = n > 1e17 ? n / 1e6 : n > 1e14 ? n / 1e3 : n; // ns→ms, µs→ms, else ms
-  } else {
-    ms = new Date(timestamp).getTime();
+    return n > 1e17 ? n / 1e6 : n > 1e14 ? n / 1e3 : n; // ns→ms, µs→ms, else ms
   }
-  return new Date(ms + offsetMs).toISOString();
+  return new Date(timestamp).getTime();
+};
+
+export const cursorFromTimestamp = (timestamp: string | number, offsetMs: number): string => new Date(tsToMs(timestamp) + offsetMs).toISOString();
+
+// Oldest (minimum) timestamp among loaded rows. spanListTree is the flattened
+// trace tree: child spans (always ≥ their parent's start) are appended after the
+// trace root, so the trailing array element is a newer leaf — NOT the oldest row.
+// Scan for the true min so "earlier"/load-more cursors page strictly before
+// everything already shown instead of re-fetching rows already on screen.
+export const oldestRowTimestamp = (rows: EventLine[], colIdxMap: ColIdxMap): string | number | undefined => {
+  const ti = colIdxMap['timestamp'] ?? colIdxMap['created_at'];
+  if (ti === undefined) return undefined;
+  let best: string | number | undefined;
+  let bestMs = Infinity;
+  for (const r of rows) {
+    const ts = (r as any)?.data?.[ti];
+    if (ts == null) continue;
+    const ms = tsToMs(ts);
+    if (ms < bestMs) {
+      bestMs = ms;
+      best = ts;
+    }
+  }
+  return best;
 };
 
 export const getColumnWidth = (column: string): string =>

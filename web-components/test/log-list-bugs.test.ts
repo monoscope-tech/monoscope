@@ -1,5 +1,5 @@
 import { describe, test, expect, vi } from 'vitest';
-import { row, fakeTransport, deferredTransport, stubFetch, ids, mountList } from './log-list-harness';
+import { row, serverTransport, logPage, treeFromLogs, COLS, deferredTransport, stubFetch, ids, mountList } from './log-list-harness';
 import { shouldBufferRecent, cursorFromTimestamp } from '../src/log-list-utils';
 
 describe('LogList — LOWER', () => {
@@ -54,7 +54,7 @@ describe('LogList — MED correctness', () => {
   // dedup-dropped boundary row on every page. It should match visible rows.
   test('loadedCount equals visible row count after an overlapping load-more', async () => {
     const el = await mountList();
-    el.transport = fakeTransport({ tree: [row('1'), row('2'), row('3')] }, { tree: [row('3'), row('4')] });
+    el.transport = serverTransport(logPage(['1', '2', '3']), logPage(['3', '4'])); // page 2 re-sends boundary row 3
     await el.fetchData('init', false, false, false);
     await el.fetchData('lm', false, false, true);
     expect((el as any).loadedCount).toBe((el as any).spanListTree.length);
@@ -66,10 +66,10 @@ describe('LogList — MED correctness', () => {
   // instead of re-deduping the whole tree.
   test('paginated overlapping pages dedupe to a unique, ordered tree', async () => {
     const el = await mountList();
-    el.transport = fakeTransport(
-      { tree: [row('1'), row('2'), row('3')] },
-      { tree: [row('3'), row('4'), row('5')] }, // 3 overlaps prior page
-      { tree: [row('5'), row('6')] }, // 5 overlaps prior page
+    el.transport = serverTransport(
+      logPage(['1', '2', '3']),
+      logPage(['3', '4', '5']), // 3 overlaps prior page
+      logPage(['5', '6']), // 5 overlaps prior page
     );
     await el.fetchData('init', false, false, false);
     await el.fetchData('lm1', false, false, true);
@@ -81,7 +81,7 @@ describe('LogList — MED correctness', () => {
   // would be wrongly dropped from the new query's results.
   test('refresh resets dedup state so a previously-seen id reappears', async () => {
     const el = await mountList();
-    el.transport = fakeTransport({ tree: [row('1'), row('2')] }, { tree: [row('2')] });
+    el.transport = serverTransport(logPage(['1', '2']), logPage(['2']));
     await el.fetchData('init', false, false, false);
     await el.fetchData('newquery', true, false, false); // refresh / new query
     expect(ids(el)).toEqual(['2']);
@@ -92,8 +92,8 @@ describe('LogList — MED correctness', () => {
   test('buildRecentFetchUrl stops live-tail (with toast) at the upper bound', async () => {
     const el = await mountList();
     window.history.replaceState({}, '', '/log_explorer?to=2026-06-01T00%3A00%3A00.000Z&query=x');
-    (el as any).colIdxMap = { timestamp: 0 };
-    (el as any).spanListTree = [row('1', ['2026-06-01T00:00:00.000Z'])]; // newest is AT `to`
+    el.transport = serverTransport(logPage([['1', '2026-06-01T00:00:00.000Z']])); // newest loaded row is AT `to`
+    await el.fetchData('/log_explorer?to=2026-06-01T00%3A00%3A00.000Z&query=x&json=true', false, false, false);
     (el as any).isLiveStreaming = true;
     (el as any).liveStreamInterval = setInterval(() => {}, 1e7);
     const btn = document.createElement('input');
@@ -117,8 +117,8 @@ describe('LogList — MED correctness', () => {
   test('buildRecentFetchUrl keeps live-tail running while below the upper bound', async () => {
     const el = await mountList();
     window.history.replaceState({}, '', '/log_explorer?to=2026-06-01T00%3A00%3A00.000Z&query=x');
-    (el as any).colIdxMap = { timestamp: 0 };
-    (el as any).spanListTree = [row('1', ['2026-05-01T00:00:00.000Z'])]; // well below `to`
+    el.transport = serverTransport(logPage([['1', '2026-05-01T00:00:00.000Z']])); // well below `to`
+    await el.fetchData('/log_explorer?to=2026-06-01T00%3A00%3A00.000Z&query=x&json=true', false, false, false);
     (el as any).isLiveStreaming = true;
     (el as any).buildRecentFetchUrl();
     expect((el as any).isLiveStreaming).toBe(true);
@@ -129,7 +129,7 @@ describe('LogList — MED correctness', () => {
   test('refresh clears expandedAggregates', async () => {
     const el = await mountList();
     (el as any).expandedAggregates = { hash1: { rows: [['x']], cols: ['id'], colIdxMap: { id: 0 }, hasMore: false, loading: false, skip: 1 } };
-    el.transport = fakeTransport({ tree: [row('1')] });
+    el.transport = serverTransport(logPage(['1']));
     await el.fetchData('newquery', true, false, false);
     expect(Object.keys((el as any).expandedAggregates)).toHaveLength(0);
   });
@@ -155,8 +155,8 @@ describe('LogList — MED correctness', () => {
   test('buildRecentFetchUrl preserves the to bound', async () => {
     const el = await mountList();
     window.history.replaceState({}, '', '/log_explorer?to=2026-06-01T00%3A00%3A00.000Z&query=x');
-    (el as any).colIdxMap = { timestamp: 0 };
-    (el as any).spanListTree = [row('1', ['2026-05-01T00:00:00.000Z'])];
+    el.transport = serverTransport(logPage([['1', '2026-05-01T00:00:00.000Z']]));
+    await el.fetchData('/log_explorer?to=2026-06-01T00%3A00%3A00.000Z&query=x&json=true', false, false, false);
     const url = new URL((el as any).buildRecentFetchUrl(), 'http://localhost');
     expect(url.searchParams.get('to')).toBe('2026-06-01T00:00:00.000Z');
     expect(url.searchParams.has('cursor')).toBe(false);
@@ -166,8 +166,8 @@ describe('LogList — MED correctness', () => {
   test('buildRecentFetchUrl tolerates a nanosecond-epoch timestamp (no year-55000 from)', async () => {
     const el = await mountList();
     window.history.replaceState({}, '', '/log_explorer?query=x');
-    (el as any).colIdxMap = { timestamp: 0 };
-    (el as any).spanListTree = [row('1', [1700000000000000000])]; // ns ≈ Nov 2023
+    el.transport = serverTransport(logPage([['1', 1700000000000000000]])); // ns ≈ Nov 2023
+    await el.fetchData('/log_explorer?query=x&json=true', false, false, false);
     const url = new URL((el as any).buildRecentFetchUrl(), 'http://localhost');
     expect(new Date(url.searchParams.get('from')!).getUTCFullYear()).toBe(2023);
   });
@@ -176,8 +176,8 @@ describe('LogList — MED correctness', () => {
   test('expandTimeRangeUrl tolerates a nanosecond-epoch timestamp in the cursor', async () => {
     const el = await mountList();
     window.history.replaceState({}, '', '/log_explorer?since=1H&query=x');
-    (el as any).colIdxMap = { timestamp: 0 };
-    (el as any).spanListTree = [row('1', [1700000000000000000])];
+    el.transport = serverTransport(logPage([['1', 1700000000000000000]]));
+    await el.fetchData('/log_explorer?since=1H&query=x&json=true', false, false, false);
     const url = new URL((el as any).expandTimeRangeUrl(), 'http://localhost');
     expect(new Date(url.searchParams.get('cursor')!).getUTCFullYear()).toBe(2023);
   });
@@ -186,7 +186,7 @@ describe('LogList — MED correctness', () => {
   // earlier events" every quiet 5s tick even though history isn't exhausted).
   test('an empty recent fetch does not turn on expandTimeRange', async () => {
     const el = await mountList();
-    el.transport = fakeTransport({ tree: [row('1'), row('2')] }, { tree: [], meta: { hasMore: false } });
+    el.transport = serverTransport(logPage(['1', '2']), logPage([])); // 2nd tick returns nothing
     await el.fetchData('initial', false, false, false);
     (el as any).expandTimeRange = false;
     await el.fetchData('recent', false, true, false); // isRecentFetch, returns nothing
@@ -203,6 +203,60 @@ describe('LogList — MED correctness', () => {
     (el as any).updated(new Map([['mode', 'logs']]));
     expect((el as any).liveStreamInterval).toBeNull();
     expect((el as any).isLiveStreaming).toBe(false);
+  });
+});
+
+// Pagination workflow: the cursor for "earlier"/load-more must page strictly
+// before the OLDEST loaded row. Reported symptom: last visible row was 16:54:45
+// but the triggered request used cursor=16:55:02 (NEWER) → "earlier" re-fetched
+// rows already on screen.
+//
+// Driven end-to-end through the real worker pipeline (serverTransport runs the
+// real groupSpans): a server page returns a trace whose root (16:54:45) is the
+// oldest row but whose child span (16:55:02) is later. flattenSpanTree appends
+// the root FIRST then its child, and traces sort newest-start-first, so the last
+// array element is the newer child leaf — not the oldest row. Deriving the cursor
+// from spanListTree[length-1] therefore picked the child's (newer) timestamp.
+describe('LogList — earlier/load-more pagination cursor (worker pipeline)', () => {
+  const tsRoot = '2026-06-26T16:54:45.000Z'; // oldest row: the trace root (visually last)
+  const tsChild = '2026-06-26T16:55:02.644Z'; // its later child span, flattened AFTER the root
+  // A trace (root + one later child) — the shape logPage can't express. Indexed by COLS.
+  const rootRow = [tsRoot, 'span-root', 'trace-1', '', 'server', 'id-root', 100, 1_750_000_485_000_000_000];
+  const childRow = [tsChild, 'span-child', 'trace-1', 'span-root', 'client', 'id-child', 50, 1_750_000_502_644_000_000];
+  const traces = [{ trace_id: 'trace-1', start_time: 1_750_000_485_000_000_000, duration: 100, trace_start_time: tsRoot, root: 'span-root', children: { 'span-root': ['span-child'] } }];
+  const page = (over: any = {}) => ({ logsData: [rootRow, childRow], colIdxMap: COLS, traces, ...over });
+
+  test('load-more requests cursor older than the oldest row (not the trailing child leaf)', async () => {
+    const el = await mountList();
+    window.history.replaceState({}, '', '/log_explorer?query=x');
+    const t = serverTransport(page({ nextUrl: '/log_explorer?query=x&layout=loadmore', hasMore: true }), page());
+    el.transport = t;
+
+    await el.fetchData('/log_explorer?query=x&json=true', false, false, false);
+
+    // The trap the bug fell into: the flattened tree ends on the newer child, while
+    // the oldest VISIBLE (depth-0) row is the root. The cursor must follow the root.
+    const tree = (el as any).spanListTree;
+    expect(tree[tree.length - 1].data[0]).toBe(tsChild); // last array elem is the newer leaf
+    expect(tree.find((r: any) => r.depth === 0).data[0]).toBe(tsRoot); // oldest visible row
+
+    // Fire the load-more and inspect the request that actually hit the endpoint.
+    await el.fetchData((el as any).buildLoadMoreUrl(), false, false, true);
+    const sent = new URL(t.urls[1], 'http://localhost');
+    expect(sent.searchParams.get('cursor')).toBe(cursorFromTimestamp(tsRoot, -10));
+  });
+
+  test('"Show earlier events" (expandTimeRangeUrl) requests cursor from the oldest row', async () => {
+    const el = await mountList();
+    window.history.replaceState({}, '', '/log_explorer?since=1H&query=x');
+    // hasMore:false → after the initial fetch the component shows "Show earlier events".
+    el.transport = serverTransport(page({ hasMore: false }));
+
+    await el.fetchData('/log_explorer?since=1H&query=x&json=true', false, false, false);
+    expect((el as any).expandTimeRange).toBe(true);
+
+    const url = new URL((el as any).expandTimeRangeUrl(), 'http://localhost');
+    expect(url.searchParams.get('cursor')).toBe(cursorFromTimestamp(tsRoot, 0));
   });
 });
 
@@ -278,10 +332,8 @@ describe('LogList — columns survive background refetches', () => {
   // hidden column. Column hiding is effectively broken under live/paginated views.
   test('a hidden column is not restored by a load-more refetch', async () => {
     const el = await mountList();
-    el.transport = fakeTransport(
-      { tree: [row('1')], meta: { cols: ['id', 'service', 'summary'] } },
-      { tree: [row('2')], meta: { cols: ['id', 'service', 'summary'] } },
-    );
+    const cols = ['id', 'service', 'summary'];
+    el.transport = serverTransport(logPage(['1'], { cols }), logPage(['2'], { cols }));
     await el.fetchData('initial', false, false, false);
     el.hideColumn('service');
     expect((el as any).logsColumns).not.toContain('service');
@@ -328,18 +380,19 @@ describe('LogList — concurrent refresh vs load-more', () => {
   // results — cross-query contamination with no visible signal.
   test('a load-more resolving after a refresh does not contaminate the new query', async () => {
     const el = await mountList();
+    // Query A's first page is on screen (built through the real pipeline)...
+    el.transport = serverTransport(logPage(['a1', 'a2']));
+    await el.fetchData('A', false, false, false);
+
+    // ...then a load-more and a refresh race, both resolving out of order.
     const tx = deferredTransport();
     el.transport = tx as any;
-
-    // page of query A is on screen
-    await (async () => { const t = fakeTransport({ tree: [row('a1'), row('a2')] }); el.transport = t as any; await el.fetchData('A', false, false, false); el.transport = tx as any; })();
-
     const loadMore = el.fetchData('A-loadmore', false, false, true); // in flight (deferred)
     const refresh = el.fetchData('B-newquery', true, false, false); // new query, also deferred
 
-    tx.settle(1, [row('b1'), row('b2')]); // refresh (query B) resolves first
+    tx.settle(1, treeFromLogs(['b1', 'b2'])); // refresh (query B) resolves first
     await refresh;
-    tx.settle(0, [row('a3'), row('a4')]); // stale load-more (query A) resolves later
+    tx.settle(0, treeFromLogs(['a3', 'a4'])); // stale load-more (query A) resolves later
     await loadMore;
 
     // Must show ONLY query B's rows — A's older page must not be appended.
@@ -354,11 +407,11 @@ describe('LogList — concurrent refresh vs load-more', () => {
     const loadMore = el.fetchData('lm', false, false, true); // isLoadingMore = true
     const recent = el.fetchData('recent', false, true, false); // isFetchingRecent = true
 
-    tx.settle(1, [row('r1')]); // recent resolves first → its finally runs
+    tx.settle(1, treeFromLogs(['r1'])); // recent resolves first → its finally runs
     await recent;
     expect((el as any).isLoadingMore).toBe(true); // load-more still in flight
 
-    tx.settle(0, [row('r2')]);
+    tx.settle(0, treeFromLogs(['r2']));
     await loadMore;
     expect((el as any).isLoadingMore).toBe(false);
   });

@@ -33,6 +33,7 @@ import {
   dedupeById,
   shouldBufferRecent,
   cursorFromTimestamp,
+  oldestRowTimestamp,
   renderSparkline,
   parseUserAgent,
   isBotUserAgent,
@@ -398,14 +399,10 @@ export class LogList extends LitElement {
       return this.buildJsonUrl();
     }
 
-    // Get the actual oldest item from current data
-    // flipDirection=false (newest first): oldest is at END of array
-    // flipDirection=true (oldest first): oldest is at START of array
-    const lastItem = this.flipDirection ? this.spanListTree[0] : this.spanListTree[this.spanListTree.length - 1];
-
-    // Get timestamp column name (try timestamp first, then created_at)
-    const timestampCol = this.colIdxMap['timestamp'] !== undefined ? 'timestamp' : 'created_at';
-    const timestamp = lastItem?.data?.[this.colIdxMap[timestampCol]];
+    // Oldest loaded row's timestamp — scanned, not positional: the flattened
+    // trace tree appends newer child spans after the oldest trace's root, so the
+    // array endpoints aren't the min. (See oldestRowTimestamp.)
+    const timestamp = oldestRowTimestamp(this.spanListTree, this.colIdxMap);
 
     if (!timestamp) {
       console.warn('[LoadMore] No timestamp found, falling back to nextFetchUrl or buildJsonUrl', {
@@ -449,11 +446,10 @@ export class LogList extends LitElement {
       url.searchParams.set('since', target);
     }
 
-    // Use the timestamp of the oldest log currently in the list as the cursor
-    // This ensures we fetch older logs when expanding the time range
+    // Use the oldest loaded row's timestamp as the cursor so we fetch strictly
+    // older logs when expanding the range (scanned, not positional — see above).
     if (this.spanListTree.length > 0) {
-      const oldestItem = this.flipDirection ? this.spanListTree[0] : this.spanListTree[this.spanListTree.length - 1];
-      const oldestTimestamp = oldestItem?.data?.[this.colIdxMap['timestamp'] ?? this.colIdxMap['created_at']];
+      const oldestTimestamp = oldestRowTimestamp(this.spanListTree, this.colIdxMap);
 
       if (oldestTimestamp) {
         // Same ns/µs/ms tolerance as load-more; String(epochNs) would stall the server cursor.
