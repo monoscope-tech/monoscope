@@ -283,8 +283,7 @@ export const cursorFromTimestamp = (timestamp: string | number, offsetMs: number
 // and traces sort newest-first, so NEITHER array endpoint is the true min/max.
 // Scan instead, so "earlier"/load-more (oldest) and live-tail (newest) cursors
 // page strictly outside everything already shown.
-type ArrayExtremum = (arr: EventLine[], iteratee: (r: EventLine) => number | undefined) => EventLine | undefined;
-const byRowTs = (by: ArrayExtremum) => (rows: EventLine[], colIdxMap: ColIdxMap): string | number | undefined => {
+const byRowTs = (by: typeof minBy) => (rows: EventLine[], colIdxMap: ColIdxMap): string | number | undefined => {
   const ti = colIdxMap['timestamp'] ?? colIdxMap['created_at'];
   if (ti === undefined) return undefined;
   // minBy/maxBy skip null/undefined/NaN iteratees, so no pre-filter pass needed.

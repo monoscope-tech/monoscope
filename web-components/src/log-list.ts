@@ -5,7 +5,7 @@ import { customElement, state, query, property } from 'lit/decorators.js';
 import { ref, createRef } from 'lit/directives/ref.js';
 import { APTEvent, ChildrenForLatency, ColIdxMap, EventLine, ServerTraceEntry, Trace, TraceDataMap } from './types/types';
 import debounce from 'lodash/debounce';
-import { includes, startsWith, map, forEach, compact, pick, chunk, chain, lt } from 'lodash';
+import { includes, startsWith, map, forEach, compact, chunk, chain, lt } from 'lodash';
 // Import worker as URL instead of worker instance
 import LogWorkerUrl from './log-worker?worker&url';
 import { groupSpans } from './log-worker-functions';
@@ -385,8 +385,8 @@ export class LogList extends LitElement {
   // newest → live-tail lower bound.
   private oldestCursor(offsetMs: number) { return this.edgeCursor(oldestRowTimestamp, offsetMs); }
   private newestCursor(offsetMs: number) { return this.edgeCursor(newestRowTimestamp, offsetMs); }
-  private edgeCursor(pick: (rows: EventLine[], colIdxMap: ColIdxMap) => string | number | undefined, offsetMs: number): string | null {
-    const ts = pick(this.spanListTree, this.colIdxMap);
+  private edgeCursor(by: typeof oldestRowTimestamp, offsetMs: number): string | null {
+    const ts = by(this.spanListTree, this.colIdxMap);
     return ts == null ? null : cursorFromTimestamp(ts, offsetMs);
   }
 
@@ -589,14 +589,14 @@ export class LogList extends LitElement {
     if (!countEl) return;
     let countText: string, suffixText: string;
     if (this.mode === 'patterns') {
-      countText = `${this.formatCount(this.totalPatterns)} patterns`;
-      suffixText = ` found (based on ${this.formatCount(this.totalCount)} logs)`;
+      countText = `${formatPatternCount(this.totalPatterns)} patterns`;
+      suffixText = ` found (based on ${formatPatternCount(this.totalCount)} logs)`;
     } else if (this.mode === 'sessions') {
-      countText = `${this.formatCount(this.totalSessions)} sessions`;
-      suffixText = this.totalCount ? ` (${this.formatCount(this.totalCount)} events)` : '';
+      countText = `${formatPatternCount(this.totalSessions)} sessions`;
+      suffixText = this.totalCount ? ` (${formatPatternCount(this.totalCount)} events)` : '';
     } else {
-      countText = this.formatCount(this.loadedCount);
-      suffixText = this.loadedCount < this.totalCount ? ` of ${this.formatCount(this.totalCount)} rows` : ' rows';
+      countText = formatPatternCount(this.loadedCount);
+      suffixText = this.loadedCount < this.totalCount ? ` of ${formatPatternCount(this.totalCount)} rows` : ' rows';
     }
     countEl.textContent = countText;
     if (suffixEl) suffixEl.textContent = suffixText;
@@ -624,15 +624,6 @@ export class LogList extends LitElement {
       // Remove spinner
       spinner.remove();
     }
-  }
-
-  private formatCount(count: number): string {
-    if (count >= 1000000) {
-      return (count / 1000000).toFixed(1) + 'M';
-    } else if (count >= 1000) {
-      return (count / 1000).toFixed(1) + 'K';
-    }
-    return count.toString();
   }
 
   firstUpdated() {
