@@ -285,6 +285,18 @@ describe('LogList — earlier/load-more pagination cursor (worker pipeline)', ()
   });
 });
 
+// serverTransport's leading-boolean opts into flipped (oldest-first) grouping so
+// flipped-component tests get a tree order matching what the component renders.
+// Guards the consume-the-flag branch (queue must stay aligned, not off-by-one).
+describe('serverTransport — flipDirection opt-in', () => {
+  test('leading `true` flips grouping to oldest-first; default stays newest-first', async () => {
+    const def = await serverTransport(logPage(['1', '2', '3']))('u'); // id 1 = newest
+    expect(def.tree.map((r: any) => r.id)).toEqual(['1', '2', '3']);
+    const flipped = await serverTransport(true, logPage(['1', '2', '3']))('u');
+    expect(flipped.tree.map((r: any) => r.id)).toEqual(['3', '2', '1']);
+  });
+});
+
 // M4: buffering decision (pure) — buffer whenever scrolled off the insertion edge.
 describe('shouldBufferRecent', () => {
   test('newest-first: buffers as soon as scrolled off the top (>0), not at 30px', () => {

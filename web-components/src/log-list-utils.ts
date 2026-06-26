@@ -1,7 +1,7 @@
 import { format, isValid } from 'date-fns';
 import clsx from 'clsx';
 import { html, svg, TemplateResult } from 'lit';
-import { get, minBy, maxBy } from 'lodash';
+import { minBy, maxBy } from 'lodash';
 import { ColIdxMap, EventLine } from './types/types';
 import { AnsiUp } from 'ansi-up';
 // Configuration objects
@@ -288,10 +288,13 @@ const rowTimestamp = (rows: EventLine[], colIdxMap: ColIdxMap, by: typeof minBy)
   if (ti === undefined) return undefined;
   // minBy/maxBy skip null/undefined/NaN iteratees, so no pre-filter pass needed.
   const best = by(rows, r => (r.data[ti] != null ? tsToMs(r.data[ti]) : undefined));
+  // Returns the RAW cell value (ISO string or ns/µs/ms epoch), NOT milliseconds —
+  // feed it straight to cursorFromTimestamp, which re-tolerates the unit. Don't
+  // treat it as ms (that's the ns→year-55000 trap this scan exists to avoid).
   return best?.data[ti];
 };
-export const oldestRowTimestamp = (rows: EventLine[], colIdxMap: ColIdxMap) => rowTimestamp(rows, colIdxMap, minBy);
-export const newestRowTimestamp = (rows: EventLine[], colIdxMap: ColIdxMap) => rowTimestamp(rows, colIdxMap, maxBy);
+export const oldestRowTimestamp = (rows: EventLine[], colIdxMap: ColIdxMap): string | number | undefined => rowTimestamp(rows, colIdxMap, minBy);
+export const newestRowTimestamp = (rows: EventLine[], colIdxMap: ColIdxMap): string | number | undefined => rowTimestamp(rows, colIdxMap, maxBy);
 
 export const getColumnWidth = (column: string): string =>
   COLUMN_WIDTHS[column as keyof typeof COLUMN_WIDTHS] || (column === 'id' ? '' : 'w-[16ch] shrink-0');
