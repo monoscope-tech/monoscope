@@ -686,6 +686,7 @@ requireMinio tr pending action
   | tr.trMinioAvailable = action
   | otherwise = pending "MinIO not reachable — run `make minio-local` (or set MINIO_ENDPOINT)"
 
+
 -- One process-lifetime bulk logger shared by every example, never shut down.
 -- The old per-example `withBulkStdOutLogger` bracket shut its logger down at
 -- example end, but the background-job/extraction threads the example spawned keep
@@ -695,6 +696,7 @@ requireMinio tr pending action
 {-# NOINLINE sharedTestLogger #-}
 sharedTestLogger :: Log.Logger
 sharedTestLogger = unsafePerformIO $ mkBulkLogger "test-stdout-bulk" (mapM_ (putTextLn . showLogMessage Nothing)) (pure ())
+
 
 withSharedLogger :: (Log.Logger -> m a) -> m a
 withSharedLogger act = act sharedTestLogger
