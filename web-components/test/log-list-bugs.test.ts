@@ -61,6 +61,69 @@ describe('LogList — MED correctness', () => {
     expect((el as any).loadedCount).toBe(4);
   });
 
+  // Dedup must hold across many overlapping pages (inclusive-cursor boundary row
+  // recurs each page) now that the merge filters via a persistent seenIds set
+  // instead of re-deduping the whole tree.
+  test('paginated overlapping pages dedupe to a unique, ordered tree', async () => {
+    const el = await mountList();
+    el.transport = fakeTransport(
+      { tree: [row('1'), row('2'), row('3')] },
+      { tree: [row('3'), row('4'), row('5')] }, // 3 overlaps prior page
+      { tree: [row('5'), row('6')] }, // 5 overlaps prior page
+    );
+    await el.fetchData('init', false, false, false);
+    await el.fetchData('lm1', false, false, true);
+    await el.fetchData('lm2', false, false, true);
+    expect(ids(el)).toEqual(['1', '2', '3', '4', '5', '6']);
+  });
+
+  // A refresh must reset the dedup state, else an id seen by the previous query
+  // would be wrongly dropped from the new query's results.
+  test('refresh resets dedup state so a previously-seen id reappears', async () => {
+    const el = await mountList();
+    el.transport = fakeTransport({ tree: [row('1'), row('2')] }, { tree: [row('2')] });
+    await el.fetchData('init', false, false, false);
+    await el.fetchData('newquery', true, false, false); // refresh / new query
+    expect(ids(el)).toEqual(['2']);
+  });
+
+  // Live-tail on a bounded range must stop (not hang silently) once the newest
+  // loaded row reaches `to`: from=newest+10ms ≥ to → every tick fetches empty.
+  test('buildRecentFetchUrl stops live-tail (with toast) at the upper bound', async () => {
+    const el = await mountList();
+    window.history.replaceState({}, '', '/log_explorer?to=2026-06-01T00%3A00%3A00.000Z&query=x');
+    (el as any).colIdxMap = { timestamp: 0 };
+    (el as any).spanListTree = [row('1', ['2026-06-01T00:00:00.000Z'])]; // newest is AT `to`
+    (el as any).isLiveStreaming = true;
+    (el as any).liveStreamInterval = setInterval(() => {}, 1e7);
+    const btn = document.createElement('input');
+    btn.type = 'checkbox';
+    btn.checked = true;
+    (el as any).liveBtn = btn;
+    let toast: string | undefined;
+    const onToast = (e: any) => (toast = e.detail.value[0]);
+    document.body.addEventListener('errorToast', onToast);
+    try {
+      (el as any).buildRecentFetchUrl();
+      expect((el as any).isLiveStreaming).toBe(false);
+      expect((el as any).liveStreamInterval).toBeNull();
+      expect(btn.checked).toBe(false);
+      expect(toast).toMatch(/end of the selected time range/);
+    } finally {
+      document.body.removeEventListener('errorToast', onToast);
+    }
+  });
+
+  test('buildRecentFetchUrl keeps live-tail running while below the upper bound', async () => {
+    const el = await mountList();
+    window.history.replaceState({}, '', '/log_explorer?to=2026-06-01T00%3A00%3A00.000Z&query=x');
+    (el as any).colIdxMap = { timestamp: 0 };
+    (el as any).spanListTree = [row('1', ['2026-05-01T00:00:00.000Z'])]; // well below `to`
+    (el as any).isLiveStreaming = true;
+    (el as any).buildRecentFetchUrl();
+    expect((el as any).isLiveStreaming).toBe(true);
+  });
+
   // M2: a refresh must drop inline-expanded aggregate children, else stale rows
   // from the previous query render under a key that survives the new query.
   test('refresh clears expandedAggregates', async () => {

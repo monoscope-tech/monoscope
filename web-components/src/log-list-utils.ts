@@ -240,10 +240,12 @@ export const generateId = (): string => Math.random().toString(36).substring(2, 
 // and any expand state on the kept row). Cursor/recent pagination uses inclusive
 // timestamp boundaries, so the boundary row recurs across pages — without this,
 // "load more" / live-tail appends a duplicate of the last/first visible row.
-export const dedupeById = <T extends { id: string }>(items: T[]): T[] => {
+// id is widened to allow null/undefined: rows are built from untyped server data,
+// so the guard against a missing id is a real runtime check, not dead code.
+export const dedupeById = <T extends { id: string | null | undefined }>(items: T[]): T[] => {
   const seen = new Set<string>();
   return items.filter((it) => {
-    if (it.id == null || seen.has(it.id)) return false; // == null catches both null and undefined
+    if (it.id == null || seen.has(it.id)) return false;
     seen.add(it.id);
     return true;
   });
