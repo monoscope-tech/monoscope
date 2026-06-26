@@ -259,7 +259,9 @@ withLocalSetup f = do
     migratedConfig <- throwE $ cacheAction ("./.tmp/postgres/" <> show dirSize) migrate combinedConfig
     withConfig migratedConfig $ \db -> do
       let cstr = toConnectionString db
-      pool <- newPool (defaultPoolConfig (connectPostgreSQL cstr) close 60 5)
+      -- Same per-test budget as withExternalDBSetup: small pool so the parallel
+      -- suite stays under Postgres's connection cap (3 pg + 3×2 hasql ≈ 9 per test).
+      pool <- newPool (defaultPoolConfig (connectPostgreSQL cstr) close 60 3)
       f pool cstr
 
 
@@ -773,6 +775,9 @@ withTestResources f = withSetup $ \pool cstr -> LogBulk.withBulkStdOutLogger \lo
           )
   uuidRef <- newIORef (map (UUID.fromWords 0 0 0) [1 .. 100000])
   testClock <- newTestClock frozenTime
+  -- Release the three hasql pools when the example finishes. Under `around`
+  -- (per-example resources) they're created once per test; without this each test
+  -- leaks ~6 connections, exhausting Postgres's cap across the parallel suite.
   f
     TestResources
       { trPool = pool
@@ -786,6 +791,7 @@ withTestResources f = withSetup $ \pool cstr -> LogBulk.withBulkStdOutLogger \lo
       , trMinioAvailable = minioReady
       , trTestClock = testClock
       }
+    `finally` (OHasql.release hasqlMain >> OHasql.release hasqlJobs >> OHasql.release hasqlTf)
 
 
 toServantResponse :: TestResources -> ATAuthCtx (RespHeaders a) -> IO (RespHeaders a, a)

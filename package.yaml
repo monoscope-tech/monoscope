@@ -278,6 +278,7 @@ tests:
       - -O0
     dependencies:
       - monoscope
+      - base # System.ServerSpec imports Control.Concurrent/Exception directly (not via relude)
       - hs-opentelemetry-instrumentation-auto
       - hspec
       - relude >= 1.2.0.0
