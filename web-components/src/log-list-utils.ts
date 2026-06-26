@@ -286,7 +286,8 @@ export const cursorFromTimestamp = (timestamp: string | number, offsetMs: number
 const rowTimestamp = (rows: EventLine[], colIdxMap: ColIdxMap, by: typeof minBy): string | number | undefined => {
   const ti = colIdxMap['timestamp'] ?? colIdxMap['created_at'];
   if (ti === undefined) return undefined;
-  const best = by(rows.filter(r => r.data[ti] != null), r => tsToMs(r.data[ti]));
+  // minBy/maxBy skip null/undefined/NaN iteratees, so no pre-filter pass needed.
+  const best = by(rows, r => (r.data[ti] != null ? tsToMs(r.data[ti]) : undefined));
   return best?.data[ti];
 };
 export const oldestRowTimestamp = (rows: EventLine[], colIdxMap: ColIdxMap) => rowTimestamp(rows, colIdxMap, minBy);

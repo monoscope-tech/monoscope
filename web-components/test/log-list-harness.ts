@@ -22,12 +22,13 @@ export const COLS = { timestamp: 0, latency_breakdown: 1, trace_id: 2, parent_id
 // Deterministic per-id timestamp: numeric ids sort newest-first (id "1" newest),
 // and the SAME id maps to the SAME time across pages — so overlapping-page dedup
 // behaves as it does against the real server.
-const TS_BASE = Date.parse('2026-06-26T17:00:00.000Z');
+const TS_BASE = Date.parse('2024-01-01T00:00:00.000Z'); // stable past anchor
 const idToTs = (id: string) => new Date(TS_BASE - (/^\d+$/.test(id) ? Number(id) : [...id].reduce((a, c) => a + c.charCodeAt(0), 0)) * 1000).toISOString();
 const startNs = (ts: string | number) => (typeof ts === 'number' ? ts : Date.parse(ts) * 1e6);
 
 // One server-shaped standalone log row (kind='log'). Positional, in COLS order.
-export const logRow = (id: string, ts: string | number = idToTs(id)): any[] => [ts, id, id, '', 'log', id, 0, startNs(ts)];
+// Internal to the page builders below — tests construct fixtures via logPage.
+const logRow = (id: string, ts: string | number = idToTs(id)): any[] => [ts, id, id, '', 'log', id, 0, startNs(ts)];
 // The trace-adjacency entry the server emits for a standalone log (its own trace).
 const logTrace = (id: string, ts: string | number = idToTs(id)) => ({ trace_id: id, start_time: startNs(ts), duration: 0, trace_start_time: typeof ts === 'string' ? ts : null, root: id, children: {} });
 
@@ -66,9 +67,11 @@ export const fakeTransport = (...pages: { tree: any[]; meta?: any }[]) => {
 // and runs the REAL groupSpans to flatten them into the tree. Tests using it
 // exercise the same fetch → group → merge → build-next-url pipeline the browser
 // does, instead of hand-feeding a pre-built tree. Records the urls requested.
-// NOTE: groups newest-first (flipDirection=false); a test that sets
-// el.flipDirection = true needs its own transport, or this gets the order wrong.
+// Groups newest-first by default; pass a leading `true` to match a component
+// with flipDirection set (e.g. `serverTransport(true, page1, page2)`), else its
+// tree order won't match what the component renders.
 export const serverTransport = (...pages: any[]) => {
+  const flipDirection = typeof pages[0] === 'boolean' ? (pages.shift() as boolean) : false;
   const q = [...pages];
   const urls: string[] = [];
   const fn = async (url: string) => {
@@ -77,7 +80,7 @@ export const serverTransport = (...pages: any[]) => {
     const colIdxMap = d.colIdxMap ?? {};
     const traces = d.traces ?? [];
     const n = d.logsData?.length ?? 0;
-    const tree = n ? groupSpans(d.logsData, colIdxMap, {}, false, traces) : [];
+    const tree = n ? groupSpans(d.logsData, colIdxMap, {}, flipDirection, traces) : [];
     return {
       tree,
       meta: meta({
