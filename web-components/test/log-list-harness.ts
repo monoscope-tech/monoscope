@@ -1,6 +1,7 @@
 // Shared harness for high-level LogList behavior tests: mount the real component,
 // feed canned {tree, meta} via the transport seam (no Web Worker / network), and
 // drive fetchData / events as a user would. See web_components_test_harness memory.
+import { sum } from 'lodash';
 import { LogList } from '../src/log-list';
 import { groupSpans } from '../src/log-worker-functions';
 
@@ -23,14 +24,17 @@ export const COLS = { timestamp: 0, latency_breakdown: 1, trace_id: 2, parent_id
 // and the SAME id maps to the SAME time across pages — so overlapping-page dedup
 // behaves as it does against the real server.
 const TS_BASE = Date.parse('2024-01-01T00:00:00.000Z'); // stable past anchor
-const idToTs = (id: string) => new Date(TS_BASE - (/^\d+$/.test(id) ? Number(id) : [...id].reduce((a, c) => a + c.charCodeAt(0), 0)) * 1000).toISOString();
+const idToTs = (id: string) => new Date(TS_BASE - (/^\d+$/.test(id) ? Number(id) : sum([...id].map(c => c.charCodeAt(0)))) * 1000).toISOString();
+// Fixture-only: numeric input is taken as already-nanoseconds (the server's start_time_ns),
+// strings as ISO → ns. Deliberately NOT tsToMs (which detects unit + converts to ms).
 const startNs = (ts: string | number) => (typeof ts === 'number' ? ts : Date.parse(ts) * 1e6);
+const tsIso = (ts: string | number) => (typeof ts === 'string' ? ts : new Date(ts / 1e6).toISOString());
 
 // One server-shaped standalone log row (kind='log'). Positional, in COLS order.
 // Internal to the page builders below — tests construct fixtures via logPage.
 const logRow = (id: string, ts: string | number = idToTs(id)): any[] => [ts, id, id, '', 'log', id, 0, startNs(ts)];
 // The trace-adjacency entry the server emits for a standalone log (its own trace).
-const logTrace = (id: string, ts: string | number = idToTs(id)) => ({ trace_id: id, start_time: startNs(ts), duration: 0, trace_start_time: typeof ts === 'string' ? ts : null, root: id, children: {} });
+const logTrace = (id: string, ts: string | number = idToTs(id)) => ({ trace_id: id, start_time: startNs(ts), duration: 0, trace_start_time: tsIso(ts), root: id, children: {} });
 
 type RowSpec = string | [string, string | number]; // id, or [id, explicit-timestamp]
 const norm = (r: RowSpec): [string, string | number] => (Array.isArray(r) ? r : [r, idToTs(r)]);
@@ -67,11 +71,7 @@ export const fakeTransport = (...pages: { tree: any[]; meta?: any }[]) => {
 // and runs the REAL groupSpans to flatten them into the tree. Tests using it
 // exercise the same fetch → group → merge → build-next-url pipeline the browser
 // does, instead of hand-feeding a pre-built tree. Records the urls requested.
-// Groups newest-first by default; pass a leading `true` to match a component
-// with flipDirection set (e.g. `serverTransport(true, page1, page2)`), else its
-// tree order won't match what the component renders.
-export const serverTransport = (...pages: any[]) => {
-  const flipDirection = typeof pages[0] === 'boolean' ? (pages.shift() as boolean) : false;
+const makeServerTransport = (flipDirection: boolean, pages: any[]) => {
   const q = [...pages];
   const urls: string[] = [];
   const fn = async (url: string) => {
@@ -85,12 +85,18 @@ export const serverTransport = (...pages: any[]) => {
       tree,
       meta: meta({
         nextUrl: d.nextUrl ?? '', recentUrl: d.recentUrl ?? '', cols: d.cols ?? Object.keys(colIdxMap),
-        colIdxMap, count: d.count ?? 0, traces, hasMore: d.hasMore ?? n > 0, queryResultCount: n, // worker: empty→false, full→true
+        // Mirrors the worker: empty page → false, full page → true. So a single
+        // full page leaves hasMore=true; pass { hasMore: false } to fire expandTimeRange.
+        colIdxMap, count: d.count ?? 0, traces, hasMore: d.hasMore ?? n > 0, queryResultCount: n,
       }),
     };
   };
   return Object.assign(fn, { urls });
 };
+// Groups newest-first (matches a component with flipDirection unset); use
+// serverTransportFlipped for a flipDirection=true component so the tree order matches.
+export const serverTransport = (...pages: any[]) => makeServerTransport(false, pages);
+export const serverTransportFlipped = (...pages: any[]) => makeServerTransport(true, pages);
 
 // Transport whose responses are resolved manually, to test out-of-order / concurrent fetches.
 export const deferredTransport = () => {

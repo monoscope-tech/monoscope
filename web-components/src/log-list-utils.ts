@@ -288,10 +288,7 @@ const rowTimestamp = (rows: EventLine[], colIdxMap: ColIdxMap, by: typeof minBy)
   if (ti === undefined) return undefined;
   // minBy/maxBy skip null/undefined/NaN iteratees, so no pre-filter pass needed.
   const best = by(rows, r => (r.data[ti] != null ? tsToMs(r.data[ti]) : undefined));
-  // Returns the RAW cell value (ISO string or ns/µs/ms epoch), NOT milliseconds —
-  // feed it straight to cursorFromTimestamp, which re-tolerates the unit. Don't
-  // treat it as ms (that's the ns→year-55000 trap this scan exists to avoid).
-  return best?.data[ti];
+  return best?.data[ti]; // RAW value, not ms — cursorFromTimestamp re-tolerates the unit
 };
 export const oldestRowTimestamp = (rows: EventLine[], colIdxMap: ColIdxMap): string | number | undefined => rowTimestamp(rows, colIdxMap, minBy);
 export const newestRowTimestamp = (rows: EventLine[], colIdxMap: ColIdxMap): string | number | undefined => rowTimestamp(rows, colIdxMap, maxBy);

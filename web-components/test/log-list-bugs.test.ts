@@ -1,5 +1,5 @@
 import { describe, test, expect, vi } from 'vitest';
-import { row, serverTransport, logPage, treeFromLogs, COLS, deferredTransport, stubFetch, ids, mountList } from './log-list-harness';
+import { row, serverTransport, serverTransportFlipped, logPage, treeFromLogs, COLS, deferredTransport, stubFetch, ids, mountList } from './log-list-harness';
 import { shouldBufferRecent, cursorFromTimestamp } from '../src/log-list-utils';
 
 describe('LogList — LOWER', () => {
@@ -292,7 +292,7 @@ describe('serverTransport — flipDirection opt-in', () => {
   test('leading `true` flips grouping to oldest-first; default stays newest-first', async () => {
     const def = await serverTransport(logPage(['1', '2', '3']))('u'); // id 1 = newest
     expect(def.tree.map((r: any) => r.id)).toEqual(['1', '2', '3']);
-    const flipped = await serverTransport(true, logPage(['1', '2', '3']))('u');
+    const flipped = await serverTransportFlipped(logPage(['1', '2', '3']))('u');
     expect(flipped.tree.map((r: any) => r.id)).toEqual(['3', '2', '1']);
   });
 });
