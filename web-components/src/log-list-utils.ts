@@ -1,7 +1,7 @@
 import { format, isValid } from 'date-fns';
 import clsx from 'clsx';
 import { html, svg, TemplateResult } from 'lit';
-import { get } from 'lodash';
+import { get, minBy, maxBy } from 'lodash';
 import { ColIdxMap, EventLine } from './types/types';
 import { AnsiUp } from 'ansi-up';
 // Configuration objects
@@ -278,27 +278,19 @@ const tsToMs = (timestamp: string | number): number => {
 
 export const cursorFromTimestamp = (timestamp: string | number, offsetMs: number): string => new Date(tsToMs(timestamp) + offsetMs).toISOString();
 
-// Oldest (minimum) timestamp among loaded rows. spanListTree is the flattened
-// trace tree: child spans (always ≥ their parent's start) are appended after the
-// trace root, so the trailing array element is a newer leaf — NOT the oldest row.
-// Scan for the true min so "earlier"/load-more cursors page strictly before
-// everything already shown instead of re-fetching rows already on screen.
-export const oldestRowTimestamp = (rows: EventLine[], colIdxMap: ColIdxMap): string | number | undefined => {
+// Extremum timestamp among loaded rows. spanListTree is the flattened trace tree:
+// child spans (always ≥ their parent's start) are appended after the trace root
+// and traces sort newest-first, so NEITHER array endpoint is the true min/max.
+// Scan instead, so "earlier"/load-more (oldest) and live-tail (newest) cursors
+// page strictly outside everything already shown.
+const rowTimestamp = (rows: EventLine[], colIdxMap: ColIdxMap, by: typeof minBy): string | number | undefined => {
   const ti = colIdxMap['timestamp'] ?? colIdxMap['created_at'];
   if (ti === undefined) return undefined;
-  let best: string | number | undefined;
-  let bestMs = Infinity;
-  for (const r of rows) {
-    const ts = (r as any)?.data?.[ti];
-    if (ts == null) continue;
-    const ms = tsToMs(ts);
-    if (ms < bestMs) {
-      bestMs = ms;
-      best = ts;
-    }
-  }
-  return best;
+  const best = by(rows.filter(r => r.data[ti] != null), r => tsToMs(r.data[ti]));
+  return best?.data[ti];
 };
+export const oldestRowTimestamp = (rows: EventLine[], colIdxMap: ColIdxMap) => rowTimestamp(rows, colIdxMap, minBy);
+export const newestRowTimestamp = (rows: EventLine[], colIdxMap: ColIdxMap) => rowTimestamp(rows, colIdxMap, maxBy);
 
 export const getColumnWidth = (column: string): string =>
   COLUMN_WIDTHS[column as keyof typeof COLUMN_WIDTHS] || (column === 'id' ? '' : 'w-[16ch] shrink-0');

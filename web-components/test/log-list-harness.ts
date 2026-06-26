@@ -45,7 +45,8 @@ export const logPage = (rows: RowSpec[], over: any = {}) => ({
   logsData: rows.map((r) => logRow(...norm(r))), colIdxMap: COLS, traces: rows.map((r) => logTrace(...norm(r))), ...over,
 });
 // The flattened tree groupSpans produces for those rows — for deferredTransport.settle.
-export const treeFromLogs = (rows: RowSpec[]) => { const p = logPage(rows); return groupSpans(p.logsData, p.colIdxMap as any, {}, false, p.traces); };
+// flipDirection defaults newest-first; pass true to match a component with flipDirection set.
+export const treeFromLogs = (rows: RowSpec[], flipDirection = false) => { const p = logPage(rows); return groupSpans(p.logsData, p.colIdxMap as any, {}, flipDirection, p.traces); };
 
 export const meta = (over: any = {}) => ({
   serviceColors: {}, nextUrl: '', recentUrl: '', cols: ['id'], colIdxMap: { id: 0 },
@@ -69,6 +70,8 @@ export const fakeTransport = (...pages: { tree: any[]; meta?: any }[]) => {
 // and runs the REAL groupSpans to flatten them into the tree. Tests using it
 // exercise the same fetch → group → merge → build-next-url pipeline the browser
 // does, instead of hand-feeding a pre-built tree. Records the urls requested.
+// NOTE: groups newest-first (flipDirection=false); a test that sets
+// el.flipDirection = true needs its own transport, or this gets the order wrong.
 export const serverTransport = (...pages: any[]) => {
   const q = [...pages];
   const urls: string[] = [];

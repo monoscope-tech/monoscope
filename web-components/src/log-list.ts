@@ -34,6 +34,7 @@ import {
   shouldBufferRecent,
   cursorFromTimestamp,
   oldestRowTimestamp,
+  newestRowTimestamp,
   renderSparkline,
   parseUserAgent,
   isBotUserAgent,
@@ -357,8 +358,10 @@ export class LogList extends LitElement {
 
     // If we have data, update the 'from' parameter to fetch newer data
     if (this.spanListTree.length > 0) {
-      const firstItem = this.flipDirection ? this.spanListTree[this.spanListTree.length - 1] : this.spanListTree[0];
-      const timestamp = firstItem?.data?.[this.colIdxMap['timestamp'] ?? this.colIdxMap['created_at']];
+      // Newest loaded row — scanned, not positional: a child span of the newest
+      // trace starts later than (and sits after) its root, so spanListTree[0]
+      // isn't the max. (Mirror of oldestRowTimestamp; see newestRowTimestamp.)
+      const timestamp = newestRowTimestamp(this.spanListTree, this.colIdxMap);
 
       if (timestamp) {
         // cursorFromTimestamp tolerates ISO + ns/µs/ms epochs (+10ms so we skip the newest row);

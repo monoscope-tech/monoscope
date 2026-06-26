@@ -124,6 +124,31 @@ describe('LogList — MED correctness', () => {
     expect((el as any).isLiveStreaming).toBe(true);
   });
 
+  // Symmetric to the load-more cursor bug: the NEWEST timestamp must be a scan, not
+  // spanListTree[0]. The newest trace's child span starts later than its root but is
+  // flattened AFTER it, so positional access undercounts `from` and the to-boundary
+  // stop-check never fires → live-tail polls an empty [from,to] window forever.
+  test('buildRecentFetchUrl stops live-tail using the newest row (later child span), not the trace root', async () => {
+    const el = await mountList();
+    const tRoot = '2026-06-01T00:00:00.000Z';
+    const tChild = '2026-06-01T00:00:05.000Z'; // newer child of the same trace (sits after root in the tree)
+    const to = '2026-06-01T00:00:02.000Z'; // between root+10ms and child+10ms
+    const rootRow = [tRoot, 's-root', 'tr', '', 'server', 'i-root', 100, 1_780_272_000_000_000_000];
+    const childRow = [tChild, 's-child', 'tr', 's-root', 'client', 'i-child', 50, 1_780_272_005_000_000_000];
+    const traces = [{ trace_id: 'tr', start_time: 1_780_272_000_000_000_000, duration: 100, trace_start_time: tRoot, root: 's-root', children: { 's-root': ['s-child'] } }];
+    window.history.replaceState({}, '', `/log_explorer?to=${encodeURIComponent(to)}&query=x`);
+    el.transport = serverTransport({ logsData: [rootRow, childRow], colIdxMap: COLS, traces });
+    await el.fetchData(`/log_explorer?to=${encodeURIComponent(to)}&query=x&json=true`, false, false, false);
+    (el as any).isLiveStreaming = true;
+    (el as any).liveStreamInterval = setInterval(() => {}, 1e7);
+    const btn = document.createElement('input');
+    btn.type = 'checkbox';
+    btn.checked = true;
+    (el as any).liveBtn = btn;
+    (el as any).buildRecentFetchUrl();
+    expect((el as any).isLiveStreaming).toBe(false); // newest=child → from=child+10ms ≥ to → stops
+  });
+
   // M2: a refresh must drop inline-expanded aggregate children, else stale rows
   // from the previous query render under a key that survives the new query.
   test('refresh clears expandedAggregates', async () => {
