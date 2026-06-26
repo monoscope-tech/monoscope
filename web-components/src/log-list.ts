@@ -32,7 +32,6 @@ import {
   generateId,
   dedupeById,
   shouldBufferRecent,
-  cursorFromTimestamp,
   oldestRowTimestamp,
   newestRowTimestamp,
   renderSparkline,
@@ -357,7 +356,7 @@ export class LogList extends LitElement {
     url.searchParams.set('json', 'true');
 
     // Lower bound = newest loaded row + 10ms (skip it). null when empty.
-    const from = this.newestCursor(10);
+    const from = this.edgeCursor(newestRowTimestamp, 10);
     if (from != null) {
       url.searchParams.set('from', from);
       // Recompute the lower bound from the newest loaded row; drop cursor/since.
@@ -383,11 +382,9 @@ export class LogList extends LitElement {
   // appends child spans after their (older) trace root, so the array endpoints
   // aren't the true min/max. null when empty. oldest → page earlier/load-more;
   // newest → live-tail lower bound.
-  private oldestCursor(offsetMs: number) { return this.edgeCursor(oldestRowTimestamp, offsetMs); }
-  private newestCursor(offsetMs: number) { return this.edgeCursor(newestRowTimestamp, offsetMs); }
   private edgeCursor(by: typeof oldestRowTimestamp, offsetMs: number): string | null {
-    const ts = by(this.spanListTree, this.colIdxMap);
-    return ts == null ? null : cursorFromTimestamp(ts, offsetMs);
+    const ms = by(this.spanListTree, this.colIdxMap);
+    return ms == null ? null : new Date(ms + offsetMs).toISOString();
   }
 
   private buildLoadMoreUrl(): string {
@@ -406,7 +403,7 @@ export class LogList extends LitElement {
     }
 
     // Cursor from the oldest row, -10ms buffer to skip the inclusive boundary.
-    const cursor = this.oldestCursor(-10);
+    const cursor = this.edgeCursor(oldestRowTimestamp, -10);
 
     if (!cursor) {
       console.warn('[LoadMore] No timestamp found, falling back to nextFetchUrl or buildJsonUrl', {
@@ -448,7 +445,7 @@ export class LogList extends LitElement {
     }
 
     // Cursor from the oldest loaded row so we fetch strictly older logs on expand.
-    const cursor = this.oldestCursor(0);
+    const cursor = this.edgeCursor(oldestRowTimestamp, 0);
     if (cursor) url.searchParams.set('cursor', cursor);
 
     // Ensure json=true and layout=loadmore for the API request

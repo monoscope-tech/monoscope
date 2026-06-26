@@ -28,6 +28,7 @@ const idToTs = (id: string) => new Date(TS_BASE - (/^\d+$/.test(id) ? Number(id)
 // Fixture-only: numeric input is taken as already-nanoseconds (the server's start_time_ns),
 // strings as ISO → ns. Deliberately NOT tsToMs (which detects unit + converts to ms).
 const startNs = (ts: string | number) => (typeof ts === 'number' ? ts : Date.parse(ts) * 1e6);
+// numeric input is ns (same convention as startNs); strings pass through as ISO.
 const tsIso = (ts: string | number) => (typeof ts === 'string' ? ts : new Date(ts / 1e6).toISOString());
 
 // One server-shaped standalone log row (kind='log'). Positional, in COLS order.
