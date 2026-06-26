@@ -388,7 +388,7 @@ export const middleTruncatePath = (path: string, maxTailLen: number = 28): [stri
   return [path.slice(0, Math.max(0, path.length - maxTailLen)), path.slice(-maxTailLen)];
 };
 
-export const formatPatternCount = (n: number): string => {
+export const formatLargeCount = (n: number): string => {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
   if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K';
   return String(n);
@@ -414,7 +414,7 @@ export const renderSparkline = (buckets: number[]): TemplateResult => {
   const peak = Math.max(...buckets, 1);
   const n = buckets.length;
   const h = 40, barZone = 32, topPad = h - barZone;
-  const peakLabel = formatPatternCount(peak);
+  const peakLabel = formatLargeCount(peak);
   const labelW = peakLabel.length * 7 + 4;
   const gap = 2, barW = Math.max(2, Math.floor(120 / n) - gap);
   const barsEnd = n * (barW + gap);

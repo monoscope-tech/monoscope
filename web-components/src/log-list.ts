@@ -27,7 +27,7 @@ import {
   createCachedIconRenderer,
   WEAK_TEXT_STYLES,
   RIGHT_PREFIX_REGEX,
-  formatPatternCount,
+  formatLargeCount,
   highlightPlaceholders,
   generateId,
   dedupeById,
@@ -586,14 +586,14 @@ export class LogList extends LitElement {
     if (!countEl) return;
     let countText: string, suffixText: string;
     if (this.mode === 'patterns') {
-      countText = `${formatPatternCount(this.totalPatterns)} patterns`;
-      suffixText = ` found (based on ${formatPatternCount(this.totalCount)} logs)`;
+      countText = `${formatLargeCount(this.totalPatterns)} patterns`;
+      suffixText = ` found (based on ${formatLargeCount(this.totalCount)} logs)`;
     } else if (this.mode === 'sessions') {
-      countText = `${formatPatternCount(this.totalSessions)} sessions`;
-      suffixText = this.totalCount ? ` (${formatPatternCount(this.totalCount)} events)` : '';
+      countText = `${formatLargeCount(this.totalSessions)} sessions`;
+      suffixText = this.totalCount ? ` (${formatLargeCount(this.totalCount)} events)` : '';
     } else {
-      countText = formatPatternCount(this.loadedCount);
-      suffixText = this.loadedCount < this.totalCount ? ` of ${formatPatternCount(this.totalCount)} rows` : ' rows';
+      countText = formatLargeCount(this.loadedCount);
+      suffixText = this.loadedCount < this.totalCount ? ` of ${formatLargeCount(this.totalCount)} rows` : ' rows';
     }
     countEl.textContent = countText;
     if (suffixEl) suffixEl.textContent = suffixText;
@@ -1808,7 +1808,7 @@ export class LogList extends LitElement {
           : 1;
         const pct = (count / maxCount) * 100;
         return html`<div class="flex items-center gap-1.5 w-full min-w-0" title="${pct.toFixed(1)}% of total${mergedCount > 0 ? ` (${mergedCount} merged)` : ''}">
-          <span class="text-sm tabular-nums text-textStrong w-10 shrink-0 text-right">${formatPatternCount(count)}</span>
+          <span class="text-sm tabular-nums text-textStrong w-10 shrink-0 text-right">${formatLargeCount(count)}</span>
           ${mergedCount > 0 ? html`<span class="text-[10px] tabular-nums text-textWeak shrink-0" title="${mergedCount} similar patterns merged">+${mergedCount}</span>` : ''}
           <div class="w-12 shrink-0 h-2 bg-strokeWeak/40 rounded-sm overflow-hidden">
             <div class="h-full bg-fillBrand-strong rounded-sm" style="width:${pct}%"></div>

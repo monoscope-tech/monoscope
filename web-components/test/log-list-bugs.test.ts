@@ -133,9 +133,10 @@ describe('LogList — MED correctness', () => {
     const tRoot = '2026-06-01T00:00:00.000Z';
     const tChild = '2026-06-01T00:00:05.000Z'; // newer child of the same trace (sits after root in the tree)
     const to = '2026-06-01T00:00:02.000Z'; // between root+10ms and child+10ms
-    const rootRow = [tRoot, 's-root', 'tr', '', 'server', 'i-root', 100, 1_780_272_000_000_000_000];
-    const childRow = [tChild, 's-child', 'tr', 's-root', 'client', 'i-child', 50, 1_780_272_005_000_000_000];
-    const traces = [{ trace_id: 'tr', start_time: 1_780_272_000_000_000_000, duration: 100, trace_start_time: tRoot, root: 's-root', children: { 's-root': ['s-child'] } }];
+    const rootNs = Date.parse(tRoot) * 1e6;
+    const rootRow = [tRoot, 's-root', 'tr', '', 'server', 'i-root', 100, rootNs];
+    const childRow = [tChild, 's-child', 'tr', 's-root', 'client', 'i-child', 50, Date.parse(tChild) * 1e6];
+    const traces = [{ trace_id: 'tr', start_time: rootNs, duration: 100, trace_start_time: tRoot, root: 's-root', children: { 's-root': ['s-child'] } }];
     window.history.replaceState({}, '', `/log_explorer?to=${encodeURIComponent(to)}&query=x`);
     el.transport = serverTransport({ logsData: [rootRow, childRow], colIdxMap: COLS, traces });
     await el.fetchData(`/log_explorer?to=${encodeURIComponent(to)}&query=x&json=true`, false, false, false);
@@ -246,9 +247,10 @@ describe('LogList — earlier/load-more pagination cursor (worker pipeline)', ()
   const tsRoot = '2026-06-26T16:54:45.000Z'; // oldest row: the trace root (visually last)
   const tsChild = '2026-06-26T16:55:02.644Z'; // its later child span, flattened AFTER the root
   // A trace (root + one later child) — the shape logPage can't express. Indexed by COLS.
-  const rootRow = [tsRoot, 'span-root', 'trace-1', '', 'server', 'id-root', 100, 1_750_000_485_000_000_000];
-  const childRow = [tsChild, 'span-child', 'trace-1', 'span-root', 'client', 'id-child', 50, 1_750_000_502_644_000_000];
-  const traces = [{ trace_id: 'trace-1', start_time: 1_750_000_485_000_000_000, duration: 100, trace_start_time: tsRoot, root: 'span-root', children: { 'span-root': ['span-child'] } }];
+  const rootNs = Date.parse(tsRoot) * 1e6;
+  const rootRow = [tsRoot, 'span-root', 'trace-1', '', 'server', 'id-root', 100, rootNs];
+  const childRow = [tsChild, 'span-child', 'trace-1', 'span-root', 'client', 'id-child', 50, Date.parse(tsChild) * 1e6];
+  const traces = [{ trace_id: 'trace-1', start_time: rootNs, duration: 100, trace_start_time: tsRoot, root: 'span-root', children: { 'span-root': ['span-child'] } }];
   const page = (over: any = {}) => ({ logsData: [rootRow, childRow], colIdxMap: COLS, traces, ...over });
 
   test('load-more requests cursor older than the oldest row (not the trailing child leaf)', async () => {
