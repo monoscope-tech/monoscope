@@ -344,12 +344,12 @@ export class LogList extends LitElement {
     // If we have data, update the 'from' parameter to fetch newer data
     if (this.spanListTree.length > 0) {
       const firstItem = this.flipDirection ? this.spanListTree[this.spanListTree.length - 1] : this.spanListTree[0];
-      const timestamp = firstItem?.data?.[this.colIdxMap['timestamp'] || this.colIdxMap['created_at']];
+      const timestamp = firstItem?.data?.[this.colIdxMap['timestamp'] ?? this.colIdxMap['created_at']];
 
       if (timestamp) {
-        const date = new Date(timestamp);
-        date.setTime(date.getTime() + 10); // Add 10ms
-        url.searchParams.set('from', date.toISOString());
+        // cursorFromTimestamp tolerates ISO + ns/µs/ms epochs (+10ms so we skip the newest row);
+        // a raw `new Date(epochNs)` would read ns as ms → a year-~55000 `from` → empty live-tail.
+        url.searchParams.set('from', cursorFromTimestamp(timestamp, 10));
         // Recompute the lower bound from the newest loaded row; drop cursor/since.
         // Keep `to`: on a bounded historical range, live-tail must stay within it
         // rather than silently pulling rows newer than the user's upper bound.
@@ -431,10 +431,11 @@ export class LogList extends LitElement {
     // This ensures we fetch older logs when expanding the time range
     if (this.spanListTree.length > 0) {
       const oldestItem = this.flipDirection ? this.spanListTree[0] : this.spanListTree[this.spanListTree.length - 1];
-      const oldestTimestamp = oldestItem?.data?.[this.colIdxMap['timestamp'] || this.colIdxMap['created_at']];
+      const oldestTimestamp = oldestItem?.data?.[this.colIdxMap['timestamp'] ?? this.colIdxMap['created_at']];
 
       if (oldestTimestamp) {
-        url.searchParams.set('cursor', String(oldestTimestamp));
+        // Same ns/µs/ms tolerance as load-more; String(epochNs) would stall the server cursor.
+        url.searchParams.set('cursor', cursorFromTimestamp(oldestTimestamp, 0));
       }
     }
 
@@ -629,6 +630,7 @@ export class LogList extends LitElement {
     // Stop live streaming when switching to an aggregate view
     if (changedProperties.has('mode') && this.isAggregate && this.liveStreamInterval) {
       clearInterval(this.liveStreamInterval);
+      this.liveStreamInterval = null; // else handleLiveToggle's !interval guard skips restart on switch-back
       this.isLiveStreaming = false;
     }
 
@@ -1085,7 +1087,9 @@ export class LogList extends LitElement {
         // load-more sentinel keeps re-firing and refetches (and, pre-dedup,
         // re-appends) the same window. Initial/refresh fetches keep trusting meta.
         this.hasMore = isLoadMore ? false : meta.hasMore || false;
-        this.expandTimeRange = !this.hasMore;
+        // A quiet live-tail tick (no new rows) isn't "history exhausted" — don't flash
+        // the "Show earlier events" button on every empty 5s recent fetch.
+        if (!isRecentFetch) this.expandTimeRange = !this.hasMore;
         // A full fetch (new query, filter or time-range change) that returns
         // nothing is the FULL result set — clear stale rows so the empty state
         // shows, instead of leaving the previous query's results on screen.

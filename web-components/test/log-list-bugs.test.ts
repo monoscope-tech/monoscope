@@ -98,6 +98,49 @@ describe('LogList — MED correctness', () => {
     expect(url.searchParams.get('to')).toBe('2026-06-01T00:00:00.000Z');
     expect(url.searchParams.has('cursor')).toBe(false);
   });
+
+  // buildRecentFetchUrl must apply the ns/µs/ms tolerance too (it used raw new Date()).
+  test('buildRecentFetchUrl tolerates a nanosecond-epoch timestamp (no year-55000 from)', async () => {
+    const el = await mountList();
+    window.history.replaceState({}, '', '/log_explorer?query=x');
+    (el as any).colIdxMap = { timestamp: 0 };
+    (el as any).spanListTree = [row('1', [1700000000000000000])]; // ns ≈ Nov 2023
+    const url = new URL((el as any).buildRecentFetchUrl(), 'http://localhost');
+    expect(new Date(url.searchParams.get('from')!).getUTCFullYear()).toBe(2023);
+  });
+
+  // expandTimeRangeUrl ("Show earlier events") had the same raw-String(ns) cursor bug.
+  test('expandTimeRangeUrl tolerates a nanosecond-epoch timestamp in the cursor', async () => {
+    const el = await mountList();
+    window.history.replaceState({}, '', '/log_explorer?since=1H&query=x');
+    (el as any).colIdxMap = { timestamp: 0 };
+    (el as any).spanListTree = [row('1', [1700000000000000000])];
+    const url = new URL((el as any).expandTimeRangeUrl(), 'http://localhost');
+    expect(new Date(url.searchParams.get('cursor')!).getUTCFullYear()).toBe(2023);
+  });
+
+  // An empty live-tail tick must NOT flip expandTimeRange on (would flash "Show
+  // earlier events" every quiet 5s tick even though history isn't exhausted).
+  test('an empty recent fetch does not turn on expandTimeRange', async () => {
+    const el = await mountList();
+    el.transport = fakeTransport({ tree: [row('1'), row('2')] }, { tree: [], meta: { hasMore: false } });
+    await el.fetchData('initial', false, false, false);
+    (el as any).expandTimeRange = false;
+    await el.fetchData('recent', false, true, false); // isRecentFetch, returns nothing
+    expect((el as any).expandTimeRange).toBe(false);
+  });
+
+  // Switching to an aggregate view must null the interval, not just clear it — else
+  // handleLiveToggle's `!liveStreamInterval` guard skips setInterval on switch-back.
+  test('mode-switch to aggregate nulls liveStreamInterval (re-enable works later)', async () => {
+    const el = await mountList();
+    (el as any).liveStreamInterval = setInterval(() => {}, 1e7);
+    (el as any).isLiveStreaming = true;
+    (el as any).mode = 'patterns';
+    (el as any).updated(new Map([['mode', 'logs']]));
+    expect((el as any).liveStreamInterval).toBeNull();
+    expect((el as any).isLiveStreaming).toBe(false);
+  });
 });
 
 // M4: buffering decision (pure) — buffer whenever scrolled off the insertion edge.

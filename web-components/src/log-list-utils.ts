@@ -242,7 +242,11 @@ export const generateId = (): string => Math.random().toString(36).substring(2, 
 // "load more" / live-tail appends a duplicate of the last/first visible row.
 export const dedupeById = <T extends { id: string }>(items: T[]): T[] => {
   const seen = new Set<string>();
-  return items.filter((it) => (it.id == null || seen.has(it.id) ? false : (seen.add(it.id), true)));
+  return items.filter((it) => {
+    if (it.id == null || seen.has(it.id)) return false; // == null catches both null and undefined
+    seen.add(it.id);
+    return true;
+  });
 };
 
 // Whether a live-stream batch should be buffered ("N new" pill) instead of inserted
