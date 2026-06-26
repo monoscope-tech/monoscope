@@ -356,43 +356,37 @@ export class LogList extends LitElement {
     const url = new URL(window.location.href);
     url.searchParams.set('json', 'true');
 
-    // If we have data, update the 'from' parameter to fetch newer data
-    if (this.spanListTree.length > 0) {
-      // Newest loaded row — scanned, not positional: a child span of the newest
-      // trace starts later than (and sits after) its root, so spanListTree[0]
-      // isn't the max. (Mirror of oldestRowTimestamp; see newestRowTimestamp.)
-      const timestamp = newestRowTimestamp(this.spanListTree, this.colIdxMap);
-
-      if (timestamp != null) {
-        // cursorFromTimestamp tolerates ISO + ns/µs/ms epochs (+10ms so we skip the newest row);
-        // a raw `new Date(epochNs)` would read ns as ms → a year-~55000 `from` → empty live-tail.
-        const from = cursorFromTimestamp(timestamp, 10);
-        url.searchParams.set('from', from);
-        // Recompute the lower bound from the newest loaded row; drop cursor/since.
-        // Keep `to`: on a bounded historical range, live-tail must stay within it
-        // rather than silently pulling rows newer than the user's upper bound.
-        url.searchParams.delete('cursor');
-        url.searchParams.delete('since');
-        // Edge case: once the newest loaded row reaches the upper bound, `from`
-        // (newest+10ms) lands at/after `to`, so every tick fetches an empty
-        // [from,to] window — the live banner would hang forever with no rows and
-        // no error. Stop live-tail instead of polling a guaranteed-empty range.
-        const to = url.searchParams.get('to');
-        const toMs = to ? Date.parse(to) : NaN;
-        if (!isNaN(toMs) && Date.parse(from) >= toMs)
-          this.stopLiveStream('Reached the end of the selected time range — live tail paused.');
-      }
+    // Lower bound = newest loaded row + 10ms (skip it). null when empty.
+    const from = this.newestCursor(10);
+    if (from != null) {
+      url.searchParams.set('from', from);
+      // Recompute the lower bound from the newest loaded row; drop cursor/since.
+      // Keep `to`: on a bounded historical range, live-tail must stay within it
+      // rather than silently pulling rows newer than the user's upper bound.
+      url.searchParams.delete('cursor');
+      url.searchParams.delete('since');
+      // Edge case: once the newest loaded row reaches the upper bound, `from`
+      // (newest+10ms) lands at/after `to`, so every tick fetches an empty
+      // [from,to] window — the live banner would hang forever with no rows and
+      // no error. Stop live-tail instead of polling a guaranteed-empty range.
+      const to = url.searchParams.get('to');
+      const toMs = to ? Date.parse(to) : NaN;
+      if (!isNaN(toMs) && Date.parse(from) >= toMs)
+        this.stopLiveStream('Reached the end of the selected time range — live tail paused.');
     }
 
     return url.toString();
   }
 
-  // Cursor for paging strictly older than everything loaded: the oldest row's
-  // timestamp ± offset (negative skips the inclusive boundary row). Scanned, not
-  // positional — the flattened trace tree appends newer child spans after the
-  // oldest trace's root, so the array endpoints aren't the min. null when empty.
-  private oldestCursor(offsetMs: number): string | null {
-    const ts = oldestRowTimestamp(this.spanListTree, this.colIdxMap);
+  // Cursor at an extreme of everything loaded, ± offset (offset skips the
+  // inclusive boundary row). Scanned, not positional — the flattened trace tree
+  // appends child spans after their (older) trace root, so the array endpoints
+  // aren't the true min/max. null when empty. oldest → page earlier/load-more;
+  // newest → live-tail lower bound.
+  private oldestCursor(offsetMs: number) { return this.edgeCursor(oldestRowTimestamp, offsetMs); }
+  private newestCursor(offsetMs: number) { return this.edgeCursor(newestRowTimestamp, offsetMs); }
+  private edgeCursor(pick: typeof oldestRowTimestamp, offsetMs: number): string | null {
+    const ts = pick(this.spanListTree, this.colIdxMap);
     return ts == null ? null : cursorFromTimestamp(ts, offsetMs);
   }
 
