@@ -104,7 +104,7 @@ export const serverTransportFlipped = (...pages: any[]) => makeServerTransport(t
 export const deferredTransport = () => {
   const pending: Array<{ resolve: (v: any) => void; url: string }> = [];
   const fn = (url: string) => new Promise<any>((resolve) => pending.push({ url, resolve }));
-  // settle(index, {tree, metaOverrides})
+  // settle(index, tree, metaOverrides?)
   const settle = (i: number, tree: any[], over: any = {}) =>
     pending[i].resolve({ tree, meta: meta({ ...over, queryResultCount: tree.length }) });
   return Object.assign(fn, { pending, settle });
