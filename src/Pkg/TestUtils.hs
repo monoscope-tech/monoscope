@@ -126,7 +126,8 @@ import Effectful.Log (Log)
 import Effectful.Reader.Static qualified
 import Effectful.Time (Time, runTime)
 import Log qualified
-import Log.Backend.StandardOutput.Bulk qualified as LogBulk
+import Log.Data (showLogMessage)
+import Log.Logger (mkBulkLogger)
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
@@ -182,6 +183,7 @@ import System.Environment (setEnv, unsetEnv)
 import System.Envy (DefConfig (..), decodeWithDefaults)
 import System.Exit (ExitCode (..))
 import System.IO.Silently qualified as Silently
+import System.IO.Unsafe (unsafePerformIO)
 import System.Logging qualified as Logging
 import System.Server qualified as Server
 import System.Tracing (Tracing)
@@ -262,7 +264,7 @@ withLocalSetup f = do
       -- Same per-test budget as withExternalDBSetup: small pool so the parallel
       -- suite stays under Postgres's connection cap (3 pg + 3×2 hasql ≈ 9 per test).
       pool <- newPool (defaultPoolConfig (connectPostgreSQL cstr) close 60 3)
-      f pool cstr
+      finally (f pool cstr) (destroyAllResources pool) -- match withExternalDBSetup; no per-example leak
 
 
 -- Test DB connection info, host configurable via DB_HOST env var
@@ -486,7 +488,7 @@ frozenTime = Unsafe.read "2025-01-01 00:00:00 UTC"
 
 
 runTestBackground :: UTCTime -> Config.AuthContext -> ATBackgroundCtx a -> IO a
-runTestBackground t authCtx action = LogBulk.withBulkStdOutLogger \logger ->
+runTestBackground t authCtx action = withSharedLogger \logger ->
   runTestBackgroundWithLogger t logger authCtx action
 
 
@@ -684,10 +686,23 @@ requireMinio tr pending action
   | tr.trMinioAvailable = action
   | otherwise = pending "MinIO not reachable — run `make minio-local` (or set MINIO_ENDPOINT)"
 
+-- One process-lifetime bulk logger shared by every example, never shut down.
+-- The old per-example `withBulkStdOutLogger` bracket shut its logger down at
+-- example end, but the background-job/extraction threads the example spawned keep
+-- logging; under `around` + parallel that raced into "attempt to write to a shut
+-- down logger" (AssertionFailed) and aborted the whole suite. A single shared
+-- logger (log-base loggers are thread-safe) sidesteps the lifecycle entirely.
+{-# NOINLINE sharedTestLogger #-}
+sharedTestLogger :: Log.Logger
+sharedTestLogger = unsafePerformIO $ mkBulkLogger "test-stdout-bulk" (mapM_ (putTextLn . showLogMessage Nothing)) (pure ())
+
+withSharedLogger :: (Log.Logger -> m a) -> m a
+withSharedLogger act = act sharedTestLogger
+
 
 -- Compose withSetup with additional IO actions
 withTestResources :: (TestResources -> IO ()) -> IO ()
-withTestResources f = withSetup $ \pool cstr -> LogBulk.withBulkStdOutLogger \logger -> do
+withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
   projectCache <- newCache (Just $ TimeSpec (60 * 60) 0)
   projectKeyCache <- newCache (Just $ TimeSpec (60 * 60) 0)
   logsPatternCache <- newCache (Just $ TimeSpec (30 * 60) 0) -- Cache for log patterns, 30 minutes TTL
@@ -791,7 +806,8 @@ withTestResources f = withSetup $ \pool cstr -> LogBulk.withBulkStdOutLogger \lo
       , trMinioAvailable = minioReady
       , trTestClock = testClock
       }
-    `finally` (OHasql.release hasqlMain >> OHasql.release hasqlJobs >> OHasql.release hasqlTf)
+    -- nested so a throw releasing one pool still releases the others
+    `finally` (OHasql.release hasqlMain `finally` (OHasql.release hasqlJobs `finally` OHasql.release hasqlTf))
 
 
 toServantResponse :: TestResources -> ATAuthCtx (RespHeaders a) -> IO (RespHeaders a, a)
@@ -863,7 +879,7 @@ freshUUIDRef = newIORef (map (UUID.fromWords 0 0 0) [1 .. 1000])
 runQueryEffect :: TestResources -> (forall es. (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServantS.ServerError :> es, IOE :> es, Log :> es, Time :> es, Tracing :> es) => Eff es a) -> IO a
 runQueryEffect TestResources{..} action = do
   tp <- getGlobalTracerProvider
-  LogBulk.withBulkStdOutLogger \logger ->
+  withSharedLogger \logger ->
     action
       & runErrorNoCallStack @ServantS.ServerError
       & Effectful.Reader.Static.runReader trATCtx
@@ -993,7 +1009,7 @@ logBackgroundJobsInfo logger jobs = do
 runAllBackgroundJobs :: UTCTime -> AuthContext -> IO (V.Vector Job)
 runAllBackgroundJobs t authCtx = do
   jobs <- withResource authCtx.pool getBackgroundJobs
-  LogBulk.withBulkStdOutLogger \logger ->
+  withSharedLogger \logger ->
     -- Run jobs concurrently using Ki structured concurrency
     runEff $ runConcurrent $ Ki.runStructuredConcurrency $ Ki.scoped \scope -> do
       threads <- V.forM jobs $ \job -> Ki.fork scope $ liftIO $ testJobsRunner t logger authCtx job
@@ -1007,7 +1023,7 @@ runAllBackgroundJobs t authCtx = do
 runAllBackgroundJobsNoReset :: TestResources -> IO (V.Vector Job)
 runAllBackgroundJobsNoReset TestResources{..} = do
   jobs <- withResource trATCtx.pool getBackgroundJobs
-  LogBulk.withBulkStdOutLogger \logger ->
+  withSharedLogger \logger ->
     runEff $ runConcurrent $ Ki.runStructuredConcurrency $ Ki.scoped \scope -> do
       threads <- V.forM jobs \job -> Ki.fork scope $ liftIO $ do
         Relude.when trATCtx.config.enableBackgroundJobs $ do
@@ -1027,7 +1043,7 @@ runBackgroundJobsWhere t authCtx predicate = do
     bgJob <- BackgroundJobs.throwParsePayload job
     pure (job, bgJob)
   let filteredJobs = V.filter (\(_, bgJob) -> predicate bgJob) jobsWithParsed
-  LogBulk.withBulkStdOutLogger \logger ->
+  withSharedLogger \logger ->
     -- Run filtered jobs concurrently using Ki structured concurrency
     runEff $ runConcurrent $ Ki.runStructuredConcurrency $ Ki.scoped \scope -> do
       threads <- V.forM filteredJobs $ \(job, _) -> Ki.fork scope $ liftIO $ testJobsRunner t logger authCtx job
