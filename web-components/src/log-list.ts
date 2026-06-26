@@ -5,7 +5,7 @@ import { customElement, state, query, property } from 'lit/decorators.js';
 import { ref, createRef } from 'lit/directives/ref.js';
 import { APTEvent, ChildrenForLatency, ColIdxMap, EventLine, ServerTraceEntry, Trace, TraceDataMap } from './types/types';
 import debounce from 'lodash/debounce';
-import { includes, startsWith, map, forEach, compact, pick, chunk, chain, lt } from 'lodash';
+import { includes, startsWith, map, forEach, compact, chunk, chain, lt } from 'lodash';
 // Import worker as URL instead of worker instance
 import LogWorkerUrl from './log-worker?worker&url';
 import { groupSpans } from './log-worker-functions';
@@ -27,12 +27,13 @@ import {
   createCachedIconRenderer,
   WEAK_TEXT_STYLES,
   RIGHT_PREFIX_REGEX,
-  formatPatternCount,
+  formatLargeCount,
   highlightPlaceholders,
   generateId,
   dedupeById,
   shouldBufferRecent,
-  cursorFromTimestamp,
+  oldestRowTimestamp,
+  newestRowTimestamp,
   renderSparkline,
   parseUserAgent,
   isBotUserAgent,
@@ -354,33 +355,36 @@ export class LogList extends LitElement {
     const url = new URL(window.location.href);
     url.searchParams.set('json', 'true');
 
-    // If we have data, update the 'from' parameter to fetch newer data
-    if (this.spanListTree.length > 0) {
-      const firstItem = this.flipDirection ? this.spanListTree[this.spanListTree.length - 1] : this.spanListTree[0];
-      const timestamp = firstItem?.data?.[this.colIdxMap['timestamp'] ?? this.colIdxMap['created_at']];
-
-      if (timestamp) {
-        // cursorFromTimestamp tolerates ISO + ns/µs/ms epochs (+10ms so we skip the newest row);
-        // a raw `new Date(epochNs)` would read ns as ms → a year-~55000 `from` → empty live-tail.
-        const from = cursorFromTimestamp(timestamp, 10);
-        url.searchParams.set('from', from);
-        // Recompute the lower bound from the newest loaded row; drop cursor/since.
-        // Keep `to`: on a bounded historical range, live-tail must stay within it
-        // rather than silently pulling rows newer than the user's upper bound.
-        url.searchParams.delete('cursor');
-        url.searchParams.delete('since');
-        // Edge case: once the newest loaded row reaches the upper bound, `from`
-        // (newest+10ms) lands at/after `to`, so every tick fetches an empty
-        // [from,to] window — the live banner would hang forever with no rows and
-        // no error. Stop live-tail instead of polling a guaranteed-empty range.
-        const to = url.searchParams.get('to');
-        const toMs = to ? Date.parse(to) : NaN;
-        if (!isNaN(toMs) && Date.parse(from) >= toMs)
-          this.stopLiveStream('Reached the end of the selected time range — live tail paused.');
-      }
+    // Lower bound = newest loaded row + 10ms (skip it). null when empty.
+    const from = this.edgeCursor(newestRowTimestamp, 10);
+    if (from != null) {
+      url.searchParams.set('from', from);
+      // Recompute the lower bound from the newest loaded row; drop cursor/since.
+      // Keep `to`: on a bounded historical range, live-tail must stay within it
+      // rather than silently pulling rows newer than the user's upper bound.
+      url.searchParams.delete('cursor');
+      url.searchParams.delete('since');
+      // Edge case: once the newest loaded row reaches the upper bound, `from`
+      // (newest+10ms) lands at/after `to`, so every tick fetches an empty
+      // [from,to] window — the live banner would hang forever with no rows and
+      // no error. Stop live-tail instead of polling a guaranteed-empty range.
+      const to = url.searchParams.get('to');
+      const toMs = to ? Date.parse(to) : NaN;
+      if (!isNaN(toMs) && Date.parse(from) >= toMs)
+        this.stopLiveStream('Reached the end of the selected time range — live tail paused.');
     }
 
     return url.toString();
+  }
+
+  // Cursor at an extreme of everything loaded, ± offset (offset skips the
+  // inclusive boundary row). Scanned, not positional — the flattened trace tree
+  // appends child spans after their (older) trace root, so the array endpoints
+  // aren't the true min/max. null when empty. oldest → page earlier/load-more;
+  // newest → live-tail lower bound.
+  private edgeCursor(by: typeof oldestRowTimestamp, offsetMs: number): string | null {
+    const ms = by(this.spanListTree, this.colIdxMap);
+    return ms == null ? null : new Date(ms + offsetMs).toISOString();
   }
 
   private buildLoadMoreUrl(): string {
@@ -398,16 +402,10 @@ export class LogList extends LitElement {
       return this.buildJsonUrl();
     }
 
-    // Get the actual oldest item from current data
-    // flipDirection=false (newest first): oldest is at END of array
-    // flipDirection=true (oldest first): oldest is at START of array
-    const lastItem = this.flipDirection ? this.spanListTree[0] : this.spanListTree[this.spanListTree.length - 1];
+    // Cursor from the oldest row, -10ms buffer to skip the inclusive boundary.
+    const cursor = this.edgeCursor(oldestRowTimestamp, -10);
 
-    // Get timestamp column name (try timestamp first, then created_at)
-    const timestampCol = this.colIdxMap['timestamp'] !== undefined ? 'timestamp' : 'created_at';
-    const timestamp = lastItem?.data?.[this.colIdxMap[timestampCol]];
-
-    if (!timestamp) {
+    if (!cursor) {
       console.warn('[LoadMore] No timestamp found, falling back to nextFetchUrl or buildJsonUrl', {
         flipDirection: this.flipDirection,
         treeLength: this.spanListTree.length,
@@ -420,10 +418,7 @@ export class LogList extends LitElement {
     const baseUrl = this.nextFetchUrl || window.location.href;
     const url = new URL(baseUrl, window.location.origin + window.location.pathname);
     url.searchParams.set('json', 'true');
-
-    // Cursor from the oldest row, -10ms buffer; preserves from/to/since filters.
-    // cursorFromTimestamp handles ISO or numeric ns/µs/ms timestamps.
-    url.searchParams.set('cursor', cursorFromTimestamp(timestamp, -10));
+    url.searchParams.set('cursor', cursor); // preserves from/to/since filters already on the base URL
 
     return url.toString();
   }
@@ -449,17 +444,9 @@ export class LogList extends LitElement {
       url.searchParams.set('since', target);
     }
 
-    // Use the timestamp of the oldest log currently in the list as the cursor
-    // This ensures we fetch older logs when expanding the time range
-    if (this.spanListTree.length > 0) {
-      const oldestItem = this.flipDirection ? this.spanListTree[0] : this.spanListTree[this.spanListTree.length - 1];
-      const oldestTimestamp = oldestItem?.data?.[this.colIdxMap['timestamp'] ?? this.colIdxMap['created_at']];
-
-      if (oldestTimestamp) {
-        // Same ns/µs/ms tolerance as load-more; String(epochNs) would stall the server cursor.
-        url.searchParams.set('cursor', cursorFromTimestamp(oldestTimestamp, 0));
-      }
-    }
+    // Cursor from the oldest loaded row so we fetch strictly older logs on expand.
+    const cursor = this.edgeCursor(oldestRowTimestamp, 0);
+    if (cursor) url.searchParams.set('cursor', cursor);
 
     // Ensure json=true and layout=loadmore for the API request
     url.searchParams.set('json', 'true');
@@ -599,14 +586,14 @@ export class LogList extends LitElement {
     if (!countEl) return;
     let countText: string, suffixText: string;
     if (this.mode === 'patterns') {
-      countText = `${this.formatCount(this.totalPatterns)} patterns`;
-      suffixText = ` found (based on ${this.formatCount(this.totalCount)} logs)`;
+      countText = `${formatLargeCount(this.totalPatterns)} patterns`;
+      suffixText = ` found (based on ${formatLargeCount(this.totalCount)} logs)`;
     } else if (this.mode === 'sessions') {
-      countText = `${this.formatCount(this.totalSessions)} sessions`;
-      suffixText = this.totalCount ? ` (${this.formatCount(this.totalCount)} events)` : '';
+      countText = `${formatLargeCount(this.totalSessions)} sessions`;
+      suffixText = this.totalCount ? ` (${formatLargeCount(this.totalCount)} events)` : '';
     } else {
-      countText = this.formatCount(this.loadedCount);
-      suffixText = this.loadedCount < this.totalCount ? ` of ${this.formatCount(this.totalCount)} rows` : ' rows';
+      countText = formatLargeCount(this.loadedCount);
+      suffixText = this.loadedCount < this.totalCount ? ` of ${formatLargeCount(this.totalCount)} rows` : ' rows';
     }
     countEl.textContent = countText;
     if (suffixEl) suffixEl.textContent = suffixText;
@@ -634,15 +621,6 @@ export class LogList extends LitElement {
       // Remove spinner
       spinner.remove();
     }
-  }
-
-  private formatCount(count: number): string {
-    if (count >= 1000000) {
-      return (count / 1000000).toFixed(1) + 'M';
-    } else if (count >= 1000) {
-      return (count / 1000).toFixed(1) + 'K';
-    }
-    return count.toString();
   }
 
   firstUpdated() {
@@ -1830,7 +1808,7 @@ export class LogList extends LitElement {
           : 1;
         const pct = (count / maxCount) * 100;
         return html`<div class="flex items-center gap-1.5 w-full min-w-0" title="${pct.toFixed(1)}% of total${mergedCount > 0 ? ` (${mergedCount} merged)` : ''}">
-          <span class="text-sm tabular-nums text-textStrong w-10 shrink-0 text-right">${formatPatternCount(count)}</span>
+          <span class="text-sm tabular-nums text-textStrong w-10 shrink-0 text-right">${formatLargeCount(count)}</span>
           ${mergedCount > 0 ? html`<span class="text-[10px] tabular-nums text-textWeak shrink-0" title="${mergedCount} similar patterns merged">+${mergedCount}</span>` : ''}
           <div class="w-12 shrink-0 h-2 bg-strokeWeak/40 rounded-sm overflow-hidden">
             <div class="h-full bg-fillBrand-strong rounded-sm" style="width:${pct}%"></div>

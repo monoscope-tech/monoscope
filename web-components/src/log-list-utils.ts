@@ -1,7 +1,7 @@
 import { format, isValid } from 'date-fns';
 import clsx from 'clsx';
 import { html, svg, TemplateResult } from 'lit';
-import { get } from 'lodash';
+import { minBy, maxBy } from 'lodash';
 import { ColIdxMap, EventLine } from './types/types';
 import { AnsiUp } from 'ansi-up';
 // Configuration objects
@@ -266,18 +266,32 @@ export const shouldBufferRecent = (
 // Pagination cursor (ISO) from a row timestamp ± offset. Tolerates ISO strings and
 // numeric epochs in ns/µs/ms — `new Date(epochNs)` otherwise reads ns as ms and
 // produces a year-~55000 cursor that returns nothing, stalling load-more.
-export const cursorFromTimestamp = (timestamp: string | number, offsetMs: number): string => {
-  let ms: number;
+// Magnitude disambiguates the unit; assumes wall-clock log times in
+// ~2001–5138 (ms ∈ [1e11,1e14)), so the thresholds never collide in practice.
+const tsToMs = (timestamp: string | number): number => {
   if (typeof timestamp === 'number' || /^\d+$/.test(String(timestamp))) {
     const n = Number(timestamp);
-    // Magnitude disambiguates the unit; assumes wall-clock log times in
-    // ~2001–5138 (ms ∈ [1e11,1e14)), so the thresholds never collide in practice.
-    ms = n > 1e17 ? n / 1e6 : n > 1e14 ? n / 1e3 : n; // ns→ms, µs→ms, else ms
-  } else {
-    ms = new Date(timestamp).getTime();
+    return n > 1e17 ? n / 1e6 : n > 1e14 ? n / 1e3 : n; // ns→ms, µs→ms, else ms
   }
-  return new Date(ms + offsetMs).toISOString();
+  return new Date(timestamp).getTime();
 };
+
+export const cursorFromTimestamp = (timestamp: string | number, offsetMs: number): string => new Date(tsToMs(timestamp) + offsetMs).toISOString();
+
+// Extremum timestamp among loaded rows. spanListTree is the flattened trace tree:
+// child spans (always ≥ their parent's start) are appended after the trace root
+// and traces sort newest-first, so NEITHER array endpoint is the true min/max.
+// Scan instead, so "earlier"/load-more (oldest) and live-tail (newest) cursors
+// page strictly outside everything already shown.
+const byRowTs = (by: typeof minBy) => (rows: EventLine[], colIdxMap: ColIdxMap): number | undefined => {
+  const ti = colIdxMap['timestamp'] ?? colIdxMap['created_at'];
+  if (ti === undefined) return undefined;
+  // minBy/maxBy skip null/undefined/NaN iteratees, so no pre-filter pass needed.
+  const best = by(rows, r => (r.data[ti] != null ? tsToMs(r.data[ti]) : undefined));
+  return best != null ? tsToMs(best.data[ti]) : undefined; // ms
+};
+export const oldestRowTimestamp = byRowTs(minBy);
+export const newestRowTimestamp = byRowTs(maxBy);
 
 export const getColumnWidth = (column: string): string =>
   COLUMN_WIDTHS[column as keyof typeof COLUMN_WIDTHS] || (column === 'id' ? '' : 'w-[16ch] shrink-0');
@@ -374,7 +388,7 @@ export const middleTruncatePath = (path: string, maxTailLen: number = 28): [stri
   return [path.slice(0, Math.max(0, path.length - maxTailLen)), path.slice(-maxTailLen)];
 };
 
-export const formatPatternCount = (n: number): string => {
+export const formatLargeCount = (n: number): string => {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
   if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K';
   return String(n);
@@ -400,7 +414,7 @@ export const renderSparkline = (buckets: number[]): TemplateResult => {
   const peak = Math.max(...buckets, 1);
   const n = buckets.length;
   const h = 40, barZone = 32, topPad = h - barZone;
-  const peakLabel = formatPatternCount(peak);
+  const peakLabel = formatLargeCount(peak);
   const labelW = peakLabel.length * 7 + 4;
   const gap = 2, barW = Math.max(2, Math.floor(120 / n) - gap);
   const barsEnd = n * (barW + gap);
