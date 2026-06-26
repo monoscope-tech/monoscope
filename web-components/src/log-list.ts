@@ -384,6 +384,15 @@ export class LogList extends LitElement {
     return url.toString();
   }
 
+  // Cursor for paging strictly older than everything loaded: the oldest row's
+  // timestamp ± offset (negative skips the inclusive boundary row). Scanned, not
+  // positional — the flattened trace tree appends newer child spans after the
+  // oldest trace's root, so the array endpoints aren't the min. null when empty.
+  private oldestCursor(offsetMs: number): string | null {
+    const ts = oldestRowTimestamp(this.spanListTree, this.colIdxMap);
+    return ts == null ? null : cursorFromTimestamp(ts, offsetMs);
+  }
+
   private buildLoadMoreUrl(): string {
     // Patterns / sessions: increment aggregate_skip based on loaded count
     if (this.isAggregate || this.mode === 'sessions') { // sessions also use aggregate skip for top-level pagination
@@ -399,12 +408,10 @@ export class LogList extends LitElement {
       return this.buildJsonUrl();
     }
 
-    // Oldest loaded row's timestamp — scanned, not positional: the flattened
-    // trace tree appends newer child spans after the oldest trace's root, so the
-    // array endpoints aren't the min. (See oldestRowTimestamp.)
-    const timestamp = oldestRowTimestamp(this.spanListTree, this.colIdxMap);
+    // Cursor from the oldest row, -10ms buffer to skip the inclusive boundary.
+    const cursor = this.oldestCursor(-10);
 
-    if (!timestamp) {
+    if (!cursor) {
       console.warn('[LoadMore] No timestamp found, falling back to nextFetchUrl or buildJsonUrl', {
         flipDirection: this.flipDirection,
         treeLength: this.spanListTree.length,
@@ -417,10 +424,7 @@ export class LogList extends LitElement {
     const baseUrl = this.nextFetchUrl || window.location.href;
     const url = new URL(baseUrl, window.location.origin + window.location.pathname);
     url.searchParams.set('json', 'true');
-
-    // Cursor from the oldest row, -10ms buffer; preserves from/to/since filters.
-    // cursorFromTimestamp handles ISO or numeric ns/µs/ms timestamps.
-    url.searchParams.set('cursor', cursorFromTimestamp(timestamp, -10));
+    url.searchParams.set('cursor', cursor); // preserves from/to/since filters already on the base URL
 
     return url.toString();
   }
@@ -446,16 +450,9 @@ export class LogList extends LitElement {
       url.searchParams.set('since', target);
     }
 
-    // Use the oldest loaded row's timestamp as the cursor so we fetch strictly
-    // older logs when expanding the range (scanned, not positional — see above).
-    if (this.spanListTree.length > 0) {
-      const oldestTimestamp = oldestRowTimestamp(this.spanListTree, this.colIdxMap);
-
-      if (oldestTimestamp) {
-        // Same ns/µs/ms tolerance as load-more; String(epochNs) would stall the server cursor.
-        url.searchParams.set('cursor', cursorFromTimestamp(oldestTimestamp, 0));
-      }
-    }
+    // Cursor from the oldest loaded row so we fetch strictly older logs on expand.
+    const cursor = this.oldestCursor(0);
+    if (cursor) url.searchParams.set('cursor', cursor);
 
     // Ensure json=true and layout=loadmore for the API request
     url.searchParams.set('json', 'true');
