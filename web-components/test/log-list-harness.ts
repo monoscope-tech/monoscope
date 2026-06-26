@@ -26,13 +26,8 @@ const TS_BASE = Date.parse('2026-06-26T17:00:00.000Z');
 const idToTs = (id: string) => new Date(TS_BASE - (/^\d+$/.test(id) ? Number(id) : [...id].reduce((a, c) => a + c.charCodeAt(0), 0)) * 1000).toISOString();
 const startNs = (ts: string | number) => (typeof ts === 'number' ? ts : Date.parse(ts) * 1e6);
 
-// One server-shaped standalone log row (kind='log').
-export const logRow = (id: string, ts: string | number = idToTs(id)): any[] => {
-  const r: any[] = [];
-  r[COLS.timestamp] = ts; r[COLS.latency_breakdown] = id; r[COLS.trace_id] = id; r[COLS.parent_id] = '';
-  r[COLS.kind] = 'log'; r[COLS.id] = id; r[COLS.duration] = 0; r[COLS.start_time_ns] = startNs(ts);
-  return r;
-};
+// One server-shaped standalone log row (kind='log'). Positional, in COLS order.
+export const logRow = (id: string, ts: string | number = idToTs(id)): any[] => [ts, id, id, '', 'log', id, 0, startNs(ts)];
 // The trace-adjacency entry the server emits for a standalone log (its own trace).
 const logTrace = (id: string, ts: string | number = idToTs(id)) => ({ trace_id: id, start_time: startNs(ts), duration: 0, trace_start_time: typeof ts === 'string' ? ts : null, root: id, children: {} });
 
@@ -41,9 +36,10 @@ const norm = (r: RowSpec): [string, string | number] => (Array.isArray(r) ? r : 
 
 // A server JSON page of standalone logs (newest-first). `over` sets meta fields
 // (nextUrl, recentUrl, hasMore, cols, count, …) the way a real response would.
-export const logPage = (rows: RowSpec[], over: any = {}) => ({
-  logsData: rows.map((r) => logRow(...norm(r))), colIdxMap: COLS, traces: rows.map((r) => logTrace(...norm(r))), ...over,
-});
+export const logPage = (rows: RowSpec[], over: any = {}) => {
+  const specs = rows.map(norm);
+  return { logsData: specs.map((s) => logRow(...s)), colIdxMap: COLS, traces: specs.map((s) => logTrace(...s)), ...over };
+};
 // The flattened tree groupSpans produces for those rows — for deferredTransport.settle.
 // flipDirection defaults newest-first; pass true to match a component with flipDirection set.
 export const treeFromLogs = (rows: RowSpec[], flipDirection = false) => { const p = logPage(rows); return groupSpans(p.logsData, p.colIdxMap as any, {}, flipDirection, p.traces); };

@@ -363,7 +363,7 @@ export class LogList extends LitElement {
       // isn't the max. (Mirror of oldestRowTimestamp; see newestRowTimestamp.)
       const timestamp = newestRowTimestamp(this.spanListTree, this.colIdxMap);
 
-      if (timestamp) {
+      if (timestamp != null) {
         // cursorFromTimestamp tolerates ISO + ns/µs/ms epochs (+10ms so we skip the newest row);
         // a raw `new Date(epochNs)` would read ns as ms → a year-~55000 `from` → empty live-tail.
         const from = cursorFromTimestamp(timestamp, 10);
