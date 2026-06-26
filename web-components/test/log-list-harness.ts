@@ -24,7 +24,8 @@ export const COLS = { timestamp: 0, latency_breakdown: 1, trace_id: 2, parent_id
 // and the SAME id maps to the SAME time across pages — so overlapping-page dedup
 // behaves as it does against the real server.
 const TS_BASE = Date.parse('2024-01-01T00:00:00.000Z'); // stable past anchor
-const idToTs = (id: string) => new Date(TS_BASE - (/^\d+$/.test(id) ? Number(id) : sum([...id].map(c => c.charCodeAt(0)))) * 1000).toISOString();
+// Position-weighted char sum so permutation ids (e.g. 'a2' vs 'b1') don't collide to the same time.
+const idToTs = (id: string) => new Date(TS_BASE - (/^\d+$/.test(id) ? Number(id) : sum([...id].map((c, i) => c.charCodeAt(0) * (i + 1)))) * 1000).toISOString();
 // Fixture-only: numeric input is taken as already-nanoseconds (the server's start_time_ns),
 // strings as ISO → ns. Deliberately NOT tsToMs (which detects unit + converts to ms).
 const startNs = (ts: string | number) => (typeof ts === 'number' ? ts : Date.parse(ts) * 1e6);
