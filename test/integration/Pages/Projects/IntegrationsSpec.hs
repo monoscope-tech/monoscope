@@ -17,11 +17,11 @@ import Pages.Settings (TestForm (..))
 import Pages.Settings qualified as Integrations
 import Pkg.TestUtils
 import Relude
-import Test.Hspec (Spec, aroundAll, describe, it, shouldBe, shouldContain, shouldSatisfy)
+import Test.Hspec (Spec, aroundAll, sequential, describe, it, shouldBe, shouldContain, shouldSatisfy)
 
 
 spec :: Spec
-spec = aroundAll withTestResources $ do
+spec = sequential $ aroundAll withTestResources $ do
   describe "Notification Testing" $ do
     describe "Project-Level Tests" $ do
       it "sends test notification to Slack and records history" \tr -> do

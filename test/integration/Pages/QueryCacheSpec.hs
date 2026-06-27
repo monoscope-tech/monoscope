@@ -12,7 +12,7 @@ import Pages.Charts.Charts qualified as Charts
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
-import Test.Hspec (Spec, aroundAll, describe, it, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, around, describe, it, shouldBe, shouldSatisfy)
 import Text.Read (read)
 
 
@@ -65,7 +65,7 @@ isSorted xs = V.and $ V.zipWith (<=) xs (V.drop 1 xs)
 
 
 spec :: Spec
-spec = aroundAll withTestResources do
+spec = around withTestResources do
   describe "Query Cache" do
     it "cache hit returns same results as fresh query" $ \tr -> do
       clearAllTestData tr

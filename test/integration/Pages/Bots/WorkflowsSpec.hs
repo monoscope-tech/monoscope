@@ -11,11 +11,11 @@ import Pages.Bots.Whatsapp (whatsappIncomingPostH)
 import Pkg.TestUtils
 import Relude
 import System.Config qualified as Config
-import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldBe, shouldSatisfy)
 
 
 spec :: Spec
-spec = aroundAll withTestResources do
+spec = around withTestResources do
   describe "Complete Bot Workflows" do
     describe "Query → Process → Respond" do
       it "Slack: handles general query end-to-end" \tr -> do

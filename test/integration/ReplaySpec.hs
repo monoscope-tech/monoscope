@@ -18,7 +18,7 @@ import Pkg.ErrorMetrics (wireTypeErrorsRef)
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
-import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, pendingWith, shouldBe, shouldContain, shouldSatisfy)
+import Test.Hspec (Spec, around, describe, expectationFailure, it, pendingWith, shouldBe, shouldContain, shouldSatisfy)
 
 
 pid :: Projects.ProjectId
@@ -33,7 +33,7 @@ clearReplaySessions tr =
 
 
 spec :: Spec
-spec = aroundAll withTestResources do
+spec = around withTestResources do
   describe "concatRawJsonArrays" do
     it "returns empty array for no inputs" $ \_ ->
       concatRawJsonArrays [] `shouldBe` "[]"

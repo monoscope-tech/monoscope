@@ -11,11 +11,11 @@ import Pages.Bots.BotTestHelpers
 import Pages.Bots.Slack (slackInteractionsH)
 import Pkg.TestUtils
 import Relude
-import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldBe, shouldSatisfy)
 
 
 spec :: Spec
-spec = aroundAll withTestResources do
+spec = around withTestResources do
   describe "Slack Bot" do
     describe "/here command" do
       it "sets notification channel and saves golden response" \tr -> do

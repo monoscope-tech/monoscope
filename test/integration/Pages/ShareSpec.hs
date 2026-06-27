@@ -5,7 +5,7 @@ import Test.Hspec
 
 
 spec :: Spec
-spec = aroundAll withTestResources do
+spec = around withTestResources do
   describe "Check Share Request" do
     it "should create share link" \tr -> do
       -- currentTime <- getCurrentTime

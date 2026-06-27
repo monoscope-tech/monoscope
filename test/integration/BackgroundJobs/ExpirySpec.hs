@@ -10,7 +10,7 @@ import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
-import Test.Hspec (Spec, aroundAll, describe, it, shouldBe)
+import Test.Hspec (Spec, around, describe, it, shouldBe)
 
 
 pid :: Projects.ProjectId
@@ -34,7 +34,7 @@ countReplay tr sid = withResource tr.trPool \conn -> do
 
 
 spec :: Spec
-spec = aroundAll withTestResources do
+spec = around withTestResources do
   describe "Background expiry jobs" do
     -- 30d retention + 48h grace = 32d cutoff. Below boundary: row survives;
     -- above boundary: row deleted. Cutoff is computed from Time.currentTime.

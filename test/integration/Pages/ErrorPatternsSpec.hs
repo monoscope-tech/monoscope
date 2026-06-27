@@ -24,7 +24,7 @@ import Pkg.ErrorFingerprint qualified as EF
 import Pkg.TestUtils
 import Relude
 import Servant qualified
-import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, aroundAll, sequential, describe, expectationFailure, it, shouldBe, shouldSatisfy)
 
 
 pid :: Projects.ProjectId
@@ -40,7 +40,10 @@ countIssues tr issueType = withResource tr.trPool \conn -> do
 
 
 spec :: Spec
-spec = aroundAll withTestResources do
+-- Tests run as a sequence, each reading issues/state the previous ones created, so
+-- this keeps aroundAll and runs sequentially — opting out of the suite's per-test
+-- isolation + parallelism (same as GitSyncSpec).
+spec = sequential $ aroundAll withTestResources do
   describe "Error Pattern Pipeline" do
 
     it "1. Ingest spans with exceptions → extract error patterns" \tr -> do

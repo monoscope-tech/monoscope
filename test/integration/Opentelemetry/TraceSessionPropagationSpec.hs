@@ -14,7 +14,7 @@ import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Pkg.TraceSessionCache qualified as TSC
 import Relude
-import Test.Hspec (Spec, aroundAll, describe, it, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, around, describe, it, shouldBe, shouldSatisfy)
 
 
 pid :: Projects.ProjectId
@@ -38,7 +38,7 @@ findSpan name = find (\(n, _, _, _, _, _) -> n == name) . V.toList
 
 
 spec :: Spec
-spec = aroundAll withTestResources do
+spec = around withTestResources do
   describe "Trace Session Propagation" do
 
     it "propagates all session/user attrs across batches via cache" $ \tr -> do

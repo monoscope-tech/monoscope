@@ -7,11 +7,11 @@ import Pages.Bots.Discord (discordInteractionsH)
 import Pkg.TestUtils
 import Relude
 import System.Config qualified as Config
-import Test.Hspec (Spec, aroundAll, describe, it, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, around, describe, it, shouldBe, shouldSatisfy)
 
 
 spec :: Spec
-spec = aroundAll withTestResources do
+spec = around withTestResources do
   describe "Discord Bot" do
     describe "Ping interaction" do
       it "responds to ping with type 1" \tr -> do

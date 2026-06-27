@@ -11,6 +11,7 @@ module System.Logging (
   logAttention,
   logAttention_,
   timeAction,
+  tolerantLogger,
   LoggingDestination (..),
   getLogLevelFromEnv,
 )

@@ -11,7 +11,7 @@ import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
-import Test.Hspec (Spec, aroundAll, describe, it, shouldBe)
+import Test.Hspec (Spec, around, describe, it, shouldBe)
 
 
 pid :: Projects.ProjectId
@@ -19,7 +19,7 @@ pid = UUIDId UUID.nil
 
 
 spec :: Spec
-spec = aroundAll withTestResources do
+spec = around withTestResources do
   describe "Notification digest flush" do
     -- 4 rows are recent (within 24h of test clock) → stamped sent_at = current test time.
     -- 1 row is too old (created_at = -25h) → never picked up → sent_at stays NULL.

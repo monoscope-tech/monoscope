@@ -55,7 +55,7 @@ withTestProject action = withTestResources $ \tr -> do
 
 
 spec :: Spec
-spec = aroundAll withTestProject do
+spec = around withTestProject do
   describe "Onboarding Flow" do
     onboardingTests
 

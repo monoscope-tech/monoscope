@@ -61,7 +61,7 @@ shouldHaveKeys other _ = expectationFailure $ "expected JSON object, got: " <> s
 
 
 spec :: Spec
-spec = aroundAll withTestResources do
+spec = around withTestResources do
   describe "CLI lifecycle (in-process, real parser + handlers)" do
     it "version prints and exits zero (harness smoke)" \tr -> do
       (ec, out) <- runCLILifecycle tr ["version"]

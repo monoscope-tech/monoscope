@@ -29,7 +29,7 @@ import Relude
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Key (fromText)
-import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, shouldBe, shouldContain, shouldSatisfy, shouldThrow)
+import Test.Hspec (Spec, aroundAll, sequential, describe, expectationFailure, it, shouldBe, shouldContain, shouldSatisfy, shouldThrow)
 import Data.List (isInfixOf)
 import Data.Set qualified as Set
 import Control.Exception (ErrorCall (..), evaluate)
@@ -73,7 +73,7 @@ expectLogsJson = \case
 
 
 spec :: Spec
-spec = aroundAll withTestResources do
+spec = sequential $ aroundAll withTestResources do
   describe "gRPC Ingestion via Service Handlers" do
     it "Test 1.1: should create and verify 3 API keys work" $ \tr -> do
       keys <- traverse (createTestAPIKey tr pid) ["test-key-1", "test-key-2", "test-key-3"]
@@ -288,7 +288,8 @@ spec = aroundAll withTestResources do
 
       it "Test 11.2: KQL filter narrows sessions result to a single user" $ \tr -> do
         key <- createTestAPIKey tr pid "sessions-filter-key"
-        -- Use unique emails to avoid collision with Test 11.1 data (aroundAll shares state)
+        -- Unique emails are REQUIRED: examples share one DB (sequential $ aroundAll),
+        -- so these must not collide with Test 11.1's data.
         ingestSessionEvent tr key "GET /a" [("session.id", "s1-filter"), ("user.email", "alice-filter@example.com")] False frozenTime
         ingestSessionEvent tr key "GET /b" [("session.id", "s2-filter"), ("user.email", "bob-filter@example.com")] False frozenTime
         void $ runAllBackgroundJobs frozenTime tr.trATCtx

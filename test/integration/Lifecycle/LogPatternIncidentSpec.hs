@@ -14,7 +14,7 @@ import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
 import Servant qualified
-import Test.Hspec (Spec, aroundAll, describe, it, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, around, describe, it, shouldBe, shouldSatisfy)
 
 
 pid :: Projects.ProjectId
@@ -22,7 +22,7 @@ pid = UUIDId UUID.nil
 
 
 spec :: Spec
-spec = aroundAll withTestResources do
+spec = around withTestResources do
   describe "Log Pattern Incident Lifecycle" do
     it "ingest -> baseline -> spike -> notify -> ack (24h cooldown) -> re-spike suppressed -> expire -> re-spike fires" \tr -> do
       runTestBg frozenTime tr pass

@@ -211,7 +211,9 @@ uniquePath base = do
 -- ═══════════════════════════════════════════════════════════════════════════
 
 spec :: Spec
-spec = do
+-- Uses aroundAll + beforeAll (shared resource across examples), so it can't use the
+-- per-test isolation the rest of the suite relies on for parallelism. Run sequentially.
+spec = sequential do
   -- Layer 1: Unit/Integration tests (no external deps)
   aroundAll withTestResources do
     describe "GitHub Sync Settings" do

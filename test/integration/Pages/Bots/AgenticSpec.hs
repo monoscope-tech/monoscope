@@ -13,11 +13,11 @@ import Pkg.TestUtils
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Logging
-import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldBe, shouldSatisfy)
 
 
 spec :: Spec
-spec = aroundAll withTestResources do
+spec = around withTestResources do
   describe "Agentic Query Processing" do
     describe "Response parsing" do
       it "parses widget response" \_ -> do

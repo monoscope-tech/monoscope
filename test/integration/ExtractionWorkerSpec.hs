@@ -14,7 +14,7 @@ import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Pkg.TestUtils
 import Relude
 import System.Config (AuthContext (..))
-import Test.Hspec (Spec, aroundAll, describe, it, shouldSatisfy)
+import Test.Hspec (Spec, around, describe, it, shouldSatisfy)
 
 
 pid :: Projects.ProjectId
@@ -22,7 +22,7 @@ pid = UUIDId UUID.nil
 
 
 spec :: Spec
-spec = aroundAll withTestResources do
+spec = around withTestResources do
   describe "Extraction Worker" do
 
     it "parity: ingest spans → processEagerBatch produces endpoints + hashes" \tr -> do

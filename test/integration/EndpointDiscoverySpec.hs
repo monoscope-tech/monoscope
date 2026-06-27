@@ -13,7 +13,7 @@ import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import ProcessMessage (tokenizeUrlPath)
 import Relude
-import Test.Hspec (Spec, aroundAll, describe, it, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, around, describe, it, shouldBe, shouldSatisfy)
 import Utils (toXXHash)
 
 
@@ -68,7 +68,7 @@ queryEmbeddedCount tr = do
 
 
 spec :: Spec
-spec = aroundAll withTestResources do
+spec = around withTestResources do
   describe "Endpoint Template Discovery" do
     describe "End-to-end: tokenization + embedding + merge + cleanup" do
       it "full pipeline: tokenizes ID-like paths, embeds static paths, merges similar, cleans up" \tr -> do

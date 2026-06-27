@@ -11,7 +11,7 @@ import Relude
 
 
 spec :: Spec
-spec = aroundAll withTestResources do
+spec = around withTestResources do
   describe "Check Reports" do
     it "should toggle reports notifs" \tr -> do
       -- Get initial state

@@ -126,7 +126,8 @@ import Effectful.Log (Log)
 import Effectful.Reader.Static qualified
 import Effectful.Time (Time, runTime)
 import Log qualified
-import Log.Backend.StandardOutput.Bulk qualified as LogBulk
+import Log.Data (showLogMessage)
+import Log.Logger (mkBulkLogger)
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
@@ -182,6 +183,7 @@ import System.Environment (setEnv, unsetEnv)
 import System.Envy (DefConfig (..), decodeWithDefaults)
 import System.Exit (ExitCode (..))
 import System.IO.Silently qualified as Silently
+import System.IO.Unsafe (unsafePerformIO)
 import System.Logging qualified as Logging
 import System.Server qualified as Server
 import System.Tracing (Tracing)
@@ -259,8 +261,10 @@ withLocalSetup f = do
     migratedConfig <- throwE $ cacheAction ("./.tmp/postgres/" <> show dirSize) migrate combinedConfig
     withConfig migratedConfig $ \db -> do
       let cstr = toConnectionString db
-      pool <- newPool (defaultPoolConfig (connectPostgreSQL cstr) close 60 50)
-      f pool cstr
+      -- Same per-test budget as withExternalDBSetup: small pool so the parallel
+      -- suite stays under Postgres's connection cap (3 pg + 3×2 hasql ≈ 9 per test).
+      pool <- newPool (defaultPoolConfig (connectPostgreSQL cstr) close 60 3)
+      finally (f pool cstr) (destroyAllResources pool) -- match withExternalDBSetup; no per-example leak
 
 
 -- Test DB connection info, host configurable via DB_HOST env var
@@ -296,11 +300,12 @@ withExternalDBSetup f = do
                 threadDelay (100000 * (attempt + 1))
                 createFromTemplate (attempt + 1)
             | otherwise -> throwIO e
-  createFromTemplate 0
-  close masterConn
+  createFromTemplate 0 `finally` close masterConn
 
   -- Connect to the new test database
-  pool <- newPool (defaultPoolConfig (connect $ connInfo (toString testDbName)) close 60 10)
+  -- Small per-test pool: under `parallel` many test DBs are live at once and the CI
+  -- Postgres caps at 100 connections (3 pg + 3×2 hasql ≈ 9 per test).
+  pool <- newPool (defaultPoolConfig (connect $ connInfo (toString testDbName)) close 60 3)
   let cstr =
         encodeUtf8
           ( "host="
@@ -356,50 +361,57 @@ ensureTemplateDatabase connInfo templateDbName = do
   masterConn <- connect $ connInfo "postgres"
   let alter clause = void $ execute masterConn (Query $ encodeUtf8 $ "ALTER DATABASE " <> templateDbName <> " WITH " <> clause) ()
 
-  -- Per-file sizes (sorted by name) so content changes that preserve total size still invalidate.
-  files <- sort <$> listDirectory migrationsDirr
-  sizes <- mapM (getFileSize . (migrationsDirr <>)) files
-  let migrationChecksum = toText (show (zip files sizes))
+  -- Serialize the check-then-(re)build across parallel examples with a session
+  -- advisory lock: only one process builds the template at a time; the rest block
+  -- briefly, then find it already built (checksum match) and skip. Without this,
+  -- per-example setups race on CREATE/ALTER/COMMENT of the template →
+  -- "datname=... already exists" (23505) / "tuple concurrently updated" (XX000).
+  -- The lock auto-releases when masterConn closes (incl. on exception via finally).
+  flip finally (close masterConn) $ do
+    _ <- PGS.query_ masterConn "SELECT pg_advisory_lock(873042)::text" :: IO [Only Text]
+    -- Per-file sizes (sorted by name) so content changes that preserve total size still invalidate.
+    files <- sort <$> listDirectory migrationsDirr
+    sizes <- mapM (getFileSize . (migrationsDirr <>)) files
+    let migrationChecksum = toText (show (zip files sizes))
 
-  -- Read the checksum we stamped as the template's DB comment — from master, no
-  -- connection to the template (it disallows them). Nothing/mismatch ⇒ (re)build.
-  stamped <-
-    PGS.query masterConn "SELECT shobj_description(oid, 'pg_database') FROM pg_database WHERE datname = ?" (Only templateDbName)
-      :: IO [Only (Maybe Text)]
-  let existing = case stamped of [Only c] -> Just c; _ -> Nothing
+    -- Read the checksum we stamped as the template's DB comment — from master, no
+    -- connection to the template (it disallows them). Nothing/mismatch ⇒ (re)build.
+    stamped <-
+      PGS.query masterConn "SELECT shobj_description(oid, 'pg_database') FROM pg_database WHERE datname = ?" (Only templateDbName)
+        :: IO [Only (Maybe Text)]
+    let existing = case stamped of [Only c] -> Just c; _ -> Nothing
 
-  when (existing /= Just (Just migrationChecksum)) $ do
-    -- Drop a stale template (unlock first: a template DB can't be dropped, and FORCE clears stragglers).
-    when (isJust existing) $ do
-      alter "IS_TEMPLATE false ALLOW_CONNECTIONS true"
-      void $ execute masterConn (Query $ encodeUtf8 $ "DROP DATABASE IF EXISTS " <> templateDbName <> " WITH (FORCE)") ()
+    when (existing /= Just (Just migrationChecksum)) $ do
+      -- Drop a stale template (unlock first: a template DB can't be dropped, and FORCE clears stragglers).
+      when (isJust existing) $ do
+        alter "IS_TEMPLATE false ALLOW_CONNECTIONS true"
+        void $ execute masterConn (Query $ encodeUtf8 $ "DROP DATABASE IF EXISTS " <> templateDbName <> " WITH (FORCE)") ()
 
-    void $ execute masterConn (Query $ encodeUtf8 $ "CREATE DATABASE " <> templateDbName) ()
-    templateConn <- connect $ connInfo (toString templateDbName)
-    _ <- Migration.runMigration templateConn Migration.defaultOptions MigrationInitialization
-    _ <- Migration.runMigration templateConn Migration.defaultOptions $ MigrationDirectory migrationsDirr
-    -- Nil user as sudo + demo project + test API key.
-    _ <-
-      execute
-        templateConn
-        [sql| UPDATE users.users SET is_sudo = true WHERE id = '00000000-0000-0000-0000-000000000000';
+      void $ execute masterConn (Query $ encodeUtf8 $ "CREATE DATABASE " <> templateDbName) ()
+      -- bracket so templateConn closes even if a migration/seed throws (the template
+      -- is then left unstamped, so the next setup rebuilds it).
+      Safe.bracket (connect $ connInfo (toString templateDbName)) close $ \templateConn -> do
+        _ <- Migration.runMigration templateConn Migration.defaultOptions MigrationInitialization
+        _ <- Migration.runMigration templateConn Migration.defaultOptions $ MigrationDirectory migrationsDirr
+        -- Nil user as sudo + demo project + test API key.
+        void
+          $ execute
+            templateConn
+            [sql| UPDATE users.users SET is_sudo = true WHERE id = '00000000-0000-0000-0000-000000000000';
 
-              INSERT INTO projects.projects (id, title, payment_plan, active, deleted_at, weekly_notif, daily_notif)
-              VALUES ('00000000-0000-0000-0000-000000000000', 'Demo Project', 'FREE', true, NULL, true, true)
-              ON CONFLICT (id) DO UPDATE SET payment_plan = 'FREE', active = true, deleted_at = NULL;
+                  INSERT INTO projects.projects (id, title, payment_plan, active, deleted_at, weekly_notif, daily_notif)
+                  VALUES ('00000000-0000-0000-0000-000000000000', 'Demo Project', 'FREE', true, NULL, true, true)
+                  ON CONFLICT (id) DO UPDATE SET payment_plan = 'FREE', active = true, deleted_at = NULL;
 
-              INSERT into projects.project_api_keys (active, project_id, title, key_prefix)
-              SELECT True, '00000000-0000-0000-0000-000000000000', 'test', 'z6YeJcRJNH0zy9JOg6ZsQzxM9GHBHdSeu+7ugOpZ9jtR94qV'
-              WHERE NOT EXISTS (SELECT 1 FROM projects.project_api_keys WHERE key_prefix = 'z6YeJcRJNH0zy9JOg6ZsQzxM9GHBHdSeu+7ugOpZ9jtR94qV');
-          |]
-        ()
-    close templateConn
+                  INSERT into projects.project_api_keys (active, project_id, title, key_prefix)
+                  SELECT True, '00000000-0000-0000-0000-000000000000', 'test', 'z6YeJcRJNH0zy9JOg6ZsQzxM9GHBHdSeu+7ugOpZ9jtR94qV'
+                  WHERE NOT EXISTS (SELECT 1 FROM projects.project_api_keys WHERE key_prefix = 'z6YeJcRJNH0zy9JOg6ZsQzxM9GHBHdSeu+7ugOpZ9jtR94qV');
+              |]
+            ()
 
-    -- Stamp the checksum (escape quotes defensively) then lock: template + no connections.
-    void $ execute masterConn (Query $ encodeUtf8 $ "COMMENT ON DATABASE " <> templateDbName <> " IS '" <> T.replace "'" "''" migrationChecksum <> "'") ()
-    alter "IS_TEMPLATE true ALLOW_CONNECTIONS false"
-
-  close masterConn
+      -- Stamp the checksum (escape quotes defensively) then lock: template + no connections.
+      void $ execute masterConn (Query $ encodeUtf8 $ "COMMENT ON DATABASE " <> templateDbName <> " IS '" <> T.replace "'" "''" migrationChecksum <> "'") ()
+      alter "IS_TEMPLATE true ALLOW_CONNECTIONS false"
 
 
 -- | `testSessionHeader` would log a user in and automatically generate a session header
@@ -482,7 +494,7 @@ frozenTime = Unsafe.read "2025-01-01 00:00:00 UTC"
 
 
 runTestBackground :: UTCTime -> Config.AuthContext -> ATBackgroundCtx a -> IO a
-runTestBackground t authCtx action = LogBulk.withBulkStdOutLogger \logger ->
+runTestBackground t authCtx action = withSharedLogger \logger ->
   runTestBackgroundWithLogger t logger authCtx action
 
 
@@ -681,9 +693,28 @@ requireMinio tr pending action
   | otherwise = pending "MinIO not reachable — run `make minio-local` (or set MINIO_ENDPOINT)"
 
 
+-- One process-lifetime bulk logger shared by every example, never shut down.
+-- The old per-example `withBulkStdOutLogger` bracket shut its logger down at
+-- example end, but the background-job/extraction threads the example spawned keep
+-- logging; under `around` + parallel that raced into "attempt to write to a shut
+-- down logger" (AssertionFailed) and aborted the whole suite. A single shared
+-- logger (log-base loggers are thread-safe) sidesteps the lifecycle entirely.
+-- NOINLINE required: without it GHC may re-run the unsafePerformIO and create
+-- multiple loggers instead of the single shared CAF.
+{-# NOINLINE sharedTestLogger #-}
+sharedTestLogger :: Log.Logger
+-- tolerantLogger (the production wrapper) swallows write-after-shutdown / flush-thread
+-- crashes so a logger hiccup can't take down a parallel worker.
+sharedTestLogger = unsafePerformIO $ Logging.tolerantLogger <$> mkBulkLogger "test-stdout-bulk" (mapM_ (putTextLn . showLogMessage Nothing)) (pure ())
+
+
+withSharedLogger :: (Log.Logger -> m a) -> m a
+withSharedLogger act = act sharedTestLogger
+
+
 -- Compose withSetup with additional IO actions
 withTestResources :: (TestResources -> IO ()) -> IO ()
-withTestResources f = withSetup $ \pool cstr -> LogBulk.withBulkStdOutLogger \logger -> do
+withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
   projectCache <- newCache (Just $ TimeSpec (60 * 60) 0)
   projectKeyCache <- newCache (Just $ TimeSpec (60 * 60) 0)
   logsPatternCache <- newCache (Just $ TimeSpec (30 * 60) 0) -- Cache for log patterns, 30 minutes TTL
@@ -694,9 +725,9 @@ withTestResources f = withSetup $ \pool cstr -> LogBulk.withBulkStdOutLogger \lo
   tfPgUrl <- lookupEnv "TIMEFUSION_PG_TEST_URL"
   let tfCstr = maybe cstr (encodeUtf8 . toText) tfPgUrl
       tfEnabled = isJust tfPgUrl
-  hasqlMain <- mkHasqlPool 5 cstr
-  hasqlJobs <- mkHasqlPool 5 cstr
-  hasqlTf <- mkHasqlPool 5 tfCstr
+  hasqlMain <- mkHasqlPool 2 cstr
+  hasqlJobs <- mkHasqlPool 2 cstr
+  hasqlTf <- mkHasqlPool 2 tfCstr
   sessAndHeader <- testSessionHeader pool hasqlMain
 
   -- Load .env file for tests (to get OPENAI_API_KEY and other non-database configs)
@@ -771,6 +802,9 @@ withTestResources f = withSetup $ \pool cstr -> LogBulk.withBulkStdOutLogger \lo
           )
   uuidRef <- newIORef (map (UUID.fromWords 0 0 0) [1 .. 100000])
   testClock <- newTestClock frozenTime
+  -- Release the three hasql pools when the example finishes. Under `around`
+  -- (per-example resources) they're created once per test; without this each test
+  -- leaks ~6 connections, exhausting Postgres's cap across the parallel suite.
   f
     TestResources
       { trPool = pool
@@ -784,6 +818,8 @@ withTestResources f = withSetup $ \pool cstr -> LogBulk.withBulkStdOutLogger \lo
       , trMinioAvailable = minioReady
       , trTestClock = testClock
       }
+    -- finally over mapM_ releases every pool even if an earlier release throws
+    `finally` mapM_ OHasql.release [hasqlMain, hasqlJobs, hasqlTf]
 
 
 toServantResponse :: TestResources -> ATAuthCtx (RespHeaders a) -> IO (RespHeaders a, a)
@@ -855,7 +891,7 @@ freshUUIDRef = newIORef (map (UUID.fromWords 0 0 0) [1 .. 1000])
 runQueryEffect :: TestResources -> (forall es. (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServantS.ServerError :> es, IOE :> es, Log :> es, Time :> es, Tracing :> es) => Eff es a) -> IO a
 runQueryEffect TestResources{..} action = do
   tp <- getGlobalTracerProvider
-  LogBulk.withBulkStdOutLogger \logger ->
+  withSharedLogger \logger ->
     action
       & runErrorNoCallStack @ServantS.ServerError
       & Effectful.Reader.Static.runReader trATCtx
@@ -985,7 +1021,7 @@ logBackgroundJobsInfo logger jobs = do
 runAllBackgroundJobs :: UTCTime -> AuthContext -> IO (V.Vector Job)
 runAllBackgroundJobs t authCtx = do
   jobs <- withResource authCtx.pool getBackgroundJobs
-  LogBulk.withBulkStdOutLogger \logger ->
+  withSharedLogger \logger ->
     -- Run jobs concurrently using Ki structured concurrency
     runEff $ runConcurrent $ Ki.runStructuredConcurrency $ Ki.scoped \scope -> do
       threads <- V.forM jobs $ \job -> Ki.fork scope $ liftIO $ testJobsRunner t logger authCtx job
@@ -999,7 +1035,7 @@ runAllBackgroundJobs t authCtx = do
 runAllBackgroundJobsNoReset :: TestResources -> IO (V.Vector Job)
 runAllBackgroundJobsNoReset TestResources{..} = do
   jobs <- withResource trATCtx.pool getBackgroundJobs
-  LogBulk.withBulkStdOutLogger \logger ->
+  withSharedLogger \logger ->
     runEff $ runConcurrent $ Ki.runStructuredConcurrency $ Ki.scoped \scope -> do
       threads <- V.forM jobs \job -> Ki.fork scope $ liftIO $ do
         Relude.when trATCtx.config.enableBackgroundJobs $ do
@@ -1019,7 +1055,7 @@ runBackgroundJobsWhere t authCtx predicate = do
     bgJob <- BackgroundJobs.throwParsePayload job
     pure (job, bgJob)
   let filteredJobs = V.filter (\(_, bgJob) -> predicate bgJob) jobsWithParsed
-  LogBulk.withBulkStdOutLogger \logger ->
+  withSharedLogger \logger ->
     -- Run filtered jobs concurrently using Ki structured concurrency
     runEff $ runConcurrent $ Ki.runStructuredConcurrency $ Ki.scoped \scope -> do
       threads <- V.forM filteredJobs $ \(job, _) -> Ki.fork scope $ liftIO $ testJobsRunner t logger authCtx job

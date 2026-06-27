@@ -18,7 +18,7 @@ import Pkg.TestUtils
 import BackgroundJobs qualified
 import Relude
 import Relude.Unsafe qualified as Unsafe
-import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, aroundAll, sequential, describe, expectationFailure, it, shouldBe, shouldSatisfy)
 import Utils (toXXHash)
 
 
@@ -82,7 +82,7 @@ prepareTestMessages = do
     ]
 
 spec :: Spec
-spec = aroundAll withTestResources do
+spec = sequential $ aroundAll withTestResources do
   describe "API Catalog and Endpoints" do
     it "returns empty list when no data exists" \tr -> do
       (_, catalogList) <- testServant tr $

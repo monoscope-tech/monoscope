@@ -42,7 +42,7 @@ import Pkg.SchemaLearning.Worker qualified as Worker
 import Pkg.TestUtils (TestResources (..), frozenTime, runAsBase, runHasqlEffect, withTestResources)
 import ProcessMessage qualified
 import Relude
-import Test.Hspec (Spec, aroundAll, describe, it, shouldBe, shouldContain, shouldNotContain, shouldSatisfy)
+import Test.Hspec (Spec, around, describe, it, shouldBe, shouldContain, shouldNotContain, shouldSatisfy)
 import Web.ApiHandlers qualified as ApiH
 
 
@@ -188,7 +188,7 @@ seedSummary tr p = do
 
 
 spec :: Spec
-spec = aroundAll withTestResources $
+spec = around withTestResources $
   describe "Facets" $ do
     describe "Layer B — handler-shape contract" $ do
       it "getFacetSummary surfaces dotted keys with section prefixes" $ \tr -> do

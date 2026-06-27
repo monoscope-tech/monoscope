@@ -23,7 +23,10 @@ filters =
 
 
 spec :: Spec
-spec = aroundAll withTestResources do
+-- Later tests reuse dashboards created by earlier ones (e.g. "bulk add teams to
+-- dashboards"), so this keeps aroundAll and runs sequentially — opting out of the
+-- suite's per-test isolation + parallelism (same as GitSyncSpec).
+spec = sequential $ aroundAll withTestResources do
   describe "Dashboards Tests" do
     let mkDashboard t = Dashboards.DashboardForm{Dashboards.title = t, Dashboards.file = "overview.yaml", Dashboards.teams = [], Dashboards.fileDir = Nothing}
         dashboard = mkDashboard "Test Dashboard"

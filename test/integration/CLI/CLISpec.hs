@@ -53,7 +53,7 @@ checkJsonValue (AE.Object obj) check = check obj
 checkJsonValue _ _ = expectationFailure "Expected JSON object"
 
 spec :: Spec
-spec = aroundAll withTestResources do
+spec = around withTestResources do
   describe "CLI integrated tests" do
     it "events search returns JSON with log data via HTTP effect" \tr -> do
       key <- createTestAPIKey tr testPid "cli-test-events"

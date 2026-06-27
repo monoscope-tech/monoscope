@@ -26,7 +26,10 @@ import Test.Hspec
 
 
 spec :: Spec
-spec = aroundAll withTestResources do
+-- Examples share state across the file (later tests reuse rows earlier ones create),
+-- so this keeps aroundAll and runs sequentially — opting out of the suite's per-test
+-- isolation + parallelism (same as GitSyncSpec).
+spec = sequential $ aroundAll withTestResources do
   describe "Query Log Monitors" do
     it "should create monitor with no triggers" $ \tr -> do
       currentTime <- getCurrentTime

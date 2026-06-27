@@ -637,6 +637,7 @@ test-suite integration-tests
       SchemaLearningPerfSpec
       SchemaLearningSpec
       Spec
+      SpecHook
       Web.ApiV1Spec
       Web.ClientMetadataSpec
   hs-source-dirs:
@@ -880,6 +881,7 @@ test-suite test-dev
       SchemaLearningPerfSpec
       SchemaLearningSpec
       Spec
+      SpecHook
       Web.ApiV1Spec
       Web.ClientMetadataSpec
       Proto.Opentelemetry.Proto.Common.V1.Common

@@ -16,7 +16,7 @@ import Test.Hspec
 
 
 spec :: Spec
-spec = aroundAll withTestResources do
+spec = around withTestResources do
   describe "Check Course Creation, Update and Consumption" do
     it "Cannot update demo project without sudo" \tr -> do
       let createPForm =

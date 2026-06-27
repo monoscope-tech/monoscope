@@ -46,7 +46,7 @@ specJson = AE.toJSON apiV1OpenApiSpec
 
 
 spec :: Spec
-spec = aroundAll withTestResources do
+spec = around withTestResources do
   describe "API v1" do
     describe "OpenAPI spec" do
       it "round-trips through JSON and has correct metadata" $ \_tr -> do

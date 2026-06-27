@@ -20,7 +20,7 @@ import Pkg.TestUtils
 import Relude
 import Servant qualified
 import Database.PostgreSQL.Simple.Types (PGArray (..))
-import Test.Hspec (Spec, aroundAll, describe, it, shouldBe, shouldSatisfy, expectationFailure)
+import Test.Hspec (Spec, aroundAll, sequential, describe, it, shouldBe, shouldSatisfy, expectationFailure)
 
 
 pid :: Projects.ProjectId
@@ -66,7 +66,10 @@ countIssues tr issueType = withResource tr.trPool \conn -> do
 
 
 spec :: Spec
-spec = aroundAll withTestResources do
+-- Tests run as a sequence (later ones assert on patterns earlier ones seeded/merged),
+-- so this keeps aroundAll and runs sequentially — opting out of the suite's per-test
+-- isolation + parallelism (same as GitSyncSpec).
+spec = sequential $ aroundAll withTestResources do
   describe "Log Pattern Pipeline" do
 
     it "1. Extract patterns from ingested logs" \tr -> do

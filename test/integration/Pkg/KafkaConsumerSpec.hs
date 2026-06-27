@@ -120,7 +120,7 @@ seedTopic bVar topic offs =
 
 
 spec :: Spec
-spec = aroundAll withTestResources $ describe "Kafka decoupledLoop (in-memory broker)" do
+spec = around withTestResources $ describe "Kafka decoupledLoop (in-memory broker)" do
   it "drains a poll batch through processing and commits the contiguous offset watermark" \tr -> do
     bVar <- newTVarIO emptyBroker
     seedTopic bVar "otlp_logs" [0 .. 4]

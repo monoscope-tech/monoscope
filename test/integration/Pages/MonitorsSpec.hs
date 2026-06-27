@@ -53,7 +53,7 @@ alertForm =
 
 
 spec :: Spec
-spec = aroundAll withTestResources do
+spec = sequential $ aroundAll withTestResources do
   describe "Check Alerts" do
     it "should return an empty list" \tr -> do
       (_, pg) <-

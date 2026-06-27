@@ -29,7 +29,7 @@ userID = Projects.UserId (Unsafe.fromJust $ UUID.fromText "00000000-0000-0000-00
 
 
 spec :: Spec
-spec = aroundAll withTestResources do
+spec = sequential $ aroundAll withTestResources do
   describe "Members Creation, Update and Consumption" do
     it "Create member" \tr -> do
       -- Update project to a paid plan to allow multiple members
