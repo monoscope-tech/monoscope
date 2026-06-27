@@ -695,7 +695,9 @@ requireMinio tr pending action
 -- logger (log-base loggers are thread-safe) sidesteps the lifecycle entirely.
 {-# NOINLINE sharedTestLogger #-}
 sharedTestLogger :: Log.Logger
-sharedTestLogger = unsafePerformIO $ mkBulkLogger "test-stdout-bulk" (mapM_ (putTextLn . showLogMessage Nothing)) (pure ())
+-- tolerantLogger (the production wrapper) swallows write-after-shutdown / flush-thread
+-- crashes so a logger hiccup can't take down a parallel worker.
+sharedTestLogger = Logging.tolerantLogger . unsafePerformIO $ mkBulkLogger "test-stdout-bulk" (mapM_ (putTextLn . showLogMessage Nothing)) (pure ())
 
 
 withSharedLogger :: (Log.Logger -> m a) -> m a

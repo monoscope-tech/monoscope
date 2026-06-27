@@ -29,7 +29,7 @@ import Relude
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Key (fromText)
-import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldBe, shouldContain, shouldSatisfy, shouldThrow)
+import Test.Hspec (Spec, aroundAll, sequential, describe, expectationFailure, it, shouldBe, shouldContain, shouldSatisfy, shouldThrow)
 import Data.List (isInfixOf)
 import Data.Set qualified as Set
 import Control.Exception (ErrorCall (..), evaluate)
@@ -73,7 +73,7 @@ expectLogsJson = \case
 
 
 spec :: Spec
-spec = around withTestResources do
+spec = sequential $ aroundAll withTestResources do
   describe "gRPC Ingestion via Service Handlers" do
     it "Test 1.1: should create and verify 3 API keys work" $ \tr -> do
       keys <- traverse (createTestAPIKey tr pid) ["test-key-1", "test-key-2", "test-key-3"]
