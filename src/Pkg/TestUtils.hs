@@ -388,25 +388,26 @@ ensureTemplateDatabase connInfo templateDbName = do
         void $ execute masterConn (Query $ encodeUtf8 $ "DROP DATABASE IF EXISTS " <> templateDbName <> " WITH (FORCE)") ()
 
       void $ execute masterConn (Query $ encodeUtf8 $ "CREATE DATABASE " <> templateDbName) ()
-      templateConn <- connect $ connInfo (toString templateDbName)
-      _ <- Migration.runMigration templateConn Migration.defaultOptions MigrationInitialization
-      _ <- Migration.runMigration templateConn Migration.defaultOptions $ MigrationDirectory migrationsDirr
-      -- Nil user as sudo + demo project + test API key.
-      _ <-
-        execute
-          templateConn
-          [sql| UPDATE users.users SET is_sudo = true WHERE id = '00000000-0000-0000-0000-000000000000';
+      -- bracket so templateConn closes even if a migration/seed throws (the template
+      -- is then left unstamped, so the next setup rebuilds it).
+      Safe.bracket (connect $ connInfo (toString templateDbName)) close $ \templateConn -> do
+        _ <- Migration.runMigration templateConn Migration.defaultOptions MigrationInitialization
+        _ <- Migration.runMigration templateConn Migration.defaultOptions $ MigrationDirectory migrationsDirr
+        -- Nil user as sudo + demo project + test API key.
+        void $
+          execute
+            templateConn
+            [sql| UPDATE users.users SET is_sudo = true WHERE id = '00000000-0000-0000-0000-000000000000';
 
-                INSERT INTO projects.projects (id, title, payment_plan, active, deleted_at, weekly_notif, daily_notif)
-                VALUES ('00000000-0000-0000-0000-000000000000', 'Demo Project', 'FREE', true, NULL, true, true)
-                ON CONFLICT (id) DO UPDATE SET payment_plan = 'FREE', active = true, deleted_at = NULL;
+                  INSERT INTO projects.projects (id, title, payment_plan, active, deleted_at, weekly_notif, daily_notif)
+                  VALUES ('00000000-0000-0000-0000-000000000000', 'Demo Project', 'FREE', true, NULL, true, true)
+                  ON CONFLICT (id) DO UPDATE SET payment_plan = 'FREE', active = true, deleted_at = NULL;
 
-                INSERT into projects.project_api_keys (active, project_id, title, key_prefix)
-                SELECT True, '00000000-0000-0000-0000-000000000000', 'test', 'z6YeJcRJNH0zy9JOg6ZsQzxM9GHBHdSeu+7ugOpZ9jtR94qV'
-                WHERE NOT EXISTS (SELECT 1 FROM projects.project_api_keys WHERE key_prefix = 'z6YeJcRJNH0zy9JOg6ZsQzxM9GHBHdSeu+7ugOpZ9jtR94qV');
-            |]
-          ()
-      close templateConn
+                  INSERT into projects.project_api_keys (active, project_id, title, key_prefix)
+                  SELECT True, '00000000-0000-0000-0000-000000000000', 'test', 'z6YeJcRJNH0zy9JOg6ZsQzxM9GHBHdSeu+7ugOpZ9jtR94qV'
+                  WHERE NOT EXISTS (SELECT 1 FROM projects.project_api_keys WHERE key_prefix = 'z6YeJcRJNH0zy9JOg6ZsQzxM9GHBHdSeu+7ugOpZ9jtR94qV');
+              |]
+            ()
 
       -- Stamp the checksum (escape quotes defensively) then lock: template + no connections.
       void $ execute masterConn (Query $ encodeUtf8 $ "COMMENT ON DATABASE " <> templateDbName <> " IS '" <> T.replace "'" "''" migrationChecksum <> "'") ()
