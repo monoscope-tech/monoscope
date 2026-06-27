@@ -699,6 +699,8 @@ requireMinio tr pending action
 -- logging; under `around` + parallel that raced into "attempt to write to a shut
 -- down logger" (AssertionFailed) and aborted the whole suite. A single shared
 -- logger (log-base loggers are thread-safe) sidesteps the lifecycle entirely.
+-- NOINLINE required: without it GHC may re-run the unsafePerformIO and create
+-- multiple loggers instead of the single shared CAF.
 {-# NOINLINE sharedTestLogger #-}
 sharedTestLogger :: Log.Logger
 -- tolerantLogger (the production wrapper) swallows write-after-shutdown / flush-thread
@@ -816,8 +818,8 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
       , trMinioAvailable = minioReady
       , trTestClock = testClock
       }
-    -- nested so a throw releasing one pool still releases the others
-    `finally` (OHasql.release hasqlMain `finally` (OHasql.release hasqlJobs `finally` OHasql.release hasqlTf))
+    -- finally over mapM_ releases every pool even if an earlier release throws
+    `finally` mapM_ OHasql.release [hasqlMain, hasqlJobs, hasqlTf]
 
 
 toServantResponse :: TestResources -> ATAuthCtx (RespHeaders a) -> IO (RespHeaders a, a)
