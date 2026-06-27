@@ -300,8 +300,7 @@ withExternalDBSetup f = do
                 threadDelay (100000 * (attempt + 1))
                 createFromTemplate (attempt + 1)
             | otherwise -> throwIO e
-  createFromTemplate 0
-  close masterConn
+  createFromTemplate 0 `finally` close masterConn
 
   -- Connect to the new test database
   -- Small per-test pool: under `parallel` many test DBs are live at once and the CI
@@ -368,8 +367,8 @@ ensureTemplateDatabase connInfo templateDbName = do
   -- per-example setups race on CREATE/ALTER/COMMENT of the template →
   -- "datname=... already exists" (23505) / "tuple concurrently updated" (XX000).
   -- The lock auto-releases when masterConn closes (incl. on exception via finally).
-  _ <- PGS.query_ masterConn "SELECT pg_advisory_lock(873042)::text" :: IO [Only Text]
   flip finally (close masterConn) $ do
+    _ <- PGS.query_ masterConn "SELECT pg_advisory_lock(873042)::text" :: IO [Only Text]
     -- Per-file sizes (sorted by name) so content changes that preserve total size still invalidate.
     files <- sort <$> listDirectory migrationsDirr
     sizes <- mapM (getFileSize . (migrationsDirr <>)) files
@@ -703,7 +702,7 @@ requireMinio tr pending action
 sharedTestLogger :: Log.Logger
 -- tolerantLogger (the production wrapper) swallows write-after-shutdown / flush-thread
 -- crashes so a logger hiccup can't take down a parallel worker.
-sharedTestLogger = Logging.tolerantLogger . unsafePerformIO $ mkBulkLogger "test-stdout-bulk" (mapM_ (putTextLn . showLogMessage Nothing)) (pure ())
+sharedTestLogger = unsafePerformIO $ Logging.tolerantLogger <$> mkBulkLogger "test-stdout-bulk" (mapM_ (putTextLn . showLogMessage Nothing)) (pure ())
 
 
 withSharedLogger :: (Log.Logger -> m a) -> m a
