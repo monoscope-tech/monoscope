@@ -288,7 +288,8 @@ spec = sequential $ aroundAll withTestResources do
 
       it "Test 11.2: KQL filter narrows sessions result to a single user" $ \tr -> do
         key <- createTestAPIKey tr pid "sessions-filter-key"
-        -- Unique emails are belt-and-suspenders; each example gets a fresh DB (around)
+        -- Unique emails are REQUIRED: examples share one DB (sequential $ aroundAll),
+        -- so these must not collide with Test 11.1's data.
         ingestSessionEvent tr key "GET /a" [("session.id", "s1-filter"), ("user.email", "alice-filter@example.com")] False frozenTime
         ingestSessionEvent tr key "GET /b" [("session.id", "s2-filter"), ("user.email", "bob-filter@example.com")] False frozenTime
         void $ runAllBackgroundJobs frozenTime tr.trATCtx

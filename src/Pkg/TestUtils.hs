@@ -362,50 +362,56 @@ ensureTemplateDatabase connInfo templateDbName = do
   masterConn <- connect $ connInfo "postgres"
   let alter clause = void $ execute masterConn (Query $ encodeUtf8 $ "ALTER DATABASE " <> templateDbName <> " WITH " <> clause) ()
 
-  -- Per-file sizes (sorted by name) so content changes that preserve total size still invalidate.
-  files <- sort <$> listDirectory migrationsDirr
-  sizes <- mapM (getFileSize . (migrationsDirr <>)) files
-  let migrationChecksum = toText (show (zip files sizes))
+  -- Serialize the check-then-(re)build across parallel examples with a session
+  -- advisory lock: only one process builds the template at a time; the rest block
+  -- briefly, then find it already built (checksum match) and skip. Without this,
+  -- per-example setups race on CREATE/ALTER/COMMENT of the template →
+  -- "datname=... already exists" (23505) / "tuple concurrently updated" (XX000).
+  -- The lock auto-releases when masterConn closes (incl. on exception via finally).
+  _ <- PGS.query_ masterConn "SELECT pg_advisory_lock(873042)::text" :: IO [Only Text]
+  flip finally (close masterConn) $ do
+    -- Per-file sizes (sorted by name) so content changes that preserve total size still invalidate.
+    files <- sort <$> listDirectory migrationsDirr
+    sizes <- mapM (getFileSize . (migrationsDirr <>)) files
+    let migrationChecksum = toText (show (zip files sizes))
 
-  -- Read the checksum we stamped as the template's DB comment — from master, no
-  -- connection to the template (it disallows them). Nothing/mismatch ⇒ (re)build.
-  stamped <-
-    PGS.query masterConn "SELECT shobj_description(oid, 'pg_database') FROM pg_database WHERE datname = ?" (Only templateDbName)
-      :: IO [Only (Maybe Text)]
-  let existing = case stamped of [Only c] -> Just c; _ -> Nothing
+    -- Read the checksum we stamped as the template's DB comment — from master, no
+    -- connection to the template (it disallows them). Nothing/mismatch ⇒ (re)build.
+    stamped <-
+      PGS.query masterConn "SELECT shobj_description(oid, 'pg_database') FROM pg_database WHERE datname = ?" (Only templateDbName)
+        :: IO [Only (Maybe Text)]
+    let existing = case stamped of [Only c] -> Just c; _ -> Nothing
 
-  when (existing /= Just (Just migrationChecksum)) $ do
-    -- Drop a stale template (unlock first: a template DB can't be dropped, and FORCE clears stragglers).
-    when (isJust existing) $ do
-      alter "IS_TEMPLATE false ALLOW_CONNECTIONS true"
-      void $ execute masterConn (Query $ encodeUtf8 $ "DROP DATABASE IF EXISTS " <> templateDbName <> " WITH (FORCE)") ()
+    when (existing /= Just (Just migrationChecksum)) $ do
+      -- Drop a stale template (unlock first: a template DB can't be dropped, and FORCE clears stragglers).
+      when (isJust existing) $ do
+        alter "IS_TEMPLATE false ALLOW_CONNECTIONS true"
+        void $ execute masterConn (Query $ encodeUtf8 $ "DROP DATABASE IF EXISTS " <> templateDbName <> " WITH (FORCE)") ()
 
-    void $ execute masterConn (Query $ encodeUtf8 $ "CREATE DATABASE " <> templateDbName) ()
-    templateConn <- connect $ connInfo (toString templateDbName)
-    _ <- Migration.runMigration templateConn Migration.defaultOptions MigrationInitialization
-    _ <- Migration.runMigration templateConn Migration.defaultOptions $ MigrationDirectory migrationsDirr
-    -- Nil user as sudo + demo project + test API key.
-    _ <-
-      execute
-        templateConn
-        [sql| UPDATE users.users SET is_sudo = true WHERE id = '00000000-0000-0000-0000-000000000000';
+      void $ execute masterConn (Query $ encodeUtf8 $ "CREATE DATABASE " <> templateDbName) ()
+      templateConn <- connect $ connInfo (toString templateDbName)
+      _ <- Migration.runMigration templateConn Migration.defaultOptions MigrationInitialization
+      _ <- Migration.runMigration templateConn Migration.defaultOptions $ MigrationDirectory migrationsDirr
+      -- Nil user as sudo + demo project + test API key.
+      _ <-
+        execute
+          templateConn
+          [sql| UPDATE users.users SET is_sudo = true WHERE id = '00000000-0000-0000-0000-000000000000';
 
-              INSERT INTO projects.projects (id, title, payment_plan, active, deleted_at, weekly_notif, daily_notif)
-              VALUES ('00000000-0000-0000-0000-000000000000', 'Demo Project', 'FREE', true, NULL, true, true)
-              ON CONFLICT (id) DO UPDATE SET payment_plan = 'FREE', active = true, deleted_at = NULL;
+                INSERT INTO projects.projects (id, title, payment_plan, active, deleted_at, weekly_notif, daily_notif)
+                VALUES ('00000000-0000-0000-0000-000000000000', 'Demo Project', 'FREE', true, NULL, true, true)
+                ON CONFLICT (id) DO UPDATE SET payment_plan = 'FREE', active = true, deleted_at = NULL;
 
-              INSERT into projects.project_api_keys (active, project_id, title, key_prefix)
-              SELECT True, '00000000-0000-0000-0000-000000000000', 'test', 'z6YeJcRJNH0zy9JOg6ZsQzxM9GHBHdSeu+7ugOpZ9jtR94qV'
-              WHERE NOT EXISTS (SELECT 1 FROM projects.project_api_keys WHERE key_prefix = 'z6YeJcRJNH0zy9JOg6ZsQzxM9GHBHdSeu+7ugOpZ9jtR94qV');
-          |]
-        ()
-    close templateConn
+                INSERT into projects.project_api_keys (active, project_id, title, key_prefix)
+                SELECT True, '00000000-0000-0000-0000-000000000000', 'test', 'z6YeJcRJNH0zy9JOg6ZsQzxM9GHBHdSeu+7ugOpZ9jtR94qV'
+                WHERE NOT EXISTS (SELECT 1 FROM projects.project_api_keys WHERE key_prefix = 'z6YeJcRJNH0zy9JOg6ZsQzxM9GHBHdSeu+7ugOpZ9jtR94qV');
+            |]
+          ()
+      close templateConn
 
-    -- Stamp the checksum (escape quotes defensively) then lock: template + no connections.
-    void $ execute masterConn (Query $ encodeUtf8 $ "COMMENT ON DATABASE " <> templateDbName <> " IS '" <> T.replace "'" "''" migrationChecksum <> "'") ()
-    alter "IS_TEMPLATE true ALLOW_CONNECTIONS false"
-
-  close masterConn
+      -- Stamp the checksum (escape quotes defensively) then lock: template + no connections.
+      void $ execute masterConn (Query $ encodeUtf8 $ "COMMENT ON DATABASE " <> templateDbName <> " IS '" <> T.replace "'" "''" migrationChecksum <> "'") ()
+      alter "IS_TEMPLATE true ALLOW_CONNECTIONS false"
 
 
 -- | `testSessionHeader` would log a user in and automatically generate a session header

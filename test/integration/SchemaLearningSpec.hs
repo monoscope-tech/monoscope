@@ -27,7 +27,7 @@ import Pkg.SchemaLearning.Hot qualified as Hot
 import Pkg.SchemaLearning.Worker qualified as Worker
 import Pkg.TestUtils (TestResources (..), frozenTime, runHasqlEffect, withTestResources)
 import Relude
-import Test.Hspec (Spec, aroundAll, describe, it, shouldBe, shouldReturn, shouldSatisfy)
+import Test.Hspec (Spec, aroundAll, sequential, describe, it, shouldBe, shouldReturn, shouldSatisfy)
 import Utils (toXXHash)
 
 
@@ -131,7 +131,9 @@ countAnomalyJobs tr = do
 
 
 spec :: Spec
-spec = aroundAll withTestResources $
+-- aroundAll (shared DB + clearAll between examples) — must run sequentially, else the
+-- parallel hook races concurrent flushes on the shared schema_catalog/template.
+spec = sequential $ aroundAll withTestResources $
   describe "Schema Learning – flush + anomaly producer" $ do
     it "first flush emits endpoint+shape+field+format anomalies and enqueues one job per type" $ \tr -> do
       clearAll tr
