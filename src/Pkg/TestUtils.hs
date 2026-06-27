@@ -394,8 +394,8 @@ ensureTemplateDatabase connInfo templateDbName = do
         _ <- Migration.runMigration templateConn Migration.defaultOptions MigrationInitialization
         _ <- Migration.runMigration templateConn Migration.defaultOptions $ MigrationDirectory migrationsDirr
         -- Nil user as sudo + demo project + test API key.
-        void $
-          execute
+        void
+          $ execute
             templateConn
             [sql| UPDATE users.users SET is_sudo = true WHERE id = '00000000-0000-0000-0000-000000000000';
 
