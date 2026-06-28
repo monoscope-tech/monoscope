@@ -53,6 +53,7 @@ import Pkg.Components.TimePicker qualified as Components
 import Pkg.Components.Widget (WidgetAxis (..), WidgetType (WTTimeseries, WTTimeseriesLine))
 import Pkg.Components.Widget qualified as Widget
 import Pkg.Parser (pSource, parseQueryToAST, toQText)
+import Pkg.Parser.Stats (Section (TakeCommand))
 import Pkg.SchemaLearning.Catalog (FacetData (..), FacetSummary (..), FacetValue (..))
 import Relude hiding (ask)
 import Servant qualified
@@ -642,15 +643,20 @@ queryEvents pid queryM sinceM fromM toM sourceM limitM withChildrenM = do
     Left err -> throwError $ kqlError400 "invalid_query" ("Invalid query: " <> err) Nothing Nothing Nothing
     Right ast -> pure ast
   let (fromD, toD, _) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
-  result <- LogQueries.selectLogTable pid queryAST (toQText queryAST) Nothing (fromD, toD) [] (parseMaybe pSource =<< sourceM) Nothing
+      -- Apply the API `limit` (default 100) as the query row-limit when the KQL
+      -- didn't set its own, so selectLogTable returns exactly the page: hasMore
+      -- and cursor stay consistent with the rows returned (this mirrors apiLogH,
+      -- which has no secondary take). Previously a post-hoc `V.take` over the
+      -- trace-tree-flattened rows — which include synth headers and descendants —
+      -- both miscounted hasMore and dropped matched roots past the cut, so
+      -- `--with-children` could silently truncate results and stop pagination.
+      hasKqlLimit = any (\case TakeCommand{} -> True; _ -> False) queryAST
+      queryAST' = if hasKqlLimit then queryAST else queryAST <> [TakeCommand (fromMaybe 100 limitM)]
+  result <- LogQueries.selectLogTable pid queryAST' (toQText queryAST') Nothing (fromD, toD) [] (parseMaybe pSource =<< sourceM) Nothing
   case result of
     Left err -> throwError $ translateQueryError err
-    Right r -> do
-      -- Default to exact-match (no trace expansion); UI passes True via apiLogH.
-      lr <- buildLogResult (fromMaybe False withChildrenM) pid now sinceM fromM toM [] r
-      let limited = V.take (fromMaybe 100 limitM) lr.logsData
-          qrc = V.length limited
-      pure lr{logsData = limited, queryResultCount = qrc, hasMore = qrc < lr.count}
+    -- Default to exact-match (no trace expansion); UI passes True via apiLogH.
+    Right r -> buildLogResult (fromMaybe False withChildrenM) pid now sinceM fromM toM [] r
 
 
 -- | Translate the raw exception string returned by 'LogQueries.selectLogTable'
