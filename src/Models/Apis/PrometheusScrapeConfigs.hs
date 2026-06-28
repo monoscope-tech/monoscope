@@ -19,6 +19,7 @@ import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Default (Default)
 import Data.Effectful.Hasql qualified as Hasql
+import Data.List (partition)
 import Data.OpenApi (ToParamSchema (..), ToSchema (..), declareNamedSchema)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
@@ -149,11 +150,9 @@ markScraped cid status =
 -- silently: the dropped count is logged. Returns the number of samples ingested.
 ingestScrapedBody :: (DB es, Log :> es) => PrometheusScrapeConfig -> UTCTime -> LByteString -> Eff es Int
 ingestScrapedBody cfg now body = do
-  let samples = Prom.parsePrometheus (decodeUtf8 body)
-      finiteS = filter (\s -> not (isNaN s.value || isInfinite s.value)) samples
+  let (finiteS, dropped) = partition (\s -> not (isNaN s.value || isInfinite s.value)) (Prom.parsePrometheus (decodeUtf8 body))
       records = V.fromList (map (sampleToMetricRecord cfg now) finiteS)
-      droppedN = length samples - length finiteS
-  unless (droppedN == 0) $ Log.logInfo "Prometheus scrape dropped non-finite samples" (AE.object ["config_id" AE..= cfg.id.toText, "dropped" AE..= droppedN])
+  unless (null dropped) $ Log.logInfo "Prometheus scrape dropped non-finite samples" (AE.object ["config_id" AE..= cfg.id.toText, "dropped" AE..= length dropped])
   Telemetry.bulkInsertMetrics records
   pure (V.length records)
 

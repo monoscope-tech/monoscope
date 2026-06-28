@@ -472,7 +472,7 @@ prometheusGetH pid = do
 validatePrometheusForm :: PrometheusForm -> Either Text (Text, Text, Int, Maybe Text, AE.Value)
 validatePrometheusForm form
   | T.null url = Left "A /metrics URL is required"
-  | not (T.isPrefixOf "http://" url || T.isPrefixOf "https://" url) = Left "URL must start with http:// or https://"
+  | not (isHttpUrl url) = Left "URL must start with http:// or https://"
   | T.null name = Left "A name is required — it groups the scraped metrics under service.name"
   | otherwise =
       Right
@@ -485,6 +485,12 @@ validatePrometheusForm form
   where
     name = T.strip form.name
     url = T.strip form.url
+
+
+-- | Minimal SSRF floor: only http(s) targets. Used by both save-validation and the
+-- Test handler so neither path can be pointed at file:// or other schemes.
+isHttpUrl :: Text -> Bool
+isHttpUrl u = T.isPrefixOf "http://" u || T.isPrefixOf "https://" u
 
 
 prometheusPostH :: Projects.ProjectId -> PrometheusForm -> ATAuthCtx (RespHeaders PrometheusMut)
@@ -517,15 +523,18 @@ prometheusTestH pid form = do
   let url = T.strip form.url
   if T.null url
     then addRespHeaders $ prometheusTestResult (Left "Enter a URL first")
-    else do
-      let opts = BJ.prometheusScrapeOpts (mfilter (not . T.null) (T.strip <$> form.authHeader))
-      t0 <- Time.currentTime
-      res <- tryAny (W.getWith opts (toString url))
-      t1 <- Time.currentTime
-      let ms = round (realToFrac (diffUTCTime t1 t0) * 1000 :: Double) :: Int
-      addRespHeaders $ prometheusTestResult $ case res of
-        Left e -> Left (T.take 300 (show e))
-        Right resp -> Right (length (Prom.parsePrometheus (decodeUtf8 (resp ^. Wreq.responseBody))), ms)
+    else
+      if not (isHttpUrl url)
+        then addRespHeaders $ prometheusTestResult (Left "URL must start with http:// or https://")
+        else do
+          let opts = BJ.prometheusScrapeOpts (mfilter (not . T.null) (T.strip <$> form.authHeader))
+          t0 <- Time.currentTime
+          res <- tryAny (W.getWith opts (toString url))
+          t1 <- Time.currentTime
+          let ms = round (realToFrac (diffUTCTime t1 t0) * 1000 :: Double) :: Int
+          addRespHeaders $ prometheusTestResult $ case res of
+            Left e -> Left (T.take 300 (show e))
+            Right resp -> Right (length (Prom.parsePrometheus (decodeUtf8 (resp ^. Wreq.responseBody))), ms)
 
 
 prometheusDeleteH :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfigId -> ATAuthCtx (RespHeaders PrometheusMut)
