@@ -477,7 +477,7 @@ validatePrometheusForm form
       Right
         ( name
         , url
-        , max 10 (fromMaybe 60 form.scrapeInterval)
+        , max 60 (fromMaybe 60 form.scrapeInterval) -- floor at the 60s dispatcher cadence
         , mfilter (not . T.null) (T.strip <$> form.authHeader)
         , parseLabelsText (fromMaybe "" form.extraLabels)
         )
@@ -608,7 +608,9 @@ prometheusFields_ pid mcfg = do
   label_ [class_ "flex flex-col gap-1 text-sm"] do
     span_ [class_ "text-textWeak"] "Scrape interval"
     select_ [class_ "select select-bordered w-full", name_ "scrapeInterval"]
-      $ forM_ ([(15, "15s"), (30, "30s"), (60, "1 minute"), (300, "5 minutes"), (900, "15 minutes")] :: [(Int, Text)]) \(v, l) ->
+      -- No sub-minute options: the scrape dispatcher ticks once per minute, so a
+      -- shorter interval can't be honoured (it would just scrape every ~60s anyway).
+      $ forM_ ([(60, "1 minute"), (300, "5 minutes"), (900, "15 minutes"), (3600, "1 hour")] :: [(Int, Text)]) \(v, l) ->
         option_ ([value_ (show v)] <> [selected_ "selected" | maybe (v == 60) ((== v) . (.scrapeIntervalSeconds)) mcfg]) (toHtml l)
   field_ "authHeader" "Authorization header (optional)" "Bearer <token>" "password" False (maybe "" (fromMaybe "" . (.authHeader)) mcfg)
   field_ "extraLabels" "Static labels (optional)" "env=prod, team=core" "text" False (maybe "" (labelsToText . (.extraLabels)) mcfg)

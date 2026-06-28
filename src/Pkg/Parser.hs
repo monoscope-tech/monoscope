@@ -531,7 +531,7 @@ defaultSelectSqlQuery (Just SSpans) =
     -- error spans are caught client-side via the summary marker); for logs, which carry
     -- no `errors` payload, we fold in severity — a log-scoped subset of LogQueries.is_error
     -- — so ERROR/FATAL logs also propagate the badge to their parent.
-    "(errors is not null OR (kind = 'log' AND (lower(level) = 'error' OR severity___severity_number >= 17))) as errors"
+    "COALESCE(errors is not null OR (kind = 'log' AND (lower(level) = 'error' OR severity___severity_number >= 17)), false) as errors"
   , "summary"
   , "context___span_id as latency_breakdown"
   , "kind"

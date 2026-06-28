@@ -27,7 +27,9 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.ToField (ToField)
-import Effectful (Eff)
+import Effectful (Eff, type (:>))
+import Effectful.Log (Log)
+import Effectful.Log qualified as Log
 import GHC.Records (HasField (getField))
 import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
@@ -133,11 +135,15 @@ markScraped cid t status =
 
 
 -- | Parse an exposition-format body and ingest its (finite) samples as metrics.
--- Non-finite values (NaN/±Inf) are dropped — Aeson can't encode them and they
--- carry no queryable signal. Returns the number of samples ingested.
-ingestScrapedBody :: DB es => PrometheusScrapeConfig -> UTCTime -> LByteString -> Eff es Int
+-- Non-finite values (NaN/±Inf) are dropped — Aeson can't encode them — but never
+-- silently: the dropped count is logged. Returns the number of samples ingested.
+ingestScrapedBody :: (DB es, Log :> es) => PrometheusScrapeConfig -> UTCTime -> LByteString -> Eff es Int
 ingestScrapedBody cfg now body = do
-  let records = V.fromList [sampleToMetricRecord cfg now s | s <- Prom.parsePrometheus (decodeUtf8 body), not (isNaN s.value || isInfinite s.value)]
+  let samples = Prom.parsePrometheus (decodeUtf8 body)
+      finiteS = filter (\s -> not (isNaN s.value || isInfinite s.value)) samples
+      records = V.fromList (map (sampleToMetricRecord cfg now) finiteS)
+      droppedN = length samples - length finiteS
+  unless (droppedN == 0) $ Log.logInfo "Prometheus scrape dropped non-finite samples" (AE.object ["config_id" AE..= cfg.id.toText, "dropped" AE..= droppedN])
   Telemetry.bulkInsertMetrics records
   pure (V.length records)
 
