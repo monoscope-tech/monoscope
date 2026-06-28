@@ -137,11 +137,9 @@ markScraped cid t status =
 -- carry no queryable signal. Returns the number of samples ingested.
 ingestScrapedBody :: DB es => PrometheusScrapeConfig -> UTCTime -> LByteString -> Eff es Int
 ingestScrapedBody cfg now body = do
-  let records = V.fromList [sampleToMetricRecord cfg now s | s <- Prom.parsePrometheus (decodeUtf8 body), finite s.value]
+  let records = V.fromList [sampleToMetricRecord cfg now s | s <- Prom.parsePrometheus (decodeUtf8 body), not (isNaN s.value || isInfinite s.value)]
   Telemetry.bulkInsertMetrics records
   pure (V.length records)
-  where
-    finite v = not (isNaN v || isInfinite v)
 
 
 -- | Map one Prometheus sample to a metric row. Counters become monotonic sums;

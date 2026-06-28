@@ -1,6 +1,6 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl, sameSegmentCount) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl, sameSegmentCount, prometheusScrapeOpts) where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
@@ -3044,6 +3044,17 @@ prometheusScrapeTimeoutMicros :: Int
 prometheusScrapeTimeoutMicros = 10 * 1000000
 
 
+-- | wreq Options for a scrape: hard response timeout + optional Authorization header.
+-- Shared by the worker and the settings Test button so the two never drift on timeout
+-- or header wiring (the Test button exists to mirror what the real scrape does).
+prometheusScrapeOpts :: Maybe Text -> Wreq.Options
+prometheusScrapeOpts authHeader =
+  maybe id (\h -> header "Authorization" .~ [encodeUtf8 h]) authHeader
+    $ defaults
+    & Wreq.manager
+    .~ Left tlsManagerSettings{managerResponseTimeout = responseTimeoutMicro prometheusScrapeTimeoutMicros}
+
+
 -- | Dispatcher (PrometheusScrapeTick). Atomically leases the due targets — 'claimDueConfigs'
 -- uses @FOR UPDATE SKIP LOCKED@, so running this on every node never double-scrapes — then
 -- fans out one 'PrometheusScrapeOne' job per target. The actual scraping is done by workers
@@ -3065,10 +3076,7 @@ dispatchPrometheusScrapes authCtx = do
 scrapePrometheusTarget :: PromCfg.PrometheusScrapeConfigId -> ATBackgroundCtx ()
 scrapePrometheusTarget cid = whenJustM (PromCfg.getConfig cid) \cfg -> Relude.when cfg.enabled do
   now <- Time.currentTime
-  let mgr = Left tlsManagerSettings{managerResponseTimeout = responseTimeoutMicro prometheusScrapeTimeoutMicros}
-      auth = maybe id (\h -> header "Authorization" .~ [encodeUtf8 h]) cfg.authHeader
-      opts = auth $ defaults & Wreq.manager .~ mgr
-  tryAny (W.getWith opts (toString cfg.url) >>= \resp -> PromCfg.ingestScrapedBody cfg now (resp ^. responseBody)) >>= \case
+  tryAny (W.getWith (prometheusScrapeOpts cfg.authHeader) (toString cfg.url) >>= \resp -> PromCfg.ingestScrapedBody cfg now (resp ^. responseBody)) >>= \case
     Right n -> void $ PromCfg.markScraped cfg.id now ("ok: " <> show n <> " samples")
     Left err -> do
       Log.logWarn "Prometheus scrape failed" (cfg.id.toText, cfg.url, show err)

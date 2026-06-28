@@ -142,9 +142,10 @@ describe('Log Worker Functions', () => {
   });
 
   // Regression: error-level LOGS (and orphan error logs under a synthetic
-  // "missing span" parent) must propagate the red error badge to their parent
-  // via childErrors. Previously logs were hardcoded hasErrors=false, so only
-  // error spans lit the parent badge.
+  // "missing span" parent) must propagate the red error badge to their parent via
+  // childErrors. Logs were once hardcoded hasErrors=false; now the server-computed
+  // `errors` flag folds in log severity (defaultSelectSqlQuery), and the worker
+  // simply honours that flag — so an error log is one with errors=true here.
   describe('childErrors propagation', () => {
     const colMap = {
       trace_id: 0,
@@ -155,36 +156,25 @@ describe('Log Worker Functions', () => {
       start_time_ns: 5,
       errors: 6,
       summary: 7,
-      severity_text: 8,
-      severity_number: 9,
-      kind: 10,
-      id: 11,
+      kind: 8,
+      id: 9,
     };
     const row = (o: Partial<any> = {}) =>
-      Object.assign([], { 0: 'tr', 1: 'def', 2: null, 3: '2024-01-01T00:00:00Z', 4: 0, 5: 1, 6: false, 7: [], 8: null, 9: null, 10: 'span', 11: 'def' }, o);
+      Object.assign([], { 0: 'tr', 1: 'def', 2: null, 3: '2024-01-01T00:00:00Z', 4: 0, 5: 1, 6: false, 7: [], 8: 'span', 9: 'def' }, o);
     const byId = (res: any[], id: string) => res.find((r) => r.id === id);
 
-    test('error log child lights the parent error badge', () => {
-      const parent = row({ 1: 'span-1', 11: 'span-1' });
-      const errLog = row({ 2: 'span-1', 10: 'log', 11: 'log-1', 8: 'ERROR' });
+    test('error log child (errors flag set) lights the parent error badge', () => {
+      const parent = row({ 1: 'span-1', 9: 'span-1' });
+      const errLog = row({ 2: 'span-1', 8: 'log', 9: 'log-1', 6: true });
       const res = groupSpans([parent, errLog], colMap, { tr: true }, false, [
         { trace_id: 'tr', start_time: 1, duration: 1, trace_start_time: null, root: 'span-1', children: { 'span-1': ['log-1'] } },
       ]);
       expect(byId(res, 'span-1').childErrors).toBe(true);
     });
 
-    test('error log identified by OTel severity_number ≥17', () => {
-      const parent = row({ 1: 'span-1', 11: 'span-1' });
-      const errLog = row({ 2: 'span-1', 10: 'log', 11: 'log-1', 9: 17 });
-      const res = groupSpans([parent, errLog], colMap, { tr: true }, false, [
-        { trace_id: 'tr', start_time: 1, duration: 1, trace_start_time: null, root: 'span-1', children: { 'span-1': ['log-1'] } },
-      ]);
-      expect(byId(res, 'span-1').childErrors).toBe(true);
-    });
-
-    test('non-error (info) log does not light the parent badge', () => {
-      const parent = row({ 1: 'span-1', 11: 'span-1' });
-      const infoLog = row({ 2: 'span-1', 10: 'log', 11: 'log-1', 8: 'INFO', 7: ['body↢saw an ERROR earlier'] });
+    test('non-error log does not light the parent badge (summary not scanned for logs)', () => {
+      const parent = row({ 1: 'span-1', 9: 'span-1' });
+      const infoLog = row({ 2: 'span-1', 8: 'log', 9: 'log-1', 6: false, 7: ['body↢saw an ERROR earlier'] });
       const res = groupSpans([parent, infoLog], colMap, { tr: true }, false, [
         { trace_id: 'tr', start_time: 1, duration: 1, trace_start_time: null, root: 'span-1', children: { 'span-1': ['log-1'] } },
       ]);
@@ -194,9 +184,9 @@ describe('Log Worker Functions', () => {
     test('synthetic missing-span parent lights up from an orphan error log', () => {
       // Server inserts a synthetic placeholder (kind=span, errors=false,
       // latency_breakdown = the missing parent id) as the trace root; the real
-      // orphans (here an error log) hang under it.
-      const synthetic = row({ 1: 'missing-parent', 11: 'synthetic-missing-parent', 6: false });
-      const errLog = row({ 2: 'missing-parent', 10: 'log', 11: 'log-1', 8: 'FATAL' });
+      // orphans (here an error log with errors=true) hang under it.
+      const synthetic = row({ 1: 'missing-parent', 9: 'synthetic-missing-parent', 6: false });
+      const errLog = row({ 2: 'missing-parent', 8: 'log', 9: 'log-1', 6: true });
       const res = groupSpans([synthetic, errLog], colMap, { tr: true }, false, [
         { trace_id: 'tr', start_time: 1, duration: 1, trace_start_time: null, root: 'missing-parent', children: { 'missing-parent': ['log-1'] } },
       ]);

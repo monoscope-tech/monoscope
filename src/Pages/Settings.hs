@@ -92,8 +92,6 @@ import Models.Projects.ProjectMembers (Team (..), getTeamsById, resolveTeamEmail
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
-import Network.HTTP.Client (managerResponseTimeout, responseTimeoutMicro)
-import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.Minio qualified as Minio
 import Network.Wreq qualified as Wreq
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, settingsContentTarget, withSettingsPage)
@@ -489,25 +487,22 @@ validatePrometheusForm form
 
 
 prometheusPostH :: Projects.ProjectId -> PrometheusForm -> ATAuthCtx (RespHeaders PrometheusMut)
-prometheusPostH pid form = do
-  _ <- Projects.sessionAndProject pid
-  case validatePrometheusForm form of
-    Left err -> addErrorToast err Nothing
-    Right (name, url, interval, authH, labels) -> do
-      void $ PromCfg.insertConfig pid name url interval authH labels
-      addSuccessToast "Added Prometheus target" Nothing
-      addTriggerEvent "closeModal" ""
-  prometheusMut pid
+prometheusPostH pid form = promSave pid form "Added" \(name, url, interval, authH, labels) -> PromCfg.insertConfig pid name url interval authH labels
 
 
 prometheusUpdateH :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfigId -> PrometheusForm -> ATAuthCtx (RespHeaders PrometheusMut)
-prometheusUpdateH pid cid form = do
+prometheusUpdateH pid cid form = promSave pid form "Updated" \(name, url, interval, authH, labels) -> PromCfg.updateConfig pid cid name url interval authH labels
+
+
+-- | Shared create/edit flow: validate, persist (insert or update), toast, refresh list.
+promSave :: Projects.ProjectId -> PrometheusForm -> Text -> ((Text, Text, Int, Maybe Text, AE.Value) -> ATAuthCtx Int64) -> ATAuthCtx (RespHeaders PrometheusMut)
+promSave pid form verb persist = do
   _ <- Projects.sessionAndProject pid
   case validatePrometheusForm form of
     Left err -> addErrorToast err Nothing
-    Right (name, url, interval, authH, labels) -> do
-      void $ PromCfg.updateConfig pid cid name url interval authH labels
-      addSuccessToast "Updated Prometheus target" Nothing
+    Right vals -> do
+      void $ persist vals
+      addSuccessToast (verb <> " Prometheus target") Nothing
       addTriggerEvent "closeModal" ""
   prometheusMut pid
 
@@ -522,9 +517,7 @@ prometheusTestH pid form = do
   if T.null url
     then addRespHeaders $ prometheusTestResult (Left "Enter a URL first")
     else do
-      let mgr = Left tlsManagerSettings{managerResponseTimeout = responseTimeoutMicro (10 * 1000000)}
-          auth = maybe Relude.id (\h -> Wreq.header "Authorization" .~ [encodeUtf8 h]) (mfilter (not . T.null) (T.strip <$> form.authHeader))
-          opts = auth $ Wreq.defaults & Wreq.manager .~ mgr
+      let opts = BJ.prometheusScrapeOpts (mfilter (not . T.null) (T.strip <$> form.authHeader))
       t0 <- Time.currentTime
       res <- tryAny (W.getWith opts (toString url))
       t1 <- Time.currentTime

@@ -11,21 +11,18 @@ export function generateId() {
 }
 
 // Whether a row counts as an error for the purpose of propagating the red error
-// badge to ancestor rows. Spans use the explicit `errors` flag or an ERROR marker
-// in their styled `summary` segments. Logs have no `errors`/summary-marker, so we
-// derive error-ness from severity (text or OTel number ≥17 = ERROR/FATAL); we do
-// NOT scan a log's summary for "ERROR" since that's the raw body and false-positives.
+// badge to ancestor rows. The server-computed `errors` flag already folds in log
+// severity (see defaultSelectSqlQuery), so logs are covered by it; for spans we
+// additionally honour an ERROR marker in the styled `summary` segments (status-only
+// error spans carry no `errors` payload). We do NOT scan a log's summary, since that
+// is the raw body and would false-positive on the word "ERROR".
 function rowHasError(span: any[], idx: ColIdxMap, isLog: boolean): boolean {
   if (span[idx.errors]) return true;
-  const sevText = span[idx.severity_text];
-  if (typeof sevText === 'string' && /^(error|fatal|critical|alert|emerg)/i.test(sevText.trim())) return true;
-  const sevNum = span[idx.severity_number];
-  if (typeof sevNum === 'number' && sevNum >= 17) return true;
   return isLog ? false : (span[idx.summary]?.some((el: string) => el.includes('ERROR')) ?? false);
 }
 
 export function groupSpans(data: any[][], colIdxMap: ColIdxMap, expandedTraces: Record<string, boolean>, flipDirection: boolean, serverTraces: ServerTraceEntry[]) {
-  const keys = ['trace_id', 'latency_breakdown', 'parent_id', 'timestamp', 'duration', 'start_time_ns', 'errors', 'summary', 'severity_text', 'severity_number', 'kind', 'id'];
+  const keys = ['trace_id', 'latency_breakdown', 'parent_id', 'timestamp', 'duration', 'start_time_ns', 'errors', 'summary', 'kind', 'id'];
   const idx: ColIdxMap = {};
   keys.forEach((key) => {
     if (colIdxMap[key] !== undefined) idx[key] = colIdxMap[key];
