@@ -87,9 +87,8 @@ tabs:
             query: |
               (kind == "server" or name == "apitoolkit-http-span" or name == "monoscope.http")
               | summarize count() by bin_auto(timestamp)
-              | order by timestamp desc
-              | limit 200
             unit: req/min
+            summarize_by: rate
             layout: { w: 3, h: 2 }
 
           - type: 'timeseries_stat'
@@ -99,9 +98,8 @@ tabs:
             query: |
               (kind == "server" or name == "apitoolkit-http-span" or name == "monoscope.http") and duration != null
               | summarize p95(duration) / 1000000 by bin_auto(timestamp)
-              | order by timestamp desc
-              | limit 200
             unit: ms
+            summarize_by: mean
             layout: { w: 3, h: 2 }
 
           - type: 'timeseries_stat'
@@ -111,9 +109,8 @@ tabs:
             query: |
               (kind == "server" or name == "apitoolkit-http-span")
               | summarize round(countif(status_code == "ERROR" or coalesce(attributes.http.response.status_code, 0) >= 500) * 100.0 / count(), 2) by bin_auto(timestamp)
-              | order by timestamp desc
-              | limit 200
             unit: '%'
+            summarize_by: mean
             alert_threshold: 5
             warning_threshold: 2
             layout: { w: 3, h: 2 }
