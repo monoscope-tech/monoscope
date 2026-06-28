@@ -683,7 +683,7 @@ prometheusTestResult res = div_ [class_ "prom-test-result text-sm"] $ case res o
   Right (n, ms) -> span_ [class_ "cbadge-sm badge-success inline-flex items-center gap-1"] $ faSprite_ "circle-check" "solid" "w-3 h-3" >> toHtml ("Scraped " <> show n <> " samples · " <> show ms <> "ms" :: Text)
   Left err
     | T.null err -> mempty
-    | otherwise -> span_ [class_ "cbadge-sm badge-error inline-flex items-start gap-1 max-w-full"] $ faSprite_ "circle-exclamation" "solid" "w-3 h-3 shrink-0 mt-0.5" >> span_ [class_ "break-all"] (toHtml err)
+    | otherwise -> span_ [class_ "cbadge-sm badge-error inline-flex items-center gap-1 max-w-full"] $ faSprite_ "circle-exclamation" "solid" "w-3 h-3 shrink-0" >> span_ [class_ "break-all"] (toHtml err)
 
 
 prometheusTargetsList :: Projects.ProjectId -> V.Vector PromCfg.PrometheusScrapeConfig -> Html ()
