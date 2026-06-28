@@ -585,6 +585,14 @@ spec = around withTestResources do
       (_, item) <- testServant (withTfReads True) $ LogItem.expandAPIlogItemH testPid rid ts Nothing
       expectFound item
 
+      -- Random-access lookup is exact (timestamp = ts), not a ±1s window. A timestamp
+      -- offset by even a second must no longer resolve the row — on both TF and PG.
+      let expectNotFound store item' = case item' of
+            LogItem.ItemDetailedNotFound _ -> pass
+            _ -> expectationFailure $ store <> ": off-by-1s timestamp unexpectedly matched (window not removed)"
+      (_, miss) <- testServant (withTfReads True) $ LogItem.expandAPIlogItemH testPid rid (addUTCTime 1 ts) Nothing
+      expectNotFound "TF" miss
+
       -- Legacy PG rows can have NULL hashes; the lookup must still decode them.
       void $ withPool tr.trPool $ DBT.execute [sql| UPDATE otel_logs_and_spans SET hashes = NULL WHERE id = ? |] (Only rid)
       (_, item2) <- testServant (withTfReads False) $ LogItem.expandAPIlogItemH testPid rid ts Nothing

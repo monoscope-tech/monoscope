@@ -1214,8 +1214,8 @@ apiFacets pid sinceM fromM toM fieldM = do
 
 -- | GET /api/v1/events/{id}/time/{ts} — O(1) lookup using the timeseries
 -- partition key. Both id and timestamp must be supplied; the DB resolves the
--- row via @timestamp BETWEEN ts-1s AND ts+1s AND id = ?@ without a range scan.
--- Returns 404 when the event is not found.
+-- row via @timestamp = ts AND id = ?@ (the caller holds the exact stored
+-- timestamp). Returns 404 when the event is not found.
 apiEventGet :: Projects.ProjectId -> UUID.UUID -> UTCTime -> ATBaseCtx AE.Value
 apiEventGet pid eid ts = do
   mItem <- Telemetry.logRecordByProjectAndId pid ts eid
