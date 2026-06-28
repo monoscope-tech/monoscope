@@ -778,6 +778,7 @@ tabs:
               attributes.db.system.name == "{{var-database}}"
               | summarize round(countif(status_code == "ERROR") * 100.0 / count(), 2) by bin_auto(timestamp)
             unit: '%'
+            summarize_by: mean
             alert_threshold: 5
             warning_threshold: 1
             layout: { w: 3, h: 2 }
@@ -789,6 +790,7 @@ tabs:
               attributes.db.system.name == "{{var-database}}" and duration != null
               | summarize p95(duration) / 1000000 by bin_auto(timestamp)
             unit: ms
+            summarize_by: mean
             layout: { w: 3, h: 2 }
 
           - type: 'stat'

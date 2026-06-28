@@ -299,8 +299,15 @@ const NO_DATA_VALUE = '—';
 const setStatValue = (widgetData: WidGetData, stats: any, from?: number, to?: number) => {
   const value = $(`${widgetData.chartId}Value`);
   if (!value) return;
-  value.innerHTML =
-    stats && stats.count > 0
+  if (stats == null) {
+    // Fetch error: clear the spinner, but leave the chart's error overlay as the
+    // sole failure signal rather than revealing a redundant "—" badge above it.
+    value.textContent = '';
+    return;
+  }
+  // textContent (not innerHTML): values are plain text, and the max/min prefix is a literal "<"/">".
+  value.textContent =
+    stats.count > 0
       ? [widgetData.summarizeByPrefix, formatStatValue(statScalar(stats, widgetData.summarizeBy, from, to), widgetData.unit || '')].filter(Boolean).join(' ')
       : NO_DATA_VALUE;
   value.classList.remove('hidden');

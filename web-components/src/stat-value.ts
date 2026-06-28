@@ -35,7 +35,7 @@ export const formatDuration = (ns: number): string => {
   return `${ns.toFixed(0)}ns`;
 };
 
-const DURATION_UNITS = ['ns', 'μs', 'us', 'ms', 's', 'm', 'h'];
+const DURATION_UNITS = new Set(['ns', 'μs', 'us', 'ms', 's', 'm', 'h']);
 
 export type StatAggregates = { min: number; max: number; sum: number; count: number; mean: number };
 
@@ -61,7 +61,7 @@ export const statScalar = (stats: Partial<StatAggregates>, summarizeBy: string, 
 
 /** Format a stat scalar for display, appending the unit (duration-aware). */
 export const formatStatValue = (value: number, unit: string): string => {
-  if (DURATION_UNITS.includes(unit)) return formatDuration(convertToNanoseconds(value, unit));
+  if (DURATION_UNITS.has(unit)) return formatDuration(convertToNanoseconds(value, unit));
   const suffix = ({ '': '', '1': '', '{}': '', By: ' bytes' } as Record<string, string>)[unit] ?? ` ${unit}`;
   return `${formatNumber(value)}${suffix}`;
 };
