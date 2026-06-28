@@ -3069,8 +3069,13 @@ dispatchPrometheusScrapes authCtx = do
   due <- PromCfg.claimDueConfigs prometheusScrapeBatchLimit
   unless (null due) do
     Log.logInfo "Dispatching Prometheus scrapes" (length due)
-    liftIO $ withResource authCtx.jobsPool \conn ->
-      forM_ due \cfg -> void $ createJob conn "background_jobs" (PrometheusScrapeOne cfg.id)
+    -- Each enqueue is guarded: the targets were already leased (last_scraped_at bumped) by the
+    -- claim, so if one createJob throws (pool exhaustion, transient DB error) we must not let it
+    -- abort the loop and silently strand the remaining targets for a full interval — log and continue.
+    failures <- liftIO $ withResource authCtx.jobsPool \conn ->
+      lefts <$> forM due \cfg ->
+        first (cfg.id.toText,) <$> tryAny (void $ createJob conn "background_jobs" (PrometheusScrapeOne cfg.id))
+    forM_ failures \(cid, err) -> Log.logAttention "Prometheus scrape enqueue failed — target stranded until next tick" (cid, displayException err)
 
 
 -- | Worker (PrometheusScrapeOne). Scrapes one target with a hard HTTP timeout, parses the
@@ -3079,8 +3084,9 @@ dispatchPrometheusScrapes authCtx = do
 -- backs off instead of retry-storming, and one bad target never fails sibling work.
 scrapePrometheusTarget :: PromCfg.PrometheusScrapeConfigId -> ATBackgroundCtx ()
 scrapePrometheusTarget cid = whenJustM (PromCfg.getConfig cid) \cfg -> Relude.when cfg.enabled do
-  now <- Time.currentTime
-  tryAny (W.getWith (prometheusScrapeOpts cfg.authHeader) (toString cfg.url) >>= \resp -> PromCfg.ingestScrapedBody cfg now (resp ^. responseBody)) >>= \case
+  -- Capture the fallback metricTime *after* the response arrives: a slow endpoint would
+  -- otherwise backdate every timestamp-less sample by the scrape latency.
+  tryAny (W.getWith (prometheusScrapeOpts cfg.authHeader) (toString cfg.url) >>= \resp -> Time.currentTime >>= \now -> PromCfg.ingestScrapedBody cfg now (resp ^. responseBody)) >>= \case
     Right n -> void $ PromCfg.markScraped cfg.id ("ok: " <> show n <> " samples")
     Left err -> do
       Log.logWarn "Prometheus scrape failed" (cfg.id.toText, cfg.url, show err)

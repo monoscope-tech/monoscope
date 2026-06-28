@@ -70,6 +70,10 @@ isFiniteSample s = not (isNaN s.value || isInfinite s.value)
 --
 -- >>> map (\s -> (s.name, s.labels)) $ parsePrometheus "rpc{quantile=\"0.5\",path=\"/a,b\"} 4773\n"
 -- [("rpc",[("quantile","0.5"),("path","/a,b")])]
+--
+-- A @}@ inside a quoted label value must not end the label block early:
+-- >>> map (\s -> (s.name, s.labels, s.value)) $ parsePrometheus "m{a=\"x}y\"} 1\n"
+-- [("m",[("a","x}y")],1.0)]
 parsePrometheus :: Text -> [Sample]
 parsePrometheus = go Map.empty . lines
   where
@@ -140,16 +144,27 @@ resolveMeta meta name = fromMaybe (Meta Untyped "") $ asum (map (`Map.lookup` me
 
 
 -- | Split at the matching @}@, returning (inside, after). Honours quoted
--- strings so a @}@ inside a label value doesn't end the block early.
+-- strings so a @}@ inside a label value doesn't end the block early. Stays in
+-- 'Text' (T.break chunks) rather than round-tripping through 'String'.
 splitBrace :: Text -> Maybe (Text, Text)
-splitBrace = go False "" . toString
+splitBrace = go ""
   where
-    go _ acc [] = Just (toText (reverse acc), "")
-    go inQ acc (c : cs)
-      | c == '"' = go (not inQ) (c : acc) cs
-      | c == '\\', inQ, (n : ns) <- cs = go inQ (n : c : acc) ns
-      | c == '}', not inQ = Just (toText (reverse acc), toText cs)
-      | otherwise = go inQ (c : acc) cs
+    go acc t =
+      let (chunk, rest) = T.break (\c -> c == '"' || c == '}') t
+       in case T.uncons rest of
+            Just ('}', after) -> Just (acc <> chunk, after)
+            Just ('"', after) -> let (q, rest') = quoted after in go (acc <> chunk <> "\"" <> q) rest'
+            _ -> Just (acc <> chunk, "") -- no closing brace; take what we have
+    -- consume from just past an opening quote up to and including the closing one,
+    -- preserving backslash escapes verbatim (a @\"@ doesn't close the string).
+    quoted t =
+      let (chunk, rest) = T.break (\c -> c == '"' || c == '\\') t
+       in case T.uncons rest of
+            Just ('"', after) -> (chunk <> "\"", after)
+            Just ('\\', after) -> case T.uncons after of
+              Just (e, after') -> let (more, rest') = quoted after' in (chunk <> "\\" <> one e <> more, rest')
+              Nothing -> (chunk <> "\\", "")
+            _ -> (chunk, "") -- unterminated quote
 
 
 -- | Parse the comma-separated @name="value"@ pairs inside @{...}@.

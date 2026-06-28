@@ -527,7 +527,7 @@ safeScrapeUrl u = case parseURI (toString (T.strip u)) of
        in T.null h
             || h
             == "localhost"
-            || any (`T.isPrefixOf` ip6) ["::1", "fd", "fe80", "::ffff:"]
+            || any (`T.isPrefixOf` ip6) ["::1", "fc", "fd", "fe80", "::ffff:"] -- fc/fd = full ULA fc00::/7
             || internalIPv4 h
             || obfuscatedNumericHost h
     -- A clean dotted-decimal quad whose address is loopback/RFC-1918/link-local/unspecified.
@@ -552,7 +552,13 @@ prometheusPostH pid form = promSave pid form "Added" \(name, url, interval, auth
 
 
 prometheusUpdateH :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfigId -> PrometheusForm -> ATAuthCtx (RespHeaders PrometheusMut)
-prometheusUpdateH pid cid form = promSave pid form "Updated" \(name, url, interval, authH, labels) -> PromCfg.updateConfig pid cid name url interval authH labels
+prometheusUpdateH pid cid form = promSave pid form "Updated" \(name, url, interval, authH, labels) -> do
+  -- The edit form never echoes the saved token back into the password field, so a blank
+  -- auth field means "keep the existing token" rather than "clear it".
+  keptAuth <- case authH of
+    Just t -> pure (Just t)
+    Nothing -> PromCfg.getConfig cid <&> (>>= (.authHeader))
+  PromCfg.updateConfig pid cid name url interval keptAuth labels
 
 
 -- | Shared create/edit flow: validate, persist (insert or update), toast, refresh list.
@@ -611,7 +617,6 @@ prometheusMut pid = do
   addRespHeaders $ PrometheusMut (pid, cfgs)
 
 
--- | "k=v, k2=v2" → JSON object of static labels (blank/invalid pairs skipped).
 -- | Parse @k=v, k2=v2@ static-label text into a JSON object, trimming whitespace and
 -- dropping pairs with an empty key or empty value (so @"env= "@ is dropped, not stored blank).
 --
@@ -697,7 +702,14 @@ prometheusFields_ pid modalId submitLabel mcfg = do
       faSprite_ "chevron-right" "solid" "w-3 h-3 transition-transform group-open:rotate-90"
       "Advanced"
     div_ [class_ "flex flex-col gap-3 mt-3"] do
-      field_ "authHeader" "Authorization header" "Bearer <token>" "password" False (Just "Sent as the Authorization header on every scrape.") (maybe "" (fromMaybe "" . (.authHeader)) mcfg)
+      -- Never echo the saved token into the HTML (it would sit in the page source / proxy
+      -- caches): show an empty field, and on edit treat blank as "keep the saved token".
+      let hasToken = maybe False (isJust . (.authHeader)) mcfg
+          (authPh, authHelp) =
+            if hasToken
+              then ("Leave blank to keep the saved token", "A token is saved. Enter a new value to replace it.")
+              else ("Bearer <token>", "Sent as the Authorization header on every scrape.")
+      field_ "authHeader" "Authorization header" authPh "password" False (Just authHelp) ""
       field_ "extraLabels" "Static labels" "env=prod, team=core" "text" False (Just "Comma-separated key=value pairs, added to every series from this target.") (maybe "" (labelsToText . (.extraLabels)) mcfg)
   div_ [class_ "flex items-center gap-2 border-t border-strokeWeak pt-4"] do
     button_

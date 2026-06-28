@@ -150,7 +150,7 @@ markScraped cid status =
 ingestScrapedBody :: (DB es, Log :> es) => PrometheusScrapeConfig -> UTCTime -> LByteString -> Eff es Int
 ingestScrapedBody cfg now body = do
   let samples = Prom.parsePrometheus (decodeUtf8 body)
-      records = V.mapMaybe (\s -> if Prom.isFiniteSample s then Just (sampleToMetricRecord cfg now s) else Nothing) (V.fromList samples)
+      records = V.fromList [sampleToMetricRecord cfg now s | s <- samples, Prom.isFiniteSample s]
       dropped = length samples - V.length records
   when (dropped > 0) $ Log.logInfo "Prometheus scrape dropped non-finite samples" (AE.object ["config_id" AE..= cfg.id.toText, "dropped" AE..= dropped])
   Telemetry.bulkInsertMetrics records
