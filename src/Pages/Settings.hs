@@ -620,20 +620,21 @@ prometheusPage pid cfgs = settingsSection_ do
   div_ [class_ "flex justify-between items-center"] do
     settingsH2_ "Prometheus targets"
     modalWith_ "prometheus-modal" def{boxClass = "p-8"} (Just $ span_ [class_ "btn btn-sm btn-primary gap-1.5"] $ do faSprite_ "plus" "regular" "w-3 h-3"; "Add target") do
-      iconBadgeLg_ BrandBadge "objects-column"
-      span_ [class_ "text-textStrong text-2xl font-semibold mb-1"] "Scrape a Prometheus endpoint"
-      form_ [hxPost_ $ "/p/" <> pid.toText <> "/settings/prometheus", class_ "flex flex-col gap-3", hxTarget_ "#prometheus-targets", hxSwap_ "outerHTML"] do
-        prometheusFields_ pid Nothing
-        button_ [type_ "submit", class_ "btn btn-primary w-full mt-2"] "Add target"
+      div_ do
+        h2_ [class_ "text-textStrong text-xl font-semibold"] "Scrape a Prometheus endpoint"
+        p_ [class_ "text-sm text-textWeak mt-1"] "We poll this endpoint on your schedule, parse the metrics exposition format, and ingest the samples as series you can chart and alert on."
+      form_ [hxPost_ $ "/p/" <> pid.toText <> "/settings/prometheus", class_ "flex flex-col gap-3", hxTarget_ "#prometheus-targets", hxSwap_ "outerHTML"]
+        $ prometheusFields_ pid "prometheus-modal" "Add scrape target" Nothing
   prometheusTargetsList pid cfgs
 
 
--- | Shared add/edit form body: prefilled from a config when editing, plus a Test button
--- that scrapes the entered URL and shows the result inline (targets the sibling result div).
-prometheusFields_ :: Projects.ProjectId -> Maybe PromCfg.PrometheusScrapeConfig -> Html ()
-prometheusFields_ pid mcfg = do
-  field_ "name" "Name" "api-gateway" "text" True (maybe "" (.name) mcfg)
-  field_ "url" "Metrics URL" "http://service:9090/metrics" "url" True (maybe "" (.url) mcfg)
+-- | Shared add/edit form body: prefilled from a config when editing. Carries its own
+-- action row (Test / Cancel / submit) so callers just wrap it in a form. @submitLabel@
+-- names the commit button and @modalId@ wires Cancel to close the enclosing modal.
+prometheusFields_ :: Projects.ProjectId -> Text -> Text -> Maybe PromCfg.PrometheusScrapeConfig -> Html ()
+prometheusFields_ pid modalId submitLabel mcfg = do
+  field_ "name" "Name" "api-gateway" "text" True Nothing (maybe "" (.name) mcfg)
+  field_ "url" "Metrics URL" "http://service:9090/metrics" "url" True (Just "Must be reachable from Monoscope and return the Prometheus text exposition format.") (maybe "" (.url) mcfg)
   label_ [class_ "flex flex-col gap-1 text-sm"] do
     span_ [class_ "text-textWeak"] "Scrape interval"
     -- No sub-minute options: the dispatcher ticks once per minute, so a shorter
@@ -645,24 +646,35 @@ prometheusFields_ pid mcfg = do
     select_ [class_ "select select-bordered w-full", name_ "scrapeInterval"]
       $ forM_ opts \(v, l) ->
         option_ ([value_ (show v)] <> [selected_ "selected" | v == cur]) (toHtml l)
-  field_ "authHeader" "Authorization header (optional)" "Bearer <token>" "password" False (maybe "" (fromMaybe "" . (.authHeader)) mcfg)
-  field_ "extraLabels" "Static labels (optional)" "env=prod, team=core" "text" False (maybe "" (labelsToText . (.extraLabels)) mcfg)
-  div_ [class_ "flex items-center gap-2 flex-wrap"] do
+  -- Optional fields stay collapsed until needed; auto-expanded when editing a target
+  -- that already has them set, so existing values are never hidden behind the toggle.
+  let hasAdvanced = maybe False (\c -> isJust c.authHeader || not (T.null (labelsToText c.extraLabels))) mcfg
+  details_ ([class_ "group border-t border-strokeWeak pt-2"] <> [term "open" "open" | hasAdvanced]) do
+    summary_ [class_ "cursor-pointer select-none text-sm text-textWeak flex items-center gap-1.5"] do
+      faSprite_ "chevron-right" "solid" "w-3 h-3 transition-transform group-open:rotate-90"
+      "Advanced"
+    div_ [class_ "flex flex-col gap-3 mt-3"] do
+      field_ "authHeader" "Authorization header" "Bearer <token>" "password" False (Just "Sent as the Authorization header on every scrape.") (maybe "" (fromMaybe "" . (.authHeader)) mcfg)
+      field_ "extraLabels" "Static labels" "env=prod, team=core" "text" False (Just "Comma-separated key=value pairs, added to every series from this target.") (maybe "" (labelsToText . (.extraLabels)) mcfg)
+  div_ [class_ "flex items-center gap-2 pt-2"] do
     button_
       [ type_ "button"
-      , class_ "btn btn-sm btn-ghost"
+      , class_ "btn btn-ghost gap-1.5"
       , hxPost_ $ "/p/" <> pid.toText <> "/settings/prometheus/test"
       , term "hx-include" "closest form"
       , term "hx-target" "next .prom-test-result"
       , hxSwap_ "outerHTML"
       ]
-      "Test"
-    prometheusTestResult (Left "")
+      $ do faSprite_ "circle-play" "regular" "w-3.5 h-3.5"; "Test connection"
+    label_ [class_ "btn btn-ghost ml-auto", Lucid.for_ modalId] "Cancel"
+    button_ [type_ "submit", class_ "btn btn-primary"] (toHtml submitLabel)
+  prometheusTestResult (Left "")
   where
-    field_ :: Text -> Text -> Text -> Text -> Bool -> Text -> Html ()
-    field_ nm lbl ph ty req val = label_ [class_ "flex flex-col gap-1 text-sm"] do
+    field_ :: Text -> Text -> Text -> Text -> Bool -> Maybe Text -> Text -> Html ()
+    field_ nm lbl ph ty req helpM val = label_ [class_ "flex flex-col gap-1 text-sm"] do
       span_ [class_ "text-textWeak"] (toHtml lbl)
       input_ $ [class_ "input input-bordered w-full", type_ ty, name_ nm, placeholder_ ph, value_ val] <> [required_ "true" | req]
+      whenJust helpM $ span_ [class_ "text-xs text-textWeak"] . toHtml
 
 
 prometheusTestResult :: Either Text (Int, Int) -> Html ()
@@ -712,11 +724,11 @@ prometheusTargetRow pid cfg = div_ [class_ "itemsListItem flex items-center just
     -- which sampleToMetricRecord sets to the config name).
     a_ [class_ "btn btn-xs btn-ghost", href_ $ "/p/" <> pid.toText <> "/metrics?metric_source=" <> decodeUtf8 (urlEncode True (encodeUtf8 cfg.name))] "View metrics"
     modalWith_ ("prom-edit-" <> cfg.id.toText) def{boxClass = "p-8"} (Just $ span_ [class_ "btn btn-xs btn-ghost"] "Edit") do
-      iconBadgeLg_ BrandBadge "objects-column"
-      span_ [class_ "text-textStrong text-2xl font-semibold mb-1"] "Edit Prometheus target"
-      form_ [hxPost_ $ "/p/" <> pid.toText <> "/settings/prometheus/" <> cfg.id.toText <> "/edit", class_ "flex flex-col gap-3", hxTarget_ "#prometheus-targets", hxSwap_ "outerHTML"] do
-        prometheusFields_ pid (Just cfg)
-        button_ [type_ "submit", class_ "btn btn-primary w-full mt-2"] "Save changes"
+      div_ do
+        h2_ [class_ "text-textStrong text-xl font-semibold"] "Edit Prometheus target"
+        p_ [class_ "text-sm text-textWeak mt-1"] "Update how Monoscope scrapes this endpoint. Changes take effect on the next scrape."
+      form_ [hxPost_ $ "/p/" <> pid.toText <> "/settings/prometheus/" <> cfg.id.toText <> "/edit", class_ "flex flex-col gap-3", hxTarget_ "#prometheus-targets", hxSwap_ "outerHTML"]
+        $ prometheusFields_ pid ("prom-edit-" <> cfg.id.toText) "Save changes" (Just cfg)
     button_ [class_ "btn btn-xs btn-ghost", hxPatch_ $ "/p/" <> pid.toText <> "/settings/prometheus/" <> cfg.id.toText, hxTarget_ "#prometheus-targets", hxSwap_ "outerHTML"] $ toHtml (bool "Resume" "Pause" cfg.enabled :: Text)
     button_ [class_ "btn btn-xs btn-ghost text-textError", hxDelete_ $ "/p/" <> pid.toText <> "/settings/prometheus/" <> cfg.id.toText, hxTarget_ "#prometheus-targets", hxSwap_ "outerHTML", hxConfirm_ "Remove this Prometheus target?"] "Delete"
 
