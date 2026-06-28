@@ -24,7 +24,7 @@ cypress:
 	set -a && . ./.env && npx cypress run --record
 
 live-reload:
-	ghcid --command 'cabal repl monoscope --ghc-options="-Wno-error=unused-imports -Wno-error=unused-top-binds" --with-compiler=$(GHC)' --test ':run Start.startApp' --warnings
+	ghcid --command 'cabal repl monoscope --ghc-options="-j$(NCPUS) -Wno-error=unused-imports -Wno-error=unused-top-binds" --with-compiler=$(GHC)' --test ':run Start.startApp' --warnings
 
 live-reload-cli:
 	ghcid --command 'cabal repl exe:monoscope --ghc-options="-O0 -Wno-error=unused-imports -Wno-error=unused-top-binds" --with-compiler=$(GHC)' --warnings 2>&1 | tee build-cli.log
@@ -48,7 +48,7 @@ live-test-reload-all:
 TEST_MATCH ?=
 live-test-dev:
 	USE_EXTERNAL_DB=true LOG_LEVEL=attention \
-	ghcid --command 'cabal repl monoscope:test:test-dev --ghc-options="-osuf dyn_o -hisuf dyn_hi -O0" --with-compiler=$(GHC)' \
+	ghcid --command 'cabal repl monoscope:test:test-dev --ghc-options="-j$(NCPUS) -osuf dyn_o -hisuf dyn_hi -O0" --with-compiler=$(GHC)' \
 		--test ':main $(if $(TEST_MATCH),--match $(TEST_MATCH))' --warnings 2>&1 | tee build-test-dev.log
 
 hot-reload:
@@ -164,7 +164,7 @@ timescaledb-docker-tmp:
 	docker run -it --rm --name=monoscope -p 5432:5432/tcp \
 		-e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=monoscope \
 		-e TZ=UTC \
-		--mount type=tmpfs,destination=/var/lib/postgresql/data,tmpfs-size=1G \
+		--mount type=tmpfs,destination=/home/postgres/pgdata,tmpfs-size=2G \
 		--user root \
 		--entrypoint /bin/bash \
 		docker.io/timescale/timescaledb-ha:pg16-all \
