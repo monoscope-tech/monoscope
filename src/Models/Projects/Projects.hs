@@ -11,7 +11,7 @@ module Models.Projects.Projects (
   createEmptyUser,
   -- Projects
   Project (..),
-  Project' (..),
+  ProjectListItem (..),
   ProjectId,
   CreateProject (..),
   OnboardingStep (..),
@@ -53,6 +53,8 @@ module Models.Projects.Projects (
   -- Billing
   BillingProvider (..),
   billingProvider,
+  isFreeTier,
+  isOnboarding,
   LemonSub (..),
   LemonSubId (..),
   addSubscription,
@@ -271,8 +273,12 @@ data Project = Project
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Project
 
 
--- FIXME: Why was this record created? And not the regular projects record?
-data Project' = Project'
+-- | Project-list projection: every 'Project' column PLUS two columns computed by the join
+-- in 'selectProjectsForUser' (@has_integrated@, @users_display_images@). It is NOT a
+-- duplicate of 'Project' to merge away — those columns are only available via that aggregate
+-- query, so folding them into 'Project' would force every plain project lookup to carry the
+-- joins. Kept as a dedicated projection for the project-list page.
+data ProjectListItem = ProjectListItem
   { id :: ProjectId
   , createdAt :: UTCTime
   , updatedAt :: UTCTime
@@ -446,7 +452,7 @@ newProjectsSince :: DB es => UTCTime -> Eff es [Project]
 newProjectsSince since = EHasql.interp [HI.sql|SELECT p.* FROM projects.projects p WHERE p.created_at >= #{since}::timestamptz AND p.deleted_at IS NULL ORDER BY p.created_at DESC|]
 
 
-selectProjectsForUser :: (DB es, Time :> es) => UserId -> Eff es [Project']
+selectProjectsForUser :: (DB es, Time :> es) => UserId -> Eff es [ProjectListItem]
 selectProjectsForUser uid = do
   now <- currentTime
   EHasql.interp
@@ -911,6 +917,24 @@ upgradeToPaid orderId subId subItemId plan =
           OR (sub_id IS NULL AND order_id = #{orderId}::text) |]
 
 
+-- | The free-tier predicate. `payment_plan` is an open-valued text column (paid tiers
+-- carry arbitrary names like "Startup"/"Bring your own storage"), so we can't model it as
+-- a closed enum — but the free-tier check must live in exactly ONE place. Comparing the
+-- literal inline let two call sites drift ("Free" vs "FREE"), silently disabling the
+-- free-tier gate. Case-insensitive so historical "FREE" rows still match.
+--
+-- >>> map isFreeTier ["Free", "FREE", "free", "Startup", "ONBOARDING"]
+-- [True,True,True,False,False]
+isFreeTier :: Text -> Bool
+isFreeTier = (== "free") . T.toLower
+
+
+-- | >>> map isOnboarding ["ONBOARDING", "onboarding", "Free"]
+-- [True,True,False]
+isOnboarding :: Text -> Bool
+isOnboarding = (== "onboarding") . T.toLower
+
+
 data BillingProvider = StripeProvider | LemonSqueezyProvider | NoBillingProvider
   deriving stock (Eq, Show)
 
@@ -1090,7 +1114,7 @@ sessionAndProject pid = do
   sess <- getSession
   let projects = sess.persistentSession.projects.getProjects
   case V.find (\v -> v.id == pid) projects of
-    Just p | p.paymentPlan /= "ONBOARDING" -> pure (sess, p)
+    Just p | not (isOnboarding p.paymentPlan) -> pure (sess, p)
     Just _ ->
       projectById pid >>= \case
         Just p -> pure (sess, p)

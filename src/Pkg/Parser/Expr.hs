@@ -273,17 +273,17 @@ parens = between (symbol "(") (symbol ")")
 pDuration :: Parser Values
 pDuration = do
   value <- try L.float <|> (fromIntegral <$> L.decimal)
-  unit <- string "ns" <|> string "us" <|> string "µs" <|> string "ms" <|> string "s" <|> string "m" <|> string "h"
-  let multiplier = case unit of
-        "ns" -> 1
-        "us" -> 1000
-        "µs" -> 1000
-        "ms" -> 1000000
-        "s" -> 1000000000
-        "m" -> 60000000000
-        "h" -> 3600000000000
-        _ -> error "Invalid duration unit"
+  (unit, multiplier) <- asum [(u, m) <$ string u | (u, m) <- durationUnits]
   return $ Duration unit (round (value * multiplier))
+
+
+-- | Accepted duration units paired with their nanosecond multipliers — the single source of
+-- truth for 'pDuration'. Multi-char units precede their single-char prefixes ("ms" before
+-- "s"/"m") so @string@ matches greedily. Driving the parser and the multiplier from the same
+-- list means they can't drift apart into an unreachable @error@ fallthrough.
+durationUnits :: [(Text, Double)]
+durationUnits =
+  [("ns", 1), ("us", 1000), ("µs", 1000), ("ms", 1000000), ("s", 1000000000), ("m", 60000000000), ("h", 3600000000000)]
 
 
 -- | Parse the now() function

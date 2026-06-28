@@ -48,7 +48,6 @@ import Data.HashTable.ST.Cuckoo qualified as HT
 import Data.Text qualified as T
 import Data.Time (addUTCTime, zonedTimeToUTC)
 import Data.Time.LocalTime (ZonedTime)
-import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
@@ -69,7 +68,6 @@ import Pkg.SchemaLearning.Catalog qualified as Fields
 import Pkg.SchemaLearning.Hot qualified as SchemaHot
 import Relude hiding (ask)
 import Relude.Extra.Tuple (toSnd)
-import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Tracing (Tracing, batchSpanAttrs, withSpan_)
@@ -175,7 +173,7 @@ processMessages msgs attrs =
                 !msgSize = fromIntegral (BS.length raw)
             cache <- hoistMaybe $ HM.lookup pid projectCaches
             let !totalDailyEvents = fromIntegral cache.dailyEventCount + fromIntegral cache.dailyMetricCount
-                !isFreeTier = cache.paymentPlan == "Free"
+                !isFreeTier = Projects.isFreeTier cache.paymentPlan
             guard $ not (isFreeTier && totalDailyEvents >= freeTierDailyMaxEvents)
             spanId <- lift UUID.genUUID
             trId <- lift $ UUID.toText <$> UUID.genUUID
@@ -273,10 +271,12 @@ httpKeyOf canonicalTemplates otelSpan =
    in HttpKey{method, host, urlPath, statusCode, isHttpSpan}
 
 
-processSpanToEntities :: HM.HashMap (Text, Text) [([Text], Text)] -> Projects.ProjectCache -> Telemetry.OtelLogsAndSpans -> UUID.UUID -> (Maybe Endpoints.Endpoint, V.Vector Text, Maybe Text)
-processSpanToEntities canonicalTemplates pjc otelSpan dumpId =
-  let !projectId = UUIDId $ Unsafe.fromJust $ UUID.fromText otelSpan.project_id
-      !attributes = maybeToMonoid (unAesonTextMaybe otelSpan.attributes)
+-- The owning 'ProjectId' is threaded in already-parsed (the batch is grouped by project
+-- upstream), so we never re-parse the untyped @otelSpan.project_id@ here — that parse used
+-- to be a partial @fromJust@ that crashed the whole ingestion batch on one malformed id.
+processSpanToEntities :: HM.HashMap (Text, Text) [([Text], Text)] -> Projects.ProjectCache -> Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> UUID.UUID -> (Maybe Endpoints.Endpoint, V.Vector Text, Maybe Text)
+processSpanToEntities canonicalTemplates pjc projectId otelSpan dumpId =
+  let !attributes = maybeToMonoid (unAesonTextMaybe otelSpan.attributes)
       !hk = httpKeyOf canonicalTemplates otelSpan
       HttpKey{method, host, urlPath, statusCode, isHttpSpan} = hk
 

@@ -1849,7 +1849,7 @@ entrypointRedirectGetH baseTemplate title tags pid qparams = do
         syncDashboardAndQueuePush pid did
         pure did.toText
   redirectTo <-
-    if project.paymentPlan == "ONBOARDING"
+    if Projects.isOnboarding project.paymentPlan
       then pure $ mkPath "/onboarding" ""
       else mkPath "/dashboards/" <$> (maybe newDashboard (pure . (.toText)) =<< Dashboards.getDashboardByBaseTemplate pid baseTemplate)
   pure $ addHeader redirectTo NoContent

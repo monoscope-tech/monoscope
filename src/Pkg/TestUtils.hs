@@ -801,6 +801,7 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
               , openaiApiKey = bool envConfig.openaiApiKey "sk-test-key-not-real" (T.null envConfig.openaiApiKey)
               }
           )
+          Nothing -- backgroundScope: no app-lifetime ki scope in tests; forkBackground falls back to an untracked fork
   uuidRef <- newIORef (map (UUID.fromWords 0 0 0) [1 .. 100000])
   testClock <- newTestClock frozenTime
   -- Release the three hasql pools when the example finishes. Under `around`
@@ -1320,7 +1321,8 @@ ingestSessionEvent tr apiKey spanName extras isError timestamp = do
 -- be valid hex (a UUID works); a non-hex string decodes to an empty id.
 ingestSpanLinked :: TestResources -> Text -> Text -> Text -> Maybe Text -> Text -> [(Text, Text)] -> UTCTime -> IO ()
 ingestSpanLinked tr apiKey trId spanId parentM name extras ts =
-  void $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider
+  void
+    $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider
     $ Proto (mkSpanRequest trId spanId parentM name [] Nothing [mkAttr k v | (k, v) <- extras] (mkResource apiKey []) ts)
 
 

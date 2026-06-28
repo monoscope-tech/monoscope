@@ -27,7 +27,6 @@ import Control.Exception (ErrorCall (..))
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, IOE, type (:>))
-import Effectful.Concurrent (forkIO)
 import Effectful.Error.Static (throwError)
 import Effectful.Log qualified as Log
 import Effectful.Reader.Static (ask, asks)
@@ -51,7 +50,8 @@ import Relude hiding (ask, asks)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
 import Servant.Server (ServerError (errBody), err400)
-import System.Config (AuthContext (env, pool), EnvConfig (..))
+import System.Config (AuthContext (backgroundScope, env, pool), EnvConfig (..))
+import System.Tracing (forkBackground)
 import System.Types (ATBaseCtx, DB)
 import UnliftIO.Exception (throwIO, tryAny)
 import Web.FormUrlEncoded (FromForm)
@@ -207,11 +207,9 @@ slackInteractionsH interaction = do
     _ -> do
       slackDataM <- getSlackDataByTeamId interaction.team_id
       when (isNothing slackDataM) $ Log.logAttention ("Slack slash command for unlinked workspace" :: Text) $ AE.object ["team_id" AE..= interaction.team_id, "command" AE..= interaction.command]
-      void $ forkIO $ do
-        resultE <- tryAny $ case slackDataM of
-          Nothing -> sendSlackFollowupResponse interaction.response_url (formatBotError Slack ServiceError)
-          Just slackData -> handleAskCommand interaction slackData authCtx
-        whenLeft_ resultE \err -> Log.logAttention "Slack slash command background task failed" $ AE.object ["error" AE..= show @Text err, "team_id" AE..= interaction.team_id]
+      forkBackground authCtx.backgroundScope ("Slack slash command (team " <> interaction.team_id <> ")") $ case slackDataM of
+        Nothing -> sendSlackFollowupResponse interaction.response_url (formatBotError Slack ServiceError)
+        Just slackData -> handleAskCommand interaction slackData authCtx
       let loadingMsg = getLoadingMessage (detectReportIntent interaction.text)
           resp = AE.object ["text" AE..= loadingMsg, "replace_original" AE..= True, "delete_original" AE..= True]
       Log.logTrace ("Slack interaction response" :: Text) resp
@@ -717,13 +715,12 @@ data SlackEvent = SlackMessageEvent
 slackEventsPostH :: SlackEventPayload -> ATBaseCtx AE.Value
 slackEventsPostH payload = do
   envCfg <- asks env
+  scopeM <- asks @AuthContext (.backgroundScope)
   now <- Time.currentTime
   case payload of
     UrlVerification (UrlVerificationData _ challenge) -> pure $ AE.object ["challenge" AE..= challenge]
     EventCallback cb -> do
-      void $ forkIO $ do
-        resultE <- tryAny $ handleEventCallback envCfg cb.event cb.team_id now
-        whenLeft_ resultE \err -> Log.logAttention "Slack event callback background task failed" $ AE.object ["error" AE..= show @Text err, "team_id" AE..= cb.team_id]
+      forkBackground scopeM ("Slack event callback (team " <> cb.team_id <> ")") $ handleEventCallback envCfg cb.event cb.team_id now
       pure $ AE.object []
   where
     handleEventCallback envCfg event workspaceId now = void $ withSlackDataByTeam "handleEventCallback" workspaceId \slackData -> case event.thread_ts of

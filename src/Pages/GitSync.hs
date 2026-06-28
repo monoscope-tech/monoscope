@@ -403,7 +403,7 @@ githubAppCallbackH instIdM _setupAction stateM = do
 
 
 -- | View for selecting a project when state is missing from callback
-projectSelectorView :: Int64 -> [Projects.Project'] -> Html ()
+projectSelectorView :: Int64 -> [Projects.ProjectListItem] -> Html ()
 projectSelectorView instId projects = div_ [class_ "min-h-screen bg-bgBase flex items-center justify-center p-8"] do
   div_ [class_ "surface-raised rounded-2xl p-6 max-w-md w-full space-y-4"] do
     div_ [class_ "flex items-center gap-3 mb-4"] do

@@ -426,7 +426,7 @@ processBackgroundJob authCtx bgJob =
         Just project -> do
           let provider = Projects.billingProvider project.subId
           Log.logInfo "Reporting usage" ("project_id", pid.toText, "plan", project.paymentPlan, "provider", show provider)
-          Relude.when (project.paymentPlan /= "Free" && project.paymentPlan /= "ONBOARDING") $ whenJust (mfilter (not . T.null) project.firstSubItemId) \fSubId -> do
+          Relude.when (not (Projects.isFreeTier project.paymentPlan) && not (Projects.isOnboarding project.paymentPlan)) $ whenJust (mfilter (not . T.null) project.firstSubItemId) \fSubId -> do
             -- 1) Commit bookkeeping BEFORE any provider HTTP call. usage_last_reported
             --    always advances; daily_usage + usage_report_submissions rows are
             --    inserted in the same tx only when totalUsage > 0. See
@@ -641,7 +641,7 @@ processBackgroundJob authCtx bgJob =
 
       -- Section 3: Inactive projects (non-ONBOARDING with 0 events)
       tryStep "churnSignals" do
-        let churn = filter (\(p, _, _, _) -> p.paymentPlan /= "ONBOARDING") inactiveRows
+        let churn = filter (\(p, _, _, _) -> not (Projects.isOnboarding p.paymentPlan)) inactiveRows
         unless (null churn)
           $ send
           $ "**Inactive Projects** ("
@@ -898,7 +898,7 @@ runHourlyJob scheduledTime hour = do
 checkFreeTierUsageNotifications :: [Projects.ProjectId] -> UTCTime -> ATBackgroundCtx ()
 checkFreeTierUsageNotifications pids now = forM_ pids \pid -> tryStep "free-tier-check" do
   projectM <- Projects.projectById pid
-  forM_ projectM \project -> Relude.when (project.paymentPlan == "Free") do
+  forM_ projectM \project -> Relude.when (Projects.isFreeTier project.paymentPlan) do
     -- Use the TTL-cached daily event count to avoid a full 24-hour count(*) scan.
     cacheM <- Projects.projectCacheById pid
     let count = maybe 0 (.dailyEventCount) cacheM :: Int
@@ -1617,7 +1617,7 @@ processEagerBatch batch shard
         -- Pure entity + hash derivation.
         !entityIds <- V.replicateM (V.length spans) UUID.genUUID
         let !canonicalTemplates = parseCanonicalPaths projectCache.canonicalPaths
-            !results = V.zipWith (processSpanToEntities canonicalTemplates projectCache) spans entityIds
+            !results = V.zipWith (processSpanToEntities canonicalTemplates projectCache pid) spans entityIds
             !(endpoints, spanHashes, normalizedPaths) = V.unzip3 results
             !observations = V.map (extractObservation canonicalTemplates) spans
             !endpointsFinal = deduplicateByHash (.hash) $ V.mapMaybe id endpoints
@@ -2372,7 +2372,7 @@ sendReportForProject pid rType = do
                       , performance = endpointPerformance
                       , slowQueries = slowDbQueries
                       , topPatterns
-                      , freeTierExceeded = pr.paymentPlan == "FREE" && totalRequest > 5000
+                      , freeTierExceeded = Projects.isFreeTier pr.paymentPlan && totalRequest > 5000
                       }
                   (subj, html) = ET.weeklyReportEmail reportData
               sendRenderedEmail (CI.original user.email) subj (ET.renderEmail subj html)

@@ -341,7 +341,7 @@ monitorScheduleSection_ paymentPlan defaultFrequency defaultTimeWindow condition
   let timeOpts :: [(Int, Text)]
       timeOpts = [(1, "minute"), (2, "2 minutes"), (5, "5 minutes"), (10, "10 minutes"), (15, "15 minutes"), (30, "30 minutes"), (60, "hour"), (360, "6 hours"), (720, "12 hours"), (1440, "day")]
       isByos = paymentPlan == "Bring your own storage"
-      isFree = paymentPlan == "Free"
+      isFree = Projects.isFreeTier paymentPlan
       minFreq
         | isFree = 60
         | isByos = 1

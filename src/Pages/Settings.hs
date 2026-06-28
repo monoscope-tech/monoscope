@@ -785,7 +785,7 @@ manageBillingGetH pid from = do
       bwconf = bw{pageTitle = "Billing", isSettingsPage = True}
   let lemonUrl = envCfg.lemonSqueezyUrl <> "&checkout[custom][project_id]=" <> pid.toText
       critical = envCfg.lemonSqueezyCriticalUrl <> "&checkout[custom][project_id]=" <> pid.toText
-  let provider = if project.paymentPlan == "Free" then Projects.NoBillingProvider else Projects.billingProvider project.subId
+  let provider = if Projects.isFreeTier project.paymentPlan then Projects.NoBillingProvider else Projects.billingProvider project.subId
   addRespHeaders $ BillingGet $ PageCtx bwconf BillingData{pid, totalReqs = totalRequests, totalBytes, lastReported = last_reported, lemonUrl, critical, paymentPlan = project.paymentPlan, enableFreetier = envCfg.enableFreetier, basicAuthEnabled = envCfg.basicAuthEnabled, provider, dailyUsage, cycleStart = utctDay cycleStart, pastCycles}
 
 
@@ -801,7 +801,7 @@ billingPage d = div_ [] do
       basicAuthEnabled = d.basicAuthEnabled
       provider = d.provider
       pidTxt = pid.toText
-      isFree = paymentPlan == "Free"
+      isFree = Projects.isFreeTier paymentPlan
       basePriceNum =
         if
           | isFree -> 0
