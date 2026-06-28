@@ -620,11 +620,12 @@ prometheusPage pid cfgs = settingsSection_ do
   div_ [class_ "flex justify-between items-center"] do
     settingsH2_ "Prometheus targets"
     modalWith_ "prometheus-modal" def{boxClass = "p-8"} (Just $ span_ [class_ "btn btn-sm btn-primary gap-1.5"] $ do faSprite_ "plus" "regular" "w-3 h-3"; "Add target") do
-      div_ do
-        h2_ [class_ "text-textStrong text-xl font-semibold"] "Scrape a Prometheus endpoint"
-        p_ [class_ "text-sm text-textWeak mt-1"] "We poll this endpoint on your schedule, parse the metrics exposition format, and ingest the samples as series you can chart and alert on."
-      form_ [hxPost_ $ "/p/" <> pid.toText <> "/settings/prometheus", class_ "flex flex-col gap-3", hxTarget_ "#prometheus-targets", hxSwap_ "outerHTML"]
-        $ prometheusFields_ pid "prometheus-modal" "Add scrape target" Nothing
+      div_ [class_ "flex flex-col gap-5"] do
+        div_ do
+          h2_ [class_ "text-textStrong text-xl font-semibold"] "Scrape a Prometheus endpoint"
+          p_ [class_ "text-sm text-textWeak mt-1"] "We poll this endpoint on your schedule, parse the metrics exposition format, and ingest the samples as series you can chart and alert on."
+        form_ [hxPost_ $ "/p/" <> pid.toText <> "/settings/prometheus", class_ "flex flex-col gap-4", hxTarget_ "#prometheus-targets", hxSwap_ "outerHTML"]
+          $ prometheusFields_ pid "prometheus-modal" "Add scrape target" Nothing
   prometheusTargetsList pid cfgs
 
 
@@ -649,14 +650,14 @@ prometheusFields_ pid modalId submitLabel mcfg = do
   -- Optional fields stay collapsed until needed; auto-expanded when editing a target
   -- that already has them set, so existing values are never hidden behind the toggle.
   let hasAdvanced = maybe False (\c -> isJust c.authHeader || not (T.null (labelsToText c.extraLabels))) mcfg
-  details_ ([class_ "group border-t border-strokeWeak pt-2"] <> [term "open" "open" | hasAdvanced]) do
+  details_ ([class_ "group"] <> [term "open" "open" | hasAdvanced]) do
     summary_ [class_ "cursor-pointer select-none text-sm text-textWeak flex items-center gap-1.5"] do
       faSprite_ "chevron-right" "solid" "w-3 h-3 transition-transform group-open:rotate-90"
       "Advanced"
     div_ [class_ "flex flex-col gap-3 mt-3"] do
       field_ "authHeader" "Authorization header" "Bearer <token>" "password" False (Just "Sent as the Authorization header on every scrape.") (maybe "" (fromMaybe "" . (.authHeader)) mcfg)
       field_ "extraLabels" "Static labels" "env=prod, team=core" "text" False (Just "Comma-separated key=value pairs, added to every series from this target.") (maybe "" (labelsToText . (.extraLabels)) mcfg)
-  div_ [class_ "flex items-center gap-2 pt-2"] do
+  div_ [class_ "flex items-center gap-2 border-t border-strokeWeak pt-4"] do
     button_
       [ type_ "button"
       , class_ "btn btn-ghost gap-1.5"
@@ -724,11 +725,12 @@ prometheusTargetRow pid cfg = div_ [class_ "itemsListItem flex items-center just
     -- which sampleToMetricRecord sets to the config name).
     a_ [class_ "btn btn-xs btn-ghost", href_ $ "/p/" <> pid.toText <> "/metrics?metric_source=" <> decodeUtf8 (urlEncode True (encodeUtf8 cfg.name))] "View metrics"
     modalWith_ ("prom-edit-" <> cfg.id.toText) def{boxClass = "p-8"} (Just $ span_ [class_ "btn btn-xs btn-ghost"] "Edit") do
-      div_ do
-        h2_ [class_ "text-textStrong text-xl font-semibold"] "Edit Prometheus target"
-        p_ [class_ "text-sm text-textWeak mt-1"] "Update how Monoscope scrapes this endpoint. Changes take effect on the next scrape."
-      form_ [hxPost_ $ "/p/" <> pid.toText <> "/settings/prometheus/" <> cfg.id.toText <> "/edit", class_ "flex flex-col gap-3", hxTarget_ "#prometheus-targets", hxSwap_ "outerHTML"]
-        $ prometheusFields_ pid ("prom-edit-" <> cfg.id.toText) "Save changes" (Just cfg)
+      div_ [class_ "flex flex-col gap-5"] do
+        div_ do
+          h2_ [class_ "text-textStrong text-xl font-semibold"] "Edit Prometheus target"
+          p_ [class_ "text-sm text-textWeak mt-1"] "Update how Monoscope scrapes this endpoint. Changes take effect on the next scrape."
+        form_ [hxPost_ $ "/p/" <> pid.toText <> "/settings/prometheus/" <> cfg.id.toText <> "/edit", class_ "flex flex-col gap-4", hxTarget_ "#prometheus-targets", hxSwap_ "outerHTML"]
+          $ prometheusFields_ pid ("prom-edit-" <> cfg.id.toText) "Save changes" (Just cfg)
     button_ [class_ "btn btn-xs btn-ghost", hxPatch_ $ "/p/" <> pid.toText <> "/settings/prometheus/" <> cfg.id.toText, hxTarget_ "#prometheus-targets", hxSwap_ "outerHTML"] $ toHtml (bool "Resume" "Pause" cfg.enabled :: Text)
     button_ [class_ "btn btn-xs btn-ghost text-textError", hxDelete_ $ "/p/" <> pid.toText <> "/settings/prometheus/" <> cfg.id.toText, hxTarget_ "#prometheus-targets", hxSwap_ "outerHTML", hxConfirm_ "Remove this Prometheus target?"] "Delete"
 
