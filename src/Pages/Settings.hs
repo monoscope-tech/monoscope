@@ -91,6 +91,7 @@ import Models.Projects.ProjectMembers (Team (..), getTeamsById, resolveTeamEmail
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
+import Network.HTTP.Types (urlEncode)
 import Network.Minio qualified as Minio
 import Network.URI (parseURI, uriAuthority, uriRegName, uriScheme)
 import Network.Wreq qualified as Wreq
@@ -707,7 +708,9 @@ prometheusTargetRow pid cfg = div_ [class_ "itemsListItem flex items-center just
       whenJust cfg.lastScrapedAt \t -> span_ [] $ "· scraped " >> localTimeFmt_ "MMM dd, HH:mm" t
       whenJust cfg.lastStatus \s -> span_ [class_ "truncate max-w-xs", title_ s] $ toHtml ("· " <> s)
   div_ [class_ "flex items-center gap-1 shrink-0"] do
-    a_ [class_ "btn btn-xs btn-ghost", href_ $ "/p/" <> pid.toText <> "/metrics"] "View metrics"
+    -- Filter the metrics explorer to this target's series (metric_source = service_name,
+    -- which sampleToMetricRecord sets to the config name).
+    a_ [class_ "btn btn-xs btn-ghost", href_ $ "/p/" <> pid.toText <> "/metrics?metric_source=" <> decodeUtf8 (urlEncode True (encodeUtf8 cfg.name))] "View metrics"
     modalWith_ ("prom-edit-" <> cfg.id.toText) def{boxClass = "p-8"} (Just $ span_ [class_ "btn btn-xs btn-ghost"] "Edit") do
       iconBadgeLg_ BrandBadge "objects-column"
       span_ [class_ "text-textStrong text-2xl font-semibold mb-1"] "Edit Prometheus target"
