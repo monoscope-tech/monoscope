@@ -980,6 +980,7 @@ navBottomList pidTxt =
   , ("key", "API Keys", "/p/" <> pidTxt <> "/apis")
   , ("users", "Team", "/p/" <> pidTxt <> "/manage_members")
   , ("arrows-turn-right", "Integrations", "/p/" <> pidTxt <> "/settings/integrations")
+  , ("objects-column", "Prometheus", "/p/" <> pidTxt <> "/settings/prometheus")
   , ("dollar", "Billing", "/p/" <> pidTxt <> "/manage_billing")
   ]
 

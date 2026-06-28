@@ -1,0 +1,162 @@
+module Models.Apis.PrometheusScrapeConfigs (
+  PrometheusScrapeConfig (..),
+  PrometheusScrapeConfigId (..),
+  insertConfig,
+  configsByProjectId,
+  getConfig,
+  deleteConfig,
+  setEnabled,
+  dueConfigs,
+  markScraped,
+  ingestScrapedBody,
+  sampleToMetricRecord,
+) where
+
+import Data.Aeson qualified as AE
+import Data.Aeson.Key qualified as AEK
+import Data.Aeson.KeyMap qualified as AEKM
+import Data.Default (Default)
+import Data.Effectful.Hasql qualified as Hasql
+import Data.OpenApi (ToParamSchema (..), ToSchema (..), declareNamedSchema)
+import Data.Text qualified as T
+import Data.Time (UTCTime)
+import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
+import Data.UUID qualified as UUID
+import Data.Vector qualified as V
+import Database.PostgreSQL.Simple (FromRow, ToRow)
+import Database.PostgreSQL.Simple.FromField (FromField)
+import Database.PostgreSQL.Simple.ToField (ToField)
+import Effectful (Eff)
+import GHC.Records (HasField (getField))
+import Hasql.Interpolate qualified as HI
+import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.Telemetry qualified as Telemetry
+import Pkg.DeriveUtils (unUUIDId)
+import Pkg.Prometheus qualified as Prom
+import Relude
+import Servant.API (FromHttpApiData)
+import System.Types (DB)
+
+
+newtype PrometheusScrapeConfigId = PrometheusScrapeConfigId {unPrometheusScrapeConfigId :: UUID.UUID}
+  deriving stock (Generic, Show)
+  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, NFData, ToField)
+  deriving anyclass (FromRow, ToRow)
+
+
+instance ToSchema PrometheusScrapeConfigId where declareNamedSchema _ = declareNamedSchema (Proxy @UUID.UUID)
+instance ToParamSchema PrometheusScrapeConfigId where toParamSchema _ = toParamSchema (Proxy @UUID.UUID)
+instance HasField "toText" PrometheusScrapeConfigId Text where getField = UUID.toText . unPrometheusScrapeConfigId
+
+
+data PrometheusScrapeConfig = PrometheusScrapeConfig
+  { id :: PrometheusScrapeConfigId
+  , projectId :: Projects.ProjectId
+  , createdAt :: UTCTime
+  , updatedAt :: UTCTime
+  , name :: Text
+  , url :: Text
+  , scrapeIntervalSeconds :: Int
+  , authHeader :: Maybe Text
+  , extraLabels :: AE.Value
+  , enabled :: Bool
+  , lastScrapedAt :: Maybe UTCTime
+  , lastStatus :: Maybe Text
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow, NFData)
+
+
+selectCols :: HI.Sql
+selectCols = [HI.sql|id, project_id, created_at, updated_at, name, url, scrape_interval_seconds, auth_header, extra_labels, enabled, last_scraped_at, last_status|]
+
+
+insertConfig :: DB es => Projects.ProjectId -> Text -> Text -> Int -> Maybe Text -> AE.Value -> Eff es Int64
+insertConfig pid name url interval authHeader extraLabels =
+  Hasql.interpExecute
+    [HI.sql|INSERT INTO apis.prometheus_scrape_configs (project_id, name, url, scrape_interval_seconds, auth_header, extra_labels)
+            VALUES (#{pid}, #{name}, #{url}, #{interval}, #{authHeader}, #{extraLabels})|]
+
+
+configsByProjectId :: DB es => Projects.ProjectId -> Eff es [PrometheusScrapeConfig]
+configsByProjectId pid = Hasql.interp ([HI.sql|SELECT |] <> selectCols <> [HI.sql| FROM apis.prometheus_scrape_configs WHERE project_id = #{pid} ORDER BY created_at DESC|])
+
+
+getConfig :: DB es => PrometheusScrapeConfigId -> Eff es (Maybe PrometheusScrapeConfig)
+getConfig cid = Hasql.interpOne ([HI.sql|SELECT |] <> selectCols <> [HI.sql| FROM apis.prometheus_scrape_configs WHERE id = #{cid}|])
+
+
+deleteConfig :: DB es => Projects.ProjectId -> PrometheusScrapeConfigId -> Eff es Int64
+deleteConfig pid cid = Hasql.interpExecute [HI.sql|DELETE FROM apis.prometheus_scrape_configs WHERE id = #{cid} AND project_id = #{pid}|]
+
+
+setEnabled :: DB es => Projects.ProjectId -> PrometheusScrapeConfigId -> Bool -> Eff es Int64
+setEnabled pid cid en = Hasql.interpExecute [HI.sql|UPDATE apis.prometheus_scrape_configs SET enabled = #{en} WHERE id = #{cid} AND project_id = #{pid}|]
+
+
+-- | Enabled targets whose interval has elapsed since the last scrape (or never scraped).
+-- The scrape ticker runs every 60s; per-target cadence is enforced here.
+dueConfigs :: DB es => Eff es [PrometheusScrapeConfig]
+dueConfigs =
+  Hasql.interp
+    ( [HI.sql|SELECT |]
+        <> selectCols
+        <> [HI.sql| FROM apis.prometheus_scrape_configs
+                    WHERE enabled AND (last_scraped_at IS NULL
+                          OR last_scraped_at < now() - make_interval(secs => scrape_interval_seconds))|]
+    )
+
+
+markScraped :: DB es => PrometheusScrapeConfigId -> UTCTime -> Text -> Eff es Int64
+markScraped cid t status =
+  Hasql.interpExecute [HI.sql|UPDATE apis.prometheus_scrape_configs SET last_scraped_at = #{t}, last_status = #{status} WHERE id = #{cid}|]
+
+
+-- | Parse an exposition-format body and ingest its (finite) samples as metrics.
+-- Non-finite values (NaN/±Inf) are dropped — Aeson can't encode them and they
+-- carry no queryable signal. Returns the number of samples ingested.
+ingestScrapedBody :: DB es => PrometheusScrapeConfig -> UTCTime -> LByteString -> Eff es Int
+ingestScrapedBody cfg now body = do
+  let records = V.fromList [sampleToMetricRecord cfg now s | s <- Prom.parsePrometheus (decodeUtf8 body), finite s.value]
+  Telemetry.bulkInsertMetrics records
+  pure (V.length records)
+  where
+    finite v = not (isNaN v || isInfinite v)
+
+
+-- | Map one Prometheus sample to a metric row. Counters become monotonic sums;
+-- everything else (gauges, histogram/summary component series) becomes a gauge.
+-- The config name is the @service.name@ so scraped series group per target.
+sampleToMetricRecord :: PrometheusScrapeConfig -> UTCTime -> Prom.Sample -> Telemetry.MetricRecord
+sampleToMetricRecord cfg now s =
+  Telemetry.MetricRecord
+    { id = Nothing
+    , projectId = unUUIDId cfg.projectId
+    , metricName = s.name
+    , metricType = mtype
+    , metricUnit = ""
+    , metricDescription = s.help
+    , metricTime = maybe now (posixSecondsToUTCTime . (/ 1000) . fromIntegral) s.timestampMs
+    , timestamp = now
+    , attributes = attrs
+    , resource = AE.object ["service.name" AE..= svc]
+    , instrumentationScope = AE.object []
+    , metricValue = mval
+    , metricMetadata = AE.object []
+    , exemplars = AE.Null
+    , flags = 0
+    , aggregationTemporality = bool Nothing (Just Telemetry.ATCumulative) isCounter
+    , isMonotonic = bool Nothing (Just True) isCounter
+    , messageSizeBytes = 0
+    }
+  where
+    svc = if T.null cfg.name then "prometheus" else cfg.name
+    isCounter = s.sampleType == Prom.Counter
+    (mtype, mval) =
+      if isCounter
+        then (Telemetry.MTSum, Telemetry.SumValue (Telemetry.GaugeSum s.value))
+        else (Telemetry.MTGauge, Telemetry.GaugeValue (Telemetry.GaugeSum s.value))
+    labelMap = AEKM.fromList [(AEK.fromText k, AE.String v) | (k, v) <- s.labels]
+    attrs = AE.Object $ case cfg.extraLabels of
+      AE.Object o -> o <> labelMap
+      _ -> labelMap

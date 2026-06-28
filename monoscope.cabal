@@ -126,6 +126,7 @@ extra-source-files:
     static/migrations/0098_widen_int_to_bigint.sql
     static/migrations/0099_jsonb_build_array_record_overload.sql
     static/migrations/0100_db_response_status_code_to_text.sql
+    static/migrations/0101_prometheus_scrape_configs.sql
 
 source-repository head
   type: git
@@ -164,6 +165,7 @@ library
       Models.Apis.LogQueries
       Models.Apis.Monitors
       Models.Apis.PatternMerge
+      Models.Apis.PrometheusScrapeConfigs
       Models.Apis.SchemaCatalog
       Models.Apis.ShareEvents
       Models.Projects.Dashboards
@@ -215,6 +217,7 @@ library
       Pkg.Parser.Expr
       Pkg.Parser.Stats
       Pkg.PatternMerge
+      Pkg.Prometheus
       Pkg.QueryCache
       Pkg.Queue
       Pkg.SchemaLearning.Catalog
@@ -628,6 +631,7 @@ test-suite integration-tests
       Pages.Projects.IntegrationsSpec
       Pages.Projects.ManageMembersSpec
       Pages.Projects.ProjectsSpec
+      Pages.PrometheusSpec
       Pages.QueryCacheSpec
       Pages.ReportsSpec
       Pages.ShareSpec
@@ -759,6 +763,7 @@ test-suite test-dev
       Models.Apis.LogQueries
       Models.Apis.Monitors
       Models.Apis.PatternMerge
+      Models.Apis.PrometheusScrapeConfigs
       Models.Apis.SchemaCatalog
       Models.Apis.ShareEvents
       Models.Projects.Dashboards
@@ -810,6 +815,7 @@ test-suite test-dev
       Pkg.Parser.Expr
       Pkg.Parser.Stats
       Pkg.PatternMerge
+      Pkg.Prometheus
       Pkg.QueryCache
       Pkg.Queue
       Pkg.SchemaLearning.Catalog
@@ -872,6 +878,7 @@ test-suite test-dev
       Pages.Projects.IntegrationsSpec
       Pages.Projects.ManageMembersSpec
       Pages.Projects.ProjectsSpec
+      Pages.PrometheusSpec
       Pages.QueryCacheSpec
       Pages.ReportsSpec
       Pages.ShareSpec

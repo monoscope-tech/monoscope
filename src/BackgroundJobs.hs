@@ -67,6 +67,7 @@ import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.PatternMerge qualified as PatternMergeDB
+import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitHub
@@ -152,6 +153,8 @@ data BgJobs
   | ErrorAssigned Projects.ProjectId ErrorPatterns.ErrorPatternId Projects.UserId -- projectId, errorId, assigneeId
   | PatternEmbeddingAndMerge UTCTime Projects.ProjectId
   | EndpointTemplateDiscovery UTCTime Projects.ProjectId
+  | -- | Per-minute ticker: scrape every enabled Prometheus target whose interval has elapsed.
+    PrometheusScrapeTick UTCTime
   | MonoscopeAdminDaily
   | UsageAuditReport
   | -- | Hourly catch-up for rows the extraction worker missed. Re-drives rows
@@ -354,6 +357,7 @@ processBackgroundJob authCtx bgJob =
                 void $ scheduleJob conn "background_jobs" (BackgroundJobs.HourlyJob at i) at
               seed 24 3600 BackgroundJobs.ProcessIssuesEnhancement
               seed 1440 60 (const BackgroundJobs.QueryMonitorsCheck)
+              seed 1440 60 BackgroundJobs.PrometheusScrapeTick
               seed 144 600 BackgroundJobs.NotificationSweepJob
               seed 24 3600 BackgroundJobs.NotificationDigestJob
 
@@ -551,6 +555,7 @@ processBackgroundJob authCtx bgJob =
     GitSyncPushDashboard pid dashboardId -> gitSyncPushDashboard pid (UUIDId dashboardId)
     GitSyncPushAllDashboards pid -> gitSyncPushAllDashboards pid
     QueryMonitorsCheck -> checkTriggeredQueryMonitors
+    PrometheusScrapeTick _ -> scrapePrometheusTargets
     CompressReplaySessions -> Replay.compressAndMergeReplaySessions
     MergeReplaySession pid sid -> Replay.mergeReplaySession pid sid
     ExpireReplayData -> Replay.expireOldReplayData
@@ -3020,6 +3025,23 @@ gitSyncPushAllDashboards pid = do
                 _ <- GitSync.updateLastTreeSha sync.id treeSha
                 Log.logInfo "Pushed dashboard" (dash.id, dash.title)
           Log.logInfo "Finished pushing all dashboards" pid
+
+
+-- | Scrape every enabled Prometheus target that is due, GET-ing its /metrics URL,
+-- parsing the exposition body and ingesting the samples as metrics. Each target's
+-- outcome is recorded on the config (last_scraped_at + last_status) so a failing
+-- target neither blocks others nor re-fires before its interval.
+scrapePrometheusTargets :: ATBackgroundCtx ()
+scrapePrometheusTargets = do
+  cfgs <- PromCfg.dueConfigs
+  forM_ cfgs \cfg -> do
+    now <- Time.currentTime
+    let opts = maybe W.defaults (\h -> W.defaults & header "Authorization" .~ [encodeUtf8 h]) cfg.authHeader
+    tryAny (W.getWith opts (toString cfg.url) >>= \resp -> PromCfg.ingestScrapedBody cfg now (resp ^. responseBody)) >>= \case
+      Right n -> void $ PromCfg.markScraped cfg.id now ("ok: " <> show n <> " samples")
+      Left err -> do
+        Log.logWarn "Prometheus scrape failed" (cfg.id.toText, cfg.url, show err)
+        void $ PromCfg.markScraped cfg.id now ("error: " <> toText (displayException err))
 
 
 checkTriggeredQueryMonitors :: ATBackgroundCtx ()
