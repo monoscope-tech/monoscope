@@ -37,8 +37,6 @@ tabs:
             query: |
               kind=="server" AND hashes[*]=="{{var-endpointHash}}"
               | summarize count() by bin_auto(timestamp)
-              | order by timestamp desc
-              | limit 200
             unit: reqs
             eager: true
             layout: { w: 3, h: 2 }
@@ -50,8 +48,6 @@ tabs:
             query: |
               kind=="server" AND hashes[*]=="{{var-endpointHash}}"
               | summarize round(countif(coalesce(attributes.http.response.status_code, 0) >= 500) * 100.0 / count(), 2) by bin_auto(timestamp)
-              | order by timestamp desc
-              | limit 200
             unit: '%'
             alert_threshold: 5
             warning_threshold: 1
@@ -64,8 +60,6 @@ tabs:
             query: |
               kind=="server" AND hashes[*]=="{{var-endpointHash}}" AND duration != null
               | summarize p95(duration) / 1000000 by bin_auto(timestamp)
-              | order by timestamp desc
-              | limit 200
             unit: ms
             layout: { w: 3, h: 2 }
 
@@ -275,8 +269,6 @@ tabs:
             query: |
               kind=="server" AND hashes[*]=="{{var-endpointHash}}" AND attributes.http.response.status_code >= 500
               | summarize count() by bin_auto(timestamp)
-              | order by timestamp desc
-              | limit 200
             unit: errors
             alert_threshold: 1
             layout: { w: 4, h: 2 }
@@ -287,8 +279,6 @@ tabs:
             query: |
               kind=="server" AND hashes[*]=="{{var-endpointHash}}" AND attributes.http.response.status_code >= 400 AND attributes.http.response.status_code < 500
               | summarize count() by bin_auto(timestamp)
-              | order by timestamp desc
-              | limit 200
             unit: errors
             layout: { w: 4, h: 2 }
 
@@ -370,8 +360,6 @@ tabs:
             query: |
               kind=="server" AND hashes[*]=="{{var-endpointHash}}" AND duration != null
               | summarize p50(duration) / 1000000 by bin_auto(timestamp)
-              | order by timestamp desc
-              | limit 200
             unit: ms
             layout: { w: 3, h: 2 }
 
@@ -381,8 +369,6 @@ tabs:
             query: |
               kind=="server" AND hashes[*]=="{{var-endpointHash}}" AND duration != null
               | summarize p75(duration) / 1000000 by bin_auto(timestamp)
-              | order by timestamp desc
-              | limit 200
             unit: ms
             layout: { w: 3, h: 2 }
 
@@ -392,8 +378,6 @@ tabs:
             query: |
               kind=="server" AND hashes[*]=="{{var-endpointHash}}" AND duration != null
               | summarize p95(duration) / 1000000 by bin_auto(timestamp)
-              | order by timestamp desc
-              | limit 200
             unit: ms
             layout: { w: 3, h: 2 }
 
@@ -403,8 +387,6 @@ tabs:
             query: |
               kind=="server" AND hashes[*]=="{{var-endpointHash}}" AND duration != null
               | summarize p99(duration) / 1000000 by bin_auto(timestamp)
-              | order by timestamp desc
-              | limit 200
             unit: ms
             layout: { w: 3, h: 2 }
 

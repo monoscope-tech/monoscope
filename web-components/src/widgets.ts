@@ -2,6 +2,7 @@
 import { params } from './main';
 import { getSeriesColor } from './colorMapping';
 import { beginChartFetch } from './chart-fetch-seq';
+import { formatNumber, convertToNanoseconds, formatDuration, statScalar, formatStatValue } from './stat-value';
 const INITIAL_FETCH_INTERVAL = 5000;
 const $ = (id: string) => document.getElementById(id);
 
@@ -216,18 +217,23 @@ const hideNoDataOverlay = (chartId: string) => {
 
 
 const createSeriesConfig = (widgetData: WidGetData, name: string, i: number, opt: any) => {
-  // For timeseries_stat widgets with generic column names, use the brand color token
+  // A thresholded stat (e.g. Error Rate) is treated as a caution metric — color
+  // it red so the signal isn't an arbitrary hash color, rather than leaving it to
+  // getSeriesColor's hash. Assumes higher = worse; revisit (explicit intent field)
+  // if a "good when high" or latency-SLO stat ever needs a non-red threshold.
+  // Otherwise generic stat columns use the brand color; named series use their mapping.
+  const isErrorStat = widgetData.widgetType === 'timeseries_stat' && widgetData.alertThreshold != null;
   const isGenericStatColumn = widgetData.widgetType === 'timeseries_stat' &&
     (name === 'value' || name.startsWith('count') || name === '' || !name);
-  const paletteColor = isGenericStatColumn ? getChartStyles().brandColor : getSeriesColor(name);
+  const styles = getChartStyles(); // one getComputedStyle read per series, not three
+  const paletteColor = isErrorStat ? styles.errorColor : isGenericStatColumn ? styles.brandColor : getSeriesColor(name);
 
   const gradientColor = new (window as any).echarts.graphic.LinearGradient(0, 0, 0, 1, [
     { offset: 0, color: (window as any).echarts.color.modifyAlpha(paletteColor, 1) },
     { offset: 1, color: (window as any).echarts.color.modifyAlpha(paletteColor, 0) },
   ]);
 
-  const { chartBg } = getChartStyles();
-  const backgroundStyle = { color: chartBg };
+  const backgroundStyle = { color: styles.chartBg };
 
   const seriesOpt: any = {
     type: widgetData.chartType,
@@ -285,10 +291,34 @@ const updateChartConfiguration = (widgetData: WidGetData, opt: any, data: any) =
   return opt;
 };
 
+// Fill a timeseries_stat's big number from the chart-data fetch: the
+// representative scalar for its unit, or a no-data dash (stats null / empty
+// range) so the loading spinner always resolves rather than spinning under an
+// error overlay. Eager stat widgets keep their server-rendered value (no fetch).
+const NO_DATA_VALUE = '—';
+const setStatValue = (widgetData: WidGetData, stats: any, from?: number, to?: number) => {
+  const value = $(`${widgetData.chartId}Value`);
+  if (!value) return;
+  if (stats == null) {
+    // Fetch error: clear the spinner, but leave the chart's error overlay as the
+    // sole failure signal rather than revealing a redundant "—" badge above it.
+    value.textContent = '';
+    return;
+  }
+  // textContent (not innerHTML): values are plain text, and the max/min prefix is a literal "<"/">".
+  if (stats.count > 0) {
+    const formatted = formatStatValue(statScalar(stats, widgetData.summarizeBy, from, to), widgetData.unit || '');
+    value.textContent = widgetData.summarizeByPrefix ? `${widgetData.summarizeByPrefix} ${formatted}` : formatted;
+  } else {
+    value.textContent = NO_DATA_VALUE; // empty range
+  }
+  value.classList.remove('hidden');
+};
+
 const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widgetData: WidGetData) => {
   if (!shouldFetch) return;
 
-  const { query, querySQL, pid, chartId, summarizeBy, summarizeByPrefix } = widgetData;
+  const { query, querySQL, pid, chartId } = widgetData;
   const isStale = beginChartFetch(chartId);
   // Batch DOM updates before fetch
   requestAnimationFrame(() => {
@@ -342,6 +372,7 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
       // "no data" one) so the user can distinguish a broken widget from an empty range.
       chart.hideLoading();
       showNoDataOverlay(chartId, error, 'error');
+      setStatValue(widgetData, null); // clear the stat spinner; failed ≠ loading
       return;
     }
     const trmHeaders = headers?.map((h: string) => {
@@ -364,19 +395,10 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
     const subtitle = $(`${chartId}Subtitle`);
     subtitle && (subtitle.innerHTML = `${window.formatNumber(rows_per_min)}/min`);
 
-    const value = $(`${chartId}Value`);
-    if (value && stats) {
-      const durationUnits = ['ns', 'μs', 'us', 'ms', 's', 'm', 'h'];
-      const unit = widgetData.unit || '';
-      const isDuration = durationUnits.includes(unit);
-      const formattedValue = isDuration
-        ? window.formatDuration(window.convertToNanoseconds(Number(stats[summarizeBy]), unit))
-        : window.formatNumber(Number(stats[summarizeBy]));
-      const displayUnit = {'': '', '1': '', '{}': '', 'By': ' bytes'}[unit] ?? ` ${unit}`;
-      const unitSuffix = isDuration ? '' : displayUnit;
-      value.innerHTML = `${summarizeByPrefix} ${formattedValue}${unitSuffix}`;
-      value.classList.remove('hidden');
-    }
+    // Representative scalar for the unit (rate/mean/…), not a blind sum of
+    // per-bin values — see statScalar. from/to are ms, needed for rate. count<1
+    // (empty range) renders the no-data dash, matching the chart overlay below.
+    setStatValue(widgetData, stats, from, to);
 
     chart.hideLoading();
     if (!dataset || dataset.length === 0) {
@@ -396,7 +418,10 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
   } catch (e) {
     console.error('Failed to fetch new data:', e);
     chart.hideLoading();
-    if (!isStale()) showNoDataOverlay(chartId, 'Failed to load data', 'error');
+    if (!isStale()) {
+      showNoDataOverlay(chartId, 'Failed to load data', 'error');
+      setStatValue(widgetData, null); // clear the stat spinner on fetch failure
+    }
   } finally {
     // Batch DOM updates after fetch completes
     requestAnimationFrame(() => {
@@ -602,71 +627,12 @@ const chartWidget = (widgetData: WidGetData) => {
 (window as any).queueChartInit = queueChartInit;
 
 /**
- * Format numbers with appropriate suffixes and precision
- * for display in charts and tooltips
+ * Number/duration formatting now lives in ./stat-value (pure + unit-tested);
+ * re-export onto window for the inline chart formatters that reference them.
  */
-window.formatNumber = (n: number): string => {
-  if (n >= 1_000_000_000) return `${Math.floor(n / 1_000_000_000)}.${Math.floor((n % 1_000_000_000) / 100_000_000)}B`;
-  if (n >= 1_000_000) return `${Math.floor(n / 1_000_000)}.${Math.floor((n % 1_000_000) / 100_000)}M`;
-  if (n >= 1_000) return `${Math.floor(n / 1_000)}.${Math.floor((n % 1_000) / 100)}K`;
-  if (n === null) return 'N/A';
-
-  // Format decimals appropriately based on magnitude
-  if (!Number.isInteger(n) && !Number.isNaN(n)) {
-    if (n >= 100) return Math.round(n).toString();
-    if (n >= 10) return parseFloat(n.toFixed(1)).toString();
-    return parseFloat(n.toFixed(2)).toString();
-  }
-
-  return n.toString();
-};
-
-/**
- * Convert a value from a specified time unit to nanoseconds
- * @param value - The numeric value to convert
- * @param unit - The unit of the input value (h, m, s, ms, μs, us, ns)
- * @returns Value converted to nanoseconds
- */
-window.convertToNanoseconds = (value: number, unit: string): number => {
-  const conversionFactors: Record<string, number> = {
-    h: 3_600_000_000_000, // hours to nanoseconds
-    m: 60_000_000_000, // minutes to nanoseconds
-    s: 1_000_000_000, // seconds to nanoseconds
-    ms: 1_000_000, // milliseconds to nanoseconds
-    μs: 1_000, // microseconds to nanoseconds
-    us: 1_000, // microseconds to nanoseconds (alt)
-    ns: 1, // already nanoseconds
-  };
-  return value * (conversionFactors[unit] || 1);
-};
-
-/**
- * Format duration values from nanoseconds into human-readable time units
- * Matches the backend's prettyPrintDuration function in Utils.hs
- * @param ns - Duration in nanoseconds
- * @returns Formatted duration string with appropriate unit
- */
-window.formatDuration = (ns: number): string => {
-  if (ns >= 3_600_000_000_000) {
-    // >= 1 hour
-    return `${(ns / 3_600_000_000_000).toFixed(1)}h`;
-  } else if (ns >= 60_000_000_000) {
-    // >= 1 minute
-    return `${(ns / 60_000_000_000).toFixed(1)}m`;
-  } else if (ns >= 1_000_000_000) {
-    // >= 1 second
-    return `${(ns / 1_000_000_000).toFixed(1)}s`;
-  } else if (ns >= 1_000_000) {
-    // >= 1 millisecond
-    return `${(ns / 1_000_000).toFixed(1)}ms`;
-  } else if (ns >= 1_000) {
-    // >= 1 microsecond
-    return `${(ns / 1_000).toFixed(1)}μs`;
-  } else {
-    // nanoseconds
-    return `${ns.toFixed(0)}ns`;
-  }
-};
+window.formatNumber = formatNumber;
+window.convertToNanoseconds = convertToNanoseconds;
+window.formatDuration = formatDuration;
 
 // Recursively build the widget order from a grid container.
 // It looks for direct children with the class "grid-stack-item" and
