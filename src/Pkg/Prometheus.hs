@@ -9,6 +9,7 @@ module Pkg.Prometheus (
   SampleType (..),
   Sample (..),
   parsePrometheus,
+  isFiniteSample,
 ) where
 
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
@@ -37,6 +38,15 @@ data Sample = Sample
 
 -- | Per-family metadata accumulated from @# TYPE@/@# HELP@ lines.
 data Meta = Meta {mType :: SampleType, mHelp :: Text}
+
+
+-- | Whether a sample carries a finite value — NaN/±Inf samples can't be stored as
+-- a metric point, so both ingestion and the test-scrape preview drop them.
+--
+-- >>> map isFiniteSample $ parsePrometheus "a 1\nb +Inf\nc NaN\nd -Inf\n"
+-- [True,False,False,False]
+isFiniteSample :: Sample -> Bool
+isFiniteSample s = not (isNaN s.value || isInfinite s.value)
 
 
 -- | Parse a full exposition document into samples. Malformed sample lines are
@@ -182,5 +192,9 @@ parseValue (T.strip -> t) = case t of
   _ -> readMaybe (toString (T.dropWhile (== '+') t))
 
 
+-- The exposition spec mandates an integer millisecond timestamp. We deliberately do not
+-- accept floats: truncating a float would misread float-seconds (which some exporters emit)
+-- as float-milliseconds, dating every point to ~1970. A non-integer timestamp is dropped
+-- (the sample falls back to scrape time), which is safer than a silently wrong time.
 parseTs :: Text -> Maybe Int64
-parseTs t = readMaybe (toString t) <|> (truncate <$> (readMaybe (toString t) :: Maybe Double))
+parseTs t = readMaybe (toString t)

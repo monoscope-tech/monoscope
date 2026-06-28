@@ -19,7 +19,6 @@ import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Default (Default)
 import Data.Effectful.Hasql qualified as Hasql
-import Data.List (partition)
 import Data.OpenApi (ToParamSchema (..), ToSchema (..), declareNamedSchema)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
@@ -150,9 +149,10 @@ markScraped cid status =
 -- silently: the dropped count is logged. Returns the number of samples ingested.
 ingestScrapedBody :: (DB es, Log :> es) => PrometheusScrapeConfig -> UTCTime -> LByteString -> Eff es Int
 ingestScrapedBody cfg now body = do
-  let (finiteS, dropped) = partition (\s -> not (isNaN s.value || isInfinite s.value)) (Prom.parsePrometheus (decodeUtf8 body))
-      records = V.fromList (map (sampleToMetricRecord cfg now) finiteS)
-  unless (null dropped) $ Log.logInfo "Prometheus scrape dropped non-finite samples" (AE.object ["config_id" AE..= cfg.id.toText, "dropped" AE..= length dropped])
+  let samples = Prom.parsePrometheus (decodeUtf8 body)
+      records = V.mapMaybe (\s -> if Prom.isFiniteSample s then Just (sampleToMetricRecord cfg now s) else Nothing) (V.fromList samples)
+      dropped = length samples - V.length records
+  when (dropped > 0) $ Log.logInfo "Prometheus scrape dropped non-finite samples" (AE.object ["config_id" AE..= cfg.id.toText, "dropped" AE..= dropped])
   Telemetry.bulkInsertMetrics records
   pure (V.length records)
 
@@ -184,12 +184,19 @@ sampleToMetricRecord cfg now s =
     }
   where
     svc = if T.null cfg.name then "prometheus" else cfg.name
+    -- Only TYPE counter maps to MTSum. Histogram/summary _count/_sum sub-series are
+    -- cumulative-monotonic too, but we ingest them as plain gauges (their family TYPE is
+    -- histogram/summary, not counter) — enough to chart/query, but downstream rate() that
+    -- keys off aggregationTemporality will treat them as instantaneous. Intentional: see
+    -- the module-header note on per-series ingestion.
     isCounter = s.sampleType == Prom.Counter
     (mtype, mval) =
       if isCounter
         then (Telemetry.MTSum, Telemetry.SumValue (Telemetry.GaugeSum s.value))
         else (Telemetry.MTGauge, Telemetry.GaugeValue (Telemetry.GaugeSum s.value))
     labelMap = AEKM.fromList [(AEK.fromText k, AE.String v) | (k, v) <- s.labels]
+    -- KeyMap (<>) is left-biased, so the scraped per-sample labels (specific) must come
+    -- first to win over the config's static extraLabels (general context) on key collisions.
     attrs = AE.Object $ case cfg.extraLabels of
-      AE.Object o -> o <> labelMap
+      AE.Object o -> labelMap <> o
       _ -> labelMap

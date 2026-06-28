@@ -22,6 +22,8 @@ module Pages.Settings (
   PrometheusForm (..),
   PrometheusGet (..),
   PrometheusMut (..),
+  safeScrapeUrl,
+  parseLabelsText,
   -- Integrations
   TestForm (..),
   notificationsTestPostH,
@@ -56,6 +58,7 @@ import Data.ByteArray qualified as BA
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
 import Data.CaseInsensitive qualified as CI
+import Data.Char (isDigit)
 import Data.Default
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Notify qualified as Notify
@@ -471,21 +474,29 @@ prometheusGetH pid = do
 -- @service.name@ the scraped metrics are grouped under — blank names would silently
 -- collide multiple targets into one series namespace.
 validatePrometheusForm :: PrometheusForm -> Either Text (Text, Text, Int, Maybe Text, AE.Value)
-validatePrometheusForm form
-  | T.null url = Left "A /metrics URL is required"
-  | not (safeScrapeUrl url) = Left "URL must be a public http:// or https:// endpoint"
-  | T.null name = Left "A name is required — it groups the scraped metrics under service.name"
-  | otherwise =
-      Right
-        ( name
-        , url
-        , max 60 (fromMaybe 60 form.scrapeInterval) -- floor at the 60s dispatcher cadence
-        , mfilter (not . T.null) (T.strip <$> form.authHeader)
-        , parseLabelsText (fromMaybe "" form.extraLabels)
-        )
+validatePrometheusForm form = do
+  url <- validateScrapeUrl form.url
+  when (T.null name) $ Left "A name is required — it groups the scraped metrics under service.name"
+  Right
+    ( name
+    , url
+    , max 60 (fromMaybe 60 form.scrapeInterval) -- floor at the 60s dispatcher cadence
+    , mfilter (not . T.null) (T.strip <$> form.authHeader)
+    , parseLabelsText (fromMaybe "" form.extraLabels)
+    )
   where
     name = T.strip form.name
-    url = T.strip form.url
+
+
+-- | The URL guards shared by save-validation and the Test handler: non-empty + SSRF floor.
+-- Returns the stripped URL so callers don't re-strip or re-check.
+validateScrapeUrl :: Text -> Either Text Text
+validateScrapeUrl raw
+  | T.null url = Left "A /metrics URL is required"
+  | not (safeScrapeUrl url) = Left "URL must be a public http:// or https:// endpoint"
+  | otherwise = Right url
+  where
+    url = T.strip raw
 
 
 -- | SSRF floor, used by both save-validation and the Test handler: require an http(s)
@@ -493,6 +504,15 @@ validatePrometheusForm form
 -- and RFC-1918 / ULA literals. This is a literal-host check: a public hostname that
 -- *resolves* to an internal IP (DNS rebinding) is not caught here — resolve-and-pin is
 -- a worthwhile follow-up for full coverage.
+-- | Reject non-http(s) schemes and hosts that resolve to the internal network
+-- (loopback, link-local, RFC-1918, ULA, IPv4-mapped IPv6, and obfuscated numeric
+-- literals — octal/decimal/short forms), to blunt SSRF via the scrape URL. DNS-rebinding
+-- remains a known gap (we only vet the literal host; resolve-and-pin is the full fix).
+--
+-- >>> map safeScrapeUrl ["https://metrics.example.com/m", "http://10.0.0.1/m", "http://[::ffff:127.0.0.1]/m", "file:///etc/passwd"]
+-- [True,False,False,False]
+-- >>> map safeScrapeUrl ["http://2130706433/m", "http://0177.0.0.1/m", "http://localhost./m", "http://172.160.0.1/m"]
+-- [False,False,False,True]
 safeScrapeUrl :: Text -> Bool
 safeScrapeUrl u = case parseURI (toString (T.strip u)) of
   Nothing -> False
@@ -501,12 +521,30 @@ safeScrapeUrl u = case parseURI (toString (T.strip u)) of
       `elem` ["http:", "https:"]
       && not (internalHost (T.toLower (toText (maybe "" uriRegName (uriAuthority uri)))))
   where
-    internalHost h =
-      T.null h
-        || h
-        `elem` ["localhost", "[::1]", "0.0.0.0"]
-        || any (`T.isPrefixOf` h) ["127.", "10.", "192.168.", "169.254.", "[fd", "[fe80"]
-        || any (\n -> ("172." <> show n <> ".") `T.isPrefixOf` h) ([16 .. 31] :: [Int])
+    internalHost raw =
+      let h = fromMaybe raw (T.stripSuffix "." raw) -- normalise the trailing-dot FQDN form
+          ip6 = fromMaybe h (T.stripPrefix "[" h >>= T.stripSuffix "]") -- inside of a [..] literal
+       in T.null h
+            || h
+            == "localhost"
+            || any (`T.isPrefixOf` ip6) ["::1", "fd", "fe80", "::ffff:"]
+            || internalIPv4 h
+            || obfuscatedNumericHost h
+    -- A clean dotted-decimal quad whose address is loopback/RFC-1918/link-local/unspecified.
+    internalIPv4 h = case traverse octet (T.splitOn "." h) of
+      Just [a, b, _, _] -> a `elem` [0, 127] || a == 10 || (a == 169 && b == 254) || (a == 172 && b >= 16 && b <= 31) || (a == 192 && b == 168)
+      _ -> False
+    -- Any all-numeric host that is not a clean 4-octet quad: bare integer (2130706433),
+    -- octal octets (0177.0.0.1), or short forms (127.1) — all of which an OS resolver
+    -- expands to an internal address.
+    obfuscatedNumericHost h =
+      not (T.null h)
+        && T.all (\c -> isDigit c || c == '.') h
+        && maybe True ((/= 4) . length) (traverse octet (T.splitOn "." h))
+    octet o = do
+      guard $ not (T.null o) && (T.length o == 1 || T.head o /= '0') -- reject leading-zero (octal) octets
+      n <- readMaybe (toString o) :: Maybe Int
+      n <$ guard (n >= 0 && n <= 255)
 
 
 prometheusPostH :: Projects.ProjectId -> PrometheusForm -> ATAuthCtx (RespHeaders PrometheusMut)
@@ -536,24 +574,20 @@ promSave pid form verb persist = do
 prometheusTestH :: Projects.ProjectId -> PrometheusForm -> ATAuthCtx (RespHeaders (Html ()))
 prometheusTestH pid form = do
   _ <- Projects.sessionAndProject pid
-  let url = T.strip form.url
-  if T.null url
-    then addRespHeaders $ prometheusTestResult (Left "Enter a URL first")
-    else
-      if not (safeScrapeUrl url)
-        then addRespHeaders $ prometheusTestResult (Left "URL must be a public http:// or https:// endpoint")
-        else do
-          let opts = BJ.prometheusScrapeOpts (mfilter (not . T.null) (T.strip <$> form.authHeader))
-          t0 <- Time.currentTime
-          res <- tryAny (W.getWith opts (toString url))
-          t1 <- Time.currentTime
-          let ms = round (realToFrac (diffUTCTime t1 t0) * 1000 :: Double) :: Int
-          addRespHeaders $ prometheusTestResult $ case res of
-            Left e -> Left (T.take 300 (show e))
-            Right resp ->
-              -- Count only finite samples — matches what ingestScrapedBody actually stores.
-              let finite = filter (\s -> not (isNaN s.value || isInfinite s.value)) (Prom.parsePrometheus (decodeUtf8 (resp ^. Wreq.responseBody)))
-               in Right (length finite, ms)
+  case validateScrapeUrl form.url of
+    Left err -> addRespHeaders $ prometheusTestResult (Left err)
+    Right url -> do
+      let opts = BJ.prometheusScrapeOpts (mfilter (not . T.null) (T.strip <$> form.authHeader))
+      t0 <- Time.currentTime
+      res <- tryAny (W.getWith opts (toString url))
+      t1 <- Time.currentTime
+      let ms = round (realToFrac (diffUTCTime t1 t0) * 1000 :: Double) :: Int
+      addRespHeaders $ prometheusTestResult $ case res of
+        Left e -> Left (T.take 300 (show e))
+        Right resp ->
+          -- Count only the samples ingestScrapedBody would store (shared isFiniteSample).
+          let finite = filter Prom.isFiniteSample (Prom.parsePrometheus (decodeUtf8 (resp ^. Wreq.responseBody)))
+           in Right (length finite, ms)
 
 
 prometheusDeleteH :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfigId -> ATAuthCtx (RespHeaders PrometheusMut)
@@ -578,15 +612,23 @@ prometheusMut pid = do
 
 
 -- | "k=v, k2=v2" → JSON object of static labels (blank/invalid pairs skipped).
+-- | Parse @k=v, k2=v2@ static-label text into a JSON object, trimming whitespace and
+-- dropping pairs with an empty key or empty value (so @"env= "@ is dropped, not stored blank).
+--
+-- >>> parseLabelsText "env = prod "
+-- Object (fromList [("env",String "prod")])
+-- >>> parseLabelsText "env= , =orphan"
+-- Object (fromList [])
 parseLabelsText :: Text -> AE.Value
 parseLabelsText t =
   AE.object
-    [ (AEK.fromText k', AE.String (T.strip (T.drop 1 v)))
+    [ (AEK.fromText k', AE.String v')
     | pair <- T.splitOn "," t
-    , let (k, v) = T.breakOn "=" pair
+    , let (k, rest) = T.breakOn "=" pair
     , let k' = T.strip k
     , not (T.null k')
-    , not (T.null v)
+    , Just v' <- [T.strip <$> T.stripPrefix "=" rest] -- explicit "skip the =", drops valueless keys
+    , not (T.null v')
     ]
 
 

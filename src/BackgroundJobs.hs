@@ -3044,15 +3044,19 @@ prometheusScrapeTimeoutMicros :: Int
 prometheusScrapeTimeoutMicros = 10 * 1000000
 
 
--- | wreq Options for a scrape: hard response timeout + optional Authorization header.
--- Shared by the worker and the settings Test button so the two never drift on timeout
--- or header wiring (the Test button exists to mirror what the real scrape does).
+-- | wreq Options for a scrape: hard response timeout, no redirect following, and an
+-- optional Authorization header. Shared by the worker and the settings Test button so the
+-- two never drift on timeout or header wiring (the Test button exists to mirror the real scrape).
 prometheusScrapeOpts :: Maybe Text -> Wreq.Options
 prometheusScrapeOpts authHeader =
-  maybe id (\h -> header "Authorization" .~ [encodeUtf8 h]) authHeader
-    $ defaults
+  defaults
     & Wreq.manager
     .~ Left tlsManagerSettings{managerResponseTimeout = responseTimeoutMicro prometheusScrapeTimeoutMicros}
+      -- Don't follow redirects: http-client (unlike browsers) re-sends Authorization across a
+      -- cross-host 3xx, so a target answering 302 -> attacker could exfiltrate the bearer token.
+      & Wreq.redirects
+    .~ 0
+      & maybe id (\h -> header "Authorization" .~ [encodeUtf8 h]) authHeader
 
 
 -- | Dispatcher (PrometheusScrapeTick). Atomically leases the due targets — 'claimDueConfigs'
