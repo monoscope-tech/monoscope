@@ -607,11 +607,15 @@ prometheusFields_ pid mcfg = do
   field_ "url" "Metrics URL" "http://service:9090/metrics" "url" True (maybe "" (.url) mcfg)
   label_ [class_ "flex flex-col gap-1 text-sm"] do
     span_ [class_ "text-textWeak"] "Scrape interval"
+    -- No sub-minute options: the dispatcher ticks once per minute, so a shorter
+    -- interval can't be honoured. Always include the config's current value (even if
+    -- off-list) so editing an unrelated field never silently rewrites the interval.
+    let cur = maybe 60 (.scrapeIntervalSeconds) mcfg
+        presets = [(60, "1 minute"), (300, "5 minutes"), (900, "15 minutes"), (3600, "1 hour")] :: [(Int, Text)]
+        opts = if any ((== cur) . fst) presets then presets else sortOn fst ((cur, show cur <> "s") : presets)
     select_ [class_ "select select-bordered w-full", name_ "scrapeInterval"]
-      -- No sub-minute options: the scrape dispatcher ticks once per minute, so a
-      -- shorter interval can't be honoured (it would just scrape every ~60s anyway).
-      $ forM_ ([(60, "1 minute"), (300, "5 minutes"), (900, "15 minutes"), (3600, "1 hour")] :: [(Int, Text)]) \(v, l) ->
-        option_ ([value_ (show v)] <> [selected_ "selected" | maybe (v == 60) ((== v) . (.scrapeIntervalSeconds)) mcfg]) (toHtml l)
+      $ forM_ opts \(v, l) ->
+        option_ ([value_ (show v)] <> [selected_ "selected" | v == cur]) (toHtml l)
   field_ "authHeader" "Authorization header (optional)" "Bearer <token>" "password" False (maybe "" (fromMaybe "" . (.authHeader)) mcfg)
   field_ "extraLabels" "Static labels (optional)" "env=prod, team=core" "text" False (maybe "" (labelsToText . (.extraLabels)) mcfg)
   div_ [class_ "flex items-center gap-2 flex-wrap"] do
