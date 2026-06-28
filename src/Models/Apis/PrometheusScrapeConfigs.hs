@@ -7,6 +7,7 @@ module Models.Apis.PrometheusScrapeConfigs (
   getConfig,
   deleteConfig,
   setEnabled,
+  toggleEnabled,
   claimDueConfigs,
   markScraped,
   ingestScrapedBody,
@@ -106,6 +107,12 @@ setEnabled :: DB es => Projects.ProjectId -> PrometheusScrapeConfigId -> Bool ->
 setEnabled pid cid en = Hasql.interpExecute [HI.sql|UPDATE apis.prometheus_scrape_configs SET enabled = #{en} WHERE id = #{cid} AND project_id = #{pid}|]
 
 
+-- | Flip enabled atomically in one statement — two concurrent toggles can't read the
+-- same value and cancel out (the read-modify-write race a getConfig+setEnabled would have).
+toggleEnabled :: DB es => Projects.ProjectId -> PrometheusScrapeConfigId -> Eff es Int64
+toggleEnabled pid cid = Hasql.interpExecute [HI.sql|UPDATE apis.prometheus_scrape_configs SET enabled = NOT enabled WHERE id = #{cid} AND project_id = #{pid}|]
+
+
 -- | Atomically claim up to @limit@ enabled targets whose interval has elapsed (or that
 -- were never scraped), advancing @last_scraped_at@ to now() in the SAME statement. The
 -- @FOR UPDATE SKIP LOCKED@ subquery makes this safe to run from any number of monoscope
@@ -129,9 +136,12 @@ claimDueConfigs limit =
     )
 
 
-markScraped :: DB es => PrometheusScrapeConfigId -> UTCTime -> Text -> Eff es Int64
-markScraped cid t status =
-  Hasql.interpExecute [HI.sql|UPDATE apis.prometheus_scrape_configs SET last_scraped_at = #{t}, last_status = #{status} WHERE id = #{cid}|]
+-- | Record a scrape outcome. Uses the DB clock for @last_scraped_at@ (not a host
+-- @UTCTime@) so a host/DB clock skew can't rewind the lease set by 'claimDueConfigs'
+-- and cause the target to be re-claimed before its interval elapses.
+markScraped :: DB es => PrometheusScrapeConfigId -> Text -> Eff es Int64
+markScraped cid status =
+  Hasql.interpExecute [HI.sql|UPDATE apis.prometheus_scrape_configs SET last_scraped_at = now(), last_status = #{status} WHERE id = #{cid}|]
 
 
 -- | Parse an exposition-format body and ingest its (finite) samples as metrics.

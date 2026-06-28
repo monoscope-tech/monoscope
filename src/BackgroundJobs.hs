@@ -3077,10 +3077,10 @@ scrapePrometheusTarget :: PromCfg.PrometheusScrapeConfigId -> ATBackgroundCtx ()
 scrapePrometheusTarget cid = whenJustM (PromCfg.getConfig cid) \cfg -> Relude.when cfg.enabled do
   now <- Time.currentTime
   tryAny (W.getWith (prometheusScrapeOpts cfg.authHeader) (toString cfg.url) >>= \resp -> PromCfg.ingestScrapedBody cfg now (resp ^. responseBody)) >>= \case
-    Right n -> void $ PromCfg.markScraped cfg.id now ("ok: " <> show n <> " samples")
+    Right n -> void $ PromCfg.markScraped cfg.id ("ok: " <> show n <> " samples")
     Left err -> do
       Log.logWarn "Prometheus scrape failed" (cfg.id.toText, cfg.url, show err)
-      void $ PromCfg.markScraped cfg.id now ("error: " <> toText (displayException err))
+      void $ PromCfg.markScraped cfg.id ("error: " <> toText (displayException err))
 
 
 checkTriggeredQueryMonitors :: ATBackgroundCtx ()

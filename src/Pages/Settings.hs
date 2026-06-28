@@ -472,6 +472,7 @@ prometheusGetH pid = do
 validatePrometheusForm :: PrometheusForm -> Either Text (Text, Text, Int, Maybe Text, AE.Value)
 validatePrometheusForm form
   | T.null url = Left "A /metrics URL is required"
+  | not (T.isPrefixOf "http://" url || T.isPrefixOf "https://" url) = Left "URL must start with http:// or https://"
   | T.null name = Left "A name is required — it groups the scraped metrics under service.name"
   | otherwise =
       Right
@@ -538,7 +539,7 @@ prometheusDeleteH pid cid = do
 prometheusToggleH :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfigId -> ATAuthCtx (RespHeaders PrometheusMut)
 prometheusToggleH pid cid = do
   _ <- Projects.sessionAndProject pid
-  whenJustM (PromCfg.getConfig cid) \cfg -> void $ PromCfg.setEnabled pid cid (not cfg.enabled)
+  void $ PromCfg.toggleEnabled pid cid
   prometheusMut pid
 
 

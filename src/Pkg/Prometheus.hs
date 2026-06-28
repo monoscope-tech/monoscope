@@ -53,6 +53,10 @@ data Meta = Meta {mType :: SampleType, mHelp :: Text}
 -- >>> map (\s -> s.sampleType) $ parsePrometheus "# TYPE x gauge\nx 1\ny 2\n"
 -- [Gauge,Untyped]
 --
+-- OpenMetrics counters declare TYPE on the family name but expose @_total@ samples:
+-- >>> map (\s -> s.sampleType) $ parsePrometheus "# TYPE http_requests counter\nhttp_requests_total 5\n"
+-- [Counter]
+--
 -- >>> map (\s -> (s.name, s.labels)) $ parsePrometheus "rpc{quantile=\"0.5\",path=\"/a,b\"} 4773\n"
 -- [("rpc",[("quantile","0.5"),("path","/a,b")])]
 parsePrometheus :: Text -> [Sample]
@@ -112,12 +116,16 @@ parseSample meta line = do
     isNameChar c = c == '_' || c == ':' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
 
 
--- | Look up family metadata, stripping histogram/summary suffixes so a
--- @x_bucket@ sample inherits the @x@ family's declared TYPE.
+-- | Look up family metadata, stripping the suffixes that distinguish a sample name
+-- from its @# TYPE@ family name so the sample inherits the declared type. Covers
+-- histogram/summary component series (@_bucket@/@_sum@/@_count@) and the OpenMetrics
+-- counter convention where @# TYPE http_requests counter@ is exposed as
+-- @http_requests_total@ (@_total@) — without this a counter is misread as a gauge.
+-- Classic exposition (@# TYPE x_total counter@) still matches via the unstripped name.
 resolveMeta :: Map.Map Text Meta -> Text -> Meta
 resolveMeta meta name = fromMaybe (Meta Untyped "") $ asum (map (`Map.lookup` meta) candidates)
   where
-    candidates = name : mapMaybe (\sfx -> T.stripSuffix sfx name) ["_bucket", "_sum", "_count"]
+    candidates = name : mapMaybe (\sfx -> T.stripSuffix sfx name) ["_bucket", "_sum", "_count", "_total"]
 
 
 -- | Split at the matching @}@, returning (inside, after). Honours quoted
