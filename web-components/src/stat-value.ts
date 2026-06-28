@@ -6,11 +6,11 @@
 
 /** Format numbers with magnitude suffixes for chart/stat display. */
 export const formatNumber = (n: number): string => {
+  if (n == null || Number.isNaN(n)) return 'N/A'; // guard first: NaN (e.g. Number(undefined)) must not reach the DOM as "NaN"
   if (n >= 1_000_000_000) return `${Math.floor(n / 1_000_000_000)}.${Math.floor((n % 1_000_000_000) / 100_000_000)}B`;
   if (n >= 1_000_000) return `${Math.floor(n / 1_000_000)}.${Math.floor((n % 1_000_000) / 100_000)}M`;
   if (n >= 1_000) return `${Math.floor(n / 1_000)}.${Math.floor((n % 1_000) / 100)}K`;
-  if (n === null) return 'N/A';
-  if (!Number.isInteger(n) && !Number.isNaN(n)) {
+  if (!Number.isInteger(n)) {
     if (n >= 100) return Math.round(n).toString();
     if (n >= 10) return parseFloat(n.toFixed(1)).toString();
     return parseFloat(n.toFixed(2)).toString();

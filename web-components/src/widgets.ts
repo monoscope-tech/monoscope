@@ -225,19 +225,15 @@ const createSeriesConfig = (widgetData: WidGetData, name: string, i: number, opt
   const isErrorStat = widgetData.widgetType === 'timeseries_stat' && widgetData.alertThreshold != null;
   const isGenericStatColumn = widgetData.widgetType === 'timeseries_stat' &&
     (name === 'value' || name.startsWith('count') || name === '' || !name);
-  const paletteColor = isErrorStat
-    ? getChartStyles().errorColor
-    : isGenericStatColumn
-      ? getChartStyles().brandColor
-      : getSeriesColor(name);
+  const styles = getChartStyles(); // one getComputedStyle read per series, not three
+  const paletteColor = isErrorStat ? styles.errorColor : isGenericStatColumn ? styles.brandColor : getSeriesColor(name);
 
   const gradientColor = new (window as any).echarts.graphic.LinearGradient(0, 0, 0, 1, [
     { offset: 0, color: (window as any).echarts.color.modifyAlpha(paletteColor, 1) },
     { offset: 1, color: (window as any).echarts.color.modifyAlpha(paletteColor, 0) },
   ]);
 
-  const { chartBg } = getChartStyles();
-  const backgroundStyle = { color: chartBg };
+  const backgroundStyle = { color: styles.chartBg };
 
   const seriesOpt: any = {
     type: widgetData.chartType,

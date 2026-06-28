@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'vitest';
-import { statScalar, formatStatValue } from '../src/stat-value';
+import { statScalar, formatStatValue, formatNumber } from '../src/stat-value';
 
 // Regression for the golden-signals overview bug: the big number was a blind
 // sum of every per-bin value (mislabeled "120k req/min", "1.5m" p99), instead
@@ -49,5 +49,17 @@ describe('formatStatValue', () => {
   test('unitless and bytes suffixes', () => {
     expect(formatStatValue(1500, '')).toBe('1.5K');
     expect(formatStatValue(2048, 'By')).toBe('2.0K bytes');
+  });
+});
+
+describe('formatNumber NaN/null guard', () => {
+  test('NaN/undefined/null render N/A, not the literal "NaN"', () => {
+    expect(formatNumber(NaN)).toBe('N/A');
+    expect(formatNumber(Number(undefined))).toBe('N/A');
+    expect(formatNumber(null as unknown as number)).toBe('N/A');
+  });
+  test('finite values are unaffected', () => {
+    expect(formatNumber(1500)).toBe('1.5K');
+    expect(formatNumber(42)).toBe('42');
   });
 });
