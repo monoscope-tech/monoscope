@@ -144,8 +144,26 @@ jobs:
           MINIO_ENDPOINT: http://minio:9000
           MINIO_ACCESS_KEY: minioadmin
           MINIO_SECRET_KEY: minioadmin
-          MINIO_BUCKET: monoscope-test
-        run: cabal test integration-tests --ghc-options="-O0" --test-show-details=direct
+        # Process-sharded: 4 binary copies (one per vCPU), each its own RTS running a
+        # disjoint shard (by SHARD_INDEX/SHARD_TOTAL) sequentially. In-process hspec
+        # `parallel` deadlocks on the per-test resource-pool lifecycle (see
+        # test/integration/Main.hs); sharding sidesteps it. 4 * ~9 conns = 36 < the
+        # Postgres default max_connections (100). Inlined (no `make` in the deps image).
+        run: |
+          bin=$(cabal list-bin integration-tests)
+          rm -f build-shard-*.log
+          for i in 0 1 2 3; do
+            SHARD_INDEX=$i SHARD_TOTAL=4 "$bin" --color > build-shard-$i.log 2>&1 &
+          done
+          wait
+          echo "=== per-shard summaries ==="; grep -hE "examples?, [0-9]+ failures?" build-shard-*.log || true
+          green=$(grep -lE "examples?, 0 failures" build-shard-*.log | wc -l | tr -d ' ')
+          if [ "$green" -ne 4 ] || grep -qE "[1-9][0-9]* failures?|error:|Interrupted" build-shard-*.log; then
+            echo "SHARDED RUN FAILED ($green/4 green):"
+            for f in build-shard-*.log; do grep -qE "examples?, 0 failures" "$f" || { echo "### $f"; tail -40 "$f"; }; done
+            exit 1
+          fi
+          echo "ALL SHARDS GREEN"
 
   lint:
     name: Lint (hlint)
