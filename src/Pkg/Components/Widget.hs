@@ -110,16 +110,24 @@ data SummarizeBy
   | SBMax
   | SBMin
   | SBCount
+  | SBMean
+  | SBRate
   deriving stock (Enum, Eq, Generic, Show, THS.Lift)
   deriving anyclass (Default, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "SB", DAE.CamelToSnake]] SummarizeBy
 
 
+-- | Prefix shown before a stat's big number. The value itself is computed and
+-- formatted client-side (statScalar/formatStatValue in stat-value.ts) from the
+-- same stats the chart uses, so the two paths can't disagree. Explicit clauses
+-- (not a wildcard) so a new constructor must declare its prefix.
 summarizeByPrefix :: SummarizeBy -> Text
-summarizeByPrefix SBSum = ""
 summarizeByPrefix SBMax = "<"
 summarizeByPrefix SBMin = ">"
+summarizeByPrefix SBSum = ""
 summarizeByPrefix SBCount = ""
+summarizeByPrefix SBMean = ""
+summarizeByPrefix SBRate = ""
 
 
 -- when processing widgets we'll do them async, so eager queries are loaded upfront
