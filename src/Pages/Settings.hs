@@ -15,6 +15,8 @@ module Pages.Settings (
   -- Prometheus
   prometheusGetH,
   prometheusPostH,
+  prometheusUpdateH,
+  prometheusTestH,
   prometheusDeleteH,
   prometheusToggleH,
   PrometheusForm (..),
@@ -73,6 +75,10 @@ import Hasql.Interpolate qualified as HI
 
 import BackgroundJobs (errorTrendChartUrl)
 import BackgroundJobs qualified as BJ
+import Data.Aeson.Key qualified as AEK
+import Data.Aeson.KeyMap qualified as AEKM
+import Data.Effectful.Wreq qualified as W
+import Data.Time (diffUTCTime)
 import Effectful.Reader.Static (ask, asks)
 import Effectful.Time qualified as Time
 import Fmt (commaizeF, fmt)
@@ -86,6 +92,8 @@ import Models.Projects.ProjectMembers (Team (..), getTeamsById, resolveTeamEmail
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
+import Network.HTTP.Client (managerResponseTimeout, responseTimeoutMicro)
+import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.Minio qualified as Minio
 import Network.Wreq qualified as Wreq
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, settingsContentTarget, withSettingsPage)
@@ -94,11 +102,13 @@ import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.EmailTemplates qualified as ET
 import Pkg.Mail (NotificationAlerts (..), sampleAlertByIssueTypeText, sampleReport, sendDiscordAlert, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendWhatsAppAlert)
+import Pkg.Prometheus qualified as Prom
 import Relude hiding (ask, asks)
 import Servant (err400, errBody)
 import System.Config
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
 import Text.Printf (printf)
+import UnliftIO.Exception (tryAny)
 import Utils (LoadingSize (..), calculateCycleStartDate, faSprite_, formatUTC, htmxIndicator_)
 import Web.FormUrlEncoded (FromForm)
 import "cryptonite" Crypto.Hash (SHA256)
@@ -458,19 +468,70 @@ prometheusGetH pid = do
   addRespHeaders $ PrometheusGet $ PageCtx bw{pageTitle = "Prometheus", isSettingsPage = True} (pid, cfgs)
 
 
+-- | Validate + normalise a target form. Name is required because it becomes the
+-- @service.name@ the scraped metrics are grouped under — blank names would silently
+-- collide multiple targets into one series namespace.
+validatePrometheusForm :: PrometheusForm -> Either Text (Text, Text, Int, Maybe Text, AE.Value)
+validatePrometheusForm form
+  | T.null url = Left "A /metrics URL is required"
+  | T.null name = Left "A name is required — it groups the scraped metrics under service.name"
+  | otherwise =
+      Right
+        ( name
+        , url
+        , max 10 (fromMaybe 60 form.scrapeInterval)
+        , mfilter (not . T.null) (T.strip <$> form.authHeader)
+        , parseLabelsText (fromMaybe "" form.extraLabels)
+        )
+  where
+    name = T.strip form.name
+    url = T.strip form.url
+
+
 prometheusPostH :: Projects.ProjectId -> PrometheusForm -> ATAuthCtx (RespHeaders PrometheusMut)
 prometheusPostH pid form = do
   _ <- Projects.sessionAndProject pid
-  if T.null (T.strip form.url)
-    then addErrorToast "A /metrics URL is required" Nothing
-    else do
-      let interval = max 10 (fromMaybe 60 form.scrapeInterval)
-          authH = mfilter (not . T.null) (T.strip <$> form.authHeader)
-      void $ PromCfg.insertConfig pid (T.strip form.name) (T.strip form.url) interval authH (parseLabelsText (fromMaybe "" form.extraLabels))
+  case validatePrometheusForm form of
+    Left err -> addErrorToast err Nothing
+    Right (name, url, interval, authH, labels) -> do
+      void $ PromCfg.insertConfig pid name url interval authH labels
       addSuccessToast "Added Prometheus target" Nothing
       addTriggerEvent "closeModal" ""
-  cfgs <- V.fromList <$> PromCfg.configsByProjectId pid
-  addRespHeaders $ PrometheusMut (pid, cfgs)
+  prometheusMut pid
+
+
+prometheusUpdateH :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfigId -> PrometheusForm -> ATAuthCtx (RespHeaders PrometheusMut)
+prometheusUpdateH pid cid form = do
+  _ <- Projects.sessionAndProject pid
+  case validatePrometheusForm form of
+    Left err -> addErrorToast err Nothing
+    Right (name, url, interval, authH, labels) -> do
+      void $ PromCfg.updateConfig pid cid name url interval authH labels
+      addSuccessToast "Updated Prometheus target" Nothing
+      addTriggerEvent "closeModal" ""
+  prometheusMut pid
+
+
+-- | One-shot scrape used by the form's Test button: fetch + parse, no DB write, no ingest.
+-- Reports sample count + latency, or a (truncated) error, so a user validates a target
+-- before saving instead of saving blind and squinting at last_status a minute later.
+prometheusTestH :: Projects.ProjectId -> PrometheusForm -> ATAuthCtx (RespHeaders (Html ()))
+prometheusTestH pid form = do
+  _ <- Projects.sessionAndProject pid
+  let url = T.strip form.url
+  if T.null url
+    then addRespHeaders $ prometheusTestResult (Left "Enter a URL first")
+    else do
+      let mgr = Left tlsManagerSettings{managerResponseTimeout = responseTimeoutMicro (10 * 1000000)}
+          auth = maybe Relude.id (\h -> Wreq.header "Authorization" .~ [encodeUtf8 h]) (mfilter (not . T.null) (T.strip <$> form.authHeader))
+          opts = auth $ Wreq.defaults & Wreq.manager .~ mgr
+      t0 <- Time.currentTime
+      res <- tryAny (W.getWith opts (toString url))
+      t1 <- Time.currentTime
+      let ms = round (realToFrac (diffUTCTime t1 t0) * 1000 :: Double) :: Int
+      addRespHeaders $ prometheusTestResult $ case res of
+        Left e -> Left (T.take 300 (show e))
+        Right resp -> Right (length (Prom.parsePrometheus (decodeUtf8 (resp ^. Wreq.responseBody))), ms)
 
 
 prometheusDeleteH :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfigId -> ATAuthCtx (RespHeaders PrometheusMut)
@@ -478,14 +539,18 @@ prometheusDeleteH pid cid = do
   _ <- Projects.sessionAndProject pid
   void $ PromCfg.deleteConfig pid cid
   addSuccessToast "Removed Prometheus target" Nothing
-  cfgs <- V.fromList <$> PromCfg.configsByProjectId pid
-  addRespHeaders $ PrometheusMut (pid, cfgs)
+  prometheusMut pid
 
 
 prometheusToggleH :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfigId -> ATAuthCtx (RespHeaders PrometheusMut)
 prometheusToggleH pid cid = do
   _ <- Projects.sessionAndProject pid
   whenJustM (PromCfg.getConfig cid) \cfg -> void $ PromCfg.setEnabled pid cid (not cfg.enabled)
+  prometheusMut pid
+
+
+prometheusMut :: Projects.ProjectId -> ATAuthCtx (RespHeaders PrometheusMut)
+prometheusMut pid = do
   cfgs <- V.fromList <$> PromCfg.configsByProjectId pid
   addRespHeaders $ PrometheusMut (pid, cfgs)
 
@@ -494,13 +559,38 @@ prometheusToggleH pid cid = do
 parseLabelsText :: Text -> AE.Value
 parseLabelsText t =
   AE.object
-    [ (fromString (toString k'), AE.String (T.strip (T.drop 1 v)))
+    [ (AEK.fromText k', AE.String (T.strip (T.drop 1 v)))
     | pair <- T.splitOn "," t
     , let (k, v) = T.breakOn "=" pair
     , let k' = T.strip k
     , not (T.null k')
     , not (T.null v)
     ]
+
+
+-- | Inverse of 'parseLabelsText', to prefill the edit form.
+labelsToText :: AE.Value -> Text
+labelsToText (AE.Object o) = T.intercalate ", " [AEK.toText k <> "=" <> v | (k, AE.String v) <- AEKM.toList o]
+labelsToText _ = ""
+
+
+-- | Scrape health derived from last_status ("ok: …" / "error: …"). Distinct from the
+-- on/off state so a target that's enabled-but-failing never shows a reassuring green.
+data ScrapeHealth = HealthOk | HealthError | HealthPending
+
+
+configHealth :: PromCfg.PrometheusScrapeConfig -> ScrapeHealth
+configHealth cfg = case T.toLower . T.strip <$> cfg.lastStatus of
+  Just s | "ok" `T.isPrefixOf` s -> HealthOk
+  Just s | "error" `T.isPrefixOf` s -> HealthError
+  _ -> HealthPending
+
+
+healthBadge_ :: ScrapeHealth -> Html ()
+healthBadge_ = \case
+  HealthOk -> span_ [class_ "cbadge-sm badge-success inline-flex items-center gap-1"] $ faSprite_ "circle-check" "solid" "w-3 h-3" >> "healthy"
+  HealthError -> span_ [class_ "cbadge-sm badge-error inline-flex items-center gap-1"] $ faSprite_ "circle-exclamation" "solid" "w-3 h-3" >> "failing"
+  HealthPending -> span_ [class_ "cbadge-sm badge-neutral"] "pending"
 
 
 prometheusPage :: Projects.ProjectId -> V.Vector PromCfg.PrometheusScrapeConfig -> Html ()
@@ -511,37 +601,93 @@ prometheusPage pid cfgs = settingsSection_ do
       iconBadgeLg_ BrandBadge "objects-column"
       span_ [class_ "text-textStrong text-2xl font-semibold mb-1"] "Scrape a Prometheus endpoint"
       form_ [hxPost_ $ "/p/" <> pid.toText <> "/settings/prometheus", class_ "flex flex-col gap-3", hxTarget_ "#prometheus-targets", hxSwap_ "outerHTML"] do
-        labeledInput_ "name" "Name" "api-gateway" False
-        labeledInput_ "url" "Metrics URL" "http://service:9090/metrics" True
-        labeledInput_ "scrapeInterval" "Scrape interval (seconds)" "60" False
-        labeledInput_ "authHeader" "Authorization header (optional)" "Bearer <token>" False
-        labeledInput_ "extraLabels" "Extra labels (optional, k=v,k2=v2)" "env=prod,team=core" False
+        prometheusFields_ pid Nothing
         button_ [type_ "submit", class_ "btn btn-primary w-full mt-2"] "Add target"
   prometheusTargetsList pid cfgs
+
+
+-- | Shared add/edit form body: prefilled from a config when editing, plus a Test button
+-- that scrapes the entered URL and shows the result inline (targets the sibling result div).
+prometheusFields_ :: Projects.ProjectId -> Maybe PromCfg.PrometheusScrapeConfig -> Html ()
+prometheusFields_ pid mcfg = do
+  field_ "name" "Name" "api-gateway" "text" True (maybe "" (.name) mcfg)
+  field_ "url" "Metrics URL" "http://service:9090/metrics" "url" True (maybe "" (.url) mcfg)
+  label_ [class_ "flex flex-col gap-1 text-sm"] do
+    span_ [class_ "text-textWeak"] "Scrape interval"
+    select_ [class_ "select select-bordered w-full", name_ "scrapeInterval"]
+      $ forM_ ([(15, "15s"), (30, "30s"), (60, "1 minute"), (300, "5 minutes"), (900, "15 minutes")] :: [(Int, Text)]) \(v, l) ->
+        option_ ([value_ (show v)] <> [selected_ "selected" | maybe (v == 60) ((== v) . (.scrapeIntervalSeconds)) mcfg]) (toHtml l)
+  field_ "authHeader" "Authorization header (optional)" "Bearer <token>" "password" False (maybe "" (fromMaybe "" . (.authHeader)) mcfg)
+  field_ "extraLabels" "Static labels (optional)" "env=prod, team=core" "text" False (maybe "" (labelsToText . (.extraLabels)) mcfg)
+  div_ [class_ "flex items-center gap-2 flex-wrap"] do
+    button_
+      [ type_ "button"
+      , class_ "btn btn-sm btn-ghost"
+      , hxPost_ $ "/p/" <> pid.toText <> "/settings/prometheus/test"
+      , term "hx-include" "closest form"
+      , term "hx-target" "next .prom-test-result"
+      , hxSwap_ "outerHTML"
+      ]
+      "Test"
+    prometheusTestResult (Left "")
   where
-    labeledInput_ :: Text -> Text -> Text -> Bool -> Html ()
-    labeledInput_ nm lbl ph req = label_ [class_ "flex flex-col gap-1 text-sm"] do
+    field_ :: Text -> Text -> Text -> Text -> Bool -> Text -> Html ()
+    field_ nm lbl ph ty req val = label_ [class_ "flex flex-col gap-1 text-sm"] do
       span_ [class_ "text-textWeak"] (toHtml lbl)
-      input_ $ [class_ "input input-bordered w-full", type_ (if nm == "scrapeInterval" then "number" else "text"), name_ nm, placeholder_ ph] <> [required_ "true" | req]
+      input_ $ [class_ "input input-bordered w-full", type_ ty, name_ nm, placeholder_ ph, value_ val] <> [required_ "true" | req]
+
+
+prometheusTestResult :: Either Text (Int, Int) -> Html ()
+prometheusTestResult res = div_ [class_ "prom-test-result text-sm"] $ case res of
+  Right (n, ms) -> span_ [class_ "cbadge-sm badge-success inline-flex items-center gap-1"] $ faSprite_ "circle-check" "solid" "w-3 h-3" >> toHtml ("Scraped " <> show n <> " samples · " <> show ms <> "ms" :: Text)
+  Left err
+    | T.null err -> mempty
+    | otherwise -> span_ [class_ "cbadge-sm badge-error inline-flex items-start gap-1 max-w-full"] $ faSprite_ "circle-exclamation" "solid" "w-3 h-3 shrink-0 mt-0.5" >> span_ [class_ "break-all"] (toHtml err)
 
 
 prometheusTargetsList :: Projects.ProjectId -> V.Vector PromCfg.PrometheusScrapeConfig -> Html ()
-prometheusTargetsList pid cfgs = div_ [id_ "prometheus-targets", class_ "flex flex-col gap-2 mt-4"] do
+prometheusTargetsList pid cfgs = div_ [id_ "prometheus-targets", class_ "mt-4"] do
   if V.null cfgs
-    then div_ [class_ "text-sm text-textWeak py-8 text-center"] "No Prometheus targets yet. Add one to start scraping metrics."
-    else V.forM_ cfgs (prometheusTargetRow pid)
+    then prometheusEmptyState
+    else do
+      input_
+        [ class_ "input input-bordered input-sm w-full mb-3"
+        , type_ "search"
+        , placeholder_ "Filter targets…"
+        , term "_" "on input show .itemsListItem in #prometheus-targets when its textContent.toLowerCase() contains my value.toLowerCase()"
+        ]
+      div_ [class_ "flex flex-col gap-2"] $ V.forM_ cfgs (prometheusTargetRow pid)
+
+
+prometheusEmptyState :: Html ()
+prometheusEmptyState = div_ [class_ "flex flex-col items-center text-center gap-3 py-14 px-4"] do
+  iconBadgeLg_ BrandBadge "objects-column"
+  h3_ [class_ "text-base font-semibold text-textStrong"] "Scrape your Prometheus endpoints"
+  p_ [class_ "text-sm text-textWeak max-w-md"] "Point Monoscope at any /metrics endpoint. We poll it on your schedule, parse the exposition format, and ingest the samples as metrics you can chart and alert on — grouped under the name you give each target. Use “Add target” to start."
 
 
 prometheusTargetRow :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfig -> Html ()
-prometheusTargetRow pid cfg = div_ [class_ "flex items-center justify-between gap-3 border border-strokeWeak rounded-md p-3"] do
-  div_ [class_ "flex flex-col min-w-0 gap-0.5"] do
-    div_ [class_ "flex items-center gap-2"] do
-      span_ [class_ "text-textStrong font-medium"] $ toHtml (if T.null cfg.name then cfg.url else cfg.name)
-      span_ [class_ $ "cbadge-sm " <> bool "badge-neutral" "badge-success" cfg.enabled] $ toHtml (bool "disabled" "enabled" cfg.enabled :: Text)
+prometheusTargetRow pid cfg = div_ [class_ "itemsListItem flex items-center justify-between gap-3 border border-strokeWeak rounded-md p-3"] do
+  div_ [class_ "flex flex-col min-w-0 gap-1"] do
+    div_ [class_ "flex items-center gap-2 flex-wrap"] do
+      healthBadge_ (configHealth cfg)
+      span_ [class_ "text-textStrong font-medium"] $ toHtml cfg.name
+      unless cfg.enabled $ span_ [class_ "cbadge-sm badge-neutral"] "paused"
+      when (isJust cfg.authHeader) $ faSprite_ "lock" "solid" "w-3 h-3 text-iconNeutral"
     span_ [class_ "text-xs text-textWeak truncate"] $ toHtml cfg.url
-    span_ [class_ "text-xs text-textWeak"] $ toHtml ("every " <> show cfg.scrapeIntervalSeconds <> "s" <> maybe "" (" · " <>) cfg.lastStatus :: Text)
-  div_ [class_ "flex items-center gap-2 shrink-0"] do
-    button_ [class_ "btn btn-xs btn-ghost", hxPatch_ $ "/p/" <> pid.toText <> "/settings/prometheus/" <> cfg.id.toText, hxTarget_ "#prometheus-targets", hxSwap_ "outerHTML"] $ toHtml (bool "Enable" "Disable" cfg.enabled :: Text)
+    div_ [class_ "text-xs text-textWeak flex items-center gap-1.5 flex-wrap"] do
+      toHtml ("every " <> show cfg.scrapeIntervalSeconds <> "s" :: Text)
+      whenJust cfg.lastScrapedAt \t -> span_ [] $ "· scraped " >> localTimeFmt_ "MMM dd, HH:mm" t
+      whenJust cfg.lastStatus \s -> span_ [class_ "truncate max-w-xs", title_ s] $ toHtml ("· " <> s)
+  div_ [class_ "flex items-center gap-1 shrink-0"] do
+    a_ [class_ "btn btn-xs btn-ghost", href_ $ "/p/" <> pid.toText <> "/metrics"] "View metrics"
+    modalWith_ ("prom-edit-" <> cfg.id.toText) def{boxClass = "p-8"} (Just $ span_ [class_ "btn btn-xs btn-ghost"] "Edit") do
+      iconBadgeLg_ BrandBadge "objects-column"
+      span_ [class_ "text-textStrong text-2xl font-semibold mb-1"] "Edit Prometheus target"
+      form_ [hxPost_ $ "/p/" <> pid.toText <> "/settings/prometheus/" <> cfg.id.toText <> "/edit", class_ "flex flex-col gap-3", hxTarget_ "#prometheus-targets", hxSwap_ "outerHTML"] do
+        prometheusFields_ pid (Just cfg)
+        button_ [type_ "submit", class_ "btn btn-primary w-full mt-2"] "Save changes"
+    button_ [class_ "btn btn-xs btn-ghost", hxPatch_ $ "/p/" <> pid.toText <> "/settings/prometheus/" <> cfg.id.toText, hxTarget_ "#prometheus-targets", hxSwap_ "outerHTML"] $ toHtml (bool "Resume" "Pause" cfg.enabled :: Text)
     button_ [class_ "btn btn-xs btn-ghost text-textError", hxDelete_ $ "/p/" <> pid.toText <> "/settings/prometheus/" <> cfg.id.toText, hxTarget_ "#prometheus-targets", hxSwap_ "outerHTML", hxConfirm_ "Remove this Prometheus target?"] "Delete"
 
 

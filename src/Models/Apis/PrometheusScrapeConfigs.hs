@@ -2,6 +2,7 @@ module Models.Apis.PrometheusScrapeConfigs (
   PrometheusScrapeConfig (..),
   PrometheusScrapeConfigId (..),
   insertConfig,
+  updateConfig,
   configsByProjectId,
   getConfig,
   deleteConfig,
@@ -76,6 +77,15 @@ insertConfig pid name url interval authHeader extraLabels =
   Hasql.interpExecute
     [HI.sql|INSERT INTO apis.prometheus_scrape_configs (project_id, name, url, scrape_interval_seconds, auth_header, extra_labels)
             VALUES (#{pid}, #{name}, #{url}, #{interval}, #{authHeader}, #{extraLabels})|]
+
+
+-- | Edit a target in place (preserves id + scrape history). Scoped by project_id.
+updateConfig :: DB es => Projects.ProjectId -> PrometheusScrapeConfigId -> Text -> Text -> Int -> Maybe Text -> AE.Value -> Eff es Int64
+updateConfig pid cid name url interval authHeader extraLabels =
+  Hasql.interpExecute
+    [HI.sql|UPDATE apis.prometheus_scrape_configs
+            SET name = #{name}, url = #{url}, scrape_interval_seconds = #{interval}, auth_header = #{authHeader}, extra_labels = #{extraLabels}
+            WHERE id = #{cid} AND project_id = #{pid}|]
 
 
 configsByProjectId :: DB es => Projects.ProjectId -> Eff es [PrometheusScrapeConfig]

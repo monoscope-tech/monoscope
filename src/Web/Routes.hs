@@ -449,6 +449,8 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , gitSyncSettingsDelete :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Delete '[HTML] (RespHeaders (Html ()))
   , prometheusSettingsGet :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> Get '[HTML] (RespHeaders Settings.PrometheusGet)
   , prometheusSettingsPost :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> ReqBody '[FormUrlEncoded] Settings.PrometheusForm :> Post '[HTML] (RespHeaders Settings.PrometheusMut)
+  , prometheusSettingsTest :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> "test" :> ReqBody '[FormUrlEncoded] Settings.PrometheusForm :> Post '[HTML] (RespHeaders (Html ()))
+  , prometheusSettingsEdit :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> Capture "cfgID" PromCfg.PrometheusScrapeConfigId :> "edit" :> ReqBody '[FormUrlEncoded] Settings.PrometheusForm :> Post '[HTML] (RespHeaders Settings.PrometheusMut)
   , prometheusSettingsToggle :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> Capture "cfgID" PromCfg.PrometheusScrapeConfigId :> Patch '[HTML] (RespHeaders Settings.PrometheusMut)
   , prometheusSettingsDelete :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> Capture "cfgID" PromCfg.PrometheusScrapeConfigId :> Delete '[HTML] (RespHeaders Settings.PrometheusMut)
   , -- GitHub App routes
@@ -823,6 +825,8 @@ cookieProtectedServer =
     , gitSyncSettingsDelete = GitSync.gitSyncSettingsDeleteH
     , prometheusSettingsGet = Settings.prometheusGetH
     , prometheusSettingsPost = Settings.prometheusPostH
+    , prometheusSettingsTest = Settings.prometheusTestH
+    , prometheusSettingsEdit = Settings.prometheusUpdateH
     , prometheusSettingsToggle = Settings.prometheusToggleH
     , prometheusSettingsDelete = Settings.prometheusDeleteH
     , githubAppInstall = GitSync.githubAppInstallH
