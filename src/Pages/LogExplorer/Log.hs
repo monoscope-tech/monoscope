@@ -52,7 +52,7 @@ import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), logQueryBox_, queryEd
 import Pkg.Components.TimePicker qualified as Components
 import Pkg.Components.Widget (WidgetAxis (..), WidgetType (WTTimeseries, WTTimeseriesLine))
 import Pkg.Components.Widget qualified as Widget
-import Pkg.Parser (pSource, parseQueryToAST, toQText)
+import Pkg.Parser (defaultQueryLimit, pSource, parseQueryToAST, toQText)
 import Pkg.Parser.Stats (Section (TakeCommand))
 import Pkg.SchemaLearning.Catalog (FacetData (..), FacetSummary (..), FacetValue (..))
 import Relude hiding (ask)
@@ -650,8 +650,11 @@ queryEvents pid queryM sinceM fromM toM sourceM limitM withChildrenM = do
       -- trace-tree-flattened rows — which include synth headers and descendants —
       -- both miscounted hasMore and dropped matched roots past the cut, so
       -- `--with-children` could silently truncate results and stop pagination.
+      -- Cap the API `limit` at the server default (500) so a huge ?limit= can't make
+      -- the query fetch an unbounded result set (the old post-hoc `take` capped it at
+      -- defaultQueryLimit implicitly). An explicit KQL `| limit` is left as the user wrote it.
       hasKqlLimit = any (\case TakeCommand{} -> True; _ -> False) queryAST
-      queryAST' = if hasKqlLimit then queryAST else queryAST <> [TakeCommand (fromMaybe 100 limitM)]
+      queryAST' = if hasKqlLimit then queryAST else queryAST <> [TakeCommand (min defaultQueryLimit (fromMaybe 100 limitM))]
   result <- LogQueries.selectLogTable pid queryAST' (toQText queryAST') Nothing (fromD, toD) [] (parseMaybe pSource =<< sourceM) Nothing
   case result of
     Left err -> throwError $ translateQueryError err
