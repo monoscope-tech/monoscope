@@ -49,6 +49,7 @@ module Pkg.TestUtils (
   ingestErrorAt,
   ingestTrace,
   ingestTraceAt,
+  ingestSpanLinked,
   ingestMetric,
   ingestLogWithHeader,
   ingestTraceWithHeader,
@@ -1306,6 +1307,21 @@ ingestSessionEvent tr apiKey spanName extras isError timestamp = do
           else Nothing
       req = mkSpanRequest trIdText spanIdText Nothing spanName [] statusM attrs (mkResource apiKey []) timestamp
   void $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto req)
+
+
+-- | Ingest one span with full trace/parent linkage control, so tests can build
+-- production-shaped *partial* traces. A @parent_id@ that is absent from a query's
+-- result set is exactly what makes the log explorer synthesize "Upstream span
+-- missing" header rows; ≥2 siblings sharing one (trace_id, missing parent_id)
+-- form one orphan group → one synth row. Most explorer/pagination bugs hide in
+-- this shape, which the other ingest helpers (parent hard-coded to Nothing)
+-- cannot produce. Pass the same @trId@ + @parentM@ for siblings of a group.
+-- NB: ids are hex-decoded on ingest ('hexPad'), so @trId@/@spanId@/@parentM@ must
+-- be valid hex (a UUID works); a non-hex string decodes to an empty id.
+ingestSpanLinked :: TestResources -> Text -> Text -> Text -> Maybe Text -> Text -> [(Text, Text)] -> UTCTime -> IO ()
+ingestSpanLinked tr apiKey trId spanId parentM name extras ts =
+  void $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider
+    $ Proto (mkSpanRequest trId spanId parentM name [] Nothing [mkAttr k v | (k, v) <- extras] (mkResource apiKey []) ts)
 
 
 ingestMetric, ingestMetricWithHeader :: TestResources -> Text -> Text -> Double -> UTCTime -> IO ()

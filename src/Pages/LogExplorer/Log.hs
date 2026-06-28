@@ -618,7 +618,11 @@ buildLogResult withChildren pid now sinceM fromM toM summaryCols (requestVecs, c
       , serviceColors = colors
       , queryResultCount
       , count = resultCount'
-      , hasMore = queryResultCount < resultCount'
+      , -- Compare ONLY the real fetched rows (requestVecs) against selectLogTable's
+        -- overflow sentinel (resultCount' = limit+1 when more pages exist). Counting
+        -- synthesized orphan-header rows here inflates the page to limit+synth ≥ sentinel,
+        -- flipping hasMore false on any page with an orphan group and stalling load-more.
+        hasMore = V.length requestVecs < resultCount'
       , traces
       }
 

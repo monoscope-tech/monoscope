@@ -3,6 +3,7 @@ module Pages.LogExplorer.LogSpec (spec) where
 import Data.Aeson qualified as AE
 import Data.HashMap.Strict qualified as HashMap
 import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Data.Time.Clock (addUTCTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
@@ -26,6 +27,13 @@ import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext (..), EnvConfig (..))
 import Test.Hspec
 
+
+
+-- Convert apiLogH's cursor (last-row timestamp text) into the UTCTime upper-bound
+-- the next page expects, mirroring apiLogH's nextUrl (-0.001s skips the boundary
+-- row that would otherwise reappear). Shared by the cursor-pagination tests.
+nextCursor :: Text -> Maybe UTCTime
+nextCursor t = addUTCTime (-0.001) <$> iso8601ParseM (toString t)
 
 
 spec :: Spec
@@ -277,12 +285,6 @@ spec = around withTestResources do
       let q = Just $ "attributes.page.marker == \"" <> pageMarker <> "\" | limit 2"
           fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) frozenTime
           toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
-          -- Convert apiLogH's cursor (last-row timestamp text) into the
-          -- UTCTime upper-bound the next call expects, mirroring the
-          -- nextUrl construction in apiLogH (-0.001s to skip the boundary
-          -- row that would otherwise reappear on the next page).
-          nextCursor :: Text -> Maybe UTCTime
-          nextCursor t = addUTCTime (-0.001) <$> iso8601ParseM (toString t)
           -- Pull each row's `page.idx` attribute by walking down to the
           -- raw DB row (latency_breakdown=context___span_id is what the
           -- predicate matches; we look up the attribute via SQL since
@@ -340,6 +342,72 @@ spec = around withTestResources do
           page3Ids `shouldBe` [5]
           r.hasMore `shouldBe` False
         _ -> error "Expected JSON response"
+
+    -- Regression + invariant: synthesized "Upstream span missing" orphan-header
+    -- rows are a DISPLAY augmentation and must not count toward the page-fill
+    -- check. The bug used queryResultCount (= real rows + synth) < resultCount'
+    -- (= limit+1), so any page carrying ≥1 synth row reported hasMore=False —
+    -- "Show earlier events" appeared after one page even with the window full
+    -- (the reported 502 = 500 real + 2 orphan headers). This pins the invariant
+    -- at the seam where pagination accounting meets display augmentation:
+    --   * a FULL page that also has a synth row still reports hasMore=True,
+    --   * draining the cursor visits every REAL row exactly once (no overlap,
+    --     no early stop) across MULTIPLE pages,
+    --   * only the final (short) page reports hasMore=False.
+    it "load-more is robust to orphan headers: full pages keep hasMore, drain visits every row once" \tr -> do
+      apiKey <- createTestAPIKey tr testPid "orphan-pagination-key"
+      marker <- ("orph-" <>) . UUID.toText <$> nextRandom
+      orphTid <- UUID.toText <$> nextRandom
+      -- A never-ingested parent: must be a valid hex id (UUID), since the OTLP
+      -- ingest hex-decodes span/parent ids — a non-hex string decodes to empty
+      -- and the spans would look parentless (no orphan group, no synth header).
+      ghostParent <- UUID.toText <$> nextRandom
+      let extras = [("page.marker", marker)]
+          tsAt i = addUTCTime (fromIntegral (negate (i :: Int))) frozenTime
+      -- Two newest spans are an orphan group (same trace, same never-ingested
+      -- parent) → one synth header on page 1. Three older spans are independent
+      -- roots. `| limit 2` over 5 rows ⇒ pages [2,2,1] ⇒ hasMore [True,True,False].
+      orphanA <- UUID.toText <$> nextRandom
+      orphanB <- UUID.toText <$> nextRandom
+      ingestSpanLinked tr apiKey orphTid orphanA (Just ghostParent) "orph.child.a" extras (tsAt 1)
+      ingestSpanLinked tr apiKey orphTid orphanB (Just ghostParent) "orph.child.b" extras (tsAt 2)
+      forM_ [3 .. 5] \i -> do
+        rootTid <- show <$> nextRandom
+        rootSid <- UUID.toText <$> nextRandom
+        ingestSpanLinked tr apiKey rootTid rootSid Nothing ("root." <> show i) extras (tsAt i)
+
+      let q = Just $ "attributes.page.marker == \"" <> marker <> "\" | limit 2"
+          fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) frozenTime
+          toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
+          colText col r row = HashMap.lookup col r.colIdxMap >>= (row V.!?) >>= \case AE.String t -> Just t; _ -> Nothing
+          fetchPage cur = do
+            (_, resp) <- testServant tr
+              $ Log.apiLogH testPid q Nothing cur Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
+            case resp of
+              Log.LogsGetJson r -> pure r
+              _ -> error "Expected JSON response"
+          -- A synth orphan header sets latency_breakdown = parent_id (so the tree
+          -- nests orphans under it) — exclude it by span_name so realIds counts
+          -- only genuine spans.
+          isSynth r row = maybe False ("Upstream span missing" `T.isInfixOf`) (colText "span_name" r row)
+          realIds r = V.toList $ V.mapMaybe (\row -> if isSynth r row then Nothing else colText "latency_breakdown" r row) r.logsData
+          hasSynthHeader r = V.any (isSynth r) r.logsData
+
+      page1 <- fetchPage Nothing
+      hasSynthHeader page1 `shouldBe` True -- the orphan path actually ran on this page
+      page1.hasMore `shouldBe` True -- full page despite the synth row → more remains
+
+      -- Drain the rest via the real cursor, seeded with page 1 (no re-fetch),
+      -- collecting real ids per page until exhausted.
+      let drain cur acc pages = do
+            r <- fetchPage cur
+            let acc' = acc <> realIds r
+            if r.hasMore then drain (r.cursor >>= nextCursor) acc' (pages + 1) else pure (acc', pages + 1, r.hasMore)
+      (seen, pageCount, lastHasMore) <- drain (page1.cursor >>= nextCursor) (realIds page1) 1
+      lastHasMore `shouldBe` False -- only the final short page stops pagination
+      pageCount `shouldBe` 3 -- 5 rows / limit 2 = 3 pages: proves we didn't stop early
+      length seen `shouldBe` 5 -- every real row visited exactly once …
+      length (ordNub seen) `shouldBe` 5 -- … with no cross-page overlap
 
     it "should paginate through multiple pages using cursor" \tr -> do
 
