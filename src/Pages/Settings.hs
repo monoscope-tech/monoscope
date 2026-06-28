@@ -93,6 +93,7 @@ import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Network.Minio qualified as Minio
+import Network.URI (parseURI, uriAuthority, uriRegName, uriScheme)
 import Network.Wreq qualified as Wreq
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, settingsContentTarget, withSettingsPage)
 import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), ModalCfg (..), confirmModal_, connectionBadge_, formField_, headerRow_, iconBadgeLg_, localTimeFmt_, modalWith_, paymentPlanPicker, sectionLabel_, settingsH2_, settingsSection_)
@@ -472,7 +473,7 @@ prometheusGetH pid = do
 validatePrometheusForm :: PrometheusForm -> Either Text (Text, Text, Int, Maybe Text, AE.Value)
 validatePrometheusForm form
   | T.null url = Left "A /metrics URL is required"
-  | not (isHttpUrl url) = Left "URL must start with http:// or https://"
+  | not (safeScrapeUrl url) = Left "URL must be a public http:// or https:// endpoint"
   | T.null name = Left "A name is required — it groups the scraped metrics under service.name"
   | otherwise =
       Right
@@ -487,10 +488,25 @@ validatePrometheusForm form
     url = T.strip form.url
 
 
--- | Minimal SSRF floor: only http(s) targets. Used by both save-validation and the
--- Test handler so neither path can be pointed at file:// or other schemes.
-isHttpUrl :: Text -> Bool
-isHttpUrl u = T.isPrefixOf "http://" u || T.isPrefixOf "https://" u
+-- | SSRF floor, used by both save-validation and the Test handler: require an http(s)
+-- scheme (case-insensitive) and reject obvious internal hosts — loopback, link-local,
+-- and RFC-1918 / ULA literals. This is a literal-host check: a public hostname that
+-- *resolves* to an internal IP (DNS rebinding) is not caught here — resolve-and-pin is
+-- a worthwhile follow-up for full coverage.
+safeScrapeUrl :: Text -> Bool
+safeScrapeUrl u = case parseURI (toString (T.strip u)) of
+  Nothing -> False
+  Just uri ->
+    T.toLower (toText (uriScheme uri))
+      `elem` ["http:", "https:"]
+      && not (internalHost (T.toLower (toText (maybe "" uriRegName (uriAuthority uri)))))
+  where
+    internalHost h =
+      T.null h
+        || h
+        `elem` ["localhost", "[::1]", "0.0.0.0"]
+        || any (`T.isPrefixOf` h) ["127.", "10.", "192.168.", "169.254.", "[fd", "[fe80"]
+        || any (\n -> ("172." <> show n <> ".") `T.isPrefixOf` h) ([16 .. 31] :: [Int])
 
 
 prometheusPostH :: Projects.ProjectId -> PrometheusForm -> ATAuthCtx (RespHeaders PrometheusMut)
@@ -524,8 +540,8 @@ prometheusTestH pid form = do
   if T.null url
     then addRespHeaders $ prometheusTestResult (Left "Enter a URL first")
     else
-      if not (isHttpUrl url)
-        then addRespHeaders $ prometheusTestResult (Left "URL must start with http:// or https://")
+      if not (safeScrapeUrl url)
+        then addRespHeaders $ prometheusTestResult (Left "URL must be a public http:// or https:// endpoint")
         else do
           let opts = BJ.prometheusScrapeOpts (mfilter (not . T.null) (T.strip <$> form.authHeader))
           t0 <- Time.currentTime
@@ -534,7 +550,8 @@ prometheusTestH pid form = do
           let ms = round (realToFrac (diffUTCTime t1 t0) * 1000 :: Double) :: Int
           addRespHeaders $ prometheusTestResult $ case res of
             Left e -> Left (T.take 300 (show e))
-            Right resp -> Right (length (Prom.parsePrometheus (decodeUtf8 (resp ^. Wreq.responseBody))), ms)
+            -- Count only finite samples — matches what ingestScrapedBody actually stores.
+            Right resp -> Right (length (filter (\s -> not (isNaN s.value || isInfinite s.value)) (Prom.parsePrometheus (decodeUtf8 (resp ^. Wreq.responseBody)))), ms)
 
 
 prometheusDeleteH :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfigId -> ATAuthCtx (RespHeaders PrometheusMut)
