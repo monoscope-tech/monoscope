@@ -306,10 +306,12 @@ const setStatValue = (widgetData: WidGetData, stats: any, from?: number, to?: nu
     return;
   }
   // textContent (not innerHTML): values are plain text, and the max/min prefix is a literal "<"/">".
-  value.textContent =
-    stats.count > 0
-      ? [widgetData.summarizeByPrefix, formatStatValue(statScalar(stats, widgetData.summarizeBy, from, to), widgetData.unit || '')].filter(Boolean).join(' ')
-      : NO_DATA_VALUE;
+  if (stats.count > 0) {
+    const formatted = formatStatValue(statScalar(stats, widgetData.summarizeBy, from, to), widgetData.unit || '');
+    value.textContent = widgetData.summarizeByPrefix ? `${widgetData.summarizeByPrefix} ${formatted}` : formatted;
+  } else {
+    value.textContent = NO_DATA_VALUE; // empty range
+  }
   value.classList.remove('hidden');
 };
 

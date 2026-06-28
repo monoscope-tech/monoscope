@@ -14,9 +14,9 @@ describe('statScalar', () => {
     expect(statScalar(traffic, 'rate', 0, 600000)).not.toBe(traffic.sum);
   });
 
-  test('rate falls back to sum when the window is missing/degenerate', () => {
-    expect(statScalar(traffic, 'rate')).toBe(1200);
-    expect(statScalar(traffic, 'rate', 100, 100)).toBe(1200);
+  test('rate returns NaN on a missing/degenerate window (→ N/A), not a wrong-unit sum', () => {
+    expect(statScalar(traffic, 'rate')).toBeNaN();
+    expect(statScalar(traffic, 'rate', 100, 100)).toBeNaN();
   });
 
   test('mean averages per-bin values (error-rate %, p95 latency)', () => {
@@ -61,6 +61,10 @@ describe('formatNumber NaN/null guard', () => {
   test('finite values are unaffected', () => {
     expect(formatNumber(1500)).toBe('1.5K');
     expect(formatNumber(42)).toBe('42');
+  });
+  test('K/M/B branches round rather than truncate', () => {
+    expect(formatNumber(1590)).toBe('1.6K');
+    expect(formatNumber(1_550_000)).toBe('1.6M');
   });
   test('duration units also guard NaN (no "NaNns")', () => {
     expect(formatStatValue(NaN, 'ms')).toBe('N/A');

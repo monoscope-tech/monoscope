@@ -5,11 +5,11 @@
 // src/Pkg/Components/Widget.hs that the dashboard YAML's summarize_by parses to.
 
 /** Format numbers with magnitude suffixes for chart/stat display. */
-export const formatNumber = (n: number): string => {
-  if (n == null || Number.isNaN(n)) return 'N/A'; // guard first: NaN (e.g. Number(undefined)) must not reach the DOM as "NaN"
-  if (n >= 1_000_000_000) return `${Math.floor(n / 1_000_000_000)}.${Math.floor((n % 1_000_000_000) / 100_000_000)}B`;
-  if (n >= 1_000_000) return `${Math.floor(n / 1_000_000)}.${Math.floor((n % 1_000_000) / 100_000)}M`;
-  if (n >= 1_000) return `${Math.floor(n / 1_000)}.${Math.floor((n % 1_000) / 100)}K`;
+export const formatNumber = (n: number | null | undefined): string => {
+  if (n == null || Number.isNaN(n)) return 'N/A'; // guard first: NaN (e.g. Number(undefined)) must not reach the DOM as "NaN". Loose type matches untyped JS callers.
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
   if (!Number.isInteger(n)) {
     if (n >= 100) return Math.round(n).toString();
     if (n >= 10) return parseFloat(n.toFixed(1)).toString();
@@ -24,17 +24,23 @@ export const convertToNanoseconds = (value: number, unit: string): number => {
   return value * (f[unit] || 1);
 };
 
+// Descending [threshold-ns, suffix] steps; first step whose threshold ns clears wins.
+const DURATION_STEPS: [number, string][] = [
+  [3_600_000_000_000, 'h'],
+  [60_000_000_000, 'm'],
+  [1_000_000_000, 's'],
+  [1_000_000, 'ms'],
+  [1_000, 'μs'],
+];
+
 /** Format a nanosecond duration into a human-readable unit (matches Utils.hs). */
 export const formatDuration = (ns: number): string => {
   if (ns == null || Number.isNaN(ns)) return 'N/A'; // guard first, mirroring formatNumber, so NaN never renders as "NaNns"
-  if (ns >= 3_600_000_000_000) return `${(ns / 3_600_000_000_000).toFixed(1)}h`;
-  if (ns >= 60_000_000_000) return `${(ns / 60_000_000_000).toFixed(1)}m`;
-  if (ns >= 1_000_000_000) return `${(ns / 1_000_000_000).toFixed(1)}s`;
-  if (ns >= 1_000_000) return `${(ns / 1_000_000).toFixed(1)}ms`;
-  if (ns >= 1_000) return `${(ns / 1_000).toFixed(1)}μs`;
-  return `${ns.toFixed(0)}ns`;
+  const step = DURATION_STEPS.find(([t]) => ns >= t);
+  return step ? `${(ns / step[0]).toFixed(1)}${step[1]}` : `${ns.toFixed(0)}ns`;
 };
 
+// Units that format as a duration. NB: 'm' here is minutes, not meters.
 const DURATION_UNITS = new Set(['ns', 'μs', 'us', 'ms', 's', 'm', 'h']);
 
 export type StatAggregates = { min: number; max: number; sum: number; count: number; mean: number };
@@ -49,7 +55,7 @@ export const statScalar = (stats: Partial<StatAggregates>, summarizeBy: string, 
   switch (summarizeBy) {
     case 'rate': {
       const minutes = from != null && to != null && to > from ? (to - from) / 60000 : 0;
-      return minutes > 0 ? Number(stats.sum) / minutes : Number(stats.sum);
+      return minutes > 0 ? Number(stats.sum) / minutes : NaN; // degenerate window → N/A, not a wrong-unit raw sum
     }
     case 'mean': return Number(stats.mean);
     case 'max': return Number(stats.max);
