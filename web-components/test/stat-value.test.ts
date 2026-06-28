@@ -62,4 +62,7 @@ describe('formatNumber NaN/null guard', () => {
     expect(formatNumber(1500)).toBe('1.5K');
     expect(formatNumber(42)).toBe('42');
   });
+  test('duration units also guard NaN (no "NaNns")', () => {
+    expect(formatStatValue(NaN, 'ms')).toBe('N/A');
+  });
 });

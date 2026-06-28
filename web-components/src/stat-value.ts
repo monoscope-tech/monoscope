@@ -26,6 +26,7 @@ export const convertToNanoseconds = (value: number, unit: string): number => {
 
 /** Format a nanosecond duration into a human-readable unit (matches Utils.hs). */
 export const formatDuration = (ns: number): string => {
+  if (ns == null || Number.isNaN(ns)) return 'N/A'; // guard first, mirroring formatNumber, so NaN never renders as "NaNns"
   if (ns >= 3_600_000_000_000) return `${(ns / 3_600_000_000_000).toFixed(1)}h`;
   if (ns >= 60_000_000_000) return `${(ns / 60_000_000_000).toFixed(1)}m`;
   if (ns >= 1_000_000_000) return `${(ns / 1_000_000_000).toFixed(1)}s`;
