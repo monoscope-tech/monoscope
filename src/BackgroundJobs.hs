@@ -76,6 +76,8 @@ import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (SeverityLevel (..), generateSummary, insertSystemLog, mkSystemLog)
 import Models.Telemetry.Telemetry qualified as Telemetry
+import Network.HTTP.Client (managerResponseTimeout, responseTimeoutMicro)
+import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.Wreq (defaults, getWith, header, postWith, responseBody)
 import Network.Wreq qualified as Wreq
 import OddJobs.ConfigBuilder (mkConfig)
@@ -153,8 +155,11 @@ data BgJobs
   | ErrorAssigned Projects.ProjectId ErrorPatterns.ErrorPatternId Projects.UserId -- projectId, errorId, assigneeId
   | PatternEmbeddingAndMerge UTCTime Projects.ProjectId
   | EndpointTemplateDiscovery UTCTime Projects.ProjectId
-  | -- | Per-minute ticker: scrape every enabled Prometheus target whose interval has elapsed.
+  | -- | Per-minute dispatcher: atomically lease due Prometheus targets (SKIP LOCKED,
+    -- multi-node safe) and fan out one PrometheusScrapeOne per target.
     PrometheusScrapeTick UTCTime
+  | -- | Scrape a single Prometheus target; drained by workers across all pods.
+    PrometheusScrapeOne PromCfg.PrometheusScrapeConfigId
   | MonoscopeAdminDaily
   | UsageAuditReport
   | -- | Hourly catch-up for rows the extraction worker missed. Re-drives rows
@@ -555,7 +560,8 @@ processBackgroundJob authCtx bgJob =
     GitSyncPushDashboard pid dashboardId -> gitSyncPushDashboard pid (UUIDId dashboardId)
     GitSyncPushAllDashboards pid -> gitSyncPushAllDashboards pid
     QueryMonitorsCheck -> checkTriggeredQueryMonitors
-    PrometheusScrapeTick _ -> scrapePrometheusTargets
+    PrometheusScrapeTick _ -> dispatchPrometheusScrapes authCtx
+    PrometheusScrapeOne cid -> scrapePrometheusTarget cid
     CompressReplaySessions -> Replay.compressAndMergeReplaySessions
     MergeReplaySession pid sid -> Replay.mergeReplaySession pid sid
     ExpireReplayData -> Replay.expireOldReplayData
@@ -3027,21 +3033,46 @@ gitSyncPushAllDashboards pid = do
           Log.logInfo "Finished pushing all dashboards" pid
 
 
--- | Scrape every enabled Prometheus target that is due, GET-ing its /metrics URL,
--- parsing the exposition body and ingesting the samples as metrics. Each target's
--- outcome is recorded on the config (last_scraped_at + last_status) so a failing
--- target neither blocks others nor re-fires before its interval.
-scrapePrometheusTargets :: ATBackgroundCtx ()
-scrapePrometheusTargets = do
-  cfgs <- PromCfg.dueConfigs
-  forM_ cfgs \cfg -> do
-    now <- Time.currentTime
-    let opts = maybe W.defaults (\h -> W.defaults & header "Authorization" .~ [encodeUtf8 h]) cfg.authHeader
-    tryAny (W.getWith opts (toString cfg.url) >>= \resp -> PromCfg.ingestScrapedBody cfg now (resp ^. responseBody)) >>= \case
-      Right n -> void $ PromCfg.markScraped cfg.id now ("ok: " <> show n <> " samples")
-      Left err -> do
-        Log.logWarn "Prometheus scrape failed" (cfg.id.toText, cfg.url, show err)
-        void $ PromCfg.markScraped cfg.id now ("error: " <> toText (displayException err))
+-- | How many due targets a single dispatcher tick fans out. Bounds the per-tick burst;
+-- the rest is picked up by the next tick (here or on another node).
+prometheusScrapeBatchLimit :: Int
+prometheusScrapeBatchLimit = 1000
+
+
+-- | Per-scrape HTTP response timeout (µs). A dead/slow endpoint must never wedge a worker.
+prometheusScrapeTimeoutMicros :: Int
+prometheusScrapeTimeoutMicros = 10 * 1000000
+
+
+-- | Dispatcher (PrometheusScrapeTick). Atomically leases the due targets — 'claimDueConfigs'
+-- uses @FOR UPDATE SKIP LOCKED@, so running this on every node never double-scrapes — then
+-- fans out one 'PrometheusScrapeOne' job per target. The actual scraping is done by workers
+-- draining those jobs across all pods, so this tick stays cheap (one claim + N enqueues) and
+-- the work scales horizontally with the worker fleet rather than a single sequential loop.
+dispatchPrometheusScrapes :: Config.AuthContext -> ATBackgroundCtx ()
+dispatchPrometheusScrapes authCtx = do
+  due <- PromCfg.claimDueConfigs prometheusScrapeBatchLimit
+  unless (null due) do
+    Log.logInfo "Dispatching Prometheus scrapes" (length due)
+    liftIO $ withResource authCtx.jobsPool \conn ->
+      forM_ due \cfg -> void $ createJob conn "background_jobs" (PrometheusScrapeOne cfg.id)
+
+
+-- | Worker (PrometheusScrapeOne). Scrapes one target with a hard HTTP timeout, parses the
+-- exposition body and ingests the samples. Failures are caught (not rethrown): the lease set
+-- at claim time already prevents re-firing before the next interval, so a broken endpoint
+-- backs off instead of retry-storming, and one bad target never fails sibling work.
+scrapePrometheusTarget :: PromCfg.PrometheusScrapeConfigId -> ATBackgroundCtx ()
+scrapePrometheusTarget cid = whenJustM (PromCfg.getConfig cid) \cfg -> Relude.when cfg.enabled do
+  now <- Time.currentTime
+  let mgr = Left tlsManagerSettings{managerResponseTimeout = responseTimeoutMicro prometheusScrapeTimeoutMicros}
+      auth = maybe id (\h -> header "Authorization" .~ [encodeUtf8 h]) cfg.authHeader
+      opts = auth $ defaults & Wreq.manager .~ mgr
+  tryAny (W.getWith opts (toString cfg.url) >>= \resp -> PromCfg.ingestScrapedBody cfg now (resp ^. responseBody)) >>= \case
+    Right n -> void $ PromCfg.markScraped cfg.id now ("ok: " <> show n <> " samples")
+    Left err -> do
+      Log.logWarn "Prometheus scrape failed" (cfg.id.toText, cfg.url, show err)
+      void $ PromCfg.markScraped cfg.id now ("error: " <> toText (displayException err))
 
 
 checkTriggeredQueryMonitors :: ATBackgroundCtx ()

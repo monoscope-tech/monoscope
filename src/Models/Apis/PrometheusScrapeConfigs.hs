@@ -6,7 +6,7 @@ module Models.Apis.PrometheusScrapeConfigs (
   getConfig,
   deleteConfig,
   setEnabled,
-  dueConfigs,
+  claimDueConfigs,
   markScraped,
   ingestScrapedBody,
   sampleToMetricRecord,
@@ -94,16 +94,26 @@ setEnabled :: DB es => Projects.ProjectId -> PrometheusScrapeConfigId -> Bool ->
 setEnabled pid cid en = Hasql.interpExecute [HI.sql|UPDATE apis.prometheus_scrape_configs SET enabled = #{en} WHERE id = #{cid} AND project_id = #{pid}|]
 
 
--- | Enabled targets whose interval has elapsed since the last scrape (or never scraped).
--- The scrape ticker runs every 60s; per-target cadence is enforced here.
-dueConfigs :: DB es => Eff es [PrometheusScrapeConfig]
-dueConfigs =
+-- | Atomically claim up to @limit@ enabled targets whose interval has elapsed (or that
+-- were never scraped), advancing @last_scraped_at@ to now() in the SAME statement. The
+-- @FOR UPDATE SKIP LOCKED@ subquery makes this safe to run from any number of monoscope
+-- nodes/pods concurrently: each due row is handed to exactly one caller, and the lease
+-- (the @last_scraped_at@ bump) keeps the next dispatcher tick from re-picking it before
+-- its interval elapses — so a crashed worker just retries on the next interval rather than
+-- being hammered. Oldest-scraped first so a backlog drains fairly.
+claimDueConfigs :: DB es => Int -> Eff es [PrometheusScrapeConfig]
+claimDueConfigs limit =
   Hasql.interp
-    ( [HI.sql|SELECT |]
+    ( [HI.sql|UPDATE apis.prometheus_scrape_configs SET last_scraped_at = now()
+              WHERE id IN (
+                SELECT id FROM apis.prometheus_scrape_configs
+                WHERE enabled AND (last_scraped_at IS NULL
+                      OR last_scraped_at < now() - make_interval(secs => scrape_interval_seconds))
+                ORDER BY last_scraped_at ASC NULLS FIRST
+                FOR UPDATE SKIP LOCKED
+                LIMIT #{limit})
+              RETURNING |]
         <> selectCols
-        <> [HI.sql| FROM apis.prometheus_scrape_configs
-                    WHERE enabled AND (last_scraped_at IS NULL
-                          OR last_scraped_at < now() - make_interval(secs => scrape_interval_seconds))|]
     )
 
 

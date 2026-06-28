@@ -1,7 +1,6 @@
 module Pages.PrometheusSpec (spec) where
 
 import Data.Aeson qualified as AE
-import Data.Time.Clock (getCurrentTime)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
@@ -43,16 +42,16 @@ spec = around withTestResources do
       V.length rows `shouldBe` 3
       sort (V.toList rows) `shouldBe` [("http_requests_total", "SUM"), ("http_requests_total", "SUM"), ("temperature_celsius", "GAUGE")]
 
-    it "treats targets as due until scraped within their interval" \tr -> do
-      void $ runQueryEffect tr $ PromCfg.insertConfig testPid "gauge-svc" "http://y/metrics" 3600 Nothing (AE.object [])
-      (cfg : _) <- runQueryEffect tr (PromCfg.configsByProjectId testPid)
-      due1 <- runQueryEffect tr PromCfg.dueConfigs
-      length due1 `shouldBe` 1 -- never scraped ⇒ due
-      now <- getCurrentTime
-      void $ runQueryEffect tr $ PromCfg.markScraped cfg.id now "ok"
-      due2 <- runQueryEffect tr PromCfg.dueConfigs
-      length due2 `shouldBe` 0 -- scraped just now, 3600s interval not elapsed
-      void $ runQueryEffect tr $ PromCfg.setEnabled testPid cfg.id False
-      void $ runQueryEffect tr $ PromCfg.markScraped cfg.id frozenTime "ok" -- far in the past
-      due3 <- runQueryEffect tr PromCfg.dueConfigs
-      length due3 `shouldBe` 0 -- disabled targets are never due
+    it "claims each due target once and leases it (multi-node safe), skipping disabled" \tr -> do
+      void $ runQueryEffect tr $ PromCfg.insertConfig testPid "svc-a" "http://a/metrics" 3600 Nothing (AE.object [])
+      void $ runQueryEffect tr $ PromCfg.insertConfig testPid "svc-b" "http://b/metrics" 3600 Nothing (AE.object [])
+      claimed1 <- runQueryEffect tr (PromCfg.claimDueConfigs 50)
+      length claimed1 `shouldBe` 2 -- both due, claimed
+      claimed2 <- runQueryEffect tr (PromCfg.claimDueConfigs 50)
+      length claimed2 `shouldBe` 0 -- leased within interval ⇒ a second node's claim gets nothing
+      -- a disabled target is never claimed even though its interval has elapsed
+      void $ runQueryEffect tr $ PromCfg.insertConfig testPid "svc-c" "http://c/metrics" 1 Nothing (AE.object [])
+      (c : _) <- runQueryEffect tr (filter ((== "svc-c") . (.name)) <$> PromCfg.configsByProjectId testPid)
+      void $ runQueryEffect tr $ PromCfg.setEnabled testPid c.id False
+      claimed3 <- runQueryEffect tr (PromCfg.claimDueConfigs 50)
+      length claimed3 `shouldBe` 0
