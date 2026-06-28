@@ -155,8 +155,8 @@ splitBrace = go ""
             Just ('}', after) -> Just (acc <> chunk, after)
             Just ('"', after) -> let (q, rest') = quoted after in go (acc <> chunk <> "\"" <> q) rest'
             _ -> Just (acc <> chunk, "") -- no closing brace; take what we have
-    -- consume from just past an opening quote up to and including the closing one,
-    -- preserving backslash escapes verbatim (a @\"@ doesn't close the string).
+            -- consume from just past an opening quote up to and including the closing one,
+            -- preserving backslash escapes verbatim (a @\"@ doesn't close the string).
     quoted t =
       let (chunk, rest) = T.break (\c -> c == '"' || c == '\\') t
        in case T.uncons rest of
