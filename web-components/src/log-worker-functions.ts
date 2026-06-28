@@ -10,8 +10,22 @@ export function generateId() {
   return Math.random().toString(36).substring(2, 15);
 }
 
+// Whether a row counts as an error for the purpose of propagating the red error
+// badge to ancestor rows. Spans use the explicit `errors` flag or an ERROR marker
+// in their styled `summary` segments. Logs have no `errors`/summary-marker, so we
+// derive error-ness from severity (text or OTel number ≥17 = ERROR/FATAL); we do
+// NOT scan a log's summary for "ERROR" since that's the raw body and false-positives.
+function rowHasError(span: any[], idx: ColIdxMap, isLog: boolean): boolean {
+  if (span[idx.errors]) return true;
+  const sevText = span[idx.severity_text];
+  if (typeof sevText === 'string' && /^(error|fatal|critical|alert|emerg)/i.test(sevText.trim())) return true;
+  const sevNum = span[idx.severity_number];
+  if (typeof sevNum === 'number' && sevNum >= 17) return true;
+  return isLog ? false : (span[idx.summary]?.some((el: string) => el.includes('ERROR')) ?? false);
+}
+
 export function groupSpans(data: any[][], colIdxMap: ColIdxMap, expandedTraces: Record<string, boolean>, flipDirection: boolean, serverTraces: ServerTraceEntry[]) {
-  const keys = ['trace_id', 'latency_breakdown', 'parent_id', 'timestamp', 'duration', 'start_time_ns', 'errors', 'summary', 'kind', 'id'];
+  const keys = ['trace_id', 'latency_breakdown', 'parent_id', 'timestamp', 'duration', 'start_time_ns', 'errors', 'summary', 'severity_text', 'severity_number', 'kind', 'id'];
   const idx: ColIdxMap = {};
   keys.forEach((key) => {
     if (colIdxMap[key] !== undefined) idx[key] = colIdxMap[key];
@@ -25,7 +39,7 @@ export function groupSpans(data: any[][], colIdxMap: ColIdxMap, expandedTraces: 
     return {
       id: isLog ? span[idx.id] : span[idx.latency_breakdown],
       startNs: span[idx.start_time_ns],
-      hasErrors: isLog ? false : span[idx.errors] || (span[idx.summary]?.some((el: string) => el.includes('ERROR')) ?? false),
+      hasErrors: rowHasError(span, idx, isLog),
       duration: isLog ? 0 : span[idx.duration],
       children: [] as APTEvent[],
       parent: span[idx.parent_id],

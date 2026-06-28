@@ -14,11 +14,13 @@ import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types (PGArray (..))
+import Models.Apis.LogQueries qualified as LogQueries
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.GRPC.Common.Protobuf (Proto (..))
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.LogExplorer.Log qualified as Log
 import Pages.LogExplorer.LogItem qualified as LogItem
+import Pkg.Parser.Stats (Sources (..))
 import Pkg.TestUtils
 import ProcessMessage (processMessages)
 import Relude
@@ -597,3 +599,22 @@ spec = around withTestResources do
       void $ withPool tr.trPool $ DBT.execute [sql| UPDATE otel_logs_and_spans SET hashes = NULL WHERE id = ? |] (Only rid)
       (_, item2) <- testServant (withTfReads False) $ LogItem.expandAPIlogItemH testPid rid ts Nothing
       expectFound item2
+      (_, miss2) <- testServant (withTfReads False) $ LogItem.expandAPIlogItemH testPid rid (addUTCTime 1 ts) Nothing
+      expectNotFound "PG" miss2
+
+    -- Regression: ERROR-severity logs carry no structured `errors` payload, so the
+    -- trace-view projection must fold severity into the `errors` flag — otherwise the
+    -- red error badge never propagates to a log's parent (or to a synthetic missing-span
+    -- parent whose orphan children are error logs). See defaultSelectSqlQuery.
+    it "flags ERROR-severity logs in the trace-view 'errors' column" \tr -> do
+      apiKey <- createTestAPIKey tr testPid "err-log-badge-key"
+      ingestErrorLog tr apiKey "boom: db connection failed" [] frozenTime
+      ingestLog tr apiKey "ordinary info line" frozenTime
+      let range = (Just (addUTCTime (-60) frozenTime), Just (addUTCTime 60 frozenTime))
+      res <- runQueryEffect tr $ LogQueries.selectLogTable testPid [] "" Nothing range [] (Just SSpans) Nothing
+      (rows, cols, _) <- either (\e -> error ("selectLogTable failed: " <> e)) pure res
+      let colIx name = Unsafe.fromJust $ V.elemIndex name (V.fromList cols)
+          logRows = [r | r <- V.toList rows, (r V.!? colIx "kind") == Just (AE.String "log")]
+          isErr r = (r V.!? colIx "errors") == Just (AE.Bool True)
+      length logRows `shouldBe` 2
+      length (filter isErr logRows) `shouldBe` 1
