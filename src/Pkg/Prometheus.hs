@@ -11,6 +11,7 @@ module Pkg.Prometheus (
   parsePrometheus,
 ) where
 
+import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Relude
@@ -60,7 +61,7 @@ data Meta = Meta {mType :: SampleType, mHelp :: Text}
 -- >>> map (\s -> (s.name, s.labels)) $ parsePrometheus "rpc{quantile=\"0.5\",path=\"/a,b\"} 4773\n"
 -- [("rpc",[("quantile","0.5"),("path","/a,b")])]
 parsePrometheus :: Text -> [Sample]
-parsePrometheus = go Map.empty . T.lines
+parsePrometheus = go Map.empty . lines
   where
     go _ [] = []
     go meta (rawLine : rest) =
@@ -77,11 +78,11 @@ parsePrometheus = go Map.empty . T.lines
                 Nothing -> go meta rest
 
     -- "TYPE <family> <type>"
-    recordType meta body = case T.words body of
+    recordType meta body = case words body of
       (_ : fam : ty : _) -> Map.insertWith mergeType fam (Meta (toType ty) "") meta
       _ -> meta
-    recordHelp meta body = case T.words body of
-      ws@(_ : fam : _) -> Map.insertWith mergeHelp fam (Meta Untyped (T.unwords (drop 2 ws))) meta
+    recordHelp meta body = case words body of
+      ws@(_ : fam : _) -> Map.insertWith mergeHelp fam (Meta Untyped (unwords (drop 2 ws))) meta
       _ -> meta
     mergeType new old = old{mType = new.mType}
     mergeHelp new old = old{mHelp = new.mHelp}
@@ -105,7 +106,7 @@ parseSample meta line = do
       (inside, rest) <- splitBrace (T.drop 1 stripped)
       pure (parseLabels inside, rest)
     _ -> pure ([], afterName)
-  case T.words (T.strip afterLabels) of
+  case words (T.strip afterLabels) of
     (valTok : tsToks) -> do
       val <- parseValue valTok
       let ts = listToMaybe tsToks >>= parseTs
@@ -113,7 +114,7 @@ parseSample meta line = do
       pure Sample{name, labels, value = val, timestampMs = ts, sampleType = mType, help = mHelp}
     [] -> Nothing
   where
-    isNameChar c = c == '_' || c == ':' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
+    isNameChar c = c == '_' || c == ':' || isAsciiLower c || isAsciiUpper c || isDigit c
 
 
 -- | Look up family metadata, stripping the suffixes that distinguish a sample name
@@ -125,13 +126,13 @@ parseSample meta line = do
 resolveMeta :: Map.Map Text Meta -> Text -> Meta
 resolveMeta meta name = fromMaybe (Meta Untyped "") $ asum (map (`Map.lookup` meta) candidates)
   where
-    candidates = name : mapMaybe (\sfx -> T.stripSuffix sfx name) ["_bucket", "_sum", "_count", "_total"]
+    candidates = name : mapMaybe (`T.stripSuffix` name) ["_bucket", "_sum", "_count", "_total"]
 
 
 -- | Split at the matching @}@, returning (inside, after). Honours quoted
 -- strings so a @}@ inside a label value doesn't end the block early.
 splitBrace :: Text -> Maybe (Text, Text)
-splitBrace = go False "" . T.unpack
+splitBrace = go False "" . toString
   where
     go _ acc [] = Just (toText (reverse acc), "")
     go inQ acc (c : cs)
@@ -156,7 +157,7 @@ parseLabels = go . T.stripStart
                       rest' = T.stripStart $ T.dropWhile (== ',') $ T.stripStart rest
                    in if T.null k then go rest' else (k, v) : go rest'
                 _ -> []
-    isLabelNameChar c = c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
+    isLabelNameChar c = c == '_' || isAsciiLower c || isAsciiUpper c || isDigit c
     -- consume up to the closing unescaped quote, unescaping \\ \" \n
     takeQuoted = go' ""
       where
@@ -175,7 +176,7 @@ parseValue :: Text -> Maybe Double
 parseValue (T.strip -> t) = case t of
   "+Inf" -> Just (1 / 0)
   "Inf" -> Just (1 / 0)
-  "-Inf" -> Just (-1 / 0)
+  "-Inf" -> Just (-(1 / 0))
   "NaN" -> Just (0 / 0)
   "Nan" -> Just (0 / 0)
   _ -> readMaybe (toString (T.dropWhile (== '+') t))

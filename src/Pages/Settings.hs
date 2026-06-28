@@ -60,7 +60,7 @@ import Data.Default
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Notify qualified as Notify
 import Data.Text qualified as T
-import Data.Time (Day, UTCTime (..), addDays, addUTCTime, getZonedTime)
+import Data.Time (Day, UTCTime (..), addDays, addUTCTime, diffUTCTime, getZonedTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.UUID qualified as UUID
@@ -78,7 +78,6 @@ import BackgroundJobs qualified as BJ
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Effectful.Wreq qualified as W
-import Data.Time (diffUTCTime)
 import Effectful.Reader.Static (ask, asks)
 import Effectful.Time qualified as Time
 import Fmt (commaizeF, fmt)
@@ -550,8 +549,10 @@ prometheusTestH pid form = do
           let ms = round (realToFrac (diffUTCTime t1 t0) * 1000 :: Double) :: Int
           addRespHeaders $ prometheusTestResult $ case res of
             Left e -> Left (T.take 300 (show e))
-            -- Count only finite samples — matches what ingestScrapedBody actually stores.
-            Right resp -> Right (length (filter (\s -> not (isNaN s.value || isInfinite s.value)) (Prom.parsePrometheus (decodeUtf8 (resp ^. Wreq.responseBody)))), ms)
+            Right resp ->
+              -- Count only finite samples — matches what ingestScrapedBody actually stores.
+              let finite = filter (\s -> not (isNaN s.value || isInfinite s.value)) (Prom.parsePrometheus (decodeUtf8 (resp ^. Wreq.responseBody)))
+               in Right (length finite, ms)
 
 
 prometheusDeleteH :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfigId -> ATAuthCtx (RespHeaders PrometheusMut)
@@ -639,7 +640,7 @@ prometheusFields_ pid mcfg = do
     -- off-list) so editing an unrelated field never silently rewrites the interval.
     let cur = maybe 60 (.scrapeIntervalSeconds) mcfg
         presets = [(60, "1 minute"), (300, "5 minutes"), (900, "15 minutes"), (3600, "1 hour")] :: [(Int, Text)]
-        opts = if any ((== cur) . fst) presets then presets else sortOn fst ((cur, show cur <> "s") : presets)
+        opts = if any ((== cur) . fst) presets then presets else sortWith fst ((cur, show cur <> "s") : presets)
     select_ [class_ "select select-bordered w-full", name_ "scrapeInterval"]
       $ forM_ opts \(v, l) ->
         option_ ([value_ (show v)] <> [selected_ "selected" | v == cur]) (toHtml l)
