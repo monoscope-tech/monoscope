@@ -84,10 +84,13 @@ test-shards:
 	@bin=$$(cabal list-bin integration-tests); echo "sharding $(SHARDS)x: $$bin"; \
 	rm -f build-shard-*.log; \
 	for i in $$(seq 0 $$(( $(SHARDS) - 1 ))); do \
-	  SHARD_INDEX=$$i SHARD_TOTAL=$(SHARDS) USE_EXTERNAL_DB=true LOG_LEVEL=attention \
-	    $$bin --color > build-shard-$$i.log 2>&1 & \
+	  ( start=$$(date +%s); SHARD_INDEX=$$i SHARD_TOTAL=$(SHARDS) USE_EXTERNAL_DB=true LOG_LEVEL=attention \
+	    $$bin --color > build-shard-$$i.log 2>&1; echo "[shard-time] $$(( $$(date +%s) - start ))s" >> build-shard-$$i.log ) & \
 	done; wait; \
-	echo "=== per-shard summaries ==="; grep -hE "examples?, [0-9]+ failures?" build-shard-*.log; \
+	echo "=== per-shard (wall-clock | result) — wide spreads ⇒ rebalance ==="; \
+	for i in $$(seq 0 $$(( $(SHARDS) - 1 ))); do \
+	  printf "shard %s: %-6s | %s\n" "$$i" "$$(sed -n 's/.*\[shard-time\] //p' build-shard-$$i.log | tail -1)" "$$(grep -hE 'examples?, [0-9]+ failures?' build-shard-$$i.log | tail -1)"; \
+	done; \
 	green=$$(grep -lE "examples?, 0 failures" build-shard-*.log | wc -l | tr -d ' '); \
 	if [ "$$green" -ne $(SHARDS) ] || grep -qE "[1-9][0-9]* failures?|error:|Interrupted" build-shard-*.log; then \
 	  echo "SHARDED RUN FAILED ($$green/$(SHARDS) shards green) — failing shard output:"; \
