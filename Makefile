@@ -75,6 +75,24 @@ test:
 	#  -test-show-details=direct Cabal streams the test output directly to your terminal in real-time as the tests run.
 	USE_EXTERNAL_DB=true  cabal test -j --ghc-options="-O0"  --test-show-details=never --test-options='--color --jobs=$(NCPUS)'
 
+# Parallel integration tests via PROCESS-level sharding (in-process hspec `parallel`
+# deadlocks on the per-test resource-pool lifecycle — see test/integration/Main.hs).
+# Builds once, then runs SHARDS copies of the test binary concurrently, each its own
+# RTS running a disjoint shard sequentially. Each shard keeps ~1 test DB live at a
+# time, so SHARDS * ~9 connections must stay under Postgres max_connections — the
+# default 6 is safe on a stock (100) server; bump SHARDS with the tmpfs DB
+# (`make timescaledb-docker-tmp`, max_connections=200). Logs: build-shard-<i>.log.
+SHARDS ?= 6
+test-shards:
+	cabal build integration-tests --ghc-options="-O0 +RTS -A64m -RTS"
+	@bin=$$(cabal list-bin integration-tests); echo "sharding $(SHARDS)x: $$bin"; \
+	for i in $$(seq 0 $$(( $(SHARDS) - 1 ))); do \
+	  SHARD_INDEX=$$i SHARD_TOTAL=$(SHARDS) USE_EXTERNAL_DB=true LOG_LEVEL=attention \
+	    $$bin --color > build-shard-$$i.log 2>&1 & \
+	done; wait; \
+	echo "=== per-shard summaries ==="; grep -hE "examples?, [0-9]+ failures?" build-shard-*.log; \
+	if grep -qE "[1-9][0-9]* failures?|^.*error:|Interrupted" build-shard-*.log; then echo "SHARDED RUN FAILED"; exit 1; else echo "ALL SHARDS GREEN"; fi
+
 test-unit:
 	cabal test unit-tests -j --ghc-options="-O0"  --test-show-details=direct --test-options='--color --jobs=$(NCPUS)'
 

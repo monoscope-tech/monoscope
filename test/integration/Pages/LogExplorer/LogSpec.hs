@@ -446,13 +446,15 @@ spec = around withTestResources do
       pageCount `shouldSatisfy` (> 1) -- actually paginated, didn't stop after page 1
 
     it "should paginate through multiple pages using cursor" \tr -> do
-
-      let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
-      let reqMsg = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
-
-      -- Create 1000 messages to ensure multiple pages (limit is 500)
-      let msgs = take 1000 $ map ((, toStrict $ AE.encode reqMsg) . (\i -> "m" <> show i)) [1..]
-      _ <- runTestBackground frozenTime tr.trATCtx $ processMessages msgs HashMap.empty
+      -- Need > the default 500-row page to assert the cap + hasMore. Seed 520 rows
+      -- directly (one bulk INSERT) instead of pushing 1000 messages through the full
+      -- ingest pipeline — same assertion, ~100x faster. Spaced 50ms apart inside the
+      -- [-60s,+60s] window below; only project_id/timestamp are required columns.
+      void $ withPool tr.trPool $ DBT.execute
+        [sql| INSERT INTO otel_logs_and_spans (project_id, timestamp, name)
+              SELECT ?, ?::timestamptz - g * interval '50 milliseconds', 'seed.row'
+              FROM generate_series(1, 520) AS g |]
+        (testPid, frozenTime)
 
       let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) frozenTime
       let toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 frozenTime
