@@ -5,6 +5,7 @@ module Data.Effectful.Hasql (
   isTransientHasqlError,
   isTransientException,
   isDeadlockError,
+  isUniqueViolation,
   runHasqlPool,
   use,
   statement,
@@ -98,10 +99,24 @@ isTransientException :: SomeException -> Bool
 isTransientException = maybe False isTransientHasqlError . fromException
 
 
+-- | SQLSTATE of a failed statement, if the error carries one — the nested walk
+-- shared by the by-code predicates below (Nothing for connection/acquisition faults).
+serverErrorCode :: HasqlException -> Maybe Text
+serverErrorCode (HasqlException ue) = case ue of
+  SessionUsageError (StatementSessionError _ _ _ _ _ (ServerStatementError (ServerError code _ _ _ _))) -> Just code
+  SessionUsageError (ScriptSessionError _ (ServerError code _ _ _ _)) -> Just code
+  _ -> Nothing
+
+
+-- | Deadlock detected (SQLSTATE 40P01) — safe to retry the whole transaction.
 isDeadlockError :: HasqlException -> Bool
-isDeadlockError (HasqlException ue) = case ue of
-  SessionUsageError (StatementSessionError _ _ _ _ _ (ServerStatementError (ServerError code _ _ _ _))) -> code == "40P01"
-  _ -> False
+isDeadlockError = (== Just "40P01") . serverErrorCode
+
+
+-- | Unique-constraint violation (SQLSTATE 23505) — lets a handler turn a losing
+-- concurrent insert into a friendly message instead of a raw 500.
+isUniqueViolation :: HasqlException -> Bool
+isUniqueViolation = (== Just "23505") . serverErrorCode
 
 
 runHasqlPool :: IOE :> es => TracedPool -> Eff (Hasql ': es) a -> Eff es a

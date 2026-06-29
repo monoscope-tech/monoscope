@@ -526,7 +526,12 @@ defaultSelectSqlQuery (Just SSpans) =
   , "resource___service___name as service"
   , "parent_id"
   , "CAST(EXTRACT(EPOCH FROM (start_time)) * 1000000000 AS BIGINT) as start_time_ns"
-  , "errors is not null as errors"
+  , -- Error flag the trace waterfall uses to light the red badge on a row and bubble it
+    -- to ancestors. For spans it's the presence of structured error data (status-only
+    -- error spans are caught client-side via the summary marker); for logs, which carry
+    -- no `errors` payload, we apply LogQueries.is_error (level/severity/status_code)
+    -- scoped to kind='log', so ERROR/FATAL logs also propagate the badge to their parent.
+    "COALESCE(errors is not null OR (kind = 'log' AND (lower(level) = 'error' OR severity___severity_number >= 17 OR status_code = 'ERROR')), false) as errors"
   , "summary"
   , "context___span_id as latency_breakdown"
   , "kind"

@@ -111,7 +111,7 @@ forkBackground scopeM label action =
     Nothing -> void $ forkIO guardedAction
   where
     guardedAction =
-      tryAny action >>= \r -> whenLeft_ r \e ->
+      whenLeftM_ (tryAny action) \e ->
         Log.logAttention (label <> " background task failed") (AE.object ["error" AE..= show @Text e])
 
 

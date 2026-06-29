@@ -15,18 +15,19 @@ import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types (PGArray (..))
+import Models.Apis.LogQueries qualified as LogQueries
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.GRPC.Common.Protobuf (Proto (..))
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.LogExplorer.Log qualified as Log
 import Pages.LogExplorer.LogItem qualified as LogItem
+import Pkg.Parser.Stats (Sources (..))
 import Pkg.TestUtils
 import ProcessMessage (processMessages)
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext (..), EnvConfig (..))
 import Test.Hspec
-
 
 
 -- Convert apiLogH's cursor (last-row timestamp text) into the UTCTime upper-bound
@@ -68,10 +69,10 @@ spec = around withTestResources do
       let msgs = concat (replicate 100 [("m1", toStrict $ AE.encode reqMsg1), ("m2", toStrict $ AE.encode reqMsg2)]) ++ [("m3", toStrict $ AE.encode reqMsg3), ("m4", toStrict $ AE.encode reqMsg4)]
       res <- runTestBackground frozenTime tr.trATCtx $ processMessages msgs HashMap.empty
       bimap (show @Text) (length . fst) res `shouldBe` Right 202
-      
+
       -- Get time range that includes all messages (3 days ago to 1 day from now)
-      let threeDaysAgo = addUTCTime (-259200) frozenTime  -- 3 days in seconds
-      let oneDayFuture = addUTCTime 86400 frozenTime  -- 1 day in the future
+      let threeDaysAgo = addUTCTime (-259200) frozenTime -- 3 days in seconds
+      let oneDayFuture = addUTCTime 86400 frozenTime -- 1 day in the future
       let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" threeDaysAgo
       let toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" oneDayFuture
 
@@ -81,8 +82,8 @@ spec = around withTestResources do
       case pg of
         Log.LogsGetJson r -> do
           -- Verify we got results
-          V.length r.logsData `shouldBe` 202  -- Should return all 202 test messages (under the 500 limit)
-          r.count `shouldSatisfy` (>= 202)  -- At least our 202 test messages (might include data from other tests)
+          V.length r.logsData `shouldBe` 202 -- Should return all 202 test messages (under the 500 limit)
+          r.count `shouldSatisfy` (>= 202) -- At least our 202 test messages (might include data from other tests)
 
           -- Verify column structure
           r.cols `shouldBe` ["id", "timestamp", "service", "summary", "latency_breakdown"]
@@ -94,7 +95,6 @@ spec = around withTestResources do
         _ -> error "Expected JSON response but got something else"
 
     it "should handle query filters correctly" \tr -> do
-
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
       let reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
       let reqMsg2 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 nowTxt
@@ -103,7 +103,7 @@ spec = around withTestResources do
       let msgs = [("m1", toStrict $ AE.encode reqMsg1), ("m2", toStrict $ AE.encode reqMsg2)]
       res <- runTestBackground frozenTime tr.trATCtx $ processMessages msgs HashMap.empty
       bimap (show @Text) (length . fst) res `shouldBe` Right 2
-      
+
       -- Get time range that includes the messages we just processed
       let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) frozenTime
       let toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 frozenTime
@@ -121,15 +121,14 @@ spec = around withTestResources do
         _ -> error "Expected JSON response but got something else"
 
     it "should paginate results correctly" \tr -> do
-
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
       let reqMsg = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
 
       -- Create many messages to test pagination
-      let msgs = take 200 $ map ((, toStrict $ AE.encode reqMsg) . (\i -> "m" <> show i)) [1..]
+      let msgs = take 200 $ map ((,toStrict $ AE.encode reqMsg) . (\i -> "m" <> show i)) [1 ..]
       res <- runTestBackground frozenTime tr.trATCtx $ processMessages msgs HashMap.empty
       bimap (show @Text) (length . fst) res `shouldBe` Right 200
-      
+
       -- Get time range that includes the messages we just processed
       let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) frozenTime
       let toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 frozenTime
@@ -140,28 +139,28 @@ spec = around withTestResources do
 
       case pg1 of
         Log.LogsGetJson r -> do
-          V.length r.logsData `shouldSatisfy` (>= 200)  -- Should return at least all 200 test messages (under the 500 limit)
-          r.count `shouldSatisfy` (>= 200)  -- At least our 200 test messages
+          V.length r.logsData `shouldSatisfy` (>= 200) -- Should return at least all 200 test messages (under the 500 limit)
+          r.count `shouldSatisfy` (>= 200) -- At least our 200 test messages
           -- With 500 limit, might not need pagination for 200 items
         _ -> error "Expected JSON response but got something else"
 
   describe "Column Selection" do
     it "should return only requested columns" \tr -> do
-
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
       let reqMsg = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
-      
+
       let msgs = [("m1", toStrict $ AE.encode reqMsg)]
       _ <- runTestBackground frozenTime tr.trATCtx $ processMessages msgs HashMap.empty
-      
+
       let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) frozenTime
       let toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 frozenTime
-      
+
       -- Request specific columns (using columns that actually exist in the database)
       -- Note: Just request additional columns beyond the default ones
       let cols = "id,timestamp,name,duration"
-      (_, pg) <- testServant tr $ 
-        Log.apiLogH testPid Nothing (Just cols) Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
+      (_, pg) <-
+        testServant tr
+          $ Log.apiLogH testPid Nothing (Just cols) Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
 
       case pg of
         Log.LogsGetJson r -> do
@@ -189,7 +188,8 @@ spec = around withTestResources do
       marker <- ("ui-" <>) . UUID.toText <$> nextRandom
       let resource = mkResource apiKey []
           ingest sid pidM name extras =
-            void $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider
+            void
+              $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider
               $ Proto (mkSpanRequest trId sid pidM name [] Nothing extras resource ts)
       ingest spanA Nothing "ui.tree.root" [mkAttr "ui.marker" marker]
       ingest spanB (Just spanA) "ui.tree.child" []
@@ -201,10 +201,12 @@ spec = around withTestResources do
       -- Without this, a 'returns 3 rows' assertion downstream silently
       -- masks the case where ingestion dropped a span and the trace shape
       -- on disk doesn't match what the test thinks it set up.
-      ingestedRows <- withPool tr.trPool $ DBT.query
-        [sql| SELECT name FROM otel_logs_and_spans WHERE project_id = ? AND name LIKE 'ui.tree.%' ORDER BY name |]
-        (Only testPid)
-        :: IO (V.Vector (Only Text))
+      ingestedRows <-
+        withPool tr.trPool
+          $ DBT.query
+            [sql| SELECT name FROM otel_logs_and_spans WHERE project_id = ? AND name LIKE 'ui.tree.%' ORDER BY name |]
+            (Only testPid)
+          :: IO (V.Vector (Only Text))
       V.toList (fmap (\(Only n) -> n) ingestedRows)
         `shouldBe` ["ui.tree.child", "ui.tree.grandchild", "ui.tree.root", "ui.tree.unrelated.child", "ui.tree.unrelated.root"]
 
@@ -212,8 +214,9 @@ spec = around withTestResources do
           toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 ts
           q = "attributes.ui.marker == \"" <> marker <> "\""
 
-      (_, pg) <- testServant tr
-        $ Log.apiLogH testPid (Just q) Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
+      (_, pg) <-
+        testServant tr
+          $ Log.apiLogH testPid (Just q) Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
 
       case pg of
         Log.LogsGetJson r -> do
@@ -225,24 +228,25 @@ spec = around withTestResources do
 
   describe "Query Error Handling" do
     it "should handle invalid query syntax gracefully" \tr -> do
-      let invalidQuery = "status_code = 200"  -- Missing quotes around string value
-
-      (_, pg) <- testServant tr $
-        Log.apiLogH testPid (Just invalidQuery) Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
+      let invalidQuery = "status_code = 200" -- Missing quotes around string value
+      (_, pg) <-
+        testServant tr
+          $ Log.apiLogH testPid (Just invalidQuery) Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
 
       -- Invalid query should return 0 results (not silently ignored)
       case pg of
         Log.LogsGetJson r -> do
           V.length r.logsData `shouldBe` 0
           r.count `shouldBe` 0
-        Log.LogsGetErrorSimple _ -> pass  -- Also acceptable
+        Log.LogsGetErrorSimple _ -> pass -- Also acceptable
         _ -> error "Expected JSON response or error"
 
     it "should handle malformed query operators" \tr -> do
-      let malformedQuery = "status_code === \"200\""  -- Invalid operator
-      (_, pg) <- testServant tr $ 
-        Log.apiLogH testPid (Just malformedQuery) Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
-      
+      let malformedQuery = "status_code === \"200\"" -- Invalid operator
+      (_, pg) <-
+        testServant tr
+          $ Log.apiLogH testPid (Just malformedQuery) Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
+
       case pg of
         Log.LogsGetJson r -> do
           V.length r.logsData `shouldBe` 0
@@ -272,14 +276,17 @@ spec = around withTestResources do
             tid <- show <$> nextRandom
             let ts = addUTCTime (fromIntegral (negate i)) frozenTime
                 attrs = [mkAttr "page.marker" pageMarker, mkAttr "page.idx" (show i)]
-            void $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider
+            void
+              $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider
               $ Proto (mkSpanRequest tid sid Nothing ("pg.row." <> show i) [] Nothing attrs resource ts)
       mapM_ rowAt [1 .. 5 :: Int]
 
-      ingested <- withPool tr.trPool $ DBT.query
-        [sql| SELECT count(*)::int FROM otel_logs_and_spans WHERE project_id = ? AND attributes->'page'->>'marker' = ? |]
-        (testPid, pageMarker)
-        :: IO (V.Vector (Only Int))
+      ingested <-
+        withPool tr.trPool
+          $ DBT.query
+            [sql| SELECT count(*)::int FROM otel_logs_and_spans WHERE project_id = ? AND attributes->'page'->>'marker' = ? |]
+            (testPid, pageMarker)
+          :: IO (V.Vector (Only Int))
       V.toList (fmap (\(Only n) -> n) ingested) `shouldBe` [5]
 
       let q = Just $ "attributes.page.marker == \"" <> pageMarker <> "\" | limit 2"
@@ -291,19 +298,22 @@ spec = around withTestResources do
           -- LogResult doesn't surface attributes in its column set).
           pageIdsFor :: V.Vector (V.Vector AE.Value) -> HashMap.HashMap Text Int -> IO [Int]
           pageIdsFor rows colIdxMap = do
-            let spanIdAt r = HashMap.lookup "latency_breakdown" colIdxMap >>= (r V.!?) >>= \case
-                  AE.String t -> Just t
-                  _ -> Nothing
+            let spanIdAt r =
+                  HashMap.lookup "latency_breakdown" colIdxMap >>= (r V.!?) >>= \case
+                    AE.String t -> Just t
+                    _ -> Nothing
                 spanIds = V.toList $ V.mapMaybe spanIdAt rows
             -- Guard against latency_breakdown silently changing shape (e.g. an
             -- object instead of a span_id string): fail here rather than at
             -- the caller's `shouldBe [...]`, which would point the wrong way.
             length spanIds `shouldBe` V.length rows
-            attrs <- withPool tr.trPool $ DBT.query
-              [sql| SELECT attributes->'page'->>'idx' FROM otel_logs_and_spans
+            attrs <-
+              withPool tr.trPool
+                $ DBT.query
+                  [sql| SELECT attributes->'page'->>'idx' FROM otel_logs_and_spans
                     WHERE project_id = ? AND context___span_id = ANY(?) ORDER BY timestamp DESC |]
-              (testPid, PGArray spanIds)
-              :: IO (V.Vector (Only (Maybe Text)))
+                  (testPid, PGArray spanIds)
+                :: IO (V.Vector (Only (Maybe Text)))
             pure $ V.toList $ V.mapMaybe (\(Only m) -> m >>= readMaybe . toString) attrs
 
           fetchPage cursor =
@@ -381,8 +391,9 @@ spec = around withTestResources do
           toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
           colText col r row = HashMap.lookup col r.colIdxMap >>= (row V.!?) >>= \case AE.String t -> Just t; _ -> Nothing
           fetchPage cur = do
-            (_, resp) <- testServant tr
-              $ Log.apiLogH testPid q Nothing cur Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
+            (_, resp) <-
+              testServant tr
+                $ Log.apiLogH testPid q Nothing cur Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
             case resp of
               Log.LogsGetJson r -> pure r
               _ -> error "Expected JSON response"
@@ -444,29 +455,32 @@ spec = around withTestResources do
       (seenRoots, pageCount) <- drain Nothing [] 0
       ordNub seenRoots `shouldMatchList` ["evroot.1", "evroot.2", "evroot.3"] -- no root dropped
       pageCount `shouldSatisfy` (> 1) -- actually paginated, didn't stop after page 1
-
     it "should paginate through multiple pages using cursor" \tr -> do
       -- Need > the default 500-row page to assert the cap + hasMore. Seed 520 rows
       -- directly (one bulk INSERT) instead of pushing 1000 messages through the full
       -- ingest pipeline — same assertion, ~100x faster. Spaced 50ms apart inside the
-      -- [-60s,+60s] window below; only project_id/timestamp are required columns.
-      void $ withPool tr.trPool $ DBT.execute
-        [sql| INSERT INTO otel_logs_and_spans (project_id, timestamp, name)
-              SELECT ?, ?::timestamptz - g * interval '50 milliseconds', 'seed.row'
+      -- [-60s,+60s] window below. summary is TEXT[] NOT NULL (no default), so it must be
+      -- supplied even for seed rows — an empty array satisfies the pagination assertions.
+      void
+        $ withPool tr.trPool
+        $ DBT.execute
+          [sql| INSERT INTO otel_logs_and_spans (project_id, timestamp, name, summary)
+              SELECT ?, ?::timestamptz - g * interval '50 milliseconds', 'seed.row', '{}'
               FROM generate_series(1, 520) AS g |]
-        (testPid, frozenTime)
+          (testPid, frozenTime)
 
       let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) frozenTime
       let toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 frozenTime
 
       -- First page
-      (_, pg1) <- testServant tr $
-        Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
+      (_, pg1) <-
+        testServant tr
+          $ Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
 
       case pg1 of
         Log.LogsGetJson r -> do
-          V.length r.logsData `shouldBe` 500  -- API limits to 500 per page
-          r.hasMore `shouldBe` True  -- More pages available
+          V.length r.logsData `shouldBe` 500 -- API limits to 500 per page
+          r.hasMore `shouldBe` True -- More pages available
 
           -- Extract cursor timestamp from last item
           let lastItemM = r.logsData V.!? (V.length r.logsData - 1)
@@ -482,24 +496,24 @@ spec = around withTestResources do
         _ -> error "Expected JSON response but got something else"
 
     it "should return consistent results when using cursor" \tr -> do
-
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
-      
+
       -- Create messages with different timestamps
       let msg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
       let msg2Time = toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-30) frozenTime
       let msg2 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 msg2Time
-      
+
       let msgs = [("m1", toStrict $ AE.encode msg1), ("m2", toStrict $ AE.encode msg2)]
       _ <- runTestBackground frozenTime tr.trATCtx $ processMessages msgs HashMap.empty
-      
+
       let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-120) frozenTime
       let toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 frozenTime
-      
+
       -- Get all results
-      (_, pg) <- testServant tr $ 
-        Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
-      
+      (_, pg) <-
+        testServant tr
+          $ Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
+
       case pg of
         Log.LogsGetJson r -> do
           r.count `shouldSatisfy` (>= 2)
@@ -508,31 +522,29 @@ spec = around withTestResources do
 
   describe "Time Range Selection" do
     it "should respect exact time boundaries" \tr -> do
-
-      
       -- Create messages at specific times
       let oneHourAgo = addUTCTime (-3600) frozenTime
       let twoHoursAgo = addUTCTime (-7200) frozenTime
       let threeHoursAgo = addUTCTime (-10800) frozenTime
-      
+
       let msg1Txt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" oneHourAgo
       let msg2Txt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" twoHoursAgo
       let msg3Txt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" threeHoursAgo
-      
+
       let msg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 msg1Txt
       let msg2 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 msg2Txt
       let msg3 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 msg3Txt
-      
+
       let msgs = [("m1", toStrict $ AE.encode msg1), ("m2", toStrict $ AE.encode msg2), ("m3", toStrict $ AE.encode msg3)]
       _ <- runTestBackground frozenTime tr.trATCtx $ processMessages msgs HashMap.empty
-      
+
       -- Query for messages between 2.5 and 1.5 hours ago (should only get msg2)
-      let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-9000) frozenTime  -- 2.5 hours ago
-      let toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-5400) frozenTime   -- 1.5 hours ago
-      
-      (_, pg) <- testServant tr $ 
-        Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
-      
+      let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-9000) frozenTime -- 2.5 hours ago
+      let toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-5400) frozenTime -- 1.5 hours ago
+      (_, pg) <-
+        testServant tr
+          $ Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
+
       case pg of
         Log.LogsGetJson r -> do
           -- Should only include messages within the time range
@@ -546,22 +558,25 @@ spec = around withTestResources do
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
       let oneHourBefore = toText $ formatTime defaultTimeLocale "%FT%T%QZ" (addUTCTime (-3600) frozenTime)
       let twoDaysBefore = toText $ formatTime defaultTimeLocale "%FT%T%QZ" (addUTCTime (-172800) frozenTime)
-      
+
       -- Create messages at different times relative to frozen time
       let msgNow = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
-      let msgHourBeforeMsg = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 oneHourBefore  
+      let msgHourBeforeMsg = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 oneHourBefore
       let msgTwoDaysBeforeMsg = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 twoDaysBefore
-      
-      let msgs = [("m1", toStrict $ AE.encode msgNow),
-                  ("m2", toStrict $ AE.encode msgHourBeforeMsg),
-                  ("m3", toStrict $ AE.encode msgTwoDaysBeforeMsg)]
-      
+
+      let msgs =
+            [ ("m1", toStrict $ AE.encode msgNow)
+            , ("m2", toStrict $ AE.encode msgHourBeforeMsg)
+            , ("m3", toStrict $ AE.encode msgTwoDaysBeforeMsg)
+            ]
+
       _ <- runTestBackground frozenTime tr.trATCtx $ processMessages msgs HashMap.empty
-      
+
       -- Test "1H" - should get messages from last hour (msgNow and msgHourBefore)
-      (_, pg1) <- testServant tr $ 
-        Log.apiLogH testPid Nothing Nothing Nothing (Just "1H") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
-      
+      (_, pg1) <-
+        testServant tr
+          $ Log.apiLogH testPid Nothing Nothing Nothing (Just "1H") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
+
       case pg1 of
         Log.LogsGetJson r -> do
           -- In frozen time at 2025-01-01, "1H" means from 1 hour before to now
@@ -571,8 +586,9 @@ spec = around withTestResources do
         _ -> error "Expected JSON response but got something else"
 
       -- Test "24H" - should get messages from last 24 hours
-      (_, pg2) <- testServant tr $
-        Log.apiLogH testPid Nothing Nothing Nothing (Just "24H") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
+      (_, pg2) <-
+        testServant tr
+          $ Log.apiLogH testPid Nothing Nothing Nothing (Just "24H") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
 
       case pg2 of
         Log.LogsGetJson r -> do
@@ -583,8 +599,9 @@ spec = around withTestResources do
 
     it "should handle missing time range (default behavior)" \tr -> do
       -- When no time range is specified, it should use a default (e.g., last 24 hours)
-      (_, pg) <- testServant tr $
-        Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
+      (_, pg) <-
+        testServant tr
+          $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
 
       case pg of
         Log.LogsGetJson r -> do
@@ -691,7 +708,34 @@ spec = around withTestResources do
       (_, item) <- testServant (withTfReads True) $ LogItem.expandAPIlogItemH testPid rid ts Nothing
       expectFound item
 
+      -- Random-access lookup is exact (timestamp = ts), not a ±1s window. A timestamp
+      -- offset by even a second must no longer resolve the row — on both TF and PG.
+      let expectNotFound store item' = case item' of
+            LogItem.ItemDetailedNotFound _ -> pass
+            _ -> expectationFailure $ store <> ": off-by-1s timestamp unexpectedly matched (window not removed)"
+      (_, miss) <- testServant (withTfReads True) $ LogItem.expandAPIlogItemH testPid rid (addUTCTime 1 ts) Nothing
+      expectNotFound "TF" miss
+
       -- Legacy PG rows can have NULL hashes; the lookup must still decode them.
       void $ withPool tr.trPool $ DBT.execute [sql| UPDATE otel_logs_and_spans SET hashes = NULL WHERE id = ? |] (Only rid)
       (_, item2) <- testServant (withTfReads False) $ LogItem.expandAPIlogItemH testPid rid ts Nothing
       expectFound item2
+      (_, miss2) <- testServant (withTfReads False) $ LogItem.expandAPIlogItemH testPid rid (addUTCTime 1 ts) Nothing
+      expectNotFound "PG" miss2
+
+    -- Regression: ERROR-severity logs carry no structured `errors` payload, so the
+    -- trace-view projection must fold severity into the `errors` flag — otherwise the
+    -- red error badge never propagates to a log's parent (or to a synthetic missing-span
+    -- parent whose orphan children are error logs). See defaultSelectSqlQuery.
+    it "flags ERROR-severity logs in the trace-view 'errors' column" \tr -> do
+      apiKey <- createTestAPIKey tr testPid "err-log-badge-key"
+      ingestErrorLog tr apiKey "boom: db connection failed" [] frozenTime
+      ingestLog tr apiKey "ordinary info line" frozenTime
+      let range = (Just (addUTCTime (-60) frozenTime), Just (addUTCTime 60 frozenTime))
+      res <- runQueryEffect tr $ LogQueries.selectLogTable testPid [] "" Nothing range [] (Just SSpans) Nothing
+      (rows, cols, _) <- either (\e -> error ("selectLogTable failed: " <> e)) pure res
+      let colIx name = Unsafe.fromJust $ V.elemIndex name (V.fromList cols)
+          logRows = [r | r <- V.toList rows, (r V.!? colIx "kind") == Just (AE.String "log")]
+          isErr r = (r V.!? colIx "errors") == Just (AE.Bool True)
+      length logRows `shouldBe` 2
+      length (filter isErr logRows) `shouldBe` 1

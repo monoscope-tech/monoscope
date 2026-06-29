@@ -67,6 +67,7 @@ import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.PatternMerge qualified as PatternMergeDB
+import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitHub
@@ -152,6 +153,11 @@ data BgJobs
   | ErrorAssigned Projects.ProjectId ErrorPatterns.ErrorPatternId Projects.UserId -- projectId, errorId, assigneeId
   | PatternEmbeddingAndMerge UTCTime Projects.ProjectId
   | EndpointTemplateDiscovery UTCTime Projects.ProjectId
+  | -- | Per-minute dispatcher: atomically lease due Prometheus targets (SKIP LOCKED,
+    -- multi-node safe) and fan out one PrometheusScrapeOne per target.
+    PrometheusScrapeTick UTCTime
+  | -- | Scrape a single Prometheus target; drained by workers across all pods.
+    PrometheusScrapeOne PromCfg.PrometheusScrapeConfigId
   | MonoscopeAdminDaily
   | UsageAuditReport
   | -- | Hourly catch-up for rows the extraction worker missed. Re-drives rows
@@ -354,6 +360,7 @@ processBackgroundJob authCtx bgJob =
                 void $ scheduleJob conn "background_jobs" (BackgroundJobs.HourlyJob at i) at
               seed 24 3600 BackgroundJobs.ProcessIssuesEnhancement
               seed 1440 60 (const BackgroundJobs.QueryMonitorsCheck)
+              seed 1440 60 BackgroundJobs.PrometheusScrapeTick
               seed 144 600 BackgroundJobs.NotificationSweepJob
               seed 24 3600 BackgroundJobs.NotificationDigestJob
 
@@ -551,6 +558,8 @@ processBackgroundJob authCtx bgJob =
     GitSyncPushDashboard pid dashboardId -> gitSyncPushDashboard pid (UUIDId dashboardId)
     GitSyncPushAllDashboards pid -> gitSyncPushAllDashboards pid
     QueryMonitorsCheck -> checkTriggeredQueryMonitors
+    PrometheusScrapeTick _ -> dispatchPrometheusScrapes authCtx
+    PrometheusScrapeOne cid -> scrapePrometheusTarget cid
     CompressReplaySessions -> Replay.compressAndMergeReplaySessions
     MergeReplaySession pid sid -> Replay.mergeReplaySession pid sid
     ExpireReplayData -> Replay.expireOldReplayData
@@ -3020,6 +3029,50 @@ gitSyncPushAllDashboards pid = do
                 _ <- GitSync.updateLastTreeSha sync.id treeSha
                 Log.logInfo "Pushed dashboard" (dash.id, dash.title)
           Log.logInfo "Finished pushing all dashboards" pid
+
+
+-- | How many due targets a single dispatcher tick fans out. Bounds the per-tick burst;
+-- the rest is picked up by the next tick (here or on another node).
+prometheusScrapeBatchLimit :: Int
+prometheusScrapeBatchLimit = 1000
+
+
+-- | Dispatcher (PrometheusScrapeTick). Atomically leases the due targets — 'claimDueConfigs'
+-- uses @FOR UPDATE SKIP LOCKED@, so running this on every node never double-scrapes — then
+-- fans out one 'PrometheusScrapeOne' job per target. The actual scraping is done by workers
+-- draining those jobs across all pods, so this tick stays cheap (one claim + N enqueues) and
+-- the work scales horizontally with the worker fleet rather than a single sequential loop.
+dispatchPrometheusScrapes :: Config.AuthContext -> ATBackgroundCtx ()
+dispatchPrometheusScrapes authCtx = do
+  due <- PromCfg.claimDueConfigs prometheusScrapeBatchLimit
+  unless (null due) do
+    Log.logInfo "Dispatching Prometheus scrapes" (length due)
+    -- Each enqueue is guarded: the targets were already leased (last_scraped_at bumped) by the
+    -- claim, so if one createJob throws (pool exhaustion, transient DB error) we must not let it
+    -- abort the loop and silently strand the remaining targets for a full interval — log and continue.
+    failures <- liftIO $ withResource authCtx.jobsPool \conn ->
+      lefts <$> forM due \cfg ->
+        first (cfg.id.toText,) <$> tryAny (void $ createJob conn "background_jobs" (PrometheusScrapeOne cfg.id))
+    forM_ failures \(cid, err) -> Log.logAttention "Prometheus scrape enqueue failed — target stranded until next tick" (cid, displayException err)
+
+
+-- | Worker (PrometheusScrapeOne). Scrapes one target with a hard HTTP timeout, parses the
+-- exposition body and ingests the samples. Failures are caught (not rethrown): the lease set
+-- at claim time already prevents re-firing before the next interval, so a broken endpoint
+-- backs off instead of retry-storming, and one bad target never fails sibling work.
+scrapePrometheusTarget :: PromCfg.PrometheusScrapeConfigId -> ATBackgroundCtx ()
+scrapePrometheusTarget cid = whenJustM (PromCfg.getConfig cid) \cfg -> Relude.when cfg.enabled do
+  result <- tryAny do
+    resp <- W.getWith (PromCfg.prometheusScrapeOpts cfg.authHeader) (toString cfg.url)
+    -- Capture the fallback metricTime *after* the response arrives: a slow endpoint would
+    -- otherwise backdate every timestamp-less sample by the scrape latency.
+    now <- Time.currentTime
+    PromCfg.ingestScrapedBody cfg now (resp ^. responseBody)
+  case result of
+    Right n -> void $ PromCfg.markScraped cfg.id ("ok: " <> show n <> " samples")
+    Left err -> do
+      Log.logWarn "Prometheus scrape failed" (cfg.id.toText, cfg.url, show err)
+      void $ PromCfg.markScraped cfg.id ("error: " <> toText (displayException err))
 
 
 checkTriggeredQueryMonitors :: ATBackgroundCtx ()

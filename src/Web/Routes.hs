@@ -66,6 +66,7 @@ import Data.Effectful.Wreq qualified as Wreq
 import Data.Text qualified as T
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Monitors qualified as Monitors
+import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
@@ -446,6 +447,12 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , gitSyncSettings :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Get '[HTML] (RespHeaders (Html ()))
   , gitSyncSettingsPost :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> ReqBody '[FormUrlEncoded] GitSync.GitSyncForm :> Post '[HTML] (RespHeaders (Html ()))
   , gitSyncSettingsDelete :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Delete '[HTML] (RespHeaders (Html ()))
+  , prometheusSettingsGet :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> Get '[HTML] (RespHeaders Settings.PrometheusGet)
+  , prometheusSettingsPost :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> ReqBody '[FormUrlEncoded] Settings.PrometheusForm :> Post '[HTML] (RespHeaders Settings.PrometheusMut)
+  , prometheusSettingsTest :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> "test" :> ReqBody '[FormUrlEncoded] Settings.PrometheusForm :> Post '[HTML] (RespHeaders (Html ()))
+  , prometheusSettingsEdit :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> Capture "cfgID" PromCfg.PrometheusScrapeConfigId :> "edit" :> ReqBody '[FormUrlEncoded] Settings.PrometheusForm :> Post '[HTML] (RespHeaders Settings.PrometheusMut)
+  , prometheusSettingsToggle :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> Capture "cfgID" PromCfg.PrometheusScrapeConfigId :> Patch '[HTML] (RespHeaders Settings.PrometheusMut)
+  , prometheusSettingsDelete :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> Capture "cfgID" PromCfg.PrometheusScrapeConfigId :> Delete '[HTML] (RespHeaders Settings.PrometheusMut)
   , -- GitHub App routes
     githubAppInstall :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> "install" :> Get '[HTML] (RespHeaders (Html ()))
   , githubAppCallback :: mode :- "github" :> "callback" :> QueryParam "installation_id" Int64 :> QueryParam "setup_action" Text :> QueryParam "state" Text :> Get '[HTML] (RespHeaders (Html ()))
@@ -816,6 +823,12 @@ cookieProtectedServer =
     , gitSyncSettings = GitSync.gitSyncSettingsGetH
     , gitSyncSettingsPost = GitSync.gitSyncSettingsPostH
     , gitSyncSettingsDelete = GitSync.gitSyncSettingsDeleteH
+    , prometheusSettingsGet = Settings.prometheusGetH
+    , prometheusSettingsPost = Settings.prometheusPostH
+    , prometheusSettingsTest = Settings.prometheusTestH
+    , prometheusSettingsEdit = Settings.prometheusUpdateH
+    , prometheusSettingsToggle = Settings.prometheusToggleH
+    , prometheusSettingsDelete = Settings.prometheusDeleteH
     , githubAppInstall = GitSync.githubAppInstallH
     , githubAppCallback = GitSync.githubAppCallbackH
     , githubAppRepos = GitSync.githubAppReposH

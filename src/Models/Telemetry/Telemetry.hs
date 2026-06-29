@@ -578,15 +578,18 @@ selectOtelSpans pidTxt lo hi predSql =
     <> predSql
 
 
+-- | Random-access lookup of a single row by exact (timestamp, id). The caller always
+-- has the precise stored timestamp (it originates from a prior query result), so we match
+-- @timestamp = ts@ rather than a window — both PG and TF store microsecond precision, which
+-- round-trips losslessly through the UTCTime↔Hasql encoder. Exact equality also lets the
+-- planner hit the (timestamp, id) ordering instead of scanning a ±window range.
 lookupOtelRecord :: DB es => Maybe Text -> UTCTime -> UUID.UUID -> Eff es (Maybe OtelLogsAndSpans)
 lookupOtelRecord mPid createdAt rdId = do
-  let tLo = addUTCTime (-1) createdAt
-      tHi = addUTCTime 1 createdAt
-      pidFilter = maybe mempty (\p -> [HI.sql| and project_id=#{p}|]) mPid
+  let pidFilter = maybe mempty (\p -> [HI.sql| and project_id=#{p}|]) mPid
   Hasql.interpOne
     $ [HI.sql|SELECT |]
     <> otelSpanColsSql
-    <> [HI.sql| FROM otel_logs_and_spans where timestamp BETWEEN #{tLo} AND #{tHi}|]
+    <> [HI.sql| FROM otel_logs_and_spans where timestamp = #{createdAt}|]
     <> pidFilter
     <> [HI.sql| and id=#{rdId} LIMIT 1|]
 

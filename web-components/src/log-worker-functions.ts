@@ -10,6 +10,17 @@ export function generateId() {
   return Math.random().toString(36).substring(2, 15);
 }
 
+// Whether a row counts as an error for the purpose of propagating the red error
+// badge to ancestor rows. The server-computed `errors` flag already folds in log
+// severity (see defaultSelectSqlQuery), so logs are covered by it; for spans we
+// additionally honour an ERROR marker in the styled `summary` segments (status-only
+// error spans carry no `errors` payload). We do NOT scan a log's summary, since that
+// is the raw body and would false-positive on the word "ERROR".
+function rowHasError(span: any[], idx: ColIdxMap, isLog: boolean): boolean {
+  if (span[idx.errors]) return true;
+  return isLog ? false : (span[idx.summary]?.some((el: string) => el.includes('ERROR')) ?? false);
+}
+
 export function groupSpans(data: any[][], colIdxMap: ColIdxMap, expandedTraces: Record<string, boolean>, flipDirection: boolean, serverTraces: ServerTraceEntry[]) {
   const keys = ['trace_id', 'latency_breakdown', 'parent_id', 'timestamp', 'duration', 'start_time_ns', 'errors', 'summary', 'kind', 'id'];
   const idx: ColIdxMap = {};
@@ -25,7 +36,7 @@ export function groupSpans(data: any[][], colIdxMap: ColIdxMap, expandedTraces: 
     return {
       id: isLog ? span[idx.id] : span[idx.latency_breakdown],
       startNs: span[idx.start_time_ns],
-      hasErrors: isLog ? false : span[idx.errors] || (span[idx.summary]?.some((el: string) => el.includes('ERROR')) ?? false),
+      hasErrors: rowHasError(span, idx, isLog),
       duration: isLog ? 0 : span[idx.duration],
       children: [] as APTEvent[],
       parent: span[idx.parent_id],

@@ -12,6 +12,18 @@ module Pages.Settings (
   GenerateAPIKeyForm (..),
   ApiGet (..),
   ApiMut (..),
+  -- Prometheus
+  prometheusGetH,
+  prometheusPostH,
+  prometheusUpdateH,
+  prometheusTestH,
+  prometheusDeleteH,
+  prometheusToggleH,
+  PrometheusForm (..),
+  PrometheusGet (..),
+  PrometheusMut (..),
+  safeScrapeUrl,
+  parseLabelsText,
   -- Integrations
   TestForm (..),
   notificationsTestPostH,
@@ -46,11 +58,12 @@ import Data.ByteArray qualified as BA
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
 import Data.CaseInsensitive qualified as CI
+import Data.Char (isDigit, isHexDigit)
 import Data.Default
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Notify qualified as Notify
 import Data.Text qualified as T
-import Data.Time (Day, UTCTime (..), addDays, addUTCTime, getZonedTime)
+import Data.Time (Day, UTCTime (..), addDays, addUTCTime, diffUTCTime, getZonedTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.UUID qualified as UUID
@@ -65,6 +78,9 @@ import Hasql.Interpolate qualified as HI
 
 import BackgroundJobs (errorTrendChartUrl)
 import BackgroundJobs qualified as BJ
+import Data.Aeson.Key qualified as AEK
+import Data.Aeson.KeyMap qualified as AEKM
+import Data.Effectful.Wreq qualified as W
 import Effectful.Reader.Static (ask, asks)
 import Effectful.Time qualified as Time
 import Fmt (commaizeF, fmt)
@@ -72,12 +88,15 @@ import Lucid
 import Lucid.Htmx (hxConfirm_, hxDelete_, hxGet_, hxIndicator_, hxPatch_, hxPost_, hxSwap_, hxTarget_)
 import Lucid.Hyperscript (__)
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
+import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers (Team (..), getTeamsById, resolveTeamEmails)
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
+import Network.HTTP.Types (urlEncode)
 import Network.Minio qualified as Minio
+import Network.URI (parseURI, uriAuthority, uriRegName, uriScheme)
 import Network.Wreq qualified as Wreq
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, settingsContentTarget, withSettingsPage)
 import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), ModalCfg (..), confirmModal_, connectionBadge_, formField_, headerRow_, iconBadgeLg_, localTimeFmt_, modalWith_, paymentPlanPicker, sectionLabel_, settingsH2_, settingsSection_)
@@ -85,11 +104,13 @@ import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.EmailTemplates qualified as ET
 import Pkg.Mail (NotificationAlerts (..), sampleAlertByIssueTypeText, sampleReport, sendDiscordAlert, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendWhatsAppAlert)
+import Pkg.Prometheus qualified as Prom
 import Relude hiding (ask, asks)
 import Servant (err400, errBody)
 import System.Config
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
 import Text.Printf (printf)
+import UnliftIO.Exception (throwIO, try, tryAny)
 import Utils (LoadingSize (..), calculateCycleStartDate, faSprite_, formatUTC, htmxIndicator_)
 import Web.FormUrlEncoded (FromForm)
 import "cryptonite" Crypto.Hash (SHA256)
@@ -409,6 +430,384 @@ copyNewApiKey newKeyM hasNext =
                         , [__|on click call window.location.reload()|]
                         ]
                         "Next"
+
+
+----------------------------------------------------------------------
+-- Prometheus scrape targets
+----------------------------------------------------------------------
+
+data PrometheusForm = PrometheusForm
+  { name :: Text
+  , url :: Text
+  , scrapeInterval :: Maybe Int
+  , authHeader :: Maybe Text
+  , extraLabels :: Maybe Text
+  , clearAuth :: Maybe Text -- "on" when the "Clear saved token" box is ticked
+  }
+  deriving stock (Generic)
+  deriving anyclass (FromForm)
+
+
+newtype PrometheusGet = PrometheusGet (PageCtx (Projects.ProjectId, V.Vector PromCfg.PrometheusScrapeConfig))
+
+
+instance ToHtml PrometheusGet where
+  toHtml (PrometheusGet (PageCtx bwconf (pid, cfgs))) = toHtml $ PageCtx bwconf $ prometheusPage pid cfgs
+  toHtmlRaw = toHtml
+
+
+newtype PrometheusMut = PrometheusMut (Projects.ProjectId, V.Vector PromCfg.PrometheusScrapeConfig)
+
+
+instance ToHtml PrometheusMut where
+  toHtml (PrometheusMut (pid, cfgs)) = toHtml $ prometheusTargetsList pid cfgs
+  toHtmlRaw = toHtml
+
+
+prometheusGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders PrometheusGet)
+prometheusGetH pid = do
+  (_, _, bw) <- mkPageCtx pid
+  cfgs <- PromCfg.configsByProjectId pid
+  addRespHeaders $ PrometheusGet $ PageCtx bw{pageTitle = "Prometheus", isSettingsPage = True} (pid, cfgs)
+
+
+-- | Validate + normalise a target form. Name is required because it becomes the
+-- @service.name@ the scraped metrics are grouped under — blank names would silently
+-- collide multiple targets into one series namespace.
+validatePrometheusForm :: PrometheusForm -> Either Text (Text, Text, Int, Maybe Text, AE.Value)
+validatePrometheusForm form = do
+  url <- validateScrapeUrl form.url
+  when (T.null name) $ Left "A name is required — it groups the scraped metrics under service.name"
+  Right
+    ( name
+    , url
+    , max 60 (fromMaybe 60 form.scrapeInterval) -- floor at the 60s dispatcher cadence
+    , mfilter (not . T.null) (T.strip <$> form.authHeader)
+    , parseLabelsText (fromMaybe "" form.extraLabels)
+    )
+  where
+    name = T.strip form.name
+
+
+-- | The URL guards shared by save-validation and the Test handler: non-empty + SSRF floor.
+-- Returns the stripped URL so callers don't re-strip or re-check.
+validateScrapeUrl :: Text -> Either Text Text
+validateScrapeUrl raw
+  | T.null url = Left "A /metrics URL is required"
+  | not (safeScrapeUrl url) = Left "URL must be a public http:// or https:// endpoint"
+  | otherwise = Right url
+  where
+    url = T.strip raw
+
+
+-- | Reject non-http(s) schemes and hosts that resolve to the internal network
+-- (loopback, link-local, RFC-1918, ULA, IPv4-mapped IPv6, and obfuscated numeric
+-- literals — octal/decimal/short forms), to blunt SSRF via the scrape URL. DNS-rebinding
+-- remains a known gap (we only vet the literal host; resolve-and-pin is the full fix).
+--
+-- >>> map safeScrapeUrl ["https://metrics.example.com/m", "http://10.0.0.1/m", "http://[::ffff:127.0.0.1]/m", "file:///etc/passwd"]
+-- [True,False,False,False]
+-- >>> map safeScrapeUrl ["http://2130706433/m", "http://0177.0.0.1/m", "http://localhost./m", "http://172.160.0.1/m"]
+-- [False,False,False,True]
+-- >>> map safeScrapeUrl ["http://0x7f000001/m", "http://0x7f.0x0.0x0.0x1/m"]
+-- [False,False]
+-- >>> map safeScrapeUrl ["http://[fe9f::1]/m", "http://[fc00::1]/m", "http://[2001:db8::1]/m"]
+-- [False,False,True]
+safeScrapeUrl :: Text -> Bool
+safeScrapeUrl u = case parseURI (toString (T.strip u)) of
+  Nothing -> False
+  Just uri ->
+    T.toLower (toText (uriScheme uri))
+      `elem` ["http:", "https:"]
+      && not (internalHost (T.toLower (toText (maybe "" uriRegName (uriAuthority uri)))))
+  where
+    internalHost raw =
+      let h = fromMaybe raw (T.stripSuffix "." raw) -- normalise the trailing-dot FQDN form
+          ip6 = fromMaybe h (T.stripPrefix "[" h >>= T.stripSuffix "]") -- inside of a [..] literal
+       in T.null h
+            || h
+            == "localhost"
+            || any (`T.isPrefixOf` ip6) ["::1", "fc", "fd", "fe8", "fe9", "fea", "feb", "::ffff:"] -- fc/fd = ULA fc00::/7; fe8-feb = link-local fe80::/10
+            || internalIPv4 h
+            || obfuscatedNumericHost h
+            || hexNumericHost h
+    -- A clean dotted-decimal quad whose address is loopback/RFC-1918/link-local/unspecified.
+    internalIPv4 h = case traverse octet (T.splitOn "." h) of
+      Just [a, b, _, _] -> a `elem` [0, 127] || a == 10 || (a == 169 && b == 254) || (a == 172 && b >= 16 && b <= 31) || (a == 192 && b == 168)
+      _ -> False
+    -- Any all-numeric host that is not a clean 4-octet quad: bare integer (2130706433),
+    -- octal octets (0177.0.0.1), or short forms (127.1) — all of which an OS resolver
+    -- expands to an internal address.
+    obfuscatedNumericHost h =
+      not (T.null h)
+        && T.all (\c -> isDigit c || c == '.') h
+        && maybe True ((/= 4) . length) (traverse octet (T.splitOn "." h))
+    -- Reject hex IP literals (0x7f000001, 0x7f.0x0.0x0.0x1): any component is "0x"+hex digits.
+    hexNumericHost h = any hexLiteral (T.splitOn "." h)
+      where
+        hexLiteral p = case T.stripPrefix "0x" p of
+          Just rest -> not (T.null rest) && T.all isHexDigit rest
+          Nothing -> False
+    octet o = do
+      guard $ not (T.null o) && (T.length o == 1 || T.head o /= '0') -- reject leading-zero (octal) octets
+      n <- readMaybe (toString o) :: Maybe Int
+      n <$ guard (n >= 0 && n <= 255)
+
+
+prometheusPostH :: Projects.ProjectId -> PrometheusForm -> ATAuthCtx (RespHeaders PrometheusMut)
+prometheusPostH pid form = promSave pid form "Added" \(name, url, interval, authH, labels) -> PromCfg.insertConfig pid name url interval authH labels
+
+
+prometheusUpdateH :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfigId -> PrometheusForm -> ATAuthCtx (RespHeaders PrometheusMut)
+prometheusUpdateH pid cid form = promSave pid form "Updated" \(name, url, interval, authH, labels) -> do
+  -- The edit form never echoes the saved token back into the password field, so a blank
+  -- auth field means "keep the existing token" — unless "Clear saved token" was ticked.
+  keptAuth <- case authH of
+    Just t -> pure (Just t)
+    Nothing | isJust form.clearAuth -> pure Nothing
+    Nothing -> PromCfg.getConfigByProject pid cid <&> (>>= (.authHeader))
+  PromCfg.updateConfig pid cid name url interval keptAuth labels
+
+
+-- | Shared create/edit flow. The DB UNIQUE(project_id, name) constraint (migration 0103)
+-- is the real guard: catching its violation here — rather than a pre-check scan that two
+-- concurrent saves can both pass before either inserts — closes the race, saves a roundtrip,
+-- and still turns the collision into a friendly message.
+promSave :: Projects.ProjectId -> PrometheusForm -> Text -> ((Text, Text, Int, Maybe Text, AE.Value) -> ATAuthCtx Int64) -> ATAuthCtx (RespHeaders PrometheusMut)
+promSave pid form verb persist = do
+  _ <- Projects.sessionAndProject pid
+  case validatePrometheusForm form of
+    Left err -> addErrorToast err Nothing
+    Right vals@(name, _, _, _, _) ->
+      try (persist vals) >>= \case
+        -- 0 rows means the edit targeted a row that no longer matches (concurrently deleted,
+        -- or a cid that isn't this project's) — don't claim success for a write that did nothing.
+        Right 0 -> addErrorToast "That Prometheus target no longer exists" Nothing
+        Right _ -> do
+          addSuccessToast (verb <> " Prometheus target") Nothing
+          addTriggerEvent "closeModal" ""
+        Left e
+          | Hasql.isUniqueViolation e -> addErrorToast ("A target named “" <> name <> "” already exists") Nothing
+          | otherwise -> throwIO e
+  prometheusMut pid
+
+
+-- | One-shot scrape used by the form's Test button: fetch + parse, no DB write, no ingest.
+-- Reports sample count + latency, or a (truncated) error, so a user validates a target
+-- before saving instead of saving blind and squinting at last_status a minute later.
+prometheusTestH :: Projects.ProjectId -> PrometheusForm -> ATAuthCtx (RespHeaders (Html ()))
+prometheusTestH pid form = do
+  _ <- Projects.sessionAndProject pid
+  case validateScrapeUrl form.url of
+    Left err -> addRespHeaders $ prometheusTestResult (Left err)
+    Right url -> do
+      let opts = PromCfg.prometheusScrapeOpts (mfilter (not . T.null) (T.strip <$> form.authHeader))
+      t0 <- Time.currentTime
+      res <- tryAny (W.getWith opts (toString url))
+      t1 <- Time.currentTime
+      let ms = round (realToFrac (diffUTCTime t1 t0) * 1000 :: Double) :: Int
+      addRespHeaders $ prometheusTestResult $ case res of
+        Left e -> Left (T.take 300 (show e))
+        Right resp ->
+          -- Count only the samples ingestScrapedBody would store (shared isFiniteSample).
+          let finite = filter Prom.isFiniteSample (Prom.parsePrometheus (decodeUtf8 (resp ^. Wreq.responseBody)))
+           in Right (length finite, ms)
+
+
+prometheusDeleteH :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfigId -> ATAuthCtx (RespHeaders PrometheusMut)
+prometheusDeleteH pid cid = do
+  _ <- Projects.sessionAndProject pid
+  void $ PromCfg.deleteConfig pid cid
+  addSuccessToast "Removed Prometheus target" Nothing
+  prometheusMut pid
+
+
+prometheusToggleH :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfigId -> ATAuthCtx (RespHeaders PrometheusMut)
+prometheusToggleH pid cid = do
+  _ <- Projects.sessionAndProject pid
+  void $ PromCfg.toggleEnabled pid cid
+  prometheusMut pid
+
+
+prometheusMut :: Projects.ProjectId -> ATAuthCtx (RespHeaders PrometheusMut)
+prometheusMut pid = do
+  cfgs <- PromCfg.configsByProjectId pid
+  addRespHeaders $ PrometheusMut (pid, cfgs)
+
+
+-- | Parse @k=v, k2=v2@ static-label text into a JSON object, trimming whitespace and
+-- dropping pairs with an empty key or empty value (so @"env= "@ is dropped, not stored blank).
+--
+-- >>> parseLabelsText "env = prod "
+-- Object (fromList [("env",String "prod")])
+-- >>> parseLabelsText "env= , =orphan"
+-- Object (fromList [])
+parseLabelsText :: Text -> AE.Value
+parseLabelsText t =
+  AE.object
+    [ (AEK.fromText k', AE.String v')
+    | pair <- T.splitOn "," t
+    , let (k, rest) = T.breakOn "=" pair
+    , let k' = T.strip k
+    , not (T.null k')
+    , Just v' <- [T.strip <$> T.stripPrefix "=" rest] -- explicit "skip the =", drops valueless keys
+    , not (T.null v')
+    ]
+
+
+-- | Inverse of 'parseLabelsText', to prefill the edit form.
+labelsToText :: AE.Value -> Text
+labelsToText (AE.Object o) = T.intercalate ", " [AEK.toText k <> "=" <> v | (k, AE.String v) <- AEKM.toList o]
+labelsToText _ = ""
+
+
+-- | Scrape health derived from last_status ("ok: …" / "error: …"). Distinct from the
+-- on/off state so a target that's enabled-but-failing never shows a reassuring green.
+data ScrapeHealth = HealthOk | HealthError | HealthPending
+
+
+configHealth :: PromCfg.PrometheusScrapeConfig -> ScrapeHealth
+configHealth cfg = case T.toLower . T.strip <$> cfg.lastStatus of
+  Just s | "ok" `T.isPrefixOf` s -> HealthOk
+  Just s | "error" `T.isPrefixOf` s -> HealthError
+  _ -> HealthPending
+
+
+healthBadge_ :: ScrapeHealth -> Html ()
+healthBadge_ = \case
+  HealthOk -> span_ [class_ "cbadge-sm badge-success inline-flex items-center gap-1"] $ faSprite_ "circle-check" "solid" "w-3 h-3" >> "healthy"
+  HealthError -> span_ [class_ "cbadge-sm badge-error inline-flex items-center gap-1"] $ faSprite_ "circle-exclamation" "solid" "w-3 h-3" >> "failing"
+  HealthPending -> span_ [class_ "cbadge-sm badge-neutral"] "pending"
+
+
+prometheusPage :: Projects.ProjectId -> V.Vector PromCfg.PrometheusScrapeConfig -> Html ()
+prometheusPage pid cfgs = settingsSection_ do
+  div_ [class_ "flex justify-between items-center"] do
+    settingsH2_ "Prometheus targets"
+    modalWith_ "prometheus-modal" def{boxClass = "p-8"} (Just $ span_ [class_ "btn btn-sm btn-primary gap-1.5"] $ do faSprite_ "plus" "regular" "w-3 h-3"; "Add target") do
+      div_ [class_ "flex flex-col gap-5"] do
+        div_ do
+          h2_ [class_ "text-textStrong text-xl font-semibold"] "Scrape a Prometheus endpoint"
+          p_ [class_ "text-sm text-textWeak mt-1"] "We poll this endpoint on your schedule, parse the metrics exposition format, and ingest the samples as series you can chart and alert on."
+        form_ [hxPost_ $ "/p/" <> pid.toText <> "/settings/prometheus", class_ "flex flex-col gap-4", hxTarget_ "#prometheus-targets", hxSwap_ "outerHTML"]
+          $ prometheusFields_ pid "prometheus-modal" "Add scrape target" Nothing
+  prometheusTargetsList pid cfgs
+
+
+-- | Shared add/edit form body: prefilled from a config when editing. Carries its own
+-- action row (Test / Cancel / submit) so callers just wrap it in a form. @submitLabel@
+-- names the commit button and @modalId@ wires Cancel to close the enclosing modal.
+prometheusFields_ :: Projects.ProjectId -> Text -> Text -> Maybe PromCfg.PrometheusScrapeConfig -> Html ()
+prometheusFields_ pid modalId submitLabel mcfg = do
+  field_ "name" "Name" "api-gateway" "text" True Nothing (maybe "" (.name) mcfg)
+  field_ "url" "Metrics URL" "http://service:9090/metrics" "url" True (Just "Must be reachable from Monoscope and return the Prometheus text exposition format.") (maybe "" (.url) mcfg)
+  label_ [class_ "flex flex-col gap-1 text-sm"] do
+    span_ [class_ "text-textWeak"] "Scrape interval"
+    -- No sub-minute options: the dispatcher ticks once per minute, so a shorter
+    -- interval can't be honoured. Always include the config's current value (even if
+    -- off-list) so editing an unrelated field never silently rewrites the interval.
+    let cur = maybe 60 (.scrapeIntervalSeconds) mcfg
+        presets = [(60, "1 minute"), (300, "5 minutes"), (900, "15 minutes"), (3600, "1 hour")] :: [(Int, Text)]
+        opts = if any ((== cur) . fst) presets then presets else sortWith fst ((cur, show cur <> "s") : presets)
+    select_ [class_ "select select-bordered w-full", name_ "scrapeInterval"]
+      $ forM_ opts \(v, l) ->
+        option_ ([value_ (show v)] <> [selected_ "selected" | v == cur]) (toHtml l)
+  -- Optional fields stay collapsed until needed; auto-expanded when editing a target
+  -- that already has them set, so existing values are never hidden behind the toggle.
+  let hasAdvanced = maybe False (\c -> isJust c.authHeader || not (T.null (labelsToText c.extraLabels))) mcfg
+  details_ ([class_ "group"] <> [term "open" "open" | hasAdvanced]) do
+    summary_ [class_ "cursor-pointer select-none text-sm text-textWeak flex items-center gap-1.5"] do
+      faSprite_ "chevron-right" "solid" "w-3 h-3 transition-transform group-open:rotate-90"
+      "Advanced"
+    div_ [class_ "flex flex-col gap-3 mt-3"] do
+      -- Never echo the saved token into the HTML (it would sit in the page source / proxy
+      -- caches): show an empty field, and on edit treat blank as "keep the saved token".
+      let hasToken = maybe False (isJust . (.authHeader)) mcfg
+          (authPh, authHelp) =
+            if hasToken
+              then ("Leave blank to keep the saved token", "A token is saved. Enter a new value to replace it.")
+              else ("Bearer <token>", "Sent as the Authorization header on every scrape.")
+      field_ "authHeader" "Authorization header" authPh "password" False (Just authHelp) ""
+      when hasToken $ label_ [class_ "flex items-center gap-2 text-sm text-textWeak -mt-1"] do
+        input_ [type_ "checkbox", name_ "clearAuth", class_ "checkbox checkbox-sm"]
+        "Clear saved token"
+      field_ "extraLabels" "Static labels" "env=prod, team=core" "text" False (Just "Comma-separated key=value pairs, added to every series from this target.") (maybe "" (labelsToText . (.extraLabels)) mcfg)
+  div_ [class_ "flex items-center gap-2 border-t border-strokeWeak pt-4"] do
+    button_
+      [ type_ "button"
+      , class_ "btn btn-ghost gap-1.5"
+      , hxPost_ $ "/p/" <> pid.toText <> "/settings/prometheus/test"
+      , term "hx-include" "closest form"
+      , term "hx-target" "next .prom-test-result"
+      , hxSwap_ "outerHTML"
+      ]
+      $ do faSprite_ "circle-play" "regular" "w-3.5 h-3.5"; "Test connection"
+    label_ [class_ "btn btn-ghost ml-auto", Lucid.for_ modalId] "Cancel"
+    button_ [type_ "submit", class_ "btn btn-primary"] (toHtml submitLabel)
+  prometheusTestResult (Left "")
+  where
+    field_ :: Text -> Text -> Text -> Text -> Bool -> Maybe Text -> Text -> Html ()
+    field_ nm lbl ph ty req helpM val = label_ [class_ "flex flex-col gap-1 text-sm"] do
+      span_ [class_ "text-textWeak"] (toHtml lbl)
+      input_ $ [class_ "input input-bordered w-full", type_ ty, name_ nm, placeholder_ ph, value_ val] <> [required_ "true" | req]
+      whenJust helpM $ span_ [class_ "text-xs text-textWeak"] . toHtml
+
+
+prometheusTestResult :: Either Text (Int, Int) -> Html ()
+prometheusTestResult res = div_ [class_ "prom-test-result text-sm"] $ case res of
+  Right (n, ms) -> span_ [class_ "cbadge-sm badge-success inline-flex items-center gap-1"] $ faSprite_ "circle-check" "solid" "w-3 h-3" >> toHtml ("Scraped " <> show n <> " samples · " <> show ms <> "ms" :: Text)
+  Left err
+    | T.null err -> mempty
+    | otherwise -> span_ [class_ "cbadge-sm badge-error inline-flex items-center gap-1 max-w-full"] $ faSprite_ "circle-exclamation" "solid" "w-3 h-3 shrink-0" >> span_ [class_ "break-all"] (toHtml err)
+
+
+prometheusTargetsList :: Projects.ProjectId -> V.Vector PromCfg.PrometheusScrapeConfig -> Html ()
+prometheusTargetsList pid cfgs = div_ [id_ "prometheus-targets", class_ "mt-4"] do
+  if V.null cfgs
+    then prometheusEmptyState
+    else do
+      input_
+        [ class_ "input input-bordered input-sm w-full mb-3"
+        , type_ "search"
+        , placeholder_ "Filter targets…"
+        , term "_" "on input show .itemsListItem in #prometheus-targets when its textContent.toLowerCase() contains my value.toLowerCase()"
+        ]
+      div_ [class_ "flex flex-col gap-2"] $ V.forM_ cfgs (prometheusTargetRow pid)
+
+
+prometheusEmptyState :: Html ()
+prometheusEmptyState = div_ [class_ "flex flex-col items-center text-center gap-3 py-14 px-4"] do
+  iconBadgeLg_ BrandBadge "objects-column"
+  h3_ [class_ "text-base font-semibold text-textStrong"] "Scrape your Prometheus endpoints"
+  p_ [class_ "text-sm text-textWeak max-w-md"] "Point Monoscope at any /metrics endpoint. We poll it on your schedule, parse the exposition format, and ingest the samples as metrics you can chart and alert on — grouped under the name you give each target. Use “Add target” to start."
+
+
+prometheusTargetRow :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfig -> Html ()
+prometheusTargetRow pid cfg = div_ [class_ "itemsListItem flex items-center justify-between gap-3 border border-strokeWeak rounded-md p-3"] do
+  div_ [class_ "flex flex-col min-w-0 gap-1"] do
+    div_ [class_ "flex items-center gap-2 flex-wrap"] do
+      healthBadge_ (configHealth cfg)
+      span_ [class_ "text-textStrong font-medium"] $ toHtml cfg.name
+      unless cfg.enabled $ span_ [class_ "cbadge-sm badge-neutral"] "paused"
+      when (isJust cfg.authHeader) $ faSprite_ "lock" "solid" "w-3 h-3 text-iconNeutral"
+    span_ [class_ "text-xs text-textWeak truncate"] $ toHtml cfg.url
+    div_ [class_ "text-xs text-textWeak flex items-center gap-1.5 flex-wrap"] do
+      toHtml ("every " <> show cfg.scrapeIntervalSeconds <> "s" :: Text)
+      whenJust cfg.lastScrapedAt \t -> span_ [] $ "· scraped " >> localTimeFmt_ "MMM dd, HH:mm" t
+      whenJust cfg.lastStatus \s -> span_ [class_ "truncate max-w-xs", title_ s] $ toHtml ("· " <> s)
+  div_ [class_ "flex items-center gap-1 shrink-0"] do
+    -- Filter the metrics explorer to this target's series (metric_source = service_name,
+    -- which sampleToMetricRecord sets to the config name).
+    a_ [class_ "btn btn-xs btn-ghost", href_ $ "/p/" <> pid.toText <> "/metrics?metric_source=" <> decodeUtf8 (urlEncode True (encodeUtf8 cfg.name))] "View metrics"
+    modalWith_ ("prom-edit-" <> cfg.id.toText) def{boxClass = "p-8"} (Just $ span_ [class_ "btn btn-xs btn-ghost"] "Edit") do
+      div_ [class_ "flex flex-col gap-5"] do
+        div_ do
+          h2_ [class_ "text-textStrong text-xl font-semibold"] "Edit Prometheus target"
+          p_ [class_ "text-sm text-textWeak mt-1"] "Update how Monoscope scrapes this endpoint. Changes take effect on the next scrape."
+        form_ [hxPost_ $ "/p/" <> pid.toText <> "/settings/prometheus/" <> cfg.id.toText <> "/edit", class_ "flex flex-col gap-4", hxTarget_ "#prometheus-targets", hxSwap_ "outerHTML"]
+          $ prometheusFields_ pid ("prom-edit-" <> cfg.id.toText) "Save changes" (Just cfg)
+    button_ [class_ "btn btn-xs btn-ghost", hxPatch_ $ "/p/" <> pid.toText <> "/settings/prometheus/" <> cfg.id.toText, hxTarget_ "#prometheus-targets", hxSwap_ "outerHTML"] $ toHtml (bool "Resume" "Pause" cfg.enabled :: Text)
+    button_ [class_ "btn btn-xs btn-ghost text-textError", hxDelete_ $ "/p/" <> pid.toText <> "/settings/prometheus/" <> cfg.id.toText, hxTarget_ "#prometheus-targets", hxSwap_ "outerHTML", hxConfirm_ "Remove this Prometheus target?"] "Delete"
 
 
 ----------------------------------------------------------------------
