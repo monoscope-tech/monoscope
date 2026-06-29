@@ -63,6 +63,7 @@ module Models.Telemetry.Telemetry (
   getMetricLabelValues,
   getTraceShapes,
   getMetricServiceNames,
+  metricServiceNameFromResource,
   SpanEvent (..),
   SpanLink (..),
   atMapText,
@@ -822,11 +823,30 @@ bulkInsertMetrics metrics = checkpoint "bulkInsertMetrics" $ unless (V.null metr
           MetricRecord{projectId, metricName, metricType, metricUnit, metricDescription, metricTime, timestamp, attributes, resource, instrumentationScope, metricValue, exemplars, flags, aggregationTemporality, isMonotonic, messageSizeBytes} = m
        in [HI.sql|(#{projectId}, #{metricName}, #{metricType}, #{metricUnit}, #{metricDescription}, #{metricTime}, #{timestamp}, #{attributes}, #{resource}, #{instrumentationScope}, #{metricValue}, #{exemplars}, #{flags}, #{nValue}, #{nSum}, #{nCount}, #{nBucketCounts}, #{nExplicitBounds}, #{nPointMin}, #{nPointMax}, #{nQuantiles}, #{aggregationTemporality}, #{isMonotonic}, #{messageSizeBytes})|]
     metaTuple (m :: MetricRecord) =
-      let svc = fromMaybe "unknown" $ lookupValueText m.resource "service.name"
+      let svc = metricServiceNameFromResource m.metricName m.resource
           MetricRecord{projectId, metricName, metricType, metricUnit, metricDescription} = m
        in (projectId, metricName, metricType, metricUnit, metricDescription, svc)
     metaRowSql (pid, mName, mType, mUnit, mDesc, svc) =
       [HI.sql|(#{pid}, #{mName}, #{mType}, #{mUnit}, #{mDesc}, #{svc})|]
+
+
+metricServiceNameFromResource :: Text -> AE.Value -> Text
+metricServiceNameFromResource metricName resource =
+  fromMaybe "unknown" $
+    lookupValueText resource "service.name"
+      <|> nestedText ["service", "name"] resource
+      <|> nestedText ["container", "name"] resource
+      <|> lookupValueText resource "compose_service"
+      <|> if "system." `T.isPrefixOf` metricName then Just "SYSTEM" else Nothing
+  where
+    nestedText :: [Text] -> AE.Value -> Maybe Text
+    nestedText path (AE.Object obj) = do
+      val <- getNestedValue path (KEM.toMapText obj)
+      case val of
+        AE.String t -> Just t
+        AE.Number n -> Just $ show n
+        _ -> Nothing
+    nestedText _ _ = Nothing
 
 
 -- | Fixed namespace for the content-derived (v5) row ids below. Arbitrary but

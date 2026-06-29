@@ -1126,6 +1126,7 @@ test-suite unit-tests
       Data.Effectful.HasqlSpec
       Data.Effectful.NotifySpec
       Models.Telemetry.DeterministicIdSpec
+      Models.Telemetry.MetricServiceNameSpec
       Pkg.DrainSpec
       Pkg.Parser.ExprSpec
       Pkg.ParserSpec
