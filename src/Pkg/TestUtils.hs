@@ -398,12 +398,13 @@ ensureTemplateDatabase connInfo templateDbName = do
         void
           $ execute
             templateConn
+            -- 'GraduatedPricing' is the real paid plan the checkout flow writes (see
+            -- createStripeCheckoutSession). payment_plan is open-valued; only "Free"
+            -- (case-insensitively, via isFreeTier) is the free tier — and a free-tier demo
+            -- project would make manageMembersPostH deactivate non-owner members, breaking
+            -- member-management tests (sessionAndProject reads the plan from the session here).
             [sql| UPDATE users.users SET is_sudo = true WHERE id = '00000000-0000-0000-0000-000000000000';
 
-                  -- Seed a real paid plan: 'GraduatedPricing' is the default the checkout flow writes
-                  -- (see createStripeCheckoutSession). payment_plan is open-valued; only "Free"
-                  -- (case-insensitively, via isFreeTier) is the free tier. A free-tier value here would
-                  -- make manageMembersPostH deactivate non-owner members and break member-management tests.
                   INSERT INTO projects.projects (id, title, payment_plan, active, deleted_at, weekly_notif, daily_notif)
                   VALUES ('00000000-0000-0000-0000-000000000000', 'Demo Project', 'GraduatedPricing', true, NULL, true, true)
                   ON CONFLICT (id) DO UPDATE SET payment_plan = 'GraduatedPricing', active = true, deleted_at = NULL;
@@ -710,7 +711,7 @@ requireMinio tr pending action
 sharedTestLogger :: Log.Logger
 -- tolerantLogger (the production wrapper) swallows write-after-shutdown / flush-thread
 -- crashes so a logger hiccup can't take down a parallel worker.
-sharedTestLogger = unsafePerformIO $ Logging.tolerantLogger <$> mkBulkLogger "test-stdout-bulk" (mapM_ (putTextLn . showLogMessage Nothing)) pass
+sharedTestLogger = unsafePerformIO $ Logging.tolerantLogger <$> mkBulkLogger "test-stdout-bulk" (mapM_ (putTextLn . showLogMessage Nothing)) (pure ())
 
 
 withSharedLogger :: (Log.Logger -> m a) -> m a

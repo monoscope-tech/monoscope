@@ -78,5 +78,5 @@ spec = around withTestResources do
       let project = Unsafe.fromJust updatedProject
       project.title `shouldBe` "Test Project CI2"
       project.description `shouldBe` "Test Description2"
-      project.paymentPlan `shouldBe` "FREE"
+      project.paymentPlan `shouldBe` "GraduatedPricing"
       project.timeZone `shouldBe` "Africa/Accra"
