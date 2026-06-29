@@ -5,6 +5,7 @@ module Models.Apis.PrometheusScrapeConfigs (
   updateConfig,
   configsByProjectId,
   getConfig,
+  getConfigByProject,
   deleteConfig,
   setEnabled,
   toggleEnabled,
@@ -91,12 +92,20 @@ updateConfig pid cid name url interval authHeader extraLabels =
             WHERE id = #{cid} AND project_id = #{pid}|]
 
 
-configsByProjectId :: DB es => Projects.ProjectId -> Eff es [PrometheusScrapeConfig]
-configsByProjectId pid = Hasql.interp ([HI.sql|SELECT |] <> selectCols <> [HI.sql| FROM apis.prometheus_scrape_configs WHERE project_id = #{pid} ORDER BY created_at DESC|])
+configsByProjectId :: DB es => Projects.ProjectId -> Eff es (V.Vector PrometheusScrapeConfig)
+configsByProjectId pid = V.fromList <$> Hasql.interp ([HI.sql|SELECT |] <> selectCols <> [HI.sql| FROM apis.prometheus_scrape_configs WHERE project_id = #{pid} ORDER BY created_at DESC|])
 
 
+-- | Unscoped lookup — only for trusted internal callers that already hold a claimed id
+-- (the background scrape worker). Request handlers must use 'getConfigByProject'.
 getConfig :: DB es => PrometheusScrapeConfigId -> Eff es (Maybe PrometheusScrapeConfig)
 getConfig cid = Hasql.interpOne ([HI.sql|SELECT |] <> selectCols <> [HI.sql| FROM apis.prometheus_scrape_configs WHERE id = #{cid}|])
+
+
+-- | Project-scoped lookup for request handlers, so a foreign id can never load another
+-- project's row (and its auth token) into the request context.
+getConfigByProject :: DB es => Projects.ProjectId -> PrometheusScrapeConfigId -> Eff es (Maybe PrometheusScrapeConfig)
+getConfigByProject pid cid = Hasql.interpOne ([HI.sql|SELECT |] <> selectCols <> [HI.sql| FROM apis.prometheus_scrape_configs WHERE id = #{cid} AND project_id = #{pid}|])
 
 
 deleteConfig :: DB es => Projects.ProjectId -> PrometheusScrapeConfigId -> Eff es Int64

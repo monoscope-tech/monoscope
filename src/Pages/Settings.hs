@@ -58,7 +58,7 @@ import Data.ByteArray qualified as BA
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
 import Data.CaseInsensitive qualified as CI
-import Data.Char (isDigit)
+import Data.Char (isDigit, isHexDigit)
 import Data.Default
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Notify qualified as Notify
@@ -467,7 +467,7 @@ instance ToHtml PrometheusMut where
 prometheusGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders PrometheusGet)
 prometheusGetH pid = do
   (_, _, bw) <- mkPageCtx pid
-  cfgs <- V.fromList <$> PromCfg.configsByProjectId pid
+  cfgs <- PromCfg.configsByProjectId pid
   addRespHeaders $ PrometheusGet $ PageCtx bw{pageTitle = "Prometheus", isSettingsPage = True} (pid, cfgs)
 
 
@@ -509,6 +509,8 @@ validateScrapeUrl raw
 -- [True,False,False,False]
 -- >>> map safeScrapeUrl ["http://2130706433/m", "http://0177.0.0.1/m", "http://localhost./m", "http://172.160.0.1/m"]
 -- [False,False,False,True]
+-- >>> map safeScrapeUrl ["http://0x7f000001/m", "http://0x7f.0x0.0x0.0x1/m"]
+-- [False,False]
 -- >>> map safeScrapeUrl ["http://[fe9f::1]/m", "http://[fc00::1]/m", "http://[2001:db8::1]/m"]
 -- [False,False,True]
 safeScrapeUrl :: Text -> Bool
@@ -528,6 +530,7 @@ safeScrapeUrl u = case parseURI (toString (T.strip u)) of
             || any (`T.isPrefixOf` ip6) ["::1", "fc", "fd", "fe8", "fe9", "fea", "feb", "::ffff:"] -- fc/fd = ULA fc00::/7; fe8-feb = link-local fe80::/10
             || internalIPv4 h
             || obfuscatedNumericHost h
+            || hexNumericHost h
     -- A clean dotted-decimal quad whose address is loopback/RFC-1918/link-local/unspecified.
     internalIPv4 h = case traverse octet (T.splitOn "." h) of
       Just [a, b, _, _] -> a `elem` [0, 127] || a == 10 || (a == 169 && b == 254) || (a == 172 && b >= 16 && b <= 31) || (a == 192 && b == 168)
@@ -539,6 +542,12 @@ safeScrapeUrl u = case parseURI (toString (T.strip u)) of
       not (T.null h)
         && T.all (\c -> isDigit c || c == '.') h
         && maybe True ((/= 4) . length) (traverse octet (T.splitOn "." h))
+    -- Reject hex IP literals (0x7f000001, 0x7f.0x0.0x0.0x1): any component is "0x"+hex digits.
+    hexNumericHost h = any hexLiteral (T.splitOn "." h)
+      where
+        hexLiteral p = case T.stripPrefix "0x" p of
+          Just rest -> not (T.null rest) && T.all isHexDigit rest
+          Nothing -> False
     octet o = do
       guard $ not (T.null o) && (T.length o == 1 || T.head o /= '0') -- reject leading-zero (octal) octets
       n <- readMaybe (toString o) :: Maybe Int
@@ -546,30 +555,36 @@ safeScrapeUrl u = case parseURI (toString (T.strip u)) of
 
 
 prometheusPostH :: Projects.ProjectId -> PrometheusForm -> ATAuthCtx (RespHeaders PrometheusMut)
-prometheusPostH pid form = promSave pid form "Added" \(name, url, interval, authH, labels) -> PromCfg.insertConfig pid name url interval authH labels
+prometheusPostH pid form = promSave pid form "Added" Nothing \(name, url, interval, authH, labels) -> PromCfg.insertConfig pid name url interval authH labels
 
 
 prometheusUpdateH :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfigId -> PrometheusForm -> ATAuthCtx (RespHeaders PrometheusMut)
-prometheusUpdateH pid cid form = promSave pid form "Updated" \(name, url, interval, authH, labels) -> do
+prometheusUpdateH pid cid form = promSave pid form "Updated" (Just cid) \(name, url, interval, authH, labels) -> do
   -- The edit form never echoes the saved token back into the password field, so a blank
   -- auth field means "keep the existing token" — unless "Clear saved token" was ticked.
   keptAuth <- case authH of
     Just t -> pure (Just t)
     Nothing | isJust form.clearAuth -> pure Nothing
-    Nothing -> PromCfg.getConfig cid <&> (>>= (.authHeader))
+    Nothing -> PromCfg.getConfigByProject pid cid <&> (>>= (.authHeader))
   PromCfg.updateConfig pid cid name url interval keptAuth labels
 
 
--- | Shared create/edit flow: validate, persist (insert or update), toast, refresh list.
-promSave :: Projects.ProjectId -> PrometheusForm -> Text -> ((Text, Text, Int, Maybe Text, AE.Value) -> ATAuthCtx Int64) -> ATAuthCtx (RespHeaders PrometheusMut)
-promSave pid form verb persist = do
+-- | Shared create/edit flow. @mSelf@ is the row being edited (Nothing on create) so the
+-- name-uniqueness check can exclude it; the DB UNIQUE(project_id, name) constraint is the
+-- race backstop, this pre-check just turns it into a friendly message.
+promSave :: Projects.ProjectId -> PrometheusForm -> Text -> Maybe PromCfg.PrometheusScrapeConfigId -> ((Text, Text, Int, Maybe Text, AE.Value) -> ATAuthCtx Int64) -> ATAuthCtx (RespHeaders PrometheusMut)
+promSave pid form verb mSelf persist = do
   _ <- Projects.sessionAndProject pid
   case validatePrometheusForm form of
     Left err -> addErrorToast err Nothing
-    Right vals -> do
-      void $ persist vals
-      addSuccessToast (verb <> " Prometheus target") Nothing
-      addTriggerEvent "closeModal" ""
+    Right vals@(name, _, _, _, _) -> do
+      existing <- PromCfg.configsByProjectId pid
+      if V.any (\c -> c.name == name && Just c.id /= mSelf) existing
+        then addErrorToast ("A target named “" <> name <> "” already exists") Nothing
+        else do
+          void $ persist vals
+          addSuccessToast (verb <> " Prometheus target") Nothing
+          addTriggerEvent "closeModal" ""
   prometheusMut pid
 
 
@@ -612,7 +627,7 @@ prometheusToggleH pid cid = do
 
 prometheusMut :: Projects.ProjectId -> ATAuthCtx (RespHeaders PrometheusMut)
 prometheusMut pid = do
-  cfgs <- V.fromList <$> PromCfg.configsByProjectId pid
+  cfgs <- PromCfg.configsByProjectId pid
   addRespHeaders $ PrometheusMut (pid, cfgs)
 
 

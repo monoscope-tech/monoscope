@@ -30,7 +30,7 @@ spec = around withTestResources do
   describe "Prometheus scrape configs" do
     it "ingests a scraped exposition body as metrics, dropping non-finite samples" \tr -> do
       void $ runQueryEffect tr $ PromCfg.insertConfig testPid "api-gw" "http://svc:9090/metrics" 60 Nothing (AE.object ["env" AE..= ("prod" :: Text)])
-      (cfg : _) <- runQueryEffect tr (PromCfg.configsByProjectId testPid)
+      (cfg : _) <- V.toList <$> runQueryEffect tr (PromCfg.configsByProjectId testPid)
       n <- runQueryEffect tr $ PromCfg.ingestScrapedBody cfg frozenTime promBody
       n `shouldBe` 3 -- 2 counter series + 1 gauge; +Inf dropped
       rows <-
@@ -51,7 +51,7 @@ spec = around withTestResources do
       length claimed2 `shouldBe` 0 -- leased within interval ⇒ a second node's claim gets nothing
       -- a disabled target is never claimed even though its interval has elapsed
       void $ runQueryEffect tr $ PromCfg.insertConfig testPid "svc-c" "http://c/metrics" 1 Nothing (AE.object [])
-      (c : _) <- runQueryEffect tr (filter ((== "svc-c") . (.name)) <$> PromCfg.configsByProjectId testPid)
+      (c : _) <- V.toList . V.filter ((== "svc-c") . (.name)) <$> runQueryEffect tr (PromCfg.configsByProjectId testPid)
       void $ runQueryEffect tr $ PromCfg.setEnabled testPid c.id False
       claimed3 <- runQueryEffect tr (PromCfg.claimDueConfigs 50)
       length claimed3 `shouldBe` 0
