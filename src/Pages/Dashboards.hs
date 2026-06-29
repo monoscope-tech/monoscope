@@ -1277,7 +1277,7 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
         alertEndpoint = case dashboardIdM of
           Just dashId -> "/p/" <> pid.toText <> "/widgets/" <> sourceWid <> "/alert?dashboard_id=" <> dashId.toText
           Nothing -> ""
-    div_ [class_ "hidden group-has-[.page-drawer-tab-alerts:checked]/wgtexp:block mt-6"] do
+    div_ [class_ "group/walert hidden group-has-[.page-drawer-tab-alerts:checked]/wgtexp:block mt-6"] do
       widgetAlertConfig_ pid paymentPlan alertFormId alertEndpoint wid sourceWid widgetToUse
 
 
@@ -1291,14 +1291,14 @@ widgetAlertConfig_ _pid paymentPlan alertFormId alertEndpoint chartTargetId widg
     div_ [] do
       h4_ [class_ "font-medium text-textStrong"] "Enable Alert"
       p_ [class_ "text-xs text-textWeak"] "Get notified when this widget's value crosses thresholds"
-    input_ $ [type_ "checkbox", name_ "alertEnabled", class_ "toggle toggle-primary peer", [__|on change if my.checked then remove .hidden from next <form/> else add .hidden to next <form/>|]] <> [checked_ | hasAlert]
+    input_ $ [type_ "checkbox", name_ "alertEnabled", class_ "toggle toggle-primary alert-enable"] <> [checked_ | hasAlert]
   form_
     [ id_ alertFormId
     , hxPost_ alertEndpoint
     , hxSwap_ "none"
     , hxTrigger_ "submit"
     , hxVals_ "js:{teams: window.getTagValues('#teamHandlesInput')}"
-    , class_ $ "flex flex-col gap-3" <> if hasAlert then "" else " hidden"
+    , class_ "flex flex-col gap-3 hidden group-has-[.alert-enable:checked]/walert:flex"
     , [__|on htmx:afterRequest if event.detail.successful set my value to '' then call me.reset() end|]
     ]
     do

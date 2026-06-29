@@ -882,7 +882,7 @@ navbar projectM menuL currUser prePageTitle pageTitle pageTitleSuffix pageTitleM
   nav_ [id_ "main-navbar", class_ "w-full max-md:px-2 max-md:py-1.5 px-4 py-2 flex flex-row flex-wrap border-strokeWeak items-center"] do
     div_ [class_ "flex-1 flex items-center text-textStrong gap-1 min-w-0 overflow-hidden"] do
       whenJust projectM \_ -> do
-        div_ [class_ "md:!hidden max-md:flex group-has-[#mobile-nav-toggle:checked]/pg:max-md:!hidden cursor-pointer text-strokeStrong p-2 -m-2 items-center justify-center", Aria.label_ "Open menu", [__|on click set #mobile-nav-toggle.checked to true|]] $ faSprite_ "side-chevron-left-in-box" "regular" "h-5 w-5 rotate-180 pointer-events-none"
+        label_ [term "for" "mobile-nav-toggle", class_ "md:!hidden max-md:flex group-has-[#mobile-nav-toggle:checked]/pg:max-md:!hidden cursor-pointer text-strokeStrong p-2 -m-2 items-center justify-center", Aria.label_ "Open menu"] $ faSprite_ "side-chevron-left-in-box" "regular" "h-5 w-5 rotate-180 pointer-events-none"
         div_ [class_ "md:!hidden max-md:block group-has-[#mobile-nav-toggle:checked]/pg:max-md:!hidden w-px h-5 bg-strokeWeak ml-2"] ""
       whenJust prePageTitle \pt -> whenJust (find (\a -> fst3 a == pt) menuL) \(_, url, icon) -> do
         a_ ([class_ "max-md:hidden p-1 hover:bg-fillWeak inline-flex items-center justify-center gap-1 rounded-md text-sm", href_ url] <> navTabAttrs) do
@@ -965,7 +965,7 @@ settingsWrapper pid current pageHtml = do
       h1_ [class_ "text-lg pl-3 font-semibold text-textStrong max-md:hidden"] "Settings"
       ul_ [class_ $ "flex max-md:flex-row max-md:flex-nowrap md:flex-col md:mt-4 gap-0.5 w-full " <> navActiveStyles] do
         li_ [class_ "md:hidden shrink-0"]
-          $ div_ [class_ "flex items-center px-2.5 py-2 rounded-lg cursor-pointer text-strokeStrong hover:bg-fillWeak", Aria.label_ "Open menu", [__|on click set #mobile-nav-toggle.checked to true|]]
+          $ label_ [term "for" "mobile-nav-toggle", class_ "flex items-center px-2.5 py-2 rounded-lg cursor-pointer text-strokeStrong hover:bg-fillWeak", Aria.label_ "Open menu"]
           $ faSprite_ "side-chevron-left-in-box" "regular" "shrink-0 h-4.5 w-4.5 rotate-180"
         mapM_ (renderNavBottomItem current) $ navBottomList pid.toText
     main_ [id_ "settings-content", class_ "relative w-full h-full overflow-y-auto"] do
