@@ -706,7 +706,7 @@ requireMinio tr pending action
 sharedTestLogger :: Log.Logger
 -- tolerantLogger (the production wrapper) swallows write-after-shutdown / flush-thread
 -- crashes so a logger hiccup can't take down a parallel worker.
-sharedTestLogger = unsafePerformIO $ Logging.tolerantLogger <$> mkBulkLogger "test-stdout-bulk" (mapM_ (putTextLn . showLogMessage Nothing)) (pure ())
+sharedTestLogger = unsafePerformIO $ Logging.tolerantLogger <$> mkBulkLogger "test-stdout-bulk" (mapM_ (putTextLn . showLogMessage Nothing)) pass
 
 
 withSharedLogger :: (Log.Logger -> m a) -> m a

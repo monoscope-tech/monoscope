@@ -13,13 +13,16 @@ module Models.Apis.PrometheusScrapeConfigs (
   markScraped,
   ingestScrapedBody,
   sampleToMetricRecord,
+  prometheusScrapeOpts,
 ) where
 
+import Control.Lens ((.~))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Default (Default)
 import Data.Effectful.Hasql qualified as Hasql
+import Data.List (partition)
 import Data.OpenApi (ToParamSchema (..), ToSchema (..), declareNamedSchema)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
@@ -36,6 +39,10 @@ import GHC.Records (HasField (getField))
 import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
+import Network.HTTP.Client (managerResponseTimeout, responseTimeoutMicro)
+import Network.HTTP.Client.TLS (tlsManagerSettings)
+import Network.Wreq (defaults, header)
+import Network.Wreq qualified as Wreq
 import Pkg.DeriveUtils (unUUIDId)
 import Pkg.Prometheus qualified as Prom
 import Relude
@@ -158,9 +165,9 @@ markScraped cid status =
 -- silently: the dropped count is logged. Returns the number of samples ingested.
 ingestScrapedBody :: (DB es, Log :> es) => PrometheusScrapeConfig -> UTCTime -> LByteString -> Eff es Int
 ingestScrapedBody cfg now body = do
-  let samples = Prom.parsePrometheus (decodeUtf8 body)
-      records = V.fromList [sampleToMetricRecord cfg now s | s <- samples, Prom.isFiniteSample s]
-      dropped = length samples - V.length records
+  let (finite, nonFinite) = partition Prom.isFiniteSample (Prom.parsePrometheus (decodeUtf8 body))
+      records = V.fromList (map (sampleToMetricRecord cfg now) finite)
+      dropped = length nonFinite
   when (dropped > 0) $ Log.logInfo "Prometheus scrape dropped non-finite samples" (AE.object ["config_id" AE..= cfg.id.toText, "dropped" AE..= dropped])
   Telemetry.bulkInsertMetrics records
   pure (V.length records)
@@ -209,3 +216,23 @@ sampleToMetricRecord cfg now s =
     attrs = AE.Object $ case cfg.extraLabels of
       AE.Object o -> labelMap <> o
       _ -> labelMap
+
+
+-- | Per-scrape HTTP response timeout (µs). A dead/slow endpoint must never wedge a worker.
+prometheusScrapeTimeoutMicros :: Int
+prometheusScrapeTimeoutMicros = 10 * 1000000
+
+
+-- | wreq Options for a scrape: hard response timeout, no redirect following, and an optional
+-- Authorization header. Shared by the background worker and the settings Test button so the
+-- two never drift on timeout or header wiring (the Test button exists to mirror the real scrape).
+prometheusScrapeOpts :: Maybe Text -> Wreq.Options
+prometheusScrapeOpts authHeader =
+  defaults
+    & Wreq.manager
+    .~ Left tlsManagerSettings{managerResponseTimeout = responseTimeoutMicro prometheusScrapeTimeoutMicros}
+      -- Don't follow redirects: http-client (unlike browsers) re-sends Authorization across a
+      -- cross-host 3xx, so a target answering 302 -> attacker could exfiltrate the bearer token.
+      & Wreq.redirects
+    .~ 0
+      & maybe Relude.id (\h -> header "Authorization" .~ [encodeUtf8 h]) authHeader

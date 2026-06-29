@@ -1,6 +1,6 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl, sameSegmentCount, prometheusScrapeOpts) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl, sameSegmentCount) where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
@@ -76,8 +76,6 @@ import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (SeverityLevel (..), generateSummary, insertSystemLog, mkSystemLog)
 import Models.Telemetry.Telemetry qualified as Telemetry
-import Network.HTTP.Client (managerResponseTimeout, responseTimeoutMicro)
-import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.Wreq (defaults, getWith, header, postWith, responseBody)
 import Network.Wreq qualified as Wreq
 import OddJobs.ConfigBuilder (mkConfig)
@@ -3039,26 +3037,6 @@ prometheusScrapeBatchLimit :: Int
 prometheusScrapeBatchLimit = 1000
 
 
--- | Per-scrape HTTP response timeout (µs). A dead/slow endpoint must never wedge a worker.
-prometheusScrapeTimeoutMicros :: Int
-prometheusScrapeTimeoutMicros = 10 * 1000000
-
-
--- | wreq Options for a scrape: hard response timeout, no redirect following, and an
--- optional Authorization header. Shared by the worker and the settings Test button so the
--- two never drift on timeout or header wiring (the Test button exists to mirror the real scrape).
-prometheusScrapeOpts :: Maybe Text -> Wreq.Options
-prometheusScrapeOpts authHeader =
-  defaults
-    & Wreq.manager
-    .~ Left tlsManagerSettings{managerResponseTimeout = responseTimeoutMicro prometheusScrapeTimeoutMicros}
-      -- Don't follow redirects: http-client (unlike browsers) re-sends Authorization across a
-      -- cross-host 3xx, so a target answering 302 -> attacker could exfiltrate the bearer token.
-      & Wreq.redirects
-    .~ 0
-      & maybe id (\h -> header "Authorization" .~ [encodeUtf8 h]) authHeader
-
-
 -- | Dispatcher (PrometheusScrapeTick). Atomically leases the due targets — 'claimDueConfigs'
 -- uses @FOR UPDATE SKIP LOCKED@, so running this on every node never double-scrapes — then
 -- fans out one 'PrometheusScrapeOne' job per target. The actual scraping is done by workers
@@ -3085,7 +3063,7 @@ dispatchPrometheusScrapes authCtx = do
 scrapePrometheusTarget :: PromCfg.PrometheusScrapeConfigId -> ATBackgroundCtx ()
 scrapePrometheusTarget cid = whenJustM (PromCfg.getConfig cid) \cfg -> Relude.when cfg.enabled do
   result <- tryAny do
-    resp <- W.getWith (prometheusScrapeOpts cfg.authHeader) (toString cfg.url)
+    resp <- W.getWith (PromCfg.prometheusScrapeOpts cfg.authHeader) (toString cfg.url)
     -- Capture the fallback metricTime *after* the response arrives: a slow endpoint would
     -- otherwise backdate every timestamp-less sample by the scrape latency.
     now <- Time.currentTime

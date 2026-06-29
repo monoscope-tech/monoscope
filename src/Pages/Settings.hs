@@ -110,7 +110,7 @@ import Servant (err400, errBody)
 import System.Config
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
 import Text.Printf (printf)
-import UnliftIO.Exception (tryAny)
+import UnliftIO.Exception (throwIO, try, tryAny)
 import Utils (LoadingSize (..), calculateCycleStartDate, faSprite_, formatUTC, htmxIndicator_)
 import Web.FormUrlEncoded (FromForm)
 import "cryptonite" Crypto.Hash (SHA256)
@@ -555,11 +555,11 @@ safeScrapeUrl u = case parseURI (toString (T.strip u)) of
 
 
 prometheusPostH :: Projects.ProjectId -> PrometheusForm -> ATAuthCtx (RespHeaders PrometheusMut)
-prometheusPostH pid form = promSave pid form "Added" Nothing \(name, url, interval, authH, labels) -> PromCfg.insertConfig pid name url interval authH labels
+prometheusPostH pid form = promSave pid form "Added" \(name, url, interval, authH, labels) -> PromCfg.insertConfig pid name url interval authH labels
 
 
 prometheusUpdateH :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfigId -> PrometheusForm -> ATAuthCtx (RespHeaders PrometheusMut)
-prometheusUpdateH pid cid form = promSave pid form "Updated" (Just cid) \(name, url, interval, authH, labels) -> do
+prometheusUpdateH pid cid form = promSave pid form "Updated" \(name, url, interval, authH, labels) -> do
   -- The edit form never echoes the saved token back into the password field, so a blank
   -- auth field means "keep the existing token" — unless "Clear saved token" was ticked.
   keptAuth <- case authH of
@@ -569,22 +569,26 @@ prometheusUpdateH pid cid form = promSave pid form "Updated" (Just cid) \(name, 
   PromCfg.updateConfig pid cid name url interval keptAuth labels
 
 
--- | Shared create/edit flow. @mSelf@ is the row being edited (Nothing on create) so the
--- name-uniqueness check can exclude it; the DB UNIQUE(project_id, name) constraint is the
--- race backstop, this pre-check just turns it into a friendly message.
-promSave :: Projects.ProjectId -> PrometheusForm -> Text -> Maybe PromCfg.PrometheusScrapeConfigId -> ((Text, Text, Int, Maybe Text, AE.Value) -> ATAuthCtx Int64) -> ATAuthCtx (RespHeaders PrometheusMut)
-promSave pid form verb mSelf persist = do
+-- | Shared create/edit flow. The DB UNIQUE(project_id, name) constraint (migration 0103)
+-- is the real guard: catching its violation here — rather than a pre-check scan that two
+-- concurrent saves can both pass before either inserts — closes the race, saves a roundtrip,
+-- and still turns the collision into a friendly message.
+promSave :: Projects.ProjectId -> PrometheusForm -> Text -> ((Text, Text, Int, Maybe Text, AE.Value) -> ATAuthCtx Int64) -> ATAuthCtx (RespHeaders PrometheusMut)
+promSave pid form verb persist = do
   _ <- Projects.sessionAndProject pid
   case validatePrometheusForm form of
     Left err -> addErrorToast err Nothing
-    Right vals@(name, _, _, _, _) -> do
-      existing <- PromCfg.configsByProjectId pid
-      if V.any (\c -> c.name == name && Just c.id /= mSelf) existing
-        then addErrorToast ("A target named “" <> name <> "” already exists") Nothing
-        else do
-          void $ persist vals
+    Right vals@(name, _, _, _, _) ->
+      try (persist vals) >>= \case
+        -- 0 rows means the edit targeted a row that no longer matches (concurrently deleted,
+        -- or a cid that isn't this project's) — don't claim success for a write that did nothing.
+        Right 0 -> addErrorToast "That Prometheus target no longer exists" Nothing
+        Right _ -> do
           addSuccessToast (verb <> " Prometheus target") Nothing
           addTriggerEvent "closeModal" ""
+        Left e
+          | Hasql.isUniqueViolation e -> addErrorToast ("A target named “" <> name <> "” already exists") Nothing
+          | otherwise -> throwIO e
   prometheusMut pid
 
 
@@ -597,7 +601,7 @@ prometheusTestH pid form = do
   case validateScrapeUrl form.url of
     Left err -> addRespHeaders $ prometheusTestResult (Left err)
     Right url -> do
-      let opts = BJ.prometheusScrapeOpts (mfilter (not . T.null) (T.strip <$> form.authHeader))
+      let opts = PromCfg.prometheusScrapeOpts (mfilter (not . T.null) (T.strip <$> form.authHeader))
       t0 <- Time.currentTime
       res <- tryAny (W.getWith opts (toString url))
       t1 <- Time.currentTime

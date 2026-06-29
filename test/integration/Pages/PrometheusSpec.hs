@@ -7,6 +7,7 @@ import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
+import Pages.Settings (PrometheusForm (..), PrometheusMut (..), prometheusPostH)
 import Pkg.TestUtils
 import Relude
 import Test.Hspec
@@ -55,3 +56,14 @@ spec = around withTestResources do
       void $ runQueryEffect tr $ PromCfg.setEnabled testPid c.id False
       claimed3 <- runQueryEffect tr (PromCfg.claimDueConfigs 50)
       length claimed3 `shouldBe` 0
+
+    -- A duplicate-name save must be caught by the DB UNIQUE(project_id, name) constraint
+    -- (migration 0103) and turned into a friendly error — not a 500 (which is what a missed
+    -- Hasql.isUniqueViolation classification would produce) and not a second row. Drive it
+    -- through prometheusPostH so the handler's try+isUniqueViolation+toast wiring is pinned
+    -- end-to-end: reaching the assertion proves the second save did not throw.
+    it "prometheusPostH catches a duplicate-name save (no 500) and never creates a second row" \tr -> do
+      let form = PrometheusForm{name = "dup", url = "http://example.com/metrics", scrapeInterval = Nothing, authHeader = Nothing, extraLabels = Nothing, clearAuth = Nothing}
+      _ <- testServant tr $ prometheusPostH testPid form
+      (_, PrometheusMut (_, cfgs)) <- testServant tr $ prometheusPostH testPid form
+      V.length (V.filter ((== "dup") . (.name)) cfgs) `shouldBe` 1
