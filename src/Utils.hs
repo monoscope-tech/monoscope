@@ -493,7 +493,7 @@ freeTierUsageBanner pid = \case
 
 checkFreeTierStatus :: (Hasql.Hasql :> es, IOE :> es, Time :> es) => Projects.ProjectId -> Text -> Eff es FreeTierStatus
 checkFreeTierStatus pid paymentPlan =
-  if paymentPlan == "Free"
+  if Projects.isFreeTier paymentPlan
     then do
       now <- Time.currentTime
       count <- fromMaybe (0 :: Int) <$> Hasql.interpOne [HI.sql| SELECT count(*)::BIGINT FROM otel_logs_and_spans WHERE project_id=#{pid.toText} AND timestamp > #{now}::timestamptz - interval '1 day'|]

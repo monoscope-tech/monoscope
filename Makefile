@@ -24,7 +24,7 @@ cypress:
 	set -a && . ./.env && npx cypress run --record
 
 live-reload:
-	ghcid --command 'cabal repl monoscope --ghc-options="-Wno-error=unused-imports -Wno-error=unused-top-binds" --with-compiler=$(GHC)' --test ':run Start.startApp' --warnings
+	ghcid --command 'cabal repl monoscope --ghc-options="-j$(NCPUS) -Wno-error=unused-imports -Wno-error=unused-top-binds" --with-compiler=$(GHC)' --test ':run Start.startApp' --warnings
 
 live-reload-cli:
 	ghcid --command 'cabal repl exe:monoscope --ghc-options="-O0 -Wno-error=unused-imports -Wno-error=unused-top-binds" --with-compiler=$(GHC)' --warnings 2>&1 | tee build-cli.log
@@ -48,7 +48,7 @@ live-test-reload-all:
 TEST_MATCH ?=
 live-test-dev:
 	USE_EXTERNAL_DB=true LOG_LEVEL=attention \
-	ghcid --command 'cabal repl monoscope:test:test-dev --ghc-options="-osuf dyn_o -hisuf dyn_hi -O0" --with-compiler=$(GHC)' \
+	ghcid --command 'cabal repl monoscope:test:test-dev --ghc-options="-j$(NCPUS) -osuf dyn_o -hisuf dyn_hi -O0" --with-compiler=$(GHC)' \
 		--test ':main $(if $(TEST_MATCH),--match $(TEST_MATCH))' --warnings 2>&1 | tee build-test-dev.log
 
 hot-reload:
@@ -67,13 +67,35 @@ watch:
 live-test-reload-cabal:
 	ghcid --test 'cabal test --test-show-details=streaming'
 
-test:
-	# --test-show-details=never - Shows only a summary at the end
-	# --test-show-details=failures - Shows output only for failed tests (after completion)
-	# --test-show-details=always - Shows all test output, but buffers it and displays after the test suite completes
-	# --test-show-details=streaming - Similar to direct, provides real-time output (introduced in newer Cabal versions)
-	#  -test-show-details=direct Cabal streams the test output directly to your terminal in real-time as the tests run.
-	USE_EXTERNAL_DB=true  cabal test -j --ghc-options="-O0"  --test-show-details=never --test-options='--color --jobs=$(NCPUS)'
+# `make test` = the fast default: PROCESS-level sharded integration suite. In-process
+# hspec `parallel` deadlocks on the per-test resource-pool lifecycle (see
+# test/integration/Main.hs), so we run SHARDS copies of the test binary concurrently —
+# each its own RTS running a disjoint shard SEQUENTIALLY (no shared state to race).
+# Fast by default; no env/params to remember.
+test: test-shards
+
+# Build once, then run SHARDS shard processes concurrently. Each shard keeps ~1 test DB
+# live, so SHARDS * ~9 connections must stay under Postgres max_connections — 6 is safe
+# on a stock (100) server; bump SHARDS with the tmpfs DB (`make timescaledb-docker-tmp`,
+# max_connections=200). Per-shard output: build-shard-<i>.log.
+SHARDS ?= 6
+test-shards:
+	cabal build integration-tests --ghc-options="-O0 +RTS -A64m -RTS"
+	@bin=$$(cabal list-bin integration-tests); echo "sharding $(SHARDS)x: $$bin"; \
+	rm -f build-shard-*.log; \
+	for i in $$(seq 0 $$(( $(SHARDS) - 1 ))); do \
+	  ( start=$$(date +%s); SHARD_INDEX=$$i SHARD_TOTAL=$(SHARDS) USE_EXTERNAL_DB=true LOG_LEVEL=attention \
+	    $$bin --color > build-shard-$$i.log 2>&1; echo "[shard-time] $$(( $$(date +%s) - start ))s" >> build-shard-$$i.log ) & \
+	done; wait; \
+	echo "=== per-shard (wall-clock | result) — wide spreads ⇒ rebalance ==="; \
+	for i in $$(seq 0 $$(( $(SHARDS) - 1 ))); do \
+	  printf "shard %s: %-6s | %s\n" "$$i" "$$(sed -n 's/.*\[shard-time\] //p' build-shard-$$i.log | tail -1)" "$$(grep -hE 'examples?, [0-9]+ failures?' build-shard-$$i.log | tail -1)"; \
+	done; \
+	green=$$(grep -lE "examples?, 0 failures" build-shard-*.log | wc -l | tr -d ' '); \
+	if [ "$$green" -ne $(SHARDS) ] || grep -qE "[1-9][0-9]* failures?|error:|Interrupted" build-shard-*.log; then \
+	  echo "SHARDED RUN FAILED ($$green/$(SHARDS) shards green) — failing shard output:"; \
+	  for f in build-shard-*.log; do grep -qE "examples?, 0 failures" "$$f" || { echo "### $$f"; grep -E "✘| [0-9]+\) |error:|but got|expected|Interrupted" "$$f" | head -20; }; done; exit 1; \
+	else echo "ALL SHARDS GREEN ($$green/$(SHARDS))"; fi
 
 test-unit:
 	cabal test unit-tests -j --ghc-options="-O0"  --test-show-details=direct --test-options='--color --jobs=$(NCPUS)'
@@ -164,7 +186,7 @@ timescaledb-docker-tmp:
 	docker run -it --rm --name=monoscope -p 5432:5432/tcp \
 		-e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=monoscope \
 		-e TZ=UTC \
-		--mount type=tmpfs,destination=/var/lib/postgresql/data,tmpfs-size=1G \
+		--mount type=tmpfs,destination=/home/postgres/pgdata,tmpfs-size=2G \
 		--user root \
 		--entrypoint /bin/bash \
 		docker.io/timescale/timescaledb-ha:pg16-all \

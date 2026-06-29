@@ -267,7 +267,7 @@ buildLiveReportEmailHtml pid project userName = do
       anomalies' = V.fromList $ Issues.toIssueSummary <$> anomalies
       topPatterns = V.fromList $ patterns <&> \p -> (p.logPattern, p.occurrenceCount, LogPatterns.sourceFieldLabel p.sourceField)
   let reportUrl = "/p/" <> pid.toText <> "/reports"
-      freeTierExceeded = project.paymentPlan == "FREE" && totalRequest > 5000
+      freeTierExceeded = Projects.isFreeTier project.paymentPlan && totalRequest > 5000
   renderWeeklyEmail reportUrl project pid userName startTime currentTime totalEvents totalErrors eventsChangePct errorsChangePct anomalies' performance slowQueries topPatterns freeTierExceeded
 
 

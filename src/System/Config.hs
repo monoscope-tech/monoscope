@@ -17,6 +17,7 @@ import Database.PostgreSQL.Simple qualified as PG
 import Database.PostgreSQL.Simple.Migration qualified as Migrations
 import Effectful
 import Effectful.Fail (Fail)
+import Effectful.Ki qualified as Ki
 import Log (LogLevel (..))
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
@@ -295,6 +296,10 @@ data AuthContext = AuthContext
   , traceSessionCache :: TraceSessionCache.TraceSessionCache
   , tfCircuit :: ExtractionWorker.CircuitBreaker
   , config :: EnvConfig
+  , -- App-lifetime ki scope for fire-and-forget work that must outlive the request
+    -- (Slack/Twilio handlers ACK fast, then process in the background). Nothing in
+    -- non-server contexts (tests); see 'System.Tracing.forkBackground'.
+    backgroundScope :: Maybe Ki.Scope
   }
   deriving stock (Generic)
 
@@ -374,6 +379,7 @@ configToEnv config = do
       , traceSessionCache
       , tfCircuit
       , config
+      , backgroundScope = Nothing
       }
 
 

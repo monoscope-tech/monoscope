@@ -13,6 +13,7 @@ import Data.Vector qualified as V
 import Effectful
 import Effectful.Concurrent (runConcurrent)
 import Effectful.Fail (runFailIO)
+import Effectful.Ki qualified as Ki
 import Effectful.Time (runTime)
 import Log (LogLevel (..), runLogT)
 import Log qualified as LogBase
@@ -34,7 +35,7 @@ import Servant (FromHttpApiData (..))
 import Servant qualified
 import Servant.Server.Generic (genericServeTWithContext)
 import System.Config (
-  AuthContext (config, extractionWorker, jobsPool, pool, timefusionPgPool),
+  AuthContext (backgroundScope, config, extractionWorker, jobsPool, pool, timefusionPgPool),
   EnvConfig (..),
   getAppContext,
  )
@@ -52,11 +53,13 @@ runMonoscope tp =
   Safe.bracket
     (getAppContext & runFailIO & runEff)
     (runEff . shutdownMonoscope)
-    \env -> runEff . runTime . runConcurrent $ do
+    \env -> runEff . runTime . runConcurrent . Ki.runStructuredConcurrency $ Ki.scoped \backgroundScope -> do
       let baseURL = "http://localhost:" <> show env.config.port
       liftIO $ blueMessage $ "Starting Monoscope server on " <> baseURL
       let withLogger = Logging.makeLogger env.config.loggingDestination
-      withLogger \l -> runServer l env tp
+      -- App-lifetime scope for fire-and-forget handler work (Slack/Twilio). The scope
+      -- lives until shutdown, then ki reaps any still-running background fibers.
+      withLogger \l -> runServer l env{backgroundScope = Just backgroundScope} tp
 
 
 optionsMiddleware :: Middleware

@@ -10,15 +10,20 @@ module System.Tracing (
 
   -- * Cross-thread context propagation
   forkWithCtx,
+  forkBackground,
 
   -- * Common attribute builders
   batchSpanAttrs,
 ) where
 
+import Data.Aeson qualified as AE
 import Data.HashMap.Strict qualified as HM
 import Effectful
+import Effectful.Concurrent (Concurrent, forkIO)
 import Effectful.Dispatch.Dynamic
 import Effectful.Ki qualified as Ki
+import Effectful.Log (Log)
+import Effectful.Log qualified as Log
 import Effectful.TH
 import OpenTelemetry.Attributes (Attribute)
 import OpenTelemetry.Attributes qualified as OA
@@ -33,7 +38,7 @@ import OpenTelemetry.Trace (
  )
 import OpenTelemetry.Trace qualified as Trace
 import Relude hiding (span)
-import UnliftIO.Exception (bracket, finally, withException)
+import UnliftIO.Exception (bracket, finally, tryAny, withException)
 
 
 data Tracing :: Effect where
@@ -90,6 +95,24 @@ forkWithCtx scope action = do
       (liftIO $ Context.attachContext ctx)
       (liftIO . Context.detachContext)
       (const action)
+
+
+-- | Fire-and-forget a task that must outlive the current request (e.g. Slack/Twilio
+-- handlers that ACK fast then do the real work). Uses the app-lifetime ki scope when one
+-- is present (prod) so the thread is tracked and reaped on shutdown; falls back to an
+-- untracked fork only in non-server contexts (tests) where no scope exists. The action is
+-- always guarded so a thrown exception is logged at attention, never silently dropped.
+forkBackground
+  :: (Concurrent :> es, IOE :> es, Ki.StructuredConcurrency :> es, Log :> es)
+  => Maybe Ki.Scope -> Text -> Eff es () -> Eff es ()
+forkBackground scopeM label action =
+  case scopeM of
+    Just scope -> void $ forkWithCtx scope guardedAction
+    Nothing -> void $ forkIO guardedAction
+  where
+    guardedAction =
+      tryAny action >>= \r -> whenLeft_ r \e ->
+        Log.logAttention (label <> " background task failed") (AE.object ["error" AE..= show @Text e])
 
 
 -- | Standard attributes for batch-processing root spans (queue consumers,

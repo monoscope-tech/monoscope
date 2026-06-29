@@ -57,6 +57,7 @@ import Effectful.Reader.Static (ask)
 import Effectful.Reader.Static qualified as Eff
 import Effectful.Time qualified as Time
 import GHC.Exception (ErrorCall (..))
+import Ki qualified as RawKi
 import Log (LogLevel (..), Logger, runLogT)
 import Log qualified as LogBase
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
@@ -136,9 +137,11 @@ noteProfilingStrindex x = unsafePerformIO $ do
   pure x
 
 
--- | Initialize periodic error logging
-initPeriodicErrorLogging :: Logger -> IO ()
-initPeriodicErrorLogging logger = void $ forkIO $ forever $ do
+-- | Initialize periodic error logging. Runs on the app-lifetime ki scope when present so
+-- the daemon is reaped on shutdown; falls back to an untracked fork only when no scope
+-- exists (non-server contexts).
+initPeriodicErrorLogging :: Maybe Ki.Scope -> Logger -> IO ()
+initPeriodicErrorLogging scopeM logger = onScope $ forever $ do
   threadDelay (60 * 1000000) -- 60 seconds
   (errors, dropped) <- atomicModifyIORef' wireTypeErrorsRef ((HM.empty, 0),)
   unless (HM.null errors) $ do
@@ -160,6 +163,10 @@ initPeriodicErrorLogging logger = void $ forkIO $ forever $ do
             ++ ["dropped_categories" AE..= dropped | dropped > 0]
     runLogT "monoscope" logger LogAttention
       $ LogBase.logAttention "Wire type errors summary" errorDetails
+  where
+    onScope a = case scopeM of
+      Just scope -> void $ RawKi.fork scope a
+      Nothing -> void $ forkIO a
 
 
 -- | Minimum valid timestamp in nanoseconds (Year 2000)
@@ -1025,7 +1032,7 @@ convertResourceLogsToOtelLogs !fallbackTime !projectCaches !pids resourceLogs =
             Just cache ->
               -- Check if project has exceeded daily limit for free tier
               let !totalDailyEvents = fromIntegral cache.dailyEventCount + fromIntegral cache.dailyMetricCount
-                  !isFreeTier = cache.paymentPlan == "Free"
+                  !isFreeTier = Projects.isFreeTier cache.paymentPlan
                   !hasExceededLimit = isFreeTier && totalDailyEvents >= freeTierDailyMaxEvents
                in if hasExceededLimit
                     then [] -- Discard events for projects that exceeded limits
@@ -1127,7 +1134,7 @@ convertResourceSpansToOtelLogs !fallbackTime !projectCaches !pids !resourceSpans
               case HM.lookup pid projectCaches of
                 Just cache ->
                   let !totalDailyEvents = toInteger cache.dailyEventCount + toInteger cache.dailyMetricCount
-                      !isFreeTier = cache.paymentPlan == "Free"
+                      !isFreeTier = Projects.isFreeTier cache.paymentPlan
                       !hasExceededLimit = isFreeTier && totalDailyEvents >= freeTierDailyMaxEvents
                    in if hasExceededLimit then [] else convertScopeSpansToOtelLogs fallbackTime pid (Just $ rs ^. PTF.resource) rs
                 Nothing -> []
@@ -1329,7 +1336,7 @@ convertResourceMetricsToMetricRecords !fallbackTime !projectCaches !pid !resourc
   case HM.lookup pid projectCaches of
     Just cache ->
       let !totalDailyEvents = fromIntegral cache.dailyEventCount + fromIntegral cache.dailyMetricCount
-          !isFreeTier = cache.paymentPlan == "Free"
+          !isFreeTier = Projects.isFreeTier cache.paymentPlan
           !hasExceededLimit = isFreeTier && totalDailyEvents >= freeTierDailyMaxEvents
        in if hasExceededLimit
             then []
@@ -1467,7 +1474,7 @@ convertMetricToMetricRecords fallbackTime pid resourceM scopeM metric =
 
 runServer :: Logger -> AuthContext -> TracerProvider -> IO ()
 runServer appLogger appCtx tp = do
-  initPeriodicErrorLogging appLogger
+  initPeriodicErrorLogging appCtx.backgroundScope appLogger
   runServerWithHandlers def config (services appLogger appCtx tp)
   where
     serverHost = "0.0.0.0"
@@ -1696,7 +1703,7 @@ isFreeTierExceededCached appCtx = \case
       Just pid -> do
         cacheM <- Cache.lookup appCtx.projectCache pid
         pure $ case cacheM of
-          Just pc -> pc.paymentPlan == "Free" && pc.dailyEventCount >= fromInteger freeTierDailyMaxEvents
+          Just pc -> Projects.isFreeTier pc.paymentPlan && pc.dailyEventCount >= fromInteger freeTierDailyMaxEvents
           Nothing -> False
 
 

@@ -7,9 +7,10 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.Telemetry qualified as Telemetry
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
-import ProcessMessage (processMessages)
+import ProcessMessage (processMessages, processSpanToEntities)
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldBe, shouldContain)
@@ -21,6 +22,22 @@ pid = UUIDId UUID.nil
 
 spec :: Spec
 spec = around withTestResources do
+  describe "processSpanToEntities" do
+    -- Regression: an unparseable project_id used to be `Unsafe.fromJust . UUID.fromText`,
+    -- crashing the whole ingestion batch. The owning ProjectId is now threaded in typed,
+    -- so the span's own project_id text is never parsed and a garbage value can't crash.
+    it "does not crash on an unparseable project_id and stamps the threaded ProjectId" $ \_ -> do
+      now <- getCurrentTime
+      let badSpan =
+            Telemetry.OtelLogsAndSpans
+              { project_id = "not-a-uuid", id = "", timestamp = now, observed_timestamp = Nothing, context = Nothing, level = Nothing
+              , severity = Nothing, body = Nothing, attributes = Nothing, resource = Nothing, hashes = Nothing, kind = Nothing
+              , status_code = Nothing, status_message = Nothing, start_time = now, end_time = Nothing, events = Nothing, links = Nothing
+              , duration = Nothing, name = Nothing, parent_id = Nothing, summary = V.empty, date = now, errors = Nothing, message_size_bytes = 0
+              }
+          (mEndpoint, _hashes, _) = processSpanToEntities HashMap.empty Projects.defaultProjectCache pid badSpan UUID.nil
+      fmap (.projectId) mEndpoint `shouldBe` Just pid
+
   describe "process request to db" do
     it "test processing raw request message string" $ \tr -> do
       currentTime <- getCurrentTime

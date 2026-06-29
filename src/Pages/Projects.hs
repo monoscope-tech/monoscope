@@ -118,7 +118,7 @@ listProjectsGetH = do
 
   projects <- V.fromList <$> Projects.selectProjectsForUser sess.persistentSession.userId
   let demoProject =
-        (def :: Projects.Project')
+        (def :: Projects.ProjectListItem)
           { Projects.title = project.title
           , Projects.description = project.description
           , Projects.createdAt = project.createdAt
@@ -129,7 +129,7 @@ listProjectsGetH = do
     else addRespHeaders $ ListProjectsGet $ PageCtx bwconf (projects, demoProject, appCtx.env.showDemoProject)
 
 
-newtype ListProjectsGet = ListProjectsGet {unwrap :: PageCtx (V.Vector Projects.Project', Projects.Project', Bool)}
+newtype ListProjectsGet = ListProjectsGet {unwrap :: PageCtx (V.Vector Projects.ProjectListItem, Projects.ProjectListItem, Bool)}
   deriving stock (Show)
 
 
@@ -138,7 +138,7 @@ instance ToHtml ListProjectsGet where
   toHtmlRaw = toHtml
 
 
-listProjectsBody :: Maybe Projects.Session -> V.Vector Projects.Project' -> Projects.Project' -> Bool -> Html ()
+listProjectsBody :: Maybe Projects.Session -> V.Vector Projects.ProjectListItem -> Projects.ProjectListItem -> Bool -> Html ()
 listProjectsBody sessM projects demoProject showDemoProject = do
   nav_ [class_ "fixed top-0 left-0 right-0 bg-bgBase border-b border-strokeWeak z-50"] do
     headerRowPad_ [] do
@@ -174,7 +174,7 @@ listProjectsBody sessM projects demoProject showDemoProject = do
       div_ [class_ "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"] $ projectCard_ demoProject
 
 
-projectCard_ :: Projects.Project' -> Html ()
+projectCard_ :: Projects.ProjectListItem -> Html ()
 projectCard_ project = do
   div_ [class_ "surface-raised hover:shadow-md transition-shadow duration-200 overflow-hidden group"] do
     a_ [href_ ("/p/" <> project.id.toText), class_ "block"] do
@@ -694,7 +694,7 @@ manageMembersPostH pid onboardingM form = do
     $ ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
 
   whenJust (nonEmpty deletedUAndP) $ void . ProjectMembers.softDeleteProjectMembers
-  when (project.paymentPlan == "Free") $ void $ ProjectMembers.deactivateNonOwnerMembers pid
+  when (Projects.isFreeTier project.paymentPlan) $ void $ ProjectMembers.deactivateNonOwnerMembers pid
   unless (null uAndPNew)
     $ Projects.logAuditS pid Projects.AEMemberAdded sess
     $ Just
@@ -708,7 +708,7 @@ manageMembersPostH pid onboardingM form = do
       redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=Integration"
       addRespHeaders $ ManageMembersPost (pid, projMembersLatest, project.paymentPlan, teamsCount)
     else do
-      if project.paymentPlan == "Free" && not (null uAndPNew)
+      if Projects.isFreeTier project.paymentPlan && not (null uAndPNew)
         then addSuccessToast "Members invited! Upgrade to enable team access." Nothing
         else addSuccessToast "Updated Members List Successfully" Nothing
       addRespHeaders $ ManageMembersPost (pid, projMembersLatest, project.paymentPlan, teamsCount)
@@ -1061,7 +1061,7 @@ manageMembersBody pid projMembers paymentPlan teamsCount =
     teamTabsHeader_ pid "members" (V.length projMembers) teamsCount
 
     div_ [class_ "space-y-6"] do
-      when (paymentPlan == "Free" && V.length projMembers > 1)
+      when (Projects.isFreeTier paymentPlan && V.length projMembers > 1)
         $ div_ [class_ "bg-fillWarning-weak border border-strokeWarning-weak rounded-xl p-4 flex items-start gap-3"] do
           faSprite_ "triangle-exclamation" "regular" "w-5 h-5 text-iconWarning flex-shrink-0 mt-0.5"
           div_ do
@@ -1264,7 +1264,7 @@ projectOnboardingH = do
   let envCfg = appCtx.config
   sess <- Projects.getSession
   projects <- Projects.selectProjectsForUser sess.persistentSession.userId
-  let projectM = find (\pr -> pr.paymentPlan == "ONBOARDING") projects
+  let projectM = find (\pr -> Projects.isOnboarding pr.paymentPlan) projects
       bwconf = (def :: BWConfig){sessM = Just sess, currProject = Nothing, pageTitle = "New Project", config = appCtx.config}
   case projectM of
     Just p -> do
@@ -1407,7 +1407,7 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = do
       steps = project.onboardingStepsCompleted
       newStepsComp = insertIfNotExist "Pricing" steps
       updatePricing name sid fid oid = Projects.updateProjectPricing pid name sid fid oid newStepsComp
-      handleOnboarding name = when (project.paymentPlan == "ONBOARDING") $ do
+      handleOnboarding name = when (Projects.isOnboarding project.paymentPlan) $ do
         _ <- liftIO $ withResource appCtx.pool \conn -> do
           let fullName = sess.user.firstName <> " " <> sess.user.lastName
               foundUsFrom = fromMaybe "" $ project.questions >>= (`lookupValueText` "foundUsFrom")
@@ -1453,7 +1453,7 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = do
         let (subj, html) = ET.planDowngradedEmail project.title "was cancelled" billingUrl
         users <- Projects.usersByProjectId pid
         forM_ users \u -> notifyPlanChange u.email subj (ET.renderEmail subj html)
-  if project.paymentPlan == "ONBOARDING" || isOnboarding == Just True
+  if Projects.isOnboarding project.paymentPlan || isOnboarding == Just True
     then do
       redirectCS $ "/p/" <> pid.toText <> "/"
       addRespHeaders mempty

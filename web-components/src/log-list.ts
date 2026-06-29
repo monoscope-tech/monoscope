@@ -435,6 +435,9 @@ export class LogList extends LitElement {
     if (since) {
       target = expandSince(since);
       url.searchParams.set('since', target);
+      // Sync the picker dropdown label to the widened range; expandTimeRangeUrl
+      // owns the URL itself, so skipSetParams (the to-branch already does this).
+      window.updateTimePicker({ since: target }, { skipSetParams: true });
     } else if (to) {
       const newFrom = expandFromToRange(url.searchParams.get('from'), to);
       url.searchParams.set('from', newFrom);

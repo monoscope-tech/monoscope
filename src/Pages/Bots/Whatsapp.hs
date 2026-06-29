@@ -10,7 +10,6 @@ import Data.Text qualified as T
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Vector qualified as V
 import Effectful
-import Effectful.Concurrent (forkIO)
 import Effectful.Log qualified as Log
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
@@ -27,8 +26,9 @@ import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (idFromText)
 import Pkg.Parser (parseQueryToAST)
 import Relude
-import System.Config (AuthContext, EnvConfig)
+import System.Config (AuthContext (backgroundScope), EnvConfig)
 import System.Config qualified as Config
+import System.Tracing (forkBackground)
 import System.Types (ATBaseCtx)
 import Utils (toUriStr)
 import Web.Internal.FormUrlEncoded
@@ -57,7 +57,7 @@ whatsappIncomingPostH val = do
           sendWhatsappResponse contentVars val.from envCfg.whatsappDashboardList Nothing
         WidgetsLoad dashboardId skip -> handleDashboard dashboardId skip val p envCfg
         WidgetSelect widgetTitle dashboardId -> handleWidget widgetTitle dashboardId val p envCfg
-        Prompt _ -> void $ forkIO $ handlePrompt val envCfg p
+        Prompt _ -> forkBackground authCtx.backgroundScope ("WhatsApp prompt (" <> val.from <> ")") $ handlePrompt val envCfg p
       pure $ AE.object []
     _ -> pure $ AE.object []
   where

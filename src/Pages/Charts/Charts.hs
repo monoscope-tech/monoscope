@@ -32,7 +32,6 @@ import Pkg.Parser (QueryComponents (finalSummarizeQuery, whereClause), SqlQueryC
 import Pkg.Parser.Stats (Section (..), Sources (..))
 import Pkg.QueryCache qualified as QC
 import Relude
-import Relude.Unsafe qualified as Unsafe
 import Servant.Server (ServerError (errBody), err400)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Tracing (Tracing, withSpan_)
@@ -130,9 +129,12 @@ queryMetrics :: (DB es, Effectful.Error.Static.Error ServerError :> es, Effectfu
 queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (nonNull -> querySQLM) (nonNull -> sinceM) (nonNull -> fromM) (nonNull -> toM) (nonNull -> sourceM) allParams = do
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   now <- Time.currentTime
+  -- project_id is required for every query path; a missing one is a malformed request,
+  -- not a 500 (this used to be `Unsafe.fromJust pidM`, which crashed the handler).
+  pid <- maybe (throwError err400{errBody = "project_id is required"}) pure pidM
   let (fromD, toD, _currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
-  let mappngSQL = variablePresets (maybe "" (.toText) pidM) fromD toD allParams now
-      mappngKQL = variablePresetsKQL (maybe "" (.toText) pidM) fromD toD allParams now
+  let mappngSQL = variablePresets pid.toText fromD toD allParams now
+      mappngKQL = variablePresetsKQL pid.toText fromD toD allParams now
   let parseQuery q = either (\err -> throwError err400{errBody = encodeUtf8 $ "Invalid query: " <> err}) pure (parseQueryToAST $ replacePlaceholders mappngKQL q)
 
   case (queryM, querySQLM) of
@@ -142,7 +144,7 @@ queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (
           $ parseQuery
           $ maybeToMonoid queryM
       let sqlQueryComponents =
-            (defSqlQueryCfg (Unsafe.fromJust pidM) now (parseMaybe pSource =<< sourceM) Nothing)
+            (defSqlQueryCfg pid now (parseMaybe pSource =<< sourceM) Nothing)
               { dateRange = (fromD, toD)
               }
       let (_, qc) = queryASTToComponents sqlQueryComponents queryAST
@@ -152,7 +154,7 @@ queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (
       convertTimestampsToMs
         <$> withChartSpan
           tbl
-          ( chartSpanAttrs tbl sqlQuery respDataType (maybe "" (.toText) pidM)
+          ( chartSpanAttrs tbl sqlQuery respDataType pid.toText
               <> [ ("monoscope.kql.query", OA.toAttribute (maybeToMonoid queryM))
                  , ("monoscope.kql.mode", OA.toAttribute ("sql" :: Text))
                  ]
@@ -165,7 +167,6 @@ queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (
         checkpoint (toAnnotation ("queryMetrics", queryM))
           $ parseQuery
           $ maybeToMonoid queryM
-      let pid = Unsafe.fromJust pidM
       let source = parseMaybe pSource =<< sourceM
       let sqlQueryCfg = (defSqlQueryCfg pid now source Nothing){dateRange = (fromD, toD)}
       -- Scalar aggregates (summarize with no `by` clause) produce a single
