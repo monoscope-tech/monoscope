@@ -31,74 +31,41 @@ userID = Projects.UserId (Unsafe.fromJust $ UUID.fromText "00000000-0000-0000-00
 spec :: Spec
 spec = sequential $ aroundAll withTestResources do
   describe "Members Creation, Update and Consumption" do
-    it "Create member" \tr -> do
-      -- Update project to a paid plan to allow multiple members
+    -- These steps share one DB (aroundAll) and MUST run in order: update/get/delete/re-add
+    -- all build on the member created in the first step. They were separate `it`s, but the
+    -- suite runs randomized, so any order but definition-order broke them. Kept as one
+    -- sequential `it` so the create→update→get→delete→re-add lifecycle can't be reordered.
+    it "creates, updates, gets, deletes, and re-adds a member" \tr -> do
+      -- PAID plan allows multiple members; start from a clean member list.
       _ <- withPool tr.trPool $ PGT.execute [sql|UPDATE projects.projects SET payment_plan = 'PAID' WHERE id = ?|] (Only testPid)
-      -- Clean up any existing test members from other tests (keep only the original test user)
       _ <- withPool tr.trPool $ PGT.execute [sql|DELETE FROM projects.project_members WHERE project_id = ? AND user_id != '00000000-0000-0000-0000-000000000001'|] (Only testPid)
-      pass
-      let member =
-            ManageMembers.ManageMembersForm
-              { emails = ["example@gmail.com"]
-              , permissions = [ProjectMembers.PAdmin]
-              }
-      (_, pg) <-
-        testServant tr $ ManageMembers.manageMembersPostH testPid Nothing member
-      -- Check if the response contains the newly added member
-      p <- postMembers pg
-      "example@gmail.com" `shouldSatisfy` (`elem` (p <&> (.email)))
+      let saveWith perms = postMembers . snd =<< testServant tr (ManageMembers.manageMembersPostH testPid Nothing (ManageMembers.ManageMembersForm{emails = ["example@gmail.com"], permissions = perms}))
+          hasExample ms = "example@gmail.com" `elem` (ms <&> (.email))
 
-    it "Update member permissions" \tr -> do
-      let member =
-            ManageMembers.ManageMembersForm
-              { emails = ["example@gmail.com"]
-              , permissions = [ProjectMembers.PView]
-              }
-      (_, pg) <-
-        testServant tr $ ManageMembers.manageMembersPostH testPid Nothing member
+      -- create
+      created <- saveWith [ProjectMembers.PAdmin]
+      created `shouldSatisfy` hasExample
 
-      -- Check if the member's permission is updated
-      projMembers <- postMembers pg
-      mem <- maybe (fail "example@gmail.com not found in members") pure $ find (\pm -> pm.email == "example@gmail.com") (V.toList projMembers)
+      -- update permission (re-saving the same email updates it in place)
+      updated <- saveWith [ProjectMembers.PView]
+      mem <- maybe (fail "example@gmail.com not found in members") pure $ find (\pm -> pm.email == "example@gmail.com") (V.toList updated)
       mem.permission `shouldBe` ProjectMembers.PView
 
-    it "Get members" \tr -> do
-      (_, pg) <-
-        testServant tr $ ManageMembers.manageMembersGetH testPid
-
-      -- Check if the response contains the expected members
-      -- Note: 2 members expected - the test user from setup + example@gmail.com
-      case pg of
+      -- get: the original test user + example@gmail.com
+      (_, pgGet) <- testServant tr $ ManageMembers.manageMembersGetH testPid
+      case pgGet of
         ManageMembers.ManageMembersGet (PageCtx _ (_, projMembers, _, _)) -> do
-          let emails = (.email) <$> projMembers
-          "example@gmail.com" `shouldSatisfy` (`elem` emails)
+          projMembers `shouldSatisfy` hasExample
           length projMembers `shouldBe` 2
         _ -> fail "Expected ManageMembersGet response"
 
-    it "Delete member" \tr -> do
-      let member =
-            ManageMembers.ManageMembersForm
-              { emails = []
-              , permissions = []
-              }
-      (_, pg) <-
-        testServant tr $ ManageMembers.manageMembersPostH testPid Nothing member
+      -- delete: an empty email list removes the non-owner member
+      deleted <- postMembers . snd =<< testServant tr (ManageMembers.manageMembersPostH testPid Nothing (ManageMembers.ManageMembersForm{emails = [], permissions = []}))
+      deleted `shouldNotSatisfy` hasExample
 
-      -- Check if the member is deleted
-      projMembers <- postMembers pg
-      "example@gmail.com" `shouldNotSatisfy` (`elem` ((.email) <$> projMembers))
-
-    it "Should add member after deletion" \tr -> do
-      let member =
-            ManageMembers.ManageMembersForm
-              { emails = ["example@gmail.com"]
-              , permissions = [ProjectMembers.PAdmin]
-              }
-      (_, pg) <-
-        testServant tr $ ManageMembers.manageMembersPostH testPid Nothing member
-      -- Check if the response contains the newly added member
-      p <- postMembers pg
-      "example@gmail.com" `shouldSatisfy` (`elem` (p <&> (.email)))
+      -- re-add after deletion
+      readded <- saveWith [ProjectMembers.PAdmin]
+      readded `shouldSatisfy` hasExample
 
   describe "Teams Creation, Update and Consumption" do
     let team =
