@@ -63,6 +63,7 @@ module Models.Telemetry.Telemetry (
   getMetricLabelValues,
   getTraceShapes,
   getMetricServiceNames,
+  resourceServiceName,
   metricServiceNameFromResource,
   SpanEvent (..),
   SpanLink (..),
@@ -175,7 +176,23 @@ atMapInt key maybeMap = do
 
 
 spanServiceName :: OtelLogsAndSpans -> Maybe Text
-spanServiceName s = atMapText "service.name" (unAesonTextMaybe s.resource)
+spanServiceName s = resourceServiceName (unAesonTextMaybe s.resource)
+
+
+resourceServiceName :: Maybe (Map Text AE.Value) -> Maybe Text
+resourceServiceName resource =
+  atMapText "service.name" resource
+    <|> flatAttrText "service.name" resource
+
+
+flatAttrText :: Text -> Maybe (Map Text AE.Value) -> Maybe Text
+flatAttrText key maybeMap = do
+  m <- maybeMap
+  val <- Map.lookup key m
+  case val of
+    AE.String t -> Just $ scrubNulText t
+    AE.Number n -> Just $ show n
+    _ -> Nothing
 
 
 data SeverityLevel = SLTrace | SLDebug | SLInfo | SLWarn | SLError | SLFatal
@@ -833,12 +850,15 @@ bulkInsertMetrics metrics = checkpoint "bulkInsertMetrics" $ unless (V.null metr
 metricServiceNameFromResource :: Text -> AE.Value -> Text
 metricServiceNameFromResource metricName resource =
   fromMaybe "unknown" $
-    lookupValueText resource "service.name"
-      <|> nestedText ["service", "name"] resource
+    resourceServiceName (aesonObjectMap resource)
       <|> nestedText ["container", "name"] resource
       <|> lookupValueText resource "compose_service"
       <|> if "system." `T.isPrefixOf` metricName then Just "SYSTEM" else Nothing
   where
+    aesonObjectMap :: AE.Value -> Maybe (Map Text AE.Value)
+    aesonObjectMap (AE.Object obj) = Just $ KEM.toMapText obj
+    aesonObjectMap _ = Nothing
+
     nestedText :: [Text] -> AE.Value -> Maybe Text
     nestedText path (AE.Object obj) = do
       val <- getNestedValue path (KEM.toMapText obj)
@@ -1694,9 +1714,7 @@ atErrorFrom spanObj typ msg stack =
             AE.Object sdkObj -> KEM.lookup "language" sdkObj >>= asText
             _ -> Nothing
         _ -> Nothing
-      serviceName = case resc >>= Map.lookup "service" of
-        Just (AE.Object so) -> KEM.lookup "name" so >>= asText
-        _ -> Nothing
+      serviceName = resourceServiceName resc
       -- Empty (not "unknown") keeps hash inputs stable when runtime detection fails.
       rt = fromMaybe "" tech
       hashes = ErrorPatterns.computeErrorHashes spanObj.project_id serviceName spanObj.name rt typ msg stack
