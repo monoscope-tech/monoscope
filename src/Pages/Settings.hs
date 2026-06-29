@@ -442,6 +442,7 @@ data PrometheusForm = PrometheusForm
   , scrapeInterval :: Maybe Int
   , authHeader :: Maybe Text
   , extraLabels :: Maybe Text
+  , clearAuth :: Maybe Text -- "on" when the "Clear saved token" box is ticked
   }
   deriving stock (Generic)
   deriving anyclass (FromForm)
@@ -499,11 +500,6 @@ validateScrapeUrl raw
     url = T.strip raw
 
 
--- | SSRF floor, used by both save-validation and the Test handler: require an http(s)
--- scheme (case-insensitive) and reject obvious internal hosts — loopback, link-local,
--- and RFC-1918 / ULA literals. This is a literal-host check: a public hostname that
--- *resolves* to an internal IP (DNS rebinding) is not caught here — resolve-and-pin is
--- a worthwhile follow-up for full coverage.
 -- | Reject non-http(s) schemes and hosts that resolve to the internal network
 -- (loopback, link-local, RFC-1918, ULA, IPv4-mapped IPv6, and obfuscated numeric
 -- literals — octal/decimal/short forms), to blunt SSRF via the scrape URL. DNS-rebinding
@@ -513,6 +509,8 @@ validateScrapeUrl raw
 -- [True,False,False,False]
 -- >>> map safeScrapeUrl ["http://2130706433/m", "http://0177.0.0.1/m", "http://localhost./m", "http://172.160.0.1/m"]
 -- [False,False,False,True]
+-- >>> map safeScrapeUrl ["http://[fe9f::1]/m", "http://[fc00::1]/m", "http://[2001:db8::1]/m"]
+-- [False,False,True]
 safeScrapeUrl :: Text -> Bool
 safeScrapeUrl u = case parseURI (toString (T.strip u)) of
   Nothing -> False
@@ -527,7 +525,7 @@ safeScrapeUrl u = case parseURI (toString (T.strip u)) of
        in T.null h
             || h
             == "localhost"
-            || any (`T.isPrefixOf` ip6) ["::1", "fc", "fd", "fe80", "::ffff:"] -- fc/fd = full ULA fc00::/7
+            || any (`T.isPrefixOf` ip6) ["::1", "fc", "fd", "fe8", "fe9", "fea", "feb", "::ffff:"] -- fc/fd = ULA fc00::/7; fe8-feb = link-local fe80::/10
             || internalIPv4 h
             || obfuscatedNumericHost h
     -- A clean dotted-decimal quad whose address is loopback/RFC-1918/link-local/unspecified.
@@ -554,9 +552,10 @@ prometheusPostH pid form = promSave pid form "Added" \(name, url, interval, auth
 prometheusUpdateH :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfigId -> PrometheusForm -> ATAuthCtx (RespHeaders PrometheusMut)
 prometheusUpdateH pid cid form = promSave pid form "Updated" \(name, url, interval, authH, labels) -> do
   -- The edit form never echoes the saved token back into the password field, so a blank
-  -- auth field means "keep the existing token" rather than "clear it".
+  -- auth field means "keep the existing token" — unless "Clear saved token" was ticked.
   keptAuth <- case authH of
     Just t -> pure (Just t)
+    Nothing | isJust form.clearAuth -> pure Nothing
     Nothing -> PromCfg.getConfig cid <&> (>>= (.authHeader))
   PromCfg.updateConfig pid cid name url interval keptAuth labels
 
@@ -710,6 +709,9 @@ prometheusFields_ pid modalId submitLabel mcfg = do
               then ("Leave blank to keep the saved token", "A token is saved. Enter a new value to replace it.")
               else ("Bearer <token>", "Sent as the Authorization header on every scrape.")
       field_ "authHeader" "Authorization header" authPh "password" False (Just authHelp) ""
+      when hasToken $ label_ [class_ "flex items-center gap-2 text-sm text-textWeak -mt-1"] do
+        input_ [type_ "checkbox", name_ "clearAuth", class_ "checkbox checkbox-sm"]
+        "Clear saved token"
       field_ "extraLabels" "Static labels" "env=prod, team=core" "text" False (Just "Comma-separated key=value pairs, added to every series from this target.") (maybe "" (labelsToText . (.extraLabels)) mcfg)
   div_ [class_ "flex items-center gap-2 border-t border-strokeWeak pt-4"] do
     button_

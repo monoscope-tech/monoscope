@@ -3084,9 +3084,13 @@ dispatchPrometheusScrapes authCtx = do
 -- backs off instead of retry-storming, and one bad target never fails sibling work.
 scrapePrometheusTarget :: PromCfg.PrometheusScrapeConfigId -> ATBackgroundCtx ()
 scrapePrometheusTarget cid = whenJustM (PromCfg.getConfig cid) \cfg -> Relude.when cfg.enabled do
-  -- Capture the fallback metricTime *after* the response arrives: a slow endpoint would
-  -- otherwise backdate every timestamp-less sample by the scrape latency.
-  tryAny (W.getWith (prometheusScrapeOpts cfg.authHeader) (toString cfg.url) >>= \resp -> Time.currentTime >>= \now -> PromCfg.ingestScrapedBody cfg now (resp ^. responseBody)) >>= \case
+  result <- tryAny do
+    resp <- W.getWith (prometheusScrapeOpts cfg.authHeader) (toString cfg.url)
+    -- Capture the fallback metricTime *after* the response arrives: a slow endpoint would
+    -- otherwise backdate every timestamp-less sample by the scrape latency.
+    now <- Time.currentTime
+    PromCfg.ingestScrapedBody cfg now (resp ^. responseBody)
+  case result of
     Right n -> void $ PromCfg.markScraped cfg.id ("ok: " <> show n <> " samples")
     Left err -> do
       Log.logWarn "Prometheus scrape failed" (cfg.id.toText, cfg.url, show err)

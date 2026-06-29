@@ -183,17 +183,17 @@ parseLabels = go . T.stripStart
                    in if T.null k then go rest' else (k, v) : go rest'
                 _ -> []
     isLabelNameChar c = c == '_' || isAsciiLower c || isAsciiUpper c || isDigit c
-    -- consume up to the closing unescaped quote, unescaping \\ \" \n
+    -- consume up to the closing unescaped quote, unescaping \\ \" \n (stays in Text)
     takeQuoted = go' ""
       where
         go' acc t = case T.uncons t of
-          Nothing -> (toText (reverse acc), "")
-          Just ('"', rest) -> (toText (reverse acc), rest)
+          Nothing -> (acc, "")
+          Just ('"', rest) -> (acc, rest)
           Just ('\\', rest) -> case T.uncons rest of
-            Just ('n', r) -> go' ('\n' : acc) r
-            Just (c, r) -> go' (c : acc) r
-            Nothing -> (toText (reverse acc), "")
-          Just (c, rest) -> go' (c : acc) rest
+            Just ('n', r) -> go' (T.snoc acc '\n') r
+            Just (c, r) -> go' (T.snoc acc c) r
+            Nothing -> (acc, "")
+          Just (c, rest) -> go' (T.snoc acc c) rest
 
 
 -- | Go-style float literal, including @+Inf@/@-Inf@/@NaN@.
