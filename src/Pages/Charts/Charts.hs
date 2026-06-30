@@ -224,12 +224,20 @@ queryMetricsWithCache authCtx dbSource respDataType pid source queryAST sqlQuery
           let windowSecs = fromIntegral $ QC.slidingWindowSeconds cacheKey.binInterval
           let slidingWindowStart = addUTCTime (negate windowSecs) reqTo
           let trimmed = QC.trimOldData slidingWindowStart merged
-          QC.updateCache cacheKey (slidingWindowStart, reqTo) trimmed originalQuery
+          -- Only advance the watermark when the delta actually succeeded. A failed
+          -- fetch (timeout, TF planning error, dropped conn) is swallowed into an
+          -- empty MetricsData by 'withChartSpan'; advancing cached_to past it would
+          -- orphan the [cachedTo, reqTo] window forever (no later delta revisits it).
+          when (isNothing deltaData.error)
+            $ QC.updateCache cacheKey (slidingWindowStart, reqTo) trimmed originalQuery
           let result = QC.trimToRange trimmed reqFrom reqTo
           refetchUnlessAdequate (slidingWindowStart <= reqFrom) trimmed result
         QC.CacheMiss -> do
           result <- executeQueryWith sqlQueryCfg queryAST
-          QC.updateCache cacheKey (reqFrom, reqTo) result originalQuery
+          -- Don't cache a failed fetch (same reasoning as the partial-hit guard);
+          -- it carries no data, so leave the cache cold and let the next request retry.
+          when (isNothing result.error)
+            $ QC.updateCache cacheKey (reqFrom, reqTo) result originalQuery
           pure result
         QC.CacheBypassed _ -> executeQueryWith sqlQueryCfg queryAST
   where
