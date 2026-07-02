@@ -63,6 +63,8 @@ module Models.Telemetry.Telemetry (
   getMetricLabelValues,
   getTraceShapes,
   getMetricServiceNames,
+  resourceServiceName,
+  metricServiceNameFromResource,
   SpanEvent (..),
   SpanLink (..),
   atMapText,
@@ -174,7 +176,23 @@ atMapInt key maybeMap = do
 
 
 spanServiceName :: OtelLogsAndSpans -> Maybe Text
-spanServiceName s = atMapText "service.name" (unAesonTextMaybe s.resource)
+spanServiceName s = resourceServiceName (unAesonTextMaybe s.resource)
+
+
+resourceServiceName :: Maybe (Map Text AE.Value) -> Maybe Text
+resourceServiceName resource =
+  atMapText "service.name" resource
+    <|> flatAttrText "service.name" resource
+
+
+flatAttrText :: Text -> Maybe (Map Text AE.Value) -> Maybe Text
+flatAttrText key maybeMap = do
+  m <- maybeMap
+  val <- Map.lookup key m
+  case val of
+    AE.String t -> Just $ scrubNulText t
+    AE.Number n -> Just $ show n
+    _ -> Nothing
 
 
 data SeverityLevel = SLTrace | SLDebug | SLInfo | SLWarn | SLError | SLFatal
@@ -825,11 +843,33 @@ bulkInsertMetrics metrics = checkpoint "bulkInsertMetrics" $ unless (V.null metr
           MetricRecord{projectId, metricName, metricType, metricUnit, metricDescription, metricTime, timestamp, attributes, resource, instrumentationScope, metricValue, exemplars, flags, aggregationTemporality, isMonotonic, messageSizeBytes} = m
        in [HI.sql|(#{projectId}, #{metricName}, #{metricType}, #{metricUnit}, #{metricDescription}, #{metricTime}, #{timestamp}, #{attributes}, #{resource}, #{instrumentationScope}, #{metricValue}, #{exemplars}, #{flags}, #{nValue}, #{nSum}, #{nCount}, #{nBucketCounts}, #{nExplicitBounds}, #{nPointMin}, #{nPointMax}, #{nQuantiles}, #{aggregationTemporality}, #{isMonotonic}, #{messageSizeBytes})|]
     metaTuple (m :: MetricRecord) =
-      let svc = fromMaybe "unknown" $ lookupValueText m.resource "service.name"
+      let svc = metricServiceNameFromResource m.metricName m.resource
           MetricRecord{projectId, metricName, metricType, metricUnit, metricDescription} = m
        in (projectId, metricName, metricType, metricUnit, metricDescription, svc)
     metaRowSql (pid, mName, mType, mUnit, mDesc, svc) =
       [HI.sql|(#{pid}, #{mName}, #{mType}, #{mUnit}, #{mDesc}, #{svc})|]
+
+
+metricServiceNameFromResource :: Text -> AE.Value -> Text
+metricServiceNameFromResource metricName resource =
+  fromMaybe "unknown" $
+    resourceServiceName (aesonObjectMap resource)
+      <|> nestedText ["container", "name"] resource
+      <|> lookupValueText resource "compose_service"
+      <|> if "system." `T.isPrefixOf` metricName then Just "SYSTEM" else Nothing
+  where
+    aesonObjectMap :: AE.Value -> Maybe (Map Text AE.Value)
+    aesonObjectMap (AE.Object obj) = Just $ KEM.toMapText obj
+    aesonObjectMap _ = Nothing
+
+    nestedText :: [Text] -> AE.Value -> Maybe Text
+    nestedText path (AE.Object obj) = do
+      val <- getNestedValue path (KEM.toMapText obj)
+      case val of
+        AE.String t -> Just t
+        AE.Number n -> Just $ show n
+        _ -> Nothing
+    nestedText _ _ = Nothing
 
 
 -- | Fixed namespace for the content-derived (v5) row ids below. Arbitrary but
@@ -1677,9 +1717,7 @@ atErrorFrom spanObj typ msg stack =
             AE.Object sdkObj -> KEM.lookup "language" sdkObj >>= asText
             _ -> Nothing
         _ -> Nothing
-      serviceName = case resc >>= Map.lookup "service" of
-        Just (AE.Object so) -> KEM.lookup "name" so >>= asText
-        _ -> Nothing
+      serviceName = resourceServiceName resc
       -- Empty (not "unknown") keeps hash inputs stable when runtime detection fails.
       rt = fromMaybe "" tech
       hashes = ErrorPatterns.computeErrorHashes spanObj.project_id serviceName spanObj.name rt typ msg stack

@@ -48,11 +48,6 @@ jobs:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     container:
       image: ghcr.io/monoscope-tech/monoscope-deps:latest
-      credentials:
-        username: ${{ github.repository_owner }}
-        # Dependabot-triggered runs don't get repo secrets; an empty password
-        # is a template error, so fall back to the workflow token.
-        password: ${{ secrets.GH_TOKEN || github.token }}
       env:
         CABAL_DIR: /root/.cabal
     services:
@@ -200,6 +195,10 @@ jobs:
             git push origin HEAD:${{ github.event.pull_request.head.ref }}
           fi
       - uses: haskell-actions/hlint-run@v2
+        # The previous refactor step can only push fixes on same-repository PRs.
+        # On forks it cannot update the branch, so pre-existing hlint warnings
+        # would fail unrelated external contributions.
+        continue-on-error: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
         with:
           path: src/
           fail-on: warning
