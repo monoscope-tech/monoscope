@@ -11,7 +11,7 @@ jobs:
     name: Build Frontend
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -77,10 +77,10 @@ jobs:
           --health-timeout=3s
           --health-retries=20
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Cache dist-newstyle
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: dist-newstyle
           key: ${{ runner.os }}-container-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}-${{ github.sha }}
@@ -173,7 +173,7 @@ jobs:
       # Pin to the PR head SHA instead of head_ref: head_ref is the branch
       # name, which checkout fetches with a glob refspec that 404s on deleted
       # or fork branches (see i18n-yaml PR fetch failure).
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -207,7 +207,7 @@ jobs:
     name: UI Tests
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
