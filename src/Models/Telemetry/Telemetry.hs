@@ -852,11 +852,11 @@ bulkInsertMetrics metrics = checkpoint "bulkInsertMetrics" $ unless (V.null metr
 
 metricServiceNameFromResource :: Text -> AE.Value -> Text
 metricServiceNameFromResource metricName resource =
-  fromMaybe "unknown" $
-    resourceServiceName (aesonObjectMap resource)
-      <|> nestedText ["container", "name"] resource
-      <|> lookupValueText resource "compose_service"
-      <|> if "system." `T.isPrefixOf` metricName then Just "SYSTEM" else Nothing
+  fromMaybe "unknown"
+    $ resourceServiceName (aesonObjectMap resource)
+    <|> nestedText ["container", "name"] resource
+    <|> lookupValueText resource "compose_service"
+    <|> if "system." `T.isPrefixOf` metricName then Just "SYSTEM" else Nothing
   where
     aesonObjectMap :: AE.Value -> Maybe (Map Text AE.Value)
     aesonObjectMap (AE.Object obj) = Just $ KEM.toMapText obj
