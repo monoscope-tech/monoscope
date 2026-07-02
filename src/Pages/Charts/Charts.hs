@@ -228,7 +228,7 @@ queryMetricsWithCache authCtx dbSource respDataType pid source queryAST sqlQuery
           -- fetch (timeout, TF planning error, dropped conn) is swallowed into an
           -- empty MetricsData by 'withChartSpan'; advancing cached_to past it would
           -- orphan the [cachedTo, reqTo] window forever (no later delta revisits it).
-          when (isNothing deltaData.error)
+          whenNothing_ deltaData.error
             $ QC.updateCache cacheKey (slidingWindowStart, reqTo) trimmed originalQuery
           let result = QC.trimToRange trimmed reqFrom reqTo
           refetchUnlessAdequate (slidingWindowStart <= reqFrom) trimmed result
