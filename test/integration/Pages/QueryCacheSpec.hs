@@ -57,8 +57,7 @@ cachedToFor tr key = withResource tr.trPool \conn -> do
     PG.query
       conn
       [sql|SELECT cached_to FROM query_cache WHERE project_id = ? AND query_hash = ? AND bin_interval = ? AND source = ?|]
-      (key.projectId, key.queryHash, key.binInterval, key.source)
-      :: IO [PG.Only UTCTime]
+      (key.projectId, key.queryHash, key.binInterval, key.source) :: IO [PG.Only UTCTime]
   pure $ PG.fromOnly <$> listToMaybe rows
 
 
