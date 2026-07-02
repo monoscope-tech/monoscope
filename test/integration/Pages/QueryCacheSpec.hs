@@ -57,8 +57,7 @@ cachedToFor tr key = withResource tr.trPool \conn -> do
     PG.query
       conn
       [sql|SELECT cached_to FROM query_cache WHERE project_id = ? AND query_hash = ? AND bin_interval = ? AND source = ?|]
-      (key.projectId, key.queryHash, key.binInterval, key.source) ::
-      IO [PG.Only UTCTime]
+      (key.projectId, key.queryHash, key.binInterval, key.source) :: IO [PG.Only UTCTime]
   pure $ PG.fromOnly <$> listToMaybe rows
 
 
@@ -78,10 +77,14 @@ seedCache tr q (t0, t1, t2) = do
 -- Compare two MetricsData for equivalence including stats
 compareResults :: Charts.MetricsData -> Charts.MetricsData -> Bool
 compareResults a b =
-  a.rowsCount == b.rowsCount
-    && V.length a.dataset == V.length b.dataset
-    && V.toList a.headers == V.toList b.headers
-    && V.toList a.dataset == V.toList b.dataset
+  a.rowsCount
+    == b.rowsCount
+    && V.length a.dataset
+    == V.length b.dataset
+    && V.toList a.headers
+    == V.toList b.headers
+    && V.toList a.dataset
+    == V.toList b.dataset
     && compareStats a.stats b.stats
   where
     compareStats Nothing Nothing = True
@@ -197,6 +200,15 @@ spec = around withTestResources do
       V.length result.dataset `shouldBe` 1
       -- ...and must NOT advance the watermark, so the gap is retried next refresh.
       cachedToFor tr key `shouldReturn` Just t1
+
+    it "does not populate cache when a cache-miss fetch errors" $ \tr -> do
+      clearAllTestData tr
+      let q = "totally_made_up_column == \"x\" | summarize count(*) by bin_auto(timestamp)"
+      sections <- either (fail . toString) pure (parseQueryToAST q)
+      let cfg = (defSqlQueryCfg pid baseTime Nothing Nothing){dateRange = (Just (addUTCTime (-1800) baseTime), Just (addUTCTime 1800 baseTime))}
+          key = QC.generateCacheKey pid Nothing sections cfg
+      _ <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just q) Nothing Nothing (Just (timeAt (-1800))) (Just (timeAt 1800)) Nothing []
+      cachedToFor tr key `shouldReturn` Nothing
 
     -- Counterpart to the guard above: a delta that *succeeds* but legitimately
     -- returns no rows is not a failure, so the watermark must still advance.

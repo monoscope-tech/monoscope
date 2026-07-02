@@ -756,8 +756,8 @@ extractMissingColumn t = tfMatch <|> pgMatch
 
 apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
 apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM queryLibItemTitle queryLibItemID detailWM targetEventM showTraceM hxRequestM hxBoostedM jsonM vizTypeM alertM skipM pTargetM sortByM = do
-  (sess, project, bw) <- mkPageCtx pid
   let source = fromMaybe "spans" sourceM
+  (sess, project, bw) <- mkPageCtx pid
   let summaryCols = T.splitOn "," (fromMaybe "" cols')
   let queryInput = maybeToMonoid queryM'
   let parseError msg = addTriggerEvent "showParseError" (AE.toJSON msg) >> addErrorToast "Error Parsing Query" (Just msg) $> ([], Just msg)
