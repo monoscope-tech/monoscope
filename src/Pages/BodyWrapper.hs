@@ -19,7 +19,7 @@ import PyF
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (FreeTierStatus (..), LoadingSize (..), LoadingType (..), faSprite_, fieldContextMenuItems_, freeTierUsageBanner, loadingIndicatorWith_, loadingIndicator_, navTabAttrs)
+import Utils (FieldAction (..), FreeTierStatus (..), LoadingSize (..), LoadingType (..), faSprite_, fieldContextMenuItems_, freeTierUsageBanner, loadingIndicatorWith_, loadingIndicator_, navTabAttrs, popoverPanel_, popoverTrigger_)
 import Web.I18n qualified as I18n
 
 
@@ -221,8 +221,7 @@ bodyWrapper bcfg child = do
         script_ [src_ $(hashAssetFile "/public/assets/deps/htmx/json-enc-2.js"), defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/deps/htmx/response-targets.js"), defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/deps/htmx/idiomorph-ext.min.js"), defer_ "true"] ("" :: Text)
-        script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/_hyperscript_web0_9_5.min.js"), defer_ "true"] ("" :: Text)
-        script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/_hyperscript_template.js"), defer_ "true"] ("" :: Text)
+        script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/_hyperscript_web0_9_93.min.js"), defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/deps/tagify/tagify.min.js"), defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/deps/echarts/echarts.min.js"), defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/roma-echarts.js"), defer_ "true"] ("" :: Text)
@@ -234,7 +233,7 @@ bodyWrapper bcfg child = do
         script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/popper2_11_4.min.js"), defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/tippy6_3_7.umd.min.js"), defer_ "true"] ("" :: Text)
 
-        when bcfg.config.enableBrowserMonitoring $ script_ [src_ "https://unpkg.com/@monoscopetech/browser@latest/dist/monoscope.min.js"] ("" :: Text)
+        when bcfg.config.enableBrowserMonitoring $ script_ [src_ "https://unpkg.com/@monoscopetech/browser@0.11.6/dist/monoscope.min.js"] ("" :: Text)
 
         -- Flag for widget initialization - set to true after web-components loads
         script_ "window.widgetDepsReady = false;"
@@ -725,20 +724,22 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
     input_ ([type_ "checkbox", class_ "hidden", id_ "sidenav-toggle", [__|on change call setCookie("isSidebarClosed", `${me.checked}`) then send "toggle-sidebar" to <body/>|]] <> [checked_ | sess.isSidebarClosed])
     -- Project picker + Toggle (context + sidebar control)
     div_ [class_ "pt-3.5 flex flex-col group-has-[#sidenav-toggle:checked]/pg:flex-row items-center gap-1 group-has-[#sidenav-toggle:checked]/pg:gap-2 group/ctx"] do
-      div_ [class_ "dropdown block group-has-[#sidenav-toggle:checked]/pg:flex-1 group-has-[#sidenav-toggle:checked]/pg:min-w-0"] do
-        a_
-          [ class_ "flex flex-row text-textStrong hover:bg-fillWeak gap-2 items-center rounded-lg cursor-pointer py-2 justify-center group-has-[#sidenav-toggle:checked]/pg:py-2 group-has-[#sidenav-toggle:checked]/pg:px-2 group-has-[#sidenav-toggle:checked]/pg:border group-has-[#sidenav-toggle:checked]/pg:border-strokeWeak group-has-[#sidenav-toggle:checked]/pg:bg-fillWeaker transition-colors duration-100"
-          , tabindex_ "0"
-          , Aria.haspopup_ "listbox"
-          , Aria.label_ $ "Switch project, current: " <> project.title
-          , term "data-tippy-placement" "right"
-          , term "data-tippy-content" $ project.title <> " — Switch project"
-          ]
+      div_ [class_ "block group-has-[#sidenav-toggle:checked]/pg:flex-1 group-has-[#sidenav-toggle:checked]/pg:min-w-0"] do
+        button_
+          ( [ type_ "button"
+            , class_ "flex flex-row w-full text-textStrong hover:bg-fillWeak gap-2 items-center rounded-lg cursor-pointer py-2 justify-center group-has-[#sidenav-toggle:checked]/pg:py-2 group-has-[#sidenav-toggle:checked]/pg:px-2 group-has-[#sidenav-toggle:checked]/pg:border group-has-[#sidenav-toggle:checked]/pg:border-strokeWeak group-has-[#sidenav-toggle:checked]/pg:bg-fillWeaker transition-colors duration-100"
+            , Aria.haspopup_ "listbox"
+            , Aria.label_ $ "Switch project, current: " <> project.title
+            , term "data-tippy-placement" "right"
+            , term "data-tippy-content" $ project.title <> " — Switch project"
+            ]
+              <> popoverTrigger_ "project-picker-pop"
+          )
           do
             span_ [class_ "w-8 h-8 group-has-[#sidenav-toggle:checked]/pg:w-6 group-has-[#sidenav-toggle:checked]/pg:h-6 rounded-lg group-has-[#sidenav-toggle:checked]/pg:rounded-md bg-fillBrand-weak text-textBrand text-sm group-has-[#sidenav-toggle:checked]/pg:text-xs font-semibold flex items-center justify-center shrink-0"] $ toHtml $ T.take 1 project.title
             span_ [class_ "grow hidden group-has-[#sidenav-toggle:checked]/pg:block overflow-x-hidden whitespace-nowrap truncate"] $ toHtml project.title
             span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex shrink-0"] $ faSprite_ "angles-up-down" "regular" "w-4 text-textWeak"
-        div_ [tabindex_ "0", class_ "dropdown-content z-40 group-has-[#sidenav-toggle:not(:checked)]/pg:left-full group-has-[#sidenav-toggle:not(:checked)]/pg:top-0 group-has-[#sidenav-toggle:not(:checked)]/pg:ml-2", role_ "listbox"] $ projectsDropDown project (Projects.getProjects $ Projects.projects sess.persistentSession)
+        div_ ([class_ "dropdown group-has-[#sidenav-toggle:not(:checked)]/pg:dropdown-right group-has-[#sidenav-toggle:not(:checked)]/pg:ml-2", role_ "listbox"] <> popoverPanel_ "project-picker-pop") $ projectsDropDown project (Projects.getProjects $ Projects.projects sess.persistentSession)
       -- Toggle sidebar (desktop: toggles sidenav-toggle, mobile: closes mobile-nav-toggle)
       label_ [term "for" "sidenav-toggle", role_ "button", class_ "max-md:hidden cursor-pointer text-textWeaker hover:text-textWeak flex items-center justify-center group-has-[#sidenav-toggle:checked]/pg:text-strokeStrong transition-colors duration-150", Aria.label_ "Toggle sidebar", Aria.expanded_ (if sess.isSidebarClosed then "false" else "true"), Aria.controls_ "side-nav-menu", term "data-tippy-placement" "right", term "data-tippy-content" "Expand sidebar", [__|on change from #sidenav-toggle if #sidenav-toggle.checked set @aria-expanded to 'false' else set @aria-expanded to 'true'|]] do
         faSprite_ "side-chevron-left-in-box" "regular" "h-3.5 w-3.5 rotate-180 group-has-[#sidenav-toggle:checked]/pg:rotate-0 group-has-[#sidenav-toggle:checked]/pg:h-5 group-has-[#sidenav-toggle:checked]/pg:w-5"
@@ -832,20 +833,21 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
       span_ [class_ "hidden dark:inline-flex"] $ faSprite_ "moon-stars" "regular" "h-4 w-4 text-textWeak"
 
     -- User avatar popover
-    div_ [class_ "dropdown dropdown-top group-has-[#sidenav-toggle:checked]/pg:dropdown-top block group/user"] do
-      div_
-        [ tabindex_ "0"
-        , role_ "button"
-        , class_ "flex items-center gap-2 py-2 px-1 rounded-lg hover:bg-fillWeak cursor-pointer w-full justify-center group-has-[#sidenav-toggle:checked]/pg:justify-start"
-        , Aria.haspopup_ "true"
-        , Aria.label_ $ userIdentifier <> ", user menu"
-        ]
+    div_ [class_ "block group/user"] do
+      button_
+        ( [ type_ "button"
+          , class_ "flex items-center gap-2 py-2 px-1 rounded-lg hover:bg-fillWeak cursor-pointer w-full justify-center group-has-[#sidenav-toggle:checked]/pg:justify-start"
+          , Aria.haspopup_ "true"
+          , Aria.label_ $ userIdentifier <> ", user menu"
+          ]
+            <> popoverTrigger_ "user-menu-pop"
+        )
         do
           img_ [class_ "w-8 h-8 rounded-full bg-fillPress shrink-0", src_ avatarUrl, alt_ userIdentifier, term "data-tippy-placement" "right", term "data-tippy-content" userIdentifier]
           span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex items-center gap-1 overflow-hidden flex-1"] do
             span_ [class_ "truncate text-sm"] $ toHtml userIdentifier
             faSprite_ "chevron-down" "regular" "w-3 h-3 text-textWeak shrink-0 ml-auto transition-transform duration-150 rotate-180 group-focus-within/user:rotate-0"
-      ul_ [tabindex_ "0", class_ "dropdown-content z-40 menu menu-md bg-bgRaised rounded-box shadow-sm border border-strokeWeak w-56 mb-2", role_ "menu"] do
+      ul_ ([class_ "dropdown dropdown-top menu menu-md bg-bgRaised rounded-box shadow-lg border border-strokeWeak w-56 mb-2", role_ "menu"] <> popoverPanel_ "user-menu-pop") do
         div_ [class_ "px-3 py-2 text-sm"] do
           div_ [class_ "font-medium text-textStrong truncate"] $ toHtml userIdentifier
           div_ [class_ "text-textWeak text-xs truncate"] $ toHtml $ CI.original currUser.email
@@ -912,11 +914,18 @@ globalTemplates_ = do
   template_ [id_ "log-item-context-menu-tmpl"] do
     ul_ [class_ "log-item-cloned-menu dropdown-content z-50 menu p-2 shadow-sm bg-bgRaised rounded-box w-52 absolute", tabindex_ "0"] do
       fieldContextMenuItems_
-        [__|on click if 'clipboard' in window.navigator then
-              call navigator.clipboard.writeText((closest @data-field-value))
-              send successToast(value:['Value has been added to the Clipboard']) to <body/>
-              halt
-            end|]
+        [ FAddColumn
+        , FCopyValue
+            [__|on click if 'clipboard' in window.navigator then
+                  call navigator.clipboard.writeText((closest @data-field-value))
+                  send successToast(value:['Value has been added to the Clipboard']) to <body/>
+                  halt
+                end|]
+        , FFilter
+        , FExclude
+        , FGroupBy
+        , FViewPatterns
+        ]
   template_ [id_ "successToastTmpl"] do
     div_ [role_ "alert", class_ "alert alert-success max-md:w-full md:w-96 cursor-pointer toast-animate", [__|init wait for click or 30s then transition my opacity to 0 then remove me|]] do
       faSprite_ "circle-check" "solid" "stroke-current shrink-0 w-6 h-6"

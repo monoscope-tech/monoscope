@@ -42,7 +42,7 @@ import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Pages.Components (emptyState_)
 import Relude
-import Utils (deleteParam, faSprite_, navTabAttrs, toUriStr)
+import Utils (deleteParam, faSprite_, navTabAttrs, popoverPanel_, popoverTrigger_, toUriStr)
 
 
 -- Core Types
@@ -702,17 +702,15 @@ renderSortMenu sortCfg = do
   let defaultSort = maybe "" (\(_, _, i) -> i) (listToMaybe sortCfg.options)
   let currentSortTitle = maybe sortCfg.current (\(t, _, _) -> t) $ find (\(_, _, identifier) -> identifier == sortCfg.current) sortCfg.options
 
-  div_ [class_ "dropdown dropdown-end inline-block"] do
-    a_ [class_ "btn btn-xs shadow-none text-xs font-normal border border-strokeWeak text-textWeak bg-transparent", tabindex_ "0"] do
+  div_ [class_ "inline-block"] do
+    button_ ([type_ "button", class_ "btn btn-xs shadow-none text-xs font-normal border border-strokeWeak text-textWeak bg-transparent"] <> popoverTrigger_ "sortMenuDiv") do
       faSprite_ "sort" "regular" "h-3 w-3"
       span_ $ toHtml currentSortTitle
 
     div_
-      [ id_ "sortMenuDiv"
-      , hxBoost_ "true"
-      , class_ "dropdown-content bg-bgRaised p-1 text-sm border border-strokeWeak z-50 mt-2 w-72 origin-top-right rounded-md shadow-lg"
-      , tabindex_ "0"
-      ]
+      ( [hxBoost_ "true", class_ "dropdown dropdown-end bg-bgRaised p-1 text-sm border border-strokeWeak mt-2 w-72 origin-top-right rounded-md shadow-lg"]
+          <> popoverPanel_ "sortMenuDiv"
+      )
       do
         sortCfg.options & mapM_ \(title, desc, identifier) -> do
           let isActive = sortCfg.current == identifier || (sortCfg.current == "" && identifier == defaultSort)

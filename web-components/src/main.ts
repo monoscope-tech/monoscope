@@ -418,6 +418,26 @@ window.addEventListener('update-query', async () => {
   (window as any).interpolateVarTemplates();
 });
 
+// Reflect the query editor's current KQL onto Log Explorer facet checkboxes,
+// matching each `data-field == "data-value"` fragment. Runs on query changes and
+// after HTMX swaps (facets are swapped in via morph, so DOMContentLoaded won't do).
+// The fragment's value is quote-terminated but its field prefix is not, so a bare
+// substring test lets `status == "ok"` match inside `http_status == "ok"`; require a
+// left token boundary (start, or a non field-name char) before the field.
+function fragmentInQuery(query: string, fragment: string): boolean {
+  for (let i = query.indexOf(fragment); i >= 0; i = query.indexOf(fragment, i + 1)) {
+    if (!/[\w.]/.test(query[i - 1] ?? '')) return true;
+  }
+  return false;
+}
+function syncFacetCheckboxes(root: Document | Element = document) {
+  const query = (document.getElementById('filterElement') as any)?.editor?.getValue() ?? '';
+  root.querySelectorAll<HTMLInputElement>('input[type="checkbox"][data-field][data-value]').forEach(cb => {
+    cb.checked = fragmentInQuery(query, `${cb.dataset.field} == "${cb.dataset.value}"`);
+  });
+}
+window.addEventListener('update-query', () => syncFacetCheckboxes());
+
 function initAllTagifyInputs(root: Document | Element = document) {
   root.querySelectorAll<HTMLElement>('[data-tagify]').forEach(initTagifyElement);
 }
@@ -437,4 +457,4 @@ initAllTagifyInputs();
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => { initAllTagifyInputs(); (window as any).interpolateVarTemplates(); });
 }
-document.addEventListener('htmx:afterSettle', (e: any) => { initAllTagifyInputs(e.detail?.elt || document); (window as any).interpolateVarTemplates(); });
+document.addEventListener('htmx:afterSettle', (e: any) => { initAllTagifyInputs(e.detail?.elt || document); (window as any).interpolateVarTemplates(); syncFacetCheckboxes(e.detail?.elt || document); });

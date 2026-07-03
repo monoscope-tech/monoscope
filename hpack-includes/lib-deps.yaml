@@ -127,6 +127,7 @@
 - cryptohash-md5
 - casing
 - yaml
+- indexed-traversable
 - hs-opentelemetry-sdk
 - hs-opentelemetry-api
 - hs-opentelemetry-instrumentation-wai

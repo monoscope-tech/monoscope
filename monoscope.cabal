@@ -127,6 +127,8 @@ extra-source-files:
     static/migrations/0099_jsonb_build_array_record_overload.sql
     static/migrations/0100_db_response_status_code_to_text.sql
     static/migrations/0101_prometheus_scrape_configs.sql
+    static/migrations/0102_prometheus_claim_index.sql
+    static/migrations/0103_prometheus_scrape_configs_unique_name.sql
 
 source-repository head
   type: git
@@ -378,6 +380,7 @@ library
     , http-client-tls
     , http-types
     , hw-kafka-client
+    , indexed-traversable
     , insert-ordered-containers
     , jose-jwt
     , kafka-effectful
@@ -1030,6 +1033,7 @@ test-suite test-dev
     , http-client-tls
     , http-types
     , hw-kafka-client
+    , indexed-traversable
     , insert-ordered-containers
     , jose-jwt
     , kafka-effectful

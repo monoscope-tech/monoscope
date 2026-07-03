@@ -2420,9 +2420,10 @@ dashboardActions_ pid paymentPlan dashId tabSlugM currentRange = div_ [class_ "f
   span_ [class_ "text-fillDisabled mr-2 max-md:hidden"] "|"
   div_ [class_ "max-md:hidden"] $ Components.drawer_ "page-data-drawer" Nothing (Just $ newWidget_ pid paymentPlan dashId tabSlugM currentRange) $ span_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg tap-target", Aria.label_ "Add a new widget", data_ "tippy-content" "Add a new widget"] $ faSprite_ "plus" "regular" "w-3 h-3"
   div_ [class_ "max-md:hidden"] $ yamlEditorDrawer_ pid dashId
-  div_ [class_ "dropdown dropdown-end"] do
-    div_ [tabindex_ "0", role_ "button", class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg tap-target", Aria.label_ "Open context menu", data_ "tippy-content" "Context Menu"] $ faSprite_ "ellipsis" "regular" "w-4 h-4"
-    ul_ [tabindex_ "0", class_ "dropdown-content menu menu-md bg-bgRaised rounded-box p-2 w-52 shadow-sm leading-none"] do
+  let dashActionsPop = "dash-actions-" <> dashId.toText
+  div_ [class_ "inline-block"] do
+    button_ ([type_ "button", class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg tap-target", Aria.label_ "Open context menu", data_ "tippy-content" "Context Menu"] <> popoverTrigger_ dashActionsPop) $ faSprite_ "ellipsis" "regular" "w-4 h-4"
+    ul_ ([class_ "dropdown dropdown-end menu menu-md bg-bgRaised rounded-box border border-strokeWeak p-2 w-52 shadow-lg leading-none"] <> popoverPanel_ dashActionsPop) do
       li_ $ label_ [Lucid.for_ "pageTitleModalId", class_ "p-2"] "Rename dashboard"
       whenJust tabSlugM $ \_ -> li_ $ label_ [Lucid.for_ "tabRenameModalId", class_ "p-2"] "Rename tab"
       li_ $ button_ [class_ "p-2 w-full text-left", hxPost_ ("/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/duplicate"), hxSwap_ "none", data_ "tippy-content" "Creates a copy of this dashboard"] "Duplicate dashboard"

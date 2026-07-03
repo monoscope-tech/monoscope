@@ -332,10 +332,12 @@ spec = around withTestResources $
         T.isInfixOf "data-field=\"attributes.http.request.method\"" html `shouldBe` True
         T.isInfixOf "data-field=\"resource.service.name\"" html `shouldBe` True
         T.isInfixOf "data-field=\"level\"" html `shouldBe` True
-        -- jsEscape contract: the onclick wires the facet path + value through
-        -- filterByFacet. Lucid HTML-escapes attribute values, so the single
-        -- quotes round-trip as &#39;.
-        T.isInfixOf "filterByFacet(&#39;attributes.http.request.method&#39;, &#39;GET&#39;)" html `shouldBe` True
+        -- The facet path + value are carried on data-field/data-value; the
+        -- hyperscript pseudo-command reads them off the element at click time
+        -- (no inline interpolation to escape).
+        T.isInfixOf "data-value=\"GET\"" html `shouldBe` True
+        T.isInfixOf "toggleSubQuery(@data-field" html `shouldBe` True
+        T.isInfixOf "on #filterElement" html `shouldBe` True
         -- Section headers for groups that have populated facets show up.
         T.isInfixOf "Common Filters" html `shouldBe` True
         -- Facets without values still render with the empty-state row.

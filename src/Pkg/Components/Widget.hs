@@ -439,10 +439,11 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
          |]
               ]
               $ Utils.faSprite_ "expand-icon" "regular" "w-3 h-3"
-    details_ [class_ "dropdown dropdown-end"] do
-      summary_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg tap-target", Aria.label_ "Widget menu", data_ "tippy-content" "Widget Menu"]
+    let widgetMenuPop = wId <> "-widget-menu"
+    div_ [class_ "inline-block"] do
+      button_ ([type_ "button", class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg tap-target", Aria.label_ "Widget menu", data_ "tippy-content" "Widget Menu"] <> Utils.popoverTrigger_ widgetMenuPop)
         $ Utils.faSprite_ "ellipsis" "regular" "w-4 h-4"
-      ul_ [class_ "text-textStrong menu menu-md dropdown-content bg-bgRaised rounded-box p-2 w-52 shadow-sm leading-none z-10"] do
+      ul_ ([class_ "dropdown text-textStrong dropdown-end menu menu-md bg-bgRaised rounded-box p-2 w-52 shadow-lg leading-none border border-strokeWeak"] <> Utils.popoverPanel_ widgetMenuPop) do
         -- Only show the "Move to dashboard" option if we're in a dashboard context
 
         let dashId = fromMaybe "" widget._dashboardId
@@ -459,7 +460,7 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
               then set #dashboards-modal-source-dashboard-id.value to "${dashId}"
               then set #dashboards-modal.checked to true
               then trigger loadDashboards on #dashboards-modal-content
-              then set (the closest <details/>).open to false
+              then call (the closest <[popover]/>).hidePopover()
             |]
             ]
             "Copy to dashboard"
@@ -519,7 +520,7 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
               , hxPost_ ("/p/" <> maybeToMonoid (widget._projectId <&> (.toText)) <> "/dashboards/" <> maybeToMonoid widget._dashboardId <> "/widgets/" <> wId <> "/duplicate")
               , hxTrigger_ "click"
               , hxSwap_ "none"
-              , [__| on click set (the closest <details/>).open to false
+              , [__| on click call (the closest <[popover]/>).hidePopover()
                      on htmx:beforeSwap
                         set event.detail.shouldSwap to false then
                         set widgetData to JSON.parse(event.detail.xhr.getResponseHeader('X-Widget-JSON')) then

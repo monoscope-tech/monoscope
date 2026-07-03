@@ -26,6 +26,7 @@ import Data.Aeson.Types qualified as AET
 import Data.Containers.ListUtils (nubOrd)
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
+import Data.Foldable.WithIndex (iforM_)
 import Data.HashMap.Strict qualified as HM
 import Data.List qualified as L
 import Data.Text qualified as T
@@ -60,7 +61,7 @@ import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Megaparsec (parseMaybe)
-import Utils (FreeTierStatus (..), LoadingSize (..), LoadingType (..), checkFreeTierStatus, faSprite_, formatUTC, getDurationNSMS, getServiceColors, htmxOverlayIndicator_, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecTextByKey, methodFillColor, prettyPrintCount, serviceFillColor, statusFillColorText)
+import Utils (FieldAction (..), FreeTierStatus (..), LoadingSize (..), LoadingType (..), checkFreeTierStatus, faSprite_, fieldContextMenuItems_, formatUTC, getDurationNSMS, getServiceColors, htmxOverlayIndicator_, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecTextByKey, methodFillColor, popoverPanel_, popoverTrigger_, prettyPrintCount, serviceFillColor, statusFillColorText)
 
 import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.UUID qualified as UUID
@@ -86,6 +87,7 @@ import OddJobs.Job (createJob)
 import Pkg.DeriveUtils (SnakeSchema (..))
 import System.Logging qualified as Log
 import System.Tracing (Tracing, forkWithCtx)
+import Text.Slugify (slugify)
 import UnliftIO.Exception (tryAny)
 
 
@@ -418,7 +420,6 @@ facetDefs =
 
 
 -- | 'facetDefs' bucketed by 'FacetGroup', built once at module load time.
--- 'flip (<>)' preserves source order under Map.fromListWith (which calls f new old).
 facetsByGroup :: Map.Map FacetGroup [Facet]
 facetsByGroup = Map.fromListWith (flip (<>)) [(f.group, [f]) | f <- facetDefs]
 
@@ -428,150 +429,83 @@ facetsByGroup = Map.fromListWith (flip (<>)) [(f.group, [f]) | f <- facetDefs]
 renderFacets :: FacetSummary -> Html ()
 renderFacets facetSummary = do
   let (FacetData facetMap) = facetSummary.facetJson
-
-  -- JS: emit / sync canonical KQL fragments using dotted paths.
-  script_
-    [text|
-    function filterByFacet(field, value) {
-      const queryFragment = field + ' == "' + value + '"';
-      document.getElementById("filterElement").toggleSubQuery(queryFragment);
-    }
-
-    function syncFacetCheckboxes() {
-      const filterEl = document.getElementById("filterElement");
-      if (!filterEl) return;
-      const query = filterEl.editor ? filterEl.editor.getValue() : "";
-      requestAnimationFrame(() => {
-        const checkboxes = document.querySelectorAll('input[type="checkbox"][data-field][data-value]');
-        checkboxes.forEach(cb => {
-          const field = cb.getAttribute('data-field');
-          const value = cb.getAttribute('data-value');
-          const fragment = field + ' == "' + value + '"';
-          cb.checked = query.includes(fragment);
-        });
-      });
-    }
-
-    document.addEventListener('DOMContentLoaded', () => {
-      setTimeout(syncFacetCheckboxes, 100);
-      window.addEventListener('update-query', syncFacetCheckboxes);
-    });
-  |]
-
-  forM_ universe \g ->
+  -- Checkbox↔query sync lives in web-components/src/main.ts (syncFacetCheckboxes),
+  -- wired to `update-query` + `htmx:afterSettle` so swapped-in facets re-sync.
+  forM_ (universe :: [FacetGroup]) \g ->
     renderFacetSection (facetGroupLabel g) (Map.findWithDefault [] g facetsByGroup) facetMap (g /= FGCommon)
   where
+    collapsible_ :: [Attribute] -> Text -> Bool -> [Attribute] -> Html () -> Html () -> Html ()
+    collapsible_ wrapAttrs toggleId open labelAttrs header body =
+      div_ (wrapAttrs <> [class_ " block contain-[layout_style] "]) do
+        input_ $ [type_ "checkbox", class_ "hidden peer", id_ toggleId] ++ [checked_ | open]
+        label_
+          ( labelAttrs
+              <> [ class_ " cursor-pointer peer-checked:[&_.chev]:rotate-0 "
+                 , role_ "button"
+                 , Lucid.for_ toggleId
+                 , Aria.expanded_ (T.toLower $ show open)
+                 , [__|live set @aria-expanded to (the previous <input/>'s checked)|]
+                 ]
+          )
+          header
+        div_ [class_ "h-0 overflow-hidden peer-checked:h-auto transition-[height] ease-out duration-200"] body
+
+    chev_ :: Text -> Html ()
+    chev_ size = faSprite_ "chevron-down" "regular" $ "chev shrink-0 transition-transform -rotate-90 " <> size
+
     renderFacetSection :: Text -> [Facet] -> HM.HashMap Text [FacetValue] -> Bool -> Html ()
-    renderFacetSection sectionName fs facetMap collapsed = do
-      div_ [class_ "facet-section-group group/section block contain-[layout_style]"] do
-        input_ $ [type_ "checkbox", class_ "hidden peer", id_ $ "toggle-" <> T.replace " " "-" sectionName] ++ [checked_ | not collapsed]
-        label_ [class_ "p-2 bg-fillWeak rounded-lg cursor-pointer flex gap-2 items-center peer-checked:[&>svg]:rotate-0", role_ "button", Lucid.for_ $ "toggle-" <> T.replace " " "-" sectionName, Aria.expanded_ (if collapsed then "false" else "true"), [__|on change from previous <input/> if the checked of previous <input/> set @aria-expanded to 'true' else set @aria-expanded to 'false'|]] do
-          faSprite_ "chevron-down" "regular" "w-3 h-3 transition-transform -rotate-90"
-          span_ [class_ "font-medium text-sm"] (toHtml sectionName)
-
-        div_ [class_ "facets-container mt-1 max-h-0 overflow-hidden peer-checked:max-h-[2000px] transition-[max-height] duration-300"] do
-          forM_ (zip [0 :: Int ..] fs) \(idx, f) -> do
-            let values = HM.lookupDefault [] f.path facetMap
-                shouldBeExpanded = f.group == FGCommon && idx < 5 && not (null values)
-            label_ [class_ "facet-section border-t border-strokeWeak group/facet block contain-[layout_style]"] do
-              input_ $ [type_ "checkbox", class_ "hidden", id_ $ "facet-toggle-" <> f.path] ++ [checked_ | shouldBeExpanded]
-              div_ [class_ "flex items-center justify-between hover:bg-fillWeak rounded"] do
-                div_ [class_ "p-2 flex items-center gap-2 cursor-pointer flex-1"] do
-                  faSprite_ "chevron-down" "regular" "w-2.5 h-2.5 transition-transform group-has-[:checked]/facet:rotate-0 -rotate-90"
-                  span_ [class_ "text-sm", term "data-tippy-content" f.path] (toHtml f.label)
-
-                div_ [class_ "dropdown dropdown-end contain-[layout_style]", onclick_ "event.stopPropagation()"] do
-                  a_ [tabindex_ "0", class_ "cursor-pointer p-2 hover:bg-fillWeak rounded", Aria.label_ "Facet options", role_ "button"] do
-                    faSprite_ "ellipsis-vertical" "regular" "w-3 h-3"
-                  ul_ [tabindex_ "0", class_ "dropdown-content z-10 menu p-2 shadow-sm bg-bgRaised rounded-box w-52"] do
-                    li_
-                      $ a_
-                        [ term "data-field" f.path
-                        , class_ "flex gap-2 items-center"
-                        , [__|
-                             init
-                                set cols to params().cols or '' then
-                                set colsX to cols.split(',') then
-                                if colsX contains @data-field
-                                  set innerHTML of first <span/> in me to 'Remove column'
-                                end
-                              on click
-                                call #resultTable.toggleColumnOnTable(@data-field) then
-                                set cols to params().cols or '' then
-                                set colsX to cols.split(',')
-                                if colsX contains @data-field
-                                  set innerHTML of first <span/> in me to 'Remove column'
-                                else
-                                  set innerHTML of first <span/> in me to 'Add as table column'
-                                end
-                              |]
-                        ]
-                        do
-                          faSprite_ "table-column" "regular" "w-4 h-4 text-iconNeutral"
-                          span_ [] "Add as table column"
-                    li_
-                      $ a_
-                        [ term "data-field" f.path
-                        , term "data-key" f.path
-                        , class_ "flex gap-2 items-center"
-                        , [__|
-                              init call window.updateGroupByButtonText(event, me) end
-                              on refreshItem call window.updateGroupByButtonText(event, me) end
-
-                              on click
-                                call document.querySelector('query-builder').toggleGroupByField(@data-field) then
-                                trigger refreshItem on me
-                              end
-                          |]
-                        ]
-                        do
-                          faSprite_ "group-by" "regular" "w-4 h-4 text-iconNeutral"
-                          span_ [] "Group by"
-                    li_ $ a_ [class_ "flex gap-2 items-center", onclick_ $ "viewFieldPatterns('" <> f.path <> "')"] do
-                      faSprite_ "chart-bar" "regular" "w-4 h-4 text-iconNeutral"
-                      span_ [] "View patterns"
-
-              div_ [class_ "facet-values pl-7 pr-2 mb-1 space-y-1 max-h-0 overflow-hidden group-has-[:checked]/facet:max-h-[1000px] transition-[max-height] duration-200"] do
-                let valuesWithIndices = zip [0 :: Int ..] values
-                    (visibleValues, hiddenValues) = splitAt 5 valuesWithIndices
-                    hiddenCount = length hiddenValues
-                    -- jsEscape an observed value before embedding in the JS
-                    -- single-quoted onclick. Order: backslash, single quote,
-                    -- CR (drop), LF (translate) — so a value containing
-                    -- "\n</script>..." can't break out of the surrounding tag.
-                    jsEscape =
-                      T.replace "\n" "\\n"
-                        . T.replace "\r" ""
-                        . T.replace "'" "\\'"
-                        . T.replace "\\" "\\\\"
-                    renderFacetValue (FacetValue val count) =
-                      label_ [class_ "facet-item flex items-center justify-between py-0.5 max-md:py-1.5 px-1 hover:bg-fillWeak rounded cursor-pointer will-change-[background-color]"] do
-                        div_ [class_ "flex items-center gap-2 min-w-0 flex-1"] do
-                          input_
-                            [ type_ "checkbox"
-                            , class_ "checkbox checkbox-xs max-md:checkbox-sm"
-                            , name_ f.path
-                            , onclick_ $ "filterByFacet('" <> f.path <> "', '" <> jsEscape val <> "')"
-                            , term "data-tippy-content" (f.path <> " == \"" <> val <> "\"")
-                            , term "data-field" f.path
-                            , term "data-value" val
-                            ]
-                          let colorClass = f.color val
-                          unless (T.null colorClass) $ span_ [class_ $ colorClass <> " shrink-0 w-0.5 h-3 rounded-sm"] ""
-                          span_ [class_ "facet-value truncate text-xs", term "data-tippy-content" val] (toHtml val)
-                        span_ [class_ "facet-count text-xs text-textWeak shrink-0 tabular-nums"] $ toHtml $ prettyPrintCount count
-                if null values
-                  then div_ [class_ "facet-empty px-1 py-1 text-xs italic text-textWeak"] "no values in window"
-                  else forM_ visibleValues \(_, value) -> renderFacetValue value
-
-                when (hiddenCount > 0) do
-                  let moreId = "more-" <> f.path
-                  input_ [type_ "checkbox", class_ "hidden peer/more", id_ moreId]
-                  label_ [class_ "text-textBrand text-xs px-1 py-0.5 cursor-pointer hover:underline", Lucid.for_ moreId] do
-                    span_ [class_ "peer-checked/more:hidden"] $ toHtml $ "+ More (" <> prettyPrintCount hiddenCount <> ")"
-                    span_ [class_ "hidden peer-checked/more:inline"] $ toHtml $ "- Less (" <> prettyPrintCount hiddenCount <> ")"
-
-                  div_ [class_ "hidden peer-checked/more:block space-y-1"] $ forM_ hiddenValues \(_, value) -> renderFacetValue value
+    renderFacetSection sectionName fs facetMap collapsed =
+      collapsible_
+        [class_ "facet-section-group"]
+        ("toggle-" <> slugify sectionName)
+        (not collapsed)
+        [class_ "p-2 bg-fillWeak rounded-lg flex gap-2 items-center"]
+        (chev_ "w-3 h-3" >> span_ [class_ "font-medium text-sm"] (toHtml sectionName))
+        $ div_ [class_ "facets-container mt-1"]
+        $ iforM_ fs \idx f -> do
+          let values = HM.lookupDefault [] f.path facetMap
+              open = f.group == FGCommon && idx < 5 && not (null values)
+              (visibleValues, hiddenValues) = splitAt 5 values
+              hiddenCount = length hiddenValues
+              renderFacetValue (FacetValue val count) =
+                label_ [class_ "facet-item flex items-center justify-between py-0.5 max-md:py-1.5 px-1 hover:bg-fillWeak rounded cursor-pointer will-change-[background-color]"] do
+                  div_ [class_ "flex items-center gap-2 min-w-0 flex-1"] do
+                    input_
+                      [ type_ "checkbox"
+                      , class_ "checkbox checkbox-xs max-md:checkbox-sm"
+                      , [__|on click toggleSubQuery(@data-field + ' == "' + @data-value + '"') on #filterElement|]
+                      , term "data-tippy-content" (f.path <> " == \"" <> val <> "\"")
+                      , term "data-field" f.path
+                      , term "data-value" val
+                      ]
+                    let colorClass = f.color val
+                    unless (T.null colorClass) $ span_ [class_ $ colorClass <> " shrink-0 w-0.5 h-3 rounded-sm"] ""
+                    span_ [class_ "facet-value truncate text-xs", term "data-tippy-content" val] (toHtml val)
+                  span_ [class_ "facet-count text-xs text-textWeak shrink-0 tabular-nums"] $ toHtml $ prettyPrintCount count
+          collapsible_
+            [class_ "facet-section border-t border-strokeWeak"]
+            ("facet-toggle-" <> f.path)
+            open
+            [class_ "flex items-center justify-between hover:bg-fillWeak rounded"]
+            do
+              div_
+                [class_ "p-2 flex items-center gap-2 flex-1"]
+                (chev_ "w-2.5 h-2.5" >> span_ [class_ "text-sm", term "data-tippy-content" f.path] (toHtml f.label))
+              div_ [class_ "inline-block"] do
+                button_ ([type_ "button", class_ "cursor-pointer p-2 hover:bg-fillWeak rounded", Aria.label_ "Facet options"] <> popoverTrigger_ (slugify f.path))
+                  $ faSprite_ "ellipsis-vertical" "regular" "w-3 h-3"
+                ul_ ([class_ "dropdown dropdown-end menu p-2 shadow-sm bg-bgRaised rounded-box w-52 border border-strokeWeak z-50", term "data-field-path" f.path] <> popoverPanel_ (slugify f.path))
+                  $ fieldContextMenuItems_ [FAddColumn, FGroupBy, FViewPatterns]
+            $ div_ [class_ "facet-values pl-7 pr-2 mb-1 space-y-1"] do
+              if null values
+                then div_ [class_ "facet-empty px-1 py-1 text-xs italic text-textWeak"] "no values in window"
+                else forM_ visibleValues renderFacetValue
+              when (hiddenCount > 0) do
+                input_ [type_ "checkbox", class_ "hidden peer/more", id_ $ "more-" <> f.path]
+                label_ [class_ "text-textBrand text-xs px-1 py-0.5 cursor-pointer hover:underline", Lucid.for_ $ "more-" <> f.path] do
+                  span_ [class_ "peer-checked/more:hidden"] $ toHtml $ "+ More (" <> prettyPrintCount hiddenCount <> ")"
+                  span_ [class_ "hidden peer-checked/more:inline"] $ toHtml $ "- Less (" <> prettyPrintCount hiddenCount <> ")"
+                div_ [class_ "hidden peer-checked/more:block space-y-1"] $ forM_ hiddenValues renderFacetValue
 
 
 keepNonEmpty :: Maybe Text -> Maybe Text
@@ -758,7 +692,7 @@ apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Ma
 apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM queryLibItemTitle queryLibItemID detailWM targetEventM showTraceM hxRequestM hxBoostedM jsonM vizTypeM alertM skipM pTargetM sortByM = do
   let source = fromMaybe "spans" sourceM
   (sess, project, bw) <- mkPageCtx pid
-  let summaryCols = T.splitOn "," (fromMaybe "" cols')
+  let summaryCols = filter (not . T.null) $ T.splitOn "," (fromMaybe "" cols')
   let queryInput = maybeToMonoid queryM'
   let parseError msg = addTriggerEvent "showParseError" (AE.toJSON msg) >> addErrorToast "Error Parsing Query" (Just msg) $> ([], Just msg)
   (queryAST, parseErrorMsg) <- case parseQueryToAST queryInput of
@@ -1415,13 +1349,11 @@ apiLogsPage page = do
           , alert = isJust page.alert
           , patternSelected = page.targetPattern
           , mobileExtra = Just do
-              label_ [class_ "gap-1 flex items-center cursor-pointer text-textWeak"] do
+              label_ [class_ "gap-1 flex items-center cursor-pointer text-textWeak", Lucid.for_ "toggle-filters"] do
                 faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 text-iconNeutral"
                 span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
                 span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
                 "filters"
-                input_ [type_ "checkbox", class_ "toggle-filters hidden", id_ "toggle-filters-mobile", onchange_ "document.getElementById('toggle-filters').checked = this.checked; document.getElementById('toggle-filters').dispatchEvent(new Event('change'));"]
-                script_ "if(window.innerWidth<768) document.getElementById('toggle-filters-mobile').checked=true;"
               span_ [class_ "text-strokeWeak text-xs"] "·"
               rowCountDisplay_ "mobile" countText suffixText
           , parseError = page.parseError
@@ -1474,38 +1406,41 @@ apiLogsPage page = do
             span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
             span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
             "filters"
-            input_ [type_ "checkbox", class_ "toggle-filters hidden", id_ "toggle-filters", onchange_ "localStorage.setItem('toggle-filter-checked', this.checked); var m=document.getElementById('toggle-filters-mobile'); if(m) m.checked=this.checked; setTimeout(() => { const editor = document.getElementById('filterElement'); if (editor && editor.refreshLayout) editor.refreshLayout(); }, 200);"]
-            script_
-              [text|
-              if (window.innerWidth < 768) document.getElementById('toggle-filters').checked = true;
-              else document.getElementById('toggle-filters').checked = localStorage.getItem('toggle-filter-checked') === 'true';
-              // Ensure editor layout is correct on initial load
-              setTimeout(() => {
-                const editor = document.getElementById('filterElement');
-                if (editor && editor.refreshLayout) {
-                  editor.refreshLayout();
-                }
-              }, 300);
-            |]
+            input_
+              [ type_ "checkbox"
+              , class_ "toggle-filters hidden"
+              , id_ "toggle-filters"
+              , [__|
+                  init
+                    if window.innerWidth < 768 set my.checked to true
+                    else set my.checked to (localStorage.getItem('toggle-filter-checked') is 'true')
+                    end
+                    wait 300ms
+                    if #filterElement call #filterElement.refreshLayout() end
+                  on change
+                    call localStorage.setItem('toggle-filter-checked', my.checked)
+                    wait 200ms
+                    if #filterElement call #filterElement.refreshLayout() end
+                |]
+              ]
           span_ [class_ "text-strokeWeak "] "|"
           rowCountDisplay_ "" countText suffixText
 
         -- Visualization widget that shows when not in logs view (skip for patterns mode which uses log-list)
         div_ [class_ "flex-1 min-h-0 h-full group-has-[#viz-logs:checked]/pg:hidden group-has-[#viz-patterns:checked]/pg:hidden group-has-[#viz-sessions:checked]/pg:hidden"] do
-          let pid = page.pid.toText
-          let vizType = maybe "\"timeseries\"" show page.vizType
-          script_
-            [text| var widgetJSON = {
-                  "id": "visualization-widget",
-                  "type": ${vizType}, 
-                  "title": "Visualization",
-                  "standalone": true,
-                  "allow_zoom": true,
-                  "_project_id": "$pid",
-                  "_center_title": true, 
-                  "layout": {"w": 6, "h": 4}
-                };
-                |]
+          let widgetVals =
+                decodeUtf8
+                  $ AE.encode
+                  $ AE.object
+                    [ "id" AE..= ("visualization-widget" :: Text)
+                    , "type" AE..= fromMaybe "timeseries" page.vizType
+                    , "title" AE..= ("Visualization" :: Text)
+                    , "standalone" AE..= True
+                    , "allow_zoom" AE..= True
+                    , "_project_id" AE..= page.pid.toText
+                    , "_center_title" AE..= True
+                    , "layout" AE..= AE.object ["w" AE..= (6 :: Int), "h" AE..= (4 :: Int)]
+                    ]
           div_
             [ id_ "visualization-widget-container"
             , class_ " w-full"
@@ -1514,7 +1449,7 @@ apiLogsPage page = do
             , hxTrigger_ "intersect once, update-widget"
             , hxTarget_ "this"
             , hxSwap_ "innerHTML"
-            , hxVals_ "js:{...widgetJSON}"
+            , hxVals_ widgetVals
             , hxExt_ "json-enc,forward-page-params"
             , term "hx-sync" "this:replace"
             ]
@@ -1540,7 +1475,7 @@ apiLogsPage page = do
 
       div_ [class_ $ "transition-opacity duration-200 hidden max-md:hidden ml-3.5 " <> if isJust page.targetEvent then "group-has-[#viz-logs:checked]/pg:block group-has-[#viz-sessions:checked]/pg:block" else "", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
 
-      div_ [class_ "grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll w-0 max-w-0 overflow-hidden group-has-[#viz-logs:checked]/pg:max-w-full group-has-[#viz-logs:checked]/pg:overflow-y-auto group-has-[#viz-sessions:checked]/pg:max-w-full group-has-[#viz-sessions:checked]/pg:overflow-y-auto max-md:hidden max-md:[&.details-open]:block! max-md:[&.details-open]:fixed max-md:[&.details-open]:inset-0 max-md:[&.details-open]:z-40 max-md:[&.details-open]:w-full max-md:[&.details-open]:max-w-full max-md:[&.details-open]:bg-bgBase", id_ "log_details_container", term "hx-on::after-swap" "if(window.innerWidth<768)this.classList.add('details-open')"] do
+      div_ [class_ "grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll w-0 max-w-0 overflow-hidden group-has-[#viz-logs:checked]/pg:max-w-full group-has-[#viz-logs:checked]/pg:overflow-y-auto group-has-[#viz-sessions:checked]/pg:max-w-full group-has-[#viz-sessions:checked]/pg:overflow-y-auto max-md:hidden max-md:[&.details-open]:block! max-md:[&.details-open]:fixed max-md:[&.details-open]:inset-0 max-md:[&.details-open]:z-40 max-md:[&.details-open]:w-full max-md:[&.details-open]:max-w-full max-md:[&.details-open]:bg-bgBase", id_ "log_details_container", [__|on htmx:afterSwap if window.innerWidth < 768 add .details-open to me end|]] do
         htmxOverlayIndicator_ "details_indicator"
         whenJust page.targetEvent \te -> do
           script_
@@ -1675,7 +1610,13 @@ curateCols summaryCols cols = sortBy sortAccordingly filteredCols
       , "duration"
       , "body"
       ]
-    filteredCols = filter (\c -> c `notElem` defaultSummaryPaths || c `elem` summaryCols) cols
+    -- With no explicit selection, show every column except the hidden-by-default set.
+    -- With an explicit selection (the `cols` URL param), that list is authoritative — render
+    -- exactly it (id is always kept as the row key), so columns can be hidden and the state is
+    -- fully URL-driven / refresh-safe.
+    filteredCols
+      | null summaryCols = filter (`notElem` defaultSummaryPaths) cols
+      | otherwise = filter (\c -> c == "id" || c `elem` summaryCols) cols
 
     sortAccordingly :: Text -> Text -> Ordering
     sortAccordingly a b

@@ -20,7 +20,7 @@ import NeatInterpolation (text)
 import Pages.Components (modal_)
 import Pkg.SchemaLearning.Catalog (FacetData (..), FacetValue (..))
 import Relude
-import Utils (displayTimestamp, faSprite_, formatUTC, onpointerdown_)
+import Utils (displayTimestamp, faSprite_, formatUTC, onpointerdown_, popoverPanel_, popoverTrigger_)
 
 
 instance Default (Html ()) where def = mempty
@@ -192,9 +192,9 @@ logQueryBox_ config = do
                     option_ (value_ "root-spans" : ([selected_ "true" | target == "root-spans"])) "Trace Root Spans"
                     option_ (value_ "service-entry-spans" : ([selected_ "true" | target == "service-entry-spans"])) "Service Entry Spans"
 
-              div_ [class_ "dropdown dropdown-hover dropdown-bottom dropdown-end max-md:hidden"] do
-                div_ [class_ "rounded-lg px-3 py-1 text-textStrong inline-flex items-center border border-strokeStrong h-full", tabindex_ "0", role_ "button", Aria.label_ "Save query"] $ faSprite_ "floppy-disk" "regular" "h-5 w-5 text-iconNeutral"
-                ul_ [tabindex_ "0", class_ "dropdown-content border menu bg-bgRaised rounded-box z-1 w-60 p-2 shadow-lg"] do
+              div_ [class_ "inline-block max-md:hidden"] do
+                button_ ([type_ "button", class_ "rounded-lg px-3 py-1 text-textStrong inline-flex items-center border border-strokeStrong h-full cursor-pointer", Aria.label_ "Save query"] <> popoverTrigger_ "save-query-pop") $ faSprite_ "floppy-disk" "regular" "h-5 w-5 text-iconNeutral"
+                ul_ ([class_ "dropdown dropdown-end border border-strokeWeak menu bg-bgRaised rounded-box w-60 p-2 shadow-lg"] <> popoverPanel_ "save-query-pop") do
                   li_ $ label_ [Lucid.for_ "saveQueryMdl", onclick_ "document.getElementById('saveQueryMdl').dataset.pendingQuery = null;"] "Save query to Query Library"
             button_
               [ type_ "submit"
@@ -235,7 +235,7 @@ logQueryBox_ config = do
                     if my value is '__custom__'
                       add .hidden to me
                       remove .hidden from #pattern-target-input
-                      focus() the #pattern-target-input
+                      call #pattern-target-input.focus()
                     else
                       call window.setQueryParamAndReload('pattern_target', my value)
                     end|]

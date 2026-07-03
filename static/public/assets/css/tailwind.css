@@ -1012,6 +1012,11 @@
   @apply font-normal;
 }
 
+:root {
+  /* Lets transitions interpolate to intrinsic sizes (height: auto etc.) — inherits everywhere */
+  interpolate-size: allow-keywords;
+}
+
 :root,
 [data-theme] {
   --backgroundPrimary: oklch(100% 0 0);

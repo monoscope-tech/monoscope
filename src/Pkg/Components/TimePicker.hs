@@ -23,7 +23,7 @@ import Relude hiding (some)
 import Text.Megaparsec (Parsec, parse, some)
 import Text.Megaparsec.Char (letterChar, space)
 import Text.Megaparsec.Char.Lexer (decimal)
-import Utils (faSprite_)
+import Utils (faSprite_, popoverPanel_, popoverTrigger_)
 
 
 -- $setup
@@ -278,12 +278,12 @@ refreshButton_ = do
           remove .animate-spin from the first <svg/> in me |]
       ]
       $ faSprite_ "arrows-rotate" "regular" "w-3.5 h-3.5 text-iconNeutral"
-    div_ [class_ "dropdown dropdown-end leading-none join-item border-y border-r border-strokeWeak rounded-r-lg shadow-xs group/rf"] do
-      div_ [class_ "cursor-pointer py-2 px-3 max-md:px-2 flex gap-1.5 max-md:gap-1 items-center leading-none text-sm", tabindex_ "0", data_ "tippy-content" "Auto-refresh interval"] do
+    div_ [class_ "leading-none join-item border-y border-r border-strokeWeak rounded-r-lg shadow-xs group/rf"] do
+      button_ ([type_ "button", class_ "cursor-pointer py-2 px-3 max-md:px-2 flex gap-1.5 max-md:gap-1 items-center leading-none text-sm", data_ "tippy-content" "Auto-refresh interval"] <> popoverTrigger_ "auto-refresh-pop") do
         span_ [class_ "auto-refresh-span text-textWeak max-md:hidden", Aria.label_ "Auto-refresh interval"] "Off"
         faSprite_ "chevron-down" "regular" "w-3 h-3 text-iconNeutral"
 
-      ul_ [class_ "dropdown-content menu p-2 shadow-lg bg-bgRaised rounded-box z-[1] mt-2 min-w-40", tabindex_ "0"] do
+      ul_ ([class_ "dropdown dropdown-end menu p-2 shadow-lg bg-bgRaised rounded-box border border-strokeWeak mt-2 min-w-40"] <> popoverPanel_ "auto-refresh-pop") do
         li_ [class_ "menu-title"] "Auto-refresh"
         forM_ refreshOptions \(label, title, ms) ->
           li_
@@ -293,8 +293,7 @@ refreshButton_ = do
               , [__| on click
                   set .auto-refresh-span.innerText to my.textContent then
                   send setRefreshInterval(interval: parseInt(@data-value)) to window then
-                  call document.activeElement.blur() then
-                  focus(document.body)
+                  call (closest <[popover]/>).hidePopover()
               |]
               ]
             $ toHtml label
