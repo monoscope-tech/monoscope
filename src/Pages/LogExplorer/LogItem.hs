@@ -343,20 +343,20 @@ expandedItemView pid item aptSp leftM rightM = do
       div_ [class_ "mt-2 py-1 text-textWeak"] $ do
         when (isLog || isAlert) $ whenJust item.body \b ->
           div_ [class_ "http-tab-content", id_ "body-content"]
-            $ jsonValueToHtmlTree (AE.toJSON b) Nothing
+            $ jsonValueToHtmlTree "body" (AE.toJSON b) Nothing
         div_ [class_ "hidden http-tab-content", id_ "m-raw-content"] $ do
-          jsonValueToHtmlTree (AE.toJSON item) Nothing
+          jsonValueToHtmlTree "raw" (AE.toJSON item) Nothing
         unless isAlert $ div_ [class_ $ "http-tab-content " <> if (isLog && isNothing item.body) || (not isLog && not isHttp) then "" else "hidden", id_ "att-content"] $ do
           case unAesonTextMaybe item.attributes of
-            Just m | not (null m) -> jsonValueToHtmlTree (AE.Object $ KEM.fromMapText m) $ Just "attributes"
+            Just m | not (null m) -> jsonValueToHtmlTree "att" (AE.Object $ KEM.fromMapText m) $ Just "attributes"
             _ -> div_ [class_ "text-sm text-textWeak italic py-4"] "No custom attributes on this entry"
         div_ [class_ "hidden http-tab-content", id_ "meta-content"] $ do
-          jsonValueToHtmlTree (maybe (AE.object []) (AE.Object . KEM.fromMapText) (unAesonTextMaybe item.resource)) $ Just "resource"
+          jsonValueToHtmlTree "meta" (maybe (AE.object []) (AE.Object . KEM.fromMapText) (unAesonTextMaybe item.resource)) $ Just "resource"
         unless isLog $ do
           div_ [class_ "hidden http-tab-content w-full whitespace-wrap", id_ "errors-content"] $ do
             renderErrors spanErrors
           div_ [class_ "hidden http-tab-content", id_ "logs-content"] $ do
-            jsonValueToHtmlTree (AE.toJSON (unAesonTextMaybe item.events)) Nothing
+            jsonValueToHtmlTree "events" (AE.toJSON (unAesonTextMaybe item.events)) Nothing
 
         unless isLog $ whenJust reqDetails $ \case
           ("HTTP", method, path, status) -> do
@@ -373,31 +373,31 @@ expandedItemView pid item aptSp leftM rightM = do
                     httpTab "raw_content" "Request Details" ""
                 div_ [] do
                   div_ [id_ "raw_content", class_ "hidden a-tab-content http"] do
-                    jsonValueToHtmlTree (AE.toJSON cSp) Nothing
+                    jsonValueToHtmlTree "reqdetails" (AE.toJSON cSp) Nothing
                   div_ [id_ "req_content", class_ "hidden a-tab-content http"] do
                     let b = case unAesonTextMaybe cSp.body of
                           Just (AE.Object bb) -> case KEM.lookup "request_body" bb of
                             Just a -> a
                             _ -> AE.object []
                           _ -> AE.object []
-                    jsonValueToHtmlTree b $ Just "body.request_body"
+                    jsonValueToHtmlTree "reqbody" b $ Just "body.request_body"
                   div_ [id_ "res_content", class_ "a-tab-content http"] do
                     let b = case unAesonTextMaybe cSp.body of
                           Just (AE.Object bb) -> case KEM.lookup "response_body" bb of
                             Just a -> a
                             _ -> AE.object []
                           _ -> AE.object []
-                    jsonValueToHtmlTree b $ Just "body.response_body"
+                    jsonValueToHtmlTree "resbody" b $ Just "body.response_body"
                   let httpSub :: [AEKey.Key] -> Maybe AE.Value
                       httpSub = foldlM (\v k -> case v of AE.Object o -> KEM.lookup k o; _ -> Nothing) (AE.Object $ maybe mempty (\case AE.Object o -> o; _ -> mempty) (unAesonTextMaybe cSp.attributes >>= Map.lookup "http"))
                   div_ [id_ "hed_content", class_ "hidden a-tab-content http"] do
                     let reqHeaders = httpSub ["request", "header"]
                         resHeaders = httpSub ["response", "header"]
-                    jsonValueToHtmlTree (AE.object ["request_headers" AE..= fromMaybe AE.Null reqHeaders, "response_headers" AE..= fromMaybe AE.Null resHeaders]) Nothing
+                    jsonValueToHtmlTree "headers" (AE.object ["request_headers" AE..= fromMaybe AE.Null reqHeaders, "response_headers" AE..= fromMaybe AE.Null resHeaders]) Nothing
                   div_ [id_ "par_content", class_ "hidden a-tab-content http"] do
                     let queryParams = httpSub ["request", "query_params"]
                         pathParams = httpSub ["request", "path_params"]
-                    jsonValueToHtmlTree (AE.object ["query_params" AE..= fromMaybe AE.Null queryParams, "path_params" AE..= fromMaybe AE.Null pathParams]) Nothing
+                    jsonValueToHtmlTree "params" (AE.object ["query_params" AE..= fromMaybe AE.Null queryParams, "path_params" AE..= fromMaybe AE.Null pathParams]) Nothing
           _ -> pass
 
 

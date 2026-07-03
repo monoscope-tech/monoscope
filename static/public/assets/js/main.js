@@ -110,11 +110,12 @@ window.updateGroupByButtonText = (_e, self) => {
     ed = document.querySelector('#filterElement')?.editor,
     v = ed?.getValue().toLowerCase() || '',
     field = el.dataset.field || el.closest('[data-field-path]')?.dataset.fieldPath,
-    span = el.querySelector('span')
+    // Only the verb span — the field key (.ctx-key) is a sibling and must be preserved.
+    span = el.querySelector('.gb-verb') || el.querySelector('span')
 
   if (span && field && ed) {
     const isGrouped = ['summarize', 'by', field.toLowerCase()].every(s => v.includes(s))
-    span.textContent = isGrouped ? 'Remove group by' : 'Group by'
+    span.textContent = isGrouped ? 'Remove group by ' : 'Group by '
   }
 }
 

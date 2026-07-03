@@ -19,7 +19,7 @@ import PyF
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (FieldAction (..), FreeTierStatus (..), LoadingSize (..), LoadingType (..), faSprite_, fieldContextMenuItems_, freeTierUsageBanner, loadingIndicatorWith_, loadingIndicator_, navTabAttrs, popoverPanel_, popoverTrigger_)
+import Utils (FieldAction (..), FieldMenuCtx (..), FreeTierStatus (..), LoadingSize (..), LoadingType (..), faSprite_, fieldContextMenuItems_, fieldMenuActions, freeTierUsageBanner, loadingIndicatorWith_, loadingIndicator_, navTabAttrs, popoverPanel_, popoverTrigger_)
 import Web.I18n qualified as I18n
 
 
@@ -439,8 +439,10 @@ bodyWrapper bcfg child = do
           }
         })
 
-        const operator = operation === 'Eq' ? '==' : operation === 'NotEq' ? '!=' : '==';
-        document.getElementById("filterElement").handleAddQuery(path + ' ' + operator + ' ' + value);
+        const editor = document.getElementById("filterElement");
+        if (!editor) return; // no query editor on this page (e.g. shared/standalone item views)
+        const operator = operation === 'NotEq' ? '!=' : '==';
+        editor.handleAddQuery(path + ' ' + operator + ' ' + value, operation === 'Replace');
     }
 
     function viewFieldPatterns(fieldPath) {
@@ -474,13 +476,14 @@ bodyWrapper bcfg child = do
           [text|
           behavior LogItemMenuable
             on click
-              log "clicked" then
               if I match <.with-context-menu/> then
                 remove <.log-item-cloned-menu /> then remove .with-context-menu from <.with-context-menu />
               else
                 remove <.log-item-cloned-menu /> then remove .with-context-menu from <.with-context-menu /> then
                 get #log-item-context-menu-tmpl.innerHTML then put it after me then add .with-context-menu to me then
-                _hyperscript.processNode(.log-item-cloned-menu) then htmx.process(next <.log-item-cloned-menu/>)
+                _hyperscript.processNode(.log-item-cloned-menu) then htmx.process(next <.log-item-cloned-menu/>) then
+                for el in <.log-item-cloned-menu .ctx-key/> set el's textContent to (my @data-field-path or 'field') end then
+                for el in <.log-item-cloned-menu .ctx-val/> set el's textContent to (my @data-field-value or 'value') end
               end
             end
           end
@@ -912,20 +915,8 @@ navbar projectM menuL currUser prePageTitle pageTitle pageTitleSuffix pageTitleM
 globalTemplates_ :: Html ()
 globalTemplates_ = do
   template_ [id_ "log-item-context-menu-tmpl"] do
-    ul_ [class_ "log-item-cloned-menu dropdown-content z-50 menu p-2 shadow-sm bg-bgRaised rounded-box w-52 absolute", tabindex_ "0"] do
-      fieldContextMenuItems_
-        [ FAddColumn
-        , FCopyValue
-            [__|on click if 'clipboard' in window.navigator then
-                  call navigator.clipboard.writeText((closest @data-field-value))
-                  send successToast(value:['Value has been added to the Clipboard']) to <body/>
-                  halt
-                end|]
-        , FFilter
-        , FExclude
-        , FGroupBy
-        , FViewPatterns
-        ]
+    ul_ [class_ "log-item-cloned-menu dropdown-content z-50 menu p-2 shadow-sm bg-bgRaised rounded-box w-96 max-w-[92vw] absolute", tabindex_ "0"] do
+      fieldContextMenuItems_ DynamicField fieldMenuActions
   template_ [id_ "successToastTmpl"] do
     div_ [role_ "alert", class_ "alert alert-success max-md:w-full md:w-96 cursor-pointer toast-animate", [__|init wait for click or 30s then transition my opacity to 0 then remove me|]] do
       faSprite_ "circle-check" "solid" "stroke-current shrink-0 w-6 h-6"

@@ -481,24 +481,30 @@ export class LogList extends LitElement {
     this.refetchLogs();
   }, 50);
 
-  // Is `col` currently shown? logsColumns mirrors the server-rendered set, which is driven by the
-  // authoritative `cols` URL param (once set), so this stays correct across refresh.
+  // Is `col` currently shown? logsColumns mirrors the server-rendered set.
   isColumnOnTable = (col: string) => this.logsColumns.includes(col);
 
-  // Toggle a column by rewriting the `cols` URL param to the full column list and refetching.
-  // The param is the single source of truth: the server renders exactly this set, so the state
-  // survives a page refresh. Returns the column's new visibility.
+  // Toggle a column by editing the `cols` URL param, which the server reads as a *delta* over its
+  // default set: a bare token `foo` adds a column, `-foo` hides a default. The edit is the exact
+  // inverse of the prior toggle (re-adding drops the `-`, re-removing drops the bare token), so the
+  // param stays minimal, reversible, and safe to share — no transient client state can collapse the
+  // table. Returns the column's new visibility.
   toggleColumnOnTable = (col: string): boolean => {
-    const has = this.logsColumns.includes(col);
-    const sIdx = this.logsColumns.indexOf('summary');
-    const newCols = has
-      ? this.logsColumns.filter(c => c !== col)
-      : sIdx > -1
-        ? [...this.logsColumns.slice(0, sIdx), col, ...this.logsColumns.slice(sIdx)]
-        : [...this.logsColumns, col];
     const p = new URLSearchParams(window.location.search);
-    p.set('cols', newCols.join(','));
-    window.history.replaceState({}, '', `${window.location.pathname}?${p}${window.location.hash}`);
+    const toks = (p.get('cols') || '').split(',').filter(Boolean);
+    const has = this.isColumnOnTable(col);
+    const next = has
+      ? toks.includes(col)
+        ? toks.filter(t => t !== col) // drop an explicit add
+        : [...toks, `-${col}`] // hide a default
+      : toks.includes(`-${col}`)
+        ? toks.filter(t => t !== `-${col}`) // un-hide a default
+        : [...toks, col]; // add a column
+    const uniq = [...new Set(next)];
+    if (uniq.length) p.set('cols', uniq.join(','));
+    else p.delete('cols');
+    const qs = p.toString();
+    window.history.replaceState({}, '', `${window.location.pathname}${qs ? '?' + qs : ''}${window.location.hash}`);
     this.fetchData(this.buildJsonUrl(), true);
     return !has;
   };

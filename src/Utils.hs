@@ -59,7 +59,9 @@ module Utils (
   renderMarkdown,
   jsonToMap,
   fieldContextMenuItems_,
+  fieldMenuActions,
   FieldAction (..),
+  FieldMenuCtx (..),
   renderSummaryTags,
   renderSummaryElements,
   summaryForDetailView,
@@ -146,53 +148,91 @@ onpointerdown_ :: Text -> Attribute
 onpointerdown_ = term "onpointerdown"
 
 
--- | Actions available in the shared field context menu. Every action reads the
--- field path from the nearest @data-field-path@ ancestor, so callers must set
--- that attribute on an enclosing element. 'FCopyValue' carries its own copy
--- hyperscript (differs between inline log-item and cloned-template usage).
-data FieldAction = FAddColumn | FCopyValue Attribute | FFilter | FExclude | FGroupBy | FViewPatterns
+-- | Field-label context for the shared context menu. 'StaticField' bakes the
+-- field key (bold) and an optional display value into labels (inline log-item
+-- tree, facet menu). 'DynamicField' renders @.ctx-key@/@.ctx-val@ placeholders
+-- filled at click time by the LogItemMenuable behavior (cloned-template menu,
+-- where the field isn't known until a pill is clicked).
+data FieldMenuCtx = StaticField Text (Maybe Text) | DynamicField
 
 
--- | Shared context menu for log/trace/facet field actions, rendered in the given
--- order. Single source of truth for the log-item, cloned-template, and facet
--- sidebar menus — pass the subset of actions each site needs.
-fieldContextMenuItems_ :: Monad m => [FieldAction] -> HtmlT m ()
-fieldContextMenuItems_ = traverse_ \case
-  FAddColumn ->
+-- | Actions in the shared field context menu, rendered in the order given;
+-- 'FDivider' draws a separator. Every action reads the field from the nearest
+-- @data-field-path@/@data-field-value@ ancestor, so callers must set those on an
+-- enclosing element (or, for the cloned template, on the clicked pill).
+data FieldAction
+  = FCopyValue
+  | FCopyField
+  | FCopyKeyValue
+  | FFilter
+  | FExclude
+  | FReplaceFilter
+  | FGroupBy
+  | FViewPatterns
+  | FAddColumn
+  | FDivider
+
+
+-- | The full field-menu action list (Datadog order), shared by the inline
+-- log-item tree and the cloned-template pill menu so the two can't drift.
+fieldMenuActions :: [FieldAction]
+fieldMenuActions =
+  [ FCopyValue
+  , FCopyField
+  , FCopyKeyValue
+  , FDivider
+  , FFilter
+  , FExclude
+  , FReplaceFilter
+  , FGroupBy
+  , FViewPatterns
+  , FDivider
+  , FAddColumn
+  ]
+
+
+-- | Datadog-style shared context menu for log/trace/facet field actions. Single
+-- source of truth for the log-item, cloned-template, and facet menus.
+fieldContextMenuItems_ :: Monad m => FieldMenuCtx -> [FieldAction] -> HtmlT m ()
+fieldContextMenuItems_ ctx = traverse_ \case
+  FCopyValue ->
     menuItem_
-      "table-columns"
-      "Add as table column"
-      [__|
-        init send refreshLabel to me
-        on refreshLabel
-            if #resultTable
-              set fp to (closest @data-field-path)
-              call #resultTable.isColumnOnTable(fp)
-              if result
-                set innerHTML of first <span/> in me to 'Remove column'
-              else
-                set innerHTML of first <span/> in me to 'Add as table column'
-              end
-            end
-        on toggle from closest <[popover]/> send refreshLabel to me
-        on click
-            if #resultTable
-              set fp to (closest @data-field-path)
-              call #resultTable.toggleColumnOnTable(fp)
-              if result
-                set innerHTML of first <span/> in me to 'Remove column'
-              else
-                set innerHTML of first <span/> in me to 'Add as table column'
-              end
-            end
-      |]
-  FCopyValue copyScript -> menuItem_ "copy" "Copy field value" copyScript
-  FFilter -> menuItem_ "filter" "Filter by field" $ onpointerdown_ "filterByField(event, 'Eq')"
-  FExclude -> menuItem_ "filter-circle-xmark" "Exclude field" $ onpointerdown_ "filterByField(event, 'NotEq')"
+      "copy"
+      "Copy value"
+      valTip
+      [__|on click if 'clipboard' in window.navigator then
+            call navigator.clipboard.writeText((closest @data-field-value))
+            send successToast(value:['Copied to Clipboard']) to <body/>
+            halt
+          end|]
+  FCopyField ->
+    menuItem_
+      "copy"
+      "Copy field"
+      keyTip
+      [__|on click if 'clipboard' in window.navigator then
+            call navigator.clipboard.writeText((closest @data-field-path))
+            send successToast(value:['Copied to Clipboard']) to <body/>
+            halt
+          end|]
+  FCopyKeyValue ->
+    menuItem_
+      "copy"
+      "Copy key == value"
+      kvTip
+      [__|on click if 'clipboard' in window.navigator then
+            call navigator.clipboard.writeText((closest @data-field-path) + ' == ' + (closest @data-field-value))
+            send successToast(value:['Copied to Clipboard']) to <body/>
+            halt
+          end|]
+  FFilter -> menuItem_ "filter" ("Filter by " <> keyVal_) kvTip $ onpointerdown_ "filterByField(event, 'Eq')"
+  FExclude -> menuItem_ "filter-circle-xmark" ("Exclude " <> keyVal_) kvTip $ onpointerdown_ "filterByField(event, 'NotEq')"
+  FReplaceFilter -> menuItem_ "arrow-rotate-left" ("Replace filter with " <> keyVal_) kvTip $ onpointerdown_ "filterByField(event, 'Replace')"
   FGroupBy ->
     menuItem_
       "layer-group"
-      "Group by field"
+      (span_ [class_ "gb-verb"] "Group by " <> key_)
+      keyTip
       [__|
         init if document.querySelector('query-builder') call window.updateGroupByButtonText(event, me) end
         on refreshItem if document.querySelector('query-builder') call window.updateGroupByButtonText(event, me) end
@@ -205,11 +245,63 @@ fieldContextMenuItems_ = traverse_ \case
           end
         end
       |]
-  FViewPatterns -> menuItem_ "chart-simple" "View patterns" $ onpointerdown_ "viewFieldPatterns(event.target.closest('[data-field-path]').dataset.fieldPath)"
+  FViewPatterns -> menuItem_ "chart-simple" ("Show patterns for " <> key_) keyTip $ onpointerdown_ "viewFieldPatterns(event.target.closest('[data-field-path]').dataset.fieldPath)"
+  FAddColumn ->
+    -- Label reflects current state; refreshed when the popover opens (by which point the
+    -- <log-list> element has upgraded — refreshing on `init` raced its upgrade and threw).
+    -- Guard on the method too, so a stray early `toggle` can't call a not-yet-upgraded element.
+    menuItem_
+      "table-columns"
+      (span_ [class_ "col-verb"] "Add column for " <> key_)
+      keyTip
+      [__|
+        on toggle from closest <[popover]/>
+            if #resultTable and #resultTable.isColumnOnTable
+              if #resultTable.isColumnOnTable(closest @data-field-path)
+                set innerHTML of first <.col-verb/> in me to 'Remove column for '
+              else
+                set innerHTML of first <.col-verb/> in me to 'Add column for '
+              end
+            end
+        on click
+            if #resultTable and #resultTable.toggleColumnOnTable
+              if #resultTable.toggleColumnOnTable(closest @data-field-path)
+                set innerHTML of first <.col-verb/> in me to 'Remove column for '
+              else
+                set innerHTML of first <.col-verb/> in me to 'Add column for '
+              end
+            end
+      |]
+  FDivider -> li_ [class_ "pointer-events-none"] $ div_ [class_ "border-t border-strokeWeak my-1 -mx-2"] ""
   where
-    menuItem_ icon label action = li_ $ a_ [class_ "flex gap-2 items-center", action] do
-      faSprite_ icon "regular" "w-4 h-4 text-iconNeutral"
-      span_ [] label
+    -- Full (untruncated) key/value for tooltips; the label shows a shortened form.
+    (keyTxt, valTxtM) = case ctx of StaticField k v -> (k, v); DynamicField -> ("", Nothing)
+    valTip = fromMaybe "" valTxtM
+    keyTip = keyTxt
+    kvTip = keyTxt <> maybe "" (" == " <>) valTxtM
+    key_ = b_ [class_ "ctx-key font-semibold text-textStrong"] $ case ctx of
+      StaticField k _ -> toHtml k
+      DynamicField -> "field"
+    val_ = span_ [class_ "ctx-val"] $ case ctx of
+      StaticField _ (Just v) -> toHtml (truncateMiddle 52 v)
+      _ -> "value"
+    keyVal_ = key_ <> span_ [class_ "text-textWeak"] " == " <> val_
+    -- w-full so the item fills the fixed-width menu; the label then shrinks
+    -- (min-w-0) and truncates instead of widening the menu / scrolling it.
+    -- @tip@ (full key/value) becomes a native `title` tooltip so the truncated text
+    -- is recoverable on hover.
+    menuItem_ icon labelHtml tip action =
+      li_ $ a_ ([class_ "flex gap-2 items-center flex-nowrap w-full", action] <> [term "title" tip | not (T.null tip)]) do
+        faSprite_ icon "regular" "w-4 h-4 text-iconNeutral shrink-0"
+        span_ [class_ "truncate min-w-0"] labelHtml
+
+
+-- | Middle-truncate a display string to at most @n@ chars (keeps head + tail),
+-- e.g. @k6NOL5dPP3Yzy9ZD…pI/B@ — for showing long values in menu labels.
+truncateMiddle :: Int -> Text -> Text
+truncateMiddle n t
+  | T.length t <= n = t
+  | otherwise = T.take (n - 6) t <> "…" <> T.takeEnd 5 t
 
 
 -- | Render a Font Awesome icon from the sprite sheet at
@@ -302,8 +394,12 @@ b64ToJson b64Text =
   fromRight (AE.object []) $ AE.eitherDecodeStrict $ fromRight "{}" $ B64.decodeBase64Untyped $ encodeUtf8 b64Text
 
 
-jsonValueToHtmlTree :: AE.Value -> Maybe Text -> Html ()
-jsonValueToHtmlTree val pathM = do
+-- | @scope@ must be unique per call site on a page: the popover ids/anchor-names
+-- are derived from it, and the log-item detail renders several trees whose paths
+-- overlap (e.g. the raw-data tab re-renders resource/attributes). Duplicate ids
+-- would make native popovertarget resolve to the first match and break the menu.
+jsonValueToHtmlTree :: Text -> AE.Value -> Maybe Text -> Html ()
+jsonValueToHtmlTree scope val pathM = do
   div_ [class_ "p-2 rounded-lg bg-fillWeaker border w-full json-tree-container monospace text-sm leading-6"] do
     div_ [class_ "w-full flex items-center gap-4 text-xs mb-2"] do
       button_
@@ -367,11 +463,13 @@ jsonValueToHtmlTree val pathM = do
     jsonValueToHtmlTree' (path, key, value) = do
       let fullFieldPath = if T.isSuffixOf "[*]" path then path else path <> "." <> key
       let fullFieldPath' = fromMaybe fullFieldPath $ T.stripPrefix ".." fullFieldPath
-      let fieldPopId = "log-field-" <> slugify fullFieldPath'
+      let fieldPopId = "log-field-" <> scope <> "-" <> slugify fullFieldPath'
+      let dfPath = replaceNumbers $ if isJust pathM then T.replace ".." "." fullFieldPath' else fullFieldPath'
+          dfVal = unwrapJsonPrimValue False value
       div_
         [ class_ "log-item-field-parent block"
-        , term "data-field-path" $ replaceNumbers $ if isJust pathM then T.replace ".." "." fullFieldPath' else fullFieldPath'
-        , term "data-field-value" $ unwrapJsonPrimValue False value
+        , term "data-field-path" dfPath
+        , term "data-field-value" dfVal
         ]
         do
           button_
@@ -379,22 +477,10 @@ jsonValueToHtmlTree val pathM = do
             do
               span_ $ toHtml key
               span_ [class_ "text-textBrand"] ":"
-              span_ [class_ "text-textBrand ml-2.5 log-item-field-value", term "data-field-path" fullFieldPath'] $ toHtml $ unwrapJsonPrimValue False value
+              span_ [class_ "text-textBrand ml-2.5 log-item-field-value", term "data-field-path" fullFieldPath'] $ toHtml dfVal
 
-          ul_ ([class_ "dropdown log-item-context-menu menu p-2 shadow-lg bg-bgRaised rounded-box border border-strokeWeak w-52"] <> popoverPanel_ fieldPopId) do
-            fieldContextMenuItems_
-              [ FAddColumn
-              , FCopyValue
-                  [__|on click if 'clipboard' in window.navigator then
-                        call navigator.clipboard.writeText((previous <.log-item-field-value/>)'s innerText)
-                        send successToast(value:['Value has been added to the Clipboard']) to <body/>
-                        halt
-                      end|]
-              , FFilter
-              , FExclude
-              , FGroupBy
-              , FViewPatterns
-              ]
+          ul_ ([class_ "dropdown log-item-context-menu menu p-2 shadow-lg bg-bgRaised rounded-box border border-strokeWeak w-96 max-w-[92vw]"] <> popoverPanel_ fieldPopId)
+            $ fieldContextMenuItems_ (StaticField dfPath (Just dfVal)) fieldMenuActions
 
     renderParentType :: Text -> Text -> Text -> Int -> Html () -> Html ()
     renderParentType opening closing key count child = div_ [class_ $ "log-item-with-children" <> if count == 0 then " collapsed" else ""] do

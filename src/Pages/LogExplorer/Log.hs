@@ -61,7 +61,7 @@ import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Megaparsec (parseMaybe)
-import Utils (FieldAction (..), FreeTierStatus (..), LoadingSize (..), LoadingType (..), checkFreeTierStatus, faSprite_, fieldContextMenuItems_, formatUTC, getDurationNSMS, getServiceColors, htmxOverlayIndicator_, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecTextByKey, methodFillColor, popoverPanel_, popoverTrigger_, prettyPrintCount, serviceFillColor, statusFillColorText)
+import Utils (FieldAction (..), FieldMenuCtx (..), FreeTierStatus (..), LoadingSize (..), LoadingType (..), checkFreeTierStatus, faSprite_, fieldContextMenuItems_, formatUTC, getDurationNSMS, getServiceColors, htmxOverlayIndicator_, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecTextByKey, methodFillColor, popoverPanel_, popoverTrigger_, prettyPrintCount, serviceFillColor, statusFillColorText)
 
 import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.UUID qualified as UUID
@@ -436,7 +436,9 @@ renderFacets facetSummary = do
   where
     collapsible_ :: [Attribute] -> Text -> Bool -> [Attribute] -> Html () -> Html () -> Html ()
     collapsible_ wrapAttrs toggleId open labelAttrs header body =
-      div_ (wrapAttrs <> [class_ " block contain-[layout_style] "]) do
+      -- No `contain` here: it would become the containing block for the fixed-position
+      -- field-action popover (top layer), trapping it inside this section's overflow clip.
+      div_ (wrapAttrs <> [class_ " block "]) do
         input_ $ [type_ "checkbox", class_ "hidden peer", id_ toggleId] ++ [checked_ | open]
         label_
           ( labelAttrs
@@ -494,8 +496,10 @@ renderFacets facetSummary = do
               div_ [class_ "inline-block"] do
                 button_ ([type_ "button", class_ "cursor-pointer p-2 hover:bg-fillWeak rounded", Aria.label_ "Facet options"] <> popoverTrigger_ (slugify f.path))
                   $ faSprite_ "ellipsis-vertical" "regular" "w-3 h-3"
-                ul_ ([class_ "dropdown dropdown-end menu p-2 shadow-sm bg-bgRaised rounded-box w-52 border border-strokeWeak z-50", term "data-field-path" f.path] <> popoverPanel_ (slugify f.path))
-                  $ fieldContextMenuItems_ [FAddColumn, FGroupBy, FViewPatterns]
+                -- Opens below the ⋮, extending right over the log list (top-layer popover),
+                -- so long field names aren't truncated inside the narrow facets sidebar.
+                ul_ ([class_ "dropdown menu p-2 shadow-sm bg-bgRaised rounded-box w-96 border border-strokeWeak z-50", term "data-field-path" f.path] <> popoverPanel_ (slugify f.path))
+                  $ fieldContextMenuItems_ (StaticField f.path Nothing) [FCopyField, FDivider, FGroupBy, FViewPatterns, FDivider, FAddColumn]
             $ div_ [class_ "facet-values pl-7 pr-2 mb-1 space-y-1"] do
               if null values
                 then div_ [class_ "facet-empty px-1 py-1 text-xs italic text-textWeak"] "no values in window"
@@ -518,8 +522,8 @@ keepNonEmpty (Just a) = Just a
 -- When @withChildren@ is False, only rows matching the predicate are returned —
 -- no descendants of matches, no synthesised orphan headers (both are
 -- trace-tree concerns the UI wants but the API/CLI usually doesn't).
-buildLogResult :: (DB es, Time.Time :> es) => Bool -> Projects.ProjectId -> UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> (V.Vector (V.Vector AE.Value), [Text], Int) -> Eff es LogResult
-buildLogResult withChildren pid now sinceM fromM toM summaryCols (requestVecs, colNames, resultCount') = do
+buildLogResult :: (DB es, Time.Time :> es) => Bool -> Projects.ProjectId -> UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> (V.Vector (V.Vector AE.Value), [Text], Int) -> Eff es LogResult
+buildLogResult withChildren pid now sinceM fromM toM addCols removeCols (requestVecs, colNames, resultCount') = do
   let colIdxMap = listToIndexHashMap colNames
       reqLastCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? (V.length requestVecs - 1))
       reqFirstCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? 0)
@@ -533,11 +537,11 @@ buildLogResult withChildren pid now sinceM fromM toM summaryCols (requestVecs, c
             traceIds = V.fromList $ take 50 $ nubOrd $ V.toList allTraceIds
             -- latency_breakdown is aliased from context___span_id (see Pkg.Parser).
             seedSpanIds = V.mapMaybe (\v -> lookupVecTextByKey v colIdxMap "latency_breakdown") requestVecs
-        LogQueries.selectChildSpansAndLogs pid summaryCols traceIds seedSpanIds (fromDD, toDD) alreadyLoadedIds
+        LogQueries.selectChildSpansAndLogs pid addCols traceIds seedSpanIds (fromDD, toDD) alreadyLoadedIds
   let synthRows = if withChildren then synthesizeOrphanHeaders colIdxMap requestVecs else V.empty
       requestVecsAug = synthRows <> requestVecs
       rawLogsData = requestVecsAug <> V.fromList childSpansList
-      cols = nubOrd $ curateCols summaryCols colNames
+      cols = nubOrd $ curateCols addCols removeCols colNames
       colors = getServiceColors $ V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") rawLogsData
       queryResultCount = V.length requestVecsAug
       (logsData, traces) = buildTraceTree colIdxMap queryResultCount rawLogsData
@@ -593,7 +597,7 @@ queryEvents pid queryM sinceM fromM toM sourceM limitM withChildrenM = do
   case result of
     Left err -> throwError $ translateQueryError err
     -- Default to exact-match (no trace expansion); UI passes True via apiLogH.
-    Right r -> buildLogResult (fromMaybe False withChildrenM) pid now sinceM fromM toM [] r
+    Right r -> buildLogResult (fromMaybe False withChildrenM) pid now sinceM fromM toM [] [] r
 
 
 -- | Translate the raw exception string returned by 'LogQueries.selectLogTable'
@@ -692,7 +696,10 @@ apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Ma
 apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM queryLibItemTitle queryLibItemID detailWM targetEventM showTraceM hxRequestM hxBoostedM jsonM vizTypeM alertM skipM pTargetM sortByM = do
   let source = fromMaybe "spans" sourceM
   (sess, project, bw) <- mkPageCtx pid
-  let summaryCols = filter (not . T.null) $ T.splitOn "," (fromMaybe "" cols')
+  -- `cols` is a delta over server defaults: bare tokens add columns, `-`-prefixed tokens hide
+  -- defaults. Only adds are projected (removes are already-fetched defaults, just hidden).
+  let (removeToks, addCols) = L.partition ("-" `T.isPrefixOf`) $ filter (not . T.null) $ T.splitOn "," (fromMaybe "" cols')
+      removeCols = map (T.drop 1) removeToks
   let queryInput = maybeToMonoid queryM'
   let parseError msg = addTriggerEvent "showParseError" (AE.toJSON msg) >> addErrorToast "Error Parsing Query" (Just msg) $> ([], Just msg)
   (queryAST, parseErrorMsg) <- case parseQueryToAST queryInput of
@@ -743,14 +750,14 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
   let shouldSkipLoad = hadParseError || isNothing layoutM && isNothing hxRequestM && jsonM /= Just "true"
       fetchLogs =
         Hasql.withHasqlTimefusion authCtx.env.enableTimefusionReads
-          $ LogQueries.selectLogTable pid queryAST queryText cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
+          $ LogQueries.selectLogTable pid queryAST queryText cursorM' (fromD, toD) addCols (parseMaybe pSource =<< sourceM) targetSpansM
 
   -- JSON fast path: skip side queries (facets, teams, queryLib, patterns)
   let isJsonFastPath = jsonM == Just "true" && layoutM /= Just "SaveQuery"
 
   let buildLogResult' tableData = do
         -- UI always wants the trace-tree context; the API/CLI defaults off.
-        lr <- buildLogResult True pid now sinceM fromM toM summaryCols tableData
+        lr <- buildLogResult True pid now sinceM fromM toM addCols removeCols tableData
         let lastFM = lr.cursor >>= textToUTC <&> toText . iso8601Show . addUTCTime (-0.001)
         pure
           (lr :: LogResult)
@@ -1375,7 +1382,9 @@ apiLogsPage page = do
             div_ [class_ "flex-1 min-w-0 max-md:hidden"] $ Widget.widget_ page.latencyWidget
     div_ [class_ "flex max-md:flex-col h-full overflow-y-hidden max-md:overflow-y-auto", id_ "facets_and_loglist"] do
       -- FACETS
-      div_ [class_ "w-68 will-change-[width] contain-[layout_style] text-sm text-textWeak shrink-0 flex flex-col h-full overflow-y-scroll gap-2 max-md:w-full max-md:shrink max-md:max-h-48 max-md:border-b max-md:border-strokeWeak group-has-[.toggle-filters:checked]/pg:max-w-0 group-has-[.toggle-filters:checked]/pg:overflow-hidden max-md:group-has-[.toggle-filters:checked]/pg:max-h-0", id_ "facets-container"] do
+      -- No `contain:layout` here: it makes this a containing block for fixed/anchored
+      -- descendants, which clips the facet action popover (top layer) to the sidebar.
+      div_ [class_ "w-68 will-change-[width] text-sm text-textWeak shrink-0 flex flex-col h-full overflow-y-scroll gap-2 max-md:w-full max-md:shrink max-md:max-h-48 max-md:border-b max-md:border-strokeWeak group-has-[.toggle-filters:checked]/pg:max-w-0 group-has-[.toggle-filters:checked]/pg:overflow-hidden max-md:group-has-[.toggle-filters:checked]/pg:max-h-0", id_ "facets-container"] do
         div_ [class_ "sticky top-0 z-10 bg-bgBase relative mb-2"] do
           span_ [class_ "absolute inset-y-0 left-3 flex items-center", Aria.hidden_ "true"]
             $ faSprite_ "magnifying-glass" "regular" "w-4 h-4 text-iconNeutral"
@@ -1541,7 +1550,7 @@ apiLogExpandH pid kindM keyM skipM queryM sinceM fromM toM = do
   let rawLogsData = shown <> V.fromList childSpansList
       queryResultCount = V.length shown
       (logsData, traces) = buildTraceTree colIdxMap queryResultCount rawLogsData
-      displayCols = curateCols [] cols
+      displayCols = curateCols [] [] cols
   addRespHeaders
     $ AE.object
       [ "cols" AE..= displayCols
@@ -1590,8 +1599,23 @@ aiSearchH pid requestBody = do
                   ]
 
 
-curateCols :: [Text] -> [Text] -> [Text]
-curateCols summaryCols cols = sortBy sortAccordingly filteredCols
+-- | Compute the visible columns from server defaults plus the user's URL-encoded deltas:
+-- @addCols@ are extra columns to show (bare tokens in the `cols` param), @removeCols@ are
+-- default columns to hide (@-@-prefixed tokens). Deltas (rather than an explicit column
+-- list) keep the shareable URL small and forward-compatible — new default columns still
+-- appear for old links, and no transient client state can collapse the table. @id@ is
+-- always kept as the row key.
+--
+-- >>> curateCols [] [] ["id","timestamp","resource.service.name","duration","body"]
+-- ["id","timestamp","resource.service.name"]
+--
+-- >>> curateCols [] ["resource.service.name"] ["id","timestamp","resource.service.name"]
+-- ["id","timestamp"]
+--
+-- >>> curateCols ["duration"] [] ["id","timestamp","resource.service.name","duration"]
+-- ["id","timestamp","resource.service.name","duration"]
+curateCols :: [Text] -> [Text] -> [Text] -> [Text]
+curateCols addCols removeCols cols = sortBy sortAccordingly visible
   where
     defaultSummaryPaths =
       [ "trace_id"
@@ -1610,13 +1634,11 @@ curateCols summaryCols cols = sortBy sortAccordingly filteredCols
       , "duration"
       , "body"
       ]
-    -- With no explicit selection, show every column except the hidden-by-default set.
-    -- With an explicit selection (the `cols` URL param), that list is authoritative — render
-    -- exactly it (id is always kept as the row key), so columns can be hidden and the state is
-    -- fully URL-driven / refresh-safe.
-    filteredCols
-      | null summaryCols = filter (`notElem` defaultSummaryPaths) cols
-      | otherwise = filter (\c -> c == "id" || c `elem` summaryCols) cols
+    -- Show a fetched column when it's the id key, or it's not explicitly removed and either
+    -- isn't hidden-by-default or was explicitly added. `removeCols` wins over `addCols` for the
+    -- (client-never-produced) both-present case.
+    visible = flip filter cols \c ->
+      c == "id" || (c `notElem` removeCols && (c `notElem` defaultSummaryPaths || c `elem` addCols))
 
     sortAccordingly :: Text -> Text -> Ordering
     sortAccordingly a b
@@ -1626,7 +1648,7 @@ curateCols summaryCols cols = sortBy sortAccordingly filteredCols
       | b == "timestamp" && a /= "id" = GT
       | a == "latency_breakdown" = GT
       | b == "latency_breakdown" = LT
-      | otherwise = comparing (`L.elemIndex` filteredCols) a b
+      | otherwise = comparing (`L.elemIndex` visible) a b
 
 
 -- | Render alert configuration form for creating log-based alerts

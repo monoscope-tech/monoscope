@@ -78,3 +78,51 @@ describe('LogList load-more', () => {
     expect((el as any).loadedCount).toBe(0);
   });
 });
+
+// The `cols` URL param is a DELTA over the server's default column set: a bare token
+// adds a column, `-token` hides a default. Toggles must be exact inverses so the param
+// stays minimal and reversible, and no client state can write a table-collapsing list.
+// Regression for the popover-migration breakage (add/remove column stopped working).
+describe('LogList toggleColumnOnTable (URL delta)', () => {
+  let el: LogList;
+  beforeEach(async () => {
+    el = await mountList();
+    el.transport = fakeTransport({ tree: [] }); // absorb the refetch toggle kicks off
+    window.history.replaceState({}, '', '/p/x/log_explorer');
+  });
+  const cols = () => new URLSearchParams(window.location.search).get('cols');
+  const setShown = (c: string[]) => ((el as any).logsColumns = c);
+
+  test('adding a hidden column appends a bare token', () => {
+    setShown(['id', 'timestamp']);
+    expect(el.toggleColumnOnTable('resource.service.name')).toBe(true);
+    expect(cols()).toBe('resource.service.name');
+  });
+
+  test('removing a shown default appends a -token', () => {
+    setShown(['id', 'timestamp', 'resource.service.name']);
+    expect(el.toggleColumnOnTable('resource.service.name')).toBe(false);
+    expect(cols()).toBe('-resource.service.name');
+  });
+
+  test('removing a column that was explicitly added round-trips to empty', () => {
+    window.history.replaceState({}, '', '/p/x/log_explorer?cols=route');
+    setShown(['id', 'route']);
+    expect(el.toggleColumnOnTable('route')).toBe(false);
+    expect(cols()).toBe(null); // dropped, not left as `-route`
+  });
+
+  test('re-adding a hidden default drops its -token (not a bare add)', () => {
+    window.history.replaceState({}, '', '/p/x/log_explorer?cols=-service');
+    setShown(['id', 'timestamp']); // service currently hidden
+    expect(el.toggleColumnOnTable('service')).toBe(true);
+    expect(cols()).toBe(null);
+  });
+
+  test('preserves unrelated tokens and dedupes', () => {
+    window.history.replaceState({}, '', '/p/x/log_explorer?cols=route%2C-service');
+    setShown(['id', 'route']); // route shown, service hidden, duration hidden
+    expect(el.toggleColumnOnTable('duration')).toBe(true);
+    expect(cols()).toBe('route,-service,duration');
+  });
+});
