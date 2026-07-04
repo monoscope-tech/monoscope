@@ -1333,86 +1333,86 @@ apiLogsPage page = do
           end|]
     ]
     do
-    template_ [id_ "loader-tmp"] $ loadingIndicator_ LdMD LdDots
+      template_ [id_ "loader-tmp"] $ loadingIndicator_ LdMD LdDots
 
-    div_ [class_ "fixed z-[9999] hidden right-0 w-max h-max border rounded top-32 bg-bgBase shadow-lg", id_ "sessionPlayerWrapper"] do
-      termRaw "session-replay" [id_ "sessionReplay", class_ "shrink-1 flex flex-col", term "projectId" page.pid.toText, term "containerId" "sessionPlayerWrapper"] ("" :: Text)
-    div_
-      [ style_ "z-index:26"
-      , class_ "fixed hidden right-0 top-0 justify-end left-0 bottom-0 w-full bg-black bg-opacity-5"
-      , [__|on click remove .show-log-modal from #expand-log-modal|]
-      , id_ "expand-log-modal"
-      ]
-      do
-        div_ [class_ "relative ml-auto w-full", style_ ""] do
-          div_ [class_ "flex justify-end  w-full p-4 "]
-            $ button_ [class_ "cursor-pointer", Aria.label_ "Close log details", [__|on click add .hidden to #expand-log-modal|]]
-            $ faSprite_ "xmark" "regular" "h-8"
-          form_
-            [ hxPost_ $ "/p/" <> page.pid.toText <> "/share/"
-            , hxSwap_ "innerHTML"
-            , hxTarget_ "#copy_share_link"
-            , id_ "share_log_form"
-            ]
-            do
-              input_ [type_ "hidden", value_ "1 hour", name_ "expiresIn", id_ "expire_input"]
-              input_ [type_ "hidden", value_ "", name_ "reqId", id_ "req_id_input"]
-              input_ [type_ "hidden", value_ "", name_ "reqCreatedAt", id_ "req_created_at_input"]
-    let countText = prettyPrintCount page.queryResultCount
-        suffixText = if page.queryResultCount >= page.resultCount then " rows" else "+ rows"
-    div_ [class_ "w-full", id_ "log_explorer_controls"] do
-      logQueryBox_
-        LogQueryBoxConfig
-          { pid = page.pid
-          , currentRange = page.currentRange
-          , source = Just page.source
-          , targetSpan = page.targetSpans
-          , query = page.query
-          , vizType = page.vizType
-          , queryLibRecent = page.queryLibRecent
-          , queryLibSaved = page.queryLibSaved
-          , updateUrl = True
-          , targetWidgetPreview = Nothing
-          , alert = isJust page.alert
-          , patternSelected = page.targetPattern
-          , mobileExtra = Just do
-              label_ [class_ "gap-1 flex items-center cursor-pointer text-textWeak", Lucid.for_ "toggle-filters"] do
-                faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 text-iconNeutral"
-                span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
-                span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
-                "filters"
-              span_ [class_ "text-strokeWeak text-xs"] "·"
-              rowCountDisplay_ "mobile" countText suffixText
-          , parseError = page.parseError
-          , facetData = (.facetJson) <$> page.facets
-          }
+      div_ [class_ "fixed z-[9999] hidden right-0 w-max h-max border rounded top-32 bg-bgBase shadow-lg", id_ "sessionPlayerWrapper"] do
+        termRaw "session-replay" [id_ "sessionReplay", class_ "shrink-1 flex flex-col", term "projectId" page.pid.toText, term "containerId" "sessionPlayerWrapper"] ("" :: Text)
+      div_
+        [ style_ "z-index:26"
+        , class_ "fixed hidden right-0 top-0 justify-end left-0 bottom-0 w-full bg-black bg-opacity-5"
+        , [__|on click remove .show-log-modal from #expand-log-modal|]
+        , id_ "expand-log-modal"
+        ]
+        do
+          div_ [class_ "relative ml-auto w-full", style_ ""] do
+            div_ [class_ "flex justify-end  w-full p-4 "]
+              $ button_ [class_ "cursor-pointer", Aria.label_ "Close log details", [__|on click add .hidden to #expand-log-modal|]]
+              $ faSprite_ "xmark" "regular" "h-8"
+            form_
+              [ hxPost_ $ "/p/" <> page.pid.toText <> "/share/"
+              , hxSwap_ "innerHTML"
+              , hxTarget_ "#copy_share_link"
+              , id_ "share_log_form"
+              ]
+              do
+                input_ [type_ "hidden", value_ "1 hour", name_ "expiresIn", id_ "expire_input"]
+                input_ [type_ "hidden", value_ "", name_ "reqId", id_ "req_id_input"]
+                input_ [type_ "hidden", value_ "", name_ "reqCreatedAt", id_ "req_created_at_input"]
+      let countText = prettyPrintCount page.queryResultCount
+          suffixText = if page.queryResultCount >= page.resultCount then " rows" else "+ rows"
+      div_ [class_ "w-full", id_ "log_explorer_controls"] do
+        logQueryBox_
+          LogQueryBoxConfig
+            { pid = page.pid
+            , currentRange = page.currentRange
+            , source = Just page.source
+            , targetSpan = page.targetSpans
+            , query = page.query
+            , vizType = page.vizType
+            , queryLibRecent = page.queryLibRecent
+            , queryLibSaved = page.queryLibSaved
+            , updateUrl = True
+            , targetWidgetPreview = Nothing
+            , alert = isJust page.alert
+            , patternSelected = page.targetPattern
+            , mobileExtra = Just do
+                label_ [class_ "gap-1 flex items-center cursor-pointer text-textWeak", Lucid.for_ "toggle-filters"] do
+                  faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 text-iconNeutral"
+                  span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
+                  span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
+                  "filters"
+                span_ [class_ "text-strokeWeak text-xs"] "·"
+                rowCountDisplay_ "mobile" countText suffixText
+            , parseError = page.parseError
+            , facetData = (.facetJson) <$> page.facets
+            }
 
-      -- Sessions viz renders a session-level header. A Left means the summary
-      -- query failed — surface it visibly instead of silently reverting to the
-      -- generic span/log widgets, which would reintroduce the unit-of-analysis
-      -- mismatch this view exists to fix. Wrapped in #page-summary-region so the
-      -- viz-tab change handler can swap this fragment when crossing the sessions
-      -- boundary (sessions uses a different region than other viz types).
-      div_ [id_ "page-summary-region"] $ case page.sessionSummary of
-        Just (Right summ) -> sessionsHeader_ summ
-        Just (Left err) -> sessionsHeaderError_ err
-        Nothing ->
-          div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full min-h-36 max-md:min-h-28 aspect-[10/1] max-md:aspect-auto max-md:flex-col"] do
-            Widget.widget_ page.chartWidget
-            div_ [class_ "flex-1 min-w-0 max-md:hidden"] $ Widget.widget_ page.latencyWidget
-    div_ [class_ "flex max-md:flex-col h-full overflow-y-hidden max-md:overflow-y-auto", id_ "facets_and_loglist"] do
-      -- FACETS
-      -- No `contain:layout` here: it makes this a containing block for fixed/anchored
-      -- descendants, which clips the facet action popover (top layer) to the sidebar.
-      div_ [class_ "w-68 will-change-[width] text-sm text-textWeak shrink-0 flex flex-col h-full overflow-y-scroll gap-2 max-md:w-full max-md:shrink max-md:max-h-48 max-md:border-b max-md:border-strokeWeak group-has-[.toggle-filters:checked]/pg:max-w-0 group-has-[.toggle-filters:checked]/pg:overflow-hidden max-md:group-has-[.toggle-filters:checked]/pg:max-h-0", id_ "facets-container"] do
-        div_ [class_ "sticky top-0 z-10 bg-bgBase relative mb-2"] do
-          span_ [class_ "absolute inset-y-0 left-3 flex items-center", Aria.hidden_ "true"]
-            $ faSprite_ "magnifying-glass" "regular" "w-4 h-4 text-iconNeutral"
-          input_
-            [ placeholder_ "Search filters..."
-            , class_ "rounded-lg pl-10 pr-3 py-1.5 border border-strokeStrong w-full"
-            , term "data-filterParent" "facets-container"
-            , [__| on keyup
+        -- Sessions viz renders a session-level header. A Left means the summary
+        -- query failed — surface it visibly instead of silently reverting to the
+        -- generic span/log widgets, which would reintroduce the unit-of-analysis
+        -- mismatch this view exists to fix. Wrapped in #page-summary-region so the
+        -- viz-tab change handler can swap this fragment when crossing the sessions
+        -- boundary (sessions uses a different region than other viz types).
+        div_ [id_ "page-summary-region"] $ case page.sessionSummary of
+          Just (Right summ) -> sessionsHeader_ summ
+          Just (Left err) -> sessionsHeaderError_ err
+          Nothing ->
+            div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full min-h-36 max-md:min-h-28 aspect-[10/1] max-md:aspect-auto max-md:flex-col"] do
+              Widget.widget_ page.chartWidget
+              div_ [class_ "flex-1 min-w-0 max-md:hidden"] $ Widget.widget_ page.latencyWidget
+      div_ [class_ "flex max-md:flex-col h-full overflow-y-hidden max-md:overflow-y-auto", id_ "facets_and_loglist"] do
+        -- FACETS
+        -- No `contain:layout` here: it makes this a containing block for fixed/anchored
+        -- descendants, which clips the facet action popover (top layer) to the sidebar.
+        div_ [class_ "w-68 will-change-[width] text-sm text-textWeak shrink-0 flex flex-col h-full overflow-y-scroll gap-2 max-md:w-full max-md:shrink max-md:max-h-48 max-md:border-b max-md:border-strokeWeak group-has-[.toggle-filters:checked]/pg:max-w-0 group-has-[.toggle-filters:checked]/pg:overflow-hidden max-md:group-has-[.toggle-filters:checked]/pg:max-h-0", id_ "facets-container"] do
+          div_ [class_ "sticky top-0 z-10 bg-bgBase relative mb-2"] do
+            span_ [class_ "absolute inset-y-0 left-3 flex items-center", Aria.hidden_ "true"]
+              $ faSprite_ "magnifying-glass" "regular" "w-4 h-4 text-iconNeutral"
+            input_
+              [ placeholder_ "Search filters..."
+              , class_ "rounded-lg pl-10 pr-3 py-1.5 border border-strokeStrong w-full"
+              , term "data-filterParent" "facets-container"
+              , [__| on keyup
                     if the event's key is 'Escape'
                       set my value to '' then trigger keyup
                     else
@@ -1420,25 +1420,25 @@ apiLogsPage page = do
                       show <div.facet-section/> in #{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()
                       show <div.facet-value/> in #{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()
                   |]
-            ]
-        whenJust page.facets renderFacets
+              ]
+          whenJust page.facets renderFacets
 
-      div_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden max-md:hidden mr-3.5", id_ "resizer-facets_width-wrapper"] $ resizer_ "facets-container" "facets_width" True
+        div_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden max-md:hidden mr-3.5", id_ "resizer-facets_width-wrapper"] $ resizer_ "facets-container" "facets_width" True
 
-      let showTrace = isJust page.showTrace
-      div_ [class_ "grow will-change-[width] contain-[layout_style] relative flex flex-col shrink-1 min-w-0 w-full h-full ", id_ "logs_list_container"] do
-        -- Filters and row count header
-        div_ [class_ "flex gap-2 py-1 text-sm z-10 w-max bg-bgBase -mb-6 group-has-[#viz-patterns:checked]/pg:mb-0"] do
-          label_ [class_ "gap-1 flex items-center cursor-pointer text-textWeak"] do
-            faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 text-iconNeutral"
-            span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
-            span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
-            "filters"
-            input_
-              [ type_ "checkbox"
-              , class_ "toggle-filters hidden"
-              , id_ "toggle-filters"
-              , [__|
+        let showTrace = isJust page.showTrace
+        div_ [class_ "grow will-change-[width] contain-[layout_style] relative flex flex-col shrink-1 min-w-0 w-full h-full ", id_ "logs_list_container"] do
+          -- Filters and row count header
+          div_ [class_ "flex gap-2 py-1 text-sm z-10 w-max bg-bgBase -mb-6 group-has-[#viz-patterns:checked]/pg:mb-0"] do
+            label_ [class_ "gap-1 flex items-center cursor-pointer text-textWeak"] do
+              faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 text-iconNeutral"
+              span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
+              span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
+              "filters"
+              input_
+                [ type_ "checkbox"
+                , class_ "toggle-filters hidden"
+                , id_ "toggle-filters"
+                , [__|
                   init
                     if window.innerWidth < 768 set my.checked to true
                     else set my.checked to (localStorage.getItem('toggle-filter-checked') is 'true')
@@ -1450,48 +1450,48 @@ apiLogsPage page = do
                     wait 200ms
                     if #filterElement call #filterElement.refreshLayout() end
                 |]
+                ]
+            span_ [class_ "text-strokeWeak "] "|"
+            rowCountDisplay_ "" countText suffixText
+
+          -- Visualization widget that shows when not in logs view (skip for patterns mode which uses log-list)
+          div_ [class_ "flex-1 min-h-0 h-full group-has-[#viz-logs:checked]/pg:hidden group-has-[#viz-patterns:checked]/pg:hidden group-has-[#viz-sessions:checked]/pg:hidden"] do
+            let widgetVals =
+                  decodeUtf8
+                    $ AE.encode
+                    $ AE.object
+                      [ "id" AE..= ("visualization-widget" :: Text)
+                      , "type" AE..= fromMaybe "timeseries" page.vizType
+                      , "title" AE..= ("Visualization" :: Text)
+                      , "standalone" AE..= True
+                      , "allow_zoom" AE..= True
+                      , "_project_id" AE..= page.pid.toText
+                      , "_center_title" AE..= True
+                      , "layout" AE..= AE.object ["w" AE..= (6 :: Int), "h" AE..= (4 :: Int)]
+                      ]
+            div_
+              [ id_ "visualization-widget-container"
+              , class_ " w-full"
+              , style_ "aspect-ratio: 4 / 2;"
+              , hxPost_ ("/p/" <> page.pid.toText <> "/widget")
+              , hxTrigger_ "intersect once, update-widget"
+              , hxTarget_ "this"
+              , hxSwap_ "innerHTML"
+              , hxVals_ widgetVals
+              , hxExt_ "json-enc,forward-page-params"
+              , term "hx-sync" "this:replace"
               ]
-          span_ [class_ "text-strokeWeak "] "|"
-          rowCountDisplay_ "" countText suffixText
+              ""
 
-        -- Visualization widget that shows when not in logs view (skip for patterns mode which uses log-list)
-        div_ [class_ "flex-1 min-h-0 h-full group-has-[#viz-logs:checked]/pg:hidden group-has-[#viz-patterns:checked]/pg:hidden group-has-[#viz-sessions:checked]/pg:hidden"] do
-          let widgetVals =
-                decodeUtf8
-                  $ AE.encode
-                  $ AE.object
-                    [ "id" AE..= ("visualization-widget" :: Text)
-                    , "type" AE..= fromMaybe "timeseries" page.vizType
-                    , "title" AE..= ("Visualization" :: Text)
-                    , "standalone" AE..= True
-                    , "allow_zoom" AE..= True
-                    , "_project_id" AE..= page.pid.toText
-                    , "_center_title" AE..= True
-                    , "layout" AE..= AE.object ["w" AE..= (6 :: Int), "h" AE..= (4 :: Int)]
-                    ]
+          -- Trace view container. The openTraceFullscreen event is dispatched by the
+          -- hover "View trace" button on virtual-list rows (log-list.ts).
+          let pidT = page.pid.toText
           div_
-            [ id_ "visualization-widget-container"
-            , class_ " w-full"
-            , style_ "aspect-ratio: 4 / 2;"
-            , hxPost_ ("/p/" <> page.pid.toText <> "/widget")
-            , hxTrigger_ "intersect once, update-widget"
-            , hxTarget_ "this"
-            , hxSwap_ "innerHTML"
-            , hxVals_ widgetVals
-            , hxExt_ "json-enc,forward-page-params"
-            , term "hx-sync" "this:replace"
-            ]
-            ""
-
-        -- Trace view container. The openTraceFullscreen event is dispatched by the
-        -- hover "View trace" button on virtual-list rows (log-list.ts).
-        let pidT = page.pid.toText
-        div_
-          [ class_ $ "absolute top-0 right-0  w-full h-full overflow-scroll c-scroll z-50 bg-bgBase transition-all duration-100 " <> if showTrace then "" else "hidden"
-          , id_ "trace_expanded_view"
-          , term
-              "_"
-              [text|on closeTraceView
+            [ class_ $ "absolute top-0 right-0  w-full h-full overflow-scroll c-scroll z-50 bg-bgBase transition-all duration-100 " <> if showTrace then "" else "hidden"
+            , id_ "trace_expanded_view"
+            , term
+                "_"
+                [text|on closeTraceView
                       add .hidden to me
                       send toggleTraceFullscreen(active: false) to #apiLogsPage
                       call updateUrlState('showTrace', '', 'delete')
@@ -1508,27 +1508,27 @@ apiLogsPage page = do
                       call updateUrlState('showTrace', traceId + '/?timestamp=' + timestamp)
                       call htmx.ajax('GET', '/p/$pidT/traces/' + traceId + '/?timestamp=' + encodeURIComponent(timestamp), {target: me, swap: 'innerHTML'})
                       then call window.evalScriptsFromContent(me)|]
-          ]
-          do
-            whenJust page.showTrace \trIdAndTimestamp -> do
-              let url = "/p/" <> page.pid.toText <> "/traces/" <> trIdAndTimestamp
-              loadingIndicator_ LdMD LdDots
-              div_ [hxGet_ url, hxTarget_ "#trace_expanded_view", hxSwap_ "innerHtml", hxTrigger_ "intersect one", term "hx-sync" "this:replace"] pass
+            ]
+            do
+              whenJust page.showTrace \trIdAndTimestamp -> do
+                let url = "/p/" <> page.pid.toText <> "/traces/" <> trIdAndTimestamp
+                loadingIndicator_ LdMD LdDots
+                div_ [hxGet_ url, hxTarget_ "#trace_expanded_view", hxSwap_ "innerHtml", hxTrigger_ "intersect one", term "hx-sync" "this:replace"] pass
 
-        div_ [class_ "flex-1 min-h-0 h-full flex flex-col"] do
-          div_ [class_ "flex-1 min-h-0 hidden h-full group-has-[#viz-logs:checked]/pg:block group-has-[#viz-patterns:checked]/pg:block group-has-[#viz-sessions:checked]/pg:block"] $ virtualTable page.pid Nothing Nothing
+          div_ [class_ "flex-1 min-h-0 h-full flex flex-col"] do
+            div_ [class_ "flex-1 min-h-0 hidden h-full group-has-[#viz-logs:checked]/pg:block group-has-[#viz-patterns:checked]/pg:block group-has-[#viz-sessions:checked]/pg:block"] $ virtualTable page.pid Nothing Nothing
 
-      div_ [class_ "hidden group-has-[#create-alert-toggle:checked]/pg:block max-md:hidden ml-3.5"] $ resizer_ "alert_container" "alert_width" False
+        div_ [class_ "hidden group-has-[#create-alert-toggle:checked]/pg:block max-md:hidden ml-3.5"] $ resizer_ "alert_container" "alert_width" False
 
-      div_ [class_ "grow-0 shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll hidden group-has-[#create-alert-toggle:checked]/pg:block w-[500px] max-md:w-full max-md:fixed max-md:inset-0 max-md:z-50 max-md:max-w-full", id_ "alert_container"] do
-        alertConfigurationForm_ page.project page.alert page.teams
+        div_ [class_ "grow-0 shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll hidden group-has-[#create-alert-toggle:checked]/pg:block w-[500px] max-md:w-full max-md:fixed max-md:inset-0 max-md:z-50 max-md:max-w-full", id_ "alert_container"] do
+          alertConfigurationForm_ page.project page.alert page.teams
 
-      div_ [class_ $ "transition-opacity duration-200 hidden max-md:hidden ml-3.5 " <> if isJust page.targetEvent then "group-has-[#viz-logs:checked]/pg:block group-has-[#viz-sessions:checked]/pg:block" else "", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
+        div_ [class_ $ "transition-opacity duration-200 hidden max-md:hidden ml-3.5 " <> if isJust page.targetEvent then "group-has-[#viz-logs:checked]/pg:block group-has-[#viz-sessions:checked]/pg:block" else "", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
 
-      div_
-        [ class_ "grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll w-0 max-w-0 overflow-hidden group-has-[#viz-logs:checked]/pg:max-w-full group-has-[#viz-logs:checked]/pg:overflow-y-auto group-has-[#viz-sessions:checked]/pg:max-w-full group-has-[#viz-sessions:checked]/pg:overflow-y-auto max-md:hidden max-md:[&.details-open]:block! max-md:[&.details-open]:fixed max-md:[&.details-open]:inset-0 max-md:[&.details-open]:z-40 max-md:[&.details-open]:w-full max-md:[&.details-open]:max-w-full max-md:[&.details-open]:bg-bgBase"
-        , id_ "log_details_container"
-        , [__|on htmx:afterSwap if window.innerWidth < 768 add .details-open to me end
+        div_
+          [ class_ "grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll w-0 max-w-0 overflow-hidden group-has-[#viz-logs:checked]/pg:max-w-full group-has-[#viz-logs:checked]/pg:overflow-y-auto group-has-[#viz-sessions:checked]/pg:max-w-full group-has-[#viz-sessions:checked]/pg:overflow-y-auto max-md:hidden max-md:[&.details-open]:block! max-md:[&.details-open]:fixed max-md:[&.details-open]:inset-0 max-md:[&.details-open]:z-40 max-md:[&.details-open]:w-full max-md:[&.details-open]:max-w-full max-md:[&.details-open]:bg-bgBase"
+          , id_ "log_details_container"
+          , [__|on htmx:afterSwap if window.innerWidth < 768 add .details-open to me end
         on keydown[key=='Escape'] from window
           if not (the event's target matches <input, textarea, select, [contenteditable]/>)
              and no <[popover]:popover-open/> and no <dialog[open]/>
@@ -1551,12 +1551,12 @@ apiLogsPage page = do
           call updateUrlState('target_event', '', 'delete')
           call updateUrlState('showTrace', '', 'delete')
         end|]
-        ]
-        do
-          htmxOverlayIndicator_ "details_indicator"
-          whenJust page.targetEvent \te -> do
-            script_
-              [text|
+          ]
+          do
+            htmxOverlayIndicator_ "details_indicator"
+            whenJust page.targetEvent \te -> do
+              script_
+                [text|
             document.addEventListener('DOMContentLoaded', function() {
               const detailsContainer = document.getElementById('log_details_container');
               if (detailsContainer) {
@@ -1571,8 +1571,8 @@ apiLogsPage page = do
               }
               });
           |]
-            let url = "/p/" <> page.pid.toText <> "/log_explorer/" <> te
-            div_ [hxGet_ url, hxTarget_ "#log_details_container", hxSwap_ "innerHtml", hxTrigger_ "intersect one", hxIndicator_ "#details_indicator", term "hx-sync" "this:replace"] pass
+              let url = "/p/" <> page.pid.toText <> "/log_explorer/" <> te
+              div_ [hxGet_ url, hxTarget_ "#log_details_container", hxSwap_ "innerHtml", hxTrigger_ "intersect one", hxIndicator_ "#details_indicator", term "hx-sync" "this:replace"] pass
 
   queryEditorInitializationCode page.queryLibRecent page.queryLibSaved page.vizType ((.facetJson) <$> page.facets)
 
