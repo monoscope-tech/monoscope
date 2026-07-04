@@ -416,6 +416,22 @@ appendConnParams kvs connStr
     isUri = "postgres://" `T.isPrefixOf` txt || "postgresql://" `T.isPrefixOf` txt
 
 
+-- | Socket-liveness params for every PG/TF pool. Keepalives detect a dead
+-- idle peer in ~45s, but two hangs escape them (2026-07-04 wedged-consumer
+-- incident: a worker sat in one uninterruptible libpq call for 40+ min):
+-- @connect_timeout@ bounds connection establishment (otherwise unbounded —
+-- the pool's acquisitionTimeout only bounds slot-wait), and
+-- @tcp_user_timeout@ bounds writes with unacked data in the send queue,
+-- where keepalive probes don't run (otherwise the ~15–25min kernel
+-- retransmit ceiling; ignored on non-Linux). The kernel then surfaces the
+-- dead socket as a connection error, which the transient-retry/DLQ path
+-- already handles.
+--
+-- >>> addKeepaliveParams "postgres://u:p@host:5432/db"
+-- "postgres://u:p@host:5432/db?keepalives=1&keepalives_idle=15&keepalives_interval=10&keepalives_count=3&connect_timeout=5&tcp_user_timeout=30000"
+--
+-- >>> addKeepaliveParams "host=localhost dbname=db"
+-- "host=localhost dbname=db keepalives=1 keepalives_idle=15 keepalives_interval=10 keepalives_count=3 connect_timeout=5 tcp_user_timeout=30000"
 addKeepaliveParams :: ByteString -> ByteString
 addKeepaliveParams =
   appendConnParams
@@ -423,6 +439,8 @@ addKeepaliveParams =
     , ("keepalives_idle", "15")
     , ("keepalives_interval", "10")
     , ("keepalives_count", "3")
+    , ("connect_timeout", "5")
+    , ("tcp_user_timeout", "30000")
     ]
 
 
