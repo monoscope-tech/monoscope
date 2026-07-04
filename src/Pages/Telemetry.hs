@@ -432,10 +432,10 @@ inactiveMetricsList pid source metrics = do
           div_
             (class_ "flex items-center justify-between py-2 px-2 cursor-pointer hover:bg-fillWeak rounded" : drawerLoadAttrs_ detailUrl)
             do
-            div_ [class_ "flex items-center gap-2"] do
-              faSprite_ "chart-line" "regular" "w-3.5 h-3.5 text-textWeak"
-              span_ [class_ "text-sm font-mono"] $ toHtml metric.metricName
-            span_ [class_ "text-xs text-textWeak"] $ toHtml $ "Last seen " <> lastSeenStr
+              div_ [class_ "flex items-center gap-2"] do
+                faSprite_ "chart-line" "regular" "w-3.5 h-3.5 text-textWeak"
+                span_ [class_ "text-sm font-mono"] $ toHtml metric.metricName
+              span_ [class_ "text-xs text-textWeak"] $ toHtml $ "Last seen " <> lastSeenStr
 
 
 dataPointsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricDataPoint -> Map Text (Int, Int, Int) -> Html ()
