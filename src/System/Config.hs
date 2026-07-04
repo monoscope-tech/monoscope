@@ -2,8 +2,10 @@ module System.Config (EnvConfig (..), AuthContext (..), getAppContext, configToE
 
 import Colourista.IO (blueMessage)
 import Control.Exception.Safe qualified as Safe
+import Data.Base64.Types qualified as B64
 import Data.Cache (Cache, newCache)
 import Data.Default (Default (..))
+import Data.Map.Strict qualified as M
 import Data.Pool as Pool (Pool, defaultPoolConfig, newPool, setNumStripes)
 import Data.Pool qualified as Pool
 import Data.Set qualified as S
@@ -28,8 +30,11 @@ import Pkg.Parser.Expr qualified as ParserExpr
 import Pkg.TraceSessionCache qualified as TraceSessionCache
 import Relude
 import System.Clock (TimeSpec (TimeSpec))
+import System.Directory (getDirectoryContents)
 import System.Envy (DefConfig (..), FromEnv (..), ReadShowVar (..), Var (..), decodeWithDefaults, fromVar, toVar)
 import System.Logging qualified as Logging
+import "base64" Data.ByteString.Base64 qualified as B64
+import "cryptohash-md5" Crypto.Hash.MD5 qualified as MD5
 
 
 -- Default log level is Info (used by the Default deriving for EnvConfig)
@@ -328,7 +333,7 @@ configToEnv config = do
     conn <- createPgConnIO
     initializationRes <- Migrations.runMigration conn Migrations.defaultOptions Migrations.MigrationInitialization
     blueMessage ("migration initialized " <> show initializationRes)
-    migrationRes <- Migrations.runMigration conn Migrations.defaultOptions $ Migrations.MigrationDirectory (toString config.migrationsDir :: FilePath)
+    migrationRes <- runPendingMigrations conn (toString config.migrationsDir :: FilePath)
     blueMessage ("migration result " <> show migrationRes)
     -- Fail-fast on MigrationError. postgresql-simple-migration stops at the
     -- first failure (e.g. a checksum mismatch from an edited migration file)
@@ -381,6 +386,22 @@ configToEnv config = do
       , config
       , backgroundScope = Nothing
       }
+
+
+-- | Same effect as @Migrations.runMigration conn defaultOptions (MigrationDirectory dir)@,
+-- but checks all already-applied checksums in a single round trip instead of one @SELECT@
+-- per file. On a remote/high-latency dev DB, 100+ migration files each costing a round trip
+-- turned every ghcid reload into a ~30s stall. Files that are new or checksum-mismatched still
+-- go through the library's own 'Migrations.MigrationFile' path, so failure detection (incl. the
+-- 2026-05-11-style edited-migration case) is unchanged.
+runPendingMigrations :: Connection -> FilePath -> IO (Migrations.MigrationResult String)
+runPendingMigrations conn dir = do
+  files <- sort . filter (not . isPrefixOf ".") <$> getDirectoryContents dir
+  applied <- M.fromList . map (\m -> (decodeUtf8 m.schemaMigrationName, m.schemaMigrationChecksum)) <$> Migrations.getMigrations conn
+  let checksum = encodeUtf8 . B64.extractBase64 . B64.encodeBase64 . MD5.hash
+      isPending f = (\c -> M.lookup (toText f) applied /= Just (checksum c)) <$> readFileBS (dir <> "/" <> f)
+  pending <- filterM isPending files
+  Migrations.runMigration conn Migrations.defaultOptions $ Migrations.MigrationCommands [Migrations.MigrationFile f (dir <> "/" <> f) | f <- pending]
 
 
 getAppContext :: Eff '[Fail, IOE] AuthContext

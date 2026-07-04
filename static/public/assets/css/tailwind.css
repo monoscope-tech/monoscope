@@ -2509,3 +2509,40 @@ table td a[href]:not(.btn):not([data-no-preview]) { --tooltip-z: 100; --tooltip-
     @apply w-[500px] h-36 right-0 top-0 rotate-y-15 rotate-z-15 top-[-55px] right-[-40px] rounded-t-2xl absolute bg-gradient-to-b from-fillBrand-weak to-transparent;
   }
 }
+
+/* Log-explorer fullscreen modes, toggled by the toggleDetailsFullscreen/toggleTraceFullscreen
+   hyperscript on #apiLogsPage (Log.hs). fs-details: side panel takes over the whole browser
+   viewport via position:fixed (escaping the facets/loglist row so it also covers the query
+   box and charts above); fs-trace: the trace overlay covers the whole viewport too. The
+   expand/compress icons swap via Tailwind arbitrary-variant classes on the svgs themselves
+   (see LogItem.hs/Telemetry.hs), not custom classes here. */
+#apiLogsPage.fs-details :is(#facets-container, #logs_list_container, #alert_container, [id^='resizer-'], #log_explorer_controls) {
+  display: none;
+}
+#apiLogsPage.fs-details #log_details_container {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  width: 100% !important;
+  max-width: 100% !important;
+  background: var(--color-bgBase);
+}
+/* #logs_list_container's contain:layout (see its class list) makes it a containing block for
+   position:fixed descendants, which would otherwise clip #trace_expanded_view to this row
+   instead of the real viewport. Neutralize it only while fs-trace is active. */
+#apiLogsPage.fs-trace #logs_list_container {
+  contain: none;
+}
+#apiLogsPage.fs-trace #trace_expanded_view {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  background: var(--color-bgBase);
+}
+/* The trace overlay (#trace_expanded_view) sits over the log list, not over
+   #log_details_container, so both panels' fullscreen toggles can be on screen
+   at once. Hide the details panel's toggle while a trace is open — the trace
+   panel's own toggle is the only one that should be visible then. */
+#facets_and_loglist:has(#trace_expanded_view:not(.hidden)) #log_details_container .fs-details-toggle {
+  display: none;
+}

@@ -150,12 +150,24 @@ expandedItemView pid item aptSp = do
       (faSprite_ "chevron-left" "regular" "w-3.5 h-3.5" >> "Back to logs")
     div_ [class_ "flex gap-2 items-center shrink-0 ml-auto"] do
       dateTime (if isLog then item.timestamp else item.start_time) Nothing
-      button_
-        [ class_ "cursor-pointer detail-close-btn rounded-md p-1 hover:bg-fillWeak transition-colors"
-        , Aria.label_ "Close item details"
-        , [__|on click send closeDetailPanel to #log_details_container|]
-        ]
-        $ faSprite_ "xmark" "regular" "w-3.5 h-3.5 text-iconNeutral"
+      div_ [class_ "flex gap-1 items-center"] do
+        button_
+          [ class_ "fs-details-toggle cursor-pointer rounded-md p-1 hover:bg-fillWeak transition-colors hidden md:[#apiLogsPage_&]:block"
+          , Aria.label_ "Toggle fullscreen"
+          , term "data-tippy-content" "Expand panel"
+          , term "data-share-hide" "1"
+          , [__|on click send toggleDetailsFullscreen to #apiLogsPage|]
+          ]
+          do
+            faSprite_ "expand" "regular" "w-3.5 h-3.5 text-iconNeutral [#apiLogsPage.fs-details_&]:hidden!"
+            faSprite_ "compress" "regular" "hidden! w-3.5 h-3.5 text-iconNeutral [#apiLogsPage.fs-details_&]:block!"
+        button_
+          [ class_ "cursor-pointer detail-close-btn rounded-md p-1 hover:bg-fillWeak transition-colors"
+          , Aria.label_ "Close item details"
+          , term "data-tippy-content" "Close · Esc"
+          , [__|on click send closeDetailPanel to #log_details_container|]
+          ]
+          $ faSprite_ "xmark" "regular" "w-3 h-3 text-iconNeutral"
   div_ [class_ $ "w-full pl-3 pr-1 pb-2 relative border-l border-strokeWeak max-md:border-l-0 max-md:px-0 " <> if isLog then " flex flex-col gap-2" else " pb-[50px]"] do
     div_ [id_ "copy_share_link"] pass
     unless isLog $ htmxOverlayIndicator_ "loading-span-list"
@@ -246,6 +258,10 @@ expandedItemView pid item aptSp = do
         , tab True "tab-raw" "whitespace-nowrap" "Raw data" (jsonTab_ "group-has-[.tab-raw:checked]/dtab:block" "m-raw-content" "raw" (AE.toJSON item) Nothing)
         ]
       where
+        numberOfEvents :: AE.Value -> Int
+        numberOfEvents (AE.Array obj) = length obj
+        numberOfEvents _ = 0
+
         tab shown m c l p = DetailTab m c l p <$ guard shown
         badge l c n = toHtml @Text l >> div_ [class_ c] (show n)
         attPanel = tabPanel_ "group-has-[.tab-att:checked]/dtab:block" "att-content" $ case unAesonTextMaybe item.attributes of
@@ -323,8 +339,3 @@ renderErrors errs =
     getErrorDetails ae = (fld "type", fld "message", fld "stacktrace")
       where
         fld k = fromMaybe "" $ ae ^? key "event_attributes" . key "exception" . key k . _String
-
-
-numberOfEvents :: AE.Value -> Int
-numberOfEvents (AE.Array obj) = length obj
-numberOfEvents _ = 0

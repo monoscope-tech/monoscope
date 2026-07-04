@@ -44,8 +44,7 @@ import { toEChartsColor } from './widgets';
 import { unsafeHTML } from 'lit/directives/unsafe-html.js';
 
 // Convert CSS token to hex for ECharts (which can't parse oklch)
-const cssTokenToHex = (token: string): string =>
-  toEChartsColor(getComputedStyle(document.body).getPropertyValue(token).trim());
+const cssTokenToHex = (token: string): string => toEChartsColor(getComputedStyle(document.body).getPropertyValue(token).trim());
 
 // TypeScript declarations for global functions
 declare global {
@@ -231,18 +230,45 @@ export class LogList extends LitElement {
       const colIdxMap = data.colIdxMap || {};
       const isSessions = this.mode === 'sessions';
       const tree = (data.logsData || []).map((row: any[]) => {
-        const sessionId = isSessions ? (row[colIdxMap['trace_id']] as string || '') : '';
-        const eventCount = isSessions ? (row[colIdxMap['event_count']] as number || 0) : 0;
+        const sessionId = isSessions ? (row[colIdxMap['trace_id']] as string) || '' : '';
+        const eventCount = isSessions ? (row[colIdxMap['event_count']] as number) || 0 : 0;
         return {
-          id: sessionId || generateId(), data: row, depth: 0,
-          children: eventCount || (isSessions ? 1 : 0), traceId: sessionId, parentIds: [],
-          show: true, expanded: false, isLastChild: true, siblingsArr: [],
-          childErrors: false, hasErrors: false, isNew: false,
-          startNs: 0, duration: 0, traceStart: 0, traceEnd: 0,
-          childrenTimeSpans: [], type: 'log' as const,
+          id: sessionId || generateId(),
+          data: row,
+          depth: 0,
+          children: eventCount || (isSessions ? 1 : 0),
+          traceId: sessionId,
+          parentIds: [],
+          show: true,
+          expanded: false,
+          isLastChild: true,
+          siblingsArr: [],
+          childErrors: false,
+          hasErrors: false,
+          isNew: false,
+          startNs: 0,
+          duration: 0,
+          traceStart: 0,
+          traceEnd: 0,
+          childrenTimeSpans: [],
+          type: 'log' as const,
         };
       });
-      return { tree, meta: { serviceColors: {}, nextUrl: '', cols: data.cols || [], colIdxMap, count: data.count || 0, totalPatterns: data.totalPatterns ?? 0, totalSessions: data.totalSessions ?? 0, traces: [], hasMore: data.hasMore ?? ((data.logsData || []).length > 0), queryResultCount: data.queryResultCount ?? 0 } };
+      return {
+        tree,
+        meta: {
+          serviceColors: {},
+          nextUrl: '',
+          cols: data.cols || [],
+          colIdxMap,
+          count: data.count || 0,
+          totalPatterns: data.totalPatterns ?? 0,
+          totalSessions: data.totalSessions ?? 0,
+          traces: [],
+          hasMore: data.hasMore ?? (data.logsData || []).length > 0,
+          queryResultCount: data.queryResultCount ?? 0,
+        },
+      };
     }
 
     // Use early fetch promise if available (set by server-rendered script in head)
@@ -255,15 +281,40 @@ export class LogList extends LitElement {
       if (data.error) throw new Error(data.message || data.error || 'Server error');
       const { logsData, serviceColors, nextUrl, recentUrl, cols, colIdxMap, count, traces } = data;
       const tree = logsData?.length ? groupSpans(logsData, colIdxMap, this.expandedTraces, this.flipDirection, traces || []) : [];
-      return { tree, meta: { serviceColors, nextUrl, recentUrl, cols, colIdxMap, count, traces: traces || [], hasMore: data.hasMore ?? (logsData?.length > 0), queryResultCount: data.queryResultCount ?? logsData?.length ?? 0 } };
+      return {
+        tree,
+        meta: {
+          serviceColors,
+          nextUrl,
+          recentUrl,
+          cols,
+          colIdxMap,
+          count,
+          traces: traces || [],
+          hasMore: data.hasMore ?? logsData?.length > 0,
+          queryResultCount: data.queryResultCount ?? logsData?.length ?? 0,
+        },
+      };
     }
     // Fallback to worker
     if (!this.worker) throw new Error('Worker not initialized');
     const id = ++this.workerReqId;
     return new Promise((resolve, reject) => {
       this.workerCallbacks.set(id, { resolve, reject });
-      this.worker!.postMessage({ type: 'fetch', url, colIdxMap: this.colIdxMap, expandedTraces: this.expandedTraces, flipDirection: this.flipDirection, id });
-      setTimeout(() => { if (this.workerCallbacks.has(id)) { this.workerCallbacks.delete(id); reject(new Error('Worker timeout')); } }, 120000);
+      this.worker!.postMessage({
+        type: 'fetch',
+        url,
+        colIdxMap: this.colIdxMap,
+        expandedTraces: this.expandedTraces,
+        flipDirection: this.flipDirection,
+        id,
+      });
+      setTimeout(() => {
+        if (this.workerCallbacks.has(id)) {
+          this.workerCallbacks.delete(id);
+          reject(new Error('Worker timeout'));
+        }
+      }, 120000);
     });
   }
 
@@ -370,8 +421,7 @@ export class LogList extends LitElement {
       // no error. Stop live-tail instead of polling a guaranteed-empty range.
       const to = url.searchParams.get('to');
       const toMs = to ? Date.parse(to) : NaN;
-      if (!isNaN(toMs) && Date.parse(from) >= toMs)
-        this.stopLiveStream('Reached the end of the selected time range — live tail paused.');
+      if (!isNaN(toMs) && Date.parse(from) >= toMs) this.stopLiveStream('Reached the end of the selected time range — live tail paused.');
     }
 
     return url.toString();
@@ -389,7 +439,8 @@ export class LogList extends LitElement {
 
   private buildLoadMoreUrl(): string {
     // Patterns / sessions: increment aggregate_skip based on loaded count
-    if (this.isAggregate || this.mode === 'sessions') { // sessions also use aggregate skip for top-level pagination
+    if (this.isAggregate || this.mode === 'sessions') {
+      // sessions also use aggregate skip for top-level pagination
       const url = new URL(window.location.href);
       url.searchParams.set('json', 'true');
       url.searchParams.set('aggregate_skip', String(this.spanListTree.length));
@@ -495,10 +546,10 @@ export class LogList extends LitElement {
     const has = this.isColumnOnTable(col);
     const next = has
       ? toks.includes(col)
-        ? toks.filter(t => t !== col) // drop an explicit add
+        ? toks.filter((t) => t !== col) // drop an explicit add
         : [...toks, `-${col}`] // hide a default
       : toks.includes(`-${col}`)
-        ? toks.filter(t => t !== `-${col}`) // un-hide a default
+        ? toks.filter((t) => t !== `-${col}`) // un-hide a default
         : [...toks, col]; // add a column
     const uniq = [...new Set(next)];
     if (uniq.length) p.set('cols', uniq.join(','));
@@ -596,7 +647,9 @@ export class LogList extends LitElement {
 
   private rowCountEls: (HTMLElement | null)[] | null = null;
   private getRowCountEls() {
-    return this.rowCountEls ??= ['row-count-display', 'row-count-suffix', 'row-count-display-mobile', 'row-count-suffix-mobile'].map(id => document.getElementById(id));
+    return (this.rowCountEls ??= ['row-count-display', 'row-count-suffix', 'row-count-display-mobile', 'row-count-suffix-mobile'].map(
+      (id) => document.getElementById(id)
+    ));
   }
 
   private updateRowCountDisplay() {
@@ -663,7 +716,9 @@ export class LogList extends LitElement {
     if (changedProperties.has('spanListTree') && this.spanListTree.some((s) => s.isNew)) {
       if (this.isNewResetTimer) clearTimeout(this.isNewResetTimer);
       this.isNewResetTimer = setTimeout(() => {
-        this.spanListTree.forEach((span) => { span.isNew = false; });
+        this.spanListTree.forEach((span) => {
+          span.isNew = false;
+        });
         this.fetchedNew = false;
         this.isNewResetTimer = null;
         this.requestUpdate();
@@ -899,10 +954,11 @@ export class LogList extends LitElement {
       const mergedRows = skip === 0 ? newRows : [...existing.rows, ...newRows];
       // Build trace tree from rows + server traces for full tree rendering
       const traces = data.traces || [];
-      const eventLines = mergedRows.length
-        ? dedupeById(groupSpans(mergedRows, childIdxMap, {}, false, traces))
-        : [];
-      eventLines.forEach((el) => { el.show = true; el.expanded = true; });
+      const eventLines = mergedRows.length ? dedupeById(groupSpans(mergedRows, childIdxMap, {}, false, traces)) : [];
+      eventLines.forEach((el) => {
+        el.show = true;
+        el.expanded = true;
+      });
       // skip is a CUMULATIVE offset for the next page. queryResultCount is this
       // page's count, so advance by it — storing it directly pinned skip to the
       // page size and refetched (and duplicated) the same window every load-more.
@@ -946,8 +1002,8 @@ export class LogList extends LitElement {
         ${state.loading && eventLines.length === 0
           ? html`<div class="text-xs text-textWeak px-2 py-1">Loading events…</div>`
           : eventLines.length === 0
-          ? html`<div class="text-xs text-textWeak px-2 py-1">No events.</div>`
-          : html`<div class="flex flex-col">${rows}</div>`}
+            ? html`<div class="text-xs text-textWeak px-2 py-1">No events.</div>`
+            : html`<div class="flex flex-col">${rows}</div>`}
         ${state.hasMore
           ? html`<button
               class="mt-1 text-xs text-textBrand underline px-2 py-1"
@@ -976,9 +1032,12 @@ export class LogList extends LitElement {
     const toggleSpans = (spans: EventLine[]) => {
       for (const span of spans) {
         if (span.traceId !== tracId) continue;
-        if (span.id === spanId) { span.expanded = expanded; span.show = true; }
-        else if (span.parentIds?.includes(spanId)) {
-          span.expanded = expanded; span.show = expanded;
+        if (span.id === spanId) {
+          span.expanded = expanded;
+          span.show = true;
+        } else if (span.parentIds?.includes(spanId)) {
+          span.expanded = expanded;
+          span.show = expanded;
           nextExpanded[span.id] = expanded;
         }
       }
@@ -1333,8 +1392,8 @@ export class LogList extends LitElement {
         ? [...current, ...newData]
         : [...newData, ...current]
       : isRecentFetch
-      ? [...newData, ...current]
-      : [...current, ...newData];
+        ? [...newData, ...current]
+        : [...current, ...newData];
   }
 
   // Buffer accumulation ("N new" pill) — small bounded list, full dedupe is fine.
@@ -1574,13 +1633,16 @@ export class LogList extends LitElement {
           aria-rowcount=${this.totalCount || -1}
           class="table-fixed ${isAggregate || this.wrapLines ? 'w-full' : 'w-max'} relative ctable table-pin-rows table-pin-cols text-sm"
           style=${Object.entries(
-            this.logsColumns.reduce((acc, column) => {
-              const width = this.columnMaxWidthMap[column] || this.fixedColumnWidths[column];
-              if (width) {
-                acc[`--col-${column}-width`] = `${width}px`;
-              }
-              return acc;
-            }, {} as Record<string, string>)
+            this.logsColumns.reduce(
+              (acc, column) => {
+                const width = this.columnMaxWidthMap[column] || this.fixedColumnWidths[column];
+                if (width) {
+                  acc[`--col-${column}-width`] = `${width}px`;
+                }
+                return acc;
+              },
+              {} as Record<string, string>
+            )
           )
             .map(([k, v]) => `${k}: ${v}`)
             .join('; ')}
@@ -1634,7 +1696,6 @@ export class LogList extends LitElement {
               <span class="text-xs text-textWeak">Try expanding the time picker above.</span>
             </div>`
           : nothing}
-
         ${!isAggregate && !this.shouldScrollToBottom && this.flipDirection
           ? html` <div style="position: sticky;bottom: 0px;overflow-anchor: none;">
               <button
@@ -1644,7 +1705,9 @@ export class LogList extends LitElement {
                   this.handleRecentConcatenation();
                 }}
                 data-tip="Scroll to bottom"
-                aria-label=${this.recentDataToBeAdded.length > 0 ? `Scroll to bottom (${this.recentDataToBeAdded.length} new events)` : 'Scroll to bottom'}
+                aria-label=${this.recentDataToBeAdded.length > 0
+                  ? `Scroll to bottom (${this.recentDataToBeAdded.length} new events)`
+                  : 'Scroll to bottom'}
                 class=${clsx(
                   'absolute tooltip tooltip-left right-8 bottom-2 group z-50 text-textInverse-strong flex justify-center items-center rounded-full shadow-lg h-10 w-10 transition-all duration-300 hover:shadow-xl hover:scale-110',
                   this.recentDataToBeAdded.length > 0
@@ -1673,7 +1736,7 @@ export class LogList extends LitElement {
     const summary = lookupVecValue<string[] | string>(dataArr, cim, 'summary');
     // Coerce non-string elements (e.g. a TF to_jsonb that re-parsed JSON-looking
     // text) so one bad element can't throw and blank the whole row.
-    if (Array.isArray(summary)) return summary.map((e) => (typeof e === 'string' ? e : JSON.stringify(e) ?? ''));
+    if (Array.isArray(summary)) return summary.map((e) => (typeof e === 'string' ? e : (JSON.stringify(e) ?? '')));
     try {
       return typeof summary === 'string' ? JSON.parse(summary) : [];
     } catch (err) {
@@ -1778,13 +1841,17 @@ export class LogList extends LitElement {
 
         // Direct style checks with early returns
         if (style === 'text-textStrong') {
-          result.push(this.mode === 'patterns'
-            ? html`<span class="text-textStrong">${highlightPlaceholders(value)}</span>`
-            : html`<span class="text-textStrong">${value}</span>`);
+          result.push(
+            this.mode === 'patterns'
+              ? html`<span class="text-textStrong">${highlightPlaceholders(value)}</span>`
+              : html`<span class="text-textStrong">${value}</span>`
+          );
         } else if (WEAK_TEXT_STYLES.has(style)) {
-          result.push(this.mode === 'patterns'
-            ? html`<span class="text-textWeak">${highlightPlaceholders(value)}</span>`
-            : html`<span class="text-textWeak">${unsafeHTML(getCachedUnescape(value))}</span>`);
+          result.push(
+            this.mode === 'patterns'
+              ? html`<span class="text-textWeak">${highlightPlaceholders(value)}</span>`
+              : html`<span class="text-textWeak">${unsafeHTML(getCachedUnescape(value))}</span>`
+          );
         } else {
           // Top-level session rows are rendered via renderSessionSummary in
           // the summary case; this fallback handles regular log rows and
@@ -1821,13 +1888,19 @@ export class LogList extends LitElement {
       case 'pattern_count':
         const count = lookupVecValue<number>(dataArr, colIdxMap, key);
         const mergedCount = lookupVecValue<number>(dataArr, colIdxMap, 'merged_count') || 0;
-        const maxCount = this.mode === 'patterns' && this.visibleItems.length
-          ? lookupVecValue<number>(this.visibleItems[0].data, colIdxMap, key) || 1
-          : 1;
+        const maxCount =
+          this.mode === 'patterns' && this.visibleItems.length ? lookupVecValue<number>(this.visibleItems[0].data, colIdxMap, key) || 1 : 1;
         const pct = (count / maxCount) * 100;
-        return html`<div class="flex items-center gap-1.5 w-full min-w-0" title="${pct.toFixed(1)}% of total${mergedCount > 0 ? ` (${mergedCount} merged)` : ''}">
+        return html`<div
+          class="flex items-center gap-1.5 w-full min-w-0"
+          title="${pct.toFixed(1)}% of total${mergedCount > 0 ? ` (${mergedCount} merged)` : ''}"
+        >
           <span class="text-sm tabular-nums text-textStrong w-10 shrink-0 text-right">${formatLargeCount(count)}</span>
-          ${mergedCount > 0 ? html`<span class="text-2xs tabular-nums text-textWeak shrink-0" title="${mergedCount} similar patterns merged">+${mergedCount}</span>` : ''}
+          ${mergedCount > 0
+            ? html`<span class="text-2xs tabular-nums text-textWeak shrink-0" title="${mergedCount} similar patterns merged"
+                >+${mergedCount}</span
+              >`
+            : ''}
           <div class="w-12 shrink-0 h-2 bg-strokeWeak/40 rounded-sm overflow-hidden">
             <div class="h-full bg-fillBrand-strong rounded-sm" style="width:${pct}%"></div>
           </div>
@@ -1838,11 +1911,19 @@ export class LogList extends LitElement {
       case 'level':
         const lv = lookupVecValue<string>(dataArr, colIdxMap, key);
         if (!lv) return html`<span class="text-textWeak text-xs text-center w-full inline-block">-</span>`;
-        const lvColors: Record<string, string> = { error: 'badge-error', warn: 'badge-warning', warning: 'badge-warning', info: 'badge-info', debug: 'badge-neutral' };
+        const lvColors: Record<string, string> = {
+          error: 'badge-error',
+          warn: 'badge-warning',
+          warning: 'badge-warning',
+          info: 'badge-info',
+          debug: 'badge-neutral',
+        };
         return renderBadge(`cbadge-sm ${lvColors[lv.toLowerCase()] || 'badge-neutral'}`, lv);
       case 'id':
         if (!this._renderOverrides && this.isAggregate) {
-          return html`<div class="flex items-center justify-between w-3"><span class="col-span-1 h-5 rounded-sm flex w-1 bg-strokeBrand-weak"></span></div>`;
+          return html`<div class="flex items-center justify-between w-3">
+            <span class="col-span-1 h-5 rounded-sm flex w-1 bg-strokeBrand-weak"></span>
+          </div>`;
         }
         const { statusCode: status, hasErrors: errCount, className: errClass } = getErrorClassification(dataArr, colIdxMap);
         const isExpanded = expanded || rowData.parentIds?.some((pid: string) => this.expandedTraces[pid]);
@@ -1855,13 +1936,32 @@ export class LogList extends LitElement {
           </div>
         `;
       case 'created_at':
-      case 'timestamp':
-        let timestamp = lookupVecValue<string>(dataArr, colIdxMap, key);
-        return html`<div>
+      case 'timestamp': {
+        const timestamp = lookupVecValue<string>(dataArr, colIdxMap, key);
+        const rowTraceId = traceId || lookupVecValue<string>(dataArr, colIdxMap, 'trace_id');
+        return html`<div class="relative">
           <time class=${`monospace text-xs text-textWeak tooltip tooltip-right ${wrapClass}`} data-tip="timestamp" datetime=${timestamp}
             >${formatTimestamp(timestamp)}</time
           >
+          ${rowTraceId && this.mode !== 'sessions'
+            ? html`<button
+                class="absolute inset-y-0 left-0 z-30 hidden group-hover:flex items-center cursor-pointer group/btn"
+                data-tippy-content="Open trace fullscreen"
+                @pointerdown=${(e: Event) => e.stopPropagation()}
+                @click=${(e: Event) => {
+                  e.stopPropagation();
+                  window.dispatchEvent(new CustomEvent('openTraceFullscreen', { detail: { traceId: rowTraceId, timestamp } }));
+                }}
+              >
+                <span
+                  class="flex items-center justify-center w-5 h-5 rounded border border-strokeMedium bg-bgBase text-iconNeutral group-hover/btn:border-strokeBrand group-hover/btn:text-textBrand group-hover/btn:bg-fillBrand/10 transition-colors"
+                >
+                  ${faSprite('up-right-and-down-left-from-center', 'regular', 'w-2.5 h-2.5')}
+                </span>
+              </button>`
+            : nothing}
         </div>`;
+      }
       case 'latency_breakdown':
         // Cache rendered latency breakdown
         const currentWidth = this.columnMaxWidthMap['latency_breakdown'] || this.fixedColumnWidths['latency_breakdown'] || 120;
@@ -1881,7 +1981,9 @@ export class LogList extends LitElement {
           const rightAlignedBadges: TemplateResult[] = [];
 
           // Use optimized parsing for right-aligned badges
-          let userEmail = '', userName = '', userBadgeStyle = '';
+          let userEmail = '',
+            userName = '',
+            userBadgeStyle = '';
           for (let i = 0; i < summaryArr.length; i++) {
             const element = summaryArr[i];
             const sepIdx = element.indexOf('⇒');
@@ -1906,9 +2008,11 @@ export class LogList extends LitElement {
                 rightAlignedBadges.push(this.createSessionButton(value, !!hasErrors));
               }
             } else if (field === 'user email') {
-              userEmail = value; userBadgeStyle = badgeStyle;
+              userEmail = value;
+              userBadgeStyle = badgeStyle;
             } else if (field === 'user name') {
-              userName = value; if (!userBadgeStyle) userBadgeStyle = badgeStyle;
+              userName = value;
+              if (!userBadgeStyle) userBadgeStyle = badgeStyle;
             } else {
               rightAlignedBadges.push(renderBadge(`cbadge-sm ${badgeStyle} bg-opacity-100`, value));
             }
@@ -1960,21 +2064,25 @@ export class LogList extends LitElement {
         }
         // Synthetic-orphan rows append a click-to-copy chip showing the full
         // upstream parent id (carried in the latency_breakdown column).
-        const synthParentId = isSyntheticRow ? lookupVecValue<string>(dataArr, colIdxMap, 'latency_breakdown') ?? '' : '';
+        const synthParentId = isSyntheticRow ? (lookupVecValue<string>(dataArr, colIdxMap, 'latency_breakdown') ?? '') : '';
         if (this.mode === 'patterns') {
           const patIsError = lookupVecValue<boolean>(dataArr, colIdxMap, 'is_error') === true;
           return html`<div class="break-all whitespace-break-spaces">
-            ${patIsError ? html`<span class="cbadge-sm badge-error mr-1.5 align-middle" title="Pattern includes error-level events">error</span>` : nothing}
+            ${patIsError
+              ? html`<span class="cbadge-sm badge-error mr-1.5 align-middle" title="Pattern includes error-level events">error</span>`
+              : nothing}
             ${rowData._summaryCache.content}
           </div>`;
         }
         const errClas = hasErrors
           ? 'bg-fillError-strong text-textInverse-strong fill-textInverse-strong stroke-strokeError-strong'
           : childErrors
-          ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
-          : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
+            ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
+            : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
         const summaryContent = rowData._summaryCache.content;
-        return html`<div class=${clsx('flex w-full gap-1 min-w-0', isSessionTopLevel ? 'items-center' : this.wrapLines ? 'items-start' : 'items-center')}>
+        return html`<div
+          class=${clsx('flex w-full gap-1 min-w-0', isSessionTopLevel ? 'items-center' : this.wrapLines ? 'items-start' : 'items-center')}
+        >
           ${this.view === 'tree' || this.mode === 'sessions'
             ? html`
                 <div class="flex items-center shrink-0">
@@ -2009,15 +2117,23 @@ export class LogList extends LitElement {
                         ${children}
                       </button>`
                     : depth === 0
-                    ? nothing
-                    : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
+                      ? nothing
+                      : html`<div class=${`rounded-sm ml-1 shrink-0 w-3 h-5 ${errClas}`}></div>`}
                 </div>
               `
             : nothing}
-          <div class=${clsx(
-            'flex gap-1 min-w-0',
-            isSessionTopLevel ? 'flex-1 items-center' : this.wrapLines ? 'items-center break-all flex-wrap' : 'items-center overflow-hidden'
-          )}>${summaryContent}${synthParentId ? renderCopyIdChip(synthParentId) : nothing}</div>
+          <div
+            class=${clsx(
+              'flex gap-1 min-w-0',
+              isSessionTopLevel
+                ? 'flex-1 items-center'
+                : this.wrapLines
+                  ? 'items-center break-all flex-wrap'
+                  : 'items-center overflow-hidden'
+            )}
+          >
+            ${summaryContent}${synthParentId ? renderCopyIdChip(synthParentId) : nothing}
+          </div>
         </div>`;
       case 'service':
         let serviceData = lookupVecValue<string>(dataArr, colIdxMap, key);
@@ -2132,8 +2248,8 @@ export class LogList extends LitElement {
       this.isLiveStreaming
         ? html`<p class="h-5 leading-5 m-0">Live streaming latest data...</p>`
         : this.isFetchingRecent
-        ? html`<div class="loading loading-dots loading-md h-5"></div>`
-        : this.createLoadButton('Load newer events'),
+          ? html`<div class="loading loading-dots loading-md h-5"></div>`
+          : this.createLoadButton('Load newer events'),
       this.isLiveStreaming || this.isFetchingRecent ? undefined : fetchRecent
     );
   };
@@ -2198,13 +2314,16 @@ export class LogList extends LitElement {
       const isNew = rowData.isNew;
 
       // Pre-calculate CSS custom properties for widths
-      const columnStyles = effectiveLogsColumns.reduce((acc, column) => {
-        const width = this.columnMaxWidthMap[column] || this.fixedColumnWidths[column];
-        if (width) {
-          acc[`--col-${column}-width`] = `${width}px`;
-        }
-        return acc;
-      }, {} as Record<string, string>);
+      const columnStyles = effectiveLogsColumns.reduce(
+        (acc, column) => {
+          const width = this.columnMaxWidthMap[column] || this.fixedColumnWidths[column];
+          if (width) {
+            acc[`--col-${column}-width`] = `${width}px`;
+          }
+          return acc;
+        },
+        {} as Record<string, string>
+      );
 
       const isSessionTopLevelRow = effectiveMode === 'sessions' && rowData.depth === 0;
       // Error sessions escalate visually: the row takes on a soft red tint
@@ -2241,7 +2360,10 @@ export class LogList extends LitElement {
             this.toggleAggregateRow(rowData);
           }
         : effectiveMode === 'sessions' && rowData.depth === 0
-          ? (event: any) => { event.stopPropagation(); this.expandTrace(rowData.traceId, rowData.id); }
+          ? (event: any) => {
+              event.stopPropagation();
+              this.expandTrace(rowData.traceId, rowData.id);
+            }
           : (event: any) => this.toggleLogRow(event, targetInfo, this.projectId);
       const cells = effectiveLogsColumns
         .filter((v) => v !== 'latency_breakdown')
@@ -2250,24 +2372,34 @@ export class LogList extends LitElement {
           // In aggregate child rows (ov), skip fixed summary width so it flexes to fill remaining space
           const skipFixedWidth = ov && column === 'summary';
           const cellClass = `${this.wrapLines ? 'break-all whitespace-break-spaces' : ''} ${cellBg} group-hover:bg-inherit relative pl-2 ${
-            column === 'summary' ? `flex-1 min-w-0 ${ov ? 'overflow-hidden' : ''}` : 'flex-shrink-0 overflow-hidden hover:overflow-visible hover:z-30'
+            column === 'summary'
+              ? `flex-1 min-w-0 ${ov ? 'overflow-hidden' : ''}`
+              : 'flex-shrink-0 overflow-hidden hover:overflow-visible hover:z-30'
           } ${hasWidth && !(isAggregate && column === 'summary') && !skipFixedWidth ? `col-${column}` : ''}`;
           return ov
             ? html`<div role="cell" class=${cellClass}>${this.logItemCol(rowData, column)}</div>`
             : html`<td class=${cellClass}>${this.logItemCol(rowData, column)}</td>`;
         });
       const latencyCell = effectiveLogsColumns.includes('latency_breakdown')
-        ? (ov
-            ? html`<div role="cell" class=${`${cellBg} group-hover:bg-inherit pl-2 shrink-0 col-latency_breakdown`}>${this.logItemCol(rowData, 'latency_breakdown')}</div>`
-            : html`<td class=${`sticky right-0 max-md:static z-10 ${cellBg} group-hover:bg-inherit pl-2 shrink-0`}>${this.logItemCol(rowData, 'latency_breakdown')}</td>`)
+        ? ov
+          ? html`<div role="cell" class=${`${cellBg} group-hover:bg-inherit pl-2 shrink-0 col-latency_breakdown`}>
+              ${this.logItemCol(rowData, 'latency_breakdown')}
+            </div>`
+          : html`<td class=${`sticky right-0 max-md:static z-10 ${cellBg} group-hover:bg-inherit pl-2 shrink-0`}>
+              ${this.logItemCol(rowData, 'latency_breakdown')}
+            </td>`
         : nothing;
       const rowHtml = ov
         ? html`<div role="row" class=${rowClass} style=${rowStyle} @click=${rowClick}>${cells}${latencyCell}</div>`
-        : html`<tr class=${rowClass} style=${rowStyle} @click=${rowClick}>${cells}${latencyCell}</tr>`;
+        : html`<tr class=${rowClass} style=${rowStyle} @click=${rowClick}>
+            ${cells}${latencyCell}
+          </tr>`;
       return rowHtml;
     } catch (error) {
       console.error('logItemRow error:', error);
-      return html`<tr><td>Error rendering row: ${(error as Error).message}</td></tr>`;
+      return html`<tr>
+        <td>Error rendering row: ${(error as Error).message}</td>
+      </tr>`;
     }
   };
 
@@ -2364,13 +2496,18 @@ export class LogList extends LitElement {
       // Middle-truncate: keep the last path segment visible since it usually
       // identifies the page ("/checkout/cart" is more useful than "/api/v2/…").
       const [head, tail] = middleTruncatePath(url);
-      add(html`<span class="text-xs font-mono text-textStrong inline-flex items-center min-w-0" title=${url}>${head ? html`<span class="truncate min-w-0">${head}</span>` : nothing}<span class="shrink-0">${tail}</span></span>`);
+      add(
+        html`<span class="text-xs font-mono text-textStrong inline-flex items-center min-w-0" title=${url}
+          >${head ? html`<span class="truncate min-w-0">${head}</span>` : nothing}<span class="shrink-0">${tail}</span></span
+        >`
+      );
     }
     if (errors) {
-      add(html`<span
-        class="cbadge-sm badge-error tabular-nums shrink-0"
-        title="${errors} error${errors === '1' ? '' : 's'} in this session"
-      >${errors} ${errors === '1' ? 'error' : 'errors'}</span>`);
+      add(
+        html`<span class="cbadge-sm badge-error tabular-nums shrink-0" title="${errors} error${errors === '1' ? '' : 's'} in this session"
+          >${errors} ${errors === '1' ? 'error' : 'errors'}</span
+        >`
+      );
     }
     if (events) add(html`<span class="text-xs text-textWeak tabular-nums shrink-0">${events} events</span>`);
     if (duration) add(html`<span class="text-xs text-textWeak tabular-nums shrink-0">${duration}</span>`);
@@ -2382,9 +2519,7 @@ export class LogList extends LitElement {
     // row kill the single-line rhythm; the full text stays in the tooltip.
     if (errorText) add(html`<span class="text-xs text-textError truncate min-w-0 max-w-[60ch]" title=${errorText}>${errorText}</span>`);
 
-    return html`
-      <div class=${clsx('flex items-center gap-1.5 min-w-0 w-full overflow-hidden', isBot && 'opacity-60')}>${parts}</div>
-    `;
+    return html` <div class=${clsx('flex items-center gap-1.5 min-w-0 w-full overflow-hidden', isBot && 'opacity-60')}>${parts}</div> `;
   }
 
   // Error sessions reuse the neutral pill but swap the border to strokeError
@@ -2672,7 +2807,6 @@ class ColumnsSettings extends LitElement {
 
 const isSyntheticRowId = (id: unknown): id is string => typeof id === 'string' && id.startsWith('synthetic-');
 
-
 // Click-to-copy chip for synthetic-row parent ids. Briefly swaps the copy
 // icon for a checkmark on success — confirmation without a toast.
 function renderCopyIdChip(fullId: string) {
@@ -2701,7 +2835,6 @@ function renderCopyIdChip(fullId: string) {
     <span class="check-icon hidden text-textSuccess" aria-hidden="true">${faSprite('check', 'regular', 'w-3 h-3')}</span>
   </button>`;
 }
-
 
 function spanLatencyBreakdown({
   start,
@@ -2850,15 +2983,9 @@ function emptyState(cols: number) {
             </div>
           </div>
           <div class="flex flex-col gap-3">
-            <h2 class="text-2xl text-textStrong font-bold">
-              ${title}
-            </h2>
+            <h2 class="text-2xl text-textStrong font-bold">${title}</h2>
             <p class="text-sm max-w-md font-medium text-textWeak leading-relaxed">${subText}</p>
-            <a
-              href="https://monoscope.tech/docs/sdks/"
-              target="_BLANK"
-              class="btn text-sm w-max mx-auto btn-primary border-0"
-            >
+            <a href="https://monoscope.tech/docs/sdks/" target="_BLANK" class="btn text-sm w-max mx-auto btn-primary border-0">
               Read integration guides
             </a>
           </div>

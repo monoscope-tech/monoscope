@@ -566,13 +566,10 @@ buildLogResult withChildren pid now sinceM fromM toM addCols removeCols (request
       }
 
 
--- | Standalone query function for the v1 API events endpoint.
--- Returns 400 for parse errors, propagates DB errors instead of silently returning empty results.
--- error bodies are JSON-shaped (@{"error": {"code", "message", "field"?,
--- "suggestion"?, "details"?}}@) so the CLI can render a one-liner instead of
--- dumping the raw Hasql/SQL into the user's terminal. The raw SQL/exception
--- text is only included in @error.details@ when the request carried
--- @X-Debug: 1@ (CLI sets this under @--debug@).
+-- | Standalone query function for the v1 API events endpoint. Returns a
+-- JSON-shaped 400 (@{"error": {code, message, field?, suggestion?, details?}}@)
+-- for parse/query errors so the CLI can render a one-liner instead of raw
+-- Hasql/SQL; propagates DB errors instead of silently returning empty results.
 queryEvents :: (DB es, ELog.Log :> es, Error Servant.ServerError :> es, Time.Time :> es, Tracing :> es) => Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Bool -> Eff es LogResult
 queryEvents pid queryM sinceM fromM toM sourceM limitM withChildrenM = do
   now <- Time.currentTime
@@ -581,16 +578,11 @@ queryEvents pid queryM sinceM fromM toM sourceM limitM withChildrenM = do
     Left err -> throwError $ kqlError400 "invalid_query" ("Invalid query: " <> err) Nothing Nothing Nothing
     Right ast -> pure ast
   let (fromD, toD, _) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
-      -- Apply the API `limit` (default 100) as the query row-limit when the KQL
-      -- didn't set its own, so selectLogTable returns exactly the page: hasMore
-      -- and cursor stay consistent with the rows returned (this mirrors apiLogH,
-      -- which has no secondary take). Previously a post-hoc `V.take` over the
-      -- trace-tree-flattened rows — which include synth headers and descendants —
-      -- both miscounted hasMore and dropped matched roots past the cut, so
-      -- `--with-children` could silently truncate results and stop pagination.
-      -- Cap the API `limit` at the server default (500) so a huge ?limit= can't make
-      -- the query fetch an unbounded result set (the old post-hoc `take` capped it at
-      -- defaultQueryLimit implicitly). An explicit KQL `| limit` is left as the user wrote it.
+      -- Apply the API `limit` (default 100, capped at defaultQueryLimit) as the
+      -- query row-limit when the KQL has no explicit `| limit`, so selectLogTable
+      -- returns exactly the page and hasMore/cursor stay consistent. A post-hoc
+      -- `V.take` can't: the trace-tree rows include synth headers + descendants,
+      -- which miscount hasMore and drop matched roots past the cut.
       hasKqlLimit = any (\case TakeCommand{} -> True; _ -> False) queryAST
       queryAST' = if hasKqlLimit then queryAST else queryAST <> [TakeCommand (min defaultQueryLimit (fromMaybe 100 limitM))]
   result <- LogQueries.selectLogTable pid queryAST' (toQText queryAST') Nothing (fromD, toD) [] (parseMaybe pSource =<< sourceM) Nothing
@@ -600,14 +592,10 @@ queryEvents pid queryM sinceM fromM toM sourceM limitM withChildrenM = do
     Right r -> buildLogResult (fromMaybe False withChildrenM) pid now sinceM fromM toM [] [] r
 
 
--- | Translate the raw exception string returned by 'LogQueries.selectLogTable'
--- into a structured 400. We detect a column-not-exist (SQLSTATE 42703) and
--- extract the missing column name so the CLI can suggest a fix; everything
--- else is bundled as a generic @query_failed@ with the raw text under
--- @details@ (which is dropped unless the request opted in via @X-Debug: 1@,
--- a future hook — for now the message stays the one-liner from the SQLSTATE
--- excerpt or a short summary, and the full text is only kept when the
--- excerpt is too short to be helpful).
+-- | Translate the raw exception string from 'LogQueries.selectLogTable' into a
+-- structured 400. A column-not-exist (SQLSTATE 42703) becomes an @unknown_field@
+-- error with the missing column extracted so the CLI can suggest a fix;
+-- everything else is a generic @query_failed@ with the raw text under @details@.
 translateQueryError :: Text -> Servant.ServerError
 translateQueryError raw =
   let
@@ -638,8 +626,7 @@ translateQueryError raw =
 
 
 -- | Build a 400 with a JSON-shaped body the CLI's 'renderAPIError' decodes.
--- The @details@ slot is reserved for the raw SQL/Hasql text; only included
--- when set, and meant to be opt-in via debug header.
+-- The @details@ slot carries the raw SQL/Hasql text; only included when set.
 kqlError400 :: Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Servant.ServerError
 kqlError400 code msg fieldM suggestionM detailsM =
   Servant.err400
@@ -826,7 +813,6 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
         $ withResource authCtx.jobsPool \conn ->
           void $ createJob conn "background_jobs" $ BackgroundJobs.GenerateOtelFacetsBatch (V.singleton pid) now
 
-      -- Build preload URL using the same function that builds the JSON URLs
       let preloadUrl = T.replace "\"" "%22" $ LogQueries.logExplorerUrlPath pid queryM' cols' (formatUTC <$> cursorM') sinceM fromM toM Nothing sourceM False
           headContent = Just $ do
             script_ [text|window.logDataPromise = fetch("$preloadUrl", {headers: {Accept: "application/json"}, credentials: "include"}).then(r => r.json());|]
@@ -1190,8 +1176,6 @@ instance AE.ToJSON LogsGet where
   toJSON _ = AE.object ["error" AE..= True]
 
 
--- This component has been moved to Pkg.Components.LogQueryBox
-
 -- | Shared JSON envelope for aggregate visualizations (patterns, sessions).
 aggregateEnvelope :: V.Vector AE.Value -> [Text] -> [Text] -> Int64 -> [AET.Pair] -> AE.Value
 aggregateEnvelope rows cols allCols total extra =
@@ -1312,7 +1296,43 @@ virtualTable pid initialFetchUrl modeM = do
 
 apiLogsPage :: ApiLogsPageData -> Html ()
 apiLogsPage page = do
-  section_ [class_ "mx-auto pt-2 max-md:px-2 px-4 gap-3.5 max-md:gap-2 w-full flex flex-col h-full overflow-y-hidden overflow-x-hidden pb-2 group/pg", id_ "apiLogsPage"] do
+  -- Fullscreen modes: fs-details expands the side panel, fs-trace gives the trace overlay
+  -- the full content area. Layout is CSS-driven (see tailwind.css fs-* rules) so the
+  -- resizer's inline widths survive untouched for restore.
+  section_
+    [ class_ "mx-auto pt-2 max-md:px-2 px-4 gap-3.5 max-md:gap-2 w-full flex flex-col h-full overflow-y-hidden overflow-x-hidden pb-2 group/pg"
+    , id_ "apiLogsPage"
+    , [__|on toggleDetailsFullscreen(active)
+            if active is undefined set active to not (me matches .fs-details) end
+            if active
+              remove .fs-trace from me
+              add .fs-details to me
+              call updateUrlState('fullscreen', 'details')
+            otherwise if me matches .fs-details
+              remove .fs-details from me
+              call updateUrlState('fullscreen', '', 'delete')
+            end
+            send resize to window
+          end
+          on toggleTraceFullscreen(active)
+            if active is undefined set active to not (me matches .fs-trace) end
+            if active
+              remove .fs-details from me
+              add .fs-trace to me
+              call updateUrlState('fullscreen', 'trace')
+            otherwise if me matches .fs-trace
+              remove .fs-trace from me
+              call updateUrlState('fullscreen', '', 'delete')
+            end
+            send resize to window
+          end
+          init
+            set fs to params().fullscreen
+            if fs is 'details' send toggleDetailsFullscreen(active: true) to me
+            otherwise if fs is 'trace' send toggleTraceFullscreen(active: true) to me end
+          end|]
+    ]
+    do
     template_ [id_ "loader-tmp"] $ loadingIndicator_ LdMD LdDots
 
     div_ [class_ "fixed z-[9999] hidden right-0 w-max h-max border rounded top-32 bg-bgBase shadow-lg", id_ "sessionPlayerWrapper"] do
@@ -1340,7 +1360,7 @@ apiLogsPage page = do
               input_ [type_ "hidden", value_ "", name_ "reqCreatedAt", id_ "req_created_at_input"]
     let countText = prettyPrintCount page.queryResultCount
         suffixText = if page.queryResultCount >= page.resultCount then " rows" else "+ rows"
-    div_ [class_ "w-full"] do
+    div_ [class_ "w-full", id_ "log_explorer_controls"] do
       logQueryBox_
         LogQueryBoxConfig
           { pid = page.pid
@@ -1403,7 +1423,7 @@ apiLogsPage page = do
             ]
         whenJust page.facets renderFacets
 
-      div_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden max-md:hidden mr-3.5"] $ resizer_ "facets-container" "facets_width" True
+      div_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden max-md:hidden mr-3.5", id_ "resizer-facets_width-wrapper"] $ resizer_ "facets-container" "facets_width" True
 
       let showTrace = isJust page.showTrace
       div_ [class_ "grow will-change-[width] contain-[layout_style] relative flex flex-col shrink-1 min-w-0 w-full h-full ", id_ "logs_list_container"] do
@@ -1463,19 +1483,41 @@ apiLogsPage page = do
             ]
             ""
 
-        -- Trace view container
-        div_ [class_ $ "absolute top-0 right-0  w-full h-full overflow-scroll c-scroll z-50 bg-bgBase transition-all duration-100 " <> if showTrace then "" else "hidden", id_ "trace_expanded_view"] do
-          whenJust page.showTrace \trIdAndTimestamp -> do
-            let url = "/p/" <> page.pid.toText <> "/traces/" <> trIdAndTimestamp
-            loadingIndicator_ LdMD LdDots
-            div_ [hxGet_ url, hxTarget_ "#trace_expanded_view", hxSwap_ "innerHtml", hxTrigger_ "intersect one", term "hx-sync" "this:replace"] pass
+        -- Trace view container. The openTraceFullscreen event is dispatched by the
+        -- hover "View trace" button on virtual-list rows (log-list.ts).
+        let pidT = page.pid.toText
+        div_
+          [ class_ $ "absolute top-0 right-0  w-full h-full overflow-scroll c-scroll z-50 bg-bgBase transition-all duration-100 " <> if showTrace then "" else "hidden"
+          , id_ "trace_expanded_view"
+          , term
+              "_"
+              [text|on closeTraceView
+                      add .hidden to me
+                      send toggleTraceFullscreen(active: false) to #apiLogsPage
+                      call updateUrlState('showTrace', '', 'delete')
+                    end
+                    on htmx:afterSwap from me
+                      if #apiLogsPage matches .fs-details
+                        send toggleTraceFullscreen(active: true) to #apiLogsPage
+                      end
+                    end
+                    on openTraceFullscreen(traceId, timestamp) from window
+                      put '' into me
+                      remove .hidden from me
+                      send toggleTraceFullscreen(active: true) to #apiLogsPage
+                      call updateUrlState('showTrace', traceId + '/?timestamp=' + timestamp)
+                      call htmx.ajax('GET', '/p/$pidT/traces/' + traceId + '/?timestamp=' + encodeURIComponent(timestamp), {target: me, swap: 'innerHTML'})
+                      then call window.evalScriptsFromContent(me)|]
+          ]
+          do
+            whenJust page.showTrace \trIdAndTimestamp -> do
+              let url = "/p/" <> page.pid.toText <> "/traces/" <> trIdAndTimestamp
+              loadingIndicator_ LdMD LdDots
+              div_ [hxGet_ url, hxTarget_ "#trace_expanded_view", hxSwap_ "innerHtml", hxTrigger_ "intersect one", term "hx-sync" "this:replace"] pass
 
-        -- Logs view section (also within the scrollable container)
         div_ [class_ "flex-1 min-h-0 h-full flex flex-col"] do
-          -- Virtual table for logs
           div_ [class_ "flex-1 min-h-0 hidden h-full group-has-[#viz-logs:checked]/pg:block group-has-[#viz-patterns:checked]/pg:block group-has-[#viz-sessions:checked]/pg:block"] $ virtualTable page.pid Nothing Nothing
 
-      -- Alert configuration panel on the right
       div_ [class_ "hidden group-has-[#create-alert-toggle:checked]/pg:block max-md:hidden ml-3.5"] $ resizer_ "alert_container" "alert_width" False
 
       div_ [class_ "grow-0 shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll hidden group-has-[#create-alert-toggle:checked]/pg:block w-[500px] max-md:w-full max-md:fixed max-md:inset-0 max-md:z-50 max-md:max-w-full", id_ "alert_container"] do
@@ -1487,8 +1529,19 @@ apiLogsPage page = do
         [ class_ "grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll w-0 max-w-0 overflow-hidden group-has-[#viz-logs:checked]/pg:max-w-full group-has-[#viz-logs:checked]/pg:overflow-y-auto group-has-[#viz-sessions:checked]/pg:max-w-full group-has-[#viz-sessions:checked]/pg:overflow-y-auto max-md:hidden max-md:[&.details-open]:block! max-md:[&.details-open]:fixed max-md:[&.details-open]:inset-0 max-md:[&.details-open]:z-40 max-md:[&.details-open]:w-full max-md:[&.details-open]:max-w-full max-md:[&.details-open]:bg-bgBase"
         , id_ "log_details_container"
         , [__|on htmx:afterSwap if window.innerWidth < 768 add .details-open to me end
+        on keydown[key=='Escape'] from window
+          if not (the event's target matches <input, textarea, select, [contenteditable]/>)
+             and no <[popover]:popover-open/> and no <dialog[open]/>
+            if #trace_expanded_view does not match .hidden
+              send closeTraceView to #trace_expanded_view
+            otherwise
+              send closeDetailPanel to me
+            end
+          end
+        end
         on closeDetailPanel
           add .hidden to #trace_expanded_view
+          send toggleDetailsFullscreen(active: false) to #apiLogsPage
           remove .details-open from me
           set my *width to '0px'
           set the *width of #logs_list_container to '100%'
@@ -1671,7 +1724,6 @@ alertConfigurationForm_ :: Projects.Project -> Maybe Monitors.QueryMonitor -> V.
 alertConfigurationForm_ project alertM teams = do
   let pid = project.id
   div_ [class_ "surface-raised h-full flex flex-col group/alt"] do
-    -- Header section (more compact)
     div_ [class_ "flex items-center justify-between px-4 py-2.5"] do
       div_ [class_ "flex items-center gap-2.5"] do
         div_ [class_ "w-8 h-8 rounded-full bg-fillBrand-weak flex items-center justify-center shrink-0"]
@@ -1679,7 +1731,6 @@ alertConfigurationForm_ project alertM teams = do
         div_ [] do
           h3_ [class_ "text-base font-semibold text-textStrong"] "Create monitor"
           p_ [class_ "text-xs text-textWeak hidden sm:block"] "Get notified when your query matches specific conditions"
-      -- Close button only
       button_
         [ type_ "button"
         , class_ "p-1 rounded-lg hover:bg-fillWeak transition-colors"
@@ -1687,7 +1738,6 @@ alertConfigurationForm_ project alertM teams = do
         ]
         $ faSprite_ "xmark" "regular" "w-3 h-3 text-iconNeutral"
 
-    -- Form content wrapper with scrolling
     div_ [class_ "p-4 pt-3 flex-1 overflow-y-auto c-scroll"] do
       form_
         [ id_ "alert-form"
@@ -1697,8 +1747,7 @@ alertConfigurationForm_ project alertM teams = do
         , class_ "flex flex-col gap-3"
         , [__|on htmx:afterRequest
              if event.detail.successful
-               set my value to ''
-               call me.reset()
+               set my value to '' then call me.reset()
              end
           |]
         ]
@@ -1706,19 +1755,15 @@ alertConfigurationForm_ project alertM teams = do
           input_ [type_ "hidden", name_ "alertId", value_ $ maybe "" ((.id.toText)) alertM]
           formField_ FieldSm def{value = maybe "" (\x -> x.alertConfig.title) alertM, placeholder = "e.g. High error rate on checkout API"} "Name" "title" True Nothing
 
-          -- Monitor Schedule section (shared component)
           let defaultFrequency = maybe 5 (.checkIntervalMins) alertM
               conditionType = if maybe True (\x -> x.alertThreshold > 0 && isJust x.warningThreshold) alertM then Just "threshold_exceeded" else Just "has_matches"
           AlertUI.monitorScheduleSection_ project.paymentPlan defaultFrequency 5 conditionType Nothing
 
-          -- Thresholds section (shared component)
           AlertUI.thresholdsSection_ Nothing (fmap (.alertThreshold) alertM) ((.warningThreshold) =<< alertM) (maybe False (.triggerLessThan) alertM) ((.alertRecoveryThreshold) =<< alertM) ((.warningRecoveryThreshold) =<< alertM)
 
-          -- Notification Settings section (shared component)
           let selectedTeamIds = maybe V.empty (.teams) alertM
           AlertUI.notificationSettingsSection_ ((.alertConfig.severity) <$> alertM) ((.alertConfig.subject) <$> alertM) ((.alertConfig.message) <$> alertM) (maybe True (.alertConfig.emailAll) alertM) teams selectedTeamIds "alert-form" alertM
 
-          -- Action buttons with proper spacing
           div_ [class_ "flex items-center justify-end gap-2 pt-4 pb-20 mt-4 border-t border-strokeWeak"] do
             button_
               [ type_ "button"

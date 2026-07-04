@@ -16,6 +16,8 @@ import Data.Vector qualified as V
 import Effectful (Eff, IOE, (:>))
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
+import Hasql.Transaction qualified as Tx
+import Hasql.Transaction.Sessions qualified as TxS
 import Relude
 
 import Data.Aeson qualified as AE
@@ -133,10 +135,26 @@ evictStaleEntries cache maxIdleSecs maxEntries now =
 
 
 -- | Backfill session/user attrs from sibling spans within recent traces (catches cross-batch edge cases).
+--
+-- Runs on a 90s timer on EVERY replica; the advisory xact-lock makes it
+-- cluster-wide single-flight — overlapping runs from sibling replicas update
+-- the same 15-min row window in different physical orders and deadlock each
+-- other (40P01, observed 2026-07-04). A gated-out run returns 0; the
+-- statement is idempotent (COALESCE fills), so the next tick converges.
+-- lock_timeout stops a run from queueing long behind the hash-update
+-- writers — skipped work likewise self-heals on a later tick.
 backfillSessionAttributes :: DB es => Eff es Int
 backfillSessionAttributes = do
-  rows :: [Int] <-
-    Hasql.interp
+  rows :: [Int] <- Hasql.transaction TxS.ReadCommitted TxS.Write do
+    Tx.sql "SET LOCAL lock_timeout = '10s'"
+    Tx.sql "SET LOCAL statement_timeout = '2min'"
+    locked :: [Bool] <- Tx.statement () $ HI.interp False [HI.sql| SELECT pg_try_advisory_xact_lock(73553109) |]
+    if locked /= [True]
+      then pure []
+      else Tx.statement () $ HI.interp False backfillSql
+  pure $ length rows
+  where
+    backfillSql =
       [HI.sql|
         WITH session_sources AS (
           SELECT context___trace_id, project_id,
@@ -166,4 +184,3 @@ backfillSessionAttributes = do
           AND (s.sid IS NOT NULL OR s.uid IS NOT NULL)
         RETURNING 1::bigint
       |]
-  pure $ length rows

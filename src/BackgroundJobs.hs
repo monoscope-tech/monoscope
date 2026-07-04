@@ -2072,7 +2072,9 @@ runSessionBackfillTimer logger ctx tp = forever $ do
   tryStepIO logger ctx "session-backfill" $ runBackground logger ctx tp go
   where
     go = do
-      n <- TSC.backfillSessionAttributes
+      -- retryOnDeadlock covers the residual case the advisory gate can't:
+      -- lock-order deadlock against the hash-update writers (UPDATE-1/2).
+      n <- retryOnDeadlock "session-backfill" TSC.backfillSessionAttributes
       when (n > 0) $ Log.logTrace "session-backfill" ("rows_updated" :: Text, n)
 
 

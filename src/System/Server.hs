@@ -184,12 +184,20 @@ shutdownDeadlineUs = 15_000_000
 -- workers retrying dead-DB writes instead of exiting. Catching SIGTERM also lets
 -- @docker stop@/k8s drain gracefully (flush buffers, close pools) rather than
 -- SIGKILL-dropping in-flight data.
+--
+-- The cancellation step runs in 'finally', not sequenced after the 'race':
+-- an exception landing on this thread while blocked in 'race' (e.g. ghcid's
+-- interrupt-then-reload on `make live-reload`, which throws 'UserInterrupt'
+-- into the running `:run Start.startApp`) used to skip straight past
+-- 'cancelAllConcurrently', leaking every fiber — including the OTLP gRPC
+-- listener — as an orphaned thread with its socket still bound. The next
+-- reload's `otlp-grpc` fiber then failed to bind port 4317 ("Address already
+-- in use") and, being wrapped in 'supervise', retried that failure forever.
 awaitShutdown :: [Async a] -> IO ()
 awaitShutdown asyncs = do
   stop <- newEmptyMVar
   for_ [sigINT, sigTERM] \s -> installHandler s (Catch (void (tryPutMVar stop ()))) Nothing
-  void $ race (takeMVar stop) (waitAny asyncs)
-  cancelAllConcurrently shutdownDeadlineUs asyncs
+  void (race (takeMVar stop) (waitAny asyncs)) `Safe.finally` cancelAllConcurrently shutdownDeadlineUs asyncs
 
 
 -- | Cancel every fiber CONCURRENTLY (vs async's sequential @mapM_ cancel@),

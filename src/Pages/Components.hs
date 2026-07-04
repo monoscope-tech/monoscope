@@ -107,7 +107,7 @@ dateTime t endTM = do
   let utcOf = formatTime defaultTimeLocale "%Y-%m-%d %H:%M:%S UTC"
       title = maybe (utcOf t) (\e -> utcOf t <> " — " <> utcOf e) endTM
   span_
-    [ class_ "flex items-center rounded-lg px-2 py-1.5 text-xs gap-2 border border-strokeWeak bg-fillWeaker text-textStrong"
+    [ class_ "flex items-center rounded-lg px-2 py-1.5 text-xs gap-2 border border-strokeWeak bg-fillWeaker text-textStrong whitespace-nowrap shrink-0"
     , Lucid.title_ (toText title)
     ]
     do

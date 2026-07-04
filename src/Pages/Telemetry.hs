@@ -608,22 +608,46 @@ tracePage pid traceItem spanRecords = do
   div_ [class_ "w-full p-2", id_ "trace_span_container"] $ do
     div_ [class_ "flex flex-col w-full gap-4 pb-4"] $ do
       div_ [class_ "flex flex-wrap justify-between items-center gap-y-1"] do
-        div_ [class_ "flex items-center gap-4"] $ do
+        div_ [class_ "flex items-center gap-3"] $ do
+          button_
+            [ class_ "cursor-pointer hidden [#apiLogsPage_&]:flex items-center gap-1.5 text-sm font-medium text-textBrand"
+            , term "data-share-hide" ""
+            , term "aria-label" "Back to event details"
+            , [__|on click send closeTraceView to #trace_expanded_view|]
+            ]
+            (faSprite_ "chevron-left" "regular" "w-3.5 h-3.5" >> "Back")
           h3_ [class_ "whitespace-nowrap font-semibold text-textStrong"] "Trace Breakdown"
-        div_ [class_ "flex items-center gap-2"] $ do
+        div_ [class_ "flex items-center gap-2 ml-auto shrink-0"] $ do
           Components.dateTime traceItem.traceStartTime (Just traceItem.traceEndTime)
-          button_ [class_ "p-0 m-0 cursor-pointer trace-collapse-btn rounded-md p-1 hover:bg-fillWeak transition-colors", term "data-share-hide" "", term "aria-label" "Collapse trace view", [__| on click add .hidden to #trace_expanded_view then call updateUrlState('showTrace', '', 'delete')|]] do
-            faSprite_ "xmark" "regular" "w-4 h-4 text-iconNeutral"
+          div_ [class_ "flex gap-1 items-center"] do
+            button_
+              [ class_ "fs-trace-toggle cursor-pointer rounded-md p-1 hover:bg-fillWeak transition-colors hidden md:[#apiLogsPage_&]:block"
+              , term "data-share-hide" ""
+              , term "aria-label" "Toggle fullscreen"
+              , term "data-tippy-content" "Expand trace"
+              , [__|on click send toggleTraceFullscreen to #apiLogsPage|]
+              ]
+              do
+                faSprite_ "expand" "regular" "w-3.5 h-3.5 text-iconNeutral [#apiLogsPage.fs-trace_&]:hidden!"
+                faSprite_ "compress" "regular" "hidden! w-3.5 h-3.5 text-iconNeutral [#apiLogsPage.fs-trace_&]:block!"
+            button_
+              [ class_ "cursor-pointer rounded-md p-1 hover:bg-fillWeak transition-colors hidden [#apiLogsPage_&]:block"
+              , term "data-share-hide" ""
+              , term "aria-label" "Close details"
+              , term "data-tippy-content" "Close"
+              , [__|on click send closeDetailPanel to #log_details_container|]
+              ]
+              $ faSprite_ "xmark" "regular" "w-3.5 h-3.5 text-iconNeutral"
 
       div_ [class_ "flex gap-1 w-full max-md:mt-2 mt-5"] $ do
         div_ [role_ "tablist", class_ "w-full flex flex-col gap-2", id_ "trace-tabs"] $ do
           div_ [class_ "flex flex-col gap-2"] do
             div_ [class_ "flex flex-wrap justify-between gap-y-1 mb-2"] do
-              div_ [class_ "flex items-center gap-2 text-textWeak font-medium"] do
-                button_ [class_ "a-tab text-sm px-3 py-1.5 border-b-2 border-b-transparent t-tab-active", onpointerdown_ "navigatable(this, '#water_fall', '#trace-tabs', 't-tab-active')"] "Waterfall"
-                button_ [class_ "a-tab text-sm px-3 border-b-2 border-b-transparent py-1.5", onpointerdown_ "navigatable(this, '#flame_graph', '#trace-tabs', 't-tab-active')"] "Timeline"
-                button_ [class_ "a-tab text-sm px-3 border-b-2 border-b-transparent py-1.5", onpointerdown_ "navigatable(this, '#span_list', '#trace-tabs', 't-tab-active')"] "Services"
-              div_ [class_ "flex items-center gap-2"] do
+              div_ [class_ "flex items-center gap-2 text-textWeak font-medium min-w-0 overflow-x-auto"] do
+                button_ [class_ "a-tab text-sm px-3 py-1.5 border-b-2 border-b-transparent whitespace-nowrap shrink-0 t-tab-active", onpointerdown_ "navigatable(this, '#water_fall', '#trace-tabs', 't-tab-active')"] "Waterfall"
+                button_ [class_ "a-tab text-sm px-3 border-b-2 border-b-transparent py-1.5 whitespace-nowrap shrink-0", onpointerdown_ "navigatable(this, '#flame_graph', '#trace-tabs', 't-tab-active')"] "Timeline"
+                button_ [class_ "a-tab text-sm px-3 border-b-2 border-b-transparent py-1.5 whitespace-nowrap shrink-0", onpointerdown_ "navigatable(this, '#span_list', '#trace-tabs', 't-tab-active')"] "Services"
+              div_ [class_ "flex items-center gap-2 shrink-0"] do
                 stBox "Spans" (show $ length spanRecords) Nothing
                 stBox "Errors" (show $ length $ V.filter (\s -> s.status == Just SSError) spanRecords) $ Just (faSprite_ "alert-triangle" "regular" "w-3 h-3 text-iconError")
                 stBox "Duration" (toText $ getDurationNSMS traceItem.traceDurationNs) $ Just (faSprite_ "clock" "regular" "w-3 h-3 text-iconNeutral")
@@ -847,7 +871,7 @@ getServiceData sp = ServiceData{name = getServiceName sp.resource, duration = sp
 
 stBox :: Text -> Text -> Maybe (Html ()) -> Html ()
 stBox label value iconM =
-  div_ [class_ "flex items-center px-2 gap-1.5 border-r last:border-r-0", title_ label] do
+  div_ [class_ "flex items-center px-2 gap-1.5 border-r last:border-r-0 whitespace-nowrap shrink-0", title_ label] do
     whenJust iconM id
     span_ [class_ "text-textStrong text-sm tabular-nums"] $ toHtml value
     span_ [class_ "font-medium text-textWeak text-xs"] $ toHtml label
