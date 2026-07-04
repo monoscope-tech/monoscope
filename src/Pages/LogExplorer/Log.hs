@@ -1264,8 +1264,8 @@ data LogResult = LogResult
   , traces :: [TraceTreeEntry]
   }
   deriving stock (Generic)
-  deriving (AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields] LogResult
   deriving (ToSchema) via CamelSchema LogResult
+  deriving (AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields] LogResult
 
 
 virtualTable :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Html ()
