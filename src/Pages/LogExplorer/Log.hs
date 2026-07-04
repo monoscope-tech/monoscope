@@ -1483,11 +1483,27 @@ apiLogsPage page = do
 
       div_ [class_ $ "transition-opacity duration-200 hidden max-md:hidden ml-3.5 " <> if isJust page.targetEvent then "group-has-[#viz-logs:checked]/pg:block group-has-[#viz-sessions:checked]/pg:block" else "", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
 
-      div_ [class_ "grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll w-0 max-w-0 overflow-hidden group-has-[#viz-logs:checked]/pg:max-w-full group-has-[#viz-logs:checked]/pg:overflow-y-auto group-has-[#viz-sessions:checked]/pg:max-w-full group-has-[#viz-sessions:checked]/pg:overflow-y-auto max-md:hidden max-md:[&.details-open]:block! max-md:[&.details-open]:fixed max-md:[&.details-open]:inset-0 max-md:[&.details-open]:z-40 max-md:[&.details-open]:w-full max-md:[&.details-open]:max-w-full max-md:[&.details-open]:bg-bgBase", id_ "log_details_container", [__|on htmx:afterSwap if window.innerWidth < 768 add .details-open to me end|]] do
-        htmxOverlayIndicator_ "details_indicator"
-        whenJust page.targetEvent \te -> do
-          script_
-            [text|
+      div_
+        [ class_ "grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll w-0 max-w-0 overflow-hidden group-has-[#viz-logs:checked]/pg:max-w-full group-has-[#viz-logs:checked]/pg:overflow-y-auto group-has-[#viz-sessions:checked]/pg:max-w-full group-has-[#viz-sessions:checked]/pg:overflow-y-auto max-md:hidden max-md:[&.details-open]:block! max-md:[&.details-open]:fixed max-md:[&.details-open]:inset-0 max-md:[&.details-open]:z-40 max-md:[&.details-open]:w-full max-md:[&.details-open]:max-w-full max-md:[&.details-open]:bg-bgBase"
+        , id_ "log_details_container"
+        , [__|on htmx:afterSwap if window.innerWidth < 768 add .details-open to me end
+        on closeDetailPanel
+          add .hidden to #trace_expanded_view
+          remove .details-open from me
+          set my *width to '0px'
+          set the *width of #logs_list_container to '100%'
+          remove .bg-fillBrand-strong from <.item-row.bg-fillBrand-strong/>
+          add .hidden .opacity-0 .pointer-events-none to #resizer-details_width-wrapper
+          call updateUrlState('details_width', '', 'delete')
+          call updateUrlState('target_event', '', 'delete')
+          call updateUrlState('showTrace', '', 'delete')
+        end|]
+        ]
+        do
+          htmxOverlayIndicator_ "details_indicator"
+          whenJust page.targetEvent \te -> do
+            script_
+              [text|
             document.addEventListener('DOMContentLoaded', function() {
               const detailsContainer = document.getElementById('log_details_container');
               if (detailsContainer) {
@@ -1502,8 +1518,8 @@ apiLogsPage page = do
               }
               });
           |]
-          let url = "/p/" <> page.pid.toText <> "/log_explorer/" <> te
-          div_ [hxGet_ url, hxTarget_ "#log_details_container", hxSwap_ "innerHtml", hxTrigger_ "intersect one", hxIndicator_ "#details_indicator", term "hx-sync" "this:replace"] pass
+            let url = "/p/" <> page.pid.toText <> "/log_explorer/" <> te
+            div_ [hxGet_ url, hxTarget_ "#log_details_container", hxSwap_ "innerHtml", hxTrigger_ "intersect one", hxIndicator_ "#details_indicator", term "hx-sync" "this:replace"] pass
 
   queryEditorInitializationCode page.queryLibRecent page.queryLibSaved page.vizType ((.facetJson) <$> page.facets)
 

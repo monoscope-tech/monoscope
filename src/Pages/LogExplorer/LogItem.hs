@@ -71,12 +71,6 @@ spanHasErrors :: Telemetry.SpanRecord -> Bool
 spanHasErrors = not . null . getSpanErrors . (.events)
 
 
-getErrorDetails :: AE.Value -> (Text, Text, Text)
-getErrorDetails ae = (fld "type", fld "message", fld "stacktrace")
-  where
-    fld k = fromMaybe "" $ ae ^? key "event_attributes" . key "exception" . key k . _String
-
-
 expandAPIlogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Maybe Text -> ATAuthCtx (RespHeaders ApiItemDetailed)
 expandAPIlogItemH pid rdId timestamp _ = do
   _ <- Projects.sessionAndProject pid
@@ -105,8 +99,8 @@ data ApiItemDetailed
 
 
 instance ToHtml ApiItemDetailed where
-  toHtml (SpanItemExpanded pid spn aptSpan) = toHtml $ expandedItemView pid spn aptSpan Nothing Nothing
-  toHtml (LogItemExpanded pid req) = toHtml $ expandedItemView pid req Nothing Nothing Nothing
+  toHtml (SpanItemExpanded pid spn aptSpan) = toHtml $ expandedItemView pid spn aptSpan
+  toHtml (LogItemExpanded pid req) = toHtml $ expandedItemView pid req Nothing
   toHtml (ItemDetailedNotFound message) =
     toHtml $ emptyState_ def{icon = Just "circle-exclamation", action = ESCustom closeBtn} "Record not found" message
     where
@@ -114,25 +108,15 @@ instance ToHtml ApiItemDetailed where
         button_
           [ class_ "btn btn-sm btn-ghost text-sm"
           , Aria.label_ "Close details panel"
-          , term
-              "_"
-              [text|on click
-                add .hidden to #trace_expanded_view
-                remove .details-open from #log_details_container
-                set #log_details_container.style.width to '0px'
-                set #logs_list_container.style.width to '100%'
-                remove .bg-fillBrand-strong from <.item-row.bg-fillBrand-strong/>
-                add .hidden .opacity-0 .pointer-events-none to #resizer-details_width-wrapper
-                call updateUrlState('details_width', '', 'delete')
-                call updateUrlState('target_event', '0px', 'delete')
-                call updateUrlState('showTrace', '', 'delete')|]
+          , term "data-share-hide" "1"
+          , [__|on click send closeDetailPanel to #log_details_container|]
           ]
           "Close"
   toHtmlRaw = toHtml
 
 
 spanBadge :: Projects.ProjectId -> Text -> Text -> Text -> Html ()
-spanBadge pid path val fieldKey = do
+spanBadge pid path val fieldKey =
   div_
     [ class_ "relative min-w-0"
     , term "data-field-path" path
@@ -146,15 +130,6 @@ spanBadge pid path val fieldKey = do
       (span_ [class_ "truncate"] $ toHtml val)
 
 
--- Shared pill styling + icon/label body for the header action row (Copy as curl, View trace, View alert, Share).
-actionBtnAttrs :: [Attribute]
-actionBtnAttrs = [class_ "cursor-pointer flex items-center gap-1.5 text-xs font-medium px-2 py-1 rounded-md border border-strokeWeak bg-fillWeakerer hover:bg-fillWeaker transition-colors text-textBrand"]
-
-
-actionBtnBody :: Text -> Text -> Html ()
-actionBtnBody icon lbl = faSprite_ icon "regular" "w-3 h-3" >> toHtml lbl
-
-
 -- | One detail tab. @panel@ carries its own literal @group-has-[.MARKER:checked]/dtab:block@
 -- class — Tailwind only compiles class strings that appear verbatim in source, so this must
 -- never be built from @marker@ at runtime. Default-active tab is the first shown (not a field).
@@ -162,19 +137,15 @@ data DetailTab = DetailTab {marker :: Text, cls :: Text, label :: Html (), panel
 
 
 -- Unified view for both logs and spans
-expandedItemView :: Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> Maybe Telemetry.OtelLogsAndSpans -> Maybe Text -> Maybe Text -> Html ()
-expandedItemView pid item aptSp _ _ = do
+expandedItemView :: Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> Maybe Telemetry.OtelLogsAndSpans -> Html ()
+expandedItemView pid item aptSp = do
   -- Row #1 (both views): back-to-logs (mobile only), timestamp, close.
   div_ [class_ "sticky top-[-1px] z-10 flex items-center gap-2 bg-bgBase border-b border-l border-strokeWeak max-md:border-l-0 px-2 py-1"] do
     button_
       [ class_ "hidden max-md:flex cursor-pointer items-center gap-1.5 text-sm font-medium text-textBrand"
       , Aria.label_ "Close details"
-      , [__|on click
-            remove .details-open from #log_details_container
-            set #log_details_container.style.width to '0px'
-            set #logs_list_container.style.width to '100%'
-            remove .bg-fillBrand-strong from <.item-row.bg-fillBrand-strong/>
-            call updateUrlState('target_event', '0px', 'delete')|]
+      , term "data-share-hide" "1"
+      , [__|on click send closeDetailPanel to #log_details_container|]
       ]
       (faSprite_ "chevron-left" "regular" "w-3.5 h-3.5" >> "Back to logs")
     div_ [class_ "flex gap-2 items-center shrink-0 ml-auto"] do
@@ -182,16 +153,7 @@ expandedItemView pid item aptSp _ _ = do
       button_
         [ class_ "cursor-pointer detail-close-btn rounded-md p-1 hover:bg-fillWeak transition-colors"
         , Aria.label_ "Close item details"
-        , [__|on click
-              add .hidden to #trace_expanded_view
-              remove .details-open from #log_details_container
-              set #log_details_container.style.width to '0px'
-              set #logs_list_container.style.width to '100%'
-              remove .bg-fillBrand-strong from <.item-row.bg-fillBrand-strong/>
-              add .hidden .opacity-0 .pointer-events-none to #resizer-details_width-wrapper
-              call updateUrlState('details_width', '', 'delete')
-              call updateUrlState('target_event', '0px', 'delete')
-              call updateUrlState('showTrace', '', 'delete')|]
+        , [__|on click send closeDetailPanel to #log_details_container|]
         ]
         $ faSprite_ "xmark" "regular" "w-3.5 h-3.5 text-iconNeutral"
   div_ [class_ $ "w-full pl-3 pr-1 pb-2 relative border-l border-strokeWeak max-md:border-l-0 max-md:px-0 " <> if isLog then " flex flex-col gap-2" else " pb-[50px]"] do
@@ -225,29 +187,31 @@ expandedItemView pid item aptSp _ _ = do
         div_ [class_ "flex gap-2 flex-wrap min-w-0"] $ spanBadge pid "context.span_id" ("Span ID: " <> v) "Span ID"
       div_ [class_ "flex flex-wrap gap-2 items-center"] actionRow
 
+    actionBtnBody :: Text -> Text -> Html ()
+    actionBtnBody icon lbl = faSprite_ icon "regular" "w-3 h-3" >> toHtml lbl
+
     actionRow = do
       when isHttp
-        $ button_ (actionBtnAttrs <> [onclick_ "window.buildCurlRequest(event)", term "data-reqjson" (decodeUtf8 $ AE.encode $ AE.toJSON item)])
+        $ button_ [class_ "action-btn", onclick_ "window.buildCurlRequest(event)", term "data-reqjson" (decodeUtf8 $ AE.encode $ AE.toJSON item)]
         $ actionBtnBody "copy" "Copy as curl"
       whenJust (item.context >>= (.trace_id) >>= guarded (not . T.null)) \trId ->
         button_
-          ( actionBtnAttrs
-              <> [ term "data-share-hide" "1"
-                 , hxGet_ $ "/p/" <> pid.toText <> "/traces/" <> trId <> "/?timestamp=" <> createdAt
-                 , hxTarget_ "#trace_expanded_view"
-                 , hxSwap_ "innerHTML"
-                 , term "hx-on::after-swap" "window.evalScriptsFromContent(htmx.find('#trace_expanded_view'))"
-                 , term
-                     "_"
-                     [text|on click remove .hidden from #trace_expanded_view
-                            then call updateUrlState('showTrace', "$trId/?timestamp=$createdAt")|]
-                 ]
-          )
+          [ class_ "action-btn"
+          , term "data-share-hide" "1"
+          , hxGet_ $ "/p/" <> pid.toText <> "/traces/" <> trId <> "/?timestamp=" <> createdAt
+          , hxTarget_ "#trace_expanded_view"
+          , hxSwap_ "innerHTML"
+          , term "hx-on::after-swap" "window.evalScriptsFromContent(htmx.find('#trace_expanded_view'))"
+          , term
+              "_"
+              [text|on click remove .hidden from #trace_expanded_view
+                     then call updateUrlState('showTrace', "$trId/?timestamp=$createdAt")|]
+          ]
           (actionBtnBody "cross-hair" "View trace")
       when isAlert
-        $ a_ (actionBtnAttrs <> [href_ $ "/p/" <> pid.toText <> "/monitors/" <> fromMaybe "" item.parent_id <> "/overview"])
+        $ a_ [class_ "action-btn", href_ $ "/p/" <> pid.toText <> "/monitors/" <> fromMaybe "" item.parent_id <> "/overview"]
         $ actionBtnBody "bell" "View alert"
-      button_ (actionBtnAttrs <> [term "data-share-hide" "1", hxPost_ ("/p/" <> pid.toText <> "/share/" <> item.id <> "/" <> createdAt <> "?event_type=" <> (if isLog then "log" else "span")), hxSwap_ "innerHTML", hxTarget_ "#copy_share_link"])
+      button_ [class_ "action-btn", term "data-share-hide" "1", hxPost_ ("/p/" <> pid.toText <> "/share/" <> item.id <> "/" <> createdAt <> "?event_type=" <> (if isLog then "log" else "span")), hxSwap_ "innerHTML", hxTarget_ "#copy_share_link"]
         $ actionBtnBody "link-simple" "Share link"
 
     -- The tab set as data: [shown?] marker, extra button class, label, panel (with its literal vis class).
@@ -292,17 +256,19 @@ expandedItemView pid item aptSp _ _ = do
               bodyField k = fromMaybe (AE.object []) $ unAesonTextMaybe cSp.body >>= (^? key k)
               httpSub = foldlM (\acc k -> case acc of AE.Object o -> KEM.lookup k o; _ -> Nothing) (AE.Object $ maybe mempty (\case AE.Object o -> o; _ -> mempty) (unAesonTextMaybe cSp.attributes >>= Map.lookup "http"))
               hp = fromMaybe AE.Null . httpSub
-              notEmpty v = v `notElem` [AE.Null, AE.object [], AE.Array mempty, AE.String ""]
+              notEmpty v = v `notElem` ([AE.Null, AE.object [], AE.Array mempty, AE.String ""] :: [AE.Value])
               -- Default to the first sub-tab that has content (Request Details always does).
               defaultTab =
                 maybe "htab-raw" fst
                   $ find
                     snd
-                    [ ("htab-res" :: Text, notEmpty (bodyField "response_body"))
-                    , ("htab-req", notEmpty (bodyField "request_body"))
-                    , ("htab-hed", any (notEmpty . hp) [["request", "header"], ["response", "header"]])
-                    , ("htab-par", any (notEmpty . hp) [["request", "query_params"], ["request", "path_params"]])
-                    ]
+                    ( [ ("htab-res", notEmpty (bodyField "response_body"))
+                      , ("htab-req", notEmpty (bodyField "request_body"))
+                      , ("htab-hed", any (notEmpty . hp) [["request", "header"], ["response", "header"]])
+                      , ("htab-par", any (notEmpty . hp) [["request", "query_params"], ["request", "path_params"]])
+                      ]
+                        :: [(Text, Bool)]
+                    )
           div_ [class_ "bg-fillWeaker w-max rounded-lg border border-strokeWeak justify-start items-start inline-flex"]
             $ div_ [class_ "justify-start items-start flex text-sm"]
             $ forM_ ([("htab-res", "Res Body"), ("htab-req", "Req Body"), ("htab-hed", "Headers"), ("htab-par", "Params"), ("htab-raw", "Request Details")] :: [(Text, Html ())]) \(m, l) ->
@@ -352,6 +318,11 @@ renderErrors errs =
         div_ [class_ "px-3 pb-3"]
           $ pre_ [class_ "text-xs font-mono whitespace-pre text-textWeak bg-bgBase border border-strokeWeak rounded-md p-3 max-h-72 overflow-auto leading-snug"]
           $ toHtml stacktrace
+  where
+    getErrorDetails :: AE.Value -> (Text, Text, Text)
+    getErrorDetails ae = (fld "type", fld "message", fld "stacktrace")
+      where
+        fld k = fromMaybe "" $ ae ^? key "event_attributes" . key "exception" . key k . _String
 
 
 numberOfEvents :: AE.Value -> Int

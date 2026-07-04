@@ -744,10 +744,25 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp sampleOverri
                 (\t -> tracePage pid t spanRecs)
                 tr
             div_ [class_ "transition-opacity duration-200 mx-1 hidden lg:block", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
-            div_ [class_ "grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden max-h-[500px] lg:w-1/2 w-c-scroll overflow-y-auto investigation-details", id_ "log_details_container", term "hx-on::after-swap" "if(window.innerWidth<1024)this.scrollIntoView({behavior:'smooth',block:'start'})"] do
-              htmxOverlayIndicator_ "details_indicator"
-              whenJust (spanRecs V.!? 0) \sr ->
-                div_ [hxGet_ $ "/p/" <> pid.toText <> "/log_explorer/" <> sr.uSpanId <> "/" <> formatUTC sr.timestamp <> "/detailed", hxTarget_ "#log_details_container", hxSwap_ "innerHtml", hxTrigger_ "intersect once", hxIndicator_ "#details_indicator", term "hx-sync" "this:replace"] pass
+            div_
+              [ class_ "grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden max-h-[500px] lg:w-1/2 w-c-scroll overflow-y-auto investigation-details"
+              , id_ "log_details_container"
+              , term "hx-on::after-swap" "if(window.innerWidth<1024)this.scrollIntoView({behavior:'smooth',block:'start'})"
+              , [__|on closeDetailPanel
+                  set my *width to '0px'
+                  remove .bg-fillBrand-strong from <.item-row.bg-fillBrand-strong/>
+                  add .opacity-0 .pointer-events-none to #resizer-details_width-wrapper
+                  call updateUrlState('details_width', '', 'delete')
+                end
+                on htmx:afterSwap if event.target is me
+                  set my *width to ''
+                  remove .opacity-0 .pointer-events-none from #resizer-details_width-wrapper
+                end|]
+              ]
+              do
+                htmxOverlayIndicator_ "details_indicator"
+                whenJust (spanRecs V.!? 0) \sr ->
+                  div_ [hxGet_ $ "/p/" <> pid.toText <> "/log_explorer/" <> sr.uSpanId <> "/" <> formatUTC sr.timestamp <> "/detailed", hxTarget_ "#log_details_container", hxSwap_ "innerHtml", hxTrigger_ "intersect once", hxIndicator_ "#details_indicator", term "hx-sync" "this:replace"] pass
 
         div_ [id_ "log-content", class_ ((if isLogPatternIssue then "" else "hidden ") <> "err-tab-content")] do
           let logsTraceId = fromMaybe "" $ asum [errM >>= (.base.recentTraceId), (.traceId) <$> tr]

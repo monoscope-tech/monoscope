@@ -65,7 +65,7 @@ instance ToHtml MetricsOverViewGet where
 
 data TraceDetailsGet
   = TraceDetails Projects.ProjectId Telemetry.Trace (V.Vector Telemetry.SpanRecord)
-  | SpanDetails Projects.ProjectId Telemetry.OtelLogsAndSpans (Maybe Telemetry.OtelLogsAndSpans) (Maybe Text) (Maybe Text)
+  | SpanDetails Projects.ProjectId Telemetry.OtelLogsAndSpans (Maybe Telemetry.OtelLogsAndSpans)
   | TraceDetailsNotFound Text
 
 
@@ -206,7 +206,7 @@ flattenMetricTree dataMap trees lvl conts = V.concat $ zipWith flatten trees isL
 
 instance ToHtml TraceDetailsGet where
   toHtml (TraceDetails pid tr spanRecs) = toHtml $ tracePage pid tr spanRecs
-  toHtml (SpanDetails pid s aptSpn left right) = toHtml $ LogItem.expandedItemView pid s aptSpn left right
+  toHtml (SpanDetails pid s aptSpn) = toHtml $ LogItem.expandedItemView pid s aptSpn
   toHtml (TraceDetailsNotFound msg) = toHtml msg
   toHtmlRaw = toHtml
 
@@ -299,15 +299,11 @@ traceH pid trId timestamp spanIdM nav = do
   if isJust nav
     then do
       spanRecords' <- V.fromList <$> Telemetry.getSpanRecordsByTraceId pid trId timestamp now
-      let spanRecords = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> spanRecords'
-          sid = fromMaybe "" spanIdM
+      let sid = fromMaybe "" spanIdM
           matchesSpan x = maybe False (\s -> s.span_id == Just sid) x.context
           targetSpan = fromMaybe (V.head spanRecords') (V.find matchesSpan spanRecords')
-          targetIndex = fromMaybe 0 (V.findIndex matchesSpan spanRecords')
-          prevSpan = guard (targetIndex > 0) $> spanRecords V.! (targetIndex - 1)
-          nextSpan = guard (targetIndex < V.length spanRecords - 1) $> spanRecords V.! (targetIndex + 1)
           atpSpan = V.find (\x -> x.name == Just "monoscope.http" || isJust (Telemetry.atMapText "http.request.method" (unAesonTextMaybe x.attributes))) spanRecords'
-      addRespHeaders $ SpanDetails pid targetSpan atpSpan ((.spanId) <$> prevSpan) ((.spanId) <$> nextSpan)
+      addRespHeaders $ SpanDetails pid targetSpan atpSpan
     else do
       traceItemM <- Telemetry.getTraceDetails pid trId timestamp now
       case traceItemM of

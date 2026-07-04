@@ -1416,6 +1416,11 @@ code, pre, .code, .monospace {
   @apply border-strokeBrand-strong text-textBrand font-medium;
 }
 
+/* Header action pill: Copy as curl, View trace, View alert, Share link. */
+@utility action-btn {
+  @apply flex items-center gap-1.5 cursor-pointer px-2 py-1 text-xs font-medium rounded-md border border-strokeWeak hover:bg-fillWeaker transition-colors text-textBrand;
+}
+
 .cbadge {
   @apply px-2 py-1.5 text-sm rounded-lg text-center;
 }
