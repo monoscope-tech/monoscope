@@ -769,7 +769,7 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp sampleOverri
               logsQuery = case Issues.hashPrefix issue.issueType of
                 Just prefix | isLogPatternIssue -> "hashes[*]==\"" <> prefix <> issue.targetHash <> "\""
                 _ -> "kind==\"log\" AND context___trace_id==\"" <> logsTraceId <> "\""
-          virtualTable pid (Just ("/p/" <> pid.toText <> "/log_explorer?json=true&query=" <> toUriStr logsQuery)) Nothing
+          virtualTable pid (Just ("/p/" <> pid.toText <> "/log_explorer/data?json=true&query=" <> toUriStr logsQuery)) Nothing
 
       let withSessionIds = V.catMaybes $ (\sr -> (`lookupValueText` "id") =<< Map.lookup "session" =<< sr.attributes) <$> spanRecs
       unless (V.null withSessionIds) $ div_ [class_ "surface-raised rounded-2xl overflow-hidden", id_ "replay-section"] do

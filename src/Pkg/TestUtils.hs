@@ -1451,7 +1451,7 @@ routeRequest tr path params
   | "/log_explorer" `T.isPrefixOf` path = do
       (_, pg) <-
         testServant tr
-          $ Log.apiLogH testPid query Nothing Nothing since from to Nothing source Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing jsonParam Nothing Nothing Nothing Nothing Nothing
+          $ Log.logExplorerDataH testPid query Nothing Nothing since from to source Nothing
       pure $ mockResponse $ AE.encode pg
   | "/chart_data" `T.isPrefixOf` path = do
       result <-
@@ -1467,7 +1467,6 @@ routeRequest tr path params
     from = p "from" params
     to = p "to" params
     source = p "source" params
-    jsonParam = p "json" params
 
 
 routeApiV1Get :: TestResources -> Text -> [(Text, Text)] -> IO (Response LBS.ByteString)

@@ -2510,16 +2510,16 @@ table td a[href]:not(.btn):not([data-no-preview]) { --tooltip-z: 100; --tooltip-
   }
 }
 
-/* Log-explorer fullscreen modes, toggled by the toggleDetailsFullscreen/toggleTraceFullscreen
-   hyperscript on #apiLogsPage (Log.hs). fs-details: side panel takes over the whole browser
-   viewport via position:fixed (escaping the facets/loglist row so it also covers the query
-   box and charts above); fs-trace: the trace overlay covers the whole viewport too. The
-   expand/compress icons swap via Tailwind arbitrary-variant classes on the svgs themselves
-   (see LogItem.hs/Telemetry.hs), not custom classes here. */
-#apiLogsPage.fs-details :is(#facets-container, #logs_list_container, #alert_container, [id^='resizer-'], #log_explorer_controls) {
+/* Log-explorer fullscreen modes, toggled by the toggleFullscreen hyperscript on #apiLogsPage
+   (Log.hs) via its data-fullscreen attribute (details|trace). details: side panel takes over
+   the whole browser viewport via position:fixed (escaping the facets/loglist row so it also
+   covers the query box and charts above); trace: the trace overlay covers the whole viewport
+   too. The expand/compress icons swap via Tailwind arbitrary-variant classes on the svgs
+   themselves (see LogItem.hs/Telemetry.hs), not custom classes here. */
+#apiLogsPage[data-fullscreen='details'] :is(#facets-container, #logs_list_container, #alert_container, [id^='resizer-'], #log_explorer_controls) {
   display: none;
 }
-#apiLogsPage.fs-details #log_details_container {
+#apiLogsPage[data-fullscreen='details'] #log_details_container {
   position: fixed;
   inset: 0;
   z-index: 2147483647;
@@ -2529,11 +2529,11 @@ table td a[href]:not(.btn):not([data-no-preview]) { --tooltip-z: 100; --tooltip-
 }
 /* #logs_list_container's contain:layout (see its class list) makes it a containing block for
    position:fixed descendants, which would otherwise clip #trace_expanded_view to this row
-   instead of the real viewport. Neutralize it only while fs-trace is active. */
-#apiLogsPage.fs-trace #logs_list_container {
+   instead of the real viewport. Neutralize it only while trace fullscreen is active. */
+#apiLogsPage[data-fullscreen='trace'] #logs_list_container {
   contain: none;
 }
-#apiLogsPage.fs-trace #trace_expanded_view {
+#apiLogsPage[data-fullscreen='trace'] #trace_expanded_view {
   position: fixed;
   inset: 0;
   z-index: 2147483647;

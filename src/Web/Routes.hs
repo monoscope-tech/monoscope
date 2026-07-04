@@ -480,7 +480,13 @@ type LogExplorerRoutes = NamedRoutes LogExplorerRoutes'
 
 type LogExplorerRoutes' :: Type -> Type
 data LogExplorerRoutes' mode = LogExplorerRoutes'
-  { logExplorerGet :: mode :- "log_explorer" :> QPT "query" :> QPT "cols" :> QPU "cursor" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "layout" :> QPT "source" :> QPT "target-spans" :> QPT "queryTitle" :> QPT "queryLibId" :> QPT "details_width" :> QPT "target_event" :> QPT "showTrace" :> HXRequest :> HXBoosted :> QPT "json" :> QPT "viz_type" :> QPT "alert" :> QPI "aggregate_skip" :> QPT "pattern_target" :> QPT "sort_by" :> Get '[HTML, JSON] (RespHeaders Log.LogsGet)
+  { logExplorerGet :: mode :- "log_explorer" :> QPT "query" :> QPT "cols" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QPT "target-spans" :> QPT "target_event" :> QPT "showTrace" :> QPT "viz_type" :> QPT "alert" :> QPT "pattern_target" :> Get '[HTML, JSON] (RespHeaders Log.LogsGet)
+  , logExplorerDataGet :: mode :- "log_explorer" :> "data" :> QPT "query" :> QPT "cols" :> QPU "cursor" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QPT "target-spans" :> Get '[JSON] (RespHeaders Log.LogResult)
+  , logExplorerPatternsGet :: mode :- "log_explorer" :> "patterns" :> QPT "query" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QPT "pattern_target" :> QPI "aggregate_skip" :> Get '[JSON] (RespHeaders Log.PatternsView)
+  , logExplorerSessionsGet :: mode :- "log_explorer" :> "sessions" :> QPT "query" :> QPT "since" :> QPT "from" :> QPT "to" :> QPI "aggregate_skip" :> QPT "sort_by" :> Get '[JSON] (RespHeaders Log.SessionsView)
+  , saveQueryPost :: mode :- "log_explorer" :> "queries" :> ReqBody '[FormUrlEncoded] Log.SaveQueryForm :> Post '[HTML] (RespHeaders Log.QueryLibraryView)
+  , deleteQueryPost :: mode :- "log_explorer" :> "queries" :> Capture "id" Text :> Delete '[HTML] (RespHeaders Log.QueryLibraryView)
+  , alertFormGet :: mode :- "log_explorer" :> "alert_form" :> QPT "alert" :> Get '[HTML] (RespHeaders (Html ()))
   , logExplorerItemDetailedGet :: mode :- "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" UTCTime :> "detailed" :> QPT "source" :> Get '[HTML] (RespHeaders LogItem.ApiItemDetailed)
   , logExplorerExpandGet :: mode :- "log_explorer" :> "expand" :> QPT "kind" :> QPT "key" :> QPI "skip" :> QPT "query" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[JSON] (RespHeaders AE.Value)
   , aiSearchPost :: mode :- "log_explorer" :> "ai_search" :> ReqBody '[JSON] AE.Value :> Post '[JSON] (RespHeaders AE.Value)
@@ -858,6 +864,12 @@ logExplorerServer :: Projects.ProjectId -> Servant.ServerT LogExplorerRoutes ATA
 logExplorerServer pid =
   LogExplorerRoutes'
     { logExplorerGet = Log.apiLogH pid
+    , logExplorerDataGet = Log.logExplorerDataH pid
+    , logExplorerPatternsGet = Log.logPatternsH pid
+    , logExplorerSessionsGet = Log.logSessionsH pid
+    , saveQueryPost = Log.saveQueryH pid
+    , deleteQueryPost = Log.deleteQueryH pid
+    , alertFormGet = Log.alertFormH pid
     , logExplorerItemDetailedGet = LogItem.expandAPIlogItemH pid
     , logExplorerExpandGet = Log.apiLogExpandH pid
     , aiSearchPost = Log.aiSearchH pid

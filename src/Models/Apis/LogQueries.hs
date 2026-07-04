@@ -178,7 +178,7 @@ incrementByOneMillisecond dateStr =
 
 
 logExplorerUrlPath :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Bool -> Text
-logExplorerUrlPath pid q cols cursor since fromV toV layout source recent = "/p/" <> pid.toText <> "/log_explorer?" <> T.intercalate "&" params
+logExplorerUrlPath pid q cols cursor since fromV toV layout source recent = "/p/" <> pid.toText <> "/log_explorer/data?" <> T.intercalate "&" params
   where
     recentTo = cursor >>= (\x -> Just (toText . incrementByOneMillisecond . toString $ x))
     params =

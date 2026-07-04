@@ -64,7 +64,7 @@ logQueryBox_ config = do
   modal_ "saveQueryMdl" "" $ form_
     [ class_ "flex flex-col p-3 gap-3"
     , id_ "saveQueryForm"
-    , hxGet_ $ "/p/" <> config.pid.toText <> "/log_explorer?layout=SaveQuery"
+    , hxPost_ $ "/p/" <> config.pid.toText <> "/log_explorer/queries"
     , hxVals_ "js:{query: document.getElementById('saveQueryMdl').dataset.pendingQuery || window.getQueryFromEditor()}"
     , hxTarget_ "#queryLibraryContent"
     , hxSwap_ "outerHTML"
@@ -530,8 +530,7 @@ queryLibItem_ isRecent qli =
               [ type_ "button"
               , class_ "p-1 hover:bg-fillWeak rounded cursor-pointer"
               , term "data-tippy-content" "Delete query"
-              , hxGet_ $ "/p/" <> qli.projectId.toText <> "/log_explorer?layout=DeleteQuery&queryLibId=" <> qli.id.toText
-              , hxVals_ "js:{query:window.getQueryFromEditor()}"
+              , hxDelete_ $ "/p/" <> qli.projectId.toText <> "/log_explorer/queries/" <> qli.id.toText
               , hxTarget_ "#queryLibraryContent"
               , hxSwap_ "outerHTML"
               , hxSelect_ "#queryLibraryContent"

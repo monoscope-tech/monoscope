@@ -1,10 +1,20 @@
 module Pages.LogExplorer.Log (
   apiLogH,
+  logExplorerDataH,
+  logPatternsH,
+  logSessionsH,
+  saveQueryH,
+  deleteQueryH,
+  alertFormH,
   apiLogExpandH,
   aiSearchH,
   queryEvents,
   LogsGet (..),
   LogResult (..),
+  QueryLibraryView (..),
+  SaveQueryForm (..),
+  PatternsView (..),
+  SessionsView (..),
   ApiLogsPageData (..),
   virtualTable,
   curateCols,
@@ -20,7 +30,6 @@ module Pages.LogExplorer.Log (
 )
 where
 
-import Control.Error (hush)
 import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AET
 import Data.Containers.ListUtils (nubOrd)
@@ -61,7 +70,7 @@ import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Megaparsec (parseMaybe)
-import Utils (FieldAction (..), FieldMenuCtx (..), FreeTierStatus (..), LoadingSize (..), LoadingType (..), checkFreeTierStatus, faSprite_, fieldContextMenuItems_, formatUTC, getDurationNSMS, getServiceColors, htmxOverlayIndicator_, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecTextByKey, methodFillColor, popoverPanel_, popoverTrigger_, prettyPrintCount, serviceFillColor, statusFillColorText)
+import Utils (FieldAction (..), FieldMenuCtx (..), LoadingSize (..), LoadingType (..), checkFreeTierStatus, faSprite_, fieldContextMenuItems_, getDurationNSMS, getServiceColors, htmxOverlayIndicator_, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecTextByKey, methodFillColor, popoverPanel_, popoverTrigger_, prettyPrintCount, serviceFillColor, statusFillColorText)
 
 import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.UUID qualified as UUID
@@ -73,10 +82,8 @@ import Pages.Monitors qualified as AlertUI
 import Pkg.AI qualified as AI
 
 import BackgroundJobs qualified
-import Control.Lens ((.~), (?~))
 import Data.Map.Strict qualified as Map
-import Data.OpenApi (NamedSchema (..), OpenApiItems (..), OpenApiType (..), Referenced (..), ToSchema (..))
-import Data.OpenApi qualified as OA
+import Data.OpenApi (ToSchema (..))
 import Data.Pool (withResource)
 import Data.Scientific (toBoundedInteger)
 import Data.Set qualified as S
@@ -84,11 +91,12 @@ import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful.Ki qualified as Ki
 import OddJobs.Job (createJob)
-import Pkg.DeriveUtils (SnakeSchema (..))
+import Pkg.DeriveUtils (CamelSchema (..), SnakeSchema (..))
 import System.Logging qualified as Log
 import System.Tracing (Tracing, forkWithCtx)
 import Text.Slugify (slugify)
 import UnliftIO.Exception (tryAny)
+import Web.FormUrlEncoded (FromForm)
 
 
 data TraceTreeEntry = TraceTreeEntry
@@ -679,14 +687,15 @@ extractMissingColumn t = tfMatch <|> pgMatch
                in if T.null col then Nothing else Just col
 
 
-apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
-apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM queryLibItemTitle queryLibItemID detailWM targetEventM showTraceM hxRequestM hxBoostedM jsonM vizTypeM alertM skipM pTargetM sortByM = do
+-- | Log Explorer page shell. Renders chrome only (query box, facets, widgets,
+-- session header). Log rows are fetched separately by the log-list web
+-- component from 'logExplorerDataH' (and the sibling patterns/sessions
+-- endpoints), so this handler no longer touches the row-fetch, query-library
+-- mutation, or alert-form paths — each of those is now its own endpoint.
+apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
+apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM showTraceM vizTypeM alertM pTargetM = do
   let source = fromMaybe "spans" sourceM
   (sess, project, bw) <- mkPageCtx pid
-  -- `cols` is a delta over server defaults: bare tokens add columns, `-`-prefixed tokens hide
-  -- defaults. Only adds are projected (removes are already-fetched defaults, just hidden).
-  let (removeToks, addCols) = L.partition ("-" `T.isPrefixOf`) $ filter (not . T.null) $ T.splitOn "," (fromMaybe "" cols')
-      removeCols = map (T.drop 1) removeToks
   let queryInput = maybeToMonoid queryM'
   let parseError msg = addTriggerEvent "showParseError" (AE.toJSON msg) >> addErrorToast "Error Parsing Query" (Just msg) $> ([], Just msg)
   (queryAST, parseErrorMsg) <- case parseQueryToAST queryInput of
@@ -694,223 +703,232 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
     Right ast
       | not (T.null (T.strip queryInput)) && null ast -> parseError "Invalid query syntax"
       | otherwise -> pure (ast, Nothing)
-  let hadParseError = isJust parseErrorMsg
-  let queryText = toQText queryAST
-      isJsonReq = jsonM == Just "true"
 
-  -- Fire-and-forget: onboarding + query history (skip on JSON fast path since HTML path already does it)
-  unless isJsonReq do
-    unless (V.elem "explored_logs" project.onboardingStepsCompleted)
-      $ void
-      $ Hasql.interpExecute [HI.sql| UPDATE projects.projects SET onboarding_steps_completed = array_append(onboarding_steps_completed, 'explored_logs') WHERE id = #{pid} AND NOT ('explored_logs' = ANY(onboarding_steps_completed)) |]
-    unless (isJust queryLibItemTitle) $ Projects.queryLibInsert Projects.QLTHistory pid sess.persistentSession.userId queryText queryAST Nothing
-
-  when (layoutM == Just "SaveQuery") do
-    if (isJust . keepNonEmpty) queryLibItemID && (isJust . keepNonEmpty) queryLibItemTitle
-      then do
-        Projects.queryLibTitleEdit pid sess.persistentSession.userId (maybeToMonoid queryLibItemID) (maybeToMonoid queryLibItemTitle)
-        addSuccessToast "Edited Query title successfully" Nothing
-      else do
-        Projects.queryLibInsert Projects.QLTSaved pid sess.persistentSession.userId queryText queryAST queryLibItemTitle
-        addSuccessToast "Saved to Query Library successfully" Nothing
-    addTriggerEvent "closeModal" ""
-
-  when (layoutM == Just "DeleteQuery") do
-    Projects.queryLibItemDelete pid sess.persistentSession.userId (maybeToMonoid queryLibItemID)
-    addSuccessToast "Deleted from Query Library successfully" Nothing
+  -- Fire-and-forget: mark onboarding done + log this query into history.
+  recordExploration pid sess.persistentSession.userId project.onboardingStepsCompleted queryAST
 
   now <- Time.currentTime
   let (fromD, toD, currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
   authCtx <- Effectful.Reader.Static.ask @AuthContext
 
-  -- If an alert ID is provided, fetch the alert and pre-fill the query box
-  alertDM <- case alertM of
-    Nothing -> return Nothing
-    Just alertIdText -> case UUID.fromText alertIdText of
-      Just alertId -> Monitors.queryMonitorById (Monitors.QueryMonitorId alertId)
-      Nothing -> return Nothing
-
-  -- Use alert's visualization type if no vizType specified and alert is loaded
+  -- An alert ID pre-fills the query box and selects the alert's viz type.
+  alertDM <- case alertM >>= UUID.fromText of
+    Just alertId -> Monitors.queryMonitorById (Monitors.QueryMonitorId alertId)
+    Nothing -> pure Nothing
   let effectiveVizType = vizTypeM <|> ((.visualizationType) <$> alertDM)
 
-  -- Skip table load on initial page load unless it's a JSON request
-  let shouldSkipLoad = hadParseError || isNothing layoutM && isNothing hxRequestM && jsonM /= Just "true"
-      fetchLogs =
+  -- Only shell-side queries: query library, facets, free-tier, and — for the
+  -- sessions viz — the session-level summary that renders in the page header.
+  (queryLibE, facetSummaryE, freeTierStatusE, sessionSummary) <- Ki.scoped \scope -> do
+    let aw = Ki.atomically . Ki.await
+    t1 <- forkWithCtx scope $ tryAny $ Projects.queryLibHistoryForUser pid sess.persistentSession.userId
+    t2 <- forkWithCtx scope $ tryAny $ SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" (fromMaybe (addUTCTime (-86400) now) fromD) (fromMaybe now toD)
+    t3 <- forkWithCtx scope $ tryAny $ checkFreeTierStatus pid project.paymentPlan
+    t4 <- forkWithCtx scope $ case effectiveVizType of
+      Just "sessions" -> Just . first (show @Text) <$> tryAny (LogQueries.fetchSessionSummary authCtx.env.enableTimefusionReads pid queryAST (fromD, toD))
+      _ -> pure Nothing
+    (,,,) <$> aw t1 <*> aw t2 <*> aw t3 <*> aw t4
+
+  let logErr label res = whenLeft_ (void res) (Log.logAttention ("Log explorer " <> label <> " failed") . show @Text)
+  logErr "queryLib" queryLibE
+  logErr "facets" facetSummaryE
+  logErr "freeTierStatus" freeTierStatusE
+  whenJust sessionSummary \s -> whenLeft_ s (Log.logAttention "fetchSessionSummary failed")
+
+  let queryLib = fromRight [] queryLibE
+      facetSummary = join $ rightToMaybe facetSummaryE
+      freeTierStatus = fromRight def freeTierStatusE
+      (queryLibRecent, queryLibSaved) = bimap V.fromList V.fromList $ L.partition (\x -> Projects.QLTHistory == x.queryType) queryLib
+
+  -- Queue facet generation if no precomputed facets exist (new projects)
+  when (isNothing facetSummary)
+    $ liftIO
+    $ withResource authCtx.jobsPool \conn ->
+      void $ createJob conn "background_jobs" $ BackgroundJobs.GenerateOtelFacetsBatch (V.singleton pid) now
+
+  let preloadUrl = T.replace "\"" "%22" $ LogQueries.logExplorerUrlPath pid queryM' cols' Nothing sinceM fromM toM Nothing sourceM False
+      headContent = Just $ script_ [text|window.logDataPromise = fetch("$preloadUrl", {headers: {Accept: "application/json"}, credentials: "include"}).then(r => r.json());|]
+
+  let stampPng base = do
+        url <- Widget.widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid base sinceM fromM toM
+        pure $ if T.null url then base else base{Widget.pngUrl = Just url}
+  chartWidget <- stampPng (logChartWidget pid)
+  latencyWidget <- stampPng (logLatencyWidget pid)
+
+  let bwconf =
+        bw
+          { pageTitle = "Explorer"
+          , docsLink = Just "https://monoscope.tech/docs/dashboard/dashboard-pages/api-log-explorer/"
+          , freeTierStatus = freeTierStatus
+          , headContent = headContent
+          , pageActions = Just $ logExplorerActions_ currentRange
+          , navTabs = Just $ logExplorerNavTabs_ pid
+          }
+
+  let page =
+        ApiLogsPageData
+          { pid
+          , resultCount = 0
+          , currentRange
+          , query = queryM'
+          , source
+          , targetSpans = targetSpansM
+          , queryLibRecent
+          , queryLibSaved
+          , targetEvent = targetEventM
+          , showTrace = showTraceM
+          , facets = facetSummary
+          , vizType = effectiveVizType
+          , alert = alertDM
+          , sessionSummary
+          , targetPattern = pTargetM
+          , chartWidget
+          , latencyWidget
+          , queryResultCount = 0
+          , parseError = parseErrorMsg
+          }
+  addRespHeaders $ LogPage $ PageCtx bwconf page
+
+
+-- | Fire-and-forget on page load: mark the @explored_logs@ onboarding step done
+-- and record the query in the user's history.
+recordExploration :: Projects.ProjectId -> Projects.UserId -> V.Vector Text -> [Section] -> ATAuthCtx ()
+recordExploration pid uid stepsDone queryAST = do
+  unless (V.elem "explored_logs" stepsDone)
+    $ void
+    $ Hasql.interpExecute [HI.sql| UPDATE projects.projects SET onboarding_steps_completed = array_append(onboarding_steps_completed, 'explored_logs') WHERE id = #{pid} AND NOT ('explored_logs' = ANY(onboarding_steps_completed)) |]
+  Projects.queryLibInsert Projects.QLTHistory pid uid (toQText queryAST) queryAST Nothing
+
+
+-- | Log Explorer header controls: live-stream toggle, time picker, refresh.
+logExplorerActions_ :: Maybe (Text, Text) -> Html ()
+logExplorerActions_ currentRange = div_ [class_ "flex gap-2 max-md:gap-1 items-center"] do
+  label_ [class_ "cursor-pointer border border-strokeWeak rounded-lg flex shadow-xs", role_ "switch", Aria.label_ "Stream live data", [__|on change from #streamLiveData if #streamLiveData.checked set @aria-checked to 'true' else set @aria-checked to 'false'|], term "aria-checked" "false"] do
+    input_ [type_ "checkbox", id_ "streamLiveData", class_ "hidden"]
+    span_ [class_ "group-has-[#streamLiveData:checked]/pg:flex hidden py-1 px-2 items-center", data_ "tippy-content" "Pause live stream"] $ faSprite_ "pause" "solid" "h-4 w-4 text-iconNeutral"
+    span_ [class_ "group-has-[#streamLiveData:checked]/pg:hidden flex py-1 px-2 items-center", data_ "tippy-content" "Stream live data"] $ faSprite_ "play" "regular" "h-4 w-4 text-iconNeutral"
+  Components.timepicker_ (Just "log_explorer_form") currentRange Nothing
+  Components.refreshButton_
+
+
+-- | Log Explorer nav tabs (Events / Metrics).
+logExplorerNavTabs_ :: Projects.ProjectId -> Html ()
+logExplorerNavTabs_ pid = div_ [class_ "tabs tabs-box tabs-outline items-center", role_ "tablist"] do
+  a_ ([href_ $ "/p/" <> pid.toText <> "/log_explorer", role_ "tab", class_ "tab h-auto! tab-active text-textStrong", term "aria-current" "page", term "aria-selected" "true"] <> navTabAttrs) "Events"
+  a_ ([href_ $ "/p/" <> pid.toText <> "/metrics", role_ "tab", class_ "tab h-auto! ", term "aria-selected" "false"] <> navTabAttrs) "Metrics"
+
+
+-- | Shared prologue for the log-data endpoints: auth-gate the request, grab the
+-- app config + clock, and resolve the time range once.
+logDataEnv :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (AuthContext, UTCTime, Maybe UTCTime, Maybe UTCTime)
+logDataEnv pid sinceM fromM toM = do
+  _ <- Projects.sessionAndProject pid
+  authCtx <- Effectful.Reader.Static.ask @AuthContext
+  now <- Time.currentTime
+  let (fromD, toD, _) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
+  pure (authCtx, now, fromD, toD)
+
+
+-- | Log-row data endpoint. The log-list web component fetches this; the shell
+-- (apiLogH) renders only chrome. Returns the trace-tree-expanded 'LogResult'.
+logExplorerDataH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogResult)
+logExplorerDataH pid queryM' cols' cursorM' sinceM fromM toM sourceM targetSpansM = do
+  (authCtx, now, fromD, toD) <- logDataEnv pid sinceM fromM toM
+  -- `cols` is a delta over server defaults: bare tokens add columns, `-`-prefixed tokens hide defaults.
+  let (removeToks, addCols) = L.partition ("-" `T.isPrefixOf`) $ filter (not . T.null) $ T.splitOn "," (fromMaybe "" cols')
+      removeCols = map (T.drop 1) removeToks
+      emptyTable = (V.empty, ["timestamp", "summary", "duration"], 0)
+  tableData <- case parseQueryToAST (maybeToMonoid queryM') of
+    Left err -> Log.logInfo "Log explorer data: rejected invalid KQL query" err $> emptyTable
+    Right queryAST -> do
+      resultE <-
         Hasql.withHasqlTimefusion authCtx.env.enableTimefusionReads
-          $ LogQueries.selectLogTable pid queryAST queryText cursorM' (fromD, toD) addCols (parseMaybe pSource =<< sourceM) targetSpansM
+          $ LogQueries.selectLogTable pid queryAST (toQText queryAST) cursorM' (fromD, toD) addCols (parseMaybe pSource =<< sourceM) targetSpansM
+      case resultE of
+        Left err -> Log.logAttention "Log explorer data query failed" (show @Text err) $> emptyTable
+        Right t -> pure t
+  -- UI always wants the trace-tree context; the API/CLI defaults off.
+  lr <- buildLogResult True pid now sinceM fromM toM addCols removeCols tableData
+  let lastFM = lr.cursor >>= textToUTC <&> toText . iso8601Show . addUTCTime (-0.001)
+  addRespHeaders
+    (lr :: LogResult)
+      { nextUrl = LogQueries.logExplorerUrlPath pid queryM' cols' lastFM sinceM fromM toM (Just "loadmore") sourceM False
+      , resetLogsUrl = LogQueries.logExplorerUrlPath pid queryM' cols' Nothing Nothing Nothing Nothing Nothing sourceM False
+      , recentUrl = LogQueries.logExplorerUrlPath pid queryM' cols' Nothing sinceM fromM toM (Just "loadmore") sourceM True
+      }
 
-  -- JSON fast path: skip side queries (facets, teams, queryLib, patterns)
-  let isJsonFastPath = jsonM == Just "true" && layoutM /= Just "SaveQuery"
 
-  let buildLogResult' tableData = do
-        -- UI always wants the trace-tree context; the API/CLI defaults off.
-        lr <- buildLogResult True pid now sinceM fromM toM addCols removeCols tableData
-        let lastFM = lr.cursor >>= textToUTC <&> toText . iso8601Show . addUTCTime (-0.001)
-        pure
-          (lr :: LogResult)
-            { nextUrl = LogQueries.logExplorerUrlPath pid queryM' cols' lastFM sinceM fromM toM (Just "loadmore") sourceM False
-            , resetLogsUrl = LogQueries.logExplorerUrlPath pid queryM' cols' Nothing Nothing Nothing Nothing Nothing sourceM False
-            , recentUrl = LogQueries.logExplorerUrlPath pid queryM' cols' Nothing sinceM fromM toM (Just "loadmore") sourceM True
-            }
+-- | Patterns visualization data endpoint (aggregate log patterns as JSON).
+logPatternsH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> ATAuthCtx (RespHeaders PatternsView)
+logPatternsH pid queryM' sinceM fromM toM sourceM pTargetM skipM = do
+  (authCtx, _, fromD, toD) <- logDataEnv pid sinceM fromM toM
+  case parseQueryToAST (maybeToMonoid queryM') of
+    Left err -> Log.logInfo "Log explorer patterns: rejected invalid KQL query" err >> addRespHeaders (PatternsView 0 V.empty)
+    Right queryAST -> do
+      (total, rows) <- LogQueries.fetchLogPatterns authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) (parseMaybe pSource =<< sourceM) pTargetM (fromMaybe 0 skipM)
+      addRespHeaders $ PatternsView total (V.fromList rows)
 
-  let fetchOrSkip = if shouldSkipLoad then pure $ Right (V.empty, ["timestamp", "summary", "duration"], 0) else fetchLogs
 
-  if isJsonFastPath
-    then case effectiveVizType of
-      Just "patterns" -> do
-        (totalPatterns, patternRows) <- LogQueries.fetchLogPatterns authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) (parseMaybe pSource =<< sourceM) pTargetM (fromMaybe 0 skipM)
-        addRespHeaders $ LogsPatternJson totalPatterns (V.fromList patternRows)
-      Just "sessions" -> do
-        (totalSessions, sessionRows) <- LogQueries.fetchSessions authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) sortByM (fromMaybe 0 skipM)
-        addRespHeaders $ LogsSessionsJson totalSessions (V.fromList sessionRows)
-      _ -> do
-        tableAsVecE <- fetchOrSkip
-        whenLeft_ (void tableAsVecE) (Log.logAttention "Log explorer JSON query failed" . show @Text)
-        case hush tableAsVecE of
-          Just tableResult -> buildLogResult' tableResult >>= addRespHeaders . LogsGetJson
-          Nothing -> buildLogResult' (V.empty, ["timestamp", "summary", "duration"], 0) >>= addRespHeaders . LogsGetJson
-    else do
-      -- Full HTML path: parallelize independent DB queries
-      (tableAsVecE, queryLibE, facetSummaryE, freeTierStatusE, teamsE, aggregateE) <- Ki.scoped \scope -> do
-        let aw = Ki.atomically . Ki.await
-        t1 <- forkWithCtx scope fetchOrSkip
-        t2 <- forkWithCtx scope $ tryAny $ Projects.queryLibHistoryForUser pid sess.persistentSession.userId
-        t3 <- forkWithCtx scope $ tryAny $ SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" (fromMaybe (addUTCTime (-86400) now) fromD) (fromMaybe now toD)
-        t4 <- forkWithCtx scope $ tryAny $ checkFreeTierStatus pid project.paymentPlan
-        t5 <- forkWithCtx scope $ tryAny $ V.fromList <$> ManageMembers.getTeams pid
-        -- Patterns and sessions are mutually exclusive; a single fork suffices.
-        -- The summary is tried independently so its failure doesn't drop the
-        -- sessions table with it.
-        t6 <- forkWithCtx scope $ tryAny $ case effectiveVizType of
-          Just "patterns" -> (,Nothing,Nothing) . Just . second V.fromList <$> LogQueries.fetchLogPatterns authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) (parseMaybe pSource =<< sourceM) pTargetM (fromMaybe 0 skipM)
-          Just "sessions" -> do
-            rows <- second V.fromList <$> LogQueries.fetchSessions authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) sortByM (fromMaybe 0 skipM)
-            summE <- tryAny $ LogQueries.fetchSessionSummary authCtx.env.enableTimefusionReads pid queryAST (fromD, toD)
-            whenLeft_ summE (Log.logAttention "fetchSessionSummary failed" . show @Text)
-            pure (Nothing, Just rows, Just $ first (show @Text) summE)
-          _ -> pure (Nothing, Nothing, Nothing)
-        (,,,,,) <$> aw t1 <*> aw t2 <*> aw t3 <*> aw t4 <*> aw t5 <*> aw t6
+-- | Sessions visualization data endpoint (aggregate sessions as JSON).
+logSessionsH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> ATAuthCtx (RespHeaders SessionsView)
+logSessionsH pid queryM' sinceM fromM toM skipM sortByM = do
+  (authCtx, _, fromD, toD) <- logDataEnv pid sinceM fromM toM
+  case parseQueryToAST (maybeToMonoid queryM') of
+    Left err -> Log.logInfo "Log explorer sessions: rejected invalid KQL query" err >> addRespHeaders (SessionsView 0 V.empty)
+    Right queryAST -> do
+      (total, rows) <- LogQueries.fetchSessions authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) sortByM (fromMaybe 0 skipM)
+      addRespHeaders $ SessionsView total (V.fromList rows)
 
-      -- Log errors from non-critical queries but continue with defaults
-      let logErr label res = whenLeft_ (void res) (Log.logAttention ("Log explorer " <> label <> " failed") . show @Text)
-      logErr "queryLib" queryLibE
-      logErr "facets" facetSummaryE
-      logErr "freeTierStatus" freeTierStatusE
-      logErr "teams" teamsE
-      logErr "aggregate" aggregateE
 
-      let tableAsVecM = hush tableAsVecE
-          queryLib = fromRight [] queryLibE
-          facetSummary = join $ rightToMaybe facetSummaryE
-          freeTierStatus = fromRight def freeTierStatusE
-          teams = fromRight V.empty teamsE
-          (patterns, sessions, sessionSummary) = fromRight (Nothing, Nothing, Nothing) aggregateE
-          (queryLibRecent, queryLibSaved) = bimap V.fromList V.fromList $ L.partition (\x -> Projects.QLTHistory == x.queryType) queryLib
+-- | Form body for 'saveQueryH' (HTMX serializes the modal's inputs + hx-vals here).
+data SaveQueryForm = SaveQueryForm {query :: Maybe Text, queryLibId :: Maybe Text, queryTitle :: Maybe Text}
+  deriving stock (Generic)
+  deriving anyclass (FromForm)
 
-      -- Queue facet generation if no precomputed facets exist (new projects)
-      when (isNothing facetSummary)
-        $ liftIO
-        $ withResource authCtx.jobsPool \conn ->
-          void $ createJob conn "background_jobs" $ BackgroundJobs.GenerateOtelFacetsBatch (V.singleton pid) now
 
-      let preloadUrl = T.replace "\"" "%22" $ LogQueries.logExplorerUrlPath pid queryM' cols' (formatUTC <$> cursorM') sinceM fromM toM Nothing sourceM False
-          headContent = Just $ do
-            script_ [text|window.logDataPromise = fetch("$preloadUrl", {headers: {Accept: "application/json"}, credentials: "include"}).then(r => r.json());|]
+-- | Save (create or rename) a query-library item, returning the refreshed
+-- popover fragment. Split out of the log-fetch GET so a mutation isn't
+-- smuggled through a read path.
+saveQueryH :: Projects.ProjectId -> SaveQueryForm -> ATAuthCtx (RespHeaders QueryLibraryView)
+saveQueryH pid form = do
+  (sess, _) <- Projects.sessionAndProject pid
+  let uid = sess.persistentSession.userId
+      queryAST = fromRight [] $ parseQueryToAST (maybeToMonoid form.query)
+  if (isJust . keepNonEmpty) form.queryLibId && (isJust . keepNonEmpty) form.queryTitle
+    then Projects.queryLibTitleEdit pid uid (maybeToMonoid form.queryLibId) (maybeToMonoid form.queryTitle) >> addSuccessToast "Edited Query title successfully" Nothing
+    else Projects.queryLibInsert Projects.QLTSaved pid uid (toQText queryAST) queryAST form.queryTitle >> addSuccessToast "Saved to Query Library successfully" Nothing
+  addTriggerEvent "closeModal" ""
+  queryLibraryFragment pid uid
 
-      let bwconf =
-            bw
-              { pageTitle = "Explorer"
-              , docsLink = Just "https://monoscope.tech/docs/dashboard/dashboard-pages/api-log-explorer/"
-              , freeTierStatus = freeTierStatus
-              , headContent = headContent
-              , pageActions = Just $ div_ [class_ "flex gap-2 max-md:gap-1 items-center"] do
-                  label_ [class_ "cursor-pointer border border-strokeWeak rounded-lg flex shadow-xs", role_ "switch", Aria.label_ "Stream live data", [__|on change from #streamLiveData if #streamLiveData.checked set @aria-checked to 'true' else set @aria-checked to 'false'|], term "aria-checked" "false"] do
-                    input_ [type_ "checkbox", id_ "streamLiveData", class_ "hidden"]
-                    span_ [class_ "group-has-[#streamLiveData:checked]/pg:flex hidden py-1 px-2 items-center", data_ "tippy-content" "Pause live stream"] $ faSprite_ "pause" "solid" "h-4 w-4 text-iconNeutral"
-                    span_ [class_ "group-has-[#streamLiveData:checked]/pg:hidden flex py-1 px-2 items-center", data_ "tippy-content" "Stream live data"] $ faSprite_ "play" "regular" "h-4 w-4 text-iconNeutral"
-                  Components.timepicker_ (Just "log_explorer_form") currentRange Nothing
-                  Components.refreshButton_
-              , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-outline items-center", role_ "tablist"] do
-                  a_
-                    ([href_ $ "/p/" <> pid.toText <> "/log_explorer", role_ "tab", class_ "tab h-auto! tab-active text-textStrong", term "aria-current" "page", term "aria-selected" "true"] <> navTabAttrs)
-                    "Events"
-                  a_ ([href_ $ "/p/" <> pid.toText <> "/metrics", role_ "tab", class_ "tab h-auto! ", term "aria-selected" "false"] <> navTabAttrs) "Metrics"
-              }
 
-      case tableAsVecM of
-        Just tableResult -> do
-          r <- buildLogResult' tableResult
-          let patternsToSkip = fromMaybe 0 skipM + maybe 0 (V.length . snd) patterns
-              sessionsToSkip = fromMaybe 0 skipM + maybe 0 (V.length . snd) sessions
+-- | Delete a query-library item, returning the refreshed popover fragment.
+deleteQueryH :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders QueryLibraryView)
+deleteQueryH pid qId = do
+  (sess, _) <- Projects.sessionAndProject pid
+  let uid = sess.persistentSession.userId
+  Projects.queryLibItemDelete pid uid qId
+  addSuccessToast "Deleted from Query Library successfully" Nothing
+  queryLibraryFragment pid uid
 
-          -- Build widgets with PNG URLs
-          let baseChartWidget = logChartWidget pid
-              baseLatencyWidget = logLatencyWidget pid
-          chartPngUrl <- Widget.widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid baseChartWidget sinceM fromM toM
-          latencyPngUrl <- Widget.widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid baseLatencyWidget sinceM fromM toM
-          let chartWidget = if T.null chartPngUrl then baseChartWidget else baseChartWidget{Widget.pngUrl = Just chartPngUrl}
-              latencyWidget = if T.null latencyPngUrl then baseLatencyWidget else baseLatencyWidget{Widget.pngUrl = Just latencyPngUrl}
 
-          let page =
-                ApiLogsPageData
-                  { pid
-                  , resultCount = r.count
-                  , requestVecs = r.logsData
-                  , cols = r.cols
-                  , colIdxMap = r.colIdxMap
-                  , nextLogsURL = r.nextUrl
-                  , resetLogsURL = r.resetLogsUrl
-                  , recentLogsURL = r.recentUrl
-                  , currentRange
-                  , exceededFreeTier = case freeTierStatus of FreeTierExceeded _ _ -> True; _ -> False
-                  , query = queryM'
-                  , cursor = r.cursor
-                  , isTestLog = Nothing
-                  , emptyStateUrl = Nothing
-                  , source
-                  , targetSpans = targetSpansM
-                  , serviceColors = r.serviceColors
-                  , daysCountDown = Nothing
-                  , queryLibRecent
-                  , queryLibSaved
-                  , fromD
-                  , toD
-                  , detailsWidth = detailWM
-                  , targetEvent = targetEventM
-                  , showTrace = showTraceM
-                  , facets = facetSummary
-                  , vizType = effectiveVizType
-                  , alert = alertDM
-                  , patterns = patterns
-                  , patternsToSkip
-                  , sessions = sessions
-                  , sessionsToSkip
-                  , sessionSummary
-                  , targetPattern = pTargetM
-                  , project = project
-                  , teams
-                  , chartWidget
-                  , latencyWidget
-                  , queryResultCount = r.queryResultCount
-                  , parseError = parseErrorMsg
-                  }
+-- | Re-read the caller's query library and wrap it as the popover fragment.
+queryLibraryFragment :: Projects.ProjectId -> Projects.UserId -> ATAuthCtx (RespHeaders QueryLibraryView)
+queryLibraryFragment pid uid = do
+  queryLib <- Projects.queryLibHistoryForUser pid uid
+  let (recent, saved) = bimap V.fromList V.fromList $ L.partition (\x -> Projects.QLTHistory == x.queryType) queryLib
+  addRespHeaders $ QueryLibraryView pid saved recent
 
-          addRespHeaders $ case (layoutM, hxRequestM, jsonM, effectiveVizType) of
-            (_, _, Just "true", Just "patterns") -> let (tp, ps) = fromMaybe (0, V.empty) patterns in LogsPatternJson tp ps
-            (_, _, Just "true", Just "sessions") -> let (ts, ss) = fromMaybe (0, V.empty) sessions in LogsSessionsJson ts ss
-            (Just "SaveQuery", _, _, _) -> LogsQueryLibrary pid queryLibSaved queryLibRecent
-            (Just "resultTable", Just "true", _, _) -> LogsGetJson r
-            (Just "all", Just "true", _, _) -> LogsGetJson r
-            (_, _, Just "true", _) -> LogsGetJson r
-            _ -> LogPage $ PageCtx bwconf page
-        Nothing -> do
-          case (layoutM, hxRequestM, hxBoostedM, jsonM) of
-            (_, _, _, Just "true") -> do
-              addErrorToast "Something went wrong" Nothing
-              addRespHeaders $ LogsGetErrorSimple "Failed to fetch logs data"
-            _ -> do
-              addErrorToast "Something went wrong" Nothing
-              addRespHeaders $ LogsGetError $ PageCtx bwconf "Something went wrong"
+
+-- | Lazily-loaded alert configuration form (HTMX partial). Kept off the shell's
+-- hot path — the shell no longer forks a teams query or renders this every load.
+alertFormH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+alertFormH pid alertM = do
+  (_, project) <- Projects.sessionAndProject pid
+  alertDM <- case alertM >>= UUID.fromText of
+    Just alertId -> Monitors.queryMonitorById (Monitors.QueryMonitorId alertId)
+    Nothing -> pure Nothing
+  teams <- V.fromList <$> ManageMembers.getTeams pid
+  addRespHeaders $ alertConfigurationForm_ project alertDM teams
 
 
 textToUTC :: Text -> Maybe UTCTime
@@ -1071,26 +1089,37 @@ data LogsGet
   = LogPage (PageCtx ApiLogsPageData)
   | LogsGetError (PageCtx Text)
   | LogsGetErrorSimple Text
-  | LogsGetJson LogResult
-  | LogsQueryLibrary Projects.ProjectId (V.Vector Projects.QueryLibItem) (V.Vector Projects.QueryLibItem)
-  | LogsPatternJson Int (V.Vector LogQueries.PatternRow)
-  | LogsSessionsJson Int (V.Vector LogQueries.SessionRow)
 
 
 instance ToHtml LogsGet where
   toHtml (LogPage (PageCtx conf pa_dat)) = toHtml $ PageCtx conf $ apiLogsPage pa_dat
   toHtml (LogsGetErrorSimple err) = span_ [class_ "text-textError"] $ toHtml err
   toHtml (LogsGetError (PageCtx conf err)) = toHtml $ PageCtx conf err
-  toHtml (LogsQueryLibrary pid queryLibSaved queryLibRecent) = toHtml $ queryLibrary_ pid queryLibSaved queryLibRecent
-  toHtml x@LogsGetJson{} = span_ [] . toHtml $ (decodeUtf8 $ AE.encode x :: Text)
-  toHtml x@LogsPatternJson{} = span_ [] . toHtml $ (decodeUtf8 $ AE.encode x :: Text)
-  toHtml x@LogsSessionsJson{} = span_ [] . toHtml $ (decodeUtf8 $ AE.encode x :: Text)
   toHtmlRaw = toHtml
 
 
 instance AE.ToJSON LogsGet where
-  toJSON (LogsGetJson r) = AE.toJSON r
-  toJSON (LogsPatternJson totalPatterns patterns) =
+  toJSON (LogsGetError _) = AE.object ["error" AE..= True, "message" AE..= ("Something went wrong" :: Text)]
+  toJSON (LogsGetErrorSimple msg) = AE.object ["error" AE..= True, "message" AE..= msg]
+  toJSON _ = AE.object ["error" AE..= True]
+
+
+-- | HTMX fragment for the query-library popover, returned by the save/delete
+-- mutation endpoints (hxSelect extracts #queryLibraryContent from it).
+data QueryLibraryView = QueryLibraryView Projects.ProjectId (V.Vector Projects.QueryLibItem) (V.Vector Projects.QueryLibItem)
+
+
+instance ToHtml QueryLibraryView where
+  toHtml (QueryLibraryView pid queryLibSaved queryLibRecent) = toHtml $ queryLibrary_ pid queryLibSaved queryLibRecent
+  toHtmlRaw = toHtml
+
+
+-- | JSON payload for the patterns visualization endpoint.
+data PatternsView = PatternsView Int (V.Vector LogQueries.PatternRow)
+
+
+instance AE.ToJSON PatternsView where
+  toJSON (PatternsView totalPatterns patterns) =
     let patternToSummary pat
           | "\x1E" `T.isInfixOf` pat = AE.toJSON (T.splitOn "\x1E" pat)
           | otherwise = AE.toJSON (splitSummaryElements pat)
@@ -1107,10 +1136,18 @@ instance AE.ToJSON LogsGet where
         rows = V.map (\p -> AE.Array $ V.fromList [AE.Null, AE.toJSON p.count, AE.toJSON p.volume, AE.toJSON p.level, AE.toJSON p.service, patternToSummary p.logPattern, AE.toJSON p.mergedCount, AE.toJSON p.isError]) patterns
         total = V.foldl' (\acc p -> acc + p.count) 0 patterns
      in aggregateEnvelope rows cols allCols total ["totalPatterns" AE..= totalPatterns]
-  -- Sessions use the exact same column layout as logs so the same rendering code is reused.
-  -- Session-specific info is packed into the summary column as badge elements.
-  -- Column indices must match the logs colIdxMap exactly.
-  toJSON (LogsSessionsJson totalSessions sessions) =
+
+
+-- | JSON payload for the sessions visualization endpoint.
+--
+-- Sessions use the exact same column layout as logs so the same rendering code
+-- is reused. Session-specific info is packed into the summary column as badge
+-- elements. Column indices must match the logs colIdxMap exactly.
+data SessionsView = SessionsView Int (V.Vector LogQueries.SessionRow)
+
+
+instance AE.ToJSON SessionsView where
+  toJSON (SessionsView totalSessions sessions) =
     let
       -- Display columns — identical to logs
       cols = ["id", "timestamp", "service", "summary", "latency_breakdown"] :: [Text]
@@ -1171,9 +1208,6 @@ instance AE.ToJSON LogsGet where
       total = V.foldl' (\acc s -> acc + s.eventCount) 0 sessions
      in
       aggregateEnvelope rows cols allCols total ["totalSessions" AE..= totalSessions]
-  toJSON (LogsGetError _) = AE.object ["error" AE..= True, "message" AE..= ("Something went wrong" :: Text)]
-  toJSON (LogsGetErrorSimple msg) = AE.object ["error" AE..= True, "message" AE..= msg]
-  toJSON _ = AE.object ["error" AE..= True]
 
 
 -- | Shared JSON envelope for aggregate visualizations (patterns, sessions).
@@ -1192,43 +1226,25 @@ aggregateEnvelope rows cols allCols total extra =
     ++ extra
 
 
+-- | Render context for the Log Explorer page shell. Rows/aggregates are fetched
+-- separately by the log-list web component (see 'logExplorerDataH' and the
+-- patterns/sessions endpoints), so this carries only what the chrome renders.
 data ApiLogsPageData = ApiLogsPageData
   { pid :: Projects.ProjectId
   , resultCount :: Int
-  , requestVecs :: V.Vector (V.Vector AE.Value)
-  , cols :: [Text]
-  , colIdxMap :: HM.HashMap Text Int
-  , nextLogsURL :: Text
-  , resetLogsURL :: Text
-  , recentLogsURL :: Text
   , currentRange :: Maybe (Text, Text)
-  , exceededFreeTier :: Bool
   , query :: Maybe Text
-  , cursor :: Maybe Text
-  , isTestLog :: Maybe Bool
-  , emptyStateUrl :: Maybe Text
   , source :: Text
   , targetSpans :: Maybe Text
-  , serviceColors :: HM.HashMap Text Text
-  , daysCountDown :: Maybe Text
   , queryLibRecent :: V.Vector Projects.QueryLibItem
   , queryLibSaved :: V.Vector Projects.QueryLibItem
-  , fromD :: Maybe UTCTime
-  , toD :: Maybe UTCTime
-  , detailsWidth :: Maybe Text
   , targetEvent :: Maybe Text
   , showTrace :: Maybe Text
   , facets :: Maybe FacetSummary
   , vizType :: Maybe Text
   , alert :: Maybe Monitors.QueryMonitor
-  , patterns :: Maybe (Int, V.Vector LogQueries.PatternRow)
-  , patternsToSkip :: Int
-  , sessions :: Maybe (Int, V.Vector LogQueries.SessionRow)
-  , sessionsToSkip :: Int
   , sessionSummary :: Maybe (Either Text LogQueries.SessionSummary)
   , targetPattern :: Maybe Text
-  , project :: Projects.Project
-  , teams :: V.Vector ManageMembers.Team
   , chartWidget :: Widget.Widget
   , latencyWidget :: Widget.Widget
   , queryResultCount :: Int
@@ -1249,34 +1265,7 @@ data LogResult = LogResult
   }
   deriving stock (Generic)
   deriving (AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields] LogResult
-
-
-instance ToSchema LogResult where
-  declareNamedSchema _ = do
-    traceRef <- OA.declareSchemaRef (Proxy @TraceTreeEntry)
-    let prop t = Inline $ mempty & OA.type_ ?~ t
-        propDesc t d = Inline $ mempty & OA.type_ ?~ t & OA.description ?~ d
-        arrOf ref = Inline $ mempty & OA.type_ ?~ OpenApiArray & OA.items ?~ OpenApiItemsObject ref
-    pure
-      $ NamedSchema (Just "LogResult")
-      $ mempty
-      & OA.type_
-      ?~ OpenApiObject
-        & OA.properties
-      .~ fromList
-        [ ("logsData", propDesc OpenApiArray "Array of row arrays, each row is an array of values")
-        , ("cols", arrOf (Inline $ mempty & OA.type_ ?~ OpenApiString))
-        , ("colIdxMap", propDesc OpenApiObject "Column name to index mapping")
-        , ("cursor", prop OpenApiString)
-        , ("nextUrl", prop OpenApiString)
-        , ("resetLogsUrl", prop OpenApiString)
-        , ("recentUrl", prop OpenApiString)
-        , ("serviceColors", propDesc OpenApiObject "Service name to color hex mapping")
-        , ("count", prop OpenApiInteger)
-        , ("queryResultCount", prop OpenApiInteger)
-        , ("hasMore", prop OpenApiBoolean)
-        , ("traces", arrOf traceRef)
-        ]
+  deriving (ToSchema) via CamelSchema LogResult
 
 
 virtualTable :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Html ()
@@ -1294,73 +1283,78 @@ virtualTable pid initialFetchUrl modeM = do
     ("" :: Text)
 
 
+-- | Inner div that lazily HTMX-loads @url@ into @#target@ once @trigger@ fires.
+-- Shared by the trace, details, and alert-form side panels — each is a hidden
+-- container whose body is fetched on first reveal; @extra@ carries the per-panel
+-- bits (loading indicator, or the hyperscript that fires the trigger).
+lazyLoad_ :: Text -> Text -> Text -> [Attribute] -> Html ()
+lazyLoad_ target url trigger extra =
+  div_ ([hxGet_ url, hxTarget_ ("#" <> target), hxSwap_ "innerHTML", hxTrigger_ trigger, term "hx-sync" "this:replace"] <> extra) pass
+
+
 apiLogsPage :: ApiLogsPageData -> Html ()
 apiLogsPage page = do
-  -- Fullscreen modes: fs-details expands the side panel, fs-trace gives the trace overlay
-  -- the full content area. Layout is CSS-driven (see tailwind.css fs-* rules) so the
-  -- resizer's inline widths survive untouched for restore.
-  section_
-    [ class_ "mx-auto pt-2 max-md:px-2 px-4 gap-3.5 max-md:gap-2 w-full flex flex-col h-full overflow-y-hidden overflow-x-hidden pb-2 group/pg"
-    , id_ "apiLogsPage"
-    , [__|on toggleDetailsFullscreen(active)
-            if active is undefined set active to not (me matches .fs-details) end
-            if active
-              remove .fs-trace from me
-              add .fs-details to me
-              call updateUrlState('fullscreen', 'details')
-            otherwise if me matches .fs-details
-              remove .fs-details from me
-              call updateUrlState('fullscreen', '', 'delete')
-            end
-            send resize to window
-          end
-          on toggleTraceFullscreen(active)
-            if active is undefined set active to not (me matches .fs-trace) end
-            if active
-              remove .fs-details from me
-              add .fs-trace to me
-              call updateUrlState('fullscreen', 'trace')
-            otherwise if me matches .fs-trace
-              remove .fs-trace from me
-              call updateUrlState('fullscreen', '', 'delete')
-            end
-            send resize to window
-          end
-          init
-            set fs to params().fullscreen
-            if fs is 'details' send toggleDetailsFullscreen(active: true) to me
-            otherwise if fs is 'trace' send toggleTraceFullscreen(active: true) to me end
-          end|]
-    ]
-    do
+  sectionWrapper_ do
     template_ [id_ "loader-tmp"] $ loadingIndicator_ LdMD LdDots
-
     div_ [class_ "fixed z-[9999] hidden right-0 w-max h-max border rounded top-32 bg-bgBase shadow-lg", id_ "sessionPlayerWrapper"] do
       termRaw "session-replay" [id_ "sessionReplay", class_ "shrink-1 flex flex-col", term "projectId" page.pid.toText, term "containerId" "sessionPlayerWrapper"] ("" :: Text)
-    div_
-      [ style_ "z-index:26"
-      , class_ "fixed hidden right-0 top-0 justify-end left-0 bottom-0 w-full bg-black bg-opacity-5"
-      , [__|on click remove .show-log-modal from #expand-log-modal|]
-      , id_ "expand-log-modal"
-      ]
-      do
-        div_ [class_ "relative ml-auto w-full", style_ ""] do
-          div_ [class_ "flex justify-end  w-full p-4 "]
-            $ button_ [class_ "cursor-pointer", Aria.label_ "Close log details", [__|on click add .hidden to #expand-log-modal|]]
-            $ faSprite_ "xmark" "regular" "h-8"
-          form_
-            [ hxPost_ $ "/p/" <> page.pid.toText <> "/share/"
-            , hxSwap_ "innerHTML"
-            , hxTarget_ "#copy_share_link"
-            , id_ "share_log_form"
-            ]
-            do
-              input_ [type_ "hidden", value_ "1 hour", name_ "expiresIn", id_ "expire_input"]
-              input_ [type_ "hidden", value_ "", name_ "reqId", id_ "req_id_input"]
-              input_ [type_ "hidden", value_ "", name_ "reqCreatedAt", id_ "req_created_at_input"]
-    let countText = prettyPrintCount page.queryResultCount
-        suffixText = if page.queryResultCount >= page.resultCount then " rows" else "+ rows"
-    div_ [class_ "w-full", id_ "log_explorer_controls"] do
+    shareLogModal
+    queryControlsSection
+    facetsAndLogListSection
+  queryEditorInitializationCode page.queryLibRecent page.queryLibSaved page.vizType ((.facetJson) <$> page.facets)
+  where
+    countText = prettyPrintCount page.queryResultCount
+    suffixText = if page.queryResultCount >= page.resultCount then " rows" else "+ rows"
+    showTrace = isJust page.showTrace
+    pidT = page.pid.toText
+
+    -- data-fullscreen=details|trace drives layout via tailwind.css; single-valued so
+    -- "at most one fullscreen mode" holds by construction.
+    sectionWrapper_ =
+      section_
+        [ class_ "mx-auto pt-2 max-md:px-2 px-4 gap-3.5 max-md:gap-2 w-full flex flex-col h-full overflow-y-hidden overflow-x-hidden pb-2 group/pg"
+        , id_ "apiLogsPage"
+        , [__|on toggleFullscreen(mode, active)
+              default active to (my @data-fullscreen is not mode) then
+              if active
+                set my @data-fullscreen to mode
+                call updateUrlState('fullscreen', mode)
+              otherwise if my @data-fullscreen is mode
+                remove @data-fullscreen from me
+                call updateUrlState('fullscreen', '', 'delete')
+              end
+              send resize to window
+            end
+            init
+              set fs to params().fullscreen
+              if fs is 'details' or fs is 'trace' send toggleFullscreen(mode: fs, active: true) to me end
+            end|]
+        ]
+
+    shareLogModal =
+      div_
+        [ class_ "fixed hidden right-0 top-0 justify-end left-0 bottom-0 w-full bg-black bg-opacity-5 z-50"
+        , [__|on click remove .show-log-modal from #expand-log-modal|]
+        , id_ "expand-log-modal"
+        ]
+        do
+          div_ [class_ "relative ml-auto w-full"] do
+            div_ [class_ "flex justify-end  w-full p-4 "]
+              $ button_ [class_ "cursor-pointer", Aria.label_ "Close log details", [__|on click add .hidden to #expand-log-modal|]]
+              $ faSprite_ "xmark" "regular" "h-8"
+            form_
+              [ hxPost_ $ "/p/" <> page.pid.toText <> "/share/"
+              , hxSwap_ "innerHTML"
+              , hxTarget_ "#copy_share_link"
+              , id_ "share_log_form"
+              ]
+              do
+                input_ [type_ "hidden", value_ "1 hour", name_ "expiresIn", id_ "expire_input"]
+                input_ [type_ "hidden", value_ "", name_ "reqId", id_ "req_id_input"]
+                input_ [type_ "hidden", value_ "", name_ "reqCreatedAt", id_ "req_created_at_input"]
+
+    -- Query box, mobile filter toggle, and the chart/session summary strip.
+    queryControlsSection = div_ [class_ "w-full", id_ "log_explorer_controls"] do
       logQueryBox_
         LogQueryBoxConfig
           { pid = page.pid
@@ -1400,10 +1394,21 @@ apiLogsPage page = do
           div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full min-h-36 max-md:min-h-28 aspect-[10/1] max-md:aspect-auto max-md:flex-col"] do
             Widget.widget_ page.chartWidget
             div_ [class_ "flex-1 min-w-0 max-md:hidden"] $ Widget.widget_ page.latencyWidget
-    div_ [class_ "flex max-md:flex-col h-full overflow-y-hidden max-md:overflow-y-auto", id_ "facets_and_loglist"] do
-      -- FACETS
-      -- No `contain:layout` here: it makes this a containing block for fixed/anchored
-      -- descendants, which clips the facet action popover (top layer) to the sidebar.
+
+    -- Three-pane layout: facets sidebar, logs/viz/trace list, and the
+    -- alert-form / log-details side panels (all resizable via `resizer_`).
+    facetsAndLogListSection = div_ [class_ "flex max-md:flex-col h-full overflow-y-hidden max-md:overflow-y-auto", id_ "facets_and_loglist"] do
+      facetsPanel
+      div_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden max-md:hidden mr-3.5", id_ "resizer-facets_width-wrapper"] $ resizer_ "facets-container" "facets_width" True
+      logsListPanel
+      div_ [class_ "hidden group-has-[#create-alert-toggle:checked]/pg:block max-md:hidden ml-3.5"] $ resizer_ "alert_container" "alert_width" False
+      alertPanel
+      div_ [class_ $ "transition-opacity duration-200 hidden max-md:hidden ml-3.5 " <> if isJust page.targetEvent then "group-has-[#viz-logs:checked]/pg:block group-has-[#viz-sessions:checked]/pg:block" else "", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
+      detailsPanel
+
+    -- No `contain:layout` here: it makes this a containing block for fixed/anchored
+    -- descendants, which clips the facet action popover (top layer) to the sidebar.
+    facetsPanel =
       div_ [class_ "w-68 will-change-[width] text-sm text-textWeak shrink-0 flex flex-col h-full overflow-y-scroll gap-2 max-md:w-full max-md:shrink max-md:max-h-48 max-md:border-b max-md:border-strokeWeak group-has-[.toggle-filters:checked]/pg:max-w-0 group-has-[.toggle-filters:checked]/pg:overflow-hidden max-md:group-has-[.toggle-filters:checked]/pg:max-h-0", id_ "facets-container"] do
         div_ [class_ "sticky top-0 z-10 bg-bgBase relative mb-2"] do
           span_ [class_ "absolute inset-y-0 left-3 flex items-center", Aria.hidden_ "true"]
@@ -1423,158 +1428,154 @@ apiLogsPage page = do
             ]
         whenJust page.facets renderFacets
 
-      div_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden max-md:hidden mr-3.5", id_ "resizer-facets_width-wrapper"] $ resizer_ "facets-container" "facets_width" True
+    logsListPanel = div_ [class_ "grow will-change-[width] contain-[layout_style] relative flex flex-col shrink-1 min-w-0 w-full h-full ", id_ "logs_list_container"] do
+      rowCountHeader
+      vizWidget
+      traceOverlay
+      div_ [class_ "flex-1 min-h-0 h-full flex flex-col"]
+        $ div_ [class_ "flex-1 min-h-0 hidden h-full group-has-[#viz-logs:checked]/pg:block group-has-[#viz-patterns:checked]/pg:block group-has-[#viz-sessions:checked]/pg:block"]
+        $ virtualTable page.pid Nothing Nothing
 
-      let showTrace = isJust page.showTrace
-      div_ [class_ "grow will-change-[width] contain-[layout_style] relative flex flex-col shrink-1 min-w-0 w-full h-full ", id_ "logs_list_container"] do
-        -- Filters and row count header
-        div_ [class_ "flex gap-2 py-1 text-sm z-10 w-max bg-bgBase -mb-6 group-has-[#viz-patterns:checked]/pg:mb-0"] do
-          label_ [class_ "gap-1 flex items-center cursor-pointer text-textWeak"] do
-            faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 text-iconNeutral"
-            span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
-            span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
-            "filters"
-            input_
-              [ type_ "checkbox"
-              , class_ "toggle-filters hidden"
-              , id_ "toggle-filters"
-              , [__|
-                  init
-                    if window.innerWidth < 768 set my.checked to true
-                    else set my.checked to (localStorage.getItem('toggle-filter-checked') is 'true')
-                    end
-                    wait 300ms
-                    if #filterElement call #filterElement.refreshLayout() end
-                  on change
-                    call localStorage.setItem('toggle-filter-checked', my.checked)
-                    wait 200ms
-                    if #filterElement call #filterElement.refreshLayout() end
-                |]
-              ]
-          span_ [class_ "text-strokeWeak "] "|"
-          rowCountDisplay_ "" countText suffixText
-
-        -- Visualization widget that shows when not in logs view (skip for patterns mode which uses log-list)
-        div_ [class_ "flex-1 min-h-0 h-full group-has-[#viz-logs:checked]/pg:hidden group-has-[#viz-patterns:checked]/pg:hidden group-has-[#viz-sessions:checked]/pg:hidden"] do
-          let widgetVals =
-                decodeUtf8
-                  $ AE.encode
-                  $ AE.object
-                    [ "id" AE..= ("visualization-widget" :: Text)
-                    , "type" AE..= fromMaybe "timeseries" page.vizType
-                    , "title" AE..= ("Visualization" :: Text)
-                    , "standalone" AE..= True
-                    , "allow_zoom" AE..= True
-                    , "_project_id" AE..= page.pid.toText
-                    , "_center_title" AE..= True
-                    , "layout" AE..= AE.object ["w" AE..= (6 :: Int), "h" AE..= (4 :: Int)]
-                    ]
-          div_
-            [ id_ "visualization-widget-container"
-            , class_ " w-full"
-            , style_ "aspect-ratio: 4 / 2;"
-            , hxPost_ ("/p/" <> page.pid.toText <> "/widget")
-            , hxTrigger_ "intersect once, update-widget"
-            , hxTarget_ "this"
-            , hxSwap_ "innerHTML"
-            , hxVals_ widgetVals
-            , hxExt_ "json-enc,forward-page-params"
-            , term "hx-sync" "this:replace"
-            ]
-            ""
-
-        -- Trace view container. The openTraceFullscreen event is dispatched by the
-        -- hover "View trace" button on virtual-list rows (log-list.ts).
-        let pidT = page.pid.toText
-        div_
-          [ class_ $ "absolute top-0 right-0  w-full h-full overflow-scroll c-scroll z-50 bg-bgBase transition-all duration-100 " <> if showTrace then "" else "hidden"
-          , id_ "trace_expanded_view"
-          , term
-              "_"
-              [text|on closeTraceView
-                      add .hidden to me
-                      send toggleTraceFullscreen(active: false) to #apiLogsPage
-                      call updateUrlState('showTrace', '', 'delete')
-                    end
-                    on htmx:afterSwap from me
-                      if #apiLogsPage matches .fs-details
-                        send toggleTraceFullscreen(active: true) to #apiLogsPage
-                      end
-                    end
-                    on openTraceFullscreen(traceId, timestamp) from window
-                      put '' into me
-                      remove .hidden from me
-                      send toggleTraceFullscreen(active: true) to #apiLogsPage
-                      call updateUrlState('showTrace', traceId + '/?timestamp=' + timestamp)
-                      call htmx.ajax('GET', '/p/$pidT/traces/' + traceId + '/?timestamp=' + encodeURIComponent(timestamp), {target: me, swap: 'innerHTML'})
-                      then call window.evalScriptsFromContent(me)|]
+    -- Filters toggle and row count, shown above the viz widget / trace / virtual table.
+    rowCountHeader = div_ [class_ "flex gap-2 py-1 text-sm z-10 w-max bg-bgBase -mb-6 group-has-[#viz-patterns:checked]/pg:mb-0"] do
+      label_ [class_ "gap-1 flex items-center cursor-pointer text-textWeak"] do
+        faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 text-iconNeutral"
+        span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
+        span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
+        "filters"
+        input_
+          [ type_ "checkbox"
+          , class_ "toggle-filters hidden"
+          , id_ "toggle-filters"
+          , [__|
+              init
+                if window.innerWidth < 768 set my.checked to true
+                else set my.checked to (localStorage.getItem('toggle-filter-checked') is 'true')
+                end
+                wait 300ms
+                if #filterElement call #filterElement.refreshLayout() end
+              on change
+                call localStorage.setItem('toggle-filter-checked', my.checked)
+                wait 200ms
+                if #filterElement call #filterElement.refreshLayout() end
+            |]
           ]
-          do
-            whenJust page.showTrace \trIdAndTimestamp -> do
-              let url = "/p/" <> page.pid.toText <> "/traces/" <> trIdAndTimestamp
-              loadingIndicator_ LdMD LdDots
-              div_ [hxGet_ url, hxTarget_ "#trace_expanded_view", hxSwap_ "innerHtml", hxTrigger_ "intersect one", term "hx-sync" "this:replace"] pass
+      span_ [class_ "text-strokeWeak "] "|"
+      rowCountDisplay_ "" countText suffixText
 
-        div_ [class_ "flex-1 min-h-0 h-full flex flex-col"] do
-          div_ [class_ "flex-1 min-h-0 hidden h-full group-has-[#viz-logs:checked]/pg:block group-has-[#viz-patterns:checked]/pg:block group-has-[#viz-sessions:checked]/pg:block"] $ virtualTable page.pid Nothing Nothing
+    -- Shows when not in logs view (skip for patterns mode which uses log-list)
+    vizWidget = div_ [class_ "flex-1 min-h-0 h-full group-has-[#viz-logs:checked]/pg:hidden group-has-[#viz-patterns:checked]/pg:hidden group-has-[#viz-sessions:checked]/pg:hidden"] do
+      let widgetVals =
+            decodeUtf8
+              $ AE.encode
+              $ AE.object
+                [ "id" AE..= ("visualization-widget" :: Text)
+                , "type" AE..= fromMaybe "timeseries" page.vizType
+                , "title" AE..= ("Visualization" :: Text)
+                , "standalone" AE..= True
+                , "allow_zoom" AE..= True
+                , "_project_id" AE..= page.pid.toText
+                , "_center_title" AE..= True
+                , "layout" AE..= AE.object ["w" AE..= (6 :: Int), "h" AE..= (4 :: Int)]
+                ]
+      div_
+        [ id_ "visualization-widget-container"
+        , class_ " w-full"
+        , style_ "aspect-ratio: 4 / 2;"
+        , hxPost_ ("/p/" <> page.pid.toText <> "/widget")
+        , hxTrigger_ "intersect once, update-widget"
+        , hxTarget_ "this"
+        , hxSwap_ "innerHTML"
+        , hxVals_ widgetVals
+        , hxExt_ "json-enc,forward-page-params"
+        , term "hx-sync" "this:replace"
+        ]
+        ""
 
-      div_ [class_ "hidden group-has-[#create-alert-toggle:checked]/pg:block max-md:hidden ml-3.5"] $ resizer_ "alert_container" "alert_width" False
+    -- The openTraceFullscreen event is dispatched by the hover "View trace"
+    -- button on virtual-list rows (log-list.ts).
+    traceOverlay =
+      div_
+        [ class_ $ "absolute top-0 right-0  w-full h-full overflow-scroll c-scroll z-50 bg-bgBase transition-all duration-100 " <> if showTrace then "" else "hidden"
+        , id_ "trace_expanded_view"
+        , term
+            "_"
+            [text|on closeTraceView
+                    add .hidden to me
+                    send toggleFullscreen(mode: 'trace', active: false) to #apiLogsPage
+                    call updateUrlState('showTrace', '', 'delete')
+                  end
+                  on htmx:afterSwap[#apiLogsPage's @data-fullscreen is 'details'] from me
+                    send toggleFullscreen(mode: 'trace', active: true) to #apiLogsPage
+                  end
+                  on openTraceFullscreen(traceId, timestamp) from window
+                    put '' into me
+                    remove .hidden from me
+                    send toggleFullscreen(mode: 'trace', active: true) to #apiLogsPage
+                    call updateUrlState('showTrace', traceId + '/?timestamp=' + timestamp)
+                    call htmx.ajax('GET', '/p/$pidT/traces/' + traceId + '/?timestamp=' + encodeURIComponent(timestamp), {target: me, swap: 'innerHTML'})
+                    then call window.evalScriptsFromContent(me)|]
+        ]
+        do
+          whenJust page.showTrace \trIdAndTimestamp -> do
+            let url = "/p/" <> page.pid.toText <> "/traces/" <> trIdAndTimestamp
+            loadingIndicator_ LdMD LdDots
+            lazyLoad_ "trace_expanded_view" url "intersect once" []
 
-      div_ [class_ "grow-0 shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll hidden group-has-[#create-alert-toggle:checked]/pg:block w-[500px] max-md:w-full max-md:fixed max-md:inset-0 max-md:z-50 max-md:max-w-full", id_ "alert_container"] do
-        alertConfigurationForm_ page.project page.alert page.teams
+    -- Lazily loaded (HTMX) the first time this container is revealed, so the
+    -- shell never renders it or forks a teams query per load.
+    alertPanel = div_ [class_ "grow-0 shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll hidden group-has-[#create-alert-toggle:checked]/pg:block w-[500px] max-md:w-full max-md:fixed max-md:inset-0 max-md:z-50 max-md:max-w-full", id_ "alert_container"] do
+      let aurl = "/p/" <> page.pid.toText <> "/log_explorer/alert_form" <> maybe "" (\a -> "?alert=" <> a.id.toText) page.alert
+      -- The container is display:none until #create-alert-toggle is checked, so an
+      -- IntersectionObserver ("intersect") can't reliably drive the load. Fire off the
+      -- toggle's change instead (and at init for a deep-linked, already-open panel).
+      lazyLoad_
+        "alert_container"
+        aurl
+        "loadAlertForm once"
+        [ [__|init if #create-alert-toggle.checked then trigger loadAlertForm on me end
+              on change[#create-alert-toggle.checked] from #create-alert-toggle trigger loadAlertForm on me|]
+        ]
 
-      div_ [class_ $ "transition-opacity duration-200 hidden max-md:hidden ml-3.5 " <> if isJust page.targetEvent then "group-has-[#viz-logs:checked]/pg:block group-has-[#viz-sessions:checked]/pg:block" else "", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
-
+    detailsPanel =
       div_
         [ class_ "grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll w-0 max-w-0 overflow-hidden group-has-[#viz-logs:checked]/pg:max-w-full group-has-[#viz-logs:checked]/pg:overflow-y-auto group-has-[#viz-sessions:checked]/pg:max-w-full group-has-[#viz-sessions:checked]/pg:overflow-y-auto max-md:hidden max-md:[&.details-open]:block! max-md:[&.details-open]:fixed max-md:[&.details-open]:inset-0 max-md:[&.details-open]:z-40 max-md:[&.details-open]:w-full max-md:[&.details-open]:max-w-full max-md:[&.details-open]:bg-bgBase"
         , id_ "log_details_container"
-        , [__|on htmx:afterSwap if window.innerWidth < 768 add .details-open to me end
-        on keydown[key=='Escape'] from window
-          if not (the event's target matches <input, textarea, select, [contenteditable]/>)
-             and no <[popover]:popover-open/> and no <dialog[open]/>
-            if #trace_expanded_view does not match .hidden
-              send closeTraceView to #trace_expanded_view
-            otherwise
-              send closeDetailPanel to me
+        , term "data-has-target" (if isJust page.targetEvent then "1" else "0")
+        , [__|on checkMobileOpen[window.innerWidth < 768] add .details-open to me
+        init
+          if my @data-has-target is '1'
+            send checkMobileOpen to me
+            set queryWidth to params().details_width
+            set storedWidth to localStorage.getItem('resizer-details_width')
+            if queryWidth set my *width to queryWidth + 'px'
+            else if storedWidth and not storedWidth.endsWith('px') set my *width to storedWidth + 'px'
+            else if storedWidth set my *width to storedWidth
+            else set my *width to '30%'
             end
           end
         end
+        on htmx:afterSwap send checkMobileOpen to me end
+        on keydown[key=='Escape' and not (the event's target matches <input, textarea, select, [contenteditable]/>) and no <[popover]:popover-open/> and no <dialog[open]/>] from window
+          if #trace_expanded_view does not match .hidden send closeTraceView to #trace_expanded_view
+          otherwise send closeDetailPanel to me end
+        end
         on closeDetailPanel
           add .hidden to #trace_expanded_view
-          send toggleDetailsFullscreen(active: false) to #apiLogsPage
+          send toggleFullscreen(mode: 'details', active: false) to #apiLogsPage
           remove .details-open from me
           set my *width to '0px'
           set the *width of #logs_list_container to '100%'
           remove .bg-fillBrand-strong from <.item-row.bg-fillBrand-strong/>
           add .hidden .opacity-0 .pointer-events-none to #resizer-details_width-wrapper
-          call updateUrlState('details_width', '', 'delete')
-          call updateUrlState('target_event', '', 'delete')
-          call updateUrlState('showTrace', '', 'delete')
+          call updateUrlState(['details_width', 'target_event', 'showTrace'], '', 'delete')
         end|]
         ]
         do
           htmxOverlayIndicator_ "details_indicator"
           whenJust page.targetEvent \te -> do
-            script_
-              [text|
-            document.addEventListener('DOMContentLoaded', function() {
-              const detailsContainer = document.getElementById('log_details_container');
-              if (detailsContainer) {
-                if (window.innerWidth < 768) detailsContainer.classList.add('details-open');
-                const queryWidth = new URLSearchParams(window.location.search).get('details_width');
-                const storedWidth = localStorage.getItem('resizer-details_width');
-
-                if (queryWidth) detailsContainer.style.width = queryWidth + 'px';
-                else if (storedWidth && !storedWidth.endsWith('px')) detailsContainer.style.width = storedWidth + 'px';
-                else if (storedWidth) detailsContainer.style.width = storedWidth;
-                else detailsContainer.style.width = '30%';
-              }
-              });
-          |]
             let url = "/p/" <> page.pid.toText <> "/log_explorer/" <> te
-            div_ [hxGet_ url, hxTarget_ "#log_details_container", hxSwap_ "innerHtml", hxTrigger_ "intersect one", hxIndicator_ "#details_indicator", term "hx-sync" "this:replace"] pass
-
-  queryEditorInitializationCode page.queryLibRecent page.queryLibSaved page.vizType ((.facetJson) <$> page.facets)
+            lazyLoad_ "log_details_container" url "intersect once" [hxIndicator_ "#details_indicator"]
 
 
 -- | Inline-expand endpoint for the Sessions and Patterns visualizations.
@@ -1584,49 +1585,38 @@ apiLogsPage page = do
 apiLogExpandH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders AE.Value)
 apiLogExpandH pid kindM keyM skipM queryM sinceM fromM toM = do
   _ <- Projects.sessionAndProject pid
-  let skip = fromMaybe 0 skipM
-      key = fromMaybe "" keyM
-      isSessionKind = kindM == Just "session"
-      limitN = (if isSessionKind then 100 else 20) :: Int
-      fetchLimit = limitN + 1
-  when (T.null key) $ throwError Servant.err400{Servant.errBody = "Missing key"}
-  queryAST <- case parseQueryToAST (fromMaybe "" queryM) of
+  when (T.null $ maybeToMonoid keyM) $ throwError Servant.err400{Servant.errBody = "Missing key"}
+  expandKind <- case kindM of
+    Just "session" -> pure $ LogQueries.ExpandSession (maybeToMonoid keyM)
+    Just "pattern" -> pure $ LogQueries.ExpandPattern (maybeToMonoid keyM)
+    _ -> throwError Servant.err400{Servant.errBody = "kind must be session or pattern"}
+  let isSession = case expandKind of LogQueries.ExpandSession _ -> True; LogQueries.ExpandPattern _ -> False
+      limitN = (if isSession then 100 else 20) :: Int
+  queryAST <- case parseQueryToAST (maybeToMonoid queryM) of
     Left err -> throwError Servant.err400{Servant.errBody = encodeUtf8 $ "Invalid query: " <> err}
     Right ast -> pure ast
   now <- Time.currentTime
   let (fromD, toD, _) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
-  expandKind <- case kindM of
-    Just "session" -> pure $ LogQueries.ExpandSession key
-    Just "pattern" -> pure $ LogQueries.ExpandPattern key
-    _ -> throwError Servant.err400{Servant.errBody = "kind must be session or pattern"}
   authCtx <- Effectful.Reader.Static.ask @AuthContext
-  (rows, cols) <- LogQueries.fetchEventExamples authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) expandKind skip fetchLimit
+  (rows, cols) <- LogQueries.fetchEventExamples authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) expandKind (fromMaybe 0 skipM) (limitN + 1)
   let hasMore = V.length rows > limitN
       shown = if hasMore then V.take limitN rows else rows
       colIdxMap = listToIndexHashMap cols
-      isSession = case expandKind of LogQueries.ExpandSession _ -> True; _ -> False
       alreadyLoadedIds = V.mapMaybe (\v -> lookupVecTextByKey v colIdxMap "id") shown
   -- Only fetch child spans for sessions (trace tree view); patterns just show flat examples
-  childSpansList <-
-    if not isSession
-      then pure []
-      else do
-        let allTraceIds = V.filter (not . T.null) $ V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "trace_id") shown
-            traceIds = V.fromList $ take 100 $ nubOrd $ V.toList allTraceIds
-            seedSpanIds = V.mapMaybe (\v -> lookupVecTextByKey v colIdxMap "latency_breakdown") shown
-        LogQueries.selectChildSpansAndLogs pid [] traceIds seedSpanIds (fromD, toD) alreadyLoadedIds
+  let traceIds = V.fromList $ take 100 $ nubOrd $ mapMaybe (mfilter (not . T.null) . (\v -> lookupVecTextByKey v colIdxMap "trace_id")) $ V.toList shown
+      seedSpanIds = V.mapMaybe (\v -> lookupVecTextByKey v colIdxMap "latency_breakdown") shown
+  childSpansList <- bool (pure []) (LogQueries.selectChildSpansAndLogs pid [] traceIds seedSpanIds (fromD, toD) alreadyLoadedIds) isSession
   let rawLogsData = shown <> V.fromList childSpansList
-      queryResultCount = V.length shown
-      (logsData, traces) = buildTraceTree colIdxMap queryResultCount rawLogsData
-      displayCols = curateCols [] [] cols
+      (logsData, traces) = buildTraceTree colIdxMap (V.length shown) rawLogsData
   addRespHeaders
     $ AE.object
-      [ "cols" AE..= displayCols
+      [ "cols" AE..= curateCols [] [] cols
       , "rows" AE..= logsData
       , "hasMore" AE..= hasMore
       , "colIdxMap" AE..= colIdxMap
       , "traces" AE..= traces
-      , "queryResultCount" AE..= queryResultCount
+      , "queryResultCount" AE..= V.length shown
       ]
 
 
@@ -1635,36 +1625,31 @@ aiSearchH pid requestBody = do
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   now <- Time.currentTime
   let envCfg = authCtx.env
-
-  let parsed = AET.parseMaybe (AE.withObject "request" \o -> liftA2 (,) (o AE..: "input") (o AE..:? "timezone")) requestBody
-  case parsed of
+      parsed = AET.parseMaybe (AE.withObject "request" \o -> liftA2 (,) (o AE..: "input") (o AE..:? "timezone")) requestBody
+  (inputText, timezoneM) <- case parsed of
     Nothing -> do
       addErrorToast "Invalid AI search input" Nothing
       throwError Servant.err400{Servant.errBody = "Invalid input format"}
-    Just (inputText, timezoneM) ->
-      if T.null (T.strip inputText)
-        then do
-          addErrorToast "Please enter a search query" Nothing
-          throwError Servant.err400{Servant.errBody = "Empty input"}
-        else do
-          -- Fetch precomputed facets for context (last 24 hours)
-          let dayAgo = addUTCTime (-86400) now
-          facetSummaryM <- SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" dayAgo now
-          let config = (AI.defaultAgenticConfig pid){AI.facetContext = facetSummaryM, AI.timezone = timezoneM, AI.maxIterations = 2}
-          result <- AI.runAgenticQuery config inputText envCfg.openaiModel envCfg.openaiApiKey
-
-          case result of
-            Left errMsg -> do
-              addErrorToast "AI search failed" (Just errMsg)
-              throwError Servant.err502{Servant.errBody = encodeUtf8 errMsg}
-            Right resp -> do
-              addRespHeaders
-                $ AE.object
-                  [ "query" AE..= resp.query
-                  , "visualization_type" AE..= resp.visualization
-                  , "commentary" AE..= resp.explanation
-                  , "time_range" AE..= resp.timeRange
-                  ]
+    Just v -> pure v
+  when (T.null (T.strip inputText)) $ do
+    addErrorToast "Please enter a search query" Nothing
+    throwError Servant.err400{Servant.errBody = "Empty input"}
+  -- Fetch precomputed facets for context (last 24 hours)
+  facetSummaryM <- SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" (addUTCTime (-86400) now) now
+  let config = (AI.defaultAgenticConfig pid){AI.facetContext = facetSummaryM, AI.timezone = timezoneM, AI.maxIterations = 2}
+  result <- AI.runAgenticQuery config inputText envCfg.openaiModel envCfg.openaiApiKey
+  case result of
+    Left errMsg -> do
+      addErrorToast "AI search failed" (Just errMsg)
+      throwError Servant.err502{Servant.errBody = encodeUtf8 errMsg}
+    Right resp ->
+      addRespHeaders
+        $ AE.object
+          [ "query" AE..= resp.query
+          , "visualization_type" AE..= resp.visualization
+          , "commentary" AE..= resp.explanation
+          , "time_range" AE..= resp.timeRange
+          ]
 
 
 -- | Compute the visible columns from server defaults plus the user's URL-encoded deltas:
@@ -1745,11 +1730,7 @@ alertConfigurationForm_ project alertM teams = do
         , hxVals_ "js:{query:getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, source: params().source || 'spans', vizType: getVizType(), teams: window.getTagValues('#alert-form-teams')}"
         , hxSwap_ "none"
         , class_ "flex flex-col gap-3"
-        , [__|on htmx:afterRequest
-             if event.detail.successful
-               set my value to '' then call me.reset()
-             end
-          |]
+        , [__|on htmx:afterRequest[detail.successful] set my value to '' then call me.reset()|]
         ]
         do
           input_ [type_ "hidden", name_ "alertId", value_ $ maybe "" ((.id.toText)) alertM]

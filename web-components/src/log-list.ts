@@ -378,6 +378,15 @@ export class LogList extends LitElement {
     initCharts();
   }
 
+  // Log rows/aggregates come from dedicated endpoints, not the page shell:
+  // /log_explorer/data (logs), /log_explorer/patterns, /log_explorer/sessions.
+  // Derived from projectId (element attribute) so it never depends on the current
+  // browser pathname's shape — the path segment is the single source of truth for mode.
+  private dataSubPath(): string {
+    const seg = this.mode === 'patterns' ? 'patterns' : this.mode === 'sessions' ? 'sessions' : 'data';
+    return `/p/${this.projectId}/log_explorer/${seg}`;
+  }
+
   private buildJsonUrl(): string {
     // Preserve all existing query parameters and add json=true
     if (this.initialFetchUrl) {
@@ -392,12 +401,10 @@ export class LogList extends LitElement {
     } else {
       const p = new URLSearchParams(window.location.search);
       p.set('json', 'true');
-      // Sync viz_type with current mode (URL update may be deferred via rAF)
-      if (this.mode === 'patterns') p.set('viz_type', 'patterns');
-      else if (this.mode === 'sessions') p.set('viz_type', 'sessions');
-      else if (p.get('viz_type') === 'patterns' || p.get('viz_type') === 'sessions') p.delete('viz_type');
-      const pathName = window.location.pathname;
-      return `${window.location.origin}${pathName}?${p.toString()}`;
+      // Mode is encoded by the path segment (dataSubPath), so viz_type is redundant
+      // on the fetch URL — drop it. It stays in the browser URL to drive the CSS/tabs.
+      p.delete('viz_type');
+      return `${window.location.origin}${this.dataSubPath()}?${p.toString()}`;
     }
   }
 
@@ -424,6 +431,7 @@ export class LogList extends LitElement {
       if (!isNaN(toMs) && Date.parse(from) >= toMs) this.stopLiveStream('Reached the end of the selected time range — live tail paused.');
     }
 
+    url.pathname = this.dataSubPath();
     return url.toString();
   }
 
@@ -444,6 +452,7 @@ export class LogList extends LitElement {
       const url = new URL(window.location.href);
       url.searchParams.set('json', 'true');
       url.searchParams.set('aggregate_skip', String(this.spanListTree.length));
+      url.pathname = this.dataSubPath();
       return url.toString();
     }
 
@@ -471,6 +480,7 @@ export class LogList extends LitElement {
     url.searchParams.set('json', 'true');
     url.searchParams.set('cursor', cursor); // preserves from/to/since filters already on the base URL
 
+    url.pathname = this.dataSubPath();
     return url.toString();
   }
 
@@ -506,8 +516,9 @@ export class LogList extends LitElement {
     url.searchParams.set('json', 'true');
     url.searchParams.set('layout', 'loadmore');
 
-    // Save URL with cursor, json, and layout for the fetch
-    this.nextFetchUrl = url.pathname + url.search;
+    // Save URL with cursor, json, and layout for the fetch (data endpoint;
+    // the browser URL below keeps the plain /log_explorer pathname).
+    this.nextFetchUrl = this.dataSubPath() + url.search;
 
     // Remove cursor, json, and layout from browser URL (cleaner for user)
     url.searchParams.delete('cursor');
@@ -535,27 +546,31 @@ export class LogList extends LitElement {
   // Is `col` currently shown? logsColumns mirrors the server-rendered set.
   isColumnOnTable = (col: string) => this.logsColumns.includes(col);
 
-  // Toggle a column by editing the `cols` URL param, which the server reads as a *delta* over its
-  // default set: a bare token `foo` adds a column, `-foo` hides a default. The edit is the exact
-  // inverse of the prior toggle (re-adding drops the `-`, re-removing drops the bare token), so the
-  // param stays minimal, reversible, and safe to share — no transient client state can collapse the
-  // table. Returns the column's new visibility.
-  toggleColumnOnTable = (col: string): boolean => {
+  // Edits the `cols` URL param, which the server reads as a *delta* over its default set: a bare
+  // token `foo` adds a column, `-foo` hides a default. Each edit is the exact inverse of the prior
+  // one (re-adding drops the `-`, re-removing drops the bare token), so the param stays minimal,
+  // reversible, and safe to share — no transient client state can collapse the table.
+  syncColsUrlParam = (removed: string[], added: string[]) => {
     const p = new URLSearchParams(window.location.search);
-    const toks = (p.get('cols') || '').split(',').filter(Boolean);
-    const has = this.isColumnOnTable(col);
-    const next = has
-      ? toks.includes(col)
-        ? toks.filter((t) => t !== col) // drop an explicit add
-        : [...toks, `-${col}`] // hide a default
-      : toks.includes(`-${col}`)
-        ? toks.filter((t) => t !== `-${col}`) // un-hide a default
-        : [...toks, col]; // add a column
-    const uniq = [...new Set(next)];
-    if (uniq.length) p.set('cols', uniq.join(','));
+    const toks = new Set((p.get('cols') || '').split(',').filter(Boolean));
+    for (const col of removed) {
+      if (toks.has(col)) toks.delete(col); // drop an explicit add
+      else toks.add(`-${col}`); // hide a default
+    }
+    for (const col of added) {
+      if (toks.has(`-${col}`)) toks.delete(`-${col}`); // un-hide a default
+      else toks.add(col); // add a column
+    }
+    if (toks.size) p.set('cols', [...toks].join(','));
     else p.delete('cols');
     const qs = p.toString();
     window.history.replaceState({}, '', `${window.location.pathname}${qs ? '?' + qs : ''}${window.location.hash}`);
+  };
+
+  // Toggle a single column's visibility. Returns the column's new visibility.
+  toggleColumnOnTable = (col: string): boolean => {
+    const has = this.isColumnOnTable(col);
+    this.syncColsUrlParam(has ? [col] : [], has ? [] : [col]);
     this.fetchData(this.buildJsonUrl(), true);
     return !has;
   };
@@ -1286,6 +1301,7 @@ export class LogList extends LitElement {
   }
 
   hideColumn(column: string) {
+    this.syncColsUrlParam([column], []);
     this.logsColumns = this.logsColumns.filter((col) => col !== column);
     delete this.columnMaxWidthMap[column]; // don't leak a stale width for a removed column
     this.requestUpdate();
@@ -1293,6 +1309,11 @@ export class LogList extends LitElement {
   handleColumnsChanged(e: { detail: string[] }) {
     const next = e.detail;
     const nextSet = new Set(next);
+    const prevSet = new Set(this.logsColumns);
+    this.syncColsUrlParam(
+      this.logsColumns.filter((c) => !nextSet.has(c)),
+      next.filter((c) => !prevSet.has(c))
+    );
     for (const c of Object.keys(this.columnMaxWidthMap)) if (!nextSet.has(c)) delete this.columnMaxWidthMap[c];
     this.logsColumns = next;
     this.requestUpdate();
@@ -1667,7 +1688,7 @@ export class LogList extends LitElement {
                   `
                 : html`
                     ${this.logsColumns.filter((v) => v !== 'latency_breakdown').map((column) => this.logTableHeading(column))}
-                    ${this.logsColumns.length > 0 && !isAggregate ? this.logTableHeading('latency_breakdown') : nothing}
+                    ${this.logsColumns.includes('latency_breakdown') && !isAggregate ? this.logTableHeading('latency_breakdown') : nothing}
                   `}
             </tr>
           </thead>
@@ -1939,11 +1960,12 @@ export class LogList extends LitElement {
       case 'timestamp': {
         const timestamp = lookupVecValue<string>(dataArr, colIdxMap, key);
         const rowTraceId = traceId || lookupVecValue<string>(dataArr, colIdxMap, 'trace_id');
+        const rowKind = lookupVecValue<string>(dataArr, colIdxMap, 'kind');
         return html`<div class="relative">
           <time class=${`monospace text-xs text-textWeak tooltip tooltip-right ${wrapClass}`} data-tip="timestamp" datetime=${timestamp}
             >${formatTimestamp(timestamp)}</time
           >
-          ${rowTraceId && this.mode !== 'sessions'
+          ${rowTraceId && rowKind !== 'log' && this.mode !== 'sessions'
             ? html`<button
                 class="absolute inset-y-0 left-0 z-30 hidden group-hover:flex items-center cursor-pointer group/btn"
                 data-tippy-content="Open trace fullscreen"
@@ -2776,6 +2798,7 @@ class ColumnsSettings extends LitElement {
 
   _removeColumn(index: number) {
     this.columns.splice(index, 1);
+    this._emitChanges();
   }
 
   _onDragStart(e: any, index: number) {

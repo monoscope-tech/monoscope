@@ -579,7 +579,7 @@ renderLogsWidget widget = do
   let wId = maybeToMonoid widget.id
       pid = maybe "" (.toText) widget._projectId
       queryParam = maybe "" (\q -> "&query=" <> decodeUtf8 (urlEncode True (encodeUtf8 q))) widget.query
-      fetchUrl = "/p/" <> pid <> "/log_explorer?json=true&layout=1" <> queryParam
+      fetchUrl = "/p/" <> pid <> "/log_explorer/data?json=true&layout=1" <> queryParam
       action = Just ("Open in Explorer", "/p/" <> pid <> "/log_explorer" <> maybe "" ("?query=" <>) widget.query)
   withCardFrame False widget action
     $ termRaw

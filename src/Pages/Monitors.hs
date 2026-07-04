@@ -955,7 +955,7 @@ tabbedSection_ containerId tabs = do
 monitorHistoryTab_ :: Projects.ProjectId -> Monitors.QueryMonitorId -> Html ()
 monitorHistoryTab_ pid alertId = do
   let query = "kind==\"alert\" and parent_id==\"" <> alertId.toText <> "\""
-      initialUrl = "/p/" <> pid.toText <> "/log_explorer?json=true&query=" <> toUriStr query
+      initialUrl = "/p/" <> pid.toText <> "/log_explorer/data?json=true&query=" <> toUriStr query
   div_ [class_ "mt-2 p-2 border border-strokeWeak rounded-lg overflow-x-auto h-[400px] max-md:h-[300px]"] do
     termRaw "log-list" [id_ "resultTable", class_ "w-full divide-y shrink-1 flex flex-col h-full min-w-0 rr-block", term "windowTarget" "logList", term "projectId" pid.toText, term "initialFetchUrl" initialUrl] ("" :: Text)
 

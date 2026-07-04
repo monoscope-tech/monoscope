@@ -19,7 +19,6 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.GRPC.Common (GrpcError (..), GrpcException (..))
 import Network.GRPC.Common.Protobuf (Proto (..))
 import Opentelemetry.OtlpServer qualified as OtlpServer
-import Pages.BodyWrapper (PageCtx (..))
 import Pages.Charts.Charts qualified as Charts
 import Pages.LogExplorer.Log qualified as Log
 import Pages.Replay qualified as Replay
@@ -41,35 +40,25 @@ pid = UUIDId UUID.nil
 testTimeRange :: (Text, Text)
 testTimeRange = (toText $ iso8601Show $ addUTCTime (-3600) frozenTime, toText $ iso8601Show $ addUTCTime 3600 frozenTime)
 
--- | Helper to query logs with default parameters
-queryLogs :: TestResources -> Maybe Text -> IO Log.LogsGet
+-- | Helper to query logs via the dedicated data endpoint (returns LogResult).
+queryLogs :: TestResources -> Maybe Text -> IO Log.LogResult
 queryLogs tr queryM = do
   let (timeFrom, timeTo) = testTimeRange
-  (_, result) <- toServantResponse tr
-    $ Log.apiLogH pid queryM Nothing Nothing Nothing (Just timeFrom) (Just timeTo) Nothing (Just "spans") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
-  pure result
+  snd <$> toServantResponse tr (Log.logExplorerDataH pid queryM Nothing Nothing Nothing (Just timeFrom) (Just timeTo) Nothing Nothing)
 
--- | Helper to query logs with a viz_type (e.g. "sessions", "patterns") using the JSON fast path
-queryLogsViz :: TestResources -> Maybe Text -> Text -> IO Log.LogsGet
+-- | Helper to query the sessions viz endpoint (returns SessionsView).
+queryLogsViz :: TestResources -> Maybe Text -> Text -> IO Log.SessionsView
 queryLogsViz tr queryM vizType = queryLogsVizSorted tr queryM vizType Nothing
 
-queryLogsVizSorted :: TestResources -> Maybe Text -> Text -> Maybe Text -> IO Log.LogsGet
+queryLogsVizSorted :: TestResources -> Maybe Text -> Text -> Maybe Text -> IO Log.SessionsView
 queryLogsVizSorted tr queryM vizType sortByM = do
+  unless (vizType == "sessions") $ fail ("queryLogsVizSorted only supports the sessions viz, got: " <> toString vizType)
   let (timeFrom, timeTo) = testTimeRange
-  (_, result) <- toServantResponse tr
-    $ Log.apiLogH pid queryM Nothing Nothing Nothing (Just timeFrom) (Just timeTo) Nothing (Just "spans") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") (Just vizType) Nothing Nothing Nothing sortByM
-  pure result
+  snd <$> toServantResponse tr (Log.logSessionsH pid queryM Nothing (Just timeFrom) (Just timeTo) Nothing sortByM)
 
--- | Helper to extract dataset from LogsResp
-expectLogsJson :: Log.LogsGet -> IO (V.Vector (V.Vector AE.Value))
-expectLogsJson = \case
-  Log.LogsGetJson r -> pure r.logsData
-  Log.LogPage _ -> fail "Got LogPage instead of LogsGetJson - json parameter not working?"
-  Log.LogsGetError (PageCtx _ err) -> fail $ "Got LogsGetError: " <> toString err
-  Log.LogsGetErrorSimple err -> fail $ "Got LogsGetErrorSimple: " <> toString err
-  Log.LogsQueryLibrary{} -> fail "Got LogsQueryLibrary instead of LogsGetJson"
-  Log.LogsPatternJson{} -> fail "Got LogsPatternJson instead of LogsGetJson"
-  Log.LogsSessionsJson{} -> fail "Got LogsSessionsJson instead of LogsGetJson"
+-- | Helper to extract the row dataset from a LogResult.
+expectLogsJson :: Log.LogResult -> IO (V.Vector (V.Vector AE.Value))
+expectLogsJson = pure . (.logsData)
 
 
 spec :: Spec
@@ -267,7 +256,7 @@ spec = sequential $ aroundAll withTestResources do
 
         result <- queryLogsViz tr Nothing "sessions"
         case result of
-          Log.LogsSessionsJson total sessionRows -> do
+          Log.SessionsView total sessionRows -> do
             total `shouldBe` 2
             V.length sessionRows `shouldBe` 2
             let findBySid sid = V.find (\s -> s.sessionId == sid) sessionRows
@@ -284,8 +273,6 @@ spec = sequential $ aroundAll withTestResources do
                 s.errorCount `shouldBe` 0
                 s.userEmail `shouldBe` Just "bob@example.com"
               Nothing -> expectationFailure "session xyz not found"
-          _ -> expectationFailure "expected LogsSessionsJson"
-
       it "Test 11.2: KQL filter narrows sessions result to a single user" $ \tr -> do
         key <- createTestAPIKey tr pid "sessions-filter-key"
         -- Unique emails are REQUIRED: examples share one DB (sequential $ aroundAll),
@@ -295,11 +282,9 @@ spec = sequential $ aroundAll withTestResources do
         void $ runAllBackgroundJobs frozenTime tr.trATCtx
         result <- queryLogsViz tr (Just "attributes.user.email == \"alice-filter@example.com\"") "sessions"
         case result of
-          Log.LogsSessionsJson _ sessionRows -> do
+          Log.SessionsView _ sessionRows -> do
             V.length sessionRows `shouldBe` 1
             (V.head sessionRows).sessionId `shouldBe` "s1-filter"
-          _ -> expectationFailure "expected LogsSessionsJson"
-
       it "Test 11.3: sessions with missing user identity fields still aggregate" $ \tr -> do
         key <- createTestAPIKey tr pid "sessions-anon-key"
         -- Ingest spans with session.id but NO user.id / user.email / user.name
@@ -308,7 +293,7 @@ spec = sequential $ aroundAll withTestResources do
         void $ runAllBackgroundJobs frozenTime tr.trATCtx
         result <- queryLogsViz tr Nothing "sessions"
         case result of
-          Log.LogsSessionsJson _ sessionRows -> do
+          Log.SessionsView _ sessionRows -> do
             case V.find (\s -> s.sessionId == "anon-sess") sessionRows of
               Just s -> do
                 s.eventCount `shouldBe` 3
@@ -316,8 +301,6 @@ spec = sequential $ aroundAll withTestResources do
                 s.userEmail `shouldBe` Nothing
                 s.userName `shouldBe` Nothing
               Nothing -> expectationFailure "session anon-sess not found"
-          _ -> expectationFailure "expected LogsSessionsJson"
-
       it "Test 11.4: expand endpoint returns child events for a session" $ \tr -> do
         key <- createTestAPIKey tr pid "sessions-expand-key"
         forM_ ([1 .. 3] :: [Int]) $ \i ->
@@ -351,11 +334,9 @@ spec = sequential $ aroundAll withTestResources do
       it "Test 11.7: sort_by=events orders sessions by event count" $ \tr -> do
         result <- queryLogsVizSorted tr Nothing "sessions" (Just "events")
         case result of
-          Log.LogsSessionsJson _ sessionRows -> do
+          Log.SessionsView _ sessionRows -> do
             let counts = V.toList $ V.map (.eventCount) sessionRows
             counts `shouldBe` sortBy (flip compare) counts
-          _ -> expectationFailure "expected LogsSessionsJson"
-
       -- Regression for cross-project session leak: a user-supplied filter must
       -- not erase project_id scoping in fetchSessions / fetchEventExamples.
       -- Before the fix, any non-empty `whereClause` replaced the project_id
@@ -388,11 +369,9 @@ spec = sequential $ aroundAll withTestResources do
         -- Filter by the external email: must return zero sessions from `pid`.
         emailFilter <- queryLogsViz tr (Just ("attributes.user.email == \"" <> leakEmail <> "\"")) "sessions"
         case emailFilter of
-          Log.LogsSessionsJson total rows -> do
+          Log.SessionsView total rows -> do
             total `shouldBe` 0
             V.length rows `shouldBe` 0
-          _ -> expectationFailure "expected LogsSessionsJson"
-
         -- Expanding the shared session with the external-email filter must
         -- also return zero rows (fetchEventExamples path).
         let (timeFrom, timeTo) = testTimeRange
@@ -422,15 +401,13 @@ spec = sequential $ aroundAll withTestResources do
         void $ runAllBackgroundJobs frozenTime tr.trATCtx
         result <- queryLogsViz tr (Just "attributes.session.id == \"ctx-sess\"") "sessions"
         case result of
-          Log.LogsSessionsJson _ rows -> case V.find (\s -> s.sessionId == "ctx-sess") rows of
+          Log.SessionsView _ rows -> case V.find (\s -> s.sessionId == "ctx-sess") rows of
             Just s -> do
               s.landingUrl `shouldBe` Just "/login"
               s.userAgent `shouldBe` Just "Mozilla/5.0 ContextProbe"
               -- isError predicate (status_code='ERROR') populates first_error from status_message.
               s.firstError `shouldSatisfy` \case Just t -> t /= ""; Nothing -> False
             Nothing -> expectationFailure "session ctx-sess not found"
-          _ -> expectationFailure "expected LogsSessionsJson"
-
       -- Mirrors Test 11.8 for the replay path: replaySessionGetH must scope
       -- sessionMetadata by project_id, otherwise identity from another project's
       -- session row leaks into the replay header for an unrelated viewer.

@@ -260,12 +260,14 @@ window.updateMarkAreas = function (chartId: string, warningVal: string, incident
   myChart.setOption({ series: options.series }, false);
 };
 
-function updateUrlState(key: string, value: string, action: 'set' | 'delete' = 'set') {
+function updateUrlState(key: string | string[], value: string, action: 'set' | 'delete' = 'set') {
   const params = new URLSearchParams(window.location.search);
-  if (action === 'delete') {
-    params.delete(key);
-  } else {
-    params.set(key, value);
+  for (const k of Array.isArray(key) ? key : [key]) {
+    if (action === 'delete') {
+      params.delete(k);
+    } else {
+      params.set(k, value);
+    }
   }
   window.history.replaceState({}, '', `${window.location.pathname}?${params}`);
 }

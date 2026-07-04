@@ -6,6 +6,7 @@ module Pkg.DeriveUtils (
   DB,
   PGTextArray (..),
   SnakeSchema (..),
+  CamelSchema (..),
   JsonValueSchema (..),
   UUIDId (..),
   WrappedEnum (..),
@@ -334,6 +335,14 @@ instance (GToSchema (Rep a), Generic a, Typeable a) => ToSchema (SnakeSchema a) 
     genericDeclareNamedSchema
       OpenApi.defaultSchemaOptions{OpenApi.fieldLabelModifier = quietSnake . fromString}
       (Proxy @a)
+
+
+-- | DerivingVia wrapper: produces ToSchema with unmodified (camelCase) field names.
+newtype CamelSchema a = CamelSchema a
+
+
+instance (GToSchema (Rep a), Generic a, Typeable a) => ToSchema (CamelSchema a) where
+  declareNamedSchema _ = genericDeclareNamedSchema OpenApi.defaultSchemaOptions (Proxy @a)
 
 
 -- | DerivingVia wrapper: emit an unconstrained JSON value schema for types whose

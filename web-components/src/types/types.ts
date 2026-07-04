@@ -39,7 +39,7 @@ declare global {
     getTagValues: (selector: string) => string[];
     updateTimePicker: (timeRange: { since?: string; from?: string; to?: string }, opts?: { targetPr?: string; label?: string; skipSetParams?: boolean }) => string;
   }
-  function updateUrlState(key: string, value: string): void;
+  function updateUrlState(key: string | string[], value: string, action?: 'set' | 'delete'): void;
 }
 
 export type Result = {

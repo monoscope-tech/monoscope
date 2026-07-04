@@ -625,11 +625,11 @@ tracePage pid traceItem spanRecords = do
               , term "data-share-hide" ""
               , term "aria-label" "Toggle fullscreen"
               , term "data-tippy-content" "Expand trace"
-              , [__|on click send toggleTraceFullscreen to #apiLogsPage|]
+              , [__|on click send toggleFullscreen(mode: 'trace') to #apiLogsPage|]
               ]
               do
-                faSprite_ "expand" "regular" "w-3.5 h-3.5 text-iconNeutral [#apiLogsPage.fs-trace_&]:hidden!"
-                faSprite_ "compress" "regular" "hidden! w-3.5 h-3.5 text-iconNeutral [#apiLogsPage.fs-trace_&]:block!"
+                faSprite_ "expand" "regular" "w-3.5 h-3.5 text-iconNeutral [#apiLogsPage[data-fullscreen=trace]_&]:hidden!"
+                faSprite_ "compress" "regular" "hidden! w-3.5 h-3.5 text-iconNeutral [#apiLogsPage[data-fullscreen=trace]_&]:block!"
             button_
               [ class_ "cursor-pointer rounded-md p-1 hover:bg-fillWeak transition-colors hidden [#apiLogsPage_&]:block"
               , term "data-share-hide" ""

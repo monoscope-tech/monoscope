@@ -156,11 +156,11 @@ expandedItemView pid item aptSp = do
           , Aria.label_ "Toggle fullscreen"
           , term "data-tippy-content" "Expand panel"
           , term "data-share-hide" "1"
-          , [__|on click send toggleDetailsFullscreen to #apiLogsPage|]
+          , [__|on click send toggleFullscreen(mode: 'details') to #apiLogsPage|]
           ]
           do
-            faSprite_ "expand" "regular" "w-3.5 h-3.5 text-iconNeutral [#apiLogsPage.fs-details_&]:hidden!"
-            faSprite_ "compress" "regular" "hidden! w-3.5 h-3.5 text-iconNeutral [#apiLogsPage.fs-details_&]:block!"
+            faSprite_ "expand" "regular" "w-3.5 h-3.5 text-iconNeutral [#apiLogsPage[data-fullscreen=details]_&]:hidden!"
+            faSprite_ "compress" "regular" "hidden! w-3.5 h-3.5 text-iconNeutral [#apiLogsPage[data-fullscreen=details]_&]:block!"
         button_
           [ class_ "cursor-pointer detail-close-btn rounded-md p-1 hover:bg-fillWeak transition-colors"
           , Aria.label_ "Close item details"
