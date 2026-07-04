@@ -405,12 +405,13 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
         $ Utils.faSprite_ iconType "regular" ("w-3.5 h-3.5 " <> iconColor)
 
     whenJust ctaM \(ctaTitle, uri) -> a_ [class_ "underline underline-offset-2 text-textBrand", href_ uri] $ toHtml ctaTitle
-    whenJust expandBtnFn \fn ->
+    whenJust expandBtnFn \url ->
       button_
-        [ term "_" fn
-        , class_ "p-2 cursor-pointer tap-target"
-        , data_ "tippy-content" "Expand widget"
-        ]
+        ( Utils.drawerLoadAttrs_ url
+            <> [ class_ "p-2 cursor-pointer tap-target"
+               , data_ "tippy-content" "Expand widget"
+               ]
+        )
         $ Utils.faSprite_ "expand-icon" "regular" "w-3 h-3"
     when (isJust widget._dashboardId)
       $ let pid = maybeToMonoid (widget._projectId <&> (.toText))

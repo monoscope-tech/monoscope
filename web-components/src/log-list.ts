@@ -1827,7 +1827,7 @@ export class LogList extends LitElement {
         const pct = (count / maxCount) * 100;
         return html`<div class="flex items-center gap-1.5 w-full min-w-0" title="${pct.toFixed(1)}% of total${mergedCount > 0 ? ` (${mergedCount} merged)` : ''}">
           <span class="text-sm tabular-nums text-textStrong w-10 shrink-0 text-right">${formatLargeCount(count)}</span>
-          ${mergedCount > 0 ? html`<span class="text-[10px] tabular-nums text-textWeak shrink-0" title="${mergedCount} similar patterns merged">+${mergedCount}</span>` : ''}
+          ${mergedCount > 0 ? html`<span class="text-2xs tabular-nums text-textWeak shrink-0" title="${mergedCount} similar patterns merged">+${mergedCount}</span>` : ''}
           <div class="w-12 shrink-0 h-2 bg-strokeWeak/40 rounded-sm overflow-hidden">
             <div class="h-full bg-fillBrand-strong rounded-sm" style="width:${pct}%"></div>
           </div>

@@ -116,7 +116,7 @@ logQueryBox_ config = do
             }
             |]
           div_ [class_ "w-full gap-2 items-center px-2 hidden group-has-[.ai-search:checked]/fltr:flex"] do
-            span_ [class_ "text-[10px] font-semibold text-textBrand bg-fillBrand-weak px-1.5 py-0.5 rounded shrink-0"] "AI"
+            span_ [class_ "text-2xs font-semibold text-textBrand bg-fillBrand-weak px-1.5 py-0.5 rounded shrink-0"] "AI"
             input_
               [ class_ "border-0 w-full flex-1 p-1 no-focus-ring peer"
               , placeholder_ "Ask in plain English — e.g. \"errors in payment service last hour\""

@@ -93,7 +93,7 @@ const getErrorGlyph = () =>
     'span',
     {
       class:
-        'shrink-0 ml-1 w-3.5 h-3.5 rounded-sm bg-fillError-strong text-textInverse-strong text-[10px] font-bold flex items-center justify-center leading-none relative',
+        'shrink-0 ml-1 w-3.5 h-3.5 rounded-sm bg-fillError-strong text-textInverse-strong text-2xs font-bold flex items-center justify-center leading-none relative',
       'aria-hidden': 'true',
     },
     '!'

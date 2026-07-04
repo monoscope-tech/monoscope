@@ -80,7 +80,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Charts.Charts qualified as Charts
-import Pages.Components (colorChip_, compactTimeAgo, emptyState_, metadataChip_, periodToggle_, resizer_, sparkline_)
+import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), colorChip_, compactTimeAgo, emptyState_, metadataChip_, periodToggle_, resizer_, sparkline_)
 import Pages.LogExplorer.Log (virtualTable)
 import Pages.Telemetry (tracePage)
 import Pkg.AI qualified as AI
@@ -201,11 +201,9 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
       addRespHeaders
         $ PageCtx baseBwconf{pageTitle = "Issue Not Found"}
         $ emptyState_
-          (Just "circle-xmark")
+          def{icon = Just "circle-xmark", action = ESLink ("/p/" <> pid.toText <> "/issues") "Back to Issues"}
           "Issue not found"
           "This issue may have been resolved, merged, or the link may be outdated."
-          (Just $ "/p/" <> pid.toText <> "/issues")
-          "Back to Issues"
     Just issue -> do
       let tp = TimePicker.TimePicker (Just $ fromMaybe (defaultSinceRange issue.createdAt now) sinceM) Nothing Nothing
       errorM <-
@@ -472,8 +470,8 @@ userJourneySection_ spans = whenJust (extractBreadcrumbs spans) \crumbs -> do
   div_ [class_ "border-t border-strokeWeak"] do
     div_ [class_ "px-4 py-2 flex items-center gap-2 bg-fillWeaker/40"] do
       faSprite_ "route" "regular" "w-3 h-3 text-textWeak"
-      span_ [class_ "text-[11px] font-semibold text-textWeak uppercase tracking-wide"] "User journey"
-      span_ [class_ "text-[11px] text-textWeak"] $ toHtml $ show total <> " event" <> (if total == 1 then "" else "s") <> " before error"
+      span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide"] "User journey"
+      span_ [class_ "text-2xs text-textWeak"] $ toHtml $ show total <> " event" <> (if total == 1 then "" else "s") <> " before error"
     div_ [class_ "max-h-80 overflow-y-auto py-1"]
       $ V.imapM_ renderCrumb (V.fromList crumbList)
 
@@ -490,7 +488,7 @@ activityPanel_ pid issueId extraClass spans = do
     div_ [class_ "border-t border-strokeWeak"] do
       div_ [class_ "px-4 py-2 flex items-center gap-2 bg-fillWeaker/40"] do
         faSprite_ "circle-info" "regular" "w-3 h-3 text-textWeak"
-        span_ [class_ "text-[11px] font-semibold text-textWeak uppercase tracking-wide"] "Issue events"
+        span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide"] "Issue events"
     div_ [id_ "issue-activity", hxGet_ activityUrl, hxTrigger_ "intersect once", hxSwap_ "innerHTML"]
       $ div_ [class_ "p-4 flex justify-center"]
       $ loadingIndicator_ LdSM LdDots
@@ -644,7 +642,7 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp sampleOverri
                   -- Full error message first — visible whether or not we have a stack trace, since the
                   -- summary truncates and the user expanded specifically to read it in full.
                   unless (T.null exceptionData.errorMessage) $ div_ [class_ "px-4 py-3 border-b border-strokeWeak"] do
-                    span_ [class_ "text-[11px] font-semibold text-textWeak uppercase tracking-wide block mb-1"] "Error message"
+                    span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide block mb-1"] "Error message"
                     pre_ [class_ "text-sm leading-relaxed text-fillError-strong whitespace-pre-wrap break-words font-mono"] $ toHtml exceptionData.errorMessage
                   if hasStack
                     then
@@ -740,9 +738,8 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp sampleOverri
           div_ [class_ ((if isLogPatternIssue then "hidden " else "") <> "flex flex-col lg:flex-row w-full err-tab-content"), id_ "span-content"] do
             div_ [id_ "trace_container", class_ "grow-1 lg:max-w-[80%] lg:w-1/2 lg:min-w-[20%] shrink-1"]
               $ maybe
-                ( div_ [class_ "flex flex-col items-center justify-center h-48"] do
-                    faSprite_ "inbox-full" "regular" "w-6 h-6 text-iconNeutral"
-                    span_ [class_ "mt-2 text-sm text-textWeak"] "No trace data available for this issue."
+                ( div_ [class_ "flex items-center justify-center h-48"]
+                    $ emptyState_ def{icon = Just "inbox-full", size = ESCompact} "No trace data available for this issue." ""
                 )
                 (\t -> tracePage pid t spanRecs)
                 tr
@@ -1609,7 +1606,7 @@ renderIssueTitle_ :: Issues.IssueL -> Html ()
 renderIssueTitle_ Issues.IssueL{base}
   | T.null title = "(Untitled)"
   | "⇒" `T.isInfixOf` title = renderSummaryText_ title
-  | looksLikeRawPattern title = span_ [class_ "font-mono text-[0.8125rem] break-all"] $ renderWithPlaceholders_ title
+  | looksLikeRawPattern title = span_ [class_ "font-mono text-xs break-all"] $ renderWithPlaceholders_ title
   | otherwise = renderWithPlaceholders_ title
   where
     title = stripIssuePrefix base.title
@@ -1766,7 +1763,7 @@ issueTypeLabel issueType critical = span_ [class_ $ "flex items-center gap-1.5 t
 
 
 issueTypeBadge :: Issues.IssueType -> Bool -> Html ()
-issueTypeBadge issueType critical = span_ [class_ $ "flex items-center gap-1 text-[11px] whitespace-nowrap " <> color, term "data-tippy-content" fullTxt] do
+issueTypeBadge issueType critical = span_ [class_ $ "flex items-center gap-1 text-2xs whitespace-nowrap " <> color, term "data-tippy-content" fullTxt] do
   faSprite_ icon "regular" "w-3 h-3 shrink-0"; toHtml shortTxt
   where
     (color, icon, fullTxt) = issueTypeMeta issueType critical

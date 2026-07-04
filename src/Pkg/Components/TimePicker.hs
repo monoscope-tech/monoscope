@@ -147,7 +147,7 @@ timepicker_ submitForm currentRange targetIdM = do
       faSprite_ "calendar" "regular" "h-4 w-4 text-iconNeutral"
       let attrs = maybe [] (\(s, e) -> [term "data-start" s, term "data-end" e]) currentRange
       span_ (attrs ++ [class_ "inline-block leading-none", id_ $ targetPr <> "-currentRange"]) $ toHtml (maybe "1H" (\(s, e) -> s <> if T.null e then "" else " - " <> e) currentRange)
-      span_ [id_ "offsetIndicator", class_ "text-[10px] text-textWeak max-md:hidden"] "UTC+00"
+      span_ [id_ "offsetIndicator", class_ "text-2xs text-textWeak max-md:hidden"] "UTC+00"
       faSprite_ "chevron-down" "regular" "h-3 w-3"
 
   -- DaisyUI popover content

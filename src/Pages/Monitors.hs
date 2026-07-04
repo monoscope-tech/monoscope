@@ -613,7 +613,7 @@ renderNameCol item = do
         span_ [class_ "tabular-nums"] $ maybe "Never run" (toHtml . prettyTimeShort item.now) item.lastRun
         when (item.details.alertThreshold > 0) do
           span_ [class_ "text-textWeak/40"] "\xb7"
-          span_ [class_ "tabular-nums text-iconError bg-fillError-weak rounded-full px-1.5 py-px text-[11px]"] $ toHtml $ formatWithCommas item.details.alertThreshold <> " " <> item.details.triggerDirection
+          span_ [class_ "tabular-nums text-iconError bg-fillError-weak rounded-full px-1.5 py-px text-2xs"] $ toHtml $ formatWithCommas item.details.alertThreshold <> " " <> item.details.triggerDirection
         forM_ item.teamBadges \(_, handle) -> span_ [class_ "badge badge-sm badge-neutral"] $ toHtml handle
       div_ [class_ "flex gap-1 items-center shrink-0"] actionBtns
 

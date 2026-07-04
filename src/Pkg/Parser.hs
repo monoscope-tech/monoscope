@@ -224,14 +224,27 @@ normalizeKeyPath :: Text -> Text
 normalizeKeyPath txt = T.toLower $ T.replace "]" "❳" $ T.replace "[" "❲" $ T.replace "." "•" txt
 
 
+-- | Build the SELECT column list from the default columns plus any user-requested
+-- extra columns. A requested column is skipped when the parser resolves it to a SQL
+-- expression already in @defaultSelect@ (e.g. @resource.service.name@ and the default
+-- @resource___service___name as service@ are the same column) — otherwise it would be
+-- fetched twice and rendered as a duplicate column.
+--
+-- >>> length $ snd $ getProcessedColumns ["service"] ["resource___service___name as service"]
+-- 1
+-- >>> length $ snd $ getProcessedColumns ["attributes.http.request.method"] ["id"]
+-- 2
 getProcessedColumns :: [Text] -> [Text] -> (Text, [Text])
 getProcessedColumns [] defaultSelect = (T.intercalate "," $ colsNoAsClause defaultSelect, defaultSelect)
 getProcessedColumns cols defaultSelect = (T.intercalate "," $ colsNoAsClause selectedCols, selectedCols)
   where
+    defaultExprs = colsNoAsClause defaultSelect
     prs =
       cols & mapMaybe \col -> do
         subJ@(Subject entire _ _) <- hush (parse pSubject "" col)
-        pure $ display subJ <> " as " <> normalizeKeyPath entire
+        let expr = display subJ
+        guard (expr `notElem` defaultExprs)
+        pure $ expr <> " as " <> normalizeKeyPath entire
     selectedCols = prs <> defaultSelect
 
 
@@ -548,6 +561,10 @@ defaultSelectSqlQuery (Just SSpans) =
 -- ("sum(x)::float",Just "total")
 -- >>> splitTrailingAlias "CAST(x AS VARCHAR)"
 -- ("CAST(x AS VARCHAR)",Nothing)
+-- 'normalizeKeyPath' aliases dotted/bracketed paths to @•❲❳@; those must still strip,
+-- else the @AS@ leaks into @jsonb_build_array(…)@ and the query fails to parse:
+-- >>> fst $ splitTrailingAlias "resource___service___name as resource•service•name"
+-- "resource___service___name"
 splitTrailingAlias :: Text -> (Text, Maybe Text)
 splitTrailingAlias (T.strip -> t) =
   let asNeedle = " as "
@@ -558,7 +575,7 @@ splitTrailingAlias (T.strip -> t) =
         else
           let pre = T.take preLen t
               alias = T.strip $ T.drop preLen t
-           in if T.null alias || not (T.all (\c -> isAlphaNum c || c == '_') alias)
+           in if T.null alias || not (T.all (\c -> isAlphaNum c || c `elem` ("_•❲❳" :: [Char])) alias)
                 then (t, Nothing)
                 else (T.strip $ T.dropEnd (T.length asNeedle) pre, Just alias)
 

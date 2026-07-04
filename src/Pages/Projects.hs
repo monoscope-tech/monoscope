@@ -85,7 +85,7 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper, mkPageCtx, s
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as SlackP
 import Pages.Bots.Utils qualified as BotUtils
-import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), ModalCfg (..), PanelCfg (..), confirmModal_, dirtyFormSaveAttr_, formActionsModal_, formField_, formSelectField_, headerRowPad_, headerRow_, iconBadgeXs_, iconBadge_, infoBanner_, modalWith_, panel_, sectionLabel_, settingsH2_, settingsNavLink_, settingsSection_, tagInput_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), PanelCfg (..), confirmModal_, dirtyFormSaveAttr_, emptyState_, formActionsModal_, formField_, formSelectField_, headerRowPad_, headerRow_, iconBadgeXs_, iconBadge_, infoBanner_, modalWith_, panel_, sectionLabel_, settingsH2_, settingsNavLink_, settingsSection_, tagInput_)
 import Pages.Settings qualified as Settings
 import Pkg.Components.Table (Table (..))
 import Pkg.Components.Table qualified as Table
@@ -947,7 +947,7 @@ teamPage pid team projMembers slackChannels discordChannels = do
             input_ [type_ "text", placeholder_ searchPh, class_ "", makeAttribute "_" $ "on input show <tr/> in #" <> secId <> " when its textContent.toLowerCase() contains my value.toLowerCase()"]
         div_ [class_ "w-full max-h-96 overflow-y-auto", id_ secId] do
           unless (T.null url) $ a_ [hxGet_ url, hxTrigger_ "intersect once", hxTarget_ $ "#" <> secId, hxSwap_ "outerHTML"] ""
-          div_ [class_ "flex flex-col items-center justify-center py-8 text-center gap-2"] (faSprite_ icon "regular" "h-6 w-6 text-iconNeutral" >> div_ [class_ "text-sm text-textWeak"] (toHtml $ "No " <> T.toLower title <> " linked"))
+          emptyState_ def{icon = Just icon, size = ESCompact} ("No " <> T.toLower title <> " linked") ""
   section_ [id_ "main-content", class_ "w-full py-8"] $ div_ [class_ "max-md:px-2 px-4 w-full"] do
     div_ [class_ "mb-6 flex items-center gap-3"] do
       a_ [href_ ("/p/" <> pid.toText <> "/manage_teams"), class_ "text-iconNeutral hover:text-iconBrand"] $ faSprite_ "arrow-left" "regular" "h-4 w-4"

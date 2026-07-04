@@ -56,6 +56,7 @@ module Utils (
   navTabAttrs,
   popoverTrigger_,
   popoverPanel_,
+  drawerLoadAttrs_,
   renderMarkdown,
   jsonToMap,
   fieldContextMenuItems_,
@@ -105,7 +106,7 @@ import Fmt (commaizeF, fmt)
 import Hasql.Interpolate qualified as HI
 import Lucid
 import Lucid.Aria qualified as Aria
-import Lucid.Htmx (hxBoost_, hxSelect_, hxSwap_, hxTarget_)
+import Lucid.Htmx (hxBoost_, hxGet_, hxSelect_, hxSwap_, hxTarget_)
 import Lucid.Hyperscript (__)
 import Lucid.Svg qualified as Svg
 import Models.Projects.Projects qualified as Projects
@@ -162,8 +163,8 @@ data FieldMenuCtx = StaticField Text (Maybe Text) | DynamicField
 -- enclosing element (or, for the cloned template, on the clicked pill).
 data FieldAction
   = FCopyValue
-  | FCopyField
   | FCopyKeyValue
+  | FCopyField
   | FFilter
   | FExclude
   | FReplaceFilter
@@ -178,7 +179,6 @@ data FieldAction
 fieldMenuActions :: [FieldAction]
 fieldMenuActions =
   [ FCopyValue
-  , FCopyField
   , FCopyKeyValue
   , FDivider
   , FFilter
@@ -205,16 +205,6 @@ fieldContextMenuItems_ ctx = traverse_ \case
             send successToast(value:['Copied to Clipboard']) to <body/>
             halt
           end|]
-  FCopyField ->
-    menuItem_
-      "copy"
-      "Copy field"
-      keyTip
-      [__|on click if 'clipboard' in window.navigator then
-            call navigator.clipboard.writeText((closest @data-field-path))
-            send successToast(value:['Copied to Clipboard']) to <body/>
-            halt
-          end|]
   FCopyKeyValue ->
     menuItem_
       "copy"
@@ -222,6 +212,16 @@ fieldContextMenuItems_ ctx = traverse_ \case
       kvTip
       [__|on click if 'clipboard' in window.navigator then
             call navigator.clipboard.writeText((closest @data-field-path) + ' == ' + (closest @data-field-value))
+            send successToast(value:['Copied to Clipboard']) to <body/>
+            halt
+          end|]
+  FCopyField ->
+    menuItem_
+      "copy"
+      "Copy field"
+      keyTip
+      [__|on click if 'clipboard' in window.navigator then
+            call navigator.clipboard.writeText((closest @data-field-path))
             send successToast(value:['Copied to Clipboard']) to <body/>
             halt
           end|]
@@ -402,30 +402,17 @@ jsonValueToHtmlTree :: Text -> AE.Value -> Maybe Text -> Html ()
 jsonValueToHtmlTree scope val pathM = do
   div_ [class_ "p-2 rounded-lg bg-fillWeaker border w-full json-tree-container monospace text-sm leading-6"] do
     div_ [class_ "w-full flex items-center gap-4 text-xs mb-2"] do
-      button_
-        [ class_ "flex hidden items-center gap-1 cursor-pointer"
-        , [__|on click
-               set container to the closest .json-tree-container to the parentElement of me
-               set items to container.querySelectorAll(".log-item-with-children")
-               remove .collapsed from items
-               add .hidden to me
-               remove .hidden from the next <button/>
-             end
-            |]
-        ]
-        do
-          span_ [class_ "underline"] "Expand all"
-          faSprite_ "expand" "regular" "w-2 h-2"
-      button_
+      -- One toggle button: collapse state (checked = collapsed) is bulk-written to every
+      -- node's .tree-toggle; the label reflects the next action. Imperative by nature (CSS
+      -- can't write another element's checked state), so hyperscript is the right tool.
+      when hasChildren $ button_
         [ class_ "flex items-center gap-1 cursor-pointer"
-        , [__| on click
-               set container to the closest .json-tree-container to the parentElement of me
-               set items to container.querySelectorAll(".log-item-with-children")
-               add .collapsed to items
-               add .hidden to me
-               remove .hidden from the previous <button/>
-             end
-           |]
+        , [__|on click
+               set me.collapsed to not me.collapsed
+               for it in <.tree-toggle/> in closest .json-tree-container set the checked of it to me.collapsed end
+               if me.collapsed put 'Expand all' into the first <span/> in me
+               else put 'Collapse all' into the first <span/> in me
+             |]
         ]
         do
           span_ [class_ "underline"] "Collapse all"
@@ -436,11 +423,9 @@ jsonValueToHtmlTree scope val pathM = do
         [ class_ "flex items-center gap-1 cursor-pointer"
         , term
             "_"
-            [text|  on click
-                 if 'clipboard' in window.navigator then
-                   call navigator.clipboard.writeText(my @data-reqjson)
-                   send successToast(value:['Json copied to clipboard']) to <body/>
-                 end|]
+            [text|on click
+                 call navigator.clipboard.writeText(my @data-reqjson)
+                 send successToast(value:['Json copied to clipboard']) to <body/>|]
         , term "data-reqjson" json
         ]
         do
@@ -457,6 +442,7 @@ jsonValueToHtmlTree scope val pathM = do
           faSprite_ "download-f" "regular" "w-2 h-2"
     jsonValueToHtmlTree' (fromMaybe "" pathM, "", val)
   where
+    hasChildren = case val of AE.Object o -> not (AEKM.null o); AE.Array a -> not (V.null a); _ -> False
     jsonValueToHtmlTree' :: (Text, Text, AE.Value) -> Html ()
     jsonValueToHtmlTree' (path, key, AE.Object v) = renderParentType "{" "}" key (length v) (AEKM.toHashMapText v & HM.toList & sort & mapM_ (\(kk, vv) -> jsonValueToHtmlTree' (path <> "." <> key, kk, vv)))
     jsonValueToHtmlTree' (path, key, AE.Array v) = renderParentType "[" "]" key (length v) (V.iforM_ v \i item -> jsonValueToHtmlTree' (path <> "." <> key, toText $ show i, item))
@@ -475,22 +461,22 @@ jsonValueToHtmlTree scope val pathM = do
           button_
             ([type_ "button", class_ "block w-full text-left hover:bg-fillBrandWeak cursor-pointer pl-6 log-item-field-anchor"] <> popoverTrigger_ fieldPopId)
             do
-              span_ $ toHtml key
-              span_ [class_ "text-textBrand"] ":"
+              unless (T.null key) do
+                span_ $ toHtml key
+                span_ [class_ "text-textBrand"] ":"
               span_ [class_ "text-textBrand ml-2.5 log-item-field-value", term "data-field-path" fullFieldPath'] $ toHtml dfVal
 
           ul_ ([class_ "dropdown log-item-context-menu menu p-2 shadow-lg bg-bgRaised rounded-box border border-strokeWeak w-96 max-w-[92vw]"] <> popoverPanel_ fieldPopId)
             $ fieldContextMenuItems_ (StaticField dfPath (Just dfVal)) fieldMenuActions
 
     renderParentType :: Text -> Text -> Text -> Int -> Html () -> Html ()
-    renderParentType opening closing key count child = div_ [class_ $ "log-item-with-children" <> if count == 0 then " collapsed" else ""] do
-      a_
-        [ class_ "inline-block items-center cursor-pointer"
-        , onclick_ "this.parentNode.classList.toggle('collapsed')"
-        ]
-        do
-          faSprite_ "chevron-right" "regular" "log-item-tree-chevron"
-          span_ [] $ toHtml $ if key == "" then opening else key <> ": " <> opening
+    -- Collapse state is a hidden checkbox toggled by the label (no JS): CSS collapses the
+    -- node via `.log-item-with-children:has(> label > .tree-toggle:checked)`. Checked = collapsed.
+    renderParentType opening closing key count child = div_ [class_ "log-item-with-children"] do
+      label_ [class_ "inline-block items-center cursor-pointer"] do
+        input_ $ [type_ "checkbox", class_ "tree-toggle sr-only"] <> [checked_ | count == 0]
+        faSprite_ "chevron-right" "regular" "log-item-tree-chevron"
+        span_ [] $ toHtml $ if key == "" then opening else key <> ": " <> opening
       div_ [class_ "pl-5 children "] do
         span_ [class_ "tree-children-count"] $ toHtml $ show count
         div_ [class_ "tree-children"] child
@@ -1498,6 +1484,17 @@ popoverTrigger_ pid = [term "popovertarget" pid, style_ $ "anchor-name:--anchor-
 
 popoverPanel_ :: Text -> [Attribute]
 popoverPanel_ pid = [id_ pid, term "popover" "auto", style_ $ "position-try:flip-block; position-anchor:--anchor-" <> pid]
+
+
+-- | HTMX attrs that open the global data drawer and load @url@ into it.
+drawerLoadAttrs_ :: Text -> [Attribute]
+drawerLoadAttrs_ url =
+  [ hxGet_ url
+  , hxTarget_ "#global-data-drawer-content"
+  , hxSwap_ "innerHTML"
+  , term "hx-on::after-swap" "window.evalScriptsFromContent(htmx.find('#global-data-drawer-content'))"
+  , term "_" "on pointerdown or click set #global-data-drawer.checked to true"
+  ]
 
 
 renderMarkdown :: Text -> Html ()

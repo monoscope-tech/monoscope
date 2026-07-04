@@ -99,7 +99,7 @@ import Network.Minio qualified as Minio
 import Network.URI (parseURI, uriAuthority, uriRegName, uriScheme)
 import Network.Wreq qualified as Wreq
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, settingsContentTarget, withSettingsPage)
-import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), ModalCfg (..), confirmModal_, connectionBadge_, formField_, headerRow_, iconBadgeLg_, localTimeFmt_, modalWith_, paymentPlanPicker, sectionLabel_, settingsH2_, settingsSection_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), FieldCfg (..), FieldSize (..), ModalCfg (..), confirmModal_, connectionBadge_, emptyState_, formField_, headerRow_, iconBadgeLg_, localTimeFmt_, modalWith_, paymentPlanPicker, sectionLabel_, settingsH2_, settingsSection_)
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.EmailTemplates qualified as ET
@@ -776,10 +776,7 @@ prometheusTargetsList pid cfgs = div_ [id_ "prometheus-targets", class_ "mt-4"] 
 
 
 prometheusEmptyState :: Html ()
-prometheusEmptyState = div_ [class_ "flex flex-col items-center text-center gap-3 py-14 px-4"] do
-  iconBadgeLg_ BrandBadge "objects-column"
-  h3_ [class_ "text-base font-semibold text-textStrong"] "Scrape your Prometheus endpoints"
-  p_ [class_ "text-sm text-textWeak max-w-md"] "Point Monoscope at any /metrics endpoint. We poll it on your schedule, parse the exposition format, and ingest the samples as metrics you can chart and alert on — grouped under the name you give each target. Use “Add target” to start."
+prometheusEmptyState = emptyState_ def{icon = Just "objects-column"} "Scrape your Prometheus endpoints" "Point Monoscope at any /metrics endpoint. We poll it on your schedule, parse the exposition format, and ingest the samples as metrics you can chart and alert on — grouped under the name you give each target. Use “Add target” to start."
 
 
 prometheusTargetRow :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfig -> Html ()
@@ -1340,7 +1337,7 @@ dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-s
                   $ toHtml @Text
                   $ if n0 <= 0 then "—" else fmt (commaizeF n0)
                 when (bytes > 0)
-                  $ div_ [class_ "text-[11px] text-textWeak/80 leading-tight"]
+                  $ div_ [class_ "text-2xs text-textWeak/80 leading-tight"]
                   $ toHtml @Text (humanBytes bytes)
           tbody_ do
             forM_ withRunning \(day, n, metrics, eb, mb, prev, cur) -> do

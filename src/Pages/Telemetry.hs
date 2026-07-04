@@ -36,6 +36,7 @@ import Models.Telemetry.Telemetry (SpanStatus (SSError))
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
+import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..))
 import Pages.Components qualified as Components
 import Pages.LogExplorer.LogItem (getRequestDetails, getServiceColor, getServiceName, spanHasErrors)
 import Pages.LogExplorer.LogItem qualified as LogItem
@@ -46,7 +47,7 @@ import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (unAesonTextMaybe)
 import Relude hiding (ask)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (LoadingSize (..), LoadingType (..), faSprite_, getDurationNSMS, getServiceColors, loadingIndicator_, onpointerdown_, parseTime, prettyPrintCount, utcTimeToNanoseconds)
+import Utils (LoadingSize (..), LoadingType (..), drawerLoadAttrs_, faSprite_, getDurationNSMS, getServiceColors, loadingIndicator_, onpointerdown_, parseTime, prettyPrintCount, utcTimeToNanoseconds)
 
 
 data MetricsOverViewGet
@@ -368,7 +369,7 @@ chartsPage pid metricList inactive sources source mFilter nextUrl = do
     if V.null metricList && V.null inactive
       then
         div_ [class_ "w-full flex items-center justify-center h-96"]
-          $ Components.emptyState_ (Just "chart-line") "No metrics found" "Metrics will appear here once your application starts sending telemetry data." (Just "https://monoscope.tech/docs/sdks/") "View SDK setup guides"
+          $ Components.emptyState_ def{icon = Just "chart-line", action = ESLink "https://monoscope.tech/docs/sdks/" "View SDK setup guides"} "No metrics found" "Metrics will appear here once your application starts sending telemetry data."
       else do
         when (V.null metricList && not (V.null inactive))
           $ div_ [class_ "text-textWeak text-sm py-4"] "No active metrics in the last 7 days."
@@ -401,22 +402,15 @@ metricWidget pid metricName metricUnit mTitle mId mExpandBtn mDescription =
     }
 
 
-drawerExpandScript :: Text -> Text
-drawerExpandScript detailUrl =
-  let fetchTail = LogItem.fetchIntoScript "global-data-drawer-content" detailUrl
-   in [text|on pointerdown or click set #global-data-drawer.checked to true then $fetchTail|]
-
-
 chartList :: Projects.ProjectId -> Text -> V.Vector Telemetry.MetricChartListData -> Maybe Text -> Html ()
 chartList pid source metricList nextUrl = do
   forM_ metricList \metric ->
     div_ [class_ "w-full flex flex-col gap-2 metric_filterble"] do
       let detailUrl = metricDetailUrl pid metric.metricName source
-      let expandBtn = drawerExpandScript detailUrl
       let lastSeenStr = formatTime defaultTimeLocale "%b %d, %Y %H:%M" metric.lastSeen
       div_ [class_ "h-52"]
         $ toHtml
-        $ metricWidget pid metric.metricName metric.metricUnit (Just metric.metricName) Nothing (Just expandBtn) (Just $ "Last seen: " <> toText lastSeenStr)
+        $ metricWidget pid metric.metricName metric.metricUnit (Just metric.metricName) Nothing (Just detailUrl) (Just $ "Last seen: " <> toText lastSeenStr)
   whenJust nextUrl \url ->
     a_ [hxTrigger_ "intersect once", hxSwap_ "outerHTML", hxGet_ url] pass
 
@@ -434,9 +428,10 @@ inactiveMetricsList pid source metrics = do
       div_ [class_ "flex flex-col divide-y divide-strokeWeak"] do
         forM_ metrics $ \metric -> do
           let detailUrl = metricDetailUrl pid metric.metricName source
-          let expandBtn = drawerExpandScript detailUrl
           let lastSeenStr = formatTime defaultTimeLocale "%b %d, %Y" metric.lastSeen
-          div_ [class_ "flex items-center justify-between py-2 px-2 cursor-pointer hover:bg-fillWeak rounded", makeAttribute "_" expandBtn] do
+          div_
+            (class_ "flex items-center justify-between py-2 px-2 cursor-pointer hover:bg-fillWeak rounded" : drawerLoadAttrs_ detailUrl)
+            do
             div_ [class_ "flex items-center gap-2"] do
               faSprite_ "chart-line" "regular" "w-3.5 h-3.5 text-textWeak"
               span_ [class_ "text-sm font-mono"] $ toHtml metric.metricName
@@ -500,9 +495,7 @@ dataPointsPage pid metrics refCounts = do
                     then [class_ "cursor-pointer"]
                     else
                       let detailUrl = metricDetailUrl pid r.fullPath "all"
-                       in [ class_ "cursor-pointer"
-                          , makeAttribute "_" $ drawerExpandScript detailUrl
-                          ]
+                       in class_ "cursor-pointer" : drawerLoadAttrs_ detailUrl
               , Table.zeroState = Just Table.ZeroState{icon = "chart-line", title = "No metrics found", description = "Metrics will appear here once your application starts sending telemetry data.", actionText = "View SDK setup guides", destination = Right "https://monoscope.tech/docs/sdks/"}
               }
         }
@@ -994,7 +987,7 @@ buildSpanTree_ pid sp trId level scol = do
             else div_ [class_ $ "w-2.5 h-2.5 rounded-full shrink-0 " <> serviceCol, title_ sp.spanRecord.serviceName] pass
           when sp.spanRecord.hasErrors
             $ span_
-              [ class_ "shrink-0 w-3.5 h-3.5 rounded-sm bg-fillError-strong text-textInverse-strong text-[10px] font-bold flex items-center justify-center leading-none"
+              [ class_ "shrink-0 w-3.5 h-3.5 rounded-sm bg-fillError-strong text-textInverse-strong text-2xs font-bold flex items-center justify-center leading-none"
               , title_ "This span errored"
               , Aria.label_ "Error span"
               ]

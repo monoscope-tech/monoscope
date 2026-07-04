@@ -152,6 +152,13 @@ lint:
 fix-lint:
 	find ./src -name '*.hs' | xargs -L1 hlint --refactor --refactor-options="--inplace"
 
+# Add a FontAwesome icon to the sprite sheet.
+# Usage: make fa-add ICON=arrow-right STYLE=solid
+#        make fa-add ICON=circle-check STYLE=regular
+fa-add:
+	@test -n "$(ICON)" || (echo "usage: make fa-add ICON=icon-name STYLE=solid|regular"; exit 1)
+	python3 scripts/fa-add.py $(ICON) $${STYLE:-regular}
+
 gen-proto:
 	cd proto && protoc --plugin=protoc-gen-haskell=`which proto-lens-protoc` \
     --haskell_out=. \

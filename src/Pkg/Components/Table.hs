@@ -40,7 +40,7 @@ import GHC.Records (HasField (getField))
 import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
-import Pages.Components (emptyState_)
+import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), emptyState_)
 import Relude
 import Utils (deleteParam, faSprite_, navTabAttrs, popoverPanel_, popoverTrigger_, toUriStr)
 
@@ -757,7 +757,7 @@ renderZeroState zs = do
   let url = case zs.destination of
         Left labelId -> labelId
         Right destination -> destination
-  emptyState_ (Just zs.icon) zs.title zs.description (Just url) zs.actionText
+  emptyState_ def{icon = Just zs.icon, action = ESLink url zs.actionText} zs.title zs.description
 
 
 renderSimpleZeroState :: SimpleZeroState -> Html ()

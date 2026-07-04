@@ -742,7 +742,7 @@ export class SessionReplay extends LitElement {
               <span class="text-sm font-semibold truncate" title=${this.userLabel() ?? 'Anonymous session — no user was identified when this was recorded'}>
                 ${this.userLabel() ?? 'Anonymous session'}
               </span>
-              <span class="text-[11px] text-textWeak font-medium tabular-nums flex items-center gap-1.5 truncate">
+              <span class="text-2xs text-textWeak font-medium tabular-nums flex items-center gap-1.5 truncate">
                 <span title="Session started">${this.formattedStartedAt()}</span>
                 <span aria-hidden="true">·</span>
                 <span title="Session duration" class="whitespace-nowrap">${SessionReplay.formatTime(this.metaData.totalTime || 0)}</span>
@@ -765,7 +765,7 @@ export class SessionReplay extends LitElement {
             <div class="flex items-center gap-1 shrink-0">
               <button
                 @click=${this.copySessionId}
-                class="flex items-center gap-1 px-1.5 h-6 rounded cursor-pointer hover:bg-fillWeaker text-textWeak hover:text-textStrong text-[11px] font-medium"
+                class="flex items-center gap-1 px-1.5 h-6 rounded cursor-pointer hover:bg-fillWeaker text-textWeak hover:text-textStrong text-2xs font-medium"
                 title="Copy session ID"
                 aria-label="Copy session ID"
               >
@@ -776,7 +776,7 @@ export class SessionReplay extends LitElement {
               </button>
               <button
                 @click=${this.shareAtTimestamp}
-                class="flex items-center gap-1 px-1.5 h-6 rounded cursor-pointer hover:bg-fillWeaker text-textWeak hover:text-textStrong text-[11px] font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                class="flex items-center gap-1 px-1.5 h-6 rounded cursor-pointer hover:bg-fillWeaker text-textWeak hover:text-textStrong text-2xs font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                 title="Copy a link that opens the player at this moment"
                 aria-label="Share this moment"
                 ?disabled=${this.isLoading || !!this.loadError}
@@ -866,12 +866,12 @@ export class SessionReplay extends LitElement {
               ${this.isLoading
                 ? html`
                     <div class="flex flex-col items-center gap-3 text-center px-8" role="status" aria-live="polite">
-                      <div class="flex items-center gap-2 text-base font-medium text-gray-100">
-                        <span class="inline-block h-2 w-2 rounded-full bg-gray-100 motion-safe:animate-pulse"></span>
+                      <div class="flex items-center gap-2 text-base font-medium text-textInverse-strong">
+                        <span class="inline-block h-2 w-2 rounded-full bg-fillInverse-strong motion-safe:animate-pulse"></span>
                         Loading session recording
                       </div>
                       ${this.currentSessionId
-                        ? html`<div class="text-xs text-gray-300 tabular-nums">Session ${this.currentSessionId.slice(0, 8)}…</div>`
+                        ? html`<div class="text-xs text-textInverse-weak tabular-nums">Session ${this.currentSessionId.slice(0, 8)}…</div>`
                         : nothing}
                     </div>
                   `
@@ -879,12 +879,12 @@ export class SessionReplay extends LitElement {
                 ? html`
                     <div class="flex flex-col items-center gap-4 text-center px-8 max-w-lg" role="alert" aria-live="assertive">
                       ${faSprite_('triangle-exclamation', 'regular', 'w-10 h-10 text-textError')}
-                      <div class="text-lg font-semibold text-gray-100">Can’t play this session</div>
-                      <div class="text-sm text-gray-200">${this.loadError}</div>
+                      <div class="text-lg font-semibold text-textInverse-strong">Can’t play this session</div>
+                      <div class="text-sm text-textInverse-weak">${this.loadError}</div>
                       <div class="flex items-center gap-2 mt-2">
                         <button
                           @click=${this.retryLoad}
-                          class="flex items-center gap-1.5 px-3 py-1.5 rounded bg-white/10 hover:bg-white/20 text-sm font-medium text-gray-100 cursor-pointer"
+                          class="flex items-center gap-1.5 px-3 py-1.5 rounded bg-white/10 hover:bg-white/20 text-sm font-medium text-textInverse-strong cursor-pointer"
                           title="Retry loading this session"
                         >
                           ${faSprite_('replay', 'regular', 'w-3.5 h-3.5')}
@@ -892,7 +892,7 @@ export class SessionReplay extends LitElement {
                         </button>
                         <button
                           @click=${this.copySessionId}
-                          class="flex items-center gap-1.5 px-3 py-1.5 rounded bg-white/5 hover:bg-white/15 text-sm font-medium text-gray-200 cursor-pointer"
+                          class="flex items-center gap-1.5 px-3 py-1.5 rounded bg-white/5 hover:bg-white/15 text-sm font-medium text-textInverse-weak cursor-pointer"
                           title="Copy session ID"
                         >
                           ${faSprite_('copy', 'regular', 'w-3.5 h-3.5')}
@@ -900,7 +900,7 @@ export class SessionReplay extends LitElement {
                         </button>
                       </div>
                       ${this.currentSessionId
-                        ? html`<div class="text-[11px] text-gray-400 font-mono tabular-nums select-all">${this.currentSessionId}</div>`
+                        ? html`<div class="text-2xs text-textInverse-weak font-mono tabular-nums select-all">${this.currentSessionId}</div>`
                         : nothing}
                     </div>
                   `
@@ -908,29 +908,29 @@ export class SessionReplay extends LitElement {
                 ? html`
                     <div class="flex flex-col items-stretch gap-3 max-w-sm w-full px-6">
                       <!-- Instrument-grade end card: numbers first, navigation second -->
-                      <div class="text-[10px] uppercase tracking-wider text-gray-400 font-semibold">End of session</div>
-                      <div class="flex items-baseline gap-5 text-gray-100">
+                      <div class="text-2xs uppercase tracking-wider text-textInverse-weak font-semibold">End of session</div>
+                      <div class="flex items-baseline gap-5 text-textInverse-strong">
                         <div class="flex flex-col">
                           <span class="text-2xl font-semibold tabular-nums leading-none">${SessionReplay.formatTime(this.metaData.totalTime)}</span>
-                          <span class="text-[10px] uppercase tracking-wider text-gray-400 mt-1">Duration</span>
+                          <span class="text-2xs uppercase tracking-wider text-textInverse-weak mt-1">Duration</span>
                         </div>
                         <div class="flex flex-col">
                           <span class="text-2xl font-semibold tabular-nums leading-none ${this.consoleTypesCounts.error > 0 ? 'text-textError' : ''}">${this.consoleTypesCounts.error}</span>
-                          <span class="text-[10px] uppercase tracking-wider text-gray-400 mt-1">Errors</span>
+                          <span class="text-2xs uppercase tracking-wider text-textInverse-weak mt-1">Errors</span>
                         </div>
                         <div class="flex flex-col">
                           <span class="text-2xl font-semibold tabular-nums leading-none">${this.navMarkers.length + 1}</span>
-                          <span class="text-[10px] uppercase tracking-wider text-gray-400 mt-1">Pages</span>
+                          <span class="text-2xs uppercase tracking-wider text-textInverse-weak mt-1">Pages</span>
                         </div>
                       </div>
                       ${this.errorTicks.length > 0
                         ? html`<div class="flex flex-col gap-1 mt-1">
-                            <div class="text-[10px] uppercase tracking-wider text-gray-400 font-semibold">Jump to error</div>
+                            <div class="text-2xs uppercase tracking-wider text-textInverse-weak font-semibold">Jump to error</div>
                             <div class="flex flex-wrap gap-1">
                               ${this.errorTicks.slice(0, 6).map(
                                 (t, i) => html`<button
                                   @click=${() => this.goTo(t)}
-                                  class="cursor-pointer flex items-center gap-1 px-2 py-1 rounded bg-white/5 hover:bg-white/15 text-xs text-gray-100 tabular-nums"
+                                  class="cursor-pointer flex items-center gap-1 px-2 py-1 rounded bg-white/5 hover:bg-white/15 text-xs text-textInverse-strong tabular-nums"
                                   title="Jump to error ${i + 1}"
                                 >
                                   <span class="h-1.5 w-1.5 rounded-full bg-textError"></span>
@@ -938,7 +938,7 @@ export class SessionReplay extends LitElement {
                                 </button>`
                               )}
                               ${this.errorTicks.length > 6
-                                ? html`<span class="text-xs text-gray-400 px-1 self-center tabular-nums">+${this.errorTicks.length - 6} more</span>`
+                                ? html`<span class="text-xs text-textInverse-weak px-1 self-center tabular-nums">+${this.errorTicks.length - 6} more</span>`
                                 : nothing}
                             </div>
                           </div>`
@@ -946,7 +946,7 @@ export class SessionReplay extends LitElement {
                       <div class="flex gap-2 mt-1">
                         <button
                           @click=${() => this.goTo(0)}
-                          class="flex-1 cursor-pointer flex items-center justify-center gap-2 px-3 py-2 rounded bg-white/15 hover:bg-white/25 text-sm font-medium text-gray-100"
+                          class="flex-1 cursor-pointer flex items-center justify-center gap-2 px-3 py-2 rounded bg-white/15 hover:bg-white/25 text-sm font-medium text-textInverse-strong"
                           title="Replay from the beginning (Home)"
                         >
                           ${faSprite_('replay', 'regular', 'w-3.5 h-3.5')}
@@ -954,7 +954,7 @@ export class SessionReplay extends LitElement {
                         </button>
                         <button
                           @click=${this.shareAtTimestamp}
-                          class="cursor-pointer flex items-center justify-center gap-1.5 px-3 py-2 rounded bg-white/5 hover:bg-white/15 text-sm font-medium text-gray-200"
+                          class="cursor-pointer flex items-center justify-center gap-1.5 px-3 py-2 rounded bg-white/5 hover:bg-white/15 text-sm font-medium text-textInverse-weak"
                           title="Copy a link that opens the player at this moment"
                         >
                           ${faSprite_('link-simple', 'regular', 'w-3.5 h-3.5')}
@@ -966,7 +966,7 @@ export class SessionReplay extends LitElement {
                 : html`
                     <button
                       @click=${() => (this.paused = false)}
-                      class="cursor-pointer text-gray-100"
+                      class="cursor-pointer text-textInverse-strong"
                       title="Resume playback"
                       aria-label="Resume playback"
                     >
@@ -1062,7 +1062,7 @@ export class SessionReplay extends LitElement {
                   title="Back 10 seconds (←)"
                   aria-label="Back 10 seconds"
                 >
-                  <span class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 font-semibold text-[8px]">10</span>
+                  <span class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 font-semibold text-3xs">10</span>
                   ${faSprite_('time-skip', 'regular', 'h-5 w-5')}
                 </button>
                 ${this.finished
@@ -1090,7 +1090,7 @@ export class SessionReplay extends LitElement {
                   title="Forward 10 seconds (→)"
                   aria-label="Forward 10 seconds"
                 >
-                  <span class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 font-semibold text-[8px]">10</span>
+                  <span class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 font-semibold text-3xs">10</span>
                   ${faSprite_('time-skip', 'regular', 'h-5 w-5 rotate-y-180')}
                 </button>
                 ${this.errorTicks.length > 0
@@ -1114,7 +1114,7 @@ export class SessionReplay extends LitElement {
               <div class="w-24 shrink-0 flex justify-end">
                 <button
                   @click=${() => (this.showShortcuts = !this.showShortcuts)}
-                  class="inline-flex items-center justify-center h-6 min-w-6 px-1.5 rounded-full border border-strokeWeak bg-fillWeak text-textWeak font-mono text-[11px] tabular-nums cursor-pointer hover:bg-fillStrong/10 hover:text-textStrong hover:border-strokeStrong"
+                  class="inline-flex items-center justify-center h-6 min-w-6 px-1.5 rounded-full border border-strokeWeak bg-fillWeak text-textWeak font-mono text-2xs tabular-nums cursor-pointer hover:bg-fillStrong/10 hover:text-textStrong hover:border-strokeStrong"
                   title="Keyboard shortcuts (?)"
                   aria-label="Show keyboard shortcuts"
                   aria-expanded=${this.showShortcuts}
@@ -1221,7 +1221,7 @@ export class SessionReplay extends LitElement {
         <span class="flex items-center gap-1 shrink-0">
           ${keys.map(
             (k) => html`<kbd
-              class="px-1.5 py-0.5 rounded border border-strokeStrong bg-fillWeak font-mono text-[10px] tabular-nums text-textStrong"
+              class="px-1.5 py-0.5 rounded border border-strokeStrong bg-fillWeak font-mono text-2xs tabular-nums text-textStrong"
               >${k}</kbd
             >`
           )}
@@ -1244,7 +1244,7 @@ export class SessionReplay extends LitElement {
         >
           <div class="flex items-baseline justify-between px-5 py-4 border-b">
             <div>
-              <div class="text-[10px] uppercase tracking-wider text-textWeak font-semibold">Reference</div>
+              <div class="text-2xs uppercase tracking-wider text-textWeak font-semibold">Reference</div>
               <div class="text-sm font-semibold text-textStrong">Keyboard shortcuts</div>
             </div>
             <button
@@ -1259,13 +1259,13 @@ export class SessionReplay extends LitElement {
           </div>
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-5 px-5 py-4 text-xs">
             <section>
-              <div class="text-[10px] uppercase tracking-wider text-textWeak font-semibold mb-1.5">Playback</div>
+              <div class="text-2xs uppercase tracking-wider text-textWeak font-semibold mb-1.5">Playback</div>
               ${row(['Space', 'K'], 'Play / pause')}
               ${row(['Home'], 'Jump to start')}
               ${row(['End'], 'Jump to end')}
             </section>
             <section>
-              <div class="text-[10px] uppercase tracking-wider text-textWeak font-semibold mb-1.5">Seek</div>
+              <div class="text-2xs uppercase tracking-wider text-textWeak font-semibold mb-1.5">Seek</div>
               ${row(['←', 'J'], 'Back 10 seconds')}
               ${row(['→', 'L'], 'Forward 10 seconds')}
               ${row(['↑'], 'Back 30 seconds')}
@@ -1273,22 +1273,22 @@ export class SessionReplay extends LitElement {
               ${row(['0–9'], 'Jump to 0%, 10% … 90%')}
             </section>
             <section>
-              <div class="text-[10px] uppercase tracking-wider text-textWeak font-semibold mb-1.5">Speed</div>
+              <div class="text-2xs uppercase tracking-wider text-textWeak font-semibold mb-1.5">Speed</div>
               ${row(['<'], 'Slow down')}
               ${row(['>'], 'Speed up')}
             </section>
             <section>
-              <div class="text-[10px] uppercase tracking-wider text-textWeak font-semibold mb-1.5">Errors</div>
+              <div class="text-2xs uppercase tracking-wider text-textWeak font-semibold mb-1.5">Errors</div>
               ${row(['N'], 'Next error')}
               ${row(['Shift', 'N'], 'Previous error')}
             </section>
             <section class="sm:col-span-2">
-              <div class="text-[10px] uppercase tracking-wider text-textWeak font-semibold mb-1.5">Panel</div>
+              <div class="text-2xs uppercase tracking-wider text-textWeak font-semibold mb-1.5">Panel</div>
               ${row(['?'], 'Toggle this panel')}
               ${row(['Esc'], 'Close panel, then close player')}
             </section>
           </div>
-          <div class="px-5 py-3 border-t text-[11px] text-textWeak">
+          <div class="px-5 py-3 border-t text-2xs text-textWeak">
             Shortcuts follow YouTube and media-player conventions.
           </div>
         </div>

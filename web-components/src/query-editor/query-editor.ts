@@ -914,11 +914,11 @@ export class QueryEditorComponent extends LitElement {
         endLineNumber: error.line,
         endColumn: error.endColumn,
       }]);
-      wrapper?.classList.add('!border-red-500/60');
+      wrapper?.classList.add('!border-strokeError-strong');
       (window as any).showQueryParseError?.(error.message);
     } else {
       monaco.editor.setModelMarkers(model, 'query-validator', []);
-      wrapper?.classList.remove('!border-red-500/60');
+      wrapper?.classList.remove('!border-strokeError-strong');
       (window as any).clearQueryParseError?.();
     }
   }
@@ -1756,7 +1756,7 @@ export class QueryEditorComponent extends LitElement {
 
   private getCompletionIcon(kind: number): TemplateResult {
     const badge = this.KIND_BADGES[kind] || { label: '?', cls: 'text-textWeak bg-fillWeak border-strokeWeak' };
-    return html`<span class="inline-flex items-center justify-center w-5 h-5 rounded text-[10px] font-semibold border leading-none ${badge.cls}">${badge.label}</span>`;
+    return html`<span class="inline-flex items-center justify-center w-5 h-5 rounded text-2xs font-semibold border leading-none ${badge.cls}">${badge.label}</span>`;
   }
 
   // Generate unique key for suggestion items (for repeat directive performance)
@@ -1782,12 +1782,12 @@ export class QueryEditorComponent extends LitElement {
   } {
     const uiData: Record<SuggestionKind, () => ReturnType<typeof this.getSuggestionUIData>> = {
       recentSearch: () => ({
-        icon: html`<span class="inline-flex items-center justify-center w-5 h-5 rounded text-[10px] font-semibold border leading-none text-textWeak bg-fillWeak border-strokeWeak">⏱</span>`,
+        icon: html`<span class="inline-flex items-center justify-center w-5 h-5 rounded text-2xs font-semibold border leading-none text-textWeak bg-fillWeak border-strokeWeak">⏱</span>`,
         primaryText: item.query,
         secondaryText: (item as RecentSearch).timestamp,
       }),
       savedView: () => ({
-        icon: html`<span class="inline-flex items-center justify-center w-5 h-5 rounded text-[10px] font-semibold border leading-none text-amber-400 bg-amber-400/15 border-amber-400/30">★</span>`,
+        icon: html`<span class="inline-flex items-center justify-center w-5 h-5 rounded text-2xs font-semibold border leading-none text-amber-400 bg-amber-400/15 border-amber-400/30">★</span>`,
         primaryText: (item as SavedView).name,
         secondaryText: html`
           <span class="truncate text-textWeak mr-2" title="${item.query}">${item.query}</span>
@@ -1799,7 +1799,7 @@ export class QueryEditorComponent extends LitElement {
         `,
       }),
       popularSearch: () => ({
-        icon: html`<span class="inline-flex items-center justify-center w-5 h-5 rounded text-[10px] font-semibold border leading-none text-sky-400 bg-sky-400/15 border-sky-400/30">↗</span>`,
+        icon: html`<span class="inline-flex items-center justify-center w-5 h-5 rounded text-2xs font-semibold border leading-none text-sky-400 bg-sky-400/15 border-sky-400/30">↗</span>`,
         primaryText: item.query,
         secondaryText: (item as PopularSearch).description,
       }),

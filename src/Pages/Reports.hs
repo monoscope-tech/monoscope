@@ -37,6 +37,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx)
 import Pages.Charts.Charts qualified as Charts
+import Pages.Components (EmptyStateCfg (..), emptyState_)
 import Pkg.Components.Widget (WidgetType (..))
 import Pkg.Components.Widget qualified as Widget
 import Pkg.EmailTemplates qualified as ET
@@ -367,11 +368,7 @@ reportsPage pid reports nextUrl _daily _weekly =
   div_ [class_ "flex flex-col md:flex-row h-full w-full border-t"] do
     when (V.null reports)
       $ div_ [class_ "flex h-full w-full justify-center items-center"]
-      $ div_ [class_ "flex flex-col items-center justify-center py-16 px-4"]
-      $ do
-        div_ [class_ "rounded-full flex items-center justify-center mb-3"]
-          $ faSprite_ "empty" "regular" "h-12 w-12"
-        h3_ [class_ "text-xl text-textStrong mb-2"] "No reports generated for this project yet."
+      $ emptyState_ def{icon = Just "empty"} "No reports generated yet" "Scheduled digests will appear here once your project has activity to summarize."
     unless (V.null reports) do
       div_ [class_ "w-full md:w-1/3 md:border-r border-b md:border-b-0 border-strokeWeak p-4 overflow-x-auto md:overflow-y-auto"] do
         div_ [class_ "mt-4 flex flex-row md:flex-col gap-4 w-full"] do
@@ -388,7 +385,7 @@ reportsPage pid reports nextUrl _daily _weekly =
                   div_ [class_ "flex items-center w-full justify-between gap-2"] do
                     div_ [class_ "flex items-center gap-2"] do
                       div_ [class_ "bg-fillBrand-weak text-xs font-medium px-2.5 py-1 rounded-full"] "Weekly report"
-                      span_ [class_ "bg-fillSuccess-strong text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full uppercase"] "Live"
+                      span_ [class_ "bg-fillSuccess-strong text-textInverse-strong text-2xs font-bold px-1.5 py-0.5 rounded-full uppercase"] "Live"
                     faSprite_ "chevron-right" "regular" "w-3 h-3"
                   h4_ [class_ "font-medium text-sm flex items-center gap-2"] do
                     faSprite_ "calendar" "regular" "w-4 h-4"

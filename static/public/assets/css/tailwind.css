@@ -50,6 +50,8 @@
 /* Inter font features are applied via :root font-feature-settings below */
 
 @theme {
+  --text-3xs: 0.5rem;
+  --text-3xs--line-height: 0.75rem;
   --text-2xs: 0.625rem;
   --text-2xs--line-height: 0.875rem;
 
@@ -1932,7 +1934,7 @@ code, pre, .code, .monospace {
     @apply cursor-pointer font-bold h-5 w-5 rotate-90 inline-block p-1 rounded-sm border border-strokeWeak mr-1;
   }
 
-  .collapsed .log-item-tree-chevron {
+  .log-item-with-children:has(> label > .tree-toggle:checked) > label > .log-item-tree-chevron {
     @apply rotate-0;
   }
 
@@ -2027,7 +2029,7 @@ code, pre, .code, .monospace {
     display: none;
   }
 
-  .collapsed .tree-children {
+  .log-item-with-children:has(> label > .tree-toggle:checked) .tree-children {
     display: none !important;
   }
 
@@ -2036,16 +2038,16 @@ code, pre, .code, .monospace {
   }
 
 
-  .collapsed .tree-children-count {
+  .log-item-with-children:has(> label > .tree-toggle:checked) .tree-children-count {
     display: inline !important;
   }
 
-  .collapsed .children {
+  .log-item-with-children:has(> label > .tree-toggle:checked) > .children {
     display: inline-block;
     padding-left: 0;
   }
 
-  .collapsed .closing-token {
+  .log-item-with-children:has(> label > .tree-toggle:checked) > .closing-token {
     padding-left: 0;
   }
 

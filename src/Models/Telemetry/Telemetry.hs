@@ -3,7 +3,6 @@
 module Models.Telemetry.Telemetry (
   LogRecord (..),
   logRecordByProjectAndId,
-  logRecordById,
   spanRecordByProjectAndId,
   getSpanRecordsByTraceId,
   getSpanRecordsByTraceIds,
@@ -557,13 +556,7 @@ getTraceDetails pid trId tme now = do
 
 
 logRecordByProjectAndId :: DB es => Projects.ProjectId -> UTCTime -> UUID.UUID -> Eff es (Maybe OtelLogsAndSpans)
-logRecordByProjectAndId pid = lookupOtelRecord (Just pid.toText)
-
-
--- | Lookup by id + timestamp only (no project_id filter). Used as fallback for demo project where
--- session data may span multiple projects.
-logRecordById :: DB es => UTCTime -> UUID.UUID -> Eff es (Maybe OtelLogsAndSpans)
-logRecordById = lookupOtelRecord Nothing
+logRecordByProjectAndId pid = lookupOtelRecord pid.toText
 
 
 -- | Full column list for SELECT against otel_logs_and_spans, in the field
@@ -601,15 +594,12 @@ selectOtelSpans pidTxt lo hi predSql =
 -- @timestamp = ts@ rather than a window — both PG and TF store microsecond precision, which
 -- round-trips losslessly through the UTCTime↔Hasql encoder. Exact equality also lets the
 -- planner hit the (timestamp, id) ordering instead of scanning a ±window range.
-lookupOtelRecord :: DB es => Maybe Text -> UTCTime -> UUID.UUID -> Eff es (Maybe OtelLogsAndSpans)
-lookupOtelRecord mPid createdAt rdId = do
-  let pidFilter = maybe mempty (\p -> [HI.sql| and project_id=#{p}|]) mPid
+lookupOtelRecord :: DB es => Text -> UTCTime -> UUID.UUID -> Eff es (Maybe OtelLogsAndSpans)
+lookupOtelRecord pidTxt createdAt rdId =
   Hasql.interpOne
     $ [HI.sql|SELECT |]
     <> otelSpanColsSql
-    <> [HI.sql| FROM otel_logs_and_spans where timestamp = #{createdAt}|]
-    <> pidFilter
-    <> [HI.sql| and id=#{rdId} LIMIT 1|]
+    <> [HI.sql| FROM otel_logs_and_spans where timestamp = #{createdAt} and project_id=#{pidTxt} and id=#{rdId} LIMIT 1|]
 
 
 -- | First/recent trace_id for a (project, method, url_path). Window kept tight (7d) since
@@ -720,7 +710,7 @@ getSpanRecordsByTraceIds pid traceIds tme = do
 
 
 spanRecordByProjectAndId :: DB es => Projects.ProjectId -> UTCTime -> UUID.UUID -> Eff es (Maybe OtelLogsAndSpans)
-spanRecordByProjectAndId pid = lookupOtelRecord (Just pid.toText)
+spanRecordByProjectAndId pid = lookupOtelRecord pid.toText
 
 
 spanRecordByName :: DB es => Projects.ProjectId -> Text -> Text -> Eff es (Maybe OtelLogsAndSpans)

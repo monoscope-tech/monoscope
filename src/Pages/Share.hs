@@ -17,7 +17,7 @@ import Models.Apis.ShareEvents qualified as ShareEvents
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Pages.Components (ModalCfg (..), emptyState_, modalWith_)
+import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), ModalCfg (..), emptyState_, modalWith_)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Replay qualified as Replay
 import Pages.Telemetry qualified as PTelemetry
@@ -228,8 +228,8 @@ sharePage v = do
             ]
             pass
       div_ [id_ "share-detail-inner", class_ "border border-strokeWeak rounded-lg bg-bgBase overflow-hidden"] detail
-    ShareExpired -> emptyState_ (Just "clock") "Link expired" "This share link was valid for 48 hours and has passed its expiry. Ask the sender for a fresh link." (Just "https://monoscope.tech") "Learn about Monoscope"
-    ShareMissing -> emptyState_ (Just "empty") "Event not found" "This share link doesn't exist or the underlying event is no longer available." (Just "https://monoscope.tech") "Learn about Monoscope"
+    ShareExpired -> emptyState_ def{icon = Just "clock", action = ESLink "https://monoscope.tech" "Learn about Monoscope"} "Link expired" "This share link was valid for 48 hours and has passed its expiry. Ask the sender for a fresh link."
+    ShareMissing -> emptyState_ def{icon = Just "empty", action = ESLink "https://monoscope.tech" "Learn about Monoscope"} "Event not found" "This share link doesn't exist or the underlying event is no longer available."
 
 
 -- | Slim sticky top bar: logo, "Shared event" label, expiry pill, About link.
@@ -242,10 +242,10 @@ shareTopBar hoursLeftM = do
           img_ [class_ "h-5 w-auto dark:hidden", src_ "/public/assets/svgs/logo_black.svg"]
           img_ [class_ "h-5 w-auto hidden dark:block", src_ "/public/assets/svgs/logo_white.svg"]
         span_ [class_ "hidden sm:inline-block h-4 w-px bg-strokeWeak shrink-0"] ""
-        span_ [class_ "text-[11px] uppercase tracking-wider text-textWeak font-medium whitespace-nowrap shrink-0"] "Shared event"
+        span_ [class_ "text-2xs uppercase tracking-wider text-textWeak font-medium whitespace-nowrap shrink-0"] "Shared event"
         whenJust hoursLeftM \h -> do
           let cls = bool "text-textWeak border-strokeWeak bg-fillWeaker" "text-textError border-strokeError-strong/40 bg-fillError-weak" (h <= 6) :: Text
-          span_ [class_ $ "text-[11px] px-2 py-0.5 rounded-full border whitespace-nowrap shrink-0 " <> cls]
+          span_ [class_ $ "text-2xs px-2 py-0.5 rounded-full border whitespace-nowrap shrink-0 " <> cls]
             $ toHtml @Text ("Expires in " <> show h <> "h")
       a_
         [href_ "https://monoscope.tech", target_ "_blank", class_ "text-xs font-medium text-textBrand hover:underline shrink-0 whitespace-nowrap"]

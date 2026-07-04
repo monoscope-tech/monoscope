@@ -1,5 +1,6 @@
-module Pages.Components (drawer_, emptyState_, resizer_, dateTime, localTime_, localTimeFmt_, paymentPlanPicker, navBar, modal_, modalCloseButton_, primaryButton_, headerRow_, headerRowPad_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_, sparkline_, periodToggle_, abbreviateUnit, compactTimeAgo) where
+module Pages.Components (drawer_, emptyState_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), resizer_, detailTab_, httpTab_, tabPanel_, jsonTab_, dateTime, localTime_, localTimeFmt_, paymentPlanPicker, navBar, modal_, modalCloseButton_, primaryButton_, headerRow_, headerRowPad_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_, sparkline_, periodToggle_, abbreviateUnit, compactTimeAgo) where
 
+import Data.Aeson qualified as AE
 import Data.Default (Default (..))
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
@@ -13,25 +14,53 @@ import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import PyF qualified
 import Relude
-import Utils (LoadingSize (..), LoadingType (..), deleteParam, faSprite_, loadingIndicator_, onpointerdown_)
+import Utils (LoadingSize (..), LoadingType (..), deleteParam, faSprite_, jsonValueToHtmlTree, loadingIndicator_, onpointerdown_)
 
 
--- | Empty state component with optional contextual icon
--- Usage: emptyState_ (Just "chart-line") "No data" "Description" (Just "/setup") "Get Started"
--- Pass Nothing for icon to use default, or Just "icon-name" for custom icon
-emptyState_ :: Maybe Text -> Text -> Text -> Maybe Text -> Text -> Html ()
-emptyState_ iconM title subTxt urlM btnText =
-  section_ [class_ "max-w-max mx-auto my-8 text-center p-5 sm:py-8 sm:px-12 flex flex-col gap-3 empty-state"] do
-    div_ [] $ faSprite_ (fromMaybe "empty" iconM) "regular" "h-12 w-12 stroke-strokeBrand-strong fill-fillBrand-strong"
+data EmptyStateSize = ESFull | ESCompact
+  deriving stock (Generic)
+  deriving anyclass (Default)
+
+
+-- | Empty-state action slot: a primary CTA link (url, label), arbitrary custom Html
+-- (e.g. a close-panel button), or nothing. Generic 'Default' picks the first constructor
+-- (ESNone), so the fields of ESLink/ESCustom need no Default instances of their own.
+data EmptyStateAction = ESNone | ESLink Text Text | ESCustom (Html ())
+  deriving stock (Generic)
+  deriving anyclass (Default)
+
+
+data EmptyStateCfg = EmptyStateCfg
+  { icon :: Maybe Text -- Nothing → default "empty" glyph
+  , size :: EmptyStateSize
+  , action :: EmptyStateAction
+  }
+  deriving stock (Generic)
+  deriving anyclass (Default)
+
+
+-- | Unified empty / absent-data state. @ESFull@ is the page-level state (large brand icon,
+-- heading, optional CTA); @ESCompact@ is the muted inline "nothing here" hint for small
+-- cards/panels. Empty @subTxt@ renders no paragraph.
+-- Usage: @emptyState_ def{icon = Just "chart-line", action = ESLink "/setup" "Get started"} "No data" "…"@
+emptyState_ :: EmptyStateCfg -> Text -> Text -> Html ()
+emptyState_ cfg title subTxt =
+  section_ [class_ $ sectionCls <> " mx-auto text-center flex flex-col gap-3 empty-state"] do
+    div_ [] $ faSprite_ (fromMaybe "empty" cfg.icon) "regular" iconCls
     div_ [class_ "flex flex-col gap-1.5"] do
-      h2_ [class_ "text-base text-textStrong font-semibold"] $ toHtml title
-      p_ [class_ "text-sm text-textWeak"] $ toHtml subTxt
-      whenJust urlM \u ->
-        unless (T.null btnText)
-          $ let attrs =
-                  [href_ u, class_ "btn text-sm w-max mx-auto btn-primary"]
-                    ++ if "https://" `T.isPrefixOf` u then [target_ "_blank", rel_ "noopener noreferrer"] else []
-             in a_ attrs $ toHtml btnText
+      h2_ [class_ titleCls] $ toHtml title
+      unless (T.null subTxt) $ p_ [class_ "text-sm text-textWeak max-w-md mx-auto"] $ toHtml subTxt
+      case cfg.action of
+        ESNone -> pass
+        ESLink u txt ->
+          unless (T.null txt)
+            $ a_ ([href_ u, class_ "btn text-sm w-max mx-auto btn-primary"] ++ if "https://" `T.isPrefixOf` u then [target_ "_blank", rel_ "noopener noreferrer"] else [])
+            $ toHtml txt
+        ESCustom h -> h
+  where
+    (sectionCls, iconCls, titleCls) = case cfg.size of
+      ESFull -> ("max-w-max my-8 p-5 sm:py-8 sm:px-12", "h-12 w-12 stroke-strokeBrand-strong fill-fillBrand-strong", "text-base text-textStrong font-semibold")
+      ESCompact -> ("max-w-sm my-2 p-4", "h-6 w-6 text-iconNeutral", "text-sm text-textWeak")
 
 
 getTargetPage :: Text -> Text
@@ -424,6 +453,42 @@ resizer_ targetId urlParam increasingDirection =
       , class_ "absolute left-1/2 top-1/2 z-10 -translate-x-1/2 leading-none py-1 -translate-y-1/2 bg-bgBase rounded-sm border border-strokeBrand-weak group-hover:border-strokeBrand-strong text-iconNeutral group-hover:text-iconBrand"
       ]
     $ faSprite_ "grip-dots-vertical" "regular" "w-4 h-5"
+
+
+-- CSS-only tabs (no JS): a hidden radio per tab styles its own label active via
+-- has-[:checked], and its marker class drives the matching panel's visibility via
+-- group-has-[.marker:checked] on the scoped container. Survives HTMX morphs; wrap the
+-- nav in @[__|on click halt the event's bubbling|]@ to keep the native label→radio toggle
+-- while stopping the click from reaching ancestor handlers. @grp@ (the radio name) must be
+-- per-instance so two tab bars on one page can't cross-uncheck each other.
+detailTab_ :: Text -> Text -> Text -> Bool -> Html () -> Html ()
+detailTab_ grp marker extra active inner =
+  label_ [class_ $ "cursor-pointer border-b-2 border-b-strokeWeak px-4 py-1.5 text-sm has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-strokeBrand-strong has-[:focus-visible]:rounded-sm has-[:checked]:font-bold has-[:checked]:border-strokeBrand-strong has-[:checked]:text-textBrand " <> extra] do
+    input_ $ [type_ "radio", name_ grp, class_ $ "sr-only " <> marker] <> [checked_ | active]
+    inner
+
+
+-- Nested "box" tabs (e.g. inside an HTTP request panel); active styling mirrors @t-tab-box-active@.
+httpTab_ :: Text -> Text -> Bool -> Html () -> Html ()
+httpTab_ grp marker active inner =
+  label_ [class_ "cursor-pointer px-3 py-1 rounded-lg text-textWeak has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-strokeBrand-strong has-[:checked]:shadow-[0px_4px_8px_-2px_rgba(0,0,0,0.04)] has-[:checked]:text-textStrong has-[:checked]:border has-[:checked]:border-strokeStrong has-[:checked]:bg-bgOverlay"] do
+    input_ $ [type_ "radio", name_ grp, class_ $ "sr-only " <> marker] <> [checked_ | active]
+    inner
+
+
+-- Content panel revealed when its tab's radio is checked. @visCls@ MUST be the full,
+-- literal @group-has-[.MARKER:checked]/GRP:block@ class (plus any extra panel classes,
+-- space-separated) written out at the call site — Tailwind's scanner only compiles complete
+-- literal class strings, so building this by runtime concatenation silently produces CSS that
+-- never exists. MARKER must match the tab's radio class and GRP the @group/GRP@ container.
+tabPanel_ :: Text -> Text -> Html () -> Html ()
+tabPanel_ visCls elemId = div_ [class_ $ "hidden " <> visCls, id_ elemId]
+
+
+-- A tab content panel holding a JSON tree; the common shape behind most tab bodies. @visCls@
+-- is the literal group-has class — see 'tabPanel_'.
+jsonTab_ :: Text -> Text -> Text -> AE.Value -> Maybe Text -> Html ()
+jsonTab_ visCls elemId name val filt = tabPanel_ visCls elemId $ jsonValueToHtmlTree name val filt
 
 
 chartSkeleton_ :: Html ()

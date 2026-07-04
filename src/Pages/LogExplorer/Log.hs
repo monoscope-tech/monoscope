@@ -1405,9 +1405,8 @@ apiLogsPage page = do
 
       div_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden max-md:hidden mr-3.5"] $ resizer_ "facets-container" "facets_width" True
 
-      let dW = fromMaybe "100%" page.detailsWidth
-          showTrace = isJust page.showTrace
-      div_ [class_ "grow will-change-[width] contain-[layout_style] relative flex flex-col shrink-1 min-w-0 w-full h-full ", style_ $ "xwidth: " <> dW, id_ "logs_list_container"] do
+      let showTrace = isJust page.showTrace
+      div_ [class_ "grow will-change-[width] contain-[layout_style] relative flex flex-col shrink-1 min-w-0 w-full h-full ", id_ "logs_list_container"] do
         -- Filters and row count header
         div_ [class_ "flex gap-2 py-1 text-sm z-10 w-max bg-bgBase -mb-6 group-has-[#viz-patterns:checked]/pg:mb-0"] do
           label_ [class_ "gap-1 flex items-center cursor-pointer text-textWeak"] do
