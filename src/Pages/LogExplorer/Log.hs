@@ -112,13 +112,11 @@ data TraceTreeEntry = TraceTreeEntry
   deriving (ToSchema) via SnakeSchema TraceTreeEntry
 
 
--- Internal type for span info extraction
 data SpanInfo = SpanInfo {spanId :: Text, parentId :: Maybe Text, traceIdVal :: Text, startNs :: Int64, dur :: Int64, timestamp :: Maybe Text, isQueryResult :: Bool, rowIdx :: Int}
 
 
 -- | Build trace tree from flat rows. Query-result spans (index < queryResultCount)
--- become roots. Non-query-result spans (fetched via selectChildSpansAndLogs) form
--- the tree beneath them.
+-- become roots; other spans (fetched via selectChildSpansAndLogs) nest beneath them.
 --
 -- >>> import Relude
 -- >>> import Data.Vector qualified as V
@@ -245,9 +243,8 @@ buildTraceTree colIdxMap queryResultCount rows = (adjustedRows, sortWith (Down .
           tid = maybe "" (.traceIdVal) (viaNonEmpty head spans)
        in map (buildEntry tid sortedChildrenMap spanMap traceStartTime) roots
 
-    -- Walk subtree applying clock-skew correction: if a child starts before its
-    -- parent's adjusted start, shift it forward and clamp its duration to fit
-    -- within the parent's window. Mirrors Pages.Telemetry.buildSpanTree.
+    -- Clock-skew correction: shift a child forward if it starts before its parent's
+    -- adjusted start, clamping duration to the parent's window. Mirrors Pages.Telemetry.buildSpanTree.
     buildEntry :: Text -> Map.Map Text [Text] -> Map.Map Text SpanInfo -> Maybe Text -> SpanInfo -> (TraceTreeEntry, [(Int, Int64, Int64)])
     buildEntry tid fullChildrenMap spanMap tst root' =
       let rootEnd = root'.startNs + root'.dur
@@ -268,7 +265,6 @@ buildTraceTree colIdxMap queryResultCount rows = (adjustedRows, sortWith (Down .
                   kids = fromMaybe [] (Map.lookup x fullChildrenMap)
                   treeAcc' = if null kids then treeAcc else Map.insert x kids treeAcc
                   st' = (min minS adjStart, max maxE adjEnd, (si.rowIdx, adjStart, adjDur) : adjs, treeAcc')
-                  -- recurse depth-first into this subtree, then continue with siblings
                   st'' = go adjStart adjEnd kids st'
                in go pStart pEnd xs st''
           (minStart, maxEnd, adjustments', subtreeChildren) =
@@ -309,10 +305,8 @@ synthesizeOrphanHeaders colIdxMap rows = V.fromList [synthRow t p ks | ((t, p), 
           startNs = foldr (min . fst) 0 spans'
           endNs = foldr (max . uncurry (+)) startNs spans'
           label = "Upstream span missing \x2014 " <> T.take 8 pid
-          -- Children count already shows on the tree chevron — no duplicate
-          -- here. Single 'text-textWeak' style so the renderer's
-          -- WEAK_TEXT_STYLES lookup matches; the italic + dashed border live
-          -- on the row in log-list.ts, keyed off the synthetic-* id.
+          -- 'text-textWeak' style matches renderer's WEAK_TEXT_STYLES lookup; italic +
+          -- dashed border are applied in log-list.ts, keyed off the synthetic-* id.
           fields :: [(Text, AE.Value)]
           fields =
             [ ("id", AE.String ("synthetic-" <> pid))
@@ -356,13 +350,11 @@ facetGroupLabel = \case
   FGErrors -> "Errors & Exceptions"
 
 
--- | A facet entry the sidebar can render.
---
--- @path@ is the canonical KQL field name — the lookup key in 'FacetData' AND
--- the field a user types in KQL. Invariant ('prop_facetsAreFast'): @path@ must
--- be a flat-column reference (in 'Pkg.Parser.Expr.flattenedOtelAttributes' or
--- 'Pkg.Parser.Expr.topLevelOtelColumns') so click-to-filter compiles to a
--- direct column scan, not a jsonb_path fallback.
+-- | A facet entry the sidebar can render. @path@ is the canonical KQL field
+-- name (the 'FacetData' lookup key and what a user types). Invariant
+-- ('prop_facetsAreFast'): @path@ must be a flat-column reference (in
+-- 'Pkg.Parser.Expr.flattenedOtelAttributes' or 'topLevelOtelColumns') so
+-- click-to-filter compiles to a direct column scan, not a jsonb_path fallback.
 data Facet = Facet
   { path :: Text
   , label :: Text
@@ -526,10 +518,9 @@ keepNonEmpty (Just "") = Nothing
 keepNonEmpty (Just a) = Just a
 
 
--- | Core result builder shared by apiLogH and queryEvents.
--- When @withChildren@ is False, only rows matching the predicate are returned —
--- no descendants of matches, no synthesised orphan headers (both are
--- trace-tree concerns the UI wants but the API/CLI usually doesn't).
+-- | Core result builder shared by apiLogH and queryEvents. When @withChildren@
+-- is False, only matched rows are returned — no descendants, no synthesised
+-- orphan headers (trace-tree concerns the UI wants but the API/CLI usually doesn't).
 buildLogResult :: (DB es, Time.Time :> es) => Bool -> Projects.ProjectId -> UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> (V.Vector (V.Vector AE.Value), [Text], Int) -> Eff es LogResult
 buildLogResult withChildren pid now sinceM fromM toM addCols removeCols (requestVecs, colNames, resultCount') = do
   let colIdxMap = listToIndexHashMap colNames
@@ -565,10 +556,9 @@ buildLogResult withChildren pid now sinceM fromM toM addCols removeCols (request
       , serviceColors = colors
       , queryResultCount
       , count = resultCount'
-      , -- Compare ONLY the real fetched rows (requestVecs) against selectLogTable's
-        -- overflow sentinel (resultCount' = limit+1 when more pages exist). Counting
-        -- synthesized orphan-header rows here inflates the page to limit+synth ≥ sentinel,
-        -- flipping hasMore false on any page with an orphan group and stalling load-more.
+      , -- Compare only real fetched rows against selectLogTable's overflow sentinel
+        -- (resultCount' = limit+1); counting synthesized orphan headers would inflate
+        -- the page past the sentinel and stall load-more.
         hasMore = V.length requestVecs < resultCount'
       , traces
       }
@@ -576,8 +566,7 @@ buildLogResult withChildren pid now sinceM fromM toM addCols removeCols (request
 
 -- | Standalone query function for the v1 API events endpoint. Returns a
 -- JSON-shaped 400 (@{"error": {code, message, field?, suggestion?, details?}}@)
--- for parse/query errors so the CLI can render a one-liner instead of raw
--- Hasql/SQL; propagates DB errors instead of silently returning empty results.
+-- for parse/query errors instead of raw Hasql/SQL.
 queryEvents :: (DB es, ELog.Log :> es, Error Servant.ServerError :> es, Time.Time :> es, Tracing :> es) => Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Bool -> Eff es LogResult
 queryEvents pid queryM sinceM fromM toM sourceM limitM withChildrenM = do
   now <- Time.currentTime
@@ -586,11 +575,9 @@ queryEvents pid queryM sinceM fromM toM sourceM limitM withChildrenM = do
     Left err -> throwError $ kqlError400 "invalid_query" ("Invalid query: " <> err) Nothing Nothing Nothing
     Right ast -> pure ast
   let (fromD, toD, _) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
-      -- Apply the API `limit` (default 100, capped at defaultQueryLimit) as the
-      -- query row-limit when the KQL has no explicit `| limit`, so selectLogTable
-      -- returns exactly the page and hasMore/cursor stay consistent. A post-hoc
-      -- `V.take` can't: the trace-tree rows include synth headers + descendants,
-      -- which miscount hasMore and drop matched roots past the cut.
+      -- Apply the API `limit` as the query row-limit (when KQL has none) so selectLogTable
+      -- returns exactly the page; a post-hoc `V.take` would miscount hasMore since
+      -- trace-tree rows include synth headers + descendants.
       hasKqlLimit = any (\case TakeCommand{} -> True; _ -> False) queryAST
       queryAST' = if hasKqlLimit then queryAST else queryAST <> [TakeCommand (min defaultQueryLimit (fromMaybe 100 limitM))]
   result <- LogQueries.selectLogTable pid queryAST' (toQText queryAST') Nothing (fromD, toD) [] (parseMaybe pSource =<< sourceM) Nothing
@@ -601,15 +588,12 @@ queryEvents pid queryM sinceM fromM toM sourceM limitM withChildrenM = do
 
 
 -- | Translate the raw exception string from 'LogQueries.selectLogTable' into a
--- structured 400. A column-not-exist (SQLSTATE 42703) becomes an @unknown_field@
--- error with the missing column extracted so the CLI can suggest a fix;
--- everything else is a generic @query_failed@ with the raw text under @details@.
+-- structured 400: a column-not-exist error becomes @unknown_field@ with a fix
+-- suggestion; everything else is a generic @query_failed@.
 translateQueryError :: Text -> Servant.ServerError
 translateQueryError raw =
   let
-    -- The Hasql @show@ output usually contains the bare PG error somewhere;
-    -- pluck the first reasonable summary line so the user doesn't see a
-    -- paragraph of Haskell record syntax.
+    -- Pluck the first line so the user doesn't see raw Haskell record syntax.
     firstLine = T.strip $ T.takeWhile (/= '\n') raw
     summary
       | T.null firstLine = "Query execution failed"
@@ -653,13 +637,9 @@ kqlError400 code msg fieldM suggestionM detailsM =
           ]
 
 
--- | Pull a missing column name from the underlying SQL error. Handles both:
---
--- - Postgres: @column "X" does not exist@ (SQLSTATE 42703)
--- - TimeFusion: @Schema error: No field named X@
---
--- Returns 'Nothing' when neither shape matches so we don't mislabel
--- unrelated errors (timeouts, network, etc.).
+-- | Pull a missing column name from the underlying SQL error. Handles both
+-- Postgres (@column "X" does not exist@) and TimeFusion (@No field named X@)
+-- shapes; 'Nothing' if neither matches, so unrelated errors aren't mislabeled.
 extractMissingColumn :: Text -> Maybe Text
 extractMissingColumn t = tfMatch <|> pgMatch
   where
@@ -668,8 +648,7 @@ extractMissingColumn t = tfMatch <|> pgMatch
        in if T.null after
             then Nothing
             else
-              -- Use the original-case text from the same offset so the
-              -- returned column name keeps its casing.
+              -- Re-slice from the original-case text so the column name keeps its casing.
               let idx = T.length t - T.length after
                   rest = T.drop (idx + T.length "no field named ") t
                   col = T.strip $ T.takeWhile (\c -> c /= '.' && c /= ' ' && c /= '\n' && c /= '"' && c /= '`') rest
@@ -688,10 +667,8 @@ extractMissingColumn t = tfMatch <|> pgMatch
 
 
 -- | Log Explorer page shell. Renders chrome only (query box, facets, widgets,
--- session header). Log rows are fetched separately by the log-list web
--- component from 'logExplorerDataH' (and the sibling patterns/sessions
--- endpoints), so this handler no longer touches the row-fetch, query-library
--- mutation, or alert-form paths — each of those is now its own endpoint.
+-- session header). Log rows are fetched separately by the log-list web component
+-- from 'logExplorerDataH' and the sibling patterns/sessions/query-library/alert-form endpoints.
 apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
 apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM showTraceM vizTypeM alertM pTargetM = do
   let source = fromMaybe "spans" sourceM
@@ -886,9 +863,7 @@ data SaveQueryForm = SaveQueryForm {query :: Maybe Text, queryLibId :: Maybe Tex
   deriving anyclass (FromForm)
 
 
--- | Save (create or rename) a query-library item, returning the refreshed
--- popover fragment. Split out of the log-fetch GET so a mutation isn't
--- smuggled through a read path.
+-- | Save (create or rename) a query-library item, returning the refreshed popover fragment.
 saveQueryH :: Projects.ProjectId -> SaveQueryForm -> ATAuthCtx (RespHeaders QueryLibraryView)
 saveQueryH pid form = do
   (sess, _) <- Projects.sessionAndProject pid
@@ -987,9 +962,8 @@ fmtPct1 :: Double -> Text
 fmtPct1 x = toText (showFFloat (Just 1) x "") <> "%"
 
 
--- | Rendered when the sessions summary query fails. Surfaces the failure
--- inline rather than silently falling back to the generic log/span widgets
--- (which would reintroduce the unit-of-analysis mismatch).
+-- | Rendered when the sessions summary query fails; surfaces the failure inline
+-- rather than silently falling back to the generic log/span widgets.
 sessionsHeaderError_ :: Text -> Html ()
 sessionsHeaderError_ err =
   div_ [class_ "mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden surface-raised rounded-2xl px-3 py-2 flex items-start gap-2 text-sm"] do
@@ -1017,53 +991,46 @@ sessionsHeader_ summ = do
         span_ [class_ "text-xs text-textWeak truncate"] $ toHtml label
         strong_ [class_ "text-textStrong text-xl font-bold tabular-nums leading-tight truncate"] $ toHtml value
         whenJust subM (span_ [class_ "text-xs text-textWeak tabular-nums truncate"] . toHtml)
+      legend :: Text -> Html () -> Html ()
+      legend cls label = span_ [class_ "flex items-center gap-1"] do
+        span_ [class_ $ "inline-block w-2 h-2 rounded-sm " <> cls] ""
+        label
+      kpis :: [(Text, Text, Maybe Text)]
+      kpis =
+        [ ("Sessions" :: Text, prettyPrintCount total, Just $ prettyPrintCount clean <> " clean")
+        , ("Errored", fmtPct1 errRate, Just $ prettyPrintCount errored <> " sessions")
+        , ("Median duration", medDur, Just $ "p95 " <> p95Dur)
+        , ("Median events", prettyPrintCount $ fromIntegral summ.medianEvents, Just $ prettyPrintCount totalEvt <> " total")
+        , ("Users", prettyPrintCount $ fromIntegral summ.uniqueUsers, Nothing)
+        , ("Services", prettyPrintCount $ fromIntegral summ.uniqueServices, Nothing)
+        ]
   div_ [class_ "mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full flex flex-col gap-2"] do
-    div_ [class_ "grid grid-cols-6 max-md:grid-cols-3 gap-2"] do
-      kpi "Sessions" (prettyPrintCount total) (Just $ prettyPrintCount clean <> " clean")
-      kpi "Errored" (fmtPct1 errRate) (Just $ prettyPrintCount errored <> " sessions")
-      kpi "Median duration" medDur (Just $ "p95 " <> p95Dur)
-      kpi "Median events" (prettyPrintCount $ fromIntegral summ.medianEvents) (Just $ prettyPrintCount totalEvt <> " total")
-      kpi "Users" (prettyPrintCount $ fromIntegral summ.uniqueUsers) Nothing
-      kpi "Services" (prettyPrintCount $ fromIntegral summ.uniqueServices) Nothing
+    div_ [class_ "grid grid-cols-6 max-md:grid-cols-3 gap-2"] $ forM_ kpis \(label, value, subM) -> kpi label value subM
     div_ [class_ "surface-raised rounded-2xl px-3 py-2"] do
       div_ [class_ "flex items-center justify-between mb-1"] do
         span_ [class_ "text-xs text-textWeak"] "Sessions over time"
         div_ [class_ "flex gap-3 text-xs text-textWeak"] do
-          span_ [class_ "flex items-center gap-1"] do
-            span_ [class_ "inline-block w-2 h-2 rounded-sm bg-fillBrand-strong/70"] ""
-            "Clean"
-          span_ [class_ "flex items-center gap-1"] do
-            span_ [class_ "inline-block w-2 h-2 rounded-sm bg-fillError-strong"] ""
-            "Errored"
+          legend "bg-fillBrand-strong/70" "Clean"
+          legend "bg-fillError-strong" "Errored"
       if total == 0 || null bars
         then div_ [class_ "h-12 flex items-center justify-center text-xs text-textWeak"] "No sessions in range"
         else div_ [class_ "flex items-end gap-[2px] h-12"] do
+          let bar cls n pct = when (n > 0) $ div_ [class_ cls, style_ $ "height:" <> T.show (max 4 pct) <> "%"] ""
           forM_ bars \(i, c, e) -> do
             let cPct = norm c
                 ePct = norm e
                 tip = prettyPrintCount (c + e) <> " sessions · " <> prettyPrintCount e <> " errored"
-                js =
-                  "window.__sessionsBucketFilter("
-                    <> T.show (bucketFrom i)
-                    <> ","
-                    <> T.show (bucketFrom i + summ.bucketWidthSec)
-                    <> ")"
             button_
               [ class_ "flex-1 h-full flex flex-col-reverse gap-[1px] min-w-[2px] cursor-pointer group/bar"
               , type_ "button"
               , data_ "tippy-content" tip
-              , onclick_ js
+              , onclick_ $ "window.__sessionsBucketFilter(" <> T.show (bucketFrom i) <> "," <> T.show (bucketFrom i + summ.bucketWidthSec) <> ")"
               ]
               do
-                -- Match the legend swatch opacity (/70) so clean bars are
-                -- visibly readable on the dark surface — /40 was nearly
-                -- invisible, making clean traffic look absent.
-                when (c > 0)
-                  $ div_ [class_ "w-full rounded-sm bg-fillBrand-strong/70 group-hover/bar:bg-fillBrand-strong transition-colors", style_ $ "height:" <> T.show (max 4 cPct) <> "%"] ""
-                when (e > 0)
-                  $ div_ [class_ "w-full rounded-sm bg-fillError-strong", style_ $ "height:" <> T.show (max 4 ePct) <> "%"] ""
-      -- Reassigned on every render so bug fixes aren't masked by a stale
-      -- definition left behind from a prior HTMX swap. Dispatches the same
+                -- /70 opacity matches the legend swatch; /40 was nearly invisible on the dark surface.
+                bar "w-full rounded-sm bg-fillBrand-strong/70 group-hover/bar:bg-fillBrand-strong transition-colors" c cPct
+                bar "w-full rounded-sm bg-fillError-strong" e ePct
+      -- Reassigned every render (survives stale HTMX swaps); dispatches the same
       -- update-query event log-list uses for chart-zoom so the table refetches.
       script_
         [text|
@@ -1119,95 +1086,71 @@ data PatternsView = PatternsView Int (V.Vector LogQueries.PatternRow)
 
 
 instance AE.ToJSON PatternsView where
-  toJSON (PatternsView totalPatterns patterns) =
-    let patternToSummary pat
-          | "\x1E" `T.isInfixOf` pat = AE.toJSON (T.splitOn "\x1E" pat)
-          | otherwise = AE.toJSON (splitSummaryElements pat)
-        -- Group words into summary elements: each word containing ⇒ starts a new
-        -- element; subsequent plain words are part of the preceding element's value.
-        splitSummaryElements :: Text -> [Text]
-        splitSummaryElements = map (unwords . reverse) . reverse . foldl' go [] . words
-          where
-            go [] w = [[w]]
-            go acc w | "⇒" `T.isInfixOf` w = [w] : acc
-            go (cur : rest) w = (w : cur) : rest
-        cols = ["id", "pattern_count", "volume", "level", "service", "summary"] :: [Text]
-        allCols = cols ++ ["merged_count", "is_error"] :: [Text]
-        rows = V.map (\p -> AE.Array $ V.fromList [AE.Null, AE.toJSON p.count, AE.toJSON p.volume, AE.toJSON p.level, AE.toJSON p.service, patternToSummary p.logPattern, AE.toJSON p.mergedCount, AE.toJSON p.isError]) patterns
-        total = V.foldl' (\acc p -> acc + p.count) 0 patterns
-     in aggregateEnvelope rows cols allCols total ["totalPatterns" AE..= totalPatterns]
+  toJSON (PatternsView totalPatterns patterns) = aggregateEnvelope rows cols allCols total ["totalPatterns" AE..= totalPatterns]
+    where
+      cols = ["id", "pattern_count", "volume", "level", "service", "summary"] :: [Text]
+      allCols = cols ++ ["merged_count", "is_error"] :: [Text]
+      patternToSummary pat
+        | "\x1E" `T.isInfixOf` pat = AE.toJSON (T.splitOn "\x1E" pat)
+        | otherwise = AE.toJSON (splitSummaryElements pat)
+      -- Group words into summary elements: each word containing ⇒ starts a new
+      -- element; subsequent plain words are part of the preceding element's value.
+      splitSummaryElements :: Text -> [Text]
+      splitSummaryElements = map unwords . L.groupBy (\_ w -> not ("⇒" `T.isInfixOf` w)) . words
+      rowOf p = AE.Array $ V.fromList [AE.Null, AE.toJSON p.count, AE.toJSON p.volume, AE.toJSON p.level, AE.toJSON p.service, patternToSummary p.logPattern, AE.toJSON p.mergedCount, AE.toJSON p.isError]
+      rows = V.map rowOf patterns
+      total = V.foldl' (\acc p -> acc + p.count) 0 patterns
 
 
--- | JSON payload for the sessions visualization endpoint.
---
--- Sessions use the exact same column layout as logs so the same rendering code
--- is reused. Session-specific info is packed into the summary column as badge
--- elements. Column indices must match the logs colIdxMap exactly.
+-- | JSON payload for the sessions visualization endpoint. Reuses the logs
+-- column layout so the same rendering code applies; session-specific info is
+-- packed into the summary column as badge elements.
 data SessionsView = SessionsView Int (V.Vector LogQueries.SessionRow)
 
 
 instance AE.ToJSON SessionsView where
-  toJSON (SessionsView totalSessions sessions) =
-    let
-      -- Display columns — identical to logs
+  toJSON (SessionsView totalSessions sessions) = aggregateEnvelope rows cols allCols total ["totalSessions" AE..= totalSessions]
+    where
       cols = ["id", "timestamp", "service", "summary", "latency_breakdown"] :: [Text]
-      -- Full colIdxMap — same indices as logs so groupSpans/tree logic works
       allCols = ["id", "timestamp", "trace_id", "span_name", "duration", "service", "parent_id", "start_time_ns", "errors", "summary", "latency_breakdown", "kind", "event_count"] :: [Text]
-      fmtDuration ns
-        | ns >= 60_000_000_000 = show (ns `div` 60_000_000_000) <> "m"
-        | ns >= 1_000_000_000 = show (ns `div` 1_000_000_000) <> "s"
-        | ns >= 1_000_000 = show (ns `div` 1_000_000) <> "ms"
-        | otherwise = show ns <> "ns"
+      -- `key;style⇒value` badge contract (see renderSessionSummary/parseSummaryElement in log-list.ts).
+      tag key style val = key <> ";" <> style <> "\x21d2" <> val
+      field key = tag key ""
+      -- Stack-trace errors: keep only the first line, capped so one huge exception can't blow out the row.
+      clipError = (\t -> if T.length t > 120 then T.take 119 t <> "\x2026" else t) . fromMaybe "" . viaNonEmpty head . lines . T.strip
+      -- Positions match allCols; unused slots (span_name/parent_id/kind/latency_breakdown/id) are inert placeholders.
       rowOf s =
-        let user = LogQueries.sessionUserDisplay s.userEmail s.userName s.userId
-            svcList = V.toList s.services
-            svc = if null svcList then "" else T.intercalate " " svcList
-            -- Error messages can be stack traces. Take just the first line
-            -- and cap length so one huge exception doesn't blow out the row.
-            clipError t =
-              let firstLine = fromMaybe t . viaNonEmpty head . lines . T.strip $ t
-               in if T.length firstLine > 120 then T.take 119 firstLine <> "\x2026" else firstLine
-            -- `session;right-neutral` puts the session id in the right-aligned
-            -- badge group, which is the branch that renders the ▶ play button
-            -- (see createSessionButton in log-list.ts). Without the right-
-            -- prefix the session id just renders as inert text.
-            -- Contract: summary parts are `field;style⇒value`. Empty style
-            -- still needs the semicolon so parseSummaryElement classifies
-            -- them as `formatted` — without it, renderSessionSummary drops
-            -- the whole row's fields as plain content.
-            summaryParts =
-              -- Full session id: the client feeds this into /replay_session/{id},
-              -- which Servant captures as a UUID. Truncating here would round-trip
-              -- to a 400 from Servant's route parser before the handler runs.
-              [ "session;right-neutral\x21d2" <> s.sessionId
-              , "user;\x21d2" <> user
+        AE.Array
+          . V.fromList
+          $ [ AE.Null
+            , AE.toJSON s.firstSeen
+            , AE.toJSON s.sessionId -- trace_id, used as expand key
+            , AE.String ""
+            , AE.toJSON s.durationNs
+            , AE.toJSON (unwords $ V.toList s.services)
+            , AE.String ""
+            , AE.Number 0
+            , AE.toJSON s.errorCount
+            , AE.toJSON summaryParts
+            , AE.Null
+            , AE.String ""
+            , AE.toJSON s.traceCount -- event_count, drives the [+N] children badge
+            ]
+        where
+          -- Full session id (not truncated): the client feeds it into /replay_session/{id}, a Servant UUID capture.
+          summaryParts =
+            catMaybes
+              [ Just $ tag "session" "right-neutral" s.sessionId
+              , Just $ field "user" (LogQueries.sessionUserDisplay s.userEmail s.userName s.userId)
+              , field "url" <$> mfilter (not . T.null) s.landingUrl
+              , field "device" <$> mfilter (not . T.null) s.userAgent
+              , field "events" (show s.eventCount) <$ guard (s.eventCount > 0)
+              , field "errors" (show s.errorCount) <$ guard (s.errorCount > 0)
+              , field "error" . clipError <$> mfilter (not . T.null) s.firstError
+              , Just $ field "duration" (toText $ getDurationNSMS (fromIntegral s.durationNs))
               ]
-                ++ ["url;\x21d2" <> u | Just u <- [s.landingUrl], not (T.null u)]
-                ++ ["device;\x21d2" <> ua | Just ua <- [s.userAgent], not (T.null ua)]
-                ++ ["events;\x21d2" <> show s.eventCount | s.eventCount > 0]
-                ++ ["errors;\x21d2" <> show s.errorCount | s.errorCount > 0]
-                ++ ["error;\x21d2" <> clipError e | Just e <- [s.firstError], not (T.null e)]
-                ++ ["duration;\x21d2" <> toText (fmtDuration s.durationNs)]
-         in AE.Array
-              $ V.fromList
-                [ AE.Null -- id (0)
-                , AE.toJSON s.firstSeen -- timestamp (1)
-                , AE.toJSON s.sessionId -- trace_id (2) — used as expand key
-                , AE.String "" -- span_name (3)
-                , AE.toJSON s.durationNs -- duration (4)
-                , AE.toJSON svc -- service (5)
-                , AE.String "" -- parent_id (6)
-                , AE.Number 0 -- start_time_ns (7)
-                , AE.toJSON s.errorCount -- errors (8)
-                , AE.toJSON summaryParts -- summary (9)
-                , AE.Null -- latency_breakdown (10)
-                , AE.String "" -- kind (11)
-                , AE.toJSON s.traceCount -- event_count (12) — used for [+N] children count
-                ]
       rows = V.map rowOf sessions
       total = V.foldl' (\acc s -> acc + s.eventCount) 0 sessions
-     in
-      aggregateEnvelope rows cols allCols total ["totalSessions" AE..= totalSessions]
 
 
 -- | Shared JSON envelope for aggregate visualizations (patterns, sessions).
@@ -1226,9 +1169,8 @@ aggregateEnvelope rows cols allCols total extra =
     ++ extra
 
 
--- | Render context for the Log Explorer page shell. Rows/aggregates are fetched
--- separately by the log-list web component (see 'logExplorerDataH' and the
--- patterns/sessions endpoints), so this carries only what the chrome renders.
+-- | Render context for the Log Explorer page shell — chrome only; rows/aggregates
+-- are fetched separately (see 'logExplorerDataH' and the patterns/sessions endpoints).
 data ApiLogsPageData = ApiLogsPageData
   { pid :: Projects.ProjectId
   , resultCount :: Int
@@ -1284,9 +1226,8 @@ virtualTable pid initialFetchUrl modeM = do
 
 
 -- | Inner div that lazily HTMX-loads @url@ into @#target@ once @trigger@ fires.
--- Shared by the trace, details, and alert-form side panels — each is a hidden
--- container whose body is fetched on first reveal; @extra@ carries the per-panel
--- bits (loading indicator, or the hyperscript that fires the trigger).
+-- Shared by the trace, details, and alert-form side panels; @extra@ carries
+-- per-panel bits (loading indicator, or hyperscript firing the trigger).
 lazyLoad_ :: Text -> Text -> Text -> [Attribute] -> Html ()
 lazyLoad_ target url trigger extra =
   div_ ([hxGet_ url, hxTarget_ ("#" <> target), hxSwap_ "innerHTML", hxTrigger_ trigger, term "hx-sync" "this:replace"] <> extra) pass
@@ -1305,8 +1246,6 @@ apiLogsPage page = do
   where
     countText = prettyPrintCount page.queryResultCount
     suffixText = if page.queryResultCount >= page.resultCount then " rows" else "+ rows"
-    showTrace = isJust page.showTrace
-    pidT = page.pid.toText
 
     -- data-fullscreen=details|trace drives layout via tailwind.css; single-valued so
     -- "at most one fullscreen mode" holds by construction.
@@ -1381,12 +1320,9 @@ apiLogsPage page = do
           , facetData = (.facetJson) <$> page.facets
           }
 
-      -- Sessions viz renders a session-level header. A Left means the summary
-      -- query failed — surface it visibly instead of silently reverting to the
-      -- generic span/log widgets, which would reintroduce the unit-of-analysis
-      -- mismatch this view exists to fix. Wrapped in #page-summary-region so the
-      -- viz-tab change handler can swap this fragment when crossing the sessions
-      -- boundary (sessions uses a different region than other viz types).
+      -- Sessions viz renders a session-level header; a Left means the summary query
+      -- failed, surfaced visibly rather than falling back to the generic span/log
+      -- widgets. #page-summary-region lets the viz-tab handler swap this fragment.
       div_ [id_ "page-summary-region"] $ case page.sessionSummary of
         Just (Right summ) -> sessionsHeader_ summ
         Just (Left err) -> sessionsHeaderError_ err
@@ -1496,24 +1432,22 @@ apiLogsPage page = do
     -- button on virtual-list rows (log-list.ts).
     traceOverlay =
       div_
-        [ class_ $ "absolute top-0 right-0  w-full h-full overflow-scroll c-scroll z-50 bg-bgBase transition-all duration-100 " <> if showTrace then "" else "hidden"
+        [ class_ $ "absolute top-0 right-0  w-full h-full overflow-scroll c-scroll z-50 bg-bgBase transition-all duration-100 " <> if isJust page.showTrace then "" else "hidden"
         , id_ "trace_expanded_view"
         , term
             "_"
             [text|on closeTraceView
-                    add .hidden to me
-                    send toggleFullscreen(mode: 'trace', active: false) to #apiLogsPage
+                    add .hidden to me then send toggleFullscreen(mode: 'trace', active: false) to #apiLogsPage
                     call updateUrlState('showTrace', '', 'delete')
                   end
                   on htmx:afterSwap[#apiLogsPage's @data-fullscreen is 'details'] from me
                     send toggleFullscreen(mode: 'trace', active: true) to #apiLogsPage
                   end
                   on openTraceFullscreen(traceId, timestamp) from window
-                    put '' into me
-                    remove .hidden from me
+                    put '' into me then remove .hidden from me
                     send toggleFullscreen(mode: 'trace', active: true) to #apiLogsPage
                     call updateUrlState('showTrace', traceId + '/?timestamp=' + timestamp)
-                    call htmx.ajax('GET', '/p/$pidT/traces/' + traceId + '/?timestamp=' + encodeURIComponent(timestamp), {target: me, swap: 'innerHTML'})
+                    call htmx.ajax('GET', '/p/${page.pid.toText}/traces/' + traceId + '/?timestamp=' + encodeURIComponent(timestamp), {target: me, swap: 'innerHTML'})
                     then call window.evalScriptsFromContent(me)|]
         ]
         do
@@ -1526,9 +1460,8 @@ apiLogsPage page = do
     -- shell never renders it or forks a teams query per load.
     alertPanel = div_ [class_ "grow-0 shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll hidden group-has-[#create-alert-toggle:checked]/pg:block w-[500px] max-md:w-full max-md:fixed max-md:inset-0 max-md:z-50 max-md:max-w-full", id_ "alert_container"] do
       let aurl = "/p/" <> page.pid.toText <> "/log_explorer/alert_form" <> maybe "" (\a -> "?alert=" <> a.id.toText) page.alert
-      -- The container is display:none until #create-alert-toggle is checked, so an
-      -- IntersectionObserver ("intersect") can't reliably drive the load. Fire off the
-      -- toggle's change instead (and at init for a deep-linked, already-open panel).
+      -- Container is display:none until checked, so IntersectionObserver can't drive
+      -- the load — fire off the toggle's change instead (and at init if deep-linked open).
       lazyLoad_
         "alert_container"
         aurl
@@ -1578,10 +1511,9 @@ apiLogsPage page = do
             lazyLoad_ "log_details_container" url "intersect once" [hxIndicator_ "#details_indicator"]
 
 
--- | Inline-expand endpoint for the Sessions and Patterns visualizations.
--- Returns up to @limitN@ example events that belong to a given session
--- (@kind=session@) or that match a given pattern template (@kind=pattern@),
--- plus a @hasMore@ flag for pagination.
+-- | Inline-expand endpoint for the Sessions and Patterns visualizations. Returns
+-- up to @limitN@ example events for a session (@kind=session@) or pattern
+-- (@kind=pattern@), plus a @hasMore@ flag for pagination.
 apiLogExpandH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders AE.Value)
 apiLogExpandH pid kindM keyM skipM queryM sinceM fromM toM = do
   _ <- Projects.sessionAndProject pid
@@ -1590,15 +1522,18 @@ apiLogExpandH pid kindM keyM skipM queryM sinceM fromM toM = do
     Just "session" -> pure $ LogQueries.ExpandSession (maybeToMonoid keyM)
     Just "pattern" -> pure $ LogQueries.ExpandPattern (maybeToMonoid keyM)
     _ -> throwError Servant.err400{Servant.errBody = "kind must be session or pattern"}
+
   let isSession = case expandKind of LogQueries.ExpandSession _ -> True; LogQueries.ExpandPattern _ -> False
       limitN = (if isSession then 100 else 20) :: Int
-  queryAST <- case parseQueryToAST (maybeToMonoid queryM) of
-    Left err -> throwError Servant.err400{Servant.errBody = encodeUtf8 $ "Invalid query: " <> err}
-    Right ast -> pure ast
+
+  queryAST <-
+    either (\err -> throwError Servant.err400{Servant.errBody = encodeUtf8 $ "Invalid query: " <> err}) pure (parseQueryToAST (maybeToMonoid queryM))
+
   now <- Time.currentTime
   let (fromD, toD, _) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   (rows, cols) <- LogQueries.fetchEventExamples authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) expandKind (fromMaybe 0 skipM) (limitN + 1)
+
   let hasMore = V.length rows > limitN
       shown = if hasMore then V.take limitN rows else rows
       colIdxMap = listToIndexHashMap cols
@@ -1609,6 +1544,7 @@ apiLogExpandH pid kindM keyM skipM queryM sinceM fromM toM = do
   childSpansList <- bool (pure []) (LogQueries.selectChildSpansAndLogs pid [] traceIds seedSpanIds (fromD, toD) alreadyLoadedIds) isSession
   let rawLogsData = shown <> V.fromList childSpansList
       (logsData, traces) = buildTraceTree colIdxMap (V.length shown) rawLogsData
+
   addRespHeaders
     $ AE.object
       [ "cols" AE..= curateCols [] [] cols
@@ -1626,14 +1562,16 @@ aiSearchH pid requestBody = do
   now <- Time.currentTime
   let envCfg = authCtx.env
       parsed = AET.parseMaybe (AE.withObject "request" \o -> liftA2 (,) (o AE..: "input") (o AE..:? "timezone")) requestBody
-  (inputText, timezoneM) <- case parsed of
-    Nothing -> do
+
+  (inputText, timezoneM) <-
+    parsed `whenNothing` do
       addErrorToast "Invalid AI search input" Nothing
       throwError Servant.err400{Servant.errBody = "Invalid input format"}
-    Just v -> pure v
-  when (T.null (T.strip inputText)) $ do
+
+  when (T.null (T.strip inputText)) do
     addErrorToast "Please enter a search query" Nothing
     throwError Servant.err400{Servant.errBody = "Empty input"}
+
   -- Fetch precomputed facets for context (last 24 hours)
   facetSummaryM <- SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" (addUTCTime (-86400) now) now
   let config = (AI.defaultAgenticConfig pid){AI.facetContext = facetSummaryM, AI.timezone = timezoneM, AI.maxIterations = 2}
@@ -1652,12 +1590,9 @@ aiSearchH pid requestBody = do
           ]
 
 
--- | Compute the visible columns from server defaults plus the user's URL-encoded deltas:
--- @addCols@ are extra columns to show (bare tokens in the `cols` param), @removeCols@ are
--- default columns to hide (@-@-prefixed tokens). Deltas (rather than an explicit column
--- list) keep the shareable URL small and forward-compatible — new default columns still
--- appear for old links, and no transient client state can collapse the table. @id@ is
--- always kept as the row key.
+-- | Visible columns = server defaults plus the URL's deltas (@addCols@ show extra, @removeCols@
+-- hide defaults), with id first, timestamp second, latency_breakdown last. Deltas keep the
+-- shareable URL small and forward-compatible — new default columns still show up on old links.
 --
 -- >>> curateCols [] [] ["id","timestamp","resource.service.name","duration","body"]
 -- ["id","timestamp","resource.service.name"]
@@ -1668,9 +1603,16 @@ aiSearchH pid requestBody = do
 -- >>> curateCols ["duration"] [] ["id","timestamp","resource.service.name","duration"]
 -- ["id","timestamp","resource.service.name","duration"]
 curateCols :: [Text] -> [Text] -> [Text] -> [Text]
-curateCols addCols removeCols cols = sortBy sortAccordingly visible
+curateCols addCols removeCols = sortOn rank . filter keep
   where
-    defaultSummaryPaths =
+    keep c = c == "id" || (c `notElem` removeCols && (c `notElem` hiddenByDefault || c `elem` addCols))
+    rank :: Text -> Int
+    rank = \case
+      "id" -> 0
+      "timestamp" -> 1
+      "latency_breakdown" -> 3
+      _ -> 2 -- sortOn is stable, so ties keep their incoming order
+    hiddenByDefault =
       [ "trace_id"
       , "severity_text"
       , "parent_id"
@@ -1687,21 +1629,6 @@ curateCols addCols removeCols cols = sortBy sortAccordingly visible
       , "duration"
       , "body"
       ]
-    -- Show a fetched column when it's the id key, or it's not explicitly removed and either
-    -- isn't hidden-by-default or was explicitly added. `removeCols` wins over `addCols` for the
-    -- (client-never-produced) both-present case.
-    visible = flip filter cols \c ->
-      c == "id" || (c `notElem` removeCols && (c `notElem` defaultSummaryPaths || c `elem` addCols))
-
-    sortAccordingly :: Text -> Text -> Ordering
-    sortAccordingly a b
-      | a == "id" = LT
-      | b == "id" = GT
-      | a == "timestamp" && b /= "id" = LT
-      | b == "timestamp" && a /= "id" = GT
-      | a == "latency_breakdown" = GT
-      | b == "latency_breakdown" = LT
-      | otherwise = comparing (`L.elemIndex` visible) a b
 
 
 -- | Render alert configuration form for creating log-based alerts
@@ -1716,11 +1643,8 @@ alertConfigurationForm_ project alertM teams = do
         div_ [] do
           h3_ [class_ "text-base font-semibold text-textStrong"] "Create monitor"
           p_ [class_ "text-xs text-textWeak hidden sm:block"] "Get notified when your query matches specific conditions"
-      button_
-        [ type_ "button"
-        , class_ "p-1 rounded-lg hover:bg-fillWeak transition-colors"
-        , [__|on click set #create-alert-toggle.checked to false|]
-        ]
+      label_
+        [Lucid.for_ "create-alert-toggle", class_ "p-1 rounded-lg hover:bg-fillWeak transition-colors"]
         $ faSprite_ "xmark" "regular" "w-3 h-3 text-iconNeutral"
 
     div_ [class_ "p-4 pt-3 flex-1 overflow-y-auto c-scroll"] do
@@ -1746,16 +1670,7 @@ alertConfigurationForm_ project alertM teams = do
           AlertUI.notificationSettingsSection_ ((.alertConfig.severity) <$> alertM) ((.alertConfig.subject) <$> alertM) ((.alertConfig.message) <$> alertM) (maybe True (.alertConfig.emailAll) alertM) teams selectedTeamIds "alert-form" alertM
 
           div_ [class_ "flex items-center justify-end gap-2 pt-4 pb-20 mt-4 border-t border-strokeWeak"] do
+            label_ [Lucid.for_ "create-alert-toggle", class_ "btn btn-sm"] "Cancel"
             button_
-              [ type_ "button"
-              , class_ "btn btn-outline btn-sm"
-              , [__|on click set #create-alert-toggle.checked to false|]
-              ]
-              "Cancel"
-            button_
-              [ type_ "submit"
-              , class_ "btn btn-primary btn-sm"
-              ]
-              do
-                faSprite_ "plus" "regular" "w-3.5 h-3.5"
-                if isJust alertM then "Update monitor" else "Create monitor"
+              [type_ "submit", class_ "btn btn-primary btn-sm"]
+              (faSprite_ "plus" "regular" "w-3.5 h-3.5" >> if isJust alertM then "Update monitor" else "Create monitor")

@@ -535,6 +535,7 @@ utcTimeToNanoseconds utcTime =
 
 getDurationNSMS :: Integer -> String
 getDurationNSMS duration
+  | duration >= 60000000000 = printf "%.1f m" (fromIntegral @_ @Double duration / 60000000000)
   | duration >= 1000000000 = printf "%.1f s" (fromIntegral @_ @Double duration / 1000000000)
   | duration >= 1000000 = printf "%.1f ms" (fromIntegral @_ @Double duration / 1000000)
   | duration >= 1000 = printf "%.1f µs" (fromIntegral @_ @Double duration / 1000)
