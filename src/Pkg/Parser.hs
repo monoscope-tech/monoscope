@@ -561,8 +561,10 @@ defaultSelectSqlQuery (Just SSpans) =
 -- ("sum(x)::float",Just "total")
 -- >>> splitTrailingAlias "CAST(x AS VARCHAR)"
 -- ("CAST(x AS VARCHAR)",Nothing)
+--
 -- 'normalizeKeyPath' aliases dotted/bracketed paths to @•❲❳@; those must still strip,
 -- else the @AS@ leaks into @jsonb_build_array(…)@ and the query fails to parse:
+--
 -- >>> fst $ splitTrailingAlias "resource___service___name as resource•service•name"
 -- "resource___service___name"
 splitTrailingAlias :: Text -> (Text, Maybe Text)
