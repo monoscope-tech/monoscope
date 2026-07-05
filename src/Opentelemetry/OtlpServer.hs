@@ -295,7 +295,7 @@ dualWriteWithPoisonMapping appCtx target label caches perMsg = do
 -- | Boundary adapter: convert a 'WriteFailure' to a gRPC INTERNAL error.
 -- Used at the gRPC handler edge where clients expect status codes via throw,
 -- not Either. Internal pipeline code stays Either-based.
-throwOnWriteFailure :: (IOE :> es) => Either Telemetry.WriteFailure () -> Eff es ()
+throwOnWriteFailure :: IOE :> es => Either Telemetry.WriteFailure () -> Eff es ()
 throwOnWriteFailure = \case
   Right () -> pass
   Left wf ->

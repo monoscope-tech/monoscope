@@ -1322,6 +1322,7 @@ data OtelCol = OtelCol
   , selectExpr :: Text -> Text
   }
 
+
 -- | The single column combinator. hasql-interpolate's @EncodeValue (Vector a)@
 -- instance derives the whole postgres-array encoder for ANY encodable element
 -- type (Text, Int32, Int64, UTCTime, Day, Bool, …), so there are no
@@ -1330,6 +1331,7 @@ data OtelCol = OtelCol
 column :: HI.EncodeValue a => Text -> (OtelRow -> Maybe a) -> OtelCol
 column nm proj = OtelCol nm (\rows -> encoderAndParam (E.nonNullable HI.encodeValue) (V.map proj rows)) Relude.id
 
+
 -- | text[] column rebuilt with @string_to_array(_, chr(31))@ (hashes, summary):
 -- elements are 0x1F-joined (0x1F stripped from each first) so commas inside an
 -- element are safe. Identical on TimeFusion and TimescaleDB.
@@ -1337,6 +1339,7 @@ splitColumn :: Text -> (OtelRow -> V.Vector Text) -> OtelCol
 splitColumn nm proj = (column nm (Just . joinUnit . proj)){selectExpr = \a -> "string_to_array(" <> a <> ", chr(31))"}
   where
     joinUnit = T.intercalate "\x1f" . fmap (T.filter (/= '\x1f')) . V.toList
+
 
 -- | JSON/Variant column: value JSON-encoded to text and sent as text[]. TF
 -- coerces text→Variant (VariantInsertRewriter fires on the SELECT projection);
