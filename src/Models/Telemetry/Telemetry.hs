@@ -1138,14 +1138,15 @@ bulkInsertOtelLogsAndSpansTF target records = do
     $ AE.object [("record_count", AE.toJSON $ V.length records), ("write_target", AE.toJSON $ show @Text target)]
   case target of
     WriteBoth -> Ki.scoped \scope -> do
-      pgThread <- forkWithCtx scope $ retryHasqlWrite maxWriteAttempts "pg" (bulkInsertOtelLogsAndSpans records)
-      tfThread <- forkWithCtx scope $ retryHasqlWrite maxWriteAttempts "tf" (labeled @"timefusion" @Hasql $ bulkInsertOtelLogsAndSpans records)
+      pgThread <- forkWithCtx scope $ retryHasqlWrite maxWriteAttempts "pg" (bulkInsertOtelLogsAndSpans True records)
+      tfThread <- forkWithCtx scope $ retryHasqlWrite maxWriteAttempts "tf" (labeled @"timefusion" @Hasql $ bulkInsertOtelLogsAndSpans False records)
       (pgRes, tfRes) <- Ki.atomically $ (,) <$> Ki.await pgThread <*> Ki.await tfThread
       classify pgRes tfRes
     -- Single-leg replay: only the store that originally failed is rewritten, so
-    -- the durable leg keeps its single copy.
-    WritePgOnly -> singleLeg "pg" This (,0) =<< retryHasqlWrite maxWriteAttempts "pg" (bulkInsertOtelLogsAndSpans records)
-    WriteTfOnly -> singleLeg "tf" That (0,) =<< retryHasqlWrite maxWriteAttempts "tf" (labeled @"timefusion" @Hasql $ bulkInsertOtelLogsAndSpans records)
+    -- the durable leg keeps its single copy. Pg casts to native uuid/jsonb; Tf
+    -- leaves bare text (Variant coercion).
+    WritePgOnly -> singleLeg "pg" This (,0) =<< retryHasqlWrite maxWriteAttempts "pg" (bulkInsertOtelLogsAndSpans True records)
+    WriteTfOnly -> singleLeg "tf" That (0,) =<< retryHasqlWrite maxWriteAttempts "tf" (labeled @"timefusion" @Hasql $ bulkInsertOtelLogsAndSpans False records)
   where
     -- Classify one store's result; @side@ is 'This'/'That' for the written leg,
     -- @losts@ places the under-persist count on that leg ((l,0) for pg, (0,l) for tf).
@@ -1286,12 +1287,14 @@ handOffBatches worker caches records = do
 -- uuid[]/jsonb[]; TS assignment-casts text→uuid/jsonb, TF's VariantInsertRewriter
 -- coerces text→Variant), and the array columns (hashes, summary) travel
 -- 0x1F-joined and are rebuilt with @string_to_array(_, chr(31))@.
-bulkInsertOtelLogsAndSpans :: (Hasql :> es, IOE :> es, Log :> es) => V.Vector OtelLogsAndSpans -> Eff es BulkInsertResult
-bulkInsertOtelLogsAndSpans records
+-- | @usePgTypes@: 'True' for PostgreSQL/TimescaleDB (cast id/JSON to
+-- uuid/jsonb), 'False' for TimeFusion (bare text→Variant). See 'insertUnnestStmt'.
+bulkInsertOtelLogsAndSpans :: (Hasql :> es, IOE :> es, Log :> es) => Bool -> V.Vector OtelLogsAndSpans -> Eff es BulkInsertResult
+bulkInsertOtelLogsAndSpans usePgTypes records
   | V.null records = pure mempty
   | otherwise = do
       rows <- V.mapM mkOtelRow records
-      n <- Hasql.use $ HSession.statement () (insertUnnestStmt rows)
+      n <- Hasql.use $ HSession.statement () (insertUnnestStmt usePgTypes rows)
       pure (BulkInsertResult n)
 
 
@@ -1299,8 +1302,13 @@ bulkInsertOtelLogsAndSpans records
 -- Column i's batch values become the i-th unnest array (aliased @cI@); the
 -- SELECT projects @ocSelect@ over that alias (identity for most columns,
 -- @string_to_array@ for the text[] ones).
-insertUnnestStmt :: V.Vector OtelRow -> Statement () Int64
-insertUnnestStmt rows =
+-- | @usePgTypes@: PostgreSQL/TimescaleDB has no text→uuid/jsonb assignment
+-- cast, so id + JSON columns are cast explicitly (@::uuid@/@::jsonb@) in the
+-- SELECT — pass 'True'. TimeFusion rejects those OIDs and instead coerces bare
+-- text→Variant (VariantInsertRewriter) — pass 'False'. The array bind params are
+-- identical either way; only these columns' SELECT projection differs.
+insertUnnestStmt :: Bool -> V.Vector OtelRow -> Statement () Int64
+insertUnnestStmt usePgTypes rows =
   toPreparableStatement
     ( fromString ("INSERT INTO otel_logs_and_spans (" <> toString names <> ") SELECT " <> toString selects <> " FROM unnest(")
         <> mconcat (intersperse (fromString ", ") [c.bind rows | c <- otelColumns])
@@ -1311,15 +1319,17 @@ insertUnnestStmt rows =
     idxd = zip [1 :: Int ..] otelColumns
     names = T.intercalate ", " [c.name | c <- otelColumns]
     aliases = T.intercalate ", " ["c" <> show i | (i, _) <- idxd]
-    selects = T.intercalate ", " [c.selectExpr ("u.c" <> show i) | (i, c) <- idxd]
+    selects = T.intercalate ", " [c.selectExpr usePgTypes ("u.c" <> show i) | (i, c) <- idxd]
 
 
 -- | A bulk-insert column: SQL name, its whole-batch array bind param, and how
--- it's projected out of the unnest alias in the SELECT.
+-- it's projected out of the unnest alias in the SELECT. The 'Bool' is
+-- @usePgTypes@ (see 'insertUnnestStmt'): 'True' casts to native uuid/jsonb
+-- (Postgres), 'False' leaves bare text (TimeFusion).
 data OtelCol = OtelCol
   { name :: Text
   , bind :: V.Vector OtelRow -> Snippet
-  , selectExpr :: Text -> Text
+  , selectExpr :: Bool -> Text -> Text
   }
 
 
@@ -1327,25 +1337,32 @@ data OtelCol = OtelCol
 -- instance derives the whole postgres-array encoder for ANY encodable element
 -- type (Text, Int32, Int64, UTCTime, Day, Bool, …), so there are no
 -- hand-written encoders or per-type helpers. NULL elements are allowed
--- (@EncodeField (Maybe a)@); the SELECT projects the column as-is.
+-- (@EncodeField (Maybe a)@); the SELECT projects the column as-is on both engines.
 column :: HI.EncodeValue a => Text -> (OtelRow -> Maybe a) -> OtelCol
-column nm proj = OtelCol nm (\rows -> encoderAndParam (E.nonNullable HI.encodeValue) (V.map proj rows)) Relude.id
+column nm proj = OtelCol nm (\rows -> encoderAndParam (E.nonNullable HI.encodeValue) (V.map proj rows)) (const Relude.id)
+
+
+-- | Text column that PostgreSQL must cast to a native type with no text→T
+-- assignment cast (@uuid@); TimeFusion takes the bare text (Utf8).
+castColumn :: Text -> Text -> (OtelRow -> Maybe Text) -> OtelCol
+castColumn nm pgType proj = (column nm proj){selectExpr = \usePgTypes a -> if usePgTypes then a <> "::" <> pgType else a}
 
 
 -- | text[] column rebuilt with @string_to_array(_, chr(31))@ (hashes, summary):
 -- elements are 0x1F-joined (0x1F stripped from each first) so commas inside an
 -- element are safe. Identical on TimeFusion and TimescaleDB.
 splitColumn :: Text -> (OtelRow -> V.Vector Text) -> OtelCol
-splitColumn nm proj = (column nm (Just . joinUnit . proj)){selectExpr = \a -> "string_to_array(" <> a <> ", chr(31))"}
+splitColumn nm proj = (column nm (Just . joinUnit . proj)){selectExpr = \_ a -> "string_to_array(" <> a <> ", chr(31))"}
   where
     joinUnit = T.intercalate "\x1f" . fmap (T.filter (/= '\x1f')) . V.toList
 
 
--- | JSON/Variant column: value JSON-encoded to text and sent as text[]. TF
--- coerces text→Variant (VariantInsertRewriter fires on the SELECT projection);
--- TimescaleDB assignment-casts text→jsonb.
+-- | JSON/Variant column: value JSON-encoded to text and sent as text[]. On
+-- PostgreSQL/TimescaleDB it's cast @::jsonb@ in the SELECT (no text→jsonb
+-- assignment cast); on TimeFusion the bare text coerces to Variant (the
+-- VariantInsertRewriter fires on the SELECT projection).
 jsonColumn :: Text -> (OtelRow -> Maybe AE.Value) -> OtelCol
-jsonColumn nm proj = column nm (fmap enc . proj)
+jsonColumn nm proj = (column nm (fmap enc . proj)){selectExpr = \usePgTypes a -> if usePgTypes then a <> "::jsonb" else a}
   where
     enc = decodeUtf8 . AE.encode . scrubNulValue :: AE.Value -> Text
 
@@ -1387,7 +1404,7 @@ otelColumns =
       sevNum e = fromIntegral . severity_number <$> e.severity
    in [ column "timestamp" (\r -> Just r.row.timestamp)
       , column "observed_timestamp" (\r -> r.row.observed_timestamp)
-      , column "id" (\r -> Just r.row.id)
+      , castColumn "id" "uuid" (\r -> Just r.row.id)
       , textField "parent_id" (.parent_id)
       , splitColumn "hashes" (\r -> fromMaybe V.empty r.row.hashes)
       , textField "name" (fmap (T.take 500) . (.name))
