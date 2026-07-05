@@ -48,14 +48,12 @@ module Models.Telemetry.Telemetry (
   writeFailureDlqHeaders,
   PoisonMsg,
   BulkInsertResult (..),
-  RowPoisonInfo,
   SilentUnderPersistError (..),
   unaccountedRows,
   retryHasqlWrite,
   retryTransientEff,
   maxWriteAttempts,
   maxReadAttempts,
-  poisonReason,
   handOffBatches,
   mintOtelLogIds,
   getMetricChartListData,
@@ -76,7 +74,6 @@ module Models.Telemetry.Telemetry (
   insertSystemLog,
   generateSummary,
   otelSpanColsSql,
-  bisectCap,
 )
 where
 
@@ -108,7 +105,6 @@ import Data.UUID qualified as UUID
 import Data.UUID.Quasi (uuid)
 import Data.UUID.V5 qualified as UUIDv5
 import Data.Vector qualified as V
-import Data.Vector.Split qualified as VS
 import Database.PostgreSQL.Simple.FromField (Conversion, FromField (..))
 import Database.PostgreSQL.Simple.FromRow
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
@@ -123,16 +119,16 @@ import Effectful.Labeled (Labeled, labeled)
 import Effectful.Log (Log)
 import Effectful.Time qualified as Time
 import Hasql.Decoders qualified as D
-import Hasql.DynamicStatements.Snippet (Snippet, encoderAndParam, param, toPreparableStatement)
+import Hasql.DynamicStatements.Snippet (Snippet, encoderAndParam, toPreparableStatement)
 import Hasql.Encoders qualified as E
 import Hasql.Interpolate qualified as HI
 import Hasql.Session qualified as HSession
+import Hasql.Statement (Statement)
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), WrappedEnum (..), WrappedEnumInt (..), WrappedEnumSC (..), encodeEnumSC, idFromText, textArrayEnc, unAesonTextMaybe)
+import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), WrappedEnum (..), WrappedEnumInt (..), WrappedEnumSC (..), encodeEnumSC, idFromText, unAesonTextMaybe)
 import Pkg.ExtractionWorker qualified as EW
 import Relude hiding (ask)
-import Relude.Extra.Tuple (traverseToSnd)
 import System.IO (hPutStrLn)
 import System.Logging qualified as Log
 import System.Tracing (forkWithCtx)
@@ -954,41 +950,19 @@ type PoisonMsg =
   -- ^ @(ackId, rawBytes, errorReason)@
 
 
--- | Per-row outcome from a dual-write. @This pgErr@ = PG-only failure;
--- @That tfErr@ = TF-only failure; @These pgErr tfErr@ = both failed. A row
--- accepted by both stores never appears here, so the no-error case is
--- structurally absent (no need for a defensive Nothing-Nothing branch in callers).
-type RowPoisonInfo = These SomeException SomeException
-
-
--- | Human-readable per-row error reason for DLQ payload. Capped at 2 KiB per
--- side so a multi-MB nested exception can't blow past broker message limits;
--- the full stack stays in the logAttention emitted at the write site.
-poisonReason :: RowPoisonInfo -> Text
-poisonReason =
-  These.these
-    (\pg -> "row insert failed (pg-only): " <> truncErr pg)
-    (\tf -> "row insert failed (tf-only): " <> truncErr tf)
-    (\pg tf -> "row insert failed (both): pg=" <> truncErr pg <> "; tf=" <> truncErr tf)
-  where
-    truncErr = T.take 2048 . toText . displayException
-
-
--- | Result of a single-side ('bulkInsertOtelLogsAndSpans') bulk write. Rows
--- that bisect-isolated to a non-transient failure are surfaced here instead of
--- silently dropped — caller routes them to the DLQ.
-data BulkInsertResult = BulkInsertResult
-  { rowsInserted :: !Int64
-  , poisonRows :: !(V.Vector (OtelLogsAndSpans, SomeException))
-  }
+-- | Rows inserted by a single-side ('bulkInsertOtelLogsAndSpans') bulk write.
+-- A whole batch either lands or throws (no per-row isolation), so this is just
+-- a count; the dual-write cross-check ('unaccountedRows') compares it against
+-- the submitted total to catch a store that acked but silently under-persisted.
+newtype BulkInsertResult = BulkInsertResult {rowsInserted :: Int64}
 
 
 instance Semigroup BulkInsertResult where
-  BulkInsertResult n1 p1 <> BulkInsertResult n2 p2 = BulkInsertResult (n1 + n2) (p1 <> p2)
+  BulkInsertResult a <> BulkInsertResult b = BulkInsertResult (a + b)
 
 
 instance Monoid BulkInsertResult where
-  mempty = BulkInsertResult 0 V.empty
+  mempty = BulkInsertResult 0
 
 
 -- | A store accepted a bulk write without raising an error, yet persisted
@@ -1006,20 +980,18 @@ data SilentUnderPersistError = SilentUnderPersistError
   deriving anyclass (Exception)
 
 
--- | Rows a single-side bulk write failed to account for: every submitted record
--- must either land ('rowsInserted') or be isolated as poison ('poisonRows'). A
--- positive result means the store reported success yet silently dropped that
--- many rows — the gap that bypasses every DLQ safety net.
+-- | Rows a store reported success for but didn't actually persist: submitted
+-- minus 'rowsInserted'. A positive result means the store acked yet silently
+-- dropped that many rows — the gap that bypasses every DLQ safety net.
 --
--- >>> unaccountedRows 3 (BulkInsertResult 3 V.empty)
+-- >>> unaccountedRows 3 (BulkInsertResult 3)
 -- 0
--- >>> unaccountedRows 3 (BulkInsertResult 0 V.empty)
+-- >>> unaccountedRows 3 (BulkInsertResult 0)
 -- 3
--- >>> unaccountedRows 5 (BulkInsertResult 2 V.empty)
+-- >>> unaccountedRows 5 (BulkInsertResult 2)
 -- 3
 unaccountedRows :: Int -> BulkInsertResult -> Int
-unaccountedRows submitted bir =
-  max 0 (submitted - fromIntegral bir.rowsInserted - V.length bir.poisonRows)
+unaccountedRows submitted bir = max 0 (submitted - fromIntegral bir.rowsInserted)
 
 
 writeFailureSummary :: WriteFailure -> Text
@@ -1144,13 +1116,12 @@ retryTransientEff maxAttempts op act = go 1
 
 
 -- | Dual-write to PG + TimeFusion concurrently. Both stores are mandatory.
---
---   * 'Left WriteFailure' — bounded transient-retry budget exhausted on at
---     least one side; the whole batch needs to be DLQ'd as a unit.
---   * 'Right' poisonRows — per-side bulk-insert returned poison rows
---     (constraint violations, schema mismatch, etc.). Each row carries
---     'RowPoisonInfo' saying which side(s) rejected it so the DLQ replay tool
---     can rewrite only the missing side. Empty vector = full success.
+-- Returns 'Left WriteFailure' when a leg exhausts its transient-retry budget or
+-- acks but silently under-persists ('unaccountedRows'); the whole batch is then
+-- DLQ'd as a unit. 'Right ()' = every row landed on every required leg. There
+-- is no per-row isolation: after upfront NUL-scrubbing + id validation a
+-- single-row failure can't occur, and if one ever did it's a systemic bug to
+-- surface loudly, not silently drop one row for.
 bulkInsertOtelLogsAndSpansTF
   :: ( Concurrent :> es
      , Hasql :> es
@@ -1161,7 +1132,7 @@ bulkInsertOtelLogsAndSpansTF
      )
   => WriteTarget
   -> V.Vector OtelLogsAndSpans
-  -> Eff es (Either WriteFailure (V.Vector (OtelLogsAndSpans, RowPoisonInfo)))
+  -> Eff es (Either WriteFailure ())
 bulkInsertOtelLogsAndSpansTF target records = do
   Log.logTrace "bulkInsertOtelLogsAndSpansTF called"
     $ AE.object [("record_count", AE.toJSON $ V.length records), ("write_target", AE.toJSON $ show @Text target)]
@@ -1181,20 +1152,19 @@ bulkInsertOtelLogsAndSpansTF target records = do
     singleLeg store side losts = \case
       Right bir
         | lost <- unaccountedRows (V.length records) bir, lost > 0 -> let (pgL, tfL) = losts lost in underPersist (pgL, "pg") (tfL, "tf")
-        | otherwise -> pure (Right (V.map (second side) bir.poisonRows))
+        | otherwise -> pure (Right ())
       Left e -> do
         Log.logAttention (T.toUpper store <> "_WRITE_FAILED") (AE.object ["record_count" AE..= V.length records, "error" AE..= show @Text e])
         pure (Left (side e))
     -- Cross-check persistence on a Right/Right dual-write: a store that reported
-    -- success but didn't account for every submitted row (inserted + poison <
-    -- submitted) silently dropped data. Convert to a WriteFailure so Pkg.Queue
-    -- DLQs the batch instead of acking it. Without this a TuplesOk-swallow /
-    -- accept-but-drop reads as a clean success and the rows are lost with no
-    -- trace (the 2026-06-12 TF-only gap).
+    -- success but persisted fewer rows than submitted silently dropped data.
+    -- Convert to a WriteFailure so Pkg.Queue DLQs the batch instead of acking
+    -- it. Without this a TuplesOk-swallow / accept-but-drop reads as a clean
+    -- success and the rows are lost with no trace (the 2026-06-12 TF-only gap).
     classify (Right pgBir) (Right tfBir) =
       let n = V.length records
        in case (unaccountedRows n pgBir, unaccountedRows n tfBir) of
-            (0, 0) -> pure (Right (combinePoison pgBir tfBir))
+            (0, 0) -> pure (Right ())
             (pgLost, tfLost) -> underPersist (pgLost, "pg") (tfLost, "tf")
     classify (Left ePg) (Right _) = do
       Log.logAttention "PG_WRITE_FAILED"
@@ -1225,24 +1195,6 @@ bulkInsertOtelLogsAndSpansTF target records = do
         (False, True) -> That (mkErr tfStore tfLost)
         _ -> This (mkErr pgStore pgLost)
 
-    -- Per-row attribution: a row appears in the result iff at least one side
-    -- rejected it. Rows accepted by both stores are silently absent (full
-    -- success). Result order is HashMap-iteration order — DLQ consumers
-    -- process entries independently, so order is irrelevant downstream.
-    combinePoison :: BulkInsertResult -> BulkInsertResult -> V.Vector (OtelLogsAndSpans, RowPoisonInfo)
-    combinePoison pg tf
-      | V.null pg.poisonRows && V.null tf.poisonRows = V.empty
-      | V.null tf.poisonRows = V.map (second This) pg.poisonRows
-      | V.null pg.poisonRows = V.map (second That) tf.poisonRows
-      | otherwise =
-          let mkMap bir = HM.fromList [(r.id, (r, e)) | (r, e) <- V.toList bir.poisonRows]
-              pgMap = mkMap pg
-              tfMap = mkMap tf
-              both = HM.intersectionWith (\(r, pe) (_, te) -> (r, These pe te)) pgMap tfMap
-              pgOnly = HM.map (second This) (pgMap `HM.difference` tfMap)
-              tfOnly = HM.map (second That) (tfMap `HM.difference` pgMap)
-           in V.fromList $ HM.elems (HM.unions [both, pgOnly, tfOnly])
-
 
 -- | Persist `records` to Postgres (+TimeFusion when enabled) and hand each
 -- per-project sub-batch to the in-process extraction worker. Every ingestion
@@ -1265,19 +1217,17 @@ insertAndHandOff
   -- extraction worker only happens on full success; a failed batch goes to DLQ.
   -> HM.HashMap Projects.ProjectId Projects.ProjectCache
   -> V.Vector OtelLogsAndSpans
-  -> Eff es (Either WriteFailure (V.Vector (OtelLogsAndSpans, RowPoisonInfo)))
+  -> Eff es (Either WriteFailure ())
 insertAndHandOff target worker caches records
-  | V.null records = pure (Right V.empty)
+  | V.null records = pure (Right ())
   | otherwise =
       bulkInsertOtelLogsAndSpansTF target records >>= \case
         Left wf -> pure (Left wf)
-        Right rowPoison -> do
-          -- Hand off only the fully-successful rows — don't let downstream
-          -- extraction observe records that landed in only one store.
-          let poisonIds = HS.fromList [r.id | (r, _) <- V.toList rowPoison]
-              fullyOk = V.filter (\r -> not (HS.member r.id poisonIds)) records
-          liftIO $ handOffBatches worker caches fullyOk
-          pure (Right rowPoison)
+        Right () -> do
+          -- Every row landed on every required store — hand them all off to
+          -- the extraction worker (a failed batch takes the Left branch → DLQ).
+          liftIO $ handOffBatches worker caches records
+          pure (Right ())
 
 
 -- | Group `records` by `project_id`, build one `ExtractionBatch` per group, and
@@ -1324,56 +1274,77 @@ handOffBatches worker caches records = do
           unless ok $ atomicModifyIORef' worker.droppedBatches \n -> (n + 1, ())
 
 
-maxBisectDepth, bisectCap :: Int
-maxBisectDepth = 9
-bisectCap = 2 ^ maxBisectDepth
-
-
--- | Bulk-insert with row-level poison isolation. Slices oversized inputs so
--- every Bind fits libpq's 65 535-param ceiling; the bisector then has enough
--- depth (log2 bisectCap) to drill any failing slice to the offending row.
---
--- Slices commit independently — no enclosing transaction, since TF doesn't
--- support real transactions and PG matches. Retry duplicates are absorbed by
--- TF dedup on (id, timestamp) at flush time; PG doesn't retry. The PG-only
--- path (enableTf=False) accepts the same per-slice contract — partial commit
--- on failure, no rollback across slices.
---
--- >>> bisectCap * length otelColumns <= 65535  -- libpq Bind param ceiling
--- True
+-- | Bulk-insert the whole batch in ONE column-oriented statement:
+-- @INSERT ... SELECT ... FROM unnest($1::t[], ...)@ — one array param per
+-- column (89 params, NOT rows×cols), so planning is O(cols) and the statement
+-- text is identical for every batch → TF/PG plan-cache hits. No row-count
+-- chunking (unnest sidesteps libpq's 65 535-param ceiling) and no per-row
+-- bisection: a failed batch throws, 'retryHasqlWrite' turns it into a
+-- WriteFailure and the whole batch goes to the DLQ (TF dedup on (id, timestamp)
+-- absorbs any retry duplicates). The SAME statement runs on TimeFusion and
+-- TimescaleDB — id + JSON columns travel as @text[]@ (TF's pgwire rejects
+-- uuid[]/jsonb[]; TS assignment-casts text→uuid/jsonb, TF's VariantInsertRewriter
+-- coerces text→Variant), and the array columns (hashes, summary) travel
+-- 0x1F-joined and are rebuilt with @string_to_array(_, chr(31))@.
 bulkInsertOtelLogsAndSpans :: (Hasql :> es, IOE :> es, Log :> es) => V.Vector OtelLogsAndSpans -> Eff es BulkInsertResult
-bulkInsertOtelLogsAndSpans = fmap mconcat . traverse insertSlice . VS.chunksOf bisectCap
+bulkInsertOtelLogsAndSpans records
+  | V.null records = pure mempty
+  | otherwise = do
+      rows <- V.mapM mkOtelRow records
+      n <- Hasql.use $ HSession.statement () (insertUnnestStmt rows)
+      pure (BulkInsertResult n)
+
+
+-- | The single INSERT…SELECT…unnest statement, built from 'otelColumns'.
+-- Column i's batch values become the i-th unnest array (aliased @cI@); the
+-- SELECT projects @ocSelect@ over that alias (identity for most columns,
+-- @string_to_array@ for the text[] ones).
+insertUnnestStmt :: V.Vector OtelRow -> Statement () Int64
+insertUnnestStmt rows =
+  toPreparableStatement
+    ( fromString ("INSERT INTO otel_logs_and_spans (" <> toString names <> ") SELECT " <> toString selects <> " FROM unnest(")
+        <> mconcat (intersperse (fromString ", ") [c.bind rows | c <- otelColumns])
+        <> fromString (") AS u(" <> toString aliases <> ")")
+    )
+    D.rowsAffected
   where
-    insertSlice rs = V.mapM (traverseToSnd otelRowSnippet) rs >>= go maxBisectDepth
+    idxd = zip [1 :: Int ..] otelColumns
+    names = T.intercalate ", " [c.name | c <- otelColumns]
+    aliases = T.intercalate ", " ["c" <> show i | (i, _) <- idxd]
+    selects = T.intercalate ", " [c.selectExpr ("u.c" <> show i) | (i, c) <- idxd]
 
-    go d pairs =
-      tryAny (Hasql.use $ HSession.statement () (stmt pairs)) >>= \case
-        Right n -> pure (BulkInsertResult n V.empty)
-        Left e
-          | Hasql.isTransientException e -> throwIO e
-          | V.length pairs == 1 -> do
-              -- Single row failed non-transiently: surface as poison so caller
-              -- can DLQ. Previous behaviour was to drop + log (silent loss).
-              Log.logAttention
-                "ROW_INSERT_FAILED"
-                (AE.object ["id" AE..= (fst (V.head pairs)).id, "error" AE..= show @Text e])
-              pure (BulkInsertResult 0 (V.map (\(r, _) -> (r, e)) pairs))
-          | d <= 0 -> do
-              -- Couldn't isolate within bisect budget. Treat the whole
-              -- remaining slice as poison so the rows still reach the DLQ.
-              Log.logAttention
-                "BISECT_DEPTH_EXHAUSTED"
-                (AE.object ["record_count" AE..= V.length pairs, "error" AE..= show @Text e])
-              pure (BulkInsertResult 0 (V.map (\(r, _) -> (r, e)) pairs))
-          | otherwise ->
-              -- <*> is sequential in Eff: a throw from the left short-circuits the right. Do not parallelize.
-              let (l, r) = V.splitAt (V.length pairs `div` 2) pairs
-               in (<>) <$> go (d - 1) l <*> go (d - 1) r
 
-    stmt pairs =
-      toPreparableStatement
-        (otelInsertHeader <> mconcat (intersperse ", " (map snd (V.toList pairs))))
-        D.rowsAffected
+-- | A bulk-insert column: SQL name, its whole-batch array bind param, and how
+-- it's projected out of the unnest alias in the SELECT.
+data OtelCol = OtelCol
+  { name :: Text
+  , bind :: V.Vector OtelRow -> Snippet
+  , selectExpr :: Text -> Text
+  }
+
+-- | The single column combinator. hasql-interpolate's @EncodeValue (Vector a)@
+-- instance derives the whole postgres-array encoder for ANY encodable element
+-- type (Text, Int32, Int64, UTCTime, Day, Bool, …), so there are no
+-- hand-written encoders or per-type helpers. NULL elements are allowed
+-- (@EncodeField (Maybe a)@); the SELECT projects the column as-is.
+column :: HI.EncodeValue a => Text -> (OtelRow -> Maybe a) -> OtelCol
+column nm proj = OtelCol nm (\rows -> encoderAndParam (E.nonNullable HI.encodeValue) (V.map proj rows)) Relude.id
+
+-- | text[] column rebuilt with @string_to_array(_, chr(31))@ (hashes, summary):
+-- elements are 0x1F-joined (0x1F stripped from each first) so commas inside an
+-- element are safe. Identical on TimeFusion and TimescaleDB.
+splitColumn :: Text -> (OtelRow -> V.Vector Text) -> OtelCol
+splitColumn nm proj = (column nm (Just . joinUnit . proj)){selectExpr = \a -> "string_to_array(" <> a <> ", chr(31))"}
+  where
+    joinUnit = T.intercalate "\x1f" . fmap (T.filter (/= '\x1f')) . V.toList
+
+-- | JSON/Variant column: value JSON-encoded to text and sent as text[]. TF
+-- coerces text→Variant (VariantInsertRewriter fires on the SELECT projection);
+-- TimescaleDB assignment-casts text→jsonb.
+jsonColumn :: Text -> (OtelRow -> Maybe AE.Value) -> OtelCol
+jsonColumn nm proj = column nm (fmap enc . proj)
+  where
+    enc = decodeUtf8 . AE.encode . scrubNulValue :: AE.Value -> Text
 
 
 -- | Thrown when an OtelLogsAndSpans row reaches the bulk insert path with an
@@ -1384,156 +1355,146 @@ newtype InvalidOtelRowIdException = InvalidOtelRowIdException Text
   deriving anyclass (Exception)
 
 
--- | Per-row context: pre-decoded attribute/resource maps (bound once instead
--- of re-parsing JSON ~50× per row) plus the params that need IO/logging to
--- compute (id UUID parse, is_remote textual bool parse).
-data OtelRowCtx = OtelRowCtx
+-- | Per-row prep: attribute/resource maps decoded once (avoids re-parsing JSON
+-- ~50× per row) plus the parsed is_remote bool. Built by 'mkOtelRow', which
+-- also validates the id is a UUID (fail loud rather than write a sentinel).
+data OtelRow = OtelRow
   { row :: OtelLogsAndSpans
-  , am :: Maybe (Map.Map Text AE.Value)
-  , rm :: Maybe (Map.Map Text AE.Value)
-  , uuidP :: Snippet
-  , isRemoteP :: Snippet
+  , attrs :: Maybe (Map.Map Text AE.Value)
+  , resource :: Maybe (Map.Map Text AE.Value)
+  , isRemote :: Maybe Bool
   }
 
 
--- | Single source of truth for the otel_logs_and_spans bulk insert: SQL column
--- name + per-row encoder. `otelInsertHeader` and `otelRowSnippet` are both
--- derived from this list, so the two can never drift apart.
-otelColumns :: [(Text, OtelRowCtx -> Snippet)]
+-- | Single source of truth for the otel_logs_and_spans bulk insert AND the
+-- read-path field order ('OtelLogsAndSpans' FromRow / 'otelSpanColsSql' must
+-- match this list). Each 'OtelCol' knows its own array encoder + SELECT
+-- projection; 'insertUnnestStmt' derives the whole statement from this list.
+otelColumns :: [OtelCol]
 otelColumns =
-  let aT k c = param (atMapText k c.am)
-      aI k c = param (fmap (fromIntegral :: Int -> Int32) (atMapInt k c.am))
-      aI8 k c = param (fmap (fromIntegral :: Int -> Int64) (atMapInt k c.am))
-      rT k c = param (atMapText k c.rm)
-      top f c = f c.row
-      txt g = top (param . fmap scrubNulText . g)
-      jp :: AE.ToJSON a => (OtelLogsAndSpans -> Maybe a) -> OtelRowCtx -> Snippet
-      jp g = top (param . fmap (scrubNulValue . AE.toJSON) . g)
-      aeson g = top (param . fmap scrubNulValue . unAesonTextMaybe . g)
-      arr g = top (encoderAndParam (E.nonNullable textArrayEnc) . V.map scrubNulText . g)
-      ctxT f = top (\e -> param (fmap scrubNulText (e.context >>= f)))
+  let attrText nm key = column nm (\r -> atMapText key r.attrs)
+      attrInt nm key = column nm (\r -> fromIntegral @Int @Int32 <$> atMapInt key r.attrs)
+      attrBigInt nm key = column nm (\r -> fromIntegral @Int @Int64 <$> atMapInt key r.attrs)
+      resourceText nm key = column nm (\r -> atMapText key r.resource)
+      textField nm g = column nm (\r -> scrubNulText <$> g r.row)
+      contextText nm f = column nm (\r -> scrubNulText <$> (r.row.context >>= f))
+      jsonField nm g = jsonColumn nm (\r -> g r.row)
       sevText e = e.severity >>= \s -> scrubNulText . toText . encodeEnumSC @"SL" <$> s.severity_text
       sevNum :: OtelLogsAndSpans -> Maybe Int32
       sevNum e = fromIntegral . severity_number <$> e.severity
-   in [ ("timestamp", top (param . (.timestamp)))
-      , ("observed_timestamp", top (param . (.observed_timestamp)))
-      , ("id", (.uuidP))
-      , ("parent_id", txt (.parent_id))
-      , ("hashes", arr (fromMaybe V.empty . (.hashes)))
-      , ("name", txt (fmap (T.take 500) . (.name)))
-      , ("kind", txt (.kind))
-      , ("status_code", txt (.status_code))
-      , ("status_message", txt (.status_message))
-      , ("level", txt (.level))
-      , ("severity", jp (.severity))
-      , ("severity___severity_text", top (param . sevText))
-      , ("severity___severity_number", top (param . sevNum))
-      , ("body", aeson (.body))
-      , ("duration", top (param . (.duration)))
-      , ("start_time", top (param . (.start_time)))
-      , ("end_time", top (param . (.end_time)))
-      , ("context", jp (.context))
-      , ("context___trace_id", ctxT (.trace_id))
-      , ("context___span_id", ctxT (.span_id))
-      , ("context___trace_state", ctxT (.trace_state))
-      , ("context___trace_flags", ctxT (.trace_flags))
-      , ("context___is_remote", (.isRemoteP))
-      , ("events", aeson (.events))
-      , ("links", txt (.links))
-      , ("attributes", \c -> param (fmap (scrubNulValue . AE.Object . KEM.fromMapText) c.am))
-      , ("attributes___client___address", aT "client.address")
-      , ("attributes___client___port", aI "client.port")
-      , ("attributes___server___address", aT "server.address")
-      , ("attributes___server___port", aI "server.port")
-      , ("attributes___network___local__address", aT "network.local.address")
-      , ("attributes___network___local__port", aI "network.local.port")
-      , ("attributes___network___peer___address", aT "network.peer.address")
-      , ("attributes___network___peer__port", aI "network.peer.port")
-      , ("attributes___network___protocol___name", aT "network.protocol.name")
-      , ("attributes___network___protocol___version", aT "network.protocol.version")
-      , ("attributes___network___transport", aT "network.transport")
-      , ("attributes___network___type", aT "network.type")
-      , ("attributes___code___number", aI "code.number")
-      , ("attributes___code___file___path", aT "code.file.path")
-      , ("attributes___code___function___name", aT "code.function.name")
-      , ("attributes___code___line___number", aI "code.line.number")
-      , ("attributes___code___stacktrace", aT "code.stacktrace")
-      , ("attributes___log__record___original", aT "log.record.original")
-      , ("attributes___log__record___uid", aT "log.record.uid")
-      , ("attributes___error___type", aT "error.type")
-      , ("attributes___exception___type", aT "exception.type")
-      , ("attributes___exception___message", aT "exception.message")
-      , ("attributes___exception___stacktrace", aT "exception.stacktrace")
-      , ("attributes___url___fragment", aT "url.fragment")
-      , ("attributes___url___full", aT "url.full")
-      , ("attributes___url___path", aT "url.path")
-      , ("attributes___url___query", aT "url.query")
-      , ("attributes___url___scheme", aT "url.scheme")
-      , ("attributes___user_agent___original", aT "user_agent.original")
-      , ("attributes___http___request___method", aT "http.request.method")
-      , ("attributes___http___request___method_original", aT "http.request.method_original")
-      , ("attributes___http___response___status_code", aI "http.response.status_code")
-      , ("attributes___http___request___resend_count", aI "http.request.resend_count")
-      , ("attributes___http___request___body___size", aI8 "http.request.body.size")
-      , ("attributes___session___id", aT "session.id")
-      , ("attributes___session___previous___id", aT "session.previous.id")
-      , ("attributes___db___system___name", aT "db.system.name")
-      , ("attributes___db___collection___name", aT "db.collection.name")
-      , ("attributes___db___namespace", aT "db.namespace")
-      , ("attributes___db___operation___name", aT "db.operation.name")
-      , ("attributes___db___response___status_code", aT "db.response.status_code")
-      , ("attributes___db___operation___batch___size", aI "db.operation.batch.size")
-      , ("attributes___db___query___summary", aT "db.query.summary")
-      , ("attributes___db___query___text", aT "db.query.text")
-      , ("attributes___user___id", aT "user.id")
-      , ("attributes___user___email", aT "user.email")
-      , ("attributes___user___full_name", aT "user.full_name")
-      , ("attributes___user___name", aT "user.name")
-      , ("attributes___user___hash", aT "user.hash")
-      , ("resource", \c -> param (fmap (scrubNulValue . AE.Object . KEM.fromMapText) c.rm))
-      , ("resource___service___name", rT "service.name")
-      , ("resource___service___version", rT "service.version")
-      , ("resource___service___instance___id", rT "service.instance.id")
-      , ("resource___service___namespace", rT "service.namespace")
-      , ("resource___telemetry___sdk___language", rT "telemetry.sdk.language")
-      , ("resource___telemetry___sdk___name", rT "telemetry.sdk.name")
-      , ("resource___telemetry___sdk___version", rT "telemetry.sdk.version")
-      , ("resource___user_agent___original", rT "user_agent.original")
-      , ("project_id", top (param . scrubNulText . (.project_id)))
-      , ("summary", arr (.summary))
+   in [ column "timestamp" (\r -> Just r.row.timestamp)
+      , column "observed_timestamp" (\r -> r.row.observed_timestamp)
+      , column "id" (\r -> Just r.row.id)
+      , textField "parent_id" (.parent_id)
+      , splitColumn "hashes" (\r -> fromMaybe V.empty r.row.hashes)
+      , textField "name" (fmap (T.take 500) . (.name))
+      , textField "kind" (.kind)
+      , textField "status_code" (.status_code)
+      , textField "status_message" (.status_message)
+      , textField "level" (.level)
+      , jsonField "severity" (fmap AE.toJSON . (.severity))
+      , column "severity___severity_text" (\r -> sevText r.row)
+      , column "severity___severity_number" (\r -> sevNum r.row)
+      , jsonField "body" (unAesonTextMaybe . (.body))
+      , column "duration" (\r -> r.row.duration)
+      , column "start_time" (\r -> Just r.row.start_time)
+      , column "end_time" (\r -> r.row.end_time)
+      , jsonField "context" (fmap AE.toJSON . (.context))
+      , contextText "context___trace_id" (.trace_id)
+      , contextText "context___span_id" (.span_id)
+      , contextText "context___trace_state" (.trace_state)
+      , contextText "context___trace_flags" (.trace_flags)
+      , column "context___is_remote" (\r -> r.isRemote)
+      , jsonField "events" (unAesonTextMaybe . (.events))
+      , textField "links" (.links)
+      , jsonColumn "attributes" (\r -> AE.Object . KEM.fromMapText <$> r.attrs)
+      , attrText "attributes___client___address" "client.address"
+      , attrInt "attributes___client___port" "client.port"
+      , attrText "attributes___server___address" "server.address"
+      , attrInt "attributes___server___port" "server.port"
+      , attrText "attributes___network___local__address" "network.local.address"
+      , attrInt "attributes___network___local__port" "network.local.port"
+      , attrText "attributes___network___peer___address" "network.peer.address"
+      , attrInt "attributes___network___peer__port" "network.peer.port"
+      , attrText "attributes___network___protocol___name" "network.protocol.name"
+      , attrText "attributes___network___protocol___version" "network.protocol.version"
+      , attrText "attributes___network___transport" "network.transport"
+      , attrText "attributes___network___type" "network.type"
+      , attrInt "attributes___code___number" "code.number"
+      , attrText "attributes___code___file___path" "code.file.path"
+      , attrText "attributes___code___function___name" "code.function.name"
+      , attrInt "attributes___code___line___number" "code.line.number"
+      , attrText "attributes___code___stacktrace" "code.stacktrace"
+      , attrText "attributes___log__record___original" "log.record.original"
+      , attrText "attributes___log__record___uid" "log.record.uid"
+      , attrText "attributes___error___type" "error.type"
+      , attrText "attributes___exception___type" "exception.type"
+      , attrText "attributes___exception___message" "exception.message"
+      , attrText "attributes___exception___stacktrace" "exception.stacktrace"
+      , attrText "attributes___url___fragment" "url.fragment"
+      , attrText "attributes___url___full" "url.full"
+      , attrText "attributes___url___path" "url.path"
+      , attrText "attributes___url___query" "url.query"
+      , attrText "attributes___url___scheme" "url.scheme"
+      , attrText "attributes___user_agent___original" "user_agent.original"
+      , attrText "attributes___http___request___method" "http.request.method"
+      , attrText "attributes___http___request___method_original" "http.request.method_original"
+      , attrInt "attributes___http___response___status_code" "http.response.status_code"
+      , attrInt "attributes___http___request___resend_count" "http.request.resend_count"
+      , attrBigInt "attributes___http___request___body___size" "http.request.body.size"
+      , attrText "attributes___session___id" "session.id"
+      , attrText "attributes___session___previous___id" "session.previous.id"
+      , attrText "attributes___db___system___name" "db.system.name"
+      , attrText "attributes___db___collection___name" "db.collection.name"
+      , attrText "attributes___db___namespace" "db.namespace"
+      , attrText "attributes___db___operation___name" "db.operation.name"
+      , attrText "attributes___db___response___status_code" "db.response.status_code"
+      , attrInt "attributes___db___operation___batch___size" "db.operation.batch.size"
+      , attrText "attributes___db___query___summary" "db.query.summary"
+      , attrText "attributes___db___query___text" "db.query.text"
+      , attrText "attributes___user___id" "user.id"
+      , attrText "attributes___user___email" "user.email"
+      , attrText "attributes___user___full_name" "user.full_name"
+      , attrText "attributes___user___name" "user.name"
+      , attrText "attributes___user___hash" "user.hash"
+      , jsonColumn "resource" (\r -> AE.Object . KEM.fromMapText <$> r.resource)
+      , resourceText "resource___service___name" "service.name"
+      , resourceText "resource___service___version" "service.version"
+      , resourceText "resource___service___instance___id" "service.instance.id"
+      , resourceText "resource___service___namespace" "service.namespace"
+      , resourceText "resource___telemetry___sdk___language" "telemetry.sdk.language"
+      , resourceText "resource___telemetry___sdk___name" "telemetry.sdk.name"
+      , resourceText "resource___telemetry___sdk___version" "telemetry.sdk.version"
+      , resourceText "resource___user_agent___original" "user_agent.original"
+      , column "project_id" (\r -> Just (scrubNulText r.row.project_id))
+      , splitColumn "summary" (\r -> r.row.summary)
       , -- Send the partition column as a Day (PG `date` OID 1082): TF's `date` is a
         -- Date32 Hive key and its pgwire decoder can't coerce TIMESTAMPTZ→Date32, so a
         -- raw UTCTime drops the whole row on the TF leg. PG's `date` is TIMESTAMPTZ and
         -- coerces the Day to midnight, but that value is never read (see otelSpanColsSql).
-        ("date", top (param . utctDay . (.date)))
-      , ("message_size_bytes", top (param . (.message_size_bytes)))
-      , ("errors", aeson (.errors))
+        column "date" (\r -> Just (utctDay r.row.date))
+      , column "message_size_bytes" (\r -> Just r.row.message_size_bytes)
+      , jsonField "errors" (unAesonTextMaybe . (.errors))
       ]
 
 
-otelInsertHeader :: Snippet
-otelInsertHeader =
-  fromString $ "INSERT INTO otel_logs_and_spans (" <> toString (T.intercalate ", " (fst <$> otelColumns)) <> ") VALUES "
-
-
--- | Build the (?, ?, ..., ?) values group for one OtelLogsAndSpans row by
--- walking `otelColumns`. Throws `InvalidOtelRowIdException` on bad id and logs
--- on unparseable `is_remote` rather than silently corrupting the row.
-otelRowSnippet :: (IOE :> es, Log :> es) => OtelLogsAndSpans -> Eff es Snippet
-otelRowSnippet e = do
-  uuidP <- maybe (liftIO $ throwIO (InvalidOtelRowIdException e.id)) (pure . param) (UUID.fromText e.id)
-  isRemoteP <- case e.context >>= (.is_remote) of
-    Nothing -> pure (param (Nothing :: Maybe Bool))
-    Just t -> case T.toLower t of
-      l
-        | l `elem` ["true", "t", "1"] -> pure (param (Just True))
-        | l `elem` ["false", "f", "0"] -> pure (param (Just False))
-        | otherwise -> do
-            Log.logAttention "OTEL_UNPARSEABLE_IS_REMOTE"
-              $ AE.object ["error_id" AE..= ("OTEL_UNPARSEABLE_IS_REMOTE" :: Text), "value" AE..= t, "trace_id" AE..= (e.context >>= (.trace_id))]
-            pure (param (Nothing :: Maybe Bool))
-  let ctx = OtelRowCtx{row = e, am = unAesonTextMaybe e.attributes, rm = unAesonTextMaybe e.resource, uuidP, isRemoteP}
-  pure $ "(" <> mconcat (intersperse ", " [enc ctx | (_, enc) <- otelColumns]) <> ")"
+-- | Per-row prep: decode the attribute/resource maps once (avoids re-parsing
+-- JSON ~50× per row), parse is_remote, and validate the id is a UUID (TS's id
+-- column is uuid — fail loud rather than write under a sentinel). An
+-- unparseable is_remote is logged, not fatal.
+mkOtelRow :: (IOE :> es, Log :> es) => OtelLogsAndSpans -> Eff es OtelRow
+mkOtelRow e = do
+  when (isNothing (UUID.fromText e.id)) $ liftIO $ throwIO (InvalidOtelRowIdException e.id)
+  isRemote <- case e.context >>= (.is_remote) of
+    Nothing -> pure Nothing
+    Just t
+      | T.toLower t `elem` ["true", "t", "1"] -> pure (Just True)
+      | T.toLower t `elem` ["false", "f", "0"] -> pure (Just False)
+      | otherwise -> do
+          Log.logAttention "OTEL_UNPARSEABLE_IS_REMOTE"
+            $ AE.object ["error_id" AE..= ("OTEL_UNPARSEABLE_IS_REMOTE" :: Text), "value" AE..= t, "trace_id" AE..= (e.context >>= (.trace_id))]
+          pure Nothing
+  pure OtelRow{row = e, attrs = unAesonTextMaybe e.attributes, resource = unAesonTextMaybe e.resource, isRemote}
 
 
 removeDuplic :: (Ord a, Ord e) => [(a, e, b, c, d, q)] -> [(a, e, b, c, d, q)]

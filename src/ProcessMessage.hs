@@ -182,31 +182,16 @@ processMessages msgs attrs =
           pure (map (\(a, _, _) -> a) rMsgs, poison, Just (projectCaches, V.fromList (catMaybes paired)))
 
     writeRes <- case mWrite of
-      Nothing -> pure (Right V.empty)
+      Nothing -> pure (Right ())
       Just (projectCaches, paired) ->
         Metrics.timed Metrics.ingestWriteHist []
           $ Telemetry.insertAndHandOff (Telemetry.writeTargetFor appCtx.env.enableTimefusionWrites Nothing) appCtx.extractionWorker projectCaches (V.map (\(_, _, s) -> s) paired)
 
-    let pairedSpans = maybe V.empty snd mWrite
-        idToSource = HM.fromList [(s.id, (a, r)) | (a, r, s) <- V.toList pairedSpans]
     case writeRes of
       Left wf -> pure (Left wf)
-      Right rowPoison -> do
-        -- Lookup miss = silent data loss for that row. By construction the
-        -- map is built from the same `paired` we sent to insertAndHandOff,
-        -- so this can't happen today; log loud if a future change breaks it.
-        let lookedUp = [(HM.lookup s.id idToSource, s, info) | (s, info) <- V.toList rowPoison]
-            missing = [s.id | (Nothing, s, _) <- lookedUp]
-        unless (null missing)
-          $ Log.logAttention "processMessages: poison row missing source mapping"
-          $ object ["missing_count" .= length missing, "ids" .= missing]
-        let writePoison =
-              [ (ackId, raw, Telemetry.poisonReason info)
-              | (Just (ackId, raw), _, info) <- lookedUp
-              ]
-            poisonAcks = HS.fromList [a | (a, _, _) <- writePoison]
-            successAcks = filter (\a -> not (HS.member a poisonAcks)) rAckIds
-        pure (Right (successAcks, poison <> writePoison))
+      -- The whole batch landed on every store (no per-row poison); the only
+      -- DLQ entries are the decode failures collected upstream in `poison`.
+      Right () -> pure (Right (rAckIds, poison))
 
 
 -- | Process a single span to extract entities for hash-stamping.

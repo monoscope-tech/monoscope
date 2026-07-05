@@ -280,53 +280,24 @@ dualWriteWithPoisonMapping
   -> Eff es (Either Telemetry.WriteFailure [Telemetry.PoisonMsg])
 dualWriteWithPoisonMapping appCtx target label caches perMsg = do
   let !allRecords = V.concat [rs | (_, _, rs) <- perMsg]
-      !perRecordSource = concat [replicate (V.length rs) (ackId, raw) | (ackId, raw, rs) <- perMsg]
   stamped <- stampOrPassthrough appCtx allRecords
   let minted = Telemetry.mintOtelLogIds stamped
-  -- Guard the 1:1 ordering invariant explicitly: if either upstream step ever
-  -- drops or reorders records, silent zipWith misalignment would associate the
-  -- wrong (ackId, raw) with a record. Fail loud at the boundary instead.
-  when (length perRecordSource /= V.length minted)
-    $ liftIO
-    $ throwIO
-    $ ErrorCall
-      ("dualWriteWithPoisonMapping: record count mismatch after stamp/mint (sources=" <> show (length perRecordSource) <> ", minted=" <> show (V.length minted) <> ")")
-  let !idToSource = HM.fromList (zipWith (\(ackId, raw) r -> (r.id, (ackId, raw))) perRecordSource (V.toList minted))
   res <-
     checkpoint
       (fromString $ "processList:" <> toString label <> ":bulkInsert")
       (Telemetry.insertAndHandOff target appCtx.extractionWorker caches minted)
-  case res of
-    Left wf -> pure (Left wf)
-    Right rowPoison -> do
-      -- Lookup miss = silent data loss (poison row neither acked nor DLQ'd).
-      -- The length-equality guard above proves it can't happen today; log
-      -- loud if a future change ever breaks the invariant.
-      let lookedUp = [(HM.lookup r.id idToSource, r, info) | (r, info) <- V.toList rowPoison]
-          missing = [r.id | (Nothing, r, _) <- lookedUp]
-      unless (null missing)
-        $ Log.logAttention "dualWriteWithPoisonMapping: poison row missing source mapping"
-        $ AE.object ["missing_count" AE..= length missing, "ids" AE..= missing]
-      pure
-        $ Right
-          [ (ackId, raw, Telemetry.poisonReason info)
-          | (Just (ackId, raw), _, info) <- lookedUp
-          ]
+  -- The batch succeeds or fails as a unit (no per-row poison), so the insert
+  -- side contributes no PoisonMsgs; decode-failure PoisonMsgs are produced by
+  -- the caller before this point.
+  pure (second (const []) res)
 
 
 -- | Boundary adapter: convert a 'WriteFailure' to a gRPC INTERNAL error.
 -- Used at the gRPC handler edge where clients expect status codes via throw,
 -- not Either. Internal pipeline code stays Either-based.
-throwOnWriteFailure :: (IOE :> es, Log :> es) => Either Telemetry.WriteFailure (V.Vector (Telemetry.OtelLogsAndSpans, Telemetry.RowPoisonInfo)) -> Eff es ()
+throwOnWriteFailure :: (IOE :> es) => Either Telemetry.WriteFailure () -> Eff es ()
 throwOnWriteFailure = \case
-  Right rowPoison
-    | V.null rowPoison -> pass
-    | otherwise ->
-        -- Whole-side write succeeded but some rows had per-row failures (TF
-        -- rejected a row PG accepted, or vice versa). gRPC clients can't act
-        -- on per-row state — log loudly so the discrepancy is visible.
-        Log.logAttention "OTLP_GRPC_ROW_POISON_BUT_RETURNING_OK"
-          $ AE.object ["poison_count" AE..= V.length rowPoison]
+  Right () -> pass
   Left wf ->
     liftIO
       $ throwIO

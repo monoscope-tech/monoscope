@@ -139,13 +139,13 @@ spec = sequential $ aroundAll withTestResources do
       metricResult <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just "summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") []
       V.length metricResult.dataset `shouldSatisfy` (> 0)
 
-    it "Test 8.1: slices and persists a >bisectCap OTLP request" $ \tr -> do
-      -- 2 * bisectCap + 1 → 3 slices including a singleton tail; a wrong slice
-      -- boundary fails the row total.
+    it "Test 8.1: persists a large bulk OTLP request in one unnest insert" $ \tr -> do
+      -- The whole batch goes in a single column-oriented INSERT…SELECT…unnest
+      -- (no row-count slicing); a large N exercises that path end to end.
       key <- createTestAPIKey tr pid "Bulk Test Key"
-      let bulkN = 2 * Telemetry.bisectCap + 1
+      let bulkN = 2000 :: Int
           tag = "bulk-8.1"
-          bodies = [tag <> "/" <> show i | i <- [1 .. bulkN] :: [Int]]
+          bodies = [tag <> "/" <> show i | i <- [1 .. bulkN]]
       void $ OtlpServer.logsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ createOtelLogAtTime key bodies frozenTime)
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
       counts :: [Int64] <- runQueryEffect tr
