@@ -86,8 +86,11 @@ jobs:
         image: ghcr.io/monoscope-tech/timefusion:latest
         env:
           PGWIRE_PORT: '5432'
-          # TF refuses to boot without a pgwire password or this opt-in (see its
-          # deploy.yml smoke test); the test connects as postgres/postgres.
+          # pgwire auth: TF checks the client password against PGWIRE_PASSWORD;
+          # insecure mode alone expects an EMPTY password and rejects the test's
+          # "postgres". Set it to match TIMEFUSION_PG_TEST_URL (postgres/postgres).
+          PGWIRE_PASSWORD: postgres
+          # Still needed so TF's gRPC ingest server starts without a GRPC_TOKEN.
           TIMEFUSION_ALLOW_INSECURE_AUTH: 'true'
           AWS_S3_BUCKET: timefusion
           AWS_S3_ENDPOINT: http://minio:9000
