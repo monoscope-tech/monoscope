@@ -185,7 +185,7 @@ processMessages msgs attrs =
       Nothing -> pure (Right ())
       Just (projectCaches, paired) ->
         Metrics.timed Metrics.ingestWriteHist []
-          $ Telemetry.insertAndHandOff (Telemetry.writeTargetFor appCtx.env.enableTimefusionWrites Nothing) appCtx.extractionWorker projectCaches (V.map (\(_, _, s) -> s) paired)
+          $ Telemetry.insertAndHandOff appCtx.env.timefusionUsesPgTypes (Telemetry.writeTargetFor appCtx.env.enableTimefusionWrites Nothing) appCtx.extractionWorker projectCaches (V.map (\(_, _, s) -> s) paired)
 
     case writeRes of
       Left wf -> pure (Left wf)

@@ -1130,23 +1130,26 @@ bulkInsertOtelLogsAndSpansTF
      , Labeled "timefusion" Hasql :> es
      , Log :> es
      )
-  => WriteTarget
+  => Bool
+  -- ^ @tfPgTypes@: the TF leg casts id/JSON to native uuid/jsonb (a Postgres-backed
+  -- TF, e.g. tests). Prod's real TimeFusion passes 'False' (bare text → Variant).
+  -> WriteTarget
   -> V.Vector OtelLogsAndSpans
   -> Eff es (Either WriteFailure ())
-bulkInsertOtelLogsAndSpansTF target records = do
+bulkInsertOtelLogsAndSpansTF tfPgTypes target records = do
   Log.logTrace "bulkInsertOtelLogsAndSpansTF called"
     $ AE.object [("record_count", AE.toJSON $ V.length records), ("write_target", AE.toJSON $ show @Text target)]
   case target of
     WriteBoth -> Ki.scoped \scope -> do
       pgThread <- forkWithCtx scope $ retryHasqlWrite maxWriteAttempts "pg" (bulkInsertOtelLogsAndSpans True records)
-      tfThread <- forkWithCtx scope $ retryHasqlWrite maxWriteAttempts "tf" (labeled @"timefusion" @Hasql $ bulkInsertOtelLogsAndSpans False records)
+      tfThread <- forkWithCtx scope $ retryHasqlWrite maxWriteAttempts "tf" (labeled @"timefusion" @Hasql $ bulkInsertOtelLogsAndSpans tfPgTypes records)
       (pgRes, tfRes) <- Ki.atomically $ (,) <$> Ki.await pgThread <*> Ki.await tfThread
       classify pgRes tfRes
     -- Single-leg replay: only the store that originally failed is rewritten, so
-    -- the durable leg keeps its single copy. Pg casts to native uuid/jsonb; Tf
-    -- leaves bare text (Variant coercion).
+    -- the durable leg keeps its single copy. Pg casts to native uuid/jsonb; real
+    -- Tf leaves bare text (Variant coercion), while a Postgres-backed Tf casts too.
     WritePgOnly -> singleLeg "pg" This (,0) =<< retryHasqlWrite maxWriteAttempts "pg" (bulkInsertOtelLogsAndSpans True records)
-    WriteTfOnly -> singleLeg "tf" That (0,) =<< retryHasqlWrite maxWriteAttempts "tf" (labeled @"timefusion" @Hasql $ bulkInsertOtelLogsAndSpans False records)
+    WriteTfOnly -> singleLeg "tf" That (0,) =<< retryHasqlWrite maxWriteAttempts "tf" (labeled @"timefusion" @Hasql $ bulkInsertOtelLogsAndSpans tfPgTypes records)
   where
     -- Classify one store's result; @side@ is 'This'/'That' for the written leg,
     -- @losts@ places the under-persist count on that leg ((l,0) for pg, (0,l) for tf).
@@ -1212,17 +1215,20 @@ insertAndHandOff
      , Labeled "timefusion" Hasql :> es
      , Log :> es
      )
-  => WriteTarget
+  => Bool
+  -- ^ @tfPgTypes@ (see 'bulkInsertOtelLogsAndSpansTF'): cast the TF leg to native
+  -- uuid/jsonb (Postgres-backed TF). Prod real TimeFusion passes 'False'.
+  -> WriteTarget
   -> EW.WorkerState OtelLogsAndSpans
   -- ^ NB: returns 'Left WriteFailure' if either store failed. Hand-off to the
   -- extraction worker only happens on full success; a failed batch goes to DLQ.
   -> HM.HashMap Projects.ProjectId Projects.ProjectCache
   -> V.Vector OtelLogsAndSpans
   -> Eff es (Either WriteFailure ())
-insertAndHandOff target worker caches records
+insertAndHandOff tfPgTypes target worker caches records
   | V.null records = pure (Right ())
   | otherwise =
-      bulkInsertOtelLogsAndSpansTF target records >>= \case
+      bulkInsertOtelLogsAndSpansTF tfPgTypes target records >>= \case
         Left wf -> pure (Left wf)
         Right () -> do
           -- Every row landed on every required store — hand them all off to
@@ -1904,14 +1910,16 @@ insertSystemLog
   :: (Concurrent :> es, Hasql :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es)
   => Bool
   -- ^ enableTimefusionWrites
+  -> Bool
+  -- ^ @tfPgTypes@ (see 'bulkInsertOtelLogsAndSpansTF')
   -> OtelLogsAndSpans
   -> Eff es ()
-insertSystemLog enableTf otelLog = do
+insertSystemLog enableTf tfPgTypes otelLog = do
   let minted = mintOtelLogIds (V.singleton otelLog)
   -- System logs are best-effort. The inner write logs its own failure via
   -- logAttention; surface a higher-level "system log dropped" so an incident
   -- triager investigating the original event can see that its trail was lost.
-  bulkInsertOtelLogsAndSpansTF (writeTargetFor enableTf Nothing) minted >>= \case
+  bulkInsertOtelLogsAndSpansTF tfPgTypes (writeTargetFor enableTf Nothing) minted >>= \case
     Right _ -> pass
     Left wf ->
       Log.logAttention "SYSTEM_LOG_DROPPED" (AE.object ["reason" AE..= writeFailureSummary wf])

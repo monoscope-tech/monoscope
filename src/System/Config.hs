@@ -139,6 +139,12 @@ data EnvConfig = EnvConfig
   , enableReplayService :: Bool
   , enableTimefusionReads :: Bool
   , enableTimefusionWrites :: Bool
+  , -- | Cast id/JSON columns to native uuid/jsonb on the TimeFusion write leg.
+    -- Real TimeFusion coerces bare text→Variant, so prod leaves this False; the
+    -- test suite points the TF leg at a plain Postgres (which has no such
+    -- coercion) so it sets this True to get the same ::uuid/::jsonb casts the pg
+    -- leg uses.
+    timefusionUsesPgTypes :: Bool
   , kafkaDeadLetterTopic :: Text
   , enableKafkaDeadLetterService :: Bool
   -- ^ Consume 'kafkaDeadLetterTopic' back through processList under its own

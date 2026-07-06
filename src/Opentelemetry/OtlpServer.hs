@@ -285,7 +285,7 @@ dualWriteWithPoisonMapping appCtx target label caches perMsg = do
   res <-
     checkpoint
       (fromString $ "processList:" <> toString label <> ":bulkInsert")
-      (Telemetry.insertAndHandOff target appCtx.extractionWorker caches minted)
+      (Telemetry.insertAndHandOff appCtx.env.timefusionUsesPgTypes target appCtx.extractionWorker caches minted)
   -- The batch succeeds or fails as a unit (no per-row poison), so the insert
   -- side contributes no PoisonMsgs; decode-failure PoisonMsgs are produced by
   -- the caller before this point.
@@ -1543,7 +1543,7 @@ processSignalRequest label signal receivedMsg noun countKey metadataApiKey proje
   unless (V.null records) do
     stamped <- stampOrPassthrough appCtx records
     let minted = Telemetry.mintOtelLogIds stamped
-    Telemetry.insertAndHandOff (Telemetry.writeTargetFor appCtx.env.enableTimefusionWrites Nothing) appCtx.extractionWorker projectCaches minted
+    Telemetry.insertAndHandOff appCtx.env.timefusionUsesPgTypes (Telemetry.writeTargetFor appCtx.env.enableTimefusionWrites Nothing) appCtx.extractionWorker projectCaches minted
       >>= throwOnWriteFailure
     Log.logTrace
       (label <> ": Successfully inserted " <> noun <> " into database")
