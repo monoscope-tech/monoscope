@@ -81,9 +81,8 @@ jobs:
       # (untyped placeholders, unnest casts, Variant coercion) instead of the
       # Postgres-as-TF fallback. TIMEFUSION_PG_TEST_URL below flips it on.
       timefusion:
-        # Pinned to a deployed prod TF SHA (TF publishes only short-SHA tags,
-        # no :latest). Bump when prod TF upgrades.
-        image: ghcr.io/monoscope-tech/timefusion:36e550a
+        # TF's deploy workflow publishes :latest on every master build.
+        image: ghcr.io/monoscope-tech/timefusion:latest
         env:
           PGWIRE_PORT: '5432'
           AWS_S3_BUCKET: timefusion
