@@ -101,6 +101,7 @@ import Data.These (These (..))
 import Data.These qualified as These
 import Data.Time (UTCTime)
 import Data.Time.Clock (addUTCTime, utctDay)
+import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
 import Data.UUID.Quasi (uuid)
 import Data.UUID.V5 qualified as UUIDv5
@@ -1339,13 +1340,44 @@ data OtelCol = OtelCol
   }
 
 
+-- | SQL element type emitted as a @$N::<ty>[]@ cast on every unnest bind
+-- param. TimeFusion (datafusion-postgres) plans the statement at pgwire Parse
+-- time WITHOUT the client-declared param OIDs, so an uncast @unnest($N)@
+-- argument types as Null and the whole INSERT fails with "unnest() does not
+-- support null yet". Timestamps and dates travel as text — TF's pgwire can't
+-- decode @_timestamptz@/@_date@ bind params — and are cast back in the SELECT
+-- ('tsColumn' / the date column).
+class HI.EncodeValue a => UnnestElem a where
+  elemSqlType :: Text
+
+
+instance UnnestElem Text where elemSqlType = "text"
+
+
+instance UnnestElem Int32 where elemSqlType = "int4"
+
+
+instance UnnestElem Int64 where elemSqlType = "int8"
+
+
+instance UnnestElem Bool where elemSqlType = "bool"
+
+
 -- | The single column combinator. hasql-interpolate's @EncodeValue (Vector a)@
 -- instance derives the whole postgres-array encoder for ANY encodable element
--- type (Text, Int32, Int64, UTCTime, Day, Bool, …), so there are no
--- hand-written encoders or per-type helpers. NULL elements are allowed
--- (@EncodeField (Maybe a)@); the SELECT projects the column as-is on both engines.
-column :: HI.EncodeValue a => Text -> (OtelRow -> Maybe a) -> OtelCol
-column nm proj = OtelCol nm (\rows -> encoderAndParam (E.nonNullable HI.encodeValue) (V.map proj rows)) (const Relude.id)
+-- type, so there are no hand-written encoders or per-type helpers. NULL
+-- elements are allowed (@EncodeField (Maybe a)@); the SELECT projects the
+-- column as-is on both engines. The bind param carries an explicit array cast
+-- (see 'UnnestElem').
+column :: forall a. UnnestElem a => Text -> (OtelRow -> Maybe a) -> OtelCol
+column nm proj =
+  OtelCol nm (\rows -> encoderAndParam (E.nonNullable HI.encodeValue) (V.map proj rows) <> fromString (toString ("::" <> elemSqlType @a <> "[]"))) (const Relude.id)
+
+
+-- | Timestamp column: bound as ISO-8601 text (see 'UnnestElem') and cast back
+-- to timestamptz in the SELECT on both engines.
+tsColumn :: Text -> (OtelRow -> Maybe UTCTime) -> OtelCol
+tsColumn nm proj = (column nm (fmap (toText . iso8601Show) . proj)){selectExpr = \_ a -> a <> "::timestamptz"}
 
 
 -- | Text column that PostgreSQL must cast to a native type with no text→T
@@ -1408,8 +1440,8 @@ otelColumns =
       sevText e = e.severity >>= \s -> scrubNulText . toText . encodeEnumSC @"SL" <$> s.severity_text
       sevNum :: OtelLogsAndSpans -> Maybe Int32
       sevNum e = fromIntegral . severity_number <$> e.severity
-   in [ column "timestamp" (\r -> Just r.row.timestamp)
-      , column "observed_timestamp" (\r -> r.row.observed_timestamp)
+   in [ tsColumn "timestamp" (\r -> Just r.row.timestamp)
+      , tsColumn "observed_timestamp" (\r -> r.row.observed_timestamp)
       , castColumn "id" "uuid" (\r -> Just r.row.id)
       , textField "parent_id" (.parent_id)
       , splitColumn "hashes" (\r -> fromMaybe V.empty r.row.hashes)
@@ -1423,8 +1455,8 @@ otelColumns =
       , column "severity___severity_number" (\r -> sevNum r.row)
       , jsonField "body" (unAesonTextMaybe . (.body))
       , column "duration" (\r -> r.row.duration)
-      , column "start_time" (\r -> Just r.row.start_time)
-      , column "end_time" (\r -> r.row.end_time)
+      , tsColumn "start_time" (\r -> Just r.row.start_time)
+      , tsColumn "end_time" (\r -> r.row.end_time)
       , jsonField "context" (fmap AE.toJSON . (.context))
       , contextText "context___trace_id" (.trace_id)
       , contextText "context___span_id" (.span_id)
@@ -1494,11 +1526,11 @@ otelColumns =
       , resourceText "resource___user_agent___original" "user_agent.original"
       , column "project_id" (\r -> Just (scrubNulText r.row.project_id))
       , splitColumn "summary" (\r -> r.row.summary)
-      , -- Send the partition column as a Day (PG `date` OID 1082): TF's `date` is a
-        -- Date32 Hive key and its pgwire decoder can't coerce TIMESTAMPTZ→Date32, so a
-        -- raw UTCTime drops the whole row on the TF leg. PG's `date` is TIMESTAMPTZ and
-        -- coerces the Day to midnight, but that value is never read (see otelSpanColsSql).
-        column "date" (\r -> Just (utctDay r.row.date))
+      , -- Partition column: bound as ISO text and cast @::date@ in the SELECT. TF's
+        -- `date` is a Date32 Hive key (its pgwire can't decode _date/_timestamptz bind
+        -- params, hence text — see 'UnnestElem'); PG's `date` is TIMESTAMPTZ and
+        -- coerces the date to midnight, but that value is never read (see otelSpanColsSql).
+        (column "date" (\r -> Just (toText (iso8601Show (utctDay r.row.date))))){selectExpr = \_ a -> a <> "::date"}
       , column "message_size_bytes" (\r -> Just r.row.message_size_bytes)
       , jsonField "errors" (unAesonTextMaybe . (.errors))
       ]
