@@ -76,6 +76,8 @@ import UnliftIO.MVar (modifyMVar)
 -- created per message. We initialize one lazily and reuse for the lifetime
 -- of the process. Holds an Either so a failed init is retried next call.
 {-# NOINLINE sharedKafkaProducer #-}
+
+
 -- | The SASL/SCRAM connection props shared by every Kafka client (consumer,
 -- shared producer, parking-redrive). One source of truth so a mechanism or
 -- credential change can't drift between clients.

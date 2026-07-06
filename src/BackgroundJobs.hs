@@ -106,8 +106,8 @@ import Pkg.SchemaLearning.Worker qualified as SchemaWorker
 import Pkg.Mail (NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendDiscordAlertWith, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendSlackAlertWith, sendSlackMessage, sendWhatsAppAlert)
 import Pkg.Parser
 import Pkg.PatternMerge qualified as PatternMerge
-import Pkg.Queue (getOrInitKafkaProducer, kafkaSaslExtraProps)
 import Pkg.QueryCache qualified as QueryCache
+import Pkg.Queue (getOrInitKafkaProducer, kafkaSaslExtraProps)
 import Pkg.TraceSessionCache qualified as TSC
 import ProcessMessage (extractObservation, parseCanonicalPaths, processSpanToEntities, tokenizeUrlPath)
 import PyF (fmtTrim)
