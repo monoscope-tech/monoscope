@@ -46,6 +46,7 @@ jobs:
     name: Build and Test
     needs: frontend
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 30
     container:
       image: ghcr.io/monoscope-tech/monoscope-deps:latest
       env:
@@ -98,6 +99,13 @@ jobs:
           # Flush each bucket immediately so a test's writes are queryable within
           # the test's lifetime (no 10-min wait).
           TIMEFUSION_BUFFER_FLUSH_IMMEDIATELY: 'true'
+          # Keep TF lean on the shared runner: it otherwise auto-sizes a ~2.3GB
+          # memory + ~226GB disk Foyer cache from host resources and OOM-kills the
+          # runner alongside the 4 sharded Haskell test processes. No cache/OTLP
+          # needed in CI.
+          TIMEFUSION_FOYER_DISABLED: 'true'
+          TIMEFUSION_BUFFER_MAX_MEMORY_MB: '512'
+          OTEL_TRACES_EXPORTER: none
     steps:
       - uses: actions/checkout@v6
 
