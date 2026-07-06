@@ -72,12 +72,33 @@ jobs:
         env:
           MINIO_ROOT_USER: minioadmin
           MINIO_ROOT_PASSWORD: minioadmin
-          MINIO_DEFAULT_BUCKETS: monoscope-test
+          # timefusion bucket must exist before TF opens its Delta table.
+          MINIO_DEFAULT_BUCKETS: monoscope-test,timefusion
         options: >-
           --health-cmd="curl -fsS http://localhost:9000/minio/health/live"
           --health-interval=5s
           --health-timeout=3s
           --health-retries=20
+      # Real TimeFusion so the dual-write TF leg is exercised exactly like prod
+      # (untyped placeholders, unnest casts, Variant coercion) instead of the
+      # Postgres-as-TF fallback. TIMEFUSION_PG_TEST_URL below flips it on.
+      timefusion:
+        image: ghcr.io/monoscope-tech/timefusion:latest
+        credentials:
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GH_TOKEN }}
+        env:
+          PGWIRE_PORT: '5432'
+          AWS_S3_BUCKET: timefusion
+          AWS_S3_ENDPOINT: http://minio:9000
+          AWS_ACCESS_KEY_ID: minioadmin
+          AWS_SECRET_ACCESS_KEY: minioadmin
+          AWS_REGION: us-east-1
+          AWS_ALLOW_HTTP: 'true'
+          TIMEFUSION_DATA_DIR: /tmp/tf-data
+          # Flush each bucket immediately so a test's writes are queryable within
+          # the test's lifetime (no 10-min wait).
+          TIMEFUSION_BUFFER_FLUSH_IMMEDIATELY: 'true'
     steps:
       - uses: actions/checkout@v6
 
@@ -117,6 +138,14 @@ jobs:
       - name: Run unit-tests
         run: cabal test unit-tests --ghc-options="-O0" --test-show-details=direct
 
+      - name: Wait for TimeFusion pgwire
+        run: |
+          for i in $(seq 1 60); do
+            (echo > /dev/tcp/timefusion/5432) >/dev/null 2>&1 && { echo "TimeFusion up"; exit 0; }
+            sleep 2
+          done
+          echo "TimeFusion did not open pgwire" >&2; exit 1
+
       - name: Run integration-tests
         env:
           USE_EXTERNAL_DB: true
@@ -127,6 +156,8 @@ jobs:
           MINIO_ENDPOINT: http://minio:9000
           MINIO_ACCESS_KEY: minioadmin
           MINIO_SECRET_KEY: minioadmin
+          # Real TimeFusion leg: TestUtils sets tfEnabled + tfPgTypes=False.
+          TIMEFUSION_PG_TEST_URL: postgresql://postgres:postgres@timefusion:5432/postgres
         # Process-sharded (see test/integration/Main.hs): 4 binary copies, each its own
         # RTS running a disjoint shard (SHARD_INDEX/SHARD_TOTAL) sequentially. Sidesteps
         # the in-process hspec `parallel` deadlock; 4 * ~9 conns < Postgres
