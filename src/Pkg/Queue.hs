@@ -6,6 +6,8 @@ module Pkg.Queue (
   ConsumerEff,
   publishJSONToKafka,
   publishToDeadLetterQueue,
+  getOrInitKafkaProducer,
+  kafkaSaslExtraProps,
   runSharedProducer,
   closeSharedKafkaProducer,
   -- exposed for unit tests: the pure consumer logic
@@ -74,6 +76,18 @@ import UnliftIO.MVar (modifyMVar)
 -- created per message. We initialize one lazily and reuse for the lifetime
 -- of the process. Holds an Either so a failed init is retried next call.
 {-# NOINLINE sharedKafkaProducer #-}
+-- | The SASL/SCRAM connection props shared by every Kafka client (consumer,
+-- shared producer, parking-redrive). One source of truth so a mechanism or
+-- credential change can't drift between clients.
+kafkaSaslExtraProps :: EnvConfig -> [(Text, Text)]
+kafkaSaslExtraProps cfg =
+  [ ("security.protocol", "sasl_plaintext")
+  , ("sasl.mechanism", "SCRAM-SHA-256")
+  , ("sasl.username", cfg.kafkaUsername)
+  , ("sasl.password", cfg.kafkaPassword)
+  ]
+
+
 sharedKafkaProducer :: MVar (Maybe KP.KafkaProducer)
 sharedKafkaProducer = unsafePerformIO (newMVar Nothing)
 
@@ -97,10 +111,7 @@ getOrInitKafkaProducer envCfg =
     kafkaProducerProps :: EnvConfig -> KP.ProducerProperties
     kafkaProducerProps cfg =
       KP.brokersList (map K.BrokerAddress cfg.kafkaBrokers)
-        <> KP.extraProp "security.protocol" "sasl_plaintext"
-        <> KP.extraProp "sasl.mechanism" "SCRAM-SHA-256"
-        <> KP.extraProp "sasl.username" cfg.kafkaUsername
-        <> KP.extraProp "sasl.password" cfg.kafkaPassword
+        <> foldMap (uncurry KP.extraProp) (kafkaSaslExtraProps cfg)
         <> KP.extraProp "acks" "all"
         <> KP.extraProp "retries" "2147483647"
         <> KP.extraProp "max.in.flight.requests.per.connection" "5"
@@ -463,10 +474,7 @@ kafkaService appLogger appCtx tp role label kafkaTopics batchSize fn = checkpoin
       K.brokersList (map K.BrokerAddress cfg.kafkaBrokers)
         <> K.groupId (K.ConsumerGroupId groupId)
         <> K.clientId (K.ClientId clientId)
-        <> K.extraProp "security.protocol" "sasl_plaintext"
-        <> K.extraProp "sasl.mechanism" "SCRAM-SHA-256"
-        <> K.extraProp "sasl.username" cfg.kafkaUsername
-        <> K.extraProp "sasl.password" cfg.kafkaPassword
+        <> foldMap (uncurry K.extraProp) (kafkaSaslExtraProps cfg)
         <> K.extraProp "session.timeout.ms" "45000"
         <> K.extraProp "heartbeat.interval.ms" "3000"
         -- 30 min: backlog-drain batches can legitimately process for >5 min

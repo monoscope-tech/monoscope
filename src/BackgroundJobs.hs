@@ -53,6 +53,13 @@ import Hasql.Interpolate qualified as HI
 import Hasql.TH (resultlessStatement, singletonStatement)
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
+import Kafka.Consumer qualified as KC
+import Kafka.Consumer.Types (ConsumerGroupId (..), Offset (..), PartitionOffset (..), TopicPartition (..))
+import Kafka.Metadata qualified as KM
+import Kafka.Producer (KafkaProducer)
+import Kafka.Producer qualified as KProd
+import Kafka.Types (Millis (..), TopicName (..))
+import Kafka.Types qualified as KT
 import Langchain.DocumentLoader.Core qualified
 import Langchain.Embeddings.OpenAI qualified
 import Log (LogLevel (..), Logger, runLogT)
@@ -99,6 +106,7 @@ import Pkg.SchemaLearning.Worker qualified as SchemaWorker
 import Pkg.Mail (NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendDiscordAlertWith, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendSlackAlertWith, sendSlackMessage, sendWhatsAppAlert)
 import Pkg.Parser
 import Pkg.PatternMerge qualified as PatternMerge
+import Pkg.Queue (getOrInitKafkaProducer, kafkaSaslExtraProps)
 import Pkg.QueryCache qualified as QueryCache
 import Pkg.TraceSessionCache qualified as TSC
 import ProcessMessage (extractObservation, parseCanonicalPaths, processSpanToEntities, tokenizeUrlPath)
@@ -178,6 +186,21 @@ data BgJobs
     -- Delivers one digest message per project per channel summarising
     -- rate-limited + log-pattern issues from the past hour.
     NotificationDigestJob UTCTime
+  | -- | Hourly external watchdog. Compares per-project TimescaleDB↔TimeFusion
+    -- row counts for the last settled hour (alerts on TF drift/stall), checks
+    -- the mainline + DLQ-replay consumer groups have live members, and reports
+    -- fresh inflow into the DLQ / parking topics. Added after the 2026-07-06
+    -- silent dual-write loss ran ~9h undetected. Alerts go to the admin
+    -- Discord webhook; the whole job is best-effort (never blocks ingestion).
+    InfraHealthCheck UTCTime
+  | -- | Operator-triggered re-drive of the terminal parking topic
+    -- (@<dlq>-parking@) back into the base DLQ so the (now-fixed) tiered
+    -- replay re-attempts them. Reads up to @cap@ messages per run under a
+    -- dedicated committing group and self-reschedules until drained. This is
+    -- the sanctioned Haskell replacement for the ad-hoc parking_replay script;
+    -- enqueue it manually (see docs/runbooks/dlq-recovery.md) — it is never
+    -- auto-scheduled because parking is a forensic archive by design.
+    ReplayParkedMessages Int
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -363,6 +386,7 @@ processBackgroundJob authCtx bgJob =
               seed 1440 60 BackgroundJobs.PrometheusScrapeTick
               seed 144 600 BackgroundJobs.NotificationSweepJob
               seed 24 3600 BackgroundJobs.NotificationDigestJob
+              seed 24 3600 BackgroundJobs.InfraHealthCheck
 
           Relude.when hourlyJobsExist
             $ Log.logInfo "Hourly jobs already scheduled for today, skipping" ()
@@ -593,6 +617,14 @@ processBackgroundJob authCtx bgJob =
     NotificationDigestJob scheduledTime -> do
       rescheduleSelf authCtx BackgroundJobs.NotificationDigestJob (addUTCTime 3600 scheduledTime)
       unlessStale "NotificationDigestJob" scheduledTime (2 * 3600) $ runNotificationDigest scheduledTime
+    InfraHealthCheck scheduledTime -> do
+      rescheduleSelf authCtx BackgroundJobs.InfraHealthCheck (addUTCTime 3600 scheduledTime)
+      unlessStale "InfraHealthCheck" scheduledTime (2 * 3600) $ runInfraHealthCheck authCtx
+    ReplayParkedMessages cap -> do
+      moved <- runParkingReplay authCtx cap
+      Log.logInfo "ReplayParkedMessages moved parking -> DLQ" ("moved", moved)
+      -- Still messages left (hit the cap): re-enqueue to keep draining.
+      when (moved >= cap) $ Time.currentTime >>= rescheduleSelf authCtx (const (BackgroundJobs.ReplayParkedMessages cap))
     MonoscopeAdminDaily -> do
       -- GC orphaned schema_template rows (no catalog refs, idle 7d)
       deletedTemplates <- SchemaCatalog.vacuumUnreferencedTemplates
@@ -841,6 +873,205 @@ tryStepIO logger ctx label action =
   tryAny action >>= \case
     Right () -> pass
     Left e -> runLogT (show ctx.config.environment) logger ctx.config.logLevel $ LogLegacy.logAttention label (show @Text e)
+
+
+-- | Hourly external watchdog (see the 'InfraHealthCheck' constructor). Runs two
+-- isolated checks — TimescaleDB↔TimeFusion count parity and Kafka pipeline
+-- health — and posts a single consolidated Discord alert if either flags a
+-- problem. Never throws: each check's failure becomes alert text, so a broker
+-- blip or TF outage surfaces rather than crashing the job.
+runInfraHealthCheck :: Config.AuthContext -> ATBackgroundCtx ()
+runInfraHealthCheck authCtx = do
+  now <- Time.currentTime
+  -- Last fully-elapsed clock hour: settled past the ~10-min TF flush, fresh
+  -- enough to catch a loss within the hour it starts.
+  let end = posixSecondsToUTCTime $ fromIntegral (floor (utcTimeToPOSIXSeconds now) `div` 3600 * 3600 :: Integer)
+      start = addUTCTime (-3600) end
+      window = formatUTC start <> " -> " <> formatUTC end <> " UTC"
+      isolate f = either (\(e :: SomeException) -> (["!! check errored: " <> show e], [])) id <$> tryAny f
+  (pAlerts, pInfo) <- isolate (checkParity start end)
+  (kAlerts, kInfo) <- isolate (checkKafkaHealth authCtx.config)
+  let alerts = pAlerts <> kAlerts
+      info = pInfo <> kInfo
+  if null alerts
+    then Log.logInfo "InfraHealthCheck OK" (AE.object ["window" AE..= window, "info" AE..= info])
+    else do
+      Log.logAttention "InfraHealthCheck ALERT" (AE.object ["window" AE..= window, "alerts" AE..= alerts])
+      sendMessageToDiscord
+        ("**🚨 monoscope pipeline alert** (" <> window <> ")\n" <> unlines alerts <> bool ("```\n" <> unlines info <> "```") "" (null info))
+        authCtx.config.discordWebhookUrl
+
+
+-- | Projects whose TimeFusion count is more than @driftPct@ behind Timescale,
+-- ignoring projects below the @minRows@ Timescale floor (absolute-count noise).
+-- Returns (project, tsCount, tfCount, drift%). TF ahead of TS (dedup/dupes)
+-- yields negative drift and is dropped — only TF-behind is a loss signal.
+--
+-- >>> parityDrift 1.0 500 [("a", 1000, 1000), ("b", 1000, 750), ("small", 100, 0)]
+-- [("b",1000,750,25.0)]
+parityDrift :: Double -> Int64 -> [(Text, Int64, Int64)] -> [(Text, Int64, Int64, Double)]
+parityDrift driftPct minRows rows =
+  [ (pid, tsN, tfN, pct)
+  | (pid, tsN, tfN) <- rows
+  , tsN >= minRows
+  , let pct = fromIntegral (tsN - tfN) / fromIntegral tsN * 100 :: Double
+  , pct > driftPct
+  ]
+
+
+-- | Per-project row-count parity, TimescaleDB (source of truth) vs TimeFusion,
+-- over @[start,end)@. Only high-volume projects are drift-checked; a TF query
+-- failure or a zero TF total is itself an alarm. Returns (alerts, info-lines).
+checkParity :: UTCTime -> UTCTime -> ATBackgroundCtx ([Text], [Text])
+checkParity start end = do
+  let minRows = 500 :: Int64 -- ignore drift on low-volume projects (absolute noise)
+      driftPct = 1.0 :: Double
+      topN = 30 :: Int64
+      pct1 x = show (fromIntegral (round (x * 10) :: Int) / 10 :: Double) -- one-decimal %
+  projs :: [(Text, Int64)] <-
+    Hasql.interp
+      [HI.sql|SELECT project_id::text, count(*)::int8 FROM otel_logs_and_spans
+         WHERE timestamp >= #{start}::timestamptz AND timestamp < #{end}::timestamptz
+         GROUP BY project_id ORDER BY 2 DESC LIMIT #{topN}|]
+  results <- forM projs \(pid, tsN) -> do
+    -- project_id filter is mandatory for TF multi-tenant routing.
+    r <-
+      tryAny
+        $ HI.getOneColumn
+        . HI.getOneRow
+        <$> withHasqlTimefusion
+          True
+          ( Hasql.interp
+              [HI.sql|SELECT count(*)::int8 FROM otel_logs_and_spans
+                 WHERE project_id = #{pid}::text AND timestamp >= #{start}::timestamptz AND timestamp < #{end}::timestamptz|]
+          )
+    pure (pid, tsN, r :: Either SomeException Int64)
+  let tfErrs = [pid | (pid, _, Left _) <- results]
+      okRows = [(pid, tsN, tfN) | (pid, tsN, Right tfN) <- results]
+      tsTotal = sum [tsN | (_, tsN, _) <- okRows]
+      tfTotal = sum [tfN | (_, _, tfN) <- okRows]
+      driftAlerts =
+        [ "🔴 TF behind TS by " <> pct1 pct <> "% (-" <> show (tsN - tfN) <> " rows) for " <> pid <> " (TS=" <> show tsN <> " TF=" <> show tfN <> ")"
+        | (pid, tsN, tfN, pct) <- parityDrift driftPct minRows okRows
+        ]
+      errAlert = ["🔴 TF unreachable/errored for " <> show (length tfErrs) <> " projects (e.g. " <> T.intercalate ", " (take 3 tfErrs) <> ")" | not (null tfErrs)]
+      stallAlert = ["🔴 TF INGEST STALLED: TS=" <> show tsTotal <> " rows, TF=0 over top " <> show (length okRows) <> " projects" | tsTotal > 0, tfTotal == 0, null tfErrs]
+  pure (errAlert <> stallAlert <> driftAlerts, ["parity: TS=" <> show tsTotal <> " TF=" <> show tfTotal <> " over top " <> show (length okRows) <> " projects"])
+
+
+-- | Kafka pipeline liveness: the mainline + DLQ-replay consumer groups must have
+-- live members (0 = ingestion/replay dead), and fresh inflow into the DLQ /
+-- parking topics is surfaced (parking growth = data silently awaiting a human;
+-- DLQ spikes = a write leg failing). Uses the shared producer handle read-only.
+checkKafkaHealth :: Config.EnvConfig -> ATBackgroundCtx ([Text], [Text])
+checkKafkaHealth cfg
+  | T.null cfg.kafkaPassword = pure (["kafka checks skipped (no SASL creds)"], [])
+  | otherwise = do
+      now <- Time.currentTime
+      producer <- liftIO $ getOrInitKafkaProducer cfg
+      let timeout = KT.Timeout 10000
+          groups = [cfg.kafkaGroupId, cfg.kafkaGroupId <> "_dlq"]
+          dlq = cfg.kafkaDeadLetterTopic
+          sinceMs = Millis (floor (utcTimeToPOSIXSeconds now) * 1000 - 90 * 60 * 1000) -- 90 min ago
+          matching g = filter ((== g) . unConsumerGroupId . KM.giGroup)
+          -- Alert only when a group is absent or in a terminal 0-member state
+          -- (Empty/Dead). A group mid-rebalance briefly reports 0 members in a
+          -- transient state — don't page for that.
+          isDead ms = null ms || all (\i -> null (KM.giMembers i) && KM.giState i `elem` [KM.GroupEmpty, KM.GroupDead]) ms
+          mkGroups infos =
+            ( ["🔴 consumer group " <> g <> " has no live members — ingestion/replay is DEAD" | g <- groups, isDead (matching g infos)]
+            , [g <> ": " <> show (sum (map (length . KM.giMembers) (matching g infos))) <> " members" | g <- groups, not (null (matching g infos))]
+            )
+      gi <- liftIO $ KM.allConsumerGroupsInfo producer timeout
+      let (groupAlerts, groupInfo) = either (\e -> (["⚠️ list consumer groups failed: " <> show e], [])) mkGroups gi
+      (parkAlert, parkInfo) <- liftIO $ topicInflow producer timeout sinceMs (dlq <> "-parking") True
+      (dlqAlert, dlqInfo) <- liftIO $ topicInflow producer timeout sinceMs dlq False
+      pure (groupAlerts <> parkAlert <> dlqAlert, groupInfo <> parkInfo <> dlqInfo)
+
+
+-- | (alerts, info) for a Kafka topic: @fresh@ = messages produced since
+-- @sinceMs@ (via offsets-for-time vs high watermark); @backlog@ = retained
+-- (high − low). Parking growth alarms on any fresh message; DLQ alarms past a
+-- rate floor to ignore steady trickle.
+topicInflow :: KafkaProducer -> KT.Timeout -> Millis -> Text -> Bool -> IO ([Text], [Text])
+topicInflow producer timeout sinceMs topic isParking = do
+  wms <- KM.watermarkOffsets producer timeout (TopicName topic)
+  ofs <- KM.topicOffsetsForTime producer timeout sinceMs (TopicName topic)
+  let highs = Map.fromList [(KM.woPartitionId w, unOffset (KM.woHighWatermark w)) | Right w <- wms]
+      backlog = sum [unOffset (KM.woHighWatermark w) - unOffset (KM.woLowWatermark w) | Right w <- wms]
+      atTime = either (const Map.empty) (\tps -> Map.fromList [(tpPartition t, o) | t <- tps, PartitionOffset o <- [tpOffset t]]) ofs
+      fresh = sum [max 0 (high - o) | (pid, high) <- Map.toList highs, Just o <- [Map.lookup pid atTime]] :: Int64
+      dlqRate = 1000 :: Int64
+  pure
+    $ if isParking
+      then
+        ( ["🔴 " <> show fresh <> " messages PARKED in the last 90m (backlog " <> show backlog <> ") — data is silently waiting for a human in " <> topic | fresh > 0]
+        , ["parking: " <> show fresh <> " new, backlog " <> show backlog]
+        )
+      else
+        ( ["🔴 " <> show fresh <> " write-failures entered " <> topic <> " in the last 90m (>" <> show dlqRate <> "/window) — a write leg is failing" | fresh > dlqRate]
+        , ["DLQ " <> topic <> ": " <> show fresh <> " new, backlog " <> show backlog]
+        )
+
+
+-- | Re-drive the terminal parking topic back into the base DLQ (see the
+-- 'ReplayParkedMessages' constructor). Reads up to @cap@ messages under a
+-- dedicated committing group so re-runs resume where the last left off, strips
+-- the exhausted retry-budget headers so the fixed ladder gets a fresh run, and
+-- republishes each to the base DLQ. Returns the count moved.
+runParkingReplay :: Config.AuthContext -> Int -> ATBackgroundCtx Int
+runParkingReplay authCtx cap = do
+  let cfg = authCtx.config
+      parking = cfg.kafkaDeadLetterTopic <> "-parking"
+      -- Give exhausted messages a fresh retry budget: the tiered replay keys off
+      -- these, so leaving them would re-park immediately.
+      dropHdrs = ["monoscope-attempt-count", "monoscope-next-due-at", "monoscope-poison-reason"] :: [ByteString]
+      props =
+        KC.brokersList (map KC.BrokerAddress cfg.kafkaBrokers)
+          <> KC.groupId (ConsumerGroupId (cfg.kafkaGroupId <> "_parking_redrive"))
+          <> KC.clientId (KC.ClientId "mono-parking-redrive")
+          <> KC.noAutoCommit
+          <> foldMap (uncurry KC.extraProp) (kafkaSaslExtraProps cfg)
+          <> KC.extraProp "max.partition.fetch.bytes" "67108864"
+          <> KC.extraProp "fetch.max.bytes" "67108864"
+          <> KC.extraProp "receive.message.max.bytes" "104857600"
+      sub = KC.topics [TopicName parking] <> KC.offsetReset KC.Earliest
+  producer <- liftIO $ getOrInitKafkaProducer cfg
+  liftIO
+    $ bracket (KC.newConsumer props sub) (either (const pass) (void . KC.closeConsumer))
+    $ \case
+      Left e -> fail ("parking-redrive consumer: " <> toString (show e))
+      Right c -> do
+        -- Flush the async producer BEFORE committing, so a committed parking
+        -- offset always implies the republished message was delivered (never
+        -- consume-and-lose). A produce error aborts before committing, so the
+        -- un-acked message is re-read next run (idempotent via UUIDv5 dedup).
+        let commit = KProd.flushProducer producer >> void (KC.commitAllOffsets KC.OffsetCommit c)
+            go n misses
+              | n >= cap = pure n
+              | misses >= 3 = pure n -- 3 consecutive empty/transient polls ⇒ drained
+              | otherwise =
+                  KC.pollMessage c (KT.Timeout 5000) >>= \case
+                    Left _ -> go n (misses + 1)
+                    Right rec -> do
+                      let out = filter ((`notElem` dropHdrs) . fst) (KT.headersToList (KC.crHeaders rec))
+                      KProd.produceMessage
+                        producer
+                        KProd.ProducerRecord
+                          { KProd.prTopic = TopicName cfg.kafkaDeadLetterTopic
+                          , KProd.prPartition = KProd.UnassignedPartition
+                          , KProd.prKey = KC.crKey rec
+                          , KProd.prValue = KC.crValue rec
+                          , KProd.prHeaders = KT.headersFromList out
+                          }
+                        >>= \case
+                          Just err -> fail ("parking-redrive produce failed (offsets not advanced): " <> toString (show err))
+                          Nothing -> do
+                            when (n `mod` 200 == 199) commit
+                            go (n + 1) 0
+        moved <- go 0 0
+        commit
+        pure moved
 
 
 -- | Retry a Hasql action on deadlock up to 2 times with 50ms/100ms backoff.
