@@ -653,18 +653,35 @@ decoupledLoop appLogger appCtx tp role batchSize clientId fn = do
     consumerRecordHeadersToHashMap :: K.ConsumerRecord (Maybe ByteString) (Maybe ByteString) -> HashMap Text Text
     consumerRecordHeadersToHashMap record = HM.fromList $ map (bimap decodeUtf8 decodeUtf8) (K.headersToList record.crHeaders)
 
-    -- Dead-letter messages carry ce-type in headers (PubSub path) or derive from original-topic (Kafka path).
-    ceTypeFor :: Text -> Text -> HM.HashMap Text Text -> Text
-    ceTypeFor deadLetterTopic topic headers
-      | topic == deadLetterTopic = fromMaybe (maybe "" topicToCeType (HM.lookup "original-topic" headers)) (HM.lookup "ce-type" headers)
-      | otherwise = topicToCeType topic
+-- | Resolve a chunk's ce-type. DLQ, retry-tier and parking messages carry
+-- ce-type in headers (PubSub path) or derive it from original-topic (Kafka
+-- path) — hence the prefix match: the old @== deadLetterTopic@ guard sent
+-- retry-tier topics to 'topicToCeType', which blanked the header on the first
+-- tier hop and turned every once-failed message into permanent
+-- \"unsupported ce-type\" poison (the 2026-07-06 100k-message parking lot).
+-- An empty header value counts as missing for the same reason: those blanked
+-- headers must fall back to original-topic on re-drive.
+--
+-- >>> ceTypeFor "dlq" "otlp_spans" mempty
+-- "org.opentelemetry.otlp.traces.v1"
+-- >>> ceTypeFor "dlq" "dlq" (HM.fromList [("ce-type", "org.opentelemetry.otlp.logs.v1")])
+-- "org.opentelemetry.otlp.logs.v1"
+-- >>> ceTypeFor "dlq" "dlq-retry-60s" (HM.fromList [("original-topic", "otlp_logs")])
+-- "org.opentelemetry.otlp.logs.v1"
+-- >>> ceTypeFor "dlq" "dlq" (HM.fromList [("ce-type", ""), ("original-topic", "otlp_spans")])
+-- "org.opentelemetry.otlp.traces.v1"
+ceTypeFor :: Text -> Text -> HM.HashMap Text Text -> Text
+ceTypeFor deadLetterTopic topic headers
+  | deadLetterTopic `T.isPrefixOf` topic = fromMaybe (maybe "" topicToCeType (HM.lookup "original-topic" headers)) (mfilter (not . T.null) (HM.lookup "ce-type" headers))
+  | otherwise = topicToCeType topic
 
-    topicToCeType :: Text -> Text
-    topicToCeType topic = case topic of
-      "otlp_spans" -> "org.opentelemetry.otlp.traces.v1"
-      "otlp_logs" -> "org.opentelemetry.otlp.logs.v1"
-      "otlp_metrics" -> "org.opentelemetry.otlp.metrics.v1"
-      _ -> ""
+
+topicToCeType :: Text -> Text
+topicToCeType topic = case topic of
+  "otlp_spans" -> "org.opentelemetry.otlp.traces.v1"
+  "otlp_logs" -> "org.opentelemetry.otlp.logs.v1"
+  "otlp_metrics" -> "org.opentelemetry.otlp.metrics.v1"
+  _ -> ""
 
 
 -- | Turn one poll's records into work items (tpKey, header-record, payloads,
