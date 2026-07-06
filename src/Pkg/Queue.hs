@@ -428,10 +428,10 @@ committableCommits tracker committed =
 
 kafkaService :: Log.Logger -> AuthContext -> TracerProvider -> KafkaRole -> Text -> [Text] -> Int -> ([(Text, ByteString)] -> HM.HashMap Text Text -> ATBackgroundCtx (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))) -> IO ()
 kafkaService appLogger appCtx tp role label kafkaTopics batchSize fn = checkpoint "kafkaService" do
-  -- client.id / group.instance.id: a human-readable label (which consumer this
-  -- is) plus a short nonce to keep the two identical in-process ingest
-  -- consumers distinct. This is the CLIENT-ID/INSTANCE-ID `rpk group describe`
-  -- shows; the broker still appends its own UUID to form the long member.id.
+  -- client.id: a human-readable label (which consumer this is) plus a short
+  -- nonce to keep the two identical in-process ingest consumers distinct.
+  -- This is the CLIENT-ID `rpk group describe` shows; the broker appends its
+  -- own UUID to form the member.id.
   nonce <- T.take 6 . UUID.toText <$> UUID.nextRandom
   let clientId = "mono-" <> label <> "-" <> nonce
       consumerSub = K.topics (map K.TopicName kafkaTopics) <> K.offsetReset K.Earliest
@@ -469,7 +469,12 @@ kafkaService appLogger appCtx tp role label kafkaTopics batchSize fn = checkpoin
         <> K.extraProp "sasl.password" cfg.kafkaPassword
         <> K.extraProp "session.timeout.ms" "45000"
         <> K.extraProp "heartbeat.interval.ms" "3000"
-        <> K.extraProp "max.poll.interval.ms" "300000"
+        -- 30 min: backlog-drain batches can legitimately process for >5 min
+        -- (each message holds many spans). Eviction mid-batch is what this
+        -- guards against — dead-process detection is session.timeout.ms.
+        -- 2026-07-06: 300s evictions + static membership orphaned the whole
+        -- group twice (0 members, ingest down) until a process restart.
+        <> K.extraProp "max.poll.interval.ms" "1800000"
         -- Let the broker coalesce a fetch up to 64 KiB (or 250ms, whichever first)
         -- before responding, instead of returning on the first 1 KiB available.
         -- Fatter fetches fill each poll batch → larger per-partition groups →
@@ -483,7 +488,9 @@ kafkaService appLogger appCtx tp role label kafkaTopics batchSize fn = checkpoin
         <> K.extraProp "fetch.max.bytes" "67108864" -- 64 MiB total per fetch (default 50 MiB)
         <> K.extraProp "receive.message.max.bytes" "104857600" -- 100 MiB socket buffer (> fetch.max.bytes)
         <> K.extraProp "partition.assignment.strategy" "cooperative-sticky"
-        <> K.extraProp "group.instance.id" clientId
+        -- NO group.instance.id (static membership): a fenced/evicted static
+        -- member never rejoins in-process — the group sat at 0 members while
+        -- the supervised thread looked alive. Dynamic members just rejoin.
         <> K.logLevel K.KafkaLogInfo
 
 
