@@ -294,11 +294,11 @@ data AuthContext = AuthContext
   , hasqlPool :: OHasql.TracedPool
   , hasqlJobsPool :: OHasql.TracedPool
   , hasqlTimefusionPool :: OHasql.TracedPool
-  , -- | Whether the "timefusion" pool actually points at a plain Postgres (tests),
-    -- which — like the pg leg — needs id/JSON cast to native uuid/jsonb. Real
-    -- TimeFusion rejects those OIDs and coerces bare text→Variant, so prod is False.
-    -- This describes pool wiring, hence it lives here and not on env-decoded EnvConfig.
-    hasqlTimefusionUsesPgTypes :: Bool
+  , hasqlTimefusionUsesPgTypes :: Bool
+  -- ^ Whether the "timefusion" pool actually points at a plain Postgres (tests),
+  -- which — like the pg leg — needs id/JSON cast to native uuid/jsonb. Real
+  -- TimeFusion rejects those OIDs and coerces bare text→Variant, so prod is False.
+  -- This describes pool wiring, hence it lives here and not on env-decoded EnvConfig.
   , projectCache :: Cache Projects.ProjectId Projects.ProjectCache
   , logsPatternCache :: Cache Projects.ProjectId (V.Vector Text)
   , projectKeyCache :: Cache Text (Maybe Projects.ProjectId)
