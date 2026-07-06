@@ -108,4 +108,13 @@ RUN chown -R monoscope:monoscope /opt/monoscope && \
 USER monoscope
 
 EXPOSE 8080
+
+# Liveness of the web listener itself (not just the process): a wedged warp
+# accept-loop leaves the container "running" but refusing connections, so Swarm
+# keeps routing 1/N of VIP traffic to a black-hole. Probe /status (bare 200, no
+# auth redirect) over bash /dev/tcp — the image has no curl/wget. ${PORT:-8080}
+# matches prod (PORT=80) and the exposed default.
+HEALTHCHECK --interval=15s --timeout=5s --start-period=90s --retries=3 \
+  CMD ["bash","-c","exec 3<>/dev/tcp/127.0.0.1/${PORT:-8080}; printf 'GET /status HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3; head -1 <&3 | grep -q '200 OK'"]
+
 ENTRYPOINT ["./monoscope-server"]
