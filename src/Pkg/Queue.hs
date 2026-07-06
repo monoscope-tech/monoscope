@@ -653,6 +653,7 @@ decoupledLoop appLogger appCtx tp role batchSize clientId fn = do
     consumerRecordHeadersToHashMap :: K.ConsumerRecord (Maybe ByteString) (Maybe ByteString) -> HashMap Text Text
     consumerRecordHeadersToHashMap record = HM.fromList $ map (bimap decodeUtf8 decodeUtf8) (K.headersToList record.crHeaders)
 
+
 -- | Resolve a chunk's ce-type. DLQ, retry-tier and parking messages carry
 -- ce-type in headers (PubSub path) or derive it from original-topic (Kafka
 -- path) — hence the prefix match: the old @== deadLetterTopic@ guard sent
