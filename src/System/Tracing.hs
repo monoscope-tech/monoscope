@@ -25,7 +25,6 @@ import Effectful.Ki qualified as Ki
 import Effectful.Log (Log)
 import Effectful.Log qualified as Log
 import Effectful.TH
-import UnliftIO qualified
 import OpenTelemetry.Attributes (Attribute)
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Context qualified as Context
@@ -39,6 +38,7 @@ import OpenTelemetry.Trace (
  )
 import OpenTelemetry.Trace qualified as Trace
 import Relude hiding (span)
+import UnliftIO qualified
 import UnliftIO.Exception (bracket, finally, tryAny, withException)
 
 
