@@ -977,7 +977,6 @@ sessionsHeader_ :: LogQueries.SessionSummary -> Html ()
 sessionsHeader_ summ = do
   let total = fromIntegral summ.totalSessions :: Int
       errored = fromIntegral summ.erroredSessions :: Int
-      clean = max 0 (total - errored)
       errRate = if total == 0 then 0 else 100 * (fromIntegral errored :: Double) / fromIntegral total
       medDur = toText $ getDurationNSMS (fromIntegral summ.medianDurationNs)
       p95Dur = toText $ getDurationNSMS (fromIntegral summ.p95DurationNs)
@@ -986,24 +985,26 @@ sessionsHeader_ summ = do
       maxBar = foldl' max 0 $ zipWith (+) summ.clean summ.errored
       norm n = if maxBar <= 0 then 0 else (fromIntegral n / fromIntegral maxBar :: Double) * 100
       bucketFrom i = summ.bucketStartEpoch + i * summ.bucketWidthSec
+
       kpi :: Text -> Text -> Maybe Text -> Html ()
       kpi label value subM = div_ [class_ "surface-raised rounded-2xl px-3 py-2 flex flex-col gap-0.5 min-w-0"] do
         span_ [class_ "text-xs text-textWeak truncate"] $ toHtml label
         strong_ [class_ "text-textStrong text-xl font-bold tabular-nums leading-tight truncate"] $ toHtml value
         whenJust subM (span_ [class_ "text-xs text-textWeak tabular-nums truncate"] . toHtml)
+
       legend :: Text -> Html () -> Html ()
-      legend cls label = span_ [class_ "flex items-center gap-1"] do
-        span_ [class_ $ "inline-block w-2 h-2 rounded-sm " <> cls] ""
-        label
+      legend cls label = span_ [class_ "flex items-center gap-1"] (span_ [class_ $ "inline-block w-2 h-2 rounded-sm " <> cls] "" >> label)
+
       kpis :: [(Text, Text, Maybe Text)]
       kpis =
-        [ ("Sessions" :: Text, prettyPrintCount total, Just $ prettyPrintCount clean <> " clean")
+        [ ("Sessions" :: Text, prettyPrintCount total, Just $ prettyPrintCount (max 0 (total - errored)) <> " clean")
         , ("Errored", fmtPct1 errRate, Just $ prettyPrintCount errored <> " sessions")
         , ("Median duration", medDur, Just $ "p95 " <> p95Dur)
         , ("Median events", prettyPrintCount $ fromIntegral summ.medianEvents, Just $ prettyPrintCount totalEvt <> " total")
         , ("Users", prettyPrintCount $ fromIntegral summ.uniqueUsers, Nothing)
         , ("Services", prettyPrintCount $ fromIntegral summ.uniqueServices, Nothing)
         ]
+
   div_ [class_ "mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full flex flex-col gap-2"] do
     div_ [class_ "grid grid-cols-6 max-md:grid-cols-3 gap-2"] $ forM_ kpis \(label, value, subM) -> kpi label value subM
     div_ [class_ "surface-raised rounded-2xl px-3 py-2"] do
@@ -1012,6 +1013,7 @@ sessionsHeader_ summ = do
         div_ [class_ "flex gap-3 text-xs text-textWeak"] do
           legend "bg-fillBrand-strong/70" "Clean"
           legend "bg-fillError-strong" "Errored"
+
       if total == 0 || null bars
         then div_ [class_ "h-12 flex items-center justify-center text-xs text-textWeak"] "No sessions in range"
         else div_ [class_ "flex items-end gap-[2px] h-12"] do
