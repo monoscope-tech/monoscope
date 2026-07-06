@@ -15,12 +15,13 @@ import Data.UUID qualified as UUID
 import Data.Effectful.Hasql qualified as EHasql
 import Database.PostgreSQL.Simple (Only (..), Query, execute_, query)
 import Hasql.Errors qualified as HE
+import Hasql.Interpolate qualified as HI
 import Hasql.Pool qualified as HP
 import UnliftIO.Exception (finally, throwIO, try)
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Opentelemetry.OtlpServer qualified as OtlpServer
-import Pkg.DeriveUtils (UUIDId (..), mkHasqlPool)
+import Pkg.DeriveUtils (UUIDId (..), mkHasqlPool, rawSql)
 import Pkg.TestUtils
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
@@ -55,11 +56,18 @@ demoProjectId = UUIDId UUID.nil
 
 -- | Rows the demo project currently holds in otel_logs_and_spans. Used as a
 -- before/after delta so leg-targeting can be asserted without a DB reset.
+-- Count spans in the TimeFusion store (the leg the tf-failed replay writes to),
+-- NOT trPool: the postgres-simple timefusionPgPool always points at the main
+-- test DB even when TIMEFUSION_PG_TEST_URL wires in a real TF, so only the hasql
+-- TF pool sees real-TF rows. project_id is embedded as a literal so the same
+-- query works whether TF is real (text column) or the Postgres-as-TF fallback
+-- (uuid column).
 countDemoSpans :: TestResources -> IO Int
 countDemoSpans tr =
-  withResource tr.trPool \c ->
-    query c "SELECT count(*)::int FROM otel_logs_and_spans WHERE project_id = ?" (Only demoProjectId)
-      <&> \rows -> sum [n | Only n <- rows]
+  fromIntegral @Int64
+    <$> runTestBg frozenTime tr (EHasql.withHasqlTimefusion True (HI.getOneColumn . HI.getOneRow <$> EHasql.interp (rawSql sql)))
+  where
+    sql = "SELECT count(*)::int8 FROM otel_logs_and_spans WHERE project_id = '" <> demoProjectId.toText <> "'"
 
 
 -- | Force the dual-write on (both pools point at the shared test DB unless
