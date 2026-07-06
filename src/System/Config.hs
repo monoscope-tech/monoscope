@@ -139,12 +139,6 @@ data EnvConfig = EnvConfig
   , enableReplayService :: Bool
   , enableTimefusionReads :: Bool
   , enableTimefusionWrites :: Bool
-  , timefusionUsesPgTypes :: Bool
-  -- ^ Cast id/JSON columns to native uuid/jsonb on the TimeFusion write leg.
-  -- Real TimeFusion coerces bare text→Variant, so prod leaves this False; the
-  -- test suite points the TF leg at a plain Postgres (which has no such
-  -- coercion) so it sets this True to get the same ::uuid/::jsonb casts the pg
-  -- leg uses.
   , kafkaDeadLetterTopic :: Text
   , enableKafkaDeadLetterService :: Bool
   -- ^ Consume 'kafkaDeadLetterTopic' back through processList under its own
@@ -300,6 +294,11 @@ data AuthContext = AuthContext
   , hasqlPool :: OHasql.TracedPool
   , hasqlJobsPool :: OHasql.TracedPool
   , hasqlTimefusionPool :: OHasql.TracedPool
+  , -- | Whether the "timefusion" pool actually points at a plain Postgres (tests),
+    -- which — like the pg leg — needs id/JSON cast to native uuid/jsonb. Real
+    -- TimeFusion rejects those OIDs and coerces bare text→Variant, so prod is False.
+    -- This describes pool wiring, hence it lives here and not on env-decoded EnvConfig.
+    hasqlTimefusionUsesPgTypes :: Bool
   , projectCache :: Cache Projects.ProjectId Projects.ProjectCache
   , logsPatternCache :: Cache Projects.ProjectId (V.Vector Text)
   , projectKeyCache :: Cache Text (Maybe Projects.ProjectId)
@@ -382,6 +381,7 @@ configToEnv config = do
       , hasqlPool
       , hasqlJobsPool
       , hasqlTimefusionPool
+      , hasqlTimefusionUsesPgTypes = False -- prod TF is a real TimeFusion: bare text→Variant
       , env = config
       , projectCache
       , projectKeyCache

@@ -758,9 +758,7 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
         Nothing -> (envConfig0, False)
       -- Flip the flag here (not just in the override at AuthContext.config) so the
       -- AuthContext.env slot also sees it; OtlpServer reads from .env.enableTimefusionWrites.
-      -- With no real TF wired in, the "timefusion" leg is a plain Postgres, which
-      -- (like the pg leg) needs ::uuid/::jsonb casts rather than bare text→Variant.
-      envConfig = envConfig1{enableTimefusionWrites = tfEnabled, timefusionUsesPgTypes = isNothing tfPgUrl}
+      envConfig = envConfig1{enableTimefusionWrites = tfEnabled}
   extractionWorker <- ExtractionWorker.initWorkerState envConfig.extractionWorkerShards envConfig.extractionQueueCapacity
   atomically $ writeTVar extractionWorker.acceptingBatches True
   traceSessionCache <- TSC.newTraceSessionCache
@@ -775,6 +773,9 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
           hasqlMain
           hasqlJobs
           hasqlTf
+          -- With no real TF wired in, the "timefusion" pool is a plain Postgres, so it
+          -- needs the same ::uuid/::jsonb casts as the pg leg (isNothing tfPgUrl → True).
+          (isNothing tfPgUrl)
           projectCache
           logsPatternCache
           projectKeyCache
