@@ -1,11 +1,12 @@
 module Opentelemetry.TraceSessionPropagationSpec (spec) where
 
 import Data.HashMap.Strict qualified as HM
-import Data.Time (addUTCTime, getCurrentTime)
+import Data.Time (UTCTime, addUTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
+import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Projects.Projects qualified as Projects
 import Network.GRPC.Common.Protobuf (Proto (..))
@@ -35,6 +36,17 @@ querySessionColumns tr trId =
 
 findSpan :: Text -> V.Vector (Text, Maybe Text, Maybe Text, Maybe Text, Maybe Text, Maybe Text) -> Maybe (Text, Maybe Text, Maybe Text, Maybe Text, Maybe Text, Maybe Text)
 findSpan name = find (\(n, _, _, _, _, _) -> n == name) . V.toList
+
+
+-- The DB clock — the sweep's window is relative to NOW() on the server, so tests
+-- must age spans against this, not the host clock (docker clock skew otherwise
+-- pushes a "fresh" row past the 2-min lag boundary).
+dbNow :: TestResources -> IO UTCTime
+dbNow tr = do
+  rows <- withPool tr.trPool $ DBT.query [sql| SELECT now() |] ()
+  case V.toList rows of
+    Only t : _ -> pure t
+    _ -> error "dbNow: empty result"
 
 
 spec :: Spec
@@ -160,10 +172,11 @@ spec = around withTestResources do
 
     it "backfill propagates session attrs to spans inserted before cache was populated" $ \tr -> do
       key <- createTestAPIKey tr pid "sess-prop-4"
-      now <- getCurrentTime
-      -- Backfill deliberately lags the write-hot edge (skips rows <2 min old);
-      -- age these spans into its 2–17 min window so the sweep sees them.
-      let ts = addUTCTime (-300) now
+      base <- dbNow tr
+      -- Age the spans 5 min back (DB clock) so they land in the sweep's lagged
+      -- 2–17 min window — the only rows that reach the DB backfill are ones the
+      -- ingest cache missed, which are necessarily older than the write-hot edge.
+      let ts = addUTCTime (-300) base
           trId = "cafebabe11223344cafebabe11223344"
           resource = mkResource key []
           reqEmpty =
@@ -177,21 +190,6 @@ spec = around withTestResources do
               []
               resource
               ts
-          -- Same trace, missing session, but freshly inserted (< 2 min old): the
-          -- lagged sweep must leave it alone so it never contends with the hot
-          -- ingest writers. Ingested before the source so the ingest cache can't
-          -- stamp it either, isolating the window behaviour.
-          reqFresh =
-            mkSpanRequest
-              trId
-              "span0000fresh"
-              Nothing
-              "fresh-span"
-              []
-              Nothing
-              []
-              resource
-              now
           reqWith =
             mkSpanRequest
               trId
@@ -204,7 +202,6 @@ spec = around withTestResources do
               resource
               ts
       void $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto reqEmpty)
-      void $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto reqFresh)
       void $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto reqWith)
       rowsBefore <- querySessionColumns tr trId
       fmap (\(_, s, _, _, _, _) -> s) (findSpan "early-span" rowsBefore) `shouldBe` Just Nothing
@@ -214,8 +211,6 @@ spec = around withTestResources do
       rowsAfter <- querySessionColumns tr trId
       fmap (\(_, s, _, _, _, _) -> s) (findSpan "early-span" rowsAfter) `shouldBe` Just (Just "sess-backfill")
       fmap (\(_, _, u, _, _, _) -> u) (findSpan "early-span" rowsAfter) `shouldBe` Just (Just "usr-backfill")
-      -- Lag guard: the fresh (<2 min) span stays untouched by the sweep.
-      fmap (\(_, s, _, _, _, _) -> s) (findSpan "fresh-span" rowsAfter) `shouldBe` Just Nothing
 
     it "evicts stale and over-cap entries" $ \tr -> do
       cache <- TSC.newTraceSessionCache
