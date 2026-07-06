@@ -25,6 +25,7 @@ import Effectful.Ki qualified as Ki
 import Effectful.Log (Log)
 import Effectful.Log qualified as Log
 import Effectful.TH
+import UnliftIO qualified
 import OpenTelemetry.Attributes (Attribute)
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Context qualified as Context
@@ -111,8 +112,20 @@ forkBackground scopeM label action =
     Nothing -> void $ forkIO guardedAction
   where
     guardedAction =
-      whenLeftM_ (tryAny action) \e ->
+      whenLeftM_ (tryAny runWithTimeout) \e ->
         Log.logAttention (label <> " background task failed") (AE.object ["error" AE..= show @Text e])
+    -- Hard-cap every fire-and-forget task. A hung external call (Slack/Twilio HTTP
+    -- with no response timeout) otherwise keeps its ki fiber alive, blocking the
+    -- app-lifetime scope's reap on shutdown → zombie process (2026-07-06 incident).
+    runWithTimeout =
+      UnliftIO.timeout backgroundTaskTimeoutMicros action >>= \case
+        Just () -> pass
+        Nothing -> Log.logAttention (label <> " background task timed out") (AE.object ["timeout_secs" AE..= (backgroundTaskTimeoutMicros `div` 1_000_000 :: Int)])
+
+
+-- | Wall-clock cap for a single 'forkBackground' task (Slack/Twilio/WhatsApp).
+backgroundTaskTimeoutMicros :: Int
+backgroundTaskTimeoutMicros = 30_000_000 -- 30s
 
 
 -- | Standard attributes for batch-processing root spans (queue consumers,

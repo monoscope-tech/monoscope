@@ -2,7 +2,7 @@ module System.Server (runMonoscope, mkServer, cancelAllConcurrently) where
 
 import BackgroundJobs qualified
 import Colourista.IO (blueMessage)
-import Control.Concurrent (threadDelay)
+import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.Async (Async, async, cancel, mapConcurrently_, race, waitAny)
 import Control.Exception.Safe qualified as Safe
 import Data.Aeson qualified as AE
@@ -39,7 +39,9 @@ import System.Config (
   EnvConfig (..),
   getAppContext,
  )
+import System.Exit (ExitCode (ExitFailure))
 import System.Logging qualified as Logging
+import System.Posix.Process (exitImmediately)
 import System.Posix.Signals (Handler (Catch), installHandler, sigINT, sigTERM)
 import System.TimeManager (TimeoutThread)
 import System.Timeout (timeout)
@@ -181,6 +183,15 @@ shutdownDeadlineUs :: Int
 shutdownDeadlineUs = 15_000_000
 
 
+-- | Hard backstop from the moment shutdown begins to a guaranteed process exit.
+-- Generous enough for a normal graceful drain (buffer flush + pool close, ~20-25s)
+-- but bounded so a wedged fiber reap / kafka-producer close / pool destroy can't
+-- leave a zombie — a live process whose Warp socket is already closed still holds
+-- its swarm VIP slot and black-holes 1/N of traffic (2026-07-06 incident).
+hardExitDeadlineUs :: Int
+hardExitDeadlineUs = 40_000_000
+
+
 -- | Block until either a service fiber exits on its own or we receive
 -- SIGINT/SIGTERM, then cancel every fiber. Replaces async's @waitAnyCancel@,
 -- whose @mapM_ cancel@ cancels sequentially and blocks on each fiber's death
@@ -202,7 +213,14 @@ awaitShutdown :: [Async a] -> IO ()
 awaitShutdown asyncs = do
   stop <- newEmptyMVar
   for_ [sigINT, sigTERM] \s -> installHandler s (Catch (void (tryPutMVar stop ()))) Nothing
-  void (race (takeMVar stop) (waitAny asyncs)) `Safe.finally` cancelAllConcurrently shutdownDeadlineUs asyncs
+  -- Arm the hard-exit watchdog the instant shutdown starts (a fiber died or a
+  -- signal arrived). It outlives the fiber reap and 'shutdownMonoscope' cleanup
+  -- that run after this returns, so even if one of those wedges the process still
+  -- dies and Swarm gets a clean restart instead of a black-holing zombie.
+  let teardown = do
+        void $ forkIO $ threadDelay hardExitDeadlineUs >> exitImmediately (ExitFailure 1)
+        cancelAllConcurrently shutdownDeadlineUs asyncs
+  void (race (takeMVar stop) (waitAny asyncs)) `Safe.finally` teardown
 
 
 -- | Cancel every fiber CONCURRENTLY (vs async's sequential @mapM_ cancel@),
