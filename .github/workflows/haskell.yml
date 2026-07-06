@@ -83,7 +83,9 @@ jobs:
       # (untyped placeholders, unnest casts, Variant coercion) instead of the
       # Postgres-as-TF fallback. TIMEFUSION_PG_TEST_URL below flips it on.
       timefusion:
-        image: ghcr.io/monoscope-tech/timefusion:latest
+        # Pinned to a deployed prod TF SHA (TF publishes only short-SHA tags,
+        # no :latest). Bump when prod TF upgrades.
+        image: ghcr.io/monoscope-tech/timefusion:36e550a
         credentials:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GH_TOKEN }}
