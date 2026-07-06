@@ -85,6 +85,9 @@ jobs:
         image: ghcr.io/monoscope-tech/timefusion:latest
         env:
           PGWIRE_PORT: '5432'
+          # TF refuses to boot without a pgwire password or this opt-in (see its
+          # deploy.yml smoke test); the test connects as postgres/postgres.
+          TIMEFUSION_ALLOW_INSECURE_AUTH: 'true'
           AWS_S3_BUCKET: timefusion
           AWS_S3_ENDPOINT: http://minio:9000
           AWS_ACCESS_KEY_ID: minioadmin
