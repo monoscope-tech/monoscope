@@ -24,16 +24,18 @@ spec :: Spec
 spec = describe "isTransientException" $ do
   let asExc = toException . EHasql.HasqlException
 
-  it "marks ConnectionUsageError (OtherConnectionError …) as transient — POISON_ROW_DROPPED regression" $
-    EHasql.isTransientException (asExc (HP.ConnectionUsageError (HE.OtherConnectionError "FATAL: the database system is starting up\n")))
-      `shouldBe` True
+  it "marks ConnectionUsageError (OtherConnectionError …) as transient — POISON_ROW_DROPPED regression"
+    $ EHasql.isTransientException (asExc (HP.ConnectionUsageError (HE.OtherConnectionError "FATAL: the database system is starting up\n")))
+    `shouldBe` True
 
-  it "marks every named ConnectionError constructor as transient (server never saw the row)" $
-    for_ allConnectionErrors $ \ce ->
+  it "marks every named ConnectionError constructor as transient (server never saw the row)"
+    $ for_ allConnectionErrors
+    $ \ce ->
       EHasql.isTransientException (asExc (HP.ConnectionUsageError ce)) `shouldBe` True
 
-  it "marks AcquisitionTimeoutUsageError as transient" $
-    EHasql.isTransientException (asExc HP.AcquisitionTimeoutUsageError) `shouldBe` True
+  it "marks AcquisitionTimeoutUsageError as transient"
+    $ EHasql.isTransientException (asExc HP.AcquisitionTimeoutUsageError)
+    `shouldBe` True
 
   -- Regression for the 2026-06-21 DLQ flood: pgdog / datafusion-postgres reset a
   -- backend connection mid-statement and reply with a server error carrying an
@@ -41,14 +43,26 @@ spec = describe "isTransientException" $ do
   -- so the dual-write/read-gate retry treated the reset as poison and
   -- dead-lettered writable data. An empty code is never a real PG execution
   -- error (those always carry a 5-char SQLSTATE) → treat as transient.
-  it "marks an empty-SQLSTATE ServerError as transient (pgdog/pgwire reset)" $
-    EHasql.isTransientException (asExc emptySqlStateError) `shouldBe` True
+  it "marks an empty-SQLSTATE ServerError as transient (pgdog/pgwire reset)"
+    $ EHasql.isTransientException (asExc emptySqlStateError)
+    `shouldBe` True
 
-  it "keeps a real-SQLSTATE ServerError non-transient (genuine poison still routes to DLQ)" $
-    EHasql.isTransientException (asExc realSqlStateError) `shouldBe` False
+  it "keeps a real-SQLSTATE ServerError non-transient (genuine poison still routes to DLQ)"
+    $ EHasql.isTransientException (asExc realSqlStateError)
+    `shouldBe` False
 
-  it "marks an empty-SQLSTATE ScriptSessionError as transient (reset mid-script)" $
-    EHasql.isTransientException (asExc emptyScriptError) `shouldBe` True
+  it "marks an empty-SQLSTATE ScriptSessionError as transient (reset mid-script)"
+    $ EHasql.isTransientException (asExc emptyScriptError)
+    `shouldBe` True
+
+  -- Regression for the 2026-07-06 wedged-node incident: session-backfill's
+  -- lock_timeout (55P03) is an expected, self-healing skip. It must be
+  -- classified so callers can swallow it as a no-op instead of surfacing it
+  -- as an "attention" log that floods the alert stream during lock contention.
+  it "classifies 55P03 as a lock timeout, and nothing else" $ do
+    EHasql.isLockTimeout (EHasql.HasqlException lockTimeoutError) `shouldBe` True
+    EHasql.isLockTimeout (EHasql.HasqlException realSqlStateError) `shouldBe` False -- 23505
+    EHasql.isLockTimeout (EHasql.HasqlException deadlockError) `shouldBe` False -- 40P01
   where
     allConnectionErrors =
       [ HE.NetworkingConnectionError "ECONNREFUSED"
@@ -62,3 +76,7 @@ spec = describe "isTransientException" $ do
       HP.SessionUsageError (HE.StatementSessionError 1 0 "insert into otel_logs_and_spans ..." [] True (HE.ServerStatementError (HE.ServerError "23505" "duplicate key value violates unique constraint" Nothing Nothing Nothing)))
     emptyScriptError =
       HP.SessionUsageError (HE.ScriptSessionError "vacuum analyze" (HE.ServerError "" "Server error" Nothing Nothing Nothing))
+    lockTimeoutError =
+      HP.SessionUsageError (HE.StatementSessionError 1 0 "update otel_logs_and_spans ..." [] False (HE.ServerStatementError (HE.ServerError "55P03" "canceling statement due to lock timeout" Nothing Nothing Nothing)))
+    deadlockError =
+      HP.SessionUsageError (HE.StatementSessionError 1 0 "update otel_logs_and_spans ..." [] False (HE.ServerStatementError (HE.ServerError "40P01" "deadlock detected" Nothing Nothing Nothing)))

@@ -5,6 +5,7 @@ module Data.Effectful.Hasql (
   isTransientHasqlError,
   isTransientException,
   isDeadlockError,
+  isLockTimeout,
   isUniqueViolation,
   runHasqlPool,
   use,
@@ -113,6 +114,13 @@ isDeadlockError :: HasqlException -> Bool
 isDeadlockError = (== Just "40P01") . serverErrorCode
 
 
+-- | Statement canceled by lock_timeout (SQLSTATE 55P03) — an expected, self-healing
+-- skip for opportunistic writers gated behind SET LOCAL lock_timeout (e.g. session-backfill),
+-- not a page-worthy fault. Callers treat it like a no-op, not an error.
+isLockTimeout :: HasqlException -> Bool
+isLockTimeout = (== Just "55P03") . serverErrorCode
+
+
 -- | Unique-constraint violation (SQLSTATE 23505) — lets a handler turn a losing
 -- concurrent insert into a friendly message instead of a raw 500.
 isUniqueViolation :: HasqlException -> Bool
@@ -156,8 +164,20 @@ interpExecute_ :: (Hasql :> es, IOE :> es) => HI.Sql -> Eff es ()
 interpExecute_ s = void $ interpExecute s
 
 
+-- | Abort any write transaction left @idle in transaction@ for >60s, releasing
+-- every lock it holds. @statement_timeout@ does NOT cover this state — a txn
+-- whose last statement finished but never COMMITted (client/pooler orphaned it)
+-- holds its locks indefinitely and wedges the whole table (outage 2026-07-06,
+-- where a stalled backfill blocked every enrichment writer). Only writes take
+-- row/table locks, so read-only txns are left untouched. Runs on the main PG
+-- pool only; TF writes never use 'transaction'.
+guardWriteTx :: TxS.Mode -> Tx.Transaction a -> Tx.Transaction a
+guardWriteTx TxS.Write tx = Tx.sql "SET LOCAL idle_in_transaction_session_timeout = '60s'" >> tx
+guardWriteTx TxS.Read tx = tx
+
+
 transaction :: (Hasql :> es, IOE :> es) => TxS.IsolationLevel -> TxS.Mode -> Tx.Transaction a -> Eff es a
-transaction iso mode tx = use (TxS.transaction iso mode tx)
+transaction iso mode tx = use (TxS.transaction iso mode (guardWriteTx mode tx))
 
 
 -- | Like 'session' but carries a caller-chosen span name + extra attributes.
@@ -170,7 +190,7 @@ labeledSession name attrs s =
 labeledTransaction
   :: (Hasql :> es, IOE :> es)
   => Text -> TxS.IsolationLevel -> TxS.Mode -> Tx.Transaction a -> Eff es a
-labeledTransaction name iso mode tx = labeledSession name mempty (TxS.transaction iso mode tx)
+labeledTransaction name iso mode tx = labeledSession name mempty (TxS.transaction iso mode (guardWriteTx mode tx))
 
 
 -- | Generic helper: route an effect through a labelled variant when a flag is on.

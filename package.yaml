@@ -218,6 +218,7 @@ tests:
       - hasql
       - hasql-interpolate
       - hasql-pool
+      - hasql-transaction
       - pg-entity
       - postgresql-simple
       - effectful

@@ -83,8 +83,13 @@ runServer appLogger env tp = do
   let server = mkServer appLogger env tp
   -- Warp's request-handler threads can outlive `waitAnyCancel` and call
   -- onException after the bulk logger has shut down; swallow that.
-  let onExc _ exception = void $ Safe.tryAny $ runLogT "monoscope" appLogger LogAttention do
-        LogBase.logAttention "Unhandled exception" (AE.object ["exception" AE..= show @String exception])
+  -- A per-connection TimeoutThread is Warp's normal HTTP-op timeout, not a fault;
+  -- logging it at attention floods the alert log during any slowdown and buries
+  -- real unhandled exceptions (see the 2026-07-06 wedged-node incident).
+  let onExc _ exception
+        | Just (_ :: TimeoutThread) <- Safe.fromException exception = pass
+        | otherwise = void $ Safe.tryAny $ runLogT "monoscope" appLogger LogAttention do
+            LogBase.logAttention "Unhandled exception" (AE.object ["exception" AE..= show @String exception])
   let onExcResp _ = responseLBS status500 [("Content-Type", "text/html; charset=utf-8")] (Auth.errorPageHtml env.config 500)
   let warpSettings =
         defaultSettings

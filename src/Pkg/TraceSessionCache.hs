@@ -24,6 +24,7 @@ import Data.Aeson qualified as AE
 import Data.HashMap.Strict qualified as HM
 import Models.Telemetry.Telemetry (Context (..), OtelLogsAndSpans (..), atMapText)
 import Pkg.DeriveUtils (AesonText (..), DB, unAesonTextMaybe)
+import UnliftIO.Exception (handle, throwIO)
 import Utils (jsonToMap, nestedJsonFromDotNotation)
 
 
@@ -144,15 +145,19 @@ evictStaleEntries cache maxIdleSecs maxEntries now =
 -- lock_timeout stops a run from queueing long behind the hash-update
 -- writers — skipped work likewise self-heals on a later tick.
 backfillSessionAttributes :: DB es => Eff es Int
-backfillSessionAttributes = do
-  rows :: [Int] <- Hasql.transaction TxS.ReadCommitted TxS.Write do
-    Tx.sql "SET LOCAL lock_timeout = '10s'"
-    Tx.sql "SET LOCAL statement_timeout = '2min'"
-    locked :: [Bool] <- Tx.statement () $ HI.interp False [HI.sql| SELECT pg_try_advisory_xact_lock(73553109) |]
-    if locked /= [True]
-      then pure []
-      else Tx.statement () $ HI.interp False backfillSql
-  pure $ length rows
+backfillSessionAttributes =
+  -- 55P03 (canceling statement due to lock_timeout) is the expected, self-healing
+  -- skip when this run queues behind the hash-update writers; swallow it as a no-op
+  -- (the next tick converges) instead of letting it surface as an attention log.
+  handle (\e -> if Hasql.isLockTimeout e then pure 0 else throwIO e) do
+    rows :: [Int] <- Hasql.transaction TxS.ReadCommitted TxS.Write do
+      Tx.sql "SET LOCAL lock_timeout = '10s'"
+      Tx.sql "SET LOCAL statement_timeout = '2min'"
+      locked :: [Bool] <- Tx.statement () $ HI.interp False [HI.sql| SELECT pg_try_advisory_xact_lock(73553109) |]
+      if locked /= [True]
+        then pure []
+        else Tx.statement () $ HI.interp False backfillSql
+    pure $ length rows
   where
     backfillSql =
       [HI.sql|
