@@ -143,14 +143,10 @@ jobs:
       - name: Run unit-tests
         run: cabal test unit-tests --ghc-options="-O0" --test-show-details=direct
 
-      - name: Wait for TimeFusion pgwire
-        run: |
-          for i in $(seq 1 60); do
-            (echo > /dev/tcp/timefusion/5432) >/dev/null 2>&1 && { echo "TimeFusion up"; exit 0; }
-            sleep 2
-          done
-          echo "TimeFusion did not open pgwire" >&2; exit 1
-
+      # No explicit wait: the TF service container starts at "Initialize
+      # containers" (before the multi-minute build) and boots in ~1s, so it's
+      # long ready by the time integration tests connect. The hasql TF pool also
+      # retries, and TF's early-bind responder holds :5432 from the start.
       - name: Run integration-tests
         env:
           USE_EXTERNAL_DB: true
