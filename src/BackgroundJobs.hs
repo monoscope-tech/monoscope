@@ -2029,9 +2029,16 @@ flushDrainTask shard task
               [HI.sql| UPDATE otel_logs_and_spans o
                           SET hashes = COALESCE(o.hashes, '{}'::text[]) || ARRAY[u.tag]
                           FROM (
-                            SELECT unnest(#{spanIds'}::text[]) AS span_id,
-                                   unnest(#{traceIds'}::text[]) AS trace_id,
-                                   unnest(#{tagArr}::text[])    AS tag
+                            -- ORDER BY matches UPDATE-1 so all hot-row writers acquire
+                            -- row locks in the same (span_id, trace_id) order — kills the
+                            -- lock-order deadlock class (40P01) against UPDATE-1/backfill.
+                            SELECT span_id, trace_id, tag
+                            FROM (
+                              SELECT unnest(#{spanIds'}::text[]) AS span_id,
+                                     unnest(#{traceIds'}::text[]) AS trace_id,
+                                     unnest(#{tagArr}::text[])    AS tag
+                            ) raw
+                            ORDER BY span_id, trace_id
                           ) u
                           WHERE o.project_id = #{pid.toText}
                             AND o.timestamp >= #{effectiveMinTs}
