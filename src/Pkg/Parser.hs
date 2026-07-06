@@ -234,17 +234,24 @@ normalizeKeyPath txt = T.toLower $ T.replace "]" "❳" $ T.replace "[" "❲" $ T
 -- 1
 -- >>> length $ snd $ getProcessedColumns ["attributes.http.request.method"] ["id"]
 -- 2
+-- >>> snd $ getProcessedColumns ["name"] ["name as span_name","duration"]
+-- ["name as name","name as span_name","duration"]
 getProcessedColumns :: [Text] -> [Text] -> (Text, [Text])
 getProcessedColumns [] defaultSelect = (T.intercalate "," $ colsNoAsClause defaultSelect, defaultSelect)
 getProcessedColumns cols defaultSelect = (T.intercalate "," $ colsNoAsClause selectedCols, selectedCols)
   where
-    defaultExprs = colsNoAsClause defaultSelect
+    defaultAliases = listToColNames defaultSelect
     prs =
       cols & mapMaybe \col -> do
         subJ@(Subject entire _ _) <- hush (parse pSubject "" col)
-        let expr = display subJ
-        guard (expr `notElem` defaultExprs)
-        pure $ expr <> " as " <> normalizeKeyPath entire
+        let alias = normalizeKeyPath entire
+        -- Dedup by output alias, not by SQL expr. A requested column whose alias already
+        -- appears in the defaults is a real duplicate (e.g. "service"). But one resolving to
+        -- the same DB expr under a *different* default alias (requested "name" vs default
+        -- "name as span_name") must still be projected under the requested alias — else the
+        -- user's requested column silently vanishes from the result.
+        guard (alias `notElem` defaultAliases)
+        pure $ display subJ <> " as " <> alias
     selectedCols = prs <> defaultSelect
 
 
