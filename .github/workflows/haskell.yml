@@ -89,6 +89,9 @@ jobs:
         credentials:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GH_TOKEN }}
+        # TF's WAL uses io_uring, which Docker's default seccomp profile blocks
+        # (WAL append_batch fails with EPERM). Unconfine this throwaway CI container.
+        options: --security-opt seccomp=unconfined
         env:
           PGWIRE_PORT: '5432'
           # pgwire auth: TF checks the client password against PGWIRE_PASSWORD;
