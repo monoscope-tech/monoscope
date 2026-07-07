@@ -889,7 +889,14 @@ runInfraHealthCheck authCtx = do
       start = addUTCTime (-3600) end
       window = formatUTC start <> " -> " <> formatUTC end <> " UTC"
       isolate f = either (\(e :: SomeException) -> (["!! check errored: " <> show e], [])) id <$> tryAny f
-  (pAlerts, pInfo) <- isolate (checkParity start end)
+  -- Parity only means anything while both stores are dual-written. Once one leg
+  -- is disabled (TF-only or PG-only), the "behind" store is empty by design, so
+  -- skip the check rather than fire a 100%-drift false alarm.
+  let dualWrite = authCtx.config.enablePostgresTelemetryWrites && authCtx.config.enableTimefusionWrites
+  (pAlerts, pInfo) <-
+    if dualWrite
+      then isolate (checkParity start end)
+      else pure ([], ["parity: skipped (single-store writes)"])
   (kAlerts, kInfo) <- isolate (checkKafkaHealth authCtx.config)
   let alerts = pAlerts <> kAlerts
       info = pInfo <> kInfo
