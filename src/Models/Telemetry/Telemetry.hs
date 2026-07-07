@@ -927,20 +927,27 @@ data WriteTarget = WriteBoth | WritePgOnly | WriteTfOnly
   deriving stock (Eq, Ord, Show)
 
 
--- | Derive the write target from the global TF flag and an optional
--- @monoscope-write-failure@ header (present on DLQ replay). A 'tf-failed' replay
--- presumes TF was enabled when it failed, so it always targets TF; everything
--- else honours @enableTf@ (TF off ⇒ PG only).
+-- | Derive the write target from the PG/TF write flags and an optional
+-- @monoscope-write-failure@ header (present on DLQ replay). A failure marker is
+-- explicit replay intent (rewrite only the leg that failed), so it is trusted
+-- as-is; otherwise the two flags decide. Disabling PG (TF is the source of
+-- truth) yields TF-only ingest; both disabled is a misconfig that falls back to
+-- WriteBoth rather than silently dropping data.
 --
--- >>> map (writeTargetFor True) [Just "tf-failed", Just "pg-failed", Just "both-failed", Nothing]
+-- >>> map (writeTargetFor True True) [Just "tf-failed", Just "pg-failed", Just "both-failed", Nothing]
 -- [WriteTfOnly,WritePgOnly,WriteBoth,WriteBoth]
--- >>> writeTargetFor False Nothing
+-- >>> writeTargetFor True False Nothing
 -- WritePgOnly
-writeTargetFor :: Bool -> Maybe Text -> WriteTarget
-writeTargetFor enableTf = \case
+-- >>> writeTargetFor False True Nothing
+-- WriteTfOnly
+writeTargetFor :: Bool -> Bool -> Maybe Text -> WriteTarget
+writeTargetFor enablePg enableTf = \case
   Just "tf-failed" -> WriteTfOnly
   Just "pg-failed" -> WritePgOnly
-  _ -> if enableTf then WriteBoth else WritePgOnly
+  _ -> case (enablePg, enableTf) of
+    (True, False) -> WritePgOnly
+    (False, True) -> WriteTfOnly
+    _ -> WriteBoth
 
 
 -- | A message that couldn't be parsed/converted. Callers MUST publish these to
@@ -1941,17 +1948,19 @@ mkSystemLog (UUIDId pid) eventName sev bodyMsg attrs duration ts =
 insertSystemLog
   :: (Concurrent :> es, Hasql :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es)
   => Bool
+  -- ^ enablePostgresTelemetryWrites
+  -> Bool
   -- ^ enableTimefusionWrites
   -> Bool
   -- ^ @tfPgTypes@ (see 'bulkInsertOtelLogsAndSpansTF')
   -> OtelLogsAndSpans
   -> Eff es ()
-insertSystemLog enableTf tfPgTypes otelLog = do
+insertSystemLog enablePg enableTf tfPgTypes otelLog = do
   let minted = mintOtelLogIds (V.singleton otelLog)
   -- System logs are best-effort. The inner write logs its own failure via
   -- logAttention; surface a higher-level "system log dropped" so an incident
   -- triager investigating the original event can see that its trail was lost.
-  bulkInsertOtelLogsAndSpansTF tfPgTypes (writeTargetFor enableTf Nothing) minted >>= \case
+  bulkInsertOtelLogsAndSpansTF tfPgTypes (writeTargetFor enablePg enableTf Nothing) minted >>= \case
     Right _ -> pass
     Left wf ->
       Log.logAttention "SYSTEM_LOG_DROPPED" (AE.object ["reason" AE..= writeFailureSummary wf])

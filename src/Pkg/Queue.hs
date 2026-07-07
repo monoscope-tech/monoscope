@@ -637,7 +637,7 @@ decoupledLoop appLogger appCtx tp role batchSize clientId fn = do
             -- ce-type (processList) and rewrites one store-set. Sharing
             -- 'writeTargetFor' with the writer keeps the leg semantics in one
             -- place and batches both-failed/normal together (both → WriteBoth).
-            dlqGroupKey r = let h = consumerRecordHeadersToHashMap r in (ceTypeFor deadLetterTopic r.crTopic.unTopicName h, Telemetry.writeTargetFor appCtx.env.enableTimefusionWrites (HM.lookup "monoscope-write-failure" h))
+            dlqGroupKey r = let h = consumerRecordHeadersToHashMap r in (ceTypeFor deadLetterTopic r.crTopic.unTopicName h, Telemetry.writeTargetFor appCtx.env.enablePostgresTelemetryWrites appCtx.env.enableTimefusionWrites (HM.lookup "monoscope-write-failure" h))
             subChunks = subChunksFor role dlqGroupKey nowEpoch byTP
         for_ subChunks \work ->
           atomically do

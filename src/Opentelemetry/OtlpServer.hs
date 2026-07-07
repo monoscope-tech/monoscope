@@ -340,7 +340,7 @@ processList msgs !attrs =
       appCtx <- ask @AuthContext
       -- DLQ replay stamps monoscope-write-failure; rewrite only the failed leg
       -- so the durable store isn't duplicated. Live ingest has no header → both.
-      let target = Telemetry.writeTargetFor appCtx.env.enableTimefusionWrites (HM.lookup "monoscope-write-failure" attrs)
+      let target = Telemetry.writeTargetFor appCtx.env.enablePostgresTelemetryWrites appCtx.env.enableTimefusionWrites (HM.lookup "monoscope-write-failure" attrs)
       case HM.lookup "ce-type" attrs of
         Just "org.opentelemetry.otlp.logs.v1" ->
           processBatchPipeline @LS.ExportLogsServiceRequest
@@ -1543,7 +1543,7 @@ processSignalRequest label signal receivedMsg noun countKey metadataApiKey proje
   unless (V.null records) do
     stamped <- stampOrPassthrough appCtx records
     let minted = Telemetry.mintOtelLogIds stamped
-    Telemetry.insertAndHandOff appCtx.hasqlTimefusionUsesPgTypes (Telemetry.writeTargetFor appCtx.env.enableTimefusionWrites Nothing) appCtx.extractionWorker projectCaches minted
+    Telemetry.insertAndHandOff appCtx.hasqlTimefusionUsesPgTypes (Telemetry.writeTargetFor appCtx.env.enablePostgresTelemetryWrites appCtx.env.enableTimefusionWrites Nothing) appCtx.extractionWorker projectCaches minted
       >>= throwOnWriteFailure
     Log.logTrace
       (label <> ": Successfully inserted " <> noun <> " into database")

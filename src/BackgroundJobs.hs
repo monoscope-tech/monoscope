@@ -1157,7 +1157,7 @@ checkFreeTierUsageNotifications pids now = forM_ pids \pid -> tryStep "free-tier
         let sev = if exceeded then SLError else SLWarn
             bodyMsg = if exceeded then "Daily event limit reached — new events are being dropped." else "Approaching daily event limit (" <> show count <> " of " <> show limit <> " events used)."
             attrs = Map.fromList [("used", AE.toJSON count), ("limit", AE.toJSON limit), ("payment_plan", AE.String "Free")]
-        insertSystemLog ctx.env.enableTimefusionWrites ctx.hasqlTimefusionUsesPgTypes $ mkSystemLog pid eventName sev bodyMsg attrs Nothing now
+        insertSystemLog ctx.env.enablePostgresTelemetryWrites ctx.env.enableTimefusionWrites ctx.hasqlTimefusionUsesPgTypes $ mkSystemLog pid eventName sev bodyMsg attrs Nothing now
         -- Send email to all project members
         users <- Projects.usersByProjectId pid
         let billingUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/manage_billing"
@@ -3410,7 +3410,7 @@ evaluateWithResults monitor startWall title total durationNs = do
           { Telemetry.kind = Just "alert"
           , Telemetry.parent_id = Just monitor.id.toText
           }
-  insertSystemLog ctx.env.enableTimefusionWrites ctx.hasqlTimefusionUsesPgTypes otelLog{Telemetry.summary = generateSummary otelLog}
+  insertSystemLog ctx.env.enablePostgresTelemetryWrites ctx.env.enableTimefusionWrites ctx.hasqlTimefusionUsesPgTypes otelLog{Telemetry.summary = generateSummary otelLog}
 
   -- Determine notification intent before UPDATE so we can set timestamps correctly
   let isRecovery = status == Monitors.MSNormal && prevStatus /= Monitors.MSNormal

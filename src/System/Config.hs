@@ -139,6 +139,10 @@ data EnvConfig = EnvConfig
   , enableReplayService :: Bool
   , enableTimefusionReads :: Bool
   , enableTimefusionWrites :: Bool
+  , enablePostgresTelemetryWrites :: Bool
+  -- ^ Dual-write to the legacy Postgres @otel_logs_and_spans@ store. Defaults
+  -- to True; set ENABLE_POSTGRES_TELEMETRY_WRITES=False once TimeFusion is the source of
+  -- truth so ingestion writes TF only and PG is phased out.
   , kafkaDeadLetterTopic :: Text
   , enableKafkaDeadLetterService :: Bool
   -- ^ Consume 'kafkaDeadLetterTopic' back through processList under its own
@@ -239,6 +243,7 @@ instance DefConfig EnvConfig where
       , openaiSmallModel = "gpt-5.4-nano"
       , kafkaGroupConcurrency = 4
       , enableKafkaDeadLetterService = True
+      , enablePostgresTelemetryWrites = True
       , extractionWorkerShards = 4
       , extractionQueueCapacity = 64
       , drainFlushBatchSize = 1000
