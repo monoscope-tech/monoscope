@@ -56,16 +56,18 @@ demoProjectId = UUIDId UUID.nil
 
 -- | Rows the demo project currently holds in otel_logs_and_spans. Used as a
 -- before/after delta so leg-targeting can be asserted without a DB reset.
--- Count spans in the TimeFusion store (the leg the tf-failed replay writes to),
--- NOT trPool: the postgres-simple timefusionPgPool always points at the main
--- test DB even when TIMEFUSION_PG_TEST_URL wires in a real TF, so only the hasql
--- TF pool sees real-TF rows. project_id is embedded as a literal so the same
--- query works whether TF is real (text column) or the Postgres-as-TF fallback
--- (uuid column).
+-- Count spans in the store the write leg actually targets. When TF writes are
+-- enabled we must read the hasql TF pool, NOT trPool: the postgres-simple
+-- timefusionPgPool always points at the main test DB even when
+-- TIMEFUSION_PG_TEST_URL wires in a real TF, so only the hasql TF pool sees
+-- real-TF rows. When TF is disabled the spans live in the main DB, so route
+-- there (withHasqlTimefusion False = main pool) — mirroring the app rather than
+-- unconditionally hitting TF. project_id is embedded as a literal so the query
+-- works whether TF is real (text column) or the Postgres-as-TF fallback (uuid).
 countDemoSpans :: TestResources -> IO Int
 countDemoSpans tr =
   fromIntegral @Int64
-    <$> runTestBg frozenTime tr (EHasql.withHasqlTimefusion True (HI.getOneColumn . HI.getOneRow <$> EHasql.interp (rawSql sql)))
+    <$> runTestBg frozenTime tr (EHasql.withHasqlTimefusion tr.trATCtx.config.enableTimefusionWrites (HI.getOneColumn . HI.getOneRow <$> EHasql.interp (rawSql sql)))
   where
     sql = "SELECT count(*)::int8 FROM otel_logs_and_spans WHERE project_id = '" <> demoProjectId.toText <> "'"
 
