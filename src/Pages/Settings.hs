@@ -1430,7 +1430,11 @@ verifyStripeSignature now sigHeader payload secret =
 
 
 stripeOpts :: Text -> Wreq.Options
-stripeOpts apiKey = Wreq.defaults & (Wreq.header "Authorization" .~ ["Bearer " <> encodeUtf8 apiKey])
+stripeOpts apiKey =
+  Wreq.defaults
+    & (Wreq.header "Authorization" .~ ["Bearer " <> encodeUtf8 apiKey])
+    -- Managed Payments requires API version 2025-03-31.basil or later.
+    & (Wreq.header "Stripe-Version" .~ ["2025-03-31.basil"])
 
 
 stripeRequest :: Text -> Text -> [(ByteString, ByteString)] -> IO (Wreq.Response LByteString)
@@ -1452,12 +1456,9 @@ createStripeCheckoutSession trialEligible apiKey hostUrl pid plan priceIdGraduat
         , ("line_items[1][price]", encodeUtf8 priceIdOverage)
         ]
       trialParams = [("subscription_data[trial_period_days]", "30") | trialEligible && plan /= "SystemsPricing"]
-      -- Stripe Managed Payments (MoR): Stripe collects + remits tax, needs address + tax IDs.
-      managedPaymentsParams =
-        [ ("automatic_tax[enabled]", "true")
-        , ("billing_address_collection", "required")
-        , ("tax_id_collection[enabled]", "true")
-        ]
+      -- Stripe Managed Payments (MoR): Stripe becomes merchant of record and handles
+      -- tax/address collection itself, so the automatic_tax + tax_id params are disallowed.
+      managedPaymentsParams = [("managed_payments[enabled]", "true")]
       params =
         prices
           <> trialParams
