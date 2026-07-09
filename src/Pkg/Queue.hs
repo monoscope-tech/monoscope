@@ -648,6 +648,15 @@ decoupledLoop appLogger appCtx tp role batchSize clientId fn = do
             modifyTVar' trackerVar (Map.insertWith (const id) work.tpKey (PartProgress (minimum work.offsets) mempty))
             modifyTVar' inflightVar (+ work.bytes)
             writeTBQueue workQ work
+        -- Never let the poll position pass an unprocessed record: seek back to
+        -- each partition's first not-yet-due offset so it is re-fetched once
+        -- due. Everything chunked above sits BEFORE that offset (due records
+        -- form a prefix), so nothing is double-processed; without the seek the
+        -- record is stranded until a rebalance and a later due chunk seeds the
+        -- commit base past it — silent loss (see 'notDueHold').
+        when (role == KafkaDlqReplay) do
+          let holds = [K.TopicPartition (K.TopicName t) p (K.PartitionOffset o) | ((t, p), recs) <- Map.toList byTP, Just o <- [notDueHold nowEpoch recs]]
+          unless (null holds) $ KE.seekPartitions holds (K.Timeout 5000)
         -- DLQ backoff: records present but none due → avoid a 10Hz re-poll of
         -- not-yet-due retries. Primary never hits this (chunks ≥1 when records
         -- exist) and uses lag, not naps, as its outage signal.
@@ -687,6 +696,30 @@ ceTypeFor deadLetterTopic topic headers
   | otherwise = topicToCeType topic
 
 
+-- | A retry-tier message is due once now ≥ its stamped due epoch. Missing /
+-- unparseable header ⇒ due (process rather than strand it).
+isDue :: Int -> K.ConsumerRecord (Maybe ByteString) (Maybe ByteString) -> Bool
+isDue now r = maybe True (now >=) (readMaybe . BC.unpack =<< lookup "monoscope-next-due-at" (K.headersToList r.crHeaders))
+
+
+-- | Offset of a partition's first not-yet-due record (offset order). The poll
+-- thread must seek back to it: librdkafka never redelivers uncommitted offsets
+-- in-session, so once the poll position passes a skipped record it is stranded
+-- until a rebalance — and a later due chunk seeds the commit base past it,
+-- making the skip durable on commit. That silent commit-over lost ~1.9M DLQ
+-- messages during the 2026-07-09 TF outage (fresh tier publishes are polled
+-- within seconds while their due-at is +5s/+60s/+600s, so under sustained
+-- failure nearly every record was skipped, then committed-over).
+--
+-- >>> let r off due = K.ConsumerRecord (K.TopicName "dlq") (K.PartitionId 0) (K.Offset off) K.NoTimestamp (K.headersFromList [("monoscope-next-due-at", BC.pack (show (due::Int)))]) Nothing (Just "x") :: K.ConsumerRecord (Maybe ByteString) (Maybe ByteString)
+-- >>> notDueHold 10 (r 0 5 :| [r 1 9, r 2 99])
+-- Just 2
+-- >>> notDueHold 10 (r 0 5 :| [r 1 9])
+-- Nothing
+notDueHold :: Int -> NonEmpty (K.ConsumerRecord (Maybe ByteString) (Maybe ByteString)) -> Maybe Int64
+notDueHold nowEpoch recs = K.unOffset . (.crOffset) <$> find (not . isDue nowEpoch) (sortOn (.crOffset) (toList recs))
+
+
 topicToCeType :: Text -> Text
 topicToCeType topic = case topic of
   "otlp_spans" -> "org.opentelemetry.otlp.traces.v1"
@@ -700,7 +733,8 @@ topicToCeType topic = case topic of
 -- partition-head's headers. DLQ replay: one chunk per *due* record under its own
 -- headers — retry tiers interleave source topics with different ce-types, and
 -- offset = failure-time = due-time order, so due records are a prefix;
--- not-yet-due ones stay uncommitted and redeliver (duplicates over loss).
+-- the poll thread seeks back to the first not-yet-due offset ('notDueHold')
+-- so those records are re-fetched once due (duplicates over loss).
 --
 -- DLQ replay byte-chunks the offset-ordered due prefix too, but grouped by
 -- ce-type first: 'processList' decodes a whole chunk under one ce-type, and
@@ -734,11 +768,6 @@ subChunksFor role dlqGroupKey nowEpoch byTP = case role of
     , chunk@(recc : _) <- chunksByBytes kafkaChunkTargetBytes recordBytes (sortOn (.crOffset) grp)
     ]
   where
-    -- A retry-tier message is due once now ≥ its stamped due epoch. Missing /
-    -- unparseable header ⇒ due (process rather than strand it).
-    isDue :: Int -> K.ConsumerRecord (Maybe ByteString) (Maybe ByteString) -> Bool
-    isDue now r = maybe True (now >=) (readMaybe . BC.unpack =<< lookup "monoscope-next-due-at" (K.headersToList r.crHeaders))
-
     consumerRecordToTuple :: K.ConsumerRecord (Maybe ByteString) (Maybe ByteString) -> (Text, ByteString)
     consumerRecordToTuple record = (record.crTopic.unTopicName, fromMaybe "" record.crValue)
 

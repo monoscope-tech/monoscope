@@ -2,6 +2,7 @@ module Pkg.KafkaConsumerSpec (spec) where
 
 import Control.Concurrent.STM (check, stateTVar)
 import Data.Map.Strict qualified as Map
+import Data.Time.Clock.POSIX (getPOSIXTime)
 import Effectful (Eff, IOE, (:>))
 import Effectful.Dispatch.Dynamic (interpret)
 import Effectful.Error.Static (runErrorNoCallStack)
@@ -17,7 +18,7 @@ import System.Timeout (timeout)
 import System.Types (ATBackgroundCtx, runBackground)
 import Test.Hspec
 import UnliftIO.Async (race_)
-import UnliftIO.Concurrent (threadDelay)
+import UnliftIO.Concurrent (forkIO, threadDelay)
 
 
 -- | An in-memory Kafka shared by the producer and consumer interpreters: each
@@ -119,6 +120,16 @@ seedTopic bVar topic offs =
   atomically $ modifyTVar' bVar \b -> foldl' (\acc o -> appendRecord topic (Just (encodeUtf8 (show o))) (K.headersFromList []) acc) b offs
 
 
+-- | Seed records carrying a @monoscope-next-due-at@ header (epoch seconds),
+-- exactly as every retry-tier publish stamps them ('publishToDeadLetterQueue'
+-- writes @nowEpoch + tier delay@). These are the records 'subChunksFor'
+-- (KafkaDlqReplay) skips while now < due.
+seedTopicDue :: TVar Broker -> Text -> Int -> [Int64] -> IO ()
+seedTopicDue bVar topic dueEpoch offs =
+  atomically $ modifyTVar' bVar \b ->
+    foldl' (\acc o -> appendRecord topic (Just (encodeUtf8 (show o))) (K.headersFromList [("monoscope-next-due-at", encodeUtf8 (show dueEpoch))]) acc) b offs
+
+
 spec :: Spec
 spec = around withTestResources $ describe "Kafka decoupledLoop (in-memory broker)" do
   it "drains a poll batch through processing and commits the contiguous offset watermark" \tr -> do
@@ -181,3 +192,55 @@ spec = around withTestResources $ describe "Kafka decoupledLoop (in-memory broke
     -- unreachable. Guards against the no-ack branch being silently removed (which
     -- would ack on the first call and pass the assertion above trivially).
     readTVarIO attemptVar >>= (`shouldSatisfy` (>= 2))
+
+  -- Regression guard for the 2026-07-09 outage loss: during a 7h TF downtime the
+  -- DLQ replay consumer polled retry-tier records *before* their next-due-at
+  -- (the consumer keeps up with inflow, so a fresh publish due at +5s/+60s is
+  -- nearly always polled early). subChunksFor skips not-due records — the poll
+  -- cursor moves past them and no tracker entry is seeded — then a later poll's
+  -- due chunk seeds the commit base PAST the skipped offsets and the committer
+  -- makes the skip durable. ~1.9M messages were committed-over this way and
+  -- never written to TF nor escalated to the next tier.
+  it "dlq_replay_never_commits_past_a_skipped_not_yet_due_record" \tr -> do
+    now <- floor . toRational <$> getPOSIXTime
+    bVar <- newTVarIO emptyBroker
+    -- fresh retry-tier publishes: polled immediately, due 2s from now
+    seedTopicDue bVar "otlp_deadletter" (now + 2) [0 .. 4]
+    receivedVar <- newTVarIO ([] :: [ByteString])
+    let testFn tuples _ = do
+          atomically $ modifyTVar' receivedVar (<> map snd tuples)
+          pure (Right (map fst tuples, [])) -- the write leg is healthy: ack everything we're given
+    -- 1s in (after the first poll skipped 0..4 as not-yet-due), already-due
+    -- messages land behind them on the log
+    _ <- forkIO do
+      threadDelay 1_000_000
+      seedTopicDue bVar "otlp_deadletter" (now - 1) [5 .. 9]
+    b <-
+      drive tr bVar ["otlp_deadletter"] Queue.KafkaDlqReplay testFn $ do
+        s <- readTVar bVar
+        check (maybe False (>= 10) (Map.lookup ("otlp_deadletter", 0) s.committed))
+    -- Committing offset 10 declares 0..9 durable, so all ten records must have
+    -- been processed by then (0..4 were due 2s in — the loop must redeliver
+    -- them, not commit over them). Anything missing here is silent loss: the
+    -- committed offset survives restarts, so no rebalance ever brings them back.
+    Map.lookup ("otlp_deadletter", 0) b.committed `shouldBe` Just 10
+    received <- readTVarIO receivedVar
+    sort received `shouldBe` sort (map (encodeUtf8 . show) [0 .. 9 :: Int64])
+
+  -- Companion liveness guard: a not-yet-due record must be processed once its
+  -- due-time passes *within the session*. Today the poll cursor moves past it
+  -- and nothing seeks back (the 5s DLQ backoff sleeps but re-polls from the new
+  -- position), so it is stranded until the next rebalance/restart — during the
+  -- outage that turned 60s-tier retries into never-retries.
+  it "dlq_replay_processes_a_not_yet_due_record_once_due" \tr -> do
+    now <- floor . toRational <$> getPOSIXTime
+    bVar <- newTVarIO emptyBroker
+    seedTopicDue bVar "otlp_deadletter" (now + 2) [0 .. 4]
+    let testFn tuples _ = pure (Right (map fst tuples, []))
+    b <-
+      drive tr bVar ["otlp_deadletter"] Queue.KafkaDlqReplay testFn $ do
+        s <- readTVar bVar
+        check (maybe False (>= 5) (Map.lookup ("otlp_deadletter", 0) s.committed))
+    -- Due 2s in, drive allows 15s: plenty for a correct loop to redeliver and
+    -- commit. A timeout here (committed = Nothing) is the stranding bug.
+    Map.lookup ("otlp_deadletter", 0) b.committed `shouldBe` Just 5
