@@ -89,8 +89,9 @@ Watch progress via the `apitoolkit_eu_parking_redrive` group's LAG and the
 
 When already-committed base-DLQ messages need re-processing (e.g. TF acked
 writes that a later bug lost — 2026-07-08) and pausing the DLQ group for an
-offset rewind is undesirable, `scripts/local/dlq-redrive` (local-only,
-gitignored) has a timestamp-range mode: it snapshots per-partition offsets for
+offset rewind is undesirable, `scripts/local/dlq-redrive` (tracked despite the
+scripts/local gitignore — it's runbook infrastructure, not scratch) has a
+timestamp-range mode: it snapshots per-partition offsets for
 `[-from-ts, -to-ts)` and re-produces that slice back onto `otlp_deadletter`; the
 live consumers reprocess it (headers preserved ⇒ TF-only retry; idempotent).
 
