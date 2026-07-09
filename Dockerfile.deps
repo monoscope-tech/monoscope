@@ -38,9 +38,12 @@ ENV CABAL_DIR=/root/.cabal
 # Copy only files needed for dependency resolution
 COPY *.cabal cabal.project* Setup.hs LICENSE ./
 
-# Update cabal index and build all dependencies (including test deps)
+# Update cabal index and build all dependencies (including test deps).
+# profiling: True pre-builds the prof way of every dep (no cost centres) so the
+# production prof-way image build (see Dockerfile) hits the store cache.
 RUN cabal update && \
   cabal configure --enable-tests --enable-benchmarks && \
+  printf 'package *\n  profiling: True\n  profiling-detail: none\npackage monoscope\n  profiling-detail: late\n' >> cabal.project.local && \
   cabal build --only-dependencies all -j$(nproc)
 
 # Pre-install npm dependencies for faster deploys

@@ -4,6 +4,7 @@ import BackgroundJobs qualified
 import Colourista.IO (blueMessage)
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.Async (Async, async, cancel, mapConcurrently_, race, waitAny)
+import Control.Concurrent.STM (check)
 import Control.Exception.Safe qualified as Safe
 import Data.Aeson qualified as AE
 import Data.Pool as Pool (destroyAllResources)
@@ -15,6 +16,7 @@ import Effectful.Concurrent (runConcurrent)
 import Effectful.Fail (runFailIO)
 import Effectful.Ki qualified as Ki
 import Effectful.Time (runTime)
+import GHC.Profiling (startHeapProfTimer, startProfTimer, stopHeapProfTimer, stopProfTimer)
 import Log (LogLevel (..), runLogT)
 import Log qualified as LogBase
 import Network.HTTP.Types (methodGet, methodHead, status200, status500)
@@ -42,7 +44,7 @@ import System.Config (
 import System.Exit (ExitCode (ExitFailure))
 import System.Logging qualified as Logging
 import System.Posix.Process (exitImmediately)
-import System.Posix.Signals (Handler (Catch), installHandler, sigINT, sigTERM)
+import System.Posix.Signals (Handler (Catch), installHandler, sigINT, sigTERM, sigUSR2)
 import System.TimeManager (TimeoutThread)
 import System.Timeout (timeout)
 import System.Types (effToServantHandler, runBackground)
@@ -155,6 +157,23 @@ runServer appLogger env tp = do
   let consumerOnly = env.config.consumerOnly -- CONSUMER_ONLY: queue consumers + schema-learning workers; skip Warp/gRPC/odd-jobs/global-timers
   -- Always accept hand-offs: every ingesting instance (incl. CONSUMER_ONLY) feeds its extraction worker.
   liftIO $ atomically $ writeTVar env.extractionWorker.acceptingBatches True
+  -- Runtime profiling switch: SIGUSR2 toggles both the CPU sampling windows
+  -- and the heap-census timer without a restart (`docker kill -s USR2 <ctr>`).
+  -- Starts DISABLED — the RTS timers from GHCRTS (-p, -hc -i60) are stopped at
+  -- boot and armed on the first SIGUSR2 after deployment. A no-op in vanilla
+  -- dev builds (rts_isProfiled = 0).
+  profilingOn <- liftIO $ newTVarIO False
+  when (rtsIsProfiled /= 0) $ liftIO $ stopProfTimer >> stopHeapProfTimer
+  void
+    $ liftIO
+    $ installHandler
+      sigUSR2
+      ( Catch do
+          nowOn <- atomically $ modifyTVar' profilingOn not >> readTVar profilingOn
+          if nowOn then startHeapProfTimer else stopProfTimer >> stopHeapProfTimer
+          logExc "profiling" $ if nowOn then "enabled via SIGUSR2" else "disabled via SIGUSR2"
+      )
+      Nothing
   asyncs <-
     liftIO
       $ sequenceA
@@ -169,6 +188,7 @@ runServer appLogger env tp = do
           -- a poison-heavy batch should not stall a large offset window.
           guard (env.config.enableKafkaService && env.config.enableKafkaDeadLetterService && not (T.null env.config.kafkaDeadLetterTopic)) $> async (supervise logExc "kafka-dlq" $ Queue.kafkaService appLogger env tp Queue.KafkaDlqReplay "dlq" (map fst (Queue.retryTiers env.config.kafkaDeadLetterTopic)) 1000 OtlpServer.processList)
         , guard env.config.enableReplayService $> async (supervise logExc "kafka-replay" $ Queue.kafkaService appLogger env tp Queue.KafkaPrimary "replay" env.config.rrwebTopics effectiveReplayBatch processReplayEvents)
+        , guard (rtsIsProfiled /= 0) $> async (supervise logExc "cpu-profiler" $ cpuProfileCycler profilingOn)
         ]
       <> fmap Just schemaFibers
       <> (if consumerOnly then [] else fmap Just jobFibers)
@@ -263,6 +283,30 @@ shutdownMonoscope env =
       | otherwise = do
           drained <- ExtractionWorker.allQueuesDrained worker
           unless drained $ threadDelay delayUs >> awaitDrained worker delayUs (budget - 1)
+
+
+-- | Non-zero iff the binary was built the profiling way (production Dockerfile:
+-- @profiling-detail: late@). Vanilla dev builds return 0, so the cpu-profiler
+-- fiber never starts locally.
+foreign import ccall unsafe "rts_isProfiled" rtsIsProfiled :: Int
+
+
+-- | Duty-cycled always-on CPU profiling, mirroring timefusion's rolling 60s
+-- pprof windows. The RTS time profiler (+RTS -p, from the image's GHCRTS)
+-- streams cost-centre samples into the eventlog; sampling continuously would
+-- grow it by GBs/day, so run a 60s window every 15 min. Heap censuses
+-- (-hc -i60) are independent of this timer and stay on continuously.
+-- Parks while the SIGUSR2 kill switch is off (a mid-window disable stops
+-- samples immediately via the handler's stopProfTimer; the parked check here
+-- just prevents new windows). Analyze off-host: hs-speedscope (CPU),
+-- eventlog2html (heap).
+cpuProfileCycler :: TVar Bool -> IO ()
+cpuProfileCycler enabled = forever do
+  atomically $ check =<< readTVar enabled
+  startProfTimer
+  threadDelay 60_000_000
+  stopProfTimer
+  threadDelay (14 * 60_000_000)
 
 
 logException :: Text -> LogBase.Logger -> LogLevel -> Text -> Text -> IO ()

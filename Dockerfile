@@ -33,6 +33,12 @@ WORKDIR /build
 # Copy cabal files for dependency caching
 COPY *.cabal cabal.project* Setup.hs LICENSE README.md auto-instrument-config.toml ./
 
+# Production profiling (Haskell counterpart of timefusion's --features profiling):
+# prof-way build with LATE cost centres on monoscope code only — deps are built
+# prof-way but with no cost centres, so runtime overhead (~2-5%) stays on our
+# code. Enables +RTS -p CPU samples and -hc heap censuses (see GHCRTS below).
+RUN printf 'package *\n  profiling: True\n  profiling-detail: none\npackage monoscope\n  profiling-detail: late\n' >> cabal.project.local
+
 # Build Haskell dependencies (fast - already cached in deps image)
 RUN --mount=type=cache,target=/root/.cabal/store \
     --mount=type=cache,target=/build/dist-newstyle \
@@ -102,12 +108,24 @@ COPY --from=builder /build/static ./static
 COPY --from=builder /usr/local/bin/chart-cli ./
 
 # Set ownership and permissions
-RUN chown -R monoscope:monoscope /opt/monoscope && \
+RUN mkdir -p profiles && \
+  chown -R monoscope:monoscope /opt/monoscope && \
   chmod +x monoscope-server chart-cli
 
 USER monoscope
 
 EXPOSE 8080
+
+# Production profiling (binary is built prof-way with late cost centres):
+# heap census every 60s (-hc -i60) and CPU cost-centre samples (-p, duty-cycled
+# 60s/15min by the cpu-profiler fiber in System.Server) stream to the eventlog,
+# flushed every 30s so the samples leading up to an OOM kill survive. -l-a
+# disables all other event classes to keep the file small.
+# Starts DISABLED: enable after deployment with `docker kill -s USR2 <ctr>`
+# (same signal toggles it back off, no restart). Mount ./profiles as a volume
+# to keep artifacts across redeploys. Analyze off-host: eventlog2html (heap),
+# hs-speedscope (CPU); a .prof is written on clean exit.
+ENV GHCRTS="-p -poprofiles/monoscope -l-a --eventlog-flush-interval=30 -hc -i60"
 
 # Liveness of the web listener itself (not just the process): a wedged warp
 # accept-loop leaves the container "running" but refusing connections, so Swarm
@@ -117,4 +135,8 @@ EXPOSE 8080
 HEALTHCHECK --interval=15s --timeout=5s --start-period=90s --retries=3 \
   CMD ["bash","-c","exec 3<>/dev/tcp/127.0.0.1/${PORT:-8080}; printf 'GET /status HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3; head -1 <&3 | grep -q '200 OK'"]
 
-ENTRYPOINT ["./monoscope-server"]
+# Timestamped eventlog per boot: a fixed -ol path would be truncated by the
+# restart right after an OOM kill, destroying exactly the samples we want.
+# Prune to the newest 5 so a crash-loop can't fill the volume (cf. timefusion's
+# prune_old). Command-line RTS opts take precedence over GHCRTS.
+ENTRYPOINT ["bash","-c","ls -t profiles/monoscope-*.eventlog 2>/dev/null | tail -n +6 | xargs -r rm -f; exec ./monoscope-server +RTS -olprofiles/monoscope-$(date +%s).eventlog -RTS \"$@\"","--"]
