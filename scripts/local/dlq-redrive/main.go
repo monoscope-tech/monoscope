@@ -62,6 +62,19 @@ import (
 	"github.com/twmb/franz-go/pkg/sasl/scram"
 )
 
+// Mirrors monoscope Pkg.Queue.topicToCeType — keep in sync.
+func ceTypeForTopic(topic string) string {
+	switch topic {
+	case "otlp_spans":
+		return "org.opentelemetry.otlp.traces.v1"
+	case "otlp_logs":
+		return "org.opentelemetry.otlp.logs.v1"
+	case "otlp_metrics":
+		return "org.opentelemetry.otlp.metrics.v1"
+	}
+	return ""
+}
+
 func main() {
 	brokers := flag.String("brokers", "redpanda-0.s.past3.tech:19092,redpanda-1.s.past3.tech:29092,redpanda-2.s.past3.tech:39092", "comma-separated bootstrap brokers")
 	user := flag.String("user", "", "SASL username")
@@ -75,6 +88,7 @@ func main() {
 	fromTs := flag.Int64("from-ts", 0, "epoch-ms start of a timestamp-range re-drive (overrides log-start)")
 	toTs := flag.Int64("to-ts", 0, "epoch-ms exclusive end of a timestamp-range re-drive (overrides log-end)")
 	stateFile := flag.String("state", "", "JSON file persisting per-partition progress; restarts resume past it")
+	synthTF := flag.Bool("synth-tf-headers", false, "source is a raw mainline OTLP topic (no headers): synthesize the tf-failed/pg-succeeded DLQ-replay headers so only the TF write is retried")
 	flag.Parse()
 
 	if *user == "" || *pass == "" {
@@ -87,6 +101,9 @@ func main() {
 	// topic, and never for a range slice (the rest of the log is live data).
 	if *trim && (*fromTs != 0 || *srcTopic != "otlp_deadletter-parking") {
 		log.Fatal("-trim is only allowed for whole-window parking re-drives")
+	}
+	if *synthTF && ceTypeForTopic(*srcTopic) == "" {
+		log.Fatalf("-synth-tf-headers requires a mainline OTLP source topic, got %q", *srcTopic)
 	}
 
 	sasl := scram.Auth{User: *user, Pass: *pass}.AsSha256Mechanism()
@@ -332,6 +349,20 @@ func main() {
 			}
 			if !hasAttempt {
 				hdrs = append(hdrs, kgo.RecordHeader{Key: "monoscope-attempt-count", Value: []byte("1")})
+			}
+			// Mainline-source mode: raw OTLP topics carry NO headers, so
+			// synthesize the DLQ-replay contract — ce-type/original-topic for
+			// decode, write-failure=tf-failed + pg-succeeded=true so replay
+			// retries ONLY the TimeFusion leg (PG already has these rows).
+			if *synthTF {
+				hdrs = append(hdrs,
+					kgo.RecordHeader{Key: "original-topic", Value: []byte(*srcTopic)},
+					kgo.RecordHeader{Key: "ce-type", Value: []byte(ceTypeForTopic(*srcTopic))},
+					kgo.RecordHeader{Key: "monoscope-write-failure", Value: []byte("tf-failed")},
+					kgo.RecordHeader{Key: "monoscope-pg-succeeded", Value: []byte("true")},
+					kgo.RecordHeader{Key: "monoscope-tf-succeeded", Value: []byte("false")},
+					kgo.RecordHeader{Key: "error-reason", Value: []byte("tf-failed")},
+				)
 			}
 			out := &kgo.Record{Topic: *dstTopic, Key: rec.Key, Value: rec.Value, Headers: hdrs}
 			prod.Produce(ctx, out, func(_ *kgo.Record, err error) {
