@@ -85,6 +85,31 @@ Watch progress via the `apitoolkit_eu_parking_redrive` group's LAG and the
 `InfraHealthCheck` parking backlog line. It is idempotent at the row level
 (deterministic UUIDv5 ids ⇒ TF dedup absorbs any double-writes).
 
+## 4b. Recovery B2 — re-drive a time-slice of the base DLQ (no consumer pause)
+
+When already-committed base-DLQ messages need re-processing (e.g. TF acked
+writes that a later bug lost — 2026-07-08) and pausing the DLQ group for an
+offset rewind is undesirable, `scripts/local/dlq-redrive` (local-only,
+gitignored) has a timestamp-range mode: it snapshots per-partition offsets for
+`[-from-ts, -to-ts)` and re-produces that slice back onto `otlp_deadletter`; the
+live consumers reprocess it (headers preserved ⇒ TF-only retry; idempotent).
+
+```bash
+cd scripts/local/dlq-redrive
+go run . -user "$RPK_USER" -pass "$RPK_PASS" -src otlp_deadletter \
+  -from-ts <EPOCH_MS> -to-ts <EPOCH_MS> -state /tmp/redrive-state.json          # dry run
+#   … append -apply (canary first with -max 5000). -trim is refused here.
+```
+
+Operational notes from 2026-07-09 (4.77M messages from a laptop): runs stall
+~10–15 min over WAN (3-min stall watchdog exits; wrap in a retry loop — the
+`-state` file resumes from the acked frontier, so restarts don't re-produce
+the window). Expect a brief TF memory-pressure spike while the re-driven
+backlog drains; rejected live inserts DLQ-and-retry by design. Verify with
+`scripts/tf_vs_ts/counts_matrix.sh` (timefusion repo): windows should settle
+within the 1% floor; any stable residue is never-dead-lettered data whose only
+copy is TimescaleDB (needs a TS→TF backfill, not Kafka).
+
 ## 5. Recovery C — bulk re-consume retained base-DLQ messages (offset rewind)
 
 When messages were consumed-and-committed from `otlp_deadletter` during an
