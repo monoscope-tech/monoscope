@@ -126,11 +126,11 @@ getOrInitKafkaProducer envCfg =
         <> KP.extraProp "request.timeout.ms" "30000"
         <> KP.extraProp "delivery.timeout.ms" "120000"
         -- Must track the broker's kafka_batch_max_bytes / topic max.message.bytes
-        -- (64 MiB). DLQ re-publishes re-stamp headers onto messages already near
+        -- (120 MiB). DLQ re-publishes re-stamp headers onto messages already near
         -- the original cap; a tighter limit rejects the enqueue (MsgSizeTooLarge,
         -- a librdkafka-local per-message check) and wedges the partition.
-        <> KP.extraProp "message.max.bytes" "67108864"
-        <> KP.extraProp "receive.message.max.bytes" "104857600"
+        <> KP.extraProp "message.max.bytes" "125829120" -- 120 MiB (matches broker cap; 20 MiB header headroom over the 100 MiB replay payload cap)
+        <> KP.extraProp "receive.message.max.bytes" "167772160" -- 160 MiB socket buffer (> message.max.bytes)
         <> KP.logLevel KP.KafkaLogInfo
 
 
@@ -492,11 +492,11 @@ kafkaService appLogger appCtx tp role label kafkaTopics batchSize fn = checkpoin
         -- round-trip cost). 250ms stays well under session/poll timeouts.
         <> K.extraProp "fetch.min.bytes" "65536"
         <> K.extraProp "fetch.wait.max.ms" "250"
-        -- Fetch ceiling must match broker 64 MiB max.message.bytes, else an oversized-but-valid
+        -- Fetch ceiling must match broker 120 MiB max.message.bytes, else an oversized-but-valid
         -- record (e.g. a header-restamped DLQ re-publish) wedges the partition with MSG_SIZE_TOO_LARGE.
-        <> K.extraProp "max.partition.fetch.bytes" "67108864" -- 64 MiB (librdkafka default 1 MiB)
-        <> K.extraProp "fetch.max.bytes" "67108864" -- 64 MiB total per fetch (default 50 MiB)
-        <> K.extraProp "receive.message.max.bytes" "104857600" -- 100 MiB socket buffer (> fetch.max.bytes)
+        <> K.extraProp "max.partition.fetch.bytes" "125829120" -- 120 MiB (librdkafka default 1 MiB)
+        <> K.extraProp "fetch.max.bytes" "125829120" -- 120 MiB total per fetch (default 50 MiB)
+        <> K.extraProp "receive.message.max.bytes" "167772160" -- 160 MiB socket buffer (> fetch.max.bytes)
         <> K.extraProp "partition.assignment.strategy" "cooperative-sticky"
         -- NO group.instance.id (static membership): a fenced/evicted static
         -- member never rejoins in-process — the group sat at 0 members while

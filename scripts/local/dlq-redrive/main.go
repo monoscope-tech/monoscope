@@ -212,8 +212,8 @@ func main() {
 
 	prod, err := kgo.NewClient(append(commonOpts,
 		kgo.ProducerLinger(20*time.Millisecond),
-		kgo.ProducerBatchMaxBytes(64<<20),
-		kgo.MaxBufferedBytes(256<<20),
+		kgo.ProducerBatchMaxBytes(120<<20), // matches the 120 MiB broker cap; must hold one ≤100 MiB replay record
+		kgo.MaxBufferedBytes(512<<20),
 		kgo.MaxBufferedRecords(4_000),
 		kgo.ProducerBatchCompression(kgo.SnappyCompression()),
 		kgo.RequiredAcks(kgo.AllISRAcks()),
@@ -232,10 +232,13 @@ func main() {
 		// Modest fetch sizes: the original 64-128MB values (tuned for a
 		// datacenter-local run) wedged the first fetch when run over a WAN
 		// (2026-07-08); 8MB fetches stream fine and the producer is the
-		// bottleneck anyway.
+		// bottleneck anyway. KIP-74 still returns an oversized single record
+		// beyond these fetch limits, so BrokerMaxReadBytes (the hard socket cap)
+		// is what must clear the largest message — 160 MiB covers the raised
+		// 100 MiB replay payload under the 120 MiB transport ceiling.
 		kgo.FetchMaxBytes(8<<20),
 		kgo.FetchMaxPartitionBytes(4<<20),
-		kgo.BrokerMaxReadBytes(32<<20),
+		kgo.BrokerMaxReadBytes(160<<20),
 	)...)
 	if err != nil {
 		log.Fatalf("consumer: %v", err)

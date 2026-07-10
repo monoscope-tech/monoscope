@@ -85,8 +85,12 @@ replayPostH pid body = do
 -- * `replayBatchByteBudget` — soft ceiling for total bytes processed in one
 --   `processReplayEvents` call. We chunk the message list and run each chunk
 --   strictly, letting GC reclaim between chunks.
+-- 100 MiB so full session-replay payloads land (2026-07-10: the old 10 MiB cap
+-- parked a steady drip of 10–41 MB rrweb blobs as replay:oversize_message
+-- poison). Kept below the 120 MiB broker/transport cap so a >100 MiB payload is
+-- dropped here (cheap metric) rather than wedging a partition.
 maxReplayMessageBytes :: Int
-maxReplayMessageBytes = 10 * 1024 * 1024
+maxReplayMessageBytes = 100 * 1024 * 1024
 
 
 replayBatchByteBudget :: Int

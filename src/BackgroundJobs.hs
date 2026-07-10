@@ -1039,9 +1039,9 @@ runParkingReplay authCtx cap = do
           <> KC.clientId (KC.ClientId "mono-parking-redrive")
           <> KC.noAutoCommit
           <> foldMap (uncurry KC.extraProp) (kafkaSaslExtraProps cfg)
-          <> KC.extraProp "max.partition.fetch.bytes" "67108864"
-          <> KC.extraProp "fetch.max.bytes" "67108864"
-          <> KC.extraProp "receive.message.max.bytes" "104857600"
+          <> KC.extraProp "max.partition.fetch.bytes" "125829120" -- 120 MiB (must fit the largest re-driven parking message)
+          <> KC.extraProp "fetch.max.bytes" "125829120" -- 120 MiB
+          <> KC.extraProp "receive.message.max.bytes" "167772160" -- 160 MiB socket buffer (> fetch.max.bytes)
       sub = KC.topics [TopicName parking] <> KC.offsetReset KC.Earliest
   producer <- liftIO $ getOrInitKafkaProducer cfg
   liftIO
