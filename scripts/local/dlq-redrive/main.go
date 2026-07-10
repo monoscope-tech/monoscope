@@ -213,6 +213,7 @@ func main() {
 	prod, err := kgo.NewClient(append(commonOpts,
 		kgo.ProducerLinger(20*time.Millisecond),
 		kgo.ProducerBatchMaxBytes(120<<20), // matches the 120 MiB broker cap; must hold one ≤100 MiB replay record
+		kgo.BrokerMaxWriteBytes(160<<20),   // franz-go requires this ≥ ProducerBatchMaxBytes
 		kgo.MaxBufferedBytes(512<<20),
 		kgo.MaxBufferedRecords(4_000),
 		kgo.ProducerBatchCompression(kgo.SnappyCompression()),
