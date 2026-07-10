@@ -232,7 +232,7 @@ spec = around withTestResources do
         readCounter k = do
           (m, _) <- readIORef wireTypeErrorsRef
           pure $ maybe 0 fst $ HM.lookup k m
-        oversize = BS.replicate (11 * 1024 * 1024) 0x20  -- 11 MB of spaces
+        oversize = BS.replicate (101 * 1024 * 1024) 0x20  -- 101 MB of spaces, over the 100 MiB maxReplayMessageBytes cap
         evNonEmpty = AE.toJSON ([AE.object ["type" AE..= (3 :: Int), "data" AE..= AE.object ["text" AE..= ("hi" :: Text)], "timestamp" AE..= (1 :: Int)]] :: [AE.Value]) :: AE.Value
         evEmptyStr = AE.toJSON ([AE.object ["type" AE..= (3 :: Int), "data" AE..= AE.object ["text" AE..= ("" :: Text), "tag" AE..= ("" :: Text)], "timestamp" AE..= (2 :: Int)]] :: [AE.Value]) :: AE.Value
 
