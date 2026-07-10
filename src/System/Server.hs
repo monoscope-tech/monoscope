@@ -182,12 +182,12 @@ runServer appLogger env tp = do
         , guard env.config.enablePubsubService $> async (supervise logExc "pubsub" $ Queue.pubsubService appLogger env tp env.config.requestPubsubTopics processMessages)
         , guard (not consumerOnly) $> async (supervise logExc "background-jobs" bgJobWorker)
         , guard (not consumerOnly) $> async (supervise logExc "otlp-grpc" $ OtlpServer.runServer appLogger env tp)
-        , guard (env.config.enableKafkaService && not (any T.null env.config.kafkaTopics)) $> async (supervise logExc "kafka" $ Queue.kafkaService appLogger env tp Queue.KafkaPrimary "ingest" env.config.kafkaTopics env.config.messagesPerPubsubPullBatch OtlpServer.processList)
-        , guard (env.config.enableKafkaService && not (any T.null env.config.kafkaTopics)) $> async (supervise logExc "kafka" $ Queue.kafkaService appLogger env tp Queue.KafkaPrimary "ingest" env.config.kafkaTopics env.config.messagesPerPubsubPullBatch OtlpServer.processList)
+        , guard (env.config.enableKafkaService && not (any T.null env.config.kafkaTopics)) $> async (supervise logExc "kafka" $ Queue.kafkaService appLogger env tp Queue.KafkaPrimary "ingest" env.config.kafkaDeadLetterTopic env.config.kafkaTopics env.config.messagesPerPubsubPullBatch OtlpServer.processList)
+        , guard (env.config.enableKafkaService && not (any T.null env.config.kafkaTopics)) $> async (supervise logExc "kafka" $ Queue.kafkaService appLogger env tp Queue.KafkaPrimary "ingest" env.config.kafkaDeadLetterTopic env.config.kafkaTopics env.config.messagesPerPubsubPullBatch OtlpServer.processList)
         , -- Small batch: DLQ replay is a retry carousel, not steady-state ingest;
           -- a poison-heavy batch should not stall a large offset window.
-          guard (env.config.enableKafkaService && env.config.enableKafkaDeadLetterService && not (T.null env.config.kafkaDeadLetterTopic)) $> async (supervise logExc "kafka-dlq" $ Queue.kafkaService appLogger env tp Queue.KafkaDlqReplay "dlq" (map fst (Queue.retryTiers env.config.kafkaDeadLetterTopic)) 1000 OtlpServer.processList)
-        , guard env.config.enableReplayService $> async (supervise logExc "kafka-replay" $ Queue.kafkaService appLogger env tp Queue.KafkaPrimary "replay" env.config.rrwebTopics effectiveReplayBatch processReplayEvents)
+          guard (env.config.enableKafkaService && env.config.enableKafkaDeadLetterService && not (T.null env.config.kafkaDeadLetterTopic)) $> async (supervise logExc "kafka-dlq" $ Queue.kafkaService appLogger env tp Queue.KafkaDlqReplay "dlq" env.config.kafkaDeadLetterTopic (map fst (Queue.retryTiers env.config.kafkaDeadLetterTopic)) 1000 OtlpServer.processList)
+        , guard env.config.enableReplayService $> async (supervise logExc "kafka-replay" $ Queue.kafkaService appLogger env tp Queue.KafkaPrimary "replay" env.config.rrwebDeadLetterTopic env.config.rrwebTopics effectiveReplayBatch processReplayEvents)
         , guard (rtsIsProfiled /= 0) $> async (supervise logExc "cpu-profiler" $ cpuProfileCycler profilingOn)
         ]
       <> fmap Just schemaFibers

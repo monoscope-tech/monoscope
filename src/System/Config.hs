@@ -144,6 +144,12 @@ data EnvConfig = EnvConfig
   -- to True; set ENABLE_POSTGRES_TELEMETRY_WRITES=False once TimeFusion is the source of
   -- truth so ingestion writes TF only and PG is phased out.
   , kafkaDeadLetterTopic :: Text
+  , rrwebDeadLetterTopic :: Text
+  -- ^ Separate dead-letter topic for rrweb session-replay poison. rrweb is NOT
+  -- an OTLP ce-type, so the DLQ-replay carousel can't re-process it (it would
+  -- loop as "unsupported ce-type"); replay poison lands here and simply sits —
+  -- no consumer, a quarantine for inspection. Kept off 'kafkaDeadLetterTopic'
+  -- so real OTLP DLQ tracking isn't drowned in rrweb noise.
   , enableKafkaDeadLetterService :: Bool
   -- ^ Consume 'kafkaDeadLetterTopic' back through processList under its own
   -- consumer group. Failures requeue to the DLQ tail with a bumped
@@ -231,6 +237,7 @@ instance DefConfig EnvConfig where
       , migrationsDir = "./static/migrations/"
       , messagesPerPubsubPullBatch = 1000
       , rrwebTopics = ["rrweb-client"]
+      , rrwebDeadLetterTopic = "rrweb_deadletter"
       , replayBatchSize = 0 -- 0 = derive at runtime as messagesPerPubsubPullBatch `div` 2
       , loggingDestination = Logging.StdOut
       , logLevel = LogInfo -- Default to Info level
