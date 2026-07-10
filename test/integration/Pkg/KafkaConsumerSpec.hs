@@ -110,7 +110,7 @@ drive tr bVar topics role fn done = do
           $ runErrorNoCallStack @K.KafkaError
           $ runMockProducer bVar
           $ runMockConsumer topics bVar
-          $ Queue.decoupledLoop tr.trLogger tr.trATCtx tr.trTracerProvider role 1000 "test-client" fn
+          $ Queue.decoupledLoop tr.trLogger tr.trATCtx tr.trTracerProvider role 1000 "test-client" "otlp_deadletter" fn
   void $ timeout 15_000_000 $ race_ loop (atomically done)
   readTVarIO bVar
 
