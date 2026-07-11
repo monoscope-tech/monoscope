@@ -824,11 +824,14 @@ sanitizeBackendError raw
     msg = T.toLower raw
     colNotFound =
       ("does not exist" `T.isInfixOf` msg && "column" `T.isInfixOf` msg)
-        || "no field named" `T.isInfixOf` msg
-        || "unknown column" `T.isInfixOf` msg
+        || "no field named"
+        `T.isInfixOf` msg
+        || "unknown column"
+        `T.isInfixOf` msg
     tableNotFound =
       ("does not exist" `T.isInfixOf` msg && "relation" `T.isInfixOf` msg)
-        || "unknown table" `T.isInfixOf` msg
+        || "unknown table"
+        `T.isInfixOf` msg
         || ("table" `T.isInfixOf` msg && "not found" `T.isInfixOf` msg)
 
 
