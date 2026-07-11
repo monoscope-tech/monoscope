@@ -23,7 +23,11 @@
 -- :set -interactive-print=Text.Pretty.Simple.pPrint
 :set -XTypeApplications -XKindSignatures
 
-:set -fwarn-unused-binds -fwarn-unused-imports
+-- Keep unused-bind/import warnings visible in the dev loop, but non-fatal:
+-- the package ghc-options run with -Werror, and re-enabling these here (after
+-- the cabal -Wno-unused-imports) otherwise makes every unused import across the
+-- codebase a fatal load error, breaking `make live-test-dev` entirely.
+:set -Wunused-binds -Wunused-imports -Wwarn=unused-binds -Wwarn=unused-imports
 
 -- :set -optl-Wl,-rpath,/Users/tonyalaribe/Projects/apitoolkit/apitoolkit-server/.stack-work/dist/aarch64-osx/ghc-9.8.3/build/
 

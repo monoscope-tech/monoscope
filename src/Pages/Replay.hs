@@ -1,4 +1,4 @@
-module Pages.Replay (replayPostH, ReplayPost (..), processReplayEvents, replaySessionGetH, fetchReplaySession, compressAndMergeReplaySessions, mergeReplaySession, expireOldReplayData, concatRawJsonArrays, mergeEventArrays, sessionFileKeys, splitReplayPayload, ReplayPayload (..), stripJsonNullEscapes) where
+module Pages.Replay (replayPostH, ReplayPost (..), processReplayEvents, replaySessionGetH, fetchReplaySession, compressAndMergeReplaySessions, mergeReplaySession, expireOldReplayData, concatRawJsonArrays, mergeEventArrays, sessionFileKeys, splitReplayPayload, ReplayPayload (..), stripJsonNullEscapes, firstEventTimestampRaw) where
 
 import Codec.Compression.GZip qualified as GZip
 import Conduit (runConduit)
@@ -10,6 +10,7 @@ import Data.Aeson.Parser qualified as AEP
 import Data.Aeson.Types qualified as AET
 import Data.Attoparsec.ByteString qualified as AB
 import Data.Attoparsec.ByteString.Char8 qualified as AC
+import Data.Attoparsec.ByteString.Lazy qualified as ABL
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BL
 import Data.Conduit ((.|))
@@ -38,6 +39,7 @@ import OddJobs.Job (createJob)
 import Pkg.ErrorMetrics qualified as Metrics
 import Pkg.Queue (chunksByBytes, publishJSONToKafka, runSharedProducer)
 import Relude
+import Relude.Extra.Tuple (traverseToFst)
 import System.Config (AuthContext (config, jobsPool), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, DB, RespHeaders, addRespHeaders)
@@ -384,15 +386,23 @@ describeValue = \case
   AE.Null -> "null"
 
 
+-- | Stream one object to raw (optionally gzip-decompressed) bytes. Shared
+-- transport primitive for both the viewer decode path and the byte-level merge
+-- path so fetch/decompress behaviour can't drift between them.
+fetchRawObject :: Minio.Bucket -> Minio.Object -> Bool -> Minio.Minio BL.ByteString
+fetchRawObject bucket objKey gzipped = do
+  src <- Minio.getObject bucket objKey Minio.defaultGetObjectOptions
+  bs <- runConduit $ Minio.gorObjectStream src .| CC.sinkLazy
+  pure $ if gzipped then GZip.decompress bs else bs
+
+
 -- | Download one object and decode as a JSON array, returning the decoded
 -- array alongside the raw decompressed bytes. Transport errors propagate
 -- through the `Minio` monad as `Left MinioErr`; decode failures are returned
 -- as `Left String`.
 loadJsonArray :: Minio.Bucket -> Minio.Object -> Bool -> Minio.Minio (Either String (AE.Array, BL.ByteString))
 loadJsonArray bucket objKey gzipped = do
-  src <- Minio.getObject bucket objKey Minio.defaultGetObjectOptions
-  bs <- runConduit $ Minio.gorObjectStream src .| CC.foldMap fromStrict
-  let raw = if gzipped then GZip.decompress bs else bs
+  raw <- fetchRawObject bucket objKey gzipped
   pure $ case AE.eitherDecode raw of
     Right (AE.Array arr) -> Right (arr, raw)
     Right v -> Left $ "expected JSON array, got " <> describeValue v
@@ -404,11 +414,50 @@ fetchEventArray bucket objKey gzipped = fst <<$>> loadJsonArray bucket objKey gz
 
 
 -- | Fetch one S3 object as raw decompressed bytes plus the first event's
--- timestamp (used to sort files before merging at the byte level).
--- Avoids re-encoding events during merge — raw bytes go directly to the output.
+-- timestamp (used to sort files before merging at the byte level). Unlike the
+-- viewer path we do NOT decode the whole array — the decoded `AE.Array` was the
+-- single largest heap term during a merge (~515MB in prod census). We only need
+-- the first event's timestamp for sorting; `firstEventTimestampRaw` parses that
+-- prefix and leaves the rest as raw bytes bound for the output.
 fetchRawForMerge :: Minio.Bucket -> Minio.Object -> Bool -> Minio.Minio (Either String (Double, BL.ByteString))
 fetchRawForMerge bucket objKey gzipped =
-  first firstEventTimestamp <<$>> loadJsonArray bucket objKey gzipped
+  traverseToFst firstEventTimestampRaw <$> fetchRawObject bucket objKey gzipped
+
+
+-- | Read the first event's `timestamp` from a raw JSON-array blob WITHOUT
+-- decoding the whole array. Validates the array envelope cheaply (opening `[`,
+-- closing `]` — the exact shape `concatRawJsonArrays` relies on when it strips
+-- brackets) then parses only the first element via lazy attoparsec, reusing
+-- `eventTimestamp` so timestamp semantics match the viewer path (default 0
+-- on absent field / empty array). A corrupt tail after a valid first event is
+-- tolerated — the merge produces these files itself; envelope failures still
+-- surface as `Left` and drive `MergeDecodeFailed`.
+--
+-- >>> firstEventTimestampRaw "[]"
+-- Right 0.0
+-- >>> firstEventTimestampRaw "[{\"timestamp\":1500},{\"timestamp\":2}]"
+-- Right 1500.0
+-- >>> firstEventTimestampRaw "[{\"type\":3}]"
+-- Right 0.0
+-- >>> firstEventTimestampRaw "[{\"timestamp\":5},!!!garbage!!!]"
+-- Right 5.0
+-- >>> isLeft (firstEventTimestampRaw "{\"x\":1}")
+-- True
+-- >>> isLeft (firstEventTimestampRaw "[{\"timestamp\":1}")
+-- True
+firstEventTimestampRaw :: BL.ByteString -> Either String Double
+firstEventTimestampRaw raw
+  | BL.null raw = Left "empty replay blob"
+  | BL.last raw /= 0x5d = Left "replay array envelope: missing closing ]"
+  | otherwise = maybe 0 eventTimestamp <$> ABL.eitherResult (ABL.parse prefix raw)
+  where
+    prefix = do
+      AC.skipSpace
+      _ <- AC.char '['
+      AC.skipSpace
+      AC.peekChar' >>= \case
+        ']' -> pure Nothing
+        _ -> Just <$> AEP.json'
 
 
 -- | Concatenate pre-sorted raw JSON array byte strings into one flat JSON array
@@ -574,10 +623,16 @@ mergeEventArrays :: [AE.Array] -> AE.Array
 mergeEventArrays arrays = V.concat $ sortWith firstEventTimestamp $ filter (not . V.null) arrays
 
 
+-- | One event's `timestamp` field (0 if absent / not an object). Shared by both
+-- the decoded viewer path and the raw-bytes merge path so "default 0" lives once.
+eventTimestamp :: AE.Value -> Double
+eventTimestamp = fromMaybe 0 . AET.parseMaybe (AE.withObject "event" (AE..: "timestamp"))
+
+
 -- | First event's `timestamp` field (0 if absent / array empty). Used to sort
 -- per-file event arrays before concatenating during merge.
 firstEventTimestamp :: AE.Array -> Double
-firstEventTimestamp arr = fromMaybe 0 $ (arr V.!? 0) >>= AET.parseMaybe (AE.withObject "event" (AE..: "timestamp"))
+firstEventTimestamp = maybe 0 eventTimestamp . (V.!? 0)
 
 
 mergeFileCountThreshold :: Int

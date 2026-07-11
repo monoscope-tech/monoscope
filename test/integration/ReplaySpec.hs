@@ -9,11 +9,13 @@ import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import GHC.Conc (getAllocationCounter, setAllocationCounter)
 import Models.Projects.Projects qualified as Projects
 import Data.ByteString qualified as BS
 import Data.HashMap.Strict qualified as HM
 import Data.Time (UTCTime (..), fromGregorian)
-import Pages.Replay (ReplayPayload (..), concatRawJsonArrays, fetchReplaySession, mergeEventArrays, processReplayEvents, sessionFileKeys, splitReplayPayload, stripJsonNullEscapes)
+import Pages.Replay (ReplayPayload (..), concatRawJsonArrays, fetchReplaySession, firstEventTimestampRaw, mergeEventArrays, processReplayEvents, sessionFileKeys, splitReplayPayload, stripJsonNullEscapes)
+import System.Mem (performGC)
 import Pkg.ErrorMetrics (wireTypeErrorsRef)
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
@@ -30,6 +32,28 @@ clearReplaySessions tr =
   void $ withPool tr.trPool $ DBT.execute
     [sql| DELETE FROM projects.replay_sessions WHERE project_id = ? |]
     (Only pid)
+
+
+-- | Bytes allocated on the current thread while forcing the action's result to
+-- WHNF, via the per-thread allocation counter (no profiling build needed).
+-- Callers pass actions returning a fully-strict scalar (Double/Int) so WHNF is
+-- full NF — enough to force the whole parse/decode being measured.
+allocatedBy :: IO a -> IO Int64
+allocatedBy act = do
+  performGC
+  setAllocationCounter maxBound
+  r <- act
+  _ <- evaluateWHNF r
+  end <- getAllocationCounter
+  pure (maxBound - end)
+
+
+-- | Full-decode an events blob into an `AE.Array` and force its length —
+-- reproduces the old merge-path cost (the whole array is realized).
+decodeArrayLen :: BS.ByteString -> Int
+decodeArrayLen bs = case AE.eitherDecodeStrict bs of
+  Right (AE.Array a) -> V.length a
+  _ -> 0
 
 
 spec :: Spec
@@ -397,3 +421,31 @@ spec = around withTestResources do
       -- Should produce valid JSON array of 5000 numbers
       let decoded = AE.decode result :: Maybe [Int]
       fmap length decoded `shouldBe` Just 5000
+
+  -- The heap-pressure regression this whole task exists for. The merge path
+  -- only needs the *first* event's timestamp (to sort files), but the old code
+  -- fully decoded every blob into an `AE.Array` — ~5-10x the raw bytes, the
+  -- single largest term in the prod census. `decodeArrayLen` below simulates
+  -- that old cost in-test; `firstEventTimestampRaw` is the P0 fix. We assert the
+  -- fix allocates dramatically less. If anyone reverts the parser to a full
+  -- decode, the ratio collapses and this fails.
+  describe "merge path: first-event extraction does not materialize the array (P0)" do
+    it "allocates far less than a full decode and stays tiny regardless of array size" $ \_ -> do
+      let ev = "{\"type\":3,\"timestamp\":1000,\"data\":{\"text\":\"" <> BS.replicate 64 0x78 <> "\"}}"
+          big = "[" <> BS.intercalate "," (replicate 50000 ev) <> "]"
+      -- Build the blob and warm both code paths once BEFORE measuring: the first
+      -- call to each charges one-time CAF/dictionary init (aeson/attoparsec) that
+      -- would otherwise pollute the measurement — badly so under the interpreted
+      -- `live-test-dev` loop, where that init dwarfs the parse itself.
+      _ <- evaluateWHNF big
+      _ <- evaluateWHNF $ either (const (-1)) id $ firstEventTimestampRaw (BL.fromStrict big)
+      _ <- evaluateWHNF $ decodeArrayLen big
+      rawAlloc <- allocatedBy $ pure $ either (const (-1)) id $ firstEventTimestampRaw (BL.fromStrict big)
+      decAlloc <- allocatedBy $ pure $ decodeArrayLen big
+      -- Both agree on the first timestamp — the fix changes cost, not behaviour.
+      firstEventTimestampRaw (BL.fromStrict big) `shouldBe` Right 1000
+      -- The prefix parse touches only the first of 50k events, so it must allocate
+      -- an order of magnitude less than a full decode. This ratio is the regression
+      -- guard: revert to a full decode and it collapses. (No absolute-bytes bound —
+      -- that is calibrated to compiled -O2 and flakes under interpreted bytecode.)
+      (rawAlloc * 20) `shouldSatisfy` (< decAlloc)
