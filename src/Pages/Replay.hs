@@ -1,9 +1,10 @@
-module Pages.Replay (replayPostH, ReplayPost (..), processReplayEvents, replaySessionGetH, fetchReplaySession, compressAndMergeReplaySessions, mergeReplaySession, expireOldReplayData, concatRawJsonArrays, mergeEventArrays, sessionFileKeys, splitReplayPayload, ReplayPayload (..), stripJsonNullEscapes, firstEventTimestampRaw) where
+module Pages.Replay (replayPostH, ReplayPost (..), processReplayEvents, replaySessionGetH, fetchReplaySession, ReplaySessionResp (..), RawJson (..), compressAndMergeReplaySessions, mergeReplaySession, expireOldReplayData, concatRawJsonArrays, sessionFileKeys, splitReplayPayload, ReplayPayload (..), stripJsonNullEscapes, firstEventTimestampRaw) where
 
 import Codec.Compression.GZip qualified as GZip
 import Conduit (runConduit)
 import Control.Exception (throwIO, try)
 import Data.Aeson qualified as AE
+import Data.Aeson.Encoding qualified as AEE
 import Data.Aeson.Key qualified as AEKey
 import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Parser qualified as AEP
@@ -12,6 +13,7 @@ import Data.Attoparsec.ByteString qualified as AB
 import Data.Attoparsec.ByteString.Char8 qualified as AC
 import Data.Attoparsec.ByteString.Lazy qualified as ABL
 import Data.ByteString qualified as BS
+import Data.ByteString.Builder qualified as BB
 import Data.ByteString.Lazy qualified as BL
 import Data.Conduit ((.|))
 import Data.Conduit.Combinators qualified as CC
@@ -198,7 +200,7 @@ splitReplayPayload = AB.parseOnly $ do
       Just raw -> case AE.fromJSON (AE.Object meta) of
         AE.Error e -> fail e
         AE.Success ReplayMeta{..} ->
-          pure ReplayPayload{eventsBytes = raw, eventsEmpty = isEmptyJsonArray raw, ..}
+          pure ReplayPayload{eventsBytes = raw, eventsEmpty = isEmptyJsonArray (fromStrict raw), ..}
 
 
 -- | True if a JSON array byte-slice contains zero elements, regardless of
@@ -212,11 +214,11 @@ splitReplayPayload = AB.parseOnly $ do
 -- False
 -- >>> isEmptyJsonArray ""
 -- True
-isEmptyJsonArray :: BS.ByteString -> Bool
-isEmptyJsonArray raw = case BS.uncons (BS.dropWhile isWs raw) of
+isEmptyJsonArray :: BL.ByteString -> Bool
+isEmptyJsonArray raw = case BL.uncons (BL.dropWhile isWs raw) of
   Nothing -> True
-  Just (0x5b, t) -> case BS.uncons (BS.dropWhile isWs t) of
-    Just (0x5d, rest) -> BS.all isWs rest
+  Just (0x5b, t) -> case BL.uncons (BL.dropWhile isWs t) of
+    Just (0x5d, rest) -> BL.all isWs rest
     _ -> False
   _ -> False
   where
@@ -319,20 +321,6 @@ processReplayEvents msgs _attrs = do
               Nothing -> ([], [])
 
 
--- | Retrieve a legacy single-object replay blob. Returns `Left` on transport
--- failure or decode error (caller decides how to surface); `Right V.empty` only
--- when the underlying JSON is genuinely empty or not an array.
-getMinioFile :: IOE :> es => Minio.ConnectInfo -> Minio.Bucket -> Minio.Object -> Eff es (Either Text AE.Array)
-getMinioFile conn bucket objKey = do
-  res <- liftIO $ Minio.runMinio conn $ fetchEventArray bucket objKey False
-  pure $ case res of
-    Right (Right a) -> Right a
-    Right (Left decodeErr) -> Left $ "decode: " <> toText decodeErr
-    Left err
-      | isNoSuchKey err -> Right V.empty
-      | otherwise -> Left $ "transport: " <> toText (displayException err)
-
-
 -- | True if the Minio error represents a missing object (safe to treat as empty).
 --
 -- >>> isNoSuchKey (MErrService NoSuchKey)
@@ -375,17 +363,6 @@ data MergeError
   deriving anyclass (Exception)
 
 
--- | Describe the top-level JSON constructor (for error messages).
-describeValue :: AE.Value -> String
-describeValue = \case
-  AE.Object _ -> "object"
-  AE.Array _ -> "array"
-  AE.String _ -> "string"
-  AE.Number _ -> "number"
-  AE.Bool _ -> "bool"
-  AE.Null -> "null"
-
-
 -- | Stream one object to raw (optionally gzip-decompressed) bytes. Shared
 -- transport primitive for both the viewer decode path and the byte-level merge
 -- path so fetch/decompress behaviour can't drift between them.
@@ -394,23 +371,6 @@ fetchRawObject bucket objKey gzipped = do
   src <- Minio.getObject bucket objKey Minio.defaultGetObjectOptions
   bs <- runConduit $ Minio.gorObjectStream src .| CC.sinkLazy
   pure $ if gzipped then GZip.decompress bs else bs
-
-
--- | Download one object and decode as a JSON array, returning the decoded
--- array alongside the raw decompressed bytes. Transport errors propagate
--- through the `Minio` monad as `Left MinioErr`; decode failures are returned
--- as `Left String`.
-loadJsonArray :: Minio.Bucket -> Minio.Object -> Bool -> Minio.Minio (Either String (AE.Array, BL.ByteString))
-loadJsonArray bucket objKey gzipped = do
-  raw <- fetchRawObject bucket objKey gzipped
-  pure $ case AE.eitherDecode raw of
-    Right (AE.Array arr) -> Right (arr, raw)
-    Right v -> Left $ "expected JSON array, got " <> describeValue v
-    Left e -> Left e
-
-
-fetchEventArray :: Minio.Bucket -> Minio.Object -> Bool -> Minio.Minio (Either String AE.Array)
-fetchEventArray bucket objKey gzipped = fst <<$>> loadJsonArray bucket objKey gzipped
 
 
 -- | Fetch one S3 object as raw decompressed bytes plus the first event's
@@ -497,22 +457,22 @@ projectMinioConn envCfg p =
 -- silently skipped as a concurrent-merge artifact; transport and decode errors are
 -- logged and the key is dropped). Returns merged arrays plus a partial-failure flag
 -- that is `True` if any key was lost to a non-NoSuchKey error.
-fetchIndividuals
+fetchIndividualsRaw
   :: (IOE :> es, Log :> es)
   => Minio.ConnectInfo
   -> Minio.Bucket
   -> [Text]
   -> HashMap Text Text
-  -> Eff es (AE.Array, Bool, Int)
-fetchIndividuals conn bucket fileKeys logCtx = do
+  -> Eff es ([(Double, BL.ByteString)], Bool, Int)
+fetchIndividualsRaw conn bucket fileKeys logCtx = do
   perKey <- liftIO $ forM fileKeys $ \k ->
-    Minio.runMinio conn (fetchEventArray bucket (toObjKey k) False) <&> (k,)
-  let (arrs, decodeErrs, transportErrs, missing) = foldr classify ([], [], [], []) perKey
-      classify (_, Right (Right a)) (as, ds, ts, ms) = (a : as, ds, ts, ms)
-      classify (k, Right (Left de)) (as, ds, ts, ms) = (as, (k, de) : ds, ts, ms)
-      classify (k, Left me) (as, ds, ts, ms)
-        | isNoSuchKey me = (as, ds, ts, k : ms)
-        | otherwise = (as, ds, (k, displayException me) : ts, ms)
+    Minio.runMinio conn (fetchRawForMerge bucket (toObjKey k) False) <&> (k,)
+  let (raws, decodeErrs, transportErrs, missing) = foldr classify ([], [], [], []) perKey
+      classify (_, Right (Right r)) (rs, ds, ts, ms) = (r : rs, ds, ts, ms)
+      classify (k, Right (Left de)) (rs, ds, ts, ms) = (rs, (k, de) : ds, ts, ms)
+      classify (k, Left me) (rs, ds, ts, ms)
+        | isNoSuchKey me = (rs, ds, ts, k : ms)
+        | otherwise = (rs, ds, (k, displayException me) : ts, ms)
   unless (null decodeErrs)
     $ Log.logAttention "Decode errors while reading replay event files" (HM.insert "errors" (toText $ show decodeErrs) logCtx)
   unless (null transportErrs)
@@ -523,34 +483,40 @@ fetchIndividuals conn bucket fileKeys logCtx = do
     $ Log.logAttention
       "Tracked replay file_keys missing from S3"
       (HM.insert "missing_keys" (toText $ show missing) $ HM.insert "missing_count" (show $ length missing) logCtx)
-  pure (mergeEventArrays arrs, not (null decodeErrs && null transportErrs), length missing)
+  pure (raws, not (null decodeErrs && null transportErrs), length missing)
 
 
 -- | Fetch events for a session. Returns `Left` with a user-facing message on
 -- unrecoverable failure, `Right` on success (including empty or partial results).
-getSessionEvents :: (DB es, Log :> es) => Minio.ConnectInfo -> Projects.ProjectId -> Minio.Bucket -> UUID.UUID -> Eff es (Either Text (AE.Array, Bool))
+getSessionEvents :: (DB es, Log :> es) => Minio.ConnectInfo -> Projects.ProjectId -> Minio.Bucket -> UUID.UUID -> Eff es (Either Text (BL.ByteString, Bool))
 getSessionEvents conn pid bucket sessionId = do
   let sessionStr = UUID.toText sessionId
       mergedKey = mergedKeyFor sessionId
       logCtx = HM.fromList [("session", sessionStr), ("projectId", pid.toText)]
+      transientMsg = "Storage is temporarily unreachable. Retry in a moment — your recording is safe." :: Text
+      notFoundErr = "No recorded events found for this session. The SDK may not have uploaded any events, or storage retention has expired. Session ID is below — share with support if this is unexpected." :: Text
+      corruptedErr = Left "This session’s history is corrupted and can’t be replayed. Contact support with the session ID so we can investigate."
+      noEvents reason = do
+        Log.logAttention "No replay events found anywhere for session" (HM.insert "reason" reason logCtx)
+        pure $ Left notFoundErr
+      -- Legacy single-object sessions (pre file_keys migration): fetch raw, same
+      -- byte-level handling as the merged path.
       legacy reason = do
         Log.logInfo "Falling back to legacy replay blob" (HM.insert "reason" reason logCtx)
-        legacyRes <- getMinioFile conn bucket (toObjKey (sessionStr <> ".json"))
+        legacyRes <- liftIO $ Minio.runMinio conn $ fetchRawForMerge bucket (toObjKey (sessionStr <> ".json")) False
         case legacyRes of
-          Right a
-            | V.null a -> do
-                Log.logAttention "No replay events found anywhere for session" (HM.insert "reason" "legacy_blob_missing" logCtx)
-                pure $ Left notFoundErr
-            | otherwise -> pure $ Right (a, False)
-          Left e -> do
-            Log.logError "Failed to load legacy replay blob" (HM.insert "error" e logCtx)
-            pure $ Left "Storage is temporarily unreachable. Retry in a moment — your recording is safe."
-      transientMsg = "Storage is temporarily unreachable. Retry in a moment — your recording is safe." :: Text
-      transientErr = Left transientMsg
-      corruptedErr = Left "This session’s history is corrupted and can’t be replayed. Contact support with the session ID so we can investigate."
-      notFoundErr = "No recorded events found for this session. The SDK may not have uploaded any events, or storage retention has expired. Session ID is below — share with support if this is unexpected." :: Text
+          Left err | isNoSuchKey err -> noEvents "legacy_blob_missing"
+          Left err -> do
+            Log.logError "Failed to load legacy replay blob" (withError err logCtx)
+            pure $ Left transientMsg
+          Right (Left e) -> do
+            Log.logError "Failed to load legacy replay blob" (HM.insert "error" (toText e) logCtx)
+            pure $ Left transientMsg
+          Right (Right (_, raw))
+            | isEmptyJsonArray raw -> noEvents "legacy_blob_missing"
+            | otherwise -> pure $ Right (raw, False)
   fileKeys <- sessionFileKeys pid sessionId
-  mergedRes <- liftIO $ Minio.runMinio conn $ fetchEventArray bucket mergedKey True
+  mergedRes <- liftIO $ Minio.runMinio conn $ fetchRawForMerge bucket mergedKey True
   case mergedRes of
     -- Corrupt merged.json.gz is a data-integrity event — do NOT silently fall through
     -- to individuals/legacy, that would hide the pre-merge history from the user.
@@ -559,31 +525,34 @@ getSessionEvents conn pid bucket sessionId = do
       pure corruptedErr
     Left err | not (isNoSuchKey err) -> do
       Log.logError "Failed to fetch merged replay events" (withError err logCtx)
-      pure transientErr
+      pure $ Left transientMsg
     _ -> do
-      let mergedEvents = case mergedRes of
-            Right (Right a) -> a
-            _ -> V.empty -- NoSuchKey path
-      if null fileKeys
-        then
-          if V.null mergedEvents
+      let mergedRaw = case mergedRes of
+            Right (Right r) -> [r] -- (firstTs, raw bytes)
+            _ -> [] -- NoSuchKey path
+      (individuals, partial, missingCount) <-
+        if null fileKeys then pure ([], False, 0) else fetchIndividualsRaw conn bucket fileKeys logCtx
+      -- Mirror the old two-level merge: individuals collapse (sorted by first event)
+      -- into one blob, which is then ordered against merged.json.gz by its first
+      -- event. concatRawJsonArrays drops empty arrays, so `== "[]"` is the empty test.
+      let indivBlob = concatRawJsonArrays $ map snd $ sortWith fst individuals
+          indivEntry = [(fromRight 0 (firstEventTimestampRaw indivBlob), indivBlob) | not (null individuals)]
+          combined = concatRawJsonArrays $ map snd $ sortWith fst (mergedRaw <> indivEntry)
+      if combined /= "[]"
+        then pure $ Right (combined, partial)
+        else
+          if null fileKeys
             then legacy "new_or_pre_migration_session"
-            else pure $ Right (mergedEvents, False)
-        else do
-          (arr, partial, missingCount) <- fetchIndividuals conn bucket fileKeys logCtx
-          let combined = mergeEventArrays [mergedEvents, arr]
-          if partial && V.null combined
-            then pure $ Left transientMsg
             else
-              if V.null combined
-                then do
+              if partial
+                then pure $ Left transientMsg
+                else do
                   Log.logAttention
                     "Replay session resolved empty despite tracked file_keys"
                     ( HM.insert "file_keys_count" (show $ length fileKeys)
                         $ HM.insert "missing_count" (show missingCount) logCtx
                     )
                   pure $ Left notFoundErr
-                else pure $ Right (combined, partial)
 
 
 -- | Lookup the tracked object keys for an unmerged replay session.
@@ -612,27 +581,52 @@ sessionMetadata pid sessionId = do
   pure $ listToMaybe rows
 
 
--- | Merge multiple already-sorted event arrays by sorting arrays based on their first event's timestamp, then concatenating.
---
--- >>> let ev ts = AE.object ["timestamp" AE..= (ts :: Double)]
--- >>> mergeEventArrays [V.fromList [ev 5], V.fromList [ev 1], V.fromList [ev 3]] == V.fromList [ev 1, ev 3, ev 5]
--- True
--- >>> mergeEventArrays [V.empty, V.fromList [ev 2]] == V.fromList [ev 2]
--- True
-mergeEventArrays :: [AE.Array] -> AE.Array
-mergeEventArrays arrays = V.concat $ sortWith firstEventTimestamp $ filter (not . V.null) arrays
-
-
--- | One event's `timestamp` field (0 if absent / not an object). Shared by both
--- the decoded viewer path and the raw-bytes merge path so "default 0" lives once.
+-- | One event's `timestamp` field (0 if absent / not an object). Sorts files by
+-- their first event before concatenation, keeping "default 0" in one place.
 eventTimestamp :: AE.Value -> Double
 eventTimestamp = fromMaybe 0 . AET.parseMaybe (AE.withObject "event" (AE..: "timestamp"))
 
 
--- | First event's `timestamp` field (0 if absent / array empty). Used to sort
--- per-file event arrays before concatenating during merge.
-firstEventTimestamp :: AE.Array -> Double
-firstEventTimestamp = maybe 0 eventTimestamp . (V.!? 0)
+-- | Raw JSON bytes spliced verbatim into an enclosing object's encoding. Lets the
+-- read path return a (potentially 100MB) events array without ever re-parsing it
+-- into an `AE.Array` or re-encoding it. `toEncoding` is the hot path aeson `encode`
+-- and servant use; `toJSON` is a decode fallback that should never be hit serving.
+newtype RawJson = RawJson BL.ByteString
+  deriving stock (Show)
+
+
+instance AE.ToJSON RawJson where
+  toEncoding (RawJson bs) = AEE.unsafeToEncoding (BB.lazyByteString bs)
+  toJSON (RawJson bs) = fromMaybe AE.Null (AE.decode bs)
+
+
+-- | Player-API payload: the events array as raw bytes plus the envelope fields the
+-- viewer expects. Typed (not opaque `AE.Value`) so handlers/tests inspect it
+-- structurally; the `ToJSON` splices `events` raw and matches the legacy shape.
+data ReplaySessionResp = ReplaySessionResp
+  { events :: RawJson
+  , partial :: Maybe Bool
+  , errorMsg :: Maybe Text
+  , meta :: Maybe SessionMeta
+  }
+  deriving stock (Generic, Show)
+
+
+instance AE.ToJSON ReplaySessionResp where
+  toEncoding r =
+    AE.pairs
+      $ AEE.pair "events" (AE.toEncoding r.events)
+      <> maybe mempty ("partial" AE..=) r.partial
+      <> maybe mempty ("error" AE..=) r.errorMsg
+      <> foldMap metaSeries r.meta
+    where
+      metaSeries m = "userId" AE..= m.userId <> "userEmail" AE..= m.userEmail <> "userName" AE..= m.userName <> "lastEventAt" AE..= m.lastEventAt
+  toJSON r =
+    AE.object
+      $ ["events" AE..= r.events]
+      <> maybe [] (\p -> ["partial" AE..= p]) r.partial
+      <> maybe [] (\e -> ["error" AE..= e]) r.errorMsg
+      <> maybe [] (\m -> ["userId" AE..= m.userId, "userEmail" AE..= m.userEmail, "userName" AE..= m.userName, "lastEventAt" AE..= m.lastEventAt]) r.meta
 
 
 mergeFileCountThreshold :: Int
@@ -704,7 +698,7 @@ saveReplayMinio envCfg jobsPool ackId payload = do
               pure Nothing
 
 
-replaySessionGetH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders AE.Value)
+replaySessionGetH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders ReplaySessionResp)
 replaySessionGetH pid sessionId = do
   (_, p) <- Projects.sessionAndProject pid
   addRespHeaders =<< fetchReplaySession p sessionId
@@ -713,36 +707,36 @@ replaySessionGetH pid sessionId = do
 -- | Auth-free replay payload fetch: pulls events from S3 + metadata from DB,
 -- returning the same JSON envelope the auth handler returns. Callers handle
 -- their own authorization (project membership, share-link validity, etc.)
--- before invoking this.
+-- before invoking this. Events stay as raw bytes end-to-end — never decoded into
+-- an `AE.Array` — and are spliced verbatim into the response by `RawJson`.
 fetchReplaySession
   :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Log :> es)
-  => Projects.Project -> UUID.UUID -> Eff es AE.Value
+  => Projects.Project -> UUID.UUID -> Eff es ReplaySessionResp
 fetchReplaySession p sessionId = do
   ctx <- Effectful.Reader.Static.ask @AuthContext
   let pid = p.id
       (conn, bucket) = projectMinioConn ctx.config p
       sessionStr = UUID.toText sessionId
-      metaPairs = maybe [] (\m -> ["userId" AE..= m.userId, "userEmail" AE..= m.userEmail, "userName" AE..= m.userName, "lastEventAt" AE..= m.lastEventAt])
       summaryCtx = HM.fromList [("session", sessionStr), ("projectId", pid.toText)]
   meta <-
     tryAny (sessionMetadata pid sessionId)
       >>= either
         (\err -> Nothing <$ Log.logAttention "sessionMetadata lookup failed; continuing without identity" (withError err summaryCtx))
         pure
-  let respond events extras = AE.object $ ["events" AE..= AE.Array events] <> extras <> metaPairs meta
+  let emptyResp userMsg = ReplaySessionResp{events = RawJson "[]", partial = Nothing, errorMsg = Just userMsg, meta}
   result <- tryAny $ getSessionEvents conn pid bucket sessionId
   case result of
     Right (Right (replayEvents, partial)) -> do
       Log.logInfo
         "Replay session served"
-        (summaryCtx <> HM.fromList [("event_count", show $ V.length replayEvents), ("partial", show partial), ("outcome", "ok")])
-      pure $ respond replayEvents ["partial" AE..= partial]
+        (summaryCtx <> HM.fromList [("event_bytes", show $ BL.length replayEvents), ("partial", show partial), ("outcome", "ok")])
+      pure ReplaySessionResp{events = RawJson replayEvents, partial = Just partial, errorMsg = Nothing, meta}
     Right (Left userMsg) -> do
       Log.logInfo "Replay session served (user-facing error)" (summaryCtx <> HM.fromList [("outcome", "user_error"), ("user_msg", userMsg)])
-      pure $ respond V.empty ["error" AE..= userMsg]
+      pure $ emptyResp userMsg
     Left err -> do
       Log.logAttention "Unexpected exception fetching replay session" (withError err summaryCtx)
-      pure $ respond V.empty ["error" AE..= ("We couldn’t load this session right now. Check your connection and retry — if it keeps failing, copy the session ID and share it with support." :: Text)]
+      pure $ emptyResp "We couldn’t load this session right now. Check your connection and retry — if it keeps failing, copy the session ID and share it with support."
 
 
 -- | Merge a specific replay session's S3 event files (triggered when file count exceeds threshold)

@@ -1,6 +1,5 @@
 module Pages.Share (ReqForm (..), shareLinkPostH, shareLinkGetH, shareReplaySessionGetH, ShareLinkGet (..), ShareLinkPost (..)) where
 
-import Data.Aeson qualified as AE
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Text qualified as T
@@ -185,7 +184,7 @@ instance ToHtml ShareLinkGet where
 -- anchor span attached to the share id has a matching `session.id` attribute
 -- and the share link is unexpired. Rejects with 404 otherwise so enumeration
 -- of project session ids via a leaked share id stays impossible.
-shareReplaySessionGetH :: UUID.UUID -> UUID.UUID -> ATBaseCtx AE.Value
+shareReplaySessionGetH :: UUID.UUID -> UUID.UUID -> ATBaseCtx Replay.ReplaySessionResp
 shareReplaySessionGetH sid sessionId = do
   now <- Time.currentTime
   row <- resolveShare sid now >>= note404

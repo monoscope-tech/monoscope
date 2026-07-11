@@ -14,7 +14,7 @@ import Models.Projects.Projects qualified as Projects
 import Data.ByteString qualified as BS
 import Data.HashMap.Strict qualified as HM
 import Data.Time (UTCTime (..), fromGregorian)
-import Pages.Replay (ReplayPayload (..), concatRawJsonArrays, fetchReplaySession, firstEventTimestampRaw, mergeEventArrays, processReplayEvents, sessionFileKeys, splitReplayPayload, stripJsonNullEscapes)
+import Pages.Replay (RawJson (..), ReplayPayload (..), ReplaySessionResp (..), concatRawJsonArrays, fetchReplaySession, firstEventTimestampRaw, processReplayEvents, sessionFileKeys, splitReplayPayload, stripJsonNullEscapes)
 import System.Mem (performGC)
 import Pkg.ErrorMetrics (wireTypeErrorsRef)
 import Pkg.DeriveUtils (UUIDId (..))
@@ -75,19 +75,6 @@ spec = around withTestResources do
       let input = ["[1,2,3]", "[4,5,6]"]
           result = concatRawJsonArrays input
       AE.decode result `shouldBe` Just ([1, 2, 3, 4, 5, 6] :: [Int])
-
-  describe "mergeEventArrays" do
-    let ev ts = AE.object ["timestamp" AE..= (ts :: Double)]
-
-    it "sorts arrays by first event timestamp" $ \_ ->
-      mergeEventArrays [V.fromList [ev 5], V.fromList [ev 1], V.fromList [ev 3]]
-        `shouldBe` V.fromList [ev 1, ev 3, ev 5]
-
-    it "excludes empty arrays" $ \_ ->
-      mergeEventArrays [V.empty, V.fromList [ev 2]] `shouldBe` V.fromList [ev 2]
-
-    it "returns empty for all-empty input" $ \_ ->
-      mergeEventArrays [V.empty, V.empty] `shouldBe` V.empty
 
   describe "sessionFileKeys" do
     it "returns empty list for unknown session" $ \tr -> do
@@ -343,14 +330,15 @@ spec = around withTestResources do
         fetchEventsFor tr sid = do
           projM <- runQueryEffect tr $ Projects.projectById pid
           case projM of
-            Nothing -> expectationFailure "test project not found" >> pure (V.empty)
+            Nothing -> expectationFailure "test project not found" >> pure V.empty
             Just p -> do
               resp <- runTestBg frozen tr $ fetchReplaySession p sid
-              case resp of
-                AE.Object obj -> case AEKM.lookup "events" obj of
-                  Just (AE.Array a) -> pure a
-                  _ -> expectationFailure "response missing events array" >> pure V.empty
-                _ -> expectationFailure "expected JSON object response" >> pure V.empty
+              -- Decode the *serialized* envelope (exactly what servant sends the
+              -- browser) so the RawJson byte-splice is exercised, not just the
+              -- pre-serialization value.
+              case AE.decode (AE.encode resp) of
+                Just (AE.Object obj) | Just (AE.Array a) <- AEKM.lookup "events" obj -> pure a
+                _ -> expectationFailure "serialized response missing events array" >> pure V.empty
 
     it "round-trips events posted via the kafka entry point through the player API" $ \tr ->
       requireMinio tr pendingWith $ do
@@ -421,6 +409,29 @@ spec = around withTestResources do
       -- Should produce valid JSON array of 5000 numbers
       let decoded = AE.decode result :: Maybe [Int]
       fmap length decoded `shouldBe` Just 5000
+
+  -- P1: the viewer serves the events array as raw bytes spliced verbatim into
+  -- the JSON envelope — never re-parsed into an AE.Array or re-encoded. If anyone
+  -- reintroduces a decode/re-encode, the non-canonical spacing below is normalized
+  -- away and the verbatim-substring assertion fails.
+  describe "ReplaySessionResp serialization (P1: raw events spliced, not re-encoded)" do
+    it "splices the exact events bytes into the envelope and stays well-formed" $ \_ -> do
+      let rawBytes = "[{\"type\":3,   \"timestamp\":10}]" :: BL.ByteString -- deliberately non-canonical spacing
+          resp = ReplaySessionResp{events = RawJson rawBytes, partial = Just False, errorMsg = Nothing, meta = Nothing}
+          encoded = AE.encode resp
+      BS.isInfixOf (BL.toStrict rawBytes) (BL.toStrict encoded) `shouldBe` True
+      case AE.decode encoded of
+        Just (AE.Object o) -> do
+          AEKM.lookup "partial" o `shouldBe` Just (AE.Bool False)
+          (AEKM.lookup "events" o >>= \case AE.Array a -> Just (V.length a); _ -> Nothing) `shouldBe` Just 1
+        _ -> expectationFailure "envelope not a JSON object"
+
+    it "omits partial when absent and surfaces the error field" $ \_ ->
+      case AE.decode (AE.encode ReplaySessionResp{events = RawJson "[]", partial = Nothing, errorMsg = Just "boom", meta = Nothing}) of
+        Just (AE.Object o) -> do
+          AEKM.member "partial" o `shouldBe` False
+          AEKM.lookup "error" o `shouldBe` Just (AE.String "boom")
+        _ -> expectationFailure "envelope not a JSON object"
 
   -- The heap-pressure regression this whole task exists for. The merge path
   -- only needs the *first* event's timestamp (to sort files), but the old code

@@ -407,11 +407,11 @@ replayTests = do
 
     (_, result) <- testServant tr $ Replay.replaySessionGetH testPid sessionId
 
-    case result of
-      AE.Object obj -> do
-        case KM.lookup "events" obj of
-          Just (AE.Array _) -> pass -- Valid events array
-          _ -> fail "Missing or invalid events field"
+    -- Decode the serialized envelope (ReplaySessionResp splices events as raw bytes).
+    case AE.decode (AE.encode result) of
+      Just (AE.Object obj) -> case KM.lookup "events" obj of
+        Just (AE.Array _) -> pass -- Valid events array
+        _ -> fail "Missing or invalid events field"
       _ -> fail "Expected Object response"
 
 

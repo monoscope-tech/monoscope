@@ -439,7 +439,7 @@ spec = sequential $ aroundAll withTestResources do
           (sharedSessionId, otherPid, frozenTime)
         (_, result) <- toServantResponse tr
           $ Replay.replaySessionGetH pid sharedSessionId
-        let lookupKey k = case result of AE.Object o -> KM.lookup (fromText k) o; _ -> Nothing
+        let lookupKey k = case AE.decode (AE.encode result) of Just (AE.Object o) -> KM.lookup (fromText k) o; _ -> Nothing
         lookupKey "userEmail" `shouldSatisfy` (`elem` [Nothing, Just AE.Null])
         lookupKey "userId" `shouldSatisfy` (`elem` [Nothing, Just AE.Null])
         lookupKey "userName" `shouldSatisfy` (`elem` [Nothing, Just AE.Null])
