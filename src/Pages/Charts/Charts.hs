@@ -9,7 +9,6 @@ import Data.Default
 import Data.List qualified as L (maximum)
 import Data.Map.Strict qualified as M
 import Data.Pool (withResource)
-import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Tuple.Extra (fst3, snd3, thd3)
@@ -37,6 +36,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Tracing (Tracing, withSpan_)
 import Text.Megaparsec (parseMaybe)
 import UnliftIO.Exception (catch, throwIO)
+import Utils qualified
 
 
 pivot' :: V.Vector (Int, Text, Double) -> (V.Vector Text, V.Vector (V.Vector (Maybe Double)), Double, Double)
@@ -300,27 +300,7 @@ emptyMetricsFor now fromD toD =
 -- since prod chart reads can hit either backend. Raw error stays in the OTEL
 -- span + log line.
 sanitizeChartError :: SomePostgreSqlException -> Text
-sanitizeChartError e
-  | columnNotFound = "Column not found"
-  | tableNotFound = "Table not found"
-  | "canceling statement due to" `T.isInfixOf` msg = "Query timed out"
-  | "connection" `T.isInfixOf` msg && ("refused" `T.isInfixOf` msg || "closed" `T.isInfixOf` msg) = "Database unavailable"
-  | otherwise = "Query execution failed"
-  where
-    msg = T.toLower $ toText $ displayException e
-    columnNotFound =
-      -- Postgres: column "x" does not exist
-      ("does not exist" `T.isInfixOf` msg && "column" `T.isInfixOf` msg)
-        -- DataFusion / TimeFusion: "Schema error: No field named x"
-        || "no field named"
-        `T.isInfixOf` msg
-        || "unknown column"
-        `T.isInfixOf` msg
-    tableNotFound =
-      ("does not exist" `T.isInfixOf` msg && "relation" `T.isInfixOf` msg)
-        || "unknown table"
-        `T.isInfixOf` msg
-        || ("table" `T.isInfixOf` msg && "not found" `T.isInfixOf` msg)
+sanitizeChartError = Utils.sanitizeBackendError . toText . displayException
 
 
 -- | Wrap a chart-data fetch with its OTEL span and turn any SQL failure into

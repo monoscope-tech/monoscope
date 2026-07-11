@@ -56,7 +56,6 @@ import Effectful.Log (Log)
 import Effectful.Reader.Static (ask)
 import Effectful.Reader.Static qualified as Eff
 import Effectful.Time qualified as Time
-import GHC.Exception (ErrorCall (..))
 import Ki qualified as RawKi
 import Log (LogLevel (..), Logger, runLogT)
 import Log qualified as LogBase

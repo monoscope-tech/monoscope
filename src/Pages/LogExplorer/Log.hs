@@ -70,7 +70,7 @@ import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Megaparsec (parseMaybe)
-import Utils (FieldAction (..), FieldMenuCtx (..), LoadingSize (..), LoadingType (..), checkFreeTierStatus, faSprite_, fieldContextMenuItems_, getDurationNSMS, getServiceColors, htmxOverlayIndicator_, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecTextByKey, methodFillColor, popoverPanel_, popoverTrigger_, prettyPrintCount, serviceFillColor, statusFillColorText)
+import Utils (FieldAction (..), FieldMenuCtx (..), LoadingSize (..), LoadingType (..), checkFreeTierStatus, faSprite_, fieldContextMenuItems_, getDurationNSMS, getServiceColors, htmxOverlayIndicator_, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecTextByKey, methodFillColor, popoverPanel_, popoverTrigger_, prettyPrintCount, sanitizeBackendError, serviceFillColor, statusFillColorText)
 
 import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.UUID qualified as UUID
@@ -561,6 +561,7 @@ buildLogResult withChildren pid now sinceM fromM toM addCols removeCols (request
         -- the page past the sentinel and stall load-more.
         hasMore = V.length requestVecs < resultCount'
       , traces
+      , error = Nothing
       }
 
 
@@ -815,21 +816,24 @@ logExplorerDataH pid queryM' cols' cursorM' sinceM fromM toM sourceM targetSpans
   let (removeToks, addCols) = L.partition ("-" `T.isPrefixOf`) $ filter (not . T.null) $ T.splitOn "," (fromMaybe "" cols')
       removeCols = map (T.drop 1) removeToks
       emptyTable = (V.empty, ["timestamp", "summary", "duration"], 0)
-  tableData <- case parseQueryToAST (maybeToMonoid queryM') of
-    Left err -> Log.logInfo "Log explorer data: rejected invalid KQL query" err $> emptyTable
+  -- Carry a sanitized failure message alongside the (empty) table so the client
+  -- can show an error state instead of a misleading "no events" list.
+  (errM, tableData) <- case parseQueryToAST (maybeToMonoid queryM') of
+    Left err -> Log.logInfo "Log explorer data: rejected invalid KQL query" err $> (Just "Invalid query syntax", emptyTable)
     Right queryAST -> do
       resultE <-
         Hasql.withHasqlTimefusion authCtx.env.enableTimefusionReads
           $ LogQueries.selectLogTable pid queryAST (toQText queryAST) cursorM' (fromD, toD) addCols (parseMaybe pSource =<< sourceM) targetSpansM
       case resultE of
-        Left err -> Log.logAttention "Log explorer data query failed" (show @Text err) $> emptyTable
-        Right t -> pure t
+        Left err -> Log.logAttention "Log explorer data query failed" (show @Text err) $> (Just (sanitizeBackendError err), emptyTable)
+        Right t -> pure (Nothing, t)
   -- UI always wants the trace-tree context; the API/CLI defaults off.
   lr <- buildLogResult True pid now sinceM fromM toM addCols removeCols tableData
   let lastFM = lr.cursor >>= textToUTC <&> toText . iso8601Show . addUTCTime (-0.001)
   addRespHeaders
     (lr :: LogResult)
-      { nextUrl = LogQueries.logExplorerUrlPath pid queryM' cols' lastFM sinceM fromM toM (Just "loadmore") sourceM False
+      { error = errM
+      , nextUrl = LogQueries.logExplorerUrlPath pid queryM' cols' lastFM sinceM fromM toM (Just "loadmore") sourceM False
       , resetLogsUrl = LogQueries.logExplorerUrlPath pid queryM' cols' Nothing Nothing Nothing Nothing Nothing sourceM False
       , recentUrl = LogQueries.logExplorerUrlPath pid queryM' cols' Nothing sinceM fromM toM (Just "loadmore") sourceM True
       }
@@ -1206,6 +1210,10 @@ data LogResult = LogResult
   , queryResultCount, count :: Int
   , hasMore :: Bool
   , traces :: [TraceTreeEntry]
+  , error :: Maybe Text
+  -- ^ Sanitized backend-failure message. When set, the web client renders an
+  -- error state (inline on first load, toast on refresh) instead of the
+  -- misleading empty "no events" list. Raw detail stays in the OTEL span + log.
   }
   deriving stock (Generic)
   deriving (ToSchema) via CamelSchema LogResult

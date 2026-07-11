@@ -44,6 +44,7 @@ module Utils (
   nestedJsonFromDotNotation,
   prettyPrintCount,
   formatWithCommas,
+  sanitizeBackendError,
   extractMessageFromLog,
   -- Fill color helpers
   statusFillColorText,
@@ -793,6 +794,42 @@ prettyPrintCount n
   | n >= 1_000_000 = T.show (n `div` 1_000_000) <> "." <> T.show ((n `mod` 1_000_000) `div` 100_000) <> "M"
   | n >= 1_000 = T.show (n `div` 1_000) <> "." <> T.show ((n `mod` 1_000) `div` 100) <> "K"
   | otherwise = T.show n
+
+
+-- | Map a raw backend (Postgres / TimeFusion) error message to a short, safe
+-- user-facing label. Raw detail stays in logs/spans, never the UI. Covers both
+-- Postgres phrasing and TimeFusion's DataFusion-wrapped forms since prod reads
+-- can hit either backend.
+--
+-- >>> sanitizeBackendError "This feature is not implemented: Unsupported SQL type jsonpath"
+-- "This query isn't supported on the current data source"
+-- >>> sanitizeBackendError "FATAL:  the database system is starting up"
+-- "Database unavailable"
+-- >>> sanitizeBackendError "ERROR: column \"foo\" does not exist"
+-- "Column not found"
+-- >>> sanitizeBackendError "Schema error: No field named bar"
+-- "Column not found"
+-- >>> sanitizeBackendError "some entirely novel failure"
+-- "Query execution failed"
+sanitizeBackendError :: Text -> Text
+sanitizeBackendError raw
+  | colNotFound = "Column not found"
+  | tableNotFound = "Table not found"
+  | "canceling statement due to" `T.isInfixOf` msg = "Query timed out"
+  | "connection" `T.isInfixOf` msg && ("refused" `T.isInfixOf` msg || "closed" `T.isInfixOf` msg) = "Database unavailable"
+  | "starting up" `T.isInfixOf` msg = "Database unavailable"
+  | "not implemented" `T.isInfixOf` msg = "This query isn't supported on the current data source"
+  | otherwise = "Query execution failed"
+  where
+    msg = T.toLower raw
+    colNotFound =
+      ("does not exist" `T.isInfixOf` msg && "column" `T.isInfixOf` msg)
+        || "no field named" `T.isInfixOf` msg
+        || "unknown column" `T.isInfixOf` msg
+    tableNotFound =
+      ("does not exist" `T.isInfixOf` msg && "relation" `T.isInfixOf` msg)
+        || "unknown table" `T.isInfixOf` msg
+        || ("table" `T.isInfixOf` msg && "not found" `T.isInfixOf` msg)
 
 
 -- | Format a Double with thousand separators

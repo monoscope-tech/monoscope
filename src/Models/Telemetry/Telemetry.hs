@@ -89,7 +89,6 @@ import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Generics.Labels ()
 import Data.HashMap.Strict qualified as HM
-import Data.HashSet qualified as HS
 import Data.List qualified as L (groupBy)
 import Data.List.Extra (chunksOf)
 import Data.List.NonEmpty qualified as NE

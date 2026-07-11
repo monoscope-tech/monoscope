@@ -76,6 +76,19 @@ spec = sequential $ aroundAll withTestResources do
       dataset <- expectLogsJson result
       V.length dataset `shouldSatisfy` (>= 3)
 
+    it "Test 2.1b: surfaces backend query failures as LogResult.error, not a silent empty list" $ \tr -> do
+      -- Regression: the log-explorer data endpoint used to swallow every query
+      -- failure into an empty table, so a failed read rendered identically to
+      -- "No events match in the selected time range". A valid query must carry
+      -- no error; a query that fails at the backend must surface a sanitized one.
+      ok <- queryLogs tr (Just "kind == \"log\"")
+      ok.error `shouldBe` Nothing
+      -- An unknown field renders as a bare `notarealcolumn_xyz` column reference,
+      -- which the backend rejects at plan time (row-independent) — exercising the
+      -- selectLogTable Left branch that used to be swallowed into an empty table.
+      failed <- queryLogs tr (Just "notarealcolumn_xyz == \"x\"")
+      failed.error `shouldSatisfy` isJust
+
     it "Test 2.2: should reject log ingestion with invalid API key" $ \tr -> do
       OtlpServer.logsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ createOtelLogAtTime "invalid-key-that-does-not-exist" ["Should not be stored"] frozenTime)
         `shouldThrow` \case GrpcException{grpcError = GrpcUnauthenticated} -> True; _ -> False
