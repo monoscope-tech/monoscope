@@ -685,7 +685,7 @@ projectsDropDown currProject projects = do
   let pidTxt = currProject.id.toText
   div_
     [ term "data-menu" "true"
-    , class_ "origin-top-right z-40 bg-bgRaised p-2 absolute w-[18rem] rounded-xl shadow-lg border border-strokeWeak"
+    , class_ "origin-top-right z-40 bg-bgRaised p-2 w-[18rem] rounded-xl shadow-lg border border-strokeWeak"
     ]
     do
       when (V.length projects > 1)
