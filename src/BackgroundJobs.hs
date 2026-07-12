@@ -1273,19 +1273,19 @@ sendAlertToChannels alert pid project users alertUrl subj html (initSlackTs, ini
     Just team -> do
       let enabled ch = ProjectMembers.isChannelEnabled ch team
       slackTs <-
-        if enabled "slack" && not (V.null team.slack_channels)
+        if enabled ProjectMembers.Slack && not (V.null team.slack_channels)
           then foldlM (\acc cid -> (acc <|>) <$> sendSlackAlertWith acc alert pid project.title (Just cid)) initSlackTs team.slack_channels
           else pure initSlackTs
       discordMsgId <-
-        if enabled "discord" && not (V.null team.discord_channels)
+        if enabled ProjectMembers.Discord && not (V.null team.discord_channels)
           then foldlM (\acc cid -> (acc <|>) <$> sendDiscordAlertWith acc alert pid project.title (Just cid)) initDiscordMsgId team.discord_channels
           else pure initDiscordMsgId
-      when (enabled "phone" && not (V.null team.phone_numbers))
+      when (enabled ProjectMembers.Phone && not (V.null team.phone_numbers))
         $ sendWhatsAppAlert alert pid project.title team.phone_numbers
-      when (enabled "email") do
+      when (enabled ProjectMembers.Email) do
         let rendered = ET.renderEmail subj html
         forM_ users \u -> sendRenderedEmail (CI.original u.email) subj rendered
-      when (enabled "pagerduty")
+      when (enabled ProjectMembers.Pagerduty)
         $ forM_ team.pagerduty_services \k -> sendPagerdutyAlertToService k alert project.title alertUrl
       pure (slackTs, discordMsgId, True)
 
@@ -1419,7 +1419,7 @@ runNotificationDigest _scheduledTime = do
           Log.logInfo "notification_digest_flushing"
             $ AE.object ["project_id" AE..= pid.toText, "count" AE..= length rows, "url" AE..= url]
           -- Email-only delivery today; Slack/Discord templates TBD.
-          emailEnabled <- ProjectMembers.isEveryoneChannelEnabled "email" pid
+          emailEnabled <- ProjectMembers.isEveryoneChannelEnabled ProjectMembers.Email pid
           Relude.when emailEnabled do
             users <- Projects.usersByProjectId pid
             let html = ET.digestEmail project.title url summary (length rows)
@@ -2452,7 +2452,7 @@ dispatchTeamNotifications team alert projectId projectTitle monitorUrl emailActi
   let emails = ProjectMembers.resolveTeamEmails team
   -- notify_emails is the authoritative audience now (no implicit member fallback) —
   -- if it's empty the alert goes to zero email recipients, which is almost never intended.
-  when (null emails && ProjectMembers.isChannelEnabled "email" team)
+  when (null emails && ProjectMembers.isChannelEnabled ProjectMembers.Email team)
     $ Log.logAttention "dispatchTeamNotifications: email channel enabled but notify_emails is empty — zero email recipients"
     $ AE.object ["project_id" AE..= projectId, "team_id" AE..= team.id, "is_everyone" AE..= team.is_everyone]
   for_ emails (`emailAction` Nothing)
@@ -2588,14 +2588,14 @@ sendReportForProject pid rType = do
       let alert = ReportAlert typTxt stmTxt currentTimeTxt totalErrors totalEvents (V.fromList stats) reportUrl allQ errQ
 
       teamM <- ProjectMembers.getEveryoneTeam pid
-      let ifCh ch getField act = whenJust teamM \t ->
-            Relude.when (ProjectMembers.isChannelEnabled ch t && not (V.null (getField t))) (act t)
+      let ifCh ch act = whenJust teamM \t ->
+            Relude.when (ProjectMembers.isChannelEnabled ch t && not (V.null (ProjectMembers.channelTargets ch t))) (act t)
       Relude.when pr.weeklyNotif do
-        ifCh "discord" (.discord_channels) \t -> forM_ t.discord_channels (sendDiscordAlert alert pid pr.title . Just)
-        ifCh "slack" (.slack_channels) \t -> forM_ t.slack_channels (sendSlackAlert alert pid pr.title . Just)
-        ifCh "phone" (.phone_numbers) \t -> sendWhatsAppAlert alert pid pr.title t.phone_numbers
-        ifCh "pagerduty" (.pagerduty_services) \t -> forM_ t.pagerduty_services \k -> sendPagerdutyAlertToService k alert pr.title (ctx.env.hostUrl <> "p/" <> pid.toText)
-        Relude.when (maybe False (ProjectMembers.isChannelEnabled "email") teamM) do
+        ifCh ProjectMembers.Discord \t -> forM_ t.discord_channels (sendDiscordAlert alert pid pr.title . Just)
+        ifCh ProjectMembers.Slack \t -> forM_ t.slack_channels (sendSlackAlert alert pid pr.title . Just)
+        ifCh ProjectMembers.Phone \t -> sendWhatsAppAlert alert pid pr.title t.phone_numbers
+        ifCh ProjectMembers.Pagerduty \t -> forM_ t.pagerduty_services \k -> sendPagerdutyAlertToService k alert pr.title (ctx.env.hostUrl <> "p/" <> pid.toText)
+        Relude.when (maybe False (ProjectMembers.isChannelEnabled ProjectMembers.Email) teamM) do
           totalRequest <- LogQueries.getLastSevenDaysTotalRequest pid
           Relude.when (totalRequest > 0) do
             patterns <- LogPatterns.getLogPatterns pid 10 0
@@ -2779,13 +2779,13 @@ processAPIChangeAnomalies pid targetHashes = do
         Relude.when project.endpointAlerts do
           let alert = EndpointAlert{project = project.title, endpoints = V.fromList notifiableRows, endpointHash = fromMaybe "" $ viaNonEmpty head $ V.toList targetHashes}
           teamM <- ProjectMembers.getEveryoneTeam pid
-          let ifCh ch getField act = whenJust teamM \t ->
-                Relude.when (ProjectMembers.isChannelEnabled ch t && not (V.null (getField t))) (act t)
-          ifCh "slack" (.slack_channels) \t -> forM_ t.slack_channels (sendSlackAlert alert pid project.title . Just)
-          ifCh "discord" (.discord_channels) \t -> forM_ t.discord_channels (sendDiscordAlert alert pid project.title . Just)
-          ifCh "phone" (.phone_numbers) \t -> sendWhatsAppAlert alert pid project.title t.phone_numbers
-          ifCh "pagerduty" (.pagerduty_services) \t -> forM_ t.pagerduty_services \k -> sendPagerdutyAlertToService k alert project.title (authCtx.env.hostUrl <> "p/" <> pid.toText)
-          Relude.when (maybe False (ProjectMembers.isChannelEnabled "email") teamM) do
+          let ifCh ch act = whenJust teamM \t ->
+                Relude.when (ProjectMembers.isChannelEnabled ch t && not (V.null (ProjectMembers.channelTargets ch t))) (act t)
+          ifCh ProjectMembers.Slack \t -> forM_ t.slack_channels (sendSlackAlert alert pid project.title . Just)
+          ifCh ProjectMembers.Discord \t -> forM_ t.discord_channels (sendDiscordAlert alert pid project.title . Just)
+          ifCh ProjectMembers.Phone \t -> sendWhatsAppAlert alert pid project.title t.phone_numbers
+          ifCh ProjectMembers.Pagerduty \t -> forM_ t.pagerduty_services \k -> sendPagerdutyAlertToService k alert project.title (authCtx.env.hostUrl <> "p/" <> pid.toText)
+          Relude.when (maybe False (ProjectMembers.isChannelEnabled ProjectMembers.Email) teamM) do
             forM_ users \u -> do
               let anomalyUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues"
                   (subj, html) = ET.anomalyEndpointEmail u.firstName project.title anomalyUrl notifiableRows

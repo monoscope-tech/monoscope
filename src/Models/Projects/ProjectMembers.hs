@@ -36,6 +36,8 @@ module Models.Projects.ProjectMembers (
   removePagerdutyServicesFromEveryoneTeam,
   setEveryoneTeamEmails,
   setEveryoneTeamPhones,
+  NotificationChannel (..),
+  channelTargets,
   isChannelEnabled,
   isEveryoneChannelEnabled,
   teamHasAnyEnabledChannel,
@@ -47,7 +49,7 @@ import Data.CaseInsensitive (CI)
 import Data.CaseInsensitive qualified as CI
 import Data.Effectful.Hasql qualified as Hasql
 import Data.OpenApi (ToSchema)
-import Data.Text.Display (Display)
+import Data.Text.Display (Display, display)
 import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -558,18 +560,36 @@ resolveTeamEmails :: Team -> [CI Text]
 resolveTeamEmails team = V.toList $ fmap CI.mk team.notify_emails
 
 
--- | A channel type ("slack" | "discord" | "email" | "phone" | "pagerduty") is
--- enabled for a team iff it's not listed in disabled_channels. Absence of
--- targets on the team is a separate question — this only answers "has the
--- user muted this channel type?"
-isChannelEnabled :: Text -> Team -> Bool
-isChannelEnabled ch t = not $ V.elem ch t.disabled_channels
+-- | The notification channels a team can route alerts to. Encodes (via
+-- 'display') to "email"/"slack"/"discord"/"phone"/"pagerduty" — the strings
+-- stored in @disabled_channels@ and the keys the settings UI toggles.
+data NotificationChannel = Email | Slack | Discord | Phone | Pagerduty
+  deriving stock (Bounded, Enum, Eq, Generic, Show)
+  deriving (Display) via WrappedEnumSC 'Nothing "" NotificationChannel
+
+
+-- | The configured targets for a channel on a team (recipient emails / channel
+-- ids / service keys). Empty ⇒ nowhere to send. The single source of the
+-- channel→column mapping, so "phone" can't drift from @phone_numbers@.
+channelTargets :: NotificationChannel -> Team -> V.Vector Text
+channelTargets = \case
+  Email -> (.notify_emails)
+  Slack -> (.slack_channels)
+  Discord -> (.discord_channels)
+  Phone -> (.phone_numbers)
+  Pagerduty -> (.pagerduty_services)
+
+
+-- | A channel is enabled for a team iff it's not listed in disabled_channels.
+-- Absence of targets on the team is a separate question ('channelTargets').
+isChannelEnabled :: NotificationChannel -> Team -> Bool
+isChannelEnabled ch t = not $ V.elem (display ch) t.disabled_channels
 
 
 -- | Fetch @everyone and ask whether a channel type is enabled there. Defaults to False
 -- when the team doesn't exist — the caller is about to dispatch, and silently dispatching
 -- with no team would route nowhere.
-isEveryoneChannelEnabled :: DB es => Text -> Projects.ProjectId -> Eff es Bool
+isEveryoneChannelEnabled :: DB es => NotificationChannel -> Projects.ProjectId -> Eff es Bool
 isEveryoneChannelEnabled ch pid = maybe False (isChannelEnabled ch) <$> getEveryoneTeam pid
 
 
@@ -578,14 +598,4 @@ isEveryoneChannelEnabled ch pid = maybe False (isChannelEnabled ch) <$> getEvery
 -- project members), so it's treated like any other channel — empty means
 -- undeliverable.
 teamHasAnyEnabledChannel :: Team -> Bool
-teamHasAnyEnabledChannel t =
-  any
-    populatedAndEnabled
-    [ ("email" :: Text, t.notify_emails)
-    , ("slack", t.slack_channels)
-    , ("discord", t.discord_channels)
-    , ("phone", t.phone_numbers)
-    , ("pagerduty", t.pagerduty_services)
-    ]
-  where
-    populatedAndEnabled (ch, xs) = not (V.null xs) && isChannelEnabled ch t
+teamHasAnyEnabledChannel t = any (\ch -> not (V.null (channelTargets ch t)) && isChannelEnabled ch t) [minBound .. maxBound]

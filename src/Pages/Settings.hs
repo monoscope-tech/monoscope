@@ -909,10 +909,10 @@ notificationsTestPostH pid TestForm{..} = do
       p <- pagerduty t
       pure (e + s + d + w + p)
     "email" -> countingSend Nothing (0, Nothing) email
-    "slack" -> countingSend (Just "slack") (0, Nothing) slack
-    "discord" -> countingSend (Just "discord") (0, Nothing) discord
-    "whatsapp" -> countingSend (Just "phone") (0, Nothing) whatsapp
-    "pagerduty" -> countingSend (Just "pagerduty") (0, Nothing) pagerduty
+    "slack" -> countingSend (Just ProjectMembers.Slack) (0, Nothing) slack
+    "discord" -> countingSend (Just ProjectMembers.Discord) (0, Nothing) discord
+    "whatsapp" -> countingSend (Just ProjectMembers.Phone) (0, Nothing) whatsapp
+    "pagerduty" -> countingSend (Just ProjectMembers.Pagerduty) (0, Nothing) pagerduty
     _ -> throwError err400{errBody = "Unknown notification channel"}
 
   let (status, err) = case (attempts, skipReason) of
