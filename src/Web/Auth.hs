@@ -466,13 +466,13 @@ clientMetadataH (Just authTextB64) = do
           (pApiKey, project) <- do
             pApiKeyM <- ProjectApiKeys.getProjectApiKey apiKeyUUID
             case pApiKeyM of
-              Nothing -> error "no api key with given id"
+              Nothing -> Logging.logAttention "clientMetadata: no api key with given id" () >> throwError err401
               Just pApiKey -> do
                 project <- Projects.projectById pApiKey.projectId
                 pure (pApiKey, project)
-          let serviceAccountJson = case AE.decodeStrict . B64.decodeBase64Lenient . encodeUtf8 $ appCtx.config.monoscopePusherServiceAccountB64 of
-                Just val -> val
-                Nothing -> error "Failed to decode service account from environment variable"
+          serviceAccountJson <- case AE.decodeStrict . B64.decodeBase64Lenient . encodeUtf8 $ appCtx.config.monoscopePusherServiceAccountB64 of
+            Just val -> pure val
+            Nothing -> Logging.logAttention "clientMetadata: failed to decode service account from env" () >> throwError Servant.err500
           pure
             $ ClientMetadata
               { projectId = pApiKey.projectId
