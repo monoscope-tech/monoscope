@@ -129,7 +129,7 @@ runServer appLogger env tp = do
         if env.config.replayBatchSize == 0
           then max 1 (env.config.messagesPerPubsubPullBatch `div` 2)
           else env.config.replayBatchSize
-  let logExc = logException env.config.environment appLogger env.config.logLevel
+  let logExc = logException (show env.config.environment) appLogger env.config.logLevel
   -- Extraction worker shard fibers. Each shard runs `processEagerBatch` per
   -- batch inside its own `runBackground` effect stack. The error-decay fiber
   -- owns propagateMergedCounts/updateOccurrenceCounts on a 1-minute tick.

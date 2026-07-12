@@ -45,7 +45,7 @@ import Data.Ord (clamp)
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Text.Display (display)
-import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, diffUTCTime, formatTime, getCurrentTime)
+import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, diffUTCTime, formatTime)
 import Data.Time.Clock.POSIX qualified as POSIX
 import Data.Time.LocalTime (ZonedTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
@@ -1405,7 +1405,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
       currentSort = fromMaybe "-created_at" sortM
 
   freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
-  currTime <- liftIO getCurrentTime
+  currTime <- Time.currentTime
 
   let period = fromMaybe "24h" periodM
   ((issues, totalCount), (availableServices, availableTypes)) <-

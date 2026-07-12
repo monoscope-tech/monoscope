@@ -30,9 +30,10 @@ import Control.Concurrent (threadDelay)
 import Data.Aeson qualified as AE
 import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HS
-import Data.Time (UTCTime, getCurrentTime)
+import Data.Time (UTCTime)
 import Data.Vector qualified as V
-import Effectful (Eff)
+import Effectful (Eff, type (:>))
+import Effectful.Time qualified as Time
 import Models.Apis.SchemaCatalog qualified as SC
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (DB)
@@ -64,7 +65,7 @@ data FlushResult = FlushResult
 -- so we don't see our own write back as the "prior". Anomaly inserts race-
 -- safely on the @(project_id, target_hash)@ unique index.
 flushDirty
-  :: DB es
+  :: (DB es, Time.Time :> es)
   => IORef SchemaShardState
   -> Eff es FlushResult
 flushDirty ref = do
@@ -72,7 +73,7 @@ flushDirty ref = do
   if V.null dirty
     then pure FlushResult{templatesWritten = 0, catalogRowsWritten = 0, summariesUpdated = 0, dirtyKeys = 0, anomaliesEmitted = 0}
     else do
-      now <- liftIO getCurrentTime
+      now <- Time.currentTime
       -- 1. Anomaly diff (must precede upserts so we don't see our own write
       -- back as the prior). Priors come from the in-process snapshot;
       -- cold-start keys fall through to a 'getByKeysBatch' round trip.

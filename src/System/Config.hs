@@ -31,7 +31,7 @@ import Pkg.TraceSessionCache qualified as TraceSessionCache
 import Relude
 import System.Clock (TimeSpec (TimeSpec))
 import System.Directory (getDirectoryContents)
-import System.Envy (DefConfig (..), FromEnv (..), ReadShowVar (..), Var (..), decodeWithDefaults, fromVar, toVar)
+import System.Envy (DefConfig (..), FromEnv (..), Var (..), decodeWithDefaults, fromVar, toVar)
 import System.Logging qualified as Logging
 import "base64" Data.ByteString.Base64 qualified as B64
 import "cryptohash-md5" Crypto.Hash.MD5 qualified as MD5
@@ -102,7 +102,7 @@ data EnvConfig = EnvConfig
   , githubClientSecret :: Text
   , courierClientKey :: Text
   , courierApiKey :: Text
-  , environment :: Text
+  , environment :: DeploymentEnv
   , loggingDestination :: Logging.LoggingDestination
   , logLevel :: LogLevel
   , lemonSqueezyApiKey :: Text
@@ -233,7 +233,7 @@ instance DefConfig EnvConfig where
   defConfig =
     (def :: EnvConfig)
       { port = 8080
-      , environment = "DEV"
+      , environment = Dev
       , migrationsDir = "./static/migrations/"
       , messagesPerPubsubPullBatch = 1000
       , rrwebTopics = ["rrweb-client"]
@@ -328,9 +328,25 @@ data AuthContext = AuthContext
 
 -- ===============
 
-data DeploymentEnv = Prod | Staging
-  deriving stock (Generic, Read, Show)
-  deriving (Var) via (ReadShowVar DeploymentEnv)
+data DeploymentEnv = Prod | Staging | Dev
+  deriving stock (Eq, Generic, Read, Show)
+
+
+-- | Tolerant, case-insensitive parse of the ENVIRONMENT var so existing
+-- deployments setting "DEV"/"PROD"/"staging" keep working.
+instance Var DeploymentEnv where
+  fromVar str = case T.toLower (toText str) of
+    "prod" -> Just Prod
+    "production" -> Just Prod
+    "staging" -> Just Staging
+    "stage" -> Just Staging
+    "dev" -> Just Dev
+    "development" -> Just Dev
+    "local" -> Just Dev
+    _ -> Nothing
+  toVar Prod = "prod"
+  toVar Staging = "staging"
+  toVar Dev = "dev"
 
 
 instance Default DeploymentEnv where

@@ -47,7 +47,7 @@ import OpenTelemetry.Trace (TracerProvider)
 import Pages.Bots.Utils (verifyWidgetSignature)
 import Pages.CommandPalette qualified as CommandPalette
 import Servant.OpenApi (toOpenApi)
-import System.Config (AuthContext (..), EnvConfig (..))
+import System.Config (AuthContext (..), DeploymentEnv (..), EnvConfig (..))
 import System.Exit (ExitCode (..))
 import System.Logging qualified as Log
 import System.Process.Typed (byteStringInput, proc, readProcess, setStdin)
@@ -1085,7 +1085,7 @@ emailTemplateNames = ["project-invite", "project-created", "project-deleted", "w
 guardDevOnly :: ATBaseCtx ()
 guardDevOnly = do
   ctx <- Effectful.Reader.Static.ask @AuthContext
-  unless (T.toUpper ctx.config.environment == "DEV") $ Error.throwError err404
+  unless (ctx.config.environment == Dev) $ Error.throwError err404
 
 
 emailPreviewListH :: ATBaseCtx (Html ())

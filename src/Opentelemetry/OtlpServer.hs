@@ -42,7 +42,7 @@ import Data.ProtoLens.Encoding (decodeMessage, encodeMessage)
 import Data.Scientific (fromFloatDigits)
 import Data.Text qualified as T
 import Data.These (These (..))
-import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
+import Data.Time (UTCTime, diffUTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -1493,7 +1493,7 @@ processSignalRequest
 processSignalRequest label signal receivedMsg noun countKey metadataApiKey projectKeys atIds' convert = do
   Log.logTrace receivedMsg AE.Null
 
-  currentTime <- liftIO getCurrentTime
+  currentTime <- Time.currentTime
   appCtx <- ask @AuthContext
 
   let atIds = V.catMaybes $ Projects.projectIdFromText <$> V.fromList atIds'
@@ -1587,11 +1587,11 @@ logsServiceExport appLogger appCtx tp (Proto req) = do
 
 
 -- | Process metrics request with optional API key from gRPC metadata (extracted for testing)
-processMetricsRequest :: (DB es, Eff.Reader AuthContext :> es, Log :> es) => Maybe Text -> MS.ExportMetricsServiceRequest -> Eff es ()
+processMetricsRequest :: (DB es, Eff.Reader AuthContext :> es, Log :> es, Time.Time :> es) => Maybe Text -> MS.ExportMetricsServiceRequest -> Eff es ()
 processMetricsRequest metadataApiKey req = do
   Log.logTrace "Received metrics export request" AE.Null
 
-  currentTime <- liftIO getCurrentTime
+  currentTime <- Time.currentTime
   appCtx <- ask @AuthContext
 
   let !resourceMetrics = V.fromList $ req ^. PMF.resourceMetrics
