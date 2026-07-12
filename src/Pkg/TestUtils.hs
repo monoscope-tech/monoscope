@@ -1378,7 +1378,6 @@ runHTTPtoServant tr = interpret $ \_ -> \case
   Patch url body -> liftIO $ routeWriteRequest tr "PATCH" (extractPath url) [] (unsafeCoerce body)
   DeleteWith _opts url -> liftIO $ routeDeleteRequest tr (extractPath url)
   Delete url -> liftIO $ routeDeleteRequest tr (extractPath url)
-  _ -> error "runHTTPtoServant: unsupported HTTP method (Options/Head not routed)"
 
 
 -- | Drive the real CLI top-down in-process: the actual optparse parser, the

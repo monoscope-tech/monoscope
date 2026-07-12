@@ -217,7 +217,7 @@ monitorUnmuteByIds ids =
 
 monitorResolveByIds :: DB es => [QueryMonitorId] -> Eff es Int64
 monitorResolveByIds ids =
-  Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET current_status = 'normal', alert_last_triggered = NULL, warning_last_triggered = NULL, notification_count = 0 WHERE id = ANY(#{ids}::uuid[]) AND current_status != 'normal' |]
+  Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET current_status = #{MSNormal}, alert_last_triggered = NULL, warning_last_triggered = NULL, notification_count = 0 WHERE id = ANY(#{ids}::uuid[]) AND current_status != #{MSNormal} |]
 
 
 monitorSoftDeleteByIds :: (DB es, Time :> es) => [QueryMonitorId] -> Eff es Int64

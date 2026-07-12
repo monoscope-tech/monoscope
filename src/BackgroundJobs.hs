@@ -2647,17 +2647,18 @@ sendReportForProject pid rType = do
 newAnomalyJob :: Projects.ProjectId -> ZonedTime -> Text -> Text -> V.Vector Text -> ATBackgroundCtx ()
 newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
   authCtx <- ask @Config.AuthContext
-  let anomalyType = fromMaybe (error "parseAnomalyTypes returned Nothing") $ Anomalies.parseAnomalyTypes anomalyTypesT
-  Log.logTrace "Processing new anomalies" ()
-  case anomalyType of
-    -- API Change anomalies (endpoint, shape, format) - group into single issue per endpoint
-    -- This prevents notification spam when multiple related changes occur
-    Anomalies.ATEndpoint -> processAPIChangeAnomalies pid targetHashes
-    Anomalies.ATShape -> processAPIChangeAnomalies pid targetHashes
-    Anomalies.ATFormat -> processAPIChangeAnomalies pid targetHashes
-    -- Runtime exceptions get individual issues
-    -- Each unique error pattern gets its own issue for tracking
-    _ -> pass
+  case Anomalies.parseAnomalyTypes anomalyTypesT of
+    Nothing -> Log.logAttention "newAnomalyJob: unrecognized anomaly type, skipping" anomalyTypesT
+    Just anomalyType -> do
+      Log.logTrace "Processing new anomalies" ()
+      case anomalyType of
+        -- API Change anomalies (endpoint, shape, format) - group into single issue per endpoint
+        -- This prevents notification spam when multiple related changes occur
+        Anomalies.ATEndpoint -> processAPIChangeAnomalies pid targetHashes
+        Anomalies.ATShape -> processAPIChangeAnomalies pid targetHashes
+        Anomalies.ATFormat -> processAPIChangeAnomalies pid targetHashes
+        -- Runtime exceptions get individual issues; unknown types are ignored
+        _ -> pass
 
 
 -- | Process API change anomalies (endpoint, shape, format) into unified APIChange issues

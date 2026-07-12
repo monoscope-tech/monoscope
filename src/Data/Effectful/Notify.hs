@@ -293,7 +293,9 @@ runNotifyProduction = interpret $ \_ -> \case
   SendNotificationWithReply notification -> case notification of
     SlackNotification slackData -> sendSlack slackData
     DiscordNotification discordData -> sendDiscord discordData
-    _ -> pure Nothing
+    EmailNotification _ -> pure Nothing
+    WhatsAppNotification _ -> pure Nothing
+    PagerdutyNotification _ -> pure Nothing
   GetNotifications -> pure [] -- Production doesn't store notifications
   where
     sendSlack :: (IOE :> es, Log :> es, Reader Config.AuthContext :> es) => SlackData -> Eff es (Maybe Text)
@@ -476,5 +478,7 @@ runNotifyTest ref = interpret \_ -> \case
     pure $ case notification of
       SlackNotification _ -> Just $ "test-slack-ts-" <> show idx
       DiscordNotification _ -> Just $ "test-discord-id-" <> show idx
-      _ -> Nothing
+      EmailNotification _ -> Nothing
+      WhatsAppNotification _ -> Nothing
+      PagerdutyNotification _ -> Nothing
   GetNotifications -> liftIO $ reverse <$> readIORef ref

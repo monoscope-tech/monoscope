@@ -5,15 +5,11 @@ module Data.Effectful.Wreq (
   put,
   patch,
   delete,
-  options,
-  head_,
   getWith,
   postWith,
   putWith,
   patchWith,
   deleteWith,
-  optionsWith,
-  headWith,
   W.header,
   runHTTPWreq,
   runHTTPGolden,
@@ -63,15 +59,11 @@ data HTTP :: Effect where
   Put :: Putable a => String -> a -> HTTP m (Response LBS.ByteString)
   Patch :: Patchable a => String -> a -> HTTP m (Response LBS.ByteString)
   Delete :: String -> HTTP m (Response LBS.ByteString)
-  Options :: String -> HTTP m (Response LBS.ByteString)
-  Head_ :: String -> HTTP m (Response LBS.ByteString)
   GetWith :: Options -> String -> HTTP m (Response LBS.ByteString)
   PostWith :: Postable a => Options -> String -> a -> HTTP m (Response LBS.ByteString)
   PutWith :: Putable a => Options -> String -> a -> HTTP m (Response LBS.ByteString)
   PatchWith :: Patchable a => Options -> String -> a -> HTTP m (Response LBS.ByteString)
   DeleteWith :: Options -> String -> HTTP m (Response LBS.ByteString)
-  OptionsWith :: Options -> String -> HTTP m (Response LBS.ByteString)
-  HeadWith :: Options -> String -> HTTP m (Response LBS.ByteString)
 
 
 type instance DispatchOf HTTP = 'Dynamic
@@ -93,7 +85,6 @@ runHTTPWreq = interpret $ \_ -> \case
   PutWith opts url body -> liftIO $ W.putWith opts url body
   PatchWith opts url body -> liftIO $ W.patchWith opts url body
   DeleteWith opts url -> liftIO $ W.deleteWith opts url
-  _ -> error "unimplemented"
 
 
 runHTTPGolden :: IOE :> es => FilePath -> Eff (HTTP ': es) a -> Eff es a
@@ -108,7 +99,6 @@ runHTTPGolden goldenDir = interpret $ \_ -> \case
   PutWith opts url body -> liftIO $ getOrCreateGoldenResponse goldenDir (sanitizeFileName url <> "_put_with.json") (W.putWith opts url body)
   PatchWith opts url body -> liftIO $ getOrCreateGoldenResponse goldenDir (sanitizeFileName url <> "_patch_with.json") (W.patchWith opts url body)
   DeleteWith opts url -> liftIO $ getOrCreateGoldenResponse goldenDir (sanitizeFileName url <> "_delete_with.json") (W.deleteWith opts url)
-  _ -> error "unimplemented"
 
 
 -- Helper functions
