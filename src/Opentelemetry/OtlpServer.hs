@@ -1097,8 +1097,12 @@ convertResourceSpansToOtelLogs !fallbackTime !projectCaches !pids !resourceSpans
               Nothing ->
                 case (V.!? 0) $ getSpanAttributeValue "at-project-id" (V.singleton rs) of
                   Just pidText | Just uid <- UUID.fromText pidText -> Just (UUIDId uid)
-                  _ | not (V.null pids) -> Just (snd $ V.head pids)
-                  _ -> Nothing
+                  -- Fall back to the batch's project only when it is unambiguous (a
+                  -- single project). Picking V.head of a multi-project batch silently
+                  -- mis-attributes spans to the wrong project (cross-tenant leak).
+                  _ -> case V.toList pids of
+                    [(_, sole)] -> Just sole
+                    _ -> Nothing
        in case projectId of
             Just pid ->
               case HM.lookup pid projectCaches of
