@@ -671,10 +671,9 @@ dbMessageToLLMMessage :: Issues.AIChatMessage -> LLM.Message
 dbMessageToLLMMessage msg =
   LLM.Message
     { LLM.role = case msg.role of
-        "user" -> LLM.User
-        "assistant" -> LLM.Assistant
-        "system" -> LLM.System
-        _ -> LLM.User
+        Issues.ChatUser -> LLM.User
+        Issues.ChatAssistant -> LLM.Assistant
+        Issues.ChatSystem -> LLM.System
     , LLM.content = msg.content
     , LLM.messageData = LLM.defaultMessageData
     }
@@ -706,7 +705,7 @@ runAgenticChatWithHistory config userQuery model apiKey = do
       dbMessages <- Issues.selectChatHistory convId
       let historyMsgs = map dbMessageToLLMMessage dbMessages
           chatHistory = systemMsg :| (historyMsgs <> [userMsg])
-      Issues.insertChatMessage config.projectId convId "user" userQuery Nothing Nothing
+      Issues.insertChatMessage config.projectId convId Issues.ChatUser userQuery Nothing Nothing
       runAgenticLoopRaw config apiKey chatHistory params 0 []
 
 

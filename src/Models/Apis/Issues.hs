@@ -24,6 +24,7 @@ module Models.Apis.Issues (
   RuntimeExceptionData (..),
   QueryAlertData (..),
   ThresholdDirection (..),
+  ChatRole (..),
   LogPatternRateChangeData (..),
   LogPatternData (..),
   RateChangeDirection (..),
@@ -771,11 +772,19 @@ data AIConversation = AIConversation
 
 
 -- | AI Chat message
+-- | Author of a stored AI chat message. Encodes to "user"/"assistant"/"system"
+-- (byte-identical to the previous free-text column).
+data ChatRole = ChatUser | ChatAssistant | ChatSystem
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving anyclass (Default, NFData)
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "Chat" ChatRole
+
+
 data AIChatMessage = AIChatMessage
   { id :: UUIDId "ai_chat"
   , projectId :: Projects.ProjectId
   , conversationId :: UUIDId "conversation"
-  , role :: Text -- "user", "assistant", or "system"
+  , role :: ChatRole
   , content :: Text
   , widgets :: Maybe (Aeson AE.Value) -- Array of widget configs
   , metadata :: Maybe (Aeson AE.Value) -- Additional metadata
@@ -799,7 +808,7 @@ getOrCreateConversation pid convId convType ctx = do
 
 
 -- | Insert a new chat message
-insertChatMessage :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Text -> Text -> Maybe AE.Value -> Maybe AE.Value -> Eff es ()
+insertChatMessage :: DB es => Projects.ProjectId -> UUIDId "conversation" -> ChatRole -> Text -> Maybe AE.Value -> Maybe AE.Value -> Eff es ()
 insertChatMessage pid convId chatRole chatContent widgetsM metadataM = do
   let widgetsJ = Aeson <$> widgetsM
       metaJ = Aeson <$> metadataM

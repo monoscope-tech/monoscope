@@ -748,7 +748,7 @@ slackEventsPostH payload = do
             case replies of
               Nothing -> Log.logAttention "Slack chat migration: getChannelMessages failed" $ AE.object ["conv_id" AE..= show @Text convId, "channel" AE..= event.channel, "thread_ts" AE..= threadTs]
               Just messages -> forM_ messages.messages \m ->
-                Issues.insertChatMessage slackData.projectId convId "user" m.text Nothing Nothing
+                Issues.insertChatMessage slackData.projectId convId Issues.ChatUser m.text Nothing Nothing
           Issues.releaseChatMigrationLock convId
           whenLeft_ result \err ->
             Log.logAttention "Slack chat migration failed" $ AE.object ["error" AE..= show @Text err, "conv_id" AE..= show @Text convId]
@@ -768,8 +768,8 @@ slackEventsPostH payload = do
           sendSlackChatMessage slackData.botToken (mergeSlackContent (formatBotError Slack ServiceError) (AE.object ["channel" AE..= event.channel, "thread_ts" AE..= threadTs]))
         Right resp -> do
           -- Save user message and bot response to DB
-          Issues.insertChatMessage slackData.projectId convId "user" event.text Nothing Nothing
-          whenJust resp.query \q -> Issues.insertChatMessage slackData.projectId convId "assistant" q Nothing Nothing
+          Issues.insertChatMessage slackData.projectId convId Issues.ChatUser event.text Nothing Nothing
+          whenJust resp.query \q -> Issues.insertChatMessage slackData.projectId convId Issues.ChatAssistant q Nothing Nothing
 
           let addThread c = mergeSlackContent c (AE.object ["channel" AE..= event.channel, "thread_ts" AE..= threadTs])
           dispatchAIResponse

@@ -339,16 +339,16 @@ discordInteractionsH rawBody signatureM timestampM = do
               when lockAcquired $ do
                 msgs <- getThreadStarterMessage interaction envCfg.discordBotToken
                 for_ msgs \messages -> forM_ messages \m ->
-                  let role = if m.author.username `elem` ["APItoolkit", "Monoscope"] then "assistant" else "user"
+                  let role = if m.author.username `elem` ["APItoolkit", "Monoscope"] then Issues.ChatAssistant else Issues.ChatUser
                    in Issues.insertChatMessage discordData.projectId convId role m.content Nothing Nothing
             dbMessages <- Issues.selectChatHistory convId
             let threadContext = formatHistoryAsContext "Discord" $ map AI.dbMessageToLLMMessage dbMessages
             result <- processAIQuery discordData.projectId userQuery (Just threadContext) envCfg.openaiModel envCfg.openaiApiKey
-            Issues.insertChatMessage discordData.projectId convId "user" userQuery Nothing Nothing
+            Issues.insertChatMessage discordData.projectId convId Issues.ChatUser userQuery Nothing Nothing
             case result of
               Left _ -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (formatBotError Discord ServiceError)
               Right resp -> do
-                whenJust resp.query \q -> Issues.insertChatMessage discordData.projectId convId "assistant" q Nothing Nothing
+                whenJust resp.query \q -> Issues.insertChatMessage discordData.projectId convId Issues.ChatAssistant q Nothing Nothing
                 sendDiscordResponse options interaction envCfg authCtx discordData resp now
           _ -> do
             result <- processAIQuery discordData.projectId userQuery Nothing envCfg.openaiModel envCfg.openaiApiKey

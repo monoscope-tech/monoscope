@@ -1018,8 +1018,8 @@ aiChatPostH pid issueId form
       maybe (respond Nothing convId "Issue not found. Unable to analyze." Nothing Nothing True) (processIssue appCtx now convId) issueM
   where
     respond systemPromptM convId response widgets toolCalls includeUserMsg = do
-      when includeUserMsg $ Issues.insertChatMessage pid convId "user" form.query Nothing Nothing
-      Issues.insertChatMessage pid convId "assistant" response (AE.toJSON <$> widgets) (AE.toJSON <$> toolCalls)
+      when includeUserMsg $ Issues.insertChatMessage pid convId Issues.ChatUser form.query Nothing Nothing
+      Issues.insertChatMessage pid convId Issues.ChatAssistant response (AE.toJSON <$> widgets) (AE.toJSON <$> toolCalls)
       addRespHeaders $ aiChatResponse_ pid form.query response widgets toolCalls systemPromptM
 
     processIssue appCtx now convId issue = do
@@ -1317,7 +1317,7 @@ aiChatHistoryWithSystemPrompt_ pid systemPrompt msgs = do
 
 -- | Pair user messages with their following assistant responses, skipping unpaired
 pairUserAssistant :: [Issues.AIChatMessage] -> [(Issues.AIChatMessage, Issues.AIChatMessage)]
-pairUserAssistant (u : a : rest) | u.role == "user" && a.role == "assistant" = (u, a) : pairUserAssistant rest
+pairUserAssistant (u : a : rest) | u.role == Issues.ChatUser && a.role == Issues.ChatAssistant = (u, a) : pairUserAssistant rest
 pairUserAssistant (_ : rest) = pairUserAssistant rest
 pairUserAssistant [] = []
 
