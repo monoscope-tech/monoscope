@@ -981,22 +981,27 @@ scalarFuncToSQL name args
 -- "message::text !~* 'success'"
 --
 -- >>> display (Contains (Subject "" "url" []) (Str "api"))
--- "url::text ILIKE '%' || 'api' || '%'"
+-- "url::text ~* 'api'"
 --
 -- >>> display (NotContains (Subject "" "path" []) (Str "admin"))
--- "path::text NOT ILIKE '%' || 'admin' || '%'"
+-- "path::text !~* 'admin'"
+--
+-- The search term is matched literally — regex metacharacters are escaped:
+--
+-- >>> display (Contains (Subject "" "v" []) (Str "3.14"))
+-- "v::text ~* '3\\.14'"
 --
 -- >>> display (StartsWith (Subject "" "endpoint" []) (Str "/api/"))
--- "endpoint::text ILIKE '/api/' || '%'"
+-- "endpoint::text ~* '^/api/'"
 --
 -- >>> display (NotStartsWith (Subject "" "path" []) (Str "/internal"))
--- "path::text NOT ILIKE '/internal' || '%'"
+-- "path::text !~* '^/internal'"
 --
 -- >>> display (EndsWith (Subject "" "filename" []) (Str ".log"))
--- "filename::text ILIKE '%' || '.log'"
+-- "filename::text ~* '\\.log$'"
 --
 -- >>> display (NotEndsWith (Subject "" "url" []) (Str ".css"))
--- "url::text NOT ILIKE '%' || '.css'"
+-- "url::text !~* '\\.css$'"
 --
 -- On a wildcard subject, negation wraps the whole existence test (NOT jsonb_path_exists),
 -- so @!in@ means "no element matches" — not "some element differs":
@@ -1096,22 +1101,30 @@ displayExprHelper op prec sub val =
         ("!=", Null) -> displayPrec prec sub <> " IS NOT NULL"
         ("IN", List vs) -> displayPrec prec sub <> " IN (" <> (mconcat . intersperse "," . map (displayPrec prec)) vs <> ")"
         ("NOT IN", List vs) -> displayPrec prec sub <> " NOT IN (" <> (mconcat . intersperse "," . map (displayPrec prec)) vs <> ")"
-        ("HAS", _) -> subAsText <> " ~* " <> displayPrec prec val
-        ("NOT HAS", _) -> subAsText <> " !~* " <> displayPrec prec val
-        ("HAS_ANY", List vs) -> "(" <> (mconcat . intersperse " OR " . map (\v -> subAsText <> " ~* " <> displayPrec prec v)) vs <> ")"
-        ("HAS_ALL", List vs) -> "(" <> (mconcat . intersperse " AND " . map (\v -> subAsText <> " ~* " <> displayPrec prec v)) vs <> ")"
-        ("CONTAINS", _) -> subAsText <> " ILIKE '%' || " <> displayPrec prec val <> " || '%'"
-        ("NOT CONTAINS", _) -> subAsText <> " NOT ILIKE '%' || " <> displayPrec prec val <> " || '%'"
-        ("STARTSWITH", _) -> subAsText <> " ILIKE " <> displayPrec prec val <> " || '%'"
-        ("NOT STARTSWITH", _) -> subAsText <> " NOT ILIKE " <> displayPrec prec val <> " || '%'"
-        ("ENDSWITH", _) -> subAsText <> " ILIKE '%' || " <> displayPrec prec val
-        ("NOT ENDSWITH", _) -> subAsText <> " NOT ILIKE '%' || " <> displayPrec prec val
+        -- has/contains/startswith/endswith match a literal (case-insensitively) — the term
+        -- is regex-escaped and rendered as `~*`, mirroring the wildcard jsonpath path
+        -- (like_regex + escapeRegex). ^/$ anchor startswith/endswith.
+        ("HAS", _) -> subAsText <> " ~* " <> reTerm "" "" val
+        ("NOT HAS", _) -> subAsText <> " !~* " <> reTerm "" "" val
+        ("HAS_ANY", List vs) -> "(" <> (mconcat . intersperse " OR " . map (\v -> subAsText <> " ~* " <> reTerm "" "" v)) vs <> ")"
+        ("HAS_ALL", List vs) -> "(" <> (mconcat . intersperse " AND " . map (\v -> subAsText <> " ~* " <> reTerm "" "" v)) vs <> ")"
+        ("CONTAINS", _) -> subAsText <> " ~* " <> reTerm "" "" val
+        ("NOT CONTAINS", _) -> subAsText <> " !~* " <> reTerm "" "" val
+        ("STARTSWITH", _) -> subAsText <> " ~* " <> reTerm "^" "" val
+        ("NOT STARTSWITH", _) -> subAsText <> " !~* " <> reTerm "^" "" val
+        ("ENDSWITH", _) -> subAsText <> " ~* " <> reTerm "" "$" val
+        ("NOT ENDSWITH", _) -> subAsText <> " !~* " <> reTerm "" "$" val
         _ -> displayPrec prec sub <> " " <> displayPrec @T.Text prec op <> " " <> displayPrec prec val
   where
     -- Cast to text for subjects without field keys (may be JSONB columns)
     subAsText = case sub of
       Subject _ _ [] -> displayPrec prec sub <> "::text"
       _ -> displayPrec prec sub
+    -- SQL regex literal for a search term: metacharacters escaped so it matches
+    -- literally, with optional ^/$ anchors. Non-string terms render as-is.
+    reTerm pre post = \case
+      Str s -> displayPrec prec (Str (pre <> escapeRegex s <> post))
+      v -> displayPrec prec v
 
 
 -- | Postgres SQL/JSON-path (jsonpath) target IR. Only constructs that are valid
