@@ -130,6 +130,7 @@ import Hasql.Interpolate qualified as HI
 import Models.Apis.Anomalies (PayloadChange)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
+import Models.Apis.LogPatterns (RateChangeDirection (..))
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), idToText, rawSql, selectFrom)
@@ -1000,12 +1001,6 @@ data LogPatternData = LogPatternData
   deriving anyclass (NFData)
   deriving (FromField, ToField) via Aeson LogPatternData
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake LogPatternData
-
-
-data RateChangeDirection = Spike | Drop
-  deriving stock (Eq, Generic, Read, Show)
-  deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON, Display) via WrappedEnumSC 'Nothing "" RateChangeDirection
 
 
 data SpikeResult = SpikeResult

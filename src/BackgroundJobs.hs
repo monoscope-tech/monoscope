@@ -3633,11 +3633,6 @@ isAlertableLogLevel = \case
   Nothing -> False
 
 
-dirText :: Issues.RateChangeDirection -> Text
-dirText Issues.Spike = "spike"
-dirText Issues.Drop = "drop"
-
-
 -- | Detect log pattern volume spikes and create issues.
 -- Projects partial-hour counts to hourly rate for sub-hourly detection.
 --
@@ -3683,8 +3678,8 @@ detectLogPatternSpikes pid scheduledTime authCtx = do
       matchedPending dir lp = case (lp.pendingAnomalyDirection, lp.pendingAnomalyDetectedAt) of
         (Just pd, Just pAt) -> pd == dir && freshPending pAt
         _ -> False
-      fires = [(lp, sr) | (lp, Just sr) <- detected, matchedPending (dirText sr.direction) lp]
-      pends = [(lp, dirText sr.direction) | (lp, Just sr) <- detected, not (matchedPending (dirText sr.direction) lp)]
+      fires = [(lp, sr) | (lp, Just sr) <- detected, matchedPending sr.direction lp]
+      pends = [(lp, sr.direction) | (lp, Just sr) <- detected, not (matchedPending sr.direction lp)]
       clears = V.fromList [lp.patternId | (lp, Nothing) <- detected, isJust lp.pendingAnomalyDirection]
 
   forM_ pends \(lp, dir) ->
@@ -3705,7 +3700,7 @@ detectLogPatternSpikes pid scheduledTime authCtx = do
     whenJust projectM \project -> do
       let issueUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> issue.id.toText
           changePct = if sr.mean > 0 then (sr.currentRate - sr.mean) / sr.mean * 100 else 0
-          alert = LogPatternRateChangeAlert{issueUrl, patternText = lpRate.logPattern, sampleMessage = Nothing, logLevel = lpRate.logLevel, serviceName = lpRate.serviceName, direction = dir, currentRate = sr.currentRate, baselineMean = sr.mean, changePercent = changePct, isError = lpRate.isError}
+          alert = LogPatternRateChangeAlert{issueUrl, patternText = lpRate.logPattern, sampleMessage = Nothing, logLevel = lpRate.logLevel, serviceName = lpRate.serviceName, direction = sr.direction, currentRate = sr.currentRate, baselineMean = sr.mean, changePercent = changePct, isError = lpRate.isError}
           (subj, html) = ET.logPatternRateChangeEmail project.title issueUrl lpRate.logPattern lpRate.logLevel lpRate.serviceName dir sr.currentRate sr.mean changePct
       void $ notifyIssue issue project users Issues.rateChangeCooldownHours "log_pattern_rate_change" alert issueUrl subj html
     pure issue.id

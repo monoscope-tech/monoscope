@@ -3,6 +3,7 @@ module Models.Apis.LogPatterns (
   LogPattern (..),
   LogPatternId (..),
   LogPatternState (..),
+  RateChangeDirection (..),
   getLogPatterns,
   getLogPatternTexts,
   getLogPatternTextsByService,
@@ -47,6 +48,7 @@ import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.OpenApi (ToSchema)
 import Data.Text qualified as T
+import Data.Text.Display (Display)
 import Data.Time (UTCTime, ZonedTime)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
@@ -79,6 +81,16 @@ data LogPatternState
   deriving (AE.FromJSON, AE.ToJSON, FromField, HI.DecodeValue, HI.EncodeValue, ToField, ToSchema) via WrappedEnumSC 'Nothing "LPS" LogPatternState
 
 
+-- | Direction of a log-pattern volume anomaly. Encodes to "spike"/"drop",
+-- matching the @apis.log_patterns.pending_anomaly_direction@ column. Defined
+-- here (not in "Models.Apis.Issues", which imports this module) so the column
+-- and the alert payloads can share one type; re-exported from Issues.
+data RateChangeDirection = Spike | Drop
+  deriving stock (Eq, Generic, Read, Show)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "" RateChangeDirection
+
+
 data LogPattern = LogPattern
   { id :: LogPatternId
   , projectId :: Projects.ProjectId
@@ -106,7 +118,7 @@ data LogPattern = LogPattern
   , embedding :: Maybe (V.Vector Float)
   , embeddingAt :: Maybe ZonedTime
   , mergeOverride :: Bool
-  , pendingAnomalyDirection :: Maybe Text
+  , pendingAnomalyDirection :: Maybe RateChangeDirection
   , pendingAnomalyDetectedAt :: Maybe UTCTime
   , isError :: Bool
   }
@@ -375,7 +387,7 @@ data LogPatternWithRate = LogPatternWithRate
   , baselineMean :: Maybe Double
   , baselineMad :: Maybe Double
   , currentHourCount :: Int64
-  , pendingAnomalyDirection :: Maybe Text
+  , pendingAnomalyDirection :: Maybe RateChangeDirection
   , pendingAnomalyDetectedAt :: Maybe UTCTime
   , isError :: Bool
   }
@@ -444,8 +456,7 @@ sourceFieldLabel f = fromMaybe f $ lookup f knownPatternFields
 
 
 -- | Record a first-observation anomaly so the next detection run can confirm it.
--- Caller passes "spike" or "drop" as the direction.
-setPendingAnomaly :: DB es => LogPatternId -> Text -> UTCTime -> Eff es ()
+setPendingAnomaly :: DB es => LogPatternId -> RateChangeDirection -> UTCTime -> Eff es ()
 setPendingAnomaly lpid dir at =
   Hasql.interpExecute_
     [HI.sql|
