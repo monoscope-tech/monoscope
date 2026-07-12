@@ -79,6 +79,7 @@ import Relude
 import Relude.Extra.Enum (safeToEnum)
 import Relude.Unsafe qualified as Unsafe
 import Servant (FromHttpApiData (..))
+import System.Envy (Var (..))
 import Text.Casing (fromSnake, quietSnake, toPascal)
 
 
@@ -310,6 +311,13 @@ instance (KnownSymbol prefix, Read a, Show a) => AE.FromJSON (WrappedEnumSC qual
 
 instance (KnownSymbol prefix, Read a, Show a) => FromHttpApiData (WrappedEnumSC qualType prefix a) where
   parseUrlPiece t = maybe (Left $ "Invalid " <> fromString (symbolVal (Proxy @prefix)) <> " value: " <> t) (Right . WrappedEnumSC) $ decodeEnumSC @prefix (toString @Text t)
+
+
+-- | envy env-var (de)serialization. 'decodeEnumSC' normalizes case via
+-- @toPascal . fromSnake@, so @ENVIRONMENT=DEV@ / @PROD@ / @staging@ all parse.
+instance (KnownSymbol prefix, Read a, Show a, Typeable a, Typeable qualType) => Var (WrappedEnumSC qualType prefix a) where
+  toVar (WrappedEnumSC a) = encodeEnumSC @prefix a
+  fromVar = fmap WrappedEnumSC . decodeEnumSC @prefix
 
 
 -- | Shared enum value list for a 'WrappedEnumSC' OpenApi schema.

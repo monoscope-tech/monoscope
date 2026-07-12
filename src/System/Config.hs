@@ -328,25 +328,12 @@ data AuthContext = AuthContext
 
 -- ===============
 
+-- | @Var@ derived via 'WrappedEnumSC' encodes to "prod"/"staging"/"dev" and
+-- decodes case-insensitively (via @toPascal . fromSnake@), so existing
+-- @ENVIRONMENT=DEV@/@PROD@/@STAGING@ deployments keep working.
 data DeploymentEnv = Prod | Staging | Dev
   deriving stock (Eq, Generic, Read, Show)
-
-
--- | Tolerant, case-insensitive parse of the ENVIRONMENT var so existing
--- deployments setting "DEV"/"PROD"/"staging" keep working.
-instance Var DeploymentEnv where
-  fromVar str = case T.toLower (toText str) of
-    "prod" -> Just Prod
-    "production" -> Just Prod
-    "staging" -> Just Staging
-    "stage" -> Just Staging
-    "dev" -> Just Dev
-    "development" -> Just Dev
-    "local" -> Just Dev
-    _ -> Nothing
-  toVar Prod = "prod"
-  toVar Staging = "staging"
-  toVar Dev = "dev"
+  deriving (Var) via DeriveUtils.WrappedEnumSC 'Nothing "" DeploymentEnv
 
 
 instance Default DeploymentEnv where
