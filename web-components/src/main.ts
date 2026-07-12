@@ -141,10 +141,9 @@ window.getTimeRange = function () {
     if (range[0] != '') {
       return { since: range[0], from: '', to: '' };
     }
-    if (params().since == '') {
-      return { since: '14D', from: params().from, to: params().to };
-    }
-    return { since: params().since, from: params().from, to: params().to };
+    // No explicit pick: send empty and let the server fill its default (see
+    // defaultSince in TimePicker.hs). The frontend never names a default range.
+    return { since: params().since || '', from: params().from, to: params().to };
   }
 
   const fromInput = document.querySelector('input[name="from"]') as HTMLInputElement | null;

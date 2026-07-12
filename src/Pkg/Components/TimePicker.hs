@@ -81,8 +81,18 @@ parseSince now since =
     timeParser = (,) <$> decimal <*> (space *> some letterChar)
 
 
+-- | The one place the default time range is decided. Every layer (server SQL,
+-- the picker label, the frontend) either forwards an explicit user pick through
+-- here or defers to this — nobody else names a default.
+defaultSince :: Text
+defaultSince = "1H"
+
+
 -- | Parse time range from TimePicker
--- Converts user input (since/from/to) into start and end times
+-- Converts user input (since/from/to) into start and end times. Empty strings
+-- are treated as absent, and any range that resolves to nothing falls back to
+-- 'defaultSince' — so this can never emit an unbounded scan regardless of what
+-- the client sends.
 --
 -- Test with since value (uses current time as end)
 -- >>> parseTimeRange (Unsafe.read "2024-10-31 12:00:00 UTC") (TimePicker (Just "2H") Nothing Nothing)
@@ -91,13 +101,19 @@ parseSince now since =
 -- Test with from/to values
 -- >>> parseTimeRange (Unsafe.read "2024-10-31 12:00:00 UTC") (TimePicker Nothing (Just "2024-10-31T08:00:00Z") (Just "2024-10-31T10:00:00Z"))
 -- (Just 2024-10-31 08:00:00 UTC,Just 2024-10-31 10:00:00 UTC,Just ("2024-10-31 08:00:00","2024-10-31 10:00:00"))
+--
+-- Empty since/from/to must fall back to the default range, never an unbounded scan
+-- >>> parseTimeRange (Unsafe.read "2024-10-31 12:00:00 UTC") (TimePicker (Just "") (Just "") (Just ""))
+-- (Just 2024-10-31 11:00:00 UTC,Just 2024-10-31 12:00:00 UTC,Just ("1H",""))
 parseTimeRange :: UTCTime -> TimePicker -> (Maybe UTCTime, Maybe UTCTime, Maybe (Text, Text))
-parseTimeRange now tp = case tp of
-  TimePicker Nothing Nothing Nothing -> parseSince now "1H"
-  TimePicker (Just "") Nothing Nothing -> parseSince now "1H"
-  TimePicker Nothing fromM toM -> parseFromAndTo now fromM toM
-  TimePicker (Just "") fromM toM -> parseFromAndTo now fromM toM
-  TimePicker sinceM _ _ -> parseSince now (maybeToMonoid sinceM)
+parseTimeRange now tp = case (nonEmpty' tp.since, nonEmpty' tp.from, nonEmpty' tp.to) of
+  (Just s, _, _) -> parseSince now s
+  (_, Nothing, Nothing) -> parseSince now defaultSince
+  (_, fromM, toM) -> case parseFromAndTo now fromM toM of
+    (Nothing, Nothing, _) -> parseSince now defaultSince
+    resolved -> resolved
+  where
+    nonEmpty' = mfilter (not . T.null)
 
 
 parseFromAndTo :: UTCTime -> Maybe Text -> Maybe Text -> (Maybe UTCTime, Maybe UTCTime, Maybe (Text, Text))
@@ -146,7 +162,7 @@ timepicker_ submitForm currentRange targetIdM = do
     do
       faSprite_ "calendar" "regular" "h-4 w-4 text-iconNeutral"
       let attrs = maybe [] (\(s, e) -> [term "data-start" s, term "data-end" e]) currentRange
-      span_ (attrs ++ [class_ "inline-block leading-none", id_ $ targetPr <> "-currentRange"]) $ toHtml (maybe "1H" (\(s, e) -> s <> if T.null e then "" else " - " <> e) currentRange)
+      span_ (attrs ++ [class_ "inline-block leading-none", id_ $ targetPr <> "-currentRange"]) $ toHtml (maybe defaultSince (\(s, e) -> s <> if T.null e then "" else " - " <> e) currentRange)
       span_ [id_ "offsetIndicator", class_ "text-2xs text-textWeak max-md:hidden"] "UTC+00"
       faSprite_ "chevron-down" "regular" "h-3 w-3"
 
