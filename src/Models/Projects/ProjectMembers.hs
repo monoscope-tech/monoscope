@@ -598,4 +598,4 @@ isEveryoneChannelEnabled ch pid = maybe False (isChannelEnabled ch) <$> getEvery
 -- project members), so it's treated like any other channel — empty means
 -- undeliverable.
 teamHasAnyEnabledChannel :: Team -> Bool
-teamHasAnyEnabledChannel t = any (\ch -> not (V.null (channelTargets ch t)) && isChannelEnabled ch t) [minBound .. maxBound]
+teamHasAnyEnabledChannel t = any (\ch -> not (V.null (channelTargets ch t)) && isChannelEnabled ch t) [minBound ..]
