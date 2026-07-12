@@ -1,10 +1,11 @@
-module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), kqlTimespanToTimeBucket, FieldKey (..), pSquareBracketKey, pTerm, jsonPathQuery, display, pDuration, pNowFunction, pAgoFunction, pValues, Parser, symbol, sc, ToQueryText (..), flattenedOtelAttributes, flattenedOtelAttributesBuiltin, setFlattenedOtelColumns, topLevelOtelColumns, transformFlattenedAttribute, outputFieldAliases) where
+module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), kqlTimespanToTimeBucket, FieldKey (..), pSquareBracketKey, pTerm, Jsonpath, LowerErr (..), lowerPred, renderJsonpath, resolveWildcardTimes, display, pDuration, pNowFunction, pAgoFunction, pValues, Parser, symbol, sc, ToQueryText (..), flattenedOtelAttributes, flattenedOtelAttributesBuiltin, setFlattenedOtelColumns, topLevelOtelColumns, transformFlattenedAttribute, outputFieldAliases) where
 
 import Control.Monad.Combinators.Expr (
   Operator (InfixL),
   makeExprParser,
  )
 import Data.Aeson qualified as AE
+import Data.Aeson.Text (encodeToLazyText)
 import Data.Char (isDigit)
 import Data.Map.Strict qualified as M
 import Data.Scientific (FPFormat (Fixed), Scientific, formatScientific)
@@ -12,7 +13,10 @@ import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Builder.Linear (Builder)
 import Data.Text.Display (Display, display, displayBuilder, displayParen, displayPrec)
+import Data.Time (NominalDiffTime, UTCTime, addUTCTime)
+import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Vector qualified as V
+import Pkg.DeriveUtils (escapeRegex)
 import Relude hiding (GT, LT, Sum, many, some)
 import System.IO.Unsafe (unsafePerformIO)
 import Text.Megaparsec
@@ -38,8 +42,10 @@ symbol = L.symbol sc
 -- $setup
 -- >>> import Text.Megaparsec (parse, parseTest)
 -- >>> import Data.Text.Display (display)
--- >>> import Pkg.Parser.Expr (Values(..), Subject(..), FieldKey(..), jsonPathQuery)
+-- >>> import Pkg.Parser.Expr (Values(..), Subject(..), FieldKey(..), lowerPred, renderJsonpath, LowerErr(..))
 -- >>> import Prelude (Bool(..))
+-- >>> import Data.Time (UTCTime(..))
+-- >>> import Data.Time.Calendar (fromGregorian)
 -- >>> :set -XOverloadedStrings
 -- >>> :set -XQuasiQuotes
 
@@ -63,6 +69,7 @@ data Values
   | NowExpression -- Represents now() function
   | Field Subject -- Field reference - displayed as column name, not quoted string
   | ScalarFunc Text [Values] -- Scalar function: name, arguments (coalesce, iff, isnull, toint, etc.)
+  | TimestampLit Text -- now()/ago() resolved to a concrete ISO-8601 instant (see resolveWildcardTimes)
   deriving stock (Eq, Generic, Ord, Show)
 
 
@@ -89,6 +96,7 @@ instance AE.ToJSON Values where
   toJSON NowExpression = AE.String "now()"
   toJSON (Field sub) = AE.toJSON sub
   toJSON (ScalarFunc name args) = AE.object ["func" AE..= name, "args" AE..= args]
+  toJSON (TimestampLit iso) = AE.String iso
 
 
 instance ToQueryText Values where
@@ -888,6 +896,7 @@ instance Display Values where
      in "ARRAY[" <> arrayElements <> "]"
   displayPrec prec (Field sub) = displayPrec prec sub
   displayPrec _ (ScalarFunc name args) = displayBuilder $ scalarFuncToSQL name args
+  displayPrec prec (TimestampLit iso) = displayPrec prec ("'" <> iso <> "'::timestamptz")
 
 
 -- | Type cast function name to SQL type mapping
@@ -929,10 +938,10 @@ scalarFuncToSQL name args
 -- "errors->0->>'message' = 'val'"
 --
 -- >>> display (Eq (Subject "" "abc" [ArrayWildcard "",FieldKey "xyz"]) (Str "val"))
--- "jsonb_path_exists(to_jsonb(abc), $$$[*].\"xyz\" ? (@ == \"val\")$$::jsonpath)"
+-- "jsonb_path_exists(to_jsonb(abc), '$[*].\"xyz\" ? (@ == \"val\")'::jsonpath)"
 --
 -- >>> display (Eq (Subject "" "errors" [ArrayWildcard "", ArrayIndex "message" 0, FieldKey "details"]) (Str "detailsVal"))
--- "jsonb_path_exists(to_jsonb(errors), $$$[*].message[0].\"details\" ? (@ == \"detailsVal\")$$::jsonpath)"
+-- "jsonb_path_exists(to_jsonb(errors), '$[*].\"message\"[0].\"details\" ? (@ == \"detailsVal\")'::jsonpath)"
 --
 -- -- abc[*].xyz which should generate something else than what is generated.
 -- -- TODO: investigate and then FIXME
@@ -955,7 +964,7 @@ scalarFuncToSQL name args
 -- "request_body->'message'->'tags'->>'name'"
 --
 -- >>> display (Regex (Subject "" "request_body" [FieldKey "msg"]) "^abc.*")
--- "jsonb_path_exists(to_jsonb(request_body), $$$.\"msg\" ? (@ like_regex \"^abc.*\" flag \"i\" )$$::jsonpath)"
+-- "jsonb_path_exists(to_jsonb(request_body), '$.\"msg\" ? (@ like_regex \"^abc.*\" flag \"i\")'::jsonpath)"
 --
 -- Test new operators Display instances for SQL generation:
 --
@@ -989,8 +998,17 @@ scalarFuncToSQL name args
 -- >>> display (NotEndsWith (Subject "" "url" []) (Str ".css"))
 -- "url::text NOT ILIKE '%' || '.css'"
 --
+-- On a wildcard subject, negation wraps the whole existence test (NOT jsonb_path_exists),
+-- so @!in@ means "no element matches" — not "some element differs":
+--
+-- >>> display (NotIn (Subject "" "roles" [ArrayWildcard ""]) (List [Str "admin"]))
+-- "NOT (jsonb_path_exists(to_jsonb(roles), '$[*] ? (@ == \"admin\")'::jsonpath))"
+--
+-- >>> display (NotHas (Subject "" "logs" [ArrayWildcard "", FieldKey "msg"]) (Str "error"))
+-- "NOT (jsonb_path_exists(to_jsonb(logs), '$[*].\"msg\" ? (@ like_regex \"error\" flag \"i\")'::jsonpath))"
+--
 -- >>> display (Matches (Subject "" "email" []) ".*@company\\.com")
--- "jsonb_path_exists(to_jsonb(email), $$$ ? (@ like_regex \".*@company\\.com\" flag \"i\" )$$::jsonpath)"
+-- "jsonb_path_exists(to_jsonb(email), '$ ? (@ like_regex \".*@company\\\\.com\" flag \"i\")'::jsonpath)"
 
 -- | Decompose a binary Expr into its operands plus the (display op-string,
 -- toQText infix token) drawn from the shared operator tables, so Display and
@@ -1044,11 +1062,11 @@ instance Display Expr where
   displayPrec prec e
     | Just (sub, val, op, _) <- subBinaryParts e = displayExprHelper op prec sub val
     | Just (v1, v2, op, _) <- valBinaryParts e = displayParen (prec > 0) $ displayPrec prec v1 <> " " <> displayBuilder op <> " " <> displayPrec prec v2
-  displayPrec prec (Matches sub val) = displayPrec prec $ jsonPathQuery "like_regex" sub (Str val)
+  displayPrec prec (Matches sub val) = displayPrec prec $ renderJsonpathSQL "like_regex" sub (Str val)
   displayPrec prec (Paren u1) = displayParen True $ displayPrec prec u1
   displayPrec prec (And u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " AND " <> displayPrec prec u2
   displayPrec prec (Or u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " OR " <> displayPrec prec u2
-  displayPrec prec (Regex sub val) = displayPrec prec $ jsonPathQuery "like_regex" sub (Str val)
+  displayPrec prec (Regex sub val) = displayPrec prec $ renderJsonpathSQL "like_regex" sub (Str val)
   displayPrec prec (BoolFunc v) = displayPrec prec v -- Boolean scalar function renders directly to SQL
   displayPrec _ _ = error "Display Expr: unreachable"
 
@@ -1072,7 +1090,7 @@ displayExprHelper :: T.Text -> Int -> Subject -> Values -> Builder
 displayExprHelper op prec sub val =
   displayParen (prec > 0)
     $ if subjectHasWildcard sub
-      then displayPrec prec (jsonPathQuery op sub val)
+      then displayPrec prec (renderJsonpathSQL op sub val)
       else case (op, val) of
         ("=", Null) -> displayPrec prec sub <> " IS NULL"
         ("!=", Null) -> displayPrec prec sub <> " IS NOT NULL"
@@ -1096,69 +1114,266 @@ displayExprHelper op prec sub val =
       _ -> displayPrec prec sub
 
 
--- | Generate PostgreSQL JSONPath queries from AST with specified operator
---
--- Examples:
---
--- >>> jsonPathQuery "==" (Subject "" "data" [FieldKey "name"]) (Str "John Doe")
--- "jsonb_path_exists(to_jsonb(data), $$$.\"name\" ? (@ == \"John Doe\")$$::jsonpath)"
---
--- >>> jsonPathQuery "!=" (Subject "" "users" [ArrayIndex "" 1, FieldKey "age"]) (Num "30")
--- "jsonb_path_exists(to_jsonb(users), $$$[1].\"age\" ? (@ != 30)$$::jsonpath)"
---
--- >>> jsonPathQuery "!=" (Subject "" "settings" [ArrayWildcard "", FieldKey "enabled"]) (Boolean True)
--- "jsonb_path_exists(to_jsonb(settings), $$$[*].\"enabled\" ? (@ != true)$$::jsonpath)"
---
--- >>> jsonPathQuery "<" (Subject "" "user" [FieldKey "profile", FieldKey "address", FieldKey "zipcode"]) Null
--- "jsonb_path_exists(to_jsonb(user), $$$.\"profile\".\"address\".\"zipcode\" ? (@ < null)$$::jsonpath)"
---
--- >>> jsonPathQuery ">" (Subject "" "orders" [ArrayIndex "" 0, ArrayWildcard "val", FieldKey "status"]) (Str "pending")
--- "jsonb_path_exists(to_jsonb(orders), $$$[0].val[*].\"status\" ? (@ > \"pending\")$$::jsonpath)"
---
--- >>> jsonPathQuery "like_regex" (Subject "" "request_body" [FieldKey "msg"]) (Str "^abc.*")
--- "jsonb_path_exists(to_jsonb(request_body), $$$.\"msg\" ? (@ like_regex \"^abc.*\" flag \"i\" )$$::jsonpath)"
---
--- Test new operators with JSONPath (wildcard subjects):
---
--- >>> jsonPathQuery "IN" (Subject "" "users" [ArrayWildcard "", FieldKey "role"]) (List [Str "admin", Str "user"])
--- "jsonb_path_exists(to_jsonb(users), $$$[*].\"role\" ? (@ IN ['admin','user'])$$::jsonpath)"
---
--- >>> jsonPathQuery "HAS" (Subject "" "logs" [ArrayWildcard "", FieldKey "message"]) (Str "error")
--- "jsonb_path_exists(to_jsonb(logs), $$$[*].\"message\" ? (@ HAS \"error\")$$::jsonpath)"
---
--- >>> jsonPathQuery "CONTAINS" (Subject "" "events" [ArrayWildcard "", FieldKey "description"]) (Str "login")
--- "jsonb_path_exists(to_jsonb(events), $$$[*].\"description\" ? (@ CONTAINS \"login\")$$::jsonpath)"
---
--- >>> jsonPathQuery "STARTSWITH" (Subject "" "requests" [ArrayWildcard "", FieldKey "path"]) (Str "/api")
--- "jsonb_path_exists(to_jsonb(requests), $$$[*].\"path\" ? (@ STARTSWITH \"/api\")$$::jsonpath)"
-jsonPathQuery :: T.Text -> Subject -> Values -> T.Text
-jsonPathQuery op' (Subject entire base keys) val =
-  "jsonb_path_exists(to_jsonb(" <> base <> "), $$" <> "$" <> buildPath keys <> buildCondition op val postfix <> "$$::jsonpath)"
+-- | Postgres SQL/JSON-path (jsonpath) target IR. Only constructs that are valid
+-- Postgres jsonpath are representable, so 'renderJsonpath' is total and always
+-- emits syntactically valid jsonpath. KQL operators are translated into this IR
+-- by 'lowerPred'; a comparison with no jsonpath form (now()/ago(), field refs) is
+-- a typed 'LowerErr', never a silently-invalid string like @\@ IN [...]@.
+data Jsonpath = Jsonpath Text JPath JPred
+  deriving stock (Show)
+
+
+-- | An absolute path from the document root @$@, then a sequence of steps.
+newtype JPath = JPath [JStep]
+  deriving stock (Show)
+
+
+data JStep = JKey Text | JIdx Int | JWild
+  deriving stock (Show)
+
+
+-- | A filter predicate: the body of @? ( … )@, always about the current item @\@@.
+data JPred
+  = JCmp JCmpOp JLit -- @\@ == "x"@
+  | JLikeRegex Text -- @\@ like_regex "…" flag "i"@ (always case-insensitive here)
+  | JAnd JPred JPred
+  | JOr JPred JPred
+  deriving stock (Show)
+
+
+data JCmpOp = JEq | JNeq | JLt | JLte | JGt | JGte
+  deriving stock (Show)
+
+
+data JLit
+  = JStr Text
+  | JNum Text
+  | JBool Bool
+  | JNull
+  | -- | ISO-8601 instant compared via @.datetime()@
+    JDateTime Text
+  deriving stock (Show)
+
+
+-- | Why a KQL comparison has no Postgres jsonpath rendering.
+data LowerErr
+  = -- | value has no jsonpath equivalent (now(), ago(), field ref, empty list)
+    NoJsonpathForm Text
+  | -- | operator token not in the KQL operator set
+    UnknownOp Text
+  deriving stock (Show)
+
+
+-- | Render the jsonpath IR to a Postgres @jsonb_path_exists@ predicate. Total: by
+-- construction the IR can only encode valid jsonpath.
+renderJsonpath :: Jsonpath -> Text
+renderJsonpath (Jsonpath base path pred_) =
+  -- Single-quoted SQL literal with @''@-escaping (matches the rest of the module and
+  -- transformFlattenedAttribute), not @$$@ dollar-quoting which a @$$@ in a user value would break.
+  "jsonb_path_exists(to_jsonb(" <> base <> "), '" <> T.replace "'" "''" (renderPath path <> " ? (" <> renderPred False pred_ <> ")") <> "'::jsonpath)"
   where
-    op = if op' == "=" then "==" else op'
-    postfix = if op' == "like_regex" then " flag \"i\" " else ""
+    renderPath (JPath steps) = "$" <> foldMap step steps
+    step (JKey k) = ".\"" <> k <> "\""
+    step (JIdx i) = "[" <> show i <> "]"
+    step JWild = "[*]"
 
-    buildPath :: [FieldKey] -> T.Text
-    buildPath [] = ""
-    buildPath (FieldKey key : rest) = ".\"" <> key <> "\"" <> buildPath rest
-    buildPath (ArrayIndex "" idx : rest) = "[" <> show idx <> "]" <> buildPath rest
-    buildPath (ArrayIndex key idx : rest) = "." <> key <> "[" <> show idx <> "]" <> buildPath rest
-    buildPath (ArrayWildcard "" : rest) = "[*]" <> buildPath rest
-    buildPath (ArrayWildcard key : rest) = "." <> key <> "[*]" <> buildPath rest
+    -- The 'Bool' requests parenthesization: the mandatory @? ( … )@ wrapper already
+    -- groups, so a binary op only self-parenthesizes when nested inside another one.
+    -- Datetime comparison coerces both operands via @.datetime()@ (jsonpath has no now()).
+    renderPred _ (JCmp o (JDateTime iso)) = "@.datetime() " <> cmp o <> " " <> jsonString iso <> ".datetime()"
+    renderPred _ (JCmp o l) = "@ " <> cmp o <> " " <> lit l
+    renderPred _ (JLikeRegex rx) = "@ like_regex " <> jsonString rx <> " flag \"i\""
+    renderPred p (JAnd a b) = paren p (renderPred True a <> " && " <> renderPred True b)
+    renderPred p (JOr a b) = paren p (renderPred True a <> " || " <> renderPred True b)
 
-    buildCondition :: T.Text -> Values -> T.Text -> T.Text
-    buildCondition oper (Num n) pstfx = " ? (@ " <> oper <> " " <> n <> postfix <> ")"
-    buildCondition oper (Str s) pstfx = " ? (@ " <> oper <> " \"" <> s <> "\"" <> postfix <> ")"
-    buildCondition oper (Boolean b) pstfx = " ? (@ " <> oper <> " " <> T.toLower (show b) <> pstfx <> ")"
-    buildCondition oper (Duration _ ns) pstfx = " ? (@ " <> oper <> " " <> show ns <> postfix <> ")"
-    buildCondition oper NowExpression pstfx = " ? (@ " <> oper <> " now()" <> pstfx <> ")"
-    buildCondition oper (AgoExpression timespan) pstfx = " ? (@ " <> oper <> " ago(" <> timespan <> ")" <> pstfx <> ")"
-    buildCondition oper (TimeFunction tf) pstfx = " ? (@ " <> oper <> " " <> tf <> pstfx <> ")"
-    buildCondition oper Null pstfx =
-      case op' of
-        "=" -> " ? (@ is null" <> pstfx <> ")"
-        "!=" -> " ? (@ is not null" <> pstfx <> ")"
-        _ -> " ? (@ " <> oper <> " null" <> pstfx <> ")"
-    buildCondition oper (List xs) pstfx = " ? (@ " <> oper <> " [" <> (mconcat . intersperse "," . map display) xs <> "]" <> pstfx <> ")"
-    buildCondition oper (Field sub) pstfx = " ? (@ " <> oper <> " " <> display sub <> pstfx <> ")"
-    buildCondition oper (ScalarFunc name args) pstfx = " ? (@ " <> oper <> " " <> scalarFuncToSQL name args <> pstfx <> ")"
+    paren doParen s = if doParen then "(" <> s <> ")" else s
+
+    cmp JEq = "=="
+    cmp JNeq = "!="
+    cmp JLt = "<"
+    cmp JLte = "<="
+    cmp JGt = ">"
+    cmp JGte = ">="
+
+    lit (JStr s) = jsonString s
+    lit (JNum n) = n
+    lit (JBool b) = if b then "true" else "false"
+    lit JNull = "null"
+    lit (JDateTime iso) = jsonString iso <> ".datetime()"
+
+
+-- | JSON-escaped, double-quoted string literal — valid inside a jsonpath.
+jsonString :: Text -> Text
+jsonString = toText . encodeToLazyText . AE.String
+
+
+-- | Lower a KQL @operator/subject/value@ comparison into the jsonpath IR. The
+-- operator token is the display token from 'subjectBinOps' (plus @like_regex@ for
+-- the regex exprs); every token that reaches here has an explicit arm, and any
+-- value with no jsonpath form is a typed 'LowerErr'.
+--
+-- >>> renderJsonpath <$> lowerPred "=" (Subject "" "data" [FieldKey "name"]) (Str "John Doe")
+-- Right "jsonb_path_exists(to_jsonb(data), '$.\"name\" ? (@ == \"John Doe\")'::jsonpath)"
+--
+-- >>> renderJsonpath <$> lowerPred "!=" (Subject "" "settings" [ArrayWildcard "", FieldKey "enabled"]) (Boolean True)
+-- Right "jsonb_path_exists(to_jsonb(settings), '$[*].\"enabled\" ? (@ != true)'::jsonpath)"
+--
+-- >>> renderJsonpath <$> lowerPred "=" (Subject "" "u" [ArrayWildcard "", FieldKey "x"]) Null
+-- Right "jsonb_path_exists(to_jsonb(u), '$[*].\"x\" ? (@ == null)'::jsonpath)"
+--
+-- >>> renderJsonpath <$> lowerPred "!=" (Subject "" "u" [ArrayWildcard "", FieldKey "x"]) Null
+-- Right "jsonb_path_exists(to_jsonb(u), '$[*].\"x\" ? (@ != null)'::jsonpath)"
+--
+-- >>> renderJsonpath <$> lowerPred "IN" (Subject "" "users" [ArrayWildcard "", FieldKey "role"]) (List [Str "admin", Str "user"])
+-- Right "jsonb_path_exists(to_jsonb(users), '$[*].\"role\" ? (@ == \"admin\" || @ == \"user\")'::jsonpath)"
+--
+-- >>> renderJsonpath <$> lowerPred "HAS" (Subject "" "logs" [ArrayWildcard "", FieldKey "message"]) (Str "error")
+-- Right "jsonb_path_exists(to_jsonb(logs), '$[*].\"message\" ? (@ like_regex \"error\" flag \"i\")'::jsonpath)"
+--
+-- >>> renderJsonpath <$> lowerPred "CONTAINS" (Subject "" "e" [ArrayWildcard "", FieldKey "d"]) (Str "login")
+-- Right "jsonb_path_exists(to_jsonb(e), '$[*].\"d\" ? (@ like_regex \"login\" flag \"i\")'::jsonpath)"
+--
+-- >>> renderJsonpath <$> lowerPred "HAS_ANY" (Subject "" "t" [ArrayWildcard "", FieldKey "k"]) (List [Str "a", Str "b"])
+-- Right "jsonb_path_exists(to_jsonb(t), '$[*].\"k\" ? (@ like_regex \"a\" flag \"i\" || @ like_regex \"b\" flag \"i\")'::jsonpath)"
+--
+-- >>> renderJsonpath <$> lowerPred "HAS_ALL" (Subject "" "t" [ArrayWildcard "", FieldKey "k"]) (List [Str "a", Str "b"])
+-- Right "jsonb_path_exists(to_jsonb(t), '$[*].\"k\" ? (@ like_regex \"a\" flag \"i\" && @ like_regex \"b\" flag \"i\")'::jsonpath)"
+--
+-- >>> renderJsonpath <$> lowerPred "STARTSWITH" (Subject "" "r" [ArrayWildcard "", FieldKey "path"]) (Str "/api")
+-- Right "jsonb_path_exists(to_jsonb(r), '$[*].\"path\" ? (@ like_regex \"^/api\" flag \"i\")'::jsonpath)"
+--
+-- >>> renderJsonpath <$> lowerPred "ENDSWITH" (Subject "" "f" [ArrayWildcard "", FieldKey "name"]) (Str ".log")
+-- Right "jsonb_path_exists(to_jsonb(f), '$[*].\"name\" ? (@ like_regex \"\\\\.log$\" flag \"i\")'::jsonpath)"
+--
+-- >>> renderJsonpath <$> lowerPred "like_regex" (Subject "" "request_body" [FieldKey "msg"]) (Str "^abc.*")
+-- Right "jsonb_path_exists(to_jsonb(request_body), '$.\"msg\" ? (@ like_regex \"^abc.*\" flag \"i\")'::jsonpath)"
+--
+-- A resolved timestamp compares via @.datetime()@ on both operands:
+--
+-- >>> renderJsonpath <$> lowerPred ">" (Subject "" "spans" [ArrayWildcard "", FieldKey "ts"]) (TimestampLit "2026-07-11T20:00:00Z")
+-- Right "jsonb_path_exists(to_jsonb(spans), '$[*].\"ts\" ? (@.datetime() > \"2026-07-11T20:00:00Z\".datetime())'::jsonpath)"
+--
+-- Bare now()\/ago() have no jsonpath form; 'resolveWildcardTimes' must resolve them first:
+--
+-- >>> lowerPred ">" (Subject "" "attrs" [ArrayWildcard "", FieldKey "ts"]) NowExpression
+-- Left (NoJsonpathForm "now()")
+--
+-- >>> lowerPred ">" (Subject "" "attrs" [ArrayWildcard "", FieldKey "ts"]) (AgoExpression "1h")
+-- Left (NoJsonpathForm "ago(1h)")
+lowerPred :: Text -> Subject -> Values -> Either LowerErr Jsonpath
+lowerPred op (Subject _ base keys) val = Jsonpath base (JPath (concatMap toSteps keys)) <$> pred_
+  where
+    toSteps (FieldKey k) = [JKey k]
+    toSteps (ArrayIndex "" i) = [JIdx i]
+    toSteps (ArrayIndex k i) = [JKey k, JIdx i]
+    toSteps (ArrayWildcard "") = [JWild]
+    toSteps (ArrayWildcard k) = [JKey k, JWild]
+
+    -- Negation is NOT handled here: on a wildcard subject it must negate the whole
+    -- existence test (@NOT jsonb_path_exists@), not the inner filter — see renderJsonpathSQL.
+    pred_ = case (snd <$> find ((== op) . fst) cmpOps, op) of
+      (Just c, _) -> JCmp c <$> lit val
+      (Nothing, "IN") -> orEq
+      (Nothing, "HAS") -> substr
+      (Nothing, "CONTAINS") -> substr
+      (Nothing, "HAS_ANY") -> likeList JOr
+      (Nothing, "HAS_ALL") -> likeList JAnd
+      (Nothing, "STARTSWITH") -> JLikeRegex . (\t -> "^" <> escapeRegex t) <$> asTerm val
+      (Nothing, "ENDSWITH") -> JLikeRegex . (\t -> escapeRegex t <> "$") <$> asTerm val
+      (Nothing, "like_regex") -> JLikeRegex <$> asTerm val -- raw user regex, not escaped
+      (Nothing, _) -> Left (UnknownOp op)
+
+    cmpOps :: [(Text, JCmpOp)]
+    cmpOps = [("=", JEq), ("==", JEq), ("!=", JNeq), (">=", JGte), ("<=", JLte), (">", JGt), ("<", JLt)]
+    substr = JLikeRegex . escapeRegex <$> asTerm val
+    orEq = combineList JOr . fmap (JCmp JEq) =<< traverse lit =<< listVals
+    likeList c = combineList c . fmap (JLikeRegex . escapeRegex) =<< traverse asTerm =<< listVals
+    combineList c xs = maybe (Left (NoJsonpathForm "empty list")) (Right . \(y :| ys) -> foldl' c y ys) (nonEmpty xs)
+
+    listVals = case val of List xs -> Right xs; _ -> Left (NoJsonpathForm "expected list")
+
+    lit (Num n) = Right (JNum n)
+    lit (Str s) = Right (JStr s)
+    lit (Boolean b) = Right (JBool b)
+    lit Null = Right JNull
+    lit (Duration _ ns) = Right (JNum (show ns))
+    lit NowExpression = Left (NoJsonpathForm "now()")
+    lit (AgoExpression t) = Left (NoJsonpathForm ("ago(" <> t <> ")"))
+    lit (TimeFunction tf) = Left (NoJsonpathForm tf)
+    lit (Field _) = Left (NoJsonpathForm "field reference")
+    lit (ScalarFunc n _) = Left (NoJsonpathForm (n <> "()"))
+    lit (List _) = Left (NoJsonpathForm "list")
+    lit (TimestampLit iso) = Right (JDateTime iso)
+
+    asTerm (Str s) = Right s
+    asTerm (Num n) = Right n
+    asTerm v = Left (NoJsonpathForm (display v))
+
+
+-- | SQL for a wildcard-subject comparison. A @NOT X@ operator negates the whole
+-- existence test (@NOT jsonb_path_exists@) — pushing @!@ into the @$[*] ? (…)@ filter
+-- would instead match rows where *some* element fails, i.e. the wrong quantifier.
+-- 'lowerPred' failures (values with no jsonpath form, e.g. now()\/ago()) render as the
+-- non-matching predicate @false@, keeping the SQL valid rather than emitting jsonpath
+-- Postgres would reject.
+renderJsonpathSQL :: Text -> Subject -> Values -> Text
+renderJsonpathSQL op sub val = case T.stripPrefix "NOT " op of
+  Just pos -> "NOT (" <> render pos <> ")"
+  Nothing -> render op
+  where
+    render o = either (const "false") renderJsonpath (lowerPred o sub val)
+
+
+-- | Resolve now()/ago() on wildcard-subject comparisons to a concrete ISO-8601 instant,
+-- so they lower to a jsonpath @.datetime()@ comparison (jsonpath has no now()). Runs per
+-- query build, so the instant is fresh each execution. Non-wildcard comparisons are left
+-- untouched — the SQL path renders them as NOW()/INTERVAL.
+--
+-- Wildcard @ago(1h)@ resolves to (now − 1h) as a jsonpath datetime comparison:
+--
+-- >>> display (resolveWildcardTimes (UTCTime (fromGregorian 2026 7 11) 75600) (GT (Subject "" "spans" [ArrayWildcard "", FieldKey "ts"]) (AgoExpression "1h")))
+-- "jsonb_path_exists(to_jsonb(spans), '$[*].\"ts\" ? (@.datetime() > \"2026-07-11T20:00:00Z\".datetime())'::jsonpath)"
+--
+-- A non-wildcard comparison is untouched — now() stays NOW() (query-execution time):
+--
+-- >>> display (resolveWildcardTimes (UTCTime (fromGregorian 2026 7 11) 75600) (GT (Subject "" "ts" []) NowExpression))
+-- "ts > NOW()"
+resolveWildcardTimes :: UTCTime -> Expr -> Expr
+resolveWildcardTimes now = go
+  where
+    go (And a b) = And (go a) (go b)
+    go (Or a b) = Or (go a) (go b)
+    go (Paren a) = Paren (go a)
+    go e
+      | Just (sub, val, dop, _) <- subBinaryParts e
+      , subjectHasWildcard sub
+      , Just (ctor, _, _, _) <- find (\(_, _, _, d) -> d == dop) subjectBinOps =
+          ctor sub (resolveVal val)
+      | otherwise = e
+
+    resolveVal NowExpression = TimestampLit (toText (iso8601Show now))
+    resolveVal (AgoExpression ts) = TimestampLit (toText (iso8601Show (addUTCTime (negate (timespanToSeconds ts)) now)))
+    resolveVal v = v
+
+
+-- | KQL timespan (@1h30m@, @7d@, @500ms@) to seconds, for ago() arithmetic.
+timespanToSeconds :: Text -> NominalDiffTime
+timespanToSeconds = go 0
+  where
+    go acc t
+      | T.null t = acc
+      | (digits, rest) <- T.span (\c -> isDigit c || c == '.') t
+      , not (T.null digits)
+      , Just n <- readMaybe @Double (toString digits)
+      , Just (factor, rest') <- unit rest =
+          go (acc + realToFrac (n * factor)) rest'
+      | otherwise = acc
+    unit t
+      | Just r <- T.stripPrefix "ms" t = Just (0.001 :: Double, r)
+      | Just r <- T.stripPrefix "us" t = Just (0.000001, r)
+      | Just r <- T.stripPrefix "ns" t = Just (0.000000001, r)
+      | Just r <- T.stripPrefix "d" t = Just (86400, r)
+      | Just r <- T.stripPrefix "h" t = Just (3600, r)
+      | Just r <- T.stripPrefix "m" t = Just (60, r)
+      | Just r <- T.stripPrefix "s" t = Just (1, r)
+      | otherwise = Nothing

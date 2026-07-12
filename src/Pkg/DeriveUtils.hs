@@ -28,6 +28,7 @@ module Pkg.DeriveUtils (
   mkHasqlPool,
   rawSql,
   selectFrom,
+  escapeRegex,
 ) where
 
 import Control.Exception (throwIO)
@@ -682,3 +683,9 @@ rawSql = fromString . toString
 -- a WHERE clause via @<> [HI.sql| WHERE ... |]@.
 selectFrom :: forall e. Entity e => HI.Sql
 selectFrom = rawSql $ decodeUtf8 $ fromQuery (_select @e)
+
+
+-- | Backslash-escape POSIX-regex metacharacters so a literal substring can be
+-- embedded safely in a regex pattern.
+escapeRegex :: Text -> Text
+escapeRegex = T.concatMap \c -> if c `elem` (".^$*+?()[]{}|\\" :: [Char]) then "\\" <> one c else one c

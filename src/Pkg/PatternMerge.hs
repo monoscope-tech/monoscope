@@ -30,6 +30,7 @@ import Data.Vector qualified as V
 import Data.Vector.Unboxed qualified as VU
 import NeatInterpolation (text)
 import Pkg.AI qualified as AI
+import Pkg.DeriveUtils (escapeRegex)
 import Pkg.Drain qualified as Drain
 import Pkg.ErrorFingerprint qualified as EF
 import Relude
@@ -398,7 +399,6 @@ verifyMergeDecision template sampleLog = (toString sampleLog :: String) =~ (toSt
   where
     regexPattern = "^" <> T.intercalate ".+" (map escapeRegex $ T.splitOn "<*>" expanded) <> "$"
     expanded = normalizeForEmbedding template
-    escapeRegex = T.concatMap \c -> if c `elem` (".+*?^${}()|[]\\" :: String) then "\\" <> one c else one c
 
 
 -- | Normalize an error pattern for embedding. Splits on ": " to separate the

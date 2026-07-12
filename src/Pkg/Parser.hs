@@ -155,8 +155,8 @@ combineWhereClause (Just existing) new = Just $ existing <> " AND " <> new
 
 
 applySectionToComponent :: SqlQueryCfg -> QueryComponents -> Section -> QueryComponents
-applySectionToComponent _ qc (Search expr) = qc{whereClause = combineWhereClause qc.whereClause (display expr)}
-applySectionToComponent _ qc (WhereClause expr) = qc{whereClause = combineWhereClause qc.whereClause (display expr)}
+applySectionToComponent sqlCfg qc (Search expr) = qc{whereClause = combineWhereClause qc.whereClause (display (resolveWildcardTimes sqlCfg.currentTime expr))}
+applySectionToComponent sqlCfg qc (WhereClause expr) = qc{whereClause = combineWhereClause qc.whereClause (display (resolveWildcardTimes sqlCfg.currentTime expr))}
 applySectionToComponent _ qc (Source source) = qc{fromTable = Just $ display source}
 applySectionToComponent sqlCfg qc (SummarizeCommand aggs byClauseM) =
   let pctInfo = extractPercentilesInfo [SummarizeCommand aggs byClauseM]
@@ -441,13 +441,15 @@ sqlFromQueryComponents sqlCfg qc =
 -- >>> T.isInfixOf "as _total_count" q2
 -- False
 --
+-- Comparing to an empty list literal has no jsonpath form, so it lowers to a
+-- non-matching predicate rather than invalid jsonpath:
 -- >>> let Right (_, c3) = parseQueryToComponents cfg "errors[*].error_type == []"
 -- >>> c3.whereClause
--- Just "(jsonb_path_exists(to_jsonb(errors), $$$[*].\"error_type\" ? (@ == [])$$::jsonpath))"
+-- Just "(false)"
 --
 -- >>> let Right (_, c4) = parseQueryToComponents cfg "errors[*].error_type =~ /^ab.*c/"
 -- >>> c4.whereClause
--- Just "(jsonb_path_exists(to_jsonb(errors), $$$[*].\"error_type\" ? (@ like_regex \"^ab.*c\" flag \"i\" )$$::jsonpath))"
+-- Just "(jsonb_path_exists(to_jsonb(errors), '$[*].\"error_type\" ? (@ like_regex \"^ab.*c\" flag \"i\")'::jsonpath))"
 parseQueryToComponents :: SqlQueryCfg -> Text -> Either Text (Text, QueryComponents)
 parseQueryToComponents sqlCfg q = bimap (toText . errorBundlePretty) (queryASTToComponents sqlCfg) (parse parseQuery "" (T.strip q))
 
