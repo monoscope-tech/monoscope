@@ -2416,7 +2416,7 @@ notifyQueryMonitorStatusChange monitor value isRecovery = do
       $ Log.logAttention "Monitor configured with teams but none found (possibly deleted)" (monitor.id, monitor.projectId, V.length monitor.teams)
     let hostUrl = appCtx.env.hostUrl
         monitorListUrl = hostUrl <> "/p/" <> monitor.projectId.toText <> "/monitors"
-        thresholdDir = if monitor.triggerLessThan then "below" else "above" :: Text
+        thresholdDir = if monitor.triggerLessThan then Issues.Below else Issues.Above
     now <- Time.currentTime
     let chartMins = clamp (15, 240) (4 * monitor.checkIntervalMins)
         chartFrom = addUTCTime (negate $ fromIntegral (chartMins * 60)) now
@@ -2436,7 +2436,7 @@ notifyQueryMonitorStatusChange monitor value isRecovery = do
     let (subj, html) =
           if isRecovery
             then ET.monitorRecoveryEmail p.title monitor.alertConfig.title alertUrl
-            else ET.monitorAlertEmail p.title monitor.alertConfig.title alertUrl value monitor.alertThreshold thresholdDir chartUrlM
+            else ET.monitorAlertEmail p.title monitor.alertConfig.title alertUrl value monitor.alertThreshold (display thresholdDir) chartUrlM
         renderedBody = ET.renderEmail subj html
     for_ targetTeams \team -> dispatchTeamNotifications
       team

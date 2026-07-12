@@ -1142,7 +1142,7 @@ buildSystemPromptForIssue pid issue now = do
           , Just ""
           , Just "### Query & Thresholds"
           , Just $ "- **Alert Query (KQL)**: `" <> alertData.queryExpression <> "`"
-          , Just $ "- **Alert Threshold**: " <> show alertData.thresholdValue <> " (trigger when " <> alertData.thresholdType <> ")"
+          , Just $ "- **Alert Threshold**: " <> show alertData.thresholdValue <> " (trigger when " <> display alertData.thresholdType <> ")"
           , Just $ "- **Current Value**: " <> show alertData.actualValue
           , Just $ "- **Triggered At**: " <> formatUTC alertData.triggeredAt
           , Just ""

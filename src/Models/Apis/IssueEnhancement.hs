@@ -106,7 +106,7 @@ buildTitlePrompt issue =
             ( \d ->
                 [fmtTrim|Generate a concise title for this query alert.
             Query: {d.queryName}
-            Threshold: {d.thresholdValue} ({d.thresholdType})
+            Threshold: {d.thresholdValue} ({display d.thresholdType})
             Actual value: {d.actualValue}|]
             )
             "Generate a concise title for this query alert."
@@ -210,7 +210,7 @@ buildDescriptionPrompt issue =
                 [fmtTrim|Describe this query alert and recommended actions.
             Query: {d.queryName}
             Expression: {d.queryExpression}
-            Threshold: {d.thresholdValue} ({d.thresholdType})
+            Threshold: {d.thresholdValue} ({display d.thresholdType})
             Actual value: {d.actualValue}
             Triggered at: {show d.triggeredAt}|]
             )

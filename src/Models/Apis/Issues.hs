@@ -23,6 +23,7 @@ module Models.Apis.Issues (
   APIChangeData (..),
   RuntimeExceptionData (..),
   QueryAlertData (..),
+  ThresholdDirection (..),
   LogPatternRateChangeData (..),
   LogPatternData (..),
   RateChangeDirection (..),
@@ -247,6 +248,14 @@ data RuntimeExceptionData = RuntimeExceptionData
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake RuntimeExceptionData
 
 
+-- | Whether an alert fires above or below its threshold. Encodes to
+-- "above"/"below" (byte-identical to the previous free-text field).
+data ThresholdDirection = Above | Below
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON, Display) via WrappedEnumSC 'Nothing "" ThresholdDirection
+
+
 -- | Query Alert issue data
 data QueryAlertData = QueryAlertData
   { queryId :: Text
@@ -254,7 +263,7 @@ data QueryAlertData = QueryAlertData
   , queryExpression :: Text
   , thresholdValue :: Double
   , actualValue :: Double
-  , thresholdType :: Text -- "above" or "below"
+  , thresholdType :: ThresholdDirection
   , triggeredAt :: UTCTime
   }
   deriving stock (Generic, Show)
@@ -710,7 +719,7 @@ createAPIChangeIssue projectId endpointHash anomalies = do
 
 
 -- | Create Query Alert issue
-createQueryAlertIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Text -> Text -> Text -> Double -> Double -> Text -> Eff es Issue
+createQueryAlertIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Text -> Text -> Text -> Double -> Double -> ThresholdDirection -> Eff es Issue
 createQueryAlertIssue projectId queryId queryName queryExpr threshold actual thresholdType = do
   now <- Time.currentTime
   mkIssue
@@ -723,7 +732,7 @@ createQueryAlertIssue projectId queryId queryName queryExpr threshold actual thr
       , service = Just "Monitoring"
       , critical = True
       , severity = "warning"
-      , title = queryName <> " threshold " <> thresholdType <> " " <> show threshold
+      , title = queryName <> " threshold " <> display thresholdType <> " " <> show threshold
       , recommendedAction = "Review the query results and take appropriate action."
       , migrationComplexity = "n/a"
       , issueData =
