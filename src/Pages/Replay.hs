@@ -563,8 +563,8 @@ getSessionEvents conn pid bucket sessionId = do
       let shardRaws = [r | Right (Right r) <- shardRes]
           shardDecodeErrs = [e | Right (Left e) <- shardRes] -- corrupt shard bytes
           shardTransportErrs = [e | Left e <- shardRes, not (isNoSuchKey e)] -- transient (NoSuchKey = concurrent seal, tolerate)
-      -- A corrupt shard is a data-integrity event, exactly like a corrupt monolith:
-      -- surface it instead of silently returning a session missing that time range.
+          -- A corrupt shard is a data-integrity event, exactly like a corrupt monolith:
+          -- surface it instead of silently returning a session missing that time range.
       shardCorrupt <-
         if null shardDecodeErrs
           then pure False
@@ -586,21 +586,22 @@ getSessionEvents conn pid bucket sessionId = do
           combined = concatRawJsonArrays $ map snd $ sortWith fst (mergedRaw <> shardRaws <> indivEntry)
       if shardCorrupt
         then pure corruptedErr
-        else if combined /= "[]"
-        then pure $ Right (combined, partial)
         else
-          if null fileKeys
-            then legacy "new_or_pre_migration_session"
+          if combined /= "[]"
+            then pure $ Right (combined, partial)
             else
-              if partial
-                then pure $ Left transientMsg
-                else do
-                  Log.logAttention
-                    "Replay session resolved empty despite tracked file_keys"
-                    ( HM.insert "file_keys_count" (show $ length fileKeys)
-                        $ HM.insert "missing_count" (show missingCount) logCtx
-                    )
-                  pure $ Left notFoundErr
+              if null fileKeys
+                then legacy "new_or_pre_migration_session"
+                else
+                  if partial
+                    then pure $ Left transientMsg
+                    else do
+                      Log.logAttention
+                        "Replay session resolved empty despite tracked file_keys"
+                        ( HM.insert "file_keys_count" (show $ length fileKeys)
+                            $ HM.insert "missing_count" (show missingCount) logCtx
+                        )
+                      pure $ Left notFoundErr
 
 
 -- | Lookup the tracked object keys for an unmerged replay session.

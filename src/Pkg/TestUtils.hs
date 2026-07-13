@@ -78,6 +78,7 @@ where
 
 import BackgroundJobs qualified
 import CLI.Main qualified as CLIMain
+import Conduit (runConduit, (.|))
 import Configuration.Dotenv qualified as Dotenv
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.STM.TBQueue (isEmptyTBQueue, readTBQueue)
@@ -91,6 +92,7 @@ import Data.Aeson.Types (KeyValue (..))
 import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Lazy qualified as LBS
 import Data.Cache (Cache (..), newCache)
+import Data.Conduit.Combinators qualified as CC
 import Data.Effectful.Hasql (Hasql, runHasqlPool)
 import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.Notify qualified
@@ -135,8 +137,6 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.GRPC.Common.Protobuf (Proto (..))
-import Conduit (runConduit, (.|))
-import Data.Conduit.Combinators qualified as CC
 import Network.HTTP.Client (createCookieJar, defaultRequest)
 import Network.HTTP.Client.Internal (Response (..), ResponseClose (..))
 import Network.HTTP.Types.Status (ok200)
