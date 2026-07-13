@@ -70,7 +70,7 @@ import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Megaparsec (parseMaybe)
-import Utils (FieldAction (..), FieldMenuCtx (..), LoadingSize (..), LoadingType (..), checkFreeTierStatus, faSprite_, fieldContextMenuItems_, getDurationNSMS, getServiceColors, htmxOverlayIndicator_, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecTextByKey, methodFillColor, fieldMenuPanel_, popoverTrigger_, prettyPrintCount, sanitizeBackendError, serviceFillColor, statusFillColorText)
+import Utils (FieldAction (..), FieldMenuCtx (..), LoadingSize (..), LoadingType (..), checkFreeTierStatus, faSprite_, fieldContextMenuItems_, fieldMenuPanel_, getDurationNSMS, getServiceColors, htmxOverlayIndicator_, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecTextByKey, methodFillColor, popoverTrigger_, prettyPrintCount, sanitizeBackendError, serviceFillColor, statusFillColorText)
 
 import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.UUID qualified as UUID
