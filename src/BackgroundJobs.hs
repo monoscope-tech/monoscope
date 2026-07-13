@@ -455,9 +455,9 @@ processBackgroundJob authCtx bgJob =
       case projectM of
         Nothing -> Log.logAttention "ReportUsage: project not found, skipping" ("project_id", pid.toText)
         Just project -> do
-          let provider = Projects.billingProvider project.subId
+          let provider = Projects.projectProvider project
           Log.logInfo "Reporting usage" ("project_id", pid.toText, "plan", project.paymentPlan, "provider", show provider)
-          Relude.when (not (Projects.isFreeTier project.paymentPlan) && not (Projects.isOnboarding project.paymentPlan)) $ whenJust (mfilter (not . T.null) project.firstSubItemId) \fSubId -> do
+          Relude.when (Projects.isPaidPlan (Projects.parsePlan project.paymentPlan)) $ whenJust (mfilter (not . T.null) project.firstSubItemId) \fSubId -> do
             -- 1) Commit bookkeeping BEFORE any provider HTTP call. usage_last_reported
             --    always advances; daily_usage + usage_report_submissions rows are
             --    inserted in the same tx only when totalUsage > 0. See
@@ -541,7 +541,7 @@ processBackgroundJob authCtx bgJob =
         Just project -> case project.subId of
           Nothing -> Log.logAttention "TrialEndingReminder: project has no subId" (pid.toText, scheduledDaysLeft :: Int)
           Just subId
-            | Projects.billingProvider (Just subId) /= Projects.StripeProvider ->
+            | Projects.projectProvider project /= Projects.StripeProvider ->
                 Log.logInfo "TrialEndingReminder: project migrated off Stripe, skipping" (pid.toText, scheduledDaysLeft :: Int, subId)
             | otherwise -> do
                 details <- liftIO $ getStripeSubDetails authCtx.config.stripeSecretKey subId

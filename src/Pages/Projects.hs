@@ -1141,7 +1141,7 @@ manageSubGetH pid = do
   (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
-  case Projects.billingProvider project.subId of
+  case Projects.projectProvider project of
     Projects.StripeProvider -> do
       case project.customerId <|> project.orderId of
         Just customerId | not (T.null customerId) -> do

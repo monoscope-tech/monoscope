@@ -52,7 +52,11 @@ module Models.Projects.Projects (
   queryLibItemDelete,
   -- Billing
   BillingProvider (..),
-  billingProvider,
+  billingProviderFromSubId,
+  projectProvider,
+  Plan (..),
+  parsePlan,
+  isPaidPlan,
   isFreeTier,
   isOnboarding,
   LemonSub (..),
@@ -264,6 +268,8 @@ data Project = Project
   , endpointAlerts :: Bool
   , errorAlerts :: Bool
   , customerId :: Maybe Text
+  , -- Positional decode: must stay LAST to match the trailing @billing_provider@ column added in migration 0106.
+    billingProvider :: BillingProvider
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, HI.DecodeRow, NFData)
@@ -303,6 +309,8 @@ data ProjectListItem = ProjectListItem
   , endpointAlerts :: Bool
   , errorAlerts :: Bool
   , customerId :: Maybe Text
+  , -- Positional: matches @pp.*@ (billing_provider is the last projects column), before the joined columns below.
+    billingProvider :: BillingProvider
   , hasIntegrated :: Bool
   , usersDisplayImages :: V.Vector Text
   }
@@ -530,13 +538,15 @@ patchProjectSettings pid p now =
 
 
 updateProjectPricing :: DB es => ProjectId -> Text -> Text -> Text -> Text -> V.Vector Text -> Eff es Int64
+-- billing_provider inferred from the sub_id shape (same source as the webhooks/backfill):
+-- this shared onboarding path carries a real LemonSqueezy sub_id (numeric) for paid plans and "" for Free/Open Source.
 updateProjectPricing pid paymentPlan subId firstSubItemId orderId stepsCompleted =
-  EHasql.interpExecute [HI.sql| UPDATE projects.projects SET payment_plan=#{paymentPlan}, sub_id=#{subId}, first_sub_item_id=#{firstSubItemId}, order_id=#{orderId}, onboarding_steps_completed=#{stepsCompleted} where id=#{pid};|]
+  EHasql.interpExecute [HI.sql| UPDATE projects.projects SET payment_plan=#{paymentPlan}, sub_id=#{subId}, first_sub_item_id=#{firstSubItemId}, order_id=#{orderId}, onboarding_steps_completed=#{stepsCompleted}, billing_provider=#{billingProviderFromSubId (Just subId)} where id=#{pid};|]
 
 
 updateProjectBilling :: DB es => ProjectId -> Text -> Text -> Text -> Text -> Eff es Int64
 updateProjectBilling pid paymentPlan subId firstSubItemId orderId =
-  EHasql.interpExecute [HI.sql| UPDATE projects.projects SET payment_plan=#{paymentPlan}, sub_id=#{subId}, first_sub_item_id=#{firstSubItemId}, order_id=#{orderId} WHERE id=#{pid} AND (first_sub_item_id IS NULL OR first_sub_item_id = '');|]
+  EHasql.interpExecute [HI.sql| UPDATE projects.projects SET payment_plan=#{paymentPlan}, sub_id=#{subId}, first_sub_item_id=#{firstSubItemId}, order_id=#{orderId}, billing_provider=#{LemonSqueezyProvider} WHERE id=#{pid} AND (first_sub_item_id IS NULL OR first_sub_item_id = '');|]
 
 
 updateProjectReportNotif :: DB es => ProjectId -> Text -> Eff es Int64
@@ -912,7 +922,7 @@ upgradeToPaid orderId subId subItemId plan =
   EHasql.interpExecute
     [HI.sql|
       UPDATE projects.projects
-         SET payment_plan = #{plan}, sub_id = #{subId}::text, first_sub_item_id = #{subItemId}::text
+         SET payment_plan = #{plan}, sub_id = #{subId}::text, first_sub_item_id = #{subItemId}::text, billing_provider = #{LemonSqueezyProvider}
        WHERE sub_id = #{subId}::text
           OR (sub_id IS NULL AND order_id = #{orderId}::text) |]
 
@@ -935,24 +945,79 @@ isOnboarding :: Text -> Bool
 isOnboarding = (== "onboarding") . T.toLower
 
 
+-- | Payment provider for a project. Stored authoritatively in the
+-- @billing_provider@ column (written by the webhook that knows which provider
+-- fired) rather than guessed at every read from the shape of @sub_id@.
 data BillingProvider = StripeProvider | LemonSqueezyProvider | NoBillingProvider
-  deriving stock (Eq, Show)
+  deriving stock (Eq, Generic, Read, Show)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "" BillingProvider
 
 
--- | >>> billingProvider (Just "sub_abc123")
+-- Semantic default is NoBillingProvider; generic Default would pick the first constructor.
+instance Default BillingProvider where
+  def = NoBillingProvider
+
+
+-- | Provider inferred from the shape of @sub_id@. Only used to backfill the
+-- stored column (migration 0106) and as the read fallback in 'projectProvider'
+-- for legacy rows whose @billing_provider@ was never written.
+--
+-- >>> billingProviderFromSubId (Just "sub_abc123")
 -- StripeProvider
--- >>> billingProvider (Just "12345")
+-- >>> billingProviderFromSubId (Just "12345")
 -- LemonSqueezyProvider
--- >>> billingProvider Nothing
+-- >>> billingProviderFromSubId Nothing
 -- NoBillingProvider
--- >>> billingProvider (Just "")
+-- >>> billingProviderFromSubId (Just "")
 -- NoBillingProvider
-billingProvider :: Maybe Text -> BillingProvider
-billingProvider = \case
+billingProviderFromSubId :: Maybe Text -> BillingProvider
+billingProviderFromSubId = \case
   Just sid
     | "sub_" `T.isPrefixOf` sid -> StripeProvider
     | not (T.null sid) && T.all isDigit sid -> LemonSqueezyProvider
   _ -> NoBillingProvider
+
+
+-- | Authoritative provider: the stored column, falling back to shape inference
+-- only when unset (legacy rows / paths that never wrote it).
+projectProvider :: Project -> BillingProvider
+projectProvider p = case p.billingProvider of
+  NoBillingProvider -> billingProviderFromSubId p.subId
+  StripeProvider -> StripeProvider
+  LemonSqueezyProvider -> LemonSqueezyProvider
+
+
+-- | Typed view over the open-valued @payment_plan@ column. Storage stays 'Text'
+-- (paid tiers carry arbitrary names, still on @payment_plan@); this is the single
+-- parse point folding the onboarding/free/paid distinction so gating code matches
+-- exhaustively instead of scattering case-insensitive string compares.
+--
+-- Phased rollout: the usage-reporting gate uses this today; the remaining
+-- 'isFreeTier'/'isOnboarding' call sites (ingestion hot path, several Pages) can
+-- migrate onto 'Plan' incrementally. See docs/design-notes/billing-plan-types.md.
+--
+-- >>> map parsePlan ["ONBOARDING", "onboarding", "Free", "FREE", "Startup"]
+-- [Onboarding,Onboarding,Free,Free,Paid]
+data Plan = Onboarding | Free | Paid
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (NFData)
+
+
+parsePlan :: Text -> Plan
+parsePlan t
+  | isOnboarding t = Onboarding
+  | isFreeTier t = Free
+  | otherwise = Paid
+
+
+-- | >>> map (isPaidPlan . parsePlan) ["Startup", "Free", "ONBOARDING"]
+-- [True,False,False]
+isPaidPlan :: Plan -> Bool
+isPaidPlan = \case
+  Paid -> True
+  Free -> False
+  Onboarding -> False
 
 
 downgradeToFreeBySubId :: DB es => Text -> Eff es Int64
@@ -971,7 +1036,7 @@ updateStripeProjectBilling :: DB es => ProjectId -> Text -> Text -> Text -> Text
 updateStripeProjectBilling pid plan subId firstSubItemId customerId =
   -- Clear order_id so a late LemonSqueezy cancel webhook (from a prior LS→Stripe
   -- switch) can't rematch this project by order_id and downgrade to Free.
-  EHasql.interpExecute [HI.sql|UPDATE projects.projects SET payment_plan = #{plan}, sub_id = #{subId}, first_sub_item_id = #{firstSubItemId}, customer_id = #{customerId}, order_id = NULL WHERE id = #{pid}|]
+  EHasql.interpExecute [HI.sql|UPDATE projects.projects SET payment_plan = #{plan}, sub_id = #{subId}, first_sub_item_id = #{firstSubItemId}, customer_id = #{customerId}, order_id = NULL, billing_provider = #{StripeProvider} WHERE id = #{pid}|]
 
 
 -- Sessions

@@ -4,7 +4,6 @@ import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Lazy qualified as BL
 import Data.Pool (Pool, withResource)
-import System.Config qualified
 import Data.Text qualified as T
 import Data.Time (getCurrentTime, getZonedTime)
 import Data.UUID qualified as UUID
@@ -15,17 +14,18 @@ import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
-import Pages.Settings qualified as LemonSqueezy
 import Pages.Onboarding qualified as Onboarding
 import Pages.Projects qualified as CreateProject
 import Pages.Projects qualified as ManageMembers
 import Pages.Replay qualified as Replay
+import Pages.Settings qualified as LemonSqueezy
 import Pages.Settings qualified as S3
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils hiding (testPid)
 import Relude
 import Servant.API (ResponseHeader (..), lookupResponseHeader)
 import Servant.Server qualified as ServantS
+import System.Config qualified
 import Test.Hspec
 
 
@@ -64,6 +64,9 @@ spec = around withTestProject do
 
   describe "LemonSqueezy Billing" do
     lemonSqueezyWebhookTests
+
+  describe "Stripe Billing" do
+    stripeBillingTests
 
   describe "Replay Session Recording" do
     replayTests
@@ -241,6 +244,19 @@ settingsTests = do
 -- deleting the project. Which i think marks a project as deleted and prevents sending emails and notifications and other actions. we should test the
 -- actions.
 
+-- | Stripe write path round-trips the provider through the model: the Stripe
+-- checkout write stores StripeProvider, and Project decodes the new trailing
+-- billing_provider column back positionally so projectProvider reads it.
+stripeBillingTests :: SpecWith TestContext
+stripeBillingTests =
+  it "stores and decodes StripeProvider round-trip" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
+    _ <- runQueryEffect tr $ Projects.updateStripeProjectBilling testPid "GraduatedPricing" "sub_test123" "si_test" "cus_test"
+    projectM <- runQueryEffect tr $ Projects.projectById testPid
+    case projectM of
+      Just project -> Projects.projectProvider project `shouldBe` Projects.StripeProvider
+      Nothing -> fail "project not found after updateStripeProjectBilling"
+
+
 -- | LemonSqueezy Webhook Tests - Table-driven testing for all webhook events
 lemonSqueezyWebhookTests :: SpecWith TestContext
 lemonSqueezyWebhookTests = do
@@ -265,6 +281,11 @@ webhookTestCases =
         case subs of
           [Only (count :: Int)] -> count `shouldBe` 1
           _ -> fail "Failed to query subscriptions"
+        -- Phase A: the LemonSqueezy webhook stores the provider explicitly (no read-time guessing).
+        provider <- withResource pool \conn -> PGS.query conn [sql|SELECT billing_provider FROM projects.projects WHERE id = ?|] (Only testPid)
+        case provider of
+          [Only (bp :: Text)] -> bp `shouldBe` "lemon_squeezy_provider"
+          _ -> fail "Failed to query billing_provider"
     )
   ,
     ( "subscription_cancelled"
@@ -303,11 +324,15 @@ setupProjectWithSubscription :: Pool Connection -> Projects.ProjectId -> Text ->
 setupProjectWithSubscription pool testPid plan = do
   subId <- Projects.LemonSubId <$> UUIDV4.nextRandom
   currentZonedTime <- getZonedTime
-  _ <- withResource pool \conn -> PGS.execute conn [sql|
+  _ <- withResource pool \conn ->
+    PGS.execute
+      conn
+      [sql|
     INSERT INTO apis.subscriptions (id, created_at, updated_at, project_id, order_id, subscription_id, first_sub_id, product_name, user_email)
     VALUES (?, ?, ?, ?, 12345, 67890, 111, 'Test Plan', 'test@example.com')
     ON CONFLICT (subscription_id) DO UPDATE SET project_id=EXCLUDED.project_id, product_name=EXCLUDED.product_name
-  |] (subId, currentZonedTime, currentZonedTime, testPid.toText)
+  |]
+      (subId, currentZonedTime, currentZonedTime, testPid.toText)
   _ <- withResource pool \conn -> PGS.execute conn [sql|UPDATE projects.projects SET payment_plan = ?, order_id = '67890', sub_id = '12345', first_sub_item_id = '111' WHERE id = ?|] (plan, testPid)
   pass
 
@@ -450,7 +475,8 @@ s3ConfigTests = do
             }
 
     _ <- withResource tr.trPool \conn ->
-      PGS.execute conn
+      PGS.execute
+        conn
         [sql|UPDATE projects.projects SET s3_bucket = ? WHERE id = ?|]
         (Just s3Form, testPid)
 
@@ -465,5 +491,3 @@ s3ConfigTests = do
     case savedConfig of
       Just (Nothing :: Maybe Projects.ProjectS3Bucket) -> pass -- Successfully removed
       _ -> fail "S3 config was not removed"
-
-
