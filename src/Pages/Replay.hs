@@ -829,7 +829,18 @@ buildReplayManifest p sessionId = do
   let legacySeg = [ReplaySegment{key = UUID.toText sessionId <> "/merged.json.gz", firstTs = 0, gzipped = True} | legacyExists]
       tailSegs = [ReplaySegment{key = k, firstTs = tailTs, gzipped = False} | k <- tailKeys]
       segs = legacySeg <> shardSegs <> tailSegs
-  pure ReplayManifest{segments = segs, meta, errorMsg = if null segs then Just "No recorded events found for this session." else Nothing}
+  -- Ancient pre-file_keys sessions stored a single uncompressed `<sid>.json` blob
+  -- (no monolith, no shards, no tracked keys). getSessionEvents still falls back
+  -- to it, so the manifest must too — but only probe when nothing else was found,
+  -- to keep the hot path a pure listing.
+  legacyBlob <-
+    if null segs
+      then do
+        exists <- liftIO $ objectExists conn bucket (UUID.toText sessionId <> ".json")
+        pure [ReplaySegment{key = UUID.toText sessionId <> ".json", firstTs = 0, gzipped = False} | exists]
+      else pure []
+  let allSegs = segs <> legacyBlob
+  pure ReplayManifest{segments = allSegs, meta, errorMsg = if null allSegs then Just "No recorded events found for this session." else Nothing}
 
 
 replaySessionManifestGetH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders ReplayManifest)
@@ -847,9 +858,12 @@ fetchReplayShard
 fetchReplayShard p sessionId mkey = do
   ctx <- Effectful.Reader.Static.ask @AuthContext
   let (conn, bucket) = projectMinioConn ctx.config p
-      prefix = UUID.toText sessionId <> "/"
+      sidText = UUID.toText sessionId
+      -- Scope to this session: shards/monolith/tail live under "<sid>/"; the
+      -- ancient single-object blob is exactly "<sid>.json". Anything else is rejected.
+      scoped k = (sidText <> "/") `T.isPrefixOf` k || k == sidText <> ".json"
   case mkey of
-    Just k | prefix `T.isPrefixOf` k -> do
+    Just k | scoped k -> do
       res <- liftIO $ Minio.runMinio conn $ fetchRawObject bucket (toObjKey k) (".gz" `T.isSuffixOf` k)
       case res of
         Right raw -> pure $ RawJson raw
