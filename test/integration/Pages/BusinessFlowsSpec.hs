@@ -265,6 +265,11 @@ webhookTestCases =
         case subs of
           [Only (count :: Int)] -> count `shouldBe` 1
           _ -> fail "Failed to query subscriptions"
+        -- Phase A: the LemonSqueezy webhook stores the provider explicitly (no read-time guessing).
+        provider <- withResource pool \conn -> PGS.query conn [sql|SELECT billing_provider FROM projects.projects WHERE id = ?|] (Only testPid)
+        case provider of
+          [Only (bp :: Text)] -> bp `shouldBe` "lemon_squeezy_provider"
+          _ -> fail "Failed to query billing_provider"
     )
   ,
     ( "subscription_cancelled"

@@ -1181,7 +1181,7 @@ manageBillingGetH pid from = do
       bwconf = bw{pageTitle = "Billing", isSettingsPage = True}
   let lemonUrl = envCfg.lemonSqueezyUrl <> "&checkout[custom][project_id]=" <> pid.toText
       critical = envCfg.lemonSqueezyCriticalUrl <> "&checkout[custom][project_id]=" <> pid.toText
-  let provider = if Projects.isFreeTier project.paymentPlan then Projects.NoBillingProvider else Projects.billingProvider project.subId
+  let provider = if Projects.isFreeTier project.paymentPlan then Projects.NoBillingProvider else Projects.projectProvider project
   addRespHeaders $ BillingGet $ PageCtx bwconf BillingData{pid, totalReqs = totalRequests, totalBytes, lastReported = last_reported, lemonUrl, critical, paymentPlan = project.paymentPlan, enableFreetier = envCfg.enableFreetier, basicAuthEnabled = envCfg.basicAuthEnabled, provider, dailyUsage, cycleStart = utctDay cycleStart, pastCycles}
 
 
@@ -1555,7 +1555,7 @@ handleStripeCheckout envConfig obj notifyMembers billingUrl = do
         else do
           -- Cancel any existing LemonSqueezy subscription (auto-migration)
           whenJust projectM \project ->
-            case Projects.billingProvider project.subId of
+            case Projects.projectProvider project of
               Projects.LemonSqueezyProvider ->
                 whenJust project.subId
                   $ liftIO
