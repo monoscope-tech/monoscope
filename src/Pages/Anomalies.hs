@@ -543,7 +543,7 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp sampleOverri
                   (sampleMessage >>= \m -> if T.strip m == T.strip logPattern then Nothing else Just m)
                   (renderSample . renderLogContent_)
       div_ [class_ "flex flex-wrap gap-2 items-center"] do
-        severityBadge issue.severity
+        severityBadge (display issue.severity)
         issueTypeLabel issue.issueType issue.critical
         case issue.issueType of
           Issues.LogPattern -> withIssueDataH @Issues.LogPatternData issue.issueData \d -> do
@@ -1096,7 +1096,7 @@ buildSystemPromptForIssue pid issue now = do
           [ Just "## Issue Details"
           , Just $ "- **Title**: " <> iss.title
           , Just $ "- **Type**: " <> show iss.issueType
-          , Just $ "- **Severity**: " <> iss.severity
+          , Just $ "- **Severity**: " <> display iss.severity
           , Just $ "- **Service**: " <> Issues.serviceLabel iss.service
           , Just $ "- **Recommended Action**: " <> iss.recommendedAction
           , alertContextM <&> \(alertData, monitorM, metricsData) -> formatCompleteAlertContext alertData monitorM metricsData
@@ -1519,7 +1519,7 @@ instance ToHtml AnomalyListGet where
 issueRowAttrs :: IssueVM -> [Attribute]
 issueRowAttrs (IssueVM _ _ _ _ issue) = [class_ $ "group/row hover:bg-fillWeaker " <> bg] <> sty
   where
-    (bg, sty) = case issue.base.severity of
+    (bg, sty) = case display issue.base.severity of
       "critical" -> ("bg-fillError-weak", [style_ "box-shadow: inset 3px 0 0 var(--color-fillError-strong)"])
       "warning" -> ("bg-fillWarning-weak", [style_ "box-shadow: inset 3px 0 0 var(--color-fillWarning-strong)"])
       _ -> ("", [])
@@ -1647,7 +1647,7 @@ renderIssueMainCol pid (IssueVM _ _ currTime period issue) = do
   let b = issue.base
       isAcknowledged = isJust b.acknowledgedAt
       isArchived = isJust b.archivedAt
-      (icon, iconStyle, iconColor, tooltip) = anomalyStatusIndicator isAcknowledged isArchived b.severity
+      (icon, iconStyle, iconColor, tooltip) = anomalyStatusIndicator isAcknowledged isArchived (display b.severity)
       issueUrl = "/p/" <> pid.toText <> "/issues/" <> Issues.issueIdText b.id
   div_ [class_ "flex flex-col gap-1 py-0.5 min-w-0"] do
     div_ [class_ "flex items-center gap-2 min-w-0"] do
@@ -1656,14 +1656,14 @@ renderIssueMainCol pid (IssueVM _ _ currTime period issue) = do
         span_ [class_ "text-xs tabular-nums mr-1 text-textWeak max-md:text-textStrong max-md:font-medium"] $ toHtml $ "#" <> show b.seqNum <> " "
         a_ ([href_ issueUrl, class_ "font-medium text-textStrong hover:text-textBrand transition-colors"] <> navTabAttrs) $ renderIssueTitle_ issue
       span_ [class_ "shrink-0 flex items-center gap-1.5 max-md:hidden"] do
-        severityBadge_ b.severity
+        severityBadge_ (display b.severity)
         issueStateBadge_ issue.latestStateEvent
         when isAcknowledged $ span_ [class_ "badge badge-sm badge-ghost gap-1"] do faSprite_ "check" "regular" "h-3 w-3"; "Ack'd"
       div_ [class_ "shrink-0 flex gap-1 items-center opacity-0 group-hover/row:opacity-100 has-[:focus-within]:opacity-100 transition-opacity max-md:hidden"] do
         inlineBtn (bool "Acknowledge" "Unacknowledge" isAcknowledged) "check" (hxGet_ $ issueUrl <> bool "/acknowledge" "/unacknowledge" isAcknowledged) []
         inlineBtn (bool "Archive" "Unarchive" isArchived) "archive" (hxGet_ $ issueUrl <> bool "/archive" "/unarchive" isArchived) []
     div_ [class_ "hidden max-md:flex items-center gap-1.5 flex-wrap"] do
-      severityBadge_ b.severity
+      severityBadge_ (display b.severity)
       issueStateBadge_ issue.latestStateEvent
     div_ [class_ "max-md:hidden"] $ issuePreview_ issue
     div_ [class_ "hidden max-md:flex items-center justify-between text-xs text-textWeak"] do
@@ -1683,14 +1683,14 @@ renderIssueMainCol pid (IssueVM _ _ currTime period issue) = do
 issueCardCompact_ :: Projects.ProjectId -> UTCTime -> Issues.IssueL -> Html ()
 issueCardCompact_ pid now issue = do
   let b = issue.base
-      (icon, iconStyle, iconColor, tooltip) = anomalyStatusIndicator (isJust b.acknowledgedAt) (isJust b.archivedAt) b.severity
+      (icon, iconStyle, iconColor, tooltip) = anomalyStatusIndicator (isJust b.acknowledgedAt) (isJust b.archivedAt) (display b.severity)
       issueUrl = "/p/" <> pid.toText <> "/issues/" <> Issues.issueIdText b.id
   a_ ([href_ issueUrl, class_ "block border border-strokeWeak rounded-xl p-3 hover:bg-bgRaised transition-colors"] <> navTabAttrs) do
     div_ [class_ "flex items-center gap-2 min-w-0"] do
       span_ [class_ $ "shrink-0 " <> iconColor, title_ tooltip, Aria.label_ tooltip] $ faSprite_ icon iconStyle "w-3.5 h-3.5"
       span_ [class_ "text-xs text-textWeak shrink-0 tabular-nums"] $ toHtml $ "#" <> show b.seqNum
       span_ [class_ "text-sm font-medium text-textStrong truncate min-w-0"] $ renderIssueTitle_ issue
-      severityBadge_ b.severity
+      severityBadge_ (display b.severity)
       span_ [class_ "text-xs text-textWeak shrink-0 ml-auto"] $ toHtml $ compactTimeAgo $ toText $ prettyTimeAuto now $ zonedTimeToUTC b.createdAt
     issuePreview_ issue
 

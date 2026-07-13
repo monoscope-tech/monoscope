@@ -101,6 +101,7 @@ import Data.List qualified as List
 import Data.Map.Strict qualified as Map
 import Data.OpenApi (ToSchema (..))
 import Data.Text qualified as T
+import Data.Text.Display (display)
 import Data.Time (UTCTime, addUTCTime, nominalDay, zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -817,7 +818,7 @@ issueToSummary i =
     , projectId = i.projectId
     , issueType = i.issueType
     , title = i.title
-    , severity = i.severity
+    , severity = display i.severity
     , critical = i.critical
     , service = i.service
     , affectedRequests = i.affectedRequests

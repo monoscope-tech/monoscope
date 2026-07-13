@@ -951,10 +951,10 @@ sampleWeeklyReport eventsChart errorsChart =
       , rateChangeCount = 1
       , anomalies =
           V.fromList
-            [ Issues.IssueSummary (UUIDId UUID.nil) "TypeError: Cannot read property 'map'" True "critical" Issues.RuntimeException (Just [0, 2, 5, 12, 8, 3, 1])
-            , Issues.IssueSummary (UUIDId UUID.nil) "New endpoint detected: POST /api/orders" False "medium" Issues.ApiChange (Just [0, 0, 0, 1, 0, 0, 0])
-            , Issues.IssueSummary (UUIDId UUID.nil) "Connection timeout pattern detected" False "medium" Issues.LogPattern (Just [1, 3, 2, 0, 1, 4, 2])
-            , Issues.IssueSummary (UUIDId UUID.nil) "Request rate spike on /api/users" False "high" Issues.LogPatternRateChange (Just [0, 1, 1, 5, 12, 3, 0])
+            [ Issues.IssueSummary (UUIDId UUID.nil) "TypeError: Cannot read property 'map'" True Issues.Critical Issues.RuntimeException (Just [0, 2, 5, 12, 8, 3, 1])
+            , Issues.IssueSummary (UUIDId UUID.nil) "New endpoint detected: POST /api/orders" False Issues.Warning Issues.ApiChange (Just [0, 0, 0, 1, 0, 0, 0])
+            , Issues.IssueSummary (UUIDId UUID.nil) "Connection timeout pattern detected" False Issues.Info Issues.LogPattern (Just [1, 3, 2, 0, 1, 4, 2])
+            , Issues.IssueSummary (UUIDId UUID.nil) "Request rate spike on /api/users" False Issues.Warning Issues.LogPatternRateChange (Just [0, 1, 1, 5, 12, 3, 0])
             ]
       , performance = V.fromList [("api.example.com", "GET", "/api/v1/users", 245, -12.5, 5000, 8.3), ("api.example.com", "POST", "/api/v1/orders", 890, 45.2, 1200, -3.1)]
       , slowQueries = V.fromList [("SELECT * FROM users WHERE email = $1", 3400, 1250 :: Int)]

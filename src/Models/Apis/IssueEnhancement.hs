@@ -349,9 +349,9 @@ buildCriticalityPrompt issue =
 updateIssueClassification :: DB es => Issues.IssueId -> Bool -> Int -> Int -> Eff es ()
 updateIssueClassification issueId isCritical breakingCount incrementalCount = do
   let severity
-        | isCritical = "critical"
-        | breakingCount > 0 = "warning"
-        | otherwise = "info"
+        | isCritical = Issues.Critical
+        | breakingCount > 0 = Issues.Warning
+        | otherwise = Issues.Info
   Issues.updateIssueCriticality issueId isCritical severity
 
 

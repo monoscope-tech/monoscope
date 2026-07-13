@@ -25,6 +25,7 @@ module Models.Apis.Issues (
   QueryAlertData (..),
   ThresholdDirection (..),
   ChatRole (..),
+  IssueSeverity (..),
   LogPatternRateChangeData (..),
   LogPatternData (..),
   RateChangeDirection (..),
@@ -177,11 +178,20 @@ parseIssueType :: Text -> Maybe IssueType
 parseIssueType = rightToMaybe . parseUrlPiece
 
 
+-- | Issue severity. Encodes to "critical"/"warning"/"info"/"low", byte-identical
+-- to the previous free-text column. Migration 0105 backfills legacy empty/NULL
+-- rows and sets NOT NULL DEFAULT 'info', so the column is always one of these.
+data IssueSeverity = Critical | Warning | Info | Low
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "" IssueSeverity
+
+
 data IssueSummary = IssueSummary
   { id :: IssueId
   , title :: Text
   , critical :: Bool
-  , severity :: Text
+  , severity :: IssueSeverity
   , issueType :: IssueType
   , activityBuckets :: Maybe [Int]
   }
@@ -287,7 +297,7 @@ data Issue = Issue
   , title :: Text
   , service :: Maybe Text
   , critical :: Bool
-  , severity :: Text -- "critical", "warning", "info"
+  , severity :: IssueSeverity
   , affectedRequests :: Int
   , affectedClients :: Int
   , errorRate :: Maybe Double
@@ -528,7 +538,7 @@ updateIssueEnhancement issueId iTitle action complexity = do
 
 
 -- | Update issue criticality and severity
-updateIssueCriticality :: DB es => IssueId -> Bool -> Text -> Eff es ()
+updateIssueCriticality :: DB es => IssueId -> Bool -> IssueSeverity -> Eff es ()
 updateIssueCriticality issueId isCritical sev =
   Hasql.interpExecute_
     [HI.sql|
@@ -707,7 +717,7 @@ createAPIChangeIssue projectId endpointHash anomalies = do
       , isFramework = False
       , service = Just $ Anomalies.detectService Nothing firstAnomaly.endpointUrlPath
       , critical = isCritical
-      , severity = if isCritical then "critical" else "warning"
+      , severity = if isCritical then Critical else Warning
       , title =
           if V.any ((== Anomalies.ATEndpoint) . (.anomalyType)) anomalies
             then "New endpoint detected: " <> apiChangeData.endpointMethod <> " " <> apiChangeData.endpointPath <> " on " <> apiChangeData.endpointHost
@@ -732,7 +742,7 @@ createQueryAlertIssue projectId queryId queryName queryExpr threshold actual thr
       , isFramework = False
       , service = Just "Monitoring"
       , critical = True
-      , severity = "warning"
+      , severity = Warning
       , title = queryName <> " threshold " <> display thresholdType <> " " <> show threshold
       , recommendedAction = "Review the query results and take appropriate action."
       , migrationComplexity = "n/a"
@@ -876,11 +886,11 @@ createLogPatternRateChangeIssue projectId lp sr = do
       svcLabel = fromMaybe "unknown" lp.serviceName
       silentDrop = sr.direction == Drop && sr.currentRate == 0 && svcLabel `elem` ["", "unknown"]
       severity
-        | silentDrop = "low"
+        | silentDrop = Low
         | otherwise = case (sr.direction, lvl) of
-            (Spike, "error") -> "critical"
-            (Spike, _) -> "warning"
-            (Drop, _) -> "info"
+            (Spike, "error") -> Critical
+            (Spike, _) -> Warning
+            (Drop, _) -> Info
       patternSnippet = T.take 40 lp.logPattern
       title =
         svcLabel
@@ -982,10 +992,10 @@ createLogPatternIssue projectId lp = do
           }
       lvl = T.toLower $ fromMaybe "" lp.logLevel
       severity = case lvl of
-        "error" -> "critical"
-        "warning" -> "warning"
-        "warn" -> "warning"
-        _ -> "info"
+        "error" -> Critical
+        "warning" -> Warning
+        "warn" -> Warning
+        _ -> Info
   mkIssue
     MkIssueOpts
       { projectId
@@ -1061,7 +1071,7 @@ data MkIssueOpts a = MkIssueOpts
   , isFramework :: Bool
   , service :: Maybe Text
   , critical :: Bool
-  , severity :: Text
+  , severity :: IssueSeverity
   , title :: Text
   , recommendedAction :: Text
   , migrationComplexity :: Text
@@ -1276,7 +1286,7 @@ mkErrorIssue projectId targetHash parentHash isFramework service errType errMsg 
       , isFramework
       , service
       , critical = True
-      , severity = "critical"
+      , severity = Critical
       , title
       , recommendedAction
       , migrationComplexity = "n/a"
