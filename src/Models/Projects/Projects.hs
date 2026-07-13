@@ -993,6 +993,10 @@ projectProvider p = case p.billingProvider of
 -- parse point folding the onboarding/free/paid distinction so gating code matches
 -- exhaustively instead of scattering case-insensitive string compares.
 --
+-- Phased rollout: the usage-reporting gate uses this today; the remaining
+-- 'isFreeTier'/'isOnboarding' call sites (ingestion hot path, several Pages) can
+-- migrate onto 'Plan' incrementally. See docs/design-notes/billing-plan-types.md.
+--
 -- >>> map parsePlan ["ONBOARDING", "onboarding", "Free", "FREE", "Startup"]
 -- [Onboarding,Onboarding,Free,Free,Paid]
 data Plan = Onboarding | Free | Paid

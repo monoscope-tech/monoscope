@@ -1181,6 +1181,8 @@ manageBillingGetH pid from = do
       bwconf = bw{pageTitle = "Billing", isSettingsPage = True}
   let lemonUrl = envCfg.lemonSqueezyUrl <> "&checkout[custom][project_id]=" <> pid.toText
       critical = envCfg.lemonSqueezyCriticalUrl <> "&checkout[custom][project_id]=" <> pid.toText
+  -- Free-tier display shows no provider even for a historically-paid-then-downgraded project
+  -- (which keeps its stored provider so trial-reminder/auto-migration logic still works).
   let provider = if Projects.isFreeTier project.paymentPlan then Projects.NoBillingProvider else Projects.projectProvider project
   addRespHeaders $ BillingGet $ PageCtx bwconf BillingData{pid, totalReqs = totalRequests, totalBytes, lastReported = last_reported, lemonUrl, critical, paymentPlan = project.paymentPlan, enableFreetier = envCfg.enableFreetier, basicAuthEnabled = envCfg.basicAuthEnabled, provider, dailyUsage, cycleStart = utctDay cycleStart, pastCycles}
 
