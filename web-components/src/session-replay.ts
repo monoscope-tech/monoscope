@@ -32,6 +32,8 @@ export class SessionReplay extends LitElement {
   @state() private paused = false;
   @state() private isLoading = false;
   @state() private loadError: string | null = null;
+  // A shard failed to load after retries; playback continues but is incomplete.
+  @state() private partialLoad = false;
 
   @state() private consoleEvents: ConsoleEvent[] = [];
   @state() private currentEventTime: number = 0;
@@ -485,6 +487,14 @@ export class SessionReplay extends LitElement {
     this.ingestMarkers(events);
     // totalTime grows as later shards arrive, so the scrubber extends live.
     this.metaData = this.player.getMetaData();
+    // Playback can hit the end of the *loaded-so-far* shards while later ones are
+    // still streaming — that's not the real end of the session. Clear the finished
+    // state and resume (respecting an explicit user pause) so multi-shard sessions
+    // don't halt at a shard boundary showing the "End of session" card.
+    if (this.finished && this.currentTime < this.metaData.totalTime) {
+      this.finished = false;
+      if (!this.paused) this.play(this.currentTime);
+    }
   }
 
   private async fetchSegment(index: number): Promise<eventWithTime[]> {
@@ -496,19 +506,35 @@ export class SessionReplay extends LitElement {
   }
 
   // Stream shards one at a time after playback has started, feeding each into the
-  // live timeline. Bails if the user switched to another session.
+  // live timeline. A transient failure on one shard retries with backoff, then
+  // skips that shard and continues (flagging a partial load) rather than
+  // truncating the entire tail of the recording. Bails if the user switched away.
   private async prefetchRemaining(requestedId: string) {
+    const maxRetries = 2;
     while (this.loadedSegments < this.segments.length) {
       if (this.currentSessionId !== requestedId) return;
-      try {
-        const evs = await this.fetchSegment(this.loadedSegments);
-        if (this.currentSessionId !== requestedId) return;
-        this.appendEvents(evs);
-        this.loadedSegments += 1;
-      } catch (e) {
-        console.warn('Replay shard prefetch failed; stopping:', e);
-        return;
+      let attempt = 0;
+      for (;;) {
+        try {
+          const evs = await this.fetchSegment(this.loadedSegments);
+          if (this.currentSessionId !== requestedId) return;
+          this.appendEvents(evs);
+          break;
+        } catch (e) {
+          if (this.currentSessionId !== requestedId) return;
+          if (attempt < maxRetries) {
+            attempt += 1;
+            await new Promise((r) => setTimeout(r, 300 * attempt));
+            continue;
+          }
+          // Give up on this one shard but keep loading the rest; surface that
+          // the recording is incomplete instead of silently dropping the tail.
+          console.warn(`Replay shard ${this.loadedSegments} failed after retries; skipping:`, e);
+          this.partialLoad = true;
+          break;
+        }
       }
+      this.loadedSegments += 1;
     }
   }
 
@@ -516,6 +542,21 @@ export class SessionReplay extends LitElement {
   // ordered shard list, play the first shard(s) with ≥2 events immediately, then
   // stream the rest in the background. The whole session is never downloaded up
   // front, and the server never stitches it into one giant response.
+  // Shared validation + player start for both load paths (manifest and share
+  // full-fetch), so the malformed / too-few-events handling can't drift between them.
+  private startPlaybackWith(events: unknown): boolean {
+    if (!Array.isArray(events)) {
+      this.loadError = 'The replay service returned an unexpected response. Retry, or contact support with the session ID below.';
+      return false;
+    }
+    if (events.length < 2) {
+      this.loadError = 'This recording has too few events to play back — the session likely ended before recording started (closed tab, network drop, or SDK misconfiguration).';
+      return false;
+    }
+    this.initiatePlayer(events as eventWithTime[]);
+    return true;
+  }
+
   private async loadFromManifest(requestedId: string) {
     try {
       const resp = await fetch(`${this.manifestBase}/manifest`, { method: 'GET', headers: { Accept: 'application/json' } });
@@ -542,11 +583,7 @@ export class SessionReplay extends LitElement {
         this.loadedSegments += 1;
         initial = initial.concat(evs);
       }
-      if (initial.length < 2) {
-        this.loadError = 'This recording has too few events to play back — the session likely ended before recording started.';
-        return;
-      }
-      this.initiatePlayer(initial);
+      if (!this.startPlaybackWith(initial)) return;
       this.isLoading = false;
       void this.prefetchRemaining(requestedId); // stream the rest without blocking first paint
     } catch (e: any) {
@@ -575,15 +612,7 @@ export class SessionReplay extends LitElement {
           this.loadError = data.error;
           return;
         }
-        if (!data.events || !Array.isArray(data.events)) {
-          this.loadError = 'The replay service returned an unexpected response. Retry, or contact support with the session ID below.';
-          return;
-        }
-        if (data.events.length < 2) {
-          this.loadError = 'This recording has too few events to play back — the session likely ended before recording started (closed tab, network drop, or SDK misconfiguration).';
-          return;
-        }
-        this.initiatePlayer(data.events);
+        this.startPlaybackWith(data.events);
       })
       .catch((error) => {
         if (this.currentSessionId !== requestedId) return;
@@ -605,6 +634,7 @@ export class SessionReplay extends LitElement {
     }
     this.isLoading = true;
     this.loadError = null;
+    this.partialLoad = false;
     this.currentSessionId = sessionId;
     // Reset identity + progressive-load + marker state so nothing leaks across sessions.
     this.userEmail = null;
@@ -871,6 +901,10 @@ export class SessionReplay extends LitElement {
                       >
                         ${this.consoleTypesCounts.error} error${this.consoleTypesCounts.error === 1 ? '' : 's'}
                       </button>`
+                  : nothing}
+                ${this.partialLoad
+                  ? html`<span aria-hidden="true">·</span>
+                      <span class="text-textWarning font-semibold whitespace-nowrap" title="Some of this recording couldn’t be loaded — playback may be incomplete">partial</span>`
                   : nothing}
               </span>
             </div>

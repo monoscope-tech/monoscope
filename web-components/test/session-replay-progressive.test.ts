@@ -44,7 +44,13 @@ vi.mock('@rrweb/replay', () => {
       this.added.push(e);
     }
     getMetaData() {
-      return { startTime: 0, endTime: 0, totalTime: 0 };
+      // totalTime grows with the events fed so far, so appendEvents can detect
+      // that more content arrived past the previously-loaded end.
+      const n = this.initial.length + this.added.length;
+      return { startTime: 0, endTime: n * 1000, totalTime: n * 1000 };
+    }
+    getCurrentTime() {
+      return 0;
     }
     play() {}
     pause() {}
@@ -163,6 +169,57 @@ describe('session-replay progressive shard loading', () => {
     expect(replayers[0].initial.length).toBe(2);
     expect(replayers[0].added.length).toBe(0);
     expect(el.loadedSegments).toBe(2);
+  });
+
+  test('resumes when a later shard streams in after reaching the end of loaded shards (no premature finish)', async () => {
+    const manifest = {
+      meta: null,
+      errorMsg: null,
+      segments: [{ key: 's/shard-1', firstTs: 1, gzipped: true }],
+    };
+    (global as any).fetch = vi.fn(async (url: string) => {
+      const body = url.includes('/manifest') ? manifest : [ev(1), ev(2)];
+      return { ok: true, status: 200, json: async () => body };
+    });
+    const el = await mountPlayer();
+    el.fetchNewSessionData('s');
+    await until(() => replayers.length === 1);
+
+    // Simulate playback having hit the end of the initially-loaded shard.
+    el.finished = true;
+    el.paused = false;
+    el.currentTime = 0;
+    const playSpy = vi.spyOn(el, 'play').mockImplementation(() => {});
+    // A later shard arrives (as prefetch would deliver it).
+    el.appendEvents([ev(50), ev(51)]);
+
+    expect(el.finished).toBe(false); // no longer "ended" — more content exists
+    expect(playSpy).toHaveBeenCalled(); // playback resumed rather than stopping at the boundary
+  });
+
+  test('a failing shard is skipped after retries; the rest still load and partialLoad is flagged', async () => {
+    const manifest = {
+      meta: null,
+      errorMsg: null,
+      segments: [
+        { key: 's3/shard-1', firstTs: 1, gzipped: true },
+        { key: 's3/shard-2', firstTs: 2, gzipped: true },
+        { key: 's3/shard-3', firstTs: 3, gzipped: true },
+      ],
+    };
+    (global as any).fetch = vi.fn(async (url: string) => {
+      if (url.includes('/manifest')) return { ok: true, status: 200, json: async () => manifest };
+      if (url.includes('shard-2')) return { ok: false, status: 500, json: async () => ({}) }; // always fails
+      if (url.includes('shard-1')) return { ok: true, status: 200, json: async () => [ev(1), ev(2)] };
+      return { ok: true, status: 200, json: async () => [ev(3)] }; // shard-3
+    });
+    const el = await mountPlayer();
+    el.fetchNewSessionData('s3');
+    await until(() => el.loadedSegments === 3, 6000);
+
+    expect(el.partialLoad).toBe(true); // the failure was surfaced, not silently swallowed
+    // shard-3 still loaded despite shard-2 failing — the tail wasn't truncated.
+    expect(replayers[0].added.some((e: any) => e.timestamp === 3)).toBe(true);
   });
 
   test('surfaces a manifest errorMsg and never starts a player', async () => {

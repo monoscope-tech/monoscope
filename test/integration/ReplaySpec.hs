@@ -445,6 +445,7 @@ spec = around withTestResources do
       requireMinio tr pendingWith $ do
         let sid = UUID.fromWords 0 0 0 300
         clearSessionRow tr sid
+        purgeTestS3Prefix (UUID.toText sid <> "/") -- start clean: this test triggers a merge that seals shards
         projM <- runQueryEffect tr $ Projects.projectById pid
         project <- maybe (expectationFailure "test project not found" >> error "unreachable") pure projM
         -- 7 MiB padding per batch so the 12 MiB shard byte-budget seals >1 shard.
