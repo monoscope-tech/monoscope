@@ -1,9 +1,6 @@
 module Models.Apis.Anomalies (
   AnomalyVM (..),
   AnomalyActions (..),
-  Issue (..),
-  IssueL (..),
-  IssueEventAgg (..),
   AnomalyTypes (..),
   AnomalyId,
   IssuesData (..),
@@ -26,7 +23,6 @@ module Models.Apis.Anomalies (
 where
 
 import Data.Aeson qualified as AE
-import Data.ByteString.Char8 qualified as BSC
 import Data.Default (Default, def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Text qualified as T
@@ -36,9 +32,8 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple (FromRow, ToRow)
-import Database.PostgreSQL.Simple.FromField (FromField, ResultError (ConversionFailed, UnexpectedNull), fromField, returnError)
+import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
-import Database.PostgreSQL.Simple.Time (parseUTCTime)
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
@@ -57,12 +52,9 @@ import Pkg.SchemaLearning.Catalog qualified as Fields (
   FormatId,
   ShapeId,
  )
-import Relude hiding (id, many, some)
+import Relude hiding (id)
 import Servant (FromHttpApiData (..))
 import System.Types (DB)
-import Text.Megaparsec
-import Text.Megaparsec.Char
-import Text.Megaparsec.Char.Lexer qualified as L
 
 
 type AnomalyId = UUIDId "anomaly"
@@ -332,110 +324,6 @@ data IssuesData
 
 instance Default IssuesData where
   def = IDEmpty
-
-
-data Issue = Issue
-  { id :: AnomalyId
-  , createdAt :: ZonedTime
-  , updatedAt :: ZonedTime
-  , projectId :: Projects.ProjectId
-  , acknowlegedAt :: Maybe ZonedTime
-  , anomalyType :: AnomalyTypes
-  , targetHash :: Text
-  , issueData :: IssuesData
-  , endpointId :: Maybe Endpoints.EndpointId
-  , acknowlegedBy :: Maybe Projects.UserId
-  , archivedAt :: Maybe ZonedTime
-  , -- Enhanced UI fields
-    title :: Text
-  , service :: Text
-  , critical :: Bool
-  , breakingChanges :: Int
-  , incrementalChanges :: Int
-  , affectedRequests :: Int
-  , affectedClients :: Int
-  , estimatedRequests :: Text
-  , migrationComplexity :: Text
-  , recommendedAction :: Text
-  , requestPayloads :: Aeson [PayloadChange]
-  , responsePayloads :: Aeson [PayloadChange]
-  , -- New fields for anomaly grouping
-    anomalyHashes :: V.Vector Text
-  , endpointHash :: Text
-  }
-  deriving stock (Generic, Show)
-  deriving anyclass (Default, FromRow, NFData, ToRow)
-  deriving
-    (Entity)
-    via (GenericEntity '[Schema "apis", TableName "issues", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Issue)
-
-
-data IssueEventAgg = IssueEventAgg
-  { count :: Int
-  , lastSeen :: UTCTime
-  }
-  deriving stock (Generic, Show)
-  deriving anyclass (NFData)
-
-
-instance FromField IssueEventAgg where
-  fromField f mdata = case mdata of
-    Nothing -> returnError UnexpectedNull f ""
-    Just bs -> case parseMaybe parseIssueEventAgg (BSC.unpack bs) of
-      Nothing -> returnError ConversionFailed f "Failed to parse IssueEventAgg"
-      Just result -> pure result
-
-
-type Parser = Parsec Void String
-
-
-parseIssueEventAgg :: Parser IssueEventAgg
-parseIssueEventAgg = do
-  _ <- char '('
-  cnt <- L.decimal
-  _ <- char ','
-  _ <- space
-  str <- char '"' *> manyTill L.charLiteral (char '"')
-  utcTime <- case parseUTCTime (encodeUtf8 str) of
-    Left err -> fail err
-    Right time -> pure time
-  _ <- char ')'
-  pure $ IssueEventAgg cnt utcTime
-
-
-data IssueL = IssueL
-  { id :: AnomalyId
-  , createdAt :: ZonedTime
-  , updatedAt :: ZonedTime
-  , projectId :: Projects.ProjectId
-  , acknowlegedAt :: Maybe ZonedTime
-  , anomalyType :: AnomalyTypes
-  , targetHash :: Text
-  , issueData :: IssuesData
-  , endpointId :: Maybe Endpoints.EndpointId
-  , acknowlegedBy :: Maybe Projects.UserId
-  , archivedAt :: Maybe ZonedTime
-  , eventsAgg :: IssueEventAgg
-  , -- New fields for enhanced UI
-    title :: Text
-  , service :: Text
-  , critical :: Bool
-  , breakingChanges :: Int
-  , incrementalChanges :: Int
-  , affectedRequests :: Int
-  , affectedClients :: Int
-  , estimatedRequests :: Text
-  , migrationComplexity :: Text
-  , recommendedAction :: Text
-  , -- Payload changes data
-    requestPayloads :: Aeson [PayloadChange]
-  , responsePayloads :: Aeson [PayloadChange]
-  , -- New fields for anomaly grouping
-    anomalyHashes :: V.Vector Text
-  , endpointHash :: Text
-  }
-  deriving stock (Generic, Show)
-  deriving anyclass (FromRow, NFData)
 
 
 -- NFData instance for Aeson wrapper (postgresql-simple doesn't provide it)
