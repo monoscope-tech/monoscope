@@ -8,6 +8,7 @@ module Pkg.Parser.Stats (
   ByClauseItem (..),
   BinFunction (..),
   SortField (..),
+  SortDir (..),
   Sources (..),
   SubjectExpr (..),
   -- Section parsers
@@ -55,6 +56,7 @@ import Data.Aeson qualified as AE
 import Data.Generics.Product (typed)
 import Data.Text qualified as T
 import Data.Text.Display (Display, display, displayBuilder, displayPrec)
+import Pkg.DeriveUtils (WrappedEnumSC (..))
 import Pkg.Parser.Expr (Expr (..), FieldKey (..), Parser, Subject (..), ToQueryText (..), Values (..), kqlTimespanToTimeBucket, pExpr, pSubject, pValues)
 import Relude hiding (GT, LT, Sum, many, some)
 import Text.Megaparsec
@@ -807,7 +809,14 @@ instance ToQueryText Section where
 -- request_body[1].v7 | {.v7, .v8} |
 
 -- Sort field can include optional direction
-data SortField = SortField Subject (Maybe Text) -- field and optional direction (asc/desc)
+
+-- | Sort direction; encodes to "asc"/"desc".
+data SortDir = Asc | Desc
+  deriving stock (Eq, Generic, Read, Show)
+  deriving (AE.FromJSON, AE.ToJSON, Display) via WrappedEnumSC 'Nothing "" SortDir
+
+
+data SortField = SortField Subject (Maybe SortDir) -- field and optional direction
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -908,29 +917,29 @@ instance ToQueryText ByClauseItem where
 -- | Parse a sort field that can include an optional direction
 --
 -- >>> parse pSortField "" "parent_id asc"
--- Right (SortField (Subject "parent_id" "parent_id" []) (Just "asc"))
+-- Right (SortField (Subject "parent_id" "parent_id" []) (Just Asc))
 --
 -- >>> parse pSortField "" "timestamp"
 -- Right (SortField (Subject "timestamp" "timestamp" []) Nothing)
 pSortField :: Parser SortField
 pSortField = do
   field <- pSubject
-  dirM <- optional $ try (space *> (string "asc" <|> string "desc"))
+  dirM <- optional $ try (space *> ((Asc <$ string "asc") <|> (Desc <$ string "desc")))
   return $ SortField field dirM
 
 
 instance ToQueryText SortField where
   toQText (SortField field Nothing) = toQText field
-  toQText (SortField field (Just dir)) = toQText field <> " " <> dir
+  toQText (SortField field (Just dir)) = toQText field <> " " <> display dir
 
 
 -- | Parser for 'sort by' command (also supports 'order by' synonym)
 --
 -- >>> parse pSortSection "" "sort by parent_id asc, timestamp desc"
--- Right (SortCommand [SortField (Subject "parent_id" "parent_id" []) (Just "asc"),SortField (Subject "timestamp" "timestamp" []) (Just "desc")])
+-- Right (SortCommand [SortField (Subject "parent_id" "parent_id" []) (Just Asc),SortField (Subject "timestamp" "timestamp" []) (Just Desc)])
 --
 -- >>> parse pSortSection "" "order by parent_id asc"
--- Right (SortCommand [SortField (Subject "parent_id" "parent_id" []) (Just "asc")])
+-- Right (SortCommand [SortField (Subject "parent_id" "parent_id" []) (Just Asc)])
 pSortSection :: Parser Section
 pSortSection = do
   _ <- string "sort by" <|> string "order by"

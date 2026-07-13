@@ -195,7 +195,7 @@ applySummarizeByClauseToQC sqlCfg (Just (SummarizeByClause items)) qc =
 -- | Display a sort field for SQL generation
 displaySortField :: SortField -> Text
 displaySortField (SortField field Nothing) = display field
-displaySortField (SortField field (Just dir)) = display field <> " " <> dir
+displaySortField (SortField field (Just dir)) = display field <> " " <> display dir
 
 
 -- Legacy clause application functions removed
