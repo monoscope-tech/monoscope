@@ -441,6 +441,8 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , -- Billing
     manageBillingGet :: mode :- "p" :> ProjectId :> "manage_billing" :> QPT "from" :> Get '[HTML] (RespHeaders Settings.BillingGet)
   , replaySessionGet :: mode :- "p" :> ProjectId :> "replay_session" :> Capture "sessionId" UUID.UUID :> Get '[JSON] (RespHeaders Replay.ReplaySessionResp)
+  , replaySessionManifestGet :: mode :- "p" :> ProjectId :> "replay_session" :> Capture "sessionId" UUID.UUID :> "manifest" :> Get '[JSON] (RespHeaders Replay.ReplayManifest)
+  , replaySessionShardGet :: mode :- "p" :> ProjectId :> "replay_session" :> Capture "sessionId" UUID.UUID :> "shard" :> QueryParam "key" Text :> Get '[JSON] (RespHeaders Replay.RawJson)
   , bringS3 :: mode :- "p" :> ProjectId :> "byob_s3" :> Get '[HTML] (RespHeaders (Html ()))
   , bringS3Post :: mode :- "p" :> ProjectId :> "byob_s3" :> ReqBody '[FormUrlEncoded] Projects.ProjectS3Bucket :> Post '[HTML] (RespHeaders (Html ()))
   , bringS3Remove :: mode :- "p" :> ProjectId :> "byob_s3" :> Delete '[HTML] (RespHeaders (Html ()))
@@ -823,6 +825,8 @@ cookieProtectedServer =
     , reportsPost = Reports.reportsPostH
     , shareLinkPost = Share.shareLinkPostH
     , replaySessionGet = Replay.replaySessionGetH
+    , replaySessionManifestGet = Replay.replaySessionManifestGetH
+    , replaySessionShardGet = Replay.replaySessionShardGetH
     , bringS3 = Settings.bringS3GetH
     , bringS3Post = Settings.brings3PostH
     , bringS3Remove = Settings.brings3RemoveH

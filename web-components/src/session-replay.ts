@@ -55,6 +55,14 @@ export class SessionReplay extends LitElement {
   private startX: number | null = null;
   private player: Replayer | null = null;
   private events: eventWithTime[] = [];
+  // Progressive loading: the recording is stored server-side as ordered, bounded
+  // shards. We fetch a manifest, play shard 0 immediately, then lazy-load the rest
+  // via addEvent — so we never download (or hold) the whole session up front.
+  private segments: { key: string; firstTs: number; gzipped: boolean }[] = [];
+  private loadedSegments = 0;
+  private manifestBase = '';
+  private sessionStart = 0;
+  private seenFirstMeta = false;
   private containerWidth = 1024;
   private timeout: any = null;
 
@@ -390,33 +398,16 @@ export class SessionReplay extends LitElement {
     const target = document.querySelector('#playerWrapper') as HTMLElement;
     this.currentTime = 0;
     this.consoleEvents = [];
-    // Collect timeline markers relative to the first event's timestamp — rrweb
-    // seeks use offsets, not wall-clock. Meta events past the first represent
-    // full-page navigations (SPAs fire custom events instead).
-    const sessionStart = events[0].timestamp;
-    const errs: number[] = [];
-    const warns: number[] = [];
-    const navs: { offset: number; href: string }[] = [];
-    let seenFirstMeta = false;
-    events.forEach((event) => {
-      if (event.type === EventType.Plugin && event.data.plugin === 'rrweb/console@1') {
-        const ev = event as ConsoleEvent;
-        const level = ev.data.payload.level;
-        this.consoleTypesCounts[level] += 1;
-        this.consoleEvents.push(ev);
-        const offset = event.timestamp - sessionStart;
-        if (level === 'error') errs.push(offset);
-        else if (level === 'warn') warns.push(offset);
-      } else if (event.type === EventType.Meta) {
-        if (seenFirstMeta) {
-          navs.push({ offset: event.timestamp - sessionStart, href: (event.data as any).href ?? '' });
-        }
-        seenFirstMeta = true;
-      }
-    });
-    this.errorTicks = errs;
-    this.warnTicks = warns;
-    this.navMarkers = navs;
+    this.consoleTypesCounts = { error: 0, warn: 0, info: 0 };
+    this.errorTicks = [];
+    this.warnTicks = [];
+    this.navMarkers = [];
+    this.seenFirstMeta = false;
+    // rrweb seeks use offsets from the first event, so markers are computed
+    // relative to sessionStart. ingestMarkers appends, so it's reused verbatim as
+    // later shards stream in during progressive load.
+    this.sessionStart = events[0].timestamp;
+    this.ingestMarkers(events);
 
     this.player = new Replayer(events, { root: target, plugins: [{ handler: this.handleConsoleEvents }], skipInactive: this.skipInactive });
     this.trickPlayer = null;
@@ -453,41 +444,130 @@ export class SessionReplay extends LitElement {
     }
   }
 
-  fetchNewSessionData(sessionId: string) {
-    if (this.isLoading) return;
-    this.pause();
-    try {
-      this.player?.destroy();
-    } catch (error) {
-      console.warn('Replayer destroy failed:', error);
-    }
-    this.isLoading = true;
-    this.loadError = null;
-    this.currentSessionId = sessionId;
-    // Reset identity so stale values don't flash across a failed load
-    this.userEmail = null;
-    this.userName = null;
-    this.userIdLabel = null;
-    // Reset timeline markers from the previous session
-    this.errorTicks = [];
-    this.warnTicks = [];
-    this.navMarkers = [];
-    this.consoleTypesCounts = { error: 0, warn: 0, info: 0 };
-    const url = this.sessionUrl || `/p/${this.projectId}/replay_session/${sessionId}`;
-    // Capture locally so responses for abandoned sessions don't overwrite
-    // state the user has already moved on from.
-    const requestedId = sessionId;
-    const isStale = () => this.currentSessionId !== requestedId;
+  // Append timeline markers for a batch of events (relative to sessionStart).
+  // Append-only so it's reused verbatim for the initial shard and every shard
+  // streamed in afterwards; new array identities let Lit re-render the scrubber.
+  private ingestMarkers(events: eventWithTime[]) {
+    const errs: number[] = [];
+    const warns: number[] = [];
+    const navs: { offset: number; href: string }[] = [];
+    events.forEach((event) => {
+      if (event.type === EventType.Plugin && event.data.plugin === 'rrweb/console@1') {
+        const ev = event as ConsoleEvent;
+        const level = ev.data.payload.level;
+        this.consoleTypesCounts[level] += 1;
+        this.consoleEvents.push(ev);
+        const offset = event.timestamp - this.sessionStart;
+        if (level === 'error') errs.push(offset);
+        else if (level === 'warn') warns.push(offset);
+      } else if (event.type === EventType.Meta) {
+        if (this.seenFirstMeta) navs.push({ offset: event.timestamp - this.sessionStart, href: (event.data as any).href ?? '' });
+        this.seenFirstMeta = true;
+      }
+    });
+    if (errs.length) this.errorTicks = [...this.errorTicks, ...errs];
+    if (warns.length) this.warnTicks = [...this.warnTicks, ...warns];
+    if (navs.length) this.navMarkers = [...this.navMarkers, ...navs];
+    this.consoleEvents = [...this.consoleEvents];
+  }
 
+  // Feed a streamed shard's events into the live player and extend derived state.
+  private appendEvents(events: eventWithTime[]) {
+    if (!this.player || events.length === 0) return;
+    for (const ev of events) {
+      try {
+        this.player.addEvent(ev);
+      } catch (e) {
+        console.warn('addEvent failed for streamed replay event:', e);
+      }
+    }
+    this.events = this.events.concat(events);
+    this.ingestMarkers(events);
+    // totalTime grows as later shards arrive, so the scrubber extends live.
+    this.metaData = this.player.getMetaData();
+  }
+
+  private async fetchSegment(index: number): Promise<eventWithTime[]> {
+    const seg = this.segments[index];
+    const resp = await fetch(`${this.manifestBase}/shard?key=${encodeURIComponent(seg.key)}`, { method: 'GET', headers: { Accept: 'application/json' } });
+    if (!resp.ok) throw new Error(`Couldn’t load recording segment (HTTP ${resp.status}).`);
+    const data = await resp.json();
+    return Array.isArray(data) ? (data as eventWithTime[]) : [];
+  }
+
+  // Stream shards one at a time after playback has started, feeding each into the
+  // live timeline. Bails if the user switched to another session.
+  private async prefetchRemaining(requestedId: string) {
+    while (this.loadedSegments < this.segments.length) {
+      if (this.currentSessionId !== requestedId) return;
+      try {
+        const evs = await this.fetchSegment(this.loadedSegments);
+        if (this.currentSessionId !== requestedId) return;
+        this.appendEvents(evs);
+        this.loadedSegments += 1;
+      } catch (e) {
+        console.warn('Replay shard prefetch failed; stopping:', e);
+        return;
+      }
+    }
+  }
+
+  // Manifest-driven progressive load (authenticated project view): fetch the
+  // ordered shard list, play the first shard(s) with ≥2 events immediately, then
+  // stream the rest in the background. The whole session is never downloaded up
+  // front, and the server never stitches it into one giant response.
+  private async loadFromManifest(requestedId: string) {
+    try {
+      const resp = await fetch(`${this.manifestBase}/manifest`, { method: 'GET', headers: { Accept: 'application/json' } });
+      if (!resp.ok) throw new Error(`Couldn’t reach the replay service (HTTP ${resp.status}).`);
+      const manifest = await resp.json();
+      if (this.currentSessionId !== requestedId) return;
+      this.userEmail = manifest.meta?.userEmail ?? null;
+      this.userName = manifest.meta?.userName ?? null;
+      this.userIdLabel = manifest.meta?.userId ?? null;
+      if (manifest.errorMsg) {
+        this.loadError = manifest.errorMsg;
+        return;
+      }
+      this.segments = Array.isArray(manifest.segments) ? manifest.segments : [];
+      if (this.segments.length === 0) {
+        this.loadError = 'No recorded events found for this session.';
+        return;
+      }
+      // Pull leading shards until we have enough to start playback.
+      let initial: eventWithTime[] = [];
+      while (this.loadedSegments < this.segments.length && initial.length < 2) {
+        const evs = await this.fetchSegment(this.loadedSegments);
+        if (this.currentSessionId !== requestedId) return;
+        this.loadedSegments += 1;
+        initial = initial.concat(evs);
+      }
+      if (initial.length < 2) {
+        this.loadError = 'This recording has too few events to play back — the session likely ended before recording started.';
+        return;
+      }
+      this.initiatePlayer(initial);
+      this.isLoading = false;
+      void this.prefetchRemaining(requestedId); // stream the rest without blocking first paint
+    } catch (e: any) {
+      if (this.currentSessionId !== requestedId) return;
+      console.error('Failed to load session replay manifest:', e);
+      this.loadError = e?.message || 'We couldn’t load this session. Check your connection and retry.';
+    } finally {
+      if (this.currentSessionId === requestedId) this.isLoading = false;
+    }
+  }
+
+  // Share-link fallback: the share API serves the whole events array in one
+  // response (no manifest endpoint on that path), so load it directly.
+  private fetchFullSession(url: string, requestedId: string) {
     fetch(url, { method: 'GET', headers: { Accept: 'application/json' } })
       .then((response) => {
-        if (!response.ok) {
-          throw new Error(`Couldn’t reach the replay service (HTTP ${response.status}).`);
-        }
+        if (!response.ok) throw new Error(`Couldn’t reach the replay service (HTTP ${response.status}).`);
         return response.json();
       })
       .then((data) => {
-        if (isStale()) return;
+        if (this.currentSessionId !== requestedId) return;
         this.userEmail = data.userEmail ?? null;
         this.userName = data.userName ?? null;
         this.userIdLabel = data.userId ?? null;
@@ -506,14 +586,47 @@ export class SessionReplay extends LitElement {
         this.initiatePlayer(data.events);
       })
       .catch((error) => {
-        if (isStale()) return;
+        if (this.currentSessionId !== requestedId) return;
         console.error('Failed to load session replay:', error);
         this.loadError = error.message || 'We couldn’t load this session. Check your connection and retry.';
       })
       .finally(() => {
-        if (isStale()) return;
-        this.isLoading = false;
+        if (this.currentSessionId === requestedId) this.isLoading = false;
       });
+  }
+
+  fetchNewSessionData(sessionId: string) {
+    if (this.isLoading) return;
+    this.pause();
+    try {
+      this.player?.destroy();
+    } catch (error) {
+      console.warn('Replayer destroy failed:', error);
+    }
+    this.isLoading = true;
+    this.loadError = null;
+    this.currentSessionId = sessionId;
+    // Reset identity + progressive-load + marker state so nothing leaks across sessions.
+    this.userEmail = null;
+    this.userName = null;
+    this.userIdLabel = null;
+    this.errorTicks = [];
+    this.warnTicks = [];
+    this.navMarkers = [];
+    this.consoleTypesCounts = { error: 0, warn: 0, info: 0 };
+    this.segments = [];
+    this.loadedSegments = 0;
+    this.seenFirstMeta = false;
+    const requestedId = sessionId;
+
+    if (this.sessionUrl) {
+      // Share context: no manifest endpoint, load the full events array.
+      this.manifestBase = '';
+      this.fetchFullSession(this.sessionUrl, requestedId);
+    } else {
+      this.manifestBase = `/p/${this.projectId}/replay_session/${sessionId}`;
+      void this.loadFromManifest(requestedId);
+    }
   }
 
   // Human label for the session's user, falling back through the identity fields
