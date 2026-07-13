@@ -1,4 +1,4 @@
-module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), kqlTimespanToTimeBucket, FieldKey (..), pSquareBracketKey, pTerm, Jsonpath, LowerErr (..), lowerPred, renderJsonpath, resolveWildcardTimes, display, pDuration, pNowFunction, pAgoFunction, pValues, Parser, symbol, sc, ToQueryText (..), flattenedOtelAttributes, flattenedOtelAttributesBuiltin, setFlattenedOtelColumns, topLevelOtelColumns, transformFlattenedAttribute, outputFieldAliases) where
+module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), kqlTimespanToTimeBucket, FieldKey (..), pSquareBracketKey, pTerm, Jsonpath, LowerErr (..), lowerPred, renderJsonpath, resolveWildcardTimes, display, pDuration, pNowFunction, pAgoFunction, pValues, Parser, symbol, sc, ToQueryText (..), flattenedOtelAttributes, flattenedOtelAttributesBuiltin, setFlattenedOtelColumns, topLevelOtelColumns, transformFlattenedAttribute, outputFieldAliases, sqlStringLit) where
 
 import Control.Monad.Combinators.Expr (
   Operator (InfixL),
@@ -881,9 +881,20 @@ kqlTimespanToTimeBucket timespan = fromMaybe "5 minutes" $ parsePostgresInterval
       | otherwise = Nothing
 
 
+-- | The canonical SQL string-literal encoder: single-quote and double any
+-- embedded quote. Single source of truth for value escaping across the query
+-- generator (scalar comparisons, IN-lists, jsonpath) so the injection guarantee
+-- lives in one place. Relies on standard_conforming_strings (PostgreSQL default).
+--
+-- >>> sqlStringLit "foo'bar"
+-- "'foo''bar'"
+sqlStringLit :: Text -> Text
+sqlStringLit v = "'" <> T.replace "'" "''" v <> "'"
+
+
 instance Display Values where
   displayPrec prec (Num a) = displayPrec prec a
-  displayPrec prec (Str a) = displayPrec prec $ "'" <> T.replace "'" "''" a <> "'"
+  displayPrec prec (Str a) = displayPrec prec $ sqlStringLit a
   displayPrec prec (Boolean True) = "true"
   displayPrec prec (Boolean False) = "false"
   displayPrec prec Null = "null"
@@ -1183,7 +1194,7 @@ renderJsonpath :: Jsonpath -> Text
 renderJsonpath (Jsonpath base path pred_) =
   -- Single-quoted SQL literal with @''@-escaping (matches the rest of the module and
   -- transformFlattenedAttribute), not @$$@ dollar-quoting which a @$$@ in a user value would break.
-  "jsonb_path_exists(to_jsonb(" <> base <> "), '" <> T.replace "'" "''" (renderPath path <> " ? (" <> renderPred False pred_ <> ")") <> "'::jsonpath)"
+  "jsonb_path_exists(to_jsonb(" <> base <> "), " <> sqlStringLit (renderPath path <> " ? (" <> renderPred False pred_ <> ")") <> "::jsonpath)"
   where
     renderPath (JPath steps) = "$" <> foldMap step steps
     step (JKey k) = ".\"" <> k <> "\""

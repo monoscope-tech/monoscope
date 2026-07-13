@@ -663,9 +663,7 @@ variablePresetsKQL pid mf mt allParams currentTime =
 constantToSQLList :: [[Text]] -> Text
 constantToSQLList = \case
   [] -> "(SELECT NULL::text WHERE FALSE)"
-  rows -> "(" <> T.intercalate ", " [escapeQuote v | (v : _) <- rows] <> ")"
-  where
-    escapeQuote v = "'" <> T.replace "'" "''" v <> "'"
+  rows -> "(" <> T.intercalate ", " [sqlStringLit v | (v : _) <- rows] <> ")"
 
 
 -- >>> constantToKQLList [["api/users"], ["api/orders"]]
