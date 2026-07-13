@@ -57,6 +57,7 @@ module Utils (
   navTabAttrs,
   popoverTrigger_,
   popoverPanel_,
+  fieldMenuPanel_,
   drawerLoadAttrs_,
   renderMarkdown,
   jsonToMap,
@@ -467,7 +468,7 @@ jsonValueToHtmlTree scope val pathM = do
                 span_ [class_ "text-textBrand"] ":"
               span_ [class_ "text-textBrand ml-2.5 log-item-field-value", term "data-field-path" fullFieldPath'] $ toHtml dfVal
 
-          ul_ ([class_ "dropdown log-item-context-menu menu p-2 shadow-lg bg-bgRaised rounded-box border border-strokeWeak w-96 max-w-[92vw]"] <> popoverPanel_ fieldPopId)
+          ul_ ([class_ "dropdown log-item-context-menu menu p-2 shadow-lg bg-bgRaised rounded-box border border-strokeWeak w-96 max-w-[92vw]"] <> fieldMenuPanel_ fieldPopId)
             $ fieldContextMenuItems_ (StaticField dfPath (Just dfVal)) fieldMenuActions
 
     renderParentType :: Text -> Text -> Text -> Int -> Html () -> Html ()
@@ -1525,6 +1526,13 @@ popoverTrigger_ pid = [term "popovertarget" pid, style_ $ "anchor-name:--anchor-
 
 popoverPanel_ :: Text -> [Attribute]
 popoverPanel_ pid = [id_ pid, term "popover" "auto", style_ $ "position-try:flip-block; position-anchor:--anchor-" <> pid]
+
+
+-- | Panel attrs for the shared field context menu. Adds a bubbling click handler that
+-- closes the popover after an item runs, and `halt`s so the click can't bubble to an
+-- enclosing @<label for>@ (e.g. the facet-section collapse header) and toggle it.
+fieldMenuPanel_ :: Text -> [Attribute]
+fieldMenuPanel_ pid = popoverPanel_ pid <> [[__|on click call me.hidePopover() then halt|]]
 
 
 -- | HTMX attrs that open the global data drawer and load @url@ into it.

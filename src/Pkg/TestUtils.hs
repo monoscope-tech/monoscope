@@ -790,6 +790,9 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
               , convertkitApiKey = ""
               , convertkitApiSecret = ""
               , requestPubsubTopics = ["monoscope-prod-default"]
+              , -- Without this the field defaults to "" (no .env in CI), so clientMetadataH's
+                -- base64→JSON decode of the pusher service account fails and 500s. "e30=" is base64 of "{}".
+                monoscopePusherServiceAccountB64 = bool envConfig.monoscopePusherServiceAccountB64 "e30=" (T.null envConfig.monoscopePusherServiceAccountB64)
               , -- Without this the field defaults to "" (no .env in CI), so DLQ poison
                 -- routes to topic "" and KafkaConsumerSpec's "otlp_deadletter" lookup finds nothing.
                 kafkaDeadLetterTopic = bool envConfig.kafkaDeadLetterTopic "otlp_deadletter" (T.null envConfig.kafkaDeadLetterTopic)
