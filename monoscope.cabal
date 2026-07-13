@@ -130,6 +130,7 @@ extra-source-files:
     static/migrations/0102_prometheus_claim_index.sql
     static/migrations/0103_prometheus_scrape_configs_unique_name.sql
     static/migrations/0104_idle_in_transaction_timeout.sql
+    static/migrations/0105_issue_severity_backfill.sql
 
 source-repository head
   type: git
@@ -1205,6 +1206,7 @@ benchmark utils-bench
   type: exitcode-stdio-1.0
   main-is: Main.hs
   other-modules:
+      ReplayMergeBenchSpec
       UtilsBenchSpec
   hs-source-dirs:
       test/bench
@@ -1234,9 +1236,13 @@ benchmark utils-bench
   build-tool-depends:
       proto-lens-protoc:proto-lens-protoc
   build-depends:
-      hs-opentelemetry-instrumentation-auto
+      base
+    , bytestring
+    , directory
+    , hs-opentelemetry-instrumentation-auto
     , hspec
     , monoscope
     , relude >=1.2.0.0
     , time
+    , zlib
   default-language: GHC2024

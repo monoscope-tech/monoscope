@@ -352,3 +352,7 @@ benchmarks:
       - hspec
       - relude >= 1.2.0.0
       - time
+      - base
+      - bytestring
+      - zlib
+      - directory

@@ -1,4 +1,4 @@
-module Pages.Replay (replayPostH, ReplayPost (..), processReplayEvents, replaySessionGetH, fetchReplaySession, ReplaySessionResp (..), RawJson (..), compressAndMergeReplaySessions, mergeReplaySession, expireOldReplayData, concatRawJsonArrays, sessionFileKeys, splitReplayPayload, ReplayPayload (..), stripJsonNullEscapes, firstEventTimestampRaw) where
+module Pages.Replay (replayPostH, ReplayPost (..), processReplayEvents, replaySessionGetH, fetchReplaySession, ReplaySessionResp (..), RawJson (..), compressAndMergeReplaySessions, mergeReplaySession, expireOldReplayData, concatRawJsonArrays, sessionFileKeys, splitReplayPayload, ReplayPayload (..), stripJsonNullEscapes, firstEventTimestampRaw, claimMergeLease, releaseMergeLease) where
 
 import Codec.Compression.GZip qualified as GZip
 import Conduit (runConduit)
@@ -45,7 +45,7 @@ import Relude.Extra.Tuple (traverseToFst)
 import System.Config (AuthContext (config, jobsPool), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, DB, RespHeaders, addRespHeaders)
-import UnliftIO.Exception (tryAny)
+import UnliftIO.Exception (finally, tryAny)
 
 
 data ReplayPost = ReplayPost
@@ -353,6 +353,31 @@ withError e = HM.insert "error" (toText $ displayException e)
 markMerged :: DB es => Projects.ProjectId -> UUID.UUID -> UTCTime -> Eff es ()
 markMerged pid sid now =
   Hasql.interpExecute_ [HI.sql| UPDATE projects.replay_sessions SET merged = TRUE, updated_at = #{now} WHERE session_id = #{sid} AND project_id = #{pid} |]
+
+
+-- | Atomically claim the per-session merge lease. Returns True iff this worker
+-- now owns it (lease was unheld or older than the 15-minute stale window — the
+-- latter reclaims a lease left behind by a worker that died mid-merge). A merge
+-- pass on a large session holds multi-GB heap for ~a minute; the lease caps
+-- concurrency to one per session so duplicate/queued jobs claim-and-skip instead
+-- of piling on and melting the replica (2026-07-13 incident).
+claimMergeLease :: DB es => Projects.ProjectId -> UUID.UUID -> Eff es Bool
+claimMergeLease pid sid = do
+  rows :: [UUID.UUID] <-
+    Hasql.interp
+      [HI.sql|
+        UPDATE projects.replay_sessions SET merge_started_at = now()
+        WHERE session_id = #{sid} AND project_id = #{pid}
+          AND (merge_started_at IS NULL OR merge_started_at < now() - interval '15 minutes')
+        RETURNING session_id
+      |]
+  pure $ not (null rows)
+
+
+-- | Release the merge lease so the next queued job for this session can proceed.
+releaseMergeLease :: DB es => Projects.ProjectId -> UUID.UUID -> Eff es ()
+releaseMergeLease pid sid =
+  Hasql.interpExecute_ [HI.sql| UPDATE projects.replay_sessions SET merge_started_at = NULL WHERE session_id = #{sid} AND project_id = #{pid} |]
 
 
 data MergeError
@@ -773,8 +798,6 @@ mergeOneSessionByKeys
   -> (UTCTime -> ATBackgroundCtx ())
   -> ATBackgroundCtx ()
 mergeOneSessionByKeys pid sessionId logSuffix afterMerge = do
-  ctx <- Effectful.Reader.Static.ask @AuthContext
-  let logCtx = sessionLogCtx pid sessionId
   projectM <- Projects.projectById pid
   case projectM of
     Nothing -> do
@@ -783,6 +806,14 @@ mergeOneSessionByKeys pid sessionId logSuffix afterMerge = do
       now' <- Time.currentTime
       markMerged pid sessionId now'
     Just p -> do
+      claimed <- claimMergeLease pid sessionId
+      if not claimed
+        then Log.logInfo "Replay merge already in progress for session; skipping duplicate" logCtx
+        else mergeUnderLease p `finally` releaseMergeLease pid sessionId
+  where
+    logCtx = sessionLogCtx pid sessionId
+    mergeUnderLease p = do
+      ctx <- Effectful.Reader.Static.ask @AuthContext
       let (s3Conn, bucket) = projectMinioConn ctx.config p
       allFileKeys <- sessionFileKeys pid sessionId
       let fileKeys = take maxFilesPerMerge allFileKeys

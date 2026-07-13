@@ -13,8 +13,8 @@ import GHC.Conc (getAllocationCounter, setAllocationCounter)
 import Models.Projects.Projects qualified as Projects
 import Data.ByteString qualified as BS
 import Data.HashMap.Strict qualified as HM
-import Data.Time (UTCTime (..), fromGregorian)
-import Pages.Replay (RawJson (..), ReplayPayload (..), ReplaySessionResp (..), concatRawJsonArrays, fetchReplaySession, firstEventTimestampRaw, processReplayEvents, sessionFileKeys, splitReplayPayload, stripJsonNullEscapes)
+import Data.Time (UTCTime (..), addUTCTime, fromGregorian, getCurrentTime)
+import Pages.Replay (RawJson (..), ReplayPayload (..), ReplaySessionResp (..), claimMergeLease, concatRawJsonArrays, fetchReplaySession, firstEventTimestampRaw, processReplayEvents, releaseMergeLease, sessionFileKeys, splitReplayPayload, stripJsonNullEscapes)
 import System.Mem (performGC)
 import Pkg.ErrorMetrics (wireTypeErrorsRef)
 import Pkg.DeriveUtils (UUIDId (..))
@@ -95,6 +95,50 @@ spec = around withTestResources do
         (sid, pid, key1)
       keys <- runQueryEffect tr $ sessionFileKeys pid sid
       keys `shouldBe` [key1]
+      clearReplaySessions tr
+
+  -- Regression for the 2026-07-13 incident: a live 1.4 GiB session had ~24
+  -- MergeReplaySession jobs enqueued and running concurrently, each decompressing
+  -- a 528 MB merged blob into multi-GB heap — every app replica OOM/CPU-melted.
+  -- The lease guarantees at most one merge per (project, session) runs at a time;
+  -- duplicate jobs claim-and-skip.
+  describe "merge lease (per-session serialization)" do
+    let seed tr sid startedAt =
+          void $ withPool tr.trPool $ DBT.execute
+            [sql|
+              INSERT INTO projects.replay_sessions
+                (session_id, project_id, last_event_at, event_file_count, merge_started_at)
+              VALUES (?, ?, now(), 1, ?)
+              ON CONFLICT (session_id) DO UPDATE SET merge_started_at = EXCLUDED.merge_started_at
+            |]
+            (sid, pid, startedAt :: Maybe UTCTime)
+
+    it "claims an unheld session and then refuses a concurrent claim" $ \tr -> do
+      clearReplaySessions tr
+      let sid = UUID.fromWords 0 0 0 200
+      seed tr sid Nothing
+      first' <- runQueryEffect tr $ claimMergeLease pid sid
+      second' <- runQueryEffect tr $ claimMergeLease pid sid
+      (first', second') `shouldBe` (True, False)
+      clearReplaySessions tr
+
+    it "reclaims a stale lease (worker died mid-merge)" $ \tr -> do
+      clearReplaySessions tr
+      let sid = UUID.fromWords 0 0 0 201
+      stale <- addUTCTime (negate 3600) <$> getCurrentTime
+      seed tr sid (Just stale)
+      claimed <- runQueryEffect tr $ claimMergeLease pid sid
+      claimed `shouldBe` True
+      clearReplaySessions tr
+
+    it "release frees the lease for the next worker" $ \tr -> do
+      clearReplaySessions tr
+      let sid = UUID.fromWords 0 0 0 202
+      seed tr sid Nothing
+      _ <- runQueryEffect tr $ claimMergeLease pid sid
+      runQueryEffect tr $ releaseMergeLease pid sid
+      reclaimed <- runQueryEffect tr $ claimMergeLease pid sid
+      reclaimed `shouldBe` True
       clearReplaySessions tr
 
   describe "compressAndMergeReplaySessions batch selection" do
