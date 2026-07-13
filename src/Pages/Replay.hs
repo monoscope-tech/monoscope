@@ -555,9 +555,9 @@ getSessionEvents conn pid bucket sessionId = do
       let mergedRaw = case mergedRes of
             Right (Right r) -> [r] -- (firstTs, raw bytes)
             _ -> [] -- NoSuchKey path
-      -- Sealed shards (the current storage format) sit between the legacy monolith
-      -- and the unmerged individual tail. Tolerate per-shard NoSuchKey (a shard
-      -- removed by a concurrent seal); each shard carries its first-event ts for ordering.
+            -- Sealed shards (the current storage format) sit between the legacy monolith
+            -- and the unmerged individual tail. Tolerate per-shard NoSuchKey (a shard
+            -- removed by a concurrent seal); each shard carries its first-event ts for ordering.
       shardKeys <- liftIO $ listShardKeys conn bucket sessionId
       shardRes <- liftIO $ forM shardKeys $ \sk -> Minio.runMinio conn (fetchRawForMerge bucket (toObjKey sk) True)
       let shardRaws = [r | Right (Right r) <- shardRes]
@@ -819,8 +819,10 @@ buildReplayManifest p sessionId = do
       >>= either (\err -> Nothing <$ Log.logAttention "sessionMetadata lookup failed; continuing without identity" (withError err summaryCtx)) pure
   shardKeys <- liftIO $ listShardKeys conn bucket sessionId
   let shardSegs =
-        map snd $ sortOn fst
-          [(idx, ReplaySegment{key = k, firstTs = fromIntegral tsMs, gzipped = True}) | k <- shardKeys, Just (idx, tsMs) <- [parseShardKey k]]
+        map snd
+          $ sortOn
+            fst
+            [(idx, ReplaySegment{key = k, firstTs = fromIntegral tsMs, gzipped = True}) | k <- shardKeys, Just (idx, tsMs) <- [parseShardKey k]]
       tailTs = maybe 0 (.firstTs) (viaNonEmpty last shardSegs) -- keep the unmerged tail sorting after all shards
   legacyExists <- liftIO $ objectExists conn bucket (UUID.toText sessionId <> "/merged.json.gz")
   tailKeys <- sessionFileKeys pid sessionId
@@ -840,7 +842,7 @@ replaySessionManifestGetH pid sessionId = do
 -- is scoped to this session's prefix so a crafted key can't read another
 -- session's (or another bucket's) objects.
 fetchReplayShard
-  :: (Effectful.Reader.Static.Reader AuthContext :> es, Log :> es, IOE :> es)
+  :: (Effectful.Reader.Static.Reader AuthContext :> es, IOE :> es, Log :> es)
   => Projects.Project -> UUID.UUID -> Maybe Text -> Eff es RawJson
 fetchReplayShard p sessionId mkey = do
   ctx <- Effectful.Reader.Static.ask @AuthContext
@@ -1029,8 +1031,9 @@ mergeOneSession conn bucket sessionId fileKeys = do
           !merged = concatRawJsonArrays [raw | (_, raw, _) <- sorted]
           !compressed = GZip.compress merged
           shardKey = shardKeyFor sessionId idx (round (firstTs :: Double))
-      putRes <- Minio.runMinio conn
-        $ Minio.putObject bucket shardKey (CC.sourceLazy compressed) (Just (BL.length compressed)) Minio.defaultPutObjectOptions
+      putRes <-
+        Minio.runMinio conn
+          $ Minio.putObject bucket shardKey (CC.sourceLazy compressed) (Just (BL.length compressed)) Minio.defaultPutObjectOptions
       whenLeft_ putRes (throwIO . MergePutFailed)
       -- Drop the source files this shard subsumed only after it's durably written
       -- (crash-resumable); NoSuchKey on removal is fine.
