@@ -182,7 +182,7 @@ runServer appLogger env tp = do
       $ [ guard (not consumerOnly) $> async (runSettings warpSettings wrappedServer) -- intentionally unsupervised: Warp crash triggers waitAnyCancel → process exit
         , guard env.config.enablePubsubService $> async (supervise logExc "pubsub" $ Queue.pubsubService appLogger env tp env.config.requestPubsubTopics processMessages)
         , guard (not consumerOnly) $> async (supervise logExc "background-jobs" bgJobWorker)
-        , guard (not consumerOnly) $> async (supervise logExc "otlp-grpc" $ OtlpServer.runServer appLogger env tp)
+        , guard (not consumerOnly && env.config.enableOtlpGrpcService) $> async (supervise logExc "otlp-grpc" $ OtlpServer.runServer appLogger env tp)
         , guard (env.config.enableKafkaService && not (any T.null env.config.kafkaTopics)) $> async (supervise logExc "kafka" $ Queue.kafkaService appLogger env tp Queue.KafkaPrimary "ingest" env.config.kafkaDeadLetterTopic env.config.kafkaTopics env.config.messagesPerPubsubPullBatch OtlpServer.processList)
         , guard (env.config.enableKafkaService && not (any T.null env.config.kafkaTopics)) $> async (supervise logExc "kafka" $ Queue.kafkaService appLogger env tp Queue.KafkaPrimary "ingest" env.config.kafkaDeadLetterTopic env.config.kafkaTopics env.config.messagesPerPubsubPullBatch OtlpServer.processList)
         , -- Small batch: DLQ replay is a retry carousel, not steady-state ingest;

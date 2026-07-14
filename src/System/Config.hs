@@ -66,6 +66,7 @@ data EnvConfig = EnvConfig
   , kafkaUsername :: Text
   , kafkaPassword :: Text
   , enableKafkaService :: Bool
+  , enableOtlpGrpcService :: Bool -- "ENABLE_OTLP_GRPC_SERVICE": bind the gRPC OTLP listener (GRPC_PORT). Off in dev avoids port-4317 rebind clashes on ghcid reload.
   , consumerOnly :: Bool
   -- ^ CONSUMER_ONLY=True runs the message-queue consumers (Kafka/PubSub) plus
   -- the extraction / schema-learning pipeline (it flushes the spans this
@@ -250,6 +251,7 @@ instance DefConfig EnvConfig where
       , openaiSmallModel = "gpt-5.4-nano"
       , kafkaGroupConcurrency = 4
       , enableKafkaDeadLetterService = True
+      , enableOtlpGrpcService = True
       , enablePostgresTelemetryWrites = True
       , extractionWorkerShards = 4
       , extractionQueueCapacity = 64

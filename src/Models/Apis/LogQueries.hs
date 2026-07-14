@@ -8,11 +8,11 @@ module Models.Apis.LogQueries (
   normalizeUrlPath,
   selectLogTable,
   executeSecuredQuery,
+  LogEndpoint (..),
   logExplorerUrlPath,
   getLastSevenDaysTotalRequest,
   fetchLogPatterns,
   fetchSessions,
-  fetchSessionSummary,
   ExpandKind (..),
   fetchEventExamples,
   selectChildSpansAndLogs,
@@ -53,7 +53,7 @@ import Hasql.Interpolate qualified as HI
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Projects.Projects qualified as Projects
 import OpenTelemetry.Attributes qualified as OA
-import Pkg.DeriveUtils (DB, WrappedEnumShow (..), rawSql)
+import Pkg.DeriveUtils (DB, WrappedEnumShow (..), encodeEnumSC, rawSql)
 import Pkg.Drain qualified as Drain
 import Pkg.Parser
 import Pkg.Parser.Expr (flattenedOtelAttributes, transformFlattenedAttribute)
@@ -177,8 +177,16 @@ incrementByOneMillisecond dateStr =
     maybeTime = parseTimeM True defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" dateStr :: Maybe UTCTime
 
 
-logExplorerUrlPath :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Bool -> Text
-logExplorerUrlPath pid q cols cursor since fromV toV layout source recent = "/p/" <> pid.toText <> "/log_explorer/data?" <> T.intercalate "&" params
+-- | Which log-explorer data endpoint a URL targets. 'Data' serves logs/spans;
+-- 'Sessions'/'Patterns' serve their respective aggregate views. The URL segment
+-- is derived from the constructor name via 'encodeEnumSC' (snake_case), so it
+-- can't drift from the constructor.
+data LogEndpoint = Data | Sessions | Patterns
+  deriving stock (Bounded, Enum, Eq, Show)
+
+
+logExplorerUrlPath :: Projects.ProjectId -> LogEndpoint -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Bool -> Text
+logExplorerUrlPath pid endpoint q cols cursor since fromV toV layout source recent = "/p/" <> pid.toText <> "/log_explorer/" <> toText (encodeEnumSC @"" endpoint) <> "?" <> T.intercalate "&" params
   where
     recentTo = cursor >>= (\x -> Just (toText . incrementByOneMillisecond . toString $ x))
     params =
@@ -445,6 +453,12 @@ data SessionRow = SessionRow
 -- regardless of which function builds it, so the only safe path for raw
 -- OTLP text (user_agent, url_path, ...) is to never round-trip through
 -- jsonb at all.
+-- | One decoded row of 'fetchSessions'. The trailing @sum*@ fields are the
+-- session-level summary, CROSS JOINed onto every page row so the header
+-- aggregates ride the same single scan (decoded once, from the head row).
+-- (hasql-interpolate decodes a flat column list, so these live in one record
+-- rather than a tuple of sub-rows; @summBis@ is prefixed only to avoid clashing
+-- with the per-session hourly @bis@ above.)
 data RawSessionRow = RawSessionRow
   { sessionId :: Text
   , userId :: Maybe Text
@@ -456,13 +470,23 @@ data RawSessionRow = RawSessionRow
   , lastSeen :: UTCTime
   , durationNs :: Int64
   , traceCount :: Int64
-  , totalSessions :: Int64
   , services :: V.Vector Text
   , bis :: V.Vector Int64
   , cnts :: V.Vector Int64
   , landingUrl :: Maybe Text
   , userAgent :: Maybe Text
   , firstError :: Maybe Text
+  , totalSessions :: Int64
+  , erroredSessions :: Int64
+  , uniqueUsers :: Int64
+  , uniqueServices :: Int64
+  , medDur :: Int64
+  , p95Dur :: Int64
+  , medEvt :: Int64
+  , totalEvents :: Int64
+  , summBis :: V.Vector Int64
+  , cleanBkt :: V.Vector Int64
+  , errBkt :: V.Vector Int64
   }
   deriving stock (Generic, Show)
   deriving anyclass (HI.DecodeRow)
@@ -581,7 +605,10 @@ fetchLogPatterns enableTfReads pid queryAST dateRange sourceM targetM skip = do
 -- Rows are keyed by attributes___session___id; user identity is taken as the
 -- MAX non-null value within the session (stable for a given user). Pagination
 -- happens before the hourly bucket/service joins so join cost tracks page size.
-fetchSessions :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Bool -> Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Text -> Int -> Eff es (Int, [SessionRow])
+-- The session-level summary (header KPIs + over-time buckets) is computed in the
+-- SAME scan via a @summ@ CTE CROSS JOINed onto every page row, so the sessions
+-- viz reads the window once instead of twice (was a separate 'fetchSessionSummary').
+fetchSessions :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Bool -> Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Text -> Int -> Eff es (SessionSummary, Int, [SessionRow])
 fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
   now <- Time.currentTime
   let sqlCfg = (defSqlQueryCfg pid now (Just SSpans) Nothing){dateRange}
@@ -634,9 +661,31 @@ fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
             -- opening event has no url_path / user_agent.
             (ARRAY_AGG(url_path ORDER BY timestamp) FILTER (WHERE url_path IS NOT NULL AND url_path <> ''))[1] AS landing_url,
             (ARRAY_AGG(user_agent ORDER BY timestamp) FILTER (WHERE user_agent IS NOT NULL AND user_agent <> ''))[1] AS user_agent,
-            (ARRAY_AGG(error_text ORDER BY timestamp) FILTER (WHERE is_error AND error_text IS NOT NULL AND error_text <> ''))[1] AS first_error,
-            COUNT(*) OVER()::BIGINT AS total_sessions
+            (ARRAY_AGG(error_text ORDER BY timestamp) FILTER (WHERE is_error AND error_text IS NOT NULL AND error_text <> ''))[1] AS first_error
           FROM filtered GROUP BY session_id
+        ), sess_bkt AS (
+          -- One row per session, keyed to the bucket of its first event, tagged
+          -- clean/errored. Feeds the header's over-time bar chart.
+          SELECT floor(extract(epoch from first_seen) / #{bucketW})::BIGINT AS bi, (error_count > 0) AS has_err FROM agg
+        ), bkt AS (
+          SELECT bi, COUNT(*) FILTER (WHERE NOT has_err)::BIGINT AS c, COUNT(*) FILTER (WHERE has_err)::BIGINT AS e
+          FROM sess_bkt GROUP BY bi
+        ), summ AS (
+          -- Header aggregates over ALL sessions (not just the page), computed in
+          -- this same scan and CROSS JOINed onto page rows below.
+          SELECT
+            COUNT(*)::BIGINT AS total_sessions,
+            COUNT(*) FILTER (WHERE error_count > 0)::BIGINT AS errored_sessions,
+            COUNT(DISTINCT COALESCE(user_id, user_email)) FILTER (WHERE COALESCE(user_id, user_email) IS NOT NULL)::BIGINT AS unique_users,
+            (SELECT COUNT(DISTINCT service_name) FILTER (WHERE service_name IS NOT NULL)::BIGINT FROM filtered) AS unique_services,
+            COALESCE(PERCENTILE_CONT(0.5)  WITHIN GROUP (ORDER BY duration_ns), 0)::BIGINT AS med_dur,
+            COALESCE(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY duration_ns), 0)::BIGINT AS p95_dur,
+            COALESCE(PERCENTILE_CONT(0.5)  WITHIN GROUP (ORDER BY event_count), 0)::BIGINT AS med_evt,
+            COALESCE(SUM(event_count), 0)::BIGINT AS total_events,
+            COALESCE((SELECT ARRAY_AGG(bi ORDER BY bi) FROM bkt), '{}'::BIGINT[]) AS bis,
+            COALESCE((SELECT ARRAY_AGG(c  ORDER BY bi) FROM bkt), '{}'::BIGINT[]) AS clean_bkt,
+            COALESCE((SELECT ARRAY_AGG(e  ORDER BY bi) FROM bkt), '{}'::BIGINT[]) AS err_bkt
+          FROM agg
         ), page AS (
           SELECT * FROM agg ORDER BY |]
           <> sortColSql
@@ -652,19 +701,49 @@ fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
           FROM hourly GROUP BY session_id
         ) SELECT p.session_id, p.user_id, p.user_email, p.user_name,
             p.event_count, p.error_count, p.first_seen,
-            p.last_seen, p.duration_ns, p.trace_count, p.total_sessions,
+            p.last_seen, p.duration_ns, p.trace_count,
             COALESCE(s.services, '{}'::TEXT[]),
             COALESCE(h.bis, '{}'::BIGINT[]), COALESCE(h.cnts, '{}'::BIGINT[]),
-            p.landing_url, p.user_agent, p.first_error
+            p.landing_url, p.user_agent, p.first_error,
+            sm.total_sessions, sm.errored_sessions, sm.unique_users, sm.unique_services,
+            sm.med_dur, sm.p95_dur, sm.med_evt, sm.total_events,
+            sm.bis, sm.clean_bkt, sm.err_bkt
           FROM page p LEFT JOIN svcs s USING (session_id) LEFT JOIN hourly_agg h USING (session_id)
+          CROSS JOIN summ sm
           ORDER BY p.|]
           <> sortColSql
           <> [HI.sql| DESC NULLS LAST|]
   rawRows :: [RawSessionRow] <- Hasql.withHasqlTimefusion enableTfReads $ Hasql.interp q
   Log.logTrace "fetchSessions: query done" $ AE.object ["rows" AE..= length rawRows]
-  let total = maybe 0 (fromIntegral . (.totalSessions)) $ listToMaybe rawRows
-      allBuckets = concatMap (\r -> map fromIntegral $ V.toList r.bis) rawRows
+  let allBuckets = concatMap (\r -> map fromIntegral $ V.toList r.bis) rawRows
       range = bucketRange allBuckets
+      -- Densify the header's over-time buckets across the full picker range so
+      -- empty periods render as blanks (mirrors the previous fetchSessionSummary).
+      -- The summary columns are identical on every row (CROSS JOIN); read the head.
+      mkSummary s =
+        let fromT = fromMaybe (addUTCTime (-3600) now) (fst dateRange)
+            toT = fromMaybe now (snd dateRange)
+            epochBucket t = floor (utcTimeToPOSIXSeconds t) `div` bucketW
+            pMin = epochBucket fromT
+            pMax = max pMin (epochBucket toT)
+            bisI = map fromIntegral (V.toList s.summBis) :: [Int]
+            dens v = densifyBuckets (pMin, pMax) $ zip bisI (map fromIntegral (V.toList v))
+         in SessionSummary
+              { totalSessions = s.totalSessions
+              , erroredSessions = s.erroredSessions
+              , uniqueUsers = s.uniqueUsers
+              , uniqueServices = s.uniqueServices
+              , medianDurationNs = s.medDur
+              , p95DurationNs = s.p95Dur
+              , medianEvents = s.medEvt
+              , totalEvents = s.totalEvents
+              , bucketWidthSec = bucketW
+              , bucketStartEpoch = pMin * bucketW
+              , clean = dens s.cleanBkt
+              , errored = dens s.errBkt
+              }
+      summary = maybe (SessionSummary 0 0 0 0 0 0 0 0 bucketW 0 [] []) mkSummary (listToMaybe rawRows)
+      total = fromIntegral summary.totalSessions
       toRowWithVolume r =
         SessionRow
           { sessionId = r.sessionId
@@ -683,7 +762,7 @@ fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
           , userAgent = r.userAgent
           , firstError = r.firstError
           }
-  pure (total, map toRowWithVolume rawRows)
+  pure (summary, total, map toRowWithVolume rawRows)
 
 
 -- | Session-level aggregates for the Sessions viz header. Shares the filter
@@ -707,99 +786,6 @@ data SessionSummary = SessionSummary
   }
   deriving stock (Generic, Show)
   deriving (AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake], DAE.OmitNothingFields] SessionSummary
-
-
-fetchSessionSummary
-  :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es)
-  => Bool
-  -> Projects.ProjectId
-  -> [Section]
-  -> (Maybe UTCTime, Maybe UTCTime)
-  -> Eff es SessionSummary
-fetchSessionSummary enableTfReads pid queryAST dateRange = do
-  now <- Time.currentTime
-  let sqlCfg = (defSqlQueryCfg pid now (Just SSpans) Nothing){dateRange}
-      (_, queryComponents) = queryASTToComponents sqlCfg queryAST
-      dateRangeClause = buildDateRange sqlCfg
-      whereCondition = scopedWhere pid.toText queryComponents.whereClause
-      fullWhere = whereCondition <> if T.null dateRangeClause then "" else " AND " <> dateRangeClause
-      bucketW = bucketWidthSecs dateRange now
-      q =
-        [HI.sql|WITH filtered AS (
-          SELECT attributes___session___id AS sid,
-            COALESCE(attributes___user___id, attributes___user___email) AS user_key,
-            resource___service___name AS svc, timestamp, end_time,
-            (lower(level) = 'error' OR severity___severity_number >= 17 OR status_code = 'ERROR') AS is_err
-          FROM otel_logs_and_spans WHERE |]
-          <> rawSql fullWhere
-          <> [HI.sql| AND attributes___session___id IS NOT NULL AND attributes___session___id <> ''
-        ), per_session AS (
-          -- COALESCE around BOOL_OR: spans with no level/severity/status_code
-          -- yield is_err = NULL, so BOOL_OR returns NULL for sessions where
-          -- every event lacks an error signal. Without this default, "NOT
-          -- has_err" below would evaluate to NULL (not TRUE), silently
-          -- dropping clean sessions from the per-bucket counts while still
-          -- counting them in the scalar totals — producing a chart with only
-          -- error bars even when most traffic is clean.
-          SELECT MAX(user_key) AS user_key, COUNT(*)::BIGINT AS events, COALESCE(BOOL_OR(is_err), FALSE) AS has_err,
-            (EXTRACT(EPOCH FROM (MAX(COALESCE(end_time, timestamp)) - MIN(timestamp))) * 1e9)::BIGINT AS dur_ns,
-            floor(extract(epoch from MIN(timestamp)) / #{bucketW})::BIGINT AS bi
-          FROM filtered GROUP BY sid
-        ), bkt AS (
-          SELECT bi, COUNT(*) FILTER (WHERE NOT has_err)::BIGINT AS c, COUNT(*) FILTER (WHERE has_err)::BIGINT AS e
-          FROM per_session GROUP BY bi
-        )
-        SELECT COUNT(*)::BIGINT, COUNT(*) FILTER (WHERE has_err)::BIGINT,
-          COUNT(DISTINCT user_key) FILTER (WHERE user_key IS NOT NULL)::BIGINT,
-          (SELECT COUNT(DISTINCT svc) FILTER (WHERE svc IS NOT NULL)::BIGINT FROM filtered),
-          COALESCE(PERCENTILE_CONT(0.5)  WITHIN GROUP (ORDER BY dur_ns), 0)::BIGINT,
-          COALESCE(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY dur_ns), 0)::BIGINT,
-          COALESCE(PERCENTILE_CONT(0.5)  WITHIN GROUP (ORDER BY events),  0)::BIGINT,
-          COALESCE(SUM(events), 0)::BIGINT,
-          COALESCE((SELECT ARRAY_AGG(bi ORDER BY bi) FROM bkt), '{}'::BIGINT[]),
-          COALESCE((SELECT ARRAY_AGG(c  ORDER BY bi) FROM bkt), '{}'::BIGINT[]),
-          COALESCE((SELECT ARRAY_AGG(e  ORDER BY bi) FROM bkt), '{}'::BIGINT[])
-        FROM per_session|]
-  rows :: [(Int64, Int64, Int64, Int64, Int64, Int64, Int64, Int64, V.Vector Int64, V.Vector Int64, V.Vector Int64)] <-
-    Hasql.withHasqlTimefusion enableTfReads $ Hasql.interp q
-  -- A no-GROUP-BY aggregate always produces exactly one row; zero rows would
-  -- indicate a decoder/arity drift, not a legitimate "no sessions" case.
-  let zeroSumm = SessionSummary 0 0 0 0 0 0 0 0 bucketW 0 [] []
-  case rows of
-    [] -> do
-      Log.logAttention "fetchSessionSummary: aggregate returned zero rows" $ AE.object ["project_id" AE..= pid]
-      pure zeroSumm
-    (total, err, users, svcs, medDur, p95Dur, medEvt, totEvt, bisV, cV, eV) : _ ->
-      if total == 0
-        then pure zeroSumm{erroredSessions = err, uniqueUsers = users, uniqueServices = svcs, totalEvents = totEvt}
-        else do
-          -- Densify over the full picker range, not just the observed
-          -- min..max, so the chart reads as a real timeline: empty periods
-          -- show as blank bars and clusters sit at their correct relative x
-          -- position. The defaults mirror bucketWidthSecs so an absent
-          -- `from`/`to` behaves identically to the width calculation.
-          let fromT = fromMaybe (addUTCTime (-3600) now) (fst dateRange)
-              toT = fromMaybe now (snd dateRange)
-              epochBucket t = floor (utcTimeToPOSIXSeconds t) `div` bucketW
-              pickerMinB = epochBucket fromT
-              pickerMaxB = max pickerMinB (epochBucket toT)
-              bisI = map fromIntegral $ V.toList bisV :: [Int]
-              dens v = densifyBuckets (pickerMinB, pickerMaxB) $ zip bisI (map fromIntegral $ V.toList v)
-          pure
-            SessionSummary
-              { totalSessions = total
-              , erroredSessions = err
-              , uniqueUsers = users
-              , uniqueServices = svcs
-              , medianDurationNs = medDur
-              , p95DurationNs = p95Dur
-              , medianEvents = medEvt
-              , totalEvents = totEvt
-              , bucketWidthSec = bucketW
-              , bucketStartEpoch = pickerMinB * bucketW
-              , clean = dens cV
-              , errored = dens eV
-              }
 
 
 -- | Which aggregate group to expand in the inline detail view.

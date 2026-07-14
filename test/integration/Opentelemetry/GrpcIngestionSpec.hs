@@ -2,7 +2,13 @@
 
 module Opentelemetry.GrpcIngestionSpec (spec) where
 
+import Control.Exception (ErrorCall (..), evaluate)
+import Data.Aeson qualified as AE
+import Data.Aeson.Key (fromText)
+import Data.Aeson.KeyMap qualified as KM
 import Data.Effectful.Hasql qualified as Hasql
+import Data.List (isInfixOf)
+import Data.Set qualified as Set
 import Data.Time (addUTCTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
@@ -15,7 +21,6 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Hasql.Interpolate qualified as HI
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.GRPC.Common (GrpcError (..), GrpcException (..))
 import Network.GRPC.Common.Protobuf (Proto (..))
 import Opentelemetry.OtlpServer qualified as OtlpServer
@@ -25,20 +30,16 @@ import Pages.Replay qualified as Replay
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
-import Data.Aeson qualified as AE
-import Data.Aeson.KeyMap qualified as KM
-import Data.Aeson.Key (fromText)
-import Test.Hspec (Spec, aroundAll, sequential, describe, expectationFailure, it, shouldBe, shouldContain, shouldSatisfy, shouldThrow)
-import Data.List (isInfixOf)
-import Data.Set qualified as Set
-import Control.Exception (ErrorCall (..), evaluate)
+import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, sequential, shouldBe, shouldContain, shouldSatisfy, shouldThrow)
 
 
 pid :: Projects.ProjectId
 pid = UUIDId UUID.nil
 
+
 testTimeRange :: (Text, Text)
 testTimeRange = (toText $ iso8601Show $ addUTCTime (-3600) frozenTime, toText $ iso8601Show $ addUTCTime 3600 frozenTime)
+
 
 -- | Helper to query logs via the dedicated data endpoint (returns LogResult).
 queryLogs :: TestResources -> Maybe Text -> IO Log.LogResult
@@ -46,15 +47,18 @@ queryLogs tr queryM = do
   let (timeFrom, timeTo) = testTimeRange
   snd <$> toServantResponse tr (Log.logExplorerDataH pid queryM Nothing Nothing Nothing (Just timeFrom) (Just timeTo) Nothing Nothing)
 
+
 -- | Helper to query the sessions viz endpoint (returns SessionsView).
 queryLogsViz :: TestResources -> Maybe Text -> Text -> IO Log.SessionsView
 queryLogsViz tr queryM vizType = queryLogsVizSorted tr queryM vizType Nothing
+
 
 queryLogsVizSorted :: TestResources -> Maybe Text -> Text -> Maybe Text -> IO Log.SessionsView
 queryLogsVizSorted tr queryM vizType sortByM = do
   unless (vizType == "sessions") $ fail ("queryLogsVizSorted only supports the sessions viz, got: " <> toString vizType)
   let (timeFrom, timeTo) = testTimeRange
   snd <$> toServantResponse tr (Log.logSessionsH pid queryM Nothing (Just timeFrom) (Just timeTo) Nothing sortByM)
+
 
 -- | Helper to extract the row dataset from a LogResult.
 expectLogsJson :: Log.LogResult -> IO (V.Vector (V.Vector AE.Value))
@@ -161,8 +165,9 @@ spec = sequential $ aroundAll withTestResources do
           bodies = [tag <> "/" <> show i | i <- [1 .. bulkN]]
       void $ OtlpServer.logsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ createOtelLogAtTime key bodies frozenTime)
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
-      counts :: [Int64] <- runQueryEffect tr
-        $ Hasql.interp [HI.sql|SELECT count(*)::bigint FROM otel_logs_and_spans WHERE body::text LIKE '%' || #{tag} || '%'|]
+      counts :: [Int64] <-
+        runQueryEffect tr
+          $ Hasql.interp [HI.sql|SELECT count(*)::bigint FROM otel_logs_and_spans WHERE body::text LIKE '%' || #{tag} || '%'|]
       counts `shouldBe` [fromIntegral bulkN]
 
     -- Tests for gRPC Authorization header authentication (NEW!)
@@ -269,7 +274,7 @@ spec = sequential $ aroundAll withTestResources do
 
         result <- queryLogsViz tr Nothing "sessions"
         case result of
-          Log.SessionsView total sessionRows -> do
+          Log.SessionsView total sessionRows summaryM -> do
             total `shouldBe` 2
             V.length sessionRows `shouldBe` 2
             let findBySid sid = V.find (\s -> s.sessionId == sid) sessionRows
@@ -286,6 +291,15 @@ spec = sequential $ aroundAll withTestResources do
                 s.errorCount `shouldBe` 0
                 s.userEmail `shouldBe` Just "bob@example.com"
               Nothing -> expectationFailure "session xyz not found"
+            -- The session summary is computed in the SAME scan as the rows (single
+            -- scan, P1) and reconciles with them: 2 sessions, 1 errored, 2 users, 6 events.
+            case summaryM of
+              Just summ -> do
+                summ.totalSessions `shouldBe` 2
+                summ.erroredSessions `shouldBe` 1
+                summ.uniqueUsers `shouldBe` 2
+                summ.totalEvents `shouldBe` 6
+              Nothing -> expectationFailure "session summary missing from first page"
       it "Test 11.2: KQL filter narrows sessions result to a single user" $ \tr -> do
         key <- createTestAPIKey tr pid "sessions-filter-key"
         -- Unique emails are REQUIRED: examples share one DB (sequential $ aroundAll),
@@ -295,7 +309,7 @@ spec = sequential $ aroundAll withTestResources do
         void $ runAllBackgroundJobs frozenTime tr.trATCtx
         result <- queryLogsViz tr (Just "attributes.user.email == \"alice-filter@example.com\"") "sessions"
         case result of
-          Log.SessionsView _ sessionRows -> do
+          Log.SessionsView _ sessionRows _ -> do
             V.length sessionRows `shouldBe` 1
             (V.head sessionRows).sessionId `shouldBe` "s1-filter"
       it "Test 11.3: sessions with missing user identity fields still aggregate" $ \tr -> do
@@ -306,7 +320,7 @@ spec = sequential $ aroundAll withTestResources do
         void $ runAllBackgroundJobs frozenTime tr.trATCtx
         result <- queryLogsViz tr Nothing "sessions"
         case result of
-          Log.SessionsView _ sessionRows -> do
+          Log.SessionsView _ sessionRows _ -> do
             case V.find (\s -> s.sessionId == "anon-sess") sessionRows of
               Just s -> do
                 s.eventCount `shouldBe` 3
@@ -320,8 +334,9 @@ spec = sequential $ aroundAll withTestResources do
           ingestSessionEvent tr key ("GET /expand/" <> show i) [("session.id", "expand-sess"), ("user.id", "eu1")] False frozenTime
         void $ runAllBackgroundJobs frozenTime tr.trATCtx
         let (timeFrom, timeTo) = testTimeRange
-        (_, expandResult) <- toServantResponse tr
-          $ Log.apiLogExpandH pid (Just "session") (Just "expand-sess") Nothing Nothing Nothing (Just timeFrom) (Just timeTo)
+        (_, expandResult) <-
+          toServantResponse tr
+            $ Log.apiLogExpandH pid (Just "session") (Just "expand-sess") Nothing Nothing Nothing (Just timeFrom) (Just timeTo)
         let field k = case expandResult of AE.Object o -> KM.lookup (fromText k) o; _ -> Nothing
             rows = fromMaybe [] $ AE.decode @[AE.Value] . AE.encode =<< field "rows"
             cols = fromMaybe [] $ AE.decode @[Text] . AE.encode =<< field "cols"
@@ -332,22 +347,30 @@ spec = sequential $ aroundAll withTestResources do
 
       it "Test 11.5: expand endpoint rejects missing key with 400" $ \tr -> do
         let (timeFrom, timeTo) = testTimeRange
-        (do (h, _) <- toServantResponse tr
-              (Log.apiLogExpandH pid (Just "session") Nothing Nothing Nothing Nothing (Just timeFrom) (Just timeTo))
-            evaluate h >> pass)
+        ( do
+            (h, _) <-
+              toServantResponse
+                tr
+                (Log.apiLogExpandH pid (Just "session") Nothing Nothing Nothing Nothing (Just timeFrom) (Just timeTo))
+            evaluate h >> pass
+          )
           `shouldThrow` \(ErrorCall msg) -> "400" `isInfixOf` msg
 
       it "Test 11.6: expand endpoint rejects invalid kind with 400" $ \tr -> do
         let (timeFrom, timeTo) = testTimeRange
-        (do (h, _) <- toServantResponse tr
-              (Log.apiLogExpandH pid (Just "invalid") (Just "some-key") Nothing Nothing Nothing (Just timeFrom) (Just timeTo))
-            evaluate h >> pass)
+        ( do
+            (h, _) <-
+              toServantResponse
+                tr
+                (Log.apiLogExpandH pid (Just "invalid") (Just "some-key") Nothing Nothing Nothing (Just timeFrom) (Just timeTo))
+            evaluate h >> pass
+          )
           `shouldThrow` \(ErrorCall msg) -> "400" `isInfixOf` msg
 
       it "Test 11.7: sort_by=events orders sessions by event count" $ \tr -> do
         result <- queryLogsVizSorted tr Nothing "sessions" (Just "events")
         case result of
-          Log.SessionsView _ sessionRows -> do
+          Log.SessionsView _ sessionRows _ -> do
             let counts = V.toList $ V.map (.eventCount) sessionRows
             counts `shouldBe` sortBy (flip compare) counts
       -- Regression for cross-project session leak: a user-supplied filter must
@@ -358,41 +381,56 @@ spec = sequential $ aroundAll withTestResources do
         let otherPid = UUIDId (UUID.fromWords 0xdeadbeef 0xcafe0001 0x0 0x0) :: Projects.ProjectId
             leakEmail = "leak@external.com" :: Text
             leakSess = "cross-project-leak-sess" :: Text
-        _ <- withPool tr.trPool $ DBT.execute
-          [sql| INSERT INTO projects.projects (id, title, payment_plan, active, weekly_notif, daily_notif)
+        _ <-
+          withPool tr.trPool
+            $ DBT.execute
+              [sql| INSERT INTO projects.projects (id, title, payment_plan, active, weekly_notif, daily_notif)
                 VALUES (?, 'Other', 'Startup', true, true, true)
                 ON CONFLICT (id) DO NOTHING |]
-          (Only otherPid)
-        _ <- withPool tr.trPool $ DBT.execute
-          [sql| INSERT INTO otel_logs_and_spans
+              (Only otherPid)
+        _ <-
+          withPool tr.trPool
+            $ DBT.execute
+              [sql| INSERT INTO otel_logs_and_spans
                   (project_id, timestamp, name, context___trace_id,
                    attributes___session___id, attributes___user___email, attributes___user___id,
                    summary)
                 VALUES (?, ?, 'GET /leak', 'trace-leak',
                         ?, ?, 'leak-user', '{}'::TEXT[]) |]
-          (otherPid, frozenTime, leakSess, leakEmail)
+              (otherPid, frozenTime, leakSess, leakEmail)
 
         -- Same session.id also exists for `pid`, with a different user — this
         -- is the realistic case where the filter targets the other project.
         key <- createTestAPIKey tr pid "sessions-isolation-key"
-        ingestSessionEvent tr key "GET /own"
-          [("session.id", leakSess), ("user.email", "own@example.com")] False frozenTime
+        ingestSessionEvent
+          tr
+          key
+          "GET /own"
+          [("session.id", leakSess), ("user.email", "own@example.com")]
+          False
+          frozenTime
         void $ runAllBackgroundJobs frozenTime tr.trATCtx
 
         -- Filter by the external email: must return zero sessions from `pid`.
         emailFilter <- queryLogsViz tr (Just ("attributes.user.email == \"" <> leakEmail <> "\"")) "sessions"
         case emailFilter of
-          Log.SessionsView total rows -> do
+          Log.SessionsView total rows _ -> do
             total `shouldBe` 0
             V.length rows `shouldBe` 0
         -- Expanding the shared session with the external-email filter must
         -- also return zero rows (fetchEventExamples path).
         let (timeFrom, timeTo) = testTimeRange
-        (_, expandResult) <- toServantResponse tr
-          $ Log.apiLogExpandH pid (Just "session") (Just leakSess)
+        (_, expandResult) <-
+          toServantResponse tr
+            $ Log.apiLogExpandH
+              pid
+              (Just "session")
+              (Just leakSess)
               Nothing
               (Just ("attributes.user.email == \"" <> leakEmail <> "\""))
-              Nothing (Just timeFrom) (Just timeTo)
+              Nothing
+              (Just timeFrom)
+              (Just timeTo)
         let rows = case expandResult of
               AE.Object o -> fromMaybe [] $ AE.decode @[AE.Value] . AE.encode =<< KM.lookup (fromText "rows") o
               _ -> []
@@ -414,7 +452,7 @@ spec = sequential $ aroundAll withTestResources do
         void $ runAllBackgroundJobs frozenTime tr.trATCtx
         result <- queryLogsViz tr (Just "attributes.session.id == \"ctx-sess\"") "sessions"
         case result of
-          Log.SessionsView _ rows -> case V.find (\s -> s.sessionId == "ctx-sess") rows of
+          Log.SessionsView _ rows _ -> case V.find (\s -> s.sessionId == "ctx-sess") rows of
             Just s -> do
               s.landingUrl `shouldBe` Just "/login"
               s.userAgent `shouldBe` Just "Mozilla/5.0 ContextProbe"
@@ -427,18 +465,23 @@ spec = sequential $ aroundAll withTestResources do
       it "Test 11.10: replaySessionGetH does not leak session metadata across projects" $ \tr -> do
         let otherPid = UUIDId (UUID.fromWords 0xdeadbeef 0xcafe0002 0x0 0x0) :: Projects.ProjectId
         sharedSessionId <- liftIO UUIDV4.nextRandom
-        _ <- withPool tr.trPool $ DBT.execute
-          [sql| INSERT INTO projects.projects (id, title, payment_plan, active, weekly_notif, daily_notif)
+        _ <-
+          withPool tr.trPool
+            $ DBT.execute
+              [sql| INSERT INTO projects.projects (id, title, payment_plan, active, weekly_notif, daily_notif)
                 VALUES (?, 'Other2', 'Startup', true, true, true)
                 ON CONFLICT (id) DO NOTHING |]
-          (Only otherPid)
-        _ <- withPool tr.trPool $ DBT.execute
-          [sql| INSERT INTO projects.replay_sessions
+              (Only otherPid)
+        _ <-
+          withPool tr.trPool
+            $ DBT.execute
+              [sql| INSERT INTO projects.replay_sessions
                   (session_id, project_id, last_event_at, user_id, user_email, user_name)
                 VALUES (?, ?, ?, 'leaked-user', 'leaked@external.com', 'Leaked Name') |]
-          (sharedSessionId, otherPid, frozenTime)
-        (_, result) <- toServantResponse tr
-          $ Replay.replaySessionGetH pid sharedSessionId
+              (sharedSessionId, otherPid, frozenTime)
+        (_, result) <-
+          toServantResponse tr
+            $ Replay.replaySessionGetH pid sharedSessionId
         let lookupKey k = case AE.decode (AE.encode result) of Just (AE.Object o) -> KM.lookup (fromText k) o; _ -> Nothing
         lookupKey "userEmail" `shouldSatisfy` (`elem` [Nothing, Just AE.Null])
         lookupKey "userId" `shouldSatisfy` (`elem` [Nothing, Just AE.Null])

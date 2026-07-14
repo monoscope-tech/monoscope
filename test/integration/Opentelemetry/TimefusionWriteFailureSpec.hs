@@ -13,7 +13,7 @@ import Data.ProtoLens (encodeMessage)
 import Data.These.Combinators (isThat)
 import Data.UUID qualified as UUID
 import Data.Effectful.Hasql qualified as EHasql
-import Database.PostgreSQL.Simple (Only (..), Query, execute_, query)
+import Database.PostgreSQL.Simple (Query, execute_)
 import Hasql.Errors qualified as HE
 import Hasql.Interpolate qualified as HI
 import Hasql.Pool qualified as HP

@@ -486,6 +486,7 @@ data LogExplorerRoutes' mode = LogExplorerRoutes'
   , logExplorerDataGet :: mode :- "log_explorer" :> "data" :> QPT "query" :> QPT "cols" :> QPU "cursor" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QPT "target-spans" :> Get '[JSON] (RespHeaders Log.LogResult)
   , logExplorerPatternsGet :: mode :- "log_explorer" :> "patterns" :> QPT "query" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QPT "pattern_target" :> QPI "aggregate_skip" :> Get '[JSON] (RespHeaders Log.PatternsView)
   , logExplorerSessionsGet :: mode :- "log_explorer" :> "sessions" :> QPT "query" :> QPT "since" :> QPT "from" :> QPT "to" :> QPI "aggregate_skip" :> QPT "sort_by" :> Get '[JSON] (RespHeaders Log.SessionsView)
+  , logExplorerSchemaGet :: mode :- "log_explorer" :> "schema" :> Get '[JSON] (RespHeaders AE.Value)
   , saveQueryPost :: mode :- "log_explorer" :> "queries" :> ReqBody '[FormUrlEncoded] Log.SaveQueryForm :> Post '[HTML] (RespHeaders Log.QueryLibraryView)
   , deleteQueryPost :: mode :- "log_explorer" :> "queries" :> Capture "id" Text :> Delete '[HTML] (RespHeaders Log.QueryLibraryView)
   , alertFormGet :: mode :- "log_explorer" :> "alert_form" :> QPT "alert" :> Get '[HTML] (RespHeaders (Html ()))
@@ -871,6 +872,7 @@ logExplorerServer pid =
     , logExplorerDataGet = Log.logExplorerDataH pid
     , logExplorerPatternsGet = Log.logPatternsH pid
     , logExplorerSessionsGet = Log.logSessionsH pid
+    , logExplorerSchemaGet = Log.logExplorerSchemaH pid
     , saveQueryPost = Log.saveQueryH pid
     , deleteQueryPost = Log.deleteQueryH pid
     , alertFormGet = Log.alertFormH pid

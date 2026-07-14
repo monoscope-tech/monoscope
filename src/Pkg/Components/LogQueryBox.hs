@@ -1,6 +1,6 @@
 {-# OPTIONS_GHC -Wno-orphans #-}
 
-module Pkg.Components.LogQueryBox (logQueryBox_, visTypes, queryLibrary_, queryEditorInitializationCode, LogQueryBoxConfig (..), visualizationTabs_) where
+module Pkg.Components.LogQueryBox (logQueryBox_, visTypes, queryLibrary_, queryEditorInitializationCode, enrichSchemaWithFacets, LogQueryBoxConfig (..), visualizationTabs_) where
 
 import Data.Aeson qualified as AE
 import Data.Default
@@ -50,7 +50,6 @@ data LogQueryBoxConfig = LogQueryBoxConfig
   -- ^ Extra content rendered mobile-only in the viz tabs row
   , parseError :: Maybe Text
   -- ^ Server-side parse error to display inline on page load
-  , facetData :: Maybe FacetData
   }
   deriving (Generic, Show)
   deriving anyclass (Default)
@@ -312,7 +311,7 @@ logQueryBox_ config = do
               span_ "Create monitor"
 
   -- Include initialization code for the query editor
-  queryEditorInitializationCode config.queryLibRecent config.queryLibSaved config.vizType config.facetData
+  queryEditorInitializationCode config.queryLibRecent config.queryLibSaved config.vizType config.pid
 
 
 -- | Helper for visualizing the data with different chart types
@@ -350,7 +349,8 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
                               send 'update-widget' to #{@data-container-id}
                             end
                             if #resultTable exists
-                              set #resultTable's mode to (my.value if my.value is 'patterns' or my.value is 'sessions' else 'logs')
+                              set #resultTable's mode to my.value
+                              set #resultTable's mode to 'logs' unless my.value is 'patterns' or my.value is 'sessions'
                               call #resultTable.refetchLogs()
                             end
                             if window.swapSessionsRegionIfNeeded then call window.swapSessionsRegionIfNeeded(my.value, prevViz)
@@ -573,11 +573,15 @@ enrichSchemaWithFacets schema (FacetData facetMap) =
 
 
 -- | Initialization code for the query editor that sets up schema data, query library, and popular searches
-queryEditorInitializationCode :: V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Maybe Text -> Maybe FacetData -> Html ()
-queryEditorInitializationCode queryLibRecent queryLibSaved vizTypeM facetDataM = do
+queryEditorInitializationCode :: V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Maybe Text -> Projects.ProjectId -> Html ()
+queryEditorInitializationCode queryLibRecent queryLibSaved vizTypeM pid = do
   let queryLibData = queryLibRecent <> queryLibSaved
       queryLibDataJson = decodeUtf8 $ AE.encode queryLibData
-      schemaJson = decodeUtf8 $ AE.encode $ maybe Schema.telemetrySchemaJson (enrichSchemaWithFacets Schema.telemetrySchema) facetDataM
+      -- The (~365KB) enriched span schema is fetched from a dedicated endpoint
+      -- rather than inlined, so it's out of the page payload and re-encode path.
+      -- Cached in a window promise so it's fetched once per SPA session (reused
+      -- across HTMX morph swaps), not on every render.
+      schemaUrl = "/p/" <> pid.toText <> "/log_explorer/schema"
       popularQueriesJson = decodeUtf8 $ AE.encode Schema.popularOtelQueriesJson
       vizType = fromMaybe "logs" vizTypeM
   script_
@@ -615,21 +619,47 @@ queryEditorInitializationCode queryLibRecent queryLibSaved vizTypeM facetDataM =
       const retry = () => { if (++_initRetries < 80) setTimeout(initEditor, 50); };
       if (!editor || !editor.setQueryLibrary || !window.schemaManager?.setSchemaData) { retry(); return; }
       editor.setQueryLibrary($queryLibDataJson);
-      window.schemaManager.setSchemaData('spans', $schemaJson);
-      const queryBuilder = document.querySelector('query-builder');
-      if (queryBuilder?.refreshFieldSuggestions) queryBuilder.refreshFieldSuggestions();
+      window.__spanSchemaPromise = window.__spanSchemaPromise || fetch("$schemaUrl", {headers: {Accept: "application/json"}, credentials: "include"}).then(r => r.json());
+      window.__spanSchemaPromise.then(s => {
+        window.schemaManager.setSchemaData('spans', s);
+        const qb = document.querySelector('query-builder');
+        if (qb?.refreshFieldSuggestions) qb.refreshFieldSuggestions();
+      }).catch(e => console.warn('[query-editor] schema fetch failed', e));
       if (editor.setPopularSearches) editor.setPopularSearches($popularQueriesJson);
     })();
 
-    // Swap the server-rendered #page-summary-region when the viz tab change
-    // crosses the sessions boundary. Sessions renders a session-level summary;
-    // other viz types render the chart+latency widgets. Without this, switching
-    // to/from sessions only updates the result-table mode and the URL, leaving
-    // the summary region stale until a full reload.
+    // Bucket-bar click handler for the sessions header. Defined here (not in the
+    // header markup) so the header stays script-free and can be injected via
+    // innerHTML from the sessions data response. Dispatches the same update-query
+    // event the log-list uses for chart-zoom so the table refetches.
+    window.__sessionsBucketFilter = function(fromEpoch, toEpoch) {
+      if (!Number.isFinite(fromEpoch) || !Number.isFinite(toEpoch) || fromEpoch <= 0) return;
+      const from = new Date(fromEpoch * 1000).toISOString();
+      const to = new Date(toEpoch * 1000).toISOString();
+      if (window.updateTimePicker) {
+        window.updateTimePicker({ from, to }, { skipSetParams: true });
+      } else {
+        console.warn('[sessions-header] updateTimePicker missing; picker UI will not reflect filter');
+      }
+      const p = new URLSearchParams(window.location.search);
+      p.set('from', from); p.set('to', to); p.delete('since');
+      const url = window.location.pathname + '?' + p.toString() + window.location.hash;
+      window.history.replaceState({}, '', url);
+      document.dispatchEvent(new CustomEvent('update-query', { bubbles: true, detail: { source: 'sessions-header-bar', timeRange: from + ' \u2192 ' + to } }));
+    };
+
+    // Swap the #page-summary-region when the viz tab change crosses the sessions
+    // boundary. Switching TO sessions: show the skeleton and let the sessions data
+    // refetch (log-list) inject the freshly-scanned summary — no extra scan here.
+    // Switching AWAY from sessions: fetch the chart+latency region via HTMX.
     window.swapSessionsRegionIfNeeded = function(newViz, prevViz) {
       if (newViz !== 'sessions' && prevViz !== 'sessions') return;
       const region = document.getElementById('page-summary-region');
-      if (!region || !window.htmx) return;
+      if (!region) return;
+      const tpl = document.getElementById(newViz === 'sessions' ? 'sessions-summary-skeleton' : 'chart-summary-skeleton');
+      if (tpl) { region.setAttribute('aria-busy', 'true'); region.innerHTML = tpl.innerHTML; }
+      if (newViz === 'sessions') return; // summary arrives with the data refetch; don't scan again
+      if (!window.htmx) return;
       const url = new URL(window.location);
       url.searchParams.set('viz_type', newViz);
       window.htmx.ajax('GET', url.pathname + url.search, {

@@ -223,12 +223,33 @@ export class LogList extends LitElement {
   private async workerFetch(url: string): Promise<{ tree: any[]; meta: any }> {
     // Patterns / sessions: fetch directly, no span grouping needed
     if (this.isAggregate || this.mode === 'sessions') {
-      const resp = await fetch(url, { headers: { Accept: 'application/json' }, credentials: 'include' });
-      if (!resp.ok) throw new Error(resp.status === 401 ? 'Session expired, please refresh' : `Server error (${resp.status})`);
-      const data = await resp.json();
+      // Consume the <head> preload (server points it at the matching viz endpoint)
+      // so the initial aggregate load overlaps shell render instead of starting
+      // only now. Subsequent refetches fall through to a direct fetch.
+      const early = (window as any).logDataPromise;
+      let data: any;
+      if (early) {
+        (window as any).logDataPromise = null;
+        data = await early;
+      } else {
+        const resp = await fetch(url, { headers: { Accept: 'application/json' }, credentials: 'include' });
+        if (!resp.ok) throw new Error(resp.status === 401 ? 'Session expired, please refresh' : `Server error (${resp.status})`);
+        data = await resp.json();
+      }
       if (data.error) throw new Error(data.message || 'Server error');
       const colIdxMap = data.colIdxMap || {};
       const isSessions = this.mode === 'sessions';
+      // The sessions summary is computed in the same scan as the rows and shipped
+      // as pre-rendered HTML; inject it into the (skeleton) summary region. The
+      // header is script-free (bucket-filter handler lives in the page init), and
+      // tippy tooltips are globally delegated, so innerHTML injection is safe.
+      if (isSessions && typeof data.summaryHtml === 'string') {
+        const region = document.getElementById('page-summary-region');
+        if (region) {
+          region.innerHTML = data.summaryHtml;
+          region.removeAttribute('aria-busy');
+        }
+      }
       const tree = (data.logsData || []).map((row: any[]) => {
         const sessionId = isSessions ? (row[colIdxMap['trace_id']] as string) || '' : '';
         const eventCount = isSessions ? (row[colIdxMap['event_count']] as number) || 0 : 0;
@@ -719,6 +740,17 @@ export class LogList extends LitElement {
       clearInterval(this.liveStreamInterval);
       this.liveStreamInterval = null; // else handleLiveToggle's !interval guard skips restart on switch-back
       this.isLiveStreaming = false;
+    }
+
+    // Switching viz mode (logs↔patterns↔sessions) replaces the result set with a
+    // differently-shaped one via a fresh fetch that can take seconds. Clear stale
+    // rows so the loading skeleton (gated on an empty spanListTree) shows during
+    // the transition instead of freezing the previous mode's rows with no feedback.
+    // Guard on a defined old value so the initial undefined→mode set doesn't wipe seeded rows.
+    if (changedProperties.has('mode') && changedProperties.get('mode') !== undefined) {
+      this.spanListTree = [];
+      this.seenIds.clear();
+      this.loadedCount = 0;
     }
 
     if (this.shouldScrollToBottom && this.flipDirection) {

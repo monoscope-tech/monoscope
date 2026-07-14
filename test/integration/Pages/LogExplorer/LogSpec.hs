@@ -443,7 +443,7 @@ spec = around withTestResources do
       let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) frozenTime
           toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 frozenTime
       (_, sv) <- testServant tr $ Log.logSessionsH testPid Nothing fromTime Nothing toTime Nothing Nothing
-      case sv of Log.SessionsView total _ -> total `shouldSatisfy` (>= 0)
+      case sv of Log.SessionsView total _ _ -> total `shouldSatisfy` (>= 0)
 
   describe "Alert form endpoint (alertFormH)" do
     it "renders the create-monitor form" \tr -> do

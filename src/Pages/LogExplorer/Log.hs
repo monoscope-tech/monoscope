@@ -1,6 +1,7 @@
 module Pages.LogExplorer.Log (
   apiLogH,
   logExplorerDataH,
+  logExplorerSchemaH,
   logPatternsH,
   logSessionsH,
   saveQueryH,
@@ -55,10 +56,11 @@ import Lucid.Hyperscript (__)
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.Schema qualified as Schema
 import NeatInterpolation (text)
 import Numeric (showFFloat)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs, pageActions, pageTitle)
-import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), logQueryBox_, queryEditorInitializationCode, queryLibrary_)
+import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), enrichSchemaWithFacets, logQueryBox_, queryLibrary_)
 import Pkg.Components.TimePicker qualified as Components
 import Pkg.Components.Widget (WidgetAxis (..), WidgetType (WTTimeseries, WTTimeseriesLine))
 import Pkg.Components.Widget qualified as Widget
@@ -695,23 +697,21 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
     Nothing -> pure Nothing
   let effectiveVizType = vizTypeM <|> ((.visualizationType) <$> alertDM)
 
-  -- Only shell-side queries: query library, facets, free-tier, and — for the
-  -- sessions viz — the session-level summary that renders in the page header.
-  (queryLibE, facetSummaryE, freeTierStatusE, sessionSummary) <- Ki.scoped \scope -> do
+  -- Only shell-side queries: query library, facets, free-tier. The sessions
+  -- summary is no longer computed here — it rides along the sessions data fetch
+  -- (single scan, see fetchSessions) and is injected into #page-summary-region
+  -- client-side, so the shell renders a skeleton instead of blocking on it.
+  (queryLibE, facetSummaryE, freeTierStatusE) <- Ki.scoped \scope -> do
     let aw = Ki.atomically . Ki.await
     t1 <- forkWithCtx scope $ tryAny $ Projects.queryLibHistoryForUser pid sess.persistentSession.userId
     t2 <- forkWithCtx scope $ tryAny $ SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" (fromMaybe (addUTCTime (-86400) now) fromD) (fromMaybe now toD)
     t3 <- forkWithCtx scope $ tryAny $ checkFreeTierStatus pid project.paymentPlan
-    t4 <- forkWithCtx scope $ case effectiveVizType of
-      Just "sessions" -> Just . first (show @Text) <$> tryAny (LogQueries.fetchSessionSummary authCtx.env.enableTimefusionReads pid queryAST (fromD, toD))
-      _ -> pure Nothing
-    (,,,) <$> aw t1 <*> aw t2 <*> aw t3 <*> aw t4
+    (,,) <$> aw t1 <*> aw t2 <*> aw t3
 
   let logErr label res = whenLeft_ (void res) (Log.logAttention ("Log explorer " <> label <> " failed") . show @Text)
   logErr "queryLib" queryLibE
   logErr "facets" facetSummaryE
   logErr "freeTierStatus" freeTierStatusE
-  whenJust sessionSummary \s -> whenLeft_ s (Log.logAttention "fetchSessionSummary failed")
 
   let queryLib = fromRight [] queryLibE
       facetSummary = join $ rightToMaybe facetSummaryE
@@ -724,7 +724,16 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
     $ withResource authCtx.jobsPool \conn ->
       void $ createJob conn "background_jobs" $ BackgroundJobs.GenerateOtelFacetsBatch (V.singleton pid) now
 
-  let preloadUrl = T.replace "\"" "%22" $ LogQueries.logExplorerUrlPath pid queryM' cols' Nothing sinceM fromM toM Nothing sourceM False
+  -- Preload the data fetch from <head> so it overlaps shell render instead of
+  -- starting only after the log-list web component boots. Point it at the endpoint
+  -- matching the active viz — otherwise the sessions/patterns page fires a wasted
+  -- logs query that its transport never consumes (and which contends with the
+  -- real aggregate fetch).
+  let dataEndpoint = case effectiveVizType of
+        Just "sessions" -> LogQueries.Sessions
+        Just "patterns" -> LogQueries.Patterns
+        _ -> LogQueries.Data
+      preloadUrl = T.replace "\"" "%22" $ LogQueries.logExplorerUrlPath pid dataEndpoint queryM' cols' Nothing sinceM fromM toM Nothing sourceM False
       headContent = Just $ script_ [text|window.logDataPromise = fetch("$preloadUrl", {headers: {Accept: "application/json"}, credentials: "include"}).then(r => r.json());|]
 
   let stampPng base = do
@@ -758,7 +767,6 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
           , facets = facetSummary
           , vizType = effectiveVizType
           , alert = alertDM
-          , sessionSummary
           , targetPattern = pTargetM
           , chartWidget
           , latencyWidget
@@ -833,10 +841,22 @@ logExplorerDataH pid queryM' cols' cursorM' sinceM fromM toM sourceM targetSpans
   addRespHeaders
     (lr :: LogResult)
       { error = errM
-      , nextUrl = LogQueries.logExplorerUrlPath pid queryM' cols' lastFM sinceM fromM toM (Just "loadmore") sourceM False
-      , resetLogsUrl = LogQueries.logExplorerUrlPath pid queryM' cols' Nothing Nothing Nothing Nothing Nothing sourceM False
-      , recentUrl = LogQueries.logExplorerUrlPath pid queryM' cols' Nothing sinceM fromM toM (Just "loadmore") sourceM True
+      , nextUrl = LogQueries.logExplorerUrlPath pid LogQueries.Data queryM' cols' lastFM sinceM fromM toM (Just "loadmore") sourceM False
+      , resetLogsUrl = LogQueries.logExplorerUrlPath pid LogQueries.Data queryM' cols' Nothing Nothing Nothing Nothing Nothing sourceM False
+      , recentUrl = LogQueries.logExplorerUrlPath pid LogQueries.Data queryM' cols' Nothing sinceM fromM toM (Just "loadmore") sourceM True
       }
+
+
+-- | Enriched span schema for the query editor, served from a dedicated endpoint
+-- so the ~365KB payload isn't inlined into (and re-encoded on) every page render.
+-- The client caches it in a window promise for the session. Facet enrichment is
+-- from in-memory summary state (cheap); the time range is ignored by getFacetSummary.
+logExplorerSchemaH :: Projects.ProjectId -> ATAuthCtx (RespHeaders AE.Value)
+logExplorerSchemaH pid = do
+  _ <- Projects.sessionAndProject pid
+  now <- Time.currentTime
+  facetsM <- SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" now now
+  addRespHeaders $ maybe Schema.telemetrySchemaJson (enrichSchemaWithFacets Schema.telemetrySchema . (.facetJson)) facetsM
 
 
 -- | Patterns visualization data endpoint (aggregate log patterns as JSON).
@@ -855,10 +875,12 @@ logSessionsH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> 
 logSessionsH pid queryM' sinceM fromM toM skipM sortByM = do
   (authCtx, _, fromD, toD) <- logDataEnv pid sinceM fromM toM
   case parseQueryToAST (maybeToMonoid queryM') of
-    Left err -> Log.logInfo "Log explorer sessions: rejected invalid KQL query" err >> addRespHeaders (SessionsView 0 V.empty)
+    Left err -> Log.logInfo "Log explorer sessions: rejected invalid KQL query" err >> addRespHeaders (SessionsView 0 V.empty Nothing)
     Right queryAST -> do
-      (total, rows) <- LogQueries.fetchSessions authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) sortByM (fromMaybe 0 skipM)
-      addRespHeaders $ SessionsView total (V.fromList rows)
+      let skip = fromMaybe 0 skipM
+      (summ, total, rows) <- LogQueries.fetchSessions authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) sortByM skip
+      -- Summary only rides the first page; later load-more pages don't need it.
+      addRespHeaders $ SessionsView total (V.fromList rows) (if skip == 0 then Just summ else Nothing)
 
 
 -- | Form body for 'saveQueryH' (HTMX serializes the modal's inputs + hx-vals here).
@@ -966,15 +988,29 @@ fmtPct1 :: Double -> Text
 fmtPct1 x = toText (showFFloat (Just 1) x "") <> "%"
 
 
--- | Rendered when the sessions summary query fails; surfaces the failure inline
--- rather than silently falling back to the generic log/span widgets.
-sessionsHeaderError_ :: Text -> Html ()
-sessionsHeaderError_ err =
-  div_ [class_ "mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden surface-raised rounded-2xl px-3 py-2 flex items-start gap-2 text-sm"] do
-    faSprite_ "triangle-exclamation" "regular" "h-4 w-4 mt-0.5 text-iconError shrink-0"
-    div_ [class_ "min-w-0"] do
-      div_ [class_ "text-textStrong font-medium"] "Session summary unavailable"
-      div_ [class_ "text-textWeak text-xs truncate"] $ toHtml err
+-- | Shimmer placeholder mirroring 'sessionsHeader_' (6-KPI grid + over-time bar
+-- card) so the summary region keeps its height during the sessions-viz swap.
+sessionsSummarySkeleton_ :: Html ()
+sessionsSummarySkeleton_ =
+  div_ [class_ "mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full flex flex-col gap-2", role_ "status", Aria.label_ "Loading session summary"] do
+    div_ [class_ "grid grid-cols-6 max-md:grid-cols-3 gap-2"]
+      $ replicateM_ 6
+      $ div_ [class_ "surface-raised rounded-2xl px-3 py-2 flex flex-col gap-1"] do
+        div_ [class_ "h-3 w-16 rounded skeleton-shimmer"] ""
+        div_ [class_ "h-6 w-20 rounded skeleton-shimmer"] ""
+        div_ [class_ "h-3 w-14 rounded skeleton-shimmer"] ""
+    div_ [class_ "surface-raised rounded-2xl px-3 py-2"] do
+      div_ [class_ "h-3 w-28 rounded skeleton-shimmer mb-2"] ""
+      div_ [class_ "h-12 w-full rounded skeleton-shimmer"] ""
+
+
+-- | Shimmer placeholder mirroring the chart+latency widget strip (the non-sessions
+-- summary region) so its height is preserved during the swap back from sessions.
+chartSummarySkeleton_ :: Html ()
+chartSummarySkeleton_ =
+  div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full min-h-36 max-md:min-h-28 aspect-[10/1] max-md:aspect-auto max-md:flex-col", role_ "status", Aria.label_ "Loading chart"] do
+    div_ [class_ "flex-[3] min-w-0 rounded-2xl skeleton-shimmer"] ""
+    div_ [class_ "flex-1 min-w-0 max-md:hidden rounded-2xl skeleton-shimmer"] ""
 
 
 sessionsHeader_ :: LogQueries.SessionSummary -> Html ()
@@ -1036,27 +1072,11 @@ sessionsHeader_ summ = do
                 -- /70 opacity matches the legend swatch; /40 was nearly invisible on the dark surface.
                 bar "w-full rounded-sm bg-fillBrand-strong/70 group-hover/bar:bg-fillBrand-strong transition-colors" c cPct
                 bar "w-full rounded-sm bg-fillError-strong" e ePct
-      -- Reassigned every render (survives stale HTMX swaps); dispatches the same
-      -- update-query event log-list uses for chart-zoom so the table refetches.
-      script_
-        [text|
-          window.__sessionsBucketFilter = function(fromEpoch, toEpoch) {
-            if (!Number.isFinite(fromEpoch) || !Number.isFinite(toEpoch) || fromEpoch <= 0) return;
-            const from = new Date(fromEpoch * 1000).toISOString();
-            const to = new Date(toEpoch * 1000).toISOString();
-            if (window.updateTimePicker) {
-              window.updateTimePicker({ from, to }, { skipSetParams: true });
-            } else {
-              console.warn('[sessions-header] updateTimePicker missing; picker UI will not reflect filter');
-            }
-            const p = new URLSearchParams(window.location.search);
-            p.set('from', from); p.set('to', to); p.delete('since');
-            const url = window.location.pathname + '?' + p.toString() + window.location.hash;
-            window.history.replaceState({}, '', url);
-            document.dispatchEvent(new CustomEvent('update-query', { bubbles: true, detail: { source: 'sessions-header-bar', timeRange: from + ' \u2192 ' + to } }));
-          };
-        |]
 
+
+-- The bar's onclick calls window.__sessionsBucketFilter, defined once in
+-- queryEditorInitializationCode (not here) so this header stays script-free
+-- and can be injected via innerHTML from the sessions data response.
 
 data LogsGet
   = LogPage (PageCtx ApiLogsPageData)
@@ -1111,11 +1131,17 @@ instance AE.ToJSON PatternsView where
 -- | JSON payload for the sessions visualization endpoint. Reuses the logs
 -- column layout so the same rendering code applies; session-specific info is
 -- packed into the summary column as badge elements.
-data SessionsView = SessionsView Int (V.Vector LogQueries.SessionRow)
+-- | Sessions data payload. The optional 'SessionSummary' is present only on the
+-- first page (skip=0); its rendered header HTML is delivered as @summaryHtml@ so
+-- the client can inject #page-summary-region without a second scan/request.
+data SessionsView = SessionsView Int (V.Vector LogQueries.SessionRow) (Maybe LogQueries.SessionSummary)
 
 
 instance AE.ToJSON SessionsView where
-  toJSON (SessionsView totalSessions sessions) = aggregateEnvelope rows cols allCols total ["totalSessions" AE..= totalSessions]
+  toJSON (SessionsView totalSessions sessions summaryM) =
+    aggregateEnvelope rows cols allCols total
+      $ ["totalSessions" AE..= totalSessions]
+      <> maybe [] (\summ -> ["summaryHtml" AE..= Lucid.renderText (sessionsHeader_ summ)]) summaryM
     where
       cols = ["id", "timestamp", "service", "summary", "latency_breakdown"] :: [Text]
       allCols = ["id", "timestamp", "trace_id", "span_name", "duration", "service", "parent_id", "start_time_ns", "errors", "summary", "latency_breakdown", "kind", "event_count"] :: [Text]
@@ -1191,7 +1217,6 @@ data ApiLogsPageData = ApiLogsPageData
   , facets :: Maybe FacetSummary
   , vizType :: Maybe Text
   , alert :: Maybe Monitors.QueryMonitor
-  , sessionSummary :: Maybe (Either Text LogQueries.SessionSummary)
   , targetPattern :: Maybe Text
   , chartWidget :: Widget.Widget
   , latencyWidget :: Widget.Widget
@@ -1252,8 +1277,11 @@ apiLogsPage page = do
     shareLogModal
     queryControlsSection
     facetsAndLogListSection
-  queryEditorInitializationCode page.queryLibRecent page.queryLibSaved page.vizType ((.facetJson) <$> page.facets)
   where
+    -- NB: the query-editor init code (incl. the ~365KB span schema JSON) is emitted
+    -- by logQueryBox_ inside queryControlsSection. Do not re-emit it here — a second
+    -- copy doubled the page payload and re-ran the facet-enrich + JSON encode.
+
     countText = prettyPrintCount page.queryResultCount
     suffixText = if page.queryResultCount >= page.resultCount then " rows" else "+ rows"
 
@@ -1327,19 +1355,24 @@ apiLogsPage page = do
               span_ [class_ "text-strokeWeak text-xs"] "·"
               rowCountDisplay_ "mobile" countText suffixText
           , parseError = page.parseError
-          , facetData = (.facetJson) <$> page.facets
           }
 
-      -- Sessions viz renders a session-level header; a Left means the summary query
-      -- failed, surfaced visibly rather than falling back to the generic span/log
-      -- widgets. #page-summary-region lets the viz-tab handler swap this fragment.
-      div_ [id_ "page-summary-region"] $ case page.sessionSummary of
-        Just (Right summ) -> sessionsHeader_ summ
-        Just (Left err) -> sessionsHeaderError_ err
-        Nothing ->
-          div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full min-h-36 max-md:min-h-28 aspect-[10/1] max-md:aspect-auto max-md:flex-col"] do
+      -- For the sessions viz the header (summary) is computed in the same scan as
+      -- the rows and injected client-side from the sessions data response (see
+      -- log-list.ts) — so render the skeleton here and let the data fetch fill it,
+      -- rather than blocking the shell on a summary query. Other viz types render
+      -- the chart+latency widgets. #page-summary-region is the swap target.
+      div_ [id_ "page-summary-region"]
+        $ if page.vizType == Just "sessions"
+          then sessionsSummarySkeleton_
+          else div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full min-h-36 max-md:min-h-28 aspect-[10/1] max-md:aspect-auto max-md:flex-col"] do
             Widget.widget_ page.chartWidget
             div_ [class_ "flex-1 min-w-0 max-md:hidden"] $ Widget.widget_ page.latencyWidget
+
+      -- Skeletons cloned by swapSessionsRegionIfNeeded during the (multi-second)
+      -- viz-tab swap, mirroring each incoming region's height so layout doesn't jump.
+      template_ [id_ "sessions-summary-skeleton"] sessionsSummarySkeleton_
+      template_ [id_ "chart-summary-skeleton"] chartSummarySkeleton_
 
     -- Three-pane layout: facets sidebar, logs/viz/trace list, and the
     -- alert-form / log-details side panels (all resizable via `resizer_`).
