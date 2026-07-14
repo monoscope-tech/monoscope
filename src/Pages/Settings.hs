@@ -130,6 +130,55 @@ getMinioConnectInfo accessKey secretKey region bucket endpoint = Minio.setCreds 
     secretKey' = fromString $ toString secretKey
 
 
+-- | Turn a minio-hs error into something a user can act on, instead of leaking
+-- the library's raw @Show@ (e.g. @MErrValidation (MErrVRegionNotSupported "EU")@).
+--
+-- The humanized message must never expose the library constructor and must
+-- steer the user to a valid region:
+--
+-- >>> let msg = humanizeMinioErr (Minio.MErrValidation (Minio.MErrVRegionNotSupported "EU"))
+-- >>> ("MErrV" `T.isInfixOf` msg, "us-east-1" `T.isInfixOf` msg)
+-- (False,True)
+humanizeMinioErr :: Minio.MinioErr -> Text
+humanizeMinioErr = \case
+  Minio.MErrValidation (Minio.MErrVRegionNotSupported r) ->
+    "\"" <> r <> "\" isn't a valid AWS region. Use a region code like us-east-1 or eu-west-1. For MinIO, DigitalOcean Spaces, Cloudflare R2 or other S3-compatible providers, set the Custom Endpoint below — then any region your provider expects is accepted."
+  Minio.MErrValidation (Minio.MErrVInvalidBucketName b) -> "\"" <> b <> "\" isn't a valid bucket name."
+  Minio.MErrValidation Minio.MErrVMissingCredentials -> "Access Key ID and Secret Access Key are required."
+  Minio.MErrValidation _ -> "Couldn't validate the S3 settings. Double-check the region, bucket name and endpoint."
+  Minio.MErrService Minio.NoSuchBucket -> "That bucket doesn't exist for these credentials in this region."
+  Minio.MErrService Minio.InvalidBucketName -> "The bucket name is invalid."
+  Minio.MErrService (Minio.ServiceErr code msg)
+    | code `elem` ["AccessDenied", "InvalidAccessKeyId", "SignatureDoesNotMatch", "InvalidSecurity"] ->
+        "Access denied — check that the Access Key ID and Secret Access Key are correct and can access this bucket."
+    | otherwise -> "S3 rejected the request (" <> code <> "): " <> msg
+  Minio.MErrService _ -> "S3 rejected the request. Check your credentials and bucket permissions."
+  Minio.MErrHTTP _ -> "Couldn't reach the S3 endpoint. Check the Custom Endpoint URL, region and bucket name, then try again."
+  Minio.MErrIO _ -> "Network error while reaching S3. Check your connection and endpoint, then try again."
+
+
+-- | Common AWS region codes for the region combobox. Free text is still
+-- allowed so S3-compatible providers (which ignore the region) can pass anything.
+awsRegions :: [(Text, Text)]
+awsRegions =
+  [ ("us-east-1", "US East (N. Virginia)")
+  , ("us-east-2", "US East (Ohio)")
+  , ("us-west-1", "US West (N. California)")
+  , ("us-west-2", "US West (Oregon)")
+  , ("ca-central-1", "Canada (Central)")
+  , ("eu-west-1", "Europe (Ireland)")
+  , ("eu-west-2", "Europe (London)")
+  , ("eu-west-3", "Europe (Paris)")
+  , ("eu-central-1", "Europe (Frankfurt)")
+  , ("eu-north-1", "Europe (Stockholm)")
+  , ("ap-south-1", "Asia Pacific (Mumbai)")
+  , ("ap-southeast-1", "Asia Pacific (Singapore)")
+  , ("ap-southeast-2", "Asia Pacific (Sydney)")
+  , ("ap-northeast-1", "Asia Pacific (Tokyo)")
+  , ("sa-east-1", "South America (São Paulo)")
+  ]
+
+
 brings3PostH :: Projects.ProjectId -> Projects.ProjectS3Bucket -> ATAuthCtx (RespHeaders (Html ()))
 brings3PostH pid s3Form = do
   let connectInfo = getMinioConnectInfo s3Form.accessKey s3Form.secretKey s3Form.region s3Form.bucket s3Form.endpointUrl
@@ -137,7 +186,7 @@ brings3PostH pid s3Form = do
     Minio.bucketExists s3Form.bucket
   case res of
     Left err -> do
-      addErrorToast (show err) Nothing
+      addErrorToast (humanizeMinioErr err) Nothing
       addRespHeaders $ connectionBadge_ "Not connected"
     Right bExists ->
       if bExists
@@ -145,7 +194,7 @@ brings3PostH pid s3Form = do
           _ <- Projects.updateProjectS3Bucket pid $ Just s3Form
           sess <- Projects.getSession
           Projects.logAuditS pid Projects.AES3Configured sess Nothing
-          addSuccessToast "Connected succesfully" Nothing
+          addSuccessToast "Connected successfully" Nothing
           addRespHeaders $ connectionBadge_ "Connected"
         else do
           addErrorToast "Bucket does not exist" Nothing
@@ -176,10 +225,11 @@ bringS3Page pid s3BucketM = settingsSection_ do
     div_ [class_ "grid grid-cols-1 gap-3 md:grid-cols-2"] do
       formField_ FieldSm def{value = maybe "" (.accessKey) s3BucketM, placeholder = "Access Key ID"} "Access Key ID" "accessKey" True Nothing
       formField_ FieldSm def{inputType = "password", value = maybe "" (.secretKey) s3BucketM, placeholder = "Secret Access Key"} "Secret Access Key" "secretKey" True Nothing
-      formField_ FieldSm def{value = maybe "" (.region) s3BucketM, placeholder = "Region"} "Region" "region" True Nothing
+      formField_ FieldSm def{value = maybe "us-east-1" (.region) s3BucketM, placeholder = "us-east-1", extraAttrs = [term "list" "aws-regions"]} "Region" "region" True Nothing
       formField_ FieldSm def{value = maybe "" (.bucket) s3BucketM, placeholder = "Bucket Name"} "Bucket Name" "bucket" True Nothing
+    datalist_ [id_ "aws-regions"] $ forM_ awsRegions \(code, label) -> option_ [value_ code] $ toHtml label
     formField_ FieldSm def{value = maybe "" (.endpointUrl) s3BucketM, placeholder = "https://s3.example.com", extraAttrs = [pattern_ "https?://.*"]} "Custom Endpoint" "endpointUrl" False Nothing
-    p_ [class_ "text-xs text-textWeak"] "For S3-compatible providers like MinIO, DigitalOcean Spaces, etc."
+    p_ [class_ "text-xs text-textWeak"] "Leave blank for AWS S3. For S3-compatible providers (MinIO, DigitalOcean Spaces, Cloudflare R2, Backblaze, OVH), set the endpoint URL and enter the region your provider expects — e.g. auto for R2, nyc3 for DigitalOcean, or us-east-1 for MinIO."
 
     div_ [class_ "flex items-center justify-between pt-2"] do
       div_ [class_ "flex items-center gap-3"] do

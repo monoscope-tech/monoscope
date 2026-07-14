@@ -1112,6 +1112,20 @@ body, :host {
     --color-info: rgba(126 192 229 / 0.2);
   }
 
+  /* Floating toasts overlay other content, so they must be fully opaque and
+     legible. The translucent .alert tint above is only safe for inline banners
+     sitting on the page background. Second signal beyond color = the icon. */
+  .alert.toast-animate {
+    background-color: var(--color-bgRaised);
+    color: var(--color-textStrong);
+    border: 1px solid var(--color-strokeWeak);
+    box-shadow: var(--shadow-toast);
+  }
+  .alert.alert-error.toast-animate { border-color: var(--color-strokeError-strong); }
+  .alert.alert-error.toast-animate svg { color: var(--color-textError); }
+  .alert.alert-success.toast-animate { border-color: var(--color-strokeSuccess-strong); }
+  .alert.alert-success.toast-animate svg { color: var(--color-textSuccess); }
+
 
   /* Skeleton loader styles */
   .skeleton-shimmer {
