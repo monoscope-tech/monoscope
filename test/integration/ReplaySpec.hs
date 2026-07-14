@@ -3,6 +3,7 @@ module ReplaySpec (spec) where
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.ByteString.Lazy qualified as BL
+import Data.Text qualified as T
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
@@ -14,7 +15,7 @@ import Models.Projects.Projects qualified as Projects
 import Data.ByteString qualified as BS
 import Data.HashMap.Strict qualified as HM
 import Data.Time (UTCTime (..), addUTCTime, fromGregorian, getCurrentTime)
-import Pages.Replay (RawJson (..), ReplayPayload (..), ReplaySessionResp (..), claimMergeLease, concatRawJsonArrays, fetchReplaySession, firstEventTimestampRaw, processReplayEvents, releaseMergeLease, sessionFileKeys, splitReplayPayload, stripJsonNullEscapes)
+import Pages.Replay (RawJson (..), ReplayManifest (..), ReplayPayload (..), ReplaySegment (..), ReplaySessionResp (..), buildReplayManifest, claimMergeLease, concatRawJsonArrays, fetchReplaySession, fetchReplayShard, firstEventTimestampRaw, mergeReplaySession, processReplayEvents, releaseMergeLease, sessionFileKeys, splitReplayPayload, stripJsonNullEscapes)
 import System.Mem (performGC)
 import Pkg.ErrorMetrics (wireTypeErrorsRef)
 import Pkg.DeriveUtils (UUIDId (..))
@@ -433,6 +434,49 @@ spec = around withTestResources do
         V.length events `shouldBe` 2
         let timestamps = V.toList $ V.map (\v -> case v of AE.Object o -> AEKM.lookup "timestamp" o; _ -> Nothing) events
         timestamps `shouldBe` [Just (AE.Number 10), Just (AE.Number 20)]
+        clearSessionRow tr sid
+
+    -- Layer B: the merge seals events into append-only, byte-bounded shards
+    -- (<sid>/shard-<idx>-<firstTs>.json.gz) instead of one growing merged.json.gz.
+    -- This is the O(n²)→O(n)/flat-heap fix. Verify end-to-end: batches → shards,
+    -- the manifest lists them in order, and the read path stitches them back in
+    -- event-time order with nothing lost.
+    it "seals ingested events into ordered shards; manifest + read return them in order" $ \tr ->
+      requireMinio tr pendingWith $ do
+        let sid = UUID.fromWords 0 0 0 300
+        clearSessionRow tr sid -- shard keys live in the DB row, so clearing it isolates reruns
+        projM <- runQueryEffect tr $ Projects.projectById pid
+        project <- maybe (expectationFailure "test project not found" >> error "unreachable") pure projM
+        -- 7 MiB padding per batch so the 12 MiB shard byte-budget seals >1 shard.
+        let pad = decodeUtf8 (BS.replicate (7 * 1024 * 1024) 0x78)
+            ev t = AE.object ["type" AE..= (3 :: Int), "timestamp" AE..= (t :: Int), "data" AE..= AE.object ["text" AE..= (pad :: Text)]] :: AE.Value
+            batchAt t = AE.toJSON ([ev t] :: [AE.Value]) :: AE.Value
+            times = [10, 20, 30] :: [Int]
+        forM_ (zip [1 :: Int ..] times) $ \(i, t) ->
+          void $ runTestBg (UTCTime (fromGregorian 2026 5 8) (fromIntegral i)) tr $ processReplayEvents [("k" <> show i, mkBody sid (batchAt t))] HM.empty
+        -- Seal the tracked files into shards.
+        void $ runTestBg frozen tr $ mergeReplaySession pid sid
+        -- The merge consumed the individual file_keys.
+        keysAfter <- runQueryEffect tr $ sessionFileKeys pid sid
+        keysAfter `shouldBe` []
+        -- Manifest: at least two gzip shard segments (byte budget split the batches),
+        -- keyed under <sid>/shard-, with non-decreasing first-event timestamps.
+        manifest <- runTestBg frozen tr $ buildReplayManifest project sid
+        let shardSegs = filter (\s -> s.gzipped) manifest.segments
+        length shardSegs `shouldSatisfy` (>= 2)
+        all (\s -> ("/shard-" :: Text) `T.isInfixOf` s.key) shardSegs `shouldBe` True
+        map (\s -> s.firstTs) shardSegs `shouldBe` sort (map (\s -> s.firstTs) shardSegs)
+        -- A single shard fetch returns a valid, non-empty JSON events array.
+        case shardSegs of
+          (s0 : _) -> do
+            RawJson raw <- runTestBg frozen tr $ fetchReplayShard project sid (Just s0.key)
+            (AE.decode raw :: Maybe [AE.Value]) `shouldSatisfy` maybe False (not . null)
+          [] -> expectationFailure "expected at least one shard segment"
+        -- Read path stitches shards back in event-time order, nothing dropped.
+        events <- fetchEventsFor tr sid
+        V.length events `shouldBe` 3
+        let tss = V.toList $ V.map (\v -> case v of AE.Object o -> AEKM.lookup "timestamp" o; _ -> Nothing) events
+        tss `shouldBe` [Just (AE.Number 10), Just (AE.Number 20), Just (AE.Number 30)]
         clearSessionRow tr sid
 
     it "returns a user-facing error (not crash) for a session with no data" $ \tr ->
