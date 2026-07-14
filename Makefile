@@ -24,13 +24,13 @@ cypress:
 	set -a && . ./.env && npx cypress run --record
 
 live-reload:
-	ghcid --command 'cabal repl monoscope --ghc-options="-j$(NCPUS) -Wno-error=unused-imports -Wno-error=unused-top-binds" --with-compiler=$(GHC)' --test ':run Start.startApp' --warnings
+	ghcid --command 'cabal repl monoscope --no-semaphore --ghc-options="-j$(NCPUS) -Wno-error=unused-imports -Wno-error=unused-top-binds" --with-compiler=$(GHC)' --test ':run Start.startApp' --warnings
 
 live-reload-cli:
-	ghcid --command 'cabal repl exe:monoscope --ghc-options="-O0 -Wno-error=unused-imports -Wno-error=unused-top-binds" --with-compiler=$(GHC)' --warnings 2>&1 | tee build-cli.log
+	ghcid --command 'cabal repl exe:monoscope --no-semaphore --ghc-options="-O0 -Wno-error=unused-imports -Wno-error=unused-top-binds" --with-compiler=$(GHC)' --warnings 2>&1 | tee build-cli.log
 
 live-test-reload:
-	ghcid --command 'cabal repl lib:monoscope test/unit/Main.hs --with-compiler=$(GHC)' --test ':run main' --warnings
+	ghcid --command 'cabal repl lib:monoscope test/unit/Main.hs --no-semaphore --with-compiler=$(GHC)' --test ':run main' --warnings
 
 live-test-reload-unit:
 	ghcid --test 'cabal test monoscope:unit-tests --test-show-details=streaming'
@@ -48,12 +48,12 @@ live-test-reload-all:
 TEST_MATCH ?=
 live-test-dev:
 	USE_EXTERNAL_DB=true LOG_LEVEL=attention \
-	ghcid --command 'cabal repl monoscope:test:test-dev --ghc-options="-j$(NCPUS) -osuf dyn_o -hisuf dyn_hi -O0" --with-compiler=$(GHC)' \
+	ghcid --command 'cabal repl monoscope:test:test-dev --no-semaphore --ghc-options="-j$(NCPUS) -osuf dyn_o -hisuf dyn_hi -O0" --with-compiler=$(GHC)' \
 		--test ':main $(if $(TEST_MATCH),--match $(TEST_MATCH))' --warnings 2>&1 | tee build-test-dev.log
 
 hot-reload:
 	livereload -f reload.trigger static/public/ & \
-	ghcid --command 'cabal repl' --test ':run Start.startApp' --test ':! (sleep 1 && touch static/public/reload.trigger)'  --warnings
+	ghcid --command 'cabal repl --no-semaphore' --test ':run Start.startApp' --test ':! (sleep 1 && touch static/public/reload.trigger)'  --warnings
 
 watch:
 	# https://github.com/MercuryTechnologies/ghciwatch/issues/143
@@ -138,7 +138,7 @@ live-test-unit:
 	ghcid --test 'cabal test monoscope:unit-tests --test-show-details=streaming'
 
 live-reload-doctests:
-	ghcid --command 'cabal repl lib:monoscope --with-compiler=$(GHC)' --test ':! cabal test monoscope:doctests --ghc-options="-O0" --test-show-details=streaming'
+	ghcid --command 'cabal repl lib:monoscope --no-semaphore --with-compiler=$(GHC)' --test ':! cabal test monoscope:doctests --ghc-options="-O0" --test-show-details=streaming'
 
 fmt:
 	fourmolu --mode inplace $$(find ./src/ -name '*.hs')

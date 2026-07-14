@@ -38,6 +38,7 @@ import Servant qualified
 import Servant.Server.Generic (genericServeTWithContext)
 import System.Config (
   AuthContext (backgroundScope, config, extractionWorker, jobsPool, pool, timefusionPgPool),
+  DeploymentEnv (Dev),
   EnvConfig (..),
   getAppContext,
  )
@@ -192,7 +193,10 @@ runServer appLogger env tp = do
         ]
       <> fmap Just schemaFibers
       <> (if consumerOnly then [] else fmap Just jobFibers)
-  liftIO $ awaitShutdown asyncs
+  -- The hard-exit watchdog calls exitImmediately (_exit), which under ghcid
+  -- (`make live-reload`) would kill the whole `cabal repl` process on every
+  -- reload's interrupt-driven teardown. Only arm it in deployed envs.
+  liftIO $ awaitShutdown (env.config.environment /= Dev) asyncs
 
 
 -- | Wall-clock budget for tearing every service fiber down once shutdown
@@ -229,16 +233,18 @@ hardExitDeadlineUs = 40_000_000
 -- listener — as an orphaned thread with its socket still bound. The next
 -- reload's `otlp-grpc` fiber then failed to bind port 4317 ("Address already
 -- in use") and, being wrapped in 'supervise', retried that failure forever.
-awaitShutdown :: [Async a] -> IO ()
-awaitShutdown asyncs = do
+awaitShutdown :: Bool -> [Async a] -> IO ()
+awaitShutdown hardExit asyncs = do
   stop <- newEmptyMVar
   for_ [sigINT, sigTERM] \s -> installHandler s (Catch (void (tryPutMVar stop ()))) Nothing
   -- Arm the hard-exit watchdog the instant shutdown starts (a fiber died or a
   -- signal arrived). It outlives the fiber reap and 'shutdownMonoscope' cleanup
   -- that run after this returns, so even if one of those wedges the process still
   -- dies and Swarm gets a clean restart instead of a black-holing zombie.
+  -- Skipped under ghcid/dev ('hardExit' False): 'exitImmediately' is _exit and
+  -- would kill the shared 'cabal repl' process on every reload's teardown.
   let teardown = do
-        void $ forkIO $ threadDelay hardExitDeadlineUs >> exitImmediately (ExitFailure 1)
+        when hardExit $ void $ forkIO $ threadDelay hardExitDeadlineUs >> exitImmediately (ExitFailure 1)
         cancelAllConcurrently shutdownDeadlineUs asyncs
   void (race (takeMVar stop) (waitAny asyncs)) `Safe.finally` teardown
 

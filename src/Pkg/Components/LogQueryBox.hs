@@ -339,33 +339,21 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
               , value_ vizType
               , term "data-update-url" (if updateUrl then "true" else "false")
               , term "data-container-id" containerSelector
-              , [__| on change
-                          if my.checked
+              , -- swapSessionsRegionIfNeeded (defined in queryEditorInitializationCode) refetches
+                -- #page-summary-region when a viz change crosses the sessions boundary, since
+                -- sessions renders a different server region than other viz types.
+                [__| on change if my.checked
                             set prevViz to window.currentVisualizationType
                             call updateVizTypeInUrl(my.value, @data-update-url === 'true')
-                            set widgetJSON.type to my.value
-                            send 'update-widget' to #{@data-container-id}
-                            set resultTable to document.getElementById('resultTable')
-                            if resultTable
-                              if my.value is 'patterns'
-                                set resultTable.mode to 'patterns'
-                              else if my.value is 'sessions'
-                                set resultTable.mode to 'sessions'
-                              else
-                                set resultTable.mode to 'logs'
-                              end
-                              call resultTable.refetchLogs()
+                            if window.widgetJSON
+                              set widgetJSON.type to my.value
+                              send 'update-widget' to #{@data-container-id}
                             end
-                            -- Sessions swaps a different server-rendered
-                            -- region than other viz types, so when crossing
-                            -- that boundary we need to refetch that fragment.
-                            -- Defined in queryEditorInitializationCode so it
-                            -- can construct the URL with the new viz_type
-                            -- baked in (updateVizTypeInUrl writes URL state
-                            -- inside a requestAnimationFrame).
-                            if window.swapSessionsRegionIfNeeded
-                              call window.swapSessionsRegionIfNeeded(my.value, prevViz)
+                            if #resultTable exists
+                              set #resultTable's mode to (my.value if my.value is 'patterns' or my.value is 'sessions' else 'logs')
+                              call #resultTable.refetchLogs()
                             end
+                            if window.swapSessionsRegionIfNeeded then call window.swapSessionsRegionIfNeeded(my.value, prevViz)
                           end
                        |]
               ]

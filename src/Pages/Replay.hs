@@ -840,7 +840,13 @@ fetchReplayShard p sessionId mkey = do
       res <- liftIO $ Minio.runMinio conn $ fetchRawObject bucket (toObjKey k) (".gz" `T.isSuffixOf` k)
       case res of
         Right raw -> pure $ RawJson raw
-        Left err -> RawJson "[]" <$ Log.logAttention "Replay shard fetch failed" (withError err (HM.fromList [("key", k)]))
+        -- NoSuchKey = a concurrent seal/merge already removed this source; tolerate
+        -- as empty (the sealed shard carries its events). Any other error
+        -- (transport/auth) is transient — re-throw so the shard endpoint 500s and
+        -- the player shows a retryable error, instead of masking it as "[]" which
+        -- the client mislabels as "too few events / recording never started".
+        Left err | isNoSuchKey err -> RawJson "[]" <$ Log.logInfo "Replay shard already sealed/removed; serving empty" (HM.fromList [("key", k)])
+        Left err -> Log.logAttention "Replay shard fetch failed" (withError err (HM.fromList [("key", k)])) >> liftIO (throwIO err)
     _ -> pure $ RawJson "[]"
 
 

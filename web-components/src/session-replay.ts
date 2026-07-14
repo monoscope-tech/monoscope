@@ -730,8 +730,15 @@ export class SessionReplay extends LitElement {
     const hostWidth = this.fullWidth ? this.getBoundingClientRect().width : 0;
     const mContainer = hostWidth > 0 ? hostWidth : Number(getComputedStyle(this.replayerOuterContainer).width.replace('px', ''));
     this.containerWidth = mContainer - this.activityWidth;
+    // initialSession (share/anomaly pages) renders inline; a ?session_replay= deep
+    // link on the log explorer targets the floating wrapper, which starts hidden —
+    // reveal it before loading so shared "Share moment" links actually play.
+    const urlSession = new URLSearchParams(window.location.search).get('session_replay');
     if (this.initialSession) {
       this.fetchNewSessionData(this.initialSession);
+    } else if (urlSession) {
+      document.querySelector(`#${this.containerId}`)?.classList.remove('hidden');
+      this.fetchNewSessionData(urlSession);
     }
   }
 
