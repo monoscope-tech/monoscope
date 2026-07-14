@@ -1,4 +1,4 @@
-module Pages.Replay (replayPostH, ReplayPost (..), processReplayEvents, replaySessionGetH, fetchReplaySession, ReplaySessionResp (..), RawJson (..), compressAndMergeReplaySessions, mergeReplaySession, expireOldReplayData, concatRawJsonArrays, sessionFileKeys, splitReplayPayload, ReplayPayload (..), stripJsonNullEscapes, firstEventTimestampRaw, claimMergeLease, releaseMergeLease, ReplayManifest (..), ReplaySegment (..), replaySessionManifestGetH, replaySessionShardGetH, buildReplayManifest, fetchReplayShard) where
+module Pages.Replay (replayPostH, ReplayPost (..), processReplayEvents, replaySessionGetH, fetchReplaySession, ReplaySessionResp (..), RawJson (..), compressAndMergeReplaySessions, mergeReplaySession, expireOldReplayData, concatRawJsonArrays, sessionFileKeys, splitReplayPayload, ReplayPayload (..), stripJsonNullEscapes, firstEventTimestampRaw, claimMergeLease, releaseMergeLease) where
 
 import Codec.Compression.GZip qualified as GZip
 import Conduit (runConduit)
@@ -361,9 +361,6 @@ markMerged pid sid now =
 -- pass on a large session holds multi-GB heap for ~a minute; the lease caps
 -- concurrency to one per session so duplicate/queued jobs claim-and-skip instead
 -- of piling on and melting the replica (2026-07-13 incident).
--- Invariant: the 15-minute stale window must exceed the worst-case single merge
--- pass, else a slow merge gets double-claimed. maxFilesPerMerge bounds each pass
--- to keep it well under that.
 claimMergeLease :: DB es => Projects.ProjectId -> UUID.UUID -> Eff es Bool
 claimMergeLease pid sid = do
   rows :: [UUID.UUID] <-
@@ -558,38 +555,29 @@ getSessionEvents conn pid bucket sessionId = do
       let mergedRaw = case mergedRes of
             Right (Right r) -> [r] -- (firstTs, raw bytes)
             _ -> [] -- NoSuchKey path
-            -- Sealed shards (the current storage format) sit between the legacy monolith
-            -- and the unmerged individual tail. Tolerate per-shard NoSuchKey (a shard
-            -- removed by a concurrent seal); each shard carries its first-event ts for ordering.
-      shardKeys <- liftIO $ listShardKeys conn bucket sessionId
-      shardRes <- liftIO $ forM shardKeys $ \sk -> Minio.runMinio conn (fetchRawForMerge bucket (toObjKey sk) True)
-      let shardRaws = [r | Right (Right r) <- shardRes]
-          shardDecodeErrs = [e | Right (Left e) <- shardRes] -- corrupt shard bytes
-          shardTransportErrs = [e | Left e <- shardRes, not (isNoSuchKey e)] -- transient (NoSuchKey = concurrent seal, tolerate)
-          shardCorrupt = not (null shardDecodeErrs) -- data-integrity event, like a corrupt monolith
-          -- A corrupt shard is surfaced (not silently dropped); a transient fetch failure
-          -- flags the recording partial, same contract as a missing individual file.
-      unless (null shardDecodeErrs) $ Log.logError "Corrupt replay shard" (HM.insert "errors" (toText $ show shardDecodeErrs) logCtx)
-      unless (null shardTransportErrs) $ Log.logAttention "Transient shard fetch failure; serving partial recording" (HM.insert "errors" (toText $ show shardTransportErrs) logCtx)
-      (individuals, indivPartial, missingCount) <-
+      (individuals, partial, missingCount) <-
         if null fileKeys then pure ([], False, 0) else fetchIndividualsRaw conn bucket fileKeys logCtx
-      let partial = indivPartial || not (null shardTransportErrs)
       -- Mirror the old two-level merge: individuals collapse (sorted by first event)
-      -- into one blob, which is then ordered against merged.json.gz + shards by first
+      -- into one blob, which is then ordered against merged.json.gz by its first
       -- event. concatRawJsonArrays drops empty arrays, so `== "[]"` is the empty test.
       let indivBlob = concatRawJsonArrays $ map snd $ sortWith fst individuals
           indivEntry = [(fromRight 0 (firstEventTimestampRaw indivBlob), indivBlob) | not (null individuals)]
-          combined = concatRawJsonArrays $ map snd $ sortWith fst (mergedRaw <> shardRaws <> indivEntry)
-      if
-        | shardCorrupt -> pure corruptedErr
-        | combined /= "[]" -> pure $ Right (combined, partial)
-        | null fileKeys -> legacy "new_or_pre_migration_session"
-        | partial -> pure $ Left transientMsg
-        | otherwise -> do
-            Log.logAttention
-              "Replay session resolved empty despite tracked file_keys"
-              (HM.insert "file_keys_count" (show $ length fileKeys) $ HM.insert "missing_count" (show missingCount) logCtx)
-            pure $ Left notFoundErr
+          combined = concatRawJsonArrays $ map snd $ sortWith fst (mergedRaw <> indivEntry)
+      if combined /= "[]"
+        then pure $ Right (combined, partial)
+        else
+          if null fileKeys
+            then legacy "new_or_pre_migration_session"
+            else
+              if partial
+                then pure $ Left transientMsg
+                else do
+                  Log.logAttention
+                    "Replay session resolved empty despite tracked file_keys"
+                    ( HM.insert "file_keys_count" (show $ length fileKeys)
+                        $ HM.insert "missing_count" (show missingCount) logCtx
+                    )
+                  pure $ Left notFoundErr
 
 
 -- | Lookup the tracked object keys for an unmerged replay session.
@@ -776,119 +764,6 @@ fetchReplaySession p sessionId = do
       pure $ emptyResp "We couldn’t load this session right now. Check your connection and retry — if it keeps failing, copy the session ID and share it with support."
 
 
--- | One fetchable segment of a session's recording, oldest→newest. `key` is the
--- storage object key (always under "<sid>/"); the shard endpoint validates that
--- prefix before streaming. `firstTs` (first event's ms-epoch timestamp) lets the
--- player pick which segment covers a seek target without downloading it.
-data ReplaySegment = ReplaySegment
-  { key :: Text
-  , firstTs :: Double
-  , gzipped :: Bool
-  }
-  deriving stock (Generic, Show)
-  deriving anyclass (AE.ToJSON)
-
-
--- | Progressive-player manifest: the ordered segment list plus session identity.
--- The player fetches this once, plays segment 0 immediately, and lazy-loads the
--- rest via the shard endpoint as playback advances or on seek — bounding both
--- server and browser memory regardless of session length.
-data ReplayManifest = ReplayManifest
-  { segments :: [ReplaySegment]
-  , meta :: Maybe SessionMeta
-  , errorMsg :: Maybe Text
-  }
-  deriving stock (Generic, Show)
-  deriving anyclass (AE.ToJSON)
-
-
--- | Every object under a prefix (single LIST, no blob reads). The shared scaffold
--- behind objectExists / listShardKeys / the merge's size lookup.
-listObjectInfos :: Minio.ConnectInfo -> Minio.Bucket -> Text -> IO [Minio.ObjectInfo]
-listObjectInfos conn bucket prefix = do
-  res <- Minio.runMinio conn $ runConduit $ Minio.listObjects bucket (Just prefix) True .| CC.sinkList
-  pure $ either (const []) (\items -> [info | Minio.ListItemObject info <- items]) res
-
-
--- | Does an object exist? Prefix listing on the exact key — no blob read.
-objectExists :: Minio.ConnectInfo -> Minio.Bucket -> Text -> IO Bool
-objectExists conn bucket key = not . null <$> listObjectInfos conn bucket key
-
-
--- | Build the progressive manifest, oldest→newest: the legacy monolith (if any),
--- then sealed shards by index, then the unmerged individual tail. Listing + DB
--- only — never opens a blob, so it's cheap regardless of session size.
-buildReplayManifest
-  :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Log :> es)
-  => Projects.Project -> UUID.UUID -> Eff es ReplayManifest
-buildReplayManifest p sessionId = do
-  ctx <- Effectful.Reader.Static.ask @AuthContext
-  let pid = p.id
-      sidText = UUID.toText sessionId
-      (conn, bucket) = projectMinioConn ctx.config p
-      summaryCtx = HM.fromList [("session", sidText), ("projectId", pid.toText)]
-  meta <-
-    tryAny (sessionMetadata pid sessionId)
-      >>= either (\err -> Nothing <$ Log.logAttention "sessionMetadata lookup failed; continuing without identity" (withError err summaryCtx)) pure
-  shardKeys <- liftIO $ listShardKeys conn bucket sessionId
-  -- Order shards by first-event timestamp (not object index) — the same key the
-  -- events read path sorts on — so a late/out-of-order shard lands in its true
-  -- temporal position and playback order matches seek order.
-  let shardSegs = sortOn (.firstTs) [ReplaySegment{key = k, firstTs = fromIntegral tsMs, gzipped = True} | k <- shardKeys, Just (_, tsMs) <- [parseShardKey k]]
-      tailTs = maybe 0 (.firstTs) (viaNonEmpty last shardSegs) -- keep the unmerged tail sorting after all shards
-  legacyExists <- liftIO $ objectExists conn bucket (sidText <> "/merged.json.gz")
-  tailKeys <- sessionFileKeys pid sessionId
-  let legacySeg = [ReplaySegment{key = sidText <> "/merged.json.gz", firstTs = 0, gzipped = True} | legacyExists]
-      tailSegs = [ReplaySegment{key = k, firstTs = tailTs, gzipped = False} | k <- tailKeys]
-      segs = legacySeg <> shardSegs <> tailSegs
-  -- Ancient pre-file_keys sessions stored a single uncompressed `<sid>.json` blob
-  -- (no monolith, no shards, no tracked keys). getSessionEvents still falls back
-  -- to it, so the manifest must too — but only probe when nothing else was found,
-  -- to keep the hot path a pure listing.
-  legacyBlob <-
-    if null segs
-      then do
-        exists <- liftIO $ objectExists conn bucket (sidText <> ".json")
-        pure [ReplaySegment{key = sidText <> ".json", firstTs = 0, gzipped = False} | exists]
-      else pure []
-  let allSegs = segs <> legacyBlob
-  pure ReplayManifest{segments = allSegs, meta, errorMsg = if null allSegs then Just "No recorded events found for this session." else Nothing}
-
-
-replaySessionManifestGetH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders ReplayManifest)
-replaySessionManifestGetH pid sessionId = do
-  (_, p) <- Projects.sessionAndProject pid
-  addRespHeaders =<< buildReplayManifest p sessionId
-
-
--- | Stream one manifest segment's events as a raw JSON array. Validates the key
--- is scoped to this session's prefix so a crafted key can't read another
--- session's (or another bucket's) objects.
-fetchReplayShard
-  :: (Effectful.Reader.Static.Reader AuthContext :> es, IOE :> es, Log :> es)
-  => Projects.Project -> UUID.UUID -> Maybe Text -> Eff es RawJson
-fetchReplayShard p sessionId mkey = do
-  ctx <- Effectful.Reader.Static.ask @AuthContext
-  let (conn, bucket) = projectMinioConn ctx.config p
-      sidText = UUID.toText sessionId
-      -- Scope to this session: shards/monolith/tail live under "<sid>/"; the
-      -- ancient single-object blob is exactly "<sid>.json". Anything else is rejected.
-      scoped k = (sidText <> "/") `T.isPrefixOf` k || k == sidText <> ".json"
-  case mkey of
-    Just k | scoped k -> do
-      res <- liftIO $ Minio.runMinio conn $ fetchRawObject bucket (toObjKey k) (".gz" `T.isSuffixOf` k)
-      case res of
-        Right raw -> pure $ RawJson raw
-        Left err -> RawJson "[]" <$ Log.logAttention "Replay shard fetch failed" (withError err (HM.fromList [("key", k)]))
-    _ -> pure $ RawJson "[]"
-
-
-replaySessionShardGetH :: Projects.ProjectId -> UUID.UUID -> Maybe Text -> ATAuthCtx (RespHeaders RawJson)
-replaySessionShardGetH pid sessionId mkey = do
-  (_, p) <- Projects.sessionAndProject pid
-  addRespHeaders =<< fetchReplayShard p sessionId mkey
-
-
 -- | Merge a specific replay session's S3 event files (triggered when file count exceeds threshold)
 mergeReplaySession :: Projects.ProjectId -> UUID.UUID -> ATBackgroundCtx ()
 mergeReplaySession pid sessionId = mergeOneSessionByKeys pid sessionId (Just "(file count threshold)") $ const pass
@@ -998,92 +873,51 @@ mergeOneSessionByKeys pid sessionId logSuffix afterMerge = do
                       void $ createJob conn' "background_jobs" jobPayload
 
 
--- | Uncompressed-bytes budget per sealed shard. A merge accumulates raw event
--- files up to this size, seals them into one gzip shard, releases the buffer, and
--- continues — so peak heap per merge is ~one shard, not the whole session.
--- This is the O(n²)→O(n) fix: shards are append-only and immutable, so a growing
--- session never re-reads/rewrites its accumulated history (the 2026-07-13 incident
--- had a 528 MB merged blob re-decompressed on every 25-file pass).
-shardSealBytes :: Int64
-shardSealBytes = 12 * 1024 * 1024
-
-
--- | Object key for a sealed shard: `<sid>/shard-<idx>-<firstTsMs>.json.gz`. The
--- index is a collision-free append id (next = max existing + 1), NOT an ordering
--- key — read/manifest order shards by the embedded first-event timestamp, parsed
--- from the key without opening any blob.
---
--- >>> shardKeyFor UUID.nil 7 1700000000000
--- "00000000-0000-0000-0000-000000000000/shard-000007-1700000000000.json.gz"
--- >>> parseShardKey (shardKeyFor UUID.nil 7 1700000000000)
--- Just (7,1700000000000)
-shardKeyFor :: UUID.UUID -> Int -> Integer -> Minio.Object
-shardKeyFor sid idx firstTsMs =
-  toObjKey $ UUID.toText sid <> "/shard-" <> T.justifyRight 6 '0' (show idx) <> "-" <> show firstTsMs <> ".json.gz"
-
-
--- | List a session's sealed shard object keys (unordered). Prefix scan only — no blob reads.
-listShardKeys :: Minio.ConnectInfo -> Minio.Bucket -> UUID.UUID -> IO [Text]
-listShardKeys conn bucket sid = map Minio.oiObject <$> listObjectInfos conn bucket (UUID.toText sid <> "/shard-")
-
-
--- | Parse a shard object key into (index, firstTsMs). `<sid>/shard-<idx>-<ts>.json.gz`;
--- splits only the filename so the `-`/`/` in the session UUID prefix never reaches it.
---
--- >>> parseShardKey "abc/shard-000007-1700000000000.json.gz"
--- Just (7,1700000000000)
--- >>> parseShardKey "abc/shard-7.json.gz"
--- Nothing
--- >>> parseShardKey "abc/shard-00-00-1.json.gz"
--- Nothing
--- >>> parseShardKey "abc/notashard.json.gz"
--- Nothing
-parseShardKey :: Text -> Maybe (Int, Integer)
-parseShardKey key = do
-  name <- T.stripSuffix ".json.gz" =<< listToMaybe (reverse (T.splitOn "/" key))
-  rest <- T.stripPrefix "shard-" name
-  case T.splitOn "-" rest of
-    [idxT, tsT] -> (,) <$> readMaybe (toString idxT) <*> readMaybe (toString tsT)
-    _ -> Nothing
-
-
--- | Seal the tracked event files into append-only, byte-bounded gzip shards.
--- Groups sources by size (`chunksByBytes`) so peak heap per shard is ~one budget
--- of raw bytes — the O(n²)→O(n) fix vs. the old monolith that re-decompressed the
--- whole session each pass. Each shard's put and its sources' deletion happen in one
--- `runMinio` round (no window where the shard exists but sources linger for a
--- duplicate re-seal). Aborts (throwIO MergeError) on any decode/transport failure
--- so history is never dropped; NoSuchKey is tolerated (concurrent-merge artifact).
+-- | Merge the tracked S3 event files for a single session into one gzip-compressed file.
+-- Uses raw byte concatenation to avoid the V.concat + AE.encode copies: events are never
+-- re-parsed into AE.Array; sorting uses only the first event's timestamp from each file.
+-- Aborts (via `throwIO MergeError`) on any decode/fetch failure to avoid silently
+-- clobbering historical data.
 mergeOneSession :: Minio.ConnectInfo -> Minio.Bucket -> UUID.UUID -> [Text] -> IO ()
 mergeOneSession conn bucket sessionId fileKeys = do
-  -- One listing serves both: existing shard indices (for the next append id) and
-  -- the individual files' sizes (for byte-bounded grouping).
-  infos <- listObjectInfos conn bucket (UUID.toText sessionId <> "/")
-  let isShard k = "/shard-" `T.isInfixOf` k
-      startIdx = 1 + foldl' max 0 [idx | i <- infos, let k = Minio.oiObject i, isShard k, Just (idx, _) <- [parseShardKey k]]
-      sizeMap = HM.fromList [(Minio.oiObject i, Minio.oiSize i) | i <- infos]
-      -- Upload order ≈ event order (keys are `<sid>/<uploadTs>.json`); byte-bounded
-      -- groups keep shard boundaries deterministic and heap-bounded.
-      groups = chunksByBytes (fromIntegral shardSealBytes) (\k -> fromIntegral (HM.lookupDefault 0 k sizeMap)) (sort fileKeys)
-  forM_ (zip [startIdx ..] groups) (uncurry sealGroup)
-  where
-    sealGroup idx keys = do
-      perKey <- forM keys $ \k -> (k,) <$> Minio.runMinio conn (fetchRawForMerge bucket (toObjKey k) False)
-      let transportErrs = [e | (_, Left e) <- perKey, not (isNoSuchKey e)]
-          decodeErrs = [(k, e) | (k, Right (Left e)) <- perKey]
-          raws = [(ts, raw, k) | (k, Right (Right (ts, raw))) <- perKey]
-      whenJust (viaNonEmpty head transportErrs) (throwIO . MergeFetchFailed)
-      unless (null decodeErrs) $ throwIO (MergeDecodeFailed decodeErrs)
-      unless (null raws) $ do
-        let sorted = sortWith (\(ts, _, _) -> ts) raws
-            firstTs = maybe 0 (\(ts, _, _) -> ts) (viaNonEmpty head sorted)
-            !merged = concatRawJsonArrays [raw | (_, raw, _) <- sorted]
-            !compressed = GZip.compress merged
-            shardKey = shardKeyFor sessionId idx (round (firstTs :: Double))
-        putRes <- Minio.runMinio conn $ do
-          Minio.putObject bucket shardKey (CC.sourceLazy compressed) (Just (BL.length compressed)) Minio.defaultPutObjectOptions
-          forM_ [toObjKey k | (_, _, k) <- sorted] (Minio.removeObject bucket)
-        whenLeft_ putRes (throwIO . MergePutFailed)
+  let mergedKey = mergedKeyFor sessionId
+      fileObjs = map toObjKey fileKeys
+
+  existingRes <- Minio.runMinio conn $ fetchRawForMerge bucket mergedKey True
+  (mergedTs, mergedRaw) <- case existingRes of
+    Right (Right r) -> pure r
+    Right (Left decodeErr) -> throwIO $ MergeDecodeFailed [("merged.json.gz", decodeErr)]
+    Left err
+      | isNoSuchKey err -> pure (0, "[]")
+      | otherwise -> throwIO $ MergeFetchFailed err
+
+  -- Fetch each key in its own runMinio so one NoSuchKey (e.g. left over from a crashed
+  -- prior merge) doesn't abort the whole batch. Decode failures and genuine transport
+  -- errors still abort — we will not silently clobber historical data.
+  perKey <- forM (zip fileKeys fileObjs) $ \(k, obj) ->
+    (k,) <$> Minio.runMinio conn (fetchRawForMerge bucket obj False)
+  -- Decode errors are permanent (corrupt data); transport errors are transient.
+  let (decodeErrs, transportErrs, newRaws) = foldr classify ([], [], []) perKey
+      classify (_, Right (Right r)) (de, te, rs) = (de, te, r : rs)
+      classify (k, Right (Left e)) (de, te, rs) = ((k, e) : de, te, rs)
+      classify (k, Left me) (de, te, rs)
+        | isNoSuchKey me = (de, te, rs)
+        | otherwise = (de, me : te, rs)
+  case transportErrs of
+    (firstErr : _) -> throwIO $ MergeFetchFailed firstErr
+    [] -> unless (null decodeErrs) $ throwIO $ MergeDecodeFailed decodeErrs
+
+  -- Force `merged` then `compressed` in order so each is fully computed and released
+  -- before the next; otherwise `compressed` would retain the entire raw merged bytes.
+  let sorted = sortWith fst $ (mergedTs, mergedRaw) : newRaws
+      !merged = concatRawJsonArrays (map snd sorted)
+      !compressed = GZip.compress merged
+  putRes <- Minio.runMinio conn $ do
+    Minio.putObject bucket mergedKey (CC.sourceLazy compressed) (Just (BL.length compressed)) Minio.defaultPutObjectOptions
+    forM_ fileObjs $ Minio.removeObject bucket
+  case putRes of
+    Right _ -> pass
+    Left err -> throwIO $ MergePutFailed err
 
 
 -- | Advertised retention window for default-storage replay data.
