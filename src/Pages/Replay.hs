@@ -551,8 +551,8 @@ getSessionEvents conn pid bucket sessionId = do
       shardDecodeErrs = [e | Right (Left e) <- shardRes] -- corrupt shard bytes
       shardTransportErrs = [e | Left e <- shardRes, not (isNoSuchKey e)] -- transient (NoSuchKey = concurrent seal, tolerate)
       shardCorrupt = not (null shardDecodeErrs) -- data-integrity event
-  -- A corrupt shard is surfaced (not silently dropped); a transient fetch failure
-  -- flags the recording partial, same contract as a missing individual file.
+      -- A corrupt shard is surfaced (not silently dropped); a transient fetch failure
+      -- flags the recording partial, same contract as a missing individual file.
   unless (null shardDecodeErrs) $ Log.logError "Corrupt replay shard" (HM.insert "errors" (toText $ show shardDecodeErrs) logCtx)
   unless (null shardTransportErrs) $ Log.logAttention "Transient shard fetch failure; serving partial recording" (HM.insert "errors" (toText $ show shardTransportErrs) logCtx)
   (individuals, indivPartial, missingCount) <-
