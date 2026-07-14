@@ -1,0 +1,130 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-07-12T00:00:00Z",
+  "title": "Design System: Monoscope",
+  "extensions": {
+    "colorMeta": {
+      "brand": { "role": "primary", "displayName": "Signal Blue", "canonical": "oklch(56.7% 0.239 261)", "dark": "oklch(60% 0.18 265)", "tonalRamp": ["oklch(20% 0.10 261)", "oklch(30% 0.14 261)", "oklch(40% 0.18 261)", "oklch(50% 0.22 261)", "oklch(56.7% 0.239 261)", "oklch(66% 0.21 261)", "oklch(76% 0.16 261)", "oklch(90% 0.06 261)"] },
+      "error": { "role": "secondary", "displayName": "Semantic Error Red", "canonical": "oklch(51.3% 0.197 21)", "dark": "oklch(77.2% 0.126 21)", "tonalRamp": ["oklch(20% 0.10 21)", "oklch(30% 0.14 21)", "oklch(40% 0.18 21)", "oklch(51.3% 0.197 21)", "oklch(62% 0.18 21)", "oklch(72% 0.14 21)", "oklch(82% 0.09 21)", "oklch(92% 0.04 21)"] },
+      "warning": { "role": "secondary", "displayName": "Semantic Warning Amber", "canonical": "oklch(54.7% 0.126 69)", "dark": "oklch(79.5% 0.106 92)", "tonalRamp": ["oklch(22% 0.06 69)", "oklch(32% 0.08 69)", "oklch(43% 0.11 69)", "oklch(54.7% 0.126 69)", "oklch(65% 0.12 69)", "oklch(75% 0.10 69)", "oklch(85% 0.07 69)", "oklch(93% 0.04 69)"] },
+      "success": { "role": "secondary", "displayName": "Semantic Success Green", "canonical": "oklch(47.8% 0.130 162)", "dark": "oklch(75.3% 0.092 162)", "tonalRamp": ["oklch(20% 0.06 162)", "oklch(30% 0.09 162)", "oklch(40% 0.12 162)", "oklch(47.8% 0.130 162)", "oklch(60% 0.12 162)", "oklch(72% 0.09 162)", "oklch(83% 0.06 162)", "oklch(92% 0.03 162)"] },
+      "information": { "role": "tertiary", "displayName": "Information Blue", "canonical": "oklch(49.3% 0.088 241)", "dark": "oklch(78% 0.095 241)", "note": "Currently hue 241 - unintentional drift from brand hue 261. Target: migrate onto hue 261 at info weight so the system carries one blue. Treat 241 as legacy.", "tonalRamp": ["oklch(20% 0.05 241)", "oklch(30% 0.06 241)", "oklch(40% 0.075 241)", "oklch(49.3% 0.088 241)", "oklch(60% 0.09 241)", "oklch(72% 0.09 241)", "oklch(83% 0.06 241)", "oklch(92% 0.03 241)"] },
+      "bg-base": { "role": "neutral", "displayName": "Base Surface", "canonical": "oklch(99.1% 0.002 247)", "dark": "oklch(12.5% 0.004 260)", "tonalRamp": ["oklch(12.5% 0.004 260)", "oklch(18% 0.004 260)", "oklch(22% 0.004 260)", "oklch(40% 0.004 260)", "oklch(60% 0.004 260)", "oklch(85% 0.003 247)", "oklch(97.7% 0.006 247)", "oklch(99.1% 0.002 247)"] },
+      "text-strong": { "role": "neutral", "displayName": "Ink", "canonical": "oklch(14.4% 0.069 263 / 0.9)", "dark": "oklch(90% 0.005 260)", "tonalRamp": ["oklch(14.4% 0.069 263)", "oklch(25% 0.10 263)", "oklch(40% 0.10 263)", "oklch(55% 0.08 263)", "oklch(67% 0.005 260)", "oklch(80% 0.005 260)", "oklch(90% 0.005 260)", "oklch(97% 0.003 247)"] }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display", "purpose": "text-2xl (1.5rem/600). Page titles. Fixed scale step, never fluid clamp." },
+      "headline": { "displayName": "Headline", "purpose": "text-lg (1.125rem/600). Panel and section headers." },
+      "title": { "displayName": "Title", "purpose": "text-base (1rem/600). Card and group headers." },
+      "body": { "displayName": "Body", "purpose": "text-sm (0.875rem/400). Workhorse UI/data size - one step below web default for density. Prose caps 65-75ch; tables may run 120ch+." },
+      "label": { "displayName": "Label", "purpose": "text-xs (0.75rem/500). Field labels, badges, meta, dense data. Sentence case, not tracked uppercase." },
+      "caption": { "displayName": "Caption", "purpose": "text-2xs (0.625rem). Micro-labels, chart ticks." },
+      "mono": { "displayName": "Mono", "purpose": "JetBrains Mono at text-sm/text-xs steps. Machine truth: code, span/trace IDs, timestamps, raw logs, KQL." }
+    },
+    "shadows": [
+      { "name": "shadow-xs", "value": "0 1px 2px -1px rgba(0 0 0 / 0.06)", "dark": "0 1px 2px -1px rgba(0 0 0 / 0.2)", "purpose": "Badges, subtle chips." },
+      { "name": "shadow-sm", "value": "0 2px 8px -2px rgba(0 0 0 / 0.08), 0 4px 12px -4px rgba(0 0 0 / 0.04)", "dark": "0 2px 8px -2px rgba(0 0 0 / 0.55), 0 4px 16px -4px rgba(0 0 0 / 0.4)", "purpose": "Dropdowns, popovers, raised cards." },
+      { "name": "shadow-md", "value": "0 4px 12px -2px rgba(0 0 0 / 0.12), 0 8px 20px -4px rgba(0 0 0 / 0.08)", "dark": "0 4px 12px -2px rgba(0 0 0 / 0.6), 0 8px 24px -4px rgba(0 0 0 / 0.45)", "purpose": "Modals, command palette." },
+      { "name": "shadow-lg", "value": "0 8px 25px -5px rgba(0 0 0 / 0.1), 0 4px 10px -5px rgba(0 0 0 / 0.04)", "dark": "0 8px 30px -5px rgba(0 0 0 / 0.6), 0 4px 12px -5px rgba(0 0 0 / 0.35)", "purpose": "Highest floating layers." },
+      { "name": "shadow-toast", "value": "0 4px 12px rgba(0 0 0 / 0.12)", "dark": "0 4px 12px rgba(0 0 0 / 0.4)", "purpose": "Toast notifications." }
+    ],
+    "motion": [
+      { "name": "duration-fast", "value": "100ms", "purpose": "Snappy state feedback." },
+      { "name": "duration-normal", "value": "150ms", "purpose": "Default transition; modal fade-scale-in." },
+      { "name": "duration-slow", "value": "250ms", "purpose": "Drawer slide, larger reveals." },
+      { "name": "ease-out-quint", "value": "cubic-bezier(0.23, 1, 0.32, 1)", "purpose": "Default exponential ease-out." },
+      { "name": "ease-out-expo", "value": "cubic-bezier(0.19, 1, 0.22, 1)", "purpose": "Drawer/modal choreography." },
+      { "name": "button-press", "value": "transform: scale(0.98) over 75ms", "purpose": "Tactile press signature on all buttons." }
+    ],
+    "chartPalettes": {
+      "categorical": ["#60a5fa", "#f87171", "#4ade80", "#fbbf24", "#c084fc", "#2dd4bf", "#fb923c", "#38bdf8", "#fb7185", "#a3e635", "#818cf8", "#facc15", "#f472b6", "#34d399", "#a78bfa", "#22d3ee", "#e879f9"],
+      "httpStatus": { "2xx": "blues/greens (#1A74A8 → #67e0e3)", "3xx": "cyans/teals (#73c0de → #91cc75)", "4xx": "yellows/oranges (#fac858 → #e062ae)", "5xx": "reds/pinks (#ee6666 → #e7bcf3)" },
+      "percentile": { "p50": "#91cc75", "p75": "#3ba272", "p90": "#fac858", "p95": "#fc8452", "p99": "#dc2626", "p100": "#991b1b" }
+    },
+    "radii": [
+      { "name": "field", "value": "0.4rem", "purpose": "Buttons, inputs, selectors." },
+      { "name": "box", "value": "1rem", "purpose": "Cards, modals, large containers." }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Signal-blue primary action with tactile press feedback.",
+      "html": "<button class=\"ds-btn-primary\">Save changes</button>",
+      "css": ".ds-btn-primary { background: var(--color-fillBrand-strong, oklch(56.7% 0.239 261)); color: #fff; padding: 0.5rem 1rem; border: none; border-radius: 0.4rem; font: 500 0.875rem/1 'Inter', system-ui, sans-serif; cursor: pointer; transition: transform 75ms ease-out, background 150ms ease-out; } .ds-btn-primary:hover { background: oklch(52% 0.239 261); } .ds-btn-primary:focus-visible { outline: 2px solid oklch(56.7% 0.239 261); outline-offset: 2px; } .ds-btn-primary:active:not(:disabled) { transform: scale(0.98); } .ds-btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Neutral secondary action; hairline stroke, no fill.",
+      "html": "<button class=\"ds-btn-ghost\">Cancel</button>",
+      "css": ".ds-btn-ghost { background: transparent; color: oklch(16.7% 0.086 263 / 0.85); padding: 0.5rem 1rem; border: 1px solid oklch(25.2% 0.146 264 / 0.14); border-radius: 0.4rem; font: 500 0.875rem/1 'Inter', system-ui, sans-serif; cursor: pointer; transition: background 150ms ease-out, transform 75ms ease-out; } .ds-btn-ghost:hover { background: oklch(29.2% 0.174 264 / 0.05); } .ds-btn-ghost:active { transform: scale(0.98); }"
+    },
+    {
+      "name": "Text Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Field with hairline border; focus shifts to Signal Blue.",
+      "html": "<input class=\"ds-input\" type=\"text\" placeholder=\"Filter by service\" />",
+      "css": ".ds-input { background: oklch(99.1% 0.002 247); color: oklch(14.4% 0.069 263 / 0.9); padding: 0.375rem 0.625rem; border: 1px solid oklch(25.2% 0.146 264 / 0.12); border-radius: 0.4rem; font: 400 0.875rem/1.45 'Inter', system-ui, sans-serif; transition: border-color 150ms ease-out, box-shadow 150ms ease-out; } .ds-input::placeholder { color: oklch(21.2% 0.117 264 / 0.55); } .ds-input:focus-visible { outline: none; border-color: oklch(56.7% 0.239 261); box-shadow: 0 0 0 3px oklch(56.7% 0.239 261 / 0.2); }"
+    },
+    {
+      "name": "Status Badge",
+      "kind": "chip",
+      "refersTo": "badge",
+      "description": "Compact status label; solid, outline, or ghost. Status color is semantic.",
+      "html": "<span class=\"ds-badge ds-badge-error\">500</span>",
+      "css": ".ds-badge { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.125rem 0.5rem; border-radius: 8px; font: 500 0.75rem/1 'JetBrains Mono', monospace; white-space: nowrap; } .ds-badge-error { background: oklch(51.3% 0.197 21 / 0.1); color: oklch(51.3% 0.197 21); border: 1px solid oklch(51.3% 0.197 21 / 0.2); } .ds-badge-success { background: oklch(47.8% 0.130 162 / 0.1); color: oklch(47.8% 0.130 162); }"
+    },
+    {
+      "name": "Nav Tab",
+      "kind": "nav",
+      "refersTo": "input",
+      "description": "Tab/nav link; inactive is muted, active handled by morph swap.",
+      "html": "<nav class=\"ds-tabs\"><a class=\"ds-tab ds-tab-active\">Logs</a><a class=\"ds-tab\">Traces</a><a class=\"ds-tab\">Metrics</a></nav>",
+      "css": ".ds-tabs { display: inline-flex; gap: 0.25rem; border-bottom: 1px solid oklch(25.2% 0.146 264 / 0.1); } .ds-tab { padding: 0.5rem 1rem; color: oklch(16.7% 0.086 263 / 0.65); font: 500 0.875rem/1 'Inter', system-ui, sans-serif; border-bottom: 2px solid transparent; cursor: pointer; transition: color 150ms ease-out, border-color 150ms ease-out; } .ds-tab:hover { color: oklch(14.4% 0.069 263 / 0.9); } .ds-tab-active { color: oklch(56.7% 0.239 261); border-bottom-color: oklch(56.7% 0.239 261); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Instrument Panel",
+    "overview": "Monoscope is read like a cockpit, not browsed like a website. Its user is an on-call engineer at 3 AM following a shared trace link with an error clock ticking, so the interface behaves like an instrument panel: every readout carries meaning, every color is a gauge rather than paint, and density is a form of respect. The emotional target is relief, never spectacle. Color is strictly signal; the reference is Datadog APM stripped of its glossier edges. The system is light-first with full dark parity, and shared views are first-class.",
+    "keyCharacteristics": [
+      "Instrument-panel density: tight within rows, generous between groups.",
+      "Color is signal, never decoration - brand blue for action, semantic hues for state.",
+      "OKLCH semantic-token system with strict light/dark parity.",
+      "Inter for UI and data; JetBrains Mono for code, IDs, and raw telemetry.",
+      "Tonal surfaces + 1px strokes carry depth; shadows are reserved for floating layers."
+    ],
+    "rules": [
+      { "name": "The Signal Rule", "body": "Color is signal, not decoration. Brand blue means clickable; red means error; green means success; a service or status hue means identity. No meaning, no color.", "section": "colors" },
+      { "name": "The One-Blue Rule", "body": "There is a single blue hue: the brand's 261. It carries interaction at full strength (fillBrand) and informational state at a lighter weight (fillInformation) - the same hue, never a second one. fillInformation currently drifts to hue 241 (legacy); the target is to migrate it onto 261.", "section": "colors" },
+      { "name": "The Machine-Truth Rule", "body": "Machine-emitted content (span IDs, status codes, logs, queries) is set in JetBrains Mono at the same text-sm/text-xs steps as its neighbours; human chrome is Inter. The font tells the reader which is which.", "section": "typography" },
+      { "name": "The Fixed-Scale Rule", "body": "Every type size is a named step on the Tailwind scale (text-2xs through text-2xl for chrome; text-3xl+ reserved for rare hero moments). No fluid clamp headings, no one-off rem values, no separate display typeface. Weight and step create hierarchy.", "section": "typography" },
+      { "name": "The Float-Only Shadow Rule", "body": "A shadow means this floats above the page. Resting surfaces earn depth from tone and stroke, never from a drop shadow.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do treat color as signal - brand blue for interaction, semantic hues for state, service/status hues for identity. No meaning, no color.",
+      "Do pack density where power users scan: tight within rows, generous between logical groups.",
+      "Do keep one blue hue (brand 261); info is that hue at a lighter weight, distinguished by strength, not by a rival blue.",
+      "Do set machine-emitted content in JetBrains Mono; human chrome in Inter.",
+      "Do convey depth with tonal surface steps and 1px strokes; reserve shadows for floating layers.",
+      "Do verify every token and state in both light and dark - dark parity is required.",
+      "Do give every error state a second signal beyond color. WCAG AA is the floor.",
+      "Do express presentational state with Tailwind variants so it survives HTMX morphs."
+    ],
+    "donts": [
+      "Don't use playful illustrations, mascots, or decorative icons above headings.",
+      "Don't ship neon-on-dark, glassmorphism as decoration, gradient text, or cartoony empty states.",
+      "Don't add border-left / border-right greater than 1px as a colored accent stripe.",
+      "Don't warm the neutral base toward cream/sand - it is faintly cooled toward the brand hue.",
+      "Don't introduce a display font, fluid clamp heading, or one-off rem size; every type size is a named step on the scale.",
+      "Don't add a second blue hue; the system has one blue (261), and info is that hue at a lighter weight.",
+      "Don't put a resting shadow on a card that isn't floating.",
+      "Don't reinvent standard affordances for flavor.",
+      "Don't reach for a modal as the first thought - exhaust inline and progressive-disclosure alternatives first."
+    ]
+  }
+}
