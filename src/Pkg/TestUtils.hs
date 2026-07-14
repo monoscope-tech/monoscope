@@ -675,8 +675,11 @@ advanceDays tr n = advanceTestTime tr (fromIntegral n * 86400)
 -- endpoint is unreachable. Idempotent — safe to call repeatedly. Reads
 -- MINIO_ENDPOINT / MINIO_ACCESS_KEY / MINIO_SECRET_KEY / MINIO_BUCKET /
 -- MINIO_REGION env vars (with sensible defaults for `make minio-local`).
-setupTestMinio :: IO (Maybe (Text, Text, Text, Text, Text))
-setupTestMinio = do
+-- | (endpoint, accessKey, secretKey, bucket, region) + a ready ConnectInfo from
+-- the MINIO_* env (defaults for `make minio-local`). Shared by setupTestMinio and
+-- purgeTestS3Prefix so the env-defaults and conn construction live in one place.
+testMinioEnv :: IO ((Text, Text, Text, Text, Text), Minio.ConnectInfo)
+testMinioEnv = do
   endpoint <- toText . fromMaybe "http://127.0.0.1:9000" <$> lookupEnv "MINIO_ENDPOINT"
   accessKey <- toText . fromMaybe "minioadmin" <$> lookupEnv "MINIO_ACCESS_KEY"
   secretKey <- toText . fromMaybe "minioadmin" <$> lookupEnv "MINIO_SECRET_KEY"
@@ -684,28 +687,27 @@ setupTestMinio = do
   region <- toText . fromMaybe "us-east-1" <$> lookupEnv "MINIO_REGION"
   let creds = Minio.CredentialValue (fromString $ toString accessKey) (fromString $ toString secretKey) Nothing
       conn = Minio.setCreds creds (Minio.setRegion (fromString $ toString region) (fromString $ toString endpoint))
+  pure ((endpoint, accessKey, secretKey, bucket, region), conn)
+
+
+setupTestMinio :: IO (Maybe (Text, Text, Text, Text, Text))
+setupTestMinio = do
+  (env@(_, _, _, bucket, region), conn) <- testMinioEnv
   result <- Safe.try @_ @SomeException $ Minio.runMinio conn $ do
     exists <- Minio.bucketExists (fromString $ toString bucket)
     unless exists $ Minio.makeBucket (fromString $ toString bucket) (Just $ fromString $ toString region)
   case result of
-    Right (Right ()) -> pure $ Just (endpoint, accessKey, secretKey, bucket, region)
+    Right (Right ()) -> pure $ Just env
     _ -> pure Nothing
 
 
--- | Delete every object under a prefix in the test bucket (creds from the same
--- MINIO_* env as `setupTestMinio`). Tests that seal replay shards must purge S3
--- between runs — the replay read path lists shards from storage, not the DB row,
--- so a rerun would otherwise read shards the previous run left behind.
+-- | Delete every object under a prefix in the test bucket. Tests that seal replay
+-- shards must purge S3 between runs — the replay read path lists shards from
+-- storage, not the DB row, so a rerun would otherwise read the prior run's shards.
 purgeTestS3Prefix :: Text -> IO ()
 purgeTestS3Prefix prefix = do
-  endpoint <- toText . fromMaybe "http://127.0.0.1:9000" <$> lookupEnv "MINIO_ENDPOINT"
-  accessKey <- toText . fromMaybe "minioadmin" <$> lookupEnv "MINIO_ACCESS_KEY"
-  secretKey <- toText . fromMaybe "minioadmin" <$> lookupEnv "MINIO_SECRET_KEY"
-  bucket <- toText . fromMaybe "monoscope-test" <$> lookupEnv "MINIO_BUCKET"
-  region <- toText . fromMaybe "us-east-1" <$> lookupEnv "MINIO_REGION"
-  let creds = Minio.CredentialValue (fromString $ toString accessKey) (fromString $ toString secretKey) Nothing
-      conn = Minio.setCreds creds (Minio.setRegion (fromString $ toString region) (fromString $ toString endpoint))
-      b = fromString (toString bucket)
+  ((_, _, _, bucket, _), conn) <- testMinioEnv
+  let b = fromString (toString bucket)
   void $ Minio.runMinio conn $ do
     items <- runConduit $ Minio.listObjects b (Just prefix) True .| CC.sinkList
     forM_ [Minio.oiObject i | Minio.ListItemObject i <- items] (Minio.removeObject b)

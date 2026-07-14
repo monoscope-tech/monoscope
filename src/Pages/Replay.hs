@@ -361,6 +361,9 @@ markMerged pid sid now =
 -- pass on a large session holds multi-GB heap for ~a minute; the lease caps
 -- concurrency to one per session so duplicate/queued jobs claim-and-skip instead
 -- of piling on and melting the replica (2026-07-13 incident).
+-- Invariant: the 15-minute stale window must exceed the worst-case single merge
+-- pass, else a slow merge gets double-claimed. maxFilesPerMerge bounds each pass
+-- to keep it well under that.
 claimMergeLease :: DB es => Projects.ProjectId -> UUID.UUID -> Eff es Bool
 claimMergeLease pid sid = do
   rows :: [UUID.UUID] <-
@@ -563,45 +566,30 @@ getSessionEvents conn pid bucket sessionId = do
       let shardRaws = [r | Right (Right r) <- shardRes]
           shardDecodeErrs = [e | Right (Left e) <- shardRes] -- corrupt shard bytes
           shardTransportErrs = [e | Left e <- shardRes, not (isNoSuchKey e)] -- transient (NoSuchKey = concurrent seal, tolerate)
-          -- A corrupt shard is a data-integrity event, exactly like a corrupt monolith:
-          -- surface it instead of silently returning a session missing that time range.
-      shardCorrupt <-
-        if null shardDecodeErrs
-          then pure False
-          else True <$ Log.logError "Corrupt replay shard" (HM.insert "errors" (toText $ show shardDecodeErrs) logCtx)
-      -- A transient shard fetch failure must not read as a complete recording:
-      -- flag it partial (same contract as a missing individual file) and log.
-      shardPartial <-
-        if null shardTransportErrs
-          then pure False
-          else True <$ Log.logAttention "Transient shard fetch failure; serving partial recording" (HM.insert "errors" (toText $ show shardTransportErrs) logCtx)
+          shardCorrupt = not (null shardDecodeErrs) -- data-integrity event, like a corrupt monolith
+          -- A corrupt shard is surfaced (not silently dropped); a transient fetch failure
+          -- flags the recording partial, same contract as a missing individual file.
+      unless (null shardDecodeErrs) $ Log.logError "Corrupt replay shard" (HM.insert "errors" (toText $ show shardDecodeErrs) logCtx)
+      unless (null shardTransportErrs) $ Log.logAttention "Transient shard fetch failure; serving partial recording" (HM.insert "errors" (toText $ show shardTransportErrs) logCtx)
       (individuals, indivPartial, missingCount) <-
         if null fileKeys then pure ([], False, 0) else fetchIndividualsRaw conn bucket fileKeys logCtx
-      let partial = indivPartial || shardPartial
+      let partial = indivPartial || not (null shardTransportErrs)
       -- Mirror the old two-level merge: individuals collapse (sorted by first event)
       -- into one blob, which is then ordered against merged.json.gz + shards by first
       -- event. concatRawJsonArrays drops empty arrays, so `== "[]"` is the empty test.
       let indivBlob = concatRawJsonArrays $ map snd $ sortWith fst individuals
           indivEntry = [(fromRight 0 (firstEventTimestampRaw indivBlob), indivBlob) | not (null individuals)]
           combined = concatRawJsonArrays $ map snd $ sortWith fst (mergedRaw <> shardRaws <> indivEntry)
-      if shardCorrupt
-        then pure corruptedErr
-        else
-          if combined /= "[]"
-            then pure $ Right (combined, partial)
-            else
-              if null fileKeys
-                then legacy "new_or_pre_migration_session"
-                else
-                  if partial
-                    then pure $ Left transientMsg
-                    else do
-                      Log.logAttention
-                        "Replay session resolved empty despite tracked file_keys"
-                        ( HM.insert "file_keys_count" (show $ length fileKeys)
-                            $ HM.insert "missing_count" (show missingCount) logCtx
-                        )
-                      pure $ Left notFoundErr
+      if
+        | shardCorrupt -> pure corruptedErr
+        | combined /= "[]" -> pure $ Right (combined, partial)
+        | null fileKeys -> legacy "new_or_pre_migration_session"
+        | partial -> pure $ Left transientMsg
+        | otherwise -> do
+            Log.logAttention
+              "Replay session resolved empty despite tracked file_keys"
+              (HM.insert "file_keys_count" (show $ length fileKeys) $ HM.insert "missing_count" (show missingCount) logCtx)
+            pure $ Left notFoundErr
 
 
 -- | Lookup the tracked object keys for an unmerged replay session.
@@ -814,11 +802,17 @@ data ReplayManifest = ReplayManifest
   deriving anyclass (AE.ToJSON)
 
 
+-- | Every object under a prefix (single LIST, no blob reads). The shared scaffold
+-- behind objectExists / listShardKeys / the merge's size lookup.
+listObjectInfos :: Minio.ConnectInfo -> Minio.Bucket -> Text -> IO [Minio.ObjectInfo]
+listObjectInfos conn bucket prefix = do
+  res <- Minio.runMinio conn $ runConduit $ Minio.listObjects bucket (Just prefix) True .| CC.sinkList
+  pure $ either (const []) (\items -> [info | Minio.ListItemObject info <- items]) res
+
+
 -- | Does an object exist? Prefix listing on the exact key — no blob read.
 objectExists :: Minio.ConnectInfo -> Minio.Bucket -> Text -> IO Bool
-objectExists conn bucket key = do
-  res <- Minio.runMinio conn $ runConduit $ Minio.listObjects bucket (Just key) True .| CC.sinkList
-  pure $ either (const False) (\items -> not (null [() | Minio.ListItemObject _ <- items])) res
+objectExists conn bucket key = not . null <$> listObjectInfos conn bucket key
 
 
 -- | Build the progressive manifest, oldest→newest: the legacy monolith (if any),
@@ -830,8 +824,9 @@ buildReplayManifest
 buildReplayManifest p sessionId = do
   ctx <- Effectful.Reader.Static.ask @AuthContext
   let pid = p.id
+      sidText = UUID.toText sessionId
       (conn, bucket) = projectMinioConn ctx.config p
-      summaryCtx = HM.fromList [("session", UUID.toText sessionId), ("projectId", pid.toText)]
+      summaryCtx = HM.fromList [("session", sidText), ("projectId", pid.toText)]
   meta <-
     tryAny (sessionMetadata pid sessionId)
       >>= either (\err -> Nothing <$ Log.logAttention "sessionMetadata lookup failed; continuing without identity" (withError err summaryCtx)) pure
@@ -839,15 +834,11 @@ buildReplayManifest p sessionId = do
   -- Order shards by first-event timestamp (not object index) — the same key the
   -- events read path sorts on — so a late/out-of-order shard lands in its true
   -- temporal position and playback order matches seek order.
-  let shardSegs =
-        map snd
-          $ sortOn
-            fst
-            [(tsMs, ReplaySegment{key = k, firstTs = fromIntegral tsMs, gzipped = True}) | k <- shardKeys, Just (_, tsMs) <- [parseShardKey k]]
+  let shardSegs = sortOn (.firstTs) [ReplaySegment{key = k, firstTs = fromIntegral tsMs, gzipped = True} | k <- shardKeys, Just (_, tsMs) <- [parseShardKey k]]
       tailTs = maybe 0 (.firstTs) (viaNonEmpty last shardSegs) -- keep the unmerged tail sorting after all shards
-  legacyExists <- liftIO $ objectExists conn bucket (UUID.toText sessionId <> "/merged.json.gz")
+  legacyExists <- liftIO $ objectExists conn bucket (sidText <> "/merged.json.gz")
   tailKeys <- sessionFileKeys pid sessionId
-  let legacySeg = [ReplaySegment{key = UUID.toText sessionId <> "/merged.json.gz", firstTs = 0, gzipped = True} | legacyExists]
+  let legacySeg = [ReplaySegment{key = sidText <> "/merged.json.gz", firstTs = 0, gzipped = True} | legacyExists]
       tailSegs = [ReplaySegment{key = k, firstTs = tailTs, gzipped = False} | k <- tailKeys]
       segs = legacySeg <> shardSegs <> tailSegs
   -- Ancient pre-file_keys sessions stored a single uncompressed `<sid>.json` blob
@@ -857,8 +848,8 @@ buildReplayManifest p sessionId = do
   legacyBlob <-
     if null segs
       then do
-        exists <- liftIO $ objectExists conn bucket (UUID.toText sessionId <> ".json")
-        pure [ReplaySegment{key = UUID.toText sessionId <> ".json", firstTs = 0, gzipped = False} | exists]
+        exists <- liftIO $ objectExists conn bucket (sidText <> ".json")
+        pure [ReplaySegment{key = sidText <> ".json", firstTs = 0, gzipped = False} | exists]
       else pure []
   let allSegs = segs <> legacyBlob
   pure ReplayManifest{segments = allSegs, meta, errorMsg = if null allSegs then Just "No recorded events found for this session." else Nothing}
@@ -1017,10 +1008,10 @@ shardSealBytes :: Int64
 shardSealBytes = 12 * 1024 * 1024
 
 
--- | Object key for a sealed shard. Encodes the shard's ordinal index (zero-padded
--- for lexical = chronological sort) and its first event's timestamp in ms, so the
--- read/manifest path can order shards and answer "which shard covers time T"
--- from a bucket listing alone, without opening any blob.
+-- | Object key for a sealed shard: `<sid>/shard-<idx>-<firstTsMs>.json.gz`. The
+-- index is a collision-free append id (next = max existing + 1), NOT an ordering
+-- key — read/manifest order shards by the embedded first-event timestamp, parsed
+-- from the key without opening any blob.
 --
 -- >>> shardKeyFor UUID.nil 7 1700000000000
 -- "00000000-0000-0000-0000-000000000000/shard-000007-1700000000000.json.gz"
@@ -1033,19 +1024,7 @@ shardKeyFor sid idx firstTsMs =
 
 -- | List a session's sealed shard object keys (unordered). Prefix scan only — no blob reads.
 listShardKeys :: Minio.ConnectInfo -> Minio.Bucket -> UUID.UUID -> IO [Text]
-listShardKeys conn bucket sid = do
-  res <- Minio.runMinio conn $ runConduit $ Minio.listObjects bucket (Just (UUID.toText sid <> "/shard-")) True .| CC.sinkList
-  pure $ either (const []) (\items -> [Minio.oiObject info | Minio.ListItemObject info <- items]) res
-
-
--- | Object keys + byte sizes of a session's tracked individual event files
--- (`<sid>/<uploadTs>.json`), from a listing alone. Excludes shards and the legacy
--- monolith so `planShardGroups` sees only the sources it will seal.
-objectSizes :: Minio.ConnectInfo -> Minio.Bucket -> UUID.UUID -> IO [(Text, Int64)]
-objectSizes conn bucket sid = do
-  res <- Minio.runMinio conn $ runConduit $ Minio.listObjects bucket (Just (UUID.toText sid <> "/")) True .| CC.sinkList
-  let isShardOrMerged k = "/shard-" `T.isInfixOf` k || "/merged.json.gz" `T.isSuffixOf` k
-  pure $ either (const []) (\items -> [(Minio.oiObject info, Minio.oiSize info) | Minio.ListItemObject info <- items, not (isShardOrMerged (Minio.oiObject info))]) res
+listShardKeys conn bucket sid = map Minio.oiObject <$> listObjectInfos conn bucket (UUID.toText sid <> "/shard-")
 
 
 -- | Parse a shard object key into (index, firstTsMs). `<sid>/shard-<idx>-<ts>.json.gz`;
@@ -1068,29 +1047,8 @@ parseShardKey key = do
     _ -> Nothing
 
 
--- | Greedy byte-budget grouping: accumulate items into a group until adding one
--- reaches the budget, then start a new group; an oversized item lands alone. This
--- is the pure core of shard sealing — decoupled from S3 so the boundary math is
--- doctestable. Prefix-stable: it never looks ahead, so a group is decided the
--- moment it's closed.
---
--- >>> planShardGroups 10 [("a",4),("b",7),("c",3),("d",20),("e",1)]
--- [["a","b"],["c","d"],["e"]]
--- >>> planShardGroups 10 []
--- []
--- >>> planShardGroups 10 [("x",50)]
--- [["x"]]
-planShardGroups :: Int64 -> [(a, Int64)] -> [[a]]
-planShardGroups budget = go [] 0
-  where
-    go acc _ [] = [reverse acc | not (null acc)]
-    go acc !n ((x, sz) : rest)
-      | n + sz >= budget = reverse (x : acc) : go [] 0 rest
-      | otherwise = go (x : acc) (n + sz) rest
-
-
 -- | Seal the tracked event files into append-only, byte-bounded gzip shards.
--- Groups sources by size (`planShardGroups`) so peak heap per shard is ~one budget
+-- Groups sources by size (`chunksByBytes`) so peak heap per shard is ~one budget
 -- of raw bytes — the O(n²)→O(n) fix vs. the old monolith that re-decompressed the
 -- whole session each pass. Each shard's put and its sources' deletion happen in one
 -- `runMinio` round (no window where the shard exists but sources linger for a
@@ -1098,12 +1056,15 @@ planShardGroups budget = go [] 0
 -- so history is never dropped; NoSuchKey is tolerated (concurrent-merge artifact).
 mergeOneSession :: Minio.ConnectInfo -> Minio.Bucket -> UUID.UUID -> [Text] -> IO ()
 mergeOneSession conn bucket sessionId fileKeys = do
-  existing <- listShardKeys conn bucket sessionId
-  let startIdx = 1 + foldl' max 0 (mapMaybe (fmap fst . parseShardKey) existing)
-  sizeMap <- HM.fromList <$> objectSizes conn bucket sessionId
-  -- Upload order ≈ event order (keys are `<sid>/<uploadTs>.json`); group purely from
-  -- sizes so shard boundaries are deterministic and heap-bounded.
-  let groups = planShardGroups shardSealBytes [(k, HM.lookupDefault 0 k sizeMap) | k <- sort fileKeys]
+  -- One listing serves both: existing shard indices (for the next append id) and
+  -- the individual files' sizes (for byte-bounded grouping).
+  infos <- listObjectInfos conn bucket (UUID.toText sessionId <> "/")
+  let isShard k = "/shard-" `T.isInfixOf` k
+      startIdx = 1 + foldl' max 0 [idx | i <- infos, let k = Minio.oiObject i, isShard k, Just (idx, _) <- [parseShardKey k]]
+      sizeMap = HM.fromList [(Minio.oiObject i, Minio.oiSize i) | i <- infos]
+      -- Upload order ≈ event order (keys are `<sid>/<uploadTs>.json`); byte-bounded
+      -- groups keep shard boundaries deterministic and heap-bounded.
+      groups = chunksByBytes (fromIntegral shardSealBytes) (\k -> fromIntegral (HM.lookupDefault 0 k sizeMap)) (sort fileKeys)
   forM_ (zip [startIdx ..] groups) (uncurry sealGroup)
   where
     sealGroup idx keys = do

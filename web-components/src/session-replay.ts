@@ -396,7 +396,7 @@ export class SessionReplay extends LitElement {
       return;
     }
     this.loadError = null;
-    this.events = events;
+    this.events = [...events]; // own copy: appendEvents pushes here without mutating the array handed to Replayer
     const target = document.querySelector('#playerWrapper') as HTMLElement;
     this.currentTime = 0;
     this.consoleEvents = [];
@@ -467,10 +467,13 @@ export class SessionReplay extends LitElement {
         this.seenFirstMeta = true;
       }
     });
-    if (errs.length) this.errorTicks = [...this.errorTicks, ...errs];
-    if (warns.length) this.warnTicks = [...this.warnTicks, ...warns];
-    if (navs.length) this.navMarkers = [...this.navMarkers, ...navs];
-    this.consoleEvents = [...this.consoleEvents];
+    // Mutate the marker arrays in place — appending per shard with a fresh copy
+    // each time is O(shards²) over a long multi-shard stream. requestUpdate() keeps
+    // Lit re-rendering the scrubber ticks + console list without the copy.
+    this.errorTicks.push(...errs);
+    this.warnTicks.push(...warns);
+    this.navMarkers.push(...navs);
+    this.requestUpdate();
   }
 
   // Feed a streamed shard's events into the live player and extend derived state.
@@ -482,8 +485,8 @@ export class SessionReplay extends LitElement {
       } catch (e) {
         console.warn('addEvent failed for streamed replay event:', e);
       }
+      this.events.push(ev); // grow in place; concat per shard is O(shards²)
     }
-    this.events = this.events.concat(events);
     this.ingestMarkers(events);
     // totalTime grows as later shards arrive, so the scrubber extends live.
     this.metaData = this.player.getMetaData();
@@ -646,7 +649,6 @@ export class SessionReplay extends LitElement {
     this.consoleTypesCounts = { error: 0, warn: 0, info: 0 };
     this.segments = [];
     this.loadedSegments = 0;
-    this.seenFirstMeta = false;
     const requestedId = sessionId;
 
     if (this.sessionUrl) {
