@@ -1,6 +1,7 @@
 module Pages.LogExplorer.LogSpec (spec) where
 
 import Data.Aeson qualified as AE
+import Data.Aeson.KeyMap qualified as AEKM
 import Data.HashMap.Strict qualified as HashMap
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -433,7 +434,7 @@ spec = around withTestResources do
       let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) frozenTime
           toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 frozenTime
       (_, pv) <- testServant tr $ Log.logPatternsH testPid Nothing fromTime Nothing toTime (Just "spans") Nothing Nothing
-      case pv of Log.PatternsView total _ -> total `shouldSatisfy` (>= 0)
+      case pv of Log.PatternsView total _ _ _ -> total `shouldSatisfy` (>= 0)
       -- The JSON envelope carries the shared aggregate columns + the pattern total.
       let j = decodeUtf8 (toStrict (AE.encode pv)) :: Text
       j `shouldSatisfy` T.isInfixOf "totalPatterns"
@@ -444,6 +445,33 @@ spec = around withTestResources do
           toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 frozenTime
       (_, sv) <- testServant tr $ Log.logSessionsH testPid Nothing fromTime Nothing toTime Nothing Nothing
       case sv of Log.SessionsView total _ _ -> total `shouldSatisfy` (>= 0)
+
+  describe "Pattern expand (apiLogExpandH)" do
+    -- Regression: clicking a pattern used to send the summary *template* as the
+    -- key and match it via `array_to_string(summary, chr(30)) ILIKE …`, which
+    -- never matched the real multi-element / metadata-stripped summary array —
+    -- the row always came back "No events". The drain-flush stamps a
+    -- `pat:<hash>` tag on each row's `hashes` column, so expand now matches by
+    -- tag. This pins that: a hash key finds its tagged row, an untagged hash
+    -- doesn't, and the summary-template fallback path can't spoof a hash match.
+    it "matches example events by pat:<hash> tag, not by summary ILIKE" \tr -> do
+      let spanName = "GET /api/pattern-expand" :: Text
+          patHash = "abcd1234" :: Text
+      apiKey <- createTestAPIKey tr testPid "pattern-expand-key"
+      ingestTrace tr apiKey spanName frozenTime
+      void $ withPool tr.trPool $ DBT.execute [sql| UPDATE otel_logs_and_spans SET hashes = ? WHERE project_id = ? AND name = ? |] (PGArray ["pat:" <> patHash], testPid, spanName)
+
+      let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) frozenTime
+          toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 frozenTime
+          rowCount v = case v of AE.Object o | Just (AE.Number n) <- AEKM.lookup "queryResultCount" o -> round n; _ -> -1
+          expand key = rowCount . snd <$> testServant tr (Log.apiLogExpandH testPid (Just "pattern") (Just key) Nothing Nothing fromTime Nothing toTime)
+
+      -- The real hash tag finds the tagged row.
+      expand patHash >>= (`shouldBe` 1)
+      -- A hash-shaped key with no matching tag finds nothing (no accidental match).
+      expand "00000000" >>= (`shouldBe` 0)
+      -- The summary-template fallback (non-hash key) must not tag-match this row.
+      expand spanName >>= (`shouldBe` 0)
 
   describe "Alert form endpoint (alertFormH)" do
     it "renders the create-monitor form" \tr -> do

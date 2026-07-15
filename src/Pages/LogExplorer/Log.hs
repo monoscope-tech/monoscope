@@ -2,6 +2,7 @@ module Pages.LogExplorer.Log (
   apiLogH,
   logExplorerDataH,
   logExplorerSchemaH,
+  logExplorerFacetsH,
   logPatternsH,
   logSessionsH,
   saveQueryH,
@@ -74,6 +75,7 @@ import System.Types
 import Text.Megaparsec (parseMaybe)
 import Utils (FieldAction (..), FieldMenuCtx (..), LoadingSize (..), LoadingType (..), checkFreeTierStatus, faSprite_, fieldContextMenuItems_, fieldMenuPanel_, getDurationNSMS, getServiceColors, htmxOverlayIndicator_, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecTextByKey, methodFillColor, popoverTrigger_, prettyPrintCount, sanitizeBackendError, serviceFillColor, statusFillColorText)
 
+import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.UUID qualified as UUID
 import Models.Apis.Monitors (MonitorAlertConfig (..))
@@ -688,7 +690,7 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
   recordExploration pid sess.persistentSession.userId project.onboardingStepsCompleted queryAST
 
   now <- Time.currentTime
-  let (fromD, toD, currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
+  let (_, _, currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
   authCtx <- Effectful.Reader.Static.ask @AuthContext
 
   -- An alert ID pre-fills the query box and selects the alert's viz type.
@@ -697,32 +699,23 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
     Nothing -> pure Nothing
   let effectiveVizType = vizTypeM <|> ((.visualizationType) <$> alertDM)
 
-  -- Only shell-side queries: query library, facets, free-tier. The sessions
-  -- summary is no longer computed here — it rides along the sessions data fetch
-  -- (single scan, see fetchSessions) and is injected into #page-summary-region
-  -- client-side, so the shell renders a skeleton instead of blocking on it.
-  (queryLibE, facetSummaryE, freeTierStatusE) <- Ki.scoped \scope -> do
+  -- Shell-side queries are just query library + free-tier. Facets lazy-load via
+  -- HTMX (logExplorerFacetsH) and the sessions summary rides the sessions data
+  -- fetch (single scan, injected client-side) — neither is computed here, so the
+  -- shell stays lean.
+  (queryLibE, freeTierStatusE) <- Ki.scoped \scope -> do
     let aw = Ki.atomically . Ki.await
     t1 <- forkWithCtx scope $ tryAny $ Projects.queryLibHistoryForUser pid sess.persistentSession.userId
-    t2 <- forkWithCtx scope $ tryAny $ SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" (fromMaybe (addUTCTime (-86400) now) fromD) (fromMaybe now toD)
     t3 <- forkWithCtx scope $ tryAny $ checkFreeTierStatus pid project.paymentPlan
-    (,,) <$> aw t1 <*> aw t2 <*> aw t3
+    (,) <$> aw t1 <*> aw t3
 
   let logErr label res = whenLeft_ (void res) (Log.logAttention ("Log explorer " <> label <> " failed") . show @Text)
   logErr "queryLib" queryLibE
-  logErr "facets" facetSummaryE
   logErr "freeTierStatus" freeTierStatusE
 
   let queryLib = fromRight [] queryLibE
-      facetSummary = join $ rightToMaybe facetSummaryE
       freeTierStatus = fromRight def freeTierStatusE
       (queryLibRecent, queryLibSaved) = bimap V.fromList V.fromList $ L.partition (\x -> Projects.QLTHistory == x.queryType) queryLib
-
-  -- Queue facet generation if no precomputed facets exist (new projects)
-  when (isNothing facetSummary)
-    $ liftIO
-    $ withResource authCtx.jobsPool \conn ->
-      void $ createJob conn "background_jobs" $ BackgroundJobs.GenerateOtelFacetsBatch (V.singleton pid) now
 
   -- Preload the data fetch from <head> so it overlaps shell render instead of
   -- starting only after the log-list web component boots. Point it at the endpoint
@@ -764,7 +757,6 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
           , queryLibSaved
           , targetEvent = targetEventM
           , showTrace = showTraceM
-          , facets = facetSummary
           , vizType = effectiveVizType
           , alert = alertDM
           , targetPattern = pTargetM
@@ -847,6 +839,23 @@ logExplorerDataH pid queryM' cols' cursorM' sinceM fromM toM sourceM targetSpans
       }
 
 
+-- | Facet sidebar values, lazy-loaded via HTMX (intersect once) so the ~680KB of
+-- value rows isn't inlined into the initial page render. Facets are project-wide
+-- (independent of query/time range), so this needs only the project id. Also
+-- queues facet generation for projects that don't have a precomputed summary yet.
+logExplorerFacetsH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
+logExplorerFacetsH pid = do
+  _ <- Projects.sessionAndProject pid
+  authCtx <- Effectful.Reader.Static.ask @AuthContext
+  now <- Time.currentTime
+  facetSummary <- SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" now now
+  when (isNothing facetSummary)
+    $ liftIO
+    $ withResource authCtx.jobsPool \conn ->
+      void $ createJob conn "background_jobs" $ BackgroundJobs.GenerateOtelFacetsBatch (V.singleton pid) now
+  addRespHeaders $ maybe (div_ [class_ "px-1 py-4 text-xs italic text-textWeak"] "Filters are still being built for this project.") renderFacets facetSummary
+
+
 -- | Enriched span schema for the query editor, served from a dedicated endpoint
 -- so the ~365KB payload isn't inlined into (and re-encoded on) every page render.
 -- The client caches it in a window promise for the session. Facet enrichment is
@@ -862,12 +871,15 @@ logExplorerSchemaH pid = do
 -- | Patterns visualization data endpoint (aggregate log patterns as JSON).
 logPatternsH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> ATAuthCtx (RespHeaders PatternsView)
 logPatternsH pid queryM' sinceM fromM toM sourceM pTargetM skipM = do
-  (authCtx, _, fromD, toD) <- logDataEnv pid sinceM fromM toM
+  (authCtx, now, fromD, toD) <- logDataEnv pid sinceM fromM toM
+  -- Start (epoch seconds) of the earliest of the 24 hourly volume slots, so the
+  -- client can map bar i to the clock hour @baseHourEpoch + i*3600@ (see buildHourlyBuckets).
+  let baseHourEpoch = (floor (utcTimeToPOSIXSeconds now) `div` 3600 - 23) * 3600 :: Int
   case parseQueryToAST (maybeToMonoid queryM') of
-    Left err -> Log.logInfo "Log explorer patterns: rejected invalid KQL query" err >> addRespHeaders (PatternsView 0 V.empty)
+    Left err -> Log.logInfo "Log explorer patterns: rejected invalid KQL query" err >> addRespHeaders (PatternsView 0 V.empty False 0)
     Right queryAST -> do
       (total, rows) <- LogQueries.fetchLogPatterns authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) (parseMaybe pSource =<< sourceM) pTargetM (fromMaybe 0 skipM)
-      addRespHeaders $ PatternsView total (V.fromList rows)
+      addRespHeaders $ PatternsView total (V.fromList rows) (fromMaybe 0 skipM == 0) baseHourEpoch
 
 
 -- | Sessions visualization data endpoint (aggregate sessions as JSON).
@@ -1013,6 +1025,119 @@ chartSummarySkeleton_ =
     div_ [class_ "flex-1 min-w-0 max-md:hidden rounded-2xl skeleton-shimmer"] ""
 
 
+-- | KPI card shared by the sessions/patterns summary headers.
+kpiCard_ :: Text -> Text -> Maybe Text -> Html ()
+kpiCard_ label value subM = div_ [class_ "surface-raised rounded-2xl px-3 py-2 flex flex-col gap-0.5 min-w-0"] do
+  span_ [class_ "text-xs text-textWeak truncate"] $ toHtml label
+  strong_ [class_ "text-textStrong text-xl font-bold tabular-nums leading-tight truncate"] $ toHtml value
+  whenJust subM (span_ [class_ "text-xs text-textWeak tabular-nums truncate"] . toHtml)
+
+
+-- | Legend swatch shared by the sessions/patterns over-time charts.
+legendSwatch_ :: Text -> Html () -> Html ()
+legendSwatch_ cls label = span_ [class_ "flex items-center gap-1"] (span_ [class_ $ "inline-block w-2 h-2 rounded-sm " <> cls] "" >> label)
+
+
+-- | The stacked clean/errored rects inside one over-time bar.
+summaryBarRects_ :: (Int -> Double) -> Int -> Int -> Html ()
+summaryBarRects_ norm c e = do
+  let bar cls n = when (n > 0) $ div_ [class_ cls, style_ $ "height:" <> T.show (max 4 (norm n)) <> "%"] ""
+  bar "w-full rounded-sm bg-fillBrand-strong/70 group-hover/bar:bg-fillBrand-strong transition-colors" c
+  bar "w-full rounded-sm bg-fillError-strong" e
+
+
+-- | Over-time chart card shared by the sessions/patterns headers. Bars carry a
+-- @data-bi@ bucket index and a @data-count@ base tooltip; @bucketStartEpoch@ and
+-- @bucketWidthSec@ ride on the container. @window.formatSummaryChart@ (run after
+-- the header is injected) fills the axis labels and per-bar time-range tooltips in
+-- the browser's local timezone, so they match the table/time-picker.
+summaryChartCard_ :: Text -> Maybe Text -> Int -> Int -> [Html ()] -> Html ()
+summaryChartCard_ title noteM bucketStartEpoch bucketWidthSec barEls =
+  div_ [class_ "surface-raised rounded-2xl px-3 py-2"] do
+    div_ [class_ "flex items-center justify-between mb-1"] do
+      span_ [class_ "text-xs text-textWeak"] $ toHtml title
+      div_ [class_ "flex gap-3 text-xs text-textWeak"] do
+        legendSwatch_ "bg-fillBrand-strong/70" "Clean"
+        legendSwatch_ "bg-fillError-strong" "Errored"
+    if null barEls
+      then div_ [class_ "h-12 flex items-center justify-center text-xs text-textWeak"] "No data in range"
+      else do
+        div_ ([class_ "flex items-end gap-[2px] h-12", data_ "summary-chart" "", data_ "bucket-start" (T.show bucketStartEpoch), data_ "bucket-width" (T.show bucketWidthSec)] <> maybe [] (\n -> [data_ "note" n]) noteM) $ sequence_ barEls
+        div_ [class_ "flex justify-between text-2xs text-textWeak mt-1 tabular-nums"] do
+          span_ [data_ "axis-start" ""] ""
+          span_ [data_ "axis-end" ""] ""
+
+
+-- | Summary header for the patterns viz — parity with 'sessionsHeader_'. KPIs and
+-- the volume chart are derived from the returned page (the per-pattern volume
+-- buckets are summed element-wise, split clean/error), so no extra scan is needed.
+-- The buckets are the hourly series behind the ~volume column, clamped to the
+-- picker but laid out in a fixed 24-slot frame; we trim the all-zero head/tail
+-- so the chart shows only the populated window. @baseHourEpoch@ is the start
+-- (epoch seconds) of hourly slot 0, so bar @i@ covers @baseHourEpoch + i*3600@.
+-- Bars are non-interactive: unlike sessions we don't carry a filter action.
+patternsHeader_ :: V.Vector LogQueries.PatternRow -> Int -> Int -> Html ()
+patternsHeader_ rowsV totalPatterns baseHourEpoch = do
+  let rows = V.toList rowsV
+      inRange p = sum p.volume
+      shown = length rows
+      totalEvents = sum (map inRange rows) :: Int
+      errRows = filter (.isError) rows
+      errPatterns = length errRows
+      errShare = if shown == 0 then 0 else 100 * (fromIntegral errPatterns :: Double) / fromIntegral shown
+      services = length $ ordNub $ mapMaybe (.service) rows
+      topShare = case rows of
+        (p : _) | totalEvents > 0 -> 100 * (fromIntegral (inRange p) :: Double) / fromIntegral totalEvents
+        _ -> 0
+      nBuckets = foldl' max 0 (map (length . (.volume)) rows)
+      pad xs = take nBuckets (xs ++ repeat 0)
+      sumBk ps = foldl' (zipWith (+)) (replicate nBuckets 0) (map (pad . (.volume)) ps)
+      -- Trim leading/trailing empty hourly slots to the populated window so a
+      -- short range doesn't render as one bar lost in 23 empty ones.
+      rawClean = sumBk (filter (not . (.isError)) rows)
+      rawErr = sumBk errRows
+      active = [i | (i, t) <- zip [0 :: Int ..] (zipWith (+) rawClean rawErr), t > 0]
+      slice xs = case active of
+        [] -> []
+        _ -> take (L.maximum active - L.minimum active + 1) $ drop (L.minimum active) xs
+      cleanBk = slice rawClean
+      errBk = slice rawErr
+      -- Bars keep their original hour index so the client maps bar i to the
+      -- clock hour @baseHourEpoch + i*3600@.
+      shownIdx = case active of
+        [] -> []
+        _ -> [L.minimum active .. L.maximum active]
+      bars = zip3 shownIdx cleanBk errBk
+      maxBar = foldl' max 0 (zipWith (+) cleanBk errBk)
+      norm n = if maxBar <= 0 then 0 else (fromIntegral n / fromIntegral maxBar :: Double) * 100
+      barEls =
+        [ div_
+            [ class_ "flex-1 h-full flex flex-col-reverse gap-[1px] min-w-[2px] group/bar"
+            , data_ "bi" (T.show i)
+            , data_ "count" (prettyPrintCount (c + e) <> " events \xb7 " <> prettyPrintCount e <> " errored")
+            ]
+            (summaryBarRects_ norm c e)
+        | (i, c, e) <- bars
+        ]
+
+      kpis :: [(Text, Text, Maybe Text)]
+      kpis =
+        [ ("Patterns", prettyPrintCount totalPatterns, Just $ prettyPrintCount shown <> " shown")
+        , ("Events", prettyPrintCount totalEvents, Just "in range")
+        , ("Error patterns", prettyPrintCount errPatterns, Just $ fmtPct1 errShare <> " of shown")
+        , ("Services", prettyPrintCount services, Nothing)
+        , ("Noisiest", fmtPct1 topShare, Just "of events")
+        ]
+
+  div_ [class_ "mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full flex flex-col gap-2"] do
+    div_ [class_ "grid grid-cols-5 max-md:grid-cols-3 gap-2"] $ forM_ kpis \(label, value, subM) -> kpiCard_ label value subM
+    -- Patterns volume is hourly (from the rollup), so a range under an hour
+    -- resolves to a single full-width bar. Rather than hide the trend, the note
+    -- rides on the container and the client appends it to the lone bar's tooltip
+    -- so a hover explains why it's one bar (see formatSummaryChart).
+    summaryChartCard_ "Volume over time" (Just "bucketed hourly \x2014 widen the range for a fuller trend") baseHourEpoch 3600 barEls
+
+
 sessionsHeader_ :: LogQueries.SessionSummary -> Html ()
 sessionsHeader_ summ = do
   let total = fromIntegral summ.totalSessions :: Int
@@ -1025,15 +1150,20 @@ sessionsHeader_ summ = do
       maxBar = foldl' max 0 $ zipWith (+) summ.clean summ.errored
       norm n = if maxBar <= 0 then 0 else (fromIntegral n / fromIntegral maxBar :: Double) * 100
       bucketFrom i = summ.bucketStartEpoch + i * summ.bucketWidthSec
-
-      kpi :: Text -> Text -> Maybe Text -> Html ()
-      kpi label value subM = div_ [class_ "surface-raised rounded-2xl px-3 py-2 flex flex-col gap-0.5 min-w-0"] do
-        span_ [class_ "text-xs text-textWeak truncate"] $ toHtml label
-        strong_ [class_ "text-textStrong text-xl font-bold tabular-nums leading-tight truncate"] $ toHtml value
-        whenJust subM (span_ [class_ "text-xs text-textWeak tabular-nums truncate"] . toHtml)
-
-      legend :: Text -> Html () -> Html ()
-      legend cls label = span_ [class_ "flex items-center gap-1"] (span_ [class_ $ "inline-block w-2 h-2 rounded-sm " <> cls] "" >> label)
+      -- The onclick filters the table to the bucket; the axis labels + time-range
+      -- tooltips are filled client-side by window.formatSummaryChart from the
+      -- data-bucket-start/width on the container (see summaryChartCard_).
+      barEls =
+        [ button_
+            [ class_ "flex-1 h-full flex flex-col-reverse gap-[1px] min-w-[2px] cursor-pointer group/bar"
+            , type_ "button"
+            , data_ "bi" (T.show i)
+            , data_ "count" (prettyPrintCount (c + e) <> " sessions \xb7 " <> prettyPrintCount e <> " errored")
+            , onclick_ $ "window.__sessionsBucketFilter(" <> T.show (bucketFrom i) <> "," <> T.show (bucketFrom i + summ.bucketWidthSec) <> ")"
+            ]
+            (summaryBarRects_ norm c e)
+        | (i, c, e) <- bars
+        ]
 
       kpis :: [(Text, Text, Maybe Text)]
       kpis =
@@ -1046,32 +1176,8 @@ sessionsHeader_ summ = do
         ]
 
   div_ [class_ "mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full flex flex-col gap-2"] do
-    div_ [class_ "grid grid-cols-6 max-md:grid-cols-3 gap-2"] $ forM_ kpis \(label, value, subM) -> kpi label value subM
-    div_ [class_ "surface-raised rounded-2xl px-3 py-2"] do
-      div_ [class_ "flex items-center justify-between mb-1"] do
-        span_ [class_ "text-xs text-textWeak"] "Sessions over time"
-        div_ [class_ "flex gap-3 text-xs text-textWeak"] do
-          legend "bg-fillBrand-strong/70" "Clean"
-          legend "bg-fillError-strong" "Errored"
-
-      if total == 0 || null bars
-        then div_ [class_ "h-12 flex items-center justify-center text-xs text-textWeak"] "No sessions in range"
-        else div_ [class_ "flex items-end gap-[2px] h-12"] do
-          let bar cls n pct = when (n > 0) $ div_ [class_ cls, style_ $ "height:" <> T.show (max 4 pct) <> "%"] ""
-          forM_ bars \(i, c, e) -> do
-            let cPct = norm c
-                ePct = norm e
-                tip = prettyPrintCount (c + e) <> " sessions · " <> prettyPrintCount e <> " errored"
-            button_
-              [ class_ "flex-1 h-full flex flex-col-reverse gap-[1px] min-w-[2px] cursor-pointer group/bar"
-              , type_ "button"
-              , data_ "tippy-content" tip
-              , onclick_ $ "window.__sessionsBucketFilter(" <> T.show (bucketFrom i) <> "," <> T.show (bucketFrom i + summ.bucketWidthSec) <> ")"
-              ]
-              do
-                -- /70 opacity matches the legend swatch; /40 was nearly invisible on the dark surface.
-                bar "w-full rounded-sm bg-fillBrand-strong/70 group-hover/bar:bg-fillBrand-strong transition-colors" c cPct
-                bar "w-full rounded-sm bg-fillError-strong" e ePct
+    div_ [class_ "grid grid-cols-6 max-md:grid-cols-3 gap-2"] $ forM_ kpis \(label, value, subM) -> kpiCard_ label value subM
+    summaryChartCard_ "Sessions over time" Nothing summ.bucketStartEpoch summ.bucketWidthSec barEls
 
 
 -- The bar's onclick calls window.__sessionsBucketFilter, defined once in
@@ -1107,15 +1213,27 @@ instance ToHtml QueryLibraryView where
   toHtmlRaw = toHtml
 
 
--- | JSON payload for the patterns visualization endpoint.
-data PatternsView = PatternsView Int (V.Vector LogQueries.PatternRow)
+-- | JSON payload for the patterns visualization endpoint. The 'Bool' flags the
+-- first page (skip=0); when set, the rendered summary header rides along as
+-- @summaryHtml@ so the client injects #page-summary-region without a second scan
+-- (mirrors 'SessionsView').
+data PatternsView = PatternsView Int (V.Vector LogQueries.PatternRow) Bool Int
 
 
 instance AE.ToJSON PatternsView where
-  toJSON (PatternsView totalPatterns patterns) = aggregateEnvelope rows cols allCols total ["totalPatterns" AE..= totalPatterns]
+  toJSON (PatternsView totalPatterns patterns isFirstPage baseHourEpoch) =
+    aggregateEnvelope rows cols allCols total
+      $ ["totalPatterns" AE..= totalPatterns]
+      <> ["summaryHtml" AE..= Lucid.renderText (patternsHeader_ patterns totalPatterns baseHourEpoch) | isFirstPage]
     where
-      cols = ["id", "pattern_count", "volume", "level", "service", "summary"] :: [Text]
-      allCols = cols ++ ["merged_count", "is_error"] :: [Text]
+      -- No level ("status") column: it's null for span-based patterns (a dead
+      -- all-"-" column), error patterns already carry an inline badge, and the
+      -- sidebar Log Level facet covers filtering. Level stays in allCols so
+      -- colIdxMap indices (esp. is_error) and the error derivation are intact.
+      cols = ["id", "pattern_count", "volume", "service", "summary"] :: [Text]
+      -- pattern_hash carries the comma-joined pat: tag hashes (see PatternRow.hashes);
+      -- the client feeds it to the inline-expand endpoint as the tag-match key.
+      allCols = ["id", "pattern_count", "volume", "level", "service", "summary", "merged_count", "is_error", "pattern_hash"] :: [Text]
       patternToSummary pat
         | "\x1E" `T.isInfixOf` pat = AE.toJSON (T.splitOn "\x1E" pat)
         | otherwise = AE.toJSON (splitSummaryElements pat)
@@ -1123,7 +1241,7 @@ instance AE.ToJSON PatternsView where
       -- element; subsequent plain words are part of the preceding element's value.
       splitSummaryElements :: Text -> [Text]
       splitSummaryElements = map unwords . L.groupBy (\_ w -> not ("⇒" `T.isInfixOf` w)) . words
-      rowOf p = AE.Array $ V.fromList [AE.Null, AE.toJSON p.count, AE.toJSON p.volume, AE.toJSON p.level, AE.toJSON p.service, patternToSummary p.logPattern, AE.toJSON p.mergedCount, AE.toJSON p.isError]
+      rowOf p = AE.Array $ V.fromList [AE.Null, AE.toJSON p.count, AE.toJSON p.volume, AE.toJSON p.level, AE.toJSON p.service, patternToSummary p.logPattern, AE.toJSON p.mergedCount, AE.toJSON p.isError, AE.toJSON (T.intercalate "," p.hashes)]
       rows = V.map rowOf patterns
       total = V.foldl' (\acc p -> acc + p.count) 0 patterns
 
@@ -1214,7 +1332,6 @@ data ApiLogsPageData = ApiLogsPageData
   , queryLibSaved :: V.Vector Projects.QueryLibItem
   , targetEvent :: Maybe Text
   , showTrace :: Maybe Text
-  , facets :: Maybe FacetSummary
   , vizType :: Maybe Text
   , alert :: Maybe Monitors.QueryMonitor
   , targetPattern :: Maybe Text
@@ -1357,13 +1474,13 @@ apiLogsPage page = do
           , parseError = page.parseError
           }
 
-      -- For the sessions viz the header (summary) is computed in the same scan as
-      -- the rows and injected client-side from the sessions data response (see
-      -- log-list.ts) — so render the skeleton here and let the data fetch fill it,
-      -- rather than blocking the shell on a summary query. Other viz types render
-      -- the chart+latency widgets. #page-summary-region is the swap target.
+      -- For the sessions and patterns viz the header (summary) is derived in the
+      -- same fetch as the rows and injected client-side from the data response
+      -- (see log-list.ts) — so render the skeleton here and let the data fetch
+      -- fill it, rather than blocking the shell on a summary query. Other viz
+      -- types render the chart+latency widgets. #page-summary-region is the swap target.
       div_ [id_ "page-summary-region"]
-        $ if page.vizType == Just "sessions"
+        $ if page.vizType == Just "sessions" || page.vizType == Just "patterns"
           then sessionsSummarySkeleton_
           else div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full min-h-36 max-md:min-h-28 aspect-[10/1] max-md:aspect-auto max-md:flex-col"] do
             Widget.widget_ page.chartWidget
@@ -1405,7 +1522,16 @@ apiLogsPage page = do
                       show <div.facet-value/> in #{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()
                   |]
             ]
-        whenJust page.facets renderFacets
+        -- Facet values (~680KB) are lazy-loaded via HTMX on first intersect so
+        -- they're kept out of the initial page render; search still works once
+        -- loaded (facets are project-wide, independent of query/time range).
+        div_
+          [ id_ "facets-list"
+          , hxGet_ $ "/p/" <> page.pid.toText <> "/log_explorer/facets"
+          , hxTrigger_ "intersect once"
+          , hxSwap_ "innerHTML"
+          ]
+          $ div_ [class_ "px-1 py-4 text-xs text-textWeak"] "Loading filters\x2026"
 
     logsListPanel = div_ [class_ "grow will-change-[width] contain-[layout_style] relative flex flex-col shrink-1 min-w-0 w-full h-full ", id_ "logs_list_container"] do
       rowCountHeader

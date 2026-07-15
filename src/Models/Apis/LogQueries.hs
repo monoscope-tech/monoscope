@@ -29,6 +29,7 @@ import Control.Exception.Annotated (checkpoint, try)
 import Control.Lens (view, _5)
 import Data.Aeson qualified as AE
 import Data.Annotation (toAnnotation)
+import Data.Char (isDigit)
 import Data.Default
 import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.Hasql qualified as Hasql
@@ -406,7 +407,13 @@ keepDescendantsOf colIdxMap seedSpanIds rows
        in go (S.fromList seeds) seeds []
 
 
-data PatternRow = PatternRow {logPattern :: Text, count :: Int64, level :: Maybe Text, service :: Maybe Text, volume :: [Int], mergedCount :: Int, isError :: Bool}
+-- | @hashes@ carries the pattern's own hash plus any merged member hashes
+-- (@toXXHash@ of the drain template). These map to the @pat:\<hash\>@ tags the
+-- ingestion drain-flush appends to each row's @hashes@ column, so the inline
+-- expand can fetch example events by tag match rather than a lossy summary
+-- ILIKE. Only populated for the persisted @summary@ patterns (the only source
+-- field that tags rows today); empty otherwise.
+data PatternRow = PatternRow {logPattern :: Text, count :: Int64, level :: Maybe Text, service :: Maybe Text, volume :: [Int], mergedCount :: Int, isError :: Bool, hashes :: [Text]}
 
 
 -- | Display name for a session row: prefers email, then name, then user ID.
@@ -555,7 +562,14 @@ fetchLogPatterns enableTfReads pid queryAST dateRange sourceM targetM skip = do
       hourlyRows :: [(Text, UTCTime, Int)] <- Hasql.interp [HI.sql|SELECT pattern_hash, hour_bucket, event_count::BIGINT FROM apis.log_pattern_hourly_stats WHERE project_id = #{pid} AND source_field = #{target} AND pattern_hash = ANY(#{allHashes}) AND hour_bucket >= #{hourlyFrom} AND hour_bucket <= #{hourlyTo} ORDER BY pattern_hash, hour_bucket|]
       let volumeMap = HM.fromListWith (++) [(h, [(t, c)]) | (h, t, c) <- hourlyRows]
           lookupVolume h = buildHourlyBuckets now $ concatMap (\mh -> fromMaybe [] $ HM.lookup mh volumeMap) (h : fromMaybe [] (HM.lookup h memberHashMap))
-      pure (totalPatterns, [PatternRow{logPattern = pat, count = cnt, level = lvl, service = svc, volume = lookupVolume h, mergedCount = mc, isError = isErr} | (pat, cnt, lvl, svc, h, mc, _, isErr) <- precomputed])
+      -- The stored occurrence_count is all-time cumulative; the displayed count
+      -- must reflect the selected range, so derive it from the in-range hourly
+      -- buckets (sum of volume) and re-sort the page to keep the column monotonic.
+      -- Only summary patterns tag their rows with pat:<hash>, so only they can be
+      -- expanded by tag match; other source fields carry no hashes (empty).
+      let patHashes h = if target == "summary" then h : fromMaybe [] (HM.lookup h memberHashMap) else []
+          mkRow (pat, _allTime, lvl, svc, h, mc, _, isErr) = let vol = lookupVolume h in PatternRow{logPattern = pat, count = fromIntegral (sum vol), level = lvl, service = svc, volume = vol, mergedCount = mc, isError = isErr, hashes = patHashes h}
+      pure (totalPatterns, sortOn (Down . (.count)) $ map mkRow precomputed)
     else do
       Log.logTrace "fetchLogPatterns: falling back to on-the-fly query" $ AE.object ["full_where" AE..= fullWhere]
       let bucketW = bucketWidthSecs dateRange now
@@ -585,7 +599,7 @@ fetchLogPatterns enableTfReads pid queryAST dateRange sourceM targetM skip = do
           sorted = take 100 $ drop skip $ sortOn (Down . (\(c, _, _, _) -> c) . snd) $ HM.toList merged
           range = bucketRange [bi | (_, (_, _, _, bs)) <- sorted, (bi, _) <- bs]
       Log.logTrace "fetchLogPatterns: normalization done" $ AE.object ["patterns" AE..= HM.size merged]
-      pure (HM.size merged, [PatternRow{logPattern = pat, count = fromIntegral cnt, level = lvl, service = svc, volume = densifyBuckets range bs, mergedCount = 0, isError = maybe False ((== "error") . T.toLower) lvl} | (pat, (cnt, lvl, svc, bs)) <- sorted])
+      pure (HM.size merged, [PatternRow{logPattern = pat, count = fromIntegral cnt, level = lvl, service = svc, volume = densifyBuckets range bs, mergedCount = 0, isError = maybe False ((== "error") . T.toLower) lvl, hashes = []} | (pat, (cnt, lvl, svc, bs)) <- sorted])
   where
     -- SAFETY: All Left branches produce safe column names from hardcoded whitelists
     -- (flattenedOtelAttributes, rootColumns). Right branch uses parameterized #>> operator.
@@ -818,19 +832,31 @@ fetchEventExamples enableTfReads pid queryAST dateRange expandKind skip limitN =
       fullWhereSql = rawSql (whereCondition <> if T.null dateRangeClause then "" else " AND " <> dateRangeClause)
       expandFilter = case expandKind of
         ExpandSession sid -> [HI.sql| AND attributes___session___id = #{sid}|]
-        ExpandPattern tpl -> [HI.sql| AND array_to_string(summary, chr(30)) ILIKE #{templateToLike tpl}|]
+        -- Prefer tag match: the key is a comma-joined list of pat:<hash> tags
+        -- (see PatternRow.hashes) which the drain-flush stamps onto each row's
+        -- `hashes` column. Fall back to a summary ILIKE only for on-the-fly
+        -- patterns that carry no hash (non-summary source fields).
+        ExpandPattern key -> case patternKeyHashes key of
+          Just hs -> [HI.sql| AND hashes && #{toList hs}::text[]|]
+          Nothing -> [HI.sql| AND array_to_string(summary, chr(30)) ILIKE #{templateToLike key}|]
       cols = defaultSelectSqlQuery (Just SSpans)
       -- Mirror selectLogTable's summary column handling: wrap TEXT[] as JSON for row output.
       processedCols = map (\c -> if c == "summary" || "summary" `T.isSuffixOf` c then "to_json(summary)" else c) $ colsNoAsClause cols
       selectClause = T.intercalate ", " processedCols
       -- Sessions: fetch one root event per trace via DISTINCT ON so [+N] expansion
       -- covers all traces.  Patterns/other: fetch raw events as before.
+      --
+      -- The projection is built *inside* the DISTINCT ON subquery (not by wrapping
+      -- `SELECT * … ` and projecting outside): TimeFusion/DataFusion hits an internal
+      -- "physical input schema should be the same as … logical" error when the raw
+      -- `errors` parquet-variant column crosses a subquery boundary. Consuming it in an
+      -- expression here means only `arr` (jsonb) + `ts` (timestamp) escape the subquery.
       q = case expandKind of
         ExpandSession _ ->
-          rawSql ("SELECT jsonb_build_array(" <> selectClause <> ") FROM (SELECT DISTINCT ON (context___trace_id) * FROM otel_logs_and_spans WHERE ")
+          rawSql ("SELECT arr FROM (SELECT DISTINCT ON (context___trace_id) jsonb_build_array(" <> selectClause <> ") AS arr, timestamp AS ts FROM otel_logs_and_spans WHERE ")
             <> fullWhereSql
             <> expandFilter
-            <> [HI.sql| ORDER BY context___trace_id, parent_id ASC NULLS FIRST, timestamp ASC) sub ORDER BY timestamp ASC OFFSET #{skip}::BIGINT LIMIT #{limitN}::BIGINT|]
+            <> [HI.sql| ORDER BY context___trace_id, parent_id ASC NULLS FIRST, timestamp ASC) sub ORDER BY ts ASC OFFSET #{skip}::BIGINT LIMIT #{limitN}::BIGINT|]
         _ ->
           rawSql ("SELECT jsonb_build_array(" <> selectClause <> ") FROM otel_logs_and_spans WHERE ")
             <> fullWhereSql
@@ -848,6 +874,27 @@ fetchEventExamples enableTfReads pid queryAST dateRange expandKind skip limitN =
 -- checks @>= aggregatePageSize@ to set the @hasMore@ flag.
 aggregatePageSize :: Int
 aggregatePageSize = 100
+
+
+-- | Interpret an expand key as pattern @pat:\<hash\>@ tags. The frontend sends the
+-- comma-joined 'PatternRow.hashes' (8-char lowercase-hex 'toXXHash' values) as the
+-- key; a hash-shaped key means tag match, anything else (a summary template from an
+-- on-the-fly, untagged pattern) falls back to ILIKE. Detection is structural since
+-- templates always contain non-hex chars (spaces, @\8658@, @<*>@, …).
+--
+-- >>> patternKeyHashes "3ee107fa"
+-- Just ("pat:3ee107fa" :| [])
+-- >>> patternKeyHashes "3ee107fa,93529fe9"
+-- Just ("pat:3ee107fa" :| ["pat:93529fe9"])
+-- >>> patternKeyHashes "kind;neutral\8658internal <*>"
+-- Nothing
+-- >>> patternKeyHashes ""
+-- Nothing
+patternKeyHashes :: Text -> Maybe (NonEmpty Text)
+patternKeyHashes key =
+  let parts = T.splitOn "," key
+      isHash t = T.length t == 8 && T.all (\c -> isDigit c || (c >= 'a' && c <= 'f')) t
+   in if all isHash parts then nonEmpty (map ("pat:" <>) parts) else Nothing
 
 
 -- | Convert a Drain template to a SQL LIKE pattern: @\<*\>@ becomes @%@,
