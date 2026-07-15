@@ -9,6 +9,20 @@ OS_ARCH := $(ARCH)-$(OS)
 # Detect number of CPU cores (works on macOS and Linux)
 NCPUS := $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 
+# App port the live-reload server binds (matches System.Config default; override
+# to match a custom PORT in your .env).
+PORT ?= 8080
+
+# Built bundles whose content is baked into the page at COMPILE time via
+# hashAssetFile's TH splice (see BodyWrapper). They're addDependentFile deps, so
+# having ghcid watch them makes a JS/CSS-only rebuild trigger a :reload: GHC
+# re-runs the splice, the ?v= cache-buster updates, and the browser fetches the
+# freshly-built bundle instead of a stale cached copy. Without this, a JS change
+# never bumps the hash (ghcid only watches .hs) so the old bundle keeps serving.
+RELOAD_ASSETS := --reload=static/public/assets/web-components/dist/js/index.js \
+                 --reload=static/public/assets/web-components/dist/css/index.css \
+                 --reload=static/public/assets/css/tailwind.min.css
+
 css-start:
 	./node_modules/.bin/tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --watch 2>&1 | tee css.log
 post-css:
@@ -23,8 +37,30 @@ run:
 cypress:
 	set -a && . ./.env && npx cypress run --record
 
-live-reload:
-	ghcid --command 'cabal repl monoscope --no-semaphore --ghc-options="-j$(NCPUS) -Wno-error=unused-imports -Wno-error=unused-top-binds" --with-compiler=$(GHC)' --test ':run Start.startApp' --warnings
+# Kill any prior live-reload app + its ghcid/cabal-repl/ghci tree by the PROCESS
+# GROUP of whatever holds $(PORT). Group-killing is what avoids the orphaned
+# `cabal repl` processes + stale :8080 that pile up when ghcid is C-c'd: SIGINT
+# doesn't reliably reach the GHCi-hosted Warp server, so the old app keeps the
+# port and each restart's `:run Start.startApp` silently fails to rebind. Safe
+# by construction — the port owner is in a different process group than this
+# make invocation, so we never kill ourselves.
+kill-live-reload:
+	@PID=$$(lsof -ti tcp:$(PORT) 2>/dev/null | head -1); \
+	if [ -n "$$PID" ]; then \
+		PGID=$$(ps -o pgid= -p $$PID 2>/dev/null | tr -d ' '); \
+		if [ -n "$$PGID" ]; then \
+			echo "Freeing :$(PORT) — killing process group $$PGID"; \
+			kill -TERM -$$PGID 2>/dev/null || true; \
+			sleep 1; \
+		fi; \
+		REMAIN=$$(lsof -ti tcp:$(PORT) 2>/dev/null); \
+		[ -n "$$REMAIN" ] && kill -9 $$REMAIN 2>/dev/null || true; \
+	else \
+		echo "Port :$(PORT) already free"; \
+	fi
+
+live-reload: kill-live-reload
+	ghcid --command 'cabal repl monoscope --no-semaphore --ghc-options="-j$(NCPUS) -Wno-error=unused-imports -Wno-error=unused-top-binds" --with-compiler=$(GHC)' --test ':run Start.startApp' $(RELOAD_ASSETS) --warnings
 
 live-reload-cli:
 	ghcid --command 'cabal repl exe:monoscope --no-semaphore --ghc-options="-O0 -Wno-error=unused-imports -Wno-error=unused-top-binds" --with-compiler=$(GHC)' --warnings 2>&1 | tee build-cli.log
@@ -40,7 +76,13 @@ live-test-reload-all:
 
 # Integration tests with lib+test in ONE GHCi target (Jade's "cabal test-dev" trick).
 # `:reload` crosses src/<->test/ boundaries — no relink between iterations.
-# `-osuf dyn_o -hisuf dyn_hi` reuses .dyn_o artifacts cabal already wrote.
+# `-osuf dyn_o -hisuf dyn_hi` reuses the .dyn_o artifacts cabal already wrote, so
+# the cold load is fast. `-fobject-code` is the reliability half: without it GHCi
+# recompiles CHANGED modules to bytecode while unchanged ones stay object code,
+# and a bytecode module referencing an object module's constructor info-table
+# (`..._con_info`) fails macOS flat-namespace resolution in dynLoadObjs — the
+# intermittent "symbol not found in flat namespace" relink flake. Forcing every
+# recompile to object code keeps the whole session single-mode, so it can't mix.
 # Filter with: TEST_MATCH=Monitoring make live-test-dev
 # (hspec-discover node names drop the module's "Spec" suffix)
 # NB: GHCi's :main only strips quotes at token start, so `--match="X"` would
@@ -48,7 +90,7 @@ live-test-reload-all:
 TEST_MATCH ?=
 live-test-dev:
 	USE_EXTERNAL_DB=true LOG_LEVEL=attention \
-	ghcid --command 'cabal repl monoscope:test:test-dev --no-semaphore --ghc-options="-j$(NCPUS) -osuf dyn_o -hisuf dyn_hi -O0" --with-compiler=$(GHC)' \
+	ghcid --command 'cabal repl monoscope:test:test-dev --no-semaphore --ghc-options="-j$(NCPUS) -fobject-code -osuf dyn_o -hisuf dyn_hi -O0" --with-compiler=$(GHC)' \
 		--test ':main $(if $(TEST_MATCH),--match $(TEST_MATCH))' --warnings 2>&1 | tee build-test-dev.log
 
 hot-reload:
@@ -274,4 +316,4 @@ test-e2e-real: e2e-install
 test-e2e-ui: e2e-install
 	cd e2e && npx playwright test --ui
 
-.PHONY: all test fmt lint fix-lint live-reload live-reload-cli live-reload-doctests live-test-dev build-chart-cli build-chart-cli-linux tmux-live-reload tmux-live-reload-cli tmux-pin-here tmux-unpin web-components-watch e2e-install test-e2e test-e2e-real test-e2e-ui gen-proto sync-otel-proto update-otel-proto minio-local timefusion-start timefusion-stop test-integration-tf
+.PHONY: all test fmt lint fix-lint live-reload kill-live-reload live-reload-cli live-reload-doctests live-test-dev build-chart-cli build-chart-cli-linux tmux-live-reload tmux-live-reload-cli tmux-pin-here tmux-unpin web-components-watch e2e-install test-e2e test-e2e-real test-e2e-ui gen-proto sync-otel-proto update-otel-proto minio-local timefusion-start timefusion-stop test-integration-tf
