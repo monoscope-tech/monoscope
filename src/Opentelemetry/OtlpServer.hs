@@ -35,6 +35,7 @@ import Data.Cache qualified as Cache
 import Data.CaseInsensitive qualified as CI
 import Data.Char (isDigit)
 import Data.Effectful.Hasql qualified as Hasql
+import Data.Fixed (Fixed (MkFixed))
 import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HS
 import Data.List qualified as L
@@ -43,7 +44,6 @@ import Data.ProtoLens.Encoding (decodeMessage, encodeMessage)
 import Data.Scientific (fromFloatDigits)
 import Data.Text qualified as T
 import Data.These (These (..))
-import Data.Fixed (Fixed (MkFixed))
 import Data.Time (UTCTime, diffUTCTime)
 import Data.Time.Clock (secondsToNominalDiffTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
