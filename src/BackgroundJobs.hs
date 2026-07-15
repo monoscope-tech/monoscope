@@ -1,6 +1,6 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl, sameSegmentCount) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl, sameSegmentCount) where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
@@ -1842,6 +1842,78 @@ pgOnlyExec sql' = retryOnDeadlock "pgOnlyExec" $ Hasql.transaction TxS.ReadCommi
   HI.getRowsAffected <$> Tx.statement () (HI.interp True sql')
 
 
+-- | Cross-batch session/user backfill, dual-written to PG + TimeFusion.
+--
+-- The ingest-time cache ('TSC.lookupAndStamp') stamps the common case inline;
+-- this 90s sweep fills only the residual cross-batch gaps (sibling spans of a
+-- trace that arrived in separate batches, before the source attrs were cached)
+-- — for BOTH stores, so TimeFusion converges too (the store we're migrating to).
+-- One 'UPDATE \226\128\166 FROM' shape runs on both engines via 'dualExecPgTf'; TimeFusion
+-- executes it natively through its Delta MergeBuilder.
+--
+-- Scoped per project because (a) TimeFusion rejects any UPDATE without a
+-- @project_id@ filter in WHERE and (b) on Postgres that predicate is what lets
+-- the partial @idx_logs_and_spans_session_id@ / @_user_id@ indexes drive the plan
+-- instead of a cross-tenant seq scan (the 57014 statement-timeout root cause).
+--
+-- The window LAGS the write-hot edge (2\226\128\19317 min old) so the sweep rarely touches
+-- rows UPDATE-1/UPDATE-2 are actively writing; residual lock-order overlap is
+-- absorbed by 'dualExecPgTf''s @retryOnDeadlock@ (same discipline as UPDATE-1/2).
+backfillSessionAttributes
+  :: (DB es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es)
+  => Config.AuthContext -> Eff es Int64
+backfillSessionAttributes ctx = do
+  now <- Time.currentTime
+  let windowEnd = addUTCTime (-120) now -- lag 2 min behind the write-hot edge
+      windowStart = addUTCTime (-1020) now -- 17 min lookback
+  pids <- activeSessionProjects windowStart windowEnd
+  foldlM (\ !acc pid -> (acc +) <$> dualExecPgTf ctx (backfillSessionSql pid windowStart windowEnd)) 0 pids
+
+
+-- | Projects with session/user activity in the lagged window (index-driven via
+-- the partial session/user indexes). Drives the per-project backfill loop.
+activeSessionProjects :: DB es => UTCTime -> UTCTime -> Eff es [Projects.ProjectId]
+activeSessionProjects windowStart windowEnd =
+  Hasql.interp
+    [HI.sql| SELECT DISTINCT project_id::uuid FROM otel_logs_and_spans
+             WHERE timestamp >= #{windowStart} AND timestamp < #{windowEnd}
+               AND (attributes___session___id IS NOT NULL OR attributes___user___id IS NOT NULL) |]
+
+
+-- | Per-project session/user COALESCE-fill. TF-compatible single 'UPDATE \226\128\166 FROM'
+-- (per-trace aggregated source, INNER-joined on trace_id, @project_id@ literal in
+-- WHERE) \226\128\148 no advisory lock / @FOR UPDATE@ (both PG-only, rejected by TimeFusion).
+backfillSessionSql :: Projects.ProjectId -> UTCTime -> UTCTime -> HI.Sql
+backfillSessionSql pid windowStart windowEnd =
+  [HI.sql|
+    UPDATE otel_logs_and_spans o
+    SET attributes___session___id     = COALESCE(o.attributes___session___id, s.sid),
+        attributes___user___id        = COALESCE(o.attributes___user___id, s.uid),
+        attributes___user___email     = COALESCE(o.attributes___user___email, s.uemail),
+        attributes___user___name      = COALESCE(o.attributes___user___name, s.uname),
+        attributes___user___full_name = COALESCE(o.attributes___user___full_name, s.ufull)
+    FROM (
+      SELECT context___trace_id,
+             MAX(attributes___session___id)     FILTER (WHERE attributes___session___id IS NOT NULL) AS sid,
+             MAX(attributes___user___id)        FILTER (WHERE attributes___user___id IS NOT NULL) AS uid,
+             MAX(attributes___user___email)     FILTER (WHERE attributes___user___email IS NOT NULL) AS uemail,
+             MAX(attributes___user___name)      FILTER (WHERE attributes___user___name IS NOT NULL) AS uname,
+             MAX(attributes___user___full_name) FILTER (WHERE attributes___user___full_name IS NOT NULL) AS ufull
+      FROM otel_logs_and_spans
+      WHERE project_id = #{pid.toText}
+        AND timestamp >= #{windowStart} AND timestamp < #{windowEnd}
+        AND (attributes___session___id IS NOT NULL OR attributes___user___id IS NOT NULL)
+      GROUP BY context___trace_id
+    ) s
+    WHERE o.project_id = #{pid.toText}
+      AND o.context___trace_id = s.context___trace_id
+      AND o.timestamp >= #{windowStart} AND o.timestamp < #{windowEnd}
+      AND (o.attributes___session___id IS NULL OR o.attributes___user___id IS NULL
+        OR o.attributes___user___email IS NULL OR o.attributes___user___name IS NULL
+        OR o.attributes___user___full_name IS NULL)
+      AND (s.sid IS NOT NULL OR s.uid IS NOT NULL) |]
+
+
 processEagerBatch
   :: ExtractionWorker.ExtractionBatch Telemetry.OtelLogsAndSpans
   -> ExtractionWorker.ShardState Telemetry.OtelLogsAndSpans
@@ -2317,9 +2389,7 @@ runSessionBackfillTimer logger ctx tp = forever $ do
   tryStepIO logger ctx "session-backfill" $ runBackground logger ctx tp go
   where
     go = do
-      -- retryOnDeadlock covers the residual case the advisory gate can't:
-      -- lock-order deadlock against the hash-update writers (UPDATE-1/2).
-      n <- retryOnDeadlock "session-backfill" TSC.backfillSessionAttributes
+      n <- backfillSessionAttributes ctx
       when (n > 0) $ Log.logTrace "session-backfill" ("rows_updated" :: Text, n)
 
 

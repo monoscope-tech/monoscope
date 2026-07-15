@@ -1,5 +1,6 @@
 module Opentelemetry.TraceSessionPropagationSpec (spec) where
 
+import BackgroundJobs qualified as BGJobs
 import Data.HashMap.Strict qualified as HM
 import Data.Time (UTCTime, addUTCTime)
 import Data.UUID qualified as UUID
@@ -205,8 +206,9 @@ spec = around withTestResources do
       void $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto reqWith)
       rowsBefore <- querySessionColumns tr trId
       fmap (\(_, s, _, _, _, _) -> s) (findSpan "early-span" rowsBefore) `shouldBe` Just Nothing
-      -- Run shared backfill
-      n <- runQueryEffect tr TSC.backfillSessionAttributes
+      -- Run shared PG+TF backfill (seed the test clock to `base` so the aged
+      -- rows fall in the sweep's 2–17 min window).
+      n <- runTestBg base tr (BGJobs.backfillSessionAttributes tr.trATCtx)
       n `shouldSatisfy` (> 0)
       rowsAfter <- querySessionColumns tr trId
       fmap (\(_, s, _, _, _, _) -> s) (findSpan "early-span" rowsAfter) `shouldBe` Just (Just "sess-backfill")
