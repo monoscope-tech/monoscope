@@ -2136,15 +2136,17 @@ widgetSqlPreviewGetH pid queryM sinceStr fromDStr toDStr = do
           """
   where
     sqlBlock_ :: Text -> Text -> Html ()
-    sqlBlock_ label sql = div_ [class_ "space-y-1"] do
-      div_ [class_ "flex justify-between items-center"] do
-        span_ [class_ "text-textWeak font-sans"] $ toHtml label
-        button_
-          [ class_ "text-textBrand hover:underline font-sans text-xs"
-          , term "_" [text| on click writeText(`${T.replace "`" "\\`" sql}`) to the navigator's clipboard then set my.innerText to 'Copied!' then wait 1.5s then set my.innerText to 'Copy' |]
-          ]
-          "Copy"
-      pre_ [class_ "bg-fillWeak p-2 rounded overflow-x-auto max-h-48"] $ code_ [class_ "language-sql text-xs !bg-transparent"] $ toHtml sql
+    sqlBlock_ label sql =
+      let sqlEsc = T.replace "`" "\\`" sql
+       in div_ [class_ "space-y-1"] do
+            div_ [class_ "flex justify-between items-center"] do
+              span_ [class_ "text-textWeak font-sans"] $ toHtml label
+              button_
+                [ class_ "text-textBrand hover:underline font-sans text-xs"
+                , term "_" [text| on click writeText(`${sqlEsc}`) to the navigator's clipboard then set my.innerText to 'Copied!' then wait 1.5s then set my.innerText to 'Copy' |]
+                ]
+                "Copy"
+            pre_ [class_ "bg-fillWeak p-2 rounded overflow-x-auto max-h-48"] $ code_ [class_ "language-sql text-xs !bg-transparent"] $ toHtml sql
 
 
 -- | Find a tab by its slug, returns (index, tab) if found

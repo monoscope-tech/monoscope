@@ -1423,6 +1423,7 @@ apiLogsPage page = do
     -- by logQueryBox_ inside queryControlsSection. Do not re-emit it here — a second
     -- copy doubled the page payload and re-ran the facet-enrich + JSON encode.
 
+    pidTxt = page.pid.toText
     countText = prettyPrintCount page.queryResultCount
     suffixText = if page.queryResultCount >= page.resultCount then " rows" else "+ rows"
 
@@ -1640,7 +1641,7 @@ apiLogsPage page = do
                     put '' into me then remove .hidden from me
                     send toggleFullscreen(mode: 'trace', active: true) to #apiLogsPage
                     call updateUrlState('showTrace', traceId + '/?timestamp=' + timestamp)
-                    call htmx.ajax('GET', '/p/${page.pid.toText}/traces/' + traceId + '/?timestamp=' + encodeURIComponent(timestamp), {target: me, swap: 'innerHTML'})
+                    call htmx.ajax('GET', '/p/${pidTxt}/traces/' + traceId + '/?timestamp=' + encodeURIComponent(timestamp), {target: me, swap: 'innerHTML'})
                     then call window.evalScriptsFromContent(me)|]
         ]
         do

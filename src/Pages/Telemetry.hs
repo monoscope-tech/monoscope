@@ -711,6 +711,12 @@ tracePage pid traceItem spanRecords = do
                           $ div_ [class_ $ "h-full " <> color, style_ $ "width:" <> percent <> "%"] pass
 
           div_ [role_ "tabpanel", class_ "a-tab-content pt-2", id_ "water_fall"] do
+            when (length serviceNames > 1) $
+              div_ [class_ "flex flex-wrap items-center gap-x-4 gap-y-1 px-1 pb-2 text-xs text-textWeak"] $
+                forM_ serviceNames $ \s ->
+                  div_ [class_ "flex items-center gap-1.5"] do
+                    div_ [class_ $ "w-2.5 h-2.5 rounded-full shrink-0 " <> getServiceColor s serviceColors] pass
+                    span_ [class_ "truncate max-w-40"] $ toHtml s
             div_ [class_ "border border-strokeWeak w-full rounded-2xl min-h-[230px] overflow-y-auto overflow-x-hidden relative", style_ "--wf-left:35%", id_ $ "waterfall-container-" <> traceItem.traceId] do
               resizeDivider_ "--wf-left" 15 70 "waterfallResize" "waterfall-divider"
               div_ [class_ "h-full top-0 absolute z-30 hidden pointer-events-none", id_ $ "wf-time-indicator-" <> traceItem.traceId] do

@@ -402,6 +402,25 @@ function waterFallGraphChart(renderAt: string, serviceColors: Record<string, str
   });
   const maxDuration = Number.isFinite(max - min) && max > min ? max - min : 1;
 
+  // Faint vertical gridlines behind the bars, aligned exactly to the top ruler
+  // ticks, so a span's position in time is readable even deep in the tree.
+  const rows = container as HTMLElement;
+  const renderGridlines = () => {
+    const firstWidth = barData[0]?.el.clientWidth;
+    const ruler = document.querySelector('#waterfall-time-container-' + renderAt) as HTMLElement;
+    if (!firstWidth || !ruler) return;
+    rows.style.position = 'relative';
+    rows.style.zIndex = '0';
+    rows.querySelector('.wf-grid')?.remove();
+    const leftCol = ruler.getBoundingClientRect().left - rows.getBoundingClientRect().left;
+    const drawWidth = ruler.offsetWidth - SCROLL_BAR_WIDTH;
+    const grid = elt('div', { class: 'wf-grid absolute inset-0 pointer-events-none', style: 'z-index:-1' });
+    for (let i = 0; i <= 9; i++) {
+      grid.appendChild(elt('div', { class: 'absolute top-0 bottom-0 w-px', style: `left:${leftCol + (drawWidth * i) / 9}px;background-color:var(--color-fillPress);` }));
+    }
+    rows.appendChild(grid);
+  };
+
   const renderBars = () => {
     const firstWidth = barData[0]?.el.clientWidth;
     if (!firstWidth) return;
@@ -412,24 +431,44 @@ function waterFallGraphChart(renderAt: string, serviceColors: Record<string, str
       const pct = (duration / maxDuration) * 100;
 
       el.innerHTML = '';
+      const tip = (e: MouseEvent) => showTooltip(e, `${service} · ${spanName} — ${label} (${pct.toFixed(1)}%)${hasErrors ? ' · error' : ''}`);
       const bar = elt('div', {
         class: 'absolute top-1 bottom-1 rounded-sm flex items-center overflow-hidden',
         style: `left:${leftPx}px;width:${widthPx}px;background-color:${color};`,
-        onmouseenter: (e: MouseEvent) => showTooltip(e, `${service} · ${spanName} — ${label} (${pct.toFixed(1)}%)${hasErrors ? ' · error' : ''}`),
+        onmouseenter: tip,
         onmouseleave: () => hideTooltip(),
       });
       if (hasErrors) {
         bar.setAttribute('aria-label', `${spanName} errored`);
         bar.appendChild(getErrorOverlay());
       }
-      const tim = elt('span', { class: 'text-xs shrink-0 mr-1 ml-auto tabular-nums relative', style: `color:${textColor}` }, label);
-      bar.appendChild(tim);
       el.appendChild(bar);
+
+      // Duration label: keep it readable regardless of bar width. If the bar is
+      // wide enough, render inside (contrast color, right-aligned). Otherwise
+      // render OUTSIDE the bar — to its right, or flipped to the left when that
+      // would overflow the track — so tiny spans never hide their duration.
+      const labelW = label.length * 6.5 + 8;
+      const fitsInside = widthPx >= labelW + 6;
+      if (fitsInside) {
+        bar.appendChild(elt('span', { class: 'text-xs shrink-0 mr-1 ml-auto tabular-nums relative', style: `color:${textColor}` }, label));
+      } else {
+        const rightEdge = leftPx + widthPx;
+        const flipLeft = rightEdge + 4 + labelW > firstWidth;
+        const lx = flipLeft ? Math.max(0, leftPx - labelW - 4) : rightEdge + 4;
+        el.appendChild(elt('span', {
+          class: 'absolute top-1/2 -translate-y-1/2 text-xs tabular-nums text-textWeak whitespace-nowrap pointer-events-auto',
+          style: `left:${lx}px;`,
+          onmouseenter: tip,
+          onmouseleave: () => hideTooltip(),
+        }, label));
+      }
     }
   };
 
   const fullRender = () => {
     generateTimeIntervals(maxDuration, 'waterfall-time-container-' + renderAt);
+    renderGridlines();
     renderBars();
   };
 

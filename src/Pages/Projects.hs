@@ -987,14 +987,14 @@ teamPage pid team projMembers slackChannels discordChannels = do
                     div_ [class_ "text-xs"] do
                       div_ [class_ "font-medium text-textStrong"] "Test your notification setup"
                       div_ [class_ "text-textWeak mt-0.5"] "Sends a test incident to all configured channels"
-                  form_ [hxPost_ [text|/p/${pid.toText}/settings/integrations/test|], hxSwap_ "none", hxTrigger_ "submit", class_ "shrink-0"] do
+                  form_ [hxPost_ ("/p/" <> pid.toText <> "/settings/integrations/test"), hxSwap_ "none", hxTrigger_ "submit", class_ "shrink-0"] do
                     input_ [type_ "hidden", name_ "channel", value_ "all"]
                     input_ [type_ "hidden", name_ "teamId", value_ $ UUID.toText team.id]
                     input_ [type_ "hidden", name_ "issueType", value_ "runtime_exception"]
                     button_ ([type_ "submit", class_ "btn btn-xs btn-primary tap-target", [__| on htmx:afterRequest from closest <form/> trigger testSent on body |]] <> bool [] [disabled_ ""] (not hasAnyChannel)) do
                       faSprite_ "flask-vial" "regular" "h-3.5 w-3.5"
                       " Send Test"
-              div_ [id_ $ "team-test-history-" <> UUID.toText team.id, hxGet_ [text|/p/${pid.toText}/settings/integrations/history|], hxTrigger_ "testSent from:body", hxSwap_ "innerHTML", class_ "mt-3"] mempty
+              div_ [id_ $ "team-test-history-" <> UUID.toText team.id, hxGet_ ("/p/" <> pid.toText <> "/settings/integrations/history"), hxTrigger_ "testSent from:body", hxSwap_ "innerHTML", class_ "mt-3"] mempty
       div_ [class_ "flex-1 space-y-4"] do
         lazySection_ "monitors-section" "bell" "Monitors" "Search monitors..." ("/p/" <> pid.toText <> "/monitors/alerts/team/" <> UUID.toText team.id)
         lazySection_ "dashboards-section" "chart-area" "Dashboards" "Search dashboards..." ("/p/" <> pid.toText <> "/dashboards/?teamId=" <> UUID.toText team.id)
