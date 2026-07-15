@@ -2679,11 +2679,12 @@ export class LogList extends LitElement {
         'h-6 px-2 gap-1 shadow-sm transition-transform duration-150 ease-out hover:scale-105 active:scale-100',
         'motion-reduce:transition-none motion-reduce:hover:scale-100 text-textInverse-strong fill-textInverse-strong hover:brightness-110',
         // Primary action: solid fill, always visible, so replay reads as the thing to do.
-        // Broken sessions swap to the error fill so "replay the break" is unmistakable.
+        // One verb for both states; the error fill + tooltip carry the "this one broke" signal
+        // so the action label stays a stable, non-ambiguous constant.
         hasErrors ? 'bg-fillError-strong' : 'bg-fillBrand-strong'
       )}
-      data-tip=${hasErrors ? 'Replay this broken session' : 'Play recording'}
-      aria-label=${hasErrors ? 'Replay broken session' : 'Play session recording'}
+      data-tip=${hasErrors ? 'Replay — errors in this session' : 'Replay recording'}
+      aria-label=${hasErrors ? 'Replay session with errors' : 'Replay session recording'}
       @click=${(e: any) => {
         e.stopPropagation();
         e.preventDefault();
@@ -2701,7 +2702,7 @@ export class LogList extends LitElement {
       }}
     >
       ${faSprite('play', 'solid', 'w-3 h-3')}
-      <span class="text-xs font-medium">${hasErrors ? 'Replay' : 'Play'}</span>
+      <span class="text-xs font-medium">Replay</span>
     </button>
   `;
 
