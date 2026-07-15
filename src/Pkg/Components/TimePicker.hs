@@ -289,7 +289,7 @@ refreshButton_ = do
       [ class_ "cursor-pointer px-3 max-md:px-2 flex items-center border border-strokeWeak rounded-l-lg shadow-xs leading-none join-item"
       , data_ "tippy-content" "Refresh"
       , Aria.label_ "Refresh"
-      , [__| on click trigger 'update-query' on window then
+      , [__| on click trigger 'update-query' on document then
           add .animate-spin to the first <svg/> in me then wait 1 seconds then
           remove .animate-spin from the first <svg/> in me |]
       ]
