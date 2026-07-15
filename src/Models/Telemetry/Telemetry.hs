@@ -74,6 +74,7 @@ module Models.Telemetry.Telemetry (
   insertSystemLog,
   generateSummary,
   otelSpanColsSql,
+  roundUTCToMicros,
 )
 where
 
@@ -98,8 +99,8 @@ import Data.Text qualified as T
 import Data.Text.Display (Display)
 import Data.These (These (..))
 import Data.These qualified as These
-import Data.Time (UTCTime)
-import Data.Time.Clock (addUTCTime, utctDay)
+import Data.Time (UTCTime (..))
+import Data.Time.Clock (addUTCTime, diffTimeToPicoseconds, picosecondsToDiffTime, utctDay)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
 import Data.UUID.Quasi (uuid)
@@ -1380,10 +1381,23 @@ column nm proj =
   OtelCol nm (\rows -> encoderAndParam (E.nonNullable HI.encodeValue) (V.map proj rows) <> fromString (toString ("::" <> elemSqlType @a <> "[]"))) (const Relude.id)
 
 
--- | Timestamp column: bound as ISO-8601 text (see 'UnnestElem') and cast back
--- to timestamptz in the SELECT on both engines.
+-- | Round a 'UTCTime' to microsecond resolution. Timestamps travel to both
+-- engines as ISO-8601 text (see 'tsColumn'); Postgres/TimescaleDB *rounds*
+-- excess fractional digits on @::timestamptz@ while DataFusion/TimeFusion
+-- *truncates*, so an un-rounded sub-µs value lands exactly 1µs apart across
+-- engines. Quantizing here keeps the wire text ≤6 fractional digits so both
+-- parse an identical value (parity plan: end_time sub-µs divergence).
+roundUTCToMicros :: UTCTime -> UTCTime
+roundUTCToMicros (UTCTime day dt) = UTCTime day (picosecondsToDiffTime us)
+  where
+    us = ((diffTimeToPicoseconds dt + 500000) `div` 1000000) * 1000000
+
+
+-- | Timestamp column: microsecond-quantized then bound as ISO-8601 text (see
+-- 'UnnestElem' / 'roundUTCToMicros') and cast back to timestamptz in the SELECT
+-- on both engines.
 tsColumn :: Text -> (OtelRow -> Maybe UTCTime) -> OtelCol
-tsColumn nm proj = (column nm (fmap (toText . iso8601Show) . proj)){selectExpr = \_ a -> a <> "::timestamptz"}
+tsColumn nm proj = (column nm (fmap (toText . iso8601Show . roundUTCToMicros) . proj)){selectExpr = \_ a -> a <> "::timestamptz"}
 
 
 -- | Text column that PostgreSQL must cast to a native type with no text→T

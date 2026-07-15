@@ -19,6 +19,7 @@ module Opentelemetry.OtlpServer (
   parseConnectionString,
   migrateElasticsearchPathParts,
   deriveClientAddress,
+  nanosecondsToUTC,
 ) where
 
 import Control.Concurrent (forkIO, threadDelay)
@@ -42,7 +43,9 @@ import Data.ProtoLens.Encoding (decodeMessage, encodeMessage)
 import Data.Scientific (fromFloatDigits)
 import Data.Text qualified as T
 import Data.These (These (..))
+import Data.Fixed (Fixed (MkFixed))
 import Data.Time (UTCTime, diffUTCTime)
+import Data.Time.Clock (secondsToNominalDiffTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -859,9 +862,12 @@ recordProtoError prefix err msg logFn = do
     Nothing -> logFn ("processList:" <> prefix <> ": unable to parse service request") errorInfo
 
 
--- Convert nanoseconds to UTCTime
+-- Convert nanoseconds to UTCTime. Integer picosecond math (not Double /1e9):
+-- a 2026 nanosecond value (~1.78e18) exceeds Double's 52-bit mantissa, which
+-- injected a sub-µs residue and desynced the TS/TF wire text (see
+-- 'roundUTCToMicros'). @MkFixed (ns*1000)@ builds an exact Pico (E12) value.
 nanosecondsToUTC :: Word64 -> UTCTime
-nanosecondsToUTC !ns = posixSecondsToUTCTime (fromIntegral ns / 1e9)
+nanosecondsToUTC !ns = posixSecondsToUTCTime (secondsToNominalDiffTime (MkFixed (fromIntegral ns * 1000)))
 
 
 -- | Convert a nanosecond timestamp to UTC, falling back when it's unset/invalid
