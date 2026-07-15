@@ -375,7 +375,7 @@
 
   <symbol viewBox="0 0 16 16" fill="none" id="spinner">
     <g id="Loader" clip-path="url(#clip0_6882_4605)">
-      <path id="Icon" d="M7.99967 1.3335V4.00016M7.99967 12.0002V14.6668M3.28634 3.28682L5.173 5.17349M10.8263 10.8268L12.713 12.7135M1.33301 8.00016H3.99967M11.9997 8.00016H14.6663M3.28634 12.7135L5.173 10.8268M10.8263 5.17349L12.713 3.28682" stroke="currentColor" stroke-opacity="0.45" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+      <path id="Icon" d="M7.99967 1.3335V4.00016M7.99967 12.0002V14.6668M3.28634 3.28682L5.173 5.17349M10.8263 10.8268L12.713 12.7135M1.33301 8.00016H3.99967M11.9997 8.00016H14.6663M3.28634 12.7135L5.173 10.8268M10.8263 5.17349L12.713 3.28682" stroke="currentColor" stroke-opacity="0.7" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
     </g>
     <defs>
       <clipPath id="clip0_6882_4605">

@@ -648,17 +648,52 @@ queryEditorInitializationCode queryLibRecent queryLibSaved vizTypeM pid = do
       document.dispatchEvent(new CustomEvent('update-query', { bubbles: true, detail: { source: 'sessions-header-bar', timeRange: from + ' \u2192 ' + to } }));
     };
 
-    // Swap the #page-summary-region when the viz tab change crosses the sessions
-    // boundary. Switching TO sessions: show the skeleton and let the sessions data
-    // refetch (log-list) inject the freshly-scanned summary — no extra scan here.
-    // Switching AWAY from sessions: fetch the chart+latency region via HTMX.
+    // Fill the over-time chart's axis labels and per-bar tooltips (sessions +
+    // patterns) in the browser's local timezone, so they match the table and time
+    // picker. Runs after the header HTML is injected into #page-summary-region.
+    // Reads data-bucket-start/width off the container and data-bi/data-count off
+    // each bar; the server ships no formatted times (it can't know the tz).
+    window.formatSummaryChart = function(root) {
+      const chart = root && root.querySelector('[data-summary-chart]');
+      if (!chart) return;
+      const start = +chart.dataset.bucketStart, width = +chart.dataset.bucketWidth;
+      if (!Number.isFinite(start) || !Number.isFinite(width) || width <= 0) return;
+      const bars = Array.prototype.slice.call(chart.querySelectorAll('[data-bi]'));
+      if (!bars.length) return;
+      const firstEpoch = start + (+bars[0].dataset.bi) * width;
+      const endEpoch = start + ((+bars[bars.length - 1].dataset.bi) + 1) * width;
+      const spanDays = (endEpoch - firstEpoch) / 86400;
+      const opts = spanDays >= 1
+        ? { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }
+        : { hour: '2-digit', minute: '2-digit' };
+      const fmt = e => new Date(e * 1000).toLocaleString([], opts);
+      // A single bar means the range fits one bucket (e.g. patterns' hourly
+      // rollup at <1h); append the container note so a hover explains why.
+      const note = bars.length === 1 ? (chart.dataset.note || '') : '';
+      bars.forEach(bar => {
+        const from = start + (+bar.dataset.bi) * width;
+        const base = bar.getAttribute('data-count') || '';
+        bar.setAttribute('data-tippy-content', fmt(from) + ' \u2013 ' + fmt(from + width) + (base ? ' \u00b7 ' + base : '') + (note ? ' \u00b7 ' + note : ''));
+      });
+      const wrap = chart.parentElement;
+      const a = wrap && wrap.querySelector('[data-axis-start]');
+      const b = wrap && wrap.querySelector('[data-axis-end]');
+      if (a) a.textContent = fmt(firstEpoch);
+      if (b) b.textContent = fmt(endEpoch);
+    };
+
+    // Swap the #page-summary-region when the viz tab change crosses the summary
+    // boundary. Sessions and patterns both render a data-injected summary header
+    // (skeleton now, real HTML delivered with the data refetch — no extra scan);
+    // every other viz type renders the chart+latency region via HTMX.
     window.swapSessionsRegionIfNeeded = function(newViz, prevViz) {
-      if (newViz !== 'sessions' && prevViz !== 'sessions') return;
+      const isSummary = v => v === 'sessions' || v === 'patterns';
+      if (!isSummary(newViz) && !isSummary(prevViz)) return;
       const region = document.getElementById('page-summary-region');
       if (!region) return;
-      const tpl = document.getElementById(newViz === 'sessions' ? 'sessions-summary-skeleton' : 'chart-summary-skeleton');
+      const tpl = document.getElementById(isSummary(newViz) ? 'sessions-summary-skeleton' : 'chart-summary-skeleton');
       if (tpl) { region.setAttribute('aria-busy', 'true'); region.innerHTML = tpl.innerHTML; }
-      if (newViz === 'sessions') return; // summary arrives with the data refetch; don't scan again
+      if (isSummary(newViz)) return; // summary arrives with the data refetch; don't scan again
       if (!window.htmx) return;
       const url = new URL(window.location);
       url.searchParams.set('viz_type', newViz);

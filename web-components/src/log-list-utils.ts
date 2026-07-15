@@ -34,7 +34,6 @@ export const STYLE_MAPPINGS = {
   'text-textStrong': '',
 } as const;
 
-export const SKELETON_COLUMN_WIDTHS = ['w-[17ch]', 'w-[16ch]', 'w-[25ch]', 'w-[12ch]', 'w-[450px]'] as const;
 
 // Column width calculation constants
 export const COLUMN_DEFAULTS = {
@@ -296,7 +295,6 @@ export const newestRowTimestamp = byRowTs(maxBy);
 export const getColumnWidth = (column: string): string =>
   COLUMN_WIDTHS[column as keyof typeof COLUMN_WIDTHS] || (column === 'id' ? '' : 'w-[16ch] shrink-0');
 
-export const getSkeletonColumnWidth = (idx: number): string => SKELETON_COLUMN_WIDTHS[idx % SKELETON_COLUMN_WIDTHS.length] + ' shrink-0';
 
 export const getStyleClass = (style: string): string => {
   if (style.startsWith('badge-')) return style;
@@ -372,6 +370,16 @@ export const parseUserAgent = (ua: string): string => {
 // positives hide legitimate traffic.
 const BOT_UA_REGEX = /bot\b|crawler|spider|curl\/|PostmanRuntime|HeadlessChrome|python-requests|Go-http-client|Java\/|wget\//i;
 export const isBotUserAgent = (ua: string): boolean => !!ua && BOT_UA_REGEX.test(ua);
+
+// Device-type glyph for a session's user-agent. Brand/OS logos aren't in the
+// wired solid/regular sprites, so we map to a device *class* (bot / mobile /
+// desktop) using free solid icons instead of faking browser logos.
+export const deviceIconName = (ua: string): string => {
+  if (!ua) return '';
+  if (isBotUserAgent(ua)) return 'robot';
+  if (/\biPhone\b|\biPad\b|\biPod\b|\bAndroid\b|\bMobile\b/.test(ua)) return 'mobile';
+  return 'laptop';
+};
 
 // Middle-truncate a URL path so the last segment (usually what identifies
 // the page) stays visible. Returns [head, tail] where head should be

@@ -17,7 +17,7 @@ import {
   faSprite,
   renderBadge,
   renderIconWithTooltip,
-  getSkeletonColumnWidth,
+  getColumnWidth,
   getStyleClass,
   CHAR_WIDTHS,
   MIN_COLUMN_WIDTH,
@@ -37,6 +37,7 @@ import {
   renderSparkline,
   parseUserAgent,
   isBotUserAgent,
+  deviceIconName,
   middleTruncatePath,
 } from './log-list-utils';
 import { expandSince, expandFromToRange, parseChartZoom } from './time-range-utils';
@@ -74,6 +75,9 @@ export class LogList extends LitElement {
   @property({ type: String }) mode: 'logs' | 'patterns' | 'sessions' = 'logs';
 
   @state() private expandedTraces: Record<string, boolean> = {};
+  // Session ids whose children are currently being fetched — drives the inline
+  // row spinner so an expanded-but-empty session reads as "loading", not broken.
+  @state() private loadingSessions: Record<string, boolean> = {};
   @state() private flipDirection: boolean = false;
   @state() private spanListTree: EventLine[] = [];
   // Ids currently in spanListTree, kept so paginated/live appends dedupe the
@@ -243,16 +247,25 @@ export class LogList extends LitElement {
       // as pre-rendered HTML; inject it into the (skeleton) summary region. The
       // header is script-free (bucket-filter handler lives in the page init), and
       // tippy tooltips are globally delegated, so innerHTML injection is safe.
-      if (isSessions && typeof data.summaryHtml === 'string') {
+      if (typeof data.summaryHtml === 'string') {
         const region = document.getElementById('page-summary-region');
         if (region) {
           region.innerHTML = data.summaryHtml;
           region.removeAttribute('aria-busy');
+          // Idempotent; rAF retry guards the load-time race where the formatter
+          // (defined in the page init script) isn't ready at first injection.
+          const applyFmt = () => (window as any).formatSummaryChart?.(region);
+          applyFmt();
+          requestAnimationFrame(applyFmt);
         }
       }
       const tree = (data.logsData || []).map((row: any[]) => {
         const sessionId = isSessions ? (row[colIdxMap['trace_id']] as string) || '' : '';
         const eventCount = isSessions ? (row[colIdxMap['event_count']] as number) || 0 : 0;
+        // Sessions ship their error tally in the `errors` column (errorCount). Wire it
+        // into hasErrors so the play button, expand chip, and summary all redden — the
+        // left status indicator derives its own red via getErrorClassification.
+        const errorCount = isSessions ? Number(row[colIdxMap['errors']]) || 0 : 0;
         return {
           id: sessionId || generateId(),
           data: row,
@@ -265,7 +278,7 @@ export class LogList extends LitElement {
           isLastChild: true,
           siblingsArr: [],
           childErrors: false,
-          hasErrors: false,
+          hasErrors: errorCount > 0,
           isNew: false,
           startNs: 0,
           duration: 0,
@@ -734,23 +747,33 @@ export class LogList extends LitElement {
     // Initialization handled by lit-virtualizer
   }
 
+  // Runs BEFORE render (unlike updated), so clearing here means the first frame
+  // after a viz-mode switch already shows the loading skeleton — not the previous
+  // mode's rows. Switching logs↔patterns↔sessions replaces the result set with a
+  // differently-shaped one via a fetch that can take seconds; the rendered list
+  // reads virtualListItems, so that (and the count display) must be wiped too, or
+  // the stale rows keep painting until the new data lands. Guard on a defined old
+  // value so the initial undefined→mode set doesn't wipe server-seeded rows.
+  willUpdate(changedProperties: Map<string, any>) {
+    if (changedProperties.has('mode') && changedProperties.get('mode') !== undefined) {
+      this.spanListTree = [];
+      this.seenIds.clear();
+      this.virtualListItems = [];
+      this.visibleItems = [];
+      this.loadedCount = 0;
+      this.totalCount = 0;
+      this.totalPatterns = 0;
+      this.totalSessions = 0;
+      this.updateRowCountDisplay();
+    }
+  }
+
   updated(changedProperties: Map<string, any>) {
     // Stop live streaming when switching to an aggregate view
     if (changedProperties.has('mode') && this.isAggregate && this.liveStreamInterval) {
       clearInterval(this.liveStreamInterval);
       this.liveStreamInterval = null; // else handleLiveToggle's !interval guard skips restart on switch-back
       this.isLiveStreaming = false;
-    }
-
-    // Switching viz mode (logs↔patterns↔sessions) replaces the result set with a
-    // differently-shaped one via a fresh fetch that can take seconds. Clear stale
-    // rows so the loading skeleton (gated on an empty spanListTree) shows during
-    // the transition instead of freezing the previous mode's rows with no feedback.
-    // Guard on a defined old value so the initial undefined→mode set doesn't wipe seeded rows.
-    if (changedProperties.has('mode') && changedProperties.get('mode') !== undefined) {
-      this.spanListTree = [];
-      this.seenIds.clear();
-      this.loadedCount = 0;
     }
 
     if (this.shouldScrollToBottom && this.flipDirection) {
@@ -1143,6 +1166,7 @@ export class LogList extends LitElement {
     }
 
     // Fetch children
+    this.loadingSessions = { ...this.loadingSessions, [sessionId]: true };
     this.requestUpdate();
     try {
       const url = this.buildExpandUrl(sessionId, 0);
@@ -1177,6 +1201,10 @@ export class LogList extends LitElement {
       this.updateVisibleItems();
       this.requestUpdate();
       this.showErrorToast((e as Error).message || 'Failed to load events');
+    } finally {
+      const { [sessionId]: _done, ...rest } = this.loadingSessions;
+      this.loadingSessions = rest;
+      this.requestUpdate();
     }
   }
 
@@ -1703,21 +1731,24 @@ export class LogList extends LitElement {
           <thead class="z-10 sticky top-0 isolate">
             <tr class="text-textWeak border-b flex min-w-0 relative font-medium isolate">
               ${isInitialLoading
-                ? html`
-                    ${[...Array(this.logsColumns.length || 6)].map(
-                      (_, idx) => html`
-                        <td
-                          class=${`p-0 m-0 whitespace-nowrap relative flex justify-between items-center pl-2.5 pr-2 text-sm font-normal bg-bgBase ${getSkeletonColumnWidth(
-                            idx
-                          )}`}
-                        >
-                          <div class="relative overflow-hidden">
-                            <div class="h-4 rounded skeleton-shimmer w-16" style="animation-delay: ${idx * 0.1}s"></div>
-                          </div>
-                        </td>
-                      `
-                    )}
-                  `
+                ? skeletonColumns(this.logsColumns).map((column, idx) => {
+                    // Mirror skeletonCell's per-column widths so header pills sit
+                    // directly above their row cells (id is the narrow stripe,
+                    // latency_breakdown pins right).
+                    const isId = column === 'id';
+                    const widthClass = isId ? 'w-3' : column === 'latency_breakdown' ? 'sticky right-0 max-md:static z-10' : getColumnWidth(column);
+                    return html`
+                      <td
+                        class=${`p-0 m-0 whitespace-nowrap relative flex justify-between items-center pl-2.5 pr-2 text-sm font-normal bg-bgBase ${widthClass}`}
+                      >
+                        ${isId
+                          ? nothing
+                          : html`<div class="relative overflow-hidden">
+                              <div class="h-4 rounded skeleton-shimmer w-16" style="animation-delay: ${idx * 0.1}s"></div>
+                            </div>`}
+                      </td>
+                    `;
+                  })
                 : html`
                     ${this.logsColumns.filter((v) => v !== 'latency_breakdown').map((column) => this.logTableHeading(column))}
                     ${this.logsColumns.includes('latency_breakdown') && !isAggregate ? this.logTableHeading('latency_breakdown') : nothing}
@@ -1725,7 +1756,7 @@ export class LogList extends LitElement {
             </tr>
           </thead>
           ${isInitialLoading
-            ? loadingSkeleton(this.logsColumns.length || 6)
+            ? loadingSkeleton(this.logsColumns)
             : html`
                 <tbody class="min-w-0 text-xs">
                   <lit-virtualizer
@@ -1980,11 +2011,17 @@ export class LogList extends LitElement {
         }
         const { statusCode: status, hasErrors: errCount, className: errClass } = getErrorClassification(dataArr, colIdxMap);
         const isExpanded = expanded || rowData.parentIds?.some((pid: string) => this.expandedTraces[pid]);
-        const indicatorClass = isExpanded ? errClass.replace('-weak', '-strong') : errClass;
+        // Session roots get a wider bar so a red "this session errored" signal is
+        // scannable down the rail rather than a 1px hairline you must hover to read.
+        const indicatorClass = (isExpanded ? errClass.replace('-weak', '-strong') : errClass).replace(
+          'w-1',
+          this.mode === 'sessions' && depth === 0 ? 'w-1.5' : 'w-1'
+        );
+        const errTip = this.mode === 'sessions' ? `${errCount || 0} error${errCount === 1 ? '' : 's'} in this session` : `${errCount} errors attached; status ${status}`;
         return html`
           <div class="flex items-center justify-between w-3">
             <span class="col-span-1 h-5 rounded-sm flex">
-              ${renderIconWithTooltip(indicatorClass, `${errCount} errors attached; status ${status}`, html``)}
+              ${renderIconWithTooltip(indicatorClass, errTip, html``)}
             </span>
           </div>
         `;
@@ -2078,7 +2115,21 @@ export class LogList extends LitElement {
             rightAlignedBadges.push(renderBadge(`cbadge-sm ${userBadgeStyle} bg-opacity-100`, display, tip));
           }
 
-          const latencyHtml = html`
+          // Session roots have no trace waterfall. Duration (data) now lives in the
+          // summary line; this trailing column is a pure *actions* column holding
+          // only the replay button, so the header stays unlabeled (actions columns
+          // don't get a data label).
+          const isSessionRoot = this.mode === 'sessions' && depth === 0;
+          let latencyHtml;
+          if (isSessionRoot) {
+            latencyHtml = html`
+              <div class="flex justify-end items-center gap-1 pl-2 bg-bgBase group-hover:bg-fillWeaker" style="min-width:${currentWidth}px">
+                ${rightAlignedBadges}
+                <span class="w-1"></span>
+              </div>
+            `;
+          } else {
+            latencyHtml = html`
             <div class="flex justify-end items-center gap-1 text-textWeak pl-1 rounded-lg bg-bgBase" style="min-width:${currentWidth}px">
               ${rightAlignedBadges}
               ${spanLatencyBreakdown({
@@ -2094,6 +2145,7 @@ export class LogList extends LitElement {
               <span class="w-1"></span>
             </div>
           `;
+          }
 
           rowData._latencyCache = {
             content: latencyHtml,
@@ -2121,9 +2173,13 @@ export class LogList extends LitElement {
         const synthParentId = isSyntheticRow ? (lookupVecValue<string>(dataArr, colIdxMap, 'latency_breakdown') ?? '') : '';
         if (this.mode === 'patterns') {
           const patIsError = lookupVecValue<boolean>(dataArr, colIdxMap, 'is_error') === true;
-          return html`<div class="break-all whitespace-break-spaces">
+          // Flex lays the drain-template tokens out horizontally and drops the
+          // whitespace text nodes lit emits between spans. The old
+          // break-all/break-spaces preserved those newlines and inflated every
+          // row to ~4 blank lines (88px) regardless of pattern length.
+          return html`<div class="flex items-center gap-1 min-w-0 ${this.wrapLines ? 'flex-wrap' : 'whitespace-nowrap overflow-hidden'}">
             ${patIsError
-              ? html`<span class="cbadge-sm badge-error mr-1.5 align-middle" title="Pattern includes error-level events">error</span>`
+              ? html`<span class="cbadge-sm badge-error shrink-0 align-middle" title="Pattern includes error-level events">error</span>`
               : nothing}
             ${rowData._summaryCache.content}
           </div>`;
@@ -2164,10 +2220,15 @@ export class LogList extends LitElement {
                           this.expandTrace(traceId, id);
                         }}
                         aria-expanded=${expanded}
-                        aria-label="${expanded ? 'Collapse' : 'Expand'} trace (${children} ${children === 1 ? 'span' : 'spans'})"
+                        aria-busy=${!!this.loadingSessions[id]}
+                        aria-label="${this.loadingSessions[id] ? 'Loading' : expanded ? 'Collapse' : 'Expand'} trace (${children} ${children === 1 ? 'span' : 'spans'})"
                         class=${`hover:border-strokeBrand-strong rounded-sm ml-1 cursor-pointer shrink-0 w-8 px-1 flex justify-center gap-[2px] text-xs items-center h-5 ${errClas}`}
                       >
-                        ${expanded ? faSprite('minus', 'regular', 'w-3 h-1 shrink-0') : faSprite('plus', 'regular', 'w-3 h-3 shrink-0')}
+                        ${this.loadingSessions[id]
+                          ? faSprite('spinner', 'regular', 'w-3 h-3 shrink-0 animate-spin')
+                          : expanded
+                            ? faSprite('minus', 'regular', 'w-3 h-1 shrink-0')
+                            : faSprite('plus', 'regular', 'w-3 h-3 shrink-0')}
                         ${children}
                       </button>`
                     : depth === 0
@@ -2191,6 +2252,36 @@ export class LogList extends LitElement {
         </div>`;
       case 'service':
         let serviceData = lookupVecValue<string>(dataArr, colIdxMap, key);
+        // Session roots carry a space-joined service list that is often empty for
+        // browser/RUM sessions. Render one badge per service when present; render
+        // nothing when empty so the cell doesn't read as a stuck loading skeleton.
+        if (this.mode === 'sessions' && depth === 0) {
+          const svcs = (serviceData || '').split(/\s+/).filter(Boolean);
+          // Device (user-agent) is packed into the summary payload. Surface it here
+          // in this column (relabeled "client" for sessions) as a device-class glyph
+          // + label, instead of leaving the summary body to carry it. Service badges
+          // still render alongside when a session actually has service data.
+          let device = '';
+          for (const el of this.parseSummaryData(dataArr)) {
+            const p = parseSummaryElement(el);
+            if (p.type === 'formatted' && p.field === 'device') {
+              device = p.value;
+              break;
+            }
+          }
+          if (!device && !svcs.length) return nothing;
+          const icon = device ? deviceIconName(device) : '';
+          const isBot = device ? isBotUserAgent(device) : false;
+          return html`<div class=${clsx('flex items-center gap-1.5 min-w-0 overflow-hidden', isBot && 'opacity-60')}>
+            ${device
+              ? html`<span class="inline-flex items-center gap-1 min-w-0 text-xs text-textWeak tooltip tooltip-left" data-tip=${device}>
+                  ${icon ? faSprite(icon, 'solid', 'w-3 h-3 shrink-0 fill-iconNeutral') : nothing}
+                  <span class="truncate">${parseUserAgent(device)}</span>
+                </span>`
+              : nothing}
+            ${svcs.map((s) => renderBadge('cbadge-sm badge-neutral shrink-0', s))}
+          </div>`;
+        }
         return renderBadge('cbadge-sm badge-neutral ' + wrapClass, serviceData, key);
       default:
         let v = lookupVecValue<string>(dataArr, colIdxMap, key);
@@ -2327,12 +2418,17 @@ export class LogList extends LitElement {
       level: { title: 'status', classes: 'shrink-0' },
       timestamp: { title: 'timestamp', classes: 'shrink-0' },
       created_at: { title: 'timestamp', classes: 'shrink-0' },
-      latency_breakdown: { title: 'latency', classes: 'sticky right-0 max-md:static shrink-0' },
+      // Sessions use this trailing column purely for the replay action (duration
+      // lives in the summary line), so leave its header blank — actions columns
+      // aren't data and don't get a label.
+      latency_breakdown: { title: this.mode === 'sessions' ? '' : 'latency', classes: 'sticky right-0 max-md:static shrink-0' },
       status_code: { title: 'status', classes: 'shrink-0' },
       method: { title: 'method', classes: 'shrink-0' },
       raw_url: { title: column, classes: 'shrink-0' },
       url_path: { title: column, classes: 'shrink-0' },
-      service: { title: 'service', classes: 'shrink-0' },
+      // Sessions repurpose this column for the client/device on root rows (service
+      // badges still show on expanded child spans), so label it "client" there.
+      service: { title: this.mode === 'sessions' ? 'client' : 'service', classes: 'shrink-0' },
       summary: { title: 'summary', classes: 'shrink-1' },
     };
 
@@ -2398,7 +2494,7 @@ export class LogList extends LitElement {
         'item-row relative p-0 flex group whitespace-nowrap isolate cursor-pointer',
         rowHoverBg,
         !ov && 'contain-layout-style-paint content-visibility-auto',
-        isPatterns && 'items-start',
+        isPatterns && (this.wrapLines ? 'items-start' : 'items-center'),
         // All non-wrapping, non-aggregate rows (including sessions) use the
         // dense 28px log row height for a consistent rhythm.
         !this.wrapLines && !isAggregate && 'h-[28px] items-center',
@@ -2532,7 +2628,7 @@ export class LogList extends LitElement {
       }
     }
 
-    const { user, url, device, events, errors, error: errorText, duration } = fields;
+    const { user, url, device, events, errors, duration, error: errorText } = fields;
     const sep = html`<span class="text-textWeak/40 select-none shrink-0" aria-hidden="true">·</span>`;
     // Bot traffic (curl, PostmanRuntime, HeadlessChrome, *bot*) is real but
     // rarely what a support engineer is scanning for — dim the whole row so
@@ -2545,7 +2641,7 @@ export class LogList extends LitElement {
       parts.push(content);
     };
 
-    if (user) add(html`<span class="text-sm font-medium text-textStrong shrink-0 truncate max-w-[24ch]">${user}</span>`);
+    if (user) add(html`<span class="text-sm font-semibold text-textStrong shrink-0 truncate max-w-[24ch]">${user}</span>`);
     if (url) {
       // Middle-truncate: keep the last path segment visible since it usually
       // identifies the page ("/checkout/cart" is more useful than "/api/v2/…").
@@ -2564,11 +2660,9 @@ export class LogList extends LitElement {
       );
     }
     if (events) add(html`<span class="text-xs text-textWeak tabular-nums shrink-0">${events} events</span>`);
-    if (duration) add(html`<span class="text-xs text-textWeak tabular-nums shrink-0">${duration}</span>`);
-    if (device) {
-      const parsed = parseUserAgent(device);
-      add(html`<span class="text-xs text-textWeak truncate shrink min-w-0" title=${device}>${parsed || device}</span>`);
-    }
+    if (duration) add(html`<span class="text-xs text-textWeak tabular-nums shrink-0" title="session duration">${duration}</span>`);
+    // duration moved to the latency column; device moved to the "client" column — both
+    // pulled out of the summary body to declutter the identity line.
     // Cap error excerpt at a readable width — stack traces blown into the
     // row kill the single-line rhythm; the full text stays in the tooltip.
     if (errorText) add(html`<span class="text-xs text-textError truncate min-w-0 max-w-[60ch]" title=${errorText}>${errorText}</span>`);
@@ -2582,10 +2676,11 @@ export class LogList extends LitElement {
     <button
       class=${clsx(
         'inline-flex items-center justify-center shrink-0 self-center rounded-md cursor-pointer tooltip tooltip-left',
-        'h-7 px-2.5 gap-1 transition-transform duration-150 ease-out hover:scale-105 active:scale-100',
-        'motion-reduce:transition-none motion-reduce:hover:scale-100',
-        'bg-fillWeak text-textStrong fill-iconNeutral hover:bg-fillStrong/10 border',
-        hasErrors ? 'border-strokeError-strong' : 'border-strokeWeak'
+        'h-6 px-2 gap-1 shadow-sm transition-transform duration-150 ease-out hover:scale-105 active:scale-100',
+        'motion-reduce:transition-none motion-reduce:hover:scale-100 text-textInverse-strong fill-textInverse-strong hover:brightness-110',
+        // Primary action: solid fill, always visible, so replay reads as the thing to do.
+        // Broken sessions swap to the error fill so "replay the break" is unmistakable.
+        hasErrors ? 'bg-fillError-strong' : 'bg-fillBrand-strong'
       )}
       data-tip=${hasErrors ? 'Replay this broken session' : 'Play recording'}
       aria-label=${hasErrors ? 'Replay broken session' : 'Play session recording'}
@@ -2605,8 +2700,8 @@ export class LogList extends LitElement {
         if (wrapper) wrapper.classList.remove('hidden');
       }}
     >
-      ${faSprite('play', 'regular', 'w-3.5 h-3.5')}
-      <span class="text-xs">Play</span>
+      ${faSprite('play', 'solid', 'w-3 h-3')}
+      <span class="text-xs font-medium">${hasErrors ? 'Replay' : 'Play'}</span>
     </button>
   `;
 
@@ -2958,15 +3053,20 @@ function spanLatencyBreakdown({
   return html`<div class="-mt-1 shrink-0">${baseVisualization}</div>`;
 }
 
-const skeletonCell = (idx: number, totalCols: number) => {
-  const classes = clsx(
-    'bg-bgBase relative pl-2',
-    idx === 0 && 'w-3',
-    idx === totalCols - 1 && 'sticky right-0 max-md:static z-10',
-    idx > 0 && idx < totalCols - 1 && getSkeletonColumnWidth(idx)
-  );
+// Fallback column set used only when logsColumns hasn't loaded yet, so the
+// skeleton still resembles the real table (narrow id stripe → fields → latency).
+const SKELETON_FALLBACK_COLUMNS = ['id', 'timestamp', 'service', 'summary', 'latency_breakdown'];
 
-  if (idx === 0) {
+const skeletonColumns = (columns: string[]) => (columns.length ? columns : SKELETON_FALLBACK_COLUMNS);
+
+// A skeleton cell mirrors the real column layout by name (col-id is the narrow
+// stripe, latency_breakdown is sticky-right) so header pills line up over rows.
+const skeletonCell = (column: string) => {
+  const isId = column === 'id';
+  const isLatency = column === 'latency_breakdown';
+  const classes = clsx('bg-bgBase relative pl-2', isId ? 'w-3' : getColumnWidth(column), isLatency && 'z-10');
+
+  if (isId) {
     return html`<td class=${classes}>
       <div class="w-1 h-5 bg-fillBrand-strong opacity-20 rounded-full skeleton-glow"></div>
     </td>`;
@@ -2974,33 +3074,30 @@ const skeletonCell = (idx: number, totalCols: number) => {
 
   return html`<td class=${classes}>
     <div class="relative overflow-hidden">
-      <div class="h-4 rounded skeleton-shimmer skeleton-wave ${idx === totalCols - 1 ? 'w-24' : 'w-3/4'}"></div>
-      ${idx === totalCols - 1
+      <div class="h-4 rounded skeleton-shimmer skeleton-wave ${isLatency ? 'w-24' : 'w-3/4'}"></div>
+      ${isLatency
         ? html`<div class="absolute right-0 top-0 h-full w-16 bg-gradient-to-r from-transparent to-bgBase"></div>`
         : nothing}
     </div>
   </td>`;
 };
 
-const skeletonRow = (rowIdx: number, cols: number) => html`
+const skeletonRow = (rowIdx: number, columns: string[]) => html`
   <tr class="item-row relative p-0 flex items-center group whitespace-nowrap" style="--row-index: ${rowIdx}">
-    ${map(Array(cols), (_, idx) => skeletonCell(idx, cols))}
+    ${columns.map((c) => skeletonCell(c))}
   </tr>
 `;
 
-function loadingSkeleton(cols: number) {
-  const actualCols = cols || 6;
+function loadingSkeleton(columns: string[]) {
+  const cols = skeletonColumns(columns);
   return html`
     <tbody class="min-w-0 text-xs">
       <tr class="w-full flex justify-center">
-        <td colspan=${String(actualCols)} class="w-full">
-          <div class="text-center py-6">
-            <span class="loading loading-spinner loading-md text-fillBrand-strong"></span>
-            <p class="text-sm text-textWeak mt-3">Loading events...</p>
-          </div>
+        <td colspan=${String(cols.length)} class="w-full">
+          <p class="text-sm text-textWeak text-center py-3">Loading events...</p>
         </td>
       </tr>
-      ${map(Array(10), (_, rowIdx) => skeletonRow(rowIdx, actualCols))}
+      ${map(Array(10), (_, rowIdx) => skeletonRow(rowIdx, cols))}
     </tbody>
   `;
 }

@@ -1025,6 +1025,30 @@ chartSummarySkeleton_ =
     div_ [class_ "flex-1 min-w-0 max-md:hidden rounded-2xl skeleton-shimmer"] ""
 
 
+-- | Placeholder shown while the facet sidebar (logExplorerFacetsH) lazy-loads.
+-- Mirrors the real structure — one expanded section (facet rows + a few value
+-- lines) over collapsed section pills — so the column doesn't sit empty. Varied
+-- widths keep it from reading as a mechanical grid.
+facetsSkeleton_ :: Html ()
+facetsSkeleton_ =
+  div_ [class_ "flex flex-col gap-2", role_ "status", Aria.label_ "Loading filters"] do
+    sectionPill
+    div_ [class_ "flex flex-col gap-3 pl-2 mt-1"]
+      $ forM_ ([("58%", ["52%", "38%"]), ("44%", ["46%"]), ("68%", ["44%", "60%", "36%"]), ("50%", ["48%"])] :: [(Text, [Text])]) \(nameW, valWs) ->
+        div_ [class_ "flex flex-col gap-2"] do
+          div_ [class_ "flex items-center gap-2"] do
+            bar "h-2.5 w-2.5 shrink-0" Nothing
+            bar "h-3.5" (Just nameW)
+          div_ [class_ "flex flex-col gap-1.5 pl-7"] $ forM_ valWs \vw ->
+            div_ [class_ "flex items-center justify-between gap-2"] do
+              div_ [class_ "flex items-center gap-2 flex-1 min-w-0"] (bar "h-3 w-3 shrink-0" Nothing >> bar "h-3" (Just vw))
+              bar "h-3 w-6 shrink-0" Nothing
+    replicateM_ 4 sectionPill
+  where
+    sectionPill = div_ [class_ "h-8 rounded-lg skeleton-shimmer w-full"] ""
+    bar cls widthM = div_ ([class_ $ "rounded skeleton-shimmer " <> cls] <> maybe [] (\w -> [style_ $ "width:" <> w]) widthM) ""
+
+
 -- | KPI card shared by the sessions/patterns summary headers.
 kpiCard_ :: Text -> Text -> Maybe Text -> Html ()
 kpiCard_ label value subM = div_ [class_ "surface-raised rounded-2xl px-3 py-2 flex flex-col gap-0.5 min-w-0"] do
@@ -1531,7 +1555,7 @@ apiLogsPage page = do
           , hxTrigger_ "intersect once"
           , hxSwap_ "innerHTML"
           ]
-          $ div_ [class_ "px-1 py-4 text-xs text-textWeak"] "Loading filters\x2026"
+          facetsSkeleton_
 
     logsListPanel = div_ [class_ "grow will-change-[width] contain-[layout_style] relative flex flex-col shrink-1 min-w-0 w-full h-full ", id_ "logs_list_container"] do
       rowCountHeader

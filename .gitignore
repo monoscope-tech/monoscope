@@ -1,5 +1,6 @@
 tags
 haddocks
+.pi/
 .stack-work
 static/public/reload.trigger
 */.stack-work
