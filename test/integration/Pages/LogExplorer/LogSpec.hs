@@ -446,6 +446,19 @@ spec = around withTestResources do
       (_, sv) <- testServant tr $ Log.logSessionsH testPid Nothing fromTime Nothing toTime Nothing Nothing
       case sv of Log.SessionsView total _ _ -> total `shouldSatisfy` (>= 0)
 
+  describe "Trace fullscreen loading" do
+    -- Regression: opening a trace used to clear the fullscreen overlay while the
+    -- request was in flight; shared trace links showed only a disconnected dots
+    -- spinner. Both paths must now use the same trace-shaped loading state.
+    it "renders a reusable trace skeleton for shared and in-app trace loads" \tr -> do
+      let traceRef = "774115aaa715abf80d93fc629c2269a4/?timestamp=2026-07-15T18:59:16.952128Z"
+      (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just traceRef) Nothing Nothing Nothing
+      let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
+      html `shouldSatisfy` T.isInfixOf "trace-loading-skeleton"
+      html `shouldSatisfy` T.isInfixOf "Loading trace"
+      html `shouldSatisfy` T.isInfixOf "Retry loading trace"
+      html `shouldSatisfy` T.isInfixOf "send loadTrace"
+
   describe "Pattern expand (apiLogExpandH)" do
     -- Regression: clicking a pattern used to send the summary *template* as the
     -- key and match it via `array_to_string(summary, chr(30)) ILIKE …`, which

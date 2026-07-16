@@ -97,7 +97,7 @@ import Effectful.Ki qualified as Ki
 import OddJobs.Job (createJob)
 import Pkg.DeriveUtils (CamelSchema (..), SnakeSchema (..))
 import System.Logging qualified as Log
-import System.Tracing (Tracing, forkWithCtx)
+import System.Tracing (Tracing, forkWithCtx, withSpan_)
 import Text.Slugify (slugify)
 import UnliftIO.Exception (tryAny)
 import Web.FormUrlEncoded (FromForm)
@@ -810,7 +810,7 @@ logDataEnv pid sinceM fromM toM = do
 -- | Log-row data endpoint. The log-list web component fetches this; the shell
 -- (apiLogH) renders only chrome. Returns the trace-tree-expanded 'LogResult'.
 logExplorerDataH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogResult)
-logExplorerDataH pid queryM' cols' cursorM' sinceM fromM toM sourceM targetSpansM = do
+logExplorerDataH pid queryM' cols' cursorM' sinceM fromM toM sourceM targetSpansM = withSpan_ "log-explorer.data" [] do
   (authCtx, now, fromD, toD) <- logDataEnv pid sinceM fromM toM
   -- `cols` is a delta over server defaults: bare tokens add columns, `-`-prefixed tokens hide defaults.
   let (removeToks, addCols) = L.partition ("-" `T.isPrefixOf`) $ filter (not . T.null) $ T.splitOn "," (fromMaybe "" cols')
@@ -1402,17 +1402,79 @@ virtualTable pid initialFetchUrl modeM = do
 
 
 -- | Inner div that lazily HTMX-loads @url@ into @#target@ once @trigger@ fires.
--- Shared by the trace, details, and alert-form side panels; @extra@ carries
--- per-panel bits (loading indicator, or hyperscript firing the trigger).
+-- Shared by the details and alert-form side panels; @extra@ carries per-panel bits.
 lazyLoad_ :: Text -> Text -> Text -> [Attribute] -> Html ()
 lazyLoad_ target url trigger extra =
   div_ ([hxGet_ url, hxTarget_ ("#" <> target), hxSwap_ "innerHTML", hxTrigger_ trigger, term "hx-sync" "this:replace"] <> extra) pass
+
+
+traceLoadingSkeleton_ :: Html ()
+traceLoadingSkeleton_ =
+  div_ [class_ "w-full h-full p-2 flex flex-col gap-4", role_ "status", Aria.live_ "polite"] do
+    -- Match the loaded trace's header so opening it never shifts the waterfall.
+    div_ [class_ "flex flex-wrap justify-between items-center gap-y-1"] do
+      div_ [class_ "flex items-center gap-3"] do
+        div_ [class_ "h-4 w-12 rounded skeleton-shimmer"] ""
+        div_ [class_ "h-5 w-32 rounded skeleton-shimmer"] ""
+      div_ [class_ "flex items-center gap-2"] do
+        div_ [class_ "h-8 w-56 rounded-lg skeleton-shimmer"] ""
+        div_ [class_ "h-7 w-7 rounded skeleton-shimmer"] ""
+    div_ [class_ "flex flex-col gap-2 w-full mt-5"] do
+      div_ [class_ "flex flex-wrap justify-between gap-y-1 mb-2"] do
+        div_ [class_ "flex items-center gap-5"] do
+          div_ [class_ "h-4 w-16 rounded skeleton-shimmer"] ""
+          div_ [class_ "h-4 w-14 rounded skeleton-shimmer"] ""
+          div_ [class_ "h-4 w-14 rounded skeleton-shimmer"] ""
+        div_ [class_ "flex items-center gap-3"] do
+          div_ [class_ "h-4 w-16 rounded skeleton-shimmer"] ""
+          div_ [class_ "h-4 w-16 rounded skeleton-shimmer"] ""
+          div_ [class_ "h-4 w-20 rounded skeleton-shimmer"] ""
+      div_ [class_ "h-9 w-full rounded-lg border border-strokeWeak bg-fillWeaker flex items-center px-3"] do
+        div_ [class_ "h-3 w-32 rounded skeleton-shimmer"] ""
+      div_ [class_ "border border-strokeWeak rounded-2xl min-h-[230px] overflow-hidden"] do
+        div_ [class_ "flex h-8 border-b border-strokeWeak items-end text-xs"] do
+          div_ [class_ "shrink-0 px-2 pb-1 text-textWeak font-medium", style_ "width:35%"] "Service / Span"
+          div_ [class_ "grow flex justify-between px-2 pb-1"] $
+            forM_ ([1 .. 7] :: [Int]) $ \_ -> div_ [class_ "h-3 w-8 rounded skeleton-shimmer"] ""
+        div_ [class_ "py-1"] $
+          forM_
+            ( [ ("w-28", "ml-0 w-full")
+            , ("w-24", "ml-0 w-[78%]")
+            , ("w-36", "ml-[70%] w-[21%]")
+            , ("w-40", "ml-[72%] w-[4%]")
+            , ("w-32", "ml-[72%] w-[2%]")
+            , ("w-48", "ml-[73%] w-[8%]")
+            , ("w-36", "ml-[73%] w-[3%]")
+            , ("w-40", "ml-[73%] w-[2%]")
+            , ("w-28", "ml-[74%] w-[5%]")
+            ] :: [(Text, Text)]
+            )
+            $ \(labelW, barPos) ->
+              div_ [class_ "flex items-center h-7"] do
+                div_ [class_ "shrink-0 flex items-center gap-2 px-3", style_ "width:35%"] do
+                  div_ [class_ "w-2.5 h-2.5 rounded-full skeleton-shimmer"] ""
+                  div_ [class_ $ "h-3 " <> labelW <> " rounded skeleton-shimmer"] ""
+                div_ [class_ "relative grow h-full"] $
+                  div_ [class_ $ "h-3 mt-2 rounded-sm skeleton-shimmer " <> barPos] ""
+    span_ [class_ "sr-only"] "Loading trace…"
+    div_ [id_ "trace-load-error", class_ "hidden mt-4 flex items-center gap-3 text-sm text-textWeak"] do
+      "Trace details could not be loaded."
+      button_
+        [ class_ "text-textBrand font-medium cursor-pointer hover:underline"
+        , Aria.label_ "Retry loading trace"
+        , [__|on click
+        add .hidden to #trace-load-error
+        call htmx.ajax('GET', #trace_expanded_view's @data-trace-url, {target: #trace_expanded_view, swap: 'innerHTML'})
+      end|]
+        ]
+        "Retry"
 
 
 apiLogsPage :: ApiLogsPageData -> Html ()
 apiLogsPage page = do
   sectionWrapper_ do
     template_ [id_ "loader-tmp"] $ loadingIndicator_ LdMD LdDots
+    template_ [id_ "trace-loading-skeleton"] $ traceLoadingSkeleton_
     div_ [class_ "fixed z-[9999] hidden right-0 w-max h-max border rounded top-32 bg-bgBase shadow-lg", id_ "sessionPlayerWrapper"] do
       termRaw "session-replay" [id_ "sessionReplay", class_ "shrink-1 flex flex-col", term "projectId" page.pid.toText, term "containerId" "sessionPlayerWrapper"] ("" :: Text)
     shareLogModal
@@ -1622,12 +1684,13 @@ apiLogsPage page = do
         ]
         ""
 
-    -- The openTraceFullscreen event is dispatched by the hover "View trace"
-    -- button on virtual-list rows (log-list.ts).
+    -- Both shared-link and in-app paths enter through loadTrace, so they get the
+    -- same immediate skeleton, request, and retry state.
     traceOverlay =
       div_
-        [ class_ $ "absolute top-0 right-0  w-full h-full overflow-scroll c-scroll z-50 bg-bgBase transition-all duration-100 " <> if isJust page.showTrace then "" else "hidden"
+        [ class_ $ "absolute top-0 right-0 w-full h-full overflow-scroll c-scroll z-50 bg-bgBase transition-all duration-100 " <> if isJust page.showTrace then "" else "hidden"
         , id_ "trace_expanded_view"
+        , term "aria-busy" "true"
         , term
             "_"
             [text|on closeTraceView
@@ -1637,18 +1700,25 @@ apiLogsPage page = do
                   on htmx:afterSwap[#apiLogsPage's @data-fullscreen is 'details'] from me
                     send toggleFullscreen(mode: 'trace', active: true) to #apiLogsPage
                   end
-                  on openTraceFullscreen(traceId, timestamp) from window
-                    put '' into me then remove .hidden from me
+                  on htmx:responseError from me
+                    remove .hidden from #trace-load-error
+                  end
+                  on loadTrace(url)
+                    set my @data-trace-url to url
+                    put #trace-loading-skeleton.innerHTML into me then remove .hidden from me
                     send toggleFullscreen(mode: 'trace', active: true) to #apiLogsPage
+                    call htmx.ajax('GET', url, {target: me, swap: 'innerHTML'})
+                    then call window.evalScriptsFromContent(me)
+                  end
+                  on openTraceFullscreen(traceId, timestamp) from window
                     call updateUrlState('showTrace', traceId + '/?timestamp=' + timestamp)
-                    call htmx.ajax('GET', '/p/${pidTxt}/traces/' + traceId + '/?timestamp=' + encodeURIComponent(timestamp), {target: me, swap: 'innerHTML'})
-                    then call window.evalScriptsFromContent(me)|]
+                    send loadTrace(url: '/p/${pidTxt}/traces/' + traceId + '/?timestamp=' + encodeURIComponent(timestamp)) to me|]
         ]
         do
+          traceLoadingSkeleton_
           whenJust page.showTrace \trIdAndTimestamp -> do
             let url = "/p/" <> page.pid.toText <> "/traces/" <> trIdAndTimestamp
-            loadingIndicator_ LdMD LdDots
-            lazyLoad_ "trace_expanded_view" url "intersect once" []
+            div_ [term "data-trace-url" url, [__|init send loadTrace(url: my @data-trace-url) to #trace_expanded_view|]] pass
 
     -- Lazily loaded (HTMX) the first time this container is revealed, so the
     -- shell never renders it or forks a teams query per load.
@@ -1666,7 +1736,7 @@ apiLogsPage page = do
 
     detailsPanel =
       div_
-        [ class_ "grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll w-0 max-w-0 overflow-hidden group-has-[#viz-logs:checked]/pg:max-w-full group-has-[#viz-logs:checked]/pg:overflow-y-auto group-has-[#viz-sessions:checked]/pg:max-w-full group-has-[#viz-sessions:checked]/pg:overflow-y-auto max-md:hidden max-md:[&.details-open]:block! max-md:[&.details-open]:fixed max-md:[&.details-open]:inset-0 max-md:[&.details-open]:z-40 max-md:[&.details-open]:w-full max-md:[&.details-open]:max-w-full max-md:[&.details-open]:bg-bgBase"
+        [ class_ "details-panel grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll w-0 max-w-0 overflow-hidden group-has-[#viz-logs:checked]/pg:max-w-full group-has-[#viz-logs:checked]/pg:overflow-y-auto group-has-[#viz-sessions:checked]/pg:max-w-full group-has-[#viz-sessions:checked]/pg:overflow-y-auto max-md:hidden max-md:[&.details-open]:block! max-md:[&.details-open]:fixed max-md:[&.details-open]:inset-0 max-md:[&.details-open]:z-40 max-md:[&.details-open]:w-full max-md:[&.details-open]:max-w-full max-md:[&.details-open]:bg-bgBase"
         , id_ "log_details_container"
         , term "data-has-target" (if isJust page.targetEvent then "1" else "0")
         , [__|on checkMobileOpen[window.innerWidth < 768] add .details-open to me
@@ -1684,7 +1754,8 @@ apiLogsPage page = do
         end
         on htmx:afterSwap send checkMobileOpen to me end
         on keydown[key=='Escape' and not (the event's target matches <input, textarea, select, [contenteditable]/>) and no <[popover]:popover-open/> and no <dialog[open]/>] from window
-          if #trace_expanded_view does not match .hidden send closeTraceView to #trace_expanded_view
+          if <#trace_details_container.open/> send closeDetailPanel to #trace_details_container
+          otherwise if #trace_expanded_view does not match .hidden send closeTraceView to #trace_expanded_view
           otherwise send closeDetailPanel to me end
         end
         on closeDetailPanel
