@@ -188,7 +188,7 @@ spec = around withTestResources do
       it "returns valid LogResult with expected JSON structure" $ \tr -> do
         result <-
           toBaseServantResponse tr
-            $ Log.queryEvents testPid (Just "") (Just "1h") Nothing Nothing Nothing Nothing Nothing
+            $ Log.queryEvents testPid (Just "") (Just "1h") Nothing Nothing Nothing Nothing Nothing Nothing
         let json = AE.toJSON result
         (json ^? key "logsData" . _Array) `shouldSatisfy` isJust
         (json ^? key "cols" . _Array) `shouldSatisfy` isJust
@@ -198,7 +198,7 @@ spec = around withTestResources do
         (json ^? key "hasMore") `shouldSatisfy` isJust
 
       it "returns 400 for malformed query" $ \tr -> do
-        ( toBaseServantResponse tr (Log.queryEvents testPid (Just "|| invalid {{") (Just "1h") Nothing Nothing Nothing Nothing Nothing)
+        ( toBaseServantResponse tr (Log.queryEvents testPid (Just "|| invalid {{") (Just "1h") Nothing Nothing Nothing Nothing Nothing Nothing)
             >>= evaluateWHNF_
           )
           `shouldThrow` anyException
@@ -329,6 +329,12 @@ spec = around withTestResources do
         let json = AE.toJSON result
         (json ^? key "logsData" . _Array) `shouldSatisfy` isJust
         (json ^? key "count" . _Number) `shouldSatisfy` isJust
+
+      it "includes attributes only when requested" $ \tr -> do
+        result <-
+          toBaseServantResponse tr
+            $ ApiH.apiEventsQuery testPid (def :: ApiT.EventsQuery){ApiT.query = Just "", ApiT.since = Just "1h", ApiT.includeAttributes = Just True}
+        result.cols `shouldContain` ["attributes"]
 
       -- Regression: previously the search backend returned every span in a
       -- matching trace, including siblings/parents/uncles that failed the

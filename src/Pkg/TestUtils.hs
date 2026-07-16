@@ -1493,7 +1493,7 @@ routeApiV1Get tr rest params = case T.splitOn "/" rest of
       . AE.encode
       <$> runAsBase
         tr
-        (Log.queryEvents testPid (lookupParam "query" params) (lookupParam "since" params) (lookupParam "from" params) (lookupParam "to" params) (lookupParam "source" params) (pInt "limit" params) (pBool "with_children" params))
+        (Log.queryEvents testPid (lookupParam "query" params) (lookupParam "since" params) (lookupParam "from" params) (lookupParam "to" params) (lookupParam "source" params) (pInt "limit" params) (pBool "with_children" params) (pBool "include_attributes" params))
   ["events", eid, "time", ts] ->
     mockResponse . AE.encode <$> runAsBase tr (ApiH.apiEventGet testPid (rawUUID eid) (parseISOTime ts))
   ["facets"] ->

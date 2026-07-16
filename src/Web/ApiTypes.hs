@@ -259,6 +259,7 @@ data EventsQuery = EventsQuery
   -- ^ When true, also return descendants of each matched span (the
   -- sub-tree). Default (Nothing/false) returns only rows that satisfy the
   -- predicate — no sibling/parent spans bleed in.
+  , includeAttributes :: Maybe Bool
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default)

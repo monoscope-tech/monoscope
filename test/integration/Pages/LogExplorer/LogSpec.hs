@@ -285,7 +285,7 @@ spec = around withTestResources do
           fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-120) frozenTime
           spanNameOf r row = HashMap.lookup "span_name" r.colIdxMap >>= (row V.!?) >>= \case AE.String t -> Just t; _ -> Nothing
           rootsOn r = [t | row <- V.toList r.logsData, Just t <- [spanNameOf r row], "evroot." `T.isPrefixOf` t]
-          runPage toM = runAsBase tr (Log.queryEvents testPid q Nothing fromTime toM Nothing (Just 2) (Just True))
+          runPage toM = runAsBase tr (Log.queryEvents testPid q Nothing fromTime toM Nothing (Just 2) (Just True) Nothing)
           nextTo r = toText . iso8601Show <$> (r.cursor >>= nextCursor)
           drain toM acc pages = do
             r <- runPage toM

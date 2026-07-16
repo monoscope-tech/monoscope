@@ -572,8 +572,8 @@ buildLogResult withChildren pid now sinceM fromM toM addCols removeCols (request
 -- | Standalone query function for the v1 API events endpoint. Returns a
 -- JSON-shaped 400 (@{"error": {code, message, field?, suggestion?, details?}}@)
 -- for parse/query errors instead of raw Hasql/SQL.
-queryEvents :: (DB es, ELog.Log :> es, Error Servant.ServerError :> es, Time.Time :> es, Tracing :> es) => Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Bool -> Eff es LogResult
-queryEvents pid queryM sinceM fromM toM sourceM limitM withChildrenM = do
+queryEvents :: (DB es, ELog.Log :> es, Error Servant.ServerError :> es, Time.Time :> es, Tracing :> es) => Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Bool -> Maybe Bool -> Eff es LogResult
+queryEvents pid queryM sinceM fromM toM sourceM limitM withChildrenM includeAttributesM = do
   now <- Time.currentTime
   let queryInput = fromMaybe "" queryM
   queryAST <- case parseQueryToAST queryInput of
@@ -585,7 +585,7 @@ queryEvents pid queryM sinceM fromM toM sourceM limitM withChildrenM = do
       -- trace-tree rows include synth headers + descendants.
       hasKqlLimit = any (\case TakeCommand{} -> True; _ -> False) queryAST
       queryAST' = if hasKqlLimit then queryAST else queryAST <> [TakeCommand (min defaultQueryLimit (fromMaybe 100 limitM))]
-  result <- LogQueries.selectLogTable pid queryAST' (toQText queryAST') Nothing (fromD, toD) [] (parseMaybe pSource =<< sourceM) Nothing
+  result <- LogQueries.selectLogTable pid queryAST' (toQText queryAST') Nothing (fromD, toD) (if fromMaybe False includeAttributesM then ["attributes"] else []) (parseMaybe pSource =<< sourceM) Nothing
   case result of
     Left err -> throwError $ translateQueryError err
     -- Default to exact-match (no trace expansion); UI passes True via apiLogH.
