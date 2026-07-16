@@ -1,5 +1,6 @@
 'use strict';
 import '@lit-labs/virtualizer';
+import { FlowLayout } from '@lit-labs/virtualizer/layouts/flow.js';
 import { LitElement, html, css, TemplateResult, nothing } from 'lit';
 import { customElement, state, query, property } from 'lit/decorators.js';
 import { ref, createRef } from 'lit/directives/ref.js';
@@ -43,6 +44,7 @@ import {
 import { expandSince, expandFromToRange, parseChartZoom } from './time-range-utils';
 import { toEChartsColor } from './widgets';
 import { unsafeHTML } from 'lit/directives/unsafe-html.js';
+import { keyed } from 'lit/directives/keyed.js';
 
 // Convert CSS token to hex for ECharts (which can't parse oklch)
 const cssTokenToHex = (token: string): string => toEChartsColor(getComputedStyle(document.body).getPropertyValue(token).trim());
@@ -67,6 +69,15 @@ const _ensureBadgeClasses = html`
 
 // Special item types for virtual list
 type VirtualListItem = EventLine | { type: 'fetchRecent' } | { type: 'loadMore' } | { type: 'aggregateChildren'; parentKey: string };
+
+// FlowLayout starts at 100px until it observes rows. Log rows are 28px, so the
+// initial estimate inflated the virtual scroll range roughly 3.5×.
+export class DenseRowFlowLayout extends FlowLayout {
+  constructor(...args: ConstructorParameters<typeof FlowLayout>) {
+    super(...args);
+    this._itemSize.height = 28;
+  }
+}
 
 @customElement('log-list')
 export class LogList extends LitElement {
@@ -588,11 +599,13 @@ export class LogList extends LitElement {
     const p = new URLSearchParams(window.location.search);
     const toks = new Set((p.get('cols') || '').split(',').filter(Boolean));
     for (const col of removed) {
-      if (toks.has(col)) toks.delete(col); // drop an explicit add
+      if (toks.has(col))
+        toks.delete(col); // drop an explicit add
       else toks.add(`-${col}`); // hide a default
     }
     for (const col of added) {
-      if (toks.has(`-${col}`)) toks.delete(`-${col}`); // un-hide a default
+      if (toks.has(`-${col}`))
+        toks.delete(`-${col}`); // un-hide a default
       else toks.add(col); // add a column
     }
     if (toks.size) p.set('cols', [...toks].join(','));
@@ -1654,11 +1667,6 @@ export class LogList extends LitElement {
           contain: layout style paint;
         }
 
-        .content-visibility-auto {
-          content-visibility: auto;
-          contain-intrinsic-size: auto 28px;
-        }
-
         /* Fixed table layout for performance */
         table {
           table-layout: fixed;
@@ -1736,7 +1744,11 @@ export class LogList extends LitElement {
                     // directly above their row cells (id is the narrow stripe,
                     // latency_breakdown pins right).
                     const isId = column === 'id';
-                    const widthClass = isId ? 'w-3' : column === 'latency_breakdown' ? 'sticky right-0 max-md:static z-10' : getColumnWidth(column);
+                    const widthClass = isId
+                      ? 'w-3'
+                      : column === 'latency_breakdown'
+                        ? 'sticky right-0 max-md:static z-10'
+                        : getColumnWidth(column);
                     return html`
                       <td
                         class=${`p-0 m-0 whitespace-nowrap relative flex justify-between items-center pl-2.5 pr-2 text-sm font-normal bg-bgBase ${widthClass}`}
@@ -1759,17 +1771,15 @@ export class LogList extends LitElement {
             ? loadingSkeleton(this.logsColumns)
             : html`
                 <tbody class="min-w-0 text-xs">
-                  <lit-virtualizer
-                    .items=${this.virtualListItems}
-                    .renderItem=${this.renderVirtualItem}
-                    @visibilityChanged=${this.handleVisibilityChange}
-                    .layout=${{
-                      itemSize: {
-                        ...(!this.wrapLines && !isAggregate && { height: 28 }), // Fixed height only when wrap is disabled and not aggregate (patterns/sessions)
-                        width: '100%',
-                      },
-                    }}
-                  ></lit-virtualizer>
+                  ${keyed(
+                    this.isAggregate || this.wrapLines ? 'measured' : 'dense',
+                    html`<lit-virtualizer
+                      .items=${this.virtualListItems}
+                      .renderItem=${this.renderVirtualItem}
+                      @visibilityChanged=${this.handleVisibilityChange}
+                      .layout=${this.isAggregate || this.wrapLines ? {} : { type: DenseRowFlowLayout }}
+                    ></lit-virtualizer>`
+                  )}
                 </tbody>
               `}
         </table>
@@ -1985,7 +1995,7 @@ export class LogList extends LitElement {
                 >+${mergedCount}</span
               >`
             : ''}
-          <div class="w-12 shrink-0 h-2 bg-strokeWeak/40 rounded-sm overflow-hidden">
+          <div class="w-12 shrink-0 h-2 bg-strokeWeak rounded-sm overflow-hidden">
             <div class="h-full bg-fillBrand-strong rounded-sm" style="width:${pct}%"></div>
           </div>
         </div>`;
@@ -2017,12 +2027,13 @@ export class LogList extends LitElement {
           'w-1',
           this.mode === 'sessions' && depth === 0 ? 'w-1.5' : 'w-1'
         );
-        const errTip = this.mode === 'sessions' ? `${errCount || 0} error${errCount === 1 ? '' : 's'} in this session` : `${errCount} errors attached; status ${status}`;
+        const errTip =
+          this.mode === 'sessions'
+            ? `${errCount || 0} error${errCount === 1 ? '' : 's'} in this session`
+            : `${errCount} errors attached; status ${status}`;
         return html`
           <div class="flex items-center justify-between w-3">
-            <span class="col-span-1 h-5 rounded-sm flex">
-              ${renderIconWithTooltip(indicatorClass, errTip, html``)}
-            </span>
+            <span class="col-span-1 h-5 rounded-sm flex"> ${renderIconWithTooltip(indicatorClass, errTip, html``)} </span>
           </div>
         `;
       case 'created_at':
@@ -2130,21 +2141,21 @@ export class LogList extends LitElement {
             `;
           } else {
             latencyHtml = html`
-            <div class="flex justify-end items-center gap-1 text-textWeak pl-1 rounded-lg bg-bgBase" style="min-width:${currentWidth}px">
-              ${rightAlignedBadges}
-              ${spanLatencyBreakdown({
-                start: startNs - traceStart,
-                depth,
-                duration,
-                traceEnd,
-                color,
-                children: chil,
-                barWidth: currentWidth - 12,
-                expanded,
-              })}
-              <span class="w-1"></span>
-            </div>
-          `;
+              <div class="flex justify-end items-center gap-1 text-textWeak pl-1 rounded-lg bg-bgBase" style="min-width:${currentWidth}px">
+                ${rightAlignedBadges}
+                ${spanLatencyBreakdown({
+                  start: startNs - traceStart,
+                  depth,
+                  duration,
+                  traceEnd,
+                  color,
+                  children: chil,
+                  barWidth: currentWidth - 12,
+                  expanded,
+                })}
+                <span class="w-1"></span>
+              </div>
+            `;
           }
 
           rowData._latencyCache = {
@@ -2221,7 +2232,11 @@ export class LogList extends LitElement {
                         }}
                         aria-expanded=${expanded}
                         aria-busy=${!!this.loadingSessions[id]}
-                        aria-label="${this.loadingSessions[id] ? 'Loading' : expanded ? 'Collapse' : 'Expand'} trace (${children} ${children === 1 ? 'span' : 'spans'})"
+                        aria-label="${this.loadingSessions[id]
+                          ? 'Loading'
+                          : expanded
+                            ? 'Collapse'
+                            : 'Expand'} trace (${children} ${children === 1 ? 'span' : 'spans'})"
                         class=${`hover:border-strokeBrand-strong rounded-sm ml-1 cursor-pointer shrink-0 w-8 px-1 flex justify-center gap-[2px] text-xs items-center h-5 ${errClas}`}
                       >
                         ${this.loadingSessions[id]
@@ -2493,7 +2508,7 @@ export class LogList extends LitElement {
       const rowClass = clsx(
         'item-row relative p-0 flex group whitespace-nowrap isolate cursor-pointer',
         rowHoverBg,
-        !ov && 'contain-layout-style-paint content-visibility-auto',
+        !ov && 'contain-layout-style-paint',
         isPatterns && (this.wrapLines ? 'items-start' : 'items-center'),
         // All non-wrapping, non-aggregate rows (including sessions) use the
         // dense 28px log row height for a consistent rhythm.
@@ -3076,9 +3091,7 @@ const skeletonCell = (column: string) => {
   return html`<td class=${classes}>
     <div class="relative overflow-hidden">
       <div class="h-4 rounded skeleton-shimmer skeleton-wave ${isLatency ? 'w-24' : 'w-3/4'}"></div>
-      ${isLatency
-        ? html`<div class="absolute right-0 top-0 h-full w-16 bg-gradient-to-r from-transparent to-bgBase"></div>`
-        : nothing}
+      ${isLatency ? html`<div class="absolute right-0 top-0 h-full w-16 bg-gradient-to-r from-transparent to-bgBase"></div>` : nothing}
     </div>
   </td>`;
 };

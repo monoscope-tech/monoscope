@@ -1564,7 +1564,7 @@ apiLogsPage page = do
       traceOverlay
       div_ [class_ "flex-1 min-h-0 h-full flex flex-col"]
         $ div_ [class_ "flex-1 min-h-0 hidden h-full group-has-[#viz-logs:checked]/pg:block group-has-[#viz-patterns:checked]/pg:block group-has-[#viz-sessions:checked]/pg:block"]
-        $ virtualTable page.pid Nothing Nothing
+        $ virtualTable page.pid Nothing page.vizType
 
     -- Filters toggle and row count, shown above the viz widget / trace / virtual table.
     rowCountHeader = div_ [class_ "flex gap-2 py-1 text-sm z-10 w-max bg-bgBase -mb-6 group-has-[#viz-patterns:checked]/pg:mb-0"] do

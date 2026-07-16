@@ -601,7 +601,7 @@ queryEditorInitializationCode queryLibRecent queryLibSaved vizTypeM pid = do
         if (shouldUpdateUrl && !isWidgetMode) {
           const url = new URL(window.location);
           url.searchParams.set('viz_type', vizType);
-          history.replaceState({}, '', url);
+          history.replaceState({}, '', url.toString());
         }
         
         // Call the query editor's handleVisualizationChange method to update the query
@@ -619,12 +619,16 @@ queryEditorInitializationCode queryLibRecent queryLibSaved vizTypeM pid = do
       const retry = () => { if (++_initRetries < 80) setTimeout(initEditor, 50); };
       if (!editor || !editor.setQueryLibrary || !window.schemaManager?.setSchemaData) { retry(); return; }
       editor.setQueryLibrary($queryLibDataJson);
-      window.__spanSchemaPromise = window.__spanSchemaPromise || fetch("$schemaUrl", {headers: {Accept: "application/json"}, credentials: "include"}).then(r => r.json());
-      window.__spanSchemaPromise.then(s => {
-        window.schemaManager.setSchemaData('spans', s);
-        const qb = document.querySelector('query-builder');
-        if (qb?.refreshFieldSuggestions) qb.refreshFieldSuggestions();
-      }).catch(e => console.warn('[query-editor] schema fetch failed', e));
+      const loadSchema = () => {
+        window.__spanSchemaPromise = window.__spanSchemaPromise || fetch("$schemaUrl", {headers: {Accept: "application/json"}, credentials: "include"}).then(r => r.json());
+        window.__spanSchemaPromise.then(s => {
+          window.schemaManager.setSchemaData('spans', s);
+          const qb = document.querySelector('query-builder');
+          if (qb?.refreshFieldSuggestions) qb.refreshFieldSuggestions();
+        }).catch(e => console.warn('[query-editor] schema fetch failed', e));
+      };
+      if (window.__spanSchemaPromise) loadSchema();
+      else editor.addEventListener('focusin', loadSchema, {once: true});
       if (editor.setPopularSearches) editor.setPopularSearches($popularQueriesJson);
     })();
 

@@ -1,5 +1,6 @@
 import { describe, test, expect, vi } from 'vitest';
 import { row, serverTransport, serverTransportFlipped, logPage, treeFromLogs, COLS, deferredTransport, stubFetch, ids, mountList } from './log-list-harness';
+import { DenseRowFlowLayout } from '../src/log-list';
 import { shouldBufferRecent, cursorFromTimestamp } from '../src/log-list-utils';
 
 describe('LogList — LOWER', () => {
@@ -17,6 +18,13 @@ describe('LogList — LOWER', () => {
     (el as any).columnMaxWidthMap = { a: 100, b: 200, c: 300 };
     el.handleColumnsChanged({ detail: ['a', 'c'] });
     expect(Object.keys((el as any).columnMaxWidthMap).sort()).toEqual(['a', 'c']);
+  });
+
+  // Regression: FlowLayout defaults to 100px before its first measurement, but
+  // logs are fixed at 28px. The inflated estimate caused oversized scroll gaps.
+  test('virtualizer starts with the dense log-row height', () => {
+    const layout = new DenseRowFlowLayout(() => {}, {});
+    expect((layout as any)._itemSize.height).toBe(28);
   });
 
   // Lo5: patterns/sessions pagination must not stop at page 1 when the server
