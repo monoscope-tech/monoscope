@@ -1434,28 +1434,30 @@ traceLoadingSkeleton_ =
       div_ [class_ "border border-strokeWeak rounded-2xl min-h-[230px] overflow-hidden"] do
         div_ [class_ "flex h-8 border-b border-strokeWeak items-end text-xs"] do
           div_ [class_ "shrink-0 px-2 pb-1 text-textWeak font-medium", style_ "width:35%"] "Service / Span"
-          div_ [class_ "grow flex justify-between px-2 pb-1"] $
-            forM_ ([1 .. 7] :: [Int]) $ \_ -> div_ [class_ "h-3 w-8 rounded skeleton-shimmer"] ""
-        div_ [class_ "py-1"] $
-          forM_
+          div_ [class_ "grow flex justify-between px-2 pb-1"]
+            $ forM_ ([1 .. 7] :: [Int])
+            $ \_ -> div_ [class_ "h-3 w-8 rounded skeleton-shimmer"] ""
+        div_ [class_ "py-1"]
+          $ forM_
             ( [ ("w-28", "ml-0 w-full")
-            , ("w-24", "ml-0 w-[78%]")
-            , ("w-36", "ml-[70%] w-[21%]")
-            , ("w-40", "ml-[72%] w-[4%]")
-            , ("w-32", "ml-[72%] w-[2%]")
-            , ("w-48", "ml-[73%] w-[8%]")
-            , ("w-36", "ml-[73%] w-[3%]")
-            , ("w-40", "ml-[73%] w-[2%]")
-            , ("w-28", "ml-[74%] w-[5%]")
-            ] :: [(Text, Text)]
+              , ("w-24", "ml-0 w-[78%]")
+              , ("w-36", "ml-[70%] w-[21%]")
+              , ("w-40", "ml-[72%] w-[4%]")
+              , ("w-32", "ml-[72%] w-[2%]")
+              , ("w-48", "ml-[73%] w-[8%]")
+              , ("w-36", "ml-[73%] w-[3%]")
+              , ("w-40", "ml-[73%] w-[2%]")
+              , ("w-28", "ml-[74%] w-[5%]")
+              ]
+                :: [(Text, Text)]
             )
-            $ \(labelW, barPos) ->
-              div_ [class_ "flex items-center h-7"] do
-                div_ [class_ "shrink-0 flex items-center gap-2 px-3", style_ "width:35%"] do
-                  div_ [class_ "w-2.5 h-2.5 rounded-full skeleton-shimmer"] ""
-                  div_ [class_ $ "h-3 " <> labelW <> " rounded skeleton-shimmer"] ""
-                div_ [class_ "relative grow h-full"] $
-                  div_ [class_ $ "h-3 mt-2 rounded-sm skeleton-shimmer " <> barPos] ""
+          $ \(labelW, barPos) ->
+            div_ [class_ "flex items-center h-7"] do
+              div_ [class_ "shrink-0 flex items-center gap-2 px-3", style_ "width:35%"] do
+                div_ [class_ "w-2.5 h-2.5 rounded-full skeleton-shimmer"] ""
+                div_ [class_ $ "h-3 " <> labelW <> " rounded skeleton-shimmer"] ""
+              div_ [class_ "relative grow h-full"]
+                $ div_ [class_ $ "h-3 mt-2 rounded-sm skeleton-shimmer " <> barPos] ""
     span_ [class_ "sr-only"] "Loading trace…"
     div_ [id_ "trace-load-error", class_ "hidden mt-4 flex items-center gap-3 text-sm text-textWeak"] do
       "Trace details could not be loaded."
