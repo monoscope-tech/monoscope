@@ -491,7 +491,7 @@ data LogExplorerRoutes' mode = LogExplorerRoutes'
   , saveQueryPost :: mode :- "log_explorer" :> "queries" :> ReqBody '[FormUrlEncoded] Log.SaveQueryForm :> Post '[HTML] (RespHeaders Log.QueryLibraryView)
   , deleteQueryPost :: mode :- "log_explorer" :> "queries" :> Capture "id" Text :> Delete '[HTML] (RespHeaders Log.QueryLibraryView)
   , alertFormGet :: mode :- "log_explorer" :> "alert_form" :> QPT "alert" :> Get '[HTML] (RespHeaders (Html ()))
-  , logExplorerItemDetailedGet :: mode :- "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" UTCTime :> "detailed" :> QPT "source" :> Get '[HTML] (RespHeaders LogItem.ApiItemDetailed)
+  , logExplorerItemDetailedGet :: mode :- "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" UTCTime :> "detailed" :> QPT "source" :> QPT "tab" :> Get '[HTML] (RespHeaders LogItem.ApiItemDetailed)
   , logExplorerExpandGet :: mode :- "log_explorer" :> "expand" :> QPT "kind" :> QPT "key" :> QPI "skip" :> QPT "query" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[JSON] (RespHeaders AE.Value)
   , aiSearchPost :: mode :- "log_explorer" :> "ai_search" :> ReqBody '[JSON] AE.Value :> Post '[JSON] (RespHeaders AE.Value)
   , schemaGet :: mode :- "log_explorer" :> "schema" :> Get '[JSON] (RespHeaders AE.Value)

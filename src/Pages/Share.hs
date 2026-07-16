@@ -148,7 +148,7 @@ shareLinkGetH sid = do
 resolveBody :: UUID.UUID -> UTCTime -> ShareRow -> ATBaseCtx ShareView
 resolveBody _ _ row | row.eventType == "log" = do
   Telemetry.logRecordByProjectAndId row.pid row.eventCreatedAt row.eventId <&> \case
-    Just req -> ShareLive row.hoursLeft Nothing (LogItem.expandedItemView row.pid req Nothing) Nothing
+    Just req -> ShareLive row.hoursLeft Nothing (LogItem.expandedItemView row.pid req Nothing Nothing) Nothing
     Nothing -> ShareMissing
 resolveBody sid now row = do
   Telemetry.spanRecordByProjectAndId row.pid row.eventCreatedAt row.eventId >>= \case
@@ -168,7 +168,7 @@ resolveBody sid now row = do
         $ ShareLive
           row.hoursLeft
           breakdownM
-          (LogItem.expandedItemView row.pid anchor Nothing)
+          (LogItem.expandedItemView row.pid anchor Nothing Nothing)
           replayInfo
 
 
