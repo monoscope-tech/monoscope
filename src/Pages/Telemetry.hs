@@ -46,6 +46,7 @@ import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (unAesonTextMaybe)
 import Relude hiding (ask)
+import System.Tracing (withSpan_)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils (LoadingSize (..), LoadingType (..), drawerLoadAttrs_, faSprite_, getDurationNSMS, getServiceColors, loadingIndicator_, onpointerdown_, parseTime, prettyPrintCount, utcTimeToNanoseconds)
 
@@ -206,7 +207,7 @@ flattenMetricTree dataMap trees lvl conts = V.concat $ zipWith flatten trees isL
 
 instance ToHtml TraceDetailsGet where
   toHtml (TraceDetails pid tr spanRecs) = toHtml $ tracePage pid tr spanRecs
-  toHtml (SpanDetails pid s aptSpn) = toHtml $ LogItem.expandedItemView pid s aptSpn
+  toHtml (SpanDetails pid s aptSpn) = toHtml $ LogItem.expandedItemView pid s aptSpn Nothing
   toHtml (TraceDetailsNotFound msg) = toHtml msg
   toHtmlRaw = toHtml
 
@@ -294,7 +295,7 @@ metricBreakdownGetH pid metricName labelM = do
 
 -- Trace handler
 traceH :: Projects.ProjectId -> Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders TraceDetailsGet)
-traceH pid trId timestamp spanIdM nav = do
+traceH pid trId timestamp spanIdM nav = withSpan_ "trace.load" [] do
   now <- Time.currentTime
   if isJust nav
     then do
@@ -599,14 +600,27 @@ metricRefCounts dashboards monitors metricNames = Map.fromList $ map countRefs m
 
 
 -- Trace UI components
+traceDetailsLoading_ :: Html ()
+traceDetailsLoading_ =
+  div_ [class_ "trace-details-loading hidden p-4", role_ "status", Aria.live_ "polite"] do
+    div_ [class_ "flex items-center gap-2 text-sm font-medium text-textStrong"] do
+      loadingIndicator_ LdSM LdSpinner
+      "Loading span details…"
+    div_ [class_ "mt-4 space-y-3"] do
+      div_ [class_ "h-20 rounded-lg skeleton-shimmer"] ""
+      div_ [class_ "h-8 w-full rounded skeleton-shimmer"] ""
+      div_ [class_ "h-4 w-3/4 rounded skeleton-shimmer"] ""
+      div_ [class_ "h-4 w-full rounded skeleton-shimmer"] ""
+
+
 tracePage :: Projects.ProjectId -> Telemetry.Trace -> V.Vector Telemetry.SpanRecord -> Html ()
 tracePage pid traceItem spanRecords = do
   let serviceData = V.toList $ getServiceData <$> spanRecords
       serviceNames = V.fromList $ ordNub $ (.name) <$> serviceData
       serviceColors = getServiceColors serviceNames
       rootSpans = buildSpanTree spanRecords
-  div_ [class_ "w-full p-2", id_ "trace_span_container"] $ do
-    div_ [class_ "flex flex-col w-full gap-4 pb-4"] $ do
+  div_ [class_ "w-full h-full flex overflow-hidden", id_ "trace_span_container"] $ do
+    div_ [class_ "flex flex-col grow min-w-0 gap-4 p-2 pb-4 overflow-y-auto overflow-x-hidden c-scroll"] $ do
       div_ [class_ "flex flex-wrap justify-between items-center gap-y-1"] do
         div_ [class_ "flex items-center gap-3"] $ do
           button_
@@ -733,6 +747,16 @@ tracePage pid traceItem spanRecords = do
           div_ [role_ "tabpanel", class_ "a-tab-content pt-2 hidden", id_ "span_list"] do
             div_ [class_ "border border-strokeWeak w-full rounded-2xl min-h-[230px] overflow-x-hidden "] do
               renderSpanListTable serviceNames serviceColors spanRecords
+    div_ [class_ "hidden shrink-0 max-md:hidden", id_ "trace-details-resizer-wrapper"]
+      $ div_ [class_ "w-3 h-full cursor-ew-resize", id_ "trace_details_resizer", role_ "separator", Aria.label_ "Resize span details"] pass
+    div_
+      [ class_ "details-panel shrink-0 h-full overflow-hidden overflow-y-auto c-scroll bg-bgBase border-l border-strokeWeak max-md:fixed max-md:inset-0 max-md:z-50"
+      , id_ "trace_details_container"
+      , style_ "width:0"
+      ]
+      do
+        traceDetailsLoading_
+        div_ [id_ "trace_details_content", term "hx-on::after-swap" "window.traceDetailsLoaded(this)"] pass
 
   -- Use skew-adjusted SpanMin from the span tree so flame/timeline matches the waterfall.
   let flattenTrees = concatMap (\t -> t.spanRecord : flattenTrees t.children)
@@ -777,8 +801,73 @@ tracePage pid traceItem spanRecords = do
       flameGraphChart($spanJson, "$trId", $colorsJson);
       waterFallGraphChart("$trId", $colorsJson);
     }
-    document.addEventListener("DOMContentLoaded", initTraceCharts);
-    initTraceCharts();
+    window.openTraceDetails = function(panel) {
+      if (panel.offsetWidth > 5) return;
+      const storedWidth = localStorage.getItem('resizer-trace_details_width');
+      panel.style.width = window.innerWidth < 768 ? '100%' : (storedWidth || '38%');
+      panel.classList.add('open');
+      document.getElementById('trace-details-resizer-wrapper')?.classList.remove('hidden');
+      window.dispatchEvent(new Event('loglist-resize'));
+    };
+    window.showTraceDetailsLoading = function() {
+      const panel = document.getElementById('trace_details_container');
+      if (!panel) return;
+      window.openTraceDetails(panel);
+      panel.querySelector('.trace-details-loading')?.classList.remove('hidden');
+      document.getElementById('trace_details_content')?.classList.add('hidden');
+    };
+    window.traceDetailsLoaded = function(content) {
+      const panel = content.closest('#trace_details_container');
+      if (!panel) return;
+      window.openTraceDetails(panel);
+      panel.querySelector('.trace-details-loading')?.classList.add('hidden');
+      content.classList.remove('hidden');
+    };
+    window.closeTraceDetails = function(trigger) {
+      const panel = trigger.closest('#trace_details_container');
+      if (!panel) return;
+      panel.style.width = '0';
+      panel.classList.remove('open');
+      panel.querySelector('.trace-details-loading')?.classList.add('hidden');
+      const content = document.getElementById('trace_details_content');
+      if (content) content.innerHTML = '';
+      document.getElementById('trace-details-resizer-wrapper')?.classList.add('hidden');
+      document.querySelectorAll('.waterfall-active').forEach((row) => row.classList.remove('bg-fillBrand-weak', 'waterfall-active'));
+      window.dispatchEvent(new Event('loglist-resize'));
+    };
+    var traceDetailsResizer = document.getElementById('trace_details_resizer');
+    if (traceDetailsResizer) {
+      traceDetailsResizer.onpointerdown = (event) => {
+        const panel = document.getElementById('trace_details_container');
+        if (!panel) return;
+        const startX = event.clientX;
+        const startWidth = panel.offsetWidth;
+        traceDetailsResizer.setPointerCapture(event.pointerId);
+        const move = (moveEvent) => {
+          const width = Math.min(window.innerWidth * 0.7, Math.max(260, startWidth - (moveEvent.clientX - startX)));
+          panel.style.width = width + 'px';
+          window.dispatchEvent(new Event('loglist-resize'));
+        };
+        const end = () => {
+          localStorage.setItem('resizer-trace_details_width', panel.offsetWidth + 'px');
+          traceDetailsResizer.removeEventListener('pointermove', move);
+          traceDetailsResizer.removeEventListener('pointerup', end);
+          traceDetailsResizer.removeEventListener('pointercancel', end);
+        };
+        traceDetailsResizer.addEventListener('pointermove', move);
+        traceDetailsResizer.addEventListener('pointerup', end);
+        traceDetailsResizer.addEventListener('pointercancel', end);
+      };
+    }
+    function scheduleTraceCharts() {
+      requestAnimationFrame(() => {
+        const run = () => initTraceCharts();
+        if (window.requestIdleCallback) window.requestIdleCallback(run, {timeout: 200});
+        else setTimeout(run, 0);
+      });
+    }
+    document.addEventListener("DOMContentLoaded", scheduleTraceCharts);
+    scheduleTraceCharts();
   |]
 
 
@@ -855,8 +944,9 @@ spanTable records =
               (reqType, _, _, _) = fromMaybe ("", "", "", 0) $ getRequestDetails spanRecord.attributes
           tr_
             [ hxGet_ $ "/p/" <> pidText <> "/log_explorer/" <> spanid <> "/" <> tme <> "/detailed?source=spans"
-            , hxTarget_ "#log_details_container"
+            , hxTarget_ "#trace_details_content"
             , hxSwap_ "innerHTML"
+            , term "hx-on::before-request" "window.showTraceDetailsLoading(this)"
             , id_ $ "sp-list-" <> spanRecord.spanId
             , class_ "span-filterble font-medium"
             , hxIndicator_ "#loading-span-list"
@@ -990,8 +1080,9 @@ buildSpanTree_ pid sp trId level scol = do
                  then [title_ ("Upstream parent span " <> sp.spanRecord.spanId <> " was never reported by the service. Showing an inferred placeholder.")]
                  else
                    [ hxGet_ $ "/p/" <> pid.toText <> "/log_explorer/" <> spanId <> "/" <> tme <> "/detailed?source=spans"
-                   , hxTarget_ "#log_details_container"
+                   , hxTarget_ "#trace_details_content"
                    , hxSwap_ "innerHTML"
+                   , term "hx-on::before-request" "window.showTraceDetailsLoading(this)"
                    , hxIndicator_ "#loading-span-list"
                    , [__|on click remove .bg-fillBrand-weak from .waterfall-active then add .bg-fillBrand-weak .waterfall-active to me|]
                    ]

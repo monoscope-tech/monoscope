@@ -31,10 +31,11 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (atMapText)
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
-import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), dateTime, detailTab_, emptyState_, httpTab_, jsonTab_, tabPanel_)
+import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), dateTime, emptyState_, httpTab_, jsonTab_, tabPanel_)
 import Pkg.DeriveUtils (unAesonTextMaybe)
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
+import System.Tracing (withSpan_)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils
 
@@ -71,15 +72,15 @@ spanHasErrors :: Telemetry.SpanRecord -> Bool
 spanHasErrors = not . null . getSpanErrors . (.events)
 
 
-expandAPIlogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Maybe Text -> ATAuthCtx (RespHeaders ApiItemDetailed)
-expandAPIlogItemH pid rdId timestamp _ = do
+expandAPIlogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders ApiItemDetailed)
+expandAPIlogItemH pid rdId timestamp _ tabM = withSpan_ "log-explorer.detail" [] do
   _ <- Projects.sessionAndProject pid
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   let tf = Hasql.withHasqlTimefusion authCtx.env.enableTimefusionReads
   tf (Telemetry.logRecordByProjectAndId pid timestamp rdId) >>= \case
     Nothing -> addRespHeaders $ ItemDetailedNotFound "Record not found"
     Just record
-      | record.kind == Just "log" -> addRespHeaders $ LogItemExpanded pid record
+      | record.kind == Just "log" -> addRespHeaders $ LogItemExpanded pid record tabM
       | otherwise -> do
           let attrs = unAesonTextMaybe record.attributes
               needsFetch =
@@ -89,18 +90,18 @@ expandAPIlogItemH pid rdId timestamp _ = do
           aptSpan <- case record.context >>= (.trace_id) of
             Just trId | needsFetch -> tf $ Telemetry.spanRecordByName pid trId "monoscope.http"
             _ -> pure Nothing
-          addRespHeaders $ SpanItemExpanded pid record aptSpan
+          addRespHeaders $ SpanItemExpanded pid record aptSpan tabM
 
 
 data ApiItemDetailed
-  = SpanItemExpanded Projects.ProjectId Telemetry.OtelLogsAndSpans (Maybe Telemetry.OtelLogsAndSpans)
-  | LogItemExpanded Projects.ProjectId Telemetry.OtelLogsAndSpans
+  = SpanItemExpanded Projects.ProjectId Telemetry.OtelLogsAndSpans (Maybe Telemetry.OtelLogsAndSpans) (Maybe Text)
+  | LogItemExpanded Projects.ProjectId Telemetry.OtelLogsAndSpans (Maybe Text)
   | ItemDetailedNotFound Text
 
 
 instance ToHtml ApiItemDetailed where
-  toHtml (SpanItemExpanded pid spn aptSpan) = toHtml $ expandedItemView pid spn aptSpan
-  toHtml (LogItemExpanded pid req) = toHtml $ expandedItemView pid req Nothing
+  toHtml (SpanItemExpanded pid spn aptSpan tabM) = toHtml $ expandedItemView pid spn aptSpan tabM
+  toHtml (LogItemExpanded pid req tabM) = toHtml $ expandedItemView pid req Nothing tabM
   toHtml (ItemDetailedNotFound message) =
     toHtml $ emptyState_ def{icon = Just "circle-exclamation", action = ESCustom closeBtn} "Record not found" message
     where
@@ -109,7 +110,8 @@ instance ToHtml ApiItemDetailed where
           [ class_ "btn btn-sm btn-ghost text-sm"
           , Aria.label_ "Close details panel"
           , term "data-share-hide" "1"
-          , [__|on click send closeDetailPanel to #log_details_container|]
+          , onclick_ "window.closeTraceDetails(this)"
+          , [__|on click send closeDetailPanel to closest <.details-panel/>|]
           ]
           "Close"
   toHtmlRaw = toHtml
@@ -137,22 +139,23 @@ data DetailTab = DetailTab {marker :: Text, cls :: Text, label :: Html (), panel
 
 
 -- Unified view for both logs and spans
-expandedItemView :: Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> Maybe Telemetry.OtelLogsAndSpans -> Html ()
-expandedItemView pid item aptSp = do
+expandedItemView :: Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> Maybe Telemetry.OtelLogsAndSpans -> Maybe Text -> Html ()
+expandedItemView pid item aptSp selectedTabM = do
   -- Row #1 (both views): back-to-logs (mobile only), timestamp, close.
   div_ [class_ "sticky top-[-1px] z-10 flex items-center gap-2 bg-bgBase border-b border-l border-strokeWeak max-md:border-l-0 px-2 py-1"] do
     button_
       [ class_ "hidden max-md:flex cursor-pointer items-center gap-1.5 text-sm font-medium text-textBrand"
       , Aria.label_ "Close details"
       , term "data-share-hide" "1"
-      , [__|on click send closeDetailPanel to #log_details_container|]
+      , onclick_ "window.closeTraceDetails(this)"
+      , [__|on click send closeDetailPanel to closest <.details-panel/>|]
       ]
       (faSprite_ "chevron-left" "regular" "w-3.5 h-3.5" >> "Back to logs")
     div_ [class_ "flex gap-2 items-center shrink-0 ml-auto"] do
       dateTime (if isLog then item.timestamp else item.start_time) Nothing
       div_ [class_ "flex gap-1 items-center"] do
         button_
-          [ class_ "fs-details-toggle cursor-pointer rounded-md p-1 hover:bg-fillWeak transition-colors hidden md:[#apiLogsPage_&]:block"
+          [ class_ "fs-details-toggle cursor-pointer rounded-md p-1 hover:bg-fillWeak transition-colors hidden md:[#apiLogsPage_&]:block [#trace_details_container_&]:hidden!"
           , Aria.label_ "Toggle fullscreen"
           , term "data-tippy-content" "Expand panel"
           , term "data-share-hide" "1"
@@ -165,7 +168,8 @@ expandedItemView pid item aptSp = do
           [ class_ "cursor-pointer detail-close-btn rounded-md p-1 hover:bg-fillWeak transition-colors"
           , Aria.label_ "Close item details"
           , term "data-tippy-content" "Close · Esc"
-          , [__|on click send closeDetailPanel to #log_details_container|]
+          , onclick_ "window.closeTraceDetails(this)"
+          , [__|on click send closeDetailPanel to closest <.details-panel/>|]
           ]
           $ faSprite_ "xmark" "regular" "w-3 h-3 text-iconNeutral"
   div_ [class_ $ "w-full pl-3 pr-1 pb-2 relative border-l border-strokeWeak max-md:border-l-0 max-md:px-0 " <> if isLog then " flex flex-col gap-2" else " pb-[50px]"] do
@@ -175,15 +179,21 @@ expandedItemView pid item aptSp = do
     headerBlock
     div_ [class_ "w-full mt-3 group/dtab"] do
       div_ [class_ "flex", [__|on click halt the event's bubbling|]] do
-        ifor_ tabs \i t -> detailTab_ dgrp t.marker t.cls (i == 0) t.label
+        forM_ tabs \t -> lazyDetailTab_ t (t.marker == activeMarker)
         div_ [class_ "w-full border-b-2 border-b-strokeWeak"] pass
-      div_ [class_ "mt-2 py-1 text-textWeak"] $ traverse_ (.panel) tabs
+      div_ [class_ "mt-2 py-1 text-textWeak", id_ "trace-details-content"] $ traverse_ (.panel) activeTabs
   where
     isLog = item.kind == Just "log"
     isAlert = item.kind == Just "alert"
     isHttp = case if isLog then Nothing else getRequestDetails (unAesonTextMaybe item.attributes) of Just ("HTTP", _, _, _) -> True; _ -> False
     createdAt = formatUTC item.timestamp
     dgrp = "dtab-" <> item.id
+    detailUrl = "/p/" <> pid.toText <> "/log_explorer/" <> item.id <> "/" <> createdAt <> "/detailed"
+    activeMarker = fromMaybe (case tabs of [] -> "tab-raw"; t : _ -> t.marker) selectedTabM
+    activeTabs = filter ((== activeMarker) . (.marker)) tabs
+    lazyDetailTab_ t active = label_ [class_ $ "cursor-pointer border-b-2 border-b-strokeWeak px-4 py-1.5 text-sm has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-strokeBrand-strong has-[:focus-visible]:rounded-sm has-[:checked]:font-bold has-[:checked]:border-strokeBrand-strong has-[:checked]:text-textBrand " <> t.cls] do
+      input_ $ [type_ "radio", name_ dgrp, class_ $ "sr-only " <> t.marker, hxGet_ (detailUrl <> "?tab=" <> t.marker), hxTarget_ "#trace-details-content", hxSelect_ "#trace-details-content", hxSwap_ "outerHTML", hxTrigger_ "change"] <> [checked_ | active]
+      t.label
     events = fromMaybe AE.Null (unAesonTextMaybe item.events)
     spanErrors = if isLog then [] else getSpanErrors events
 

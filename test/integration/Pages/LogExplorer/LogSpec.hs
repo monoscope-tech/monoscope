@@ -511,19 +511,22 @@ spec = around withTestResources do
 
       let ctx = tr.trATCtx
           withTfReads b = tr{trATCtx = ctx{env = ctx.env{enableTimefusionReads = b}}}
-      (_, item) <- testServant (withTfReads True) $ LogItem.expandAPIlogItemH testPid rid ts Nothing
+      (_, item) <- testServant (withTfReads True) $ LogItem.expandAPIlogItemH testPid rid ts Nothing Nothing
       expectFound item
+      let initialHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml item
+      initialHtml `shouldSatisfy` T.isInfixOf "trace-details-content"
+      initialHtml `shouldNotSatisfy` T.isInfixOf "m-raw-content"
 
       let expectNotFound store item' = case item' of
             LogItem.ItemDetailedNotFound _ -> pass
             _ -> expectationFailure $ store <> ": off-by-1s timestamp unexpectedly matched (window not removed)"
-      (_, miss) <- testServant (withTfReads True) $ LogItem.expandAPIlogItemH testPid rid (addUTCTime 1 ts) Nothing
+      (_, miss) <- testServant (withTfReads True) $ LogItem.expandAPIlogItemH testPid rid (addUTCTime 1 ts) Nothing Nothing
       expectNotFound "TF" miss
 
       void $ withPool tr.trPool $ DBT.execute [sql| UPDATE otel_logs_and_spans SET hashes = NULL WHERE id = ? |] (Only rid)
-      (_, item2) <- testServant (withTfReads False) $ LogItem.expandAPIlogItemH testPid rid ts Nothing
+      (_, item2) <- testServant (withTfReads False) $ LogItem.expandAPIlogItemH testPid rid ts Nothing Nothing
       expectFound item2
-      (_, miss2) <- testServant (withTfReads False) $ LogItem.expandAPIlogItemH testPid rid (addUTCTime 1 ts) Nothing
+      (_, miss2) <- testServant (withTfReads False) $ LogItem.expandAPIlogItemH testPid rid (addUTCTime 1 ts) Nothing Nothing
       expectNotFound "PG" miss2
 
     it "flags ERROR-severity logs in the trace-view 'errors' column" \tr -> do
