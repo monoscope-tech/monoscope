@@ -2558,6 +2558,7 @@ upsertMetricMetadata records = unless (V.null records) do
           scopeVersion = case instrumentationScope of
             AE.Object o -> KEM.lookup "version" o >>= \case AE.String x -> Just x; _ -> Nothing
             _ -> Nothing
-       in (projectId, metricName, metricType, metricUnit, metricDescription, metricServiceNameFromResource metricName r.resource, fromMaybe "" scope, scopeVersion, timestamp, metricTime)
-    catalogSql (pid, name, typ, unit, desc, service, scope, scopeVersion, seen, pointTime) =
-      [HI.sql|(#{pid}, #{name}, #{typ}, #{unit}, #{desc}, #{service}, #{scope}, #{scopeVersion}, #{seen}, #{seen}, #{pointTime}, #{pointTime})|]
+          labels = V.fromList $ ordNub $ metricAttributePaths "attributes" r.attributes <> metricAttributePaths "resource" r.resource
+       in (projectId, metricName, metricType, metricUnit, metricDescription, metricServiceNameFromResource metricName r.resource, fromMaybe "" scope, scopeVersion, labels, timestamp, metricTime)
+    catalogSql (pid, name, typ, unit, desc, service, scope, scopeVersion, labels, seen, pointTime) =
+      [HI.sql|(#{pid}, #{name}, #{typ}, #{unit}, #{desc}, #{service}, #{scope}, #{scopeVersion}, #{labels}::text[], #{seen}, #{seen}, #{pointTime}, #{pointTime})|]

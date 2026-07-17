@@ -271,7 +271,6 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM = do
 
 metricDetailsGetH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 metricDetailsGetH pid metricName source fromM toM sinceM = do
-  ctx <- Reader.ask @AuthContext
   (sess, project) <- Projects.sessionAndProject pid
   now <- Time.currentTime
   let (_, _, currentRange) = parseTime fromM toM sinceM now
@@ -424,21 +423,16 @@ metricCard pid source metricName metricUnit labels selectedM = do
   let selected = if selectedM == Just "all" then Nothing else selectedM <|> listToMaybe (V.toList labels)
       cardId = "metric_" <> T.replace "." "_" metricName
       detailUrl = metricDetailUrl pid metricName source
-  div_ [class_ "w-full flex flex-col gap-2 metric_filterble relative", id_ cardId] do
-    unless (V.null labels)
-      $ select_
-        [ class_ "select select-xs absolute z-10 top-0 right-10 w-40 bg-fillWeaker border border-strokeWeak"
-        , hxGet_ $ "/p/" <> pid.toText <> "/metrics/card/" <> metricName
-        , name_ "label"
-        , hxTarget_ $ "#" <> cardId
-        , hxSwap_ "outerHTML"
-        ]
-        do
-          option_ ([selected_ "all" | selectedM == Just "all"] ++ [value_ "all"]) "All values"
-          forM_ labels $ \label -> option_ ([selected_ label | Just label == selected] ++ [value_ label]) $ toHtml label
-    div_ [class_ "h-52"]
-      $ toHtml
-      $ metricWidget pid metricName metricUnit selected (Just metricName) Nothing (Just detailUrl) Nothing
+  div_ [class_ "w-full flex flex-col gap-2 metric_filterble", id_ cardId]
+    $ div_ [class_ "h-52"]
+    $ toHtml
+    $ (metricWidget pid metricName metricUnit selected (Just metricName) Nothing (Just detailUrl) Nothing)
+      { Widget.hideSubtitle = Just True
+      , Widget.groupByOptions = V.toList labels <$ guard (not $ V.null labels)
+      , Widget.groupBySelected = selectedM <|> selected
+      , Widget.groupByUrl = Just $ "/p/" <> pid.toText <> "/metrics/card/" <> metricName
+      , Widget.groupByTarget = Just $ "#" <> cardId
+      }
 
 
 inactiveMetricsList :: Projects.ProjectId -> Text -> V.Vector Telemetry.MetricChartListData -> Html ()

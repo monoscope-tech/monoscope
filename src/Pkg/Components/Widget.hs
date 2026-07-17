@@ -164,6 +164,10 @@ data Widget = Widget
   , _isNested :: Maybe Bool
   , _centerTitle :: Maybe Bool
   , expandBtnFn :: Maybe Text
+  , groupByOptions :: Maybe [Text]
+  , groupBySelected :: Maybe Text
+  , groupByUrl :: Maybe Text
+  , groupByTarget :: Maybe Text
   , children :: Maybe [Widget]
   , html :: Maybe LText
   , standalone :: Maybe Bool -- Not used in a grid stack
@@ -718,10 +722,22 @@ renderChart widget = do
         [ class_
             $ "h-full w-full flex flex-col justify-end "
             <> bool "min-h-0 " "" isStat
-            <> if widget.naked == Just True then "" else "surface-raised rounded-2xl"
+            <> if widget.naked == Just True then "" else "surface-raised rounded-2xl relative"
         , id_ $ chartId <> "_bordered"
         ]
         do
+          whenJust ((,) <$> widget.groupByOptions <*> widget.groupByUrl) \(options, url) ->
+            div_ [class_ "flex shrink-0 justify-end px-2 pt-2"]
+              $ select_
+                [ class_ "select select-xs w-40 bg-fillWeaker border border-strokeWeak text-textWeak"
+                , hxGet_ url
+                , name_ "label"
+                , hxTarget_ $ fromMaybe "" widget.groupByTarget
+                , hxSwap_ "outerHTML"
+                ]
+                do
+                  option_ ([selected_ "all" | widget.groupBySelected == Just "all"] ++ [value_ "all"]) "All values"
+                  forM_ options \label -> option_ ([selected_ label | widget.groupBySelected == Just label] ++ [value_ label]) $ toHtml label
           when isStat $ renderStatContent widget chartId valueM
           unless (widget.wType == WTStat) $ div_ [class_ $ "h-0 max-h-full overflow-hidden w-full flex-1 min-h-0" <> bool " p-2" "" isStat] do
             div_ [class_ "h-full w-full", id_ $ maybeToMonoid widget.id] ""
