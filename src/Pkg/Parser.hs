@@ -349,15 +349,12 @@ sqlFromQueryComponents sqlCfg qc =
                       [ "(" <> show (p / 100.0) <> ", 'p" <> show (round p :: Int) <> "')"
                       | p <- pcts
                       ]
-               in [fmt|WITH bucket_digests AS (
-                    SELECT extract(epoch from {timeBucketExpr})::integer AS timeB,
-                           percentile_agg(CAST({fieldExpr} AS DOUBLE)) AS digest
-                    FROM {fromTable}
-                    WHERE {buildWhere}
-                    GROUP BY timeB
-                    HAVING COUNT(*) > 0
-                  )
-                  SELECT b.timeB, q.quantile,
+               in [fmt|WITH bucket_digests AS (SELECT extract(epoch from {timeBucketExpr})::integer AS timeB,
+                    percentile_agg(CAST({fieldExpr} AS DOUBLE)) AS digest
+                  FROM {fromTable}
+                  WHERE {buildWhere}
+                  GROUP BY timeB
+                  HAVING COUNT(*) > 0) SELECT b.timeB, q.quantile,
                          COALESCE(approx_percentile(q.percentile, b.digest), 0)::float AS value
                   FROM bucket_digests b
                   CROSS JOIN (VALUES {percentiles}) AS q(percentile, quantile)
