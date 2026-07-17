@@ -348,7 +348,7 @@ sqlFromQueryComponents sqlCfg qc =
                   pctSubqueries =
                     [ [fmt|SELECT extract(epoch from {timeBucketExpr})::integer AS timeB,
                         'p{show (round p :: Int)}' AS quantile,
-                        COALESCE((approx_percentile({show (p / 100.0)}, percentile_agg(({fieldExpr})::float)))::float, 0) AS value
+                        COALESCE(approx_percentile({show (p / 100.0)}, percentile_agg(CAST({fieldExpr} AS DOUBLE))), 0)::float AS value
                       FROM {fromTable}
                       WHERE {buildWhere}
                       GROUP BY timeB
