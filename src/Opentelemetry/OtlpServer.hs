@@ -389,12 +389,12 @@ processList msgs !attrs =
             )
             ( \_caches perMsg ->
                 let flat = Telemetry.mintMetricIds $ V.concat [recs | (_, _, recs) <- perMsg]
-                 in checkpoint "processList:metrics:bulkInsert" $
-                      Telemetry.bulkInsertOtelMetrics
+                 in checkpoint "processList:metrics:bulkInsert"
+                      $ Telemetry.bulkInsertOtelMetrics
                         appCtx.hasqlTimefusionUsesPgTypes
                         target
                         flat
-                        <&> fmap (const [])
+                      <&> fmap (const [])
             )
         _ -> do
           Log.logAttention "processList: unsupported opentelemetry data type" (AE.object ["ce-type" AE..= HM.lookup "ce-type" attrs])

@@ -13,7 +13,6 @@ module Pages.Telemetry (
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEKey
 import Data.Default
-import Effectful.Reader.Static qualified as Reader
 import Data.HashMap.Internal.Strict qualified as HM
 import Data.Map qualified as Map
 import Data.Map.Strict qualified as MapS
@@ -24,6 +23,7 @@ import Data.Time.Format (formatTime)
 import Data.Time.Format.ISO8601 (formatShow, iso8601Format)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import Effectful.Reader.Static qualified as Reader
 import Effectful.Time qualified as Time
 import Lucid
 import Lucid.Aria qualified as Aria

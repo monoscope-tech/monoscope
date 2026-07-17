@@ -503,19 +503,20 @@ metricValueToNative = \case
   SumValue g -> scalar g
   HistogramValue h -> def{nSum = h.sum, nCount = Just h.count, nBucketCounts = Just $ AE.toJSON h.bucketCounts, nExplicitBounds = Just $ AE.toJSON h.explicitBounds, nPointMin = h.pointMin, nPointMax = h.pointMax}
   SummaryValue s -> def{nSum = Just s.sum, nCount = Just s.count, nQuantiles = Just $ AE.toJSON s.quantiles}
-  ExponentialHistogramValue e -> def
-    { nSum = e.sum
-    , nCount = Just e.count
-    , nPointMin = e.pointMin
-    , nPointMax = e.pointMax
-    , nExpHistScale = Just e.scale
-    , nExpHistZeroCount = Just e.zeroCount
-    , nExpHistZeroThreshold = Just e.zeroThreshold
-    , nExpHistPosOffset = (.bucketOffset) <$> e.pointPositive
-    , nExpHistPosBuckets = AE.toJSON . (.bucketCounts) <$> e.pointPositive
-    , nExpHistNegOffset = (.bucketOffset) <$> e.pointNegative
-    , nExpHistNegBuckets = AE.toJSON . (.bucketCounts) <$> e.pointNegative
-    }
+  ExponentialHistogramValue e ->
+    def
+      { nSum = e.sum
+      , nCount = Just e.count
+      , nPointMin = e.pointMin
+      , nPointMax = e.pointMax
+      , nExpHistScale = Just e.scale
+      , nExpHistZeroCount = Just e.zeroCount
+      , nExpHistZeroThreshold = Just e.zeroThreshold
+      , nExpHistPosOffset = (.bucketOffset) <$> e.pointPositive
+      , nExpHistPosBuckets = AE.toJSON . (.bucketCounts) <$> e.pointPositive
+      , nExpHistNegOffset = (.bucketOffset) <$> e.pointNegative
+      , nExpHistNegBuckets = AE.toJSON . (.bucketCounts) <$> e.pointNegative
+      }
   where
     scalar GaugeSum{valueDouble, valueInt} =
       def
@@ -526,7 +527,7 @@ metricValueToNative = \case
 
 
 data MetricType = MTGauge | MTSum | MTHistogram | MTExponentialHistogram | MTSummary
-  deriving (Eq, Ord, Generic, Read, Show)
+  deriving (Eq, Generic, Ord, Read, Show)
   deriving (AE.FromJSON, AE.ToJSON, NFData)
   deriving (FromField, ToField) via WrappedEnum "MT" MetricType
   deriving (HI.DecodeValue, HI.EncodeValue) via WrappedEnum "MT" MetricType
@@ -757,32 +758,43 @@ getDataPointsData useTimefusion pid dateRange = do
         (Nothing, Just b) -> [HI.sql| AND timestamp BETWEEN #{now} AND #{b} |]
         (Just a, Just b) -> [HI.sql| AND timestamp BETWEEN #{a} AND #{b} |]
         _ -> mempty
-  catalog <- Hasql.interp [HI.sql| SELECT metric_name, MAX(metric_type), MAX(metric_unit), MAX(metric_description),
+  catalog <-
+    Hasql.interp
+      [HI.sql| SELECT metric_name, MAX(metric_type), MAX(metric_unit), MAX(metric_description),
       0::bigint, ARRAY_AGG(DISTINCT service_name), '{}'::text[]
     FROM otel_metrics_meta WHERE project_id = #{unUUIDId pid}
     GROUP BY metric_name |]
-  counts :: V.Vector (Text, Int) <- Hasql.withHasqlTimefusion useTimefusion $ Hasql.interp
-    $ [HI.sql| SELECT metric_name, COUNT(*)::bigint FROM otel_metrics WHERE project_id = #{pid.toText} |]
-    <> dateFilter
-    <> [HI.sql| GROUP BY metric_name |]
+  counts :: V.Vector (Text, Int) <-
+    Hasql.withHasqlTimefusion useTimefusion
+      $ Hasql.interp
+      $ [HI.sql| SELECT metric_name, COUNT(*)::bigint FROM otel_metrics WHERE project_id = #{pid.toText} |]
+      <> dateFilter
+      <> [HI.sql| GROUP BY metric_name |]
   let countByName = Map.fromList $ V.toList counts
   pure $ fmap (\m -> m{dataPointsCount = fromMaybe 0 $ Map.lookup m.metricName countByName}) catalog
 
 
 getMetricData :: (DB es, Labeled "timefusion" Hasql :> es) => Bool -> Projects.ProjectId -> Text -> Eff es (Maybe MetricDataPoint)
 getMetricData useTimefusion pid metricName = do
-  meta <- Hasql.interpOne [HI.sql| SELECT metric_name, MAX(metric_type), MAX(metric_unit), MAX(metric_description)
+  meta <-
+    Hasql.interpOne
+      [HI.sql| SELECT metric_name, MAX(metric_type), MAX(metric_unit), MAX(metric_description)
     FROM otel_metrics_meta WHERE project_id = #{unUUIDId pid} AND metric_name = #{metricName}
     GROUP BY metric_name |]
-  raw <- Hasql.withHasqlTimefusion useTimefusion $ Hasql.interpOne [HI.sql| SELECT COUNT(*)::bigint,
+  raw <-
+    Hasql.withHasqlTimefusion useTimefusion
+      $ Hasql.interpOne
+        [HI.sql| SELECT COUNT(*)::bigint,
       ARRAY_AGG(DISTINCT COALESCE(resource___service___name, 'unknown'))::text[],
       COALESCE((SELECT ARRAY_AGG(DISTINCT key) FROM (
         SELECT DISTINCT jsonb_object_keys(attributes) AS key FROM otel_metrics
         WHERE project_id = #{pid.toText} AND metric_name = #{metricName} AND attributes IS NOT NULL
       ) AS unique_keys), ARRAY[]::text[])
     FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = #{metricName}|]
-  pure $ (\(name, typ, unit, desc) (count, services, labels) -> MetricDataPoint name typ unit desc count services labels)
-    <$> meta <*> raw
+  pure
+    $ (\(name, typ, unit, desc) (count, services, labels) -> MetricDataPoint name typ unit desc count services labels)
+    <$> meta
+    <*> raw
 
 
 getTotalEventsToReport :: DB es => Projects.ProjectId -> UTCTime -> Eff es Int
@@ -2281,36 +2293,44 @@ metricIdNamespace = [uuid|5a5e99db-2f4d-58c6-9f8a-b9db1f6139aa|]
 
 metricSeriesId :: MetricRecord -> Text
 metricSeriesId MetricRecord{projectId, metricName, metricType, metricUnit, resource, attributes, instrumentationScope} =
-  UUID.toText $ UUIDv5.generateNamed metricIdNamespace . BS.unpack . encodeUtf8 $ T.intercalate "\x1f"
-    [ "series"
-    , UUID.toText projectId
-    , metricName
-    , toText $ show metricType
-    , metricUnit
-    , jsonText resource
-    , jsonText attributes
-    , jsonText instrumentationScope
-    ]
+  UUID.toText
+    $ UUIDv5.generateNamed metricIdNamespace
+    . BS.unpack
+    . encodeUtf8
+    $ T.intercalate
+      "\x1f"
+      [ "series"
+      , UUID.toText projectId
+      , metricName
+      , toText $ show metricType
+      , metricUnit
+      , jsonText resource
+      , jsonText attributes
+      , jsonText instrumentationScope
+      ]
 
 
 metricId :: MetricRecord -> UUID.UUID
 metricId r@MetricRecord{metricTime, startTimestamp, metricValue} =
-  UUIDv5.generateNamed metricIdNamespace . BS.unpack . encodeUtf8 $ T.intercalate "\x1f"
-    [ "point"
-    , metricSeriesId r
-    , toText $ iso8601Show metricTime
-    , maybe "" (toText . iso8601Show) startTimestamp
-    , jsonText $ AE.toJSON metricValue
-    ]
+  UUIDv5.generateNamed metricIdNamespace
+    . BS.unpack
+    . encodeUtf8
+    $ T.intercalate
+      "\x1f"
+      [ "point"
+      , metricSeriesId r
+      , toText $ iso8601Show metricTime
+      , maybe "" (toText . iso8601Show) startTimestamp
+      , jsonText $ AE.toJSON metricValue
+      ]
 
 
 jsonText :: AE.Value -> Text
 jsonText = decodeUtf8 . toStrict . AE.encode
 
 
-
 mintMetricIds :: V.Vector MetricRecord -> V.Vector MetricRecord
-mintMetricIds = V.map $ \r -> r{ id = Just $ fromMaybe (metricId r) r.id }
+mintMetricIds = V.map $ \r -> r{id = Just $ fromMaybe (metricId r) r.id}
 
 
 -- | Write raw metrics with precisely the same PG/TimeFusion target semantics
@@ -2376,7 +2396,9 @@ bulkInsertOtelMetrics tfPgTypes target records0 = do
 insertOtelMetrics :: (Hasql :> es, IOE :> es) => Bool -> V.Vector MetricRecord -> Eff es BulkInsertResult
 insertOtelMetrics usePgTypes records = do
   affected <- fmap (foldl' (+) 0) $ forM (chunksOf 350 $ V.toList records) $ \chunk -> do
-    void $ Hasql.interpExecute_ ([HI.sql|INSERT INTO otel_metrics (
+    void
+      $ Hasql.interpExecute_
+        ( [HI.sql|INSERT INTO otel_metrics (
       project_id, timestamp, date, start_timestamp, ingested_at, id, series_id,
       metric_name, metric_description, metric_unit, metric_type, aggregation_temporality, is_monotonic, flags,
       resource, resource_schema_url, scope_name, scope_version, scope_schema_url, attributes, dropped_attributes_count, exemplars,
@@ -2392,7 +2414,10 @@ insertOtelMetrics usePgTypes records = do
       hist_bucket_counts, hist_explicit_bounds, exp_hist_scale, exp_hist_zero_count, exp_hist_zero_threshold,
       exp_hist_pos_offset, exp_hist_pos_buckets, exp_hist_neg_offset, exp_hist_neg_buckets,
       summary_quantiles, summary_values, message_size_bytes
-    ) VALUES |] <> mconcat (intersperse [HI.sql|,|] (metricRowSql usePgTypes <$> chunk)) <> if usePgTypes then [HI.sql| ON CONFLICT (project_id, timestamp, id) DO NOTHING|] else mempty)
+    ) VALUES |]
+            <> mconcat (intersperse [HI.sql|,|] (metricRowSql usePgTypes <$> chunk))
+            <> if usePgTypes then [HI.sql| ON CONFLICT (project_id, timestamp, id) DO NOTHING|] else mempty
+        )
     pure $ fromIntegral $ length chunk
   pure $ BulkInsertResult affected
 
@@ -2516,14 +2541,14 @@ summaryArraySql wantQuantiles = \case
 upsertMetricMetadata :: (Hasql :> es, IOE :> es) => V.Vector MetricRecord -> Eff es ()
 upsertMetricMetadata records = unless (V.null records) do
   let rows = ordNub $ V.toList $ V.map catalogRow records
-  Hasql.interpExecute_ $
-    [HI.sql|INSERT INTO otel_metrics_meta (
+  Hasql.interpExecute_
+    $ [HI.sql|INSERT INTO otel_metrics_meta (
       project_id, metric_name, metric_type, metric_unit, metric_description,
       service_name, scope_name, scope_version,
       first_seen_at, last_seen_at, first_timestamp, last_timestamp
     ) VALUES |]
-      <> mconcat (intersperse [HI.sql|,|] (catalogSql <$> rows))
-      <> [HI.sql| ON CONFLICT (project_id, metric_name, metric_type, metric_unit, service_name, scope_name) DO UPDATE SET
+    <> mconcat (intersperse [HI.sql|,|] (catalogSql <$> rows))
+    <> [HI.sql| ON CONFLICT (project_id, metric_name, metric_type, metric_unit, service_name, scope_name) DO UPDATE SET
         metric_description = EXCLUDED.metric_description,
         scope_version = EXCLUDED.scope_version,
         last_seen_at = GREATEST(otel_metrics_meta.last_seen_at, EXCLUDED.last_seen_at),
