@@ -788,11 +788,13 @@ getMetricData useTimefusion pid metricName = do
     GROUP BY metric_name |]
   count <-
     fromMaybe 0
-      <$> Hasql.withHasqlTimefusion useTimefusion
+      <$> Hasql.withHasqlTimefusion
+        useTimefusion
         (Hasql.interpOne [HI.sql| SELECT COUNT(*)::bigint FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = #{metricName}|])
   services <-
     V.fromList
-      <$> Hasql.withHasqlTimefusion useTimefusion
+      <$> Hasql.withHasqlTimefusion
+        useTimefusion
         (Hasql.interp [HI.sql| SELECT DISTINCT COALESCE(resource___service___name, 'unknown') FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = #{metricName}|])
   attributeMaps :: V.Vector (AesonText (Map Text AE.Value), Maybe (AesonText (Map Text AE.Value)), Text) <-
     Hasql.withHasqlTimefusion useTimefusion

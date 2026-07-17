@@ -596,10 +596,11 @@ metricsDetailsPage pid sources metric source currentRange = do
 
 metricBreakdown :: Projects.ProjectId -> Telemetry.MetricDataPoint -> Maybe Text -> Html ()
 metricBreakdown pid metric = \case
-  Just label | label `elem` metric.metricLabels ->
-    div_ [class_ "h-64 w-full"]
-      $ toHtml
-      $ metricWidget pid metric.metricName metric.metricUnit (Just label) (Just $ "By " <> label) (Just $ "breakdown_" <> T.replace "." "_" metric.metricName) Nothing Nothing
+  Just label
+    | label `elem` metric.metricLabels ->
+        div_ [class_ "h-64 w-full"]
+          $ toHtml
+          $ metricWidget pid metric.metricName metric.metricUnit (Just label) (Just $ "By " <> label) (Just $ "breakdown_" <> T.replace "." "_" metric.metricName) Nothing Nothing
   Just _ -> metricBreakdown pid metric Nothing
   Nothing ->
     div_ [class_ "flex items-center gap-2 h-40 text-sm text-textWeak"] do
