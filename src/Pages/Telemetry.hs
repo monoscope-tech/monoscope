@@ -4,6 +4,7 @@ module Pages.Telemetry (
   metricDetailsGetH,
   MetricsOverViewGet (..),
   metricBreakdownGetH,
+  metricCardGetH,
   -- Trace
   traceH,
   TraceDetailsGet (..),
@@ -55,14 +56,14 @@ import Utils (LoadingSize (..), LoadingType (..), drawerLoadAttrs_, faSprite_, g
 
 data MetricsOverViewGet
   = MetricsOVDataPointMain (PageCtx (Projects.ProjectId, V.Vector Telemetry.MetricDataPoint, Map Text (Int, Int, Int)))
-  | MetricsOVChartsMain (PageCtx (Projects.ProjectId, V.Vector Telemetry.MetricChartListData, V.Vector Telemetry.MetricChartListData, V.Vector Text, Text, Text, Maybe Text))
-  | MetricsOVChartsPaginated (Projects.ProjectId, V.Vector Telemetry.MetricChartListData, Text, Maybe Text)
+  | MetricsOVChartsMain (PageCtx (Projects.ProjectId, V.Vector Telemetry.MetricChartListData, Map Text (V.Vector Text), V.Vector Telemetry.MetricChartListData, V.Vector Text, Text, Text, Maybe Text))
+  | MetricsOVChartsPaginated (Projects.ProjectId, V.Vector Telemetry.MetricChartListData, Map Text (V.Vector Text), Text, Maybe Text)
 
 
 instance ToHtml MetricsOverViewGet where
   toHtml (MetricsOVDataPointMain (PageCtx bwconf (pid, datapoints, refCounts))) = toHtml $ PageCtx bwconf $ dataPointsPage pid datapoints refCounts
-  toHtml (MetricsOVChartsMain (PageCtx bwconf (pid, mList, inactive, serviceNames, source, prefix, nextUrl))) = toHtml $ PageCtx bwconf $ chartsPage pid mList inactive serviceNames source prefix nextUrl
-  toHtml (MetricsOVChartsPaginated (pid, mList, source, nextUrl)) = toHtml $ chartList pid source mList nextUrl
+  toHtml (MetricsOVChartsMain (PageCtx bwconf (pid, mList, labels, inactive, serviceNames, source, prefix, nextUrl))) = toHtml $ PageCtx bwconf $ chartsPage pid mList labels inactive serviceNames source prefix nextUrl
+  toHtml (MetricsOVChartsPaginated (pid, mList, labels, source, nextUrl)) = toHtml $ chartList pid labels source mList nextUrl
   toHtmlRaw = toHtml
 
 
@@ -259,12 +260,13 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM = do
             if cursor + pageSize >= V.length active
               then Nothing
               else Just $ "/p/" <> pid.toText <> "/metrics?tab=charts" <> sourceQ <> fromQ <> toQ <> sinceQ <> prfixQ <> cursorQ
+      labels <- Map.fromList <$> forM (V.toList metricList) (\metric -> (metric.metricName,) . maybe V.empty (.metricLabels) <$> Telemetry.getMetricData ctx.env.enableTimefusionReads pid metric.metricName)
       if cursor == 0
         then do
           serviceNames <- V.fromList <$> Telemetry.getMetricServiceNames pid
-          addRespHeaders $ MetricsOVChartsMain $ PageCtx bwconf (pid, metricList, inactive, serviceNames, fromMaybe "all" sourceM, fromMaybe "all" prefixM, nextFetchUrl)
+          addRespHeaders $ MetricsOVChartsMain $ PageCtx bwconf (pid, metricList, labels, inactive, serviceNames, fromMaybe "all" sourceM, fromMaybe "all" prefixM, nextFetchUrl)
         else do
-          addRespHeaders $ MetricsOVChartsPaginated (pid, metricList, fromMaybe "all" sourceM, nextFetchUrl)
+          addRespHeaders $ MetricsOVChartsPaginated (pid, metricList, labels, fromMaybe "all" sourceM, nextFetchUrl)
 
 
 metricDetailsGetH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
@@ -285,17 +287,10 @@ metricBreakdownGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (Re
 metricBreakdownGetH pid metricName labelM = do
   ctx <- Reader.ask @AuthContext
   (sess, project) <- Projects.sessionAndProject pid
-  let label = fromMaybe "all" labelM
-  if label == "all"
-    then do
-      metricM <- Telemetry.getMetricData ctx.env.enableTimefusionReads pid metricName
-      case metricM of
-        Just metric -> do
-          addRespHeaders $ metricBreakdown pid Nothing metric.metricLabels
-        Nothing -> addRespHeaders $ metricBreakdown pid Nothing []
-    else do
-      lableValues <- V.fromList <$> Telemetry.getMetricLabelValues ctx.env.enableTimefusionReads pid metricName label
-      addRespHeaders $ metricBreakdown pid labelM lableValues
+  metricM <- Telemetry.getMetricData ctx.env.enableTimefusionReads pid metricName
+  case metricM of
+    Just metric -> addRespHeaders $ metricBreakdown pid metric labelM
+    Nothing -> addRespHeaders mempty
 
 
 -- Trace handler
@@ -327,8 +322,8 @@ overViewTabs pid tab = do
     a_ ([href_ $ "/p/" <> pid.toText <> "/metrics?tab=datapoints", role_ "tab", class_ $ "tab h-auto! " <> if tab == "datapoints" then "tab-active" else ""] <> navTabAttrs) "Table"
 
 
-chartsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricChartListData -> V.Vector Telemetry.MetricChartListData -> V.Vector Text -> Text -> Text -> Maybe Text -> Html ()
-chartsPage pid metricList inactive sources source mFilter nextUrl = do
+chartsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricChartListData -> Map Text (V.Vector Text) -> V.Vector Telemetry.MetricChartListData -> V.Vector Text -> Text -> Text -> Maybe Text -> Html ()
+chartsPage pid metricList labels inactive sources source mFilter nextUrl = do
   div_ [class_ "flex flex-col gap-4 px-4 overflow-y-scroll"] $ do
     div_ [class_ "w-full"] do
       Components.drawer_ "global-data-drawer" Nothing Nothing ""
@@ -377,7 +372,7 @@ chartsPage pid metricList inactive sources source mFilter nextUrl = do
           $ div_ [class_ "text-textWeak text-sm py-4"] "No active metrics in the last 7 days."
         unless (V.null metricList)
           $ div_ [class_ "w-full grid grid-cols-3 gap-4", id_ "metric_list_container"]
-          $ chartList pid source metricList nextUrl
+          $ chartList pid labels source metricList nextUrl
         unless (V.null inactive) $ inactiveMetricsList pid source inactive
 
 
@@ -387,12 +382,12 @@ metricDetailUrl pid metricName source = "/p/" <> pid.toText <> "/metrics/details
 
 -- | Shared WTTimeseriesLine widget for a metric. @mTitle@/@mId@/@mExpandBtn@/@mDescription@
 -- carry the per-callsite differences between the chart-list card and the details page.
-metricWidget :: Projects.ProjectId -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Widget.Widget
-metricWidget pid metricName metricUnit mTitle mId mExpandBtn mDescription =
+metricWidget :: Projects.ProjectId -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Widget.Widget
+metricWidget pid metricName metricUnit mLabel mTitle mId mExpandBtn mDescription =
   def
     { Widget.wType = Widget.WTTimeseriesLine
     , Widget.title = mTitle
-    , Widget.query = Just $ "metrics | where metric_name == \"" <> metricName <> "\" | summarize avg(value) by bin_auto(timestamp),attributes"
+    , Widget.query = Just $ "metrics | where metric_name == \"" <> metricName <> "\" | summarize avg(value) by bin_auto(timestamp)" <> maybe "" ("," <>) mLabel
     , Widget.layout = Just $ Widget.Layout{x = Just 0, y = Just 0, w = Just 2, h = Just 1}
     , Widget.unit = Just metricUnit
     , Widget.hideLegend = Nothing
@@ -404,17 +399,48 @@ metricWidget pid metricName metricUnit mTitle mId mExpandBtn mDescription =
     }
 
 
-chartList :: Projects.ProjectId -> Text -> V.Vector Telemetry.MetricChartListData -> Maybe Text -> Html ()
-chartList pid source metricList nextUrl = do
+chartList :: Projects.ProjectId -> Map Text (V.Vector Text) -> Text -> V.Vector Telemetry.MetricChartListData -> Maybe Text -> Html ()
+chartList pid labels source metricList nextUrl = do
   forM_ metricList \metric ->
-    div_ [class_ "w-full flex flex-col gap-2 metric_filterble"] do
-      let detailUrl = metricDetailUrl pid metric.metricName source
-      let lastSeenStr = formatTime defaultTimeLocale "%b %d, %Y %H:%M" metric.lastSeen
-      div_ [class_ "h-52"]
-        $ toHtml
-        $ metricWidget pid metric.metricName metric.metricUnit (Just metric.metricName) Nothing (Just detailUrl) (Just $ "Last seen: " <> toText lastSeenStr)
+    metricCard pid source metric.metricName metric.metricUnit (fromMaybe V.empty $ Map.lookup metric.metricName labels) Nothing
   whenJust nextUrl \url ->
     a_ [hxTrigger_ "intersect once", hxSwap_ "outerHTML", hxGet_ url] pass
+
+
+metricCardGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+metricCardGetH pid metricName labelM = do
+  ctx <- Reader.ask @AuthContext
+  metricM <- Telemetry.getMetricData ctx.env.enableTimefusionReads pid metricName
+  case metricM of
+    Nothing -> addRespHeaders mempty
+    Just metric ->
+      let selected = case labelM of
+            Just "all" -> Just "all"
+            Just label | label `elem` metric.metricLabels -> Just label
+            _ -> Nothing
+       in addRespHeaders $ metricCard pid "all" metric.metricName metric.metricUnit metric.metricLabels selected
+
+
+metricCard :: Projects.ProjectId -> Text -> Text -> Text -> V.Vector Text -> Maybe Text -> Html ()
+metricCard pid source metricName metricUnit labels selectedM = do
+  let selected = if selectedM == Just "all" then Nothing else selectedM <|> listToMaybe (V.toList labels)
+      cardId = "metric_" <> T.replace "." "_" metricName
+      detailUrl = metricDetailUrl pid metricName source
+  div_ [class_ "w-full flex flex-col gap-2 metric_filterble relative", id_ cardId] do
+    unless (V.null labels)
+      $ select_
+        [ class_ "select select-xs absolute z-10 top-0 right-10 w-40 bg-fillWeaker border border-strokeWeak"
+        , hxGet_ $ "/p/" <> pid.toText <> "/metrics/card/" <> metricName
+        , name_ "label"
+        , hxTarget_ $ "#" <> cardId
+        , hxSwap_ "outerHTML"
+        ]
+        do
+          option_ ([selected_ "all" | selectedM == Just "all"] ++ [value_ "all"]) "All values"
+          forM_ labels $ \label -> option_ ([selected_ label | Just label == selected] ++ [value_ label]) $ toHtml label
+    div_ [class_ "h-52"]
+      $ toHtml
+      $ metricWidget pid metricName metricUnit selected (Just metricName) Nothing (Just detailUrl) Nothing
 
 
 inactiveMetricsList :: Projects.ProjectId -> Text -> V.Vector Telemetry.MetricChartListData -> Html ()
@@ -523,7 +549,7 @@ metricsDetailsPage pid sources metric source currentRange = do
       div_ [class_ "flex items-center text-sm"] $ span_ [] $ toHtml metric.metricName
       div_ [class_ "h-64 w-full"]
         $ toHtml
-        $ metricWidget pid metric.metricName metric.metricUnit Nothing (Just $ "details_" <> T.replace "." "_" metric.metricName) Nothing Nothing
+        $ metricWidget pid metric.metricName metric.metricUnit Nothing Nothing (Just $ "details_" <> T.replace "." "_" metric.metricName) Nothing Nothing
 
     div_ [class_ "flex flex-col gap-2 rounded-2xl border border-strokeWeak", id_ "metric-tabs-container"] $ do
       div_ [class_ "flex", [__|on click halt|]] $ do
@@ -551,37 +577,34 @@ metricsDetailsPage pid sources metric source currentRange = do
         div_ [class_ "hidden a-tab-content", id_ "br-content"] do
           div_ [class_ "flex flex-col gap-4"] $ do
             div_ [class_ "flex flex-col gap-1"] do
-              span_ [class_ "text-textStrong text-sm font-medium"] "By label"
+              span_ [class_ "text-textStrong text-sm font-medium"] "Group by label"
               select_
-                [ class_ "select select-sm bg-fillWeaker border border-strokeWeak rounded-xl w-36 focus:outline-hidden focus:ring-2 focus:ring-strokeFocus"
+                [ class_ "select select-sm bg-fillWeaker border border-strokeWeak rounded-xl w-52 focus:outline-hidden focus:ring-2 focus:ring-strokeFocus"
                 , hxGet_ $ "/p/" <> pid.toText <> "/metrics/details/" <> metric.metricName <> "/breakdown"
                 , name_ "label"
                 , hxTarget_ "#breakdown-container"
                 , hxSwap_ "innerHTML"
                 ]
                 do
-                  option_ ([selected_ "all" | "all" == source] ++ [value_ "all"]) "All"
-                  forM_ metric.metricLabels $ \s -> option_ ([selected_ s | s == source] ++ [value_ s]) $ toHtml s
+                  option_ [value_ "all"] "Choose a label"
+                  forM_ metric.metricLabels $ \label -> option_ [value_ label] $ toHtml label
             div_ [class_ "flex flex-col gap-2", id_ "breakdown-container"] do
-              metricBreakdown pid Nothing metric.metricLabels
+              metricBreakdown pid metric Nothing
 
         div_ [class_ "hidden a-tab-content", id_ "rl-content"] pass
 
 
-metricBreakdown :: Projects.ProjectId -> Maybe Text -> V.Vector Text -> Html ()
-metricBreakdown pid label values = do
-  div_ [class_ "grid grid-cols-2 gap-2"] do
-    forM_ values \v ->
-      div_ [class_ "w-full flex flex-col gap-2 metric_filterble rounded-lg p-2 border border-strokeWeak"] do
-        div_ [class_ "w-full justify-between flex gap-2 items-center"] do
-          div_ [class_ "flex gap-1 items-center"] do
-            span_ [class_ "text-sm"] $ toHtml v
-          button_
-            [ class_ "btn border border-strokeWeak btn-xs btn-circle"
-            ]
-            do
-              faSprite_ "up-right-and-down-left-from-center" "regular" "w-3 h-3 text-iconNeutral"
-        div_ [class_ "h-48"] pass
+metricBreakdown :: Projects.ProjectId -> Telemetry.MetricDataPoint -> Maybe Text -> Html ()
+metricBreakdown pid metric = \case
+  Just label | label `elem` metric.metricLabels ->
+    div_ [class_ "h-64 w-full"]
+      $ toHtml
+      $ metricWidget pid metric.metricName metric.metricUnit (Just label) (Just $ "By " <> label) (Just $ "breakdown_" <> T.replace "." "_" metric.metricName) Nothing Nothing
+  Just _ -> metricBreakdown pid metric Nothing
+  Nothing ->
+    div_ [class_ "flex items-center gap-2 h-40 text-sm text-textWeak"] do
+      faSprite_ "chart-line" "regular" "w-4 h-4 text-iconNeutral"
+      "Choose a label to compare its time series."
 
 
 -- Metric reference counting: (dashboardCount, widgetCount, alertCount) per metric

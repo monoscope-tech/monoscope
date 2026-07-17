@@ -248,10 +248,12 @@ rewriteSectionsForSource (Just SMetrics) = mapSubjects rewriteForMetrics
 rewriteSectionsForSource _ = id
 
 
--- | @otel_metrics@ shares the flattened field convention used by spans, so no
--- source-specific Subject rewrite is needed.
+-- | TimeFusion stores metric JSON columns as variants. Convert them to JSON
+-- before using KQL's JSON-path operators.
 rewriteForMetrics :: Subject -> Subject
-rewriteForMetrics = id
+rewriteForMetrics (Subject entire "attributes" keys) = Subject entire "variant_to_json(attributes)" keys
+rewriteForMetrics (Subject entire "resource" keys) = Subject entire "variant_to_json(resource)" keys
+rewriteForMetrics subject = subject
 
 
 -- | Apply a Subject rewrite to every Subject reachable from a Section list.

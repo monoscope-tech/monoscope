@@ -58,7 +58,6 @@ module Models.Telemetry.Telemetry (
   handOffBatches,
   mintOtelLogIds,
   getMetricChartListData,
-  getMetricLabelValues,
   getTraceShapes,
   getMetricServiceNames,
   resourceServiceName,
@@ -553,6 +552,12 @@ data MetricDataPoint = MetricDataPoint
   deriving anyclass (FromRow, HI.DecodeRow, NFData, ToRow)
 
 
+metricAttributePaths :: Text -> AE.Value -> [Text]
+metricAttributePaths prefix = \case
+  AE.Object obj -> concatMap (\(key, value) -> metricAttributePaths (prefix <> "." <> AEK.toText key) value) (KEM.toList obj)
+  _ -> [prefix]
+
+
 data MetricChartListData = MetricChartListData
   { metricName :: Text
   , metricType :: Text
@@ -781,20 +786,20 @@ getMetricData useTimefusion pid metricName = do
       [HI.sql| SELECT metric_name, MAX(metric_type), MAX(metric_unit), MAX(metric_description)
     FROM otel_metrics_meta WHERE project_id = #{unUUIDId pid} AND metric_name = #{metricName}
     GROUP BY metric_name |]
-  raw <-
+  count <-
+    fromMaybe 0
+      <$> Hasql.withHasqlTimefusion useTimefusion
+        (Hasql.interpOne [HI.sql| SELECT COUNT(*)::bigint FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = #{metricName}|])
+  services <-
+    V.fromList
+      <$> Hasql.withHasqlTimefusion useTimefusion
+        (Hasql.interp [HI.sql| SELECT DISTINCT COALESCE(resource___service___name, 'unknown') FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = #{metricName}|])
+  attributeMaps :: V.Vector (AesonText (Map Text AE.Value), Maybe (AesonText (Map Text AE.Value)), Text) <-
     Hasql.withHasqlTimefusion useTimefusion
-      $ Hasql.interpOne
-        [HI.sql| SELECT COUNT(*)::bigint,
-      ARRAY_AGG(DISTINCT COALESCE(resource___service___name, 'unknown'))::text[],
-      COALESCE((SELECT ARRAY_AGG(DISTINCT key) FROM (
-        SELECT DISTINCT jsonb_object_keys(attributes) AS key FROM otel_metrics
-        WHERE project_id = #{pid.toText} AND metric_name = #{metricName} AND attributes IS NOT NULL
-      ) AS unique_keys), ARRAY[]::text[])
-    FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = #{metricName}|]
-  pure
-    $ (\(name, typ, unit, desc) (count, services, labels) -> MetricDataPoint name typ unit desc count services labels)
-    <$> meta
-    <*> raw
+      $ Hasql.interp [HI.sql| SELECT attributes, resource, metric_name FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = #{metricName} AND attributes IS NOT NULL|]
+  let paths prefix attrs = concatMap (\(key, value) -> metricAttributePaths (prefix <> "." <> key) value) $ Map.toList attrs
+      labels = V.fromList $ ordNub $ concatMap (\(AesonText attrs, resource, _) -> paths "attributes" attrs <> maybe [] (\(AesonText resourceAttrs) -> paths "resource" resourceAttrs) resource) attributeMaps
+  pure $ (\(name, typ, unit, desc) -> MetricDataPoint name typ unit desc count services labels) <$> meta
 
 
 getTotalEventsToReport :: DB es => Projects.ProjectId -> UTCTime -> Eff es Int
@@ -832,11 +837,6 @@ getMetricChartListData pid sourceM prefixM = do
     <> sourceFilter
     <> prefixFilter
     <> [HI.sql| GROUP BY metric_name ORDER BY MAX(last_timestamp) DESC, metric_name |]
-
-
-getMetricLabelValues :: (DB es, Labeled "timefusion" Hasql :> es) => Bool -> Projects.ProjectId -> Text -> Text -> Eff es [Text]
-getMetricLabelValues useTimefusion pid metricName labelName =
-  Hasql.withHasqlTimefusion useTimefusion $ Hasql.interp [HI.sql| SELECT DISTINCT attributes->>#{labelName} FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = #{metricName} AND jsonb_exists(attributes, #{labelName})|]
 
 
 getMetricServiceNames :: DB es => Projects.ProjectId -> Eff es [Text]

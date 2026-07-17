@@ -106,8 +106,12 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', c
       let cfg = defSqlQueryCfg defPid fixedUTCTime (Just SMetrics) Nothing
       let (serviceQuery, _) = fromRight' $ parseQueryToComponents cfg "| where service == \"accounting\" and metric_name == \"k8s.container.cpu_request\""
       serviceQuery `shouldSatisfy` T.isInfixOf "resource___service___name = 'accounting'"
-      let (attributeQuery, _) = fromRight' $ parseQueryToComponents cfg "| where attributes.http.request.method == \"GET\""
-      attributeQuery `shouldSatisfy` T.isInfixOf "attributes___http___request___method = 'GET'"
+      let (attributeQuery, _) = fromRight' $ parseQueryToComponents cfg "| where attributes.system.device == \"disk0\""
+      attributeQuery `shouldSatisfy` T.isInfixOf "variant_to_json(attributes)->'system'->>'device' = 'disk0'"
+      let (resourceQuery, _) = fromRight' $ parseQueryToComponents cfg "| where resource.host.name == \"node-1\""
+      resourceQuery `shouldSatisfy` T.isInfixOf "variant_to_json(resource)->'host'->>'name' = 'node-1'"
+      let (groupQuery, _) = fromRight' $ parseQueryToComponents cfg "| summarize avg(value) by bin_auto(timestamp), resource.host.name"
+      groupQuery `shouldSatisfy` T.isInfixOf "GROUP BY time_bucket('6 hours', timestamp), COALESCE(variant_to_json(resource)->'host'->>'name'::text, 'null')"
 
     it "spans source leaves service filter as a flat column" do
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| where service == \"accounting\""

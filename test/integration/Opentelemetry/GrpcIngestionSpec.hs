@@ -133,7 +133,10 @@ spec = sequential $ aroundAll withTestResources do
       -- Regression: metric cards must query the native scalar column in
       -- otel_metrics, not the removed telemetry.metrics JSON payload.
       (_, overview) <- toServantResponse tr $ TelemetryPage.metricsOverViewGetH pid (Just "charts") Nothing Nothing Nothing Nothing Nothing Nothing
-      toString (Lucid.renderText $ Lucid.toHtml overview) `shouldContain` "summarize avg(value) by bin_auto(timestamp),attributes"
+      toString (Lucid.renderText $ Lucid.toHtml overview) `shouldContain` "metrics | where metric_name"
+      void $ runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interpExecute_ [HI.sql| UPDATE otel_metrics SET attributes = '{"kafka":{"topic":"orders"}}'::jsonb WHERE project_id = #{pid.toText} AND metric_name = 'cpu.usage' |]
+      (_, breakdown) <- toServantResponse tr $ TelemetryPage.metricBreakdownGetH pid "cpu.usage" (Just "attributes.kafka.topic")
+      toString (Lucid.renderText breakdown) `shouldContain` "summarize avg(value) by bin_auto(timestamp),attributes.kafka.topic"
       -- Exercise every raw-data query through the labeled TimeFusion interpreter.
       metric <- runTestBg frozenTime tr $ Telemetry.getMetricData True pid "cpu.usage"
       fmap (.dataPointsCount) metric `shouldBe` Just 1

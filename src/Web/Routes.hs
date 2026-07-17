@@ -538,6 +538,7 @@ data TelemetryRoutes' mode = TelemetryRoutes'
   , metricsOVGetH :: mode :- "metrics" :> QPT "tab" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "metric_source" :> QPT "metric_prefix" :> QPI "cursor" :> Get '[HTML] (RespHeaders Metrics.MetricsOverViewGet)
   , metricDetailsGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "metric_source" :> Get '[HTML] (RespHeaders (Html ()))
   , metricBreakdownGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> "breakdown" :> QPT "label" :> Get '[HTML] (RespHeaders (Html ()))
+  , metricCardGetH :: mode :- "metrics" :> "card" :> Capture "metric_name" Text :> QPT "label" :> Get '[HTML] (RespHeaders (Html ()))
   }
   deriving stock (Generic)
 
@@ -917,6 +918,7 @@ telemetryServer pid =
     , metricsOVGetH = Metrics.metricsOverViewGetH pid
     , metricDetailsGetH = Metrics.metricDetailsGetH pid
     , metricBreakdownGetH = Metrics.metricBreakdownGetH pid
+    , metricCardGetH = Metrics.metricCardGetH pid
     }
 
 
