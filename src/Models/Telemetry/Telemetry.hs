@@ -2518,7 +2518,7 @@ jsonArraySql :: Text -> Maybe AE.Value -> HI.Sql
 jsonArraySql typ = \case
   Nothing -> [HI.sql|NULL|]
   Just (AE.Array xs) ->
-    let values = T.intercalate "\x1f" $ fmap (toText . show) $ V.toList xs
+    let values = T.intercalate "\x1f" $ jsonText <$> V.toList xs
      in [HI.sql|string_to_array(#{values}, chr(31))::|] <> fromString (toString typ) <> [HI.sql|[]|]
   Just _ -> [HI.sql|NULL|]
 

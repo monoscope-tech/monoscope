@@ -159,6 +159,16 @@ spec = sequential $ aroundAll withTestResources do
       rows <- runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT start_timestamp, resource_schema_url, scope_schema_url, dropped_attributes_count FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = 'metadata.gauge' |] :: IO (V.Vector (UTCTime, Text, Text, Int))
       rows `shouldBe` V.singleton (start, "https://example.test/resource/1", "https://example.test/scope/1", 7)
 
+    it "Test 4.1c: persists zero-valued histogram buckets" $ \tr -> do
+      key <- createTestAPIKey tr pid "histogram-bucket-key"
+      let toNanos = floor . (* 1000000000) . utcTimeToPOSIXSeconds
+          point = defMessage & PMF.timeUnixNano .~ toNanos frozenTime & PMF.count .~ 3 & PMF.bucketCounts .~ [0, 2, 1] & PMF.explicitBounds .~ [10, 20]
+          metric = defMessage & PMF.name .~ "request.duration" & PMF.histogram .~ (defMessage & PMF.dataPoints .~ [point])
+          request = defMessage & MSF.resourceMetrics .~ [defMessage & PMF.resource .~ mkResource key [] & PMF.scopeMetrics .~ [defMessage & PMF.metrics .~ [metric]]]
+      void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto request)
+      rows <- runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT hist_bucket_counts::text FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = 'request.duration' |] :: IO (V.Vector Text)
+      rows `shouldBe` V.singleton "{0,2,1}"
+
     it "Test 4.2: should reject metrics with invalid API key" $ \tr -> do
       OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ createGaugeMetricAtTime "definitely-not-a-valid-key" "rejected.metric" 99.9 frozenTime)
         `shouldThrow` \case GrpcException{grpcError = GrpcUnauthenticated} -> True; _ -> False
