@@ -302,7 +302,7 @@ selectLogTable pid queryAST queryText cursorM dateRange projectedColsByUser sour
     )
 
   let tbl = case source of
-        Just SMetrics -> "telemetry.metrics"
+        Just SMetrics -> "otel_metrics"
         _ -> "otel_logs_and_spans"
   result <-
     withSpan_

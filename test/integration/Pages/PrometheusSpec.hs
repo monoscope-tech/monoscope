@@ -32,16 +32,16 @@ spec = around withTestResources do
     it "ingests a scraped exposition body as metrics, dropping non-finite samples" \tr -> do
       void $ runQueryEffect tr $ PromCfg.insertConfig testPid "api-gw" "http://svc:9090/metrics" 60 Nothing (AE.object ["env" AE..= ("prod" :: Text)])
       (cfg : _) <- V.toList <$> runQueryEffect tr (PromCfg.configsByProjectId testPid)
-      n <- runQueryEffect tr $ PromCfg.ingestScrapedBody cfg frozenTime promBody
+      n <- runTestBg frozenTime tr $ PromCfg.ingestScrapedBody cfg frozenTime promBody
       n `shouldBe` 3 -- 2 counter series + 1 gauge; +Inf dropped
       rows <-
         withPool tr.trPool
           $ DBT.query
-            [sql| SELECT metric_name, metric_type FROM telemetry.metrics WHERE project_id = ? ORDER BY metric_name |]
-            (Only testPid)
-          :: IO (V.Vector (Text, Text))
+            [sql| SELECT metric_name, metric_type, aggregation_temporality FROM otel_metrics WHERE project_id = ? ORDER BY metric_name |]
+            (Only testPid.toText)
+          :: IO (V.Vector (Text, Text, Maybe Text))
       V.length rows `shouldBe` 3
-      sort (V.toList rows) `shouldBe` [("http_requests_total", "SUM"), ("http_requests_total", "SUM"), ("temperature_celsius", "GAUGE")]
+      sort (V.toList rows) `shouldBe` [("http_requests_total", "SUM", Just "CUMULATIVE"), ("http_requests_total", "SUM", Just "CUMULATIVE"), ("temperature_celsius", "GAUGE", Nothing)]
 
     it "claims each due target once and leases it (multi-node safe), skipping disabled" \tr -> do
       void $ runQueryEffect tr $ PromCfg.insertConfig testPid "svc-a" "http://a/metrics" 3600 Nothing (AE.object [])

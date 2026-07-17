@@ -388,8 +388,8 @@ projectCacheById pid = do
             ( SELECT count(*)::bigint FROM otel_logs_and_spans
              WHERE project_id=#{pid.toText} AND timestamp > #{now}::timestamptz - INTERVAL '1' DAY
             ) daily_event_count,
-            ( SELECT count(*)::bigint FROM telemetry.metrics
-             WHERE project_id=#{pid} AND timestamp > #{now}::timestamptz - INTERVAL '1' DAY
+            ( SELECT count(*)::bigint FROM otel_metrics
+             WHERE project_id=#{pid.toText} AND timestamp > #{now}::timestamptz - INTERVAL '1' DAY
             ) daily_metric_count,
             (SELECT COALESCE((SELECT payment_plan FROM projects.projects WHERE id = #{pid}),'Free')) payment_plan,
             (SELECT COALESCE(ARRAY_AGG(DISTINCT method || '|' || host || '|' || canonical_path), '{}')

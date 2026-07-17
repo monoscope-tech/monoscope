@@ -470,7 +470,7 @@ processBackgroundJob authCtx bgJob =
               wStart =
                 max project.usageLastReported
                   $ calculateCycleStartDate (fromMaybe project.createdAt project.billingDay) nowU
-            (totalToReport, eventBytes, totalMetricsCount, metricBytes) <- Telemetry.getUsageTotals pid wStart
+            (totalToReport, eventBytes, totalMetricsCount, metricBytes) <- Telemetry.getUsageTotals authCtx.env.enableTimefusionReads pid wStart
             let totalUsage = totalToReport + totalMetricsCount
                 totals = Projects.UsageTotals{events = totalToReport, eventBytes, metrics = totalMetricsCount, metricBytes}
                 chunks = case provider of
@@ -653,7 +653,7 @@ processBackgroundJob authCtx bgJob =
 
       allRows <- forM allProjects \(project :: Projects.Project) -> do
         events <- Telemetry.getTotalEventsToReport project.id since
-        metrics <- Telemetry.getTotalMetricsCount project.id since
+        metrics <- Telemetry.getTotalMetricsCount authCtx.env.enableTimefusionReads project.id since
         pure (project, events, metrics, events + metrics)
       let (activeRows, inactiveRows) = partition (\(_, _, _, t) -> t > 0) allRows
           sorted = sortOn (\(_, _, _, t) -> negate t) activeRows
@@ -810,8 +810,8 @@ processBackgroundJob authCtx bgJob =
             ),
             ingested_metrics AS (
               SELECT project_id::uuid AS pid, COUNT(*)::bigint AS c
-                FROM telemetry.metrics
-               WHERE time >= #{since}::timestamptz
+                FROM otel_metrics
+               WHERE timestamp >= #{since}::timestamptz
                GROUP BY project_id
             )
             SELECT p.id::uuid, p.title, p.payment_plan,
@@ -1129,7 +1129,7 @@ runHourlyJob scheduledTime hour = do
   deviceCodesDeleted <- Hasql.interpExecute [HI.sql| DELETE FROM users.device_auth_codes WHERE expires_at < now() - interval '1 hour' |]
   Relude.when (deviceCodesDeleted > 0) $ Log.logInfo "Cleaned up expired device auth codes" ("deleted_count", AE.toJSON deviceCodesDeleted)
 
-  staleMetricsDeleted <- Hasql.interpExecute [HI.sql| DELETE FROM telemetry.metrics_meta WHERE updated_at < now() - interval '3 months' |]
+  staleMetricsDeleted <- Hasql.interpExecute [HI.sql| DELETE FROM otel_metrics_meta WHERE last_seen_at < now() - interval '3 months' |]
   Relude.when (staleMetricsDeleted > 0) $ Log.logInfo "Cleaned up stale metrics metadata" ("deleted_count", AE.toJSON staleMetricsDeleted)
 
   liftIO $ withResource ctx.jobsPool \conn ->

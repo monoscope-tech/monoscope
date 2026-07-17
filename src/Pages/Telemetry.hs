@@ -13,6 +13,7 @@ module Pages.Telemetry (
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEKey
 import Data.Default
+import Effectful.Reader.Static qualified as Reader
 import Data.HashMap.Internal.Strict qualified as HM
 import Data.Map qualified as Map
 import Data.Map.Strict qualified as MapS
@@ -46,6 +47,7 @@ import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (unAesonTextMaybe)
 import Relude hiding (ask)
+import System.Config (AuthContext (..), EnvConfig (..))
 import System.Tracing (withSpan_)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils (LoadingSize (..), LoadingType (..), drawerLoadAttrs_, faSprite_, getDurationNSMS, getServiceColors, loadingIndicator_, onpointerdown_, parseTime, prettyPrintCount, utcTimeToNanoseconds)
@@ -215,6 +217,7 @@ instance ToHtml TraceDetailsGet where
 -- Metrics handlers
 metricsOverViewGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> ATAuthCtx (RespHeaders MetricsOverViewGet)
 metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM = do
+  ctx <- Reader.ask @AuthContext
   (_, _, bw) <- mkPageCtx pid
   now <- Time.currentTime
   let tab = maybe "charts" (\t -> if t == "charts" then t else "datapoints") tabM
@@ -234,7 +237,7 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM = do
           }
   if tab == "datapoints"
     then do
-      dataPoints <- Telemetry.getDataPointsData pid (from, to)
+      dataPoints <- Telemetry.getDataPointsData ctx.env.enableTimefusionReads pid (from, to)
       dashboards <- Dashboards.selectDashboardsSortedBy pid "updated_at"
       monitors <- Monitors.queryMonitorsAll pid
       let refCounts = metricRefCounts dashboards monitors (map (.metricName) dataPoints)
@@ -266,10 +269,11 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM = do
 
 metricDetailsGetH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 metricDetailsGetH pid metricName source fromM toM sinceM = do
+  ctx <- Reader.ask @AuthContext
   (sess, project) <- Projects.sessionAndProject pid
   now <- Time.currentTime
   let (_, _, currentRange) = parseTime fromM toM sinceM now
-  metricM <- Telemetry.getMetricData pid metricName
+  metricM <- Telemetry.getMetricData ctx.env.enableTimefusionReads pid metricName
   case metricM of
     Just metric -> do
       addRespHeaders $ metricsDetailsPage pid metric.serviceNames metric (fromMaybe "all" source) currentRange
@@ -279,17 +283,18 @@ metricDetailsGetH pid metricName source fromM toM sinceM = do
 
 metricBreakdownGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 metricBreakdownGetH pid metricName labelM = do
+  ctx <- Reader.ask @AuthContext
   (sess, project) <- Projects.sessionAndProject pid
   let label = fromMaybe "all" labelM
   if label == "all"
     then do
-      metricM <- Telemetry.getMetricData pid metricName
+      metricM <- Telemetry.getMetricData ctx.env.enableTimefusionReads pid metricName
       case metricM of
         Just metric -> do
           addRespHeaders $ metricBreakdown pid Nothing metric.metricLabels
         Nothing -> addRespHeaders $ metricBreakdown pid Nothing []
     else do
-      lableValues <- V.fromList <$> Telemetry.getMetricLabelValues pid metricName label
+      lableValues <- V.fromList <$> Telemetry.getMetricLabelValues ctx.env.enableTimefusionReads pid metricName label
       addRespHeaders $ metricBreakdown pid labelM lableValues
 
 

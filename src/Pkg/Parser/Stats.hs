@@ -57,7 +57,7 @@ import Data.Generics.Product (typed)
 import Data.Text qualified as T
 import Data.Text.Display (Display, display, displayBuilder, displayPrec)
 import Pkg.DeriveUtils (WrappedEnumSC (..))
-import Pkg.Parser.Expr (Expr (..), FieldKey (..), Parser, Subject (..), ToQueryText (..), Values (..), kqlTimespanToTimeBucket, pExpr, pSubject, pValues)
+import Pkg.Parser.Expr (Expr (..), Parser, Subject (..), ToQueryText (..), Values (..), kqlTimespanToTimeBucket, pExpr, pSubject, pValues)
 import Relude hiding (GT, LT, Sum, many, some)
 import Text.Megaparsec
 import Text.Megaparsec.Char (alphaNumChar, char, digitChar, hspace, space, string)
@@ -241,37 +241,17 @@ data Sources = SSpans | SMetrics
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
--- | Rewrite every Subject in an AST so its rendered SQL matches the target
--- source table's schema. otel_logs_and_spans has flat columns
--- (resource___service___name, attributes___…), while telemetry.metrics keeps
--- resource/attributes/context/severity as JSONB only. For metrics we rewrite
--- dotted user-facing paths into JSONB lookups; the existing 'Display Subject'
--- (Pkg.Parser.Expr) renders @Subject "" "resource" [FieldKey "service.name"]@
--- as @resource->>'service.name'@. For non-metrics sources we skip the AST walk
--- entirely so the flat-column path stays intact and we don't reallocate the AST.
+-- | Metrics now use the same flattened resource/attribute convention as
+-- logs/spans in @otel_metrics@, so their AST needs no JSONB-specific rewrite.
 rewriteSectionsForSource :: Maybe Sources -> [Section] -> [Section]
 rewriteSectionsForSource (Just SMetrics) = mapSubjects rewriteForMetrics
 rewriteSectionsForSource _ = id
 
 
--- | Subject rewrite for telemetry.metrics: dotted paths become JSONB lookups
--- on the matching root JSONB column. Setting @entire = ""@ skips the
--- flat-column alias map in 'Display Subject' so we don't double-resolve.
---
--- >>> import Data.Text.Display (display)
--- >>> display (rewriteForMetrics (Subject "service" "service" []))
--- "resource->>'service.name'"
--- >>> display (rewriteForMetrics (Subject "resource.service.namespace" "resource.service.namespace" []))
--- "resource->>'service.namespace'"
--- >>> display (rewriteForMetrics (Subject "attributes.http.request.method" "attributes.http.request.method" []))
--- "attributes->>'http.request.method'"
+-- | @otel_metrics@ shares the flattened field convention used by spans, so no
+-- source-specific Subject rewrite is needed.
 rewriteForMetrics :: Subject -> Subject
-rewriteForMetrics s@(Subject entire _ _) = case entire of
-  "service" -> jsonbPath "resource" "service.name"
-  "trace_id" -> jsonbPath "context" "trace_id"
-  _ -> fromMaybe s $ asum [jsonbPath col <$> T.stripPrefix (col <> ".") entire | col <- ["resource", "attributes", "context", "severity"]]
-  where
-    jsonbPath col k = Subject "" col [FieldKey k]
+rewriteForMetrics = id
 
 
 -- | Apply a Subject rewrite to every Subject reachable from a Section list.
@@ -1130,7 +1110,7 @@ instance ToQueryText Sources where
 
 instance Display Sources where
   displayPrec _prec SSpans = "otel_logs_and_spans"
-  displayPrec _prec SMetrics = "telemetry.metrics"
+  displayPrec _prec SMetrics = "otel_metrics"
 
 
 --- >>> parse parseQuery "" "method// = bla "

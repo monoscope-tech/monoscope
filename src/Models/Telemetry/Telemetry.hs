@@ -38,7 +38,8 @@ module Models.Telemetry.Telemetry (
   getEndpointTraceId,
   getTotalMetricsCount,
   getMetricData,
-  bulkInsertMetrics,
+  bulkInsertOtelMetrics,
+  mintMetricIds,
   bulkInsertOtelLogsAndSpansTF,
   insertAndHandOff,
   WriteTarget (..),
@@ -78,7 +79,6 @@ module Models.Telemetry.Telemetry (
 )
 where
 
-import Control.Exception.Annotated (checkpoint)
 import Control.Lens ((.~))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
@@ -90,7 +90,6 @@ import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Generics.Labels ()
 import Data.HashMap.Strict qualified as HM
-import Data.List qualified as L (groupBy)
 import Data.List.Extra (chunksOf)
 import Data.List.NonEmpty qualified as NE
 import Data.Map qualified as Map
@@ -100,7 +99,7 @@ import Data.Text.Display (Display)
 import Data.These (These (..))
 import Data.These qualified as These
 import Data.Time (UTCTime (..))
-import Data.Time.Clock (addUTCTime, diffTimeToPicoseconds, picosecondsToDiffTime, utctDay)
+import Data.Time.Clock (addUTCTime, diffTimeToPicoseconds, picosecondsToDiffTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
 import Data.UUID.Quasi (uuid)
@@ -127,7 +126,7 @@ import Hasql.Session qualified as HSession
 import Hasql.Statement (Statement)
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), WrappedEnum (..), WrappedEnumInt (..), WrappedEnumSC (..), encodeEnumSC, idFromText, unAesonTextMaybe)
+import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), WrappedEnum (..), WrappedEnumSC (..), encodeEnumSC, idFromText, unAesonTextMaybe)
 import Pkg.ExtractionWorker qualified as EW
 import Relude hiding (ask)
 import System.IO (hPutStrLn)
@@ -354,9 +353,13 @@ data MetricRecord = MetricRecord
   , metricDescription :: Text
   , metricTime :: UTCTime
   , timestamp :: UTCTime
+  , startTimestamp :: Maybe UTCTime
   , attributes :: AE.Value
   , resource :: AE.Value
+  , resourceSchemaUrl :: Text
   , instrumentationScope :: AE.Value
+  , scopeSchemaUrl :: Text
+  , droppedAttributesCount :: Int
   , metricValue :: MetricValue
   , metricMetadata :: AE.Value
   , exemplars :: AE.Value
@@ -396,8 +399,9 @@ data MetricValue
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MetricValue
 
 
-newtype GaugeSum = GaugeSum
-  { value :: Double
+data GaugeSum = GaugeSum
+  { valueDouble :: Maybe Double
+  , valueInt :: Maybe Int64
   }
   deriving (Generic, Show)
   deriving anyclass (NFData)
@@ -405,12 +409,12 @@ newtype GaugeSum = GaugeSum
 
 
 data Histogram = Histogram
-  { sum :: Double
-  , count :: Int
-  , bucketCounts :: V.Vector Int
+  { sum :: Maybe Double
+  , count :: Int64
+  , bucketCounts :: V.Vector Int64
   , explicitBounds :: V.Vector Double
-  , pointMin :: Double
-  , pointMax :: Double
+  , pointMin :: Maybe Double
+  , pointMax :: Maybe Double
   }
   deriving (Generic, Show)
   deriving anyclass (NFData)
@@ -418,11 +422,11 @@ data Histogram = Histogram
 
 
 data ExponentialHistogram = ExponentialHistogram
-  { sum :: Double
-  , count :: Int
-  , pointMin :: Double
-  , pointMax :: Double
-  , zeroCount :: Int
+  { sum :: Maybe Double
+  , count :: Int64
+  , pointMin :: Maybe Double
+  , pointMax :: Maybe Double
+  , zeroCount :: Int64
   , scale :: Int
   , pointNegative :: Maybe EHBucket
   , pointPositive :: Maybe EHBucket
@@ -435,7 +439,7 @@ data ExponentialHistogram = ExponentialHistogram
 
 data EHBucket = EHBucket
   { bucketOffset :: Int
-  , bucketCounts :: V.Vector Int
+  , bucketCounts :: V.Vector Int64
   }
   deriving (Generic, Show)
   deriving anyclass (NFData)
@@ -444,7 +448,7 @@ data EHBucket = EHBucket
 
 data Summary = Summary
   { sum :: Double
-  , count :: Int
+  , count :: Int64
   , quantiles :: V.Vector Quantile
   }
   deriving (Generic, Show)
@@ -472,12 +476,21 @@ data Exemplar = Exemplar
 
 data NativeMetricColumns = NativeMetricColumns
   { nValue :: Maybe Double
+  , nValueDouble :: Maybe Double
+  , nValueInt :: Maybe Int64
   , nSum :: Maybe Double
-  , nCount :: Maybe Int
+  , nCount :: Maybe Int64
   , nBucketCounts :: Maybe AE.Value
   , nExplicitBounds :: Maybe AE.Value
   , nPointMin :: Maybe Double
   , nPointMax :: Maybe Double
+  , nExpHistScale :: Maybe Int
+  , nExpHistZeroCount :: Maybe Int64
+  , nExpHistZeroThreshold :: Maybe Double
+  , nExpHistPosOffset :: Maybe Int
+  , nExpHistPosBuckets :: Maybe AE.Value
+  , nExpHistNegOffset :: Maybe Int
+  , nExpHistNegBuckets :: Maybe AE.Value
   , nQuantiles :: Maybe AE.Value
   }
   deriving (Generic)
@@ -486,15 +499,34 @@ data NativeMetricColumns = NativeMetricColumns
 
 metricValueToNative :: MetricValue -> NativeMetricColumns
 metricValueToNative = \case
-  GaugeValue g -> def{nValue = Just g.value}
-  SumValue g -> def{nValue = Just g.value}
-  HistogramValue h -> def{nSum = Just h.sum, nCount = Just h.count, nBucketCounts = Just $ AE.toJSON h.bucketCounts, nExplicitBounds = Just $ AE.toJSON h.explicitBounds, nPointMin = Just h.pointMin, nPointMax = Just h.pointMax}
+  GaugeValue g -> scalar g
+  SumValue g -> scalar g
+  HistogramValue h -> def{nSum = h.sum, nCount = Just h.count, nBucketCounts = Just $ AE.toJSON h.bucketCounts, nExplicitBounds = Just $ AE.toJSON h.explicitBounds, nPointMin = h.pointMin, nPointMax = h.pointMax}
   SummaryValue s -> def{nSum = Just s.sum, nCount = Just s.count, nQuantiles = Just $ AE.toJSON s.quantiles}
-  ExponentialHistogramValue e -> def{nSum = Just e.sum, nCount = Just e.count, nPointMin = Just e.pointMin, nPointMax = Just e.pointMax}
+  ExponentialHistogramValue e -> def
+    { nSum = e.sum
+    , nCount = Just e.count
+    , nPointMin = e.pointMin
+    , nPointMax = e.pointMax
+    , nExpHistScale = Just e.scale
+    , nExpHistZeroCount = Just e.zeroCount
+    , nExpHistZeroThreshold = Just e.zeroThreshold
+    , nExpHistPosOffset = (.bucketOffset) <$> e.pointPositive
+    , nExpHistPosBuckets = AE.toJSON . (.bucketCounts) <$> e.pointPositive
+    , nExpHistNegOffset = (.bucketOffset) <$> e.pointNegative
+    , nExpHistNegBuckets = AE.toJSON . (.bucketCounts) <$> e.pointNegative
+    }
+  where
+    scalar GaugeSum{valueDouble, valueInt} =
+      def
+        { nValue = valueDouble <|> (fromIntegral <$> valueInt)
+        , nValueDouble = valueDouble
+        , nValueInt = valueInt
+        }
 
 
 data MetricType = MTGauge | MTSum | MTHistogram | MTExponentialHistogram | MTSummary
-  deriving (Generic, Read, Show)
+  deriving (Eq, Ord, Generic, Read, Show)
   deriving (AE.FromJSON, AE.ToJSON, NFData)
   deriving (FromField, ToField) via WrappedEnum "MT" MetricType
   deriving (HI.DecodeValue, HI.EncodeValue) via WrappedEnum "MT" MetricType
@@ -504,7 +536,7 @@ data AggregationTemporality = ATUnspecified | ATDelta | ATCumulative
   deriving (Bounded, Enum, Eq, Generic, Read, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake AggregationTemporality
-  deriving (FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumInt AggregationTemporality
+  deriving (FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnum "AT" AggregationTemporality
 
 
 data MetricDataPoint = MetricDataPoint
@@ -718,55 +750,39 @@ spanRecordByName pid trId spanName = do
     <> [HI.sql| FROM otel_logs_and_spans where project_id=#{pid.toText} and context___trace_id = #{trId} and name=#{spanName} LIMIT 1|]
 
 
-getDataPointsData :: (DB es, Time.Time :> es) => Projects.ProjectId -> (Maybe UTCTime, Maybe UTCTime) -> Eff es [MetricDataPoint]
-getDataPointsData pid dateRange = do
+getDataPointsData :: (DB es, Labeled "timefusion" Hasql :> es, Time.Time :> es) => Bool -> Projects.ProjectId -> (Maybe UTCTime, Maybe UTCTime) -> Eff es [MetricDataPoint]
+getDataPointsData useTimefusion pid dateRange = do
   now <- Time.currentTime
   let dateFilter = case dateRange of
         (Nothing, Just b) -> [HI.sql| AND timestamp BETWEEN #{now} AND #{b} |]
         (Just a, Just b) -> [HI.sql| AND timestamp BETWEEN #{a} AND #{b} |]
         _ -> mempty
-  Hasql.interp
-    $ [HI.sql| WITH metrics_aggregated AS (
-        SELECT project_id, metric_name, COUNT(*)::bigint AS data_points
-        FROM telemetry.metrics
-        WHERE project_id = #{pid} |]
+  catalog <- Hasql.interp [HI.sql| SELECT metric_name, MAX(metric_type), MAX(metric_unit), MAX(metric_description),
+      0::bigint, ARRAY_AGG(DISTINCT service_name), '{}'::text[]
+    FROM otel_metrics_meta WHERE project_id = #{unUUIDId pid}
+    GROUP BY metric_name |]
+  counts :: V.Vector (Text, Int) <- Hasql.withHasqlTimefusion useTimefusion $ Hasql.interp
+    $ [HI.sql| SELECT metric_name, COUNT(*)::bigint FROM otel_metrics WHERE project_id = #{pid.toText} |]
     <> dateFilter
-    <> [HI.sql|
-        GROUP BY project_id, metric_name
-    )
-    SELECT mm.metric_name, mm.metric_type, mm.metric_unit, mm.metric_description,
-           COALESCE(ma.data_points, 0) AS data_points,
-           ARRAY_AGG(mm.service_name) AS service_names, '{}'::text[] AS labels
-    FROM telemetry.metrics_meta mm
-    LEFT JOIN metrics_aggregated ma ON mm.project_id = ma.project_id AND mm.metric_name = ma.metric_name
-    WHERE mm.project_id = #{pid}
-    GROUP BY mm.metric_name, mm.metric_type, mm.metric_unit, mm.metric_description, ma.data_points |]
+    <> [HI.sql| GROUP BY metric_name |]
+  let countByName = Map.fromList $ V.toList counts
+  pure $ fmap (\m -> m{dataPointsCount = fromMaybe 0 $ Map.lookup m.metricName countByName}) catalog
 
 
-getMetricData :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe MetricDataPoint)
-getMetricData pid metricName =
-  Hasql.interpOne
-    [HI.sql| SELECT mm.metric_name, mm.metric_type, mm.metric_unit, mm.metric_description,
-           COALESCE(m.data_points, 0) AS data_points,
-           COALESCE(m.service_names, ARRAY[mm.service_name]::text[]) AS service_names,
-           COALESCE(m.metric_labels, ARRAY[]::text[]) AS metric_labels
-      FROM telemetry.metrics_meta mm
-      LEFT JOIN LATERAL (
-          SELECT COUNT(*)::bigint AS data_points,
-              ARRAY_AGG(DISTINCT COALESCE(resource->>'service.name', 'unknown'))::text[] AS service_names,
-              COALESCE(
-                  (SELECT ARRAY_AGG(DISTINCT key)
-                   FROM (SELECT DISTINCT jsonb_object_keys(attributes) AS key
-                         FROM telemetry.metrics
-                         WHERE project_id = #{pid} AND metric_name = #{metricName} AND attributes IS NOT NULL
-                   ) AS unique_keys),
-                  ARRAY[]::text[]
-              ) AS metric_labels
-          FROM telemetry.metrics
-          WHERE project_id = mm.project_id AND metric_name = mm.metric_name
-      ) m ON true
-      WHERE mm.project_id = #{pid} AND mm.metric_name = #{metricName}
-      LIMIT 1 |]
+getMetricData :: (DB es, Labeled "timefusion" Hasql :> es) => Bool -> Projects.ProjectId -> Text -> Eff es (Maybe MetricDataPoint)
+getMetricData useTimefusion pid metricName = do
+  meta <- Hasql.interpOne [HI.sql| SELECT metric_name, MAX(metric_type), MAX(metric_unit), MAX(metric_description)
+    FROM otel_metrics_meta WHERE project_id = #{unUUIDId pid} AND metric_name = #{metricName}
+    GROUP BY metric_name |]
+  raw <- Hasql.withHasqlTimefusion useTimefusion $ Hasql.interpOne [HI.sql| SELECT COUNT(*)::bigint,
+      ARRAY_AGG(DISTINCT COALESCE(resource___service___name, 'unknown'))::text[],
+      COALESCE((SELECT ARRAY_AGG(DISTINCT key) FROM (
+        SELECT DISTINCT jsonb_object_keys(attributes) AS key FROM otel_metrics
+        WHERE project_id = #{pid.toText} AND metric_name = #{metricName} AND attributes IS NOT NULL
+      ) AS unique_keys), ARRAY[]::text[])
+    FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = #{metricName}|]
+  pure $ (\(name, typ, unit, desc) (count, services, labels) -> MetricDataPoint name typ unit desc count services labels)
+    <$> meta <*> raw
 
 
 getTotalEventsToReport :: DB es => Projects.ProjectId -> UTCTime -> Eff es Int
@@ -774,18 +790,18 @@ getTotalEventsToReport pid lastReported = do
   fromMaybe 0 <$> Hasql.interpOne [HI.sql| SELECT count(*)::bigint FROM otel_logs_and_spans WHERE project_id=#{pid.toText} AND timestamp > #{lastReported}|]
 
 
-getTotalMetricsCount :: DB es => Projects.ProjectId -> UTCTime -> Eff es Int
-getTotalMetricsCount pid lastReported =
-  fromMaybe 0 <$> Hasql.interpOne [HI.sql| SELECT count(*)::bigint FROM telemetry.metrics WHERE project_id=#{pid} AND timestamp > #{lastReported}|]
+getTotalMetricsCount :: (DB es, Labeled "timefusion" Hasql :> es) => Bool -> Projects.ProjectId -> UTCTime -> Eff es Int
+getTotalMetricsCount useTimefusion pid lastReported =
+  fromMaybe 0 <$> Hasql.withHasqlTimefusion useTimefusion (Hasql.interpOne [HI.sql| SELECT count(*)::bigint FROM otel_metrics WHERE project_id=#{pid.toText} AND timestamp > #{lastReported}|])
 
 
 -- | (eventCount, eventBytes, metricCount, metricBytes) for a project since
 -- `lastReported`. Single helper so ReportUsage stays a 1-call site instead of
 -- juggling four separate queries.
-getUsageTotals :: DB es => Projects.ProjectId -> UTCTime -> Eff es (Int, Int64, Int, Int64)
-getUsageTotals pid lastReported = do
+getUsageTotals :: (DB es, Labeled "timefusion" Hasql :> es) => Bool -> Projects.ProjectId -> UTCTime -> Eff es (Int, Int64, Int, Int64)
+getUsageTotals useTimefusion pid lastReported = do
   (eC, eB) <- fromMaybe (0, 0) <$> Hasql.interpOne [HI.sql| SELECT count(*)::bigint, COALESCE(SUM(message_size_bytes),0)::bigint FROM otel_logs_and_spans WHERE project_id=#{pid.toText} AND timestamp > #{lastReported}|]
-  (mC, mB) <- fromMaybe (0, 0) <$> Hasql.interpOne [HI.sql| SELECT count(*)::bigint, COALESCE(SUM(message_size_bytes),0)::bigint FROM telemetry.metrics WHERE project_id=#{pid} AND timestamp > #{lastReported}|]
+  (mC, mB) <- fromMaybe (0, 0) <$> Hasql.withHasqlTimefusion useTimefusion (Hasql.interpOne [HI.sql| SELECT count(*)::bigint, COALESCE(SUM(message_size_bytes),0)::bigint FROM otel_metrics WHERE project_id=#{pid.toText} AND timestamp > #{lastReported}|])
   pure (eC, eB, mC, mB)
 
 
@@ -799,42 +815,21 @@ getMetricChartListData pid sourceM prefixM = do
         _ -> mempty
   Hasql.interp
     $ [HI.sql| SELECT metric_name, MAX(metric_type) as metric_type, MAX(metric_unit) as metric_unit,
-             MAX(metric_description) as metric_description, MAX(updated_at) as last_seen
-      FROM telemetry.metrics_meta WHERE project_id = #{pid} |]
+             MAX(metric_description) as metric_description, MAX(last_seen_at) as last_seen
+      FROM otel_metrics_meta WHERE project_id = #{unUUIDId pid} |]
     <> sourceFilter
     <> prefixFilter
-    <> [HI.sql| GROUP BY metric_name ORDER BY MAX(updated_at) DESC, metric_name |]
+    <> [HI.sql| GROUP BY metric_name ORDER BY MAX(last_timestamp) DESC, metric_name |]
 
 
-getMetricLabelValues :: DB es => Projects.ProjectId -> Text -> Text -> Eff es [Text]
-getMetricLabelValues pid metricName labelName =
-  Hasql.interp [HI.sql| SELECT DISTINCT attributes->>#{labelName} FROM telemetry.metrics WHERE project_id = #{pid} AND metric_name = #{metricName}|]
+getMetricLabelValues :: (DB es, Labeled "timefusion" Hasql :> es) => Bool -> Projects.ProjectId -> Text -> Text -> Eff es [Text]
+getMetricLabelValues useTimefusion pid metricName labelName =
+  Hasql.withHasqlTimefusion useTimefusion $ Hasql.interp [HI.sql| SELECT DISTINCT attributes->>#{labelName} FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = #{metricName} AND jsonb_exists(attributes, #{labelName})|]
 
 
 getMetricServiceNames :: DB es => Projects.ProjectId -> Eff es [Text]
 getMetricServiceNames pid =
-  Hasql.interp [HI.sql| SELECT DISTINCT service_name FROM telemetry.metrics_meta WHERE project_id = #{pid}|]
-
-
-bulkInsertMetrics :: DB es => V.Vector MetricRecord -> Eff es ()
-bulkInsertMetrics metrics = checkpoint "bulkInsertMetrics" $ unless (V.null metrics) do
-  -- 24 params per row; PostgreSQL limit is 65535 params → max ~2730 rows per INSERT
-  forM_ (chunksOf 2700 $ V.toList metrics) \chunk -> do
-    let metricRows = map metricRowSql chunk
-    Hasql.interpExecute_ $ "INSERT INTO telemetry.metrics (project_id, metric_name, metric_type, metric_unit, metric_description, metric_time, timestamp, attributes, resource, instrumentation_scope, metric_value, exemplars, flags, value, metric_sum, metric_count, bucket_counts, explicit_bounds, point_min, point_max, quantiles, aggregation_temporality, is_monotonic, message_size_bytes) VALUES " <> mconcat (intersperse ", " metricRows)
-  let metas = map metaRowSql $ removeDuplic $ V.toList $ V.map metaTuple metrics
-  unless (null metas) $ Hasql.interpExecute_ $ "INSERT INTO telemetry.metrics_meta (project_id, metric_name, metric_type, metric_unit, metric_description, service_name) VALUES " <> mconcat (intersperse ", " metas) <> " ON CONFLICT (project_id, metric_name, service_name) DO UPDATE SET metric_type = EXCLUDED.metric_type, metric_unit = EXCLUDED.metric_unit, metric_description = EXCLUDED.metric_description, updated_at = current_timestamp"
-  where
-    metricRowSql (m :: MetricRecord) =
-      let NativeMetricColumns{nValue, nSum, nCount, nBucketCounts, nExplicitBounds, nPointMin, nPointMax, nQuantiles} = metricValueToNative m.metricValue
-          MetricRecord{projectId, metricName, metricType, metricUnit, metricDescription, metricTime, timestamp, attributes, resource, instrumentationScope, metricValue, exemplars, flags, aggregationTemporality, isMonotonic, messageSizeBytes} = m
-       in [HI.sql|(#{projectId}, #{metricName}, #{metricType}, #{metricUnit}, #{metricDescription}, #{metricTime}, #{timestamp}, #{attributes}, #{resource}, #{instrumentationScope}, #{metricValue}, #{exemplars}, #{flags}, #{nValue}, #{nSum}, #{nCount}, #{nBucketCounts}, #{nExplicitBounds}, #{nPointMin}, #{nPointMax}, #{nQuantiles}, #{aggregationTemporality}, #{isMonotonic}, #{messageSizeBytes})|]
-    metaTuple (m :: MetricRecord) =
-      let svc = metricServiceNameFromResource m.metricName m.resource
-          MetricRecord{projectId, metricName, metricType, metricUnit, metricDescription} = m
-       in (projectId, metricName, metricType, metricUnit, metricDescription, svc)
-    metaRowSql (pid, mName, mType, mUnit, mDesc, svc) =
-      [HI.sql|(#{pid}, #{mName}, #{mType}, #{mUnit}, #{mDesc}, #{svc})|]
+  Hasql.interp [HI.sql| SELECT DISTINCT service_name FROM otel_metrics_meta WHERE project_id = #{unUUIDId pid}|]
 
 
 metricServiceNameFromResource :: Text -> AE.Value -> Text
@@ -1575,10 +1570,6 @@ mkOtelRow e = do
   pure OtelRow{row = e, attrs = unAesonTextMaybe e.attributes, resource = unAesonTextMaybe e.resource, isRemote}
 
 
-removeDuplic :: (Ord a, Ord e) => [(a, e, b, c, d, q)] -> [(a, e, b, c, d, q)]
-removeDuplic = mapMaybe (viaNonEmpty Relude.head) . L.groupBy (\(a1, a2, _, _, _, _) (b1, b2, _, _, _, _) -> a1 == b1 && a2 == b2) . sortOn (\(a, b, _, _, _, _) -> (a, b))
-
-
 data Severity = Severity
   { severity_text :: Maybe SeverityLevel
   , severity_number :: Int
@@ -2231,7 +2222,7 @@ generateSpanSummary otel =
 
     spanNameFallback = do
       n <- otel.name
-      guard (all isNothing [httpRoute, urlPathOrFull, frontendLabel])
+      guard $ isNothing httpRoute && isNothing urlPathOrFull && isNothing frontendLabel
       pure $ tag "span_name" "neutral" n
 
     normalElements =
@@ -2280,3 +2271,272 @@ methodStyle method = case method of
   "DELETE" -> "badge-DELETE"
   "PATCH" -> "badge-PATCH"
   _ -> "badge-neutral"
+
+
+-- | Deterministic point ids make retry and DLQ replay safe on both stores.
+-- The series hash intentionally excludes timestamps; the point id includes them.
+metricIdNamespace :: UUID.UUID
+metricIdNamespace = [uuid|5a5e99db-2f4d-58c6-9f8a-b9db1f6139aa|]
+
+
+metricSeriesId :: MetricRecord -> Text
+metricSeriesId MetricRecord{projectId, metricName, metricType, metricUnit, resource, attributes, instrumentationScope} =
+  UUID.toText $ UUIDv5.generateNamed metricIdNamespace . BS.unpack . encodeUtf8 $ T.intercalate "\x1f"
+    [ "series"
+    , UUID.toText projectId
+    , metricName
+    , toText $ show metricType
+    , metricUnit
+    , jsonText resource
+    , jsonText attributes
+    , jsonText instrumentationScope
+    ]
+
+
+metricId :: MetricRecord -> UUID.UUID
+metricId r@MetricRecord{metricTime, startTimestamp, metricValue} =
+  UUIDv5.generateNamed metricIdNamespace . BS.unpack . encodeUtf8 $ T.intercalate "\x1f"
+    [ "point"
+    , metricSeriesId r
+    , toText $ iso8601Show metricTime
+    , maybe "" (toText . iso8601Show) startTimestamp
+    , jsonText $ AE.toJSON metricValue
+    ]
+
+
+jsonText :: AE.Value -> Text
+jsonText = decodeUtf8 . toStrict . AE.encode
+
+
+
+mintMetricIds :: V.Vector MetricRecord -> V.Vector MetricRecord
+mintMetricIds = V.map $ \r -> r{ id = Just $ fromMaybe (metricId r) r.id }
+
+
+-- | Write raw metrics with precisely the same PG/TimeFusion target semantics
+-- as logs and spans. The caller mints ids before calling this function; it is
+-- repeated defensively here so ad-hoc producers cannot write random ids.
+bulkInsertOtelMetrics
+  :: (Concurrent :> es, Hasql :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es)
+  => Bool
+  -> WriteTarget
+  -> V.Vector MetricRecord
+  -> Eff es (Either WriteFailure ())
+bulkInsertOtelMetrics tfPgTypes target records0 = do
+  let records = mintMetricIds records0
+      submitted = V.length records
+      writePg = retryHasqlWrite maxWriteAttempts "pg" $ insertOtelMetrics True records
+      writeTf = retryHasqlWrite maxWriteAttempts "tf" $ labeled @"timefusion" @Hasql $ insertOtelMetrics tfPgTypes records
+      under store n = toException $ SilentUnderPersistError store n submitted
+      check store bir = case unaccountedRows submitted bir of
+        0 -> Nothing
+        lost -> Just $ under store lost
+      classify pgRes tfRes = case (pgRes, tfRes) of
+        (Right pg, Right tf) -> case (check "pg" pg, check "tf" tf) of
+          (Nothing, Nothing) -> pure $ Right ()
+          (Just e, Nothing) -> pure $ Left $ This e
+          (Nothing, Just e) -> pure $ Left $ That e
+          (Just ePg, Just eTf) -> pure $ Left $ These ePg eTf
+        (Left e, Right _) -> pure $ Left $ This e
+        (Right _, Left e) -> pure $ Left $ That e
+        (Left ePg, Left eTf) -> pure $ Left $ These ePg eTf
+      single store side result = case result of
+        Left e -> pure $ Left $ side e
+        Right bir -> pure $ maybe (Right ()) (Left . side) (check store bir)
+  (result, rawPersisted) <-
+    if V.null records
+      then pure (Right (), False)
+      else case target of
+        WriteBoth -> Ki.scoped $ \scope -> do
+          pg <- forkWithCtx scope writePg
+          tf <- forkWithCtx scope writeTf
+          (pgRes, tfRes) <- (,) <$> (Ki.atomically $ Ki.await pg) <*> (Ki.atomically $ Ki.await tf)
+          result' <- classify pgRes tfRes
+          let persisted store = either (const False) (isNothing . check store)
+          pure (result', persisted "pg" pgRes || persisted "tf" tfRes)
+        WritePgOnly -> do
+          pgRes <- writePg
+          result' <- single "pg" This pgRes
+          pure (result', either (const False) (isNothing . check "pg") pgRes)
+        WriteTfOnly -> do
+          tfRes <- writeTf
+          result' <- single "tf" That tfRes
+          pure (result', either (const False) (isNothing . check "tf") tfRes)
+  -- The Timescale-only catalog is derived UI state. Any durable raw write,
+  -- including TimeFusion when legacy PG is unavailable, remains discoverable.
+  when rawPersisted $ tryAny (upsertMetricMetadata records) >>= \case
+    Left e -> Log.logAttention "OTEL_METRICS_META_WRITE_FAILED" (AE.object ["record_count" AE..= V.length records, "error" AE..= show @Text e])
+    Right () -> pass
+  pure result
+
+
+-- | Insert one chunk into a single store. Values are sent as text for the
+-- TimeFusion leg where JSON must arrive as Variant-compatible text; the PG
+-- projection casts JSON and ids to their native types.
+insertOtelMetrics :: (Hasql :> es, IOE :> es) => Bool -> V.Vector MetricRecord -> Eff es BulkInsertResult
+insertOtelMetrics usePgTypes records = do
+  affected <- fmap (foldl' (+) 0) $ forM (chunksOf 350 $ V.toList records) $ \chunk -> do
+    void $ Hasql.interpExecute_ ([HI.sql|INSERT INTO otel_metrics (
+      project_id, timestamp, date, start_timestamp, ingested_at, id, series_id,
+      metric_name, metric_description, metric_unit, metric_type, aggregation_temporality, is_monotonic, flags,
+      resource, resource_schema_url, scope_name, scope_version, scope_schema_url, attributes, dropped_attributes_count, exemplars,
+      resource___service___name, resource___service___namespace, resource___service___instance___id, resource___service___version,
+      resource___deployment___environment___name, resource___host___name, resource___container___name,
+      resource___k8s___cluster___name, resource___k8s___namespace___name, resource___k8s___pod___name, resource___k8s___container___name,
+      resource___cloud___provider, resource___cloud___region, resource___cloud___availability___zone,
+      attributes___http___request___method, attributes___http___route, attributes___http___response___status_code, attributes___error___type,
+      attributes___rpc___service, attributes___rpc___method, attributes___rpc___grpc___status_code,
+      attributes___db___system___name, attributes___db___operation___name,
+      attributes___messaging___system, attributes___messaging___operation, attributes___messaging___destination___name,
+      value, value_double, value_int, distribution_count, distribution_sum, distribution_min, distribution_max,
+      hist_bucket_counts, hist_explicit_bounds, exp_hist_scale, exp_hist_zero_count, exp_hist_zero_threshold,
+      exp_hist_pos_offset, exp_hist_pos_buckets, exp_hist_neg_offset, exp_hist_neg_buckets,
+      summary_quantiles, summary_values, message_size_bytes
+    ) VALUES |] <> mconcat (intersperse [HI.sql|,|] (metricRowSql usePgTypes <$> chunk)) <> if usePgTypes then [HI.sql| ON CONFLICT (project_id, timestamp, id) DO NOTHING|] else mempty)
+    pure $ fromIntegral $ length chunk
+  pure $ BulkInsertResult affected
+
+
+metricRowSql :: Bool -> MetricRecord -> HI.Sql
+metricRowSql usePgTypes r@MetricRecord{projectId, id = metricIdM, metricName, metricDescription, metricUnit, metricType, metricTime, timestamp, startTimestamp, attributes, resource, resourceSchemaUrl, instrumentationScope, scopeSchemaUrl, droppedAttributesCount, exemplars, flags, aggregationTemporality, isMonotonic, messageSizeBytes} =
+  let NativeMetricColumns{nValue, nValueDouble, nValueInt, nSum, nCount, nBucketCounts, nExplicitBounds, nPointMin, nPointMax, nExpHistScale, nExpHistZeroCount, nExpHistZeroThreshold, nExpHistPosOffset, nExpHistPosBuckets, nExpHistNegOffset, nExpHistNegBuckets, nQuantiles} = metricValueToNative r.metricValue
+      attrField k = atMapText k (objectMap attributes)
+      attrFieldInt k = atMapInt k (objectMap attributes)
+      resourceField k = atMapText k (objectMap resource)
+      serviceName = resourceField "service.name" <|> Just (metricServiceNameFromResource metricName resource)
+      serviceNamespace = resourceField "service.namespace"
+      serviceInstanceId = resourceField "service.instance.id"
+      serviceVersion = resourceField "service.version"
+      deploymentEnvironment = resourceField "deployment.environment.name"
+      hostName = resourceField "host.name"
+      containerName = resourceField "container.name"
+      k8sClusterName = resourceField "k8s.cluster.name"
+      k8sNamespaceName = resourceField "k8s.namespace.name"
+      k8sPodName = resourceField "k8s.pod.name"
+      k8sContainerName = resourceField "k8s.container.name"
+      cloudProvider = resourceField "cloud.provider"
+      cloudRegion = resourceField "cloud.region"
+      cloudAvailabilityZone = resourceField "cloud.availability_zone"
+      httpMethod = attrField "http.request.method"
+      httpRoute = attrField "http.route"
+      httpStatus = attrFieldInt "http.response.status_code"
+      errorType = attrField "error.type"
+      rpcService = attrField "rpc.service"
+      rpcMethod = attrField "rpc.method"
+      rpcStatus = attrFieldInt "rpc.grpc.status_code"
+      dbSystem = attrField "db.system.name"
+      dbOperation = attrField "db.operation.name"
+      messagingSystem = attrField "messaging.system"
+      messagingOperation = attrField "messaging.operation"
+      messagingDestination = attrField "messaging.destination.name"
+      scopeField k = case instrumentationScope of
+        AE.Object o -> KEM.lookup (AEK.fromText k) o >>= \case AE.String x -> Just x; _ -> Nothing
+        _ -> Nothing
+      projectIdText = UUID.toText projectId
+      metricIdText = UUID.toText $ fromMaybe (metricId r) metricIdM
+      seriesId = metricSeriesId r
+      temporalityText = aggregationTemporality
+      flagsInt64 = fromIntegral flags :: Int64
+      scopeName = scopeField "name"
+      scopeVersion = scopeField "version"
+      metricDate = toText $ iso8601Show (utctDay metricTime)
+      val = [HI.sql|(#{projectIdText}, #{metricTime}, #{metricDate}::date, #{startTimestamp}, #{timestamp}, |]
+   in val
+        <> idSql usePgTypes metricIdText
+        <> [HI.sql|, #{seriesId}, #{metricName}, #{metricDescription}, #{metricUnit}, #{metricType}, #{temporalityText}, #{isMonotonic}, #{flagsInt64}, |]
+        <> jsonSql usePgTypes resource
+        <> [HI.sql|, #{resourceSchemaUrl}, #{scopeName}, #{scopeVersion}, #{scopeSchemaUrl}, |]
+        <> jsonSql usePgTypes attributes
+        <> [HI.sql|, #{droppedAttributesCount}, |]
+        <> jsonSql usePgTypes exemplars
+        <> [HI.sql|,
+          #{serviceName}, #{serviceNamespace}, #{serviceInstanceId}, #{serviceVersion},
+          #{deploymentEnvironment}, #{hostName}, #{containerName},
+          #{k8sClusterName}, #{k8sNamespaceName}, #{k8sPodName}, #{k8sContainerName},
+          #{cloudProvider}, #{cloudRegion}, #{cloudAvailabilityZone},
+          #{httpMethod}, #{httpRoute}, #{httpStatus}, #{errorType},
+          #{rpcService}, #{rpcMethod}, #{rpcStatus},
+          #{dbSystem}, #{dbOperation},
+          #{messagingSystem}, #{messagingOperation}, #{messagingDestination},
+          #{nValue}, #{nValueDouble}, #{nValueInt}, #{nCount}, #{nSum}, #{nPointMin}, #{nPointMax}, |]
+        <> jsonArraySql "bigint" nBucketCounts
+        <> [HI.sql|, |]
+        <> jsonArraySql "double precision" nExplicitBounds
+        <> [HI.sql|, #{nExpHistScale}, #{nExpHistZeroCount}, #{nExpHistZeroThreshold}, #{nExpHistPosOffset}, |]
+        <> jsonArraySql "bigint" nExpHistPosBuckets
+        <> [HI.sql|, #{nExpHistNegOffset}, |]
+        <> jsonArraySql "bigint" nExpHistNegBuckets
+        <> [HI.sql|, |]
+        <> summaryArraySql True nQuantiles
+        <> [HI.sql|, |]
+        <> summaryArraySql False nQuantiles
+        <> [HI.sql|, #{messageSizeBytes})|]
+  where
+    objectMap = \case AE.Object o -> Just $ KEM.toMapText o; _ -> Nothing
+
+
+idSql :: Bool -> Text -> HI.Sql
+idSql usePgTypes x
+  | usePgTypes = [HI.sql|#{x}::uuid|]
+  | otherwise = [HI.sql|#{x}|]
+
+
+jsonSql :: Bool -> AE.Value -> HI.Sql
+jsonSql usePgTypes x
+  | usePgTypes = [HI.sql|#{jsonText x}::jsonb|]
+  | otherwise = [HI.sql|#{jsonText x}|]
+
+
+-- Existing metric value arrays are JSON-backed. Re-encode them as typed SQL
+-- arrays at the storage boundary so histogram queries never parse JSON.
+jsonArraySql :: Text -> Maybe AE.Value -> HI.Sql
+jsonArraySql typ = \case
+  Nothing -> [HI.sql|NULL|]
+  Just (AE.Array xs) ->
+    let values = T.intercalate "\x1f" $ fmap (toText . show) $ V.toList xs
+     in [HI.sql|string_to_array(#{values}, chr(31))::|] <> fromString (toString typ) <> [HI.sql|[]|]
+  Just _ -> [HI.sql|NULL|]
+
+
+summaryArraySql :: Bool -> Maybe AE.Value -> HI.Sql
+summaryArraySql wantQuantiles = \case
+  Nothing -> [HI.sql|NULL|]
+  Just (AE.Array xs) ->
+    let pick = \case
+          AE.Object o -> KEM.lookup (if wantQuantiles then "quantile" else "value") o >>= \case AE.Number n -> Just (toText $ show n); _ -> Nothing
+          _ -> Nothing
+        values = T.intercalate "\x1f" $ mapMaybe pick $ V.toList xs
+     in [HI.sql|string_to_array(#{values}, chr(31))::double precision[]|]
+  Just _ -> [HI.sql|NULL|]
+
+
+-- | Catalog rows are one per metric descriptor, never one per data point.
+-- Callers batch this after raw persistence; it intentionally uses the ordinary
+-- Hasql interpreter because the catalog is TimescaleDB-only.
+upsertMetricMetadata :: (Hasql :> es, IOE :> es) => V.Vector MetricRecord -> Eff es ()
+upsertMetricMetadata records = unless (V.null records) do
+  let rows = ordNub $ V.toList $ V.map catalogRow records
+  Hasql.interpExecute_ $
+    [HI.sql|INSERT INTO otel_metrics_meta (
+      project_id, metric_name, metric_type, metric_unit, metric_description,
+      service_name, scope_name, scope_version,
+      first_seen_at, last_seen_at, first_timestamp, last_timestamp
+    ) VALUES |]
+      <> mconcat (intersperse [HI.sql|,|] (catalogSql <$> rows))
+      <> [HI.sql| ON CONFLICT (project_id, metric_name, metric_type, metric_unit, service_name, scope_name) DO UPDATE SET
+        metric_description = EXCLUDED.metric_description,
+        scope_version = EXCLUDED.scope_version,
+        last_seen_at = GREATEST(otel_metrics_meta.last_seen_at, EXCLUDED.last_seen_at),
+        first_timestamp = LEAST(otel_metrics_meta.first_timestamp, EXCLUDED.first_timestamp),
+        last_timestamp = GREATEST(otel_metrics_meta.last_timestamp, EXCLUDED.last_timestamp)|]
+  where
+    catalogRow r@MetricRecord{projectId, metricName, metricType, metricUnit, metricDescription, metricTime, timestamp, instrumentationScope} =
+      let scope = case instrumentationScope of
+            AE.Object o -> KEM.lookup "name" o >>= \case AE.String x -> Just x; _ -> Nothing
+            _ -> Nothing
+          scopeVersion = case instrumentationScope of
+            AE.Object o -> KEM.lookup "version" o >>= \case AE.String x -> Just x; _ -> Nothing
+            _ -> Nothing
+       in (projectId, metricName, metricType, metricUnit, metricDescription, metricServiceNameFromResource metricName r.resource, fromMaybe "" scope, scopeVersion, timestamp, metricTime)
+    catalogSql (pid, name, typ, unit, desc, service, scope, scopeVersion, seen, pointTime) =
+      [HI.sql|(#{pid}, #{name}, #{typ}, #{unit}, #{desc}, #{service}, #{scope}, #{scopeVersion}, #{seen}, #{seen}, #{pointTime}, #{pointTime})|]

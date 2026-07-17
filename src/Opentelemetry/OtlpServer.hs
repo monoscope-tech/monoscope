@@ -43,7 +43,6 @@ import Data.Map qualified as Map
 import Data.ProtoLens.Encoding (decodeMessage, encodeMessage)
 import Data.Scientific (fromFloatDigits)
 import Data.Text qualified as T
-import Data.These (These (..))
 import Data.Time (UTCTime, diffUTCTime)
 import Data.Time.Clock (secondsToNominalDiffTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
@@ -389,13 +388,13 @@ processList msgs !attrs =
                  in maybe V.empty (\pid -> V.fromList $ convertResourceMetricsToMetricRecords ft caches pid rms) (pidM <|> pid2M)
             )
             ( \_caches perMsg ->
-                -- Metrics don't dual-write yet; surface a whole-batch Left on
-                -- failure (no per-row poison). Per-row attribution comes when
-                -- metrics adopts the dual-write path.
-                let flat = V.concat [recs | (_, _, recs) <- perMsg]
-                 in tryAny (checkpoint "processList:metrics:bulkInsert" $ Telemetry.bulkInsertMetrics flat) <&> \case
-                      Right _ -> Right []
-                      Left e -> Left (This e)
+                let flat = Telemetry.mintMetricIds $ V.concat [recs | (_, _, recs) <- perMsg]
+                 in checkpoint "processList:metrics:bulkInsert" $
+                      Telemetry.bulkInsertOtelMetrics
+                        appCtx.hasqlTimefusionUsesPgTypes
+                        target
+                        flat
+                        <&> fmap (const [])
             )
         _ -> do
           Log.logAttention "processList: unsupported opentelemetry data type" (AE.object ["ce-type" AE..= HM.lookup "ce-type" attrs])
@@ -1328,17 +1327,20 @@ convertResourceMetricsToMetricRecords !fallbackTime !projectCaches !pid !resourc
 convertResourceMetricToMetricRecords :: UTCTime -> Projects.ProjectId -> PM.ResourceMetrics -> [Telemetry.MetricRecord]
 convertResourceMetricToMetricRecords fallbackTime pid resourceMetric =
   let resourceM = Just $ resourceMetric ^. PMF.resource
+      resourceSchemaUrl = resourceMetric ^. PMF.schemaUrl
+      droppedAttributesCount = fromIntegral $ resourceMetric ^. PMF.resource . PRF.droppedAttributesCount
    in [ record
       | sm <- resourceMetric ^. PMF.scopeMetrics
       , let scope = Just $ sm ^. PMF.scope
+      , let scopeSchemaUrl = sm ^. PMF.schemaUrl
       , metric <- sm ^. PMF.metrics
-      , record <- convertMetricToMetricRecords fallbackTime pid resourceM scope metric
+      , record <- convertMetricToMetricRecords fallbackTime pid resourceM resourceSchemaUrl droppedAttributesCount scope scopeSchemaUrl metric
       ]
 
 
 -- | Convert a single Metric to MetricRecords
-convertMetricToMetricRecords :: UTCTime -> Projects.ProjectId -> Maybe PR.Resource -> Maybe PC.InstrumentationScope -> PM.Metric -> [Telemetry.MetricRecord]
-convertMetricToMetricRecords fallbackTime pid resourceM scopeM metric =
+convertMetricToMetricRecords :: UTCTime -> Projects.ProjectId -> Maybe PR.Resource -> Text -> Int -> Maybe PC.InstrumentationScope -> Text -> PM.Metric -> [Telemetry.MetricRecord]
+convertMetricToMetricRecords fallbackTime pid resourceM resourceSchemaUrl droppedAttributesCount scopeM scopeSchemaUrl metric =
   case metric ^. PMF.maybe'data' of
     Just metricData ->
       case metricData of
@@ -1348,8 +1350,12 @@ convertMetricToMetricRecords fallbackTime pid resourceM scopeM metric =
               !temporality = safeToEnum @Telemetry.AggregationTemporality n
               !monotonic = Just $ s ^. PMF.isMonotonic
            in convertNumberDataPoints (s ^. PMF.dataPoints) Telemetry.MTSum Telemetry.SumValue temporality monotonic
-        PM.Metric'Histogram hist -> mapMaybe convertHistogramPoint $ hist ^. PMF.dataPoints
-        PM.Metric'ExponentialHistogram ehist -> map convertExpHistogramPoint $ ehist ^. PMF.dataPoints
+        PM.Metric'Histogram hist ->
+          let temporality = safeToEnum @Telemetry.AggregationTemporality $ fromEnum (hist ^. PMF.aggregationTemporality)
+           in mapMaybe (convertHistogramPoint temporality) $ hist ^. PMF.dataPoints
+        PM.Metric'ExponentialHistogram ehist ->
+          let temporality = safeToEnum @Telemetry.AggregationTemporality $ fromEnum (ehist ^. PMF.aggregationTemporality)
+           in map (convertExpHistogramPoint temporality) $ ehist ^. PMF.dataPoints
         PM.Metric'Summary summary -> map convertSummaryPoint $ summary ^. PMF.dataPoints
     Nothing -> []
   where
@@ -1372,7 +1378,9 @@ convertMetricToMetricRecords fallbackTime pid resourceM scopeM metric =
     pointTime = validTsOr fallbackTime
     pointAttrs point = keyValueToJSON (V.toList $ point ^. PMF.vec'attributes)
 
-    mkRecord validTime attrs mType mValue fls temporality_ monotonic_ payloadBytes =
+    validStartTime n = if n == 0 then Nothing else Just $ pointTime n
+
+    mkRecord validTime startTime attrs mType mValue fls temporality_ monotonic_ payloadBytes =
       Telemetry.MetricRecord
         { projectId = unUUIDId pid
         , id = Nothing
@@ -1381,8 +1389,12 @@ convertMetricToMetricRecords fallbackTime pid resourceM scopeM metric =
         , metricUnit = mUnit
         , timestamp = validTime
         , metricTime = validTime
+        , startTimestamp = startTime
         , resource = res
+        , resourceSchemaUrl
         , instrumentationScope = scopeJSON
+        , scopeSchemaUrl
+        , droppedAttributesCount
         , metricValue = mValue
         , exemplars = AE.object []
         , metricType = mType
@@ -1398,38 +1410,38 @@ convertMetricToMetricRecords fallbackTime pid resourceM scopeM metric =
       where
         go point =
           let !value = case point ^. PMF.maybe'value of
-                Just (PM.NumberDataPoint'AsDouble d) -> d
-                Just (PM.NumberDataPoint'AsInt i) -> fromIntegral i
-                _ -> 0
+                Just (PM.NumberDataPoint'AsDouble d) -> Telemetry.GaugeSum (Just d) Nothing
+                Just (PM.NumberDataPoint'AsInt i) -> Telemetry.GaugeSum Nothing (Just i)
+                Nothing -> Telemetry.GaugeSum Nothing (Just 0)
               !pSize = fromIntegral $ BS.length (encodeMessage point)
-           in mkRecord (pointTime $ point ^. PMF.timeUnixNano) (pointAttrs point) mType (wrap $ Telemetry.GaugeSum{value}) (fromIntegral $ point ^. PMF.flags) temporality_ monotonic_ pSize
+           in mkRecord (pointTime $ point ^. PMF.timeUnixNano) (validStartTime $ point ^. PMF.startTimeUnixNano) (pointAttrs point) mType (wrap value) (fromIntegral $ point ^. PMF.flags) temporality_ monotonic_ pSize
 
-    convertHistogramPoint point
+    convertHistogramPoint temporality point
       | VU.length vBCounts /= VU.length vEBounds + 1 = Nothing -- OTLP spec: len(bucket_counts) == len(explicit_bounds) + 1
-      | otherwise = Just $ mkRecord (pointTime $ point ^. PMF.timeUnixNano) (pointAttrs point) Telemetry.MTHistogram (Telemetry.HistogramValue hval) (fromIntegral $ point ^. PMF.flags) Nothing Nothing (fromIntegral $ BS.length (encodeMessage point))
+      | otherwise = Just $ mkRecord (pointTime $ point ^. PMF.timeUnixNano) (validStartTime $ point ^. PMF.startTimeUnixNano) (pointAttrs point) Telemetry.MTHistogram (Telemetry.HistogramValue hval) (fromIntegral $ point ^. PMF.flags) temporality Nothing (fromIntegral $ BS.length (encodeMessage point))
       where
         vBCounts = point ^. PMF.vec'bucketCounts
         vEBounds = point ^. PMF.vec'explicitBounds
         hval =
           Telemetry.Histogram
-            { sum = fromMaybe 0 $ point ^. PMF.maybe'sum
+            { sum = point ^. PMF.maybe'sum
             , count = fromIntegral $ point ^. PMF.count
             , bucketCounts = V.fromList $ map fromIntegral $ point ^. PMF.bucketCounts
             , explicitBounds = V.fromList $ point ^. PMF.explicitBounds
-            , pointMin = fromMaybe 0 $ point ^. PMF.maybe'min
-            , pointMax = fromMaybe 0 $ point ^. PMF.maybe'max
+            , pointMin = point ^. PMF.maybe'min
+            , pointMax = point ^. PMF.maybe'max
             }
 
-    convertExpHistogramPoint point =
-      mkRecord (pointTime $ point ^. PMF.timeUnixNano) (pointAttrs point) Telemetry.MTExponentialHistogram (Telemetry.ExponentialHistogramValue ehval) (fromIntegral $ point ^. PMF.flags) Nothing Nothing (fromIntegral $ BS.length (encodeMessage point))
+    convertExpHistogramPoint temporality point =
+      mkRecord (pointTime $ point ^. PMF.timeUnixNano) (validStartTime $ point ^. PMF.startTimeUnixNano) (pointAttrs point) Telemetry.MTExponentialHistogram (Telemetry.ExponentialHistogramValue ehval) (fromIntegral $ point ^. PMF.flags) temporality Nothing (fromIntegral $ BS.length (encodeMessage point))
       where
         toBucket b = Telemetry.EHBucket{bucketOffset = fromIntegral $ b ^. PMF.offset, bucketCounts = V.fromList $ map fromIntegral $ b ^. PMF.bucketCounts}
         !ehval =
           Telemetry.ExponentialHistogram
-            { sum = fromMaybe 0 $ point ^. PMF.maybe'sum
+            { sum = point ^. PMF.maybe'sum
             , count = fromIntegral $ point ^. PMF.count
-            , pointMin = fromMaybe 0 $ point ^. PMF.maybe'min
-            , pointMax = fromMaybe 0 $ point ^. PMF.maybe'max
+            , pointMin = point ^. PMF.maybe'min
+            , pointMax = point ^. PMF.maybe'max
             , zeroCount = fromIntegral $ point ^. PMF.zeroCount
             , scale = fromIntegral $ point ^. PMF.scale
             , pointPositive = toBucket <$> point ^. PMF.maybe'positive
@@ -1438,7 +1450,7 @@ convertMetricToMetricRecords fallbackTime pid resourceM scopeM metric =
             }
 
     convertSummaryPoint point =
-      mkRecord (pointTime $ point ^. PMF.timeUnixNano) (pointAttrs point) Telemetry.MTSummary (Telemetry.SummaryValue sval) (fromIntegral $ point ^. PMF.flags) Nothing Nothing (fromIntegral $ BS.length (encodeMessage point))
+      mkRecord (pointTime $ point ^. PMF.timeUnixNano) (validStartTime $ point ^. PMF.startTimeUnixNano) (pointAttrs point) Telemetry.MTSummary (Telemetry.SummaryValue sval) (fromIntegral $ point ^. PMF.flags) Nothing Nothing (fromIntegral $ BS.length (encodeMessage point))
       where
         !sval =
           Telemetry.Summary
@@ -1597,7 +1609,7 @@ logsServiceExport appLogger appCtx tp (Proto req) = do
 
 
 -- | Process metrics request with optional API key from gRPC metadata (extracted for testing)
-processMetricsRequest :: (DB es, Eff.Reader AuthContext :> es, Log :> es, Time.Time :> es) => Maybe Text -> MS.ExportMetricsServiceRequest -> Eff es ()
+processMetricsRequest :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es) => Maybe Text -> MS.ExportMetricsServiceRequest -> Eff es ()
 processMetricsRequest metadataApiKey req = do
   Log.logTrace "Received metrics export request" AE.Null
 
@@ -1634,10 +1646,12 @@ processMetricsRequest metadataApiKey req = do
         (AE.object ["metric_count" AE..= length metricRecords])
 
       unless (null metricRecords) do
-        Telemetry.bulkInsertMetrics (V.fromList metricRecords)
+        let records = Telemetry.mintMetricIds $ V.fromList metricRecords
+            target = Telemetry.writeTargetFor appCtx.env.enablePostgresTelemetryWrites appCtx.env.enableTimefusionWrites Nothing
+        Telemetry.bulkInsertOtelMetrics appCtx.hasqlTimefusionUsesPgTypes target records >>= throwOnWriteFailure
         Log.logTrace
           "Metrics: Successfully inserted metrics into database"
-          (AE.object ["inserted_count" AE..= length metricRecords])
+          (AE.object ["inserted_count" AE..= V.length records])
     Nothing ->
       -- Return authentication error for gRPC requests with invalid or missing keys
       liftIO

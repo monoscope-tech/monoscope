@@ -114,7 +114,7 @@ type M = Maybe
 
 sourceTable :: Maybe Sources -> Text
 sourceTable = \case
-  Just SMetrics -> "telemetry.metrics"
+  Just SMetrics -> "otel_metrics"
   _ -> "otel_logs_and_spans"
 
 

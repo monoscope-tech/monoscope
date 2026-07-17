@@ -3,17 +3,20 @@
 module Opentelemetry.GrpcIngestionSpec (spec) where
 
 import Control.Exception (ErrorCall (..), evaluate)
+import Control.Lens ((.~))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key (fromText)
 import Data.Aeson.KeyMap qualified as KM
 import Data.Effectful.Hasql qualified as Hasql
 import Data.List (isInfixOf)
 import Data.Set qualified as Set
-import Data.Time (addUTCTime)
+import Data.Time (UTCTime, addUTCTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
+import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
+import Data.ProtoLens (defMessage)
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Only (..))
@@ -21,12 +24,17 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Hasql.Interpolate qualified as HI
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.GRPC.Common (GrpcError (..), GrpcException (..))
 import Network.GRPC.Common.Protobuf (Proto (..))
+import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields qualified as MSF
+import Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields qualified as PMF
+import Proto.Opentelemetry.Proto.Resource.V1.Resource_Fields qualified as PRF
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.Charts.Charts qualified as Charts
 import Pages.LogExplorer.Log qualified as Log
 import Pages.Replay qualified as Replay
+import Pages.Telemetry qualified as TelemetryPage
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
@@ -117,6 +125,34 @@ spec = sequential $ aroundAll withTestResources do
       let (timeFrom, timeTo) = testTimeRange
       result <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just "summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") []
       V.length result.dataset `shouldSatisfy` (> 0)
+      rawRows :: V.Vector Int <- runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT count(*)::bigint FROM otel_metrics WHERE project_id = #{pid.toText} |]
+      rawRows `shouldBe` V.singleton 3
+      catalogRows :: V.Vector (Only Int) <- withPool tr.trPool $ DBT.query [sql| SELECT count(*)::int FROM otel_metrics_meta WHERE project_id = ? |] (Only $ unUUIDId pid)
+      catalogRows `shouldBe` V.singleton (Only 3)
+      -- Regression: the Metrics overview must query the new catalog column,
+      -- rather than the legacy telemetry.metrics_meta.updated_at column.
+      void $ toServantResponse tr $ TelemetryPage.metricsOverViewGetH pid (Just "charts") Nothing Nothing Nothing Nothing Nothing Nothing
+      -- Exercise every raw-data query through the labeled TimeFusion interpreter.
+      metric <- runTestBg frozenTime tr $ Telemetry.getMetricData True pid "cpu.usage"
+      fmap (.dataPointsCount) metric `shouldBe` Just 1
+      points <- runTestBg frozenTime tr $ Telemetry.getDataPointsData True pid (Just (addUTCTime (-1) frozenTime), Just (addUTCTime 1 frozenTime))
+      find ((== "cpu.usage") . (.metricName)) points `shouldSatisfy` isJust
+      (events, _, metrics, _) <- runTestBg frozenTime tr $ Telemetry.getUsageTotals True pid (addUTCTime (-1) frozenTime)
+      events `shouldSatisfy` (>= 0)
+      metrics `shouldSatisfy` (>= 3)
+
+    it "Test 4.1b: preserves OTLP metric start and schema metadata" $ \tr -> do
+      key <- createTestAPIKey tr pid "metric-metadata-key"
+      let toNanos = floor . (* 1000000000) . utcTimeToPOSIXSeconds
+          start = addUTCTime (-30) frozenTime
+          point = defMessage & PMF.timeUnixNano .~ toNanos frozenTime & PMF.startTimeUnixNano .~ toNanos start & PMF.asDouble .~ 42
+          metric = defMessage & PMF.name .~ "metadata.gauge" & PMF.unit .~ "1" & PMF.gauge .~ (defMessage & PMF.dataPoints .~ [point])
+          scopeMetrics = defMessage & PMF.schemaUrl .~ "https://example.test/scope/1" & PMF.metrics .~ [metric]
+          resource = mkResource key [] & PRF.droppedAttributesCount .~ 7
+          request = defMessage & MSF.resourceMetrics .~ [defMessage & PMF.resource .~ resource & PMF.schemaUrl .~ "https://example.test/resource/1" & PMF.scopeMetrics .~ [scopeMetrics]]
+      void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto request)
+      rows <- runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT start_timestamp, resource_schema_url, scope_schema_url, dropped_attributes_count FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = 'metadata.gauge' |] :: IO (V.Vector (UTCTime, Text, Text, Int))
+      rows `shouldBe` V.singleton (start, "https://example.test/resource/1", "https://example.test/scope/1", 7)
 
     it "Test 4.2: should reject metrics with invalid API key" $ \tr -> do
       OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ createGaugeMetricAtTime "definitely-not-a-valid-key" "rejected.metric" 99.9 frozenTime)

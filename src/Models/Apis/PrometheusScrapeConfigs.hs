@@ -22,6 +22,7 @@ import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Default (Default)
 import Data.Effectful.Hasql qualified as Hasql
+import Data.These qualified as These
 import Data.List (partition)
 import Data.OpenApi (ToParamSchema (..), ToSchema (..), declareNamedSchema)
 import Data.Text qualified as T
@@ -33,6 +34,10 @@ import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Effectful (Eff, type (:>))
+import Effectful.Concurrent (Concurrent)
+import Effectful.Ki qualified as Ki
+import Effectful.Labeled (Labeled)
+import Effectful.Reader.Static qualified as Eff
 import Effectful.Log (Log)
 import Effectful.Log qualified as Log
 import GHC.Records (HasField (getField))
@@ -47,7 +52,9 @@ import Pkg.DeriveUtils (unUUIDId)
 import Pkg.Prometheus qualified as Prom
 import Relude
 import Servant.API (FromHttpApiData)
+import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (DB)
+import UnliftIO (throwIO)
 
 
 newtype PrometheusScrapeConfigId = PrometheusScrapeConfigId {unPrometheusScrapeConfigId :: UUID.UUID}
@@ -163,14 +170,17 @@ markScraped cid status =
 -- | Parse an exposition-format body and ingest its (finite) samples as metrics.
 -- Non-finite values (NaN/±Inf) are dropped — Aeson can't encode them — but never
 -- silently: the dropped count is logged. Returns the number of samples ingested.
-ingestScrapedBody :: (DB es, Log :> es) => PrometheusScrapeConfig -> UTCTime -> LByteString -> Eff es Int
+ingestScrapedBody :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es) => PrometheusScrapeConfig -> UTCTime -> LByteString -> Eff es Int
 ingestScrapedBody cfg now body = do
+  appCtx :: AuthContext <- Eff.ask
   let (finite, nonFinite) = partition Prom.isFiniteSample (Prom.parsePrometheus (decodeUtf8 body))
       records = V.fromList (map (sampleToMetricRecord cfg now) finite)
       dropped = length nonFinite
   when (dropped > 0) $ Log.logInfo "Prometheus scrape dropped non-finite samples" (AE.object ["config_id" AE..= cfg.id.toText, "dropped" AE..= dropped])
-  Telemetry.bulkInsertMetrics records
-  pure (V.length records)
+  let target = Telemetry.writeTargetFor appCtx.env.enablePostgresTelemetryWrites appCtx.env.enableTimefusionWrites Nothing
+  Telemetry.bulkInsertOtelMetrics appCtx.hasqlTimefusionUsesPgTypes target records >>= \case
+    Left failure -> liftIO $ throwIO $ These.these (\e -> e) (\e -> e) (\e _ -> e) failure
+    Right () -> pure (V.length records)
 
 
 -- | Map one Prometheus sample to a metric row. Counters become monotonic sums;
@@ -187,9 +197,13 @@ sampleToMetricRecord cfg now s =
     , metricDescription = s.help
     , metricTime = maybe now (posixSecondsToUTCTime . (/ 1000) . fromIntegral) s.timestampMs
     , timestamp = now
+    , startTimestamp = Nothing
     , attributes = attrs
     , resource = AE.object ["service.name" AE..= svc]
+    , resourceSchemaUrl = ""
     , instrumentationScope = AE.object []
+    , scopeSchemaUrl = ""
+    , droppedAttributesCount = 0
     , metricValue = mval
     , metricMetadata = AE.object []
     , exemplars = AE.Null
@@ -208,8 +222,8 @@ sampleToMetricRecord cfg now s =
     isCounter = s.sampleType == Prom.Counter
     (mtype, mval) =
       if isCounter
-        then (Telemetry.MTSum, Telemetry.SumValue (Telemetry.GaugeSum s.value))
-        else (Telemetry.MTGauge, Telemetry.GaugeValue (Telemetry.GaugeSum s.value))
+        then (Telemetry.MTSum, Telemetry.SumValue (Telemetry.GaugeSum (Just s.value) Nothing))
+        else (Telemetry.MTGauge, Telemetry.GaugeValue (Telemetry.GaugeSum (Just s.value) Nothing))
     labelMap = AEKM.fromList [(AEK.fromText k, AE.String v) | (k, v) <- s.labels]
     -- KeyMap (<>) is left-biased, so the scraped per-sample labels (specific) must come
     -- first to win over the config's static extraLabels (general context) on key collisions.
