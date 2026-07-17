@@ -368,7 +368,6 @@ sqlFromQueryComponents sqlCfg qc =
                       else "COALESCE(" <> maybe "status_code" resolve (listToMaybe qc.groupByClause) <> "::text, 'null')"
                   aggCol = if null qc.aggregations then "count(*)::float" else fromMaybe "count(*)::float" (listToMaybe qc.aggregations)
                   timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
-                  firstGroupCol = resolve $ fromMaybe "status_code" (listToMaybe qc.groupByClause)
                   groupByPart = if null qc.groupByClause then timeBucketExpr else timeBucketExpr <> ", " <> groupCol
                in [fmt|SELECT extract(epoch from {timeBucketExpr})::integer, {groupCol}, {aggCol}
                       FROM {fromTable} WHERE {buildWhere} GROUP BY {groupByPart}
