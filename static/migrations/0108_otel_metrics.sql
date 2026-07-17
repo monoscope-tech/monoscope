@@ -4,7 +4,6 @@
 CREATE TABLE IF NOT EXISTS otel_metrics (
     project_id TEXT NOT NULL,
     timestamp TIMESTAMPTZ NOT NULL,
-    date TIMESTAMPTZ,
     start_timestamp TIMESTAMPTZ,
     ingested_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
     id UUID NOT NULL,
