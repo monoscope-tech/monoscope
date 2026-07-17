@@ -260,7 +260,7 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM = do
             if cursor + pageSize >= V.length active
               then Nothing
               else Just $ "/p/" <> pid.toText <> "/metrics?tab=charts" <> sourceQ <> fromQ <> toQ <> sinceQ <> prfixQ <> cursorQ
-      labels <- Map.fromList <$> forM (V.toList metricList) (\metric -> (metric.metricName,) . maybe V.empty (.metricLabels) <$> Telemetry.getMetricData ctx.env.enableTimefusionReads pid metric.metricName)
+      let labels = Map.fromList $ (\metric -> (metric.metricName, metric.metricLabels)) <$> V.toList metricList
       if cursor == 0
         then do
           serviceNames <- V.fromList <$> Telemetry.getMetricServiceNames pid
@@ -275,7 +275,7 @@ metricDetailsGetH pid metricName source fromM toM sinceM = do
   (sess, project) <- Projects.sessionAndProject pid
   now <- Time.currentTime
   let (_, _, currentRange) = parseTime fromM toM sinceM now
-  metricM <- Telemetry.getMetricData ctx.env.enableTimefusionReads pid metricName
+  metricM <- Telemetry.getMetricData pid metricName
   case metricM of
     Just metric -> do
       addRespHeaders $ metricsDetailsPage pid metric.serviceNames metric (fromMaybe "all" source) currentRange
@@ -285,9 +285,8 @@ metricDetailsGetH pid metricName source fromM toM sinceM = do
 
 metricBreakdownGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 metricBreakdownGetH pid metricName labelM = do
-  ctx <- Reader.ask @AuthContext
   (sess, project) <- Projects.sessionAndProject pid
-  metricM <- Telemetry.getMetricData ctx.env.enableTimefusionReads pid metricName
+  metricM <- Telemetry.getMetricData pid metricName
   case metricM of
     Just metric -> addRespHeaders $ metricBreakdown pid metric labelM
     Nothing -> addRespHeaders mempty
@@ -409,8 +408,7 @@ chartList pid labels source metricList nextUrl = do
 
 metricCardGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 metricCardGetH pid metricName labelM = do
-  ctx <- Reader.ask @AuthContext
-  metricM <- Telemetry.getMetricData ctx.env.enableTimefusionReads pid metricName
+  metricM <- Telemetry.getMetricData pid metricName
   case metricM of
     Nothing -> addRespHeaders mempty
     Just metric ->

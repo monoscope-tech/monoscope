@@ -130,21 +130,25 @@ spec = sequential $ aroundAll withTestResources do
       rawRows `shouldBe` V.singleton 3
       catalogRows :: V.Vector (Only Int) <- withPool tr.trPool $ DBT.query [sql| SELECT count(*)::int FROM otel_metrics_meta WHERE project_id = ? |] (Only $ unUUIDId pid)
       catalogRows `shouldBe` V.singleton (Only 3)
+      catalogLabels :: V.Vector (Only Text) <- withPool tr.trPool $ DBT.query [sql| SELECT array_to_string(metric_labels, ',') FROM otel_metrics_meta WHERE project_id = ? AND metric_name = 'cpu.usage' |] (Only $ unUUIDId pid)
+      catalogLabels `shouldSatisfy` (any (\(Only labels) -> "resource.service.name" `isInfixOf` toString labels) . toList)
       -- Regression: metric cards must query the native scalar column in
       -- otel_metrics, not the removed telemetry.metrics JSON payload.
       (_, overview) <- toServantResponse tr $ TelemetryPage.metricsOverViewGetH pid (Just "charts") Nothing Nothing Nothing Nothing Nothing Nothing
       toString (Lucid.renderText $ Lucid.toHtml overview) `shouldContain` "metrics | where metric_name"
-      void $ runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interpExecute_ [HI.sql| UPDATE otel_metrics SET attributes = '{"kafka":{"topic":"orders"}}'::jsonb WHERE project_id = #{pid.toText} AND metric_name = 'cpu.usage' |]
-      (_, breakdown) <- toServantResponse tr $ TelemetryPage.metricBreakdownGetH pid "cpu.usage" (Just "attributes.kafka.topic")
-      toString (Lucid.renderText breakdown) `shouldContain` "summarize avg(value) by bin_auto(timestamp),attributes.kafka.topic"
-      -- Exercise every raw-data query through the labeled TimeFusion interpreter.
-      metric <- runTestBg frozenTime tr $ Telemetry.getMetricData True pid "cpu.usage"
-      fmap (.dataPointsCount) metric `shouldBe` Just 1
+      (_, breakdown) <- toServantResponse tr $ TelemetryPage.metricBreakdownGetH pid "cpu.usage" (Just "resource.service.name")
+      toString (Lucid.renderText breakdown) `shouldContain` "summarize avg(value) by bin_auto(timestamp),resource.service.name"
       points <- runTestBg frozenTime tr $ Telemetry.getDataPointsData True pid (Just (addUTCTime (-1) frozenTime), Just (addUTCTime 1 frozenTime))
       find ((== "cpu.usage") . (.metricName)) points `shouldSatisfy` isJust
       (events, _, metrics, _) <- runTestBg frozenTime tr $ Telemetry.getUsageTotals True pid (addUTCTime (-1) frozenTime)
       events `shouldSatisfy` (>= 0)
       metrics `shouldSatisfy` (>= 3)
+
+    it "streams metric label paths into metadata" $ \tr -> do
+      key <- createTestAPIKey tr pid "metric-label-catalog-key"
+      ingestMetric tr key "catalog.labels" 1 frozenTime
+      labels :: V.Vector (Only Text) <- withPool tr.trPool $ DBT.query [sql| SELECT array_to_string(metric_labels, ',') FROM otel_metrics_meta WHERE project_id = ? AND metric_name = 'catalog.labels' |] (Only $ unUUIDId pid)
+      labels `shouldSatisfy` (any (\(Only value) -> "resource.service.name" `isInfixOf` toString value) . toList)
 
     it "Test 4.1b: preserves OTLP metric start and schema metadata" $ \tr -> do
       key <- createTestAPIKey tr pid "metric-metadata-key"

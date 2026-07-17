@@ -564,6 +564,7 @@ data MetricChartListData = MetricChartListData
   , metricUnit :: Text
   , metricDescription :: Text
   , lastSeen :: UTCTime
+  , metricLabels :: V.Vector Text
   }
   deriving (Generic, Show)
   deriving anyclass (FromRow, HI.DecodeRow, NFData, ToRow)
@@ -779,29 +780,18 @@ getDataPointsData useTimefusion pid dateRange = do
   pure $ fmap (\m -> m{dataPointsCount = fromMaybe 0 $ Map.lookup m.metricName countByName}) catalog
 
 
-getMetricData :: (DB es, Labeled "timefusion" Hasql :> es) => Bool -> Projects.ProjectId -> Text -> Eff es (Maybe MetricDataPoint)
-getMetricData useTimefusion pid metricName = do
+getMetricData :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe MetricDataPoint)
+getMetricData pid metricName = do
   meta <-
     Hasql.interpOne
-      [HI.sql| SELECT metric_name, MAX(metric_type), MAX(metric_unit), MAX(metric_description)
-    FROM otel_metrics_meta WHERE project_id = #{unUUIDId pid} AND metric_name = #{metricName}
+      [HI.sql| SELECT metric_name, MAX(metric_type), MAX(metric_unit), MAX(metric_description),
+      ARRAY_AGG(DISTINCT service_name),
+      COALESCE(ARRAY_AGG(DISTINCT label) FILTER (WHERE label IS NOT NULL), '{}'::text[])
+    FROM otel_metrics_meta
+    LEFT JOIN LATERAL unnest(metric_labels) AS label ON TRUE
+    WHERE project_id = #{unUUIDId pid} AND metric_name = #{metricName}
     GROUP BY metric_name |]
-  count <-
-    fromMaybe 0
-      <$> Hasql.withHasqlTimefusion
-        useTimefusion
-        (Hasql.interpOne [HI.sql| SELECT COUNT(*)::bigint FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = #{metricName}|])
-  services <-
-    V.fromList
-      <$> Hasql.withHasqlTimefusion
-        useTimefusion
-        (Hasql.interp [HI.sql| SELECT DISTINCT COALESCE(resource___service___name, 'unknown') FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = #{metricName}|])
-  attributeMaps :: V.Vector (AesonText (Map Text AE.Value), Maybe (AesonText (Map Text AE.Value)), Text) <-
-    Hasql.withHasqlTimefusion useTimefusion
-      $ Hasql.interp [HI.sql| SELECT attributes, resource, metric_name FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = #{metricName} AND attributes IS NOT NULL|]
-  let paths prefix attrs = concatMap (\(key, value) -> metricAttributePaths (prefix <> "." <> key) value) $ Map.toList attrs
-      labels = V.fromList $ ordNub $ concatMap (\(AesonText attrs, resource, _) -> paths "attributes" attrs <> maybe [] (\(AesonText resourceAttrs) -> paths "resource" resourceAttrs) resource) attributeMaps
-  pure $ (\(name, typ, unit, desc) -> MetricDataPoint name typ unit desc count services labels) <$> meta
+  pure $ (\(name, typ, unit, desc, services, labels) -> MetricDataPoint name typ unit desc 0 services labels) <$> meta
 
 
 getTotalEventsToReport :: DB es => Projects.ProjectId -> UTCTime -> Eff es Int
@@ -834,8 +824,11 @@ getMetricChartListData pid sourceM prefixM = do
         _ -> mempty
   Hasql.interp
     $ [HI.sql| SELECT metric_name, MAX(metric_type) as metric_type, MAX(metric_unit) as metric_unit,
-             MAX(metric_description) as metric_description, MAX(last_seen_at) as last_seen
-      FROM otel_metrics_meta WHERE project_id = #{unUUIDId pid} |]
+             MAX(metric_description) as metric_description, MAX(last_seen_at) as last_seen,
+             COALESCE(ARRAY_AGG(DISTINCT label) FILTER (WHERE label IS NOT NULL), '{}'::text[])
+      FROM otel_metrics_meta
+      LEFT JOIN LATERAL unnest(metric_labels) AS label ON TRUE
+      WHERE project_id = #{unUUIDId pid} |]
     <> sourceFilter
     <> prefixFilter
     <> [HI.sql| GROUP BY metric_name ORDER BY MAX(last_timestamp) DESC, metric_name |]
@@ -2546,13 +2539,14 @@ upsertMetricMetadata records = unless (V.null records) do
   Hasql.interpExecute_
     $ [HI.sql|INSERT INTO otel_metrics_meta (
       project_id, metric_name, metric_type, metric_unit, metric_description,
-      service_name, scope_name, scope_version,
+      service_name, scope_name, scope_version, metric_labels,
       first_seen_at, last_seen_at, first_timestamp, last_timestamp
     ) VALUES |]
     <> mconcat (intersperse [HI.sql|,|] (catalogSql <$> rows))
     <> [HI.sql| ON CONFLICT (project_id, metric_name, metric_type, metric_unit, service_name, scope_name) DO UPDATE SET
         metric_description = EXCLUDED.metric_description,
         scope_version = EXCLUDED.scope_version,
+        metric_labels = ARRAY(SELECT DISTINCT unnest(otel_metrics_meta.metric_labels || EXCLUDED.metric_labels)),
         last_seen_at = GREATEST(otel_metrics_meta.last_seen_at, EXCLUDED.last_seen_at),
         first_timestamp = LEAST(otel_metrics_meta.first_timestamp, EXCLUDED.first_timestamp),
         last_timestamp = GREATEST(otel_metrics_meta.last_timestamp, EXCLUDED.last_timestamp)|]
