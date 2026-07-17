@@ -506,7 +506,7 @@ spec = around withTestResources do
 
       let expectFound item = case item of
             LogItem.ItemDetailedNotFound msg -> expectationFailure $ "expected record, got not-found: " <> toString msg
-            LogItem.SpanItemExpanded _ (rec :: Telemetry.OtelLogsAndSpans) _ -> rec.name `shouldBe` Just spanName
+            LogItem.SpanItemExpanded _ (rec :: Telemetry.OtelLogsAndSpans) _ _ -> rec.name `shouldBe` Just spanName
             LogItem.LogItemExpanded _ rec -> rec.name `shouldBe` Just spanName
 
       let ctx = tr.trATCtx
