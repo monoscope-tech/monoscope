@@ -178,7 +178,7 @@ ingestScrapedBody cfg now body = do
       dropped = length nonFinite
   when (dropped > 0) $ Log.logInfo "Prometheus scrape dropped non-finite samples" (AE.object ["config_id" AE..= cfg.id.toText, "dropped" AE..= dropped])
   let target = Telemetry.writeTargetFor appCtx.env.enablePostgresTelemetryWrites appCtx.env.enableTimefusionWrites Nothing
-  Telemetry.bulkInsertOtelMetrics appCtx.hasqlTimefusionUsesPgTypes target records >>= \case
+  Telemetry.bulkInsertOtelMetrics appCtx.metricCatalogBuffer appCtx.hasqlTimefusionUsesPgTypes target records >>= \case
     Left failure -> liftIO $ throwIO $ These.these (\e -> e) (\e -> e) (\e _ -> e) failure
     Right () -> pure (V.length records)
 

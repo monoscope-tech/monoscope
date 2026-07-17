@@ -20,6 +20,11 @@ module Models.Telemetry.Telemetry (
   AggregationTemporality (..),
   MetricType (..),
   MetricRecord (..),
+  MetricCatalogBuffer,
+  newMetricCatalogBuffer,
+  enqueueMetricCatalog,
+  flushMetricCatalog,
+  reconcileMetricCatalog,
   ExponentialHistogram (..),
   GaugeSum (..),
   Histogram (..),
@@ -78,6 +83,7 @@ module Models.Telemetry.Telemetry (
 )
 where
 
+import Control.Concurrent.STM qualified as STM
 import Control.Lens ((.~))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
@@ -370,6 +376,71 @@ data MetricRecord = MetricRecord
   deriving (Generic, Show)
   deriving anyclass (FromRow, NFData, ToRow)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MetricRecord
+
+
+-- | Bounded, descriptor-deduplicated catalog work. Raw metric persistence is
+-- independent of this best-effort UI index.
+newtype MetricCatalogBuffer = MetricCatalogBuffer (STM.TVar (Map.Map Text MetricRecord))
+
+
+newMetricCatalogBuffer :: IO MetricCatalogBuffer
+newMetricCatalogBuffer = MetricCatalogBuffer <$> STM.newTVarIO mempty
+
+
+metricCatalogKey :: MetricRecord -> Text
+metricCatalogKey r =
+  T.intercalate
+    "\x1f"
+    [ UUID.toText r.projectId
+    , r.metricName
+    , toText $ show r.metricType
+    , r.metricUnit
+    , metricServiceNameFromResource r.metricName r.resource
+    , case r.instrumentationScope of
+        AE.Object o -> fromMaybe "" $ KEM.lookup "name" o >>= \case AE.String x -> Just x; _ -> Nothing
+        AE.Null -> ""
+        _ -> ""
+    ]
+
+
+-- | Return a flush batch only when the bounded buffer reaches its threshold.
+enqueueMetricCatalog :: MetricCatalogBuffer -> V.Vector MetricRecord -> IO (Maybe (V.Vector MetricRecord))
+enqueueMetricCatalog (MetricCatalogBuffer ref) rows = STM.atomically do
+  STM.modifyTVar' ref $ \pending -> V.foldl' (\m r -> Map.insert (metricCatalogKey r) r m) pending rows
+  pending <- STM.readTVar ref
+  if Map.size pending < 256
+    then pure Nothing
+    else Just . V.fromList . Map.elems <$> STM.swapTVar ref mempty
+
+
+flushMetricCatalog :: (Hasql :> es, IOE :> es) => MetricCatalogBuffer -> Eff es ()
+flushMetricCatalog (MetricCatalogBuffer ref) = do
+  rows <- liftIO $ V.fromList . Map.elems <$> STM.atomically (STM.swapTVar ref mempty)
+  upsertMetricMetadata rows
+
+
+-- | Rebuild recent catalog descriptors from durable raw points. This heals a
+-- process crash or a failed buffered flush without replaying telemetry.
+reconcileMetricCatalog :: (Hasql :> es, IOE :> es) => Eff es ()
+reconcileMetricCatalog =
+  Hasql.interpExecute_
+    [HI.sql|INSERT INTO otel_metrics_meta (
+  project_id, metric_name, metric_type, metric_unit, metric_description,
+  service_name, scope_name, scope_version,
+  first_seen_at, last_seen_at, first_timestamp, last_timestamp
+)
+SELECT project_id::uuid, metric_name, metric_type, metric_unit, MAX(metric_description),
+  COALESCE(resource___service___name, 'unknown'), COALESCE(scope_name, ''), MAX(scope_version),
+  MIN(ingested_at), MAX(ingested_at), MIN(timestamp), MAX(timestamp)
+FROM otel_metrics
+WHERE ingested_at >= now() - interval '2 hours'
+GROUP BY project_id, metric_name, metric_type, metric_unit, COALESCE(resource___service___name, 'unknown'), COALESCE(scope_name, '')
+ON CONFLICT (project_id, metric_name, metric_type, metric_unit, service_name, scope_name) DO UPDATE SET
+  metric_description = EXCLUDED.metric_description,
+  scope_version = EXCLUDED.scope_version,
+  last_seen_at = GREATEST(otel_metrics_meta.last_seen_at, EXCLUDED.last_seen_at),
+  first_timestamp = LEAST(otel_metrics_meta.first_timestamp, EXCLUDED.first_timestamp),
+  last_timestamp = GREATEST(otel_metrics_meta.last_timestamp, EXCLUDED.last_timestamp)|]
 
 
 data MetricMeta = MetricMeta
@@ -2333,11 +2404,12 @@ mintMetricIds = V.map $ \r -> r{id = Just $ fromMaybe (metricId r) r.id}
 -- repeated defensively here so ad-hoc producers cannot write random ids.
 bulkInsertOtelMetrics
   :: (Concurrent :> es, Hasql :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es)
-  => Bool
+  => MetricCatalogBuffer
+  -> Bool
   -> WriteTarget
   -> V.Vector MetricRecord
   -> Eff es (Either WriteFailure ())
-bulkInsertOtelMetrics tfPgTypes target records0 = do
+bulkInsertOtelMetrics catalogBuffer tfPgTypes target records0 = do
   let records = mintMetricIds records0
       submitted = V.length records
       writePg = retryHasqlWrite maxWriteAttempts "pg" $ insertOtelMetrics True records
@@ -2377,11 +2449,14 @@ bulkInsertOtelMetrics tfPgTypes target records0 = do
           tfRes <- writeTf
           result' <- single "tf" That tfRes
           pure (result', either (const False) (isNothing . check "tf") tfRes)
-  -- The Timescale-only catalog is derived UI state. Any durable raw write,
-  -- including TimeFusion when legacy PG is unavailable, remains discoverable.
-  when rawPersisted $ tryAny (upsertMetricMetadata records) >>= \case
-    Left e -> Log.logAttention "OTEL_METRICS_META_WRITE_FAILED" (AE.object ["record_count" AE..= V.length records, "error" AE..= show @Text e])
-    Right () -> pass
+  -- Raw storage is authoritative. Catalog work is buffered and only a full
+  -- threshold batch is flushed on the ingestion path.
+  when rawPersisted $ liftIO (enqueueMetricCatalog catalogBuffer records) >>= \case
+    Nothing -> pass
+    Just batch ->
+      tryAny (upsertMetricMetadata batch) >>= \case
+        Left e -> Log.logAttention "OTEL_METRICS_META_WRITE_FAILED" (AE.object ["record_count" AE..= V.length batch, "error" AE..= show @Text e])
+        Right () -> pass
   pure result
 
 

@@ -1103,6 +1103,8 @@ retryOnDeadlock label = go 2
 runHourlyJob :: UTCTime -> Int -> ATBackgroundCtx ()
 runHourlyJob scheduledTime hour = do
   ctx <- ask @Config.AuthContext
+  tryStep "metric-catalog-flush" $ Telemetry.flushMetricCatalog ctx.metricCatalogBuffer
+  tryStep "metric-catalog-reconcile" Telemetry.reconcileMetricCatalog
   let oneHourAgo = addUTCTime (-3600) scheduledTime
   activeProjects <-
     Hasql.interp

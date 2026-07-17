@@ -8,15 +8,16 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Key (fromText)
 import Data.Aeson.KeyMap qualified as KM
 import Data.Effectful.Hasql qualified as Hasql
+import Data.HashMap.Strict qualified as HM
 import Data.List (isInfixOf)
+import Data.ProtoLens (defMessage, encodeMessage)
 import Data.Set qualified as Set
 import Data.Time (UTCTime, addUTCTime)
-import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
+import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
-import Data.ProtoLens (defMessage)
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Only (..))
@@ -28,9 +29,6 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.GRPC.Common (GrpcError (..), GrpcException (..))
 import Network.GRPC.Common.Protobuf (Proto (..))
-import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields qualified as MSF
-import Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields qualified as PMF
-import Proto.Opentelemetry.Proto.Resource.V1.Resource_Fields qualified as PRF
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.Charts.Charts qualified as Charts
 import Pages.LogExplorer.Log qualified as Log
@@ -38,7 +36,13 @@ import Pages.Replay qualified as Replay
 import Pages.Telemetry qualified as TelemetryPage
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
+import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService qualified as MS
+import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields qualified as MSF
+import Proto.Opentelemetry.Proto.Metrics.V1.Metrics qualified as PM
+import Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields qualified as PMF
+import Proto.Opentelemetry.Proto.Resource.V1.Resource_Fields qualified as PRF
 import Relude
+import System.Config (AuthContext (metricCatalogBuffer))
 import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, sequential, shouldBe, shouldContain, shouldSatisfy, shouldThrow)
 
 
@@ -48,6 +52,10 @@ pid = UUIDId UUID.nil
 
 testTimeRange :: (Text, Text)
 testTimeRange = (toText $ iso8601Show $ addUTCTime (-3600) frozenTime, toText $ iso8601Show $ addUTCTime 3600 frozenTime)
+
+
+nanosOf :: UTCTime -> Word64
+nanosOf = floor . (* 1000000000) . utcTimeToPOSIXSeconds
 
 
 -- | Helper to query logs via the dedicated data endpoint (returns LogResult).
@@ -123,8 +131,11 @@ spec = sequential $ aroundAll withTestResources do
       keys <- traverse (createTestAPIKey tr pid) ["metric-key-1", "metric-key-2", "metric-key-3"]
       forM_ (zip3 keys ["cpu.usage", "memory.usage", "disk.usage"] [75.5, 82.3, 45.1]) $ \(key, metricName, value) -> ingestMetric tr key metricName value frozenTime
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
+      -- Catalog writes are buffered and only flushed at threshold or by the hourly
+      -- job (not by runAllBackgroundJobs), so flush explicitly before asserting it.
+      runTestBg frozenTime tr $ Telemetry.flushMetricCatalog tr.trATCtx.metricCatalogBuffer
       let (timeFrom, timeTo) = testTimeRange
-      result <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just "summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") []
+      result <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just "metrics | summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") []
       V.length result.dataset `shouldSatisfy` (> 0)
       rawRows :: V.Vector Int <- runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT count(*)::bigint FROM otel_metrics WHERE project_id = #{pid.toText} |]
       rawRows `shouldBe` V.singleton 3
@@ -144,9 +155,38 @@ spec = sequential $ aroundAll withTestResources do
       events `shouldSatisfy` (>= 0)
       metrics `shouldSatisfy` (>= 3)
 
+    it "poisons queued metric payloads whose uint64 count exceeds BIGINT" $ \tr -> do
+      key <- createTestAPIKey tr pid "metric-overflow-queue-key"
+      let point :: PM.HistogramDataPoint
+          point = defMessage & PMF.timeUnixNano .~ floor (utcTimeToPOSIXSeconds frozenTime * 1000000000) & PMF.count .~ (maxBound :: Word64)
+          histogram :: PM.Histogram
+          histogram = defMessage & PMF.dataPoints .~ [point]
+          metric :: PM.Metric
+          metric = defMessage & PMF.name .~ "overflow.histogram" & PMF.histogram .~ histogram
+          scopeMetrics :: PM.ScopeMetrics
+          scopeMetrics = defMessage & PMF.metrics .~ [metric]
+          request :: MS.ExportMetricsServiceRequest
+          request = defMessage & MSF.resourceMetrics .~ [defMessage & PMF.resource .~ mkResource key [] & PMF.scopeMetrics .~ [scopeMetrics]]
+      result <- runTestBg frozenTime tr $ OtlpServer.processList [("overflow-ack", encodeMessage request)] (HM.singleton "ce-type" "org.opentelemetry.otlp.metrics.v1")
+      case result of
+        Right (acks, poison) -> do
+          acks `shouldBe` []
+          map (\(ack, _, reason) -> (ack, reason)) poison `shouldBe` [("overflow-ack", "OTLP metric count exceeds BIGINT maximum")]
+        Left failure -> expectationFailure $ "expected poison result, got write failure: " <> toString (Telemetry.writeFailureSummary failure)
+
+    it "deduplicates replayed metric exports by deterministic raw-point id" $ \tr -> do
+      key <- createTestAPIKey tr pid "metric-replay-key"
+      let metricName = "replayed.metric"
+      before :: V.Vector Int <- runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT count(*)::bigint FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = #{metricName} |]
+      ingestMetric tr key metricName 42 frozenTime
+      ingestMetric tr key metricName 42 frozenTime
+      after :: V.Vector Int <- runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT count(*)::bigint FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = #{metricName} |]
+      after `shouldBe` (\n -> n + 1) <$> before
+
     it "streams metric label paths into metadata" $ \tr -> do
       key <- createTestAPIKey tr pid "metric-label-catalog-key"
       ingestMetric tr key "catalog.labels" 1 frozenTime
+      runTestBg frozenTime tr $ Telemetry.flushMetricCatalog tr.trATCtx.metricCatalogBuffer
       labels :: V.Vector (Only Text) <- withPool tr.trPool $ DBT.query [sql| SELECT array_to_string(metric_labels, ',') FROM otel_metrics_meta WHERE project_id = ? AND metric_name = 'catalog.labels' |] (Only $ unUUIDId pid)
       labels `shouldSatisfy` (any (\(Only value) -> "resource.service.name" `isInfixOf` toString value) . toList)
 
@@ -172,6 +212,141 @@ spec = sequential $ aroundAll withTestResources do
       void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto request)
       rows <- runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT hist_bucket_counts::text FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = 'request.duration' |] :: IO (V.Vector Text)
       rows `shouldBe` V.singleton "{0,2,1}"
+
+    it "Test 4.1d: persists full histogram distribution, temporality, and exemplars" $ \tr -> do
+      key <- createTestAPIKey tr pid "histogram-full-key"
+      let exemplar :: PM.Exemplar
+          exemplar = defMessage & PMF.timeUnixNano .~ nanosOf frozenTime & PMF.asDouble .~ (5.5 :: Double)
+          point :: PM.HistogramDataPoint
+          point =
+            defMessage
+              & PMF.timeUnixNano
+              .~ nanosOf frozenTime
+                & PMF.count
+              .~ 7
+                & PMF.sum
+              .~ 12.5
+                & PMF.min
+              .~ 0.5
+                & PMF.max
+              .~ 9.0
+                & PMF.bucketCounts
+              .~ [1, 4, 2]
+                & PMF.explicitBounds
+              .~ [10, 20]
+                & PMF.exemplars
+              .~ [exemplar]
+          histogram :: PM.Histogram
+          histogram = defMessage & PMF.aggregationTemporality .~ PM.AGGREGATION_TEMPORALITY_CUMULATIVE & PMF.dataPoints .~ [point]
+          metric :: PM.Metric
+          metric = defMessage & PMF.name .~ "request.duration.full" & PMF.histogram .~ histogram
+          scopeMetrics :: PM.ScopeMetrics
+          scopeMetrics = defMessage & PMF.metrics .~ [metric]
+          request :: MS.ExportMetricsServiceRequest
+          request = defMessage & MSF.resourceMetrics .~ [defMessage & PMF.resource .~ mkResource key [] & PMF.scopeMetrics .~ [scopeMetrics]]
+      void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto request)
+      rows <- runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT distribution_count, distribution_sum, distribution_min, distribution_max, hist_explicit_bounds::text, aggregation_temporality, exemplars::text FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = 'request.duration.full' |] :: IO (V.Vector (Int64, Double, Double, Double, Text, Text, Text))
+      case V.toList rows of
+        [(c, s, mn, mx, bounds, temporality, exemplars)] -> do
+          (c, s, mn, mx) `shouldBe` (7, 12.5, 0.5, 9.0)
+          bounds `shouldBe` "{10,20}"
+          temporality `shouldBe` "CUMULATIVE"
+          toString exemplars `shouldContain` "5.5"
+        other -> expectationFailure $ "expected one histogram row, got: " <> show other
+
+    it "Test 4.1e: persists exponential histogram native columns" $ \tr -> do
+      key <- createTestAPIKey tr pid "exp-histogram-key"
+      let posBuckets :: PM.ExponentialHistogramDataPoint'Buckets
+          posBuckets = defMessage & PMF.offset .~ 2 & PMF.bucketCounts .~ [1, 3, 5]
+          negBuckets :: PM.ExponentialHistogramDataPoint'Buckets
+          negBuckets = defMessage & PMF.offset .~ (-1) & PMF.bucketCounts .~ [2, 4]
+          point :: PM.ExponentialHistogramDataPoint
+          point =
+            defMessage
+              & PMF.timeUnixNano
+              .~ nanosOf frozenTime
+                & PMF.count
+              .~ 20
+                & PMF.sum
+              .~ 55.0
+                & PMF.min
+              .~ 0.1
+                & PMF.max
+              .~ 12.0
+                & PMF.zeroCount
+              .~ 3
+                & PMF.scale
+              .~ 4
+                & PMF.zeroThreshold
+              .~ 0.001
+                & PMF.positive
+              .~ posBuckets
+                & PMF.negative
+              .~ negBuckets
+          ehist :: PM.ExponentialHistogram
+          ehist = defMessage & PMF.aggregationTemporality .~ PM.AGGREGATION_TEMPORALITY_DELTA & PMF.dataPoints .~ [point]
+          metric :: PM.Metric
+          metric = defMessage & PMF.name .~ "request.size.exp" & PMF.exponentialHistogram .~ ehist
+          scopeMetrics :: PM.ScopeMetrics
+          scopeMetrics = defMessage & PMF.metrics .~ [metric]
+          request :: MS.ExportMetricsServiceRequest
+          request = defMessage & MSF.resourceMetrics .~ [defMessage & PMF.resource .~ mkResource key [] & PMF.scopeMetrics .~ [scopeMetrics]]
+      void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto request)
+      -- exp_hist_scale/pos_offset/neg_offset are INTEGER (int4); cast to bigint so
+      -- hasql's Int64 decoder matches the column OID.
+      rows <- runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT distribution_count, distribution_sum, exp_hist_scale::bigint, exp_hist_zero_count, exp_hist_zero_threshold, exp_hist_pos_offset::bigint, exp_hist_pos_buckets::text, exp_hist_neg_offset::bigint, exp_hist_neg_buckets::text, aggregation_temporality FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = 'request.size.exp' |] :: IO (V.Vector (Int64, Double, Int64, Int64, Double, Int64, Text, Int64, Text, Text))
+      V.toList rows `shouldBe` [(20, 55.0, 4, 3, 0.001, 2, "{1,3,5}", -1, "{2,4}", "DELTA")]
+
+    it "Test 4.1f: persists summary count, sum, and quantiles" $ \tr -> do
+      key <- createTestAPIKey tr pid "summary-key"
+      let q1 :: PM.SummaryDataPoint'ValueAtQuantile
+          q1 = defMessage & PMF.quantile .~ 0.5 & PMF.value .~ 100
+          q2 :: PM.SummaryDataPoint'ValueAtQuantile
+          q2 = defMessage & PMF.quantile .~ 0.99 & PMF.value .~ 250
+          point :: PM.SummaryDataPoint
+          point = defMessage & PMF.timeUnixNano .~ nanosOf frozenTime & PMF.count .~ 12 & PMF.sum .~ 640.0 & PMF.quantileValues .~ [q1, q2]
+          summary :: PM.Summary
+          summary = defMessage & PMF.dataPoints .~ [point]
+          metric :: PM.Metric
+          metric = defMessage & PMF.name .~ "request.latency.summary" & PMF.summary .~ summary
+          scopeMetrics :: PM.ScopeMetrics
+          scopeMetrics = defMessage & PMF.metrics .~ [metric]
+          request :: MS.ExportMetricsServiceRequest
+          request = defMessage & MSF.resourceMetrics .~ [defMessage & PMF.resource .~ mkResource key [] & PMF.scopeMetrics .~ [scopeMetrics]]
+      void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto request)
+      rows <- runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT distribution_count, distribution_sum, summary_quantiles::text, summary_values::text FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = 'request.latency.summary' |] :: IO (V.Vector (Int64, Double, Text, Text))
+      V.toList rows `shouldBe` [(12, 640.0, "{0.5,0.99}", "{100,250}")]
+
+    -- Exercises every WriteTarget selection through the real processList path.
+    -- The pure PG/TF routing of `writeTargetFor` is pinned by its doctest; here
+    -- we verify the observable ingestion invariant each target must uphold: the
+    -- point is durably written exactly once and a replay is idempotent. (This
+    -- harness collapses the PG and TF legs onto one physical DB — no separate
+    -- TIMEFUSION_PG_TEST_URL — so "written to the other store only" is not
+    -- observable and deliberately not asserted.)
+    it "Test 4.3: every write target durably persists once and replays idempotently" $ \tr -> do
+      key <- createTestAPIKey tr pid "metric-write-target-key"
+      let metricsCeType = HM.singleton "ce-type" "org.opentelemetry.otlp.metrics.v1"
+          payload name = ("wt-ack", encodeMessage (createGaugeMetricAtTime key name 7 frozenTime))
+          rowCount name = runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT count(*)::bigint FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = #{name} |] :: IO (V.Vector Int)
+          send name attrs = void $ runTestBg frozenTime tr $ OtlpServer.processList [payload name] attrs
+      let cases = [("wt.pg.only", HM.insert "monoscope-write-failure" "pg-failed" metricsCeType), ("wt.tf.only", HM.insert "monoscope-write-failure" "tf-failed" metricsCeType), ("wt.both", metricsCeType)] :: [(Text, HM.HashMap Text Text)]
+      forM_ cases $ \(name, attrs) -> do
+        send name attrs
+        rowCount name >>= (`shouldBe` V.singleton 1)
+        send name attrs -- replay the identical batch
+        rowCount name >>= (`shouldBe` V.singleton 1)
+
+    it "Test 4.4: TF metric read path returns series values matching the ingested points" $ \tr -> do
+      key <- createTestAPIKey tr pid "tf-read-match-key"
+      ingestMetric tr key "tf.read.match" 10 frozenTime
+      ingestMetric tr key "tf.read.match" 32 (addUTCTime 1 frozenTime)
+      let (timeFrom, timeTo) = testTimeRange
+      -- data_type omitted so the scalar summarize auto-decodes to a float (the
+      -- CLI --assert path); the read goes through queryMetrics' otel_metrics SQL.
+      scalar <- runQueryEffect tr $ Charts.queryMetrics Nothing Nothing (Just pid) (Just "metrics | where metric_name == \"tf.read.match\" | summarize sum(value)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") []
+      scalar.error `shouldBe` Nothing
+      scalar.dataFloat `shouldBe` Just 42
 
     it "Test 4.2: should reject metrics with invalid API key" $ \tr -> do
       OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ createGaugeMetricAtTime "definitely-not-a-valid-key" "rejected.metric" 99.9 frozenTime)
@@ -208,7 +383,7 @@ spec = sequential $ aroundAll withTestResources do
       V.length dataset `shouldSatisfy` (>= 6) -- 3 logs + 3 traces
       -- Verify metrics
       let (timeFrom, timeTo) = testTimeRange
-      metricResult <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just "summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") []
+      metricResult <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just "metrics | summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") []
       V.length metricResult.dataset `shouldSatisfy` (> 0)
 
     it "Test 8.1: persists a large bulk OTLP request in one unnest insert" $ \tr -> do
@@ -249,7 +424,7 @@ spec = sequential $ aroundAll withTestResources do
         ingestMetricWithHeader tr key "header.metric" 123.45 frozenTime
         void $ runAllBackgroundJobs frozenTime tr.trATCtx
         let (timeFrom, timeTo) = testTimeRange
-        result <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just "summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") []
+        result <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just "metrics | summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") []
         V.length result.dataset `shouldSatisfy` (> 0)
 
       it "Test 9.4: should prefer resource attribute auth over header when both present" $ \tr -> do

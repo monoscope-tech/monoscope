@@ -351,6 +351,7 @@ processList msgs !attrs =
             fallbackTime
             (\req -> getLogApiKey (V.fromList $ req ^. PLF.resourceLogs))
             (\req -> V.toList $ V.catMaybes $ Projects.projectIdFromText <$> getLogAttributeValue "at-project-id" (V.fromList $ req ^. PLF.resourceLogs))
+            (const Nothing)
             ( \ft caches keyToId req ->
                 let !rls = V.fromList $ req ^. PLF.resourceLogs
                     !pkeys = getLogApiKey rls
@@ -366,6 +367,7 @@ processList msgs !attrs =
             fallbackTime
             (\req -> getSpanApiKey (V.fromList $ req ^. PTF.resourceSpans))
             (\req -> V.toList $ V.catMaybes $ Projects.projectIdFromText <$> getSpanAttributeValue "at-project-id" (V.fromList $ req ^. PTF.resourceSpans))
+            (const Nothing)
             ( \ft caches keyToId req ->
                 let !rss = V.fromList $ req ^. PTF.resourceSpans
                     !pkeys = getSpanApiKey rss
@@ -381,6 +383,7 @@ processList msgs !attrs =
             fallbackTime
             (\req -> maybe V.empty V.singleton $ getMetricApiKey (V.fromList $ req ^. PMF.resourceMetrics))
             (\req -> maybeToList $ Projects.projectIdFromText =<< getMetricAttributeValue "at-project-id" (V.fromList $ req ^. PMF.resourceMetrics))
+            (\req -> "OTLP metric count exceeds BIGINT maximum" <$ guard (metricRequestHasOverflow req))
             ( \ft caches keyToId req ->
                 let !rms = V.fromList $ req ^. PMF.resourceMetrics
                     !pidM = getMetricApiKey rms >>= (`HM.lookup` keyToId)
@@ -391,6 +394,7 @@ processList msgs !attrs =
                 let flat = Telemetry.mintMetricIds $ V.concat [recs | (_, _, recs) <- perMsg]
                  in checkpoint "processList:metrics:bulkInsert"
                       $ Telemetry.bulkInsertOtelMetrics
+                        appCtx.metricCatalogBuffer
                         appCtx.hasqlTimefusionUsesPgTypes
                         target
                         flat
@@ -413,10 +417,11 @@ processBatchPipeline
   -> UTCTime
   -> (req -> V.Vector Text) -- extract project keys
   -> (req -> [Projects.ProjectId]) -- extract project IDs
+  -> (req -> Maybe Text) -- invalid payload reason
   -> (UTCTime -> HM.HashMap Projects.ProjectId Projects.ProjectCache -> HM.HashMap Text Projects.ProjectId -> req -> V.Vector res) -- per-message converter
   -> (HM.HashMap Projects.ProjectId Projects.ProjectCache -> [(Text, ByteString, V.Vector res)] -> Eff es (Either Telemetry.WriteFailure [Telemetry.PoisonMsg])) -- DB insert; returns per-row poison resolved to source ackId+raw
   -> Eff es (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))
-processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds convert dbInsert =
+processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds invalidReason convert dbInsert =
   checkpoint (cp "") do
     let !decodedMsgs = [(ackId, msg, decodeMessage msg :: Either String req) | (ackId, msg) <- msgs]
         !allProjectKeys = V.concat [extractKeys req | (_, _, Right req) <- decodedMsgs]
@@ -447,14 +452,15 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds conv
           pure (keyToId, projectCaches)
 
     let !decodePoison = [(ackId, raw, toText err) | (ackId, raw, Left err) <- decodedMsgs]
-        !writeReady = [(ackId, raw, convert fallbackTime projectCachesMap keyToIdMap req) | (ackId, raw, Right req) <- decodedMsgs]
+        !invalidPoison = [(ackId, raw, err) | (ackId, raw, Right req) <- decodedMsgs, Just err <- [invalidReason req]]
+        !writeReady = [(ackId, raw, convert fallbackTime projectCachesMap keyToIdMap req) | (ackId, raw, Right req) <- decodedMsgs, isNothing (invalidReason req)]
         !writeAckIds = [ackId | (ackId, _, _) <- writeReady]
         !allEmpty = all (\(_, _, recs) -> V.null recs) writeReady
 
-    forM_ decodePoison \(_, raw, err) -> recordProtoError label (toString err) raw Log.logAttention
+    forM_ (decodePoison <> invalidPoison) \(_, raw, err) -> recordProtoError label (toString err) raw Log.logAttention
 
     if allEmpty
-      then pure (Right (writeAckIds, decodePoison))
+      then pure (Right (writeAckIds, decodePoison <> invalidPoison))
       else do
         -- dbInsert duration is emitted as a separate trace line so dashboards
         -- alerting on per-batch DB latency keep their metric.
@@ -468,7 +474,7 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds conv
             -- from acks and added to the poison list (Pkg.Queue DLQs them).
             let writePoisonAcks = HS.fromList [a | (a, _, _) <- writePoison]
                 successAcks = filter (\a -> not (HS.member a writePoisonAcks)) writeAckIds
-             in Right (successAcks, decodePoison <> writePoison)
+             in Right (successAcks, decodePoison <> invalidPoison <> writePoison)
   where
     cp suffix = fromString $ toString $ "processList:" <> label <> suffix
 
@@ -1309,6 +1315,32 @@ convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
    in otelSpan{summary = generateSummary otelSpan}
 
 
+-- | True when a protobuf uint64 cannot be represented by the BIGINT metric
+-- schema. Callers turn this into a direct gRPC error or a queue poison record.
+metricRequestHasOverflow :: MS.ExportMetricsServiceRequest -> Bool
+metricRequestHasOverflow req = any metricOverflow
+  [ metric
+  | resource <- req ^. PMF.resourceMetrics
+  , scope <- resource ^. PMF.scopeMetrics
+  , metric <- scope ^. PMF.metrics
+  ]
+  where
+    tooLarge n = n > fromIntegral (maxBound :: Int64)
+    metricOverflow metric = case metric ^. PMF.maybe'data' of
+      Just (PM.Metric'Histogram histogram) -> any histogramOverflow (histogram ^. PMF.dataPoints)
+      Just (PM.Metric'ExponentialHistogram histogram) -> any exponentialHistogramOverflow (histogram ^. PMF.dataPoints)
+      Just (PM.Metric'Summary summary) -> any (tooLarge . (^. PMF.count)) (summary ^. PMF.dataPoints)
+      Just (PM.Metric'Gauge _) -> False
+      Just (PM.Metric'Sum _) -> False
+      Nothing -> False
+    histogramOverflow point = tooLarge (point ^. PMF.count) || any tooLarge (point ^. PMF.bucketCounts)
+    exponentialHistogramOverflow point =
+      tooLarge (point ^. PMF.count)
+        || tooLarge (point ^. PMF.zeroCount)
+        || maybe False (any tooLarge . (^. PMF.bucketCounts)) (point ^. PMF.maybe'positive)
+        || maybe False (any tooLarge . (^. PMF.bucketCounts)) (point ^. PMF.maybe'negative)
+
+
 -- | Convert ResourceMetrics to MetricRecords
 convertResourceMetricsToMetricRecords :: UTCTime -> HM.HashMap Projects.ProjectId Projects.ProjectCache -> Projects.ProjectId -> V.Vector PM.ResourceMetrics -> [Telemetry.MetricRecord]
 convertResourceMetricsToMetricRecords !fallbackTime !projectCaches !pid !resourceMetrics =
@@ -1613,6 +1645,12 @@ logsServiceExport appLogger appCtx tp (Proto req) = do
 processMetricsRequest :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es) => Maybe Text -> MS.ExportMetricsServiceRequest -> Eff es ()
 processMetricsRequest metadataApiKey req = do
   Log.logTrace "Received metrics export request" AE.Null
+  when (metricRequestHasOverflow req) $ liftIO $ throwIO GrpcException
+    { grpcError = GrpcInternal
+    , grpcErrorMessage = Just "OTLP metric count exceeds BIGINT maximum"
+    , grpcErrorMetadata = []
+    , grpcErrorDetails = Nothing
+    }
 
   currentTime <- Time.currentTime
   appCtx <- ask @AuthContext
@@ -1649,7 +1687,7 @@ processMetricsRequest metadataApiKey req = do
       unless (null metricRecords) do
         let records = Telemetry.mintMetricIds $ V.fromList metricRecords
             target = Telemetry.writeTargetFor appCtx.env.enablePostgresTelemetryWrites appCtx.env.enableTimefusionWrites Nothing
-        Telemetry.bulkInsertOtelMetrics appCtx.hasqlTimefusionUsesPgTypes target records >>= throwOnWriteFailure
+        Telemetry.bulkInsertOtelMetrics appCtx.metricCatalogBuffer appCtx.hasqlTimefusionUsesPgTypes target records >>= throwOnWriteFailure
         Log.logTrace
           "Metrics: Successfully inserted metrics into database"
           (AE.object ["inserted_count" AE..= V.length records])

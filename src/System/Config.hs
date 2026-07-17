@@ -319,6 +319,7 @@ data AuthContext = AuthContext
   , extractionWorker :: ExtractionWorker.WorkerState Telemetry.OtelLogsAndSpans
   , traceSessionCache :: TraceSessionCache.TraceSessionCache
   , tfCircuit :: ExtractionWorker.CircuitBreaker
+  , metricCatalogBuffer :: Telemetry.MetricCatalogBuffer
   , config :: EnvConfig
   , -- App-lifetime ki scope for fire-and-forget work that must outlive the request
     -- (Slack/Twilio handlers ACK fast, then process in the background). Nothing in
@@ -385,6 +386,7 @@ configToEnv config = do
   extractionWorker <- liftIO $ ExtractionWorker.initWorkerState config.extractionWorkerShards config.extractionQueueCapacity
   traceSessionCache <- liftIO TraceSessionCache.newTraceSessionCache
   tfCircuit <- liftIO ExtractionWorker.newCircuitBreaker
+  metricCatalogBuffer <- liftIO Telemetry.newMetricCatalogBuffer
   -- Seed the parser whitelist + /api/v1/schema handler from a live
   -- introspection of @otel_logs_and_spans@. Non-fatal: a missing table
   -- during partial migration falls back to 'flattenedOtelAttributesBuiltin'
@@ -406,6 +408,7 @@ configToEnv config = do
       , extractionWorker
       , traceSessionCache
       , tfCircuit
+      , metricCatalogBuffer
       , config
       , backgroundScope = Nothing
       }

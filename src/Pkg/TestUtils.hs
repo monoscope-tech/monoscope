@@ -763,6 +763,7 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
   atomically $ writeTVar extractionWorker.acceptingBatches True
   traceSessionCache <- TSC.newTraceSessionCache
   tfCircuit <- ExtractionWorker.newCircuitBreaker
+  metricCatalogBuffer <- Telemetry.newMetricCatalogBuffer
 
   let atAuthCtx =
         AuthContext
@@ -782,6 +783,7 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
           extractionWorker
           traceSessionCache
           tfCircuit
+          metricCatalogBuffer
           ( envConfig
               { -- Override to ensure test database is used (never production DB from .env)
                 databaseUrl = "test-db-connection-from-pool"
