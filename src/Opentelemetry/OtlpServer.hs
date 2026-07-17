@@ -1384,10 +1384,12 @@ convertMetricToMetricRecords fallbackTime pid resourceM resourceSchemaUrl droppe
     exemplarToJSON exemplar =
       AE.object
         [ "timestamp" AE..= pointTime (exemplar ^. PMF.timeUnixNano)
-        , "value" AE..= (case exemplar ^. PMF.maybe'value of
-            Just (PM.Exemplar'AsDouble value) -> AE.toJSON value
-            Just (PM.Exemplar'AsInt value) -> AE.toJSON value
-            Nothing -> AE.Null)
+        , "value"
+            AE..= ( case exemplar ^. PMF.maybe'value of
+                      Just (PM.Exemplar'AsDouble value) -> AE.toJSON value
+                      Just (PM.Exemplar'AsInt value) -> AE.toJSON value
+                      Nothing -> AE.Null
+                  )
         , "filtered_attributes" AE..= keyValueToJSON (V.toList $ exemplar ^. PMF.vec'filteredAttributes)
         , "trace_id" AE..= (decodeUtf8 (B16.encode $ exemplar ^. PMF.traceId) :: Text)
         , "span_id" AE..= (decodeUtf8 (B16.encode $ exemplar ^. PMF.spanId) :: Text)
