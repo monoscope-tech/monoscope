@@ -1318,12 +1318,14 @@ convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
 -- | True when a protobuf uint64 cannot be represented by the BIGINT metric
 -- schema. Callers turn this into a direct gRPC error or a queue poison record.
 metricRequestHasOverflow :: MS.ExportMetricsServiceRequest -> Bool
-metricRequestHasOverflow req = any metricOverflow
-  [ metric
-  | resource <- req ^. PMF.resourceMetrics
-  , scope <- resource ^. PMF.scopeMetrics
-  , metric <- scope ^. PMF.metrics
-  ]
+metricRequestHasOverflow req =
+  any
+    metricOverflow
+    [ metric
+    | resource <- req ^. PMF.resourceMetrics
+    , scope <- resource ^. PMF.scopeMetrics
+    , metric <- scope ^. PMF.metrics
+    ]
   where
     tooLarge n = n > fromIntegral (maxBound :: Int64)
     metricOverflow metric = case metric ^. PMF.maybe'data' of
@@ -1645,12 +1647,15 @@ logsServiceExport appLogger appCtx tp (Proto req) = do
 processMetricsRequest :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es) => Maybe Text -> MS.ExportMetricsServiceRequest -> Eff es ()
 processMetricsRequest metadataApiKey req = do
   Log.logTrace "Received metrics export request" AE.Null
-  when (metricRequestHasOverflow req) $ liftIO $ throwIO GrpcException
-    { grpcError = GrpcInternal
-    , grpcErrorMessage = Just "OTLP metric count exceeds BIGINT maximum"
-    , grpcErrorMetadata = []
-    , grpcErrorDetails = Nothing
-    }
+  when (metricRequestHasOverflow req)
+    $ liftIO
+    $ throwIO
+      GrpcException
+        { grpcError = GrpcInternal
+        , grpcErrorMessage = Just "OTLP metric count exceeds BIGINT maximum"
+        , grpcErrorMetadata = []
+        , grpcErrorDetails = Nothing
+        }
 
   currentTime <- Time.currentTime
   appCtx <- ask @AuthContext
