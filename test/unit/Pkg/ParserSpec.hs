@@ -8,8 +8,8 @@ import Pkg.Parser (
   defPid,
   defSqlQueryCfg,
   fixedUTCTime,
-  parseQueryToComponents,
   parseQueryToAST,
+  parseQueryToComponents,
  )
 import Pkg.Parser.Stats (Sources (..))
 import Relude
@@ -118,6 +118,10 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', c
       let result = parseQueryToAST "| summarize percentile(duration, 95) by bin(timestamp, 1h)"
       isRight result `shouldBe` True
 
+    it "lowers p95 to the portable bounded-percentile aggregate" do
+      let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize p95(duration) by bin(timestamp, 1h)"
+      query `shouldSatisfy` T.isInfixOf "approx_percentile(0.95, percentile_agg(CAST(duration AS DOUBLE)))"
+
     it "parses percentiles(duration, 50, 75, 90, 95) via full query" do
       let result = parseQueryToAST "| summarize percentiles(duration, 50, 75, 90, 95) by bin(timestamp, 1h)"
       isRight result `shouldBe` True
@@ -147,7 +151,7 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', c
       let sql = fromMaybe "" c.finalSummarizeQuery
       let expected =
             [text|
-SELECT timeB, quantile, value FROM (SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer AS timeB, 'p50' AS quantile, COALESCE((approx_percentile(0.5, percentile_agg((duration)::float)))::float, 0) AS value FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY timeB HAVING COUNT(*) > 0 UNION ALL SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer AS timeB, 'p90' AS quantile, COALESCE((approx_percentile(0.9, percentile_agg((duration)::float)))::float, 0) AS value FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY timeB HAVING COUNT(*) > 0) sub WHERE value IS NOT NULL ORDER BY timeB DESC, quantile
+SELECT timeB, quantile, value FROM (SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer AS timeB, 'p50' AS quantile, COALESCE(approx_percentile(0.5, percentile_agg(CAST(duration AS DOUBLE))), 0)::float AS value FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY timeB HAVING COUNT(*) > 0 UNION ALL SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer AS timeB, 'p90' AS quantile, COALESCE(approx_percentile(0.9, percentile_agg(CAST(duration AS DOUBLE))), 0)::float AS value FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY timeB HAVING COUNT(*) > 0) sub WHERE value IS NOT NULL ORDER BY timeB DESC, quantile
             |]
       normT sql `shouldBe` normT expected
 
@@ -155,7 +159,7 @@ SELECT timeB, quantile, value FROM (SELECT extract(epoch from time_bucket('1 hou
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "resource.service.name == \"cart\" | where duration != null | summarize percentiles(duration, 50, 90) by bin(timestamp, 1h)"
       let expected =
             [text|
-SELECT jsonb_build_array(extract(epoch from time_bucket('1 hours', timestamp))::integer, approx_percentile(0.5, percentile_agg((duration)::float))::float, count(*) OVER()) FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((resource___service___name = 'cart' AND duration IS NOT NULL)) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
+SELECT jsonb_build_array(extract(epoch from time_bucket('1 hours', timestamp))::integer, approx_percentile(0.5, percentile_agg(CAST(duration AS DOUBLE)))::float, count(*) OVER()) FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((resource___service___name = 'cart' AND duration IS NOT NULL)) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
             |]
       normT query `shouldBe` normT expected
 
@@ -670,4 +674,3 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "attributes.http.request.method==\"GET\""
       query `shouldSatisfy` T.isInfixOf "attributes___http___request___method = 'GET'"
       query `shouldSatisfy` not . T.isInfixOf "COALESCE(attributes___http___request___method"
-

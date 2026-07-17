@@ -49,6 +49,7 @@ import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Data.Vector.Unboxed qualified as VU
+import Data.Word (Word64)
 import Effectful
 import Effectful.Concurrent (Concurrent)
 import Effectful.Exception (try)
@@ -1355,8 +1356,8 @@ convertMetricToMetricRecords fallbackTime pid resourceM resourceSchemaUrl droppe
            in mapMaybe (convertHistogramPoint temporality) $ hist ^. PMF.dataPoints
         PM.Metric'ExponentialHistogram ehist ->
           let temporality = safeToEnum @Telemetry.AggregationTemporality $ fromEnum (ehist ^. PMF.aggregationTemporality)
-           in map (convertExpHistogramPoint temporality) $ ehist ^. PMF.dataPoints
-        PM.Metric'Summary summary -> map convertSummaryPoint $ summary ^. PMF.dataPoints
+           in mapMaybe (convertExpHistogramPoint temporality) $ ehist ^. PMF.dataPoints
+        PM.Metric'Summary summary -> mapMaybe convertSummaryPoint $ summary ^. PMF.dataPoints
     Nothing -> []
   where
     !res = removeProjectId $ resourceToJSON resourceM
@@ -1377,10 +1378,24 @@ convertMetricToMetricRecords fallbackTime pid resourceM resourceSchemaUrl droppe
 
     pointTime = validTsOr fallbackTime
     pointAttrs point = keyValueToJSON (V.toList $ point ^. PMF.vec'attributes)
+    exemplarsToJSON :: V.Vector PM.Exemplar -> AE.Value
+    exemplarsToJSON = AE.toJSON . fmap exemplarToJSON . V.toList
+    exemplarToJSON :: PM.Exemplar -> AE.Value
+    exemplarToJSON exemplar =
+      AE.object
+        [ "timestamp" AE..= pointTime (exemplar ^. PMF.timeUnixNano)
+        , "value" AE..= (case exemplar ^. PMF.maybe'value of
+            Just (PM.Exemplar'AsDouble value) -> AE.toJSON value
+            Just (PM.Exemplar'AsInt value) -> AE.toJSON value
+            Nothing -> AE.Null)
+        , "filtered_attributes" AE..= keyValueToJSON (V.toList $ exemplar ^. PMF.vec'filteredAttributes)
+        , "trace_id" AE..= (decodeUtf8 (B16.encode $ exemplar ^. PMF.traceId) :: Text)
+        , "span_id" AE..= (decodeUtf8 (B16.encode $ exemplar ^. PMF.spanId) :: Text)
+        ]
 
     validStartTime n = if n == 0 then Nothing else Just $ pointTime n
 
-    mkRecord validTime startTime attrs mType mValue fls temporality_ monotonic_ payloadBytes =
+    mkRecord validTime startTime attrs exemplars_ mType mValue fls temporality_ monotonic_ payloadBytes =
       Telemetry.MetricRecord
         { projectId = unUUIDId pid
         , id = Nothing
@@ -1396,7 +1411,7 @@ convertMetricToMetricRecords fallbackTime pid resourceM resourceSchemaUrl droppe
         , scopeSchemaUrl
         , droppedAttributesCount
         , metricValue = mValue
-        , exemplars = AE.object []
+        , exemplars = exemplars_
         , metricType = mType
         , flags = fls
         , attributes = attrs
@@ -1414,50 +1429,35 @@ convertMetricToMetricRecords fallbackTime pid resourceM resourceSchemaUrl droppe
                 Just (PM.NumberDataPoint'AsInt i) -> Telemetry.GaugeSum Nothing (Just i)
                 Nothing -> Telemetry.GaugeSum Nothing (Just 0)
               !pSize = fromIntegral $ BS.length (encodeMessage point)
-           in mkRecord (pointTime $ point ^. PMF.timeUnixNano) (validStartTime $ point ^. PMF.startTimeUnixNano) (pointAttrs point) mType (wrap value) (fromIntegral $ point ^. PMF.flags) temporality_ monotonic_ pSize
+           in mkRecord (pointTime $ point ^. PMF.timeUnixNano) (validStartTime $ point ^. PMF.startTimeUnixNano) (pointAttrs point) (exemplarsToJSON $ point ^. PMF.vec'exemplars) mType (wrap value) (fromIntegral $ point ^. PMF.flags) temporality_ monotonic_ pSize
 
     convertHistogramPoint temporality point
       | VU.length vBCounts /= VU.length vEBounds + 1 = Nothing -- OTLP spec: len(bucket_counts) == len(explicit_bounds) + 1
-      | otherwise = Just $ mkRecord (pointTime $ point ^. PMF.timeUnixNano) (validStartTime $ point ^. PMF.startTimeUnixNano) (pointAttrs point) Telemetry.MTHistogram (Telemetry.HistogramValue hval) (fromIntegral $ point ^. PMF.flags) temporality Nothing (fromIntegral $ BS.length (encodeMessage point))
+      | otherwise = do
+          count <- boundedCount $ point ^. PMF.count
+          bucketCounts <- traverse boundedCount $ point ^. PMF.bucketCounts
+          pure $ mkRecord (pointTime $ point ^. PMF.timeUnixNano) (validStartTime $ point ^. PMF.startTimeUnixNano) (pointAttrs point) (exemplarsToJSON $ point ^. PMF.vec'exemplars) Telemetry.MTHistogram (Telemetry.HistogramValue Telemetry.Histogram{sum = point ^. PMF.maybe'sum, count, bucketCounts = V.fromList bucketCounts, explicitBounds = V.fromList $ point ^. PMF.explicitBounds, pointMin = point ^. PMF.maybe'min, pointMax = point ^. PMF.maybe'max}) (fromIntegral $ point ^. PMF.flags) temporality Nothing (fromIntegral $ BS.length (encodeMessage point))
       where
         vBCounts = point ^. PMF.vec'bucketCounts
         vEBounds = point ^. PMF.vec'explicitBounds
-        hval =
-          Telemetry.Histogram
-            { sum = point ^. PMF.maybe'sum
-            , count = fromIntegral $ point ^. PMF.count
-            , bucketCounts = V.fromList $ map fromIntegral $ point ^. PMF.bucketCounts
-            , explicitBounds = V.fromList $ point ^. PMF.explicitBounds
-            , pointMin = point ^. PMF.maybe'min
-            , pointMax = point ^. PMF.maybe'max
-            }
 
-    convertExpHistogramPoint temporality point =
-      mkRecord (pointTime $ point ^. PMF.timeUnixNano) (validStartTime $ point ^. PMF.startTimeUnixNano) (pointAttrs point) Telemetry.MTExponentialHistogram (Telemetry.ExponentialHistogramValue ehval) (fromIntegral $ point ^. PMF.flags) temporality Nothing (fromIntegral $ BS.length (encodeMessage point))
+    convertExpHistogramPoint temporality point = do
+      count <- boundedCount $ point ^. PMF.count
+      zeroCount <- boundedCount $ point ^. PMF.zeroCount
+      positive <- traverse toBucket $ point ^. PMF.maybe'positive
+      negative <- traverse toBucket $ point ^. PMF.maybe'negative
+      pure $ mkRecord (pointTime $ point ^. PMF.timeUnixNano) (validStartTime $ point ^. PMF.startTimeUnixNano) (pointAttrs point) (exemplarsToJSON $ point ^. PMF.vec'exemplars) Telemetry.MTExponentialHistogram (Telemetry.ExponentialHistogramValue Telemetry.ExponentialHistogram{sum = point ^. PMF.maybe'sum, count, pointMin = point ^. PMF.maybe'min, pointMax = point ^. PMF.maybe'max, zeroCount, scale = fromIntegral $ point ^. PMF.scale, pointPositive = positive, pointNegative = negative, zeroThreshold = point ^. PMF.zeroThreshold}) (fromIntegral $ point ^. PMF.flags) temporality Nothing (fromIntegral $ BS.length (encodeMessage point))
       where
-        toBucket b = Telemetry.EHBucket{bucketOffset = fromIntegral $ b ^. PMF.offset, bucketCounts = V.fromList $ map fromIntegral $ b ^. PMF.bucketCounts}
-        !ehval =
-          Telemetry.ExponentialHistogram
-            { sum = point ^. PMF.maybe'sum
-            , count = fromIntegral $ point ^. PMF.count
-            , pointMin = point ^. PMF.maybe'min
-            , pointMax = point ^. PMF.maybe'max
-            , zeroCount = fromIntegral $ point ^. PMF.zeroCount
-            , scale = fromIntegral $ point ^. PMF.scale
-            , pointPositive = toBucket <$> point ^. PMF.maybe'positive
-            , pointNegative = toBucket <$> point ^. PMF.maybe'negative
-            , zeroThreshold = point ^. PMF.zeroThreshold
-            }
+        toBucket bucket = Telemetry.EHBucket (fromIntegral $ bucket ^. PMF.offset) . V.fromList <$> traverse boundedCount (bucket ^. PMF.bucketCounts)
 
-    convertSummaryPoint point =
-      mkRecord (pointTime $ point ^. PMF.timeUnixNano) (validStartTime $ point ^. PMF.startTimeUnixNano) (pointAttrs point) Telemetry.MTSummary (Telemetry.SummaryValue sval) (fromIntegral $ point ^. PMF.flags) Nothing Nothing (fromIntegral $ BS.length (encodeMessage point))
-      where
-        !sval =
-          Telemetry.Summary
-            { sum = point ^. PMF.sum
-            , count = fromIntegral $ point ^. PMF.count
-            , quantiles = V.fromList $ map (\q -> Telemetry.Quantile{quantile = q ^. PMF.quantile, value = q ^. PMF.value}) $ point ^. PMF.quantileValues
-            }
+    convertSummaryPoint point = do
+      count <- boundedCount $ point ^. PMF.count
+      pure $ mkRecord (pointTime $ point ^. PMF.timeUnixNano) (validStartTime $ point ^. PMF.startTimeUnixNano) (pointAttrs point) AE.Null Telemetry.MTSummary (Telemetry.SummaryValue Telemetry.Summary{sum = point ^. PMF.sum, count, quantiles = V.fromList $ map (\q -> Telemetry.Quantile{quantile = q ^. PMF.quantile, value = q ^. PMF.value}) $ point ^. PMF.quantileValues}) (fromIntegral $ point ^. PMF.flags) Nothing Nothing (fromIntegral $ BS.length (encodeMessage point))
+
+    boundedCount :: Word64 -> Maybe Int64
+    boundedCount n
+      | n > fromIntegral (maxBound :: Int64) = Nothing
+      | otherwise = Just $ fromIntegral n
 
 
 ---------------------------------------------------------------------------------------

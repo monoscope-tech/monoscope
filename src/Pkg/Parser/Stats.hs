@@ -139,9 +139,9 @@ simpleAggSQL :: Text -> Subject -> Text
 simpleAggSQL fn sub = fn <> "((" <> display sub <> ")::float)"
 
 
--- | SQL pattern for percentiles: approx_percentile(pct, percentile_agg((subject)::float))::float
+-- | Timescale Toolkit-compatible bounded percentile aggregate.
 percentileSQL :: Double -> Subject -> Text
-percentileSQL pct sub = "approx_percentile(" <> show pct <> ", percentile_agg((" <> display sub <> ")::float))::float"
+percentileSQL pct sub = "approx_percentile(" <> show pct <> ", percentile_agg(CAST(" <> display sub <> " AS DOUBLE)))::float"
 
 
 -- | Convert AggFunction to SQL without the AS alias (for use inside other expressions)
@@ -162,8 +162,8 @@ aggToSqlNoAlias (P90 sub _) = percentileSQL 0.90 sub
 aggToSqlNoAlias (P95 sub _) = percentileSQL 0.95 sub
 aggToSqlNoAlias (P99 sub _) = percentileSQL 0.99 sub
 aggToSqlNoAlias (P100 sub _) = percentileSQL 1 sub
-aggToSqlNoAlias (Percentile subExpr pct _) = "approx_percentile(" <> show (pct / 100.0) <> ", percentile_agg((" <> subjectExprToSQL subExpr <> ")::float))::float"
-aggToSqlNoAlias (Percentiles subExpr pcts _) = let firstPct = fromMaybe 50.0 (listToMaybe pcts) in "approx_percentile(" <> show (firstPct / 100.0) <> ", percentile_agg((" <> subjectExprToSQL subExpr <> ")::float))::float"
+aggToSqlNoAlias (Percentile subExpr pct _) = "approx_percentile(" <> show (pct / 100.0) <> ", percentile_agg(CAST(" <> subjectExprToSQL subExpr <> " AS DOUBLE)))::float"
+aggToSqlNoAlias (Percentiles subExpr pcts _) = let firstPct = fromMaybe 50.0 (listToMaybe pcts) in "approx_percentile(" <> show (firstPct / 100.0) <> ", percentile_agg(CAST(" <> subjectExprToSQL subExpr <> " AS DOUBLE)))::float"
 aggToSqlNoAlias (Coalesce exprs _) = "COALESCE(" <> T.intercalate ", " (map display exprs) <> ")"
 aggToSqlNoAlias (Strcat exprs _) = "CONCAT(" <> T.intercalate ", " (map display exprs) <> ")"
 aggToSqlNoAlias (Iff cond thenVal elseVal _) = "CASE WHEN " <> display cond <> " THEN " <> display thenVal <> " ELSE " <> display elseVal <> " END"
