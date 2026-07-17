@@ -22,6 +22,7 @@ import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Hasql.Interpolate qualified as HI
+import Lucid qualified
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
@@ -129,9 +130,10 @@ spec = sequential $ aroundAll withTestResources do
       rawRows `shouldBe` V.singleton 3
       catalogRows :: V.Vector (Only Int) <- withPool tr.trPool $ DBT.query [sql| SELECT count(*)::int FROM otel_metrics_meta WHERE project_id = ? |] (Only $ unUUIDId pid)
       catalogRows `shouldBe` V.singleton (Only 3)
-      -- Regression: the Metrics overview must query the new catalog column,
-      -- rather than the legacy telemetry.metrics_meta.updated_at column.
-      void $ toServantResponse tr $ TelemetryPage.metricsOverViewGetH pid (Just "charts") Nothing Nothing Nothing Nothing Nothing Nothing
+      -- Regression: metric cards must query the native scalar column in
+      -- otel_metrics, not the removed telemetry.metrics JSON payload.
+      (_, overview) <- toServantResponse tr $ TelemetryPage.metricsOverViewGetH pid (Just "charts") Nothing Nothing Nothing Nothing Nothing Nothing
+      toString (Lucid.renderText $ Lucid.toHtml overview) `shouldContain` "summarize avg(value) by bin_auto(timestamp),attributes"
       -- Exercise every raw-data query through the labeled TimeFusion interpreter.
       metric <- runTestBg frozenTime tr $ Telemetry.getMetricData True pid "cpu.usage"
       fmap (.dataPointsCount) metric `shouldBe` Just 1

@@ -1045,8 +1045,8 @@ tabs:
             title: 'Avg CPU Utilization'
             icon: cpu
             sql: |
-              SELECT ROUND(AVG((metric_value->'contents'->>'value')::numeric * 100), 1)::text || '%'
-              FROM telemetry.metrics
+              SELECT ROUND(AVG(value::numeric * 100), 1)::text || '%'
+              FROM otel_metrics
               WHERE project_id='{{project_id}}'
                 AND metric_name IN ('container.cpu.utilization', 'process.cpu.utilization', 'jvm.cpu.recent_utilization')
                 {{time_filter}}
@@ -1056,8 +1056,8 @@ tabs:
             title: 'Avg Memory Usage'
             icon: hard-drive
             sql: |
-              SELECT ROUND(AVG((metric_value->'contents'->>'value')::numeric), 1)::text || '%'
-              FROM telemetry.metrics
+              SELECT ROUND(AVG(value::numeric), 1)::text || '%'
+              FROM otel_metrics
               WHERE project_id='{{project_id}}'
                 AND metric_name = 'container.memory.percent'
                 {{time_filter}}
@@ -1067,10 +1067,10 @@ tabs:
             title: 'Container Count'
             icon: box
             sql: |
-              SELECT COUNT(DISTINCT resource->'container'->>'name')::text
-              FROM telemetry.metrics
+              SELECT COUNT(DISTINCT resource___container___name)::text
+              FROM otel_metrics
               WHERE project_id='{{project_id}}'
-                AND resource->'container'->>'name' IS NOT NULL
+                AND resource___container___name IS NOT NULL
                 {{time_filter}}
             layout: { w: 3, h: 2 }
 
@@ -1078,10 +1078,10 @@ tabs:
             title: 'Services with Metrics'
             icon: layers
             sql: |
-              SELECT COUNT(DISTINCT resource->'service'->>'name')::text
-              FROM telemetry.metrics
+              SELECT COUNT(DISTINCT resource___service___name)::text
+              FROM otel_metrics
               WHERE project_id='{{project_id}}'
-                AND resource->'service'->>'name' IS NOT NULL
+                AND resource___service___name IS NOT NULL
                 {{time_filter}}
             layout: { w: 3, h: 2 }
 
@@ -1092,9 +1092,9 @@ tabs:
         sql: |
           SELECT
             time_bucket('1 minute', timestamp) as timestamp,
-            COALESCE(resource->'service'->>'name', resource->'container'->>'name', 'unknown') as series,
-            ROUND(AVG((metric_value->'contents'->>'value')::numeric * 100)::numeric, 2) as value
-          FROM telemetry.metrics
+            COALESCE(resource___service___name, resource___container___name, 'unknown') as series,
+            ROUND(AVG(value::numeric * 100), 2) as value
+          FROM otel_metrics
           WHERE project_id='{{project_id}}'
             AND metric_name IN ('container.cpu.utilization', 'jvm.cpu.recent_utilization', 'process.cpu.utilization')
             {{time_filter}}
@@ -1110,9 +1110,9 @@ tabs:
         sql: |
           SELECT
             time_bucket('1 minute', timestamp) as timestamp,
-            COALESCE(resource->'service'->>'name', resource->'container'->>'name', 'unknown') as series,
-            ROUND(AVG((metric_value->'contents'->>'value')::numeric)::numeric, 2) as value
-          FROM telemetry.metrics
+            COALESCE(resource___service___name, resource___container___name, 'unknown') as series,
+            ROUND(AVG(value::numeric), 2) as value
+          FROM otel_metrics
           WHERE project_id='{{project_id}}'
             AND metric_name = 'container.memory.percent'
             {{time_filter}}
@@ -1152,18 +1152,18 @@ tabs:
         sql: |
           WITH cpu_metrics AS (
             SELECT
-              COALESCE(resource->'service'->>'name', resource->'container'->>'name', 'unknown') as service,
-              (metric_value->'contents'->>'value')::numeric * 100 as value
-            FROM telemetry.metrics
+              COALESCE(resource___service___name, resource___container___name, 'unknown') as service,
+              value::numeric * 100 as value
+            FROM otel_metrics
             WHERE project_id='{{project_id}}'
               AND metric_name IN ('container.cpu.utilization', 'jvm.cpu.recent_utilization', 'process.cpu.utilization')
               {{time_filter}}
           ),
           mem_metrics AS (
             SELECT
-              COALESCE(resource->'service'->>'name', resource->'container'->>'name', 'unknown') as service,
-              (metric_value->'contents'->>'value')::numeric as value
-            FROM telemetry.metrics
+              COALESCE(resource___service___name, resource___container___name, 'unknown') as service,
+              value::numeric as value
+            FROM otel_metrics
             WHERE project_id='{{project_id}}'
               AND metric_name = 'container.memory.percent'
               {{time_filter}}
@@ -1188,9 +1188,9 @@ tabs:
         sql: |
           SELECT
             time_bucket('1 minute', timestamp) as timestamp,
-            COALESCE(resource->'service'->>'name', 'kafka') as series,
-            AVG((metric_value->'contents'->>'value')::numeric) as value
-          FROM telemetry.metrics
+            COALESCE(resource___service___name, 'kafka') as series,
+            AVG(value) as value
+          FROM otel_metrics
           WHERE project_id='{{project_id}}'
             AND metric_name = 'kafka.consumer.assigned_partitions'
             {{time_filter}}
@@ -1211,8 +1211,8 @@ tabs:
               WHEN metric_name = 'system.cpu.load_average.5m' THEN '5 min'
               WHEN metric_name = 'system.cpu.load_average.15m' THEN '15 min'
             END as series,
-            AVG((metric_value->'contents'->>'value')::numeric) as value
-          FROM telemetry.metrics
+            AVG(value) as value
+          FROM otel_metrics
           WHERE project_id='{{project_id}}'
             AND metric_name IN ('system.cpu.load_average.1m', 'system.cpu.load_average.5m', 'system.cpu.load_average.15m')
             {{time_filter}}
@@ -1228,8 +1228,8 @@ tabs:
           SELECT
             time_bucket('1 minute', timestamp) as timestamp,
             metric_name as series,
-            AVG((metric_value->'contents'->>'value')::numeric) / 1048576 as value
-          FROM telemetry.metrics
+            AVG(value) / 1048576 as value
+          FROM otel_metrics
           WHERE project_id='{{project_id}}'
             AND metric_name IN ('redis.memory.used', 'redis.memory.rss', 'redis.memory.peak')
             {{time_filter}}
@@ -1256,7 +1256,7 @@ tabs:
             metric_name,
             COUNT(*)::text as data_points,
             COALESCE(MAX(metric_unit), '-') as unit
-          FROM telemetry.metrics
+          FROM otel_metrics
           WHERE project_id='{{project_id}}'
             {{time_filter}}
           GROUP BY metric_name

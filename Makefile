@@ -22,6 +22,7 @@ PORT ?= 8080
 RELOAD_ASSETS := --reload=static/public/assets/web-components/dist/js/index.js \
                  --reload=static/public/assets/web-components/dist/css/index.css \
                  --reload=static/public/assets/css/tailwind.min.css
+RELOAD_ENV := --reload=.env
 
 css-start:
 	./node_modules/.bin/tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --watch 2>&1 | tee css.log
@@ -60,19 +61,19 @@ kill-live-reload:
 	fi
 
 live-reload: kill-live-reload
-	ghcid --command 'cabal repl monoscope --no-semaphore --ghc-options="-j$(NCPUS) -Wno-error=unused-imports -Wno-error=unused-top-binds" --with-compiler=$(GHC)' --test ':run Start.startApp' $(RELOAD_ASSETS) --warnings
+	ghcid --command 'cabal repl monoscope --no-semaphore --ghc-options="-j$(NCPUS) -Wno-error=unused-imports -Wno-error=unused-top-binds" --with-compiler=$(GHC)' --test ':run Start.startApp' $(RELOAD_ASSETS) $(RELOAD_ENV) --warnings
 
 live-reload-cli:
-	ghcid --command 'cabal repl exe:monoscope --no-semaphore --ghc-options="-O0 -Wno-error=unused-imports -Wno-error=unused-top-binds" --with-compiler=$(GHC)' --warnings 2>&1 | tee build-cli.log
+	ghcid --command 'cabal repl exe:monoscope --no-semaphore --ghc-options="-O0 -Wno-error=unused-imports -Wno-error=unused-top-binds" --with-compiler=$(GHC)' $(RELOAD_ENV) --warnings 2>&1 | tee build-cli.log
 
 live-test-reload:
-	ghcid --command 'cabal repl lib:monoscope test/unit/Main.hs --no-semaphore --with-compiler=$(GHC)' --test ':run main' --warnings
+	ghcid --command 'cabal repl lib:monoscope test/unit/Main.hs --no-semaphore --with-compiler=$(GHC)' --test ':run main' $(RELOAD_ENV) --warnings
 
 live-test-reload-unit:
-	ghcid --test 'cabal test monoscope:unit-tests --test-show-details=streaming'
+	ghcid --test 'cabal test monoscope:unit-tests --test-show-details=streaming' $(RELOAD_ENV)
 
 live-test-reload-all:
-	ghcid --test 'cabal test monoscope:tests --test-show-details=streaming'
+	ghcid --test 'cabal test monoscope:tests --test-show-details=streaming' $(RELOAD_ENV)
 
 # Integration tests with lib+test in ONE GHCi target (Jade's "cabal test-dev" trick).
 # `:reload` crosses src/<->test/ boundaries — no relink between iterations.
@@ -91,11 +92,11 @@ TEST_MATCH ?=
 live-test-dev:
 	USE_EXTERNAL_DB=true LOG_LEVEL=attention \
 	ghcid --command 'cabal repl monoscope:test:test-dev --no-semaphore --ghc-options="-j$(NCPUS) -fobject-code -osuf dyn_o -hisuf dyn_hi -O0" --with-compiler=$(GHC)' \
-		--test ':main $(if $(TEST_MATCH),--match $(TEST_MATCH))' --warnings 2>&1 | tee build-test-dev.log
+		--test ':main $(if $(TEST_MATCH),--match $(TEST_MATCH))' $(RELOAD_ENV) --warnings 2>&1 | tee build-test-dev.log
 
 hot-reload:
 	livereload -f reload.trigger static/public/ & \
-	ghcid --command 'cabal repl --no-semaphore' --test ':run Start.startApp' --test ':! (sleep 1 && touch static/public/reload.trigger)'  --warnings
+	ghcid --command 'cabal repl --no-semaphore' --test ':run Start.startApp' --test ':! (sleep 1 && touch static/public/reload.trigger)' $(RELOAD_ENV) --warnings
 
 watch:
 	# https://github.com/MercuryTechnologies/ghciwatch/issues/143
@@ -107,7 +108,7 @@ watch:
 
 
 live-test-reload-cabal:
-	ghcid --test 'cabal test --test-show-details=streaming'
+	ghcid --test 'cabal test --test-show-details=streaming' $(RELOAD_ENV)
 
 # `make test` = the fast default: PROCESS-level sharded integration suite. In-process
 # hspec `parallel` deadlocks on the per-test resource-pool lifecycle (see
@@ -177,10 +178,10 @@ bench-collector-tier1:
 	./test/collector/bench.sh
 
 live-test-unit:
-	ghcid --test 'cabal test monoscope:unit-tests --test-show-details=streaming'
+	ghcid --test 'cabal test monoscope:unit-tests --test-show-details=streaming' $(RELOAD_ENV)
 
 live-reload-doctests:
-	ghcid --command 'cabal repl lib:monoscope --no-semaphore --with-compiler=$(GHC)' --test ':! cabal test monoscope:doctests --ghc-options="-O0" --test-show-details=streaming'
+	ghcid --command 'cabal repl lib:monoscope --no-semaphore --with-compiler=$(GHC)' --test ':! cabal test monoscope:doctests --ghc-options="-O0" --test-show-details=streaming' $(RELOAD_ENV)
 
 fmt:
 	fourmolu --mode inplace $$(find ./src/ -name '*.hs')

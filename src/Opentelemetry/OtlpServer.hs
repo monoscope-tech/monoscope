@@ -49,7 +49,6 @@ import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Data.Vector.Unboxed qualified as VU
-import Data.Word (Word64)
 import Effectful
 import Effectful.Concurrent (Concurrent)
 import Effectful.Exception (try)

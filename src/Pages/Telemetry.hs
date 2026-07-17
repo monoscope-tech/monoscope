@@ -392,7 +392,7 @@ metricWidget pid metricName metricUnit mTitle mId mExpandBtn mDescription =
   def
     { Widget.wType = Widget.WTTimeseriesLine
     , Widget.title = mTitle
-    , Widget.query = Just $ "metrics | where metric_name == \"" <> metricName <> "\" | summarize avg(metric_value.contents.value) by bin_auto(timestamp),attributes"
+    , Widget.query = Just $ "metrics | where metric_name == \"" <> metricName <> "\" | summarize avg(value) by bin_auto(timestamp),attributes"
     , Widget.layout = Just $ Widget.Layout{x = Just 0, y = Just 0, w = Just 2, h = Just 1}
     , Widget.unit = Just metricUnit
     , Widget.hideLegend = Nothing

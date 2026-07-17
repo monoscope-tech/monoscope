@@ -2,6 +2,7 @@ module Pages.DashboardsSpec (spec) where
 
 import Data.Vector qualified as V
 import Models.Projects.Dashboards (DashboardVM (..))
+import Models.Projects.Dashboards qualified as DashboardModel
 import Models.Projects.ProjectMembers (TeamVM (..))
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Dashboards (DashboardFilters (..))
@@ -30,6 +31,12 @@ spec = sequential $ aroundAll withTestResources do
   describe "Dashboards Tests" do
     let mkDashboard t = Dashboards.DashboardForm{Dashboards.title = t, Dashboards.file = "overview.yaml", Dashboards.teams = [], Dashboards.fileDir = Nothing}
         dashboard = mkDashboard "Test Dashboard"
+
+    it "overview template uses the native metric store" \_ -> do
+      overview <- DashboardModel.readDashboardFile "static/public/dashboards" "_overview.yaml"
+      overview `shouldSatisfy` isJust
+      show overview `shouldNotContain` "telemetry.metrics"
+      show overview `shouldNotContain` "metric_value"
 
     it "Should create a dashboard" \tr -> do
       (_, pg) <- testServant tr do

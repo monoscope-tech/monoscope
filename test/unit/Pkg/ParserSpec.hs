@@ -146,12 +146,12 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', c
           pcts `shouldBe` [95.0]
         Nothing -> fail "Expected percentilesInfo to be extracted"
 
-    it "generates UNION ALL SQL for percentiles with bin" do
+    it "generates one digest scan for percentiles with bin" do
       let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize percentiles(duration, 50, 90) by bin(timestamp, 1h)"
       let sql = fromMaybe "" c.finalSummarizeQuery
       let expected =
             [text|
-SELECT timeB, quantile, value FROM (SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer AS timeB, 'p50' AS quantile, COALESCE(approx_percentile(0.5, percentile_agg(CAST(duration AS DOUBLE))), 0)::float AS value FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY timeB HAVING COUNT(*) > 0 UNION ALL SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer AS timeB, 'p90' AS quantile, COALESCE(approx_percentile(0.9, percentile_agg(CAST(duration AS DOUBLE))), 0)::float AS value FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY timeB HAVING COUNT(*) > 0) sub WHERE value IS NOT NULL ORDER BY timeB DESC, quantile
+WITH bucket_digests AS (SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer AS timeB, percentile_agg(CAST(duration AS DOUBLE)) AS digest FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY timeB HAVING COUNT(*) > 0) SELECT b.timeB, q.quantile, COALESCE(approx_percentile(q.percentile, b.digest), 0)::float AS value FROM bucket_digests b CROSS JOIN (VALUES (0.5, 'p50'), (0.9, 'p90')) AS q(percentile, quantile) ORDER BY b.timeB DESC, q.quantile
             |]
       normT sql `shouldBe` normT expected
 
