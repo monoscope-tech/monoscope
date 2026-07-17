@@ -457,9 +457,11 @@ parseQueryToComponents sqlCfg q = bimap (toText . errorBundlePretty) (queryASTTo
 queryASTToComponents :: SqlQueryCfg -> [Section] -> (Text, QueryComponents)
 queryASTToComponents sqlCfg sections =
   let effectiveSource = sqlCfg.source <|> viaNonEmpty Relude.head [s | Source s <- sections]
-   in sqlFromQueryComponents sqlCfg
-        . sectionsToComponents sqlCfg
-        $ rewriteSectionsForSource effectiveSource sections
+      qc = sectionsToComponents sqlCfg $ rewriteSectionsForSource effectiveSource sections
+   in -- The FROM table follows the effective source (cfg or an explicit `source`
+      -- section); without this a metrics query built via the cfg arg alone would
+      -- silently read otel_logs_and_spans.
+      sqlFromQueryComponents sqlCfg qc{fromTable = qc.fromTable <|> (display <$> effectiveSource)}
 
 
 parseQueryToAST :: Text -> Either Text [Section]
