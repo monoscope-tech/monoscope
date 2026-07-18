@@ -159,9 +159,12 @@ spec = sequential $ aroundAll withTestResources do
       toString (Lucid.renderText breakdown) `shouldContain` "summarize avg(value) by bin_auto(timestamp),resource.service.name"
       (_, details) <- toServantResponse tr $ TelemetryPage.metricDetailsGetH pid "cpu.usage" Nothing Nothing Nothing Nothing Nothing
       let detailHtml = toString $ Lucid.renderText details
+      detailHtml `shouldContain` "id=\"metric-details-content\""
+      detailHtml `shouldContain` "hx-target=\"#metric-details-content\""
       detailHtml `shouldContain` "Metric attributes"
       detailHtml `shouldContain` "resource.service.name"
       detailHtml `shouldContain` "cpu.limit"
+      detailHtml `shouldContain` "Shares cpu"
       points <- runTestBg frozenTime tr $ Telemetry.getDataPointsData True pid (Just (addUTCTime (-1) frozenTime), Just (addUTCTime 1 frozenTime))
       find ((== "cpu.usage") . (.metricName)) points `shouldSatisfy` isJust
       (events, _, metrics, _) <- runTestBg frozenTime tr $ Telemetry.getUsageTotals True pid (addUTCTime (-1) frozenTime)

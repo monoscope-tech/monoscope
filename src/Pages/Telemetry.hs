@@ -580,12 +580,14 @@ metricsDetailsPage pid sources metric candidates source selected currentRange = 
   let refreshId = "metric-details-chart-refresh"
       chartId = "details_" <> T.replace "." "_" metric.metricName
   div_
-    [ class_ "flex flex-col gap-5 h-full"
+    [ id_ "metric-details-content"
+    , class_ "flex flex-col gap-5 h-full"
     , hxGet_ $ metricDetailUrl pid metric.metricName source selected
     , hxTrigger_ "update-query from:window"
-    , hxTarget_ "#global-data-drawer-content"
+    , hxTarget_ "#metric-details-content"
     , hxSwap_ "morph"
     , term "hx-ext" "forward-page-params"
+    , [__|on htmx:afterSwap if event.target is me call window.evalScriptsFromContent(me) end end|]
     ]
     do
       div_ [class_ "sticky top-0 z-50 -mx-8 px-8 py-3 bg-bgBase border-b border-strokeWeak"] do
@@ -599,7 +601,7 @@ metricsDetailsPage pid sources metric candidates source selected currentRange = 
               , Aria.label_ "Metric data source"
               , hxGet_ $ "/p/" <> pid.toText <> "/metrics/details/" <> metric.metricName <> "/"
               , name_ "metric_source"
-              , hxTarget_ "#global-data-drawer-content"
+              , hxTarget_ "#metric-details-content"
               , hxSwap_ "morph"
               ]
               do
@@ -654,26 +656,44 @@ metricsDetailsPage pid sources metric candidates source selected currentRange = 
 relatedMetrics :: Projects.ProjectId -> Text -> Telemetry.MetricDataPoint -> V.Vector Telemetry.MetricChartListData -> Html ()
 relatedMetrics pid source metric candidates =
   case take 6 $ sortBy (\a b -> compare (relatedMetricScore metric b) (relatedMetricScore metric a)) $ filter ((> 0) . relatedMetricScore metric) $ filter ((/= metric.metricName) . (.metricName)) $ V.toList candidates of
-    [] -> div_ [class_ "py-6 text-sm text-textWeak"] "No related metrics found in this source."
-    related ->
-      div_ [class_ "flex flex-col divide-y divide-strokeWeak"] $ forM_ related $ \candidate ->
+    [] -> div_ [class_ "px-5 py-8 text-sm text-textWeak"] "No related metrics found in this source."
+    related -> do
+      div_ [class_ "px-5 pb-3 pt-5"] do
+        span_ [class_ "block text-sm font-semibold text-textStrong"] "Related metrics"
+        span_ [class_ "mt-1 block text-xs leading-5 text-textWeak"] "Metrics sharing a namespace or dimensions with this metric."
+      div_ [class_ "flex flex-col divide-y divide-strokeWeak border-y border-strokeWeak"] $ forM_ related $ \candidate ->
         a_
-          [ class_ "flex items-center justify-between gap-3 px-1 py-3 text-sm hover:bg-fillWeak"
+          [ class_ "group flex items-center justify-between gap-4 px-5 py-4 transition-colors hover:bg-fillWeak"
           , href_ $ metricDetailUrl pid candidate.metricName source Nothing
           , hxGet_ $ metricDetailUrl pid candidate.metricName source Nothing
-          , hxTarget_ "#global-data-drawer-content"
+          , hxTarget_ "#metric-details-content"
           , hxSwap_ "morph"
           ]
           do
             div_ [class_ "min-w-0"] do
               span_ [class_ "block truncate font-medium text-textStrong"] $ toHtml candidate.metricName
-              span_ [class_ "block truncate text-xs text-textWeak"] $ toHtml $ candidate.metricType <> if candidate.metricUnit == "" then "" else " · " <> candidate.metricUnit
-            faSprite_ "arrow-right" "regular" "w-3 shrink-0 text-iconNeutral"
+              div_ [class_ "mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-textWeak"] do
+                span_ $ toHtml $ candidate.metricType <> if candidate.metricUnit == "" then "" else " · " <> candidate.metricUnit
+                span_ [class_ "text-textDisabled"] "•"
+                span_ $ toHtml $ relatedMetricContext metric candidate
+              when (candidate.metricDescription /= "") $
+                span_ [class_ "mt-1 block truncate text-xs text-textWeak"] $ toHtml candidate.metricDescription
+            faSprite_ "arrow-right" "regular" "w-3 shrink-0 text-iconNeutral transition-transform group-hover:translate-x-0.5"
+
+
+relatedMetricContext :: Telemetry.MetricDataPoint -> Telemetry.MetricChartListData -> Text
+relatedMetricContext metric candidate =
+  "Shares " <> sharedNamespace <> sharedAttributes
+  where
+    sharedNamespace = T.intercalate "." $ map fst $ takeWhile (uncurry (==)) $ zip (T.splitOn "." metric.metricName) (T.splitOn "." candidate.metricName)
+    sharedAttributesCount = length $ S.intersection (S.fromList $ V.toList metric.metricLabels) (S.fromList $ V.toList candidate.metricLabels)
+    sharedAttributes = if sharedAttributesCount == 0 then "" else " · " <> prettyPrintCount sharedAttributesCount <> " shared attributes"
 
 
 relatedMetricScore :: Telemetry.MetricDataPoint -> Telemetry.MetricChartListData -> Int
 relatedMetricScore metric candidate =
-  length (takeWhile id $ zipWith (==) (T.splitOn "." metric.metricName) (T.splitOn "." candidate.metricName))
+  100 * length (takeWhile id $ zipWith (==) (T.splitOn "." metric.metricName) (T.splitOn "." candidate.metricName))
+    + length (S.intersection (S.fromList $ V.toList metric.metricLabels) (S.fromList $ V.toList candidate.metricLabels))
 
 
 metricDetailChart :: Projects.ProjectId -> Telemetry.MetricDataPoint -> Text -> Maybe Text -> Text -> Html ()
@@ -686,7 +706,7 @@ metricDetailChart pid metric source selected chartId =
           , Widget.groupByOptions = V.toList metric.metricLabels <$ guard (not $ V.null metric.metricLabels)
           , Widget.groupBySelected = selected
           , Widget.groupByUrl = Just $ metricDetailUrl pid metric.metricName source Nothing
-          , Widget.groupByTarget = Just "#global-data-drawer-content"
+          , Widget.groupByTarget = Just "#metric-details-content"
           }
 
 
