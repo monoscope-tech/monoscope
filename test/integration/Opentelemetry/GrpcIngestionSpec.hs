@@ -135,9 +135,9 @@ spec = sequential $ aroundAll withTestResources do
       OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto traceReq)
         `shouldThrow` \case GrpcException{grpcError = GrpcUnauthenticated} -> True; _ -> False
 
-    it "Test 4.1: should ingest metrics via all 3 keys using metricsServiceExport" $ \tr -> do
-      keys <- traverse (createTestAPIKey tr pid) ["metric-key-1", "metric-key-2", "metric-key-3"]
-      forM_ (zip3 keys ["cpu.usage", "memory.usage", "disk.usage"] [75.5, 82.3, 45.1]) $ \(key, metricName, value) -> ingestMetric tr key metricName value frozenTime
+    it "Test 4.1: should ingest metrics and render related metrics" $ \tr -> do
+      keys <- traverse (createTestAPIKey tr pid) ["metric-key-1", "metric-key-2", "metric-key-3", "metric-key-4"]
+      forM_ (zip3 keys ["cpu.usage", "cpu.limit", "memory.usage", "disk.usage"] [75.5, 82.3, 45.1, 10]) $ \(key, metricName, value) -> ingestMetric tr key metricName value frozenTime
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
       -- Catalog writes are buffered and only flushed at threshold or by the hourly
       -- job (not by runAllBackgroundJobs), so flush explicitly before asserting it.
@@ -146,9 +146,9 @@ spec = sequential $ aroundAll withTestResources do
       result <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just "metrics | summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") []
       V.length result.dataset `shouldSatisfy` (> 0)
       rawRows :: V.Vector Int <- runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT count(*)::bigint FROM otel_metrics WHERE project_id = #{pid.toText} |]
-      rawRows `shouldBe` V.singleton 3
+      rawRows `shouldBe` V.singleton 4
       catalogRows :: V.Vector (Only Int) <- withPool tr.trPool $ DBT.query [sql| SELECT count(*)::int FROM otel_metrics_meta WHERE project_id = ? |] (Only $ unUUIDId pid)
-      catalogRows `shouldBe` V.singleton (Only 3)
+      catalogRows `shouldBe` V.singleton (Only 4)
       catalogLabels :: V.Vector (Only Text) <- withPool tr.trPool $ DBT.query [sql| SELECT array_to_string(metric_labels, ',') FROM otel_metrics_meta WHERE project_id = ? AND metric_name = 'cpu.usage' |] (Only $ unUUIDId pid)
       catalogLabels `shouldSatisfy` (any (\(Only labels) -> "resource.service.name" `isInfixOf` toString labels) . toList)
       -- Regression: metric cards must query the native scalar column in
@@ -157,11 +157,16 @@ spec = sequential $ aroundAll withTestResources do
       toString (Lucid.renderText $ Lucid.toHtml overview) `shouldContain` "metrics | where metric_name"
       (_, breakdown) <- toServantResponse tr $ TelemetryPage.metricBreakdownGetH pid "cpu.usage" (Just "resource.service.name")
       toString (Lucid.renderText breakdown) `shouldContain` "summarize avg(value) by bin_auto(timestamp),resource.service.name"
+      (_, details) <- toServantResponse tr $ TelemetryPage.metricDetailsGetH pid "cpu.usage" Nothing Nothing Nothing Nothing Nothing
+      let detailHtml = toString $ Lucid.renderText details
+      detailHtml `shouldContain` "Metric attributes"
+      detailHtml `shouldContain` "resource.service.name"
+      detailHtml `shouldContain` "cpu.limit"
       points <- runTestBg frozenTime tr $ Telemetry.getDataPointsData True pid (Just (addUTCTime (-1) frozenTime), Just (addUTCTime 1 frozenTime))
       find ((== "cpu.usage") . (.metricName)) points `shouldSatisfy` isJust
       (events, _, metrics, _) <- runTestBg frozenTime tr $ Telemetry.getUsageTotals True pid (addUTCTime (-1) frozenTime)
       events `shouldSatisfy` (>= 0)
-      metrics `shouldSatisfy` (>= 3)
+      metrics `shouldSatisfy` (>= 4)
 
     it "poisons queued metric payloads whose uint64 count exceeds BIGINT" $ \tr -> do
       key <- createTestAPIKey tr pid "metric-overflow-queue-key"
