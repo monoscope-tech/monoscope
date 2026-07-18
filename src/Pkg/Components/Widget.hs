@@ -28,7 +28,7 @@ import Log qualified
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (termRaw)
-import Lucid.Htmx (hxExt_, hxGet_, hxPost_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_)
+import Lucid.Htmx (hxExt_, hxGet_, hxPost_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
@@ -164,6 +164,7 @@ data Widget = Widget
   , _isNested :: Maybe Bool
   , _centerTitle :: Maybe Bool
   , expandBtnFn :: Maybe Text
+  , expandPushUrl :: Maybe Text
   , groupByOptions :: Maybe [Text]
   , groupBySelected :: Maybe Text
   , groupByUrl :: Maybe Text
@@ -412,6 +413,7 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
     whenJust expandBtnFn \url ->
       button_
         ( Utils.drawerLoadAttrs_ url
+            <> maybe [] (pure . hxPushUrl_) widget.expandPushUrl
             <> [ class_ "p-2 cursor-pointer tap-target"
                , data_ "tippy-content" "Expand widget"
                ]
@@ -733,8 +735,9 @@ renderChart widget = do
                   Nothing -> "All values"
              in div_ [class_ "flex shrink-0 justify-end px-2 pt-2"]
                   $ details_ [class_ "dropdown dropdown-end relative max-w-[calc(100%-1rem)]"] do
-                    summary_ [class_ "btn btn-xs min-w-0 justify-between border-strokeWeak bg-bgRaised px-2 text-left text-textWeak opacity-100 hover:bg-fillWeak", data_ "tippy-content" "Group by"] do
-                      span_ [class_ "min-w-0 truncate text-left"] $ toHtml selectedLabel
+                    summary_ [class_ "btn btn-xs min-w-0 justify-between gap-1 border-strokeWeak bg-bgRaised px-2 text-left text-textWeak opacity-100 hover:bg-fillWeak", data_ "tippy-content" "Group by"] do
+                      span_ [class_ "shrink-0 text-textDisabled"] "Group by"
+                      span_ [class_ "min-w-0 truncate text-left text-textStrong"] $ toHtml selectedLabel
                       Utils.faSprite_ "chevron-down" "regular" "w-3 shrink-0"
                     ul_ [class_ "dropdown-content absolute right-0 top-full z-50 mt-1 flex max-h-72 max-w-[calc(100vw-2rem)] flex-col overflow-y-auto rounded-lg border border-strokeWeak bg-bgRaised p-1 opacity-100 shadow-lg"] do
                       let item value label =

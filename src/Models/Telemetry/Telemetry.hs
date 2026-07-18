@@ -902,7 +902,7 @@ getMetricChartListData pid sourceM prefixM = do
       WHERE project_id = #{unUUIDId pid} |]
     <> sourceFilter
     <> prefixFilter
-    <> [HI.sql| GROUP BY metric_name ORDER BY MAX(last_timestamp) DESC, metric_name |]
+    <> [HI.sql| GROUP BY metric_name ORDER BY metric_name |]
 
 
 getMetricServiceNames :: DB es => Projects.ProjectId -> Eff es [Text]

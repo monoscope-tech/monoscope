@@ -108,7 +108,7 @@ import Fmt (commaizeF, fmt)
 import Hasql.Interpolate qualified as HI
 import Lucid
 import Lucid.Aria qualified as Aria
-import Lucid.Htmx (hxBoost_, hxGet_, hxSelect_, hxSwap_, hxTarget_)
+import Lucid.Htmx (hxBoost_, hxGet_, hxIndicator_, hxSelect_, hxSwap_, hxTarget_)
 import Lucid.Hyperscript (__)
 import Lucid.Svg qualified as Svg
 import Models.Projects.Projects qualified as Projects
@@ -1541,13 +1541,8 @@ drawerLoadAttrs_ url =
   [ hxGet_ url
   , hxTarget_ "#global-data-drawer-content"
   , hxSwap_ "innerHTML"
-  , term "hx-on::after-swap" "window.evalScriptsFromContent(htmx.find('#global-data-drawer-content'))"
-  , term
-      "_"
-      ( "on pointerdown or click\nset #global-data-drawer.checked to true\njs { const metricName = new URL('"
-          <> url
-          <> "', window.location.origin).pathname.match(/\\/metrics\\/details\\/([^/]+)/)?.[1]; if (metricName) { const pageUrl = new URL(window.location); pageUrl.searchParams.set('expand', metricName); history.replaceState({}, '', pageUrl); } } end"
-      )
+  , hxIndicator_ "#global-data-drawer-indicator"
+  , term "hx-on::before-request" "document.querySelector('#global-data-drawer').checked = true"
   ]
 
 

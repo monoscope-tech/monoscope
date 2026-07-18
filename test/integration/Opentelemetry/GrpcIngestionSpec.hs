@@ -153,7 +153,7 @@ spec = sequential $ aroundAll withTestResources do
       catalogLabels `shouldSatisfy` (any (\(Only labels) -> "resource.service.name" `isInfixOf` toString labels) . toList)
       -- Regression: metric cards must query the native scalar column in
       -- otel_metrics, not the removed telemetry.metrics JSON payload.
-      (_, overview) <- toServantResponse tr $ TelemetryPage.metricsOverViewGetH pid (Just "charts") Nothing Nothing Nothing Nothing Nothing Nothing
+      (_, overview) <- toServantResponse tr $ TelemetryPage.metricsOverViewGetH pid (Just "charts") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       toString (Lucid.renderText $ Lucid.toHtml overview) `shouldContain` "metrics | where metric_name"
       (_, breakdown) <- toServantResponse tr $ TelemetryPage.metricBreakdownGetH pid "cpu.usage" (Just "resource.service.name")
       toString (Lucid.renderText breakdown) `shouldContain` "summarize avg(value) by bin_auto(timestamp),resource.service.name"
@@ -254,7 +254,7 @@ spec = sequential $ aroundAll withTestResources do
           request = defMessage & MSF.resourceMetrics .~ [defMessage & PMF.resource .~ mkResource key [] & PMF.scopeMetrics .~ [scopeMetrics]]
       void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto request)
       runTestBg frozenTime tr $ Telemetry.flushMetricCatalog tr.trATCtx.metricCatalogBuffer
-      (_, details) <- toServantResponse tr $ TelemetryPage.metricDetailsGetH pid "request.duration.full" Nothing Nothing Nothing Nothing
+      (_, details) <- toServantResponse tr $ TelemetryPage.metricDetailsGetH pid "request.duration.full" Nothing Nothing Nothing Nothing Nothing
       toString (Lucid.renderText details) `shouldContain` "sum(distribution_sum) / sum(distribution_count)"
       (_, card) <- toServantResponse tr $ TelemetryPage.metricCardGetH pid "request.duration.full" Nothing
       toString (Lucid.renderText card) `shouldContain` "request.duration.full · mean"

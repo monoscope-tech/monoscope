@@ -1,4 +1,4 @@
-module Pages.Components (drawer_, emptyState_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), resizer_, detailTab_, httpTab_, tabPanel_, jsonTab_, dateTime, localTime_, localTimeFmt_, paymentPlanPicker, navBar, modal_, modalCloseButton_, primaryButton_, headerRow_, headerRowPad_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_, sparkline_, periodToggle_, abbreviateUnit, compactTimeAgo) where
+module Pages.Components (drawer_, drawerLoadingSkeleton_, emptyState_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), resizer_, detailTab_, httpTab_, tabPanel_, jsonTab_, dateTime, localTime_, localTimeFmt_, paymentPlanPicker, navBar, modal_, modalCloseButton_, primaryButton_, headerRow_, headerRowPad_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_, sparkline_, periodToggle_, abbreviateUnit, compactTimeAgo) where
 
 import Data.Aeson qualified as AE
 import Data.Default (Default (..))
@@ -73,11 +73,13 @@ getTargetPage _ = ""
 drawer_ :: Text -> Maybe Text -> Maybe (Html ()) -> Html () -> Html ()
 drawer_ drawerId urlM content trigger = div_ [class_ "drawer drawer-end inline-block w-auto"] do
   input_
-    [ id_ drawerId
-    , type_ "checkbox"
-    , class_ "drawer-toggle"
-    , Aria.label_ "Toggle drawer"
-    , [__|on keyup if the event's key is 'Escape' set my.checked to false trigger keyup end
+    ( [ id_ drawerId
+      , type_ "checkbox"
+      , class_ "drawer-toggle"
+      , Aria.label_ "Toggle drawer"
+      ]
+        <> [checked_ | isJust content]
+        <> [[__|on keyup if the event's key is 'Escape' set my.checked to false trigger keyup end
           on change
             if my.checked then
               add .overflow-hidden to <body/>
@@ -88,18 +90,18 @@ drawer_ drawerId urlM content trigger = div_ [class_ "drawer drawer-end inline-b
             else
               remove .overflow-hidden from <body/>
               if my._focusTrapCleanup then call my._focusTrapCleanup() end
-              js { const url = new URL(window.location); if (url.searchParams.has('expand')) { url.searchParams.delete('expand'); history.replaceState({}, '', url); } } end
             end
-      |]
-    ]
+      |]]
+    )
   label_ [Lucid.for_ drawerId, class_ "drawer-button inline-block", Aria.label_ "Open drawer"] trigger
   div_ [class_ "drawer-side top-0 left-0 w-full h-full flex z-10000 overflow-y-scroll "] do
     label_ [Lucid.for_ drawerId, Aria.label_ "Close drawer", class_ "w-full drawer-overlay grow flex-1"] ""
-    div_ [style_ "width: min(90vw, 1200px)", class_ "bg-bgRaised h-full overflow-y-scroll overflow-x-hidden w-full"] do
+    div_ [style_ "width: min(90vw, 1200px)", class_ "bg-bgRaised h-full overflow-y-scroll overflow-x-hidden w-full relative"] do
       div_
-        [id_ $ drawerId <> "-content", class_ "py-4 px-8 h-full flex flex-col gap-8", hxSwap_ "innerHTML"]
+        [id_ $ drawerId <> "-content", class_ "pb-4 px-8 h-full flex flex-col gap-8", hxSwap_ "innerHTML"]
         $ div_ (maybe [] (\url -> [hxGet_ url, hxTrigger_ "intersect once"]) urlM)
         $ fromMaybe (loadingIndicator_ LdMD LdDots) content
+      div_ [id_ $ drawerId <> "-indicator", class_ "htmx-indicator absolute inset-0 z-10 w-full box-border bg-bgRaised px-8"] drawerLoadingSkeleton_
 
 
 dateTime :: UTCTime -> Maybe UTCTime -> Html ()
@@ -491,8 +493,25 @@ jsonTab_ :: Text -> Text -> Text -> AE.Value -> Maybe Text -> Html ()
 jsonTab_ visCls elemId name val filt = tabPanel_ visCls elemId $ jsonValueToHtmlTree name val filt
 
 
+drawerLoadingSkeleton_ :: Html ()
+drawerLoadingSkeleton_ = div_ [class_ "flex w-full flex-col gap-5 pt-8", role_ "status", Aria.label_ "Loading metric detail"] do
+  div_ [class_ "flex items-center justify-between gap-4 border-b border-strokeWeak pb-3"] do
+    div_ [class_ "flex flex-col gap-2"] do
+      div_ [class_ "h-4 w-52 rounded skeleton-shimmer"] ""
+      div_ [class_ "h-3 w-20 rounded skeleton-shimmer"] ""
+    div_ [class_ "flex gap-2"] do
+      div_ [class_ "h-8 w-32 rounded-lg skeleton-shimmer"] ""
+      div_ [class_ "h-8 w-24 rounded-lg skeleton-shimmer"] ""
+      div_ [class_ "h-8 w-8 rounded-lg skeleton-shimmer"] ""
+  chartSkeleton_
+  div_ [class_ "flex flex-col gap-3 rounded-2xl border border-strokeWeak p-4"] do
+    div_ [class_ "h-3 w-24 rounded skeleton-shimmer"] ""
+    div_ [class_ "h-3 w-full rounded skeleton-shimmer"] ""
+    div_ [class_ "h-3 w-3/5 rounded skeleton-shimmer"] ""
+
+
 chartSkeleton_ :: Html ()
-chartSkeleton_ = div_ [class_ "h-64 rounded-lg relative overflow-hidden bg-fillWeaker"] do
+chartSkeleton_ = div_ [class_ "h-64 w-full rounded-lg relative overflow-hidden bg-fillWeaker"] do
   -- Y-axis hint
   div_ [class_ "absolute left-0 top-4 bottom-8 w-px bg-strokeWeak"] ""
   -- X-axis hint

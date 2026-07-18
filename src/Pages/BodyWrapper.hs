@@ -19,7 +19,7 @@ import PyF
 import Relude hiding (ask)
 import System.Config (AuthContext (..), DeploymentEnv (Dev), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (FieldMenuCtx (..), FreeTierStatus (..), LoadingSize (..), LoadingType (..), faSprite_, fieldContextMenuItems_, fieldMenuActions, freeTierUsageBanner, loadingIndicatorWith_, loadingIndicator_, navTabAttrs, popoverPanel_, popoverTrigger_)
+import Utils (FieldMenuCtx (..), FreeTierStatus (..), LoadingSize (..), LoadingType (..), faSprite_, fieldContextMenuItems_, fieldMenuActions, freeTierUsageBanner, loadingIndicatorWith_, navTabAttrs, popoverPanel_, popoverTrigger_)
 import Web.I18n qualified as I18n
 
 
@@ -156,6 +156,7 @@ data BWConfig = BWConfig
   , hideNavbar :: Bool -- When True, hides the entire navbar
   , needsGridStack :: Bool
   , headContent :: Maybe (Html ()) -- Optional HTML content to include in the head
+  , globalDrawerContent :: Maybe (Html ())
   , config :: EnvConfig -- Environment configuration for telemetry
   }
   deriving stock (Generic, Show)
@@ -537,8 +538,8 @@ bodyWrapper bcfg child = do
                         then maybe child (\p -> settingsWrapper p.id bcfg.pageTitle child) bcfg.currProject
                         else child
                     div_ [class_ "h-0 shrink"] do
-                      Components.drawer_ "global-data-drawer" Nothing Nothing ""
-                      template_ [id_ "loader-tmp"] $ loadingIndicator_ LdMD LdDots
+                      Components.drawer_ "global-data-drawer" Nothing bcfg.globalDrawerContent ""
+                      template_ [id_ "loader-tmp"] Components.drawerLoadingSkeleton_
                       -- Modal for copying widgets to other dashboards
                       Components.modal_ "dashboards-modal" "" do
                         -- Hidden fields to store widget and dashboard IDs
