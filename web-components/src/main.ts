@@ -448,10 +448,6 @@ window.getTagValues = (selector: string): string[] => {
   return (el as any)?._tagifyInstance?.value?.map((t: any) => t.value || t) || [];
 };
 
-// Signal that web components are ready
-(window as any).widgetDepsReady = true;
-window.dispatchEvent(new CustomEvent('widgetDepsReady'));
-
 // Init tagify elements - run now, on DOMContentLoaded, and after HTMX swaps
 initAllTagifyInputs();
 (window as any).interpolateVarTemplates();

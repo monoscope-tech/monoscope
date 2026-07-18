@@ -352,7 +352,7 @@ widgetHelper_ w' = case w.wType of
     gridItem_ =
       if w.naked == Just True
         then Relude.id
-        else div_ ([class_ "grid-stack-item h-full flex-1 [.nested-grid_&]:overflow-hidden ", id_ $ maybeToMonoid w.id <> "_widgetEl", data_ "widget" widgetJson] <> attrs <> autoFitAttr) . div_ [class_ "grid-stack-item-content h-full [.grid-stack_&]:h-auto"]
+        else div_ ([class_ "grid-stack-item h-full flex-1 !overflow-visible has-[details[open]]:z-50 [.nested-grid_&]:overflow-hidden ", id_ $ maybeToMonoid w.id <> "_widgetEl", data_ "widget" widgetJson] <> attrs <> autoFitAttr) . div_ [class_ "grid-stack-item-content h-full !overflow-visible [.grid-stack_&]:h-auto"]
 
 
 renderDottedTitle :: Text -> Html ()
@@ -727,20 +727,32 @@ renderChart widget = do
         ]
         do
           whenJust ((,) <$> widget.groupByOptions <*> widget.groupByUrl) \(options, url) ->
-            div_ [class_ "flex shrink-0 justify-end px-2 pt-2"]
-              $ select_
-                [ class_ "select select-xs w-40 bg-fillWeaker border border-strokeWeak text-textWeak"
-                , hxGet_ url
-                , name_ "label"
-                , hxTarget_ $ fromMaybe "" widget.groupByTarget
-                , hxSwap_ "outerHTML"
-                ]
-                do
-                  option_ ([selected_ "all" | widget.groupBySelected == Just "all"] ++ [value_ "all"]) "All values"
-                  forM_ options \label -> option_ ([selected_ label | widget.groupBySelected == Just label] ++ [value_ label]) $ toHtml label
+            let selectedLabel = case widget.groupBySelected of
+                  Just "all" -> "All values"
+                  Just label -> label
+                  Nothing -> "All values"
+             in div_ [class_ "flex shrink-0 justify-end px-2 pt-2"]
+                  $ details_ [class_ "dropdown dropdown-end relative max-w-[calc(100%-1rem)]"] do
+                    summary_ [class_ "btn btn-xs min-w-0 justify-between border-strokeWeak bg-bgRaised px-2 text-left text-textWeak opacity-100 hover:bg-fillWeak", data_ "tippy-content" "Group by"] do
+                      span_ [class_ "min-w-0 truncate text-left"] $ toHtml selectedLabel
+                      Utils.faSprite_ "chevron-down" "regular" "w-3 shrink-0"
+                    ul_ [class_ "dropdown-content absolute right-0 top-full z-50 mt-1 flex max-h-72 max-w-[calc(100vw-2rem)] flex-col overflow-y-auto rounded-lg border border-strokeWeak bg-bgRaised p-1 opacity-100 shadow-lg"] do
+                      let item value label =
+                            li_
+                              $ button_
+                                [ class_ $ "w-full whitespace-nowrap rounded px-2 py-1.5 text-left text-xs hover:bg-fillWeak " <> bool "" "bg-fillWeak text-textStrong" (widget.groupBySelected == Just value)
+                                , hxGet_ url
+                                , name_ "label"
+                                , value_ value
+                                , hxTarget_ $ fromMaybe "" widget.groupByTarget
+                                , hxSwap_ "outerHTML"
+                                ]
+                              $ toHtml label
+                      item "all" "All values"
+                      forM_ options \label -> item label label
           when isStat $ renderStatContent widget chartId valueM
           unless (widget.wType == WTStat) $ div_ [class_ $ "h-0 max-h-full overflow-hidden w-full flex-1 min-h-0" <> bool " p-2" "" isStat] do
-            div_ [class_ "h-full w-full", id_ $ maybeToMonoid widget.id] ""
+            div_ [class_ "h-full w-full", id_ $ maybeToMonoid widget.id, data_ "chart-widget" ""] ""
             let theme = fromMaybe "default" widget.theme
             let echartOpt = encodeText $ widgetToECharts widget
             let yAxisLabel = fromMaybe (maybeToMonoid widget.unit) (widget.yAxis >>= (.label))
@@ -816,12 +828,6 @@ renderChart widget = do
                   initializeThisWidget();
                 }
 
-                document.addEventListener('htmx:afterSwap', function(event) {
-                  const swappedEl = event.detail.elt;
-                  if (swappedEl && swappedEl.contains(document.getElementById(config.chartId))) {
-                    initializeThisWidget();
-                  }
-                });
               })();
             
             |]
@@ -895,9 +901,9 @@ widgetToECharts widget =
                       "lg" -> (16, 14, 14, [5, 10, 5, 10])
                       _ -> (12, 9, 9, [3, 6, 3, 6]) -- sm (default)
                     isStatic = widget._staticRender == Just True
+                    legendOffset = if vPos == "top" then ["top" AE..= (0 :: Int)] else ["bottom" AE..= (2 :: Int)]
                  in [ "show" AE..= legendVisibility
                     , "type" AE..= if isStatic then "plain" else "scroll"
-                    , "top" AE..= vPos
                     , "textStyle" AE..= AE.object ["fontSize" AE..= AE.Number (fromIntegral fontSize), "padding" AE..= AE.Array [AE.Number 0, AE.Number 0, AE.Number 0, AE.Number (-2)]]
                     , "itemWidth" AE..= AE.Number (fromIntegral itemSize)
                     , "itemHeight" AE..= AE.Number (fromIntegral itemSize)
@@ -905,14 +911,15 @@ widgetToECharts widget =
                     , "padding" AE..= AE.Array (V.fromList $ map (AE.Number . fromIntegral) pad)
                     , "data" AE..= fromMaybe seriesNames (extractLegend widget) -- Use series names from dataset if no explicit queries
                     ]
+                      <> legendOffset
                       <> [K.fromText h AE..= (0 :: Int) | Just h <- [hPos]]
               )
         , "grid"
             AE..= AE.object
               [ "width" AE..= ("100%" :: Text)
               , "left" AE..= ("0%" :: Text)
-              , "top" AE..= if maybe False (T.isPrefixOf "top") widget.legendPosition && legendVisibility then "14%" else if widget.naked == Just True then "10%" else "5%"
-              , "bottom" AE..= if not (maybe False (T.isPrefixOf "top") widget.legendPosition) && legendVisibility then "14%" else "1.8%"
+              , "top" AE..= if maybe False (T.isPrefixOf "top") widget.legendPosition && legendVisibility then (28 :: Int) else if widget.naked == Just True then (16 :: Int) else (8 :: Int)
+              , "bottom" AE..= if not (maybe False (T.isPrefixOf "top") widget.legendPosition) && legendVisibility then (36 :: Int) else (8 :: Int)
               , "containLabel" AE..= True
               , "show" AE..= False
               ]
@@ -923,7 +930,7 @@ widgetToECharts widget =
                 , "boundaryGap" AE..= if isCategorical then AE.Bool True else AE.Array (V.fromList [AE.Number 0, AE.Number 0.01])
                 , "splitLine" AE..= AE.object ["show" AE..= False]
                 , "axisLine" AE..= AE.object ["show" AE..= axisVisibility, "lineStyle" AE..= AE.object ["color" AE..= "#000833A6", "type" AE..= "solid", "opacity" AE..= 0.1]]
-                , "axisLabel" AE..= AE.object ["show" AE..= (axisVisibility && fromMaybe True (widget ^? #xAxis . _Just . #showAxisLabel . _Just))]
+                , "axisLabel" AE..= AE.object ["show" AE..= (axisVisibility && fromMaybe True (widget ^? #xAxis . _Just . #showAxisLabel . _Just)), "margin" AE..= (8 :: Int), "hideOverlap" AE..= True]
                 , "show" AE..= (axisVisibility || fromMaybe False (widget ^? #xAxis . _Just . #showAxisLabel . _Just))
                 ]
                   <> if isCategorical
@@ -953,6 +960,8 @@ widgetToECharts widget =
                   AE..= AE.object
                     [ "show" AE..= (axisVisibility && fromMaybe True (widget ^? #yAxis . _Just . #showAxisLabel . _Just))
                     , "inside" AE..= False
+                    , "margin" AE..= (8 :: Int)
+                    , "hideOverlap" AE..= True
                     , "formatter"
                         AE..= let fmt = unitValueExprJS widget.unit
                                   showOnlyMax = fromMaybe False $ widget ^? #yAxis . _Just . #showOnlyMaxLabel . _Just

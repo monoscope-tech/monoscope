@@ -39,23 +39,24 @@ cypress:
 	set -a && . ./.env && npx cypress run --record
 
 # Kill any prior live-reload app + its ghcid/cabal-repl/ghci tree by the PROCESS
-# GROUP of whatever holds $(PORT). Group-killing is what avoids the orphaned
+# GROUP of every process holding $(PORT). Group-killing is what avoids orphaned
 # `cabal repl` processes + stale :8080 that pile up when ghcid is C-c'd: SIGINT
 # doesn't reliably reach the GHCi-hosted Warp server, so the old app keeps the
 # port and each restart's `:run Start.startApp` silently fails to rebind. Safe
-# by construction — the port owner is in a different process group than this
-# make invocation, so we never kill ourselves.
+# by construction — port owners are in different process groups than this make
+# invocation, so we never kill ourselves.
 kill-live-reload:
-	@PID=$$(lsof -ti tcp:$(PORT) 2>/dev/null | head -1); \
-	if [ -n "$$PID" ]; then \
-		PGID=$$(ps -o pgid= -p $$PID 2>/dev/null | tr -d ' '); \
-		if [ -n "$$PGID" ]; then \
-			echo "Freeing :$(PORT) — killing process group $$PGID"; \
-			kill -TERM -$$PGID 2>/dev/null || true; \
-			sleep 1; \
-		fi; \
-		REMAIN=$$(lsof -ti tcp:$(PORT) 2>/dev/null); \
-		[ -n "$$REMAIN" ] && kill -9 $$REMAIN 2>/dev/null || true; \
+	@PIDS=$$(lsof -ti tcp:$(PORT) 2>/dev/null); \
+	if [ -n "$$PIDS" ]; then \
+		for PID in $$PIDS; do \
+			PGID=$$(ps -o pgid= -p $$PID 2>/dev/null | tr -d ' '); \
+			[ -n "$$PGID" ] && echo "Freeing :$(PORT) — killing process group $$PGID" && kill -TERM -$$PGID 2>/dev/null || true; \
+		done; \
+		sleep 1; \
+		for PID in $$(lsof -ti tcp:$(PORT) 2>/dev/null); do \
+			PGID=$$(ps -o pgid= -p $$PID 2>/dev/null | tr -d ' '); \
+			[ -n "$$PGID" ] && kill -KILL -$$PGID 2>/dev/null || true; \
+		done; \
 	else \
 		echo "Port :$(PORT) already free"; \
 	fi

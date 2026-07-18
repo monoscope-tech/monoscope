@@ -56,13 +56,13 @@ import Utils (LoadingSize (..), LoadingType (..), drawerLoadAttrs_, faSprite_, g
 
 data MetricsOverViewGet
   = MetricsOVDataPointMain (PageCtx (Projects.ProjectId, V.Vector Telemetry.MetricDataPoint, Map Text (Int, Int, Int)))
-  | MetricsOVChartsMain (PageCtx (Projects.ProjectId, V.Vector Telemetry.MetricChartListData, Map Text (V.Vector Text), V.Vector Telemetry.MetricChartListData, V.Vector Text, Text, Text, Maybe Text))
+  | MetricsOVChartsMain (PageCtx (Projects.ProjectId, V.Vector Telemetry.MetricChartListData, Map Text (V.Vector Text), V.Vector Telemetry.MetricChartListData, V.Vector Text, Text, Text, Int, Maybe Text))
   | MetricsOVChartsPaginated (Projects.ProjectId, V.Vector Telemetry.MetricChartListData, Map Text (V.Vector Text), Text, Maybe Text)
 
 
 instance ToHtml MetricsOverViewGet where
   toHtml (MetricsOVDataPointMain (PageCtx bwconf (pid, datapoints, refCounts))) = toHtml $ PageCtx bwconf $ dataPointsPage pid datapoints refCounts
-  toHtml (MetricsOVChartsMain (PageCtx bwconf (pid, mList, labels, inactive, serviceNames, source, prefix, nextUrl))) = toHtml $ PageCtx bwconf $ chartsPage pid mList labels inactive serviceNames source prefix nextUrl
+  toHtml (MetricsOVChartsMain (PageCtx bwconf (pid, mList, labels, inactive, serviceNames, source, prefix, activeCount, nextUrl))) = toHtml $ PageCtx bwconf $ chartsPage pid mList labels inactive serviceNames source prefix activeCount nextUrl
   toHtml (MetricsOVChartsPaginated (pid, mList, labels, source, nextUrl)) = toHtml $ chartList pid labels source mList nextUrl
   toHtmlRaw = toHtml
 
@@ -250,11 +250,11 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM = do
           (active, inactive) = V.partition (\m -> m.lastSeen >= cutoff) allMetrics
           pageSize = 20
           metricList = V.slice (min cursor (V.length active)) (min pageSize (max 0 (V.length active - cursor))) active
-          sourceQ = maybe "" ("&source=" <>) sourceM
+          sourceQ = maybe "" ("&metric_source=" <>) sourceM
           fromQ = maybe "" ("&from=" <>) fromM
           toQ = maybe "" ("&to=" <>) toM
           sinceQ = maybe "" ("&since=" <>) sinceM
-          prfixQ = maybe "" ("&prefix=" <>) prefixM
+          prfixQ = maybe "" ("&metric_prefix=" <>) prefixM
           cursorQ = "&cursor=" <> show (cursor + pageSize)
           nextFetchUrl =
             if cursor + pageSize >= V.length active
@@ -264,7 +264,7 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM = do
       if cursor == 0
         then do
           serviceNames <- V.fromList <$> Telemetry.getMetricServiceNames pid
-          addRespHeaders $ MetricsOVChartsMain $ PageCtx bwconf (pid, metricList, labels, inactive, serviceNames, fromMaybe "all" sourceM, fromMaybe "all" prefixM, nextFetchUrl)
+          addRespHeaders $ MetricsOVChartsMain $ PageCtx bwconf (pid, metricList, labels, inactive, serviceNames, fromMaybe "all" sourceM, fromMaybe "all" prefixM, V.length active, nextFetchUrl)
         else do
           addRespHeaders $ MetricsOVChartsPaginated (pid, metricList, labels, fromMaybe "all" sourceM, nextFetchUrl)
 
@@ -314,28 +314,31 @@ traceH pid trId timestamp spanIdM nav = withSpan_ "trace.load" [] do
 
 -- Metrics UI components
 overViewTabs :: Projects.ProjectId -> Text -> Html ()
-overViewTabs pid tab = do
-  div_ [class_ "tabs tabs-border tabs-md items-center shrink-0"] do
-    a_ ([href_ $ "/p/" <> pid.toText <> "/metrics?tab=charts", role_ "tab", class_ $ "tab h-auto! " <> if tab == "charts" then "tab-active" else ""] <> navTabAttrs) "Charts"
-    a_ ([href_ $ "/p/" <> pid.toText <> "/metrics?tab=datapoints", role_ "tab", class_ $ "tab h-auto! " <> if tab == "datapoints" then "tab-active" else ""] <> navTabAttrs) "Table"
+overViewTabs pid tab =
+  div_ [class_ "flex items-center gap-2 shrink-0"] do
+    span_ [class_ "text-xs font-medium text-textWeak"] "View"
+    div_ [class_ "tabs tabs-box tabs-outline", role_ "tablist", Aria.label_ "Metric view"] do
+      let viewTab label view =
+            a_
+              ( [ href_ $ "/p/" <> pid.toText <> "/metrics?tab=" <> view
+                , role_ "tab"
+                , term "aria-selected" $ if tab == view then "true" else "false"
+                , class_ $ "tab h-8 min-h-8 px-3 text-xs " <> if tab == view then "tab-active" else ""
+                ]
+                  <> navTabAttrs
+              )
+              label
+      viewTab "Charts" "charts"
+      viewTab "Table" "datapoints"
 
 
-chartsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricChartListData -> Map Text (V.Vector Text) -> V.Vector Telemetry.MetricChartListData -> V.Vector Text -> Text -> Text -> Maybe Text -> Html ()
-chartsPage pid metricList labels inactive sources source mFilter nextUrl = do
+chartsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricChartListData -> Map Text (V.Vector Text) -> V.Vector Telemetry.MetricChartListData -> V.Vector Text -> Text -> Text -> Int -> Maybe Text -> Html ()
+chartsPage pid metricList labels inactive sources source mFilter activeCount nextUrl = do
   div_ [class_ "flex flex-col gap-4 px-4 overflow-y-scroll"] $ do
     div_ [class_ "w-full"] do
-      Components.drawer_ "global-data-drawer" Nothing Nothing ""
-      template_ [id_ "loader-tmp"] $ loadingIndicator_ LdMD LdDots
-      div_ [class_ "w-full flex gap-3 items-center min-h-10"] do
+      div_ [class_ "w-full flex flex-wrap gap-3 max-md:gap-2 items-center min-h-10 py-2 border-b border-strokeWeak"] do
         overViewTabs pid "charts"
-        div_ [class_ "w-px h-6 bg-strokeWeak"] pass
-        select_
-          [ class_ "select select-sm bg-bgRaised border border-strokeStrong h-10 w-36 shadow-none"
-          , onchange_ "(() => {window.setQueryParamAndReload('metric_source', this.value)})()"
-          ]
-          do
-            option_ ([selected_ "all" | "all" == source] ++ [value_ "all"]) "All Services"
-            forM_ sources $ \s -> option_ ([selected_ s | s == source] ++ [value_ s]) $ toHtml s
+        div_ [class_ "w-px h-6 bg-strokeWeak max-md:hidden"] pass
         let metricNames =
               ordNub
                 $ ( \x ->
@@ -344,32 +347,46 @@ chartsPage pid metricList labels inactive sources source mFilter nextUrl = do
                   )
                 <$> V.toList metricList
             stripTrailing t = fromMaybe t $ T.stripSuffix "." t <|> T.stripSuffix "_" t
-        div_ [class_ "join flex-1 min-w-0"] do
-          select_
-            [ class_ "join-item select select-sm bg-bgRaised border border-strokeStrong h-10 w-auto shadow-none cursor-pointer"
-            , onchange_ "(() => {window.setQueryParamAndReload('metric_prefix', this.value)})()"
-            ]
-            do
-              option_ ([selected_ "all" | "all" == mFilter] ++ [value_ "all"]) "All Groups"
-              forM_ metricNames $ \m -> option_ ([selected_ m | m == mFilter] ++ [value_ m]) $ toHtml (stripTrailing m)
-          label_ [class_ "join-item input input-sm flex flex-1 min-w-0 h-10 bg-fillWeak border border-strokeStrong shadow-none overflow-hidden items-center gap-2"] do
-            faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-50"
-            input_
-              [ class_ "grow"
-              , type_ "text"
-              , placeholder_ "Filter metrics\x2026"
-              , id_ "search-input"
-              , [__| on input show .metric_filterble in #metric_list_container when its textContent.toLowerCase() contains my value.toLowerCase() |]
+        div_ [class_ "flex items-center gap-2 shrink-0 max-md:w-full max-md:flex-wrap"] do
+          span_ [class_ "text-xs font-medium text-textWeak"] "Scope"
+          div_ [class_ "join max-md:w-full"] do
+            select_
+              [ class_ "join-item select select-sm bg-bgBase border border-strokeWeak h-10 w-36 max-md:w-1/2 shadow-none cursor-pointer hover:border-strokeStrong transition-colors focus:outline-hidden focus:ring-2 focus:ring-strokeFocus"
+              , Aria.label_ "Filter by service"
+              , onchange_ "(() => {window.setQueryParamAndReload('metric_source', this.value)})()"
               ]
+              do
+                option_ ([selected_ "all" | "all" == source] ++ [value_ "all"]) "All Services"
+                forM_ sources $ \s -> option_ ([selected_ s | s == source] ++ [value_ s]) $ toHtml s
+            select_
+              [ class_ "join-item select select-sm bg-bgBase border border-strokeWeak h-10 w-auto max-md:w-1/2 shadow-none cursor-pointer hover:border-strokeStrong transition-colors focus:outline-hidden focus:ring-2 focus:ring-strokeFocus"
+              , Aria.label_ "Filter by metric group"
+              , onchange_ "(() => {window.setQueryParamAndReload('metric_prefix', this.value)})()"
+              ]
+              do
+                option_ ([selected_ "all" | "all" == mFilter] ++ [value_ "all"]) "All metric groups"
+                forM_ metricNames $ \m -> option_ ([selected_ m | m == mFilter] ++ [value_ m]) $ toHtml (stripTrailing m)
+        div_ [class_ "w-px h-6 bg-strokeWeak max-md:hidden"] pass
+        label_ [class_ "input input-sm flex grow min-w-0 max-md:w-full max-md:flex-none h-10 bg-bgBase border border-strokeWeak shadow-none overflow-hidden items-center gap-2 hover:border-strokeStrong transition-colors focus-within:outline-hidden focus-within:ring-2 focus-within:ring-strokeFocus focus-within:border-strokeFocus"] do
+          faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-50"
+          input_
+            [ class_ "grow"
+            , type_ "text"
+            , placeholder_ "Search metrics"
+            , Aria.label_ "Search metrics"
+            , id_ "search-input"
+            , [__| on input show .metric_filterble in #metric_list_container when its textContent.toLowerCase() contains my value.toLowerCase() |]
+            ]
+        span_ [class_ "ml-auto shrink-0 text-xs text-textWeak tabular-nums max-md:ml-0 max-md:w-full", data_ "tippy-content" "Metric names seen in the past 7 days. This catalog is independent of the selected chart range."] $ toHtml $ "Catalog: " <> prettyPrintCount activeCount <> " metrics seen in 7d"
     if V.null metricList && V.null inactive
       then
         div_ [class_ "w-full flex items-center justify-center h-96"]
           $ Components.emptyState_ def{icon = Just "chart-line", action = ESLink "https://monoscope.tech/docs/sdks/" "View SDK setup guides"} "No metrics found" "Metrics will appear here once your application starts sending telemetry data."
       else do
         when (V.null metricList && not (V.null inactive))
-          $ div_ [class_ "text-textWeak text-sm py-4"] "No active metrics in the last 7 days."
+          $ div_ [class_ "text-textWeak text-sm py-4"] "No metrics received in the last 7 days."
         unless (V.null metricList)
-          $ div_ [class_ "w-full grid grid-cols-3 gap-4", id_ "metric_list_container"]
+          $ div_ [class_ "w-full grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4", id_ "metric_list_container"]
           $ chartList pid labels source metricList nextUrl
         unless (V.null inactive) $ inactiveMetricsList pid source inactive
 
@@ -444,7 +461,7 @@ metricCard pid source metricName metricType metricUnit labels selectedM = do
       cardId = "metric_" <> T.replace "." "_" metricName
       detailUrl = metricDetailUrl pid metricName source
   div_ [class_ "w-full flex flex-col gap-2 metric_filterble", id_ cardId]
-    $ div_ [class_ "h-52"]
+    $ div_ [class_ "h-56"]
     $ toHtml
     $ (metricWidget pid metricName metricType metricUnit selected (Just metricName) Nothing (Just detailUrl) Nothing)
       { Widget.hideSubtitle = Just True

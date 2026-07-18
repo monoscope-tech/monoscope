@@ -1,23 +1,24 @@
-// Import query-editor first to ensure globalThis.monaco is set
-import './query-editor/query-editor';
-// Then import yaml-editor which registers YAML language on the global monaco instance
-import './yaml-editor';
-// Registers the <local-time> custom element (side-effect only, no exports)
+import './index.css';
 import './local-time';
+import './main';
 
-// Re-export everything from query-editor
-export * from './query-editor/query-editor';
-export * from './query-editor/query-builder';
-export * from './session-replay';
-// Re-export the config functions
-export { initializeDefaultSchema } from './query-editor/query-editor-config';
-export * from './log-list';
-export * from './widgets';
-export * from './charts';
-export * from './main';
-export * from './yaml-editor';
+const components: Array<[string, () => Promise<unknown>]> = [
+  ['[data-chart-widget], [data-widget]', () => import('./widgets')],
+  ['log-list', () => import('./log-list')],
+  ['query-editor, query-builder', async () => {
+    await import('./query-editor/query-editor');
+    await import('./query-editor/query-builder');
+  }],
+  ['yaml-editor', async () => {
+    await import('./query-editor/query-editor');
+    await import('./yaml-editor');
+  }],
+  ['session-replay', () => import('./session-replay')],
+];
 
-export * from './session-replay';
+const loadComponents = () => components.forEach(([selector, load]) => {
+  if (document.querySelector(selector)) void load();
+});
 
-// Note: Popular queries are now provided directly from Haskell backend
-// instead of being exposed from TypeScript
+loadComponents();
+document.addEventListener('htmx:afterSettle', loadComponents);

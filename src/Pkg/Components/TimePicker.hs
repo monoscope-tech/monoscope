@@ -267,7 +267,7 @@ timepicker_ submitForm currentRange targetIdM = do
 -- | Common refresh options used throughout the application
 refreshOptions :: [(Text, Text, Text)]
 refreshOptions =
-  [ ("off", "Off", "0")
+  [ ("paused", "Paused", "0")
   , ("15s", "15 seconds", "15000")
   , ("30s", "30 seconds", "30000")
   , ("1m", "1 minute", "60000")
@@ -296,7 +296,7 @@ refreshButton_ = do
       $ faSprite_ "arrows-rotate" "regular" "w-3.5 h-3.5 text-iconNeutral"
     div_ [class_ "leading-none join-item border-y border-r border-strokeWeak rounded-r-lg shadow-xs group/rf"] do
       button_ ([type_ "button", class_ "cursor-pointer py-2 px-3 max-md:px-2 flex gap-1.5 max-md:gap-1 items-center leading-none text-sm", data_ "tippy-content" "Auto-refresh interval"] <> popoverTrigger_ "auto-refresh-pop") do
-        span_ [class_ "auto-refresh-span text-textWeak max-md:hidden", Aria.label_ "Auto-refresh interval"] "Off"
+        span_ [class_ "auto-refresh-span text-textWeak max-md:hidden", Aria.label_ "Auto-refresh interval"] "Paused"
         faSprite_ "chevron-down" "regular" "w-3 h-3 text-iconNeutral"
 
       ul_ ([class_ "dropdown dropdown-end menu p-2 shadow-lg bg-bgRaised rounded-box border border-strokeWeak mt-2 min-w-40"] <> popoverPanel_ "auto-refresh-pop") do

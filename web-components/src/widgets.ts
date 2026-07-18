@@ -1,10 +1,35 @@
 'use strict';
-import { params } from './main';
 import { getSeriesColor } from './colorMapping';
 import { beginChartFetch } from './chart-fetch-seq';
+import { isNearChartViewport } from './chart-initialization';
 import { formatNumber, convertToNanoseconds, formatDuration, statScalar, formatStatValue } from './stat-value';
 const INITIAL_FETCH_INTERVAL = 5000;
 const $ = (id: string) => document.getElementById(id);
+const params = () => ({ ...Object.fromEntries(new URLSearchParams(location.search)) });
+
+// --- ECharts loads only once a chart enters the viewport ---
+type EChartsAssetUrls = { echarts: string; theme: string };
+let echartsLoad: Promise<void> | undefined;
+
+const loadScript = (src: string) => new Promise<void>((resolve, reject) => {
+  const script = document.createElement('script');
+  script.src = src;
+  script.onload = () => resolve();
+  script.onerror = () => reject(new Error(`Failed to load ${src}`));
+  document.head.append(script);
+});
+
+const ensureECharts = () => {
+  if ((window as any).echarts) return Promise.resolve();
+  if (!echartsLoad) {
+    const assets = ((window as any).echartsAssetUrls as EChartsAssetUrls | undefined) ?? {
+      echarts: '/public/assets/deps/echarts/echarts.min.js',
+      theme: '/public/assets/roma-echarts.js',
+    };
+    echartsLoad = loadScript(assets.echarts).then(() => loadScript(assets.theme));
+  }
+  return echartsLoad;
+};
 
 // --- Concurrency limiter for fetch requests (max 3 in-flight) ---
 const MAX_CONCURRENT_FETCHES = 4;
@@ -25,36 +50,12 @@ const limitedFetch = (url: string): Promise<Response> => {
   });
 };
 
-// --- Staggered chart initialization, paused during scroll ---
-// Each echarts.init+setOption takes ~30-35ms which can't be split further.
-// We process 1 chart per rAF frame but pause entirely during active scrolling
-// to keep scroll buttery smooth. Charts resume init when scrolling stops.
+// --- Staggered chart initialization ---
+// One ECharts instance is created per animation frame so visible charts stay responsive.
 const initQueue: Array<{ fn: () => void; el: HTMLElement | null }> = [];
 let initScheduled = false;
-let isScrolling = false;
-let scrollTimer: ReturnType<typeof setTimeout> | null = null;
-
-// Detect scroll on the main content container (or any parent that scrolls)
-const trackScroll = () => {
-  const scrollTarget = document.getElementById('main-content') || window;
-  scrollTarget.addEventListener('scroll', () => {
-    isScrolling = true;
-    if (scrollTimer) clearTimeout(scrollTimer);
-    scrollTimer = setTimeout(() => {
-      isScrolling = false;
-      ensureScheduled(); // resume init queue after scroll settles
-    }, 150);
-  }, { passive: true });
-};
-if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', trackScroll);
-else trackScroll();
 
 const processInitQueue = () => {
-  if (isScrolling) {
-    // Don't init charts while scrolling — reschedule for after scroll ends
-    initScheduled = false;
-    return;
-  }
   if (initQueue.length > 0) {
     initQueue.shift()!.fn(); // 1 chart per frame
   }
@@ -66,7 +67,7 @@ const processInitQueue = () => {
 };
 
 const ensureScheduled = () => {
-  if (!initScheduled && initQueue.length > 0 && !isScrolling) {
+  if (!initScheduled && initQueue.length > 0) {
     initScheduled = true;
     requestAnimationFrame(processInitQueue);
   }
@@ -85,8 +86,7 @@ const visibilityObserver = new IntersectionObserver((entries) => {
   }
 });
 
-// Deferred init for off-screen charts — only init when scrolled near viewport.
-// 600px rootMargin starts loading ahead of scroll so charts are ready before visible.
+// Deferred init for off-screen charts — only init just before they enter the viewport.
 const deferredInits = new Map<HTMLElement, () => void>();
 const deferredInitObserver = new IntersectionObserver((entries) => {
   for (const entry of entries) {
@@ -99,7 +99,7 @@ const deferredInitObserver = new IntersectionObserver((entries) => {
     }
     deferredInitObserver.unobserve(entry.target);
   }
-}, { rootMargin: '600px' });
+}, { rootMargin: '150px' });
 
 const queueChartInit = (fn: () => void, chartId?: string) => {
   const el = chartId ? document.getElementById(chartId) : null;
@@ -108,14 +108,16 @@ const queueChartInit = (fn: () => void, chartId?: string) => {
     ensureScheduled();
     return;
   }
-  // Check if near viewport — init immediately; otherwise defer until scrolled near
+  // Keep a small look-ahead window without instantiating the whole metric grid.
   const rect = el.getBoundingClientRect();
-  if (rect.top < window.innerHeight + 600 && rect.bottom > -200) {
-    initQueue.push({ fn, el });
-    visibilityObserver.observe(el);
-    ensureScheduled();
+  if (isNearChartViewport(rect, window.innerHeight)) {
+    void ensureECharts().then(() => {
+      initQueue.push({ fn, el });
+      visibilityObserver.observe(el);
+      ensureScheduled();
+    });
   } else {
-    deferredInits.set(el, fn);
+    deferredInits.set(el, () => void ensureECharts().then(fn));
     deferredInitObserver.observe(el);
   }
 };
@@ -202,7 +204,7 @@ const showNoDataOverlay = (chartId: string, message?: string, variant: 'empty' |
   if (variant === 'error') {
     // Distinct from "no data": error triangle + textError tone so users can tell
     // a failed widget from a legitimately empty time range.
-    overlay.innerHTML = `<div class="text-center text-textError"><svg class="w-6 h-6 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"/></svg><p class="text-sm font-medium">${msg}</p></div>`;
+    overlay.innerHTML = `<div class="text-center text-textError"><svg class="w-6 h-6 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"/></svg><p class="text-sm font-medium">${msg}</p><p class="mt-1 text-xs text-textWeak">Try refreshing or changing the time range.</p></div>`;
   } else {
     overlay.innerHTML = `<div class="text-center text-textWeak"><svg class="w-6 h-6 mx-auto mb-2 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 13h4l3-8 4 16 3-8h4"/></svg><p class="text-sm">${msg}</p></div>`;
   }
@@ -419,7 +421,7 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
     console.error('Failed to fetch new data:', e);
     chart.hideLoading();
     if (!isStale()) {
-      showNoDataOverlay(chartId, 'Failed to load data', 'error');
+      showNoDataOverlay(chartId, "Couldn't load this chart", 'error');
       setStatValue(widgetData, null); // clear the stat spinner on fetch failure
     }
   } finally {
@@ -468,6 +470,15 @@ type WidGetData = {
   warningThreshold?: number | null;
 };
 
+const chartDisposers = new Map<string, () => void>();
+
+const disposeChartsIn = (root: Element) => {
+  const charts = root.matches('[data-chart-widget]') ? [root] : [...root.querySelectorAll('[data-chart-widget]')];
+  charts.forEach((chart) => chartDisposers.get((chart as HTMLElement).id)?.());
+};
+
+document.addEventListener('htmx:beforeSwap', (event) => disposeChartsIn((event as CustomEvent<{ target: Element }>).detail.target));
+
 // Global resize queue to batch chart resize operations
 const resizeQueue = new Set<string>();
 let resizeFrameScheduled = false;
@@ -507,6 +518,9 @@ const chartWidget = (widgetData: WidGetData) => {
     chartEl = $(chartId),
     liveStreamCheckbox = $('streamLiveData') as HTMLInputElement;
   let intervalId: NodeJS.Timeout | null = null;
+  const controller = new AbortController();
+
+  chartDisposers.get(chartId)?.();
 
   // Dispose of any existing chart instance before creating a new one
   const existingChart = (window as any).echarts.getInstanceByDom(chartEl);
@@ -556,19 +570,21 @@ const chartWidget = (widgetData: WidGetData) => {
       clearInterval(intervalId);
       intervalId = null;
     }
-  });
+  }, { signal: controller.signal });
 
+  let dataObserver: IntersectionObserver | undefined;
   if (!opt.dataset.source && chartEl) {
     chart.showLoading({
-      text: 'Loading...',
+      text: 'Loading chart…',
       color: styles.brandColor,
       textColor: styles.tooltipTextColor,
       maskColor: styles.chartMask,
       zlevel: 0,
     });
-    new IntersectionObserver(
+    dataObserver = new IntersectionObserver(
       (entries, observer) => entries[0]?.isIntersecting && (updateChartData(chart, opt, true, widgetData), observer.disconnect())
-    ).observe(chartEl);
+    );
+    dataObserver.observe(chartEl);
   }
 
   const updateQuery = () => {
@@ -582,7 +598,7 @@ const chartWidget = (widgetData: WidGetData) => {
       updateQuery();
       if (window.logListTable && e.detail?.source !== 'expand-timerange') (window.logListTable as any).refetchLogs();
       updateChartData(chart, opt, true, widgetData);
-    });
+    }, { signal: controller.signal });
   });
 
   window.addEventListener('update-query', (e: any) => {
@@ -591,7 +607,7 @@ const chartWidget = (widgetData: WidGetData) => {
     if (window.logListTable && e.detail?.source !== 'expand-timerange' && e.detail?.source !== 'chart-zoom')
       (window.logListTable as any).refetchLogs();
     updateChartData(chart, opt, true, widgetData);
-  });
+  }, { signal: controller.signal });
 
   // Register with shared theme observer instead of per-widget MutationObserver
   const onThemeChange: ThemeCallback = (_isDark, _cbStyles) => {
@@ -615,10 +631,14 @@ const chartWidget = (widgetData: WidGetData) => {
   };
   themeCallbacks.add(onThemeChange);
 
-  window.addEventListener('pagehide', () => {
+  chartDisposers.set(chartId, () => {
     if (intervalId) clearInterval(intervalId);
+    dataObserver?.disconnect();
+    controller.abort();
     if (chartEl) sharedResizeObserver.unobserve(chartEl);
     themeCallbacks.delete(onThemeChange);
+    if (!chart.isDisposed()) chart.dispose();
+    chartDisposers.delete(chartId);
   });
 };
 

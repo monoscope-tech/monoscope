@@ -39,6 +39,7 @@ export default defineConfig({
     emptyOutDir: true,
     assetsDir: 'assets',
     sourcemap: true, // Enable source maps for debugging
+    cssCodeSplit: false,
     chunkSizeWarningLimit: 10000, // Increased chunk size limit (in kB)
     rollupOptions: {
       output: {
@@ -48,7 +49,7 @@ export default defineConfig({
           const info = assetInfo.name.split('.');
           const ext = info[info.length - 1];
           if (/\.(css)$/.test(assetInfo.name)) {
-            return `css/[name].[ext]`;
+            return `css/index.[ext]`;
           }
           if (/\.(woff2?|eot|ttf|otf)$/.test(assetInfo.name)) {
             return `fonts/[name].[ext]`;

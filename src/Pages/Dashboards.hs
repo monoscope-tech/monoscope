@@ -1069,6 +1069,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
               , pageTitleModalId = Just "pageTitleModalId"
               , freeTierStatus = freeTierStatus
               , headContent = Just dashboardHeadContent_
+              , needsGridStack = True
               , pageActions = Just $ div_ [class_ "flex gap-3 max-md:gap-1 items-center"] do
                   TimePicker.timepicker_ Nothing currentRange Nothing
                   TimePicker.refreshButton_
@@ -2281,6 +2282,7 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = d
           , pageTitleSuffixModalId = Just "tabRenameModalId" -- Modal for renaming tab
           , freeTierStatus = freeTierStatus
           , headContent = Just dashboardHeadContent_
+          , needsGridStack = True
           , pageActions = Just $ div_ [class_ "flex gap-3 max-md:gap-1 items-center"] do
               TimePicker.timepicker_ Nothing currentRange Nothing
               TimePicker.refreshButton_

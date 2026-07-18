@@ -53,9 +53,8 @@
     </div>
     <script type="module" src="/src/index.ts"></script>
     <script type="module">
-      import { initializeDefaultSchema } from '/src/index.ts';
-
-      document.addEventListener('DOMContentLoaded', () => {
+      document.addEventListener('DOMContentLoaded', async () => {
+        const { initializeDefaultSchema } = await import('/src/query-editor/query-editor-config.ts');
         // Get a reference to the editor component
         const editor = document.getElementById('kusto-editor');
 
