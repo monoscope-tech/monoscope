@@ -134,6 +134,10 @@ extra-source-files:
     static/migrations/0106_project_billing_provider.sql
     static/migrations/0106_replay_merge_lease.sql
     static/migrations/0107_replay_shard_keys.sql
+    static/migrations/0108_otel_metrics.sql
+    static/migrations/0109_otel_metrics_date.sql
+    static/migrations/0110_otel_metrics_meta_labels.sql
+    static/migrations/0111_drop_legacy_metrics_meta.sql
 
 source-repository head
   type: git
@@ -644,6 +648,7 @@ test-suite integration-tests
       Pages.QueryCacheSpec
       Pages.ReportsSpec
       Pages.ShareSpec
+      Pages.TelemetrySpec
       Pkg.KafkaConsumerSpec
       ProcessMessageSpec
       ReplaySpec
@@ -893,6 +898,7 @@ test-suite test-dev
       Pages.QueryCacheSpec
       Pages.ReportsSpec
       Pages.ShareSpec
+      Pages.TelemetrySpec
       Pkg.KafkaConsumerSpec
       ProcessMessageSpec
       ReplaySpec

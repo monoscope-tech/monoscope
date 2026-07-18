@@ -1542,7 +1542,12 @@ drawerLoadAttrs_ url =
   , hxTarget_ "#global-data-drawer-content"
   , hxSwap_ "innerHTML"
   , term "hx-on::after-swap" "window.evalScriptsFromContent(htmx.find('#global-data-drawer-content'))"
-  , term "_" "on pointerdown or click set #global-data-drawer.checked to true"
+  , term
+      "_"
+      ( "on pointerdown or click\nset #global-data-drawer.checked to true\njs { const metricName = new URL('"
+          <> url
+          <> "', window.location.origin).pathname.match(/\\/metrics\\/details\\/([^/]+)/)?.[1]; if (metricName) { const pageUrl = new URL(window.location); pageUrl.searchParams.set('expand', metricName); history.replaceState({}, '', pageUrl); } } end"
+      )
   ]
 
 
