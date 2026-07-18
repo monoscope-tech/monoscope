@@ -12,6 +12,7 @@ import Data.HashMap.Strict qualified as HM
 import Data.List (isInfixOf)
 import Data.ProtoLens (defMessage, encodeMessage)
 import Data.Set qualified as Set
+import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format.ISO8601 (iso8601Show)
@@ -56,6 +57,13 @@ testTimeRange = (toText $ iso8601Show $ addUTCTime (-3600) frozenTime, toText $ 
 
 nanosOf :: UTCTime -> Word64
 nanosOf = floor . (* 1000000000) . utcTimeToPOSIXSeconds
+
+
+-- | Parse an array column's @::text@ into numbers, tolerant of both the
+-- Postgres/TimescaleDB rendering (@{1,3,5}@) and the real-TimeFusion rendering
+-- (@[1, 3, 5]@) so metric-column assertions hold in both test topologies.
+parseNumArray :: Text -> [Double]
+parseNumArray = mapMaybe (readMaybe . toString) . filter (not . T.null) . T.split (`elem` (",{}[] " :: [Char]))
 
 
 -- | Helper to query logs via the dedicated data endpoint (returns LogResult).
@@ -211,7 +219,7 @@ spec = sequential $ aroundAll withTestResources do
           request = defMessage & MSF.resourceMetrics .~ [defMessage & PMF.resource .~ mkResource key [] & PMF.scopeMetrics .~ [defMessage & PMF.metrics .~ [metric]]]
       void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto request)
       rows <- runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT hist_bucket_counts::text FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = 'request.duration' |] :: IO (V.Vector Text)
-      rows `shouldBe` V.singleton "{0,2,1}"
+      parseNumArray <$> V.toList rows `shouldBe` [[0, 2, 1]]
 
     it "Test 4.1d: persists full histogram distribution, temporality, and exemplars" $ \tr -> do
       key <- createTestAPIKey tr pid "histogram-full-key"
@@ -249,7 +257,7 @@ spec = sequential $ aroundAll withTestResources do
       case V.toList rows of
         [(c, s, mn, mx, bounds, temporality, exemplars)] -> do
           (c, s, mn, mx) `shouldBe` (7, 12.5, 0.5, 9.0)
-          bounds `shouldBe` "{10,20}"
+          parseNumArray bounds `shouldBe` [10, 20]
           temporality `shouldBe` "CUMULATIVE"
           toString exemplars `shouldContain` "5.5"
         other -> expectationFailure $ "expected one histogram row, got: " <> show other
@@ -295,7 +303,12 @@ spec = sequential $ aroundAll withTestResources do
       -- exp_hist_scale/pos_offset/neg_offset are INTEGER (int4); cast to bigint so
       -- hasql's Int64 decoder matches the column OID.
       rows <- runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT distribution_count, distribution_sum, exp_hist_scale::bigint, exp_hist_zero_count, exp_hist_zero_threshold, exp_hist_pos_offset::bigint, exp_hist_pos_buckets::text, exp_hist_neg_offset::bigint, exp_hist_neg_buckets::text, aggregation_temporality FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = 'request.size.exp' |] :: IO (V.Vector (Int64, Double, Int64, Int64, Double, Int64, Text, Int64, Text, Text))
-      V.toList rows `shouldBe` [(20, 55.0, 4, 3, 0.001, 2, "{1,3,5}", -1, "{2,4}", "DELTA")]
+      case V.toList rows of
+        [(c, s, scale, zc, zt, posOff, posBkts, negOff, negBkts, temporality)] -> do
+          (c, s, scale, zc, zt, posOff, negOff, temporality) `shouldBe` (20, 55.0, 4, 3, 0.001, 2, -1, "DELTA")
+          parseNumArray posBkts `shouldBe` [1, 3, 5]
+          parseNumArray negBkts `shouldBe` [2, 4]
+        other -> expectationFailure $ "expected one exp-histogram row, got: " <> show other
 
     it "Test 4.1f: persists summary count, sum, and quantiles" $ \tr -> do
       key <- createTestAPIKey tr pid "summary-key"
@@ -315,27 +328,34 @@ spec = sequential $ aroundAll withTestResources do
           request = defMessage & MSF.resourceMetrics .~ [defMessage & PMF.resource .~ mkResource key [] & PMF.scopeMetrics .~ [scopeMetrics]]
       void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto request)
       rows <- runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT distribution_count, distribution_sum, summary_quantiles::text, summary_values::text FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = 'request.latency.summary' |] :: IO (V.Vector (Int64, Double, Text, Text))
-      V.toList rows `shouldBe` [(12, 640.0, "{0.5,0.99}", "{100,250}")]
+      case V.toList rows of
+        [(c, s, quantiles, values)] -> do
+          (c, s) `shouldBe` (12, 640.0)
+          parseNumArray quantiles `shouldBe` [0.5, 0.99]
+          parseNumArray values `shouldBe` [100, 250]
+        other -> expectationFailure $ "expected one summary row, got: " <> show other
 
     -- Exercises every WriteTarget selection through the real processList path.
-    -- The pure PG/TF routing of `writeTargetFor` is pinned by its doctest; here
-    -- we verify the observable ingestion invariant each target must uphold: the
-    -- point is durably written exactly once and a replay is idempotent. (This
-    -- harness collapses the PG and TF legs onto one physical DB — no separate
-    -- TIMEFUSION_PG_TEST_URL — so "written to the other store only" is not
-    -- observable and deliberately not asserted.)
+    -- The pure PG/TF routing of `writeTargetFor` is pinned by its doctest; here we
+    -- verify the observable invariant each target must uphold: the point is durably
+    -- written exactly once and a replay is idempotent. We count the row in whichever
+    -- store the target chose (max over PG + TF): with a real separate TimeFusion the
+    -- pg-only/tf-only markers land in exactly one store, while a shared-DB harness
+    -- collapses both legs onto one — max is 1 in either topology.
     it "Test 4.3: every write target durably persists once and replays idempotently" $ \tr -> do
       key <- createTestAPIKey tr pid "metric-write-target-key"
       let metricsCeType = HM.singleton "ce-type" "org.opentelemetry.otlp.metrics.v1"
           payload name = ("wt-ack", encodeMessage (createGaugeMetricAtTime key name 7 frozenTime))
-          rowCount name = runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT count(*)::bigint FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = #{name} |] :: IO (V.Vector Int)
+          pgCount name = (\(Only n) -> n) . V.head <$> withPool tr.trPool (DBT.query [sql| SELECT count(*)::int FROM otel_metrics WHERE project_id = ? AND metric_name = ? |] (unUUIDId pid, name)) :: IO Int
+          tfCount name = V.head <$> runTestBg frozenTime tr (Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT count(*)::bigint FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = #{name} |]) :: IO Int
+          maxCount name = max <$> pgCount name <*> tfCount name
           send name attrs = void $ runTestBg frozenTime tr $ OtlpServer.processList [payload name] attrs
       let cases = [("wt.pg.only", HM.insert "monoscope-write-failure" "pg-failed" metricsCeType), ("wt.tf.only", HM.insert "monoscope-write-failure" "tf-failed" metricsCeType), ("wt.both", metricsCeType)] :: [(Text, HM.HashMap Text Text)]
       forM_ cases $ \(name, attrs) -> do
         send name attrs
-        rowCount name >>= (`shouldBe` V.singleton 1)
+        maxCount name >>= (`shouldBe` 1)
         send name attrs -- replay the identical batch
-        rowCount name >>= (`shouldBe` V.singleton 1)
+        maxCount name >>= (`shouldBe` 1)
 
     it "Test 4.4: TF metric read path returns series values matching the ingested points" $ \tr -> do
       key <- createTestAPIKey tr pid "tf-read-match-key"
