@@ -253,14 +253,17 @@ spec = sequential $ aroundAll withTestResources do
           request :: MS.ExportMetricsServiceRequest
           request = defMessage & MSF.resourceMetrics .~ [defMessage & PMF.resource .~ mkResource key [] & PMF.scopeMetrics .~ [scopeMetrics]]
       void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto request)
-      rows <- runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT distribution_count, distribution_sum, distribution_min, distribution_max, hist_explicit_bounds::text, aggregation_temporality, exemplars::text FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = 'request.duration.full' |] :: IO (V.Vector (Int64, Double, Double, Double, Text, Text, Text))
+      rows <- runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT distribution_count, distribution_sum, distribution_min, distribution_max, hist_explicit_bounds::text, aggregation_temporality FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = 'request.duration.full' |] :: IO (V.Vector (Int64, Double, Double, Double, Text, Text))
       case V.toList rows of
-        [(c, s, mn, mx, bounds, temporality, exemplars)] -> do
+        [(c, s, mn, mx, bounds, temporality)] -> do
           (c, s, mn, mx) `shouldBe` (7, 12.5, 0.5, 9.0)
           parseNumArray bounds `shouldBe` [10, 20]
           temporality `shouldBe` "CUMULATIVE"
-          toString exemplars `shouldContain` "5.5"
         other -> expectationFailure $ "expected one histogram row, got: " <> show other
+      -- exemplars is jsonb; a ::text cast reports as jsonb over real TimeFusion's
+      -- pgwire, so decode it as a JSON value (consistent OID) instead of text.
+      exemplarRows <- runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT exemplars FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = 'request.duration.full' |] :: IO (V.Vector AE.Value)
+      decodeUtf8 (AE.encode (V.head exemplarRows)) `shouldSatisfy` T.isInfixOf "5.5"
 
     it "Test 4.1e: persists exponential histogram native columns" $ \tr -> do
       key <- createTestAPIKey tr pid "exp-histogram-key"
