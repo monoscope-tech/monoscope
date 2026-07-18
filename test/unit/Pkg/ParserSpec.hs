@@ -110,8 +110,10 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', c
       attributeQuery `shouldSatisfy` T.isInfixOf "variant_to_json(attributes)->'system'->>'device' = 'disk0'"
       let (resourceQuery, _) = fromRight' $ parseQueryToComponents cfg "| where resource.host.name == \"node-1\""
       resourceQuery `shouldSatisfy` T.isInfixOf "variant_to_json(resource)->'host'->>'name' = 'node-1'"
-      let (groupQuery, _) = fromRight' $ parseQueryToComponents cfg "| summarize avg(value) by bin_auto(timestamp), resource.host.name"
-      groupQuery `shouldSatisfy` T.isInfixOf "GROUP BY time_bucket('6 hours', timestamp), COALESCE(variant_to_json(resource)->'host'->>'name'::text, 'null')"
+      -- Grouping dimensions live on the chart query (finalSummarizeQuery), not the
+      -- flat data query; assert the flattened resource path reaches its GROUP BY.
+      let (_, groupComps) = fromRight' $ parseQueryToComponents cfg "| summarize avg(value) by bin_auto(timestamp), resource.host.name"
+      fromMaybe "" groupComps.finalSummarizeQuery `shouldSatisfy` T.isInfixOf "GROUP BY time_bucket('6 hours', timestamp), COALESCE(variant_to_json(resource)->'host'->>'name'::text, 'null')"
 
     it "spans source leaves service filter as a flat column" do
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| where service == \"accounting\""
