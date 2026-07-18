@@ -50,6 +50,7 @@ import Effectful.Log (Log)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
+import Hasql.Session qualified as Session
 import Hasql.TH (resultlessStatement, singletonStatement)
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
@@ -782,6 +783,16 @@ processBackgroundJob authCtx bgJob =
           <> show (length activeUsers)
           <> " in last 24h)\n"
           <> unlines (map fmtUser activeUsers)
+
+      -- Reclaim index bloat on apis.log_patterns. Every pattern upsert rewrites the
+      -- indexed last_seen_at, so idx_log_patterns_last_seen can't HOT-update and bloats
+      -- ~65x/day (1.5 GB observed vs 23 MB rebuilt). REINDEX CONCURRENTLY runs online
+      -- (brief locks only) so ingestion keeps writing; it must go through the simple
+      -- query protocol (Session.script) — the prepared/extended protocol used by interp
+      -- rejects REINDEX. The index earns its keep: it backs the last_seen_at-ordered
+      -- pattern list (ApiHandlers/Reports) over projects with 1M+ patterns.
+      tryStep "reindexLogPatternsLastSeen"
+        $ Hasql.use (Session.script "REINDEX INDEX CONCURRENTLY apis.idx_log_patterns_last_seen")
 
       -- Section 9: Project links
       let linkRow (p, _, _, _) = "- [" <> p.title <> "](" <> authCtx.env.hostUrl <> "p/" <> p.id.toText <> ")"
