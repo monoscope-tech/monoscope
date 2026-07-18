@@ -79,7 +79,7 @@ drawer_ drawerId urlM content trigger = div_ [class_ "drawer drawer-end inline-b
       , Aria.label_ "Toggle drawer"
       ]
         <> [checked_ | isJust content]
-        <> [[__|on keyup if the event's key is 'Escape' set my.checked to false trigger keyup end
+        <> [ [__|on keyup if the event's key is 'Escape' set my.checked to false trigger keyup end
           on change
             if my.checked then
               add .overflow-hidden to <body/>
@@ -91,7 +91,8 @@ drawer_ drawerId urlM content trigger = div_ [class_ "drawer drawer-end inline-b
               remove .overflow-hidden from <body/>
               if my._focusTrapCleanup then call my._focusTrapCleanup() end
             end
-      |]]
+      |]
+           ]
     )
   label_ [Lucid.for_ drawerId, class_ "drawer-button inline-block", Aria.label_ "Open drawer"] trigger
   div_ [class_ "drawer-side top-0 left-0 w-full h-full flex z-10000 overflow-y-scroll "] do

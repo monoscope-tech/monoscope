@@ -676,8 +676,9 @@ relatedMetrics pid source metric candidates =
                 span_ $ toHtml $ candidate.metricType <> if candidate.metricUnit == "" then "" else " · " <> candidate.metricUnit
                 span_ [class_ "text-textDisabled"] "•"
                 span_ $ toHtml $ relatedMetricContext metric candidate
-              when (candidate.metricDescription /= "") $
-                span_ [class_ "mt-1 block truncate text-xs text-textWeak"] $ toHtml candidate.metricDescription
+              when (candidate.metricDescription /= "")
+                $ span_ [class_ "mt-1 block truncate text-xs text-textWeak"]
+                $ toHtml candidate.metricDescription
             faSprite_ "arrow-right" "regular" "w-3 shrink-0 text-iconNeutral transition-transform group-hover:translate-x-0.5"
 
 
@@ -692,7 +693,8 @@ relatedMetricContext metric candidate =
 
 relatedMetricScore :: Telemetry.MetricDataPoint -> Telemetry.MetricChartListData -> Int
 relatedMetricScore metric candidate =
-  100 * length (takeWhile id $ zipWith (==) (T.splitOn "." metric.metricName) (T.splitOn "." candidate.metricName))
+  100
+    * length (takeWhile id $ zipWith (==) (T.splitOn "." metric.metricName) (T.splitOn "." candidate.metricName))
     + length (S.intersection (S.fromList $ V.toList metric.metricLabels) (S.fromList $ V.toList candidate.metricLabels))
 
 
