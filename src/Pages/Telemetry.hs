@@ -337,7 +337,9 @@ overViewTabs pid tab =
 chartsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricChartListData -> Map Text (V.Vector Text) -> V.Vector Telemetry.MetricChartListData -> V.Vector Text -> Text -> Text -> Int -> Maybe Text -> Html ()
 chartsPage pid metricList labels inactive sources source mFilter activeCount nextUrl = do
   let deepLinkScript =
-        T.replace "__metric-detail-path__" ("/p/" <> pid.toText <> "/metrics/details/")
+        T.replace
+          "__metric-detail-path__"
+          ("/p/" <> pid.toText <> "/metrics/details/")
           [text|on load
             js {
               const pageUrl = new URL(window.location);
@@ -364,60 +366,60 @@ chartsPage pid metricList labels inactive sources source mFilter activeCount nex
     , term "_" deepLinkScript
     ]
     $ do
-    div_ [class_ "w-full"] do
-      div_ [class_ "w-full flex flex-wrap gap-3 max-md:gap-2 items-center min-h-10 py-2 border-b border-strokeWeak"] do
-        overViewTabs pid "charts"
-        div_ [class_ "w-px h-6 bg-strokeWeak max-md:hidden"] pass
-        let metricNames =
-              ordNub
-                $ ( \x ->
-                      let (n, pr) = if length (T.splitOn "." x.metricName) == 1 then (T.splitOn "_" x.metricName, "_") else (T.splitOn "." x.metricName, ".")
-                       in fromMaybe "" (viaNonEmpty head n) <> pr
-                  )
-                <$> V.toList metricList
-            stripTrailing t = fromMaybe t $ T.stripSuffix "." t <|> T.stripSuffix "_" t
-        div_ [class_ "flex items-center gap-2 shrink-0 max-md:w-full max-md:flex-wrap"] do
-          span_ [class_ "text-xs font-medium text-textWeak"] "Scope"
-          div_ [class_ "join max-md:w-full"] do
-            select_
-              [ class_ "join-item select select-sm bg-bgBase border border-strokeWeak h-10 w-36 max-md:w-1/2 shadow-none cursor-pointer hover:border-strokeStrong transition-colors focus:outline-hidden focus:ring-2 focus:ring-strokeFocus"
-              , Aria.label_ "Filter by service"
-              , onchange_ "(() => {window.setQueryParamAndReload('metric_source', this.value)})()"
+      div_ [class_ "w-full"] do
+        div_ [class_ "w-full flex flex-wrap gap-3 max-md:gap-2 items-center min-h-10 py-2 border-b border-strokeWeak"] do
+          overViewTabs pid "charts"
+          div_ [class_ "w-px h-6 bg-strokeWeak max-md:hidden"] pass
+          let metricNames =
+                ordNub
+                  $ ( \x ->
+                        let (n, pr) = if length (T.splitOn "." x.metricName) == 1 then (T.splitOn "_" x.metricName, "_") else (T.splitOn "." x.metricName, ".")
+                         in fromMaybe "" (viaNonEmpty head n) <> pr
+                    )
+                  <$> V.toList metricList
+              stripTrailing t = fromMaybe t $ T.stripSuffix "." t <|> T.stripSuffix "_" t
+          div_ [class_ "flex items-center gap-2 shrink-0 max-md:w-full max-md:flex-wrap"] do
+            span_ [class_ "text-xs font-medium text-textWeak"] "Scope"
+            div_ [class_ "join max-md:w-full"] do
+              select_
+                [ class_ "join-item select select-sm bg-bgBase border border-strokeWeak h-10 w-36 max-md:w-1/2 shadow-none cursor-pointer hover:border-strokeStrong transition-colors focus:outline-hidden focus:ring-2 focus:ring-strokeFocus"
+                , Aria.label_ "Filter by service"
+                , onchange_ "(() => {window.setQueryParamAndReload('metric_source', this.value)})()"
+                ]
+                do
+                  option_ ([selected_ "all" | "all" == source] ++ [value_ "all"]) "All Services"
+                  forM_ sources $ \s -> option_ ([selected_ s | s == source] ++ [value_ s]) $ toHtml s
+              select_
+                [ class_ "join-item select select-sm bg-bgBase border border-strokeWeak h-10 w-auto max-md:w-1/2 shadow-none cursor-pointer hover:border-strokeStrong transition-colors focus:outline-hidden focus:ring-2 focus:ring-strokeFocus"
+                , Aria.label_ "Filter by metric group"
+                , onchange_ "(() => {window.setQueryParamAndReload('metric_prefix', this.value)})()"
+                ]
+                do
+                  option_ ([selected_ "all" | "all" == mFilter] ++ [value_ "all"]) "All metric groups"
+                  forM_ metricNames $ \m -> option_ ([selected_ m | m == mFilter] ++ [value_ m]) $ toHtml (stripTrailing m)
+          div_ [class_ "w-px h-6 bg-strokeWeak max-md:hidden"] pass
+          label_ [class_ "input input-sm flex grow min-w-0 max-md:w-full max-md:flex-none h-10 bg-bgBase border border-strokeWeak shadow-none overflow-hidden items-center gap-2 hover:border-strokeStrong transition-colors focus-within:outline-hidden focus-within:ring-2 focus-within:ring-strokeFocus focus-within:border-strokeFocus"] do
+            faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-50"
+            input_
+              [ class_ "grow"
+              , type_ "text"
+              , placeholder_ "Search metrics"
+              , Aria.label_ "Search metrics"
+              , id_ "search-input"
+              , [__| on input show .metric_filterble in #metric_list_container when its textContent.toLowerCase() contains my value.toLowerCase() |]
               ]
-              do
-                option_ ([selected_ "all" | "all" == source] ++ [value_ "all"]) "All Services"
-                forM_ sources $ \s -> option_ ([selected_ s | s == source] ++ [value_ s]) $ toHtml s
-            select_
-              [ class_ "join-item select select-sm bg-bgBase border border-strokeWeak h-10 w-auto max-md:w-1/2 shadow-none cursor-pointer hover:border-strokeStrong transition-colors focus:outline-hidden focus:ring-2 focus:ring-strokeFocus"
-              , Aria.label_ "Filter by metric group"
-              , onchange_ "(() => {window.setQueryParamAndReload('metric_prefix', this.value)})()"
-              ]
-              do
-                option_ ([selected_ "all" | "all" == mFilter] ++ [value_ "all"]) "All metric groups"
-                forM_ metricNames $ \m -> option_ ([selected_ m | m == mFilter] ++ [value_ m]) $ toHtml (stripTrailing m)
-        div_ [class_ "w-px h-6 bg-strokeWeak max-md:hidden"] pass
-        label_ [class_ "input input-sm flex grow min-w-0 max-md:w-full max-md:flex-none h-10 bg-bgBase border border-strokeWeak shadow-none overflow-hidden items-center gap-2 hover:border-strokeStrong transition-colors focus-within:outline-hidden focus-within:ring-2 focus-within:ring-strokeFocus focus-within:border-strokeFocus"] do
-          faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-50"
-          input_
-            [ class_ "grow"
-            , type_ "text"
-            , placeholder_ "Search metrics"
-            , Aria.label_ "Search metrics"
-            , id_ "search-input"
-            , [__| on input show .metric_filterble in #metric_list_container when its textContent.toLowerCase() contains my value.toLowerCase() |]
-            ]
-        span_ [class_ "ml-auto shrink-0 text-xs text-textWeak tabular-nums max-md:ml-0 max-md:w-full", data_ "tippy-content" "Metric names seen in the past 7 days. This catalog is independent of the selected chart range."] $ toHtml $ "Catalog: " <> prettyPrintCount activeCount <> " metrics seen in 7d"
-    if V.null metricList && V.null inactive
-      then
-        div_ [class_ "w-full flex items-center justify-center h-96"]
-          $ Components.emptyState_ def{icon = Just "chart-line", action = ESLink "https://monoscope.tech/docs/sdks/" "View SDK setup guides"} "No metrics found" "Metrics will appear here once your application starts sending telemetry data."
-      else do
-        when (V.null metricList && not (V.null inactive))
-          $ div_ [class_ "text-textWeak text-sm py-4"] "No metrics received in the last 7 days."
-        unless (V.null metricList)
-          $ div_ [class_ "w-full grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4", id_ "metric_list_container"]
-          $ chartList pid labels source metricList nextUrl
-        unless (V.null inactive) $ inactiveMetricsList pid source inactive
+          span_ [class_ "ml-auto shrink-0 text-xs text-textWeak tabular-nums max-md:ml-0 max-md:w-full", data_ "tippy-content" "Metric names seen in the past 7 days. This catalog is independent of the selected chart range."] $ toHtml $ "Catalog: " <> prettyPrintCount activeCount <> " metrics seen in 7d"
+      if V.null metricList && V.null inactive
+        then
+          div_ [class_ "w-full flex items-center justify-center h-96"]
+            $ Components.emptyState_ def{icon = Just "chart-line", action = ESLink "https://monoscope.tech/docs/sdks/" "View SDK setup guides"} "No metrics found" "Metrics will appear here once your application starts sending telemetry data."
+        else do
+          when (V.null metricList && not (V.null inactive))
+            $ div_ [class_ "text-textWeak text-sm py-4"] "No metrics received in the last 7 days."
+          unless (V.null metricList)
+            $ div_ [class_ "w-full grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4", id_ "metric_list_container"]
+            $ chartList pid labels source metricList nextUrl
+          unless (V.null inactive) $ inactiveMetricsList pid source inactive
 
 
 metricDetailUrl :: Projects.ProjectId -> Text -> Text -> Text
