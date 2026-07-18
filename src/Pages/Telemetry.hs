@@ -380,12 +380,12 @@ metricDetailUrl pid metricName source = "/p/" <> pid.toText <> "/metrics/details
 
 -- | Shared WTTimeseriesLine widget for a metric. @mTitle@/@mId@/@mExpandBtn@/@mDescription@
 -- carry the per-callsite differences between the chart-list card and the details page.
-metricWidget :: Projects.ProjectId -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Widget.Widget
-metricWidget pid metricName metricUnit mLabel mTitle mId mExpandBtn mDescription =
+metricWidget :: Projects.ProjectId -> Text -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Widget.Widget
+metricWidget pid metricName metricType metricUnit mLabel mTitle mId mExpandBtn mDescription =
   def
     { Widget.wType = Widget.WTTimeseriesLine
-    , Widget.title = mTitle
-    , Widget.query = Just $ "metrics | where metric_name == \"" <> metricName <> "\" | summarize avg(value) by bin_auto(timestamp)" <> maybe "" ("," <>) mLabel
+    , Widget.title = if isDistributionMetricType metricType then (<> " · mean") <$> mTitle else mTitle
+    , Widget.query = Just $ metricQuery metricName metricType mLabel
     , Widget.layout = Just $ Widget.Layout{x = Just 0, y = Just 0, w = Just 2, h = Just 1}
     , Widget.unit = Just metricUnit
     , Widget.hideLegend = Nothing
@@ -397,10 +397,30 @@ metricWidget pid metricName metricUnit mLabel mTitle mId mExpandBtn mDescription
     }
 
 
+isDistributionMetricType :: Text -> Bool
+isDistributionMetricType = (`elem` ["HISTOGRAM", "EXPONENTIAL_HISTOGRAM", "SUMMARY"])
+
+
+metricQuery :: Text -> Text -> Maybe Text -> Text
+metricQuery metricName metricType mLabel =
+  "metrics | where metric_name == \""
+    <> metricName
+    <> "\""
+    <> valueFilter
+    <> " | summarize "
+    <> aggregation
+    <> " by bin_auto(timestamp)"
+    <> maybe "" ("," <>) mLabel
+  where
+    isDistribution = isDistributionMetricType metricType
+    valueFilter = if isDistribution then " and distribution_count > 0 and distribution_sum != null" else ""
+    aggregation = if isDistribution then "sum(distribution_sum) / sum(distribution_count)" else "avg(value)"
+
+
 chartList :: Projects.ProjectId -> Map Text (V.Vector Text) -> Text -> V.Vector Telemetry.MetricChartListData -> Maybe Text -> Html ()
 chartList pid labels source metricList nextUrl = do
   forM_ metricList \metric ->
-    metricCard pid source metric.metricName metric.metricUnit (fromMaybe V.empty $ Map.lookup metric.metricName labels) Nothing
+    metricCard pid source metric.metricName metric.metricType metric.metricUnit (fromMaybe V.empty $ Map.lookup metric.metricName labels) Nothing
   whenJust nextUrl \url ->
     a_ [hxTrigger_ "intersect once", hxSwap_ "outerHTML", hxGet_ url] pass
 
@@ -415,18 +435,18 @@ metricCardGetH pid metricName labelM = do
             Just "all" -> Just "all"
             Just label | label `elem` metric.metricLabels -> Just label
             _ -> Nothing
-       in addRespHeaders $ metricCard pid "all" metric.metricName metric.metricUnit metric.metricLabels selected
+       in addRespHeaders $ metricCard pid "all" metric.metricName metric.metricType metric.metricUnit metric.metricLabels selected
 
 
-metricCard :: Projects.ProjectId -> Text -> Text -> Text -> V.Vector Text -> Maybe Text -> Html ()
-metricCard pid source metricName metricUnit labels selectedM = do
+metricCard :: Projects.ProjectId -> Text -> Text -> Text -> Text -> V.Vector Text -> Maybe Text -> Html ()
+metricCard pid source metricName metricType metricUnit labels selectedM = do
   let selected = if selectedM == Just "all" then Nothing else selectedM <|> listToMaybe (V.toList labels)
       cardId = "metric_" <> T.replace "." "_" metricName
       detailUrl = metricDetailUrl pid metricName source
   div_ [class_ "w-full flex flex-col gap-2 metric_filterble", id_ cardId]
     $ div_ [class_ "h-52"]
     $ toHtml
-    $ (metricWidget pid metricName metricUnit selected (Just metricName) Nothing (Just detailUrl) Nothing)
+    $ (metricWidget pid metricName metricType metricUnit selected (Just metricName) Nothing (Just detailUrl) Nothing)
       { Widget.hideSubtitle = Just True
       , Widget.groupByOptions = V.toList labels <$ guard (not $ V.null labels)
       , Widget.groupBySelected = selectedM <|> selected
@@ -541,7 +561,7 @@ metricsDetailsPage pid sources metric source currentRange = do
       div_ [class_ "flex items-center text-sm"] $ span_ [] $ toHtml metric.metricName
       div_ [class_ "h-64 w-full"]
         $ toHtml
-        $ metricWidget pid metric.metricName metric.metricUnit Nothing Nothing (Just $ "details_" <> T.replace "." "_" metric.metricName) Nothing Nothing
+        $ metricWidget pid metric.metricName metric.metricType metric.metricUnit Nothing Nothing (Just $ "details_" <> T.replace "." "_" metric.metricName) Nothing Nothing
 
     div_ [class_ "flex flex-col gap-2 rounded-2xl border border-strokeWeak", id_ "metric-tabs-container"] $ do
       div_ [class_ "flex", [__|on click halt|]] $ do
@@ -592,7 +612,7 @@ metricBreakdown pid metric = \case
     | label `elem` metric.metricLabels ->
         div_ [class_ "h-64 w-full"]
           $ toHtml
-          $ metricWidget pid metric.metricName metric.metricUnit (Just label) (Just $ "By " <> label) (Just $ "breakdown_" <> T.replace "." "_" metric.metricName) Nothing Nothing
+          $ metricWidget pid metric.metricName metric.metricType metric.metricUnit (Just label) (Just $ "By " <> label) (Just $ "breakdown_" <> T.replace "." "_" metric.metricName) Nothing Nothing
   Just _ -> metricBreakdown pid metric Nothing
   Nothing ->
     div_ [class_ "flex items-center gap-2 h-40 text-sm text-textWeak"] do

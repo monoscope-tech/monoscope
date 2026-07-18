@@ -253,6 +253,15 @@ spec = sequential $ aroundAll withTestResources do
           request :: MS.ExportMetricsServiceRequest
           request = defMessage & MSF.resourceMetrics .~ [defMessage & PMF.resource .~ mkResource key [] & PMF.scopeMetrics .~ [scopeMetrics]]
       void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto request)
+      runTestBg frozenTime tr $ Telemetry.flushMetricCatalog tr.trATCtx.metricCatalogBuffer
+      (_, details) <- toServantResponse tr $ TelemetryPage.metricDetailsGetH pid "request.duration.full" Nothing Nothing Nothing Nothing
+      toString (Lucid.renderText details) `shouldContain` "sum(distribution_sum) / sum(distribution_count)"
+      (_, card) <- toServantResponse tr $ TelemetryPage.metricCardGetH pid "request.duration.full" Nothing
+      toString (Lucid.renderText card) `shouldContain` "request.duration.full · mean"
+      let (timeFrom, timeTo) = testTimeRange
+      chart <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just "metrics | where metric_name == \"request.duration.full\" and distribution_count > 0 and distribution_sum != null | summarize sum(distribution_sum) / sum(distribution_count) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") []
+      chart.error `shouldBe` Nothing
+      chart.dataset `shouldSatisfy` (not . V.null)
       rows <- runTestBg frozenTime tr $ Hasql.withHasqlTimefusion True $ Hasql.interp [HI.sql| SELECT distribution_count, distribution_sum, distribution_min, distribution_max, hist_explicit_bounds::text, aggregation_temporality FROM otel_metrics WHERE project_id = #{pid.toText} AND metric_name = 'request.duration.full' |] :: IO (V.Vector (Int64, Double, Double, Double, Text, Text))
       case V.toList rows of
         [(c, s, mn, mx, bounds, temporality)] -> do
