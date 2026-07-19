@@ -735,7 +735,7 @@ renderChart widget = do
                   Nothing -> "All values"
              in div_ [class_ "flex shrink-0 justify-end px-2 pt-2"]
                   $ details_ [class_ "dropdown dropdown-end relative max-w-[calc(100%-1rem)]"] do
-                    summary_ [class_ "btn btn-xs min-w-0 justify-between gap-1 border-strokeWeak bg-bgRaised px-2 text-left text-textWeak opacity-100 hover:bg-fillWeak", data_ "tippy-content" "Group by"] do
+                    summary_ [class_ "btn btn-xs min-w-0 cursor-pointer justify-between gap-1 border-strokeWeak bg-bgRaised px-2 text-left text-textWeak opacity-100 hover:bg-fillWeak", data_ "tippy-content" "Group by"] do
                       span_ [class_ "shrink-0 text-textDisabled"] "Group by"
                       span_ [class_ "min-w-0 truncate text-left text-textStrong"] $ toHtml selectedLabel
                       Utils.faSprite_ "chevron-down" "regular" "w-3 shrink-0"
@@ -743,7 +743,7 @@ renderChart widget = do
                       let item value label =
                             li_
                               $ button_
-                                [ class_ $ "w-full whitespace-nowrap rounded px-2 py-1.5 text-left text-xs hover:bg-fillWeak " <> bool "" "bg-fillWeak text-textStrong" (widget.groupBySelected == Just value)
+                                [ class_ $ "w-full cursor-pointer whitespace-nowrap rounded px-2 py-1.5 text-left text-xs hover:bg-fillWeak " <> bool "" "bg-fillWeak text-textStrong" (widget.groupBySelected == Just value)
                                 , hxGet_ url
                                 , name_ "label"
                                 , value_ value

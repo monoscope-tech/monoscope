@@ -266,11 +266,13 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM expandM la
       if cursor == 0
         then do
           serviceNames <- V.fromList <$> Telemetry.getMetricServiceNames pid
+          dashboards <- Dashboards.selectDashboardsSortedBy pid "updated_at"
+          monitors <- Monitors.queryMonitorsAll pid
           drawerM <- forM expandM \metricName -> do
             metricM <- Telemetry.getMetricData pid metricName
             pure $ metricM <&> \metric ->
               let selected = labelM >>= \label -> guard (label `elem` metric.metricLabels) $> label
-               in metricsDetailsPage pid serviceNames metric allMetrics (fromMaybe "all" sourceM) selected currentRange
+               in metricsDetailsPage pid serviceNames metric allMetrics (metricReferences metric.metricName dashboards monitors) (fromMaybe "all" sourceM) selected currentRange
           let bwconf' = bwconf{globalDrawerContent = join drawerM}
           addRespHeaders $ MetricsOVChartsMain $ PageCtx bwconf' (pid, metricList, labels, inactive, serviceNames, fromMaybe "all" sourceM, fromMaybe "all" prefixM, V.length active, nextFetchUrl)
         else do
@@ -284,10 +286,12 @@ metricDetailsGetH pid metricName fromM toM sinceM source labelM = do
   let (_, _, currentRange) = parseTime fromM toM sinceM now
   metricM <- Telemetry.getMetricData pid metricName
   relatedCandidates <- V.fromList <$> Telemetry.getMetricChartListData pid (source >>= \s -> guard (s /= "all") $> s) Nothing
+  dashboards <- Dashboards.selectDashboardsSortedBy pid "updated_at"
+  monitors <- Monitors.queryMonitorsAll pid
   case metricM of
     Just metric -> do
       let selected = labelM >>= \label -> guard (label `elem` metric.metricLabels) $> label
-      addRespHeaders $ metricsDetailsPage pid metric.serviceNames metric relatedCandidates (fromMaybe "all" source) selected currentRange
+      addRespHeaders $ metricsDetailsPage pid metric.serviceNames metric relatedCandidates (metricReferences metric.metricName dashboards monitors) (fromMaybe "all" source) selected currentRange
     Nothing -> do
       addRespHeaders $ div_ [class_ "flex flex-col gap-2 -10 text-2xl"] "Metric not found"
 
@@ -575,10 +579,17 @@ dataPointsPage pid metrics refCounts = do
         }
 
 
-metricsDetailsPage :: Projects.ProjectId -> V.Vector Text -> Telemetry.MetricDataPoint -> V.Vector Telemetry.MetricChartListData -> Text -> Maybe Text -> Maybe (Text, Text) -> Html ()
-metricsDetailsPage pid sources metric candidates source selected currentRange = do
+metricsDetailsPage :: Projects.ProjectId -> V.Vector Text -> Telemetry.MetricDataPoint -> V.Vector Telemetry.MetricChartListData -> ([Dashboards.DashboardVM], [Monitors.QueryMonitor]) -> Text -> Maybe Text -> Maybe (Text, Text) -> Html ()
+metricsDetailsPage pid sources metric candidates (dashboards, monitors) source selected currentRange = do
   let refreshId = "metric-details-chart-refresh"
       chartId = "details_" <> T.replace "." "_" metric.metricName
+      labelPriority label
+        | "attributes." `T.isPrefixOf` label = 0 :: Int
+        | "resource.service." `T.isPrefixOf` label = 1
+        | otherwise = 2
+      sortedLabels = sortBy (\a b -> compare (labelPriority a, a) (labelPriority b, b)) $ V.toList metric.metricLabels
+      dimensions = maybe sortedLabels (\label -> label : filter (/= label) sortedLabels) selected
+      (topDimensions, moreDimensions) = splitAt 4 dimensions
   div_
     [ id_ "metric-details-content"
     , class_ "flex flex-col gap-5 h-full"
@@ -586,6 +597,7 @@ metricsDetailsPage pid sources metric candidates source selected currentRange = 
     , hxTrigger_ "update-query from:window"
     , hxTarget_ "#metric-details-content"
     , hxSwap_ "morph"
+    , hxIndicator_ "#global-data-drawer-indicator"
     , term "hx-ext" "forward-page-params"
     , [__|on htmx:afterSwap if event.target is me call window.evalScriptsFromContent(me) end end|]
     ]
@@ -594,29 +606,29 @@ metricsDetailsPage pid sources metric candidates source selected currentRange = 
         div_ [class_ "flex flex-wrap items-center justify-between gap-3"] do
           div_ [class_ "min-w-0"] do
             span_ [class_ "block truncate text-sm font-semibold text-textStrong", title_ metric.metricName] $ toHtml metric.metricName
-            span_ [class_ "text-xs text-textWeak"] "Metric detail"
           div_ [class_ "flex flex-wrap items-center gap-2"] do
             select_
-              [ class_ "select select-sm bg-bgRaised text-textStrong border border-strokeStrong rounded-lg w-36 focus:outline-hidden focus:ring-2 focus:ring-strokeFocus"
+              [ class_ "select select-sm cursor-pointer bg-bgRaised text-textStrong border border-strokeStrong rounded-lg w-36 focus:outline-hidden focus:ring-2 focus:ring-strokeFocus max-md:h-11"
               , Aria.label_ "Metric data source"
               , hxGet_ $ "/p/" <> pid.toText <> "/metrics/details/" <> metric.metricName <> "/"
               , name_ "metric_source"
               , hxTarget_ "#metric-details-content"
               , hxSwap_ "morph"
+              , hxIndicator_ "#global-data-drawer-indicator"
               ]
               do
                 option_ ([selected_ "all" | "all" == source] ++ [value_ "all"]) "All sources"
                 forM_ sources $ \s -> option_ ([selected_ s | s == source] ++ [value_ s]) $ toHtml s
             TimePicker.timepicker_ (Just refreshId) currentRange (Just "metric-details")
             TimePicker.refreshButton_
-            label_ [class_ "btn btn-ghost btn-circle btn-sm tap-target text-iconNeutral hover:text-iconBrand", Aria.label_ "Close metric detail", data_ "tippy-content" "Close metric detail", Lucid.for_ "global-data-drawer"] $ faSprite_ "xmark" "regular" "w-3 h-3"
+            label_ [class_ "btn btn-ghost btn-circle btn-sm cursor-pointer tap-target text-iconNeutral hover:text-iconBrand", Aria.label_ "Close metric detail", data_ "tippy-content" "Close metric detail", Lucid.for_ "global-data-drawer"] $ faSprite_ "xmark" "regular" "w-3 h-3"
         div_ [id_ refreshId, class_ "hidden", term "_" "on submit trigger 'update-query' on window"] ""
       metricDetailChart pid metric source selected chartId
 
       div_ [class_ "flex flex-col gap-2 rounded-2xl border border-strokeWeak", id_ "metric-tabs-container"] $ do
         div_ [class_ "flex", [__|on click halt|]] $ do
-          button_ [class_ "a-tab border-b border-b-strokeWeak px-4 py-1.5 t-tab-active", onclick_ "navigatable(this, '#ov-content', '#metric-tabs-container', 't-tab-active')"] "Overview"
-          button_ [class_ "a-tab border-b w-max whitespace-nowrap border-b-strokeWeak px-4 py-1.5 ", onclick_ "navigatable(this, '#rl-content', '#metric-tabs-container', 't-tab-active')"] "Related metrics"
+          button_ [class_ "cursor-pointer a-tab border-b border-b-strokeWeak px-4 py-1.5 t-tab-active focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-strokeFocus max-md:min-h-11", onclick_ "navigatable(this, '#ov-content', '#metric-tabs-container', 't-tab-active')"] "Overview"
+          button_ [class_ "cursor-pointer a-tab border-b w-max whitespace-nowrap border-b-strokeWeak px-4 py-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-strokeFocus max-md:min-h-11", onclick_ "navigatable(this, '#rl-content', '#metric-tabs-container', 't-tab-active')"] "Related metrics"
           div_ [class_ "w-full border-b border-b-strokeWeak"] pass
 
         div_ [class_ "grid px-4 pb-4 mt-2 text-textWeak font-normal"] $ do
@@ -628,46 +640,78 @@ metricsDetailsPage pid sources metric candidates source selected currentRange = 
                   span_ [class_ "text-textStrong"] $ toHtml metric.metricType
                 div_ [class_ "flex flex-col gap-0.5"] do
                   span_ [class_ "text-xs font-medium text-textWeak"] "Unit"
-                  span_ [class_ "text-textStrong"] $ toHtml if metric.metricUnit == "" then "No unit" else metric.metricUnit
+                  span_ [class_ "text-textStrong"] $ toHtml if metric.metricUnit == "" then "Unit not reported" else metric.metricUnit
                 div_ [class_ "flex flex-col gap-0.5"] do
-                  span_ [class_ "text-xs font-medium text-textWeak"] "Source services"
+                  span_ [class_ "text-xs font-medium text-textWeak"] "Reporting services"
                   span_ [class_ "text-textStrong"] $ toHtml $ prettyPrintCount (V.length sources)
                 div_ [class_ "flex flex-col gap-0.5"] do
-                  span_ [class_ "text-xs font-medium text-textWeak"] "Attributes"
+                  span_ [class_ "text-xs font-medium text-textWeak"] "Available dimensions"
                   span_ [class_ "text-textStrong"] $ toHtml $ prettyPrintCount (V.length metric.metricLabels)
               when (metric.metricDescription /= "")
                 $ div_ [class_ "border-t border-strokeWeak pt-3 text-sm leading-6"]
                 $ toHtml metric.metricDescription
-              unless (V.null sources || V.null metric.metricLabels)
-                $ div_ [class_ "border-t border-strokeWeak"] pass
+              unless (null dimensions)
+                $ div_ [class_ "border-t border-strokeWeak pt-4"] do
+                  span_ [class_ "text-xs font-medium text-textWeak"] "Dimensions"
+                  span_ [class_ "mt-1 block text-xs text-textWeak"] "Choose a dimension to split the chart."
+                  div_ [class_ "mt-2 flex flex-wrap gap-1.5"] $ forM_ topDimensions $ \label ->
+                    metricDimension pid metric.metricName source selected label
+                  unless (null moreDimensions)
+                    $ details_ [class_ "mt-3"] do
+                      summary_ [class_ "inline-flex cursor-pointer items-center text-sm text-textWeak hover:text-textStrong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-strokeFocus max-md:min-h-11 max-md:text-sm"] $ "Show " <> toHtml (prettyPrintCount $ length moreDimensions) <> " more dimensions"
+                      div_ [class_ "mt-2 flex flex-wrap gap-1.5"] $ forM_ moreDimensions $ \label ->
+                        metricDimension pid metric.metricName source selected label
               unless (V.null sources)
-                $ div_ [class_ "flex flex-col gap-2"] do
-                  span_ [class_ "text-xs font-medium text-textWeak"] "Source services"
-                  div_ [class_ "flex flex-wrap gap-1.5"] $ forM_ sources $ \service ->
+                $ details_ [class_ "border-t border-strokeWeak pt-4"] do
+                  summary_ [class_ "inline-flex cursor-pointer items-center text-sm text-textWeak hover:text-textStrong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-strokeFocus max-md:min-h-11 max-md:text-sm"] do
+                    "Reporting services"
+                    span_ [class_ "ml-1 text-textDisabled"] $ "(" <> toHtml (prettyPrintCount $ V.length sources) <> ")"
+                  div_ [class_ "mt-2 flex flex-wrap gap-1.5"] $ forM_ sources $ \service ->
                     span_ [class_ "badge badge-ghost font-normal"] $ toHtml service
-              unless (V.null metric.metricLabels)
-                $ div_ [class_ "flex flex-col gap-2"] do
-                  span_ [class_ "text-xs font-medium text-textWeak"] "Metric attributes"
-                  div_ [class_ "flex flex-wrap gap-1.5"] $ forM_ metric.metricLabels $ \label ->
-                    span_ [class_ "badge badge-ghost font-normal"] $ toHtml label
+              unless (null dashboards && null monitors)
+                $ div_ [class_ "border-t border-strokeWeak pt-4"] do
+                  span_ [class_ "text-xs font-medium text-textWeak"] "Used by"
+                  div_ [class_ "mt-2 flex flex-col divide-y divide-strokeWeak border-y border-strokeWeak"] do
+                    forM_ dashboards $ \dashboard ->
+                      a_ [class_ "flex cursor-pointer items-center justify-between gap-3 px-1 py-2 text-sm hover:text-textBrand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-strokeFocus", href_ $ "/p/" <> pid.toText <> "/dashboards/" <> dashboard.id.toText] do
+                        span_ [class_ "truncate text-textStrong"] $ toHtml dashboard.title
+                        faSprite_ "arrow-up-right-from-square" "regular" "w-3 shrink-0 text-iconNeutral"
+                    forM_ monitors $ \monitor ->
+                      a_ [class_ "flex cursor-pointer items-center justify-between gap-3 px-1 py-2 text-sm hover:text-textBrand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-strokeFocus", href_ $ "/p/" <> pid.toText <> "/monitors/alerts/" <> monitor.id.toText] do
+                        span_ [class_ "truncate text-textStrong"] "Monitor"
+                        faSprite_ "arrow-up-right-from-square" "regular" "w-3 shrink-0 text-iconNeutral"
           div_ [class_ "hidden a-tab-content", id_ "rl-content"] $ relatedMetrics pid source metric candidates
+
+
+metricDimension :: Projects.ProjectId -> Text -> Text -> Maybe Text -> Text -> Html ()
+metricDimension pid metricName source selected label =
+  button_
+    [ class_ $ "badge cursor-pointer font-normal hover:border-strokeStrong hover:bg-fillWeak focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-strokeFocus max-md:min-h-11 max-md:text-sm " <> if selected == Just label then "border-strokeStrong bg-fillWeak text-textStrong" else "badge-ghost"
+    , hxGet_ $ metricDetailUrl pid metricName source (Just label)
+    , hxTarget_ "#metric-details-content"
+    , hxSwap_ "morph"
+    , hxIndicator_ "#global-data-drawer-indicator"
+    , data_ "tippy-content" $ "Group chart by " <> label
+    ]
+    $ toHtml label
 
 
 relatedMetrics :: Projects.ProjectId -> Text -> Telemetry.MetricDataPoint -> V.Vector Telemetry.MetricChartListData -> Html ()
 relatedMetrics pid source metric candidates =
   case take 6 $ sortBy (\a b -> compare (relatedMetricScore metric b) (relatedMetricScore metric a)) $ filter ((> 0) . relatedMetricScore metric) $ filter ((/= metric.metricName) . (.metricName)) $ V.toList candidates of
-    [] -> div_ [class_ "px-5 py-8 text-sm text-textWeak"] "No related metrics found in this source."
+    [] -> div_ [class_ "px-5 py-8 text-sm text-textWeak"] $ if source == "all" then "No metrics with a similar name or dimensions were found." else "No similar metrics in this source. Try All sources."
     related -> do
       div_ [class_ "px-5 pb-3 pt-5"] do
         span_ [class_ "block text-sm font-semibold text-textStrong"] "Related metrics"
-        span_ [class_ "mt-1 block text-xs leading-5 text-textWeak"] "Metrics sharing a namespace or dimensions with this metric."
+        span_ [class_ "mt-1 block text-xs leading-5 text-textWeak"] "Metrics with a similar name or dimensions."
       div_ [class_ "flex flex-col divide-y divide-strokeWeak border-y border-strokeWeak"] $ forM_ related $ \candidate ->
         a_
-          [ class_ "group flex items-center justify-between gap-4 px-5 py-4 transition-colors hover:bg-fillWeak"
+          [ class_ "group flex cursor-pointer items-center justify-between gap-4 px-5 py-4 transition-colors hover:bg-fillWeak focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-strokeFocus"
           , href_ $ metricDetailUrl pid candidate.metricName source Nothing
           , hxGet_ $ metricDetailUrl pid candidate.metricName source Nothing
           , hxTarget_ "#metric-details-content"
           , hxSwap_ "morph"
+          , hxIndicator_ "#global-data-drawer-indicator"
           ]
           do
             div_ [class_ "min-w-0"] do
@@ -684,11 +728,12 @@ relatedMetrics pid source metric candidates =
 
 relatedMetricContext :: Telemetry.MetricDataPoint -> Telemetry.MetricChartListData -> Text
 relatedMetricContext metric candidate =
-  "Shares " <> sharedNamespace <> sharedAttributes
+  namespace <> sharedDimensions
   where
     sharedNamespace = T.intercalate "." $ map fst $ takeWhile (uncurry (==)) $ zip (T.splitOn "." metric.metricName) (T.splitOn "." candidate.metricName)
+    namespace = if T.null sharedNamespace then "Similar dimensions" else "Same " <> sharedNamespace <> " namespace"
     sharedAttributesCount = length $ S.intersection (S.fromList $ V.toList metric.metricLabels) (S.fromList $ V.toList candidate.metricLabels)
-    sharedAttributes = if sharedAttributesCount == 0 then "" else " · " <> prettyPrintCount sharedAttributesCount <> " shared attributes"
+    sharedDimensions = if sharedAttributesCount == 0 then "" else " · " <> prettyPrintCount sharedAttributesCount <> " shared dimensions"
 
 
 relatedMetricScore :: Telemetry.MetricDataPoint -> Telemetry.MetricChartListData -> Int
@@ -714,22 +759,40 @@ metricDetailChart pid metric source selected chartId =
 
 -- Metric reference counting: (dashboardCount, widgetCount, alertCount) per metric
 metricRefCounts :: [Dashboards.DashboardVM] -> [Monitors.QueryMonitor] -> [Text] -> Map Text (Int, Int, Int)
-metricRefCounts dashboards monitors metricNames = Map.fromList $ map countRefs metricNames
+metricRefCounts dashboards monitors = Map.fromList . map countRefs
   where
-    countRefs mn = (mn, (length matchingDashboards, totalWidgets, alertCount mn))
-      where
-        matchingDashboards = filter (dashboardHasMetric mn) dashboards
-        totalWidgets = sum $ map (countWidgetsWithMetric mn) dashboards
-    alertCount mn = sum [1 :: Int | m <- monitors, any (`T.isInfixOf` m.logQuery) ["\"" <> mn <> "\"", "'" <> mn <> "'", "metric=" <> mn, "metric_name=" <> mn]]
-    dashboardHasMetric mn d = any (widgetRefsMetric mn) (allWidgets d)
-    countWidgetsWithMetric mn d = sum [1 :: Int | w <- allWidgets d, widgetRefsMetric mn w]
-    allWidgets d = case d.schema of
+    countRefs metricName =
+      let (matchingDashboards, matchingMonitors) = metricReferences metricName dashboards monitors
+       in (metricName, (length matchingDashboards, sum (countWidgetsWithMetric metricName <$> matchingDashboards), length matchingMonitors))
+
+
+metricReferences :: Text -> [Dashboards.DashboardVM] -> [Monitors.QueryMonitor] -> ([Dashboards.DashboardVM], [Monitors.QueryMonitor])
+metricReferences metricName dashboards monitors = (filter (dashboardHasMetric metricName) dashboards, filter (monitorHasMetric metricName) monitors)
+
+
+dashboardHasMetric :: Text -> Dashboards.DashboardVM -> Bool
+dashboardHasMetric metricName dashboard = any (widgetRefsMetric metricName) $ case dashboard.schema of
+  Nothing -> []
+  Just schema -> schema.widgets <> maybe [] (concatMap (.widgets)) schema.tabs
+
+
+countWidgetsWithMetric :: Text -> Dashboards.DashboardVM -> Int
+countWidgetsWithMetric metricName dashboard = sum [1 :: Int | widget <- widgets, widgetRefsMetric metricName widget]
+  where
+    widgets = case dashboard.schema of
       Nothing -> []
       Just schema -> schema.widgets <> maybe [] (concatMap (.widgets)) schema.tabs
-    widgetRefsMetric mn w =
-      let allTexts = maybeToList w.query <> maybeToList w.sql
-          quoted = "\"" <> mn <> "\""
-       in any (T.isInfixOf quoted) allTexts || any (widgetRefsMetric mn) (fromMaybe [] w.children)
+
+
+monitorHasMetric :: Text -> Monitors.QueryMonitor -> Bool
+monitorHasMetric metricName monitor = any (`T.isInfixOf` monitor.logQuery) ["\"" <> metricName <> "\"", "'" <> metricName <> "'", "metric=" <> metricName, "metric_name=" <> metricName]
+
+
+widgetRefsMetric :: Text -> Widget.Widget -> Bool
+widgetRefsMetric metricName widget =
+  let allTexts = maybeToList widget.query <> maybeToList widget.sql
+      quoted = "\"" <> metricName <> "\""
+   in any (T.isInfixOf quoted) allTexts || any (widgetRefsMetric metricName) (fromMaybe [] widget.children)
 
 
 -- Trace UI components

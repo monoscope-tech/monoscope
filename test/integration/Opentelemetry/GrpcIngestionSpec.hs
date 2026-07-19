@@ -161,10 +161,15 @@ spec = sequential $ aroundAll withTestResources do
       let detailHtml = toString $ Lucid.renderText details
       detailHtml `shouldContain` "id=\"metric-details-content\""
       detailHtml `shouldContain` "hx-target=\"#metric-details-content\""
-      detailHtml `shouldContain` "Metric attributes"
+      detailHtml `shouldContain` "window.evalScriptsFromContent(this)"
+      detailHtml `shouldContain` "Available dimensions"
+      detailHtml `shouldContain` "Reporting services"
+      detailHtml `shouldNotContain` ">Metric detail<"
+      detailHtml `shouldNotContain` "Metric attributes"
       detailHtml `shouldContain` "resource.service.name"
+      detailHtml `shouldContain` "Group chart by resource.service.name"
       detailHtml `shouldContain` "cpu.limit"
-      detailHtml `shouldContain` "Shares cpu"
+      detailHtml `shouldContain` "Same cpu namespace"
       points <- runTestBg frozenTime tr $ Telemetry.getDataPointsData True pid (Just (addUTCTime (-1) frozenTime), Just (addUTCTime 1 frozenTime))
       find ((== "cpu.usage") . (.metricName)) points `shouldSatisfy` isJust
       (events, _, metrics, _) <- runTestBg frozenTime tr $ Telemetry.getUsageTotals True pid (addUTCTime (-1) frozenTime)
