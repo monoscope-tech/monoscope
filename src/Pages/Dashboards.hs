@@ -620,6 +620,12 @@ processVariable pid now timeRange@(sinceStr, fromDStr, toDStr) allParams variabl
     Nothing -> pure Nothing
   case facetOpts of
     Just opts | not (null opts) -> pure variable{Dashboards.options = Just opts}
+    -- Dependent variables (depends_on) are lazy: their options are scoped to the
+    -- parent's value and can't be facet-served, so we skip the (multi-second)
+    -- DISTINCT scan at render time. The client fetches the whitelist on demand
+    -- (dropdown open / update-query) via /chart_data, keeping the scoped query
+    -- off the page's critical path.
+    _ | isJust variable.dependsOn -> pure variable
     _ -> case variable._vType of
       Dashboards.VTQuery | Just sqlQuery <- variable.sql -> do
         -- SECURITY: Use secured query execution with project_id filtering

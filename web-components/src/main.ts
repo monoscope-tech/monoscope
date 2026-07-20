@@ -371,6 +371,19 @@ function initTagifyElement(el: HTMLElement) {
       }
     }
 
+    // Lazy dashboard variables: options aren't server-rendered (scoped/dependent
+    // vars skip the render-time scan). Fetch the whitelist the first time the
+    // dropdown opens, so opening the picker is what pays the query cost, not the
+    // page load. Guarded so it only fetches once per instance.
+    if (el.classList.contains('dash-variable-input') && !options.whitelist?.length && (el.getAttribute('data-tagify-query-sql') || el.getAttribute('data-tagify-query'))) {
+      let fetched = false;
+      tagify.on('dropdown:show', () => {
+        if (fetched) return;
+        fetched = true;
+        (window as any).reloadVarWhitelist(el);
+      });
+    }
+
     // Dashboard variable: sync tagify changes to URL params and fire update-query
     if (el.classList.contains('dash-variable-input')) {
       tagify.on('change', (e: any) => {
@@ -402,20 +415,28 @@ let _cachedSearch = '', _cachedParams: URLSearchParams | null = null, _interpola
   });
 };
 
+// Fetch a dashboard variable's option whitelist from /chart_data, resolving the
+// variable's SQL/KQL against the current URL params (so scoped/dependent vars
+// like Resource-by-Service stay correct). Server-side rendering skips computing
+// these to keep the multi-second DISTINCT scan off the page critical path, so we
+// load them client-side: lazily on first dropdown open, and again on update-query.
+async function reloadVarWhitelist(input: HTMLElement) {
+  const querySql = input.getAttribute('data-tagify-query-sql') || '';
+  const query = input.getAttribute('data-tagify-query') || '';
+  if (!querySql && !query) return;
+  const tgfy = (input as any)._tagifyInstance;
+  try {
+    tgfy?.loading(true);
+    const params = new URLSearchParams({ ...Object.fromEntries(new URLSearchParams(location.search)), query, query_sql: querySql, data_type: 'text' });
+    const { data_text } = await fetch(`/chart_data?${params}`).then(res => res.json());
+    if (tgfy) { tgfy.settings.whitelist = data_text.map((i: any) => i.length === 1 ? i[0] : { value: i[0], name: i[1] }); tgfy.loading(false); }
+  } catch (e) { console.error(`Error fetching data for ${(input as any).name}:`, e); }
+}
+(window as any).reloadVarWhitelist = reloadVarWhitelist;
+
 // Reload whitelist for dashboard variables with data-tagify-reload-on-change on update-query
 window.addEventListener('update-query', async () => {
-  document.querySelectorAll<HTMLElement>('.dash-variable-input[data-tagify-reload-on-change="true"]').forEach(async (input) => {
-    const querySql = input.getAttribute('data-tagify-query-sql') || '';
-    const query = input.getAttribute('data-tagify-query') || '';
-    if (!querySql && !query) return;
-    const tgfy = (input as any)._tagifyInstance;
-    try {
-      tgfy?.loading(true);
-      const params = new URLSearchParams({ ...Object.fromEntries(new URLSearchParams(location.search)), query, query_sql: querySql, data_type: 'text' });
-      const { data_text } = await fetch(`/chart_data?${params}`).then(res => res.json());
-      if (tgfy) { tgfy.settings.whitelist = data_text.map((i: any) => i.length === 1 ? i[0] : { value: i[0], name: i[1] }); tgfy.loading(false); }
-    } catch (e) { console.error(`Error fetching data for ${(input as any).name}:`, e); }
-  });
+  document.querySelectorAll<HTMLElement>('.dash-variable-input[data-tagify-reload-on-change="true"]').forEach(reloadVarWhitelist);
   (window as any).interpolateVarTemplates();
 });
 
