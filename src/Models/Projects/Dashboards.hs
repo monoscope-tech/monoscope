@@ -129,6 +129,7 @@ data Variable = Variable
   , helpText :: Maybe Text
   , _vType :: VariableType
   , sql :: Maybe Text
+  , facetField :: Maybe Text -- Populate options from the precomputed facet catalog (bare field path, e.g. "db.system.name") instead of a live DISTINCT scan; falls back to sql when absent.
   , query :: Maybe Text
   , options :: Maybe [[Text]]
   , value :: Maybe Text

@@ -72,6 +72,7 @@ import Lucid.Hyperscript (__)
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.Monitors qualified as Monitors
+import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ProjectMembers qualified as ManageMembers
@@ -94,6 +95,7 @@ import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), hashAssetFile)
 import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), constantToKQLList, constantToSQLList, defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToComponents, presetRollup)
+import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import Servant (NoContent (..), ServerError, err302, err404, errBody, errHeaders)
@@ -608,15 +610,25 @@ processVariable pid now timeRange@(sinceStr, fromDStr, toDStr) allParams variabl
       variable' = Dashboards.replaceQueryVariables pid fromD toD allParams now variableBase
       variable = variable'{Dashboards.value = join (Map.lookup ("var-" <> variable'.key) paramsMap) <|> variable'.value}
 
-  case variable._vType of
-    Dashboards.VTQuery | Just sqlQuery <- variable.sql -> do
-      -- SECURITY: Use secured query execution with project_id filtering
-      useTf <- (.env.enableTimefusionReads) <$> ask @AuthContext
-      result <- LogQueries.executeSecuredQuery useTf pid sqlQuery 1000
-      case result of
-        Right queryResults -> pure variable{Dashboards.options = Just $ map (map valueToText . V.toList) $ V.toList queryResults}
-        Left _ -> pure variable -- Return unchanged on error
-    _ -> pure variable
+  -- Prefer the precomputed facet catalog (a single indexed jsonb read) over a
+  -- live DISTINCT scan of the day partition — the latter blocks page render for
+  -- seconds on high-volume projects (e.g. the databases-tab picker).
+  facetOpts <- case variable.facetField of
+    Just field -> do
+      docM <- SchemaCatalog.getSummary pid
+      pure $ docM >>= \(d :: Catalog.SummaryDoc) -> HM.lookup field d.topValuesByField <&> \tk -> map ((: []) . fst) $ sortOn (Down . snd) $ HM.toList tk.top
+    Nothing -> pure Nothing
+  case facetOpts of
+    Just opts | not (null opts) -> pure variable{Dashboards.options = Just opts}
+    _ -> case variable._vType of
+      Dashboards.VTQuery | Just sqlQuery <- variable.sql -> do
+        -- SECURITY: Use secured query execution with project_id filtering
+        useTf <- (.env.enableTimefusionReads) <$> ask @AuthContext
+        result <- LogQueries.executeSecuredQuery useTf pid sqlQuery 1000
+        case result of
+          Right queryResults -> pure variable{Dashboards.options = Just $ map (map valueToText . V.toList) $ V.toList queryResults}
+          Left _ -> pure variable -- Return unchanged on error
+      _ -> pure variable
   where
     valueToText :: AE.Value -> Text
     valueToText (AE.String t) = t
@@ -1049,7 +1061,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
       -- No tabs - render the dashboard normally (existing behavior for non-tabbed dashboards)
       let timeParams = (sinceStr, fromDStr, toDStr)
           paramsWithVarDefaults = addVariableDefaults allParams dash.variables
-      (processedConstants, allParamsWithConstants) <- processConstantsAndExtendParams pid now timeParams paramsWithVarDefaults (fromMaybe [] dash.constants)
+      (processedConstants, allParamsWithConstants) <- processConstantsAndExtendParams pid now timeParams paramsWithVarDefaults (dashboardQueryText dash) (fromMaybe [] dash.constants)
 
       let dashWithConstants = dash & #constants ?~ processedConstants
           processWidgetWithDashboardId = mkWidgetProcessor pid dashId now timeParams allParamsWithConstants
@@ -2105,7 +2117,7 @@ dashboardWidgetExpandGetH pid dashId widgetId = do
   now <- Time.currentTime
   let timeParams = (Nothing, Nothing, Nothing)
       paramsWithVarDefaults = addVariableDefaults [] dash.variables
-  (_, allParamsWithConstants) <- processConstantsAndExtendParams pid now timeParams paramsWithVarDefaults (fromMaybe [] dash.constants)
+  (_, allParamsWithConstants) <- processConstantsAndExtendParams pid now timeParams paramsWithVarDefaults (dashboardQueryText dash) (fromMaybe [] dash.constants)
   case snd <$> findWidgetInDashboard widgetId dash of
     Nothing -> throwError $ err404{errBody = "Widget not found in dashboard"}
     Just widgetToExpand -> do
@@ -2201,21 +2213,39 @@ addVariableDefaults params varsM = params <> defaults
     defaults = [("var-" <> v.key, v.value) | v <- fromMaybe [] varsM, not (Map.member ("var-" <> v.key) paramsMap)]
 
 
--- | Process dashboard constants concurrently and build extended params with constant results
+-- | All query text that can reference a @{{const-…}}@ placeholder, across a
+-- dashboard's widgets (incl. children), tab widgets, and variables. Lets us
+-- skip constants nothing references — an unused constant otherwise runs its
+-- query (e.g. a top_resources GROUP BY full-day scan) on every page load.
+dashboardQueryText :: Dashboards.Dashboard -> Text
+dashboardQueryText dash =
+  T.concat $ concatMap widgetText (dash.widgets <> foldMap (.widgets) (fromMaybe [] dash.tabs)) <> foldMap varText (fromMaybe [] dash.variables)
+  where
+    widgetText w = catMaybes [w.query, w.sql] <> concatMap widgetText (fromMaybe [] w.children)
+    varText v = catMaybes [v.sql, v.query]
+
+
+-- | Process dashboard constants concurrently and build extended params with constant results.
+-- Constants whose key is not referenced anywhere in @haystack@ skip their query entirely.
 processConstantsAndExtendParams
   :: Projects.ProjectId
   -> UTCTime
   -> (Maybe Text, Maybe Text, Maybe Text)
   -> [(Text, Maybe Text)]
+  -> Text
   -> [Dashboards.Constant]
   -> ATAuthCtx ([Dashboards.Constant], [(Text, Maybe Text)])
-processConstantsAndExtendParams pid now timeParams allParams constants =
-  pooledForConcurrently constants (processConstant pid now timeParams allParams) <&> \pc ->
+processConstantsAndExtendParams pid now timeParams allParams haystack constants =
+  pooledForConcurrently constants processOne <&> \pc ->
     ( pc
     , allParams
         <> [("const-" <> c.key, Just $ constantToSQLList $ fromMaybe [] c.result) | c <- pc]
         <> [("const-" <> c.key <> "-kql", Just $ constantToKQLList $ fromMaybe [] c.result) | c <- pc]
     )
+  where
+    processOne c
+      | ("{{const-" <> c.key) `T.isInfixOf` haystack || ("{{" <> c.key <> "}}") `T.isInfixOf` haystack = processConstant pid now timeParams allParams c
+      | otherwise = pure c -- unreferenced: emit empty-sentinel params without running the query
 
 
 -- | Create a widget processor that adds dashboard ID to processed widgets.
@@ -2251,7 +2281,7 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = d
       paramsWithVarDefaults = addVariableDefaults allParams dash.variables
 
   -- Process constants and variables
-  (processedConstants, allParamsWithConstants) <- processConstantsAndExtendParams pid now timeParams paramsWithVarDefaults (fromMaybe [] dash.constants)
+  (processedConstants, allParamsWithConstants) <- processConstantsAndExtendParams pid now timeParams paramsWithVarDefaults (dashboardQueryText dash) (fromMaybe [] dash.constants)
   let dashWithConstants = dash & #constants ?~ processedConstants
       processWidgetWithDashboardId = mkWidgetProcessor pid dashId now timeParams allParamsWithConstants
 
@@ -2320,7 +2350,7 @@ dashboardTabContentGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allPar
         allParamsWithConstants <-
           if hasConstants
             then pure paramsWithVarDefaults
-            else snd <$> processConstantsAndExtendParams pid now timeParams paramsWithVarDefaults (fromMaybe [] dash.constants)
+            else snd <$> processConstantsAndExtendParams pid now timeParams paramsWithVarDefaults (dashboardQueryText dash) (fromMaybe [] dash.constants)
         let processWidgetWithDashboardId = mkWidgetProcessor pid dashId now timeParams allParamsWithConstants
 
         -- Process variables to check if tab requires one that's not set

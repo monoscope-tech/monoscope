@@ -26,8 +26,9 @@ variables:
     title: Service
     type: query
     reload_on_change: true
+    facet_field: service.name
     sql: |
-      SELECT DISTINCT resource___service___name 
+      SELECT DISTINCT resource___service___name
       FROM otel_logs_and_spans 
       WHERE project_id='{{project_id}}' 
         AND resource___service___name IS NOT NULL 
@@ -58,6 +59,7 @@ variables:
     title: Database System
     type: query
     reload_on_change: true
+    facet_field: db.system.name
     sql: |
       SELECT DISTINCT attributes___db___system___name
       FROM otel_logs_and_spans
