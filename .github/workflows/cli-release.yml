@@ -12,10 +12,10 @@ jobs:
     name: Build Frontend Assets
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: '22'
 
@@ -51,7 +51,7 @@ jobs:
       env:
         CABAL_DIR: /root/.cabal
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Download frontend artifacts
         uses: actions/download-artifact@v8
@@ -60,7 +60,7 @@ jobs:
           path: static/public/assets
 
       - name: Cache dist-newstyle
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: dist-newstyle
           key: cli-linux-x64-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}-${{ github.sha }}
@@ -98,7 +98,7 @@ jobs:
       env:
         CABAL_DIR: /root/.cabal
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Download frontend artifacts
         uses: actions/download-artifact@v8
@@ -107,7 +107,7 @@ jobs:
           path: static/public/assets
 
       - name: Cache dist-newstyle
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: dist-newstyle
           key: cli-linux-arm64-dist-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}-${{ github.sha }}
@@ -146,7 +146,7 @@ jobs:
           - arch: x86_64
             runner: macos-15-intel
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Download frontend artifacts
         uses: actions/download-artifact@v8
@@ -165,14 +165,14 @@ jobs:
           cabal-version: '3.14'
 
       - name: Cache Cabal
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.cabal
           key: cli-macos-${{ matrix.arch }}-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}
           restore-keys: cli-macos-${{ matrix.arch }}-cabal-
 
       - name: Cache dist-newstyle
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: dist-newstyle
           key: cli-macos-${{ matrix.arch }}-dist-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}
@@ -219,7 +219,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Download all artifacts
         uses: actions/download-artifact@v8
