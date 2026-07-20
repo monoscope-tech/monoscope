@@ -32,15 +32,18 @@ where
 
 import Data.Aeson qualified as AE
 import Data.Default (Default)
+import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Map.Lazy qualified as Map
-import Data.Time (UTCTime, ZonedTime)
+import Data.Time (UTCTime, ZonedTime, addUTCTime, zonedTimeToUTC)
+import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
+import Effectful.Labeled (Labeled)
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
@@ -136,6 +139,33 @@ data EndpointRequestStats = EndpointRequestStats
   deriving anyclass (HI.DecodeRow)
 
 
+-- Per-(url_path, method, service, bucket) telemetry slice, aggregated in Haskell.
+data EndpointTelRow = EndpointTelRow
+  { urlPath :: Text
+  , method :: Maybe Text
+  , service :: Maybe Text
+  , bucketIdx :: Int
+  , cnt :: Int64
+  , lastSeen :: Maybe ZonedTime
+  }
+  deriving stock (Generic)
+  deriving anyclass (HI.DecodeRow)
+
+
+-- Endpoint identity/metadata (Postgres only — TimeFusion has no @apis.*@ tables).
+data EndpointMetaRow = EndpointMetaRow
+  { endpointId :: EndpointId
+  , endpointHash :: Text
+  , projectId :: Projects.ProjectId
+  , urlPath :: Text
+  , method :: Text
+  , host :: Text
+  , createdAt :: ZonedTime
+  }
+  deriving stock (Generic)
+  deriving anyclass (HI.DecodeRow)
+
+
 -- | Resolve the remote host of a span. Mirrors the priority used by
 -- 'ProcessMessage.hs:223' when stamping @apis.endpoints.host@ at ingest, so
 -- the value computed here equals what's stored in @apis.hosts@.
@@ -143,17 +173,19 @@ data EndpointRequestStats = EndpointRequestStats
 -- emitted before the stamping logic existed; they're harmless when the
 -- primary attributes are present. The @prefix@ is the column alias (e.g.
 -- @"s."@) or empty for unaliased queries.
+-- Uses jsonb path extraction (@#>>@) rather than chained @->@/@->>@ so the same
+-- expression runs on both Postgres and TimeFusion (DataFusion) query engines.
 hostCoalesceExpr :: Text -> Text
 hostCoalesceExpr prefix =
   "COALESCE(NULLIF("
     <> prefix
-    <> "attributes->'net'->'host'->>'name',''), "
+    <> "attributes #>> '{net,host,name}',''), "
     <> "NULLIF("
     <> prefix
     <> "attributes___server___address,''), "
     <> "NULLIF("
     <> prefix
-    <> "attributes->'http'->>'host',''), "
+    <> "attributes #>> '{http,host}',''), "
     <> "NULLIF(split_part(split_part(split_part("
     <> prefix
     <> "attributes___url___full, '://', 2), '/', 1), ':', 1), ''), "
@@ -162,9 +194,30 @@ hostCoalesceExpr prefix =
     <> "resource___service___name,''), '')"
 
 
-periodBuckets :: Text -> (Text, Int)
-periodBuckets "7d" = ("(CURRENT_DATE - INTERVAL '6 days')", 7)
-periodBuckets _ = ("(NOW() - INTERVAL '23 hours')", 24)
+-- | Rolling activity window for a period: (window start, bucket count, bucket width in seconds).
+periodWindow :: Text -> UTCTime -> (UTCTime, Int, Double)
+periodWindow p now = (addUTCTime (negate $ realToFrac spanS) now, n, spanS / fromIntegral n)
+  where
+    (n, spanS) = if p == "7d" then (7, 7 * 86400 :: Double) else (24, 24 * 3600)
+
+
+-- | Assemble a dense activity vector of @n@ buckets from sparse (bucketIdx, count) pairs.
+denseBuckets :: Int -> [(Int, Int64)] -> V.Vector Int
+denseBuckets n pairs = V.generate n \i -> fromIntegral $ fromMaybe 0 $ Map.lookup i m
+  where
+    m = Map.fromListWith (+) pairs
+
+
+-- Epoch seconds as a bindable Double, for engine-portable time bucketing.
+epochSecs :: UTCTime -> Double
+epochSecs = realToFrac . utcTimeToPOSIXSeconds
+
+
+-- | Max @last_seen@ / min @first_seen@ over rows, comparing via UTC (ZonedTime has no Ord).
+pickZoned :: (UTCTime -> UTCTime -> Ordering) -> [Maybe ZonedTime] -> Maybe ZonedTime
+pickZoned cmp zs = case catMaybes zs of
+  [] -> Nothing
+  (x : xs) -> Just $ foldl' (\a b -> if cmp (zonedTimeToUTC a) (zonedTimeToUTC b) == LT then b else a) x xs
 
 
 -- | @AND outgoing = ?@ when a direction is specified, empty otherwise.
@@ -179,58 +232,65 @@ archivedHostClauseSql False = [HI.sql| AND h.archived_at IS NULL|]
 
 -- FIXME: Include and return a boolean flag to show if fields that have annomalies.
 -- FIXME: return endpoint_hash as well.
-endpointRequestStatsByProject :: DB es => Projects.ProjectId -> Bool -> Maybe Text -> Maybe Text -> Maybe Text -> Int -> Int -> Text -> Text -> Eff es (V.Vector EndpointRequestStats)
-endpointRequestStatsByProject pid archived pHostM sortM searchM page perPage requestType period = V.fromList <$> Hasql.interp query
-  where
-    isOutgoing = requestType == "Outgoing"
-    offset = page * perPage
-    (seriesStart, numBuckets) = periodBuckets period
-    seriesStartSql = rawSql seriesStart
-    hostFilter = foldMap (\h -> [HI.sql| AND (^{rawSql (hostCoalesceExpr "")} = #{h})|]) pHostM
-    pHostQuery = foldMap (\h -> [HI.sql| AND enp.host = #{h}|]) pHostM
-    search = foldMap (\s -> let pat = "%" <> s <> "%" in [HI.sql| AND enp.url_path LIKE #{pat}|]) searchM
-    archivedClause = archivedHostClauseSql archived
-    orderBy = rawSql case fromMaybe "" sortM of
-      "first_seen" -> "enp.created_at ASC"
-      "last_seen" -> "enp.created_at DESC"
-      _ -> "coalesce(es.eventsCount, 0) DESC"
-    query =
+-- Endpoint identity comes from Postgres (@apis.*@); per-endpoint traffic stats come
+-- from the telemetry store (TimeFusion when @useTf@), which holds no @apis.*@ tables —
+-- so the two are fetched separately and joined + sorted + paginated in Haskell.
+endpointRequestStatsByProject :: (DB es, Labeled "timefusion" Hasql :> es, Time :> es) => Bool -> Projects.ProjectId -> Bool -> Maybe Text -> Maybe Text -> Maybe Text -> Int -> Int -> Text -> Text -> Eff es (V.Vector EndpointRequestStats)
+endpointRequestStatsByProject useTf pid archived pHostM sortM searchM page perPage requestType period = do
+  now <- Time.currentTime
+  let isOutgoing = requestType == "Outgoing"
+      (start, numBuckets, widthS) = periodWindow period now
+      startEpoch = epochSecs start
+      pHostQuery = foldMap (\h -> [HI.sql| AND enp.host = #{h}|]) pHostM
+      search = foldMap (\s -> let pat = "%" <> s <> "%" in [HI.sql| AND enp.url_path LIKE #{pat}|]) searchM
+      archivedClause = archivedHostClauseSql archived
+      hostFilter = foldMap (\h -> [HI.sql| AND (^{rawSql (hostCoalesceExpr "")} = #{h})|]) pHostM
+  metas :: [EndpointMetaRow] <-
+    Hasql.interp
       [HI.sql|
-        WITH combined AS (
-          SELECT COALESCE(NULLIF(attributes->'http'->>'route', ''), attributes___url___path, '/') AS url_path,
+        SELECT enp.id, enp.hash, enp.project_id, enp.url_path, enp.method, enp.host, enp.created_at
+        FROM apis.endpoints enp
+        JOIN apis.hosts h ON (h.project_id = enp.project_id AND h.host = enp.host AND h.outgoing = enp.outgoing)
+        WHERE enp.project_id = #{pid} AND enp.outgoing = #{isOutgoing} ^{pHostQuery} ^{search} ^{archivedClause}|]
+  tels :: [EndpointTelRow] <-
+    Hasql.withHasqlTimefusion useTf
+      $ Hasql.interp
+        [HI.sql|
+          SELECT COALESCE(NULLIF(attributes #>> '{http,route}', ''), attributes___url___path, '/') AS url_path,
                  attributes___http___request___method AS method,
                  resource___service___name AS service,
-                 COUNT(*) AS eventsCount,
-                 MAX(timestamp) AS last_seen,
-                 LEAST(width_bucket(EXTRACT(EPOCH FROM timestamp), EXTRACT(EPOCH FROM ^{seriesStartSql}::timestamptz), EXTRACT(EPOCH FROM NOW()), #{numBuckets}::int), #{numBuckets}::int) AS bucket_idx,
-                 COUNT(*)::bigint AS cnt
+                 LEAST(GREATEST(floor((extract(epoch from timestamp) - #{startEpoch}) / #{widthS})::bigint, 0), #{numBuckets - 1}::bigint) AS bucket_idx,
+                 COUNT(*)::bigint AS cnt,
+                 MAX(timestamp) AS last_seen
           FROM otel_logs_and_spans
           WHERE project_id = #{pid}::text
             AND attributes___http___request___method IS NOT NULL
             ^{hostFilter}
-            AND timestamp >= ^{seriesStartSql}::timestamptz
-          GROUP BY url_path, method, service, bucket_idx
-        ), endpoint_stats AS (
-          SELECT url_path, method, SUM(eventsCount)::bigint AS eventsCount, MAX(last_seen) AS last_seen,
-                 COALESCE(ARRAY_AGG(DISTINCT service) FILTER (WHERE service IS NOT NULL AND service != ''), ARRAY[]::text[]) AS services
-          FROM combined GROUP BY url_path, method
-        ), bucketed_agg AS (
-          SELECT c.url_path, c.method, ARRAY_AGG(COALESCE(c2.cnt, 0) ORDER BY s.idx) AS activity_buckets
-          FROM (SELECT DISTINCT url_path, method FROM combined) c
-          CROSS JOIN generate_series(1, #{numBuckets}::int) AS s(idx)
-          LEFT JOIN combined c2 ON c2.url_path = c.url_path AND c2.method = c.method AND c2.bucket_idx = s.idx
-          GROUP BY c.url_path, c.method
-        )
-        SELECT enp.id endpoint_id, enp.hash endpoint_hash, enp.project_id, enp.url_path, enp.method, enp.host,
-               coalesce(es.eventsCount, 0) as total_requests, es.last_seen,
-               COALESCE(ba.activity_buckets, ARRAY[]::bigint[]) AS activity_buckets,
-               COALESCE(es.services, ARRAY[]::text[]) AS services
-        FROM apis.endpoints enp
-        JOIN apis.hosts h ON (h.project_id = enp.project_id AND h.host = enp.host AND h.outgoing = enp.outgoing)
-        LEFT JOIN endpoint_stats es ON (enp.url_path=es.url_path AND enp.method=es.method)
-        LEFT JOIN bucketed_agg ba ON (enp.url_path=ba.url_path AND enp.method=ba.method)
-        WHERE enp.project_id = #{pid} AND enp.outgoing = #{isOutgoing} ^{pHostQuery} ^{search} ^{archivedClause}
-        ORDER BY ^{orderBy}, url_path ASC OFFSET #{offset} LIMIT #{perPage}|]
+            AND timestamp >= #{start}::timestamptz
+          GROUP BY url_path, method, service, bucket_idx|]
+  let telMap = Map.fromListWith (<>) [((r.urlPath, fromMaybe "" r.method), [r]) | r <- tels]
+      mk m =
+        let rs = fromMaybe [] $ Map.lookup (m.urlPath, m.method) telMap
+         in ( m
+            , EndpointRequestStats
+                { endpointId = m.endpointId
+                , endpointHash = m.endpointHash
+                , projectId = m.projectId
+                , urlPath = m.urlPath
+                , method = m.method
+                , host = m.host
+                , totalRequests = fromIntegral $ sum $ map (.cnt) rs
+                , lastSeen = pickZoned compare $ map (.lastSeen) rs
+                , activityBuckets = denseBuckets numBuckets [(r.bucketIdx, r.cnt) | r <- rs]
+                , services = V.fromList $ ordNub $ mapMaybe (.service) rs
+                }
+            )
+      rows = map mk metas
+      ordered = case fromMaybe "" sortM of
+        "first_seen" -> sortOn (zonedTimeToUTC . (.createdAt) . fst) rows
+        "last_seen" -> sortOn (Down . zonedTimeToUTC . (.createdAt) . fst) rows
+        _ -> sortOn (\(m, s) -> (Down s.totalRequests, m.urlPath)) rows
+  pure $ V.fromList $ map snd $ take perPage $ drop (page * perPage) ordered
 
 
 data HostEvents = HostEvents
@@ -246,65 +306,73 @@ data HostEvents = HostEvents
   deriving anyclass (HI.DecodeRow)
 
 
+-- Per-(host, direction, service, bucket) telemetry slice, aggregated in Haskell.
+data HostTelRow = HostTelRow
+  { host :: Text
+  , outgoing :: Bool
+  , service :: Maybe Text
+  , bucketIdx :: Int
+  , cnt :: Int64
+  , lastSeen :: Maybe ZonedTime
+  , firstSeen :: Maybe ZonedTime
+  }
+  deriving stock (Generic)
+  deriving anyclass (HI.DecodeRow)
+
+
 -- | When @outgoingM@ is @Nothing@, both directions are returned (used for the
 -- combined Archived tab). Spans are attributed to a host using the same
 -- coalesce that ProcessMessage applies at ingest to set @apis.endpoints.host@
 -- (see 'src/ProcessMessage.hs:223'), so each row tallies only its own traffic.
-dependenciesAndEventsCount :: (DB es, Time :> es) => Projects.ProjectId -> Maybe Bool -> Text -> Int -> Text -> Text -> Bool -> Eff es [HostEvents]
-dependenciesAndEventsCount pid outgoingM sortT skip timeF period showArchived = do
+dependenciesAndEventsCount :: (DB es, Labeled "timefusion" Hasql :> es, Time :> es) => Bool -> Projects.ProjectId -> Maybe Bool -> Text -> Int -> Text -> Text -> Bool -> Eff es [HostEvents]
+dependenciesAndEventsCount useTf pid outgoingM sortT skip timeF period showArchived = do
   now <- Time.currentTime
   let intervalDays = if timeF == "14D" then 14 else 1 :: Int
-      (seriesStart, numBuckets) = periodBuckets period
-      seriesStartSql = rawSql seriesStart
+      windowStart = addUTCTime (negate $ fromIntegral intervalDays * 86400) now
+      (start, numBuckets, widthS) = periodWindow period now
+      startEpoch = epochSecs start
       directionClause = directionClauseSql outgoingM
       hostExpr = rawSql (hostCoalesceExpr "s.")
       archivedClause = rawSql if showArchived then "archived_at IS NOT NULL" else "archived_at IS NULL"
-      orderBy = rawSql case sortT of
-        "first_seen" -> "first_seen ASC"
-        "last_seen" -> "last_seen DESC"
-        _ -> "eventsCount DESC"
-  Hasql.interp
-    [HI.sql|
-      WITH endpoint_hosts AS (
-          SELECT host, outgoing FROM apis.hosts
-          WHERE project_id = #{pid} AND host != '' ^{directionClause} AND ^{archivedClause}
-      ), combined AS (
+  hosts :: [(Text, Bool)] <-
+    Hasql.interp
+      [HI.sql|
+        SELECT host, outgoing FROM apis.hosts
+        WHERE project_id = #{pid} AND host != '' ^{directionClause} AND ^{archivedClause}|]
+  tels :: [HostTelRow] <-
+    Hasql.withHasqlTimefusion useTf
+      $ Hasql.interp
+        [HI.sql|
           SELECT ^{hostExpr} AS host,
                  (s.kind = 'client') AS outgoing,
                  s.resource___service___name AS service,
-                 s.timestamp AS ts,
-                 LEAST(width_bucket(EXTRACT(EPOCH FROM s.timestamp), EXTRACT(EPOCH FROM ^{seriesStartSql}::timestamptz), EXTRACT(EPOCH FROM NOW()), #{numBuckets}::int), #{numBuckets}::int) AS bucket_idx
+                 LEAST(GREATEST(floor((extract(epoch from s.timestamp) - #{startEpoch}) / #{widthS})::bigint, 0), #{numBuckets - 1}::bigint) AS bucket_idx,
+                 COUNT(*)::bigint AS cnt,
+                 MAX(s.timestamp) AS last_seen,
+                 MIN(s.timestamp) AS first_seen
           FROM otel_logs_and_spans s
           WHERE s.project_id = #{pid}::text
-            AND s.timestamp > #{now}::timestamptz - make_interval(days => #{intervalDays}::int)
+            AND s.timestamp > #{windowStart}::timestamptz
             AND s.attributes___http___request___method IS NOT NULL
-      ), aggregated AS (
-          SELECT host, outgoing, service, bucket_idx,
-                 COUNT(*)::bigint AS cnt, MAX(ts) AS last_seen, MIN(ts) AS first_seen
-          FROM combined WHERE host != '' GROUP BY host, outgoing, service, bucket_idx
-      ), host_stats AS (
-          SELECT host, outgoing,
-                 SUM(cnt)::bigint AS eventsCount,
-                 MAX(last_seen) AS last_seen,
-                 MIN(first_seen) AS first_seen,
-                 COALESCE(ARRAY_AGG(DISTINCT service) FILTER (WHERE service IS NOT NULL AND service != '' AND service != host), ARRAY[]::text[]) AS services
-          FROM aggregated GROUP BY host, outgoing
-      ), bucketed_agg AS (
-          SELECT c.host, c.outgoing, ARRAY_AGG(COALESCE(b.cnt, 0) ORDER BY g.idx) AS activity_buckets
-          FROM (SELECT DISTINCT host, outgoing FROM aggregated) c
-          CROSS JOIN generate_series(1, #{numBuckets}::int) AS g(idx)
-          LEFT JOIN (SELECT host, outgoing, bucket_idx, SUM(cnt)::bigint AS cnt FROM aggregated GROUP BY host, outgoing, bucket_idx) b
-            ON b.host = c.host AND b.outgoing = c.outgoing AND b.bucket_idx = g.idx
-          GROUP BY c.host, c.outgoing
-      )
-      SELECT eh.host, eh.outgoing, COALESCE(hs.eventsCount, 0) AS eventsCount, hs.last_seen, hs.first_seen,
-             COALESCE(ba.activity_buckets, ARRAY[]::bigint[]) AS activity_buckets,
-             COALESCE(hs.services, ARRAY[]::text[]) AS services
-      FROM endpoint_hosts eh
-      LEFT JOIN host_stats hs ON (eh.host = hs.host AND eh.outgoing = hs.outgoing)
-      LEFT JOIN bucketed_agg ba ON (ba.host = eh.host AND ba.outgoing = eh.outgoing)
-      ORDER BY ^{orderBy}
-      LIMIT 200 OFFSET #{skip}|]
+          GROUP BY host, outgoing, service, bucket_idx|]
+  let telMap = Map.fromListWith (<>) [((r.host, r.outgoing), [r]) | r <- tels, r.host /= ""]
+      mk (h, o) =
+        let rs = fromMaybe [] $ Map.lookup (h, o) telMap
+         in HostEvents
+              { host = h
+              , outgoing = o
+              , eventCount = sum $ map (.cnt) rs
+              , first_seen = pickZoned (flip compare) $ map (.firstSeen) rs
+              , last_seen = pickZoned compare $ map (.lastSeen) rs
+              , activityBuckets = denseBuckets numBuckets [(r.bucketIdx, r.cnt) | r <- rs]
+              , services = V.fromList $ filter (/= h) $ ordNub $ mapMaybe (.service) rs
+              }
+      rows = map mk hosts
+      ordered = case sortT of
+        "first_seen" -> sortOn (fmap zonedTimeToUTC . (.first_seen)) rows
+        "last_seen" -> sortOn (Down . fmap zonedTimeToUTC . (.last_seen)) rows
+        _ -> sortOn (Down . (.eventCount)) rows
+  pure $ take 200 $ drop skip ordered
 
 
 -- | Mark hosts as archived. When @outgoingM@ is @Nothing@ both directions for

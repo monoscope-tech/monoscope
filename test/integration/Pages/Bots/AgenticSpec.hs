@@ -77,7 +77,7 @@ spec = around withTestResources do
       it "processes error trend query and saves golden response" \tr -> do
         cleanupTelemetryData tr
         seedTelemetryData tr
-        result <- runTestBg frozenTime tr $ processAIQuery testPid "plot error trend over time" Nothing (getOpenAIModel tr) (getOpenAIKey tr)
+        result <- runTestBg frozenTime tr $ processAIQuery False testPid "plot error trend over time" Nothing (getOpenAIModel tr) (getOpenAIKey tr)
         case result of
           Left err -> expectationFailure $ "API call failed: " <> toString err
           Right agenticResp -> do
@@ -88,7 +88,7 @@ spec = around withTestResources do
       it "processes service breakdown query and saves golden response" \tr -> do
         cleanupTelemetryData tr
         seedTelemetryData tr
-        result <- runTestBg frozenTime tr $ processAIQuery testPid "show warning and error counts grouped by service" Nothing (getOpenAIModel tr) (getOpenAIKey tr)
+        result <- runTestBg frozenTime tr $ processAIQuery False testPid "show warning and error counts grouped by service" Nothing (getOpenAIModel tr) (getOpenAIKey tr)
         case result of
           Left err -> expectationFailure $ "API call failed: " <> toString err
           Right agenticResp -> do
@@ -98,7 +98,7 @@ spec = around withTestResources do
       it "processes explanation-only query and saves golden response" \tr -> do
         cleanupTelemetryData tr
         seedTelemetryData tr
-        result <- runTestBg frozenTime tr $ processAIQuery testPid "what services have the most errors?" Nothing (getOpenAIModel tr) (getOpenAIKey tr)
+        result <- runTestBg frozenTime tr $ processAIQuery False testPid "what services have the most errors?" Nothing (getOpenAIModel tr) (getOpenAIKey tr)
         case result of
           Left err -> expectationFailure $ "API call failed: " <> toString err
           Right agenticResp -> do
@@ -107,7 +107,7 @@ spec = around withTestResources do
             isJust agenticResp.explanation || not (null agenticResp.widgets) `shouldBe` True
 
       it "handles empty API key gracefully" \tr -> do
-        result <- runTestBg frozenTime tr $ processAIQuery testPid "show errors" Nothing (getOpenAIModel tr) ""
+        result <- runTestBg frozenTime tr $ processAIQuery False testPid "show errors" Nothing (getOpenAIModel tr) ""
         case result of
           Left err -> T.isInfixOf "unavailable" err || T.isInfixOf "error" (T.toLower err) `shouldBe` True
           Right _ -> pass

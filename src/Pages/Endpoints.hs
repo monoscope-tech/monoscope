@@ -8,6 +8,7 @@ import Data.Time.LocalTime (ZonedTime, zonedTimeToUTC)
 import Data.Vector qualified as V
 import Effectful.Concurrent.Async (concurrently)
 import Effectful.Error.Static (throwError)
+import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Log (logAttention)
 import Lucid
@@ -19,6 +20,7 @@ import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features
 import PyF qualified
 import Relude hiding (ask, asks)
 import Servant (err400, errBody)
+import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
 import Text.Time.Pretty (prettyTimeAuto)
 import Utils (checkFreeTierStatus, faSprite_, formatWithCommas, toUriStr)
@@ -49,7 +51,8 @@ apiCatalogH pid sortM timeFilter currentTabM periodM skipM filterTabM = do
         "+name" -> "name"
         _ -> "events"
 
-  hostsAndEvents <- Endpoints.dependenciesAndEventsCount pid outgoingM sortV (fromMaybe 0 skipM) filterV period showArchived
+  useTf <- (.env.enableTimefusionReads) <$> ask @AuthContext
+  hostsAndEvents <- Endpoints.dependenciesAndEventsCount useTf pid outgoingM sortV (fromMaybe 0 skipM) filterV period showArchived
   freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
 
   currTime <- Time.currentTime
@@ -222,9 +225,10 @@ endpointListGetH pid pageM perPageM layoutM filterTM hostM currentTabM sortM per
         "-name" -> Just "name"
         "+name" -> Just "name"
         _ -> Just "events"
+  useTf <- (.env.enableTimefusionReads) <$> ask @AuthContext
   (endpointStats, totalCount) <-
     concurrently
-      (Endpoints.endpointRequestStatsByProject pid archived hostParam sortV searchM page perPage (fromMaybe "" currentTabM) period)
+      (Endpoints.endpointRequestStatsByProject useTf pid archived hostParam sortV searchM page perPage (fromMaybe "" currentTabM) period)
       (Endpoints.countEndpointsForHost pid isOutgoing archived hostParam searchM)
   freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
 
