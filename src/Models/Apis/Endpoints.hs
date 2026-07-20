@@ -37,6 +37,7 @@ import Data.Effectful.Hasql qualified as Hasql
 import Data.Map.Lazy qualified as Map
 import Data.Time (UTCTime, ZonedTime, addUTCTime, zonedTimeToUTC)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
+import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
@@ -173,19 +174,20 @@ data EndpointMetaRow = EndpointMetaRow
 -- emitted before the stamping logic existed; they're harmless when the
 -- primary attributes are present. The @prefix@ is the column alias (e.g.
 -- @"s."@) or empty for unaliased queries.
--- Uses jsonb path extraction (@#>>@) rather than chained @->@/@->>@ so the same
--- expression runs on both Postgres and TimeFusion (DataFusion) query engines.
+-- Uses chained @->@/@->>@ (not @#>>@): TimeFusion's VariantAwareExprPlanner only
+-- rewrites @->@/@->>@ on the Variant @attributes@ column; @#>>@ falls through and
+-- doesn't extract from it. Semantically identical to @#>>@ on Postgres.
 hostCoalesceExpr :: Text -> Text
 hostCoalesceExpr prefix =
   "COALESCE(NULLIF("
     <> prefix
-    <> "attributes #>> '{net,host,name}',''), "
+    <> "attributes->'net'->'host'->>'name',''), "
     <> "NULLIF("
     <> prefix
     <> "attributes___server___address,''), "
     <> "NULLIF("
     <> prefix
-    <> "attributes #>> '{http,host}',''), "
+    <> "attributes->'http'->>'host',''), "
     <> "NULLIF(split_part(split_part(split_part("
     <> prefix
     <> "attributes___url___full, '://', 2), '/', 1), ':', 1), ''), "
@@ -194,23 +196,25 @@ hostCoalesceExpr prefix =
     <> "resource___service___name,''), '')"
 
 
--- | Rolling activity window for a period: (window start, bucket count, bucket width in seconds).
-periodWindow :: Text -> UTCTime -> (UTCTime, Int, Double)
-periodWindow p now = (addUTCTime (negate $ realToFrac spanS) now, n, spanS / fromIntegral n)
+-- | Rolling activity window for a period: (window start, bucket count, integer bucket
+-- width in seconds). Widths divide evenly (24h/24 = 3600, 7d/7 = 86400).
+periodWindow :: Text -> UTCTime -> (UTCTime, Int, Int)
+periodWindow p now = (addUTCTime (negate $ fromIntegral (n * w)) now, n, w)
   where
-    (n, spanS) = if p == "7d" then (7, 7 * 86400 :: Double) else (24, 24 * 3600)
+    (n, w) = if p == "7d" then (7, 86400) else (24, 3600)
 
 
--- | Assemble a dense activity vector of @n@ buckets from sparse (bucketIdx, count) pairs.
+-- | Assemble a dense activity vector of @n@ buckets from sparse (bucketIdx, count)
+-- pairs. Indices outside @[0, n)@ (e.g. a boundary row) are simply dropped.
 denseBuckets :: Int -> [(Int, Int64)] -> V.Vector Int
 denseBuckets n pairs = V.generate n \i -> fromIntegral $ fromMaybe 0 $ Map.lookup i m
   where
     m = Map.fromListWith (+) pairs
 
 
--- Epoch seconds as a bindable Double, for engine-portable time bucketing.
-epochSecs :: UTCTime -> Double
-epochSecs = realToFrac . utcTimeToPOSIXSeconds
+-- Integer epoch seconds of a window start, for engine-portable time bucketing.
+epochSecs :: UTCTime -> Int64
+epochSecs = floor . utcTimeToPOSIXSeconds
 
 
 -- | Max @last_seen@ / min @first_seen@ over rows, comparing via UTC (ZonedTime has no Ord).
@@ -239,8 +243,9 @@ endpointRequestStatsByProject :: (DB es, Labeled "timefusion" Hasql :> es, Time 
 endpointRequestStatsByProject useTf pid archived pHostM sortM searchM page perPage requestType period = do
   now <- Time.currentTime
   let isOutgoing = requestType == "Outgoing"
-      (start, numBuckets, widthS) = periodWindow period now
+      (start, numBuckets, width) = periodWindow period now
       startEpoch = epochSecs start
+      startSql = rawSql $ "'" <> toText (iso8601Show start) <> "'"
       pHostQuery = foldMap (\h -> [HI.sql| AND enp.host = #{h}|]) pHostM
       search = foldMap (\s -> let pat = "%" <> s <> "%" in [HI.sql| AND enp.url_path LIKE #{pat}|]) searchM
       archivedClause = archivedHostClauseSql archived
@@ -256,18 +261,20 @@ endpointRequestStatsByProject useTf pid archived pHostM sortM searchM page perPa
     Hasql.withHasqlTimefusion useTf
       $ Hasql.interp
         [HI.sql|
-          SELECT COALESCE(NULLIF(attributes #>> '{http,route}', ''), attributes___url___path, '/') AS url_path,
-                 attributes___http___request___method AS method,
-                 resource___service___name AS service,
-                 LEAST(GREATEST(floor((extract(epoch from timestamp) - #{startEpoch}) / #{widthS})::bigint, 0), #{numBuckets - 1}::bigint) AS bucket_idx,
-                 COUNT(*)::bigint AS cnt,
-                 MAX(timestamp) AS last_seen
-          FROM otel_logs_and_spans
-          WHERE project_id = #{pid}::text
-            AND attributes___http___request___method IS NOT NULL
-            ^{hostFilter}
-            AND timestamp >= #{start}::timestamptz
-          GROUP BY url_path, method, service, bucket_idx|]
+          WITH filtered AS (
+            SELECT COALESCE(NULLIF(attributes->'http'->>'route', ''), attributes___url___path, '/') AS url_path,
+                   attributes___http___request___method AS method,
+                   resource___service___name AS service,
+                   floor((extract(epoch from timestamp) - #{startEpoch}) / #{width})::bigint AS bucket_idx,
+                   timestamp
+            FROM otel_logs_and_spans
+            WHERE project_id = #{pid}::text
+              AND attributes___http___request___method IS NOT NULL
+              ^{hostFilter}
+              AND timestamp >= ^{startSql}
+          )
+          SELECT url_path, method, service, bucket_idx, COUNT(*)::bigint AS cnt, MAX(timestamp) AS last_seen
+          FROM filtered GROUP BY url_path, method, service, bucket_idx|]
   let telMap = Map.fromListWith (<>) [((r.urlPath, fromMaybe "" r.method), [r]) | r <- tels]
       mk m =
         let rs = fromMaybe [] $ Map.lookup (m.urlPath, m.method) telMap
@@ -328,8 +335,9 @@ dependenciesAndEventsCount :: (DB es, Labeled "timefusion" Hasql :> es, Time :> 
 dependenciesAndEventsCount useTf pid outgoingM sortT skip timeF period showArchived = do
   now <- Time.currentTime
   let intervalDays = if timeF == "14D" then 14 else 1 :: Int
-      windowStart = addUTCTime (negate $ fromIntegral intervalDays * 86400) now
-      (start, numBuckets, widthS) = periodWindow period now
+      windowStart = addUTCTime (negate $ fromIntegral (intervalDays * 86400)) now
+      windowStartSql = rawSql $ "'" <> toText (iso8601Show windowStart) <> "'"
+      (start, numBuckets, width) = periodWindow period now
       startEpoch = epochSecs start
       directionClause = directionClauseSql outgoingM
       hostExpr = rawSql (hostCoalesceExpr "s.")
@@ -343,18 +351,19 @@ dependenciesAndEventsCount useTf pid outgoingM sortT skip timeF period showArchi
     Hasql.withHasqlTimefusion useTf
       $ Hasql.interp
         [HI.sql|
-          SELECT ^{hostExpr} AS host,
-                 (s.kind = 'client') AS outgoing,
-                 s.resource___service___name AS service,
-                 LEAST(GREATEST(floor((extract(epoch from s.timestamp) - #{startEpoch}) / #{widthS})::bigint, 0), #{numBuckets - 1}::bigint) AS bucket_idx,
-                 COUNT(*)::bigint AS cnt,
-                 MAX(s.timestamp) AS last_seen,
-                 MIN(s.timestamp) AS first_seen
-          FROM otel_logs_and_spans s
-          WHERE s.project_id = #{pid}::text
-            AND s.timestamp > #{windowStart}::timestamptz
-            AND s.attributes___http___request___method IS NOT NULL
-          GROUP BY host, outgoing, service, bucket_idx|]
+          WITH filtered AS (
+            SELECT ^{hostExpr} AS host,
+                   (s.kind = 'client') AS outgoing,
+                   s.resource___service___name AS service,
+                   floor((extract(epoch from s.timestamp) - #{startEpoch}) / #{width})::bigint AS bucket_idx,
+                   s.timestamp AS ts
+            FROM otel_logs_and_spans s
+            WHERE s.project_id = #{pid}::text
+              AND s.timestamp > ^{windowStartSql}
+              AND s.attributes___http___request___method IS NOT NULL
+          )
+          SELECT host, outgoing, service, bucket_idx, COUNT(*)::bigint AS cnt, MAX(ts) AS last_seen, MIN(ts) AS first_seen
+          FROM filtered GROUP BY host, outgoing, service, bucket_idx|]
   let telMap = Map.fromListWith (<>) [((r.host, r.outgoing), [r]) | r <- tels, r.host /= ""]
       mk (h, o) =
         let rs = fromMaybe [] $ Map.lookup (h, o) telMap
