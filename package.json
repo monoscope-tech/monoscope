@@ -1,11 +1,11 @@
 {
   "devDependencies": {
     "@tailwindcss/typography": "^0.5.20",
-    "autoprefixer": "^10.5.0",
-    "daisyui": "^5.5.23",
+    "autoprefixer": "^10.5.4",
+    "daisyui": "^5.6.18",
     "jest": "^30.4.2",
-    "postcss": "^8.5.15",
-    "tailwindcss": "^4.3.0",
+    "postcss": "^8.5.20",
+    "tailwindcss": "^4.3.3",
     "workbox-cli": "^7.4.1"
   },
   "dependencies": {
