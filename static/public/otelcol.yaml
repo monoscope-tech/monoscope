@@ -3,6 +3,7 @@ receivers:
     protocols:
       grpc:
         endpoint: :4317
+        max_recv_msg_size_mib: 16
         include_metadata: true
       http:
         endpoint: :80
