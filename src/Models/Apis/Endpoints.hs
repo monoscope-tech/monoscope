@@ -34,7 +34,7 @@ import Data.Aeson qualified as AE
 import Data.Default (Default)
 import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.Hasql qualified as Hasql
-import Data.Map.Lazy qualified as Map
+import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime, ZonedTime, addUTCTime, zonedTimeToUTC)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format.ISO8601 (iso8601Show)
