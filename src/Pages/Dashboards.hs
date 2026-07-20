@@ -611,7 +611,8 @@ processVariable pid now timeRange@(sinceStr, fromDStr, toDStr) allParams variabl
   case variable._vType of
     Dashboards.VTQuery | Just sqlQuery <- variable.sql -> do
       -- SECURITY: Use secured query execution with project_id filtering
-      result <- LogQueries.executeSecuredQuery pid sqlQuery 1000
+      useTf <- (.env.enableTimefusionReads) <$> ask @AuthContext
+      result <- LogQueries.executeSecuredQuery useTf pid sqlQuery 1000
       case result of
         Right queryResults -> pure variable{Dashboards.options = Just $ map (map valueToText . V.toList) $ V.toList queryResults}
         Left _ -> pure variable -- Return unchanged on error
@@ -751,10 +752,11 @@ processConstant pid now (sinceStr, fromDStr, toDStr) allParams constantBase = do
           (\(err :: SomeException) -> Log.logWarn ("Dashboard constant " <> label <> " query failed") (constant.key, show err, duration) $> constant)
           (\val -> Log.logDebug ("Dashboard constant " <> label <> " query completed") (constant.key, duration) $> constant{Dashboards.result = Just $ toResult val})
           res
+  useTf <- (.env.enableTimefusionReads) <$> ask @AuthContext
   case (constant.sql, constant.query) of
     (Just sqlQuery, _) -> do
       -- SECURITY: Use secured query execution with project_id filtering
-      (res, duration) <- Log.timeAction $ LogQueries.executeSecuredQuery pid sqlQuery 1000
+      (res, duration) <- Log.timeAction $ LogQueries.executeSecuredQuery useTf pid sqlQuery 1000
       case res of
         Left err -> Log.logWarn "Dashboard constant SQL query failed" (constant.key, err, duration) $> constant
         Right queryResults -> do
@@ -2421,7 +2423,7 @@ dashboardTabRenamePatchH pid dashId tabSlug form = do
 dashboardActions_ :: Projects.ProjectId -> Text -> Dashboards.DashboardId -> Maybe Text -> Maybe (Text, Text) -> Html ()
 dashboardActions_ pid paymentPlan dashId tabSlugM currentRange = div_ [class_ "flex items-center"] do
   span_ [class_ "text-fillDisabled mr-2 max-md:hidden"] "|"
-  div_ [class_ "max-md:hidden"] $ Components.drawer_ "page-data-drawer" Nothing (Just $ newWidget_ pid paymentPlan dashId tabSlugM currentRange) $ span_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg tap-target", Aria.label_ "Add a new widget", data_ "tippy-content" "Add a new widget"] $ faSprite_ "plus" "regular" "w-3 h-3"
+  div_ [class_ "max-md:hidden"] $ Components.drawer_ "page-data-drawer" False Nothing (Just $ newWidget_ pid paymentPlan dashId tabSlugM currentRange) $ span_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg tap-target", Aria.label_ "Add a new widget", data_ "tippy-content" "Add a new widget"] $ faSprite_ "plus" "regular" "w-3 h-3"
   div_ [class_ "max-md:hidden"] $ yamlEditorDrawer_ pid dashId
   let dashActionsPop = "dash-actions-" <> dashId.toText
   div_ [class_ "inline-block"] do

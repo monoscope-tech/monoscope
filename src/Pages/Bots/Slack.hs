@@ -275,7 +275,7 @@ slackInteractionsH interaction = do
               Log.logTrace ("Slack followup response (report)" :: Text) resp
               sendSlackFollowupResponse inter.response_url resp
         GeneralQueryIntent -> do
-          result <- processAIQuery slackData.projectId inter.text Nothing envCfg.openaiModel envCfg.openaiApiKey
+          result <- processAIQuery envCfg.enableTimefusionReads slackData.projectId inter.text Nothing envCfg.openaiModel envCfg.openaiApiKey
           case result of
             Left _ -> do
               let resp = formatBotError Slack ServiceError
@@ -761,7 +761,7 @@ slackEventsPostH payload = do
       let threadContext = formatHistoryAsContext "Slack" $ map AI.dbMessageToLLMMessage dbMessages
 
       -- Use processAIQuery with thread context
-      result <- processAIQuery slackData.projectId event.text (Just threadContext) envCfg.openaiModel envCfg.openaiApiKey
+      result <- processAIQuery envCfg.enableTimefusionReads slackData.projectId event.text (Just threadContext) envCfg.openaiModel envCfg.openaiApiKey
       case result of
         Left err -> do
           Log.logAttention "Slack fallback_error_message (threaded AI query failed)" $ AE.object ["team_id" AE..= slackData.teamId, "channel_id" AE..= event.channel, "thread_ts" AE..= threadTs, "ai_error" AE..= err]

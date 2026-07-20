@@ -6,6 +6,7 @@ import Data.Aeson.Lens (key, _Number)
 import Data.ByteArray qualified as BA
 import Data.ByteString.Lazy qualified as LBS
 import Data.Default (def)
+import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.Wreq (Options, header)
 import Data.HashMap.Strict qualified as HM
@@ -15,6 +16,7 @@ import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, (:>))
+import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
 import Effectful.Time qualified as Time
 import Langchain.LLM.Core qualified as LLM
@@ -267,12 +269,12 @@ data Channel = Channel
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "channel", DAE.CamelToSnake]] Channel
 
 
-processAIQuery :: (DB es, ELLM.LLM :> es, Log :> es, Time.Time :> es, Tracing :> es) => Projects.ProjectId -> Text -> Maybe Text -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
-processAIQuery pid userQuery threadCtx model apiKey = do
+processAIQuery :: (DB es, ELLM.LLM :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => Bool -> Projects.ProjectId -> Text -> Maybe Text -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
+processAIQuery useTf pid userQuery threadCtx model apiKey = do
   now <- Time.currentTime
   let dayAgo = addUTCTime (-86400) now
   facetSummaryM <- SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" dayAgo now
-  let config = (AI.defaultAgenticConfig pid){AI.facetContext = facetSummaryM, AI.customContext = threadCtx}
+  let config = (AI.defaultAgenticConfig pid){AI.facetContext = facetSummaryM, AI.customContext = threadCtx, AI.useTimefusion = useTf}
   result <- AI.runAgenticQuery config userQuery model apiKey
   case result of
     Left err -> do

@@ -1841,7 +1841,7 @@ aiSearchH pid requestBody = do
 
   -- Fetch precomputed facets for context (last 24 hours)
   facetSummaryM <- SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" (addUTCTime (-86400) now) now
-  let config = (AI.defaultAgenticConfig pid){AI.facetContext = facetSummaryM, AI.timezone = timezoneM, AI.maxIterations = 2}
+  let config = (AI.defaultAgenticConfig pid){AI.facetContext = facetSummaryM, AI.timezone = timezoneM, AI.maxIterations = 2, AI.useTimefusion = envCfg.enableTimefusionReads}
   result <- AI.runAgenticQuery config inputText envCfg.openaiModel envCfg.openaiApiKey
   case result of
     Left errMsg -> do

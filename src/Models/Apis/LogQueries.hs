@@ -212,13 +212,17 @@ logExplorerUrlPath pid endpoint q cols cursor since fromV toV layout source rece
 -- (one jsonb array per row, in projection order).
 -- SECURITY: validates the query for dangerous patterns and verifies a
 -- project_id filter is present (the caller substitutes {{project_id}}).
-executeSecuredQuery :: DB es => Projects.ProjectId -> Text -> Int -> Eff es (Either Text (V.Vector (V.Vector AE.Value)))
-executeSecuredQuery pid userQuery limit
+-- @useTimefusion@ routes the read to the TimeFusion pool when TF reads are on,
+-- mirroring the widget/chart path ('Charts.fetchMetricsData'). Without it,
+-- dashboard constant/variable queries hit Postgres and silently return empty
+-- for TF-only projects even though the widgets (which do route to TF) show data.
+executeSecuredQuery :: (DB es, Labeled "timefusion" Hasql :> es) => Bool -> Projects.ProjectId -> Text -> Int -> Eff es (Either Text (V.Vector (V.Vector AE.Value)))
+executeSecuredQuery useTimefusion pid userQuery limit
   | not (validateSqlQuery userQuery) = pure $ Left "Query contains disallowed operations"
   | not (hasProjectIdFilter userQuery pid) = pure $ Left "Query must filter by project_id"
   | otherwise = do
       let wrapped = rawSql ("SELECT jsonb_build_array(sub.*) FROM (" <> userQuery <> ") sub") <> [HI.sql| LIMIT #{limit}|]
-      resultE <- try @Hasql.HasqlException $ do
+      resultE <- try @Hasql.HasqlException $ Hasql.withHasqlTimefusion useTimefusion do
         rows :: [AE.Value] <- Hasql.interp wrapped
         pure $ V.fromList $ mapMaybe jsonArrayToVector rows
       pure $ first (\e -> "Query execution failed: " <> toText (displayException e)) resultE

@@ -44,6 +44,7 @@ module Pkg.AI (
 import Control.Lens ((^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens (key, _Array, _String)
+import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.LLM (callOpenAIAPI)
 import Data.Effectful.LLM qualified as ELLM
 import Data.HashMap.Strict qualified as HM
@@ -54,6 +55,7 @@ import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, (:>))
+import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
 import Effectful.Log qualified as Log
 import Effectful.Time qualified as Time
@@ -441,6 +443,7 @@ data AgenticConfig = AgenticConfig
   , conversationType :: Maybe Issues.ConversationType
   , systemPromptOverride :: Maybe Text -- Custom system prompt for specific use cases (e.g., issue investigation)
   , timezone :: Maybe Text -- User's IANA timezone (e.g. "Europe/Berlin")
+  , useTimefusion :: Bool -- Route raw-SQL reads to TimeFusion (mirrors env.enableTimefusionReads)
   }
 
 
@@ -458,6 +461,7 @@ defaultAgenticConfig pid =
     , conversationType = Nothing
     , systemPromptOverride = Nothing
     , timezone = Nothing
+    , useTimefusion = False
     }
 
 
@@ -646,7 +650,7 @@ stripCodeBlock t
     stripped = T.strip t
 
 
-runAgenticQuery :: (DB es, ELLM.LLM :> es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Text -> Text -> Text -> Eff es (Either Text LLMResponse)
+runAgenticQuery :: (DB es, ELLM.LLM :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Text -> Text -> Text -> Eff es (Either Text LLMResponse)
 runAgenticQuery config userQuery model apiKey = do
   now <- Time.currentTime
   let sysPrompt = buildSystemPrompt config now
@@ -682,7 +686,7 @@ dbMessageToLLMMessage msg =
 -- | Run agentic chat with DB-persisted history, returns response with tool call info
 -- This is more flexible than runAgenticQueryWithHistory as it doesn't parse the response
 runAgenticChatWithHistory
-  :: (DB es, ELLM.LLM :> es, Log :> es, Time.Time :> es, Tracing :> es)
+  :: (DB es, ELLM.LLM :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es)
   => AgenticConfig
   -> Text
   -> Text
@@ -710,7 +714,7 @@ runAgenticChatWithHistory config userQuery model apiKey = do
 
 
 -- | Raw agentic loop that returns the response with tool call history
-runAgenticLoopRaw :: (DB es, ELLM.LLM :> es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Text -> LLM.ChatHistory -> OpenAIV1.CreateChatCompletion -> Int -> [ToolCallInfo] -> Eff es (Either Text AgenticChatResult)
+runAgenticLoopRaw :: (DB es, ELLM.LLM :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Text -> LLM.ChatHistory -> OpenAIV1.CreateChatCompletion -> Int -> [ToolCallInfo] -> Eff es (Either Text AgenticChatResult)
 runAgenticLoopRaw config apiKey chatHistory params iteration accumulated
   | iteration >= config.maxIterations = do
       Log.logTrace "AI agentic loop forcing final response" (AE.object ["iteration" AE..= iteration, "maxIterations" AE..= config.maxIterations])
@@ -765,7 +769,7 @@ addMessagesToMemory maxTokens history newMsgs = do
   pure $ fromMaybe allMsgs (rightToMaybe result)
 
 
-executeToolCall :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> LLM.ToolCall -> Eff es ToolResult
+executeToolCall :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> LLM.ToolCall -> Eff es ToolResult
 executeToolCall config tc = do
   let funcName = LLM.toolFunctionName (LLM.toolCallFunction tc)
       args = LLM.toolFunctionArguments (LLM.toolCallFunction tc)
@@ -878,11 +882,11 @@ executeRunQuery config args = case getTextArg "query" args of
   _ -> pure $ ToolResult (toolError "run_query" "missing 'query'" args) Nothing
 
 
-executeSqlQuery :: DB es => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
+executeSqlQuery :: (DB es, Labeled "timefusion" Hasql :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
 executeSqlQuery config args = case getTextArg "query" args of
   Just query -> do
     let lim = getLimitArg "limit" config.limits.maxQueryResults config.limits.maxDisplayRows args
-    resultE <- executeSecuredQuery config.projectId query lim
+    resultE <- executeSecuredQuery config.useTimefusion config.projectId query lim
     pure $ case resultE of
       Left err -> "SQL Error: " <> err <> "\nNote: KQL queries (run_query) are preferred when possible."
       Right results ->

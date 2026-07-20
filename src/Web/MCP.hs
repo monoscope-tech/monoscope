@@ -534,7 +534,7 @@ searchEventsNL =
             authCtx <- Reader.ask @AuthContext
             now <- Time.currentTime
             facets <- SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" (addUTCTime (-86400) now) now
-            let cfg = (AI.defaultAgenticConfig pid){AI.facetContext = facets, AI.timezone = sanitizeTimezone =<< textArg "timezone" args, AI.maxIterations = 2}
+            let cfg = (AI.defaultAgenticConfig pid){AI.facetContext = facets, AI.timezone = sanitizeTimezone =<< textArg "timezone" args, AI.maxIterations = 2, AI.useTimefusion = authCtx.env.enableTimefusionReads}
             AI.runAgenticQuery cfg inputT authCtx.env.openaiModel authCtx.env.openaiApiKey >>= \case
               Left err -> pure $ toolError ("AI translation failed: " <> err)
               Right resp ->
