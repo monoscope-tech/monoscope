@@ -70,15 +70,23 @@ getTargetPage "Endpoints" = "/endpoints"
 getTargetPage _ = ""
 
 
-drawer_ :: Text -> Maybe Text -> Maybe (Html ()) -> Html () -> Html ()
-drawer_ drawerId urlM content trigger = div_ [class_ "drawer drawer-end inline-block w-auto"] do
+-- | @startOpen@ controls whether the drawer renders expanded on load. Keep this
+-- distinct from @content@ presence: URL-driven drawers (e.g. @?expand=@) pass
+-- @startOpen = isJust content@ to reopen from a shared link, while drawers with
+-- eager inline content that should stay collapsed pass @False@.
+--
+-- >>> let checks b = T.count "checked" $ toStrict $ renderText $ drawer_ "d" b Nothing (Just "x") ""
+-- >>> checks True == checks False + 1
+-- True
+drawer_ :: Text -> Bool -> Maybe Text -> Maybe (Html ()) -> Html () -> Html ()
+drawer_ drawerId startOpen urlM content trigger = div_ [class_ "drawer drawer-end inline-block w-auto"] do
   input_
     ( [ id_ drawerId
       , type_ "checkbox"
       , class_ "drawer-toggle"
       , Aria.label_ "Toggle drawer"
       ]
-        <> [checked_ | isJust content]
+        <> [checked_ | startOpen]
         <> [ [__|on keyup if the event's key is 'Escape' set my.checked to false trigger keyup end
           on change
             if my.checked then

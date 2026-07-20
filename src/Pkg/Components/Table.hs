@@ -442,7 +442,16 @@ treeRowAttrs row tc =
   , data_ "tree-level" (show $ tc.rowLevel row)
   ]
     <> if tc.isGroupRow row
-      then [data_ "tree-group" "true", data_ "tree-collapsed" "false", onclick_ "toggleTreeRow(this)"]
+      then
+        [ data_ "tree-group" "true"
+        , data_ "tree-collapsed" "false"
+        , term "aria-expanded" "true"
+        , role_ "button"
+        , tabindex_ "0"
+        , term "aria-label" $ "Toggle metric namespace " <> tc.rowPath row
+        , onclick_ "toggleTreeRow(this)"
+        , [__|on keydown[key=='Enter' or key==' '] halt the event then call toggleTreeRow(me) end|]
+        ]
       else []
 
 
@@ -459,7 +468,7 @@ renderListRow tbl row = div_ (treeAttrs <> rowAttrs <> [class_ "flex gap-4 md:ga
 {-# INLINE renderTableRow #-}
 renderTableRow :: Table a -> a -> Html ()
 renderTableRow tbl row =
-  tr_ ([class_ "hover:bg-fillWeak transition-colors duration-75 itemsListItem"] <> treeAttrs <> rowAttrs <> linkHandler) do
+  tr_ ([class_ rowClass] <> treeAttrs <> rowAttrs <> linkHandler) do
     when (isJust tbl.features.rowId)
       $ td_ [class_ "w-8 align-top pt-4 max-md:hidden"] do
         whenJust tbl.features.rowId \getId ->
@@ -476,6 +485,8 @@ renderTableRow tbl row =
   where
     rowAttrs = maybe [] ($ row) tbl.features.rowAttrs
     treeAttrs = maybe [] (treeRowAttrs row) tbl.features.treeConfig
+    isTreeGroup = maybe False (\tc -> tc.isGroupRow row) tbl.features.treeConfig
+    rowClass = "hover:bg-fillWeak transition-colors duration-75 itemsListItem" <> if isTreeGroup then " cursor-pointer" else ""
     linkHandler = maybe [] (\getLink -> [class_ "cursor-pointer", hxGet_ (getLink row), hxPushUrl_ "true"] <> navTabAttrs) tbl.features.rowLink
     isSelected = maybe False (\f -> f row) tbl.features.selectRow
     colAttrs c = foldMap (\a -> [class_ a]) c.align
@@ -792,6 +803,7 @@ treeScript =
         }
       }
       el.setAttribute('data-tree-collapsed', collapsed ? 'false' : 'true');
+      el.setAttribute('aria-expanded', collapsed ? 'true' : 'false');
       var chev = el.querySelector('.tree-chevron');
       if (chev) chev.classList.toggle('rotate-90');
     }

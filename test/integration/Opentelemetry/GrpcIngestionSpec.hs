@@ -44,7 +44,7 @@ import Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields qualified as PMF
 import Proto.Opentelemetry.Proto.Resource.V1.Resource_Fields qualified as PRF
 import Relude
 import System.Config (AuthContext (metricCatalogBuffer))
-import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, sequential, shouldBe, shouldContain, shouldSatisfy, shouldThrow)
+import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, sequential, shouldBe, shouldContain, shouldNotContain, shouldSatisfy, shouldThrow)
 
 
 pid :: Projects.ProjectId
@@ -161,7 +161,6 @@ spec = sequential $ aroundAll withTestResources do
       let detailHtml = toString $ Lucid.renderText details
       detailHtml `shouldContain` "id=\"metric-details-content\""
       detailHtml `shouldContain` "hx-target=\"#metric-details-content\""
-      detailHtml `shouldContain` "window.evalScriptsFromContent(this)"
       detailHtml `shouldContain` "Available dimensions"
       detailHtml `shouldContain` "Reporting services"
       detailHtml `shouldNotContain` ">Metric detail<"
@@ -170,6 +169,15 @@ spec = sequential $ aroundAll withTestResources do
       detailHtml `shouldContain` "Group chart by resource.service.name"
       detailHtml `shouldContain` "cpu.limit"
       detailHtml `shouldContain` "Same cpu namespace"
+      (_, dataPoints) <- toServantResponse tr $ TelemetryPage.metricsOverViewGetH pid (Just "datapoints") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      let dataPointsHtml = toString $ Lucid.renderText $ Lucid.toHtml dataPoints
+      dataPointsHtml `shouldContain` "tab=datapoints&amp;expand=cpu.usage"
+      dataPointsHtml `shouldContain` "on keydown[key==&#39;Enter&#39;] halt the event then trigger click end"
+      dataPointsHtml `shouldContain` "window.evalScriptsFromContent(this)"
+      dataPointsHtml `shouldContain` "role=\"button\""
+      dataPointsHtml `shouldContain` "tabindex=\"0\""
+      dataPointsHtml `shouldContain` "w-10 shrink-0"
+      dataPointsHtml `shouldNotContain` "cursor-pointerhover"
       points <- runTestBg frozenTime tr $ Telemetry.getDataPointsData True pid (Just (addUTCTime (-1) frozenTime), Just (addUTCTime 1 frozenTime))
       find ((== "cpu.usage") . (.metricName)) points `shouldSatisfy` isJust
       (events, _, metrics, _) <- runTestBg frozenTime tr $ Telemetry.getUsageTotals True pid (addUTCTime (-1) frozenTime)

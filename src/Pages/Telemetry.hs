@@ -521,9 +521,10 @@ dataPointsPage pid metrics refCounts = do
   let dataMap = Map.fromList [(m.metricName, m) | m <- V.toList metrics]
       tree = buildMetricTree $ V.toList $ (.metricName) <$> metrics
       rows = flattenMetricTree dataMap tree 0 []
+      metricPageUrl metricName = "/p/" <> pid.toText <> "/metrics?tab=datapoints&expand=" <> metricName
   div_ [class_ "flex flex-col gap-4 px-4 overflow-y-scroll"] $ do
     div_ [class_ "w-full"] do
-      Components.drawer_ "global-data-drawer" Nothing Nothing ""
+      Components.drawer_ "global-data-drawer" False Nothing Nothing ""
       template_ [id_ "loader-tmp"] $ loadingIndicator_ LdMD LdDots
       div_ [class_ "w-full flex gap-3 items-center min-h-10"] do
         overViewTabs pid "datapoints"
@@ -544,12 +545,23 @@ dataPointsPage pid metrics refCounts = do
                           else div_ [class_ "absolute top-0 h-1/2 border-l border-l-strokeWeak", style_ $ "left:" <> px] pass
                         div_ [class_ "absolute h-[1px] bg-strokeWeak", style_ $ "left:" <> px <> "; top:50%; width:16px"] pass
                   div_ [class_ "flex items-center gap-2", style_ $ "padding-left:" <> show (r.level * indent) <> "px"] do
-                    when r.isGroup
-                      $ div_ [class_ "border border-strokeWeak min-w-7 flex justify-between gap-1 items-center rounded-sm px-1 py-0.5"] do
+                    div_ [class_ "w-10 shrink-0"] $ when r.isGroup $
+                      div_ [class_ "w-full border border-strokeWeak flex justify-between gap-1 items-center rounded-sm px-1 py-0.5"] do
                         faSprite_ "chevron-right" "regular" "h-3 w-3 shrink-0 text-textStrong tree-chevron rotate-90 transition-transform"
                         span_ [class_ "text-xs"] $ toHtml $ show r.childCount
                     unless (r.parentPath == "___root___") $ span_ [class_ "text-textDisabled"] $ toHtml $ r.parentPath <> "."
-                    span_ [class_ "text-textStrong font-medium"] $ toHtml r.segment
+                    case r.metric of
+                      Nothing -> span_ [class_ "text-textStrong font-medium"] $ toHtml r.segment
+                      Just _ -> do
+                        let detailUrl = metricDetailUrl pid r.fullPath "all" Nothing
+                        a_
+                          ( [ class_ "cursor-pointer font-medium text-textStrong hover:text-textBrand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-strokeFocus"
+                            , href_ $ metricPageUrl r.fullPath
+                            , [__|on keydown[key=='Enter'] halt the event then trigger click end|]
+                            ]
+                              <> drawerLoadAttrs_ detailUrl
+                          )
+                          $ toHtml r.segment
             , Table.col "Sources" (\r -> div_ [class_ "flex gap-1 flex-wrap"] $ whenJust r.metric \m -> forM_ m.serviceNames $ span_ [class_ "badge badge-ghost text-xs"] . toHtml) & Table.withAttrs [class_ "w-48"]
             , Table.col "Datapoints" (\r -> whenJust r.metric \m -> span_ [class_ "tabular-nums"] $ toHtml $ prettyPrintCount m.dataPointsCount) & Table.withAttrs [class_ "w-28"]
             , Table.col
@@ -568,12 +580,6 @@ dataPointsPage pid metrics refCounts = do
             def
               { Table.search = Just Table.ClientSide
               , Table.treeConfig = Just Table.TreeConfig{rowLevel = (.level), rowPath = (.fullPath), isGroupRow = (.isGroup)}
-              , Table.rowAttrs = Just \r ->
-                  if r.isGroup
-                    then [class_ "cursor-pointer"]
-                    else
-                      let detailUrl = metricDetailUrl pid r.fullPath "all" Nothing
-                       in class_ "cursor-pointer" : drawerLoadAttrs_ detailUrl
               , Table.zeroState = Just Table.ZeroState{icon = "chart-line", title = "No metrics found", description = "Metrics will appear here once your application starts sending telemetry data.", actionText = "View SDK setup guides", destination = Right "https://monoscope.tech/docs/sdks/"}
               }
         }

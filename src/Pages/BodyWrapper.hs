@@ -538,7 +538,7 @@ bodyWrapper bcfg child = do
                         then maybe child (\p -> settingsWrapper p.id bcfg.pageTitle child) bcfg.currProject
                         else child
                     div_ [class_ "h-0 shrink"] do
-                      Components.drawer_ "global-data-drawer" Nothing bcfg.globalDrawerContent ""
+                      Components.drawer_ "global-data-drawer" (isJust bcfg.globalDrawerContent) Nothing bcfg.globalDrawerContent ""
                       template_ [id_ "loader-tmp"] Components.drawerLoadingSkeleton_
                       -- Modal for copying widgets to other dashboards
                       Components.modal_ "dashboards-modal" "" do
