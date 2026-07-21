@@ -195,6 +195,7 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
   (sess, project, bw) <- mkPageCtx pid
   issueM <- fetchIssue pid
   now <- Time.currentTime
+  useTf <- (.env.enableTimefusionReads) <$> ask @AuthContext
   let baseBwconf = bw{pageTitle = "Issues", menuItem = Just "Issues"}
   case issueM of
     Nothing ->
@@ -245,8 +246,8 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
       (trItem, spanRecs) <-
         fromMaybe (Nothing, V.empty) <$> runMaybeT do
           tId <- hoistMaybe mTraceId
-          traceItem <- MaybeT $ Telemetry.getTraceDetails pid tId Nothing now
-          otelLogs <- lift $ Telemetry.getSpanRecordsByTraceId pid traceItem.traceId (Just traceItem.traceStartTime) now
+          traceItem <- MaybeT $ Telemetry.getTraceDetails useTf pid tId Nothing now
+          otelLogs <- lift $ Telemetry.getSpanRecordsByTraceId useTf pid traceItem.traceId (Just traceItem.traceStartTime) now
           pure (Just traceItem, V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> V.fromList otelLogs)
       sampleOverride <-
         if issue.issueType `elem` [Issues.LogPattern, Issues.LogPatternRateChange]
@@ -1066,8 +1067,9 @@ aiChatHistoryGetH pid issueId = do
 -- | Build complete system prompt for an issue (shared between POST and GET)
 buildSystemPromptForIssue :: Projects.ProjectId -> Issues.Issue -> UTCTime -> ATAuthCtx Text
 buildSystemPromptForIssue pid issue now = do
+  useTf <- (.env.enableTimefusionReads) <$> ask @AuthContext
   errorM <- bool (pure Nothing) (ErrorPatterns.getErrorPatternByHash pid issue.endpointHash) (issue.issueType == Issues.RuntimeException)
-  (traceDataM, spans) <- maybe (pure (Nothing, V.empty)) fetchTrace errorM
+  (traceDataM, spans) <- maybe (pure (Nothing, V.empty)) (fetchTrace useTf) errorM
   alertContextM <- case (issue.issueType, AE.fromJSON @Issues.QueryAlertData (getAeson issue.issueData)) of
     (Issues.QueryAlert, AE.Success alertData) -> do
       let twoDaysAgo = addUTCTime (-172800) now
@@ -1084,11 +1086,11 @@ buildSystemPromptForIssue pid issue now = do
       fullSystemPrompt = unlines [systemPrompt, "", "--- FACET SUMMARY ---", maybe "" formatFacetSummaryForAI facetSummaryM, "", issueContext]
   pure fullSystemPrompt
   where
-    fetchTrace err =
+    fetchTrace useTf err =
       fromMaybe (Nothing, V.empty) <$> runMaybeT do
         tId <- hoistMaybe err.recentTraceId
-        trData <- MaybeT $ Telemetry.getTraceDetails pid tId (Just $ zonedTimeToUTC err.updatedAt) now
-        spans <- lift $ Telemetry.getSpanRecordsByTraceId pid trData.traceId (Just trData.traceStartTime) now
+        trData <- MaybeT $ Telemetry.getTraceDetails useTf pid tId (Just $ zonedTimeToUTC err.updatedAt) now
+        spans <- lift $ Telemetry.getSpanRecordsByTraceId useTf pid trData.traceId (Just trData.traceStartTime) now
         pure (Just trData, V.fromList spans)
     buildAIContext iss errM trDataM spans alertContextM =
       unlines

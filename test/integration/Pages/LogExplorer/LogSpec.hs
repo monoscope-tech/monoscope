@@ -25,6 +25,7 @@ import Network.GRPC.Common.Protobuf (Proto (..))
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.LogExplorer.Log qualified as Log
 import Pages.LogExplorer.LogItem qualified as LogItem
+import Pages.Telemetry qualified as TelemetryPage
 import Pkg.Parser.Stats (Sources (..))
 import Pkg.TestUtils
 import ProcessMessage (processMessages)
@@ -492,17 +493,17 @@ spec = around withTestResources do
       LT.toStrict (Lucid.renderText html) `shouldSatisfy` T.isInfixOf "Create monitor"
 
   describe "Log item detail (expandAPIlogItemH)" do
-    it "loads a span via the TimeFusion read path, and decodes legacy NULL hashes on PG" \tr -> do
+    it "trace-timefusion-read loads a span and decodes legacy NULL hashes on PG" \tr -> do
       let spanName = "GET /api/log-item/tf" :: Text
       apiKey <- createTestAPIKey tr testPid "log-item-tf-key"
       ingestTrace tr apiKey spanName frozenTime
       rows <-
         withPool tr.trPool
           $ DBT.query
-            [sql| SELECT id, timestamp FROM otel_logs_and_spans WHERE project_id = ? AND name = ? |]
+            [sql| SELECT id, timestamp, context___trace_id FROM otel_logs_and_spans WHERE project_id = ? AND name = ? |]
             (testPid, spanName)
-          :: IO (V.Vector (UUID.UUID, UTCTime))
-      (rid, ts) <- maybe (error "ingested span missing from otel_logs_and_spans") pure (rows V.!? 0)
+          :: IO (V.Vector (UUID.UUID, UTCTime, Text))
+      (rid, ts, traceIdTxt) <- maybe (error "ingested span missing from otel_logs_and_spans") pure (rows V.!? 0)
 
       let expectFound item = case item of
             LogItem.ItemDetailedNotFound msg -> expectationFailure $ "expected record, got not-found: " <> toString msg
@@ -513,6 +514,11 @@ spec = around withTestResources do
           withTfReads b = tr{trATCtx = ctx{env = ctx.env{enableTimefusionReads = b}}}
       (_, item) <- testServant (withTfReads True) $ LogItem.expandAPIlogItemH testPid rid ts Nothing Nothing
       expectFound item
+      (_, traceDetails) <- testServant (withTfReads True) $ TelemetryPage.traceH testPid traceIdTxt (Just ts) Nothing Nothing
+      case traceDetails of
+        TelemetryPage.TraceDetails _ _ _ -> pass
+        TelemetryPage.SpanDetails _ _ _ -> expectationFailure "expected trace details, got span details"
+        TelemetryPage.TraceDetailsNotFound _ -> expectationFailure "expected TimeFusion trace details"
       let initialHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml item
       initialHtml `shouldSatisfy` T.isInfixOf "trace-details-content"
       initialHtml `shouldNotSatisfy` T.isInfixOf "m-raw-content"

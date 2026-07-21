@@ -72,7 +72,7 @@ instance ToHtml MetricsOverViewGet where
 data TraceDetailsGet
   = TraceDetails Projects.ProjectId Telemetry.Trace (V.Vector Telemetry.SpanRecord)
   | SpanDetails Projects.ProjectId Telemetry.OtelLogsAndSpans (Maybe Telemetry.OtelLogsAndSpans)
-  | TraceDetailsNotFound Text
+  | TraceDetailsNotFound Projects.ProjectId
 
 
 data ServiceData = ServiceData {name :: Text, duration :: Integer}
@@ -213,7 +213,26 @@ flattenMetricTree dataMap trees lvl conts = V.concat $ zipWith flatten trees isL
 instance ToHtml TraceDetailsGet where
   toHtml (TraceDetails pid tr spanRecs) = toHtml $ tracePage pid tr spanRecs
   toHtml (SpanDetails pid s aptSpn) = toHtml $ LogItem.expandedItemView pid s aptSpn Nothing
-  toHtml (TraceDetailsNotFound msg) = toHtml msg
+  toHtml (TraceDetailsNotFound pid) =
+    div_ [class_ "min-h-screen flex items-center justify-center bg-bgBase p-6"] $
+      div_ [class_ "max-w-lg space-y-6 text-center"] do
+        div_ [class_ "flex flex-col items-center gap-3"] do
+          faSprite_ "circle-exclamation" "solid" "w-6 h-6 text-textWeak"
+          div_ [class_ "space-y-1.5"] do
+            h1_ [class_ "text-lg font-semibold text-textStrong"] "Couldn't load this trace"
+            p_ [class_ "max-w-md text-sm leading-6 text-textWeak"] "Try again. If it still fails, return to your results and search for the trace again."
+        div_ [class_ "flex flex-wrap justify-center gap-2"] do
+          button_
+            [ class_ "btn btn-sm btn-primary"
+            , [__|on click send loadTrace(url: #trace_expanded_view's @data-trace-url) to #trace_expanded_view|]
+            ]
+            "Retry loading trace"
+          button_
+            [ class_ "btn btn-sm border-0 bg-fillWeaker text-textStrong hover:bg-fillWeak"
+            , [__|on click send closeTraceView to #trace_expanded_view|]
+            ]
+            "Back to search results"
+        a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer", class_ "link link-hover text-sm text-textWeak"] "Open Log Explorer"
   toHtmlRaw = toHtml
 
 
@@ -308,23 +327,25 @@ metricBreakdownGetH pid metricName labelM = do
 
 -- Trace handler
 traceH :: Projects.ProjectId -> Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders TraceDetailsGet)
-traceH pid trId timestamp spanIdM nav = withSpan_ "trace.load" [] do
-  now <- Time.currentTime
-  if isJust nav
+traceH pid trId timestamp spanIdM nav = do
+  useTf <- (.env.enableTimefusionReads) <$> Reader.ask @AuthContext
+  withSpan_ "trace.load" [] do
+    now <- Time.currentTime
+    if isJust nav
     then do
-      spanRecords' <- V.fromList <$> Telemetry.getSpanRecordsByTraceId pid trId timestamp now
-      let sid = fromMaybe "" spanIdM
-          matchesSpan x = maybe False (\s -> s.span_id == Just sid) x.context
-          targetSpan = fromMaybe (V.head spanRecords') (V.find matchesSpan spanRecords')
-          atpSpan = V.find (\x -> x.name == Just "monoscope.http" || isJust (Telemetry.atMapText "http.request.method" (unAesonTextMaybe x.attributes))) spanRecords'
-      addRespHeaders $ SpanDetails pid targetSpan atpSpan
-    else do
-      traceItemM <- Telemetry.getTraceDetails pid trId timestamp now
-      case traceItemM of
-        Just traceItem -> do
-          spanRecords <- V.catMaybes . fmap Telemetry.convertOtelLogsAndSpansToSpanRecord . V.fromList <$> Telemetry.getSpanRecordsByTraceId pid trId timestamp now
-          addRespHeaders $ TraceDetails pid traceItem spanRecords
-        Nothing -> addRespHeaders $ TraceDetailsNotFound "Trace not found"
+        spanRecords' <- V.fromList <$> Telemetry.getSpanRecordsByTraceId useTf pid trId timestamp now
+        let sid = fromMaybe "" spanIdM
+            matchesSpan x = maybe False (\s -> s.span_id == Just sid) x.context
+            targetSpan = fromMaybe (V.head spanRecords') (V.find matchesSpan spanRecords')
+            atpSpan = V.find (\x -> x.name == Just "monoscope.http" || isJust (Telemetry.atMapText "http.request.method" (unAesonTextMaybe x.attributes))) spanRecords'
+        addRespHeaders $ SpanDetails pid targetSpan atpSpan
+      else do
+        traceItemM <- Telemetry.getTraceDetails useTf pid trId timestamp now
+        case traceItemM of
+          Just traceItem -> do
+            spanRecords <- V.catMaybes . fmap Telemetry.convertOtelLogsAndSpansToSpanRecord . V.fromList <$> Telemetry.getSpanRecordsByTraceId useTf pid trId timestamp now
+            addRespHeaders $ TraceDetails pid traceItem spanRecords
+          Nothing -> addRespHeaders $ TraceDetailsNotFound pid
 
 
 -- Metrics UI components

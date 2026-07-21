@@ -883,8 +883,9 @@ enrichIssue pid issue
             case epM >>= (.recentTraceId) of
               Nothing -> pure issue
               Just trId -> do
+                useTf <- (.env.enableTimefusionReads) <$> ask @AuthContext
                 now <- Time.currentTime
-                spans <- Telemetry.getSpanRecordsByTraceId pid trId Nothing now
+                spans <- Telemetry.getSpanRecordsByTraceId useTf pid trId Nothing now
                 let synth = synthStackFromSpans trId spans
                 pure
                   $ if T.null synth

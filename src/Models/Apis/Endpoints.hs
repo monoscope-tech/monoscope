@@ -249,7 +249,6 @@ endpointRequestStatsByProject useTf pid archived pHostM sortM searchM page perPa
       pHostQuery = foldMap (\h -> [HI.sql| AND enp.host = #{h}|]) pHostM
       search = foldMap (\s -> let pat = "%" <> s <> "%" in [HI.sql| AND enp.url_path LIKE #{pat}|]) searchM
       archivedClause = archivedHostClauseSql archived
-      hostFilter = foldMap (\h -> [HI.sql| AND (^{rawSql (hostCoalesceExpr "")} = #{h})|]) pHostM
   metas :: [EndpointMetaRow] <-
     Hasql.interp
       [HI.sql|
@@ -257,24 +256,30 @@ endpointRequestStatsByProject useTf pid archived pHostM sortM searchM page perPa
         FROM apis.endpoints enp
         JOIN apis.hosts h ON (h.project_id = enp.project_id AND h.host = enp.host AND h.outgoing = enp.outgoing)
         WHERE enp.project_id = #{pid} AND enp.outgoing = #{isOutgoing} ^{pHostQuery} ^{search} ^{archivedClause}|]
+  -- Endpoint hashes are stamped onto telemetry by the extraction worker. Querying
+  -- them avoids evaluating the host JSON fallback for every span in the project.
+  let endpointHashes = V.fromList $ map (.endpointHash) metas
   tels :: [EndpointTelRow] <-
-    Hasql.withHasqlTimefusion useTf
-      $ Hasql.interp
-        [HI.sql|
-          WITH filtered AS (
-            SELECT COALESCE(NULLIF(attributes->'http'->>'route', ''), attributes___url___path, '/') AS url_path,
-                   attributes___http___request___method AS method,
-                   resource___service___name AS service,
-                   floor((extract(epoch from timestamp) - #{startEpoch}) / #{width})::bigint AS bucket_idx,
-                   timestamp
-            FROM otel_logs_and_spans
-            WHERE project_id = #{pid}::text
-              AND attributes___http___request___method IS NOT NULL
-              ^{hostFilter}
-              AND timestamp >= ^{startSql}
-          )
-          SELECT url_path, method, service, bucket_idx, COUNT(*)::bigint AS cnt, MAX(timestamp) AS last_seen
-          FROM filtered GROUP BY url_path, method, service, bucket_idx|]
+    if V.null endpointHashes
+      then pure []
+      else
+        Hasql.withHasqlTimefusion useTf
+          $ Hasql.interp
+            [HI.sql|
+              WITH filtered AS (
+                SELECT COALESCE(NULLIF(attributes->'http'->>'route', ''), attributes___url___path, '/') AS url_path,
+                       attributes___http___request___method AS method,
+                       resource___service___name AS service,
+                       floor((extract(epoch from timestamp) - #{startEpoch}) / #{width})::bigint AS bucket_idx,
+                       timestamp
+                FROM otel_logs_and_spans
+                WHERE project_id = #{pid}::text
+                  AND attributes___http___request___method IS NOT NULL
+                  AND hashes && #{endpointHashes}::text[]
+                  AND timestamp >= ^{startSql}
+              )
+              SELECT url_path, method, service, bucket_idx, COUNT(*)::bigint AS cnt, MAX(timestamp) AS last_seen
+              FROM filtered GROUP BY url_path, method, service, bucket_idx|]
   let telMap = Map.fromListWith (<>) [((r.urlPath, fromMaybe "" r.method), [r]) | r <- tels]
       mk m =
         let rs = fromMaybe [] $ Map.lookup (m.urlPath, m.method) telMap

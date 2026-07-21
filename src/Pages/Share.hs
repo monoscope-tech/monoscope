@@ -23,7 +23,7 @@ import Pages.Telemetry qualified as PTelemetry
 import Pkg.DeriveUtils (unAesonTextMaybe)
 import Relude
 import Servant (err404)
-import System.Config (AuthContext (..))
+import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders)
 import UnliftIO.Exception (throwIO)
 import Web.FormUrlEncoded (FromForm)
@@ -151,13 +151,14 @@ resolveBody _ _ row | row.eventType == "log" = do
     Just req -> ShareLive row.hoursLeft Nothing (LogItem.expandedItemView row.pid req Nothing Nothing) Nothing
     Nothing -> ShareMissing
 resolveBody sid now row = do
+  useTf <- (.env.enableTimefusionReads) <$> Effectful.Reader.Static.ask @AuthContext
   Telemetry.spanRecordByProjectAndId row.pid row.eventCreatedAt row.eventId >>= \case
     Nothing -> pure ShareMissing
     Just anchor -> do
       breakdownM <- runMaybeT do
         tid <- hoistMaybe $ anchor.context >>= (.trace_id) >>= guarded (not . T.null)
-        traceItem <- MaybeT $ Telemetry.getTraceDetails row.pid tid (Just row.eventCreatedAt) now
-        spans <- lift $ Telemetry.getSpanRecordsByTraceId row.pid tid (Just row.eventCreatedAt) now
+        traceItem <- MaybeT $ Telemetry.getTraceDetails useTf row.pid tid (Just row.eventCreatedAt) now
+        spans <- lift $ Telemetry.getSpanRecordsByTraceId useTf row.pid tid (Just row.eventCreatedAt) now
         let recs = V.mapMaybe Telemetry.convertOtelLogsAndSpansToSpanRecord (V.fromList spans)
         pure $ PTelemetry.tracePage row.pid traceItem recs
       let replayInfo =

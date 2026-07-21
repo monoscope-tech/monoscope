@@ -104,7 +104,7 @@ import Data.Text.Display (Display)
 import Data.These (These (..))
 import Data.These qualified as These
 import Data.Time (UTCTime (..))
-import Data.Time.Clock (addUTCTime, diffTimeToPicoseconds, picosecondsToDiffTime)
+import Data.Time.Clock (addUTCTime, diffTimeToPicoseconds, diffUTCTime, picosecondsToDiffTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
 import Data.UUID.Quasi (uuid)
@@ -641,25 +641,17 @@ data MetricChartListData = MetricChartListData
   deriving anyclass (FromRow, HI.DecodeRow, NFData, ToRow)
 
 
-getTraceDetails :: (Hasql :> es, IOE :> es) => Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Eff es (Maybe Trace)
-getTraceDetails pid trId tme now = do
-  rows :: V.Vector (Text, UTCTime, UTCTime, Int64, Int64, Maybe (V.Vector Text)) <-
-    Hasql.interp
-      [HI.sql| SELECT
-              context___trace_id,
-              MIN(start_time) AS trace_start_time,
-              MAX(COALESCE(end_time, start_time)) AS trace_end_time,
-              CAST(EXTRACT(EPOCH FROM (MAX(COALESCE(end_time, start_time)) - MIN(start_time))) * 1000000000 AS int8) AS trace_duration_ns,
-              COUNT(context->>'span_id')::int8 AS total_spans,
-              ARRAY_REMOVE(ARRAY_AGG(DISTINCT jsonb_extract_path_text(resource, 'service.name')), NULL) AS service_names
-            FROM otel_logs_and_spans
-            WHERE project_id = #{pid.toText} AND timestamp BETWEEN #{start} AND #{end} AND context___trace_id = #{trId}
-            GROUP BY context___trace_id |]
-  pure $ (\(tid, ts, te, dur, ns, sn) -> Trace tid ts te (fromIntegral dur) (fromIntegral ns) sn) <$> (rows V.!? 0)
-  where
-    (start, end) = case tme of
-      Nothing -> (addUTCTime (-(14 * 24 * 3600)) now, now)
-      Just ts -> (addUTCTime (-(60 * 5)) ts, addUTCTime (60 * 5) ts)
+getTraceDetails :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es) => Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Eff es (Maybe Trace)
+getTraceDetails useTf pid trId tme now = do
+  spans <- getSpanRecordsByTraceId useTf pid trId tme now
+  pure $ case spans of
+    [] -> Nothing
+    firstSpan : rest ->
+      let start = foldl' (\acc r -> min acc r.start_time) firstSpan.start_time rest
+          end = foldl' (\acc r -> max acc $ fromMaybe firstSpan.start_time r.end_time) firstSpan.start_time rest
+          services = V.fromList $ ordNub $ mapMaybe (atMapText "service.name" . unAesonTextMaybe . (.resource)) spans
+          duration = floor $ diffUTCTime end start * 1000000000
+       in Just $ Trace trId start end duration (length spans) $ if V.null services then Nothing else Just services
 
 
 logRecordByProjectAndId :: DB es => Projects.ProjectId -> UTCTime -> UUID.UUID -> Eff es (Maybe OtelLogsAndSpans)
@@ -755,8 +747,8 @@ orphanParentIds rs =
    in ordNub [p | r <- rs, Just p <- [r.parent_id], not (T.null p), not (S.member p present)]
 
 
-getSpanRecordsByTraceId :: (DB es, Log :> es) => Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Eff es [OtelLogsAndSpans]
-getSpanRecordsByTraceId pid trId tme now = do
+getSpanRecordsByTraceId :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es) => Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Eff es [OtelLogsAndSpans]
+getSpanRecordsByTraceId useTf pid trId tme now = Hasql.withHasqlTimefusion useTf do
   let baseT = fromMaybe now tme
       (start, end) = case tme of
         Nothing -> (addUTCTime (-(14 * 24 * 3600)) now, now)
