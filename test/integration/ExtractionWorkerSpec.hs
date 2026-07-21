@@ -1,6 +1,8 @@
 module ExtractionWorkerSpec (spec) where
 
 import BackgroundJobs qualified
+import Data.Effectful.Hasql qualified as Hasql
+import Data.Text qualified as T
 import Data.Time (addUTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -8,12 +10,13 @@ import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Pkg.TestUtils
 import Relude
-import System.Config (AuthContext (..))
+import System.Config (AuthContext (..), EnvConfig (..))
 import Test.Hspec (Spec, around, describe, it, shouldSatisfy)
 
 
@@ -31,7 +34,9 @@ spec = around withTestResources do
       replicateM_ 3 $ ingestTrace tr apiKey "GET /api/parity/check" frozenTime
       replicateM_ 3 $ ingestTrace tr apiKey "POST /api/parity/submit" frozenTime
 
-      drainExtractionWorker tr
+      let ctx = tr.trATCtx
+          trTf = tr{trATCtx = ctx{env = ctx.env{enableTimefusionReads = True}, config = ctx.config{enableTimefusionWrites = True}}}
+      drainExtractionWorker trTf
 
       -- Verify endpoints were created
       endpoints <- withPool tr.trPool $ DBT.query
@@ -49,6 +54,13 @@ spec = around withTestResources do
       case V.toList processed of
         [Only n] -> n `shouldSatisfy` (>= 6)
         _ -> pass
+
+      tfHashes :: V.Vector Text <- runTestBg frozenTime trTf $ Hasql.withHasqlTimefusion True $ Hasql.interp
+        [HI.sql| SELECT array_to_string(hashes, chr(31))
+                  FROM otel_logs_and_spans
+                  WHERE project_id = #{pid.toText}
+                    AND name = 'GET /api/parity/check' |]
+      tfHashes `shouldSatisfy` any (not . T.null)
 
     it "safety-net: unprocessed rows get re-driven through the worker" \tr -> do
       apiKey <- createTestAPIKey tr pid "ew-safetynet-key"

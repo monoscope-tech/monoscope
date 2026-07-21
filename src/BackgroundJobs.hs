@@ -1991,16 +1991,17 @@ processEagerBatch batch shard
                 allErrors
 
         -- Per-row packed vectors for UPDATE-1.
-        let perRowHashesJson :: V.Vector AE.Value
-            perRowHashesJson =
+        let perRowHashes =
               V.zipWith3
                 ( \sid tid base ->
                     let extra = fromMaybe [] (HM.lookup (sid, tid) errHashesByKey)
-                     in AE.toJSON (V.toList base <> extra)
+                     in base <> V.fromList extra
                 )
                 spanIdsV
                 traceIdsV
                 spanHashes
+            perRowHashesJson :: V.Vector AE.Value
+            perRowHashesJson = AE.toJSON . V.toList <$> perRowHashes
             perRowErrorsJson :: V.Vector AE.Value
             perRowErrorsJson =
               V.zipWith (\sid tid -> fromMaybe AE.Null (HM.lookup (sid, tid) errorsByKey)) spanIdsV traceIdsV
@@ -2039,8 +2040,26 @@ processEagerBatch batch shard
             dbSpanIds = V.toList spanIdsV
             dbTraceIds = V.toList traceIdsV
             dbHashesJson = V.toList perRowHashesJson
+            dbHashes = V.toList $ V.map (T.intercalate "\x1f" . V.toList) perRowHashes
             dbErrorsJson = V.toList perRowErrorsJson
             dbNormPaths = V.toList normalizedPaths
+            updateHashesSql =
+              [HI.sql| UPDATE otel_logs_and_spans o
+                    SET hashes = CASE WHEN o.hashes IS NULL THEN u.new_hashes ELSE o.hashes || u.new_hashes END
+                    FROM (
+                      SELECT span_id, trace_id, string_to_array(hash_text, chr(31)) AS new_hashes
+                      FROM (
+                        SELECT unnest(#{dbSpanIds}::text[]) AS span_id,
+                               unnest(#{dbTraceIds}::text[]) AS trace_id,
+                               unnest(#{dbHashes}::text[]) AS hash_text
+                      ) raw
+                      ORDER BY span_id, trace_id
+                    ) u
+                    WHERE o.project_id = #{pid.toText}
+                      AND o.timestamp >= #{effectiveMinTs}
+                      AND o.timestamp < #{batchMaxTsPad}
+                      AND o.context___span_id = u.span_id
+                      AND o.context___trace_id = u.trace_id |]
             update1Sql =
               [HI.sql| UPDATE otel_logs_and_spans o
                     SET hashes = ARRAY(
@@ -2076,9 +2095,8 @@ processEagerBatch batch shard
         rowsUpdated <-
           if not ctx.config.enableHashUpdates || batch.batchMaxTs < hashCutoff
             then pure 0
-            else pgOnlyExec update1Sql
-        -- \^ PG-only: TF can't run jsonb_build_object / jsonb_array_elements_text / now().
-        -- See comment on pgOnlyExec. UPDATE-2 below stays dual (CASE-rewritten).
+            else dualExecPgTf ctx updateHashesSql <* pgOnlyExec update1Sql
+        -- The hash-only update is TF-compatible; PG retains the JSON/path enrichment.
         Log.logTrace "Eager-track UPDATE-1 complete" (AE.object ["project_id" AE..= pid.toText, "span_count" AE..= V.length spans, "rows_updated" AE..= rowsUpdated, "skipped" AE..= (not ctx.config.enableHashUpdates || batch.batchMaxTs < hashCutoff)])
 
         -- TODO(otel-metrics): emit counters for batches_processed, spans_processed here.
