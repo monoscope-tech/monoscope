@@ -1558,22 +1558,28 @@ jsonToMap _ = Nothing
 
 
 -- | Style mapping matching web-components/src/log-list-utils.ts STYLE_MAPPINGS
+-- | Resolve a summary `style` token to a pill class. Mirrors the log-list TS
+-- renderer (`getStyleClass` + STYLE_MAPPINGS in log-list-utils.ts) so detail-view
+-- pills carry the same method/status/db colors as the list rows. `badge-*` tokens
+-- (badge-GET, badge-2xx, badge-mysql, …) pass through verbatim on a `cbadge-sm`
+-- base; `right-` alignment prefixes are dropped (detail header wraps).
 summaryStyleClass :: Text -> Text
-summaryStyleClass = \case
-  "badge-error" -> "badge badge-sm badge-error"
-  "badge-warning" -> "badge badge-sm badge-warning"
-  "badge-info" -> "badge badge-sm badge-info"
-  "badge-success" -> "badge badge-sm badge-success"
-  "badge-neutral" -> "badge badge-sm badge-neutral"
-  "error-strong" -> "badge badge-sm badge-error"
-  "error-weak" -> "badge badge-sm opacity-70 badge-error"
-  "warning-strong" -> "badge badge-sm badge-warning"
-  "info-strong" -> "badge badge-sm badge-info"
-  "success-strong" -> "badge badge-sm badge-success"
-  "neutral" -> "badge badge-sm badge-neutral"
-  s | "right-badge-" `T.isPrefixOf` s -> "badge badge-sm ml-auto " <> T.drop 6 s
-  s | "text-" `T.isPrefixOf` s -> s <> " text-xs"
-  _ -> "badge badge-sm badge-neutral"
+summaryStyleClass style
+  | "text-" `T.isPrefixOf` style = style <> " text-xs"
+  | otherwise = "cbadge-sm " <> resolve style
+  where
+    resolve = \case
+      s | "badge-" `T.isPrefixOf` s -> s
+      s | Just r <- T.stripPrefix "right-" s -> resolve r
+      "info-strong" -> "badge-info"
+      "info-weak" -> "badge-neutral"
+      "error-strong" -> "badge-error"
+      "error-weak" -> "badge-4xx"
+      "warning-strong" -> "badge-warning"
+      "warning-weak" -> "badge-3xx"
+      "success-strong" -> "badge-success"
+      "success-weak" -> "badge-2xx"
+      _ -> "badge-neutral"
 
 
 -- | Map a summary `field` (left side of `;style⇒value`) to the column path used
@@ -1744,7 +1750,7 @@ renderSummaryElements els =
 
 -- | Adapt a summary vector for the log-item detail header:
 --   1. drop list-row noise (raw JSON dumps of attributes/resource, redundant protocol);
---   2. strip `right-badge-` style (ml-auto right-alignment is meaningless in a wrapping header);
+--   2. strip the `right-` alignment prefix (ml-auto right-alignment is meaningless in a wrapping header);
 --   3. dedupe by (field, value) so `status ERROR` doesn't appear twice (left-side + right-side).
 summaryForDetailView :: V.Vector Text -> V.Vector Text
 summaryForDetailView = dedupe . V.mapMaybe step
@@ -1754,7 +1760,7 @@ summaryForDetailView = dedupe . V.mapMaybe step
       | skip el = Nothing
       | otherwise = Just $ case parseSummaryEl el of
           Just (field, style, value) ->
-            let style' = fromMaybe style (T.stripPrefix "right-badge-" style)
+            let style' = fromMaybe style (T.stripPrefix "right-" style)
              in field <> ";" <> style' <> "⇒" <> value
           Nothing -> el
     key el = maybe ("", el) (\(f, _, v) -> (f, v)) (parseSummaryEl el)

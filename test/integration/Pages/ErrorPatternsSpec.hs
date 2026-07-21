@@ -544,10 +544,11 @@ spec = sequential $ aroundAll withTestResources do
               discordNotifs1 = [dd | DiscordNotification dd <- notifs1]
           length slackNotifs1 `shouldSatisfy` (>= 1)
           length discordNotifs1 `shouldSatisfy` (>= 1)
-          -- Slack payload should mention the error type
+          -- Slack payload should mention the error type and link to its trace.
           forM_ slackNotifs1 \sd -> do
             let payloadText = show @Text sd.payload
             T.isInfixOf pat.errorType payloadText `shouldBe` True
+            T.isInfixOf "context.trace_id" payloadText `shouldBe` True
 
           pat1 <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
           let slackTs1 = pat1 >>= (.slackThreadTs)
