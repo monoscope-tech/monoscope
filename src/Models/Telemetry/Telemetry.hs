@@ -706,10 +706,10 @@ lookupOtelRecord pidTxt createdAt rdId =
 -- "First" and "Recent" page loads. We UNION ALL two index-friendly subqueries (one per
 -- url-path source) instead of OR'ing them in a single WHERE, so each side can hit its own
 -- expression index and avoid a 7d seq scan on otel_logs_and_spans.
-getEndpointTraceId :: (Hasql :> es, IOE :> es) => Projects.ProjectId -> Text -> Text -> Bool -> UTCTime -> Eff es (Maybe Text)
+getEndpointTraceId :: (Hasql :> es, IOE :> es) => Projects.ProjectId -> Text -> Text -> Bool -> UTCTime -> Eff es (Maybe (Text, UTCTime))
 getEndpointTraceId pid method urlPath isFirst now =
   Hasql.interpOne
-    $ [HI.sql| SELECT context___trace_id FROM ( |]
+    $ [HI.sql| SELECT context___trace_id, start_time FROM ( |]
     <> branch [HI.sql| attributes___url___path = #{urlPath} |]
     <> [HI.sql| UNION ALL |]
     <> branch [HI.sql| attributes->'http'->>'route' = #{urlPath} |]
@@ -751,7 +751,7 @@ getSpanRecordsByTraceId :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es) 
 getSpanRecordsByTraceId useTf pid trId tme now = Hasql.withHasqlTimefusion useTf do
   let baseT = fromMaybe now tme
       (start, end) = case tme of
-        Nothing -> (addUTCTime (-(14 * 24 * 3600)) now, now)
+        Nothing -> (addUTCTime (-(3 * 24 * 3600)) now, now)
         Just ts -> (addUTCTime (-300) ts, addUTCTime 300 ts)
       (wideStart, wideEnd) = (addUTCTime (-86400) baseT, addUTCTime 86400 baseT)
       resolveHop ids =

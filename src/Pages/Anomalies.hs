@@ -234,10 +234,13 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
                       errorResolveAction pid errL.base.id errL.base.state canResolve
                       errorSubscriptionAction pid errL.base
               }
+      -- Every trace lookup carries the point-in-time the issue is known to have
+      -- happened, so the query stays a ±5min window instead of a multi-day
+      -- trace_id scan (a full-table scan on TF; see 2026-07-21 crash).
       let isFirst = isJust firstM
-      mTraceId <- case issue.issueType of
+      mTraceRef <- case issue.issueType of
         Issues.RuntimeException ->
-          pure $ errorM >>= \errL -> bool errL.base.recentTraceId errL.base.firstTraceId isFirst
+          pure $ errorM >>= \errL -> (,zonedTimeToUTC $ bool errL.base.updatedAt errL.base.createdAt isFirst) <$> bool errL.base.recentTraceId errL.base.firstTraceId isFirst
         Issues.ApiChange -> case AE.fromJSON (getAeson issue.issueData) of
           AE.Success (d :: Issues.APIChangeData) ->
             Telemetry.getEndpointTraceId pid d.endpointMethod d.endpointPath isFirst now
@@ -245,8 +248,8 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
         _ -> pure Nothing
       (trItem, spanRecs) <-
         fromMaybe (Nothing, V.empty) <$> runMaybeT do
-          tId <- hoistMaybe mTraceId
-          traceItem <- MaybeT $ Telemetry.getTraceDetails useTf pid tId Nothing now
+          (tId, tTs) <- hoistMaybe mTraceRef
+          traceItem <- MaybeT $ Telemetry.getTraceDetails useTf pid tId (Just tTs) now
           otelLogs <- lift $ Telemetry.getSpanRecordsByTraceId useTf pid traceItem.traceId (Just traceItem.traceStartTime) now
           pure (Just traceItem, V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> V.fromList otelLogs)
       sampleOverride <-

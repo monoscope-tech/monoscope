@@ -880,12 +880,12 @@ enrichIssue pid issue
       AE.Success (rd :: Issues.RuntimeExceptionData)
         | T.null rd.stackTrace -> do
             epM <- ErrorPatterns.getErrorPatternByHash pid issue.targetHash
-            case epM >>= (.recentTraceId) of
+            case epM >>= \ep -> (,zonedTimeToUTC ep.updatedAt) <$> ep.recentTraceId of
               Nothing -> pure issue
-              Just trId -> do
+              Just (trId, ts) -> do
                 useTf <- (.env.enableTimefusionReads) <$> ask @AuthContext
                 now <- Time.currentTime
-                spans <- Telemetry.getSpanRecordsByTraceId useTf pid trId Nothing now
+                spans <- Telemetry.getSpanRecordsByTraceId useTf pid trId (Just ts) now
                 let synth = synthStackFromSpans trId spans
                 pure
                   $ if T.null synth
