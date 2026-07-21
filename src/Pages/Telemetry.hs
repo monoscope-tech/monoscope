@@ -214,8 +214,8 @@ instance ToHtml TraceDetailsGet where
   toHtml (TraceDetails pid tr spanRecs) = toHtml $ tracePage pid tr spanRecs
   toHtml (SpanDetails pid s aptSpn) = toHtml $ LogItem.expandedItemView pid s aptSpn Nothing
   toHtml (TraceDetailsNotFound pid) =
-    div_ [class_ "min-h-screen flex items-center justify-center bg-bgBase p-6"] $
-      div_ [class_ "max-w-lg space-y-6 text-center"] do
+    div_ [class_ "min-h-screen flex items-center justify-center bg-bgBase p-6"]
+      $ div_ [class_ "max-w-lg space-y-6 text-center"] do
         div_ [class_ "flex flex-col items-center gap-3"] do
           faSprite_ "circle-exclamation" "solid" "w-6 h-6 text-textWeak"
           div_ [class_ "space-y-1.5"] do
@@ -332,7 +332,7 @@ traceH pid trId timestamp spanIdM nav = do
   withSpan_ "trace.load" [] do
     now <- Time.currentTime
     if isJust nav
-    then do
+      then do
         spanRecords' <- V.fromList <$> Telemetry.getSpanRecordsByTraceId useTf pid trId timestamp now
         let sid = fromMaybe "" spanIdM
             matchesSpan x = maybe False (\s -> s.span_id == Just sid) x.context
