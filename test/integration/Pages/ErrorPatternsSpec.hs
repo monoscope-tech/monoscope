@@ -516,17 +516,21 @@ spec = sequential $ aroundAll withTestResources do
           [sql| UPDATE projects.projects SET error_alerts = true WHERE id = ? |]
           (PGS.Only pid)
 
-      -- Find a non-resolved pattern (test 7 may have resolved all, so re-open one if needed)
-      patterns <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 10 0
-      patM <- case find (\p -> p.state /= ESResolved) patterns of
-        Just p -> pure (Just p)
-        Nothing -> case patterns of
-          (p1 : _) -> do
-            void $ runTestBg frozenTime tr $ ErrorPatterns.updateErrorPatternState p1.id ESOngoing frozenTime
-            runTestBg frozenTime tr (ErrorPatterns.getErrorPatternById p1.id)
-          [] -> pure Nothing
-      case patM of
-        Nothing -> expectationFailure "no patterns available"
+      -- Ingest a fresh error with a distinctive ASCII error type so this test is
+      -- independent of patterns tests 1–7 may have resolved, merged, or
+      -- canonicalized — a merged pattern's error_type column can diverge from the
+      -- error_data actually rendered into the alert, which made the payload
+      -- assertion below order/seed-dependent.
+      apiKey <- createTestAPIKey tr pid "notify-thread-key"
+      let notifErrType = "HardenNotifyError"
+          notifStack = notifErrType <> ": boom\n    at Handler.run (/app/src/handler.js:7:3)"
+      ingestTraceWithException tr apiKey "POST /api/notify" notifErrType "notify threading probe" notifStack (addUTCTime 400 frozenTime)
+      drainExtractionWorker tr
+      void $ runAllBackgroundJobs frozenTime tr.trATCtx
+
+      patterns <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 100 0
+      case find (\p -> p.errorType == notifErrType) patterns of
+        Nothing -> expectationFailure "fresh notification pattern not created"
         Just pat -> do
           -- Ensure it's subscribed
           void $ testServant tr $ Pages.Anomalies.errorSubscriptionPostH pid pat.id.unErrorPatternId (Pages.Anomalies.ErrorSubscriptionForm (Just 30))
