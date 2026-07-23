@@ -9,7 +9,7 @@
     "workbox-cli": "^7.4.1"
   },
   "dependencies": {
-    "@opentelemetry/auto-instrumentations-node": "^0.77.0",
+    "@opentelemetry/auto-instrumentations-node": "^0.79.0",
     "@tailwindcss/cli": "^4.3.1",
     "ansi-up": "^1.0.0",
     "html2canvas": "^1.4.1"
