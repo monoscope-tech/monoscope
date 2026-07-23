@@ -77,7 +77,7 @@ expandAPIlogItemH pid rdId timestamp _ tabM = withSpan_ "log-explorer.detail" []
   _ <- Projects.sessionAndProject pid
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   let tf = Hasql.withHasqlTimefusion authCtx.env.enableTimefusionReads
-  tf (Telemetry.logRecordByProjectAndId pid timestamp rdId) >>= \case
+  tf (Telemetry.otelRecordByProjectAndId pid timestamp rdId) >>= \case
     Nothing -> addRespHeaders $ ItemDetailedNotFound "Record not found"
     Just record
       | record.kind == Just "log" -> addRespHeaders $ LogItemExpanded pid record tabM

@@ -18,7 +18,6 @@ import Data.Aeson.Key qualified as AEKey
 import Data.Default
 import Data.HashMap.Internal.Strict qualified as HM
 import Data.Map qualified as Map
-import Data.Map.Strict qualified as MapS
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale)
@@ -242,7 +241,7 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM expandM la
   ctx <- Reader.ask @AuthContext
   (_, _, bw) <- mkPageCtx pid
   now <- Time.currentTime
-  let tab = maybe "charts" (\t -> if t == "charts" then t else "datapoints") tabM
+  let tab = bool "datapoints" "charts" $ maybe True (== "charts") tabM
   let (from, to, currentRange) = parseTime fromM toM sinceM now
       bwconf =
         bw
@@ -290,8 +289,7 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM expandM la
           drawerM <- forM expandM \metricName -> do
             metricM <- Telemetry.getMetricData pid metricName
             pure $ metricM <&> \metric ->
-              let selected = labelM >>= \label -> guard (label `elem` metric.metricLabels) $> label
-               in metricsDetailsPage pid serviceNames metric allMetrics (metricReferences metric.metricName dashboards monitors) (fromMaybe "all" sourceM) selected currentRange
+              metricsDetailsPage pid serviceNames metric allMetrics (metricReferences metric.metricName dashboards monitors) (fromMaybe "all" sourceM) (mfilter (`elem` metric.metricLabels) labelM) currentRange
           let bwconf' = bwconf{globalDrawerContent = join drawerM}
           addRespHeaders $ MetricsOVChartsMain $ PageCtx bwconf' (pid, metricList, labels, inactive, serviceNames, fromMaybe "all" sourceM, fromMaybe "all" prefixM, V.length active, nextFetchUrl)
         else do
@@ -304,25 +302,19 @@ metricDetailsGetH pid metricName fromM toM sinceM source labelM = do
   now <- Time.currentTime
   let (_, _, currentRange) = parseTime fromM toM sinceM now
   metricM <- Telemetry.getMetricData pid metricName
-  relatedCandidates <- V.fromList <$> Telemetry.getMetricChartListData pid (source >>= \s -> guard (s /= "all") $> s) Nothing
+  relatedCandidates <- V.fromList <$> Telemetry.getMetricChartListData pid (mfilter (/= "all") source) Nothing
   dashboards <- Dashboards.selectDashboardsSortedBy pid "updated_at"
   monitors <- Monitors.queryMonitorsAll pid
-  case metricM of
-    Just metric -> do
-      let selected = labelM >>= \label -> guard (label `elem` metric.metricLabels) $> label
-      addRespHeaders $ metricsDetailsPage pid metric.serviceNames metric relatedCandidates (metricReferences metric.metricName dashboards monitors) (fromMaybe "all" source) selected currentRange
-    Nothing -> do
-      addRespHeaders $ div_ [class_ "flex flex-col gap-2 -10 text-2xl"] "Metric not found"
+  addRespHeaders $ case metricM of
+    Just metric ->
+      metricsDetailsPage pid metric.serviceNames metric relatedCandidates (metricReferences metric.metricName dashboards monitors) (fromMaybe "all" source) (mfilter (`elem` metric.metricLabels) labelM) currentRange
+    Nothing -> div_ [class_ "flex flex-col gap-2 -10 text-2xl"] "Metric not found"
 
 
 metricBreakdownGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 metricBreakdownGetH pid metricName labelM = do
   metricM <- Telemetry.getMetricData pid metricName
-  case metricM of
-    Just metric -> addRespHeaders $ metricDetailChart pid metric "all" selected ("details_" <> T.replace "." "_" metric.metricName)
-      where
-        selected = labelM >>= \label -> guard (label `elem` metric.metricLabels) $> label
-    Nothing -> addRespHeaders mempty
+  addRespHeaders $ maybe mempty (\metric -> metricDetailChart pid metric "all" (mfilter (`elem` metric.metricLabels) labelM) ("details_" <> T.replace "." "_" metric.metricName)) metricM
 
 
 -- Trace handler
@@ -341,11 +333,7 @@ traceH pid trId timestamp spanIdM nav = do
         addRespHeaders $ SpanDetails pid targetSpan atpSpan
       else do
         traceItemM <- Telemetry.getTraceDetails useTf pid trId timestamp now
-        case traceItemM of
-          Just traceItem -> do
-            spanRecords <- V.catMaybes . fmap Telemetry.convertOtelLogsAndSpansToSpanRecord . V.fromList <$> Telemetry.getSpanRecordsByTraceId useTf pid trId timestamp now
-            addRespHeaders $ TraceDetails pid traceItem spanRecords
-          Nothing -> addRespHeaders $ TraceDetailsNotFound pid
+        addRespHeaders $ maybe (TraceDetailsNotFound pid) (\(traceItem, spans) -> TraceDetails pid traceItem (V.mapMaybe Telemetry.convertOtelLogsAndSpansToSpanRecord (V.fromList spans))) traceItemM
 
 
 -- Metrics UI components
@@ -486,14 +474,9 @@ chartList pid labels source metricList nextUrl = do
 metricCardGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 metricCardGetH pid metricName labelM = do
   metricM <- Telemetry.getMetricData pid metricName
-  case metricM of
-    Nothing -> addRespHeaders mempty
-    Just metric ->
-      let selected = case labelM of
-            Just "all" -> Just "all"
-            Just label | label `elem` metric.metricLabels -> Just label
-            _ -> Nothing
-       in addRespHeaders $ metricCard pid "all" metric.metricName metric.metricType metric.metricUnit metric.metricLabels selected
+  addRespHeaders $ flip (maybe mempty) metricM \metric ->
+    let selected = mfilter (\l -> l == "all" || l `elem` metric.metricLabels) labelM
+     in metricCard pid "all" metric.metricName metric.metricType metric.metricUnit metric.metricLabels selected
 
 
 metricCard :: Projects.ProjectId -> Text -> Text -> Text -> Text -> V.Vector Text -> Maybe Text -> Html ()
@@ -558,13 +541,11 @@ dataPointsPage pid metrics refCounts = do
                 div_ [class_ "flex items-center relative", style_ "min-height:20px"] do
                   when (r.level > 0) $ forM_ (zip [0 ..] r.continuations) \(i, continues) -> do
                     let px = show (i * indent + 12) <> "px"
-                    if i < r.level - 1
-                      then when continues $ div_ [class_ "absolute top-0 bottom-0 border-l border-l-strokeWeak", style_ $ "left:" <> px] pass
-                      else do
-                        if continues
-                          then div_ [class_ "absolute top-0 bottom-0 border-l border-l-strokeWeak", style_ $ "left:" <> px] pass
-                          else div_ [class_ "absolute top-0 h-1/2 border-l border-l-strokeWeak", style_ $ "left:" <> px] pass
-                        div_ [class_ "absolute h-[1px] bg-strokeWeak", style_ $ "left:" <> px <> "; top:50%; width:16px"] pass
+                        isLast = i >= r.level - 1
+                    when (continues || isLast)
+                      $ div_ [class_ $ "absolute top-0 border-l border-l-strokeWeak " <> bool "bottom-0" "h-1/2" (isLast && not continues), style_ $ "left:" <> px] pass
+                    when isLast
+                      $ div_ [class_ "absolute h-[1px] bg-strokeWeak", style_ $ "left:" <> px <> "; top:50%; width:16px"] pass
                   div_ [class_ "flex items-center gap-2", style_ $ "padding-left:" <> show (r.level * indent) <> "px"] do
                     div_ [class_ "w-10 shrink-0"]
                       $ when r.isGroup
@@ -615,7 +596,7 @@ metricsDetailsPage pid sources metric candidates (dashboards, monitors) source s
         | "attributes." `T.isPrefixOf` label = 0 :: Int
         | "resource.service." `T.isPrefixOf` label = 1
         | otherwise = 2
-      sortedLabels = sortBy (\a b -> compare (labelPriority a, a) (labelPriority b, b)) $ V.toList metric.metricLabels
+      sortedLabels = sortOn (labelPriority &&& id) $ V.toList metric.metricLabels
       dimensions = maybe sortedLabels (\label -> label : filter (/= label) sortedLabels) selected
       (topDimensions, moreDimensions) = splitAt 4 dimensions
   div_
@@ -726,7 +707,7 @@ metricDimension pid metricName source selected label =
 
 relatedMetrics :: Projects.ProjectId -> Text -> Telemetry.MetricDataPoint -> V.Vector Telemetry.MetricChartListData -> Html ()
 relatedMetrics pid source metric candidates =
-  case take 6 $ sortBy (\a b -> compare (relatedMetricScore metric b) (relatedMetricScore metric a)) $ filter ((> 0) . relatedMetricScore metric) $ filter ((/= metric.metricName) . (.metricName)) $ V.toList candidates of
+  case take 6 $ sortOn (Down . relatedMetricScore metric) $ filter (\c -> c.metricName /= metric.metricName && relatedMetricScore metric c > 0) $ V.toList candidates of
     [] -> div_ [class_ "px-5 py-8 text-sm text-textWeak"] $ if source == "all" then "No metrics with a similar name or dimensions were found." else "No similar metrics in this source. Try All sources."
     related -> do
       div_ [class_ "px-5 pb-3 pt-5"] do
@@ -799,17 +780,16 @@ metricReferences metricName dashboards monitors = (filter (dashboardHasMetric me
 
 
 dashboardHasMetric :: Text -> Dashboards.DashboardVM -> Bool
-dashboardHasMetric metricName dashboard = any (widgetRefsMetric metricName) $ case dashboard.schema of
-  Nothing -> []
-  Just schema -> schema.widgets <> maybe [] (concatMap (.widgets)) schema.tabs
+dashboardHasMetric metricName = (> 0) . countWidgetsWithMetric metricName
 
 
 countWidgetsWithMetric :: Text -> Dashboards.DashboardVM -> Int
-countWidgetsWithMetric metricName dashboard = sum [1 :: Int | widget <- widgets, widgetRefsMetric metricName widget]
-  where
-    widgets = case dashboard.schema of
-      Nothing -> []
-      Just schema -> schema.widgets <> maybe [] (concatMap (.widgets)) schema.tabs
+countWidgetsWithMetric metricName dashboard =
+  length [widget | widget <- dashboardWidgets dashboard, widgetRefsMetric metricName widget]
+
+
+dashboardWidgets :: Dashboards.DashboardVM -> [Widget.Widget]
+dashboardWidgets dashboard = flip foldMap dashboard.schema \schema -> schema.widgets <> foldMap (concatMap (.widgets)) schema.tabs
 
 
 monitorHasMetric :: Text -> Monitors.QueryMonitor -> Bool
@@ -933,10 +913,10 @@ tracePage pid traceItem spanRecords = do
                   span_ [] "Services"
                   span_ [] "Exec Time %"
                 div_ [class_ "w-full overflow-x-hidden text-textWeak text-xs", id_ $ "services-" <> traceItem.traceId] do
+                  let allDur = sum $ (.duration) <$> serviceData
                   forM_ serviceNames $ \s -> do
                     let spans = filter (\x -> x.name == s) serviceData
                         duration = sum $ (.duration) <$> spans
-                        allDur = sum $ (.duration) <$> serviceData
                         percent = show $ (fromIntegral duration / fromIntegral allDur) * 100
                         color = getServiceColor s serviceColors
                     div_ [class_ "flex items-center justify-between px-2 py-1"] $ do
@@ -1204,8 +1184,8 @@ syntheticMissingParentKey = "monoscope.synthetic.missing_parent"
 
 -- | Orphan handling lives in 'buildSpanTree' (synthetic placeholders) — keep
 -- this map keyed by literal parent_id so we can detect them.
-buildSpanMap :: V.Vector Telemetry.SpanRecord -> MapS.Map (Maybe Text) [Telemetry.SpanRecord]
-buildSpanMap = V.foldr (\sp m -> MapS.insertWith (++) sp.parentSpanId [sp] m) MapS.empty
+buildSpanMap :: V.Vector Telemetry.SpanRecord -> Map.Map (Maybe Text) [Telemetry.SpanRecord]
+buildSpanMap = V.foldr (\sp m -> Map.insertWith (++) sp.parentSpanId [sp] m) Map.empty
 
 
 -- | Build span tree with clock skew adjustment: if a child starts before its
@@ -1224,8 +1204,8 @@ buildSpanTree spans =
       orphanRoots = mapMaybe (syntheticRoot spanMap) missingParents
    in realRoots <> orphanRoots
   where
-    buildTree :: MapS.Map (Maybe Text) [Telemetry.SpanRecord] -> Maybe Text -> (Integer, Integer) -> [SpanTree]
-    buildTree spanMap parentId (pStart, pEnd) = case MapS.lookup parentId spanMap of
+    buildTree :: Map.Map (Maybe Text) [Telemetry.SpanRecord] -> Maybe Text -> (Integer, Integer) -> [SpanTree]
+    buildTree spanMap parentId (pStart, pEnd) = case Map.lookup parentId spanMap of
       Nothing -> []
       Just spans' ->
         [ let cStart = utcTimeToNanoseconds sp.startTime
@@ -1238,8 +1218,8 @@ buildSpanTree spans =
         | sp <- spans'
         ]
 
-    syntheticRoot :: MapS.Map (Maybe Text) [Telemetry.SpanRecord] -> Text -> Maybe SpanTree
-    syntheticRoot spanMap missingPid = case MapS.lookup (Just missingPid) spanMap of
+    syntheticRoot :: Map.Map (Maybe Text) [Telemetry.SpanRecord] -> Text -> Maybe SpanTree
+    syntheticRoot spanMap missingPid = case Map.lookup (Just missingPid) spanMap of
       Just kids@(sp : rest) ->
         let startNs = foldr (min . (utcTimeToNanoseconds . (.startTime))) (utcTimeToNanoseconds sp.startTime) rest
             endNs = foldr (max . utcTimeToNanoseconds) startNs (mapMaybe (.endTime) kids)
@@ -1293,7 +1273,7 @@ buildSpanTree_ pid sp trId level scol = do
       spanId = UUID.toText sp.spanRecord.uSpanId
       indent = show (level * 12) <> "px"
       errRowCls = if sp.spanRecord.hasErrors then " bg-fillError-weak/40 hover:bg-fillError-weak" else ""
-      isSynthetic = maybe False (MapS.member syntheticMissingParentKey) sp.spanRecord.attributes
+      isSynthetic = maybe False (Map.member syntheticMissingParentKey) sp.spanRecord.attributes
       syntheticRowCls = if isSynthetic then " italic text-textWeak bg-fillWeaker/50" else " cursor-pointer"
   div_ [class_ "span-filterble"] do
     div_

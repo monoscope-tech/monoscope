@@ -1220,7 +1220,7 @@ apiFacets pid sinceM fromM toM fieldM = do
 -- timestamp). Returns 404 when the event is not found.
 apiEventGet :: Projects.ProjectId -> UUID.UUID -> UTCTime -> ATBaseCtx AE.Value
 apiEventGet pid eid ts = do
-  mItem <- Telemetry.logRecordByProjectAndId pid ts eid
+  mItem <- Telemetry.otelRecordByProjectAndId pid ts eid
   case mItem of
     Nothing -> throwError err404{errBody = encodeUtf8 ("event not found" :: Text)}
     Just item -> pure (AE.toJSON item)

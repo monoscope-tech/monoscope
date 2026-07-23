@@ -2,8 +2,7 @@
 
 module Models.Telemetry.Telemetry (
   LogRecord (..),
-  logRecordByProjectAndId,
-  spanRecordByProjectAndId,
+  otelRecordByProjectAndId,
   getSpanRecordsByTraceId,
   getSpanRecordsByTraceIds,
   convertOtelLogsAndSpansToSpanRecord,
@@ -134,6 +133,7 @@ import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), WrappedEnum (..), WrappedEnumSC (..), encodeEnumSC, idFromText, unAesonTextMaybe)
 import Pkg.ExtractionWorker qualified as EW
 import Relude hiding (ask)
+import Relude.Extra.Foldable1 (maximum1, minimum1)
 import System.IO (hPutStrLn)
 import System.Logging qualified as Log
 import System.Tracing (forkWithCtx)
@@ -154,15 +154,34 @@ getNestedValue ks@(k : rest) m =
       _ -> Nothing
 
 
+-- | Render a JSON leaf as Text (strings scrubbed of NULs, numbers shown).
+valText :: AE.Value -> Maybe Text
+valText = \case
+  AE.String t -> Just $ scrubNulText t
+  AE.Number n -> Just $ show n
+  _ -> Nothing
+
+
+-- | Strings only, verbatim. Use where the extracted value feeds a stable
+-- identity (error-pattern hashes) that 'valText'\'s wider acceptance would shift.
+asTextRaw :: AE.Value -> Maybe Text
+asTextRaw = \case
+  AE.String t -> Just t
+  _ -> Nothing
+
+
+objectToMap :: AE.Value -> Maybe (Map Text AE.Value)
+objectToMap = \case AE.Object o -> Just $ KEM.toMapText o; _ -> Nothing
+
+
+-- | Look up a top-level key of a JSON object and render its leaf as Text.
+scopeField :: Text -> AE.Value -> Maybe Text
+scopeField k v = valText =<< Map.lookup k =<< objectToMap v
+
+
 -- Lens-like access helpers for Map Text AE.Value fields
 atMapText :: Text -> Maybe (Map Text AE.Value) -> Maybe Text
-atMapText key maybeMap = do
-  m <- maybeMap
-  val <- getNestedValue (T.split (== '.') key) m
-  case val of
-    AE.String t -> Just $ scrubNulText t
-    AE.Number n -> Just $ show n
-    _ -> Nothing
+atMapText key maybeMap = valText =<< getNestedValue (T.split (== '.') key) =<< maybeMap
 
 
 atMapInt :: Text -> Maybe (Map Text AE.Value) -> Maybe Int
@@ -186,13 +205,7 @@ resourceServiceName resource =
 
 
 flatAttrText :: Text -> Maybe (Map Text AE.Value) -> Maybe Text
-flatAttrText key maybeMap = do
-  m <- maybeMap
-  val <- Map.lookup key m
-  case val of
-    AE.String t -> Just $ scrubNulText t
-    AE.Number n -> Just $ show n
-    _ -> Nothing
+flatAttrText key maybeMap = valText =<< Map.lookup key =<< maybeMap
 
 
 data SeverityLevel = SLTrace | SLDebug | SLInfo | SLWarn | SLError | SLFatal
@@ -396,10 +409,7 @@ metricCatalogKey r =
     , toText $ show r.metricType
     , r.metricUnit
     , metricServiceNameFromResource r.metricName r.resource
-    , case r.instrumentationScope of
-        AE.Object o -> fromMaybe "" $ KEM.lookup "name" o >>= \case AE.String x -> Just x; _ -> Nothing
-        AE.Null -> ""
-        _ -> ""
+    , fromMaybe "" $ scopeField "name" r.instrumentationScope
     ]
 
 
@@ -641,21 +651,24 @@ data MetricChartListData = MetricChartListData
   deriving anyclass (FromRow, HI.DecodeRow, NFData, ToRow)
 
 
-getTraceDetails :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es) => Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Eff es (Maybe Trace)
+-- | Fetch a trace's spans once and return both the aggregate 'Trace' and the
+-- spans, so callers rendering the waterfall don't re-query the same trace.
+getTraceDetails :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es) => Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Eff es (Maybe (Trace, [OtelLogsAndSpans]))
 getTraceDetails useTf pid trId tme now = do
   spans <- getSpanRecordsByTraceId useTf pid trId tme now
-  pure $ case spans of
-    [] -> Nothing
-    firstSpan : rest ->
-      let start = foldl' (\acc r -> min acc r.start_time) firstSpan.start_time rest
-          end = foldl' (\acc r -> max acc $ fromMaybe firstSpan.start_time r.end_time) firstSpan.start_time rest
+  pure $ viaNonEmpty toTrace spans
+  where
+    toTrace ne =
+      let spans = toList ne
+          start = minimum1 $ (.start_time) <$> ne
+          end = maximum1 $ (\r -> fromMaybe r.start_time r.end_time) <$> ne
           services = V.fromList $ ordNub $ mapMaybe (atMapText "service.name" . unAesonTextMaybe . (.resource)) spans
           duration = floor $ diffUTCTime end start * 1000000000
-       in Just $ Trace trId start end duration (length spans) $ if V.null services then Nothing else Just services
+       in (Trace trId start end duration (length spans) $ if V.null services then Nothing else Just services, spans)
 
 
-logRecordByProjectAndId :: DB es => Projects.ProjectId -> UTCTime -> UUID.UUID -> Eff es (Maybe OtelLogsAndSpans)
-logRecordByProjectAndId pid = lookupOtelRecord pid.toText
+otelRecordByProjectAndId :: DB es => Projects.ProjectId -> UTCTime -> UUID.UUID -> Eff es (Maybe OtelLogsAndSpans)
+otelRecordByProjectAndId pid = lookupOtelRecord pid.toText
 
 
 -- | Full column list for SELECT against otel_logs_and_spans, in the field
@@ -729,7 +742,8 @@ getEndpointTraceId pid method urlPath isFirst now =
                   AND attributes___http___request___method = #{method}
                   AND |]
         <> pathPred
-        <> [HI.sql| AND context___trace_id IS NOT NULL |]
+        -- <> '' also filters NULLs; trace-less rows store '' (not NULL) for trace_id.
+        <> [HI.sql| AND context___trace_id <> '' |]
         <> orderSql
         <> [HI.sql| LIMIT 1) |]
 
@@ -806,10 +820,6 @@ getSpanRecordsByTraceIds pid traceIds tme = do
       start
       end'
       [HI.sql| AND context___trace_id = ANY(#{traceIdsList}) ORDER BY context___trace_id ASC, start_time ASC|]
-
-
-spanRecordByProjectAndId :: DB es => Projects.ProjectId -> UTCTime -> UUID.UUID -> Eff es (Maybe OtelLogsAndSpans)
-spanRecordByProjectAndId pid = lookupOtelRecord pid.toText
 
 
 spanRecordByName :: DB es => Projects.ProjectId -> Text -> Text -> Eff es (Maybe OtelLogsAndSpans)
@@ -905,23 +915,10 @@ getMetricServiceNames pid =
 metricServiceNameFromResource :: Text -> AE.Value -> Text
 metricServiceNameFromResource metricName resource =
   fromMaybe "unknown"
-    $ resourceServiceName (aesonObjectMap resource)
-    <|> nestedText ["container", "name"] resource
+    $ resourceServiceName (objectToMap resource)
+    <|> (valText =<< getNestedValue ["container", "name"] =<< objectToMap resource)
     <|> lookupValueText resource "compose_service"
     <|> if "system." `T.isPrefixOf` metricName then Just "SYSTEM" else Nothing
-  where
-    aesonObjectMap :: AE.Value -> Maybe (Map Text AE.Value)
-    aesonObjectMap (AE.Object obj) = Just $ KEM.toMapText obj
-    aesonObjectMap _ = Nothing
-
-    nestedText :: [Text] -> AE.Value -> Maybe Text
-    nestedText path (AE.Object obj) = do
-      val <- getNestedValue path (KEM.toMapText obj)
-      case val of
-        AE.String t -> Just t
-        AE.Number n -> Just $ show n
-        _ -> Nothing
-    nestedText _ _ = Nothing
 
 
 -- | Fixed namespace for the content-derived (v5) row ids below. Arbitrary but
@@ -1212,49 +1209,71 @@ bulkInsertOtelLogsAndSpansTF
 bulkInsertOtelLogsAndSpansTF tfPgTypes target records = do
   Log.logTrace "bulkInsertOtelLogsAndSpansTF called"
     $ AE.object [("record_count", AE.toJSON $ V.length records), ("write_target", AE.toJSON $ show @Text target)]
-  case target of
-    WriteBoth -> Ki.scoped \scope -> do
-      pgThread <- forkWithCtx scope $ retryHasqlWrite maxWriteAttempts "pg" (bulkInsertOtelLogsAndSpans True records)
-      tfThread <- forkWithCtx scope $ retryHasqlWrite maxWriteAttempts "tf" (labeled @"timefusion" @Hasql $ bulkInsertOtelLogsAndSpans tfPgTypes records)
-      (pgRes, tfRes) <- Ki.atomically $ (,) <$> Ki.await pgThread <*> Ki.await tfThread
-      classify pgRes tfRes
-    -- Single-leg replay: only the store that originally failed is rewritten, so
-    -- the durable leg keeps its single copy. Pg casts to native uuid/jsonb; real
-    -- Tf leaves bare text (Variant coercion), while a Postgres-backed Tf casts too.
-    WritePgOnly -> singleLeg "pg" This (,0) =<< retryHasqlWrite maxWriteAttempts "pg" (bulkInsertOtelLogsAndSpans True records)
-    WriteTfOnly -> singleLeg "tf" That (0,) =<< retryHasqlWrite maxWriteAttempts "tf" (labeled @"timefusion" @Hasql $ bulkInsertOtelLogsAndSpans tfPgTypes records)
+  -- Single-leg replay: only the store that originally failed is rewritten, so
+  -- the durable leg keeps its single copy. Pg casts to native uuid/jsonb; real
+  -- Tf leaves bare text (Variant coercion), while a Postgres-backed Tf casts too.
+  fst
+    <$> dualWrite
+      (V.length records)
+      target
+      (bulkInsertOtelLogsAndSpans True records)
+      (labeled @"timefusion" @Hasql $ bulkInsertOtelLogsAndSpans tfPgTypes records)
+
+
+-- | Shared dual-write engine: run the PG/TF legs per 'WriteTarget' (concurrently
+-- for 'WriteBoth'), classify the results — logging failed legs — and cross-check
+-- persistence: a store that reported success but persisted fewer rows than
+-- submitted silently dropped data ('unaccountedRows'). That converts to a
+-- 'WriteFailure' so Pkg.Queue DLQs the batch instead of acking it; without this
+-- a TuplesOk-swallow / accept-but-drop reads as a clean success and the rows are
+-- lost with no trace (the 2026-06-12 TF-only gap). The returned Bool reports
+-- whether at least one leg fully persisted the batch (for best-effort follow-on
+-- work like the metrics catalog).
+dualWrite
+  :: (Concurrent :> es, IOE :> es, Ki.StructuredConcurrency :> es, Log :> es)
+  => Int
+  -- ^ submitted row count
+  -> WriteTarget
+  -> Eff es BulkInsertResult
+  -- ^ pg write action (throws on failure; retried via 'retryHasqlWrite')
+  -> Eff es BulkInsertResult
+  -- ^ tf write action
+  -> Eff es (Either WriteFailure (), Bool)
+dualWrite submitted target writePg writeTf = case target of
+  WriteBoth -> Ki.scoped \scope -> do
+    pgThread <- forkWithCtx scope $ retryHasqlWrite maxWriteAttempts "pg" writePg
+    tfThread <- forkWithCtx scope $ retryHasqlWrite maxWriteAttempts "tf" writeTf
+    (pgRes, tfRes) <- Ki.atomically $ (,) <$> Ki.await pgThread <*> Ki.await tfThread
+    (,fullyPersisted pgRes || fullyPersisted tfRes) <$> classify pgRes tfRes
+  WritePgOnly -> singleLeg "pg" This (,0) =<< retryHasqlWrite maxWriteAttempts "pg" writePg
+  WriteTfOnly -> singleLeg "tf" That (0,) =<< retryHasqlWrite maxWriteAttempts "tf" writeTf
   where
+    lostOf = unaccountedRows submitted
+    fullyPersisted = either (const False) ((== 0) . lostOf)
     -- Classify one store's result; @side@ is 'This'/'That' for the written leg,
     -- @losts@ places the under-persist count on that leg ((l,0) for pg, (0,l) for tf).
     singleLeg store side losts = \case
       Right bir
-        | lost <- unaccountedRows (V.length records) bir, lost > 0 -> let (pgL, tfL) = losts lost in underPersist (pgL, "pg") (tfL, "tf")
-        | otherwise -> pure (Right ())
+        | lost <- lostOf bir, lost > 0 -> (,False) <$> underPersist (losts lost)
+        | otherwise -> pure (Right (), True)
       Left e -> do
-        Log.logAttention (T.toUpper store <> "_WRITE_FAILED") (AE.object ["record_count" AE..= V.length records, "error" AE..= show @Text e])
-        pure (Left (side e))
-    -- Cross-check persistence on a Right/Right dual-write: a store that reported
-    -- success but persisted fewer rows than submitted silently dropped data.
-    -- Convert to a WriteFailure so Pkg.Queue DLQs the batch instead of acking
-    -- it. Without this a TuplesOk-swallow / accept-but-drop reads as a clean
-    -- success and the rows are lost with no trace (the 2026-06-12 TF-only gap).
-    classify (Right pgBir) (Right tfBir) =
-      let n = V.length records
-       in case (unaccountedRows n pgBir, unaccountedRows n tfBir) of
-            (0, 0) -> pure (Right ())
-            (pgLost, tfLost) -> underPersist (pgLost, "pg") (tfLost, "tf")
+        Log.logAttention (T.toUpper store <> "_WRITE_FAILED") (AE.object ["record_count" AE..= submitted, "error" AE..= show @Text e])
+        pure (Left (side e), False)
+    classify (Right pgBir) (Right tfBir) = case (lostOf pgBir, lostOf tfBir) of
+      (0, 0) -> pure (Right ())
+      losts -> underPersist losts
     classify (Left ePg) (Right _) = do
       Log.logAttention "PG_WRITE_FAILED"
-        $ AE.object ["record_count" AE..= V.length records, "error" AE..= show @Text ePg]
+        $ AE.object ["record_count" AE..= submitted, "error" AE..= show @Text ePg]
       pure (Left (This ePg))
     classify (Right _) (Left eTf) = do
       Log.logAttention "TF_WRITE_FAILED"
-        $ AE.object ["record_count" AE..= V.length records, "error" AE..= show @Text eTf]
+        $ AE.object ["record_count" AE..= submitted, "error" AE..= show @Text eTf]
       pure (Left (That eTf))
     classify (Left ePg) (Left eTf) = do
       Log.logAttention "BOTH_WRITES_FAILED"
         $ AE.object
-          [ "record_count" AE..= V.length records
+          [ "record_count" AE..= submitted
           , "pg_error" AE..= show @Text ePg
           , "tf_error" AE..= show @Text eTf
           ]
@@ -1262,15 +1281,14 @@ bulkInsertOtelLogsAndSpansTF tfPgTypes target records = do
 
     -- Build the Left WriteFailure for a detected silent under-persist. A side
     -- with lost == 0 is healthy and dropped from the These.
-    underPersist (pgLost, pgStore) (tfLost, tfStore) = do
-      let n = V.length records
-          mkErr store lost = toException (SilentUnderPersistError store lost n)
+    underPersist (pgLost, tfLost) = do
+      let mkErr store lost = toException (SilentUnderPersistError store lost submitted)
       Log.logAttention "WRITE_UNDERPERSIST_DETECTED"
-        $ AE.object ["record_count" AE..= n, "pg_lost" AE..= pgLost, "tf_lost" AE..= tfLost]
+        $ AE.object ["record_count" AE..= submitted, "pg_lost" AE..= pgLost, "tf_lost" AE..= tfLost]
       pure . Left $ case (pgLost > 0, tfLost > 0) of
-        (True, True) -> These (mkErr pgStore pgLost) (mkErr tfStore tfLost)
-        (False, True) -> That (mkErr tfStore tfLost)
-        _ -> This (mkErr pgStore pgLost)
+        (True, True) -> These (mkErr "pg" pgLost) (mkErr "tf" tfLost)
+        (False, True) -> That (mkErr "tf" tfLost)
+        _ -> This (mkErr "pg" pgLost)
 
 
 -- | Persist `records` to Postgres (+TimeFusion when enabled) and hand each
@@ -1301,13 +1319,12 @@ insertAndHandOff
 insertAndHandOff tfPgTypes target worker caches records
   | V.null records = pure (Right ())
   | otherwise =
-      bulkInsertOtelLogsAndSpansTF tfPgTypes target records >>= \case
-        Left wf -> pure (Left wf)
-        Right () -> do
-          -- Every row landed on every required store — hand them all off to
-          -- the extraction worker (a failed batch takes the Left branch → DLQ).
-          liftIO $ handOffBatches worker caches records
-          pure (Right ())
+      do
+        res <- bulkInsertOtelLogsAndSpansTF tfPgTypes target records
+        -- Hand-off only when every row landed on every required store; a
+        -- failed batch stays Left → DLQ.
+        when (isRight res) $ liftIO $ handOffBatches worker caches records
+        pure res
 
 
 -- | Group `records` by `project_id`, build one `ExtractionBatch` per group, and
@@ -1320,25 +1337,20 @@ handOffBatches
   -> V.Vector OtelLogsAndSpans
   -> IO ()
 handOffBatches worker caches records = do
-  let groups :: HM.HashMap Text [OtelLogsAndSpans]
-      groups = V.foldr' (\r -> HM.insertWith (<>) r.project_id [r]) HM.empty records
-  forM_ (HM.toList groups) \(pidText, rowList) ->
+  let groups :: HM.HashMap Text (NonEmpty OtelLogsAndSpans)
+      groups = V.foldr' (\r -> HM.insertWith (<>) r.project_id (r :| [])) HM.empty records
+  forM_ (HM.toList groups) \(pidText, rowsNE) ->
     case idFromText pidText of
       Nothing -> hPutStrLn stderr $ "handOffBatches: unparseable project_id: " <> toString pidText
       Just pid -> case HM.lookup pid caches of
         Nothing -> pass -- safety-net picks these up via processed_at IS NULL
         Just cache -> do
-          let rows = V.fromList rowList
+          let rows = V.fromList (toList rowsNE)
               extractSpanId r = fromMaybe "" (r.context >>= (.span_id))
               extractTraceId r = fromMaybe "" (r.context >>= (.trace_id))
               spanIds = V.map extractSpanId rows
               traceIds = V.map extractTraceId rows
-              firstTs = (V.unsafeHead rows).timestamp
-              (minTs, maxTs) =
-                V.foldl'
-                  (\(lo, hi) r -> (min lo r.timestamp, max hi r.timestamp))
-                  (firstTs, firstTs)
-                  rows
+              timestamps = (.timestamp) <$> rowsNE
               batch =
                 EW.ExtractionBatch
                   { projectId = pid
@@ -1346,8 +1358,8 @@ handOffBatches worker caches records = do
                   , spans = rows
                   , spanIds
                   , traceIds
-                  , batchMinTs = minTs
-                  , batchMaxTs = maxTs
+                  , batchMinTs = minimum1 timestamps
+                  , batchMaxTs = maximum1 timestamps
                   }
           ok <- atomically (EW.submitBatch worker batch)
           -- TODO(otel-metrics): emit a counter for dropped batches when submitBatch fails.
@@ -1753,9 +1765,9 @@ extractATError :: OtelLogsAndSpans -> AE.Value -> Maybe ErrorPatterns.ATError
 extractATError spanObj (AE.Object o) = do
   AE.Object attrs' <- KEM.lookup "event_attributes" o
   AE.Object attrs <- KEM.lookup "exception" attrs'
-  let getTextOrEmpty k = fromMaybe "" $ case KEM.lookup k attrs of
-        Just (AE.String s) -> Just s
-        _ -> Nothing
+  -- Strings-only, no NUL-scrub: these feed computeErrorHashes, so widening the
+  -- accepted values (or scrubbing) would re-key existing error patterns.
+  let getTextOrEmpty k = fromMaybe "" $ asTextRaw =<< KEM.lookup k attrs
   pure $ atErrorFrom spanObj (getTextOrEmpty "type") (getTextOrEmpty "message") (getTextOrEmpty "stacktrace")
 extractATError _ _ = Nothing
 
@@ -1792,11 +1804,9 @@ atErrorFrom :: OtelLogsAndSpans -> Text -> Text -> Text -> ErrorPatterns.ATError
 atErrorFrom spanObj typ msg stack =
   let attrs = unAesonTextMaybe spanObj.attributes
       resc = unAesonTextMaybe spanObj.resource
-      asText (AE.String t) = Just t
-      asText _ = Nothing
-      getSpanAttr k = attrs >>= Map.lookup k >>= asText
+      getSpanAttr k = attrs >>= Map.lookup k >>= valText
       getUserAttrM k v = case resc >>= Map.lookup v of
-        Just (AE.Object userAttrs) -> KEM.lookup k userAttrs >>= asText
+        Just (AE.Object userAttrs) -> KEM.lookup k userAttrs >>= valText
         _ -> Nothing
       method = getSpanAttr "http.request.method"
       urlPath = getSpanAttr "http.route" <|> getSpanAttr "http.target"
@@ -1804,7 +1814,7 @@ atErrorFrom spanObj typ msg stack =
       tech = case resc >>= Map.lookup "telemetry" of
         Just (AE.Object tel) ->
           KEM.lookup "sdk" tel >>= \case
-            AE.Object sdkObj -> KEM.lookup "language" sdkObj >>= asText
+            AE.Object sdkObj -> KEM.lookup "language" sdkObj >>= asTextRaw
             _ -> Nothing
         _ -> Nothing
       serviceName = resourceServiceName resc
@@ -1981,13 +1991,15 @@ mkSystemLog
   -> OtelLogsAndSpans
 mkSystemLog (UUIDId pid) eventName sev bodyMsg attrs duration ts =
   let
-    (levelText, sevNum) = case sev of
-      SLTrace -> ("TRACE", 1)
-      SLDebug -> ("DEBUG", 5)
-      SLInfo -> ("INFO", 9)
-      SLWarn -> ("WARN", 13)
-      SLError -> ("ERROR", 17)
-      SLFatal -> ("FATAL", 21)
+    -- OTel severity numbers (each level spans 4).
+    sevNum = case sev of
+      SLTrace -> 1
+      SLDebug -> 5
+      SLInfo -> 9
+      SLWarn -> 13
+      SLError -> 17
+      SLFatal -> 21
+    levelText = T.toUpper $ toText $ encodeEnumSC @"SL" sev
     resource = Map.fromList [("service.name", AE.String "SYSTEM")]
    in
     OtelLogsAndSpans
@@ -2034,10 +2046,8 @@ insertSystemLog enablePg enableTf tfPgTypes otelLog = do
   -- System logs are best-effort. The inner write logs its own failure via
   -- logAttention; surface a higher-level "system log dropped" so an incident
   -- triager investigating the original event can see that its trail was lost.
-  bulkInsertOtelLogsAndSpansTF tfPgTypes (writeTargetFor enablePg enableTf Nothing) minted >>= \case
-    Right _ -> pass
-    Left wf ->
-      Log.logAttention "SYSTEM_LOG_DROPPED" (AE.object ["reason" AE..= writeFailureSummary wf])
+  bulkInsertOtelLogsAndSpansTF tfPgTypes (writeTargetFor enablePg enableTf Nothing) minted >>= flip whenLeft_ \wf ->
+    Log.logAttention "SYSTEM_LOG_DROPPED" (AE.object ["reason" AE..= writeFailureSummary wf])
 
 
 -- | Generate summary array for an OtelLogsAndSpans record
@@ -2106,7 +2116,7 @@ generateLogSummary otel =
         AE.String t -> Just t
         AE.Object obj -> Just $ fromMaybe (decodeUtf8 (AE.encode obj)) (extractMessageFromLog (AE.Object obj))
         AE.Null -> Nothing
-        v -> Just $ T.take 200 (toText (show v))
+        v -> Just $ T.take 200 (show v)
 
     normalLogElements =
       catMaybes
@@ -2209,9 +2219,9 @@ clickTargetLabel attrs =
 -- | Format a byte count compactly (e.g. 340000 → "340KB").
 humanBytes :: Int -> T.Text
 humanBytes n
-  | n < 1024 = toText (show n) <> "B"
-  | n < 1024 * 1024 = toText (show (n `div` 1024)) <> "KB"
-  | otherwise = toText (show (n `div` (1024 * 1024))) <> "MB"
+  | n < 1024 = show n <> "B"
+  | n < 1024 * 1024 = show (n `div` 1024) <> "KB"
+  | otherwise = show (n `div` (1024 * 1024)) <> "MB"
 
 
 generateSpanSummary :: OtelLogsAndSpans -> V.Vector T.Text
@@ -2299,7 +2309,7 @@ generateSpanSummary otel =
       catMaybes
         [ kindElt
         , frontendLabel
-        , (\c -> tag "status_code" (statusCodeStyle c) (toText (show c))) <$> httpStatus
+        , (\c -> tag "status_code" (statusCodeStyle c) (show c)) <$> httpStatus
         , (\m -> tag "method" (methodStyle m) m) <$> httpMethod
         , routeOrUrl
         , tag "db.system" "neutral" <$> dbSys
@@ -2384,7 +2394,7 @@ metricId r@MetricRecord{metricTime, startTimestamp, metricValue} =
 
 
 jsonText :: AE.Value -> Text
-jsonText = decodeUtf8 . toStrict . AE.encode
+jsonText = decodeUtf8 . AE.encode
 
 
 mintMetricIds :: V.Vector MetricRecord -> V.Vector MetricRecord
@@ -2403,44 +2413,15 @@ bulkInsertOtelMetrics
   -> Eff es (Either WriteFailure ())
 bulkInsertOtelMetrics catalogBuffer tfPgTypes target records0 = do
   let records = mintMetricIds records0
-      submitted = V.length records
-      writePg = retryHasqlWrite maxWriteAttempts "pg" $ insertOtelMetrics True records
-      writeTf = retryHasqlWrite maxWriteAttempts "tf" $ labeled @"timefusion" @Hasql $ insertOtelMetrics tfPgTypes records
-      under store n = toException $ SilentUnderPersistError store n submitted
-      check store bir = case unaccountedRows submitted bir of
-        0 -> Nothing
-        lost -> Just $ under store lost
-      classify pgRes tfRes = case (pgRes, tfRes) of
-        (Right pg, Right tf) -> case (check "pg" pg, check "tf" tf) of
-          (Nothing, Nothing) -> pure $ Right ()
-          (Just e, Nothing) -> pure $ Left $ This e
-          (Nothing, Just e) -> pure $ Left $ That e
-          (Just ePg, Just eTf) -> pure $ Left $ These ePg eTf
-        (Left e, Right _) -> pure $ Left $ This e
-        (Right _, Left e) -> pure $ Left $ That e
-        (Left ePg, Left eTf) -> pure $ Left $ These ePg eTf
-      single store side result = case result of
-        Left e -> pure $ Left $ side e
-        Right bir -> pure $ maybe (Right ()) (Left . side) (check store bir)
   (result, rawPersisted) <-
     if V.null records
       then pure (Right (), False)
-      else case target of
-        WriteBoth -> Ki.scoped $ \scope -> do
-          pg <- forkWithCtx scope writePg
-          tf <- forkWithCtx scope writeTf
-          (pgRes, tfRes) <- (,) <$> (Ki.atomically $ Ki.await pg) <*> (Ki.atomically $ Ki.await tf)
-          result' <- classify pgRes tfRes
-          let persisted store = either (const False) (isNothing . check store)
-          pure (result', persisted "pg" pgRes || persisted "tf" tfRes)
-        WritePgOnly -> do
-          pgRes <- writePg
-          result' <- single "pg" This pgRes
-          pure (result', either (const False) (isNothing . check "pg") pgRes)
-        WriteTfOnly -> do
-          tfRes <- writeTf
-          result' <- single "tf" That tfRes
-          pure (result', either (const False) (isNothing . check "tf") tfRes)
+      else
+        dualWrite
+          (V.length records)
+          target
+          (insertOtelMetrics True records)
+          (labeled @"timefusion" @Hasql $ insertOtelMetrics tfPgTypes records)
   -- Raw storage is authoritative. Catalog work is buffered and only a full
   -- threshold batch is flushed on the ingestion path.
   when rawPersisted $ liftIO (enqueueMetricCatalog catalogBuffer records) >>= \case
@@ -2487,9 +2468,9 @@ insertOtelMetrics usePgTypes records = do
 metricRowSql :: Bool -> MetricRecord -> HI.Sql
 metricRowSql usePgTypes r@MetricRecord{projectId, id = metricIdM, metricName, metricDescription, metricUnit, metricType, metricTime, timestamp, startTimestamp, attributes, resource, resourceSchemaUrl, instrumentationScope, scopeSchemaUrl, droppedAttributesCount, exemplars, flags, aggregationTemporality, isMonotonic, messageSizeBytes} =
   let NativeMetricColumns{nValue, nValueDouble, nValueInt, nSum, nCount, nBucketCounts, nExplicitBounds, nPointMin, nPointMax, nExpHistScale, nExpHistZeroCount, nExpHistZeroThreshold, nExpHistPosOffset, nExpHistPosBuckets, nExpHistNegOffset, nExpHistNegBuckets, nQuantiles} = metricValueToNative r.metricValue
-      attrField k = atMapText k (objectMap attributes)
-      attrFieldInt k = atMapInt k (objectMap attributes)
-      resourceField k = atMapText k (objectMap resource)
+      attrField k = atMapText k (objectToMap attributes)
+      attrFieldInt k = atMapInt k (objectToMap attributes)
+      resourceField k = atMapText k (objectToMap resource)
       serviceName = resourceField "service.name" <|> Just (metricServiceNameFromResource metricName resource)
       serviceNamespace = resourceField "service.namespace"
       serviceInstanceId = resourceField "service.instance.id"
@@ -2516,21 +2497,17 @@ metricRowSql usePgTypes r@MetricRecord{projectId, id = metricIdM, metricName, me
       messagingSystem = attrField "messaging.system"
       messagingOperation = attrField "messaging.operation"
       messagingDestination = attrField "messaging.destination.name"
-      scopeField k = case instrumentationScope of
-        AE.Object o -> KEM.lookup (AEK.fromText k) o >>= \case AE.String x -> Just x; _ -> Nothing
-        _ -> Nothing
       projectIdText = UUID.toText projectId
       metricIdText = UUID.toText $ fromMaybe (metricId r) metricIdM
       seriesId = metricSeriesId r
-      temporalityText = aggregationTemporality
       flagsInt64 = fromIntegral flags :: Int64
-      scopeName = scopeField "name"
-      scopeVersion = scopeField "version"
+      scopeName = scopeField "name" instrumentationScope
+      scopeVersion = scopeField "version" instrumentationScope
       metricDate = toText $ iso8601Show (utctDay metricTime)
       val = [HI.sql|(#{projectIdText}, #{metricTime}, #{metricDate}::date, #{startTimestamp}, #{timestamp}, |]
    in val
         <> idSql usePgTypes metricIdText
-        <> [HI.sql|, #{seriesId}, #{metricName}, #{metricDescription}, #{metricUnit}, #{metricType}, #{temporalityText}, #{isMonotonic}, #{flagsInt64}, |]
+        <> [HI.sql|, #{seriesId}, #{metricName}, #{metricDescription}, #{metricUnit}, #{metricType}, #{aggregationTemporality}, #{isMonotonic}, #{flagsInt64}, |]
         <> jsonSql usePgTypes resource
         <> [HI.sql|, #{resourceSchemaUrl}, #{scopeName}, #{scopeVersion}, #{scopeSchemaUrl}, |]
         <> jsonSql usePgTypes attributes
@@ -2558,8 +2535,6 @@ metricRowSql usePgTypes r@MetricRecord{projectId, id = metricIdM, metricName, me
         <> [HI.sql|, |]
         <> summaryArraySql False nQuantiles
         <> [HI.sql|, #{messageSizeBytes})|]
-  where
-    objectMap = \case AE.Object o -> Just $ KEM.toMapText o; _ -> Nothing
 
 
 idSql :: Bool -> Text -> HI.Sql
@@ -2619,12 +2594,8 @@ upsertMetricMetadata records = unless (V.null records) do
         last_timestamp = GREATEST(otel_metrics_meta.last_timestamp, EXCLUDED.last_timestamp)|]
   where
     catalogRow r@MetricRecord{projectId, metricName, metricType, metricUnit, metricDescription, metricTime, timestamp, instrumentationScope} =
-      let scope = case instrumentationScope of
-            AE.Object o -> KEM.lookup "name" o >>= \case AE.String x -> Just x; _ -> Nothing
-            _ -> Nothing
-          scopeVersion = case instrumentationScope of
-            AE.Object o -> KEM.lookup "version" o >>= \case AE.String x -> Just x; _ -> Nothing
-            _ -> Nothing
+      let scope = scopeField "name" instrumentationScope
+          scopeVersion = scopeField "version" instrumentationScope
           labels = V.fromList $ ordNub $ metricAttributePaths "attributes" r.attributes <> metricAttributePaths "resource" r.resource
        in (projectId, metricName, metricType, metricUnit, metricDescription, metricServiceNameFromResource metricName r.resource, fromMaybe "" scope, scopeVersion, labels, timestamp, metricTime)
     catalogSql (pid, name, typ, unit, desc, service, scope, scopeVersion, labels, seen, pointTime) =

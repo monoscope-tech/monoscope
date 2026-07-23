@@ -8,7 +8,6 @@ module Models.Apis.ErrorPatterns (
   getErrorPatterns,
   getErrorPatternById,
   getErrorPatternByHash,
-  updateOccurrenceCounts,
   updateOccurrenceCountsBatch,
   propagateMergedCountsBatch,
   updateErrorPatternState,
@@ -18,7 +17,7 @@ module Models.Apis.ErrorPatterns (
   batchUpsertErrorPatterns,
   upsertErrorPatternHourlyStats,
   updateErrorPatternSubscription,
-  updateErrorPatternThreadIdsAndNotifiedAt,
+  NotifiedStamp (..),
   updateErrorPatternThreadIds,
   revertLastNotifiedAt,
   setErrorPatternAssignee,
@@ -43,6 +42,7 @@ import Data.Aeson qualified as AE
 import Data.Default
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
+import Data.Text qualified as T
 import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -192,9 +192,8 @@ data ATError = ATError
 
 -- | Get error patterns for a project with optional state filter (excludes merged patterns)
 getErrorPatterns :: DB es => Projects.ProjectId -> Maybe ErrorState -> Int -> Int -> Eff es [ErrorPattern]
-getErrorPatterns pid mstate limit offset = case mstate of
-  Nothing -> Hasql.interp [HI.sql| SELECT * FROM apis.error_patterns WHERE project_id = #{pid} AND canonical_id IS NULL ORDER BY updated_at DESC LIMIT #{limit} OFFSET #{offset} |]
-  Just st -> Hasql.interp [HI.sql| SELECT * FROM apis.error_patterns WHERE project_id = #{pid} AND state = #{st} AND canonical_id IS NULL ORDER BY updated_at DESC LIMIT #{limit} OFFSET #{offset} |]
+getErrorPatterns pid mstate limit offset =
+  Hasql.interp [HI.sql| SELECT * FROM apis.error_patterns WHERE project_id = #{pid} AND (#{mstate} IS NULL OR state = #{mstate}) AND canonical_id IS NULL ORDER BY updated_at DESC LIMIT #{limit} OFFSET #{offset} |]
 
 
 -- | Get error pattern by ID
@@ -218,11 +217,7 @@ getErrorPatternLByHash pid eHash now =
     ) ev ON true WHERE e.project_id = #{pid} AND e.hash = #{eHash} |]
 
 
-updateOccurrenceCounts :: DB es => Projects.ProjectId -> UTCTime -> Eff es Int64
-updateOccurrenceCounts pid = updateOccurrenceCountsBatch (V.singleton pid)
-
-
--- | Batch version: propagate merged counts for all given projects in a single query.
+-- | Propagate merged counts for all given projects in a single query.
 propagateMergedCountsBatch :: DB es => V.Vector Projects.ProjectId -> Eff es Int64
 propagateMergedCountsBatch pids | V.null pids = pure 0
 propagateMergedCountsBatch pids =
@@ -323,23 +318,20 @@ updateErrorPatternSubscription eid sub notifyMins now =
       |]
 
 
-updateErrorPatternThreadIdsAndNotifiedAt :: DB es => ErrorPatternId -> Maybe Text -> Maybe Text -> UTCTime -> Eff es Int64
-updateErrorPatternThreadIdsAndNotifiedAt = updateErrorPatternThreadIds' True
+-- | Whether a thread-id update also stamps @last_notified_at@. Use
+-- 'KeepNotifiedAt' after 'claimDueErrorNotifications' has already stamped it
+-- atomically to win the race.
+data NotifiedStamp = StampNotifiedAt | KeepNotifiedAt
+  deriving stock (Eq, Show)
 
 
--- | Update slack/discord IDs only. Used after 'claimDueErrorNotifications'
--- has already stamped @last_notified_at@ atomically to win the race.
-updateErrorPatternThreadIds :: DB es => ErrorPatternId -> Maybe Text -> Maybe Text -> UTCTime -> Eff es Int64
-updateErrorPatternThreadIds = updateErrorPatternThreadIds' False
-
-
-updateErrorPatternThreadIds' :: DB es => Bool -> ErrorPatternId -> Maybe Text -> Maybe Text -> UTCTime -> Eff es Int64
-updateErrorPatternThreadIds' updateNotifiedAt eid slackTs discordMsgId now =
+updateErrorPatternThreadIds :: DB es => NotifiedStamp -> ErrorPatternId -> Maybe Text -> Maybe Text -> UTCTime -> Eff es Int64
+updateErrorPatternThreadIds stamp eid slackTs discordMsgId now =
   Hasql.interpExecute
     [HI.sql| UPDATE apis.error_patterns SET
         slack_thread_ts = COALESCE(#{slackTs}, slack_thread_ts),
         discord_message_id = COALESCE(#{discordMsgId}, discord_message_id),
-        last_notified_at = CASE WHEN #{updateNotifiedAt} THEN #{now} ELSE last_notified_at END,
+        last_notified_at = CASE WHEN #{stamp == StampNotifiedAt} THEN #{now} ELSE last_notified_at END,
         updated_at = #{now} WHERE id = #{eid} |]
 
 
@@ -436,9 +428,8 @@ getErrorPatternsWithCurrentRates pid now =
 -- Used for fast pre-merge before issue creation to prevent notification spam from identical errors across different spans.
 findCanonicalMatch :: DB es => Projects.ProjectId -> Maybe Text -> Text -> Text -> Eff es (Maybe ErrorPatternId)
 findCanonicalMatch pid service eType msg =
-  listToMaybe
-    <$> Hasql.interp
-      [HI.sql| SELECT id FROM apis.error_patterns
+  Hasql.interpOne
+    [HI.sql| SELECT id FROM apis.error_patterns
         WHERE project_id = #{pid} AND service IS NOT DISTINCT FROM #{service}
           AND error_type = #{eType} AND message = #{msg}
           AND canonical_id IS NULL AND merge_override = FALSE
@@ -478,10 +469,12 @@ batchUpsertErrorPatterns pid errors now =
             -- Without this guard a busy pattern rewrites this column on every
             -- occurrence, breaking HOT and bloating the heap/TOAST relation.
             recent_trace_id = CASE
-              WHEN apis.error_patterns.updated_at < #{now}::timestamptz - INTERVAL '5 minutes'
+              WHEN EXCLUDED.recent_trace_id IS NOT NULL
+                AND apis.error_patterns.updated_at < #{now}::timestamptz - INTERVAL '5 minutes'
                 THEN EXCLUDED.recent_trace_id
               ELSE apis.error_patterns.recent_trace_id
             END,
+            first_trace_id = COALESCE(apis.error_patterns.first_trace_id, EXCLUDED.first_trace_id),
             is_framework = EXCLUDED.is_framework,
             occurrences_1m = apis.error_patterns.occurrences_1m + EXCLUDED.occurrences_1m,
             occurrences_5m = apis.error_patterns.occurrences_5m + EXCLUDED.occurrences_1m,
@@ -511,7 +504,9 @@ batchUpsertErrorPatterns pid errors now =
     services = V.map (.serviceName) errs
     runtimes = V.map (.runtime) errs
     errorDatas = V.map HI.AsJsonb errs
-    traceIds = V.map (.traceId) errs
+    -- '' would persist and pass every Maybe check downstream, sending the issue
+    -- page off to fetch "trace ''" — every trace-less row in the window.
+    traceIds = V.map (mfilter (not . T.null) . (.traceId)) errs
 
 
 -- | Batch upsert hourly rollup stats. Takes (hash, event_count, user_count) triples and

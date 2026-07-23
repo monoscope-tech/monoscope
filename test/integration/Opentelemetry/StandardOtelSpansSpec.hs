@@ -8,6 +8,7 @@ import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Only (..), fromOnly)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.GRPC.Common.Protobuf (Proto (..))
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pkg.DeriveUtils (UUIDId (..))
@@ -114,3 +115,18 @@ spec = around withTestResources do
         WHERE project_id = ? AND name = 'db.query'
       |] (Only pid) :: IO (V.Vector (Only Text))
       V.length spans `shouldSatisfy` (>= 1)
+
+    it "getTraceDetails: single-span trace reports the span's own duration, not zero" \tr -> do
+      -- Regression: the trace end-time fold used to ignore the first span's
+      -- end_time, so a single-span trace reported duration 0.
+      apiKey <- createTestAPIKey tr pid "std-otel-singlespan-key"
+      trId <- show <$> nextRandom
+      spanId' <- show <$> nextRandom
+      let req = mkSpanRequest trId spanId' Nothing "single.span" [] Nothing [] (mkResource apiKey []) frozenTime
+      void $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto req)
+      Only storedTrId <- V.head <$> (withPool tr.trPool $ DBT.query [sql|
+        SELECT context___trace_id FROM otel_logs_and_spans
+        WHERE project_id = ? AND name = 'single.span'
+      |] (Only pid) :: IO (V.Vector (Only Text)))
+      trDetailsM <- runTestBg frozenTime tr $ Telemetry.getTraceDetails False pid storedTrId (Just frozenTime) frozenTime
+      fmap (\(t, ss) -> (t.traceDurationNs > 0, length ss)) trDetailsM `shouldBe` Just (True, 1)

@@ -483,7 +483,7 @@ spec = sequential $ aroundAll withTestResources do
                     WHERE id = ? |]
               (PGS.Only pat.id)
 
-          void $ runTestBg frozenTime tr $ ErrorPatterns.updateOccurrenceCounts pid frozenTime
+          void $ runTestBg frozenTime tr $ ErrorPatterns.updateOccurrenceCountsBatch (V.singleton pid) frozenTime
 
           updatedPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
           case updatedPat of
@@ -615,7 +615,7 @@ spec = sequential $ aroundAll withTestResources do
               (PGS.Only pat.id)
 
           -- First decay tick: occurrences_1m=10 (>0), so quiet_minutes resets to 0
-          void $ runTestBg frozenTime tr $ ErrorPatterns.updateOccurrenceCounts pid frozenTime
+          void $ runTestBg frozenTime tr $ ErrorPatterns.updateOccurrenceCountsBatch (V.singleton pid) frozenTime
           p1 <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
           case p1 of
             Just p -> do
@@ -627,7 +627,7 @@ spec = sequential $ aroundAll withTestResources do
             Nothing -> expectationFailure "Pattern not found after first decay"
 
           -- Second decay tick (1m is now 0, so quiet_minutes increments to 1)
-          void $ runTestBg frozenTime tr $ ErrorPatterns.updateOccurrenceCounts pid frozenTime
+          void $ runTestBg frozenTime tr $ ErrorPatterns.updateOccurrenceCountsBatch (V.singleton pid) frozenTime
           p2 <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
           case p2 of
             Just p -> do
@@ -862,3 +862,30 @@ spec = sequential $ aroundAll withTestResources do
           merged = filter (isJust . snd) ioPatterns
       length canonicals `shouldBe` 1
       length merged `shouldBe` 3
+
+    it "15. Empty trace ids are stored as NULL, real ones backfill first_trace_id" \tr -> do
+      -- Regression: errors extracted from trace-less logs carried traceId = Just "",
+      -- which persisted as '' (passing every Maybe check) and made the issue-detail
+      -- page fetch "trace ''" — a 40-60s scan over every trace-less row on TF.
+      let err = (def :: ErrorPatterns.ATError)
+            { ErrorPatterns.when = frozenTime
+            , ErrorPatterns.errorType = "EmptyTraceError"
+            , ErrorPatterns.message = "boom"
+            , ErrorPatterns.hash = "empty-trace-hash"
+            , ErrorPatterns.traceId = Just ""
+            }
+      void $ runTestBg frozenTime tr $ ErrorPatterns.batchUpsertErrorPatterns pid (V.singleton err) frozenTime
+      patM <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternByHash pid "empty-trace-hash"
+      fmap (.recentTraceId) patM `shouldBe` Just Nothing
+      fmap (.firstTraceId) patM `shouldBe` Just Nothing
+
+      -- A later occurrence with a real trace id refreshes recent_trace_id (once the
+      -- 5-min HOT guard allows) and backfills first_trace_id. updated_at defaults to
+      -- the real clock on insert, so pin it in the past to open the guard window.
+      withResource tr.trPool \conn ->
+        void $ PGS.execute conn [sql| UPDATE apis.error_patterns SET updated_at = ? WHERE project_id = ? AND hash = 'empty-trace-hash' |] (frozenTime, pid)
+      let later = addUTCTime 400 frozenTime
+      void $ runTestBg frozenTime tr $ ErrorPatterns.batchUpsertErrorPatterns pid (V.singleton err{ErrorPatterns.traceId = Just "abc123"}) later
+      patM2 <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternByHash pid "empty-trace-hash"
+      fmap (.recentTraceId) patM2 `shouldBe` Just (Just "abc123")
+      fmap (.firstTraceId) patM2 `shouldBe` Just (Just "abc123")

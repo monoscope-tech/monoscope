@@ -58,6 +58,13 @@ spec = sequential $ aroundAll withTestResources do
           length tbl.rows `shouldBe` 0
         _ -> error "Unexpected response"
 
+    it "does not preload issue acknowledge or archive actions" \_ -> do
+      issueId <- UUIDId <$> UUID.nextRandom
+      let html = TL.toStrict $ renderText $ do
+            AnomalyList.anomalyAcknowledgeButton testPid issueId False ""
+            AnomalyList.anomalyArchiveButton testPid issueId False
+      T.count "preload=\"false\"" html `shouldBe` 2
+
     it "should create endpoint anomalies (not visible in anomaly list)" \tr -> do
       currentTime <- getCurrentTime
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime

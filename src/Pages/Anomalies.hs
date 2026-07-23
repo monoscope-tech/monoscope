@@ -12,7 +12,6 @@ module Pages.Anomalies (
   anomalyDetailHashGetH,
   AnomalyAction (..),
   IssueVM (..),
-  issueColumns,
   AssignErrorForm (..),
   assignErrorPostH,
   resolveErrorPostH,
@@ -111,14 +110,13 @@ newtype AnomalyBulkForm = AnomalyBulk
 -- The acknowledge path cascades via the model helpers; the clear path resets the columns directly.
 acknowledgeAnomalyGetH :: Projects.ProjectId -> Bool -> Anomalies.AnomalyId -> Maybe Text -> ATAuthCtx (RespHeaders AnomalyAction)
 acknowledgeAnomalyGetH pid enable aid _hostM = do
-  (sess, project) <- Projects.sessionAndProject pid
+  (sess, _) <- Projects.sessionAndProject pid
   let issueId = UUIDId aid.unUUIDId
   if enable
     then do
       _ <- Issues.acknowledgeIssue issueId sess.user.id
       Issues.logIssueActivity issueId Issues.IEAcknowledged (Just sess.user.id) Nothing
-      let text_id = V.fromList [UUID.toText aid.unUUIDId]
-      v <- Anomalies.acknowledgeAnomalies sess.user.id text_id
+      v <- Anomalies.acknowledgeAnomalies sess.user.id (V.singleton (UUID.toText aid.unUUIDId))
       _ <- Anomalies.acknowlegeCascade sess.user.id (V.fromList v)
       pass
     else do
@@ -131,7 +129,7 @@ acknowledgeAnomalyGetH pid enable aid _hostM = do
 -- | Archive (on=True) or un-archive (on=False) an anomaly/issue.
 archiveAnomalyGetH :: Projects.ProjectId -> Bool -> Anomalies.AnomalyId -> ATAuthCtx (RespHeaders AnomalyAction)
 archiveAnomalyGetH pid enable aid = do
-  (sess, project) <- Projects.sessionAndProject pid
+  (sess, _) <- Projects.sessionAndProject pid
   archivedAt <- if enable then Just <$> Time.currentTime else pure Nothing
   _ <- Hasql.interpExecute [HI.sql| update apis.issues set archived_at=#{archivedAt} where id=#{aid} |]
   _ <- Hasql.interpExecute [HI.sql| update apis.anomalies set archived_at=#{archivedAt} where id=#{aid} |]
@@ -155,8 +153,7 @@ instance ToHtml AnomalyAction where
 -- | Bulk acknowledge/archive anomalies, triggering a notification and list reload
 anomalyBulkActionsPostH :: Projects.ProjectId -> Text -> AnomalyBulkForm -> ATAuthCtx (RespHeaders AnomalyAction)
 anomalyBulkActionsPostH pid action items = do
-  (sess, project) <- Projects.sessionAndProject pid
-  appCtx <- ask @AuthContext
+  (sess, _) <- Projects.sessionAndProject pid
   if null items.itemId
     then do
       addErrorToast "No items selected" Nothing
@@ -172,9 +169,8 @@ anomalyBulkActionsPostH pid action items = do
           void $ Anomalies.archiveAnomaliesAndIssues vIds
           pure Issues.IEArchived
         _ -> throwError err400{errBody = "unhandled anomaly bulk action: " <> encodeUtf8 action}
-      forM_ items.itemId \iid -> case UUID.fromText iid of
-        Just u -> Issues.logIssueActivity (UUIDId u) eventType (Just sess.user.id) Nothing
-        Nothing -> pass
+      forM_ (mapMaybe UUID.fromText items.itemId) \u ->
+        Issues.logIssueActivity (UUIDId u) eventType (Just sess.user.id) Nothing
       addSuccessToast (action <> "d items Successfully") Nothing
       addTriggerEvent "issuesListChanged" AE.Null
       addRespHeaders Bulk
@@ -249,9 +245,8 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
       (trItem, spanRecs) <-
         fromMaybe (Nothing, V.empty) <$> runMaybeT do
           (tId, tTs) <- hoistMaybe mTraceRef
-          traceItem <- MaybeT $ Telemetry.getTraceDetails useTf pid tId (Just tTs) now
-          otelLogs <- lift $ Telemetry.getSpanRecordsByTraceId useTf pid traceItem.traceId (Just traceItem.traceStartTime) now
-          pure (Just traceItem, V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> V.fromList otelLogs)
+          (traceItem, otelLogs) <- MaybeT $ Telemetry.getTraceDetails useTf pid tId (Just tTs) now
+          pure (Just traceItem, V.mapMaybe Telemetry.convertOtelLogsAndSpansToSpanRecord (V.fromList otelLogs))
       sampleOverride <-
         if issue.issueType `elem` [Issues.LogPattern, Issues.LogPatternRateChange]
           then do
@@ -271,10 +266,6 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
       addRespHeaders $ PageCtx bwconf $ anomalyDetailPage pid issue trItem spanRecs errorM now (isJust firstM) members tp sampleOverride
 
 
--- | Render a span/log @summary@ array element-wise as styled chips. Each
--- element stays as a single chip even if its value contains internal
--- whitespace (user-agent, page title). Right-rail metadata renders with a
--- subdued style so the primary fields stay visually dominant.
 -- | Unescape JSON-ish whitespace/quotes embedded in summary tokens.
 unescSummary :: Text -> Text
 unescSummary = T.replace "\\\"" "\"" . T.replace "\\n" " " . T.replace "\\t" " "
@@ -291,10 +282,13 @@ summaryTokenClass wrap style = case style of
   "text-textStrong" -> "text-textStrong text-xs font-medium" <> textWrap
   _ -> "cbadge-sm badge-neutral" <> badgeWrap
   where
-    badgeWrap = if wrap then " whitespace-pre-wrap break-all" else ""
-    textWrap = if wrap then " whitespace-pre-wrap break-words" else ""
+    badgeWrap = bool "" " whitespace-pre-wrap break-all" wrap
+    textWrap = bool "" " whitespace-pre-wrap break-words" wrap
 
 
+-- | Render a span/log @summary@ array element-wise as styled chips; each
+-- element stays one chip even with internal whitespace, and right-rail
+-- metadata renders subdued so the primary fields stay dominant.
 renderSummaryChips_ :: Monad m => V.Vector Text -> HtmlT m ()
 renderSummaryChips_ summary = V.forM_ summary \token ->
   case T.breakOn "\8658" token of
@@ -544,7 +538,7 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp sampleOverri
                     renderSample $ div_ [class_ "flex flex-wrap items-center gap-1 p-4 max-h-80 overflow-y-auto"] $ renderSummaryChips_ summary
               _ ->
                 whenJust
-                  (sampleMessage >>= \m -> if T.strip m == T.strip logPattern then Nothing else Just m)
+                  (mfilter ((/= T.strip logPattern) . T.strip) sampleMessage)
                   (renderSample . renderLogContent_)
       div_ [class_ "flex flex-wrap gap-2 items-center"] do
         severityBadge (display issue.severity)
@@ -589,19 +583,17 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp sampleOverri
                     , Widget.hideLegend = Just True
                     , Widget.hideSubtitle = Just True
                     }
+      let patternLayout sf lp sm =
+            div_ [class_ "flex flex-col lg:flex-row gap-4 lg:items-start"] do
+              div_ [class_ "min-w-0 flex-1 flex flex-col gap-4"] do
+                volumeChart_ "Pattern Volume"
+                logPatternCards sf lp sm
+              activityPanel_ pid issueId "lg:w-80 shrink-0" spanRecs
       case issue.issueType of
         Issues.LogPattern -> withIssueDataH @Issues.LogPatternData issue.issueData \d ->
-          div_ [class_ "flex flex-col lg:flex-row gap-4 lg:items-start"] do
-            div_ [class_ "min-w-0 flex-1 flex flex-col gap-4"] do
-              volumeChart_ "Pattern Volume"
-              logPatternCards d.sourceField d.logPattern d.sampleMessage
-            activityPanel_ pid issueId "lg:w-80 shrink-0" spanRecs
+          patternLayout d.sourceField d.logPattern d.sampleMessage
         Issues.LogPatternRateChange -> withIssueDataH @Issues.LogPatternRateChangeData issue.issueData \d ->
-          div_ [class_ "flex flex-col lg:flex-row gap-4 lg:items-start"] do
-            div_ [class_ "min-w-0 flex-1 flex flex-col gap-4"] do
-              volumeChart_ "Pattern Volume"
-              logPatternCards d.sourceField d.logPattern d.sampleMessage
-            activityPanel_ pid issueId "lg:w-80 shrink-0" spanRecs
+          patternLayout d.sourceField d.logPattern d.sampleMessage
         Issues.RuntimeException -> withIssueDataH @Issues.RuntimeExceptionData issue.issueData \exceptionData -> do
           let trimmedStack = T.strip exceptionData.stackTrace
               hasStack = not $ T.null trimmedStack
@@ -674,7 +666,6 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp sampleOverri
                       faSprite_ icn "regular" $ "w-3 h-3 " <> color
                       span_ [class_ $ "text-xs font-semibold uppercase tracking-wide " <> color] $ toHtml lbl
                       span_ [class_ "text-xs text-textWeak"] $ toHtml $ "(" <> show (V.length fields) <> ")"
-                      pass
                     div_ [class_ "flex flex-wrap gap-1"] $ V.forM_ fields (fieldChip color)
               hasFieldChanges = not (V.null d.newFields) || not (V.null d.deletedFields) || not (V.null d.modifiedFields)
           -- Endpoint chip line
@@ -775,7 +766,7 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp sampleOverri
                 _ -> "kind==\"log\" AND context___trace_id==\"" <> logsTraceId <> "\""
           virtualTable pid (Just ("/p/" <> pid.toText <> "/log_explorer/data?json=true&query=" <> toUriStr logsQuery)) Nothing
 
-      let withSessionIds = V.catMaybes $ (\sr -> (`lookupValueText` "id") =<< Map.lookup "session" =<< sr.attributes) <$> spanRecs
+      let withSessionIds = V.mapMaybe (\sr -> (`lookupValueText` "id") =<< Map.lookup "session" =<< sr.attributes) spanRecs
       unless (V.null withSessionIds) $ div_ [class_ "surface-raised rounded-2xl overflow-hidden", id_ "replay-section"] do
         div_ [class_ "max-md:px-3 px-4 py-2.5 border-b border-strokeWeak flex items-center gap-2"] do
           faSprite_ "video" "regular" "w-3.5 h-3.5 text-textWeak"
@@ -802,19 +793,18 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp sampleOverri
 
 errorAssigneeSection :: Projects.ProjectId -> Maybe ErrorPatterns.ErrorPatternId -> Maybe Projects.UserId -> V.Vector ProjectMembers.ProjectMemberVM -> Html ()
 errorAssigneeSection pid errIdM assigneeIdM members = do
-  let isDisabled = isNothing errIdM || V.null members
   div_ [id_ "error-assignee", class_ "flex flex-col gap-2 border-t border-strokeWeak pt-3"] do
     span_ [class_ "text-xs text-textWeak"] "Assignee"
     case errIdM of
       Nothing ->
-        select_ ([class_ "select select-sm w-full", disabled_ "true"] <> [name_ "assigneeId"]) do
+        select_ [class_ "select select-sm w-full", disabled_ "true", name_ "assigneeId"] do
           option_ [value_ ""] "Unassigned"
       Just errId -> do
         let actionUrl = "/p/" <> pid.toText <> "/issues/errors/" <> UUID.toText errId.unErrorPatternId <> "/assign"
         form_ [hxPost_ actionUrl, hxTarget_ "#error-assignee", hxSwap_ "outerHTML", hxTrigger_ "change"] do
           select_
             ( [class_ "select select-sm w-full", name_ "assigneeId"]
-                <> [disabled_ "true" | isDisabled]
+                <> [disabled_ "true" | V.null members]
             )
             $ do
               option_ ([value_ ""] <> [selected_ "true" | isNothing assigneeIdM]) "Unassigned"
@@ -1051,19 +1041,13 @@ aiChatPostH pid issueId form
 -- | Handle AI chat history GET request
 aiChatHistoryGetH :: Projects.ProjectId -> Issues.IssueId -> ATAuthCtx (RespHeaders (Html ()))
 aiChatHistoryGetH pid issueId = do
-  (sess, project) <- Projects.sessionAndProject pid
+  _ <- Projects.sessionAndProject pid
   now <- Time.currentTime
-  -- Get issue to build system prompt
-  issueM <- Issues.selectIssueById issueId
-  case issueM of
+  Issues.selectIssueById issueId >>= \case
     Nothing -> addRespHeaders $ aiChatHistoryView_ pid []
     Just issue -> do
-      -- Build system prompt context (reuse logic from aiChatPostH)
       systemPrompt <- buildSystemPromptForIssue pid issue now
-      -- Load chat history
-      let convId = UUIDId issueId.unUUIDId :: UUIDId "conversation"
-      messages <- Issues.selectChatHistory convId
-      -- Render with system prompt prepended
+      messages <- Issues.selectChatHistory (UUIDId issueId.unUUIDId :: UUIDId "conversation")
       addRespHeaders $ aiChatHistoryWithSystemPrompt_ pid systemPrompt messages
 
 
@@ -1092,8 +1076,7 @@ buildSystemPromptForIssue pid issue now = do
     fetchTrace useTf err =
       fromMaybe (Nothing, V.empty) <$> runMaybeT do
         tId <- hoistMaybe err.recentTraceId
-        trData <- MaybeT $ Telemetry.getTraceDetails useTf pid tId (Just $ zonedTimeToUTC err.updatedAt) now
-        spans <- lift $ Telemetry.getSpanRecordsByTraceId useTf pid trData.traceId (Just trData.traceStartTime) now
+        (trData, spans) <- MaybeT $ Telemetry.getTraceDetails useTf pid tId (Just $ zonedTimeToUTC err.updatedAt) now
         pure (Just trData, V.fromList spans)
     buildAIContext iss errM trDataM spans alertContextM =
       unlines
@@ -1284,10 +1267,8 @@ processWidgetsWithToolData toolCalls = map \w -> case w.query >>= findToolCallDa
 
 -- | Find matching tool call data for a widget query
 findToolCallData :: [AI.ToolCallInfo] -> Text -> Maybe AE.Value
-findToolCallData toolCalls widgetQuery = listToMaybe [rd | tc <- toolCalls, tc.name == "run_query", Just q <- [Map.lookup "query" tc.args >>= getText], norm q == norm widgetQuery, Just rd <- [tc.rawData]]
+findToolCallData toolCalls widgetQuery = listToMaybe [rd | tc <- toolCalls, tc.name == "run_query", Just (AE.String q) <- [Map.lookup "query" tc.args], norm q == norm widgetQuery, Just rd <- [tc.rawData]]
   where
-    getText (AE.String t) = Just t
-    getText _ = Nothing
     norm = unwords . words -- normalize for comparison (whitespace-insensitive)
 
 
@@ -1461,7 +1442,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
                 , bulkActionsInHeader = Just 0
                 , refreshOnEvent = Just ("issuesListChanged", baseUrl)
                 }
-          , columns = issueColumnsWithToggle pid period (Just $ periodToggle_ baseUrl "anomalyListContainer" period)
+          , columns = issueColumns pid period (Just $ periodToggle_ baseUrl "anomalyListContainer" period)
           , rows = issuesVM
           , features =
               def
@@ -1506,7 +1487,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
                   }
           }
   addRespHeaders $ case (layoutM, hxRequestM, hxBoostedM, loadM) of
-    (_, _, _, Just "true") -> ALRows $ TableRows{columns = issueColumns pid period, rows = issuesVM, emptyState = Nothing, renderAsTable = True, rowId = Just issueRowId, rowAttrs = Just issueRowAttrs, pagination = if totalCount > 0 then Just paginationConfig else Nothing}
+    (_, _, _, Just "true") -> ALRows $ TableRows{columns = issueColumns pid period Nothing, rows = issuesVM, emptyState = Nothing, renderAsTable = True, rowId = Just issueRowId, rowAttrs = Just issueRowAttrs, pagination = if totalCount > 0 then Just paginationConfig else Nothing}
     _ -> ALPage $ PageCtx bwconf issuesTable
 
 
@@ -1547,12 +1528,8 @@ data IssueVM = IssueVM Bool Bool UTCTime Text Issues.IssueL
   deriving stock (Show)
 
 
-issueColumns :: Projects.ProjectId -> Text -> [Column IssueVM]
-issueColumns pid period = issueColumnsWithToggle pid period Nothing
-
-
-issueColumnsWithToggle :: Projects.ProjectId -> Text -> Maybe (Html ()) -> [Column IssueVM]
-issueColumnsWithToggle pid period toggleM =
+issueColumns :: Projects.ProjectId -> Text -> Maybe (Html ()) -> [Column IssueVM]
+issueColumns pid period toggleM =
   [ col "Issue" (renderIssueMainCol pid) & withAttrs [class_ "min-w-0 max-w-0 w-full"]
   , col ("Events (" <> period <> ")") renderIssueEventsCol & withAttrs [class_ "w-24 max-md:hidden"]
   , col "Last Seen" renderIssueDateCol & withAttrs [class_ "w-24 max-md:hidden"]
@@ -1746,33 +1723,31 @@ issuePreview_ Issues.IssueL{base} = div_ [class_ "flex items-center gap-2 min-w-
 
 
 anomalyAcknowledgeButton :: Projects.ProjectId -> Issues.IssueId -> Bool -> Text -> Html ()
-anomalyAcknowledgeButton pid aid acked host = do
-  let acknowledgeAnomalyEndpoint = "/p/" <> pid.toText <> "/issues/" <> Issues.issueIdText aid <> if acked then "/unacknowledge" else "/acknowledge?host=" <> host
-  a_
-    [ class_ $ "btn btn-sm gap-1.5 " <> if acked then "bg-fillSuccess-weak text-textSuccess border-strokeSuccess-weak" else "btn-primary"
-    , term "data-tippy-content" $ if acked then "unacknowledge issue" else "acknowledge issue"
-    , Aria.label_ $ if acked then "Unacknowledge issue" else "Acknowledge issue"
-    , hxGet_ acknowledgeAnomalyEndpoint
-    , hxSwap_ "outerHTML"
-    ]
-    do
-      faSprite_ "check" "regular" "w-4 h-4"
-      span_ [class_ "max-md:hidden"] $ if acked then "Acknowledged" else "Acknowledge"
+anomalyAcknowledgeButton pid aid acked host =
+  issueToggleButton_ pid aid acked "check" ("Acknowledge", "Acknowledged") ("Acknowledge", "Unacknowledge") ("/acknowledge?host=" <> host, "/unacknowledge") "btn-primary" "bg-fillSuccess-weak text-textSuccess border-strokeSuccess-weak"
 
 
 anomalyArchiveButton :: Projects.ProjectId -> Issues.IssueId -> Bool -> Html ()
-anomalyArchiveButton pid aid archived = do
-  let archiveAnomalyEndpoint = "/p/" <> pid.toText <> "/issues/" <> Issues.issueIdText aid <> if archived then "/unarchive" else "/archive"
+anomalyArchiveButton pid aid archived =
+  issueToggleButton_ pid aid archived "archive" ("Archive", "Unarchive") ("Archive", "Unarchive") ("/archive", "/unarchive") "btn-ghost" "btn-ghost bg-fillWarning-weak text-textWarning border-strokeWarning-weak"
+
+
+-- | Shared HTMX toggle button for the issue acknowledge/archive actions.
+-- Labels show the current state; action names drive the tooltip/aria text.
+issueToggleButton_ :: Projects.ProjectId -> Issues.IssueId -> Bool -> Text -> (Text, Text) -> (Text, Text) -> (Text, Text) -> Text -> Text -> Html ()
+issueToggleButton_ pid aid active icon labels actions paths offCls onCls = do
+  let pick = if active then snd else fst
   a_
-    [ class_ $ "btn btn-sm btn-ghost gap-1.5 " <> if archived then "bg-fillWarning-weak text-textWarning border-strokeWarning-weak" else ""
-    , term "data-tippy-content" $ if archived then "unarchive" else "archive"
-    , Aria.label_ $ if archived then "Unarchive issue" else "Archive issue"
-    , hxGet_ archiveAnomalyEndpoint
+    [ class_ $ "btn btn-sm gap-1.5 " <> if active then onCls else offCls
+    , term "data-tippy-content" $ T.toLower (pick actions) <> " issue"
+    , Aria.label_ $ pick actions <> " issue"
+    , term "preload" "false"
+    , hxGet_ $ "/p/" <> pid.toText <> "/issues/" <> Issues.issueIdText aid <> pick paths
     , hxSwap_ "outerHTML"
     ]
     do
-      faSprite_ "archive" "regular" "w-4 h-4"
-      span_ [class_ "max-md:hidden"] $ if archived then "Unarchive" else "Archive"
+      faSprite_ icon "regular" "w-4 h-4"
+      span_ [class_ "max-md:hidden"] $ toHtml $ pick labels
 
 
 issueTypeLabel :: Issues.IssueType -> Bool -> Html ()

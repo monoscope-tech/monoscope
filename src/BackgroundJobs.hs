@@ -1585,7 +1585,7 @@ dispatchDueErrorNotifications ctx pid now dueErrors =
             forM_ results \(errorId, slackTs, discordMsgId, delivered) ->
               Relude.when (delivered && (isJust slackTs || isJust discordMsgId))
                 $ void
-                $ ErrorPatterns.updateErrorPatternThreadIds errorId slackTs discordMsgId now
+                $ ErrorPatterns.updateErrorPatternThreadIds ErrorPatterns.KeepNotifiedAt errorId slackTs discordMsgId now
 
 
 -- | Sliding-window rate limiter. One bucket per project per hour. Returns True
@@ -1739,7 +1739,7 @@ processProjectErrors pid errors now = do
             -- path (notifyErrorSubscriptions) reads for per-pattern dedup.
             Relude.when dispatched
               $ void
-              $ ErrorPatterns.updateErrorPatternThreadIdsAndNotifiedAt err.id slackTs discordMsgId now
+              $ ErrorPatterns.updateErrorPatternThreadIds ErrorPatterns.StampNotifiedAt err.id slackTs discordMsgId now
       forM_ newOrRegressed \(errorHash, errState) -> do
         errM <- ErrorPatterns.getErrorPatternByHash pid errorHash
         whenJust errM \err ->
@@ -3965,4 +3965,4 @@ createAndNotifyErrorIssue pid issue runtimeAlertType errorData emailFn errorPatt
       sendAlertToChannels alert pid project users errorsUrl subj html (existSlackTs, existDiscordId)
     Relude.when dispatched
       $ void
-      $ ErrorPatterns.updateErrorPatternThreadIdsAndNotifiedAt errorPatternId finalSlackTs finalDiscordMsgId now
+      $ ErrorPatterns.updateErrorPatternThreadIds ErrorPatterns.StampNotifiedAt errorPatternId finalSlackTs finalDiscordMsgId now

@@ -39,7 +39,6 @@ data ShareView
       , detail :: !(Html ()) -- LogItem.expandedItemView; its built-in header supplies the event summary
       , replay :: !(Maybe (Text, Text, UUID.UUID)) -- (shareId, projectId, sessionId) for the session-replay player
       }
-  deriving stock (Generic)
 
 
 data ReqForm = ReqForm
@@ -147,18 +146,17 @@ shareLinkGetH sid = do
 
 resolveBody :: UUID.UUID -> UTCTime -> ShareRow -> ATBaseCtx ShareView
 resolveBody _ _ row | row.eventType == "log" = do
-  Telemetry.logRecordByProjectAndId row.pid row.eventCreatedAt row.eventId <&> \case
+  Telemetry.otelRecordByProjectAndId row.pid row.eventCreatedAt row.eventId <&> \case
     Just req -> ShareLive row.hoursLeft Nothing (LogItem.expandedItemView row.pid req Nothing Nothing) Nothing
     Nothing -> ShareMissing
 resolveBody sid now row = do
   useTf <- (.env.enableTimefusionReads) <$> Effectful.Reader.Static.ask @AuthContext
-  Telemetry.spanRecordByProjectAndId row.pid row.eventCreatedAt row.eventId >>= \case
+  Telemetry.otelRecordByProjectAndId row.pid row.eventCreatedAt row.eventId >>= \case
     Nothing -> pure ShareMissing
     Just anchor -> do
       breakdownM <- runMaybeT do
         tid <- hoistMaybe $ anchor.context >>= (.trace_id) >>= guarded (not . T.null)
-        traceItem <- MaybeT $ Telemetry.getTraceDetails useTf row.pid tid (Just row.eventCreatedAt) now
-        spans <- lift $ Telemetry.getSpanRecordsByTraceId useTf row.pid tid (Just row.eventCreatedAt) now
+        (traceItem, spans) <- MaybeT $ Telemetry.getTraceDetails useTf row.pid tid (Just row.eventCreatedAt) now
         let recs = V.mapMaybe Telemetry.convertOtelLogsAndSpansToSpanRecord (V.fromList spans)
         pure $ PTelemetry.tracePage row.pid traceItem recs
       let replayInfo =
@@ -190,22 +188,18 @@ shareReplaySessionGetH sid sessionId = do
   now <- Time.currentTime
   row <- resolveShare sid now >>= note404
   when (row.hoursLeft <= 0 || row.eventType == "log") $ throwIO err404
-  anchor <- Telemetry.spanRecordByProjectAndId row.pid row.eventCreatedAt row.eventId >>= note404
+  anchor <- Telemetry.otelRecordByProjectAndId row.pid row.eventCreatedAt row.eventId >>= note404
   let attrSessionId = Telemetry.atMapText "session.id" (unAesonTextMaybe anchor.attributes) >>= UUID.fromText
   when (attrSessionId /= Just sessionId) $ throwIO err404
   project <- Projects.projectById row.pid >>= note404
   Replay.fetchReplaySession project sessionId
 
 
--- | Hide embedded controls that don't apply on a standalone share page
--- (sidebar close, internal share button marked data-share-hide).
-shareViewStyles :: Html ()
-shareViewStyles = style_ ".share-view .detail-close-btn,.share-view [data-share-hide]{display:none!important}.share-view .urlPath{user-select:text}"
-
-
 sharePage :: ShareView -> Html ()
 sharePage v = do
-  shareViewStyles
+  -- Hide embedded controls that don't apply on a standalone share page
+  -- (sidebar close, internal share button marked data-share-hide).
+  style_ ".share-view .detail-close-btn,.share-view [data-share-hide]{display:none!important}.share-view .urlPath{user-select:text}"
   shareTopBar $ case v of
     ShareLive{hoursLeft} -> Just hoursLeft
     _ -> Nothing
