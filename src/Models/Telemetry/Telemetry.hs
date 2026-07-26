@@ -37,7 +37,10 @@ module Models.Telemetry.Telemetry (
   Severity (..),
   Context (..),
   getDataPointsData,
-  spanRecordByName,
+  SpanMatch (..),
+  sdkSpanNames,
+  sdkSpanStoredName,
+  spanRecordInTrace,
   getTraceDetails,
   getEndpointTraceId,
   getTotalMetricsCount,
@@ -822,12 +825,34 @@ getSpanRecordsByTraceIds pid traceIds tme = do
       [HI.sql| AND context___trace_id = ANY(#{traceIdsList}) ORDER BY context___trace_id ASC, start_time ASC|]
 
 
-spanRecordByName :: DB es => Projects.ProjectId -> Text -> Text -> Eff es (Maybe OtelLogsAndSpans)
-spanRecordByName pid trId spanName = do
+-- | How 'spanRecordInTrace' picks its span within the trace.
+data SpanMatch = SpanByName Text | SpanBySpanId Text
+
+
+-- | Canonical stored name for the SDK payload span; ingestion (OtlpServer)
+-- renames every wire name in 'sdkSpanNames' to it, so store-side matches may
+-- use this name alone.
+sdkSpanStoredName :: Text
+sdkSpanStoredName = "monoscope.http"
+
+
+-- | Names the SDK payload span arrives under.
+sdkSpanNames :: [Text]
+sdkSpanNames = ["apitoolkit-http-span", sdkSpanStoredName]
+
+
+-- | Earliest span in a trace matching by name or span id, bounded to a timestamp
+-- window so both stores partition-prune instead of scanning the trace's history.
+spanRecordInTrace :: DB es => Projects.ProjectId -> Text -> (UTCTime, UTCTime) -> SpanMatch -> Eff es (Maybe OtelLogsAndSpans)
+spanRecordInTrace pid trId (lo, hi) match =
   Hasql.interpOne
-    $ [HI.sql| SELECT |]
-    <> otelSpanColsSql
-    <> [HI.sql| FROM otel_logs_and_spans where project_id=#{pid.toText} and context___trace_id = #{trId} and name=#{spanName} LIMIT 1|]
+    $ selectOtelSpans pid.toText lo hi
+    $ [HI.sql| AND context___trace_id = #{trId} |]
+    <> ( case match of
+           SpanByName n -> [HI.sql| AND name = #{n} |]
+           SpanBySpanId s -> [HI.sql| AND context___span_id = #{s} |]
+       )
+    <> [HI.sql| ORDER BY start_time ASC LIMIT 1 |]
 
 
 getDataPointsData :: (DB es, Labeled "timefusion" Hasql :> es, Time.Time :> es) => Bool -> Projects.ProjectId -> (Maybe UTCTime, Maybe UTCTime) -> Eff es [MetricDataPoint]

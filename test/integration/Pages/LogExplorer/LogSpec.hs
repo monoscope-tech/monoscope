@@ -33,6 +33,8 @@ import Relude
 import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext (..), EnvConfig (..))
 import Test.Hspec
+import "base64" Data.Base64.Types qualified as B64T
+import "base64" Data.ByteString.Base64 qualified as B64
 
 
 -- Convert the data handler's cursor (last-row timestamp text) into the UTCTime
@@ -534,6 +536,62 @@ spec = around withTestResources do
       expectFound item2
       (_, miss2) <- testServant (withTfReads False) $ LogItem.expandAPIlogItemH testPid rid (addUTCTime 1 ts) Nothing Nothing
       expectNotFound "PG" miss2
+
+    -- Regression: the SDK payload span ("monoscope.http") confused users — the
+    -- parent request's panel showed empty body tabs (the merge only fired when
+    -- http.request.method was absent, which auto-instrumented spans always have),
+    -- and clicking the SDK span showed a synthetic span instead of the request.
+    it "merges SDK payload bodies into the parent request and anchors SDK-span clicks on the parent" \tr -> do
+      apiKey <- createTestAPIKey tr testPid "sdk-merge-key"
+      -- Ids are hex-decoded on ingest, so stored ids are dash-free — generate them that way.
+      let hexId = T.replace "-" "" . UUID.toText <$> nextRandom
+      (trId, rootSid, sdkSid) <- (,,) <$> hexId <*> hexId <*> hexId
+      let b64 = B64T.extractBase64 . B64.encodeBase64 . encodeUtf8 @Text
+      ingestSpanLinked tr apiKey trId rootSid Nothing "GET /api/orders" [("http.request.method", "GET"), ("http.route", "/api/orders")] frozenTime
+      ingestSpanLinked tr apiKey trId sdkSid (Just rootSid) "apitoolkit-http-span" [("http.request.body", b64 "{\"item\":\"apple\"}"), ("http.response.body", b64 "{\"ok\":true}"), ("http.request.method", "GET")] (addUTCTime 0.01 frozenTime)
+      rows <-
+        withPool tr.trPool
+          $ DBT.query
+            [sql| SELECT id, timestamp, name, context___span_id FROM otel_logs_and_spans WHERE project_id = ? AND context___trace_id = ? ORDER BY start_time |]
+            (testPid, trId)
+          :: IO (V.Vector (UUID.UUID, UTCTime, Text, Text))
+      [(rootId, rootTs, rootName, _), (sdkId, sdkTs, sdkName, sdkStoredSid)] <- pure $ V.toList rows
+      rootName `shouldBe` "GET /api/orders"
+      sdkName `shouldBe` "monoscope.http"
+
+      -- Both clicks land on the same panel: anchored on the request, SDK bodies attached.
+      let assertAnchored = \case
+            LogItem.SpanItemExpanded _ anchor sdkM _ -> do
+              anchor.name `shouldBe` Just "GET /api/orders"
+              (.name) <$> sdkM `shouldBe` Just (Just "monoscope.http")
+            _ -> expectationFailure "expected SpanItemExpanded anchored on the request span"
+
+      -- Clicking the request span: bodies borrowed from the nested SDK span.
+      (_, rootItem) <- testServant tr $ LogItem.expandAPIlogItemH testPid rootId rootTs Nothing (Just "tab-req")
+      assertAnchored rootItem
+      let rootHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml rootItem
+      rootHtml `shouldSatisfy` T.isInfixOf "apple"
+
+      -- Clicking the SDK span: panel anchors on the parent request, bodies intact.
+      (_, sdkItem) <- testServant tr $ LogItem.expandAPIlogItemH testPid sdkId sdkTs Nothing (Just "tab-req")
+      assertAnchored sdkItem
+
+      -- Waterfall keyboard-nav onto the SDK span also anchors on the parent request.
+      (_, navDetails) <- testServant tr $ TelemetryPage.traceH testPid trId (Just rootTs) (Just sdkStoredSid) (Just "next")
+      case navDetails of
+        TelemetryPage.SpanDetails _ target sdkM -> do
+          target.name `shouldBe` Just "GET /api/orders"
+          (.name) <$> sdkM `shouldBe` Just (Just "monoscope.http")
+        _ -> expectationFailure "expected SpanDetails anchored on the request span"
+
+      -- The waterfall collapses the redundant SDK row into its parent.
+      (_, traceDetails) <- testServant tr $ TelemetryPage.traceH testPid trId (Just rootTs) Nothing Nothing
+      case traceDetails of
+        TelemetryPage.TraceDetails{} -> do
+          let traceHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml traceDetails
+          traceHtml `shouldSatisfy` T.isInfixOf "GET /api/orders"
+          traceHtml `shouldNotSatisfy` T.isInfixOf "monoscope.http"
+        _ -> expectationFailure "expected trace details"
 
     it "flags ERROR-severity logs in the trace-view 'errors' column" \tr -> do
       apiKey <- createTestAPIKey tr testPid "err-log-badge-key"

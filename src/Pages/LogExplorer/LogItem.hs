@@ -1,5 +1,7 @@
 module Pages.LogExplorer.LogItem (
   expandAPIlogItemH,
+  anchorSdkSpan,
+  spanEndOrCap,
   ApiItemDetailed (..),
   expandedItemView,
   getServiceName,
@@ -9,7 +11,7 @@ module Pages.LogExplorer.LogItem (
   spanBadge,
 ) where
 
-import Control.Lens (filtered, (^..), (^?))
+import Control.Lens (filtered, has, (^..), (^?), _Just)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KEM
 import Data.Aeson.Lens (key, _Array, _String)
@@ -20,7 +22,7 @@ import Data.Foldable.WithIndex (ifor_)
 import Data.HashMap.Strict qualified as HM
 import Data.Map qualified as Map
 import Data.Text qualified as T
-import Data.Time (UTCTime)
+import Data.Time (UTCTime, addUTCTime)
 import Data.UUID qualified as UUID
 import Effectful.Reader.Static qualified
 import Lucid
@@ -82,15 +84,45 @@ expandAPIlogItemH pid rdId timestamp _ tabM = withSpan_ "log-explorer.detail" []
     Just record
       | record.kind == Just "log" -> addRespHeaders $ LogItemExpanded pid record tabM
       | otherwise -> do
-          let attrs = unAesonTextMaybe record.attributes
-              needsFetch =
-                any (\(t, _, _, _) -> t == "HTTP") (getRequestDetails attrs)
-                  && (record.name `notElem` ([Just "apitoolkit-http-span", Just "monoscope.http"] :: [Maybe Text]))
-                  && isNothing (atMapText "http.request.method" attrs)
-          aptSpan <- case record.context >>= (.trace_id) of
-            Just trId | needsFetch -> tf $ Telemetry.spanRecordByName pid trId "monoscope.http"
-            _ -> pure Nothing
-          addRespHeaders $ SpanItemExpanded pid record aptSpan tabM
+          let fetchIn window match = maybe (pure Nothing) (\trId -> tf $ Telemetry.spanRecordInTrace pid trId window match) (record.context >>= (.trace_id) >>= guarded (not . T.null))
+          (anchor, sdkSpan) <-
+            anchorSdkSpan
+              (fetchIn (addUTCTime (-300) record.timestamp, addUTCTime 1 record.timestamp) . Telemetry.SpanBySpanId)
+              (fetchIn (addUTCTime (-1) record.start_time, addUTCTime 1 (spanEndOrCap record)) (Telemetry.SpanByName Telemetry.sdkSpanStoredName))
+              record
+          addRespHeaders $ SpanItemExpanded pid anchor sdkSpan tabM
+
+
+-- | Upper bound of a span's time window when end_time is missing (open span): cap at +300s.
+spanEndOrCap :: Telemetry.OtelLogsAndSpans -> UTCTime
+spanEndOrCap r = fromMaybe (addUTCTime 300 r.start_time) r.end_time
+
+
+-- | Anchor the detail view on the real request span: the SDK payload span
+-- ("monoscope.http") is a synthetic carrier for request/response bodies, so a
+-- click on it resolves to its (HTTP) parent, and an HTTP span without captured
+-- bodies borrows them from the SDK span nested inside its time window. Shared by
+-- 'expandAPIlogItemH' (DB-backed lookups) and 'Pages.Telemetry.traceH' (in-memory
+-- over the loaded trace).
+anchorSdkSpan
+  :: Monad m
+  => (Text -> m (Maybe Telemetry.OtelLogsAndSpans))
+  -- ^ parent lookup by span id
+  -> m (Maybe Telemetry.OtelLogsAndSpans)
+  -- ^ SDK-span lookup within the record's window
+  -> Telemetry.OtelLogsAndSpans
+  -> m (Telemetry.OtelLogsAndSpans, Maybe Telemetry.OtelLogsAndSpans)
+anchorSdkSpan lookupParent lookupSdk record
+  | record.name `elem` map Just Telemetry.sdkSpanNames = do
+      parentM <- maybe (pure Nothing) lookupParent (record.parent_id >>= guarded (not . T.null))
+      pure $ case parentM of
+        Just parent | isHttpRec parent -> (parent, Just record)
+        _ -> (record, Nothing)
+  | isHttpRec record && not hasBodies = (record,) <$> lookupSdk
+  | otherwise = pure (record, Nothing)
+  where
+    isHttpRec r = any (\(t, _, _, _) -> t == "HTTP") (getRequestDetails (unAesonTextMaybe r.attributes))
+    hasBodies = any (\k -> has (_Just . key k) (unAesonTextMaybe record.body)) ["request_body", "response_body"]
 
 
 data ApiItemDetailed

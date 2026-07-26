@@ -47,7 +47,6 @@ import Pkg.Components.Table (Table (..))
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (unAesonTextMaybe)
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Tracing (withSpan_)
@@ -328,8 +327,13 @@ traceH pid trId timestamp spanIdM nav = do
         spanRecords' <- V.fromList <$> Telemetry.getSpanRecordsByTraceId useTf pid trId timestamp now
         let sid = fromMaybe "" spanIdM
             matchesSpan x = maybe False (\s -> s.span_id == Just sid) x.context
-            targetSpan = fromMaybe (V.head spanRecords') (V.find matchesSpan spanRecords')
-            atpSpan = V.find (\x -> x.name == Just "monoscope.http" || isJust (Telemetry.atMapText "http.request.method" (unAesonTextMaybe x.attributes))) spanRecords'
+            clicked = fromMaybe (V.head spanRecords') (V.find matchesSpan spanRecords')
+            bySpanId i = V.find (\x -> (x.context >>= (.span_id)) == Just i) spanRecords'
+            sdkNear =
+              V.find
+                (\x -> x.name == Just Telemetry.sdkSpanStoredName && x.start_time >= addUTCTime (-1) clicked.start_time && x.start_time <= addUTCTime 1 (LogItem.spanEndOrCap clicked))
+                spanRecords'
+            (targetSpan, atpSpan) = runIdentity $ LogItem.anchorSdkSpan (pure . bySpanId) (pure sdkNear) clicked
         addRespHeaders $ SpanDetails pid targetSpan atpSpan
       else do
         traceItemM <- Telemetry.getTraceDetails useTf pid trId timestamp now
@@ -818,8 +822,10 @@ traceDetailsLoading_ =
 
 
 tracePage :: Projects.ProjectId -> Telemetry.Trace -> V.Vector Telemetry.SpanRecord -> Html ()
-tracePage pid traceItem spanRecords = do
-  let serviceData = V.toList $ getServiceData <$> spanRecords
+tracePage pid traceItem rawSpanRecords = do
+  -- Collapse once so every tab (waterfall, timeline, services list) hides the SDK row.
+  let spanRecords = collapseSdkSpans rawSpanRecords
+      serviceData = V.toList $ getServiceData <$> spanRecords
       serviceNames = V.fromList $ ordNub $ (.name) <$> serviceData
       serviceColors = getServiceColors serviceNames
       rootSpans = buildSpanTree spanRecords
@@ -1180,6 +1186,21 @@ stBox label value iconM =
 
 syntheticMissingParentKey :: Text
 syntheticMissingParentKey = "monoscope.synthetic.missing_parent"
+
+
+-- | The SDK payload span ("monoscope.http") is a synthetic carrier for request/
+-- response bodies, not a real operation — its bodies surface on the parent
+-- request's detail panel. When that parent is present in the trace, drop the
+-- SDK row and graft its children onto the parent so the waterfall shows only
+-- real work.
+collapseSdkSpans :: V.Vector Telemetry.SpanRecord -> V.Vector Telemetry.SpanRecord
+collapseSdkSpans spans =
+  let ids = S.fromList $ V.toList $ (.spanId) <$> spans
+      remap = Map.fromList [(sp.spanId, p) | sp <- V.toList spans, sp.spanName == Telemetry.sdkSpanStoredName, Just p <- [sp.parentSpanId], not (T.null p), S.member p ids]
+      -- Nearest surviving ancestor: chained SDK spans remap through each other.
+      resolve p = maybe p resolve (Map.lookup p remap)
+   in V.map (\sp -> maybe sp (\p -> sp{Telemetry.parentSpanId = Just (resolve p)}) (sp.parentSpanId >>= (`Map.lookup` remap)))
+        $ V.filter (\sp -> not (Map.member sp.spanId remap)) spans
 
 
 -- | Orphan handling lives in 'buildSpanTree' (synthetic placeholders) — keep

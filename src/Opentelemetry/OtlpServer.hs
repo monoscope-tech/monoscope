@@ -1212,7 +1212,7 @@ convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
       !attributes = jsonToMap $ removeProjectId $ keyValueToJSON $ pSpan ^. PTF.attributes
       spanName' = pSpan ^. PTF.name
       -- "monoscope.http" included so re-ingested spans get consistent body/attribute processing
-      isOurSdkSpan = spanName' `elem` ["apitoolkit-http-span", "monoscope.http"]
+      isOurSdkSpan = spanName' `elem` Telemetry.sdkSpanNames
       (req, res) = case Map.lookup "http" (fromMaybe Map.empty attributes) of
         Just (AE.Object http) -> (KEM.lookup "request" http, KEM.lookup "response" http)
         _ -> (Nothing, Nothing)
@@ -1305,7 +1305,7 @@ convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
           , end_time = Just validEndTime
           , events = fmap AesonText eventsJson
           , links = linksJson
-          , name = Just $ if isOurSdkSpan then "monoscope.http" else spanName'
+          , name = Just $ if isOurSdkSpan then Telemetry.sdkSpanStoredName else spanName'
           , parent_id = parentId
           , summary = V.empty -- Will be populated after creation
           , date = validStartTime
