@@ -901,13 +901,15 @@ runInfraHealthCheck authCtx = do
       window = formatUTC start <> " -> " <> formatUTC end <> " UTC"
       isolate f = either (\(e :: SomeException) -> (["!! check errored: " <> show e], [])) id <$> tryAny f
   -- Parity only means anything while both stores are dual-written. Once one leg
-  -- is disabled (TF-only or PG-only), the "behind" store is empty by design, so
-  -- skip the check rather than fire a 100%-drift false alarm.
+  -- is disabled the "behind" store is empty by design, so cross-store drift
+  -- would be a 100% false alarm — but SKIPPING outright is what left prod with
+  -- no loss detector at all on 2026-07-27. Single-store mode falls back to
+  -- per-project continuity against TF's own recent baseline.
   let dualWrite = authCtx.config.enablePostgresTelemetryWrites && authCtx.config.enableTimefusionWrites
   (pAlerts, pInfo) <-
     if dualWrite
       then isolate (checkParity start end)
-      else pure ([], ["parity: skipped (single-store writes)"])
+      else isolate (checkIngestContinuity start end)
   (kAlerts, kInfo) <- isolate (checkKafkaHealth authCtx.config)
   let alerts = pAlerts <> kAlerts
       info = pInfo <> kInfo
@@ -975,6 +977,88 @@ checkParity start end = do
       errAlert = ["🔴 TF unreachable/errored for " <> show (length tfErrs) <> " projects (e.g. " <> T.intercalate ", " (take 3 tfErrs) <> ")" | not (null tfErrs)]
       stallAlert = ["🔴 TF INGEST STALLED: TS=" <> show tsTotal <> " rows, TF=0 over top " <> show (length okRows) <> " projects" | tsTotal > 0, tfTotal == 0, null tfErrs]
   pure (errAlert <> stallAlert <> driftAlerts, ["parity: TS=" <> show tsTotal <> " TF=" <> show tfTotal <> " over top " <> show (length okRows) <> " projects"])
+
+
+-- | Projects whose current-window row count collapsed against their OWN recent
+-- baseline. The single-store replacement for 'parityDrift': with Timescale
+-- writes off there is no second store to compare against, so a project's own
+-- recent throughput becomes the reference.
+--
+-- Only a DROP is a loss signal — a spike is a traffic change, not missing data.
+-- @minRows@ is applied to the baseline so a quiet project going quieter can't
+-- alarm. Input rows are @(project, baselinePerWindow, current)@.
+--
+-- The 2026-07-27 gap: ~25k rows/min collapsed to ~1k for nine minutes.
+--
+-- >>> continuityDrop 60.0 500 [("steady", 1000, 980), ("gap", 25000, 1000), ("quiet", 100, 0)]
+-- [("gap",25000,1000,96.0)]
+--
+-- A project that stops entirely is the loudest case, not an excluded one:
+--
+-- >>> continuityDrop 60.0 500 [("dead", 5000, 0)]
+-- [("dead",5000,0,100.0)]
+continuityDrop :: Double -> Int64 -> [(Text, Int64, Int64)] -> [(Text, Int64, Int64, Double)]
+continuityDrop dropPct minRows rows =
+  [ (pid, baseN, curN, pct)
+  | (pid, baseN, curN) <- rows
+  , baseN >= minRows
+  , let pct = fromIntegral (baseN - curN) / fromIntegral baseN * 100 :: Double
+  , pct > dropPct
+  ]
+
+
+-- | Single-store ingest continuity, TimeFusion against its own recent history.
+-- Runs when dual-write is off, where 'checkParity' has nothing to compare and
+-- would otherwise skip — which is exactly why the 2026-07-27 loss (~200k rows,
+-- 9 minutes, ~90% of ingest) triggered no alert: going TF-only silently
+-- retired the only automated loss detector.
+--
+-- Two grouped TF queries (not the N+1 fan-out 'checkParity' pays): top projects
+-- by volume over a multi-hour baseline, then the same projects over the window.
+checkIngestContinuity :: UTCTime -> UTCTime -> ATBackgroundCtx ([Text], [Text])
+checkIngestContinuity start end = do
+  let minRows = 500 :: Int64 -- baseline floor: ignore low-volume projects
+      dropPct = 60.0 :: Double
+      topN = 30 :: Int64
+      baselineHours = 6 :: Int64
+      baseStart = addUTCTime (negate (fromIntegral baselineHours * 3600)) start
+      pct1 x = show (fromIntegral (round (x * 10) :: Int) / 10 :: Double)
+      tfCounts s e =
+        withHasqlTimefusion
+          True
+          ( Hasql.interp
+              [HI.sql|SELECT project_id::text, count(*)::int8 FROM otel_logs_and_spans
+                 WHERE timestamp >= #{s}::timestamptz AND timestamp < #{e}::timestamptz
+                 GROUP BY project_id ORDER BY 2 DESC LIMIT #{topN}|]
+          )
+  baseRows :: [(Text, Int64)] <- tfCounts baseStart start
+  curRows :: [(Text, Int64)] <- tfCounts start end
+  let curMap = HM.fromList curRows
+      -- Baseline is per-window (the window is one hour; see runInfraHealthCheck).
+      rows = [(pid, baseN `div` baselineHours, HM.lookupDefault 0 pid curMap) | (pid, baseN) <- baseRows]
+      baseTotal = sum [b | (_, b, _) <- rows]
+      curTotal = sum [c | (_, _, c) <- rows]
+      dropAlerts =
+        [ "🔴 INGEST DROP "
+          <> pct1 pct
+          <> "% for "
+          <> pid
+          <> " (baseline≈"
+          <> show baseN
+          <> "/h, got "
+          <> show curN
+          <> ") — rows may have been acked but never stored"
+        | (pid, baseN, curN, pct) <- continuityDrop dropPct minRows rows
+        ]
+      stallAlert =
+        [ "🔴 TF INGEST STALLED: baseline≈" <> show baseTotal <> "/h across " <> show (length rows) <> " projects, got 0"
+        | baseTotal > 0
+        , curTotal == 0
+        ]
+  pure
+    ( stallAlert <> dropAlerts
+    , ["continuity: " <> show curTotal <> " rows vs baseline≈" <> show baseTotal <> "/h over " <> show (length rows) <> " projects"]
+    )
 
 
 -- | Kafka pipeline liveness: the mainline + DLQ-replay consumer groups must have
