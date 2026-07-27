@@ -1040,14 +1040,14 @@ checkIngestContinuity start end = do
       curTotal = sum [c | (_, _, c) <- rows]
       dropAlerts =
         [ "🔴 INGEST DROP "
-          <> pct1 pct
-          <> "% for "
-          <> pid
-          <> " (baseline≈"
-          <> show baseN
-          <> "/h, got "
-          <> show curN
-          <> ") — rows may have been acked but never stored"
+            <> pct1 pct
+            <> "% for "
+            <> pid
+            <> " (baseline≈"
+            <> show baseN
+            <> "/h, got "
+            <> show curN
+            <> ") — rows may have been acked but never stored"
         | (pid, baseN, curN, pct) <- continuityDrop dropPct minRows rows
         ]
       stallAlert =
