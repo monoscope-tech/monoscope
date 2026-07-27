@@ -453,14 +453,33 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds inva
 
     let !decodePoison = [(ackId, raw, toText err) | (ackId, raw, Left err) <- decodedMsgs]
         !invalidPoison = [(ackId, raw, err) | (ackId, raw, Right req) <- decodedMsgs, Just err <- [invalidReason req]]
-        !writeReady = [(ackId, raw, convert fallbackTime projectCachesMap keyToIdMap req) | (ackId, raw, Right req) <- decodedMsgs, isNothing (invalidReason req)]
+        !converted = [(ackId, raw, req, convert fallbackTime projectCachesMap keyToIdMap req) | (ackId, raw, Right req) <- decodedMsgs, isNothing (invalidReason req)]
+        -- "Converted to zero rows" is NOT proof there was nothing to write.
+        -- A payload that carried an API key or an at-project-id but produced no
+        -- rows was DROPPED: its project never resolved (a cached negative entry,
+        -- a key racing its own creation, a lookup that returned no rows). Acking
+        -- that commits the offset and destroys the data with no DLQ entry — the
+        -- 2026-07-27 loss (~200k rows / 10 tenants / 9 min, zero failure signal
+        -- anywhere in the pipeline). Route it to the DLQ so the bytes survive.
+        !dropPoison =
+          [ (ackId, raw, "unresolved project: payload carried telemetry but converted to zero rows")
+          | (ackId, raw, req, recs) <- converted
+          , V.null recs
+          , not (V.null (extractKeys req)) || not (null (extractIds req))
+          ]
+        !dropAckIds = HS.fromList [ackId | (ackId, _, _) <- dropPoison]
+        !writeReady = [(ackId, raw, recs) | (ackId, raw, _, recs) <- converted, not (HS.member ackId dropAckIds)]
         !writeAckIds = [ackId | (ackId, _, _) <- writeReady]
         !allEmpty = all (\(_, _, recs) -> V.null recs) writeReady
 
     forM_ (decodePoison <> invalidPoison) \(_, raw, err) -> recordProtoError label (toString err) raw Log.logAttention
+    unless (null dropPoison)
+      $ Log.logAttention
+        "processList: payload carried telemetry but resolved to zero rows — routing to DLQ instead of acking"
+        (AE.object ["label" AE..= label, "dropped_messages" AE..= length dropPoison, "ack_ids" AE..= [a | (a, _, _) <- dropPoison]])
 
     if allEmpty
-      then pure (Right (writeAckIds, decodePoison <> invalidPoison))
+      then pure (Right (writeAckIds, decodePoison <> invalidPoison <> dropPoison))
       else do
         -- dbInsert duration is emitted as a separate trace line so dashboards
         -- alerting on per-batch DB latency keep their metric.
@@ -474,7 +493,7 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds inva
             -- from acks and added to the poison list (Pkg.Queue DLQs them).
             let writePoisonAcks = HS.fromList [a | (a, _, _) <- writePoison]
                 successAcks = filter (\a -> not (HS.member a writePoisonAcks)) writeAckIds
-             in Right (successAcks, decodePoison <> invalidPoison <> writePoison)
+             in Right (successAcks, decodePoison <> invalidPoison <> dropPoison <> writePoison)
   where
     cp suffix = fromString $ toString $ "processList:" <> label <> suffix
 

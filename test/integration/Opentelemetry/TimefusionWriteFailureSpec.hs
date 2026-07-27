@@ -353,3 +353,44 @@ spec = around withTestResources $ beforeWith mkResWithKey do
         case res of
           Right (acks, _) -> acks `shouldBe` ["ack-pg-replay"]
           Left wf -> expectationFailure $ "expected Right (TF leg skipped); got Left " <> toString (Telemetry.writeFailureSummary wf)
+
+  -- 2026-07-27 incident. During a 9-minute TimeFusion OOM window, ~200k rows
+  -- across 10 tenants vanished with NO failure signal anywhere: spans were
+  -- produced to Kafka and consumed at a normal rate, offsets were committed,
+  -- and not one message reached otlp_deadletter / -retry-60s / -retry-600s /
+  -- -parking. TimeFusion's own durability was later cleared by a SIGKILL suite
+  -- (tests/kill_recovery.rs) — the writes were never attempted.
+  --
+  -- The path: 'projectIdsByProjectApiKeys' returns a clean 'Nothing' for a key
+  -- it can't resolve (cached negative entry, a key racing its own creation, a
+  -- blip that resolved to no rows). The key drops out of keyToId, 'convert'
+  -- yields zero records for a payload that definitely carried spans, and
+  -- processBatchPipeline's 'allEmpty' branch returns
+  -- @Right (writeAckIds, [])@ — acking every offset and dead-lettering nothing.
+  --
+  -- "Converted to zero rows" is NOT proof there was nothing to write. A payload
+  -- that carried telemetry but produced no rows is a DROP, and it must be
+  -- visible: routed to the DLQ (or at minimum surfaced as poison), never acked
+  -- as a healthy no-op. Silent is the one thing it may not be.
+  describe "unresolvable project key is never a silent ack (2026-07-27)" do
+    it "valid payload + unresolvable API key → not acked as a clean no-op" \(tr, _) -> do
+      -- A well-formed OTLP logs payload carrying a key that is NOT in the DB.
+      -- Byte-identical in shape to a real customer batch; only the key differs.
+      let unknownKey = "no-such-project-key-2026-07-27"
+          msgs = [validLogMsg unknownKey "ack-unresolvable"]
+      before <- countDemoSpans tr
+      res <- runTestBg frozenTime tr $ OtlpServer.processList msgs logsAttrs
+      after <- countDemoSpans tr
+      (after - before) `shouldBe` 0 -- nothing was written, by construction
+      case res of
+        -- The defect: every offset acked, nothing dead-lettered, no trace of
+        -- the drop. This is what let 9 minutes of customer data disappear.
+        Right (acks, []) ->
+          expectationFailure
+            $ "SILENT DROP: payload carried spans, zero rows were written, and processList acked "
+            <> show acks
+            <> " with an empty poison list — the offsets commit and the data is gone with no DLQ entry."
+        -- Acceptable: surfaced as poison (Pkg.Queue DLQs it) …
+        Right (_, poison) -> length poison `shouldBe` 1
+        -- … or surfaced as an outright write failure.
+        Left _ -> pass
