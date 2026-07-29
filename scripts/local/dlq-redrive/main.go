@@ -228,6 +228,9 @@ func main() {
 	for p, r := range ranges {
 		pOffsets[p] = kgo.NewOffset().At(r.start)
 	}
+	if os.Getenv("KGO_DEBUG") != "" {
+		commonOpts = append(commonOpts, kgo.WithLogger(kgo.BasicLogger(os.Stderr, kgo.LogLevelDebug, nil)))
+	}
 	cons, err := kgo.NewClient(append(commonOpts,
 		kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{*srcTopic: pOffsets}),
 		// Modest fetch sizes: the original 64-128MB values (tuned for a
@@ -317,6 +320,9 @@ func main() {
 			for _, e := range errs {
 				log.Printf("fetch err %s/%d: %v", e.Topic, e.Partition, e.Err)
 			}
+		}
+		if n := fetches.NumRecords(); n > 0 {
+			log.Printf("DEBUG fetched %d records", n)
 		}
 		fetches.EachRecord(func(rec *kgo.Record) {
 			if done {
