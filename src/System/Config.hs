@@ -21,6 +21,7 @@ import Effectful
 import Effectful.Fail (Fail)
 import Effectful.Ki qualified as Ki
 import Log (LogLevel (..))
+import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
@@ -300,6 +301,13 @@ instance Var LogLevel where
 
 
 -- Rename to AppContext
+
+-- | Everything that changes the api_catalog stats result: project, tab, sort, window,
+-- period, page offset. A tuple rather than a joined string so a new dimension is a type
+-- error at every construction site instead of a silently colliding cache key.
+type HostStatsKey = (Projects.ProjectId, Text, Text, Text, Text, Int)
+
+
 data AuthContext = AuthContext
   { env :: EnvConfig
   , pool :: Pool.Pool Connection
@@ -315,6 +323,10 @@ data AuthContext = AuthContext
   -- This describes pool wiring, hence it lives here and not on env-decoded EnvConfig.
   , projectCache :: Cache Projects.ProjectId Projects.ProjectCache
   , logsPatternCache :: Cache Projects.ProjectId (V.Vector Text)
+  , hostStatsCache :: Cache HostStatsKey [Endpoints.HostEvents]
+  -- ^ api_catalog per-host traffic stats. The underlying telemetry aggregate scans a
+  -- full window of spans (tens of seconds), so tab and period toggles must not re-run
+  -- it; a few minutes of staleness is invisible on a rolling 24h count.
   , projectKeyCache :: Cache Text (Maybe Projects.ProjectId)
   , extractionWorker :: ExtractionWorker.WorkerState Telemetry.OtelLogsAndSpans
   , traceSessionCache :: TraceSessionCache.TraceSessionCache
@@ -383,6 +395,7 @@ configToEnv config = do
   projectCache <- liftIO $ newCache (Just $ TimeSpec (30 * 60) 0)
   projectKeyCache <- liftIO $ newCache (Just $ TimeSpec (30 * 60) 0)
   logsPatternCache <- liftIO $ newCache (Just $ TimeSpec (30 * 60) 0)
+  hostStatsCache <- liftIO $ newCache (Just $ TimeSpec 300 0)
   extractionWorker <- liftIO $ ExtractionWorker.initWorkerState config.extractionWorkerShards config.extractionQueueCapacity
   traceSessionCache <- liftIO TraceSessionCache.newTraceSessionCache
   tfCircuit <- liftIO ExtractionWorker.newCircuitBreaker
@@ -405,6 +418,7 @@ configToEnv config = do
       , projectCache
       , projectKeyCache
       , logsPatternCache
+      , hostStatsCache
       , extractionWorker
       , traceSessionCache
       , tfCircuit

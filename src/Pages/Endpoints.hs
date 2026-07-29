@@ -1,6 +1,7 @@
 module Pages.Endpoints (apiCatalogH, HostEventsVM (..), endpointListGetH, CatalogList (..), EndpointRequestStatsVM (..), EnpReqStatsVM (..), apiCatalogBulkActionH, HostBulkActionForm (..), CatalogBulkAction (..)) where
 
 import Data.Aeson qualified as AE
+import Data.Cache qualified as Cache
 import Data.Default (def)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
@@ -27,8 +28,8 @@ import Utils (checkFreeTierStatus, faSprite_, formatWithCommas, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 
 
-apiCatalogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> ATAuthCtx (RespHeaders CatalogList)
-apiCatalogH pid sortM timeFilter currentTabM periodM skipM filterTabM = do
+apiCatalogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders CatalogList)
+apiCatalogH pid sortM timeFilter currentTabM periodM skipM filterTabM statsM = do
   (_, project, bw) <- mkPageCtx pid
 
   -- Legacy request_type=… kept alongside the unified ?filter=… for shared links.
@@ -51,20 +52,34 @@ apiCatalogH pid sortM timeFilter currentTabM periodM skipM filterTabM = do
         "+name" -> "name"
         _ -> "events"
 
-  useTf <- (.env.enableTimefusionReads) <$> ask @AuthContext
-  hostsAndEvents <- Endpoints.dependenciesAndEventsCount useTf pid outgoingM sortV (fromMaybe 0 skipM) filterV period showArchived
+  appCtx <- ask @AuthContext
+  -- The host list is a cheap Postgres read; the per-host counts and sparkline scan a
+  -- full window of spans in the telemetry store and can take tens of seconds. So the
+  -- first request renders a shell and HTMX immediately re-fetches it with stats=true,
+  -- and that (much slower) response is memoised for a few minutes so tab and period
+  -- toggles — and every other viewer of the project — read it for free.
+  let statsMode = if statsM == Just "true" then Endpoints.WithStats else Endpoints.ShellOnly
+      skip = fromMaybe 0 skipM
+      cacheKey = (pid, currentTab, sortV, filterV, period, skip)
+      fetch mode = Endpoints.dependenciesAndEventsCount mode appCtx.env.enableTimefusionReads pid outgoingM sortV skip filterV period showArchived
+  hostsAndEvents <- case statsMode of
+    Endpoints.ShellOnly -> fetch Endpoints.ShellOnly
+    Endpoints.WithStats ->
+      liftIO (Cache.lookup appCtx.hostStatsCache cacheKey)
+        >>= maybe (fetch Endpoints.WithStats >>= \fresh -> fresh <$ liftIO (Cache.insert appCtx.hostStatsCache cacheKey fresh)) pure
   freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
 
   currTime <- Time.currentTime
 
   let baseUrl = "/p/" <> pid.toText <> "/api_catalog?filter=" <> currentTab <> "&sort=" <> currentSort <> "&period=" <> period
+      statsUrl = baseUrl <> "&stats=true"
       -- On the Archived tab the action spans both directions, so we omit
       -- request_type and let the handler resolve direction per row.
       bulkActionItem =
         if showArchived
           then BulkAction{icon = Just "rotate-left", title = "Unarchive", uri = "/p/" <> pid.toText <> "/api_catalog/bulk_action/unarchive"}
           else BulkAction{icon = Just "archive", title = "Archive", uri = "/p/" <> pid.toText <> "/api_catalog/bulk_action/archive?request_type=" <> currentTab}
-      hostsVM = V.fromList $ map (\host -> HostEventsVM pid host filterV currentTab period currTime) hostsAndEvents
+      hostsVM = V.fromList $ map (\events -> HostEventsVM{events, currTime, statsMode}) hostsAndEvents
       tableActions =
         TableHeaderActions
           { baseUrl
@@ -80,12 +95,12 @@ apiCatalogH pid sortM timeFilter currentTabM periodM skipM filterTabM = do
           }
   let catalogTable =
         Table
-          { config = def{elemID = "apiCatalogForm", containerId = Just "apiCatalogContainer", addPadding = True, renderAsTable = True, bulkActionsInHeader = Just 0, refreshOnEvent = Just ("apiCatalogChanged", baseUrl)}
+          { config = def{elemID = "apiCatalogForm", containerId = Just "apiCatalogContainer", addPadding = True, renderAsTable = True, bulkActionsInHeader = Just 0, refreshOnEvent = Just ("apiCatalogChanged", statsUrl), deferredUrl = statsUrl <$ guard (statsMode == Endpoints.ShellOnly)}
           , columns = catalogColumns pid currentTab baseUrl period
           , rows = hostsVM
           , features =
               def
-                { rowId = Just \(HostEventsVM _ he _ _ _ _) -> he.host
+                { rowId = Just (.events.host)
                 , rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"]
                 , bulkActions = [bulkActionItem]
                 , search = Just ClientSide
@@ -124,19 +139,25 @@ apiCatalogH pid sortM timeFilter currentTabM periodM skipM filterTabM = do
                   }
           }
   case skipM of
-    Just _ -> addRespHeaders $ CatalogListRows $ TableRows{columns = catalogColumns pid currentTab baseUrl period, rows = hostsVM, emptyState = Nothing, renderAsTable = True, rowId = Just \(HostEventsVM _ he _ _ _ _) -> he.host, rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"], pagination = Nothing}
+    Just _ -> addRespHeaders $ CatalogListRows $ TableRows{columns = catalogColumns pid currentTab baseUrl period, rows = hostsVM, emptyState = Nothing, renderAsTable = True, rowId = Just (.events.host), rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"], pagination = Nothing}
     _ -> addRespHeaders $ CatalogListPage $ PageCtx bwconf catalogTable
 
 
-data HostEventsVM = HostEventsVM Projects.ProjectId Endpoints.HostEvents Text Text Text UTCTime
+-- | A catalog row: its traffic, the clock the "last seen" column renders against, and
+-- whether stats have arrived yet (shell rows render skeletons instead of zeros).
+data HostEventsVM = HostEventsVM
+  { events :: Endpoints.HostEvents
+  , currTime :: UTCTime
+  , statsMode :: Endpoints.StatsMode
+  }
 
 
 catalogColumns :: Projects.ProjectId -> Text -> Text -> Text -> [Column HostEventsVM]
 catalogColumns pid currentTab baseUrl period =
   [ col "Dependency" (renderCatalogMainCol pid currentTab) & withAttrs [class_ "min-w-0 max-w-0 w-full"]
-  , col ("Events (" <> period <> ")") (\(HostEventsVM _ he _ _ _ _) -> eventsCountCell_ (fromIntegral he.eventCount)) & withAttrs [class_ "w-24 max-md:hidden"]
-  , col "Last Seen" (\(HostEventsVM _ he _ _ _ currTime) -> lastSeenCell_ currTime he.last_seen) & withAttrs [class_ "w-24 max-md:hidden"]
-  , col "Activity" (\(HostEventsVM _ he _ _ _ _) -> activityCell_ he.activityBuckets) & withAttrs [class_ "w-40 max-md:hidden"] & withColHeaderExtra (periodToggle_ baseUrl "apiCatalogContainer" period)
+  , col ("Events (" <> period <> ")") (\vm -> statCell_ vm.statsMode $ eventsCountCell_ (fromIntegral vm.events.eventCount)) & withAttrs [class_ "w-24 max-md:hidden"]
+  , col "Last Seen" (\vm -> statCell_ vm.statsMode $ lastSeenCell_ vm.currTime vm.events.last_seen) & withAttrs [class_ "w-24 max-md:hidden"]
+  , col "Activity" (\vm -> statCell_ vm.statsMode $ activityCell_ vm.events.activityBuckets) & withAttrs [class_ "w-40 max-md:hidden"] & withColHeaderExtra (periodToggle_ baseUrl "apiCatalogContainer" period)
   ]
 
 
@@ -158,7 +179,8 @@ servicesBadges_ sourceLabel kindVal badgeHref svcs =
 
 
 renderCatalogMainCol :: Projects.ProjectId -> Text -> HostEventsVM -> Html ()
-renderCatalogMainCol pid _currentTab (HostEventsVM _ he _ _ _ _) = do
+renderCatalogMainCol pid _currentTab vm = do
+  let he = vm.events
   let svcs = V.toList he.services
       outgoing = he.outgoing
       reqTypeLabel = bool "Incoming" "Outgoing" outgoing :: Text
@@ -315,6 +337,14 @@ endpointColumns pid baseUrl period currentTab =
 
 
 -- Shared column cell renderers for both catalog and endpoint tables
+
+-- | Stats columns are empty in the shell render, so show a skeleton rather than a
+-- misleading "0"/"-" until the deferred stats response swaps in.
+statCell_ :: Endpoints.StatsMode -> Html () -> Html ()
+statCell_ Endpoints.WithStats h = h
+statCell_ Endpoints.ShellOnly _ = span_ [class_ "block h-4 w-12 rounded bg-fillWeak animate-pulse"] ""
+
+
 eventsCountCell_ :: Int -> Html ()
 eventsCountCell_ n =
   span_ [class_ $ "tabular-nums font-medium " <> style] $ toHtml $ formatWithCommas (fromIntegral n)

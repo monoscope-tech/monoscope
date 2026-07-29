@@ -133,6 +133,10 @@ data Config = Config
   -- ^ (event name, GET url): container re-fetches itself when the named HX-Trigger event
   -- fires anywhere on the page. /Requires/ 'containerId' to be set; without it the
   -- table has no element to attach the listener to and refreshOnEvent is a no-op.
+  , deferredUrl :: Maybe Text
+  -- ^ GET url the container re-fetches once on load, replacing itself. Lets a page ship a
+  -- cheap shell (rows without expensive stats) and fill it in afterwards, so a slow
+  -- aggregate never blocks first paint. Like 'refreshOnEvent', requires 'containerId'.
   , renderAsTable :: Bool -- True for table mode, False for list mode
   , addPadding :: Bool -- When True, wraps table in div with px-4 pt-4 pb-2 padding
   , bulkActionsInHeader :: Maybe Int -- Column index (0-based) to place bulk actions in header; Nothing uses toolbar
@@ -276,6 +280,7 @@ instance Default Config where
       , elemID = "tableContainer"
       , containerId = Nothing
       , refreshOnEvent = Nothing
+      , deferredUrl = Nothing
       , renderAsTable = False
       , addPadding = False
       , bulkActionsInHeader = Nothing
@@ -369,15 +374,14 @@ renderTable tbl =
         whenJust tbl.features.pagination renderPaginationFooter
         when (isJust tbl.features.treeConfig) treeScript
       paddedContent = if tbl.config.addPadding then div_ [class_ "max-md:px-2 px-4 pt-4 pb-2"] tableContent else tableContent
-      refreshAttrs cid = case tbl.config.refreshOnEvent of
-        Just (evt, url) ->
-          [ hxGet_ url
-          , hxTrigger_ $ evt <> " from:body"
-          , hxTarget_ "this"
-          , hxSwap_ "outerHTML"
-          , term "hx-select" $ "#" <> cid
-          ]
-        Nothing -> []
+      -- A deferred fill-in wins over the event refresh: the response it swaps in carries
+      -- its own refreshOnEvent, so the listener is re-established rather than lost.
+      refreshAttrs cid = case (tbl.config.deferredUrl, tbl.config.refreshOnEvent) of
+        (Just url, _) -> swapSelf url "load"
+        (Nothing, Just (evt, url)) -> swapSelf url $ evt <> " from:body"
+        (Nothing, Nothing) -> []
+        where
+          swapSelf url trig = [hxGet_ url, hxTrigger_ trig, hxTarget_ "this", hxSwap_ "outerHTML", term "hx-select" $ "#" <> cid]
    in case tbl.config.containerId of
         Just cid -> div_ ([class_ "w-full", id_ cid] <> refreshAttrs cid) paddedContent
         Nothing -> paddedContent

@@ -22,6 +22,7 @@ module ProcessMessage (
   pathMatchesTemplate,
   parseCanonicalPaths,
   tokenizeUrlPath,
+  hostFromRawUrl,
 )
 where
 
@@ -540,6 +541,7 @@ createSpanAttributes rm =
   let baseAttrs =
         nestedJsonFromDotNotation
           [ ("net.host.name", AE.String $ fromMaybe "" rm.host)
+          , ("server.address", AE.String serverAddress)
           , ("http.method", AE.String rm.method)
           , ("http.request.method", AE.String rm.method)
           , ("http.request.path_params", rm.pathParams)
@@ -561,6 +563,13 @@ createSpanAttributes rm =
         `lodashMerge` headersObj
         `lodashMerge` tagsObj
   where
+    -- Stable semconv name for what the SDK sends as host (net.host.name is deprecated).
+    -- Host resolution reads that column and nothing else, so it is populated here rather
+    -- than reconstructed at query time; rawUrl keeps hostless spans attributable.
+    serverAddress = case rm.host of
+      Just h | not (T.null h) -> h
+      _ -> hostFromRawUrl rm.rawUrl
+
     -- Process tags
     tagsObj = case rm.tags of
       Just tags -> nestedJsonFromDotNotation [("monoscope.tags", AE.Array $ V.fromList $ map AE.String tags)]
@@ -580,6 +589,29 @@ createSpanAttributes rm =
         respHeaders = extractHeaders "http.response.headers." rm.responseHeaders
        in
         reqHeaders `lodashMerge` respHeaders
+
+
+-- | The authority of an absolute URL, minus any port. Relative URLs have no authority,
+-- so they yield @""@ rather than being mistaken for a host.
+--
+-- >>> hostFromRawUrl "https://api.test.com/v1/users?page=1"
+-- "api.test.com"
+--
+-- The port is not part of the host, and neither is a trailing path:
+-- >>> hostFromRawUrl "http://api.test.com:8443/v1"
+-- "api.test.com"
+-- >>> hostFromRawUrl "https://api.test.com"
+-- "api.test.com"
+--
+-- No scheme means no authority to extract -- a path must never be read as a host:
+-- >>> hostFromRawUrl "/api/v1/users"
+-- ""
+-- >>> hostFromRawUrl ""
+-- ""
+hostFromRawUrl :: Text -> Text
+hostFromRawUrl url = case T.breakOn "://" url of
+  (_, rest) | not (T.null rest) -> T.takeWhile (\c -> c /= '/' && c /= ':') (T.drop 3 rest)
+  _ -> ""
 
 
 -- $setup

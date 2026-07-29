@@ -2,6 +2,7 @@ module Pages.Endpoints.ApiCatalogSpec (spec) where
 
 import Data.Default (def)
 import Data.Aeson qualified as AE
+import Data.Text qualified as T
 import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -86,7 +87,7 @@ spec = sequential $ aroundAll withTestResources do
   describe "API Catalog and Endpoints" do
     it "returns empty list when no data exists" \tr -> do
       (_, catalogList) <- testServant tr $
-          ApiCatalog.apiCatalogH testPid Nothing Nothing Nothing Nothing Nothing Nothing
+          ApiCatalog.apiCatalogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       case catalogList of
         ApiCatalog.CatalogListPage (PageCtx _ tbl) ->
           length tbl.rows `shouldBe` 0
@@ -136,7 +137,7 @@ spec = sequential $ aroundAll withTestResources do
 
     it "returns hosts list after processing messages" \tr -> do
       (_, catalogList) <- testServant tr $
-          ApiCatalog.apiCatalogH testPid Nothing Nothing (Just "Incoming") Nothing Nothing Nothing
+          ApiCatalog.apiCatalogH testPid Nothing Nothing (Just "Incoming") Nothing Nothing Nothing Nothing
       case catalogList of
         ApiCatalog.CatalogListPage (PageCtx _ tbl) ->
           length tbl.rows `shouldBe` 2
@@ -147,16 +148,35 @@ spec = sequential $ aroundAll withTestResources do
       -- query joined spans to endpoints by (url_path, method) only — the bug
       -- that produced "every host shows the same total" — is caught here.
       (_, catalogList) <- testServant tr
-        $ ApiCatalog.apiCatalogH testPid Nothing Nothing (Just "Incoming") Nothing Nothing Nothing
+        $ ApiCatalog.apiCatalogH testPid Nothing Nothing (Just "Incoming") Nothing Nothing Nothing (Just "true")
       case catalogList of
         ApiCatalog.CatalogListPage (PageCtx _ tbl) -> do
-          let countOf host = sum
-                [ he.eventCount
-                | ApiCatalog.HostEventsVM _ he _ _ _ _ <- V.toList tbl.rows
-                , he.host == host
-                ]
+          let countOf host = sum [vm.events.eventCount | vm <- V.toList tbl.rows, vm.events.host == host]
           countOf "172.31.29.11" `shouldBe` 100
           countOf "api.test.com" `shouldBe` 100
+        _ -> expectationFailure "Expected CatalogListPage"
+
+    -- Perf guard: the default page load must not pay for the telemetry aggregate that
+    -- scans a full window of spans (measured at 20-107s on a busy project). It renders
+    -- the host list from Postgres with empty stats, and advertises the stats=true URL
+    -- that HTMX fetches afterwards. If someone makes the first load compute stats again,
+    -- eventCount becomes non-zero here and the page goes back to being unusably slow.
+    it "apiCatalog_defaultLoad_rendersShellWithoutTelemetryStats" \tr -> do
+      (_, shell) <- testServant tr
+        $ ApiCatalog.apiCatalogH testPid Nothing Nothing (Just "Incoming") Nothing Nothing Nothing Nothing
+      (_, withStats) <- testServant tr
+        $ ApiCatalog.apiCatalogH testPid Nothing Nothing (Just "Incoming") Nothing Nothing Nothing (Just "true")
+      case (shell, withStats) of
+        (ApiCatalog.CatalogListPage (PageCtx _ shellTbl), ApiCatalog.CatalogListPage (PageCtx _ statsTbl)) -> do
+          let counts tbl = map (.events.eventCount) $ V.toList tbl.rows
+          -- Same hosts in both, but only the deferred response carries traffic. Asserted
+          -- as a relationship, not absolute totals, so this stays a guard on the
+          -- shell/stats split rather than a second copy of the per-host count test.
+          length shellTbl.rows `shouldBe` length statsTbl.rows
+          counts shellTbl `shouldSatisfy` all (== 0)
+          counts statsTbl `shouldSatisfy` all (> 0)
+          shellTbl.config.deferredUrl `shouldSatisfy` maybe False ("stats=true" `T.isInfixOf`)
+          statsTbl.config.deferredUrl `shouldBe` Nothing
         _ -> expectationFailure "Expected CatalogListPage"
 
     it "creates anomalies automatically via database triggers" \tr -> do
@@ -303,11 +323,11 @@ spec = sequential $ aroundAll withTestResources do
 
     describe "host archiving" do
       let listHosts tr reqType filt = do
-            (_, cat) <- testServant tr $ ApiCatalog.apiCatalogH testPid Nothing Nothing (Just reqType) Nothing Nothing filt
+            (_, cat) <- testServant tr $ ApiCatalog.apiCatalogH testPid Nothing Nothing (Just reqType) Nothing Nothing filt Nothing
             case cat of
               ApiCatalog.CatalogListPage (PageCtx _ tbl) ->
-                pure $ V.toList $ V.map (\(ApiCatalog.HostEventsVM _ he _ _ _ _) -> he.host) tbl.rows
-              _ -> expectationFailure "Expected CatalogListPage" >> pure []
+                pure $ V.toList $ V.map (.events.host) tbl.rows
+              _ -> expectationFailure "Expected CatalogListPage" $> []
           bulk tr action reqType hosts = testServant tr $
             ApiCatalog.apiCatalogBulkActionH testPid action (Just reqType) (ApiCatalog.HostBulk{itemId = hosts})
           bulkAny tr action hosts = testServant tr $
@@ -352,7 +372,7 @@ spec = sequential $ aroundAll withTestResources do
         _ <- bulk tr "archive" "Incoming" ["172.31.29.11"]
         _ <- bulk tr "archive" "Outgoing" ["api.upstream.example"]
         archivedAny <- listHosts tr "Incoming" (Just "Archived")
-        archivedAny `shouldSatisfy` ((/= 0) . length)
+        archivedAny `shouldSatisfy` (not . null)
         _ <- bulkAny tr "unarchive" ["172.31.29.11", "api.upstream.example"]
         inActive <- listHosts tr "Incoming" Nothing
         outActive <- listHosts tr "Outgoing" Nothing
