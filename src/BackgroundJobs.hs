@@ -2131,10 +2131,12 @@ processEagerBatch batch shard
             dbErrorsJson = V.toList perRowErrorsJson
             dbNormPaths = V.toList normalizedPaths
             updateHashesSql =
-              -- DISTINCT makes re-application idempotent (TF's DML coalescer
-              -- contract: a failed drain retries whole groups).
+              -- @> guard makes re-application idempotent (TF's DML coalescer
+              -- contract: a failed drain retries whole groups). ARRAY(SELECT
+              -- DISTINCT ..) is unplannable on TF — use the same guard shape
+              -- as the tag-append below.
               [HI.sql| UPDATE otel_logs_and_spans o
-                    SET hashes = ARRAY(SELECT DISTINCT h FROM unnest(COALESCE(o.hashes, '{}'::text[]) || u.new_hashes) AS h)
+                    SET hashes = CASE WHEN o.hashes IS NULL THEN u.new_hashes ELSE o.hashes || u.new_hashes END
                     FROM (
                       SELECT span_id, trace_id, string_to_array(hash_text, chr(31)) AS new_hashes
                       FROM (
@@ -2148,7 +2150,8 @@ processEagerBatch batch shard
                       AND o.timestamp >= #{effectiveMinTs}
                       AND o.timestamp < #{batchMaxTsPad}
                       AND o.context___span_id = u.span_id
-                      AND o.context___trace_id = u.trace_id |]
+                      AND o.context___trace_id = u.trace_id
+                      AND NOT (COALESCE(o.hashes, '{}'::text[]) @> u.new_hashes) |]
             update1Sql =
               [HI.sql| UPDATE otel_logs_and_spans o
                     SET hashes = ARRAY(
