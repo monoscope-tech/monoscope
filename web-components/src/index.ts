@@ -1,6 +1,11 @@
 import './index.css';
 import './local-time';
 import './main';
+// Publishes window.flameGraphChart / window.waterFallGraphChart, which the trace
+// page's inline initTraceCharts calls. Must be eager: that script runs as soon as
+// the trace HTML is swapped in, so a lazy import would lose the race and the
+// waterfall would render its rows with no bars.
+import './charts';
 
 const components: Array<[string, () => Promise<unknown>]> = [
   ['[data-chart-widget], [data-widget]', () => import('./widgets')],

@@ -1647,11 +1647,11 @@ apiLogsPage page = do
                 else set my.checked to (localStorage.getItem('toggle-filter-checked') is 'true')
                 end
                 wait 300ms
-                if #filterElement call #filterElement.refreshLayout() end
+                js document.getElementById('filterElement')?.refreshLayout?.() end
               on change
                 call localStorage.setItem('toggle-filter-checked', my.checked)
                 wait 200ms
-                if #filterElement call #filterElement.refreshLayout() end
+                js document.getElementById('filterElement')?.refreshLayout?.() end
             |]
           ]
       span_ [class_ "text-strokeWeak "] "|"
