@@ -1881,10 +1881,18 @@ deduplicateByHash getHash = V.fromList . HM.elems . V.foldl' (\acc item -> HM.in
 -- partial index `idx_otel_unprocessed` and re-drives them through the
 -- extraction worker via `Telemetry.handOffBatches` (same code path as live
 -- ingestion).
+--
+-- The floor is `hashUpdateMaxAgeSecs`, not a fixed 6h: past that age the eager
+-- track skips the hash merge, so a re-drive can neither finish the row nor
+-- stamp `processed_at`. Re-driving them anyway is what turned this sweep into a
+-- perpetual re-send of the same work (oldest-first + LIMIT 1000 also starved
+-- the rows it *could* complete). Rows past the floor are counted and logged at
+-- attention instead of being silently abandoned.
 safetyNetReprocess :: Projects.ProjectId -> ATBackgroundCtx ()
 safetyNetReprocess pid = do
   ctx <- ask @Config.AuthContext
   let cutoff = ctx.config.processedAtCutoff
+      maxAgeSecs = fromIntegral ctx.config.hashUpdateMaxAgeSecs :: Double
   projectCacheVal <- liftIO $ Cache.fetchWithCache ctx.projectCache pid \pid' -> do
     mpjCache <- Projects.projectCacheByIdIO ctx.hasqlJobsPool pid'
     pure $ fromMaybe Projects.defaultProjectCache mpjCache
@@ -1900,10 +1908,26 @@ safetyNetReprocess pid = do
                 AND processed_at IS NULL
                 AND timestamp >= #{cutoff}
                 AND timestamp <  now() - interval '10 minutes'
-                AND timestamp >  now() - interval '6 hours'
+                AND timestamp >  now() - #{maxAgeSecs} * interval '1 second'
               ORDER BY timestamp
               LIMIT 1000 |]
         )
+  -- Bounded count so an unbounded backlog can't turn visibility into a seq scan.
+  abandoned <-
+    HI.getOneColumn
+      . HI.getOneRow
+      <$> Hasql.interp
+        [HI.sql| SELECT count(*)::int8 FROM (
+                   SELECT 1 FROM otel_logs_and_spans
+                   WHERE project_id = #{pid.toText}
+                     AND processed_at IS NULL
+                     AND timestamp >= #{cutoff}
+                     AND timestamp <= now() - #{maxAgeSecs} * interval '1 second'
+                   LIMIT 5000) s |]
+  Relude.when ((abandoned :: Int64) > 0)
+    $ Log.logAttention
+      "SafetyNetReprocess rows past hash-update age floor (not re-drivable)"
+      (AE.object ["project_id" AE..= pid.toText, "row_count" AE..= abandoned, "max_age_secs" AE..= maxAgeSecs])
   Relude.unless (V.null rows) $ do
     Log.logTrace "SafetyNetReprocess re-driving unprocessed rows" (AE.object ["project_id" AE..= pid.toText, "row_count" AE..= V.length rows])
     liftIO $ Telemetry.handOffBatches ctx.extractionWorker caches rows
@@ -2184,12 +2208,35 @@ processEagerBatch batch shard
                       AND o.timestamp <  #{batchMaxTsPad}
                       AND o.context___span_id = u.span_id
                       AND o.context___trace_id = u.trace_id |]
+            -- Bookkeeping is by attempt, not by rows affected: every derivation
+            -- above has completed for this batch, so `processed_at` must be
+            -- stamped even when the hash merge is gated off. Without this the
+            -- rows stay `processed_at IS NULL` and `safetyNetReprocess` re-drives
+            -- the same work on every tick forever — the sustained hash-append
+            -- UPDATE storm that OOM-killed TimeFusion on 2026-07-29.
+            markProcessedSql =
+              [HI.sql| UPDATE otel_logs_and_spans o
+                    SET processed_at = now()
+                    FROM (
+                      SELECT span_id, trace_id
+                      FROM (
+                        SELECT unnest(#{dbSpanIds}::text[]) AS span_id,
+                               unnest(#{dbTraceIds}::text[]) AS trace_id
+                      ) raw
+                      ORDER BY span_id, trace_id
+                    ) u
+                    WHERE o.project_id = #{pid.toText}
+                      AND o.timestamp >= #{effectiveMinTs}
+                      AND o.timestamp <  #{batchMaxTsPad}
+                      AND o.context___span_id = u.span_id
+                      AND o.context___trace_id = u.trace_id
+                      AND o.processed_at IS NULL |]
         rowsUpdated <-
-          if not ctx.config.enableHashUpdates || batch.batchMaxTs < hashCutoff
-            then pure 0
-            else dualExecPgTf ctx updateHashesSql <* pgOnlyExec update1Sql
+          if ctx.config.enableHashUpdates && batch.batchMaxTs >= hashCutoff
+            then dualExecPgTf ctx updateHashesSql <* pgOnlyExec update1Sql
+            else pgOnlyExec markProcessedSql
         -- The hash-only update is TF-compatible; PG retains the JSON/path enrichment.
-        Log.logTrace "Eager-track UPDATE-1 complete" (AE.object ["project_id" AE..= pid.toText, "span_count" AE..= V.length spans, "rows_updated" AE..= rowsUpdated, "skipped" AE..= (not ctx.config.enableHashUpdates || batch.batchMaxTs < hashCutoff)])
+        Log.logTrace "Eager-track UPDATE-1 complete" (AE.object ["project_id" AE..= pid.toText, "span_count" AE..= V.length spans, "rows_updated" AE..= rowsUpdated, "hash_merge_skipped" AE..= (not ctx.config.enableHashUpdates || batch.batchMaxTs < hashCutoff)])
 
         -- TODO(otel-metrics): emit counters for batches_processed, spans_processed here.
         -- Drain-track hand-off: buffer spans for pattern tagging (T.copy to unpin).
