@@ -634,6 +634,22 @@ migrateElasticsearchPathParts keyVals =
 -- Existing @exception.*@ fields win when both are present:
 -- >>> OS.migrateHttpSemanticConventions [("error.name", AE.String "TypeError"), ("exception.type", AE.String "DomainError")]
 -- [("error.name",String "TypeError"),("exception.type",String "DomainError")]
+--
+-- Legacy host attributes are copied onto @server.address@ (semconv 1.21) so host
+-- resolution reads a flat column instead of the attributes blob. Originals are kept:
+-- >>> OS.migrateHttpSemanticConventions [("net.host.name", AE.String "api.test.com")]
+-- [("net.host.name",String "api.test.com"),("server.address",String "api.test.com")]
+--
+-- @net.host.name@ outranks @http.host@ when both are present:
+-- >>> OS.migrateHttpSemanticConventions [("net.host.name", AE.String "api.test.com"), ("http.host", AE.String "proxy.test.com")]
+-- [("net.host.name",String "api.test.com"),("http.host",String "proxy.test.com"),("server.address",String "api.test.com")]
+--
+-- An existing @server.address@ is never overwritten, and @net.peer.name@ already maps
+-- onto it — so neither case emits a duplicate:
+-- >>> OS.migrateHttpSemanticConventions [("http.host", AE.String "proxy.test.com"), ("server.address", AE.String "real.test.com")]
+-- [("http.host",String "proxy.test.com"),("server.address",String "real.test.com")]
+-- >>> OS.migrateHttpSemanticConventions [("net.host.name", AE.String "api.test.com"), ("net.peer.name", AE.String "peer.test.com")]
+-- [("net.host.name",String "api.test.com"),("server.address",String "peer.test.com")]
 fieldMappingsMap :: HM.HashMap Text Text
 fieldMappingsMap =
   HM.fromList
@@ -745,15 +761,28 @@ migrateHttpSemanticConventions !keyVals =
             [("http.request.method", originalMethod)]
       _ -> []
 
+    -- Copy a legacy attribute onto its canonical semconv key, additively: the original
+    -- stays queryable and an existing canonical value is never overwritten.
+    pick k = HM.lookup k kvMap
+    emit target src = [(target, v) | not (HM.member target kvMap), Just v <- [src]]
+
     -- Browser SDKs use attributes.error.*; copy into OTel attributes.exception.*
     -- so the Issues pipeline has a single canonical namespace. Keeps the
     -- originals so bespoke queries / detail views that know about error.* still work.
     migrateBrowserError =
-      let pick k = HM.lookup k kvMap
-          emit target src = [(target, v) | not (HM.member target kvMap), Just v <- [src]]
-       in emit "exception.type" (pick "error.name" <|> pick "error.type")
-            ++ emit "exception.message" (pick "error.message")
-            ++ emit "exception.stacktrace" (pick "error.stacktrace" <|> pick "error.stack")
+      emit "exception.type" (pick "error.name" <|> pick "error.type")
+        ++ emit "exception.message" (pick "error.message")
+        ++ emit "exception.stacktrace" (pick "error.stacktrace" <|> pick "error.stack")
+
+    -- semconv 1.21 deprecated net.host.name/http.host in favour of server.address, which
+    -- means the same thing in both directions: the local server on a server span, the
+    -- remote one on a client span. Without this, host lives only in the attributes blob
+    -- and every query needing it pays to read that blob instead of the
+    -- attributes___server___address column.
+    migrateServerAddress
+      -- Already renamed onto server.address by fieldMappingsMap, so it counts as present.
+      | HM.member "net.peer.name" kvMap = []
+      | otherwise = emit "server.address" (pick "net.host.name" <|> pick "http.host")
 
     -- Derive client.address from common proxy/CDN request headers when the
     -- producer didn't already set it. Real client IPs land at the edge in
@@ -761,7 +790,7 @@ migrateHttpSemanticConventions !keyVals =
     -- the proxy's address (or nothing) in attributes___client___address.
     migrateClientAddress = deriveClientAddress kvMap
    in
-    mgVals ++ migrateHttpTarget ++ migrateMethodOther ++ migrateConnectionString ++ migrateElasticsearchPaths ++ migrateRedisIndex ++ migrateBrowserError ++ migrateClientAddress
+    mgVals ++ migrateHttpTarget ++ migrateMethodOther ++ migrateConnectionString ++ migrateElasticsearchPaths ++ migrateRedisIndex ++ migrateBrowserError ++ migrateServerAddress ++ migrateClientAddress
 
 
 -- | Derive @client.address@ from common proxy/CDN headers when not explicitly set.

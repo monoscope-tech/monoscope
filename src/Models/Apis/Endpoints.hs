@@ -8,6 +8,7 @@ module Models.Apis.Endpoints (
   bulkInsertHosts,
   countEndpointsForHost,
   dependenciesAndEventsCount,
+  StatsMode (..),
   archiveHosts,
   unarchiveHosts,
   endpointRequestStatsByProject,
@@ -49,9 +50,8 @@ import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (UUIDId (..), rawSql, showPGFloatArray)
+import Pkg.DeriveUtils (DB, UUIDId (..), rawSql, showPGFloatArray)
 import Relude
-import System.Types (DB)
 
 
 type EndpointId = UUIDId "endpoint"
@@ -165,35 +165,6 @@ data EndpointMetaRow = EndpointMetaRow
   }
   deriving stock (Generic)
   deriving anyclass (HI.DecodeRow)
-
-
--- | Resolve the remote host of a span. Mirrors the priority used by
--- 'ProcessMessage.hs:223' when stamping @apis.endpoints.host@ at ingest, so
--- the value computed here equals what's stored in @apis.hosts@.
--- Trailing entries (url.full / service.name) are legacy fallbacks for spans
--- emitted before the stamping logic existed; they're harmless when the
--- primary attributes are present. The @prefix@ is the column alias (e.g.
--- @"s."@) or empty for unaliased queries.
--- Uses chained @->@/@->>@ (not @#>>@): TimeFusion's VariantAwareExprPlanner only
--- rewrites @->@/@->>@ on the Variant @attributes@ column; @#>>@ falls through and
--- doesn't extract from it. Semantically identical to @#>>@ on Postgres.
-hostCoalesceExpr :: Text -> Text
-hostCoalesceExpr prefix =
-  "COALESCE(NULLIF("
-    <> prefix
-    <> "attributes->'net'->'host'->>'name',''), "
-    <> "NULLIF("
-    <> prefix
-    <> "attributes___server___address,''), "
-    <> "NULLIF("
-    <> prefix
-    <> "attributes->'http'->>'host',''), "
-    <> "NULLIF(split_part(split_part(split_part("
-    <> prefix
-    <> "attributes___url___full, '://', 2), '/', 1), ':', 1), ''), "
-    <> "NULLIF("
-    <> prefix
-    <> "resource___service___name,''), '')"
 
 
 -- | Rolling activity window for a period: (window start, bucket count, integer bucket
@@ -332,12 +303,19 @@ data HostTelRow = HostTelRow
   deriving anyclass (HI.DecodeRow)
 
 
+-- | Whether to pay for the telemetry-store aggregate. The host list itself comes from
+-- Postgres and is cheap; the per-host counts/sparkline scan a full window of spans and
+-- can take tens of seconds, so the page renders 'ShellOnly' first and fills in after.
+data StatsMode = ShellOnly | WithStats
+  deriving stock (Eq)
+
+
 -- | When @outgoingM@ is @Nothing@, both directions are returned (used for the
 -- combined Archived tab). Spans are attributed to a host using the same
 -- coalesce that ProcessMessage applies at ingest to set @apis.endpoints.host@
 -- (see 'src/ProcessMessage.hs:223'), so each row tallies only its own traffic.
-dependenciesAndEventsCount :: (DB es, Labeled "timefusion" Hasql :> es, Time :> es) => Bool -> Projects.ProjectId -> Maybe Bool -> Text -> Int -> Text -> Text -> Bool -> Eff es [HostEvents]
-dependenciesAndEventsCount useTf pid outgoingM sortT skip timeF period showArchived = do
+dependenciesAndEventsCount :: (DB es, Labeled "timefusion" Hasql :> es, Time :> es) => StatsMode -> Bool -> Projects.ProjectId -> Maybe Bool -> Text -> Int -> Text -> Text -> Bool -> Eff es [HostEvents]
+dependenciesAndEventsCount statsMode useTf pid outgoingM sortT skip timeF period showArchived = do
   now <- Time.currentTime
   let intervalDays = if timeF == "14D" then 14 else 1 :: Int
       windowStart = addUTCTime (negate $ fromIntegral (intervalDays * 86400)) now
@@ -345,19 +323,26 @@ dependenciesAndEventsCount useTf pid outgoingM sortT skip timeF period showArchi
       (start, numBuckets, width) = periodWindow period now
       startEpoch = epochSecs start
       directionClause = directionClauseSql outgoingM
-      hostExpr = rawSql (hostCoalesceExpr "s.")
       archivedClause = rawSql if showArchived then "archived_at IS NOT NULL" else "archived_at IS NULL"
   hosts :: [(Text, Bool)] <-
     Hasql.interp
       [HI.sql|
         SELECT host, outgoing FROM apis.hosts
         WHERE project_id = #{pid} AND host != '' ^{directionClause} AND ^{archivedClause}|]
-  tels :: [HostTelRow] <-
-    Hasql.withHasqlTimefusion useTf
-      $ Hasql.interp
-        [HI.sql|
+  tels :: [HostTelRow] <- case statsMode of
+    ShellOnly -> pure []
+    WithStats ->
+      Hasql.withHasqlTimefusion useTf
+        $ Hasql.interp
+          -- Host reads one flat column: every ingest path normalises the legacy semconv
+          -- host attributes (net.host.name, http.host, net.peer.name) onto server.address.
+          -- The COALESCE over JSON paths this replaced forced the wide @attributes@ blob to
+          -- be materialised for every span in the window (107s vs 21s on a busy project).
+          -- Spans written before that normalisation have no server.address and fall out as
+          -- the empty string (dropped below); they age out of the window on their own.
+          [HI.sql|
           WITH filtered AS (
-            SELECT ^{hostExpr} AS host,
+            SELECT COALESCE(s.attributes___server___address, '') AS host,
                    (s.kind = 'client') AS outgoing,
                    s.resource___service___name AS service,
                    floor((extract(epoch from s.timestamp) - #{startEpoch}) / #{width})::bigint AS bucket_idx,
@@ -382,10 +367,13 @@ dependenciesAndEventsCount useTf pid outgoingM sortT skip timeF period showArchi
               , services = V.fromList $ filter (/= h) $ ordNub $ mapMaybe (.service) rs
               }
       rows = map mk hosts
-      ordered = case sortT of
-        "first_seen" -> sortOn (fmap zonedTimeToUTC . (.first_seen)) rows
-        "last_seen" -> sortOn (Down . fmap zonedTimeToUTC . (.last_seen)) rows
-        _ -> sortOn (Down . (.eventCount)) rows
+      -- Shell rows carry no counts, so the traffic sorts would be arbitrary; order by
+      -- host instead to keep the placeholder stable until the stats swap arrives.
+      ordered = case (statsMode, sortT) of
+        (ShellOnly, _) -> sortOn (.host) rows
+        (WithStats, "first_seen") -> sortOn (fmap zonedTimeToUTC . (.first_seen)) rows
+        (WithStats, "last_seen") -> sortOn (Down . fmap zonedTimeToUTC . (.last_seen)) rows
+        (WithStats, _) -> sortOn (Down . (.eventCount)) rows
   pure $ take 200 $ drop skip ordered
 
 
