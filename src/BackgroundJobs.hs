@@ -1027,9 +1027,12 @@ checkIngestContinuity start end = do
         withHasqlTimefusion
           True
           ( Hasql.interp
+              -- ORDER BY count(*), not the ordinal: DataFusion can't resolve an
+              -- ordinal that points at a cast-wrapped aggregate (count(*)::int8)
+              -- and errors with "must appear in the GROUP BY clause".
               [HI.sql|SELECT project_id::text, count(*)::int8 FROM otel_logs_and_spans
                  WHERE timestamp >= #{s}::timestamptz AND timestamp < #{e}::timestamptz
-                 GROUP BY project_id ORDER BY 2 DESC LIMIT #{topN}|]
+                 GROUP BY project_id ORDER BY count(*) DESC LIMIT #{topN}|]
           )
   baseRows :: [(Text, Int64)] <- tfCounts baseStart start
   curRows :: [(Text, Int64)] <- tfCounts start end
