@@ -837,7 +837,9 @@ sparkline_ buckets
           barW = max 2 (120 `div` n - gap)
           barsEnd = n * (barW + gap)
           topPad = h - barZone
-          peakIdx = length $ takeWhile (/= peakVal) buckets
+          -- fall back to 0 when nothing matches peakVal (all-negative buckets,
+          -- where the seed 1 wins) so the marker stays on-chart
+          peakIdx = maybe 0 fst $ find ((== peakVal) . snd) $ zip [0 ..] buckets
           lineX1 = peakIdx * (barW + gap) + barW
           lineX2 = barsEnd + 2
           w = lineX2 + labelW

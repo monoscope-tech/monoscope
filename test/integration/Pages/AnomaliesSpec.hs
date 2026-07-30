@@ -340,6 +340,19 @@ spec = sequential $ aroundAll withTestResources do
     -- defaultRecommendedAction, so the detail page's "not yet LLM-enhanced" check
     -- never matched api_change issues and always rendered the boilerplate.
     it "api_change issues carry defaultRecommendedAction" \tr -> do
+      -- Seed through the real pipeline when running in isolation; the file's
+      -- earlier tests normally created the api_change issue already.
+      existing <- withResource tr.trPool \conn -> PGS.query conn
+        [sql| SELECT id FROM apis.issues WHERE project_id=? AND issue_type='api_change' |]
+        (Only testPid) :: IO [Only Issues.IssueId]
+      when (null existing) do
+        currentTime <- getCurrentTime
+        let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
+            reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
+        processMessagesAndBackgroundJobs tr [("m1", toStrict $ AE.encode reqMsg1)]
+        void $ runBackgroundJobsWhere frozenTime tr.trATCtx \case
+          BackgroundJobs.NewAnomaly{} -> True
+          _ -> False
       ras <- withResource tr.trPool \conn -> PGS.query conn
         [sql| SELECT DISTINCT recommended_action FROM apis.issues WHERE project_id=? AND issue_type='api_change' |]
         (Only testPid) :: IO [Only Text]
