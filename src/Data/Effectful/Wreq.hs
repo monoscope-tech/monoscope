@@ -109,7 +109,7 @@ runHTTPRecord ref = interpret $ \_ -> \case
     payload mk = renderBody . requestBody <$> mk defaultRequest
     renderBody = \case
       RequestBodyLBS b -> b
-      RequestBodyBS b -> LBS.fromStrict b
+      RequestBodyBS b -> fromStrict b
       _ -> "" -- streaming bodies aren't rendered; no current caller sends them
     record url getBody = liftIO do
       body <- getBody
