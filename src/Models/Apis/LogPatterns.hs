@@ -266,7 +266,7 @@ updateBaselineBatch pid rows
 upsertLogPatternBatch :: (DB es, Time :> es) => [UpsertPattern] -> Eff es Int64
 upsertLogPatternBatch ups = do
   now <- Time.currentTime
-  fmap sum $ forM (cap <$> dedup ups) \u ->
+  sum <$> forM (cap <$> dedup ups) \u ->
     Hasql.interpExecute
       [HI.sql| INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash, source_field, service_name, log_level, trace_id, sample_message, occurrence_count, last_seen_at, is_error)
         VALUES (#{u.projectId}, #{u.logPattern}, #{u.hash}, #{u.sourceField}, #{u.serviceName}, #{u.logLevel}, #{u.traceId}, #{u.sampleMessage}, #{u.eventCount}, #{now}, #{u.isError})
@@ -300,7 +300,7 @@ upsertHourlyStat pid sourceField patHash hourBucket count =
 -- | Batch version of upsertHourlyStat using executeMany.
 upsertHourlyStatBatch :: DB es => [(Projects.ProjectId, Text, Text, UTCTime, Int64)] -> Eff es Int64
 upsertHourlyStatBatch rows =
-  fmap sum $ forM (Map.toList deduped) \((pid, sf, ph, hb), ec) ->
+  sum <$> forM (Map.toList deduped) \((pid, sf, ph, hb), ec) ->
     Hasql.interpExecute
       [HI.sql| INSERT INTO apis.log_pattern_hourly_stats (project_id, source_field, pattern_hash, hour_bucket, event_count)
         VALUES (#{pid}, #{sf}, #{ph}, #{hb}, #{ec})

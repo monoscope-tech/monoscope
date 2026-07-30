@@ -579,7 +579,7 @@ queryEvents pid queryM sinceM fromM toM sourceM limitM withChildrenM includeAttr
       -- trace-tree rows include synth headers + descendants.
       hasKqlLimit = any (\case TakeCommand{} -> True; _ -> False) queryAST
       queryAST' = if hasKqlLimit then queryAST else queryAST <> [TakeCommand (min defaultQueryLimit (fromMaybe 100 limitM))]
-  result <- LogQueries.selectLogTable pid queryAST' (toQText queryAST') Nothing (fromD, toD) (if fromMaybe False includeAttributesM then ["attributes"] else []) (parseMaybe pSource =<< sourceM) Nothing
+  result <- LogQueries.selectLogTable pid queryAST' (toQText queryAST') Nothing (fromD, toD) ["attributes" | fromMaybe False includeAttributesM] (parseMaybe pSource =<< sourceM) Nothing
   case result of
     Left err -> throwError $ translateQueryError err
     -- Default to exact-match (no trace expansion); UI passes True via apiLogH.
@@ -1457,7 +1457,7 @@ apiLogsPage :: ApiLogsPageData -> Html ()
 apiLogsPage page = do
   sectionWrapper_ do
     template_ [id_ "loader-tmp"] $ loadingIndicator_ LdMD LdDots
-    template_ [id_ "trace-loading-skeleton"] $ traceLoadingSkeleton_
+    template_ [id_ "trace-loading-skeleton"] traceLoadingSkeleton_
     div_ [class_ "fixed z-[9999] hidden right-0 w-max h-max border rounded top-32 bg-bgBase shadow-lg", id_ "sessionPlayerWrapper"] do
       termRaw "session-replay" [id_ "sessionReplay", class_ "shrink-1 flex flex-col", term "projectId" page.pid.toText, term "containerId" "sessionPlayerWrapper"] ("" :: Text)
     shareLogModal

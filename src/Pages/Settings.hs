@@ -271,11 +271,11 @@ apiPostH pid apiKeyForm = do
 
 
 apiDeleteH :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (RespHeaders ApiMut)
-apiDeleteH pid keyid = apiKeySetActive pid ProjectApiKeys.revokeApiKey Projects.AEApiKeyRevoked "Revoked" keyid
+apiDeleteH pid = apiKeySetActive pid ProjectApiKeys.revokeApiKey Projects.AEApiKeyRevoked "Revoked"
 
 
 apiActivateH :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (RespHeaders ApiMut)
-apiActivateH pid keyid = apiKeySetActive pid ProjectApiKeys.activateApiKey Projects.AEApiKeyActivated "Activated" keyid
+apiActivateH pid = apiKeySetActive pid ProjectApiKeys.activateApiKey Projects.AEApiKeyActivated "Activated"
 
 
 apiKeySetActive :: Projects.ProjectId -> (ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx Int64) -> Projects.AuditEvent -> Text -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (RespHeaders ApiMut)

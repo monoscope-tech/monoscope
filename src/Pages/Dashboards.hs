@@ -614,7 +614,7 @@ processVariable pid now (sinceStr, fromDStr, toDStr) allParams variableBase = do
   facetOpts <- case variable.facetField of
     Just field -> do
       docM <- SchemaCatalog.getSummary pid
-      pure $ docM >>= \(d :: Catalog.SummaryDoc) -> HM.lookup field d.topValuesByField <&> \tk -> map ((: []) . fst) $ sortOn (Down . snd) $ HM.toList tk.top
+      pure $ docM >>= \(d :: Catalog.SummaryDoc) -> HM.lookup field d.topValuesByField <&> \tk -> map (one . fst) $ sortWith (Down . snd) $ HM.toList tk.top
     Nothing -> pure Nothing
   case facetOpts of
     Just opts | not (null opts) -> pure variable{Dashboards.options = Just opts}

@@ -70,6 +70,7 @@ import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..), respo
 import Network.HTTP.Types.Status (statusCode)
 import Pkg.DeriveUtils (DB, UUIDId (..), selectFrom)
 import Relude
+import Relude.Extra.Bifunctor (bimapF, firstF)
 import System.IO (hClose)
 import System.IO.Temp (withSystemTempFile)
 import System.Logging (logWarn)
@@ -277,14 +278,14 @@ pushFileToGit token sync path content existingSha message = do
           <> maybeToList (("sha" AE..=) <$> existingSha)
   result <- tryHttp $ W.putWith (githubOpts token) (toString url) payload
   pure $ result >>= \resp ->
-    maybe (Left "Missing sha in response") Right
+    maybeToRight "Missing sha in response"
       $ (,)
       <$> (resp ^? W.responseBody . key "content" . key "sha" . _String)
       <*> (resp ^? W.responseBody . key "commit" . key "tree" . key "sha" . _String)
 
 
 tryHttp :: IOE :> es => Eff es a -> Eff es (Either Text a)
-tryHttp = fmap (first formatHttpError) . try
+tryHttp = firstF formatHttpError . try
 
 
 formatHttpError :: HttpException -> Text
@@ -423,8 +424,8 @@ generateAppJWT appId privateKeyB64 = do
         hClose h
         readKeyFile tmpPath >>= \case
           (PrivKeyRSA rsaKey : _) ->
-            bimap (("Failed to sign JWT: " <>) . toText . show) (\(Jwt jwtBytes) -> decodeUtf8 jwtBytes)
-              <$> Jws.rsaEncode RS256 rsaKey (toStrict payload)
+            bimapF (("Failed to sign JWT: " <>) . toText . show) (\(Jwt jwtBytes) -> decodeUtf8 jwtBytes)
+              $ Jws.rsaEncode RS256 rsaKey (toStrict payload)
           [] -> pure $ Left "No private key found in PEM"
           _ -> pure $ Left "Unsupported key type (expected RSA)"
 

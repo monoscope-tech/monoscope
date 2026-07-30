@@ -685,7 +685,7 @@ metricDimension pid metricName source selected label =
 
 relatedMetrics :: Projects.ProjectId -> Text -> Telemetry.MetricDataPoint -> V.Vector Telemetry.MetricChartListData -> Html ()
 relatedMetrics pid source metric candidates =
-  case take 6 $ map snd $ sortOn (Down . fst) [(score, c) | c <- V.toList candidates, c.metricName /= metric.metricName, let score = relatedMetricScore metric c, score > 0] of
+  case take 6 $ map snd $ sortWith (Down . fst) [(score, c) | c <- V.toList candidates, c.metricName /= metric.metricName, let score = relatedMetricScore metric c, score > 0] of
     [] -> div_ [class_ "px-5 py-8 text-sm text-textWeak"] $ if source == "all" then "No metrics with a similar name or dimensions were found." else "No similar metrics in this source. Try All sources."
     related -> do
       div_ [class_ "px-5 pb-3 pt-5"] do
@@ -764,7 +764,7 @@ metricReferences metricName dashboards monitors = (filter ((> 0) . countWidgetsW
 
 countWidgetsWithMetric :: Text -> Dashboards.DashboardVM -> Int
 countWidgetsWithMetric metricName dashboard =
-  length $ filter (widgetRefsMetric metricName) $ flip foldMap dashboard.schema \schema -> schema.widgets <> foldMap (concatMap (.widgets)) schema.tabs
+  sum $ map (fromEnum . widgetRefsMetric metricName) $ flip foldMap dashboard.schema \schema -> schema.widgets <> foldMap (concatMap (.widgets)) schema.tabs
 
 
 monitorHasMetric :: Text -> Monitors.QueryMonitor -> Bool

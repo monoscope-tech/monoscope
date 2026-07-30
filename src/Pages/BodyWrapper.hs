@@ -76,7 +76,7 @@ onboardingChecklist_ project = do
         , (has "NotifChannel", ("Set up notifications", "/p/" <> pid <> "/settings/integrations", "envelope"))
         ]
           :: [(Bool, (Text, Text, Text))]
-      doneCount = length $ filter fst items
+      doneCount = sum $ map (fromEnum . fst) items
       totalCount = length items
       progress = show doneCount <> "/" <> show totalCount :: Text
   unless (doneCount == totalCount || has "checklist_dismissed")
@@ -104,7 +104,7 @@ onboardingChecklist_ project = do
         div_ [class_ "h-0.5 w-full bg-strokeWeak rounded-full overflow-hidden mb-2"]
           $ div_ [class_ "h-full bg-strokeBrand-strong rounded-full transition-all", style_ $ "width:" <> show (doneCount * 100 `div` totalCount) <> "%"] ""
         div_ [class_ "flex flex-col gap-0.5"] do
-          forM_ (sortOn (Down . fst) items) \(done, (label, link, icon)) ->
+          forM_ (sortWith (Down . fst) items) \(done, (label, link, icon)) ->
             a_
               [ href_ link
               , class_ $ "flex items-center gap-2 px-2 py-1 rounded-md text-xs transition-colors " <> if done then "text-textWeak opacity-60" else "text-textStrong font-medium hover:bg-fillWeak"

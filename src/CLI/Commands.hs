@@ -767,7 +767,7 @@ data TraceSummary = TraceSummary
 buildSearchParams :: EventsSearchOpts -> [(Text, Text)]
 buildSearchParams opts =
   let q = foldFiltersIntoQuery opts.query opts.service opts.level
-      includeAttributes = maybe False (any (\field -> field == "attributes" || "attributes." `T.isPrefixOf` field) . map T.strip . T.splitOn ",") opts.fields
+      includeAttributes = maybe False (any ((\field -> field == "attributes" || "attributes." `T.isPrefixOf` field) . T.strip) . T.splitOn ",") opts.fields
       sinceParam = case opts.since of
         Just s -> s
         Nothing -> if isJust opts.from || isJust opts.to then "" else "1H"

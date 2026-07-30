@@ -58,7 +58,7 @@ whatsappIncomingPostH val = do
       handleWidget widget dashboardId project = withDashboard dashboardId $ \dashboard ->
         whenJust (find (\w -> fromMaybe "Untitled-" w.title == widget) dashboard.widgets) $ \w -> do
           now <- Time.currentTime
-          let opts = "time=" <> toUriStr (show now) <> "&p=" <> project.id.toText <> "&widget=" <> toUriStr (decodeUtf8 $ toStrict $ AE.encode w)
+          let opts = "time=" <> toUriStr (show now) <> "&p=" <> project.id.toText <> "&widget=" <> toUriStr (decodeUtf8 @Text $ AE.encode w)
           sendWhatsappResponse (getBotContent val.body widget (project.id.toText <> "/dashboards") opts) val.from envCfg.whatsappBotChart Nothing
 
       handlePrompt project = do

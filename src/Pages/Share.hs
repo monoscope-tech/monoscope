@@ -167,7 +167,7 @@ sharePage v = do
     ShareMissing -> Nothing
   section_ [class_ "share-view max-w-6xl mx-auto w-full px-4 pt-6 flex flex-col gap-6"] $ case v of
     ShareLive{breakdown, detail, replay} -> do
-      whenJust breakdown \bd -> div_ [class_ "border border-strokeWeak rounded-lg bg-bgBase"] bd
+      whenJust breakdown $ div_ [class_ "border border-strokeWeak rounded-lg bg-bgBase"]
       whenJust replay \(shareId, projectId, sessionId) ->
         div_ [class_ "flex flex-col gap-2"] do
           div_ [class_ "flex items-center gap-2 px-1"] do

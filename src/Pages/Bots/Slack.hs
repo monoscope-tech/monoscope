@@ -41,6 +41,7 @@ import Pkg.Components.Widget (Widget (..), widgetPngUrl)
 import Pkg.DeriveUtils (idFromText)
 import PyF
 import Relude hiding (ask, asks)
+import Relude.Extra.Tuple (dup)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
 import Servant.Server (ServerError (errBody), err400)
@@ -366,7 +367,7 @@ selectBlocks :: [Widget] -> V.Vector AE.Value -> V.Vector AE.Value
 selectBlocks widgets extra =
   V.fromList [dashboardSelectBlock "dashboard-select" "*Select dashboard*" opts, dashboardSelectBlock "widget-select" "*Select widget*" opts] <> extra
   where
-    opts = V.fromList $ map ((\t -> (t, t)) . fromMaybe "Untitled-" . (.title)) widgets
+    opts = V.fromList $ map (dup . fromMaybe "Untitled-" . (.title)) widgets
 
 
 -- | Slash-command / modal reply that replaces the invoking message.
