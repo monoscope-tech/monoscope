@@ -13,7 +13,7 @@ module Pkg.AI (
   -- * Response Parsing
   parseLLMResponse,
   parseAgenticResponse,
-  getNormalTupleReponse,
+  getNormalTupleResponse,
 
   -- * Basic LLM Calls
   callOpenAIAPI,
@@ -123,8 +123,8 @@ callOpenAIAPIEff :: ELLM.LLM :> es => Text -> Text -> Text -> Eff es (Either Tex
 callOpenAIAPIEff = ELLM.callLLM
 
 
-getNormalTupleReponse :: Text -> Either Text (Text, Maybe Text)
-getNormalTupleReponse response =
+getNormalTupleResponse :: Text -> Either Text (Text, Maybe Text)
+getNormalTupleResponse response =
   let lines' = lines $ T.strip response
       queryLine = fromMaybe "" (viaNonEmpty head lines')
       vizTypeM = viaNonEmpty head (drop 1 lines') >>= parseVisualizationType

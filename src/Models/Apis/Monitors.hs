@@ -57,12 +57,8 @@ newtype QueryMonitorId = QueryMonitorId {unQueryMonitorId :: UUID.UUID}
   deriving anyclass (HI.DecodeRow)
 
 
-instance HasField "toText" QueryMonitorId Text where
-  getField = UUID.toText . unQueryMonitorId
-
-
-instance ToParamSchema QueryMonitorId where
-  toParamSchema _ = toParamSchema (Proxy @UUID.UUID)
+instance HasField "toText" QueryMonitorId Text where getField = UUID.toText . unQueryMonitorId
+instance ToParamSchema QueryMonitorId where toParamSchema _ = toParamSchema (Proxy @UUID.UUID)
 
 
 data MonitorStatus = MSNormal | MSWarning | MSAlerting

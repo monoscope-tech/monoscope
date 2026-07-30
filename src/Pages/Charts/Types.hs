@@ -2,20 +2,16 @@
 
 module Pages.Charts.Types (MetricsData (..), MetricsStats (..), DataType (..)) where
 
-import Control.Lens ((?~))
 import Data.Aeson qualified as AE
-import Data.Default
-import Data.OpenApi (NamedSchema (..), ToParamSchema (..), ToSchema (..), enum_, type_)
-import Data.OpenApi qualified as OpenApi
+import Data.Default (Default)
+import Data.OpenApi (ToParamSchema, ToSchema)
 import Data.Semigroup (Max (Max))
 import Data.Vector qualified as V
-import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Language.Haskell.TH.Syntax qualified as THS
-import Pkg.DeriveUtils (SnakeSchema (..))
+import Pkg.DeriveUtils (SnakeSchema (..), WrappedEnumSC (..))
 import Relude
-import Servant (FromHttpApiData (..))
-import Utils (JSONHttpApiData (..))
+import Servant (FromHttpApiData)
 
 
 data MetricsStats = MetricsStats
@@ -56,23 +52,7 @@ data MetricsData = MetricsData
 
 
 data DataType = DTMetric | DTJson | DTFloat | DTText
-  deriving stock (Bounded, Enum, Eq, Generic, Ord, Show, THS.Lift)
+  deriving stock (Bounded, Enum, Eq, Generic, Ord, Read, Show, THS.Lift)
   deriving anyclass (NFData)
   deriving (Monoid, Semigroup) via (Max DataType)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "DT", DAE.CamelToSnake]] DataType
-  deriving (FromHttpApiData) via Utils.JSONHttpApiData DataType
-
-
-instance ToSchema DataType where
-  declareNamedSchema _ =
-    pure
-      $ NamedSchema (Just "DataType")
-      $ mempty
-      & type_
-      ?~ OpenApi.OpenApiString
-        & enum_
-      ?~ [AE.toJSON @DataType v | v <- universe]
-
-
-instance ToParamSchema DataType where
-  toParamSchema _ = mempty & type_ ?~ OpenApi.OpenApiString
+  deriving (AE.FromJSON, AE.ToJSON, FromHttpApiData, ToParamSchema, ToSchema) via WrappedEnumSC 'Nothing "DT" DataType

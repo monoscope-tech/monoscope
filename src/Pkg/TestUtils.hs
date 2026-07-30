@@ -24,6 +24,7 @@ module Pkg.TestUtils (
   setBjRunAtInThePast,
   toServantResponse,
   toBaseServantResponse,
+  runAsBaseRecordingHTTP,
   runAsBase,
   atAuthToBase,
   effToServantHandlerTest,
@@ -94,7 +95,7 @@ import Data.Effectful.Hasql (Hasql, runHasqlPool)
 import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.Notify qualified
 import Data.Effectful.UUID (UUIDEff, runStaticUUID, runUUID)
-import Data.Effectful.Wreq (HTTP (..), runHTTPGolden, runHTTPWreq)
+import Data.Effectful.Wreq (HTTP (..), runHTTPGolden, runHTTPRecord, runHTTPWreq)
 import Data.Either.Extra
 import Data.HashMap.Strict qualified as HM
 import Data.Pool (Pool, defaultPoolConfig, destroyAllResources, newPool, withResource)
@@ -189,7 +190,7 @@ import System.Logging qualified as Logging
 import System.Server qualified as Server
 import System.Tracing (Tracing)
 import System.Tracing qualified as Tracing
-import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, RespHeaders, atAuthToBase, atAuthToBaseTest, effToServantHandlerTest)
+import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, RespHeaders, atAuthToBase, atAuthToBaseTest, effToServantHandlerTest, effToServantHandlerTestHTTP)
 import Unsafe.Coerce (unsafeCoerce)
 import Web.ApiHandlers qualified as ApiH
 import Web.Auth qualified as Auth
@@ -711,7 +712,7 @@ requireMinio tr pending action
 sharedTestLogger :: Log.Logger
 -- tolerantLogger (the production wrapper) swallows write-after-shutdown / flush-thread
 -- crashes so a logger hiccup can't take down a parallel worker.
-sharedTestLogger = unsafePerformIO $ Logging.tolerantLogger <$> mkBulkLogger "test-stdout-bulk" (mapM_ (putTextLn . showLogMessage Nothing)) (pure ())
+sharedTestLogger = unsafePerformIO $ Logging.tolerantLogger <$> mkBulkLogger "test-stdout-bulk" (mapM_ (putTextLn . showLogMessage Nothing)) pass
 
 
 withSharedLogger :: (Log.Logger -> m a) -> m a
@@ -884,6 +885,24 @@ toBaseServantResponse TestResources{..} k = do
       & ServantS.runHandler
     )
     <&> fromRightShow
+
+
+-- | Like 'toBaseServantResponse' but records outgoing HTTP requests instead of
+-- golden-replaying them, returning them as (url, rendered body) alongside the
+-- result — the seam for asserting what a handler actually sent.
+runAsBaseRecordingHTTP :: TestResources -> ATBaseCtx a -> IO ([(Text, LByteString)], a)
+runAsBaseRecordingHTTP TestResources{..} k = do
+  tp <- getGlobalTracerProvider
+  uuidRef <- freshUUIDRef
+  reqsRef <- newIORef []
+  r <-
+    ( k
+        & effToServantHandlerTestHTTP (runHTTPRecord reqsRef) trTestClock uuidRef trATCtx trLogger tp
+        & ServantS.runHandler
+    )
+      <&> fromRightShow
+  reqs <- reverse <$> readIORef reqsRef
+  pure (reqs, r)
 
 
 -- | Like `toBaseServantResponse` but draws UUIDs from the TestResources-scoped

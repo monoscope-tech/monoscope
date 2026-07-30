@@ -113,6 +113,11 @@ export const deferredTransport = () => {
 
 export const ids = (el: LogList) => (el as any).spanListTree.map((r: any) => r.id);
 
+// updateTimePicker is installed by main.ts in the real app; expandTimeRangeUrl
+// calls it to sync the picker label. Default no-op stub — tests that assert on
+// it (log-list-chart-anchor) install their own vi.fn over this.
+(window as any).updateTimePicker ??= () => '';
+
 // Mount with the mount-time auto-fetch disabled so tests drive fetchData explicitly.
 export const mountList = async (props: Partial<LogList> = {}) => {
   const el = new LogList();

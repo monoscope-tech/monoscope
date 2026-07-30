@@ -28,8 +28,8 @@ import Deriving.Aeson.Stock qualified as DAES
 import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Htmx (hxDelete_, hxIndicator_, hxPost_, hxSwap_, hxTarget_)
+import Lucid.Hyperscript (__)
 import Models.Projects.Dashboards qualified as Dashboards
-import Models.Projects.GitSync qualified as GitHub
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
@@ -86,48 +86,36 @@ data GitSyncForm = GitSyncForm
   deriving anyclass (FromForm)
 
 
+statusResp :: Text -> AE.Value
+statusResp s = AE.object ["status" AE..= s]
+
+
+errResp :: Text -> AE.Value
+errResp msg = AE.object ["status" AE..= ("error" :: Text), "message" AE..= msg]
+
+
 githubWebhookPostH :: Maybe Text -> Maybe Text -> ByteString -> ATBaseCtx AE.Value
-githubWebhookPostH signatureM eventTypeM rawBody = do
-  case AE.eitherDecodeStrict rawBody of
-    Left err -> do
-      Log.logAttention "GitHub webhook invalid JSON payload" err
-      pure $ AE.object ["status" AE..= ("error" :: Text), "message" AE..= ("invalid JSON: " <> toText err)]
-    Right payload -> handlePayload signatureM eventTypeM rawBody payload
-
-
-handlePayload :: Maybe Text -> Maybe Text -> ByteString -> GitHubWebhookPayload -> ATBaseCtx AE.Value
-handlePayload signatureM eventTypeM rawBody payload = do
-  ctx <- ask @Config.AuthContext
-  case payload.repository of
-    Nothing -> do
-      Log.logAttention "GitHub webhook missing repository" ()
-      pure $ AE.object ["status" AE..= ("error" :: Text), "message" AE..= ("missing repository" :: Text)]
+githubWebhookPostH signatureM eventTypeM rawBody = case AE.eitherDecodeStrict @GitHubWebhookPayload rawBody of
+  Left err -> errResp ("invalid JSON: " <> toText err) <$ Log.logAttention "GitHub webhook invalid JSON payload" err
+  Right payload -> case payload.repository of
+    Nothing -> errResp "missing repository" <$ Log.logAttention "GitHub webhook missing repository" ()
     Just repo -> do
-      let ownerName = repo.owner.login
-          repoName = repo.name
+      let (ownerName, repoName) = (repo.owner.login, repo.name)
       syncM <- GitSync.getGitHubSyncByRepo ownerName repoName
       case syncM of
-        Nothing -> do
-          Log.logTrace "GitHub webhook for untracked repo" (ownerName, repoName)
-          pure $ AE.object ["status" AE..= ("ignored" :: Text)]
+        Nothing -> statusResp "ignored" <$ Log.logTrace "GitHub webhook for untracked repo" (ownerName, repoName)
         Just sync -> case validateWebhookSignature sync.webhookSecret signatureM rawBody of
-          Left err -> do
-            Log.logAttention "GitHub webhook signature validation failed" (ownerName, repoName, err)
-            pure $ AE.object ["status" AE..= ("error" :: Text), "message" AE..= err]
+          Left err -> errResp err <$ Log.logAttention "GitHub webhook signature validation failed" (ownerName, repoName, err)
           Right () -> do
             when (isNothing sync.webhookSecret) $ Log.logWarn "GitHub webhook accepted without secret validation" (ownerName, repoName)
             case eventTypeM of
               Just "push" -> do
+                ctx <- ask @Config.AuthContext
                 liftIO $ withResource ctx.jobsPool \conn ->
                   void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncFromRepo sync.projectId
-                Log.logTrace "Triggered git sync from webhook" (sync.projectId, ownerName, repoName)
-                pure $ AE.object ["status" AE..= ("ok" :: Text)]
-              Just event -> do
-                Log.logTrace "Ignoring GitHub event type" event
-                pure $ AE.object ["status" AE..= ("ignored" :: Text), "event" AE..= event]
-              Nothing -> do
-                Log.logInfo "GitHub webhook missing event type" ()
-                pure $ AE.object ["status" AE..= ("error" :: Text)]
+                statusResp "ok" <$ Log.logTrace "Triggered git sync from webhook" (sync.projectId, ownerName, repoName)
+              Just event -> AE.object ["status" AE..= ("ignored" :: Text), "event" AE..= event] <$ Log.logTrace "Ignoring GitHub event type" event
+              Nothing -> statusResp "error" <$ Log.logInfo "GitHub webhook missing event type" ()
 
 
 validateWebhookSignature :: Maybe Text -> Maybe Text -> ByteString -> Either Text ()
@@ -135,77 +123,55 @@ validateWebhookSignature Nothing _ _ = Right () -- No secret configured, skip va
 validateWebhookSignature _ Nothing _ = Left "signature required but not provided"
 validateWebhookSignature (Just secret) (Just sig) body =
   let expectedSig = "sha256=" <> decodeUtf8 (B16.encode $ BA.convert (HMAC.hmac (encodeUtf8 secret :: ByteString) body :: HMAC.HMAC SHA256))
-   in if BA.constEq (encodeUtf8 sig :: ByteString) (encodeUtf8 expectedSig :: ByteString) then Right () else Left "invalid signature"
+   in unless (BA.constEq (encodeUtf8 sig :: ByteString) (encodeUtf8 expectedSig :: ByteString)) $ Left "invalid signature"
 
 
 gitSyncSettingsGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 gitSyncSettingsGetH pid = do
   ctx <- ask @Config.AuthContext
   syncM <- GitSync.getGitHubSync pid
-  withSettingsPage pid "Integrations" \_ -> pure $ gitSyncSettingsPage ctx.env.hostUrl pid syncM
+  withSettingsPage pid "Integrations" \_ -> pure $ settingsSection_ do
+    settingsH2_ "GitHub Sync"
+    div_ [id_ "git-sync-content"] $ gitSyncSettingsView ctx.env.hostUrl pid syncM
 
 
 gitSyncSettingsPostH :: Projects.ProjectId -> GitSyncForm -> ATAuthCtx (RespHeaders (Html ()))
 gitSyncSettingsPostH pid form = do
   ctx <- ask @Config.AuthContext
   let encKey = encodeUtf8 ctx.config.apiKeyEncryptionSecretKey
-  -- Auto-detect branch if not specified or empty
-  branch <-
-    if T.null form.branch
-      then GitSync.detectDefaultBranch form.accessToken form.owner form.repo
-      else pure form.branch
+  branch <- if T.null form.branch then GitSync.detectDefaultBranch form.accessToken form.owner form.repo else pure form.branch
   existingM <- GitSync.getGitHubSync pid
   syncM <- case existingM of
-    Nothing -> do
-      result <- GitSync.insertGitHubSync encKey pid form.owner form.repo branch form.accessToken Nothing (fromMaybe "" form.pathPrefix)
-      Log.logTrace "Created GitHub sync config" (pid, form.owner, form.repo)
-      pure result
-    Just existing -> do
-      result <-
-        if T.null form.accessToken
-          then GitSync.updateGitHubSyncKeepToken existing.id form.owner form.repo branch True
-          else GitSync.updateGitHubSync encKey existing.id form.owner form.repo branch form.accessToken True
-      Log.logTrace "Updated GitHub sync config" (pid, form.owner, form.repo)
-      pure result
+    Nothing -> GitSync.insertGitHubSync encKey pid form.owner form.repo branch form.accessToken Nothing (fromMaybe "" form.pathPrefix)
+    Just existing
+      | T.null form.accessToken -> GitSync.updateGitHubSyncKeepToken existing.id form.owner form.repo branch True
+      | otherwise -> GitSync.updateGitHubSync encKey existing.id form.owner form.repo branch form.accessToken True
+  Log.logTrace (maybe "Created GitHub sync config" (const "Updated GitHub sync config") existingM) (pid, form.owner, form.repo)
   addRespHeaders $ gitSyncSettingsView ctx.env.hostUrl pid syncM
 
 
 gitSyncSettingsDeleteH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 gitSyncSettingsDeleteH pid = do
   ctx <- ask @Config.AuthContext
-  existingM <- GitSync.getGitHubSync pid
-  case existingM of
-    Nothing -> pass
-    Just existing -> do
-      _ <- GitSync.deleteGitHubSync existing.id
-      Log.logTrace "Deleted GitHub sync config" pid
+  whenJustM (GitSync.getGitHubSync pid) \existing -> do
+    _ <- GitSync.deleteGitHubSync existing.id
+    Log.logTrace "Deleted GitHub sync config" pid
   addRespHeaders $ gitSyncSettingsView ctx.env.hostUrl pid Nothing
 
 
-gitSyncSettingsPage :: Text -> Projects.ProjectId -> Maybe GitSync.GitHubSync -> Html ()
-gitSyncSettingsPage hostUrl pid syncM = settingsSection_ do
-  settingsH2_ "GitHub Sync"
-  div_ [id_ "git-sync-content"] $ gitSyncSettingsView hostUrl pid syncM
-
-
 gitSyncSettingsView :: Text -> Projects.ProjectId -> Maybe GitSync.GitHubSync -> Html ()
-gitSyncSettingsView hostUrl pid syncM = do
-  let webhookUrl = hostUrl <> "webhook/github"
-      actionUrl = "/p/" <> pid.toText <> "/settings/git-sync"
-      installUrl = "/p/" <> pid.toText <> "/settings/git-sync/install"
-      isViaApp = maybe False (isJust . (.installationId)) syncM
-  div_ [class_ "space-y-6"] do
-    case syncM of
-      Nothing -> notConnectedView pid actionUrl installUrl
-      Just sync -> connectedView hostUrl pid sync actionUrl webhookUrl isViaApp
+gitSyncSettingsView hostUrl pid syncM =
+  div_ [class_ "space-y-6"] $ maybe (notConnectedView actionUrl) (\sync -> connectedView sync actionUrl (hostUrl <> "webhook/github")) syncM
+  where
+    actionUrl = "/p/" <> pid.toText <> "/settings/git-sync"
 
 
-notConnectedView :: Projects.ProjectId -> Text -> Text -> Html ()
-notConnectedView pid actionUrl installUrl = do
+notConnectedView :: Text -> Html ()
+notConnectedView actionUrl = do
   -- GitHub App (primary)
   div_ [class_ "space-y-3"] do
     p_ [class_ "text-sm text-textWeak"] "Install the GitHub App to sync dashboards with your repository. Webhooks are configured automatically."
-    a_ [href_ installUrl, class_ "btn btn-sm btn-primary gap-2"] do
+    a_ [href_ (actionUrl <> "/install"), class_ "btn btn-sm btn-primary gap-2"] do
       faSprite_ "github" "regular" "w-3.5 h-3.5"
       "Install GitHub App"
 
@@ -230,9 +196,9 @@ notConnectedView pid actionUrl installUrl = do
           htmxIndicator_ "indicator" LdXS
 
 
-connectedView :: Text -> Projects.ProjectId -> GitSync.GitHubSync -> Text -> Text -> Bool -> Html ()
-connectedView hostUrl pid sync actionUrl webhookUrl isViaApp = do
-  -- Status line
+connectedView :: GitSync.GitHubSync -> Text -> Text -> Html ()
+connectedView sync actionUrl webhookUrl = do
+  let isViaApp = isJust sync.installationId
   headerRow_ [] do
     div_ [class_ "flex items-center gap-2 text-sm"] do
       faSprite_ "circle-check" "solid" "w-3.5 h-3.5 text-iconSuccess"
@@ -256,9 +222,17 @@ connectedView hostUrl pid sync actionUrl webhookUrl isViaApp = do
     div_ [class_ "pt-4 border-t border-strokeWeak space-y-2"] do
       headerRow_ [] do
         sectionLabel_ "Webhook URL"
-        button_ [type_ "button", class_ "btn btn-xs btn-ghost gap-1", onclick_ ("navigator.clipboard.writeText('" <> webhookUrl <> "'); this.querySelector('span').textContent='Copied!'; setTimeout(() => this.querySelector('span').textContent='Copy', 2000)")] do
-          faSprite_ "copy" "regular" "w-3 h-3"
-          span_ "Copy"
+        button_
+          [ type_ "button"
+          , class_ "btn btn-xs btn-ghost gap-1"
+          , term "data-url" webhookUrl
+          , [__| on click call navigator.clipboard.writeText(my @data-url)
+                   then put 'Copied!' into the first <span/> in me
+                   then wait 2s then put 'Copy' into the first <span/> in me |]
+          ]
+          do
+            faSprite_ "copy" "regular" "w-3 h-3"
+            span_ "Copy"
       div_ [class_ "bg-fillWeak rounded-lg px-3 py-1.5 font-mono text-xs text-textWeak break-all"] $ toHtml webhookUrl
       unless isViaApp $ p_ [class_ "text-xs text-textWeak"] "Add this to your repository for automatic syncing."
 
@@ -340,14 +314,10 @@ For automatic syncing when you push changes:
 queueGitSyncPush :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx ()
 queueGitSyncPush pid dashboardId = do
   ctx <- ask @Config.AuthContext
-  syncM <- GitSync.getGitHubSync pid
-  case syncM of
-    Nothing -> pass
-    Just sync | not sync.syncEnabled -> pass
-    Just _ -> do
-      liftIO $ withResource ctx.jobsPool \conn ->
-        void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncPushDashboard pid (unUUIDId dashboardId)
-      Log.logTrace "Queued git sync push for dashboard" (pid, dashboardId)
+  whenJustM (GitSync.getGitHubSync pid) \sync -> when sync.syncEnabled do
+    liftIO $ withResource ctx.jobsPool \conn ->
+      void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncPushDashboard pid (unUUIDId dashboardId)
+    Log.logTrace "Queued git sync push for dashboard" (pid, dashboardId)
 
 
 -- | Form for selecting a repo from GitHub App installation
@@ -361,17 +331,19 @@ data RepoSelectForm = RepoSelectForm
   deriving anyclass (FromForm)
 
 
+-- | Meta-refresh redirect (no JS, escapes url properly) with a fallback link for no-refresh clients.
+redirectPage :: Text -> Text -> Html ()
+redirectPage msg url = div_ [class_ "p-8 text-center"] do
+  meta_ [httpEquiv_ "refresh", content_ ("0;url=" <> url)]
+  p_ [class_ "text-textWeak mb-4"] $ toHtml msg
+  a_ [href_ url, class_ "text-textBrand underline"] "Continue"
+
+
 -- | Redirect to GitHub App installation page
 githubAppInstallH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 githubAppInstallH pid = do
   ctx <- ask @Config.AuthContext
-  -- Store project ID in state parameter for callback
-  let stateParam = pid.toText
-      installUrl = "https://github.com/apps/" <> ctx.config.githubAppName <> "/installations/new?state=" <> stateParam
-  -- Return a redirect page
-  addRespHeaders $ div_ [class_ "p-8 text-center"] do
-    p_ [class_ "text-textWeak mb-4"] "Redirecting to GitHub..."
-    script_ $ "window.location.href = '" <> installUrl <> "';"
+  addRespHeaders $ redirectPage "Redirecting to GitHub..." $ "https://github.com/apps/" <> ctx.config.githubAppName <> "/installations/new?state=" <> pid.toText
 
 
 -- | Handle callback from GitHub after App installation
@@ -382,16 +354,9 @@ githubAppCallbackH instIdM _setupAction stateM = do
   let bwconf = (def :: BWConfig){sessM = Just sess, pageTitle = "GitHub Sync", config = ctx.config}
   case (instIdM, stateM >>= rightToMaybe . parseUrlPiece) of
     (Just instId, Just pid) -> do
-      -- Check if sync already exists for this project
       existingM <- GitSync.getGitHubSync pid
-      case existingM of
-        Just _ -> Log.logInfo "GitHub App already configured, updating installation" (pid, instId)
-        Nothing -> Log.logInfo "GitHub App installed, awaiting repo selection" (pid, instId)
-      -- Redirect to repo selection page
-      let reposUrl = "/p/" <> pid.toText <> "/settings/git-sync/repos?installationId=" <> show instId
-      addRespHeaders $ bodyWrapper bwconf $ div_ [class_ "p-8 text-center"] do
-        p_ [class_ "text-textWeak mb-4"] "GitHub App installed! Redirecting..."
-        script_ $ "window.location.href = '" <> reposUrl <> "';"
+      Log.logInfo (maybe "GitHub App installed, awaiting repo selection" (const "GitHub App already configured, updating installation") existingM) (pid, instId)
+      addRespHeaders $ bodyWrapper bwconf $ redirectPage "GitHub App installed! Redirecting..." $ "/p/" <> pid.toText <> "/settings/git-sync/repos?installationId=" <> show instId
     (Just instId, Nothing) -> do
       -- No state param - user installed directly from GitHub, show project selector
       Log.logInfo "GitHub callback without state, showing project selector" instId
@@ -425,24 +390,14 @@ githubAppReposH pid instIdParam = withSettingsPage pid "Integrations" \_ -> do
   ctx <- ask @Config.AuthContext
   syncM <- GitSync.getGitHubSync pid
   let instIdM = instIdParam <|> (syncM >>= (.installationId))
+      errBox err = div_ [class_ "text-textError p-4"] $ toHtml err
   content <- case instIdM of
-    Nothing -> pure $ div_ [class_ "text-textError p-4"] "No GitHub App installation found"
-    Just instId -> W.runHTTPWreq do
-      tokenResult <- GitHub.getInstallationToken ctx.config.githubAppId ctx.config.githubAppPrivateKey instId
-      case tokenResult of
-        Left err -> pure $ div_ [class_ "text-textError p-4"] $ toHtml $ "Failed to get token: " <> err
-        Right tok -> do
-          reposResult <- GitHub.listInstallationRepos tok.token
-          case reposResult of
-            Left err -> pure $ div_ [class_ "text-textError p-4"] $ toHtml $ "Failed to list repos: " <> err
-            Right repos -> pure $ repoSelectionView pid instId repos
-  pure $ repoSelectionPage content
-
-
--- | Page structure for repo selection
-repoSelectionPage :: Html () -> Html ()
-repoSelectionPage content = div_ [class_ "w-full h-full overflow-y-auto"] do
-  section_ [class_ "p-8 max-w-2xl mx-auto space-y-6"] do
+    Nothing -> pure $ errBox ("No GitHub App installation found" :: Text)
+    Just instId ->
+      W.runHTTPWreq $ either errBox (repoSelectionView pid instId) <$> runExceptT do
+        tok <- ExceptT $ first ("Failed to get token: " <>) <$> GitSync.getInstallationToken ctx.config.githubAppId ctx.config.githubAppPrivateKey instId
+        ExceptT $ first ("Failed to list repos: " <>) <$> GitSync.listInstallationRepos tok.token
+  pure $ div_ [class_ "w-full h-full overflow-y-auto"] $ section_ [class_ "p-8 max-w-2xl mx-auto space-y-6"] do
     div_ [class_ "mb-2"] do
       h2_ [class_ "text-textStrong text-xl font-semibold"] "GitHub Sync"
       p_ [class_ "text-textWeak text-sm mt-1"] "Select a repository to sync dashboards with."
@@ -450,7 +405,7 @@ repoSelectionPage content = div_ [class_ "w-full h-full overflow-y-auto"] do
 
 
 -- | View for selecting a repository
-repoSelectionView :: Projects.ProjectId -> Int64 -> [GitHub.GitHubRepo] -> Html ()
+repoSelectionView :: Projects.ProjectId -> Int64 -> [GitSync.GitHubRepo] -> Html ()
 repoSelectionView pid instId repos = div_ [class_ "space-y-4"] do
   h3_ [class_ "text-lg font-medium text-textStrong"] "Select Repository"
   p_ [class_ "text-sm text-textWeak"] "Choose which repository to sync dashboards with:"
@@ -471,19 +426,13 @@ repoSelectionView pid instId repos = div_ [class_ "space-y-4"] do
 githubAppSelectRepoH :: Projects.ProjectId -> RepoSelectForm -> ATAuthCtx (RespHeaders (Html ()))
 githubAppSelectRepoH pid form = do
   ctx <- ask @Config.AuthContext
-  syncM <- GitSync.getGitHubSync pid
-  -- Parse owner/repo from fullName
-  let (ownerVal, repoVal) = case T.splitOn "/" form.repoFullName of
-        [o, r] -> (o, r)
-        _ -> (form.repoFullName, "")
+  let (ownerVal, repoVal) = second (T.drop 1) $ T.breakOn "/" form.repoFullName
       prefix = fromMaybe "" form.pathPrefix
-  -- Insert or update the sync config
-  result <- case syncM of
-    Nothing -> GitSync.insertGitHubAppSync pid form.installationId ownerVal repoVal form.branch prefix
-    Just existing -> GitSync.updateGitHubSyncRepo existing.id ownerVal repoVal form.branch prefix
+  result <-
+    GitSync.getGitHubSync pid >>= \case
+      Nothing -> GitSync.insertGitHubAppSync pid form.installationId ownerVal repoVal form.branch prefix
+      Just existing -> GitSync.updateGitHubSyncRepo existing.id ownerVal repoVal form.branch prefix
   Log.logInfo "GitHub App repo selected" (pid, form.repoFullName)
-  -- Push all existing dashboards to the repo
   liftIO $ withResource ctx.jobsPool \conn ->
     void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncPushAllDashboards pid
-  -- Return updated settings view
   addRespHeaders $ gitSyncSettingsView ctx.env.hostUrl pid result

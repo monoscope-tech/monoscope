@@ -163,11 +163,12 @@ data IssueType
 
 -- | Hash prefix used in otel_logs_and_spans hashes column
 hashPrefix :: IssueType -> Maybe Text
-hashPrefix LogPattern = Just "pat:"
-hashPrefix LogPatternRateChange = Just "pat:"
-hashPrefix RuntimeException = Just "err:"
-hashPrefix ApiChange = Just "" -- endpoint hash is stored unprefixed on span hashes
-hashPrefix _ = Nothing
+hashPrefix = \case
+  LogPattern -> Just "pat:"
+  LogPatternRateChange -> Just "pat:"
+  RuntimeException -> Just "err:"
+  ApiChange -> Just "" -- endpoint hash is stored unprefixed on span hashes
+  QueryAlert -> Nothing
 
 
 defaultRecommendedAction :: Text
@@ -217,11 +218,10 @@ serviceLabel = fromMaybe "unknown-service"
 
 
 isNewEndpointOnly :: Issue -> Bool
-isNewEndpointOnly issue
-  | issue.issueType /= ApiChange = False
-  | otherwise = case AE.fromJSON (getAeson issue.issueData) of
-      AE.Success (d :: APIChangeData) -> V.null d.newFields && V.null d.deletedFields && V.null d.modifiedFields
-      _ -> False
+isNewEndpointOnly issue =
+  issue.issueType == ApiChange && case AE.fromJSON (getAeson issue.issueData) of
+    AE.Success (d :: APIChangeData) -> V.null d.newFields && V.null d.deletedFields && V.null d.modifiedFields
+    AE.Error _ -> False
 
 
 -- | API Change issue data
@@ -418,10 +418,17 @@ bumpIssueUpdatedAt issueId = do
           WHERE id = #{issueId} |]
 
 
+-- | @AND pfx.col IS [NOT] NULL@ clause, or empty if the filter is unset. Shared
+-- between 'selectIssues' (prefixed, joined query) and 'selectIssuesByFilters'
+-- (unprefixed, single-table query — pass @mempty@ for @pfx@).
+sqlNullFilter :: HI.Sql -> HI.Sql -> Maybe Bool -> HI.Sql
+sqlNullFilter pfx col = foldMap (bool [HI.sql| AND ^{pfx}^{col} IS NULL|] [HI.sql| AND ^{pfx}^{col} IS NOT NULL|])
+
+
 -- | Select issues with filters, returns issues and total count for pagination
 -- period: "24h" = 24 hourly buckets, "7d" = 7 daily buckets (default)
-selectIssues :: (DB es, Time :> es) => Projects.ProjectId -> Maybe IssueType -> Maybe Bool -> Maybe Bool -> Int -> Int -> Maybe (UTCTime, UTCTime) -> Maybe Text -> Text -> [Text] -> [Text] -> Eff es ([IssueL], Int)
-selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM period serviceFilters typeFilters = do
+selectIssues :: (DB es, Time :> es) => Projects.ProjectId -> Maybe Bool -> Maybe Bool -> Int -> Int -> Maybe (UTCTime, UTCTime) -> Maybe Text -> Text -> [Text] -> [Text] -> Eff es ([IssueL], Int)
+selectIssues pid isAcknowledged isArchived limit offset timeRangeM sortM period serviceFilters typeFilters = do
   now <- Time.currentTime
   -- period controls bucket granularity: "24h" = hourly, "7d" = daily.
   -- seriesStart/step are bound here (not via SQL NOW()) so charts honour the test clock.
@@ -433,12 +440,11 @@ selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM 
       orderBy = rawSql case T.uncons =<< sortM of
         Just (s, c) | s == '-' || s == '+', c `elem` ["created_at", "updated_at", "title"] -> "i." <> c <> bool " ASC" " DESC" (s == '-')
         _ -> "i.critical DESC, i.created_at DESC"
-      nullF pfx col = foldMap (bool [HI.sql| AND ^{pfx}^{col} IS NULL|] [HI.sql| AND ^{pfx}^{col} IS NOT NULL|])
       arrF pfx col xs = if null xs then mempty else [HI.sql| AND ^{pfx}^{col} = ANY(#{xs}::text[])|]
       mkFilters pfx =
         foldMap (\(s, e) -> [HI.sql| AND ^{pfx}created_at >= #{s} AND ^{pfx}created_at <= #{e}|]) timeRangeM
-          <> nullF pfx [HI.sql|acknowledged_at|] isAcknowledged
-          <> nullF pfx [HI.sql|archived_at|] isArchived
+          <> sqlNullFilter pfx [HI.sql|acknowledged_at|] isAcknowledged
+          <> sqlNullFilter pfx [HI.sql|archived_at|] isArchived
           <> bool mempty [HI.sql| AND (^{pfx}severity IS NULL OR ^{pfx}severity != 'low')|] isInbox
           <> arrF pfx [HI.sql|service|] serviceFilters
           <> arrF pfx [HI.sql|issue_type::text|] typeFilters
@@ -597,9 +603,8 @@ setAckState pid iids mTs mUid
 -- within its cooldown window. The detector uses this to suppress re-firing.
 isInCooldown :: DB es => Projects.ProjectId -> Text -> IssueType -> UTCTime -> Eff es Bool
 isInCooldown pid tgt ty now =
-  isJust <$> (Hasql.interpOne q :: DB es => Eff es (Maybe Int64))
-  where
-    q =
+  isJust @Int64
+    <$> Hasql.interpOne
       [HI.sql|
         SELECT 1::bigint FROM apis.issues
         WHERE project_id = #{pid}
@@ -622,12 +627,6 @@ setArchiveState pid iids mTs
           WHERE project_id = #{pid} AND id = ANY(#{iids}::uuid[]) |]
 
 
--- | Archive open @log_pattern@ / @log_pattern_rate_change@ issues whose
--- @updated_at@ is older than @days@. @insertIssue@ bumps @updated_at@ on
--- conflict, so an actively-firing pattern never ages out — only dead signal
--- does. The predicate runs against OLD @updated_at@ before the
--- @set_updated_at@ trigger fires, so the cutoff is evaluated on the
--- pre-archive value.
 -- | Auto-archive open discovery-type issues (log_pattern, log_pattern_rate_change,
 -- api_change) whose @updated_at@ is older than @days@. @insertIssue@ bumps
 -- @updated_at@ on conflict, so an actively-drifting endpoint or firing pattern
@@ -669,22 +668,13 @@ selectIssuesByFilters
   -> Int -- offset
   -> Eff es ([Issue], Int)
 selectIssuesByFilters pid isAck isArch tyM svcM limit offset = do
-  let anyAck = isNothing isAck
-      ackFlag = fromMaybe False isAck
-      anyArch = isNothing isArch
-      archFlag = fromMaybe False isArch
-      anyType = maybe True T.null tyM
-      ty = fromMaybe "" tyM
-      anySvc = maybe True T.null svcM
-      svc = fromMaybe "" svcM
+  let eqF col = foldMap (\v -> if T.null v then mempty else [HI.sql| AND ^{col} = #{v}|])
       whereSql =
-        [HI.sql|
-          WHERE project_id = #{pid}
-            AND (#{anyAck} OR (#{ackFlag} AND acknowledged_at IS NOT NULL) OR (NOT #{ackFlag} AND acknowledged_at IS NULL))
-            AND (#{anyArch} OR (#{archFlag} AND archived_at IS NOT NULL) OR (NOT #{archFlag} AND archived_at IS NULL))
-            AND (#{anyType} OR issue_type::text = #{ty})
-            AND (#{anySvc} OR service = #{svc})
-        |]
+        [HI.sql| WHERE project_id = #{pid}|]
+          <> sqlNullFilter mempty [HI.sql|acknowledged_at|] isAck
+          <> sqlNullFilter mempty [HI.sql|archived_at|] isArch
+          <> eqF [HI.sql|issue_type::text|] tyM
+          <> eqF [HI.sql|service|] svcM
   rows <- Hasql.interp (selectFrom @Issue <> whereSql <> [HI.sql| ORDER BY updated_at DESC LIMIT #{limit} OFFSET #{offset} |])
   total <- fromMaybe 0 <$> Hasql.interpOne ([HI.sql| SELECT COUNT(*)::bigint FROM apis.issues |] <> whereSql)
   pure (rows, total)
@@ -722,7 +712,7 @@ createAPIChangeIssue projectId endpointHash anomalies = do
           if V.any ((== Anomalies.ATEndpoint) . (.anomalyType)) anomalies
             then "New endpoint detected: " <> apiChangeData.endpointMethod <> " " <> apiChangeData.endpointPath <> " on " <> apiChangeData.endpointHost
             else "API structure has changed"
-      , recommendedAction = "Review the API changes and update your integration accordingly."
+      , recommendedAction = defaultRecommendedAction
       , migrationComplexity = if breakingChanges > 5 then "high" else if breakingChanges > 0 then "medium" else "low"
       , issueData = apiChangeData
       , timestamp = Just firstAnomaly.createdAt
@@ -781,7 +771,6 @@ data AIConversation = AIConversation
   deriving anyclass (Default, FromRow, HI.DecodeRow, ToRow)
 
 
--- | AI Chat message
 -- | Author of a stored AI chat message. Encodes to "user"/"assistant"/"system"
 -- (byte-identical to the previous free-text column).
 data ChatRole = ChatUser | ChatAssistant | ChatSystem
@@ -810,11 +799,11 @@ getOrCreateConversation pid convId convType ctx = do
   now <- Time.currentTime
   let ctxJ = Aeson ctx
   result <-
-    Hasql.interp
+    Hasql.interpOne
       [HI.sql| INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type, context)
               VALUES (#{pid}, #{convId}, #{convType}, #{ctxJ}) ON CONFLICT (project_id, conversation_id) DO UPDATE SET updated_at = #{now}
               RETURNING id, project_id, conversation_id, conversation_type, context, created_at, updated_at |]
-  maybe (throwError err500{errBody = "getOrCreateConversation: RETURNING clause must return a row"}) pure $ listToMaybe result
+  maybe (throwError err500{errBody = "getOrCreateConversation: RETURNING clause must return a row"}) pure result
 
 
 -- | Insert a new chat message
@@ -851,18 +840,18 @@ discordThreadToConversationId :: Text -> UUIDId "conversation"
 discordThreadToConversationId = textToConversationId
 
 
--- | Try to acquire an advisory lock for chat migration to prevent race conditions.
--- Returns True if lock was acquired, False if already locked (another request is migrating).
--- Uses PostgreSQL advisory locks which are automatically released on connection close.
 chatMigrationLockKey :: UUIDId "conversation" -> Int64
 chatMigrationLockKey convId = fromIntegral @Int @Int64 $ abs $ hash $ show convId.unwrap
 
 
+-- | Try to acquire an advisory lock for chat migration to prevent race conditions.
+-- Returns True if lock was acquired, False if already locked (another request is migrating).
+-- Uses PostgreSQL advisory locks which are automatically released on connection close.
 tryAcquireChatMigrationLock :: DB es => UUIDId "conversation" -> Eff es Bool
 tryAcquireChatMigrationLock convId = do
   let lockKey = chatMigrationLockKey convId
   result :: [Bool] <- Hasql.interp [HI.sql| SELECT pg_try_advisory_lock(#{lockKey}) |]
-  pure $ fromMaybe False $ viaNonEmpty head result
+  pure $ or result
 
 
 -- | Release a chat migration advisory lock so that a failed migration can be retried
@@ -879,7 +868,6 @@ createLogPatternRateChangeIssue projectId lp sr = do
   now <- Time.currentTime
   let changePercentVal = if sr.mean > 1 then min 9999 $ abs ((sr.currentRate / sr.mean) - 1) * 100 else 0
       dir = display sr.direction
-      zonedNow = utcToZonedTime utc now
       lvl = T.toLower $ fromMaybe "" lp.logLevel
       -- Silent drops on unknown/empty services are almost always deploy/pod-restart
       -- noise, not incidents. Demote them so the Inbox filter hides them by default.
@@ -891,20 +879,13 @@ createLogPatternRateChangeIssue projectId lp sr = do
             (Spike, "error") -> Critical
             (Spike, _) -> Warning
             (Drop, _) -> Info
-      patternSnippet = T.take 40 lp.logPattern
       title =
-        svcLabel
-          <> " · "
-          <> patternSnippet
-          <> " · "
-          <> dir
-          <> " "
-          <> showPct changePercentVal
-          <> " ("
-          <> showRate sr.currentRate
-          <> "/hr vs "
-          <> showRate sr.mean
-          <> "/hr)"
+        T.intercalate
+          " · "
+          [ svcLabel
+          , T.take 40 lp.logPattern
+          , dir <> " " <> showPct changePercentVal <> " (" <> showRate sr.currentRate <> " vs " <> showRate sr.mean <> ")"
+          ]
   mkIssue
     MkIssueOpts
       { projectId
@@ -934,7 +915,7 @@ createLogPatternRateChangeIssue projectId lp sr = do
             , changeDirection = sr.direction
             , detectedAt = now
             }
-      , timestamp = Just zonedNow
+      , timestamp = Just $ utcToZonedTime utc now
       }
 
 
@@ -950,24 +931,12 @@ createLogPatternRateChangeIssue projectId lp sr = do
 -- "api: GET /users 500"
 sanitizeLogPatternTitle :: Text -> Maybe Text -> Maybe Text -> Text
 sanitizeLogPatternTitle raw sampleM serviceM =
-  let replacements :: [(Text, Text)]
-      replacements =
-        [ (";neutral⇒", " ")
-        , (";badge-error⇒", " ")
-        , (";badge-warning⇒", " ")
-        , (";badge-info⇒", " ")
-        , (";badge-success⇒", " ")
-        , ("{integer}", "")
-        , ("{uuid}", "")
-        , ("{float}", "")
-        , ("{*}", "")
-        , ("{hex}", "")
-        ]
+  let replacements =
+        [(m, " ") | m <- [";neutral⇒", ";badge-error⇒", ";badge-warning⇒", ";badge-info⇒", ";badge-success⇒"]]
+          <> [(p, "") | p <- ["{integer}", "{uuid}", "{float}", "{*}", "{hex}"]]
       stripped = unwords $ words $ foldl' (\t (a, b) -> T.replace a b t) raw replacements
-      printableRatio txt
-        | T.null txt = 0
-        | otherwise = fromIntegral (T.length (T.filter (\c -> isPrint c && isAscii c) txt)) / fromIntegral (T.length txt) :: Double
-      usable = not (T.null stripped) && printableRatio stripped > 0.7
+      -- printable-ASCII ratio > 0.7, as integer arithmetic
+      usable = not (T.null stripped) && 10 * T.length (T.filter (\c -> isPrint c && isAscii c) stripped) > 7 * T.length stripped
       fallback = case (serviceM, sampleM) of
         (Just svc, Just s) -> svc <> ": " <> T.take 80 s
         (_, Just s) -> s
@@ -979,23 +948,11 @@ sanitizeLogPatternTitle raw sampleM serviceM =
 -- | Create an issue for a new log pattern
 createLogPatternIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> LogPatterns.LogPattern -> Eff es Issue
 createLogPatternIssue projectId lp = do
-  let logPatternData =
-        LogPatternData
-          { patternHash = lp.patternHash
-          , logPattern = lp.logPattern
-          , sampleMessage = lp.sampleMessage
-          , logLevel = lp.logLevel
-          , serviceName = lp.serviceName
-          , sourceField = lp.sourceField
-          , firstSeenAt = zonedTimeToUTC lp.firstSeenAt
-          , occurrenceCount = lp.occurrenceCount
-          }
-      lvl = T.toLower $ fromMaybe "" lp.logLevel
-      severity = case lvl of
-        "error" -> Critical
-        "warning" -> Warning
-        "warn" -> Warning
-        _ -> Info
+  let lvl = T.toLower $ fromMaybe "" lp.logLevel
+      severity
+        | lvl == "error" = Critical
+        | lvl `elem` ["warning", "warn"] = Warning
+        | otherwise = Info
   mkIssue
     MkIssueOpts
       { projectId
@@ -1009,7 +966,17 @@ createLogPatternIssue projectId lp = do
       , title = "New Log Pattern: " <> sanitizeLogPatternTitle lp.logPattern lp.sampleMessage lp.serviceName
       , recommendedAction = "A new log pattern has been detected. Review to ensure it's expected behavior."
       , migrationComplexity = "n/a"
-      , issueData = logPatternData
+      , issueData =
+          LogPatternData
+            { patternHash = lp.patternHash
+            , logPattern = lp.logPattern
+            , sampleMessage = lp.sampleMessage
+            , logLevel = lp.logLevel
+            , serviceName = lp.serviceName
+            , sourceField = lp.sourceField
+            , firstSeenAt = zonedTimeToUTC lp.firstSeenAt
+            , occurrenceCount = lp.occurrenceCount
+            }
       , timestamp = Just lp.firstSeenAt
       }
 
@@ -1223,13 +1190,20 @@ getLatestReportByType :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Re
 getLatestReportByType pid rType = Hasql.interpOne [HI.sql| SELECT * FROM apis.reports WHERE project_id = #{pid} AND report_type = #{rType} ORDER BY created_at DESC LIMIT 1 |]
 
 
+-- | Which hash an error issue is keyed on. Framework/transport errors key on the
+-- *parent* (broad) hash so per-route variants collapse into one issue via the
+-- (project_id, target_hash, issue_type) ON CONFLICT index; app errors — and framework
+-- errors with no parent hash — keep their narrow per-route identity.
+frameworkTarget :: Bool -> Maybe Text -> Text -> (Bool, Text)
+frameworkTarget isFw parentHash hsh = maybe (False, hsh) (True,) (parentHash <* guard isFw)
+
+
 createErrorSpikeIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> ErrorPatterns.ErrorPatternWithCurrentRate -> Double -> Double -> Double -> Eff es Issue
 createErrorSpikeIssue projectId errRate currentRate baselineMean zScore =
   let increasePercent = if baselineMean > 0 then ((currentRate / baselineMean) - 1) * 100 else 0
       -- Inherit classification from the underlying pattern so a spike on a framework
       -- error dedupes against the rolled-up framework issue via the same target_hash.
-      useFramework = errRate.isFramework && isJust errRate.parentHash
-      tgt = if useFramework then fromMaybe errRate.hash errRate.parentHash else errRate.hash
+      (useFramework, tgt) = frameworkTarget errRate.isFramework errRate.parentHash errRate.hash
    in mkErrorIssue
         projectId
         tgt
@@ -1244,17 +1218,11 @@ createErrorSpikeIssue projectId errRate currentRate baselineMean zScore =
         ("Error rate has spiked " <> show (round zScore :: Int) <> " standard deviations above baseline. Current: " <> show (round currentRate :: Int) <> "/hr, Baseline: " <> show (round baselineMean :: Int) <> "/hr. Investigate recent deployments or changes.")
 
 
--- | Create a new issue for an error pattern. Framework/transport errors are keyed on
--- the *parent* (broad) hash so that subsequent per-route variants hit the ON CONFLICT
--- path and do not fragment into many issues. App errors keep per-route identity and
--- store the parent hash for UI rollup.
+-- | Create a new issue for an error pattern. See 'frameworkTarget' for how the
+-- target hash is chosen; the parent hash is always stored for UI rollup.
 createNewErrorIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> ErrorPatterns.ErrorPattern -> Eff es Issue
 createNewErrorIssue projectId err =
-  -- Framework errors key the issue on parentHash so per-route variants collapse into one
-  -- issue via the (project_id, target_hash, issue_type) ON CONFLICT index. If the broad
-  -- hash is somehow missing we fall back to the narrow hash (behaves like an app error).
-  let useFramework = err.isFramework && isJust err.parentHash
-      tgt = if useFramework then fromMaybe err.hash err.parentHash else err.hash
+  let (useFramework, tgt) = frameworkTarget err.isFramework err.parentHash err.hash
       title =
         (if useFramework then "Framework Error: " else "New Error: ")
           <> err.errorType

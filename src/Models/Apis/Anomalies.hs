@@ -3,12 +3,6 @@ module Models.Apis.Anomalies (
   AnomalyActions (..),
   AnomalyTypes (..),
   AnomalyId,
-  IssuesData (..),
-  ATError (..),
-  NewEndpointIssue (..),
-  NewFieldIssue (..),
-  NewShapeIssue (..),
-  NewFormatIssue (..),
   PayloadChange (..),
   ChangeType (..),
   FieldChange (..),
@@ -28,21 +22,17 @@ import Data.Effectful.Hasql qualified as Hasql
 import Data.Text qualified as T
 import Data.Text.Display (Display)
 import Data.Time
-import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
-import Database.PostgreSQL.Simple (FromRow, ToRow)
+import Database.PostgreSQL.Simple (FromRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (ToField)
-import Deriving.Aeson qualified as DAE
-import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, type (:>))
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Models.Apis.Endpoints qualified as Endpoints
-import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Pkg.SchemaLearning.Catalog qualified as Fields (
@@ -53,7 +43,6 @@ import Pkg.SchemaLearning.Catalog qualified as Fields (
   ShapeId,
  )
 import Relude hiding (id)
-import Servant (FromHttpApiData (..))
 import System.Types (DB)
 
 
@@ -204,18 +193,16 @@ acknowledgeAnomalies uid issueIds
   | V.null issueIds = pure []
   | otherwise = do
       now <- Time.currentTime
-      targetHashes :: [Text] <-
-        Hasql.interp
-          [HI.sql| UPDATE apis.issues SET acknowledged_by=#{uid}, acknowledged_at=#{now}
-                   WHERE id=ANY(#{issueIds}::uuid[]) RETURNING target_hash |]
-      Hasql.interpExecute_
-        [HI.sql| WITH related AS (
-                   SELECT jsonb_array_elements_text(COALESCE(issue_data->'anomaly_hashes','[]'::jsonb)) AS h
-                   FROM apis.issues WHERE id=ANY(#{issueIds}::uuid[])
-                 )
-                 UPDATE apis.anomalies a SET acknowledged_by=#{uid}, acknowledged_at=#{now}
-                 WHERE a.target_hash IN (SELECT h FROM related) |]
-      pure targetHashes
+      Hasql.interp
+        [HI.sql| UPDATE apis.issues SET acknowledged_by=#{uid}, acknowledged_at=#{now}
+                 WHERE id=ANY(#{issueIds}::uuid[]) RETURNING target_hash |]
+        <* Hasql.interpExecute_
+          [HI.sql| WITH related AS (
+                     SELECT jsonb_array_elements_text(COALESCE(issue_data->'anomaly_hashes','[]'::jsonb)) AS h
+                     FROM apis.issues WHERE id=ANY(#{issueIds}::uuid[])
+                   )
+                   UPDATE apis.anomalies a SET acknowledged_by=#{uid}, acknowledged_at=#{now}
+                   WHERE a.target_hash IN (SELECT h FROM related) |]
 
 
 acknowlegeCascade :: (DB es, Time :> es) => Projects.UserId -> V.Vector Text -> Eff es Int64
@@ -224,7 +211,7 @@ acknowlegeCascade uid targets
   | otherwise = do
       now <- Time.currentTime
       let hashes = (<> "%") <$> targets
-      _ <- Hasql.interpExecute [HI.sql| UPDATE apis.issues SET acknowledged_by = #{uid}, acknowledged_at = #{now} WHERE target_hash=ANY(#{hashes}) |]
+      Hasql.interpExecute_ [HI.sql| UPDATE apis.issues SET acknowledged_by = #{uid}, acknowledged_at = #{now} WHERE target_hash LIKE ANY(#{hashes}) |]
       Hasql.interpExecute [HI.sql| UPDATE apis.anomalies SET acknowledged_by = #{uid}, acknowledged_at = #{now} WHERE target_hash LIKE ANY(#{hashes}) |]
 
 
@@ -236,107 +223,29 @@ archiveAnomaliesAndIssues issueIds
   | V.null issueIds = pure 0
   | otherwise = do
       now <- Time.currentTime
-      n <- Hasql.interpExecute [HI.sql| UPDATE apis.issues SET archived_at=#{now} WHERE id=ANY(#{issueIds}::uuid[]) |]
-      Hasql.interpExecute_
-        [HI.sql| WITH related AS (
-                   SELECT jsonb_array_elements_text(COALESCE(issue_data->'anomaly_hashes','[]'::jsonb)) AS h
-                   FROM apis.issues WHERE id=ANY(#{issueIds}::uuid[])
-                 )
-                 UPDATE apis.anomalies a SET archived_at=#{now}
-                 WHERE a.target_hash IN (SELECT h FROM related) |]
-      pure n
+      Hasql.interpExecute [HI.sql| UPDATE apis.issues SET archived_at=#{now} WHERE id=ANY(#{issueIds}::uuid[]) |]
+        <* Hasql.interpExecute_
+          [HI.sql| WITH related AS (
+                     SELECT jsonb_array_elements_text(COALESCE(issue_data->'anomaly_hashes','[]'::jsonb)) AS h
+                     FROM apis.issues WHERE id=ANY(#{issueIds}::uuid[])
+                   )
+                   UPDATE apis.anomalies a SET archived_at=#{now}
+                   WHERE a.target_hash IN (SELECT h FROM related) |]
 
 
 -------------------------------------------------------------------------------------------
 -- New Issues model implementations
 --
 
-data NewShapeIssue = NewShapeIssue
-  { id :: Fields.ShapeId
-  , endpointId :: Endpoints.EndpointId
-  , endpointMethod :: Text
-  , endpointUrlPath :: Text
-  , host :: Text
-  , newUniqueFields :: V.Vector Text
-  , deletedFields :: V.Vector Text
-  , updatedFieldFormats :: V.Vector Text
-  }
-  deriving stock (Generic, Show)
-  deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake NewShapeIssue
-
-
-data NewFieldIssue = NewFieldIssue
-  { id :: Fields.FieldId
-  , endpointId :: Endpoints.EndpointId
-  , endpointMethod :: Text
-  , endpointUrlPath :: Text
-  , host :: Text
-  , key :: Text
-  , keyPath :: Text
-  , fieldCategory :: Fields.FieldCategoryEnum
-  , format :: Text
-  }
-  deriving stock (Generic, Show)
-  deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake NewFieldIssue
-
-
-data NewFormatIssue = NewFormatIssue
-  { id :: Fields.FormatId
-  , endpointId :: Endpoints.EndpointId
-  , endpointMethod :: Text
-  , endpointUrlPath :: Text
-  , host :: Text
-  , fieldKeyPath :: Text
-  , formatType :: Fields.FieldTypes
-  , fieldCategory :: Fields.FieldCategoryEnum
-  , examples :: Maybe (V.Vector Text)
-  }
-  deriving stock (Generic, Show)
-  deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake NewFormatIssue
-
-
-data NewEndpointIssue = NewEndpointIssue
-  { id :: Endpoints.EndpointId
-  , endpointMethod :: Text
-  , endpointUrlPath :: Text
-  , host :: Text
-  }
-  deriving stock (Generic, Show)
-  deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake NewEndpointIssue
-
-
-data IssuesData
-  = IDNewShapeIssue NewShapeIssue
-  | IDNewFieldIssue NewFieldIssue
-  | IDNewFormatIssue NewFormatIssue
-  | IDNewEndpointIssue NewEndpointIssue
-  | IDNewRuntimeExceptionIssue ErrorPatterns.ATError
-  | IDEmpty
-  deriving stock (Generic, Show)
-  deriving anyclass (NFData)
-  deriving (FromField, ToField) via Aeson IssuesData
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake IssuesData
-
-
-instance Default IssuesData where
-  def = IDEmpty
-
-
--- NFData instance for Aeson wrapper (postgresql-simple doesn't provide it)
+-- Orphans: postgresql-simple's Aeson wrapper provides neither.
 instance NFData a => NFData (Aeson a) where
   rnf (Aeson a) = rnf a
 
 
--- Default instance for Aeson wrapper
 instance Default (Aeson [a]) where
   def = Aeson []
 
 
--- Payload change data structures
 data PayloadChange = PayloadChange
   { method :: Maybe Text
   , statusCode :: Maybe Int
@@ -377,38 +286,9 @@ data FieldChangeKind = Modified | Added | Removed
   deriving anyclass (AE.FromJSON, AE.ToJSON, NFData)
 
 
+-- | Derive a service name from the path (@\/api\/v1\/auth\/login@ → @auth-service@), falling back to the host.
 detectService :: Maybe Text -> Maybe Text -> Text
-detectService hostM endpointPathM =
-  let pathSegments = maybe [] (T.splitOn "/" . T.dropWhile (== '/')) endpointPathM
-      -- Try to detect service from common patterns like /api/v1/auth/login -> auth-service
-      serviceFromPath = case pathSegments of
-        ("api" : _ : service : _) -> service <> "-service"
-        (service : _) | service /= "" -> service <> "-service"
-        _ -> ""
-   in if T.null serviceFromPath
-        then fromMaybe "api-service" hostM
-        else serviceFromPath
-
-
-newtype ErrorId = ErrorId {unErrorId :: UUID.UUID}
-  deriving stock (Generic, Show)
-  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, NFData, Ord, ToField)
-
-
-data ATError = ATError
-  { id :: ErrorId
-  , createdAt :: ZonedTime
-  , updatedAt :: ZonedTime
-  , projectId :: Projects.ProjectId
-  , hash :: Text
-  , errorType :: Text
-  , message :: Text
-  , errorData :: ErrorPatterns.ATError
-  , firstTraceId :: Maybe Text
-  , recentTraceId :: Maybe Text
-  }
-  deriving stock (Generic, Show)
-  deriving anyclass (Default, FromRow, NFData, ToRow)
-  deriving (Entity) via (GenericEntity '[Schema "apis", TableName "error_patterns", PrimaryKey "id", FieldModifiers '[CamelToSnake]] ATError)
-  deriving (FromField, ToField) via Aeson ATError
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake ATError
+detectService hostM endpointPathM = case maybe [] (T.splitOn "/" . T.dropWhile (== '/')) endpointPathM of
+  ("api" : _ : service : _) -> service <> "-service"
+  (service : _) | service /= "" -> service <> "-service"
+  _ -> fromMaybe "api-service" hostM

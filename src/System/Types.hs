@@ -20,6 +20,7 @@ module System.Types (
   redirectCS,
   effToServantHandler,
   effToServantHandlerTest,
+  effToServantHandlerTestHTTP,
   effToHandler,
   atAuthToBase,
   atAuthToBaseTest,
@@ -154,12 +155,18 @@ effToServantHandler env logger tp app =
 -- The 'TestClock' drives the 'Time' effect and is shared across handler
 -- invocations so tests can advance time between calls.
 effToServantHandlerTest :: TestClock -> IORef [UUID.UUID] -> AuthContext -> Log.Logger -> TracerProvider -> ATBaseCtx a -> Servant.Handler a
-effToServantHandlerTest clock uuidRef env logger tp app =
+effToServantHandlerTest = effToServantHandlerTestHTTP (runHTTPGolden "./tests/golden/")
+
+
+-- | 'effToServantHandlerTest' with a caller-chosen HTTP interpreter, e.g.
+-- 'Data.Effectful.Wreq.runHTTPRecord' to assert on outgoing request payloads.
+effToServantHandlerTestHTTP :: (forall x hes. IOE :> hes => Eff (HTTP ': hes) x -> Eff hes x) -> TestClock -> IORef [UUID.UUID] -> AuthContext -> Log.Logger -> TracerProvider -> ATBaseCtx a -> Servant.Handler a
+effToServantHandlerTestHTTP http clock uuidRef env logger tp app =
   app
     & ELLM.runLLMGolden "./tests/golden/"
     & Effectful.Reader.Static.runReader env
     & runStaticUUIDRef uuidRef
-    & runHTTPGolden "./tests/golden/"
+    & http
     & runHasqlPool env.hasqlPool
     & runLabeled @"timefusion" (runHasqlPool env.hasqlTimefusionPool)
     & runMutableTime clock

@@ -15,7 +15,6 @@ import Control.Lens (filtered, has, (^..), (^?), _Just)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KEM
 import Data.Aeson.Lens (key, _Array, _String)
-import Data.Char (isSpace)
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Foldable.WithIndex (ifor_)
@@ -47,7 +46,7 @@ getServiceName rs = fromMaybe "Unknown" $ (Map.lookup "service" =<< rs) >>= (^? 
 
 
 getServiceColor :: Text -> HashMap Text Text -> Text
-getServiceColor s serviceColors = fromMaybe "bg-fillNeutral-strong" $ HM.lookup s serviceColors
+getServiceColor = HM.findWithDefault "bg-fillNeutral-strong"
 
 
 getRequestDetails :: Maybe (Map Text AE.Value) -> Maybe (Text, Text, Text, Int)
@@ -62,7 +61,11 @@ getRequestDetails spanRecord = do
     txt k = fromMaybe "" $ atMapText k spanRecord
     query = txt "db.query"
     status pfx = fromMaybe 0 $ Telemetry.atMapInt (pfx <> ".status_code") spanRecord
-    url pfx = viaNonEmpty head $ Relude.filter (not . T.null) [txt (pfx <> "." <> k) | k <- ["route", "path", "url", "target"]]
+    url pfx = viaNonEmpty head $ filter (not . T.null) [txt (pfx <> "." <> k) | k <- ["route", "path", "url", "target"]]
+
+
+isHttpSpan :: Telemetry.OtelLogsAndSpans -> Bool
+isHttpSpan r = any (\(t, _, _, _) -> t == "HTTP") (getRequestDetails (unAesonTextMaybe r.attributes))
 
 
 -- | Exception events (event_name == "exception") within a span's events array.
@@ -116,12 +119,11 @@ anchorSdkSpan lookupParent lookupSdk record
   | record.name `elem` map Just Telemetry.sdkSpanNames = do
       parentM <- maybe (pure Nothing) lookupParent (record.parent_id >>= guarded (not . T.null))
       pure $ case parentM of
-        Just parent | isHttpRec parent -> (parent, Just record)
+        Just parent | isHttpSpan parent -> (parent, Just record)
         _ -> (record, Nothing)
-  | isHttpRec record && not hasBodies = (record,) <$> lookupSdk
+  | isHttpSpan record && not hasBodies = (record,) <$> lookupSdk
   | otherwise = pure (record, Nothing)
   where
-    isHttpRec r = any (\(t, _, _, _) -> t == "HTTP") (getRequestDetails (unAesonTextMaybe r.attributes))
     hasBodies = any (\k -> has (_Just . key k) (unAesonTextMaybe record.body)) ["request_body", "response_body"]
 
 
@@ -129,6 +131,12 @@ data ApiItemDetailed
   = SpanItemExpanded Projects.ProjectId Telemetry.OtelLogsAndSpans (Maybe Telemetry.OtelLogsAndSpans) (Maybe Text)
   | LogItemExpanded Projects.ProjectId Telemetry.OtelLogsAndSpans (Maybe Text)
   | ItemDetailedNotFound Text
+
+
+-- | Dismissing the panel: the trace overlay owns it via the global handler, the log-explorer
+-- shell via the event contract — both are wired on every close affordance.
+closeDetailAttrs :: [Attribute]
+closeDetailAttrs = [onclick_ "window.closeTraceDetails(this)", [__|on click send closeDetailPanel to closest <.details-panel/>|]]
 
 
 instance ToHtml ApiItemDetailed where
@@ -139,12 +147,9 @@ instance ToHtml ApiItemDetailed where
     where
       closeBtn =
         button_
-          [ class_ "btn btn-sm btn-ghost text-sm"
-          , Aria.label_ "Close details panel"
-          , term "data-share-hide" "1"
-          , onclick_ "window.closeTraceDetails(this)"
-          , [__|on click send closeDetailPanel to closest <.details-panel/>|]
-          ]
+          ( [class_ "btn btn-sm btn-ghost text-sm", Aria.label_ "Close details panel", term "data-share-hide" "1"]
+              <> closeDetailAttrs
+          )
           "Close"
   toHtmlRaw = toHtml
 
@@ -154,7 +159,7 @@ spanBadge pid path val fieldKey =
   div_
     [ class_ "relative min-w-0"
     , term "data-field-path" path
-    , term "data-field-value" $ "\"" <> T.dropAround isSpace (fromMaybe val (viaNonEmpty last (T.splitOn ":" val))) <> "\""
+    , term "data-field-value" $ "\"" <> T.strip (T.takeWhileEnd (/= ':') val) <> "\""
     ]
     $ button_
       [ class_ "relative cursor-pointer flex gap-2 items-center text-textStrong bg-fillWeaker border border-strokeWeak text-xs rounded-lg whitespace-nowrap px-2 py-1 max-w-64"
@@ -176,12 +181,12 @@ expandedItemView pid item aptSp selectedTabM = do
   -- Row #1 (both views): back-to-logs (mobile only), timestamp, close.
   div_ [class_ "sticky top-[-1px] z-10 flex items-center gap-2 bg-bgBase border-b border-l border-strokeWeak max-md:border-l-0 px-2 py-1"] do
     button_
-      [ class_ "hidden max-md:flex cursor-pointer items-center gap-1.5 text-sm font-medium text-textBrand"
-      , Aria.label_ "Close details"
-      , term "data-share-hide" "1"
-      , onclick_ "window.closeTraceDetails(this)"
-      , [__|on click send closeDetailPanel to closest <.details-panel/>|]
-      ]
+      ( [ class_ "hidden max-md:flex cursor-pointer items-center gap-1.5 text-sm font-medium text-textBrand"
+        , Aria.label_ "Close details"
+        , term "data-share-hide" "1"
+        ]
+          <> closeDetailAttrs
+      )
       (faSprite_ "chevron-left" "regular" "w-3.5 h-3.5" >> "Back to logs")
     div_ [class_ "flex gap-2 items-center shrink-0 ml-auto"] do
       dateTime (if isLog then item.timestamp else item.start_time) Nothing
@@ -197,12 +202,12 @@ expandedItemView pid item aptSp selectedTabM = do
             faSprite_ "expand" "regular" "w-3.5 h-3.5 text-iconNeutral [#apiLogsPage[data-fullscreen=details]_&]:hidden!"
             faSprite_ "compress" "regular" "hidden! w-3.5 h-3.5 text-iconNeutral [#apiLogsPage[data-fullscreen=details]_&]:block!"
         button_
-          [ class_ "cursor-pointer detail-close-btn rounded-md p-1 hover:bg-fillWeak transition-colors"
-          , Aria.label_ "Close item details"
-          , term "data-tippy-content" "Close · Esc"
-          , onclick_ "window.closeTraceDetails(this)"
-          , [__|on click send closeDetailPanel to closest <.details-panel/>|]
-          ]
+          ( [ class_ "cursor-pointer detail-close-btn rounded-md p-1 hover:bg-fillWeak transition-colors"
+            , Aria.label_ "Close item details"
+            , term "data-tippy-content" "Close · Esc"
+            ]
+              <> closeDetailAttrs
+          )
           $ faSprite_ "xmark" "regular" "w-3 h-3 text-iconNeutral"
   div_ [class_ $ "w-full pl-3 pr-1 pb-2 relative border-l border-strokeWeak max-md:border-l-0 max-md:px-0 " <> if isLog then " flex flex-col gap-2" else " pb-[50px]"] do
     div_ [id_ "copy_share_link"] pass
@@ -211,20 +216,20 @@ expandedItemView pid item aptSp selectedTabM = do
     headerBlock
     div_ [class_ "w-full mt-3 group/dtab"] do
       div_ [class_ "flex", [__|on click halt the event's bubbling|]] do
-        forM_ tabs \t -> lazyDetailTab_ t (t.marker == activeMarker)
+        traverse_ lazyDetailTab_ tabs
         div_ [class_ "w-full border-b-2 border-b-strokeWeak"] pass
       div_ [class_ "mt-2 py-1 text-textWeak", id_ "trace-details-content"] $ traverse_ (.panel) activeTabs
   where
     isLog = item.kind == Just "log"
     isAlert = item.kind == Just "alert"
-    isHttp = case if isLog then Nothing else getRequestDetails (unAesonTextMaybe item.attributes) of Just ("HTTP", _, _, _) -> True; _ -> False
+    isHttp = not isLog && isHttpSpan item
     createdAt = formatUTC item.timestamp
     dgrp = "dtab-" <> item.id
     detailUrl = "/p/" <> pid.toText <> "/log_explorer/" <> item.id <> "/" <> createdAt <> "/detailed"
     activeMarker = fromMaybe (case tabs of [] -> "tab-raw"; t : _ -> t.marker) selectedTabM
     activeTabs = filter ((== activeMarker) . (.marker)) tabs
-    lazyDetailTab_ t active = label_ [class_ $ "cursor-pointer border-b-2 border-b-strokeWeak px-4 py-1.5 text-sm has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-strokeBrand-strong has-[:focus-visible]:rounded-sm has-[:checked]:font-bold has-[:checked]:border-strokeBrand-strong has-[:checked]:text-textBrand " <> t.cls] do
-      input_ $ [type_ "radio", name_ dgrp, class_ $ "sr-only " <> t.marker, hxGet_ (detailUrl <> "?tab=" <> t.marker), hxTarget_ "#trace-details-content", hxSelect_ "#trace-details-content", hxSwap_ "outerHTML", hxTrigger_ "change"] <> [checked_ | active]
+    lazyDetailTab_ t = label_ [class_ $ "cursor-pointer border-b-2 border-b-strokeWeak px-4 py-1.5 text-sm has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-strokeBrand-strong has-[:focus-visible]:rounded-sm has-[:checked]:font-bold has-[:checked]:border-strokeBrand-strong has-[:checked]:text-textBrand " <> t.cls] do
+      input_ $ [type_ "radio", name_ dgrp, class_ $ "sr-only " <> t.marker, hxGet_ (detailUrl <> "?tab=" <> t.marker), hxTarget_ "#trace-details-content", hxSelect_ "#trace-details-content", hxSwap_ "outerHTML", hxTrigger_ "change"] <> [checked_ | t.marker == activeMarker]
       t.label
     events = fromMaybe AE.Null (unAesonTextMaybe item.events)
     spanErrors = if isLog then [] else getSpanErrors events
@@ -246,7 +251,7 @@ expandedItemView pid item aptSp selectedTabM = do
 
     actionRow = do
       when isHttp
-        $ button_ [class_ "action-btn", onclick_ "window.buildCurlRequest(event)", term "data-reqjson" (decodeUtf8 $ AE.encode $ AE.toJSON item)]
+        $ button_ [class_ "action-btn", onclick_ "window.buildCurlRequest(event)", term "data-reqjson" (decodeUtf8 $ AE.encode item)]
         $ actionBtnBody "copy" "Copy as curl"
       whenJust (item.context >>= (.trace_id) >>= guarded (not . T.null)) \trId ->
         button_
@@ -295,15 +300,11 @@ expandedItemView pid item aptSp selectedTabM = do
             (not isLog)
             "tab-logs"
             "flex items-center gap-1"
-            (badge "Logs" "badge badge-ghost badge-sm" (numberOfEvents events))
+            (badge "Logs" "badge badge-ghost badge-sm" (maybe 0 length (events ^? _Array)))
             (jsonTab_ "group-has-[.tab-logs:checked]/dtab:block" "logs-content" "events" events Nothing)
         , tab True "tab-raw" "whitespace-nowrap" "Raw data" (jsonTab_ "group-has-[.tab-raw:checked]/dtab:block" "m-raw-content" "raw" (AE.toJSON item) Nothing)
         ]
       where
-        numberOfEvents :: AE.Value -> Int
-        numberOfEvents (AE.Array obj) = length obj
-        numberOfEvents _ = 0
-
         tab shown m c l p = DetailTab m c l p <$ guard shown
         badge l c n = toHtml @Text l >> div_ [class_ c] (show n)
         attPanel = tabPanel_ "group-has-[.tab-att:checked]/dtab:block" "att-content" $ case unAesonTextMaybe item.attributes of
@@ -312,8 +313,8 @@ expandedItemView pid item aptSp selectedTabM = do
         reqPanel = tabPanel_ "group-has-[.tab-req:checked]/dtab:block" "request-content" $ div_ [id_ "http-content-container", class_ "group/htab flex flex-col gap-3 mt-2"] do
           let cSp = fromMaybe item aptSp
               bodyField k = fromMaybe (AE.object []) $ unAesonTextMaybe cSp.body >>= (^? key k)
-              httpSub = foldlM (\acc k -> case acc of AE.Object o -> KEM.lookup k o; _ -> Nothing) (AE.Object $ maybe mempty (\case AE.Object o -> o; _ -> mempty) (unAesonTextMaybe cSp.attributes >>= Map.lookup "http"))
-              hp = fromMaybe AE.Null . httpSub
+              httpAttrs = fromMaybe AE.Null $ unAesonTextMaybe cSp.attributes >>= Map.lookup "http"
+              hp ks = fromMaybe AE.Null $ foldlM (\v k -> v ^? key k) httpAttrs ks
               notEmpty v = v `notElem` ([AE.Null, AE.object [], AE.Array mempty, AE.String ""] :: [AE.Value])
               -- Default to the first sub-tab that has content (Request Details always does).
               defaultTab =
@@ -344,7 +345,6 @@ expandedItemView pid item aptSp selectedTabM = do
               \(visCls, eid, nm, val, filt) -> jsonTab_ visCls eid nm val filt
 
 
--- Helper functions
 renderErrors :: [AE.Value] -> Html ()
 renderErrors errs =
   div_ [class_ "flex flex-col mt-4 gap-3 w-full"] $ ifor_ errs \idx err ->

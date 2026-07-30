@@ -1,5 +1,3 @@
-{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
-
 module Models.Projects.ProjectApiKeys (
   ProjectApiKey (..),
   ProjectApiKeyId (..),
@@ -83,18 +81,14 @@ data ProjectApiKey = ProjectApiKey
 newProjectApiKeys :: Time :> es => Projects.ProjectId -> UUID.UUID -> Text -> Text -> Eff es ProjectApiKey
 newProjectApiKeys projectId projectKeyUUID title keyPrefix = do
   createdAt <- Time.currentTime
-  let updatedAt = createdAt
-      deletedAt = Nothing
-      active = True
-      id = ProjectApiKeyId projectKeyUUID
-  pure $ ProjectApiKey{..}
+  pure ProjectApiKey{id = ProjectApiKeyId projectKeyUUID, updatedAt = createdAt, deletedAt = Nothing, active = True, ..}
 
 
 insertProjectApiKey :: DB es => ProjectApiKey -> Eff es ()
-insertProjectApiKey ProjectApiKey{id = kid, createdAt, updatedAt, deletedAt, active, projectId, title, keyPrefix} =
+insertProjectApiKey ProjectApiKey{..} =
   Hasql.interpExecute_
     [HI.sql| INSERT INTO projects.project_api_keys (id, created_at, updated_at, deleted_at, active, project_id, title, key_prefix)
-           VALUES (#{kid}, #{createdAt}, #{updatedAt}, #{deletedAt}, #{active}, #{projectId}, #{title}, #{keyPrefix}) |]
+           VALUES (#{id}, #{createdAt}, #{updatedAt}, #{deletedAt}, #{active}, #{projectId}, #{title}, #{keyPrefix}) |]
 
 
 projectApiKeysByProjectId :: DB es => Projects.ProjectId -> Eff es [ProjectApiKey]
@@ -119,36 +113,23 @@ getProjectApiKey :: DB es => ProjectApiKeyId -> Eff es (Maybe ProjectApiKey)
 getProjectApiKey kid = Hasql.interp (selectFrom @ProjectApiKey <> [HI.sql| WHERE id = #{kid} AND active = true |])
 
 
+-- | Cache-backed lookup. DB-level failures (connection refused, pool exhausted, …)
+-- throw 'Hasql.HasqlException' so the caller (ultimately 'Pkg.Queue') routes the batch
+-- to the DLQ; a clean @Nothing@ stays the legitimate "key not in DB" signal.
 getProjectIdByApiKey :: (DB es, Effectful.Reader Config.AuthContext :> es) => Text -> Eff es (Maybe Projects.ProjectId)
 getProjectIdByApiKey projectKey = do
   appCtx <- Effectful.ask @Config.AuthContext
-  liftIO $ Cache.fetchWithCache appCtx.projectKeyCache projectKey \_ ->
-    queryProjectIdByKey appCtx.hasqlPool projectKey
+  liftIO $ Cache.fetchWithCache appCtx.projectKeyCache projectKey \key ->
+    OHasql.use appCtx.hasqlPool (Session.statement () (HI.interp True [HI.sql| SELECT project_id FROM projects.project_api_keys WHERE key_prefix = #{key} |]))
+      >>= either (throwIO . Hasql.HasqlException) pure
 
 
 projectIdsByProjectApiKeys :: (DB es, Effectful.Reader Config.AuthContext :> es) => V.Vector Text -> Eff es (V.Vector (Text, Projects.ProjectId))
-projectIdsByProjectApiKeys projectKeys = do
-  appCtx <- Effectful.ask @Config.AuthContext
-  liftIO $ do
-    results <- forM (V.toList projectKeys) $ \key -> do
-      maybeProjectId <- Cache.fetchWithCache appCtx.projectKeyCache key $ \k ->
-        queryProjectIdByKey appCtx.hasqlPool k
-      pure $ (key,) <$> maybeProjectId
-    pure $ V.fromList $ catMaybes results
+projectIdsByProjectApiKeys projectKeys =
+  V.catMaybes <$> forM projectKeys \key -> fmap (key,) <$> getProjectIdByApiKey key
 
 
--- | IO-level helper for cache callbacks that need to query hasql directly.
--- DB-level failures (connection refused, pool exhausted, …) throw
--- 'Hasql.HasqlException' so the caller (and ultimately 'Pkg.Queue') can route
--- the batch to the DLQ. A clean @Right Nothing@ is preserved as the
--- legitimate "key not in DB" signal — only infrastructure failures throw.
-queryProjectIdByKey :: OHasql.TracedPool -> Text -> IO (Maybe Projects.ProjectId)
-queryProjectIdByKey hpool key =
-  OHasql.use hpool (Session.statement () (HI.interp True [HI.sql| SELECT project_id FROM projects.project_api_keys WHERE key_prefix = #{key} |]))
-    >>= either (throwIO . Hasql.HasqlException) pure
-
-
--- AES256 encryption
+-- | AES256-CTR; symmetric, so 'decryptAPIKey' is the same function.
 encryptAPIKey :: ByteString -> ByteString -> ByteString
 encryptAPIKey key = ctrCombine ctx nullIV
   where
@@ -156,7 +137,7 @@ encryptAPIKey key = ctrCombine ctx nullIV
     ctx = throwCryptoError $ cipherInit key
 
 
--- | decryptAPIKey :: secretKey -> TextToDecrypt -> DecryptedText as bytestring
+-- | @decryptAPIKey secretKey ciphertext@ — inverse of 'encryptAPIKey'.
 decryptAPIKey :: ByteString -> ByteString -> ByteString
 decryptAPIKey = encryptAPIKey
 

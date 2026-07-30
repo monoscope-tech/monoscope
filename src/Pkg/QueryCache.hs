@@ -15,6 +15,7 @@ module Pkg.QueryCache (
 ) where
 
 import Data.Char (isDigit)
+import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Map.Strict qualified as M
 import Data.Text qualified as T
@@ -243,7 +244,7 @@ recalculateStats rows =
     rowSums = V.map (sum . V.mapMaybe id . V.drop 1) rows
    in
     if V.null allValues
-      then MetricsStats 0 0 0 0 0 0 0
+      then def
       else
         let h = V.head allValues
             maxFreqEntries = 1000 -- cap frequency map to prevent memory issues with high-cardinality data

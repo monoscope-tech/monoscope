@@ -15,7 +15,6 @@ import Data.Map qualified as Map
 import Data.OpenApi (ToSchema)
 import Data.Set qualified as S
 import Data.Text qualified as T
-import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Pkg.DeriveUtils (SnakeSchema (..))
 import Relude
@@ -203,13 +202,11 @@ generateSchemaForAI schema =
       , ("Network:", filterByPrefixes ["attributes.client", "attributes.server", "attributes.network"])
       ]
 
-    filterByPrefixes prefixes = filter (matchesAnyPrefix prefixes . fst) fields
-    matchesAnyPrefix prefixes name = any (`T.isPrefixOf` name) prefixes || name `elem` prefixes
+    filterByPrefixes prefixes = filter (\(name, _) -> any (`T.isPrefixOf` name) prefixes) fields
 
-    renderCategory (title, categoryFields) =
-      if null categoryFields
-        then []
-        else title : map renderField (take 10 categoryFields) ++ [""]
+    renderCategory (title, categoryFields)
+      | null categoryFields = []
+      | otherwise = title : map renderField (take 10 categoryFields) <> [""]
 
     renderField (name, info) = "- " <> name <> maybe "" (\vals -> " (" <> T.intercalate ", " vals <> ")") info.examples
 
@@ -296,16 +293,8 @@ popularOtelQueriesJson = AE.toJSON popularOtelQueries
 -- duration, body) aren't in the flattened set and are kept unconditionally.
 deriveSchema :: Set Text -> Schema
 deriveSchema liveAttrs =
-  let handCoded = telemetrySchema.fields
-      bareDefault = FieldInfo "text" "" Nothing
-      -- Top-level fields aren't in the flattened set; keep their hand-coded
-      -- entries (timestamp, name, kind, severity.text → severity.severity_text,
-      -- duration, body, etc.). Drop only the dotted-form entries that the
-      -- live set doesn't confirm.
-      isTopLevel k = not ("." `T.isInfixOf` k)
-      keepHand k _ = isTopLevel k || k `S.member` liveAttrs
-      kept = Map.filterWithKey keepHand handCoded
-      -- For any live column not already in 'kept', add a bare entry.
-      missing = [k | k <- toList liveAttrs, not (Map.member k kept)]
-      enriched = foldl' (\m k -> Map.insert k bareDefault m) kept missing
-   in Schema{fields = enriched}
+  -- union is left-biased: hand-coded entries win over the bare live ones.
+  Schema{fields = Map.filterWithKey keepHand telemetrySchema.fields `Map.union` Map.fromSet (const bareDefault) liveAttrs}
+  where
+    bareDefault = FieldInfo "text" "" Nothing
+    keepHand k _ = not ("." `T.isInfixOf` k) || k `S.member` liveAttrs

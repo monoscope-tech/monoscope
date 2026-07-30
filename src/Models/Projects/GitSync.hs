@@ -47,8 +47,8 @@ import Data.Effectful.Wreq qualified as W
 import Data.Generics.Labels ()
 import Data.Map.Strict qualified as M
 import Data.Text qualified as T
-import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime)
-import Data.Time.Clock.POSIX (getPOSIXTime)
+import Data.Time (UTCTime)
+import Data.Time.Clock.POSIX (getPOSIXTime, posixSecondsToUTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Data.Yaml qualified as Yaml
@@ -70,6 +70,7 @@ import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..), respo
 import Network.HTTP.Types.Status (statusCode)
 import Pkg.DeriveUtils (DB, UUIDId (..), selectFrom)
 import Relude
+import Relude.Extra.Bifunctor (bimapF, firstF)
 import System.IO (hClose)
 import System.IO.Temp (withSystemTempFile)
 import System.Logging (logWarn)
@@ -108,7 +109,7 @@ data GitHubSync = GitHubSync
 instance Default GitHubSync where
   def = GitHubSync (UUIDId UUID.nil) (UUIDId UUID.nil) "" "" "main" Nothing Nothing "" Nothing Nothing True epoch epoch
     where
-      epoch = UTCTime (fromGregorian 1970 1 1) (secondsToDiffTime 0)
+      epoch = posixSecondsToUTCTime 0
 
 
 data TreeEntry = TreeEntry
@@ -139,10 +140,8 @@ encryptToken encKey = extractBase64 . B64.encodeBase64 . encryptAPIKey encKey . 
 -- SECURITY: Never falls back to plaintext - callers must handle Left appropriately.
 decryptToken :: ByteString -> Text -> Either Text Text
 decryptToken encKey encryptedB64 =
-  first (("Base64 decode failed: " <>) . toText . show)
-    $ decodeUtf8
-    . decryptAPIKey encKey
-    <$> B64.decodeBase64Untyped (encodeUtf8 encryptedB64)
+  bimap ("Base64 decode failed: " <>) (decodeUtf8 . decryptAPIKey encKey)
+    $ B64.decodeBase64Untyped (encodeUtf8 encryptedB64)
 
 
 -- | Decrypt a GitHubSync's access token if present. Returns Left with error if decryption fails.
@@ -160,14 +159,10 @@ getGitHubSync pid =
     (selectFrom @GitHubSync <> [HI.sql| WHERE project_id = #{pid} |])
 
 
--- | Helper to decrypt sync config, logging on failure
-withDecryption :: (AE.ToJSON ctx, DB es, Log :> es) => ByteString -> ctx -> Eff es (Maybe GitHubSync) -> Eff es (Maybe GitHubSync)
-withDecryption encKey ctx fetch =
-  fetch >>= maybe (pure Nothing) (either (\err -> logWarn "GitHub sync token decryption failed" (ctx, err) $> Nothing) (pure . Just) . decryptSync encKey)
-
-
 getGitHubSyncDecrypted :: (DB es, Log :> es) => ByteString -> ProjectId -> Eff es (Maybe GitHubSync)
-getGitHubSyncDecrypted encKey pid = withDecryption encKey pid $ getGitHubSync pid
+getGitHubSyncDecrypted encKey pid =
+  getGitHubSync pid
+    >>= maybe (pure Nothing) (either (\err -> logWarn "GitHub sync token decryption failed" (pid, err) $> Nothing) (pure . Just) . decryptSync encKey)
 
 
 getGitHubSyncByRepo :: DB es => Text -> Text -> Eff es (Maybe GitHubSync)
@@ -264,36 +259,33 @@ fetchGitTree token sync = do
 fetchFileContent :: (IOE :> es, W.HTTP :> es) => Text -> GitHubSync -> Text -> Eff es (Either Text ByteString)
 fetchFileContent token sync path = do
   let url = "https://api.github.com/repos/" <> sync.owner <> "/" <> sync.repo <> "/contents/" <> path <> "?ref=" <> sync.branch
-  result <- try $ W.getWith (githubOpts token) (toString url)
-  pure $ case result of
-    Left (err :: HttpException) -> Left $ formatHttpError err
-    Right resp -> case resp ^. W.responseBody . key "content" . _String of
-      "" -> Left "No content field"
-      b64Content -> first (toText . show) $ B64.decodeBase64Untyped $ encodeUtf8 $ T.filter (/= '\n') b64Content
+  result <- tryHttp $ W.getWith (githubOpts token) (toString url)
+  pure $ result >>= \resp -> case resp ^. W.responseBody . key "content" . _String of
+    "" -> Left "No content field"
+    b64Content -> B64.decodeBase64Untyped $ encodeUtf8 $ T.filter (/= '\n') b64Content
 
 
 -- | Push a file to GitHub. Returns (fileSha, treeSha) on success.
 pushFileToGit :: (IOE :> es, W.HTTP :> es) => Text -> GitHubSync -> Text -> ByteString -> Maybe Text -> Text -> Eff es (Either Text (Text, Text))
 pushFileToGit token sync path content existingSha message = do
   let url = "https://api.github.com/repos/" <> sync.owner <> "/" <> sync.repo <> "/contents/" <> path
-      b64Content = extractBase64 $ B64.encodeBase64 content
       payload =
         AE.object
-          $ catMaybes
-            [ Just $ "message" AE..= message
-            , Just $ "content" AE..= b64Content
-            , Just $ "branch" AE..= sync.branch
-            , ("sha" AE..=) <$> existingSha
+          $ [ "message" AE..= message
+            , "content" AE..= extractBase64 (B64.encodeBase64 content)
+            , "branch" AE..= sync.branch
             ]
-  result <- try $ W.putWith (githubOpts token) (toString url) payload
-  pure $ case result of
-    Left (err :: HttpException) -> Left $ formatHttpError err
-    Right resp ->
-      let fileSha = resp ^? W.responseBody . key "content" . key "sha" . _String
-          treeSha = resp ^? W.responseBody . key "commit" . key "tree" . key "sha" . _String
-       in case (fileSha, treeSha) of
-            (Just f, Just t) -> Right (f, t)
-            _ -> Left "Missing sha in response"
+          <> maybeToList (("sha" AE..=) <$> existingSha)
+  result <- tryHttp $ W.putWith (githubOpts token) (toString url) payload
+  pure $ result >>= \resp ->
+    maybeToRight "Missing sha in response"
+      $ (,)
+      <$> (resp ^? W.responseBody . key "content" . key "sha" . _String)
+      <*> (resp ^? W.responseBody . key "commit" . key "tree" . key "sha" . _String)
+
+
+tryHttp :: IOE :> es => Eff es a -> Eff es (Either Text a)
+tryHttp = firstF formatHttpError . try
 
 
 formatHttpError :: HttpException -> Text
@@ -302,32 +294,27 @@ formatHttpError (InvalidUrlException url reason) = "Invalid URL (" <> toText url
 
 
 githubOpts :: Text -> W.Options
-githubOpts token =
+githubOpts = githubOptsUA "Monoscope"
+
+
+githubOptsUA :: ByteString -> Text -> W.Options
+githubOptsUA ua token =
   W.defaults
     & W.header "Authorization"
     .~ [encodeUtf8 $ "Bearer " <> token]
       & W.header "Accept"
     .~ ["application/vnd.github+json"]
       & W.header "User-Agent"
-    .~ ["Monoscope"]
+    .~ [ua]
       & W.header "X-GitHub-Api-Version"
     .~ ["2022-11-28"]
 
 
 -- | Detect the default branch of a repo, or return "main" for empty repos
--- Tries to get repo info first, falls back to checking main/master branches
 detectDefaultBranch :: (IOE :> es, W.HTTP :> es) => Text -> Text -> Text -> Eff es Text
-detectDefaultBranch token owner repo = do
-  let repoUrl = "https://api.github.com/repos/" <> owner <> "/" <> repo
-  result <- try $ W.getWith (githubOpts token) (toString repoUrl)
-  pure $ case result of
-    Left (_ :: HttpException) -> "main" -- Default to main if can't access repo
-    Right resp -> fromMaybe "main" $ resp ^? W.responseBody . key "default_branch" . _String
-
-
--- Constants
-yamlExtensions :: [Text]
-yamlExtensions = [".yaml", ".yml"]
+detectDefaultBranch token owner repo =
+  tryHttp (W.getWith (githubOpts token) (toString $ "https://api.github.com/repos/" <> owner <> "/" <> repo))
+    <&> either (const "main") (fromMaybe "main" . (^? W.responseBody . key "default_branch" . _String))
 
 
 -- | Get the dashboards folder path including prefix
@@ -338,29 +325,23 @@ getDashboardsPath sync
 
 
 isDashboardFile :: Text -> TreeEntry -> Bool
-isDashboardFile prefix e = e._teType == "blob" && prefix `T.isPrefixOf` e.path && any (`T.isSuffixOf` e.path) yamlExtensions
+isDashboardFile prefix e = e._teType == "blob" && prefix `T.isPrefixOf` e.path && any (`T.isSuffixOf` e.path) [".yaml", ".yml"]
 
 
 -- Sync Logic
 buildSyncPlan :: Text -> [TreeEntry] -> M.Map Text (DashboardId, Text) -> [SyncAction]
-buildSyncPlan prefix entries dbState = renames <> realCreates <> updates <> realDeletes
+buildSyncPlan prefix entries dbState = renames <> creates <> updates <> deletes
   where
-    stripPrefix p = fromMaybe p $ T.stripPrefix prefix p
-    gitFiles = M.fromList [(stripPrefix e.path, (e.path, e.sha)) | e <- entries, isDashboardFile prefix e]
+    gitFiles = M.fromList [(fromMaybe e.path $ T.stripPrefix prefix e.path, (e.path, e.sha)) | e <- entries, isDashboardFile prefix e]
     newFiles = gitFiles `M.difference` dbState
-    removedFiles = dbState `M.difference` (fst <$> gitFiles)
-    -- Build map of SHA -> (DashboardId, oldPath) for removed files to detect renames
-    removedBySha = M.fromList [(sha, (rid, p)) | (p, (rid, sha)) <- M.toList removedFiles]
-    -- Detect renames: new files whose SHA matches a removed file
-    (renameActions, unmatchedCreates) = M.foldrWithKey checkRename ([], []) newFiles
-    checkRename _ (fullPath, sha) (rens, crs) = case M.lookup sha removedBySha of
-      Just (rid, _) -> (SyncRename fullPath sha rid : rens, crs)
-      Nothing -> (rens, SyncCreate fullPath sha : crs)
-    renames = renameActions
-    realCreates = unmatchedCreates
-    -- Remove renamed files from deletes
+    removedFiles = dbState `M.difference` gitFiles
+    removedBySha = M.fromList [(sha, rid) | (rid, sha) <- M.elems removedFiles]
+    -- A new file whose SHA matches a removed file is a rename, not a create+delete
+    (renames, creates) =
+      partitionEithers
+        [maybe (Right $ SyncCreate p s) (Left . SyncRename p s) (M.lookup s removedBySha) | (p, s) <- M.elems newFiles]
     renamedIds = [rid | SyncRename _ _ rid <- renames]
-    realDeletes = [SyncDelete p rid | (p, (rid, _)) <- M.toList removedFiles, rid `notElem` renamedIds]
+    deletes = [SyncDelete p rid | (p, (rid, _)) <- M.toList removedFiles, rid `notElem` renamedIds]
     updates = M.foldMapWithKey (\relPath (fullPath, s) -> case M.lookup relPath dbState of Just (rid, oldSha) | s /= oldSha -> [SyncUpdate fullPath s rid]; _ -> []) gitFiles
 
 
@@ -380,8 +361,7 @@ titleToFilePath = (<> ".yaml") . toText . toKebab . fromAny . toString . T.strip
 -- | Compute Git blob SHA (SHA1 of "blob <size>\0<content>")
 computeContentSha :: ByteString -> Text
 computeContentSha content =
-  let blobHeader = "blob " <> show (BS.length content) <> "\0"
-   in decodeUtf8 $ B16.encode $ BA.convert (hash (encodeUtf8 blobHeader <> content) :: Digest SHA1)
+  decodeUtf8 $ B16.encode $ BA.convert (hash ("blob " <> show (BS.length content) <> "\0" <> content) :: Digest SHA1)
 
 
 -- | Build a Dashboard schema with title, tags, and team handles populated
@@ -418,12 +398,9 @@ data InstallationToken = InstallationToken
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] InstallationToken
 
 
-data ReposResponse = ReposResponse
-  { totalCount :: Int
-  , repositories :: [GitHubRepo]
-  }
-  deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] ReposResponse
+newtype ReposResponse = ReposResponse {repositories :: [GitHubRepo]}
+  deriving stock (Generic)
+  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] ReposResponse
 
 
 generateAppJWT :: Text -> Text -> IO (Either Text Text)
@@ -445,55 +422,27 @@ generateAppJWT appId privateKeyB64 = do
       withSystemTempFile "github-key.pem" $ \tmpPath h -> do
         BS.hPut h pemBytes
         hClose h
-        keys <- readKeyFile tmpPath
-        case keys of
+        readKeyFile tmpPath >>= \case
+          (PrivKeyRSA rsaKey : _) ->
+            bimapF (("Failed to sign JWT: " <>) . toText . show) (\(Jwt jwtBytes) -> decodeUtf8 jwtBytes)
+              $ Jws.rsaEncode RS256 rsaKey (toStrict payload)
           [] -> pure $ Left "No private key found in PEM"
-          (PrivKeyRSA rsaKey : _) -> do
-            result <- Jws.rsaEncode RS256 rsaKey (toStrict payload)
-            pure $ case result of
-              Left err -> Left $ "Failed to sign JWT: " <> toText (show err)
-              Right (Jwt jwtBytes) -> Right $ decodeUtf8 jwtBytes
           _ -> pure $ Left "Unsupported key type (expected RSA)"
 
 
 getInstallationToken :: (IOE :> es, W.HTTP :> es) => Text -> Text -> Int64 -> Eff es (Either Text InstallationToken)
-getInstallationToken appId privateKeyB64 installationId = do
-  jwtResult <- liftIO $ generateAppJWT appId privateKeyB64
-  case jwtResult of
-    Left err -> pure $ Left err
-    Right jwt -> do
-      let url = "https://api.github.com/app/installations/" <> show installationId <> "/access_tokens"
-          opts =
-            W.defaults
-              & W.header "Authorization"
-              .~ ["Bearer " <> encodeUtf8 jwt]
-                & W.header "Accept"
-              .~ ["application/vnd.github+json"]
-                & W.header "X-GitHub-Api-Version"
-              .~ ["2022-11-28"]
-                & W.header "User-Agent"
-              .~ ["Monoscope-App"]
-      response <- W.postWith opts (toString url) ("" :: ByteString)
-      let body = response ^. W.responseBody
-      case AE.eitherDecode body of
-        Left err -> pure $ Left $ "Failed to parse token response: " <> toText err
-        Right token -> pure $ Right token
+getInstallationToken appId privateKeyB64 installationId =
+  liftIO (generateAppJWT appId privateKeyB64) >>= either (pure . Left) \jwt -> do
+    let url = "https://api.github.com/app/installations/" <> show installationId <> "/access_tokens"
+    response <- W.postWith (githubOptsUA "Monoscope-App" jwt) (toString url) ("" :: ByteString)
+    pure $ decodeGitHub "token" $ response ^. W.responseBody
 
 
 listInstallationRepos :: W.HTTP :> es => Text -> Eff es (Either Text [GitHubRepo])
 listInstallationRepos accessToken = do
-  let opts =
-        W.defaults
-          & W.header "Authorization"
-          .~ ["Bearer " <> encodeUtf8 accessToken]
-            & W.header "Accept"
-          .~ ["application/vnd.github+json"]
-            & W.header "X-GitHub-Api-Version"
-          .~ ["2022-11-28"]
-            & W.header "User-Agent"
-          .~ ["Monoscope-App"]
-  response <- W.getWith opts "https://api.github.com/installation/repositories?per_page=100"
-  let body = response ^. W.responseBody
-  case AE.eitherDecode body of
-    Left err -> pure $ Left $ "Failed to parse repos response: " <> toText err
-    Right (repos :: ReposResponse) -> pure $ Right repos.repositories
+  response <- W.getWith (githubOptsUA "Monoscope-App" accessToken) "https://api.github.com/installation/repositories?per_page=100"
+  pure $ (.repositories) <$> (decodeGitHub "repos" (response ^. W.responseBody) :: Either Text ReposResponse)
+
+
+decodeGitHub :: AE.FromJSON a => Text -> LByteString -> Either Text a
+decodeGitHub what = first (\err -> "Failed to parse " <> what <> " response: " <> toText err) . AE.eitherDecode

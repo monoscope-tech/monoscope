@@ -21,16 +21,16 @@ module Models.Apis.PatternMerge (
 where
 
 import Data.Effectful.Hasql qualified as Hasql
-import Data.Map.Lazy qualified as Map
+import Data.Map.Strict qualified as Map
 import Data.Vector qualified as V
 import Effectful (Eff)
 import Hasql.Interpolate qualified as HI
-import Models.Apis.ErrorPatterns (ErrorPattern, ErrorPatternId (..))
+import Models.Apis.ErrorPatterns (ErrorPattern, ErrorPatternId)
 import Models.Apis.LogPatterns (LogPattern, LogPatternId)
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (showPGFloatArray)
 import Pkg.PatternMerge (embeddingTextForError)
-import Relude hiding (id)
+import Relude
 import System.Types (DB)
 
 
@@ -158,5 +158,5 @@ fetchLogSamples :: DB es => [LogPatternId] -> Eff es (Map LogPatternId Text)
 fetchLogSamples [] = pure mempty
 fetchLogSamples ids =
   Map.fromList
-    . mapMaybe (\(pid, mSample) -> (pid,) <$> mSample)
+    . mapMaybe sequenceA
     <$> Hasql.interp [HI.sql| SELECT id, sample_message FROM apis.log_patterns WHERE id = ANY(#{ids}) |]

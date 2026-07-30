@@ -247,10 +247,10 @@ spec = sequential $ aroundAll withTestResources do
       V.length activeEndpoints `shouldBe` 2
       
       -- Verify endpoint details
-      let enp1 = (\(ApiCatalog.EnpReqStatsVM _ _ _ c) -> c) <$>
-            Unsafe.fromJust $ find (\(ApiCatalog.EnpReqStatsVM _ _ _ c) -> c.urlPath == "/") activeEndpoints
-      let enp2 = (\(ApiCatalog.EnpReqStatsVM _ _ _ c) -> c) <$>
-            Unsafe.fromJust $ find (\(ApiCatalog.EnpReqStatsVM _ _ _ c) -> c.urlPath == "/api/v1/user/login") activeEndpoints
+      let enp1 = (\(ApiCatalog.EnpReqStatsVM _ _ c) -> c) <$>
+            Unsafe.fromJust $ find (\(ApiCatalog.EnpReqStatsVM _ _ c) -> c.urlPath == "/") activeEndpoints
+      let enp2 = (\(ApiCatalog.EnpReqStatsVM _ _ c) -> c) <$>
+            Unsafe.fromJust $ find (\(ApiCatalog.EnpReqStatsVM _ _ c) -> c.urlPath == "/api/v1/user/login") activeEndpoints
 
       enp1.endpointHash `shouldBe` toXXHash (testPid.toText <> "172.31.29.11" <> "GET" <> "/")
       enp2.endpointHash `shouldBe` toXXHash (testPid.toText <> "api.test.com" <> "POST" <> "/api/v1/user/login")
@@ -426,7 +426,40 @@ spec = sequential $ aroundAll withTestResources do
       V.length page0Rows `shouldBe` 5
       V.length page1Rows `shouldBe` 5
       V.length page2Rows `shouldBe` 2 -- 12 mod 5
-      let hashes vm = [enp.endpointHash | ApiCatalog.EnpReqStatsVM _ _ _ enp <- V.toList vm]
+      let hashes vm = [enp.endpointHash | ApiCatalog.EnpReqStatsVM _ _ enp <- V.toList vm]
           all3 = hashes page0Rows <> hashes page1Rows <> hashes page2Rows
       length all3 `shouldBe` 12
       length (ordNub all3) `shouldBe` 12 -- pages are disjoint
+
+    -- Regression: the "last_seen" sort ordered by endpoint created_at (like
+    -- first_seen, just reversed) instead of the row's actual lastSeen traffic time.
+    it "last_seen sort orders by span recency, not endpoint created_at" \tr -> do
+      let hostName = "lastseen.example"
+          mkEp path =
+            (def :: Endpoints.Endpoint)
+              { Endpoints.projectId = testPid
+              , Endpoints.urlPath = path
+              , Endpoints.urlParams = AE.object []
+              , Endpoints.method = "GET"
+              , Endpoints.host = hostName
+              , Endpoints.hash = toXXHash (testPid.toText <> hostName <> "GET" <> path)
+              , Endpoints.outgoing = False
+              }
+      runQueryEffect tr $ Endpoints.bulkInsertEndpoints $ V.fromList [mkEp "/old", mkEp "/new"]
+      withPool tr.trPool $ do
+        -- "/old" was created first but has the most recent traffic.
+        void $ DBT.execute [sql| UPDATE apis.endpoints SET created_at = ?::timestamptz - interval '2 days' WHERE project_id = ? AND host = ? AND url_path = '/old' |] (frozenTime, testPid, hostName)
+        void $ DBT.execute [sql| UPDATE apis.endpoints SET created_at = ?::timestamptz - interval '1 hour' WHERE project_id = ? AND host = ? AND url_path = '/new' |] (frozenTime, testPid, hostName)
+        let insertSpan (path :: Text) (offsetMins :: Int) =
+              void $ DBT.execute
+                [sql| INSERT INTO otel_logs_and_spans
+                        (id, project_id, timestamp, start_time,
+                         attributes___http___request___method, attributes___url___path,
+                         hashes, context, kind, status_code, summary)
+                      VALUES (gen_random_uuid(), ?, ?::timestamptz - make_interval(mins => ?), ?::timestamptz - make_interval(mins => ?),
+                              'GET', ?, ARRAY[?], '{}'::jsonb, 'SERVER', '200', '{}') |]
+                (testPid, frozenTime, offsetMins, frozenTime, offsetMins, path, (mkEp path).hash)
+        insertSpan "/old" 5
+        insertSpan "/new" 120
+      stats <- runTestBg frozenTime tr $ Endpoints.endpointRequestStatsByProject False testPid False (Just hostName) (Just "last_seen") Nothing 0 10 "Incoming" "7d"
+      map (.urlPath) (V.toList stats) `shouldBe` ["/old", "/new"]

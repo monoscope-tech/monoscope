@@ -1,7 +1,6 @@
 module Pages.Anomalies (
   anomalyListGetH,
   anomalyBulkActionsPostH,
-  escapedQueryPartial,
   acknowledgeAnomalyGetH,
   archiveAnomalyGetH,
   anomalyDetailGetH,
@@ -55,7 +54,6 @@ import Effectful.Concurrent.Async (concurrently)
 import Effectful.Error.Static (throwError)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
-import GHC.Records (HasField)
 import Hasql.Interpolate qualified as HI
 import Lucid
 import Lucid.Aria qualified as Aria
@@ -90,12 +88,11 @@ import Pkg.DeriveUtils (UUIDId (..), hashAssetFile)
 import Pkg.SchemaLearning.Catalog (FacetData (..), FacetSummary (..), FacetValue (..))
 import PyF (fmt)
 import Relude hiding (ask)
-import Relude.Unsafe qualified as Unsafe
 import Servant (err400, errBody)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (LoadingSize (..), LoadingType (..), checkFreeTierStatus, escapedQueryPartial, faSprite_, formatOffset, formatUTC, formatWithCommas, htmxOverlayIndicator_, loadingIndicator_, lookupValueText, renderMarkdown, toUriStr)
+import Utils (LoadingSize (..), LoadingType (..), checkFreeTierStatus, faSprite_, formatOffset, formatUTC, formatWithCommas, htmxOverlayIndicator_, loadingIndicator_, lookupValueText, renderMarkdown, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -263,7 +260,7 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
                           LIMIT 1 |]
             pure $ viaNonEmpty head rows
           else pure Nothing
-      addRespHeaders $ PageCtx bwconf $ anomalyDetailPage pid issue trItem spanRecs errorM now (isJust firstM) members tp sampleOverride
+      addRespHeaders $ PageCtx bwconf $ anomalyDetailPage pid issue trItem spanRecs errorM now isFirst members tp sampleOverride
 
 
 -- | Unescape JSON-ish whitespace/quotes embedded in summary tokens.
@@ -274,11 +271,9 @@ unescSummary = T.replace "\\\"" "\"" . T.replace "\\n" " " . T.replace "\\t" " "
 -- | Style->class mapping shared by the chip and inline-text summary renderers.
 -- When @wrap@ is True (chips) the classes gain whitespace-pre-wrap/break-* suffixes.
 summaryTokenClass :: Bool -> Text -> Text
-summaryTokenClass wrap style = case style of
+summaryTokenClass wrap = \case
   s | "badge-" `T.isPrefixOf` s -> "cbadge-sm " <> s <> badgeWrap
-  "neutral" -> "cbadge-sm badge-neutral" <> badgeWrap
-  "text-textWeak" -> "text-textWeak text-xs" <> textWrap
-  "text-weak" -> "text-textWeak text-xs" <> textWrap
+  s | s `elem` ["text-textWeak", "text-weak"] -> "text-textWeak text-xs" <> textWrap
   "text-textStrong" -> "text-textStrong text-xs font-medium" <> textWrap
   _ -> "cbadge-sm badge-neutral" <> badgeWrap
   where
@@ -286,22 +281,19 @@ summaryTokenClass wrap style = case style of
     textWrap = bool "" " whitespace-pre-wrap break-words" wrap
 
 
--- | Render a span/log @summary@ array element-wise as styled chips; each
--- element stays one chip even with internal whitespace, and right-rail
--- metadata renders subdued so the primary fields stay dominant.
-renderSummaryChips_ :: Monad m => V.Vector Text -> HtmlT m ()
-renderSummaryChips_ summary = V.forM_ summary \token ->
-  case T.breakOn "\8658" token of
-    (_, "") -> span_ [class_ "text-textWeak text-xs whitespace-pre-wrap break-words"] $ toHtml $ unescSummary token
-    (left, rest) -> do
-      let value = unescSummary $ T.drop 1 rest
-          (field, style) = case T.breakOn ";" left of
-            (f, s) | not (T.null s) -> (f, T.drop 1 s)
-            _ -> ("", left)
-          baseStyle = fromMaybe style $ T.stripPrefix "right-" style
-          cls = summaryTokenClass True baseStyle
-          tipAttr = [term "data-tippy-content" field | not (T.null field)]
-      span_ ([class_ $ cls <> " inline-block max-w-full"] <> tipAttr) $ toHtml value
+-- | Render one @field;style⇒value@ summary token. In chip mode (@wrap@) whitespace
+-- is preserved and the @right-@ style prefix (subdued right-rail metadata) is honoured.
+summaryToken_ :: Monad m => Bool -> Text -> HtmlT m ()
+summaryToken_ wrap token = case T.breakOn "⇒" token of
+  (_, "") -> span_ [class_ $ bool "mr-1" "text-textWeak text-xs whitespace-pre-wrap break-words" wrap] $ toHtml $ unescSummary token
+  (left, rest) ->
+    let (field, style) = case T.breakOn ";" left of
+          (f, s) | not (T.null s) -> (f, T.drop 1 s)
+          _ -> ("", left)
+        cls = summaryTokenClass wrap $ bool style (fromMaybe style $ T.stripPrefix "right-" style) wrap
+     in span_
+          ([class_ $ cls <> bool " mr-1 inline-block" " inline-block max-w-full" wrap] <> [term "data-tippy-content" field | not (T.null field)])
+          (toHtml $ unescSummary $ T.drop 1 rest)
 
 
 -- | Smart default time range based on anomaly age.
@@ -407,15 +399,13 @@ extractBreadcrumbs spans =
 
 -- | Icon id + tailwind colour class for a breadcrumb @type@.
 breadcrumbVisual :: Text -> (Text, Text)
-breadcrumbVisual t = case t of
-  "click" -> ("arrow-pointer", "text-fillBrand-strong")
-  "navigation" -> ("globe", "text-fillSuccess-strong")
-  "nav" -> ("globe", "text-fillSuccess-strong")
-  "xhr" -> ("wifi", "text-fillInformation-strong")
-  "fetch" -> ("wifi", "text-fillInformation-strong")
-  "console.error" -> ("terminal", "text-fillError-strong")
-  "console.warn" -> ("terminal", "text-fillWarning-strong")
-  _ -> ("terminal", "text-textWeak")
+breadcrumbVisual t
+  | t == "click" = ("arrow-pointer", "text-fillBrand-strong")
+  | t `elem` ["navigation", "nav"] = ("globe", "text-fillSuccess-strong")
+  | t `elem` ["xhr", "fetch"] = ("wifi", "text-fillInformation-strong")
+  | t == "console.error" = ("terminal", "text-fillError-strong")
+  | t == "console.warn" = ("terminal", "text-fillWarning-strong")
+  | otherwise = ("terminal", "text-textWeak")
 
 
 -- | Compact selector / url summary from a breadcrumb's @data@ blob.
@@ -492,12 +482,24 @@ activityPanel_ pid issueId extraClass spans = do
       $ loadingIndicator_ LdSM LdDots
 
 
--- | One labelled icon+value row used in the Error/Endpoint detail panels.
-detailItem_ :: (Text, Text, Text, Text) -> Html ()
-detailItem_ (icn, iconColor, lbl, value) = div_ [class_ "flex items-center gap-1.5 whitespace-nowrap"] do
-  faSprite_ icn "regular" $ "w-3 h-3 " <> iconColor
-  span_ [class_ "text-xs text-textWeak"] $ toHtml lbl <> ":"
-  span_ [class_ "text-xs font-medium"] $ toHtml value
+-- | A wrapping row of @(icon, iconColour, label, value)@ entries, as used by the
+-- Error/Endpoint detail panels.
+detailRow_ :: [(Text, Text, Text, Text)] -> Html ()
+detailRow_ =
+  div_ [class_ "flex flex-wrap items-center gap-x-5 gap-y-2"] . mapM_ \(icn, iconColor, lbl, value) ->
+    div_ [class_ "flex items-center gap-1.5 whitespace-nowrap"] do
+      faSprite_ icn "regular" $ "w-3 h-3 " <> iconColor
+      span_ [class_ "text-xs text-textWeak"] $ toHtml lbl <> ":"
+      span_ [class_ "text-xs font-medium"] $ toHtml value
+
+
+-- | Right-hand "<title> details" card shown next to the volume chart.
+detailCard_ :: Text -> Html () -> Html ()
+detailCard_ title body = div_ [class_ "lg:w-72 shrink-0 surface-raised rounded-2xl overflow-hidden"] do
+  div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
+    faSprite_ "circle-info" "regular" "w-3.5 h-3.5 text-textWeak"
+    span_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] $ toHtml title
+  div_ [class_ "p-4 flex flex-col gap-3"] body
 
 
 anomalyDetailPage :: Projects.ProjectId -> Issues.Issue -> Maybe Telemetry.Trace -> V.Vector Telemetry.SpanRecord -> Maybe ErrorPatterns.ErrorPatternL -> UTCTime -> Bool -> V.Vector ProjectMembers.ProjectMemberVM -> TimePicker.TimePicker -> Maybe (V.Vector Text) -> Html ()
@@ -524,22 +526,19 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp sampleOverri
           -- vector — render each element as a single chip so values with
           -- internal whitespace (user-agents, page titles) stay intact.
           logPatternCards sourceField logPattern sampleMessage = div_ [class_ "flex flex-col gap-4"] do
-            _ <- div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
+            div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
               div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
                 span_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Log Pattern"
                 span_ [class_ "badge badge-sm badge-ghost"] $ toHtml $ sourceFieldLabel sourceField
               renderLogContent_ logPattern
-            let renderSample body = div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
-                  _ <- div_ [class_ "px-4 py-3 border-b border-strokeWeak"] $ span_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Sample Message"
+            let renderSample :: Html () -> Html ()
+                renderSample body = div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
+                  div_ [class_ "px-4 py-3 border-b border-strokeWeak"] $ span_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Sample Message"
                   body
-            case sampleOverride of
-              Just summary
-                | not (V.null summary) ->
-                    renderSample $ div_ [class_ "flex flex-wrap items-center gap-1 p-4 max-h-80 overflow-y-auto"] $ renderSummaryChips_ summary
-              _ ->
-                whenJust
-                  (mfilter ((/= T.strip logPattern) . T.strip) sampleMessage)
-                  (renderSample . renderLogContent_)
+            maybe
+              (whenJust (mfilter ((/= T.strip logPattern) . T.strip) sampleMessage) (renderSample . renderLogContent_))
+              (renderSample . div_ [class_ "flex flex-wrap items-center gap-1 p-4 max-h-80 overflow-y-auto"] . V.mapM_ (summaryToken_ True))
+              (mfilter (not . V.null) sampleOverride)
       div_ [class_ "flex flex-wrap gap-2 items-center"] do
         severityBadge (display issue.severity)
         issueTypeLabel issue.issueType issue.critical
@@ -603,27 +602,19 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp sampleOverri
             div_ [class_ "min-w-0 flex-1"] $ volumeChart_ "Error Frequency"
             whenJust errM \errL -> do
               let err = errL.base
-              div_ [class_ "lg:w-72 shrink-0 surface-raised rounded-2xl overflow-hidden"] do
-                div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
-                  faSprite_ "circle-info" "regular" "w-3.5 h-3.5 text-textWeak"
-                  span_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Error Details"
-                div_ [class_ "p-4 flex flex-col gap-3"] do
-                  whenJust ((,) <$> exceptionData.requestMethod <*> exceptionData.requestPath) \(method, path) ->
-                    div_ [class_ "mb-1"] do
-                      span_ [class_ $ "relative cbadge-sm badge-" <> method <> " whitespace-nowrap"] $ toHtml method
-                      span_ [class_ "ml-2 text-sm text-textWeak"] $ toHtml path
-                  div_ [class_ "flex flex-wrap items-center gap-x-5 gap-y-2"]
-                    $ forM_
-                      [ ("calendar" :: Text, "text-fillBrand-strong" :: Text, "First seen" :: Text, compactTimeAgo $ toText $ prettyTimeAuto now (zonedTimeToUTC err.createdAt))
-                      , ("calendar" :: Text, "text-fillBrand-strong" :: Text, "Last seen" :: Text, compactTimeAgo $ toText $ prettyTimeAuto now (zonedTimeToUTC err.updatedAt))
-                      ]
-                      detailItem_
-                  div_ [class_ "flex flex-wrap items-center gap-x-5 gap-y-2"]
-                    $ forM_
-                      [ ("code" :: Text, "text-fillWarning-strong" :: Text, "Stack" :: Text, fromMaybe "Unknown stack" err.errorData.runtime)
-                      , ("server" :: Text, "text-fillSuccess-strong" :: Text, "Service" :: Text, fromMaybe "Unknown service" err.errorData.serviceName)
-                      ]
-                      detailItem_
+              detailCard_ "Error Details" do
+                whenJust ((,) <$> exceptionData.requestMethod <*> exceptionData.requestPath) \(method, path) ->
+                  div_ [class_ "mb-1"] do
+                    span_ [class_ $ "relative cbadge-sm badge-" <> method <> " whitespace-nowrap"] $ toHtml method
+                    span_ [class_ "ml-2 text-sm text-textWeak"] $ toHtml path
+                detailRow_
+                  [ ("calendar", "text-fillBrand-strong", "First seen", compactTimeAgo $ toText $ prettyTimeAuto now (zonedTimeToUTC err.createdAt))
+                  , ("calendar", "text-fillBrand-strong", "Last seen", compactTimeAgo $ toText $ prettyTimeAuto now (zonedTimeToUTC err.updatedAt))
+                  ]
+                detailRow_
+                  [ ("code", "text-fillWarning-strong", "Stack", fromMaybe "Unknown stack" err.errorData.runtime)
+                  , ("server", "text-fillSuccess-strong", "Service", fromMaybe "Unknown service" err.errorData.serviceName)
+                  ]
           -- Stack trace + Activity (Activity column merges User Journey + issue events)
           div_ [class_ "flex flex-col lg:flex-row gap-4 lg:items-start"] do
             div_ [class_ "min-w-0 flex-1"]
@@ -678,23 +669,15 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp sampleOverri
           -- Chart + endpoint details panel side-by-side
           div_ [class_ "flex flex-col lg:flex-row gap-4 lg:items-start"] do
             div_ [class_ "min-w-0 flex-1"] $ volumeChart_ "Request Trend"
-            div_ [class_ "lg:w-72 shrink-0 surface-raised rounded-2xl overflow-hidden"] do
-              div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
-                faSprite_ "circle-info" "regular" "w-3.5 h-3.5 text-textWeak"
-                span_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Endpoint Details"
-              div_ [class_ "p-4 flex flex-col gap-3"] do
-                div_ [class_ "flex flex-wrap items-center gap-x-5 gap-y-2"]
-                  $ forM_
-                    [ ("calendar" :: Text, "text-fillBrand-strong" :: Text, "First seen" :: Text, compactTimeAgo $ toText $ prettyTimeAuto now (zonedTimeToUTC issue.createdAt))
-                    , ("calendar" :: Text, "text-fillBrand-strong" :: Text, "Last seen" :: Text, compactTimeAgo $ toText $ prettyTimeAuto now (zonedTimeToUTC issue.updatedAt))
-                    ]
-                    detailItem_
-                div_ [class_ "flex flex-wrap items-center gap-x-5 gap-y-2"]
-                  $ forM_
-                    [ ("server" :: Text, "text-fillSuccess-strong" :: Text, "Service" :: Text, fromMaybe "Unknown service" issue.service)
-                    , ("hashtag" :: Text, "text-fillBrand-strong" :: Text, "Requests" :: Text, formatWithCommas (fromIntegral issue.affectedRequests :: Double))
-                    ]
-                    detailItem_
+            detailCard_ "Endpoint Details" do
+              detailRow_
+                [ ("calendar", "text-fillBrand-strong", "First seen", compactTimeAgo $ toText $ prettyTimeAuto now (zonedTimeToUTC issue.createdAt))
+                , ("calendar", "text-fillBrand-strong", "Last seen", compactTimeAgo $ toText $ prettyTimeAuto now (zonedTimeToUTC issue.updatedAt))
+                ]
+              detailRow_
+                [ ("server", "text-fillSuccess-strong", "Service", fromMaybe "Unknown service" issue.service)
+                , ("hashtag", "text-fillBrand-strong", "Requests", formatWithCommas (fromIntegral issue.affectedRequests :: Double))
+                ]
           -- Field changes (or "new endpoint" hint) + Activity panel
           div_ [class_ "flex flex-col lg:flex-row gap-4 lg:items-start"] do
             div_ [class_ "min-w-0 flex-1"]
@@ -715,13 +698,15 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp sampleOverri
                     "This endpoint started receiving traffic. Inspect the originating request in Investigation below to see headers, body, and call site."
             activityPanel_ pid issueId "lg:w-80 shrink-0" spanRecs
       let isLogPatternIssue = issue.issueType `elem` [Issues.LogPattern, Issues.LogPatternRateChange]
-      div_ [class_ "surface-raised rounded-2xl overflow-hidden", id_ "error-details-container", makeAttribute "tabindex" "-1", onkeydown_ "if(event.key==='Escape'&&this.classList.contains('investigation-fullscreen'))document.getElementById('investigation-fullscreen-btn').click()"] do
+      div_ [class_ "surface-raised rounded-2xl overflow-hidden group/inv", id_ "error-details-container", makeAttribute "tabindex" "-1", [__|on keydown[key is 'Escape'] if I match .investigation-fullscreen remove .investigation-fullscreen from me then call window.scrollTo({top:0})|]] do
         div_ [class_ "max-md:px-3 px-4 border-b border-strokeWeak flex max-md:flex-col md:items-center md:justify-between"] do
           div_ [class_ "flex items-center gap-2 max-md:py-1.5"] do
             faSprite_ "magnifying-glass-chart" "regular" "w-3.5 h-3.5 text-textWeak"
             h3_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Investigation"
-            button_ [class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer transition-colors max-md:hidden", Aria.label_ "Toggle fullscreen", id_ "investigation-fullscreen-btn", onclick_ "var c=document.getElementById('error-details-container'),u=this.querySelector('use'),h=u.getAttribute('href');c.classList.toggle('investigation-fullscreen');u.setAttribute('href',c.classList.contains('investigation-fullscreen')?h.replace('#expand','#compress'):h.replace('#compress','#expand'));window.scrollTo({top:0})"] do
-              faSprite_ "expand" "regular" "w-3 h-3 text-textWeak"
+            -- Icon state is CSS-driven off the container's fullscreen class; the click handler only toggles it.
+            button_ [class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer transition-colors max-md:hidden", Aria.label_ "Toggle fullscreen", [__|on click toggle .investigation-fullscreen on #error-details-container then call window.scrollTo({top:0})|]] do
+              faSprite_ "expand" "regular" "w-3 h-3 text-textWeak group-[.investigation-fullscreen]/inv:hidden"
+              faSprite_ "compress" "regular" "w-3 h-3 text-textWeak hidden group-[.investigation-fullscreen]/inv:block"
           div_ [class_ "flex items-center max-md:overflow-x-auto max-md:-mx-4 max-md:px-4 max-md:pb-1.5"] do
             let aUrl = "/p/" <> pid.toText <> "/issues/" <> issueId
                 navLink (href, isActive, tooltip, lbl) = a_ [href_ href, class_ $ bool "text-textWeak hover:text-textStrong" "text-textBrand font-medium" isActive <> " text-xs py-2.5 max-md:px-2 px-3 cursor-pointer transition-colors", term "data-tippy-content" tooltip] $ toHtml lbl
@@ -842,15 +827,13 @@ errorResolveAction pid errId errState canResolve =
             span_ [class_ "max-md:hidden"] "Resolve"
 
 
-errorSubscriptionAction :: (HasField "id" err ErrorPatterns.ErrorPatternId, HasField "notifyEveryMinutes" err Int, HasField "subscribed" err Bool) => Projects.ProjectId -> err -> Html ()
+errorSubscriptionAction :: Projects.ProjectId -> ErrorPatterns.ErrorPattern -> Html ()
 errorSubscriptionAction pid err = do
   let isActive = err.subscribed
-  let notifyEvery = err.notifyEveryMinutes
-  let actionUrl = "/p/" <> pid.toText <> "/issues/errors/" <> UUID.toText err.id.unErrorPatternId <> "/subscribe"
   form_
     [ id_ "issue-subscription-action"
     , class_ "flex items-center gap-2"
-    , hxPost_ actionUrl
+    , hxPost_ $ "/p/" <> pid.toText <> "/issues/errors/" <> UUID.toText err.id.unErrorPatternId <> "/subscribe"
     , hxTarget_ "#issue-subscription-action"
     , hxSwap_ "outerHTML"
     , hxTrigger_ "change"
@@ -861,10 +844,8 @@ errorSubscriptionAction pid err = do
         span_ [class_ "max-md:hidden"] "Notify every"
       select_ [class_ "select select-sm max-md:w-20 w-36", name_ "notifyEveryMinutes", Aria.label_ "Notification frequency"] do
         option_ ([value_ "0"] <> [selected_ "true" | not isActive]) "Off"
-        let opts :: [(Int, Text)]
-            opts = [(10, "10 min"), (20, "20 min"), (30, "30 min"), (60, "1 hr"), (360, "6 hrs"), (1440, "24 hrs")]
-        forM_ opts \(val, label) ->
-          option_ ([value_ (show val)] <> [selected_ "true" | isActive && val == notifyEvery]) (toHtml label)
+        forM_ ([(10, "10 min"), (20, "20 min"), (30, "30 min"), (60, "1 hr"), (360, "6 hrs"), (1440, "24 hrs")] :: [(Int, Text)]) \(val, label) ->
+          option_ ([value_ (show val)] <> [selected_ "true" | isActive && val == err.notifyEveryMinutes]) (toHtml label)
 
 
 newtype AssignErrorForm = AssignErrorForm
@@ -1017,10 +998,8 @@ aiChatPostH pid issueId form
       addRespHeaders $ aiChatResponse_ pid form.query response widgets toolCalls systemPromptM
 
     processIssue appCtx now convId issue = do
-      -- Build system prompt (shared logic)
       fullSystemPrompt <- buildSystemPromptForIssue pid issue now
-      let systemPrompt = anomalySystemPrompt now
-          config = (AI.defaultAgenticConfig pid){AI.facetContext = Nothing, AI.customContext = Just fullSystemPrompt, AI.conversationId = Just convId, AI.conversationType = Just Issues.CTAnomaly, AI.systemPromptOverride = Just systemPrompt}
+      let config = (AI.defaultAgenticConfig pid){AI.facetContext = Nothing, AI.customContext = Just fullSystemPrompt, AI.conversationId = Just convId, AI.conversationType = Just Issues.CTAnomaly, AI.systemPromptOverride = Just $ anomalySystemPrompt now}
       result <- AI.runAgenticChatWithHistory config form.query appCtx.config.openaiModel appCtx.config.openaiApiKey
       either
         (\err -> respond (Just fullSystemPrompt) convId ("I encountered an error while analyzing this issue: " <> err) Nothing Nothing False)
@@ -1066,12 +1045,17 @@ buildSystemPromptForIssue pid issue now = do
       metricsData <- Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just alertData.queryExpression) Nothing Nothing (Just $ show twoDaysAgo) (Just $ show now) Nothing []
       pure $ Just (alertData, monitorM, metricsData)
     _ -> pure Nothing
-  let issueContext = unlines ["--- ISSUE CONTEXT ---", buildAIContext issue errorM traceDataM spans alertContextM]
-      dayAgo = addUTCTime (-86400) now
-  facetSummaryM <- SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" dayAgo now
-  let systemPrompt = anomalySystemPrompt now
-      fullSystemPrompt = unlines [systemPrompt, "", "--- FACET SUMMARY ---", maybe "" formatFacetSummaryForAI facetSummaryM, "", issueContext]
-  pure fullSystemPrompt
+  facetSummaryM <- SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" (addUTCTime (-86400) now) now
+  pure
+    $ unlines
+      [ anomalySystemPrompt now
+      , ""
+      , "--- FACET SUMMARY ---"
+      , maybe "" formatFacetSummaryForAI facetSummaryM
+      , ""
+      , "--- ISSUE CONTEXT ---"
+      , buildAIContext issue errorM traceDataM spans alertContextM
+      ]
   where
     fetchTrace useTf err =
       fromMaybe (Nothing, V.empty) <$> runMaybeT do
@@ -1192,13 +1176,12 @@ buildSystemPromptForIssue pid issue now = do
     formatFacetSummaryForAI summary =
       let FacetData facetMap = summary.facetJson
           formatField (fieldName, values) =
-            let topValues = take 10 values
-                formattedValues = map (\fv -> fv.value <> " (" <> show fv.count <> ")") topValues
-                valueStr = T.intercalate ", " formattedValues
-                ellipsis = if length values > 10 then ", ..." else ""
-             in "- " <> fieldName <> ": " <> valueStr <> ellipsis
-          sortedFields = sortOn (\(_, vs) -> negate $ sum $ map (.count) vs) $ HM.toList facetMap
-          topFields = take 30 sortedFields
+            "- "
+              <> fieldName
+              <> ": "
+              <> T.intercalate ", " (map (\fv -> fv.value <> " (" <> show fv.count <> ")") $ take 10 values)
+              <> bool "" ", ..." (length values > 10)
+          topFields = take 30 $ sortOn (\(_, vs) -> negate $ sum $ map (.count) vs) $ HM.toList facetMap
        in unlines
             $ "Available telemetry fields (top values by frequency):"
             : map formatField topFields
@@ -1386,8 +1369,8 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
         _ -> (Just False, Just False, "Inbox")
 
   let filterV = fromMaybe "14d" timeFilter
-      pageInt = maybe 0 (Unsafe.read . toString) pageM
-      perPage = maybe 25 (Unsafe.read . toString) perPageM
+      pageInt = fromMaybe 0 $ readMaybe . toString =<< pageM
+      perPage = fromMaybe 25 $ readMaybe . toString =<< perPageM
       currentSort = fromMaybe "-created_at" sortM
 
   freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
@@ -1396,7 +1379,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
   let period = fromMaybe "24h" periodM
   ((issues, totalCount), (availableServices, availableTypes)) <-
     concurrently
-      (Issues.selectIssues pid Nothing ackd archived perPage (pageInt * perPage) Nothing (Just currentSort) period serviceFilters typeFilters)
+      (Issues.selectIssues pid ackd archived perPage (pageInt * perPage) Nothing (Just currentSort) period serviceFilters typeFilters)
       ( concurrently
           (Hasql.interp [HI.sql| SELECT DISTINCT service FROM apis.issues WHERE project_id = #{pid} AND service IS NOT NULL |])
           (Hasql.interp [HI.sql| SELECT DISTINCT issue_type::text FROM apis.issues WHERE project_id = #{pid} |])
@@ -1414,7 +1397,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
           }
   let serviceMenu = FilterMenu{label = "Service", paramName = "service", multiSelect = True, options = map (\s -> FilterOption{label = s, value = s, isActive = s `elem` serviceFilters}) availableServices}
       typeMenu = FilterMenu{label = "Type", paramName = "type", multiSelect = True, options = map (\t -> FilterOption{label = t, value = t, isActive = t `elem` typeFilters}) availableTypes}
-      issuesVM = V.fromList $ map (IssueVM False False currTime filterV) issues
+      issuesVM = V.fromList $ map (IssueVM False currTime filterV) issues
       tableActions =
         TableHeaderActions
           { baseUrl
@@ -1503,7 +1486,7 @@ instance ToHtml AnomalyListGet where
 
 
 issueRowAttrs :: IssueVM -> [Attribute]
-issueRowAttrs (IssueVM _ _ _ _ issue) = [class_ $ "group/row hover:bg-fillWeaker " <> bg] <> sty
+issueRowAttrs (IssueVM _ _ _ issue) = [class_ $ "group/row hover:bg-fillWeaker " <> bg] <> sty
   where
     (bg, sty) = case display issue.base.severity of
       "critical" -> ("bg-fillError-weak", [style_ "box-shadow: inset 3px 0 0 var(--color-fillError-strong)"])
@@ -1512,7 +1495,7 @@ issueRowAttrs (IssueVM _ _ _ _ issue) = [class_ $ "group/row hover:bg-fillWeaker
 
 
 issueRowId :: IssueVM -> Text
-issueRowId (IssueVM _ _ _ _ issue) = Issues.issueIdText issue.base.id
+issueRowId (IssueVM _ _ _ issue) = Issues.issueIdText issue.base.id
 
 
 -- | (icon, iconStyle, colorClass, tooltip) — uses shape+color so status isn't color-only
@@ -1524,7 +1507,7 @@ anomalyStatusIndicator False False "warning" = ("triangle-alert", "regular", "te
 anomalyStatusIndicator False False _ = ("circle-alert", "regular", "text-textWeak", "Active")
 
 
-data IssueVM = IssueVM Bool Bool UTCTime Text Issues.IssueL
+data IssueVM = IssueVM Bool UTCTime Text Issues.IssueL
   deriving stock (Show)
 
 
@@ -1538,7 +1521,7 @@ issueColumns pid period toggleM =
 
 
 renderIssueEventsCol :: IssueVM -> Html ()
-renderIssueEventsCol (IssueVM _ isWidget _ _ issue) =
+renderIssueEventsCol (IssueVM isWidget _ _ issue) =
   unless isWidget
     $ span_ [class_ $ "tabular-nums font-medium " <> countStyle issue.eventCount]
     $ toHtml
@@ -1551,12 +1534,12 @@ renderIssueEventsCol (IssueVM _ isWidget _ _ issue) =
 
 
 renderIssueDateCol :: IssueVM -> Html ()
-renderIssueDateCol (IssueVM _ _ currTime _ issue) =
+renderIssueDateCol (IssueVM _ currTime _ issue) =
   span_ [class_ "text-xs text-textWeak"] $ toHtml $ compactTimeAgo $ toText $ prettyTimeAuto currTime $ zonedTimeToUTC issue.base.createdAt
 
 
 renderIssueChartCol :: IssueVM -> Html ()
-renderIssueChartCol (IssueVM _ _ _ _ issue) = sparkline_ $ V.toList issue.activityBuckets
+renderIssueChartCol (IssueVM _ _ _ issue) = sparkline_ $ V.toList issue.activityBuckets
 
 
 highlightJsHead_ :: Monad m => HtmlT m ()
@@ -1586,17 +1569,7 @@ renderLogContent_ txt =
 
 
 renderSummaryText_ :: Monad m => Text -> HtmlT m ()
-renderSummaryText_ txt = forM_ (words txt) \token ->
-  case T.breakOn "⇒" token of
-    (_, "") -> span_ [class_ "mr-1"] $ toHtml $ unescSummary token
-    (left, rest) -> do
-      let value = unescSummary $ T.drop 1 rest
-          (field, style) = case T.breakOn ";" left of
-            (f, s) | not (T.null s) -> (f, T.drop 1 s)
-            _ -> ("", left)
-          cls = summaryTokenClass False style
-          tipAttr = [term "data-tippy-content" field | not (T.null field)]
-      span_ ([class_ $ cls <> " mr-1 inline-block"] <> tipAttr) $ toHtml value
+renderSummaryText_ = traverse_ (summaryToken_ False) . words
 
 
 renderIssueTitle_ :: Issues.IssueL -> Html ()
@@ -1606,11 +1579,11 @@ renderIssueTitle_ Issues.IssueL{base}
   | looksLikeRawPattern title = span_ [class_ "font-mono text-xs break-all"] $ renderWithPlaceholders_ title
   | otherwise = renderWithPlaceholders_ title
   where
-    title = stripIssuePrefix base.title
-    stripIssuePrefix =
-      foldl' (\t pfx -> fromMaybe t $ T.stripPrefix pfx t)
-        <*> const
-          ["New Log Pattern: ", "Log Pattern Spike: ", "Log Pattern Drop: ", "New Log Pattern Detected: "]
+    title =
+      foldl'
+        (\t pfx -> fromMaybe t $ T.stripPrefix pfx t)
+        base.title
+        ["New Log Pattern: ", "Log Pattern Spike: ", "Log Pattern Drop: ", "New Log Pattern Detected: "]
     looksLikeRawPattern t = any (`T.isInfixOf` t) [";right-", "v{", "<*>", "]{", "ERROR ERROR"]
 
 
@@ -1625,7 +1598,7 @@ renderWithPlaceholders_ = go
 
 
 renderIssueMainCol :: Projects.ProjectId -> IssueVM -> Html ()
-renderIssueMainCol pid (IssueVM _ _ currTime period issue) = do
+renderIssueMainCol pid (IssueVM _ currTime period issue) = do
   let b = issue.base
       isAcknowledged = isJust b.acknowledgedAt
       isArchived = isJust b.archivedAt
@@ -1774,16 +1747,10 @@ issueTypeBadge issueType critical = span_ [class_ $ "flex items-center gap-1 tex
 logLevelChip_ :: Monad m => Maybe Text -> Text -> HtmlT m ()
 logLevelChip_ logLevel pat =
   let normalized = T.toUpper <$> logLevel
-      hasErrorStatus =
-        "status;badge-error⇒ERROR"
-          `T.isInfixOf` pat
-          || "status_code;badge-4xx"
-          `T.isInfixOf` pat
-          || "status_code;badge-5xx"
-          `T.isInfixOf` pat
+      hasErrorStatus = any (`T.isInfixOf` pat) ["status;badge-error⇒ERROR", "status_code;badge-4xx", "status_code;badge-5xx"]
       effective
-        | normalized == Just "ERROR" || normalized == Just "FATAL" || normalized == Just "CRITICAL" = Just "ERROR"
-        | normalized == Just "WARN" || normalized == Just "WARNING" = Just "WARN"
+        | normalized `elem` ([Just "ERROR", Just "FATAL", Just "CRITICAL"] :: [Maybe Text]) = Just "ERROR"
+        | normalized `elem` ([Just "WARN", Just "WARNING"] :: [Maybe Text]) = Just "WARN"
         | hasErrorStatus = Just "ERROR"
         | otherwise = normalized
       (cls, icon, label) = case effective of

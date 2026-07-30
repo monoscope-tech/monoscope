@@ -35,6 +35,7 @@ import Data.Aeson qualified as AE
 import Data.Default (Default)
 import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.Hasql qualified as Hasql
+import Data.List qualified as L
 import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime, ZonedTime, addUTCTime, zonedTimeToUTC)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
@@ -178,7 +179,7 @@ periodWindow p now = (addUTCTime (negate $ fromIntegral (n * w)) now, n, w)
 -- | Assemble a dense activity vector of @n@ buckets from sparse (bucketIdx, count)
 -- pairs. Indices outside @[0, n)@ (e.g. a boundary row) are simply dropped.
 denseBuckets :: Int -> [(Int, Int64)] -> V.Vector Int
-denseBuckets n pairs = V.generate n \i -> fromIntegral $ fromMaybe 0 $ Map.lookup i m
+denseBuckets n pairs = V.generate n \i -> fromIntegral $ Map.findWithDefault 0 i m
   where
     m = Map.fromListWith (+) pairs
 
@@ -188,11 +189,14 @@ epochSecs :: UTCTime -> Int64
 epochSecs = floor . utcTimeToPOSIXSeconds
 
 
+-- | Quoted ISO8601 timestamp literal, inlined into the SQL text rather than bound.
+tsLit :: UTCTime -> HI.Sql
+tsLit t = rawSql $ "'" <> toText (iso8601Show t) <> "'"
+
+
 -- | Max @last_seen@ / min @first_seen@ over rows, comparing via UTC (ZonedTime has no Ord).
 pickZoned :: (UTCTime -> UTCTime -> Ordering) -> [Maybe ZonedTime] -> Maybe ZonedTime
-pickZoned cmp zs = case catMaybes zs of
-  [] -> Nothing
-  (x : xs) -> Just $ foldl' (\a b -> if cmp (zonedTimeToUTC a) (zonedTimeToUTC b) == LT then b else a) x xs
+pickZoned cmp = viaNonEmpty (L.maximumBy (cmp `on` zonedTimeToUTC)) . catMaybes
 
 
 -- | @AND outgoing = ?@ when a direction is specified, empty otherwise.
@@ -200,9 +204,13 @@ directionClauseSql :: Maybe Bool -> HI.Sql
 directionClauseSql = maybe [HI.sql| |] (\o -> [HI.sql| AND outgoing = #{o} |])
 
 
-archivedHostClauseSql :: Bool -> HI.Sql
-archivedHostClauseSql True = [HI.sql| AND h.archived_at IS NOT NULL|]
-archivedHostClauseSql False = [HI.sql| AND h.archived_at IS NULL|]
+-- | Row filters shared by 'endpointRequestStatsByProject' and 'countEndpointsForHost'
+-- (optional host, url_path search, archived state) so their paginators stay in sync.
+endpointFiltersSql :: Maybe Text -> Maybe Text -> Bool -> HI.Sql
+endpointFiltersSql pHostM searchM archived =
+  foldMap (\h -> [HI.sql| AND enp.host = #{h}|]) pHostM
+    <> foldMap (\s -> let pat = "%" <> s <> "%" in [HI.sql| AND enp.url_path LIKE #{pat}|]) searchM
+    <> bool [HI.sql| AND h.archived_at IS NULL|] [HI.sql| AND h.archived_at IS NOT NULL|] archived
 
 
 -- FIXME: Include and return a boolean flag to show if fields that have annomalies.
@@ -216,17 +224,13 @@ endpointRequestStatsByProject useTf pid archived pHostM sortM searchM page perPa
   let isOutgoing = requestType == "Outgoing"
       (start, numBuckets, width) = periodWindow period now
       startEpoch = epochSecs start
-      startSql = rawSql $ "'" <> toText (iso8601Show start) <> "'"
-      pHostQuery = foldMap (\h -> [HI.sql| AND enp.host = #{h}|]) pHostM
-      search = foldMap (\s -> let pat = "%" <> s <> "%" in [HI.sql| AND enp.url_path LIKE #{pat}|]) searchM
-      archivedClause = archivedHostClauseSql archived
   metas :: [EndpointMetaRow] <-
     Hasql.interp
       [HI.sql|
         SELECT enp.id, enp.hash, enp.project_id, enp.url_path, enp.method, enp.host, enp.created_at
         FROM apis.endpoints enp
         JOIN apis.hosts h ON (h.project_id = enp.project_id AND h.host = enp.host AND h.outgoing = enp.outgoing)
-        WHERE enp.project_id = #{pid} AND enp.outgoing = #{isOutgoing} ^{pHostQuery} ^{search} ^{archivedClause}|]
+        WHERE enp.project_id = #{pid} AND enp.outgoing = #{isOutgoing} ^{endpointFiltersSql pHostM searchM archived}|]
   -- Endpoint hashes are stamped onto telemetry by the extraction worker. Querying
   -- them avoids evaluating the host JSON fallback for every span in the project.
   let endpointHashes = V.fromList $ map (.endpointHash) metas
@@ -247,7 +251,7 @@ endpointRequestStatsByProject useTf pid archived pHostM sortM searchM page perPa
                 WHERE project_id = #{pid}::text
                   AND attributes___http___request___method IS NOT NULL
                   AND hashes && #{endpointHashes}::text[]
-                  AND timestamp >= ^{startSql}
+                  AND timestamp >= ^{tsLit start}
               )
               SELECT url_path, method, service, bucket_idx, COUNT(*)::bigint AS cnt, MAX(timestamp) AS last_seen
               FROM filtered GROUP BY url_path, method, service, bucket_idx|]
@@ -271,7 +275,7 @@ endpointRequestStatsByProject useTf pid archived pHostM sortM searchM page perPa
       rows = map mk metas
       ordered = case fromMaybe "" sortM of
         "first_seen" -> sortOn (zonedTimeToUTC . (.createdAt) . fst) rows
-        "last_seen" -> sortOn (Down . zonedTimeToUTC . (.createdAt) . fst) rows
+        "last_seen" -> sortOn (Down . fmap zonedTimeToUTC . (.lastSeen) . snd) rows
         _ -> sortOn (\(m, s) -> (Down s.totalRequests, m.urlPath)) rows
   pure $ V.fromList $ map snd $ take perPage $ drop (page * perPage) ordered
 
@@ -317,18 +321,15 @@ data StatsMode = ShellOnly | WithStats
 dependenciesAndEventsCount :: (DB es, Labeled "timefusion" Hasql :> es, Time :> es) => StatsMode -> Bool -> Projects.ProjectId -> Maybe Bool -> Text -> Int -> Text -> Text -> Bool -> Eff es [HostEvents]
 dependenciesAndEventsCount statsMode useTf pid outgoingM sortT skip timeF period showArchived = do
   now <- Time.currentTime
-  let intervalDays = if timeF == "14D" then 14 else 1 :: Int
-      windowStart = addUTCTime (negate $ fromIntegral (intervalDays * 86400)) now
-      windowStartSql = rawSql $ "'" <> toText (iso8601Show windowStart) <> "'"
+  let windowStartSql = tsLit $ addUTCTime (bool (-1) (-14) (timeF == "14D") * 86400) now
       (start, numBuckets, width) = periodWindow period now
       startEpoch = epochSecs start
-      directionClause = directionClauseSql outgoingM
-      archivedClause = rawSql if showArchived then "archived_at IS NOT NULL" else "archived_at IS NULL"
   hosts :: [(Text, Bool)] <-
     Hasql.interp
       [HI.sql|
         SELECT host, outgoing FROM apis.hosts
-        WHERE project_id = #{pid} AND host != '' ^{directionClause} AND ^{archivedClause}|]
+        WHERE project_id = #{pid} AND host != '' ^{directionClauseSql outgoingM}
+          AND ^{rawSql $ bool "archived_at IS NULL" "archived_at IS NOT NULL" showArchived}|]
   tels :: [HostTelRow] <- case statsMode of
     ShellOnly -> pure []
     WithStats ->
@@ -405,35 +406,29 @@ unarchiveHosts pid outgoingM hosts =
 
 countEndpointInbox :: DB es => Projects.ProjectId -> Text -> Text -> Eff es Int
 countEndpointInbox pid host requestType =
-  let dirClause = rawSql case requestType of
-        "Outgoing" -> "enp.outgoing = true"
-        _ -> "enp.outgoing = false"
+  let isOutgoing = requestType == "Outgoing"
    in fromMaybe 0
         <$> Hasql.interpOne
           [HI.sql|
             SELECT coalesce(COUNT(*)::BIGINT, 0)
             FROM apis.endpoints enp
             LEFT JOIN apis.issues ann ON (ann.issue_type = 'api_change' AND ann.endpoint_hash = enp.hash)
-            WHERE enp.project_id = #{pid} AND ^{dirClause}
+            WHERE enp.project_id = #{pid} AND enp.outgoing = #{isOutgoing}
               AND ann.id IS NOT NULL AND ann.acknowledged_at IS NULL AND host = #{host} |]
 
 
--- | Count of endpoints under a (project, direction) optionally filtered by
--- host, url_path search, and archived status — mirrors the row filters used by
--- 'endpointRequestStatsByProject' so paginators stay in sync.
+-- | Count of endpoints under a (project, direction), under the same row filters as
+-- 'endpointRequestStatsByProject'.
 countEndpointsForHost :: DB es => Projects.ProjectId -> Bool -> Bool -> Maybe Text -> Maybe Text -> Eff es Int
 countEndpointsForHost pid outgoing archived pHostM searchM =
-  let hostQ = foldMap (\h -> [HI.sql| AND enp.host = #{h}|]) pHostM
-      searchQ = foldMap (\s -> let pat = "%" <> s <> "%" in [HI.sql| AND enp.url_path LIKE #{pat}|]) searchM
-      archivedQ = archivedHostClauseSql archived
-   in fromMaybe 0
-        <$> Hasql.interpOne
-          [HI.sql|
-            SELECT COUNT(*)::bigint
-            FROM apis.endpoints enp
-            JOIN apis.hosts h ON (h.project_id = enp.project_id AND h.host = enp.host AND h.outgoing = enp.outgoing)
-            WHERE enp.project_id = #{pid} AND enp.outgoing = #{outgoing}
-              ^{hostQ} ^{searchQ} ^{archivedQ} |]
+  fromMaybe 0
+    <$> Hasql.interpOne
+      [HI.sql|
+        SELECT COUNT(*)::bigint
+        FROM apis.endpoints enp
+        JOIN apis.hosts h ON (h.project_id = enp.project_id AND h.host = enp.host AND h.outgoing = enp.outgoing)
+        WHERE enp.project_id = #{pid} AND enp.outgoing = #{outgoing}
+          ^{endpointFiltersSql pHostM searchM archived} |]
 
 
 -- | Paginated endpoint list with optional url_path LIKE filter. Returns (rows, total count).
@@ -493,11 +488,7 @@ insertCanonicalEndpoints rows =
            FROM unnest(#{pids}::uuid[], #{tpls}::text[], #{methods}::text[], #{hosts}::text[], #{hashes}::text[]) AS t(p, tp, m, h, eh)
            ON CONFLICT (hash) DO UPDATE SET canonical_hash = EXCLUDED.canonical_hash, canonical_path = EXCLUDED.canonical_path |]
   where
-    pids = [p | (p, _, _, _, _) <- rows]
-    tpls = [t | (_, t, _, _, _) <- rows]
-    methods = [m | (_, _, m, _, _) <- rows]
-    hosts = [h | (_, _, _, h, _) <- rows]
-    hashes = [eh | (_, _, _, _, eh) <- rows]
+    (pids, tpls, methods, hosts, hashes) = L.unzip5 rows
 
 
 -- Endpoint embedding + merge ---------------------------------------------------
@@ -533,7 +524,7 @@ updateEndpointEmbeddings pairs =
 
 getCanonicalEndpoints :: DB es => Projects.ProjectId -> Eff es [(EndpointId, [Float])]
 getCanonicalEndpoints pid =
-  map (\(eid, emb :: V.Vector Float) -> (eid, V.toList emb))
+  map (second (V.toList @Float))
     <$> Hasql.interp
       [HI.sql| SELECT id, embedding FROM apis.endpoints
         WHERE project_id = #{pid} AND canonical_hash IS NULL
@@ -574,9 +565,7 @@ getMergedEndpointPairs pid =
 migrateAndDeleteMergedEndpoints :: DB es => [(Text, Text)] -> Eff es ()
 migrateAndDeleteMergedEndpoints [] = pass
 migrateAndDeleteMergedEndpoints pairs = do
-  let (oldHashes, canonHashes) = unzip pairs
-      oldArr = V.fromList oldHashes
-      canonArr = V.fromList canonHashes
+  let (oldArr, canonArr) = bimap V.fromList V.fromList $ unzip pairs
   -- Remap anomalies (skip if canonical target already exists for same project)
   Hasql.interpExecute_
     [HI.sql|

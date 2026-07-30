@@ -14,7 +14,7 @@ import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import PyF qualified
 import Relude
-import Utils (LoadingSize (..), LoadingType (..), deleteParam, faSprite_, jsonValueToHtmlTree, loadingIndicator_, onpointerdown_)
+import Utils (LoadingSize (..), LoadingType (..), deleteParam, faSprite_, jsonValueToHtmlTree, loadingIndicator_)
 
 
 data EmptyStateSize = ESFull | ESCompact
@@ -54,7 +54,7 @@ emptyState_ cfg title subTxt =
         ESNone -> pass
         ESLink u txt ->
           unless (T.null txt)
-            $ a_ ([href_ u, class_ "btn text-sm w-max mx-auto btn-primary"] ++ if "https://" `T.isPrefixOf` u then [target_ "_blank", rel_ "noopener noreferrer"] else [])
+            $ a_ ([href_ u, class_ "btn text-sm w-max mx-auto btn-primary"] <> bool [] [target_ "_blank", rel_ "noopener noreferrer"] ("https://" `T.isPrefixOf` u))
             $ toHtml txt
         ESCustom h -> h
   where
@@ -120,7 +120,7 @@ drawer_ drawerId startOpen urlM content trigger = div_ [class_ "drawer drawer-en
 dateTime :: UTCTime -> Maybe UTCTime -> Html ()
 dateTime t endTM = do
   let utcOf = formatTime defaultTimeLocale "%Y-%m-%d %H:%M:%S UTC"
-      title = maybe (utcOf t) (\e -> utcOf t <> " — " <> utcOf e) endTM
+      title = utcOf t <> foldMap ((" — " <>) . utcOf) endTM
   span_
     [ class_ "flex items-center rounded-lg px-2 py-1.5 text-xs gap-2 border border-strokeWeak bg-fillWeaker text-textStrong whitespace-nowrap shrink-0"
     , Lucid.title_ (toText title)
@@ -152,10 +152,7 @@ localTimeFmt_ dfFmt ts =
 
 paymentPlanPicker :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Bool -> Bool -> Projects.BillingProvider -> Html ()
 paymentPlanPicker pid lemonUrl criticalUrl currentPlan freePricingEnabled basicAuthEnabled isOnboarding provider = do
-  let gridCols
-        | basicAuthEnabled = "grid-cols-1 md:grid-cols-2"
-        | freePricingEnabled = "grid-cols-1 md:grid-cols-3"
-        | otherwise = "grid-cols-1 md:grid-cols-2"
+  let gridCols = bool "grid-cols-1 md:grid-cols-2" "grid-cols-1 md:grid-cols-3" (freePricingEnabled && not basicAuthEnabled)
       useStripe = provider /= Projects.LemonSqueezyProvider
   div_ ([class_ "flex flex-col gap-8 w-full"] <> [hxVals_ "{\"isOnboarding\": true}" | isOnboarding]) do
     unless basicAuthEnabled $ div_ [class_ "flex flex-col gap-2 w-full"] do
@@ -166,15 +163,18 @@ paymentPlanPicker pid lemonUrl criticalUrl currentPlan freePricingEnabled basicA
     div_ [class_ "flex flex-col gap-8 mt-6 w-full"] do
       div_ [class_ $ "grid gap-8 w-full " <> gridCols] do
         let isCurrent p = not isOnboarding && currentPlan == p
-        when basicAuthEnabled $ openSourcePricing pid (isCurrent "Open Source")
-        when basicAuthEnabled enterprisePricing
-        when (freePricingEnabled && not basicAuthEnabled) $ freePricing pid (isCurrent "Free")
-        unless basicAuthEnabled $ popularPricing pid lemonUrl (isCurrent "Bring nothing") freePricingEnabled useStripe
-        unless basicAuthEnabled $ systemsPricing pid criticalUrl (isCurrent "Bring your own storage") useStripe
+        if basicAuthEnabled
+          then openSourcePricing pid (isCurrent "Open Source") >> enterprisePricing
+          else do
+            when freePricingEnabled $ freePricing pid (isCurrent "Free")
+            popularPricing pid lemonUrl (isCurrent "Bring nothing") freePricingEnabled useStripe
+            systemsPricing pid criticalUrl (isCurrent "Bring your own storage") useStripe
     unless useStripe
       $ script_ [src_ "https://assets.lemonsqueezy.com/lemon.js"] ("" :: Text)
-    script_
-      [text|
+    -- Guarded: #price_range/#price only exist when the usage slider is rendered.
+    unless basicAuthEnabled
+      $ script_
+        [text|
                const price_indicator = document.querySelector("#price_range");
                const priceContainer = document.querySelector("#price")
                const criticalContainer = document.querySelector("#critical_price")
@@ -191,16 +191,6 @@ paymentPlanPicker pid lemonUrl criticalUrl currentPlan freePricingEnabled basicA
                }
 
                price_indicator.addEventListener('input', priceChange)
-
-               function handlePaymentPlanSelect(event, id) {
-                event.stopPropagation()
-                const target = event.currentTarget
-                if(id === 'popularPlan') {
-                  window.paymentPlanUrl = "$lemonUrl"
-                } else if(id=== 'systemsPlan') {
-                  window.paymentPlanUrl = "$criticalUrl"
-                }
-               }
             |]
     unless useStripe
       $ script_
@@ -232,7 +222,7 @@ paymentPlanPicker pid lemonUrl criticalUrl currentPlan freePricingEnabled basicA
 
 pricingContent_ :: Text -> Text -> Html () -> Html () -> [Text] -> Html () -> Html ()
 pricingContent_ title subtitle priceEl ctaEl features featuresTitle = do
-  div_ [class_ "flex-col justify-start items-start gap-1 flex"] $ do
+  div_ [class_ "flex-col justify-start items-start gap-1 flex"] do
     div_ [class_ "text-xl font-semibold text-textStrong"] $ toHtml title
     div_ [class_ "text-textStrong text-sm"] $ toHtml subtitle
   div_ [class_ "flex items-center gap-1 mt-4"] priceEl
@@ -262,6 +252,20 @@ pricingBtnCls :: Bool -> Text -> Text
 pricingBtnCls isCurrent normalCls = "btn mb-6 mt-4 h-8 px-3 py-1 w-full text-sm font-semibold rounded-lg " <> if isCurrent then "bg-fillDisabled cursor-not-allowed border-0 text-textInverse-strong" else normalCls
 
 
+-- | Plan CTA: inert when already the current plan, else a Stripe checkout POST or a LemonSqueezy popup.
+pricingCta_ :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Bool -> Html ()
+pricingCta_ pid plan normalCls lemonUrl isCurrent useStripe =
+  div_ [[__|on click halt|]]
+    $ button_ ([class_ $ pricingBtnCls isCurrent normalCls, type_ "button"] <> attrs)
+    $ if isCurrent then "Current plan" else "Start 30 day free trial"
+  where
+    attrs :: [Attribute]
+    attrs
+      | isCurrent = []
+      | useStripe = [hxPost_ $ "/p/" <> pid.toText <> "/stripe_checkout", hxVals_ $ "{\"plan\": \"" <> plan <> "\"}", hxSwap_ "none"]
+      | otherwise = [term "_" $ "on click call window.payLemon(\"" <> plan <> "\", \"" <> lemonUrl <> "\")"]
+
+
 pricingBadge_ :: Html () -> Html () -> Html ()
 pricingBadge_ badge content = div_ [class_ "relative"] do
   content
@@ -272,7 +276,7 @@ pricingBadge_ badge content = div_ [class_ "relative"] do
 freePricing :: Projects.ProjectId -> Bool -> Html ()
 freePricing pid isCurrent =
   div_ (pricingPostAttrs pid "freePricing" "outline-strokeWeak" [])
-    $ div_ [class_ "flex flex-col gap-2 h-full relative", onpointerdown_ "handlePaymentPlanSelect(event, 'freePlan')", id_ "freePlan"] do
+    $ div_ [class_ "flex flex-col gap-2 h-full relative"] do
       div_ [class_ "pricing-gradient-slate"] pass
       pricingContent_
         "Free tier"
@@ -288,17 +292,13 @@ popularPricing pid lemonUrl isCurrent freeTierEnabled useStripe =
   div_ [class_ "relative"]
     $ div_ (pricingPostAttrs pid "GraduatedPricing" "outline-strokeWeak shadow-[0px_3px_3px_-1.5px_rgba(10,13,18,0.04)] shadow-[0px_8px_8px_-4px_rgba(10,13,18,0.03)] shadow-[0px_20px_24px_-4px_rgba(10,13,18,0.08)]" [hxVals_ "js:{orderIdM: document.querySelector('#popularPricing').value}"]) do
       div_ [class_ "pricing-gradient-slate-wide"] pass
-      div_ [class_ "relative flex flex-col gap-2 overflow-hidden", onpointerdown_ "handlePaymentPlanSelect(event, 'popularPlan')", id_ "popularPlan"] do
+      div_ [class_ "relative flex flex-col gap-2 overflow-hidden"] do
         input_ [type_ "hidden", class_ "orderId", id_ "popularPricing", name_ "ord", value_ ""]
-        let cta
-              | isCurrent = div_ [[__|on click halt|]] $ button_ [class_ $ pricingBtnCls True "", type_ "button"] "Current plan"
-              | useStripe = div_ [[__|on click halt|]] $ button_ [class_ $ pricingBtnCls False "btn-primary", hxPost_ ("/p/" <> pid.toText <> "/stripe_checkout"), hxVals_ "{\"plan\": \"GraduatedPricing\"}", hxSwap_ "none", type_ "button"] "Start 30 day free trial"
-              | otherwise = div_ [[__|on click halt|]] $ button_ [class_ $ pricingBtnCls False "btn-primary", term "_" [text|on click call window.payLemon("GraduatedPricing","$lemonUrl") |], type_ "button"] "Start 30 day free trial"
         pricingContent_
           "Bring nothing"
           "This plan can be adjusted"
           (priceDisplay_ [id_ "price"] "29" "/per month")
-          cta
+          (pricingCta_ pid "GraduatedPricing" "btn-primary" lemonUrl isCurrent useStripe)
           ["Fully managed cloud service", "Predictable usage-based pricing", "Intelligent incident alerts", "Query your data in english", "30 days data retention included"]
           (span_ [] $ when freeTierEnabled $ "Everything in " >> span_ [class_ "text-textBrand"] "free" >> " plus...")
 
@@ -307,18 +307,14 @@ systemsPricing :: Projects.ProjectId -> Text -> Bool -> Bool -> Html ()
 systemsPricing pid critical isCurrent useStripe =
   pricingBadge_ (span_ [class_ "text-sm font-medium leading-tight"] "🌟" >> span_ [class_ "leading-tight text-sm"] "MOST POPULAR")
     $ div_ (pricingPostAttrs pid "SystemsPricing" "outline-strokeBrand-strong" [hxVals_ "js:{orderIdM: document.querySelector('#systemsPricing').value}"])
-    $ div_ [class_ "flex flex-col gap-2", onpointerdown_ "handlePaymentPlanSelect(event, 'systemsPlan')", id_ "systemsPlan"] do
+    $ div_ [class_ "flex flex-col gap-2"] do
       input_ [type_ "hidden", class_ "orderId", id_ "systemsPricing", name_ "ord", value_ ""]
       div_ [class_ "pricing-gradient-brand-wide"] pass
-      let cta
-            | isCurrent = div_ [[__|on click halt|]] $ button_ [class_ $ pricingBtnCls True "", type_ "button"] "Current plan"
-            | useStripe = div_ [[__|on click halt|]] $ button_ [class_ $ pricingBtnCls False "bg-fillStrong text-textInverse-strong", hxPost_ ("/p/" <> pid.toText <> "/stripe_checkout"), hxVals_ "{\"plan\": \"SystemsPricing\"}", hxSwap_ "none", type_ "button"] "Start 30 day free trial"
-            | otherwise = div_ [[__|on click halt|]] $ button_ [class_ $ pricingBtnCls False "bg-fillStrong text-textInverse-strong", term "_" [text|on click call window.payLemon("SystemsPricing", "$critical") |], type_ "button"] "Start 30 day free trial"
       pricingContent_
         "Bring your own storage"
         "Business plan"
         (priceDisplay_ [id_ "critical_price"] "199" "/per month")
-        cta
+        (pricingCta_ pid "SystemsPricing" "bg-fillStrong text-textInverse-strong" critical isCurrent useStripe)
         ["Own and control all your data", "Save all your data to any S3-compatible bucket", "Unlimited data retention period", "Query years of data via monoscope", "No extra cost for data retention"]
         (span_ [] $ "Everything in " >> span_ [class_ "text-textBrand"] "bring nothing" >> " plus...")
 
@@ -354,32 +350,20 @@ enterprisePricing =
 
 included :: [Text] -> Html () -> Html ()
 included features title =
-  div_ [class_ "flex-col justify-start items-start gap-3 flex"] $ do
-    div_ [class_ "text-textStrong text-sm h-6 font-medium italic"] $ toHtml title
-    mapM_ featureRow features
-
-
-featureRow :: Text -> Html ()
-featureRow feature =
-  div_ [class_ "flex items-center gap-3"] $ do
-    faSprite_ "feature-check" "regular" "h-4 text-iconBrand shrink-0"
-    p_ [class_ "text-sm text-textStrong leading-tight"] (toHtml feature)
+  div_ [class_ "flex-col justify-start items-start gap-3 flex"] do
+    div_ [class_ "text-textStrong text-sm h-6 font-medium italic"] title
+    forM_ features \feature -> div_ [class_ "flex items-center gap-3"] do
+      faSprite_ "feature-check" "regular" "h-4 text-iconBrand shrink-0"
+      p_ [class_ "text-sm text-textStrong leading-tight"] $ toHtml feature
 
 
 navBar :: Html ()
-navBar = do
-  nav_ [id_ "main-navbar", class_ "fixed z-20 top-0 w-full w-full px-4 py-4 bg-bgOverlay flex flex-row justify-between"] do
-    div_ [class_ "flex justify-between items-center gap-4 w-[1000px] mx-auto"] do
-      a_ [href_ "https://monoscope.tech", class_ "flex items-center text-textWeak hover:text-textStrong"] do
-        -- Only show full logos (no mini version needed for navbar)
-        img_
-          [ class_ "h-12 dark:hidden"
-          , src_ "/public/assets/svgs/logo_black.svg"
-          ]
-        img_
-          [ class_ "h-12 hidden dark:block"
-          , src_ "/public/assets/svgs/logo_white.svg"
-          ]
+navBar =
+  nav_ [id_ "main-navbar", class_ "fixed z-20 top-0 w-full px-4 py-4 bg-bgOverlay flex flex-row justify-between"]
+    $ div_ [class_ "flex justify-between items-center gap-4 w-[1000px] mx-auto"]
+    $ a_ [href_ "https://monoscope.tech", class_ "flex items-center text-textWeak hover:text-textStrong"] do
+      img_ [class_ "h-12 dark:hidden", src_ "/public/assets/svgs/logo_black.svg"]
+      img_ [class_ "h-12 hidden dark:block", src_ "/public/assets/svgs/logo_white.svg"]
 
 
 modal_ :: T.Text -> Html () -> Html () -> Html ()
@@ -525,22 +509,13 @@ drawerLoadingSkeleton_ = div_ [class_ "flex w-full flex-col gap-5 pt-8", role_ "
 
 chartSkeleton_ :: Html ()
 chartSkeleton_ = div_ [class_ "h-64 w-full rounded-lg relative overflow-hidden bg-fillWeaker"] do
-  -- Y-axis hint
   div_ [class_ "absolute left-0 top-4 bottom-8 w-px bg-strokeWeak"] ""
-  -- X-axis hint
   div_ [class_ "absolute left-4 right-4 bottom-8 h-px bg-strokeWeak"] ""
-  -- Shimmer bars representing data
-  div_ [class_ "absolute left-8 right-4 top-8 bottom-12 flex items-end gap-2"] do
-    div_ [class_ "flex-1 h-3/5 skeleton-shimmer rounded-t", style_ "animation-delay: 0s"] ""
-    div_ [class_ "flex-1 h-2/5 skeleton-shimmer rounded-t", style_ "animation-delay: 0.1s"] ""
-    div_ [class_ "flex-1 h-4/5 skeleton-shimmer rounded-t", style_ "animation-delay: 0.2s"] ""
-    div_ [class_ "flex-1 h-1/2 skeleton-shimmer rounded-t", style_ "animation-delay: 0.3s"] ""
-    div_ [class_ "flex-1 h-3/4 skeleton-shimmer rounded-t", style_ "animation-delay: 0.4s"] ""
-    div_ [class_ "flex-1 h-2/5 skeleton-shimmer rounded-t", style_ "animation-delay: 0.5s"] ""
-  -- Y-axis labels hint
+  div_ [class_ "absolute left-8 right-4 top-8 bottom-12 flex items-end gap-2"]
+    $ forM_ (["h-3/5", "h-2/5", "h-4/5", "h-1/2", "h-3/4", "h-2/5"] `zip` ["0s", "0.1s", "0.2s", "0.3s", "0.4s", "0.5s"])
+    $ \(hCls, delay) -> div_ [class_ $ "flex-1 skeleton-shimmer rounded-t " <> hCls, style_ $ "animation-delay: " <> delay] ""
   div_ [class_ "absolute left-1 top-6 w-3 h-2 skeleton-shimmer rounded"] ""
   div_ [class_ "absolute left-1 top-1/2 w-4 h-2 skeleton-shimmer rounded"] ""
-  -- X-axis labels hint
   div_ [class_ "absolute left-8 bottom-3 w-6 h-2 skeleton-shimmer rounded"] ""
   div_ [class_ "absolute left-1/2 bottom-3 w-6 h-2 skeleton-shimmer rounded"] ""
   div_ [class_ "absolute right-4 bottom-3 w-6 h-2 skeleton-shimmer rounded"] ""
@@ -572,15 +547,18 @@ formField_ size cfg lbl name required customM =
       whenJust cfg.icon \ic -> faSprite_ ic "solid" "w-4 h-4 text-iconNeutral shrink-0"
       toHtml lbl
       when required $ span_ [class_ reqCls] "*"
-    case customM of
-      Just content -> content
-      Nothing -> case (cfg.inputType, cfg.suffix) of
-        ("textarea", _) -> textarea_ ([class_ textareaCls, name_ name, id_ name, placeholder_ cfg.placeholder] <> [required_ "true" | required] <> cfg.extraAttrs) $ toHtml cfg.value
-        (_, Just sfx) -> div_ [class_ "relative"] do
-          input_ $ [class_ $ inputCls <> " pr-14", value_ cfg.value, name_ name, id_ name, type_ cfg.inputType, placeholder_ cfg.placeholder] <> [required_ "true" | required] <> cfg.extraAttrs
-          span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] $ toHtml sfx
-        _ -> input_ $ [class_ inputCls, value_ cfg.value, name_ name, id_ name, type_ cfg.inputType, placeholder_ cfg.placeholder] <> [required_ "true" | required] <> cfg.extraAttrs
+    fromMaybe
+      ( case (cfg.inputType, cfg.suffix) of
+          ("textarea", _) -> textarea_ ([class_ textareaCls, name_ name, id_ name, placeholder_ cfg.placeholder] <> commonAttrs) $ toHtml cfg.value
+          (_, Just sfx) -> div_ [class_ "relative"] do
+            input_ $ [class_ $ inputCls <> " pr-14"] <> inputAttrs
+            span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] $ toHtml sfx
+          _ -> input_ $ [class_ inputCls] <> inputAttrs
+      )
+      customM
   where
+    commonAttrs = [required_ "true" | required] <> cfg.extraAttrs
+    inputAttrs = [value_ cfg.value, name_ name, id_ name, type_ cfg.inputType, placeholder_ cfg.placeholder] <> commonAttrs
     (wrapperCls, labelCls, inputCls, textareaCls, reqCls) = case size of
       FieldSm -> ("fieldset flex-1 min-w-0", "label text-xs text-textStrong", "input input-sm w-full", "textarea textarea-sm w-full leading-relaxed", "text-textError")
       FieldMd -> ("fieldset", "label flex w-full items-center gap-1 text-textStrong", "input w-full h-12", "textarea w-full", "text-textWeak")
@@ -633,14 +611,14 @@ panel_ cfg title content = case cfg.collapsible of
 
 
 formCheckbox_ :: Monad m => FieldSize -> Text -> Text -> [Attribute] -> HtmlT m ()
-formCheckbox_ FieldSm lbl name extraAttrs =
-  label_ [class_ "flex items-center gap-2 text-xs cursor-pointer"] do
+formCheckbox_ size lbl name extraAttrs =
+  label_ [class_ lblCls] do
     input_ $ [type_ "checkbox", class_ "checkbox checkbox-sm", name_ name] <> extraAttrs
-    span_ [] $ toHtml lbl
-formCheckbox_ FieldMd lbl name extraAttrs =
-  label_ [class_ "label cursor-pointer flex items-center gap-2"] do
-    input_ $ [type_ "checkbox", class_ "checkbox checkbox-sm", name_ name] <> extraAttrs
-    span_ [class_ "text-sm"] $ toHtml lbl
+    span_ [class_ spanCls] $ toHtml lbl
+  where
+    (lblCls, spanCls) = case size of
+      FieldSm -> ("flex items-center gap-2 text-xs cursor-pointer", "")
+      FieldMd -> ("label cursor-pointer flex items-center gap-2", "text-sm")
 
 
 tagInput_ :: Monad m => Text -> Text -> [Attribute] -> HtmlT m ()
@@ -662,7 +640,6 @@ connectionBadge_ status = span_ [class_ $ "badge badge-sm gap-1 " <> badgeCls] d
       "Active" -> ("badge-soft badge-success", Just "circle-check")
       "Connected" -> ("badge-soft badge-success", Just "circle-check")
       "Not connected" -> ("badge-soft badge-secondary", Just "circle-info")
-      "Configure" -> ("badge-soft badge-secondary", Nothing)
       _ -> ("badge-soft badge-secondary", Nothing)
 
 
@@ -759,7 +736,7 @@ confirmModal_ modalId title description confirmAttrs confirmText =
 colorChip_ :: Monad m => Text -> Text -> Text -> HtmlT m ()
 colorChip_ color icon label = span_ [class_ $ "inline-flex items-center gap-1.5 text-xs rounded-full px-2.5 py-1 " <> bool "text-textWeak bg-fillWeaker" color (color /= "")] do
   faSprite_ icon "regular" "h-3 w-3"
-  toHtml @Text label
+  toHtml label
 
 
 metadataChip_ :: Monad m => Text -> Text -> HtmlT m ()
@@ -860,7 +837,7 @@ sparkline_ buckets
           barW = max 2 (120 `div` n - gap)
           barsEnd = n * (barW + gap)
           topPad = h - barZone
-          peakIdx = maybe 0 fst $ viaNonEmpty head $ filter ((== peakVal) . snd) $ zip [0 ..] buckets
+          peakIdx = length $ takeWhile (/= peakVal) buckets
           lineX1 = peakIdx * (barW + gap) + barW
           lineX2 = barsEnd + 2
           w = lineX2 + labelW

@@ -1,5 +1,3 @@
-{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
-
 module Pages.Onboarding (
   onboardingGetH,
   onboardingInfoPostH,
@@ -32,7 +30,7 @@ import Data.Effectful.Wreq qualified as W (get, responseBody)
 import Data.Text qualified as T
 import Data.Tuple.Extra (thd3)
 import Data.Vector qualified as V (Vector, fromList, toList)
-import Effectful (Eff, (:>))
+import Effectful (Eff, IOE, (:>))
 import Effectful.Reader.Static (ask)
 import Effectful.State.Static.Local qualified as State
 import Hasql.Interpolate qualified as HI
@@ -49,7 +47,6 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx)
 import Pages.Components
 import Pkg.DeriveUtils (hashAssetFile)
 import Relude hiding (ask)
-import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, HXRedirectDest, RespHeaders, TriggerEvents, XWidgetJSON, addErrorToast, addRespHeaders, redirectCS)
 import Utils (LoadingSize (..), LoadingType (..), faSprite_, insertIfNotExist, loadingIndicator_, lookupValueText, onpointerdown_)
@@ -61,57 +58,33 @@ onboardingGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders Onb
 onboardingGetH pid onboardingStepM = do
   (sess, project, bw) <- mkPageCtx pid
   appCtx <- ask @AuthContext
-  let bodyConfig = bw{currProject = Nothing}
-      questions = fromMaybe (AE.Object []) project.questions
+  let questions = fromMaybe (AE.Object []) project.questions
       onboardingStep = fromMaybe "Info" onboardingStepM
   stepData <- case onboardingStep of
     "Complete" -> pure $ CompleteStep pid
     "Survey" -> do
       let host = fromMaybe "" $ lookupValueText questions "location"
           func = case questions of
-            (AE.Object q) ->
-              let fun = case KM.lookup "functionality" q of
-                    Just (AE.Array f) ->
-                      ( \case
-                          AE.String s -> s
-                          _ -> ""
-                      )
-                        <$> V.toList f
-                    _ -> []
-               in fun
+            AE.Object q | Just (AE.Array f) <- KM.lookup "functionality" q -> (\case AE.String s -> s; _ -> "") <$> V.toList f
             _ -> []
       pure $ SurveyStep pid host func
     "NotifChannel" -> do
-      slack <- getProjectSlackData pid
-      discord <- getDiscordDataByProjectId pid
+      hasSlack <- isJust <$> getProjectSlackData pid
+      hasDiscord <- isJust <$> getDiscordDataByProjectId pid
       everyoneTeamM <- ProjectMembers.getEveryoneTeam pid
       let phone = fromMaybe "" $ everyoneTeamM >>= viaNonEmpty head . V.toList . (.phone_numbers)
-          emails = maybe mempty (.notify_emails) everyoneTeamM
-          hasDiscord = isJust discord
-          hasSlack = isJust slack
-          slackRedirectUri = appCtx.env.slackRedirectUri
-          discordRedirectUri = appCtx.env.discordRedirectUri
-          slackUrl = "https://slack.com/oauth/v2/authorize?client_id=" <> appCtx.config.slackClientId <> "&scope=chat:write,commands,incoming-webhook,files:write,app_mentions:read,channels:read,groups:read,channels:history,groups:history,im:history,mpim:history,chat:write.public&user_scope=&redirect_uri=" <> slackRedirectUri <> "&state=" <> pid.toText <> "__onboarding"
-          discordUrl = "https://discord.com/oauth2/authorize?response_type=code&client_id=" <> appCtx.config.discordClientId <> "&permissions=277025392640&integration_type=0&scope=bot+applications.commands" <> "&state=" <> pid.toText <> "__onboarding" <> "&redirect_uri=" <> discordRedirectUri
-      pure $ NotifChannelStep pid slackUrl discordUrl phone emails hasSlack hasDiscord
-    "Integration" -> do
-      apiKey <- ProjectApiKeys.projectApiKeysByProjectId pid
-      let key = maybe "<API_KEY>" (.keyPrefix) (listToMaybe apiKey)
-      pure $ IntegrationStep pid key
+          slackUrl = "https://slack.com/oauth/v2/authorize?client_id=" <> appCtx.config.slackClientId <> "&scope=chat:write,commands,incoming-webhook,files:write,app_mentions:read,channels:read,groups:read,channels:history,groups:history,im:history,mpim:history,chat:write.public&user_scope=&redirect_uri=" <> appCtx.env.slackRedirectUri <> "&state=" <> pid.toText <> "__onboarding"
+          discordUrl = "https://discord.com/oauth2/authorize?response_type=code&client_id=" <> appCtx.config.discordClientId <> "&permissions=277025392640&integration_type=0&scope=bot+applications.commands&state=" <> pid.toText <> "__onboarding&redirect_uri=" <> appCtx.env.discordRedirectUri
+      pure $ NotifChannelStep pid slackUrl discordUrl phone (maybe mempty (.notify_emails) everyoneTeamM) hasSlack hasDiscord
+    "Integration" -> IntegrationStep pid . maybe "<API_KEY>" (.keyPrefix) . listToMaybe <$> ProjectApiKeys.projectApiKeysByProjectId pid
     "Pricing" -> do
-      let lemonUrl = appCtx.config.lemonSqueezyUrl <> "&checkout[custom][project_id]=" <> pid.toText
-          critical = appCtx.config.lemonSqueezyCriticalUrl <> "&checkout[custom][project_id]=" <> pid.toText
-          paymentPlan = project.paymentPlan
-      pure $ PricingStep pid lemonUrl critical paymentPlan appCtx.config.enableFreetier appCtx.config.basicAuthEnabled
+      let checkout u = u <> "&checkout[custom][project_id]=" <> pid.toText
+      pure $ PricingStep pid (checkout appCtx.config.lemonSqueezyUrl) (checkout appCtx.config.lemonSqueezyCriticalUrl) project.paymentPlan appCtx.config.enableFreetier appCtx.config.basicAuthEnabled
     _ -> do
-      let firstName = sess.user.firstName
-          lastName = sess.user.lastName
-          (companyName, companySize, foundUsfrom) = (fromMaybe "" $ lookupValueText questions "companyName", fromMaybe "" $ lookupValueText questions "companySize", fromMaybe "" $ lookupValueText questions "foundUsFrom")
-      pure $ InfoStep pid firstName lastName companyName companySize foundUsfrom
-  addRespHeaders $ OnboardingGet $ PageCtx bodyConfig stepData
+      let q k = fromMaybe "" $ lookupValueText questions k
+      pure $ InfoStep pid sess.user.firstName sess.user.lastName (q "companyName") (q "companySize") (q "foundUsFrom")
+  addRespHeaders $ OnboardingGet $ PageCtx bw{currProject = Nothing} stepData
 
-
--- addRespHeaders $ PageCtx bodyConfig $ div_ [class_ "container"] $ "Hello world"
 
 data OnboardingInfoForm = OnboardingInfoForm
   { firstName :: Text
@@ -145,7 +118,6 @@ data NotifChannelForm = NotifChannelForm
   deriving anyclass (AE.FromJSON, AE.ToJSON, FromForm)
 
 
--- | Data type representing different onboarding steps
 data OnboardingStepData
   = InfoStep
       { stepPid :: Projects.ProjectId
@@ -188,7 +160,6 @@ data OnboardingStepData
   deriving anyclass (AE.ToJSON)
 
 
--- | Response type for onboarding GET handler
 newtype OnboardingGet = OnboardingGet (PageCtx OnboardingStepData)
   deriving stock (Generic, Show)
 
@@ -206,7 +177,6 @@ instance ToHtml OnboardingGet where
   toHtmlRaw = toHtml
 
 
--- | Response type for onboarding info POST handler (redirects to next step)
 newtype OnboardingInfoPost = OnboardingInfoPost ()
   deriving stock (Generic, Show)
 
@@ -216,7 +186,6 @@ instance ToHtml OnboardingInfoPost where
   toHtmlRaw = toHtml
 
 
--- | Response type for onboarding configuration POST handler (redirects to next step)
 newtype OnboardingConfPost = OnboardingConfPost ()
   deriving stock (Generic, Show)
 
@@ -226,7 +195,6 @@ instance ToHtml OnboardingConfPost where
   toHtmlRaw = toHtml
 
 
--- | Response type for phone/emails POST handler
 data OnboardingPhoneEmailsPost = OnboardingPhoneEmailsPost
   { projectId :: Projects.ProjectId
   , emails :: V.Vector Text
@@ -242,26 +210,22 @@ instance ToHtml OnboardingPhoneEmailsPost where
 
 onboardingStepSkipped :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 onboardingStepSkipped pid stepM = do
-  (sess, project) <- Projects.sessionAndProject pid
-  case stepM of
-    Just step -> do
-      let stepsCompleted = project.onboardingStepsCompleted
-          newCompleted = insertIfNotExist step stepsCompleted
-      _ <- Hasql.interpExecute [HI.sql| update projects.projects set onboarding_steps_completed=#{newCompleted} where id=#{pid} |]
-
-      redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=" <> getNextStep step
-      addRespHeaders ""
-    _ -> do
-      redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=Info"
-      addRespHeaders ""
+  (_, project) <- Projects.sessionAndProject pid
+  whenJust stepM $ markStepCompleted pid project.onboardingStepsCompleted
+  redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=" <> maybe "Info" getNextStep stepM
+  addRespHeaders ""
 
 
 dismissChecklistH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 dismissChecklistH pid = do
   (_, project) <- Projects.sessionAndProject pid
-  let newCompleted = insertIfNotExist "checklist_dismissed" project.onboardingStepsCompleted
-  Hasql.interpExecute_ [HI.sql| UPDATE projects.projects SET onboarding_steps_completed=#{newCompleted} WHERE id=#{pid} |]
+  markStepCompleted pid project.onboardingStepsCompleted "checklist_dismissed"
   addRespHeaders ""
+
+
+markStepCompleted :: (Hasql.Hasql :> es, IOE :> es) => Projects.ProjectId -> V.Vector Text -> Text -> Eff es ()
+markStepCompleted pid stepsCompleted step =
+  Hasql.interpExecute_ [HI.sql| update projects.projects set onboarding_steps_completed=#{insertIfNotExist step stepsCompleted} where id=#{pid} |]
 
 
 getNextStep :: Text -> Text
@@ -271,39 +235,26 @@ getNextStep _ = "Info"
 
 phoneEmailPostH :: Projects.ProjectId -> NotifChannelForm -> ATAuthCtx (RespHeaders OnboardingPhoneEmailsPost)
 phoneEmailPostH pid form = do
-  (sess, project) <- Projects.sessionAndProject pid
+  (_, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
-  let envCfg = appCtx.config
-      phone = form.phoneNumber
-      emails = form.emails
-      stepsCompleted = project.onboardingStepsCompleted
-      newCompleted = insertIfNotExist "NotifChannel" stepsCompleted
-      emailsVec = V.fromList emails
-  projectMembers <- Projects.usersByProjectId pid
-  let emails' = (\u -> CI.original u.email) <$> projectMembers
-  _ <- Hasql.interpExecute [HI.sql| update projects.projects set onboarding_steps_completed=#{newCompleted} where id=#{pid} |]
-  ProjectMembers.setEveryoneTeamEmails pid emailsVec
-  when (phone /= "") $ ProjectMembers.setEveryoneTeamPhones pid (V.fromList [phone])
-  addRespHeaders $ OnboardingPhoneEmailsPost pid (V.fromList $ ordNub $ emails <> emails') envCfg.enableFreetier
+  memberEmails <- map (CI.original . (.email)) <$> Projects.usersByProjectId pid
+  markStepCompleted pid project.onboardingStepsCompleted "NotifChannel"
+  ProjectMembers.setEveryoneTeamEmails pid (V.fromList form.emails)
+  unless (T.null form.phoneNumber) $ ProjectMembers.setEveryoneTeamPhones pid (V.fromList [form.phoneNumber])
+  addRespHeaders $ OnboardingPhoneEmailsPost pid (V.fromList $ ordNub $ form.emails <> memberEmails) appCtx.config.enableFreetier
 
 
 checkIntegrationGet :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 checkIntegrationGet pid languageM = do
-  (sess, project) <- Projects.sessionAndProject pid
-  let stepsCompleted = project.onboardingStepsCompleted
-      newCompleted = insertIfNotExist "Integration" stepsCompleted
+  (_, project) <- Projects.sessionAndProject pid
   v :: Maybe Text <- Hasql.interpOne [HI.sql|SELECT context___span_id FROM otel_logs_and_spans WHERE project_id = #{pid.toText} LIMIT 1|]
-  if isJust v
-    then do
-      _ <- Hasql.interpExecute [HI.sql|update projects.projects set onboarding_steps_completed=#{newCompleted} where id=#{pid}|]
+  case v of
+    Nothing -> addErrorToast "No events found yet" Nothing >> addRespHeaders ""
+    Just _ -> do
+      markStepCompleted pid project.onboardingStepsCompleted "Integration"
       case languageM of
-        Just lg -> addRespHeaders verifiedCheck
-        _ -> do
-          redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=Pricing"
-          addRespHeaders ""
-    else do
-      addErrorToast "No events found yet" Nothing
-      addRespHeaders ""
+        Just _ -> addRespHeaders verifiedCheck
+        Nothing -> redirectCS ("/p/" <> pid.toText <> "/onboarding?step=Pricing") >> addRespHeaders ""
 
 
 verifiedCheck :: Html ()
@@ -315,43 +266,36 @@ verifiedCheck = div_ [class_ "flex items-center gap-2 text-textSuccess"] do
 onboardingInfoPostH :: Projects.ProjectId -> OnboardingInfoForm -> ATAuthCtx (RespHeaders OnboardingInfoPost)
 onboardingInfoPostH pid form = do
   (sess, project) <- Projects.sessionAndProject pid
-  let firstName = form.firstName
-      lastName = form.lastName
-  let infoJson =
-        KM.fromList
+  let jsonBytes =
+        mergeQuestions
+          project.questions
           [ ("companyName", AE.toJSON form.companyName)
           , ("companySize", AE.toJSON form.companySize)
           , ("foundUsFrom", AE.toJSON form.whereDidYouHearAboutUs)
           ]
-      questions = case project.questions of
-        Just (AE.Object o) -> AE.Object $ infoJson <> o
-        _ -> AE.Object infoJson
-      jsonBytes = HI.AsJsonb questions
-      stepsCompleted = project.onboardingStepsCompleted
-      newCompleted = insertIfNotExist "Info" stepsCompleted
-  let companyName = form.companyName
+      newCompleted = insertIfNotExist "Info" project.onboardingStepsCompleted
+      OnboardingInfoForm{firstName, lastName, companyName} = form
       userId = sess.user.id
-  _ <- Hasql.interpExecute [HI.sql| update projects.projects set title=#{companyName},questions=#{jsonBytes},onboarding_steps_completed=#{newCompleted} where id=#{pid} |]
-  _ <- Hasql.interpExecute [HI.sql| update users.users set first_name=#{firstName}, last_name=#{lastName} where id=#{userId} |]
+  Hasql.interpExecute_ [HI.sql| update projects.projects set title=#{companyName},questions=#{jsonBytes},onboarding_steps_completed=#{newCompleted} where id=#{pid} |]
+  Hasql.interpExecute_ [HI.sql| update users.users set first_name=#{firstName}, last_name=#{lastName} where id=#{userId} |]
   redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=Survey"
   addRespHeaders $ OnboardingInfoPost ()
 
 
+-- | Merge new answers into a project's existing questions blob; new answers win on conflict.
+mergeQuestions :: Maybe AE.Value -> [(AE.Key, AE.Value)] -> HI.AsJsonb AE.Value
+mergeQuestions old kvs =
+  HI.AsJsonb $ AE.Object $ KM.fromList kvs <> case old of
+    Just (AE.Object o) -> o
+    _ -> mempty
+
+
 onboardingConfPostH :: Projects.ProjectId -> OnboardingConfForm -> ATAuthCtx (RespHeaders OnboardingConfPost)
 onboardingConfPostH pid form = do
-  (sess, project) <- Projects.sessionAndProject pid
-  let infoJson =
-        KM.fromList
-          [ ("functionality", AE.toJSON form.functionality)
-          , ("location", AE.toJSON form.location)
-          ]
-      questions = case project.questions of
-        Just (AE.Object o) -> AE.Object $ infoJson <> o
-        _ -> AE.Object infoJson
-      jsonBytes = HI.AsJsonb questions
-      stepsCompleted = project.onboardingStepsCompleted
-      newCompleted = insertIfNotExist "Survey" stepsCompleted
-  _ <- Hasql.interpExecute [HI.sql| update projects.projects set questions=#{jsonBytes}, onboarding_steps_completed=#{newCompleted} where id=#{pid} |]
+  (_, project) <- Projects.sessionAndProject pid
+  let jsonBytes = mergeQuestions project.questions [("functionality", AE.toJSON form.functionality), ("location", AE.toJSON form.location)]
+      newCompleted = insertIfNotExist "Survey" project.onboardingStepsCompleted
+  Hasql.interpExecute_ [HI.sql| update projects.projects set questions=#{jsonBytes}, onboarding_steps_completed=#{newCompleted} where id=#{pid} |]
   redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=NotifChannel"
   addRespHeaders $ OnboardingConfPost ()
 
@@ -497,7 +441,7 @@ integrationGroups =
   ]
 
 
--- IMPORtANT: DO NOT DELETE. Needed for the tailwindcss to generate classes.
+-- IMPORTANT: DO NOT DELETE. Needed for the tailwindcss to generate classes.
 -- [class_ "group-has-[#check-js:checked]/pg:block group-has-[#check-go:checked]/pg:block group-has-[#check-elixir:checked]/pg:block group-has-[#check-py:checked]/pg:block group-has-[#check-java:checked]/pg:block"]
 -- [class_ "group-has-[#check-php:checked]/pg:block group-has-[#check-cs:checked]/pg:block"]
 -- [class_ "group-has-[#check-linux:checked]/pg:block group-has-[#check-docker:checked]/pg:block group-has-[#check-kubernetes:checked]/pg:block group-has-[#check-kafka:checked]/pg:block"]
@@ -525,13 +469,12 @@ integrationsPage pid apikey =
             button_
               [ class_ "px-4 py-2 bg-fillBrand-strong rounded-xl text-textInverse-strong flex items-center gap-1 hover:bg-fillBrand-strong/90 cursor-pointer"
               , type_ "button"
-              , onpointerdown_ "navigator.clipboard.writeText(document.getElementById('api-key-display').textContent); this.innerHTML = '<span>Copied!</span><svg class=\"h-4 w-4\" xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M5 13l4 4L19 7\"></path></svg>';"
+              , onpointerdown_ "navigator.clipboard.writeText(document.getElementById('api-key-display').textContent); this.innerHTML = 'Copied!';"
               ]
               do
                 span_ "Copy"
                 faSprite_ "copy" "regular" "h-4 w-4"
 
-        -- Quick Test suggestion banner
         div_ [class_ "mb-4 px-4 bg-gradient-to-r from-fillInfo-weak to-transparent border-l-4 border-strokeInfo rounded-lg"] do
           p_ [class_ "text-sm text-textStrong"] do
             "Want to test quickly? "
@@ -542,89 +485,54 @@ integrationsPage pid apikey =
               "Use telemetrygen"
             " to send sample data in seconds"
 
-        -- Display integration groups
         forM_ integrationGroups \(groupName, langsList) -> div_ [class_ "mb-4 md:mb-6"] do
           div_ [class_ "text-textWeak text-lg md:text-xl mb-2"] $ toHtml groupName
           div_ [class_ "grid grid-cols-2 gap-2"]
             $ forM_ langsList \(lang, langName, _) ->
               languageItem pid langName lang
 
-        -- Inline CTA on desktop (mobile uses sticky bar)
-        div_ [class_ "max-md:hidden flex items-center gap-4 py-8"] do
-          button_ [class_ "btn-primary px-8 py-3 text-xl rounded-xl cursor-pointer flex items-center", hxGet_ $ "/p/" <> pid.toText <> "/onboarding/integration-check", hxSwap_ "none", hxIndicator_ "#loadingIndicator"] "Confirm & Proceed"
-          a_
-            [ class_ "px-4 py-3 flex items-center underline text-textBrand text-xl cursor-pointer"
-            , type_ "button"
-            , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/skip?step=Integration"
-            ]
-            "Skip"
-      -- Sticky CTA bar for mobile
-      div_ [class_ "md:hidden fixed bottom-0 left-0 right-0 bg-bgRaised border-t border-strokeWeak pl-4 pr-18 py-3 flex items-center gap-3 z-30"] do
-        button_ [class_ "btn-primary px-6 py-2.5 text-base rounded-xl cursor-pointer flex-1 flex items-center justify-center", hxGet_ $ "/p/" <> pid.toText <> "/onboarding/integration-check", hxSwap_ "none", hxIndicator_ "#loadingIndicator"] "Confirm & Proceed"
-        a_
-          [ class_ "px-3 py-2.5 flex items-center underline text-textBrand text-base cursor-pointer"
-          , type_ "button"
-          , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/skip?step=Integration"
-          ]
-          "Skip"
+        integrationCta_ pid "max-md:hidden flex items-center gap-4 py-8" "btn-primary px-8 py-3 text-xl rounded-xl cursor-pointer flex items-center" "px-4 py-3 flex items-center underline text-textBrand text-xl cursor-pointer"
+      integrationCta_ pid "md:hidden fixed bottom-0 left-0 right-0 bg-bgRaised border-t border-strokeWeak pl-4 pr-18 py-3 flex items-center gap-3 z-30" "btn-primary px-6 py-2.5 text-base rounded-xl cursor-pointer flex-1 flex items-center justify-center" "px-3 py-2.5 flex items-center underline text-textBrand text-base cursor-pointer"
 
     div_ [class_ "w-full md:w-1/2 md:h-full overflow-hidden md:border-l border-weak", id_ "docs-panel"] do
       div_ [class_ "md:hidden sticky top-0 z-20 bg-bgBase border-b border-strokeWeak p-3 hidden", id_ "docs-panel-back"] do
         button_
           [ class_ "flex items-center gap-2 text-textBrand cursor-pointer"
           , type_ "button"
-          , onclick_ "event.preventDefault();event.stopPropagation();document.getElementById('docs-panel').classList.remove('open');this.parentElement.classList.add('hidden');"
+          , [__|on click remove .open from #docs-panel|]
           ]
           do
             faSprite_ "arrow-left" "regular" "h-4 w-4"
             span_ "Back to selection"
       div_ [class_ "md:h-full flex flex-col"] do
         div_ [class_ "w-full md:h-full overflow-y-auto rounded-2xl blue-gradient-box bg-bgBase"] do
-          -- Welcome content shown when no integration is selected (hidden on mobile)
           div_ [class_ "max-md:hidden p-12 text-center group-has-[.checkbox:checked]/pg:hidden flex items-center justify-center h-full"] do
             div_ [class_ "flex flex-col w-full items-center gap-8"] do
-              -- Icon/graphic
               div_ [class_ "p-6 bg-fillWeak rounded-full"] do
                 faSprite_ "brackets-curly" "regular" "h-16 w-16 text-iconBrand"
 
-              -- Welcome text
               h2_ [class_ "text-3xl text-textStrong"] "👈 Select your stack on the left to begin"
               p_ [class_ "text-lg text-textWeak max-w-md leading-relaxed"] do
                 "You can also check out our youtube videos for more interactive walkthroughs."
 
-                -- YouTube video embeds
-                div_ [class_ "grid grid-cols-2 gap-4 w-full"] do
-                  -- Video 1
-                  div_ [class_ "relative overflow-hidden rounded-lg border border-weak", style_ "padding-bottom: 56.25%;"] do
-                    iframe_
-                      [ class_ "absolute top-0 left-0 w-full h-full"
-                      , src_ "https://www.youtube.com/embed/Q-tGuIkDmyk?si=BIHn2vN1m9gDs_9v"
-                      , title_ "YouTube video player"
-                      , term "frameborder" "0"
-                      , term "allow" "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                      , term "referrerpolicy" "strict-origin-when-cross-origin"
-                      , term "allowfullscreen" ""
-                      ]
-                      ""
-
-                  -- Video 2 (replace VIDEO_ID_2 with actual ID)
-                  div_ [class_ "relative overflow-hidden rounded-lg border border-weak", style_ "padding-bottom: 56.25%;"] do
-                    iframe_
-                      [ class_ "absolute top-0 left-0 w-full h-full"
-                      , src_ "https://www.youtube.com/embed/OALS4ckfOdI"
-                      , title_ "YouTube video player"
-                      , term "frameborder" "0"
-                      , term "allow" "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                      , term "referrerpolicy" "strict-origin-when-cross-origin"
-                      , term "allowfullscreen" ""
-                      ]
-                      ""
+                div_ [class_ "grid grid-cols-2 gap-4 w-full"]
+                  $ forM_ ["Q-tGuIkDmyk?si=BIHn2vN1m9gDs_9v", "OALS4ckfOdI"] \vid ->
+                    div_ [class_ "relative overflow-hidden rounded-lg border border-weak", style_ "padding-bottom: 56.25%;"]
+                      $ iframe_
+                        [ class_ "absolute top-0 left-0 w-full h-full"
+                        , src_ $ "https://www.youtube.com/embed/" <> vid
+                        , title_ "YouTube video player"
+                        , term "frameborder" "0"
+                        , term "allow" "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                        , term "referrerpolicy" "strict-origin-when-cross-origin"
+                        , term "allowfullscreen" ""
+                        ]
+                        ""
 
                 div_ [class_ "text-center mt-3"]
                   $ a_ [href_ "https://www.youtube.com/@monoscope", target_ "_blank", class_ "text-textBrand hover:underline text-sm font-medium"] do
                     "Watch more tutorials →"
 
-          -- Display guides for all integration options
           forM_ integrationGroups \(_, integrations) -> do
             forM_ integrations \(lang, langName, frameworks) ->
               div_ [class_ $ "p-4 lang-guide hidden group-has-[#check-" <> lang <> ":checked]/pg:block", id_ $ lang <> "_main"] do
@@ -654,7 +562,7 @@ integrationsPage pid apikey =
                     $ loadingIndicator_ LdMD LdDots
                   div_
                     [ id_ $ "fw-content-" <> lang
-                    , hxGet_ $ "/proxy/docs/sdks/" <> thd3 (frameworks Unsafe.!! 0)
+                    , hxGet_ $ "/proxy/docs/sdks/" <> foldMap thd3 (listToMaybe frameworks)
                     , hxTrigger_ "load"
                     , hxSwap_ "innerHTML"
                     , hxSelect_ "#mainArticle"
@@ -662,7 +570,6 @@ integrationsPage pid apikey =
                     ]
                     ""
 
-    -- Telemetrygen modal
     modalWith_ "telemetrygen-modal" def{boxClass = "max-w-2xl", hideClose = True} Nothing do
       h3_ [class_ "text-lg font-bold text-textStrong flex items-center gap-2 mb-4"] do
         faSprite_ "flask-vial" "regular" "h-5 w-5"
@@ -671,7 +578,6 @@ integrationsPage pid apikey =
       p_ [class_ "text-textWeak mb-6 leading-relaxed"] "Use the Monoscope CLI to send test traces and verify your setup is working. No extra tools needed."
 
       div_ [class_ "space-y-4"] do
-        -- Step 1: Install CLI (if needed)
         div_ [class_ "p-4 bg-fillWeak rounded-lg"] do
           div_ [class_ "text-textStrong font-medium mb-2 flex items-center gap-2"] do
             span_ [class_ "inline-flex items-center justify-center w-6 h-6 rounded-full bg-fillBrand-weak text-textBrand text-sm font-bold"] "1"
@@ -680,7 +586,6 @@ integrationsPage pid apikey =
             [class_ "bg-bgBase p-3 rounded monospace text-sm overflow-x-auto border border-strokeWeak"]
             "curl https://monoscope.tech/install.sh | sh && monoscope auth login"
 
-        -- Step 2: Run command
         div_ [class_ "p-4 bg-fillWeak rounded-lg"] do
           div_ [class_ "text-textStrong font-medium mb-2 flex items-center gap-2"] do
             span_ [class_ "inline-flex items-center justify-center w-6 h-6 rounded-full bg-fillBrand-weak text-textBrand text-sm font-bold"] "2"
@@ -699,7 +604,6 @@ integrationsPage pid apikey =
                 span_ "Copy"
                 faSprite_ "copy" "regular" "h-3 w-3"
 
-      -- Success message
       div_ [class_ "mt-6 p-4 bg-fillSuccess-weak border border-strokeSuccess-weak rounded-lg flex items-start gap-3"] do
         faSprite_ "circle-check" "regular" "h-5 w-5 text-iconSuccess flex-shrink-0 mt-0.5"
         div_ do
@@ -708,10 +612,10 @@ integrationsPage pid apikey =
 
       div_ [class_ "modal-action"] $ label_ [Lucid.for_ "telemetrygen-modal", class_ "btn"] "Close"
 
-    -- Mobile overlay for docs panel
+    -- Mobile docs-panel overlay + the AI menu injected into proxied docs content
     style_
       $ unlines
-        [ "@media(max-width:767px){#docs-panel{display:none}#docs-panel.open{display:flex;flex-direction:column;position:fixed;inset:0;z-index:50;background:var(--color-bgBase);overflow-y:auto}}"
+        [ "@media(max-width:767px){#docs-panel{display:none}#docs-panel.open{display:flex;flex-direction:column;position:fixed;inset:0;z-index:50;background:var(--color-bgBase);overflow-y:auto}#docs-panel.open #docs-panel-back{display:block}}"
         , ".ai-menu-wrap{position:relative}"
         , ".ai-menu{position:absolute;right:0;top:100%;z-index:50;min-width:260px;margin-top:6px;background:var(--color-bgRaised);border:1px solid var(--color-strokeWeak);border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,0.12);padding:6px;opacity:0;transform:scale(0.95) translateY(-4px);pointer-events:none;transition:opacity 150ms ease,transform 150ms ease}"
         , ".ai-menu.open{opacity:1;transform:scale(1) translateY(0);pointer-events:auto}"
@@ -727,7 +631,6 @@ integrationsPage pid apikey =
         , ".ai-menu-item.copied svg:first-child{display:none}"
         ]
 
-    -- Highlight.js for syntax highlighting (v11.11.1)
     link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/deps/highlightjs/atom-one-dark.min.css")]
     script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/highlight.min.js")] ("" :: Text)
     script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/javascript.min.js")] ("" :: Text)
@@ -742,12 +645,10 @@ integrationsPage pid apikey =
     script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/yaml.min.js")] ("" :: Text)
     script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/json.min.js")] ("" :: Text)
 
-    -- Initialize highlight.js after HTMX loads content
     script_
       [text|
-        // Initialize highlight.js
         hljs.highlightAll();
-        
+
         function initAIMenu(container) {
           var trigger = container.querySelector('#ai-menu-trigger');
           var menu = container.querySelector('#ai-menu');
@@ -769,25 +670,22 @@ integrationsPage pid apikey =
             if (!menu.contains(e.target) && e.target !== trigger) menu.classList.remove('open');
           });
           document.addEventListener('keydown', function(e) { if (e.key === 'Escape') menu.classList.remove('open'); });
-          var copyPage = menu.querySelector('[data-action="copy-page"]');
-          if (copyPage) copyPage.onclick = function() {
+          function pageMarkdown() {
             var clone = container.cloneNode(true);
             clone.querySelectorAll('.ai-menu-wrap, .code-header').forEach(function(el) { el.remove(); });
-            var text = '# ' + pageTitle + '\n\nSource: ' + pageUrl + '\n\n' + clone.innerText;
-            navigator.clipboard.writeText(text).then(function() { showCopied(menu, 'copy-page'); });
+            return '# ' + pageTitle + '\n\nSource: ' + pageUrl + '\n\n' + clone.innerText;
+          }
+          var copyPage = menu.querySelector('[data-action="copy-page"]');
+          if (copyPage) copyPage.onclick = function() {
+            navigator.clipboard.writeText(pageMarkdown()).then(function() {
+              copyPage.classList.add('copied');
+              setTimeout(function() { copyPage.classList.remove('copied'); }, 2000);
+            });
           };
           var viewMd = menu.querySelector('[data-action="view-markdown"]');
           if (viewMd) viewMd.onclick = function() {
-            var clone = container.cloneNode(true);
-            clone.querySelectorAll('.ai-menu-wrap, .code-header').forEach(function(el) { el.remove(); });
-            var text = '# ' + pageTitle + '\n\nSource: ' + pageUrl + '\n\n' + clone.innerText;
-            window.open(URL.createObjectURL(new Blob([text], { type: 'text/plain' })), '_blank');
+            window.open(URL.createObjectURL(new Blob([pageMarkdown()], { type: 'text/plain' })), '_blank');
           };
-          function showCopied(m, action) {
-            var item = m.querySelector('[data-action="' + action + '"]');
-            item.classList.add('copied');
-            setTimeout(function() { item.classList.remove('copied'); }, 2000);
-          }
         }
 
         // Re-highlight after HTMX swaps content
@@ -804,6 +702,13 @@ integrationsPage pid apikey =
       |]
 
 
+-- | "Confirm & Proceed" + "Skip" pair; classes differ between the desktop inline and mobile sticky bars.
+integrationCta_ :: Projects.ProjectId -> Text -> Text -> Text -> Html ()
+integrationCta_ pid wrapCls btnCls skipCls = div_ [class_ wrapCls] do
+  button_ [class_ btnCls, hxGet_ $ "/p/" <> pid.toText <> "/onboarding/integration-check", hxSwap_ "none", hxIndicator_ "#loadingIndicator"] "Confirm & Proceed"
+  a_ [class_ skipCls, type_ "button", hxPost_ $ "/p/" <> pid.toText <> "/onboarding/skip?step=Integration"] "Skip"
+
+
 languageItem :: Projects.ProjectId -> Text -> Text -> Html ()
 languageItem pid lang ext = do
   label_
@@ -815,7 +720,7 @@ languageItem pid lang ext = do
         , class_ "checkbox shrink-0"
         , id_ $ "check-" <> ext
         , value_ ext
-        , onchange_ $ "if(this.checked) { var dp=document.getElementById('docs-panel'); if(window.innerWidth<768){dp.classList.add('open');document.getElementById('docs-panel-back').classList.remove('hidden');requestAnimationFrame(function(){dp.scrollTop=0;});} else {requestAnimationFrame(function(){document.getElementById('" <> ext <> "_main').scrollIntoView({behavior:'smooth'});});} }"
+        , onchange_ $ "if(this.checked){var dp=document.getElementById('docs-panel');if(window.innerWidth<768){dp.classList.add('open');requestAnimationFrame(function(){dp.scrollTop=0});}else{requestAnimationFrame(function(){document.getElementById('" <> ext <> "_main').scrollIntoView({behavior:'smooth'})});}}"
         ]
       div_ [class_ "flex w-full items-center justify-between overflow-hidden"] do
         div_ [class_ "flex items-center gap-2 text-sm min-w-0"] do
@@ -834,32 +739,20 @@ languageItem pid lang ext = do
               faSprite_ "spinner" "regular" "h-4 w-4 animate-spin shrink-0"
 
 
--- Helper function to render connection status button
-connectionStatusButton :: Bool -> Text -> Html ()
-connectionStatusButton isConnected connectUrl
-  | isConnected = button_ [class_ "text-textSuccess "] "Connected"
-  | otherwise =
-      a_
-        [ target_ "_blank"
-        , class_ "border px-3 h-8 flex items-center shadow-xs border-[var(--brand-color)] rounded-lg text-textBrand "
-        , href_ connectUrl
-        ]
-        "Connect"
-
-
--- Helper function to render integration card
 integrationCard :: Text -> Text -> Bool -> Text -> Html ()
 integrationCard serviceName iconPath isConnected connectUrl = do
   div_ [class_ "px-3 py-2 rounded-xl border border-strokeWeak bg-fillWeak justify-between items-center flex"] $ do
     div_ [class_ "items-center gap-1.5 flex overflow-hidden"] $ do
       img_ [src_ iconPath]
       span_ [class_ "text-center text-textStrong text-xl"] $ toHtml serviceName
-    connectionStatusButton isConnected connectUrl
+    if isConnected
+      then button_ [class_ "text-textSuccess "] "Connected"
+      else a_ [target_ "_blank", class_ "border px-3 h-8 flex items-center shadow-xs border-[var(--brand-color)] rounded-lg text-textBrand ", href_ connectUrl] "Connect"
 
 
-onboardingStepWrapper_ :: Text -> Int -> Text -> Text -> Html () -> Html ()
-onboardingStepWrapper_ extraCls step title prevUrl content =
-  div_ [class_ $ "w-full max-w-xl mx-auto mt-20 md:mt-[156px] px-4 md:px-0 " <> extraCls]
+onboardingStepWrapper_ :: Int -> Text -> Text -> Html () -> Html ()
+onboardingStepWrapper_ step title prevUrl content =
+  div_ [class_ "w-full max-w-xl mx-auto mt-20 md:mt-[156px] px-4 md:px-0"]
     $ div_ [class_ "flex-col gap-4 flex w-full"] do
       stepIndicator step title prevUrl
       content
@@ -911,7 +804,7 @@ notifChannelsWithUrls slackUrl discordUrl pid phone emails hasDiscord hasSlack =
 
 onboardingInfoBody :: Projects.ProjectId -> Text -> Text -> Text -> Text -> Text -> Html ()
 onboardingInfoBody pid firstName lastName cName cSize fUsFrm = do
-  onboardingStepWrapper_ "" 1 "Tell us a little bit about you" ""
+  onboardingStepWrapper_ 1 "Tell us a little bit about you" ""
     $ form_ [class_ "flex-col w-full gap-8 flex", hxPost_ $ "/p/" <> pid.toText <> "/onboarding/info", hxIndicator_ "#loadingIndicator"]
     $ do
       div_ [class_ "flex-col w-full gap-4 mt-4 flex"] $ do
@@ -928,7 +821,7 @@ onboardingInfoBody pid firstName lastName cName cSize fUsFrm = do
 
 onboardingConfigBody :: Projects.ProjectId -> Text -> [Text] -> Html ()
 onboardingConfigBody pid loca func = do
-  onboardingStepWrapper_ "" 2 "Let's configure your project" ("/p/" <> pid.toText <> "/onboarding?step=Info")
+  onboardingStepWrapper_ 2 "Let's configure your project" ("/p/" <> pid.toText <> "/onboarding?step=Info")
     $ form_ [class_ "flex-col w-full gap-8 flex", hxPost_ $ "/p/" <> pid.toText <> "/onboarding/survey", hxIndicator_ "#loadingIndicator"]
     $ do
       div_ [class_ "flex-col w-full gap-14 mt-4 flex"] $ do
@@ -972,8 +865,8 @@ inviteTeamMemberModal pid emails enableFreetier = do
             , hxIndicator_ "#loadingIndicator"
             ]
             $ do
-              inviteMemberItem "hidden"
-              forM_ emails inviteMemberItem
+              inviteMemberItem Nothing
+              forM_ emails (inviteMemberItem . Just)
       div_ [class_ "modal-action w-full flex items-center justify-start gap-4"] do
         button_ [class_ "btn-primary px-8 py-2 text-lg rounded-xl cursor-pointer flex items-center", type_ "button", onpointerdown_ "htmx.trigger('#members-container', 'submit')"] "Proceed"
         label_ [Lucid.for_ "inviteModal", class_ "text-textWeak text-sm underline cursor-pointer"] "Close"
@@ -987,6 +880,8 @@ functionalities =
   , ("changeTracking", "API (Breaking) Change Tracking")
   , ("customDashboards", "Custom Dashboards")
   ]
+
+
 locations :: [(Text, Text)]
 locations =
   [ ("usa", "USA")
@@ -995,14 +890,14 @@ locations =
   ]
 
 
-inviteMemberItem :: Text -> Html ()
-inviteMemberItem email = do
-  let hide = email == "hidden"
-  div_ (class_ ("flex  py-1 w-full justify-between items-center border-b border-strokeWeak " <> if hide then "hidden" else "") : [id_ "member-template" | hide]) do
+-- | 'Nothing' renders the hidden @#member-template@ that appendMember() clones.
+inviteMemberItem :: Maybe Text -> Html ()
+inviteMemberItem emailM = do
+  let (email, isTemplate) = (fromMaybe "" emailM, isNothing emailM)
+  div_ (class_ ("flex  py-1 w-full justify-between items-center border-b border-strokeWeak " <> bool "" "hidden" isTemplate) : [id_ "member-template" | isTemplate]) do
     div_ [class_ "pr-6 py-1  w-full justify-start items-center inline-flex"] do
-      input_ ([type_ "hidden", value_ email] ++ [name_ "emails" | not hide])
-      span_ [class_ "text-textStrong text-sm font-normal"]
-        $ toHtml email
+      input_ ([type_ "hidden", value_ email] <> [name_ "emails" | not isTemplate])
+      span_ [class_ "text-textStrong text-sm font-normal"] $ toHtml email
     select_ [name_ "permissions", class_ "select select-xs"] do
       option_ [class_ "text-textWeak", value_ "admin"] "Admin"
       option_ [class_ "text-textWeak", value_ "edit"] "Can Edit"
@@ -1018,8 +913,7 @@ inviteMemberItem email = do
 createBinaryField :: Text -> Text -> [Text] -> (Text, Text) -> Html ()
 createBinaryField kind name selectedValues (value, label) = do
   div_ [class_ " items-center gap-3 inline-flex"] $ do
-    let checked = value `elem` selectedValues
-    input_ $ [class_ "w-6 h-6 rounded-sm", type_ kind, name_ name, value_ value, id_ value] <> [required_ "required" | kind == "radio"] <> [checked_ | checked]
+    input_ $ [class_ "w-6 h-6 rounded-sm", type_ kind, name_ name, value_ value, id_ value] <> [required_ "required" | kind == "radio"] <> [checked_ | value `elem` selectedValues]
     label_ [class_ " text-textStrong text-sm", Lucid.for_ value] $ toHtml label
 
 
@@ -1063,12 +957,5 @@ universalIndicator =
 -- This bypasses CORS restrictions by fetching the content server-side
 proxyLandingH :: (HTTP :> es, State.State HXRedirectDest :> es, State.State TriggerEvents :> es, State.State XWidgetJSON :> es) => [Text] -> Eff es (RespHeaders Text)
 proxyLandingH path = do
-  let baseUrl = "https://monoscope.tech/"
-      fullUrl = baseUrl <> T.intercalate "/" path
-
-  response <- W.get (toString fullUrl)
-
-  let content = fromMaybe "" $ response L.^? W.responseBody
-      textContent = decodeUtf8 content
-      textContent' = T.replace "href=\"/" "href=\"https://monoscope.tech/" textContent
-  addRespHeaders textContent'
+  response <- W.get $ toString $ "https://monoscope.tech/" <> T.intercalate "/" path
+  addRespHeaders $ T.replace "href=\"/" "href=\"https://monoscope.tech/" $ decodeUtf8 $ fromMaybe "" $ response L.^? W.responseBody

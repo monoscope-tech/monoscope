@@ -351,10 +351,11 @@ getTeams pid =
     (selectFrom @Team <> [HI.sql| WHERE project_id = #{pid} AND deleted_at IS NULL |])
 
 
-getTeamsVM :: DB es => Projects.ProjectId -> Eff es [TeamVM]
-getTeamsVM pid =
-  Hasql.interp
-    [HI.sql|
+-- | The one 'TeamVM' projection (teams + their member objects); the caller only
+-- supplies the extra WHERE predicate, so the member aggregation can't drift.
+teamsVMQuery :: HI.Sql -> HI.Sql
+teamsVMQuery cond =
+  [HI.sql|
       SELECT
         t.id,
         t.created_at,
@@ -384,11 +385,16 @@ getTeamsVM pid =
       FROM projects.teams t
       LEFT JOIN unnest(t.members) AS mid ON true
       LEFT JOIN users.users u ON u.id = mid
-      WHERE t.project_id = #{pid} AND t.deleted_at IS NULL
+      WHERE t.deleted_at IS NULL AND |]
+    <> cond
+    <> [HI.sql|
       GROUP BY t.id, t.created_at, t.updated_at, t.created_by, t.name, t.handle,
                t.description, t.notify_emails, t.slack_channels, t.discord_channels, t.phone_numbers, t.pagerduty_services, t.disabled_channels, t.is_everyone
-      ORDER BY t.is_everyone DESC, t.created_at ASC
-    |]
+      ORDER BY t.is_everyone DESC, t.created_at ASC |]
+
+
+getTeamsVM :: DB es => Projects.ProjectId -> Eff es [TeamVM]
+getTeamsVM pid = Hasql.interp $ teamsVMQuery [HI.sql| t.project_id = #{pid} |]
 
 
 data TeamVM = TeamVM
@@ -438,12 +444,9 @@ deleteTeams pid tids
 
 
 getTeamsById :: DB es => Projects.ProjectId -> V.Vector UUID.UUID -> Eff es [Team]
-getTeamsById pid tids =
-  if V.null tids
-    then pure []
-    else
-      Hasql.interp
-        (selectFrom @Team <> [HI.sql| WHERE project_id = #{pid} AND id = ANY(#{tids}::uuid[]) AND deleted_at IS NULL |])
+getTeamsById pid tids
+  | V.null tids = pure []
+  | otherwise = Hasql.interp (selectFrom @Team <> [HI.sql| WHERE project_id = #{pid} AND id = ANY(#{tids}::uuid[]) AND deleted_at IS NULL |])
 
 
 getTeamById :: DB es => Projects.ProjectId -> UUID.UUID -> Eff es (Maybe Team)
@@ -452,48 +455,12 @@ getTeamById pid tid =
     (selectFrom @Team <> [HI.sql| WHERE project_id = #{pid} AND id = #{tid} AND deleted_at IS NULL |])
 
 
--- | Bulk fetch teams by handles - more efficient than mapping getTeamByHandle
+-- | Bulk fetch teams by handles — one round trip instead of mapping getTeamByHandle.
 getTeamsByHandles :: DB es => Projects.ProjectId -> [Text] -> Eff es [TeamVM]
 getTeamsByHandles _ [] = pure []
-getTeamsByHandles pid handles =
-  Hasql.interp
-    [HI.sql|
-      SELECT
-        t.id,
-        t.created_at,
-        t.updated_at,
-        t.created_by,
-        t.name,
-        t.handle,
-        t.description,
-        t.notify_emails,
-        t.slack_channels,
-        t.discord_channels,
-        t.phone_numbers,
-        t.pagerduty_services,
-        t.disabled_channels,
-        t.is_everyone,
-        COALESCE(
-          array_agg(
-            jsonb_build_object(
-              'memberId', u.id,
-              'memberName', concat_ws(' ', u.first_name, u.last_name),
-              'memberEmail', u.email,
-              'memberAvatar', '/api/avatar/' || u.id::text
-            ) ORDER BY u.first_name, u.last_name
-          ) FILTER (WHERE u.id IS NOT NULL),
-          '{}'
-        ) AS members
-      FROM projects.teams t
-      LEFT JOIN unnest(t.members) AS mid ON true
-      LEFT JOIN users.users u ON u.id = mid
-      WHERE t.project_id = #{pid} AND t.handle = ANY(#{handles}) AND t.deleted_at IS NULL
-      GROUP BY t.id, t.created_at, t.updated_at, t.created_by, t.name, t.handle,
-               t.description, t.notify_emails, t.slack_channels, t.discord_channels, t.phone_numbers, t.pagerduty_services, t.disabled_channels, t.is_everyone
-    |]
+getTeamsByHandles pid handles = Hasql.interp $ teamsVMQuery [HI.sql| t.project_id = #{pid} AND t.handle = ANY(#{handles}) |]
 
 
--- | Convert Team to TeamDetails for updates
 teamToDetails :: Team -> TeamDetails
 teamToDetails t = TeamDetails{name = t.name, description = t.description, handle = t.handle, members = t.members, notifyEmails = t.notify_emails, slackChannels = t.slack_channels, discordChannels = t.discord_channels, phoneNumbers = t.phone_numbers, pagerdutyServices = t.pagerduty_services, disabledChannels = t.disabled_channels}
 
@@ -504,39 +471,37 @@ teamToDetails t = TeamDetails{name = t.name, description = t.description, handle
 -- write succeeded and surface a success toast; silence here hides real bugs.
 modifyEveryoneTeamDetails :: (DB es, Log :> es) => Projects.ProjectId -> (TeamDetails -> TeamDetails) -> Eff es ()
 modifyEveryoneTeamDetails pid f =
-  getEveryoneTeam pid >>= \case
-    Nothing -> Log.logAttention "modifyEveryoneTeamDetails: no @everyone team; write ignored" (AE.object ["project_id" AE..= pid])
-    Just team -> void $ updateTeam pid team.id $ f (teamToDetails team)
+  getEveryoneTeam pid
+    >>= maybe
+      (Log.logAttention "modifyEveryoneTeamDetails: no @everyone team; write ignored" (AE.object ["project_id" AE..= pid]))
+      (\team -> void $ updateTeam pid team.id $ f (teamToDetails team))
 
 
--- | Race-free idempotent append to one of @everyone's text[] fields. Returns True
+-- | Race-free idempotent append to one of @everyone's text[] columns. Returns True
 -- if the value was actually added, False if it was already present (or there was
 -- no team). Single UPDATE, no read-modify-write window.
+appendEveryoneTarget :: DB es => HI.Sql -> Projects.ProjectId -> Text -> Eff es Bool
+appendEveryoneTarget col pid val =
+  (> 0)
+    <$> Hasql.interpExecute
+      ( [HI.sql| UPDATE projects.teams SET |]
+          <> col
+          <> [HI.sql| = array_append(|]
+          <> col
+          <> [HI.sql|, #{val})
+             WHERE project_id = #{pid} AND is_everyone = TRUE AND deleted_at IS NULL AND NOT (#{val} = ANY(|]
+          <> col
+          <> [HI.sql|))|]
+      )
+
+
 addSlackChannelToEveryoneTeam
   , addDiscordChannelToEveryoneTeam
   , addPagerdutyServiceToEveryoneTeam
     :: DB es => Projects.ProjectId -> Text -> Eff es Bool
-addSlackChannelToEveryoneTeam pid val =
-  (> 0)
-    <$> Hasql.interpExecute
-      [HI.sql|
-    UPDATE projects.teams SET slack_channels = array_append(slack_channels, #{val})
-    WHERE project_id = #{pid} AND is_everyone = TRUE AND deleted_at IS NULL
-      AND NOT (#{val} = ANY(slack_channels))|]
-addDiscordChannelToEveryoneTeam pid val =
-  (> 0)
-    <$> Hasql.interpExecute
-      [HI.sql|
-    UPDATE projects.teams SET discord_channels = array_append(discord_channels, #{val})
-    WHERE project_id = #{pid} AND is_everyone = TRUE AND deleted_at IS NULL
-      AND NOT (#{val} = ANY(discord_channels))|]
-addPagerdutyServiceToEveryoneTeam pid val =
-  (> 0)
-    <$> Hasql.interpExecute
-      [HI.sql|
-    UPDATE projects.teams SET pagerduty_services = array_append(pagerduty_services, #{val})
-    WHERE project_id = #{pid} AND is_everyone = TRUE AND deleted_at IS NULL
-      AND NOT (#{val} = ANY(pagerduty_services))|]
+addSlackChannelToEveryoneTeam = appendEveryoneTarget [HI.sql|slack_channels|]
+addDiscordChannelToEveryoneTeam = appendEveryoneTarget [HI.sql|discord_channels|]
+addPagerdutyServiceToEveryoneTeam = appendEveryoneTarget [HI.sql|pagerduty_services|]
 
 
 removeSlackChannelsFromEveryoneTeam

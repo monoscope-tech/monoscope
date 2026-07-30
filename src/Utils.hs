@@ -46,6 +46,7 @@ module Utils (
   formatWithCommas,
   sanitizeBackendError,
   extractMessageFromLog,
+  nonEmptyT,
   -- Fill color helpers
   statusFillColorText,
   methodFillColor,
@@ -134,6 +135,11 @@ instance Eq ZonedTime where
 
 escapedQueryPartial :: Text -> Text
 escapedQueryPartial x = toText $ escapeURIString isUnescapedInURI $ toString x
+
+
+-- | Drop empty text so \"\" and Nothing collapse to one absent case.
+nonEmptyT :: Maybe Text -> Maybe Text
+nonEmptyT = mfilter (not . T.null)
 
 
 data DBField = forall a. (Show a, ToField a) => MkDBField a

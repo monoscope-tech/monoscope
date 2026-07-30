@@ -155,6 +155,23 @@ spec = sequential $ aroundAll withTestResources $
       -- One NewAnomaly job per (project, anomaly_type) — 4 jobs total.
       countAnomalyJobs tr `shouldReturn` 4
 
+    -- Regression: upsertTemplates wrote @fields@ without scrubNulValue, so one NUL
+    -- byte in a field path 22P05-poisoned the whole template batch (cf. upsertSummary).
+    it "flush survives NUL bytes in field paths" $ \tr -> do
+      clearAll tr
+      ref <- newIORef Hot.emptySchemaShardState
+      let obs = mkObs frozenTime "api.example.com" "GET" "/nul"
+            [("request.body.bad\NULkey", AE.String "v\NULv", Catalog.FCRequestBody)]
+      r <- observeAndFlush tr ref [obs]
+      r.catalogRowsWritten `shouldBe` 1
+      trows :: V.Vector (Only Int) <-
+        withPool tr.trPool $ DBT.query
+          [sql| SELECT COUNT(*)::int FROM apis.schema_template t
+                JOIN apis.schema_catalog c ON c.template_hash = t.template_hash
+                WHERE c.project_id = ? |]
+          (Only pid)
+      (maybe 0 (\(Only n) -> n) (trows V.!? 0) :: Int) `shouldBe` 1
+
     it "second flush of identical observations dedupes — no new anomalies, no extra jobs" $ \tr -> do
       clearAll tr
       ref <- newIORef Hot.emptySchemaShardState

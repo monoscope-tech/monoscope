@@ -13,6 +13,7 @@ module Data.Effectful.Wreq (
   W.header,
   runHTTPWreq,
   runHTTPGolden,
+  runHTTPRecord,
   Options,
   Response,
   W.responseBody,
@@ -29,7 +30,7 @@ import Data.CaseInsensitive qualified as CI
 import Effectful
 import Effectful.Dispatch.Dynamic
 import Effectful.TH
-import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..), createCookieJar, defaultRequest)
+import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..), RequestBody (..), createCookieJar, defaultRequest, requestBody)
 import Network.HTTP.Client.Internal (Response (..), ResponseClose (..))
 import Network.HTTP.Types.Status (Status (..), statusCode, statusMessage)
 import Network.HTTP.Types.Version (http11)
@@ -85,6 +86,35 @@ runHTTPWreq = interpret $ \_ -> \case
   PutWith opts url body -> liftIO $ W.putWith opts url body
   PatchWith opts url body -> liftIO $ W.patchWith opts url body
   DeleteWith opts url -> liftIO $ W.deleteWith opts url
+
+
+-- | Record outgoing requests as @(url, rendered body)@ instead of performing
+-- them, replying with a stub @200 {}@ response. The assertion seam for
+-- end-to-end payload tests — 'runHTTPGolden' can't serve that, because golden
+-- responses are keyed by URL alone, so two different bodies sent to one URL
+-- are indistinguishable there.
+runHTTPRecord :: IOE :> es => IORef [(Text, LBS.ByteString)] -> Eff (HTTP ': es) a -> Eff es a
+runHTTPRecord ref = interpret $ \_ -> \case
+  Get url -> record url (pure "")
+  Post url body -> record url (payload $ W.postPayload body)
+  Put url body -> record url (payload $ W.putPayload body)
+  Patch url body -> record url (payload $ W.patchPayload body)
+  Delete url -> record url (pure "")
+  GetWith _ url -> record url (pure "")
+  PostWith _ url body -> record url (payload $ W.postPayload body)
+  PutWith _ url body -> record url (payload $ W.putPayload body)
+  PatchWith _ url body -> record url (payload $ W.patchPayload body)
+  DeleteWith _ url -> record url (pure "")
+  where
+    payload mk = renderBody . requestBody <$> mk defaultRequest
+    renderBody = \case
+      RequestBodyLBS b -> b
+      RequestBodyBS b -> fromStrict b
+      _ -> "" -- streaming bodies aren't rendered; no current caller sends them
+    record url getBody = liftIO do
+      body <- getBody
+      modifyIORef' ref ((toText url, body) :)
+      pure $ toWreqResponse $ WreqResponse 200 "OK" "{}" [] "" []
 
 
 runHTTPGolden :: IOE :> es => FilePath -> Eff (HTTP ': es) a -> Eff es a

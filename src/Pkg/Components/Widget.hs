@@ -305,45 +305,36 @@ signWidgetUrl secret pid widgetJson =
 
 -- use either index or the xxhash as id
 widget_ :: Widget -> Html ()
-widget_ = widgetHelper_
-
-
-widgetHelper_ :: Widget -> Html ()
-widgetHelper_ w' = case w.wType of
+widget_ w' = case w.wType of
   WTAnomalies -> gridItem_ $ div_ [class_ "h-full group/wgt "] $ div_ [class_ "gap-0.5 flex flex-col h-full"] do
     unless (w.naked == Just True) $ renderWidgetHeader w (maybeToMonoid w.id) w.title Nothing Nothing Nothing (Just ("View all", "/p/" <> maybeToMonoid (w._projectId <&> (.toText)) <> "/issues")) (w.hideSubtitle == Just True)
     div_ [class_ "flex-1 flex min-h-0"] $ div_ [class_ $ "h-full w-full " <> if w.naked == Just True then "" else "surface-raised rounded-2xl", id_ $ maybeToMonoid w.id <> "_bordered"] $ div_ [class_ "h-full overflow-auto p-3"] $ whenJust w.html toHtmlRaw
   WTGroup -> gridItem_ $ div_ [class_ "h-full flex flex-col border border-strokeWeak rounded-lg surface-raised overflow-hidden group/wgt"] do
     -- Header: auto height (no flex), group-header class for CSS targeting when collapsed
-    div_ [class_ $ "group-header py-2 px-4 flex items-center justify-between " <> gridStackHandleClass] do
+    div_ [class_ $ "group-header py-2 px-4 flex items-center justify-between " <> gridStackHandleClassFor w] do
       div_ [class_ "inline-flex gap-2 items-center group/h"] do
         span_ [class_ "hidden group-hover/h:inline-flex cursor-move"] $ Utils.faSprite_ "grip-dots-vertical" "regular" "w-4 h-4"
         whenJust w.icon \icon -> span_ [] $ Utils.faSprite_ icon "regular" "w-5 h-5"
-        span_ ([class_ "text-lg font-medium"] <> foldMap (\t -> [data_ "var-template" t | "{{var-" `T.isInfixOf` t]) w.title) $ toHtml $ maybeToMonoid w.title
-        whenJust w.description \desc -> span_ [class_ "hidden group-hover/wgt:inline-flex items-center", data_ "tippy-content" desc] $ Utils.faSprite_ "circle-info" "regular" "w-4 h-4"
+        span_ ([class_ "text-lg font-medium"] <> varTemplateAttr w.title) $ toHtml $ maybeToMonoid w.title
+        descIcon_ w.description ""
       -- Collapse chevron: only for full-width groups
       when isFullWidth $ button_ [class_ "collapse-toggle p-2 rounded hover:bg-fillWeak transition-colors cursor-pointer tap-target", Aria.label_ "Toggle group", [__|on click toggle .hidden on .nested-grid in closest .grid-stack-item then toggle .collapsed on closest .grid-stack-item|]] $ Utils.faSprite_ "chevron-up" "regular" "w-5 h-5 transition-transform"
     -- Nested grid: flex-1 fills remaining space
-    div_ [class_ "grid-stack nested-grid flex-1"] $ forM_ (fromMaybe [] w.children) (\wChild -> widgetHelper_ (wChild{_isNested = Just True}))
+    div_ [class_ "grid-stack nested-grid flex-1"] $ forM_ (fromMaybe [] w.children) (\wChild -> widget_ (wChild{_isNested = Just True}))
   WTTable -> gridItem_ $ div_ [class_ "h-full group/wgt "] $ renderTable w
   WTLogs -> gridItem_ $ div_ [class_ "h-full group/wgt "] $ renderLogsWidget w
   WTTraces -> gridItem_ $ div_ [class_ "h-full group/wgt "] $ renderTraceTable w
   WTFlamegraph -> gridItem_ $ div_ [class_ "h-full "] $ div_ [class_ "p-3"] "Flamegraph widget coming soon"
   _ -> gridItem_ $ div_ [class_ " w-full h-full group/wgt "] $ renderChart w
   where
-    w = w' & #id %~ maybe (slugify <$> w'.title) Just
-    gridStackHandleClass = if w._isNested == Just True then "nested-grid-stack-handle" else "grid-stack-handle"
+    w = w' & #id %~ (<|> (slugify <$> w'.title))
     isFullWidth = (== Just 12) $ w.layout >>= (.w)
-    groupRequiredHeight = case w.wType of
+    -- For groups: full-width uses the height the children require, partial-width uses max(yamlH, requiredHeight)
+    effectiveHeight = case w.wType of
       WTGroup ->
-        let childWidgets = fromMaybe [] w.children
-            maxRow = foldl' (\acc c -> max acc $ fromMaybe 0 (c.layout >>= (.y)) + fromMaybe 1 (c.layout >>= (.h))) 1 childWidgets
-         in Just (1 + maxRow)
-      _ -> Nothing
-    -- For groups: full-width uses requiredHeight, partial-width uses max(yamlH, requiredHeight)
-    effectiveHeight = case groupRequiredHeight of
-      Just reqH -> Just $ if isFullWidth then reqH else maybe reqH (max reqH) (w.layout >>= (.h))
-      Nothing -> w.layout >>= (.h)
+        let reqH = 1 + foldl' (\acc c -> max acc $ fromMaybe 0 (c.layout >>= (.y)) + fromMaybe 1 (c.layout >>= (.h))) 1 (fromMaybe [] w.children)
+         in Just $ if isFullWidth then reqH else maybe reqH (max reqH) (w.layout >>= (.h))
+      _ -> w.layout >>= (.h)
     layoutFields = [("x", (.x)), ("y", (.y)), ("w", (.w))] :: [(Text, Layout -> Maybe Int)]
     attrs =
       foldMap (\(name, field) -> foldMap (\v -> [term ("gs-" <> name) (show v)]) (w.layout >>= field)) layoutFields
@@ -354,6 +345,22 @@ widgetHelper_ w' = case w.wType of
       if w.naked == Just True
         then Relude.id
         else div_ ([class_ "grid-stack-item h-full flex-1 !overflow-visible has-[details[open]]:z-50 [.nested-grid_&]:overflow-hidden ", id_ $ maybeToMonoid w.id <> "_widgetEl", data_ "widget" widgetJson] <> attrs <> autoFitAttr) . div_ [class_ "grid-stack-item-content h-full !overflow-visible [.grid-stack_&]:h-auto"]
+
+
+gridStackHandleClassFor :: Widget -> Text
+gridStackHandleClassFor w = bool "grid-stack-handle" "nested-grid-stack-handle" (w._isNested == Just True)
+
+
+-- | Marks text that still contains @{{var-…}}@ placeholders so the client can
+-- re-render it when dashboard variables change.
+varTemplateAttr :: Maybe Text -> [Attribute]
+varTemplateAttr = foldMap \t -> [data_ "var-template" t | "{{var-" `T.isInfixOf` t]
+
+
+-- | Hover-revealed info icon carrying the widget description tooltip.
+descIcon_ :: Maybe Text -> Text -> Html ()
+descIcon_ descM extraCls = whenJust descM \desc ->
+  span_ [class_ "hidden group-hover/wgt:inline-flex items-center", data_ "tippy-content" desc] $ Utils.faSprite_ "circle-info" "regular" ("w-4 h-4" <> extraCls)
 
 
 renderDottedTitle :: Text -> Html ()
@@ -384,30 +391,26 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
     span_ [class_ "text-sm text-textStrong font-semibold flex items-center gap-1 min-w-0"] do
       unless (widget.standalone == Just True) $ span_ [class_ "hidden group-hover/h:inline-flex"] $ Utils.faSprite_ "grip-dots-vertical" "regular" "w-4 h-4"
       whenJust widget.icon \icon -> span_ [] $ Utils.faSprite_ icon "regular" "w-4 h-4"
-      span_ ([class_ "flex min-w-0 overflow-hidden", title_ $ maybeToMonoid title] <> foldMap (\t -> [data_ "var-template" t | "{{var-" `T.isInfixOf` t]) title) $ renderDottedTitle $ maybeToMonoid title
-      whenJust widget.description \desc -> span_ [class_ "hidden group-hover/wgt:inline-flex items-center", data_ "tippy-content" desc] $ Utils.faSprite_ "circle-info" "regular" "w-4 h-4"
+      span_ ([class_ "flex min-w-0 overflow-hidden", title_ $ maybeToMonoid title] <> varTemplateAttr title) $ renderDottedTitle $ maybeToMonoid title
+      descIcon_ widget.description ""
     span_ [class_ $ "bg-fillWeak border border-strokeWeak text-sm font-semibold px-2 py-1 rounded-3xl leading-none text-textWeak max-md:hidden whitespace-nowrap " <> if isJust valueM then "" else "hidden", id_ $ wId <> "Value"]
       $ whenJust valueM toHtml
-    span_ ([class_ $ "text-textDisabled widget-subtitle text-sm max-md:hidden " <> bool "" "hidden" hideSub, id_ $ wId <> "Subtitle"] <> foldMap (\t -> [data_ "var-template" t | "{{var-" `T.isInfixOf` t]) subValueM) $ toHtml $ maybeToMonoid subValueM
+    span_ ([class_ $ "text-textDisabled widget-subtitle text-sm max-md:hidden " <> bool "" "hidden" hideSub, id_ $ wId <> "Subtitle"] <> varTemplateAttr subValueM) $ toHtml $ maybeToMonoid subValueM
     -- Add hidden loader with specific ID that can be toggled from JS
     span_ [class_ "hidden", id_ $ wId <> "_loader"] $ Utils.faSprite_ "spinner" "regular" "w-4 h-4 animate-spin"
   div_ [class_ "text-iconNeutral flex items-center gap-0.5"] do
     -- Alert status indicator (visible on hover, always visible when alerting/warning)
-    whenJust widget.alertId \_ -> do
-      let (iconColor, iconType, tooltip) = case widget.alertStatus of
-            Just "alerting" -> ("text-fillError-strong", "bell-exclamation", "Monitor triggered")
-            Just "warning" -> ("text-fillWarning-strong", "bell", "Warning threshold exceeded")
-            _ -> ("text-iconNeutral", "bell", "Monitor configured")
-          visibilityClass = case widget.alertStatus of
-            Just "alerting" -> ""
-            Just "warning" -> ""
-            _ -> "opacity-0 group-hover/wgt:opacity-100 touch:opacity-50"
-      span_
-        [ class_ $ "p-1 transition-opacity " <> visibilityClass
-        , data_ "tippy-content" tooltip
-        , id_ $ wId <> "_alert_indicator"
-        ]
-        $ Utils.faSprite_ iconType "regular" ("w-3.5 h-3.5 " <> iconColor)
+    when (isJust widget.alertId)
+      $ let (iconColor, iconType, tooltip, visibilityClass) = case widget.alertStatus of
+              Just "alerting" -> ("text-fillError-strong", "bell-exclamation", "Monitor triggered", "")
+              Just "warning" -> ("text-fillWarning-strong", "bell", "Warning threshold exceeded", "")
+              _ -> ("text-iconNeutral", "bell", "Monitor configured", "opacity-0 group-hover/wgt:opacity-100 touch:opacity-50")
+         in span_
+              [ class_ $ "p-1 transition-opacity " <> visibilityClass
+              , data_ "tippy-content" tooltip
+              , id_ $ wId <> "_alert_indicator"
+              ]
+              $ Utils.faSprite_ iconType "regular" ("w-3.5 h-3.5 " <> iconColor)
 
     whenJust ctaM \(ctaTitle, uri) -> a_ [class_ "underline underline-offset-2 text-textBrand", href_ uri] $ toHtml ctaTitle
     whenJust expandBtnFn \url ->
@@ -623,8 +626,6 @@ renderTraceTable widget = do
   script_ [type_ "text/javascript"] """htmx.process(".widget-target")"""
 
 
--- Table widget rendering
--- class_ "progress-brand "
 renderTable :: Widget -> Html ()
 renderTable widget = renderTableShell widget [(col.title, col.align) | col <- fromMaybe [] widget.columns] (rowClickTableAttrs widget)
 
@@ -647,18 +648,14 @@ renderTableShell widget headerCols tableAttrs = do
       , hxSwap_ "outerHTML"
       , hxExt_ "forward-page-params"
       ]
-      do
-        case widget.html of
-          Just html -> toHtmlRaw html
-          Nothing ->
-            table_
-              ([class_ "table table-zebra table-sm w-full relative", id_ tableId] <> tableAttrs)
-              do
-                sortableTableHead_ tableId True headerCols
-                tbody_ []
-                  $ tr_ []
-                  $ td_ [colspan_ "100", class_ "text-center py-8"]
-                  $ loadingIndicator_ LdSM LdSpinner
+    $ case widget.html of
+      Just html -> toHtmlRaw html
+      Nothing -> table_ ([class_ "table table-zebra table-sm w-full relative", id_ tableId] <> tableAttrs) do
+        sortableTableHead_ tableId True headerCols
+        tbody_ []
+          $ tr_ []
+          $ td_ [colspan_ "100", class_ "text-center py-8"]
+          $ loadingIndicator_ LdSM LdSpinner
 
 
 -- | Render stat widget content with HTMX lazy loading support
@@ -668,9 +665,7 @@ renderStatContent widget chartId valueM = do
   let statContentId = chartId <> "_stat"
       hasData = widget.eager == Just True || isJust (widget.dataset >>= (.value))
       paddingClass = "px-3 flex flex-col " <> bool "py-3 " "py-2 " (widget._isNested == Just True)
-      -- Always use eager widget JSON for HTMX requests
       eagerWidget = widget & #eager ?~ True
-  -- Always include HTMX attributes for refresh capability
   div_
     [ id_ statContentId
     , class_ paddingClass
@@ -681,45 +676,30 @@ renderStatContent widget chartId valueM = do
     , hxSwap_ "outerHTML"
     , hxExt_ "forward-page-params"
     ]
-    $ if hasData
-      then renderStatValue widget chartId valueM
-      else renderStatPlaceholder widget chartId
+    $ renderStatBody widget chartId (if hasData then whenJust valueM toHtml else loadingIndicator_ LdSM LdSpinner)
 
 
--- | Render placeholder with loading spinner for lazy-loaded stats
-renderStatPlaceholder :: Widget -> Text -> Html ()
-renderStatPlaceholder widget chartId = div_ [class_ "flex flex-col gap-1"] do
-  strong_ [class_ "text-textStrong text-4xl font-bold tabular-nums", id_ $ chartId <> "Value"]
-    $ loadingIndicator_ LdSM LdSpinner
+-- | Stat body: the big number (a spinner while lazy-loading) plus icon/title/description.
+renderStatBody :: Widget -> Text -> Html () -> Html ()
+renderStatBody widget chartId value = div_ [class_ "flex flex-col gap-1"] do
+  strong_ [class_ "text-textStrong text-4xl font-bold tabular-nums", id_ $ chartId <> "Value"] value
   div_ [class_ "inline-flex gap-1 items-center text-sm"] do
     whenJust widget.icon \icon -> Utils.faSprite_ icon "regular" "w-4 h-4 text-iconBrand"
     toHtml $ maybeToMonoid widget.title
-    whenJust widget.description \desc -> span_ [class_ "hidden group-hover/wgt:inline-flex items-center", data_ "tippy-content" desc] $ Utils.faSprite_ "circle-info" "regular" "w-4 h-4 text-iconNeutral"
-
-
--- | Render actual stat value content
-renderStatValue :: Widget -> Text -> Maybe Text -> Html ()
-renderStatValue widget chartId valueM = div_ [class_ "flex flex-col gap-1"] do
-  strong_ [class_ "text-textStrong text-4xl font-bold tabular-nums", id_ $ chartId <> "Value"]
-    $ whenJust valueM toHtml
-  div_ [class_ "inline-flex gap-1 items-center text-sm"] do
-    whenJust widget.icon \icon -> Utils.faSprite_ icon "regular" "w-4 h-4 text-iconBrand"
-    toHtml $ maybeToMonoid widget.title
-    whenJust widget.description \desc -> span_ [class_ "hidden group-hover/wgt:inline-flex items-center", data_ "tippy-content" desc] $ Utils.faSprite_ "circle-info" "regular" "w-4 h-4 text-iconNeutral"
+    descIcon_ widget.description " text-iconNeutral"
 
 
 renderChart :: Widget -> Html ()
 renderChart widget = do
-  let rateM = widget.dataset >>= (.rowsPerMin) >>= \r -> Just $ Utils.prettyPrintCount (round r) <> "/min"
+  let rateM = widget.dataset >>= (.rowsPerMin) <&> \r -> Utils.prettyPrintCount (round r) <> "/min"
   let chartId = maybeToMonoid widget.id
   let unitSuffix = maybe "" displayUnit widget.unit
-  let valueM = widget.dataset >>= (.value) >>= \x -> Just $ Utils.prettyPrintCount (round x) <> unitSuffix
+  let valueM = widget.dataset >>= (.value) <&> \x -> Utils.prettyPrintCount (round x) <> unitSuffix
   let isStat = widget.wType `elem` [WTTimeseriesStat, WTStat]
-  let gridStackHandleClass = if widget._isNested == Just True then "nested-grid-stack-handle" else "grid-stack-handle"
   div_ [class_ "gap-0.5 flex flex-col h-full justify-end "] do
-    unless (widget.naked == Just True || widget.wType `elem` [WTTimeseriesStat, WTStat])
+    unless (widget.naked == Just True || isStat)
       $ renderWidgetHeader widget chartId widget.title valueM rateM widget.expandBtnFn Nothing (widget.hideSubtitle == Just True)
-    div_ [class_ $ "flex-1 flex min-h-0 " <> bool "" gridStackHandleClass isStat] do
+    div_ [class_ $ "flex-1 flex min-h-0 " <> bool "" (gridStackHandleClassFor widget) isStat] do
       div_
         [ class_
             $ "h-full w-full flex flex-col justify-end "
@@ -730,9 +710,8 @@ renderChart widget = do
         do
           whenJust ((,) <$> widget.groupByOptions <*> widget.groupByUrl) \(options, url) ->
             let selectedLabel = case widget.groupBySelected of
-                  Just "all" -> "All values"
-                  Just label -> label
-                  Nothing -> "All values"
+                  Just l | l /= "all" -> l
+                  _ -> "All values"
              in div_ [class_ "flex shrink-0 justify-end px-2 pt-2"]
                   $ details_ [class_ "dropdown dropdown-end relative max-w-[calc(100%-1rem)]"] do
                     summary_ [class_ "btn btn-xs min-w-0 cursor-pointer justify-between gap-1 border-strokeWeak bg-bgRaised px-2 text-left text-textWeak opacity-100 hover:bg-fillWeak", data_ "tippy-content" "Group by"] do
@@ -840,21 +819,13 @@ renderChart widget = do
 -- Echarts Logic
 -----------------------------------------------------------------------------
 
--- -- -- Helper: Select tooltip formatter
--- -- selectFormatter :: WidgetType -> Text
--- -- selectFormatter WTTimeseries = "{a} <br/>{b}: {c}ms"
--- -- selectFormatter _ = "{a} <br/>{b}: {c}"
-
 -- Helper: Extract series names from dataset source (headers[1:])
 extractSeriesNamesFromDataset :: Maybe WidgetDataset -> [Text]
-extractSeriesNamesFromDataset (Just wd) = case wd.source of
-  AE.Array arr | not (V.null arr) -> case V.head arr of
-    AE.Array headers | V.length headers > 1 -> mapMaybe getText $ V.toList $ V.tail headers
-    _ -> []
+extractSeriesNamesFromDataset ds = case ds <&> (.source) of
+  Just (AE.Array arr) | Just (AE.Array headers) <- arr V.!? 0 -> mapMaybe getText $ drop 1 $ V.toList headers
   _ -> []
   where
-    getText (AE.String t) = Just t; getText _ = Nothing
-extractSeriesNamesFromDataset Nothing = []
+    getText = \case AE.String t -> Just t; _ -> Nothing
 
 
 -- | JS expression formatting a numeric @value@ for a widget's unit: duration
@@ -873,7 +844,6 @@ widgetToECharts :: Widget -> AE.Value
 widgetToECharts widget =
   let isStat = widget.wType == WTTimeseriesStat
       axisVisibility = not isStat
-      gridLinesVisibility = not isStat
       legendVisibility = not isStat && widget.hideLegend /= Just True
       seriesNames = extractSeriesNamesFromDataset widget.dataset
       -- Detect categorical widget types (no time axis)
@@ -950,7 +920,7 @@ widgetToECharts widget =
               , "max" AE..= maybe AE.Null (AE.Number . fromFloatDigits) (widget ^? #dataset . _Just . #stats . _Just . #maxGroupSum)
               , "splitLine"
                   AE..= AE.object
-                    [ "show" AE..= gridLinesVisibility
+                    [ "show" AE..= axisVisibility
                     , "lineStyle" AE..= AE.object ["type" AE..= "dotted", "color" AE..= "#0011661A"]
                     , "interval"
                         AE..= if fromMaybe False $ widget ^? #yAxis . _Just . #showOnlyMaxLabel . _Just
@@ -992,10 +962,7 @@ widgetToECharts widget =
 -- Helper: Add markLines to first series for alert thresholds
 addMarkLinesToFirstSeries :: Widget -> [AE.Value] -> [AE.Value]
 addMarkLinesToFirstSeries widget series
-  | shouldShowLines
-  , not (null markLineData) = case series of
-      [] -> series
-      (s : rest) -> addMarkLine s : rest
+  | shouldShowLines, not (null markLineData) = series & _head %~ addMarkLine
   | otherwise = series
   where
     shouldShowLines = case widget.showThresholdLines of
@@ -1103,21 +1070,15 @@ renderTableWithDataAndParams widget dataRows params = do
       tableId = maybeToMonoid widget.id
       currentVar = widget.onRowClick >>= (.setVariable) >>= \var -> find ((== "var-" <> var) . fst) params >>= snd
 
-  -- Render complete table with data
   table_
     ( [class_ "table table-zebra table-sm w-full relative", id_ tableId]
         <> rowClickTableAttrs widget
     )
     do
-      -- Table header
       sortableTableHead_ tableId True [(col.title, col.align) | col <- columns]
-
-      -- Table body with data
       tbody_ [] do
-        -- Calculate max values for column percentages
         let maxValues = calculateMaxValues columns dataRows
-
-        -- Calculate max formatted width for each progress column
+        -- max formatted width per progress column, so bars line up
         let valueWidths =
               M.fromList
                 [ (col.field, V.foldl' (\acc row -> max acc (T.length $ formatColumnValue col (fromMaybe "" $ row V.!? idx))) 5 dataRows)
@@ -1125,34 +1086,26 @@ renderTableWithDataAndParams widget dataRows params = do
                 , isJust col.progress
                 ]
 
-        -- Render table rows
         V.forM_ dataRows \row -> do
           let rowData = AE.object [(K.fromText col.field, AE.String $ getRowValue idx row) | (col, idx) <- zip columns [0 ..]]
-          let firstColValue = maybe "" (const $ getRowValue 0 row) (listToMaybe columns)
-          let rowValue = case widget.onRowClick >>= (.value) of
-                Just tmpl -> T.replace "{{row.resource_name}}" firstColValue tmpl
-                Nothing -> firstColValue
-          let isSelected = Just rowValue == currentVar
-
+          let firstColValue = memptyIfFalse (not $ null columns) (getRowValue 0 row)
+          let rowValue = maybe firstColValue (T.replace "{{row.resource_name}}" firstColValue) (widget.onRowClick >>= (.value))
           tr_
-            [ class_ $ "hover cursor-pointer" <> if isSelected then " bg-fillBrand/20 border-l-4 border-borderBrand" else ""
+            [ class_ $ "hover cursor-pointer" <> memptyIfFalse (Just rowValue == currentVar) " bg-fillBrand/20 border-l-4 border-borderBrand"
             , data_ "row" (encodeText rowData)
             ]
-            do
-              ifor_ columns \idx col -> do
-                let value = getRowValue idx row
-                td_ [class_ $ fromMaybe "" col.align <> if col.columnType `elem` [Just ("number" :: Text), Just ("duration" :: Text)] then " monospace" else ""] do
-                  if isJust col.progress
-                    then renderProgressCell col value maxValues valueWidths
-                    else renderLongTextOr col value
+            $ ifor_ columns \idx col -> do
+              let value = getRowValue idx row
+              td_ [class_ $ cellClass col]
+                $ if isJust col.progress
+                  then renderProgressCell col value maxValues valueWidths
+                  else renderLongTextOr col value
 
 
 renderTraceDataTable :: Widget -> V.Vector (V.Vector Text) -> HashMap Text [(Text, Int, Int)] -> HashMap Text [Telemetry.SpanRecord] -> Text -> Html ()
 renderTraceDataTable widget dataRows spGroup spansGrouped colorsJson = do
   let columns = fromMaybe [] widget.columns
   let tableId = maybeToMonoid widget.id
-
-  -- Render complete table with data
   table_ [class_ "table table-sm w-full relative", id_ tableId] do
     sortableTableHead_ tableId False [(col.title, col.align) | col <- columns]
     tbody_ [] do
@@ -1167,22 +1120,19 @@ renderTraceDataTable widget dataRows spGroup spansGrouped colorsJson = do
                 <$> fromMaybe [] (HM.lookup val spansGrouped)
         let spjson = encodeText spansJson
         let clcFun = [text|on click toggle .hidden on the next <tr/> then call flameGraphChart($spjson, "$val", $colorsJson)|]
-        tr_ [term "_" clcFun, class_ "cursor-pointer"] do
-          ifor_ columns \idx col -> do
-            let value = getRowValue idx row
+        tr_ [term "_" clcFun, class_ "cursor-pointer"]
+          $ ifor_ columns \idx col ->
             if col.field == "latency_breakdown"
-              then td_ [class_ "py-2"] do
-                renderLatencyBreakdown cdrn
-              else td_ [class_ $ fromMaybe "" col.align <> if col.columnType `elem` [Just ("number" :: Text), Just ("duration" :: Text)] then " monospace" else ""] do
-                toHtml $ formatColumnValue col value
+              then td_ [class_ "py-2"] $ renderLatencyBreakdown cdrn
+              else td_ [class_ $ cellClass col] $ toHtml $ formatColumnValue col (getRowValue idx row)
         tr_ [class_ "hidden"] do
           td_ [colspan_ "100%"] do
-            whenJust widget._projectId \p ->
-              div_
+            when (isJust widget._projectId)
+              $ div_
                 [ class_ "w-full group px-2 pt-4 border relative flex flex-col rounded-lg overflow-hidden"
                 , id_ $ "flame-graph-container-" <> val
                 ]
-                $ renderFlameGraph val
+              $ renderFlameGraph val
 
 
 getSpanJson :: Maybe (Int, Int) -> Telemetry.SpanRecord -> AE.Value
@@ -1191,14 +1141,12 @@ getSpanJson tgtM sp =
     [ "spanId" AE..= sp.spanId
     , "name" AE..= sp.spanName
     , "value" AE..= maybe sp.spanDurationNs (\(d, _) -> fromIntegral d) tgtM
-    , "start" AE..= start
+    , "start" AE..= utcTimeToNanoseconds sp.startTime
     , "parentId" AE..= sp.parentSpanId
     , "serviceName" AE..= getServiceName sp.resource
     , "hasErrors" AE..= spanHasErrors sp
     , "totalSpans" AE..= maybe 1 snd tgtM
     ]
-  where
-    start = utcTimeToNanoseconds sp.startTime
 
 
 renderFlameGraph :: Text -> Html ()
@@ -1216,10 +1164,10 @@ renderLatencyBreakdown groups = do
   div_ [class_ "flex h-5 overflow-hidden relative bg-fillWeak rounded", style_ "width:150px"] $ do
     let totalDur = sum (map (\(_, d, _) -> fromIntegral d) groups) :: Double
     let colors = getServiceColors $ V.fromList (fmap (\(n, _, _) -> n) groups)
-    mapM_ (renderGroup totalDur colors) (zip [0 ..] groups)
+    ifor_ groups (renderGroup totalDur colors)
   where
-    renderGroup :: Double -> HM.HashMap Text Text -> (Int, (Text, Int, Int)) -> Html ()
-    renderGroup totalDur colors (i, (name, dur, _)) = do
+    renderGroup :: Double -> HM.HashMap Text Text -> Int -> (Text, Int, Int) -> Html ()
+    renderGroup totalDur colors i (name, dur, _) = do
       let barWidth = 150.0
           width = (fromIntegral dur / totalDur) * barWidth
           left =
@@ -1250,56 +1198,44 @@ calculateMaxValues columns dataRows =
 
 -- Render a progress bar cell
 renderProgressCell :: TableColumn -> Text -> M.Map Text Double -> M.Map Text Int -> Html ()
-renderProgressCell col value maxValues valueWidths = do
-  div_ [class_ "flex items-center gap-2"] do
-    -- Format and display the value using the same logic as formatColumnValue
-    let formattedValue = formatColumnValue col value
-    -- Use calculated max width for this column
-    let width = M.findWithDefault 8 col.field valueWidths
-
-    span_ [class_ "inline-block text-left monospace", style_ $ "width: " <> show width <> "ch"] do
-      toHtml formattedValue
-
-    -- Calculate progress percentage
-    let numValue = fromMaybe 0 $ readMaybe (toString value) :: Double
-    let percentage = case col.progress of
-          Just "value_percent" -> min 100 (max 0 numValue)
-          Just "column_percent" -> case M.lookup col.field maxValues of
-            Just maxVal | maxVal > 0 -> (numValue / maxVal) * 100
-            _ -> 0
-          _ -> 0
-
-    -- Render progress bar
-    let progressClass = "progress w-12 ml-2 " <> getProgressVariantClass col.progressVariant
-    progress_ [class_ progressClass, value_ (show percentage), max_ "100"] ""
+renderProgressCell col value maxValues valueWidths = div_ [class_ "flex items-center gap-2"] do
+  let numValue = fromMaybe 0 (readMaybe $ toString value) :: Double
+      percentage = case col.progress of
+        Just "value_percent" -> min 100 (max 0 numValue)
+        Just "column_percent" | Just maxVal <- M.lookup col.field maxValues, maxVal > 0 -> (numValue / maxVal) * 100
+        _ -> 0
+      variantClass = case col.progressVariant of
+        Just "error" -> "progress-error"
+        Just "warning" -> "progress-warning"
+        Just "success" -> "progress-success"
+        _ -> "progress-brand"
+  span_ [class_ "inline-block text-left monospace", style_ $ "width: " <> show (M.findWithDefault 8 col.field valueWidths) <> "ch"]
+    $ toHtml
+    $ formatColumnValue col value
+  progress_ [class_ $ "progress w-12 ml-2 " <> variantClass, value_ (show percentage), max_ "100"] ""
 
 
--- Get progress bar variant class
-getProgressVariantClass :: Maybe Text -> Text
-getProgressVariantClass variant = case variant of
-  Just "error" -> "progress-error"
-  Just "warning" -> "progress-warning"
-  Just "success" -> "progress-success"
-  _ -> "progress-brand"
+isNumericCol :: TableColumn -> Bool
+isNumericCol col = col.columnType `elem` [Just ("number" :: Text), Just "duration"]
+
+
+-- | @td@ classes: column alignment plus monospace for numeric/duration columns.
+cellClass :: TableColumn -> Text
+cellClass col = fromMaybe "" col.align <> memptyIfFalse (isNumericCol col) " monospace"
 
 
 -- Format column value based on column type
 formatColumnValue :: TableColumn -> Text -> Text
 formatColumnValue col value = case col.columnType of
-  Just "number" ->
-    case readMaybe (toString value) :: Maybe Double of
-      Just n ->
-        let formatted =
-              if n < 100 && n /= fromIntegral (round n :: Int)
-                then toText (printf "%.2g" n :: String) -- Keep significant digits for small numbers
-                else prettyPrintCount (round n) -- Use pretty print for larger numbers
-         in formatted <> foldMap (" " <>) col.unit
-      Nothing -> value <> foldMap (" " <>) col.unit
-  Just "duration" ->
-    case readMaybe (toString value) :: Maybe Double of
-      Just v -> toText $ getDurationNSMS (fromIntegral (round v :: Int))
-      Nothing -> value <> foldMap (" " <>) col.unit
-  _ -> fromMaybe value (formatTimestampValue value) <> foldMap (" " <>) col.unit
+  Just "number" -> maybe value fmtNumber (readMaybe (toString value) :: Maybe Double) <> unitSuffix
+  Just "duration" -> maybe (value <> unitSuffix) (\v -> toText $ getDurationNSMS (fromIntegral (round v :: Int))) (readMaybe (toString value) :: Maybe Double)
+  _ -> fromMaybe value (formatTimestampValue value) <> unitSuffix
+  where
+    unitSuffix = foldMap (" " <>) col.unit
+    -- keep significant digits for small non-integral numbers, pretty-print the rest
+    fmtNumber n
+      | n < 100, n /= fromIntegral (round n :: Int) = toText (printf "%.2g" n :: String)
+      | otherwise = prettyPrintCount (round n)
 
 
 -- | Try to parse a PostgreSQL timestamp and format as "Mar 19, 09:05"
@@ -1315,25 +1251,14 @@ formatTimestampValue (T.strip -> val)
     fmt = toText . formatTime defaultTimeLocale "%b %d, %H:%M"
 
 
--- | Render cell value, parsing summary tags (field;style⇒value) into badges
-renderCellValue :: TableColumn -> Text -> Html ()
-renderCellValue col value
-  | T.isInfixOf "⇒" formatted = renderSummaryTags formatted
-  | otherwise = toHtml formatted
-  where
-    formatted = formatColumnValue col value
-
-
--- | Render a text cell. Long values get a truncated single-line view with a
--- tippy tooltip (delegated body-wide in BodyWrapper) showing the full text on
--- hover. Number/duration columns skip the wrapper since they're always short.
+-- | Render a text cell, parsing summary tags (field;style⇒value) into badges.
+-- Long values get a truncated single-line view with a tippy tooltip (delegated
+-- body-wide in BodyWrapper) showing the full text on hover. Number/duration
+-- columns skip the wrapper since they're always short.
 renderLongTextOr :: TableColumn -> Text -> Html ()
 renderLongTextOr col value
-  | col.columnType `elem` [Just ("number" :: Text), Just "duration"] = renderCellValue col value
-  | T.length value > 60 =
-      div_
-        [ class_ "truncate max-w-2xl"
-        , term "data-tippy-content" value
-        ]
-        $ renderCellValue col value
-  | otherwise = renderCellValue col value
+  | not (isNumericCol col), T.length value > 60 = div_ [class_ "truncate max-w-2xl", term "data-tippy-content" value] cell
+  | otherwise = cell
+  where
+    formatted = formatColumnValue col value
+    cell = if T.isInfixOf "⇒" formatted then renderSummaryTags formatted else toHtml formatted

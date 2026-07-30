@@ -60,12 +60,17 @@ insertAccessToken pid teamId channelId teamName botToken channelName webhookUrl 
                DO UPDATE SET team_id = EXCLUDED.team_id, channel_id = EXCLUDED.channel_id, team_name = EXCLUDED.team_name, bot_token = EXCLUDED.bot_token, channel_name = EXCLUDED.channel_name, webhook_url = EXCLUDED.webhook_url |]
 
 
+-- | Column order must match 'SlackData''s field order — 'HI.DecodeRow' is positional.
+selectSlack :: HI.Sql
+selectSlack = [HI.sql|SELECT project_id, team_id, team_name, bot_token, channel_id, channel_name, webhook_url FROM apis.slack |]
+
+
 getProjectSlackData :: DB es => Projects.ProjectId -> Eff es (Maybe SlackData)
-getProjectSlackData pid = Hasql.interpOne [HI.sql|SELECT project_id, team_id, team_name, bot_token, channel_id, channel_name, webhook_url FROM apis.slack WHERE project_id = #{pid} |]
+getProjectSlackData pid = Hasql.interpOne (selectSlack <> [HI.sql|WHERE project_id = #{pid}|])
 
 
 getSlackDataByTeamId :: DB es => Text -> Eff es (Maybe SlackData)
-getSlackDataByTeamId teamId = Hasql.interpOne [HI.sql|SELECT project_id, team_id, team_name, bot_token, channel_id, channel_name, webhook_url FROM apis.slack WHERE team_id = #{teamId} |]
+getSlackDataByTeamId teamId = Hasql.interpOne (selectSlack <> [HI.sql|WHERE team_id = #{teamId}|])
 
 
 -- | Update the OAuth-time default channel cached on apis.slack.
@@ -102,12 +107,16 @@ insertDiscordData pid guildId =
                DO UPDATE SET guild_id = EXCLUDED.guild_id |]
 
 
+selectDiscord :: HI.Sql
+selectDiscord = [HI.sql|SELECT project_id, guild_id FROM apis.discord |]
+
+
 getDiscordData :: DB es => Text -> Eff es (Maybe DiscordData)
-getDiscordData guildId = Hasql.interpOne [HI.sql|SELECT project_id, guild_id FROM apis.discord WHERE guild_id = #{guildId} |]
+getDiscordData guildId = Hasql.interpOne (selectDiscord <> [HI.sql|WHERE guild_id = #{guildId}|])
 
 
 getDiscordDataByProjectId :: DB es => Projects.ProjectId -> Eff es (Maybe DiscordData)
-getDiscordDataByProjectId pid = Hasql.interpOne [HI.sql|SELECT project_id, guild_id FROM apis.discord WHERE project_id = #{pid} |]
+getDiscordDataByProjectId pid = Hasql.interpOne (selectDiscord <> [HI.sql|WHERE project_id = #{pid}|])
 
 
 -- | Shared (d.title, d.id::text) dashboard lookup; each caller supplies the
@@ -129,7 +138,7 @@ getDashboardsForWhatsapp number =
 
 
 getDashboardsForDiscord :: DB es => Text -> Eff es [(Text, Text)]
-getDashboardsForDiscord guildId = dashboardsByProjectJoin [HI.sql|JOIN apis.discord dd ON d.project_id = dd.project_id where guild_id=#{guildId}|]
+getDashboardsForDiscord guildId = dashboardsByProjectJoin [HI.sql|JOIN apis.discord dd ON d.project_id = dd.project_id WHERE dd.guild_id = #{guildId}|]
 
 
 deleteSlackData :: DB es => Projects.ProjectId -> Eff es Int64

@@ -3,7 +3,7 @@ module Pages.BodyWrapper (bodyWrapper, BWConfig (..), PageCtx (..), mkPageCtx, w
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default, def)
 import Data.Text qualified as T
-import Data.Tuple.Extra (fst3)
+import Data.Tuple.Extra (fst3, uncurry3)
 import Data.Vector qualified as V
 import Effectful.Reader.Static qualified as EffReader
 import Lucid
@@ -53,40 +53,37 @@ withSettingsPage pid title build = do
 
 menu :: I18n.Language -> Projects.ProjectId -> [(Text, Text, Text)]
 menu lang pid =
-  [ (I18n.t lang "nav.dashboards", "/p/" <> pid.toText <> "/dashboards", "dashboard")
-  , (I18n.t lang "nav.explorer", "/p/" <> pid.toText <> "/log_explorer", "explore")
-  , (I18n.t lang "nav.api_catalog", "/p/" <> pid.toText <> "/api_catalog", "swap")
-  , (I18n.t lang "nav.issues", "/p/" <> pid.toText <> "/issues", "bug")
-  , (I18n.t lang "nav.monitors", "/p/" <> pid.toText <> "/monitors", "list-check")
-  , (I18n.t lang "nav.reports", "/p/" <> pid.toText <> "/reports", "chart-simple")
+  [ (I18n.t lang "nav.dashboards", p "/dashboards", "dashboard")
+  , (I18n.t lang "nav.explorer", p "/log_explorer", "explore")
+  , (I18n.t lang "nav.api_catalog", p "/api_catalog", "swap")
+  , (I18n.t lang "nav.issues", p "/issues", "bug")
+  , (I18n.t lang "nav.monitors", p "/monitors", "list-check")
+  , (I18n.t lang "nav.reports", p "/reports", "chart-simple")
   ]
+  where
+    p path = "/p/" <> pid.toText <> path
 
 
 -- | Onboarding checklist widget for the sidenav
 onboardingChecklist_ :: Projects.Project -> Html ()
 onboardingChecklist_ project = do
-  let steps = project.onboardingStepsCompleted
-      pid = project.id.toText
-      hasEvents = V.elem "Integration" steps || V.elem "has_events" steps
-      exploredLogs = V.elem "explored_logs" steps
-      createdMonitor = V.elem "created_monitor" steps
-      setupNotifs = V.elem "NotifChannel" steps
+  let pid = project.id.toText
+      has = (`V.elem` project.onboardingStepsCompleted)
       items =
-        [ (hasEvents, "Send first event", "/p/" <> pid <> "/onboarding?step=Integration", "paper-plane")
-        , (exploredLogs, "Explore logs", "/p/" <> pid <> "/log_explorer", "magnifying-glass")
-        , (createdMonitor, "Create a monitor", "/p/" <> pid <> "/monitors", "bell")
-        , (setupNotifs, "Set up notifications", "/p/" <> pid <> "/settings/integrations", "envelope")
+        [ (has "Integration" || has "has_events", ("Send first event", "/p/" <> pid <> "/onboarding?step=Integration", "paper-plane"))
+        , (has "explored_logs", ("Explore logs", "/p/" <> pid <> "/log_explorer", "magnifying-glass"))
+        , (has "created_monitor", ("Create a monitor", "/p/" <> pid <> "/monitors", "bell"))
+        , (has "NotifChannel", ("Set up notifications", "/p/" <> pid <> "/settings/integrations", "envelope"))
         ]
-          :: [(Bool, Text, Text, Text)]
-      doneCount = sum [1 :: Int | (True, _, _, _) <- items]
+          :: [(Bool, (Text, Text, Text))]
+      doneCount = sum $ map (fromEnum . fst) items
       totalCount = length items
-      allDone = doneCount == totalCount
-      dismissed = V.elem "checklist_dismissed" steps
-  unless (allDone || dismissed)
+      progress = show doneCount <> "/" <> show totalCount :: Text
+  unless (doneCount == totalCount || has "checklist_dismissed")
     $ div_ [id_ "onboarding-checklist", class_ "mt-5 pt-3 border-t border-strokeWeak"] do
       -- Collapsed state: rocket icon
       div_ [class_ "flex justify-center group-has-[#sidenav-toggle:checked]/pg:hidden"] do
-        a_ [href_ $ "/p/" <> pid <> "/onboarding", class_ "relative tap-target", term "data-tippy-placement" "right", term "data-tippy-content" $ "Getting Started (" <> show doneCount <> "/" <> show totalCount <> ")"] do
+        a_ [href_ $ "/p/" <> pid <> "/onboarding", class_ "relative tap-target", term "data-tippy-placement" "right", term "data-tippy-content" $ "Getting Started (" <> progress <> ")"] do
           faSprite_ "rocket" "regular" "w-4 h-4 text-textWeak"
       -- Expanded state: full checklist
       div_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block bg-fillWeaker rounded-lg p-2.5"] do
@@ -95,7 +92,7 @@ onboardingChecklist_ project = do
             faSprite_ "rocket" "regular" "w-2.5 h-2.5 text-textWeak"
             span_ [class_ "text-xs font-medium text-textStrong"] "Getting Started"
           div_ [class_ "flex items-center gap-3"] do
-            span_ [class_ "text-xs text-textWeak tabular-nums"] $ toHtml @Text $ show doneCount <> "/" <> show totalCount
+            span_ [class_ "text-xs text-textWeak tabular-nums"] $ toHtml progress
             button_
               [ class_ "text-textWeak opacity-50 hover:opacity-100 hover:text-textStrong tap-target cursor-pointer"
               , Aria.label_ "Dismiss getting started checklist"
@@ -104,12 +101,10 @@ onboardingChecklist_ project = do
               , hxSwap_ "delete"
               ]
               $ faSprite_ "xmark" "regular" "w-2.5 h-2.5"
-        div_ [class_ "h-0.5 w-full bg-strokeWeak rounded-full overflow-hidden mb-2"] do
-          let pct = show (doneCount * 100 `div` totalCount :: Int)
-          div_ [class_ "h-full bg-strokeBrand-strong rounded-full transition-all", style_ $ "width:" <> toText pct <> "%"] ""
-        let sorted = sortOn (Down . (\(d, _, _, _) -> d)) items
+        div_ [class_ "h-0.5 w-full bg-strokeWeak rounded-full overflow-hidden mb-2"]
+          $ div_ [class_ "h-full bg-strokeBrand-strong rounded-full transition-all", style_ $ "width:" <> show (doneCount * 100 `div` totalCount) <> "%"] ""
         div_ [class_ "flex flex-col gap-0.5"] do
-          forM_ sorted \(done, label, link, icon) ->
+          forM_ (sortWith (Down . fst) items) \(done, (label, link, icon)) ->
             a_
               [ href_ link
               , class_ $ "flex items-center gap-2 px-2 py-1 rounded-md text-xs transition-colors " <> if done then "text-textWeak opacity-60" else "text-textStrong font-medium hover:bg-fillWeak"
@@ -165,91 +160,103 @@ data BWConfig = BWConfig
 
 bodyWrapper :: BWConfig -> Html () -> Html ()
 bodyWrapper bcfg child = do
+  let isProd = bcfg.config.environment /= Dev
   doctype_
   html_ [lang_ "en"] do
-    head_
-      do
-        title_ $ toHtml bcfg.pageTitle
-        meta_ [charset_ "UTF-8"]
-        meta_ [name_ "viewport", content_ "width=device-width, initial-scale=1.0"]
-        meta_ [name_ "description", content_ $ "Monoscope — " <> bcfg.pageTitle]
-        meta_ [httpEquiv_ "X-UA-Compatible", content_ "ie=edge"]
-        meta_ [name_ "htmx-config", content_ [text|{"selfRequestsOnly":false}|]]
-        -- favicon items
-        link_ [rel_ "apple-touch-icon", sizes_ "180x180", href_ "/public/apple-touch-icon.png"]
-        link_ [rel_ "icon", type_ "image/png", sizes_ "32x32", href_ "/public/favicon-32x32.png"]
-        link_ [rel_ "icon", type_ "image/png", sizes_ "16x16", href_ "/public/favicon-16x16.png"]
-        link_ [rel_ "manifest", href_ "/public/site.webmanifest"]
-        link_ [rel_ "mask-icon", href_ "/public/safari-pinned-tab.svg", term "color" "#5bbad5"]
-        meta_ [name_ "msapplication-TileColor", content_ "#da532c"]
-        meta_ [name_ "theme-color", content_ "#ffffff"]
+    head_ do
+      title_ $ toHtml bcfg.pageTitle
+      meta_ [charset_ "UTF-8"]
+      meta_ [name_ "viewport", content_ "width=device-width, initial-scale=1.0"]
+      meta_ [name_ "description", content_ $ "Monoscope — " <> bcfg.pageTitle]
+      meta_ [httpEquiv_ "X-UA-Compatible", content_ "ie=edge"]
+      meta_ [name_ "htmx-config", content_ [text|{"selfRequestsOnly":false}|]]
+      -- favicon items
+      link_ [rel_ "apple-touch-icon", sizes_ "180x180", href_ "/public/apple-touch-icon.png"]
+      link_ [rel_ "icon", type_ "image/png", sizes_ "32x32", href_ "/public/favicon-32x32.png"]
+      link_ [rel_ "icon", type_ "image/png", sizes_ "16x16", href_ "/public/favicon-16x16.png"]
+      link_ [rel_ "manifest", href_ "/public/site.webmanifest"]
+      link_ [rel_ "mask-icon", href_ "/public/safari-pinned-tab.svg", term "color" "#5bbad5"]
+      meta_ [name_ "msapplication-TileColor", content_ "#da532c"]
+      meta_ [name_ "theme-color", content_ "#ffffff"]
 
-        -- Resource hints for faster loading
-        link_ [rel_ "preconnect", href_ "https://www.gravatar.com"]
-        link_ [rel_ "preconnect", href_ "https://ui-avatars.com"]
-        link_ [rel_ "dns-prefetch", href_ "https://cdn.jsdelivr.net"]
-        link_ [rel_ "dns-prefetch", href_ "https://unpkg.com"]
+      -- Resource hints for faster loading
+      link_ [rel_ "preconnect", href_ "https://www.gravatar.com"]
+      link_ [rel_ "preconnect", href_ "https://ui-avatars.com"]
+      link_ [rel_ "dns-prefetch", href_ "https://cdn.jsdelivr.net"]
+      link_ [rel_ "dns-prefetch", href_ "https://unpkg.com"]
 
-        -- Preload critical CSS
-        link_ [rel_ "preload", href_ $(hashAssetFile "/public/assets/css/tailwind.min.css"), term "as" "style"]
+      -- Preload critical CSS
+      link_ [rel_ "preload", href_ $(hashAssetFile "/public/assets/css/tailwind.min.css"), term "as" "style"]
 
-        -- View Transitions API (Chrome 111+, graceful fallback for others)
-        meta_ [name_ "view-transition", content_ "same-origin"]
-        style_
-          """
-          @supports (view-transition-name: root) {
-            ::view-transition-old(root) { animation: vt-fade-out 150ms ease-out; }
-            ::view-transition-new(root) { animation: vt-fade-in 150ms ease-in; }
-          }
-          @keyframes vt-fade-out { from { opacity: 1; } to { opacity: 0; } }
-          @keyframes vt-fade-in { from { opacity: 0; } to { opacity: 1; } }
-          """
+      -- View Transitions API (Chrome 111+, graceful fallback for others)
+      meta_ [name_ "view-transition", content_ "same-origin"]
+      style_
+        """
+        @supports (view-transition-name: root) {
+          ::view-transition-old(root) { animation: vt-fade-out 150ms ease-out; }
+          ::view-transition-new(root) { animation: vt-fade-in 150ms ease-in; }
+        }
+        @keyframes vt-fade-out { from { opacity: 1; } to { opacity: 0; } }
+        @keyframes vt-fade-in { from { opacity: 0; } to { opacity: 1; } }
+        """
 
-        link_ [rel_ "stylesheet", type_ "text/css", href_ $(hashAssetFile "/public/assets/css/thirdparty/notyf3.min.css")]
-        link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/css/thirdparty/tagify.min.css"), type_ "text/css"]
-        when bcfg.needsGridStack $ link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/deps/gridstack/gridstack.min.css")]
-        link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/css/thirdparty/rrweb.css")]
+      let css href = link_ [rel_ "stylesheet", type_ "text/css", href_ href]
+          deferScript src = script_ [src_ src, defer_ "true"] ("" :: Text)
+      mapM_
+        css
+        [ $(hashAssetFile "/public/assets/css/thirdparty/notyf3.min.css")
+        , $(hashAssetFile "/public/assets/css/thirdparty/tagify.min.css")
+        ]
+      when bcfg.needsGridStack $ css $(hashAssetFile "/public/assets/deps/gridstack/gridstack.min.css")
+      mapM_
+        css
+        [ $(hashAssetFile "/public/assets/css/thirdparty/rrweb.css")
+        , $(hashAssetFile "/public/assets/css/tailwind.min.css")
+        , $(hashAssetFile "/public/assets/web-components/dist/css/index.css")
+        ]
 
-        link_ [rel_ "stylesheet", type_ "text/css", href_ $(hashAssetFile "/public/assets/css/tailwind.min.css")]
-        link_ [rel_ "stylesheet", type_ "text/css", href_ $(hashAssetFile "/public/assets/web-components/dist/css/index.css")]
+      fold bcfg.headContent
 
-        -- Include optional head content from the page
-        whenJust bcfg.headContent id
+      mapM_
+        deferScript
+        [ "https://cdn.jsdelivr.net/npm/htmx.org@2.0.8/dist/htmx.min.js"
+        , $(hashAssetFile "/public/assets/js/main.js")
+        , $(hashAssetFile "/public/assets/deps/htmx/multi-swap.js")
+        , $(hashAssetFile "/public/assets/deps/htmx/preload.js")
+        , $(hashAssetFile "/public/assets/deps/htmx/json-enc-2.js")
+        , $(hashAssetFile "/public/assets/deps/htmx/response-targets.js")
+        , $(hashAssetFile "/public/assets/deps/htmx/idiomorph-ext.min.js")
+        , $(hashAssetFile "/public/assets/js/thirdparty/_hyperscript_web0_9_93.min.js")
+        , $(hashAssetFile "/public/assets/deps/tagify/tagify.min.js")
+        , $(hashAssetFile "/public/assets/js/thirdparty/notyf3.min.js")
+        ]
+      script_ [src_ $(hashAssetFile "/public/assets/deps/lit/lit-html.js"), type_ "module", defer_ "true"] ("" :: Text)
+      when bcfg.needsGridStack $ deferScript $(hashAssetFile "/public/assets/deps/gridstack/gridstack-all.js")
+      mapM_
+        deferScript
+        [ $(hashAssetFile "/public/assets/deps/easepick/bundle.min.js")
+        , $(hashAssetFile "/public/assets/js/thirdparty/luxon.min.js")
+        , $(hashAssetFile "/public/assets/js/thirdparty/popper2_11_4.min.js")
+        , $(hashAssetFile "/public/assets/js/thirdparty/tippy6_3_7.umd.min.js")
+        ]
 
-        script_ [src_ "https://cdn.jsdelivr.net/npm/htmx.org@2.0.8/dist/htmx.min.js", defer_ "true"] ("" :: Text)
-        script_ [src_ $(hashAssetFile "/public/assets/js/main.js"), defer_ "true"] ("" :: Text)
-        script_ [src_ $(hashAssetFile "/public/assets/deps/htmx/multi-swap.js"), defer_ "true"] ("" :: Text)
-        script_ [src_ $(hashAssetFile "/public/assets/deps/htmx/preload.js"), defer_ "true"] ("" :: Text)
-        script_ [src_ $(hashAssetFile "/public/assets/deps/htmx/json-enc-2.js"), defer_ "true"] ("" :: Text)
-        script_ [src_ $(hashAssetFile "/public/assets/deps/htmx/response-targets.js"), defer_ "true"] ("" :: Text)
-        script_ [src_ $(hashAssetFile "/public/assets/deps/htmx/idiomorph-ext.min.js"), defer_ "true"] ("" :: Text)
-        script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/_hyperscript_web0_9_93.min.js"), defer_ "true"] ("" :: Text)
-        script_ [src_ $(hashAssetFile "/public/assets/deps/tagify/tagify.min.js"), defer_ "true"] ("" :: Text)
-        script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/notyf3.min.js"), defer_ "true"] ("" :: Text)
-        script_ [src_ $(hashAssetFile "/public/assets/deps/lit/lit-html.js"), type_ "module", defer_ "true"] ("" :: Text)
-        when bcfg.needsGridStack $ script_ [src_ $(hashAssetFile "/public/assets/deps/gridstack/gridstack-all.js"), defer_ "true"] ("" :: Text)
-        script_ [src_ $(hashAssetFile "/public/assets/deps/easepick/bundle.min.js"), defer_ "true"] ("" :: Text)
-        script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/luxon.min.js"), defer_ "true"] ("" :: Text)
-        script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/popper2_11_4.min.js"), defer_ "true"] ("" :: Text)
-        script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/tippy6_3_7.umd.min.js"), defer_ "true"] ("" :: Text)
+      when (isProd && bcfg.config.enableBrowserMonitoring) $ script_ [src_ "https://unpkg.com/@monoscopetech/browser@0.11.6/dist/monoscope.min.js"] ("" :: Text)
 
-        when (bcfg.config.environment /= Dev && bcfg.config.enableBrowserMonitoring) $ script_ [src_ "https://unpkg.com/@monoscopetech/browser@0.11.6/dist/monoscope.min.js"] ("" :: Text)
+      -- Flag for widget initialization - set to true after web-components loads
+      script_ "window.widgetDepsReady = false;"
+      script_ [type_ "module", src_ $(hashAssetFile "/public/assets/web-components/dist/js/index.js")] ("" :: Text)
 
-        -- Flag for widget initialization - set to true after web-components loads
-        script_ "window.widgetDepsReady = false;"
-        script_ [type_ "module", src_ $(hashAssetFile "/public/assets/web-components/dist/js/index.js")] ("" :: Text)
-
-        unless (bcfg.config.environment == Dev)
-          $ script_
-            [text|
+      when isProd
+        $ script_
+          [text|
         !function(e,t,n,s,u,a){e.twq||(s=e.twq=function(){s.exe?s.exe.apply(s,arguments):s.queue.push(arguments);},s.version='1.1',s.queue=[],u=t.createElement(n),u.async=!0,u.src='https://static.ads-twitter.com/uwt.js',
         a=t.getElementsByTagName(n)[0],a.parentNode.insertBefore(u,a))}(window,document,'script');
         twq('config','om5gt');
         |]
 
-        let swURI = $(hashAssetFile "/public/sw.js")
-        script_
-          [text|
+      let swURI = $(hashAssetFile "/public/sw.js")
+      script_
+        [text|
         if("serviceWorker" in navigator) {
             window.addEventListener("load", () => {
               navigator.serviceWorker.register("${swURI}").then(swReg => {}).catch(err => {
@@ -258,8 +265,8 @@ bodyWrapper bcfg child = do
           });
         }
           |]
-        script_
-          [raw|
+      script_
+        [raw|
 
 
         function navigatable(me, target, container, activeClass, tabPrefix)  {
@@ -472,9 +479,9 @@ bodyWrapper bcfg child = do
     }
 
       |]
-        script_
-          [type_ "text/hyperscript"]
-          [text|
+      script_
+        [type_ "text/hyperscript"]
+        [text|
           behavior LogItemMenuable
             on click
               if I match <.with-context-menu/> then
@@ -507,64 +514,50 @@ bodyWrapper bcfg child = do
       -- HTMX progress bar for long operations
       div_ [id_ "htmx-progress", class_ "htmx-progress"] ""
       case bcfg.sessM of
-        Nothing -> do
+        Nothing ->
           main_ [class_ "flex flex-col grow  h-screen overflow-y-hidden", id_ "main-content"]
-            $ section_
-              [class_ "flex-1 overflow-y-auto"]
-              child
-        Just sess ->
-          let currUser = sess.persistentSession.user.getUser
-              sideNav' = bcfg.currProject & maybe "" \project -> sideNav sess project (fromMaybe bcfg.pageTitle bcfg.prePageTitle) bcfg.menuItem
-           in do
-                -- Command palette (shell rendered inline, dynamic items lazy-loaded)
-                whenJust bcfg.currProject \p ->
-                  CommandPalette.paletteShell_ p.id
-                -- Mobile nav toggle (CSS-only sidebar control, only rendered when sidebar exists)
-                input_ [type_ "checkbox", class_ "hidden", id_ "mobile-nav-toggle", [__|on load if window.innerWidth < 768 then set #sidenav-toggle.checked to true|]]
-                section_ [class_ "flex flex-row grow-0 h-screen overflow-hidden"] do
-                  sideNav'
-                  section_ [class_ "h-full overflow-y-hidden grow flex flex-col"] do
-                    when
-                      (currUser.email == "hello@monoscope.tech")
-                      loginBanner
-                    if bcfg.isSettingsPage || bcfg.hideNavbar
-                      then do
-                        -- Empty navbar anchor so OOB morph can remove non-settings navbar
-                        nav_ [id_ "main-navbar", class_ "hidden"] ""
-                      else navbar bcfg.currProject (maybe [] (\p -> menu sess.lang p.id) bcfg.currProject) currUser bcfg.prePageTitle bcfg.pageTitle bcfg.pageTitleSuffix bcfg.pageTitleModalId bcfg.pageTitleSuffixModalId bcfg.docsLink bcfg.navTabs bcfg.pageActions
-                    main_ [id_ "main-content", class_ "overflow-y-auto h-full grow"] do
-                      whenJust bcfg.currProject (\p -> freeTierUsageBanner p.id.toText bcfg.freeTierStatus)
-                      if bcfg.isSettingsPage
-                        then maybe child (\p -> settingsWrapper p.id bcfg.pageTitle child) bcfg.currProject
-                        else child
-                    div_ [class_ "h-0 shrink"] do
-                      Components.drawer_ "global-data-drawer" (isJust bcfg.globalDrawerContent) Nothing bcfg.globalDrawerContent ""
-                      template_ [id_ "loader-tmp"] Components.drawerLoadingSkeleton_
-                      -- Modal for copying widgets to other dashboards
-                      Components.modal_ "dashboards-modal" "" do
-                        -- Hidden fields to store widget and dashboard IDs
-                        input_ [type_ "hidden", id_ "dashboards-modal-widget-id", name_ "widget_id"]
-                        input_ [type_ "hidden", id_ "dashboards-modal-source-dashboard-id", name_ "source_dashboard_id"]
-
-                        div_
-                          [ id_ "dashboards-modal-content"
-                          , class_ "dashboards-list space-y-3 max-h-160 overflow-y-auto"
-                          , hxGet_ ("/p/" <> maybe "" (.id.toText) bcfg.currProject <> "/dashboards?embedded=true")
-                          , hxTrigger_ "loadDashboards"
-                          , hxSelect_ "#itemsListPage"
-                          , hxSwap_ "innerHTML"
-                          , hxVals_ "js:{copy_widget_id: document.getElementById('dashboards-modal-widget-id').value, source_dashboard_id: document.getElementById('dashboards-modal-source-dashboard-id').value}"
-                          ]
-                          do
-                            div_ [class_ "skeleton h-16 w-full"] ""
-                            div_ [class_ "skeleton h-16 w-full"] ""
-                            div_ [class_ "skeleton h-16 w-full"] ""
+            $ section_ [class_ "flex-1 overflow-y-auto"] child
+        Just sess -> do
+          -- Command palette (shell rendered inline, dynamic items lazy-loaded)
+          whenJust bcfg.currProject \p -> CommandPalette.paletteShell_ p.id
+          -- Mobile nav toggle (CSS-only sidebar control, only rendered when sidebar exists)
+          input_ [type_ "checkbox", class_ "hidden", id_ "mobile-nav-toggle", [__|on load if window.innerWidth < 768 then set #sidenav-toggle.checked to true|]]
+          section_ [class_ "flex flex-row grow-0 h-screen overflow-hidden"] do
+            foldMap (\project -> sideNav sess project (fromMaybe bcfg.pageTitle bcfg.prePageTitle) bcfg.menuItem) bcfg.currProject
+            section_ [class_ "h-full overflow-y-hidden grow flex flex-col"] do
+              when (sess.persistentSession.user.getUser.email == "hello@monoscope.tech") loginBanner
+              -- Empty navbar anchor so OOB morph can remove non-settings navbar
+              if bcfg.isSettingsPage || bcfg.hideNavbar
+                then nav_ [id_ "main-navbar", class_ "hidden"] ""
+                else navbar bcfg (foldMap (\p -> menu sess.lang p.id) bcfg.currProject)
+              main_ [id_ "main-content", class_ "overflow-y-auto h-full grow"] do
+                whenJust bcfg.currProject (\p -> freeTierUsageBanner p.id.toText bcfg.freeTierStatus)
+                if bcfg.isSettingsPage
+                  then maybe child (\p -> settingsWrapper p.id bcfg.pageTitle child) bcfg.currProject
+                  else child
+              div_ [class_ "h-0 shrink"] do
+                Components.drawer_ "global-data-drawer" (isJust bcfg.globalDrawerContent) Nothing bcfg.globalDrawerContent ""
+                template_ [id_ "loader-tmp"] Components.drawerLoadingSkeleton_
+                -- Modal for copying widgets to other dashboards
+                Components.modal_ "dashboards-modal" "" do
+                  input_ [type_ "hidden", id_ "dashboards-modal-widget-id", name_ "widget_id"]
+                  input_ [type_ "hidden", id_ "dashboards-modal-source-dashboard-id", name_ "source_dashboard_id"]
+                  div_
+                    [ id_ "dashboards-modal-content"
+                    , class_ "dashboards-list space-y-3 max-h-160 overflow-y-auto"
+                    , hxGet_ ("/p/" <> foldMap (.id.toText) bcfg.currProject <> "/dashboards?embedded=true")
+                    , hxTrigger_ "loadDashboards"
+                    , hxSelect_ "#itemsListPage"
+                    , hxSwap_ "innerHTML"
+                    , hxVals_ "js:{copy_widget_id: document.getElementById('dashboards-modal-widget-id').value, source_dashboard_id: document.getElementById('dashboards-modal-source-dashboard-id').value}"
+                    ]
+                    $ replicateM_ 3 (div_ [class_ "skeleton h-16 w-full"] "")
 
       -- Mobile nav backdrop (at body level, after section, so it paints on top)
       label_ [term "for" "mobile-nav-toggle", class_ "fixed inset-0 bg-black/50 backdrop-blur-xs z-40 hidden group-has-[#mobile-nav-toggle:checked]/pg:max-md:block cursor-default", Aria.label_ "Close menu"] ""
-      unless (bcfg.config.environment == Dev) $ externalHeadScripts_ bcfg.config
+      when isProd $ externalHeadScripts_ bcfg.config
       globalTemplates_
-      unless (bcfg.config.environment == Dev) $ script_ [async_ "true", src_ "https://www.googletagmanager.com/gtag/js?id=AW-11285541899"] ("" :: Text)
+      when isProd $ script_ [async_ "true", src_ "https://www.googletagmanager.com/gtag/js?id=AW-11285541899"] ("" :: Text)
       script_
         [text|
           window.dataLayer = window.dataLayer || [];
@@ -584,36 +577,23 @@ bodyWrapper bcfg child = do
           }
 
           
-          // Dark mode toggle function - disables transitions during theme switch
-          function toggleDarkMode() {
-            const currentTheme = document.body.getAttribute('data-theme');
-            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+          function syncThemeToggles(theme) {
+            ['dark-mode-toggle', 'dark-mode-toggle-swap', 'dark-mode-toggle-navbar'].forEach(id => {
+              const el = document.getElementById(id);
+              if (el) el.checked = theme === 'dark';
+            });
+          }
 
-            // Disable transitions during theme switch to prevent flash
+          // Dark mode toggle - disables transitions during theme switch to prevent flash
+          function toggleDarkMode() {
+            const newTheme = document.body.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
             document.documentElement.classList.add('no-transition');
             document.body.setAttribute('data-theme', newTheme);
             setCookie('theme', newTheme, 365);
-
-            // Update all toggle states
-            const toggle = document.getElementById('dark-mode-toggle');
-            const swapToggle = document.getElementById('dark-mode-toggle-swap');
-            const navbarToggle = document.getElementById('dark-mode-toggle-navbar');
-            if (toggle) {
-              toggle.checked = newTheme === 'dark';
-            }
-            if (swapToggle) {
-              swapToggle.checked = newTheme === 'dark';
-            }
-            if (navbarToggle) {
-              navbarToggle.checked = newTheme === 'dark';
-            }
-
-            // Re-enable transitions after paint
-            requestAnimationFrame(() => {
-              document.documentElement.classList.remove('no-transition');
-            });
+            syncThemeToggles(newTheme);
+            requestAnimationFrame(() => document.documentElement.classList.remove('no-transition'));
           }
-          
+
           // System theme detection - respect OS preference if user hasn't manually set
           (function() {
             const savedTheme = getCookie('theme');
@@ -631,30 +611,15 @@ bodyWrapper bcfg child = do
             });
           })();
 
-          // Initialize toggle state on page load
-          window.addEventListener('DOMContentLoaded', function() {
-            // Set initial toggle state based on data-theme attribute
-            const currentTheme = document.body.getAttribute('data-theme');
-            const toggle = document.getElementById('dark-mode-toggle');
-            const swapToggle = document.getElementById('dark-mode-toggle-swap');
-            const navbarToggle = document.getElementById('dark-mode-toggle-navbar');
-            if (toggle) {
-              toggle.checked = currentTheme === 'dark';
-            }
-            if (swapToggle) {
-              swapToggle.checked = currentTheme === 'dark';
-            }
-            if (navbarToggle) {
-              navbarToggle.checked = currentTheme === 'dark';
-            }
-          });
+          window.addEventListener('DOMContentLoaded', () => syncThemeToggles(document.body.getAttribute('data-theme')));
       |]
-      let email = show $ maybe "" ((.persistentSession.user.getUser.email)) bcfg.sessM
-      let name = maybe "" (\sess -> sess.persistentSession.user.getUser.firstName <> " " <> sess.persistentSession.user.getUser.lastName) bcfg.sessM
-      let pidT = maybe "" (.id.toText) bcfg.currProject
-      let pTitle = maybe "" (.title) bcfg.currProject
-      let telemetryApiKey = bcfg.config.telemetryApiKey
-      let telemetryServiceName = bcfg.config.telemetryServiceName
+      let userM = (.persistentSession.user.getUser) <$> bcfg.sessM
+          email = show $ maybe "" (.email) userM
+          name = maybe "" (\u -> u.firstName <> " " <> u.lastName) userM
+          pidT = foldMap (.id.toText) bcfg.currProject
+          pTitle = foldMap (.title) bcfg.currProject
+          telemetryApiKey = bcfg.config.telemetryApiKey
+          telemetryServiceName = bcfg.config.telemetryServiceName
       script_
         [text| window.addEventListener("load", (event) => {
                   if (typeof posthog !== 'undefined' && posthog && posthog.people && posthog.people.set_once) {
@@ -759,51 +724,37 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
       -- Collapsed: search icon
       button_ [class_ "group-has-[#sidenav-toggle:checked]/pg:hidden flex items-center justify-center p-2 rounded-lg border border-strokeWeak hover:border-strokeStrong hover:bg-fillWeak text-textWeak cursor-pointer transition-colors", searchScript, Aria.label_ "Search", term "data-tippy-placement" "right", term "data-tippy-content" "Search (\x2318K)"] do
         faSprite_ "magnifying-glass" "regular" "w-4 h-4"
-    let mainNavActiveStyles = "[&_.main-nav-link.active]:bg-fillBrand-weak [&_.main-nav-link.active]:text-textStrong [&_.main-nav-link.active]:font-medium [&_.main-nav-link.active]:border-l-strokeBrand-strong [&_.main-nav-link.active]:border-y-transparent [&_.main-nav-link.active]:border-r-transparent [&_.main-nav-link.active_.nav-icon]:text-textBrand"
-    nav_ [id_ "main-sidenav", class_ $ "mt-2 flex flex-col gap-1 text-textWeak " <> mainNavActiveStyles, [__|on click set #mobile-nav-toggle.checked to false end on htmx:pushedIntoHistory from window or popstate from window settle then set p to window.location.pathname then for link in .main-nav-link set h to link.getAttribute('href') set extra to (link.getAttribute('data-match') or '') set matched to (p is h or p.startsWith(h + '/')) if not matched and extra is not '' for m in extra.split(' ') if m is not '' and (p is m or p.startsWith(m + '/')) set matched to true end end end if matched add .active to link else remove .active from link end end|]] do
+    nav_ [id_ "main-sidenav", class_ "mt-2 flex flex-col gap-1 text-textWeak [&_.main-nav-link.active]:bg-fillBrand-weak [&_.main-nav-link.active]:text-textStrong [&_.main-nav-link.active]:font-medium [&_.main-nav-link.active]:border-l-strokeBrand-strong [&_.main-nav-link.active]:border-y-transparent [&_.main-nav-link.active]:border-r-transparent [&_.main-nav-link.active_.nav-icon]:text-textBrand", [__|on click set #mobile-nav-toggle.checked to false end on htmx:pushedIntoHistory from window or popstate from window settle then set p to window.location.pathname then for link in .main-nav-link set h to link.getAttribute('href') set extra to (link.getAttribute('data-match') or '') set matched to (p is h or p.startsWith(h + '/')) if not matched and extra is not '' for m in extra.split(' ') if m is not '' and (p is m or p.startsWith(m + '/')) set matched to true end end end if matched add .active to link else remove .active from link end end|]] do
       let navLinkCls activeCls = "main-nav-link relative group-has-[#sidenav-toggle:checked]/pg:px-4 gap-3 py-2 flex no-wrap shrink-0 justify-center group-has-[#sidenav-toggle:checked]/pg:justify-start items-center rounded-lg overflow-x-hidden overflow-y-hidden hover:bg-fillWeak hover:text-textStrong transition-colors duration-100" <> activeCls
-      let pidTxt = project.id.toText
-          flyoutCls = "invisible opacity-0 group-hover/flyout:visible group-hover/flyout:opacity-100 absolute left-full top-0 ml-1 z-50 min-w-44 bg-bgRaised border border-strokeWeak rounded-lg shadow-md py-1.5 transition-all duration-150"
+          pidTxt = project.id.toText
           flyoutLink (linkText, link) =
-            a_
-              ( [ href_ link
-                , class_ "flex gap-2.5 items-center px-3 py-2 text-sm text-textWeak hover:bg-fillWeak hover:text-textStrong whitespace-nowrap"
-                ]
-                  <> navTabAttrs
-              )
+            a_ ([href_ link, class_ "flex gap-2.5 items-center px-3 py-2 text-sm text-textWeak hover:bg-fillWeak hover:text-textStrong whitespace-nowrap"] <> navTabAttrs)
               $ span_ [] (toHtml linkText)
-          renderNavItem mTitle mUrl fIcon flyoutItems = do
-            let isActive = maybe (pageTitle == mTitle) (== mTitle) menuItem
-                activeCls = if isActive then " active" else ""
+          renderNavItem mTitle mUrl fIcon = do
+            let activeCls = if maybe (pageTitle == mTitle) (== mTitle) menuItem then " active" else ""
+                flyoutItems = navFlyoutItems pidTxt mTitle
                 hasFlyout = not (null flyoutItems)
-                extraMatch
-                  | "/api_catalog" `T.isSuffixOf` mUrl = [term "data-match" $ "/p/" <> pidTxt <> "/endpoints"]
-                  | otherwise = []
+                extraMatch = [term "data-match" ("/p/" <> pidTxt <> "/endpoints") | "/api_catalog" `T.isSuffixOf` mUrl]
             (if hasFlyout then div_ [class_ "relative group/flyout"] else id) do
               a_
-                ( [ href_ mUrl
-                  , class_ $ navLinkCls activeCls
-                  ]
+                ( [href_ mUrl, class_ $ navLinkCls activeCls]
                     <> extraMatch
-                    <> if hasFlyout
-                      then []
-                      else
-                        [term "data-tippy-placement" "right", term "data-tippy-content" mTitle]
-                          <> navTabAttrs
+                    <> if hasFlyout then [] else [term "data-tippy-placement" "right", term "data-tippy-content" mTitle] <> navTabAttrs
                 )
                 do
                   faSprite_ fIcon "regular" "nav-icon w-4 h-4 shrink-0"
                   span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block whitespace-nowrap truncate"] $ toHtml mTitle
                   when hasFlyout $ span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block ml-auto text-textWeak"] $ faSprite_ "chevron-right" "regular" "w-3 h-3"
-              when hasFlyout $ div_ [class_ flyoutCls] $ mapM_ flyoutLink flyoutItems
-      let items = menu sess.lang project.id
-          (primary, secondary) = splitAt 2 items
-      mapM_ (\(mTitle, mUrl, fIcon) -> renderNavItem mTitle mUrl fIcon (navFlyoutItems pidTxt mTitle)) primary
+              when hasFlyout
+                $ div_ [class_ "invisible opacity-0 group-hover/flyout:visible group-hover/flyout:opacity-100 absolute left-full top-0 ml-1 z-50 min-w-44 bg-bgRaised border border-strokeWeak rounded-lg shadow-md py-1.5 transition-all duration-150"]
+                $ mapM_ flyoutLink flyoutItems
+      let (primary, secondary) = splitAt 2 $ menu sess.lang project.id
+      mapM_ (uncurry3 renderNavItem) primary
       div_ [class_ "border-t border-strokeWeak/50 my-1.5 mx-2"] ""
-      mapM_ (\(mTitle, mUrl, fIcon) -> renderNavItem mTitle mUrl fIcon (navFlyoutItems pidTxt mTitle)) secondary
+      mapM_ (uncurry3 renderNavItem) secondary
       onboardingChecklist_ project
       div_ [class_ "border-t border-strokeWeak my-2"] ""
-      renderNavItem "Settings" ("/p/" <> pidTxt <> "/settings") "gear" (map (\(_, t, l) -> (t, l)) $ navBottomList pidTxt)
+      renderNavItem "Settings" ("/p/" <> pidTxt <> "/settings") "gear"
       a_
         [ href_ "https://monoscope.tech/docs/"
         , target_ "blank"
@@ -819,12 +770,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
 
   div_ [class_ "py-2.5 px-2 group-has-[#sidenav-toggle:checked]/pg:px-3 border-t border-strokeWeak flex flex-col gap-1"] do
     let currUser = sess.persistentSession.user.getUser
-        userIdentifier =
-          if currUser.firstName /= "" || currUser.lastName /= ""
-            then currUser.firstName <> " " <> currUser.lastName
-            else CI.original currUser.email
-        avatarUrl = "/api/avatar/" <> currUser.id.toText
-
+        userIdentifier = bool (CI.original currUser.email) (currUser.firstName <> " " <> currUser.lastName) (currUser.firstName /= "" || currUser.lastName /= "")
     -- Dark mode toggle
     -- Expanded: sun + toggle + moon
     label_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex cursor-pointer gap-2 items-center px-2 py-2 rounded-lg hover:bg-fillWeak transition-colors duration-100", Aria.label_ "Toggle dark mode"] do
@@ -847,7 +793,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
             <> popoverTrigger_ "user-menu-pop"
         )
         do
-          img_ [class_ "w-8 h-8 rounded-full bg-fillPress shrink-0", src_ avatarUrl, alt_ userIdentifier, term "data-tippy-placement" "right", term "data-tippy-content" userIdentifier]
+          img_ [class_ "w-8 h-8 rounded-full bg-fillPress shrink-0", src_ $ "/api/avatar/" <> currUser.id.toText, alt_ userIdentifier, term "data-tippy-placement" "right", term "data-tippy-content" userIdentifier]
           span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex items-center gap-1 overflow-hidden flex-1"] do
             span_ [class_ "truncate text-sm"] $ toHtml userIdentifier
             faSprite_ "chevron-down" "regular" "w-3 h-3 text-textWeak shrink-0 ml-auto transition-transform duration-150 rotate-180 group-focus-within/user:rotate-0"
@@ -857,60 +803,52 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
           div_ [class_ "text-textWeak text-xs truncate"] $ toHtml $ CI.original currUser.email
         div_ [class_ "divider my-0"] ""
         li_ [class_ "menu-title px-3 pt-2"] $ toHtml $ I18n.t sess.lang "nav.language"
-        li_ [] $ a_
-          [ href_ "/set_language/en?redirect_to=/"
-          , class_ "flex items-center justify-between"
-          , -- Rewrite the redirect to the current path on click so the user
-            -- stays where they were instead of being bounced to /.
-            onclick_ "this.href='/set_language/en?redirect_to='+encodeURIComponent(location.pathname+location.search);return true;"
-          ]
-          do
-            toHtml $ I18n.t sess.lang "nav.language.english"
-            when (sess.lang == I18n.En) $ faSprite_ "check" "regular" "w-3 h-3"
-        li_ [] $ a_
-          [ href_ "/set_language/es?redirect_to=/"
-          , class_ "flex items-center justify-between"
-          , onclick_ "this.href='/set_language/es?redirect_to='+encodeURIComponent(location.pathname+location.search);return true;"
-          ]
-          do
-            toHtml $ I18n.t sess.lang "nav.language.spanish"
-            when (sess.lang == I18n.Es) $ faSprite_ "check" "regular" "w-3 h-3"
+        -- onclick rewrites the redirect to the current path so the user stays put instead of bouncing to /.
+        let langLink code lang labelKey =
+              li_ [] $ a_
+                [ href_ $ "/set_language/" <> code <> "?redirect_to=/"
+                , class_ "flex items-center justify-between"
+                , onclick_ $ "this.href='/set_language/" <> code <> "?redirect_to='+encodeURIComponent(location.pathname+location.search);return true;"
+                ]
+                do
+                  toHtml $ I18n.t sess.lang labelKey
+                  when (sess.lang == lang) $ faSprite_ "check" "regular" "w-3 h-3"
+        langLink "en" I18n.En "nav.language.english"
+        langLink "es" I18n.Es "nav.language.spanish"
         div_ [class_ "divider my-0"] ""
         li_ [] $ a_ [href_ "/logout", class_ "flex items-center gap-2 text-textError", [__| on click js posthog.reset(); end |]] do
           faSprite_ "arrow-right-from-bracket" "regular" "w-4 h-4"
           toHtml $ I18n.t sess.lang "nav.logout"
 
 
--- mapM_ renderNavBottomItem $ navBottomList project.id.toText
-
-navbar :: Maybe Projects.Project -> [(Text, Text, Text)] -> Projects.User -> Maybe Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
-navbar projectM menuL currUser prePageTitle pageTitle pageTitleSuffix pageTitleMonadId pageTitleSuffixModalId docsLink tabsM pageActionsM =
+navbar :: BWConfig -> [(Text, Text, Text)] -> Html ()
+navbar bcfg menuL =
   nav_ [id_ "main-navbar", class_ "w-full max-md:px-2 max-md:py-1.5 px-4 py-2 flex flex-row flex-wrap border-b border-strokeWeak items-center"] do
     div_ [class_ "flex-1 flex items-center text-textStrong gap-1 min-w-0 overflow-hidden"] do
-      whenJust projectM \_ -> do
+      whenJust bcfg.currProject \_ -> do
         label_ [term "for" "mobile-nav-toggle", class_ "md:!hidden max-md:flex group-has-[#mobile-nav-toggle:checked]/pg:max-md:!hidden cursor-pointer text-strokeStrong p-2 -m-2 items-center justify-center", Aria.label_ "Open menu"] $ faSprite_ "side-chevron-left-in-box" "regular" "h-5 w-5 rotate-180 pointer-events-none"
         div_ [class_ "md:!hidden max-md:block group-has-[#mobile-nav-toggle:checked]/pg:max-md:!hidden w-px h-5 bg-strokeWeak ml-2"] ""
-      whenJust prePageTitle \pt -> whenJust (find (\a -> fst3 a == pt) menuL) \(_, url, icon) -> do
+      whenJust bcfg.prePageTitle \pt -> whenJust (find ((== pt) . fst3) menuL) \(_, url, icon) -> do
         a_ ([class_ "max-md:hidden p-1 hover:bg-fillWeak inline-flex items-center justify-center gap-1 rounded-md text-sm", href_ url] <> navTabAttrs) do
           faSprite_ icon "regular" "w-4 h-4 text-strokeStrong"
           toHtml pt
         faSprite_ "chevron-right" "regular" "w-3 h-3 max-md:hidden"
-      let targetPage = Components.getTargetPage pageTitle
-          titleBase = "font-normal text-xl max-md:text-base p-1 rounded-md leading-none truncate"
-      if targetPage /= "" && isJust pageTitleSuffix
-        then whenJust projectM \p -> a_ ([class_ $ titleBase <> " cursor-pointer hover:bg-fillWeak", href_ $ "/p/" <> p.id.toText <> targetPage, id_ "pageTitleText"] <> navTabAttrs) $ toHtml pageTitle
-        else label_ [class_ $ titleBase <> " cursor-pointer hover:bg-fillWeak", Lucid.for_ $ maybeToMonoid pageTitleMonadId, id_ "pageTitleText"] $ toHtml pageTitle
+      let targetPage = Components.getTargetPage bcfg.pageTitle
+          titleBase = "font-normal text-xl max-md:text-base p-1 rounded-md leading-none truncate cursor-pointer hover:bg-fillWeak"
+      if targetPage /= "" && isJust bcfg.pageTitleSuffix
+        then whenJust bcfg.currProject \p -> a_ ([class_ titleBase, href_ $ "/p/" <> p.id.toText <> targetPage, id_ "pageTitleText"] <> navTabAttrs) $ toHtml bcfg.pageTitle
+        else label_ [class_ titleBase, Lucid.for_ $ maybeToMonoid bcfg.pageTitleModalId, id_ "pageTitleText"] $ toHtml bcfg.pageTitle
       -- Show tab/suffix in breadcrumbs if present (with ID for htmx out-of-band updates)
-      span_ [id_ "pageTitleSuffix", class_ "max-md:hidden flex items-center gap-1"] $ whenJust pageTitleSuffix \suffix -> do
+      span_ [id_ "pageTitleSuffix", class_ "max-md:hidden flex items-center gap-1"] $ whenJust bcfg.pageTitleSuffix \suffix -> do
         faSprite_ "chevron-right" "regular" "w-3 h-3"
         -- Make tab name clickable if modal ID is provided
-        case pageTitleSuffixModalId of
+        case bcfg.pageTitleSuffixModalId of
           Just modalId -> label_ [class_ "font-normal text-xl p-1 leading-none text-textWeak cursor-pointer hover:bg-fillWeak rounded-md", Lucid.for_ modalId, id_ "pageTitleSuffixText"] $ toHtml suffix
           Nothing -> span_ [class_ "font-normal text-xl p-1 leading-none text-textWeak", id_ "pageTitleSuffixText"] $ toHtml suffix
-      whenJust docsLink \link -> a_ [class_ "max-md:hidden text-iconBrand -mt-1", href_ link, Aria.label_ "Open Documentation", term "data-tippy-placement" "right", term "data-tippy-content" "Open Documentation"] $ faSprite_ "circle-question" "regular" "w-4 h-4"
-    whenJust tabsM $ div_ [class_ $ bool "" "max-md:order-last max-md:w-full max-md:pt-1" (isJust pageActionsM)]
-    div_ [class_ $ "flex-1 flex items-center justify-end gap-2 text-sm" <> maybe " max-md:hidden" (const "") pageActionsM] do
-      whenJust pageActionsM id
+      whenJust bcfg.docsLink \link -> a_ [class_ "max-md:hidden text-iconBrand -mt-1", href_ link, Aria.label_ "Open Documentation", term "data-tippy-placement" "right", term "data-tippy-content" "Open Documentation"] $ faSprite_ "circle-question" "regular" "w-4 h-4"
+    whenJust bcfg.navTabs $ div_ [class_ $ bool "" "max-md:order-last max-md:w-full max-md:pt-1" (isJust bcfg.pageActions)]
+    div_ [class_ $ "flex-1 flex items-center justify-end gap-2 text-sm" <> bool " max-md:hidden" "" (isJust bcfg.pageActions)]
+      $ fold bcfg.pageActions
 
 
 globalTemplates_ :: Html ()
@@ -918,14 +856,13 @@ globalTemplates_ = do
   template_ [id_ "log-item-context-menu-tmpl"] do
     ul_ [class_ "log-item-cloned-menu dropdown-content z-50 menu p-2 shadow-sm bg-bgRaised rounded-box w-96 max-w-[92vw] absolute", tabindex_ "0"] do
       fieldContextMenuItems_ DynamicField fieldMenuActions
-  template_ [id_ "successToastTmpl"] do
-    div_ [role_ "alert", class_ "alert alert-success max-md:w-full md:w-96 cursor-pointer toast-animate", [__|init wait for click or 30s then transition my opacity to 0 then remove me|]] do
-      faSprite_ "circle-check" "solid" "stroke-current shrink-0 w-6 h-6"
-      span_ [class_ "title"] "Something succeeded"
-  template_ [id_ "errorToastTmpl"] do
-    div_ [role_ "alert", class_ "alert alert-error max-md:w-full md:w-96 cursor-pointer toast-animate", [__|init wait for click or 30s then transition my opacity to 0 then remove me|]] do
-      faSprite_ "circle-exclamation" "solid" "stroke-current shrink-0 w-6 h-6"
-      span_ [class_ "title"] "Something failed"
+  let toastTmpl tmplId variant icon fallback =
+        template_ [id_ tmplId]
+          $ div_ [role_ "alert", class_ $ "alert " <> variant <> " max-md:w-full md:w-96 cursor-pointer toast-animate", [__|init wait for click or 30s then transition my opacity to 0 then remove me|]] do
+            faSprite_ icon "solid" "stroke-current shrink-0 w-6 h-6"
+            span_ [class_ "title"] fallback
+  toastTmpl "successToastTmpl" "alert-success" "circle-check" "Something succeeded"
+  toastTmpl "errorToastTmpl" "alert-error" "circle-exclamation" "Something failed"
   section_ [class_ "fixed top-0 right-0 z-50 pt-14 pr-5 max-md:left-0 max-md:px-4 space-y-3 pointer-events-none [&>*]:pointer-events-auto", id_ "toastsParent"] ""
   script_
     [type_ "text/javascript"]
@@ -958,13 +895,11 @@ loginBanner = do
 
 
 settingsWrapper :: Projects.ProjectId -> Text -> Html () -> Html ()
-settingsWrapper pid current pageHtml = do
-  let
-    navActiveStyles = "[&_.settings-nav-link]:hover:bg-fillWeak [&_.settings-nav-link]:text-textWeak [&_.settings-nav-link.active]:bg-fillBrand-weak [&_.settings-nav-link.active]:text-textBrand [&_.settings-nav-link.active]:hover:bg-fillBrand-weak"
+settingsWrapper pid current pageHtml =
   section_ [class_ "flex max-md:flex-col h-full w-full"] do
     nav_ [id_ "settings-nav", class_ "md:w-52 shrink-0 md:h-full max-md:px-3 max-md:py-2.5 p-4 md:pt-8 max-md:border-b max-md:border-b-strokeWeak md:border-r md:border-r-strokeWeak max-md:overflow-x-auto max-md:scrollbar-hide", term "preload" "mouseover"] do
       h1_ [class_ "text-lg pl-3 font-semibold text-textStrong max-md:hidden"] "Settings"
-      ul_ [class_ $ "flex max-md:flex-row max-md:flex-nowrap md:flex-col md:mt-4 gap-0.5 w-full " <> navActiveStyles] do
+      ul_ [class_ "flex max-md:flex-row max-md:flex-nowrap md:flex-col md:mt-4 gap-0.5 w-full [&_.settings-nav-link]:hover:bg-fillWeak [&_.settings-nav-link]:text-textWeak [&_.settings-nav-link.active]:bg-fillBrand-weak [&_.settings-nav-link.active]:text-textBrand [&_.settings-nav-link.active]:hover:bg-fillBrand-weak"] do
         li_ [class_ "md:hidden shrink-0"]
           $ label_ [term "for" "mobile-nav-toggle", class_ "flex items-center px-2.5 py-2 rounded-lg cursor-pointer text-strokeStrong hover:bg-fillWeak", Aria.label_ "Open menu"]
           $ faSprite_ "side-chevron-left-in-box" "regular" "shrink-0 h-4.5 w-4.5 rotate-180"
@@ -992,6 +927,7 @@ navFlyoutItems pidTxt = \case
   "API Catalog" -> [("Incoming", p "/api_catalog?request_type=Incoming"), ("Outgoing", p "/api_catalog?request_type=Outgoing")]
   "Issues" -> [("Inbox", p "/issues?filter=Inbox"), ("Acknowledged", p "/issues?filter=Acknowledged"), ("Archived", p "/issues?filter=Archived")]
   "Monitors" -> [("Active", p "/monitors?filter=Active"), ("Inactive", p "/monitors?filter=Inactive"), ("New Monitor", p "/log_explorer#create-alert-toggle")]
+  "Settings" -> [(t, l) | (_, t, l) <- navBottomList pidTxt]
   _ -> []
   where
     p path = "/p/" <> pidTxt <> path
@@ -1037,29 +973,12 @@ externalHeadScripts_ config = do
             window.dataLayer = window.dataLayer || [];
             function gtag(){{dataLayer.push(arguments);}}
             gtag('js', new Date());
-            gtag('config', '{conversionId}');
-
-            function gtag_report_conversion(url) {{
-              var callback = function () {{
-                if (typeof(url) != 'undefined') {{
-                  window.location = url;
-                }}
-              }};
-              gtag('event', 'conversion', {{
-                  'send_to': '{conversionId}/IUBqCKOA-8sYEIvoroUq',
-                  'event_callback': callback
-              }});
-              return false;
-            }} |]
+            gtag('config', '{conversionId}'); |]
 
   -- Facebook Pixel Code
   when (isJust config.facebookPixelId1 || isJust config.facebookPixelId2) $ do
-    let pixelInitScript =
-          mconcat
-            $ catMaybes
-              [ config.facebookPixelId1 <&> \pixelId -> [fmt|fbq('init', '{pixelId}'); fbq('track', 'PageView');|]
-              , config.facebookPixelId2 <&> \pixelId -> [fmt|fbq('init', '{pixelId}'); fbq('track', 'PageView');|]
-              ]
+    let fbInit pixelId = [fmt|fbq('init', '{pixelId}'); fbq('track', 'PageView');|]
+        pixelInitScript = foldMap fbInit $ catMaybes [config.facebookPixelId1, config.facebookPixelId2]
     script_
       [fmt|
           setTimeout(function(){{

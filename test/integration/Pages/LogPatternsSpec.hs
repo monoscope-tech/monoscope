@@ -2,6 +2,7 @@ module Pages.LogPatternsSpec (spec) where
 
 import BackgroundJobs qualified
 import Data.Pool (withResource)
+import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, zonedTimeToUTC)
 import Effectful.Time qualified as Time
 import Data.UUID qualified as UUID
@@ -756,3 +757,28 @@ spec = sequential $ aroundAll withTestResources do
       Just p2 <- runHasqlEffect tr $ LogPatterns.getLogPatternByHash pid srcField h
       p2.state `shouldBe` LPSAcknowledged
       fmap zonedTimeToUTC p2.acknowledgedAt `shouldBe` Just (addUTCTime (8 * 86400) frozenTime)
+
+    -- Regression: showRate already appends "/hr"; the title must not append a second one ("5/hr/hr").
+    it "16. rateChangeIssueTitle_singleHrSuffix" \tr -> do
+      let lp =
+            LogPatterns.LogPatternWithRate
+              { patternId = LogPatterns.LogPatternId 0
+              , projectId = pid
+              , logPattern = "timeout calling <SVC>"
+              , patternHash = "hr-suffix-title-001"
+              , sourceField = "body"
+              , serviceName = Just "checkout"
+              , logLevel = Just "error"
+              , sampleMessage = Nothing
+              , baselineState = BSEstablished
+              , baselineMean = Just 2
+              , baselineMad = Just 1
+              , currentHourCount = 5
+              , pendingAnomalyDirection = Nothing
+              , pendingAnomalyDetectedAt = Nothing
+              , isError = True
+              }
+          sr = Issues.SpikeResult{currentRate = 5, mean = 2, mad = 1, zScore = 9, direction = LogPatterns.Spike}
+      issue <- runTestBg frozenTime tr $ Issues.createLogPatternRateChangeIssue pid lp sr
+      issue.title `shouldSatisfy` T.isInfixOf "(5/hr vs 2/hr)"
+      issue.title `shouldSatisfy` (not . T.isInfixOf "/hr/hr")
