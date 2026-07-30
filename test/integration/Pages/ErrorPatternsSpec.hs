@@ -548,11 +548,13 @@ spec = sequential $ aroundAll withTestResources do
               discordNotifs1 = [dd | DiscordNotification dd <- notifs1]
           length slackNotifs1 `shouldSatisfy` (>= 1)
           length discordNotifs1 `shouldSatisfy` (>= 1)
-          -- Slack payload should mention the error type and link to its trace.
+          -- Slack payload should mention the error type and carry the "View trace"
+          -- deep link. The link filters Log Explorer on the `trace_id` KQL alias
+          -- (Parser.Expr.outputFieldAliases), not the raw `context.trace_id` column.
           forM_ slackNotifs1 \sd -> do
             let payloadText = show @Text sd.payload
-            T.isInfixOf pat.errorType payloadText `shouldBe` True
-            T.isInfixOf "context.trace_id" payloadText `shouldBe` True
+            payloadText `shouldSatisfy` T.isInfixOf pat.errorType
+            payloadText `shouldSatisfy` T.isInfixOf "log_explorer?query=trace_id"
 
           pat1 <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
           let slackTs1 = pat1 >>= (.slackThreadTs)
