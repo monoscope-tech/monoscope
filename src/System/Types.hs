@@ -160,7 +160,7 @@ effToServantHandlerTest = effToServantHandlerTestHTTP (runHTTPGolden "./tests/go
 
 -- | 'effToServantHandlerTest' with a caller-chosen HTTP interpreter, e.g.
 -- 'Data.Effectful.Wreq.runHTTPRecord' to assert on outgoing request payloads.
-effToServantHandlerTestHTTP :: (forall x hes. IOE :> hes => Eff (HTTP : hes) x -> Eff hes x) -> TestClock -> IORef [UUID.UUID] -> AuthContext -> Log.Logger -> TracerProvider -> ATBaseCtx a -> Servant.Handler a
+effToServantHandlerTestHTTP :: (forall x hes. IOE :> hes => Eff (HTTP ': hes) x -> Eff hes x) -> TestClock -> IORef [UUID.UUID] -> AuthContext -> Log.Logger -> TracerProvider -> ATBaseCtx a -> Servant.Handler a
 effToServantHandlerTestHTTP http clock uuidRef env logger tp app =
   app
     & ELLM.runLLMGolden "./tests/golden/"
