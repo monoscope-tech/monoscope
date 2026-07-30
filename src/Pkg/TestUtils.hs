@@ -899,7 +899,7 @@ runAsBaseRecordingHTTP TestResources{..} k = do
     ( k
         & effToServantHandlerTestHTTP (runHTTPRecord reqsRef) trTestClock uuidRef trATCtx trLogger tp
         & ServantS.runHandler
-      )
+    )
       <&> fromRightShow
   reqs <- reverse <$> readIORef reqsRef
   pure (reqs, r)
