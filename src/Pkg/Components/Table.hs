@@ -339,7 +339,7 @@ instance ToHtml TabFilter where
         let uri = deleteParam "filter" tf.currentURL
         forM_ tf.options \opt ->
           a_
-            ( [ href_ $ uri <> "&filter=" <> toUriStr opt.name
+            ( [ href_ $ withQuery uri ("filter=" <> toUriStr opt.name)
               , role_ "tab"
               , class_ $ "tab h-auto! " <> if opt.name == tf.current then "tab-active text-textStrong" else ""
               ]
@@ -650,7 +650,7 @@ renderSortMenu :: SortConfig -> Html ()
 renderSortMenu sortCfg = do
   div_ [class_ "inline-block"]
     $ sortDropdown_ "sortMenuDiv" [hxBoost_ "true", class_ "dropdown dropdown-end bg-bgRaised p-1 text-sm border border-strokeWeak mt-2 w-72 origin-top-right rounded-md shadow-lg"] sortCfg.options sortCfg.current sortCfg.current
-    $ \k -> [href_ $ deleteParam "sort" sortCfg.currentURL <> "&sort=" <> toUriStr k]
+    $ \k -> [href_ $ withQuery (deleteParam "sort" sortCfg.currentURL) ("sort=" <> toUriStr k)]
   sortLoader_
 
 

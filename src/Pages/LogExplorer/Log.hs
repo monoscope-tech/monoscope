@@ -70,7 +70,7 @@ import Pkg.Parser (defaultQueryLimit, pSource, parseQueryToAST, toQText)
 import Pkg.Parser.Stats (Section (TakeCommand))
 import Pkg.SchemaLearning.Catalog (FacetData (..), FacetSummary (..), FacetValue (..))
 import Relude hiding (ask)
-import Relude.Extra.Foldable1 (minimum1)
+import Relude.Extra.Foldable1 (maximum1, minimum1)
 import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
@@ -1119,7 +1119,7 @@ patternsHeader_ rowsV totalPatterns baseHourEpoch = do
       rawClean = sumBk (filter (not . (.isError)) rows)
       rawErr = sumBk errRows
       active = [i | (i, t) <- zip [0 :: Int ..] (zipWith (+) rawClean rawErr), t > 0]
-      window = viaNonEmpty (\a -> (L.minimum a, L.maximum a)) active
+      window = viaNonEmpty (\a -> (minimum1 a, maximum1 a)) active
       slice xs = maybe [] (\(lo, hi) -> take (hi - lo + 1) $ drop lo xs) window
       cleanBk = slice rawClean
       errBk = slice rawErr

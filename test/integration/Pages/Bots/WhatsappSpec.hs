@@ -2,8 +2,12 @@ module Pages.Bots.WhatsappSpec (spec) where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KEM
+import Data.ByteString.Lazy qualified as LBS
+import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Vector qualified as V
+import Database.PostgreSQL.Simple qualified as PGS
+import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Pages.Bots.BotFixtures
 import Pages.Bots.BotTestHelpers
 import Pages.Bots.Whatsapp (BodyType (..), TwilioWhatsAppMessage (..), getWhatsappList, parseWhatsappBody, whatsappIncomingPostH)
@@ -74,6 +78,23 @@ spec = around withTestResources do
         KEM.lookup "7" (varsAt 0) `shouldBe` Just (AE.String "dashboard___2")
         -- Page 1 (skip=2): window actually advances to "c".
         KEM.lookup "2" (varsAt 2) `shouldBe` Just (AE.String "c")
+
+      -- Same regression, end-to-end: the handler (not just the parser/list
+      -- helpers) must thread the parsed skip into the Twilio template vars.
+      it "handler threads Load-More skip into the Twilio contentVariables" \tr -> do
+        let testPhone = getTestPhoneNumber tr
+        setupWhatsappNumber tr testPid testPhone
+        -- 6 dashboards: the skip=2 window still overflows, so the next Load-More
+        -- token must be dashboard___4; the hardcoded-0 bug would emit dashboard___2.
+        void $ withResource tr.trPool \conn ->
+          PGS.execute
+            conn
+            [sql|INSERT INTO projects.dashboards (project_id, created_by, title)
+                 SELECT ?, (SELECT id FROM users.users LIMIT 1), 'wa-dash-' || i FROM generate_series(1, 6) i|]
+            (PGS.Only testPid)
+        (reqs, _) <- runAsBaseRecordingHTTP tr $ whatsappIncomingPostH (twilioWhatsAppPrompt tr testPhone "dashboard___2")
+        let twilioBodies = [b | (u, b) <- reqs, "twilio" `T.isInfixOf` u]
+        twilioBodies `shouldSatisfy` any ("dashboard___4" `LBS.isInfixOf`)
 
     describe "Response format" do
       it "uses template-based responses" \_ -> do
