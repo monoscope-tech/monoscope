@@ -2,7 +2,7 @@ module Pages.Bots.WhatsappSpec (spec) where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KEM
-import Data.ByteString.Lazy qualified as LBS
+import Data.ByteString qualified as BS
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Vector qualified as V
@@ -94,7 +94,7 @@ spec = around withTestResources do
             (PGS.Only testPid)
         (reqs, _) <- runAsBaseRecordingHTTP tr $ whatsappIncomingPostH (twilioWhatsAppPrompt tr testPhone "dashboard___2")
         let twilioBodies = [b | (u, b) <- reqs, "twilio" `T.isInfixOf` u]
-        twilioBodies `shouldSatisfy` any ("dashboard___4" `LBS.isInfixOf`)
+        twilioBodies `shouldSatisfy` any (("dashboard___4" `BS.isInfixOf`) . toStrict)
 
     describe "Response format" do
       it "uses template-based responses" \_ -> do
