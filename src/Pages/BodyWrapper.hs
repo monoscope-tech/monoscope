@@ -116,6 +116,9 @@ onboardingChecklist_ project = do
                 span_ [class_ "truncate"] $ toHtml label
 
 
+type role PageCtx representational
+
+
 data PageCtx a = PageCtx
   { conf :: BWConfig
   , content :: a

@@ -353,6 +353,15 @@ instance ToHtml TabFilter where
 -- Shared bits
 
 -- | Append a query fragment to a url, picking @?@ or @&@.
+--
+-- The separator must be computed on the url as passed — single-select filters
+-- delete the target param first, so a page whose only param was the filter
+-- gets @?@ back, not a malformed @&@ (regression: /x&filter=bar):
+--
+-- >>> withQuery (deleteParam "filter" "/x?filter=old") "filter=bar"
+-- "/x?filter=bar"
+-- >>> withQuery "/x?a=1" "filter=bar"
+-- "/x?a=1&filter=bar"
 withQuery :: Text -> Text -> Text
 withQuery url q = url <> bool "?" "&" ("?" `T.isInfixOf` url) <> q
 

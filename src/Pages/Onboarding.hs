@@ -282,7 +282,7 @@ onboardingInfoPostH pid form = do
   addRespHeaders $ OnboardingInfoPost ()
 
 
--- | Merge new answers into a project's existing questions blob; existing keys win.
+-- | Merge new answers into a project's existing questions blob; new answers win on conflict.
 mergeQuestions :: Maybe AE.Value -> [(AE.Key, AE.Value)] -> HI.AsJsonb AE.Value
 mergeQuestions old kvs =
   HI.AsJsonb $ AE.Object $ KM.fromList kvs <> case old of

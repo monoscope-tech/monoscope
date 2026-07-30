@@ -190,7 +190,7 @@ readDashboardsFromDirectory dir = do
 readDashboardFile :: FilePath -> FilePath -> IO (Maybe Dashboard)
 readDashboardFile dir file = do
   raw <- try @SomeException $ readFileBS path
-  let parsed = first show raw >>= first show . Yml.decodeEither' :: Either String Dashboard
+  let parsed = first (("read error: " <>) . show) raw >>= first (("YAML error: " <>) . show) . Yml.decodeEither' :: Either String Dashboard
   parsed
     & either
       (\e -> Nothing <$ putStrLn ("Error loading dashboard " <> path <> ": " <> e))

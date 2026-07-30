@@ -264,6 +264,7 @@ updateBaselineBatch pid rows
 -- Pre-merges rows with the same (projectId, sourceField, hash) to avoid
 -- "ON CONFLICT DO UPDATE command cannot affect row a second time".
 upsertLogPatternBatch :: (DB es, Time :> es) => [UpsertPattern] -> Eff es Int64
+upsertLogPatternBatch [] = pure 0
 upsertLogPatternBatch ups = do
   now <- Time.currentTime
   sum <$> forM (cap <$> dedup ups) \u ->
