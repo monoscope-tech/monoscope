@@ -60,20 +60,13 @@ data ReplayPost = ReplayPost
   deriving anyclass (AE.FromJSON, ToSchema)
 
 
--- Helper function to publish to Pub/Sub using the queue service
-publishReplayEvent :: ReplayPost -> Projects.ProjectId -> ATBaseCtx (Either Text ())
-publishReplayEvent replayData pid = do
-  ctx <- Effectful.Reader.Static.ask @AuthContext
-  let messagePayload = AE.object ["events" AE..= replayData.events, "sessionId" AE..= replayData.sessionId, "projectId" AE..= pid, "timestamp" AE..= replayData.timestamp, "userId" AE..= replayData.userId, "userEmail" AE..= replayData.userEmail, "userName" AE..= replayData.userName]
-      attributes = HM.fromList [("eventType", "replay")]
-  case ctx.config.rrwebTopics of
-    [] -> pure $ Left "No rrweb pubsub topics configured"
-    (topicName : _) -> first ("Failed to publish replay event: " <>) <$> runSharedProducer ctx (publishJSONToKafka topicName messagePayload attributes)
-
-
 replayPostH :: Projects.ProjectId -> ReplayPost -> ATBaseCtx AE.Value
 replayPostH pid body = do
-  pubResult <- publishReplayEvent body pid
+  ctx <- Effectful.Reader.Static.ask @AuthContext
+  let messagePayload = AE.object ["events" AE..= body.events, "sessionId" AE..= body.sessionId, "projectId" AE..= pid, "timestamp" AE..= body.timestamp, "userId" AE..= body.userId, "userEmail" AE..= body.userEmail, "userName" AE..= body.userName]
+  pubResult <- case ctx.config.rrwebTopics of
+    [] -> pure $ Left "No rrweb pubsub topics configured"
+    (topicName : _) -> first ("Failed to publish replay event: " <>) <$> runSharedProducer ctx (publishJSONToKafka topicName messagePayload (HM.fromList [("eventType", "replay")]))
   pure $ AE.object $ ["sessionId" AE..= body.sessionId] <> case pubResult of
     Left errMsg -> ["status" AE..= ("warning" :: Text), "message" AE..= errMsg]
     Right () -> ["status" AE..= ("ok" :: Text)]
@@ -292,7 +285,7 @@ skipStringBody =
 -- per-message handoff so finished messages are GC-eligible immediately.
 -- Drop counts feed `OtlpServer.bumpErrorCounter` so they roll up in the same
 -- minute-cadence summary as wire/UTF-8 parse errors — no per-event log spam.
--- | Replay doesn't dual-write so it can't surface a 'Telemetry.WriteFailure'.
+-- Replay doesn't dual-write so it can't surface a 'Telemetry.WriteFailure'.
 -- Oversize + decode-failed messages are returned as 'PoisonMsg' so Pkg.Queue
 -- can DLQ their raw bytes before committing offsets (no silent drop). S3/Minio
 -- transport errors still propagate as exceptions through the outer tryAny.
@@ -304,21 +297,20 @@ processReplayEvents msgs _attrs = do
       (oversized, valid) = partition (\(_, b) -> BS.length b > maxReplayMessageBytes) msgs
       oversizePoison = [(ackId, body, "replay:oversize_message") | (ackId, body) <- oversized]
   traverse_ (\_ -> Metrics.bumpErrorCounter "replay:oversize_message") oversized
-  (acks, decodePoison) <- mconcat <$> mapM (handleChunk envCfg ctx.jobsPool) (chunksByBytes replayBatchByteBudget (BS.length . snd) valid)
+  (acks, decodePoison) <- foldMapM (handleChunk envCfg ctx.jobsPool) (chunksByBytes replayBatchByteBudget (BS.length . snd) valid)
   pure $ Right (acks, oversizePoison <> decodePoison)
   where
     -- Returns @(acks, poison)@ for one chunk so the caller can DLQ poison and
     -- ack only the successfully-saved + DLQ'd ackIds.
-    handleChunk envCfg jobsPool chunk =
-      mconcat <$> forM chunk \(!ackId, !body) ->
-        case splitReplayPayload (stripJsonNullEscapes body) of
-          Left err -> do
-            Metrics.bumpErrorCounter "replay:decode_error"
-            pure ([], [(ackId, body, "replay:decode_error: " <> toText err)])
-          Right payload ->
-            saveReplayMinio envCfg jobsPool ackId payload <&> \case
-              Just acked -> ([acked], [])
-              Nothing -> ([], [])
+    handleChunk envCfg jobsPool = foldMapM \(!ackId, !body) ->
+      case splitReplayPayload (stripJsonNullEscapes body) of
+        Left err -> do
+          Metrics.bumpErrorCounter "replay:decode_error"
+          pure ([], [(ackId, body, "replay:decode_error: " <> toText err)])
+        Right payload ->
+          saveReplayMinio envCfg jobsPool ackId payload <&> \case
+            Just acked -> ([acked], [])
+            Nothing -> ([], [])
 
 
 -- | True if the Minio error represents a missing object (safe to treat as empty).
@@ -332,14 +324,6 @@ isNoSuchKey (MErrService NoSuchKey) = True
 isNoSuchKey _ = False
 
 
-toObjKey :: Text -> Minio.Object
-toObjKey = fromString . toString
-
-
-mergedKeyFor :: UUID.UUID -> Minio.Object
-mergedKeyFor sid = toObjKey (UUID.toText sid <> "/merged.json.gz")
-
-
 sessionLogCtx :: Projects.ProjectId -> UUID.UUID -> HashMap Text Text
 sessionLogCtx pid sid = HM.fromList [("session_id", UUID.toText sid), ("project_id", pid.toText)]
 
@@ -348,6 +332,14 @@ sessionLogCtx pid sid = HM.fromList [("session_id", UUID.toText sid), ("project_
 -- "error" key. Used so call sites stop repeating the displayException dance.
 withError :: Exception e => e -> HashMap Text Text -> HashMap Text Text
 withError e = HM.insert "error" (toText $ displayException e)
+
+
+-- | Enqueue a BgJobs job. The payload is hand-rolled to mirror the derived
+-- Generic ToJSON shape because BackgroundJobs imports this module, so we can't
+-- import its job sum type here.
+enqueueBgJob :: IOE :> es => Pool Connection -> Text -> [AE.Value] -> Eff es ()
+enqueueBgJob pool tag contents =
+  liftIO $ withResource pool \c -> void $ createJob c "background_jobs" (AE.object ["tag" AE..= tag, "contents" AE..= contents])
 
 
 markMerged :: DB es => Projects.ProjectId -> UUID.UUID -> UTCTime -> Eff es ()
@@ -477,7 +469,7 @@ projectMinioConn envCfg p =
           p.s3Bucket
       creds = Minio.CredentialValue (fromString $ toString acc) (fromString $ toString sec) Nothing
       info = if T.null endpoint then Minio.awsCI else fromString $ toString endpoint
-      conn = Minio.setCreds creds (Minio.setRegion (fromString $ toString region) info)
+      conn = Minio.setCreds creds (Minio.setRegion region info)
    in (conn, bucket)
 
 
@@ -494,7 +486,7 @@ fetchIndividualsRaw
   -> Eff es ([(Double, BL.ByteString)], Bool, Int)
 fetchIndividualsRaw conn bucket fileKeys logCtx = do
   perKey <- liftIO $ forM fileKeys $ \k ->
-    Minio.runMinio conn (fetchRawForMerge bucket (toObjKey k) False) <&> (k,)
+    Minio.runMinio conn (fetchRawForMerge bucket k False) <&> (k,)
   let (raws, decodeErrs, transportErrs, missing) = foldr classify ([], [], [], []) perKey
       classify (_, Right (Right r)) (rs, ds, ts, ms) = (r : rs, ds, ts, ms)
       classify (k, Right (Left de)) (rs, ds, ts, ms) = (rs, (k, de) : ds, ts, ms)
@@ -526,27 +518,24 @@ getSessionEvents conn pid bucket sessionId = do
       noEvents reason = do
         Log.logAttention "No replay events found anywhere for session" (HM.insert "reason" reason logCtx)
         pure $ Left notFoundErr
+      legacyFailed e = Left transientMsg <$ Log.logError "Failed to load legacy replay blob" (HM.insert "error" e logCtx)
       -- Ancient single-object sessions (pre file_keys migration): fetch raw.
       legacy reason = do
         Log.logInfo "Falling back to legacy replay blob" (HM.insert "reason" reason logCtx)
-        legacyRes <- liftIO $ Minio.runMinio conn $ fetchRawForMerge bucket (toObjKey (sessionStr <> ".json")) False
+        legacyRes <- liftIO $ Minio.runMinio conn $ fetchRawForMerge bucket (sessionStr <> ".json") False
         case legacyRes of
-          Left err | isNoSuchKey err -> noEvents "legacy_blob_missing"
-          Left err -> do
-            Log.logError "Failed to load legacy replay blob" (withError err logCtx)
-            pure $ Left transientMsg
-          Right (Left e) -> do
-            Log.logError "Failed to load legacy replay blob" (HM.insert "error" (toText e) logCtx)
-            pure $ Left transientMsg
+          Left err
+            | isNoSuchKey err -> noEvents "legacy_blob_missing"
+            | otherwise -> legacyFailed (toText $ displayException err)
+          Right (Left e) -> legacyFailed (toText e)
           Right (Right (_, raw))
             | isEmptyJsonArray raw -> noEvents "legacy_blob_missing"
             | otherwise -> pure $ Right (raw, False)
   -- Shards (incl. the legacy monolith, registered as a shard) and the unmerged
   -- individual tail both come from the DB — never from listing S3 (minio-hs can't
   -- list R2). Fetch each key by getObject, gzip-decoding by suffix.
-  shardKeys <- sessionShardKeys pid sessionId
-  fileKeys <- sessionFileKeys pid sessionId
-  shardRes <- liftIO $ forM shardKeys $ \sk -> Minio.runMinio conn (fetchRawForMerge bucket (toObjKey sk) (".gz" `T.isSuffixOf` sk))
+  (shardKeys, fileKeys) <- sessionKeys pid sessionId
+  shardRes <- liftIO $ forM shardKeys $ \sk -> Minio.runMinio conn (fetchRawForMerge bucket sk (".gz" `T.isSuffixOf` sk))
   let shardRaws = [r | Right (Right r) <- shardRes]
       shardDecodeErrs = [e | Right (Left e) <- shardRes] -- corrupt shard bytes
       shardTransportErrs = [e | Left e <- shardRes, not (isNoSuchKey e)] -- transient (NoSuchKey = concurrent seal, tolerate)
@@ -575,21 +564,19 @@ getSessionEvents conn pid bucket sessionId = do
         pure $ Left notFoundErr
 
 
--- | Lookup the tracked object keys for an unmerged replay session.
--- Empty list if the row doesn't exist (new session) or has a NULL/empty column.
+-- | Tracked object keys for a session as @(sealed shards, unmerged tail)@, both
+-- empty if the row doesn't exist (new session) or the columns are NULL. Always
+-- read from Postgres, never listed from S3 (minio-hs can't list R2); each shard
+-- key embeds its first-event ts so readers order shards without opening a blob.
+sessionKeys :: DB es => Projects.ProjectId -> UUID.UUID -> Eff es ([Text], [Text])
+sessionKeys pid sessionId = do
+  rows :: [(V.Vector Text, V.Vector Text)] <-
+    Hasql.interp [HI.sql| SELECT COALESCE(shard_keys, '{}'::text[]), COALESCE(file_keys, '{}'::text[]) FROM projects.replay_sessions WHERE session_id = #{sessionId} AND project_id = #{pid} LIMIT 1 |]
+  pure $ maybe ([], []) (bimap V.toList V.toList) (listToMaybe rows)
+
+
 sessionFileKeys :: DB es => Projects.ProjectId -> UUID.UUID -> Eff es [Text]
-sessionFileKeys pid sessionId = do
-  rows :: [V.Vector Text] <- Hasql.interp [HI.sql| SELECT COALESCE(file_keys, '{}'::text[]) FROM projects.replay_sessions WHERE session_id = #{sessionId} AND project_id = #{pid} LIMIT 1 |]
-  pure $ maybe [] V.toList (listToMaybe rows)
-
-
--- | Sealed shard object keys for a session, tracked in Postgres (never listed
--- from S3 — minio-hs can't list R2). Each key embeds the shard's first-event ts
--- so the read/manifest path orders them without opening a blob.
-sessionShardKeys :: DB es => Projects.ProjectId -> UUID.UUID -> Eff es [Text]
-sessionShardKeys pid sessionId = do
-  rows :: [V.Vector Text] <- Hasql.interp [HI.sql| SELECT COALESCE(shard_keys, '{}'::text[]) FROM projects.replay_sessions WHERE session_id = #{sessionId} AND project_id = #{pid} LIMIT 1 |]
-  pure $ maybe [] V.toList (listToMaybe rows)
+sessionFileKeys pid = fmap snd . sessionKeys pid
 
 
 -- | Identity + timing metadata for a session, surfaced in the player header.
@@ -603,11 +590,15 @@ data SessionMeta = SessionMeta
   deriving anyclass (AE.ToJSON, HI.DecodeRow)
 
 
-sessionMetadata :: DB es => Projects.ProjectId -> UUID.UUID -> Eff es (Maybe SessionMeta)
-sessionMetadata pid sessionId = do
-  rows :: [SessionMeta] <-
-    Hasql.interp [HI.sql| SELECT user_id, user_email, user_name, last_event_at FROM projects.replay_sessions WHERE session_id = #{sessionId} AND project_id = #{pid} LIMIT 1 |]
-  pure $ listToMaybe rows
+-- | Never fatal: a lookup failure logs and yields Nothing so the player still
+-- renders without identity.
+sessionMetadata :: (DB es, Log :> es) => Projects.ProjectId -> UUID.UUID -> HashMap Text Text -> Eff es (Maybe SessionMeta)
+sessionMetadata pid sessionId logCtx = do
+  r <- tryAny do
+    rows :: [SessionMeta] <-
+      Hasql.interp [HI.sql| SELECT user_id, user_email, user_name, last_event_at FROM projects.replay_sessions WHERE session_id = #{sessionId} AND project_id = #{pid} LIMIT 1 |]
+    pure $ listToMaybe rows
+  either (\err -> Nothing <$ Log.logAttention "sessionMetadata lookup failed; continuing without identity" (withError err logCtx)) pure r
 
 
 -- | One event's `timestamp` field (0 if absent / not an object). Sorts files by
@@ -645,17 +636,17 @@ instance AE.ToJSON ReplaySessionResp where
   toEncoding r =
     AE.pairs
       $ AEE.pair "events" (AE.toEncoding r.events)
-      <> maybe mempty ("partial" AE..=) r.partial
-      <> maybe mempty ("error" AE..=) r.errorMsg
+      <> foldMap ("partial" AE..=) r.partial
+      <> foldMap ("error" AE..=) r.errorMsg
       <> foldMap metaSeries r.meta
     where
       metaSeries m = "userId" AE..= m.userId <> "userEmail" AE..= m.userEmail <> "userName" AE..= m.userName <> "lastEventAt" AE..= m.lastEventAt
   toJSON r =
     AE.object
       $ ["events" AE..= r.events]
-      <> maybe [] (\p -> ["partial" AE..= p]) r.partial
-      <> maybe [] (\e -> ["error" AE..= e]) r.errorMsg
-      <> maybe [] (\m -> ["userId" AE..= m.userId, "userEmail" AE..= m.userEmail, "userName" AE..= m.userName, "lastEventAt" AE..= m.lastEventAt]) r.meta
+      <> foldMap (\p -> ["partial" AE..= p]) r.partial
+      <> foldMap (\e -> ["error" AE..= e]) r.errorMsg
+      <> foldMap (\m -> ["userId" AE..= m.userId, "userEmail" AE..= m.userEmail, "userName" AE..= m.userName, "lastEventAt" AE..= m.lastEventAt]) r.meta
 
 
 mergeFileCountThreshold :: Int
@@ -687,11 +678,11 @@ saveReplayMinio envCfg jobsPool ackId payload = do
               (conn, bucket) = projectMinioConn envCfg p
               timeStr = toText $ formatTime defaultTimeLocale "%Y%m%dT%H%M%S%q" now
               objKeyText = session <> "/" <> timeStr <> ".json"
-              objKey = toObjKey objKeyText
               body = payload.eventsBytes
-              bodySize = fromIntegral (BS.length body)
-          res <- liftIO $ Minio.runMinio conn $ do
-            Minio.putObject bucket objKey (CC.sourceLazy (BL.fromStrict body)) (Just bodySize) Minio.defaultPutObjectOptions
+          res <-
+            liftIO
+              $ Minio.runMinio conn
+              $ Minio.putObject bucket objKeyText (CC.sourceLazy (BL.fromStrict body)) (Just $ fromIntegral $ BS.length body) Minio.defaultPutObjectOptions
           case res of
             Right _ -> do
               let ReplayPayload{sessionId, projectId, userId, userEmail, userName} = payload
@@ -715,12 +706,8 @@ saveReplayMinio envCfg jobsPool ackId payload = do
               -- with N events past 14/28/42/... fires at most one merge per
               -- threshold-window, rather than one per save (which under high
               -- event rates piled up dozens of duplicate merges per session).
-              when (fileCount >= mergeFileCountThreshold && fileCount `mod` mergeFileCountThreshold == 0) $ do
-                -- Hand-rolled payload mirrors the derived Generic ToJSON shape for BgJobs;
-                -- cannot import BackgroundJobs here (BackgroundJobs imports Pages.Replay).
-                let jobPayload = AE.object ["tag" AE..= ("MergeReplaySession" :: Text), "contents" AE..= ([AE.toJSON payload.projectId, AE.toJSON payload.sessionId] :: [AE.Value])]
-                liftIO $ withResource jobsPool \conn' ->
-                  void $ createJob conn' "background_jobs" jobPayload
+              when (fileCount >= mergeFileCountThreshold && fileCount `mod` mergeFileCountThreshold == 0)
+                $ enqueueBgJob jobsPool "MergeReplaySession" [AE.toJSON payload.projectId, AE.toJSON payload.sessionId]
               pure $ Just ackId
             Left err -> do
               Log.logAttention "Failed to save replay events to MinIO" (withError err $ HM.fromList [("session", session), ("projectId", payload.projectId.toText)])
@@ -747,11 +734,7 @@ fetchReplaySession p sessionId = do
       (conn, bucket) = projectMinioConn ctx.config p
       sessionStr = UUID.toText sessionId
       summaryCtx = HM.fromList [("session", sessionStr), ("projectId", pid.toText)]
-  meta <-
-    tryAny (sessionMetadata pid sessionId)
-      >>= either
-        (\err -> Nothing <$ Log.logAttention "sessionMetadata lookup failed; continuing without identity" (withError err summaryCtx))
-        pure
+  meta <- sessionMetadata pid sessionId summaryCtx
   let emptyResp userMsg = ReplaySessionResp{events = RawJson "[]", partial = Nothing, errorMsg = Just userMsg, meta}
   result <- tryAny $ getSessionEvents conn pid bucket sessionId
   case result of
@@ -802,11 +785,8 @@ buildReplayManifest :: (DB es, Log :> es) => Projects.Project -> UUID.UUID -> Ef
 buildReplayManifest p sessionId = do
   let pid = p.id
       summaryCtx = HM.fromList [("session", UUID.toText sessionId), ("projectId", pid.toText)]
-  meta <-
-    tryAny (sessionMetadata pid sessionId)
-      >>= either (\err -> Nothing <$ Log.logAttention "sessionMetadata lookup failed; continuing without identity" (withError err summaryCtx)) pure
-  shardKeys <- sessionShardKeys pid sessionId
-  tailKeys <- sessionFileKeys pid sessionId
+  meta <- sessionMetadata pid sessionId summaryCtx
+  (shardKeys, tailKeys) <- sessionKeys pid sessionId
   -- Order shards by embedded first-event ts (the legacy monolith key doesn't
   -- parse → 0 → sorts first, which is correct: it's the oldest). gzip by suffix.
   let shardSegs = sortOn (.firstTs) [ReplaySegment{key = k, firstTs = fromIntegral (maybe 0 snd (parseShardKey k)), gzipped = ".gz" `T.isSuffixOf` k} | k <- shardKeys]
@@ -837,7 +817,7 @@ fetchReplayShard p sessionId mkey = do
       scoped k = (sidText <> "/") `T.isPrefixOf` k || k == sidText <> ".json"
   case mkey of
     Just k | scoped k -> do
-      res <- liftIO $ Minio.runMinio conn $ fetchRawObject bucket (toObjKey k) (".gz" `T.isSuffixOf` k)
+      res <- liftIO $ Minio.runMinio conn $ fetchRawObject bucket k (".gz" `T.isSuffixOf` k)
       case res of
         Right raw -> pure $ RawJson raw
         -- NoSuchKey = a concurrent seal/merge already removed this source; tolerate
@@ -881,8 +861,8 @@ compressAndMergeReplaySessions = do
       Log.logAttention "Replay session merge threw; continuing batch" (withError err (sessionLogCtx projectId sessionId))
 
 
--- | Look up a project + its S3 settings + tracked file keys and merge them into merged.json.gz.
--- Runs the extra DB finalization step after the S3 merge succeeds.
+-- | Look up a project + its S3 settings + tracked file keys and seal them into
+-- gzip shards. Runs the extra DB finalization step after the S3 merge succeeds.
 mergeOneSessionByKeys
   :: Projects.ProjectId
   -> UUID.UUID
@@ -907,7 +887,7 @@ mergeOneSessionByKeys pid sessionId logSuffix afterMerge = do
     mergeUnderLease p = do
       ctx <- Effectful.Reader.Static.ask @AuthContext
       let (s3Conn, bucket) = projectMinioConn ctx.config p
-      allFileKeys <- sessionFileKeys pid sessionId
+      (existingShards, allFileKeys) <- sessionKeys pid sessionId
       let fileKeys = take maxFilesPerMerge allFileKeys
       if null fileKeys
         then do
@@ -919,7 +899,6 @@ mergeOneSessionByKeys pid sessionId logSuffix afterMerge = do
           Log.logInfo "Replay session merge skipped (no tracked file keys)" ("session_id", UUID.toText sessionId)
         else do
           -- Next append index from the DB shard count (no S3 listing).
-          existingShards <- sessionShardKeys pid sessionId
           let startIdx = 1 + foldl' max 0 (mapMaybe (fmap fst . parseShardKey) existingShards)
           result <- liftIO $ try @MergeError $ mergeOneSession s3Conn bucket sessionId startIdx fileKeys
           case result of
@@ -966,10 +945,8 @@ mergeOneSessionByKeys pid sessionId logSuffix afterMerge = do
                   -- We capped the merge at `maxFilesPerMerge`; re-enqueue while
                   -- there's backlog so a session that fell behind drains in
                   -- bounded-heap chunks instead of waiting for the 30-min cron.
-                  when (length allFileKeys > maxFilesPerMerge) $ do
-                    let jobPayload = AE.object ["tag" AE..= ("MergeReplaySession" :: Text), "contents" AE..= ([AE.toJSON pid, AE.toJSON sessionId] :: [AE.Value])]
-                    liftIO $ withResource ctx.jobsPool \conn' ->
-                      void $ createJob conn' "background_jobs" jobPayload
+                  when (length allFileKeys > maxFilesPerMerge)
+                    $ enqueueBgJob ctx.jobsPool "MergeReplaySession" [AE.toJSON pid, AE.toJSON sessionId]
 
 
 -- | Uncompressed-bytes budget per sealed shard. A merge accumulates raw event
@@ -993,7 +970,7 @@ shardSealBytes = 12 * 1024 * 1024
 -- Just (7,1700000000000)
 shardKeyFor :: UUID.UUID -> Int -> Integer -> Minio.Object
 shardKeyFor sid idx firstTsMs =
-  toObjKey $ UUID.toText sid <> "/shard-" <> T.justifyRight 6 '0' (show idx) <> "-" <> show firstTsMs <> ".json.gz"
+  UUID.toText sid <> "/shard-" <> T.justifyRight 6 '0' (show idx) <> "-" <> show firstTsMs <> ".json.gz"
 
 
 -- | Parse a shard object key into (index, firstTsMs). `<sid>/shard-<idx>-<ts>.json.gz`;
@@ -1009,7 +986,7 @@ shardKeyFor sid idx firstTsMs =
 -- Nothing
 parseShardKey :: Text -> Maybe (Int, Integer)
 parseShardKey key = do
-  name <- T.stripSuffix ".json.gz" =<< listToMaybe (reverse (T.splitOn "/" key))
+  name <- T.stripSuffix ".json.gz" (T.takeWhileEnd (/= '/') key)
   rest <- T.stripPrefix "shard-" name
   case T.splitOn "-" rest of
     [idxT, tsT] -> (,) <$> readMaybe (toString idxT) <*> readMaybe (toString tsT)
@@ -1031,7 +1008,7 @@ mergeOneSession conn bucket sessionId startIdx fileKeys = reverse <$> go startId
     -- buf :: [(firstTs, raw, sourceKey)] for the current shard; sealed :: sealed keys (newest first)
     go idx [] buf _ sealed = seal idx buf sealed
     go idx (k : ks) buf !bufBytes sealed = do
-      res <- Minio.runMinio conn (fetchRawForMerge bucket (toObjKey k) False)
+      res <- Minio.runMinio conn (fetchRawForMerge bucket k False)
       case res of
         Left me | isNoSuchKey me -> go idx ks buf bufBytes sealed
         Left me -> throwIO (MergeFetchFailed me)
@@ -1051,7 +1028,7 @@ mergeOneSession conn bucket sessionId startIdx fileKeys = reverse <$> go startId
           shardKey = shardKeyFor sessionId idx (round (firstTs :: Double))
       putRes <- Minio.runMinio conn $ do
         Minio.putObject bucket shardKey (CC.sourceLazy compressed) (Just (BL.length compressed)) Minio.defaultPutObjectOptions
-        forM_ [toObjKey k | (_, _, k) <- sorted] (Minio.removeObject bucket)
+        forM_ [k | (_, _, k) <- sorted] (Minio.removeObject bucket)
       whenLeft_ putRes (throwIO . MergePutFailed)
       pure (shardKey : sealed)
 
@@ -1093,9 +1070,9 @@ expireOldReplayData = do
     projectM <- Projects.projectById pid
     whenJust projectM $ \p -> do
       let (conn, bucket) = projectMinioConn ctx.config p
-          -- shard_keys covers sealed shards + the legacy monolith; mergedKeyFor kept
+          -- shard_keys covers sealed shards + the legacy monolith; the merged key is kept
           -- as a belt-and-suspenders for any session not yet reflected in shard_keys.
-          keyObjs = mergedKeyFor sid : map toObjKey (V.toList shardKeys <> V.toList fileKeys)
+          keyObjs = (UUID.toText sid <> "/merged.json.gz") : V.toList shardKeys <> V.toList fileKeys
           logCtx = sessionLogCtx pid sid
       -- Separate `runMinio` per key so one transport error doesn't abort siblings;
       -- mirrors the `fetchIndividuals` pattern elsewhere in this module.
@@ -1111,8 +1088,4 @@ expireOldReplayData = do
           Hasql.interpExecute_
             [HI.sql| DELETE FROM projects.replay_sessions WHERE session_id = #{sid} AND project_id = #{pid} |]
           Log.logInfo "Expired replay session" logCtx
-  when (length rows >= expireReplayBatchSize) $ do
-    -- See MergeReplaySession note: cannot import BackgroundJobs (circular).
-    let payload = AE.object ["tag" AE..= ("ExpireReplayData" :: Text), "contents" AE..= ([] :: [AE.Value])]
-    liftIO $ withResource ctx.jobsPool \c ->
-      void $ createJob c "background_jobs" payload
+  when (length rows >= expireReplayBatchSize) $ enqueueBgJob ctx.jobsPool "ExpireReplayData" []

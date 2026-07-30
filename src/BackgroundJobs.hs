@@ -2784,7 +2784,7 @@ sendReportForProject pid rType = do
                         (liftIO $ fromRight def <$> Charts.fetchMetricsData Charts.DTMetric (parseQ "| summarize count(*) by bin_auto(timestamp), resource___service___name") currentTime (Just startTime) (Just currentTime) ctx Nothing)
                         (liftIO $ fromRight def <$> Charts.fetchMetricsData Charts.DTMetric (parseQ "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), resource___service___name") currentTime (Just startTime) (Just currentTime) ctx Nothing)
                     )
-                    (Issues.selectIssues pid Nothing (Just False) Nothing 100 0 (Just (startTime, currentTime)) Nothing "7d" [] [])
+                    (Issues.selectIssues pid (Just False) Nothing 100 0 (Just (startTime, currentTime)) Nothing "7d" [] [])
                 )
             )
         )
@@ -2794,10 +2794,8 @@ sendReportForProject pid rType = do
         totalEvents = sum $ map (\(_, _, x) -> x) stats
         totalErrorsPrev = sum $ map (\(_, x, _) -> x) statsPrev
         totalEventsPrev = sum $ map (\(_, _, x) -> x) statsPrev
-        errorsChange' = if totalErrorsPrev == 0 then 0.00 else fromIntegral (totalErrors - totalErrorsPrev) / fromIntegral totalErrorsPrev * 100
-        eventsChange' = if totalEventsPrev == 0 then 0.00 else fromIntegral (totalEvents - totalEventsPrev) / fromIntegral totalEventsPrev * 100
-        errorsChange = fromIntegral (round (errorsChange' * 100)) / 100
-        eventsChange = fromIntegral (round (eventsChange' * 100)) / 100
+        errorsChange = RP.pctChange totalErrors totalErrorsPrev
+        eventsChange = RP.pctChange totalEvents totalEventsPrev
         spanStatsDiff = RP.getSpanTypeStats statsBySpanType statsBySpanTypePrev
         endpointPerformance = RP.computeDurationChanges endpointStats endpointStatsPrev
     let rp_json = RP.buildReportJson' totalEvents totalErrors eventsChange errorsChange spanStatsDiff endpointPerformance slowDbQueries chartDataEvents chartDataErrors anomalies'
@@ -3117,8 +3115,8 @@ enhanceIssuesWithLLM pid issueIds = do
                     criticalityResult <- Enhancement.classifyIssueCriticality ctx issue
                     case criticalityResult of
                       Left err -> Log.logAttention "Failed to classify issue criticality" (issueId, err)
-                      Right (isCritical, breakingCount, incrementalCount) -> do
-                        _ <- Enhancement.updateIssueClassification issue.id isCritical breakingCount incrementalCount
+                      Right (isCritical, breakingCount, _incrementalCount) -> do
+                        _ <- Enhancement.updateIssueClassification issue.id isCritical breakingCount
                         Log.logInfo "Successfully enhanced and classified issue" (issueId, isCritical, breakingCount)
 
                     -- Analyze error patterns for root cause and category

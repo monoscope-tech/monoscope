@@ -14,7 +14,6 @@ module Models.Projects.Projects (
   ProjectListItem (..),
   ProjectId,
   CreateProject (..),
-  OnboardingStep (..),
   ProjectS3Bucket (..),
   insertProject,
   projectIdFromText,
@@ -236,11 +235,6 @@ type ProjectId = UUIDId "project"
 
 projectIdFromText :: Text -> Maybe ProjectId
 projectIdFromText = idFromText
-
-
-data OnboardingStep = Info | Survey | CreateMonitor | NotifChannel | Integration | Pricing | Complete
-  deriving stock (Eq, Generic, Read, Show)
-  deriving (AE.FromJSON, AE.ToJSON, FromField, NFData, ToField) via OnboardingStep
 
 
 data Project = Project
@@ -700,9 +694,6 @@ addSubscription s =
     |]
 
 
--- | Sum of requests for the given project since `start`, using window_start
--- (when events occurred) rather than created_at (when the job ran). Pre-migration
--- rows without window_start are excluded from billing calculations.
 -- | (totalRequests, totalBytes) since `start`, using window_start (when events
 -- occurred) rather than created_at. Pre-migration rows without window_start
 -- are excluded from billing calculations.
@@ -741,7 +732,7 @@ getDailyUsageBreakdown pid start =
 -- (Lemon Squeezy rejects quantities > 1,000,000; 900k leaves headroom). The
 -- smart constructor is the only public way in; splitUsageIntoChunks is the
 -- only producer in the codebase.
-newtype ChunkQuantity = ChunkQuantity Int
+newtype ChunkQuantity = ChunkQuantity {chunkQuantityInt :: Int}
   deriving stock (Eq, Generic)
   deriving newtype (FromField, HI.DecodeValue, HI.EncodeValue, NFData, Show, ToField)
 
@@ -766,10 +757,6 @@ mkChunkQuantity :: Int -> Maybe ChunkQuantity
 mkChunkQuantity n
   | n > 0 && n <= 900_000 = Just (ChunkQuantity n)
   | otherwise = Nothing
-
-
-chunkQuantityInt :: ChunkQuantity -> Int
-chunkQuantityInt (ChunkQuantity n) = n
 
 
 -- | State of a submission chunk. Collapses (status, submitted_at, last_error)
@@ -866,7 +853,7 @@ recordUsageWindow
 recordUsageWindow pid wStart wEnd totals chunks = do
   chunkIds <- replicateM (length chunks) genUUID
   let exec :: HI.Sql -> Tx.Transaction ()
-      exec s = Tx.statement () (HI.interp True s :: Statement () HI.RowsAffected) $> ()
+      exec s = void $ Tx.statement () (HI.interp True s :: Statement () HI.RowsAffected)
       -- total_requests historically = events + metrics (drives splitUsageIntoChunks
       -- and getTotalUsage). Preserve that invariant; new columns are additive.
       totalUsage = totals.events + totals.metrics
@@ -1177,19 +1164,15 @@ sessionAndProject
   -> Eff es (Session, Project)
 sessionAndProject pid = do
   sess <- getSession
-  let projects = sess.persistentSession.projects.getProjects
-  case V.find (\v -> v.id == pid) projects of
+  let redirect = throwError $ err302{errHeaders = [("Location", "/?missingProjectPermission")]}
+      fetch = projectById pid >>= maybe redirect (pure . (sess,))
+  case V.find ((== pid) . (.id)) sess.persistentSession.projects.getProjects of
+    -- Onboarding projects in the session cache are stale; re-read them.
     Just p | not (isOnboarding p.paymentPlan) -> pure (sess, p)
-    Just _ ->
-      projectById pid >>= \case
-        Just p -> pure (sess, p)
-        Nothing -> throwError $ err302{errHeaders = [("Location", "/?missingProjectPermission")]}
-    _
-      | pid == UUIDId UUID.nil || sess.user.isSudo ->
-          projectById pid >>= \case
-            Just p -> pure (sess, p)
-            Nothing -> throwError $ err302{errHeaders = [("Location", "/?missingProjectPermission")]}
-    _ -> throwError $ err302{errHeaders = [("Location", "/?missingProjectPermission")]}
+    Just _ -> fetch
+    Nothing
+      | pid == UUIDId UUID.nil || sess.user.isSudo -> fetch
+      | otherwise -> redirect
 
 
 ----------------------------------------------------------------------

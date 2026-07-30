@@ -1,7 +1,6 @@
 module Pages.Bots.Whatsapp (whatsappIncomingPostH, TwilioWhatsAppMessage (..)) where
 
-import Control.Lens ((?~))
-import Control.Lens.Setter ((.~))
+import Control.Lens ((.~), (?~))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as KEYM
 import Data.Aeson.KeyMap qualified as KEM
@@ -17,16 +16,15 @@ import Models.Apis.Integrations (getDashboardsForWhatsapp)
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.Projects qualified as Projects
-import Network.HTTP.Types (urlEncode)
 import Network.Wreq
 import Pages.Bots.Utils (BotType (..), QueryIntent (..), botEmoji, detectReportIntent, formatReportForWhatsApp, handleTableResponse, processAIQuery, processReportQuery)
-import Pkg.AI qualified as AI
+import Pkg.AI (LLMResponse (..))
 import Pkg.Components.TimePicker qualified as TP
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (idFromText)
 import Pkg.Parser (parseQueryToAST)
 import Relude
-import System.Config (AuthContext (backgroundScope), EnvConfig)
+import System.Config (AuthContext (backgroundScope))
 import System.Config qualified as Config
 import System.Tracing (forkBackground)
 import System.Types (ATBaseCtx)
@@ -43,160 +41,117 @@ whatsappIncomingPostH val = do
   Log.logTrace ("WhatsApp interaction received" :: Text) $ AE.object ["from" AE..= val.from, "body" AE..= val.body]
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   let envCfg = authCtx.config
-  let fromN = T.dropWhile (/= '+') val.from
+      fromN = T.dropWhile (/= '+') val.from
+
+      sendText t = sendWhatsappResponse (AE.object []) val.from envCfg.whatsappBotText (Just t)
+
+      withDashboard dashboardId act = do
+        dashboardVMM <- maybe (pure Nothing) Dashboards.getDashboardById (idFromText dashboardId)
+        whenJust dashboardVMM $ \dashboardVM -> do
+          dashboardM <- liftIO $ Dashboards.readDashboardFile "static/public/dashboards" (toString $ fromMaybe "_overview.yaml" dashboardVM.baseTemplate)
+          whenJust dashboardM act
+
+      handleDashboard dashboardId skip = withDashboard dashboardId $ \dashboard -> do
+        let widgets = V.fromList $ (\w -> let t = fromMaybe "Untitled-" w.title in (t, "widg" <> joiner <> t <> joiner <> dashboardId)) <$> dashboard.widgets
+        sendWhatsappResponse (getWhatsappList ("widget" <> joiner <> dashboardId) "Please select a widget" widgets skip) val.from envCfg.whatsappDashboardList Nothing
+
+      handleWidget widget dashboardId project = withDashboard dashboardId $ \dashboard ->
+        whenJust (find (\w -> fromMaybe "Untitled-" w.title == widget) dashboard.widgets) $ \w -> do
+          now <- Time.currentTime
+          let opts = "time=" <> toUriStr (show now) <> "&p=" <> project.id.toText <> "&widget=" <> toUriStr (decodeUtf8 $ toStrict $ AE.encode w)
+          sendWhatsappResponse (getBotContent val.body widget (project.id.toText <> "/dashboards") opts) val.from envCfg.whatsappBotChart Nothing
+
+      handlePrompt project = do
+        now <- Time.currentTime
+        case detectReportIntent val.body of
+          ReportIntent reportType ->
+            processReportQuery project.id reportType envCfg >>= \case
+              Left err -> sendText err
+              Right (report, _, _) -> sendText $ formatReportForWhatsApp report project.id envCfg
+          GeneralQueryIntent ->
+            processAIQuery envCfg.enableTimefusionReads project.id val.body Nothing envCfg.openaiModel envCfg.openaiApiKey >>= \case
+              Left _ -> sendText $ botEmoji "error" <> " Something went wrong. Please try again."
+              Right resp -> do
+                let (fromTimeM, toTimeM, _) = maybe (Nothing, Nothing, Nothing) (TP.parseTimeRange now) resp.timeRange
+                case (resp.query, resp.explanation) of
+                  (Just query, explM) -> do
+                    handleWidgetResponse now project query resp.visualization fromTimeM toTimeM
+                    whenJust explM sendText
+                  (Nothing, Just expl) -> sendText expl
+                  (Nothing, Nothing) -> sendText "No response available"
+
+      handleWidgetResponse now project query visualization fromTimeM toTimeM = case visualization of
+        Just vizType -> do
+          let chartType = Widget.mapWidgetTypeToChartType $ Widget.mapChatTypeToWidgetType vizType
+              iso = maybe "" (toText . iso8601Show)
+              opts =
+                "time=" <> toUriStr (show now) <> "&q=" <> toUriStr query <> "&p=" <> toUriStr project.id.toText <> "&t=" <> toUriStr chartType <> "&from=" <> toUriStr (iso fromTimeM) <> "&to=" <> toUriStr (iso toTimeM)
+              queryUrl = project.id.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> toUriStr query
+          sendWhatsappResponse (getBotContent val.body query queryUrl opts) val.from envCfg.whatsappBotChart Nothing
+        Nothing -> case parseQueryToAST query of
+          Left _ -> sendText $ botEmoji "warning" <> " Couldn't parse query. Try: 'show errors in last hour'"
+          Right query' -> do
+            tableAsVecE <- LogQueries.selectLogTable project.id query' query Nothing (fromTimeM, toTimeM) [] Nothing Nothing
+            sendText $ case handleTableResponse WhatsApp tableAsVecE envCfg project.id query of
+              AE.Object o | Just (AE.String c) <- KEM.lookup "body" o -> c
+              _ -> "Error processing query"
+
   projectM <- Projects.getProjectByPhoneNumber fromN
   Log.logTrace ("WhatsApp project lookup" :: Text) $ AE.object ["fromN" AE..= fromN, "found" AE..= isJust projectM]
-  let bodyType = parseWhatsappBody val.body
-  case projectM of
-    Just p -> do
-      case bodyType of
-        DashboardLoad skip -> do
-          dashboards' <- getDashboardsForWhatsapp fromN
-          let dashboards = V.fromList $ map (\(k, v) -> (k, "dash" <> joiner <> v)) dashboards'
-          let contentVars = getWhatsappList "dashboard" "Please select a dashboard" dashboards 0
-          sendWhatsappResponse contentVars val.from envCfg.whatsappDashboardList Nothing
-        WidgetsLoad dashboardId skip -> handleDashboard dashboardId skip val p envCfg
-        WidgetSelect widgetTitle dashboardId -> handleWidget widgetTitle dashboardId val p envCfg
-        Prompt _ -> forkBackground authCtx.backgroundScope ("WhatsApp prompt (" <> val.from <> ")") $ handlePrompt val envCfg p
-      pure $ AE.object []
-    _ -> pure $ AE.object []
-  where
-    handleDashboard :: Text -> Int -> TwilioWhatsAppMessage -> Projects.Project -> EnvConfig -> ATBaseCtx ()
-    handleDashboard dashboardId skip v p envCfg = do
-      dashboardVMM <- maybe (pure Nothing) Dashboards.getDashboardById (idFromText dashboardId)
-      case dashboardVMM of
-        Nothing -> pass
-        Just dashboardVM -> do
-          dashboardM <- liftIO $ Dashboards.readDashboardFile "static/public/dashboards" (toString $ fromMaybe "_overview.yaml" dashboardVM.baseTemplate)
-          whenJust dashboardM $ \dashboard -> do
-            let widgets' = (\w -> (fromMaybe "Untitled-" w.title, fromMaybe "Untitled-" w.title)) <$> dashboard.widgets
-                widgets = V.fromList $ (\(k, id') -> (k, "widg" <> joiner <> id' <> joiner <> dashboardId)) <$> widgets'
-            let contentVars = getWhatsappList ("widget" <> joiner <> dashboardId) "Please select a widget" widgets skip
-            sendWhatsappResponse contentVars val.from envCfg.whatsappDashboardList Nothing
-            pass
-
-    handleWidget :: Text -> Text -> TwilioWhatsAppMessage -> Projects.Project -> EnvConfig -> ATBaseCtx ()
-    handleWidget widget dashboardId reqBody project envCfg = do
-      dashboardVMM <- maybe (pure Nothing) Dashboards.getDashboardById (idFromText dashboardId)
-      case dashboardVMM of
-        Nothing -> pass
-        Just dashboardVM -> do
-          dashboardM <- liftIO $ Dashboards.readDashboardFile "static/public/dashboards" (toString $ fromMaybe "_overview.yaml" dashboardVM.baseTemplate)
-          whenJust dashboardM $ \dashboard -> do
-            let widgetM = find (\w -> fromMaybe "Untitled-" w.title == widget) dashboard.widgets
-            whenJust widgetM $ \w -> do
-              now <- Time.currentTime
-              let widgetQuery = "&widget=" <> decodeUtf8 (urlEncode True (toStrict $ AE.encode $ AE.toJSON w))
-                  opts = "time=" <> decodeUtf8 (urlEncode True (encodeUtf8 $ show now)) <> "&p=" <> project.id.toText <> widgetQuery
-                  query_url = project.id.toText <> "/dashboards"
-                  content' = getBotContent reqBody.body widget query_url opts
-              _ <- sendWhatsappResponse content' reqBody.from envCfg.whatsappBotChart Nothing
-              pass
-
-    handlePrompt :: TwilioWhatsAppMessage -> EnvConfig -> Projects.Project -> ATBaseCtx ()
-    handlePrompt reqBody envCfg project = do
-      now <- Time.currentTime
-      case detectReportIntent reqBody.body of
-        ReportIntent reportType -> do
-          reportResult <- processReportQuery project.id reportType envCfg
-          case reportResult of
-            Left err -> sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just err)
-            Right (report, _, _) -> sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just $ formatReportForWhatsApp report project.id envCfg)
-        GeneralQueryIntent -> do
-          result <- processAIQuery envCfg.enableTimefusionReads project.id reqBody.body Nothing envCfg.openaiModel envCfg.openaiApiKey
-          case result of
-            Left _ -> sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just $ botEmoji "error" <> " Something went wrong. Please try again.")
-            Right resp -> do
-              let (fromTimeM, toTimeM, _) = maybe (Nothing, Nothing, Nothing) (TP.parseTimeRange now) resp.timeRange
-                  query = fromMaybe "" resp.query
-                  hasQuery = isJust resp.query
-                  hasExplanation = isJust resp.explanation
-              case (hasQuery, hasExplanation) of
-                (False, True) -> sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just $ fromMaybe "No insights available" resp.explanation)
-                (True, False) -> handleWidgetResponse now reqBody envCfg project query resp.visualization fromTimeM toTimeM
-                (True, True) -> do
-                  handleWidgetResponse now reqBody envCfg project query resp.visualization fromTimeM toTimeM
-                  whenJust resp.explanation $ sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText . Just
-                (False, False) -> sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just "No response available")
-
-    handleWidgetResponse now reqBody envCfg project query visualization fromTimeM toTimeM = case visualization of
-      Just vizType -> do
-        let chartType = Widget.mapWidgetTypeToChartType $ Widget.mapChatTypeToWidgetType vizType
-            fromISO = maybe "" (toText . iso8601Show) fromTimeM
-            toISO = maybe "" (toText . iso8601Show) toTimeM
-            opts = "time=" <> toUriStr (show now) <> "&q=" <> toUriStr query <> "&p=" <> toUriStr project.id.toText <> "&t=" <> toUriStr chartType <> "&from=" <> toUriStr fromISO <> "&to=" <> toUriStr toISO
-            query_url = project.id.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> toUriStr query
-            content' = getBotContent reqBody.body query query_url opts
-        _ <- sendWhatsappResponse content' reqBody.from envCfg.whatsappBotChart Nothing
-        pass
-      Nothing -> case parseQueryToAST query of
-        Left _ -> sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just $ botEmoji "warning" <> " Couldn't parse query. Try: 'show errors in last hour'")
-        Right query' -> do
-          tableAsVecE <- LogQueries.selectLogTable project.id query' query Nothing (fromTimeM, toTimeM) [] Nothing Nothing
-          let content = case handleTableResponse WhatsApp tableAsVecE envCfg project.id query of
-                AE.Object o -> case KEM.lookup "body" o of
-                  Just (AE.String c) -> c
-                  _ -> "Error processing query"
-                _ -> "Error processing query"
-          sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just content)
+  whenJust projectM $ \p -> case parseWhatsappBody val.body of
+    DashboardLoad skip -> do
+      dashboards <- V.fromList . map (second (("dash" <> joiner) <>)) <$> getDashboardsForWhatsapp fromN
+      sendWhatsappResponse (getWhatsappList "dashboard" "Please select a dashboard" dashboards skip) val.from envCfg.whatsappDashboardList Nothing
+    WidgetsLoad dashboardId skip -> handleDashboard dashboardId skip
+    WidgetSelect widgetTitle dashboardId -> handleWidget widgetTitle dashboardId p
+    Prompt -> forkBackground authCtx.backgroundScope ("WhatsApp prompt (" <> val.from <> ")") $ handlePrompt p
+  pure $ AE.object []
 
 
 data BodyType
   = WidgetsLoad Text Int
   | WidgetSelect Text Text
   | DashboardLoad Int
-  | Prompt Text
+  | Prompt
 
 
 parseWhatsappBody :: Text -> BodyType
-parseWhatsappBody body =
-  case body of
-    "/dashboard" -> DashboardLoad 0
-    _ ->
-      let parts = T.splitOn joiner body
-       in case parts of
-            ["dashboard", skip] -> DashboardLoad $ defaultZero skip
-            ["dash", dashboardId] -> WidgetsLoad dashboardId 0
-            ["dash", dashboardId, _] -> WidgetsLoad dashboardId 0
-            ["widget", dashboardId, skip] -> WidgetsLoad dashboardId (defaultZero skip)
-            ["widg", widgetTitle, dashboardId] -> WidgetSelect widgetTitle dashboardId
-            ["widg", widgetTitle, dashboardId, _] -> WidgetSelect widgetTitle dashboardId
-            _ -> Prompt body
+parseWhatsappBody "/dashboard" = DashboardLoad 0
+parseWhatsappBody body = case T.splitOn joiner body of
+  ["dashboard", skip] -> DashboardLoad (readInt0 skip)
+  ["dash", dashboardId] -> WidgetsLoad dashboardId 0
+  ["dash", dashboardId, _] -> WidgetsLoad dashboardId 0
+  ["widget", dashboardId, skip] -> WidgetsLoad dashboardId (readInt0 skip)
+  ["widg", widgetTitle, dashboardId] -> WidgetSelect widgetTitle dashboardId
+  ["widg", widgetTitle, dashboardId, _] -> WidgetSelect widgetTitle dashboardId
+  _ -> Prompt
   where
-    defaultZero skip = fromMaybe 0 (readMaybe (toString skip))
+    readInt0 = fromMaybe 0 . readMaybe . toString
 
 
 getBotContent :: Text -> Text -> Text -> Text -> AE.Value
-getBotContent question query query_url opts =
-  AE.object ["1" AE..= ("*" <> question <> "*"), "2" AE..= ("`" <> query <> "`"), "3" AE..= opts, "4" AE..= query_url]
+getBotContent question query queryUrl opts =
+  AE.object ["1" AE..= ("*" <> question <> "*"), "2" AE..= ("`" <> query <> "`"), "3" AE..= opts, "4" AE..= queryUrl]
 
 
+-- | Twilio content-template variables: "1" is the prompt, then alternating label/payload
+-- pairs from "2" on, with "6"/"7" reserved for the Load More button when the list overflows.
 getWhatsappList :: Text -> Text -> V.Vector (Text, Text) -> Int -> AE.Value
-getWhatsappList typ body vals' skip = AE.object $ ("1" AE..= body) : vars
+getWhatsappList typ body vals' skip = AE.object $ ("1" AE..= body) : buttons <> loadMore
   where
     vals = V.map (first (T.take 24)) (V.drop skip vals')
-    paddedVals =
-      let missing = 3 - V.length vals
-          duplicates' = case vals V.!? 0 of
-            Just v | V.length vals == 1 -> V.replicate missing v
-            _ -> V.take missing vals
-          duplicates = V.imap (\i (k, v) -> (k <> " " <> show (i + 1), v <> joiner <> show (i + 1))) duplicates'
-       in if missing > 0
-            then vals <> duplicates
-            else vals
-    vars
-      | V.length vals > 3 =
-          let firstTwo = V.take 2 paddedVals
-              loadMore = ("Load More", typ <> joiner <> show (skip + 2))
-              buttonPairs = V.toList $ V.imap (\i (k, v) -> [key (2 * i + 2) AE..= k, key (2 * i + 3) AE..= v]) firstTwo
-              flattened = concat buttonPairs
-           in flattened ++ ["6" AE..= fst loadMore, "7" AE..= snd loadMore]
-      | otherwise =
-          let buttonPairs = V.toList $ V.imap (\i (k, v) -> [key (2 * i + 2) AE..= k, key (2 * i + 3) AE..= v]) paddedVals
-           in concat buttonPairs
-
+    missing = 3 - V.length vals
+    -- Twilio rejects templates with unfilled variables, so pad short lists with suffixed copies.
+    padded
+      | missing <= 0 = vals
+      | otherwise = vals <> V.imap (\i (k, v) -> (k <> " " <> show (i + 1), v <> joiner <> show (i + 1))) (V.take missing $ V.concat $ replicate missing vals)
+    overflow = V.length vals > 3
+    buttons = concat $ V.toList $ V.imap (\i (k, v) -> [key (2 * i + 2) AE..= k, key (2 * i + 3) AE..= v]) (if overflow then V.take 2 padded else padded)
+    loadMore
+      | overflow = ["6" AE..= ("Load More" :: Text), "7" AE..= (typ <> joiner <> show (skip + 2))]
+      | otherwise = []
     key :: Int -> AE.Key
-    key = KEYM.fromText . toText . show
+    key = KEYM.fromText . show
 
 
 data TwilioWhatsAppMessage = TwilioWhatsAppMessage
@@ -222,55 +177,38 @@ data TwilioWhatsAppMessage = TwilioWhatsAppMessage
 instance FromForm TwilioWhatsAppMessage where
   fromForm f =
     TwilioWhatsAppMessage
-      <$> parseUnique' "MessageSid"
-      <*> parseUnique' "SmsSid"
-      <*> parseUnique' "SmsMessageSid"
-      <*> parseUnique' "AccountSid"
-      <*> parseOptional "MessagingServiceSid"
-      <*> parseUnique' "From"
-      <*> parseUnique' "To"
-      <*> parseUnique' "Body"
-      <*> parseFieldDefault "NumMedia" 0
-      <*> parseFieldDefault "NumSegments" 1
-      <*> parseOptional "ProfileName"
-      <*> parseOptional "WaId"
-      <*> parseOptionalBool "Forwarded"
-      <*> parseOptionalBool "FrequentlyForwarded"
-      <*> parseOptional "ButtonText"
+      <$> req "MessageSid"
+      <*> req "SmsSid"
+      <*> req "SmsMessageSid"
+      <*> req "AccountSid"
+      <*> opt "MessagingServiceSid"
+      <*> req "From"
+      <*> req "To"
+      <*> req "Body"
+      <*> num "NumMedia" 0
+      <*> num "NumSegments" 1
+      <*> opt "ProfileName"
+      <*> opt "WaId"
+      <*> flag "Forwarded"
+      <*> flag "FrequentlyForwarded"
+      <*> opt "ButtonText"
     where
-      parseUnique' key = case lookupMaybe key f of
-        Right (Just v) -> pure v
-        Right _ -> fail $ "Missing field: " ++ toString key
-        Left e -> fail $ toString e
-      parseOptional key = case lookupMaybe key f of
-        Right v -> pure v
-        _ -> pure Nothing
-      parseFieldDefault key def = case lookupMaybe key f of
-        Right v -> pure $ maybe def (fromMaybe def . readMaybeText) v
-        Left e -> fail $ toString e
-      parseOptionalBool key = case lookupMaybe key f of
-        Right v -> pure $ parseBool =<< v
-        Left e -> fail $ toString e
-      readMaybeText :: Read a => Text -> Maybe a
-      readMaybeText = readMaybe . toString
-      parseBool :: Text -> Maybe Bool
-      parseBool t =
-        case t of
-          "true" -> Just True
-          _ -> Just False
+      raw k = lookupMaybe k f
+      req k = raw k >>= maybe (fail $ "Missing field: " <> toString k) pure
+      opt k = pure $ fromRight Nothing (raw k)
+      num k d = maybe d (fromMaybe d . readMaybe . toString) <$> raw k
+      flag k = fmap (== "true") <$> raw k
 
 
 sendWhatsappResponse :: AE.Value -> Text -> Text -> Maybe Text -> ATBaseCtx ()
 sendWhatsappResponse contentVariables to template bodyM = do
   Log.logTrace ("WhatsApp response" :: Text) $ AE.object ["to" AE..= to, "template" AE..= template, "body" AE..= bodyM, "contentVariables" AE..= contentVariables]
   appCtx <- Effectful.Reader.Static.ask @AuthContext
-  let from = appCtx.config.whatsappFromNumber
-      accountSid = appCtx.config.twilioAccountSid
-      token = appCtx.config.twilioAuthToken
-      opts = defaults & header "Content-Type" .~ ["application/x-www-form-urlencoded"] & auth ?~ basicAuth (encodeUtf8 accountSid) (encodeUtf8 token)
+  let accountSid = appCtx.config.twilioAccountSid
+      opts = defaults & header "Content-Type" .~ ["application/x-www-form-urlencoded"] & auth ?~ basicAuth (encodeUtf8 accountSid) (encodeUtf8 appCtx.config.twilioAuthToken)
       url = toString $ "https://api.twilio.com/2010-04-01/Accounts/" <> accountSid <> "/Messages.json"
-      variables = toStrict $ AE.encode contentVariables
       payload :: [FormParam]
-      payload = ["To" := to, "From" := ("whatsapp:" <> from)] <> maybe ["ContentSid" := template, "ContentVariables" := variables] (\x -> ["Body" := x]) bodyM
-  _ <- Wreq.postWith opts url payload
-  pass
+      payload =
+        ["To" := to, "From" := ("whatsapp:" <> appCtx.config.whatsappFromNumber)]
+          <> maybe ["ContentSid" := template, "ContentVariables" := toStrict (AE.encode contentVariables)] (\x -> ["Body" := x]) bodyM
+  void $ Wreq.postWith opts url payload

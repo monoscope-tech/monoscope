@@ -46,7 +46,6 @@ where
 import BackgroundJobs qualified
 import Control.Lens ((^.))
 import Data.Aeson qualified as AE
-import Data.CaseInsensitive (original)
 import Data.CaseInsensitive qualified as CI
 import Data.Char (isAlphaNum, isDigit, isLower)
 import Data.Default (Default (..))
@@ -94,7 +93,6 @@ import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.EmailTemplates qualified as ET
 import Pkg.Mail (addConvertKitUserOrganization, sendRenderedEmail)
 import Relude hiding (ask, asks)
-import Relude.Unsafe qualified as Unsafe
 import Servant (addHeader)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers)
@@ -186,9 +184,10 @@ projectCard_ project = do
           faSprite_ "arrow-right" "regular" "h-4 w-4 text-iconNeutral opacity-0 group-hover:opacity-100 transition-opacity ml-2 mt-1"
 
         div_ [class_ "flex items-center justify-between text-sm text-textWeak"] do
+          let created = fmt @Text $ dateDashF project.createdAt
           div_ [class_ "flex items-center gap-1"] do
             faSprite_ "calendar" "regular" "h-3.5 w-3.5"
-            time_ [datetime_ $ fmt $ dateDashF project.createdAt] $ toHtml @Text $ fmt $ dateDashF project.createdAt
+            time_ [datetime_ created] $ toHtml created
 
           unless (V.null project.usersDisplayImages)
             $ div_ [class_ "flex -space-x-2"] do
@@ -235,20 +234,8 @@ data CreateProjectForm = CreateProjectForm
 
 integrationsSettingsGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 integrationsSettingsGetH pid = do
-  (sess, project, bw) <- mkPageCtx pid
+  (_, _, bw) <- mkPageCtx pid
   appCtx <- ask @AuthContext
-  let createProj =
-        CreateProjectForm
-          { title = project.title
-          , description = project.description
-          , emails = []
-          , permissions = []
-          , timeZone = project.timeZone
-          , errorAlerts = if project.errorAlerts then Just "on" else Nothing
-          , endpointAlerts = if project.endpointAlerts then Just "on" else Nothing
-          , weeklyNotifs = if project.weeklyNotif then Just "on" else Nothing
-          , dailyNotifs = if project.dailyNotif then Just "on" else Nothing
-          }
   slackInfo <- getProjectSlackData pid
   discordInfo <- getDiscordDataByProjectId pid
   channels <- resolveSlackChannels slackInfo
@@ -259,8 +246,7 @@ integrationsSettingsGetH pid = do
   whenJust slackInfo \s -> void $ ProjectMembers.addSlackChannelToEveryoneTeam pid s.channelId
   everyoneTeamM <- ProjectMembers.getEveryoneTeam pid
   let pagerdutyKey = listToMaybe . V.toList . (.pagerduty_services) =<< everyoneTeamM
-      hasDiscord = isJust discordInfo
-  let existingSlackChannels = maybe V.empty (.slack_channels) everyoneTeamM
+      existingSlackChannels = maybe V.empty (.slack_channels) everyoneTeamM
       knownChannelIds = S.fromList $ map BotUtils.channelId channels
       -- Seed extras with the stored default channel name (captured at OAuth time),
       -- since the bot often can't query conversations.info for it later.
@@ -268,30 +254,24 @@ integrationsSettingsGetH pid = do
       seededExtras = maybeToList $ mfilter (\c -> not $ S.member (BotUtils.channelId c) knownChannelIds) defaultChannel
       seededIds = S.fromList $ map BotUtils.channelId seededExtras
       missingIds = filter (\c -> not (S.member c knownChannelIds) && not (S.member c seededIds)) $ V.toList existingSlackChannels
-  fetchedExtras <- case slackInfo of
-    Just d -> catMaybes <$> traverse (SlackP.getSlackChannelInfo d.botToken) missingIds
-    Nothing -> pure []
+  fetchedExtras <- maybe (pure []) (\d -> catMaybes <$> traverse (SlackP.getSlackChannelInfo d.botToken) missingIds) slackInfo
   let extraSlackChannels = seededExtras <> fetchedExtras
-
-  let bwconf = bw{pageTitle = "Integrations", isSettingsPage = True}
+      bwconf = bw{pageTitle = "Integrations", isSettingsPage = True}
   addRespHeaders
     $ bodyWrapper bwconf
     $ integrationsBody
       IntegrationsConfig
-        { session = sess.persistentSession
-        , projectId = pid
+        { projectId = pid
         , envConfig = appCtx.env
-        , isUpdate = True
-        , createForm = createProj
         , disabledChannels = maybe V.empty (.disabled_channels) everyoneTeamM
         , phones = maybe V.empty (.phone_numbers) everyoneTeamM
         , emails = maybe V.empty (.notify_emails) everyoneTeamM
         , slackData = slackInfo
-        , pagerdutyKey = pagerdutyKey
-        , discordConnected = hasDiscord
+        , pagerdutyKey
+        , discordConnected = isJust discordInfo
         , slackChannels = channels
-        , extraSlackChannels = extraSlackChannels
-        , existingSlackChannels = existingSlackChannels
+        , extraSlackChannels
+        , existingSlackChannels
         , everyoneTeamId = (.id) <$> everyoneTeamM
         }
 
@@ -312,11 +292,8 @@ allChannels = ["email", "slack", "discord", "phone", "pagerduty"]
 
 updateNotificationsChannel :: Projects.ProjectId -> NotifListForm -> ATAuthCtx (RespHeaders (Html ()))
 updateNotificationsChannel pid NotifListForm{enabledChannels, phones, emails, slackChannels} = do
-  validationResult <- validateNotificationChannels pid enabledChannels phones
-  case validationResult of
-    Left errorMessage -> do
-      addErrorToast errorMessage Nothing
-      integrationsSettingsGetH pid
+  validateNotificationChannels pid enabledChannels phones >>= \case
+    Left errorMessage -> addErrorToast errorMessage Nothing
     Right () -> do
       projectM <- Projects.projectById pid
       slackInfoM <- getProjectSlackData pid
@@ -332,8 +309,8 @@ updateNotificationsChannel pid NotifListForm{enabledChannels, phones, emails, sl
         -- channel; drop any where Slack says not_in_channel / channel_not_found
         -- / etc. so we don't persist unreachable routes that fail every alert.
         (unreachable, reachableAdds) <- case (,) <$> projectM <*> slackInfoM of
-          Just (project, slackInfo) -> do
-            results <- forM addedChannels \cid -> do
+          Just (project, slackInfo) ->
+            partitionEithers <$> forM addedChannels \cid -> do
               -- OAuth-default channel: probe via the channel-bound webhook URL
               -- (works for private channels; no bot membership needed).
               -- Other channels: probe via chat.postMessage (needs bot membership).
@@ -347,28 +324,24 @@ updateNotificationsChannel pid NotifListForm{enabledChannels, phones, emails, sl
                 Left err -> do
                   SlackP.logWelcomeMessageFailure cid err
                   pure (Left cid)
-            pure $ partitionEithers results
           Nothing -> do
             unless (null addedChannels)
               $ addErrorToast "Slack workspace is not linked to this project; new channels were not saved." Nothing
             pure (addedChannels, [])
 
-        let finalSlack = V.fromList $ ordNub $ V.toList team.slack_channels <> reachableAdds
-            disabled = V.fromList $ filter (`notElem` enabledChannels) allChannels
-            teamDetails =
-              (ProjectMembers.teamToDetails team)
-                { ProjectMembers.slackChannels = finalSlack
-                , ProjectMembers.notifyEmails = V.fromList emails
-                , ProjectMembers.phoneNumbers = V.fromList phones
-                , ProjectMembers.disabledChannels = disabled
-                }
-                :: ProjectMembers.TeamDetails
-        void $ ProjectMembers.updateTeam pid team.id teamDetails
+        void
+          $ ProjectMembers.updateTeam pid team.id
+          $ (ProjectMembers.teamToDetails team)
+            { ProjectMembers.slackChannels = V.fromList $ ordNub $ V.toList team.slack_channels <> reachableAdds
+            , ProjectMembers.notifyEmails = V.fromList emails
+            , ProjectMembers.phoneNumbers = V.fromList phones
+            , ProjectMembers.disabledChannels = V.fromList $ filter (`notElem` enabledChannels) allChannels
+            }
 
         unless (null unreachable)
           $ addErrorToast ("Could not reach Slack channel(s): " <> T.intercalate ", " unreachable <> ". Invite Monoscope to each channel and try again.") Nothing
       addSuccessToast "Updated Notification Channels Successfully" Nothing
-      integrationsSettingsGetH pid
+  integrationsSettingsGetH pid
 
 
 validateNotificationChannels :: Projects.ProjectId -> [Text] -> [Text] -> ATAuthCtx (Either Text ())
@@ -415,28 +388,29 @@ newtype PagerdutyConnectForm = PagerdutyConnectForm {integrationKey :: Text}
   deriving anyclass (FromForm)
 
 
+-- | Audit an integration connect/disconnect for @name@ against the current session.
+logIntegrationAudit :: Projects.ProjectId -> Projects.AuditEvent -> Text -> ATAuthCtx ()
+logIntegrationAudit pid event name = do
+  sess <- Projects.getSession
+  Projects.logAuditS pid event sess $ Just $ AE.object ["integration" AE..= name]
+
+
 pagerdutyConnectH :: Projects.ProjectId -> PagerdutyConnectForm -> ATAuthCtx (RespHeaders (Html ()))
 pagerdutyConnectH pid form = do
   let key = T.strip form.integrationKey
-  if T.length key < 20 || T.null key
-    then addErrorToast "PagerDuty integration key is too short" Nothing >> integrationsSettingsGetH pid
+  if T.length key < 20
+    then addErrorToast "PagerDuty integration key is too short" Nothing
     else do
       void $ ProjectMembers.addPagerdutyServiceToEveryoneTeam pid key
-      sess <- Projects.getSession
-      Projects.logAuditS pid Projects.AEIntegrationConnected sess
-        $ Just
-        $ AE.object ["integration" AE..= ("pagerduty" :: Text)]
+      logIntegrationAudit pid Projects.AEIntegrationConnected "pagerduty"
       addSuccessToast "PagerDuty connected" Nothing
-      integrationsSettingsGetH pid
+  integrationsSettingsGetH pid
 
 
 pagerdutyDisconnectH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 pagerdutyDisconnectH pid = do
   ProjectMembers.removePagerdutyServicesFromEveryoneTeam pid
-  sess <- Projects.getSession
-  Projects.logAuditS pid Projects.AEIntegrationDisconnected sess
-    $ Just
-    $ AE.object ["integration" AE..= ("pagerduty" :: Text)]
+  logIntegrationAudit pid Projects.AEIntegrationDisconnected "pagerduty"
   addSuccessToast "PagerDuty disconnected" Nothing
   integrationsSettingsGetH pid
 
@@ -447,21 +421,15 @@ slackDisconnectH pid = do
   if deleted > 0
     then do
       void $ ProjectMembers.removeSlackChannelsFromEveryoneTeam pid
-      sess <- Projects.getSession
-      Projects.logAuditS pid Projects.AEIntegrationDisconnected sess
-        $ Just
-        $ AE.object ["integration" AE..= ("slack" :: Text)]
+      logIntegrationAudit pid Projects.AEIntegrationDisconnected "slack"
       addSuccessToast "Slack disconnected" Nothing
     else addErrorToast "Failed to disconnect Slack" Nothing
   integrationsSettingsGetH pid
 
 
 data IntegrationsConfig = IntegrationsConfig
-  { session :: Projects.PersistentSession
-  , projectId :: Projects.ProjectId
+  { projectId :: Projects.ProjectId
   , envConfig :: EnvConfig
-  , isUpdate :: Bool
-  , createForm :: CreateProjectForm
   , disabledChannels :: V.Vector Text
   , phones :: V.Vector Text
   , emails :: V.Vector Text
@@ -501,7 +469,7 @@ integrationsBody IntegrationsConfig{..} = do
               , ("slack", "Slack", isJust slackData, faSprite_ "slack" "solid" "h-4 w-4", renderSlackIntegration envConfig pid slackData slackChannels extraSlackChannels existingSlackChannels)
               , ("discord", "Discord", discordConnected, faSprite_ "discord" "solid" "h-4 w-4", renderDiscordIntegration envConfig pid)
               , ("phone", "WhatsApp", not $ V.null phones, faSprite_ "whatsapp" "solid" "h-4 w-4", renderWhatsappIntegration tgs)
-              , ("pagerduty", "PagerDuty", isJust pagerdutyKey, faSprite_ "pager" "solid" "h-4 w-4", renderPagerdutyIntegration projectId.toText pagerdutyKey)
+              , ("pagerduty", "PagerDuty", isJust pagerdutyKey, faSprite_ "pager" "solid" "h-4 w-4", renderPagerdutyIntegration pid (isJust pagerdutyKey))
               ]
                 :: [(Text, Text, Bool, Html (), Html ())]
 
@@ -517,7 +485,7 @@ integrationsBody IntegrationsConfig{..} = do
             , hxTarget_ "#integrations-form-section"
             , hxSelect_ "#integrations-form-section"
             , hxSwap_ "outerHTML swap:0.3s"
-            , [__| on change from closest <div/> put .btn-primary into my.className then put 'btn btn-sm btn-primary' into my.className end |]
+            , [__| on change from closest <div/> put 'btn btn-sm btn-primary' into my.className |]
             ]
             "Save"
 
@@ -549,7 +517,7 @@ renderInlineTestButton pid channel teamIdM =
 renderNotificationOption :: Text -> Maybe UUID.UUID -> Text -> Text -> Bool -> Bool -> Html () -> Html () -> Html ()
 renderNotificationOption pid teamIdM title value isChecked isConfigured icon extraContent = do
   let isActive = isChecked && isConfigured
-  div_ [class_ ""] do
+  div_ [] do
     -- Compact row: icon, name, test, toggle
     div_ [class_ "flex items-center gap-3 p-3"] do
       div_ [class_ "flex items-center justify-center shrink-0 w-7 h-7 rounded-md", class_ $ if isActive then "bg-fillBrand-weak" else "bg-fillWeak"] icon
@@ -618,8 +586,8 @@ renderDiscordIntegration envCfg pid = do
     "Add to Discord"
 
 
-renderPagerdutyIntegration :: Text -> Maybe Text -> Html ()
-renderPagerdutyIntegration pid = div_ [id_ "pagerduty-integration"] . maybe disconnectedUI (const connectedUI)
+renderPagerdutyIntegration :: Text -> Bool -> Html ()
+renderPagerdutyIntegration pid = div_ [id_ "pagerduty-integration"] . bool disconnectedUI connectedUI
   where
     connectedUI = do
       div_ [class_ "flex items-center gap-2"] do
@@ -651,31 +619,22 @@ manageMembersPostH pid onboardingM form = do
   projMembers <- ProjectMembers.selectActiveProjectMembers pid
   let usersAndPermissions = filter (\(x, _) -> not (T.null x)) $ zip (form.emails <&> T.strip) form.permissions & uniq
   let uAndPOldAndChanged =
-        mapMaybe
-          ( \(email, permission) -> do
-              let projMembersM = projMembers & find (\a -> original a.email == email && a.permission /= permission)
-              projMembersM >>= (\projMember -> Just (projMember.id, permission))
-          )
-          usersAndPermissions
+        usersAndPermissions
+          & mapMaybe \(email, permission) ->
+            (,permission) . (.id) <$> find (\a -> CI.original a.email == email && a.permission /= permission) projMembers
 
-  let uAndPNew = filter (\(email, _) -> not $ any (\a -> original a.email == email) projMembers) usersAndPermissions
+  let uAndPNew = filter (\(email, _) -> not $ any (\a -> CI.original a.email == email) projMembers) usersAndPermissions
 
   let deletedUAndP =
         projMembers
-          & filter (\pm -> not $ any (\(email, _) -> original pm.email == email) usersAndPermissions)
+          & filter (\pm -> not $ any (\(email, _) -> CI.original pm.email == email) usersAndPermissions)
           & filter (\a -> a.userId /= currUserId)
           & map (.id)
 
   newProjectMembers <- forM uAndPNew \(email, permission) -> do
-    userId' <- do
-      userIdM' <- Projects.userIdByEmail email
-      case userIdM' of
-        Nothing -> do
-          idM' <- Projects.createEmptyUser email
-          case idM' of
-            Nothing -> error "duplicate email in createEmptyUser"
-            Just idX -> pure idX
-        Just idX -> pure idX
+    userId' <-
+      Projects.userIdByEmail email
+        >>= maybe (Projects.createEmptyUser email >>= maybe (error "duplicate email in createEmptyUser") pure) pure
 
     when (userId' /= currUserId)
       $ void
@@ -683,11 +642,11 @@ manageMembersPostH pid onboardingM form = do
       $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject currUserId pid email project.title
     pure (email, permission, userId')
 
-  let projectMembers =
-        newProjectMembers
-          & filter (\(_, _, id') -> id' /= currUserId)
-          & map (\(email, permission, id') -> ProjectMembers.CreateProjectMembers pid id' permission)
-  _ <- ProjectMembers.insertProjectMembers projectMembers
+  _ <-
+    ProjectMembers.insertProjectMembers
+      $ newProjectMembers
+      & filter (\(_, _, id') -> id' /= currUserId)
+      & map \(_, permission, id') -> ProjectMembers.CreateProjectMembers pid id' permission
 
   unless (null uAndPOldAndChanged)
     $ void
@@ -703,15 +662,16 @@ manageMembersPostH pid onboardingM form = do
 
   projMembersLatest <- V.fromList <$> ProjectMembers.selectAllProjectMembers pid
   teamsCount <- length <$> ProjectMembers.getTeamsVM pid
-  if isJust onboardingM
-    then do
-      redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=Integration"
-      addRespHeaders $ ManageMembersPost (pid, projMembersLatest, project.paymentPlan, teamsCount)
-    else do
-      if Projects.isFreeTier project.paymentPlan && not (null uAndPNew)
-        then addSuccessToast "Members invited! Upgrade to enable team access." Nothing
-        else addSuccessToast "Updated Members List Successfully" Nothing
-      addRespHeaders $ ManageMembersPost (pid, projMembersLatest, project.paymentPlan, teamsCount)
+  case onboardingM of
+    Just _ -> redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=Integration"
+    Nothing ->
+      addSuccessToast
+        ( if Projects.isFreeTier project.paymentPlan && not (null uAndPNew)
+            then "Members invited! Upgrade to enable team access."
+            else "Updated Members List Successfully"
+        )
+        Nothing
+  addRespHeaders $ ManageMembersPost (pid, projMembersLatest, project.paymentPlan, teamsCount)
 
 
 data TeamForm = TeamForm
@@ -769,7 +729,7 @@ manageTeamPostH pid form tmView = do
       _ <- ProjectMembers.updateTeam pid tid teamDetails
       addSuccessToast "Team updated successfully" Nothing
       addTriggerEvent "closeModal" ""
-      maybe (redirectCS $ "/p/" <> pid.toText <> "/manage_teams") (\_ -> redirectCS $ "/p/" <> pid.toText <> "/team/" <> form.teamHandle) tmView
+      redirectCS $ "/p/" <> pid.toText <> maybe "/manage_teams" (const $ "/team/" <> form.teamHandle) tmView
       addRespHeaders $ ManageTeamsPostError ""
     (_, _, _, Nothing) -> do
       createdM <- ProjectMembers.createTeam pid (Just currUserId) teamDetails
@@ -791,13 +751,11 @@ newtype TBulkActionForm = TBulkActionForm
 
 manageTeamBulkActionH :: Projects.ProjectId -> Text -> TBulkActionForm -> Maybe Text -> ATAuthCtx (RespHeaders ManageTeams)
 manageTeamBulkActionH pid action TBulkActionForm{itemId} listViewM = do
-  (sess, project) <- Projects.sessionAndProject pid
-  appCtx <- ask @AuthContext
+  (sess, _) <- Projects.sessionAndProject pid
   case action of
     "delete" -> do
       teamVm <- ProjectMembers.getTeamsById pid $ V.fromList itemId
-      let canDelete = all (\team -> Just sess.user.id == team.created_by) teamVm
-      if canDelete
+      if all (\team -> Just sess.user.id == team.created_by) teamVm
         then do
           _ <- ProjectMembers.deleteTeams pid $ V.fromList itemId
           when (isNothing listViewM)
@@ -820,7 +778,7 @@ data ManageTeams
 instance ToHtml ManageTeams where
   toHtml (ManageTeamsGet (PageCtx bwconf (pid, members, slackChannels, discordChannels, teams))) = toHtml $ PageCtx bwconf $ manageTeamsPage pid members slackChannels discordChannels teams
   toHtml (ManageTeamsGet' (pid, members, slackChannels, discordChannels, teams)) = toHtml $ manageTeamsPage pid members slackChannels discordChannels teams
-  toHtml (ManageTeamsPostError msg) = span_ [] ""
+  toHtml (ManageTeamsPostError _) = span_ [] ""
   toHtml ManageTeamsDelete = toHtml ""
   toHtml (ManageTeamGet (PageCtx bwconf (pid, team, members, slackChannels, discordChannels))) = toHtml $ PageCtx bwconf $ teamPage pid team members slackChannels discordChannels
   toHtml (ManageTeamGet' (pid, team, members, slackChannels, discordChannels)) = toHtml $ teamPage pid team members slackChannels discordChannels
@@ -834,19 +792,25 @@ manageTeamsGetH pid layoutM = do
   (projMembers, channels, discordChannels) <- teamPageData pid
   teams <- V.fromList <$> ProjectMembers.getTeamsVM pid
   let bwconf = bw{pageTitle = "Team", isSettingsPage = True}
-  case layoutM of
-    Just _ -> do
-      addRespHeaders $ ManageTeamsGet' (pid, projMembers, channels, discordChannels, teams)
-    _ -> do
-      addRespHeaders $ ManageTeamsGet (PageCtx bwconf (pid, projMembers, channels, discordChannels, teams))
+      payload = (pid, projMembers, channels, discordChannels, teams)
+  addRespHeaders $ maybe (ManageTeamsGet $ PageCtx bwconf payload) (const $ ManageTeamsGet' payload) layoutM
+
+
+encodeChannels :: [BotUtils.Channel] -> Text
+encodeChannels = decodeUtf8 . AE.encode . map \x -> AE.object ["name" AE..= ("#" <> x.channelName), "value" AE..= x.channelId]
+
+
+-- | Tagify whitelists for the team modal: (members by user id, members by email).
+memberWhitelists :: V.Vector ProjectMembers.ProjectMemberVM -> (Text, Text)
+memberWhitelists projMembers =
+  ( decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= (x.first_name <> " " <> x.last_name), "email" AE..= x.email, "value" AE..= x.userId]) <$> projMembers
+  , decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= x.email, "value" AE..= x.email]) <$> projMembers
+  )
 
 
 manageTeamsPage :: Projects.ProjectId -> V.Vector ProjectMembers.ProjectMemberVM -> [BotUtils.Channel] -> [BotUtils.Channel] -> V.Vector ProjectMembers.TeamVM -> Html ()
-encodeChannels :: [BotUtils.Channel] -> Text
-encodeChannels = decodeUtf8 . AE.encode . map \x -> AE.object ["name" AE..= ("#" <> x.channelName), "value" AE..= x.channelId]
 manageTeamsPage pid projMembers channels discordChannels teams = do
-  let whiteList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= (x.first_name <> " " <> x.last_name), "email" AE..= x.email, "value" AE..= x.userId]) <$> projMembers
-      emailWhiteList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= x.email, "value" AE..= x.email]) <$> projMembers
+  let (whiteList, emailWhiteList) = memberWhitelists projMembers
       (channelWhiteList, discordWhiteList) = (encodeChannels channels, encodeChannels discordChannels)
   div_ [class_ "w-full h-full overflow-y-auto"] $ section_ [class_ "py-6 px-4 sm:py-8 sm:px-8 lg:px-12 space-y-6"] do
     div_ [class_ "flex justify-between items-center max-w-2xl"] do
@@ -858,24 +822,24 @@ manageTeamsPage pid projMembers channels discordChannels teams = do
       then div_ [class_ "py-12 text-center surface-raised rounded-2xl max-w-2xl"] do
         div_ [class_ "text-sm text-textStrong font-medium"] "No teams yet"
         div_ [class_ "text-xs text-textWeak mt-1"] "Create a team to route alerts to the right people."
-      else do
-        let renderTeamNameCol team = nameCell pid team.name team.description team.handle team.is_everyone
-            renderModifiedCol team = span_ [class_ "monospace text-textWeak text-xs whitespace-nowrap"] $ toHtml $ toText $ formatTime defaultTimeLocale "%b %-e" team.updated_at
-            renderMembersCol team = memberCell team.members
-            renderNotificationsCol = notifsCell
-            tableCols = [Table.col "Name" renderTeamNameCol, Table.col "Members" renderMembersCol, Table.col "Notifications" renderNotificationsCol, Table.col "Modified" renderModifiedCol]
-            table =
-              Table
-                { config = def{Table.elemID = "teams_table", Table.renderAsTable = True}
-                , columns = tableCols
-                , rows = teams
-                , features =
-                    def
-                      { Table.rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"]
-                      , Table.search = if V.length teams >= 5 then Just Table.ClientSide else Nothing
-                      }
-                }
-        div_ [class_ "w-full"] $ toHtml table
+      else
+        div_ [class_ "w-full"]
+          $ toHtml
+            Table
+              { config = def{Table.elemID = "teams_table", Table.renderAsTable = True}
+              , columns =
+                  [ Table.col "Name" \team -> nameCell pid team.name team.description team.handle team.is_everyone
+                  , Table.col "Members" $ memberCell . (.members)
+                  , Table.col "Notifications" notifsCell
+                  , Table.col "Modified" \team -> span_ [class_ "monospace text-textWeak text-xs whitespace-nowrap"] $ toHtml $ toText $ formatTime defaultTimeLocale "%b %-e" team.updated_at
+                  ]
+              , rows = teams
+              , features =
+                  def
+                    { Table.rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"]
+                    , Table.search = if V.length teams >= 5 then Just Table.ClientSide else Nothing
+                    }
+              }
 
 
 nameCell :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Html ()
@@ -917,18 +881,14 @@ teamGetH pid handle layoutM = do
                       faSprite_ "pen-to-square" "regular" "h-4 w-4"
                       "Edit"
               }
-      case layoutM of
-        Just _ -> addRespHeaders $ ManageTeamGet' (pid, team, projMembers, channels, discordChannels)
-        _ -> addRespHeaders $ ManageTeamGet (PageCtx bwconf (pid, team, projMembers, channels, discordChannels))
-    Nothing -> do
-      let bwconf = bw{pageTitle = "Team details"}
-      addRespHeaders $ ManageTeamGetError (PageCtx bwconf (pid, handle))
+      let payload = (pid, team, projMembers, channels, discordChannels)
+      addRespHeaders $ maybe (ManageTeamGet $ PageCtx bwconf payload) (const $ ManageTeamGet' payload) layoutM
+    Nothing -> addRespHeaders $ ManageTeamGetError $ PageCtx bw{pageTitle = "Team details"} (pid, handle)
 
 
 teamPage :: Projects.ProjectId -> ProjectMembers.TeamVM -> V.Vector ProjectMembers.ProjectMemberVM -> [BotUtils.Channel] -> [BotUtils.Channel] -> Html ()
 teamPage pid team projMembers slackChannels discordChannels = do
-  let whiteList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= (x.first_name <> " " <> x.last_name), "email" AE..= x.email, "value" AE..= x.userId]) <$> projMembers
-      emailWhiteList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= x.email, "value" AE..= x.email]) <$> projMembers
+  let (whiteList, emailWhiteList) = memberWhitelists projMembers
       (channelWhiteList, discordWhiteList) = (encodeChannels slackChannels, encodeChannels discordChannels)
       isEveryone = team.is_everyone
       notifRow_ icon iconType lbl vals inherited = div_ [class_ "flex items-start gap-3 py-2.5"] do
@@ -944,7 +904,7 @@ teamPage pid team projMembers slackChannels discordChannels = do
           _ <- span_ [class_ "flex items-center gap-2 text-sm font-semibold text-textStrong"] (faSprite_ icon "regular" "h-4 w-4" >> toHtml title)
           label_ [class_ "input input-sm w-64 bg-fillWeak border-0"] do
             faSprite_ "magnifying-glass" "regular" "h-3.5 w-3.5 text-iconNeutral"
-            input_ [type_ "text", placeholder_ searchPh, class_ "", makeAttribute "_" $ "on input show <tr/> in #" <> secId <> " when its textContent.toLowerCase() contains my value.toLowerCase()"]
+            input_ [type_ "text", placeholder_ searchPh, makeAttribute "_" $ "on input show <tr/> in #" <> secId <> " when its textContent.toLowerCase() contains my value.toLowerCase()"]
         div_ [class_ "w-full max-h-96 overflow-y-auto", id_ secId] do
           unless (T.null url) $ a_ [hxGet_ url, hxTrigger_ "intersect once", hxTarget_ $ "#" <> secId, hxSwap_ "outerHTML"] ""
           emptyState_ def{icon = Just icon, size = ESCompact} ("No " <> T.toLower title <> " linked") ""
@@ -968,7 +928,7 @@ teamPage pid team projMembers slackChannels discordChannels = do
             div_ [class_ "flex gap-2"] $ span_ [class_ "text-textWeak w-16"] "Handle" >> span_ [class_ "text-textStrong"] (toHtml $ "@" <> team.handle)
             unless (T.null team.description) $ div_ [class_ "flex gap-2"] $ span_ [class_ "text-textWeak w-16"] "About" >> span_ [class_ "text-textStrong"] (toHtml team.description)
         let memberRow_ avatar name email = div_ [class_ "flex items-center gap-3 py-2.5"] $ img_ [src_ avatar, class_ "w-8 h-8 rounded-full border border-strokeWeak", term "loading" "lazy", term "decoding" "async"] >> div_ [] (div_ [class_ "text-sm font-medium text-textStrong"] (toHtml name) >> div_ [class_ "text-xs text-textWeak"] (toHtml email))
-            members = if isEveryone then (\m -> ("/api/avatar/" <> m.userId.toText, m.first_name <> " " <> m.last_name, original m.email)) <$> projMembers else (\m -> (m.memberAvatar, m.memberName, m.memberEmail)) <$> team.members
+            members = if isEveryone then (\m -> ("/api/avatar/" <> m.userId.toText, m.first_name <> " " <> m.last_name, CI.original m.email)) <$> projMembers else (\m -> (m.memberAvatar, m.memberName, m.memberEmail)) <$> team.members
         panel_ def{raised = True, icon = Just "users", subtitle = Just $ " (" <> show (V.length members) <> ")"} "Members" do
           div_ [class_ "divide-y divide-strokeWeak -mx-4"] $ forM_ members \(avatar, name, email) -> div_ [class_ "px-4"] $ memberRow_ avatar name email
         panel_ def{raised = True, icon = Just "bell"} "Notifications" $ div_ [class_ "divide-y divide-strokeWeak -mx-4"] do
@@ -991,7 +951,7 @@ teamPage pid team projMembers slackChannels discordChannels = do
                     input_ [type_ "hidden", name_ "channel", value_ "all"]
                     input_ [type_ "hidden", name_ "teamId", value_ $ UUID.toText team.id]
                     input_ [type_ "hidden", name_ "issueType", value_ "runtime_exception"]
-                    button_ ([type_ "submit", class_ "btn btn-xs btn-primary tap-target", [__| on htmx:afterRequest from closest <form/> trigger testSent on body |]] <> bool [] [disabled_ ""] (not hasAnyChannel)) do
+                    button_ ([type_ "submit", class_ "btn btn-xs btn-primary tap-target", [__| on htmx:afterRequest from closest <form/> trigger testSent on body |]] <> [disabled_ "" | not hasAnyChannel]) do
                       faSprite_ "flask-vial" "regular" "h-3.5 w-3.5"
                       " Send Test"
               div_ [id_ $ "team-test-history-" <> UUID.toText team.id, hxGet_ ("/p/" <> pid.toText <> "/settings/integrations/history"), hxTrigger_ "testSent from:body", hxSwap_ "innerHTML", class_ "mt-3"] mempty
@@ -1086,7 +1046,7 @@ manageMembersBody pid projMembers paymentPlan teamsCount =
         div_ [class_ "space-y-3"] do
           headerRow_ [] do
             h3_ [class_ "text-sm font-medium text-textStrong"] $ toHtml $ "Members (" <> show (V.length projMembers) <> ")"
-            when (V.length projMembers > 0) $ button_ [class_ "btn btn-sm btn-outline gap-1.5", disabled_ "true", id_ "saveMembersBtn", dirtyFormSaveAttr_] do
+            unless (V.null projMembers) $ button_ [class_ "btn btn-sm btn-outline gap-1.5", disabled_ "true", id_ "saveMembersBtn", dirtyFormSaveAttr_] do
               faSprite_ "check" "regular" "w-3 h-3"; "Save changes"
           div_ [class_ "divide-y divide-strokeWeak rounded-xl border border-strokeWeak overflow-hidden"]
             $ if V.null projMembers
@@ -1118,11 +1078,10 @@ memberRowWithStatus pid idx prM = do
 
 deleteMemberH :: Projects.ProjectId -> RealUUID.UUID -> ATAuthCtx (RespHeaders (Html ()))
 deleteMemberH pid memberId = do
-  (sess, project) <- Projects.sessionAndProject pid
+  (sess, _) <- Projects.sessionAndProject pid
   let currUserId = sess.persistentSession.userId
   projMembers <- ProjectMembers.selectActiveProjectMembers pid
-  let memberM = find (\m -> m.id == memberId) projMembers
-  case memberM of
+  case find (\m -> m.id == memberId) projMembers of
     Nothing -> toastError "Member not found" mempty
     Just member ->
       if member.userId == currUserId
@@ -1138,11 +1097,11 @@ deleteMemberH pid memberId = do
 
 manageSubGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 manageSubGetH pid = do
-  (sess, project) <- Projects.sessionAndProject pid
+  (_, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
   case Projects.projectProvider project of
-    Projects.StripeProvider -> do
+    Projects.StripeProvider ->
       case project.customerId <|> project.orderId of
         Just customerId | not (T.null customerId) -> do
           let returnUrl = envCfg.hostUrl <> "p/" <> pid.toText <> "/manage_billing"
@@ -1152,9 +1111,7 @@ manageSubGetH pid = do
             Nothing -> toastError "Failed to create billing portal" mempty
         _ -> toastError "Customer ID not found" mempty
     Projects.LemonSqueezyProvider -> do
-      sub <- case project.subId of
-        Nothing -> pure Nothing
-        Just sid -> lsGet @SubPortalDataVals envCfg.lemonSqueezyApiKey ("https://api.lemonsqueezy.com/v1/subscriptions/" <> sid)
+      sub <- maybe (pure Nothing) (lsGet @SubPortalDataVals envCfg.lemonSqueezyApiKey . ("https://api.lemonsqueezy.com/v1/subscriptions/" <>)) project.subId
       case sub of
         Nothing -> toastError "Subscription ID not found" mempty
         Just s -> redirectCS s.dataVal.attributes.urls.customerPortal >> addRespHeaders mempty
@@ -1264,26 +1221,20 @@ projectOnboardingH = do
   let envCfg = appCtx.config
   sess <- Projects.getSession
   projects <- Projects.selectProjectsForUser sess.persistentSession.userId
-  let projectM = find (\pr -> Projects.isOnboarding pr.paymentPlan) projects
-      bwconf = (def :: BWConfig){sessM = Just sess, currProject = Nothing, pageTitle = "New Project", config = appCtx.config}
-  case projectM of
-    Just p -> do
-      let h = "/p/" <> p.id.toText <> "/onboarding"
-      pure $ addHeader h $ PageCtx bwconf ""
-    _ -> do
+  let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Nothing, pageTitle = "New Project", config = appCtx.config}
+  pid <- case find (\pr -> Projects.isOnboarding pr.paymentPlan) projects of
+    Just p -> pure p.id
+    Nothing -> do
       pid <- UUIDId <$> UUID.genUUID
-      let pr = Projects.CreateProject{id = pid, title = "Onboarding Project", description = "", paymentPlan = "ONBOARDING", timeZone = "", subId = Nothing, firstSubItemId = Nothing, orderId = Nothing, weeklyNotif = True, dailyNotif = True, endpointAlerts = True, errorAlerts = True}
-      _ <- Projects.insertProject pr
+      _ <- Projects.insertProject Projects.CreateProject{id = pid, title = "Onboarding Project", description = "", paymentPlan = "ONBOARDING", timeZone = "", subId = Nothing, firstSubItemId = Nothing, orderId = Nothing, weeklyNotif = True, dailyNotif = True, endpointAlerts = True, errorAlerts = True}
       _ <- ProjectMembers.createEveryoneTeam pid sess.user.id
       projectKeyUUID <- UUID.genUUID
-      let encryptedKeyB64 = ProjectApiKeys.encodeApiKeyB64 envCfg.apiKeyEncryptionSecretKey projectKeyUUID
-      pApiKey <- ProjectApiKeys.newProjectApiKeys pid projectKeyUUID "Default API Key" encryptedKeyB64
+      pApiKey <- ProjectApiKeys.newProjectApiKeys pid projectKeyUUID "Default API Key" $ ProjectApiKeys.encodeApiKeyB64 envCfg.apiKeyEncryptionSecretKey projectKeyUUID
       _ <- ProjectApiKeys.insertProjectApiKey pApiKey
-      let projectMember = ProjectMembers.CreateProjectMembers pid sess.user.id ProjectMembers.PAdmin
-      _ <- ProjectMembers.insertProjectMembers [projectMember]
+      _ <- ProjectMembers.insertProjectMembers [ProjectMembers.CreateProjectMembers pid sess.user.id ProjectMembers.PAdmin]
       Projects.logAuditS pid Projects.AEProjectCreated sess Nothing
-      let h = "/p/" <> pid.toText <> "/onboarding"
-      pure $ addHeader h $ PageCtx bwconf ""
+      pure pid
+  pure $ addHeader ("/p/" <> pid.toText <> "/onboarding") $ PageCtx bwconf ""
 
 
 data CreateProjectResp = CreateProjectResp
@@ -1313,7 +1264,7 @@ instance HasField "unwrapCreateProjectResp" CreateProject (Maybe CreateProjectRe
 
 instance ToHtml CreateProject where
   toHtml (CreateProject (PageCtx bwconf (sess, pid, config, paymentPlan, isUpdate, prf, pref, pro))) = toHtml $ PageCtx bwconf $ createProjectBody sess pid config paymentPlan prf pref pro
-  toHtml (PostNoContent message) = span_ [class_ ""] $ toHtml message
+  toHtml (PostNoContent message) = span_ [] $ toHtml message
   toHtml (ProjectPost cpr) = toHtml $ createProjectBody cpr.sess cpr.pid cpr.env cpr.paymentPlan cpr.form cpr.formError cpr.pro
   toHtmlRaw = toHtml
 
@@ -1322,17 +1273,18 @@ projectSettingsGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders CreateProjec
 projectSettingsGetH pid = do
   (sess, project, bw) <- mkPageCtx pid
   appCtx <- ask @AuthContext
-  let createProj =
+  let onFlag = bool Nothing (Just "on")
+      createProj =
         CreateProjectForm
           { title = project.title
           , description = project.description
           , emails = []
           , permissions = []
           , timeZone = project.timeZone
-          , weeklyNotifs = if project.weeklyNotif then Just "on" else Nothing
-          , dailyNotifs = if project.dailyNotif then Just "on" else Nothing
-          , errorAlerts = if project.errorAlerts then Just "on" else Nothing
-          , endpointAlerts = if project.endpointAlerts then Just "on" else Nothing
+          , weeklyNotifs = onFlag project.weeklyNotif
+          , dailyNotifs = onFlag project.dailyNotif
+          , errorAlerts = onFlag project.errorAlerts
+          , endpointAlerts = onFlag project.endpointAlerts
           }
 
   let bwconf = bw{pageTitle = "Project", isSettingsPage = True}
@@ -1344,9 +1296,7 @@ deleteProjectGetH pid = do
   sess <- Projects.getSession
   appCtx <- ask @AuthContext
   if isDemoAndNotSudo pid sess.user.isSudo
-    then do
-      addSuccessToast "Can't perform this action on the demon project" Nothing
-      addRespHeaders $ PostNoContent ""
+    then addSuccessToast "Can't perform this action on the demon project" Nothing
     else do
       _ <- Projects.deleteProject pid
       _ <- liftIO $ withResource appCtx.pool \conn ->
@@ -1354,7 +1304,7 @@ deleteProjectGetH pid = do
       Projects.logAuditS pid Projects.AEProjectDeleted sess Nothing
       addSuccessToast "Deleted Project Successfully" Nothing
       redirectCS "/"
-      addRespHeaders $ PostNoContent ""
+  addRespHeaders $ PostNoContent ""
 
 
 createProjectPostH :: Projects.ProjectId -> CreateProjectForm -> ATAuthCtx (RespHeaders CreateProject)
@@ -1383,12 +1333,6 @@ data SubDataVals = SubDataVals
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SubDataVals
 
 
-getSubscriptionId :: HTTP :> es => Maybe Text -> Text -> Eff es (Maybe (LSData [SubDataVals]))
-getSubscriptionId orderId apiKey = case orderId of
-  Nothing -> pure Nothing
-  Just ordId -> lsGet apiKey ("https://api.lemonsqueezy.com/v1/orders/" <> ordId <> "/subscriptions")
-
-
 data PricingUpdateForm = PricingUpdateForm
   { orderIdM :: Maybe Text
   , plan :: Maybe Text
@@ -1404,8 +1348,7 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = do
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
       apiKey = envCfg.lemonSqueezyApiKey
-      steps = project.onboardingStepsCompleted
-      newStepsComp = insertIfNotExist "Pricing" steps
+      newStepsComp = insertIfNotExist "Pricing" project.onboardingStepsCompleted
       updatePricing name sid fid oid = Projects.updateProjectPricing pid name sid fid oid newStepsComp
       handleOnboarding name = when (Projects.isOnboarding project.paymentPlan) $ do
         _ <- liftIO $ withResource appCtx.pool \conn -> do
@@ -1422,7 +1365,9 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = do
         Projects.logAuditS pid Projects.AEPlanChanged sess
           $ Just
           $ AE.object ["plan" AE..= name]
-      notifyPlanChange email = sendRenderedEmail (CI.original email)
+      mailAllUsers (subj, html) = do
+        users <- Projects.usersByProjectId pid
+        forM_ users \u -> sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
   case plan of
     Just "Open Source" | envCfg.basicAuthEnabled -> do
       _ <- updatePricing "Open Source" "" "" ""
@@ -1431,36 +1376,29 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = do
       void $ ProjectMembers.activateAllMembers pid
     _ -> case orderIdM of
       Just orderId ->
-        getSubscriptionId (Just orderId) apiKey >>= \case
-          Just sub | not (null sub.dataVal) -> do
-            let target = sub.dataVal Unsafe.!! 0
-                subId = show target.attributes.firstSubscriptionItem.subscriptionId
+        lsGet @[SubDataVals] apiKey ("https://api.lemonsqueezy.com/v1/orders/" <> orderId <> "/subscriptions") >>= \case
+          Just sub | Just target <- viaNonEmpty head sub.dataVal -> do
+            let subId = show target.attributes.firstSubscriptionItem.subscriptionId
                 firstSubId = show target.attributes.firstSubscriptionItem.id
                 productName = target.attributes.productName
             _ <- updatePricing productName subId firstSubId orderId
             auditPlan productName
             handleOnboarding productName
             void $ ProjectMembers.activateAllMembers pid
-            let (subj, html) = ET.planUpgradedEmail project.title productName billingUrl
-            users <- Projects.usersByProjectId pid
-            forM_ users \u -> notifyPlanChange u.email subj (ET.renderEmail subj html)
+            mailAllUsers $ ET.planUpgradedEmail project.title productName billingUrl
           _ -> addErrorToast "Something went wrong while fetching subscription id" Nothing
       Nothing -> do
         _ <- updatePricing "Free" "" "" ""
         auditPlan ("Free" :: Text)
         handleOnboarding "Free"
         void $ ProjectMembers.deactivateNonOwnerMembers pid
-        let (subj, html) = ET.planDowngradedEmail project.title "was cancelled" billingUrl
-        users <- Projects.usersByProjectId pid
-        forM_ users \u -> notifyPlanChange u.email subj (ET.renderEmail subj html)
+        mailAllUsers $ ET.planDowngradedEmail project.title "was cancelled" billingUrl
   if Projects.isOnboarding project.paymentPlan || isOnboarding == Just True
-    then do
-      redirectCS $ "/p/" <> pid.toText <> "/"
-      addRespHeaders mempty
+    then redirectCS $ "/p/" <> pid.toText <> "/"
     else do
       addTriggerEvent "closeModal" ""
       addSuccessToast "Pricing updated successfully" Nothing
-      addRespHeaders mempty
+  addRespHeaders mempty
 
 
 processProjectPostForm :: Valor.Valid CreateProjectForm -> Projects.ProjectId -> ATAuthCtx (RespHeaders CreateProject)
@@ -1471,14 +1409,12 @@ processProjectPostForm cpRaw pid = do
 
   let cp = Valor.unValid cpRaw
   if isDemoAndNotSudo pid sess.user.isSudo
-    then do
-      addErrorToast "Can't perform this action on the demo project" Nothing
-      addRespHeaders $ ProjectPost (CreateProjectResp sess.persistentSession pid envCfg "" cp (def @CreateProjectFormError) project)
+    then addErrorToast "Can't perform this action on the demo project" Nothing
     else do
       _ <- Projects.updateProject (createProjectFormToModel pid project.subId project.firstSubItemId project.orderId project.paymentPlan cp)
       Projects.logAuditS pid Projects.AEProjectUpdated sess Nothing
       addSuccessToast "Updated Project Successfully" Nothing
-      addRespHeaders $ ProjectPost (CreateProjectResp sess.persistentSession pid envCfg "" cp (def @CreateProjectFormError) project)
+  addRespHeaders $ ProjectPost (CreateProjectResp sess.persistentSession pid envCfg "" cp (def @CreateProjectFormError) project)
 
 
 createProjectBody :: Projects.PersistentSession -> Projects.ProjectId -> EnvConfig -> Text -> CreateProjectForm -> CreateProjectFormError -> Projects.Project -> Html ()
@@ -1505,7 +1441,7 @@ createProjectBody sess pid envCfg paymentPlan cp cpe proj = do
 
         -- Alert configuration
         div_ [class_ "border-t border-strokeWeak pt-1"]
-          $ alertConfiguration (isJust cp.endpointAlerts) (isJust cp.errorAlerts) (isJust cp.weeklyNotifs) (isJust cp.dailyNotifs)
+          $ alertConfiguration cp
 
         -- Save button: muted until form is dirty
         div_ [class_ "flex justify-end pt-2"] do
@@ -1550,24 +1486,27 @@ createProjectBody sess pid envCfg paymentPlan cp cpe proj = do
       "Delete project"
 
 
-alertConfiguration :: Bool -> Bool -> Bool -> Bool -> Html ()
-alertConfiguration newEndpointsAlerts errorAlerts weeklyReportsAlerts dailyReportsAlerts =
+alertConfiguration :: CreateProjectForm -> Html ()
+alertConfiguration cp =
   div_ do
     div_ [class_ "flex items-center gap-2 mb-3"] do
       iconBadgeXs_ NeutralBadge "bell"
       span_ [class_ "text-sm font-semibold text-textStrong"] "Notifications"
-    div_ [class_ "divide-y divide-strokeWeak"] do
-      switchRow "New endpoint alerts" "endpointAlerts" "Get notified when new API endpoints are detected" newEndpointsAlerts
-      switchRow "Runtime error alerts" "errorAlerts" "Receive immediate notifications for system errors" errorAlerts
-      switchRow "Weekly reports" "weeklyNotifs" "Get a summary of your project activity every week" weeklyReportsAlerts
-      switchRow "Daily reports" "dailyNotifs" "Receive daily summaries of your project metrics" dailyReportsAlerts
-  where
-    switchRow lbl forId descr checked =
-      div_ [class_ "flex items-center justify-between py-3 first:pt-0 last:pb-0"] do
-        div_ [class_ "space-y-0.5"] do
-          label_ [Lucid.for_ forId, class_ "text-sm font-medium text-textStrong cursor-pointer"] $ toHtml lbl
-          p_ [class_ "text-xs text-textWeak"] $ toHtml descr
-        input_ $ [type_ "checkbox", id_ forId, class_ "toggle toggle-sm", name_ forId] ++ [checked_ | checked]
+    div_ [class_ "divide-y divide-strokeWeak"]
+      $ forM_
+        ( [ ("New endpoint alerts", "endpointAlerts", "Get notified when new API endpoints are detected", isJust cp.endpointAlerts)
+          , ("Runtime error alerts", "errorAlerts", "Receive immediate notifications for system errors", isJust cp.errorAlerts)
+          , ("Weekly reports", "weeklyNotifs", "Get a summary of your project activity every week", isJust cp.weeklyNotifs)
+          , ("Daily reports", "dailyNotifs", "Receive daily summaries of your project metrics", isJust cp.dailyNotifs)
+          ]
+            :: [(Text, Text, Text, Bool)]
+        )
+        \(lbl, forId, descr, checked) ->
+          div_ [class_ "flex items-center justify-between py-3 first:pt-0 last:pb-0"] do
+            div_ [class_ "space-y-0.5"] do
+              label_ [Lucid.for_ forId, class_ "text-sm font-medium text-textStrong cursor-pointer"] $ toHtml lbl
+              p_ [class_ "text-xs text-textWeak"] $ toHtml descr
+            input_ $ [type_ "checkbox", id_ forId, class_ "toggle toggle-sm", name_ forId] <> [checked_ | checked]
 
 
 -- Main Modal Component

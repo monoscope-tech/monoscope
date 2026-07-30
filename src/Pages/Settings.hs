@@ -62,6 +62,7 @@ import Data.Char (isDigit, isHexDigit)
 import Data.Default
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Notify qualified as Notify
+import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Time (Day, UTCTime (..), addDays, addUTCTime, diffUTCTime, getZonedTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
@@ -69,7 +70,6 @@ import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful.Error.Static (throwError)
@@ -93,7 +93,6 @@ import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers (Team (..), getTeamsById, resolveTeamEmails)
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
-import NeatInterpolation (text)
 import Network.HTTP.Types (urlEncode)
 import Network.Minio qualified as Minio
 import Network.URI (parseURI, uriAuthority, uriRegName, uriScheme)
@@ -182,8 +181,7 @@ awsRegions =
 brings3PostH :: Projects.ProjectId -> Projects.ProjectS3Bucket -> ATAuthCtx (RespHeaders (Html ()))
 brings3PostH pid s3Form = do
   let connectInfo = getMinioConnectInfo s3Form.accessKey s3Form.secretKey s3Form.region s3Form.bucket s3Form.endpointUrl
-  res <- liftIO $ Minio.runMinio connectInfo do
-    Minio.bucketExists s3Form.bucket
+  res <- liftIO $ Minio.runMinio connectInfo $ Minio.bucketExists s3Form.bucket
   case res of
     Left err -> do
       addErrorToast (humanizeMinioErr err) Nothing
@@ -203,8 +201,7 @@ brings3PostH pid s3Form = do
 
 brings3RemoveH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 brings3RemoveH pid = do
-  (sess, project) <- Projects.sessionAndProject pid
-  appCtx <- ask @AuthContext
+  (sess, _) <- Projects.sessionAndProject pid
   _ <- Projects.updateProjectS3Bucket pid Nothing
   Projects.logAuditS pid Projects.AES3Removed sess Nothing
   addSuccessToast "Removed S3 bucket" Nothing
@@ -257,46 +254,39 @@ data GenerateAPIKeyForm = GenerateAPIKeyForm
 
 apiPostH :: Projects.ProjectId -> GenerateAPIKeyForm -> ATAuthCtx (RespHeaders ApiMut)
 apiPostH pid apiKeyForm = do
-  (sess, project) <- Projects.sessionAndProject pid
+  (sess, _) <- Projects.sessionAndProject pid
   authCtx <- ask @AuthContext
   projectKeyUUID <- liftIO UUIDV4.nextRandom
   let encryptedKeyB64 = ProjectApiKeys.encodeApiKeyB64 authCtx.config.apiKeyEncryptionSecretKey projectKeyUUID
-  pApiKey <- ProjectApiKeys.newProjectApiKeys pid projectKeyUUID (title apiKeyForm) encryptedKeyB64
-  apiKeys <- do
-    ProjectApiKeys.insertProjectApiKey pApiKey
-    V.fromList <$> ProjectApiKeys.projectApiKeysByProjectId pid
+  pApiKey <- ProjectApiKeys.newProjectApiKeys pid projectKeyUUID apiKeyForm.title encryptedKeyB64
+  ProjectApiKeys.insertProjectApiKey pApiKey
+  apiKeys <- V.fromList <$> ProjectApiKeys.projectApiKeysByProjectId pid
   Projects.logAuditS pid Projects.AEApiKeyCreated sess
     $ Just
-    $ AE.object ["key_title" AE..= title apiKeyForm]
+    $ AE.object ["key_title" AE..= apiKeyForm.title]
   addSuccessToast "Created API Key Successfully" Nothing
   addTriggerEvent "closeModal" ""
-  case from apiKeyForm of
-    Just v -> addRespHeaders $ ApiPostCopy (Just (pApiKey, encryptedKeyB64)) True
-    Nothing -> addRespHeaders $ ApiPost pid apiKeys (Just (pApiKey, encryptedKeyB64))
+  let newKey = Just (pApiKey, encryptedKeyB64)
+  addRespHeaders $ maybe (ApiPost pid apiKeys newKey) (const $ ApiPostCopy newKey True) apiKeyForm.from
 
 
 apiDeleteH :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (RespHeaders ApiMut)
-apiDeleteH pid keyid = do
-  (sess, project) <- Projects.sessionAndProject pid
-  res <- ProjectApiKeys.revokeApiKey keyid
-  apikeys <- V.fromList <$> ProjectApiKeys.projectApiKeysByProjectId pid
-  if res > 0
-    then do
-      Projects.logAuditS pid Projects.AEApiKeyRevoked sess Nothing
-      addSuccessToast "Revoked API Key Successfully" Nothing
-    else addErrorToast "Something went wrong" Nothing
-  addRespHeaders $ ApiPost pid apikeys Nothing
+apiDeleteH pid keyid = apiKeySetActive pid ProjectApiKeys.revokeApiKey Projects.AEApiKeyRevoked "Revoked" keyid
 
 
 apiActivateH :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (RespHeaders ApiMut)
-apiActivateH pid keyid = do
-  (sess, project) <- Projects.sessionAndProject pid
-  res <- ProjectApiKeys.activateApiKey keyid
+apiActivateH pid keyid = apiKeySetActive pid ProjectApiKeys.activateApiKey Projects.AEApiKeyActivated "Activated" keyid
+
+
+apiKeySetActive :: Projects.ProjectId -> (ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx Int64) -> Projects.AuditEvent -> Text -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (RespHeaders ApiMut)
+apiKeySetActive pid act event verb keyid = do
+  (sess, _) <- Projects.sessionAndProject pid
+  res <- act keyid
   apikeys <- V.fromList <$> ProjectApiKeys.projectApiKeysByProjectId pid
   if res > 0
     then do
-      Projects.logAuditS pid Projects.AEApiKeyActivated sess Nothing
-      addSuccessToast "Activated API Key Successfully" Nothing
+      Projects.logAuditS pid event sess Nothing
+      addSuccessToast (verb <> " API Key Successfully") Nothing
     else addErrorToast "Something went wrong" Nothing
   addRespHeaders $ ApiPost pid apikeys Nothing
 
@@ -347,10 +337,7 @@ apiKeysPage pid apiKeys = do
 apiMainContent :: Projects.ProjectId -> V.Vector ProjectApiKeys.ProjectApiKey -> Maybe (ProjectApiKeys.ProjectApiKey, Text) -> Html ()
 apiMainContent pid apiKeys newKeyM = section_ [] do
   copyNewApiKey newKeyM False
-  let activeKeys = V.filter (\x -> x.active) apiKeys
-      revokedKeys = V.filter (\x -> not x.active) apiKeys
-      activeTable = makeApiKeysTable pid activeKeys "active_content"
-      revokedTable = makeApiKeysTable pid revokedKeys "revoked_content"
+  let (activeKeys, revokedKeys) = V.partition (.active) apiKeys
       tabs =
         Table.TabFilter
           { current = "Active keys"
@@ -363,49 +350,37 @@ apiMainContent pid apiKeys newKeyM = section_ [] do
           }
 
   toHtml tabs
-  div_ [class_ "a-tab-content", id_ "active_content"] $ toHtml activeTable
-  div_ [class_ "hidden a-tab-content", id_ "revoked_content"] $ toHtml revokedTable
+  div_ [class_ "a-tab-content", id_ "active_content"] $ toHtml $ makeApiKeysTable pid activeKeys "active_content"
+  div_ [class_ "hidden a-tab-content", id_ "revoked_content"] $ toHtml $ makeApiKeysTable pid revokedKeys "revoked_content"
 
 
-makeApiKeysTable :: Projects.ProjectId -> V.Vector ProjectApiKeys.ProjectApiKey -> Text -> Table.Table (Int, ProjectApiKeys.ProjectApiKey)
+makeApiKeysTable :: Projects.ProjectId -> V.Vector ProjectApiKeys.ProjectApiKey -> Text -> Table.Table ProjectApiKeys.ProjectApiKey
 makeApiKeysTable pid apiKeys elemId =
   Table.Table
     { config = def{Table.elemID = elemId, Table.renderAsTable = True}
     , columns = apiKeyColumns pid
-    , rows = V.indexed apiKeys
+    , rows = apiKeys
     , features = Table.Features{rowLink = Nothing, rowId = Nothing, rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"], selectRow = Nothing, bulkActions = [], search = Nothing, tabs = Nothing, sort = Nothing, sortableColumns = Nothing, tableHeaderActions = Nothing, pagination = Nothing, zeroState = Just Table.ZeroState{icon = "key", title = "No API keys", description = "Create an API key to start integrating with your project.", actionText = "", destination = Right ""}, header = Nothing, treeConfig = Nothing}
     }
 
 
-apiKeyColumns :: Projects.ProjectId -> [Table.Column (Int, ProjectApiKeys.ProjectApiKey)]
+apiKeyColumns :: Projects.ProjectId -> [Table.Column ProjectApiKeys.ProjectApiKey]
 apiKeyColumns pid =
-  [ Table.col "Title" \(_, apiKey) ->
+  [ Table.col "Title" \apiKey ->
       span_ [class_ "text-textStrong font-semibold text-sm truncate min-w-0 block max-w-48"] $ toHtml apiKey.title
-  , Table.col "Key" \(i, apiKey) -> do
-      let idx = "key-" <> show i
-      div_ [class_ "whitespace-nowrap w-full flex items-center gap-2 text-sm text-textWeak"] do
-        span_ [class_ $ "min-w-0 " <> idx] $ toHtml $ T.take 8 apiKey.keyPrefix <> T.replicate 20 "*"
+  , Table.col "Key" \apiKey -> do
+      -- Reveal is pure CSS: the sr-only checkbox flips both spans and both eye labels
+      -- via `group-has-[:checked]` on the row container (no hyperscript, survives morph).
+      -- Keyed by key id, not row index — the active and archived tables both index from 0.
+      let revealId = "reveal-key-" <> apiKey.id.toText
+      div_ [class_ "group whitespace-nowrap w-full flex items-center gap-2 text-sm text-textWeak"] do
+        input_ [type_ "checkbox", id_ revealId, class_ "sr-only"]
+        span_ [class_ "min-w-0 group-has-[:checked]:hidden"] $ toHtml $ T.take 8 apiKey.keyPrefix <> T.replicate 20 "*"
+        span_ [class_ "min-w-0 hidden group-has-[:checked]:inline"] $ toHtml apiKey.keyPrefix
         div_ [class_ "flex items-center gap-1.5 shrink-0 ml-auto"] do
-          button_
-            [ class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer"
-            , term "data-key" apiKey.keyPrefix
-            , term "data-state" "hide"
-            , type_ "button"
-            , term "data-tippy-content" "Show key"
-            , term "data-prefix" (T.take 8 apiKey.keyPrefix <> T.replicate 20 "*")
-            , term
-                "_"
-                [text|on click
-                 if my @data-state is "hide"
-                   put my @data-key into <.$idx/>
-                   put "show" into my @data-state
-                   put "Hide key" into my @data-tippy-content
-                 else
-                   put my @data-prefix into <.$idx/>
-                   put "hide" into my @data-state
-                   put "Show key" into my @data-tippy-content
-                 end |]
-            ]
+          label_ [Lucid.for_ revealId, class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer group-has-[:checked]:hidden", term "data-tippy-content" "Show key"]
+            $ faSprite_ "eye" "regular" "h-3.5 w-3.5 text-iconNeutral"
+          label_ [Lucid.for_ revealId, class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer hidden group-has-[:checked]:block", term "data-tippy-content" "Hide key"]
             $ faSprite_ "eye" "regular" "h-3.5 w-3.5 text-iconNeutral"
           button_
             [ class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer"
@@ -428,7 +403,6 @@ apiKeyColumns pid =
             , hxMethod $ "/p/" <> pid.toText <> "/apis/" <> apiKey.id.toText
             , hxConfirm_ confirmMsg
             , hxTarget_ settingsContentTarget
-            , id_ $ "key" <> show i
             , term "data-tippy-content" tip
             ]
             $ faSprite_ icon "regular"
@@ -438,48 +412,33 @@ apiKeyColumns pid =
 
 
 copyNewApiKey :: Maybe (ProjectApiKeys.ProjectApiKey, Text) -> Bool -> Html ()
-copyNewApiKey newKeyM hasNext =
-  case newKeyM of
-    Nothing -> ""
-    Just (keyObj, newKey) -> do
-      div_ [id_ "apiFeedbackSection", class_ "pb-8"] do
-        div_ [class_ "rounded-md bg-fillSuccess-weak p-4"] do
-          div_ [class_ "flex"] do
-            div_ [class_ "shrink-0"] do
-              faSprite_ "circle-check" "regular" "h-5 w-5 text-iconSuccess"
-            div_ [class_ "ml-3"] do
-              h3_ [class_ " font-medium text-textSuccess"] "API Key was generated successfully"
-              div_ [class_ "mt-2  text-textSuccess py-2"] do
-                strong_ [class_ "block pt-2", id_ "newKey"] $ toHtml newKey
-              div_ [class_ "mt-4"] do
-                div_ [class_ "-mx-2 -my-1.5 flex"] do
-                  button_
-                    [ type_ "button"
-                    , class_ "btn btn-sm btn-success"
-                    , [__|
+copyNewApiKey newKeyM hasNext = whenJust newKeyM \(_, newKey) ->
+  div_ [id_ "apiFeedbackSection", class_ "pb-8"] do
+    div_ [class_ "rounded-md bg-fillSuccess-weak p-4"] do
+      div_ [class_ "flex"] do
+        div_ [class_ "shrink-0"] do
+          faSprite_ "circle-check" "regular" "h-5 w-5 text-iconSuccess"
+        div_ [class_ "ml-3"] do
+          h3_ [class_ " font-medium text-textSuccess"] "API Key was generated successfully"
+          div_ [class_ "mt-2  text-textSuccess py-2"] do
+            strong_ [class_ "block pt-2", id_ "newKey"] $ toHtml newKey
+          div_ [class_ "mt-4"] do
+            div_ [class_ "-mx-2 -my-1.5 flex"] do
+              button_
+                [ type_ "button"
+                , class_ "btn btn-sm btn-success"
+                , [__|
                       on click
                         if 'clipboard' in window.navigator then
                           call navigator.clipboard.writeText(#newKey's innerText)
                           send successToast(value:['API Key has been added to the Clipboard']) to <body/>
                         end
                         |]
-                    ]
-                    "Copy Key"
-                  if not hasNext
-                    then do
-                      button_
-                        [ type_ "button"
-                        , class_ "btn btn-sm btn-ghost text-textSuccess ml-2"
-                        , [__|on click remove #apiFeedbackSection|]
-                        ]
-                        "Dismiss"
-                    else do
-                      button_
-                        [ type_ "button"
-                        , class_ "btn btn-sm btn-ghost text-textBrand ml-4"
-                        , [__|on click call window.location.reload()|]
-                        ]
-                        "Next"
+                ]
+                "Copy Key"
+              if hasNext
+                then button_ [type_ "button", class_ "btn btn-sm btn-ghost text-textBrand ml-4", [__|on click call window.location.reload()|]] "Next"
+                else button_ [type_ "button", class_ "btn btn-sm btn-ghost text-textSuccess ml-2", [__|on click remove #apiFeedbackSection|]] "Dismiss"
 
 
 ----------------------------------------------------------------------
@@ -521,20 +480,31 @@ prometheusGetH pid = do
   addRespHeaders $ PrometheusGet $ PageCtx bw{pageTitle = "Prometheus", isSettingsPage = True} (pid, cfgs)
 
 
+-- | A 'PrometheusForm' that passed validation: trimmed, SSRF-checked, interval floored.
+data ScrapeTarget = ScrapeTarget
+  { name :: Text
+  , url :: Text
+  , interval :: Int
+  , authHeader :: Maybe Text
+  , labels :: AE.Value
+  }
+
+
 -- | Validate + normalise a target form. Name is required because it becomes the
 -- @service.name@ the scraped metrics are grouped under — blank names would silently
 -- collide multiple targets into one series namespace.
-validatePrometheusForm :: PrometheusForm -> Either Text (Text, Text, Int, Maybe Text, AE.Value)
+validatePrometheusForm :: PrometheusForm -> Either Text ScrapeTarget
 validatePrometheusForm form = do
   url <- validateScrapeUrl form.url
   when (T.null name) $ Left "A name is required — it groups the scraped metrics under service.name"
   Right
-    ( name
-    , url
-    , max 60 (fromMaybe 60 form.scrapeInterval) -- floor at the 60s dispatcher cadence
-    , mfilter (not . T.null) (T.strip <$> form.authHeader)
-    , parseLabelsText (fromMaybe "" form.extraLabels)
-    )
+    ScrapeTarget
+      { name
+      , url
+      , interval = max 60 (fromMaybe 60 form.scrapeInterval) -- floor at the 60s dispatcher cadence
+      , authHeader = mfilter (not . T.null) (T.strip <$> form.authHeader)
+      , labels = parseLabelsText (fromMaybe "" form.extraLabels)
+      }
   where
     name = T.strip form.name
 
@@ -605,31 +575,31 @@ safeScrapeUrl u = case parseURI (toString (T.strip u)) of
 
 
 prometheusPostH :: Projects.ProjectId -> PrometheusForm -> ATAuthCtx (RespHeaders PrometheusMut)
-prometheusPostH pid form = promSave pid form "Added" \(name, url, interval, authH, labels) -> PromCfg.insertConfig pid name url interval authH labels
+prometheusPostH pid form = promSave pid form "Added" \t -> PromCfg.insertConfig pid t.name t.url t.interval t.authHeader t.labels
 
 
 prometheusUpdateH :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfigId -> PrometheusForm -> ATAuthCtx (RespHeaders PrometheusMut)
-prometheusUpdateH pid cid form = promSave pid form "Updated" \(name, url, interval, authH, labels) -> do
+prometheusUpdateH pid cid form = promSave pid form "Updated" \t -> do
   -- The edit form never echoes the saved token back into the password field, so a blank
   -- auth field means "keep the existing token" — unless "Clear saved token" was ticked.
-  keptAuth <- case authH of
-    Just t -> pure (Just t)
+  keptAuth <- case t.authHeader of
+    Just a -> pure (Just a)
     Nothing | isJust form.clearAuth -> pure Nothing
     Nothing -> PromCfg.getConfigByProject pid cid <&> (>>= (.authHeader))
-  PromCfg.updateConfig pid cid name url interval keptAuth labels
+  PromCfg.updateConfig pid cid t.name t.url t.interval keptAuth t.labels
 
 
 -- | Shared create/edit flow. The DB UNIQUE(project_id, name) constraint (migration 0103)
 -- is the real guard: catching its violation here — rather than a pre-check scan that two
 -- concurrent saves can both pass before either inserts — closes the race, saves a roundtrip,
 -- and still turns the collision into a friendly message.
-promSave :: Projects.ProjectId -> PrometheusForm -> Text -> ((Text, Text, Int, Maybe Text, AE.Value) -> ATAuthCtx Int64) -> ATAuthCtx (RespHeaders PrometheusMut)
+promSave :: Projects.ProjectId -> PrometheusForm -> Text -> (ScrapeTarget -> ATAuthCtx Int64) -> ATAuthCtx (RespHeaders PrometheusMut)
 promSave pid form verb persist = do
   _ <- Projects.sessionAndProject pid
   case validatePrometheusForm form of
     Left err -> addErrorToast err Nothing
-    Right vals@(name, _, _, _, _) ->
-      try (persist vals) >>= \case
+    Right target ->
+      try (persist target) >>= \case
         -- 0 rows means the edit targeted a row that no longer matches (concurrently deleted,
         -- or a cid that isn't this project's) — don't claim success for a write that did nothing.
         Right 0 -> addErrorToast "That Prometheus target no longer exists" Nothing
@@ -637,7 +607,7 @@ promSave pid form verb persist = do
           addSuccessToast (verb <> " Prometheus target") Nothing
           addTriggerEvent "closeModal" ""
         Left e
-          | Hasql.isUniqueViolation e -> addErrorToast ("A target named “" <> name <> "” already exists") Nothing
+          | Hasql.isUniqueViolation e -> addErrorToast ("A target named “" <> target.name <> "” already exists") Nothing
           | otherwise -> throwIO e
   prometheusMut pid
 
@@ -649,14 +619,14 @@ prometheusTestH :: Projects.ProjectId -> PrometheusForm -> ATAuthCtx (RespHeader
 prometheusTestH pid form = do
   _ <- Projects.sessionAndProject pid
   case validateScrapeUrl form.url of
-    Left err -> addRespHeaders $ prometheusTestResult (Left err)
+    Left err -> addRespHeaders $ prometheusTestResult $ Just $ Left err
     Right url -> do
       let opts = PromCfg.prometheusScrapeOpts (mfilter (not . T.null) (T.strip <$> form.authHeader))
       t0 <- Time.currentTime
       res <- tryAny (W.getWith opts (toString url))
       t1 <- Time.currentTime
       let ms = round (realToFrac (diffUTCTime t1 t0) * 1000 :: Double) :: Int
-      addRespHeaders $ prometheusTestResult $ case res of
+      addRespHeaders $ prometheusTestResult $ Just $ case res of
         Left e -> Left (T.take 300 (show e))
         Right resp ->
           -- Count only the samples ingestScrapedBody would store (shared isFiniteSample).
@@ -788,13 +758,13 @@ prometheusFields_ pid modalId submitLabel mcfg = do
       , class_ "btn btn-ghost gap-1.5"
       , hxPost_ $ "/p/" <> pid.toText <> "/settings/prometheus/test"
       , term "hx-include" "closest form"
-      , term "hx-target" "next .prom-test-result"
+      , hxTarget_ "next .prom-test-result"
       , hxSwap_ "outerHTML"
       ]
       $ do faSprite_ "circle-play" "regular" "w-3.5 h-3.5"; "Test connection"
     label_ [class_ "btn btn-ghost ml-auto", Lucid.for_ modalId] "Cancel"
     button_ [type_ "submit", class_ "btn btn-primary"] (toHtml submitLabel)
-  prometheusTestResult (Left "")
+  prometheusTestResult Nothing
   where
     field_ :: Text -> Text -> Text -> Text -> Bool -> Maybe Text -> Text -> Html ()
     field_ nm lbl ph ty req helpM val = label_ [class_ "flex flex-col gap-1 text-sm"] do
@@ -803,12 +773,12 @@ prometheusFields_ pid modalId submitLabel mcfg = do
       whenJust helpM $ span_ [class_ "text-xs text-textWeak"] . toHtml
 
 
-prometheusTestResult :: Either Text (Int, Int) -> Html ()
+-- | @Nothing@ is the not-yet-tested placeholder the form renders on first paint.
+prometheusTestResult :: Maybe (Either Text (Int, Int)) -> Html ()
 prometheusTestResult res = div_ [class_ "prom-test-result text-sm"] $ case res of
-  Right (n, ms) -> span_ [class_ "cbadge-sm badge-success inline-flex items-center gap-1"] $ faSprite_ "circle-check" "solid" "w-3 h-3" >> toHtml ("Scraped " <> show n <> " samples · " <> show ms <> "ms" :: Text)
-  Left err
-    | T.null err -> mempty
-    | otherwise -> span_ [class_ "cbadge-sm badge-error inline-flex items-center gap-1 max-w-full"] $ faSprite_ "circle-exclamation" "solid" "w-3 h-3 shrink-0" >> span_ [class_ "break-all"] (toHtml err)
+  Nothing -> mempty
+  Just (Right (n, ms)) -> span_ [class_ "cbadge-sm badge-success inline-flex items-center gap-1"] $ faSprite_ "circle-check" "solid" "w-3 h-3" >> toHtml ("Scraped " <> show n <> " samples · " <> show ms <> "ms" :: Text)
+  Just (Left err) -> span_ [class_ "cbadge-sm badge-error inline-flex items-center gap-1 max-w-full"] $ faSprite_ "circle-exclamation" "solid" "w-3 h-3 shrink-0" >> span_ [class_ "break-all"] (toHtml err)
 
 
 prometheusTargetsList :: Projects.ProjectId -> V.Vector PromCfg.PrometheusScrapeConfig -> Html ()
@@ -881,7 +851,7 @@ data TestHistory = TestHistory
   , createdAt :: UTCTime
   }
   deriving stock (Eq, Generic, Show)
-  deriving anyclass (FromRow, HI.DecodeRow, ToRow)
+  deriving anyclass (HI.DecodeRow)
 
 
 newtype NotificationTestHistoryGet = NotificationTestHistoryGet {tests :: [TestHistory]}
@@ -890,7 +860,7 @@ newtype NotificationTestHistoryGet = NotificationTestHistoryGet {tests :: [TestH
 
 instance ToHtml NotificationTestHistoryGet where
   toHtml (NotificationTestHistoryGet tests) = toHtmlRaw $ historyHtml_ tests
-  toHtmlRaw (NotificationTestHistoryGet tests) = toHtmlRaw $ historyHtml_ tests
+  toHtmlRaw = toHtml
 
 
 notificationsTestPostH :: Projects.ProjectId -> TestForm -> ATAuthCtx (RespHeaders (Html ()))
@@ -903,67 +873,52 @@ notificationsTestPostH pid TestForm{..} = do
 
   (_, project) <- Projects.sessionAndProject pid
   let baseAlert = bool (sampleAlertByIssueTypeText issueType project.title) (sampleReport project.title) (issueType == "report")
-      getTeam tid = listToMaybe <$> getTeamsById pid (V.singleton tid)
   -- Build a real signed widget URL so the test exercises the same image path
   -- as production alerts (webhook transport lifts it into attachments.image_url).
   -- The chart may be empty for the sample hash; what matters is that signing,
   -- URL length, and the webhook flatten/lift logic are all on the critical path.
-  appCtxForChart <- ask @AuthContext
-  nowUtc <- Time.currentTime
-  let fromUtc = addUTCTime (-3600) nowUtc
+  appCtx <- ask @AuthContext
   alert <- case baseAlert of
     RuntimeErrorAlert{errorData} -> do
       let errHash = (errorData :: ErrorPatterns.ATError).hash
-      chartUrlM <- errorTrendChartUrl appCtxForChart pid errHash (formatUTC fromUtc) (formatUTC nowUtc)
+      chartUrlM <- errorTrendChartUrl appCtx pid errHash (formatUTC (addUTCTime (-3600) now)) (formatUTC now)
       pure baseAlert{chartUrl = chartUrlM}
     _ -> pure baseAlert
 
   Log.logTrace "Sending test notification" (channel, pid, issueType)
-  appCtx <- ask @AuthContext
 
   let projectUrl = "/p/" <> pid.toText
       fullProjectUrl = appCtx.env.hostUrl <> "p/" <> pid.toText
-      testTemplate = case issueType of
-        "runtime_exception" -> ET.runtimeErrorsEmail project.title (fullProjectUrl <> "/issues/") [] Nothing Nothing Nothing
-        "escalating_errors" -> ET.escalatingErrorsEmail project.title (fullProjectUrl <> "/issues/") [] Nothing Nothing Nothing
-        "regressed_errors" -> ET.regressedErrorsEmail project.title (fullProjectUrl <> "/issues/") [] Nothing Nothing Nothing
-        "error_spike" -> ET.errorSpikesEmail project.title (fullProjectUrl <> "/issues/") [] Nothing Nothing Nothing
-        "report" -> ET.sampleWeeklyReport "" ""
-        _ -> ET.anomalyEndpointEmail "Test User" project.title (fullProjectUrl <> "/issues") [ET.EndpointAlertRow "GET /api/v1/test" (Just "api.example.com") (Just "api-service") (Just "production")]
+      testTemplate
+        | Just mk <- lookup issueType [("runtime_exception", ET.runtimeErrorsEmail), ("escalating_errors", ET.escalatingErrorsEmail), ("regressed_errors", ET.regressedErrorsEmail), ("error_spike", ET.errorSpikesEmail)] =
+            mk project.title (fullProjectUrl <> "/issues/") [] Nothing Nothing Nothing
+        | issueType == "report" = ET.sampleWeeklyReport "" ""
+        | otherwise = ET.anomalyEndpointEmail "Test User" project.title (fullProjectUrl <> "/issues") [ET.EndpointAlertRow "GET /api/v1/test" (Just "api.example.com") (Just "api-service") (Just "production")]
       sendTestEmail email = let (subj, html) = testTemplate; subj' = "[Test] " <> subj in sendRenderedEmail email subj' (ET.renderEmail subj' html)
 
   -- The @everyone team is the single source of truth for project notification settings,
   -- so tests always resolve against a team — the provided one, or @everyone when omitted.
-  let targetTeam = case teamId of
-        Just tid -> getTeam tid
-        Nothing -> ProjectMembers.getEveryoneTeam pid
-      countingSend mChKey (count, reason) run =
+  let targetTeam = maybe (ProjectMembers.getEveryoneTeam pid) (\tid -> listToMaybe <$> getTeamsById pid (V.singleton tid)) teamId
+      countingSend mChKey run =
         targetTeam >>= \case
-          Nothing -> pure (count, Just "no_team")
-          Just t | Just chKey <- mChKey, not (ProjectMembers.isChannelEnabled chKey t) -> pure (count, Just "channel_disabled")
-          Just t -> (,reason) . (+ count) <$> run t
-      sent = pure
-      -- per-channel attempt counts
-      slack t = do forM_ t.slack_channels (sendSlackAlert alert pid project.title . Just); sent (V.length t.slack_channels)
-      discord t = do forM_ t.discord_channels (sendDiscordAlert alert pid project.title . Just); sent (V.length t.discord_channels)
-      whatsapp t = if V.null t.phone_numbers then sent 0 else sent (V.length t.phone_numbers) <* sendWhatsAppAlert alert pid project.title t.phone_numbers
-      pagerduty t = do forM_ t.pagerduty_services \k -> sendPagerdutyAlertToService k alert project.title projectUrl; sent (V.length t.pagerduty_services)
-      email t = let emails = map CI.original (resolveTeamEmails t) in forM_ emails sendTestEmail *> sent (length emails)
+          Nothing -> pure (0 :: Int, Just "no_team")
+          Just t | Just chKey <- mChKey, not (ProjectMembers.isChannelEnabled chKey t) -> pure (0, Just "channel_disabled")
+          Just t -> (,Nothing) <$> run t
+      -- per-channel attempt counts, keyed by the form's `channel` value
+      senders :: [(Text, Maybe ProjectMembers.NotificationChannel, Team -> ATAuthCtx Int)]
+      senders =
+        [ ("email", Nothing, \t -> let emails = map CI.original (resolveTeamEmails t) in forM_ emails sendTestEmail $> length emails)
+        , ("slack", Just ProjectMembers.Slack, \t -> forM_ t.slack_channels (sendSlackAlert alert pid project.title . Just) $> V.length t.slack_channels)
+        , ("discord", Just ProjectMembers.Discord, \t -> forM_ t.discord_channels (sendDiscordAlert alert pid project.title . Just) $> V.length t.discord_channels)
+        , ("whatsapp", Just ProjectMembers.Phone, \t -> if V.null t.phone_numbers then pure 0 else sendWhatsAppAlert alert pid project.title t.phone_numbers $> V.length t.phone_numbers)
+        , ("pagerduty", Just ProjectMembers.Pagerduty, \t -> forM_ t.pagerduty_services (\k -> sendPagerdutyAlertToService k alert project.title projectUrl) $> V.length t.pagerduty_services)
+        ]
 
   (attempts, skipReason) <- case channel of
-    "all" -> countingSend Nothing (0, Nothing) \t -> do
-      e <- email t
-      s <- slack t
-      d <- discord t
-      w <- whatsapp t
-      p <- pagerduty t
-      pure (e + s + d + w + p)
-    "email" -> countingSend Nothing (0, Nothing) email
-    "slack" -> countingSend (Just ProjectMembers.Slack) (0, Nothing) slack
-    "discord" -> countingSend (Just ProjectMembers.Discord) (0, Nothing) discord
-    "whatsapp" -> countingSend (Just ProjectMembers.Phone) (0, Nothing) whatsapp
-    "pagerduty" -> countingSend (Just ProjectMembers.Pagerduty) (0, Nothing) pagerduty
-    _ -> throwError err400{errBody = "Unknown notification channel"}
+    "all" -> countingSend Nothing \t -> sum <$> traverse (\(_, _, run) -> run t) senders
+    c -> case find (\(n, _, _) -> n == c) senders of
+      Just (_, chKey, run) -> countingSend chKey run
+      Nothing -> throwError err400{errBody = "Unknown notification channel"}
 
   let (status, err) = case (attempts, skipReason) of
         (_, Just r) -> ("skipped" :: Text, Just r)
@@ -974,10 +929,10 @@ notificationsTestPostH pid TestForm{..} = do
       [HI.sql|INSERT INTO apis.notification_test_history (project_id, issue_type, channel, target, status, error) VALUES (#{pid}, #{issueType}, #{channel}, #{("" :: Text)}, #{status}, #{err})|]
 
   Log.logTrace "Test notification complete" (channel, pid, status, attempts)
-  let toast = case status of
-        "sent" -> addSuccessToast (if channel == "all" then "Test notification sent to all channels!" else "Test " <> channel <> " notification sent!") Nothing
-        _ -> addErrorToast ("Test skipped: " <> fromMaybe "unknown" err) Nothing
-  toast >> addRespHeaders mempty
+  if status == "sent"
+    then addSuccessToast (if channel == "all" then "Test notification sent to all channels!" else "Test " <> channel <> " notification sent!") Nothing
+    else addErrorToast ("Test skipped: " <> fromMaybe "unknown" err) Nothing
+  addRespHeaders mempty
 
 
 notificationsTestHistoryGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders NotificationTestHistoryGet)
@@ -987,12 +942,11 @@ notificationsTestHistoryGetH pid = do
 
 
 historyHtml_ :: [TestHistory] -> Html ()
-historyHtml_ tests = if null tests then emptyMsg else renderTable tests
+historyHtml_ [] = div_ [class_ "text-center py-12"] do
+  div_ [class_ "text-textWeak mb-2"] "No test notifications sent yet"
+  p_ [class_ "text-sm text-textWeaker"] "Test your integrations to see results here"
+historyHtml_ tests = div_ [class_ "bg-bgRaised rounded-lg border border-strokeWeak overflow-hidden"] $ table_ [class_ "table table-sm w-full"] (thead_ [class_ "text-xs text-left text-textStrong font-semibold uppercase bg-fillWeaker border-b border-strokeWeak"] (tr_ (th_ [class_ "p-3"] "Status" <> th_ [class_ "p-3"] "Channel" <> th_ [class_ "p-3"] "Alert Type" <> th_ [class_ "p-3 text-right"] "Time")) <> tbody_ [class_ "text-sm divide-y divide-strokeWeak"] (foldMap' renderRow tests))
   where
-    emptyMsg = div_ [class_ "text-center py-12"] do
-      div_ [class_ "text-textWeak mb-2"] "No test notifications sent yet"
-      p_ [class_ "text-sm text-textWeaker"] "Test your integrations to see results here"
-    renderTable ts = div_ [class_ "bg-bgRaised rounded-lg border border-strokeWeak overflow-hidden"] $ table_ [class_ "table table-sm w-full"] (thead_ [class_ "text-xs text-left text-textStrong font-semibold uppercase bg-fillWeaker border-b border-strokeWeak"] (tr_ (th_ [class_ "p-3"] "Status" <> th_ [class_ "p-3"] "Channel" <> th_ [class_ "p-3"] "Alert Type" <> th_ [class_ "p-3 text-right"] "Time")) <> tbody_ [class_ "text-sm divide-y divide-strokeWeak"] (foldMap' renderRow ts))
     renderRow t = tr_ [class_ "hover-only:hover:bg-fillWeaker transition-colors"] (td_ [class_ "p-3"] (if t.status == "sent" then span_ [class_ "badge badge-success badge-sm gap-1"] (faSprite_ "check" "solid" "h-3 w-3" >> "Sent") else span_ [class_ "badge badge-error badge-sm gap-1"] (faSprite_ "xmark" "solid" "h-3 w-3" >> "Failed")) <> td_ [class_ "p-3 capitalize font-medium"] (toHtml $ if t.channel == "all" then "All channels" else t.channel) <> td_ [class_ "p-3 text-textWeak"] (toHtml $ T.replace "_" " " t.issueType) <> td_ [class_ "p-3 text-right tabular-nums text-textWeak"] (localTimeFmt_ "MMM dd, HH:mm" t.createdAt))
 
 
@@ -1080,14 +1034,10 @@ webhookPostH :: Maybe Text -> ByteString -> ATBaseCtx (Html ())
 webhookPostH sigHeaderM rawBody = do
   envConfig <- asks env
   let secret = encodeUtf8 envConfig.lemonSqueezyWebhookSecret
-      sigValid = case sigHeaderM of
-        Just h -> verifyLemonSqueezySignature h rawBody secret
-        Nothing -> False
+      sigValid = maybe False (\h -> verifyLemonSqueezySignature h rawBody secret) sigHeaderM
   unless sigValid $ Log.logAttention "ls_webhook_sig_mismatch" (T.take 8 <$> sigHeaderM, BS.length rawBody)
-  when envConfig.lsWebhookSigEnforce $ case sigHeaderM of
-    Nothing -> throwError err400{errBody = "missing signature"}
-    Just _ | not sigValid -> throwError err400{errBody = "invalid signature"}
-    _ -> pass
+  when (envConfig.lsWebhookSigEnforce && not sigValid)
+    $ throwError err400{errBody = bool "invalid signature" "missing signature" (isNothing sigHeaderM)}
   dat <- case AE.eitherDecodeStrict rawBody :: Either String WebhookData of
     Right d -> pure d
     Left err -> do
@@ -1101,8 +1051,7 @@ webhookPostH sigHeaderM rawBody = do
         users <- Projects.usersByProjectId pid
         forM_ users \u -> sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
       downgrade reason = do
-        projectM <- Projects.projectByOrderId (show orderId)
-        case projectM of
+        Projects.projectByOrderId (show orderId) >>= \case
           Just project -> do
             rows <- Projects.downgradeToFree orderId subItem.subscriptionId subItem.id
             when (rows == 0) $ Log.logAttention "LS downgrade touched 0 rows" (show orderId :: Text, reason)
@@ -1115,8 +1064,7 @@ webhookPostH sigHeaderM rawBody = do
         rows <- Projects.upgradeToPaid orderId subItem.subscriptionId subItem.id plan
         when (rows == 0) $ Log.logAttention "LS upgrade touched 0 rows" (show orderId :: Text, subItem.subscriptionId, plan)
         when (rows > 1) $ Log.logAttention "LS upgrade touched multiple rows" (show orderId :: Text, rows)
-        projectM <- Projects.projectBySubId (show subItem.subscriptionId)
-        case projectM of
+        Projects.projectBySubId (show subItem.subscriptionId) >>= \case
           Just project -> notifyMembers project.id $ ET.planUpgradedEmail project.title plan (billingUrl project.id)
           Nothing -> Log.logAttention "LS upgrade: no project for sub_id" (show orderId :: Text, subItem.subscriptionId, plan)
         pure "upgraded"
@@ -1124,10 +1072,8 @@ webhookPostH sigHeaderM rawBody = do
     "subscription_created" -> do
       currentTime <- liftIO getZonedTime
       subId <- Projects.LemonSubId <$> liftIO UUIDV4.nextRandom
-      let projectId = case dat.meta.customData of
-            Nothing -> ""
-            Just d -> fromMaybe "" d.projectId
-      let sub =
+      let projectId = fromMaybe "" (dat.meta.customData >>= (.projectId))
+          sub =
             Projects.LemonSub
               { id = subId
               , createdAt = currentTime
@@ -1229,31 +1175,23 @@ manageBillingGetH pid from = do
         ]
   let last_reported = toText (formatTime defaultTimeLocale "%b %-d" project.usageLastReported)
       bwconf = bw{pageTitle = "Billing", isSettingsPage = True}
-  let lemonUrl = envCfg.lemonSqueezyUrl <> "&checkout[custom][project_id]=" <> pid.toText
+      lemonUrl = envCfg.lemonSqueezyUrl <> "&checkout[custom][project_id]=" <> pid.toText
       critical = envCfg.lemonSqueezyCriticalUrl <> "&checkout[custom][project_id]=" <> pid.toText
-  -- Free-tier display shows no provider even for a historically-paid-then-downgraded project
-  -- (which keeps its stored provider so trial-reminder/auto-migration logic still works).
-  let provider = if Projects.isFreeTier project.paymentPlan then Projects.NoBillingProvider else Projects.projectProvider project
+      -- Free-tier display shows no provider even for a historically-paid-then-downgraded project
+      -- (which keeps its stored provider so trial-reminder/auto-migration logic still works).
+      provider = if Projects.isFreeTier project.paymentPlan then Projects.NoBillingProvider else Projects.projectProvider project
   addRespHeaders $ BillingGet $ PageCtx bwconf BillingData{pid, totalReqs = totalRequests, totalBytes, lastReported = last_reported, lemonUrl, critical, paymentPlan = project.paymentPlan, enableFreetier = envCfg.enableFreetier, basicAuthEnabled = envCfg.basicAuthEnabled, provider, dailyUsage, cycleStart = utctDay cycleStart, pastCycles}
 
 
 billingPage :: BillingData -> Html ()
 billingPage d = div_ [] do
-  let pid = d.pid
-      reqs = d.totalReqs
-      last_reported = d.lastReported
-      lemonUrl = d.lemonUrl
-      critical = d.critical
-      paymentPlan = d.paymentPlan
-      enableFreetier = d.enableFreetier
-      basicAuthEnabled = d.basicAuthEnabled
-      provider = d.provider
-      pidTxt = pid.toText
-      isFree = Projects.isFreeTier paymentPlan
+  let reqs = d.totalReqs
+      pidTxt = d.pid.toText
+      isFree = Projects.isFreeTier d.paymentPlan
       basePriceNum =
         if
           | isFree -> 0
-          | paymentPlan == "Bring your own storage" -> 199
+          | d.paymentPlan == "Bring your own storage" -> 199
           | otherwise -> 29 :: Int64
       planPrice = show basePriceNum
       overageNum = max 0 (reqs - 20_000_000)
@@ -1268,7 +1206,7 @@ billingPage d = div_ [] do
     -- Current plan row
     headerRow_ [] do
       div_ [class_ "flex items-center gap-3"] do
-        span_ [class_ "text-sm font-medium text-textStrong"] $ toHtml paymentPlan
+        span_ [class_ "text-sm font-medium text-textStrong"] $ toHtml d.paymentPlan
         span_ [class_ "rounded-md text-textWeak bg-fillWeak border border-strokeWeak py-0.5 px-2 text-xs"] "Active"
       div_ [class_ "flex items-baseline gap-0.5"] do
         span_ [class_ "text-2xl text-textStrong font-bold tabular-nums"] $ toHtml $ "$" <> planPrice
@@ -1287,15 +1225,15 @@ billingPage d = div_ [] do
                 then fmt (commaizeF reqs) <> " requests" <> bytesSuffix
                 else "$" <> planPrice <> " plan + " <> fmtUSD overageCost <> " usage (" <> fmt (commaizeF reqs) <> " requests" <> bytesSuffix <> ")"
         div_ [class_ "text-xs text-textWeak mt-1 tabular-nums"] $ toHtml usageLine
-      unless (T.null last_reported)
+      unless (T.null d.lastReported)
         $ div_ [class_ "text-xs text-textWeak"]
-        $ toHtml ("Last reported " <> last_reported)
+        $ toHtml ("Last reported " <> d.lastReported)
 
     -- Actions (kept above the breakdown so they remain near the headline numbers)
     div_ [class_ "border-t border-strokeWeak pt-6 flex items-center gap-3"] do
       label_ [Lucid.for_ "pricing-modal", class_ "btn btn-sm btn-primary cursor-pointer"] "Change plan"
       unless isFree
-        $ a_ [class_ "btn btn-sm btn-ghost text-textBrand", hxGet_ [text| /p/$pidTxt/manage_subscription |]] "Manage subscription"
+        $ a_ [class_ "btn btn-sm btn-ghost text-textBrand", hxGet_ $ "/p/" <> pidTxt <> "/manage_subscription"] "Manage subscription"
 
     -- Daily breakdown
     dailyUsageBreakdown_ isFree d.cycleStart d.dailyUsage
@@ -1307,7 +1245,7 @@ billingPage d = div_ [] do
     div_ [class_ "text-center text-sm text-textWeak w-full mx-auto max-w-96"] do
       span_ [class_ "text-textStrong text-2xl font-semibold"] "Compare Plans"
       p_ [class_ "mt-2 mb-4"] "Drag the slider to estimate costs at different usage levels."
-    paymentPlanPicker pid lemonUrl critical paymentPlan enableFreetier basicAuthEnabled False provider
+    paymentPlanPicker d.pid d.lemonUrl d.critical d.paymentPlan d.enableFreetier d.basicAuthEnabled False d.provider
 
 
 -- | Format a byte count with the largest unit it fits into. KB-step decimal
@@ -1320,6 +1258,11 @@ humanBytes b
   | otherwise = fmtNum (fromIntegral b / 1_073_741_824 :: Double) <> " GB"
   where
     fmtNum n = toText (printf "%.1f" n :: String)
+
+
+-- | Sticky table header cell: opaque background so scrolled rows can't show through.
+stickyTh_ :: Text -> Html () -> Html ()
+stickyTh_ cls = th_ [class_ ("font-medium px-3 py-2 sticky top-0 z-10 bg-fillWeak border-b border-strokeWeak " <> cls)]
 
 
 -- | Per-day usage table for the last 30 days. Cost shown is the marginal
@@ -1372,17 +1315,15 @@ dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-s
           span_ [] "Only logs and traces have been ingested."
       div_ [class_ "border border-strokeWeak rounded-md overflow-hidden max-h-96 overflow-y-auto"] do
         table_ [class_ "w-full text-sm tabular-nums border-separate border-spacing-0"] do
-          -- Sticky header: each <th> carries its own opaque background so that
-          -- body rows can't show through during scroll. `border-separate` keeps
-          -- the border-bottom rule from being clipped by sticky positioning.
-          let th_h cls = th_ [class_ ("font-medium px-3 py-2 sticky top-0 z-10 bg-fillWeak border-b border-strokeWeak " <> cls)]
+          -- `border-separate` keeps the header's border-bottom from being clipped
+          -- by sticky positioning.
           thead_ [class_ "text-textWeak text-xs uppercase tracking-wide"] do
             tr_ do
-              th_h "text-left" "Date"
-              th_h "text-right" "Events"
-              th_h "text-right" "Metrics"
-              th_h "text-left w-1/4" ""
-              th_h "text-right" "Est. cost"
+              stickyTh_ "text-left" "Date"
+              stickyTh_ "text-right" "Events"
+              stickyTh_ "text-right" "Metrics"
+              stickyTh_ "text-left w-1/4" ""
+              stickyTh_ "text-right" "Est. cost"
           let countCell :: Int64 -> Int64 -> Bool -> Html ()
               countCell bytes n0 strong = td_ [class_ "px-3 py-2 text-right whitespace-nowrap"] do
                 div_ [class_ (if strong then "text-textStrong" else "text-textWeak")]
@@ -1433,13 +1374,12 @@ pastCyclesSection_ isFree basePrice cycles = div_ [class_ "border-t border-strok
     span_ [class_ "text-xs text-textWeak"] $ toHtml @Text (show (length cycles) <> " cycle" <> (if length cycles == 1 then "" else "s"))
   div_ [class_ "border border-strokeWeak rounded-md overflow-hidden"] do
     table_ [class_ "w-full text-sm tabular-nums border-separate border-spacing-0"] do
-      let th_h cls = th_ [class_ ("font-medium px-3 py-2 sticky top-0 z-10 bg-fillWeak border-b border-strokeWeak " <> cls)]
       thead_ [class_ "text-textWeak text-xs uppercase tracking-wide"] do
         tr_ do
-          th_h "text-left" "Cycle"
-          th_h "text-right" "Requests"
-          th_h "text-right" "Volume"
-          th_h "text-right" "Est. cost"
+          stickyTh_ "text-left" "Cycle"
+          stickyTh_ "text-right" "Requests"
+          stickyTh_ "text-right" "Volume"
+          stickyTh_ "text-right" "Est. cost"
       tbody_ do
         forM_ cycles \(cs, ce, reqs, bytes) -> do
           -- ce is exclusive end; subtract 1 day for the human-facing label.
@@ -1583,12 +1523,14 @@ stripeWebhookPostH sigHeaderM rawBody = do
             billingUrl pid = envConfig.hostUrl <> "p/" <> pid.toText <> "/manage_billing"
         case (eventType, sessionObj) of
           (Just "checkout.session.completed", Just obj) -> handleStripeCheckout envConfig obj notifyMembers billingUrl
-          (Just "customer.subscription.deleted", Just obj) -> handleStripeSubDeleted obj notifyMembers billingUrl
+          (Just "customer.subscription.deleted", Just obj) -> handleStripeDowngrade "subscription.deleted" "was cancelled" obj notifyMembers billingUrl
           (Just "customer.subscription.updated", Just obj) -> handleStripeSubUpdated obj
-          (Just "customer.subscription.paused", Just obj) -> handleStripeSubPaused obj notifyMembers billingUrl
+          (Just "customer.subscription.paused", Just obj) -> handleStripeDowngrade "subscription.paused" "was paused" obj notifyMembers billingUrl
           (Just "customer.subscription.resumed", Just obj) -> handleStripeSubResumed envConfig obj notifyMembers billingUrl
           (Just "invoice.payment_failed", Just obj) -> handleStripePaymentFailed obj notifyMembers billingUrl
-          _ -> pure ""
+          _ -> do
+            Log.logInfo "Stripe webhook unhandled event" (eventType, isJust sessionObj)
+            pure ""
 
 
 handleStripeCheckout :: EnvConfig -> AE.Value -> (Projects.ProjectId -> (Text, Html ()) -> ATBaseCtx ()) -> (Projects.ProjectId -> Text) -> ATBaseCtx (Html ())
@@ -1615,7 +1557,7 @@ handleStripeCheckout envConfig obj notifyMembers billingUrl = do
               _ -> pass
           subDetails <- liftIO $ BJ.getStripeSubDetails envConfig.stripeSecretKey subId
           when (isNothing subDetails) $ Log.logAttention "Stripe sub fetch failed after checkout" (pid.toText, subId)
-          let subItemId = maybe "" (\BJ.StripeSubDetails{subItemId = i} -> i) subDetails
+          let subItemId = maybe "" (.subItemId) subDetails
           void $ Projects.updateStripeProjectBilling pid plan subId subItemId customerId
           void $ ProjectMembers.activateAllMembers pid
           case subDetails of
@@ -1630,26 +1572,20 @@ handleStripeCheckout envConfig obj notifyMembers billingUrl = do
       pure "missing fields"
 
 
--- Returns (first subscription item id, first price id) so callers can reverse-map
--- the price id back to our internal plan name.
-getStripeSubItemAndPrice :: Text -> Text -> IO (Maybe (Text, Text))
-getStripeSubItemAndPrice apiKey subId =
-  fmap (\BJ.StripeSubDetails{subItemId = i, priceId = p} -> (i, p)) <$> BJ.getStripeSubDetails apiKey subId
-
-
-handleStripeSubDeleted :: AE.Value -> (Projects.ProjectId -> (Text, Html ()) -> ATBaseCtx ()) -> (Projects.ProjectId -> Text) -> ATBaseCtx (Html ())
-handleStripeSubDeleted obj notifyMembers billingUrl = do
-  let subIdM = jsonField "id" obj :: Maybe Text
-  case subIdM of
+-- | Shared body of subscription.deleted / .paused: downgrade by sub_id, then notify.
+-- @event@ names the Stripe event in logs, @reason@ is the user-facing wording.
+handleStripeDowngrade :: Text -> Text -> AE.Value -> (Projects.ProjectId -> (Text, Html ()) -> ATBaseCtx ()) -> (Projects.ProjectId -> Text) -> ATBaseCtx (Html ())
+handleStripeDowngrade event reason obj notifyMembers billingUrl =
+  case jsonField "id" obj :: Maybe Text of
     Just subId -> do
       rows <- Projects.downgradeToFreeBySubId subId
-      when (rows == 0) $ Log.logAttention "Stripe subscription.deleted: no project for sub_id" subId
-      when (rows > 1) $ Log.logAttention "Stripe subscription.deleted touched multiple rows" (subId, rows)
+      when (rows == 0) $ Log.logAttention ("Stripe " <> event <> ": no project for sub_id") subId
+      when (rows > 1) $ Log.logAttention ("Stripe " <> event <> " touched multiple rows") (subId, rows)
       whenJustM (Projects.projectBySubId subId) \project ->
-        notifyMembers project.id $ ET.planDowngradedEmail project.title "was cancelled" (billingUrl project.id)
-      pure "subscription deleted"
+        notifyMembers project.id $ ET.planDowngradedEmail project.title reason (billingUrl project.id)
+      pure $ toHtml $ T.replace "." " " event
     Nothing -> do
-      Log.logAttention "Stripe subscription.deleted: missing sub id" ()
+      Log.logAttention ("Stripe " <> event <> ": missing sub id") ()
       pure "missing sub id"
 
 
@@ -1668,45 +1604,25 @@ handleStripeSubUpdated obj = do
 -- Downgrade happens via customer.subscription.deleted when Stripe gives up.
 handleStripePaymentFailed :: AE.Value -> (Projects.ProjectId -> (Text, Html ()) -> ATBaseCtx ()) -> (Projects.ProjectId -> Text) -> ATBaseCtx (Html ())
 handleStripePaymentFailed obj notifyMembers billingUrl = do
-  let customerIdM = jsonField "customer" obj :: Maybe Text
-      attemptCount = jsonField "attempt_count" obj :: Maybe Int
+  let attemptCount = jsonField "attempt_count" obj :: Maybe Int
       nextAttempt = jsonField "next_payment_attempt" obj :: Maybe Int
-  case customerIdM of
-    Just customerId -> do
-      whenJustM (Projects.projectByCustomerId customerId) \project -> do
-        Log.logAttention "Stripe invoice.payment_failed" (project.id, attemptCount, nextAttempt)
-        notifyMembers project.id $ ET.planDowngradedEmail project.title "payment failed" (billingUrl project.id)
-    Nothing -> pass
+  whenJust (jsonField "customer" obj :: Maybe Text) \customerId ->
+    whenJustM (Projects.projectByCustomerId customerId) \project -> do
+      Log.logAttention "Stripe invoice.payment_failed" (project.id, attemptCount, nextAttempt)
+      notifyMembers project.id $ ET.planDowngradedEmail project.title "payment failed" (billingUrl project.id)
   pure "payment failed handled"
 
 
--- Preserve IDs on pause so resume can restore plan without re-checkout.
-handleStripeSubPaused :: AE.Value -> (Projects.ProjectId -> (Text, Html ()) -> ATBaseCtx ()) -> (Projects.ProjectId -> Text) -> ATBaseCtx (Html ())
-handleStripeSubPaused obj notifyMembers billingUrl = do
-  let subIdM = jsonField "id" obj :: Maybe Text
-  case subIdM of
-    Just subId -> do
-      rows <- Projects.downgradeToFreeBySubId subId
-      when (rows == 0) $ Log.logAttention "Stripe subscription.paused: no project for sub_id" subId
-      when (rows > 1) $ Log.logAttention "Stripe subscription.paused touched multiple rows" (subId, rows)
-      when (rows > 0)
-        $ whenJustM (Projects.projectBySubId subId) \project ->
-          notifyMembers project.id $ ET.planDowngradedEmail project.title "was paused" (billingUrl project.id)
-      pure "subscription paused"
-    Nothing -> do
-      Log.logAttention "Stripe subscription.paused: missing sub id" ()
-      pure "missing sub id"
-
-
 -- Look up the sub's price via the Stripe API, reverse-map to our plan name, and re-upgrade.
+-- (Pause preserved the IDs, so resume never needs a re-checkout.)
 handleStripeSubResumed :: EnvConfig -> AE.Value -> (Projects.ProjectId -> (Text, Html ()) -> ATBaseCtx ()) -> (Projects.ProjectId -> Text) -> ATBaseCtx (Html ())
-handleStripeSubResumed envConfig obj notifyMembers billingUrl = do
-  let subIdM = jsonField "id" obj :: Maybe Text
-  case subIdM of
+handleStripeSubResumed envConfig obj notifyMembers billingUrl =
+  case jsonField "id" obj :: Maybe Text of
     Just subId -> do
-      itemAndPriceM <- liftIO $ getStripeSubItemAndPrice envConfig.stripeSecretKey subId
-      case itemAndPriceM of
-        Just (itemId, priceId) -> do
+      subDetailsM <- liftIO $ BJ.getStripeSubDetails envConfig.stripeSecretKey subId
+      case subDetailsM of
+        -- the price id reverse-maps to our internal plan name
+        Just BJ.StripeSubDetails{subItemId = itemId, priceId} -> do
           let plan
                 | priceId == envConfig.stripePriceIdByos = "SystemsPricing"
                 | otherwise = "GraduatedPricing"

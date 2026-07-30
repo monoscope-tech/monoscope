@@ -26,7 +26,6 @@ module Models.Apis.LogQueries (
 where
 
 import Control.Exception.Annotated (checkpoint, try)
-import Control.Lens (view, _5)
 import Data.Aeson qualified as AE
 import Data.Annotation (toAnnotation)
 import Data.Char (isDigit)
@@ -132,16 +131,8 @@ data RequestTypes
 normalizeUrlPath :: SDKTypes -> Int -> Text -> Text -> Text
 -- NOTE: Temporary workaround due to storing complex paths in the urlPath, which should be unaccepted, and messes with our logic
 normalizeUrlPath JsExpress _ "OPTIONS" _ = ""
-normalizeUrlPath _ statusCode _ urlPath = removeQueryParams statusCode urlPath
-
-
--- removeQueryParams ...
--- >>> removeQueryParams 200 "https://monoscope.tech/abc/:bla?q=abc"
---
--- Function to remove the query parameter section from a URL
-removeQueryParams :: Int -> Text -> Text
-removeQueryParams 404 _ = ""
-removeQueryParams _ urlPath = T.takeWhile (/= '?') urlPath
+normalizeUrlPath _ 404 _ _ = ""
+normalizeUrlPath _ _ _ urlPath = T.takeWhile (/= '?') urlPath
 
 
 data ATError = ATError
@@ -167,15 +158,9 @@ data ATError = ATError
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake ATError
 
 
-incrementByOneMillisecond :: String -> String
+incrementByOneMillisecond :: Text -> Text
 incrementByOneMillisecond dateStr =
-  case maybeTime of
-    Nothing -> ""
-    Just utcTime ->
-      let newTime = posixSecondsToUTCTime $ utcTimeToPOSIXSeconds utcTime + 0.000001
-       in iso8601Show newTime
-  where
-    maybeTime = parseTimeM True defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" dateStr :: Maybe UTCTime
+  maybe "" (toText . iso8601Show . addUTCTime 0.000001) (parseTimeM True defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" (toString dateStr) :: Maybe UTCTime)
 
 
 -- | Which log-explorer data endpoint a URL targets. 'Data' serves logs/spans;
@@ -183,25 +168,26 @@ incrementByOneMillisecond dateStr =
 -- is derived from the constructor name via 'encodeEnumSC' (snake_case), so it
 -- can't drift from the constructor.
 data LogEndpoint = Data | Sessions | Patterns
-  deriving stock (Bounded, Enum, Eq, Show)
+  deriving stock (Eq, Show)
 
 
 logExplorerUrlPath :: Projects.ProjectId -> LogEndpoint -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Bool -> Text
 logExplorerUrlPath pid endpoint q cols cursor since fromV toV layout source recent = "/p/" <> pid.toText <> "/log_explorer/" <> toText (encodeEnumSC @"" endpoint) <> "?" <> T.intercalate "&" params
   where
-    recentTo = cursor >>= (\x -> Just (toText . incrementByOneMillisecond . toString $ x))
+    param k v = ((k <> "=") <>) . toQueryParam <$> v
+    unlessRecent v = if recent then Nothing else v
     params =
-      catMaybes
-        [ Just "json=true"
-        , fmap ("query=" <>) (toQueryParam <$> q)
-        , fmap ("cols=" <>) (toQueryParam <$> cols)
-        , if recent then Nothing else fmap ("cursor=" <>) (toQueryParam <$> cursor)
-        , if recent then Nothing else fmap ("since=" <>) (toQueryParam <$> since)
-        , fmap ("from=" <>) (toQueryParam <$> fromV)
-        , if recent then fmap ("to=" <>) (toQueryParam <$> recentTo) else fmap ("to=" <>) (toQueryParam <$> toV)
-        , fmap ("layout=" <>) (toQueryParam <$> layout)
-        , fmap ("source=" <>) (toQueryParam <$> source)
-        ]
+      "json=true"
+        : catMaybes
+          [ param "query" q
+          , param "cols" cols
+          , param "cursor" (unlessRecent cursor)
+          , param "since" (unlessRecent since)
+          , param "from" fromV
+          , param "to" (if recent then incrementByOneMillisecond <$> cursor else toV)
+          , param "layout" layout
+          , param "source" source
+          ]
 
 
 -- | Execute a user-provided SQL query with mandatory project_id filtering.
@@ -224,27 +210,24 @@ executeSecuredQuery useTimefusion pid userQuery limit
       let wrapped = rawSql ("SELECT jsonb_build_array(sub.*) FROM (" <> userQuery <> ") sub") <> [HI.sql| LIMIT #{limit}|]
       resultE <- try @Hasql.HasqlException $ Hasql.withHasqlTimefusion useTimefusion do
         rows :: [AE.Value] <- Hasql.interp wrapped
-        pure $ V.fromList $ mapMaybe jsonArrayToVector rows
+        pure $ jsonArrayRows rows
       pure $ first (\e -> "Query execution failed: " <> toText (displayException e)) resultE
 
 
 -- | Each query path projects a single jsonb-array column per row (via
 -- inlined @jsonb_build_array(...)@); this decodes that wire shape into
--- the positional 'V.Vector AE.Value' callers index into.
-jsonArrayToVector :: AE.Value -> Maybe (V.Vector AE.Value)
-jsonArrayToVector (AE.Array arr) = Just arr
-jsonArrayToVector _ = Nothing
+-- the positional 'V.Vector AE.Value' rows callers index into.
+jsonArrayRows :: [AE.Value] -> V.Vector (V.Vector AE.Value)
+jsonArrayRows =
+  V.fromList . mapMaybe \case
+    AE.Array arr -> Just arr
+    _ -> Nothing
 
 
 -- | Check that query contains a project_id filter with the correct project ID
 -- This validates that the query has been properly prepared with the project_id substituted
 hasProjectIdFilter :: Text -> Projects.ProjectId -> Bool
-hasProjectIdFilter query pid =
-  let pidText = pid.toText
-   in ("project_id='" <> pidText <> "'")
-        `T.isInfixOf` query
-        || ("project_id = '" <> pidText <> "'")
-        `T.isInfixOf` query
+hasProjectIdFilter query pid = any (`T.isInfixOf` query) ["project_id='" <> pid.toText <> "'", "project_id = '" <> pid.toText <> "'"]
 
 
 -- | Dangerous SQL patterns that must not appear in user queries
@@ -277,12 +260,7 @@ dangerousSqlPatterns =
 validateSqlQuery :: Text -> Bool
 validateSqlQuery query =
   let lowerQuery = T.toLower query
-      -- Check for comment-based bypass attempts in original query
-      hasComments = "--" `T.isInfixOf` query || "/*" `T.isInfixOf` query
-   in not hasComments
-        && all (\p -> not $ p `T.isInfixOf` lowerQuery) dangerousSqlPatterns
-        && "select"
-        `T.isInfixOf` lowerQuery
+   in "select" `T.isInfixOf` lowerQuery && not (any (`T.isInfixOf` lowerQuery) dangerousSqlPatterns)
 
 
 selectLogTable :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => Projects.ProjectId -> [Section] -> Text -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector AE.Value), [Text], Int))
@@ -323,26 +301,23 @@ selectLogTable pid queryAST queryText cursorM dateRange projectedColsByUser sour
       $ try @SomeException
       $ checkpoint (toAnnotation ("selectLogTable", q)) do
         rows :: [AE.Value] <- Hasql.interp (rawSql q)
-        pure $ V.fromList $ mapMaybe jsonArrayToVector rows
-  case result of
-    Left e -> pure $ Left $ show e
-    Right logItemsV -> do
-      let limit = fromMaybe defaultQueryLimit queryComponents.takeLimit
-      if queryComponents.hasCountOver
-        then do
-          let dropLast v = V.take (V.length v - 1) v
-              count = fromMaybe 0 $ do
+        pure $ jsonArrayRows rows
+  pure case result of
+    Left e -> Left $ show e
+    Right logItemsV
+      | queryComponents.hasCountOver ->
+          let count = fromMaybe 0 do
                 firstRow <- logItemsV V.!? 0
                 AE.Number n <- firstRow V.!? (V.length firstRow - 1)
                 pure $ round n
-          pure $ Right (V.map dropLast logItemsV, queryComponents.toColNames, count)
-        else do
-          -- No count(*) OVER(): use overflow row to detect hasMore
-          let hasOverflow = V.length logItemsV > limit
+           in Right (V.map (\v -> V.take (V.length v - 1) v) logItemsV, queryComponents.toColNames, count)
+      -- No count(*) OVER(): the overflow row detects hasMore, signalled by
+      -- returning count > rows length.
+      | otherwise ->
+          let limit = fromMaybe defaultQueryLimit queryComponents.takeLimit
+              hasOverflow = V.length logItemsV > limit
               rows = if hasOverflow then V.take limit logItemsV else logItemsV
-              -- Signal hasMore by returning count > rows length
-              count = if hasOverflow then V.length rows + 1 else V.length rows
-          pure $ Right (rows, queryComponents.toColNames, count)
+           in Right (rows, queryComponents.toColNames, V.length rows + bool 0 1 hasOverflow)
 
 
 -- | Return spans that are transitive descendants of @seedSpanIds@ within
@@ -355,32 +330,29 @@ selectLogTable pid queryAST queryText cursorM dateRange projectedColsByUser sour
 -- whereas the bounded scan here is a single pass and the result set is
 -- already capped at 2000 rows so the in-memory walk is negligible.
 selectChildSpansAndLogs :: (DB es, Time.Time :> es) => Projects.ProjectId -> [Text] -> V.Vector Text -> V.Vector Text -> (Maybe UTCTime, Maybe UTCTime) -> V.Vector Text -> Eff es [V.Vector AE.Value]
+-- Skipping the SQL round-trip on an empty seed set matters: 'keepDescendantsOf'
+-- would also return [] but we'd pay for the query first.
+selectChildSpansAndLogs _ _ _ seedSpanIds _ _ | V.null seedSpanIds = pure []
 selectChildSpansAndLogs pid projectedColsByUser traceIds seedSpanIds dateRange excludedSpanIds = do
   now <- Time.currentTime
   let qConfig = defSqlQueryCfg pid now (Just SSpans) Nothing
       (r, colNames) = getProcessedColumns projectedColsByUser qConfig.defaultSelect
-  let traceIdsList = V.toList traceIds
+      traceIdsList = V.toList traceIds
       excludedList = V.toList excludedSpanIds
       dateRangeSql = case dateRange of
         (Nothing, Just b) -> [HI.sql| AND timestamp BETWEEN #{b} AND #{now} |]
         (Just a, Just b) -> let a' = addUTCTime (-30) a; b' = addUTCTime 30 b in [HI.sql| AND timestamp BETWEEN #{a'} AND #{b'} |]
         _ -> mempty
-  -- Skip the SQL round-trip when there's nothing to expand from;
-  -- 'keepDescendantsOf' would also return [] but we'd pay for the query first.
-  if V.null seedSpanIds
-    then pure []
-    else do
-      let inner =
-            rawSql ("SELECT jsonb_build_array(" <> r <> ") FROM otel_logs_and_spans WHERE project_id=")
-              <> [HI.sql|#{pid.toText}::text|]
-              <> dateRangeSql
-              <> [HI.sql| AND context___trace_id=ANY(#{traceIdsList}) AND parent_id IS NOT NULL AND id::text != ALL(#{excludedList}) ORDER BY timestamp DESC LIMIT 2000|]
-      rawRows :: [AE.Value] <- Hasql.interp inner
-      let results = V.fromList $ mapMaybe jsonArrayToVector rawRows
-      -- 'colNames' from getProcessedColumns retains "<expr> as <alias>" entries;
-      -- strip to bare aliases so the index map matches what callers / 'lookupVecTextByKey'
-      -- look up (e.g. "latency_breakdown", "parent_id").
-      pure $ keepDescendantsOf (listToIndexHashMap (listToColNames colNames)) seedSpanIds results
+  rawRows :: [AE.Value] <-
+    Hasql.interp
+      $ rawSql ("SELECT jsonb_build_array(" <> r <> ") FROM otel_logs_and_spans WHERE project_id=")
+      <> [HI.sql|#{pid.toText}::text|]
+      <> dateRangeSql
+      <> [HI.sql| AND context___trace_id=ANY(#{traceIdsList}) AND parent_id IS NOT NULL AND id::text != ALL(#{excludedList}) ORDER BY timestamp DESC LIMIT 2000|]
+  -- 'colNames' from getProcessedColumns retains "<expr> as <alias>" entries;
+  -- strip to bare aliases so the index map matches what callers / 'lookupVecTextByKey'
+  -- look up (e.g. "latency_breakdown", "parent_id").
+  pure $ keepDescendantsOf (listToIndexHashMap (listToColNames colNames)) seedSpanIds $ jsonArrayRows rawRows
 
 
 -- | Keep only rows that are transitive descendants of any @seedSpanIds@
@@ -394,7 +366,7 @@ selectChildSpansAndLogs pid projectedColsByUser traceIds seedSpanIds dateRange e
 -- them (in 'requestVecs') and we only return strict descendants.
 keepDescendantsOf :: HM.HashMap Text Int -> V.Vector Text -> V.Vector (V.Vector AE.Value) -> [V.Vector AE.Value]
 keepDescendantsOf colIdxMap seedSpanIds rows
-  | V.null seedSpanIds || V.null rows = []
+  | V.null rows = []
   | otherwise =
       let sid r = lookupVecTextByKey r colIdxMap "latency_breakdown"
           pid' r = lookupVecTextByKey r colIdxMap "parent_id"
@@ -458,13 +430,12 @@ data SessionRow = SessionRow
   deriving stock (Generic, Show)
 
 
--- | Mirrors the column order of the SELECT in 'fetchSessions'. Decoded
--- directly via hasql to bypass the jsonb wrapper entirely — Postgres'
--- jsonb type still rejects NULL bytes / lone surrogates in TEXT values
--- regardless of which function builds it, so the only safe path for raw
--- OTLP text (user_agent, url_path, ...) is to never round-trip through
--- jsonb at all.
--- | One decoded row of 'fetchSessions'. The trailing @sum*@ fields are the
+-- | One decoded row of 'fetchSessions', mirroring the column order of its
+-- SELECT. Decoded directly via hasql to bypass the jsonb wrapper entirely —
+-- Postgres' jsonb type rejects NULL bytes / lone surrogates in TEXT values
+-- regardless of which function builds it, so the only safe path for raw OTLP
+-- text (user_agent, url_path, ...) is to never round-trip through jsonb.
+-- The trailing @sum*@ fields are the
 -- session-level summary, CROSS JOINed onto every page row so the header
 -- aggregates ride the same single scan (decoded once, from the head row).
 -- (hasql-interpolate decodes a flat column list, so these live in one record
@@ -503,24 +474,50 @@ data RawSessionRow = RawSessionRow
   deriving anyclass (HI.DecodeRow)
 
 
--- | Build a WHERE body always scoped to the project. `QueryComponents.whereClause`
--- carries only user-supplied filters (see `Pkg.Parser.sqlFromQueryComponents`
--- where `project_id` is attached separately via `buildWhere`), so any caller
--- that embeds `whereClause` into its own SQL must prepend project scoping
--- here — otherwise a non-empty user filter silently bypasses project isolation.
+-- | Build a WHERE body always scoped to the project, ANDed with the user
+-- filters and the date-range clause. `QueryComponents.whereClause` carries only
+-- user-supplied filters (see `Pkg.Parser.sqlFromQueryComponents` where
+-- `project_id` is attached separately via `buildWhere`), so any caller that
+-- embeds `whereClause` into its own SQL must scope it here — otherwise a
+-- non-empty user filter silently bypasses project isolation.
 --
--- >>> scopedWhere "p1" Nothing
+-- >>> scopedWhere "p1" Nothing ""
 -- "project_id='p1'"
--- >>> scopedWhere "p1" (Just "")
+-- >>> scopedWhere "p1" (Just "") ""
 -- "project_id='p1'"
--- >>> scopedWhere "p1" (Just "level='error'")
--- "project_id='p1' AND (level='error')"
-scopedWhere :: Text -> Maybe Text -> Text
-scopedWhere pidTxt mUser =
-  let base = "project_id='" <> pidTxt <> "'"
-   in case mUser of
-        Just w | not (T.null w) -> base <> " AND (" <> w <> ")"
-        _ -> base
+-- >>> scopedWhere "p1" (Just "level='error'") "timestamp > now()"
+-- "project_id='p1' AND (level='error') AND timestamp > now()"
+scopedWhere :: Text -> Maybe Text -> Text -> Text
+scopedWhere pidTxt mUser dateClause =
+  T.intercalate " AND " $ ("project_id='" <> pidTxt <> "'") : filter (not . T.null) [foldMap parens mUser, dateClause]
+  where
+    parens w = if T.null w then "" else "(" <> w <> ")"
+
+
+-- | Parse @queryAST@ against a fresh 'defSqlQueryCfg' and build its scoped WHERE
+-- clause in one step. Shared by 'fetchLogPatterns', 'fetchSessions', and
+-- 'fetchEventExamples', which all otherwise repeat this three-line dance.
+scopedQueryWhere :: Projects.ProjectId -> UTCTime -> Maybe Sources -> (Maybe UTCTime, Maybe UTCTime) -> [Section] -> Text
+scopedQueryWhere pid now source dateRange queryAST =
+  let sqlCfg = (defSqlQueryCfg pid now source Nothing){dateRange}
+      (_, qc) = queryASTToComponents sqlCfg queryAST
+   in scopedWhere pid.toText qc.whereClause (buildDateRange sqlCfg)
+
+
+-- | One row of the precomputed patterns query in 'fetchLogPatterns' (persisted
+-- @apis.log_patterns@, LEFT JOINed against its merged members).
+data PrecomputedPattern = PrecomputedPattern
+  { logPattern :: Text
+  , totalCount :: Int64
+  , logLevel :: Maybe Text
+  , serviceName :: Maybe Text
+  , patternHash :: Text
+  , mergedCount :: Int
+  , totalPatterns :: Int
+  , isError :: Bool
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
 
 
 fetchLogPatterns
@@ -538,26 +535,22 @@ fetchLogPatterns
   -> Eff es (Int, [PatternRow])
 fetchLogPatterns enableTfReads pid queryAST dateRange sourceM targetM skip = do
   now <- Time.currentTime
-  let sqlCfg = (defSqlQueryCfg pid now sourceM Nothing){dateRange}
-      (_, queryComponents) = queryASTToComponents sqlCfg queryAST
-      pidTxt = pid.toText
-      dateRangeClause = buildDateRange sqlCfg
-      whereCondition = scopedWhere pidTxt queryComponents.whereClause
-      fullWhere = whereCondition <> if T.null dateRangeClause then "" else " AND " <> dateRangeClause
+  let pidTxt = pid.toText
+      fullWhere = scopedQueryWhere pid now sourceM dateRange queryAST
       target = fromMaybe "summary" targetM
   Log.logTrace "fetchLogPatterns: start"
     $ AE.object
       ["project_id" AE..= pid, "target" AE..= target, "skip" AE..= skip, "date_range" AE..= show dateRange]
   let (dateFrom, dateTo) = dateRange
-  precomputed :: [(Text, Int64, Maybe Text, Maybe Text, Text, Int, Int, Bool)] <-
+  precomputed :: [PrecomputedPattern] <-
     if target `elem` map fst LogPatterns.knownPatternFields
       then Hasql.interp [HI.sql|SELECT lp.log_pattern, (lp.occurrence_count + COALESCE(m.member_count, 0))::BIGINT as total_count, lp.log_level, lp.service_name, lp.pattern_hash, COALESCE(m.member_cnt, 0)::BIGINT as merged_count, COUNT(*) OVER()::BIGINT as total_patterns, (lp.is_error OR COALESCE(m.member_err, FALSE)) as is_error FROM apis.log_patterns lp LEFT JOIN LATERAL (SELECT SUM(occurrence_count) as member_count, COUNT(*)::BIGINT as member_cnt, bool_or(is_error) as member_err FROM apis.log_patterns WHERE canonical_id = lp.id) m ON TRUE WHERE lp.project_id = #{pid} AND lp.source_field = #{target} AND lp.canonical_id IS NULL AND (#{dateFrom} IS NULL OR lp.last_seen_at >= #{dateFrom}) AND (#{dateTo} IS NULL OR lp.last_seen_at <= #{dateTo}) ORDER BY total_count DESC OFFSET #{skip} LIMIT #{aggregatePageSize}|]
       else pure []
   if not (null precomputed)
     then do
       Log.logTrace "fetchLogPatterns: using precomputed" $ AE.object ["count" AE..= length precomputed]
-      let totalPatterns = maybe 0 (\(_, _, _, _, _, _, n, _) -> n) $ listToMaybe precomputed
-          hashes = V.fromList $ map (view _5) precomputed
+      let totalPatterns = maybe 0 (.totalPatterns) $ listToMaybe precomputed
+          hashes = V.fromList $ map (.patternHash) precomputed
           hourlyFrom = fromMaybe (addUTCTime (-(24 * 3600)) now) dateFrom
           hourlyTo = fromMaybe now dateTo
       -- Fetch member hashes for merged patterns so their hourly stats are included
@@ -572,7 +565,7 @@ fetchLogPatterns enableTfReads pid queryAST dateRange sourceM targetM skip = do
       -- Only summary patterns tag their rows with pat:<hash>, so only they can be
       -- expanded by tag match; other source fields carry no hashes (empty).
       let patHashes h = if target == "summary" then h : fromMaybe [] (HM.lookup h memberHashMap) else []
-          mkRow (pat, _allTime, lvl, svc, h, mc, _, isErr) = let vol = lookupVolume h in PatternRow{logPattern = pat, count = fromIntegral (sum vol), level = lvl, service = svc, volume = vol, mergedCount = mc, isError = isErr, hashes = patHashes h}
+          mkRow p = let vol = lookupVolume p.patternHash in PatternRow{logPattern = p.logPattern, count = fromIntegral (sum vol), level = p.logLevel, service = p.serviceName, volume = vol, mergedCount = p.mergedCount, isError = p.isError, hashes = patHashes p.patternHash}
       pure (totalPatterns, sortOn (Down . (.count)) $ map mkRow precomputed)
     else do
       Log.logTrace "fetchLogPatterns: falling back to on-the-fly query" $ AE.object ["full_where" AE..= fullWhere]
@@ -582,8 +575,7 @@ fetchLogPatterns enableTfReads pid queryAST dateRange sourceM targetM skip = do
         Just (Left colExpr) ->
           Hasql.interp $ rawSql ("SELECT " <> colExpr <> "::text, " <> bucketCol <> " as bi, count(*)::BIGINT as cnt, mode() WITHIN GROUP (ORDER BY level) as lvl, mode() WITHIN GROUP (ORDER BY resource___service___name) as svc FROM otel_logs_and_spans WHERE project_id=") <> [HI.sql|#{pidTxt} |] <> rawSql (" AND " <> fullWhere <> " AND " <> colExpr <> " IS NOT NULL GROUP BY 1, 2 ORDER BY cnt DESC LIMIT 20000")
         Just (Right pathParts) ->
-          let pathPartsList = V.toList pathParts
-           in Hasql.interp $ [HI.sql|SELECT attributes #>> #{pathPartsList}, |] <> rawSql (bucketCol <> " as bi, count(*)::BIGINT as cnt, mode() WITHIN GROUP (ORDER BY level) as lvl, mode() WITHIN GROUP (ORDER BY resource___service___name) as svc FROM otel_logs_and_spans WHERE project_id=") <> [HI.sql|#{pidTxt} |] <> rawSql (" AND " <> fullWhere) <> [HI.sql| AND attributes #>> #{pathPartsList} IS NOT NULL GROUP BY 1, 2 ORDER BY cnt DESC LIMIT 20000|]
+          Hasql.interp $ [HI.sql|SELECT attributes #>> #{pathParts}, |] <> rawSql (bucketCol <> " as bi, count(*)::BIGINT as cnt, mode() WITHIN GROUP (ORDER BY level) as lvl, mode() WITHIN GROUP (ORDER BY resource___service___name) as svc FROM otel_logs_and_spans WHERE project_id=") <> [HI.sql|#{pidTxt} |] <> rawSql (" AND " <> fullWhere) <> [HI.sql| AND attributes #>> #{pathParts} IS NOT NULL GROUP BY 1, 2 ORDER BY cnt DESC LIMIT 20000|]
         Nothing -> pure []
       Log.logTrace "fetchLogPatterns: on-the-fly query done" $ AE.object ["raw_results" AE..= length rawResults]
       let agg (c1, l1, s1, b1) (c2, l2, s2, b2) = (c1 + c2, l1 <|> l2, s1 <|> s2, b1 ++ b2)
@@ -593,14 +585,14 @@ fetchLogPatterns enableTfReads pid queryAST dateRange sourceM targetM skip = do
               [(replaceAllFormats val, (cnt, lvl, svc, [(bi, cnt)])) | (val, bi, cnt, lvl, svc) <- rawResults, not (T.null val)]
           drainTree =
             let keys = V.fromList $ HM.keys grouped
-             in Drain.buildDrainTree Drain.tokenizeForDrain Relude.id (const Nothing) Drain.emptyDrainTree keys now
+             in Drain.buildDrainTree Drain.tokenizeForDrain id (const Nothing) Drain.emptyDrainTree keys now
           merged =
             HM.fromListWith
               agg
               [ (dr.templateStr, foldl' agg (0, Nothing, Nothing, []) $ mapMaybe (`HM.lookup` grouped) $ V.toList dr.logIds)
               | dr <- V.toList $ Drain.getAllLogGroups drainTree
               ]
-          sorted = take 100 $ drop skip $ sortOn (Down . (\(c, _, _, _) -> c) . snd) $ HM.toList merged
+          sorted = take aggregatePageSize $ drop skip $ sortOn (Down . (\(c, _, _, _) -> c) . snd) $ HM.toList merged
           range = bucketRange [bi | (_, (_, _, _, bs)) <- sorted, (bi, _) <- bs]
       Log.logTrace "fetchLogPatterns: normalization done" $ AE.object ["patterns" AE..= HM.size merged]
       pure (HM.size merged, [PatternRow{logPattern = pat, count = fromIntegral cnt, level = lvl, service = svc, volume = densifyBuckets range bs, mergedCount = 0, isError = maybe False ((== "error") . T.toLower) lvl, hashes = []} | (pat, (cnt, lvl, svc, bs)) <- sorted])
@@ -614,7 +606,7 @@ fetchLogPatterns enableTfReads pid queryAST dateRange sourceM targetM skip = do
       | f == "summary" = Just $ Left "array_to_string(summary, chr(30))"
       | f `S.member` flattenedOtelAttributes = Just $ Left $ transformFlattenedAttribute f
       | f `elem` rootColumns = Just $ Left f
-      | "attributes." `T.isPrefixOf` f = let parts = drop 1 $ T.splitOn "." f in if null parts || parts == [""] then Nothing else Just $ Right $ V.fromList parts
+      | Just rest <- T.stripPrefix "attributes." f, not (T.null rest) = Just $ Right $ T.splitOn "." rest
       | otherwise = Nothing
     rootColumns = ["body", "level", "kind", "name", "status_code", "status_message"] :: [Text]
 
@@ -629,12 +621,7 @@ fetchLogPatterns enableTfReads pid queryAST dateRange sourceM targetM skip = do
 fetchSessions :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Bool -> Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Text -> Int -> Eff es (SessionSummary, Int, [SessionRow])
 fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
   now <- Time.currentTime
-  let sqlCfg = (defSqlQueryCfg pid now (Just SSpans) Nothing){dateRange}
-      (_, queryComponents) = queryASTToComponents sqlCfg queryAST
-      pidTxt = pid.toText
-      dateRangeClause = buildDateRange sqlCfg
-      whereCondition = scopedWhere pidTxt queryComponents.whereClause
-      fullWhere = whereCondition <> if T.null dateRangeClause then "" else " AND " <> dateRangeClause
+  let fullWhere = scopedQueryWhere pid now (Just SSpans) dateRange queryAST
       bucketW = bucketWidthSecs dateRange now
       sortCol = case sortByM of
         Just "duration" -> "duration_ns" :: Text
@@ -828,12 +815,7 @@ fetchEventExamples
   -> Eff es (V.Vector (V.Vector AE.Value), [Text])
 fetchEventExamples enableTfReads pid queryAST dateRange expandKind skip limitN = do
   now <- Time.currentTime
-  let sqlCfg = (defSqlQueryCfg pid now (Just SSpans) Nothing){dateRange}
-      (_, qc) = queryASTToComponents sqlCfg queryAST
-      pidTxt = pid.toText
-      dateRangeClause = buildDateRange sqlCfg
-      whereCondition = scopedWhere pidTxt qc.whereClause
-      fullWhereSql = rawSql (whereCondition <> if T.null dateRangeClause then "" else " AND " <> dateRangeClause)
+  let fullWhereSql = rawSql $ scopedQueryWhere pid now (Just SSpans) dateRange queryAST
       expandFilter = case expandKind of
         ExpandSession sid -> [HI.sql| AND attributes___session___id = #{sid}|]
         -- Prefer tag match: the key is a comma-joined list of pat:<hash> tags
@@ -845,8 +827,7 @@ fetchEventExamples enableTfReads pid queryAST dateRange expandKind skip limitN =
           Nothing -> [HI.sql| AND array_to_string(summary, chr(30)) ILIKE #{templateToLike key}|]
       cols = defaultSelectSqlQuery (Just SSpans)
       -- Mirror selectLogTable's summary column handling: wrap TEXT[] as JSON for row output.
-      processedCols = map (\c -> if c == "summary" || "summary" `T.isSuffixOf` c then "to_json(summary)" else c) $ colsNoAsClause cols
-      selectClause = T.intercalate ", " processedCols
+      selectClause = T.intercalate ", " $ map (\c -> if "summary" `T.isSuffixOf` c then "to_json(summary)" else c) $ colsNoAsClause cols
       -- Sessions: fetch one root event per trace via DISTINCT ON so [+N] expansion
       -- covers all traces.  Patterns/other: fetch raw events as before.
       --
@@ -861,7 +842,7 @@ fetchEventExamples enableTfReads pid queryAST dateRange expandKind skip limitN =
             <> fullWhereSql
             <> expandFilter
             <> [HI.sql| ORDER BY context___trace_id, parent_id ASC NULLS FIRST, timestamp ASC) sub ORDER BY ts ASC OFFSET #{skip}::BIGINT LIMIT #{limitN}::BIGINT|]
-        _ ->
+        ExpandPattern _ ->
           rawSql ("SELECT jsonb_build_array(" <> selectClause <> ") FROM otel_logs_and_spans WHERE ")
             <> fullWhereSql
             <> expandFilter
@@ -871,7 +852,7 @@ fetchEventExamples enableTfReads pid queryAST dateRange expandKind skip limitN =
     Hasql.withHasqlTimefusion enableTfReads
       $ checkpoint (toAnnotation ("fetchEventExamples" :: Text, pid))
       $ Hasql.interp q
-  pure (V.fromList $ mapMaybe jsonArrayToVector rawRows, listToColNames cols)
+  pure (jsonArrayRows rawRows, listToColNames cols)
 
 
 -- | Page size for patterns and sessions aggregations. The JSON encoder
@@ -963,16 +944,12 @@ buildHourlyBuckets :: UTCTime -> [(UTCTime, Int)] -> [Int]
 buildHourlyBuckets now pairs = [fromMaybe 0 $ HM.lookup i bucketMap | i <- [0 .. 23]]
   where
     startHour = addUTCTime (-(23 * 3600)) $ truncateToHour now
-    bucketMap = HM.fromListWith (+) [(hourIndex t, c) | (t, c) <- pairs, let idx = hourIndex t, idx >= 0 && idx < 24]
+    bucketMap = HM.fromListWith (+) [(idx, c) | (t, c) <- pairs, let idx = hourIndex t, idx >= 0, idx < 24]
     hourIndex t = floor (diffUTCTime (truncateToHour t) startHour / 3600) :: Int
     truncateToHour t = let s = utcTimeToPOSIXSeconds t in posixSecondsToUTCTime $ fromIntegral (floor s `div` 3600 * 3600 :: Int)
 
 
 getLastSevenDaysTotalRequest :: (DB es, Time.Time :> es) => Projects.ProjectId -> Eff es Int
-getLastSevenDaysTotalRequest = getRequestCountForInterval "7 days"
-
-
-getRequestCountForInterval :: (DB es, Time.Time :> es) => Text -> Projects.ProjectId -> Eff es Int
-getRequestCountForInterval interval pid = do
+getLastSevenDaysTotalRequest pid = do
   now <- Time.currentTime
-  fromMaybe 0 <$> Hasql.interpOne ([HI.sql| SELECT count(*)::BIGINT FROM otel_logs_and_spans WHERE project_id=#{pid.toText}::text AND timestamp > #{now}::timestamptz - interval |] <> rawSql ("'" <> interval <> "'"))
+  fromMaybe 0 <$> Hasql.interpOne [HI.sql| SELECT count(*)::BIGINT FROM otel_logs_and_spans WHERE project_id=#{pid.toText}::text AND timestamp > #{now}::timestamptz - interval '7 days'|]

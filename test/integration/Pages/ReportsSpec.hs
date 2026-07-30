@@ -17,11 +17,11 @@ spec = around withTestResources do
       -- Get initial state
       (_, res1) <- testServant tr $ PageReports.reportsGetH testPid Nothing Nothing Nothing
       case res1 of
-        PageReports.ReportsGetMain (PageCtx _ (_, _, _, daily1, weekly1)) -> do
-          -- Initial state should be daily=True, weekly=True from testSessionHeader
-          daily1 `shouldBe` False
-          weekly1 `shouldBe` True
+        PageReports.ReportsGetMain (PageCtx _ (pid1, _, _)) -> pid1 `shouldBe` testPid
         _ -> error "Unexpected response"
+      initial <- runTestBg frozenTime tr $ Projects.projectById testPid
+      fmap (.dailyNotif) initial `shouldBe` Just False
+      fmap (.weeklyNotif) initial `shouldBe` Just True
 
       -- Toggle daily
       _ <-
@@ -41,7 +41,7 @@ spec = around withTestResources do
       -- Also check via the reports page
       (_, res) <- testServant tr $ PageReports.reportsGetH testPid Nothing Nothing Nothing
       case res of
-        PageReports.ReportsGetMain (PageCtx _ (pid, reports, _, _, _)) -> do
+        PageReports.ReportsGetMain (PageCtx _ (pid, reports, _)) -> do
           pid `shouldBe` testPid
           length reports `shouldBe` 0
         _ -> error "Unexpected response"

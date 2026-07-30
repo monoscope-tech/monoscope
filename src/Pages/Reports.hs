@@ -11,12 +11,12 @@ module Pages.Reports (
   computeDurationChanges,
   EndpointStatsTuple,
   anomalyTypeCounts,
+  pctChange,
   eventsWidget,
   errorsWidget,
 )
 where
 
-import Control.Lens (view, _2, _3)
 import Data.Aeson qualified as AE
 import Data.Default (def)
 import Data.Map.Lazy qualified as Map
@@ -43,6 +43,7 @@ import Pkg.Components.Widget qualified as Widget
 import Pkg.EmailTemplates qualified as ET
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
+import System.Logging qualified as Log
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
 import Utils (FreeTierStatus, LoadingSize (..), LoadingType (..), checkFreeTierStatus, faSprite_, formatUTCMicros, loadingIndicatorWith_)
 
@@ -136,41 +137,43 @@ buildReportJson' totalEvents totalErrors eventsChange errorsChange spanTypeStats
       }
 
 
--- | Moved from BackgroundJobs
 type EndpointStatsTuple = (Text, Text, Text, Int64, Int64)
+
+
+-- | Percent change of @cur@ over @prev@, rounded to 2dp; 0 when there's no baseline.
+pctChange :: Integral a => a -> a -> Double
+pctChange cur prev
+  | prev == 0 = 0
+  | otherwise = fromIntegral (round (ratio * 10000) :: Int) / 100
+  where
+    ratio = fromIntegral (cur - prev) / fromIntegral prev :: Double
 
 
 getSpanTypeStats :: V.Vector (Text, Int, Int) -> V.Vector (Text, Int, Int) -> V.Vector (Text, Int, Double, Int, Double)
 getSpanTypeStats current prev =
-  let spanTypes = ordNub $ V.toList (V.map (\(t, _, _) -> t) current <> V.map (\(t, _, _) -> t) prev)
-      getStats t =
-        let evtCount = maybe 0 (\(_, c, _) -> c) (V.find (\(st, _, _) -> st == t) current)
-            prevEvtCount = maybe 0 (\(_, c, _) -> c) (V.find (\(st, _, _) -> st == t) prev)
-            evtChange' = if prevEvtCount == 0 then 0.00 :: Double else fromIntegral (evtCount - prevEvtCount) / fromIntegral prevEvtCount * 100
-            evtChange = fromIntegral (round (evtChange' * 100)) / 100
-            avgDuration = maybe 0 (\(_, _, d) -> d) (V.find (\(st, _, _) -> st == t) current)
-            prevAvgDuration = maybe 0 (\(_, _, d) -> d) (V.find (\(st, _, _) -> st == t) prev)
-            durationChange' = if prevAvgDuration == 0 then 0.00 :: Double else fromIntegral (avgDuration - prevAvgDuration) / fromIntegral prevAvgDuration * 100
-            durationChange = fromIntegral (round (durationChange' * 100)) / 100
-         in (t, evtCount, evtChange, avgDuration, durationChange)
-   in V.fromList (map getStats spanTypes)
+  V.fromList
+    [ (t, c, pctChange c pc, d, pctChange d pd)
+    | t <- ordNub [st | (st, _, _) <- V.toList current <> V.toList prev]
+    , let (c, d) = Map.findWithDefault (0, 0) t curMap
+    , let (pc, pd) = Map.findWithDefault (0, 0) t prevMap
+    ]
+  where
+    -- first row wins on duplicate span types, matching the pre-map lookup
+    toMap v = Map.fromListWith (\_ old -> old) [(t, (c, d)) | (t, c, d) <- V.toList v]
+    curMap = toMap current
+    prevMap = toMap prev
 
 
 computeDurationChanges :: V.Vector EndpointStatsTuple -> V.Vector EndpointStatsTuple -> V.Vector (Text, Text, Text, Int64, Double, Int64, Double)
-computeDurationChanges current prev =
-  let prevMap :: Map.Map (Text, Text, Text) Int64
-      prevMap = Map.fromList [((h, m, u), dur) | (h, m, u, dur, _req) <- V.toList prev]
-      prevMapReq :: Map.Map (Text, Text, Text) Int64
-      prevMapReq = Map.fromList [((h, m, u), req) | (h, m, u, _dur, req) <- V.toList prev]
-      compute (h, m, u, dur, req) =
-        let change = case Map.lookup (h, m, u) prevMap of
-              Just prevDur | prevDur > 0 -> Just $ (fromIntegral (dur - prevDur) / fromIntegral prevDur) * 100
-              _ -> Nothing
-            reqChange = case Map.lookup (h, m, u) prevMapReq of
-              Just prevReq | prevReq > 0 -> Just $ (fromIntegral (req - prevReq) / fromIntegral prevReq) * 100
-              _ -> Nothing
-         in (h, m, u, dur, maybe 100.00 (\x -> fromIntegral (round (x * 100)) / 100) change, req, maybe 100.00 (\x -> fromIntegral (round (x * 100)) / 100) reqChange)
-   in V.map compute current
+computeDurationChanges current prev = V.map compute current
+  where
+    prevMap :: Map.Map (Text, Text, Text) (Int64, Int64)
+    prevMap = Map.fromList [((h, m, u), (dur, req)) | (h, m, u, dur, req) <- V.toList prev]
+    -- no positive baseline reads as "all new": 100%
+    change cur = maybe 100 (\p -> if p > 0 then pctChange cur p else 100)
+    compute (h, m, u, dur, req) =
+      let pv = Map.lookup (h, m, u) prevMap
+       in (h, m, u, dur, change dur (fst <$> pv), req, change req (snd <$> pv))
 
 
 -- | Shared email rendering: builds WeeklyReportData from inputs, generates chart URLs, renders email
@@ -220,7 +223,7 @@ renderWeeklyEmail reportUrl project pid userName startTime endTime totalEvents t
 -- | Reconstruct the email HTML from a stored Report's reportJson. Returns (dateLabel, emailHtml)
 reportToEmailHtml :: Issues.Report -> Projects.Project -> Text -> ATAuthCtx (Text, Text)
 reportToEmailHtml report project userName = case AE.fromJSON @ReportData report.reportJson of
-  AE.Error _ -> pure ("", "Error: Could not parse report data")
+  AE.Error err -> ("", "Error: Could not parse report data") <$ Log.logAttention "Unparseable stored report json" (report.id.toText, toText err)
   AE.Success rd -> do
     let anomalies' = V.fromList rd.issues
         performance = V.fromList $ (\ep -> (ep.host, ep.method, ep.urlPath, fromIntegral ep.averageDuration :: Int64, ep.durationDiffPct, fromIntegral ep.requestCount :: Int64, ep.requestDiffPct)) <$> rd.endpoints
@@ -252,22 +255,20 @@ buildLiveReportEmailHtml pid project userName = do
               )
           )
           ( concurrently
-              (Issues.selectIssues pid Nothing (Just False) Nothing 100 0 (Just (startTime, currentTime)) Nothing "7d" [] [])
+              (Issues.selectIssues pid (Just False) Nothing 100 0 (Just (startTime, currentTime)) Nothing "7d" [] [])
               (concurrently (LogPatterns.getLogPatterns pid 10 0) (LogQueries.getLastSevenDaysTotalRequest pid))
           )
       )
-  let totalErrors = sum $ map (view _2) stats
-      totalEvents = sum $ map (view _3) stats
-      totalErrorsPrev = sum $ map (view _2) statsPrev
-      totalEventsPrev = sum $ map (view _3) statsPrev
-      pctChange cur prev = if prev == 0 then 0.0 else fromIntegral (round ((fromIntegral (cur - prev) / fromIntegral prev * 100 :: Double) * 100)) / 100
-      eventsChangePct = pctChange totalEvents totalEventsPrev :: Double
-      errorsChangePct = pctChange totalErrors totalErrorsPrev :: Double
+  let totals xs = (sum [e | (_, e, _) <- xs], sum [v | (_, _, v) <- xs])
+      (totalErrors, totalEvents) = totals stats
+      (totalErrorsPrev, totalEventsPrev) = totals statsPrev
+      eventsChangePct = pctChange totalEvents totalEventsPrev
+      errorsChangePct = pctChange totalErrors totalErrorsPrev
       slowQueries = V.fromList slowQueriesL
       performance = computeDurationChanges endpointStats endpointStatsPrev
       anomalies' = V.fromList $ Issues.toIssueSummary <$> anomalies
       topPatterns = V.fromList $ patterns <&> \p -> (p.logPattern, p.occurrenceCount, LogPatterns.sourceFieldLabel p.sourceField)
-  let reportUrl = "/p/" <> pid.toText <> "/reports"
+      reportUrl = "/p/" <> pid.toText <> "/reports"
       freeTierExceeded = Projects.isFreeTier project.paymentPlan && totalRequest > 5000
   renderWeeklyEmail reportUrl project pid userName startTime currentTime totalEvents totalErrors eventsChangePct errorsChangePct anomalies' performance slowQueries topPatterns freeTierExceeded
 
@@ -289,9 +290,8 @@ instance ToHtml ReportsPost where
 
 
 wrapSingleResponse :: BWConfig -> FreeTierStatus -> Text -> Maybe Text -> (Text, Text, Text) -> ATAuthCtx (RespHeaders ReportsGet)
-wrapSingleResponse bw freeTierStatus pageTitle hxRequestM content = case hxRequestM of
-  Just _ -> addRespHeaders $ ReportsGetSingle' content
-  _ -> addRespHeaders $ ReportsGetSingle $ PageCtx bw{pageTitle, freeTierStatus} content
+wrapSingleResponse bw freeTierStatus pageTitle hxRequestM content =
+  addRespHeaders $ maybe (ReportsGetSingle $ PageCtx bw{pageTitle, freeTierStatus} content) (const $ ReportsGetSingle' content) hxRequestM
 
 
 singleReportGetH :: Projects.ProjectId -> Issues.ReportId -> Maybe Text -> ATAuthCtx (RespHeaders ReportsGet)
@@ -319,11 +319,8 @@ reportsLiveGetH pid hxRequestM = do
 reportsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders ReportsGet)
 reportsGetH pid page hxRequest hxBoosted = do
   (_, project, bw) <- mkPageCtx pid
-  let p = toString (fromMaybe "0" page)
-  let pg = fromMaybe 0 (readMaybe p :: Maybe Int)
-
-  reportsList <- Issues.reportHistoryByProject pid pg
-  let reports = V.fromList reportsList
+  let pg = fromMaybe 0 (readMaybe . toString =<< page) :: Int
+  reports <- V.fromList <$> Issues.reportHistoryByProject pid pg
   freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
   let nextUrl =
         if V.length reports < 20
@@ -331,27 +328,25 @@ reportsGetH pid page hxRequest hxBoosted = do
           else Just $ "/p/" <> pid.toText <> "/reports?page=" <> show (pg + 1)
   case (hxRequest, hxBoosted) of
     (Just "true", Nothing) -> addRespHeaders $ ReportsGetList pid reports nextUrl
-    _ -> do
-      let bwconf = bw{pageTitle = "Reports", freeTierStatus = freeTierStatus}
-      addRespHeaders $ ReportsGetMain $ PageCtx bwconf (pid, reports, nextUrl, project.dailyNotif, project.weeklyNotif)
+    _ -> addRespHeaders $ ReportsGetMain $ PageCtx bw{pageTitle = "Reports", freeTierStatus} (pid, reports, nextUrl)
 
 
--- | (reportType, dateLabel, emailHtml)
 data ReportsGet
-  = ReportsGetMain (PageCtx (Projects.ProjectId, V.Vector Issues.ReportListItem, Maybe Text, Bool, Bool))
+  = ReportsGetMain (PageCtx (Projects.ProjectId, V.Vector Issues.ReportListItem, Maybe Text))
   | ReportsGetList Projects.ProjectId (V.Vector Issues.ReportListItem) (Maybe Text)
   | ReportsGetSingle (PageCtx (Text, Text, Text))
   | ReportsGetSingle' (Text, Text, Text)
 
 
 instance ToHtml ReportsGet where
-  toHtml (ReportsGetMain (PageCtx conf (pid, reports, next, daily, weekly))) = toHtml $ PageCtx conf $ reportsPage pid reports next daily weekly
+  toHtml (ReportsGetMain (PageCtx conf (pid, reports, next))) = toHtml $ PageCtx conf $ reportsPage pid reports next
   toHtml (ReportsGetList pid reports next) = toHtml $ reportListItems pid reports next
   toHtml (ReportsGetSingle (PageCtx conf content)) = toHtml $ PageCtx conf $ singleReportPage content
   toHtml (ReportsGetSingle' content) = toHtml $ singleReportPage content
   toHtmlRaw = toHtml
 
 
+-- | (reportType, dateLabel, emailHtml)
 singleReportPage :: (Text, Text, Text) -> Html ()
 singleReportPage (reportType, dateLabel, emailHtml) =
   div_ [class_ "w-full flex flex-col h-full"] do
@@ -363,68 +358,62 @@ singleReportPage (reportType, dateLabel, emailHtml) =
       else iframe_ [term "srcdoc" emailHtml, style_ "width:100%;height:100%;border:none;", term "sandbox" "allow-same-origin"] ""
 
 
-reportsPage :: Projects.ProjectId -> V.Vector Issues.ReportListItem -> Maybe Text -> Bool -> Bool -> Html ()
-reportsPage pid reports nextUrl _daily _weekly =
+-- | HTMX attrs loading @url@ into the report detail pane.
+detailPaneAttrs :: Text -> [Attribute]
+detailPaneAttrs url = [hxGet_ url, hxTarget_ "#detailSidebar", hxSwap_ "innerHTML"]
+
+
+-- | Clickable report card: @borderCls@ distinguishes the live entry from history.
+reportCard_ :: Text -> Text -> Html () -> Html ()
+reportCard_ borderCls url body =
+  div_ [class_ $ "shrink-0 w-64 md:w-full flex flex-col border rounded-lg hover:bg-fillWeaker " <> borderCls]
+    $ a_ (class_ "w-full p-4 flex justify-between hover:bg-fillHover cursor-pointer" : detailPaneAttrs url)
+    $ div_ [class_ "flex flex-col grow gap-4"] body
+
+
+-- | Card header row: a pill, optional trailing badge, and the chevron affordance.
+reportCardHead_ :: Text -> Html () -> Html () -> Html ()
+reportCardHead_ pillCls pill badge = div_ [class_ "flex items-center w-full justify-between gap-2"] do
+  div_ [class_ "flex items-center gap-2"] do
+    div_ [class_ $ pillCls <> " text-xs font-medium px-2.5 py-1 rounded-full"] pill
+    badge
+  faSprite_ "chevron-right" "regular" "w-3 h-3"
+
+
+reportCardTitle_ :: Html () -> Html ()
+reportCardTitle_ title = h4_ [class_ "font-medium text-sm flex items-center gap-2"] do
+  faSprite_ "calendar" "regular" "w-4 h-4"
+  title
+
+
+reportsPage :: Projects.ProjectId -> V.Vector Issues.ReportListItem -> Maybe Text -> Html ()
+reportsPage pid reports nextUrl =
   div_ [class_ "flex flex-col md:flex-row h-full w-full border-t"] do
-    when (V.null reports)
-      $ div_ [class_ "flex h-full w-full justify-center items-center"]
-      $ emptyState_ def{icon = Just "empty"} "No reports generated yet" "Scheduled digests will appear here once your project has activity to summarize."
-    unless (V.null reports) do
-      div_ [class_ "w-full md:w-1/3 md:border-r border-b md:border-b-0 border-strokeWeak p-4 overflow-x-auto md:overflow-y-auto"] do
-        div_ [class_ "mt-4 flex flex-row md:flex-col gap-4 w-full"] do
-          -- "Week to Date" live preview entry
-          div_ [class_ "shrink-0 w-64 md:w-full flex flex-col border border-strokeBrand-weak bg-fillBrand-weak/10 rounded-lg cursor-pointer hover:bg-fillWeaker"] do
-            div_ [class_ "w-full"] do
-              a_
-                [ class_ "w-full p-4 flex justify-between hover:bg-fillHover cursor-pointer"
-                , hxGet_ $ "/p/" <> pid.toText <> "/reports/live"
-                , hxTarget_ "#detailSidebar"
-                , hxSwap_ "innerHTML"
-                ]
-                $ div_ [class_ "flex flex-col grow gap-4"] do
-                  div_ [class_ "flex items-center w-full justify-between gap-2"] do
-                    div_ [class_ "flex items-center gap-2"] do
-                      div_ [class_ "bg-fillBrand-weak text-xs font-medium px-2.5 py-1 rounded-full"] "Weekly report"
-                      span_ [class_ "bg-fillSuccess-strong text-textInverse-strong text-2xs font-bold px-1.5 py-0.5 rounded-full uppercase"] "Live"
-                    faSprite_ "chevron-right" "regular" "w-3 h-3"
-                  h4_ [class_ "font-medium text-sm flex items-center gap-2"] do
-                    faSprite_ "calendar" "regular" "w-4 h-4"
-                    "Week to Date"
-          -- Historical reports
-          reportListItems pid reports nextUrl
-      div_ [class_ "w-full md:w-2/3 overflow-y-auto"] do
-        div_ [class_ "flex h-full", id_ "detailSidebar"] do
-          -- Auto-load the live preview on initial page load
-          a_
-            [ class_ "w-full text-center cursor-pointer"
-            , hxGet_ $ "/p/" <> pid.toText <> "/reports/live"
-            , hxTarget_ "#detailSidebar"
-            , hxSwap_ "innerHTML"
-            , hxTrigger_ "intersect once"
-            ]
-            $ div_ [class_ "w-full p-4 flex justify-between hover:bg-fillHover cursor-pointer"] do
-              loadingIndicatorWith_ LdSM LdDots "text-textWeak"
+    if V.null reports
+      then
+        div_ [class_ "flex h-full w-full justify-center items-center"]
+          $ emptyState_ def{icon = Just "empty"} "No reports generated yet" "Scheduled digests will appear here once your project has activity to summarize."
+      else do
+        div_ [class_ "w-full md:w-1/3 md:border-r border-b md:border-b-0 border-strokeWeak p-4 overflow-x-auto md:overflow-y-auto"]
+          $ div_ [class_ "mt-4 flex flex-row md:flex-col gap-4 w-full"] do
+            reportCard_ "border-strokeBrand-weak bg-fillBrand-weak/10" ("/p/" <> pid.toText <> "/reports/live") do
+              reportCardHead_ "bg-fillBrand-weak" "Weekly report"
+                $ span_ [class_ "bg-fillSuccess-strong text-textInverse-strong text-2xs font-bold px-1.5 py-0.5 rounded-full uppercase"] "Live"
+              reportCardTitle_ "Week to Date"
+            reportListItems pid reports nextUrl
+        div_ [class_ "w-full md:w-2/3 overflow-y-auto"]
+          $ div_ [class_ "flex h-full", id_ "detailSidebar"]
+          $ a_ (class_ "w-full text-center cursor-pointer" : hxTrigger_ "intersect once" : detailPaneAttrs ("/p/" <> pid.toText <> "/reports/live"))
+          $ div_ [class_ "w-full p-4 flex justify-between hover:bg-fillHover cursor-pointer"]
+          $ loadingIndicatorWith_ LdSM LdDots "text-textWeak"
 
 
 reportListItems :: Projects.ProjectId -> V.Vector Issues.ReportListItem -> Maybe Text -> Html ()
 reportListItems pid reports nextUrl =
   div_ [class_ "flex flex-row md:flex-col gap-4 w-full"] do
-    forM_ reports $ \report -> do
-      let isWeeklyData = report.reportType == "weekly"
-      div_ [class_ "shrink-0 w-64 md:w-full flex flex-col border border-strokeWeak rounded-lg cursor-pointer hover:bg-fillWeaker"] do
-        div_ [class_ "w-full"] do
-          a_
-            [ class_ "w-full p-4 flex justify-between hover:bg-fillHover cursor-pointer"
-            , hxGet_ $ "/p/" <> pid.toText <> "/reports/" <> report.id.toText
-            , hxTarget_ "#detailSidebar"
-            , hxSwap_ "innerHTML"
-            ]
-            $ div_ [class_ "flex flex-col grow gap-4"] do
-              div_ [class_ "flex items-center w-full justify-between gap-2"] do
-                div_ [class_ $ (if isWeeklyData then "bg-fillBrand-weak" else "bg-fillWeak") <> " text-xs font-medium px-2.5 py-1 rounded-full capitalize"] $ toHtml report.reportType <> " report"
-                faSprite_ "chevron-right" "regular" "w-3 h-3"
-              h4_ [class_ "font-medium text-sm flex items-center gap-2"] do
-                faSprite_ "calendar" "regular" "w-4 h-4"
-                toHtml $ formatTime defaultTimeLocale "%a, %b %d %Y" (zonedTimeToLocalTime report.createdAt)
+    forM_ reports \report ->
+      reportCard_ "border-strokeWeak" ("/p/" <> pid.toText <> "/reports/" <> report.id.toText) do
+        reportCardHead_ (if report.reportType == "weekly" then "bg-fillBrand-weak capitalize" else "bg-fillWeak capitalize") (toHtml report.reportType <> " report") mempty
+        reportCardTitle_ $ toHtml $ formatTime defaultTimeLocale "%a, %b %d %Y" (zonedTimeToLocalTime report.createdAt)
     whenJust nextUrl \url ->
       a_ [class_ "w-full cursor-pointer block p-1 text-textBrand bg-fillBrand-weak hover:bg-fillBrand-weak text-center mb-4", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] "LOAD MORE"

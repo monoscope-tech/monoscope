@@ -87,6 +87,12 @@ data CatalogRow = CatalogRow
   deriving anyclass (NFData)
 
 
+-- | JSON-encode then strip NULs (PG @jsonb@ rejects @\\u0000@) before wrapping
+-- for a jsonb column. Shared by every jsonb-bearing upsert below.
+asScrubbedJsonb :: AE.ToJSON a => a -> HI.AsJsonb AE.Value
+asScrubbedJsonb = HI.AsJsonb . scrubNulValue . AE.toJSON
+
+
 -- ---------------------------------------------------------------------------
 -- Upserts. Both are multi-row INSERTs over @unnest@ so a single round-trip
 -- handles the dirty subset of an entire shard.
@@ -145,11 +151,9 @@ upsertCatalogRows rows =
     kinds = V.map (.keyKind) rows
     khs = V.map (.keyHash) rows
     ths = V.map (.templateHash) rows
-    asScrubbed :: AE.ToJSON a => a -> HI.AsJsonb AE.Value
-    asScrubbed = HI.AsJsonb . scrubNulValue . AE.toJSON
-    scopes = V.map (asScrubbed . (.scope)) rows
-    vds = V.map (asScrubbed . (.valuesDelta)) rows
-    cnts = V.map (asScrubbed . (.counts)) rows
+    scopes = V.map (asScrubbedJsonb . (.scope)) rows
+    vds = V.map (asScrubbedJsonb . (.valuesDelta)) rows
+    cnts = V.map (asScrubbedJsonb . (.counts)) rows
     ss = V.map (fromIntegral @Word64 @Int64 . (.sampleCount)) rows
     firsts = V.map (.firstSeen) rows
     lasts = V.map (.lastSeen) rows
@@ -160,7 +164,7 @@ upsertCatalogRows rows =
 
 -- | Decoded result of a join across @apis.schema_catalog@ ⨝ @apis.schema_template@.
 data CatalogReadRow = CatalogReadRow
-  { projectId :: UUID.UUID
+  { projectId :: UUID
   , keyKind :: Catalog.KeyKind
   , keyHash :: Text
   , templateHash :: Text
@@ -178,20 +182,16 @@ data CatalogReadRow = CatalogReadRow
 
 readRowToEntry :: CatalogReadRow -> Catalog.CatalogEntry
 readRowToEntry r =
-  let HI.AsJsonb sc = r.scope
-      HI.AsJsonb tf = r.templateFields
-      HI.AsJsonb vd = r.valuesDelta
-      HI.AsJsonb ct = r.counts
-   in Catalog.CatalogEntry
-        { scope = sc
-        , template = Catalog.Template r.keyKind tf
-        , valuesDelta = vd
-        , counts = ct
-        , sampleCount = fromIntegral r.sampleCount
-        , firstSeen = r.firstSeen
-        , lastSeen = r.lastSeen
-        , dirty = False
-        }
+  Catalog.CatalogEntry
+    { scope = coerce r.scope
+    , template = Catalog.Template r.keyKind (coerce r.templateFields)
+    , valuesDelta = coerce r.valuesDelta
+    , counts = coerce r.counts
+    , sampleCount = fromIntegral r.sampleCount
+    , firstSeen = r.firstSeen
+    , lastSeen = r.lastSeen
+    , dirty = False
+    }
 
 
 -- | Bulk variant: fetches catalog rows for a heterogeneous (project, key_hash)
@@ -204,8 +204,7 @@ getByKeysBatch
 getByKeysBatch pairs
   | V.null pairs = pure HM.empty
   | otherwise = do
-      let pids = V.map fst pairs
-          khs = V.map snd pairs
+      let (pids, khs) = V.unzip pairs
       rows :: [CatalogReadRow] <-
         Hasql.interp
           [HI.sql| SELECT c.project_id, c.key_kind, c.key_hash, c.template_hash,
@@ -229,11 +228,9 @@ newtype SummaryRow = SummaryRow {doc :: HI.AsJsonb Catalog.SummaryDoc}
 -- | Read the materialised AI/query-editor doc for a project.
 getSummary :: DB es => Projects.ProjectId -> Eff es (Maybe Catalog.SummaryDoc)
 getSummary pid =
-  fmap unwrap
+  fmap (\(SummaryRow (HI.AsJsonb d)) -> d)
     <$> Hasql.interpOne
       [HI.sql| SELECT doc FROM apis.schema_summary WHERE project_id = #{pid} |]
-  where
-    unwrap (SummaryRow (HI.AsJsonb d)) = d
 
 
 -- | Batched per-project summary upsert. One round trip regardless of how many
@@ -249,10 +246,8 @@ getSummary pid =
 -- project can't block the rest.
 upsertSummary :: DB es => V.Vector (Projects.ProjectId, Catalog.SummaryDoc) -> Eff es ()
 upsertSummary rows0 = unless (V.null rows0) $ do
-  let rows = V.map (second (HI.AsJsonb . scrubNulValue . AE.toJSON)) rows0
-  tryAny (batch rows) >>= \case
-    Right () -> pass
-    Left _ -> V.forM_ rows (void . tryAny . batch . V.singleton)
+  let rows = V.map (second asScrubbedJsonb) rows0
+  whenLeftM_ (tryAny (batch rows)) \_ -> V.forM_ rows (void . tryAny . batch . V.singleton)
   where
     batch xs =
       let (pids, docs) = V.unzip xs
@@ -276,7 +271,7 @@ freshSummaryProjects
 freshSummaryProjects pids
   | V.null pids = pure HS.empty
   | otherwise = do
-      rows :: [UUID.UUID] <-
+      rows :: [UUID] <-
         Hasql.interp
           [HI.sql| SELECT project_id FROM apis.schema_summary
                    WHERE project_id = ANY(#{pids}::uuid[])
@@ -405,8 +400,7 @@ existingEndpointHashes
 existingEndpointHashes pairs
   | V.null pairs = pure HS.empty
   | otherwise = do
-      let pids = V.map fst pairs
-          hashes = V.map snd pairs
+      let (pids, hashes) = V.unzip pairs
       rows :: [(UUID, Text)] <-
         Hasql.interp
           [HI.sql| SELECT e.project_id, e.hash
@@ -414,7 +408,7 @@ existingEndpointHashes pairs
                    JOIN unnest(#{pids}::uuid[], #{hashes}::text[]) m(pid, h)
                      ON e.project_id = m.pid AND e.hash = m.h
                    WHERE e.created_at < now() - interval '5 minutes' |]
-      pure $ HS.fromList [(UUIDId pid, h) | (pid, h) <- rows]
+      pure $ HS.fromList (first UUIDId <$> rows)
 
 
 -- | Bulk-insert anomalies. The unique @(project_id, target_hash)@ index
@@ -449,8 +443,7 @@ enqueueAnomalyJobs rows = do
   let groups :: HM.HashMap (Projects.ProjectId, Text) [Text]
       groups = HM.fromListWith (<>) [((r.projectId, r.anomalyType), [r.targetHash]) | r <- V.toList rows]
   forM_ (HM.toList groups) \((pid, atype), ths) -> do
-    let payload :: V.Vector Text
-        payload = V.fromList ths
+    let payload = V.fromList ths
     Hasql.interpExecute_
       [HI.sql|
         WITH existing AS (

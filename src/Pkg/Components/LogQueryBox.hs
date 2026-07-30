@@ -1,6 +1,4 @@
-{-# OPTIONS_GHC -Wno-orphans #-}
-
-module Pkg.Components.LogQueryBox (logQueryBox_, visTypes, queryLibrary_, queryEditorInitializationCode, enrichSchemaWithFacets, LogQueryBoxConfig (..), visualizationTabs_) where
+module Pkg.Components.LogQueryBox (logQueryBox_, visTypes, queryLibraryDropdown_, queryEditorInitializationCode, enrichSchemaWithFacets, LogQueryBoxConfig (..), visualizationTabs_) where
 
 import Data.Aeson qualified as AE
 import Data.Default
@@ -23,9 +21,6 @@ import Relude
 import Utils (displayTimestamp, faSprite_, formatUTC, onpointerdown_, popoverPanel_, popoverTrigger_)
 
 
-instance Default (Html ()) where def = mempty
-
-
 sortedSchemaFieldNames :: [Text]
 sortedSchemaFieldNames = sort $ Map.keys Schema.telemetrySchema.fields
 
@@ -41,9 +36,9 @@ data LogQueryBoxConfig = LogQueryBoxConfig
   , queryLibRecent :: V.Vector Projects.QueryLibItem
   , queryLibSaved :: V.Vector Projects.QueryLibItem
   , updateUrl :: Bool
+  -- ^ Whether to update the URL when the query changes
   , alert :: Bool
   , patternSelected :: Maybe Text
-  -- ^ Whether to update the URL when the query changes
   , targetWidgetPreview :: Maybe Text
   -- ^ ID of the widget preview element to update when the query changes
   , mobileExtra :: Maybe (Html ())
@@ -59,7 +54,7 @@ data LogQueryBoxConfig = LogQueryBoxConfig
 -- This component provides a unified interface for querying logs and visualizing data
 logQueryBox_ :: LogQueryBoxConfig -> Html ()
 logQueryBox_ config = do
-  let noActiveQuery = isNothing config.query || config.query == Just ""
+  let noActiveQuery = maybe True T.null config.query
   modal_ "saveQueryMdl" "" $ form_
     [ class_ "flex flex-col p-3 gap-3"
     , id_ "saveQueryForm"
@@ -89,31 +84,17 @@ logQueryBox_ config = do
               , type_ "checkbox"
               , id_ "ai-search-chkbox"
               , [__|on change if me.checked then call #ai-search-input.focus() end
-                  on keydown[key=='Space' and shiftKey] from document set #ai-search-chkbox.checked to true
+                  on keydown[key=='Space' and shiftKey] from document set my.checked to true
+                  on keydown[key=='?' and not ctrlKey and not metaKey and not altKey] from document
+                    if event.target.tagName is not 'INPUT' and event.target.tagName is not 'TEXTAREA' and event.target.contentEditable is not 'true'
+                      set my.checked to true
+                      set #ai-search-input.value to ''
+                      call #ai-search-input.focus()
+                      halt
+                    end
                   |]
               ]
             <> [checked_ | isJust config.targetWidgetPreview || noActiveQuery]
-          script_
-            [text|
-            document.addEventListener('keydown', function(e) {
-              if (e.key === "?" && !e.ctrlKey && !e.metaKey && !e.altKey && (e.target.tagName !== 'INPUT') && (e.target.tagName !== 'TEXTAREA') && (e.target.contentEditable !== 'true')) {
-                e.preventDefault();
-                e.stopPropagation();
-                document.getElementById("ai-search-chkbox").checked = true;
-                document.getElementById("ai-search-input").focus()
-                document.getElementById("ai-search-input").value=""
-              }
-            });
-            window.handleVisualizationUpdate = function(vizType, widgetId) {
-              window.requestAnimationFrame(() => {
-                updateVizTypeInUrl(vizType);
-                document.querySelector(`#visualizationTabs input[value='$${vizType}']`).checked = true;
-                window.widgetJSON.type = vizType;
-                const containerId = widgetId || 'visualization-widget-container';
-                document.getElementById(containerId).dispatchEvent(new Event('update-widget'));
-              });
-            }
-            |]
           div_ [class_ "w-full gap-2 items-center px-2 hidden group-has-[.ai-search:checked]/fltr:flex"] do
             span_ [class_ "text-2xs font-semibold text-textBrand bg-fillBrand-weak px-1.5 py-0.5 rounded shrink-0"] "AI"
             input_
@@ -129,7 +110,7 @@ logQueryBox_ config = do
               , hxVals_ "js:{timezone: Intl.DateTimeFormat().resolvedOptions().timeZone}"
               , term "hx-validate" "false"
               , hxIndicator_ "#ai-search-loader"
-              , term "data-container-id" (fromMaybe "visualization-widget-container" config.targetWidgetPreview)
+              , data_ "container-id" (fromMaybe "visualization-widget-container" config.targetWidgetPreview)
               , [__|on keydown[key=='Escape'] set #ai-search-chkbox.checked to false
                    on keydown[key=='Enter'] 
                      if my.value.trim().length > 0 
@@ -175,7 +156,7 @@ logQueryBox_ config = do
                 )
                 ("" :: Text)
 
-            unless (isJust config.targetWidgetPreview) $ do
+            whenNothing_ config.targetWidgetPreview $ do
               div_ [class_ "gap-[2px] flex items-center max-md:hidden"] do
                 span_ [class_ "text-textWeak"] "in"
                 select_
@@ -185,11 +166,8 @@ logQueryBox_ config = do
                   , Aria.label_ "Target span type"
                   , onchange_ "this.form.dispatchEvent(new Event('submit', {bubbles: true}))"
                   ]
-                  do
-                    let target = fromMaybe "all-spans" config.targetSpan
-                    option_ (value_ "all-spans" : ([selected_ "true" | target == "all-spans"])) "All spans"
-                    option_ (value_ "root-spans" : ([selected_ "true" | target == "root-spans"])) "Trace Root Spans"
-                    option_ (value_ "service-entry-spans" : ([selected_ "true" | target == "service-entry-spans"])) "Service Entry Spans"
+                  $ forM_ ([("all-spans", "All spans"), ("root-spans", "Trace Root Spans"), ("service-entry-spans", "Service Entry Spans")] :: [(Text, Text)]) \(v, label) ->
+                    option_ (value_ v : [selected_ "true" | fromMaybe "all-spans" config.targetSpan == v]) $ toHtml label
 
               div_ [class_ "inline-block max-md:hidden"] do
                 button_ ([type_ "button", class_ "rounded-lg px-3 py-1 text-textStrong inline-flex items-center border border-strokeStrong h-full cursor-pointer", Aria.label_ "Save query"] <> popoverTrigger_ "save-query-pop") $ faSprite_ "floppy-disk" "regular" "h-5 w-5 text-iconNeutral"
@@ -203,25 +181,20 @@ logQueryBox_ config = do
               ]
               do
                 faSprite_ "magnifying-glass" "regular" "h-4 w-4 inline-block"
-      -- Inline parse error display
-      case config.parseError of
-        Just err -> div_ [class_ "text-xs text-textError px-2 py-1 bg-fillError-weak rounded flex items-center gap-1", id_ "query-parse-error"] do
-          faSprite_ "triangle-exclamation" "regular" "h-3 w-3 shrink-0"
-          toHtml err
-        Nothing -> div_ [class_ "hidden text-xs text-textError px-2 py-1 bg-fillError-weak rounded flex items-center gap-1", id_ "query-parse-error"] ""
+      div_ [class_ $ "text-xs text-textError px-2 py-1 bg-fillError-weak rounded flex items-center gap-1" <> bool " hidden" "" (isJust config.parseError), id_ "query-parse-error"]
+        $ whenJust config.parseError \err -> faSprite_ "triangle-exclamation" "regular" "h-3 w-3 shrink-0" >> toHtml err
 
       div_ [class_ "flex items-between justify-between max-md:flex-wrap max-md:gap-0.5"] do
         div_ [class_ "flex items-center gap-2 max-md:gap-1 max-md:w-full"] do
           visualizationTabs_ config.vizType config.updateUrl config.targetWidgetPreview config.alert
           div_ [class_ "hidden group-has-[#viz-sessions:checked]/pg:flex items-center gap-1"] do
-            let sortOptions = [("last_seen", "Last seen"), ("first_seen", "First seen"), ("duration", "Duration"), ("errors", "Errors"), ("events", "Events")] :: [(Text, Text)]
             span_ [class_ "text-textWeak text-xs"] "Sort:"
             select_
               [ class_ "select select-sm max-w-[130px]"
               , id_ "session-sort-select"
               , onchange_ "window.setQueryParamAndReload('sort_by', this.value)"
               ]
-              $ forM_ sortOptions \(v, label) ->
+              $ forM_ ([("last_seen", "Last seen"), ("first_seen", "First seen"), ("duration", "Duration"), ("errors", "Errors"), ("events", "Events")] :: [(Text, Text)]) \(v, label) ->
                 option_ [value_ v] $ toHtml label
             script_ "document.getElementById('session-sort-select').value = new URLSearchParams(window.location.search).get('sort_by') || 'last_seen';"
           div_ [class_ "hidden group-has-[#viz-patterns:checked]/pg:flex items-center gap-1"] do
@@ -241,8 +214,8 @@ logQueryBox_ config = do
               ]
               do
                 forM_ knownPatternFields \(v, label) ->
-                  option_ ([value_ v] <> [selected_ "" | config.patternSelected == Just v || (v == "summary" && isNothing config.patternSelected)]) $ toHtml label
-                option_ ([value_ "__custom__"] <> [selected_ "" | isCustom]) "Other field..."
+                  option_ (value_ v : [selected_ "" | config.patternSelected == Just v || (v == "summary" && isNothing config.patternSelected)]) $ toHtml label
+                option_ (value_ "__custom__" : [selected_ "" | isCustom]) "Other field..."
             input_
               [ class_ $ "input input-sm max-w-[200px]" <> bool " hidden" "" isCustom
               , id_ "pattern-target-input"
@@ -266,51 +239,37 @@ logQueryBox_ config = do
                 option_ [value_ f] ""
           span_ [class_ "text-textDisabled mx-2 text-xs max-md:hidden"] "|"
           termRaw "query-builder" [term "query-editor-selector" "#filterElement"] ("" :: Text)
-          unless (isJust config.targetWidgetPreview)
-            $ popularSearchChips_ config.pid config.queryLibSaved config.queryLibRecent noActiveQuery
+          whenNothing_ config.targetWidgetPreview
+            $ popularSearchChips_ config.queryLibSaved config.queryLibRecent noActiveQuery
           -- Mobile-only hide timeline, inside the viz tabs row so it stays on the same line
           fieldset_ [class_ "fieldset md:hidden ml-auto"] $ label_ [class_ "label space-x-1 group-has-[.default-chart:checked]/pg:block"] do
-            input_ [type_ "checkbox", class_ "checkbox checkbox-xs rounded-sm toggle-chart"] >> span_ [class_ "text-xs"] "Hide timeline"
-            script_ "if(window.innerWidth<768){const c=document.currentScript.parentElement.querySelector('.toggle-chart');if(c)c.checked=true;}"
+            input_ [type_ "checkbox", class_ "checkbox checkbox-xs rounded-sm toggle-chart", [__|init if window.innerWidth < 768 set my.checked to true|]]
+              >> span_ [class_ "text-xs"] "Hide timeline"
 
         whenJust config.mobileExtra
           $ div_ [class_ "md:hidden flex items-center gap-2 text-sm w-full hidden"]
 
-        div_
-          [ class_ "flex justify-end gap-2 max-md:hidden"
-          , [__|init
-            if window.location.hash.includes('create-alert-toggle')
-                set #create-alert-toggle.checked to true
-                set #viz-timeseries.checked to true
-                call updateVizTypeInUrl('timeseries', true)
-                set widgetJSON.type to 'timeseries'
-                send 'update-widget' to #visualization-widget-container
-              end
+        div_ [class_ "flex justify-end gap-2 max-md:hidden"] do
+          fieldset_ [class_ "fieldset"] $ label_ [class_ "label space-x-1 hidden group-has-[.default-chart:checked]/pg:block"] do
+            input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm toggle-chart"] >> span_ "Hide timeline"
+          fieldset_ [class_ "fieldset"] $ label_ [class_ "label space-x-1 group-has-[#viz-patterns:checked]/pg:hidden group-has-[#viz-sessions:checked]/pg:hidden"] do
+            input_
+              $ [ type_ "checkbox"
+                , id_ "create-alert-toggle"
+                , class_ "checkbox checkbox-sm rounded-sm"
+                , -- The #create-alert-toggle hash deep-link replays this element's own change
+                  -- handler rather than duplicating the force-switch body on an ancestor init.
+                  [__|init if window.location.hash.includes('create-alert-toggle') then set my.checked to true then send change to me end
+                   on change if me.checked
+                     set #viz-timeseries.checked to true
+                     call updateVizTypeInUrl('timeseries', true)
+                     set widgetJSON.type to 'timeseries'
+                     send 'update-widget' to #visualization-widget-container
+                   end|]
+                ]
+              <> [checked_ | config.alert]
+            span_ "Create monitor"
 
-          |]
-          ]
-          do
-            fieldset_ [class_ "fieldset"] $ label_ [class_ "label space-x-1 hidden group-has-[.default-chart:checked]/pg:block"] do
-              input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm toggle-chart"] >> span_ "Hide timeline"
-            fieldset_ [class_ "fieldset"] $ label_ [class_ "label space-x-1 group-has-[#viz-patterns:checked]/pg:hidden group-has-[#viz-sessions:checked]/pg:hidden"] do
-              input_
-                $ [ type_ "checkbox"
-                  , id_ "create-alert-toggle"
-                  , class_ "checkbox checkbox-sm rounded-sm"
-                  , [__|on change 
-                     if me.checked
-                       -- Force switch to chart visualization when creating alert
-                       set #viz-timeseries.checked to true
-                       call updateVizTypeInUrl('timeseries', true)
-                       set widgetJSON.type to 'timeseries'
-                       send 'update-widget' to #visualization-widget-container
-                     end
-                  |]
-                  ]
-                <> [checked_ | config.alert]
-              span_ "Create monitor"
-
-  -- Include initialization code for the query editor
   queryEditorInitializationCode config.queryLibRecent config.queryLibSaved config.vizType config.pid
 
 
@@ -318,53 +277,43 @@ logQueryBox_ config = do
 visualizationTabs_ :: Maybe Text -> Bool -> Maybe Text -> Bool -> Html ()
 visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
   div_ [class_ "tabs tabs-box tabs-outline tabs-xs bg-fillWeak p-1 rounded-lg", id_ "visualizationTabs", role_ "radiogroup", Aria.label_ "Visualization type"] do
-    -- Use vizTypeM if provided, otherwise default to timeseries for alerts or logs otherwise
     let defaultVizType = fromMaybe (if alert then "timeseries" else "logs") vizTypeM
         containerSelector = fromMaybe "visualization-widget-container" widgetContainerId
-        showEmojis = isJust widgetContainerId -- Only show emojis in widget mode, not in log explorer
         -- Sessions tab is hidden in alert mode (not a valid alerting surface).
-    let visible = if alert then filter (\(_, _, t, _) -> t /= "sessions") visTypes else visTypes
-    forM_ visible $ \(icon, label, vizType, emoji) -> do
-      label_
-        [ term "data-value" vizType
-        , class_ "tab !shadow-none !border-strokeWeak flex gap-1"
-        ]
-        do
-          input_
-            $ [ type_ "radio"
-              , name_ "visualization"
-              , id_ $ "viz-" <> vizType
-              , class_ $ if vizType == "logs" || vizType == "patterns" || vizType == "sessions" then "default-chart" else "no-chart"
-              , value_ vizType
-              , term "data-update-url" (if updateUrl then "true" else "false")
-              , term "data-container-id" containerSelector
-              , -- swapSessionsRegionIfNeeded (defined in queryEditorInitializationCode) refetches
-                -- #page-summary-region when a viz change crosses the sessions boundary, since
-                -- sessions renders a different server region than other viz types.
-                [__| on change if my.checked
-                            set prevViz to window.currentVisualizationType
-                            call updateVizTypeInUrl(my.value, @data-update-url === 'true')
-                            if window.widgetJSON
-                              set widgetJSON.type to my.value
-                              send 'update-widget' to #{@data-container-id}
-                            end
-                            if #resultTable exists
-                              set #resultTable's mode to my.value
-                              set #resultTable's mode to 'logs' unless my.value is 'patterns' or my.value is 'sessions'
-                              call #resultTable.refetchLogs()
-                            end
-                            if window.swapSessionsRegionIfNeeded then call window.swapSessionsRegionIfNeeded(my.value, prevViz)
+        visible = if alert then filter (\(_, _, t, _) -> t /= "sessions") visTypes else visTypes
+    forM_ visible \(_icon, label, vizType, emoji) ->
+      label_ [data_ "value" vizType, class_ "tab !shadow-none !border-strokeWeak flex gap-1"] do
+        input_
+          $ [ type_ "radio"
+            , name_ "visualization"
+            , id_ $ "viz-" <> vizType
+            , class_ $ bool "no-chart" "default-chart" (vizType `elem` ["logs", "patterns", "sessions"])
+            , value_ vizType
+            , data_ "update-url" (bool "false" "true" updateUrl)
+            , data_ "container-id" containerSelector
+            , -- swapSessionsRegionIfNeeded (defined in queryEditorInitializationCode) refetches
+              -- #page-summary-region when a viz change crosses the sessions boundary, since
+              -- sessions renders a different server region than other viz types.
+              [__| on change if my.checked
+                          set prevViz to window.currentVisualizationType
+                          call updateVizTypeInUrl(my.value, @data-update-url === 'true')
+                          if window.widgetJSON
+                            set widgetJSON.type to my.value
+                            send 'update-widget' to #{@data-container-id}
                           end
-                       |]
-              ]
-            <> [checked_ | vizType == defaultVizType]
-          when showEmojis $ span_ [class_ "text-iconNeutral leading-none"] $ toHtml emoji
-          span_ [] $ toHtml label
-
-
--- | HTMX partial response wrapper — hxSelect extracts #queryLibraryContent from the rendered popover
-queryLibrary_ :: Projects.ProjectId -> V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
-queryLibrary_ _pid = queryLibraryDropdown_
+                          if #resultTable exists
+                            set #resultTable's mode to my.value
+                            set #resultTable's mode to 'logs' unless my.value is 'patterns' or my.value is 'sessions'
+                            call #resultTable.refetchLogs()
+                          end
+                          if window.swapSessionsRegionIfNeeded then call window.swapSessionsRegionIfNeeded(my.value, prevViz)
+                        end
+                     |]
+            ]
+          <> [checked_ | vizType == defaultVizType]
+        -- Emojis only in widget mode, not in the log explorer
+        when (isJust widgetContainerId) $ span_ [class_ "text-iconNeutral leading-none"] $ toHtml emoji
+        span_ $ toHtml label
 
 
 -- | Shared dropdown content for the query library (Popular + Saved + Recent tabs)
@@ -414,7 +363,7 @@ queryLibraryDropdown_ queryLibSaved queryLibRecent =
           [ type_ "text"
           , class_ "grow"
           , placeholder_ "Search"
-          , term "data-filterParent" $ "dataLibContent" <> label
+          , data_ "filterParent" $ "dataLibContent" <> label
           , [__|on keyup
                  if the event's key is 'Escape' set my value to '' then trigger keyup
                  else show <.query-item/> in .{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()|]
@@ -422,8 +371,8 @@ queryLibraryDropdown_ queryLibSaved queryLibRecent =
       when (label == "Saved")
         $ label_ [class_ "tabs tabs-sm tabs-box tabs-outline bg-fillWeak text-textInverse-weak shrink items-center h-8", role_ "tablist"] do
           input_ [class_ "hidden", type_ "checkbox", id_ "queryLibraryGroup"]
-          div_ [role_ "tab", class_ "tab h-full bg-fillWeaker group-has-[#queryLibraryGroup:checked]/pg:bg-transparent px-2", term "data-tippy-content" "My queries"] $ faSprite_ "user" "regular" "w-3 h-3"
-          div_ [role_ "tab", class_ "tab h-full group-has-[#queryLibraryGroup:checked]/pg:bg-fillWeaker px-2", term "data-tippy-content" "All team queries"] $ faSprite_ "users" "regular" "w-3 h-3"
+          div_ [role_ "tab", class_ "tab h-full bg-fillWeaker group-has-[#queryLibraryGroup:checked]/pg:bg-transparent px-2", data_ "tippy-content" "My queries"] $ faSprite_ "user" "regular" "w-3 h-3"
+          div_ [role_ "tab", class_ "tab h-full group-has-[#queryLibraryGroup:checked]/pg:bg-fillWeaker px-2", data_ "tippy-content" "All team queries"] $ faSprite_ "users" "regular" "w-3 h-3"
 
 
 hidePopoverJS :: Text
@@ -472,12 +421,10 @@ queryLibItem_ :: Bool -> Projects.QueryLibItem -> Html ()
 queryLibItem_ isRecent qli =
   div_
     [ class_ $ "query-item px-3 py-2 hover:bg-fillWeak cursor-pointer group relative transition-colors " <> if qli.byMe then "" else "hidden group-has-[#queryLibraryGroup:checked]/pg:block"
-    , term "data-query" qli.queryText
-    , term "data-query-id" qli.id.toText
-    , term "data-pid" qli.projectId.toText
+    , data_ "query" qli.queryText
+    , data_ "query-id" qli.id.toText
     ]
     do
-      -- Main content area
       div_ [class_ "pr-8", onclick_ $ "document.getElementById('filterElement').handleAddQuery(JSON.parse(this.closest('.query-item').dataset.query)); " <> hidePopoverJS] do
         div_ [class_ "flex items-baseline gap-2 mb-1"] do
           whenJust qli.title (\title -> span_ [class_ "font-medium text-sm"] $ toHtml title <> " •")
@@ -486,51 +433,39 @@ queryLibItem_ isRecent qli =
             >> when qli.byMe " • by me"
         code_ [class_ "queryText text-xs block whitespace-pre-wrap break-words opacity-75"] $ toHtml qli.queryText
 
-      -- Actions (simplified, shown on hover)
       div_ [class_ "query-actions absolute top-0 right-3 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-within:opacity-100 flex gap-1"] do
-        button_
-          [ type_ "button"
-          , class_ "p-1 hover:bg-fillWeak rounded cursor-pointer"
-          , term "data-tippy-content" "Run this query"
-          , onclick_ $ "event.preventDefault(); document.getElementById('filterElement').handleAddQuery(this.closest('.query-item').dataset.query, true); " <> hidePopoverJS
-          ]
-          $ faSprite_ "play" "regular" "h-3 w-3"
-        button_
-          [ type_ "button"
-          , class_ "p-1 hover:bg-fillWeak rounded cursor-pointer"
-          , term "data-tippy-content" "Copy query to clipboard"
-          , onclick_ "event.preventDefault(); navigator.clipboard.writeText(this.closest('.query-item').dataset.query).then(() => { document.body.dispatchEvent(new CustomEvent('successToast', {detail: {value: ['Query copied to clipboard']}})); })"
-          ]
-          $ faSprite_ "copy" "regular" "h-3 w-3"
+        actionBtn_ "Run this query" "play" [onclick_ $ "event.preventDefault(); document.getElementById('filterElement').handleAddQuery(this.closest('.query-item').dataset.query, true); " <> hidePopoverJS]
+        actionBtn_ "Copy query to clipboard" "copy" [onclick_ "event.preventDefault(); navigator.clipboard.writeText(this.closest('.query-item').dataset.query).then(() => { document.body.dispatchEvent(new CustomEvent('successToast', {detail: {value: ['Query copied to clipboard']}})); })"]
         when qli.byMe do
-          button_
-            [ type_ "button"
-            , class_ "p-1 hover:bg-fillWeak rounded cursor-pointer"
-            , term "data-tippy-content" $ if isRecent then "Save as named query" else "Edit query title"
-            , onclick_
+          actionBtn_
+            (if isRecent then "Save as named query" else "Edit query title")
+            (if isRecent then "floppy-disk" else "pen-to-square")
+            [ onclick_
                 $ if isRecent
                   then "event.preventDefault(); document.getElementById('saveQueryMdl').dataset.pendingQuery = this.closest('.query-item').dataset.query; document.getElementById('queryLibId').value = ''; document.getElementById('saveQueryMdl').checked = true;"
                   else "event.preventDefault(); document.getElementById('queryLibId').value = '" <> qli.id.toText <> "'; document.getElementById('saveQueryMdl').checked = true;"
             ]
-            $ faSprite_ (if isRecent then "floppy-disk" else "pen-to-square") "regular" "h-3 w-3"
           unless isRecent
-            $ button_
-              [ type_ "button"
-              , class_ "p-1 hover:bg-fillWeak rounded cursor-pointer"
-              , term "data-tippy-content" "Delete query"
-              , hxDelete_ $ "/p/" <> qli.projectId.toText <> "/log_explorer/queries/" <> qli.id.toText
+            $ actionBtn_
+              "Delete query"
+              "trash"
+              [ hxDelete_ $ "/p/" <> qli.projectId.toText <> "/log_explorer/queries/" <> qli.id.toText
               , hxTarget_ "#queryLibraryContent"
               , hxSwap_ "outerHTML"
               , hxSelect_ "#queryLibraryContent"
               , hxPushUrl_ "false"
               ]
-            $ faSprite_ "trash" "regular" "h-3 w-3"
+  where
+    actionBtn_ :: Text -> Text -> [Attribute] -> Html ()
+    actionBtn_ tip icon attrs =
+      button_ ([type_ "button", class_ "p-1 hover:bg-fillWeak rounded cursor-pointer", data_ "tippy-content" tip] <> attrs)
+        $ faSprite_ icon "regular" "h-3 w-3"
 
 
 -- | Popular search chips + query library dropdown, unified as one component.
 -- When no query is active, shows "Try:" chips inline. "more" opens the full library dropdown.
-popularSearchChips_ :: Projects.ProjectId -> V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Bool -> Html ()
-popularSearchChips_ _pid queryLibSaved queryLibRecent showChips =
+popularSearchChips_ :: V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Bool -> Html ()
+popularSearchChips_ queryLibSaved queryLibRecent showChips =
   div_ [class_ "max-md:hidden group-has-[.ai-search:checked]/fltr:hidden inline-flex gap-1.5 text-xs items-center", id_ "queryLibraryParentEl"] do
     when showChips
       $ span_
@@ -540,7 +475,7 @@ popularSearchChips_ _pid queryLibSaved queryLibRecent showChips =
         ]
         do
           span_ [class_ "text-textDisabled"] "Try:"
-          forM_ defaultChips \(q, l) ->
+          forM_ (take 3 popularQueries) \(q, l, _) ->
             button_
               [ type_ "button"
               , class_ "px-2 py-0.5 rounded-md bg-fillWeaker border border-strokeWeak hover:border-strokeBrand-weak hover:bg-fillBrand-weak text-textWeak hover:text-textBrand cursor-pointer transition-colors"
@@ -557,8 +492,6 @@ popularSearchChips_ _pid queryLibSaved queryLibRecent showChips =
         "Library"
         faSprite_ "chevron-down" "regular" "w-2.5 h-2.5"
     queryLibraryDropdown_ queryLibSaved queryLibRecent
-  where
-    defaultChips = [(q, l) | (q, l, _) <- take 3 popularQueries]
 
 
 -- | Merge pre-computed facet values into the schema so the query editor shows real autocomplete values
@@ -611,7 +544,17 @@ queryEditorInitializationCode queryLibRecent queryLibSaved vizTypeM pid = do
         }
       });
     };
-    
+
+    // Called by the AI-search response handler and query-builder.ts to switch viz type.
+    window.handleVisualizationUpdate = function(vizType, widgetId) {
+      window.requestAnimationFrame(() => {
+        updateVizTypeInUrl(vizType);
+        document.querySelector(`#visualizationTabs input[value='$${vizType}']`).checked = true;
+        window.widgetJSON.type = vizType;
+        document.getElementById(widgetId || 'visualization-widget-container').dispatchEvent(new Event('update-widget'));
+      });
+    };
+
     // Immediate init instead of DOMContentLoaded (which never re-fires on HTMX morph).
     var _initRetries = 0;
     (function initEditor() {

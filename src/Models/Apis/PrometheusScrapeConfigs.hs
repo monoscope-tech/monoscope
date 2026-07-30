@@ -1,6 +1,6 @@
 module Models.Apis.PrometheusScrapeConfigs (
   PrometheusScrapeConfig (..),
-  PrometheusScrapeConfigId (..),
+  PrometheusScrapeConfigId,
   insertConfig,
   updateConfig,
   configsByProjectId,
@@ -20,19 +20,13 @@ import Control.Lens ((.~))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
-import Data.Default (Default)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.List (partition)
-import Data.OpenApi (ToParamSchema (..), ToSchema (..), declareNamedSchema)
 import Data.Text qualified as T
 import Data.These qualified as These
 import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
-import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple (FromRow, ToRow)
-import Database.PostgreSQL.Simple.FromField (FromField)
-import Database.PostgreSQL.Simple.ToField (ToField)
 import Effectful (Eff, type (:>))
 import Effectful.Concurrent (Concurrent)
 import Effectful.Ki qualified as Ki
@@ -40,7 +34,6 @@ import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
 import Effectful.Log qualified as Log
 import Effectful.Reader.Static qualified as Eff
-import GHC.Records (HasField (getField))
 import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
@@ -48,24 +41,15 @@ import Network.HTTP.Client (managerResponseTimeout, responseTimeoutMicro)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.Wreq (defaults, header)
 import Network.Wreq qualified as Wreq
-import Pkg.DeriveUtils (unUUIDId)
+import Pkg.DeriveUtils (UUIDId, unUUIDId)
 import Pkg.Prometheus qualified as Prom
 import Relude
-import Servant.API (FromHttpApiData)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (DB)
 import UnliftIO (throwIO)
 
 
-newtype PrometheusScrapeConfigId = PrometheusScrapeConfigId {unPrometheusScrapeConfigId :: UUID.UUID}
-  deriving stock (Generic, Show)
-  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, NFData, ToField)
-  deriving anyclass (FromRow, ToRow)
-
-
-instance ToSchema PrometheusScrapeConfigId where declareNamedSchema _ = declareNamedSchema (Proxy @UUID.UUID)
-instance ToParamSchema PrometheusScrapeConfigId where toParamSchema _ = toParamSchema (Proxy @UUID.UUID)
-instance HasField "toText" PrometheusScrapeConfigId Text where getField = UUID.toText . unPrometheusScrapeConfigId
+type PrometheusScrapeConfigId = UUIDId "prometheus_scrape_config"
 
 
 data PrometheusScrapeConfig = PrometheusScrapeConfig
@@ -90,6 +74,10 @@ selectCols :: HI.Sql
 selectCols = [HI.sql|id, project_id, created_at, updated_at, name, url, scrape_interval_seconds, auth_header, extra_labels, enabled, last_scraped_at, last_status|]
 
 
+selectFrom :: HI.Sql
+selectFrom = [HI.sql|SELECT |] <> selectCols <> [HI.sql| FROM apis.prometheus_scrape_configs |]
+
+
 insertConfig :: DB es => Projects.ProjectId -> Text -> Text -> Int -> Maybe Text -> AE.Value -> Eff es Int64
 insertConfig pid name url interval authHeader extraLabels =
   Hasql.interpExecute
@@ -107,19 +95,19 @@ updateConfig pid cid name url interval authHeader extraLabels =
 
 
 configsByProjectId :: DB es => Projects.ProjectId -> Eff es (V.Vector PrometheusScrapeConfig)
-configsByProjectId pid = V.fromList <$> Hasql.interp ([HI.sql|SELECT |] <> selectCols <> [HI.sql| FROM apis.prometheus_scrape_configs WHERE project_id = #{pid} ORDER BY created_at DESC|])
+configsByProjectId pid = V.fromList <$> Hasql.interp (selectFrom <> [HI.sql|WHERE project_id = #{pid} ORDER BY created_at DESC|])
 
 
 -- | Unscoped lookup — only for trusted internal callers that already hold a claimed id
 -- (the background scrape worker). Request handlers must use 'getConfigByProject'.
 getConfig :: DB es => PrometheusScrapeConfigId -> Eff es (Maybe PrometheusScrapeConfig)
-getConfig cid = Hasql.interpOne ([HI.sql|SELECT |] <> selectCols <> [HI.sql| FROM apis.prometheus_scrape_configs WHERE id = #{cid}|])
+getConfig cid = Hasql.interpOne (selectFrom <> [HI.sql|WHERE id = #{cid}|])
 
 
 -- | Project-scoped lookup for request handlers, so a foreign id can never load another
 -- project's row (and its auth token) into the request context.
 getConfigByProject :: DB es => Projects.ProjectId -> PrometheusScrapeConfigId -> Eff es (Maybe PrometheusScrapeConfig)
-getConfigByProject pid cid = Hasql.interpOne ([HI.sql|SELECT |] <> selectCols <> [HI.sql| FROM apis.prometheus_scrape_configs WHERE id = #{cid} AND project_id = #{pid}|])
+getConfigByProject pid cid = Hasql.interpOne (selectFrom <> [HI.sql|WHERE id = #{cid} AND project_id = #{pid}|])
 
 
 deleteConfig :: DB es => Projects.ProjectId -> PrometheusScrapeConfigId -> Eff es Int64
@@ -174,12 +162,11 @@ ingestScrapedBody :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.
 ingestScrapedBody cfg now body = do
   appCtx :: AuthContext <- Eff.ask
   let (finite, nonFinite) = partition Prom.isFiniteSample (Prom.parsePrometheus (decodeUtf8 body))
-      records = V.fromList (map (sampleToMetricRecord cfg now) finite)
-      dropped = length nonFinite
-  when (dropped > 0) $ Log.logInfo "Prometheus scrape dropped non-finite samples" (AE.object ["config_id" AE..= cfg.id.toText, "dropped" AE..= dropped])
-  let target = Telemetry.writeTargetFor appCtx.env.enablePostgresTelemetryWrites appCtx.env.enableTimefusionWrites Nothing
+      records = V.fromList (sampleToMetricRecord cfg now <$> finite)
+      target = Telemetry.writeTargetFor appCtx.env.enablePostgresTelemetryWrites appCtx.env.enableTimefusionWrites Nothing
+  unless (null nonFinite) $ Log.logInfo "Prometheus scrape dropped non-finite samples" (AE.object ["config_id" AE..= cfg.id.toText, "dropped" AE..= length nonFinite])
   Telemetry.bulkInsertOtelMetrics appCtx.metricCatalogBuffer appCtx.hasqlTimefusionUsesPgTypes target records >>= \case
-    Left failure -> liftIO $ throwIO $ These.these (\e -> e) (\e -> e) (\e _ -> e) failure
+    Left failure -> liftIO $ throwIO $ These.mergeThese const failure
     Right () -> pure (V.length records)
 
 
@@ -208,43 +195,35 @@ sampleToMetricRecord cfg now s =
     , metricMetadata = AE.object []
     , exemplars = AE.Null
     , flags = 0
-    , aggregationTemporality = bool Nothing (Just Telemetry.ATCumulative) isCounter
-    , isMonotonic = bool Nothing (Just True) isCounter
+    , aggregationTemporality = Telemetry.ATCumulative <$ guard isCounter
+    , isMonotonic = True <$ guard isCounter
     , messageSizeBytes = 0
     }
   where
     svc = if T.null cfg.name then "prometheus" else cfg.name
     -- Only TYPE counter maps to MTSum. Histogram/summary _count/_sum sub-series are
-    -- cumulative-monotonic too, but we ingest them as plain gauges (their family TYPE is
-    -- histogram/summary, not counter) — enough to chart/query, but downstream rate() that
-    -- keys off aggregationTemporality will treat them as instantaneous. Intentional: see
-    -- the module-header note on per-series ingestion.
+    -- cumulative-monotonic too but stay gauges (their family TYPE isn't counter), so a
+    -- downstream rate() keying off aggregationTemporality treats them as instantaneous.
     isCounter = s.sampleType == Prom.Counter
-    (mtype, mval) =
-      if isCounter
-        then (Telemetry.MTSum, Telemetry.SumValue (Telemetry.GaugeSum (Just s.value) Nothing))
-        else (Telemetry.MTGauge, Telemetry.GaugeValue (Telemetry.GaugeSum (Just s.value) Nothing))
+    gs = Telemetry.GaugeSum (Just s.value) Nothing
+    (mtype, mval) = bool (Telemetry.MTGauge, Telemetry.GaugeValue gs) (Telemetry.MTSum, Telemetry.SumValue gs) isCounter
     labelMap = AEKM.fromList [(AEK.fromText k, AE.String v) | (k, v) <- s.labels]
     -- KeyMap (<>) is left-biased, so the scraped per-sample labels (specific) must come
     -- first to win over the config's static extraLabels (general context) on key collisions.
-    attrs = AE.Object $ case cfg.extraLabels of
-      AE.Object o -> labelMap <> o
-      _ -> labelMap
+    attrs =
+      AE.Object $ labelMap <> case cfg.extraLabels of
+        AE.Object o -> o
+        _ -> mempty
 
 
--- | Per-scrape HTTP response timeout (µs). A dead/slow endpoint must never wedge a worker.
-prometheusScrapeTimeoutMicros :: Int
-prometheusScrapeTimeoutMicros = 10 * 1000000
-
-
--- | wreq Options for a scrape: hard response timeout, no redirect following, and an optional
--- Authorization header. Shared by the background worker and the settings Test button so the
--- two never drift on timeout or header wiring (the Test button exists to mirror the real scrape).
+-- | wreq Options for a scrape: hard 10s response timeout (a dead/slow endpoint must never wedge
+-- a worker), no redirect following, and an optional Authorization header. Shared by the background
+-- worker and the settings Test button so the two never drift on timeout or header wiring.
 prometheusScrapeOpts :: Maybe Text -> Wreq.Options
 prometheusScrapeOpts authHeader =
   defaults
     & Wreq.manager
-    .~ Left tlsManagerSettings{managerResponseTimeout = responseTimeoutMicro prometheusScrapeTimeoutMicros}
+    .~ Left tlsManagerSettings{managerResponseTimeout = responseTimeoutMicro 10_000_000}
       -- Don't follow redirects: http-client (unlike browsers) re-sends Authorization across a
       -- cross-host 3xx, so a target answering 302 -> attacker could exfiltrate the bearer token.
       & Wreq.redirects

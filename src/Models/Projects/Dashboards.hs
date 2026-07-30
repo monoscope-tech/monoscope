@@ -168,52 +168,46 @@ data Tab = Tab
 
 
 insert :: DB es => DashboardVM -> Eff es Int64
-insert DashboardVM{id = did, projectId, createdAt, updatedAt, createdBy, baseTemplate, schema, starredSince, homepageSince, tags, title, teams, filePath, fileSha} =
+insert d =
   Hasql.interpExecute
     [HI.sql| INSERT INTO projects.dashboards (id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams, file_path, file_sha)
-           VALUES (#{did}, #{projectId}, #{createdAt}, #{updatedAt}, #{createdBy}, #{baseTemplate}, #{schema}, #{starredSince}, #{homepageSince}, #{tags}, #{title}, #{teams}::uuid[], #{filePath}, #{fileSha}) |]
+           VALUES (#{d.id}, #{d.projectId}, #{d.createdAt}, #{d.updatedAt}, #{d.createdBy}, #{d.baseTemplate}, #{d.schema}, #{d.starredSince}, #{d.homepageSince}, #{d.tags}, #{d.title}, #{d.teams}::uuid[], #{d.filePath}, #{d.fileSha}) |]
+
+
+yamlFiles :: FilePath -> IO [FilePath]
+yamlFiles dir = sort . filter (".yaml" `L.isSuffixOf`) <$> listDirectory dir
 
 
 -- | Read dashboard YAML files from directory at compile time via TH
 readDashboardsFromDirectory :: FilePath -> Q Exp
 readDashboardsFromDirectory dir = do
-  files <- runIO $ listDirectory dir
-  let files' = sort $ filter (".yaml" `L.isSuffixOf`) files
-  mapM_ (THS.addDependentFile . (dir </>)) files'
-  dashboards <- runIO $ catMaybes <$> mapM (readDashboardFile dir) files'
-  THS.lift dashboards
+  files <- runIO $ yamlFiles dir
+  mapM_ (THS.addDependentFile . (dir </>)) files
+  runIO (mapMaybeM (readDashboardFile dir) files) >>= THS.lift
 
 
 -- | Read single dashboard YAML file
 readDashboardFile :: FilePath -> FilePath -> IO (Maybe Dashboard)
 readDashboardFile dir file = do
-  let filePath = dir </> file
-  result <- try $ readFileBS filePath :: IO (Either SomeException ByteString)
-  case result of
-    Left err -> do
-      putStrLn $ "Error reading file " ++ filePath ++ ": " ++ show err
-      pure Nothing
-    Right content ->
-      case Yml.decodeEither' content of
-        Left err -> do
-          putStrLn $ "Error decoding YAML in file: " ++ filePath ++ ": " ++ show err
-          pure Nothing
-        Right dashboard -> pure (Just $ dashboard{file = Just $ fromString file})
+  raw <- try @SomeException $ readFileBS path
+  let parsed = first show raw >>= first show . Yml.decodeEither' :: Either String Dashboard
+  parsed
+    & either
+      (\e -> Nothing <$ putStrLn ("Error loading dashboard " <> path <> ": " <> e))
+      (\d -> pure $ Just d{file = Just $ fromString file})
+  where
+    path = dir </> file
 
 
 readDashboardsFromDisk :: FilePath -> IO [Dashboard]
-readDashboardsFromDisk dir = do
-  files <- sort . filter (".yaml" `L.isSuffixOf`) <$> listDirectory dir
-  catMaybes <$> mapM (readDashboardFile dir) files
+readDashboardsFromDisk dir = yamlFiles dir >>= mapMaybeM (readDashboardFile dir)
 
 
 readDashboardEndpoint :: (Error ServerError :> es, HTTP :> es) => Text -> Eff es Dashboard
 readDashboardEndpoint uri = do
   fileResp <- W.get (toString uri)
-  Yml.decodeEither' (toStrict $ fileResp ^. W.responseBody)
-    & either
-      (\e -> throwError $ err404{errBody = "Error decoding dashboard: " <> show e})
-      pure
+  either (\e -> throwError err404{errBody = "Error decoding dashboard: " <> show e}) pure
+    $ Yml.decodeEither' (toStrict $ fileResp ^. W.responseBody)
 
 
 replaceQueryVariables :: Projects.ProjectId -> Maybe UTCTime -> Maybe UTCTime -> [(Text, Maybe Text)] -> UTCTime -> Variable -> Variable
@@ -293,6 +287,4 @@ deleteDashboard dashId = Hasql.interpExecute [HI.sql| DELETE FROM projects.dashb
 
 getDashboardByBaseTemplate :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe DashboardId)
 getDashboardByBaseTemplate pid baseTemplate =
-  fmap (.id)
-    <$> Hasql.interpOne @DashboardVM
-      (selectFrom @DashboardVM <> [HI.sql| WHERE project_id = #{pid} AND base_template = #{baseTemplate} |])
+  Hasql.interpOne [HI.sql| SELECT id FROM projects.dashboards WHERE project_id = #{pid} AND base_template = #{baseTemplate} |]

@@ -380,7 +380,7 @@ bulkCalculateAndUpdateBaselines pid now =
     |]
 
 
--- | Get all error patterns with their current hour counts (for batch spike detection)
+-- | An error pattern joined with its current-hour occurrence count (batch spike detection).
 data ErrorPatternWithCurrentRate = ErrorPatternWithCurrentRate
   { errorId :: ErrorPatternId
   , projectId :: Projects.ProjectId
@@ -406,11 +406,8 @@ data ErrorPatternWithCurrentRate = ErrorPatternWithCurrentRate
 
 getErrorPatternsWithCurrentRates :: DB es => Projects.ProjectId -> UTCTime -> Eff es [ErrorPatternWithCurrentRate]
 getErrorPatternsWithCurrentRates pid now =
-  Hasql.interp q
-  where
-    hourBucket = truncateHour now
-    q =
-      [HI.sql|
+  Hasql.interp
+    [HI.sql|
         SELECT
           e.id, e.project_id, e.error_type, LEFT(e.message, 2000), e.service, e.state,
           e.baseline_state, e.baseline_error_rate_mean, e.baseline_error_rate_stddev,
@@ -419,7 +416,7 @@ getErrorPatternsWithCurrentRates pid now =
         FROM apis.error_patterns e
         LEFT JOIN apis.error_hourly_stats counts
           ON counts.error_id = e.id AND counts.project_id = e.project_id
-          AND counts.hour_bucket = #{hourBucket}
+          AND counts.hour_bucket = #{truncateHour now}
         WHERE e.project_id = #{pid} AND e.state != 'resolved' AND NOT e.is_ignored
       |]
 
@@ -442,7 +439,7 @@ findCanonicalMatch pid service eType msg =
 batchUpsertErrorPatterns :: DB es => Projects.ProjectId -> V.Vector ATError -> UTCTime -> Eff es [(Text, Text)]
 batchUpsertErrorPatterns _pid errors _now | V.null errors = pure []
 batchUpsertErrorPatterns pid errors now =
-  filter (\(_, s) -> s == "new" || s == "regressed")
+  filter ((`elem` ["new", "regressed"]) . snd)
     <$> Hasql.interp
       [HI.sql| INSERT INTO apis.error_patterns (
             project_id, error_type, message, stacktrace, hash, parent_hash, is_framework,
@@ -492,8 +489,8 @@ batchUpsertErrorPatterns pid errors now =
             ELSE 'unchanged' END::text |]
   where
     -- Group by hash: keep last occurrence + sum count (avoids ON CONFLICT duplicate-row error)
-    grouped = HM.elems $ V.foldl' (\m e -> HM.insertWith (\(a, n) (_, k) -> (a, n + k)) e.hash (e, 1 :: Int) m) HM.empty errors
-    (errs, counts) = V.unzip $ V.fromList grouped
+    (errs, counts) =
+      V.unzip $ V.fromList $ HM.elems $ V.foldl' (\m e -> HM.insertWith (\(a, n) (_, k) -> (a, n + k)) e.hash (e, 1 :: Int) m) HM.empty errors
     errorTypes = V.map (.errorType) errs
     messages = V.map (.message) errs
     stacktraces = V.map (.stackTrace) errs
@@ -517,12 +514,11 @@ upsertErrorPatternHourlyStats pid now stats =
   Hasql.interpExecute
     [HI.sql|
           INSERT INTO apis.error_hourly_stats (project_id, error_id, hour_bucket, event_count, user_count)
-          SELECT e.project_id, e.id, #{hourBucket}, u.event_count, u.user_count
+          SELECT e.project_id, e.id, #{truncateHour now}, u.event_count, u.user_count
           FROM (SELECT unnest(#{hashes}::text[]) AS hash, unnest(#{eventCounts}::bigint[]) AS event_count, unnest(#{userCounts}::bigint[]) AS user_count) u
           JOIN apis.error_patterns e ON e.project_id = #{pid} AND e.hash = u.hash
           ON CONFLICT (project_id, error_id, hour_bucket)
           DO UPDATE SET event_count = apis.error_hourly_stats.event_count + EXCLUDED.event_count,
                         user_count = apis.error_hourly_stats.user_count + EXCLUDED.user_count |]
   where
-    hourBucket = truncateHour now
     (hashes, eventCounts, userCounts) = V.unzip3 stats

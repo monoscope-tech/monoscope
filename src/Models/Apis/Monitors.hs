@@ -57,12 +57,8 @@ newtype QueryMonitorId = QueryMonitorId {unQueryMonitorId :: UUID.UUID}
   deriving anyclass (HI.DecodeRow)
 
 
-instance HasField "toText" QueryMonitorId Text where
-  getField = UUID.toText . unQueryMonitorId
-
-
-instance ToParamSchema QueryMonitorId where
-  toParamSchema _ = toParamSchema (Proxy @UUID.UUID)
+instance HasField "toText" QueryMonitorId Text where getField = UUID.toText . unQueryMonitorId
+instance ToParamSchema QueryMonitorId where toParamSchema _ = toParamSchema (Proxy @UUID.UUID)
 
 
 data MonitorStatus = MSNormal | MSWarning | MSAlerting
@@ -186,15 +182,10 @@ monitorToggleActiveById mid = do
         where id=#{mid}|]
 
 
--- | Shared shape for the "stamp a single timestamptz column, guarded by IS NULL" updates
--- (deactivate / soft-delete). Each caller supplies the column-specific SQL given @now@.
-setTimestampColByIds :: (DB es, Time :> es) => (UTCTime -> HI.Sql) -> Eff es Int64
-setTimestampColByIds mkSql = Time.currentTime >>= Hasql.interpExecute . mkSql
-
-
 monitorDeactivateByIds :: (DB es, Time :> es) => [QueryMonitorId] -> Eff es Int64
 monitorDeactivateByIds ids =
-  setTimestampColByIds \now -> [HI.sql| UPDATE monitors.query_monitors SET deactivated_at = #{now} WHERE id = ANY(#{ids}::uuid[]) AND deactivated_at IS NULL |]
+  Time.currentTime >>= \now ->
+    Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET deactivated_at = #{now} WHERE id = ANY(#{ids}::uuid[]) AND deactivated_at IS NULL |]
 
 
 monitorReactivateByIds :: DB es => [QueryMonitorId] -> Eff es Int64
@@ -222,7 +213,8 @@ monitorResolveByIds ids =
 
 monitorSoftDeleteByIds :: (DB es, Time :> es) => [QueryMonitorId] -> Eff es Int64
 monitorSoftDeleteByIds ids =
-  setTimestampColByIds \now -> [HI.sql| UPDATE monitors.query_monitors SET deleted_at = #{now} WHERE id = ANY(#{ids}::uuid[]) AND deleted_at IS NULL |]
+  Time.currentTime >>= \now ->
+    Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET deleted_at = #{now} WHERE id = ANY(#{ids}::uuid[]) AND deleted_at IS NULL |]
 
 
 queryMonitorsAll :: DB es => Projects.ProjectId -> Eff es [QueryMonitor]

@@ -293,30 +293,28 @@ instance Default Config where
 
 instance ToHtml (Table a) where
   {-# INLINE toHtml #-}
-  toHtml tbl = toHtmlRaw $ renderTable tbl
+  toHtml = toHtmlRaw . renderTable
   {-# INLINE toHtmlRaw #-}
-  toHtmlRaw tbl = toHtmlRaw $ renderTable tbl
+  toHtmlRaw = toHtmlRaw . renderTable
 
 
 -- TableRows ToHtml - only renders rows + pagination link for load more
 
 instance ToHtml (TableRows a) where
-  toHtml tr = toHtmlRaw $ renderTableRows tr
-  toHtmlRaw tr = toHtmlRaw $ renderTableRows tr
+  toHtml = toHtmlRaw . renderTableRows
+  toHtmlRaw = toHtmlRaw . renderTableRows
 
 
 {-# INLINE renderTableRows #-}
 renderTableRows :: TableRows a -> Html ()
 renderTableRows tr
   | V.null tr.rows = whenJust tr.emptyState renderSimpleZeroState
-  | tr.renderAsTable = do
-      let getRowAttrs row = maybe [] ($ row) tr.rowAttrs
-      tbody_ [class_ "stagger-fade"] $ V.forM_ tr.rows \row -> tr_ (getRowAttrs row) do
-        whenJust tr.rowId \getId -> td_ [class_ "w-8 align-top pt-4"] $ input_ [term "aria-label" "Select Item", class_ "bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "itemId", value_ $ getId row]
-        forM_ tr.columns \c -> td_ c.attrs $ c.render row
-      whenJust tr.pagination renderPaginationFooter
   | otherwise = do
-      div_ [class_ "stagger-fade"] $ V.forM_ tr.rows \row -> div_ [class_ "flex gap-8 items-start itemsListItem"] $ forM_ tr.columns \c -> div_ c.attrs $ c.render row
+      if tr.renderAsTable
+        then tbody_ [class_ "stagger-fade"] $ V.forM_ tr.rows \row -> tr_ (maybe [] ($ row) tr.rowAttrs) do
+          whenJust tr.rowId \getId -> td_ [class_ "w-8 align-top pt-4"] $ selectRowCheckbox_ False (getId row)
+          forM_ tr.columns \c -> td_ c.attrs $ c.render row
+        else div_ [class_ "stagger-fade"] $ V.forM_ tr.rows \row -> div_ [class_ "flex gap-8 items-start itemsListItem"] $ forM_ tr.columns \c -> div_ c.attrs $ c.render row
       whenJust tr.pagination renderPaginationFooter
 
 
@@ -350,6 +348,61 @@ instance ToHtml TabFilter where
             do
               span_ $ toHtml opt.name
               whenJust opt.count \c -> when (c > 0) $ span_ [class_ "absolute top-[1px] -right-[5px] text-textInverse-strong text-xs font-medium rounded-full px-1 bg-fillError-strong"] $ show c
+
+
+-- Shared bits
+
+-- | Append a query fragment to a url, picking @?@ or @&@.
+withQuery :: Text -> Text -> Text
+withQuery url q = url <> bool "?" "&" ("?" `T.isInfixOf` url) <> q
+
+
+-- | htmx attrs that fetch @url@ and swap the target container with the same container from the response.
+swapTarget_ :: Text -> Text -> [Attribute]
+swapTarget_ tid url = [hxGet_ url, hxTarget_ $ "#" <> tid, hxSelect_ $ "#" <> tid, hxPushUrl_ "true", hxSwap_ "outerHTML"]
+
+
+selectAllCheckbox_ :: Html ()
+selectAllCheckbox_ = input_ [term "aria-label" "Select All", type_ "checkbox", class_ "checkbox h-6 w-6 checked:checkbox-primary", [__| on click set .bulkactionItemCheckbox.checked to my.checked |]]
+
+
+selectRowCheckbox_ :: Bool -> Text -> Html ()
+selectRowCheckbox_ selected rid =
+  input_
+    $ [term "aria-label" "Select Item", class_ "bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "itemId", value_ rid]
+    <> [checked_ | selected]
+
+
+-- | One row of a sort dropdown; @linkAttrs@ carries either an href or the htmx swap attrs.
+sortOption_ :: Bool -> [Attribute] -> Text -> Text -> Html ()
+sortOption_ isActive linkAttrs title desc =
+  a_ ([class_ $ "block flex flex-row px-3 py-2 hover:bg-fillBrand-weak rounded-md cursor-pointer " <> bool "" " text-textBrand " isActive] <> linkAttrs) do
+    div_ [class_ "flex flex-col items-center justify-center px-1"] $ if isActive then faSprite_ "icon-checkmark4" "solid" "w-4 h-4" else div_ [class_ "w-4 h-4"] ""
+    div_ [class_ "grow"] do
+      span_ [class_ "block text-sm font-medium"] $ toHtml title
+      span_ [class_ "block text-xs text-textWeak"] $ toHtml desc
+
+
+sortLoader_ :: Html ()
+sortLoader_ = div_ [class_ "p-12 fixed rounded-lg shadow-sm bg-bgOverlay top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 htmx-indicator loading loading-dots loading-md", id_ "sortLoader"] ""
+
+
+-- | Icon + label button that opens the popover @popId@ (sort/filter dropdown triggers).
+dropdownTriggerBtn_ :: Text -> Text -> Text -> Html ()
+dropdownTriggerBtn_ icon label popId =
+  button_ ([class_ "btn btn-xs shadow-none text-xs font-normal border border-strokeWeak text-textWeak bg-transparent", type_ "button"] <> popoverTrigger_ popId) do
+    faSprite_ icon "regular" "h-3 w-3"
+    span_ $ toHtml label
+
+
+-- | Sort dropdown: trigger + popover of options. @optAttrs@ turns a sort key into its link/htmx attrs;
+-- the first option is the implicit default when @current@ is empty.
+sortDropdown_ :: Text -> [Attribute] -> [(Text, Text, Text)] -> Text -> Text -> (Text -> [Attribute]) -> Html ()
+sortDropdown_ popId panelAttrs opts current fallbackLabel optAttrs = do
+  let defaultKey = maybe "" (\(_, _, k) -> k) (listToMaybe opts)
+  dropdownTriggerBtn_ "sort" (maybe fallbackLabel (\(t, _, _) -> t) $ find (\(_, _, k) -> k == current) opts) popId
+  div_ (panelAttrs <> popoverPanel_ popId) $ forM_ opts \(title, desc, k) ->
+    sortOption_ (current == k || (current == "" && k == defaultKey)) (optAttrs k <> [hxIndicator_ "#sortLoader"]) title desc
 
 
 -- Core Rendering Functions
@@ -395,41 +448,20 @@ renderRows tbl =
         $ thead_ do
           tr_ do
             when (isJust tbl.features.rowId)
-              $ th_ [class_ $ tbl.config.thClasses <> " w-8 max-md:hidden"]
-              $ input_
-                [ term "aria-label" "Select All"
-                , type_ "checkbox"
-                , class_ "checkbox h-6 w-6 checked:checkbox-primary"
-                , [__| on click set .bulkactionItemCheckbox.checked to my.checked |]
-                ]
+              $ th_ [class_ $ tbl.config.thClasses <> " w-8 max-md:hidden"] selectAllCheckbox_
             forM_ (zip [0 ..] tbl.columns) \(idx, c) -> do
-              let baseAttrs = [class_ $ tbl.config.thClasses <> " " <> fromMaybe "" c.align]
-                  sortAttrs = case (c.sortField, tbl.features.sortableColumns) of
-                    (Just field, Just cfg) ->
-                      [ hxGet_ $ toggleSortUrl cfg field
-                      , hxTarget_ $ "#" <> cfg.targetId
-                      , hxSelect_ $ "#" <> cfg.targetId
-                      , hxPushUrl_ "true"
-                      , hxSwap_ "outerHTML"
-                      , class_ "cursor-pointer hover:bg-fillWeak"
-                      ]
-                    _ -> []
-                  isSorted = case (c.sortField, tbl.features.sortableColumns) of
-                    (Just field, Just cfg) -> ("+" <> field == cfg.currentSort) || ("-" <> field == cfg.currentSort)
-                    _ -> False
-                  sortOrder = case (c.sortField, tbl.features.sortableColumns) of
-                    (Just field, Just cfg) | "-" <> field == cfg.currentSort -> Just Desc
-                    (Just field, Just cfg) | "+" <> field == cfg.currentSort -> Just Asc
-                    _ -> Nothing
+              let sortable = (,) <$> c.sortField <*> tbl.features.sortableColumns
+                  baseAttrs = [class_ $ tbl.config.thClasses <> " " <> fromMaybe "" c.align]
+                  sortAttrs = foldMap (\(field, cfg) -> swapTarget_ cfg.targetId (toggleSortUrl cfg field) <> [class_ "cursor-pointer hover:bg-fillWeak"]) sortable
+                  sortOrder = sortable >>= \(field, cfg) -> lookup cfg.currentSort [("-" <> field, Desc), ("+" <> field, Asc)]
               th_ (c.attrs <> baseAttrs <> sortAttrs) do
                 span_ [class_ "flex items-center gap-2 min-w-0"] do
                   span_ [class_ $ bool "max-md:hidden" "" (idx > 0)] $ toHtml c.name
                   whenJust c.headerExtra id
-                  when isSorted $ case sortOrder of
-                    Just Asc -> faSprite_ "arrow-up" "regular" "w-3 h-3"
-                    Just Desc -> faSprite_ "arrow-down" "regular" "w-3 h-3"
-                    Nothing -> pass
-                  when (isJust c.sortField && isJust tbl.features.sortableColumns && not isSorted) $ faSprite_ "arrows-up-down" "regular" "w-3 h-3 opacity-30"
+                  whenJust sortOrder \case
+                    Asc -> faSprite_ "arrow-up" "regular" "w-3 h-3"
+                    Desc -> faSprite_ "arrow-down" "regular" "w-3 h-3"
+                  when (isJust sortable && isNothing sortOrder) $ faSprite_ "arrows-up-down" "regular" "w-3 h-3 opacity-30"
                   when (tbl.config.bulkActionsInHeader == Just idx) do
                     renderHeaderBulkActions tbl.features.bulkActions
                     whenJust tbl.features.tableHeaderActions \ha -> do
@@ -473,41 +505,32 @@ renderListRow tbl row = div_ (treeAttrs <> rowAttrs <> [class_ "flex gap-4 md:ga
 renderTableRow :: Table a -> a -> Html ()
 renderTableRow tbl row =
   tr_ ([class_ rowClass] <> treeAttrs <> rowAttrs <> linkHandler) do
-    when (isJust tbl.features.rowId)
-      $ td_ [class_ "w-8 align-top pt-4 max-md:hidden"] do
-        whenJust tbl.features.rowId \getId ->
-          input_
-            $ [ term "aria-label" "Select Item"
-              , class_ "bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary"
-              , type_ "checkbox"
-              , name_ "itemId"
-              , value_ $ getId row
-              ]
-            <> [checked_ | isSelected]
-
-    forM_ tbl.columns \c -> td_ (c.attrs <> colAttrs c) $ c.render row
+    whenJust tbl.features.rowId \getId ->
+      td_ [class_ "w-8 align-top pt-4 max-md:hidden"] $ selectRowCheckbox_ (maybe False ($ row) tbl.features.selectRow) (getId row)
+    forM_ tbl.columns \c -> td_ (c.attrs <> (class_ <$> maybeToList c.align)) $ c.render row
   where
     rowAttrs = maybe [] ($ row) tbl.features.rowAttrs
     treeAttrs = maybe [] (treeRowAttrs row) tbl.features.treeConfig
     isTreeGroup = maybe False (\tc -> tc.isGroupRow row) tbl.features.treeConfig
     rowClass = "hover:bg-fillWeak transition-colors duration-75 itemsListItem" <> if isTreeGroup then " cursor-pointer" else ""
     linkHandler = maybe [] (\getLink -> [class_ "cursor-pointer", hxGet_ (getLink row), hxPushUrl_ "true"] <> navTabAttrs) tbl.features.rowLink
-    isSelected = maybe False (\f -> f row) tbl.features.selectRow
-    colAttrs c = foldMap (\a -> [class_ a]) c.align
+
+
+-- | Bulk action button: enabled (via CSS) only while some row checkbox is checked.
+bulkActionBtn_ :: Text -> Text -> BulkAction -> Html ()
+bulkActionBtn_ btnSize iconSize blkA =
+  button_
+    [ class_ $ "btn " <> btnSize <> " btn-disabled group-has-[.bulkactionItemCheckbox:checked]/grid:text-white group-has-[.bulkactionItemCheckbox:checked]/grid:bg-fillBrand-strong group-has-[.bulkactionItemCheckbox:checked]/grid:pointer-events-auto!"
+    , hxPost_ blkA.uri
+    , hxSwap_ "none"
+    ]
+    do
+      whenJust blkA.icon \icon -> faSprite_ icon "regular" $ iconSize <> " inline-block"
+      span_ [class_ "ml-1"] $ toHtml blkA.title
 
 
 renderHeaderBulkActions :: [BulkAction] -> Html ()
-renderHeaderBulkActions bulkActions =
-  span_ [class_ "inline-flex gap-2 ml-2 max-md:hidden"] do
-    forM_ bulkActions \blkA ->
-      button_
-        [ class_ "btn btn-xs btn-disabled group-has-[.bulkactionItemCheckbox:checked]/grid:text-white group-has-[.bulkactionItemCheckbox:checked]/grid:bg-fillBrand-strong group-has-[.bulkactionItemCheckbox:checked]/grid:pointer-events-auto!"
-        , hxPost_ blkA.uri
-        , hxSwap_ "none"
-        ]
-        do
-          whenJust blkA.icon \icon -> faSprite_ icon "regular" "h-3 w-3 inline-block"
-          span_ [class_ "ml-1"] $ toHtml blkA.title
+renderHeaderBulkActions bulkActions = span_ [class_ "inline-flex gap-2 ml-2 max-md:hidden"] $ forM_ bulkActions $ bulkActionBtn_ "btn-xs" "h-3 w-3"
 
 
 renderHeaderTableActions :: TableHeaderActions -> Html ()
@@ -519,81 +542,24 @@ renderHeaderTableActions actions = span_ [class_ "inline-flex gap-2 ml-2"] do
 
 renderSortDropdown :: TableHeaderActions -> Html ()
 renderSortDropdown actions = do
-  let defaultSort = maybe "" (\(_, _, k) -> k) (listToMaybe actions.sortOptions)
-      currentLabel = maybe "Sort" (\(t, _, _) -> t) $ find (\(_, _, k) -> k == actions.currentSort) actions.sortOptions
-      baseUrl' = deleteParam "sort" actions.baseUrl
-      urlPrefix = baseUrl' <> (if T.isInfixOf "?" baseUrl' then "&" else "?") <> "sort="
-      mkSortUrl sortKey = urlPrefix <> toUriStr sortKey
-      popId = "sortDropdown"
-
-  div_ [class_ "inline-block", data_ "tippy-content" "Sort by"] do
-    button_
-      [ class_ "btn btn-xs shadow-none text-xs font-normal border border-strokeWeak text-textWeak bg-transparent"
-      , type_ "button"
-      , term "popovertarget" popId
-      , style_ $ "anchor-name: --anchor-" <> popId
-      ]
-      do
-        faSprite_ "sort" "regular" "h-3 w-3"
-        span_ $ toHtml currentLabel
-    div_
-      [ id_ popId
-      , term "popover" "auto"
-      , class_ "dropdown dropdown-start bg-bgRaised p-1 text-sm normal-case border border-strokeWeak z-50 w-72 rounded-md shadow-lg mt-1"
-      , style_ $ "position-try: flip-block; position-anchor: --anchor-" <> popId
-      ]
-      do
-        forM_ actions.sortOptions \(title, desc, sortKey) -> do
-          let isActive = actions.currentSort == sortKey || (actions.currentSort == "" && sortKey == defaultSort)
-          a_
-            [ class_ $ "block flex flex-row px-3 py-2 hover:bg-fillBrand-weak rounded-md cursor-pointer " <> if isActive then " text-textBrand " else ""
-            , hxGet_ $ mkSortUrl sortKey
-            , hxTarget_ $ "#" <> actions.targetId
-            , hxSelect_ $ "#" <> actions.targetId
-            , hxPushUrl_ "true"
-            , hxSwap_ "outerHTML"
-            , hxIndicator_ "#sortLoader"
-            ]
-            do
-              div_ [class_ "flex flex-col items-center justify-center px-1"] $ if isActive then faSprite_ "icon-checkmark4" "solid" "w-4 h-4" else div_ [class_ "w-4 h-4"] ""
-              div_ [class_ "grow"] do
-                span_ [class_ "block text-sm font-medium"] $ toHtml title
-                span_ [class_ "block text-xs text-textWeak"] $ toHtml desc
-  div_ [class_ "p-12 fixed rounded-lg shadow-sm bg-bgOverlay top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 htmx-indicator loading loading-dots loading-md", id_ "sortLoader"] ""
+  div_ [class_ "inline-block", data_ "tippy-content" "Sort by"]
+    $ sortDropdown_ "sortDropdown" [class_ "dropdown dropdown-start bg-bgRaised p-1 text-sm normal-case border border-strokeWeak z-50 w-72 rounded-md shadow-lg mt-1"] actions.sortOptions actions.currentSort "Sort"
+    $ \k -> swapTarget_ actions.targetId (withQuery (deleteParam "sort" actions.baseUrl) $ "sort=" <> toUriStr k)
+  sortLoader_
 
 
 renderFilterDropdown :: TableHeaderActions -> Html ()
 renderFilterDropdown actions = do
-  let hasActiveFilters = not $ null actions.activeFilters
-      activeCount = sum $ map (length . snd) actions.activeFilters
-      popId = "filterDropdown"
+  let popId = "filterDropdown"
   div_ [class_ "inline-block", data_ "tippy-content" "Filter by"] do
-    button_
-      [ class_ "btn btn-xs shadow-none text-xs font-normal border border-strokeWeak text-textWeak bg-transparent"
-      , type_ "button"
-      , term "popovertarget" popId
-      , style_ $ "anchor-name: --anchor-" <> popId
-      ]
-      do
-        faSprite_ "filter" "regular" "h-3 w-3"
-        span_ $ toHtml $ "Filter" <> if hasActiveFilters then " (" <> show activeCount <> ")" else ""
+    dropdownTriggerBtn_ "filter" ("Filter" <> if null actions.activeFilters then "" else " (" <> show (sum $ map (length . snd) actions.activeFilters) <> ")") popId
     div_
-      [ id_ popId
-      , term "popover" "auto"
-      , class_ "dropdown dropdown-start bg-bgRaised p-1 text-sm normal-case border border-strokeWeak z-50 w-60 rounded-md shadow-lg mt-1"
-      , style_ $ "position-try: flip-block; position-anchor: --anchor-" <> popId
-      ]
+      ([class_ "dropdown dropdown-start bg-bgRaised p-1 text-sm normal-case border border-strokeWeak z-50 w-60 rounded-md shadow-lg mt-1"] <> popoverPanel_ popId)
       do
         div_ [class_ "flex items-center justify-between px-3 py-2 text-sm font-semibold text-textStrong border-b border-strokeWeak"] do
           span_ "Select Filter"
           a_
-            [ class_ "text-xs text-textBrand cursor-pointer flex items-center gap-1"
-            , hxGet_ actions.baseUrl
-            , hxTarget_ $ "#" <> actions.targetId
-            , hxSelect_ $ "#" <> actions.targetId
-            , hxPushUrl_ "true"
-            , hxSwap_ "outerHTML"
-            ]
+            ([class_ "text-xs text-textBrand cursor-pointer flex items-center gap-1"] <> swapTarget_ actions.targetId actions.baseUrl)
             ("Clear all" >> faSprite_ "xmark" "regular" "w-3 h-3")
         div_ [class_ "p-1"] $ forM_ actions.filterMenus (renderFilterMenuItem actions)
 
@@ -602,11 +568,7 @@ renderFilterMenuItem :: TableHeaderActions -> FilterMenu -> Html ()
 renderFilterMenuItem actions menu = div_ [class_ "relative"] do
   let subPopId = "filterSub_" <> menu.paramName
   button_
-    [ class_ "flex items-center justify-between w-full px-3 py-2 text-sm rounded hover:bg-fillWeak cursor-pointer"
-    , type_ "button"
-    , term "popovertarget" subPopId
-    , style_ $ "anchor-name: --anchor-" <> subPopId
-    ]
+    ([class_ "flex items-center justify-between w-full px-3 py-2 text-sm rounded hover:bg-fillWeak cursor-pointer", type_ "button"] <> popoverTrigger_ subPopId)
     do
       span_ $ toHtml $ "By " <> menu.label
       faSprite_ "chevron-right" "regular" "w-3 h-3"
@@ -623,26 +585,20 @@ renderFilterMenuItem actions menu = div_ [class_ "relative"] do
 
 renderFilterOption :: TableHeaderActions -> FilterMenu -> FilterOption -> Html ()
 renderFilterOption actions menu opt = label_ [class_ "flex items-center gap-3 px-3 py-2 rounded cursor-pointer hover:bg-fillWeak"] do
-  let separator = if T.isInfixOf "?" actions.baseUrl then "&" else "?"
-      paramVal = menu.paramName <> "=" <> toUriStr opt.value
+  let paramVal = menu.paramName <> "=" <> toUriStr opt.value
       -- For multi-select: toggle this value; for single-select: replace all with this value
       url
         | menu.multiSelect && opt.isActive = deleteParamValue menu.paramName opt.value actions.baseUrl
-        | menu.multiSelect = actions.baseUrl <> separator <> paramVal
-        | otherwise = deleteParam menu.paramName actions.baseUrl <> separator <> paramVal
-      inputType = if menu.multiSelect then "checkbox" else "radio"
+        | menu.multiSelect = withQuery actions.baseUrl paramVal
+        | otherwise = withQuery (deleteParam menu.paramName actions.baseUrl) paramVal
   input_
-    $ [ type_ inputType
-      , class_ $ if menu.multiSelect then "checkbox checkbox-xs" else "radio radio-xs"
+    $ [ type_ $ bool "radio" "checkbox" menu.multiSelect
+      , class_ $ bool "radio radio-xs" "checkbox checkbox-xs" menu.multiSelect
       , value_ opt.value
       , name_ $ "filter_" <> menu.paramName -- group radios by param name
-      , hxGet_ url
-      , hxTarget_ $ "#" <> actions.targetId
-      , hxSelect_ $ "#" <> actions.targetId
-      , hxPushUrl_ "true"
-      , hxSwap_ "outerHTML"
       , hxTrigger_ "change"
       ]
+    <> swapTarget_ actions.targetId url
     <> [checked_ | opt.isActive]
   span_ [class_ "text-sm"] $ toHtml opt.label
 
@@ -663,24 +619,10 @@ renderToolbar tbl =
     when (isJust tbl.features.rowId && not tbl.config.renderAsTable)
       $ div_ [class_ "h-4 flex space-x-3 w-8 items-center"] do
         span_ [class_ "w-2 h-full"] ""
-        input_
-          [ term "aria-label" "Select All"
-          , type_ "checkbox"
-          , class_ "checkbox h-6 w-6 checked:checkbox-primary"
-          , [__| on click set .bulkactionItemCheckbox.checked to my.checked |]
-          ]
+        selectAllCheckbox_
 
     div_ [class_ "grow flex flex-row gap-2"] do
-      forM_ tbl.features.bulkActions \blkA ->
-        button_
-          [ class_ "btn btn-sm btn-disabled group-has-[.bulkactionItemCheckbox:checked]/grid:text-white group-has-[.bulkactionItemCheckbox:checked]/grid:bg-fillBrand-strong group-has-[.bulkactionItemCheckbox:checked]/grid:pointer-events-auto!"
-          , hxPost_ blkA.uri
-          , hxSwap_ "none"
-          ]
-          do
-            whenJust blkA.icon \icon -> faSprite_ icon "regular" "h-4 w-4 inline-block"
-            span_ (toHtml blkA.title)
-
+      forM_ tbl.features.bulkActions $ bulkActionBtn_ "btn-sm" "h-4 w-4"
       whenJust tbl.features.sort renderSortMenu
 
 
@@ -688,63 +630,19 @@ renderSearch :: Text -> SearchMode -> Html ()
 renderSearch elemID searchMode =
   label_ [class_ "input input-sm max-md:hidden flex w-full h-9 bg-transparent border border-strokeWeak shadow-none overflow-hidden items-center gap-2"] do
     faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
-    case searchMode of
-      ServerSide url ->
-        input_
-          [ type_ "text"
-          , class_ "grow"
-          , name_ "search"
-          , id_ "search_box"
-          , placeholder_ "Search"
-          , hxTrigger_ "keyup changed delay:500ms"
-          , hxGet_ url
-          , hxTarget_ "#rowsContainer"
-          , hxSwap_ "innerHTML"
-          , hxIndicator_ "#searchIndicator"
-          ]
-      ClientSide ->
-        input_
-          [ type_ "text"
-          , class_ "grow"
-          , placeholder_ "Search"
-          , term "_" $ "on input show .itemsListItem in #" <> elemID <> "_page when its textContent.toLowerCase() contains my value.toLowerCase()"
-          ]
+    input_
+      $ [type_ "text", class_ "grow", placeholder_ "Search"]
+      <> case searchMode of
+        ServerSide url -> [name_ "search", id_ "search_box", hxTrigger_ "keyup changed delay:500ms", hxGet_ url, hxTarget_ "#rowsContainer", hxSwap_ "innerHTML", hxIndicator_ "#searchIndicator"]
+        ClientSide -> [term "_" $ "on input show .itemsListItem in #" <> elemID <> "_page when its textContent.toLowerCase() contains my value.toLowerCase()"]
 
 
 renderSortMenu :: SortConfig -> Html ()
 renderSortMenu sortCfg = do
-  let currentURL' = deleteParam "sort" sortCfg.currentURL
-  let defaultSort = maybe "" (\(_, _, i) -> i) (listToMaybe sortCfg.options)
-  let currentSortTitle = maybe sortCfg.current (\(t, _, _) -> t) $ find (\(_, _, identifier) -> identifier == sortCfg.current) sortCfg.options
-
-  div_ [class_ "inline-block"] do
-    button_ ([type_ "button", class_ "btn btn-xs shadow-none text-xs font-normal border border-strokeWeak text-textWeak bg-transparent"] <> popoverTrigger_ "sortMenuDiv") do
-      faSprite_ "sort" "regular" "h-3 w-3"
-      span_ $ toHtml currentSortTitle
-
-    div_
-      ( [hxBoost_ "true", class_ "dropdown dropdown-end bg-bgRaised p-1 text-sm border border-strokeWeak mt-2 w-72 origin-top-right rounded-md shadow-lg"]
-          <> popoverPanel_ "sortMenuDiv"
-      )
-      do
-        sortCfg.options & mapM_ \(title, desc, identifier) -> do
-          let isActive = sortCfg.current == identifier || (sortCfg.current == "" && identifier == defaultSort)
-          a_
-            [ class_ $ "block flex flex-row px-3 py-2 hover:bg-fillBrand-weak rounded-md cursor-pointer " <> (if isActive then " text-textBrand " else "")
-            , href_ $ currentURL' <> "&sort=" <> toUriStr identifier
-            , hxIndicator_ "#sortLoader"
-            ]
-            do
-              div_ [class_ "flex flex-col items-center justify-center px-1"]
-                $ if isActive then faSprite_ "icon-checkmark4" "solid" "w-4 h-4" else div_ [class_ "w-4 h-4"] ""
-              div_ [class_ "grow"] do
-                span_ [class_ "block text-sm font-medium"] $ toHtml title
-                span_ [class_ "block text-xs text-textWeak"] $ toHtml desc
-  div_
-    [ class_ "p-12 fixed rounded-lg shadow-sm bg-bgOverlay top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 htmx-indicator loading loading-dots loading-md"
-    , id_ "sortLoader"
-    ]
-    ""
+  div_ [class_ "inline-block"]
+    $ sortDropdown_ "sortMenuDiv" [hxBoost_ "true", class_ "dropdown dropdown-end bg-bgRaised p-1 text-sm border border-strokeWeak mt-2 w-72 origin-top-right rounded-md shadow-lg"] sortCfg.options sortCfg.current sortCfg.current
+    $ \k -> [href_ $ deleteParam "sort" sortCfg.currentURL <> "&sort=" <> toUriStr k]
+  sortLoader_
 
 
 -- Pagination footer with per-page selector and navigation
@@ -762,17 +660,13 @@ renderPaginationFooter pg = div_ [class_ "flex items-center justify-between max-
   where
     startItem = pg.currentPage * pg.perPage + 1
     endItem = min ((pg.currentPage + 1) * pg.perPage) pg.totalCount
-    mkUrl page perPage = pg.baseUrl <> (if T.isInfixOf "?" pg.baseUrl then "&" else "?") <> "page=" <> show page <> "&per_page=" <> show perPage
-    pgAttrs url = [hxGet_ url, hxTarget_ $ "#" <> pg.targetId, hxSelect_ $ "#" <> pg.targetId, hxSwap_ "outerHTML", hxPushUrl_ "true"]
+    mkUrl page perPage = withQuery pg.baseUrl $ "page=" <> show page <> "&per_page=" <> show perPage
+    pgAttrs = swapTarget_ pg.targetId
     navBtn icon enabled url = button_ ([class_ $ "cursor-pointer p-1.5 rounded border border-strokeWeak " <> if enabled then "hover:bg-fillWeak cursor-pointer" else "opacity-40 cursor-not-allowed", type_ "button"] <> if enabled then pgAttrs url else []) $ faSprite_ icon "regular" "w-4 h-4"
 
 
 renderZeroState :: ZeroState -> Html ()
-renderZeroState zs = do
-  let url = case zs.destination of
-        Left labelId -> labelId
-        Right destination -> destination
-  emptyState_ def{icon = Just zs.icon, action = ESLink url zs.actionText} zs.title zs.description
+renderZeroState zs = emptyState_ def{icon = Just zs.icon, action = ESLink (either id id zs.destination) zs.actionText} zs.title zs.description
 
 
 renderSimpleZeroState :: SimpleZeroState -> Html ()
@@ -847,33 +741,19 @@ withColHeaderExtra h column = column{headerExtra = Just h}
 parseSortParam :: Text -> Maybe [(Text, [Text])] -> [SortField]
 parseSortParam sortP overridesM = concatMap parseField (T.splitOn "," sortP)
   where
-    overrideLookup = fromMaybe [] overridesM
-    parseField txt
-      | Just sortField <- T.stripPrefix "+" txt = createSortFields sortField Asc
-      | Just sortField <- T.stripPrefix "-" txt = createSortFields sortField Desc
-      | otherwise = []
-    createSortFields sortField order =
-      let matchingFields = fromMaybe [sortField] (lookup (T.toLower sortField) overrideLookup)
-       in map (`SortField` order) matchingFields
+    parseField txt = case T.uncons txt of
+      Just ('+', f) -> fields f Asc
+      Just ('-', f) -> fields f Desc
+      _ -> []
+    fields f order = map (`SortField` order) $ fromMaybe [f] (lookup (T.toLower f) =<< overridesM)
 
 
 -- Generate ORDER BY clause from sort fields
 sortFieldsToSQL :: [SortField] -> Text
-sortFieldsToSQL sortFields
-  | null sortFields = ""
-  | otherwise = "ORDER BY " <> T.intercalate ", " (map (.toSql) sortFields)
+sortFieldsToSQL [] = ""
+sortFieldsToSQL sortFields = "ORDER BY " <> T.intercalate ", " (map (.toSql) sortFields)
 
 
--- Toggle sort direction for a column, returning the new sort param
-toggleSortParam :: Text -> Text -> Text
-toggleSortParam currentSort field
-  | currentSort == "+" <> field = "-" <> field
-  | otherwise = "+" <> field
-
-
--- Generate URL with new sort param
+-- Generate URL toggling the sort direction of a column
 toggleSortUrl :: SortableConfig -> Text -> Text
-toggleSortUrl cfg field =
-  let urlWithoutSort = deleteParam "sort" cfg.baseUrl
-      separator = if T.isInfixOf "?" urlWithoutSort then "&" else "?"
-   in urlWithoutSort <> separator <> "sort=" <> toUriStr (toggleSortParam cfg.currentSort field)
+toggleSortUrl cfg field = withQuery (deleteParam "sort" cfg.baseUrl) $ "sort=" <> toUriStr (bool "+" "-" (cfg.currentSort == "+" <> field) <> field)

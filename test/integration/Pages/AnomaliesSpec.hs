@@ -388,20 +388,20 @@ spec = sequential $ aroundAll withTestResources do
       -- 23h in: still within the 24h window
       advanceHours tr 23
       (within, _) <- runHasqlEffect tr
-        $ Issues.selectIssues testPid Nothing Nothing Nothing 100 0 Nothing Nothing "24h" [] []
+        $ Issues.selectIssues testPid Nothing Nothing 100 0 Nothing Nothing "24h" [] []
       map (.base.id) within `shouldSatisfy` elem iid
 
       -- 25h in: outside window — query still returns row, but activityBuckets all zero
       advanceHours tr 2
       (after, _) <- runHasqlEffect tr
-        $ Issues.selectIssues testPid Nothing Nothing Nothing 100 0 Nothing Nothing "24h" [] []
+        $ Issues.selectIssues testPid Nothing Nothing 100 0 Nothing Nothing "24h" [] []
       case find (\r -> r.base.id == iid) after of
         Just row -> V.sum row.activityBuckets `shouldBe` 0
         Nothing -> pure () -- also acceptable: filtered out entirely
 
 
 isApiChangeSingleRow :: Issues.IssueType -> AnomalyList.IssueVM -> Bool
-isApiChangeSingleRow ty (AnomalyList.IssueVM _ _ _ _ c) = c.base.issueType == ty
+isApiChangeSingleRow ty (AnomalyList.IssueVM _ _ _ c) = c.base.issueType == ty
 
 
 -- | Pull the first ApiChange issue id created by earlier tests. Fails the test

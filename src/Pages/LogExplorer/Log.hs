@@ -61,7 +61,7 @@ import Models.Telemetry.Schema qualified as Schema
 import NeatInterpolation (text)
 import Numeric (showFFloat)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs, pageActions, pageTitle)
-import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), enrichSchemaWithFacets, logQueryBox_, queryLibrary_)
+import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), enrichSchemaWithFacets, logQueryBox_, queryLibraryDropdown_)
 import Pkg.Components.TimePicker qualified as Components
 import Pkg.Components.Widget (WidgetAxis (..), WidgetType (WTTimeseries, WTTimeseriesLine))
 import Pkg.Components.Widget qualified as Widget
@@ -73,7 +73,7 @@ import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Megaparsec (parseMaybe)
-import Utils (FieldAction (..), FieldMenuCtx (..), LoadingSize (..), LoadingType (..), checkFreeTierStatus, faSprite_, fieldContextMenuItems_, fieldMenuPanel_, getDurationNSMS, getServiceColors, htmxOverlayIndicator_, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecTextByKey, methodFillColor, popoverTrigger_, prettyPrintCount, sanitizeBackendError, serviceFillColor, statusFillColorText)
+import Utils (FieldAction (..), FieldMenuCtx (..), LoadingSize (..), LoadingType (..), checkFreeTierStatus, faSprite_, fieldContextMenuItems_, fieldMenuPanel_, getDurationNSMS, getServiceColors, htmxOverlayIndicator_, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecTextByKey, methodFillColor, nonEmptyT, popoverTrigger_, prettyPrintCount, sanitizeBackendError, serviceFillColor, statusFillColorText)
 
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
@@ -516,36 +516,30 @@ renderFacets facetSummary = do
                 div_ [class_ "hidden peer-checked/more:block space-y-1"] $ forM_ hiddenValues renderFacetValue
 
 
-keepNonEmpty :: Maybe Text -> Maybe Text
-keepNonEmpty Nothing = Nothing
-keepNonEmpty (Just "") = Nothing
-keepNonEmpty (Just a) = Just a
-
-
 -- | Core result builder shared by apiLogH and queryEvents. When @withChildren@
 -- is False, only matched rows are returned — no descendants, no synthesised
 -- orphan headers (trace-tree concerns the UI wants but the API/CLI usually doesn't).
 buildLogResult :: (DB es, Time.Time :> es) => Bool -> Projects.ProjectId -> UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> (V.Vector (V.Vector AE.Value), [Text], Int) -> Eff es LogResult
 buildLogResult withChildren pid now sinceM fromM toM addCols removeCols (requestVecs, colNames, resultCount') = do
   let colIdxMap = listToIndexHashMap colNames
-      reqLastCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? (V.length requestVecs - 1))
-      reqFirstCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? 0)
-      alreadyLoadedIds = V.mapMaybe (\v -> lookupVecTextByKey v colIdxMap "id") requestVecs
+      colOf k v = lookupVecTextByKey v colIdxMap k
+      reqLastCreatedAtM = colOf "timestamp" =<< (requestVecs V.!? (V.length requestVecs - 1))
+      reqFirstCreatedAtM = colOf "timestamp" =<< (requestVecs V.!? 0)
+      alreadyLoadedIds = V.mapMaybe (colOf "id") requestVecs
       (fromDD, toDD, _) = Components.parseTimeRange now (Components.TimePicker sinceM reqLastCreatedAtM reqFirstCreatedAtM)
   childSpansList <-
     if not withChildren || V.length requestVecs > 100
       then pure [] -- Skip expensive child span fetch for large result sets; traces load lazily on detail view
       else do
-        let allTraceIds = V.filter (not . T.null) $ V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "trace_id") requestVecs
-            traceIds = V.fromList $ take 50 $ nubOrd $ V.toList allTraceIds
+        let traceIds = V.fromList $ take 50 $ nubOrd $ V.toList $ V.mapMaybe (mfilter (not . T.null) . colOf "trace_id") requestVecs
             -- latency_breakdown is aliased from context___span_id (see Pkg.Parser).
-            seedSpanIds = V.mapMaybe (\v -> lookupVecTextByKey v colIdxMap "latency_breakdown") requestVecs
+            seedSpanIds = V.mapMaybe (colOf "latency_breakdown") requestVecs
         LogQueries.selectChildSpansAndLogs pid addCols traceIds seedSpanIds (fromDD, toDD) alreadyLoadedIds
   let synthRows = if withChildren then synthesizeOrphanHeaders colIdxMap requestVecs else V.empty
       requestVecsAug = synthRows <> requestVecs
       rawLogsData = requestVecsAug <> V.fromList childSpansList
       cols = nubOrd $ curateCols addCols removeCols colNames
-      colors = getServiceColors $ V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") rawLogsData
+      colors = getServiceColors $ V.mapMaybe (colOf "span_name") rawLogsData
       queryResultCount = V.length requestVecsAug
       (logsData, traces) = buildTraceTree colIdxMap queryResultCount rawLogsData
   pure
@@ -648,27 +642,17 @@ kqlError400 code msg fieldM suggestionM detailsM =
 extractMissingColumn :: Text -> Maybe Text
 extractMissingColumn t = tfMatch <|> pgMatch
   where
-    tfMatch =
-      let after = snd (T.breakOn "no field named " (T.toLower t))
-       in if T.null after
-            then Nothing
-            else
-              -- Re-slice from the original-case text so the column name keeps its casing.
-              let idx = T.length t - T.length after
-                  rest = T.drop (idx + T.length "no field named ") t
-                  col = T.strip $ T.takeWhile (\c -> c /= '.' && c /= ' ' && c /= '\n' && c /= '"' && c /= '`') rest
-               in if T.null col then Nothing else Just col
-    pgMatch =
-      let after = snd (T.breakOn "column " (T.toLower t))
-       in if T.null after || not ("does not exist" `T.isInfixOf` T.toLower t)
-            then Nothing
-            else
-              let idx = T.length t - T.length after
-                  rest = T.drop (idx + T.length "column ") t
-                  col = case T.stripPrefix "\"" rest of
-                    Just q -> T.takeWhile (/= '"') q
-                    Nothing -> T.takeWhile (\c -> c /= ' ' && c /= ',') rest
-               in if T.null col then Nothing else Just col
+    lower = T.toLower t
+    -- Match case-insensitively but re-slice from the original-case text so the
+    -- column name keeps its casing.
+    after needle =
+      let (pre, hit) = T.breakOn needle lower
+       in T.drop (T.length pre + T.length needle) t <$ guard (not (T.null hit))
+    tfMatch = after "no field named " >>= guarded (not . T.null) . T.strip . T.takeWhile (`notElem` ['.', ' ', '\n', '"', '`'])
+    pgMatch = do
+      guard $ "does not exist" `T.isInfixOf` lower
+      rest <- after "column "
+      guarded (not . T.null) $ maybe (T.takeWhile (`notElem` [' ', ',']) rest) (T.takeWhile (/= '"')) (T.stripPrefix "\"" rest)
 
 
 -- | Log Explorer page shell. Renders chrome only (query box, facets, widgets,
@@ -679,7 +663,7 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
   let source = fromMaybe "spans" sourceM
   (sess, project, bw) <- mkPageCtx pid
   let queryInput = maybeToMonoid queryM'
-  let parseError msg = addTriggerEvent "showParseError" (AE.toJSON msg) >> addErrorToast "Error Parsing Query" (Just msg) $> ([], Just msg)
+      parseError msg = addTriggerEvent "showParseError" (AE.toJSON msg) >> addErrorToast "Error Parsing Query" (Just msg) $> ([], Just msg)
   (queryAST, parseErrorMsg) <- case parseQueryToAST queryInput of
     Left err -> parseError err
     Right ast
@@ -694,9 +678,7 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
   authCtx <- Effectful.Reader.Static.ask @AuthContext
 
   -- An alert ID pre-fills the query box and selects the alert's viz type.
-  alertDM <- case alertM >>= UUID.fromText of
-    Just alertId -> Monitors.queryMonitorById (Monitors.QueryMonitorId alertId)
-    Nothing -> pure Nothing
+  alertDM <- lookupAlert alertM
   let effectiveVizType = vizTypeM <|> ((.visualizationType) <$> alertDM)
 
   -- Shell-side queries are just query library + free-tier. Facets lazy-load via
@@ -706,8 +688,8 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
   (queryLibE, freeTierStatusE) <- Ki.scoped \scope -> do
     let aw = Ki.atomically . Ki.await
     t1 <- forkWithCtx scope $ tryAny $ Projects.queryLibHistoryForUser pid sess.persistentSession.userId
-    t3 <- forkWithCtx scope $ tryAny $ checkFreeTierStatus pid project.paymentPlan
-    (,) <$> aw t1 <*> aw t3
+    t2 <- forkWithCtx scope $ tryAny $ checkFreeTierStatus pid project.paymentPlan
+    (,) <$> aw t1 <*> aw t2
 
   let logErr label res = whenLeft_ (void res) (Log.logAttention ("Log explorer " <> label <> " failed") . show @Text)
   logErr "queryLib" queryLibE
@@ -715,7 +697,7 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
 
   let queryLib = fromRight [] queryLibE
       freeTierStatus = fromRight def freeTierStatusE
-      (queryLibRecent, queryLibSaved) = bimap V.fromList V.fromList $ L.partition (\x -> Projects.QLTHistory == x.queryType) queryLib
+      (queryLibRecent, queryLibSaved) = partitionQueryLib queryLib
 
   -- Preload the data fetch from <head> so it overlaps shell render instead of
   -- starting only after the log-list web component boots. Point it at the endpoint
@@ -829,7 +811,7 @@ logExplorerDataH pid queryM' cols' cursorM' sinceM fromM toM sourceM targetSpans
         Right t -> pure (Nothing, t)
   -- UI always wants the trace-tree context; the API/CLI defaults off.
   lr <- buildLogResult True pid now sinceM fromM toM addCols removeCols tableData
-  let lastFM = lr.cursor >>= textToUTC <&> toText . iso8601Show . addUTCTime (-0.001)
+  let lastFM = lr.cursor >>= (iso8601ParseM . toString) <&> toText . iso8601Show . addUTCTime (-0.001)
   addRespHeaders
     (lr :: LogResult)
       { error = errM
@@ -907,9 +889,9 @@ saveQueryH pid form = do
   (sess, _) <- Projects.sessionAndProject pid
   let uid = sess.persistentSession.userId
       queryAST = fromRight [] $ parseQueryToAST (maybeToMonoid form.query)
-  if (isJust . keepNonEmpty) form.queryLibId && (isJust . keepNonEmpty) form.queryTitle
-    then Projects.queryLibTitleEdit pid uid (maybeToMonoid form.queryLibId) (maybeToMonoid form.queryTitle) >> addSuccessToast "Edited Query title successfully" Nothing
-    else Projects.queryLibInsert Projects.QLTSaved pid uid (toQText queryAST) queryAST form.queryTitle >> addSuccessToast "Saved to Query Library successfully" Nothing
+  case (,) <$> nonEmptyT form.queryLibId <*> nonEmptyT form.queryTitle of
+    Just (qId, title) -> Projects.queryLibTitleEdit pid uid qId title >> addSuccessToast "Edited Query title successfully" Nothing
+    Nothing -> Projects.queryLibInsert Projects.QLTSaved pid uid (toQText queryAST) queryAST form.queryTitle >> addSuccessToast "Saved to Query Library successfully" Nothing
   addTriggerEvent "closeModal" ""
   queryLibraryFragment pid uid
 
@@ -928,8 +910,13 @@ deleteQueryH pid qId = do
 queryLibraryFragment :: Projects.ProjectId -> Projects.UserId -> ATAuthCtx (RespHeaders QueryLibraryView)
 queryLibraryFragment pid uid = do
   queryLib <- Projects.queryLibHistoryForUser pid uid
-  let (recent, saved) = bimap V.fromList V.fromList $ L.partition (\x -> Projects.QLTHistory == x.queryType) queryLib
+  let (recent, saved) = partitionQueryLib queryLib
   addRespHeaders $ QueryLibraryView pid saved recent
+
+
+-- | Split a user's query-library items into (recent, saved) — history entries first.
+partitionQueryLib :: [Projects.QueryLibItem] -> (V.Vector Projects.QueryLibItem, V.Vector Projects.QueryLibItem)
+partitionQueryLib = bimap V.fromList V.fromList . L.partition (\x -> Projects.QLTHistory == x.queryType)
 
 
 -- | Lazily-loaded alert configuration form (HTMX partial). Kept off the shell's
@@ -937,15 +924,14 @@ queryLibraryFragment pid uid = do
 alertFormH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 alertFormH pid alertM = do
   (_, project) <- Projects.sessionAndProject pid
-  alertDM <- case alertM >>= UUID.fromText of
-    Just alertId -> Monitors.queryMonitorById (Monitors.QueryMonitorId alertId)
-    Nothing -> pure Nothing
+  alertDM <- lookupAlert alertM
   teams <- V.fromList <$> ManageMembers.getTeams pid
   addRespHeaders $ alertConfigurationForm_ project alertDM teams
 
 
-textToUTC :: Text -> Maybe UTCTime
-textToUTC = iso8601ParseM . toString
+-- | Resolve an @?alert=<uuid>@ query param to its monitor, if it parses and exists.
+lookupAlert :: DB es => Maybe Text -> Eff es (Maybe Monitors.QueryMonitor)
+lookupAlert = maybe (pure Nothing) (Monitors.queryMonitorById . Monitors.QueryMonitorId) . (>>= UUID.fromText)
 
 
 -- Widget definitions for log explorer charts
@@ -1000,11 +986,18 @@ fmtPct1 :: Double -> Text
 fmtPct1 x = toText (showFFloat (Just 1) x "") <> "%"
 
 
+-- | Wrapper classes for #page-summary-region contents. Both hide under the
+-- chart toggles; literal (not concatenated) so Tailwind's scanner sees them.
+summaryRegionCls, chartRegionCls :: Text
+summaryRegionCls = "mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full flex flex-col gap-2"
+chartRegionCls = "timeline flex flex-row gap-4 mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full min-h-36 max-md:min-h-28 aspect-[10/1] max-md:aspect-auto max-md:flex-col"
+
+
 -- | Shimmer placeholder mirroring 'sessionsHeader_' (6-KPI grid + over-time bar
 -- card) so the summary region keeps its height during the sessions-viz swap.
 sessionsSummarySkeleton_ :: Html ()
 sessionsSummarySkeleton_ =
-  div_ [class_ "mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full flex flex-col gap-2", role_ "status", Aria.label_ "Loading session summary"] do
+  div_ [class_ summaryRegionCls, role_ "status", Aria.label_ "Loading session summary"] do
     div_ [class_ "grid grid-cols-6 max-md:grid-cols-3 gap-2"]
       $ replicateM_ 6
       $ div_ [class_ "surface-raised rounded-2xl px-3 py-2 flex flex-col gap-1"] do
@@ -1020,7 +1013,7 @@ sessionsSummarySkeleton_ =
 -- summary region) so its height is preserved during the swap back from sessions.
 chartSummarySkeleton_ :: Html ()
 chartSummarySkeleton_ =
-  div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full min-h-36 max-md:min-h-28 aspect-[10/1] max-md:aspect-auto max-md:flex-col", role_ "status", Aria.label_ "Loading chart"] do
+  div_ [class_ chartRegionCls, role_ "status", Aria.label_ "Loading chart"] do
     div_ [class_ "flex-[3] min-w-0 rounded-2xl skeleton-shimmer"] ""
     div_ [class_ "flex-1 min-w-0 max-md:hidden rounded-2xl skeleton-shimmer"] ""
 
@@ -1050,16 +1043,18 @@ facetsSkeleton_ =
 
 
 -- | KPI card shared by the sessions/patterns summary headers.
-kpiCard_ :: Text -> Text -> Maybe Text -> Html ()
-kpiCard_ label value subM = div_ [class_ "surface-raised rounded-2xl px-3 py-2 flex flex-col gap-0.5 min-w-0"] do
+kpiCard_ :: (Text, Text, Maybe Text) -> Html ()
+kpiCard_ (label, value, subM) = div_ [class_ "surface-raised rounded-2xl px-3 py-2 flex flex-col gap-0.5 min-w-0"] do
   span_ [class_ "text-xs text-textWeak truncate"] $ toHtml label
   strong_ [class_ "text-textStrong text-xl font-bold tabular-nums leading-tight truncate"] $ toHtml value
   whenJust subM (span_ [class_ "text-xs text-textWeak tabular-nums truncate"] . toHtml)
 
 
--- | Legend swatch shared by the sessions/patterns over-time charts.
-legendSwatch_ :: Text -> Html () -> Html ()
-legendSwatch_ cls label = span_ [class_ "flex items-center gap-1"] (span_ [class_ $ "inline-block w-2 h-2 rounded-sm " <> cls] "" >> label)
+-- | Percent-of-tallest-bar normalizer for the over-time charts (0 when empty).
+barNorm :: [Int] -> [Int] -> Int -> Double
+barNorm clean err = \n -> if maxBar <= 0 then 0 else fromIntegral n / fromIntegral maxBar * 100
+  where
+    maxBar = foldl' max 0 (zipWith (+) clean err)
 
 
 -- | The stacked clean/errored rects inside one over-time bar.
@@ -1081,8 +1076,9 @@ summaryChartCard_ title noteM bucketStartEpoch bucketWidthSec barEls =
     div_ [class_ "flex items-center justify-between mb-1"] do
       span_ [class_ "text-xs text-textWeak"] $ toHtml title
       div_ [class_ "flex gap-3 text-xs text-textWeak"] do
-        legendSwatch_ "bg-fillBrand-strong/70" "Clean"
-        legendSwatch_ "bg-fillError-strong" "Errored"
+        let swatch cls label = span_ [class_ "flex items-center gap-1"] (span_ [class_ $ "inline-block w-2 h-2 rounded-sm " <> cls] "" >> label)
+        swatch "bg-fillBrand-strong/70" "Clean"
+        swatch "bg-fillError-strong" "Errored"
     if null barEls
       then div_ [class_ "h-12 flex items-center justify-center text-xs text-textWeak"] "No data in range"
       else do
@@ -1121,19 +1117,14 @@ patternsHeader_ rowsV totalPatterns baseHourEpoch = do
       rawClean = sumBk (filter (not . (.isError)) rows)
       rawErr = sumBk errRows
       active = [i | (i, t) <- zip [0 :: Int ..] (zipWith (+) rawClean rawErr), t > 0]
-      slice xs = case active of
-        [] -> []
-        _ -> take (L.maximum active - L.minimum active + 1) $ drop (L.minimum active) xs
+      window = viaNonEmpty (\a -> (L.minimum a, L.maximum a)) active
+      slice xs = maybe [] (\(lo, hi) -> take (hi - lo + 1) $ drop lo xs) window
       cleanBk = slice rawClean
       errBk = slice rawErr
       -- Bars keep their original hour index so the client maps bar i to the
       -- clock hour @baseHourEpoch + i*3600@.
-      shownIdx = case active of
-        [] -> []
-        _ -> [L.minimum active .. L.maximum active]
-      bars = zip3 shownIdx cleanBk errBk
-      maxBar = foldl' max 0 (zipWith (+) cleanBk errBk)
-      norm n = if maxBar <= 0 then 0 else (fromIntegral n / fromIntegral maxBar :: Double) * 100
+      bars = zip3 (maybe [] (uncurry enumFromTo) window) cleanBk errBk
+      norm = barNorm cleanBk errBk
       barEls =
         [ div_
             [ class_ "flex-1 h-full flex flex-col-reverse gap-[1px] min-w-[2px] group/bar"
@@ -1153,8 +1144,8 @@ patternsHeader_ rowsV totalPatterns baseHourEpoch = do
         , ("Noisiest", fmtPct1 topShare, Just "of events")
         ]
 
-  div_ [class_ "mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full flex flex-col gap-2"] do
-    div_ [class_ "grid grid-cols-5 max-md:grid-cols-3 gap-2"] $ forM_ kpis \(label, value, subM) -> kpiCard_ label value subM
+  div_ [class_ summaryRegionCls] do
+    div_ [class_ "grid grid-cols-5 max-md:grid-cols-3 gap-2"] $ forM_ kpis kpiCard_
     -- Patterns volume is hourly (from the rollup), so a range under an hour
     -- resolves to a single full-width bar. Rather than hide the trend, the note
     -- rides on the container and the client appends it to the lone bar's tooltip
@@ -1171,10 +1162,11 @@ sessionsHeader_ summ = do
       p95Dur = toText $ getDurationNSMS (fromIntegral summ.p95DurationNs)
       totalEvt = fromIntegral summ.totalEvents :: Int
       bars = zip3 [0 :: Int ..] summ.clean summ.errored
-      maxBar = foldl' max 0 $ zipWith (+) summ.clean summ.errored
-      norm n = if maxBar <= 0 then 0 else (fromIntegral n / fromIntegral maxBar :: Double) * 100
+      norm = barNorm summ.clean summ.errored
       bucketFrom i = summ.bucketStartEpoch + i * summ.bucketWidthSec
-      -- The onclick filters the table to the bucket; the axis labels + time-range
+      -- The onclick filters the table to the bucket; window.__sessionsBucketFilter
+      -- is defined once in queryEditorInitializationCode so this header stays
+      -- script-free and can be injected via innerHTML. Axis labels + time-range
       -- tooltips are filled client-side by window.formatSummaryChart from the
       -- data-bucket-start/width on the container (see summaryChartCard_).
       barEls =
@@ -1191,7 +1183,7 @@ sessionsHeader_ summ = do
 
       kpis :: [(Text, Text, Maybe Text)]
       kpis =
-        [ ("Sessions" :: Text, prettyPrintCount total, Just $ prettyPrintCount (max 0 (total - errored)) <> " clean")
+        [ ("Sessions", prettyPrintCount total, Just $ prettyPrintCount (max 0 (total - errored)) <> " clean")
         , ("Errored", fmtPct1 errRate, Just $ prettyPrintCount errored <> " sessions")
         , ("Median duration", medDur, Just $ "p95 " <> p95Dur)
         , ("Median events", prettyPrintCount $ fromIntegral summ.medianEvents, Just $ prettyPrintCount totalEvt <> " total")
@@ -1199,32 +1191,21 @@ sessionsHeader_ summ = do
         , ("Services", prettyPrintCount $ fromIntegral summ.uniqueServices, Nothing)
         ]
 
-  div_ [class_ "mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full flex flex-col gap-2"] do
-    div_ [class_ "grid grid-cols-6 max-md:grid-cols-3 gap-2"] $ forM_ kpis \(label, value, subM) -> kpiCard_ label value subM
+  div_ [class_ summaryRegionCls] do
+    div_ [class_ "grid grid-cols-6 max-md:grid-cols-3 gap-2"] $ forM_ kpis kpiCard_
     summaryChartCard_ "Sessions over time" Nothing summ.bucketStartEpoch summ.bucketWidthSec barEls
 
 
--- The bar's onclick calls window.__sessionsBucketFilter, defined once in
--- queryEditorInitializationCode (not here) so this header stays script-free
--- and can be injected via innerHTML from the sessions data response.
-
-data LogsGet
-  = LogPage (PageCtx ApiLogsPageData)
-  | LogsGetError (PageCtx Text)
-  | LogsGetErrorSimple Text
+newtype LogsGet = LogPage (PageCtx ApiLogsPageData)
 
 
 instance ToHtml LogsGet where
   toHtml (LogPage (PageCtx conf pa_dat)) = toHtml $ PageCtx conf $ apiLogsPage pa_dat
-  toHtml (LogsGetErrorSimple err) = span_ [class_ "text-textError"] $ toHtml err
-  toHtml (LogsGetError (PageCtx conf err)) = toHtml $ PageCtx conf err
   toHtmlRaw = toHtml
 
 
 instance AE.ToJSON LogsGet where
-  toJSON (LogsGetError _) = AE.object ["error" AE..= True, "message" AE..= ("Something went wrong" :: Text)]
-  toJSON (LogsGetErrorSimple msg) = AE.object ["error" AE..= True, "message" AE..= msg]
-  toJSON _ = AE.object ["error" AE..= True]
+  toJSON (LogPage _) = AE.object ["error" AE..= True]
 
 
 -- | HTMX fragment for the query-library popover, returned by the save/delete
@@ -1233,7 +1214,7 @@ data QueryLibraryView = QueryLibraryView Projects.ProjectId (V.Vector Projects.Q
 
 
 instance ToHtml QueryLibraryView where
-  toHtml (QueryLibraryView pid queryLibSaved queryLibRecent) = toHtml $ queryLibrary_ pid queryLibSaved queryLibRecent
+  toHtml (QueryLibraryView _pid queryLibSaved queryLibRecent) = toHtml $ queryLibraryDropdown_ queryLibSaved queryLibRecent
   toHtmlRaw = toHtml
 
 
@@ -1272,10 +1253,10 @@ instance AE.ToJSON PatternsView where
 
 -- | JSON payload for the sessions visualization endpoint. Reuses the logs
 -- column layout so the same rendering code applies; session-specific info is
--- packed into the summary column as badge elements.
--- | Sessions data payload. The optional 'SessionSummary' is present only on the
--- first page (skip=0); its rendered header HTML is delivered as @summaryHtml@ so
--- the client can inject #page-summary-region without a second scan/request.
+-- packed into the summary column as badge elements. The optional
+-- 'LogQueries.SessionSummary' is present only on the first page (skip=0); its
+-- rendered header HTML rides along as @summaryHtml@ so the client can inject
+-- #page-summary-region without a second scan/request.
 data SessionsView = SessionsView Int (V.Vector LogQueries.SessionRow) (Maybe LogQueries.SessionSummary)
 
 
@@ -1491,6 +1472,16 @@ apiLogsPage page = do
     countText = prettyPrintCount page.queryResultCount
     suffixText = if page.queryResultCount >= page.resultCount then " rows" else "+ rows"
 
+    -- Show/hide-filters label; @attrs@ must not carry a class_ (Lucid concatenates
+    -- duplicate class attributes with no separator).
+    filtersLabel_ :: [Attribute] -> Html () -> Html ()
+    filtersLabel_ attrs trailing = label_ ([class_ "gap-1 flex items-center cursor-pointer text-textWeak"] <> attrs) do
+      faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 text-iconNeutral"
+      span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
+      span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
+      "filters"
+      trailing
+
     -- data-fullscreen=details|trace drives layout via tailwind.css; single-valued so
     -- "at most one fullscreen mode" holds by construction.
     sectionWrapper_ =
@@ -1553,11 +1544,7 @@ apiLogsPage page = do
           , alert = isJust page.alert
           , patternSelected = page.targetPattern
           , mobileExtra = Just do
-              label_ [class_ "gap-1 flex items-center cursor-pointer text-textWeak", Lucid.for_ "toggle-filters"] do
-                faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 text-iconNeutral"
-                span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
-                span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
-                "filters"
+              filtersLabel_ [Lucid.for_ "toggle-filters"] pass
               span_ [class_ "text-strokeWeak text-xs"] "·"
               rowCountDisplay_ "mobile" countText suffixText
           , parseError = page.parseError
@@ -1571,7 +1558,7 @@ apiLogsPage page = do
       div_ [id_ "page-summary-region"]
         $ if page.vizType == Just "sessions" || page.vizType == Just "patterns"
           then sessionsSummarySkeleton_
-          else div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full min-h-36 max-md:min-h-28 aspect-[10/1] max-md:aspect-auto max-md:flex-col"] do
+          else div_ [class_ chartRegionCls] do
             Widget.widget_ page.chartWidget
             div_ [class_ "flex-1 min-w-0 max-md:hidden"] $ Widget.widget_ page.latencyWidget
 
@@ -1606,9 +1593,7 @@ apiLogsPage page = do
                     if the event's key is 'Escape'
                       set my value to '' then trigger keyup
                     else
-                      show <div.facet-section-group/> in #{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()
-                      show <div.facet-section/> in #{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()
-                      show <div.facet-value/> in #{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()
+                      show <div.facet-section-group, div.facet-section, div.facet-value/> in #{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()
                   |]
             ]
         -- Facet values (~680KB) are lazy-loaded via HTMX on first intersect so
@@ -1632,12 +1617,8 @@ apiLogsPage page = do
 
     -- Filters toggle and row count, shown above the viz widget / trace / virtual table.
     rowCountHeader = div_ [class_ "flex gap-2 py-1 text-sm z-10 w-max bg-bgBase -mb-6 group-has-[#viz-patterns:checked]/pg:mb-0"] do
-      label_ [class_ "gap-1 flex items-center cursor-pointer text-textWeak"] do
-        faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 text-iconNeutral"
-        span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
-        span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
-        "filters"
-        input_
+      filtersLabel_ []
+        $ input_
           [ type_ "checkbox"
           , class_ "toggle-filters hidden"
           , id_ "toggle-filters"
@@ -1783,32 +1764,31 @@ apiLogsPage page = do
 -- (@kind=pattern@), plus a @hasMore@ flag for pagination.
 apiLogExpandH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders AE.Value)
 apiLogExpandH pid kindM keyM skipM queryM sinceM fromM toM = do
-  _ <- Projects.sessionAndProject pid
-  when (T.null $ maybeToMonoid keyM) $ throwError Servant.err400{Servant.errBody = "Missing key"}
-  expandKind <- case kindM of
-    Just "session" -> pure $ LogQueries.ExpandSession (maybeToMonoid keyM)
-    Just "pattern" -> pure $ LogQueries.ExpandPattern (maybeToMonoid keyM)
+  (authCtx, _, fromD, toD) <- logDataEnv pid sinceM fromM toM
+  let key = maybeToMonoid keyM
+  when (T.null key) $ throwError Servant.err400{Servant.errBody = "Missing key"}
+  -- Sessions render a trace tree (hence the child-span fetch and larger page);
+  -- patterns just show flat examples.
+  (expandKind, limitN) <- case kindM of
+    Just "session" -> pure (LogQueries.ExpandSession key, 100 :: Int)
+    Just "pattern" -> pure (LogQueries.ExpandPattern key, 20)
     _ -> throwError Servant.err400{Servant.errBody = "kind must be session or pattern"}
-
-  let isSession = case expandKind of LogQueries.ExpandSession _ -> True; LogQueries.ExpandPattern _ -> False
-      limitN = (if isSession then 100 else 20) :: Int
 
   queryAST <-
     either (\err -> throwError Servant.err400{Servant.errBody = encodeUtf8 $ "Invalid query: " <> err}) pure (parseQueryToAST (maybeToMonoid queryM))
 
-  now <- Time.currentTime
-  let (fromD, toD, _) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
-  authCtx <- Effectful.Reader.Static.ask @AuthContext
   (rows, cols) <- LogQueries.fetchEventExamples authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) expandKind (fromMaybe 0 skipM) (limitN + 1)
 
   let hasMore = V.length rows > limitN
       shown = if hasMore then V.take limitN rows else rows
       colIdxMap = listToIndexHashMap cols
-      alreadyLoadedIds = V.mapMaybe (\v -> lookupVecTextByKey v colIdxMap "id") shown
-  -- Only fetch child spans for sessions (trace tree view); patterns just show flat examples
-  let traceIds = V.fromList $ take 100 $ nubOrd $ mapMaybe (mfilter (not . T.null) . (\v -> lookupVecTextByKey v colIdxMap "trace_id")) $ V.toList shown
-      seedSpanIds = V.mapMaybe (\v -> lookupVecTextByKey v colIdxMap "latency_breakdown") shown
-  childSpansList <- bool (pure []) (LogQueries.selectChildSpansAndLogs pid [] traceIds seedSpanIds (fromD, toD) alreadyLoadedIds) isSession
+      colOf k v = lookupVecTextByKey v colIdxMap k
+      alreadyLoadedIds = V.mapMaybe (colOf "id") shown
+      traceIds = V.fromList $ take 100 $ nubOrd $ mapMaybe (mfilter (not . T.null) . colOf "trace_id") $ V.toList shown
+      seedSpanIds = V.mapMaybe (colOf "latency_breakdown") shown
+  childSpansList <- case expandKind of
+    LogQueries.ExpandSession _ -> LogQueries.selectChildSpansAndLogs pid [] traceIds seedSpanIds (fromD, toD) alreadyLoadedIds
+    LogQueries.ExpandPattern _ -> pure []
   let rawLogsData = shown <> V.fromList childSpansList
       (logsData, traces) = buildTraceTree colIdxMap (V.length shown) rawLogsData
 

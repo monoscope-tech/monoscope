@@ -3,6 +3,7 @@ module Pages.Endpoints (apiCatalogH, HostEventsVM (..), endpointListGetH, Catalo
 import Data.Aeson qualified as AE
 import Data.Cache qualified as Cache
 import Data.Default (def)
+import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Time.LocalTime (ZonedTime, zonedTimeToUTC)
@@ -33,24 +34,14 @@ apiCatalogH pid sortM timeFilter currentTabM periodM skipM filterTabM statsM = d
   (_, project, bw) <- mkPageCtx pid
 
   -- Legacy request_type=… kept alongside the unified ?filter=… for shared links.
-  let normTab t = if t `elem` ["Incoming", "Outgoing", "Archived"] then Just t else Nothing
+  let normTab = guarded (`elem` ["Incoming", "Outgoing", "Archived"])
       currentTab = fromMaybe "Incoming" $ asum $ map (>>= normTab) [filterTabM, currentTabM]
       currentSort = fromMaybe "-events" sortM
       filterV = fromMaybe "24H" timeFilter
       period = fromMaybe "24h" periodM
       showArchived = currentTab == "Archived"
-      outgoingM :: Maybe Bool
-      outgoingM = case currentTab of
-        "Outgoing" -> Just True
-        "Incoming" -> Just False
-        _ -> Nothing
-      -- Map new sort format to old format for DB query
-      sortV = case currentSort of
-        "-events" -> "events"
-        "+events" -> "events"
-        "-name" -> "name"
-        "+name" -> "name"
-        _ -> "events"
+      outgoingM = directionOf currentTab
+      sortV = bool "events" "name" (currentSort `elem` ["-name", "+name"])
 
   appCtx <- ask @AuthContext
   -- The host list is a cheap Postgres read; the per-host counts and sparkline scan a
@@ -80,6 +71,9 @@ apiCatalogH pid sortM timeFilter currentTabM periodM skipM filterTabM statsM = d
           then BulkAction{icon = Just "rotate-left", title = "Unarchive", uri = "/p/" <> pid.toText <> "/api_catalog/bulk_action/unarchive"}
           else BulkAction{icon = Just "archive", title = "Archive", uri = "/p/" <> pid.toText <> "/api_catalog/bulk_action/archive?request_type=" <> currentTab}
       hostsVM = V.fromList $ map (\events -> HostEventsVM{events, currTime, statsMode}) hostsAndEvents
+      cols = catalogColumns pid baseUrl period
+      hostRowId = Just \(vm :: HostEventsVM) -> vm.events.host
+      hostRowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"]
       tableActions =
         TableHeaderActions
           { baseUrl
@@ -93,15 +87,15 @@ apiCatalogH pid sortM timeFilter currentTabM periodM skipM filterTabM statsM = d
           , activeFilters = []
           , headerExtra = Nothing
           }
-  let catalogTable =
+      catalogTable =
         Table
           { config = def{elemID = "apiCatalogForm", containerId = Just "apiCatalogContainer", addPadding = True, renderAsTable = True, bulkActionsInHeader = Just 0, refreshOnEvent = Just ("apiCatalogChanged", statsUrl), deferredUrl = statsUrl <$ guard (statsMode == Endpoints.ShellOnly)}
-          , columns = catalogColumns pid currentTab baseUrl period
+          , columns = cols
           , rows = hostsVM
           , features =
               def
-                { rowId = Just (.events.host)
-                , rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"]
+                { rowId = hostRowId
+                , rowAttrs = hostRowAttrs
                 , bulkActions = [bulkActionItem]
                 , search = Just ClientSide
                 , tableHeaderActions = Just tableActions
@@ -119,11 +113,10 @@ apiCatalogH pid sortM timeFilter currentTabM periodM skipM filterTabM statsM = d
                         }
                 }
           }
-
-  let bwconf =
+      bwconf =
         bw
           { pageTitle = "API Catalog"
-          , freeTierStatus = freeTierStatus
+          , freeTierStatus
           , navTabs =
               Just
                 $ toHtml
@@ -138,9 +131,9 @@ apiCatalogH pid sortM timeFilter currentTabM periodM skipM filterTabM statsM = d
                       ]
                   }
           }
-  case skipM of
-    Just _ -> addRespHeaders $ CatalogListRows $ TableRows{columns = catalogColumns pid currentTab baseUrl period, rows = hostsVM, emptyState = Nothing, renderAsTable = True, rowId = Just (.events.host), rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"], pagination = Nothing}
-    _ -> addRespHeaders $ CatalogListPage $ PageCtx bwconf catalogTable
+  addRespHeaders case skipM of
+    Just _ -> CatalogListRows TableRows{columns = cols, rows = hostsVM, emptyState = Nothing, renderAsTable = True, rowId = hostRowId, rowAttrs = hostRowAttrs, pagination = Nothing}
+    Nothing -> CatalogListPage $ PageCtx bwconf catalogTable
 
 
 -- | A catalog row: its traffic, the clock the "last seen" column renders against, and
@@ -152,9 +145,9 @@ data HostEventsVM = HostEventsVM
   }
 
 
-catalogColumns :: Projects.ProjectId -> Text -> Text -> Text -> [Column HostEventsVM]
-catalogColumns pid currentTab baseUrl period =
-  [ col "Dependency" (renderCatalogMainCol pid currentTab) & withAttrs [class_ "min-w-0 max-w-0 w-full"]
+catalogColumns :: Projects.ProjectId -> Text -> Text -> [Column HostEventsVM]
+catalogColumns pid baseUrl period =
+  [ col "Dependency" (renderCatalogMainCol pid) & withAttrs [class_ "min-w-0 max-w-0 w-full"]
   , col ("Events (" <> period <> ")") (\vm -> statCell_ vm.statsMode $ eventsCountCell_ (fromIntegral vm.events.eventCount)) & withAttrs [class_ "w-24 max-md:hidden"]
   , col "Last Seen" (\vm -> statCell_ vm.statsMode $ lastSeenCell_ vm.currTime vm.events.last_seen) & withAttrs [class_ "w-24 max-md:hidden"]
   , col "Activity" (\vm -> statCell_ vm.statsMode $ activityCell_ vm.events.activityBuckets) & withAttrs [class_ "w-40 max-md:hidden"] & withColHeaderExtra (periodToggle_ baseUrl "apiCatalogContainer" period)
@@ -165,8 +158,18 @@ logExplorerHref :: Projects.ProjectId -> Text -> Text
 logExplorerHref pid q = "/p/" <> pid.toText <> "/log_explorer?query=" <> toUriStr q
 
 
-servicesBadges_ :: Text -> Text -> (Text -> Text) -> [Text] -> Html ()
-servicesBadges_ sourceLabel kindVal badgeHref svcs =
+-- | Parse a request-direction tab label into the `outgoing` flag it filters on.
+directionOf :: Text -> Maybe Bool
+directionOf = (`lookup` [("Outgoing", True), ("Incoming", False)])
+
+
+-- | The two labels that vary by request direction: (kindVal, sourceLabel).
+directionLabels :: Bool -> (Text, Text)
+directionLabels outgoing = (bool "server" "client" outgoing, bool "Served by:" "Called by:" outgoing)
+
+
+servicesBadges_ :: Text -> (Text -> Text) -> [Text] -> Html ()
+servicesBadges_ sourceLabel badgeHref svcs =
   unless (null svcs) $ div_ [class_ "flex items-center gap-1 flex-wrap min-w-0"] do
     span_ [class_ "text-xs text-textWeak shrink-0"] $ toHtml sourceLabel
     forM_ svcs \svc ->
@@ -178,28 +181,22 @@ servicesBadges_ sourceLabel kindVal badgeHref svcs =
         $ toHtml svc
 
 
-renderCatalogMainCol :: Projects.ProjectId -> Text -> HostEventsVM -> Html ()
-renderCatalogMainCol pid _currentTab vm = do
+renderCatalogMainCol :: Projects.ProjectId -> HostEventsVM -> Html ()
+renderCatalogMainCol pid vm = do
   let he = vm.events
-  let svcs = V.toList he.services
       outgoing = he.outgoing
       reqTypeLabel = bool "Incoming" "Outgoing" outgoing :: Text
-      sourceLabel = bool "Served by:" "Called by:" outgoing
-      kindVal = bool "server" "client" outgoing
-      (arrowIcon, arrowClass, arrowTip) =
-        if outgoing
-          then ("arrow-up-right", "h-3 w-3 fill-iconBrand shrink-0", "Outgoing request" :: Text)
-          else ("arrow-down-left", "h-3 w-3 fill-iconNeutral shrink-0", "Incoming request" :: Text)
+      (kindVal, sourceLabel) = directionLabels outgoing
+      (arrowIcon, arrowClass) = bool ("arrow-down-left", "h-3 w-3 fill-iconNeutral shrink-0") ("arrow-up-right", "h-3 w-3 fill-iconBrand shrink-0") outgoing
   div_ [class_ "flex flex-col gap-1 min-w-0"] do
     div_ [class_ "flex items-center gap-2 min-w-0"] do
-      span_ [class_ "tooltip tooltip-right shrink-0 inline-flex", term "data-tip" arrowTip] $ faSprite_ arrowIcon "solid" arrowClass
+      span_ [class_ "tooltip tooltip-right shrink-0 inline-flex", term "data-tip" $ reqTypeLabel <> " request"] $ faSprite_ arrowIcon "solid" arrowClass
       a_ ([href_ $ "/p/" <> pid.toText <> "/endpoints?host=" <> he.host <> "&request_type=" <> reqTypeLabel, class_ "font-medium text-textStrong hover:text-textBrand transition-colors truncate min-w-0"] <> navTabAttrs) $ toHtml (T.replace "http://" "" $ T.replace "https://" "" he.host)
       a_ ([href_ $ logExplorerHref pid $ "attributes.net.host.name==\"" <> he.host <> "\"", class_ "shrink-0 text-xs text-textBrand hover:text-textStrong transition-colors"] <> navTabAttrs) "View logs"
     servicesBadges_
       sourceLabel
-      kindVal
       (\svc -> logExplorerHref pid $ "resource.service.name==\"" <> svc <> "\" AND kind==\"" <> kindVal <> "\"")
-      svcs
+      (V.toList he.services)
 
 
 data CatalogList = CatalogListPage (PageCtx (Table HostEventsVM)) | CatalogListRows (TableRows HostEventsVM)
@@ -227,26 +224,19 @@ endpointListGetH
   -> Maybe Text
   -> Maybe Text
   -> ATAuthCtx (RespHeaders EndpointRequestStatsVM)
-endpointListGetH pid pageM perPageM layoutM filterTM hostM currentTabM sortM periodM hxRequestM hxBoostedM hxCurrentURL loadMoreM searchM = do
+endpointListGetH pid pageM perPageM _layoutM filterTM hostM currentTabM sortM periodM _hxRequestM _hxBoostedM _hxCurrentURL loadMoreM searchM = do
   (_, project, bw) <- mkPageCtx pid
-  let (archived, currentFilterTab) = case filterTM of
-        Just "Archived" -> (True, "Archived")
-        _ -> (False, "Endpoints")
-
-  let host = maybeToMonoid $ hostM >>= \t -> if t == "" then Nothing else Just t
-      page = fromMaybe 0 $ readMaybe (toString $ fromMaybe "" pageM)
-      perPage = max 1 $ min 200 $ fromMaybe 25 $ readMaybe (toString $ fromMaybe "" perPageM)
-      hostParam = hostM >>= \h -> if h == "" then Nothing else Just h
-      isOutgoing = fromMaybe "Incoming" currentTabM == "Outgoing"
+  let archived = filterTM == Just "Archived"
+      currentFilterTab = bool "Endpoints" "Archived" archived
+      hostParam = guarded (/= "") =<< hostM
+      host = maybeToMonoid hostParam
+      page = fromMaybe 0 $ readMaybe . toString =<< pageM
+      perPage = max 1 $ min 200 $ fromMaybe 25 $ readMaybe . toString =<< perPageM
+      currentTab = fromMaybe "Incoming" currentTabM
+      isOutgoing = currentTab == "Outgoing"
       currentSort = fromMaybe "-events" sortM
       period = fromMaybe "24h" periodM
-      -- Map new sort format to old format for DB query
-      sortV = case currentSort of
-        "-events" -> Just "events"
-        "+events" -> Just "events"
-        "-name" -> Just "name"
-        "+name" -> Just "name"
-        _ -> Just "events"
+      sortV = Just $ bool "events" "name" (currentSort `elem` ["-name", "+name"])
   useTf <- (.env.enableTimefusionReads) <$> ask @AuthContext
   (endpointStats, totalCount) <-
     concurrently
@@ -254,13 +244,12 @@ endpointListGetH pid pageM perPageM layoutM filterTM hostM currentTabM sortM per
       (Endpoints.countEndpointsForHost pid isOutgoing archived hostParam searchM)
   freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
 
-  let currentTab = fromMaybe "Incoming" currentTabM
-      baseUrl = [PyF.fmt|/p/{pid.toText}/endpoints?filter={currentFilterTab}&request_type={currentTab}&host={host}&sort={currentSort}&period={period}|]
-  let bwconf =
+  let baseUrl = [PyF.fmt|/p/{pid.toText}/endpoints?filter={currentFilterTab}&request_type={currentTab}&host={host}&sort={currentSort}&period={period}|]
+      bwconf =
         bw
           { prePageTitle = Just "API Catalog"
           , pageTitle = "Endpoints for " <> host
-          , freeTierStatus = freeTierStatus
+          , freeTierStatus
           , navTabs =
               Just
                 $ toHtml
@@ -276,7 +265,11 @@ endpointListGetH pid pageM perPageM layoutM filterTM hostM currentTabM sortM per
           }
 
   currTime <- Time.currentTime
-  let endpReqVM = V.map (EnpReqStatsVM False currTime period) endpointStats
+  let endpReqVM = V.map (EnpReqStatsVM currTime period) endpointStats
+      cols = endpointColumns pid baseUrl period currentTab
+      endpRowId = Just \(EnpReqStatsVM _ _ enp) -> enp.endpointHash
+      endpRowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"]
+      pagination' = Just Pagination{currentPage = page, perPage, totalCount, baseUrl, targetId = "endpointsListContainer"}
       tableActions =
         TableHeaderActions
           { baseUrl
@@ -290,19 +283,19 @@ endpointListGetH pid pageM perPageM layoutM filterTM hostM currentTabM sortM per
           , activeFilters = []
           , headerExtra = Nothing
           }
-  let endpointsTable =
+      endpointsTable =
         Table
           { config = def{elemID = "endpointsForm", containerId = Just "endpointsListContainer", addPadding = True, renderAsTable = True, bulkActionsInHeader = Just 0, refreshOnEvent = Just ("endpointsListChanged", baseUrl)}
-          , columns = endpointColumns pid baseUrl period currentTab
+          , columns = cols
           , rows = endpReqVM
           , features =
               def
-                { rowId = Just \(EnpReqStatsVM _ _ _ enp) -> enp.endpointHash
-                , rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"]
+                { rowId = endpRowId
+                , rowAttrs = endpRowAttrs
                 , bulkActions = [BulkAction{icon = Just "archive", title = "Archive", uri = "/p/" <> pid.toText <> "/endpoints/bulk_action/archive"}]
                 , search = Just (ServerSide baseUrl)
                 , tableHeaderActions = Just tableActions
-                , pagination = Just Pagination{currentPage = page, perPage = perPage, totalCount = totalCount, baseUrl = baseUrl, targetId = "endpointsListContainer"}
+                , pagination = pagination'
                 , zeroState =
                     Just
                       $ ZeroState
@@ -312,27 +305,25 @@ endpointListGetH pid pageM perPageM layoutM filterTM hostM currentTabM sortM per
                         , actionText = "View SDK setup guides"
                         , destination = Right "https://monoscope.tech/docs/sdks/"
                         }
-                , header = Just $ div_ [class_ "mb-4"] $ case hostM of
-                    Just h -> span_ [] "Endpoints for: " >> span_ [class_ "text-textBrand font-bold"] (toHtml h)
-                    Nothing -> "Endpoints"
+                , header = Just $ div_ [class_ "mb-4"] $ maybe "Endpoints" (\h -> span_ [] "Endpoints for: " >> span_ [class_ "text-textBrand font-bold"] (toHtml h)) hostM
                 }
           }
-  let endpRowId = Just \(EnpReqStatsVM _ _ _ enp) -> enp.endpointHash
-      endpRowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"]
-      rowsOnly = EndpointsListRows $ TableRows{columns = endpointColumns pid baseUrl period currentTab, rows = endpReqVM, emptyState = Nothing, renderAsTable = True, rowId = endpRowId, rowAttrs = endpRowAttrs, pagination = Just Pagination{currentPage = page, perPage = perPage, totalCount = totalCount, baseUrl = baseUrl, targetId = "endpointsListContainer"}}
-  addRespHeaders $ if isJust loadMoreM || isJust searchM then rowsOnly else EndpointsListPage $ PageCtx bwconf endpointsTable
+  addRespHeaders
+    $ if isJust loadMoreM || isJust searchM
+      then EndpointsListRows TableRows{columns = cols, rows = endpReqVM, emptyState = Nothing, renderAsTable = True, rowId = endpRowId, rowAttrs = endpRowAttrs, pagination = pagination'}
+      else EndpointsListPage $ PageCtx bwconf endpointsTable
 
 
-data EnpReqStatsVM = EnpReqStatsVM Bool UTCTime Text Endpoints.EndpointRequestStats
+data EnpReqStatsVM = EnpReqStatsVM UTCTime Text Endpoints.EndpointRequestStats
   deriving stock (Show)
 
 
 endpointColumns :: Projects.ProjectId -> Text -> Text -> Text -> [Column EnpReqStatsVM]
 endpointColumns pid baseUrl period currentTab =
   [ col "Endpoint" (renderEndpointMainCol pid currentTab) & withAttrs [class_ "min-w-0 max-w-0 w-full"]
-  , col ("Events (" <> period <> ")") (\(EnpReqStatsVM _ _ _ enp) -> eventsCountCell_ enp.totalRequests) & withAttrs [class_ "w-24 max-md:hidden"]
-  , col "Last Seen" (\(EnpReqStatsVM _ currTime _ enp) -> lastSeenCell_ currTime enp.lastSeen) & withAttrs [class_ "w-24 max-md:hidden"]
-  , col "Activity" (\(EnpReqStatsVM _ _ _ enp) -> activityCell_ enp.activityBuckets) & withAttrs [class_ "w-40 max-md:hidden"] & withColHeaderExtra (periodToggle_ baseUrl "endpointsListContainer" period)
+  , col ("Events (" <> period <> ")") (\(EnpReqStatsVM _ _ enp) -> eventsCountCell_ enp.totalRequests) & withAttrs [class_ "w-24 max-md:hidden"]
+  , col "Last Seen" (\(EnpReqStatsVM currTime _ enp) -> lastSeenCell_ currTime enp.lastSeen) & withAttrs [class_ "w-24 max-md:hidden"]
+  , col "Activity" (\(EnpReqStatsVM _ _ enp) -> activityCell_ enp.activityBuckets) & withAttrs [class_ "w-40 max-md:hidden"] & withColHeaderExtra (periodToggle_ baseUrl "endpointsListContainer" period)
   ]
 
 
@@ -347,12 +338,12 @@ statCell_ Endpoints.ShellOnly _ = span_ [class_ "block h-4 w-12 rounded bg-fillW
 
 eventsCountCell_ :: Int -> Html ()
 eventsCountCell_ n =
-  span_ [class_ $ "tabular-nums font-medium " <> style] $ toHtml $ formatWithCommas (fromIntegral n)
+  span_ [class_ $ "tabular-nums font-medium text-sm " <> color] $ toHtml $ formatWithCommas (fromIntegral n)
   where
-    style
-      | n >= 100 = "text-sm text-fillError-strong"
-      | n >= 10 = "text-sm text-fillWarning-strong"
-      | otherwise = "text-sm text-textStrong"
+    color
+      | n >= 100 = "text-fillError-strong"
+      | n >= 10 = "text-fillWarning-strong"
+      | otherwise = "text-textStrong"
 
 
 lastSeenCell_ :: UTCTime -> Maybe ZonedTime -> Html ()
@@ -366,13 +357,11 @@ activityCell_ = sparkline_ . V.toList
 
 
 renderEndpointMainCol :: Projects.ProjectId -> Text -> EnpReqStatsVM -> Html ()
-renderEndpointMainCol pid currentTab (EnpReqStatsVM _ _ _ enp) = do
+renderEndpointMainCol pid currentTab (EnpReqStatsVM _ _ enp) = do
   let outgoing = currentTab == "Outgoing"
       hostAttr = bool "attributes.net.host.name" "attributes.server.address" outgoing
-      kindVal = bool "server" "client" outgoing :: Text
-      sourceLabel = bool "Served by:" "Called by:" outgoing
+      (kindVal, sourceLabel) = directionLabels outgoing
       q = hostAttr <> "==\"" <> enp.host <> "\" AND kind==\"" <> kindVal <> "\" AND attributes.http.route==\"" <> enp.urlPath <> "\" AND attributes.http.request.method==\"" <> enp.method <> "\""
-      svcs = V.toList enp.services
   div_ [class_ "flex flex-col gap-1 min-w-0"] do
     div_ [class_ "flex items-center gap-2 min-w-0"] do
       a_ ([class_ "inline-flex items-center gap-1.5 font-medium text-textStrong hover:text-textBrand transition-colors truncate min-w-0", href_ ("/p/" <> pid.toText <> "/endpoints/details?var-endpointHash=" <> enp.endpointHash <> "&var-host=" <> enp.host)] <> navTabAttrs) $ do
@@ -381,9 +370,8 @@ renderEndpointMainCol pid currentTab (EnpReqStatsVM _ _ _ enp) = do
       a_ ([class_ "shrink-0 text-xs text-textBrand hover:text-textStrong transition-colors", href_ (logExplorerHref pid q)] <> navTabAttrs) "View logs"
     servicesBadges_
       sourceLabel
-      kindVal
       (\svc -> logExplorerHref pid $ "resource.service.name==\"" <> svc <> "\" AND kind==\"" <> kindVal <> "\" AND attributes.http.route==\"" <> enp.urlPath <> "\"")
-      svcs
+      (V.toList enp.services)
 
 
 data EndpointRequestStatsVM
@@ -421,46 +409,26 @@ apiCatalogBulkActionH pid action currentTabM items = do
   (sess, _project) <- Projects.sessionAndProject pid
   -- request_type=Incoming/Outgoing scopes the action; absent (e.g. on the
   -- Archived tab) means apply to whichever direction the host carries.
-  let outgoingM = case currentTabM of
-        Just "Outgoing" -> Just True
-        Just "Incoming" -> Just False
-        _ -> Nothing
+  let outgoingM = directionOf =<< currentTabM
       requested = length items.itemId
+      logCtx extra = AE.object $ ["project_id" AE..= pid.toText, "action" AE..= action, "requested_count" AE..= requested] <> extra
   if requested == 0
-    then do
-      addErrorToast "No hosts selected" Nothing
-      addRespHeaders CatalogBulkDone
+    then addErrorToast "No hosts selected" Nothing
     else do
       affected <- case action of
         "archive" -> Endpoints.archiveHosts pid outgoingM (Just sess.user.id) items.itemId
         "unarchive" -> Endpoints.unarchiveHosts pid outgoingM items.itemId
         _ -> throwError err400{errBody = "unhandled api_catalog bulk action: " <> encodeUtf8 action}
       let touched = fromIntegral affected :: Int
-          verb = action <> "d"
-          noun = if requested == 1 then "host" else "hosts"
+          noun = bool "hosts" "host" (requested == 1)
       if touched == 0
         then do
-          logAttention "api_catalog bulk action affected 0 rows"
-            $ AE.object
-              [ "project_id" AE..= pid.toText
-              , "action" AE..= action
-              , "requested_count" AE..= requested
-              , "outgoing" AE..= outgoingM
-              ]
+          logAttention "api_catalog bulk action affected 0 rows" $ logCtx ["outgoing" AE..= outgoingM]
           addErrorToast ("Could not " <> action <> " " <> noun) (Just "Already in that state, or rows were removed")
         else do
           when (touched < requested)
             $ logAttention "api_catalog bulk action partially applied"
-            $ AE.object
-              [ "project_id" AE..= pid.toText
-              , "action" AE..= action
-              , "requested_count" AE..= requested
-              , "affected_count" AE..= touched
-              ]
-          let summary =
-                if touched == requested
-                  then verb <> " " <> show touched <> " " <> noun
-                  else verb <> " " <> show touched <> " of " <> show requested <> " " <> noun
-          addSuccessToast summary Nothing
+            $ logCtx ["affected_count" AE..= touched]
+          addSuccessToast (action <> "d " <> show touched <> bool (" of " <> show requested) "" (touched == requested) <> " " <> noun) Nothing
           addTriggerEvent "apiCatalogChanged" AE.Null
-      addRespHeaders CatalogBulkDone
+  addRespHeaders CatalogBulkDone

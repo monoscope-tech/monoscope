@@ -41,7 +41,6 @@ module Models.Apis.LogPatterns (
 )
 where
 
-import Control.Lens (view, _1, _2, _3, _4, _5, _6)
 import Data.Aeson qualified as AE
 import Data.Effectful.Hasql qualified as Hasql
 import Data.List (lookup)
@@ -162,9 +161,7 @@ getLogPatternTexts pid sourceField = Hasql.interp [HI.sql| SELECT LEFT(log_patte
 getLogPatternTextsByService :: DB es => Projects.ProjectId -> Text -> Text -> Eff es ([Text], Maybe UTCTime)
 getLogPatternTextsByService pid sourceField svcName = do
   rows :: [(Text, Maybe UTCTime)] <- Hasql.interp [HI.sql| SELECT LEFT(log_pattern, 2000), last_seen_at FROM apis.log_patterns WHERE project_id = #{pid} AND source_field = #{sourceField} AND service_name = #{svcName} AND canonical_id IS NULL ORDER BY last_seen_at DESC NULLS LAST LIMIT 5000|]
-  let texts = map (view _1) rows
-      maxSeen = viaNonEmpty head [t | (_, Just t) <- rows]
-  pure (texts, maxSeen)
+  pure (fst <$> rows, asum (snd <$> rows)) -- ordered DESC NULLS LAST, so the first non-null is the max
 
 
 -- | Get log pattern by unique key (project_id, source_field, pattern_hash)
@@ -249,12 +246,7 @@ updateBaselineBatch pid rows
   | V.null rows = pure 0
   | otherwise = do
       now <- Time.currentTime
-      let srcFields = V.map (view _1) rows
-          hashes = V.map (view _2) rows
-          states = V.map (view _3) rows
-          means = V.map (view _4) rows
-          mads = V.map (view _5) rows
-          samples = V.map (view _6) rows
+      let (srcFields, hashes, states, means, mads, samples) = V.unzip6 rows
       Hasql.interpExecute
         [HI.sql|
               UPDATE apis.log_patterns lp
@@ -272,16 +264,11 @@ updateBaselineBatch pid rows
 -- Pre-merges rows with the same (projectId, sourceField, hash) to avoid
 -- "ON CONFLICT DO UPDATE command cannot affect row a second time".
 upsertLogPatternBatch :: (DB es, Time :> es) => [UpsertPattern] -> Eff es Int64
-upsertLogPatternBatch [] = pure 0
 upsertLogPatternBatch ups = do
   now <- Time.currentTime
-  sum
-    <$> forM
-      (dedup ups)
-      ( \u' -> do
-          let (u :: UpsertPattern) = cap u'
-          Hasql.interpExecute
-            [HI.sql| INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash, source_field, service_name, log_level, trace_id, sample_message, occurrence_count, last_seen_at, is_error)
+  fmap sum $ forM (cap <$> dedup ups) \u ->
+    Hasql.interpExecute
+      [HI.sql| INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash, source_field, service_name, log_level, trace_id, sample_message, occurrence_count, last_seen_at, is_error)
         VALUES (#{u.projectId}, #{u.logPattern}, #{u.hash}, #{u.sourceField}, #{u.serviceName}, #{u.logLevel}, #{u.traceId}, #{u.sampleMessage}, #{u.eventCount}, #{now}, #{u.isError})
         ON CONFLICT (project_id, source_field, pattern_hash) DO UPDATE SET
           last_seen_at = EXCLUDED.last_seen_at,
@@ -292,12 +279,12 @@ upsertLogPatternBatch ups = do
           trace_id = COALESCE(EXCLUDED.trace_id, apis.log_patterns.trace_id),
           is_error = apis.log_patterns.is_error OR EXCLUDED.is_error
   |]
-      )
   where
     maxTextLen = 32000
-    cap u = u{logPattern = T.take maxTextLen u.logPattern, sampleMessage = T.take maxTextLen <$> u.sampleMessage} :: UpsertPattern
-    dedup = Map.elems . foldl' merge Map.empty
-    merge acc u = Map.insertWith mergeUp (u.projectId, u.sourceField, u.hash) u acc
+    cap :: UpsertPattern -> UpsertPattern
+    cap u = u{logPattern = T.take maxTextLen u.logPattern, sampleMessage = T.take maxTextLen <$> u.sampleMessage}
+    dedup :: [UpsertPattern] -> [UpsertPattern]
+    dedup = Map.elems . Map.fromListWith mergeUp . map (\u -> ((u.projectId, u.sourceField, u.hash), u))
     mergeUp new old = old{eventCount = old.eventCount + new.eventCount, sampleMessage = old.sampleMessage <|> new.sampleMessage, serviceName = old.serviceName <|> new.serviceName, logLevel = old.logLevel <|> new.logLevel, traceId = old.traceId <|> new.traceId, isError = old.isError || new.isError}
 
 
@@ -312,18 +299,13 @@ upsertHourlyStat pid sourceField patHash hourBucket count =
 
 -- | Batch version of upsertHourlyStat using executeMany.
 upsertHourlyStatBatch :: DB es => [(Projects.ProjectId, Text, Text, UTCTime, Int64)] -> Eff es Int64
-upsertHourlyStatBatch [] = pure 0
 upsertHourlyStatBatch rows =
-  sum
-    <$> forM
-      (Map.toList deduped)
-      ( \((pid, sf, ph, hb), ec) ->
-          Hasql.interpExecute
-            [HI.sql| INSERT INTO apis.log_pattern_hourly_stats (project_id, source_field, pattern_hash, hour_bucket, event_count)
+  fmap sum $ forM (Map.toList deduped) \((pid, sf, ph, hb), ec) ->
+    Hasql.interpExecute
+      [HI.sql| INSERT INTO apis.log_pattern_hourly_stats (project_id, source_field, pattern_hash, hour_bucket, event_count)
         VALUES (#{pid}, #{sf}, #{ph}, #{hb}, #{ec})
         ON CONFLICT (project_id, source_field, pattern_hash, hour_bucket)
         DO UPDATE SET event_count = apis.log_pattern_hourly_stats.event_count + EXCLUDED.event_count |]
-      )
   where
     deduped = Map.fromListWith (+) [((pid, sf, ph, truncateHour hb), ec) | (pid, sf, ph, hb, ec) <- rows]
 
@@ -343,10 +325,9 @@ data BatchPatternStats = BatchPatternStats
 
 
 getBatchPatternStats :: DB es => Projects.ProjectId -> UTCTime -> Int -> Eff es [BatchPatternStats]
-getBatchPatternStats pid now hoursBack = Hasql.interp q
-  where
-    q =
-      [HI.sql|
+getBatchPatternStats pid now hoursBack =
+  Hasql.interp
+    [HI.sql|
         WITH hourly_counts AS (
           SELECT source_field, pattern_hash, hour_bucket, event_count FROM apis.log_pattern_hourly_stats
           WHERE project_id = #{pid} AND hour_bucket >= #{now}::timestamptz - INTERVAL '1 hour' * #{hoursBack}
@@ -403,10 +384,8 @@ data LogPatternWithRate = LogPatternWithRate
 -- Scale ceiling: established patterns grow slowly (~weeks); expect <1k per project at steady state.
 getPatternsWithCurrentRates :: DB es => Projects.ProjectId -> UTCTime -> Eff es [LogPatternWithRate]
 getPatternsWithCurrentRates pid now =
-  Hasql.interp q
-  where
-    q =
-      [HI.sql|
+  Hasql.interp
+    [HI.sql|
         SELECT lp.id, lp.project_id, LEFT(lp.log_pattern, 2000), lp.pattern_hash, lp.source_field,
           lp.service_name, lp.log_level, LEFT(lp.sample_message, 2000),
           lp.baseline_state, lp.baseline_volume_hourly_mean, lp.baseline_volume_hourly_mad,

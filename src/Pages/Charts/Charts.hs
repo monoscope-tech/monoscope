@@ -6,7 +6,6 @@ import Control.Exception.Annotated (checkpoint, try)
 import Data.Aeson qualified as AE
 import Data.Annotation (toAnnotation)
 import Data.Default
-import Data.List qualified as L (maximum)
 import Data.Map.Strict qualified as M
 import Data.Pool (withResource)
 import Data.Time (UTCTime, addUTCTime)
@@ -14,7 +13,7 @@ import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Tuple.Extra (fst3, snd3, thd3)
 import Data.Vector qualified as V
 import Data.Vector.Algorithms.Intro qualified as VA
-import Database.PostgreSQL.Simple (SomePostgreSqlException, query_)
+import Database.PostgreSQL.Simple (FromRow, SomePostgreSqlException, query_)
 import Database.PostgreSQL.Simple.Types (Only (..), Query (Query), fromOnly)
 import Effectful (Eff, IOE, (:>))
 import Effectful.Error.Static (Error, throwError)
@@ -61,23 +60,19 @@ pivot' rows
        in (headers, V.fromList ngrouped, totalSum, rate)
 
 
--- Helper to convert from Double timestamp to Int timestamp tuples
-
 transform :: V.Vector Text -> V.Vector (Int, Text, Double) -> V.Vector (Maybe Double)
 transform fields tuples =
-  V.cons (Just timestamp) (V.map getValue fields)
+  V.cons (Just timestamp) (V.map (\field -> thd3 <$> V.find ((== field) . snd3) tuples) fields)
   where
-    getValue field = V.find (\(_, b, _) -> b == field) tuples >>= \(_, _, a) -> Just a
-    timestamp = fromIntegral $ maybe 0 fst3 (V.find (const True) tuples)
+    timestamp = fromIntegral $ maybe 0 fst3 (tuples V.!? 0)
 
 
 statsTriple :: V.Vector (Int, Text, Double) -> MetricsStats
 statsTriple v
-  | V.null v = MetricsStats 0 0 0 0 0 0 0
+  | V.null v = def
   | otherwise = MetricsStats mn mx tot cnt (tot / fromIntegral cnt) mode maxGroupSum
   where
-    -- Extract the Double values from each tuple
-    doubles = V.map thd3 v
+    d0 = thd3 $ V.head v
 
     (!mn, !mx, !tot, !cnt, !freq, !timestampMap) =
       V.foldl'
@@ -90,23 +85,13 @@ statsTriple v
             , M.insertWith (+) ts x tsMap
             )
         )
-        (V.head doubles, V.head doubles, 0, 0, M.empty, M.empty)
+        (d0, d0, 0, 0, M.empty, M.empty)
         v
 
-    -- Find the maximum of the grouped sums
-    maxGroupSum =
-      if M.null timestampMap
-        then 0
-        else L.maximum $ M.elems timestampMap
+    maxGroupSum = fromMaybe 0 $ viaNonEmpty (\(x :| xs) -> foldl' max x xs) (M.elems timestampMap)
 
-    mode =
-      fst
-        $ M.foldlWithKey'
-          ( \acc@(_, cnt') k c ->
-              if c > cnt' then (k, c) else acc
-          )
-          (V.head doubles, 0)
-          freq
+    -- first (smallest) value wins ties, hence the strict `>`
+    mode = fst $ M.foldlWithKey' (\acc@(_, cnt') k c -> if c > cnt' then (k, c) else acc) (d0, 0) freq
 
 
 type M = Maybe
@@ -118,15 +103,8 @@ sourceTable = \case
   _ -> "otel_logs_and_spans"
 
 
--- Helper function: converts Just "" to Nothing.
-nonNull :: Maybe Text -> Maybe Text
-nonNull Nothing = Nothing
-nonNull (Just "") = Nothing
-nonNull x = x
-
-
 queryMetrics :: (DB es, Effectful.Error.Static.Error ServerError :> es, Effectful.Reader.Static.Reader AuthContext :> es, Log :> es, Time.Time :> es, Tracing :> es) => M Text -> M DataType -> M Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> [(Text, Maybe Text)] -> Eff es MetricsData
-queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (nonNull -> querySQLM) (nonNull -> sinceM) (nonNull -> fromM) (nonNull -> toM) (nonNull -> sourceM) allParams = do
+queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (Utils.nonEmptyT -> queryM) (Utils.nonEmptyT -> querySQLM) (Utils.nonEmptyT -> sinceM) (Utils.nonEmptyT -> fromM) (Utils.nonEmptyT -> toM) (Utils.nonEmptyT -> sourceM) allParams = do
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   now <- Time.currentTime
   -- project_id is required for every query path; a missing one is a malformed request,
@@ -136,21 +114,19 @@ queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (
   let mappngSQL = variablePresets pid.toText fromD toD allParams now
       mappngKQL = variablePresetsKQL pid.toText fromD toD allParams now
   let parseQuery q = either (\err -> throwError err400{errBody = encodeUtf8 $ "Invalid query: " <> err}) pure (parseQueryToAST $ replacePlaceholders mappngKQL q)
+  let source = parseMaybe pSource =<< sourceM
+  queryAST <-
+    checkpoint (toAnnotation ("queryMetrics", queryM))
+      $ parseQuery
+      $ maybeToMonoid queryM
+  let sqlQueryCfg = (defSqlQueryCfg pid now source Nothing){dateRange = (fromD, toD)}
 
-  case (queryM, querySQLM) of
-    (_, Just querySQL) -> do
-      queryAST <-
-        checkpoint (toAnnotation ("queryMetrics", queryM))
-          $ parseQuery
-          $ maybeToMonoid queryM
-      let sqlQueryComponents =
-            (defSqlQueryCfg pid now (parseMaybe pSource =<< sourceM) Nothing)
-              { dateRange = (fromD, toD)
-              }
-      let (_, qc) = queryASTToComponents sqlQueryComponents queryAST
+  case querySQLM of
+    Just querySQL -> do
+      let (_, qc) = queryASTToComponents sqlQueryCfg queryAST
       let mappngSQL' = mappngSQL <> M.fromList [("query_ast_filters", maybe "" (" AND " <>) qc.whereClause)]
       let sqlQuery = replacePlaceholders mappngSQL' querySQL
-      let tbl = sourceTable (parseMaybe pSource =<< sourceM)
+      let tbl = sourceTable source
       convertTimestampsToMs
         <$> withChartSpan
           tbl
@@ -162,13 +138,7 @@ queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (
           sqlQuery
           (emptyMetricsFor now fromD toD)
           (runFetchMetrics respDataType sqlQuery now fromD toD authCtx dbSource)
-    _ -> do
-      queryAST <-
-        checkpoint (toAnnotation ("queryMetrics", queryM))
-          $ parseQuery
-          $ maybeToMonoid queryM
-      let source = parseMaybe pSource =<< sourceM
-      let sqlQueryCfg = (defSqlQueryCfg pid now source Nothing){dateRange = (fromD, toD)}
+    Nothing -> do
       -- Scalar aggregates (summarize with no `by` clause) produce a single
       -- float row; decoding them with the default DTMetric (timestamp-first
       -- pivot) raises a type error. Callers that don't pass data_type — the
@@ -179,11 +149,9 @@ queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (
 
 -- | A summarize with no @by@ clause at all — yields one scalar row.
 isScalarSummarize :: [Section] -> Bool
-isScalarSummarize = any isScalar
-  where
-    isScalar = \case
-      SummarizeCommand _ Nothing -> True
-      _ -> False
+isScalarSummarize = any \case
+  SummarizeCommand _ Nothing -> True
+  _ -> False
 
 
 -- | Execute query with caching support for timeseries queries
@@ -294,15 +262,6 @@ emptyMetricsFor now fromD toD =
     }
 
 
--- | Map common backend failure modes to a short user-facing label. Covers both
--- Postgres ("column \"x\" does not exist") and TimeFusion's wrapped form
--- ("External error: Kernel error: Predicate references unknown column: x")
--- since prod chart reads can hit either backend. Raw error stays in the OTEL
--- span + log line.
-sanitizeChartError :: SomePostgreSqlException -> Text
-sanitizeChartError = Utils.sanitizeBackendError . toText . displayException
-
-
 -- | Wrap a chart-data fetch with its OTEL span and turn any SQL failure into
 -- an error-tagged empty 'MetricsData' so the dashboard keeps rendering. The
 -- exception is rethrown through 'withSpan_' first, so the span gets
@@ -318,7 +277,9 @@ withChartSpan
   -> Eff es MetricsData
 withChartSpan tbl attrs sqlQuery fallback action =
   withSpan_ ("SELECT " <> tbl) attrs action `catch` \(e :: SomePostgreSqlException) -> do
-    let userMsg = sanitizeChartError e
+    -- sanitizeBackendError covers both Postgres ("column \"x\" does not exist") and
+    -- TimeFusion's wrapped form; the raw error stays on the span + log line.
+    let userMsg = Utils.sanitizeBackendError . toText $ displayException e
     -- TODO(otel-metrics): widget_sql_error{project_id, error_class=userMsg}
     Log.logAttention
       "widget SQL execution failed; rendering error overlay"
@@ -332,23 +293,20 @@ fetchMetricsData respDataType sqlQuery now fromD toD authCtx dbSource = do
         Just "postgres" -> authCtx.pool
         Just "timefusion" -> authCtx.timefusionPgPool
         _ -> if authCtx.env.enableTimefusionReads then authCtx.timefusionPgPool else authCtx.pool
-  let baseMetricsData =
-        def
-          { from = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe (addUTCTime (-86400) now) fromD
-          , to = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe now toD
-          }
+  let baseMetricsData = emptyMetricsFor now fromD toD
+  let runQ :: FromRow r => IO [r]
+      runQ = withResource pool \conn -> query_ conn (Query $ encodeUtf8 sqlQuery)
 
   try @SomePostgreSqlException $ checkpoint (toAnnotation (respDataType, sqlQuery)) $ case respDataType of
     DTFloat -> do
-      chartData <- withResource pool \conn -> query_ conn (Query $ encodeUtf8 sqlQuery) :: IO [Only (Maybe Double)]
+      chartData <- runQ :: IO [Only (Maybe Double)]
       pure
         baseMetricsData
           { dataFloat = listToMaybe chartData >>= fromOnly
           , rowsCount = 1
           }
     DTMetric -> do
-      chartData <- withResource pool $ \conn -> query_ conn (Query $ encodeUtf8 sqlQuery)
-      let chartsDataV = V.fromList chartData
+      chartsDataV <- V.fromList <$> runQ
       let (hdrs, groupedData, rowsCount, rpm) = pivot' chartsDataV
       pure
         baseMetricsData
@@ -359,19 +317,11 @@ fetchMetricsData respDataType sqlQuery now fromD toD authCtx dbSource = do
           , stats = Just $ statsTriple chartsDataV
           }
     DTText -> do
-      chartData <- withResource pool $ \conn -> query_ conn (Query $ encodeUtf8 sqlQuery)
-      pure
-        baseMetricsData
-          { dataText = V.fromList chartData
-          , rowsCount = fromIntegral $ length chartData
-          }
+      chartData <- V.fromList <$> runQ
+      pure baseMetricsData{dataText = chartData, rowsCount = fromIntegral $ V.length chartData}
     DTJson -> do
-      chartData <- withResource pool $ \conn -> query_ conn (Query $ encodeUtf8 sqlQuery)
-      pure
-        baseMetricsData
-          { dataJSON = V.fromList chartData
-          , rowsCount = fromIntegral $ length chartData
-          }
+      chartData <- V.fromList <$> runQ
+      pure baseMetricsData{dataJSON = chartData, rowsCount = fromIntegral $ V.length chartData}
 
 
 -- | Convert timestamps in MetricsData from seconds to milliseconds for ECharts

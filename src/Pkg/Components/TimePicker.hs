@@ -6,8 +6,7 @@ module Pkg.Components.TimePicker (
 ) where
 
 import Data.Aeson qualified as AE
-import Data.Char qualified as Char
-import Data.List qualified as L
+import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime, secondsToNominalDiffTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
@@ -18,12 +17,11 @@ import Lucid.Aria qualified as Aria
 import Lucid.Base (termRaw)
 import Lucid.Hyperscript (__)
 import NeatInterpolation (text)
-import PyF (fmt)
 import Relude hiding (some)
 import Text.Megaparsec (Parsec, parse, some)
 import Text.Megaparsec.Char (letterChar, space)
 import Text.Megaparsec.Char.Lexer (decimal)
-import Utils (faSprite_, popoverPanel_, popoverTrigger_)
+import Utils (faSprite_, nonEmptyT, popoverPanel_, popoverTrigger_)
 
 
 -- $setup
@@ -43,19 +41,7 @@ data TimePicker = TimePicker
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake TimePicker
 
 
--- Mapping of time units to seconds
-unitToSeconds :: String -> Maybe (Int, Text)
-unitToSeconds unit =
-  L.lookup
-    (map Char.toUpper unit)
-    [ ("S", (1, "Seconds"))
-    , ("M", (60, "Minutes"))
-    , ("H", (3600, "Hours"))
-    , ("D", (86400, "Days"))
-    ]
-
-
--- Test parseSince with different time units
+-- | Test parseSince with different time units
 -- >>> parseSince (Unsafe.read "2024-10-31 12:00:00 UTC") "2H"
 -- (Just 2024-10-31 10:00:00 UTC,Just 2024-10-31 12:00:00 UTC,Just ("2H",""))
 --
@@ -67,18 +53,20 @@ unitToSeconds unit =
 --
 -- >>> parseSince (Unsafe.read "2024-10-31 12:00:00 UTC") "1h"
 -- (Just 2024-10-31 11:00:00 UTC,Just 2024-10-31 12:00:00 UTC,Just ("1H",""))
---
 parseSince :: UTCTime -> Text -> (Maybe UTCTime, Maybe UTCTime, Maybe (Text, Text))
 parseSince now since =
   either (const (Nothing, Nothing, Nothing)) buildResult (parse timeParser "" since)
   where
-    buildResult (num, unit) = (Just start, Just now, Just (T.toUpper since, ""))
-      where
-        (secs, _) = fromMaybe (0, "") (unitToSeconds unit)
-        start = addUTCTime (negate . secondsToNominalDiffTime . fromIntegral $ num * secs) now
+    buildResult (num, secs) =
+      ( Just $ addUTCTime (negate . secondsToNominalDiffTime $ fromIntegral (num * secs)) now
+      , Just now
+      , Just (T.toUpper since, "")
+      )
 
-    timeParser :: Parser (Int, String)
-    timeParser = (,) <$> decimal <*> (space *> some letterChar)
+    -- unknown units resolve to 0 seconds, i.e. a zero-width range rather than an unbounded one
+    timeParser :: Parser (Int, Int)
+    timeParser = (,) <$> decimal <*> (space *> (unitSecs . toText <$> some letterChar))
+    unitSecs u = fromMaybe 0 $ lookup (T.toUpper u) [("S", 1), ("M", 60), ("H", 3600), ("D", 86400)]
 
 
 -- | The one place the default time range is decided. Every layer (server SQL,
@@ -106,25 +94,16 @@ defaultSince = "1H"
 -- >>> parseTimeRange (Unsafe.read "2024-10-31 12:00:00 UTC") (TimePicker (Just "") (Just "") (Just ""))
 -- (Just 2024-10-31 11:00:00 UTC,Just 2024-10-31 12:00:00 UTC,Just ("1H",""))
 parseTimeRange :: UTCTime -> TimePicker -> (Maybe UTCTime, Maybe UTCTime, Maybe (Text, Text))
-parseTimeRange now tp = case (nonEmpty' tp.since, nonEmpty' tp.from, nonEmpty' tp.to) of
+parseTimeRange now tp = case (nonEmptyT tp.since, nonEmptyT tp.from, nonEmptyT tp.to) of
   (Just s, _, _) -> parseSince now s
   (_, Nothing, Nothing) -> parseSince now defaultSince
-  (_, fromM, toM) -> case parseFromAndTo now fromM toM of
-    (Nothing, Nothing, _) -> parseSince now defaultSince
-    resolved -> resolved
+  (_, fromM, toM) -> case (parseUTCTime fromM, parseUTCTime toM) of
+    (Nothing, Nothing) -> parseSince now defaultSince
+    (f, t) -> (f, t, liftA2 (,) (fmtTime f) (fmtTime t))
   where
-    nonEmpty' = mfilter (not . T.null)
-
-
-parseFromAndTo :: UTCTime -> Maybe Text -> Maybe Text -> (Maybe UTCTime, Maybe UTCTime, Maybe (Text, Text))
-parseFromAndTo now fromM toM =
-  (parseUTCTime fromM, parseUTCTime toM, formatRange fromM toM)
-  where
+    parseUTCTime :: Maybe Text -> Maybe UTCTime
     parseUTCTime = iso8601ParseM . toString . fromMaybe ""
-    formatRange f t = liftA2 (,) (formatTime' f) (formatTime' t)
-
-    formatTime' :: Maybe Text -> Maybe Text
-    formatTime' = fmap (toText . formatTime defaultTimeLocale "%F %T") . parseUTCTime
+    fmtTime = fmap (toText . formatTime defaultTimeLocale "%F %T")
 
 
 -----------------------------------------------------------------------------------------------------
@@ -149,54 +128,47 @@ timePickerItems =
 timepicker_ :: Maybe Text -> Maybe (Text, Text) -> Maybe Text -> Html ()
 timepicker_ submitForm currentRange targetIdM = do
   let targetPr = fromMaybe "n" targetIdM
-  input_ [type_ "hidden", id_ $ targetPr <> "-since_input"]
+      -- with a form we submit it; without one the caller-supplied fallback reloads/updates params
+      submitVia noForm = maybe noForm (\fm -> [text|htmx.trigger("#${fm}", "submit")|]) submitForm
+  -- read/written by window.updateTimePicker + window.getTimeRange (main.ts)
   input_ [type_ "hidden", id_ $ targetPr <> "-custom_range_input"]
-  -- Trigger button using DaisyUI popover approach
   button_
     [ term "popovertarget" (targetPr <> "-timepicker-popover")
-    , term "style" $ "anchor-name:--" <> targetPr <> "-timepicker-anchor"
+    , style_ $ "anchor-name:--" <> targetPr <> "-timepicker-anchor"
     , term "popovertargetaction" "toggle"
-    , term "onclick" "event.stopPropagation()"
+    , onclick_ "event.stopPropagation()"
     , class_ "flex items-center gap-2 max-md:gap-1.5 py-2 max-md:py-1.5 px-3 max-md:px-2 border border-strokeWeak rounded-lg shadow-xs text-sm text-textWeak cursor-pointer"
     ]
     do
       faSprite_ "calendar" "regular" "h-4 w-4 text-iconNeutral"
-      let attrs = maybe [] (\(s, e) -> [term "data-start" s, term "data-end" e]) currentRange
+      let attrs = maybe [] (\(s, e) -> [data_ "start" s, data_ "end" e]) currentRange
       span_ (attrs ++ [class_ "inline-block leading-none", id_ $ targetPr <> "-currentRange"]) $ toHtml (maybe defaultSince (\(s, e) -> s <> if T.null e then "" else " - " <> e) currentRange)
-      span_ [id_ "offsetIndicator", class_ "text-2xs text-textWeak max-md:hidden"] "UTC+00"
+      span_ [id_ $ targetPr <> "-offsetIndicator", class_ "text-2xs text-textWeak max-md:hidden"] "UTC+00"
       faSprite_ "chevron-down" "regular" "h-3 w-3"
 
-  -- DaisyUI popover content
   div_ [class_ "relative w-max"] do
     div_
       [ class_ "border dropdown dropdown-end menu w-96 max-md:w-[calc(100vw-1rem)] rounded-box bg-bgRaised shadow-lg"
       , term "popover" "manual"
       , id_ $ targetPr <> "-timepicker-popover"
-      , term "style" $ "position-anchor:--" <> targetPr <> "-timepicker-anchor"
+      , style_ $ "position-anchor:--" <> targetPr <> "-timepicker-anchor"
       ]
       do
         div_ [class_ "absolute top-0 left-0 z-50 hidden", id_ $ targetPr <> "-timepickerSidebar", [__| on click halt|]] $ div_ [id_ $ targetPr <> "-startTime", class_ "hidden"] ""
         ul_ [] do
           li_ [class_ "menu-title"] "Select Time Range"
-          let action =
-                maybe
-                  "window.setQueryParamAndReload('since', my @data-value)"
-                  (\fm -> [fmt|htmx.trigger("#{fm}", "submit")|])
-                  submitForm
-              popoverId = "#" <> targetPr <> "-timepicker-popover"
+          let action = submitVia "window.setQueryParamAndReload('since', my @data-value)"
               onClickHandler =
-                [text|on click call window.updateTimePicker({since: @data-value}, {targetPr: '${targetPr}', label: @data-title}) then $action then call $popoverId.hidePopover()|]
-              timePickerLink val title =
-                li_ $ button_
-                  [ class_ "flex items-center justify-between hover:bg-fillWeak rounded-lg px-3 py-2 w-full text-left"
-                  , term "data-value" val
-                  , term "data-title" val
-                  , termRaw "_" onClickHandler
-                  ]
-                  do
-                    span_ [class_ "text-sm"] $ toHtml title
-                    span_ [class_ "text-xs text-textWeak"] $ toHtml val
-          mapM_ (uncurry timePickerLink) timePickerItems
+                [text|on click call window.updateTimePicker({since: @data-value}, {targetPr: '${targetPr}', label: @data-value}) then $action then call #${targetPr}-timepicker-popover.hidePopover()|]
+          forM_ timePickerItems \(val, title) ->
+            li_ $ button_
+              [ class_ "flex items-center justify-between hover:bg-fillWeak rounded-lg px-3 py-2 w-full text-left"
+              , data_ "value" val
+              , termRaw "_" onClickHandler
+              ]
+              do
+                span_ [class_ "text-sm"] $ toHtml title
+                span_ [class_ "text-xs text-textWeak"] $ toHtml val
           li_ $ button_
             [ class_ "w-full text-left"
             , term "_" [text| on click toggle .hidden on #$targetPr-timepickerSidebar |]
@@ -205,66 +177,55 @@ timepicker_ submitForm currentRange targetIdM = do
               faSprite_ "calendar" "regular" "h-4 w-4 mr-2 text-iconNeutral"
               span_ "Custom date range"
 
-        -- Custom date range picker (hidden by default)
-        let submitAction =
-              maybe
-                -- updateTimePicker already set params; reload page for non-form case
-                "window.setParams({}, true); document.getElementById(`$targetPr-timepicker-popover`).hidePopover();"
-                (\fm -> [text|htmx.trigger("#${fm}", "submit"); document.getElementById(`$targetPr-timepicker-popover`).hidePopover();|])
-                submitForm
+        -- updateTimePicker already set the params; the formless case just reloads
+        let submitAction = submitVia "window.setParams({}, true)"
         script_
           [text|
       (function() {
-        var formatDateLocal = (date) => new Date(date).toLocaleString();
-        // Initialize display once main.js (deferred) has loaded getUTCOffset
+        const fmt = (d) => new Date(d).toLocaleString();
+        const el = (suffix) => document.getElementById("$targetPr-" + suffix);
+        const hideSidebar = () => el('timepickerSidebar').classList.add('hidden');
+        // main.js and easepick are deferred, so poll until they land
         function initTimeDisplay() {
           if (typeof getUTCOffset === 'undefined') { setTimeout(initTimeDisplay, 50); return; }
-          const offsetEl = document.getElementById('offsetIndicator');
+          const offsetEl = el('offsetIndicator');
           if (offsetEl) offsetEl.innerText = getUTCOffset();
-          const range = document.getElementById("$targetPr-currentRange");
+          const range = el('currentRange');
           if (!range) return;
-          const start = range.dataset.start;
-          const end = range.dataset.end;
-          if(start && end) {
-              range.innerText = `$${formatDateLocal(start)} - $${formatDateLocal(end)}`
-            }
+          const { start, end } = range.dataset;
+          if (start && end) range.innerText = `$${fmt(start)} - $${fmt(end)}`;
         }
-        initTimeDisplay();
         function initEasepick() {
           if (typeof easepick === 'undefined') { setTimeout(initEasepick, 100); return; }
           if (window["$targetPr-picker"]) return;
           window["$targetPr-picker"] = new easepick.create({
-          element: '#$targetPr-startTime',
-          css: ['https://cdn.jsdelivr.net/npm/@easepick/bundle@1.2.0/dist/index.css'],
-          inline: true,
-          plugins: ['RangePlugin', 'TimePlugin'],
-          autoApply: false,
-          documentClick: (e) => {
-            if(e.target.classList.contains('easepick-wrapper')) {
-              return;
-            }
-            document.querySelector('#$targetPr-timepickerSidebar').classList.add('hidden');
-            return true;
-          },
-          setup(picker) {
-            picker.on("clear", () => {
-              document.querySelector('#$targetPr-timepickerSidebar').classList.add('hidden');
-            });
-            
-            picker.on('select', ({ detail: { start, end } }) => {
-              if (start.getTime() >= end.getTime()) end = new Date();
-              window.updateTimePicker({from: start.toISOString(), to: end.toISOString()}, {targetPr: "$targetPr"});
-              ${submitAction}
-            });
-          },
-        });
+            element: '#$targetPr-startTime',
+            css: ['https://cdn.jsdelivr.net/npm/@easepick/bundle@1.2.0/dist/index.css'],
+            inline: true,
+            plugins: ['RangePlugin', 'TimePlugin'],
+            autoApply: false,
+            documentClick: (e) => {
+              if (e.target.classList.contains('easepick-wrapper')) return;
+              hideSidebar();
+              return true;
+            },
+            setup(picker) {
+              picker.on("clear", hideSidebar);
+              picker.on('select', ({ detail: { start, end } }) => {
+                if (start.getTime() >= end.getTime()) end = new Date();
+                window.updateTimePicker({from: start.toISOString(), to: end.toISOString()}, {targetPr: "$targetPr"});
+                ${submitAction};
+                el('timepicker-popover').hidePopover();
+              });
+            },
+          });
         }
+        initTimeDisplay();
         initEasepick();
       })()
     |]
 
 
--- | Common refresh options used throughout the application
 refreshOptions :: [(Text, Text, Text)]
 refreshOptions =
   [ ("paused", "Paused", "0")
@@ -280,8 +241,8 @@ refreshOptions =
   ]
 
 
--- | Refresh button with auto-refresh dropdown
--- No parameters needed as it's now fully standardized to work with the global event system
+-- | Refresh button with auto-refresh dropdown. Driven entirely by the global
+-- @setRefreshInterval@ / @update-query@ event system, so it takes no arguments.
 refreshButton_ :: Html ()
 refreshButton_ = do
   div_ [class_ "join"] do
