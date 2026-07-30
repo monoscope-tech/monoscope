@@ -282,13 +282,14 @@ dashboardPage_ pid dashId dash dashVM allParams = do
               , data_ "tagify-whitelist" whitelist
               , data_ "tagify-enforce-whitelist" ""
               , data_ "tagify-text-prop" "name"
-              , data_ "tagify-mode" $ if var.multi == Just True then "" else "select"
               , data_ "tagify-query-sql" $ maybeToMonoid var.sql
               , data_ "tagify-query" $ maybeToMonoid var.query
               , data_ "tagify-reload-on-change" $ maybe "false" (T.toLower . show) var.reloadOnChange
               , value_ $ maybeToMonoid var.value
               ]
-            <> memptyIfFalse (var.multi == Just True) [data_ "tagify-mode" "select"]
+            -- Multi vars must carry NO tagify-mode attr (main.ts only sets options.mode
+            -- when present); a second data_ attr would be (<>)-merged by Lucid.
+            <> memptyIfFalse (var.multi /= Just True) [data_ "tagify-mode" "select"]
   let widgetOrderUrl = "/p/" <> pidText <> "/dashboards/" <> dashIdText <> "/widgets_order" <> maybe "" ("?tab=" <>) renderTabSlug
       constantsJson = decodeUtf8 $ AE.encode $ HM.fromList [(k, fromMaybe "" v) | (k, v) <- allParams, "const-" `T.isPrefixOf` k]
 

@@ -23,6 +23,7 @@ module Pages.LogExplorer.Log (
   logQueryBox_,
   TraceTreeEntry (..),
   buildTraceTree,
+  synthesizeOrphanHeaders,
   fmtPct1,
   -- Sidebar facet definitions — exported for high-level tests.
   Facet (..),
@@ -69,6 +70,7 @@ import Pkg.Parser (defaultQueryLimit, pSource, parseQueryToAST, toQText)
 import Pkg.Parser.Stats (Section (TakeCommand))
 import Pkg.SchemaLearning.Catalog (FacetData (..), FacetSummary (..), FacetValue (..))
 import Relude hiding (ask)
+import Relude.Extra.Foldable1 (minimum1)
 import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
@@ -306,7 +308,7 @@ synthesizeOrphanHeaders colIdxMap rows = V.fromList [synthRow t p ks | ((t, p), 
     firstText k = fromMaybe "" . asum . map (textAt k)
     synthRow tid pid ks =
       let spans' = mapMaybe (\r -> (,) <$> numAt "start_time_ns" r <*> numAt "duration" r) ks
-          startNs = foldr (min . fst) 0 spans'
+          startNs = maybe 0 minimum1 $ nonEmpty $ map fst spans'
           endNs = foldr (max . uncurry (+)) startNs spans'
           label = "Upstream span missing \x2014 " <> T.take 8 pid
           -- 'text-textWeak' style matches renderer's WEAK_TEXT_STYLES lookup; italic +

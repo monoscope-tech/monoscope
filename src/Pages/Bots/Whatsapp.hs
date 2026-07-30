@@ -1,4 +1,4 @@
-module Pages.Bots.Whatsapp (whatsappIncomingPostH, TwilioWhatsAppMessage (..)) where
+module Pages.Bots.Whatsapp (whatsappIncomingPostH, TwilioWhatsAppMessage (..), BodyType (..), parseWhatsappBody, getWhatsappList) where
 
 import Control.Lens ((.~), (?~))
 import Data.Aeson qualified as AE

@@ -320,7 +320,7 @@ slackActionsH action = do
                     ( V.fromList
                         [ textBlock "section" (mrkdwn heading)
                         , textBlock "section" $ mrkdwn ("Shared by <@" <> slackAction.user.id <> "> using /dashboard")
-                        , imageBlock (fromMaybe "" $ viaNonEmpty last $ T.splitOn "___" meta) widgetTitle
+                        , imageBlock (metaField 3 meta) widgetTitle
                         ]
                     )
               ]

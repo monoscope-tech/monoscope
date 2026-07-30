@@ -1,14 +1,21 @@
 module Pages.DashboardsSpec (spec) where
 
+import Data.Default (def)
+import Data.Text qualified as T
+import Data.Text.Lazy qualified as TL
+import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import Lucid (renderText, toHtml)
 import Models.Projects.Dashboards (DashboardVM (..))
 import Models.Projects.Dashboards qualified as DashboardModel
 import Models.Projects.ProjectMembers (TeamVM (..))
+import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Dashboards (DashboardFilters (..))
 import Pages.Dashboards qualified as Dashboards
 import Pages.Projects (TeamForm (..))
 import Pages.Projects qualified as ManageMembers
+import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
 import Relude.Unsafe qualified as Unsafe
@@ -31,6 +38,49 @@ spec = sequential $ aroundAll withTestResources do
   describe "Dashboards Tests" do
     let mkDashboard t = Dashboards.DashboardForm{Dashboards.title = t, Dashboards.file = "overview.yaml", Dashboards.teams = [], Dashboards.fileDir = Nothing}
         dashboard = mkDashboard "Test Dashboard"
+
+    -- Regression: the variable input emitted data-tagify-mode twice for multi
+    -- variables; Lucid merges duplicate attrs with (<>), so multi-select vars
+    -- silently rendered as single-select ("" <> "select"). Multi vars must carry
+    -- NO tagify-mode attr (main.ts only sets options.mode when it is present).
+    it "renders data-tagify-mode=select only for single-select variables" \_ -> do
+      let mkVar k m =
+            DashboardModel.Variable
+              { key = k
+              , title = Nothing
+              , multi = m
+              , required = Nothing
+              , reloadOnChange = Nothing
+              , helpText = Nothing
+              , _vType = DashboardModel.VTValues
+              , sql = Nothing
+              , facetField = Nothing
+              , query = Nothing
+              , options = Nothing
+              , value = Nothing
+              , dependsOn = Nothing
+              }
+          dash = (def :: DashboardModel.Dashboard){DashboardModel.variables = Just [mkVar "single" Nothing, mkVar "multi" (Just True)]}
+          vm =
+            DashboardVM
+              { id = UUIDId UUID.nil
+              , projectId = testPid
+              , createdAt = frozenTime
+              , updatedAt = frozenTime
+              , createdBy = Projects.UserId UUID.nil
+              , baseTemplate = Nothing
+              , schema = Just dash
+              , starredSince = Nothing
+              , homepageSince = Nothing
+              , tags = V.empty
+              , title = "t"
+              , teams = V.empty
+              , filePath = Nothing
+              , fileSha = Nothing
+              }
+          html = TL.toStrict $ renderText $ toHtml $ Dashboards.DashboardGet testPid (UUIDId UUID.nil) dash vm []
+      T.count "data-tagify-mode" html `shouldBe` 1
+      html `shouldSatisfy` T.isInfixOf "data-tagify-mode=\"select\""
 
     it "overview template uses the native metric store" \_ -> do
       overview <- DashboardModel.readDashboardFile "static/public/dashboards" "_overview.yaml"

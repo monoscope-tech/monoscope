@@ -425,7 +425,7 @@ queryLibItem_ isRecent qli =
     , data_ "query-id" qli.id.toText
     ]
     do
-      div_ [class_ "pr-8", onclick_ $ "document.getElementById('filterElement').handleAddQuery(JSON.parse(this.closest('.query-item').dataset.query)); " <> hidePopoverJS] do
+      div_ [class_ "pr-8", onclick_ $ "document.getElementById('filterElement').handleAddQuery(this.closest('.query-item').dataset.query); " <> hidePopoverJS] do
         div_ [class_ "flex items-baseline gap-2 mb-1"] do
           whenJust qli.title (\title -> span_ [class_ "font-medium text-sm"] $ toHtml title <> " •")
           small_ [class_ "text-textWeak text-xs whitespace-nowrap"]

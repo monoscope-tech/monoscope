@@ -430,3 +430,36 @@ spec = sequential $ aroundAll withTestResources do
           all3 = hashes page0Rows <> hashes page1Rows <> hashes page2Rows
       length all3 `shouldBe` 12
       length (ordNub all3) `shouldBe` 12 -- pages are disjoint
+
+    -- Regression: the "last_seen" sort ordered by endpoint created_at (like
+    -- first_seen, just reversed) instead of the row's actual lastSeen traffic time.
+    it "last_seen sort orders by span recency, not endpoint created_at" \tr -> do
+      let hostName = "lastseen.example"
+          mkEp path =
+            (def :: Endpoints.Endpoint)
+              { Endpoints.projectId = testPid
+              , Endpoints.urlPath = path
+              , Endpoints.urlParams = AE.object []
+              , Endpoints.method = "GET"
+              , Endpoints.host = hostName
+              , Endpoints.hash = toXXHash (testPid.toText <> hostName <> "GET" <> path)
+              , Endpoints.outgoing = False
+              }
+      runQueryEffect tr $ Endpoints.bulkInsertEndpoints $ V.fromList [mkEp "/old", mkEp "/new"]
+      withPool tr.trPool $ do
+        -- "/old" was created first but has the most recent traffic.
+        void $ DBT.execute [sql| UPDATE apis.endpoints SET created_at = ?::timestamptz - interval '2 days' WHERE project_id = ? AND host = ? AND url_path = '/old' |] (frozenTime, testPid, hostName)
+        void $ DBT.execute [sql| UPDATE apis.endpoints SET created_at = ?::timestamptz - interval '1 hour' WHERE project_id = ? AND host = ? AND url_path = '/new' |] (frozenTime, testPid, hostName)
+        let insertSpan (path :: Text) (offsetMins :: Int) =
+              void $ DBT.execute
+                [sql| INSERT INTO otel_logs_and_spans
+                        (id, project_id, timestamp, start_time,
+                         attributes___http___request___method, attributes___url___path,
+                         hashes, context, kind, status_code, summary)
+                      VALUES (gen_random_uuid(), ?, ?::timestamptz - make_interval(mins => ?), ?::timestamptz - make_interval(mins => ?),
+                              'GET', ?, ARRAY[?], '{}'::jsonb, 'SERVER', '200', '{}') |]
+                (testPid, frozenTime, offsetMins, frozenTime, offsetMins, path, (mkEp path).hash)
+        insertSpan "/old" 5
+        insertSpan "/new" 120
+      stats <- runTestBg frozenTime tr $ Endpoints.endpointRequestStatsByProject False testPid False (Just hostName) (Just "last_seen") Nothing 0 10 "Incoming" "7d"
+      map (.urlPath) (V.toList stats) `shouldBe` ["/old", "/new"]

@@ -113,7 +113,10 @@ upsertTemplates rows =
   where
     hashes = V.map (.templateHash) rows
     kinds = V.map (.keyKind) rows
-    fieldsJson = V.map (HI.AsJsonb . (.fields)) rows
+    -- Scrubbed like every sibling jsonb write: one NUL in a field path would
+    -- otherwise 22P05-poison the whole batch. The template_hash is computed over
+    -- the unscrubbed structure, which is fine — unscrubbed rows never stored.
+    fieldsJson = V.map (asScrubbedJsonb . (.fields)) rows
     seens = V.map (.lastSeenAt) rows
 
 

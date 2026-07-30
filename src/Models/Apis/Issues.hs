@@ -712,7 +712,7 @@ createAPIChangeIssue projectId endpointHash anomalies = do
           if V.any ((== Anomalies.ATEndpoint) . (.anomalyType)) anomalies
             then "New endpoint detected: " <> apiChangeData.endpointMethod <> " " <> apiChangeData.endpointPath <> " on " <> apiChangeData.endpointHost
             else "API structure has changed"
-      , recommendedAction = "Review the API changes and update your integration accordingly."
+      , recommendedAction = defaultRecommendedAction
       , migrationComplexity = if breakingChanges > 5 then "high" else if breakingChanges > 0 then "medium" else "low"
       , issueData = apiChangeData
       , timestamp = Just firstAnomaly.createdAt
@@ -884,7 +884,7 @@ createLogPatternRateChangeIssue projectId lp sr = do
           " · "
           [ svcLabel
           , T.take 40 lp.logPattern
-          , dir <> " " <> showPct changePercentVal <> " (" <> showRate sr.currentRate <> "/hr vs " <> showRate sr.mean <> "/hr)"
+          , dir <> " " <> showPct changePercentVal <> " (" <> showRate sr.currentRate <> " vs " <> showRate sr.mean <> ")"
           ]
   mkIssue
     MkIssueOpts

@@ -6,7 +6,7 @@ import Data.HashMap.Strict qualified as HashMap
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as LT
-import Data.Time (UTCTime, defaultTimeLocale, formatTime)
+import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime)
 import Data.Time.Clock (addUTCTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.UUID qualified as UUID
@@ -26,6 +26,8 @@ import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.LogExplorer.Log qualified as Log
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Telemetry qualified as TelemetryPage
+import Pkg.Components.LogQueryBox qualified as LogQueryBox
+import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Parser.Stats (Sources (..))
 import Pkg.TestUtils
 import ProcessMessage (processMessages)
@@ -360,6 +362,18 @@ spec = around withTestResources do
       r.cols `shouldBe` ["id", "timestamp", "service", "summary", "latency_breakdown"]
 
   describe "Trace Tree" do
+    -- Regression: startNs was folded with a 0 seed, so every synthetic orphan
+    -- header started at 0 and its duration spanned from the epoch to the last span.
+    it "synthesizeOrphanHeaders anchors start_time_ns at the earliest child span" \_ -> do
+      let colIdxMap = HashMap.fromList $ zip ["trace_id", "parent_id", "latency_breakdown", "start_time_ns", "duration"] [0 ..]
+          row sid start dur = V.fromList [AE.String "t1", AE.String "missing-parent", AE.String sid, AE.Number start, AE.Number dur]
+          synth = Log.synthesizeOrphanHeaders colIdxMap $ V.fromList [row "s1" 1000 10, row "s2" 2000 20]
+          cell k r = HashMap.lookup k colIdxMap >>= (r V.!?)
+      V.length synth `shouldBe` 1
+      let hdr = Unsafe.fromJust $ synth V.!? 0
+      cell "start_time_ns" hdr `shouldBe` Just (AE.Number 1000)
+      cell "duration" hdr `shouldBe` Just (AE.Number 1020)
+
     it "should include traces field with tree structure" \tr -> do
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
           reqMsg = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
@@ -409,6 +423,30 @@ spec = around withTestResources do
         _ -> pass
 
   describe "Query library endpoints (saveQueryH/deleteQueryH)" do
+    -- Regression: the item-body onclick wrapped dataset.query in JSON.parse, but
+    -- data-query holds raw KQL — clicking any saved query threw a SyntaxError
+    -- while the sibling "Run this query" button passed it raw.
+    it "query library items pass dataset.query to handleAddQuery unparsed" \_ -> do
+      now' <- getCurrentTime
+      qid <- nextRandom
+      let qli =
+            Projects.QueryLibItem
+              { id = UUIDId qid
+              , projectId = testPid
+              , createdAt = now'
+              , updatedAt = now'
+              , userId = Projects.UserId UUID.nil
+              , queryType = Projects.QLTSaved
+              , queryText = "status_code == \"500\""
+              , queryAst = AE.Null
+              , title = Just "errors"
+              , byMe = True
+              }
+          html = LT.toStrict $ Lucid.renderText $ LogQueryBox.queryLibraryDropdown_ (V.singleton qli) V.empty
+      -- Lucid escapes quotes in attributes, so match quote-free fragments:
+      -- "dataset.query)" is the raw pass-through; the Run button renders "dataset.query, true".
+      html `shouldSatisfy` T.isInfixOf "dataset.query)"
+      html `shouldNotSatisfy` T.isInfixOf "JSON.parse"
     -- Mutations used to be smuggled through the log-fetch GET via ?layout=.
     -- They are now their own POST/DELETE endpoints; this exercises the full
     -- create → rename → delete round-trip through the DB.

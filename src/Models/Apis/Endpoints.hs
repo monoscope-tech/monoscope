@@ -275,7 +275,7 @@ endpointRequestStatsByProject useTf pid archived pHostM sortM searchM page perPa
       rows = map mk metas
       ordered = case fromMaybe "" sortM of
         "first_seen" -> sortOn (zonedTimeToUTC . (.createdAt) . fst) rows
-        "last_seen" -> sortOn (Down . zonedTimeToUTC . (.createdAt) . fst) rows
+        "last_seen" -> sortOn (Down . fmap zonedTimeToUTC . (.lastSeen) . snd) rows
         _ -> sortOn (\(m, s) -> (Down s.totalRequests, m.urlPath)) rows
   pure $ V.fromList $ map snd $ take perPage $ drop (page * perPage) ordered
 

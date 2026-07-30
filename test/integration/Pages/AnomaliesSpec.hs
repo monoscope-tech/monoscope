@@ -19,6 +19,7 @@ import Data.Pool (withResource)
 import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Projects (Session (..))
 import Models.Projects.Projects qualified as Projects
@@ -300,6 +301,49 @@ spec = sequential $ aroundAll withTestResources do
           (issueId, testPid) :: IO [Only Int]
         pure n
       pendingCascade `shouldBe` 0
+
+    -- Regression: the issues UPDATE in acknowlegeCascade used target_hash=ANY() with
+    -- %-suffixed prefixes, so the legacy-hash sweep never matched any issue row.
+    it "acknowlegeCascade prefix-sweeps issues as well as anomalies" \tr -> do
+      runTestBg frozenTime tr pass
+      let sess = Servant.getResponse tr.trSessAndHeader
+          prefix = "casc-legacy-001" :: Text
+      iid <- (UUIDId :: DataUUID.UUID -> Issues.IssueId) <$> UUID.nextRandom
+      withResource tr.trPool \conn -> do
+        void $ PGS.execute conn
+          [sql| INSERT INTO apis.issues
+                  (id, project_id, issue_type, target_hash, endpoint_hash, title,
+                   severity, critical, affected_requests, affected_clients,
+                   issue_data, created_at, updated_at)
+                VALUES (?, ?, 'runtime_exception', ?, ?, 't', 'warning',
+                        false, 1, 1, '{}'::jsonb, ?, ?) |]
+          (iid, testPid, prefix <> ":child", prefix <> ":child", frozenTime, frozenTime)
+        void $ PGS.execute conn
+          [sql| INSERT INTO apis.anomalies (project_id, target_hash)
+                VALUES (?, ?) ON CONFLICT DO NOTHING |]
+          (testPid, prefix <> ":anom")
+
+      void $ runTestBg frozenTime tr $ Anomalies.acknowlegeCascade sess.user.id (V.singleton prefix)
+
+      ackedIssue <- withResource tr.trPool \conn -> PGS.query conn
+        [sql| SELECT id FROM apis.issues WHERE id=? AND acknowledged_at IS NOT NULL |] (Only iid) :: IO [Only Issues.IssueId]
+      length ackedIssue `shouldBe` 1
+      ackedAnoms <- withResource tr.trPool \conn -> do
+        [Only n] <- PGS.query conn
+          [sql| SELECT COUNT(*)::INT FROM apis.anomalies
+                WHERE project_id=? AND target_hash=? AND acknowledged_at IS NOT NULL |]
+          (testPid, prefix <> ":anom") :: IO [Only Int]
+        pure n
+      ackedAnoms `shouldBe` 1
+
+    -- Regression: createAPIChangeIssue hard-coded a string that differed from
+    -- defaultRecommendedAction, so the detail page's "not yet LLM-enhanced" check
+    -- never matched api_change issues and always rendered the boilerplate.
+    it "api_change issues carry defaultRecommendedAction" \tr -> do
+      ras <- withResource tr.trPool \conn -> PGS.query conn
+        [sql| SELECT DISTINCT recommended_action FROM apis.issues WHERE project_id=? AND issue_type='api_change' |]
+        (Only testPid) :: IO [Only Text]
+      map (\(Only t) -> t) ras `shouldBe` [Issues.defaultRecommendedAction]
 
     -- Regression: the ApiChange detail page used to render an empty Investigation
     -- panel because hashPrefix returned Nothing for ApiChange and there was no
