@@ -284,6 +284,11 @@ tests:
       - hspec
       - relude >= 1.2.0.0
       - aeson
+      # Pkg.WidgetLazySpec builds a Widget and renders it
+      - data-default
+      - generic-lens
+      - lens
+      - lucid
       - async
       - containers
       - text
