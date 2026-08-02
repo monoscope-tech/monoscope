@@ -822,17 +822,22 @@ processWidget pid now timeRange allParams widgetBase = do
 
   -- The prefill is best-effort: past the budget we hand back the widget with no
   -- html/dataset and no `eager` flag, which is precisely the shape whose renderer
-  -- emits a spinner plus a self-fetch. Anomalies widgets read Postgres, not TF, and
-  -- have no client-side fetch path, so they keep their (unbounded) eager render.
+  -- emits a spinner plus a self-fetch.
   widget' <-
-    if widget.eager == Just True
-      then
-        withRenderBudget ("widget:" <> maybeToMonoid widget.title) (lazyWidget widget)
-          $ processEagerWidget pid now timeRange allParams widget
-      else
-        if widget.wType == Widget.WTAnomalies
-          then processEagerWidget pid now timeRange allParams widget
-          else pure widget
+    if
+      -- Anomalies first, ahead of the `eager` check. They read Postgres rather than
+      -- TF, and `widget_` renders `whenJust w.html toHtmlRaw` — nothing at all
+      -- without html — so there is no client-side fetch to degrade to and a blown
+      -- budget would blank the card. `eager` is a free `Maybe Bool` with no
+      -- type-level tie to `wType`, so a custom dashboard can set both; ordering the
+      -- guard this way makes the exclusion hold for every input, not just the
+      -- built-in templates.
+      | widget.wType == Widget.WTAnomalies -> processEagerWidget pid now timeRange allParams widget
+      -- Label by id, not title: untitled widgets would all log the same string.
+      | widget.eager == Just True ->
+          withRenderBudget ("widget:" <> maybeToMonoid widget.id) (lazyWidget widget)
+            $ processEagerWidget pid now timeRange allParams widget
+      | otherwise -> pure widget
 
   -- Recursively process child widgets concurrently, inheriting the parent's dashboard id
   forOf (#children . _Just) widget' \kids ->
