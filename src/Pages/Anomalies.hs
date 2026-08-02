@@ -111,14 +111,13 @@ acknowledgeAnomalyGetH pid enable aid _hostM = do
   let issueId = UUIDId aid.unUUIDId
   if enable
     then do
-      _ <- Issues.acknowledgeIssue issueId sess.user.id
+      void $ Issues.acknowledgeIssue issueId sess.user.id
       Issues.logIssueActivity issueId Issues.IEAcknowledged (Just sess.user.id) Nothing
       v <- Anomalies.acknowledgeAnomalies sess.user.id (V.singleton (UUID.toText aid.unUUIDId))
-      _ <- Anomalies.acknowlegeCascade sess.user.id (V.fromList v)
-      pass
+      void $ Anomalies.acknowlegeCascade sess.user.id (V.fromList v)
     else do
-      _ <- Hasql.interpExecute [HI.sql| update apis.issues set acknowledged_by=null, acknowledged_at=null where id=#{aid} |]
-      _ <- Hasql.interpExecute [HI.sql| update apis.anomalies set acknowledged_by=null, acknowledged_at=null where id=#{aid} |]
+      void $ Hasql.interpExecute [HI.sql| update apis.issues set acknowledged_by=null, acknowledged_at=null where id=#{aid} |]
+      void $ Hasql.interpExecute [HI.sql| update apis.anomalies set acknowledged_by=null, acknowledged_at=null where id=#{aid} |]
       Issues.logIssueActivity issueId Issues.IEUnacknowledged (Just sess.user.id) Nothing
   addRespHeaders $ Acknowlege pid issueId enable
 
@@ -128,8 +127,8 @@ archiveAnomalyGetH :: Projects.ProjectId -> Bool -> Anomalies.AnomalyId -> ATAut
 archiveAnomalyGetH pid enable aid = do
   (sess, _) <- Projects.sessionAndProject pid
   archivedAt <- if enable then Just <$> Time.currentTime else pure Nothing
-  _ <- Hasql.interpExecute [HI.sql| update apis.issues set archived_at=#{archivedAt} where id=#{aid} |]
-  _ <- Hasql.interpExecute [HI.sql| update apis.anomalies set archived_at=#{archivedAt} where id=#{aid} |]
+  void $ Hasql.interpExecute [HI.sql| update apis.issues set archived_at=#{archivedAt} where id=#{aid} |]
+  void $ Hasql.interpExecute [HI.sql| update apis.anomalies set archived_at=#{archivedAt} where id=#{aid} |]
   Issues.logIssueActivity (UUIDId aid.unUUIDId) (if enable then Issues.IEArchived else Issues.IEUnarchived) (Just sess.user.id) Nothing
   addRespHeaders $ Archive pid (UUIDId aid.unUUIDId) enable
 
@@ -200,20 +199,12 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
           "This issue may have been resolved, merged, or the link may be outdated."
     Just issue -> do
       let tp = TimePicker.TimePicker (Just $ fromMaybe (defaultSinceRange issue.createdAt now) sinceM) Nothing Nothing
-      errorM <-
-        issue.issueType & \case
-          Issues.RuntimeException -> ErrorPatterns.getErrorPatternLByHash pid issue.targetHash now
-          _ -> pure Nothing
-      (members, canResolve) <- case errorM of
-        Just _ -> do
+      errorM <- bool (pure Nothing) (ErrorPatterns.getErrorPatternLByHash pid issue.targetHash now) (issue.issueType == Issues.RuntimeException)
+      canResolve <- case errorM of
+        Nothing -> pure False
+        Just errL -> do
           userPermission <- ProjectMembers.getUserPermission pid sess.user.id
-          ms <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
-          let cr =
-                userPermission
-                  >= Just ProjectMembers.PEdit
-                  || maybe False (\errL -> errL.base.assigneeId == Just sess.user.id) errorM
-          pure (ms, cr)
-        Nothing -> pure (V.empty, False)
+          pure $ userPermission >= Just ProjectMembers.PEdit || errL.base.assigneeId == Just sess.user.id
       let bwconf =
             baseBwconf
               { prePageTitle = Just "Issues"
@@ -238,7 +229,9 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
           AE.Success (d :: Issues.APIChangeData) ->
             Telemetry.getEndpointTraceId pid d.endpointMethod d.endpointPath isFirst now
           _ -> pure Nothing
-        _ -> pure Nothing
+        Issues.QueryAlert -> pure Nothing
+        Issues.LogPattern -> pure Nothing
+        Issues.LogPatternRateChange -> pure Nothing
       (trItem, spanRecs) <-
         fromMaybe (Nothing, V.empty) <$> runMaybeT do
           (tId, tTs) <- hoistMaybe mTraceRef
@@ -258,9 +251,9 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
                             AND #{patHash} = ANY(hashes)
                           ORDER BY timestamp DESC
                           LIMIT 1 |]
-            pure $ viaNonEmpty head rows
+            pure $ listToMaybe rows
           else pure Nothing
-      addRespHeaders $ PageCtx bwconf $ anomalyDetailPage pid issue trItem spanRecs errorM now isFirst members tp sampleOverride
+      addRespHeaders $ PageCtx bwconf $ anomalyDetailPage pid issue trItem spanRecs errorM now isFirst tp sampleOverride
 
 
 -- | Unescape JSON-ish whitespace/quotes embedded in summary tokens.
@@ -425,14 +418,10 @@ userJourneySection_ spans = whenJust (extractBreadcrumbs spans) \crumbs -> do
       renderCrumb idx bc = do
         let (icn, iconColor) = breadcrumbVisual bc.kind
             isTerminal = idx == lastIdx
-            rowCls =
-              if isTerminal
-                then "relative flex gap-2.5 px-4 py-2 border-l-2 border-strokeError-strong bg-fillError-weak"
-                else "relative flex gap-2.5 px-4 py-2 border-l-2 border-transparent hover:bg-fillWeaker"
             timeLabel
               | idx == 0 = toText $ formatTime defaultTimeLocale "%b %-e, %H:%M:%S" $ POSIX.posixSecondsToUTCTime $ realToFrac (fromIntegral bc.timestamp / 1000 :: Double)
               | otherwise = formatOffset base bc.timestamp
-        div_ [class_ rowCls] do
+        div_ [class_ $ bool "relative flex gap-2.5 px-4 py-2 border-l-2 border-transparent hover:bg-fillWeaker" "relative flex gap-2.5 px-4 py-2 border-l-2 border-strokeError-strong bg-fillError-weak" isTerminal] do
           div_ [class_ "flex flex-col items-center pt-0.5 shrink-0"] do
             faSprite_ icn "regular" $ "w-3 h-3 " <> iconColor
             unless isTerminal $ div_ [class_ "w-px flex-1 bg-strokeWeak mt-1"] ""
@@ -459,15 +448,15 @@ userJourneySection_ spans = whenJust (extractBreadcrumbs spans) \crumbs -> do
     div_ [class_ "px-4 py-2 flex items-center gap-2 bg-fillWeaker/40"] do
       faSprite_ "route" "regular" "w-3 h-3 text-textWeak"
       span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide"] "User journey"
-      span_ [class_ "text-2xs text-textWeak"] $ toHtml $ show total <> " event" <> (if total == 1 then "" else "s") <> " before error"
+      span_ [class_ "text-2xs text-textWeak"] $ toHtml $ show total <> " event" <> bool "s" "" (total == 1) <> " before error"
     div_ [class_ "max-h-80 overflow-y-auto py-1"]
-      $ V.imapM_ renderCrumb (V.fromList crumbList)
+      $ traverse_ (uncurry renderCrumb) (zip [0 :: Int ..] crumbList)
 
 
 activityPanel_ :: Projects.ProjectId -> Text -> Text -> V.Vector Telemetry.SpanRecord -> Html ()
 activityPanel_ pid issueId extraClass spans = do
   let activityUrl = "/p/" <> pid.toText <> "/issues/" <> issueId <> "/activity"
-  details_ [class_ $ unwords $ filter (not . T.null) ["surface-raised rounded-2xl group/activity overflow-hidden", extraClass], term "open" ""] do
+  details_ [class_ $ "surface-raised rounded-2xl group/activity overflow-hidden " <> extraClass, term "open" ""] do
     summary_ [class_ "px-4 py-3 flex items-center gap-2 cursor-pointer list-none [&::-webkit-details-marker]:hidden"] do
       faSprite_ "clock-rotate-left" "regular" "w-3.5 h-3.5 text-textWeak"
       span_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Activity"
@@ -502,13 +491,12 @@ detailCard_ title body = div_ [class_ "lg:w-72 shrink-0 surface-raised rounded-2
   div_ [class_ "p-4 flex flex-col gap-3"] body
 
 
-anomalyDetailPage :: Projects.ProjectId -> Issues.Issue -> Maybe Telemetry.Trace -> V.Vector Telemetry.SpanRecord -> Maybe ErrorPatterns.ErrorPatternL -> UTCTime -> Bool -> V.Vector ProjectMembers.ProjectMemberVM -> TimePicker.TimePicker -> Maybe (V.Vector Text) -> Html ()
-anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp sampleOverride = do
+anomalyDetailPage :: Projects.ProjectId -> Issues.Issue -> Maybe Telemetry.Trace -> V.Vector Telemetry.SpanRecord -> Maybe ErrorPatterns.ErrorPatternL -> UTCTime -> Bool -> TimePicker.TimePicker -> Maybe (V.Vector Text) -> Html ()
+anomalyDetailPage pid issue tr spanRecs errM now isFirst tp sampleOverride = do
   let (_, _, currentRange) = TimePicker.parseTimeRange now tp
       issueId = UUID.toText issue.id.unUUIDId
-      sevBase = "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 "
-      severityBadge "critical" = span_ [class_ $ sevBase <> "bg-fillError-weak text-fillError-strong border-2 border-strokeError-strong shadow-sm"] "CRITICAL"
-      severityBadge "warning" = span_ [class_ $ sevBase <> "bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak shadow-sm"] "WARNING"
+      severityBadge "critical" = span_ [class_ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillError-weak text-fillError-strong border-2 border-strokeError-strong shadow-sm"] "CRITICAL"
+      severityBadge "warning" = span_ [class_ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak shadow-sm"] "WARNING"
       severityBadge _ = pass
   div_ [class_ "flex h-full overflow-hidden relative group/ai"] do
     -- LEFT: scrollable main content
@@ -555,7 +543,8 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp sampleOverri
             metadataChip_ "gauge-high" $ Issues.showRate d.currentRatePerHour <> " current"
             metadataChip_ "chart-line" $ Issues.showRate d.baselineMean <> " baseline"
           Issues.RuntimeException -> pass -- First/Last seen shown in Error Details panel
-          _ -> createdChip
+          Issues.QueryAlert -> createdChip
+          Issues.ApiChange -> createdChip
       -- Seed URL params with default time range so standalone chart widgets can read it
       script_ [fmt|document.addEventListener('DOMContentLoaded',function(){{if(!new URLSearchParams(location.search).get('since'))window.setParams({{since:'{fromMaybe "1H" tp.since}'}})}});|]
       -- Volume chart + issue type content
@@ -715,7 +704,7 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp sampleOverri
             span_ [class_ "mx-3 w-px h-4 bg-strokeWeak max-md:mx-2"] pass
             forM_ [("#span-content" :: Text, "Trace" :: Text, not isLogPatternIssue), ("#log-content" :: Text, "Logs" :: Text, isLogPatternIssue)] tabBtn
         div_ [class_ "max-md:p-1 p-2 w-full overflow-x-hidden investigation-content"] do
-          div_ [class_ ((if isLogPatternIssue then "hidden " else "") <> "flex flex-col lg:flex-row w-full err-tab-content"), id_ "span-content"] do
+          div_ [class_ $ bool "" "hidden " isLogPatternIssue <> "flex flex-col lg:flex-row w-full err-tab-content", id_ "span-content"] do
             div_ [id_ "trace_container", class_ "grow-1 lg:max-w-[80%] lg:w-1/2 lg:min-w-[20%] shrink-1"]
               $ maybe
                 ( div_ [class_ "flex items-center justify-center h-48"]
@@ -744,7 +733,7 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp sampleOverri
                 whenJust (spanRecs V.!? 0) \sr ->
                   div_ [hxGet_ $ "/p/" <> pid.toText <> "/log_explorer/" <> sr.uSpanId <> "/" <> formatUTC sr.timestamp <> "/detailed", hxTarget_ "#log_details_container", hxSwap_ "innerHtml", hxTrigger_ "intersect once", hxIndicator_ "#details_indicator", term "hx-sync" "this:replace"] pass
 
-        div_ [id_ "log-content", class_ ((if isLogPatternIssue then "" else "hidden ") <> "err-tab-content")] do
+        div_ [id_ "log-content", class_ $ bool "hidden " "" isLogPatternIssue <> "err-tab-content"] do
           let logsTraceId = fromMaybe "" $ asum [errM >>= (.base.recentTraceId), (.traceId) <$> tr]
               logsQuery = case Issues.hashPrefix issue.issueType of
                 Just prefix | isLogPatternIssue -> "hashes[*]==\"" <> prefix <> issue.targetHash <> "\""
@@ -761,8 +750,18 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp sampleOverri
       unless (issue.issueType `elem` [Issues.RuntimeException, Issues.ApiChange, Issues.LogPattern, Issues.LogPatternRateChange]) $ activityPanel_ pid issueId "" V.empty
 
     -- RIGHT: Inline collapsible AI chat panel (checkbox + group-has CSS, persists to localStorage)
-    input_ [type_ "checkbox", id_ "ai-panel-toggle", class_ "hidden", onchange_ "localStorage.setItem('ai-panel-open', this.checked); if(this.checked) htmx.trigger('#ai-response-container','load-chat')"]
-    script_ """(function(){var e=document.getElementById('ai-panel-toggle');e.checked=localStorage.getItem('ai-panel-open')==='true';if(e.checked)htmx.trigger('#ai-response-container','load-chat')})()"""
+    input_
+      [ type_ "checkbox"
+      , id_ "ai-panel-toggle"
+      , class_ "hidden"
+      , [__|init set my.checked to (localStorage.getItem('ai-panel-open') == 'true')
+              if my.checked trigger load-chat on #ai-response-container end
+            end
+            on change
+              call localStorage.setItem('ai-panel-open', my.checked)
+              if my.checked trigger load-chat on #ai-response-container end
+            end|]
+      ]
     label_ [Lucid.for_ "ai-panel-toggle", class_ "absolute right-0 top-3 z-10 flex items-center gap-1.5 bg-fillBrand-strong text-white px-2 py-2.5 rounded-l-lg cursor-pointer shadow-md hover:opacity-90 transition-opacity group-has-[#ai-panel-toggle:checked]/ai:hidden", Aria.label_ "Open AI Assistant"] do
       faSprite_ "sparkles" "regular" "w-3.5 h-3.5"
     div_ [class_ "hidden group-has-[#ai-panel-toggle:checked]/ai:block"] $ resizer_ "ai_chat_container" "ai_width" False
@@ -1010,7 +1009,7 @@ aiChatPostH pid issueId form
       either
         (\_ -> respond systemPromptM convId chatResult.response Nothing (Just chatResult.toolCalls) False)
         ( \aiResp ->
-            let ws = if null aiResp.widgets then Nothing else Just (take 10 aiResp.widgets)
+            let ws = guarded (not . null) $ take 10 aiResp.widgets
                 txt = fromMaybe (bool chatResult.response "Here are the requested visualizations:" $ isJust ws) $ mfilter (not . T.null) aiResp.explanation
              in respond systemPromptM convId txt ws (Just chatResult.toolCalls) False
         )
@@ -1144,8 +1143,7 @@ buildSystemPromptForIssue pid issue now = do
           ]
     formatQueryResults md =
       let timestampIdx = V.findIndex (== "timestamp") md.headers
-          formatRow = V.imap formatCell
-          formatCell idx cellM = case cellM of
+          formatRow = V.imap \idx -> \case
             Just n | Just idx == timestampIdx -> formatUTC $ POSIX.posixSecondsToUTCTime $ realToFrac n
             Just val -> show val
             Nothing -> "N/A"
@@ -1185,7 +1183,7 @@ buildSystemPromptForIssue pid issue now = do
        in unlines
             $ "Available telemetry fields (top values by frequency):"
             : map formatField topFields
-              ++ ["... and " <> show (HM.size facetMap - 30) <> " more fields" | HM.size facetMap > 30]
+              <> ["... and " <> show (HM.size facetMap - 30) <> " more fields" | HM.size facetMap > 30]
 
 
 -- | Render a single chat response (user question + AI answer)
@@ -1207,8 +1205,7 @@ aiChatResponse_ pid userQuery explanation widgetsM toolCallsM systemPromptM =
             div_ [class_ "w-full aspect-[3/1]"] $ Widget.widget_ widget{Widget._projectId = Just pid}
     -- Collapsed debug info (tool calls + system prompt)
     let toolCalls = fromMaybe [] toolCallsM
-        hasContent = not (null toolCalls) || isJust systemPromptM
-    when hasContent
+    unless (null toolCalls && isNothing systemPromptM)
       $ details_ [class_ "mt-2 ml-[2.125rem] border border-strokeWeak rounded-lg text-xs group/debug"] do
         summary_ [class_ "cursor-pointer px-2.5 py-1.5 text-textWeak hover:bg-fillWeaker list-none flex items-center gap-1.5"] do
           faSprite_ "chevron-right" "regular" "w-2.5 h-2.5 transition-transform group-open/debug:rotate-90"
@@ -1236,9 +1233,7 @@ toolCallView_ tc =
 
 
 withIssueDataH :: (AE.FromJSON a, Applicative m) => Aeson AE.Value -> (a -> m ()) -> m ()
-withIssueDataH d f = case AE.fromJSON (getAeson d) of
-  AE.Success v -> f v
-  _ -> pass
+withIssueDataH d = whenJust (parseMaybe AE.parseJSON $ getAeson d)
 
 
 -- | Process widgets to use cached tool call data (no re-query)
@@ -1300,7 +1295,7 @@ parseStoredJSON = (>>= parseMaybe AE.parseJSON . getAeson)
 parseStoredContent :: Text -> Maybe (Aeson AE.Value) -> (Text, Maybe [Widget.Widget])
 parseStoredContent content storedWidgets =
   case AI.parseLLMResponse content of
-    Right aiResp -> (fromMaybe "" aiResp.explanation, if null aiResp.widgets then Nothing else Just aiResp.widgets)
+    Right aiResp -> (fromMaybe "" aiResp.explanation, guarded (not . null) aiResp.widgets)
     Left _ -> (content, parseStoredJSON @[Widget.Widget] storedWidgets)
 
 
@@ -1339,7 +1334,7 @@ anomalyAIChatBody_ pid issueId = do
       button_
         [ type_ "button"
         , class_ "text-xs px-2 py-1.5 rounded-full bg-fillWeaker text-textWeak hover:text-textStrong hover:bg-fillWeak transition-colors cursor-pointer tap-target"
-        , onclick_ $ "document.getElementById('ai-chat-input').value = '" <> txt <> "'; document.getElementById('ai-chat-input').form.requestSubmit();"
+        , term "_" $ "on click set #ai-chat-input.value to '" <> txt <> "' then call #ai-chat-input.form.requestSubmit()"
         ]
         $ toHtml @Text txt
 
@@ -1360,23 +1355,20 @@ anomalyListGetH
   -> Maybe Text
   -> Maybe Text
   -> ATAuthCtx (RespHeaders AnomalyListGet)
-anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpointM periodM serviceFilters typeFilters hxRequestM hxBoostedM = do
+anomalyListGetH pid _layoutM filterTM sortM timeFilter pageM perPageM loadM _endpointM periodM serviceFilters typeFilters _hxRequestM _hxBoostedM = do
   (_, project, bw) <- mkPageCtx pid
   let (ackd, archived, currentFilterTab) = case filterTM of
         Just "Inbox" -> (Just False, Just False, "Inbox")
         Just "Acknowledged" -> (Just True, Nothing, "Acknowledged")
         Just "Archived" -> (Nothing, Just True, "Archived")
         _ -> (Just False, Just False, "Inbox")
-
-  let filterV = fromMaybe "14d" timeFilter
+      filterV = fromMaybe "14d" timeFilter
       pageInt = fromMaybe 0 $ readMaybe . toString =<< pageM
       perPage = fromMaybe 25 $ readMaybe . toString =<< perPageM
       currentSort = fromMaybe "-created_at" sortM
-
+      period = fromMaybe "24h" periodM
   freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
   currTime <- Time.currentTime
-
-  let period = fromMaybe "24h" periodM
   ((issues, totalCount), (availableServices, availableTypes)) <-
     concurrently
       (Issues.selectIssues pid ackd archived perPage (pageInt * perPage) Nothing (Just currentSort) period serviceFilters typeFilters)
@@ -1395,7 +1387,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
           , baseUrl = baseUrl
           , targetId = "anomalyListContainer"
           }
-  let serviceMenu = FilterMenu{label = "Service", paramName = "service", multiSelect = True, options = map (\s -> FilterOption{label = s, value = s, isActive = s `elem` serviceFilters}) availableServices}
+      serviceMenu = FilterMenu{label = "Service", paramName = "service", multiSelect = True, options = map (\s -> FilterOption{label = s, value = s, isActive = s `elem` serviceFilters}) availableServices}
       typeMenu = FilterMenu{label = "Type", paramName = "type", multiSelect = True, options = map (\t -> FilterOption{label = t, value = t, isActive = t `elem` typeFilters}) availableTypes}
       issuesVM = V.fromList $ map (IssueVM False currTime filterV) issues
       tableActions =
@@ -1414,7 +1406,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
           , activeFilters = [("Service", serviceFilters) | not (null serviceFilters)] <> [("Type", typeFilters) | not (null typeFilters)]
           , headerExtra = Nothing
           }
-  let issuesTable =
+      issuesTable =
         Table
           { config =
               def
@@ -1449,7 +1441,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
                         }
                 }
           }
-  let bwconf =
+      bwconf =
         bw
           { pageTitle = "Issues"
           , menuItem = Just "Issues"
@@ -1469,9 +1461,10 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
                       ]
                   }
           }
-  addRespHeaders $ case (layoutM, hxRequestM, hxBoostedM, loadM) of
-    (_, _, _, Just "true") -> ALRows $ TableRows{columns = issueColumns pid period Nothing, rows = issuesVM, emptyState = Nothing, renderAsTable = True, rowId = Just issueRowId, rowAttrs = Just issueRowAttrs, pagination = if totalCount > 0 then Just paginationConfig else Nothing}
-    _ -> ALPage $ PageCtx bwconf issuesTable
+  addRespHeaders
+    $ if loadM == Just "true"
+      then ALRows $ TableRows{columns = issueColumns pid period Nothing, rows = issuesVM, emptyState = Nothing, renderAsTable = True, rowId = Just issueRowId, rowAttrs = Just issueRowAttrs, pagination = if totalCount > 0 then Just paginationConfig else Nothing}
+      else ALPage $ PageCtx bwconf issuesTable
 
 
 data AnomalyListGet
@@ -1589,12 +1582,12 @@ renderIssueTitle_ Issues.IssueL{base}
 
 -- | Render text with <> placeholders styled as distinct tokens
 renderWithPlaceholders_ :: Monad m => Text -> HtmlT m ()
-renderWithPlaceholders_ = go
-  where
-    placeholder = span_ [class_ "text-textWeak opacity-60"] "<>"
-    go t = case T.breakOn "<>" t of
-      (before, "") -> toHtml before
-      (before, rest) -> do toHtml before; placeholder; go (T.drop 2 rest)
+renderWithPlaceholders_ t = case T.breakOn "<>" t of
+  (before, "") -> toHtml before
+  (before, rest) -> do
+    toHtml before
+    span_ [class_ "text-textWeak opacity-60"] "<>"
+    renderWithPlaceholders_ (T.drop 2 rest)
 
 
 renderIssueMainCol :: Projects.ProjectId -> IssueVM -> Html ()
@@ -1709,9 +1702,9 @@ anomalyArchiveButton pid aid archived =
 -- Labels show the current state; action names drive the tooltip/aria text.
 issueToggleButton_ :: Projects.ProjectId -> Issues.IssueId -> Bool -> Text -> (Text, Text) -> (Text, Text) -> (Text, Text) -> Text -> Text -> Html ()
 issueToggleButton_ pid aid active icon labels actions paths offCls onCls = do
-  let pick = if active then snd else fst
+  let pick = bool fst snd active
   a_
-    [ class_ $ "btn btn-sm gap-1.5 " <> if active then onCls else offCls
+    [ class_ $ "btn btn-sm gap-1.5 " <> bool offCls onCls active
     , term "data-tippy-content" $ T.toLower (pick actions) <> " issue"
     , Aria.label_ $ pick actions <> " issue"
     , term "preload" "false"
@@ -1746,13 +1739,13 @@ issueTypeBadge issueType critical = span_ [class_ $ "flex items-center gap-1 tex
 -- 4xx/5xx status). Mirrors @isIssueWorthy@ in BackgroundJobs.
 logLevelChip_ :: Monad m => Maybe Text -> Text -> HtmlT m ()
 logLevelChip_ logLevel pat =
-  let normalized = T.toUpper <$> logLevel
-      hasErrorStatus = any (`T.isInfixOf` pat) ["status;badge-error⇒ERROR", "status_code;badge-4xx", "status_code;badge-5xx"]
-      effective
-        | normalized `elem` ([Just "ERROR", Just "FATAL", Just "CRITICAL"] :: [Maybe Text]) = Just "ERROR"
-        | normalized `elem` ([Just "WARN", Just "WARNING"] :: [Maybe Text]) = Just "WARN"
-        | hasErrorStatus = Just "ERROR"
-        | otherwise = normalized
+  let effective = case T.toUpper <$> logLevel of
+        Just l
+          | l `elem` ["ERROR", "FATAL", "CRITICAL"] -> Just "ERROR"
+          | l `elem` ["WARN", "WARNING"] -> Just "WARN"
+        other
+          | any (`T.isInfixOf` pat) ["status;badge-error⇒ERROR", "status_code;badge-4xx", "status_code;badge-5xx"] -> Just "ERROR"
+          | otherwise -> other
       (cls, icon, label) = case effective of
         Just "ERROR" -> ("text-fillError-strong bg-fillError-weak", "triangle-alert", "ERROR")
         Just "WARN" -> ("text-fillWarning-strong bg-fillWarning-weak", "triangle-alert", "WARN")

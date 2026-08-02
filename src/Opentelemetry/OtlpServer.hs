@@ -93,6 +93,7 @@ import Proto.Opentelemetry.Proto.Trace.V1.Trace qualified as PT
 import Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields qualified as PTF
 import Relude hiding (ask)
 import Relude.Extra.Enum (safeToEnum)
+import Relude.Extra.Tuple (traverseToSnd)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.IO.Unsafe (unsafePerformIO)
 import System.Logging qualified as Log
@@ -132,9 +133,7 @@ noteProfilingStrindex :: a -> a
 noteProfilingStrindex x = unsafePerformIO $ do
   atomicModifyIORef' wireTypeErrorsRef $ \(m, dropped) ->
     let example = AE.object ["spec" AE..= ("AnyValue.string_value_strindex is profiling-only per OTLP common.proto v1.10; treated as absent per spec" :: Text)]
-        bump Nothing = Just (1, example)
-        bump (Just (c, e)) = Just (c + 1, e)
-     in ((HM.alter bump "schema:profiling_strindex_in_telemetry" m, dropped), ())
+     in ((HM.alter (Just . maybe (1, example) (first (+ 1))) "schema:profiling_strindex_in_telemetry" m, dropped), ())
   pure x
 
 
@@ -176,9 +175,6 @@ minValidTimestampNanos :: Word64
 minValidTimestampNanos = 946684800000000000
 
 
--- import Network.GRPC.Server.Service (Service, service, method, fromServices)
-
--- | Generic lens-based attribute extraction from spans
 -- | Keys that carry project identity and must not be stored in telemetry payloads
 projectSecretKeys :: [Text]
 projectSecretKeys = ["at-project-key", "at-project-id", "x-api-key"]
@@ -236,6 +232,11 @@ getLogApiKey :: V.Vector PL.ResourceLogs -> V.Vector Text
 getLogApiKey = V.mapMaybe (\rl -> getApiKeyAttr (rl ^. PLF.resource . PRF.attributes))
 
 
+-- | Narrow the batch's key→project map to the keys a single message carried.
+pidsForKeys :: HM.HashMap Text Projects.ProjectId -> V.Vector Text -> V.Vector (Text, Projects.ProjectId)
+pidsForKeys keyToId pkeys = V.fromList [kv | kv@(k, _) <- HM.toList keyToId, k `V.elem` pkeys]
+
+
 getMetricAttributeValue :: Text -> V.Vector PM.ResourceMetrics -> Maybe Text
 getMetricAttributeValue !attribute !rms = V.mapMaybe (\rm -> getAttr attribute (rm ^. PMF.resource . PRF.attributes)) rms V.!? 0
 
@@ -290,24 +291,29 @@ dualWriteWithPoisonMapping appCtx target label caches perMsg = do
   -- The batch succeeds or fails as a unit (no per-row poison), so the insert
   -- side contributes no PoisonMsgs; decode-failure PoisonMsgs are produced by
   -- the caller before this point.
-  pure (second (const []) res)
+  pure (res $> [])
+
+
+-- | Fail a gRPC handler with a status code and message.
+throwGrpc :: MonadIO m => GrpcError -> Text -> m a
+throwGrpc err message =
+  liftIO $ throwIO GrpcException{grpcError = err, grpcErrorMessage = Just message, grpcErrorMetadata = [], grpcErrorDetails = Nothing}
+
+
+-- | Project cache lookup, memoized in the shared cache; missing projects get the default.
+fetchProjectCache :: MonadIO m => AuthContext -> Projects.ProjectId -> m Projects.ProjectCache
+fetchProjectCache appCtx pid =
+  liftIO
+    $ Cache.fetchWithCache appCtx.projectCache pid
+    $ fmap (fromMaybe Projects.defaultProjectCache)
+    . Projects.projectCacheByIdIO appCtx.hasqlJobsPool
 
 
 -- | Boundary adapter: convert a 'WriteFailure' to a gRPC INTERNAL error.
 -- Used at the gRPC handler edge where clients expect status codes via throw,
 -- not Either. Internal pipeline code stays Either-based.
 throwOnWriteFailure :: IOE :> es => Either Telemetry.WriteFailure () -> Eff es ()
-throwOnWriteFailure = \case
-  Right () -> pass
-  Left wf ->
-    liftIO
-      $ throwIO
-      $ GrpcException
-        { grpcError = GrpcInternal
-        , grpcErrorMessage = Just $ "OTLP write failed: " <> Telemetry.writeFailureSummary wf
-        , grpcErrorMetadata = []
-        , grpcErrorDetails = Nothing
-        }
+throwOnWriteFailure = either (throwGrpc GrpcInternal . ("OTLP write failed: " <>) . Telemetry.writeFailureSummary) pure
 
 
 -- | Process a list of OTLP-encoded messages. On success, returns
@@ -354,8 +360,7 @@ processList msgs !attrs =
             (const Nothing)
             ( \ft caches keyToId req ->
                 let !rls = V.fromList $ req ^. PLF.resourceLogs
-                    !pkeys = getLogApiKey rls
-                    !pids = V.fromList [(k, pid) | (k, pid) <- HM.toList keyToId, k `V.elem` pkeys]
+                    !pids = pidsForKeys keyToId (getLogApiKey rls)
                  in V.concatMap (V.fromList . convertResourceLogsToOtelLogs ft caches pids) rls
             )
             (dualWriteWithPoisonMapping appCtx target "logs")
@@ -370,9 +375,7 @@ processList msgs !attrs =
             (const Nothing)
             ( \ft caches keyToId req ->
                 let !rss = V.fromList $ req ^. PTF.resourceSpans
-                    !pkeys = getSpanApiKey rss
-                    !pids = V.fromList [(k, pid) | (k, pid) <- HM.toList keyToId, k `V.elem` pkeys]
-                 in V.fromList $ convertResourceSpansToOtelLogs ft caches pids rss
+                 in V.fromList $ convertResourceSpansToOtelLogs ft caches (pidsForKeys keyToId (getSpanApiKey rss)) rss
             )
             (dualWriteWithPoisonMapping appCtx target "traces")
         Just "org.opentelemetry.otlp.metrics.v1" ->
@@ -398,7 +401,7 @@ processList msgs !attrs =
                         appCtx.hasqlTimefusionUsesPgTypes
                         target
                         flat
-                      <&> fmap (const [])
+                      <&> ($> [])
             )
         _ -> do
           Log.logAttention "processList: unsupported opentelemetry data type" (AE.object ["ce-type" AE..= HM.lookup "ce-type" attrs])
@@ -425,7 +428,7 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds inva
   checkpoint (cp "") do
     let !decodedMsgs = [(ackId, msg, decodeMessage msg :: Either String req) | (ackId, msg) <- msgs]
         !allProjectKeys = V.concat [extractKeys req | (_, _, Right req) <- decodedMsgs]
-        !uniqueProjectKeys = V.fromList $ toList $ HS.fromList $ V.toList allProjectKeys
+        !uniqueProjectKeys = V.fromList $ hashNub $ V.toList allProjectKeys
         !atIds = concatMap extractIds [req | (_, _, Right req) <- decodedMsgs]
 
     (!keyToIdMap, !projectCachesMap) <-
@@ -438,22 +441,18 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds inva
         else Telemetry.retryTransientEff Telemetry.maxReadAttempts "getProjectCaches" do
           !projectIdsAndKeys <- checkpoint (cp ":getProjectIds") $ ProjectApiKeys.projectIdsByProjectApiKeys uniqueProjectKeys
           let !keyToId = HM.fromList $ V.toList projectIdsAndKeys
-              !projectIds = HS.toList $ HM.foldr' HS.insert (HS.fromList atIds) keyToId
+              !projectIds = hashNub $ atIds <> HM.elems keyToId
           !projectCaches <-
             checkpoint (cp ":getProjectCaches")
-              $ liftIO
               $ HM.fromList
-              <$> forM projectIds \pid -> do
-                !cache <-
-                  Cache.fetchWithCache appCtx.projectCache pid
-                    $ fmap (fromMaybe Projects.defaultProjectCache)
-                    . Projects.projectCacheByIdIO appCtx.hasqlJobsPool
-                pure (pid, cache)
+              <$> forM projectIds (traverseToSnd (fetchProjectCache appCtx))
           pure (keyToId, projectCaches)
 
     let !decodePoison = [(ackId, raw, toText err) | (ackId, raw, Left err) <- decodedMsgs]
-        !invalidPoison = [(ackId, raw, err) | (ackId, raw, Right req) <- decodedMsgs, Just err <- [invalidReason req]]
-        !converted = [(ackId, raw, req, convert fallbackTime projectCachesMap keyToIdMap req) | (ackId, raw, Right req) <- decodedMsgs, isNothing (invalidReason req)]
+        -- invalidReason can be a full-request scan (metrics overflow) — evaluate once per message.
+        !checked = [(ackId, raw, req, invalidReason req) | (ackId, raw, Right req) <- decodedMsgs]
+        !invalidPoison = [(ackId, raw, err) | (ackId, raw, _, Just err) <- checked]
+        !converted = [(ackId, raw, req, convert fallbackTime projectCachesMap keyToIdMap req) | (ackId, raw, req, Nothing) <- checked]
         -- "Converted to zero rows" is NOT proof there was nothing to write.
         -- A payload that carried an API key or an at-project-id but produced no
         -- rows was DROPPED: its project never resolved (a cached negative entry,
@@ -529,7 +528,7 @@ parseConnectionString :: Text -> [(Text, AE.Value)]
 parseConnectionString connStr =
   case T.breakOn "=" connStr of
     (prefix, serverPart)
-      | not (T.null serverPart) && (T.toLower prefix == "server" || T.toLower prefix == "host") ->
+      | not (T.null serverPart) && T.toLower prefix `elem` ["server", "host"] ->
           let serverVal = T.drop 1 serverPart
               -- Remove any trailing semicolons
               cleanVal = T.takeWhile (/= ';') serverVal
@@ -843,9 +842,7 @@ migrateHttpSemanticConventions !keyVals =
 deriveClientAddress :: HM.HashMap Text AE.Value -> [(Text, AE.Value)]
 deriveClientAddress kvMap
   | HM.member "client.address" kvMap = []
-  | otherwise = case asum (map tryHeader clientIpHeaders) of
-      Just ip -> [("client.address", AE.String ip)]
-      Nothing -> []
+  | otherwise = maybeToList $ (\ip -> ("client.address", AE.String ip)) <$> asum (map tryHeader clientIpHeaders)
   where
     -- Priority order: vendor-specific (single, trustworthy) before XFF (chainable, spoofable).
     clientIpHeaders :: [(Text, Text -> Text)]
@@ -891,27 +888,26 @@ deriveClientAddress kvMap
 -- | Record a protobuf decode error, categorizing wire type, UTF-8, and EOF errors
 recordProtoError :: MonadIO m => Text -> String -> ByteString -> (Text -> AE.Value -> m ()) -> m ()
 recordProtoError prefix err msg logFn = do
-  let errorInfo = case T.splitOn ":" (toText err) of
-        (firstPart : details) ->
-          let fieldPath = T.takeWhile (/= ':') (T.strip (unwords details))
-              errorType = T.takeWhileEnd (/= ':') (T.strip (unwords details))
-           in AE.object ["err_type" AE..= errorType, "field_path" AE..= fieldPath, "full_err" AE..= err, "msg_size" AE..= BS.length msg]
-        _ -> AE.object ["full_err" AE..= err, "msg_size" AE..= BS.length msg]
+  -- splitOn never yields [], so the tail after the first ':' is always well-defined.
+  let details = T.strip $ unwords $ drop 1 $ T.splitOn ":" (toText err)
+      errorInfo =
+        AE.object
+          [ "err_type" AE..= T.takeWhileEnd (/= ':') details
+          , "field_path" AE..= T.takeWhile (/= ':') details
+          , "full_err" AE..= err
+          , "msg_size" AE..= BS.length msg
+          ]
       categorize
         | "Unknown wire type" `L.isInfixOf` err = Just (prefix <> ":wire_type_error")
         | "Cannot decode byte" `L.isInfixOf` err && "Invalid UTF-8 stream" `L.isInfixOf` err = Just (prefix <> ":utf8_decode_error")
         | "Unexpected end of input" `L.isInfixOf` err = Just (prefix <> ":unexpected_eof_error")
         | otherwise = Nothing
   case categorize of
+    -- Cap distinct keys at 100; beyond that only already-tracked keys keep counting.
     Just errorKey -> liftIO $ atomicModifyIORef' wireTypeErrorsRef $ \(m, dropped) ->
-      if HM.size m >= 100
-        then case HM.lookup errorKey m of
-          Just (count, example) -> ((HM.insert errorKey (count + 1, example) m, dropped), ())
-          Nothing -> ((m, dropped + 1), ())
-        else
-          let updateFn Nothing = Just (1, errorInfo)
-              updateFn (Just (count, example)) = Just (count + 1, example)
-           in ((HM.alter updateFn errorKey m, dropped), ())
+      if HM.size m >= 100 && not (HM.member errorKey m)
+        then ((m, dropped + 1), ())
+        else ((HM.alter (Just . maybe (1, errorInfo) (first (+ 1))) errorKey m, dropped), ())
     Nothing -> logFn ("processList:" <> prefix <> ": unable to parse service request") errorInfo
 
 
@@ -929,13 +925,6 @@ validTsOr :: UTCTime -> Word64 -> UTCTime
 validTsOr fallback ns = if ns >= minValidTimestampNanos && ns /= 0 then nanosecondsToUTC ns else fallback
 
 
--- | Get a valid timestamp with fallback logic
--- Priority: timestamp -> observed_timestamp -> fallback time
-getValidTimestamp :: UTCTime -> Word64 -> Word64 -> UTCTime
-getValidTimestamp !fallbackTime !timeNano !observedTimeNano =
-  validTsOr (validTsOr fallbackTime observedTimeNano) timeNano
-
-
 -- Convert ByteString to hex Text
 byteStringToHexText :: BS.ByteString -> Text
 byteStringToHexText !bs = decodeUtf8 (B16.encode bs)
@@ -950,29 +939,28 @@ hexIdMaybe bs
   | otherwise = Just (byteStringToHexText bs)
 
 
-keyValueToJSON :: [PC.KeyValue] -> AE.Value
-keyValueToJSON !kvs =
-  let
-    !allPairs' = [(kv ^. PCF.key, anyValueToJSON (Just (kv ^. PCF.value))) | kv <- kvs]
-    !allPairs = migrateHttpSemanticConventions allPairs'
-
-    specialKeys = projectSecretKeys
-    (flatPairs, nestedPairs) = L.partition (\(k, _) -> k `elem` specialKeys) allPairs
-    nestedObj = nestedJsonFromDotNotation nestedPairs
-    flatObj = AE.object [AEK.fromText k AE..= v | (k, v) <- flatPairs]
-
-    mergedObj =
-      AE.Object
+-- | Attribute pairs → JSON object: project-identity keys stay flat (they are
+-- stripped afterwards by 'removeProjectId'); everything else expands dot notation.
+attrPairsToJSON :: [(Text, AE.Value)] -> AE.Value
+attrPairsToJSON pairs =
+  let (flatPairs, nestedPairs) = L.partition ((`elem` projectSecretKeys) . fst) pairs
+   in AE.Object
         $ KEM.union
-          (case flatObj of AE.Object km -> km; _ -> KEM.empty)
-          (case nestedObj of AE.Object km -> km; _ -> KEM.empty)
-   in
-    mergedObj
+          (KEM.fromList [(AEK.fromText k, v) | (k, v) <- flatPairs])
+          (case nestedJsonFromDotNotation nestedPairs of AE.Object o -> o; _ -> KEM.empty)
+
+
+keyValuePairs :: [PC.KeyValue] -> [(Text, AE.Value)]
+keyValuePairs kvs = [(kv ^. PCF.key, anyValueToJSON (Just (kv ^. PCF.value))) | kv <- kvs]
+
+
+keyValueToJSON :: [PC.KeyValue] -> AE.Value
+keyValueToJSON !kvs = attrPairsToJSON $ migrateHttpSemanticConventions $ keyValuePairs kvs
 
 
 anyValueToJSON :: Maybe PC.AnyValue -> AE.Value
 anyValueToJSON Nothing = AE.Null
-anyValueToJSON (Just av) = do
+anyValueToJSON (Just av) =
   case av ^. PCF.maybe'value of
     Nothing -> AE.Null
     Just (PC.AnyValue'StringValue txt) ->
@@ -1002,22 +990,9 @@ anyValueToJSON (Just av) = do
     Just (PC.AnyValue'StringValueStrindex _) -> noteProfilingStrindex AE.Null
 
 
--- Convert Resource to JSON
+-- | Resource attributes to JSON. Unlike 'keyValueToJSON', no semconv migration.
 resourceToJSON :: Maybe PR.Resource -> AE.Value
-resourceToJSON Nothing = AE.Null
-resourceToJSON (Just resource) =
-  let
-    attrPairs = [(kv ^. PCF.key, anyValueToJSON (Just (kv ^. PCF.value))) | kv <- resource ^. PRF.attributes]
-    specialKeys = projectSecretKeys
-    (flatPairs, nestedPairs) = L.partition (\(k, _) -> k `elem` specialKeys) attrPairs
-
-    nestedObj = nestedJsonFromDotNotation nestedPairs
-    flatObj = AE.object [AEK.fromText k AE..= v | (k, v) <- flatPairs]
-   in
-    AE.Object
-      $ KEM.union
-        (case flatObj of AE.Object km -> km; _ -> KEM.empty)
-        (case nestedObj of AE.Object km -> km; _ -> KEM.empty)
+resourceToJSON = maybe AE.Null (attrPairsToJSON . keyValuePairs . (^. PRF.attributes))
 
 
 -- Remove project metadata from JSON
@@ -1035,39 +1010,35 @@ severityMap :: Map.Map Text (Text, Telemetry.SeverityLevel)
 severityMap = Map.fromList $ [(t, (t, sl)) | (t, sl) <- canonicalLevels] <> [(alias, (canonical, sl)) | (alias, canonical) <- [("WARNING", "WARN"), ("INFORMATION", "INFO"), ("CRITICAL", "FATAL")], Just sl <- [L.lookup canonical canonicalLevels]]
 
 
-{-# INLINE parseSeverityLevel #-}
-parseSeverityLevel :: Text -> Maybe Telemetry.SeverityLevel
-parseSeverityLevel txt = snd <$> Map.lookup (T.toUpper txt) severityMap
+-- | Normalized severity text + level in one map lookup (used together at the one call site).
+{-# INLINE lookupSeverity #-}
+lookupSeverity :: Text -> Maybe (Text, Telemetry.SeverityLevel)
+lookupSeverity txt = Map.lookup (T.toUpper txt) severityMap
 
 
-{-# INLINE normalizeSeverityLevel #-}
-normalizeSeverityLevel :: Text -> Maybe Text
-normalizeSeverityLevel txt = fst <$> Map.lookup (T.toUpper txt) severityMap
+-- | Gate a project's converted records on its cache: unknown project or a
+-- free-tier project past its daily event+metric budget yields nothing.
+withinQuota :: HM.HashMap Projects.ProjectId Projects.ProjectCache -> Projects.ProjectId -> [a] -> [a]
+withinQuota projectCaches pid records = case HM.lookup pid projectCaches of
+  Just cache
+    | not (Projects.isFreeTier cache.paymentPlan)
+        || toInteger cache.dailyEventCount
+        + toInteger cache.dailyMetricCount
+        < freeTierDailyMaxEvents ->
+        records
+  _ -> []
 
 
 -- | Convert ResourceLogs to OtelLogsAndSpans
 convertResourceLogsToOtelLogs :: UTCTime -> HM.HashMap Projects.ProjectId Projects.ProjectCache -> V.Vector (Text, Projects.ProjectId) -> PL.ResourceLogs -> [OtelLogsAndSpans]
 convertResourceLogsToOtelLogs !fallbackTime !projectCaches !pids resourceLogs =
   let projectKey = fromMaybe "" $ (V.!? 0) $ getLogApiKey (V.singleton resourceLogs)
-      projectId = case find (\(k, _) -> k == projectKey) pids of
-        Just (_, v) -> Just v
-        Nothing ->
-          let pidText = fromMaybe "" $ (V.!? 0) $ getLogAttributeValue "at-project-id" (V.singleton resourceLogs)
-              uId = UUID.fromText pidText
-           in ((Just . UUIDId) =<< uId)
+      projectId =
+        (snd <$> find ((== projectKey) . fst) pids)
+          <|> (UUIDId <$> (UUID.fromText =<< (V.!? 0) (getLogAttributeValue "at-project-id" (V.singleton resourceLogs))))
    in case projectId of
-        Just pid ->
-          case HM.lookup pid projectCaches of
-            Just cache ->
-              -- Check if project has exceeded daily limit for free tier
-              let !totalDailyEvents = fromIntegral cache.dailyEventCount + fromIntegral cache.dailyMetricCount
-                  !isFreeTier = Projects.isFreeTier cache.paymentPlan
-                  !hasExceededLimit = isFreeTier && totalDailyEvents >= freeTierDailyMaxEvents
-               in if hasExceededLimit
-                    then [] -- Discard events for projects that exceeded limits
-                    else convertScopeLogsToOtelLogs fallbackTime pid (Just $ resourceLogs ^. PLF.resource) resourceLogs
-            Nothing -> [] -- No cache found, discard
-        _ -> []
+        Just pid -> withinQuota projectCaches pid $ convertScopeLogsToOtelLogs fallbackTime pid (Just $ resourceLogs ^. PLF.resource) resourceLogs
+        Nothing -> []
 
 
 filterEmptyEvents :: OtelLogsAndSpans -> Bool
@@ -1080,25 +1051,25 @@ convertScopeLogsToOtelLogs :: UTCTime -> Projects.ProjectId -> Maybe PR.Resource
 convertScopeLogsToOtelLogs fallbackTime pid resourceM resourceLogs =
   filter
     filterEmptyEvents
-    [ otelLog
+    [ convertLogRecordToOtelLog fallbackTime pid resourceM logRecord
     | scopeLog <- resourceLogs ^. PLF.scopeLogs
-    , let scope = Just $ scopeLog ^. PLF.scope
     , logRecord <- scopeLog ^. PLF.logRecords
-    , let otelLog = convertLogRecordToOtelLog fallbackTime pid resourceM scope logRecord
     ]
 
 
 -- | Convert LogRecord to OtelLogsAndSpans
-convertLogRecordToOtelLog :: UTCTime -> Projects.ProjectId -> Maybe PR.Resource -> Maybe PC.InstrumentationScope -> PL.LogRecord -> OtelLogsAndSpans
-convertLogRecordToOtelLog !fallbackTime !pid resourceM scopeM logRecord =
+convertLogRecordToOtelLog :: UTCTime -> Projects.ProjectId -> Maybe PR.Resource -> PL.LogRecord -> OtelLogsAndSpans
+convertLogRecordToOtelLog !fallbackTime !pid resourceM logRecord =
   let !timeNano = logRecord ^. PLF.timeUnixNano
       !observedTimeNano = logRecord ^. PLF.observedTimeUnixNano
       !severityText = logRecord ^. PLF.severityText
       !severityNumber = fromEnum (logRecord ^. PLF.severityNumber)
-      !validTimestamp = getValidTimestamp fallbackTime timeNano observedTimeNano
       !validObservedTimestamp = validTsOr fallbackTime observedTimeNano
+      -- Priority: timestamp → observed_timestamp → fallback.
+      !validTimestamp = validTsOr validObservedTimestamp timeNano
 
       !parentId = hexIdMaybe (logRecord ^. PLF.spanId)
+      !severity' = lookupSeverity severityText
 
       otelLog =
         OtelLogsAndSpans
@@ -1115,11 +1086,11 @@ convertLogRecordToOtelLog !fallbackTime !pid resourceM scopeM logRecord =
                   , trace_flags = Nothing
                   , is_remote = Nothing
                   }
-          , level = normalizeSeverityLevel severityText
+          , level = fst <$> severity'
           , severity =
               Just
                 $ Severity
-                  { severity_text = parseSeverityLevel severityText
+                  { severity_text = snd <$> severity'
                   , severity_number = severityNumber
                   }
           , body = fmap AesonText $ Just $ anyValueToJSON $ Just $ logRecord ^. PLF.body
@@ -1151,27 +1122,15 @@ convertResourceSpansToOtelLogs !fallbackTime !projectCaches !pids !resourceSpans
     convertOne rs =
       let projectKey = fromMaybe "" $ (V.!? 0) $ getSpanApiKey (V.singleton rs)
           projectId =
-            case find (\(k, _) -> k == projectKey && k /= "") pids of
-              Just (_, v) -> Just v
-              Nothing ->
-                case (V.!? 0) $ getSpanAttributeValue "at-project-id" (V.singleton rs) of
-                  Just pidText | Just uid <- UUID.fromText pidText -> Just (UUIDId uid)
-                  -- Fall back to the batch's project only when it is unambiguous (a
-                  -- single project). Picking V.head of a multi-project batch silently
-                  -- mis-attributes spans to the wrong project (cross-tenant leak).
-                  _ -> case V.toList pids of
-                    [(_, sole)] -> Just sole
-                    _ -> Nothing
+            (snd <$> find (\(k, _) -> k == projectKey && k /= "") pids)
+              <|> (UUIDId <$> (UUID.fromText =<< (V.!? 0) (getSpanAttributeValue "at-project-id" (V.singleton rs))))
+              -- Fall back to the batch's project only when it is unambiguous (a
+              -- single project). Picking V.head of a multi-project batch silently
+              -- mis-attributes spans to the wrong project (cross-tenant leak).
+              <|> (case V.toList pids of [(_, sole)] -> Just sole; _ -> Nothing)
        in case projectId of
-            Just pid ->
-              case HM.lookup pid projectCaches of
-                Just cache ->
-                  let !totalDailyEvents = toInteger cache.dailyEventCount + toInteger cache.dailyMetricCount
-                      !isFreeTier = Projects.isFreeTier cache.paymentPlan
-                      !hasExceededLimit = isFreeTier && totalDailyEvents >= freeTierDailyMaxEvents
-                   in if hasExceededLimit then [] else convertScopeSpansToOtelLogs fallbackTime pid (Just $ rs ^. PTF.resource) rs
-                Nothing -> []
-            _ -> []
+            Just pid -> withinQuota projectCaches pid $ convertScopeSpansToOtelLogs fallbackTime pid (Just $ rs ^. PTF.resource) rs
+            Nothing -> []
 
 
 -- | Convert ScopeSpans to OtelLogsAndSpansF
@@ -1179,17 +1138,15 @@ convertScopeSpansToOtelLogs :: UTCTime -> Projects.ProjectId -> Maybe PR.Resourc
 convertScopeSpansToOtelLogs fallbackTime pid resourceM resourceSpans =
   filter
     filterEmptyEvents
-    [ otelLog
+    [ convertSpanToOtelLog fallbackTime pid resourceM pSpan
     | scopeSpan <- resourceSpans ^. PTF.scopeSpans
-    , let scope = Just $ scopeSpan ^. PTF.scope
     , pSpan <- scopeSpan ^. PTF.spans
-    , let otelLog = convertSpanToOtelLog fallbackTime pid resourceM scope pSpan
     ]
 
 
 -- | Convert Span to OtelLogsAndSpans
-convertSpanToOtelLog :: UTCTime -> Projects.ProjectId -> Maybe PR.Resource -> Maybe PC.InstrumentationScope -> PT.Span -> OtelLogsAndSpans
-convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
+convertSpanToOtelLog :: UTCTime -> Projects.ProjectId -> Maybe PR.Resource -> PT.Span -> OtelLogsAndSpans
+convertSpanToOtelLog !fallbackTime !pid resourceM pSpan =
   let !startTimeNano = pSpan ^. PTF.startTimeUnixNano
       !endTimeNano = pSpan ^. PTF.endTimeUnixNano
       !validStartTime = validTsOr fallbackTime startTimeNano
@@ -1198,24 +1155,19 @@ convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
         if startTimeNano > 0 && endTimeNano > startTimeNano
           then endTimeNano - startTimeNano
           else 0
-      spanKind = pSpan ^. PTF.kind
-      spanKindText = case spanKind of
-        PT.Span'SPAN_KIND_INTERNAL -> Just "internal"
-        PT.Span'SPAN_KIND_SERVER -> Just "server"
-        PT.Span'SPAN_KIND_CLIENT -> Just "client"
-        PT.Span'SPAN_KIND_PRODUCER -> Just "producer"
-        PT.Span'SPAN_KIND_CONSUMER -> Just "consumer"
-        _ -> Just "unspecified"
-      statusM = Just $ pSpan ^. PTF.status
-      statusCodeText = case statusM of
-        Just status -> case status ^. PTF.code of
-          PT.Status'STATUS_CODE_OK -> Just "OK"
-          PT.Status'STATUS_CODE_ERROR -> Just "ERROR"
-          _ -> Just "UNSET"
-        Nothing -> Nothing
-      statusMsgText = case statusM of
-        Just status -> Just $ status ^. PTF.message
-        Nothing -> Nothing
+      spanKindText = Just $ case pSpan ^. PTF.kind of
+        PT.Span'SPAN_KIND_INTERNAL -> "internal"
+        PT.Span'SPAN_KIND_SERVER -> "server"
+        PT.Span'SPAN_KIND_CLIENT -> "client"
+        PT.Span'SPAN_KIND_PRODUCER -> "producer"
+        PT.Span'SPAN_KIND_CONSUMER -> "consumer"
+        _ -> "unspecified"
+      status = pSpan ^. PTF.status
+      statusCodeText = Just $ case status ^. PTF.code of
+        PT.Status'STATUS_CODE_OK -> "OK"
+        PT.Status'STATUS_CODE_ERROR -> "ERROR"
+        _ -> "UNSET"
+      statusMsgText = Just $ status ^. PTF.message
       parentId = hexIdMaybe (pSpan ^. PTF.parentSpanId)
 
       -- Convert events only if non-empty
@@ -1261,7 +1213,7 @@ convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
       spanName' = pSpan ^. PTF.name
       -- "monoscope.http" included so re-ingested spans get consistent body/attribute processing
       isOurSdkSpan = spanName' `elem` Telemetry.sdkSpanNames
-      (req, res) = case Map.lookup "http" (fromMaybe Map.empty attributes) of
+      (req, res) = case Map.lookup "http" =<< attributes of
         Just (AE.Object http) -> (KEM.lookup "request" http, KEM.lookup "response" http)
         _ -> (Nothing, Nothing)
       body =
@@ -1280,21 +1232,14 @@ convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
               Just (AE.String b) -> b64ToJson b
               _ -> AE.Null
           extractBody _ = AE.Null
-      newAttributes' =
-        if isOurSdkSpan
-          then
-            let htt = Map.lookup "http" (fromMaybe Map.empty attributes)
-             in case htt of
-                  Just (AE.Object http) ->
-                    let newHttp = case (req, res) of
-                          (Just (AE.Object re), Just (AE.Object rs)) ->
-                            let newReq = KEM.insert "request" (AE.Object $ KEM.delete "body" re) http
-                                newRes = KEM.insert "response" (AE.Object $ KEM.delete "body" rs) newReq
-                             in Just $ Map.insert "http" (AE.Object newRes) (fromMaybe Map.empty attributes)
-                          _ -> attributes
-                     in newHttp
-                  _ -> attributes
-          else attributes
+      -- Bodies were lifted into `body` above; drop them from the attributes copy.
+      newAttributes' = case (isOurSdkSpan, Map.lookup "http" =<< attributes, req, res) of
+        (True, Just (AE.Object http), Just (AE.Object re), Just (AE.Object rs)) ->
+          let http' =
+                KEM.insert "response" (AE.Object $ KEM.delete "body" rs)
+                  $ KEM.insert "request" (AE.Object $ KEM.delete "body" re) http
+           in Map.insert "http" (AE.Object http') <$> attributes
+        _ -> attributes
       -- Fall back to resource.service.name for server.address when no host attribute is present on HTTP spans
       !resourceAttrs = jsonToMap $ removeProjectId $ resourceToJSON resourceM
       newAttributes = case newAttributes' of
@@ -1394,15 +1339,7 @@ metricRequestHasOverflow req =
 -- | Convert ResourceMetrics to MetricRecords
 convertResourceMetricsToMetricRecords :: UTCTime -> HM.HashMap Projects.ProjectId Projects.ProjectCache -> Projects.ProjectId -> V.Vector PM.ResourceMetrics -> [Telemetry.MetricRecord]
 convertResourceMetricsToMetricRecords !fallbackTime !projectCaches !pid !resourceMetrics =
-  case HM.lookup pid projectCaches of
-    Just cache ->
-      let !totalDailyEvents = fromIntegral cache.dailyEventCount + fromIntegral cache.dailyMetricCount
-          !isFreeTier = Projects.isFreeTier cache.paymentPlan
-          !hasExceededLimit = isFreeTier && totalDailyEvents >= freeTierDailyMaxEvents
-       in if hasExceededLimit
-            then []
-            else concatMap (convertResourceMetricToMetricRecords fallbackTime pid) (V.toList resourceMetrics)
-    Nothing -> []
+  withinQuota projectCaches pid $ concatMap (convertResourceMetricToMetricRecords fallbackTime pid) (V.toList resourceMetrics)
 
 
 -- | Convert a single ResourceMetrics to MetricRecords
@@ -1424,38 +1361,28 @@ convertResourceMetricToMetricRecords fallbackTime pid resourceMetric =
 convertMetricToMetricRecords :: UTCTime -> Projects.ProjectId -> Maybe PR.Resource -> Text -> Int -> Maybe PC.InstrumentationScope -> Text -> PM.Metric -> [Telemetry.MetricRecord]
 convertMetricToMetricRecords fallbackTime pid resourceM resourceSchemaUrl droppedAttributesCount scopeM scopeSchemaUrl metric =
   case metric ^. PMF.maybe'data' of
-    Just metricData ->
-      case metricData of
-        PM.Metric'Gauge gauge -> convertNumberDataPoints (gauge ^. PMF.dataPoints) Telemetry.MTGauge Telemetry.GaugeValue Nothing Nothing
-        PM.Metric'Sum s ->
-          let !n = fromEnum (s ^. PMF.aggregationTemporality)
-              !temporality = safeToEnum @Telemetry.AggregationTemporality n
-              !monotonic = Just $ s ^. PMF.isMonotonic
-           in convertNumberDataPoints (s ^. PMF.dataPoints) Telemetry.MTSum Telemetry.SumValue temporality monotonic
-        PM.Metric'Histogram hist ->
-          let temporality = safeToEnum @Telemetry.AggregationTemporality $ fromEnum (hist ^. PMF.aggregationTemporality)
-           in mapMaybe (convertHistogramPoint temporality) $ hist ^. PMF.dataPoints
-        PM.Metric'ExponentialHistogram ehist ->
-          let temporality = safeToEnum @Telemetry.AggregationTemporality $ fromEnum (ehist ^. PMF.aggregationTemporality)
-           in mapMaybe (convertExpHistogramPoint temporality) $ ehist ^. PMF.dataPoints
-        PM.Metric'Summary summary -> mapMaybe convertSummaryPoint $ summary ^. PMF.dataPoints
+    Just (PM.Metric'Gauge gauge) -> convertNumberDataPoints (gauge ^. PMF.dataPoints) Telemetry.MTGauge Telemetry.GaugeValue Nothing Nothing
+    Just (PM.Metric'Sum s) ->
+      convertNumberDataPoints (s ^. PMF.dataPoints) Telemetry.MTSum Telemetry.SumValue (temporality $ s ^. PMF.aggregationTemporality) (Just $ s ^. PMF.isMonotonic)
+    Just (PM.Metric'Histogram hist) -> mapMaybe (convertHistogramPoint $ temporality $ hist ^. PMF.aggregationTemporality) $ hist ^. PMF.dataPoints
+    Just (PM.Metric'ExponentialHistogram ehist) -> mapMaybe (convertExpHistogramPoint $ temporality $ ehist ^. PMF.aggregationTemporality) $ ehist ^. PMF.dataPoints
+    Just (PM.Metric'Summary summary) -> mapMaybe convertSummaryPoint $ summary ^. PMF.dataPoints
     Nothing -> []
   where
     !res = removeProjectId $ resourceToJSON resourceM
     !mName = metric ^. PMF.name
     !mDesc = metric ^. PMF.description
     !mUnit = metric ^. PMF.unit
-    !scopeJSON = case scopeM of
-      Just scope ->
-        AE.object
-          [ "name" AE..= (scope ^. PCF.name)
-          , "version" AE..= (scope ^. PCF.version)
-          , "attributes" AE..= keyValueToJSON (scope ^. PCF.attributes)
-          ]
-      Nothing -> AE.Null
-    !metaJSON = case scopeM of
-      Just scope -> AE.object ["scope" AE..= (scope ^. PCF.name)]
-      Nothing -> AE.Null
+    !scopeJSON = flip (maybe AE.Null) scopeM \scope ->
+      AE.object
+        [ "name" AE..= (scope ^. PCF.name)
+        , "version" AE..= (scope ^. PCF.version)
+        , "attributes" AE..= keyValueToJSON (scope ^. PCF.attributes)
+        ]
+    !metaJSON = maybe AE.Null (\scope -> AE.object ["scope" AE..= (scope ^. PCF.name)]) scopeM
+
+    temporality :: PM.AggregationTemporality -> Maybe Telemetry.AggregationTemporality
+    temporality = safeToEnum . fromEnum
 
     pointTime = validTsOr fallbackTime
     pointAttrs point = keyValueToJSON (V.toList $ point ^. PMF.vec'attributes)
@@ -1472,8 +1399,8 @@ convertMetricToMetricRecords fallbackTime pid resourceM resourceSchemaUrl droppe
                       Nothing -> AE.Null
                   )
         , "filtered_attributes" AE..= keyValueToJSON (V.toList $ exemplar ^. PMF.vec'filteredAttributes)
-        , "trace_id" AE..= (decodeUtf8 (B16.encode $ exemplar ^. PMF.traceId) :: Text)
-        , "span_id" AE..= (decodeUtf8 (B16.encode $ exemplar ^. PMF.spanId) :: Text)
+        , "trace_id" AE..= byteStringToHexText (exemplar ^. PMF.traceId)
+        , "span_id" AE..= byteStringToHexText (exemplar ^. PMF.spanId)
         ]
 
     validStartTime n = if n == 0 then Nothing else Just $ pointTime n
@@ -1514,22 +1441,22 @@ convertMetricToMetricRecords fallbackTime pid resourceM resourceSchemaUrl droppe
               !pSize = fromIntegral $ BS.length (encodeMessage point)
            in mkRecord (pointTime $ point ^. PMF.timeUnixNano) (validStartTime $ point ^. PMF.startTimeUnixNano) (pointAttrs point) (exemplarsToJSON $ point ^. PMF.vec'exemplars) mType (wrap value) (fromIntegral $ point ^. PMF.flags) temporality_ monotonic_ pSize
 
-    convertHistogramPoint temporality point
+    convertHistogramPoint temporality_ point
       | VU.length vBCounts /= VU.length vEBounds + 1 = Nothing -- OTLP spec: len(bucket_counts) == len(explicit_bounds) + 1
       | otherwise = do
           count <- boundedCount $ point ^. PMF.count
           bucketCounts <- traverse boundedCount $ point ^. PMF.bucketCounts
-          pure $ mkRecord (pointTime $ point ^. PMF.timeUnixNano) (validStartTime $ point ^. PMF.startTimeUnixNano) (pointAttrs point) (exemplarsToJSON $ point ^. PMF.vec'exemplars) Telemetry.MTHistogram (Telemetry.HistogramValue Telemetry.Histogram{sum = point ^. PMF.maybe'sum, count, bucketCounts = V.fromList bucketCounts, explicitBounds = V.fromList $ point ^. PMF.explicitBounds, pointMin = point ^. PMF.maybe'min, pointMax = point ^. PMF.maybe'max}) (fromIntegral $ point ^. PMF.flags) temporality Nothing (fromIntegral $ BS.length (encodeMessage point))
+          pure $ mkRecord (pointTime $ point ^. PMF.timeUnixNano) (validStartTime $ point ^. PMF.startTimeUnixNano) (pointAttrs point) (exemplarsToJSON $ point ^. PMF.vec'exemplars) Telemetry.MTHistogram (Telemetry.HistogramValue Telemetry.Histogram{sum = point ^. PMF.maybe'sum, count, bucketCounts = V.fromList bucketCounts, explicitBounds = V.fromList $ point ^. PMF.explicitBounds, pointMin = point ^. PMF.maybe'min, pointMax = point ^. PMF.maybe'max}) (fromIntegral $ point ^. PMF.flags) temporality_ Nothing (fromIntegral $ BS.length (encodeMessage point))
       where
         vBCounts = point ^. PMF.vec'bucketCounts
         vEBounds = point ^. PMF.vec'explicitBounds
 
-    convertExpHistogramPoint temporality point = do
+    convertExpHistogramPoint temporality_ point = do
       count <- boundedCount $ point ^. PMF.count
       zeroCount <- boundedCount $ point ^. PMF.zeroCount
       positive <- traverse toBucket $ point ^. PMF.maybe'positive
       negative <- traverse toBucket $ point ^. PMF.maybe'negative
-      pure $ mkRecord (pointTime $ point ^. PMF.timeUnixNano) (validStartTime $ point ^. PMF.startTimeUnixNano) (pointAttrs point) (exemplarsToJSON $ point ^. PMF.vec'exemplars) Telemetry.MTExponentialHistogram (Telemetry.ExponentialHistogramValue Telemetry.ExponentialHistogram{sum = point ^. PMF.maybe'sum, count, pointMin = point ^. PMF.maybe'min, pointMax = point ^. PMF.maybe'max, zeroCount, scale = fromIntegral $ point ^. PMF.scale, pointPositive = positive, pointNegative = negative, zeroThreshold = point ^. PMF.zeroThreshold}) (fromIntegral $ point ^. PMF.flags) temporality Nothing (fromIntegral $ BS.length (encodeMessage point))
+      pure $ mkRecord (pointTime $ point ^. PMF.timeUnixNano) (validStartTime $ point ^. PMF.startTimeUnixNano) (pointAttrs point) (exemplarsToJSON $ point ^. PMF.vec'exemplars) Telemetry.MTExponentialHistogram (Telemetry.ExponentialHistogramValue Telemetry.ExponentialHistogram{sum = point ^. PMF.maybe'sum, count, pointMin = point ^. PMF.maybe'min, pointMax = point ^. PMF.maybe'max, zeroCount, scale = fromIntegral $ point ^. PMF.scale, pointPositive = positive, pointNegative = negative, zeroThreshold = point ^. PMF.zeroThreshold}) (fromIntegral $ point ^. PMF.flags) temporality_ Nothing (fromIntegral $ BS.length (encodeMessage point))
       where
         toBucket bucket = Telemetry.EHBucket (fromIntegral $ bucket ^. PMF.offset) . V.fromList <$> traverse boundedCount (bucket ^. PMF.bucketCounts)
 
@@ -1552,12 +1479,10 @@ runServer appLogger appCtx tp = do
   initPeriodicErrorLogging appCtx.backgroundScope appLogger
   runServerWithHandlers def config (services appLogger appCtx tp)
   where
-    serverHost = "0.0.0.0"
-    serverPort = appCtx.config.grpcPort
     config :: ServerConfig
     config =
       ServerConfig
-        { serverInsecure = Just (InsecureConfig (Just $ toString serverHost) (fromIntegral serverPort))
+        { serverInsecure = Just (InsecureConfig (Just "0.0.0.0") (fromIntegral appCtx.config.grpcPort))
         , serverSecure = Nothing
         }
 
@@ -1602,42 +1527,25 @@ processSignalRequest label signal receivedMsg noun countKey metadataApiKey proje
   appCtx <- ask @AuthContext
 
   let atIds = V.catMaybes $ Projects.projectIdFromText <$> V.fromList atIds'
-
       -- Combine API key from metadata with keys from resource attributes
-      !allApiKeys = case metadataApiKey of
-        Just key -> V.cons key projectKeys
-        Nothing -> projectKeys
-
-  -- Verify authentication: if project keys or IDs are present, they must resolve to valid projects
-  when (not (V.null allApiKeys) || not (V.null atIds)) $ do
-    projectIdsAndKeys <- ProjectApiKeys.projectIdsByProjectApiKeys allApiKeys
-    let allProjectIds = toList . HS.fromList $ V.toList atIds <> [pid | (_, pid) <- V.toList projectIdsAndKeys]
-    when (null allProjectIds)
-      $ liftIO
-      $ throwIO
-      $ GrpcException
-        { grpcError = GrpcUnauthenticated
-        , grpcErrorMessage = Just "Invalid or missing project API key"
-        , grpcErrorMetadata = []
-        , grpcErrorDetails = Nothing
-        }
-    Log.logTrace
-      (label <> ": Authentication successful")
-      (AE.object ["project_ids" AE..= map unUUIDId allProjectIds, "project_keys" AE..= V.toList allApiKeys, "metadata_auth" AE..= isJust metadataApiKey])
+      !allApiKeys = maybe projectKeys (`V.cons` projectKeys) metadataApiKey
 
   projectIdsAndKeys <-
     checkpoint (toAnnotation $ "processList:" <> signal <> ":getProjectIds")
       $ ProjectApiKeys.projectIdsByProjectApiKeys allApiKeys
-  -- Fetch project caches for limit checking
-  projectCaches <- checkpoint (toAnnotation $ "processList:" <> signal <> ":getProjectCaches") $ do
-    let projectIds = toList . HS.fromList $ V.toList atIds <> [pid | (_, pid) <- V.toList projectIdsAndKeys]
+  let allProjectIds = hashNub $ V.toList atIds <> map snd (V.toList projectIdsAndKeys)
 
-    caches <- forM projectIds $ \pid -> do
-      cache <- liftIO $ Cache.fetchWithCache appCtx.projectCache pid $ \pid' -> do
-        mpjCache <- Projects.projectCacheByIdIO appCtx.hasqlJobsPool pid'
-        pure $ fromMaybe Projects.defaultProjectCache mpjCache
-      pure (pid, cache)
-    pure $ HM.fromList caches
+  -- Verify authentication: if project keys or IDs are present, they must resolve to valid projects
+  when (not (V.null allApiKeys) || not (V.null atIds)) do
+    when (null allProjectIds) $ throwGrpc GrpcUnauthenticated "Invalid or missing project API key"
+    Log.logTrace
+      (label <> ": Authentication successful")
+      (AE.object ["project_ids" AE..= map unUUIDId allProjectIds, "project_keys" AE..= V.toList allApiKeys, "metadata_auth" AE..= isJust metadataApiKey])
+
+  projectCaches <-
+    checkpoint (toAnnotation $ "processList:" <> signal <> ":getProjectCaches")
+      $ HM.fromList
+      <$> forM allProjectIds (traverseToSnd (fetchProjectCache appCtx))
   let !records = convert currentTime projectCaches projectIdsAndKeys
 
   Log.logTrace
@@ -1654,7 +1562,6 @@ processSignalRequest label signal receivedMsg noun countKey metadataApiKey proje
       (AE.object ["inserted_count" AE..= V.length minted])
 
 
--- | Trace service handler (Export)
 -- | OTLP/HTTP (application/x-protobuf) ingestion — same processing pipeline
 -- as the gRPC handlers, for SDK exporters that speak http/protobuf
 -- (hs-opentelemetry's does) and self-hosted setups without a collector in
@@ -1672,22 +1579,17 @@ httpLogsExport appLogger appCtx tp keyM body = case decodeMessage body of
     pure $ Right (encodeMessage (defMessage :: LS.ExportLogsServiceResponse))
 
 
+-- | Metadata-less Export handlers, kept for direct calls from tests; the
+-- RpcHandler variants below carry the gRPC metadata api-key.
 traceServiceExport :: Logger -> AuthContext -> TracerProvider -> Proto TS.ExportTraceServiceRequest -> IO (Proto TS.ExportTraceServiceResponse)
 traceServiceExport appLogger appCtx tp (Proto req) = do
-  -- Note: This version is for backwards compatibility when called directly in tests
-  -- The RpcHandler version below has access to metadata
   _ <- runBackground appLogger appCtx tp $ processTraceRequest Nothing req
-  -- Return an empty response
   pure defMessage
 
 
--- | Logs service handler (Export)
 logsServiceExport :: Logger -> AuthContext -> TracerProvider -> Proto LS.ExportLogsServiceRequest -> IO (Proto LS.ExportLogsServiceResponse)
 logsServiceExport appLogger appCtx tp (Proto req) = do
-  -- Note: This version is for backwards compatibility when called directly in tests
-  -- The RpcHandler version below has access to metadata
   _ <- runBackground appLogger appCtx tp $ processLogsRequest Nothing req
-  -- Return an empty response
   pure defMessage
 
 
@@ -1695,15 +1597,7 @@ logsServiceExport appLogger appCtx tp (Proto req) = do
 processMetricsRequest :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es) => Maybe Text -> MS.ExportMetricsServiceRequest -> Eff es ()
 processMetricsRequest metadataApiKey req = do
   Log.logTrace "Received metrics export request" AE.Null
-  when (metricRequestHasOverflow req)
-    $ liftIO
-    $ throwIO
-      GrpcException
-        { grpcError = GrpcInternal
-        , grpcErrorMessage = Just "OTLP metric count exceeds BIGINT maximum"
-        , grpcErrorMetadata = []
-        , grpcErrorDetails = Nothing
-        }
+  when (metricRequestHasOverflow req) $ throwGrpc GrpcInternal "OTLP metric count exceeds BIGINT maximum"
 
   currentTime <- Time.currentTime
   appCtx <- ask @AuthContext
@@ -1711,14 +1605,9 @@ processMetricsRequest metadataApiKey req = do
   let !resourceMetrics = V.fromList $ req ^. PMF.resourceMetrics
       !projectKey = getMetricApiKey resourceMetrics
 
-  pidM <- do
-    -- Try metadata API key first, then resource attribute key, then project ID
-    p1 <- case metadataApiKey of
-      Just key -> ProjectApiKeys.getProjectIdByApiKey key
-      Nothing -> pure Nothing
-    p2 <- join <$> forM projectKey ProjectApiKeys.getProjectIdByApiKey
-    let p3 = Projects.projectIdFromText =<< getMetricAttributeValue "at-project-id" resourceMetrics
-    pure (p1 <|> p2 <|> p3)
+  -- Try metadata API key first, then resource attribute key, then project ID
+  keyPidM <- asum <$> traverse ProjectApiKeys.getProjectIdByApiKey (maybeToList metadataApiKey <> maybeToList projectKey)
+  let pidM = keyPidM <|> (Projects.projectIdFromText =<< getMetricAttributeValue "at-project-id" resourceMetrics)
 
   case pidM of
     Just pid -> do
@@ -1726,10 +1615,7 @@ processMetricsRequest metadataApiKey req = do
         "Metrics: Authentication successful"
         (AE.object ["project_id" AE..= unUUIDId pid, "project_key" AE..= projectKey, "metadata_auth" AE..= isJust metadataApiKey])
 
-      -- Fetch project cache using cache pattern
-      projectCache <- liftIO $ Cache.fetchWithCache appCtx.projectCache pid $ \pid' -> do
-        mpjCache <- Projects.projectCacheByIdIO appCtx.hasqlJobsPool pid'
-        pure $ fromMaybe Projects.defaultProjectCache mpjCache
+      projectCache <- fetchProjectCache appCtx pid
       let !projectCaches = one (pid, projectCache)
           !metricRecords = convertResourceMetricsToMetricRecords currentTime projectCaches pid resourceMetrics
 
@@ -1744,25 +1630,13 @@ processMetricsRequest metadataApiKey req = do
         Log.logTrace
           "Metrics: Successfully inserted metrics into database"
           (AE.object ["inserted_count" AE..= V.length records])
-    Nothing ->
-      -- Return authentication error for gRPC requests with invalid or missing keys
-      liftIO
-        $ throwIO
-        $ GrpcException
-          { grpcError = GrpcUnauthenticated
-          , grpcErrorMessage = Just "Invalid or missing project API key"
-          , grpcErrorMetadata = []
-          , grpcErrorDetails = Nothing
-          }
+    -- Return authentication error for gRPC requests with invalid or missing keys
+    Nothing -> throwGrpc GrpcUnauthenticated "Invalid or missing project API key"
 
 
--- | Metrics service handler (Export)
 metricsServiceExport :: Logger -> AuthContext -> TracerProvider -> Proto MS.ExportMetricsServiceRequest -> IO (Proto MS.ExportMetricsServiceResponse)
 metricsServiceExport appLogger appCtx tp (Proto req) = do
-  -- Note: This version is for backwards compatibility when called directly in tests
-  -- The RpcHandler version below has access to metadata
   _ <- runBackground appLogger appCtx tp $ processMetricsRequest Nothing req
-  -- Return an empty response
   pure defMessage
 
 
@@ -1782,15 +1656,12 @@ isAesonTextEmpty (Just (AesonText v)) =
 isFreeTierExceededCached :: AuthContext -> Maybe Text -> IO Bool
 isFreeTierExceededCached appCtx = \case
   Nothing -> pure False
-  Just key -> do
-    pidM <- join <$> Cache.lookup appCtx.projectKeyCache key
-    case pidM of
+  Just key ->
+    Cache.lookup appCtx.projectKeyCache key >>= \pidM -> case join pidM of
       Nothing -> pure False
-      Just pid -> do
-        cacheM <- Cache.lookup appCtx.projectCache pid
-        pure $ case cacheM of
-          Just pc -> Projects.isFreeTier pc.paymentPlan && pc.dailyEventCount >= fromInteger freeTierDailyMaxEvents
-          Nothing -> False
+      Just pid ->
+        maybe False (\pc -> Projects.isFreeTier pc.paymentPlan && pc.dailyEventCount >= fromInteger freeTierDailyMaxEvents)
+          <$> Cache.lookup appCtx.projectCache pid
 
 
 -- | Shared skeleton for the three OTLP export RpcHandlers: read metadata/api-key,

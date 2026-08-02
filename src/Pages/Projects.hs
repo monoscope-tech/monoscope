@@ -348,8 +348,7 @@ validateNotificationChannels :: Projects.ProjectId -> [Text] -> [Text] -> ATAuth
 validateNotificationChannels pid enabledChannels phones = do
   discord <- requireIntegration "discord" "You need to connect Discord to this project first." enabledChannels (getDiscordDataByProjectId pid)
   slack <- requireIntegration "slack" "You need to connect Slack to this project first." enabledChannels (getProjectSlackData pid)
-  let whatsapp = if "phone" `elem` enabledChannels && null phones then Left "Provide at least one whatsapp number" else Right ()
-  pure $ discord *> slack *> whatsapp
+  pure $ discord *> slack *> when ("phone" `elem` enabledChannels && null phones) (Left "Provide at least one whatsapp number")
 
 
 -- | Resolve the live Slack channel list for an (already-fetched) SlackData.
@@ -379,7 +378,7 @@ teamPageData pid = do
 -- | When @channel@ is toggled on, the corresponding integration row must exist.
 requireIntegration :: Text -> Text -> [Text] -> ATAuthCtx (Maybe a) -> ATAuthCtx (Either Text ())
 requireIntegration channel errMsg enabled fetch
-  | channel `elem` enabled = maybe (Left errMsg) (const (Right ())) <$> fetch
+  | channel `elem` enabled = maybeToRight errMsg . void <$> fetch
   | otherwise = pure (Right ())
 
 
@@ -458,7 +457,6 @@ integrationsBody IntegrationsConfig{..} = do
     -- The handler writes `disabled_channels = allChannels \\ enabledChannels` on @everyone.
     -- If a new channel type is ever added, it must also be added to `allChannels`
     -- or it will silently be treated as "enabled" for every project.
-    let notifVals = hxVals_ "js:{enabledChannels: Array.from(document.querySelectorAll('input[name=\"notifChannel\"]:checked')).map(i => i.value), phones: window.getTagValues('#phones_input'), emails: window.getTagValues('#emails_input'), slackChannels: window.getTagValues('#slack-channels-input')}"
     div_ [id_ "integrations-form-section"] do
       div_ [id_ "notifsForm"] do
         let ems = decodeUtf8 $ AE.encode $ V.toList emails
@@ -479,14 +477,13 @@ integrationsBody IntegrationsConfig{..} = do
 
         div_ [class_ "mt-6"] do
           button_
-            [ class_ "btn btn-sm btn-ghost"
-            , hxPost_ [text|/p/$pid/notifications-channels|]
-            , notifVals
-            , hxTarget_ "#integrations-form-section"
-            , hxSelect_ "#integrations-form-section"
-            , hxSwap_ "outerHTML swap:0.3s"
-            , [__| on change from closest <div/> put 'btn btn-sm btn-primary' into my.className |]
-            ]
+            ( [ class_ "btn btn-sm btn-ghost"
+              , hxPost_ [text|/p/$pid/notifications-channels|]
+              , hxVals_ "js:{enabledChannels: Array.from(document.querySelectorAll('input[name=\"notifChannel\"]:checked')).map(i => i.value), phones: window.getTagValues('#phones_input'), emails: window.getTagValues('#emails_input'), slackChannels: window.getTagValues('#slack-channels-input')}"
+              , [__| on change from closest <div/> put 'btn btn-sm btn-primary' into my.className |]
+              ]
+                <> integrationsSwapAttrs_
+            )
             "Save"
 
     -- Developer tools
@@ -503,13 +500,23 @@ integrationsBody IntegrationsConfig{..} = do
         p_ [class_ "text-textWeak text-sm py-4"] "Loading..."
 
 
+-- | Fired after a "send test alert" form submits, so any `testSent from:body`-listening panel refreshes.
+testSentAttr_ :: Attribute
+testSentAttr_ = [__| on htmx:afterRequest from closest <form/> trigger testSent on body |]
+
+
+-- | Shared htmx target/select/swap for actions that re-render the integrations panel.
+integrationsSwapAttrs_ :: [Attribute]
+integrationsSwapAttrs_ = [hxTarget_ "#integrations-form-section", hxSelect_ "#integrations-form-section", hxSwap_ "outerHTML swap:0.3s"]
+
+
 renderInlineTestButton :: Text -> Text -> Maybe UUID.UUID -> Html ()
 renderInlineTestButton pid channel teamIdM =
   form_ [hxPost_ [text|/p/$pid/settings/integrations/test|], hxSwap_ "none", hxTrigger_ "submit", class_ "inline"] do
     input_ [type_ "hidden", name_ "channel", value_ channel]
     input_ [type_ "hidden", name_ "issueType", value_ "runtime_exception"]
     whenJust teamIdM \tid -> input_ [type_ "hidden", name_ "teamId", value_ $ UUID.toText tid]
-    button_ [type_ "submit", class_ "btn btn-xs btn-outline gap-1", [__| on htmx:afterRequest from closest <form/> trigger testSent on body |]] do
+    button_ [type_ "submit", class_ "btn btn-xs btn-outline gap-1", testSentAttr_] do
       faSprite_ "flask-vial" "regular" "h-3 w-3"
       "Test"
 
@@ -520,7 +527,7 @@ renderNotificationOption pid teamIdM title value isChecked isConfigured icon ext
   div_ [] do
     -- Compact row: icon, name, test, toggle
     div_ [class_ "flex items-center gap-3 p-3"] do
-      div_ [class_ "flex items-center justify-center shrink-0 w-7 h-7 rounded-md", class_ $ if isActive then "bg-fillBrand-weak" else "bg-fillWeak"] icon
+      div_ [class_ $ "flex items-center justify-center shrink-0 w-7 h-7 rounded-md " <> if isActive then "bg-fillBrand-weak" else "bg-fillWeak"] icon
       span_ [class_ "text-sm font-medium text-textStrong flex-1 min-w-0"] $ toHtml title
       div_ [class_ "flex items-center gap-2 shrink-0", id_ $ value <> "-test-button"] do
         if isActive
@@ -531,9 +538,7 @@ renderNotificationOption pid teamIdM title value isChecked isConfigured icon ext
       label_ [class_ "relative inline-flex items-center cursor-pointer tap-target", Aria.label_ $ if isChecked then "Disable " <> title else "Enable " <> title] do
         input_ [type_ "checkbox", value_ value, name_ "notifChannel", if isChecked then checked_ else title_ $ "Enable " <> title, class_ "toggle toggle-sm toggle-primary"]
 
-    -- Expanded config (when toggled on or has content)
-    when (isChecked || not (T.null $ toStrict $ renderText extraContent))
-      $ div_ [class_ "px-3 pb-3 pt-0 pl-13"] extraContent
+    div_ [class_ "px-3 pb-3 pt-0 pl-13"] extraContent
 
 
 renderEmailIntegration :: Text -> Html ()
@@ -563,16 +568,15 @@ renderSlackIntegration envCfg pid slackData channels extraChannels existingChann
       -- render the chip. `extraChannels` covers names we could fetch via
       -- conversations.info (DMs, MPIMs, private channels the bot is a member of);
       -- for channels the bot can't see at all, fall back to the raw id as the name.
-      let renderCh c = AE.object ["value" AE..= BotUtils.channelId c, "name" AE..= ("#" <> BotUtils.channelName c)]
-          knownIds = S.fromList $ map BotUtils.channelId (channels <> extraChannels)
+      let knownIds = S.fromList $ map BotUtils.channelId (channels <> extraChannels)
           unresolved = [AE.object ["value" AE..= c, "name" AE..= c] | c <- V.toList existingChannels, not (S.member c knownIds)]
-          slackWhitelist = decodeUtf8 $ AE.encode $ map renderCh (channels <> extraChannels) <> unresolved
+          slackWhitelist = decodeUtf8 $ AE.encode $ map channelJSON (channels <> extraChannels) <> unresolved
           existingJSON = decodeUtf8 $ AE.encode $ V.toList existingChannels
       div_ [class_ "mb-3"] $ formField_ FieldSm def "Slack channels" "slack-channels-input" False $ Just $ tagInput_ "slack-channels-input" "Add Slack channels" [data_ "tagify-whitelist" slackWhitelist, data_ "tagify-enforce-whitelist" "", data_ "tagify-text-prop" "name", data_ "tagify-initial" existingJSON, data_ "tagify-resolve" ""]
 
       div_ [class_ "flex items-center gap-2"] do
         a_ [target_ "_blank", class_ "btn btn-xs btn-outline", href_ oauthUrl] "Reconnect"
-        form_ [hxDelete_ [text|/p/$pid/settings/integrations/slack|], hxConfirm_ "Are you sure you want to disconnect Slack?", hxTarget_ "#integrations-form-section", hxSelect_ "#integrations-form-section", hxSwap_ "outerHTML swap:0.3s", hxTrigger_ "submit"] do
+        form_ ([hxDelete_ [text|/p/$pid/settings/integrations/slack|], hxConfirm_ "Are you sure you want to disconnect Slack?", hxTrigger_ "submit"] <> integrationsSwapAttrs_) do
           button_ [class_ "btn btn-xs btn-ghost text-textError", type_ "submit"] "Disconnect"
     Nothing -> do
       a_ [target_ "_blank", class_ "btn btn-xs btn-outline", href_ oauthUrl] "Connect to Slack"
@@ -592,8 +596,8 @@ renderPagerdutyIntegration pid = div_ [id_ "pagerduty-integration"] . bool disco
     connectedUI = do
       div_ [class_ "flex items-center gap-2"] do
         span_ [class_ "text-xs text-textSuccess flex items-center gap-1.5"] $ faSprite_ "circle-check" "regular" "h-3.5 w-3.5 text-iconSuccess" >> "Connected"
-        button_ [class_ "btn btn-xs btn-ghost text-textError", hxPost_ [text|/p/$pid/settings/integrations/pagerduty/disconnect|], hxTarget_ "#integrations-form-section", hxSelect_ "#integrations-form-section", hxSwap_ "outerHTML swap:0.3s"] "Disconnect"
-    disconnectedUI = form_ [class_ "flex flex-col gap-2", hxPost_ [text|/p/$pid/settings/integrations/pagerduty|], hxTarget_ "#integrations-form-section", hxSelect_ "#integrations-form-section", hxSwap_ "outerHTML swap:0.3s"] do
+        button_ ([class_ "btn btn-xs btn-ghost text-textError", hxPost_ [text|/p/$pid/settings/integrations/pagerduty/disconnect|]] <> integrationsSwapAttrs_) "Disconnect"
+    disconnectedUI = form_ ([class_ "flex flex-col gap-2", hxPost_ [text|/p/$pid/settings/integrations/pagerduty|]] <> integrationsSwapAttrs_) do
       formField_ FieldSm def{placeholder = "Events API v2 Integration Key"} "Integration Key" "integrationKey" False Nothing
       p_ [class_ "text-xs text-textWeak"] "Get from: PagerDuty → Services → Integrations → Events API v2"
       button_ [class_ "btn btn-sm btn-outline w-max", type_ "submit"] "Connect"
@@ -627,8 +631,7 @@ manageMembersPostH pid onboardingM form = do
 
   let deletedUAndP =
         projMembers
-          & filter (\pm -> not $ any (\(email, _) -> CI.original pm.email == email) usersAndPermissions)
-          & filter (\a -> a.userId /= currUserId)
+          & filter (\pm -> pm.userId /= currUserId && not (any (\(email, _) -> CI.original pm.email == email) usersAndPermissions))
           & map (.id)
 
   newProjectMembers <- forM uAndPNew \(email, permission) -> do
@@ -796,8 +799,13 @@ manageTeamsGetH pid layoutM = do
   addRespHeaders $ maybe (ManageTeamsGet $ PageCtx bwconf payload) (const $ ManageTeamsGet' payload) layoutM
 
 
+-- | Tagify option shape for a single channel: `#`-prefixed display name + raw id.
+channelJSON :: BotUtils.Channel -> AE.Value
+channelJSON x = AE.object ["name" AE..= ("#" <> x.channelName), "value" AE..= x.channelId]
+
+
 encodeChannels :: [BotUtils.Channel] -> Text
-encodeChannels = decodeUtf8 . AE.encode . map \x -> AE.object ["name" AE..= ("#" <> x.channelName), "value" AE..= x.channelId]
+encodeChannels = decodeUtf8 . AE.encode . map channelJSON
 
 
 -- | Tagify whitelists for the team modal: (members by user id, members by email).
@@ -859,9 +867,17 @@ memberCell members = do
 
 
 notifsCell :: ProjectMembers.TeamVM -> Html ()
-notifsCell team = div_ [class_ "flex items-center gap-2"] do
-  let notifIcon ch icon tip = unless (V.null ch) $ div_ [term "data-tippy-content" tip] $ faSprite_ icon "solid" "h-3.5 w-3.5"
-  notifIcon team.slack_channels "slack" "Slack" >> notifIcon team.discord_channels "discord" "Discord" >> notifIcon team.notify_emails "envelope" "Email" >> notifIcon team.pagerduty_services "pager" "PagerDuty"
+notifsCell team =
+  div_ [class_ "flex items-center gap-2"]
+    $ forM_
+      ( [ (team.slack_channels, "slack", "Slack")
+        , (team.discord_channels, "discord", "Discord")
+        , (team.notify_emails, "envelope", "Email")
+        , (team.pagerduty_services, "pager", "PagerDuty")
+        ]
+          :: [(V.Vector Text, Text, Text)]
+      )
+      \(ch, icon, tip) -> unless (V.null ch) $ div_ [term "data-tippy-content" tip] $ faSprite_ icon "solid" "h-3.5 w-3.5"
 
 
 teamGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders ManageTeams)
@@ -891,17 +907,19 @@ teamPage pid team projMembers slackChannels discordChannels = do
   let (whiteList, emailWhiteList) = memberWhitelists projMembers
       (channelWhiteList, discordWhiteList) = (encodeChannels slackChannels, encodeChannels discordChannels)
       isEveryone = team.is_everyone
+      notifRow_ :: Text -> Text -> Html () -> [Text] -> Bool -> Html ()
       notifRow_ icon iconType lbl vals inherited = div_ [class_ "flex items-start gap-3 py-2.5"] do
-        _ <- span_ [class_ "w-5 h-5 flex items-center justify-center shrink-0"] $ faSprite_ icon iconType "h-4 w-4 text-iconNeutral"
+        span_ [class_ "w-5 h-5 flex items-center justify-center shrink-0"] $ faSprite_ icon iconType "h-4 w-4 text-iconNeutral"
         div_ [class_ "flex-1 min-w-0"] do
-          _ <- div_ [class_ "text-sm font-medium text-textStrong"] lbl
+          div_ [class_ "text-sm font-medium text-textStrong"] lbl
           div_ [class_ "text-xs text-textWeak mt-0.5 break-words"] do
             if null vals then span_ [class_ "italic"] "Not configured" else toHtml $ T.intercalate ", " vals
             when inherited $ span_ [class_ "ml-1 text-textBrand"] "· from Integrations"
       resolveChannel chans cid = maybe cid (("#" <>) . (.channelName)) $ find (\x -> x.channelId == cid) chans
+      lazySection_ :: Text -> Text -> Text -> Text -> Text -> Html ()
       lazySection_ secId icon title searchPh url = div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
-        _ <- div_ [class_ "flex items-center justify-between w-full p-4 border-b border-strokeWeak"] do
-          _ <- span_ [class_ "flex items-center gap-2 text-sm font-semibold text-textStrong"] (faSprite_ icon "regular" "h-4 w-4" >> toHtml title)
+        div_ [class_ "flex items-center justify-between w-full p-4 border-b border-strokeWeak"] do
+          span_ [class_ "flex items-center gap-2 text-sm font-semibold text-textStrong"] (faSprite_ icon "regular" "h-4 w-4" >> toHtml title)
           label_ [class_ "input input-sm w-64 bg-fillWeak border-0"] do
             faSprite_ "magnifying-glass" "regular" "h-3.5 w-3.5 text-iconNeutral"
             input_ [type_ "text", placeholder_ searchPh, makeAttribute "_" $ "on input show <tr/> in #" <> secId <> " when its textContent.toLowerCase() contains my value.toLowerCase()"]
@@ -951,7 +969,7 @@ teamPage pid team projMembers slackChannels discordChannels = do
                     input_ [type_ "hidden", name_ "channel", value_ "all"]
                     input_ [type_ "hidden", name_ "teamId", value_ $ UUID.toText team.id]
                     input_ [type_ "hidden", name_ "issueType", value_ "runtime_exception"]
-                    button_ ([type_ "submit", class_ "btn btn-xs btn-primary tap-target", [__| on htmx:afterRequest from closest <form/> trigger testSent on body |]] <> [disabled_ "" | not hasAnyChannel]) do
+                    button_ ([type_ "submit", class_ "btn btn-xs btn-primary tap-target", testSentAttr_] <> [disabled_ "" | not hasAnyChannel]) do
                       faSprite_ "flask-vial" "regular" "h-3.5 w-3.5"
                       " Send Test"
               div_ [id_ $ "team-test-history-" <> UUID.toText team.id, hxGet_ ("/p/" <> pid.toText <> "/settings/integrations/history"), hxTrigger_ "testSent from:body", hxSwap_ "innerHTML", class_ "mt-3"] mempty
@@ -993,11 +1011,9 @@ instance ToHtml ManageMembers where
 teamTabsHeader_ :: Projects.ProjectId -> Text -> Int -> Int -> Html ()
 teamTabsHeader_ pid active membersCount teamsCount = do
   let tab label key count = do
-        let isActive = active == key
-            url = "/p/" <> pid.toText <> (if key == "members" then "/manage_members" else "/manage_teams")
-            cls = "flex items-center gap-2 a-tab border-b border-b-strokeWeak px-3 py-2 text-sm" <> if isActive then " t-tab-active" else ""
+        let url = "/p/" <> pid.toText <> (if key == "members" then "/manage_members" else "/manage_teams")
         a_
-          [ class_ cls
+          [ class_ $ "flex items-center gap-2 a-tab border-b border-b-strokeWeak px-3 py-2 text-sm" <> (if active == key then " t-tab-active" else "")
           , href_ url
           , hxGet_ url
           , hxTarget_ settingsContentTarget
@@ -1016,8 +1032,7 @@ teamTabsHeader_ pid active membersCount teamsCount = do
 manageMembersBody :: Projects.ProjectId -> V.Vector ProjectMembers.ProjectMemberWithStatusVM -> Text -> Int -> Html ()
 manageMembersBody pid projMembers paymentPlan teamsCount =
   settingsSection_ do
-    div_ [class_ "flex justify-between items-center"] do
-      settingsH2_ "Team"
+    settingsH2_ "Team"
     teamTabsHeader_ pid "members" (V.length projMembers) teamsCount
 
     div_ [class_ "space-y-6"] do
@@ -1162,22 +1177,19 @@ lsGet apiKey url = do
   pure $ rightToMaybe $ AE.eitherDecode $ response ^. responseBody
 
 
-data SubUrls = SubUrls
-  { updatePaymentMethod :: Text
-  , customerPortal :: Text
-  }
+newtype SubUrls = SubUrls {customerPortal :: Text}
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SubUrls
+  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SubUrls
 
 
 newtype SubPortalAttributes = SubPortalAttributes {urls :: SubUrls}
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SubPortalAttributes
+  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SubPortalAttributes
 
 
 newtype SubPortalDataVals = SubPortalDataVals {attributes :: SubPortalAttributes}
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SubPortalDataVals
+  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SubPortalDataVals
 
 
 --------------------------------------------------------------------------------
@@ -1263,9 +1275,9 @@ instance HasField "unwrapCreateProjectResp" CreateProject (Maybe CreateProjectRe
 
 
 instance ToHtml CreateProject where
-  toHtml (CreateProject (PageCtx bwconf (sess, pid, config, paymentPlan, isUpdate, prf, pref, pro))) = toHtml $ PageCtx bwconf $ createProjectBody sess pid config paymentPlan prf pref pro
+  toHtml (CreateProject (PageCtx bwconf (_, pid, _, _, _, prf, _, _))) = toHtml $ PageCtx bwconf $ createProjectBody pid prf
   toHtml (PostNoContent message) = span_ [] $ toHtml message
-  toHtml (ProjectPost cpr) = toHtml $ createProjectBody cpr.sess cpr.pid cpr.env cpr.paymentPlan cpr.form cpr.formError cpr.pro
+  toHtml (ProjectPost cpr) = toHtml $ createProjectBody cpr.pid cpr.form
   toHtmlRaw = toHtml
 
 
@@ -1322,15 +1334,12 @@ data SubAttributes = SubAttributes
   , productName :: Text
   }
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SubAttributes
+  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SubAttributes
 
 
-data SubDataVals = SubDataVals
-  { id :: Text
-  , attributes :: SubAttributes
-  }
+newtype SubDataVals = SubDataVals {attributes :: SubAttributes}
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SubDataVals
+  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SubDataVals
 
 
 data PricingUpdateForm = PricingUpdateForm
@@ -1417,8 +1426,8 @@ processProjectPostForm cpRaw pid = do
   addRespHeaders $ ProjectPost (CreateProjectResp sess.persistentSession pid envCfg "" cp (def @CreateProjectFormError) project)
 
 
-createProjectBody :: Projects.PersistentSession -> Projects.ProjectId -> EnvConfig -> Text -> CreateProjectForm -> CreateProjectFormError -> Projects.Project -> Html ()
-createProjectBody sess pid envCfg paymentPlan cp cpe proj = do
+createProjectBody :: Projects.ProjectId -> CreateProjectForm -> Html ()
+createProjectBody pid cp = do
   settingsSection_ do
     settingsH2_ "Project Settings"
 
@@ -1526,7 +1535,6 @@ teamModal pid team whiteList emailWhiteList channelWhiteList discordWhiteList is
       discordChannels = encodeField (.discord_channels)
       pagerdutyServicesTags = encodeField (.pagerduty_services)
       field_ lbl fid attrs = formField_ FieldSm def lbl (mkId fid) False $ Just $ input_ $ [class_ "input w-full", type_ "text", id_ $ mkId fid, name_ fid] <> attrs
-      notifField_ ic lbl fid ph attrs = formField_ FieldSm def{icon = Just ic} lbl (mkId fid) False $ Just $ tagInput_ (mkId fid) ph attrs
 
   modalWith_ modalId def{boxClass = "p-6 max-w-lg w-full"} (Just trigger) do
     form_ [hxPost_ $ "/p/" <> pid.toText <> "/manage_teams?" <> if isInTeamView then "teamView=true" else "", hxExt_ "json-enc", hxVals_ [text|js:{teamMembers: window.getTagValues('#$prefix-team-members-input'), notifEmails: window.getTagValues('#$prefix-notif-emails-input'), slackChannels: window.getTagValues('#$prefix-slack-channels-input'), discordChannels: window.getTagValues('#$prefix-discord-channels-input'), pagerdutyServices: window.getTagValues('#$prefix-pagerduty-services-input'), phoneNumbers: []}|], hxSwap_ "none", class_ "flex flex-col gap-0 w-full"] do
@@ -1571,7 +1579,7 @@ teamModal pid team whiteList emailWhiteList channelWhiteList discordWhiteList is
                 ]
                   :: [(Text, Text, Text, Text, [Attribute])]
               )
-              \(ic, lbl, fid, ph, attrs) -> notifField_ ic lbl fid ph attrs
+              \(ic, lbl, fid, ph, attrs) -> formField_ FieldSm def{icon = Just ic} lbl (mkId fid) False $ Just $ tagInput_ (mkId fid) ph attrs
             formField_ FieldSm def{icon = Just "pager"} "PagerDuty" (mkId "pagerduty-services-input") False $ Just do
               tagInput_ (mkId "pagerduty-services-input") "Add integration keys..." [data_ "tagify-text-prop" "name", data_ "tagify-initial" pagerdutyServicesTags]
               details_ [class_ "group mt-1.5"] do

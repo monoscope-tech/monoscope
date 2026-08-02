@@ -78,22 +78,19 @@ where
 
 import Data.Aeson as AE
 import Data.Aeson.Extra.Merge (lodashMerge)
-import Data.Aeson.Key (fromText)
 import Data.Aeson.Key qualified as AEK
-import Data.Aeson.KeyMap (lookup)
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.Types qualified as AET
-import Data.ByteString qualified as BS
 import Data.Char (isAlpha, isAlphaNum, isDigit)
 import Data.Default (Default (..))
 import Data.Digest.XXHash (xxHash)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HS
-import Data.Set qualified as S
+import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Text.Lazy.Builder qualified as TLB
-import Data.Time (ZonedTime, addUTCTime, defaultTimeLocale, parseTimeM, secondsToNominalDiffTime)
+import Data.Time (ZonedTime, addUTCTime, defaultTimeLocale, parseTimeM)
 import Data.Time.Calendar (fromGregorian, toGregorian)
 import Data.Time.Clock (UTCTime (..), diffUTCTime, secondsToDiffTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
@@ -113,7 +110,6 @@ import Lucid.Htmx (hxBoost_, hxGet_, hxIndicator_, hxSelect_, hxSwap_, hxTarget_
 import Lucid.Hyperscript (__)
 import Lucid.Svg qualified as Svg
 import Models.Projects.Projects qualified as Projects
-import NeatInterpolation (text)
 import Network.HTTP.Types (urlEncode)
 import Network.URI (escapeURIString, isUnescapedInURI)
 import Numeric (showHex)
@@ -145,8 +141,8 @@ nonEmptyT = mfilter (not . T.null)
 data DBField = forall a. (Show a, ToField a) => MkDBField a
 
 
-instance Show DBField where
-  show (MkDBField a) = "MkDBField " ++ show a
+-- Standalone: GHC rejects an inline @deriving@ on an existential constructor.
+deriving stock instance Show DBField
 
 
 instance ToField DBField where
@@ -203,36 +199,9 @@ fieldMenuActions =
 -- source of truth for the log-item, cloned-template, and facet menus.
 fieldContextMenuItems_ :: Monad m => FieldMenuCtx -> [FieldAction] -> HtmlT m ()
 fieldContextMenuItems_ ctx = traverse_ \case
-  FCopyValue ->
-    menuItem_
-      "copy"
-      "Copy value"
-      valTip
-      [__|on click if 'clipboard' in window.navigator then
-            call navigator.clipboard.writeText((closest @data-field-value))
-            send successToast(value:['Copied to Clipboard']) to <body/>
-            halt
-          end|]
-  FCopyKeyValue ->
-    menuItem_
-      "copy"
-      "Copy key == value"
-      kvTip
-      [__|on click if 'clipboard' in window.navigator then
-            call navigator.clipboard.writeText((closest @data-field-path) + ' == ' + (closest @data-field-value))
-            send successToast(value:['Copied to Clipboard']) to <body/>
-            halt
-          end|]
-  FCopyField ->
-    menuItem_
-      "copy"
-      "Copy field"
-      keyTip
-      [__|on click if 'clipboard' in window.navigator then
-            call navigator.clipboard.writeText((closest @data-field-path))
-            send successToast(value:['Copied to Clipboard']) to <body/>
-            halt
-          end|]
+  FCopyValue -> copyItem_ "Copy value" valTip "(closest @data-field-value)"
+  FCopyKeyValue -> copyItem_ "Copy key == value" kvTip "(closest @data-field-path) + ' == ' + (closest @data-field-value)"
+  FCopyField -> copyItem_ "Copy field" keyTip "(closest @data-field-path)"
   FFilter -> menuItem_ "filter" ("Filter by " <> keyVal_) kvTip $ onpointerdown_ "filterByField(event, 'Eq')"
   FExclude -> menuItem_ "filter-circle-xmark" ("Exclude " <> keyVal_) kvTip $ onpointerdown_ "filterByField(event, 'NotEq')"
   FReplaceFilter -> menuItem_ "arrow-rotate-left" ("Replace filter with " <> keyVal_) kvTip $ onpointerdown_ "filterByField(event, 'Replace')"
@@ -283,10 +252,9 @@ fieldContextMenuItems_ ctx = traverse_ \case
   FDivider -> li_ [class_ "pointer-events-none"] $ div_ [class_ "border-t border-strokeWeak my-1 -mx-2"] ""
   where
     -- Full (untruncated) key/value for tooltips; the label shows a shortened form.
-    (keyTxt, valTxtM) = case ctx of StaticField k v -> (k, v); DynamicField -> ("", Nothing)
+    (keyTip, valTxtM) = case ctx of StaticField k v -> (k, v); DynamicField -> ("", Nothing)
     valTip = fromMaybe "" valTxtM
-    keyTip = keyTxt
-    kvTip = keyTxt <> maybe "" (" == " <>) valTxtM
+    kvTip = keyTip <> maybe "" (" == " <>) valTxtM
     key_ = b_ [class_ "ctx-key font-semibold text-textStrong"] $ case ctx of
       StaticField k _ -> toHtml k
       DynamicField -> "field"
@@ -294,6 +262,14 @@ fieldContextMenuItems_ ctx = traverse_ \case
       StaticField _ (Just v) -> toHtml (truncateMiddle 52 v)
       _ -> "value"
     keyVal_ = key_ <> span_ [class_ "text-textWeak"] " == " <> val_
+    -- Clipboard items differ only in the expression copied; `halt` stops the click
+    -- reaching an enclosing <label for> (facet-section collapse header).
+    copyItem_ label tip expr =
+      menuItem_ "copy" label tip
+        $ term "_"
+        $ "on click if 'clipboard' in window.navigator then\n  call navigator.clipboard.writeText("
+        <> expr
+        <> ")\n  send successToast(value:['Copied to Clipboard']) to <body/>\n  halt\nend"
     -- w-full so the item fills the fixed-width menu; the label then shrinks
     -- (min-w-0) and truncates instead of widening the menu / scrolling it.
     -- @tip@ (full key/value) becomes a native `title` tooltip so the truncated text
@@ -320,7 +296,6 @@ faSprite_ :: Monad m => Text -> Text -> Text -> HtmlT m ()
 faSprite_ mIcon faType classes = svg_ [class_ $ "inline-block icon " <> classes] $ Svg.use_ [href_ $ "/public/assets/svgs/fa-sprites/" <> faType <> ".svg?v=" <> fileHash <> "#" <> mIcon]
   where
     fileHash = case faType of
-      "regular" -> $(hashFile "/public/assets/svgs/fa-sprites/regular.svg")
       "solid" -> $(hashFile "/public/assets/svgs/fa-sprites/solid.svg")
       _ -> $(hashFile "/public/assets/svgs/fa-sprites/regular.svg")
 
@@ -429,11 +404,9 @@ jsonValueToHtmlTree scope val pathM = do
       let json = decodeUtf8 $ AE.encode $ AE.toJSON val
       button_
         [ class_ "flex items-center gap-1 cursor-pointer"
-        , term
-            "_"
-            [text|on click
-                 call navigator.clipboard.writeText(my @data-reqjson)
-                 send successToast(value:['Json copied to clipboard']) to <body/>|]
+        , [__|on click
+                call navigator.clipboard.writeText(my @data-reqjson)
+                send successToast(value:['Json copied to clipboard']) to <body/>|]
         , term "data-reqjson" json
         ]
         do
@@ -452,7 +425,7 @@ jsonValueToHtmlTree scope val pathM = do
   where
     hasChildren = case val of AE.Object o -> not (AEKM.null o); AE.Array a -> not (V.null a); _ -> False
     jsonValueToHtmlTree' :: (Text, Text, AE.Value) -> Html ()
-    jsonValueToHtmlTree' (path, key, AE.Object v) = renderParentType "{" "}" key (length v) (AEKM.toHashMapText v & HM.toList & sort & mapM_ (\(kk, vv) -> jsonValueToHtmlTree' (path <> "." <> key, kk, vv)))
+    jsonValueToHtmlTree' (path, key, AE.Object v) = renderParentType "{" "}" key (length v) (AEKM.toAscList v & mapM_ (\(kk, vv) -> jsonValueToHtmlTree' (path <> "." <> key, AEK.toText kk, vv)))
     jsonValueToHtmlTree' (path, key, AE.Array v) = renderParentType "[" "]" key (length v) (V.iforM_ v \i item -> jsonValueToHtmlTree' (path <> "." <> key, toText $ show i, item))
     jsonValueToHtmlTree' (path, key, value) = do
       let fullFieldPath = if T.isSuffixOf "[*]" path then path else path <> "." <> key
@@ -493,10 +466,9 @@ jsonValueToHtmlTree scope val pathM = do
 
 unwrapJsonPrimValue :: Bool -> AE.Value -> Text
 unwrapJsonPrimValue stripped = \case
-  AE.Bool True -> "true"
-  AE.Bool False -> "false"
+  AE.Bool b -> bool "false" "true" b
   AE.String v -> if stripped then toText v else "\"" <> toText v <> "\""
-  AE.Number v -> toText @String $ show v
+  AE.Number v -> toText $ show v
   AE.Null -> "null"
   AE.Object _ -> "{..}"
   AE.Array items -> "[" <> toText (show (length items)) <> "]"
@@ -526,13 +498,13 @@ lookupVecIntByKey v m k = fromMaybe 0 (lookupVecBy v m k)
 
 lookupValueText :: AE.Value -> Text -> Maybe Text
 lookupValueText (AE.Object obj) key = case AEKM.lookup (AEK.fromText key) obj of
-  Just (AE.String textValue) -> Just textValue -- Extract text from Value if it's a String
+  Just (AE.String textValue) -> Just textValue
   _ -> Nothing
 lookupValueText _ _ = Nothing
 
 
 listToIndexHashMap :: Hashable a => [a] -> HM.HashMap a Int
-listToIndexHashMap list = HM.fromList [(x, i) | (x, i) <- zip list [0 ..]]
+listToIndexHashMap list = HM.fromList $ zip list [0 ..]
 
 
 utcTimeToNanoseconds :: UTCTime -> Integer
@@ -541,13 +513,15 @@ utcTimeToNanoseconds utcTime =
    in round (posixTime * 1e9)
 
 
-getDurationNSMS :: Integer -> String
-getDurationNSMS duration
-  | duration >= 60000000000 = printf "%.1f m" (fromIntegral @_ @Double duration / 60000000000)
-  | duration >= 1000000000 = printf "%.1f s" (fromIntegral @_ @Double duration / 1000000000)
-  | duration >= 1000000 = printf "%.1f ms" (fromIntegral @_ @Double duration / 1000000)
-  | duration >= 1000 = printf "%.1f µs" (fromIntegral @_ @Double duration / 1000)
-  | otherwise = printf "%.1f ns" (fromIntegral @_ @Double duration)
+getDurationNSMS :: Integer -> Text
+getDurationNSMS duration = toText @String str
+  where
+    str
+      | duration >= 60000000000 = printf "%.1f m" (fromIntegral @_ @Double duration / 60000000000)
+      | duration >= 1000000000 = printf "%.1f s" (fromIntegral @_ @Double duration / 1000000000)
+      | duration >= 1000000 = printf "%.1f ms" (fromIntegral @_ @Double duration / 1000000)
+      | duration >= 1000 = printf "%.1f µs" (fromIntegral @_ @Double duration / 1000)
+      | otherwise = printf "%.1f ns" (fromIntegral @_ @Double duration)
 
 
 displayTimestamp :: Text -> Text
@@ -559,8 +533,7 @@ displayTimestamp inputDateString =
 
 
 formatUTC :: UTCTime -> Text
-formatUTC utcTime =
-  toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" utcTime
+formatUTC = toText . formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ"
 
 
 -- | ISO-8601 with fixed 6-digit (microsecond) fractional seconds.
@@ -581,11 +554,12 @@ freeTierUsageBanner pid = \case
     div_ [class_ "flex w-full text-center items-center px-4 gap-4 py-1 bg-fillWarning-weak text-textWarning rounded-lg justify-center"] do
       strong_ $ "You\x2019ve used " <> toHtml (formatWithCommas $ fromIntegral used) <> " of " <> toHtml (formatWithCommas $ fromIntegral limit) <> " daily events."
       a_ [class_ "underline underline-offset-2 link font-medium", href_ $ "/p/" <> pid <> "/manage_billing"] "Compare plans \x2192"
-  FreeTierExceeded _ _ ->
+  FreeTierExceeded{} ->
     div_ [class_ "flex w-full text-center items-center px-4 gap-4 py-1 bg-fillError-weak text-textError rounded-lg justify-center"] do
       strong_ "Daily cap reached \x2014 new events are being dropped."
       a_ [class_ "underline underline-offset-2 link font-medium", href_ $ "/p/" <> pid <> "/manage_billing"] "Upgrade to keep sending events \x2192"
-  _ -> pass
+  NotFreeTier -> pass
+  FreeTierOk -> pass
 
 
 checkFreeTierStatus :: (Hasql.Hasql :> es, IOE :> es, Time :> es) => Projects.ProjectId -> Text -> Eff es FreeTierStatus
@@ -595,38 +569,39 @@ checkFreeTierStatus pid paymentPlan =
       now <- Time.currentTime
       count <- fromMaybe (0 :: Int) <$> Hasql.interpOne [HI.sql| SELECT count(*)::BIGINT FROM otel_logs_and_spans WHERE project_id=#{pid.toText} AND timestamp > #{now}::timestamptz - interval '1 day'|]
       let limit = fromInteger freeTierDailyMaxEvents
-      pure $ if count >= limit then FreeTierExceeded count limit else if count >= (limit * 80) `div` 100 then FreeTierWarning count limit else FreeTierOk
+      pure
+        $ if
+          | count >= limit -> FreeTierExceeded count limit
+          | count >= (limit * 80) `div` 100 -> FreeTierWarning count limit
+          | otherwise -> FreeTierOk
     else pure NotFreeTier
 
 
 checkFreeTierExceeded :: (Hasql.Hasql :> es, IOE :> es, Time :> es) => Projects.ProjectId -> Text -> Eff es Bool
-checkFreeTierExceeded pid pp = isExceeded <$> checkFreeTierStatus pid pp
-  where
-    isExceeded (FreeTierExceeded _ _) = True
-    isExceeded _ = False
+checkFreeTierExceeded pid pp = (\case FreeTierExceeded{} -> True; _ -> False) <$> checkFreeTierStatus pid pp
 
 
 serviceColors :: V.Vector Text
 serviceColors =
   V.fromList
     -- Ordered for maximum hue separation: any 3 consecutive colors are visually distinct
-    [ "bg-blue-400" -- blue
-    , "bg-red-400" -- red
-    , "bg-green-400" -- green
-    , "bg-amber-400" -- amber
-    , "bg-purple-400" -- purple
-    , "bg-teal-400" -- teal
-    , "bg-orange-400" -- orange
-    , "bg-sky-400" -- sky
-    , "bg-rose-400" -- rose
-    , "bg-lime-400" -- lime
-    , "bg-indigo-400" -- indigo
-    , "bg-yellow-400" -- yellow
-    , "bg-pink-400" -- pink
-    , "bg-emerald-400" -- emerald
-    , "bg-violet-400" -- violet
-    , "bg-cyan-400" -- cyan
-    , "bg-fuchsia-400" -- fuchsia
+    [ "bg-blue-400"
+    , "bg-red-400"
+    , "bg-green-400"
+    , "bg-amber-400"
+    , "bg-purple-400"
+    , "bg-teal-400"
+    , "bg-orange-400"
+    , "bg-sky-400"
+    , "bg-rose-400"
+    , "bg-lime-400"
+    , "bg-indigo-400"
+    , "bg-yellow-400"
+    , "bg-pink-400"
+    , "bg-emerald-400"
+    , "bg-violet-400"
+    , "bg-cyan-400"
+    , "bg-fuchsia-400"
     ]
 
 
@@ -704,23 +679,14 @@ toXXHash :: Text -> Text
 toXXHash = T.justifyRight 8 '0' . T.take 8 . fromString . flip showHex "" . xxHash . encodeUtf8
 
 
--- | Turn a dot‑key + value into a singleton nested Object
-build :: [Text] -> AE.Value -> AEKM.KeyMap AE.Value
-build [] _ = AEKM.empty
-build [x] v = AEKM.singleton (AEK.fromText x) v
-build (x : xs) v = AEKM.singleton (AEK.fromText x) (AE.Object (build xs v))
+-- | Turn a dot‑key path + value into a nested Object
+build :: [Text] -> AE.Value -> AE.Value
+build ks v = foldr (\k acc -> AE.Object $ AEKM.singleton (AEK.fromText k) acc) v ks
 
 
--- | Succinct “dot‑notation → nested JSON”
+-- | Succinct “dot‑notation → nested JSON”: lodash‑merge each singleton path into an empty object.
 nestedJsonFromDotNotation :: [(Text, AE.Value)] -> AE.Value
-nestedJsonFromDotNotation =
-  -- start from empty object, insert each small object with a lodash‑style merge
-  foldl'
-    ( \acc (k, v) ->
-        let nestedObj = AE.Object $ build (T.splitOn "." k) v
-         in lodashMerge acc nestedObj
-    )
-    (AE.object [])
+nestedJsonFromDotNotation = foldl' (\acc (k, v) -> lodashMerge acc $ build (T.splitOn "." k) v) (AE.object [])
 
 
 isDemoAndNotSudo :: Projects.ProjectId -> Bool -> Bool
@@ -731,28 +697,31 @@ toUriStr :: Text -> Text
 toUriStr s = decodeUtf8 $ urlEncode True (encodeUtf8 s)
 
 
+-- | Relative-window tokens accepted by 'parseTime': token → (window in seconds, display label).
+sinceWindows :: [(Text, (Integer, Text))]
+sinceWindows =
+  [ ("5M", (300, "Last 5 min"))
+  , ("15M", (900, "Last 15 min"))
+  , ("30M", (1800, "Last 30 min"))
+  , ("1H", (3600, "Last Hour"))
+  , ("3H", (3600 * 3, "Last 3 Hours"))
+  , ("6H", (3600 * 6, "Last 6 Hours"))
+  , ("12H", (3600 * 12, "Last 12 Hours"))
+  , ("24H", (3600 * 24, "Last 24 Hours"))
+  , ("3D", (3600 * 24 * 3, "Last 3 Days"))
+  , ("7D", (3600 * 24 * 7, "Last 7 Days"))
+  , ("14D", (3600 * 24 * 14, "Last 14 Days"))
+  ]
+
+
 parseTime :: Maybe Text -> Maybe Text -> Maybe Text -> UTCTime -> (Maybe UTCTime, Maybe UTCTime, Maybe (Text, Text))
-parseTime fromM toM sinceM now = case sinceM of
-  Just "5M" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime 300) now, Just now, Just ("Last 5 min", ""))
-  Just "15M" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime 900) now, Just now, Just ("Last 15 min", ""))
-  Just "30M" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime 1800) now, Just now, Just ("Last 30 min", ""))
-  Just "1H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime 3600) now, Just now, Just ("Last Hour", ""))
-  Just "3H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 3) now, Just now, Just ("Last 3 Hours", ""))
-  Just "6H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 6) now, Just now, Just ("Last 6 Hours", ""))
-  Just "12H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 12) now, Just now, Just ("Last 12 Hours", ""))
-  Just "24H" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24) now, Just now, Just ("Last 24 Hours", ""))
-  Just "3D" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 3) now, Just now, Just ("Last 3 Days", ""))
-  Just "7D" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 7) now, Just now, Just ("Last 7 Days", ""))
-  Just "14D" -> (Just $ addUTCTime (negate $ secondsToNominalDiffTime $ 3600 * 24 * 14) now, Just now, Just ("Last 14 Days", ""))
-  _ -> do
-    let f = (iso8601ParseM (toString $ fromMaybe "" fromM) :: Maybe UTCTime)
-        t = (iso8601ParseM (toString $ fromMaybe "" toM) :: Maybe UTCTime)
-        start = toText . formatTime defaultTimeLocale "%F %T" <$> f
-        end = toText . formatTime defaultTimeLocale "%F %T" <$> t
-        range = case (start, end) of
-          (Just s, Just e) -> Just (s, e)
-          _ -> Nothing
-     in (f, t, range)
+parseTime fromM toM sinceM now = case (`lookup` sinceWindows) =<< sinceM of
+  Just (secs, label) -> (Just $ addUTCTime (fromIntegral $ negate secs) now, Just now, Just (label, ""))
+  Nothing ->
+    let f = iso8601ParseM (toString $ fromMaybe "" fromM) :: Maybe UTCTime
+        t = iso8601ParseM (toString $ fromMaybe "" toM) :: Maybe UTCTime
+        disp = toText . formatTime defaultTimeLocale "%F %T"
+     in (f, t, liftA2 (,) (disp <$> f) (disp <$> t))
 
 
 insertIfNotExist :: Eq a => a -> V.Vector a -> V.Vector a
@@ -767,26 +736,16 @@ newtype JSONHttpApiData a = JSONHttpApiData a
 
 
 instance AE.FromJSON a => FromHttpApiData (JSONHttpApiData a) where
-  parseUrlPiece t =
-    -- Try to parse assuming it's already a valid JSON string
-    case AE.eitherDecodeStrict' (encodeUtf8 t) of
-      Right a -> Right (JSONHttpApiData a)
-      -- If parsing fails, try wrapping in quotes and parsing as a string
-      Left _ ->
-        case AE.eitherDecodeStrict' (encodeUtf8 $ "\"" <> t <> "\"") of
-          Right a -> Right (JSONHttpApiData a)
-          Left err -> Left (fromString err)
+  -- Parse as raw JSON; on failure retry quoted, so bare strings work unquoted in URLs.
+  parseUrlPiece t = bimap fromString JSONHttpApiData $ case AE.eitherDecodeStrict' (encodeUtf8 t) of
+    Right a -> Right a
+    Left _ -> AE.eitherDecodeStrict' (encodeUtf8 $ "\"" <> t <> "\"")
 
 
 instance AE.ToJSON a => ToHttpApiData (JSONHttpApiData a) where
   toUrlPiece (JSONHttpApiData a) =
-    case toStrict $ AE.encode a of
-      -- If the encoded value starts and ends with quotes, remove them
-      bs
-        | BS.length bs >= 2 && BS.head bs == 34 && BS.last bs == 34 ->
-            decodeUtf8 $ BS.init $ BS.tail bs
-      -- Otherwise, keep as is
-      bs -> decodeUtf8 bs
+    let t = decodeUtf8 (AE.encode a)
+     in fromMaybe t $ T.stripSuffix "\"" =<< T.stripPrefix "\"" t
 
 
 freeTierDailyMaxEvents :: Integer
@@ -957,13 +916,9 @@ messageKeys =
 
 extractMessageFromLog :: Value -> Maybe T.Text
 extractMessageFromLog (AE.Object obj) =
-  listToMaybe [v | key <- messageKeys, Just v <- [extractValue key obj]]
+  asum [render <$> AEKM.lookup (AEK.fromText key) obj | key <- messageKeys]
   where
-    extractValue :: T.Text -> Object -> Maybe T.Text
-    extractValue key km = case Data.Aeson.KeyMap.lookup (fromText key) km of
-      Just (AE.String s) -> Just s
-      Just val -> Just (toText $ show val)
-      Nothing -> Nothing
+    render = \case AE.String s -> s; v -> toText $ show v
 extractMessageFromLog _ = Nothing
 
 
@@ -1004,7 +959,7 @@ levelFillColor level = case T.toLower level of
 
 
 getAlertStatusColor :: Text -> Text
-getAlertStatusColor status = case status of
+getAlertStatusColor = \case
   "Alerting" -> "badge-error"
   "Warning" -> "badge-warning"
   _ -> "badge-success"
@@ -1107,13 +1062,16 @@ replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass 
     replaceTextDates :: Text -> Text
     replaceTextDates !txt = toText . TLB.toLazyText $ scanMons Nothing Nothing txt
 
+    flushDef :: Maybe (TLB.Builder, Text) -> TLB.Builder
+    flushDef = foldMap \(pb, dd) -> pb <> TLB.fromText dd
+
     -- prev: last emitted char (for boundary checks)
     -- deferred: a "DD-" prefix held back in case the next token is a month (Nothing or Just (prefixBeforeDD, ddDash))
     scanMons :: Maybe Char -> Maybe (TLB.Builder, Text) -> Text -> TLB.Builder
     scanMons !prev !deferred !t
       -- End of input: flush deferred and remaining text
-      | T.null t = maybe mempty (\(pb, dd) -> pb <> TLB.fromText dd) deferred
-      | T.length t < 3 = maybe mempty (\(pb, dd) -> pb <> TLB.fromText dd) deferred <> TLB.fromText t
+      | T.null t = flushDef deferred
+      | T.length t < 3 = flushDef deferred <> TLB.fromText t
       -- Check for month abbreviation
       | let mon = T.take 3 t
       , HS.member mon monthSet
@@ -1121,16 +1079,13 @@ replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass 
       , monthBoundaryAfter (T.drop 3 t) =
           let afterMon = T.drop 3 t
            in case matchMonDY afterMon of
-                Just rest ->
-                  maybe mempty (\(pb, dd) -> pb <> TLB.fromText dd) deferred
-                    <> TLB.fromText "{Mon DD, YYYY}"
-                    <> scanMons (Just '}') Nothing rest
+                Just rest -> flushDef deferred <> TLB.fromText "{Mon DD, YYYY}" <> scanMons (Just '}') Nothing rest
                 Nothing -> case deferred of
                   Just (prefBefore, _ddDash)
                     | Just rest <- matchDMonYFwd afterMon ->
                         prefBefore <> TLB.fromText "{DD-Mon-YYYY}" <> scanMons (Just '}') Nothing rest
                   _ ->
-                    maybe mempty (\(pb, dd) -> pb <> TLB.fromText dd) deferred
+                    flushDef deferred
                       <> TLB.singleton (T.head t)
                       <> scanMons (Just (T.head t)) Nothing (T.drop 1 t)
       -- Detect "D-" or "DD-" that might precede a month: defer it
@@ -1147,7 +1102,7 @@ replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass 
           scanMons (Just '-') (Just (mempty, ds <> "-")) afterDash
       -- Default: emit current char
       | otherwise =
-          maybe mempty (\(pb, dd) -> pb <> TLB.fromText dd) deferred
+          flushDef deferred
             <> TLB.singleton (T.head t)
             <> scanMons (Just (T.head t)) Nothing (T.drop 1 t)
 
@@ -1178,48 +1133,43 @@ replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass 
     replaceEmails :: Text -> Text
     replaceEmails !txt =
       let (before, after) = T.breakOn "@" txt
+          afterAt = T.drop 1 after
+          (localRev, prefixRev) = T.span isLocalChar (T.reverse before)
+          keepAt = before <> "@" <> replaceEmails afterAt
        in if T.null after
             then txt
-            else
-              let (localRev, prefixRev) = T.span isLocalChar (T.reverse before)
-               in if not (T.null localRev)
-                    then case tryEmailDomain (T.drop 1 after) of
-                      Just rest -> T.reverse prefixRev <> "{email}" <> replaceEmails rest
-                      Nothing -> before <> "@" <> replaceEmails (T.drop 1 after)
-                    else before <> "@" <> replaceEmails (T.drop 1 after)
+            else maybe keepAt (\rest -> T.reverse prefixRev <> "{email}" <> replaceEmails rest) (guard (not $ T.null localRev) >> tryEmailDomain afterAt)
 
     isLocalChar :: Char -> Bool
     isLocalChar c = isAlphaNum c || c `elem` ("._%+-" :: [Char])
 
     tryEmailDomain :: Text -> Maybe Text
     tryEmailDomain !afterAt = do
-      let isDomainChar c = isAlphaNum c || c == '.' || c == '-'
-          (domain, rest) = T.span isDomainChar afterAt
+      let (domain, rest) = T.span (\c -> isAlphaNum c || c == '.' || c == '-') afterAt
           parts = T.splitOn "." domain
       guard $ length parts >= 2
-      let tld = viaNonEmpty last parts
-      guard $ maybe False (\t -> T.length t >= 2 && T.all isAlpha t) tld
+      tld <- viaNonEmpty last parts
+      guard $ T.length tld >= 2 && T.all isAlpha tld
       pure rest
 
     replaceJWTs :: Text -> Text
     replaceJWTs !txt =
       let (before, after) = T.breakOn "eyJ" txt
+          rest3 = T.drop 3 after
        in if T.null after
             then txt
-            else
-              let rest3 = T.drop 3 after
-                  (_seg1, r1) = T.span isBase64Url rest3
-               in if not (T.null r1) && T.head r1 == '.'
-                    then
-                      let (seg2, r2) = T.span isBase64Url (T.drop 1 r1)
-                       in if not (T.null seg2) && not (T.null r2) && T.head r2 == '.'
-                            then
-                              let (seg3, r3) = T.span isBase64Url (T.drop 1 r2)
-                               in if not (T.null seg3)
-                                    then before <> "{jwt}" <> replaceJWTs r3
-                                    else before <> "eyJ" <> replaceJWTs rest3
-                            else before <> "eyJ" <> replaceJWTs rest3
-                    else before <> "eyJ" <> replaceJWTs rest3
+            else maybe (before <> "eyJ" <> replaceJWTs rest3) (\r3 -> before <> "{jwt}" <> replaceJWTs r3) (jwtTail rest3)
+
+    -- Two more non-empty base64url segments, each dot-separated, after the "eyJ" header.
+    jwtTail :: Text -> Maybe Text
+    jwtTail !rest3 = do
+      r1 <- T.stripPrefix "." $ T.dropWhile isBase64Url rest3
+      let (seg2, r2) = T.span isBase64Url r1
+      guard $ not (T.null seg2)
+      r2' <- T.stripPrefix "." r2
+      let (seg3, r3) = T.span isBase64Url r2'
+      guard $ not (T.null seg3)
+      pure r3
 
     isBase64Url :: Char -> Bool
     isBase64Url c = isAlphaNum c || c == '_' || c == '-'
@@ -1237,11 +1187,8 @@ replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass 
                   else -- Digit trigger: check for hex-alpha suffix to peel
                     case peelHexSuffix safe of
                       (safePre, hexPart)
-                        | not (T.null hexPart) ->
-                            let combined = hexPart <> rest
-                                lastPre = if T.null safePre then prev else Just (T.last safePre)
-                             in TLB.fromText safePre <> scanHexDigit lastPre combined
-                      _ -> TLB.fromText safe <> scanDigit lastCh rest
+                        | not (T.null hexPart) -> TLB.fromText safePre <> scanHexDigit (hexPart <> rest)
+                      _ -> TLB.fromText safe <> scanDigit rest
 
     trigger :: Char -> Bool
     trigger c = isDigit c || c == ':'
@@ -1267,33 +1214,25 @@ replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass 
     isPortContext Nothing = True -- start of line or after placeholder
     isPortContext (Just c) = isAlphaNum c || c `elem` ("})]-. " :: [Char])
 
+    -- Fixed-length hex runs recognised as digests, shared by both hex scanners.
+    hexDigest :: Int -> Bool -> Maybe TLB.Builder
+    hexDigest len atBoundary = guard atBoundary >> lookup len [(64, "{sha256}"), (40, "{sha1}"), (32, "{md5}"), (24, "{uuid}")]
+
     -- Hex+digit sequence starting with hex alpha (from suffix peeling)
-    scanHexDigit :: Maybe Char -> Text -> TLB.Builder
-    scanHexDigit !prev !txt =
+    scanHexDigit :: Text -> TLB.Builder
+    scanHexDigit !txt =
       let (fullHex, rest) = T.span isHexDigit' txt
           len = T.length fullHex
           atBoundary = T.null rest || not (isHexDigit' (T.head rest))
-       in case () of
-            _
-              | len >= 8 && not (T.null rest) && T.head rest == '-' ->
-                  case tryUUID txt of
-                    Just r -> "{uuid}" <> go (Just '}') r
-                    Nothing -> recognizeHex prev len atBoundary fullHex rest txt
-              | otherwise -> recognizeHex prev len atBoundary fullHex rest txt
-
-    recognizeHex :: Maybe Char -> Int -> Bool -> Text -> Text -> Text -> TLB.Builder
-    recognizeHex !prev !len !atBoundary !fullHex !rest !txt = case len of
-      64 | atBoundary -> "{sha256}" <> go (Just '}') rest
-      40 | atBoundary -> "{sha1}" <> go (Just '}') rest
-      32 | atBoundary -> "{md5}" <> go (Just '}') rest
-      24 | atBoundary -> "{uuid}" <> go (Just '}') rest
-      _ ->
-        -- Fallback: emit one char at a time so digits within get replaced
-        TLB.singleton (T.head txt) <> go (Just (T.head txt)) (T.drop 1 txt)
+          -- Fallback: emit one char at a time so digits within get replaced
+          fallback = maybe (TLB.singleton (T.head txt) <> go (Just (T.head txt)) (T.drop 1 txt)) (<> go (Just '}') rest) (hexDigest len atBoundary)
+       in if len >= 8 && not (T.null rest) && T.head rest == '-'
+            then maybe fallback (\r -> "{uuid}" <> go (Just '}') r) (tryUUID txt)
+            else fallback
 
     -- Starts with digit
-    scanDigit :: Maybe Char -> Text -> TLB.Builder
-    scanDigit !prev !txt
+    scanDigit :: Text -> TLB.Builder
+    scanDigit !txt
       -- 0x hex literal
       | T.length txt >= 2 && T.head txt == '0' && T.index txt 1 == 'x' =
           let (hexRun, rest) = T.span isHexDigit' (T.drop 2 txt)
@@ -1301,38 +1240,27 @@ replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass 
       | otherwise =
           let (digits, afterDigits) = T.span isDigit txt
               dLen = T.length digits
-           in -- Timestamp: 4 digits + '-' → try YYYY-MM-DD...
-              if dLen == 4 && not (T.null afterDigits) && T.head afterDigits == '-'
-                then case tryTimestamp digits afterDigits of
-                  Just (placeholder, rest) -> placeholder <> go (Just '}') rest
-                  Nothing -> case tryUUID txt of
-                    Just rest -> "{uuid}" <> go (Just '}') rest
-                    Nothing -> trySSNOrFallback prev digits afterDigits txt
+              nextIs c = not (T.null afterDigits) && T.head afterDigits == c
+              uuidOrSSN = maybe (trySSNOrFallback digits afterDigits txt) (\rest -> "{uuid}" <> go (Just '}') rest) (tryUUID txt)
+           in if
+                -- Timestamp: 4 digits + '-' → try YYYY-MM-DD...
+                | dLen == 4 && nextIs '-' -> maybe uuidOrSSN (\(placeholder, rest) -> placeholder <> go (Just '}') rest) (tryTimestamp afterDigits)
                 -- Time: 1-2 digits + ':' → try HH:MM:SS
-                else
-                  if dLen <= 2 && dLen >= 1 && not (T.null afterDigits) && T.head afterDigits == ':'
-                    then case tryTimeOnly digits (T.drop 1 afterDigits) of
-                      Just (placeholder, rest) -> placeholder <> go (Just '}') rest
-                      Nothing -> "{integer}" <> go (Just '}') afterDigits
-                    -- UUID check: up to 8 hex digits + '-'
-                    else
-                      if dLen <= 8 && not (T.null afterDigits) && T.head afterDigits == '-'
-                        then case tryUUID txt of
-                          Just rest -> "{uuid}" <> go (Just '}') rest
-                          Nothing -> trySSNOrFallback prev digits afterDigits txt
-                        else classifyDigit prev txt digits afterDigits
+                | dLen >= 1 && dLen <= 2 && nextIs ':' ->
+                    maybe ("{integer}" <> go (Just '}') afterDigits) (\(placeholder, rest) -> placeholder <> go (Just '}') rest) (tryTimeOnly digits (T.drop 1 afterDigits))
+                -- UUID check: up to 8 hex digits + '-'
+                | dLen <= 8 && nextIs '-' -> uuidOrSSN
+                | otherwise -> classifyDigit txt digits afterDigits
 
-    trySSNOrFallback :: Maybe Char -> Text -> Text -> Text -> TLB.Builder
-    trySSNOrFallback !prev !digits !afterDigits !txt
+    trySSNOrFallback :: Text -> Text -> Text -> TLB.Builder
+    trySSNOrFallback !digits !afterDigits !txt
       -- SSN: 3 digits + '-' → NNN-NN-NNNN
       | T.length digits == 3 && not (T.null afterDigits) && T.head afterDigits == '-' =
-          case trySSN (T.drop 1 afterDigits) of
-            Just rest -> "{ssn}" <> go (Just '}') rest
-            Nothing -> classifyDigit prev txt digits afterDigits
-      | otherwise = classifyDigit prev txt digits afterDigits
+          maybe (classifyDigit txt digits afterDigits) (\rest -> "{ssn}" <> go (Just '}') rest) (trySSN (T.drop 1 afterDigits))
+      | otherwise = classifyDigit txt digits afterDigits
 
-    classifyDigit :: Maybe Char -> Text -> Text -> Text -> TLB.Builder
-    classifyDigit !_prev !txt !digits !afterDigits
+    classifyDigit :: Text -> Text -> Text -> TLB.Builder
+    classifyDigit !txt !digits !afterDigits
       | T.null afterDigits = "{integer}" <> go (Just '}') afterDigits
       | T.head afterDigits == '.' = case tryIPv4 digits afterDigits of
           Just rest -> "{ipv4}" <> go (Just '}') rest
@@ -1341,50 +1269,41 @@ replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass 
              in if not (T.null decimals)
                   then "{float}" <> go (Just '}') rest
                   else "{integer}" <> TLB.singleton '.' <> go (Just '.') (T.drop 1 afterDigits)
-      | isHexAlpha (T.head afterDigits) = classifyHexContinuation txt digits afterDigits
+      | isHexAlpha (T.head afterDigits) = classifyHexContinuation txt afterDigits
       | otherwise = "{integer}" <> go (Just '}') afterDigits
 
-    classifyHexContinuation :: Text -> Text -> Text -> TLB.Builder
-    classifyHexContinuation !txt !digits !afterDigits =
+    classifyHexContinuation :: Text -> Text -> TLB.Builder
+    classifyHexContinuation !txt !afterDigits =
       let (fullHex, rest) = T.span isHexDigit' txt
           len = T.length fullHex
           atBoundary = T.null rest || not (isHexDigit' (T.head rest))
-          fallback = "{integer}" <> go (Just '}') afterDigits
-       in if
-            | len == 64 && atBoundary -> "{sha256}" <> go (Just '}') rest
-            | len == 40 && atBoundary -> "{sha1}" <> go (Just '}') rest
-            | len == 32 && atBoundary -> "{md5}" <> go (Just '}') rest
-            | len == 24 && atBoundary -> "{uuid}" <> go (Just '}') rest
-            | len == 8 && not (T.null rest) && T.head rest == '-' ->
-                maybe fallback (\r -> "{uuid}" <> go (Just '}') r) (tryUUID txt)
-            | otherwise -> fallback
+          fallback
+            | len == 8 && not (T.null rest) && T.head rest == '-' = maybe integerFb (\r -> "{uuid}" <> go (Just '}') r) (tryUUID txt)
+            | otherwise = integerFb
+          integerFb = "{integer}" <> go (Just '}') afterDigits
+       in maybe fallback (<> go (Just '}') rest) (hexDigest len atBoundary)
 
     -- Timestamp: YYYY-MM-DD, optionally followed by ' HH:MM:SS' or 'THH:MM:SS[.sss][Z/+TZ]'
-    tryTimestamp :: Text -> Text -> Maybe (TLB.Builder, Text)
-    tryTimestamp !yyyy !afterYear = do
-      -- Already have 4 digits (yyyy) and afterYear starts with '-'
+    tryTimestamp :: Text -> Maybe (TLB.Builder, Text)
+    tryTimestamp !afterYear = do
+      -- The 4-digit year is already consumed; afterYear starts with '-'
       r1 <- T.stripPrefix "-" afterYear
       let (mm, r2) = T.span isDigit r1
       guard $ T.length mm == 2
       r3 <- T.stripPrefix "-" r2
       let (dd, r4) = T.span isDigit r3
       guard $ T.length dd == 2
-      -- Got YYYY-MM-DD. Check for time part
-      case T.uncons r4 of
-        Just (' ', r5) ->
-          -- Space separator: YYYY-MM-DD HH:MM:SS
-          case tryTimePart r5 of
-            Just (_, rest) -> Just ("{YYYY-MM-DD HH:MM:SS}", rest)
-            Nothing -> Just ("{YYYY-MM-DD}", r4)
-        Just ('T', r5) ->
-          -- ISO 8601: YYYY-MM-DDThh:mm:ss[.sss][Z/±TZ]
-          case tryTimePart r5 of
-            Just (_, rest) -> Just ("{YYYY-MM-DDThh:mm:ss.sTZD}", skipTZD rest)
-            Nothing -> Just ("{YYYY-MM-DD}", r4)
-        _ -> Just ("{YYYY-MM-DD}", r4)
+      -- Got YYYY-MM-DD. Check for a time part: ' HH:MM:SS' or ISO 'THH:MM:SS[.sss][Z/±TZ]'
+      pure $ fromMaybe ("{YYYY-MM-DD}", r4) do
+        (sep, r5) <- T.uncons r4
+        (placeholder, afterTime) <- case sep of
+          ' ' -> Just ("{YYYY-MM-DD HH:MM:SS}", id)
+          'T' -> Just ("{YYYY-MM-DDThh:mm:ss.sTZD}", skipTZD)
+          _ -> Nothing
+        (placeholder,) . afterTime <$> tryTimePart r5
 
-    -- Parse HH:MM:SS[.sss] — returns (placeholder, rest)
-    tryTimePart :: Text -> Maybe (TLB.Builder, Text)
+    -- Parse HH:MM:SS[.sss] — returns the remaining text
+    tryTimePart :: Text -> Maybe Text
     tryTimePart !txt = do
       let (hh, r1) = T.span isDigit txt
       guard $ T.length hh == 2
@@ -1395,10 +1314,9 @@ replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass 
       let (ss, r5) = T.span isDigit r4
       guard $ T.length ss == 2
       -- Optional fractional seconds
-      let rest = case T.uncons r5 of
-            Just ('.', r6) -> let (_, r7) = T.span isDigit r6 in r7
-            _ -> r5
-      Just ("{HH:MM:SS}", rest)
+      pure $ case T.uncons r5 of
+        Just ('.', r6) -> T.dropWhile isDigit r6
+        _ -> r5
 
     -- Skip timezone suffix: Z, +HH:MM, -HH:MM, +HHMM, -HHMM
     skipTZD :: Text -> Text
@@ -1559,8 +1477,7 @@ renderMarkdown md = case MMark.parse "" md of
 
 
 jsonToMap :: AE.Value -> Maybe (Map Text AE.Value)
-jsonToMap (AE.Object o) = Just $ AEKM.toMapText o
-jsonToMap _ = Nothing
+jsonToMap = \case AE.Object o -> Just $ AEKM.toMapText o; _ -> Nothing
 
 
 -- | Style mapping matching web-components/src/log-list-utils.ts STYLE_MAPPINGS
@@ -1759,7 +1676,7 @@ renderSummaryElements els =
 --   2. strip the `right-` alignment prefix (ml-auto right-alignment is meaningless in a wrapping header);
 --   3. dedupe by (field, value) so `status ERROR` doesn't appear twice (left-side + right-side).
 summaryForDetailView :: V.Vector Text -> V.Vector Text
-summaryForDetailView = dedupe . V.mapMaybe step
+summaryForDetailView = V.fromList . ordNubOn key . V.toList . V.mapMaybe step
   where
     skip el = any (`T.isPrefixOf` el) ["attributes;text-textWeak⇒", "resource;text-textWeak⇒", "protocol;"]
     step el
@@ -1770,11 +1687,6 @@ summaryForDetailView = dedupe . V.mapMaybe step
              in field <> ";" <> style' <> "⇒" <> value
           Nothing -> el
     key el = maybe ("", el) (\(f, _, v) -> (f, v)) (parseSummaryEl el)
-    dedupe xs = V.fromList $ reverse $ snd $ V.foldl' step' (mempty, []) xs
-      where
-        step' (seen, acc) x
-          | S.member (key x) seen = (seen, acc)
-          | otherwise = (S.insert (key x) seen, x : acc)
 
 
 -- | Given the subscription start date and current time, returns the UTC

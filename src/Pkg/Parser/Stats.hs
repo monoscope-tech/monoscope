@@ -140,8 +140,8 @@ simpleAggSQL fn sub = fn <> "((" <> display sub <> ")::float)"
 
 
 -- | Timescale Toolkit-compatible bounded percentile aggregate.
-percentileSQL :: Double -> Subject -> Text
-percentileSQL pct sub = "approx_percentile(" <> show pct <> ", percentile_agg(CAST(" <> display sub <> " AS DOUBLE)))::float"
+percentileSQL :: Double -> Text -> Text
+percentileSQL pct sub = "approx_percentile(" <> show pct <> ", percentile_agg(CAST(" <> sub <> " AS DOUBLE)))::float"
 
 
 -- | Convert AggFunction to SQL without the AS alias (for use inside other expressions)
@@ -156,14 +156,14 @@ aggToSqlNoAlias (Max sub _) = simpleAggSQL "max" sub
 aggToSqlNoAlias (Median sub _) = simpleAggSQL "median" sub
 aggToSqlNoAlias (Stdev sub _) = simpleAggSQL "stdev" sub
 aggToSqlNoAlias (Range sub _) = simpleAggSQL "range" sub
-aggToSqlNoAlias (P50 sub _) = percentileSQL 0.50 sub
-aggToSqlNoAlias (P75 sub _) = percentileSQL 0.75 sub
-aggToSqlNoAlias (P90 sub _) = percentileSQL 0.90 sub
-aggToSqlNoAlias (P95 sub _) = percentileSQL 0.95 sub
-aggToSqlNoAlias (P99 sub _) = percentileSQL 0.99 sub
-aggToSqlNoAlias (P100 sub _) = percentileSQL 1 sub
-aggToSqlNoAlias (Percentile subExpr pct _) = "approx_percentile(" <> show (pct / 100.0) <> ", percentile_agg(CAST(" <> subjectExprToSQL subExpr <> " AS DOUBLE)))::float"
-aggToSqlNoAlias (Percentiles subExpr pcts _) = let firstPct = fromMaybe 50.0 (listToMaybe pcts) in "approx_percentile(" <> show (firstPct / 100.0) <> ", percentile_agg(CAST(" <> subjectExprToSQL subExpr <> " AS DOUBLE)))::float"
+aggToSqlNoAlias (P50 sub _) = percentileSQL 0.50 (display sub)
+aggToSqlNoAlias (P75 sub _) = percentileSQL 0.75 (display sub)
+aggToSqlNoAlias (P90 sub _) = percentileSQL 0.90 (display sub)
+aggToSqlNoAlias (P95 sub _) = percentileSQL 0.95 (display sub)
+aggToSqlNoAlias (P99 sub _) = percentileSQL 0.99 (display sub)
+aggToSqlNoAlias (P100 sub _) = percentileSQL 1 (display sub)
+aggToSqlNoAlias (Percentile subExpr pct _) = percentileSQL (pct / 100.0) (subjectExprToSQL subExpr)
+aggToSqlNoAlias (Percentiles subExpr pcts _) = percentileSQL (fromMaybe 50.0 (listToMaybe pcts) / 100.0) (subjectExprToSQL subExpr)
 aggToSqlNoAlias (Coalesce exprs _) = "COALESCE(" <> T.intercalate ", " (map display exprs) <> ")"
 aggToSqlNoAlias (Strcat exprs _) = "CONCAT(" <> T.intercalate ", " (map display exprs) <> ")"
 aggToSqlNoAlias (Iff cond thenVal elseVal _) = "CASE WHEN " <> display cond <> " THEN " <> display thenVal <> " ELSE " <> display elseVal <> " END"
@@ -176,7 +176,6 @@ aggToSqlNoAlias (Plain sub _) = display sub
 aggToSqlNoAlias (ArithExpr expr _) = "(" <> display expr <> ")::float"
 
 
--- Modify Aggregation Functions to include optional aliases
 data AggFunction
   = Count Subject (Maybe Text) -- Optional field and alias
   | CountIf Expr (Maybe Text) -- Count with condition (KQL countif)
@@ -196,8 +195,7 @@ data AggFunction
   | Median Subject (Maybe Text)
   | Stdev Subject (Maybe Text)
   | Range Subject (Maybe Text)
-  | -- | CustomAgg String [Field] (Maybe String)
-    -- Scalar functions that can be used in aggregations (Microsoft KQL compatible)
+  | -- Scalar functions that can be used in aggregations (Microsoft KQL compatible)
     Coalesce [Values] (Maybe Text) -- coalesce(expr1, expr2, ...) - variadic, returns first non-null
   | Strcat [Values] (Maybe Text) -- strcat(expr1, expr2, ...) - concatenate any scalar expressions
   | Iff Expr Values Values (Maybe Text) -- iff(condition, then_expr, else_expr)
@@ -213,10 +211,9 @@ data AggFunction
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
--- Added to support bin() and bin_auto() functions in by clause
 data BinFunction
   = Bin Subject Text
-  | BinAuto Subject -- Will use fixed interval or legacy rollup calculation
+  | BinAuto Subject -- uses defaultBinSize
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -230,7 +227,6 @@ data ByClauseItem
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
--- Support for summarize by with bin() function and scalar expressions
 newtype SummarizeByClause = SummarizeByClause [ByClauseItem]
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
@@ -241,19 +237,14 @@ data Sources = SSpans | SMetrics
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
--- | Metrics now use the same flattened resource/attribute convention as
--- logs/spans in @otel_metrics@, so their AST needs no JSONB-specific rewrite.
+-- | TimeFusion stores metric JSON columns as variants, so metric queries wrap
+-- them in @variant_to_json@ before KQL's JSON-path operators are applied.
 rewriteSectionsForSource :: Maybe Sources -> [Section] -> [Section]
-rewriteSectionsForSource (Just SMetrics) = mapSubjects rewriteForMetrics
+rewriteSectionsForSource (Just SMetrics) = mapSubjects \case
+  Subject entire "attributes" keys -> Subject entire "variant_to_json(attributes)" keys
+  Subject entire "resource" keys -> Subject entire "variant_to_json(resource)" keys
+  subject -> subject
 rewriteSectionsForSource _ = id
-
-
--- | TimeFusion stores metric JSON columns as variants. Convert them to JSON
--- before using KQL's JSON-path operators.
-rewriteForMetrics :: Subject -> Subject
-rewriteForMetrics (Subject entire "attributes" keys) = Subject entire "variant_to_json(attributes)" keys
-rewriteForMetrics (Subject entire "resource" keys) = Subject entire "variant_to_json(resource)" keys
-rewriteForMetrics subject = subject
 
 
 -- | Apply a Subject rewrite to every Subject reachable from a Section list.
@@ -350,51 +341,6 @@ mapSubjects f = map goSec
       ByScalarFunc a -> ByScalarFunc (goAgg a)
 
 
--- Syntax:
---
--- summarize
--- <aggregation> ...
--- [<by-clause>]
---
--- aggregation
--- Syntax: [<name>=]<aggregate-function>"("<field>) ["," [<name>=]<aggregate-function>"("<field>)]...
--- for example ... | summarize sum_bytes=sum(bytes)
-
--- | Handles different aggregation functions and their optional aliases.
---
--- >>> parse aggFunctionParser "" "count(field)"
--- Right (Count (Subject "field" "field" []) Nothing)
---
--- >>> parse aggFunctionParser "" "count()"
--- Right (Count (Subject "*" "*" []) Nothing)
---
--- >>> parse aggFunctionParser "" "sum(field)"
--- Right (Sum (Subject "field" "field" []) Nothing)
---
--- >>> parse aggFunctionParser "" "avg(field)"
--- Right (Avg (Subject "field" "field" []) Nothing)
---
--- >>> parse aggFunctionParser "" "min(field)"
--- Right (Min (Subject "field" "field" []) Nothing)
---
--- >>> parse aggFunctionParser "" "max(field)"
--- Right (Max (Subject "field" "field" []) Nothing)
---
--- >>> parse aggFunctionParser "" "median(field)"
--- Right (Median (Subject "field" "field" []) Nothing)
---
--- >>> parse aggFunctionParser "" "stdev(field)"
--- Right (Stdev (Subject "field" "field" []) Nothing)
---
--- >>> parse aggFunctionParser "" "range(field)"
--- Right (Range (Subject "field" "field" []) Nothing)
---
--- >>> parse aggFunctionParser "" "p50(field)"
--- Right (P50 (Subject "field" "field" []) Nothing)
---
--- >>> parse aggFunctionParser "" "customFunc(field)"
--- Right (Plain (Subject "customFunc" "customFunc" []) Nothing)
-
 -- | Parse a numeric value (float or int) for percentile values
 pNumericValue :: Parser Double
 pNumericValue = try L.float <|> (fromIntegral <$> (L.decimal :: Parser Int))
@@ -406,15 +352,7 @@ pNumericValue = try L.float <|> (fromIntegral <$> (L.decimal :: Parser Int))
 -- >>> parse pSubjectExpr "" "duration / 1e6"
 -- Right (SubjectExpr (Subject "duration" "duration" []) (Just ("/",1000000.0)))
 pSubjectExpr :: Parser SubjectExpr
-pSubjectExpr = do
-  subj <- pSubject
-  opM <- optional $ do
-    space
-    op <- (string "/" $> "/") <|> (string "*" $> "*")
-    space
-    val <- pNumericValue
-    pure (op, val)
-  pure $ SubjectExpr subj opM
+pSubjectExpr = SubjectExpr <$> pSubject <*> optional ((,) <$> (space *> (string "/" <|> string "*") <* space) <*> pNumericValue)
 
 
 -- | Parse percentile(expr, percentile) - single percentile (Microsoft KQL syntax)
@@ -426,14 +364,10 @@ pSubjectExpr = do
 -- Left ...
 pPercentileSingle :: Parser AggFunction
 pPercentileSingle = do
-  _ <- string "percentile("
-  subExpr <- pSubjectExpr
-  _ <- comma
-  pct <- pNumericValue
-  _ <- string ")"
-  if pct < 0 || pct > 100
-    then fail "percentile value must be between 0 and 100"
-    else pure $ Percentile subExpr pct Nothing
+  subExpr <- string "percentile(" *> pSubjectExpr <* comma
+  pct <- pNumericValue <* string ")"
+  when (pct < 0 || pct > 100) $ fail "percentile value must be between 0 and 100"
+  pure $ Percentile subExpr pct Nothing
 
 
 -- | Parse percentiles(expr, p1, p2, ...) - multiple percentiles (Microsoft KQL syntax)
@@ -445,14 +379,10 @@ pPercentileSingle = do
 -- Left ...
 pPercentilesMulti :: Parser AggFunction
 pPercentilesMulti = do
-  _ <- string "percentiles("
-  subExpr <- pSubjectExpr
-  _ <- comma
-  pcts <- pNumericValue `sepBy1` comma
-  _ <- string ")"
-  if any (\p -> p < 0 || p > 100) pcts
-    then fail "percentile value must be between 0 and 100"
-    else pure $ Percentiles subExpr pcts Nothing
+  subExpr <- string "percentiles(" *> pSubjectExpr <* comma
+  pcts <- pNumericValue `sepBy1` comma <* string ")"
+  when (any (\p -> p < 0 || p > 100) pcts) $ fail "percentile value must be between 0 and 100"
+  pure $ Percentiles subExpr pcts Nothing
 
 
 -- | Parse countif(predicate) - count with a filter condition
@@ -473,13 +403,10 @@ pCountIf = withoutAlias $ CountIf <$> (string "countif(" *> pExpr <* string ")")
 -- Left ...
 pDCount :: Parser AggFunction
 pDCount = do
-  _ <- string "dcount("
-  sub <- pSubject
-  accM <- optional (comma *> (L.decimal :: Parser Int))
-  _ <- string ")"
-  case accM of
-    Just acc | acc < 0 || acc > 4 -> fail "dcount accuracy must be 0-4 per KQL spec"
-    _ -> pure $ DCount sub accM Nothing
+  sub <- string "dcount(" *> pSubject
+  accM <- optional (comma *> (L.decimal :: Parser Int)) <* string ")"
+  whenJust accM \acc -> when (acc < 0 || acc > 4) $ fail "dcount accuracy must be 0-4 per KQL spec"
+  pure $ DCount sub accM Nothing
 
 
 -- | Parse a scalar expression (field reference or literal value)
@@ -519,9 +446,12 @@ baseAggParsers =
   ]
 
 
--- | Left-associative chain combinator for expression parsing
-chainl1 :: Parser a -> Parser (a -> a -> a) -> Parser a
-chainl1 p op = p >>= rest where rest x = (op <*> pure x <*> p >>= rest) <|> pure x
+-- | Left-associative * / (tighter) then + - operator table, parameterised by the
+-- whitespace parser allowed around operators.
+arithTable :: Parser () -> [[Operator Parser ScalarExpr]]
+arithTable sp = [[infixL '*' Mul, infixL '/' Div], [infixL '+' Add, infixL '-' Sub]]
+  where
+    infixL c op = InfixL $ try ((`SArith` op) <$ (sp *> char c <* sp))
 
 
 -- | Parse a nested scalar expression with arithmetic support
@@ -531,26 +461,13 @@ chainl1 p op = p >>= rest where rest x = (op <*> pure x <*> p >>= rest) <|> pure
 -- >>> parse pScalarExprNested "" "countif(status >= 400) * 100.0 / count()"
 -- Right (SArith (SArith (SAgg (CountIf (GTEq (Subject "status" "status" []) (Num "400")) Nothing)) Mul (SVal (Num "100.0"))) Div (SAgg (Count (Subject "*" "*" []) Nothing)))
 pScalarExprNested :: Parser ScalarExpr
-pScalarExprNested = pAddSub
+pScalarExprNested = makeExprParser pFactor (arithTable space)
   where
-    pAddSub = chainl1 pMulDiv (space *> (pOp '+' Add <|> pOp '-' Sub) <* space)
-    pMulDiv = chainl1 pFactor (space *> (pOp '*' Mul <|> pOp '/' Div) <* space)
     -- No try on choice baseAggParsers: validation errors propagate after consuming function input
     pFactor =
-      between (char '(' <* space) (space *> char ')') pAddSub
-        <|> SAgg
-        <$> choice baseAggParsers
-        <|> SVal
-        <$> pScalarExpr
-    pOp c op = (`SArith` op) <$ char c
-
-
--- | Helper for variadic scalar functions like coalesce/strcat
-pVariadicAgg :: Text -> ([Values] -> Maybe Text -> AggFunction) -> Parser AggFunction
-pVariadicAgg name ctor =
-  withoutAlias
-    $ ctor
-    <$> (string (name <> "(") *> pScalarExpr `sepBy1` comma <* string ")")
+      between (char '(' <* space) (space *> char ')') pScalarExprNested
+        <|> (SAgg <$> choice baseAggParsers)
+        <|> (SVal <$> pScalarExpr)
 
 
 -- | Parse coalesce(expr1, expr2, ...) - return first non-null (variadic, 2-64 args)
@@ -561,9 +478,7 @@ pVariadicAgg name ctor =
 -- Left ...
 pCoalesce :: Parser AggFunction
 pCoalesce = do
-  _ <- string "coalesce("
-  args <- pScalarExpr `sepBy1` comma
-  _ <- string ")"
+  args <- string "coalesce(" *> pScalarExpr `sepBy1` comma <* string ")"
   when (length args < 2) $ fail "coalesce requires at least 2 arguments"
   pure $ Coalesce args Nothing
 
@@ -573,7 +488,7 @@ pCoalesce = do
 -- >>> parse pStrcat "" "strcat(method, \" \", url_path)"
 -- Right (Strcat [Field (Subject "method" "method" []),Str " ",Field (Subject "url_path" "url_path" [])] Nothing)
 pStrcat :: Parser AggFunction
-pStrcat = pVariadicAgg "strcat" Strcat
+pStrcat = withoutAlias $ Strcat <$> (string "strcat(" *> pScalarExpr `sepBy1` comma <* string ")")
 
 
 -- | Parse iff(condition, then_expr, else_expr) - conditional expression
@@ -610,18 +525,14 @@ pCase =
 -- Right (Round (SAgg (CountIf (Eq (Subject "status_code" "status_code" []) (Str "ERROR")) Nothing)) (Num "2") Nothing)
 pRound :: Parser AggFunction
 pRound = withoutAlias $ do
-  _ <- string "round("
-  val <- pScalarExprNested
-  _ <- comma
+  val <- string "round(" *> pScalarExprNested <* comma
   decimals <- pScalarExpr
   case decimals of
-    Num n -> case readMaybe (toString n) :: Maybe Int of
-      Just d | d >= 0 && d <= 15 -> pass
-      Just _ -> fail "round() decimals must be 0-15 per PostgreSQL limit"
-      Nothing -> fail "round() decimals must be a valid integer"
+    Num n
+      | Just d <- readMaybe @Int (toString n) -> when (d < 0 || d > 15) $ fail "round() decimals must be 0-15 per PostgreSQL limit"
+      | otherwise -> fail "round() decimals must be a valid integer"
     _ -> fail "round() decimals must be numeric"
-  _ <- string ")"
-  pure $ Round val decimals
+  Round val decimals <$ string ")"
 
 
 -- | Helper for type casting parsers with keyword aliases
@@ -668,6 +579,40 @@ pCount =
     <$> (string "count(" *> ((pSubject <* string ")") <|> (Subject "*" "*" [] <$ string ")")))
 
 
+-- | Handles different aggregation functions and their optional aliases.
+--
+-- >>> parse aggFunctionParser "" "count(field)"
+-- Right (Count (Subject "field" "field" []) Nothing)
+--
+-- >>> parse aggFunctionParser "" "count()"
+-- Right (Count (Subject "*" "*" []) Nothing)
+--
+-- >>> parse aggFunctionParser "" "sum(field)"
+-- Right (Sum (Subject "field" "field" []) Nothing)
+--
+-- >>> parse aggFunctionParser "" "avg(field)"
+-- Right (Avg (Subject "field" "field" []) Nothing)
+--
+-- >>> parse aggFunctionParser "" "min(field)"
+-- Right (Min (Subject "field" "field" []) Nothing)
+--
+-- >>> parse aggFunctionParser "" "max(field)"
+-- Right (Max (Subject "field" "field" []) Nothing)
+--
+-- >>> parse aggFunctionParser "" "median(field)"
+-- Right (Median (Subject "field" "field" []) Nothing)
+--
+-- >>> parse aggFunctionParser "" "stdev(field)"
+-- Right (Stdev (Subject "field" "field" []) Nothing)
+--
+-- >>> parse aggFunctionParser "" "range(field)"
+-- Right (Range (Subject "field" "field" []) Nothing)
+--
+-- >>> parse aggFunctionParser "" "p50(field)"
+-- Right (P50 (Subject "field" "field" []) Nothing)
+--
+-- >>> parse aggFunctionParser "" "customFunc(field)"
+-- Right (Plain (Subject "customFunc" "customFunc" []) Nothing)
 aggFunctionParser :: Parser AggFunction
 aggFunctionParser =
   choice @[]
@@ -723,12 +668,6 @@ sanitizeAlias :: Text -> Text
 sanitizeAlias = T.replace "." "_"
 
 
--- | Extract the explicit alias from an AggFunction (if set)
--- Uses generic-lens to access the Maybe Text alias field in each constructor
-getAlias :: AggFunction -> Maybe Text
-getAlias = view typed
-
-
 -- | Get default alias for aggregation (e.g., count_, sum_field)
 defaultAlias :: AggFunction -> Text
 defaultAlias = \case
@@ -741,7 +680,7 @@ defaultAlias = \case
   P95 (Subject n _ _) _ -> "p95_" <> sanitizeAlias n
   P99 (Subject n _ _) _ -> "p99_" <> sanitizeAlias n
   P100 (Subject n _ _) _ -> "p100_" <> sanitizeAlias n
-  Percentile (SubjectExpr (Subject n _ _) _) pct _ -> "percentile_" <> sanitizeAlias n <> "_" <> T.replace "." "_" (show pct)
+  Percentile (SubjectExpr (Subject n _ _) _) pct _ -> "percentile_" <> sanitizeAlias n <> "_" <> sanitizeAlias (show pct)
   Percentiles (SubjectExpr (Subject n _ _) _) _ _ -> "percentiles_" <> sanitizeAlias n
   Sum (Subject n _ _) _ -> "sum_" <> sanitizeAlias n
   Avg (Subject n _ _) _ -> "avg_" <> sanitizeAlias n
@@ -764,7 +703,7 @@ defaultAlias = \case
 
 -- | Display with alias: SQL AS (explicit or default)
 instance Display AggFunction where
-  displayPrec _ agg = displayBuilder $ aggToSqlNoAlias agg <> " AS " <> fromMaybe (defaultAlias agg) (getAlias agg)
+  displayPrec _ agg = displayBuilder $ aggToSqlNoAlias agg <> " AS " <> fromMaybe (defaultAlias agg) (view (typed @(Maybe Text)) agg)
 
 
 instance ToQueryText Section where
@@ -780,17 +719,8 @@ instance ToQueryText Section where
   toQText (ProjectCommand cols) =
     "project " <> T.intercalate ", " [name <> " = " <> toQText expr | (name, expr) <- cols]
   toQText (SortCommand fields) = "sort by " <> T.intercalate ", " (map toQText fields)
-  toQText (TakeCommand limit) = "take " <> toText (show (limit :: Int))
+  toQText (TakeCommand limit) = "take " <> show limit
 
-
-----------------------------------------------------------------------
-----
-
--- Example queries
--- request_body.v1.v2 == "abc" AND (request_body.v3.v4 == 123 OR request_body.v5[].v6==ANY[1,2,3] OR request_body[1].v7 OR NOT request_body[-1].v8 )
--- request_body[1].v7 | {.v7, .v8} |
-
--- Sort field can include optional direction
 
 -- | Sort direction; encodes to "asc"/"desc".
 data SortDir = Asc | Desc
@@ -824,23 +754,10 @@ data Section
 -- >>> parse pBinFunction "" "bin_auto(timestamp)"
 -- Right (BinAuto (Subject "timestamp" "timestamp" []))
 pBinFunction :: Parser BinFunction
-pBinFunction = try binParser <|> binAutoParser
-  where
-    binParser = do
-      _ <- string "bin("
-      subj <- pSubject
-      _ <- string ","
-      space
-      -- Support time duration units or just plain numbers (seconds)
-      interval <- toText <$> some (alphaNumChar <|> char '.' <|> char 'm' <|> char 's' <|> char 'h' <|> char 'd' <|> char 'w')
-      _ <- string ")"
-      return $ Bin subj interval
-
-    binAutoParser = do
-      _ <- string "bin_auto("
-      subj <- pSubject
-      _ <- string ")"
-      return $ BinAuto subj
+pBinFunction =
+  -- interval supports time duration units (30m, 1h, …) or plain numbers (seconds)
+  try (Bin <$> (string "bin(" *> pSubject <* string "," <* space) <*> (toText <$> some (alphaNumChar <|> char '.') <* string ")"))
+    <|> (BinAuto <$> (string "bin_auto(" *> pSubject <* string ")"))
 
 
 instance ToQueryText BinFunction where
@@ -850,8 +767,7 @@ instance ToQueryText BinFunction where
 
 instance Display BinFunction where
   displayPrec _prec (Bin subj interval) = displayBuilder $ "time_bucket('" <> kqlTimespanToTimeBucket interval <> "', " <> display subj <> ")"
-  -- Use default bin size for auto binning (defined in Parser.hs)
-  -- Don't include "as bin_timestamp" here as it causes syntax errors in GROUP BY
+  -- No "as bin_timestamp" here: it causes syntax errors in GROUP BY
   displayPrec _prec (BinAuto subj) = displayBuilder $ "time_bucket('" <> defaultBinSize <> "', " <> display subj <> ")"
 
 
@@ -875,10 +791,7 @@ instance Display ByClauseItem where
 -- >>> parse pSummarizeByClause "" "by bin_auto(timestamp), coalesce(tostring(status), \"unknown\")"
 -- Right (SummarizeByClause [ByBinFunc (BinAuto (Subject "timestamp" "timestamp" [])),ByScalarFunc (Coalesce [ScalarFunc "tostring" [Field (Subject "status" "status" [])],Str "unknown"] Nothing)])
 pSummarizeByClause :: Parser SummarizeByClause
-pSummarizeByClause = do
-  _ <- string "by"
-  space
-  SummarizeByClause <$> pByClauseItem `sepBy` comma
+pSummarizeByClause = SummarizeByClause <$> (string "by" *> space *> pByClauseItem `sepBy` comma)
   where
     -- Order matters: bin functions, then actual scalar functions (with parens), then plain subjects
     pByClauseItem = choice @[] [try (ByBinFunc <$> pBinFunction), try (ByScalarFunc <$> pScalarFuncOnly), BySubject <$> pSubject]
@@ -904,10 +817,7 @@ instance ToQueryText ByClauseItem where
 -- >>> parse pSortField "" "timestamp"
 -- Right (SortField (Subject "timestamp" "timestamp" []) Nothing)
 pSortField :: Parser SortField
-pSortField = do
-  field <- pSubject
-  dirM <- optional $ try (space *> ((Asc <$ string "asc") <|> (Desc <$ string "desc")))
-  return $ SortField field dirM
+pSortField = SortField <$> pSubject <*> optional (try (space *> ((Asc <$ string "asc") <|> (Desc <$ string "desc"))))
 
 
 instance ToQueryText SortField where
@@ -923,11 +833,7 @@ instance ToQueryText SortField where
 -- >>> parse pSortSection "" "order by parent_id asc"
 -- Right (SortCommand [SortField (Subject "parent_id" "parent_id" []) (Just Asc)])
 pSortSection :: Parser Section
-pSortSection = do
-  _ <- string "sort by" <|> string "order by"
-  space
-  fields <- sepBy pSortField comma
-  return $ SortCommand fields
+pSortSection = SortCommand <$> ((string "sort by" <|> string "order by") *> space *> sepBy pSortField comma)
 
 
 -- | Parser for 'take' command (also supports 'limit' synonym)
@@ -938,12 +844,7 @@ pSortSection = do
 -- >>> parse pTakeSection "" "limit 500"
 -- Right (TakeCommand 500)
 pTakeSection :: Parser Section
-pTakeSection = do
-  _ <- string "take" <|> string "limit"
-  space
-  limitStr <- some digitChar
-  let limit = readMaybe (toString limitStr) :: Maybe Int
-  return $ TakeCommand (fromMaybe 1000 limit) -- Default to 1000 if parsing fails
+pTakeSection = TakeCommand <$> ((string "take" <|> string "limit") *> space *> L.decimal)
 
 
 -- | Parse 'name = expression' pattern, returns (name, aliased expression)
@@ -954,7 +855,8 @@ pNamedExpr :: Parser (Text, AggFunction)
 pNamedExpr = do
   name <- try $ toText <$> some (alphaNumChar <|> oneOf ("_." :: String)) <* space <* string "=" <* space
   let sanitized = sanitizeAlias name
-  (sanitized,) . setAlias sanitized <$> aggFunctionParser
+  -- generic-lens sets the Maybe Text alias field of whichever constructor is parsed
+  (sanitized,) . set (typed @(Maybe Text)) (Just sanitized) <$> aggFunctionParser
 
 
 -- | Helper for column-assignment commands (extend/project)
@@ -980,12 +882,6 @@ pProjectSection :: Parser Section
 pProjectSection = pColumnCommand "project" ProjectCommand
 
 
--- | Set alias on an aggregation function
--- Uses generic-lens to set the Maybe Text alias field in each constructor
-setAlias :: Text -> AggFunction -> AggFunction
-setAlias n = set typed (Just n)
-
-
 -- | Parse a named aggregation like 'TotalCount = count()'
 --
 -- >>> parse namedAggregation "" "TotalCount=count()"
@@ -997,7 +893,10 @@ namedAggregation :: Parser AggFunction
 namedAggregation = snd <$> pNamedExpr
 
 
--- | Parse the summarize command
+-- | Parse the summarize command.
+--
+-- Syntax: summarize [<name>=]<agg>"("<field>")" ["," ...] [<by-clause>]
+-- for example ... | summarize sum_bytes=sum(bytes) by bin_auto(timestamp)
 --
 -- >>> parse pSummarizeSection "" "summarize sum(attributes.client) by attributes.client, bin(timestamp, 60)"
 -- Right (SummarizeCommand [Sum (Subject "attributes.client" "attributes" [FieldKey "client"]) Nothing] (Just (SummarizeByClause [BySubject (Subject "attributes.client" "attributes" [FieldKey "client"]),ByBinFunc (Bin (Subject "timestamp" "timestamp" []) "60")])))
@@ -1030,61 +929,42 @@ pSummarizeSection = do
   _ <- string "summarize"
   space
   -- namedAggregation has try only on prefix "name =" so validation errors propagate
-  funcs <- sepBy (namedAggregation <|> pAggWithOptionalArith) (char ',' <* space)
-  byClause <- optional $ try (space *> pSummarizeByClause)
-  return $ SummarizeCommand funcs byClause
+  funcs <- sepBy (namedAggregation <|> (unwrapAgg <$> pArithExpr)) (char ',' <* space)
+  SummarizeCommand funcs <$> optional (try (space *> pSummarizeByClause))
   where
-    -- Parse arithmetic expression with proper operator precedence
-    -- \* and / bind tighter than + and -
-    -- Example: count() + 5 * 10 parses as count() + (5 * 10)
-    pAggWithOptionalArith = do
-      expr <- pArithExpr
-      pure $ case expr of
-        SAgg agg -> agg -- Plain aggregation, return as-is
-        _ -> ArithExpr expr Nothing -- Arithmetic expression
+    unwrapAgg = \case
+      SAgg agg -> agg
+      expr -> ArithExpr expr Nothing
     pArithExpr :: Parser ScalarExpr
-    pArithExpr = makeExprParser pArithTerm arithOperatorTable
-
-    arithOperatorTable :: [[Operator Parser ScalarExpr]]
-    arithOperatorTable =
-      [ [infixL '*' Mul, infixL '/' Div]
-      , [infixL '+' Add, infixL '-' Sub]
-      ]
-
-    infixL :: Char -> ArithOp -> Operator Parser ScalarExpr
-    infixL c op = InfixL $ try ((`SArith` op) <$ (hspace *> char c <* hspace))
+    pArithExpr = makeExprParser pArithTerm (arithTable hspace)
 
     -- try on pNumericOnly is fine; aggFunctionParser parsers use try on prefix only
     -- so validation errors propagate after consuming function input
-    pArithTerm :: Parser ScalarExpr
-    pArithTerm = choice [SVal <$> try pNumericOnly, SAgg <$> aggFunctionParser, char '(' *> pArithExpr <* char ')']
+    pArithTerm = choice @[] [SVal <$> try pNumericOnly, SAgg <$> aggFunctionParser, char '(' *> pArithExpr <* char ')']
 
-    pNumericOnly = Num . toText <$> (try ((\a c -> a ++ "." ++ c) <$> some digitChar <* char '.' <*> some digitChar) <|> some digitChar)
+    pNumericOnly = Num . toText <$> ((<>) <$> some digitChar <*> option "" (try ((:) <$> char '.' <*> some digitChar)))
 
 
 -- | Parser for where clause section
 pWhereSection :: Parser Section
-pWhereSection = do
-  _ <- string "where"
-  space
-  WhereClause <$> pExpr
+pWhereSection = WhereClause <$> (string "where" *> space *> pExpr)
 
 
 pSection :: Parser Section
-pSection = do
-  _ <- space
-  choice @[]
-    [ pSummarizeSection
-    , pSortSection
-    , pTakeSection
-    , try pExtendSection
-    , try pProjectSection
-    , try pWhereSection -- Try to parse 'where' clause first
-    , try (Source <$> pSource) -- Try source before bare expressions
-    , Search <$> (notFollowedBy reservedKeyword *> pExpr) -- Fall back to bare expression for backward compatibility
-    ]
+pSection =
+  space
+    *> choice @[]
+      [ pSummarizeSection
+      , pSortSection
+      , pTakeSection
+      , try pExtendSection
+      , try pProjectSection
+      , try pWhereSection -- Try to parse 'where' clause first
+      , try (Source <$> pSource) -- Try source before bare expressions
+      , Search <$> (notFollowedBy reservedKeyword *> pExpr) -- Fall back to bare expression for backward compatibility
+      ]
   where
-    reservedKeyword = void $ choice @[] [string "project" *> space, string "extend" *> space, string "summarize" *> space, string "sort" *> space, string "take" *> space, string "where" *> space]
+    reservedKeyword = choice @[] $ map (\k -> string k *> space) ["project", "extend", "summarize", "sort", "take", "where"]
 
 
 -- find what source to use when processing a query. By default, the requests source is used
@@ -1098,10 +978,8 @@ pSection = do
 pSource :: Parser Sources
 pSource =
   choice @[]
-    [ SSpans <$ string "spans"
-    , SSpans <$ string "otlp_logs_and_spans"
-    , SMetrics <$ string "metrics"
-    , SMetrics <$ string "telemetry.metrics"
+    [ SSpans <$ (string "spans" <|> string "otlp_logs_and_spans")
+    , SMetrics <$ (string "metrics" <|> string "telemetry.metrics")
     ]
 
 
@@ -1115,15 +993,12 @@ instance Display Sources where
   displayPrec _prec SMetrics = "otel_metrics"
 
 
---- >>> parse parseQuery "" "method// = bla "
--- Right []
+-- | Parse a full query: an optional leading pipe, then pipe-separated sections.
 --
 -- >>> parse parseQuery "" "| summarize count(*) by bin_auto(timestamp)"
--- Right [SummarizeCommand [Count (Subject "*" "*" []) Nothing] (Just (SummarizeByClause [Right (BinAuto (Subject "timestamp" "timestamp" []))]))]
---
+-- Right [SummarizeCommand [Count (Subject "*" "*" []) Nothing] (Just (SummarizeByClause [ByBinFunc (BinAuto (Subject "timestamp" "timestamp" []))]))]
 parseQuery :: Parser [Section]
 parseQuery = do
-  -- Optionally parse a leading pipe character and ignore it
   _ <- optional (space *> char '|' <* space)
   sections <- sepBy pSection (space *> char '|' <* space)
   space *> eof
@@ -1148,18 +1023,18 @@ transformAST = reorderSections . combineWheres
     combineWheres (WhereClause e1 : WhereClause e2 : rest) = combineWheres (WhereClause (And e1 e2) : rest)
     combineWheres (x : rest) = x : combineWheres rest
 
-    -- Reorder sections to canonical order (respects state dependencies)
-    -- Order: Source -> filters -> extends -> summarize -> project -> sort -> take
+    -- Canonical order (respects state dependencies), stable within each group:
+    -- Source -> filters -> extends -> summarize -> project -> sort -> take
     reorderSections :: [Section] -> [Section]
-    reorderSections secs = sources <> filters <> extends <> summarizes <> projects <> sorts <> takes
-      where
-        sources = [s | s@(Source _) <- secs]
-        filters = [s | s@(Search _) <- secs] <> [s | s@(WhereClause _) <- secs]
-        extends = [s | s@(ExtendCommand _) <- secs]
-        summarizes = [s | s@(SummarizeCommand _ _) <- secs]
-        projects = [s | s@(ProjectCommand _) <- secs]
-        sorts = [s | s@(SortCommand _) <- secs]
-        takes = [s | s@(TakeCommand _) <- secs]
+    reorderSections = sortOn \case
+      Source{} -> 0 :: Int
+      Search{} -> 1
+      WhereClause{} -> 2
+      ExtendCommand{} -> 3
+      SummarizeCommand{} -> 4
+      ProjectCommand{} -> 5
+      SortCommand{} -> 6
+      TakeCommand{} -> 7
 
 
 instance ToQueryText [Section] where
@@ -1169,11 +1044,9 @@ instance ToQueryText [Section] where
 -- | Extract percentiles info from a list of sections
 -- Returns (subjectExpr as SQL, percentiles) if a Percentile(s) aggregation is found
 extractPercentilesInfo :: [Section] -> Maybe (Text, [Double])
-extractPercentilesInfo = foldr go Nothing
+extractPercentilesInfo secs = listToMaybe $ mapMaybe pcts [agg | SummarizeCommand aggs _ <- secs, agg <- aggs]
   where
-    go (SummarizeCommand (findPercentiles -> Just info) _) _ = Just info
-    go _ acc = acc
-    findPercentiles [] = Nothing
-    findPercentiles (Percentile subExpr pct _ : _) = Just (subjectExprToSQL subExpr, [pct])
-    findPercentiles (Percentiles subExpr pcts _ : _) = Just (subjectExprToSQL subExpr, pcts)
-    findPercentiles (_ : rest) = findPercentiles rest
+    pcts = \case
+      Percentile subExpr pct _ -> Just (subjectExprToSQL subExpr, [pct])
+      Percentiles subExpr ps _ -> Just (subjectExprToSQL subExpr, ps)
+      _ -> Nothing

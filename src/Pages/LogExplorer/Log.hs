@@ -221,8 +221,8 @@ buildTraceTree colIdxMap queryResultCount rows = (adjustedRows, sortWith (Down .
     adjustments = concatMap snd traceResults
 
     -- Apply adjustments to row vectors at start_time_ns / duration columns.
-    stIdxM = HM.lookup "start_time_ns" colIdxMap
-    durIdxM = HM.lookup "duration" colIdxMap
+    stIdxM = lookupIdx "start_time_ns"
+    durIdxM = lookupIdx "duration"
     adjMap :: Map.Map Int (Int64, Int64)
     adjMap = Map.fromList [(i, (s, d)) | (i, s, d) <- adjustments]
     adjustedRows = V.imap applyAdj rows
@@ -245,7 +245,7 @@ buildTraceTree colIdxMap queryResultCount rows = (adjustedRows, sortWith (Down .
           sortedChildrenMap = Map.map (sortWith \x -> maybe 0 (.startNs) (Map.lookup x spanMap)) childrenMap
           parentIsQR s = maybe False (.isQueryResult) (s.parentId >>= flip Map.lookup spanMap)
           roots = filter (\s -> s.isQueryResult && not (parentIsQR s)) spans
-          traceStartTime = viaNonEmpty head $ sort $ mapMaybe (.timestamp) spans
+          traceStartTime = viaNonEmpty minimum1 $ mapMaybe (.timestamp) spans
           tid = maybe "" (.traceIdVal) (viaNonEmpty head spans)
        in map (buildEntry tid sortedChildrenMap spanMap traceStartTime) roots
 
@@ -445,7 +445,7 @@ renderFacets facetSummary = do
       -- No `contain` here: it would become the containing block for the fixed-position
       -- field-action popover (top layer), trapping it inside this section's overflow clip.
       div_ (wrapAttrs <> [class_ " block "]) do
-        input_ $ [type_ "checkbox", class_ "hidden peer", id_ toggleId] ++ [checked_ | open]
+        input_ $ [type_ "checkbox", class_ "hidden peer", id_ toggleId] <> [checked_ | open]
         label_
           ( labelAttrs
               <> [ class_ " cursor-pointer peer-checked:[&_.chev]:rotate-0 "
@@ -521,8 +521,10 @@ renderFacets facetSummary = do
 -- | Core result builder shared by apiLogH and queryEvents. When @withChildren@
 -- is False, only matched rows are returned — no descendants, no synthesised
 -- orphan headers (trace-tree concerns the UI wants but the API/CLI usually doesn't).
-buildLogResult :: (DB es, Time.Time :> es) => Bool -> Projects.ProjectId -> UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> [Text] -> (V.Vector (V.Vector AE.Value), [Text], Int) -> Eff es LogResult
-buildLogResult withChildren pid now sinceM fromM toM addCols removeCols (requestVecs, colNames, resultCount') = do
+-- The time window is re-derived from the returned page's own first/last timestamps,
+-- so only @sinceM@ (the relative-range token) is needed here.
+buildLogResult :: (DB es, Time.Time :> es) => Bool -> Projects.ProjectId -> UTCTime -> Maybe Text -> [Text] -> [Text] -> (V.Vector (V.Vector AE.Value), [Text], Int) -> Eff es LogResult
+buildLogResult withChildren pid now sinceM addCols removeCols (requestVecs, colNames, resultCount') = do
   let colIdxMap = listToIndexHashMap colNames
       colOf k v = lookupVecTextByKey v colIdxMap k
       reqLastCreatedAtM = colOf "timestamp" =<< (requestVecs V.!? (V.length requestVecs - 1))
@@ -585,7 +587,7 @@ queryEvents pid queryM sinceM fromM toM sourceM limitM withChildrenM includeAttr
   case result of
     Left err -> throwError $ translateQueryError err
     -- Default to exact-match (no trace expansion); UI passes True via apiLogH.
-    Right r -> buildLogResult (fromMaybe False withChildrenM) pid now sinceM fromM toM [] [] r
+    Right r -> buildLogResult (fromMaybe False withChildrenM) pid now sinceM [] [] r
 
 
 -- | Translate the raw exception string from 'LogQueries.selectLogTable' into a
@@ -765,7 +767,7 @@ recordExploration pid uid stepsDone queryAST = do
 -- | Log Explorer header controls: live-stream toggle, time picker, refresh.
 logExplorerActions_ :: Maybe (Text, Text) -> Html ()
 logExplorerActions_ currentRange = div_ [class_ "flex gap-2 max-md:gap-1 items-center"] do
-  label_ [class_ "cursor-pointer border border-strokeWeak rounded-lg flex shadow-xs", role_ "switch", Aria.label_ "Stream live data", [__|on change from #streamLiveData if #streamLiveData.checked set @aria-checked to 'true' else set @aria-checked to 'false'|], term "aria-checked" "false"] do
+  label_ [class_ "cursor-pointer border border-strokeWeak rounded-lg flex shadow-xs", role_ "switch", Aria.label_ "Stream live data", [__|on change from #streamLiveData set @aria-checked to #streamLiveData.checked|], term "aria-checked" "false"] do
     input_ [type_ "checkbox", id_ "streamLiveData", class_ "hidden"]
     span_ [class_ "group-has-[#streamLiveData:checked]/pg:flex hidden py-1 px-2 items-center", data_ "tippy-content" "Pause live stream"] $ faSprite_ "pause" "solid" "h-4 w-4 text-iconNeutral"
     span_ [class_ "group-has-[#streamLiveData:checked]/pg:hidden flex py-1 px-2 items-center", data_ "tippy-content" "Stream live data"] $ faSprite_ "play" "regular" "h-4 w-4 text-iconNeutral"
@@ -812,7 +814,7 @@ logExplorerDataH pid queryM' cols' cursorM' sinceM fromM toM sourceM targetSpans
         Left err -> Log.logAttention "Log explorer data query failed" (show @Text err) $> (Just (sanitizeBackendError err), emptyTable)
         Right t -> pure (Nothing, t)
   -- UI always wants the trace-tree context; the API/CLI defaults off.
-  lr <- buildLogResult True pid now sinceM fromM toM addCols removeCols tableData
+  lr <- buildLogResult True pid now sinceM addCols removeCols tableData
   let lastFM = lr.cursor >>= (iso8601ParseM . toString) <&> toText . iso8601Show . addUTCTime (-0.001)
   addRespHeaders
     (lr :: LogResult)
@@ -988,18 +990,14 @@ fmtPct1 :: Double -> Text
 fmtPct1 x = toText (showFFloat (Just 1) x "") <> "%"
 
 
--- | Wrapper classes for #page-summary-region contents. Both hide under the
--- chart toggles; literal (not concatenated) so Tailwind's scanner sees them.
-summaryRegionCls, chartRegionCls :: Text
-summaryRegionCls = "mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full flex flex-col gap-2"
-chartRegionCls = "timeline flex flex-row gap-4 mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full min-h-36 max-md:min-h-28 aspect-[10/1] max-md:aspect-auto max-md:flex-col"
-
-
 -- | Shimmer placeholder mirroring 'sessionsHeader_' (6-KPI grid + over-time bar
 -- card) so the summary region keeps its height during the sessions-viz swap.
+-- NB: the #page-summary-region wrapper classes are repeated verbatim at every
+-- use site (here, 'chartSummarySkeleton_', the two headers, 'apiLogsPage') —
+-- Tailwind's scanner and locality both want them written on the element.
 sessionsSummarySkeleton_ :: Html ()
 sessionsSummarySkeleton_ =
-  div_ [class_ summaryRegionCls, role_ "status", Aria.label_ "Loading session summary"] do
+  div_ [class_ "mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full flex flex-col gap-2", role_ "status", Aria.label_ "Loading session summary"] do
     div_ [class_ "grid grid-cols-6 max-md:grid-cols-3 gap-2"]
       $ replicateM_ 6
       $ div_ [class_ "surface-raised rounded-2xl px-3 py-2 flex flex-col gap-1"] do
@@ -1015,7 +1013,7 @@ sessionsSummarySkeleton_ =
 -- summary region) so its height is preserved during the swap back from sessions.
 chartSummarySkeleton_ :: Html ()
 chartSummarySkeleton_ =
-  div_ [class_ chartRegionCls, role_ "status", Aria.label_ "Loading chart"] do
+  div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full min-h-36 max-md:min-h-28 aspect-[10/1] max-md:aspect-auto max-md:flex-col", role_ "status", Aria.label_ "Loading chart"] do
     div_ [class_ "flex-[3] min-w-0 rounded-2xl skeleton-shimmer"] ""
     div_ [class_ "flex-1 min-w-0 max-md:hidden rounded-2xl skeleton-shimmer"] ""
 
@@ -1112,7 +1110,7 @@ patternsHeader_ rowsV totalPatterns baseHourEpoch = do
         (p : _) | totalEvents > 0 -> 100 * (fromIntegral (inRange p) :: Double) / fromIntegral totalEvents
         _ -> 0
       nBuckets = foldl' max 0 (map (length . (.volume)) rows)
-      pad xs = take nBuckets (xs ++ repeat 0)
+      pad xs = take nBuckets (xs <> repeat 0)
       sumBk ps = foldl' (zipWith (+)) (replicate nBuckets 0) (map (pad . (.volume)) ps)
       -- Trim leading/trailing empty hourly slots to the populated window so a
       -- short range doesn't render as one bar lost in 23 empty ones.
@@ -1146,7 +1144,7 @@ patternsHeader_ rowsV totalPatterns baseHourEpoch = do
         , ("Noisiest", fmtPct1 topShare, Just "of events")
         ]
 
-  div_ [class_ summaryRegionCls] do
+  div_ [class_ "mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full flex flex-col gap-2"] do
     div_ [class_ "grid grid-cols-5 max-md:grid-cols-3 gap-2"] $ forM_ kpis kpiCard_
     -- Patterns volume is hourly (from the rollup), so a range under an hour
     -- resolves to a single full-width bar. Rather than hide the trend, the note
@@ -1193,7 +1191,7 @@ sessionsHeader_ summ = do
         , ("Services", prettyPrintCount $ fromIntegral summ.uniqueServices, Nothing)
         ]
 
-  div_ [class_ summaryRegionCls] do
+  div_ [class_ "mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full flex flex-col gap-2"] do
     div_ [class_ "grid grid-cols-6 max-md:grid-cols-3 gap-2"] $ forM_ kpis kpiCard_
     summaryChartCard_ "Sessions over time" Nothing summ.bucketStartEpoch summ.bucketWidthSec barEls
 
@@ -1323,7 +1321,7 @@ aggregateEnvelope rows cols allCols total extra =
       , "serviceColors" AE..= AE.object []
       , "traces" AE..= ([] :: [AE.Value])
       ]
-    ++ extra
+    <> extra
 
 
 -- | Render context for the Log Explorer page shell — chrome only; rows/aggregates
@@ -1560,7 +1558,7 @@ apiLogsPage page = do
       div_ [id_ "page-summary-region"]
         $ if page.vizType == Just "sessions" || page.vizType == Just "patterns"
           then sessionsSummarySkeleton_
-          else div_ [class_ chartRegionCls] do
+          else div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full min-h-36 max-md:min-h-28 aspect-[10/1] max-md:aspect-auto max-md:flex-col"] do
             Widget.widget_ page.chartWidget
             div_ [class_ "flex-1 min-w-0 max-md:hidden"] $ Widget.widget_ page.latencyWidget
 

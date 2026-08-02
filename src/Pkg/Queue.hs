@@ -71,13 +71,6 @@ import UnliftIO.Exception (tryAny)
 import UnliftIO.MVar (modifyMVar)
 
 
--- Process-wide cached Kafka producer. librdkafka producers are heavyweight
--- (TCP, SASL handshake, idempotence PID acquisition) and leak resources if
--- created per message. We initialize one lazily and reuse for the lifetime
--- of the process. Holds an Either so a failed init is retried next call.
-{-# NOINLINE sharedKafkaProducer #-}
-
-
 -- | The SASL/SCRAM connection props shared by every Kafka client (consumer,
 -- shared producer, parking-redrive). One source of truth so a mechanism or
 -- credential change can't drift between clients.
@@ -90,8 +83,13 @@ kafkaSaslExtraProps cfg =
   ]
 
 
+-- Process-wide cached Kafka producer. librdkafka producers are heavyweight
+-- (TCP, SASL handshake, idempotence PID acquisition) and leak resources if
+-- created per message. We initialize one lazily and reuse for the lifetime
+-- of the process; a failed init leaves Nothing, so it is retried next call.
 sharedKafkaProducer :: MVar (Maybe KP.KafkaProducer)
 sharedKafkaProducer = unsafePerformIO (newMVar Nothing)
+{-# NOINLINE sharedKafkaProducer #-}
 
 
 getOrInitKafkaProducer :: EnvConfig -> IO KP.KafkaProducer
@@ -189,16 +187,14 @@ runBatchSpan
 runBatchSpan spanName attrs run = withSpan spanName attrs \sp -> do
   addEvent sp "batch.started" []
   res <- run
-  case res of
+  res <$ case res of
     Right (ids, poison) -> do
       addEvent sp "batch.completed" [("processed_count", OA.toAttribute (length ids)), ("poison_count", OA.toAttribute (length poison))]
       setStatus sp Ok
-      pure (Right (ids, poison))
     Left wf -> do
       let !summary = Telemetry.writeFailureSummary wf
       addEvent sp "batch.write_failed" [("write_failure", OA.toAttribute summary)]
       setStatus sp (Error summary)
-      pure (Left wf)
 
 
 -- pubsubService connects to the pubsub service and listens for  messages,
@@ -210,9 +206,7 @@ pubsubService appLogger appCtx tp topics fn = checkpoint "pubsubService" do
   env <- case envConfig.googleServiceAccountB64 of
     "" -> Google.newEnv <&> (Google.envScopes L..~ pubSubScope)
     sa -> do
-      let credJSON = either error id $ LB64.decodeBase64Untyped (LT.encodeUtf8 sa)
-      let credsE = Google.fromJSONCredentials credJSON
-      let creds = either (error . toText) id credsE
+      let creds = either (error . toText) id $ Google.fromJSONCredentials $ either error id $ LB64.decodeBase64Untyped (LT.encodeUtf8 sa)
       managerG <- Google.newManager Google.tlsManagerSettings
       Google.newEnvWith creds (\_ _ -> pass) managerG <&> (Google.envScopes L..~ pubSubScope)
 
@@ -220,7 +214,7 @@ pubsubService appLogger appCtx tp topics fn = checkpoint "pubsubService" do
 
   forever
     $ runResourceT
-    $ forM topics \topic -> do
+    $ for_ topics \topic -> do
       result <- tryAny $ checkpoint (toAnnotation $ "pubsubTopic loop: " <> topic) do
         let subscription = "projects/past-3/subscriptions/" <> topic <> "-sub"
         pullResp <- Google.send env $ PubSub.newPubSubProjectsSubscriptionsPull pullReq subscription
@@ -233,8 +227,7 @@ pubsubService appLogger appCtx tp topics fn = checkpoint "pubsubService" do
                     Just (ackId, b64Msg)
                 )
                 messages
-        let firstAttrs = messages ^? L.folded . field @"message" . _Just . field @"attributes" . _Just . field @"additional"
-        let ceType = HM.lookup "ce-type" (maybeToMonoid firstAttrs)
+        let msgAttrs = maybeToMonoid $ messages ^? L.folded . field @"message" . _Just . field @"attributes" . _Just . field @"additional"
 
         msgIds <-
           tryAny
@@ -245,23 +238,24 @@ pubsubService appLogger appCtx tp topics fn = checkpoint "pubsubService" do
                   [ ("topic", OA.toAttribute topic)
                   , ("message_count", OA.toAttribute (length validMsgs))
                   , ("subscription", OA.toAttribute subscription)
-                  , ("ce-type", OA.toAttribute (fromMaybe "" ceType))
+                  , ("ce-type", OA.toAttribute (HM.findWithDefault "" "ce-type" msgAttrs))
                   ]
-                  (fn validMsgs (maybeToMonoid firstAttrs))
+                  (fn validMsgs msgAttrs)
             )
-            >>= \result ->
+            >>= \batchRes ->
               liftIO
                 $ fromRight []
-                <$> runBackground appLogger appCtx tp (runErrorNoCallStack @K.KafkaError (runSharedKafkaProducer appCtx (routeBatchOutcome appCtx appCtx.config.kafkaDeadLetterTopic "pubsub-service" topic validMsgs (maybeToMonoid firstAttrs) result)))
+                <$> runBackground appLogger appCtx tp (runErrorNoCallStack @K.KafkaError (runSharedKafkaProducer appCtx (routeBatchOutcome appCtx appCtx.config.kafkaDeadLetterTopic "pubsub-service" topic validMsgs msgAttrs batchRes)))
 
-        let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ Just msgIds
-        unless (null msgIds) $ void $ PubSub.newPubSubProjectsSubscriptionsAcknowledge acknowlegReq subscription & Google.send env
-      case result of
-        Left e ->
-          liftIO
-            $ runLogT "pubsub-service" appLogger LogAttention
-            $ LogBase.logAttention "pubsubService: outer loop exception" (show e)
-        Right _ -> pass
+        unless (null msgIds)
+          $ void
+          $ Google.send env
+          $ PubSub.newPubSubProjectsSubscriptionsAcknowledge (PubSub.newAcknowledgeRequest & field @"ackIds" L..~ Just msgIds) subscription
+      whenLeft_ result
+        $ liftIO
+        . runLogT "pubsub-service" appLogger LogAttention
+        . LogBase.logAttention "pubsubService: outer loop exception"
+        . show
   where
     pubSubScope :: Proxy '["https://www.googleapis.com/auth/pubsub"]
     pubSubScope = Proxy
@@ -536,7 +530,6 @@ decoupledLoop
 decoupledLoop appLogger appCtx tp role batchSize clientId dlqBase fn = do
   let highWaterBytes = 4 * kafkaChunkTargetBytes
       lowWaterBytes = kafkaChunkTargetBytes
-      deadLetterTopic = dlqBase
   workQ <- liftIO (newTBQueueIO workQueueBound :: IO (TBQueue WorkItem))
   trackerVar <- newTVarIO (Map.empty :: Map (Text, K.PartitionId) PartProgress)
   committedVar <- newTVarIO (Map.empty :: Map (Text, K.PartitionId) Int64)
@@ -549,7 +542,7 @@ decoupledLoop appLogger appCtx tp role batchSize clientId dlqBase fn = do
       worker = forever do
         w <- atomically (readTBQueue workQ)
         let topic = fst w.tpKey
-            attrs = attrsFor deadLetterTopic topic w.recc
+            attrs = attrsFor topic w.recc
         -- `inject` lifts the ATBackgroundCtx processing action into the
         -- KafkaConsumer-extended stack; workers never touch the Kafka effect.
         result <-
@@ -639,7 +632,7 @@ decoupledLoop appLogger appCtx tp role batchSize clientId dlqBase fn = do
             -- ce-type (processList) and rewrites one store-set. Sharing
             -- 'writeTargetFor' with the writer keeps the leg semantics in one
             -- place and batches both-failed/normal together (both → WriteBoth).
-            dlqGroupKey r = let h = consumerRecordHeadersToHashMap r in (ceTypeFor deadLetterTopic r.crTopic.unTopicName h, Telemetry.writeTargetFor appCtx.env.enablePostgresTelemetryWrites appCtx.env.enableTimefusionWrites (HM.lookup "monoscope-write-failure" h))
+            dlqGroupKey r = let h = consumerRecordHeadersToHashMap r in (ceTypeFor dlqBase r.crTopic.unTopicName h, Telemetry.writeTargetFor appCtx.env.enablePostgresTelemetryWrites appCtx.env.enableTimefusionWrites (HM.lookup "monoscope-write-failure" h))
             subChunks = subChunksFor role dlqGroupKey nowEpoch byTP
         for_ subChunks \work ->
           atomically do
@@ -668,8 +661,8 @@ decoupledLoop appLogger appCtx tp role batchSize clientId dlqBase fn = do
     Ki.fork_ scope committer
     forever pollOnce
   where
-    attrsFor :: Text -> Text -> K.ConsumerRecord (Maybe ByteString) (Maybe ByteString) -> HM.HashMap Text Text
-    attrsFor deadLetterTopic topic r = let h = consumerRecordHeadersToHashMap r in HM.insert "ce-type" (ceTypeFor deadLetterTopic topic h) h
+    attrsFor :: Text -> K.ConsumerRecord (Maybe ByteString) (Maybe ByteString) -> HM.HashMap Text Text
+    attrsFor topic r = let h = consumerRecordHeadersToHashMap r in HM.insert "ce-type" (ceTypeFor dlqBase topic h) h
 
     consumerRecordHeadersToHashMap :: K.ConsumerRecord (Maybe ByteString) (Maybe ByteString) -> HashMap Text Text
     consumerRecordHeadersToHashMap record = HM.fromList $ map (bimap decodeUtf8 decodeUtf8) (K.headersToList record.crHeaders)
@@ -756,19 +749,20 @@ subChunksFor
   -> Int
   -> Map (Text, K.PartitionId) (NonEmpty (K.ConsumerRecord (Maybe ByteString) (Maybe ByteString)))
   -> [WorkItem]
-subChunksFor role dlqGroupKey nowEpoch byTP = case role of
-  KafkaPrimary ->
-    [ WorkItem tpKey recc (consumerRecordToTuple <$> chunk) (K.unOffset . (.crOffset) <$> chunk) (sum (recordBytes <$> chunk))
-    | (tpKey, recs@(recc :| _)) <- Map.toList byTP
-    , chunk <- chunksByBytes kafkaChunkTargetBytes recordBytes (sortOn (.crOffset) (toList recs))
-    ]
-  KafkaDlqReplay ->
-    [ WorkItem tpKey recc (consumerRecordToTuple <$> chunk) (K.unOffset . (.crOffset) <$> chunk) (sum (recordBytes <$> chunk))
-    | (tpKey, recs) <- Map.toList byTP
-    , let due = takeWhile (isDue nowEpoch) (sortOn (.crOffset) (toList recs))
-    , grp <- Map.elems (Map.fromListWith (<>) [(dlqGroupKey r, [r]) | r <- due])
-    , chunk@(recc : _) <- chunksByBytes kafkaChunkTargetBytes recordBytes (sortOn (.crOffset) grp)
-    ]
+subChunksFor role dlqGroupKey nowEpoch byTP =
+  [ WorkItem tpKey hdr (consumerRecordToTuple <$> chunk) (K.unOffset . (.crOffset) <$> chunk) (sum (recordBytes <$> chunk))
+  | (tpKey, recs) <- Map.toList byTP
+  , let sorted = sortOn (.crOffset) (toList recs)
+  , grp <- case role of
+      KafkaPrimary -> [sorted]
+      KafkaDlqReplay -> sortOn (.crOffset) <$> Map.elems (Map.fromListWith (<>) [(dlqGroupKey r, [r]) | r <- takeWhile (isDue nowEpoch) sorted])
+  , chunk <- chunksByBytes kafkaChunkTargetBytes recordBytes grp
+  , -- headers come from the partition head (primary: one topic) or the chunk head
+  -- (DLQ: chunks are per-ce-type slices of interleaved source topics)
+  let hdr = case chunk of
+        r : _ | role == KafkaDlqReplay -> r
+        _ -> head recs
+  ]
   where
     consumerRecordToTuple :: K.ConsumerRecord (Maybe ByteString) (Maybe ByteString) -> (Text, ByteString)
     consumerRecordToTuple record = (record.crTopic.unTopicName, fromMaybe "" record.crValue)
@@ -873,32 +867,24 @@ routeBatchOutcome
 routeBatchOutcome appCtx dlqBase svc topic validMsgs attrs = \case
   Right (Right (writeAcks, [])) -> pure writeAcks
   Right (Right (writeAcks, poison)) -> do
-    let poisonBytes = [(ackId, raw) | (ackId, raw, _) <- poison]
-        poisonAckIds = [ackId | (ackId, _, _) <- poison]
-        firstReason = maybe "" (\(_, _, r) -> r) (listToMaybe poison)
-        poisonAttrs = attrs <> one ("monoscope-poison-reason", firstReason)
+    let firstReason = maybe "" (\(_, _, r) -> r) (listToMaybe poison)
     LogBase.logAttention "routeBatchOutcome: poison messages → DLQ"
       $ AE.object ["service" AE..= svc, "topic" AE..= topic, "poison_count" AE..= length poison, "write_acks" AE..= length writeAcks]
-    -- DLQ publish throws KafkaError on enqueue failure; on failure commit nothing
-    -- → broker redelivers (writes repeated on retry; need idempotency downstream).
-    tryError @K.KafkaError (publishToDeadLetterQueue appCtx dlqBase poisonBytes poisonAttrs firstReason) >>= \case
-      Right () -> pure (writeAcks <> poisonAckIds)
-      Left _ -> pure []
+    dlqThen [(ackId, raw) | (ackId, raw, _) <- poison] (attrs <> one ("monoscope-poison-reason", firstReason)) firstReason (writeAcks <> [ackId | (ackId, _, _) <- poison])
   Right (Left wf) -> do
     let summary = Telemetry.writeFailureSummary wf
-        dlqAttrs = attrs <> Telemetry.writeFailureDlqHeaders wf
     LogBase.logAttention "routeBatchOutcome: write failure → DLQ"
       $ AE.object ["service" AE..= svc, "topic" AE..= topic, "write_failure" AE..= summary, "message_count" AE..= length validMsgs]
-    tryError @K.KafkaError (publishToDeadLetterQueue appCtx dlqBase validMsgs dlqAttrs summary) >>= \case
-      Right () -> pure (map fst validMsgs)
-      Left _ -> pure []
+    dlqThen validMsgs (attrs <> Telemetry.writeFailureDlqHeaders wf) summary (map fst validMsgs)
   Left e -> do
     let errText = toText (show e)
     LogBase.logAttention "routeBatchOutcome: non-write exception"
       $ AE.object ["service" AE..= svc, "topic" AE..= topic, "error" AE..= errText, "message_count" AE..= length validMsgs]
     if Hasql.isTransientException e
       then pure []
-      else
-        tryError @K.KafkaError (publishToDeadLetterQueue appCtx dlqBase validMsgs attrs errText) >>= \case
-          Right () -> pure (map fst validMsgs)
-          Left _ -> pure []
+      else dlqThen validMsgs attrs errText (map fst validMsgs)
+  where
+    -- DLQ publish throws KafkaError on enqueue failure; on failure commit nothing
+    -- → broker redelivers (writes repeated on retry; need idempotency downstream).
+    dlqThen msgs dlqAttrs reason acks =
+      tryError @K.KafkaError (publishToDeadLetterQueue appCtx dlqBase msgs dlqAttrs reason) <&> either (const []) (const acks)

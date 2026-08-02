@@ -2,6 +2,7 @@ module Pages.Components (drawer_, drawerLoadingSkeleton_, emptyState_, EmptyStat
 
 import Data.Aeson qualified as AE
 import Data.Default (Default (..))
+import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
@@ -64,10 +65,12 @@ emptyState_ cfg title subTxt =
 
 
 getTargetPage :: Text -> Text
-getTargetPage "Requests" = "/log_explorer"
-getTargetPage "Issues" = "/issues"
-getTargetPage "Endpoints" = "/endpoints"
-getTargetPage _ = ""
+getTargetPage p = fromMaybe "" $ lookup p [("Requests", "/log_explorer"), ("Issues", "/issues"), ("Endpoints", "/endpoints")]
+
+
+-- | Element with a non-standard tag name (custom elements, SVG), which Lucid has no builder for.
+el_ :: Text -> [Attribute] -> Html () -> Html ()
+el_ n = with (makeElement n)
 
 
 -- | @startOpen@ controls whether the drawer renders expanded on load. Keep this
@@ -144,8 +147,8 @@ localTime_ = localTimeFmt_ "MMM dd, HH:mm:ss"
 -- UTC — a fixed readable form, so callers never hand-maintain a second pattern.
 localTimeFmt_ :: Text -> UTCTime -> Html ()
 localTimeFmt_ dfFmt ts =
-  with
-    (makeElement "local-time")
+  el_
+    "local-time"
     [makeAttribute "datetime" (toText $ iso8601Show ts), makeAttribute "format" dfFmt]
     (toHtml $ formatTime defaultTimeLocale "%b %d, %H:%M:%S UTC" ts)
 
@@ -366,7 +369,7 @@ navBar =
       img_ [class_ "h-12 hidden dark:block", src_ "/public/assets/svgs/logo_white.svg"]
 
 
-modal_ :: T.Text -> Html () -> Html () -> Html ()
+modal_ :: Text -> Html () -> Html () -> Html ()
 modal_ modalId btnTrigger = modalWith_ modalId def (Just btnTrigger)
 
 
@@ -566,15 +569,13 @@ formField_ size cfg lbl name required customM =
 
 formSelectField_ :: Monad m => FieldSize -> Text -> Text -> Bool -> HtmlT m () -> HtmlT m ()
 formSelectField_ size lbl name required options =
-  fieldset_ [class_ wrapperCls] do
-    label_ [class_ labelCls, Lucid.for_ name] do
-      toHtml lbl
-      when required $ span_ [class_ reqCls] "*"
-    select_ ([class_ selectCls, name_ name, id_ name] <> [required_ "true" | required]) options
+  formField_ size def lbl name required
+    $ Just
+    $ select_ ([class_ selectCls, name_ name, id_ name] <> [required_ "true" | required]) options
   where
-    (wrapperCls, labelCls, selectCls, reqCls) = case size of
-      FieldSm -> ("fieldset flex-1 min-w-0", "label text-xs text-textStrong", "select select-sm w-full", "text-textError")
-      FieldMd -> ("fieldset", "label flex w-full items-center gap-1 text-textStrong", "select w-full h-12", "text-textWeak")
+    selectCls = case size of
+      FieldSm -> "select select-sm w-full"
+      FieldMd -> "select w-full h-12"
 
 
 data PanelCfg = PanelCfg
@@ -636,11 +637,10 @@ connectionBadge_ status = span_ [class_ $ "badge badge-sm gap-1 " <> badgeCls] d
   whenJust iconM \icon -> faSprite_ icon "regular" "h-3 w-3"
   toHtml status
   where
-    (badgeCls, iconM) = case status of
-      "Active" -> ("badge-soft badge-success", Just "circle-check")
-      "Connected" -> ("badge-soft badge-success", Just "circle-check")
-      "Not connected" -> ("badge-soft badge-secondary", Just "circle-info")
-      _ -> ("badge-soft badge-secondary", Nothing)
+    (badgeCls, iconM)
+      | status `elem` ["Active", "Connected"] = ("badge-soft badge-success", Just "circle-check")
+      | status == "Not connected" = ("badge-soft badge-secondary", Just "circle-info")
+      | otherwise = ("badge-soft badge-secondary", Nothing)
 
 
 data BadgeColor = BrandBadge | SuccessBadge | ErrorBadge | NeutralBadge
@@ -677,13 +677,13 @@ data ModalCfg = ModalCfg
   deriving anyclass (Default)
 
 
-modalWith_ :: T.Text -> ModalCfg -> Maybe (Html ()) -> Html () -> Html ()
+modalWith_ :: Text -> ModalCfg -> Maybe (Html ()) -> Html () -> Html ()
 modalWith_ modalId cfg triggerM contentHtml = do
   whenJust triggerM $ label_ [Lucid.for_ modalId]
   input_
     $ [ class_ "modal-toggle"
-      , Lucid.id_ modalId
-      , Lucid.type_ "checkbox"
+      , id_ modalId
+      , type_ "checkbox"
       , Aria.label_ "Toggle modal"
       , [__|on keyup if the event's key is 'Escape' set my.checked to false trigger keyup end
           on closeModal from body set my.checked to false end
@@ -791,13 +791,7 @@ dirtyFormSaveAttr_ = [__| on change from closest <form/> remove @disabled from m
 -- >>> abbreviateUnit "days"
 -- "days"
 abbreviateUnit :: Text -> Text
-abbreviateUnit "hours" = "hrs"
-abbreviateUnit "hour" = "hr"
-abbreviateUnit "minutes" = "mins"
-abbreviateUnit "minute" = "min"
-abbreviateUnit "seconds" = "secs"
-abbreviateUnit "second" = "sec"
-abbreviateUnit w = w
+abbreviateUnit w = fromMaybe w $ lookup w [("hours", "hrs"), ("hour", "hr"), ("minutes", "mins"), ("minute", "min"), ("seconds", "secs"), ("second", "sec")]
 
 
 -- | Compact time ago display (e.g., "23 hrs ago" instead of "23 hours ago")
@@ -843,8 +837,8 @@ sparkline_ buckets
           lineX1 = peakIdx * (barW + gap) + barW
           lineX2 = barsEnd + 2
           w = lineX2 + labelW
-      with
-        (makeElement "svg")
+      el_
+        "svg"
         [ makeAttribute "viewBox" $ toText [PyF.fmt|0 0 {w} {h}|]
         , style_ [PyF.fmt|width:100%;height:{h}px|]
         , makeAttribute "preserveAspectRatio" "xMinYMid meet"
@@ -852,8 +846,8 @@ sparkline_ buckets
         $ do
           forM_ (zip [0 ..] buckets) \(i, v) -> do
             let barH = max 2 (round @Double @Int $ (fromIntegral v / peak) * fromIntegral barZone)
-            with
-              (makeElement "rect")
+            el_
+              "rect"
               [ makeAttribute "x" $ show $ i * (barW + gap)
               , makeAttribute "y" $ show $ h - barH
               , makeAttribute "width" $ show barW
@@ -863,8 +857,8 @@ sparkline_ buckets
               , makeAttribute "opacity" "0.7"
               ]
               ""
-          with
-            (makeElement "line")
+          el_
+            "line"
             [ makeAttribute "x1" $ show lineX1
             , makeAttribute "y1" $ show topPad
             , makeAttribute "x2" $ show lineX2
@@ -874,8 +868,8 @@ sparkline_ buckets
             , makeAttribute "stroke-dasharray" "3,2"
             ]
             ""
-          with
-            (makeElement "text")
+          el_
+            "text"
             [ makeAttribute "x" $ show (lineX2 + 1)
             , makeAttribute "y" $ show (topPad + 4)
             , makeAttribute "text-anchor" "start"

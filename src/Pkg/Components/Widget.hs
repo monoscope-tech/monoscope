@@ -266,16 +266,25 @@ encodeText :: AE.ToJSON a => a -> Text
 encodeText = decodeUtf8 . fromLazy . AE.encode
 
 
+-- | Widget's project id as Text, or empty when absent.
+projectIdText :: Widget -> Text
+projectIdText w = foldMap (.toText) w._projectId
+
+
+-- | Widget boolean flags round-trip as @Maybe Bool@ (Nothing = false); this reads them.
+isTrue :: Maybe Bool -> Bool
+isTrue = (== Just True)
+
+
 -- | HTMX fetch URL for a (already eager-prepared) widget: the project-scoped
 -- /widget endpoint with the widget JSON url-encoded as a query param.
 widgetFetchUrl :: Widget -> Text
-widgetFetchUrl w = "/p/" <> maybe "" (.toText) w._projectId <> "/widget?widgetJSON=" <> decodeUtf8 (urlEncode True $ encodeUtf8 $ encodeText w)
+widgetFetchUrl w = "/p/" <> projectIdText w <> "/widget?widgetJSON=" <> decodeUtf8 (urlEncode True $ encodeUtf8 $ encodeText w)
 
 
 -- | Data attributes for table row click handling (delegated via global JS handler in widgets.ts)
 rowClickTableAttrs :: Widget -> [Attribute]
-rowClickTableAttrs widget = flip foldMap widget.onRowClick \action ->
-  [data_ "on-row-click" (encodeText action)]
+rowClickTableAttrs widget = foldMap (\action -> [data_ "on-row-click" (encodeText action)]) widget.onRowClick
 
 
 -- Used when converting a widget json to its html representation. Eg in a query chart builder
@@ -306,9 +315,8 @@ signWidgetUrl secret pid widgetJson =
 -- use either index or the xxhash as id
 widget_ :: Widget -> Html ()
 widget_ w' = case w.wType of
-  WTAnomalies -> gridItem_ $ div_ [class_ "h-full group/wgt "] $ div_ [class_ "gap-0.5 flex flex-col h-full"] do
-    unless (w.naked == Just True) $ renderWidgetHeader w (maybeToMonoid w.id) w.title Nothing Nothing Nothing (Just ("View all", "/p/" <> maybeToMonoid (w._projectId <&> (.toText)) <> "/issues")) (w.hideSubtitle == Just True)
-    div_ [class_ "flex-1 flex min-h-0"] $ div_ [class_ $ "h-full w-full " <> if w.naked == Just True then "" else "surface-raised rounded-2xl", id_ $ maybeToMonoid w.id <> "_bordered"] $ div_ [class_ "h-full overflow-auto p-3"] $ whenJust w.html toHtmlRaw
+  WTAnomalies ->
+    wgtCard_ $ withCardFrame False w (Just ("View all", "/p/" <> projectIdText w <> "/issues")) $ div_ [class_ "h-full overflow-auto p-3"] $ whenJust w.html toHtmlRaw
   WTGroup -> gridItem_ $ div_ [class_ "h-full flex flex-col border border-strokeWeak rounded-lg surface-raised overflow-hidden group/wgt"] do
     -- Header: auto height (no flex), group-header class for CSS targeting when collapsed
     div_ [class_ $ "group-header py-2 px-4 flex items-center justify-between " <> gridStackHandleClassFor w] do
@@ -321,9 +329,9 @@ widget_ w' = case w.wType of
       when isFullWidth $ button_ [class_ "collapse-toggle p-2 rounded hover:bg-fillWeak transition-colors cursor-pointer tap-target", Aria.label_ "Toggle group", [__|on click toggle .hidden on .nested-grid in closest .grid-stack-item then toggle .collapsed on closest .grid-stack-item|]] $ Utils.faSprite_ "chevron-up" "regular" "w-5 h-5 transition-transform"
     -- Nested grid: flex-1 fills remaining space
     div_ [class_ "grid-stack nested-grid flex-1"] $ forM_ (fromMaybe [] w.children) (\wChild -> widget_ (wChild{_isNested = Just True}))
-  WTTable -> gridItem_ $ div_ [class_ "h-full group/wgt "] $ renderTable w
-  WTLogs -> gridItem_ $ div_ [class_ "h-full group/wgt "] $ renderLogsWidget w
-  WTTraces -> gridItem_ $ div_ [class_ "h-full group/wgt "] $ renderTraceTable w
+  WTTable -> wgtCard_ $ renderTable w
+  WTLogs -> wgtCard_ $ renderLogsWidget w
+  WTTraces -> wgtCard_ $ renderTraceTable w
   WTFlamegraph -> gridItem_ $ div_ [class_ "h-full "] $ div_ [class_ "p-3"] "Flamegraph widget coming soon"
   _ -> gridItem_ $ div_ [class_ " w-full h-full group/wgt "] $ renderChart w
   where
@@ -342,13 +350,14 @@ widget_ w' = case w.wType of
     widgetJson = encodeText w
     autoFitAttr = memptyIfFalse (w.wType `elem` [WTAnomalies, WTGroup, WTTable, WTLogs, WTTraces, WTFlamegraph]) [data_ "mobile-autofit" ""]
     gridItem_ =
-      if w.naked == Just True
+      if isTrue w.naked
         then Relude.id
         else div_ ([class_ "grid-stack-item h-full flex-1 !overflow-visible has-[details[open]]:z-50 [.nested-grid_&]:overflow-hidden ", id_ $ maybeToMonoid w.id <> "_widgetEl", data_ "widget" widgetJson] <> attrs <> autoFitAttr) . div_ [class_ "grid-stack-item-content h-full !overflow-visible [.grid-stack_&]:h-auto"]
+    wgtCard_ = gridItem_ . div_ [class_ "h-full group/wgt "]
 
 
 gridStackHandleClassFor :: Widget -> Text
-gridStackHandleClassFor w = bool "grid-stack-handle" "nested-grid-stack-handle" (w._isNested == Just True)
+gridStackHandleClassFor w = bool "grid-stack-handle" "nested-grid-stack-handle" (isTrue w._isNested)
 
 
 -- | Marks text that still contains @{{var-…}}@ placeholders so the client can
@@ -384,18 +393,18 @@ displayUnit = \case
   u -> " " <> u
 
 
-renderWidgetHeader :: Widget -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe (Text, Text) -> Bool -> Html ()
-renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = div_ [class_ $ "leading-none flex justify-between items-center  " <> bool "grid-stack-handle" "" (widget.standalone == Just True), id_ $ wId <> "_header"] do
-  when (widget._centerTitle == Just True) $ div_ ""
+renderWidgetHeader :: Widget -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe (Text, Text) -> Html ()
+renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "leading-none flex justify-between items-center  " <> bool "grid-stack-handle" "" (isTrue widget.standalone), id_ $ wId <> "_header"] do
+  when (isTrue widget._centerTitle) $ div_ ""
   div_ [class_ "inline-flex gap-3 items-center group/h min-w-0"] do
     span_ [class_ "text-sm text-textStrong font-semibold flex items-center gap-1 min-w-0"] do
-      unless (widget.standalone == Just True) $ span_ [class_ "hidden group-hover/h:inline-flex"] $ Utils.faSprite_ "grip-dots-vertical" "regular" "w-4 h-4"
+      unless (isTrue widget.standalone) $ span_ [class_ "hidden group-hover/h:inline-flex"] $ Utils.faSprite_ "grip-dots-vertical" "regular" "w-4 h-4"
       whenJust widget.icon \icon -> span_ [] $ Utils.faSprite_ icon "regular" "w-4 h-4"
-      span_ ([class_ "flex min-w-0 overflow-hidden", title_ $ maybeToMonoid title] <> varTemplateAttr title) $ renderDottedTitle $ maybeToMonoid title
+      span_ ([class_ "flex min-w-0 overflow-hidden", title_ $ maybeToMonoid widget.title] <> varTemplateAttr widget.title) $ renderDottedTitle $ maybeToMonoid widget.title
       descIcon_ widget.description ""
     span_ [class_ $ "bg-fillWeak border border-strokeWeak text-sm font-semibold px-2 py-1 rounded-3xl leading-none text-textWeak max-md:hidden whitespace-nowrap " <> if isJust valueM then "" else "hidden", id_ $ wId <> "Value"]
       $ whenJust valueM toHtml
-    span_ ([class_ $ "text-textDisabled widget-subtitle text-sm max-md:hidden " <> bool "" "hidden" hideSub, id_ $ wId <> "Subtitle"] <> varTemplateAttr subValueM) $ toHtml $ maybeToMonoid subValueM
+    span_ ([class_ $ "text-textDisabled widget-subtitle text-sm max-md:hidden " <> bool "" "hidden" (isTrue widget.hideSubtitle), id_ $ wId <> "Subtitle"] <> varTemplateAttr subValueM) $ toHtml $ maybeToMonoid subValueM
     -- Add hidden loader with specific ID that can be toggled from JS
     span_ [class_ "hidden", id_ $ wId <> "_loader"] $ Utils.faSprite_ "spinner" "regular" "w-4 h-4 animate-spin"
   div_ [class_ "text-iconNeutral flex items-center gap-0.5"] do
@@ -423,7 +432,7 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
         )
         $ Utils.faSprite_ "expand-icon" "regular" "w-3 h-3"
     when (isJust widget._dashboardId)
-      $ let pid = maybeToMonoid (widget._projectId <&> (.toText))
+      $ let pid = projectIdText widget
             dashId = maybeToMonoid widget._dashboardId
          in button_
               [ class_ "p-2 cursor-pointer opacity-0 group-hover/wgt:opacity-100 touch:opacity-100 tap-target transition-opacity"
@@ -456,7 +465,7 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
       ul_ ([class_ "dropdown text-textStrong dropdown-end menu menu-md bg-bgRaised rounded-box p-2 w-52 shadow-lg leading-none border border-strokeWeak"] <> Utils.popoverPanel_ widgetMenuPop) do
         -- Only show the "Move to dashboard" option if we're in a dashboard context
 
-        let dashId = fromMaybe "" widget._dashboardId
+        let dashId = maybeToMonoid widget._dashboardId
         li_
           $ a_
             [ class_ "p-2 w-full text-left block cursor-pointer"
@@ -474,42 +483,27 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
             |]
             ]
             "Copy to dashboard"
-        li_
-          $ a_
-            [ class_ "p-2 w-full text-left block cursor-pointer"
-            , data_ "tippy-content" "Copy generated SQL to clipboard"
-            , term
-                "_"
-                [text|
+        let copyItem tip label expr =
+              li_
+                $ a_
+                  [ class_ "p-2 w-full text-left block cursor-pointer"
+                  , data_ "tippy-content" tip
+                  , term
+                      "_"
+                      [text|
                 on click
                 set widgetEl to the closest <[data-widget]/>
                 set widgetData to JSON.parse(widgetEl.dataset.widget)
-                set sql to widgetData.sql or widgetData.query or 'No SQL available'
+                set txt to ${expr}
                 if 'clipboard' in window.navigator then
-                  call navigator.clipboard.writeText(sql)
-                  send successToast(value:['SQL copied to clipboard']) to <body/>
+                  call navigator.clipboard.writeText(txt)
+                  send successToast(value:['${label} copied to clipboard']) to <body/>
                 end
               |]
-            ]
-            "Copy SQL"
-        li_
-          $ a_
-            [ class_ "p-2 w-full text-left block cursor-pointer"
-            , data_ "tippy-content" "Copy KQL query to clipboard"
-            , term
-                "_"
-                [text|
-                on click
-                set widgetEl to the closest <[data-widget]/>
-                set widgetData to JSON.parse(widgetEl.dataset.widget)
-                set kql to widgetData.query or 'No KQL available'
-                if 'clipboard' in window.navigator then
-                  call navigator.clipboard.writeText(kql)
-                  send successToast(value:['KQL copied to clipboard']) to <body/>
-                end
-              |]
-            ]
-            "Copy KQL"
+                  ]
+                  (toHtml $ "Copy " <> label)
+        copyItem "Copy generated SQL to clipboard" "SQL" "widgetData.sql or widgetData.query or 'No SQL available'"
+        copyItem "Copy KQL query to clipboard" "KQL" "widgetData.query or 'No KQL available'"
         whenJust widget.pngUrl \url ->
           li_
             $ a_
@@ -527,7 +521,7 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
             $ a_
               [ class_ "p-2 w-full text-left block cursor-pointer"
               , data_ "tippy-content" "Create a copy of this widget"
-              , hxPost_ ("/p/" <> maybeToMonoid (widget._projectId <&> (.toText)) <> "/dashboards/" <> maybeToMonoid widget._dashboardId <> "/widgets/" <> wId <> "/duplicate")
+              , hxPost_ ("/p/" <> projectIdText widget <> "/dashboards/" <> dashId <> "/widgets/" <> wId <> "/duplicate")
               , hxTrigger_ "click"
               , hxSwap_ "none"
               , [__| on click call (the closest <[popover]/>).hidePopover()
@@ -552,19 +546,16 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
               , data_ "tippy-content" "Permanently delete this widget"
               , onpointerdown_
                   [text|
-                  if(confirm('Are you sure you want to delete this widget? This action cannot be undone.')) {
-                    const widgetEl = document.getElementById('${wId}_widgetEl');
-                    if (document.getElementById('${wId}_widgetEl')) {
-                      widgetEl.dispatchEvent(new CustomEvent('widget-remove-requested', {
-                        bubbles: true,
-                        detail: { widgetId: '${wId}' }
-                      }));
-                    }
+                  if (confirm('Are you sure you want to delete this widget? This action cannot be undone.')) {
+                    document.getElementById('${wId}_widgetEl')?.dispatchEvent(
+                      new CustomEvent('widget-remove-requested', { bubbles: true, detail: { widgetId: '${wId}' } }));
                   }
                   return false;
                 |]
               ]
               "Delete widget"
+  where
+    wId = maybeToMonoid widget.id
 
 
 -- | Shared card-shell for renderLogsWidget / renderTraceTable / renderTable:
@@ -573,20 +564,21 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
 -- @flex flex-col@. Pass @extraAction@ to attach an action button to the header.
 withCardFrame :: Bool -> Widget -> Maybe (Text, Text) -> Html () -> Html ()
 withCardFrame flexCol widget extraAction body = do
-  let wId = maybeToMonoid widget.id
-      naked = widget.naked == Just True
-      innerCls = "h-full w-full " <> (if flexCol then "flex flex-col " else "") <> if naked then "" else "surface-raised rounded-2xl"
+  let naked = isTrue widget.naked
   div_ [class_ "gap-0.5 flex flex-col h-full"] do
-    unless naked
-      $ renderWidgetHeader widget wId widget.title Nothing Nothing Nothing extraAction (widget.hideSubtitle == Just True)
+    unless naked $ renderWidgetHeader widget Nothing Nothing Nothing extraAction
     div_ [class_ "flex-1 flex min-h-0"]
-      $ div_ [class_ innerCls, id_ $ wId <> "_bordered"] body
+      $ div_
+        [ class_ $ "h-full w-full " <> bool "" "flex flex-col " flexCol <> bool "surface-raised rounded-2xl" "" naked
+        , id_ $ maybeToMonoid widget.id <> "_bordered"
+        ]
+        body
 
 
 renderLogsWidget :: Widget -> Html ()
 renderLogsWidget widget = do
   let wId = maybeToMonoid widget.id
-      pid = maybe "" (.toText) widget._projectId
+      pid = projectIdText widget
       queryParam = maybe "" (\q -> "&query=" <> decodeUtf8 (urlEncode True (encodeUtf8 q))) widget.query
       fetchUrl = "/p/" <> pid <> "/log_explorer/data?json=true&layout=1" <> queryParam
       action = Just ("Open in Explorer", "/p/" <> pid <> "/log_explorer" <> maybe "" ("?query=" <>) widget.query)
@@ -621,9 +613,7 @@ sortableTableHead_ tableId sortable cols =
 
 
 renderTraceTable :: Widget -> Html ()
-renderTraceTable widget = do
-  renderTableShell widget [(c, Nothing) | c <- ["Resource", "Span name", "Duration", "Latency breakdown"] :: [Text]] []
-  script_ [type_ "text/javascript"] """htmx.process(".widget-target")"""
+renderTraceTable widget = renderTableShell widget [(c, Nothing) | c <- ["Resource", "Span name", "Duration", "Latency breakdown"] :: [Text]] []
 
 
 renderTable :: Widget -> Html ()
@@ -660,58 +650,51 @@ renderTableShell widget headerCols tableAttrs = do
 
 -- | Render stat widget content with HTMX lazy loading support
 -- Always includes HTMX attributes so widget can refresh on update-query events
-renderStatContent :: Widget -> Text -> Maybe Text -> Html ()
-renderStatContent widget chartId valueM = do
-  let statContentId = chartId <> "_stat"
-      hasData = widget.eager == Just True || isJust (widget.dataset >>= (.value))
-      paddingClass = "px-3 flex flex-col " <> bool "py-3 " "py-2 " (widget._isNested == Just True)
-      eagerWidget = widget & #eager ?~ True
+renderStatContent :: Widget -> Maybe Text -> Html ()
+renderStatContent widget valueM = do
+  let chartId = maybeToMonoid widget.id
+      statContentId = chartId <> "_stat"
+      hasData = isTrue widget.eager || isJust (widget.dataset >>= (.value))
   div_
     [ id_ statContentId
-    , class_ paddingClass
-    , hxGet_ $ widgetFetchUrl eagerWidget
-    , hxTrigger_ $ if hasData then "update-query from:window" else "load, update-query from:window"
+    , class_ $ "px-3 flex flex-col " <> bool "py-3 " "py-2 " (isTrue widget._isNested)
+    , hxGet_ $ widgetFetchUrl (widget & #eager ?~ True)
+    , hxTrigger_ $ bool "load, update-query from:window" "update-query from:window" hasData
     , hxTarget_ $ "#" <> statContentId
     , hxSelect_ $ "#" <> statContentId
     , hxSwap_ "outerHTML"
     , hxExt_ "forward-page-params"
     ]
-    $ renderStatBody widget chartId (if hasData then whenJust valueM toHtml else loadingIndicator_ LdSM LdSpinner)
-
-
--- | Stat body: the big number (a spinner while lazy-loading) plus icon/title/description.
-renderStatBody :: Widget -> Text -> Html () -> Html ()
-renderStatBody widget chartId value = div_ [class_ "flex flex-col gap-1"] do
-  strong_ [class_ "text-textStrong text-4xl font-bold tabular-nums", id_ $ chartId <> "Value"] value
-  div_ [class_ "inline-flex gap-1 items-center text-sm"] do
-    whenJust widget.icon \icon -> Utils.faSprite_ icon "regular" "w-4 h-4 text-iconBrand"
-    toHtml $ maybeToMonoid widget.title
-    descIcon_ widget.description " text-iconNeutral"
+    $ div_ [class_ "flex flex-col gap-1"] do
+      strong_ [class_ "text-textStrong text-4xl font-bold tabular-nums", id_ $ chartId <> "Value"]
+        $ if hasData then whenJust valueM toHtml else loadingIndicator_ LdSM LdSpinner
+      div_ [class_ "inline-flex gap-1 items-center text-sm"] do
+        whenJust widget.icon \icon -> Utils.faSprite_ icon "regular" "w-4 h-4 text-iconBrand"
+        toHtml $ maybeToMonoid widget.title
+        descIcon_ widget.description " text-iconNeutral"
 
 
 renderChart :: Widget -> Html ()
 renderChart widget = do
   let rateM = widget.dataset >>= (.rowsPerMin) <&> \r -> Utils.prettyPrintCount (round r) <> "/min"
-  let chartId = maybeToMonoid widget.id
-  let unitSuffix = maybe "" displayUnit widget.unit
-  let valueM = widget.dataset >>= (.value) <&> \x -> Utils.prettyPrintCount (round x) <> unitSuffix
-  let isStat = widget.wType `elem` [WTTimeseriesStat, WTStat]
+      chartId = maybeToMonoid widget.id
+      unitSuffix = foldMap displayUnit widget.unit
+      valueM = widget.dataset >>= (.value) <&> \x -> Utils.prettyPrintCount (round x) <> unitSuffix
+      isStat = widget.wType `elem` [WTTimeseriesStat, WTStat]
   div_ [class_ "gap-0.5 flex flex-col h-full justify-end "] do
-    unless (widget.naked == Just True || isStat)
-      $ renderWidgetHeader widget chartId widget.title valueM rateM widget.expandBtnFn Nothing (widget.hideSubtitle == Just True)
+    unless (isTrue widget.naked || isStat)
+      $ renderWidgetHeader widget valueM rateM widget.expandBtnFn Nothing
     div_ [class_ $ "flex-1 flex min-h-0 " <> bool "" (gridStackHandleClassFor widget) isStat] do
       div_
         [ class_
             $ "h-full w-full flex flex-col justify-end "
             <> bool "min-h-0 " "" isStat
-            <> if widget.naked == Just True then "" else "surface-raised rounded-2xl relative"
+            <> if isTrue widget.naked then "" else "surface-raised rounded-2xl relative"
         , id_ $ chartId <> "_bordered"
         ]
         do
           whenJust ((,) <$> widget.groupByOptions <*> widget.groupByUrl) \(options, url) ->
-            let selectedLabel = case widget.groupBySelected of
-                  Just l | l /= "all" -> l
-                  _ -> "All values"
+            let selectedLabel = fromMaybe "All values" $ guarded (/= "all") =<< widget.groupBySelected
              in div_ [class_ "flex shrink-0 justify-end px-2 pt-2"]
                   $ details_ [class_ "dropdown dropdown-end relative max-w-[calc(100%-1rem)]"] do
                     summary_ [class_ "btn btn-xs min-w-0 cursor-pointer justify-between gap-1 border-strokeWeak bg-bgRaised px-2 text-left text-textWeak opacity-100 hover:bg-fillWeak", data_ "tippy-content" "Group by"] do
@@ -732,23 +715,24 @@ renderChart widget = do
                               $ toHtml label
                       item "all" "All values"
                       forM_ options \label -> item label label
-          when isStat $ renderStatContent widget chartId valueM
+          when isStat $ renderStatContent widget valueM
           unless (widget.wType == WTStat) $ div_ [class_ $ "h-0 max-h-full overflow-hidden w-full flex-1 min-h-0" <> bool " p-2" "" isStat] do
-            div_ [class_ "h-full w-full", id_ $ maybeToMonoid widget.id, data_ "chart-widget" ""] ""
-            let theme = fromMaybe "default" widget.theme
-            let echartOpt = encodeText $ widgetToECharts widget
-            let yAxisLabel = fromMaybe (maybeToMonoid widget.unit) (widget.yAxis >>= (.label))
-            let query = encodeText widget.query
-            let pid = encodeText $ widget._projectId <&> (.toText)
-            let querySQL = maybeToMonoid widget.sql
-            let chartType = mapWidgetTypeToChartType widget.wType
-            let summarizeBy = T.toLower $ T.drop 2 $ show $ fromMaybe SBSum widget.summarizeBy
-            let summarizeByPfx = summarizeByPrefix $ fromMaybe SBSum widget.summarizeBy
-            let wType = encodeText widget.wType
-            let legendPos = fromMaybe "bottom" widget.legendPosition
-            let widgetUnit = maybeToMonoid widget.unit
-            let alertThresholdJS = maybe "null" show widget.alertThreshold
-            let warningThresholdJS = maybe "null" show widget.warningThreshold
+            div_ [class_ "h-full w-full", id_ chartId, data_ "chart-widget" ""] ""
+            let sumBy = fromMaybe SBSum widget.summarizeBy
+                theme = fromMaybe "default" widget.theme
+                echartOpt = encodeText $ widgetToECharts widget
+                yAxisLabel = fromMaybe (maybeToMonoid widget.unit) (widget.yAxis >>= (.label))
+                query = encodeText widget.query
+                pid = encodeText $ widget._projectId <&> (.toText)
+                querySQL = maybeToMonoid widget.sql
+                chartType = mapWidgetTypeToChartType widget.wType
+                summarizeBy = T.toLower $ T.drop 2 $ show sumBy
+                summarizeByPfx = summarizeByPrefix sumBy
+                wType = encodeText widget.wType
+                legendPos = fromMaybe "bottom" widget.legendPosition
+                widgetUnit = maybeToMonoid widget.unit
+                alertThresholdJS = maybe "null" show widget.alertThreshold
+                warningThresholdJS = maybe "null" show widget.warningThreshold
             script_
               [type_ "text/javascript"]
               [text|
@@ -822,21 +806,17 @@ renderChart widget = do
 -- Helper: Extract series names from dataset source (headers[1:])
 extractSeriesNamesFromDataset :: Maybe WidgetDataset -> [Text]
 extractSeriesNamesFromDataset ds = case ds <&> (.source) of
-  Just (AE.Array arr) | Just (AE.Array headers) <- arr V.!? 0 -> mapMaybe getText $ drop 1 $ V.toList headers
+  Just (AE.Array arr) | Just (AE.Array headers) <- arr V.!? 0 -> mapMaybe (\case AE.String t -> Just t; _ -> Nothing) $ drop 1 $ V.toList headers
   _ -> []
-  where
-    getText = \case AE.String t -> Just t; _ -> Nothing
 
 
 -- | JS expression formatting a numeric @value@ for a widget's unit: duration
 -- units convert+format, everything else uses formatNumber. Shared by the
 -- tooltip valueFormatter and the yAxis axisLabel formatter.
 unitValueExprJS :: Maybe Text -> Text
-unitValueExprJS unitM =
-  let durationUnits = [Just "ns", Just "μs", Just "us", Just "ms", Just "s", Just "m", Just "h"] :: [Maybe Text]
-   in if unitM `elem` durationUnits
-        then "formatDuration(convertToNanoseconds(value, '" <> fromMaybe "" unitM <> "'))"
-        else "formatNumber(value)"
+unitValueExprJS unitM = case guarded (`elem` ["ns", "μs", "us", "ms", "s", "m", "h"]) =<< unitM of
+  Just u -> "formatDuration(convertToNanoseconds(value, '" <> u <> "'))"
+  Nothing -> "formatNumber(value)"
 
 
 -- Function to convert Widget to ECharts options
@@ -844,7 +824,7 @@ widgetToECharts :: Widget -> AE.Value
 widgetToECharts widget =
   let isStat = widget.wType == WTTimeseriesStat
       axisVisibility = not isStat
-      legendVisibility = not isStat && widget.hideLegend /= Just True
+      legendVisibility = not isStat && not (isTrue widget.hideLegend)
       seriesNames = extractSeriesNamesFromDataset widget.dataset
       -- Detect categorical widget types (no time axis)
       isCategorical = widget.wType `elem` [WTDistribution, WTPieChart, WTTopList, WTTreeMap, WTFunnel]
@@ -873,7 +853,7 @@ widgetToECharts widget =
                       "md" -> (14, 12, 12, [4, 8, 4, 8])
                       "lg" -> (16, 14, 14, [5, 10, 5, 10])
                       _ -> (12, 9, 9, [3, 6, 3, 6]) -- sm (default)
-                    isStatic = widget._staticRender == Just True
+                    isStatic = isTrue widget._staticRender
                     legendOffset = if vPos == "top" then ["top" AE..= (0 :: Int)] else ["bottom" AE..= (2 :: Int)]
                  in [ "show" AE..= legendVisibility
                     , "type" AE..= if isStatic then "plain" else "scroll"
@@ -882,7 +862,7 @@ widgetToECharts widget =
                     , "itemHeight" AE..= AE.Number (fromIntegral itemSize)
                     , "itemGap" AE..= AE.Number (fromIntegral itemGap)
                     , "padding" AE..= AE.Array (V.fromList $ map (AE.Number . fromIntegral) pad)
-                    , "data" AE..= fromMaybe seriesNames (extractLegend widget) -- Use series names from dataset if no explicit queries
+                    , "data" AE..= maybe seriesNames (map (fromMaybe "Unnamed Series" . (.query))) widget.queries -- Use series names from dataset if no explicit queries
                     ]
                       <> legendOffset
                       <> [K.fromText h AE..= (0 :: Int) | Just h <- [hPos]]
@@ -891,7 +871,7 @@ widgetToECharts widget =
             AE..= AE.object
               [ "width" AE..= ("100%" :: Text)
               , "left" AE..= ("0%" :: Text)
-              , "top" AE..= if maybe False (T.isPrefixOf "top") widget.legendPosition && legendVisibility then (28 :: Int) else if widget.naked == Just True then (16 :: Int) else (8 :: Int)
+              , "top" AE..= if maybe False (T.isPrefixOf "top") widget.legendPosition && legendVisibility then (28 :: Int) else if isTrue widget.naked then (16 :: Int) else (8 :: Int)
               , "bottom" AE..= if not (maybe False (T.isPrefixOf "top") widget.legendPosition) && legendVisibility then (36 :: Int) else (8 :: Int)
               , "containLabel" AE..= True
               , "show" AE..= False
@@ -947,9 +927,9 @@ widgetToECharts widget =
         , "dataset"
             AE..= AE.object
               ["source" AE..= maybe AE.Null (.source) widget.dataset]
-        , "series" AE..= addMarkLinesToFirstSeries widget (createSeriesFromHeaders widget.wType seriesNames)
+        , "series" AE..= addMarkLinesToFirstSeries widget (zipWith (createSeries widget.wType) [1 ..] seriesNames)
         , "animation" AE..= False
-        , if widget.allowZoom == Just True
+        , if isTrue widget.allowZoom
             then
               "toolbox"
                 AE..= AE.object
@@ -959,7 +939,6 @@ widgetToECharts widget =
         ]
 
 
--- Helper: Add markLines to first series for alert thresholds
 addMarkLinesToFirstSeries :: Widget -> [AE.Value] -> [AE.Value]
 addMarkLinesToFirstSeries widget series
   | shouldShowLines, not (null markLineData) = series & _head %~ addMarkLine
@@ -985,28 +964,10 @@ addMarkLinesToFirstSeries widget series
         ]
 
     addMarkLine :: AE.Value -> AE.Value
-    addMarkLine (AE.Object obj) = AE.Object $ AE.KeyMap.insert (K.fromText "markLine") markLineObj obj
+    addMarkLine (AE.Object obj) = AE.Object $ AE.KeyMap.insert "markLine" (AE.object ["silent" AE..= True, "symbol" AE..= ("none" :: Text), "data" AE..= markLineData]) obj
     addMarkLine v = v
 
-    markLineObj =
-      AE.object
-        [ "silent" AE..= True
-        , "symbol" AE..= ("none" :: Text)
-        , "data" AE..= markLineData
-        ]
 
-
--- Helper: Extract legend data
-extractLegend :: Widget -> Maybe [Text]
-extractLegend widget = fmap (map (fromMaybe "Unnamed Series" . (.query))) widget.queries
-
-
--- Helper: Create series from dataset headers with colors and encode for dataset binding
-createSeriesFromHeaders :: WidgetType -> [Text] -> [AE.Value]
-createSeriesFromHeaders wType = zipWith (createSeries wType) [1 ..]
-
-
--- Helper: Create a single series with name, column index, and color
 createSeries :: WidgetType -> Int -> Text -> AE.Value
 createSeries widgetType colIdx name =
   let isStat = widgetType == WTTimeseriesStat
@@ -1078,48 +1039,39 @@ renderTableWithDataAndParams widget dataRows params = do
       sortableTableHead_ tableId True [(col.title, col.align) | col <- columns]
       tbody_ [] do
         let maxValues = calculateMaxValues columns dataRows
-        -- max formatted width per progress column, so bars line up
-        let valueWidths =
+            -- max formatted width per progress column, so bars line up
+            valueWidths =
               M.fromList
-                [ (col.field, V.foldl' (\acc row -> max acc (T.length $ formatColumnValue col (fromMaybe "" $ row V.!? idx))) 5 dataRows)
+                [ (col.field, V.foldl' (\acc row -> max acc (T.length $ formatColumnValue col (getRowValue idx row))) 5 dataRows)
                 | (col, idx) <- zip columns [0 ..]
                 , isJust col.progress
                 ]
-
         V.forM_ dataRows \row -> do
-          let rowData = AE.object [(K.fromText col.field, AE.String $ getRowValue idx row) | (col, idx) <- zip columns [0 ..]]
           let firstColValue = memptyIfFalse (not $ null columns) (getRowValue 0 row)
-          let rowValue = maybe firstColValue (T.replace "{{row.resource_name}}" firstColValue) (widget.onRowClick >>= (.value))
+              rowValue = maybe firstColValue (T.replace "{{row.resource_name}}" firstColValue) (widget.onRowClick >>= (.value))
           tr_
             [ class_ $ "hover cursor-pointer" <> memptyIfFalse (Just rowValue == currentVar) " bg-fillBrand/20 border-l-4 border-borderBrand"
-            , data_ "row" (encodeText rowData)
+            , data_ "row" $ encodeText $ AE.object [(K.fromText col.field, AE.String $ getRowValue idx row) | (col, idx) <- zip columns [0 ..]]
             ]
-            $ ifor_ columns \idx col -> do
-              let value = getRowValue idx row
+            $ ifor_ columns \idx col ->
               td_ [class_ $ cellClass col]
                 $ if isJust col.progress
-                  then renderProgressCell col value maxValues valueWidths
-                  else renderLongTextOr col value
+                  then renderProgressCell col (getRowValue idx row) maxValues valueWidths
+                  else renderLongTextOr col (getRowValue idx row)
 
 
 renderTraceDataTable :: Widget -> V.Vector (V.Vector Text) -> HashMap Text [(Text, Int, Int)] -> HashMap Text [Telemetry.SpanRecord] -> Text -> Html ()
 renderTraceDataTable widget dataRows spGroup spansGrouped colorsJson = do
   let columns = fromMaybe [] widget.columns
-  let tableId = maybeToMonoid widget.id
+      tableId = maybeToMonoid widget.id
   table_ [class_ "table table-sm w-full relative", id_ tableId] do
     sortableTableHead_ tableId False [(col.title, col.align) | col <- columns]
     tbody_ [] do
       V.forM_ dataRows \row -> do
-        let val = V.last row
-        let cdrn = fromMaybe [] $ HM.lookup val spGroup
-        let spansJson =
-              ( \x ->
-                  let targ = find (\(n, _, _) -> n == x.spanName) cdrn
-                   in getSpanJson (targ <&> \(_, d, c) -> (d, c)) x
-              )
-                <$> fromMaybe [] (HM.lookup val spansGrouped)
-        let spjson = encodeText spansJson
-        let clcFun = [text|on click toggle .hidden on the next <tr/> then call flameGraphChart($spjson, "$val", $colorsJson)|]
+        let val = getRowValue (V.length row - 1) row
+            cdrn = fromMaybe [] $ HM.lookup val spGroup
+            spjson = encodeText $ fromMaybe [] (HM.lookup val spansGrouped) <&> \x -> getSpanJson ((\(_, d, c) -> (d, c)) <$> find (\(n, _, _) -> n == x.spanName) cdrn) x
+            clcFun = [text|on click toggle .hidden on the next <tr/> then call flameGraphChart($spjson, "$val", $colorsJson)|]
         tr_ [term "_" clcFun, class_ "cursor-pointer"]
           $ ifor_ columns \idx col ->
             if col.field == "latency_breakdown"
@@ -1160,26 +1112,20 @@ renderFlameGraph trId = do
 
 
 renderLatencyBreakdown :: [(Text, Int, Int)] -> Html ()
-renderLatencyBreakdown groups = do
-  div_ [class_ "flex h-5 overflow-hidden relative bg-fillWeak rounded", style_ "width:150px"] $ do
-    let totalDur = sum (map (\(_, d, _) -> fromIntegral d) groups) :: Double
-    let colors = getServiceColors $ V.fromList (fmap (\(n, _, _) -> n) groups)
-    ifor_ groups (renderGroup totalDur colors)
-  where
-    renderGroup :: Double -> HM.HashMap Text Text -> Int -> (Text, Int, Int) -> Html ()
-    renderGroup totalDur colors i (name, dur, _) = do
-      let barWidth = 150.0
-          width = (fromIntegral dur / totalDur) * barWidth
-          left =
-            if i == 0
-              then 0.0
-              else (sum (map (\(_, d, _) -> fromIntegral d) (take i groups)) / totalDur) * barWidth
-          color = fromMaybe "bg-black" $ HM.lookup name colors
-          tooltip = name <> ": " <> show (dur `div` 1000000) <> " ms"
-      div_ [class_ ("h-full absolute top-0 border  " <> color), title_ tooltip, style_ $ "width:" <> show width <> "px;" <> "left:" <> show left <> "px;"] pass
+renderLatencyBreakdown groups = div_ [class_ "flex h-5 overflow-hidden relative bg-fillWeak rounded", style_ "width:150px"] do
+  let durs = [fromIntegral d | (_, d, _) <- groups] :: [Double]
+      colors = getServiceColors $ V.fromList [n | (n, _, _) <- groups]
+      total = max 1 (sum durs) -- max 1 keeps an all-zero breakdown from producing NaN offsets
+      scale d = d / total * 150.0
+  forM_ (zip3 groups durs (scanl (+) 0 durs)) \((name, dur, _), d, offset) ->
+    div_
+      [ class_ $ "h-full absolute top-0 border  " <> fromMaybe "bg-black" (HM.lookup name colors)
+      , title_ $ name <> ": " <> show (dur `div` 1000000) <> " ms"
+      , style_ $ "width:" <> show (scale d) <> "px;" <> "left:" <> show (scale offset) <> "px;"
+      ]
+      pass
 
 
--- Helper to get row value by column index
 getRowValue :: Int -> V.Vector Text -> Text
 getRowValue idx row = fromMaybe "" $ row V.!? idx
 
@@ -1196,7 +1142,6 @@ calculateMaxValues columns dataRows =
     ]
 
 
--- Render a progress bar cell
 renderProgressCell :: TableColumn -> Text -> M.Map Text Double -> M.Map Text Int -> Html ()
 renderProgressCell col value maxValues valueWidths = div_ [class_ "flex items-center gap-2"] do
   let numValue = fromMaybe 0 (readMaybe $ toString value) :: Double
@@ -1204,15 +1149,19 @@ renderProgressCell col value maxValues valueWidths = div_ [class_ "flex items-ce
         Just "value_percent" -> min 100 (max 0 numValue)
         Just "column_percent" | Just maxVal <- M.lookup col.field maxValues, maxVal > 0 -> (numValue / maxVal) * 100
         _ -> 0
-      variantClass = case col.progressVariant of
+  span_ [class_ "inline-block text-left monospace", style_ $ "width: " <> show (M.findWithDefault 8 col.field valueWidths) <> "ch"]
+    $ toHtml
+    $ formatColumnValue col value
+  progress_
+    [ class_ $ "progress w-12 ml-2 " <> case col.progressVariant of
         Just "error" -> "progress-error"
         Just "warning" -> "progress-warning"
         Just "success" -> "progress-success"
         _ -> "progress-brand"
-  span_ [class_ "inline-block text-left monospace", style_ $ "width: " <> show (M.findWithDefault 8 col.field valueWidths) <> "ch"]
-    $ toHtml
-    $ formatColumnValue col value
-  progress_ [class_ $ "progress w-12 ml-2 " <> variantClass, value_ (show percentage), max_ "100"] ""
+    , value_ (show percentage)
+    , max_ "100"
+    ]
+    ""
 
 
 isNumericCol :: TableColumn -> Bool
@@ -1224,7 +1173,6 @@ cellClass :: TableColumn -> Text
 cellClass col = fromMaybe "" col.align <> memptyIfFalse (isNumericCol col) " monospace"
 
 
--- Format column value based on column type
 formatColumnValue :: TableColumn -> Text -> Text
 formatColumnValue col value = case col.columnType of
   Just "number" -> maybe value fmtNumber (readMaybe (toString value) :: Maybe Double) <> unitSuffix

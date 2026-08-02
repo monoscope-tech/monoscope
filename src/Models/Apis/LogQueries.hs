@@ -158,8 +158,8 @@ data ATError = ATError
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake ATError
 
 
-incrementByOneMillisecond :: Text -> Text
-incrementByOneMillisecond dateStr =
+incrementByOneMicrosecond :: Text -> Text
+incrementByOneMicrosecond dateStr =
   maybe "" (toText . iso8601Show . addUTCTime 0.000001) (parseTimeM True defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" (toString dateStr) :: Maybe UTCTime)
 
 
@@ -184,7 +184,7 @@ logExplorerUrlPath pid endpoint q cols cursor since fromV toV layout source rece
           , param "cursor" (unlessRecent cursor)
           , param "since" (unlessRecent since)
           , param "from" fromV
-          , param "to" (if recent then incrementByOneMillisecond <$> cursor else toV)
+          , param "to" (if recent then incrementByOneMicrosecond <$> cursor else toV)
           , param "layout" layout
           , param "source" source
           ]
@@ -230,37 +230,18 @@ hasProjectIdFilter :: Text -> Projects.ProjectId -> Bool
 hasProjectIdFilter query pid = any (`T.isInfixOf` query) ["project_id='" <> pid.toText <> "'", "project_id = '" <> pid.toText <> "'"]
 
 
--- | Dangerous SQL patterns that must not appear in user queries
-dangerousSqlPatterns :: [Text]
-dangerousSqlPatterns =
-  [ "insert "
-  , "update "
-  , "delete "
-  , "drop "
-  , "truncate "
-  , "alter "
-  , "create "
-  , "grant "
-  , "revoke "
-  , "copy "
-  , "execute "
-  , "explain "
-  , "set "
-  , "; "
-  , "--"
-  , "/*"
-  , "*/"
-  , "information_schema"
-  , "pg_catalog"
-  , "pg_"
-  ]
-
-
--- | Validate SQL query for dangerous constructs
+-- | Validate SQL query: must be a SELECT and must not contain any statement
+-- terminator, comment marker, DDL/DML keyword, or catalog reference.
 validateSqlQuery :: Text -> Bool
 validateSqlQuery query =
   let lowerQuery = T.toLower query
-   in "select" `T.isInfixOf` lowerQuery && not (any (`T.isInfixOf` lowerQuery) dangerousSqlPatterns)
+   in "select"
+        `T.isInfixOf` lowerQuery
+        && not
+          ( any
+              (`T.isInfixOf` lowerQuery)
+              ["insert ", "update ", "delete ", "drop ", "truncate ", "alter ", "create ", "grant ", "revoke ", "copy ", "execute ", "explain ", "set ", "; ", "--", "/*", "*/", "information_schema", "pg_catalog", "pg_"]
+          )
 
 
 selectLogTable :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => Projects.ProjectId -> [Section] -> Text -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector AE.Value), [Text], Int))
@@ -365,22 +346,17 @@ selectChildSpansAndLogs pid projectedColsByUser traceIds seedSpanIds dateRange e
 -- Seed rows themselves are NOT included in the output; callers already hold
 -- them (in 'requestVecs') and we only return strict descendants.
 keepDescendantsOf :: HM.HashMap Text Int -> V.Vector Text -> V.Vector (V.Vector AE.Value) -> [V.Vector AE.Value]
-keepDescendantsOf colIdxMap seedSpanIds rows
-  | V.null rows = []
-  | otherwise =
-      let sid r = lookupVecTextByKey r colIdxMap "latency_breakdown"
-          pid' r = lookupVecTextByKey r colIdxMap "parent_id"
-          childrenByParent :: HM.HashMap Text [V.Vector AE.Value]
-          childrenByParent = HM.fromListWith (<>) [(p, [r]) | r <- V.toList rows, Just p <- [pid' r]]
-          seeds = V.toList seedSpanIds
-          go _ [] acc = reverse acc
-          go visited (s : rest) acc =
-            let kids = HM.findWithDefault [] s childrenByParent
-                newKids = filter (maybe False (`S.notMember` visited) . sid) kids
-                newSids = mapMaybe sid newKids
-                visited' = foldr S.insert visited newSids
-             in go visited' (newSids <> rest) (newKids <> acc)
-       in go (S.fromList seeds) seeds []
+keepDescendantsOf colIdxMap seedSpanIds rows =
+  let sid r = lookupVecTextByKey r colIdxMap "latency_breakdown"
+      childrenByParent :: HM.HashMap Text [V.Vector AE.Value]
+      childrenByParent = HM.fromListWith (<>) [(p, [r]) | r <- V.toList rows, Just p <- [lookupVecTextByKey r colIdxMap "parent_id"]]
+      seeds = V.toList seedSpanIds
+      go _ [] acc = reverse acc
+      go visited (s : rest) acc =
+        let newKids = filter (maybe False (`S.notMember` visited) . sid) $ HM.findWithDefault [] s childrenByParent
+            newSids = mapMaybe sid newKids
+         in go (foldr S.insert visited newSids) (newSids <> rest) (newKids <> acc)
+   in go (S.fromList seeds) seeds []
 
 
 -- | @hashes@ carries the pattern's own hash plus any merged member hashes
@@ -489,9 +465,7 @@ data RawSessionRow = RawSessionRow
 -- "project_id='p1' AND (level='error') AND timestamp > now()"
 scopedWhere :: Text -> Maybe Text -> Text -> Text
 scopedWhere pidTxt mUser dateClause =
-  T.intercalate " AND " $ ("project_id='" <> pidTxt <> "'") : filter (not . T.null) [foldMap parens mUser, dateClause]
-  where
-    parens w = if T.null w then "" else "(" <> w <> ")"
+  T.intercalate " AND " $ ("project_id='" <> pidTxt <> "'") : filter (not . T.null) [foldMap (\w -> if T.null w then "" else "(" <> w <> ")") mUser, dateClause]
 
 
 -- | Parse @queryAST@ against a fresh 'defSqlQueryCfg' and build its scoped WHERE
@@ -554,17 +528,19 @@ fetchLogPatterns enableTfReads pid queryAST dateRange sourceM targetM skip = do
           hourlyFrom = fromMaybe (addUTCTime (-(24 * 3600)) now) dateFrom
           hourlyTo = fromMaybe now dateTo
       -- Fetch member hashes for merged patterns so their hourly stats are included
-      memberHashMap :: HM.HashMap Text [Text] <- HM.fromListWith (++) . map (\(canonical, mHash) -> (canonical, [mHash])) <$> Hasql.interp [HI.sql|SELECT c.pattern_hash, m.pattern_hash FROM apis.log_patterns m JOIN apis.log_patterns c ON m.canonical_id = c.id WHERE c.project_id = #{pid} AND c.source_field = #{target} AND c.pattern_hash = ANY(#{hashes})|]
-      let allHashes = V.fromList $ concatMap (\h -> h : fromMaybe [] (HM.lookup h memberHashMap)) $ V.toList hashes
+      memberHashMap :: HM.HashMap Text [Text] <- HM.fromListWith (++) . map (second pure) <$> Hasql.interp [HI.sql|SELECT c.pattern_hash, m.pattern_hash FROM apis.log_patterns m JOIN apis.log_patterns c ON m.canonical_id = c.id WHERE c.project_id = #{pid} AND c.source_field = #{target} AND c.pattern_hash = ANY(#{hashes})|]
+      -- A canonical pattern's stats are its own plus every merged member's.
+      let withMembers h = h : HM.findWithDefault [] h memberHashMap
+          allHashes = V.fromList $ concatMap withMembers $ V.toList hashes
       hourlyRows :: [(Text, UTCTime, Int)] <- Hasql.interp [HI.sql|SELECT pattern_hash, hour_bucket, event_count::BIGINT FROM apis.log_pattern_hourly_stats WHERE project_id = #{pid} AND source_field = #{target} AND pattern_hash = ANY(#{allHashes}) AND hour_bucket >= #{hourlyFrom} AND hour_bucket <= #{hourlyTo} ORDER BY pattern_hash, hour_bucket|]
       let volumeMap = HM.fromListWith (++) [(h, [(t, c)]) | (h, t, c) <- hourlyRows]
-          lookupVolume h = buildHourlyBuckets now $ concatMap (\mh -> fromMaybe [] $ HM.lookup mh volumeMap) (h : fromMaybe [] (HM.lookup h memberHashMap))
+          lookupVolume h = buildHourlyBuckets now $ concatMap (\mh -> HM.findWithDefault [] mh volumeMap) (withMembers h)
       -- The stored occurrence_count is all-time cumulative; the displayed count
       -- must reflect the selected range, so derive it from the in-range hourly
       -- buckets (sum of volume) and re-sort the page to keep the column monotonic.
       -- Only summary patterns tag their rows with pat:<hash>, so only they can be
       -- expanded by tag match; other source fields carry no hashes (empty).
-      let patHashes h = if target == "summary" then h : fromMaybe [] (HM.lookup h memberHashMap) else []
+      let patHashes h = if target == "summary" then withMembers h else []
           mkRow p = let vol = lookupVolume p.patternHash in PatternRow{logPattern = p.logPattern, count = fromIntegral (sum vol), level = p.logLevel, service = p.serviceName, volume = vol, mergedCount = p.mergedCount, isError = p.isError, hashes = patHashes p.patternHash}
       pure (totalPatterns, sortOn (Down . (.count)) $ map mkRow precomputed)
     else do
@@ -598,17 +574,16 @@ fetchLogPatterns enableTfReads pid queryAST dateRange sourceM targetM skip = do
       pure (HM.size merged, [PatternRow{logPattern = pat, count = fromIntegral cnt, level = lvl, service = svc, volume = densifyBuckets range bs, mergedCount = 0, isError = maybe False ((== "error") . T.toLower) lvl, hashes = []} | (pat, (cnt, lvl, svc, bs)) <- sorted])
   where
     -- SAFETY: All Left branches produce safe column names from hardcoded whitelists
-    -- (flattenedOtelAttributes, rootColumns). Right branch uses parameterized #>> operator.
+    -- (flattenedOtelAttributes, the inline root-column list). Right branch uses parameterized #>> operator.
     -- User input never reaches SQL as raw text — only as column lookups or parameterized values.
     resolveFieldExpr f
       | f == "url_path" = Just $ Left "attributes___url___path"
       | f == "exception" = Just $ Left "attributes___exception___message"
       | f == "summary" = Just $ Left "array_to_string(summary, chr(30))"
       | f `S.member` flattenedOtelAttributes = Just $ Left $ transformFlattenedAttribute f
-      | f `elem` rootColumns = Just $ Left f
+      | f `elem` (["body", "level", "kind", "name", "status_code", "status_message"] :: [Text]) = Just $ Left f
       | Just rest <- T.stripPrefix "attributes." f, not (T.null rest) = Just $ Right $ T.splitOn "." rest
       | otherwise = Nothing
-    rootColumns = ["body", "level", "kind", "name", "status_code", "status_message"] :: [Text]
 
 
 -- | Fetch session-aggregated rows for the Sessions visualization tab.
@@ -890,9 +865,7 @@ patternKeyHashes key =
 -- >>> templateToLike "100% <*>"
 -- "100\\% %"
 templateToLike :: Text -> Text
-templateToLike t =
-  let escaped = T.replace "_" "\\_" $ T.replace "%" "\\%" t
-   in T.replace "<*>" "%" escaped
+templateToLike = T.replace "<*>" "%" . T.replace "_" "\\_" . T.replace "%" "\\%"
 
 
 -- | Pick a bucket width in seconds targeting ~20 buckets across the given
@@ -941,10 +914,9 @@ densifyBuckets (minB, maxB) bs =
 
 -- | Build a fixed 24-slot hourly bucket array from sparse (UTCTime, Int) pairs.
 buildHourlyBuckets :: UTCTime -> [(UTCTime, Int)] -> [Int]
-buildHourlyBuckets now pairs = [fromMaybe 0 $ HM.lookup i bucketMap | i <- [0 .. 23]]
+buildHourlyBuckets now pairs = densifyBuckets (0, 23) [(idx, c) | (t, c) <- pairs, let idx = hourIndex t, idx >= 0, idx < 24]
   where
     startHour = addUTCTime (-(23 * 3600)) $ truncateToHour now
-    bucketMap = HM.fromListWith (+) [(idx, c) | (t, c) <- pairs, let idx = hourIndex t, idx >= 0, idx < 24]
     hourIndex t = floor (diffUTCTime (truncateToHour t) startHour / 3600) :: Int
     truncateToHour t = let s = utcTimeToPOSIXSeconds t in posixSecondsToUTCTime $ fromIntegral (floor s `div` 3600 * 3600 :: Int)
 

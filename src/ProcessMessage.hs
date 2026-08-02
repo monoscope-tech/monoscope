@@ -1,4 +1,3 @@
-{-# LANGUAGE PartialTypeSignatures #-}
 {-# LANGUAGE StrictData #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
@@ -33,9 +32,7 @@ import Data.Aeson.Extra (lodashMerge)
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.Lens (key, _Number, _Object, _String)
-import Data.Aeson.Types (KeyValue ((.=)), object)
 import Data.Aeson.Types qualified as AE
-import Data.Aeson.Types qualified as AET
 import Data.ByteString qualified as BS
 import Data.Cache qualified as Cache
 import Data.Char (isAlpha, isAlphaNum, isDigit, isLower, isUpper)
@@ -64,7 +61,6 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import Pkg.DeriveUtils (AesonText (..), UUIDId (..), unAesonTextMaybe)
 import Pkg.Metrics qualified as Metrics
 import Pkg.SchemaLearning.Catalog qualified as Catalog
-import Pkg.SchemaLearning.Catalog qualified as Fields
 import Pkg.SchemaLearning.Hot qualified as SchemaHot
 import Relude hiding (ask)
 import Relude.Extra.Tuple (toSnd)
@@ -76,66 +72,6 @@ import Text.RE.Replace (matched)
 import Text.RE.TDFA (RE, re, (?=~))
 import Utils (b64ToJson, freeTierDailyMaxEvents, jsonToMap, nestedJsonFromDotNotation, replaceAllFormats, toXXHash)
 
-
-{--
-  Exploring how the inmemory cache could be shaped for performance, and low footprint ability to skip hitting the postgres database when not needed.
-
-  -- All vectors here should be sorted (or we could use sets), then we would be able to do conttainment and prefix searches via binary search (Works fast on sorted lists)
-  -- It will likely be fine to just insert these projects into the cache with a short (eg 5mins) TTL, and then reload if from the db every 5 mins as needed.
-  -- - This might not be most efficient, but we don't need to worry too much about keeping this data in sync but updating values in the cache based on live requests.
-  -- - Over inserting into the database within that 5minute timeline should probably be a non-issue in comparison.
-  -- Implementation should just be a function that accepts the cache type and a project id, then it checks if the project id exists or not. if it doesn't exist,
-  -- it would run the query to get the project from the db in the exact shape we need, and fill up the cache before returning the value
-
-  -- NOTE: It might be worth it to explore using sets as well for the project cache
-
-  Project Cache structure.
- <projectID> =
-   {
-      -- Used for the dashboards on every page. The title is displayed on the sidebar.
-      -- Title  is also not requeired since in the sidebar, we also show the list of projects,
-      -- and it's easier to just deal with that via a db call for list of projects, and use that for all project disply actions.
-      Title ""
-      -- We need this hosts to mirrow all the hosts in the endpoints table, and could use this for validation purposes to skip inserting endpoints just because of hosts
-      -- if endpoint exists but host is not in this list, then we have a query specifically for inserting hosts.
-      hosts []
-      -- maybe we don't need this? See the next point.
-      endpoint_hashes []
-      - Since shapes always have the endpoints hash prepended to them, maybe we don't need to store the hash of endpoints, since we can derive that from the shapes.
-      shape_hashes []
-      --
-      -- We could also only hold the hash of formatids.
-      -- Since all the hashes are computed and concatenated making it a clear heirarchy/prefix tree?. T
-      -- his might be more space efficient to store, at the cost of compute/complexity in searching for them.
-      -- Also, maybe instead of shapes being the important unit for checking that we have a shape already, we could just use format_hashes for that. TO make sure every format is not new as well.
-      format_hashes []
-      --
-      -- We check if every request is part of the redact list, so it's better if we don't need to  hit the db for them with each request.
-      redact_fields_list []
-     }
-      -- The only problem is, how do we deal with counts for these format_hashes to make sure we have enough examples for that format_hash?
-      -- Should we postfix the count of field examples to it when building this list?
-      -- Then only actually skip inserting them if the postfixed number is equal to the maax number of examples per field which we expect.
-      -- Next issue with this mode is:
-      --    - How do we deal with fields which have a fixed number of examples or value set, which is less than the total number of max examples?
-      --      Eg a field has 2 possible answers: yes or no, but then our max is 10, so we keep checking if it has up to 10 fields, but then because it doesn't, we never skip the database operation. 🤔
-      --
-      -- A solution to this issue could be to have another hash map, but this time, linking:
-      <shape_hash> => <ioref counter>
-      -- So i can track the count of for that shape in the current session, and allo up to 100 or 200 or more requests per shape but cap it there.
-
-  How to deal with tracking preventing sending field and format updates when we don't need them.
-  ==============================
-  A workaround to maintaining the count of processed items for a shape, is to intead, deal with endpoints and just maintain number of tracked calls per endpoint.
-  It can be a sufficiently large number, to workaround for the probabilities.
-  So, we could maintain another inmemory cache that holds endpoints and their counts in memory. It's easy to deterministically  get the hash of an endpoint,
-  so we could simply calculate the endpoint hash much earlier, then use it to lookup and incremement the count and return the number. atomically.
-  Also, instead of passing this count into the requestMessage function, we can instead pass precalculate everything and just pass in a boolean in there as an argument.
-    The advantage of doing this is that we can do other calculations, such as throwing a dice and randomly deciding to still send the request to the db.
-    Sending random requests to the DB might still help us catch new fields(formats) that we didnt know about, etc.
-
-    We could also maintain hashes of all the formats in the cache, and check each field format within this list.🤔
- --}
 
 processMessages
   :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Tracing :> es, UUIDEff :> es)
@@ -154,17 +90,14 @@ processMessages msgs attrs =
           rMsgs = [(ackId, msg, m) | (ackId, msg, Right m) <- decoded]
           poison = [(ackId, msg, toText err) | (ackId, msg, Left err) <- decoded]
       forM_ poison \(ackId, msg, err) ->
-        Log.logAttention "Error parsing json msgs" (object ["AckId" .= ackId, "Error" .= err, "OriginalMsg" .= decodeUtf8 @Text msg])
+        Log.logAttention "Error parsing json msgs" (AE.object ["AckId" AE..= ackId, "Error" AE..= err, "OriginalMsg" AE..= decodeUtf8 @Text msg])
       if null rMsgs
         then pure ([], poison, Nothing)
         else do
           projectCaches <-
-            liftIO $ HM.fromList <$> forM (ordNub $ (\(_, _, m) -> UUIDId m.projectId) <$> rMsgs) \pid -> do
-              cache <-
-                Cache.fetchWithCache appCtx.projectCache pid
-                  $ fmap (fromMaybe Projects.defaultProjectCache)
-                  . Projects.projectCacheByIdIO appCtx.hasqlJobsPool
-              pure (pid, cache)
+            liftIO $ HM.fromList <$> forM (ordNub $ (\(_, _, m) -> UUIDId m.projectId) <$> rMsgs) \pid ->
+              (pid,)
+                <$> Cache.fetchWithCache appCtx.projectCache pid (fmap (fromMaybe Projects.defaultProjectCache) . Projects.projectCacheByIdIO appCtx.hasqlJobsPool)
 
           -- Track (ackId, raw) alongside each emitted span so we can map any
           -- per-row write poison back to the source message for DLQ routing.
@@ -187,22 +120,11 @@ processMessages msgs attrs =
         Metrics.timed Metrics.ingestWriteHist []
           $ Telemetry.insertAndHandOff appCtx.hasqlTimefusionUsesPgTypes (Telemetry.writeTargetFor appCtx.env.enablePostgresTelemetryWrites appCtx.env.enableTimefusionWrites Nothing) appCtx.extractionWorker projectCaches (V.map (\(_, _, s) -> s) paired)
 
-    case writeRes of
-      Left wf -> pure (Left wf)
-      -- The whole batch landed on every store (no per-row poison); the only
-      -- DLQ entries are the decode failures collected upstream in `poison`.
-      Right () -> pure (Right (rAckIds, poison))
+    -- On success the whole batch landed on every store (no per-row poison); the
+    -- only DLQ entries are the decode failures collected upstream in `poison`.
+    pure $ writeRes $> (rAckIds, poison)
 
 
--- | Process a single span to extract entities for hash-stamping.
--- Returns @(endpoint, hashes, normalizedPath)@. The normalized path
--- (@Just@ for HTTP spans) is stamped back onto the span's
--- @attributes.http.route@ and @attributes.url.path@ by the caller so that
--- explorer queries match the template stored in @apis.endpoints@.
---
--- Schema learning (fields/formats/shapes) now flows through
--- 'extractObservation' + the schema-learning catalog; this function only
--- handles endpoint discovery + hash stamping.
 -- | Shared HTTP-key derivation. Used by both 'processSpanToEntities' (which
 -- writes 'apis.endpoints') and 'extractObservation' (which feeds the
 -- schema-learning catalog) so the endpoint hash and url-path canonicalisation
@@ -236,7 +158,7 @@ httpKeyOf canonicalTemplates otelSpan =
           $ ( (attrValue ^? key "http" . key "response" . key "status_code" . _String >>= readMaybe @Int . toString)
                 <|> (truncate <$> attrValue ^? key "http" . key "response" . key "status_code" . _Number)
             )
-          >>= \c -> if c >= 100 && c < 600 then Just c else Nothing
+          >>= guarded (\c -> c >= 100 && c < 600)
       !host =
         fromMaybe ""
           $ (attrValue ^? key "net" . key "host" . key "name" . _String)
@@ -256,14 +178,19 @@ httpKeyOf canonicalTemplates otelSpan =
    in HttpKey{method, host, urlPath, statusCode, isHttpSpan}
 
 
+-- | Extract entities for hash-stamping. Returns @(endpoint, hashes, normalizedPath)@;
+-- the normalized path (@Just@ for HTTP spans) is stamped back onto the span's
+-- @attributes.http.route@ and @attributes.url.path@ by the caller so explorer
+-- queries match the template stored in @apis.endpoints@. Schema learning flows
+-- through 'extractObservation' instead; this only does endpoint discovery.
+--
 -- The owning 'ProjectId' is threaded in already-parsed (the batch is grouped by project
 -- upstream), so we never re-parse the untyped @otelSpan.project_id@ here — that parse used
 -- to be a partial @fromJust@ that crashed the whole ingestion batch on one malformed id.
 processSpanToEntities :: HM.HashMap (Text, Text) [([Text], Text)] -> Projects.ProjectCache -> Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> UUID.UUID -> (Maybe Endpoints.Endpoint, V.Vector Text, Maybe Text)
 processSpanToEntities canonicalTemplates pjc projectId otelSpan dumpId =
   let !attributes = maybeToMonoid (unAesonTextMaybe otelSpan.attributes)
-      !hk = httpKeyOf canonicalTemplates otelSpan
-      HttpKey{method, host, urlPath, statusCode, isHttpSpan} = hk
+      HttpKey{method, host, urlPath, statusCode, isHttpSpan} = httpKeyOf canonicalTemplates otelSpan
 
       -- Resolve service and environment from OTel resource attrs, falling back to span
       -- attributes for SDKs that put them there.
@@ -275,9 +202,6 @@ processSpanToEntities canonicalTemplates pjc projectId otelSpan dumpId =
       -- Generate endpoint hash - this uniquely identifies an API endpoint.
       !endpointHash = toXXHash $ projectId.toText <> host <> method <> urlPath
 
-      -- Determine if request is outgoing based on span kind
-      !outgoing = otelSpan.kind == Just "client"
-
       !endpoint =
         if endpointHash `elem` pjc.endpointHashes || statusCode == 404
           then Nothing
@@ -287,28 +211,22 @@ processSpanToEntities canonicalTemplates pjc projectId otelSpan dumpId =
                 { createdAt = otelSpan.timestamp
                 , updatedAt = otelSpan.timestamp
                 , id = UUIDId dumpId
-                , projectId = projectId
-                , urlPath = urlPath
+                , projectId
+                , urlPath
                 , urlParams = AE.emptyObject
-                , method = method
-                , host = host
+                , method
+                , host
                 , hash = endpointHash
-                , outgoing = outgoing
+                , outgoing = otelSpan.kind == Just "client"
                 , description = ""
-                , serviceName = serviceName
-                , environment = environment
+                , serviceName
+                , environment
                 }
-
-      -- Span gets one stamped hash (the endpoint hash). Field/shape hashes
-      -- used to be stamped here for anomaly cascades; the schema-learning
-      -- catalog now owns that lookup, so a single hash per span is enough.
-      !hashes = V.singleton endpointHash
-
-      -- Normalized path written into both attributes.http.route and attributes.url.path
-      -- so new-endpoint notification links and the catalog UI can filter by the
-      -- same template stored in apis.endpoints.
-      !normalizedPathForSpan = if isHttpSpan then Just urlPath else Nothing
-   in (endpoint, hashes, normalizedPathForSpan)
+   in -- One stamped hash per span (the endpoint hash) — field/shape hashes moved to
+      -- the schema-learning catalog. The normalized path goes back into both
+      -- attributes.http.route and attributes.url.path so notification links and the
+      -- catalog UI filter by the same template stored in apis.endpoints.
+      (endpoint, V.singleton endpointHash, if isHttpSpan then Just urlPath else Nothing)
 
 
 -- | Build a 'SchemaHot.ObservationInput' for the schema-learning catalog.
@@ -326,57 +244,32 @@ extractObservation canonicalTemplates otelSpan =
       !attrValue = AE.Object $ AEKM.fromMapText attrMap
       -- Hard-coded ingestion-time redaction. Per-project rules were removed
       -- with `projects.redacted_fields`; the management UI is gone.
-      !redactList = V.fromList [".set-cookie", ".password"]
-      !redacted = redactJSON redactList
+      !redacted = redactJSON $ V.fromList [".set-cookie", ".password"]
 
       -- Shared HTTP-key derivation with 'processSpanToEntities'. Must stay
       -- byte-identical or the schema-learning AKEndpoint target_hash won't
       -- match apis.endpoints.hash and the notification join goes NULL → "UNKNOWN /".
-      !hk = httpKeyOf canonicalTemplates otelSpan
-      HttpKey{method, host, urlPath = canonicalPath, statusCode, isHttpSpan} = hk
+      HttpKey{method, host, urlPath = canonicalPath, statusCode, isHttpSpan} = httpKeyOf canonicalTemplates otelSpan
 
       !service = Telemetry.atMapText "service.name" (Just resMap) <|> Telemetry.atMapText "service.name" (Just attrMap)
       !spanName = otelSpan.name
       !spanKind = otelSpan.kind
 
-      !(keyKind, keyHash, scope) =
+      -- HTTP spans key on the endpoint hash; everything else on service|name|kind.
+      !(keyKind, keyHash) =
         if isHttpSpan
-          then
-            let !endpointHash = toXXHash $ projectIdText <> host <> method <> canonicalPath
-             in ( Catalog.HttpEndpoint
-                , endpointHash
-                , Catalog.Scope
-                    { Catalog.service = service
-                    , Catalog.spanName = spanName
-                    , Catalog.kind = spanKind
-                    , Catalog.host = if T.null host then Nothing else Just host
-                    , Catalog.method = Just method
-                    , Catalog.urlPath = Just canonicalPath
-                    , Catalog.statusCodes = if statusCode > 0 then V.singleton statusCode else V.empty
-                    }
-                )
-          else
-            let !ident =
-                  toXXHash
-                    $ projectIdText
-                    <> "|"
-                    <> fromMaybe "" service
-                    <> "|"
-                    <> fromMaybe "" spanName
-                    <> "|"
-                    <> fromMaybe "" spanKind
-             in ( Catalog.SpanIdentity
-                , ident
-                , Catalog.Scope
-                    { Catalog.service = service
-                    , Catalog.spanName = spanName
-                    , Catalog.kind = spanKind
-                    , Catalog.host = Nothing
-                    , Catalog.method = Nothing
-                    , Catalog.urlPath = Nothing
-                    , Catalog.statusCodes = V.empty
-                    }
-                )
+          then (Catalog.HttpEndpoint, toXXHash $ projectIdText <> host <> method <> canonicalPath)
+          else (Catalog.SpanIdentity, toXXHash $ T.intercalate "|" (projectIdText : map (fromMaybe "") [service, spanName, spanKind]))
+      !scope =
+        Catalog.Scope
+          { Catalog.service = service
+          , Catalog.spanName = spanName
+          , Catalog.kind = spanKind
+          , Catalog.host = guard isHttpSpan >> guarded (not . T.null) host
+          , Catalog.method = method <$ guard isHttpSpan
+          , Catalog.urlPath = canonicalPath <$ guard isHttpSpan
+          , Catalog.statusCodes = if isHttpSpan && statusCode > 0 then V.singleton statusCode else V.empty
+          }
 
       -- Walk every section of the span. For HTTP we keep the legacy
       -- categorisation (header/body/etc.); for non-HTTP we tag attributes
@@ -390,16 +283,13 @@ extractObservation canonicalTemplates otelSpan =
       !topLevelValue =
         AE.Object
           $ AEKM.fromList
-            [ (AEK.fromText k, v)
-            | (k, v) <-
-                catMaybes
-                  [ ("name",) . AE.String <$> otelSpan.name
-                  , ("kind",) . AE.String <$> otelSpan.kind
-                  , ("level",) . AE.String <$> otelSpan.level
-                  , ("status_code",) . AE.String <$> otelSpan.status_code
-                  , ("status_message",) . AE.String <$> otelSpan.status_message
-                  , ("severity",) . AE.toJSON <$> otelSpan.severity
-                  ]
+          $ catMaybes
+            [ ("name",) . AE.String <$> otelSpan.name
+            , ("kind",) . AE.String <$> otelSpan.kind
+            , ("level",) . AE.String <$> otelSpan.level
+            , ("status_code",) . AE.String <$> otelSpan.status_code
+            , ("status_message",) . AE.String <$> otelSpan.status_message
+            , ("severity",) . AE.toJSON <$> otelSpan.severity
             ]
 
       -- OTel attribute + resource bags use flat dotted keys
@@ -420,10 +310,10 @@ extractObservation canonicalTemplates otelSpan =
       -- in the top attribute bag, not in any sub-bucket).
       walkThunk () =
         let commonWalk =
-              [ tagWalk Fields.FCAttribute (valueToFields $ redacted $ nestObject attrValue)
-              , tagWalk Fields.FCResource (valueToFields $ redacted $ nestObject (AE.Object $ AEKM.fromMapText resMap))
-              , tagWalk Fields.FCEvent (valueToFields $ redacted eventsValue)
-              , tagWalk Fields.FCTopLevel (valueToFields topLevelValue)
+              [ tagWalk Catalog.FCAttribute (valueToFields $ redacted $ nestObject attrValue)
+              , tagWalk Catalog.FCResource (valueToFields $ redacted $ nestObject (AE.Object $ AEKM.fromMapText resMap))
+              , tagWalk Catalog.FCEvent (valueToFields $ redacted eventsValue)
+              , tagWalk Catalog.FCTopLevel (valueToFields topLevelValue)
               ]
          in if isHttpSpan
               then
@@ -435,44 +325,32 @@ extractObservation canonicalTemplates otelSpan =
                     respBody = redacted $ fromMaybe AE.Null $ bodyValue ^? key "response_body"
                  in mconcat
                       $ commonWalk
-                      <> [ tagWalk Fields.FCPathParam (valueToFields $ redacted pathParams)
-                         , tagWalk Fields.FCQueryParam (valueToFields $ redacted queryParams)
-                         , tagWalk Fields.FCRequestHeader (valueToFields $ redacted reqHeaders)
-                         , tagWalk Fields.FCResponseHeader (valueToFields $ redacted respHeaders)
-                         , tagWalk Fields.FCRequestBody (valueToFields reqBody)
-                         , tagWalk Fields.FCResponseBody (valueToFields respBody)
+                      <> [ tagWalk Catalog.FCPathParam (valueToFields $ redacted pathParams)
+                         , tagWalk Catalog.FCQueryParam (valueToFields $ redacted queryParams)
+                         , tagWalk Catalog.FCRequestHeader (valueToFields $ redacted reqHeaders)
+                         , tagWalk Catalog.FCResponseHeader (valueToFields $ redacted respHeaders)
+                         , tagWalk Catalog.FCRequestBody (valueToFields reqBody)
+                         , tagWalk Catalog.FCResponseBody (valueToFields respBody)
                          ]
               else
                 mconcat
                   $ commonWalk
-                  <> [tagWalk Fields.FCRequestBody (valueToFields $ redacted bodyValue)]
-   in SchemaHot.ObservationInput
-        { keyKind = keyKind
-        , keyHash = keyHash
-        , scope = scope
-        , walk = walkThunk
-        , timestamp = otelSpan.timestamp
-        }
+                  <> [tagWalk Catalog.FCRequestBody (valueToFields $ redacted bodyValue)]
+   in SchemaHot.ObservationInput{keyKind, keyHash, scope, walk = walkThunk, timestamp = otelSpan.timestamp}
   where
-    -- Reuse-friendly local of the inline header extractor in
-    -- processSpanToEntities. Kept private to avoid a cycle with the
-    -- where-clause version above.
     extractHeadersV :: Text -> AE.Value -> Maybe AE.Value
-    extractHeadersV prefix obj = case obj of
-      AE.Object keyMap ->
-        let !prefixDot = prefix <> "."
-            !prefixDotLen = T.length prefixDot
-            headerPairs = [(AEK.fromText (T.drop prefixDotLen (AEK.toText k)), v) | (k, v) <- AEKM.toList keyMap, T.isPrefixOf prefixDot (AEK.toText k)]
-         in if null headerPairs then Nothing else Just $ AE.Object $ AEKM.fromList headerPairs
-      _ -> Nothing
+    extractHeadersV prefix obj = do
+      keyMap <- obj ^? _Object
+      let headerPairs = mapMaybe (\(k, v) -> (,v) . AEK.fromText <$> T.stripPrefix (prefix <> ".") (AEK.toText k)) (AEKM.toList keyMap)
+      AE.Object . AEKM.fromList <$> guarded (not . null) headerPairs
 
     -- Pair each value with its format hint and tag the whole walk with a
     -- field category. Format hint computation here is what costs us the
     -- regex sweep — only invoked on the slow-path full walk.
     tagWalk
-      :: Fields.FieldCategoryEnum
+      :: Catalog.FieldCategoryEnum
       -> V.Vector (Text, V.Vector AE.Value)
-      -> [(Text, V.Vector (AE.Value, Maybe Text), Fields.FieldCategoryEnum)]
+      -> [(Text, V.Vector (AE.Value, Maybe Text), Catalog.FieldCategoryEnum)]
     tagWalk cat fields0 =
       [ (path, V.map (toSnd formatHint) vs, cat)
       | (path, vs) <- V.toList fields0
@@ -486,10 +364,7 @@ extractObservation canonicalTemplates otelSpan =
 convertRequestMessageToSpan :: RequestMessage -> Int64 -> (UUID.UUID, Text) -> Telemetry.OtelLogsAndSpans
 convertRequestMessageToSpan rm msgSize (spanId, trId) =
   let
-    -- Convert parent_id, ensuring empty strings become Nothing
-    !parentId = case (Just . UUID.toText) =<< rm.parentId of
-      Just txt | T.null txt -> Nothing
-      other -> other
+    !parentId = rm.parentId >>= guarded (not . T.null) . UUID.toText
 
     otelSpan =
       Telemetry.OtelLogsAndSpans
@@ -505,10 +380,7 @@ convertRequestMessageToSpan rm msgSize (spanId, trId) =
         , level = Nothing
         , body = Just $ AesonText $ AE.object ["request_body" AE..= b64ToJson rm.requestBody, "response_body" AE..= b64ToJson rm.responseBody]
         , severity = Nothing
-        , status_message = Just $ case rm.statusCode of
-            sc
-              | sc >= 400 -> "Error"
-              | otherwise -> "OK"
+        , status_message = Just $ bool "OK" "Error" (rm.statusCode >= 400)
         , status_code = Just $ show rm.statusCode
         , hashes = Just []
         , observed_timestamp = Just $ zonedTimeToUTC rm.timestamp
@@ -534,8 +406,6 @@ convertRequestMessageToSpan rm msgSize (spanId, trId) =
     otelSpan{summary = generateSummary otelSpan}
 
 
--- Using nestedJsonFromDotNotation from Utils module
-
 createSpanAttributes :: RequestMessage -> AE.Value
 createSpanAttributes rm =
   let baseAttrs =
@@ -556,7 +426,7 @@ createSpanAttributes rm =
           , ("monoscope.msg_id", AE.String $ maybe "" UUID.toText rm.msgId)
           , ("monoscope.parent_id", AE.String $ maybe "" UUID.toText rm.parentId)
           , ("monoscope.sdk_type", AE.String $ show rm.sdkType)
-          , ("monoscope.errors", AE.String $ maybe "[]" (Relude.decodeUtf8 . AE.encode) rm.errors)
+          , ("monoscope.errors", AE.String $ maybe "[]" (decodeUtf8 . AE.encode) rm.errors)
           ]
    in baseAttrs
         `lodashMerge` refererObj
@@ -566,29 +436,15 @@ createSpanAttributes rm =
     -- Stable semconv name for what the SDK sends as host (net.host.name is deprecated).
     -- Host resolution reads that column and nothing else, so it is populated here rather
     -- than reconstructed at query time; rawUrl keeps hostless spans attributable.
-    serverAddress = case rm.host of
-      Just h | not (T.null h) -> h
-      _ -> hostFromRawUrl rm.rawUrl
+    serverAddress = fromMaybe (hostFromRawUrl rm.rawUrl) (rm.host >>= guarded (not . T.null))
 
-    -- Process tags
-    tagsObj = case rm.tags of
-      Just tags -> nestedJsonFromDotNotation [("monoscope.tags", AE.Array $ V.fromList $ map AE.String tags)]
-      Nothing -> AE.object []
+    tagsObj = maybe (AE.object []) (\tags -> nestedJsonFromDotNotation [("monoscope.tags", AE.Array $ V.fromList $ map AE.String tags)]) rm.tags
 
-    -- Process referer
-    refererObj = case rm.referer of
-      Just (Left text) -> nestedJsonFromDotNotation [("http.request.headers.referer", AE.String text)]
-      Just (Right texts) -> nestedJsonFromDotNotation [("http.request.headers.referer", AE.String $ T.intercalate "," texts)]
-      Nothing -> AE.object []
+    refererObj = maybe (AE.object []) (\r -> nestedJsonFromDotNotation [("http.request.headers.referer", AE.String $ either identity (T.intercalate ",") r)]) rm.referer
 
-    -- Process headers
     headersObj =
-      let
-        extractHeaders prefix = maybe (AE.object []) (nestedJsonFromDotNotation . map (first ((prefix <>) . AEK.toText)) . AEKM.toList) . (^? _Object)
-        reqHeaders = extractHeaders "http.request.headers." rm.requestHeaders
-        respHeaders = extractHeaders "http.response.headers." rm.responseHeaders
-       in
-        reqHeaders `lodashMerge` respHeaders
+      let extractHeaders prefix = maybe (AE.object []) (nestedJsonFromDotNotation . map (first ((prefix <>) . AEK.toText)) . AEKM.toList) . (^? _Object)
+       in extractHeaders "http.request.headers." rm.requestHeaders `lodashMerge` extractHeaders "http.response.headers." rm.responseHeaders
 
 
 -- | The authority of an absolute URL, minus any port. Relative URLs have no authority,
@@ -655,17 +511,16 @@ data RequestMessage = RequestMessage
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake RequestMessage
 
 
--- Custom ToJSON for Either Text [Text]
+-- Untagged codec for the SDK's referer field: a bare string or an array of strings
+-- (aeson's stock Either instance is @{"Left": …}@-tagged, hence the override).
 instance {-# OVERLAPPING #-} AE.ToJSON (Either Text [Text]) where
-  toJSON (Left txt) = AE.toJSON txt
-  toJSON (Right texts) = AE.toJSON texts
+  toJSON = either AE.toJSON AE.toJSON
 
 
--- Custom FromJSON for Either Text [Text]
 instance {-# OVERLAPPING #-} AE.FromJSON (Either Text [Text]) where
-  parseJSON value = case value of
-    AE.String txt -> return $ Left txt
-    AE.Array texts -> Right <$> AE.parseJSON value -- parses an array of Text
+  parseJSON v = case v of
+    AE.String txt -> pure $ Left txt
+    AE.Array{} -> Right <$> AE.parseJSON v
     _ -> fail "Expected either a single string or an array of strings"
 
 
@@ -696,14 +551,14 @@ redactJSON ps0 = go [fromMaybe p (T.stripPrefix "." p) | p <- V.toList ps0]
   where
     go [] v = v
     go ps v = case v of
-      AET.Object om -> AET.Object $ AEKM.mapWithKey (\k -> go (mapMaybe (matchKey (AEK.toText k)) ps)) om
-      AET.Array xs
+      AE.Object om -> AE.Object $ AEKM.mapWithKey (\k -> go (mapMaybe (matchKey (AEK.toText k)) ps)) om
+      AE.Array xs
         | null cps -> v
-        | otherwise -> AET.Array $ V.map (go cps) xs
+        | otherwise -> AE.Array $ V.map (go cps) xs
         where
           cps = mapMaybe (\p -> T.stripPrefix "[]." p <|> T.stripPrefix "[]" p) ps
-      AET.String{} | "" `elem` ps -> AET.String "[REDACTED]"
-      AET.Number{} | "" `elem` ps -> AET.String "[REDACTED]"
+      AE.String{} | "" `elem` ps -> AE.String "[REDACTED]"
+      AE.Number{} | "" `elem` ps -> AE.String "[REDACTED]"
       _ -> v
 
     -- Match @k@ against a path on a @.@ boundary, returning the remainder.
@@ -797,13 +652,7 @@ dedupFields fields = runST $ do
 -- [(".menu.password",String "[REDACTED]"),(".regular",String "abc")]
 removeBlacklistedFields :: V.Vector (Text, AE.Value) -> V.Vector (Text, AE.Value)
 removeBlacklistedFields = V.map \(k, val) ->
-  if or @[]
-    [ T.isSuffixOf "password" (T.toLower k)
-    , T.isSuffixOf "authorization" (T.toLower k)
-    , T.isSuffixOf "cookie" (T.toLower k)
-    ]
-    then (k, AE.String "[REDACTED]")
-    else (k, val)
+  (k, bool val (AE.String "[REDACTED]") $ any (`T.isSuffixOf` T.toLower k) ["password", "authorization", "cookie"])
 
 
 -- | Common format patterns used by both replaceAllFormats and valueToFormatStr
@@ -948,25 +797,22 @@ valueToFormatStr val = snd <$> find (\(regex, _) -> matched (val ?=~ regex)) com
 -- ("",False)
 ensureUrlParams :: Text -> (Text, AE.Value, Bool)
 ensureUrlParams "" = ("", AE.object [], False)
-ensureUrlParams url = (parsedUrl, pathParams, hasDyn)
+ensureUrlParams url = (T.intercalate "/" segs, pathParams, not (null dynSegs))
   where
-    (segsR, valsR) = parseUrlSegments (T.splitOn "/" url) ([], [])
+    (segsR, valsR) = foldl' step ([], []) (T.splitOn "/" url)
+    step (sAcc, vAcc) x = maybe (x : sAcc, vAcc) (\lbl -> (addNewSegment sAcc lbl, x : vAcc)) (dynSegmentLabel x)
     segs = reverse segsR
     vals = reverse valsR
-    parsedUrl = T.intercalate "/" segs
     dynSegs = filter (T.isPrefixOf "{") segs
-    hasDyn = not (null dynSegs)
-    pathParams = buildPathParams dynSegs vals (AE.object [])
+    pathParams = AE.object [AEK.fromText (T.tail k) AE..= v | (k, v) <- zip dynSegs vals]
 
 
-parseUrlSegments :: [Text] -> ([Text], [Text]) -> ([Text], [Text])
-parseUrlSegments [] parsed = parsed
-parseUrlSegments (x : xs) (segs, vals) = case valueToFormatStr x of
-  Nothing
-    | isUrlIdLike x -> parseUrlSegments xs (addNewSegment segs "param", x : vals)
-    | otherwise -> parseUrlSegments xs (x : segs, vals)
+-- | The parameter name a URL segment collapses to, or 'Nothing' if it is static.
+dynSegmentLabel :: Text -> Maybe Text
+dynSegmentLabel x = case valueToFormatStr x of
+  Nothing -> if isUrlIdLike x then Just "param" else Nothing
+  Just "{uuid}" -> Just "uuid"
   Just v
-    | v == "{uuid}" -> parseUrlSegments xs (addNewSegment segs "uuid", x : vals)
     | v
         `elem` [ "{mm/dd/yyyy}"
                , "{mm-dd-yyyy}"
@@ -979,28 +825,18 @@ parseUrlSegments (x : xs) (segs, vals) = case valueToFormatStr x of
                , "{YYYYMMDD}"
                , "{YYYY-MM-DDThh:mm:ss.sTZD}"
                ] ->
-        parseUrlSegments xs (addNewSegment segs "date", x : vals)
-    | v `elem` ["{ip}", "{ipv6}"] -> parseUrlSegments xs (addNewSegment segs "ip_address", x : vals)
-    | v `elem` ["{integer}", "{float}", "{hex}"] -> parseUrlSegments xs (addNewSegment segs "number", x : vals)
-    | otherwise -> parseUrlSegments xs (addNewSegment segs "param", x : vals)
+        Just "date"
+    | v `elem` ["{ip}", "{ipv6}"] -> Just "ip_address"
+    | v `elem` ["{integer}", "{float}", "{hex}"] -> Just "number"
+    | otherwise -> Just "param"
 
 
+-- | Append a @{label}@ segment, suffixing @_n@ when the label already occurs.
 addNewSegment :: [Text] -> Text -> [Text]
 addNewSegment segs seg =
-  let pos = sum [1 :: Int | s <- segs, T.isPrefixOf ("{" <> seg) s]
-      newSeg = if pos > 0 then "{" <> seg <> "_" <> show pos <> "}" else "{" <> seg <> "}"
-   in newSeg : segs
-
-
-buildPathParams :: [Text] -> [Text] -> AE.Value -> AE.Value
-buildPathParams [] _ acc = acc
-buildPathParams _ [] acc = acc
-buildPathParams (x : xs) (v : vs) acc = buildPathParams xs vs param
-  where
-    current = AE.object [AEK.fromText (T.tail x) AE..= v]
-    param = case (acc, current) of
-      (AE.Object a, AE.Object b) -> AE.Object $ a <> b
-      _ -> acc
+  let pfx = "{" <> seg
+      pos = length [s | s <- segs, pfx `T.isPrefixOf` s]
+   in (if pos > 0 then pfx <> "_" <> show pos <> "}" else pfx <> "}") : segs
 
 
 -- | Detect ID-like URL segments that valueToFormatStr misses (compound IDs, tokens, etc.)
@@ -1034,8 +870,8 @@ buildPathParams (x : xs) (v : vs) acc = buildPathParams xs vs param
 isUrlIdLike :: Text -> Bool
 isUrlIdLike seg
   | T.null seg = False
-  | T.any (== '|') seg = True -- compound IDs: auth0|abc, google-oauth2|123
-  | not (T.isPrefixOf ":" seg) && T.any (== ':') seg = True -- namespaced: type:value
+  | T.elem '|' seg = True -- compound IDs: auth0|abc, google-oauth2|123
+  | not (T.isPrefixOf ":" seg) && T.elem ':' seg = True -- namespaced: type:value
   | len > 20 && hasMixed = True -- long mixed alphanumeric (no hyphens — excludes slugs)
   | len > 16 && isBase64Url = True -- base64url-encoded token (requires digits)
   | len >= 6 && hasMixed && isLowVowel = True -- short IDs: mixed alphanumeric with few vowels
@@ -1044,7 +880,7 @@ isUrlIdLike seg
     len = T.length seg
     hasMixed = T.any isAlpha seg && T.any isDigit seg && T.all isAlphaNum seg
     isBase64Url = T.all (\c -> isAlphaNum c || c == '-' || c == '_') seg && T.any isUpper seg && T.any isLower seg && T.any isDigit seg
-    isLowVowel = T.foldl' (\n c -> if c `elem` ("aeiouAEIOU" :: String) then n + 1 else n) (0 :: Int) seg * 4 < len
+    isLowVowel = T.length (T.filter (`T.elem` "aeiouAEIOU") seg) * 4 < len
 
 
 -- | Check if a concrete URL path matches a pre-split template with {param} wildcards.
@@ -1058,9 +894,7 @@ isUrlIdLike seg
 -- >>> pathMatchesTemplate (T.splitOn "/" "/api/v2/users") (T.splitOn "/" "/api/v2/users/{param}")
 -- False
 pathMatchesTemplate :: [Text] -> [Text] -> Bool
-pathMatchesTemplate [] [] = True
-pathMatchesTemplate (p : ps) (t : ts) = (t == "{param}" || p == t) && pathMatchesTemplate ps ts
-pathMatchesTemplate _ _ = False
+pathMatchesTemplate ps ts = length ps == length ts && and (zipWith (\p t -> t == "{param}" || p == t) ps ts)
 
 
 -- | Find the first matching canonical template for a request path.
@@ -1068,7 +902,7 @@ pathMatchesTemplate _ _ = False
 matchCanonicalPath :: HM.HashMap (Text, Text) [([Text], Text)] -> Text -> Text -> Text -> Maybe Text
 matchCanonicalPath idx reqMethod reqHost reqPath =
   let !reqSegs = T.splitOn "/" reqPath
-   in snd <$> find (pathMatchesTemplate reqSegs . fst) (fromMaybe [] $ HM.lookup (reqMethod, reqHost) idx)
+   in snd <$> find (pathMatchesTemplate reqSegs . fst) (HM.findWithDefault [] (reqMethod, reqHost) idx)
 
 
 -- | Parse pipe-delimited canonical path entries ("method|host|template") into a HashMap keyed by (method, host).
@@ -1084,6 +918,3 @@ tokenizeUrlPath :: Text -> V.Vector Text
 tokenizeUrlPath = V.fromList . map normalize . T.splitOn "/"
   where
     normalize seg = fromMaybe (bool seg "<*>" $ isUrlIdLike seg) (valueToFormatStr seg)
-
--- fieldsToFieldDTO removed: schema learning now flows through the
--- in-memory catalog (see 'extractObservation' + Pkg.SchemaLearning).

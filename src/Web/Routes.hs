@@ -5,6 +5,7 @@ import Control.Lens
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
 import Data.Default (def)
+import Data.List qualified as L
 import Data.Map qualified as Map
 import Data.Ord (clamp)
 import Data.UUID qualified as UUID
@@ -20,8 +21,8 @@ import Hasql.Interpolate qualified as HI
 -- Effectful imports
 import Data.Effectful.Notify qualified as Notify
 import Effectful.Error.Static qualified as Error
-import Effectful.Reader.Static (runReader)
-import Effectful.Reader.Static qualified
+import Effectful.Reader.Static (ask)
+import Effectful.Reader.Static qualified as Reader
 import Effectful.State.Static.Local qualified as State
 import Effectful.Time qualified as Time
 
@@ -44,7 +45,6 @@ import Web.Cookie (SetCookie)
 import Data.OpenApi (OpenApi, SecurityDefinitions (..), SecurityScheme (..), SecuritySchemeType (..), components, description, info, security, securitySchemes, servers, title, version)
 import Data.OpenApi qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
-import Pages.Bots.Utils (verifyWidgetSignature)
 import Pages.CommandPalette qualified as CommandPalette
 import Servant.OpenApi (toOpenApi)
 import System.Config (AuthContext (..), DeploymentEnv (..), EnvConfig (..))
@@ -79,7 +79,6 @@ import "cryptohash-md5" Crypto.Hash.MD5 qualified as MD5
 -- Page imports
 
 import Models.Apis.Endpoints qualified as Endpoints
-import Models.Apis.Issues qualified as Anomalies
 import Models.Apis.Issues qualified as Issues
 import Pages.Anomalies qualified as AnomalyList
 import Pages.BodyWrapper (PageCtx (..))
@@ -436,7 +435,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , -- Slack/Discord integration
     reportsGet :: mode :- "p" :> ProjectId :> "reports" :> QPT "page" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders Reports.ReportsGet)
   , reportsLiveGet :: mode :- "p" :> ProjectId :> "reports" :> "live" :> HXRequest :> Get '[HTML] (RespHeaders Reports.ReportsGet)
-  , reportsSingleGet :: mode :- "p" :> ProjectId :> "reports" :> Capture "report_id" Anomalies.ReportId :> HXRequest :> Get '[HTML] (RespHeaders Reports.ReportsGet)
+  , reportsSingleGet :: mode :- "p" :> ProjectId :> "reports" :> Capture "report_id" Issues.ReportId :> HXRequest :> Get '[HTML] (RespHeaders Reports.ReportsGet)
   , reportsPost :: mode :- "p" :> ProjectId :> "reports_notif" :> Capture "report_type" Text :> Post '[HTML] (RespHeaders Reports.ReportsPost)
   , shareLinkPost :: mode :- "p" :> ProjectId :> "share" :> Capture "event_id" UUID.UUID :> Capture "createdAt" UTCTime :> QPT "event_type" :> Post '[HTML] (RespHeaders Share.ShareLinkPost)
   , -- Billing
@@ -495,7 +494,6 @@ data LogExplorerRoutes' mode = LogExplorerRoutes'
   , logExplorerItemDetailedGet :: mode :- "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" UTCTime :> "detailed" :> QPT "source" :> QPT "tab" :> Get '[HTML] (RespHeaders LogItem.ApiItemDetailed)
   , logExplorerExpandGet :: mode :- "log_explorer" :> "expand" :> QPT "kind" :> QPT "key" :> QPI "skip" :> QPT "query" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[JSON] (RespHeaders AE.Value)
   , aiSearchPost :: mode :- "log_explorer" :> "ai_search" :> ReqBody '[JSON] AE.Value :> Post '[JSON] (RespHeaders AE.Value)
-  , schemaGet :: mode :- "log_explorer" :> "schema" :> Get '[JSON] (RespHeaders AE.Value)
   }
   deriving stock (Generic)
 
@@ -513,14 +511,14 @@ data AnomaliesRoutes' mode = AnomaliesRoutes'
   , unarchiveGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "unarchive" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
   , bulkActionsPost :: mode :- "bulk_actions" :> Capture "action" Text :> ReqBody '[FormUrlEncoded] AnomalyList.AnomalyBulkForm :> Post '[HTML] (RespHeaders AnomalyList.AnomalyAction)
   , listGet :: mode :- QPT "layout" :> QPT "filter" :> QPT "sort" :> QPT "since" :> QPT "page" :> QPT "per_page" :> QPT "load_more" :> QEID "endpoint" :> QPT "period" :> QueryParams "service" Text :> QueryParams "type" Text :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders AnomalyList.AnomalyListGet)
-  , anomalyGet :: mode :- Capture "anomalyID" Anomalies.IssueId :> QPT "first_occurrence" :> QPT "since" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
+  , anomalyGet :: mode :- Capture "anomalyID" Issues.IssueId :> QPT "first_occurrence" :> QPT "since" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
   , anomalyHashGet :: mode :- "by_hash" :> Capture "anomalyHash" Text :> QPT "first_occurrence" :> QPT "since" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
   , assignErrorPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "assign" :> ReqBody '[FormUrlEncoded] AnomalyList.AssignErrorForm :> Post '[HTML] (RespHeaders (Html ()))
   , resolveErrorPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "resolve" :> Post '[HTML] (RespHeaders (Html ()))
   , errorSubscriptionPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "subscribe" :> ReqBody '[FormUrlEncoded] AnomalyList.ErrorSubscriptionForm :> Post '[HTML] (RespHeaders (Html ()))
-  , aiChatPost :: mode :- Capture "issueID" Anomalies.IssueId :> "ai_chat" :> ReqBody '[FormUrlEncoded] AnomalyList.AIChatForm :> Post '[HTML] (RespHeaders (Html ()))
-  , aiChatHistoryGet :: mode :- Capture "issueID" Anomalies.IssueId :> "ai_chat" :> "history" :> Get '[HTML] (RespHeaders (Html ()))
-  , activityGet :: mode :- Capture "issueID" Anomalies.IssueId :> "activity" :> Get '[HTML] (RespHeaders (Html ()))
+  , aiChatPost :: mode :- Capture "issueID" Issues.IssueId :> "ai_chat" :> ReqBody '[FormUrlEncoded] AnomalyList.AIChatForm :> Post '[HTML] (RespHeaders (Html ()))
+  , aiChatHistoryGet :: mode :- Capture "issueID" Issues.IssueId :> "ai_chat" :> "history" :> Get '[HTML] (RespHeaders (Html ()))
+  , activityGet :: mode :- Capture "issueID" Issues.IssueId :> "activity" :> Get '[HTML] (RespHeaders (Html ()))
   , errorGroupMembersGet :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "group_members" :> Get '[HTML] (RespHeaders (Html ()))
   , errorUnmergePost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "unmerge" :> Post '[HTML] (RespHeaders (Html ()))
   }
@@ -667,7 +665,7 @@ server logger env tp otlpTraces otlpLogs =
                 & State.evalState Map.empty -- TriggerEvents
                 & State.evalState Nothing -- HXRedirectDest
                 & State.evalState Nothing -- XWidgetJSON
-                & Effectful.Reader.Static.runReader sessionWithCookies
+                & Reader.runReader sessionWithCookies
           )
           cookieProtectedServer
     }
@@ -883,7 +881,6 @@ logExplorerServer pid =
     , logExplorerItemDetailedGet = LogItem.expandAPIlogItemH pid
     , logExplorerExpandGet = Log.apiLogExpandH pid
     , aiSearchPost = Log.aiSearchH pid
-    , schemaGet = addRespHeaders Schema.telemetrySchemaJson
     }
 
 
@@ -1033,7 +1030,7 @@ widgetGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Ma
 widgetGetH pid widgetJsonM sinceStr fromDStr toDStr allParams = do
   widget <-
     AE.eitherDecode (encodeUtf8 $ fromMaybe "" widgetJsonM)
-      & either (\_ -> Error.throwError err400{errBody = "Invalid or missing widgetJSON parameter"}) pure
+      & either (const $ Error.throwError err400{errBody = "Invalid or missing widgetJSON parameter"}) pure
   now <- Time.currentTime
   let widgetWithPid = widget & #_projectId ?~ pid
       isEager = widgetWithPid.eager == Just True || widgetWithPid.wType `elem` [Widget.WTTable, Widget.WTTraces, Widget.WTStat, Widget.WTAnomalies]
@@ -1049,7 +1046,7 @@ widgetGetH pid widgetJsonM sinceStr fromDStr toDStr allParams = do
 -- | Public endpoint for rendering widgets to PNG (for bot embeds). Requires valid HMAC signature.
 widgetPngGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Maybe Text -> [(Text, Maybe Text)] -> ATBaseCtx (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
 widgetPngGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr widthM heightM sigM allParams = do
-  ctx <- Effectful.Reader.Static.ask @AuthContext
+  ctx <- ask @AuthContext
   let fallback = fromMaybe "" widgetJsonM
   v <- case widgetZM of
     Just z
@@ -1060,7 +1057,7 @@ widgetPngGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr widthM heightM s
       height = clamp (100, 2000) $ fromMaybe 300 heightM
 
   Log.logInfo "widgetPngGetH: request" $ AE.object ["widgetJson_len" AE..= T.length v]
-  whenLeft_ (verifyWidgetSignature ctx.env.apiKeyEncryptionSecretKey pid v sigM) \err -> Error.throwError $ err403{errBody = err}
+  whenLeft_ (BotUtils.verifyWidgetSignature ctx.env.apiKeyEncryptionSecretKey pid v sigM) \err -> Error.throwError $ err403{errBody = err}
 
   widget <- either (const $ Error.throwError err400{errBody = "Invalid or missing widgetJSON parameter"}) pure $ AE.eitherDecode (encodeUtf8 v)
   processedWidget <- Dashboards.fetchWidgetData pid (sinceStr, fromDStr, toDStr) allParams $ widget & #_projectId ?~ pid & #eager ?~ True
@@ -1083,58 +1080,58 @@ widgetPngGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr widthM heightM s
   pure $ addHeader @"Cache-Control" (bool "public, max-age=300" "public, max-age=31536000, immutable" $ isJust fromDStr && isJust toDStr) $ addHeader @"Content-Type" "image/png" pngBytes
 
 
--- flamegraph GET handler
-
 -- =============================================================================
 -- Email Preview Handlers (dev only)
 -- =============================================================================
 
-emailTemplateNames :: [Text]
-emailTemplateNames = ["project-invite", "project-created", "project-deleted", "weekly-report", "runtime-errors", "anomaly-endpoint"]
-
-
 guardDevOnly :: ATBaseCtx ()
 guardDevOnly = do
-  ctx <- Effectful.Reader.Static.ask @AuthContext
+  ctx <- ask @AuthContext
   unless (ctx.config.environment == Dev) $ Error.throwError err404
+
+
+-- | Single source for both the index and the per-template preview, so a listed
+-- template can never be missing a renderer.
+emailTemplates :: [(Text, ATBaseCtx (Text, Html ()))]
+emailTemplates =
+  [ ("project-invite", pure ET.sampleProjectInvite)
+  , ("project-created", pure ET.sampleProjectCreated)
+  , ("project-deleted", pure ET.sampleProjectDeleted)
+  , ("weekly-report", pure $ ET.sampleWeeklyReport "https://placehold.co/600x200?text=Events+Chart" "https://placehold.co/600x200?text=Errors+Chart")
+  ,
+    ( "runtime-errors"
+    , do
+        ctx <- ask @AuthContext
+        chartUrl <-
+          Widget.widgetPngUrl
+            ctx.env.apiKeyEncryptionSecretKey
+            ctx.env.hostUrl
+            (UUIDId UUID.nil)
+            def{Widget.wType = Widget.WTTimeseries, Widget.query = Just "project_id == \"00000000-0000-0000-0000-000000000000\" and level == \"ERROR\" | summarize count(*) by bin_auto(timestamp)", Widget.theme = Just "roma"}
+            (Just "24H")
+            Nothing
+            Nothing
+        pure $ ET.sampleRuntimeErrors $ guarded (not . T.null) chartUrl
+    )
+  , ("anomaly-endpoint", pure ET.sampleAnomalyEndpoint)
+  , ("issue-assigned", pure ET.sampleIssueAssigned)
+  ]
 
 
 emailPreviewListH :: ATBaseCtx (Html ())
 emailPreviewListH = do
   guardDevOnly
-  pure $ ET.emailWrapper "Email Templates" do
-    ET.emailBody do
-      h1_ "Email Template Previews"
-      p_ "Click a template to preview:"
-      ul_ $ forM_ emailTemplateNames \name ->
-        li_ [style_ "margin: 8px 0;"] $ a_ [href_ $ "/dev/emails/" <> name] $ toHtml name
+  pure $ ET.emailWrapper "Email Templates" $ ET.emailBody do
+    h1_ "Email Template Previews"
+    p_ "Click a template to preview:"
+    ul_ $ forM_ emailTemplates \(name, _) ->
+      li_ [class_ "my-2"] $ a_ [href_ $ "/dev/emails/" <> name] $ toHtml name
 
 
 emailPreviewH :: Text -> ATBaseCtx (Html ())
 emailPreviewH templateName = do
   guardDevOnly
-  ctx <- Effectful.Reader.Static.ask @AuthContext
-  let nilPid = UUIDId UUID.nil :: Projects.ProjectId
-  (subject, content) <- case templateName of
-    "project-invite" -> pure ET.sampleProjectInvite
-    "project-created" -> pure ET.sampleProjectCreated
-    "project-deleted" -> pure ET.sampleProjectDeleted
-    "weekly-report" -> pure $ ET.sampleWeeklyReport "https://placehold.co/600x200?text=Events+Chart" "https://placehold.co/600x200?text=Errors+Chart"
-    "runtime-errors" -> do
-      chartUrl <-
-        Widget.widgetPngUrl
-          ctx.env.apiKeyEncryptionSecretKey
-          ctx.env.hostUrl
-          nilPid
-          def{Widget.wType = Widget.WTTimeseries, Widget.query = Just "project_id == \"00000000-0000-0000-0000-000000000000\" and level == \"ERROR\" | summarize count(*) by bin_auto(timestamp)", Widget.theme = Just "roma"}
-          (Just "24H")
-          Nothing
-          Nothing
-      pure $ ET.sampleRuntimeErrors (if T.null chartUrl then Nothing else Just chartUrl)
-    "anomaly-endpoint" -> pure ET.sampleAnomalyEndpoint
-    "issue-assigned" -> pure ET.sampleIssueAssigned
-    _ -> pure ("Unknown", p_ "Template not found")
-  pure $ ET.emailWrapper subject content
+  uncurry ET.emailWrapper <$> fromMaybe (pure ("Unknown", p_ "Template not found")) (L.lookup templateName emailTemplates)
 
 
 -- =============================================================================
@@ -1168,16 +1165,11 @@ instance HasServer api ctx => HasServer (AllQueryParams :> api) ctx where
   type ServerT (AllQueryParams :> api) m = [(Text, Maybe Text)] -> ServerT api m
 
 
-  route _ ctx subserver = route (Proxy :: Proxy api) ctx subserver'
+  route _ ctx subserver = route (Proxy :: Proxy api) ctx $ passToServer subserver grabAllParams
     where
       grabAllParams :: Request -> [(Text, Maybe Text)]
-      grabAllParams req =
-        [ ( decodeUtf8With lenientDecode k
-          , decodeUtf8With lenientDecode <$> mv
-          )
-        | (k, mv) <- req.queryString
-        ]
-      subserver' = passToServer subserver grabAllParams
+      grabAllParams = map (bimap dec (fmap dec)) . queryString
+      dec = decodeUtf8With lenientDecode
 
 
   hoistServerWithContext

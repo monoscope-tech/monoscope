@@ -1,5 +1,3 @@
-{-# LANGUAGE CPP #-}
-
 module Pkg.DeriveUtils (
   AesonText (..),
   BaselineState (..),
@@ -56,7 +54,7 @@ import Database.PostgreSQL.Entity (_select)
 import Database.PostgreSQL.Entity.Types (Entity)
 import Database.PostgreSQL.LibPQ qualified as PQ
 import Database.PostgreSQL.Simple (Connection, FromRow, ResultError (..), ToRow)
-import Database.PostgreSQL.Simple.FromField (Conversion (..), FromField (..), fromField, returnError)
+import Database.PostgreSQL.Simple.FromField (Conversion (..), Field, FromField (..), returnError)
 import Database.PostgreSQL.Simple.Internal qualified as PGI
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (ToField (..))
@@ -72,7 +70,6 @@ import Hasql.Interpolate qualified as HI
 import Hasql.Pool.Config qualified as HPC
 import Language.Haskell.TH qualified as TH
 import Language.Haskell.TH.Syntax qualified as TH
-import Language.Haskell.TH.Syntax qualified as THS
 import Numeric (showHex)
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Relude
@@ -95,24 +92,12 @@ newtype AesonText a = AesonText a
 
 
 instance (AE.FromJSON a, Typeable a) => FromField (AesonText a) where
-  fromField f mdata = do
-    -- Try to parse as JSONB first (via Aeson newtype)
-    let tryJsonb = do
-          Aeson v <- fromField f mdata :: Conversion (Aeson a)
-          return (AesonText v)
-    -- Try parsing as ByteString
-    let tryByteString = do
-          bs <- fromField f mdata :: Conversion ByteString
-          case AE.eitherDecodeStrict bs of
-            Right v -> return (AesonText v)
-            Left err -> returnError ConversionFailed f ("Failed to parse JSON from ByteString: " ++ err)
-    -- If that fails, try parsing as text/varchar
-    let tryText = do
-          txt <- fromField f mdata :: Conversion Text
-          case AE.eitherDecodeStrict (encodeUtf8 txt) of
-            Right v -> return (AesonText v)
-            Left err -> returnError ConversionFailed f ("Failed to parse JSON from text: " ++ err)
-    tryJsonb <|> tryByteString <|> tryText
+  -- JSONB (via the Aeson newtype) first, then a raw ByteString column, then text/varchar.
+  fromField f mdata = tryJsonb <|> tryDecode (fromField f mdata) "ByteString" <|> tryDecode (encodeUtf8 <$> (fromField f mdata :: Conversion Text)) "text"
+    where
+      tryJsonb = (\(Aeson v) -> AesonText v) <$> fromField f mdata
+      tryDecode bs src =
+        bs >>= either (\err -> returnError ConversionFailed f ("Failed to parse JSON from " <> src <> ": " <> err)) (pure . AesonText) . AE.eitherDecodeStrict
 
 
 instance AE.ToJSON a => ToField (AesonText a) where
@@ -146,7 +131,7 @@ newtype PGTextArray = PGTextArray (V.Vector Text)
 -- | Generic UUID-based ID type with phantom type parameter for type safety
 -- Usage: type ProjectId = UUIDId "project"
 newtype UUIDId (name :: Symbol) = UUIDId {unUUIDId :: UUID.UUID}
-  deriving stock (Generic, Read, Show, THS.Lift)
+  deriving stock (Generic, Read, Show, TH.Lift)
   deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, Hashable, NFData, Ord, ToField)
   deriving anyclass (FromRow, HI.DecodeRow, ToRow)
 
@@ -165,7 +150,7 @@ instance HasField "unwrap" (UUIDId name) UUID.UUID where
 
 -- | Convert any UUID-based ID to Text
 idToText :: UUIDId name -> Text
-idToText = UUID.toText . unUUIDId
+idToText uid = uid.toText
 
 
 -- | Parse Text to a UUID-based ID
@@ -183,18 +168,21 @@ instance (KnownSymbol prefix, Show a) => ToField (WrappedEnum prefix a) where
   toField (WrappedEnum a) = toField . T.toUpper . fromString . drop (length $ symbolVal (Proxy @prefix)) . show $ a
 
 
+-- | Shared postgresql-simple 'fromField' for text-backed enum wrappers: NULL fails,
+-- otherwise the decoded bytes are transformed then parsed; a parse failure quotes the
+-- transformed string.
+enumFromField :: Typeable c => (b -> c) -> (Text -> String) -> (String -> Maybe b) -> Field -> Maybe ByteString -> Conversion c
+enumFromField ctor xform parse f = \case
+  Nothing -> returnError UnexpectedNull f ""
+  Just bss -> let str = xform (decodeUtf8 bss) in maybe (returnError ConversionFailed f $ "Cannot parse: " <> str) (pure . ctor) (parse str)
+
+
 instance (KnownSymbol prefix, Read a, Typeable a) => FromField (WrappedEnum prefix a) where
-  fromField f = \case
-    Nothing -> returnError UnexpectedNull f ""
-    Just bss ->
-      let str = symbolVal (Proxy @prefix) <> toString (T.toTitle (decodeUtf8 bss))
-       in case readMaybe str of
-            Just a -> pure $ WrappedEnum a
-            Nothing -> returnError ConversionFailed f $ "Cannot parse: " <> str
+  fromField = enumFromField WrappedEnum (\t -> symbolVal (Proxy @prefix) <> toString (T.toTitle t)) readMaybe
 
 
 instance (KnownSymbol prefix, Show a) => HI.EncodeValue (WrappedEnum prefix a) where
-  encodeValue = (\(WrappedEnum a) -> T.toUpper $ toText $ drop (length $ symbolVal (Proxy @prefix)) $ show a) `contramap` E.text
+  encodeValue = contramap (\(WrappedEnum a) -> T.toUpper $ toText $ drop (length $ symbolVal (Proxy @prefix)) $ show a) E.text
 
 
 -- | Shared helper for hasql 'D.DecodeValue' instances that parse text and refine into a Haskell value.
@@ -261,27 +249,19 @@ instance (KnownSymbol prefix, Show a) => ToField (WrappedEnumSC qualType prefix 
 
 
 instance (KnownSymbol prefix, Read a, Typeable a, Typeable qualType) => FromField (WrappedEnumSC qualType prefix a) where
-  fromField f = \case
-    Nothing -> returnError UnexpectedNull f ""
-    Just bss -> maybe (returnError ConversionFailed f $ "Cannot parse: " <> str) (pure . WrappedEnumSC) $ decodeEnumSC @prefix str
-      where
-        str = toString @Text (decodeUtf8 bss)
+  fromField = enumFromField WrappedEnumSC toString (decodeEnumSC @prefix)
 
 
 instance (KnownMaybeSymbol qualType, KnownSymbol prefix, Show a) => HI.EncodeValue (WrappedEnumSC qualType prefix a) where
-  encodeValue = case maybeSymbolVal (Proxy @qualType) of
-    Nothing -> contramap (\(WrappedEnumSC a) -> toText (encodeEnumSC @prefix a)) E.text
-    Just qn ->
-      let (sch, typ) = splitQualType qn
-       in contramap (\(WrappedEnumSC a) -> toText (encodeEnumSC @prefix a)) (E.enum sch typ id)
+  encodeValue = contramap (\(WrappedEnumSC a) -> toText (encodeEnumSC @prefix a)) case maybeSymbolVal (Proxy @qualType) of
+    Nothing -> E.text
+    Just qn -> uncurry E.enum (splitQualType qn) id
 
 
 instance (KnownMaybeSymbol qualType, KnownSymbol prefix, Read a) => HI.DecodeValue (WrappedEnumSC qualType prefix a) where
   decodeValue = case maybeSymbolVal (Proxy @qualType) of
     Nothing -> refineText "WrappedEnumSC" (fmap WrappedEnumSC . decodeEnumSC @prefix . toString)
-    Just qn ->
-      let (sch, typ) = splitQualType qn
-       in WrappedEnumSC <$> D.enum sch typ (decodeEnumSC @prefix . toString)
+    Just qn -> WrappedEnumSC <$> uncurry D.enum (splitQualType qn) (decodeEnumSC @prefix . toString)
 
 
 instance (KnownMaybeSymbol qualType, KnownSymbol prefix, Read a) => HI.DecodeRow (WrappedEnumSC qualType prefix a) where
@@ -320,19 +300,22 @@ instance (KnownSymbol prefix, Read a, Show a, Typeable a, Typeable qualType) => 
   fromVar = fmap WrappedEnumSC . decodeEnumSC @prefix
 
 
--- | Shared enum value list for a 'WrappedEnumSC' OpenApi schema.
-enumSCValues :: forall prefix a. (Bounded a, Enum a, KnownSymbol prefix, Show a) => [AE.Value]
-enumSCValues = [AE.String (toText $ encodeEnumSC @prefix v) | v <- [minBound @a .. maxBound @a]]
+-- | Shared string-enum OpenApi schema for a 'WrappedEnumSC'.
+enumSCSchema :: forall prefix a. (Bounded a, Enum a, KnownSymbol prefix, Show a) => OpenApi.Schema
+enumSCSchema =
+  mempty
+    & type_
+    ?~ OpenApi.OpenApiString
+      & enum_
+    ?~ [AE.String (toText $ encodeEnumSC @prefix v) | v <- [minBound @a .. maxBound @a]]
 
 
 instance {-# OVERLAPPABLE #-} (Bounded a, Enum a, KnownSymbol prefix, Show a, Typeable a, Typeable qualType) => ToSchema (WrappedEnumSC qualType prefix a) where
-  declareNamedSchema (_ :: proxy (WrappedEnumSC qualType prefix a)) =
-    pure $ NamedSchema Nothing $ mempty & type_ ?~ OpenApi.OpenApiString & enum_ ?~ enumSCValues @prefix @a
+  declareNamedSchema (_ :: proxy (WrappedEnumSC qualType prefix a)) = pure $ NamedSchema Nothing $ enumSCSchema @prefix @a
 
 
 instance (Bounded a, Enum a, KnownSymbol prefix, Show a) => ToParamSchema (WrappedEnumSC qualType prefix a) where
-  toParamSchema (_ :: proxy (WrappedEnumSC qualType prefix a)) =
-    mempty & type_ ?~ OpenApi.OpenApiString & enum_ ?~ enumSCValues @prefix @a
+  toParamSchema (_ :: proxy (WrappedEnumSC qualType prefix a)) = enumSCSchema @prefix @a
 
 
 -- | DerivingVia wrapper: produces ToSchema with snake_case field names matching DAE.Snake's ToJSON output.
@@ -373,17 +356,11 @@ instance Show a => ToField (WrappedEnumShow a) where
 
 
 instance (Read a, Typeable a) => FromField (WrappedEnumShow a) where
-  fromField f = \case
-    Nothing -> returnError UnexpectedNull f ""
-    Just bss ->
-      let str = toString @Text (decodeUtf8 bss)
-       in case readMaybe str of
-            Just a -> pure $ WrappedEnumShow a
-            Nothing -> returnError ConversionFailed f $ "Cannot parse: " <> str
+  fromField = enumFromField WrappedEnumShow toString readMaybe
 
 
 instance Show a => HI.EncodeValue (WrappedEnumShow a) where
-  encodeValue = (\(WrappedEnumShow a) -> toText $ show a) `contramap` E.text
+  encodeValue = contramap (\(WrappedEnumShow a) -> toText $ show a) E.text
 
 
 instance Read a => HI.DecodeValue (WrappedEnumShow a) where
@@ -425,13 +402,11 @@ data BaselineState = BSLearning | BSEstablished
 appendConnParams :: [(ByteString, ByteString)] -> ByteString -> ByteString
 appendConnParams kvs connStr
   | null kvs = connStr
-  | isUri =
-      let sep = if "?" `T.isInfixOf` decodeUtf8 connStr then "&" else "?"
-       in connStr <> sep <> BS.intercalate "&" [k <> "=" <> v | (k, v) <- kvs]
-  | otherwise = connStr <> " " <> BS.intercalate " " [k <> "=" <> v | (k, v) <- kvs]
+  | "postgres://" `BS.isPrefixOf` connStr || "postgresql://" `BS.isPrefixOf` connStr =
+      connStr <> (if "?" `BS.isInfixOf` connStr then "&" else "?") <> BS.intercalate "&" params
+  | otherwise = connStr <> " " <> BS.intercalate " " params
   where
-    txt = decodeUtf8 connStr
-    isUri = "postgres://" `T.isPrefixOf` txt || "postgresql://" `T.isPrefixOf` txt
+    params = [k <> "=" <> v | (k, v) <- kvs]
 
 
 -- | Socket-liveness params for every PG/TF pool. Keepalives detect a dead
@@ -471,30 +446,28 @@ connectPostgreSQL connstr = do
       connectionHandle <- newMVar conn
       connectionObjects <- newMVar IntMap.empty
       connectionTempNameCounter <- newIORef 0
-      let wconn = PGI.Connection{..}
-      pure wconn
+      pure PGI.Connection{..}
     _ -> do
       msg <- fromMaybe "connectPostgreSQL error" <$> PQ.errorMessage conn
       throwIO $ PGI.fatalError msg
 
 
--- adds a version hash to file paths, to force cache invalidation when a new version appears
-hashAssetFile :: FilePath -> TH.Q TH.Exp
-hashAssetFile path = do
+-- | Content hash of the file under @static@, registered as a recompilation dependency.
+fileHash :: FilePath -> TH.Q String
+fileHash path = do
   let fp = "static" <> path
   TH.qAddDependentFile fp
   content <- TH.runIO $ readFileLBS fp
-  let hash = fromString $ showHex (xxHash content) ""
-  [|$(TH.lift path) <> "?v=" <> $(TH.lift (toString hash))|]
+  pure $ showHex (xxHash content) ""
+
+
+-- adds a version hash to file paths, to force cache invalidation when a new version appears
+hashAssetFile :: FilePath -> TH.Q TH.Exp
+hashAssetFile path = [|$(TH.lift path) <> "?v=" <> $(hashFile path)|]
 
 
 hashFile :: FilePath -> TH.Q TH.Exp
-hashFile path = do
-  let fp = "static" <> path
-  TH.qAddDependentFile fp
-  content <- TH.runIO $ readFileLBS fp
-  let hash = fromString $ showHex (xxHash content) ""
-  [|$(TH.lift (toString hash))|]
+hashFile = fileHash >=> TH.lift
 
 
 -- | Format a list of Floats as a PostgreSQL array literal, e.g. "{1.0,2.0,3.0}"
@@ -507,14 +480,8 @@ hashFile path = do
 showPGFloatArray :: [Float] -> Text
 showPGFloatArray xs = "{" <> T.intercalate "," (map show xs) <> "}"
 
+
 -- Default instances (orphans)
-
-#if __GLASGOW_HASKELL__ < 910
-instance Default Bool where
-  def = False
-  {-# INLINE def #-}
-#endif
-
 
 instance Default ZonedTime where
   def = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
@@ -663,7 +630,7 @@ textArrayEnc = E.array (E.dimension foldl' (E.element (E.nonNullable E.text)))
 
 -- | Build a hasql pool. Timeouts are `DiffTime` (seconds): 30s acquisition,
 -- 30min aging/idleness — matches the postgresql-simple pool's lifetime envelope.
--- | Returns an OTel-instrumented pool: every session opens a Client span with
+-- Returns an OTel-instrumented pool: every session opens a Client span with
 -- the OTel db semantic-convention attributes (db.system, db.namespace, server.address,
 -- server.port, db.user) parsed from the connection string.
 mkHasqlPool :: Int -> ByteString -> IO OHasql.TracedPool

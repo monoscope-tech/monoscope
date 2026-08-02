@@ -94,7 +94,7 @@ import Data.Default (Default (..))
 import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
-import Data.List.Extra (chunksOf)
+import Data.List.Extra (chunksOf, lookup)
 import Data.List.NonEmpty qualified as NE
 import Data.Map qualified as Map
 import Data.Set qualified as S
@@ -114,7 +114,6 @@ import Database.PostgreSQL.Simple.FromRow
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (ToField (toField))
 import Database.PostgreSQL.Simple.ToRow
-import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
 import Effectful.Concurrent (Concurrent, threadDelay)
@@ -137,7 +136,6 @@ import Relude.Extra.Foldable1 (maximum1, minimum1)
 import System.IO (hPutStrLn)
 import System.Logging qualified as Log
 import System.Tracing (forkWithCtx)
-import Text.Regex.TDFA.Text ()
 import UnliftIO (throwIO, tryAny)
 import Utils (extractMessageFromLog, getDurationNSMS, lookupValueText, nonEmptyT, scrubNulText, scrubNulValue)
 
@@ -198,7 +196,7 @@ resourceServiceName = atMapText "service.name"
 
 
 data SeverityLevel = SLTrace | SLDebug | SLInfo | SLWarn | SLError | SLFatal
-  deriving (Generic, Read, Show)
+  deriving (Bounded, Enum, Generic, Read, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON, Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "SL" SeverityLevel
 
@@ -294,36 +292,33 @@ data SpanRecord = SpanRecord
 
 
 convertOtelLogsAndSpansToSpanRecord :: OtelLogsAndSpans -> Maybe SpanRecord
-convertOtelLogsAndSpansToSpanRecord lgSp = case (trId, spanId, projectId, spanName) of
-  (Just tId, Just sId, Just pId, Just sName) ->
-    Just
-      SpanRecord
-        { uSpanId = lgSp.id
-        , projectId = pId
-        , timestamp = lgSp.timestamp
-        , traceId = tId
-        , spanId = sId
-        , parentSpanId = lgSp.parent_id
-        , traceState = lgSp.context >>= (.trace_state)
-        , spanName = sName
-        , startTime = lgSp.start_time
-        , endTime = lgSp.end_time
-        , kind = Nothing -- USE actual span kind
-        , status = Nothing -- TODO use actual span status
-        , statusMessage = lgSp.status_message
-        , attributes = unAesonTextMaybe lgSp.attributes
-        , events = fromMaybe AE.Null (unAesonTextMaybe lgSp.events)
-        , links = lgSp.links
-        , resource = unAesonTextMaybe lgSp.resource
-        , instrumentationScope = AE.Null
-        , spanDurationNs = maybe 0 fromIntegral lgSp.duration
-        }
-  _ -> Nothing
-  where
-    trId = lgSp.context >>= (.trace_id)
-    spanId = lgSp.context >>= (.span_id)
-    projectId = UUID.fromText lgSp.project_id
-    spanName = lgSp.name
+convertOtelLogsAndSpansToSpanRecord lgSp = do
+  tId <- lgSp.context >>= (.trace_id)
+  sId <- lgSp.context >>= (.span_id)
+  pId <- UUID.fromText lgSp.project_id
+  sName <- lgSp.name
+  pure
+    SpanRecord
+      { uSpanId = lgSp.id
+      , projectId = pId
+      , timestamp = lgSp.timestamp
+      , traceId = tId
+      , spanId = sId
+      , parentSpanId = lgSp.parent_id
+      , traceState = lgSp.context >>= (.trace_state)
+      , spanName = sName
+      , startTime = lgSp.start_time
+      , endTime = lgSp.end_time
+      , kind = Nothing -- USE actual span kind
+      , status = Nothing -- TODO use actual span status
+      , statusMessage = lgSp.status_message
+      , attributes = unAesonTextMaybe lgSp.attributes
+      , events = fromMaybe AE.Null (unAesonTextMaybe lgSp.events)
+      , links = lgSp.links
+      , resource = unAesonTextMaybe lgSp.resource
+      , instrumentationScope = AE.Null
+      , spanDurationNs = maybe 0 fromIntegral lgSp.duration
+      }
 
 
 data SpanEvent = SpanEvent
@@ -621,13 +616,22 @@ getTraceDetails useTf pid trId tme now = do
        in (Trace trId start end duration (length spans) $ if V.null services then Nothing else Just services, spans)
 
 
+-- | Random-access lookup of a single row by exact (timestamp, id). The caller always
+-- has the precise stored timestamp (it originates from a prior query result), so we match
+-- @timestamp = ts@ rather than a window — both PG and TF store microsecond precision, which
+-- round-trips losslessly through the UTCTime↔Hasql encoder. Exact equality also lets the
+-- planner hit the (timestamp, id) ordering instead of scanning a ±window range.
 otelRecordByProjectAndId :: DB es => Projects.ProjectId -> UTCTime -> UUID.UUID -> Eff es (Maybe OtelLogsAndSpans)
-otelRecordByProjectAndId pid = lookupOtelRecord pid.toText
+otelRecordByProjectAndId pid createdAt rdId =
+  Hasql.interpOne
+    $ [HI.sql|SELECT |]
+    <> otelSpanColsSql
+    <> [HI.sql| FROM otel_logs_and_spans where timestamp = #{createdAt} and project_id=#{pid.toText} and id=#{rdId} LIMIT 1|]
 
 
 -- | Full column list for SELECT against otel_logs_and_spans, in the field
--- order 'OtelLogsAndSpans' expects. Centralised so the four trace/log lookups
--- below can't drift out of sync.
+-- order 'OtelLogsAndSpans' expects. Centralised so the trace/log lookups
+-- can't drift out of sync.
 otelSpanColsSql :: HI.Sql
 otelSpanColsSql =
   -- NB: no COALESCE(hashes, '{}') — DataFusion can't coerce a Utf8 literal to
@@ -653,19 +657,6 @@ selectOtelSpans pidTxt lo hi predSql =
     <> otelSpanColsSql
     <> [HI.sql| FROM otel_logs_and_spans WHERE project_id=#{pidTxt} AND timestamp BETWEEN #{lo} AND #{hi} |]
     <> predSql
-
-
--- | Random-access lookup of a single row by exact (timestamp, id). The caller always
--- has the precise stored timestamp (it originates from a prior query result), so we match
--- @timestamp = ts@ rather than a window — both PG and TF store microsecond precision, which
--- round-trips losslessly through the UTCTime↔Hasql encoder. Exact equality also lets the
--- planner hit the (timestamp, id) ordering instead of scanning a ±window range.
-lookupOtelRecord :: DB es => Text -> UTCTime -> UUID.UUID -> Eff es (Maybe OtelLogsAndSpans)
-lookupOtelRecord pidTxt createdAt rdId =
-  Hasql.interpOne
-    $ [HI.sql|SELECT |]
-    <> otelSpanColsSql
-    <> [HI.sql| FROM otel_logs_and_spans where timestamp = #{createdAt} and project_id=#{pidTxt} and id=#{rdId} LIMIT 1|]
 
 
 -- | First/recent trace_id for a (project, method, url_path). Window kept tight (7d) since
@@ -810,8 +801,7 @@ getDataPointsData :: (DB es, Labeled "timefusion" Hasql :> es, Time.Time :> es) 
 getDataPointsData useTimefusion pid dateRange = do
   now <- Time.currentTime
   let dateFilter = case dateRange of
-        (Nothing, Just b) -> [HI.sql| AND timestamp BETWEEN #{now} AND #{b} |]
-        (Just a, Just b) -> [HI.sql| AND timestamp BETWEEN #{a} AND #{b} |]
+        (a, Just b) -> [HI.sql| AND timestamp BETWEEN #{fromMaybe now a} AND #{b} |]
         _ -> mempty
   catalog <-
     Hasql.interp
@@ -865,12 +855,9 @@ getUsageTotals useTimefusion pid lastReported = do
 
 getMetricChartListData :: DB es => Projects.ProjectId -> Maybe Text -> Maybe Text -> Eff es [MetricChartListData]
 getMetricChartListData pid sourceM prefixM = do
-  let sourceFilter = case sourceM of
-        Just source | source /= "" && source /= "all" -> [HI.sql| AND service_name = #{source}|]
-        _ -> mempty
-      prefixFilter = case prefixM of
-        Just prefix | prefix /= "" && prefix /= "all" -> let pat = prefix <> "%" in [HI.sql| AND metric_name LIKE #{pat}|]
-        _ -> mempty
+  let selected = mfilter (`notElem` ["", "all"])
+      sourceFilter = maybe mempty (\source -> [HI.sql| AND service_name = #{source}|]) (selected sourceM)
+      prefixFilter = maybe mempty (\prefix -> let pat = prefix <> "%" in [HI.sql| AND metric_name LIKE #{pat}|]) (selected prefixM)
   Hasql.interp
     $ [HI.sql| SELECT metric_name, MAX(metric_type) as metric_type, MAX(metric_unit) as metric_unit,
              MAX(metric_description) as metric_description, MAX(last_seen_at) as last_seen,
@@ -1084,29 +1071,43 @@ retryHasqlWrite
   -> Eff es a
   -- ^ write action; throws on transient failure (will retry)
   -> Eff es (Either SomeException a)
-retryHasqlWrite maxAttempts store act = go 1
+retryHasqlWrite maxAttempts store act =
+  retryTransientLoop maxAttempts "retryHasqlWrite: transient error, retrying" "store" store
+    $ tryAny act
+    >>= \case
+      Right a -> pure a
+      Left e
+        | "TuplesOk" `T.isInfixOf` show e -> do
+            -- PGWire status tag is wrong; the rows MAY have landed. We can't
+            -- tell from here, so we return a 0-row success rather than retry
+            -- (which would duplicate any rows that did land). This deliberately
+            -- loses the row count — the dual-write cross-check ('unaccountedRows'
+            -- in 'bulkInsertOtelLogsAndSpansTF') is what verifies persistence and
+            -- DLQs the batch if these rows are actually missing. Logged at
+            -- attention (not trace) because a silent swallow here was the root of
+            -- the 2026-06-12 TF gap where PG had the data and TF did not.
+            Log.logAttention "retryHasqlWrite: TuplesOk wire-mismatch — 0-row success, persistence verified by cross-check" $ AE.object ["store" AE..= store]
+            pure mempty
+        | otherwise -> throwIO e
+
+
+-- | Retry @act@ on transient Hasql errors with exponential backoff
+-- ('transientBackoffMicros'), yielding the last exception once the budget is
+-- spent or the error is non-transient. @msg@/@key@/@label@ shape the retry log
+-- line so the write and read wrappers keep their distinct log identities.
+retryTransientLoop :: (Concurrent :> es, IOE :> es, Log :> es) => Int -> Text -> Text -> Text -> Eff es a -> Eff es (Either SomeException a)
+retryTransientLoop maxAttempts msg key label act = go 1
   where
     go attempt =
       tryAny act >>= \case
         Right a -> pure (Right a)
         Left e
-          | "TuplesOk" `T.isInfixOf` show e -> do
-              -- PGWire status tag is wrong; the rows MAY have landed. We can't
-              -- tell from here, so we return a 0-row success rather than retry
-              -- (which would duplicate any rows that did land). This deliberately
-              -- loses the row count — the dual-write cross-check ('unaccountedRows'
-              -- in 'bulkInsertOtelLogsAndSpansTF') is what verifies persistence and
-              -- DLQs the batch if these rows are actually missing. Logged at
-              -- attention (not trace) because a silent swallow here was the root of
-              -- the 2026-06-12 TF gap where PG had the data and TF did not.
-              Log.logAttention "retryHasqlWrite: TuplesOk wire-mismatch — 0-row success, persistence verified by cross-check" $ AE.object ["store" AE..= store]
-              pure (Right mempty)
           | attempt < maxAttempts
           , Hasql.isTransientException e -> do
               let delayMicros = transientBackoffMicros attempt
-              Log.logAttention "retryHasqlWrite: transient error, retrying"
+              Log.logAttention msg
                 $ AE.object
-                  [ "store" AE..= store
+                  [ AEK.fromText key AE..= label
                   , "attempt" AE..= attempt
                   , "max_attempts" AE..= maxAttempts
                   , "backoff_us" AE..= delayMicros
@@ -1132,26 +1133,8 @@ maxReadAttempts = 5
 -- Guards the per-batch project-id / cache lookups that previously dead-lettered
 -- a whole batch on a single connection blip (the 2026-06-21 DLQ flood).
 retryTransientEff :: (Concurrent :> es, IOE :> es, Log :> es) => Int -> Text -> Eff es a -> Eff es a
-retryTransientEff maxAttempts op act = go 1
-  where
-    go attempt =
-      tryAny act >>= \case
-        Right a -> pure a
-        Left e
-          | attempt < maxAttempts
-          , Hasql.isTransientException e -> do
-              let delayMicros = transientBackoffMicros attempt
-              Log.logAttention "retryTransientEff: transient read error, retrying"
-                $ AE.object
-                  [ "op" AE..= op
-                  , "attempt" AE..= attempt
-                  , "max_attempts" AE..= maxAttempts
-                  , "backoff_us" AE..= delayMicros
-                  , "error" AE..= show @Text e
-                  ]
-              threadDelay delayMicros
-              go (attempt + 1)
-          | otherwise -> throwIO e
+retryTransientEff maxAttempts op act =
+  either throwIO pure =<< retryTransientLoop maxAttempts "retryTransientEff: transient read error, retrying" "op" op act
 
 
 -- | Dual-write to PG + TimeFusion concurrently. Both stores are mandatory.
@@ -1332,7 +1315,7 @@ handOffBatches worker caches records = do
 -- uuid[]/jsonb[]; TS assignment-casts text→uuid/jsonb, TF's VariantInsertRewriter
 -- coerces text→Variant), and the array columns (hashes, summary) travel
 -- 0x1F-joined and are rebuilt with @string_to_array(_, chr(31))@.
--- | @usePgTypes@: 'True' for PostgreSQL/TimescaleDB (cast id/JSON to
+-- @usePgTypes@: 'True' for PostgreSQL/TimescaleDB (cast id/JSON to
 -- uuid/jsonb), 'False' for TimeFusion (bare text→Variant). See 'insertUnnestStmt'.
 bulkInsertOtelLogsAndSpans :: (DB es, Log :> es) => Bool -> V.Vector OtelLogsAndSpans -> Eff es BulkInsertResult
 bulkInsertOtelLogsAndSpans usePgTypes records
@@ -1347,7 +1330,7 @@ bulkInsertOtelLogsAndSpans usePgTypes records
 -- Column i's batch values become the i-th unnest array (aliased @cI@); the
 -- SELECT projects @ocSelect@ over that alias (identity for most columns,
 -- @string_to_array@ for the text[] ones).
--- | @usePgTypes@: PostgreSQL/TimescaleDB has no text→uuid/jsonb assignment
+-- @usePgTypes@: PostgreSQL/TimescaleDB has no text→uuid/jsonb assignment
 -- cast, so id + JSON columns are cast explicitly (@::uuid@/@::jsonb@) in the
 -- SELECT — pass 'True'. TimeFusion rejects those OIDs and instead coerces bare
 -- text→Variant (VariantInsertRewriter) — pass 'False'. The array bind params are
@@ -1595,8 +1578,7 @@ mkOtelRow e = do
   isRemote <- case e.context >>= (.is_remote) of
     Nothing -> pure Nothing
     Just t
-      | T.toLower t `elem` ["true", "t", "1"] -> pure (Just True)
-      | T.toLower t `elem` ["false", "f", "0"] -> pure (Just False)
+      | Just b <- lookup (T.toLower t) [("true", True), ("t", True), ("1", True), ("false", False), ("f", False), ("0", False)] -> pure (Just b)
       | otherwise ->
           Nothing
             <$ Log.logAttention
@@ -1929,14 +1911,8 @@ mkSystemLog
   -> OtelLogsAndSpans
 mkSystemLog (UUIDId pid) eventName sev bodyMsg attrs duration ts =
   let
-    -- OTel severity numbers (each level spans 4).
-    sevNum = case sev of
-      SLTrace -> 1
-      SLDebug -> 5
-      SLInfo -> 9
-      SLWarn -> 13
-      SLError -> 17
-      SLFatal -> 21
+    -- OTel severity numbers: TRACE=1, and each level spans 4.
+    sevNum = 1 + 4 * fromEnum sev
     levelText = T.toUpper $ toText $ encodeEnumSC @"SL" sev
     resource = Map.fromList [("service.name", AE.String "SYSTEM")]
    in
@@ -2007,12 +1983,8 @@ tag :: T.Text -> T.Text -> T.Text -> T.Text
 tag n s v = n <> ";" <> s <> "⇒" <> v
 
 
-truncT :: Int -> T.Text -> T.Text
-truncT n t = if T.length t > n then T.take (n - 3) t <> "..." else t
-
-
 encTrunc :: AE.ToJSON a => Int -> a -> T.Text
-encTrunc n = truncT n . decodeUtf8 . AE.encode
+encTrunc n x = let t = decodeUtf8 (AE.encode x) in if T.length t > n then T.take (n - 3) t <> "..." else t
 
 
 generateLogSummary :: OtelLogsAndSpans -> V.Vector T.Text
@@ -2139,15 +2111,8 @@ urlBasename url =
 -- Prefers accessible labels over raw selectors.
 clickTargetLabel :: Maybe (Map Text AE.Value) -> Maybe T.Text
 clickTargetLabel attrs =
-  atMapText "target.aria_label" attrs
-    <|> atMapText "aria.label" attrs
-    <|> atMapText "target.text_content" attrs
-    <|> atMapText "text_content" attrs
-    <|> atMapText "target.element" attrs
-    <|> atMapText "target_element" attrs
-    <|> atMapText "target.tag_name" attrs
-    <|> atMapText "target.xpath" attrs
-    <|> atMapText "event_type" attrs
+  asum
+    $ map (`atMapText` attrs) ["target.aria_label", "aria.label", "target.text_content", "text_content", "target.element", "target_element", "target.tag_name", "target.xpath", "event_type"]
 
 
 -- | Format a byte count compactly (e.g. 340000 → "340KB").
@@ -2203,7 +2168,7 @@ generateSpanSummary otel =
     frontendLabel =
       frontendCat *> case spanNameT of
         n | n `elem` ["documentLoad", "documentFetch", "navigation", "route.change"] -> tag "url" "text-textStrong" <$> urlPathOrFull
-        n | n == "resourceFetch" || n == "resource" -> tag "resource" "text-textStrong" . urlBasename <$> (urlFull <|> urlPathOrFull)
+        n | n `elem` ["resourceFetch", "resource"] -> tag "resource" "text-textStrong" . urlBasename <$> (urlFull <|> urlPathOrFull)
         n | n `elem` ["click", "submit", "keydown", "keyup"] -> tag "target" "text-textStrong" <$> clickTargetLabel attrsM
         "longtask" -> tag "blocked" "text-textStrong" . ("main thread " <>) . durMs <$> otel.duration
         n | "web-vital." `T.isPrefixOf` n -> (\v -> tag "value" "text-textStrong" (v <> "ms")) <$> atMapText "value" attrsM
@@ -2278,7 +2243,7 @@ statusCodeStyle code
 
 
 methodStyle :: T.Text -> T.Text
-methodStyle method = case method of
+methodStyle = \case
   "GET" -> "badge-GET"
   "POST" -> "badge-POST"
   "PUT" -> "badge-PUT"

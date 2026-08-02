@@ -43,7 +43,9 @@ module Pkg.AI (
 
 import Control.Lens ((^?))
 import Data.Aeson qualified as AE
-import Data.Aeson.Lens (key, _Array, _String)
+import Data.Aeson.Key qualified as AEK
+import Data.Aeson.Lens (key, _Array, _Number, _String)
+import Data.Aeson.Types (parseMaybe)
 import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.LLM (callOpenAIAPI)
 import Data.Effectful.LLM qualified as ELLM
@@ -128,80 +130,38 @@ getNormalTupleResponse response =
   let lines' = lines $ T.strip response
       queryLine = fromMaybe "" (viaNonEmpty head lines')
       vizTypeM = viaNonEmpty head (drop 1 lines') >>= parseVisualizationType
-      cleanedQuery =
-        T.strip
-          $ if "```" `T.isPrefixOf` queryLine
-            then
-              let withoutFirstLine = maybe "" (unlines . toList) $ viaNonEmpty tail (lines queryLine)
-                  withoutBackticks = T.takeWhile (/= '`') withoutFirstLine
-               in T.strip withoutBackticks
-            else queryLine
-   in if "Please provide a query"
-        `T.isInfixOf` cleanedQuery
-        || "I need more"
-        `T.isInfixOf` cleanedQuery
-        || "Could you please"
-        `T.isInfixOf` cleanedQuery
-        || T.length cleanedQuery
-        < 3
+      -- a fenced first line has no query content left once the fence is dropped
+      cleanedQuery = if "```" `T.isPrefixOf` queryLine then "" else T.strip queryLine
+   in if T.length cleanedQuery < 3 || any (`T.isInfixOf` cleanedQuery) ["Please provide a query", "I need more", "Could you please"]
         then Left "INVALID_QUERY_ERROR"
         else Right (cleanedQuery, vizTypeM)
 
 
--- | Parse LLM response from plain text (no tool calls)
---
--- Converts raw LLM JSON text into structured LLMResponse. Sets toolCalls to Nothing.
---
--- Use this when:
--- - Parsing stored chat messages from database
--- - Testing with mock responses
--- - Processing non-agentic LLM calls (no tools available)
---
--- The function handles common LLM output issues:
--- - Strips markdown code blocks (```json ... ```)
--- - Fixes trailing commas in JSON
+-- | Parse raw LLM text into an 'LLMResponse' (@toolCalls@ always 'Nothing').
+-- Tolerates markdown fences, trailing commas and partially invalid fields, and
+-- falls back to an explanation-only response for non-JSON text.
 parseLLMResponse :: Text -> Either Text LLMResponse
 parseLLMResponse response =
   let cleaned = fixTrailingCommas $ stripCodeBlock response
-      responseBS = encodeUtf8 cleaned
-      -- Try decoding as full JSON first
-      fullDecode = first toText $ AE.eitherDecode (fromStrict responseBS)
-      -- If that fails, try partial decode (handle missing widgets field)
-      partialDecode = case AE.eitherDecode @AE.Value (fromStrict responseBS) of
-        Left _ -> Left "Not valid JSON"
-        Right val ->
-          let widgetList = maybe [] (V.toList >=> \v -> case AE.fromJSON @Widget.Widget v of AE.Success w -> [w]; _ -> []) (val ^? key "widgets" . _Array)
-              timePicker = val ^? key "time_range" >>= \v -> case AE.fromJSON v of AE.Success tp -> Just tp; _ -> Nothing
-           in Right
-                LLMResponse
-                  { explanation = val ^? key "explanation" . _String
-                  , query = val ^? key "query" . _String
-                  , visualization = val ^? key "visualization" . _String
-                  , widgets = widgetList
-                  , timeRange = timePicker
-                  , toolCalls = Nothing
-                  }
+      valM = rightToMaybe $ AE.eitherDecodeStrict' @AE.Value (encodeUtf8 cleaned)
+      -- Partial decode: tolerates missing/invalid widgets and time_range fields
+      partial =
+        valM <&> \val ->
+          LLMResponse
+            { explanation = val ^? key "explanation" . _String
+            , query = val ^? key "query" . _String
+            , visualization = val ^? key "visualization" . _String
+            , widgets = maybe [] (mapMaybe (parseMaybe AE.parseJSON) . V.toList) (val ^? key "widgets" . _Array)
+            , timeRange = val ^? key "time_range" >>= parseMaybe AE.parseJSON
+            , toolCalls = Nothing
+            }
       -- Fallback: treat plain text as explanation-only response
-      textFallback = Right LLMResponse{explanation = Just cleaned, query = Nothing, visualization = Nothing, widgets = [], timeRange = Nothing, toolCalls = Nothing}
-   in case fullDecode of
-        Right r -> Right r
-        Left _ -> case partialDecode of
-          Right r -> Right r
-          Left _ -> textFallback
+      textFallback = LLMResponse{explanation = Just cleaned, query = Nothing, visualization = Nothing, widgets = [], timeRange = Nothing, toolCalls = Nothing}
+   in Right $ fromMaybe (fromMaybe textFallback partial) (valM >>= parseMaybe AE.parseJSON)
 
 
--- | Parse agentic execution result (preserves tool call metadata)
---
--- Wraps parseLLMResponse but PRESERVES tool execution history from agentic chat.
--- This is critical for widget data reuse - tool calls contain cached query results
--- in their rawData field, avoiding re-execution of expensive queries.
---
--- Use this when:
--- - Processing live agentic chat results (runAgenticChatWithHistory)
--- - Need tool call debugging info
--- - Widgets should reuse tool-executed query data
---
--- Flow: AgenticChatResult (response + tool calls) → parse text → inject tool metadata → LLMResponse
+-- | Like 'parseLLMResponse' but keeps the tool-call history: each call's @rawData@
+-- carries already-executed query results, so widgets don't re-run expensive queries.
 parseAgenticResponse :: AgenticChatResult -> Either Text LLMResponse
 parseAgenticResponse (AgenticChatResult{response, toolCalls = tcs}) = do
   LLMResponse{explanation, query, visualization, widgets, timeRange} <- parseLLMResponse response
@@ -213,30 +173,27 @@ fixTrailingCommas :: Text -> Text
 fixTrailingCommas = T.replace ",\n}" "\n}" . T.replace ", }" "}" . T.replace ",}" "}" . T.replace ",\n]" "\n]" . T.replace ", ]" "]" . T.replace ",]" "]"
 
 
-vizTypeMap :: Map.Map Text Text
-vizTypeMap =
-  Map.fromList
-    [ ("bar", "timeseries")
-    , ("line", "timeseries_line")
-    , ("timeseries", "timeseries")
-    , ("timeseries_line", "timeseries_line")
-    , ("bar chart", "timeseries")
-    , ("line chart", "timeseries_line")
-    , ("time series", "timeseries")
-    , ("time series line", "timeseries_line")
-    , ("distribution", "distribution")
-    , ("pie_chart", "pie_chart")
-    , ("pie", "pie_chart")
-    , ("top_list", "top_list")
-    , ("table", "table")
-    , ("stat", "stat")
-    , ("heatmap", "heatmap")
-    ]
-{-# NOINLINE vizTypeMap #-}
-
-
 parseVisualizationType :: Text -> Maybe Text
 parseVisualizationType = flip Map.lookup vizTypeMap
+  where
+    vizTypeMap =
+      Map.fromList
+        [ ("bar", "timeseries")
+        , ("line", "timeseries_line")
+        , ("timeseries", "timeseries")
+        , ("timeseries_line", "timeseries_line")
+        , ("bar chart", "timeseries")
+        , ("line chart", "timeseries_line")
+        , ("time series", "timeseries")
+        , ("time series line", "timeseries_line")
+        , ("distribution", "distribution")
+        , ("pie_chart", "pie_chart")
+        , ("pie", "pie_chart")
+        , ("top_list", "top_list")
+        , ("table", "table")
+        , ("stat", "stat")
+        , ("heatmap", "heatmap")
+        ]
 
 
 -- | KQL documentation for AI prompts - shared between Log Explorer and Anomalies
@@ -468,62 +425,51 @@ defaultAgenticConfig pid =
 -- * Helper functions
 
 
-getIntArg :: Text -> Map.Map Text AE.Value -> Maybe Int
-getIntArg k args = Map.lookup k args >>= \case AE.Number n -> Just (round n); _ -> Nothing
-
-
 getTextArg :: Text -> Map.Map Text AE.Value -> Maybe Text
-getTextArg k args = Map.lookup k args >>= \case AE.String s -> Just s; _ -> Nothing
+getTextArg k args = Map.lookup k args >>= (^? _String)
 
 
 getLimitArg :: Text -> Int -> Int -> Map.Map Text AE.Value -> Int
-getLimitArg k maxVal defVal args = min maxVal $ fromMaybe defVal (getIntArg k args)
-
-
--- | Join Vector of Text with separator using fold (avoids intermediate list)
-vIntercalate :: Text -> V.Vector Text -> Text
-vIntercalate sep = V.ifoldl' (\acc i x -> if i == 0 then x else acc <> sep <> x) ""
+getLimitArg k maxVal defVal args = min maxVal $ maybe defVal round $ Map.lookup k args >>= (^? _Number)
 
 
 formatSummarizeResults :: V.Vector (V.Vector AE.Value) -> Text
-formatSummarizeResults = vIntercalate ", " . V.mapMaybe formatRow
+formatSummarizeResults = T.intercalate ", " . V.toList . V.mapMaybe formatRow
   where
-    formatRow :: V.Vector AE.Value -> Maybe Text
     formatRow row
       | V.length row == 2 = Just $ "\"" <> unwrapJsonPrimValue True (row V.! 0) <> "\" (" <> unwrapJsonPrimValue True (row V.! 1) <> ")"
       | otherwise = Nothing
 
 
 formatSampleLogs :: Int -> V.Vector (V.Vector AE.Value) -> Text
-formatSampleLogs maxBody = vIntercalate "\n" . V.mapMaybe formatRow
+formatSampleLogs maxBody = T.intercalate "\n" . V.toList . V.mapMaybe formatRow
   where
-    formatRow :: V.Vector AE.Value -> Maybe Text
     formatRow row
       | V.length row >= 4 =
           let (lvl, nm, svc) = (row V.! 0, row V.! 1, row V.! 2)
-              body = vIntercalate " " $ V.map (unwrapJsonPrimValue True) $ V.drop 3 row
+              body = unwords $ V.toList $ V.map (unwrapJsonPrimValue True) $ V.drop 3 row
            in Just $ "  - [" <> unwrapJsonPrimValue True lvl <> "] " <> unwrapJsonPrimValue True nm <> " (" <> unwrapJsonPrimValue True svc <> "): " <> T.take maxBody body
       | otherwise = Nothing
 
 
 formatQueryResults :: Int -> V.Vector (V.Vector AE.Value) -> Int -> Text
 formatQueryResults maxRows results count =
-  let formatted = vIntercalate "\n" $ V.map formatRow $ V.take maxRows results
-      truncated = if count > maxRows then "\n... +" <> show (count - maxRows) <> " more" else ""
-   in "Results (" <> show count <> " rows):\n" <> formatted <> truncated
-  where
-    formatRow :: V.Vector AE.Value -> Text
-    formatRow row = "  " <> vIntercalate " | " (V.map (unwrapJsonPrimValue True) row)
+  "Results ("
+    <> show count
+    <> " rows):\n"
+    <> T.intercalate "\n" ["  " <> T.intercalate " | " (V.toList $ V.map (unwrapJsonPrimValue True) row) | row <- V.toList (V.take maxRows results)]
+    <> memptyIfFalse (count > maxRows) ("\n... +" <> show (count - maxRows) <> " more")
+
+
+-- | Render one facet field as "column: \"v1\" (n), \"v2\" (n)…", keeping at most @n@ values.
+formatFacetField :: (FacetValue -> Text) -> Int -> Text -> [FacetValue] -> Text
+formatFacetField render n fieldName values = T.replace "___" "." fieldName <> ": " <> T.intercalate ", " (map render $ take n values)
 
 
 formatFacetSummary :: FacetSummary -> Text
 formatFacetSummary summary =
   let FacetData facetMap = summary.facetJson
-      formatField (fieldName, values) =
-        let columnName = T.replace "___" "." fieldName
-            valueStrs = map (\(FacetValue v c) -> "\"" <> v <> "\" (" <> show c <> ")") $ take 10 values
-         in columnName <> ": " <> T.intercalate ", " valueStrs
-   in "Facet data:\n" <> T.intercalate "\n" (map formatField $ HM.toList facetMap)
+   in "Facet data:\n" <> T.intercalate "\n" [formatFacetField (\(FacetValue v c) -> "\"" <> v <> "\" (" <> show c <> ")") 10 f vs | (f, vs) <- HM.toList facetMap]
 
 
 keyFacetFields :: [Text]
@@ -540,84 +486,47 @@ keyFacetFields =
 
 
 formatFacetContext :: Maybe FacetSummary -> Text
-formatFacetContext = \case
-  Nothing -> ""
-  Just summary ->
-    let FacetData facetMap = summary.facetJson
-        formatField fieldName =
-          HM.lookup fieldName facetMap <&> \values ->
-            let columnName = T.replace "___" "." fieldName
-                valueStrs = map (\(FacetValue v _) -> "\"" <> v <> "\"") $ take 8 values
-             in columnName <> ": " <> T.intercalate ", " valueStrs
-        formattedFacets = mapMaybe formatField keyFacetFields
-     in if null formattedFacets
-          then ""
-          else
-            unlines
-              [ ""
-              , "PROJECT DATA CONTEXT (popular values for key fields):"
-              , T.intercalate "\n" formattedFacets
-              , ""
-              ]
+formatFacetContext = maybe "" \summary ->
+  let FacetData facetMap = summary.facetJson
+      formattedFacets = mapMaybe (\f -> formatFacetField (\(FacetValue v _) -> "\"" <> v <> "\"") 8 f <$> HM.lookup f facetMap) keyFacetFields
+   in if null formattedFacets
+        then ""
+        else unlines ["", "PROJECT DATA CONTEXT (popular values for key fields):", T.intercalate "\n" formattedFacets, ""]
 
 
 -- * OpenAI Tool Definitions
 
 
-mkToolDef :: Text -> Text -> AE.Value -> OAITool.Tool
-mkToolDef name desc params =
+-- | Tool definition from (property name, JSON type, description) triples; the first
+-- property is the required one (none required when the list is empty).
+mkToolDef :: Text -> Text -> [(Text, Text, Text)] -> OAITool.Tool
+mkToolDef name desc props =
   OAITool.Tool_Function
     OAITool.Function
       { OAITool.description = Just desc
       , OAITool.name = name
-      , OAITool.parameters = Just params
+      , OAITool.parameters =
+          Just
+            $ AE.object
+              ( [ "type" AE..= ("object" :: Text)
+                , "properties" AE..= AE.object [AEK.fromText k AE..= AE.object ["type" AE..= t, "description" AE..= d] | (k, t, d) <- props]
+                ]
+                  <> ["required" AE..= map (\(k, _, _) -> k) (take 1 props) | not (null props)]
+              )
       , OAITool.strict = Just False
       }
 
 
-mkSimpleTool :: Text -> Text -> OAITool.Tool
-mkSimpleTool name desc = mkToolDef name desc $ AE.object ["type" AE..= ("object" :: Text), "properties" AE..= AE.object []]
-
-
-mkProp :: Text -> Text -> AE.Value
-mkProp typ desc = AE.object ["type" AE..= typ, "description" AE..= desc]
-
-
 allToolDefs :: [OAITool.Tool]
 allToolDefs =
-  [ mkToolDef "get_field_values" "Get distinct values for a specific field"
-      $ AE.object
-        [ "type" AE..= ("object" :: Text)
-        , "properties" AE..= AE.object [("field", mkProp "string" "Field name (e.g., resource.service.name)"), ("limit", mkProp "integer" "Max values (default 10)")]
-        , "required" AE..= (["field"] :: [Text])
-        ]
-  , mkSimpleTool "get_services" "Get list of services in this project"
-  , mkToolDef "count_query" "Get count of results for a KQL query"
-      $ AE.object
-        [ "type" AE..= ("object" :: Text)
-        , "properties" AE..= AE.object [("query", mkProp "string" "KQL query to count")]
-        , "required" AE..= (["query"] :: [Text])
-        ]
-  , mkToolDef "sample_logs" "Get sample log entries matching a query"
-      $ AE.object
-        [ "type" AE..= ("object" :: Text)
-        , "properties" AE..= AE.object [("query", mkProp "string" "KQL query to match"), ("limit", mkProp "integer" "Max samples (default 3, max 5)")]
-        , "required" AE..= (["query"] :: [Text])
-        ]
-  , mkSimpleTool "get_facets" "Get precomputed facets for common fields like services, status codes, methods"
-  , mkSimpleTool "get_schema" "Get schema of available fields in the log/span data"
-  , mkToolDef "run_query" "Execute a KQL query and return results"
-      $ AE.object
-        [ "type" AE..= ("object" :: Text)
-        , "properties" AE..= AE.object [("query", mkProp "string" "KQL query to execute"), ("limit", mkProp "integer" "Max results (default 20)")]
-        , "required" AE..= (["query"] :: [Text])
-        ]
-  , mkToolDef "run_sql_query" "Execute raw SQL on otel_logs_and_spans table. PREFER KQL queries (run_query) when possible - use SQL only for complex JOINs or aggregations not expressible in KQL"
-      $ AE.object
-        [ "type" AE..= ("object" :: Text)
-        , "properties" AE..= AE.object [("query", mkProp "string" "SQL SELECT query (project_id filter auto-injected for security)"), ("limit", mkProp "integer" "Max results (default 20, max 100)")]
-        , "required" AE..= (["query"] :: [Text])
-        ]
+  [ mkToolDef "get_field_values" "Get distinct values for a specific field" [("field", "string", "Field name (e.g., resource.service.name)"), ("limit", "integer", "Max values (default 10)")]
+  , mkToolDef "get_services" "Get list of services in this project" []
+  , mkToolDef "count_query" "Get count of results for a KQL query" [("query", "string", "KQL query to count")]
+  , mkToolDef "sample_logs" "Get sample log entries matching a query" [("query", "string", "KQL query to match"), ("limit", "integer", "Max samples (default 3, max 5)")]
+  , mkToolDef "get_facets" "Get precomputed facets for common fields like services, status codes, methods" []
+  , mkToolDef "get_schema" "Get schema of available fields in the log/span data" []
+  , mkToolDef "run_query" "Execute a KQL query and return results" [("query", "string", "KQL query to execute"), ("limit", "integer", "Max results (default 20)")]
+  , mkToolDef "run_sql_query" "Execute raw SQL on otel_logs_and_spans table. PREFER KQL queries (run_query) when possible - use SQL only for complex JOINs or aggregations not expressible in KQL" [("query", "string", "SQL SELECT query (project_id filter auto-injected for security)"), ("limit", "integer", "Max results (default 20, max 100)")]
   ]
 
 
@@ -652,22 +561,20 @@ stripCodeBlock t
 
 runAgenticQuery :: (DB es, ELLM.LLM :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Text -> Text -> Text -> Eff es (Either Text LLMResponse)
 runAgenticQuery config userQuery model apiKey = do
-  now <- Time.currentTime
-  let sysPrompt = buildSystemPrompt config now
-      systemMsg = LLM.Message LLM.System sysPrompt LLM.defaultMessageData
-      userMsg = LLM.Message LLM.User userQuery LLM.defaultMessageData
-      chatHistory = systemMsg :| [userMsg]
-      params =
-        OpenAIV1._CreateChatCompletion
-          { OpenAIV1.model = Models.Model model
-          , OpenAIV1.tools = Just $ V.fromList allToolDefs
-          , OpenAIV1.messages = V.empty
-          }
-  -- Parse the final text only (toolCalls stays Nothing): runAgenticQuery's consumers
-  -- (MCP, bots, log explorer) render explanation/query/widgets and never read toolCalls,
-  -- so injecting tool metadata here would only bloat their responses. The tool-data-reuse
-  -- path is runAgenticChatWithHistory -> AgenticChatResult (used by Anomalies).
-  (>>= parseLLMResponse . (.response)) <$> runAgenticLoopRaw config apiKey chatHistory params 0 []
+  (systemMsg, userMsg, params) <- agenticSetup config userQuery model
+  -- Text only: these consumers (MCP, bots, log explorer) never read toolCalls; the
+  -- tool-data-reuse path is runAgenticChatWithHistory -> AgenticChatResult.
+  (>>= parseLLMResponse . (.response)) <$> runAgenticLoopRaw config apiKey (systemMsg :| [userMsg]) params 0 []
+
+
+-- | System + user messages and chat params shared by both agentic entry points
+agenticSetup :: Time.Time :> es => AgenticConfig -> Text -> Text -> Eff es (LLM.Message, LLM.Message, OpenAIV1.CreateChatCompletion)
+agenticSetup config userQuery model =
+  Time.currentTime <&> \now ->
+    ( LLM.Message LLM.System (buildSystemPrompt config now) LLM.defaultMessageData
+    , LLM.Message LLM.User userQuery LLM.defaultMessageData
+    , OpenAIV1._CreateChatCompletion{OpenAIV1.model = Models.Model model, OpenAIV1.tools = Just $ V.fromList allToolDefs, OpenAIV1.messages = V.empty}
+    )
 
 
 -- | Convert a DB chat message to an LLM message
@@ -683,8 +590,8 @@ dbMessageToLLMMessage msg =
     }
 
 
--- | Run agentic chat with DB-persisted history, returns response with tool call info
--- This is more flexible than runAgenticQueryWithHistory as it doesn't parse the response
+-- | Run agentic chat with DB-persisted history; returns the raw response plus tool call info
+-- (unlike runAgenticQuery, which parses the response and drops tool metadata)
 runAgenticChatWithHistory
   :: (DB es, ELLM.LLM :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es)
   => AgenticConfig
@@ -693,24 +600,12 @@ runAgenticChatWithHistory
   -> Text
   -> Eff es (Either Text AgenticChatResult)
 runAgenticChatWithHistory config userQuery model apiKey = do
-  now <- Time.currentTime
-  let sysPrompt = buildSystemPrompt config now
-      systemMsg = LLM.Message LLM.System sysPrompt LLM.defaultMessageData
-      userMsg = LLM.Message LLM.User userQuery LLM.defaultMessageData
-      params =
-        OpenAIV1._CreateChatCompletion
-          { OpenAIV1.model = Models.Model model
-          , OpenAIV1.tools = Just $ V.fromList allToolDefs
-          , OpenAIV1.messages = V.empty
-          }
-  case config.conversationId of
-    Nothing -> runAgenticLoopRaw config apiKey (systemMsg :| [userMsg]) params 0 []
-    Just convId -> do
-      dbMessages <- Issues.selectChatHistory convId
-      let historyMsgs = map dbMessageToLLMMessage dbMessages
-          chatHistory = systemMsg :| (historyMsgs <> [userMsg])
-      Issues.insertChatMessage config.projectId convId Issues.ChatUser userQuery Nothing Nothing
-      runAgenticLoopRaw config apiKey chatHistory params 0 []
+  (systemMsg, userMsg, params) <- agenticSetup config userQuery model
+  -- history is read before the new user message is persisted, so it isn't duplicated
+  historyMsgs <-
+    config.conversationId & maybe (pure []) \convId ->
+      map dbMessageToLLMMessage <$> (Issues.selectChatHistory convId <* Issues.insertChatMessage config.projectId convId Issues.ChatUser userQuery Nothing Nothing)
+  runAgenticLoopRaw config apiKey (systemMsg :| (historyMsgs <> [userMsg])) params 0 []
 
 
 -- | Raw agentic loop that returns the response with tool call history
@@ -718,20 +613,18 @@ runAgenticLoopRaw :: (DB es, ELLM.LLM :> es, Labeled "timefusion" Hasql :> es, L
 runAgenticLoopRaw config apiKey chatHistory params iteration accumulated
   | iteration >= config.maxIterations = do
       Log.logTrace "AI agentic loop forcing final response" (AE.object ["iteration" AE..= iteration, "maxIterations" AE..= config.maxIterations])
-      ELLM.callAgenticChat chatHistory params{OpenAIV1.tools = Nothing} apiKey >>= either handleError \responseMsg -> do
-        Log.logTrace "AI final response" (AE.object ["iteration" AE..= iteration, "response" AE..= LLM.content responseMsg, "responseLength" AE..= T.length (LLM.content responseMsg)])
-        pure $ Right AgenticChatResult{response = LLM.content responseMsg, toolCalls = accumulated}
+      ELLM.callAgenticChat chatHistory params{OpenAIV1.tools = Nothing} apiKey >>= either handleError (finalResponse "AI final response")
   | otherwise = do
       let userQuery = maybe "" LLM.content $ viaNonEmpty last $ filter (\m -> LLM.role m == LLM.User) $ toList chatHistory
       Log.logTrace "AI agentic loop iteration" (AE.object ["iteration" AE..= iteration, "historySize" AE..= length chatHistory, "userQuery" AE..= userQuery])
       ELLM.callAgenticChat chatHistory params apiKey >>= either handleError \responseMsg ->
-        maybe (logFinalResponse responseMsg) (processToolCalls responseMsg) (LLM.toolCalls $ LLM.messageData responseMsg)
+        maybe (finalResponse "AI final response (no tool calls)" responseMsg) (processToolCalls responseMsg) (LLM.toolCalls $ LLM.messageData responseMsg)
   where
     handleError err = Log.logAttention "LLM API error" (AE.object ["error" AE..= show @Text err]) $> Left "LLM service temporarily unavailable"
 
-    logFinalResponse responseMsg = do
-      Log.logTrace "AI final response (no tool calls)" (AE.object ["iteration" AE..= iteration, "response" AE..= LLM.content responseMsg, "responseLength" AE..= T.length (LLM.content responseMsg)])
-      pure $ Right AgenticChatResult{response = LLM.content responseMsg, toolCalls = accumulated}
+    finalResponse label responseMsg =
+      Log.logTrace label (AE.object ["iteration" AE..= iteration, "response" AE..= LLM.content responseMsg, "responseLength" AE..= T.length (LLM.content responseMsg)])
+        $> Right AgenticChatResult{response = LLM.content responseMsg, toolCalls = accumulated}
 
     processToolCalls responseMsg toolCallList = do
       Log.logTrace "AI requesting tool calls" (AE.object ["iteration" AE..= iteration, "tools" AE..= map (LLM.toolFunctionName . LLM.toolCallFunction) toolCallList])
@@ -796,64 +689,50 @@ toolError :: Text -> Text -> Map.Map Text AE.Value -> Text
 toolError tool msg args = "Error in " <> tool <> ": " <> msg <> " (received: " <> show (Map.keys args) <> ")"
 
 
+-- | Run the continuation on a required text argument, or report it missing
+withArg :: Applicative f => Text -> Text -> Map.Map Text AE.Value -> (Text -> f Text) -> f Text
+withArg tool k args f = maybe (pure $ toolError tool ("missing '" <> k <> "'") args) f (getTextArg k args)
+
+
+-- | KQL tool whose raw results are never surfaced to the caller
+runKqlText :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Text -> [Text] -> ((V.Vector (V.Vector AE.Value), [Text], Int) -> Text) -> Eff es Text
+runKqlText config kqlQuery cols f = (.formatted) <$> runKqlWithRawData config kqlQuery cols ((,AE.Null) . f)
+
+
+withTake :: Int -> Text -> Text
+withTake lim q = if "| take" `T.isInfixOf` q then q else q <> " | take " <> show lim
+
+
 executeGetFieldValues :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
-executeGetFieldValues config args = case getTextArg "field" args of
-  Just field -> do
-    let lim = getLimitArg "limit" config.limits.maxFieldValues config.limits.defaultFieldLimit args
-        kqlQuery = "| summarize count() by " <> field <> " | sort by count_ desc | take " <> show lim
-    (.formatted)
-      <$> runKqlWithRawData
-        config
-        kqlQuery
-        []
-        ( \(results, _, _) ->
-            ("Values for '" <> field <> "': " <> formatSummarizeResults results, AE.Null)
-        )
-  _ -> pure $ toolError "get_field_values" "missing 'field'" args
+executeGetFieldValues config args = withArg "get_field_values" "field" args \field ->
+  runKqlText
+    config
+    ("| summarize count() by " <> field <> " | sort by count_ desc | take " <> show (getLimitArg "limit" config.limits.maxFieldValues config.limits.defaultFieldLimit args))
+    []
+    \(results, _, _) -> "Values for '" <> field <> "': " <> formatSummarizeResults results
 
 
 executeGetServices :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Eff es Text
-executeGetServices config = do
-  let kqlQuery = "| summarize count() by resource.service.name | sort by count_ desc | take " <> show config.limits.maxServices
-  (.formatted)
-    <$> runKqlWithRawData
-      config
-      kqlQuery
-      []
-      ( \(results, _, _) ->
-          ("Available services: " <> formatSummarizeResults results, AE.Null)
-      )
+executeGetServices config =
+  runKqlText
+    config
+    ("| summarize count() by resource.service.name | sort by count_ desc | take " <> show config.limits.maxServices)
+    []
+    \(results, _, _) -> "Available services: " <> formatSummarizeResults results
 
 
 executeCountQuery :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
-executeCountQuery config args = case getTextArg "query" args of
-  Just kqlQuery ->
-    (.formatted)
-      <$> runKqlWithRawData
-        config
-        kqlQuery
-        []
-        ( \(_, _, count) ->
-            ("Query '" <> kqlQuery <> "' matches " <> show count <> " entries", AE.Null)
-        )
-  _ -> pure $ toolError "count_query" "missing 'query'" args
+executeCountQuery config args = withArg "count_query" "query" args \kqlQuery ->
+  runKqlText config kqlQuery [] \(_, _, count) -> "Query '" <> kqlQuery <> "' matches " <> show count <> " entries"
 
 
 executeSampleLogs :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
-executeSampleLogs config args = case getTextArg "query" args of
-  Just kqlQuery -> do
-    let lim = getLimitArg "limit" config.limits.maxSampleLogs config.limits.defaultSampleLimit args
-        fullQuery = if "| take" `T.isInfixOf` kqlQuery then kqlQuery else kqlQuery <> " | take " <> show lim
-        sampleColumns = ["level", "name", "resource.service.name", "body"]
-    (.formatted)
-      <$> runKqlWithRawData
-        config
-        fullQuery
-        sampleColumns
-        ( \(results, _, _) ->
-            ("Sample logs:\n" <> formatSampleLogs config.limits.maxBodyPreview results, AE.Null)
-        )
-  _ -> pure $ toolError "sample_logs" "missing 'query'" args
+executeSampleLogs config args = withArg "sample_logs" "query" args \kqlQuery ->
+  runKqlText
+    config
+    (withTake (getLimitArg "limit" config.limits.maxSampleLogs config.limits.defaultSampleLimit args) kqlQuery)
+    ["level", "name", "resource.service.name", "body"]
+    \(results, _, _) -> "Sample logs:\n" <> formatSampleLogs config.limits.maxBodyPreview results
 
 
 executeGetFacets :: AgenticConfig -> Text
@@ -872,10 +751,8 @@ runKqlWithRawData config kqlQuery cols formatResult = case parseQueryToAST kqlQu
 
 executeRunQuery :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es ToolResult
 executeRunQuery config args = case getTextArg "query" args of
-  Just query -> do
-    let lim = getLimitArg "limit" config.limits.maxQueryResults config.limits.maxDisplayRows args
-        fullQuery = if "| take" `T.isInfixOf` query then query else query <> " | take " <> show lim
-    runKqlWithRawData config fullQuery [] $ \(results, headers, count) ->
+  Just query ->
+    runKqlWithRawData config (withTake (getLimitArg "limit" config.limits.maxQueryResults config.limits.maxDisplayRows args) query) [] \(results, headers, count) ->
       ( formatQueryResults config.limits.maxDisplayRows results count
       , AE.object ["headers" AE..= headers, "data" AE..= results, "count" AE..= count]
       )
@@ -883,13 +760,8 @@ executeRunQuery config args = case getTextArg "query" args of
 
 
 executeSqlQuery :: (DB es, Labeled "timefusion" Hasql :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
-executeSqlQuery config args = case getTextArg "query" args of
-  Just query -> do
-    let lim = getLimitArg "limit" config.limits.maxQueryResults config.limits.maxDisplayRows args
-    resultE <- executeSecuredQuery config.useTimefusion config.projectId query lim
-    pure $ case resultE of
-      Left err -> "SQL Error: " <> err <> "\nNote: KQL queries (run_query) are preferred when possible."
-      Right results ->
-        let count = V.length results
-         in formatQueryResults config.limits.maxDisplayRows results count
-  _ -> pure $ toolError "run_sql_query" "missing 'query'" args
+executeSqlQuery config args = withArg "run_sql_query" "query" args \query ->
+  executeSecuredQuery config.useTimefusion config.projectId query (getLimitArg "limit" config.limits.maxQueryResults config.limits.maxDisplayRows args)
+    <&> either
+      (\err -> "SQL Error: " <> err <> "\nNote: KQL queries (run_query) are preferred when possible.")
+      (\results -> formatQueryResults config.limits.maxDisplayRows results (V.length results))

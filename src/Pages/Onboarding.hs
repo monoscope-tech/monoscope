@@ -212,7 +212,7 @@ onboardingStepSkipped :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHead
 onboardingStepSkipped pid stepM = do
   (_, project) <- Projects.sessionAndProject pid
   whenJust stepM $ markStepCompleted pid project.onboardingStepsCompleted
-  redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=" <> maybe "Info" getNextStep stepM
+  redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=" <> bool "Info" "Pricing" (stepM == Just "Integration")
   addRespHeaders ""
 
 
@@ -226,11 +226,6 @@ dismissChecklistH pid = do
 markStepCompleted :: (Hasql.Hasql :> es, IOE :> es) => Projects.ProjectId -> V.Vector Text -> Text -> Eff es ()
 markStepCompleted pid stepsCompleted step =
   Hasql.interpExecute_ [HI.sql| update projects.projects set onboarding_steps_completed=#{insertIfNotExist step stepsCompleted} where id=#{pid} |]
-
-
-getNextStep :: Text -> Text
-getNextStep "Integration" = "Pricing"
-getNextStep _ = "Info"
 
 
 phoneEmailPostH :: Projects.ProjectId -> NotifChannelForm -> ATAuthCtx (RespHeaders OnboardingPhoneEmailsPost)
@@ -252,15 +247,11 @@ checkIntegrationGet pid languageM = do
     Nothing -> addErrorToast "No events found yet" Nothing >> addRespHeaders ""
     Just _ -> do
       markStepCompleted pid project.onboardingStepsCompleted "Integration"
-      case languageM of
-        Just _ -> addRespHeaders verifiedCheck
-        Nothing -> redirectCS ("/p/" <> pid.toText <> "/onboarding?step=Pricing") >> addRespHeaders ""
-
-
-verifiedCheck :: Html ()
-verifiedCheck = div_ [class_ "flex items-center gap-2 text-textSuccess"] do
-  span_ "verified"
-  faSprite_ "circle-check" "regular" "h-4 w-4"
+      if isJust languageM
+        then addRespHeaders $ div_ [class_ "flex items-center gap-2 text-textSuccess"] do
+          span_ "verified"
+          faSprite_ "circle-check" "regular" "h-4 w-4"
+        else redirectCS ("/p/" <> pid.toText <> "/onboarding?step=Pricing") >> addRespHeaders ""
 
 
 onboardingInfoPostH :: Projects.ProjectId -> OnboardingInfoForm -> ATAuthCtx (RespHeaders OnboardingInfoPost)
@@ -284,10 +275,7 @@ onboardingInfoPostH pid form = do
 
 -- | Merge new answers into a project's existing questions blob; new answers win on conflict.
 mergeQuestions :: Maybe AE.Value -> [(AE.Key, AE.Value)] -> HI.AsJsonb AE.Value
-mergeQuestions old kvs =
-  HI.AsJsonb $ AE.Object $ KM.fromList kvs <> case old of
-    Just (AE.Object o) -> o
-    _ -> mempty
+mergeQuestions old kvs = HI.AsJsonb $ AE.Object $ KM.fromList kvs <> foldMap (\case AE.Object o -> o; _ -> mempty) old
 
 
 onboardingConfPostH :: Projects.ProjectId -> OnboardingConfForm -> ATAuthCtx (RespHeaders OnboardingConfPost)
@@ -780,8 +768,7 @@ notifChannelsWithUrls slackUrl discordUrl pid phone emails hasDiscord hasSlack =
             ]
             $ do
               formField_ FieldMd def{inputType = "tel", value = phone} "Notify phone number" "phoneNumber" False Nothing
-              let tgs = decodeUtf8 $ AE.encode $ V.toList emails
-              formField_ FieldMd def "Notify the following email address" "emails" False $ Just $ tagInput_ "emails" "" [data_ "tagify-initial" tgs]
+              formField_ FieldMd def "Notify the following email address" "emails" False $ Just $ tagInput_ "emails" "" [data_ "tagify-initial" $ decodeUtf8 $ AE.encode emails]
               div_ [class_ "items-center gap-4 flex"] $ do
                 button_ [class_ "btn-primary px-8 py-3 text-xl rounded-xl cursor-pointer flex items-center"] "Proceed"
       script_
@@ -868,7 +855,7 @@ inviteTeamMemberModal pid emails enableFreetier = do
               inviteMemberItem Nothing
               forM_ emails (inviteMemberItem . Just)
       div_ [class_ "modal-action w-full flex items-center justify-start gap-4"] do
-        button_ [class_ "btn-primary px-8 py-2 text-lg rounded-xl cursor-pointer flex items-center", type_ "button", onpointerdown_ "htmx.trigger('#members-container', 'submit')"] "Proceed"
+        button_ [class_ "btn-primary px-8 py-2 text-lg rounded-xl cursor-pointer flex items-center", type_ "submit", term "form" "members-container"] "Proceed"
         label_ [Lucid.for_ "inviteModal", class_ "text-textWeak text-sm underline cursor-pointer"] "Close"
 
 
@@ -919,7 +906,7 @@ createBinaryField kind name selectedValues (value, label) = do
 
 stepIndicator :: Int -> Text -> Text -> Html ()
 stepIndicator step title prevUrl = do
-  universalIndicator
+  div_ [class_ "fixed  htmx-indicator top-0 left-0 right-0 bottom-0 flex items-center justify-center z-9999", id_ "loadingIndicator"] $ loadingIndicator_ LdLG LdDots
   div_ [class_ "flex-col gap-2 md:gap-4 flex w-full"] $ do
     a_ [href_ "/", class_ "absolute top-4 left-4 md:top-10 md:left-10 py-2 pr-2 rounded-xs"] do
       img_ [class_ "h-7 dark:hidden", src_ "/public/assets/svgs/logo_black.svg"]
@@ -945,12 +932,6 @@ faQ question answer =
   details_ [class_ "collapse collapse-arrow join-item border border-strokeWeak"] do
     summary_ [class_ "collapse-title text-textStrong font-medium"] $ toHtml question
     div_ [class_ "collapse-content text-textWeak leading-relaxed"] $ p_ $ toHtml answer
-
-
-universalIndicator :: Html ()
-universalIndicator =
-  div_ [class_ "fixed  htmx-indicator top-0 left-0 right-0 bottom-0 flex items-center justify-center z-9999", id_ "loadingIndicator"] do
-    loadingIndicator_ LdLG LdDots
 
 
 -- | Proxy handler for fetching documentation from monoscope.tech

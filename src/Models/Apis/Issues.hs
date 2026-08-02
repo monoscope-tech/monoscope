@@ -129,6 +129,7 @@ import Effectful (Eff, type (:>))
 import Effectful.Error.Static (Error, throwError)
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
+import GHC.Records (HasField)
 import Hasql.Interpolate qualified as HI
 import Models.Apis.Anomalies (PayloadChange)
 import Models.Apis.Anomalies qualified as Anomalies
@@ -220,7 +221,7 @@ serviceLabel = fromMaybe "unknown-service"
 isNewEndpointOnly :: Issue -> Bool
 isNewEndpointOnly issue =
   issue.issueType == ApiChange && case AE.fromJSON (getAeson issue.issueData) of
-    AE.Success (d :: APIChangeData) -> V.null d.newFields && V.null d.deletedFields && V.null d.modifiedFields
+    AE.Success (d :: APIChangeData) -> all V.null [d.newFields, d.deletedFields, d.modifiedFields]
     AE.Error _ -> False
 
 
@@ -395,27 +396,26 @@ selectLatestIssueByHash pid tgtHash =
   Hasql.interpOne [HI.sql| SELECT * FROM apis.issues WHERE project_id = #{pid} AND target_hash = #{tgtHash} AND issue_type = #{RuntimeException}::apis.issue_type ORDER BY created_at DESC LIMIT 1 |]
 
 
--- | Reopen a previously acknowledged/archived issue (clear ack/archive, bump occurrence count)
-reopenIssue :: (DB es, Time :> es) => IssueId -> Eff es ()
-reopenIssue issueId = do
+-- | Bump updated_at and occurrence count; @extra@ appends further SET clauses
+-- (each written with a leading comma).
+touchIssue :: (DB es, Time :> es) => HI.Sql -> IssueId -> Eff es ()
+touchIssue extra issueId = do
   now <- Time.currentTime
   Hasql.interpExecute_
-    [HI.sql| UPDATE apis.issues SET
-            acknowledged_at = NULL, acknowledged_by = NULL, archived_at = NULL, updated_at = #{now},
+    [HI.sql| UPDATE apis.issues SET updated_at = #{now}^{extra},
             issue_data = issue_data || jsonb_build_object('occurrence_count',
               COALESCE((issue_data->>'occurrence_count')::bigint, 1) + 1)
           WHERE id = #{issueId} |]
+
+
+-- | Reopen a previously acknowledged/archived issue (clear ack/archive, bump occurrence count)
+reopenIssue :: (DB es, Time :> es) => IssueId -> Eff es ()
+reopenIssue = touchIssue [HI.sql|, acknowledged_at = NULL, acknowledged_by = NULL, archived_at = NULL|]
 
 
 -- | Bump updated_at and occurrence count without clearing ack/archive (for already-open issues)
 bumpIssueUpdatedAt :: (DB es, Time :> es) => IssueId -> Eff es ()
-bumpIssueUpdatedAt issueId = do
-  now <- Time.currentTime
-  Hasql.interpExecute_
-    [HI.sql| UPDATE apis.issues SET updated_at = #{now},
-            issue_data = issue_data || jsonb_build_object('occurrence_count',
-              COALESCE((issue_data->>'occurrence_count')::bigint, 1) + 1)
-          WHERE id = #{issueId} |]
+bumpIssueUpdatedAt = touchIssue mempty
 
 
 -- | @AND pfx.col IS [NOT] NULL@ clause, or empty if the filter is unset. Shared
@@ -798,12 +798,11 @@ getOrCreateConversation :: (DB es, Error ServerError :> es, Time :> es) => Proje
 getOrCreateConversation pid convId convType ctx = do
   now <- Time.currentTime
   let ctxJ = Aeson ctx
-  result <-
-    Hasql.interpOne
-      [HI.sql| INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type, context)
+  Hasql.interpOne
+    [HI.sql| INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type, context)
               VALUES (#{pid}, #{convId}, #{convType}, #{ctxJ}) ON CONFLICT (project_id, conversation_id) DO UPDATE SET updated_at = #{now}
               RETURNING id, project_id, conversation_id, conversation_type, context, created_at, updated_at |]
-  maybe (throwError err500{errBody = "getOrCreateConversation: RETURNING clause must return a row"}) pure result
+    >>= (`whenNothing` throwError err500{errBody = "getOrCreateConversation: RETURNING clause must return a row"})
 
 
 -- | Insert a new chat message
@@ -848,18 +847,13 @@ chatMigrationLockKey convId = fromIntegral @Int @Int64 $ abs $ hash $ show convI
 -- Returns True if lock was acquired, False if already locked (another request is migrating).
 -- Uses PostgreSQL advisory locks which are automatically released on connection close.
 tryAcquireChatMigrationLock :: DB es => UUIDId "conversation" -> Eff es Bool
-tryAcquireChatMigrationLock convId = do
-  let lockKey = chatMigrationLockKey convId
-  result :: [Bool] <- Hasql.interp [HI.sql| SELECT pg_try_advisory_lock(#{lockKey}) |]
-  pure $ or result
+tryAcquireChatMigrationLock convId = or <$> Hasql.interp [HI.sql| SELECT pg_try_advisory_lock(#{chatMigrationLockKey convId}) |]
 
 
 -- | Release a chat migration advisory lock so that a failed migration can be retried
 -- on a subsequent event instead of being silently blocked for the connection's lifetime.
 releaseChatMigrationLock :: DB es => UUIDId "conversation" -> Eff es ()
-releaseChatMigrationLock convId = do
-  let lockKey = chatMigrationLockKey convId
-  Hasql.interpExecute_ [HI.sql| SELECT pg_advisory_unlock(#{lockKey}) |]
+releaseChatMigrationLock convId = Hasql.interpExecute_ [HI.sql| SELECT pg_advisory_unlock(#{chatMigrationLockKey convId}) |]
 
 
 -- | Create an issue for a log pattern rate change
@@ -1190,80 +1184,68 @@ getLatestReportByType :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Re
 getLatestReportByType pid rType = Hasql.interpOne [HI.sql| SELECT * FROM apis.reports WHERE project_id = #{pid} AND report_type = #{rType} ORDER BY created_at DESC LIMIT 1 |]
 
 
--- | Which hash an error issue is keyed on. Framework/transport errors key on the
--- *parent* (broad) hash so per-route variants collapse into one issue via the
--- (project_id, target_hash, issue_type) ON CONFLICT index; app errors — and framework
--- errors with no parent hash — keep their narrow per-route identity.
-frameworkTarget :: Bool -> Maybe Text -> Text -> (Bool, Text)
-frameworkTarget isFw parentHash hsh = maybe (False, hsh) (True,) (parentHash <* guard isFw)
-
-
 createErrorSpikeIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> ErrorPatterns.ErrorPatternWithCurrentRate -> Double -> Double -> Double -> Eff es Issue
 createErrorSpikeIssue projectId errRate currentRate baselineMean zScore =
   let increasePercent = if baselineMean > 0 then ((currentRate / baselineMean) - 1) * 100 else 0
-      -- Inherit classification from the underlying pattern so a spike on a framework
-      -- error dedupes against the rolled-up framework issue via the same target_hash.
-      (useFramework, tgt) = frameworkTarget errRate.isFramework errRate.parentHash errRate.hash
    in mkErrorIssue
         projectId
-        tgt
-        errRate.parentHash
-        useFramework
-        errRate.service
-        errRate.errorType
-        errRate.message
-        errRate.stacktrace
+        errRate
         (round currentRate)
-        ("Error Spike: " <> errRate.errorType <> " (" <> show (round increasePercent :: Int) <> "% increase)")
+        (const $ "Error Spike: " <> errRate.errorType <> " (" <> show (round increasePercent :: Int) <> "% increase)")
         ("Error rate has spiked " <> show (round zScore :: Int) <> " standard deviations above baseline. Current: " <> show (round currentRate :: Int) <> "/hr, Baseline: " <> show (round baselineMean :: Int) <> "/hr. Investigate recent deployments or changes.")
 
 
--- | Create a new issue for an error pattern. See 'frameworkTarget' for how the
--- target hash is chosen; the parent hash is always stored for UI rollup.
+-- | Create a new issue for an error pattern.
 createNewErrorIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> ErrorPatterns.ErrorPattern -> Eff es Issue
 createNewErrorIssue projectId err =
-  let (useFramework, tgt) = frameworkTarget err.isFramework err.parentHash err.hash
-      title =
-        (if useFramework then "Framework Error: " else "New Error: ")
-          <> err.errorType
-          <> " - "
-          <> T.take 80 err.message
-   in mkErrorIssue
-        projectId
-        tgt
-        err.parentHash
-        useFramework
-        err.service
-        err.errorType
-        err.message
-        err.stacktrace
-        1
-        title
-        "Investigate the new error and implement a fix."
+  mkErrorIssue
+    projectId
+    err
+    1
+    (\isFw -> (if isFw then "Framework Error: " else "New Error: ") <> err.errorType <> " - " <> T.take 80 err.message)
+    "Investigate the new error and implement a fix."
 
 
-mkErrorIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Text -> Maybe Text -> Bool -> Maybe Text -> Text -> Text -> Text -> Int -> Text -> Text -> Eff es Issue
-mkErrorIssue projectId targetHash parentHash isFramework service errType errMsg stack occurrences title recommendedAction = do
+-- | Fields shared by 'ErrorPatterns.ErrorPattern' and 'ErrorPatterns.ErrorPatternWithCurrentRate'.
+type ErrorLike p =
+  ( HasField "errorType" p Text
+  , HasField "hash" p Text
+  , HasField "isFramework" p Bool
+  , HasField "message" p Text
+  , HasField "parentHash" p (Maybe Text)
+  , HasField "service" p (Maybe Text)
+  , HasField "stacktrace" p Text
+  )
+
+
+-- | Build a RuntimeException issue from an error pattern. Framework/transport errors
+-- key on the *parent* (broad) hash so per-route variants collapse into one issue via
+-- the (project_id, target_hash, issue_type) ON CONFLICT index; app errors — and
+-- framework errors with no parent hash — keep their narrow per-route identity. The
+-- parent hash is always stored for UI rollup, and @mkTitle@ is told which hash won.
+mkErrorIssue :: (ErrorLike p, Time :> es, UUIDEff :> es) => Projects.ProjectId -> p -> Int -> (Bool -> Text) -> Text -> Eff es Issue
+mkErrorIssue projectId p occurrences mkTitle recommendedAction = do
   now <- Time.currentTime
+  let (isFramework, targetHash) = maybe (False, p.hash) (True,) (p.parentHash <* guard p.isFramework)
   mkIssue
     MkIssueOpts
       { projectId
       , issueType = RuntimeException
       , targetHash
-      , parentHash
+      , parentHash = p.parentHash
       , isFramework
-      , service
+      , service = p.service
       , critical = True
       , severity = Critical
-      , title
+      , title = mkTitle isFramework
       , recommendedAction
       , migrationComplexity = "n/a"
       , timestamp = Nothing
       , issueData =
           RuntimeExceptionData
-            { errorType = errType
-            , errorMessage = errMsg
-            , stackTrace = stack
+            { errorType = p.errorType
+            , errorMessage = p.message
+            , stackTrace = p.stacktrace
             , requestPath = Nothing
             , requestMethod = Nothing
             , occurrenceCount = occurrences

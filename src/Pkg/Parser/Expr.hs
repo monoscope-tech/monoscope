@@ -7,6 +7,7 @@ import Control.Monad.Combinators.Expr (
 import Data.Aeson qualified as AE
 import Data.Aeson.Text (encodeToLazyText)
 import Data.Char (isDigit)
+import Data.List (lookup)
 import Data.Map.Strict qualified as M
 import Data.Scientific (FPFormat (Fixed), Scientific, formatScientific)
 import Data.Set qualified as S
@@ -50,21 +51,15 @@ symbol = L.symbol sc
 -- >>> :set -XQuasiQuotes
 
 
--- Values is an enum of the list of supported value types.
--- Num is a text  that represents a float as float covers ints in a lot of cases. But its basically the json num type.
--- Duration stores original unit and nanoseconds value for precise time comparisons
--- TimeFunction stores KQL time functions like now()
--- AgoExpression represents KQL ago() function with the value and unit for SQL interval conversion
--- Field represents a field reference (column name) - displayed unquoted in SQL
--- ScalarFunc represents KQL scalar functions: coalesce, iff, isnull, etc.
+-- | Supported value types. 'Num' is text holding a JSON-style number (float covers ints).
 data Values
   = Num Text
   | Str Text
   | Boolean Bool
   | Null
   | List [Values]
-  | Duration Text Integer
-  | TimeFunction Text
+  | Duration Text Integer -- Original unit + nanoseconds, for precise time comparisons
+  | TimeFunction Text -- KQL time functions like now()
   | AgoExpression Text -- The original KQL timespan expression for direct conversion to PostgreSQL interval
   | NowExpression -- Represents now() function
   | Field Subject -- Field reference - displayed as column name, not quoted string
@@ -105,8 +100,7 @@ instance ToQueryText Values where
   toQText v = decodeUtf8 $ AE.encode v
 
 
--- A subject consists of the primary key, and then the list of fields keys which are delimited by a .
--- To support jsonpath, we will have more powerfule field keys, so instead of a text array, we could have an enum field key type?
+-- A subject consists of the primary key, and then the list of field keys which are delimited by a .
 data Subject = Subject Text Text [FieldKey]
   deriving stock (Eq, Generic, Ord, Show)
 
@@ -197,12 +191,6 @@ data Expr
   deriving stock (Eq, Generic, Ord, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
-
--- Example queries
--- request_body.v1.v2 = "abc" AND (request_body.v3.v4 = 123 OR request_body.v5[].v6=ANY[1,2,3] OR request_body[1].v7 OR NOT request_body[-1].v8 )
--- request_body[1].v7 | {.v7, .v8} |
-
--- >>> request_body="jfdshkjfds" | stat field1, field2 by field3
 
 -- >>> parse pFieldKey "" "key.abc[1]"
 -- Right (FieldKey "key")
@@ -342,12 +330,18 @@ boolScalarFuncNames :: [Text]
 boolScalarFuncNames = ["isnotnull", "isnotempty", "isnull", "isempty"]
 
 
+-- | Parse a call to one of @names@ (tried in order, so longer names must come first).
+-- @iif@ is normalised to @iff@.
+pNamedFunc :: [Text] -> Parser Values
+pNamedFunc names = do
+  name <- asum [n <$ string n | n <- names]
+  args <- parens (pScalarArg `sepBy` (space *> char ',' <* space))
+  pure $ ScalarFunc (if name == "iif" then "iff" else name) args
+
+
 -- | Parse boolean scalar function as standalone expression (isnull(x), isnotnull(x), etc.)
 pBoolScalarFunc :: Parser Values
-pBoolScalarFunc = do
-  name <- asum $ map (\n -> n <$ string n) boolScalarFuncNames
-  args <- parens (pScalarArg `sepBy` (space *> char ',' <* space))
-  pure $ ScalarFunc name args
+pBoolScalarFunc = pNamedFunc boolScalarFuncNames
 
 
 -- | Parse scalar function argument: nested function, field reference, or literal
@@ -357,10 +351,7 @@ pScalarArg = try pScalarFunc <|> try (Field <$> pSubject) <|> pValuesNoFunc
 
 -- | Parse KQL scalar functions: coalesce(a,b), iff(cond,t,f), isnull(x), toint(x), etc.
 pScalarFunc :: Parser Values
-pScalarFunc = do
-  name <- asum $ map (\n -> n <$ string n) scalarFuncNames
-  args <- parens (pScalarArg `sepBy` (space *> char ',' <* space))
-  pure $ ScalarFunc (if name == "iif" then "iff" else name) args
+pScalarFunc = pNamedFunc scalarFuncNames
 
 
 -- | pValuesNoFunc: pValues without scalar function parsing (avoids left recursion)
@@ -497,8 +488,8 @@ pValues = pValuesWith pValues [try pScalarFunc] -- try pScalarFunc must come fir
 pTerm :: Parser Expr
 pTerm =
   (Paren <$> parens pExpr)
-    <|> asum [binTerm pValues ctor sym | (ctor, sym, _, _) <- valBinOps]
-    <|> asum [binTerm pSubject ctor sym | (ctor, sym, _, _) <- subjectBinOps]
+    <|> asum [binTerm pValues ctor sym | (ctor, _, sym, _) <- valBinOps]
+    <|> asum [binTerm pSubject ctor sym | (ctor, _, sym, _) <- subjectBinOps]
     <|> try (Matches <$> pSubject <* space <* void (symbol "matches") <* space <*> (toText <$> (char '/' *> manyTill L.charLiteral (char '/'))))
     <|> try regexParser
     <|> try (BoolFunc <$> pBoolScalarFunc) -- Standalone boolean functions: isnull(x), isnotnull(x), etc.
@@ -510,54 +501,53 @@ binTerm :: Parser a -> (a -> Values -> Expr) -> Text -> Parser Expr
 binTerm pLhs ctor sym = try (ctor <$> pLhs <* space <* void (symbol sym) <* space <*> pValues)
 
 
--- | The shared binary-operator tables, each row carrying:
--- (constructor, KQL parse symbol, ToQueryText infix token, Display op-string).
+-- | The shared binary-operator tables, one row per binary 'Expr' constructor:
+-- (constructor, matcher, KQL parse symbol, Display op-string). The ToQueryText
+-- infix token is always the parse symbol surrounded by spaces, so it isn't stored.
+-- The same rows drive 'pTerm', 'resolveWildcardTimes', 'Display Expr' and
+-- 'ToQueryText Expr', so the constructor<->token map lives in one place.
 -- Ordering is significant for 'pTerm' (try-based, longest token first, e.g.
--- @>=@ before @>@, @!in@ before @in@). The same rows drive 'ToQueryText Expr'
--- and 'Display Expr' so the constructor->token map lives in one place.
+-- @>=@ before @>@, @!in@ before @in@).
 --
--- NOTE: 'subBinaryParts'/'valBinaryParts' map each binary 'Expr' constructor to
--- its row here, and 'Display Expr'/'ToQueryText Expr' fall through to
--- @error "...unreachable"@ for anything not covered. Because the tables are
--- decoupled from the constructor definitions, adding a new binary 'Expr'
--- constructor compiles cleanly but crashes at render until you add its row here
--- AND its case in those two helpers — GHC's exhaustiveness check won't catch it.
-valBinOps :: [(Values -> Values -> Expr, Text, Text, Text)]
+-- NOTE: because the tables are decoupled from the constructor definitions, adding
+-- a new binary 'Expr' constructor compiles cleanly but crashes at render until you
+-- add its row here — GHC's exhaustiveness check won't catch it.
+valBinOps :: [(Values -> Values -> Expr, Expr -> Maybe (Values, Values), Text, Text)]
 valBinOps =
-  [ (ValEq, "==", " == ", "=")
-  , (ValNotEq, "!=", " != ", "!=")
-  , (ValGTEq, ">=", " >= ", ">=")
-  , (ValLTEq, "<=", " <= ", "<=")
-  , (ValGT, ">", " > ", ">")
-  , (ValLT, "<", " < ", "<")
+  [ (ValEq, \case ValEq a b -> Just (a, b); _ -> Nothing, "==", "=")
+  , (ValNotEq, \case ValNotEq a b -> Just (a, b); _ -> Nothing, "!=", "!=")
+  , (ValGTEq, \case ValGTEq a b -> Just (a, b); _ -> Nothing, ">=", ">=")
+  , (ValLTEq, \case ValLTEq a b -> Just (a, b); _ -> Nothing, "<=", "<=")
+  , (ValGT, \case ValGT a b -> Just (a, b); _ -> Nothing, ">", ">")
+  , (ValLT, \case ValLT a b -> Just (a, b); _ -> Nothing, "<", "<")
   ]
 
 
-subjectBinOps :: [(Subject -> Values -> Expr, Text, Text, Text)]
+subjectBinOps :: [(Subject -> Values -> Expr, Expr -> Maybe (Subject, Values), Text, Text)]
 subjectBinOps =
-  [ (Eq, "==", " == ", "=")
-  , (NotEq, "!=", " != ", "!=")
-  , (GTEq, ">=", " >= ", ">=")
-  , (LTEq, "<=", " <= ", "<=")
-  , (GT, ">", " > ", ">")
-  , (LT, "<", " < ", "<")
-  , (NotIn, "!in", " !in ", "NOT IN")
-  , (In, "in", " in ", "IN")
-  , (NotHas, "!has", " !has ", "NOT HAS")
-  , (HasAll, "has_all", " has_all ", "HAS_ALL")
-  , (HasAny, "has_any", " has_any ", "HAS_ANY")
-  , (Has, "has", " has ", "HAS")
-  , (NotContains, "!contains", " !contains ", "NOT CONTAINS")
-  , (Contains, "contains", " contains ", "CONTAINS")
-  , (NotStartsWith, "!startswith", " !startswith ", "NOT STARTSWITH")
-  , (StartsWith, "startswith", " startswith ", "STARTSWITH")
-  , (NotEndsWith, "!endswith", " !endswith ", "NOT ENDSWITH")
-  , (EndsWith, "endswith", " endswith ", "ENDSWITH")
+  [ (Eq, \case Eq s v -> Just (s, v); _ -> Nothing, "==", "=")
+  , (NotEq, \case NotEq s v -> Just (s, v); _ -> Nothing, "!=", "!=")
+  , (GTEq, \case GTEq s v -> Just (s, v); _ -> Nothing, ">=", ">=")
+  , (LTEq, \case LTEq s v -> Just (s, v); _ -> Nothing, "<=", "<=")
+  , (GT, \case GT s v -> Just (s, v); _ -> Nothing, ">", ">")
+  , (LT, \case LT s v -> Just (s, v); _ -> Nothing, "<", "<")
+  , (NotIn, \case NotIn s v -> Just (s, v); _ -> Nothing, "!in", "NOT IN")
+  , (In, \case In s v -> Just (s, v); _ -> Nothing, "in", "IN")
+  , (NotHas, \case NotHas s v -> Just (s, v); _ -> Nothing, "!has", "NOT HAS")
+  , (HasAll, \case HasAll s v -> Just (s, v); _ -> Nothing, "has_all", "HAS_ALL")
+  , (HasAny, \case HasAny s v -> Just (s, v); _ -> Nothing, "has_any", "HAS_ANY")
+  , (Has, \case Has s v -> Just (s, v); _ -> Nothing, "has", "HAS")
+  , (NotContains, \case NotContains s v -> Just (s, v); _ -> Nothing, "!contains", "NOT CONTAINS")
+  , (Contains, \case Contains s v -> Just (s, v); _ -> Nothing, "contains", "CONTAINS")
+  , (NotStartsWith, \case NotStartsWith s v -> Just (s, v); _ -> Nothing, "!startswith", "NOT STARTSWITH")
+  , (StartsWith, \case StartsWith s v -> Just (s, v); _ -> Nothing, "startswith", "STARTSWITH")
+  , (NotEndsWith, \case NotEndsWith s v -> Just (s, v); _ -> Nothing, "!endswith", "NOT ENDSWITH")
+  , (EndsWith, \case EndsWith s v -> Just (s, v); _ -> Nothing, "endswith", "ENDSWITH")
   ]
 
 
 -- >>> parse regexParser "" "abc=~/abc.*/"
--- Right (Regex (Subject "abc" []) "abc.*")
+-- Right (Regex (Subject "abc" "abc" []) "abc.*")
 regexParser :: Parser Expr
 regexParser = do
   subj <- pSubject
@@ -572,46 +562,10 @@ pExpr :: Parser Expr
 pExpr = makeExprParser pTerm operatorTable
 
 
+-- | Both the space-padded and the bare spelling of each keyword, padded first so it wins.
 operatorTable :: [[Operator Parser Expr]]
-operatorTable =
-  [
-    [ binary " AND " And
-    , binary "AND" And
-    , binary " OR " Or
-    , binary "OR" Or
-    , binary " and " And
-    , binary "and" And
-    , binary " or " Or
-    , binary "or" Or
-    ]
-  ]
+operatorTable = [[InfixL (ctor <$ symbol sym) | (kw, ctor) <- [("AND", And), ("OR", Or), ("and", And), ("or", Or)], sym <- [" " <> kw <> " ", kw]]]
 
-
-binary :: T.Text -> (Expr -> Expr -> Expr) -> Operator Parser Expr
-binary name f = InfixL (f <$ symbol name)
-
-
--- TODO:
---
---  - Query arrays
---  - - query real numbers [x]
---  - - wildcard query [x]
---  - - array values [x]
---  - - regex [x]
---  - Group by [~]
---  - Aggregate by / rollup [~]
---  -
-
--- Core problem to solve is metrics. Metrics can be any of these values,
--- but must be aggregated over a timeline
--- Suporting a splunk like query style.
--- https://chat.openai.com/share/cc9553fd-1e02-482b-a01f-427ca755d977
---
--- stats
--- timechart
--- fields
--- where condition for alerts.
---
 
 -------------------------------------------------------
 --
@@ -621,10 +575,7 @@ binary name f = InfixL (f <$ symbol name)
 
 -- Helper function to detect if Subject contains an ArrayWildcard
 subjectHasWildcard :: Subject -> Bool
-subjectHasWildcard (Subject _ _ keys) = any isArrayWildcard keys
-  where
-    isArrayWildcard (ArrayWildcard _) = True
-    isArrayWildcard _ = False
+subjectHasWildcard (Subject _ _ keys) = any (\case ArrayWildcard _ -> True; _ -> False) keys
 
 
 -- | Hand-coded fallback for the flattened OTel attribute set. Used at
@@ -764,25 +715,20 @@ transformFlattenedAttribute entire
 
 
 -- >>> display (Subject "" "request_body" [FieldKey "message"])
--- "request_body->>'message' as message"
+-- "request_body->>'message'"
 --
 -- >>> display (Subject "" "request_body" [FieldKey "message", FieldKey "value"])
--- "request_body->'message'->>'value' as value"
+-- "request_body->'message'->>'value'"
 --
 -- >>> display (Subject "" "errors" [ArrayIndex "" 0, FieldKey "message"])
--- "errors->0->>'message' as message"
---
--- >>> display (Subject "" "errors" [ArrayIndex "" 0, FieldKey "message"])
--- "errors->0->>'message' as message"
+-- "errors->0->>'message'"
 instance Display Subject where
   displayPrec prec (Subject entire x keys) =
     case M.lookup entire outputFieldAliases of
       Just col -> displayPrec prec col
       Nothing
         | entire `S.member` flattenedOtelAttributes -> displayPrec prec (transformFlattenedAttribute entire)
-        | otherwise -> case keys of
-            [] -> displayPrec prec x
-            (y : ys) -> displayPrec prec $ buildQuerySequence x (y : ys)
+        | otherwise -> displayPrec prec (buildQuerySequence x keys)
     where
       buildQuerySequence :: T.Text -> [FieldKey] -> T.Text
       buildQuerySequence acc [] = acc
@@ -795,25 +741,12 @@ instance Display Subject where
       buildQuery acc (ArrayIndex "" idx) isLast = acc <> separatorInt isLast <> show idx
       buildQuery acc (ArrayIndex key idx) isLast = acc <> separator False <> key <> "'" <> separatorInt isLast <> show idx
 
-      separator isLast = if isLast then "->>'" else "->'"
-      separatorInt isLast = if isLast then "->>" else "->"
+      separator = bool "->'" "->>'"
+      separatorInt = bool "->" "->>"
 
 
--- ArrayWildcard handling is marked as unreachable, assuming it's not used in your context.
-
--- >>> display (List [Str "a"])
--- "ARRAY['a']"
---
--- >>> display (List [Num "2"])
--- "ARRAY[2]"
-
--- | Maximum allowed timespan in days (1 year) to prevent DoS
-maxTimespanDays :: Double
-maxTimespanDays = 365
-
-
--- | Convert a KQL timespan to PostgreSQL interval syntax with bounds checking.
--- Timespans exceeding 1 year are capped to prevent DoS attacks.
+-- | Convert a KQL timespan to PostgreSQL interval syntax. Timespans exceeding
+-- 1 year are capped to prevent DoS attacks.
 --
 -- Example conversion:
 -- 7d -> INTERVAL '7 days'
@@ -822,36 +755,40 @@ maxTimespanDays = 365
 -- 45s -> INTERVAL '45 seconds'
 -- 500ms -> INTERVAL '500 milliseconds'
 kqlTimespanToInterval :: Text -> Text
-kqlTimespanToInterval timespan =
-  let
-    parseTimeUnit :: Text -> (Text, Text, Double)
-    parseTimeUnit input =
-      let (digits, rest) = T.span (\c -> isDigit c || c == '.') input
-          num = fromMaybe 0 $ readMaybe @Double (toString digits)
-       in case rest of
-            rest' | T.isPrefixOf "d" rest' -> (digits <> " days", T.drop 1 rest', num)
-            rest' | T.isPrefixOf "h" rest' -> (digits <> " hours", T.drop 1 rest', num / 24)
-            rest' | T.isPrefixOf "m" rest' -> (digits <> " minutes", T.drop 1 rest', num / 1440)
-            rest' | T.isPrefixOf "s" rest' -> (digits <> " seconds", T.drop 1 rest', num / 86400)
-            rest' | T.isPrefixOf "ms" rest' -> (digits <> " milliseconds", T.drop 2 rest', num / 86400000)
-            rest' | T.isPrefixOf "us" rest' -> (digits <> " microseconds", T.drop 2 rest', num / 86400000000)
-            rest' | T.isPrefixOf "ns" rest' -> (digits <> " nanoseconds", T.drop 2 rest', num / 86400000000000)
-            _ -> ("", input, 0)
-    parseComplexTimespan :: Text -> (Text, Double)
-    parseComplexTimespan ts =
-      case parseTimeUnit ts of
-        ("", _, _) -> ("", 0)
-        (unit, "", days) -> (unit, days)
-        (unit, rest, days) -> let (restUnits, restDays) = parseComplexTimespan rest in (unit <> " " <> restUnits, days + restDays)
+kqlTimespanToInterval timespan
+  | totalSecs > 365 * 86400 = "INTERVAL '365 days'"
+  | otherwise = "INTERVAL '" <> intervalExpr <> "'"
+  where
+    (intervalExpr, totalDuration) = case parseTimespan timespan of ("", _) -> ("0", 0); r -> r
+    totalSecs = realToFrac totalDuration :: Double
 
-    (intervalExpr, totalDays) =
-      case parseComplexTimespan timespan of
-        ("", _) -> ("0", 0)
-        (expr, days) -> (T.strip expr, days)
-   in
-    if totalDays > maxTimespanDays
-      then "INTERVAL '365 days'"
-      else "INTERVAL '" <> intervalExpr <> "'"
+
+-- | KQL timespan units: parse suffix, PostgreSQL interval unit name, seconds per unit.
+-- Multi-char suffixes precede their single-char prefixes ("ms" before "m"/"s") so a
+-- prefix match can't swallow the wrong unit.
+timespanUnits :: [(Text, Text, Double)]
+timespanUnits =
+  [ ("ms", "milliseconds", 0.001)
+  , ("us", "microseconds", 0.000001)
+  , ("ns", "nanoseconds", 0.000000001)
+  , ("d", "days", 86400)
+  , ("h", "hours", 3600)
+  , ("m", "minutes", 60)
+  , ("s", "seconds", 1)
+  ]
+
+
+-- | Parse a KQL timespan (@1h30m@, @7d@, @500ms@) into a rendered PostgreSQL
+-- interval expression and its total duration. Single source of truth shared by
+-- 'kqlTimespanToInterval' (SQL rendering) and 'timespanToSeconds' (ago() arithmetic).
+parseTimespan :: Text -> (Text, NominalDiffTime)
+parseTimespan t
+  | (digits, rest) <- T.span (\c -> isDigit c || c == '.') t
+  , Just (name, secs, rest') <- asum [(name,secs,) <$> T.stripPrefix u rest | (u, name, secs) <- timespanUnits] =
+      let (restExpr, restSecs) = parseTimespan rest'
+          n = fromMaybe 0 (readMaybe @Double (toString digits))
+       in (T.strip (digits <> " " <> name <> " " <> restExpr), realToFrac (n * secs) + restSecs)
+  | otherwise = ("", 0)
 
 
 -- | Convert KQL timespan to PostgreSQL time bucket string
@@ -867,18 +804,13 @@ kqlTimespanToTimeBucket timespan = fromMaybe "5 minutes" $ parsePostgresInterval
     parsePostgresInterval t = case words t of
       [num, unit] | Just n <- readMaybe @Int (toString num), unit `S.member` validUnits -> Just $ show n <> " " <> unit
       _ -> Nothing
-    -- Parse KQL short format (e.g., "30s", "5m", "1h")
-    parseKqlFormat t
-      | T.isSuffixOf "ms" t, Just n <- readMaybe @Int (toString $ T.dropEnd 2 t) = Just $ show n <> " milliseconds"
-      | T.isSuffixOf "µs" t, Just n <- readMaybe @Int (toString $ T.dropEnd 2 t) = Just $ show n <> " microseconds"
-      | T.isSuffixOf "us" t, Just n <- readMaybe @Int (toString $ T.dropEnd 2 t) = Just $ show n <> " microseconds"
-      | T.isSuffixOf "ns" t, Just n <- readMaybe @Int (toString $ T.dropEnd 2 t) = Just $ show n <> " nanoseconds"
-      | T.isSuffixOf "w" t, Just n <- readMaybe @Int (toString $ T.dropEnd 1 t) = Just $ show n <> " weeks"
-      | T.isSuffixOf "d" t, Just n <- readMaybe @Int (toString $ T.dropEnd 1 t) = Just $ show n <> " days"
-      | T.isSuffixOf "h" t, Just n <- readMaybe @Int (toString $ T.dropEnd 1 t) = Just $ show n <> " hours"
-      | T.isSuffixOf "m" t, Just n <- readMaybe @Int (toString $ T.dropEnd 1 t) = Just $ show n <> " minutes"
-      | T.isSuffixOf "s" t, Just n <- readMaybe @Int (toString $ T.dropEnd 1 t) = Just $ show n <> " seconds"
-      | otherwise = Nothing
+    -- Parse KQL short format (e.g., "30s", "5m", "1h"). µs/w have no 'timespanUnits' row.
+    parseKqlFormat t =
+      listToMaybe
+        [ show n <> " " <> name
+        | (sfx, name) <- ("µs", "microseconds") : ("w", "weeks") : [(u, nm) | (u, nm, _) <- timespanUnits]
+        , Just n <- [T.stripSuffix sfx t >>= readMaybe @Int . toString]
+        ]
 
 
 -- | The canonical SQL string-literal encoder: single-quote and double any
@@ -895,19 +827,18 @@ sqlStringLit v = "'" <> T.replace "'" "''" v <> "'"
 instance Display Values where
   displayPrec prec (Num a) = displayPrec prec a
   displayPrec prec (Str a) = displayPrec prec $ sqlStringLit a
-  displayPrec prec (Boolean True) = "true"
-  displayPrec prec (Boolean False) = "false"
-  displayPrec prec Null = "null"
+  displayPrec _ (Boolean b) = bool "false" "true" b
+  displayPrec _ Null = "null"
   displayPrec prec (Duration _ ns) = displayPrec prec (show ns)
-  displayPrec prec NowExpression = displayBuilder "NOW()"
-  displayPrec prec (AgoExpression timespan) = displayBuilder $ "NOW() - " <> kqlTimespanToInterval timespan
-  displayPrec prec (TimeFunction tf) = displayBuilder tf
+  displayPrec _ NowExpression = displayBuilder @Text "NOW()"
+  displayPrec _ (AgoExpression timespan) = displayBuilder $ "NOW() - " <> kqlTimespanToInterval timespan
+  displayPrec _ (TimeFunction tf) = displayBuilder tf
   displayPrec prec (List vs) =
     let arrayElements = mconcat . intersperse "," . map (displayPrec prec) $ vs
      in "ARRAY[" <> arrayElements <> "]"
   displayPrec prec (Field sub) = displayPrec prec sub
   displayPrec _ (ScalarFunc name args) = displayBuilder $ scalarFuncToSQL name args
-  displayPrec prec (TimestampLit iso) = displayPrec prec ("'" <> iso <> "'::timestamptz")
+  displayPrec prec (TimestampLit iso) = displayPrec prec (sqlStringLit iso <> "::timestamptz")
 
 
 -- | Type cast function name to SQL type mapping
@@ -915,7 +846,7 @@ typeCastMap :: Map Text Text
 typeCastMap = M.fromList [("toint", "integer"), ("tolong", "bigint"), ("tostring", "text"), ("tofloat", "float"), ("todouble", "double precision"), ("tobool", "boolean")]
 
 
--- | Unary scalar functions with their SQL templates (use {} for argument placeholder)
+-- | Unary scalar functions, each mapping its rendered argument to the SQL predicate
 unaryFuncSQL :: Map Text (Text -> Text)
 unaryFuncSQL =
   M.fromList
@@ -955,16 +886,6 @@ scalarFuncToSQL name args
 -- "jsonb_path_exists(to_jsonb(errors), '$[*].\"message\"[0].\"details\" ? (@ == \"detailsVal\")'::jsonpath)"
 --
 -- -- abc[*].xyz which should generate something else than what is generated.
--- -- TODO: investigate and then FIXME
--- >>> display (Subject "" "abc" [ArrayWildcard "",FieldKey "xyz"])
--- "abc->''->>'xyz'"
---
--- -- buildQuery for ArrayWildcard should be unreachable
--- -- TODO: investigate and then FIXME
--- >>> display (Subject "" "request_body" [FieldKey "message", ArrayWildcard "tags", FieldKey "name"])
--- "request_body->'message'->'tags'->>'name'"
---
--- -- buildQuery for ArrayWildcard should be unreachable
 -- -- TODO: investigate and then FIXME
 -- >>> display (Subject "" "abc" [ArrayWildcard "",FieldKey "xyz"])
 -- "abc->''->>'xyz'"
@@ -1026,58 +947,18 @@ scalarFuncToSQL name args
 -- >>> display (Matches (Subject "" "email" []) ".*@company\\.com")
 -- "jsonb_path_exists(to_jsonb(email), '$ ? (@ like_regex \".*@company\\\\.com\" flag \"i\")'::jsonpath)"
 
--- | Decompose a binary Expr into its operands plus the (display op-string,
--- toQText infix token) drawn from the shared operator tables, so Display and
+-- | Decompose a binary Expr into its operands plus the (display op-string, KQL
+-- parse symbol) drawn from the shared operator tables, so Display and
 -- ToQueryText reuse a single constructor->token map. The bespoke cases
 -- (Matches/Paren/And/Or/Regex/BoolFunc) are handled directly in the instances.
-subBinaryParts :: Expr -> Maybe (Subject, Values, Text, Text)
-subBinaryParts e = do
-  (s, v, sym) <- case e of
-    Eq s v -> at s v "=="
-    NotEq s v -> at s v "!="
-    GTEq s v -> at s v ">="
-    LTEq s v -> at s v "<="
-    GT s v -> at s v ">"
-    LT s v -> at s v "<"
-    NotIn s v -> at s v "!in"
-    In s v -> at s v "in"
-    NotHas s v -> at s v "!has"
-    HasAll s v -> at s v "has_all"
-    HasAny s v -> at s v "has_any"
-    Has s v -> at s v "has"
-    NotContains s v -> at s v "!contains"
-    Contains s v -> at s v "contains"
-    NotStartsWith s v -> at s v "!startswith"
-    StartsWith s v -> at s v "startswith"
-    NotEndsWith s v -> at s v "!endswith"
-    EndsWith s v -> at s v "endswith"
-    _ -> Nothing
-  (_, _, qtok, dop) <- find (\(_, sym', _, _) -> sym' == sym) subjectBinOps
-  pure (s, v, dop, qtok)
-  where
-    at s v sym = Just (s, v, sym :: Text)
-
-
-valBinaryParts :: Expr -> Maybe (Values, Values, Text, Text)
-valBinaryParts e = do
-  (a, b, sym) <- case e of
-    ValEq a b -> at a b "=="
-    ValNotEq a b -> at a b "!="
-    ValGTEq a b -> at a b ">="
-    ValLTEq a b -> at a b "<="
-    ValGT a b -> at a b ">"
-    ValLT a b -> at a b "<"
-    _ -> Nothing
-  (_, _, qtok, dop) <- find (\(_, sym', _, _) -> sym' == sym) valBinOps
-  pure (a, b, dop, qtok)
-  where
-    at a b sym = Just (a, b, sym :: Text)
+binaryParts :: [(ctor, Expr -> Maybe (a, b), Text, Text)] -> Expr -> Maybe (a, b, Text, Text)
+binaryParts tbl e = listToMaybe [(x, y, dop, sym) | (_, matchP, sym, dop) <- tbl, Just (x, y) <- [matchP e]]
 
 
 instance Display Expr where
   displayPrec prec e
-    | Just (sub, val, op, _) <- subBinaryParts e = displayExprHelper op prec sub val
-    | Just (v1, v2, op, _) <- valBinaryParts e = displayParen (prec > 0) $ displayPrec prec v1 <> " " <> displayBuilder op <> " " <> displayPrec prec v2
+    | Just (sub, val, op, _) <- binaryParts subjectBinOps e = displayExprHelper op prec sub val
+    | Just (v1, v2, op, _) <- binaryParts valBinOps e = displayParen (prec > 0) $ displayPrec prec v1 <> " " <> displayBuilder op <> " " <> displayPrec prec v2
   displayPrec prec (Matches sub val) = displayPrec prec $ renderJsonpathSQL "like_regex" sub (Str val)
   displayPrec prec (Paren u1) = displayParen True $ displayPrec prec u1
   displayPrec prec (And u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " AND " <> displayPrec prec u2
@@ -1090,8 +971,8 @@ instance Display Expr where
 -- To be used when generating the text query given an ast
 instance ToQueryText Expr where
   toQText e
-    | Just (sub, val, _, tok) <- subBinaryParts e = toQText sub <> tok <> toQText val
-    | Just (v1, v2, _, tok) <- valBinaryParts e = toQText v1 <> tok <> toQText v2
+    | Just (sub, val, _, sym) <- binaryParts subjectBinOps e = toQText sub <> " " <> sym <> " " <> toQText val
+    | Just (v1, v2, _, sym) <- binaryParts valBinOps e = toQText v1 <> " " <> sym <> " " <> toQText v2
   toQText (Matches sub val) = toQText sub <> " matches /" <> val <> "/"
   toQText (Paren expr) = "(" <> toQText expr <> ")"
   toQText (And left right) = toQText left <> " AND " <> toQText right
@@ -1110,23 +991,19 @@ displayExprHelper op prec sub val =
       else case (op, val) of
         ("=", Null) -> displayPrec prec sub <> " IS NULL"
         ("!=", Null) -> displayPrec prec sub <> " IS NOT NULL"
-        ("IN", List vs) -> displayPrec prec sub <> " IN (" <> (mconcat . intersperse "," . map (displayPrec prec)) vs <> ")"
-        ("NOT IN", List vs) -> displayPrec prec sub <> " NOT IN (" <> (mconcat . intersperse "," . map (displayPrec prec)) vs <> ")"
+        (_, List vs) | op `elem` ["IN", "NOT IN"] -> displayPrec prec sub <> displayBuilder (" " <> op <> " (") <> commaSep vs <> ")"
+        -- has_any/has_all fan the (escaped, case-insensitive) literal match over the list
+        (_, List vs) | Just j <- lookup op [("HAS_ANY", " OR "), ("HAS_ALL", " AND ")] -> "(" <> (mconcat . intersperse j . map (\v -> subAsText <> " ~* " <> reTerm "" "" v)) vs <> ")"
         -- has/contains/startswith/endswith match a literal (case-insensitively) — the term
         -- is regex-escaped and rendered as `~*`, mirroring the wildcard jsonpath path
-        -- (like_regex + escapeRegex). ^/$ anchor startswith/endswith.
-        ("HAS", _) -> subAsText <> " ~* " <> reTerm "" "" val
-        ("NOT HAS", _) -> subAsText <> " !~* " <> reTerm "" "" val
-        ("HAS_ANY", List vs) -> "(" <> (mconcat . intersperse " OR " . map (\v -> subAsText <> " ~* " <> reTerm "" "" v)) vs <> ")"
-        ("HAS_ALL", List vs) -> "(" <> (mconcat . intersperse " AND " . map (\v -> subAsText <> " ~* " <> reTerm "" "" v)) vs <> ")"
-        ("CONTAINS", _) -> subAsText <> " ~* " <> reTerm "" "" val
-        ("NOT CONTAINS", _) -> subAsText <> " !~* " <> reTerm "" "" val
-        ("STARTSWITH", _) -> subAsText <> " ~* " <> reTerm "^" "" val
-        ("NOT STARTSWITH", _) -> subAsText <> " !~* " <> reTerm "^" "" val
-        ("ENDSWITH", _) -> subAsText <> " ~* " <> reTerm "" "$" val
-        ("NOT ENDSWITH", _) -> subAsText <> " !~* " <> reTerm "" "$" val
+        -- (like_regex + escapeRegex). ^/$ anchor startswith/endswith. "NOT X" negates to `!~*`.
+        _
+          | (neg, opPos) <- maybe (False, op) (True,) (T.stripPrefix "NOT " op)
+          , Just (pre, post) <- lookup opPos [("HAS", ("", "")), ("CONTAINS", ("", "")), ("STARTSWITH", ("^", "")), ("ENDSWITH", ("", "$"))] ->
+              subAsText <> (if neg then " !~* " else " ~* ") <> reTerm pre post val
         _ -> displayPrec prec sub <> " " <> displayPrec @T.Text prec op <> " " <> displayPrec prec val
   where
+    commaSep = mconcat . intersperse "," . map (displayPrec prec)
     -- Cast to text for subjects without field keys (may be JSONB columns)
     subAsText = case sub of
       Subject _ _ [] -> displayPrec prec sub <> "::text"
@@ -1221,7 +1098,7 @@ renderJsonpath (Jsonpath base path pred_) =
 
     lit (JStr s) = jsonString s
     lit (JNum n) = n
-    lit (JBool b) = if b then "true" else "false"
+    lit (JBool b) = bool "false" "true" b
     lit JNull = "null"
     lit (JDateTime iso) = jsonString iso <> ".datetime()"
 
@@ -1295,7 +1172,7 @@ lowerPred op (Subject _ base keys) val = Jsonpath base (JPath (concatMap toSteps
 
     -- Negation is NOT handled here: on a wildcard subject it must negate the whole
     -- existence test (@NOT jsonb_path_exists@), not the inner filter — see renderJsonpathSQL.
-    pred_ = case (snd <$> find ((== op) . fst) cmpOps, op) of
+    pred_ = case (lookup op cmpOps, op) of
       (Just c, _) -> JCmp c <$> lit val
       (Nothing, "IN") -> orEq
       (Nothing, "HAS") -> substr
@@ -1368,12 +1245,7 @@ resolveWildcardTimes now = go
     go (And a b) = And (go a) (go b)
     go (Or a b) = Or (go a) (go b)
     go (Paren a) = Paren (go a)
-    go e
-      | Just (sub, val, dop, _) <- subBinaryParts e
-      , subjectHasWildcard sub
-      , Just (ctor, _, _, _) <- find (\(_, _, _, d) -> d == dop) subjectBinOps =
-          ctor sub (resolveVal val)
-      | otherwise = e
+    go e = fromMaybe e $ listToMaybe [ctor sub (resolveVal val) | (ctor, matchP, _, _) <- subjectBinOps, Just (sub, val) <- [matchP e], subjectHasWildcard sub]
 
     resolveVal NowExpression = TimestampLit (toText (iso8601Show now))
     resolveVal (AgoExpression ts) = TimestampLit (toText (iso8601Show (addUTCTime (negate (timespanToSeconds ts)) now)))
@@ -1382,22 +1254,4 @@ resolveWildcardTimes now = go
 
 -- | KQL timespan (@1h30m@, @7d@, @500ms@) to seconds, for ago() arithmetic.
 timespanToSeconds :: Text -> NominalDiffTime
-timespanToSeconds = go 0
-  where
-    go acc t
-      | T.null t = acc
-      | (digits, rest) <- T.span (\c -> isDigit c || c == '.') t
-      , not (T.null digits)
-      , Just n <- readMaybe @Double (toString digits)
-      , Just (factor, rest') <- unit rest =
-          go (acc + realToFrac (n * factor)) rest'
-      | otherwise = acc
-    unit t
-      | Just r <- T.stripPrefix "ms" t = Just (0.001 :: Double, r)
-      | Just r <- T.stripPrefix "us" t = Just (0.000001, r)
-      | Just r <- T.stripPrefix "ns" t = Just (0.000000001, r)
-      | Just r <- T.stripPrefix "d" t = Just (86400, r)
-      | Just r <- T.stripPrefix "h" t = Just (3600, r)
-      | Just r <- T.stripPrefix "m" t = Just (60, r)
-      | Just r <- T.stripPrefix "s" t = Just (1, r)
-      | otherwise = Nothing
+timespanToSeconds = snd . parseTimespan

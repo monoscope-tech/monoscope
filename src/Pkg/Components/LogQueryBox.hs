@@ -21,10 +21,6 @@ import Relude
 import Utils (displayTimestamp, faSprite_, formatUTC, onpointerdown_, popoverPanel_, popoverTrigger_)
 
 
-sortedSchemaFieldNames :: [Text]
-sortedSchemaFieldNames = sort $ Map.keys Schema.telemetrySchema.fields
-
-
 -- | Configuration record for the log query box component
 data LogQueryBoxConfig = LogQueryBoxConfig
   { pid :: Projects.ProjectId
@@ -54,7 +50,7 @@ data LogQueryBoxConfig = LogQueryBoxConfig
 -- This component provides a unified interface for querying logs and visualizing data
 logQueryBox_ :: LogQueryBoxConfig -> Html ()
 logQueryBox_ config = do
-  let noActiveQuery = maybe True T.null config.query
+  let noActiveQuery = all T.null config.query
   modal_ "saveQueryMdl" "" $ form_
     [ class_ "flex flex-col p-3 gap-3"
     , id_ "saveQueryForm"
@@ -181,8 +177,9 @@ logQueryBox_ config = do
               ]
               do
                 faSprite_ "magnifying-glass" "regular" "h-4 w-4 inline-block"
-      div_ [class_ $ "text-xs text-textError px-2 py-1 bg-fillError-weak rounded flex items-center gap-1" <> bool " hidden" "" (isJust config.parseError), id_ "query-parse-error"]
-        $ whenJust config.parseError \err -> faSprite_ "triangle-exclamation" "regular" "h-3 w-3 shrink-0" >> toHtml err
+      div_ [class_ $ "text-xs text-textError px-2 py-1 bg-fillError-weak rounded flex items-center gap-1" <> bool " hidden" "" (isJust config.parseError), id_ "query-parse-error"] do
+        faSprite_ "triangle-exclamation" "regular" "h-3 w-3 shrink-0"
+        span_ [id_ "query-parse-error-msg"] $ toHtml $ fromMaybe "" config.parseError
 
       div_ [class_ "flex items-between justify-between max-md:flex-wrap max-md:gap-0.5"] do
         div_ [class_ "flex items-center gap-2 max-md:gap-1 max-md:w-full"] do
@@ -198,11 +195,10 @@ logQueryBox_ config = do
                 option_ [value_ v] $ toHtml label
             script_ "document.getElementById('session-sort-select').value = new URLSearchParams(window.location.search).get('sort_by') || 'last_seen';"
           div_ [class_ "hidden group-has-[#viz-patterns:checked]/pg:flex items-center gap-1"] do
-            let isCustom = maybe False (\s -> s `notElem` map fst knownPatternFields) config.patternSelected
+            let isCustom = any (`notElem` map fst knownPatternFields) config.patternSelected
             select_
               [ class_ "select select-sm max-w-[140px]"
               , id_ "pattern-target-select"
-              , value_ $ fromMaybe "" config.patternSelected
               , [__|on change
                     if my value is '__custom__'
                       add .hidden to me
@@ -221,7 +217,7 @@ logQueryBox_ config = do
               , id_ "pattern-target-input"
               , list_ "pattern-field-list"
               , placeholder_ "e.g. attributes.url.path"
-              , value_ $ if isCustom then fromMaybe "" config.patternSelected else ""
+              , value_ $ bool "" (fromMaybe "" config.patternSelected) isCustom
               , [__|on keydown[key is 'Enter']
                     call window.setQueryParamAndReload('pattern_target', my value)
                   end
@@ -235,7 +231,7 @@ logQueryBox_ config = do
                     end|]
               ]
             datalist_ [id_ "pattern-field-list"]
-              $ forM_ sortedSchemaFieldNames \f ->
+              $ forM_ (Map.keys Schema.telemetrySchema.fields) \f ->
                 option_ [value_ f] ""
           span_ [class_ "text-textDisabled mx-2 text-xs max-md:hidden"] "|"
           termRaw "query-builder" [term "query-editor-selector" "#filterElement"] ("" :: Text)
@@ -277,10 +273,10 @@ logQueryBox_ config = do
 visualizationTabs_ :: Maybe Text -> Bool -> Maybe Text -> Bool -> Html ()
 visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
   div_ [class_ "tabs tabs-box tabs-outline tabs-xs bg-fillWeak p-1 rounded-lg", id_ "visualizationTabs", role_ "radiogroup", Aria.label_ "Visualization type"] do
-    let defaultVizType = fromMaybe (if alert then "timeseries" else "logs") vizTypeM
+    let defaultVizType = fromMaybe (bool "logs" "timeseries" alert) vizTypeM
         containerSelector = fromMaybe "visualization-widget-container" widgetContainerId
         -- Sessions tab is hidden in alert mode (not a valid alerting surface).
-        visible = if alert then filter (\(_, _, t, _) -> t /= "sessions") visTypes else visTypes
+        visible = bool visTypes (filter (\(_, _, t, _) -> t /= "sessions") visTypes) alert
     forM_ visible \(_icon, label, vizType, emoji) ->
       label_ [data_ "value" vizType, class_ "tab !shadow-none !border-strokeWeak flex gap-1"] do
         input_
@@ -420,7 +416,7 @@ visTypes =
 queryLibItem_ :: Bool -> Projects.QueryLibItem -> Html ()
 queryLibItem_ isRecent qli =
   div_
-    [ class_ $ "query-item px-3 py-2 hover:bg-fillWeak cursor-pointer group relative transition-colors " <> if qli.byMe then "" else "hidden group-has-[#queryLibraryGroup:checked]/pg:block"
+    [ class_ $ "query-item px-3 py-2 hover:bg-fillWeak cursor-pointer group relative transition-colors " <> bool "hidden group-has-[#queryLibraryGroup:checked]/pg:block" "" qli.byMe
     , data_ "query" qli.queryText
     , data_ "query-id" qli.id.toText
     ]
@@ -436,25 +432,27 @@ queryLibItem_ isRecent qli =
       div_ [class_ "query-actions absolute top-0 right-3 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-within:opacity-100 flex gap-1"] do
         actionBtn_ "Run this query" "play" [onclick_ $ "event.preventDefault(); document.getElementById('filterElement').handleAddQuery(this.closest('.query-item').dataset.query, true); " <> hidePopoverJS]
         actionBtn_ "Copy query to clipboard" "copy" [onclick_ "event.preventDefault(); navigator.clipboard.writeText(this.closest('.query-item').dataset.query).then(() => { document.body.dispatchEvent(new CustomEvent('successToast', {detail: {value: ['Query copied to clipboard']}})); })"]
-        when qli.byMe do
-          actionBtn_
-            (if isRecent then "Save as named query" else "Edit query title")
-            (if isRecent then "floppy-disk" else "pen-to-square")
-            [ onclick_
-                $ if isRecent
-                  then "event.preventDefault(); document.getElementById('saveQueryMdl').dataset.pendingQuery = this.closest('.query-item').dataset.query; document.getElementById('queryLibId').value = ''; document.getElementById('saveQueryMdl').checked = true;"
-                  else "event.preventDefault(); document.getElementById('queryLibId').value = '" <> qli.id.toText <> "'; document.getElementById('saveQueryMdl').checked = true;"
-            ]
-          unless isRecent
-            $ actionBtn_
-              "Delete query"
-              "trash"
-              [ hxDelete_ $ "/p/" <> qli.projectId.toText <> "/log_explorer/queries/" <> qli.id.toText
-              , hxTarget_ "#queryLibraryContent"
-              , hxSwap_ "outerHTML"
-              , hxSelect_ "#queryLibraryContent"
-              , hxPushUrl_ "false"
-              ]
+        when qli.byMe
+          $ if isRecent
+            then
+              actionBtn_
+                "Save as named query"
+                "floppy-disk"
+                [onclick_ "event.preventDefault(); document.getElementById('saveQueryMdl').dataset.pendingQuery = this.closest('.query-item').dataset.query; document.getElementById('queryLibId').value = ''; document.getElementById('saveQueryMdl').checked = true;"]
+            else do
+              actionBtn_
+                "Edit query title"
+                "pen-to-square"
+                [onclick_ $ "event.preventDefault(); document.getElementById('queryLibId').value = '" <> qli.id.toText <> "'; document.getElementById('saveQueryMdl').checked = true;"]
+              actionBtn_
+                "Delete query"
+                "trash"
+                [ hxDelete_ $ "/p/" <> qli.projectId.toText <> "/log_explorer/queries/" <> qli.id.toText
+                , hxTarget_ "#queryLibraryContent"
+                , hxSwap_ "outerHTML"
+                , hxSelect_ "#queryLibraryContent"
+                , hxPushUrl_ "false"
+                ]
   where
     actionBtn_ :: Text -> Text -> [Attribute] -> Html ()
     actionBtn_ tip icon attrs =
@@ -651,17 +649,19 @@ queryEditorInitializationCode queryLibRecent queryLibSaved vizTypeM pid = do
       });
     };
 
-    // Inline parse error: intercept errorToast events for query errors and show inline
-    window.showQueryParseError = function(msg) {
+    // Inline parse error: the markup (icon + message span) is rendered by Lucid;
+    // JS only fills the text and toggles visibility.
+    window.__setQueryParseError = function(msg) {
       const el = document.getElementById('query-parse-error');
-      if (el) { el.innerHTML = '<svg class="inline-block icon h-3 w-3 shrink-0"><use href="/public/assets/svgs/fa-sprites/regular.svg#triangle-exclamation"></use></svg> '; el.appendChild(document.createTextNode(msg)); el.classList.remove('hidden'); }
-      document.getElementById('queryBuilder')?.classList.add('!border-red-500/50');
+      if (el) {
+        const m = document.getElementById('query-parse-error-msg');
+        if (m) m.textContent = msg || '';
+        el.classList.toggle('hidden', !msg);
+      }
+      document.getElementById('queryBuilder')?.classList.toggle('!border-red-500/50', !!msg);
     };
-    window.clearQueryParseError = function() {
-      const el = document.getElementById('query-parse-error');
-      if (el) { el.innerHTML = ''; el.classList.add('hidden'); }
-      document.getElementById('queryBuilder')?.classList.remove('!border-red-500/50');
-    };
+    window.showQueryParseError = msg => window.__setQueryParseError(msg);
+    window.clearQueryParseError = () => window.__setQueryParseError('');
     // Clear inline error when query changes
     window.addEventListener('update-query', () => window.clearQueryParseError());
     // Listen for server-sent parse error events (via HX-Trigger header)

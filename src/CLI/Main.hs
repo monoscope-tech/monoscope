@@ -852,24 +852,16 @@ cliMain v = do
   runCLI $ run v global cmd
 
 
--- | Apply --project override to the resolved config.
-resolveCfgWith :: (Environment :> es, FileSystem :> es, IOE :> es) => GlobalOpts -> Eff es CLIConfig
-resolveCfgWith g = do
-  c <- resolveConfig
-  pure $ case g.projectFlag of
-    Nothing -> c
-    Just pid -> c{projectId = Just pid}
-
-
--- | Resolve config + output mode and hand them to a subcommand handler.
--- Factors out the two-line preamble every resource branch repeats.
+-- | Resolve config (applying the @--project@ override) + output mode and hand
+-- them to a subcommand handler. Factors out the preamble every resource
+-- branch repeats.
 withCfgMode
   :: (Environment :> es, FileSystem :> es, IOE :> es)
   => GlobalOpts -> (CLIConfig -> OutputMode -> Eff es ()) -> Eff es ()
 withCfgMode global k = do
-  cfg <- resolveCfgWith global
+  cfg <- resolveConfig
   mode <- resolveMode global
-  k cfg mode
+  k cfg{projectId = global.projectFlag <|> cfg.projectId} mode
 
 
 run :: (Environment :> es, FileSystem :> es, HTTP :> es, IOE :> es) => Version -> GlobalOpts -> Command -> Eff es ()
@@ -902,7 +894,7 @@ run version global = \case
     MonApply path -> Resource.runApplyResource cfg Resource.Monitors path mode
     MonYaml i -> Resource.runYamlDump cfg Resource.Monitors i
     MonDelete i -> Resource.runDelete cfg Resource.Monitors i
-    MonMute i minsM -> Resource.runLifecycle cfg Resource.Monitors i "mute" (maybe [] (\m -> [("duration_minutes", show m)]) minsM) mode
+    MonMute i minsM -> Resource.runLifecycle cfg Resource.Monitors i "mute" (foldMap (\m -> [("duration_minutes", show m)]) minsM) mode
     MonUnmute i -> Resource.runLifecycle cfg Resource.Monitors i "unmute" [] mode
     MonResolve i -> Resource.runLifecycle cfg Resource.Monitors i "resolve" [] mode
     MonToggle i -> Resource.runLifecycle cfg Resource.Monitors i "toggle_active" [] mode
@@ -929,7 +921,7 @@ run version global = \case
       Resource.withResult (apiDelete cfg ("/api/v1/dashboards/" <> did <> "/widgets/" <> wid)) renderAPIError $ \() ->
         putTextLn $ "/api/v1/dashboards/" <> did <> "/widgets/" <> wid <> " deleted"
     DashWidgetsReorder did tabM path ->
-      Resource.runFromFile cfg Resource.PATCH ("/api/v1/dashboards/" <> did <> "/widgets/order") (maybe [] (\t -> [("tab", t)]) tabM) path mode
+      Resource.runFromFile cfg Resource.PATCH ("/api/v1/dashboards/" <> did <> "/widgets/order") (foldMap (\t -> [("tab", t)]) tabM) path mode
   ApiKeysCmd sub -> withCfgMode global $ \cfg mode -> case sub of
     KeyList -> Resource.runList cfg Resource.ApiKeys [] mode
     KeyGet i -> Resource.runGet cfg Resource.ApiKeys i mode
@@ -953,25 +945,22 @@ run version global = \case
     ProjPatch path -> Resource.runFromFile cfg Resource.PATCH "/api/v1/project" [] path mode
   IssuesCmd sub -> withCfgMode global $ \cfg mode -> case sub of
     IssueList{..} ->
-      let params = catMaybes [("status",) <$> status, ("type",) <$> issueType, ("service",) <$> service] <> pageParams page perPage
-       in Resource.runListVia cfg Resource.Issues "/api/v1/issues" params mode
-    IssueGet i -> Resource.runAPI mode (apiGetJson @_ @AE.Value cfg ("/api/v1/issues/" <> i) [])
-    IssueAck i -> Resource.writeJson cfg Resource.POST ("/api/v1/issues/" <> i <> "/ack") [] AE.Null mode
-    IssueUnack i -> Resource.writeJson cfg Resource.POST ("/api/v1/issues/" <> i <> "/unack") [] AE.Null mode
-    IssueArchive i -> Resource.writeJson cfg Resource.POST ("/api/v1/issues/" <> i <> "/archive") [] AE.Null mode
-    IssueUnarchive i -> Resource.writeJson cfg Resource.POST ("/api/v1/issues/" <> i <> "/unarchive") [] AE.Null mode
+      Resource.runList cfg Resource.Issues (catMaybes [("status",) <$> status, ("type",) <$> issueType, ("service",) <$> service] <> pageParams page perPage) mode
+    IssueGet i -> Resource.runGet cfg Resource.Issues i mode
+    IssueAck i -> Resource.runLifecycle cfg Resource.Issues i "ack" [] mode
+    IssueUnack i -> Resource.runLifecycle cfg Resource.Issues i "unack" [] mode
+    IssueArchive i -> Resource.runLifecycle cfg Resource.Issues i "archive" [] mode
+    IssueUnarchive i -> Resource.runLifecycle cfg Resource.Issues i "unarchive" [] mode
     IssueBulk act ids ->
       Resource.writeJson cfg Resource.POST "/api/v1/issues/bulk" [] (AE.object ["action" AE..= act, "ids" AE..= ids]) mode
   EndpointsCmd sub -> withCfgMode global $ \cfg mode -> case sub of
     EndList{..} ->
-      let params = catMaybes [("search",) <$> search, ("outgoing",) . bool "false" "true" <$> outgoing] <> pageParams page perPage
-       in Resource.runListVia cfg Resource.Endpoints "/api/v1/endpoints" params mode
-    EndGet i -> Resource.runAPI mode (apiGetJson @_ @AE.Value cfg ("/api/v1/endpoints/" <> i) [])
+      Resource.runList cfg Resource.Endpoints (catMaybes [("search",) <$> search, ("outgoing",) . bool "false" "true" <$> outgoing] <> pageParams page perPage) mode
+    EndGet i -> Resource.runGet cfg Resource.Endpoints i mode
   LogPatternsCmd sub -> withCfgMode global $ \cfg mode -> case sub of
-    LPList{..} ->
-      Resource.runListVia cfg Resource.LogPatterns "/api/v1/log_patterns" (pageParams page perPage) mode
-    LPGet i -> Resource.runAPI mode (apiGetJson @_ @AE.Value cfg ("/api/v1/log_patterns/" <> show i) [])
-    LPAck i -> Resource.writeJson cfg Resource.POST ("/api/v1/log_patterns/" <> show i <> "/ack") [] AE.Null mode
+    LPList{..} -> Resource.runList cfg Resource.LogPatterns (pageParams page perPage) mode
+    LPGet i -> Resource.runGet cfg Resource.LogPatterns (show i) mode
+    LPAck i -> Resource.runLifecycle cfg Resource.LogPatterns (show i) "ack" [] mode
     LPBulk act ids ->
       Resource.writeJson cfg Resource.POST "/api/v1/log_patterns/bulk" [] (AE.object ["action" AE..= act, "ids" AE..= ids]) mode
   TeamsCmd sub -> withCfgMode global $ \cfg mode -> case sub of
@@ -1024,14 +1013,10 @@ resolveMode global = do
 -- investigation. Operates on the typed 'Schema.Schema' so a server-side
 -- field rename surfaces as a compile error, not a silent miss.
 filterSchema :: SchemaOpts -> Schema.Schema -> Schema.Schema
-filterSchema opts s
-  | isNothing opts.search && isNothing opts.schemaLimit = s
-  | otherwise =
-      let needle = T.toLower <$> opts.search
-          matches k = maybe True (`T.isInfixOf` T.toLower k) needle
-          filtered = Map.filterWithKey (\k _ -> matches k) s.fields
-          capped = maybe filtered (`Map.take` filtered) opts.schemaLimit
-       in Schema.Schema{fields = capped}
+filterSchema opts s = Schema.Schema{fields = maybe filtered (`Map.take` filtered) opts.schemaLimit}
+  where
+    needle = T.toLower <$> opts.search
+    filtered = Map.filterWithKey (\k _ -> maybe True (`T.isInfixOf` T.toLower k) needle) s.fields
 
 
 -- | Trim each field's value list to the top-N. The server already sorts by
@@ -1052,12 +1037,9 @@ capFacets _ v = v
 -- silently doesn't work in their fish shell. Now we exit non-zero with a
 -- clear message that lists the supported shells.
 emitCompletion :: IOE :> es => Version -> Text -> Eff es ()
-emitCompletion v shell = liftIO $ case shell of
-  "bash" -> emit "--bash-completion-script"
-  "zsh" -> emit "--zsh-completion-script"
-  "fish" -> emit "--fish-completion-script"
-  other -> do
-    Data.Text.IO.hPutStrLn stderr $ "error: unknown shell '" <> other <> "'; supported: bash|zsh|fish"
-    exitFailure
-  where
-    emit shellArg = void $ handleParseResult $ execParserPure defaultPrefs (parserInfo v) [shellArg, "monoscope"]
+emitCompletion v shell
+  | shell `elem` ["bash", "zsh", "fish"] =
+      liftIO $ void $ handleParseResult $ execParserPure defaultPrefs (parserInfo v) ["--" <> toString shell <> "-completion-script", "monoscope"]
+  | otherwise = liftIO $ do
+      Data.Text.IO.hPutStrLn stderr $ "error: unknown shell '" <> shell <> "'; supported: bash|zsh|fish"
+      exitFailure

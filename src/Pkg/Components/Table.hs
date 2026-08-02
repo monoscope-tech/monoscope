@@ -306,15 +306,17 @@ instance ToHtml (TableRows a) where
 
 
 {-# INLINE renderTableRows #-}
-renderTableRows :: TableRows a -> Html ()
+renderTableRows :: forall a. TableRows a -> Html ()
 renderTableRows tr
   | V.null tr.rows = whenJust tr.emptyState renderSimpleZeroState
   | otherwise = do
-      if tr.renderAsTable
-        then tbody_ [class_ "stagger-fade"] $ V.forM_ tr.rows \row -> tr_ (maybe [] ($ row) tr.rowAttrs) do
-          whenJust tr.rowId \getId -> td_ [class_ "w-8 align-top pt-4"] $ selectRowCheckbox_ False (getId row)
-          forM_ tr.columns \c -> td_ c.attrs $ c.render row
-        else div_ [class_ "stagger-fade"] $ V.forM_ tr.rows \row -> div_ [class_ "flex gap-8 items-start itemsListItem"] $ forM_ tr.columns \c -> div_ c.attrs $ c.render row
+      renderBody []
+        $ Table
+          { config = (def :: Config){renderAsTable = tr.renderAsTable}
+          , columns = tr.columns
+          , rows = tr.rows
+          , features = (def :: Features a){rowId = tr.rowId, rowAttrs = tr.rowAttrs}
+          }
       whenJust tr.pagination renderPaginationFooter
 
 
@@ -385,7 +387,7 @@ selectRowCheckbox_ selected rid =
 -- | One row of a sort dropdown; @linkAttrs@ carries either an href or the htmx swap attrs.
 sortOption_ :: Bool -> [Attribute] -> Text -> Text -> Html ()
 sortOption_ isActive linkAttrs title desc =
-  a_ ([class_ $ "block flex flex-row px-3 py-2 hover:bg-fillBrand-weak rounded-md cursor-pointer " <> bool "" " text-textBrand " isActive] <> linkAttrs) do
+  a_ ([class_ $ "flex flex-row px-3 py-2 hover:bg-fillBrand-weak rounded-md cursor-pointer " <> bool "" " text-textBrand " isActive] <> linkAttrs) do
     div_ [class_ "flex flex-col items-center justify-center px-1"] $ if isActive then faSprite_ "icon-checkmark4" "solid" "w-4 h-4" else div_ [class_ "w-4 h-4"] ""
     div_ [class_ "grow"] do
       span_ [class_ "block text-sm font-medium"] $ toHtml title
@@ -443,42 +445,50 @@ renderTable tbl =
         (Nothing, Just (evt, url)) -> swapSelf url $ evt <> " from:body"
         (Nothing, Nothing) -> []
         where
-          swapSelf url trig = [hxGet_ url, hxTrigger_ trig, hxTarget_ "this", hxSwap_ "outerHTML", term "hx-select" $ "#" <> cid]
+          swapSelf url trig = [hxGet_ url, hxTrigger_ trig, hxTarget_ "this", hxSwap_ "outerHTML", hxSelect_ $ "#" <> cid]
    in case tbl.config.containerId of
         Just cid -> div_ ([class_ "w-full", id_ cid] <> refreshAttrs cid) paddedContent
         Nothing -> paddedContent
 
 
 renderRows :: Table a -> Html ()
-renderRows tbl =
-  if tbl.config.renderAsTable
-    then table_ [class_ $ tbl.config.tableClasses <> if tbl.config.noDividers then " no-dividers" else ""] do
-      when tbl.config.showHeader
-        $ thead_ do
-          tr_ do
-            when (isJust tbl.features.rowId)
-              $ th_ [class_ $ tbl.config.thClasses <> " w-8 max-md:hidden"] selectAllCheckbox_
-            forM_ (zip [0 ..] tbl.columns) \(idx, c) -> do
-              let sortable = (,) <$> c.sortField <*> tbl.features.sortableColumns
-                  baseAttrs = [class_ $ tbl.config.thClasses <> " " <> fromMaybe "" c.align]
-                  sortAttrs = foldMap (\(field, cfg) -> swapTarget_ cfg.targetId (toggleSortUrl cfg field) <> [class_ "cursor-pointer hover:bg-fillWeak"]) sortable
-                  sortOrder = sortable >>= \(field, cfg) -> lookup cfg.currentSort [("-" <> field, Desc), ("+" <> field, Asc)]
-              th_ (c.attrs <> baseAttrs <> sortAttrs) do
-                span_ [class_ "flex items-center gap-2 min-w-0"] do
-                  span_ [class_ $ bool "max-md:hidden" "" (idx > 0)] $ toHtml c.name
-                  whenJust c.headerExtra id
-                  whenJust sortOrder \case
-                    Asc -> faSprite_ "arrow-up" "regular" "w-3 h-3"
-                    Desc -> faSprite_ "arrow-down" "regular" "w-3 h-3"
-                  when (isJust sortable && isNothing sortOrder) $ faSprite_ "arrows-up-down" "regular" "w-3 h-3 opacity-30"
-                  when (tbl.config.bulkActionsInHeader == Just idx) do
-                    renderHeaderBulkActions tbl.features.bulkActions
-                    whenJust tbl.features.tableHeaderActions \ha -> do
-                      unless (null tbl.features.bulkActions) $ span_ [class_ "w-px h-5 bg-strokeWeak mx-1"] ""
-                      renderHeaderTableActions ha
-      tbody_ [id_ $ tbl.config.elemID <> "_tbody", class_ "stagger-fade"] do
-        V.mapM_ (renderTableRow tbl) tbl.rows
-    else div_ [class_ "stagger-fade"] $ V.mapM_ (renderListRow tbl) tbl.rows
+renderRows tbl
+  | tbl.config.renderAsTable =
+      table_ [class_ $ tbl.config.tableClasses <> if tbl.config.noDividers then " no-dividers" else ""] do
+        when tbl.config.showHeader
+          $ thead_ do
+            tr_ do
+              when (isJust tbl.features.rowId)
+                $ th_ [class_ $ tbl.config.thClasses <> " w-8 max-md:hidden"] selectAllCheckbox_
+              forM_ (zip [0 ..] tbl.columns) \(idx, c) -> do
+                let sortable = (,) <$> c.sortField <*> tbl.features.sortableColumns
+                    -- one class_ attribute: Lucid concatenates duplicates with no separator
+                    thAttrs = [class_ $ tbl.config.thClasses <> " " <> fromMaybe "" c.align <> bool "" " cursor-pointer hover:bg-fillWeak" (isJust sortable)]
+                    sortAttrs = foldMap (\(field, cfg) -> swapTarget_ cfg.targetId (toggleSortUrl cfg field)) sortable
+                    sortOrder = sortable >>= \(field, cfg) -> lookup cfg.currentSort [("-" <> field, Desc), ("+" <> field, Asc)]
+                th_ (c.attrs <> thAttrs <> sortAttrs) do
+                  span_ [class_ "flex items-center gap-2 min-w-0"] do
+                    span_ [class_ $ bool "max-md:hidden" "" (idx > 0)] $ toHtml c.name
+                    whenJust c.headerExtra id
+                    whenJust sortOrder \case
+                      Asc -> faSprite_ "arrow-up" "regular" "w-3 h-3"
+                      Desc -> faSprite_ "arrow-down" "regular" "w-3 h-3"
+                    when (isJust sortable && isNothing sortOrder) $ faSprite_ "arrows-up-down" "regular" "w-3 h-3 opacity-30"
+                    when (tbl.config.bulkActionsInHeader == Just idx) do
+                      span_ [class_ "inline-flex gap-2 ml-2 max-md:hidden"] $ forM_ tbl.features.bulkActions $ bulkActionBtn_ "btn-xs" "h-3 w-3"
+                      whenJust tbl.features.tableHeaderActions \ha -> do
+                        unless (null tbl.features.bulkActions) $ span_ [class_ "w-px h-5 bg-strokeWeak mx-1"] ""
+                        renderHeaderTableActions ha
+        renderBody [id_ $ tbl.config.elemID <> "_tbody"] tbl
+  | otherwise = renderBody [] tbl
+
+
+-- | Row container: @tbody@ in table mode, plain div in list mode. Shared with 'renderTableRows'
+-- so htmx-swapped pages stay markup-identical to page 1.
+renderBody :: [Attribute] -> Table a -> Html ()
+renderBody extra tbl
+  | tbl.config.renderAsTable = tbody_ (extra <> [class_ "stagger-fade"]) $ V.mapM_ (renderTableRow tbl) tbl.rows
+  | otherwise = div_ [class_ "stagger-fade"] $ V.mapM_ (renderListRow tbl) tbl.rows
 
 
 treeRowAttrs :: a -> TreeConfig a -> [Attribute]
@@ -521,8 +531,9 @@ renderTableRow tbl row =
     rowAttrs = maybe [] ($ row) tbl.features.rowAttrs
     treeAttrs = maybe [] (treeRowAttrs row) tbl.features.treeConfig
     isTreeGroup = maybe False (\tc -> tc.isGroupRow row) tbl.features.treeConfig
-    rowClass = "hover:bg-fillWeak transition-colors duration-75 itemsListItem" <> if isTreeGroup then " cursor-pointer" else ""
-    linkHandler = maybe [] (\getLink -> [class_ "cursor-pointer", hxGet_ (getLink row), hxPushUrl_ "true"] <> navTabAttrs) tbl.features.rowLink
+    -- single class_ attribute: Lucid concatenates duplicates with no separator
+    rowClass = "hover:bg-fillWeak transition-colors duration-75 itemsListItem" <> bool "" " cursor-pointer" (isTreeGroup || isJust tbl.features.rowLink)
+    linkHandler = maybe [] (\getLink -> [hxGet_ (getLink row), hxPushUrl_ "true"] <> navTabAttrs) tbl.features.rowLink
 
 
 -- | Bulk action button: enabled (via CSS) only while some row checkbox is checked.
@@ -536,10 +547,6 @@ bulkActionBtn_ btnSize iconSize blkA =
     do
       whenJust blkA.icon \icon -> faSprite_ icon "regular" $ iconSize <> " inline-block"
       span_ [class_ "ml-1"] $ toHtml blkA.title
-
-
-renderHeaderBulkActions :: [BulkAction] -> Html ()
-renderHeaderBulkActions bulkActions = span_ [class_ "inline-flex gap-2 ml-2 max-md:hidden"] $ forM_ bulkActions $ bulkActionBtn_ "btn-xs" "h-3 w-3"
 
 
 renderHeaderTableActions :: TableHeaderActions -> Html ()
@@ -671,7 +678,7 @@ renderPaginationFooter pg = div_ [class_ "flex items-center justify-between max-
     endItem = min ((pg.currentPage + 1) * pg.perPage) pg.totalCount
     mkUrl page perPage = withQuery pg.baseUrl $ "page=" <> show page <> "&per_page=" <> show perPage
     pgAttrs = swapTarget_ pg.targetId
-    navBtn icon enabled url = button_ ([class_ $ "cursor-pointer p-1.5 rounded border border-strokeWeak " <> if enabled then "hover:bg-fillWeak cursor-pointer" else "opacity-40 cursor-not-allowed", type_ "button"] <> if enabled then pgAttrs url else []) $ faSprite_ icon "regular" "w-4 h-4"
+    navBtn icon enabled url = button_ ([class_ $ "p-1.5 rounded border border-strokeWeak " <> if enabled then "hover:bg-fillWeak cursor-pointer" else "opacity-40 cursor-not-allowed", type_ "button"] <> if enabled then pgAttrs url else []) $ faSprite_ icon "regular" "w-4 h-4"
 
 
 renderZeroState :: ZeroState -> Html ()

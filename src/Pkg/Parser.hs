@@ -59,19 +59,27 @@ data NormalizedQuery = NormalizedQuery
   deriving stock (Generic, Show)
 
 
+-- | One source of truth for the timestamp column across every builder below.
+timestampCol :: Text
+timestampCol = "timestamp"
+
+
+timeBucketExpr :: Text -> Text
+timeBucketExpr interval = "time_bucket('" <> interval <> "', " <> timestampCol <> ")"
+
+
 -- | Build date range SQL clause from config
 buildDateRange :: SqlQueryCfg -> Text
 buildDateRange cfg =
   let fmtTime = toText . iso8601Show
-      timestampCol = "timestamp"
+      between a b = timestampCol <> " BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime b <> "'"
    in case (cfg.dateRange, cfg.cursorM) of
-        ((Nothing, Just b), Just cursor) -> timestampCol <> " <= '" <> fmtTime cursor <> "'"
-        ((Just a, Just _), Just cursor) -> timestampCol <> " BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime cursor <> "'"
-        ((Just a, Nothing), Just cursor) -> timestampCol <> " BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime cursor <> "'"
-        ((Nothing, Just b), Nothing) -> timestampCol <> " <= '" <> fmtTime b <> "'"
+        ((Just a, _), Just cursor) -> between a cursor
+        ((Nothing, Just _), Just cursor) -> timestampCol <> " <= '" <> fmtTime cursor <> "'"
+        ((Just a, Just b), Nothing) -> between a b
         ((Just a, Nothing), Nothing) -> timestampCol <> " >= '" <> fmtTime a <> "'"
-        ((Just a, Just b), Nothing) -> timestampCol <> " BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime b <> "'"
-        _ -> ""
+        ((Nothing, Just b), Nothing) -> timestampCol <> " <= '" <> fmtTime b <> "'"
+        ((Nothing, Nothing), _) -> ""
 
 
 -- | Build GROUP BY clause with resolved extended columns
@@ -83,18 +91,15 @@ buildGroupBy extCols cols
 
 -- | Build ORDER BY clause with fallback logic
 buildOrderBy :: QueryComponents -> Text
-buildOrderBy qc =
-  let timestampCol = "timestamp"
-   in case qc.sortFields of
-        Just fields -> "ORDER BY " <> T.intercalate ", " (map displaySortField fields)
-        Nothing -> case qc.finalSummarizeQuery of
-          Just binInterval -> "ORDER BY time_bucket('" <> binInterval <> "', " <> timestampCol <> ") desc"
-          Nothing
-            | any (\s -> "time_bucket" `T.isInfixOf` s) qc.select ->
-                "ORDER BY time_bucket('" <> defaultBinSize <> "', " <> timestampCol <> ") desc"
-            | not (null qc.groupByClause) ->
-                "ORDER BY " <> fromMaybe timestampCol (listToMaybe qc.groupByClause) <> " desc"
-            | otherwise -> "ORDER BY " <> timestampCol <> " desc"
+buildOrderBy qc = case qc.sortFields of
+  Just fields -> "ORDER BY " <> T.intercalate ", " (map displaySortField fields)
+  Nothing -> case qc.finalSummarizeQuery of
+    Just binInterval -> bucketOrder binInterval
+    Nothing
+      | any (T.isInfixOf "time_bucket") qc.select -> bucketOrder defaultBinSize
+      | otherwise -> "ORDER BY " <> fromMaybe timestampCol (listToMaybe qc.groupByClause) <> " desc"
+  where
+    bucketOrder interval = "ORDER BY " <> timeBucketExpr interval <> " desc"
 
 
 defaultQueryLimit :: Int
@@ -103,18 +108,15 @@ defaultQueryLimit = 500
 
 -- | Build LIMIT clause with defaults
 buildLimit :: QueryComponents -> Text
-buildLimit qc = case qc.takeLimit of
-  Just limit -> "limit " <> show limit
-  Nothing -> case qc.finalSummarizeQuery of
-    Just _ -> "" -- No limit for summarize queries
-    Nothing -> "limit " <> show defaultQueryLimit
+buildLimit qc = case (qc.takeLimit, qc.finalSummarizeQuery) of
+  (Just limit, _) -> "limit " <> show limit
+  (Nothing, Just _) -> "" -- No limit for summarize queries
+  (Nothing, Nothing) -> "limit " <> show defaultQueryLimit
 
 
 -- | Build WHERE condition from raw clause
 buildWhereCondition :: Maybe Text -> Text
-buildWhereCondition Nothing = "TRUE"
-buildWhereCondition (Just w) | T.null w = "TRUE"
-buildWhereCondition (Just w) = "(" <> w <> ")"
+buildWhereCondition = maybe "TRUE" \w -> if T.null w then "TRUE" else "(" <> w <> ")"
 
 
 -- | Normalize QueryComponents into NormalizedQuery for SQL generation
@@ -140,65 +142,59 @@ normalizeQuery cfg qc =
 
 
 sectionsToComponents :: SqlQueryCfg -> [Section] -> QueryComponents
-sectionsToComponents sqlCfg = foldl' (applySectionToComponent sqlCfg) (def :: QueryComponents)
+sectionsToComponents sqlCfg = foldl' (applySectionToComponent sqlCfg) def
 
 
--- | Resolve a column name to its full expression if it's an extended column (O(log n) lookup)
+-- | Resolve a column name to its full expression when it's an extended column.
 resolveExtendedColumn :: Map.Map Text Text -> Text -> Text
-resolveExtendedColumn extColsMap colName = fromMaybe colName (Map.lookup colName extColsMap)
-
-
--- | Combine where clauses using AND
-combineWhereClause :: Maybe Text -> Text -> Maybe Text
-combineWhereClause Nothing new = Just new
-combineWhereClause (Just existing) new = Just $ existing <> " AND " <> new
+resolveExtendedColumn extColsMap colName = Map.findWithDefault colName colName extColsMap
 
 
 applySectionToComponent :: SqlQueryCfg -> QueryComponents -> Section -> QueryComponents
-applySectionToComponent sqlCfg qc (Search expr) = qc{whereClause = combineWhereClause qc.whereClause (display (resolveWildcardTimes sqlCfg.currentTime expr))}
-applySectionToComponent sqlCfg qc (WhereClause expr) = qc{whereClause = combineWhereClause qc.whereClause (display (resolveWildcardTimes sqlCfg.currentTime expr))}
-applySectionToComponent _ qc (Source source) = qc{fromTable = Just $ display source}
-applySectionToComponent sqlCfg qc (SummarizeCommand aggs byClauseM) =
-  let pctInfo = extractPercentilesInfo [SummarizeCommand aggs byClauseM]
-   in applySummarizeByClauseToQC sqlCfg byClauseM $ qc{aggregations = qc.aggregations <> map display aggs, percentilesInfo = pctInfo}
--- extend adds computed columns (appends to defaults) AND tracks mappings for GROUP BY resolution
-applySectionToComponent _ qc (ExtendCommand cols) =
-  let colMappings = [(name, fst $ splitTrailingAlias $ display expr) | (name, expr) <- cols]
-      extendCols = map (display . snd) cols
-   in qc{extendedColumns = qc.extendedColumns <> colMappings, extendSelect = qc.extendSelect <> extendCols}
--- project replaces select with only the specified columns
-applySectionToComponent _ qc (ProjectCommand cols) = qc{select = map (display . snd) cols}
-applySectionToComponent _ qc (SortCommand sortFields) = qc{sortFields = Just sortFields}
-applySectionToComponent _ qc (TakeCommand limit) = qc{takeLimit = Just limit}
+applySectionToComponent sqlCfg qc = \case
+  Search expr -> narrow expr
+  WhereClause expr -> narrow expr
+  Source source -> qc{fromTable = Just $ display source}
+  sec@(SummarizeCommand aggs byClauseM) ->
+    applySummarizeByClauseToQC sqlCfg byClauseM qc{aggregations = qc.aggregations <> map display aggs, percentilesInfo = extractPercentilesInfo [sec]}
+  -- extend adds computed columns (appends to defaults) AND tracks mappings for GROUP BY resolution
+  ExtendCommand cols ->
+    qc
+      { extendedColumns = qc.extendedColumns <> [(name, fst $ splitTrailingAlias $ display expr) | (name, expr) <- cols]
+      , extendSelect = qc.extendSelect <> map (display . snd) cols
+      }
+  -- project replaces select with only the specified columns
+  ProjectCommand cols -> qc{select = map (display . snd) cols}
+  SortCommand sortFields -> qc{sortFields = Just sortFields}
+  TakeCommand limit -> qc{takeLimit = Just limit}
+  where
+    narrow expr =
+      let new = display (resolveWildcardTimes sqlCfg.currentTime expr)
+       in qc{whereClause = Just $ maybe new (<> " AND " <> new) qc.whereClause}
 
 
 -- | Apply summarize by clause to query components
 applySummarizeByClauseToQC :: SqlQueryCfg -> Maybe SummarizeByClause -> QueryComponents -> QueryComponents
 applySummarizeByClauseToQC _ Nothing qc = qc
 applySummarizeByClauseToQC sqlCfg (Just (SummarizeByClause items)) qc =
-  let binFields = [b | ByBinFunc b <- items]
-      regularFields = [item | item <- items, not (isBinFunc item)]
-      isBinFunc (ByBinFunc _) = True
-      isBinFunc _ = False
-      hasBinFuncs = not (null binFields)
-      binInterval = case listToMaybe binFields of
-        Just (Bin _ interval) -> kqlTimespanToTimeBucket interval
-        Just (BinAuto _) -> calculateAutoBinWidth sqlCfg.dateRange sqlCfg.currentTime
-        Nothing -> defaultBinSize
-      groupByClauses = map display regularFields
-   in qc
-        { finalSummarizeQuery = if hasBinFuncs then Just binInterval else Nothing
-        , groupByClause = qc.groupByClause <> groupByClauses
-        }
+  qc
+    { finalSummarizeQuery =
+        listToMaybe [b | ByBinFunc b <- items] <&> \case
+          Bin _ interval -> kqlTimespanToTimeBucket interval
+          BinAuto _ -> calculateAutoBinWidth sqlCfg.dateRange sqlCfg.currentTime
+    , groupByClause = qc.groupByClause <> [display item | item <- items, not (isBinFunc item)]
+    }
+  where
+    isBinFunc = \case
+      ByBinFunc _ -> True
+      BySubject _ -> False
+      ByScalarFunc _ -> False
 
 
 -- | Display a sort field for SQL generation
 displaySortField :: SortField -> Text
-displaySortField (SortField field Nothing) = display field
-displaySortField (SortField field (Just dir)) = display field <> " " <> display dir
+displaySortField (SortField field dirM) = display field <> maybe "" ((" " <>) . display) dirM
 
-
--- Legacy clause application functions removed
 
 ----------------------------------------------------------------------------------
 
@@ -237,7 +233,6 @@ normalizeKeyPath txt = T.toLower $ T.replace "]" "❳" $ T.replace "[" "❲" $ T
 -- >>> snd $ getProcessedColumns ["name"] ["name as span_name","duration"]
 -- ["name as name","name as span_name","duration"]
 getProcessedColumns :: [Text] -> [Text] -> (Text, [Text])
-getProcessedColumns [] defaultSelect = (T.intercalate "," $ colsNoAsClause defaultSelect, defaultSelect)
 getProcessedColumns cols defaultSelect = (T.intercalate "," $ colsNoAsClause selectedCols, selectedCols)
   where
     defaultAliases = listToColNames defaultSelect
@@ -258,23 +253,18 @@ getProcessedColumns cols defaultSelect = (T.intercalate "," $ colsNoAsClause sel
 sqlFromQueryComponents :: SqlQueryCfg -> QueryComponents -> (Text, QueryComponents)
 sqlFromQueryComponents sqlCfg qc =
   let
-    -- Use normalized query for pre-computed values
     nq = normalizeQuery sqlCfg qc
-    timestampCol = "timestamp"
 
-    processedCols = map (\col -> if "summary" == col || "summary" `T.isSuffixOf` col then "to_jsonb(summary)" else col) $ colsNoAsClause nq.nqSelectCols
-    selectClause = T.intercalate "," processedCols
+    selectClause = T.intercalate "," $ map (\col -> if "summary" `T.isSuffixOf` col then "to_jsonb(summary)" else col) $ colsNoAsClause nq.nqSelectCols
 
-    -- Use pre-computed values from NormalizedQuery
     fromTable = nq.nqTable
     groupByClause = nq.nqGroupBy
     sortOrder = nq.nqOrderBy
     limitClause = nq.nqLimit
     whereCondition = nq.nqWhere
-    dateRangeStr = nq.nqDateRange
 
     -- Build complete WHERE clause for data queries
-    buildWhere = T.intercalate " and " $ filter (not . T.null) ["project_id='" <> nq.nqProjectId <> "'", dateRangeStr, "(" <> whereCondition <> ")"]
+    buildWhere = T.intercalate " and " $ filter (not . T.null) ["project_id='" <> nq.nqProjectId <> "'", nq.nqDateRange, "(" <> whereCondition <> ")"]
 
     -- count(*) OVER() goes inside the array as the LAST element when
     -- hasCountOver = True; 'selectLogTable' peels it back off via dropLast.
@@ -282,9 +272,7 @@ sqlFromQueryComponents sqlCfg qc =
     wrap :: Text -> Text
     wrap cols = "jsonb_build_array(" <> cols <> ")"
     -- Standard data queries skip count(*) OVER() and use LIMIT+1 to detect hasMore
-    overflowLimitClause = case qc.takeLimit of
-      Just limit -> "limit " <> show (limit + 1)
-      Nothing -> "limit " <> show (defaultQueryLimit + 1)
+    overflowLimitClause = "limit " <> show (fromMaybe defaultQueryLimit qc.takeLimit + 1)
     (finalSqlQuery, countOverIncluded) = case sqlCfg.targetSpansM of
       Just "service-entry-spans" ->
         ( [fmt|WITH ranked_spans AS (SELECT *, resource->'service'->>'name' AS service_name,
@@ -299,40 +287,34 @@ sqlFromQueryComponents sqlCfg qc =
       _ ->
         case qc.finalSummarizeQuery of
           Just binInterval ->
-            let timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
+            let bucketExpr = timeBucketExpr binInterval
                 -- jsonb_build_array(...) args cannot carry @AS alias@, so strip
                 -- trailing aliases from aggregations / projected cols here.
                 cols = colsNoAsClause $ if null qc.aggregations then qc.select else qc.aggregations
                 selectCols = T.intercalate "," $ filter (not . T.isInfixOf "time_bucket") cols
                 selectPart = if T.null selectCols then "" else selectCols <> ", "
-                args = "extract(epoch from " <> timeBucketExpr <> ")::integer, " <> selectPart <> countOver
+                args = "extract(epoch from " <> bucketExpr <> ")::integer, " <> selectPart <> countOver
              in ( [fmt|SELECT {wrap args}
                    FROM {fromTable}
                    WHERE {buildWhere}
-                   GROUP BY {timeBucketExpr}
-                   ORDER BY {timeBucketExpr} DESC
+                   GROUP BY {bucketExpr}
+                   ORDER BY {bucketExpr} DESC
                    {limitClause} |]
                 , True
                 )
-          Nothing ->
-            let useAggregations = not (null qc.aggregations) && not (null qc.groupByClause)
-                selectPart =
-                  if useAggregations
-                    then T.intercalate "," (colsNoAsClause qc.aggregations)
-                    else selectClause
-             in if useAggregations
-                  then
-                    ( [fmt|SELECT {wrap (selectPart <> ", " <> countOver)} FROM {fromTable}
-                       WHERE {buildWhere}
-                       {groupByClause} {sortOrder} {limitClause} |]
-                    , True
-                    )
-                  else
-                    ( [fmt|SELECT {wrap selectPart} FROM {fromTable}
-                       WHERE {buildWhere}
-                       {groupByClause} {sortOrder} {overflowLimitClause} |]
-                    , False
-                    )
+          Nothing
+            | not (null qc.aggregations) && not (null qc.groupByClause) ->
+                ( [fmt|SELECT {wrap (T.intercalate "," (colsNoAsClause qc.aggregations) <> ", " <> countOver)} FROM {fromTable}
+                   WHERE {buildWhere}
+                   {groupByClause} {sortOrder} {limitClause} |]
+                , True
+                )
+            | otherwise ->
+                ( [fmt|SELECT {wrap selectClause} FROM {fromTable}
+                   WHERE {buildWhere}
+                   {groupByClause} {sortOrder} {overflowLimitClause} |]
+                , False
+                )
 
     -- Generate the summarize query depending on bin functions and data type
     -- Percentiles info is extracted directly from AST in applySectionToComponent
@@ -342,14 +324,14 @@ sqlFromQueryComponents sqlCfg qc =
         Just binInterval ->
           case qc.percentilesInfo of
             Just (fieldExpr, pcts) ->
-              let timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
+              let bucketExpr = timeBucketExpr binInterval
                   percentiles =
                     T.intercalate
                       ", "
                       [ "(" <> show (p / 100.0) <> ", 'p" <> show (round p :: Int) <> "')"
                       | p <- pcts
                       ]
-               in [fmt|WITH bucket_digests AS (SELECT extract(epoch from {timeBucketExpr})::integer AS timeB,
+               in [fmt|WITH bucket_digests AS (SELECT extract(epoch from {bucketExpr})::integer AS timeB,
                     percentile_agg(CAST({fieldExpr} AS DOUBLE)) AS digest
                   FROM {fromTable}
                   WHERE {buildWhere}
@@ -366,49 +348,36 @@ sqlFromQueryComponents sqlCfg qc =
                     if null qc.groupByClause
                       then "'" <> (if null qc.aggregations then "count" else "value") <> "'"
                       else "COALESCE(" <> maybe "status_code" resolve (listToMaybe qc.groupByClause) <> "::text, 'null')"
-                  aggCol = if null qc.aggregations then "count(*)::float" else fromMaybe "count(*)::float" (listToMaybe qc.aggregations)
-                  timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
-                  groupByPart = if null qc.groupByClause then timeBucketExpr else timeBucketExpr <> ", " <> groupCol
-               in [fmt|SELECT extract(epoch from {timeBucketExpr})::integer, {groupCol}, {aggCol}
+                  aggCol = fromMaybe "count(*)::float" (listToMaybe qc.aggregations)
+                  bucketExpr = timeBucketExpr binInterval
+                  groupByPart = if null qc.groupByClause then bucketExpr else bucketExpr <> ", " <> groupCol
+               in [fmt|SELECT extract(epoch from {bucketExpr})::integer, {groupCol}, {aggCol}
                       FROM {fromTable} WHERE {buildWhere} GROUP BY {groupByPart}
-                      ORDER BY {timeBucketExpr} DESC {limitClause}|]
+                      ORDER BY {bucketExpr} DESC {limitClause}|]
         Nothing ->
           let hasAggregationsNoGroupBy = not (null qc.aggregations) && null qc.groupByClause
-              orderCol = if null qc.groupByClause then timestampCol else fromMaybe timestampCol (listToMaybe qc.groupByClause)
+              orderCol = fromMaybe timestampCol (listToMaybe qc.groupByClause)
               selectCols = if null qc.aggregations then qc.select else qc.aggregations
               orderClause = if hasAggregationsNoGroupBy then "" else " ORDER BY " <> orderCol <> " DESC"
               limitPart = if hasAggregationsNoGroupBy then "" else limitClause
            in [fmt|SELECT {T.intercalate "," selectCols} FROM {fromTable} WHERE {buildWhere}
               {groupByClause}{orderClause} {limitPart}|]
 
-    -- FIXME: render this based on the aggregations, but without the aliases
-    alertSelect = [fmt| count(*)::float8|] :: Text
-    resolvedGroupByCols = let extColsMap = Map.fromList nq.nqExtendedColumns in map (resolveExtendedColumn extColsMap) qc.groupByClause
-    alertGroupByClause = if null qc.groupByClause then "" else " GROUP BY " <> T.intercalate "," resolvedGroupByCols
-    -- For alert queries, we use a simplified whereCondition without the time range/cursor
-    alertWhereCondition = nq.nqWhere
-
-    -- Alert queries must look only at recent data; otherwise time_bucket groups
-    -- across all history and max returns the all-time peak bucket.
+    -- Alert queries reuse whereCondition but drop the date range/cursor for this
+    -- recency filter; without it time_bucket groups across all history and max
+    -- returns the all-time peak bucket.
     alertTimeFilter = timestampCol <> " >= NOW() - INTERVAL '" <> show sqlCfg.alertLookbackMins <> " minutes'"
+    -- With a bin function the alert reads only the most recent bucket's value.
+    alertTail = case qc.finalSummarizeQuery of
+      Just binInterval -> let e = timeBucketExpr binInterval in "GROUP BY " <> e <> " ORDER BY " <> e <> " DESC LIMIT 1"
+      Nothing -> buildGroupBy nq.nqExtendedColumns qc.groupByClause
+    -- FIXME: render the selection from the aggregations, but without the aliases
     alertQuery =
-      case qc.finalSummarizeQuery of
-        Just binInterval ->
-          -- For queries with bin functions, return the most recent bucket's value
-          let timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
-           in [fmt|
-                SELECT GREATEST({alertSelect}) FROM {fromTable}
-                WHERE project_id='{sqlCfg.pid.toText}' AND {alertTimeFilter} AND ({alertWhereCondition})
-                GROUP BY {timeBucketExpr}
-                ORDER BY {timeBucketExpr} DESC
-                LIMIT 1
-              |]
-        Nothing ->
-          [fmt|
-              SELECT GREATEST({alertSelect}) FROM {fromTable}
-              WHERE project_id='{sqlCfg.pid.toText}' AND {alertTimeFilter} AND ({alertWhereCondition})
-              {alertGroupByClause}
-            |]
+      [fmt|
+          SELECT GREATEST( count(*)::float8) FROM {fromTable}
+          WHERE project_id='{sqlCfg.pid.toText}' AND {alertTimeFilter} AND ({whereCondition})
+          {alertTail}
+        |]
    in
     ( finalSqlQuery
     , qc
@@ -451,12 +420,12 @@ sqlFromQueryComponents sqlCfg qc =
 -- >>> c4.whereClause
 -- Just "(jsonb_path_exists(to_jsonb(errors), '$[*].\"error_type\" ? (@ like_regex \"^ab.*c\" flag \"i\")'::jsonpath))"
 parseQueryToComponents :: SqlQueryCfg -> Text -> Either Text (Text, QueryComponents)
-parseQueryToComponents sqlCfg q = bimap (toText . errorBundlePretty) (queryASTToComponents sqlCfg) (parse parseQuery "" (T.strip q))
+parseQueryToComponents sqlCfg = fmap (queryASTToComponents sqlCfg) . parseQueryToAST
 
 
 queryASTToComponents :: SqlQueryCfg -> [Section] -> (Text, QueryComponents)
 queryASTToComponents sqlCfg sections =
-  let effectiveSource = sqlCfg.source <|> viaNonEmpty Relude.head [s | Source s <- sections]
+  let effectiveSource = sqlCfg.source <|> listToMaybe [s | Source s <- sections]
       qc = sectionsToComponents sqlCfg $ rewriteSectionsForSource effectiveSource sections
    in -- The FROM table follows the effective source (cfg or an explicit `source`
       -- section); without this a metrics query built via the cfg arg alone would
@@ -469,58 +438,39 @@ parseQueryToAST q = first (toText . errorBundlePretty) (parse parseQuery "" (T.s
 
 
 defPid :: Projects.ProjectId
-defPid = def :: Projects.ProjectId
+defPid = def
 
 
--- Only for tests. and harrd coding
+-- | Fixed clock for tests and hardcoded queries.
 fixedUTCTime :: UTCTime
 fixedUTCTime = UTCTime (fromGregorian 2020 1 1) (secondsToDiffTime 0)
 
 
--- | Calculate automatic bin width based on date range duration
--- Rules:
--- - Less than 1 hour: 1 minute bins
--- - 1-6 hours: 5 minute bins
--- - 6-24 hours: 10 minute bins
--- - 1-7 days: 1 hour bins
--- - 7-30 days: 6 hour bins
--- - More than 30 days: 1 day bins
+-- | Bin width for a date range: the shortest bucket that keeps the series readable.
 calculateAutoBinWidth :: (Maybe UTCTime, Maybe UTCTime) -> UTCTime -> Text
-calculateAutoBinWidth (Just startTime, Just endTime) _ =
-  let duration = diffUTCTime endTime startTime
-      seconds = realToFrac duration :: Double
-      minutes = seconds / 60
-      hours = minutes / 60
-      days = hours / 24
-   in case () of
-        _
-          | minutes <= 2 -> "1 second"
-          | minutes <= 5 -> "5 seconds"
-          | minutes <= 15 -> "10 seconds"
-          | hours <= 1 -> "30 seconds"
-          | hours <= 6 -> "1 minutes"
-          | hours <= 14 -> "5 minutes"
-          | hours <= 48 -> "10 minutes"
-          | days < 7 -> "1 hour"
-          | days < 30 -> "6 hours"
-          | otherwise -> "1 day"
-calculateAutoBinWidth (Nothing, Just endTime) currentTime =
-  -- If no start time, assume 14 days ago (same as default date range)
-  let startTime = addUTCTime (-(14 * 24 * 60 * 60)) currentTime
-   in calculateAutoBinWidth (Just startTime, Just endTime) currentTime
-calculateAutoBinWidth (Just startTime, Nothing) currentTime =
-  -- If no end time, use current time
-  calculateAutoBinWidth (Just startTime, Just currentTime) currentTime
-calculateAutoBinWidth (Nothing, Nothing) currentTime =
-  -- Default to 14 days range if no date range specified
-  let startTime = addUTCTime (-(14 * 24 * 60 * 60)) currentTime
-   in calculateAutoBinWidth (Just startTime, Just currentTime) currentTime
+calculateAutoBinWidth (startM, endM) currentTime
+  | minutes <= 2 = "1 second"
+  | minutes <= 5 = "5 seconds"
+  | minutes <= 15 = "10 seconds"
+  | hours <= 1 = "30 seconds"
+  | hours <= 6 = "1 minutes"
+  | hours <= 14 = "5 minutes"
+  | hours <= 48 = "10 minutes"
+  | days < 7 = "1 hour"
+  | days < 30 = "6 hours"
+  | otherwise = "1 day"
+  where
+    -- Missing bounds default to the 14-day window the UI defaults to, ending now.
+    startTime = fromMaybe (addUTCTime (-(14 * 24 * 60 * 60)) currentTime) startM
+    minutes = realToFrac (diffUTCTime (fromMaybe currentTime endM) startTime) / 60 :: Double
+    hours = minutes / 60
+    days = hours / 24
 
 
 defSqlQueryCfg :: Projects.ProjectId -> UTCTime -> Maybe Sources -> Maybe Text -> SqlQueryCfg
 defSqlQueryCfg pid currentTime source spanT =
   SqlQueryCfg
-    { pid = pid
+    { pid
     , presetRollup = Nothing
     , cursorM = Nothing
     , dateRange = (Nothing, Nothing)
@@ -593,14 +543,16 @@ splitTrailingAlias (T.strip -> t) =
                 else (T.strip $ T.dropEnd (T.length asNeedle) pre, Just alias)
 
 
+-- | Output names of a select list: the alias when present, else the expression.
+--
 -- >>> listToColNames ["id", "JSONB_ARRAY_LENGTH(errors) as errors_count"]
 -- ["id","errors_count"]
 listToColNames :: [Text] -> [Text]
-listToColNames = map \x -> case splitTrailingAlias x of
-  (expr, Nothing) -> expr
-  (_, Just alias) -> alias
+listToColNames = map (uncurry fromMaybe . splitTrailingAlias)
 
 
+-- | Select list with trailing aliases stripped (jsonb_build_array args can't carry @AS@).
+--
 -- >>> colsNoAsClause ["id", "JSONB_ARRAY_LENGTH(errors) as errors_count"]
 -- ["id","JSONB_ARRAY_LENGTH(errors)"]
 colsNoAsClause :: [Text] -> [Text]
@@ -621,29 +573,26 @@ instance HasField "toColNames" QueryComponents [Text] where
 -- >>> replacePlaceholders Map.empty "{{missing}}"
 -- "{{missing}}"
 replacePlaceholders :: Map.Map Text Text -> Text -> Text
-replacePlaceholders mappng = Map.foldlWithKey' (\t k v -> T.replace ("{{" <> k <> "}}") v t) ?? mappng
+replacePlaceholders mappng txt = Map.foldlWithKey' (\t k v -> T.replace ("{{" <> k <> "}}") v t) txt mappng
 
 
 variablePresets :: Text -> Maybe UTCTime -> Maybe UTCTime -> [(Text, Maybe Text)] -> UTCTime -> Map.Map Text Text
 variablePresets pid mf mt allParams currentTime =
   let fmtUTC = maybe "" formatUTC
       andPrefix = (" AND " <>)
-      clause field = case (mf, mt) of
-        (Nothing, Nothing) -> ""
-        (Just a, Nothing) -> andPrefix $ "(" <> field <> " >= '" <> formatUTC a <> "')"
-        (Nothing, Just b) -> andPrefix $ "(" <> field <> " <= '" <> formatUTC b <> "')"
-        (Just a, Just b) -> andPrefix $ "(" <> field <> " >= '" <> formatUTC a <> "' AND " <> field <> " <= '" <> formatUTC b <> "')"
-      allParams' = allParams <&> second maybeToMonoid
-      rollupInterval = calculateAutoBinWidth (mf, mt) currentTime
+      bound op t field' = field' <> " " <> op <> " '" <> formatUTC t <> "'"
+      clause field = case catMaybes [bound ">=" <$> mf, bound "<=" <$> mt] of
+        [] -> ""
+        bs -> andPrefix $ "(" <> T.intercalate " AND " (map ($ field) bs) <> ")"
    in Map.fromList
         $ [ ("project_id", pid)
           , ("from", andPrefix $ fmtUTC mf)
           , ("to", andPrefix $ fmtUTC mt)
           , ("time_filter", clause "timestamp")
           , ("time_filter_sql_created_at", clause "created_at")
-          , ("rollup_interval", rollupInterval)
+          , ("rollup_interval", calculateAutoBinWidth (mf, mt) currentTime)
           ]
-        <> allParams'
+        <> (allParams <&> second maybeToMonoid)
 
 
 -- | Like variablePresets but uses KQL format for constants.
@@ -656,6 +605,8 @@ variablePresetsKQL pid mf mt allParams currentTime =
    in Map.union kqlRemapping filteredBase
 
 
+-- | First column of each row as a SQL @IN@ list; empty stays valid but matches nothing.
+--
 -- >>> constantToSQLList [["api/users"], ["api/orders"]]
 -- "('api/users', 'api/orders')"
 -- >>> constantToSQLList [["foo'bar"]]
@@ -668,6 +619,8 @@ constantToSQLList = \case
   rows -> "(" <> T.intercalate ", " [sqlStringLit v | (v : _) <- rows] <> ")"
 
 
+-- | Same as 'constantToSQLList' but in KQL literal syntax.
+--
 -- >>> constantToKQLList [["api/users"], ["api/orders"]]
 -- "(\"api/users\", \"api/orders\")"
 -- >>> constantToKQLList [["foo\"bar"]]

@@ -82,9 +82,7 @@ data EndpointAlertRow = EndpointAlertRow
 -- >>> endpointContextLabel (EndpointAlertRow "GET /x" Nothing Nothing Nothing)
 -- Nothing
 endpointContextLabel :: EndpointAlertRow -> Maybe Text
-endpointContextLabel r = case catMaybes [r.service, r.environment] of
-  [] -> Nothing
-  xs -> Just (T.intercalate " · " xs)
+endpointContextLabel r = guarded (not . T.null) $ T.intercalate " · " $ catMaybes [r.service, r.environment]
 
 
 -- | Partition alert rows by @(host, service, environment)@. Each group carries
@@ -284,9 +282,9 @@ emailDivider = hr_ [class_ "divider"]
 metaCell :: Text -> Text -> Html ()
 metaCell label val = td_ [width_ "50%", style_ "padding-bottom: 10px;"]
   $ span_ [class_ "error-card-meta"] do
-    b_ [class_ "error-card-label"] $ toHtml @Text label
+    b_ [class_ "error-card-label"] $ toHtml label
     " "
-    toHtml @Text val
+    toHtml val
 
 
 emailHelpLinks :: Html ()
@@ -334,6 +332,10 @@ emailStatRow cols =
       cols
 
 
+monoPre :: Text -> Html ()
+monoPre = pre_ [style_ "font-family: monospace; font-size: 13px; white-space: pre-wrap; margin: 0 0 16px 0;"] . toHtml
+
+
 emailGreeting :: Maybe Text -> Html ()
 emailGreeting = maybe (p_ "Hi there!") \name -> p_ do "Hi "; b_ (toHtml name); "!"
 
@@ -346,7 +348,7 @@ data ProjectNotifKind = PNInvite | PNCreated | PNDeleted
 
 
 projectNotifEmail :: ProjectNotifKind -> Maybe Text -> Text -> Maybe (Text, Text) -> (Text, Html ())
-projectNotifEmail kindLabel userNameM projectName ctaM =
+projectNotifEmail kind userNameM projectName ctaM =
   ( subject
   , emailBody do
       emailGreeting userNameM
@@ -358,7 +360,7 @@ projectNotifEmail kindLabel userNameM projectName ctaM =
       whenJust ctaM \(url, _) -> emailFallbackUrl url
   )
   where
-    (subject, message) = case kindLabel of
+    (subject, message) = case kind of
       PNInvite -> ("[···] Project Invitation", "<b>" <> fromMaybe "Someone" userNameM <> "</b> has invited you to the <b>" <> projectName <> "</b> project on Monoscope. We're excited to have you on board! All you need to do next is <a href=\"https://monoscope.tech/docs/sdks?utm_source=transac_emails\">integrate one of our SDKs</a> into your application so we can begin monitoring your API.")
       PNCreated -> ("[···] New Project Created", "You have created a new <b>" <> projectName <> "</b> project on Monoscope.")
       PNDeleted -> ("[···] Project Deleted", "You have successfully deleted the <b>" <> projectName <> "</b> project.")
@@ -420,16 +422,16 @@ logPatternEmail projectName issueUrl patternText sampleMessage logLevel serviceN
           ]
       emailDivider
       p_ [style_ "margin: 0 0 8px; font-weight: 600; color: #24292f;"] "Pattern"
-      pre_ [style_ "font-family: monospace; font-size: 13px; white-space: pre-wrap; margin: 0 0 16px 0;"] $ toHtml $ stripSummaryBadges patternText
+      monoPre $ stripSummaryBadges patternText
       whenJust sampleMessage \s -> do
         p_ [style_ "margin: 0 0 8px; font-weight: 600; color: #24292f;"] "Sample"
-        pre_ [style_ "font-family: monospace; font-size: 13px; white-space: pre-wrap; margin: 0 0 16px 0;"] $ toHtml (truncateText 400 (stripSummaryBadges s))
+        monoPre $ truncateText 400 (stripSummaryBadges s)
       emailButton issueUrl "Open issue"
   )
   where
     kindLabel
       | isError = "error log"
-      | maybe False (\l -> T.toLower l `elem` (["warn", "warning"] :: [Text])) logLevel = "warning log"
+      | any (\l -> T.toLower l `elem` (["warn", "warning"] :: [Text])) logLevel = "warning log"
       | otherwise = "log" :: Text
 
 
@@ -458,15 +460,13 @@ logPatternRateChangeEmail projectName issueUrl patternText logLevel serviceName 
           ]
       emailDivider
       p_ [style_ "margin: 0 0 8px; font-weight: 600; color: #24292f;"] "Pattern"
-      pre_ [style_ "font-family: monospace; font-size: 13px; white-space: pre-wrap; margin: 0 0 16px 0;"] $ toHtml (truncateText 400 (stripSummaryBadges patternText))
+      monoPre $ truncateText 400 (stripSummaryBadges patternText)
       emailButton issueUrl "Open issue"
   )
 
 
 -- | Summary digest body for the hourly notification flush (rate-limited
 -- overflow + low-signal issues). Subject is built at the call site.
-{-# ANN digestEmail ("HLint: ignore Use 'unlines' from Relude" :: String) #-}
-{-# ANN digestEmail ("HLint: ignore Use 'lines' from Relude" :: String) #-}
 digestEmail :: Text -> Text -> Text -> Int -> Html ()
 digestEmail projectName inboxUrl summary total = emailBody do
   h1_ "Batched notifications"
@@ -477,10 +477,7 @@ digestEmail projectName inboxUrl summary total = emailBody do
     b_ $ toHtml projectName
     " to avoid spam. A sample is below."
   emailDivider
-  pre_ [style_ "font-family: monospace; font-size: 13px; white-space: pre-wrap; margin: 0 0 16px 0;"]
-    $ toHtml
-    $ T.unlines
-    $ map stripSummaryBadges (T.lines summary)
+  monoPre $ unlines $ map stripSummaryBadges (lines summary)
   emailButton inboxUrl "Open inbox"
 
 
@@ -536,18 +533,14 @@ errorCard errorsUrl chartUrlM e =
       $ do
         let routeText = T.strip $ fromMaybe "" e.requestMethod <> " " <> fromMaybe "" e.requestPath
             ctxMeta = filter (/= "") [fromMaybe "" e.serviceName, fromMaybe "" e.environment, toText $ formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M %p" e.when]
-        when (routeText /= "") do
-          span_ [class_ "monoscope-code", style_ "font-size: 12px;"] $ toHtml routeText
-          unless (null ctxMeta) $ span_ [style_ "color: #c0c5cc; padding: 0 6px;"] "\183"
-        forM_ (zip [0 :: Int ..] ctxMeta) \(i, val) -> do
-          when (i > 0) $ span_ [style_ "color: #c0c5cc; padding: 0 6px;"] "\183"
-          toHtml val
+        mconcat
+          $ intersperse (span_ [style_ "color: #c0c5cc; padding: 0 6px;"] "\183")
+          $ [span_ [class_ "monoscope-code", style_ "font-size: 12px;"] $ toHtml routeText | routeText /= ""]
+          <> map toHtml ctxMeta
     when (e.stackTrace /= "") $ tr_ $ td_ [style_ "padding: 0 0 12px 0;"] do
       let traceLines = lines e.stackTrace
-          lastLines = takeEnd 2 traceLines
-          hasMore = length traceLines > 2
-      div_ [class_ "error-card-stack"] $ toHtml $ T.intercalate "\n" lastLines
-      when hasMore
+      div_ [class_ "error-card-stack"] $ toHtml $ T.intercalate "\n" $ drop (length traceLines - 2) traceLines
+      when (length traceLines > 2)
         $ p_ [style_ "margin: 8px 0 0; font-size: 12px;"]
         $ a_ [href_ (errorsUrl <> "by_hash/" <> e.hash), style_ "color: #377cfb; text-decoration: none;"]
         $ toHtml @Text ("View full trace (" <> show (length traceLines) <> " lines) \8594")
@@ -557,7 +550,6 @@ errorCard errorsUrl chartUrlM e =
         $ img_ [src_ url, alt_ "Error trend", width_ "560", style_ "max-width: 100%; height: auto; display: block; border-radius: 4px;"]
   where
     hasDistinctRootCause = e.rootErrorType /= e.errorType || e.rootErrorMessage /= e.message
-    takeEnd n xs = drop (length xs - n) xs
 
 
 truncateText :: Int -> Text -> Text
@@ -690,7 +682,7 @@ weeklyReportEmail d =
               ]
           totalCats = sum $ map (\(_, c, _) -> c) categories
           pctOf n = if totalCats == 0 then 0 else (fromIntegral n / fromIntegral totalCats) * 99 :: Double
-      let totalIssues = V.length d.anomalies
+          totalIssues = V.length d.anomalies
       when (totalIssues > 0 && not (null categories))
         $ table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"]
         $ tr_
@@ -819,8 +811,7 @@ sparklineImg :: [Int] -> Html ()
 sparklineImg buckets
   | null buckets || all (== 0) buckets = pass
   | otherwise =
-      let peakVal = foldl' max 1 buckets
-          peak = fromIntegral @Int @Double peakVal
+      let peak = fromIntegral @Int @Double $ foldl' max 1 buckets
           n = length buckets
           h = 32 :: Int
           barZone = 28 :: Int
@@ -840,8 +831,7 @@ sparklineImg buckets
                 [0 ..]
                 buckets
           svg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 " <> show w <> " " <> show h <> "' width='" <> show w <> "' height='" <> show h <> "'>" <> bars <> "</svg>"
-          dataUri = "data:image/svg+xml," <> svg
-       in img_ [src_ dataUri, alt_ "trend", width_ "120", height_ "32", style_ "display: block;"]
+       in img_ [src_ $ "data:image/svg+xml," <> svg, alt_ "trend", width_ "120", height_ "32", style_ "display: block;"]
 
 
 reportTable :: Text -> [Text] -> [Html ()] -> Html ()

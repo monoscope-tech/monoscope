@@ -89,7 +89,7 @@ module Web.ApiHandlers (
   synthStackFromSpans,
 ) where
 
-import Control.Lens ((%~), _Just)
+import Control.Lens ((%~), (.~), _Just)
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
@@ -111,6 +111,7 @@ import Deriving.Aeson.Stock qualified as DAE
 import Effectful.Error.Static (throwError)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
+import GHC.Records (HasField)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Issues qualified as Issues
@@ -142,10 +143,16 @@ notFoundOr :: Text -> Maybe a -> ATBaseCtx a
 notFoundOr msg = maybe (throwError err404{errBody = encodeUtf8 msg}) pure
 
 
--- | Result an op reports back to 'bulkExec': either an affected-row count
--- (all-or-nothing across @ba.ids@) or the explicit list of succeeded ids
--- (the complement of @ba.ids@ is reported as "not applied").
-data BulkOpResult a = BulkCount Int64 | BulkSucceeded [a]
+-- | 404 with @msg@ unless the row exists /and/ belongs to @pid@.
+ownedOr :: HasField "projectId" a Projects.ProjectId => Text -> Projects.ProjectId -> Maybe a -> ATBaseCtx a
+ownedOr msg pid = notFoundOr msg . (>>= guarded ((pid ==) . (.projectId)))
+
+
+-- | Result an op reports back to 'bulkExec': an affected-row count
+-- (all-or-nothing across @ba.ids@), the explicit list of succeeded ids (the
+-- complement of @ba.ids@ is reported as "not applied"), or a full split when
+-- the op knows a per-id failure reason.
+data BulkOpResult a = BulkCount Int64 | BulkSucceeded [a] | BulkPartial [a] [BulkFailure a]
 
 
 -- | Lift a count-returning op into a 'BulkOpResult'.
@@ -155,31 +162,28 @@ count = fmap BulkCount
 
 -- | Dispatch a 'BulkAction' against a table of named operations. A 'BulkCount'
 -- op marks every id succeeded when the count is @>0@, else all "not applied";
--- a 'BulkSucceeded' op reports per-id partial success.
+-- a 'BulkSucceeded' op reports per-id partial success and a 'BulkPartial' op
+-- carries its own failure reasons.
 -- Ops that cannot report a count can @pure (BulkCount (length ba.ids))@.
 bulkExec :: Eq a => BulkAction a -> [(Text, ATBaseCtx (BulkOpResult a))] -> ATBaseCtx (BulkResult a)
 bulkExec ba ops = do
-  r <- case List.lookup (T.toLower ba.action) ops of
-    Just op -> op
-    Nothing -> throwError err400{errBody = encodeUtf8 $ "Unknown bulk action: " <> ba.action}
+  r <- fromMaybe (throwError err400{errBody = encodeUtf8 $ "Unknown bulk action: " <> ba.action}) $ List.lookup (T.toLower ba.action) ops
   let mkResult ok = BulkResult{succeeded = ok, failed = [BulkFailure{id = i, error = "not applied"} | i <- ba.ids, i `notElem` ok]}
   pure $ case r of
-    BulkCount n -> if n > 0 then mkResult ba.ids else mkResult []
+    BulkCount n -> mkResult $ bool [] ba.ids (n > 0)
     BulkSucceeded ok -> mkResult ok
+    BulkPartial ok failed -> BulkResult{succeeded = ok, failed}
 
 
--- | Paginated list helper: normalises page/per_page with caps and constructs
--- the 'Paged' envelope in one place.
-resolvePage :: Maybe Int -> Maybe Int -> Int -> (Int, Int, Int)
-resolvePage pageM perPageM capPerPage =
+-- | Paginated list helper: normalises page/per_page with caps, runs the
+-- @(perPage -> offset -> (items, total))@ fetch and builds the envelope.
+paged :: Maybe Int -> Maybe Int -> Int -> (Int -> Int -> ATBaseCtx ([a], Int)) -> ATBaseCtx (Paged a)
+paged pageM perPageM capPerPage fetch = do
   let page = max 0 (fromMaybe 0 pageM)
       perPage = min capPerPage $ max 1 (fromMaybe 50 perPageM)
-   in (page, perPage, page * perPage)
-
-
-mkPaged :: Int -> Int -> Int -> [a] -> Int -> Paged a
-mkPaged page perPage offset items total =
-  Paged{items, totalCount = total, page, perPage, hasMore = offset + length items < total}
+      offset = page * perPage
+  (items, total) <- fetch perPage offset
+  pure Paged{items, totalCount = total, page, perPage, hasMore = offset + length items < total}
 
 
 apiMonitorsList :: Projects.ProjectId -> ATBaseCtx [Monitors.QueryMonitor]
@@ -187,11 +191,7 @@ apiMonitorsList = Monitors.queryMonitorsAll
 
 
 apiMonitorGet :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATBaseCtx Monitors.QueryMonitor
-apiMonitorGet pid mid = do
-  m <- Monitors.queryMonitorById mid
-  case m of
-    Just mon | mon.projectId == pid -> pure mon
-    _ -> throwError err404{errBody = "Monitor not found"}
+apiMonitorGet pid mid = ownedOr "Monitor not found" pid =<< Monitors.queryMonitorById mid
 
 
 -- | Build a 'QueryMonitor' from a 'MonitorInput'. Shared by create/update.
@@ -208,9 +208,10 @@ monitorFromInput pid now mid existingM inp =
     , logQuery = inp.query
     , logQueryAsSql =
         let cfg = (Parser.defSqlQueryCfg pid Parser.fixedUTCTime Nothing Nothing){Parser.presetRollup = Just "5m"}
-         in case Parser.parseQueryToComponents cfg inp.query of
-              Right (_, qc) -> fromMaybe (maybe "" (.logQueryAsSql) existingM) qc.finalAlertQuery
-              Left _ -> maybe "" (.logQueryAsSql) existingM
+         in fromMaybe (foldMap (.logQueryAsSql) existingM)
+              $ (.finalAlertQuery)
+              . snd
+              =<< rightToMaybe (Parser.parseQueryToComponents cfg inp.query)
     , lastEvaluated = now
     , warningLastTriggered = existingM >>= (.warningLastTriggered)
     , alertLastTriggered = existingM >>= (.alertLastTriggered)
@@ -226,10 +227,7 @@ monitorFromInput pid now mid existingM inp =
           , emailAll = fromMaybe False inp.emailAll
           , slackChannels = V.fromList inp.slackChannels
           }
-    , deactivatedAt =
-        if fromMaybe True inp.active
-          then Nothing
-          else Just now
+    , deactivatedAt = bool (Just now) Nothing (fromMaybe True inp.active)
     , deletedAt = Nothing
     , visualizationType = fromMaybe "timeseries" inp.visualizationType
     , teams = V.fromList inp.teams
@@ -247,22 +245,23 @@ monitorFromInput pid now mid existingM inp =
     }
 
 
+-- | Persist a monitor built from @inp@; @existingM@ carries over the fields an
+-- input can't supply (createdAt, trigger history, status).
+saveMonitor :: Projects.ProjectId -> Monitors.QueryMonitorId -> Maybe Monitors.QueryMonitor -> MonitorInput -> ATBaseCtx Monitors.QueryMonitor
+saveMonitor pid mid existingM inp = do
+  now <- Time.currentTime
+  let mon = monitorFromInput pid now mid existingM inp
+  mon <$ Monitors.queryMonitorUpsert mon
+
+
 apiMonitorCreate :: Projects.ProjectId -> MonitorInput -> ATBaseCtx Monitors.QueryMonitor
 apiMonitorCreate pid inp = do
-  now <- Time.currentTime
   mid <- Monitors.QueryMonitorId <$> UUID.genUUID
-  let mon = monitorFromInput pid now mid Nothing inp
-  _ <- Monitors.queryMonitorUpsert mon
-  pure mon
+  saveMonitor pid mid Nothing inp
 
 
 apiMonitorUpdate :: Projects.ProjectId -> Monitors.QueryMonitorId -> MonitorInput -> ATBaseCtx Monitors.QueryMonitor
-apiMonitorUpdate pid mid inp = do
-  existing <- apiMonitorGet pid mid
-  now <- Time.currentTime
-  let mon = monitorFromInput pid now mid (Just existing) inp
-  _ <- Monitors.queryMonitorUpsert mon
-  pure mon
+apiMonitorUpdate pid mid inp = apiMonitorGet pid mid >>= \existing -> saveMonitor pid mid (Just existing) inp
 
 
 -- | Upsert keyed by alert title — the monitors-as-code analogue of
@@ -324,11 +323,7 @@ apiMonitorPatch pid mid patch = do
           , Monitors.emailAll = fromMaybe ac.emailAll patch.emailAll
           , Monitors.slackChannels = maybe ac.slackChannels V.fromList patch.slackChannels
           }
-      updateActive m =
-        case patch.active of
-          Nothing -> m
-          Just True -> m{Monitors.deactivatedAt = Nothing}
-          Just False -> m{Monitors.deactivatedAt = Just now}
+      updateActive m = maybe m (\a -> m{Monitors.deactivatedAt = bool (Just now) Nothing a}) patch.active
       merged =
         updateActive
           existing
@@ -348,8 +343,7 @@ apiMonitorPatch pid mid patch = do
             , Monitors.alertRecoveryThreshold = patch.alertRecoveryThreshold <|> existing.alertRecoveryThreshold
             , Monitors.warningRecoveryThreshold = patch.warningRecoveryThreshold <|> existing.warningRecoveryThreshold
             }
-  _ <- Monitors.queryMonitorUpsert merged
-  pure merged
+  merged <$ Monitors.queryMonitorUpsert merged
 
 
 apiMonitorDelete :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATBaseCtx NoContent
@@ -427,10 +421,7 @@ apiDashboardsList pid sortM teamIdM = do
 
 
 apiDashboardGet :: Projects.ProjectId -> Dashboards.DashboardId -> ATBaseCtx DashboardFull
-apiDashboardGet pid did = do
-  d <- notFoundOr "Dashboard not found" =<< Dashboards.getDashboardById did
-  when (d.projectId /= pid) $ throwError err404{errBody = "Dashboard not found"}
-  pure $ toFull d
+apiDashboardGet pid did = toFull <$> (ownedOr "Dashboard not found" pid =<< Dashboards.getDashboardById did)
 
 
 -- | Insert a new dashboard row from an input.
@@ -484,22 +475,17 @@ apiDashboardApply pid doc = do
 
 
 apiDashboardUpdate :: Projects.ProjectId -> Dashboards.DashboardId -> DashboardInput -> ATBaseCtx DashboardFull
-apiDashboardUpdate pid did inp = do
-  _ <- apiDashboardGet pid did
-  now <- Time.currentTime
-  _ <- Dashboards.updateTitle did inp.title
-  whenJust inp.schema $ \s -> void $ Dashboards.updateSchemaAndUpdatedAt did s now
-  whenJust inp.tags $ \ts -> void $ Dashboards.updateTags did (V.fromList ts)
-  apiDashboardGet pid did
+apiDashboardUpdate pid did inp =
+  apiDashboardPatch pid did DashboardPatch{title = Just inp.title, tags = inp.tags, teams = inp.teams, filePath = inp.filePath, schema = inp.schema}
 
 
 apiDashboardPatch :: Projects.ProjectId -> Dashboards.DashboardId -> DashboardPatch -> ATBaseCtx DashboardFull
 apiDashboardPatch pid did patch = do
   _ <- apiDashboardGet pid did
   now <- Time.currentTime
-  whenJust patch.title $ \t -> void $ Dashboards.updateTitle did t
+  whenJust patch.title $ void . Dashboards.updateTitle did
   whenJust patch.schema $ \s -> void $ Dashboards.updateSchemaAndUpdatedAt did s now
-  whenJust patch.tags $ \ts -> void $ Dashboards.updateTags did (V.fromList ts)
+  whenJust patch.tags $ void . Dashboards.updateTags did . V.fromList
   apiDashboardGet pid did
 
 
@@ -539,44 +525,32 @@ apiDashboardYaml pid did = do
       }
 
 
--- | Widget upsert: replace the widget (by id) within the dashboard schema.
-apiDashboardWidgetUpsert :: Projects.ProjectId -> Dashboards.DashboardId -> Widget.Widget -> ATBaseCtx Widget.Widget
-apiDashboardWidgetUpsert pid did widget = do
+-- | Ownership-check the dashboard, rewrite its widget list with @f@ and persist.
+withWidgets :: Projects.ProjectId -> Dashboards.DashboardId -> ([Widget.Widget] -> [Widget.Widget]) -> ATBaseCtx ()
+withWidgets pid did f = do
   d <- apiDashboardGet pid did
   now <- Time.currentTime
-  let sch = fromMaybe def d.schema
-      wId = fromMaybe "" widget.id
-      replace ws = case break (\w -> w.id == Just wId) ws of
-        (pre, _ : post) -> pre ++ [widget] ++ post
-        _ -> ws ++ [widget]
-      newSchema = sch & #widgets %~ replace
-  _ <- Dashboards.updateSchemaAndUpdatedAt did newSchema now
-  pure widget
+  void $ Dashboards.updateSchemaAndUpdatedAt did (fromMaybe def d.schema & #widgets %~ f) now
+
+
+-- | Widget upsert: replace the widget (by id) within the dashboard schema.
+apiDashboardWidgetUpsert :: Projects.ProjectId -> Dashboards.DashboardId -> Widget.Widget -> ATBaseCtx Widget.Widget
+apiDashboardWidgetUpsert pid did widget =
+  widget <$ withWidgets pid did \ws -> case break ((== Just (fromMaybe "" widget.id)) . (.id)) ws of
+    (pre, _ : post) -> pre ++ [widget] ++ post
+    _ -> ws ++ [widget]
 
 
 apiDashboardWidgetDelete :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> ATBaseCtx NoContent
-apiDashboardWidgetDelete pid did wId = do
-  d <- apiDashboardGet pid did
-  now <- Time.currentTime
-  let sch = fromMaybe def d.schema
-      newSchema = sch & #widgets %~ filter (\w -> w.id /= Just wId)
-  _ <- Dashboards.updateSchemaAndUpdatedAt did newSchema now
-  pure NoContent
+apiDashboardWidgetDelete pid did wId = NoContent <$ withWidgets pid did (filter ((/= Just wId) . (.id)))
 
 
 apiDashboardWidgetsReorder :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Map Text WidgetPosition -> ATBaseCtx NoContent
-apiDashboardWidgetsReorder pid did _tabM positions = do
-  d <- apiDashboardGet pid did
-  now <- Time.currentTime
-  let sch = fromMaybe def d.schema
-      applyPos w = case w.id >>= (`Map.lookup` positions) of
-        Nothing -> w
-        Just p ->
-          let l = fromMaybe def w.layout
-           in w{Widget.layout = Just l{Widget.x = Just p.x, Widget.y = Just p.y, Widget.w = Just p.w, Widget.h = Just p.h}}
-      newSchema = sch & #widgets %~ fmap applyPos
-  _ <- Dashboards.updateSchemaAndUpdatedAt did newSchema now
-  pure NoContent
+apiDashboardWidgetsReorder pid did _tabM positions = NoContent <$ withWidgets pid did (fmap applyPos)
+  where
+    applyPos w = flip (maybe w) (w.id >>= (`Map.lookup` positions)) $ \p ->
+      let l = fromMaybe def w.layout
+       in w{Widget.layout = Just l{Widget.x = Just p.x, Widget.y = Just p.y, Widget.w = Just p.w, Widget.h = Just p.h}}
 
 
 toApiKeySummary :: ProjectApiKeys.ProjectApiKey -> ApiKeySummary
@@ -595,10 +569,7 @@ apiKeysList pid = fmap toApiKeySummary <$> ProjectApiKeys.projectApiKeysByProjec
 
 
 apiKeyGet :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATBaseCtx ApiKeySummary
-apiKeyGet pid kid = do
-  k <- notFoundOr "API key not found" =<< ProjectApiKeys.getProjectApiKey kid
-  when (k.projectId /= pid) $ throwError err404{errBody = "API key not found"}
-  pure $ toApiKeySummary k
+apiKeyGet pid kid = toApiKeySummary <$> (ownedOr "API key not found" pid =<< ProjectApiKeys.getProjectApiKey kid)
 
 
 apiKeyCreate :: Projects.ProjectId -> ApiKeyCreate -> ATBaseCtx ApiKeyCreated
@@ -620,7 +591,7 @@ apiKeyDeactivate pid kid = do
   s <- apiKeyGet pid kid
   _ <- ProjectApiKeys.revokeApiKey kid
   -- getProjectApiKey filters to active keys, so return pre-fetched summary with active=False
-  pure ApiKeySummary{id = s.id, title = s.title, keyPrefix = s.keyPrefix, active = False, createdAt = s.createdAt}
+  pure $ s & #active .~ False
 
 
 apiKeyDelete :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATBaseCtx NoContent
@@ -735,10 +706,8 @@ endpointToSummary e =
 
 
 apiEndpointsList :: Projects.ProjectId -> Maybe Text -> Maybe Bool -> Maybe Int -> Maybe Int -> ATBaseCtx (Paged EndpointSummary)
-apiEndpointsList pid searchM outgoingM pageM perPageM = do
-  let (page, perPage, offset) = resolvePage pageM perPageM 100
-  (rows, total) <- Endpoints.listEndpointsPaged pid (fromMaybe False outgoingM) searchM perPage offset
-  pure $ mkPaged page perPage offset (endpointToSummary <$> rows) total
+apiEndpointsList pid searchM outgoingM pageM perPageM = paged pageM perPageM 100 $ \perPage offset ->
+  first (fmap endpointToSummary) <$> Endpoints.listEndpointsPaged pid (fromMaybe False outgoingM) searchM perPage offset
 
 
 apiEndpointGet :: Projects.ProjectId -> Endpoints.EndpointId -> ATBaseCtx EndpointFull
@@ -771,11 +740,11 @@ logPatternToSummary lp =
 
 
 apiLogPatternsList :: Projects.ProjectId -> Maybe Int -> Maybe Int -> ATBaseCtx (Paged LogPatternSummary)
-apiLogPatternsList pid pageM perPageM = do
-  let (page, perPage, offset) = resolvePage pageM perPageM 200
-  lps <- LogPatterns.getLogPatterns pid perPage offset
-  total <- LogPatterns.countLogPatterns pid
-  pure $ mkPaged page perPage offset (logPatternToSummary <$> lps) total
+apiLogPatternsList pid pageM perPageM = paged pageM perPageM 200 $ \perPage offset ->
+  (,)
+    . fmap logPatternToSummary
+    <$> LogPatterns.getLogPatterns pid perPage offset
+    <*> LogPatterns.countLogPatterns pid
 
 
 fetchLogPattern :: Projects.ProjectId -> Int64 -> ATBaseCtx LogPatterns.LogPattern
@@ -794,10 +763,10 @@ apiLogPatternGet pid lpid = do
 
 
 apiLogPatternAck :: Projects.ProjectId -> Int64 -> ATBaseCtx LogPatternFull
-apiLogPatternAck pid lpid = do
-  _ <- fetchLogPattern pid lpid
-  _ <- LogPatterns.setLogPatternStatesByIds pid Nothing (V.singleton lpid) LogPatterns.LPSAcknowledged
-  apiLogPatternGet pid lpid
+apiLogPatternAck pid lpid =
+  fetchLogPattern pid lpid
+    *> LogPatterns.setLogPatternStatesByIds pid Nothing (V.singleton lpid) LogPatterns.LPSAcknowledged
+    *> apiLogPatternGet pid lpid
 
 
 apiLogPatternsBulk :: Projects.ProjectId -> BulkAction Int64 -> ATBaseCtx (BulkResult Int64)
@@ -848,17 +817,14 @@ apiIssuesList
   -> Maybe Int -- page
   -> Maybe Int -- per_page
   -> ATBaseCtx (Paged IssueApiSummary)
-apiIssuesList pid statusM typeM svcM pageM perPageM = do
-  let (page, perPage, offset) = resolvePage pageM perPageM 200
-      status = fromMaybe ISOpen statusM
-      -- Map high-level status to (isAck, isArch) filters.
-      (ackF, archF) = case status of
+apiIssuesList pid statusM typeM svcM pageM perPageM = paged pageM perPageM 200 $ \perPage offset ->
+  -- Map high-level status to (isAck, isArch) filters.
+  let (ackF, archF) = case fromMaybe ISOpen statusM of
         ISOpen -> (Just False, Just False)
         ISAcknowledged -> (Just True, Just False)
         ISArchived -> (Nothing, Just True)
         ISAll -> (Nothing, Nothing)
-  (rows, total) <- Issues.selectIssuesByFilters pid ackF archF typeM svcM perPage offset
-  pure $ mkPaged page perPage offset (issueToSummary <$> rows) total
+   in first (fmap issueToSummary) <$> Issues.selectIssuesByFilters pid ackF archF typeM svcM perPage offset
 
 
 fetchIssue :: Projects.ProjectId -> Issues.IssueId -> ATBaseCtx Issues.Issue
@@ -885,12 +851,8 @@ enrichIssue pid issue
               Just (trId, ts) -> do
                 useTf <- (.env.enableTimefusionReads) <$> ask @AuthContext
                 now <- Time.currentTime
-                spans <- Telemetry.getSpanRecordsByTraceId useTf pid trId (Just ts) now
-                let synth = synthStackFromSpans trId spans
-                pure
-                  $ if T.null synth
-                    then issue
-                    else issue{Issues.issueData = Aeson (AE.toJSON rd{Issues.stackTrace = synth})}
+                synth <- synthStackFromSpans trId <$> Telemetry.getSpanRecordsByTraceId useTf pid trId (Just ts) now
+                pure $ if T.null synth then issue else issue{Issues.issueData = Aeson (AE.toJSON rd{Issues.stackTrace = synth})}
       _ -> pure issue
 
 
@@ -905,13 +867,13 @@ synthStackFromSpans trId spans =
     <> T.intercalate "\n" (map formatOne (sortOn (.start_time) spans))
   where
     formatOne s =
-      let svc = Telemetry.spanServiceName s
-          spanId = fromMaybe "?" (s.context >>= (.span_id))
-          errored = s.status_code == Just "ERROR"
-          marker = if errored then "!! " else "   "
-          svcTxt = foldMap (\v -> " [" <> v <> "]") svc
-          label = fromMaybe "<unnamed>" s.name
-       in marker <> "at " <> label <> svcTxt <> " (span=" <> spanId <> ")"
+      bool "   " "!! " (s.status_code == Just "ERROR")
+        <> "at "
+        <> fromMaybe "<unnamed>" s.name
+        <> foldMap (\v -> " [" <> v <> "]") (Telemetry.spanServiceName s)
+        <> " (span="
+        <> fromMaybe "?" (s.context >>= (.span_id))
+        <> ")"
 
 
 issueMutate :: Projects.ProjectId -> Issues.IssueId -> ([Issues.IssueId] -> ATBaseCtx Int64) -> ATBaseCtx IssueApiFull
@@ -971,12 +933,9 @@ toTeamSummary t =
 
 
 -- | Project the team's member UUIDs to 'UserRef's via a single users lookup.
+-- ('Projects.usersByIds' already short-circuits on an empty vector.)
 resolveTeamMembers :: V.Vector Projects.UserId -> ATBaseCtx [UserRef]
-resolveTeamMembers uids
-  | V.null uids = pure []
-  | otherwise = do
-      users <- Projects.usersByIds (V.map Projects.getUserId uids)
-      pure (toUserRef <$> users)
+resolveTeamMembers uids = fmap toUserRef <$> Projects.usersByIds (V.map Projects.getUserId uids)
   where
     toUserRef u =
       UserRef
@@ -1004,6 +963,13 @@ toTeamFull t = do
 -- | Fetch a single team by id (scoped to project). 404s if missing.
 fetchTeam :: Projects.ProjectId -> TeamId -> ATBaseCtx PM.Team
 fetchTeam pid tid = notFoundOr "Team not found" =<< PM.getTeamById pid tid.unwrap
+
+
+-- | 'fetchTeam' that also rejects the everyone team, which is not editable here.
+fetchEditableTeam :: Projects.ProjectId -> TeamId -> ATBaseCtx PM.Team
+fetchEditableTeam pid tid = do
+  t <- fetchTeam pid tid
+  t <$ when t.is_everyone (throwError err400{errBody = "The everyone team cannot be updated via this endpoint"})
 
 
 apiTeamsList :: Projects.ProjectId -> ATBaseCtx [TeamSummary]
@@ -1048,15 +1014,12 @@ apiTeamCreate pid inp = do
   when (T.null inp.name) $ throwError err400{errBody = "name is required"}
   assertHandleAllowed inp.handle
   createdM <- PM.createTeam pid Nothing (teamDetailsFromInput inp)
-  case createdM of
-    Nothing -> throwError err400{errBody = encodeUtf8 $ "Handle \"" <> inp.handle <> "\" is already in use"}
-    Just tidRaw -> apiTeamGet pid (UUIDId tidRaw)
+  maybe (throwError err400{errBody = encodeUtf8 $ "Handle \"" <> inp.handle <> "\" is already in use"}) (apiTeamGet pid . UUIDId) createdM
 
 
 apiTeamUpdate :: Projects.ProjectId -> TeamId -> TeamInput -> ATBaseCtx TeamFull
 apiTeamUpdate pid tid inp = do
-  t <- fetchTeam pid tid
-  when t.is_everyone $ throwError err400{errBody = "The everyone team cannot be updated via this endpoint"}
+  _ <- fetchEditableTeam pid tid
   when (T.null inp.name) $ throwError err400{errBody = "name is required"}
   assertHandleAllowed inp.handle
   _ <- PM.updateTeam pid tid.unwrap (teamDetailsFromInput inp)
@@ -1065,8 +1028,7 @@ apiTeamUpdate pid tid inp = do
 
 apiTeamPatch :: Projects.ProjectId -> TeamId -> TeamPatch -> ATBaseCtx TeamFull
 apiTeamPatch pid tid p = do
-  t <- fetchTeam pid tid
-  when t.is_everyone $ throwError err400{errBody = "The everyone team cannot be updated via this endpoint"}
+  t <- fetchEditableTeam pid tid
   whenJust p.handle assertHandleAllowed
   let merged =
         (PM.teamToDetails t)
@@ -1093,19 +1055,18 @@ apiTeamDelete pid tid = do
 
 
 apiTeamsBulk :: Projects.ProjectId -> BulkAction TeamId -> ATBaseCtx (BulkResult TeamId)
-apiTeamsBulk pid ba = case T.toLower ba.action of
-  "delete" -> do
-    let ids = (.unwrap) <$> ba.ids
-    teams <- PM.getTeamsById pid (V.fromList ids)
-    let byId = Map.fromList [(t.id, t) | t <- teams]
-        classify uid = case Map.lookup uid byId of
-          Nothing -> Left BulkFailure{id = UUIDId uid, error = "not found"}
-          Just t | t.is_everyone -> Left BulkFailure{id = UUIDId uid, error = "the everyone team cannot be deleted"}
-          Just _ -> Right (UUIDId uid)
-        (failed, succeeded) = partitionEithers (classify <$> ids)
-    PM.deleteTeams pid (V.fromList [tid.unwrap | tid <- succeeded])
-    pure BulkResult{succeeded, failed}
-  other -> throwError err400{errBody = encodeUtf8 $ "Unknown bulk action: " <> other}
+apiTeamsBulk pid ba = bulkExec ba [("delete", del)]
+  where
+    ids = (.unwrap) <$> ba.ids
+    del = do
+      byId <- Map.fromList . fmap (\t -> (t.id, t)) <$> PM.getTeamsById pid (V.fromList ids)
+      let classify uid = case Map.lookup uid byId of
+            Nothing -> Left BulkFailure{id = UUIDId uid, error = "not found"}
+            Just t | t.is_everyone -> Left BulkFailure{id = UUIDId uid, error = "the everyone team cannot be deleted"}
+            Just _ -> Right (UUIDId uid)
+          (failed, succeeded) = partitionEithers (classify <$> ids)
+      PM.deleteTeams pid (V.fromList [tid.unwrap | tid <- succeeded])
+      pure $ BulkPartial succeeded failed
 
 
 toMemberSummary :: PM.ProjectMemberVM -> MemberSummary
@@ -1137,21 +1098,15 @@ apiMemberGet pid uid = toMemberSummary <$> fetchMemberByUserId pid uid
 -- matching row exists (mirrors the HTML manage-members flow).
 apiMemberAdd :: Projects.ProjectId -> MemberAdd -> ATBaseCtx MemberSummary
 apiMemberAdd pid req = do
-  let perm = fromMaybe PM.PView req.permission
   uid <- case (req.userId, req.email) of
     (Just u, _) -> do
       _ <- notFoundOr "User not found" =<< Projects.userById (Projects.UserId u)
       pure (Projects.UserId u)
-    (Nothing, Just e) -> do
-      existing <- Projects.userIdByEmail e
-      case existing of
-        Just u -> pure u
-        Nothing -> notFoundOr "Could not create user" =<< Projects.createEmptyUser e
+    (Nothing, Just e) ->
+      maybe (notFoundOr "Could not create user" =<< Projects.createEmptyUser e) pure =<< Projects.userIdByEmail e
     (Nothing, Nothing) ->
       throwError err400{errBody = "Either email or user_id is required"}
-  _ <-
-    PM.insertProjectMembers
-      [PM.CreateProjectMembers{projectId = pid, userId = uid, permission = perm}]
+  _ <- PM.insertProjectMembers [PM.CreateProjectMembers{projectId = pid, userId = uid, permission = fromMaybe PM.PView req.permission}]
   apiMemberGet pid (Projects.getUserId uid)
 
 
@@ -1185,7 +1140,6 @@ apiMemberRemove pid uid = do
 -- The response is always a JSON object keyed by field path, each value a
 -- @[{value, count}]@ list sorted by count descending. Missing/expired
 -- facets return @{}@ (not 404) — agents can rely on the shape regardless.
-{-# ANN apiFacets ("HLint: ignore Use id" :: String) #-}
 apiFacets :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATBaseCtx AE.Value
 apiFacets pid sinceM fromM toM fieldM = do
   now <- Time.currentTime
@@ -1198,7 +1152,7 @@ apiFacets pid sinceM fromM toM fieldM = do
       -- `resource___service___name`); the public API contract is dotted.
       dotKey = AEK.fromText . T.replace "___" "." . AEK.toText
       asAeson = case AE.toJSON facetMap of
-        AE.Object o -> AE.Object (AEKM.mapKeyVal dotKey (\x -> x) o)
+        AE.Object o -> AE.Object (AEKM.mapKeyVal dotKey identity o)
         v -> v
       filtered = case (fieldM, asAeson) of
         (Just f, AE.Object o) ->
@@ -1219,8 +1173,4 @@ apiFacets pid sinceM fromM toM fieldM = do
 -- row via @timestamp = ts AND id = ?@ (the caller holds the exact stored
 -- timestamp). Returns 404 when the event is not found.
 apiEventGet :: Projects.ProjectId -> UUID.UUID -> UTCTime -> ATBaseCtx AE.Value
-apiEventGet pid eid ts = do
-  mItem <- Telemetry.otelRecordByProjectAndId pid ts eid
-  case mItem of
-    Nothing -> throwError err404{errBody = encodeUtf8 ("event not found" :: Text)}
-    Just item -> pure (AE.toJSON item)
+apiEventGet pid eid ts = AE.toJSON <$> (notFoundOr "event not found" =<< Telemetry.otelRecordByProjectAndId pid ts eid)

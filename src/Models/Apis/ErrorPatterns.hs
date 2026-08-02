@@ -47,9 +47,7 @@ import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
-import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
-import Database.PostgreSQL.Simple.FromRow qualified as FR
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Deriving.Aeson.Stock qualified as DAE
@@ -131,7 +129,7 @@ data ErrorPattern = ErrorPattern
   , isFramework :: Bool
   }
   deriving stock (Generic, Show)
-  deriving anyclass (FromRow, HI.DecodeRow, NFData, ToRow)
+  deriving anyclass (HI.DecodeRow, NFData)
   deriving
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "error_patterns", PrimaryKey "id", FieldModifiers '[CamelToSnake]] ErrorPattern)
@@ -149,12 +147,9 @@ data ErrorPatternL = ErrorPatternL
   deriving anyclass (NFData)
 
 
-instance FromRow ErrorPatternL where
-  fromRow = ErrorPatternL <$> FR.fromRow <*> FR.field <*> FR.field <*> FR.field
-
-
+-- Generic HI.DecodeRow can't derive this: ErrorPattern has DecodeRow but not DecodeValue.
 instance HI.DecodeRow ErrorPatternL where
-  decodeRow = ErrorPatternL <$> HI.decodeRow <*> (HI.getOneColumn <$> HI.decodeRow) <*> (HI.getOneColumn <$> HI.decodeRow) <*> (HI.getOneColumn <$> HI.decodeRow)
+  decodeRow = ErrorPatternL <$> HI.decodeRow <*> HI.decodeRow <*> HI.decodeRow <*> HI.decodeRow
 
 
 data ATError = ATError
@@ -196,12 +191,10 @@ getErrorPatterns pid mstate limit offset =
   Hasql.interp [HI.sql| SELECT * FROM apis.error_patterns WHERE project_id = #{pid} AND (#{mstate} IS NULL OR state = #{mstate}) AND canonical_id IS NULL ORDER BY updated_at DESC LIMIT #{limit} OFFSET #{offset} |]
 
 
--- | Get error pattern by ID
 getErrorPatternById :: DB es => ErrorPatternId -> Eff es (Maybe ErrorPattern)
 getErrorPatternById eid = Hasql.interpOne [HI.sql| SELECT * FROM apis.error_patterns WHERE id = #{eid} |]
 
 
--- | Get error pattern by hash
 getErrorPatternByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe ErrorPattern)
 getErrorPatternByHash pid eHash = Hasql.interpOne [HI.sql| SELECT * FROM apis.error_patterns WHERE project_id = #{pid} AND hash = #{eHash} |]
 
@@ -401,7 +394,7 @@ data ErrorPatternWithCurrentRate = ErrorPatternWithCurrentRate
   , discordMessageId :: Maybe Text
   }
   deriving stock (Generic, Show)
-  deriving anyclass (FromRow, HI.DecodeRow)
+  deriving anyclass (HI.DecodeRow)
 
 
 getErrorPatternsWithCurrentRates :: DB es => Projects.ProjectId -> UTCTime -> Eff es [ErrorPatternWithCurrentRate]

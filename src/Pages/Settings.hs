@@ -66,7 +66,7 @@ import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Time (Day, UTCTime (..), addDays, addUTCTime, diffUTCTime, getZonedTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
-import Data.Time.Format (defaultTimeLocale, formatTime)
+import Data.Time.Format (FormatTime, defaultTimeLocale, formatTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
@@ -121,7 +121,7 @@ import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 ----------------------------------------------------------------------
 
 getMinioConnectInfo :: Text -> Text -> Text -> Text -> Text -> Minio.ConnectInfo
-getMinioConnectInfo accessKey secretKey region bucket endpoint = Minio.setCreds (Minio.CredentialValue accessKey' secretKey' Nothing) withRegion
+getMinioConnectInfo accessKey secretKey region _bucket endpoint = Minio.setCreds (Minio.CredentialValue accessKey' secretKey' Nothing) withRegion
   where
     withRegion = Minio.setRegion (fromString $ toString region) info
     info = if T.null endpoint then Minio.awsCI else fromString $ toString endpoint
@@ -182,27 +182,22 @@ brings3PostH :: Projects.ProjectId -> Projects.ProjectS3Bucket -> ATAuthCtx (Res
 brings3PostH pid s3Form = do
   let connectInfo = getMinioConnectInfo s3Form.accessKey s3Form.secretKey s3Form.region s3Form.bucket s3Form.endpointUrl
   res <- liftIO $ Minio.runMinio connectInfo $ Minio.bucketExists s3Form.bucket
+  let notConnected msg = addErrorToast msg Nothing >> addRespHeaders (connectionBadge_ "Not connected")
   case res of
-    Left err -> do
-      addErrorToast (humanizeMinioErr err) Nothing
-      addRespHeaders $ connectionBadge_ "Not connected"
-    Right bExists ->
-      if bExists
-        then do
-          _ <- Projects.updateProjectS3Bucket pid $ Just s3Form
-          sess <- Projects.getSession
-          Projects.logAuditS pid Projects.AES3Configured sess Nothing
-          addSuccessToast "Connected successfully" Nothing
-          addRespHeaders $ connectionBadge_ "Connected"
-        else do
-          addErrorToast "Bucket does not exist" Nothing
-          addRespHeaders $ connectionBadge_ "Not connected"
+    Left err -> notConnected $ humanizeMinioErr err
+    Right False -> notConnected "Bucket does not exist"
+    Right True -> do
+      void $ Projects.updateProjectS3Bucket pid $ Just s3Form
+      sess <- Projects.getSession
+      Projects.logAuditS pid Projects.AES3Configured sess Nothing
+      addSuccessToast "Connected successfully" Nothing
+      addRespHeaders $ connectionBadge_ "Connected"
 
 
 brings3RemoveH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 brings3RemoveH pid = do
   (sess, _) <- Projects.sessionAndProject pid
-  _ <- Projects.updateProjectS3Bucket pid Nothing
+  void $ Projects.updateProjectS3Bucket pid Nothing
   Projects.logAuditS pid Projects.AES3Removed sess Nothing
   addSuccessToast "Removed S3 bucket" Nothing
   addRespHeaders $ connectionBadge_ "Not connected"
@@ -260,7 +255,7 @@ apiPostH pid apiKeyForm = do
   let encryptedKeyB64 = ProjectApiKeys.encodeApiKeyB64 authCtx.config.apiKeyEncryptionSecretKey projectKeyUUID
   pApiKey <- ProjectApiKeys.newProjectApiKeys pid projectKeyUUID apiKeyForm.title encryptedKeyB64
   ProjectApiKeys.insertProjectApiKey pApiKey
-  apiKeys <- V.fromList <$> ProjectApiKeys.projectApiKeysByProjectId pid
+  apiKeys <- apiKeysForProject pid
   Projects.logAuditS pid Projects.AEApiKeyCreated sess
     $ Just
     $ AE.object ["key_title" AE..= apiKeyForm.title]
@@ -282,7 +277,7 @@ apiKeySetActive :: Projects.ProjectId -> (ProjectApiKeys.ProjectApiKeyId -> ATAu
 apiKeySetActive pid act event verb keyid = do
   (sess, _) <- Projects.sessionAndProject pid
   res <- act keyid
-  apikeys <- V.fromList <$> ProjectApiKeys.projectApiKeysByProjectId pid
+  apikeys <- apiKeysForProject pid
   if res > 0
     then do
       Projects.logAuditS pid event sess Nothing
@@ -306,8 +301,12 @@ instance ToHtml ApiMut where
 apiGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders ApiGet)
 apiGetH pid = do
   (_, _, bw) <- mkPageCtx pid
-  apiKeys <- V.fromList <$> ProjectApiKeys.projectApiKeysByProjectId pid
+  apiKeys <- apiKeysForProject pid
   addRespHeaders $ ApiGet $ PageCtx bw{pageTitle = "API Keys", isSettingsPage = True} (pid, apiKeys)
+
+
+apiKeysForProject :: Projects.ProjectId -> ATAuthCtx (V.Vector ProjectApiKeys.ProjectApiKey)
+apiKeysForProject = fmap V.fromList . ProjectApiKeys.projectApiKeysByProjectId
 
 
 newtype ApiGet = ApiGet (PageCtx (Projects.ProjectId, V.Vector ProjectApiKeys.ProjectApiKey))
@@ -360,7 +359,7 @@ makeApiKeysTable pid apiKeys elemId =
     { config = def{Table.elemID = elemId, Table.renderAsTable = True}
     , columns = apiKeyColumns pid
     , rows = apiKeys
-    , features = Table.Features{rowLink = Nothing, rowId = Nothing, rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"], selectRow = Nothing, bulkActions = [], search = Nothing, tabs = Nothing, sort = Nothing, sortableColumns = Nothing, tableHeaderActions = Nothing, pagination = Nothing, zeroState = Just Table.ZeroState{icon = "key", title = "No API keys", description = "Create an API key to start integrating with your project.", actionText = "", destination = Right ""}, header = Nothing, treeConfig = Nothing}
+    , features = def{Table.rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"], Table.zeroState = Just Table.ZeroState{icon = "key", title = "No API keys", description = "Create an API key to start integrating with your project.", actionText = "", destination = Right ""}}
     }
 
 
@@ -437,7 +436,7 @@ copyNewApiKey newKeyM hasNext = whenJust newKeyM \(_, newKey) ->
                 ]
                 "Copy Key"
               if hasNext
-                then button_ [type_ "button", class_ "btn btn-sm btn-ghost text-textBrand ml-4", [__|on click call window.location.reload()|]] "Next"
+                then button_ [type_ "button", class_ "btn btn-sm btn-ghost text-textBrand ml-4", onclick_ "window.location.reload()"] "Next"
                 else button_ [type_ "button", class_ "btn btn-sm btn-ghost text-textSuccess ml-2", [__|on click remove #apiFeedbackSection|]] "Dismiss"
 
 
@@ -704,14 +703,28 @@ prometheusPage :: Projects.ProjectId -> V.Vector PromCfg.PrometheusScrapeConfig 
 prometheusPage pid cfgs = settingsSection_ do
   div_ [class_ "flex justify-between items-center"] do
     settingsH2_ "Prometheus targets"
-    modalWith_ "prometheus-modal" def{boxClass = "p-8"} (Just $ span_ [class_ "btn btn-sm btn-primary gap-1.5"] $ do faSprite_ "plus" "regular" "w-3 h-3"; "Add target") do
-      div_ [class_ "flex flex-col gap-5"] do
-        div_ do
-          h2_ [class_ "text-textStrong text-xl font-semibold"] "Scrape a Prometheus endpoint"
-          p_ [class_ "text-sm text-textWeak mt-1"] "We poll this endpoint on your schedule, parse the metrics exposition format, and ingest the samples as series you can chart and alert on."
-        form_ [hxPost_ $ "/p/" <> pid.toText <> "/settings/prometheus", class_ "flex flex-col gap-4", hxTarget_ "#prometheus-targets", hxSwap_ "outerHTML"]
-          $ prometheusFields_ pid "prometheus-modal" "Add scrape target" Nothing
+    promTargetModal_
+      pid
+      "prometheus-modal"
+      (span_ [class_ "btn btn-sm btn-primary gap-1.5"] $ do faSprite_ "plus" "regular" "w-3 h-3"; "Add target")
+      "Scrape a Prometheus endpoint"
+      "We poll this endpoint on your schedule, parse the metrics exposition format, and ingest the samples as series you can chart and alert on."
+      ("/p/" <> pid.toText <> "/settings/prometheus")
+      "Add scrape target"
+      Nothing
   prometheusTargetsList pid cfgs
+
+
+-- | Add/edit target modal: same shell either way, differing only in trigger, copy,
+-- POST target and the config it prefills from.
+promTargetModal_ :: Projects.ProjectId -> Text -> Html () -> Text -> Text -> Text -> Text -> Maybe PromCfg.PrometheusScrapeConfig -> Html ()
+promTargetModal_ pid modalId trigger heading desc action submitLabel mcfg =
+  modalWith_ modalId def{boxClass = "p-8"} (Just trigger) $ div_ [class_ "flex flex-col gap-5"] do
+    div_ do
+      h2_ [class_ "text-textStrong text-xl font-semibold"] $ toHtml heading
+      p_ [class_ "text-sm text-textWeak mt-1"] $ toHtml desc
+    form_ [hxPost_ action, class_ "flex flex-col gap-4", hxTarget_ "#prometheus-targets", hxSwap_ "outerHTML"]
+      $ prometheusFields_ pid modalId submitLabel mcfg
 
 
 -- | Shared add/edit form body: prefilled from a config when editing. Carries its own
@@ -790,7 +803,7 @@ prometheusTargetsList pid cfgs = div_ [id_ "prometheus-targets", class_ "mt-4"] 
         [ class_ "input input-bordered input-sm w-full mb-3"
         , type_ "search"
         , placeholder_ "Filter targets…"
-        , term "_" "on input show .itemsListItem in #prometheus-targets when its textContent.toLowerCase() contains my value.toLowerCase()"
+        , [__|on input show .itemsListItem in #prometheus-targets when its textContent.toLowerCase() contains my value.toLowerCase()|]
         ]
       div_ [class_ "flex flex-col gap-2"] $ V.forM_ cfgs (prometheusTargetRow pid)
 
@@ -816,15 +829,19 @@ prometheusTargetRow pid cfg = div_ [class_ "itemsListItem flex items-center just
     -- Filter the metrics explorer to this target's series (metric_source = service_name,
     -- which sampleToMetricRecord sets to the config name).
     a_ [class_ "btn btn-xs btn-ghost", href_ $ "/p/" <> pid.toText <> "/metrics?metric_source=" <> decodeUtf8 (urlEncode True (encodeUtf8 cfg.name))] "View metrics"
-    modalWith_ ("prom-edit-" <> cfg.id.toText) def{boxClass = "p-8"} (Just $ span_ [class_ "btn btn-xs btn-ghost"] "Edit") do
-      div_ [class_ "flex flex-col gap-5"] do
-        div_ do
-          h2_ [class_ "text-textStrong text-xl font-semibold"] "Edit Prometheus target"
-          p_ [class_ "text-sm text-textWeak mt-1"] "Update how Monoscope scrapes this endpoint. Changes take effect on the next scrape."
-        form_ [hxPost_ $ "/p/" <> pid.toText <> "/settings/prometheus/" <> cfg.id.toText <> "/edit", class_ "flex flex-col gap-4", hxTarget_ "#prometheus-targets", hxSwap_ "outerHTML"]
-          $ prometheusFields_ pid ("prom-edit-" <> cfg.id.toText) "Save changes" (Just cfg)
-    button_ [class_ "btn btn-xs btn-ghost", hxPatch_ $ "/p/" <> pid.toText <> "/settings/prometheus/" <> cfg.id.toText, hxTarget_ "#prometheus-targets", hxSwap_ "outerHTML"] $ toHtml (bool "Resume" "Pause" cfg.enabled :: Text)
-    button_ [class_ "btn btn-xs btn-ghost text-textError", hxDelete_ $ "/p/" <> pid.toText <> "/settings/prometheus/" <> cfg.id.toText, hxTarget_ "#prometheus-targets", hxSwap_ "outerHTML", hxConfirm_ "Remove this Prometheus target?"] "Delete"
+    let cfgUrl = "/p/" <> pid.toText <> "/settings/prometheus/" <> cfg.id.toText
+        swapList = [hxTarget_ "#prometheus-targets", hxSwap_ "outerHTML"]
+    promTargetModal_
+      pid
+      ("prom-edit-" <> cfg.id.toText)
+      (span_ [class_ "btn btn-xs btn-ghost"] "Edit")
+      "Edit Prometheus target"
+      "Update how Monoscope scrapes this endpoint. Changes take effect on the next scrape."
+      (cfgUrl <> "/edit")
+      "Save changes"
+      (Just cfg)
+    button_ ([class_ "btn btn-xs btn-ghost", hxPatch_ cfgUrl] <> swapList) $ toHtml (bool "Resume" "Pause" cfg.enabled :: Text)
+    button_ ([class_ "btn btn-xs btn-ghost text-textError", hxDelete_ cfgUrl, hxConfirm_ "Remove this Prometheus target?"] <> swapList) "Delete"
 
 
 ----------------------------------------------------------------------
@@ -859,7 +876,7 @@ newtype NotificationTestHistoryGet = NotificationTestHistoryGet {tests :: [TestH
 
 
 instance ToHtml NotificationTestHistoryGet where
-  toHtml (NotificationTestHistoryGet tests) = toHtmlRaw $ historyHtml_ tests
+  toHtml (NotificationTestHistoryGet tests) = toHtml $ historyHtml_ tests
   toHtmlRaw = toHtml
 
 
@@ -1030,6 +1047,17 @@ verifyLemonSqueezySignature sigHeader payload secret =
     Left _ -> False
 
 
+-- | Email every member of a project. Shared by the LemonSqueezy and Stripe webhooks.
+notifyMembers :: Projects.ProjectId -> (Text, Html ()) -> ATBaseCtx ()
+notifyMembers pid (subj, html) = Notify.runNotifyProduction do
+  users <- Projects.usersByProjectId pid
+  forM_ users \u -> sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
+
+
+billingUrl :: EnvConfig -> Projects.ProjectId -> Text
+billingUrl envConfig pid = envConfig.hostUrl <> "p/" <> pid.toText <> "/manage_billing"
+
+
 webhookPostH :: Maybe Text -> ByteString -> ATBaseCtx (Html ())
 webhookPostH sigHeaderM rawBody = do
   envConfig <- asks env
@@ -1046,17 +1074,13 @@ webhookPostH sigHeaderM rawBody = do
   let orderId = dat.dataVal.attributes.orderId
       subItem = dat.dataVal.attributes.firstSubscriptionItem
       plan = dat.dataVal.attributes.productName
-      billingUrl pid = envConfig.hostUrl <> "p/" <> pid.toText <> "/manage_billing"
-      notifyMembers pid (subj, html) = Notify.runNotifyProduction do
-        users <- Projects.usersByProjectId pid
-        forM_ users \u -> sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
       downgrade reason = do
         Projects.projectByOrderId (show orderId) >>= \case
           Just project -> do
             rows <- Projects.downgradeToFree orderId subItem.subscriptionId subItem.id
             when (rows == 0) $ Log.logAttention "LS downgrade touched 0 rows" (show orderId :: Text, reason)
             when (rows > 1) $ Log.logAttention "LS downgrade touched multiple rows" (show orderId :: Text, rows)
-            notifyMembers project.id $ ET.planDowngradedEmail project.title reason (billingUrl project.id)
+            notifyMembers project.id $ ET.planDowngradedEmail project.title reason (billingUrl envConfig project.id)
           Nothing ->
             Log.logAttention "LS downgrade: no project for order_id" (show orderId :: Text, dat.meta.eventName, reason)
         pure "downgraded"
@@ -1065,7 +1089,7 @@ webhookPostH sigHeaderM rawBody = do
         when (rows == 0) $ Log.logAttention "LS upgrade touched 0 rows" (show orderId :: Text, subItem.subscriptionId, plan)
         when (rows > 1) $ Log.logAttention "LS upgrade touched multiple rows" (show orderId :: Text, rows)
         Projects.projectBySubId (show subItem.subscriptionId) >>= \case
-          Just project -> notifyMembers project.id $ ET.planUpgradedEmail project.title plan (billingUrl project.id)
+          Just project -> notifyMembers project.id $ ET.planUpgradedEmail project.title plan (billingUrl envConfig project.id)
           Nothing -> Log.logAttention "LS upgrade: no project for sub_id" (show orderId :: Text, subItem.subscriptionId, plan)
         pure "upgraded"
   case dat.meta.eventName of
@@ -1090,7 +1114,7 @@ webhookPostH sigHeaderM rawBody = do
       whenJust (Projects.projectIdFromText projectId) \pid -> do
         void $ Projects.updateProjectBilling pid plan (show subItem.subscriptionId) (show subItem.id) (show orderId)
         whenJustM (Projects.projectById pid) \project ->
-          notifyMembers pid $ ET.planUpgradedEmail project.title plan (billingUrl pid)
+          notifyMembers pid $ ET.planUpgradedEmail project.title plan (billingUrl envConfig pid)
       pure "subscription created"
     "subscription_cancelled" -> downgrade "was cancelled"
     "subscription_expired" -> downgrade "has expired"
@@ -1098,16 +1122,12 @@ webhookPostH sigHeaderM rawBody = do
     -- subscription_expired/_cancelled will downgrade if retries ultimately fail.
     "subscription_payment_failed" -> do
       whenJustM (Projects.projectByOrderId (show orderId)) \project ->
-        notifyMembers project.id $ ET.planDowngradedEmail project.title "payment failed" (billingUrl project.id)
+        notifyMembers project.id $ ET.planDowngradedEmail project.title "payment failed" (billingUrl envConfig project.id)
       Log.logAttention "LS subscription_payment_failed (no downgrade)" (show orderId :: Text, subItem.subscriptionId)
       pure "payment failed notified"
     "subscription_paused" -> downgrade "was paused"
-    "subscription_resumed" -> upgrade
-    "subscription_unpaused" -> upgrade
-    "subscription_payment_success" -> upgrade
-    "subscription_payment_recovered" -> upgrade
     "subscription_payment_refunded" -> downgrade "payment refunded"
-    "subscription_plan_changed" -> upgrade
+    e | e `elem` ["subscription_resumed", "subscription_unpaused", "subscription_payment_success", "subscription_payment_recovered", "subscription_plan_changed"] -> upgrade
     "subscription_updated" -> do
       Log.logInfo "LS subscription_updated (no-op)" (show orderId :: Text, subItem.subscriptionId, plan)
       pure "updated"
@@ -1173,7 +1193,7 @@ manageBillingGetH pid from = do
               inCycle = filter (\(d, _, _, _, _) -> d >= s && d < e) allDaily
         , not (null inCycle)
         ]
-  let last_reported = toText (formatTime defaultTimeLocale "%b %-d" project.usageLastReported)
+  let last_reported = fmtDate "%b %-d" project.usageLastReported
       bwconf = bw{pageTitle = "Billing", isSettingsPage = True}
       lemonUrl = envCfg.lemonSqueezyUrl <> "&checkout[custom][project_id]=" <> pid.toText
       critical = envCfg.lemonSqueezyCriticalUrl <> "&checkout[custom][project_id]=" <> pid.toText
@@ -1186,7 +1206,6 @@ manageBillingGetH pid from = do
 billingPage :: BillingData -> Html ()
 billingPage d = div_ [] do
   let reqs = d.totalReqs
-      pidTxt = d.pid.toText
       isFree = Projects.isFreeTier d.paymentPlan
       basePriceNum =
         if
@@ -1196,10 +1215,8 @@ billingPage d = div_ [] do
       planPrice = show basePriceNum
       overageNum = max 0 (reqs - 20_000_000)
       overageCost = fromIntegral overageNum / 1_000_000 :: Double
-      totalCost = fromIntegral basePriceNum + overageCost
-      fmtUSD n = "$" <> toText (printf "%.2f" (n :: Double) :: String)
-      estCost = if isFree then "$0" else fmtUSD totalCost
-      cycleStartText = toText (formatTime defaultTimeLocale "%b %-d" d.cycleStart)
+      estCost = if isFree then "$0" else usd (fromIntegral basePriceNum + overageCost)
+      cycleStartText = fmtDate "%b %-d" d.cycleStart
   settingsSection_ do
     settingsH2_ "Billing"
 
@@ -1223,7 +1240,7 @@ billingPage d = div_ [] do
             usageLine =
               if isFree || overageNum <= 0
                 then fmt (commaizeF reqs) <> " requests" <> bytesSuffix
-                else "$" <> planPrice <> " plan + " <> fmtUSD overageCost <> " usage (" <> fmt (commaizeF reqs) <> " requests" <> bytesSuffix <> ")"
+                else "$" <> planPrice <> " plan + " <> usd overageCost <> " usage (" <> fmt (commaizeF reqs) <> " requests" <> bytesSuffix <> ")"
         div_ [class_ "text-xs text-textWeak mt-1 tabular-nums"] $ toHtml usageLine
       unless (T.null d.lastReported)
         $ div_ [class_ "text-xs text-textWeak"]
@@ -1233,7 +1250,7 @@ billingPage d = div_ [] do
     div_ [class_ "border-t border-strokeWeak pt-6 flex items-center gap-3"] do
       label_ [Lucid.for_ "pricing-modal", class_ "btn btn-sm btn-primary cursor-pointer"] "Change plan"
       unless isFree
-        $ a_ [class_ "btn btn-sm btn-ghost text-textBrand", hxGet_ $ "/p/" <> pidTxt <> "/manage_subscription"] "Manage subscription"
+        $ a_ [class_ "btn btn-sm btn-ghost text-textBrand", hxGet_ $ "/p/" <> d.pid.toText <> "/manage_subscription"] "Manage subscription"
 
     -- Daily breakdown
     dailyUsageBreakdown_ isFree d.cycleStart d.dailyUsage
@@ -1246,6 +1263,14 @@ billingPage d = div_ [] do
       span_ [class_ "text-textStrong text-2xl font-semibold"] "Compare Plans"
       p_ [class_ "mt-2 mb-4"] "Drag the slider to estimate costs at different usage levels."
     paymentPlanPicker d.pid d.lemonUrl d.critical d.paymentPlan d.enableFreetier d.basicAuthEnabled False d.provider
+
+
+usd :: Double -> Text
+usd n = "$" <> toText (printf "%.2f" n :: String)
+
+
+fmtDate :: FormatTime t => String -> t -> Text
+fmtDate f = toText . formatTime defaultTimeLocale f
 
 
 -- | Format a byte count with the largest unit it fits into. KB-step decimal
@@ -1304,9 +1329,8 @@ dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-s
                 ([], 0 :: Int64)
                 ascending
           dayCostText prev cur
-            | isFree = "—"
-            | dayOverage <= 0 = "—"
-            | otherwise = "$" <> toText (printf "%.2f" (fromIntegral dayOverage / 1_000_000 :: Double) :: String)
+            | isFree || dayOverage <= 0 = "—"
+            | otherwise = usd (fromIntegral dayOverage / 1_000_000)
             where
               dayOverage = max 0 (cur - included) - max 0 (prev - included)
       unless hasMetrics
@@ -1340,14 +1364,14 @@ dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-s
                   rowCls = "border-t border-strokeWeak align-top" <> (if preCycle then " opacity-50" else "")
                   dayCls = "px-3 py-2 " <> (if preCycle then "text-textWeak" else "text-textStrong")
               tr_ [class_ rowCls, title_ (if preCycle then "Previous cycle — shown for context" else "")] do
-                td_ [class_ dayCls] $ toHtml $ toText (formatTime defaultTimeLocale "%a %b %e" day)
+                td_ [class_ dayCls] $ toHtml $ fmtDate "%a %b %e" day
                 countCell eb events True
                 countCell mb metrics False
                 td_ [class_ "px-3 py-2"] do
                   div_ [class_ "h-1.5 bg-fillWeak rounded-full overflow-hidden"] do
                     div_ [class_ "h-full bg-fillBrand", style_ ("width: " <> show pct <> "%")] mempty
                 td_ [class_ "px-3 py-2 text-right text-textWeak"] $ toHtml $ dayCostText prev cur
-      let cycleStartText = toText (formatTime defaultTimeLocale "%b %-d" cycleStartDay)
+      let cycleStartText = fmtDate "%b %-d" cycleStartDay
       when (activeDays < 30)
         $ div_ [class_ "text-xs text-textWeak"]
         $ toHtml
@@ -1383,13 +1407,10 @@ pastCyclesSection_ isFree basePrice cycles = div_ [class_ "border-t border-strok
       tbody_ do
         forM_ cycles \(cs, ce, reqs, bytes) -> do
           -- ce is exclusive end; subtract 1 day for the human-facing label.
-          let endLabel = toText (formatTime defaultTimeLocale "%b %-d" (addDays (-1) ce))
-              startLabel = toText (formatTime defaultTimeLocale "%b %-d, %Y" cs)
+          let endLabel = fmtDate "%b %-d" (addDays (-1) ce)
+              startLabel = fmtDate "%b %-d, %Y" cs
               overage = max 0 (reqs - 20_000_000)
-              cost = fromIntegral basePrice + (fromIntegral overage / 1_000_000 :: Double)
-              costText
-                | isFree = "—"
-                | otherwise = "$" <> toText (printf "%.2f" cost :: String)
+              costText = bool (usd (fromIntegral basePrice + fromIntegral overage / 1_000_000)) "—" isFree
           tr_ [class_ "border-t border-strokeWeak"] do
             td_ [class_ "px-3 py-2 text-textStrong"] $ toHtml @Text (startLabel <> " – " <> endLabel)
             td_ [class_ "px-3 py-2 text-right text-textStrong"] $ toHtml @Text (fmt (commaizeF reqs))
@@ -1517,24 +1538,20 @@ stripeWebhookPostH sigHeaderM rawBody = do
       Right event -> do
         let eventType = jsonField "type" event :: Maybe Text
             sessionObj = jsonField "data" event >>= jsonField "object" :: Maybe AE.Value
-            notifyMembers pid (subj, html) = Notify.runNotifyProduction do
-              users <- Projects.usersByProjectId pid
-              forM_ users \u -> sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
-            billingUrl pid = envConfig.hostUrl <> "p/" <> pid.toText <> "/manage_billing"
         case (eventType, sessionObj) of
-          (Just "checkout.session.completed", Just obj) -> handleStripeCheckout envConfig obj notifyMembers billingUrl
-          (Just "customer.subscription.deleted", Just obj) -> handleStripeDowngrade "subscription.deleted" "was cancelled" obj notifyMembers billingUrl
+          (Just "checkout.session.completed", Just obj) -> handleStripeCheckout envConfig obj
+          (Just "customer.subscription.deleted", Just obj) -> handleStripeDowngrade envConfig "subscription.deleted" "was cancelled" obj
           (Just "customer.subscription.updated", Just obj) -> handleStripeSubUpdated obj
-          (Just "customer.subscription.paused", Just obj) -> handleStripeDowngrade "subscription.paused" "was paused" obj notifyMembers billingUrl
-          (Just "customer.subscription.resumed", Just obj) -> handleStripeSubResumed envConfig obj notifyMembers billingUrl
-          (Just "invoice.payment_failed", Just obj) -> handleStripePaymentFailed obj notifyMembers billingUrl
+          (Just "customer.subscription.paused", Just obj) -> handleStripeDowngrade envConfig "subscription.paused" "was paused" obj
+          (Just "customer.subscription.resumed", Just obj) -> handleStripeSubResumed envConfig obj
+          (Just "invoice.payment_failed", Just obj) -> handleStripePaymentFailed envConfig obj
           _ -> do
             Log.logInfo "Stripe webhook unhandled event" (eventType, isJust sessionObj)
             pure ""
 
 
-handleStripeCheckout :: EnvConfig -> AE.Value -> (Projects.ProjectId -> (Text, Html ()) -> ATBaseCtx ()) -> (Projects.ProjectId -> Text) -> ATBaseCtx (Html ())
-handleStripeCheckout envConfig obj notifyMembers billingUrl = do
+handleStripeCheckout :: EnvConfig -> AE.Value -> ATBaseCtx (Html ())
+handleStripeCheckout envConfig obj = do
   let pidM = jsonField "client_reference_id" obj :: Maybe Text
       subIdM = jsonField "subscription" obj :: Maybe Text
       customerIdM = jsonField "customer" obj :: Maybe Text
@@ -1565,7 +1582,7 @@ handleStripeCheckout envConfig obj notifyMembers billingUrl = do
             Just BJ.StripeSubDetails{status = "trialing"} -> Log.logAttention "Stripe sub trialing but trial_end missing; no reminders scheduled" (pid.toText, subId)
             _ -> pass
           whenJust projectM \project ->
-            notifyMembers pid $ ET.planUpgradedEmail project.title plan (billingUrl pid)
+            notifyMembers pid $ ET.planUpgradedEmail project.title plan (billingUrl envConfig pid)
           pure "checkout processed"
     _ -> do
       Log.logAttention "Stripe checkout missing project/sub/customer" (pidM, subIdM, customerIdM)
@@ -1574,15 +1591,15 @@ handleStripeCheckout envConfig obj notifyMembers billingUrl = do
 
 -- | Shared body of subscription.deleted / .paused: downgrade by sub_id, then notify.
 -- @event@ names the Stripe event in logs, @reason@ is the user-facing wording.
-handleStripeDowngrade :: Text -> Text -> AE.Value -> (Projects.ProjectId -> (Text, Html ()) -> ATBaseCtx ()) -> (Projects.ProjectId -> Text) -> ATBaseCtx (Html ())
-handleStripeDowngrade event reason obj notifyMembers billingUrl =
+handleStripeDowngrade :: EnvConfig -> Text -> Text -> AE.Value -> ATBaseCtx (Html ())
+handleStripeDowngrade envConfig event reason obj =
   case jsonField "id" obj :: Maybe Text of
     Just subId -> do
       rows <- Projects.downgradeToFreeBySubId subId
       when (rows == 0) $ Log.logAttention ("Stripe " <> event <> ": no project for sub_id") subId
       when (rows > 1) $ Log.logAttention ("Stripe " <> event <> " touched multiple rows") (subId, rows)
       whenJustM (Projects.projectBySubId subId) \project ->
-        notifyMembers project.id $ ET.planDowngradedEmail project.title reason (billingUrl project.id)
+        notifyMembers project.id $ ET.planDowngradedEmail project.title reason (billingUrl envConfig project.id)
       pure $ toHtml $ T.replace "." " " event
     Nothing -> do
       Log.logAttention ("Stripe " <> event <> ": missing sub id") ()
@@ -1602,21 +1619,21 @@ handleStripeSubUpdated obj = do
 
 -- Notification only — Stripe retries payments automatically over its dunning period.
 -- Downgrade happens via customer.subscription.deleted when Stripe gives up.
-handleStripePaymentFailed :: AE.Value -> (Projects.ProjectId -> (Text, Html ()) -> ATBaseCtx ()) -> (Projects.ProjectId -> Text) -> ATBaseCtx (Html ())
-handleStripePaymentFailed obj notifyMembers billingUrl = do
+handleStripePaymentFailed :: EnvConfig -> AE.Value -> ATBaseCtx (Html ())
+handleStripePaymentFailed envConfig obj = do
   let attemptCount = jsonField "attempt_count" obj :: Maybe Int
       nextAttempt = jsonField "next_payment_attempt" obj :: Maybe Int
   whenJust (jsonField "customer" obj :: Maybe Text) \customerId ->
     whenJustM (Projects.projectByCustomerId customerId) \project -> do
       Log.logAttention "Stripe invoice.payment_failed" (project.id, attemptCount, nextAttempt)
-      notifyMembers project.id $ ET.planDowngradedEmail project.title "payment failed" (billingUrl project.id)
+      notifyMembers project.id $ ET.planDowngradedEmail project.title "payment failed" (billingUrl envConfig project.id)
   pure "payment failed handled"
 
 
 -- Look up the sub's price via the Stripe API, reverse-map to our plan name, and re-upgrade.
 -- (Pause preserved the IDs, so resume never needs a re-checkout.)
-handleStripeSubResumed :: EnvConfig -> AE.Value -> (Projects.ProjectId -> (Text, Html ()) -> ATBaseCtx ()) -> (Projects.ProjectId -> Text) -> ATBaseCtx (Html ())
-handleStripeSubResumed envConfig obj notifyMembers billingUrl =
+handleStripeSubResumed :: EnvConfig -> AE.Value -> ATBaseCtx (Html ())
+handleStripeSubResumed envConfig obj =
   case jsonField "id" obj :: Maybe Text of
     Just subId -> do
       subDetailsM <- liftIO $ BJ.getStripeSubDetails envConfig.stripeSecretKey subId
@@ -1631,7 +1648,7 @@ handleStripeSubResumed envConfig obj notifyMembers billingUrl =
           when (rows > 1) $ Log.logAttention "Stripe subscription.resumed touched multiple rows" (subId, rows)
           when (rows > 0)
             $ whenJustM (Projects.projectBySubId subId) \project ->
-              notifyMembers project.id $ ET.planUpgradedEmail project.title plan (billingUrl project.id)
+              notifyMembers project.id $ ET.planUpgradedEmail project.title plan (billingUrl envConfig project.id)
           pure "subscription resumed"
         Nothing -> do
           Log.logAttention "Stripe subscription.resumed: could not fetch sub items" subId

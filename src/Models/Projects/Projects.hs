@@ -109,7 +109,6 @@ import Data.Char (isDigit)
 import Data.Default
 import Data.Effectful.Hasql qualified as EHasql
 import Data.Effectful.UUID (UUIDEff, genUUID)
-import Data.Effectful.UUID qualified as UUID
 import Data.OpenApi (ToSchema)
 import Data.Text qualified as T
 import Data.Text.Display
@@ -286,9 +285,7 @@ data ProjectListItem = ProjectListItem
   , active :: Bool
   , title :: Text
   , description :: Text
-  , -- NOTE: We used to have hosts under project, but now hosts should be gotten from the endpoints.
-    -- NOTE: If there's heavy need and usage, we caould create a view. Otherwise, the project cache is best, if it meets our needs.
-    paymentPlan :: Text
+  , paymentPlan :: Text
   , questions :: Maybe AE.Value
   , dailyNotif :: Bool
   , weeklyNotif :: Bool
@@ -321,11 +318,7 @@ data ProjectS3Bucket = ProjectS3Bucket
   }
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON, FromForm, NFData)
-  deriving (FromField, ToField) via Aeson ProjectS3Bucket
-
-
-deriving via Aeson ProjectS3Bucket instance HI.DecodeValue ProjectS3Bucket
-deriving via Aeson ProjectS3Bucket instance HI.EncodeValue ProjectS3Bucket
+  deriving (FromField, HI.DecodeValue, HI.EncodeValue, ToField) via Aeson ProjectS3Bucket
 
 
 data ProjectCache = ProjectCache
@@ -857,9 +850,6 @@ recordUsageWindow pid wStart wEnd totals chunks = do
       -- total_requests historically = events + metrics (drives splitUsageIntoChunks
       -- and getTotalUsage). Preserve that invariant; new columns are additive.
       totalUsage = totals.events + totals.metrics
-      mC = totals.metrics
-      eB = totals.eventBytes
-      mB = totals.metricBytes
   EHasql.transaction TxS.ReadCommitted TxS.Write do
     -- usage_last_reported always advances (even on zero-usage days); otherwise
     -- the next tick re-scans an ever-growing window, which is the failure mode
@@ -868,7 +858,7 @@ recordUsageWindow pid wStart wEnd totals chunks = do
     when (totalUsage > 0) do
       exec
         [HI.sql| INSERT INTO apis.daily_usage (project_id, total_requests, total_metrics, total_event_bytes, total_metric_bytes, window_start, window_end)
-                       VALUES (#{pid}, #{totalUsage}, #{mC}, #{eB}, #{mB}, #{wStart}, #{wEnd}) |]
+                       VALUES (#{pid}, #{totalUsage}, #{totals.metrics}, #{totals.eventBytes}, #{totals.metricBytes}, #{wStart}, #{wEnd}) |]
       for_ (zip chunkIds chunks) \(cid, ChunkQuantity qty) ->
         exec
           [HI.sql| INSERT INTO projects.usage_report_submissions (id, project_id, window_start, window_end, quantity)
@@ -1041,12 +1031,8 @@ newtype SessionData = SessionData {getSessionData :: Map Text Text}
   deriving newtype (NFData)
   deriving anyclass (Default)
   deriving
-    (FromField, ToField)
+    (FromField, HI.DecodeValue, HI.EncodeValue, ToField)
     via Aeson (Map Text Text)
-
-
-deriving via Aeson (Map Text Text) instance HI.DecodeValue SessionData
-deriving via Aeson (Map Text Text) instance HI.EncodeValue SessionData
 
 
 newtype PSUser = PSUser {getUser :: User}
@@ -1054,12 +1040,8 @@ newtype PSUser = PSUser {getUser :: User}
   deriving newtype (NFData)
   deriving anyclass (Default)
   deriving
-    (FromField, ToField)
+    (FromField, HI.DecodeValue, HI.EncodeValue, ToField)
     via Aeson User
-
-
-deriving via Aeson User instance HI.DecodeValue PSUser
-deriving via Aeson User instance HI.EncodeValue PSUser
 
 
 newtype PSProjects = PSProjects {getProjects :: V.Vector Project}
@@ -1067,12 +1049,8 @@ newtype PSProjects = PSProjects {getProjects :: V.Vector Project}
   deriving newtype (NFData)
   deriving anyclass (Default)
   deriving
-    (FromField, ToField)
+    (FromField, HI.DecodeValue, HI.EncodeValue, ToField)
     via Aeson (V.Vector Project)
-
-
-deriving via Aeson (V.Vector Project) instance HI.DecodeValue PSProjects
-deriving via Aeson (V.Vector Project) instance HI.EncodeValue PSProjects
 
 
 data PersistentSession = PersistentSession
@@ -1093,7 +1071,7 @@ data PersistentSession = PersistentSession
 
 
 newPersistentSessionId :: UUIDEff :> es => Eff es PersistentSessionId
-newPersistentSessionId = PersistentSessionId <$> UUID.genUUID
+newPersistentSessionId = PersistentSessionId <$> genUUID
 
 
 insertSession :: DB es => PersistentSessionId -> UserId -> SessionData -> Eff es ()

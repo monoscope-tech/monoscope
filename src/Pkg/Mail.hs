@@ -9,15 +9,11 @@ import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
 import Data.Effectful.Notify qualified as Notify
 import Data.Effectful.Wreq (HTTP, defaults, header, postWith)
-import Data.Pool ()
 import Data.Text qualified as T
 import Data.Text.Display (display)
 import Data.Time
 import Data.Vector qualified as V
-import Effectful (
-  Eff,
-  type (:>),
- )
+import Effectful (Eff, type (:>))
 import Effectful.Log (Log)
 import Effectful.Reader.Static (Reader, ask)
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
@@ -43,11 +39,10 @@ sendRenderedEmail receiver subject htmlBody =
 sendSlackMessage :: (DB es, Log :> es, Notify.Notify :> es) => Projects.ProjectId -> Text -> Eff es ()
 sendSlackMessage pid message = do
   slackData <- getProjectSlackData pid
-  case slackData of
-    Just s -> do
-      let payload = [aesonQQ| {"text": #{message}, "type":"mrkdwn"} |]
-      Notify.sendNotification $ Notify.slackNotification s.channelId s.botToken payload
-    Nothing -> Log.logAttention "sendSlackMessage is not configured. But was called" (pid, message)
+  maybe
+    (Log.logAttention "sendSlackMessage is not configured. But was called" (pid, message))
+    (\s -> Notify.sendNotification $ Notify.slackNotification s.channelId s.botToken [aesonQQ| {"text": #{message}, "type":"mrkdwn"} |])
+    slackData
 
 
 data NotificationAlerts
@@ -120,17 +115,13 @@ sendDiscordAlertWith replyToMsgIdM alert pid pTitle channelIdM' = do
   -- @everyone.discord_channels (insertion order; see addDiscordChannelToEveryoneTeam).
   channelIdM <- case channelIdM' of
     Just c -> pure (Just c)
-    Nothing -> do
-      teamM <- ProjectMembers.getEveryoneTeam pid
-      pure $ teamM >>= viaNonEmpty head . V.toList . (.discord_channels)
+    Nothing -> (>>= viaNonEmpty head . V.toList . (.discord_channels)) <$> ProjectMembers.getEveryoneTeam pid
   case channelIdM of
-    Nothing -> do
-      Log.logAttention "Discord alert skipped: no channel configured" (AE.object ["project_id" AE..= pid])
-      pure Nothing
+    Nothing -> Nothing <$ Log.logAttention "Discord alert skipped: no channel configured" (AE.object ["project_id" AE..= pid])
     Just cid -> do
       let projectUrl = appCtx.env.hostUrl <> "p/" <> pid.toText
           mkPayload = \case
-            RuntimeErrorAlert{..} -> Just $ discordErrorAlert runtimeAlertType errorData issueTitle pTitle projectUrl chartUrl occurrenceText firstSeenText ongoingFor
+            RuntimeErrorAlert{..} -> Just $ discordErrorAlert runtimeAlertType errorData pTitle projectUrl chartUrl occurrenceText firstSeenText ongoingFor
             EndpointAlert{..} -> Just $ discordNewEndpointAlert project endpoints endpointHash projectUrl
             ReportAlert{..} -> Just $ discordReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle reportUrl allChartUrl errorChartUrl
             MonitorsAlert{..} -> Just $ discordMonitorAlert monitorTitle monitorUrl chartUrl
@@ -138,9 +129,7 @@ sendDiscordAlertWith replyToMsgIdM alert pid pTitle channelIdM' = do
             LogPatternAlert{..} -> Just $ mkDiscordLogPatternPayload patternText issueUrl logLevel serviceName sourceField occurrenceCount sampleMessage pTitle isError
             LogPatternRateChangeAlert{..} -> Just $ mkDiscordLogPatternRateChangePayload patternText issueUrl logLevel serviceName direction currentRate baselineMean changePercent pTitle isError
             ShapeAlert -> Nothing
-      case mkPayload alert of
-        Nothing -> pure Nothing
-        Just payload -> Notify.sendNotificationWithReply $ Notify.discordThreadedNotification cid payload replyToMsgIdM
+      maybe (pure Nothing) (\payload -> Notify.sendNotificationWithReply $ Notify.discordThreadedNotification cid payload replyToMsgIdM) (mkPayload alert)
 
 
 -- | Send a Slack alert, optionally threading replies under a parent message.
@@ -169,7 +158,7 @@ sendSlackAlertWith threadTsM alert pid pTitle channelM = do
     (Just cid, Just sd) -> do
       let projectUrl = appCtx.env.hostUrl <> "p/" <> pid.toText
           mkPayload = \case
-            RuntimeErrorAlert{..} -> Just $ slackErrorAlert runtimeAlertType errorData issueTitle pTitle cid projectUrl chartUrl occurrenceText firstSeenText ongoingFor
+            RuntimeErrorAlert{..} -> Just $ slackErrorAlert runtimeAlertType errorData pTitle cid projectUrl chartUrl occurrenceText firstSeenText ongoingFor
             EndpointAlert{..} -> Just $ slackNewEndpointsAlert project endpoints cid endpointHash projectUrl
             ReportAlert{..} -> Just $ slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle cid reportUrl allChartUrl errorChartUrl
             MonitorsAlert{..} -> Just $ slackMonitorAlert monitorTitle monitorUrl chartUrl cid
@@ -202,14 +191,11 @@ sendWhatsAppAlert alert pid pTitle tos = do
           url = pid.toText <> "/issues/by_hash/" <> errorData.hash
           contentVars = AE.object ["1" AE..= ("*" <> pTitle <> "*"), "2" AE..= ("*" <> stripSummaryBadges issueTitle <> "*"), "3" AE..= ("`" <> errorData.message <> "`"), "4" AE..= url]
       sendAlert template contentVars
-      pass
     EndpointAlert{..} -> do
       let template = appCtx.config.whatsappEndpointTemplate
           url = pid.toText <> "/issues/by_hash/" <> endpointHash
-          labels = (.label) <$> V.toList endpoints
-          contentVars = AE.object ["1" AE..= ("*" <> pTitle <> "*"), "2" AE..= T.intercalate "." ((\x -> "`" <> x <> "`") <$> labels), "3" AE..= url]
+          contentVars = AE.object ["1" AE..= ("*" <> pTitle <> "*"), "2" AE..= T.intercalate "." ((\x -> "`" <> x.label <> "`") <$> V.toList endpoints), "3" AE..= url]
       sendAlert template contentVars
-      pass
     ReportAlert{..} -> do
       let template = appCtx.config.whatsappAllReportTemplate
           templateErr = appCtx.config.whatsappErrorReportTemplate
@@ -226,7 +212,6 @@ sendWhatsAppAlert alert pid pTitle tos = do
               ]
       sendAlert template (AE.Object $ contentVars <> KEM.fromList ["3" AE..= ("*" <> show totalEvents <> "*"), "6" AE..= cUrl])
       sendAlert templateErr (AE.Object $ contentVars <> KEM.fromList ["3" AE..= ("*" <> show totalErrors <> "*"), "6" AE..= eUrl])
-      pass
     ShapeAlert -> pass
     MonitorsAlert{} -> pass
     MonitorsRecoveryAlert{} -> pass
@@ -247,10 +232,10 @@ slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown 
     [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("<" <> url <> "|📊 *" <> T.toTitle reportType <> " report* · " <> project <> ">")]]
     , AE.object
         [ "type" AE..= "context"
-        , "elements" AE..= AE.Array [AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*From:* " <> startTime <> "  *To:* " <> endTime <> "  *Events:* " <> toText (show totalEvents) <> "  *Errors:* " <> toText (show totalErrors))]]
+        , "elements" AE..= AE.Array [AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*From:* " <> startTime <> "  *To:* " <> endTime <> "  *Events:* " <> show totalEvents <> "  *Errors:* " <> show totalErrors)]]
         ]
-    , AE.object ["type" AE..= "image", "image_url" AE..= allUrl, "alt_text" AE..= "Events", "title" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= ("Events: " <> toText (show totalEvents))]]
-    , AE.object ["type" AE..= "image", "image_url" AE..= errUrl, "alt_text" AE..= "Errors", "title" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= ("Errors: " <> toText (show totalErrors))]]
+    , AE.object ["type" AE..= "image", "image_url" AE..= allUrl, "alt_text" AE..= "Events", "title" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= ("Events: " <> show totalEvents :: Text)]]
+    , AE.object ["type" AE..= "image", "image_url" AE..= errUrl, "alt_text" AE..= "Errors", "title" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= ("Errors: " <> show totalErrors :: Text)]]
     , AE.object ["type" AE..= "context", "elements" AE..= AE.Array sumr]
     , AE.object
         [ "type" AE..= "actions"
@@ -258,11 +243,11 @@ slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown 
         ]
     ]
   where
-    sumr = V.take 10 $ V.map (\(name, errCount, evCount) -> AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*" <> name <> ":* " <> toText (show evCount) <> " events · " <> toText (show errCount) <> " errors")]) breakDown
+    sumr = V.take 10 $ V.map (\(name, errCount, evCount) -> AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*" <> name <> ":* " <> show evCount <> " events · " <> show errCount <> " errors")]) breakDown
 
 
-slackErrorAlert :: RuntimeAlertType -> ErrorPatterns.ATError -> Text -> Text -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> AE.Value
-slackErrorAlert alertType err _issTitle project channelId projectUrl chartUrlM occTextM firstSeenM ongoingForM =
+slackErrorAlert :: RuntimeAlertType -> ErrorPatterns.ATError -> Text -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> AE.Value
+slackErrorAlert alertType err project channelId projectUrl chartUrlM occTextM firstSeenM ongoingForM =
   slackAttachment channelId msgs.color
     $ [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= title]]
       , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= body]]
@@ -282,16 +267,12 @@ slackErrorAlert alertType err _issTitle project channelId projectUrl chartUrlM o
     title = "<" <> targetUrl <> "|" <> titleEmoji <> " *" <> titleLabel <> "* · " <> err.errorType <> " in " <> project <> ">"
     body = "```" <> T.take 600 err.message <> maybe "" ("\n" <>) (topStackFrame err.stackTrace) <> "```"
     field lbl v = guard (not (T.null v)) $> AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*" <> lbl <> ":* " <> v)]
-    route = case (fromMaybe "" err.requestMethod, fromMaybe "" err.requestPath) of
-      ("", "") -> ""
-      ("", p) -> "`" <> p <> "`"
-      (m, p) -> "`" <> m <> " " <> p <> "`"
-    firstSeen = fromMaybe (toText $ formatTime defaultTimeLocale "%b %-e · %-l:%M %p" err.when) firstSeenM
+    firstSeen = fromMaybe (errFirstSeen err) firstSeenM
     meta =
       catMaybes
         [ field "Service" (fromMaybe "" err.serviceName)
         , field "Environment" (fromMaybe "" err.environment)
-        , field "Route" route
+        , field "Route" (errRoute err)
         , occTextM >>= field "Rate"
         , Just $ AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*First seen:* " <> firstSeen)]
         , field "Runtime" (fromMaybe "" err.runtime)
@@ -304,14 +285,23 @@ slackErrorAlert alertType err _issTitle project channelId projectUrl chartUrlM o
     buttons = btn "🔍 Investigate" "primary" targetUrl : maybeToList traceBtn
 
 
--- | First non-empty line of a stack trace that isn't a repeat of the error-type header.
--- Gives alert readers the file/line where the exception was thrown — the single most
--- useful piece of context after the error message itself.
+-- | First non-empty line of a stack trace that isn't a repeat of the error-type header
+-- (i.e. the second line when there is one). Gives alert readers the file/line where the
+-- exception was thrown — the single most useful context after the error message itself.
 topStackFrame :: Text -> Maybe Text
-topStackFrame stack = case filter (not . T.null) $ map T.strip $ lines stack of
-  (_ : frame : _) -> Just $ T.take 160 frame -- skip first line (usually the error header)
-  [only] -> Just $ T.take 160 only
-  [] -> Nothing
+topStackFrame = fmap (T.take 160) . viaNonEmpty last . take 2 . filter (not . T.null) . map T.strip . lines
+
+
+-- | "`METHOD /path`" for alert metadata; drops whichever half is missing, empty when both are.
+errRoute :: ErrorPatterns.ATError -> Text
+errRoute err = case (fromMaybe "" err.requestMethod, fromMaybe "" err.requestPath) of
+  ("", "") -> ""
+  ("", p) -> "`" <> p <> "`"
+  (m, p) -> "`" <> m <> " " <> p <> "`"
+
+
+errFirstSeen :: ErrorPatterns.ATError -> Text
+errFirstSeen err = toText $ formatTime defaultTimeLocale "%b %-e · %-l:%M %p" err.when
 
 
 slackMonitorAlert :: Text -> Text -> Maybe Text -> Text -> AE.Value
@@ -349,11 +339,9 @@ slackNewEndpointsAlert projectName endpoints channelId hash projectUrl =
     context t = AE.object ["type" AE..= "context", "elements" AE..= AE.Array [AE.object ["type" AE..= "mrkdwn", "text" AE..= t]]]
     -- Option A layout: host is the primary group header (bold, with globe), service · env
     -- drops to a dimmed context caption on the same line. Bullets below.
-    groupHeader hostM ctxM = case (hostM, ctxM) of
-      (Just h, Just c) -> Just $ ":globe_with_meridians: *" <> h <> "*  ·  " <> c
-      (Just h, Nothing) -> Just $ ":globe_with_meridians: *" <> h <> "*"
-      (Nothing, Just c) -> Just $ "_" <> c <> "_"
-      (Nothing, Nothing) -> Nothing
+    groupHeader hostM ctxM = case hostM of
+      Just h -> Just $ ":globe_with_meridians: *" <> h <> "*" <> foldMap ("  ·  " <>) ctxM
+      Nothing -> ctxM <&> \c -> "_" <> c <> "_"
     -- Single group with a header → separate context block + flat bullets (nicer Slack styling).
     -- Multiple groups → one section per group with inline header + bullets.
     bodyBlocks = case groupedByContext endpoints of
@@ -396,6 +384,15 @@ logPatternSeverity isError logLevel
   | maybe False (\l -> T.toLower l `elem` (["warn", "warning"] :: [Text])) logLevel =
       ("⚠️", "New warning log pattern", 15909152, "#eab308")
   | otherwise = ("🔍", "New log pattern", 3901174, "#3b82f6")
+
+
+-- | Rate-change presentation: (Slack shortcode, Discord emoji, hex color, Discord int color).
+-- Red when the pattern is an error, amber on spike, blue on drop.
+rateChangeSeverity :: Bool -> RateChangeDirection -> (Text, Text, Text, Int)
+rateChangeSeverity isError direction
+  | isError = (":rotating_light:", "🚨", "#ef4444", 15278902)
+  | direction == Spike = (":chart_with_upwards_trend:", "📈", "#eab308", 15381768)
+  | otherwise = (":chart_with_downwards_trend:", "📉", "#3b82f6", 3901174)
 
 
 mkSlackLogPatternPayload :: Text -> Text -> Maybe Text -> Maybe Text -> Text -> Int -> Maybe Text -> Text -> Text -> Bool -> AE.Value
@@ -451,16 +448,9 @@ mkSlackLogPatternRateChangePayload patternText issueUrl logLevel serviceName dir
         ]
     ]
   where
-    icon
-      | isError = ":rotating_light:"
-      | direction == Spike = ":chart_with_upwards_trend:"
-      | otherwise = ":chart_with_downwards_trend:"
+    (icon, _, color, _) = rateChangeSeverity isError direction
     sign = if direction == Spike then "+" else "-"
     errPrefix = if isError then "Error " else "" :: Text
-    color
-      | isError = "#ef4444"
-      | direction == Spike = "#eab308"
-      | otherwise = "#3b82f6"
 
 
 discordReportAlert :: Text -> Text -> Text -> Int -> Int -> V.Vector (Text, Int, Int) -> Text -> Text -> Text -> Text -> AE.Value
@@ -492,8 +482,8 @@ discordReportAlert reportType startTime endTime totalErrors totalEvents breakDow
       T.intercalate "\n" $ V.toList $ V.take 10 $ V.map (\(name, errCount, evCount) -> "* **" <> name <> "**: Total errors-" <> show errCount <> ", Total events-" <> show evCount) breakDown
 
 
-discordErrorAlert :: RuntimeAlertType -> ErrorPatterns.ATError -> Text -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> AE.Value
-discordErrorAlert alertType err _issTitle project projectUrl chartUrlM occTextM firstSeenM ongoingForM =
+discordErrorAlert :: RuntimeAlertType -> ErrorPatterns.ATError -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> AE.Value
+discordErrorAlert alertType err project projectUrl chartUrlM occTextM firstSeenM ongoingForM =
   AE.object
     [ "embeds"
         AE..= AE.Array
@@ -512,17 +502,13 @@ discordErrorAlert alertType err _issTitle project projectUrl chartUrlM occTextM 
   where
     msgs = runtimeAlertMessages alertType
     url = projectUrl <> "/issues/by_hash/" <> err.hash
-    route = case (fromMaybe "" err.requestMethod, fromMaybe "" err.requestPath) of
-      ("", "") -> ""
-      ("", p) -> "`" <> p <> "`"
-      (m, p) -> "`" <> m <> " " <> p <> "`"
-    firstSeen = fromMaybe (toText $ formatTime defaultTimeLocale "%b %-e · %-l:%M %p" err.when) firstSeenM
+    firstSeen = fromMaybe (errFirstSeen err) firstSeenM
     field n v = guard (not (T.null v)) $> AE.object ["name" AE..= (n :: Text), "value" AE..= v, "inline" AE..= True]
     fields =
       catMaybes
         [ field "Service" (fromMaybe "" err.serviceName)
         , field "Environment" (fromMaybe "" err.environment)
-        , field "Route" route
+        , field "Route" (errRoute err)
         , occTextM >>= field "Rate"
         , Just $ AE.object ["name" AE..= ("First Seen" :: Text), "value" AE..= firstSeen, "inline" AE..= True]
         , field "Runtime" (fromMaybe "" err.runtime)
@@ -571,8 +557,7 @@ discordNewEndpointAlert projectName endpoints hash projectUrl =
     title = (if n == 1 then "🔵 1 new endpoint" else "🔵 " <> show n <> " new endpoints") <> " · " <> projectName
     content = if n == 1 then "🔵 **New endpoint detected**" else "🔵 **" <> show n <> " new endpoints detected**"
     url = projectUrl <> "/issues/by_hash/" <> hash
-    explorerUrl = newEndpointsExplorerUrl projectUrl ((.label) <$> endpoints)
-    explorerLink = "[View in Explorer](" <> explorerUrl <> ")"
+    explorerLink = "[View in Explorer](" <> newEndpointsExplorerUrl projectUrl ((.label) <$> endpoints) <> ")"
     description =
       T.intercalate "\n\n" $ groupedByContext endpoints <&> \((hostM, ctxM), labels) ->
         groupHeaderMd hostM ctxM <> bulletList labels
@@ -590,13 +575,12 @@ mkDiscordLogPatternPayload patternText issueUrl logLevel serviceName sourceField
               , "fields"
                   AE..= AE.Array
                     ( fromList
-                        $ catMaybes
-                          [ Just $ AE.object ["name" AE..= "Level", "value" AE..= fromMaybe "—" logLevel, "inline" AE..= True]
-                          , Just $ AE.object ["name" AE..= "Service", "value" AE..= fromMaybe "—" serviceName, "inline" AE..= True]
-                          , Just $ AE.object ["name" AE..= "Source", "value" AE..= sourceField, "inline" AE..= True]
-                          , Just $ AE.object ["name" AE..= "Occurrences", "value" AE..= show occurrenceCount, "inline" AE..= True]
-                          , sampleMessage <&> \msg -> AE.object ["name" AE..= "Sample", "value" AE..= ("```" <> T.take 150 (stripSummaryBadges msg) <> "```"), "inline" AE..= False]
+                        $ [ AE.object ["name" AE..= "Level", "value" AE..= fromMaybe "—" logLevel, "inline" AE..= True]
+                          , AE.object ["name" AE..= "Service", "value" AE..= fromMaybe "—" serviceName, "inline" AE..= True]
+                          , AE.object ["name" AE..= "Source", "value" AE..= sourceField, "inline" AE..= True]
+                          , AE.object ["name" AE..= "Occurrences", "value" AE..= show occurrenceCount, "inline" AE..= True]
                           ]
+                        <> maybeToList (sampleMessage <&> \msg -> AE.object ["name" AE..= "Sample", "value" AE..= ("```" <> T.take 150 (stripSummaryBadges msg) <> "```"), "inline" AE..= False])
                     )
               , "url" AE..= issueUrl
               ]
@@ -632,14 +616,7 @@ mkDiscordLogPatternRateChangePayload patternText issueUrl logLevel serviceName d
     , "content" AE..= (icon <> " **" <> errPrefix <> "Log volume " <> display direction <> "**")
     ]
   where
-    color
-      | isError = 15278902 :: Int -- red
-      | direction == Spike = 15381768 -- amber on spike, blue on drop
-      | otherwise = 3901174
-    icon
-      | isError = "🚨"
-      | direction == Spike = "📈"
-      | otherwise = "📉"
+    (_, icon, _, color) = rateChangeSeverity isError direction
     errPrefix = if isError then "Error " else "" :: Text
     sign = if direction == Spike then "+" else "-"
 
@@ -651,8 +628,7 @@ sendPagerdutyAlertToService integrationKey (MonitorsRecoveryAlert monitorTitle m
   Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDResolve ("monoscope-alert-" <> monitorTitle) (projectTitle <> ": Resolved - " <> monitorTitle) Notify.PDInfo (AE.object ["url" AE..= monitorUrl]) monitorUrl
 sendPagerdutyAlertToService integrationKey (EndpointAlert project endpoints hash) projectTitle projectUrl =
   let endpointUrl = projectUrl <> "/issues/by_hash/" <> hash
-      labels = (.label) <$> V.toList endpoints
-      endpointNames = T.intercalate ", " labels
+      endpointNames = T.intercalate ", " $ (.label) <$> V.toList endpoints
       rowPayload r = AE.object $ ("endpoint" AE..= r.label) : [k AE..= v | (k, Just v) <- [("host", r.host), ("service", r.service), ("environment", r.environment)]]
    in Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-endpoint-" <> hash) (projectTitle <> ": New Endpoints - " <> endpointNames) Notify.PDWarning (AE.object ["project" AE..= project, "endpoints" AE..= (rowPayload <$> endpoints)]) endpointUrl
 sendPagerdutyAlertToService integrationKey RuntimeErrorAlert{issueId, issueTitle, errorData, chartUrl} projectTitle projectUrl =
@@ -661,7 +637,7 @@ sendPagerdutyAlertToService integrationKey RuntimeErrorAlert{issueId, issueTitle
 sendPagerdutyAlertToService integrationKey LogPatternAlert{issueUrl, patternText, logLevel, serviceName, isError} projectTitle _ =
   let pat = stripSummaryBadges patternText
       kind = if isError then "Error Log Pattern" else "Log Pattern" :: Text
-      sev = if isError then Notify.PDCritical else maybe Notify.PDWarning (\l -> if l == "error" then Notify.PDCritical else Notify.PDWarning) logLevel
+      sev = if isError || logLevel == Just "error" then Notify.PDCritical else Notify.PDWarning
    in Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-logpattern-" <> T.take 40 pat) (projectTitle <> ": New " <> kind <> " - " <> T.take 80 pat) sev (AE.object ["pattern" AE..= pat, "service" AE..= serviceName, "level" AE..= logLevel, "is_error" AE..= isError]) issueUrl
 sendPagerdutyAlertToService integrationKey LogPatternRateChangeAlert{issueUrl, patternText, logLevel, serviceName, direction, currentRate, baselineMean, changePercent, isError} projectTitle _ =
   let pat = stripSummaryBadges patternText
@@ -760,7 +736,7 @@ slackAttachment channelId color blocks =
 
 
 addConvertKitUser :: HTTP :> es => Text -> Text -> Text -> Text -> Text -> Text -> Text -> Eff es ()
-addConvertKitUser apiKey email firstName lastName orgId orgName plan = do
+addConvertKitUser apiKey email firstName lastName _orgId _orgName _plan =
   void
     $ postWith
       (defaults & header "Content-Type" .~ ["application/json"])
@@ -769,7 +745,7 @@ addConvertKitUser apiKey email firstName lastName orgId orgName plan = do
 
 
 addConvertKitUserOrganization :: HTTP :> es => Text -> Text -> Text -> Text -> Text -> Eff es ()
-addConvertKitUserOrganization apiKey email orgID orgName orgPlan = do
+addConvertKitUserOrganization apiKey email orgID orgName orgPlan =
   void
     $ postWith
       (defaults & header "Content-Type" .~ ["application/json"])

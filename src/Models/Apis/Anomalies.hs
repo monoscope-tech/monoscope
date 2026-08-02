@@ -132,9 +132,9 @@ data AnomalyVM = AnomalyVM
 --   * format   → @keyHash:fmt:<xxhash(fieldPath)[:8]>@
 --
 -- Endpoint metadata joins via @endpoints.hash = split_part(target_hash,':',1)@.
--- Per-field detail (key path, format) is fetched lazily by the caller via
--- 'getAnomalyFieldDetail' — encoding the full path into target_hash would
--- blow the unique-index size budget, and Postgres has no built-in xxhash.
+-- Per-field detail (key path, format) is fetched lazily by the caller —
+-- encoding the full path into target_hash would blow the unique-index size
+-- budget, and Postgres has no built-in xxhash.
 getAnomaliesVM :: (DB es, Time :> es) => Projects.ProjectId -> V.Vector Text -> Eff es [AnomalyVM]
 getAnomaliesVM pid hash
   | V.null hash = pure []
@@ -233,13 +233,8 @@ archiveAnomaliesAndIssues issueIds
                    WHERE a.target_hash IN (SELECT h FROM related) |]
 
 
--------------------------------------------------------------------------------------------
--- New Issues model implementations
---
-
 -- Orphans: postgresql-simple's Aeson wrapper provides neither.
-instance NFData a => NFData (Aeson a) where
-  rnf (Aeson a) = rnf a
+deriving newtype instance NFData a => NFData (Aeson a)
 
 
 instance Default (Aeson [a]) where

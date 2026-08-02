@@ -51,6 +51,11 @@ withSettingsPage pid title build = do
   addRespHeaders $ bodyWrapper bw{pageTitle = title, isSettingsPage = True} body
 
 
+-- | Right-side tippy tooltip attrs (this file's fixed placement for every tooltip).
+tippyRight_ :: Text -> [Attribute]
+tippyRight_ content = [term "data-tippy-placement" "right", term "data-tippy-content" content]
+
+
 menu :: I18n.Language -> Projects.ProjectId -> [(Text, Text, Text)]
 menu lang pid =
   [ (I18n.t lang "nav.dashboards", p "/dashboards", "dashboard")
@@ -76,14 +81,14 @@ onboardingChecklist_ project = do
         , (has "NotifChannel", ("Set up notifications", "/p/" <> pid <> "/settings/integrations", "envelope"))
         ]
           :: [(Bool, (Text, Text, Text))]
-      doneCount = sum $ map (fromEnum . fst) items
+      doneCount = length [i | i <- items, fst i]
       totalCount = length items
       progress = show doneCount <> "/" <> show totalCount :: Text
   unless (doneCount == totalCount || has "checklist_dismissed")
     $ div_ [id_ "onboarding-checklist", class_ "mt-5 pt-3 border-t border-strokeWeak"] do
       -- Collapsed state: rocket icon
       div_ [class_ "flex justify-center group-has-[#sidenav-toggle:checked]/pg:hidden"] do
-        a_ [href_ $ "/p/" <> pid <> "/onboarding", class_ "relative tap-target", term "data-tippy-placement" "right", term "data-tippy-content" $ "Getting Started (" <> progress <> ")"] do
+        a_ ([href_ $ "/p/" <> pid <> "/onboarding", class_ "relative tap-target"] <> tippyRight_ ("Getting Started (" <> progress <> ")")) do
           faSprite_ "rocket" "regular" "w-4 h-4 text-textWeak"
       -- Expanded state: full checklist
       div_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block bg-fillWeaker rounded-lg p-2.5"] do
@@ -107,16 +112,13 @@ onboardingChecklist_ project = do
           forM_ (sortWith (Down . fst) items) \(done, (label, link, icon)) ->
             a_
               [ href_ link
-              , class_ $ "flex items-center gap-2 px-2 py-1 rounded-md text-xs transition-colors " <> if done then "text-textWeak opacity-60" else "text-textStrong font-medium hover:bg-fillWeak"
+              , class_ $ "flex items-center gap-2 px-2 py-1 rounded-md text-xs transition-colors " <> bool "text-textStrong font-medium hover:bg-fillWeak" "text-textWeak opacity-60" done
               ]
               do
                 if done
                   then faSprite_ "circle-check" "solid" "w-3.5 h-3.5 text-textSuccess shrink-0"
                   else faSprite_ icon "regular" "w-3.5 h-3.5 shrink-0"
                 span_ [class_ "truncate"] $ toHtml label
-
-
-type role PageCtx representational
 
 
 data PageCtx a = PageCtx
@@ -202,18 +204,15 @@ bodyWrapper bcfg child = do
 
       let css href = link_ [rel_ "stylesheet", type_ "text/css", href_ href]
           deferScript src = script_ [src_ src, defer_ "true"] ("" :: Text)
-      mapM_
-        css
-        [ $(hashAssetFile "/public/assets/css/thirdparty/notyf3.min.css")
-        , $(hashAssetFile "/public/assets/css/thirdparty/tagify.min.css")
-        ]
-      when bcfg.needsGridStack $ css $(hashAssetFile "/public/assets/deps/gridstack/gridstack.min.css")
-      mapM_
-        css
-        [ $(hashAssetFile "/public/assets/css/thirdparty/rrweb.css")
-        , $(hashAssetFile "/public/assets/css/tailwind.min.css")
-        , $(hashAssetFile "/public/assets/web-components/dist/css/index.css")
-        ]
+      mapM_ css
+        $ [ $(hashAssetFile "/public/assets/css/thirdparty/notyf3.min.css")
+          , $(hashAssetFile "/public/assets/css/thirdparty/tagify.min.css")
+          ]
+        <> [$(hashAssetFile "/public/assets/deps/gridstack/gridstack.min.css") | bcfg.needsGridStack]
+        <> [ $(hashAssetFile "/public/assets/css/thirdparty/rrweb.css")
+           , $(hashAssetFile "/public/assets/css/tailwind.min.css")
+           , $(hashAssetFile "/public/assets/web-components/dist/css/index.css")
+           ]
 
       fold bcfg.headContent
 
@@ -231,14 +230,13 @@ bodyWrapper bcfg child = do
         , $(hashAssetFile "/public/assets/js/thirdparty/notyf3.min.js")
         ]
       script_ [src_ $(hashAssetFile "/public/assets/deps/lit/lit-html.js"), type_ "module", defer_ "true"] ("" :: Text)
-      when bcfg.needsGridStack $ deferScript $(hashAssetFile "/public/assets/deps/gridstack/gridstack-all.js")
-      mapM_
-        deferScript
-        [ $(hashAssetFile "/public/assets/deps/easepick/bundle.min.js")
-        , $(hashAssetFile "/public/assets/js/thirdparty/luxon.min.js")
-        , $(hashAssetFile "/public/assets/js/thirdparty/popper2_11_4.min.js")
-        , $(hashAssetFile "/public/assets/js/thirdparty/tippy6_3_7.umd.min.js")
-        ]
+      mapM_ deferScript
+        $ [$(hashAssetFile "/public/assets/deps/gridstack/gridstack-all.js") | bcfg.needsGridStack]
+        <> [ $(hashAssetFile "/public/assets/deps/easepick/bundle.min.js")
+           , $(hashAssetFile "/public/assets/js/thirdparty/luxon.min.js")
+           , $(hashAssetFile "/public/assets/js/thirdparty/popper2_11_4.min.js")
+           , $(hashAssetFile "/public/assets/js/thirdparty/tippy6_3_7.umd.min.js")
+           ]
 
       when (isProd && bcfg.config.enableBrowserMonitoring) $ script_ [src_ "https://unpkg.com/@monoscopetech/browser@0.11.6/dist/monoscope.min.js"] ("" :: Text)
 
@@ -307,7 +305,6 @@ bodyWrapper bcfg child = do
             return "";
         }
 
-        var currentISOTimeStringVar = ((new Date()).toISOString().split(".")[0])+"+00:00";
         document.addEventListener('DOMContentLoaded', function(){
           // htmx.config.useTemplateFragments = true
           // Tooltip warmth tracking - skip delay when moving between tooltips
@@ -460,24 +457,6 @@ bodyWrapper bcfg child = do
         url.searchParams.delete('aggregate_skip');
         window.location.href = url.toString();
     }
-
-    var toggleColumnToSummary = (e)=>{
-      const cols = (params().cols||"").split(",").filter(x=>x!="");
-      const subject = (e.target.closest('[data-field-path]')?.dataset.fieldPath || e.target.closest('[data-field]').dataset.field);
-      const finalCols =  subject ? 
-        [...new Set(cols.includes(subject) ? 
-          cols.filter(x=>x!=subject) : 
-          [...cols, subject])].join(",") : 
-        cols.join(",");
-      return finalCols;
-    }
-
-
-    var removeNamedColumnToSummary = (namedCol) => {
-      const cols = (params().cols ?? '').split(',').filter((x) => x != '')
-      return [...new Set(cols.filter((x) => namedCol.toLowerCase() != x.replaceAll('.', '•').replaceAll('[', '❲').replaceAll(']', '❳').toLowerCase()))].join(',')
-    }
-
       |]
       script_
         [type_ "text/hyperscript"]
@@ -565,20 +544,8 @@ bodyWrapper bcfg child = do
           gtag('js', new Date());
           gtag('config', 'AW-11285541899');
 
-          function gtag_report_conversion(url) {
-            var callback = function () {
-              if (typeof(url) != 'undefined') {window.location = url;}
-            };
-            gtag('event', 'conversion', {
-                'send_to': 'AW-11285541899/IUBqCKOA-8sYEIvoroUq',
-                'event_callback': callback
-            });
-            return false;
-          }
-
-          
           function syncThemeToggles(theme) {
-            ['dark-mode-toggle', 'dark-mode-toggle-swap', 'dark-mode-toggle-navbar'].forEach(id => {
+            ['dark-mode-toggle', 'dark-mode-toggle-navbar'].forEach(id => {
               const el = document.getElementById(id);
               if (el) el.checked = theme === 'dark';
             });
@@ -672,8 +639,7 @@ projectsDropDown currProject projects = do
       div_ [class_ "space-y-0.5 max-h-[50vh] overflow-y-auto", id_ "projectsContainer"] do
         projects & mapM_ \project -> do
           let isActive = currProject.id == project.id
-          let activeCls = if isActive then " bg-fillWeak font-medium" else " hover:bg-fillHover"
-          a_ [class_ $ "flex justify-between items-center py-2 px-2.5 rounded-lg transition-colors duration-100 project_item min-w-0" <> activeCls, href_ $ "/p/" <> project.id.toText] do
+          a_ [class_ $ "flex justify-between items-center py-2 px-2.5 rounded-lg transition-colors duration-100 project_item min-w-0" <> bool " hover:bg-fillHover" " bg-fillWeak font-medium" isActive, href_ $ "/p/" <> project.id.toText] do
             span_ [class_ "truncate"] $ toHtml project.title
             when isActive $ faSprite_ "check" "regular" "h-3.5 w-3.5 text-textBrand shrink-0"
         p_ [class_ "hidden text-textWeak text-sm text-center py-4", id_ "noProjectsFound"] "No matching projects"
@@ -699,9 +665,8 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
             , class_ "flex flex-row w-full text-textStrong hover:bg-fillWeak gap-2 items-center rounded-lg cursor-pointer py-2 justify-center group-has-[#sidenav-toggle:checked]/pg:py-2 group-has-[#sidenav-toggle:checked]/pg:px-2 group-has-[#sidenav-toggle:checked]/pg:border group-has-[#sidenav-toggle:checked]/pg:border-strokeWeak group-has-[#sidenav-toggle:checked]/pg:bg-fillWeaker transition-colors duration-100"
             , Aria.haspopup_ "listbox"
             , Aria.label_ $ "Switch project, current: " <> project.title
-            , term "data-tippy-placement" "right"
-            , term "data-tippy-content" $ project.title <> " — Switch project"
             ]
+              <> tippyRight_ (project.title <> " — Switch project")
               <> popoverTrigger_ "project-picker-pop"
           )
           do
@@ -710,7 +675,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
             span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex shrink-0"] $ faSprite_ "angles-up-down" "regular" "w-4 text-textWeak"
         div_ ([class_ "dropdown group-has-[#sidenav-toggle:not(:checked)]/pg:dropdown-right group-has-[#sidenav-toggle:not(:checked)]/pg:ml-2", role_ "listbox"] <> popoverPanel_ "project-picker-pop") $ projectsDropDown project (Projects.getProjects $ Projects.projects sess.persistentSession)
       -- Toggle sidebar (desktop: toggles sidenav-toggle, mobile: closes mobile-nav-toggle)
-      label_ [term "for" "sidenav-toggle", role_ "button", class_ "max-md:hidden cursor-pointer text-textWeaker hover:text-textWeak flex items-center justify-center group-has-[#sidenav-toggle:checked]/pg:text-strokeStrong transition-colors duration-150", Aria.label_ "Toggle sidebar", Aria.expanded_ (if sess.isSidebarClosed then "false" else "true"), Aria.controls_ "side-nav-menu", term "data-tippy-placement" "right", term "data-tippy-content" "Expand sidebar", [__|on change from #sidenav-toggle if #sidenav-toggle.checked set @aria-expanded to 'false' else set @aria-expanded to 'true'|]] do
+      label_ ([term "for" "sidenav-toggle", role_ "button", class_ "max-md:hidden cursor-pointer text-textWeaker hover:text-textWeak flex items-center justify-center group-has-[#sidenav-toggle:checked]/pg:text-strokeStrong transition-colors duration-150", Aria.label_ "Toggle sidebar", Aria.expanded_ (bool "true" "false" sess.isSidebarClosed), Aria.controls_ "side-nav-menu"] <> tippyRight_ "Expand sidebar" <> [[__|on change from #sidenav-toggle if #sidenav-toggle.checked set @aria-expanded to 'false' else set @aria-expanded to 'true'|]]) do
         faSprite_ "side-chevron-left-in-box" "regular" "h-3.5 w-3.5 rotate-180 group-has-[#sidenav-toggle:checked]/pg:rotate-0 group-has-[#sidenav-toggle:checked]/pg:h-5 group-has-[#sidenav-toggle:checked]/pg:w-5"
       label_ [term "for" "mobile-nav-toggle", class_ "md:!hidden max-md:flex cursor-pointer text-strokeStrong min-w-[22px] min-h-[22px] items-center", Aria.label_ "Close menu"] $ faSprite_ "side-chevron-left-in-box" "regular" "h-5 w-5 pointer-events-none"
     -- Search
@@ -722,24 +687,23 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
         span_ [class_ "flex-1 text-left"] "Search..."
         kbd_ [class_ "kbd kbd-xs"] "\x2318K"
       -- Collapsed: search icon
-      button_ [class_ "group-has-[#sidenav-toggle:checked]/pg:hidden flex items-center justify-center p-2 rounded-lg border border-strokeWeak hover:border-strokeStrong hover:bg-fillWeak text-textWeak cursor-pointer transition-colors", searchScript, Aria.label_ "Search", term "data-tippy-placement" "right", term "data-tippy-content" "Search (\x2318K)"] do
+      button_ ([class_ "group-has-[#sidenav-toggle:checked]/pg:hidden flex items-center justify-center p-2 rounded-lg border border-strokeWeak hover:border-strokeStrong hover:bg-fillWeak text-textWeak cursor-pointer transition-colors", searchScript, Aria.label_ "Search"] <> tippyRight_ "Search (\x2318K)") do
         faSprite_ "magnifying-glass" "regular" "w-4 h-4"
     nav_ [id_ "main-sidenav", class_ "mt-2 flex flex-col gap-1 text-textWeak [&_.main-nav-link.active]:bg-fillBrand-weak [&_.main-nav-link.active]:text-textStrong [&_.main-nav-link.active]:font-medium [&_.main-nav-link.active]:border-l-strokeBrand-strong [&_.main-nav-link.active]:border-y-transparent [&_.main-nav-link.active]:border-r-transparent [&_.main-nav-link.active_.nav-icon]:text-textBrand", [__|on click set #mobile-nav-toggle.checked to false end on htmx:pushedIntoHistory from window or popstate from window settle then set p to window.location.pathname then for link in .main-nav-link set h to link.getAttribute('href') set extra to (link.getAttribute('data-match') or '') set matched to (p is h or p.startsWith(h + '/')) if not matched and extra is not '' for m in extra.split(' ') if m is not '' and (p is m or p.startsWith(m + '/')) set matched to true end end end if matched add .active to link else remove .active from link end end|]] do
-      let navLinkCls activeCls = "main-nav-link relative group-has-[#sidenav-toggle:checked]/pg:px-4 gap-3 py-2 flex no-wrap shrink-0 justify-center group-has-[#sidenav-toggle:checked]/pg:justify-start items-center rounded-lg overflow-x-hidden overflow-y-hidden hover:bg-fillWeak hover:text-textStrong transition-colors duration-100" <> activeCls
-          pidTxt = project.id.toText
+      let pidTxt = project.id.toText
           flyoutLink (linkText, link) =
             a_ ([href_ link, class_ "flex gap-2.5 items-center px-3 py-2 text-sm text-textWeak hover:bg-fillWeak hover:text-textStrong whitespace-nowrap"] <> navTabAttrs)
               $ span_ [] (toHtml linkText)
           renderNavItem mTitle mUrl fIcon = do
-            let activeCls = if maybe (pageTitle == mTitle) (== mTitle) menuItem then " active" else ""
+            let activeCls = bool "" " active" (fromMaybe pageTitle menuItem == mTitle)
                 flyoutItems = navFlyoutItems pidTxt mTitle
                 hasFlyout = not (null flyoutItems)
                 extraMatch = [term "data-match" ("/p/" <> pidTxt <> "/endpoints") | "/api_catalog" `T.isSuffixOf` mUrl]
             (if hasFlyout then div_ [class_ "relative group/flyout"] else id) do
               a_
-                ( [href_ mUrl, class_ $ navLinkCls activeCls]
+                ( [href_ mUrl, class_ $ "main-nav-link relative group-has-[#sidenav-toggle:checked]/pg:px-4 gap-3 py-2 flex no-wrap shrink-0 justify-center group-has-[#sidenav-toggle:checked]/pg:justify-start items-center rounded-lg overflow-x-hidden overflow-y-hidden hover:bg-fillWeak hover:text-textStrong transition-colors duration-100" <> activeCls]
                     <> extraMatch
-                    <> if hasFlyout then [] else [term "data-tippy-placement" "right", term "data-tippy-content" mTitle] <> navTabAttrs
+                    <> if hasFlyout then [] else tippyRight_ mTitle <> navTabAttrs
                 )
                 do
                   faSprite_ fIcon "regular" "nav-icon w-4 h-4 shrink-0"
@@ -756,12 +720,12 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
       div_ [class_ "border-t border-strokeWeak my-2"] ""
       renderNavItem "Settings" ("/p/" <> pidTxt <> "/settings") "gear"
       a_
-        [ href_ "https://monoscope.tech/docs/"
-        , target_ "blank"
-        , term "data-tippy-placement" "right"
-        , term "data-tippy-content" "Docs"
-        , class_ $ navLinkCls ""
-        ]
+        ( [ href_ "https://monoscope.tech/docs/"
+          , target_ "blank"
+          , class_ "main-nav-link relative group-has-[#sidenav-toggle:checked]/pg:px-4 gap-3 py-2 flex no-wrap shrink-0 justify-center group-has-[#sidenav-toggle:checked]/pg:justify-start items-center rounded-lg overflow-x-hidden overflow-y-hidden hover:bg-fillWeak hover:text-textStrong transition-colors duration-100"
+          ]
+            <> tippyRight_ "Docs"
+        )
         do
           faSprite_ "circle-question" "regular" "nav-icon w-4 h-4 shrink-0"
           span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex items-center gap-1.5 whitespace-nowrap truncate"] do
@@ -778,7 +742,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
       input_ [type_ "checkbox", class_ "toggle toggle-sm theme-controller", id_ "dark-mode-toggle", Aria.label_ "Toggle dark mode", onclick_ "toggleDarkMode()"]
       faSprite_ "moon-stars" "regular" "h-4 w-4 text-textWeak"
     -- Collapsed: centered icon button
-    label_ [class_ "group-has-[#sidenav-toggle:checked]/pg:hidden flex justify-center items-center py-2 rounded-lg hover:bg-fillWeak cursor-pointer transition-colors duration-100", Aria.label_ "Toggle dark mode", term "data-tippy-placement" "right", term "data-tippy-content" "Toggle dark mode", onclick_ "toggleDarkMode()"] do
+    label_ ([class_ "group-has-[#sidenav-toggle:checked]/pg:hidden flex justify-center items-center py-2 rounded-lg hover:bg-fillWeak cursor-pointer transition-colors duration-100", Aria.label_ "Toggle dark mode", onclick_ "toggleDarkMode()"] <> tippyRight_ "Toggle dark mode") do
       span_ [class_ "dark:hidden"] $ faSprite_ "sun-bright" "regular" "h-4 w-4 text-textWeak"
       span_ [class_ "hidden dark:inline-flex"] $ faSprite_ "moon-stars" "regular" "h-4 w-4 text-textWeak"
 
@@ -793,7 +757,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
             <> popoverTrigger_ "user-menu-pop"
         )
         do
-          img_ [class_ "w-8 h-8 rounded-full bg-fillPress shrink-0", src_ $ "/api/avatar/" <> currUser.id.toText, alt_ userIdentifier, term "data-tippy-placement" "right", term "data-tippy-content" userIdentifier]
+          img_ ([class_ "w-8 h-8 rounded-full bg-fillPress shrink-0", src_ $ "/api/avatar/" <> currUser.id.toText, alt_ userIdentifier] <> tippyRight_ userIdentifier)
           span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex items-center gap-1 overflow-hidden flex-1"] do
             span_ [class_ "truncate text-sm"] $ toHtml userIdentifier
             faSprite_ "chevron-down" "regular" "w-3 h-3 text-textWeak shrink-0 ml-auto transition-transform duration-150 rotate-180 group-focus-within/user:rotate-0"
@@ -834,10 +798,9 @@ navbar bcfg menuL =
           toHtml pt
         faSprite_ "chevron-right" "regular" "w-3 h-3 max-md:hidden"
       let targetPage = Components.getTargetPage bcfg.pageTitle
-          titleBase = "font-normal text-xl max-md:text-base p-1 rounded-md leading-none truncate cursor-pointer hover:bg-fillWeak"
       if targetPage /= "" && isJust bcfg.pageTitleSuffix
-        then whenJust bcfg.currProject \p -> a_ ([class_ titleBase, href_ $ "/p/" <> p.id.toText <> targetPage, id_ "pageTitleText"] <> navTabAttrs) $ toHtml bcfg.pageTitle
-        else label_ [class_ titleBase, Lucid.for_ $ maybeToMonoid bcfg.pageTitleModalId, id_ "pageTitleText"] $ toHtml bcfg.pageTitle
+        then whenJust bcfg.currProject \p -> a_ ([class_ "font-normal text-xl max-md:text-base p-1 rounded-md leading-none truncate cursor-pointer hover:bg-fillWeak", href_ $ "/p/" <> p.id.toText <> targetPage, id_ "pageTitleText"] <> navTabAttrs) $ toHtml bcfg.pageTitle
+        else label_ [class_ "font-normal text-xl max-md:text-base p-1 rounded-md leading-none truncate cursor-pointer hover:bg-fillWeak", Lucid.for_ $ maybeToMonoid bcfg.pageTitleModalId, id_ "pageTitleText"] $ toHtml bcfg.pageTitle
       -- Show tab/suffix in breadcrumbs if present (with ID for htmx out-of-band updates)
       span_ [id_ "pageTitleSuffix", class_ "max-md:hidden flex items-center gap-1"] $ whenJust bcfg.pageTitleSuffix \suffix -> do
         faSprite_ "chevron-right" "regular" "w-3 h-3"
@@ -845,7 +808,7 @@ navbar bcfg menuL =
         case bcfg.pageTitleSuffixModalId of
           Just modalId -> label_ [class_ "font-normal text-xl p-1 leading-none text-textWeak cursor-pointer hover:bg-fillWeak rounded-md", Lucid.for_ modalId, id_ "pageTitleSuffixText"] $ toHtml suffix
           Nothing -> span_ [class_ "font-normal text-xl p-1 leading-none text-textWeak", id_ "pageTitleSuffixText"] $ toHtml suffix
-      whenJust bcfg.docsLink \link -> a_ [class_ "max-md:hidden text-iconBrand -mt-1", href_ link, Aria.label_ "Open Documentation", term "data-tippy-placement" "right", term "data-tippy-content" "Open Documentation"] $ faSprite_ "circle-question" "regular" "w-4 h-4"
+      whenJust bcfg.docsLink \link -> a_ ([class_ "max-md:hidden text-iconBrand -mt-1", href_ link, Aria.label_ "Open Documentation"] <> tippyRight_ "Open Documentation") $ faSprite_ "circle-question" "regular" "w-4 h-4"
     whenJust bcfg.navTabs $ div_ [class_ $ bool "" "max-md:order-last max-md:w-full max-md:pt-1" (isJust bcfg.pageActions)]
     div_ [class_ $ "flex-1 flex items-center justify-end gap-2 text-sm" <> bool " max-md:hidden" "" (isJust bcfg.pageActions)]
       $ fold bcfg.pageActions
@@ -945,19 +908,19 @@ renderNavBottomItem :: Text -> (Text, Text, Text) -> Html ()
 renderNavBottomItem curr (iconName, linkText, link) =
   li_ [] do
     a_
-      [ class_ $ "settings-nav-link flex gap-2 md:gap-3 items-center px-2.5 md:px-3 py-2 rounded-lg whitespace-nowrap" <> if curr == linkText then " active" else ""
-      , term "data-tippy-placement" "right"
-      , term "data-tippy-content" linkText
-      , href_ link
-      , hxGet_ link
-      , hxTarget_ settingsContentTarget
-      , hxSelect_ settingsContentTarget
-      , term "hx-select-oob" "#settings-nav:morph"
-      , hxSwap_ "morph"
-      , hxPushUrl_ "true"
-      , hxIndicator_ ("#" <> settingsLoadingId)
-      , [__|on click set my.preloadState to 'DONE'|]
-      ]
+      ( [ class_ $ "settings-nav-link flex gap-2 md:gap-3 items-center px-2.5 md:px-3 py-2 rounded-lg whitespace-nowrap" <> bool "" " active" (curr == linkText)
+        , href_ link
+        , hxGet_ link
+        , hxTarget_ settingsContentTarget
+        , hxSelect_ settingsContentTarget
+        , term "hx-select-oob" "#settings-nav:morph"
+        , hxSwap_ "morph"
+        , hxPushUrl_ "true"
+        , hxIndicator_ ("#" <> settingsLoadingId)
+        , [__|on click set my.preloadState to 'DONE'|]
+        ]
+          <> tippyRight_ linkText
+      )
       do
         faSprite_ iconName "regular" "shrink-0 h-4 w-4"
         span_ [class_ "text-sm font-medium"] (toHtml linkText)

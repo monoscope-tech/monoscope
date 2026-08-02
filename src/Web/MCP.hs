@@ -36,11 +36,9 @@ import NeatInterpolation (text)
 import Network.HTTP.Types qualified as H
 import Network.Wai qualified as Wai
 
--- @Network.Wai.Test@ lives in @wai-extra@ (an explicit lib dep). Despite the
--- "test" in its name, @runSession@ + @SRequest@ are stable and the cheapest
--- way to drive a 'Wai.Application' synchronously and capture its full
--- response. Replacing this with a hand-rolled helper would just re-implement
--- the same logic without buying anything.
+-- Despite the "test" in its name, @Network.Wai.Test@ (from @wai-extra@, an
+-- explicit lib dep) is the cheapest stable way to drive a 'Wai.Application'
+-- synchronously and capture its full response.
 import Network.Wai.Test qualified as WT
 import Pkg.AI qualified as AI
 import Pkg.DeriveUtils (UUIDId (..))
@@ -68,8 +66,8 @@ toolCallTimeoutMicros = 30_000_000 -- 30s
 -- | Truncate REST tool response bodies before stuffing them into MCP
 -- @content@. Large @search_events@ payloads can blow agent context windows;
 -- the @structuredContent@ field still carries the full JSON for typed clients.
-maxToolBodyBytes :: Int
-maxToolBodyBytes = 64 * 1024
+maxToolBodyChars :: Int
+maxToolBodyChars = 64 * 1024
 
 
 -- =============================================================================
@@ -129,22 +127,20 @@ mkToolsFromOpenApi spec =
 openApiTool :: Text -> ByteString -> OA.Operation -> Tool
 openApiTool p m op =
   let params = mapMaybe (preview OA._Inline) (op ^. OA.parameters)
-      pathParams' = [q ^. OA.name | q <- params, q ^. OA.in_ == OA.ParamPath]
-      queryParams' = [q ^. OA.name | q <- params, q ^. OA.in_ == OA.ParamQuery]
+      namesIn loc = [q ^. OA.name | q <- params, q ^. OA.in_ == loc]
       mrb = op ^. OA.requestBody >>= preview OA._Inline
-      bodyReq = maybe False (\rb -> rb ^. OA.required == Just True) mrb
-      desc = fromMaybe (decodeUtf8 m <> " " <> p) ((op ^. OA.summary) <|> (op ^. OA.description))
+      bodyReq = any (\rb -> rb ^. OA.required == Just True) mrb
    in Tool
         { name = fromMaybe (deriveNameFromPath p m) (Map.lookup (m, p) toolNameOverrides)
-        , description = desc
+        , description = fromMaybe (decodeUtf8 m <> " " <> p) ((op ^. OA.summary) <|> (op ^. OA.description))
         , inputSchema = mkInputSchema params mrb bodyReq
         , dispatch =
             ViaOpenApi
               OpenApiBinding
                 { method = m
                 , path = p
-                , pathParams = pathParams'
-                , queryParams = queryParams'
+                , pathParams = namesIn OA.ParamPath
+                , queryParams = namesIn OA.ParamQuery
                 , bodyRequired = bodyReq
                 }
         }
@@ -262,17 +258,14 @@ pathItemOps p =
 
 mkInputSchema :: [OA.Param] -> Maybe OA.RequestBody -> Bool -> AE.Value
 mkInputSchema params mrb bodyReq =
-  let paramProps =
-        KM.fromList [(AK.fromText (q ^. OA.name), paramSchemaJson q) | q <- params]
-      paramRequireds = [q ^. OA.name | q <- params, q ^. OA.required == Just True]
-      bodySchema = mrb >>= bodyContentSchema
-      allProps = maybe id (KM.insert "body") bodySchema paramProps
-      requireds = paramRequireds <> ["body" | bodyReq && isJust bodySchema]
-   in AE.object
-        [ "type" AE..= ("object" :: Text)
-        , "properties" AE..= AE.Object allProps
-        , "required" AE..= requireds
-        ]
+  let bodySchema = mrb >>= bodyContentSchema
+      allProps =
+        maybe id (KM.insert "body") bodySchema
+          $ KM.fromList [(AK.fromText (q ^. OA.name), paramSchemaJson q) | q <- params]
+      requireds =
+        [q ^. OA.name | q <- params, q ^. OA.required == Just True]
+          <> ["body" | bodyReq && isJust bodySchema]
+   in schemaObject allProps requireds
 
 
 paramSchemaJson :: OA.Param -> AE.Value
@@ -346,20 +339,15 @@ runTool app pid t args = do
 
 parseRpcReq :: AE.Value -> Maybe (AE.Value, Text, AE.Value)
 parseRpcReq (AE.Object o) = do
-  AE.String m <- KM.lookup "method" o
-  let mid = fromMaybe AE.Null (KM.lookup "id" o)
-      paramsV = fromMaybe (AE.object []) (KM.lookup "params" o)
-  pure (mid, m, paramsV)
+  m <- textArg "method" o
+  pure (fromMaybe AE.Null (KM.lookup "id" o), m, fromMaybe (AE.object []) (KM.lookup "params" o))
 parseRpcReq _ = Nothing
 
 
 parseToolCall :: AE.Value -> Maybe (Text, AE.Object)
 parseToolCall (AE.Object o) = do
-  AE.String n <- KM.lookup "name" o
-  let args = case KM.lookup "arguments" o of
-        Just (AE.Object a) -> a
-        _ -> KM.empty
-  pure (n, args)
+  n <- textArg "name" o
+  pure (n, fromMaybe KM.empty (KM.lookup "arguments" o >>= \case AE.Object a -> Just a; _ -> Nothing))
 parseToolCall _ = Nothing
 
 
@@ -391,9 +379,7 @@ toolsListJson reg = AE.object ["tools" AE..= map descriptor (Map.elems reg)]
 toolResult :: Bool -> Text -> Maybe AE.Value -> AE.Value
 toolResult isErr txt structured =
   AE.object
-    $ [ "content" AE..= ([textContent txt] :: [AE.Value])
-      , "isError" AE..= isErr
-      ]
+    $ ["content" AE..= ([textContent txt] :: [AE.Value]), "isError" AE..= isErr]
     <> maybe [] (\v -> ["structuredContent" AE..= v]) structured
 
 
@@ -439,23 +425,19 @@ callOpenApi _ b _
 callOpenApi app b args = do
   let (p, query, body) = splitArgs b args
       url = p <> if T.null query then "" else "?" <> query
-      bodyBs = AE.encode body
-      hdrs = [(H.hContentType, "application/json")]
-      baseReq = Wai.defaultRequest{Wai.requestMethod = b.method, Wai.requestHeaders = hdrs}
-      waiReq = WT.setPath baseReq (encodeUtf8 url)
-      sreq = WT.SRequest waiReq bodyBs
-  resp <- WT.runSession (WT.srequest sreq) app
-  let code = H.statusCode (WT.simpleStatus resp)
-      bodyLBS = WT.simpleBody resp
-      bodyTxt = truncateText maxToolBodyBytes (decodeUtf8 bodyLBS)
-      isErr = code >= 400
-      structured = AE.decode bodyLBS :: Maybe AE.Value
-  pure $ toolResult isErr bodyTxt structured
+      baseReq = Wai.defaultRequest{Wai.requestMethod = b.method, Wai.requestHeaders = [(H.hContentType, "application/json")]}
+  resp <- WT.runSession (WT.srequest (WT.SRequest (WT.setPath baseReq (encodeUtf8 url)) (AE.encode body))) app
+  let bodyLBS = WT.simpleBody resp
+  pure
+    $ toolResult
+      (H.statusCode (WT.simpleStatus resp) >= 400)
+      (truncateText maxToolBodyChars (decodeUtf8 bodyLBS))
+      (AE.decode bodyLBS)
 
 
--- | Truncate text to @n@ bytes (UTF-8) and append a marker. Cheap byte cap;
--- we don't try to keep the result valid JSON since this is the human-readable
--- @content@ side — the structured side has the full untruncated payload.
+-- | Truncate to @n@ characters and append a marker. The result is deliberately
+-- not valid JSON: this is the human-readable @content@ side, and the structured
+-- side carries the full untruncated payload.
 truncateText :: Int -> Text -> Text
 truncateText n t
   | T.length t <= n = t
@@ -482,8 +464,7 @@ splitArgs b args =
 jsonToText :: AE.Value -> Text
 jsonToText (AE.String s) = s
 jsonToText AE.Null = ""
-jsonToText (AE.Bool True) = "true"
-jsonToText (AE.Bool False) = "false"
+jsonToText (AE.Bool b) = bool "false" "true" b
 jsonToText v = decodeUtf8 (AE.encode v)
 
 
@@ -600,10 +581,16 @@ composite n d schema run = Tool n d schema (ViaComposite run)
 
 
 objSchema :: [(Text, AE.Value)] -> [Text] -> AE.Value
-objSchema props requireds =
+objSchema props = schemaObject (KM.fromList [(AK.fromText k, v) | (k, v) <- props])
+
+
+-- | Shared @{type: object, properties, required}@ JSON-Schema shape used by
+-- both OpenAPI-derived and composite tool input schemas.
+schemaObject :: AE.Object -> [Text] -> AE.Value
+schemaObject props requireds =
   AE.object
     [ "type" AE..= ("object" :: Text)
-    , "properties" AE..= AE.object [(AK.fromText k, v) | (k, v) <- props]
+    , "properties" AE..= AE.Object props
     , "required" AE..= requireds
     ]
 
@@ -626,9 +613,6 @@ intArg k o = KM.lookup (AK.fromText k) o >>= \case AE.Number n -> Just (floor n)
 -- the zone exists — the LLM tolerates unknown names — but this stops obviously
 -- garbage values from polluting the prompt.
 sanitizeTimezone :: Text -> Maybe Text
-sanitizeTimezone t
-  | T.null s || T.length s > 64 || T.any badChar s = Nothing
-  | otherwise = Just s
+sanitizeTimezone = guarded ok . T.strip
   where
-    s = T.strip t
-    badChar c = not (isAlphaNum c || c `elem` ("/_-+" :: String))
+    ok s = not (T.null s) && T.length s <= 64 && T.all (\c -> isAlphaNum c || c `elem` ("/_-+" :: String)) s

@@ -30,6 +30,7 @@ import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Either.Extra (fromRight')
+import Data.List (partition)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime, diffUTCTime)
@@ -194,12 +195,10 @@ alertUpsertPostH pid form = do
   now <- Time.currentTime
 
   -- For widget-tied alerts, preserve the query from the widget (can't edit directly)
-  existingMonitor <- if isJust alertId then Monitors.queryMonitorById queryMonitorId else pure Nothing
+  existingMonitor <- maybe (pure Nothing) (Monitors.queryMonitorById . Monitors.QueryMonitorId) alertId
 
   let baseMonitor = convertToQueryMonitor pid now queryMonitorId form
-      queryMonitor = case existingMonitor of
-        Just existing | isJust existing.widgetId -> baseMonitor{Monitors.logQuery = existing.logQuery, Monitors.logQueryAsSql = existing.logQueryAsSql}
-        _ -> baseMonitor
+      queryMonitor = maybe baseMonitor (\e -> baseMonitor{Monitors.logQuery = e.logQuery, Monitors.logQueryAsSql = e.logQueryAsSql}) $ mfilter (isJust . (.widgetId)) existingMonitor
 
   _ <- Monitors.queryMonitorUpsert queryMonitor
   when (isNothing alertId)
@@ -317,7 +316,7 @@ monitorScheduleSection_ paymentPlan defaultFrequency defaultTimeWindow condition
             attrs = [value_ (show m <> "m")] <> [disabled_ "" | isDisabled] <> [selected_ "" | m == clampedFreq]
          in option_ attrs ("every " <> toHtml l)
       mkTimeOpt (m, l) = option_ ([value_ (show m <> "m")] <> [selected_ "" | m == defaultTimeWindow]) ("the last " <> toHtml l)
-      isThresholdType = conditionType == Just "threshold_exceeded" || isNothing conditionType
+      isThresholdType = maybe True (== "threshold_exceeded") conditionType
       chartUpdateAttr = case chartTargetIdM of
         Just chartId -> term "_" [text|on change set chart to document.getElementById('${chartId}') if chart exists then call chart.updateRollup(my.value) end|]
         Nothing -> [__|on change set qb to document.querySelector('query-builder') if qb exists then call qb.updateBinInQuery('timestamp', my.value) end|]
@@ -456,20 +455,20 @@ unifiedMonitorsGetH
   -> Maybe Text -- filter
   -> Maybe Text -- since
   -> ATAuthCtx (RespHeaders (PageCtx (Table UnifiedMonitorItem)))
-unifiedMonitorsGetH pid filterTM sinceM = do
+unifiedMonitorsGetH pid filterTM _sinceM = do
   (_, project, bw) <- mkPageCtx pid
   currTime <- Time.currentTime
 
   let filterType = fromMaybe "Active" filterTM
 
-  allAlerts <- V.fromList <$> Monitors.queryMonitorsAll pid
+  allAlerts <- Monitors.queryMonitorsAll pid
   teamMap <- buildTeamMap pid
   freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
 
-  let (activeAlerts, inactiveAlerts) = V.partition (isNothing . (.deactivatedAt)) allAlerts
+  let (activeAlerts, inactiveAlerts) = partition (isNothing . (.deactivatedAt)) allAlerts
       alerts = bool inactiveAlerts activeAlerts (filterType == "Active")
       sortKey i = ((statusInfo i.currentStatus).rank, isNothing i.mutedUntil)
-      allItems = V.fromList $ sortOn sortKey $ V.toList $ V.map (toUnifiedMonitorItem teamMap pid currTime) alerts
+      allItems = V.fromList $ sortOn sortKey $ toUnifiedMonitorItem teamMap pid currTime <$> alerts
       currentURL = "/p/" <> pid.toText <> "/monitors?"
       monitorsTable =
         Table
@@ -478,7 +477,7 @@ unifiedMonitorsGetH pid filterTM sinceM = do
               [ col "Name" renderNameCol & withAttrs [class_ "min-w-0"]
               , col "Teams" (\i -> forM_ i.teamBadges \(_, handle) -> span_ [class_ "badge badge-sm badge-neutral mr-1"] $ toHtml handle) & withAttrs [class_ "w-48 max-md:hidden"]
               , col "Schedule" (\i -> span_ [class_ "text-xs text-textWeak whitespace-nowrap tabular-nums"] $ toHtml i.schedule) & withAttrs [class_ "w-28 max-md:hidden"]
-              , col "Last Run" renderLastRunCol & withAttrs [class_ "w-28 max-md:hidden"]
+              , col "Last Run" (\i -> span_ [class_ "text-xs text-textWeak whitespace-nowrap tabular-nums"] $ maybe "Never" (toHtml . prettyTimeShort i.now) i.lastRun) & withAttrs [class_ "w-28 max-md:hidden"]
               , col "Threshold" renderThresholdCol & withAttrs [class_ "w-40 max-md:hidden"]
               ]
           , rows = allItems
@@ -519,8 +518,8 @@ unifiedMonitorsGetH pid filterTM sinceM = do
                   , currentURL
                   , clientSide = False
                   , options =
-                      [ TabFilterOpt{name = "Active", count = Just $ V.length activeAlerts, targetId = Nothing}
-                      , TabFilterOpt{name = "Inactive", count = Just $ V.length inactiveAlerts, targetId = Nothing}
+                      [ TabFilterOpt{name = "Active", count = Just $ length activeAlerts, targetId = Nothing}
+                      , TabFilterOpt{name = "Inactive", count = Just $ length inactiveAlerts, targetId = Nothing}
                       ]
                   }
           }
@@ -530,20 +529,21 @@ unifiedMonitorsGetH pid filterTM sinceM = do
 
 renderNameCol :: UnifiedMonitorItem -> Html ()
 renderNameCol item = do
-  let base = monitorBase item
+  let base = "/p/" <> item.projectId <> "/monitors"
+      alertBase = base <> "/alerts/" <> item.monitorId
       si = statusInfo item.currentStatus
-      isMuted = isJust item.mutedUntil
       isActive = item.status == "Active"
       inlineBtn tip icon hxAction extraAttrs =
         button_ ([type_ "button", term "data-tippy-content" tip, class_ "cursor-pointer hover:text-textBrand transition-colors tap-target", hxSwap_ "none", hxAction] <> extraAttrs)
           $ faSprite_ icon "regular" "h-3.5 w-3.5"
       actionBtns = do
-        inlineBtn (bool "Activate" "Deactivate" isActive) (bool "play" "pause" isActive) (hxPost_ $ base <> "/alerts/" <> item.monitorId <> "/toggle_active") []
-        if isMuted
-          then inlineBtn "Unmute" "bell" (hxPost_ $ base <> "/alerts/" <> item.monitorId <> "/unmute") []
-          else muteDropdown_ item.monitorId (base <> "/alerts/" <> item.monitorId <> "/mute")
-        when (item.currentStatus /= Monitors.MSNormal) $ inlineBtn "Resolve" "check" (hxPost_ $ base <> "/alerts/" <> item.monitorId <> "/resolve") []
-        inlineBtn "Delete" "trash" (hxDelete_ $ base <> "/alerts/" <> item.monitorId) [hxConfirm_ "Are you sure you want to delete this monitor?"]
+        inlineBtn (bool "Activate" "Deactivate" isActive) (bool "play" "pause" isActive) (hxPost_ $ alertBase <> "/toggle_active") []
+        if isJust item.mutedUntil
+          then inlineBtn "Unmute" "bell" (hxPost_ $ alertBase <> "/unmute") []
+          else muteDropdown_ ("mute-pop-" <> item.monitorId) (alertBase <> "/mute") \popId ->
+            inlineBtn "Mute" "bell-slash" (term "popovertarget" popId) [style_ $ "anchor-name: --anchor-" <> popId]
+        when (item.currentStatus /= Monitors.MSNormal) $ inlineBtn "Resolve" "check" (hxPost_ $ alertBase <> "/resolve") []
+        inlineBtn "Delete" "trash" (hxDelete_ alertBase) [hxConfirm_ "Are you sure you want to delete this monitor?"]
   div_ [class_ "flex flex-col gap-1 py-0.5"] do
     div_ [class_ "flex items-center gap-2"] do
       span_ [class_ $ "inline-block w-2 h-2 rounded-full shrink-0 " <> si.dotColor <> bool "" " alert-dot" (item.currentStatus == Monitors.MSAlerting), term "data-tippy-content" $ bool "Inactive" "Active" isActive] ""
@@ -570,33 +570,14 @@ renderNameCol item = do
       div_ [class_ "flex gap-1 items-center shrink-0"] actionBtns
 
 
-muteButtonDropdown_ :: Text -> Text -> Text -> Html ()
-muteButtonDropdown_ btnClass monitorId muteUrl =
-  muteDropdownWith_ ("mute-btn-pop-" <> monitorId) muteUrl \popId ->
-    button_ [type_ "button", class_ btnClass, term "aria-label" "Mute", term "data-tippy-content" "Silence notifications for a period", term "popovertarget" popId, style_ $ "anchor-name: --anchor-" <> popId] do
-      faSprite_ "bell-slash" "regular" "h-4 w-4"
-      span_ [class_ "max-md:hidden"] "Mute"
-
-
-muteDropdown_ :: Text -> Text -> Html ()
-muteDropdown_ monitorId muteUrl =
-  muteDropdownWith_ ("mute-pop-" <> monitorId) muteUrl \popId ->
-    button_ [type_ "button", term "data-tippy-content" "Mute", class_ "cursor-pointer hover:text-textBrand transition-colors tap-target", term "popovertarget" popId, style_ $ "anchor-name: --anchor-" <> popId]
-      $ faSprite_ "bell-slash" "regular" "h-3.5 w-3.5"
-
-
-muteDropdownWith_ :: Text -> Text -> (Text -> Html ()) -> Html ()
-muteDropdownWith_ popId muteUrl triggerBtn = div_ [class_ "inline-block"] do
+muteDropdown_ :: Text -> Text -> (Text -> Html ()) -> Html ()
+muteDropdown_ popId muteUrl triggerBtn = div_ [class_ "inline-block"] do
   triggerBtn popId
   div_ [id_ popId, term "popover" "auto", class_ "dropdown dropdown-start menu bg-bgRaised p-1 text-sm border border-strokeWeak z-50 min-w-36 rounded-md shadow-lg mt-1", style_ $ "position-try: flip-block; position-anchor: --anchor-" <> popId] do
     span_ [class_ "px-3 py-1 text-xs font-medium text-textWeak"] "Mute for..."
-    forM_ muteDurations \(mins, label) ->
+    forM_ @[] @_ @(Int, Text) [(60, "1 hour"), (240, "4 hours"), (480, "8 hours"), (1440, "1 day"), (10080, "1 week")] \(mins, label) ->
       button_ [type_ "button", class_ "px-3 py-1.5 text-sm text-left hover:bg-fillWeaker rounded cursor-pointer w-full", hxPost_ $ muteUrl <> "?duration=" <> show mins, hxSwap_ "none"] $ toHtml label
     button_ [type_ "button", class_ "px-3 py-1.5 text-sm text-left hover:bg-fillWeaker rounded cursor-pointer w-full border-t border-strokeWeak", hxPost_ muteUrl, hxSwap_ "none"] "Indefinitely"
-
-
-muteDurations :: [(Int, Text)]
-muteDurations = [(60, "1 hour"), (240, "4 hours"), (480, "8 hours"), (1440, "1 day"), (10080, "1 week")]
 
 
 mutedLabel :: UTCTime -> UTCTime -> Text
@@ -607,10 +588,6 @@ mutedLabel now until'
   | otherwise = "Muted \xb7 " <> show (max 1 diffMins) <> "m left"
   where
     diffMins = round (diffUTCTime until' now / 60) :: Int
-
-
-monitorBase :: UnifiedMonitorItem -> Text
-monitorBase item = "/p/" <> item.projectId <> "/monitors"
 
 
 data StatusInfo = StatusInfo {dotColor :: Text, statusLabel :: Text, rank :: Int, textColor :: Text}
@@ -672,10 +649,6 @@ alertDeleteH pid monitorId = do
   addRespHeaders ""
 
 
-renderLastRunCol :: UnifiedMonitorItem -> Html ()
-renderLastRunCol item = span_ [class_ "text-xs text-textWeak whitespace-nowrap tabular-nums"] $ maybe "Never" (toHtml . prettyTimeShort item.now) item.lastRun
-
-
 renderThresholdCol :: UnifiedMonitorItem -> Html ()
 renderThresholdCol item =
   div_ [class_ "flex flex-col gap-1"] do
@@ -710,21 +683,21 @@ toUnifiedMonitorItem teamMap pid currTime alert =
 
 statusBadge_ :: Bool -> Text -> Html ()
 statusBadge_ isLarge status = do
-  let (badgeClass, icon) = case status of
+  let isAlerting = status `elem` ["Alerting", "alert"]
+      (badgeClass, icon) = case status of
         "Passing" -> ("badge-success", "check")
         "Failing" -> ("badge-error", "xmark")
         "Active" -> ("badge-success", "circle-check")
         "Inactive" -> ("badge-ghost", "circle-pause")
-        "Alerting" -> ("badge-error", "bell-exclamation")
+        _ | isAlerting -> ("badge-error", "bell-exclamation")
         "Warning" -> ("badge-warning", "triangle-exclamation")
-        "alert" -> ("badge-error", "bell-exclamation")
         "Healthy" -> ("badge-success", "heart-pulse")
         "Pending" -> ("badge-ghost", "clock")
         "NoData" -> ("badge-ghost", "circle-question")
         _ -> ("badge-ghost", "circle")
       sizeClass = bool "badge-sm" "" isLarge
       iconSize = bool "h-3 w-3" "h-4 w-4" isLarge
-  span_ [class_ $ "badge gap-1 " <> sizeClass <> " " <> badgeClass <> bool "" " alert-badge" (status `elem` ["Alerting", "alert"])] do
+  span_ [class_ $ "badge gap-1 " <> sizeClass <> " " <> badgeClass <> bool "" " alert-badge" isAlerting] do
     faSprite_ icon "regular" iconSize
     toHtml status
 
@@ -771,44 +744,40 @@ unifiedMonitorOverviewH pid monitorId = do
           isInactive = isJust alert.deactivatedAt
           deactLabel = bool "Deactivate" "Activate" isInactive
           deactIcon = bool "pause" "circle-play" isInactive
-          actionBtn = "btn btn-sm btn-ghost border border-strokeWeak"
-          mobItem = "px-3 py-2 text-sm text-left hover:bg-fillWeaker rounded cursor-pointer w-full flex items-center gap-2"
+          needsResolve = alert.currentStatus `elem` [Monitors.MSAlerting, Monitors.MSWarning]
           bwconf =
             baseBwconf
               { pageActions = Just $ div_ [class_ "flex items-center gap-2"] do
                   div_ [class_ "max-md:hidden flex items-center gap-2"] do
                     case alert.mutedUntil of
-                      Just _ -> button_ [class_ actionBtn, term "aria-label" "Unmute", term "data-tippy-content" "Resume notifications for this monitor", hxPost_ $ muteBase <> "/unmute"] do
+                      Just _ -> button_ [class_ "btn btn-sm btn-ghost border border-strokeWeak", term "aria-label" "Unmute", term "data-tippy-content" "Resume notifications for this monitor", hxPost_ $ muteBase <> "/unmute"] do
                         faSprite_ "bell" "regular" "h-4 w-4"
                         "Unmute"
-                      Nothing -> muteButtonDropdown_ actionBtn alert.id.toText (muteBase <> "/mute")
-                    when (alert.currentStatus `elem` [Monitors.MSAlerting, Monitors.MSWarning])
-                      $ button_ [class_ actionBtn, term "aria-label" "Resolve", term "data-tippy-content" "Mark as resolved and reset status to normal", hxPost_ $ muteBase <> "/resolve"] do
+                      Nothing -> muteDropdown_ ("mute-btn-pop-" <> alert.id.toText) (muteBase <> "/mute") \popId ->
+                        button_ [type_ "button", class_ "btn btn-sm btn-ghost border border-strokeWeak", term "aria-label" "Mute", term "data-tippy-content" "Silence notifications for a period", term "popovertarget" popId, style_ $ "anchor-name: --anchor-" <> popId] do
+                          faSprite_ "bell-slash" "regular" "h-4 w-4"
+                          span_ [class_ "max-md:hidden"] "Mute"
+                    when needsResolve
+                      $ button_ [class_ "btn btn-sm btn-ghost border border-strokeWeak", term "aria-label" "Resolve", term "data-tippy-content" "Mark as resolved and reset status to normal", hxPost_ $ muteBase <> "/resolve"] do
                         faSprite_ "check" "regular" "h-4 w-4"
                         "Resolve"
-                    button_ [class_ actionBtn, term "aria-label" deactLabel, term "data-tippy-content" $ bool "Pause this monitor — it won't evaluate or alert" "Re-enable this monitor to resume evaluations" isInactive, hxPost_ $ muteBase <> "/toggle_active"] do
+                    button_ [class_ "btn btn-sm btn-ghost border border-strokeWeak", term "aria-label" deactLabel, term "data-tippy-content" $ bool "Pause this monitor — it won't evaluate or alert" "Re-enable this monitor to resume evaluations" isInactive, hxPost_ $ muteBase <> "/toggle_active"] do
                       faSprite_ deactIcon "regular" "h-4 w-4"
                       toHtml deactLabel
                     div_ [class_ "w-px bg-strokeWeak h-5 mx-0.5"] mempty
                   let mobilePopId = "monitor-actions-" <> alert.id.toText
+                      mobItem_ :: Text -> Text -> Text -> Html ()
+                      mobItem_ icon path label =
+                        button_ [type_ "button", class_ "px-3 py-2 text-sm text-left hover:bg-fillWeaker rounded cursor-pointer w-full flex items-center gap-2", hxPost_ $ muteBase <> path, hxSwap_ "none"] do
+                          faSprite_ icon "regular" "h-3.5 w-3.5"
+                          toHtml label
                   div_ [class_ "md:hidden inline-block"] do
-                    button_ [type_ "button", class_ actionBtn, term "aria-label" "Actions", term "popovertarget" mobilePopId, style_ $ "anchor-name: --anchor-" <> mobilePopId] do
+                    button_ [type_ "button", class_ "btn btn-sm btn-ghost border border-strokeWeak", term "aria-label" "Actions", term "popovertarget" mobilePopId, style_ $ "anchor-name: --anchor-" <> mobilePopId] do
                       faSprite_ "ellipsis-vertical" "regular" "h-4 w-4"
                     div_ [id_ mobilePopId, term "popover" "auto", class_ "dropdown dropdown-end menu bg-bgRaised p-1 text-sm border border-strokeWeak z-50 min-w-44 rounded-md shadow-lg mt-1", style_ $ "position-try: flip-block; position-anchor: --anchor-" <> mobilePopId] do
-                      case alert.mutedUntil of
-                        Just _ -> button_ [type_ "button", class_ mobItem, hxPost_ $ muteBase <> "/unmute", hxSwap_ "none"] do
-                          faSprite_ "bell" "regular" "h-3.5 w-3.5"
-                          "Unmute"
-                        Nothing -> button_ [type_ "button", class_ mobItem, hxPost_ $ muteBase <> "/mute", hxSwap_ "none"] do
-                          faSprite_ "bell-slash" "regular" "h-3.5 w-3.5"
-                          "Mute"
-                      when (alert.currentStatus `elem` [Monitors.MSAlerting, Monitors.MSWarning])
-                        $ button_ [type_ "button", class_ mobItem, hxPost_ $ muteBase <> "/resolve", hxSwap_ "none"] do
-                          faSprite_ "check" "regular" "h-3.5 w-3.5"
-                          "Resolve"
-                      button_ [type_ "button", class_ mobItem, hxPost_ $ muteBase <> "/toggle_active", hxSwap_ "none"] do
-                        faSprite_ deactIcon "regular" "h-3.5 w-3.5"
-                        toHtml deactLabel
+                      maybe (mobItem_ "bell-slash" "/mute" "Mute") (const $ mobItem_ "bell" "/unmute" "Unmute") alert.mutedUntil
+                      when needsResolve $ mobItem_ "check" "/resolve" "Resolve"
+                      mobItem_ deactIcon "/toggle_active" deactLabel
                   a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?alert=" <> alert.id.toText <> "&query=" <> alert.logQuery, class_ "btn btn-sm max-md:btn-ghost max-md:border max-md:border-strokeWeak btn-primary", term "aria-label" "Edit monitor", term "data-tippy-content" "Edit query, thresholds, and notification settings"] do
                     faSprite_ "pen-to-square" "regular" "h-4 w-4"
                     span_ [class_ "max-md:hidden"] "Edit monitor"

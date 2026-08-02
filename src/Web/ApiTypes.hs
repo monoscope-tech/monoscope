@@ -54,7 +54,7 @@ module Web.ApiTypes (
 
 import Data.Aeson qualified as AE
 import Data.Default (Default)
-import Data.OpenApi (ToParamSchema, ToSchema (..))
+import Data.OpenApi (ToParamSchema, ToSchema)
 import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -215,7 +215,7 @@ data WidgetPosition = WidgetPosition
   , h :: Int
   }
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields] WidgetPosition
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake WidgetPosition
   deriving (ToSchema) via SnakeSchema WidgetPosition
 
 
@@ -233,7 +233,7 @@ data ApiKeySummary = ApiKeySummary
 
 newtype ApiKeyCreate = ApiKeyCreate {title :: Text}
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] ApiKeyCreate
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake ApiKeyCreate
   deriving (ToSchema) via SnakeSchema ApiKeyCreate
 
 
@@ -244,7 +244,7 @@ data ApiKeyCreated = ApiKeyCreated
   , key :: Text
   }
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] ApiKeyCreated
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake ApiKeyCreated
   deriving (ToSchema) via SnakeSchema ApiKeyCreated
 
 
@@ -276,10 +276,7 @@ data BulkAction a = BulkAction
   }
   deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake (BulkAction a)
-
-
-instance ToSchema a => ToSchema (BulkAction a) where
-  declareNamedSchema _ = declareNamedSchema (Proxy @AE.Value)
+  deriving (ToSchema) via JsonValueSchema (BulkAction a)
 
 
 -- | One failed id within a 'BulkResult'. Serialises as @{id, error}@ so SDK
@@ -289,11 +286,8 @@ data BulkFailure a = BulkFailure
   , error :: Text
   }
   deriving stock (Eq, Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] (BulkFailure a)
-
-
-instance ToSchema a => ToSchema (BulkFailure a) where
-  declareNamedSchema _ = declareNamedSchema (Proxy @AE.Value)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake (BulkFailure a)
+  deriving (ToSchema) via JsonValueSchema (BulkFailure a)
 
 
 data BulkResult a = BulkResult
@@ -301,11 +295,8 @@ data BulkResult a = BulkResult
   , failed :: [BulkFailure a]
   }
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] (BulkResult a)
-
-
-instance ToSchema a => ToSchema (BulkResult a) where
-  declareNamedSchema _ = declareNamedSchema (Proxy @AE.Value)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake (BulkResult a)
+  deriving (ToSchema) via JsonValueSchema (BulkResult a)
 
 
 -- =============================================================================
@@ -321,10 +312,7 @@ data Paged a = Paged
   }
   deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake (Paged a)
-
-
-instance ToSchema a => ToSchema (Paged a) where
-  declareNamedSchema _ = declareNamedSchema (Proxy @AE.Value)
+  deriving (ToSchema) via JsonValueSchema (Paged a)
 
 
 data UserRef = UserRef
@@ -586,5 +574,5 @@ data MemberAdd = MemberAdd
 
 newtype MemberPatch = MemberPatch {permission :: PM.Permissions}
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] MemberPatch
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MemberPatch
   deriving (ToSchema) via SnakeSchema MemberPatch
