@@ -83,6 +83,19 @@ spec = around withTestResources do
 
       V.toList (fmap fromOnly endpoints) `shouldSatisfy` elem "/admin/companies/{uuid}/employee-details"
 
+    -- Regression: with both write flags off, writeTargetFor yields WriteBoth, and the
+    -- test harness's "timefusion" pool is the same Postgres — so one export inserted the
+    -- span twice. Exact count (not >= 1) is the point of this guard.
+    it "singleExport_noRealTimefusion_insertsExactlyOneRow" \tr -> do
+      apiKey <- createTestAPIKey tr pid "std-otel-nodup-key"
+      ingestStdOtelSpan tr apiKey "GET /nodup" "GET" "/nodup" 200 "nodup.example.com"
+
+      Only rowCount <- V.head <$> (withPool tr.trPool $ DBT.query [sql|
+        SELECT COUNT(*) FROM otel_logs_and_spans
+        WHERE project_id = ? AND attributes___server___address = 'nodup.example.com'
+      |] (Only pid) :: IO (V.Vector (Only Int)))
+      rowCount `shouldBe` 1
+
     it "SDK spans still work correctly alongside standard OTel spans" \tr -> do
       apiKey <- createTestAPIKey tr pid "std-otel-mixed-key"
       ingestStdOtelSpan tr apiKey "GET /health" "GET" "/health" 200 "mixed.example.com"

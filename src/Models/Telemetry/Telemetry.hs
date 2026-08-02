@@ -965,6 +965,8 @@ data WriteTarget = WriteBoth | WritePgOnly | WriteTfOnly
 -- WritePgOnly
 -- >>> writeTargetFor False True Nothing
 -- WriteTfOnly
+-- >>> writeTargetFor False False Nothing
+-- WriteBoth
 writeTargetFor :: Bool -> Bool -> Maybe Text -> WriteTarget
 writeTargetFor enablePg enableTf = \case
   Just "tf-failed" -> WriteTfOnly
@@ -972,7 +974,10 @@ writeTargetFor enablePg enableTf = \case
   _ -> case (enablePg, enableTf) of
     (True, False) -> WritePgOnly
     (False, True) -> WriteTfOnly
-    _ -> WriteBoth
+    (True, True) -> WriteBoth
+    -- Misconfig: prefer duplicate rows over dropping telemetry. Callers that
+    -- point both legs at the same store must not rely on this arm.
+    (False, False) -> WriteBoth
 
 
 -- | A message that couldn't be parsed/converted. Callers MUST publish these to

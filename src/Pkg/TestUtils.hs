@@ -758,9 +758,13 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
           , True
           )
         Nothing -> (envConfig0, False)
-      -- Flip the flag here (not just in the override at AuthContext.config) so the
-      -- AuthContext.env slot also sees it; OtlpServer reads from .env.enableTimefusionWrites.
-      envConfig = envConfig1{enableTimefusionWrites = tfEnabled}
+      -- Flip the flags here (not just in the override at AuthContext.config) so the
+      -- AuthContext.env slot also sees them; OtlpServer reads from .env.enableTimefusionWrites.
+      -- Both must be pinned: leaving enablePostgresTelemetryWrites to inherit from a
+      -- developer .env (where it is False for TF-only prod) makes both flags False, which
+      -- writeTargetFor maps to WriteBoth — and with no real TF the "timefusion" pool is the
+      -- same Postgres, so every row is inserted twice.
+      envConfig = envConfig1{enableTimefusionWrites = tfEnabled, enablePostgresTelemetryWrites = True}
   extractionWorker <- ExtractionWorker.initWorkerState envConfig.extractionWorkerShards envConfig.extractionQueueCapacity
   atomically $ writeTVar extractionWorker.acceptingBatches True
   traceSessionCache <- TSC.newTraceSessionCache
@@ -806,6 +810,7 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
               , enableDailyJobScheduling = False
               , processedAtCutoff = Unsafe.read "2020-01-01 00:00:00 UTC"
               , enableTimefusionWrites = tfEnabled
+              , enablePostgresTelemetryWrites = True
               , -- Fallback values for external services (CI mode without .env)
                 -- .env values take priority if set, otherwise use test defaults
                 discordPublicKey = bool envConfig.discordPublicKey testDiscordPublicKeyHex (T.null envConfig.discordPublicKey)
