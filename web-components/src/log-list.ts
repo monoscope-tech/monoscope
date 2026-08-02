@@ -3,7 +3,7 @@ import '@lit-labs/virtualizer';
 import { FlowLayout } from '@lit-labs/virtualizer/layouts/flow.js';
 import { LitElement, html, css, TemplateResult, nothing } from 'lit';
 import { customElement, state, query, property } from 'lit/decorators.js';
-import { ref, createRef } from 'lit/directives/ref.js';
+import { ref, createRef, RefOrCallback } from 'lit/directives/ref.js';
 import { APTEvent, ChildrenForLatency, ColIdxMap, EventLine, ServerTraceEntry, Trace, TraceDataMap } from './types/types';
 import debounce from 'lodash/debounce';
 import { includes, startsWith, map, forEach, compact, chunk, chain, lt } from 'lodash';
@@ -66,6 +66,8 @@ const _ensureBadgeClasses = html`
   <span class="bg-fillBrand-strong bg-fillWarning-strong bg-fillError-strong bg-fillSuccess-strong bg-fillWarning-strong bg-fillInformation-strong bg-fillBrand-strong bg-fillBrand-strong bg-fillStrong bg-fillWarning-strong"></span>
   <span class="bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"></span>
 `;
+
+const noopRef: RefOrCallback = () => {};
 
 // Special item types for virtual list
 type VirtualListItem = EventLine | { type: 'fetchRecent' } | { type: 'loadMore' } | { type: 'aggregateChildren'; parentKey: string };
@@ -1024,6 +1026,13 @@ export class LogList extends LitElement {
   }
 
   private async fetchAggregateChildren(key: string, skip: number) {
+    // Paging (skip > 0) reuses this path; toggleAggregateRow only seeds loading on
+    // first open, so without this the "Load more" button gave no feedback at all.
+    const pending = this.expandedAggregates[key];
+    if (pending && !pending.loading) {
+      this.expandedAggregates = { ...this.expandedAggregates, [key]: { ...pending, loading: true } };
+      this.requestUpdate();
+    }
     try {
       const resp = await fetch(this.buildExpandUrl(key, skip), { headers: { Accept: 'application/json' }, credentials: 'include' });
       if (!resp.ok) throw new Error(resp.status === 401 ? 'Session expired, please refresh' : `Server error (${resp.status})`);
@@ -1089,14 +1098,19 @@ export class LogList extends LitElement {
             : html`<div class="flex flex-col">${rows}</div>`}
         ${state.hasMore
           ? html`<button
-              class="mt-1 text-xs text-textBrand underline px-2 py-1"
+              class="mt-1 text-xs px-2 py-1 relative"
               @click=${(e: any) => {
                 e.stopPropagation();
                 this.fetchAggregateChildren(parentKey, state.skip);
               }}
               ?disabled=${state.loading}
+              aria-busy=${state.loading}
             >
-              ${state.loading ? 'Loading…' : 'Load more'}
+              <span class=${clsx('text-textBrand underline', state.loading && 'invisible')}>Load more</span>
+              <span
+                class=${clsx('absolute left-2 top-1.5 loading loading-dots loading-sm', !state.loading && 'invisible')}
+                aria-label="Loading"
+              ></span>
             </button>`
           : nothing}
       </td>
@@ -2304,33 +2318,32 @@ export class LogList extends LitElement {
     }
   };
 
-  createLoadButton = (text: string) => html`<span class="text-textBrand underline font-semibold w-max mx-auto">${text}</span>`;
-
-  createLoadingRow = (id: string | null, content: TemplateResult, onClick?: () => void) => html`
+  // Label and spinner both stay mounted and swap via `invisible`; the spinner is
+  // overlaid absolutely so the label alone sizes the box. Conditionally rendering
+  // one OR the other left a frame where the row was empty (longer once the
+  // virtualizer re-measured the changed row) and resized it, reflowing the list.
+  createLoadingRow = (id: string | null, label: string | TemplateResult, loading: boolean, onClick: () => void, rowRef?: RefOrCallback) => html`
     <tr
-      class=${clsx('w-full flex relative h-[28px]', onClick && 'cursor-pointer hover:bg-fillWeaker')}
+      class="w-full flex relative h-[28px] cursor-pointer hover:bg-fillWeaker"
       id=${id || nothing}
-      @click=${onClick ? () => onClick() : nothing}
+      aria-busy=${loading}
+      @click=${onClick}
+      ${ref(rowRef ?? noopRef)}
     >
       <td colspan=${String(this.logsColumns.length)} class="relative pl-[calc(40vw-10ch)]">
-        <div class="h-7 flex items-center justify-center">${content}</div>
+        <div class="h-7 relative flex items-center justify-center">
+          <span class=${clsx('text-textBrand underline font-semibold', loading && 'invisible')}>${label}</span>
+          <div class=${clsx('absolute top-1 loading loading-dots loading-md h-5', !loading && 'invisible')} role="status" aria-label="Loading"></div>
+        </div>
       </td>
     </tr>
   `;
 
-  renderExpandTimeRangeButton = () => {
-    const expandTimeRange = () => {
+  renderExpandTimeRangeButton = () =>
+    this.createLoadingRow(null, 'Show earlier events', this.isLoading || this.isLoadingMore, () => {
       this.fetchData(this.expandTimeRangeUrl(), false, false, true);
       this.expandTimeRange = false;
-    };
-    return this.createLoadingRow(
-      null,
-      this.isLoading || this.isLoadingMore
-        ? html`<div class="loading loading-dots loading-md h-5"></div>`
-        : this.createLoadButton('Show earlier events'),
-      this.isLoading || this.isLoadingMore ? undefined : expandTimeRange
-    );
-  };
+    });
 
   renderLoadMoreButton = () => {
     if (this.fetchError && this.spanListTree.length === 0) {
@@ -2344,8 +2357,6 @@ export class LogList extends LitElement {
     }
     if (this.expandTimeRange && !this.hasMore && !!this.spanListTree.length) return this.renderExpandTimeRangeButton();
     if (!this.hasMore || !this.spanListTree.length) return html`<tr></tr>`;
-
-    const loadMore = () => this.fetchData(this.buildLoadMoreUrl(), false, false, true);
 
     // Use a ref to observe when this element comes into view
     const loadMoreRef = createRef<HTMLTableRowElement>();
@@ -2376,20 +2387,13 @@ export class LogList extends LitElement {
       }
     });
 
-    const isLoadingState = this.isLoading || this.isLoadingMore;
-    return html`
-      <tr
-        class=${clsx('w-full flex relative h-[28px]', !isLoadingState && 'cursor-pointer hover:bg-fillWeaker')}
-        ${ref(loadMoreRef)}
-        @click=${isLoadingState ? nothing : () => loadMore()}
-      >
-        <td colspan=${String(this.logsColumns.length)} class="relative pl-[calc(40vw-10ch)]">
-          <div class="h-7 flex items-center justify-center">
-            ${isLoadingState ? html`<div class="loading loading-dots loading-md h-5"></div>` : this.createLoadButton('Load more')}
-          </div>
-        </td>
-      </tr>
-    `;
+    return this.createLoadingRow(
+      null,
+      'Load more',
+      this.isLoading || this.isLoadingMore,
+      () => this.fetchData(this.buildLoadMoreUrl(), false, false, true),
+      loadMoreRef
+    );
   };
 
   renderFetchRecentButton = () => {
@@ -2402,15 +2406,14 @@ export class LogList extends LitElement {
     // Aggregate views (patterns) don't support live streaming or loading newer events
     if (this.isAggregate) return html`<tr></tr>`;
 
-    const fetchRecent = () => this.fetchData(this.buildRecentFetchUrl(), false, true);
     return this.createLoadingRow(
       'recent-logs',
-      this.isLiveStreaming
-        ? html`<p class="h-5 leading-5 m-0">Live streaming latest data...</p>`
-        : this.isFetchingRecent
-          ? html`<div class="loading loading-dots loading-md h-5"></div>`
-          : this.createLoadButton('Load newer events'),
-      this.isLiveStreaming || this.isFetchingRecent ? undefined : fetchRecent
+      this.isLiveStreaming ? html`<span class="font-normal no-underline text-textWeak">Live streaming latest data...</span>` : 'Load newer events',
+      this.isFetchingRecent,
+      () => {
+        if (this.isLiveStreaming) return;
+        this.fetchData(this.buildRecentFetchUrl(), false, true);
+      }
     );
   };
 

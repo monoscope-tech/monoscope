@@ -1,4 +1,5 @@
 import { describe, test, expect, beforeEach } from 'vitest';
+import { render } from 'lit';
 import { dedupeById } from '../src/log-list-utils';
 import { LogList } from '../src/log-list';
 import { row, fakeTransport, ids, mountList } from './log-list-harness';
@@ -76,6 +77,34 @@ describe('LogList load-more', () => {
     await el.fetchData('newquery', true, false, false); // isRefresh
     expect(ids(el)).toEqual([]);
     expect((el as any).loadedCount).toBe(0);
+  });
+});
+
+// Regression: entering the loading state used to swap the label OUT and the spinner
+// IN as two different subtrees, so the row went briefly empty (and changed size,
+// reflowing the list) between click and spinner. Both nodes must stay mounted and
+// only toggle `invisible`.
+describe('LogList load row loading state', () => {
+  test('label and spinner both stay mounted; only visibility flips', async () => {
+    const el = await mountList();
+    el.transport = fakeTransport({ tree: [row('1')] });
+    await el.fetchData('initial', false, false, false);
+
+    const tbody = document.createElement('tbody');
+    document.body.appendChild(document.createElement('table')).appendChild(tbody);
+    render(el.renderLoadMoreButton(), tbody);
+    const label = tbody.querySelector('span')!;
+    const spinner = tbody.querySelector('div.loading')!;
+    expect(label.textContent).toContain('Load more');
+    expect(label.className).not.toContain('invisible');
+    expect(spinner.className).toContain('invisible');
+
+    (el as any).isLoadingMore = true;
+    render(el.renderLoadMoreButton(), tbody);
+    expect(label.isConnected).toBe(true); // same nodes, not re-created
+    expect(spinner.isConnected).toBe(true);
+    expect(label.className).toContain('invisible');
+    expect(spinner.className).not.toContain('invisible');
   });
 });
 
