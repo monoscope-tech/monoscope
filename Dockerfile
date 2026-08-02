@@ -129,11 +129,19 @@ ENV GHCRTS="-p -poprofiles/monoscope -l-a --eventlog-flush-interval=30 -hc -i60"
 
 # Liveness of the web listener itself (not just the process): a wedged warp
 # accept-loop leaves the container "running" but refusing connections, so Swarm
-# keeps routing 1/N of VIP traffic to a black-hole. Probe /status (bare 200, no
-# auth redirect) over bash /dev/tcp — the image has no curl/wget. ${PORT:-8080}
-# matches prod (PORT=80) and the exposed default.
+# keeps routing 1/N of VIP traffic to a black-hole. Probe over bash /dev/tcp —
+# the image has no curl/wget. ${PORT:-8080} matches prod (PORT=80) and the
+# exposed default.
+#
+# /ping, NOT /status: this probe's failure action is "kill the container", so it
+# must test liveness only. /status runs `select version()`, which makes every
+# replica's liveness depend on one shared Postgres — a single DB hiccup fails all
+# three probes at once and Swarm kills the whole service. /ping is a pure handler,
+# so it still proves the accept loop and handler threads are alive (the thing this
+# probe exists to catch) without coupling liveness to a dependency. Dependency
+# health belongs in the InfraHealthCheck job, which alerts instead of killing.
 HEALTHCHECK --interval=15s --timeout=5s --start-period=90s --retries=3 \
-  CMD ["bash","-c","exec 3<>/dev/tcp/127.0.0.1/${PORT:-8080}; printf 'GET /status HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3; head -1 <&3 | grep -q '200 OK'"]
+  CMD ["bash","-c","exec 3<>/dev/tcp/127.0.0.1/${PORT:-8080}; printf 'GET /ping HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3; head -1 <&3 | grep -q '200 OK'"]
 
 # Timestamped eventlog per boot: a fixed -ol path would be truncated by the
 # restart right after an OOM kill, destroying exactly the samples we want.
