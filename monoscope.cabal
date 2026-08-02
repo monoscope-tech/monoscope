@@ -1157,7 +1157,6 @@ test-suite unit-tests
       Pkg.Parser.ExprSpec
       Pkg.ParserSpec
       Pkg.QueryCacheSpec
-      Pkg.WidgetLazySpec
       RequestMessagesSpec
       Spec
       System.ServerSpec
@@ -1195,13 +1194,9 @@ test-suite unit-tests
     , async
     , base
     , containers
-    , data-default
     , effectful-core
     , extra
-    , generic-lens
     , hasql
-    , lens
-    , lucid
     , hasql-pool
     , hs-opentelemetry-instrumentation-auto
     , hspec

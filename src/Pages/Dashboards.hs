@@ -26,7 +26,6 @@ module Pages.Dashboards (
   dashboardWidgetExpandGetH,
   visTypes,
   processEagerWidget,
-  lazyWidget,
   fetchWidgetData,
   dashboardBulkActionPostH,
   TabRenameForm (..),
@@ -106,7 +105,6 @@ import System.Logging qualified as Log
 import System.Tracing (Tracing)
 import System.Types
 import Text.Slugify (slugify)
-import UnliftIO qualified
 import UnliftIO.Exception (try)
 import Utils
 import Web.FormUrlEncoded (FromForm)
@@ -631,13 +629,9 @@ processVariable pid now (sinceStr, fromDStr, toDStr) allParams variableBase = do
       Dashboards.VTQuery | Just sqlQuery <- variable.sql -> do
         -- SECURITY: Use secured query execution with project_id filtering
         useTf <- (.env.enableTimefusionReads) <$> ask @AuthContext
-        -- Budgeted for the same reason as the facet/dependent short-circuits above:
-        -- an option list is never worth blocking the shell on.
-        withRenderBudget ("variable:" <> variable.key) variable
-          $ LogQueries.executeSecuredQuery useTf pid sqlQuery 1000
-          <&> \case
-            Right queryResults -> variable{Dashboards.options = Just $ queryRowsToText queryResults}
-            Left _ -> variable -- Return unchanged on error
+        LogQueries.executeSecuredQuery useTf pid sqlQuery 1000 <&> \case
+          Right queryResults -> variable{Dashboards.options = Just $ queryRowsToText queryResults}
+          Left _ -> variable -- Return unchanged on error
       _ -> pure variable
 
 
@@ -751,44 +745,6 @@ variablePickerModal_ pid dashId activeTabSlug allParams var useOob = do
             forM_ keys $ kbd_ [class_ "kbd kbd-xs"] . toHtml
 
 
--- | Wall-clock budget for a single TimeFusion-backed query run *during page render*
--- (a constant, a variable's option list, an eager widget prefill). These all used to
--- be unbounded, so a slow or wedged TF held the dashboard shell hostage: on
--- 2026-08-02 every render thread parked on TF, the three replicas grew to their 24GB
--- cap and Swarm OOM-killed them in a loop while /status timed out.
---
--- The prefill is an optimisation, never a requirement — every widget kind can fetch
--- its own data client-side (see 'withRenderBudget'). So we cap the wait and ship the
--- shell; a blown budget costs a spinner, not a page.
---
--- This is per query, and render runs three sequential phases (constants, then
--- variables, then widgets), each internally concurrent — so a total TF stall bounds
--- the shell at ~3x this, not 1x. Healthy TF is unaffected: these queries return in
--- milliseconds and the timeout never fires.
-renderQueryBudgetMicros :: Int
-renderQueryBudgetMicros = 4_000_000
-
-
--- | Run a render-time query under 'renderQueryBudgetMicros', falling back to
--- @fallback@ when the budget is blown.
---
--- Every caller's fallback leaves the widget/variable/constant in its *un-prefilled*
--- state, which is exactly the state the client already knows how to recover from:
--- tables render their spinner and fire @hx-trigger=\"load\"@, stats include @load@ in
--- their trigger whenever they have no data, and charts show \"Loading chart…\" and
--- fetch on intersection when @dataset.source@ is empty. So a slow TF degrades the
--- dashboard from server-rendered to client-fetched rather than from working to down.
---
--- Abandoning the query is safe: resource-pool destroys a connection whose borrower
--- died, so we drop the connection rather than return a half-read one to the pool.
-withRenderBudget :: Text -> a -> ATAuthCtx a -> ATAuthCtx a
-withRenderBudget label fallback action =
-  UnliftIO.timeout renderQueryBudgetMicros action >>= \case
-    Just a -> pure a
-    Nothing ->
-      Log.logWarn "Dashboard render query exceeded budget; degrading to client-side fetch" label $> fallback
-
-
 -- | Process a single dashboard constant by executing its SQL or KQL query and populating the result.
 -- Constants are executed once and their results are made available to all widgets.
 processConstant :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Dashboards.Constant -> ATAuthCtx Dashboards.Constant
@@ -820,36 +776,14 @@ processWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe
 processWidget pid now timeRange allParams widgetBase = do
   let widget = widgetBase & #_projectId %~ (<|> Just pid) & #rawQuery .~ widgetBase.query
 
-  -- The prefill is best-effort: past the budget we hand back the widget with no
-  -- html/dataset and no `eager` flag, which is precisely the shape whose renderer
-  -- emits a spinner plus a self-fetch.
   widget' <-
-    if
-      -- Anomalies first, ahead of the `eager` check. They read Postgres rather than
-      -- TF, and `widget_` renders `whenJust w.html toHtmlRaw` — nothing at all
-      -- without html — so there is no client-side fetch to degrade to and a blown
-      -- budget would blank the card. `eager` is a free `Maybe Bool` with no
-      -- type-level tie to `wType`, so a custom dashboard can set both; ordering the
-      -- guard this way makes the exclusion hold for every input, not just the
-      -- built-in templates.
-      | widget.wType == Widget.WTAnomalies -> processEagerWidget pid now timeRange allParams widget
-      -- Label by id, not title: untitled widgets would all log the same string.
-      | widget.eager == Just True ->
-          withRenderBudget ("widget:" <> maybeToMonoid widget.id) (lazyWidget widget)
-            $ processEagerWidget pid now timeRange allParams widget
-      | otherwise -> pure widget
+    if widget.eager == Just True || widget.wType == Widget.WTAnomalies
+      then processEagerWidget pid now timeRange allParams widget
+      else pure widget
 
   -- Recursively process child widgets concurrently, inheriting the parent's dashboard id
   forOf (#children . _Just) widget' \kids ->
     pooledForConcurrently kids $ processWidget pid now timeRange allParams . (#_dashboardId %~ (<|> widget'._dashboardId))
-
-
--- | Strip every trace of a server-side prefill so the widget renders as if it had
--- never been eager. @eager@ must go too: 'Widget.renderStatContent' treats the flag
--- itself as \"data is present\" and drops @load@ from its HTMX trigger, so a widget
--- left flagged-but-empty would render a spinner that never resolves.
-lazyWidget :: Widget.Widget -> Widget.Widget
-lazyWidget w = w & #eager .~ Nothing & #html .~ Nothing & #dataset .~ Nothing
 
 
 -- | Fetch widget data based on widget type (for stat and chart widgets)
@@ -2214,10 +2148,7 @@ processConstantsAndExtendParams pid now timeParams allParams haystack constants 
     )
   where
     processOne c
-      -- A blown budget leaves the constant result-less, which renders as the same
-      -- empty-sentinel params an unreferenced constant produces.
-      | ("{{const-" <> c.key) `T.isInfixOf` haystack || ("{{" <> c.key <> "}}") `T.isInfixOf` haystack =
-          withRenderBudget ("constant:" <> c.key) c $ processConstant pid now timeParams allParams c
+      | ("{{const-" <> c.key) `T.isInfixOf` haystack || ("{{" <> c.key <> "}}") `T.isInfixOf` haystack = processConstant pid now timeParams allParams c
       | otherwise = pure c -- unreferenced: emit empty-sentinel params without running the query
 
 
