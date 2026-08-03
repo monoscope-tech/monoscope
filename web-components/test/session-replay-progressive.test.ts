@@ -97,6 +97,24 @@ describe('session-replay progressive shard loading', () => {
     vi.restoreAllMocks();
   });
 
+  test('makes the floating log-explorer player draggable when loaded after DOMContentLoaded', async () => {
+    const wrapper = document.createElement('div');
+    wrapper.id = 'sessionPlayerWrapper';
+    const el: any = document.createElement('session-replay');
+    Object.assign(el, { projectId: 'proj-1', containerId: wrapper.id });
+    wrapper.appendChild(el);
+    document.body.appendChild(wrapper);
+    await el.updateComplete;
+
+    const header = wrapper.querySelector<HTMLElement>('.playerHeader')!;
+    header.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: 100, clientY: 100 }));
+    document.dispatchEvent(new MouseEvent('mousemove', { clientX: 160, clientY: 140 }));
+    document.dispatchEvent(new MouseEvent('mouseup'));
+
+    expect(wrapper.style.left).toBe('60px');
+    expect(wrapper.style.top).toBe('40px');
+  });
+
   test('fetches manifest, plays shard 1 immediately, then streams the rest in order via addEvent', async () => {
     const manifest = {
       meta: { userEmail: 'u@example.com', userName: null, userId: null },

@@ -105,10 +105,6 @@ export class SessionReplay extends LitElement {
       this.startX = null;
     });
 
-    document.addEventListener('DOMContentLoaded', () => {
-      this.makeDraggable();
-    });
-
     this.updateScale = this.updateScale.bind(this);
     this.handleConsoleEvents = this.handleConsoleEvents.bind(this);
     this.loopTimer = this.loopTimer.bind(this);
@@ -721,6 +717,7 @@ export class SessionReplay extends LitElement {
   };
 
   protected firstUpdated(_changedProperties: PropertyValues): void {
+    this.makeDraggable();
     // Open the console panel by default when consoleOpen attr is set and the user hasn't saved a width yet.
     if (this.consoleOpen && localStorage.getItem('replay-activity-width') === null && this.activityWidth === 0) {
       this.activityWidth = 300;
@@ -1456,7 +1453,8 @@ export class SessionReplay extends LitElement {
   }
 
   makeDraggable() {
-    const element = document.querySelector('#sessionPlayerWrapper') as HTMLElement;
+    const element = this.containerId ? document.getElementById(this.containerId) : null;
+    if (!element) return;
     const headers = element.querySelectorAll<HTMLElement>('.playerHeader');
 
     let isDragging = false;
