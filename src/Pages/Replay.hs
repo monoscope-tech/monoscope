@@ -1,4 +1,4 @@
-module Pages.Replay (replayPostH, ReplayPost (..), processReplayEvents, replaySessionGetH, fetchReplaySession, ReplaySessionResp (..), RawJson (..), compressAndMergeReplaySessions, mergeReplaySession, expireOldReplayData, migrateReplayStorage, replayObjectPrefix, migratedReplayKey, concatRawJsonArrays, sessionFileKeys, splitReplayPayload, ReplayPayload (..), stripJsonNullEscapes, firstEventTimestampRaw, claimMergeLease, releaseMergeLease, ReplayManifest (..), ReplaySegment (..), replaySessionManifestGetH, replaySessionShardGetH, buildReplayManifest, fetchReplayShard) where
+module Pages.Replay (replayPostH, ReplayPost (..), processReplayEvents, replaySessionGetH, fetchReplaySession, ReplaySessionResp (..), RawJson (..), compressAndMergeReplaySessions, mergeReplaySession, expireOldReplayData, migrateReplayStorage, migrateReplayStorageShard, replayObjectPrefix, migratedReplayKey, concatRawJsonArrays, sessionFileKeys, splitReplayPayload, ReplayPayload (..), stripJsonNullEscapes, firstEventTimestampRaw, claimMergeLease, releaseMergeLease, ReplayManifest (..), ReplaySegment (..), replaySessionManifestGetH, replaySessionShardGetH, buildReplayManifest, fetchReplayShard) where
 
 import Codec.Compression.GZip qualified as GZip
 import Conduit (runConduit)
@@ -1080,9 +1080,19 @@ copyReplayObjectVerified conn bucket oldKey newKey
 -- cleanup has been verified. Keep 'replayObjectPrefix'; it is the permanent
 -- write-path layout.
 migrateReplayStorage :: Int -> ATBackgroundCtx Int
-migrateReplayStorage batchSize = do
+migrateReplayStorage = migrateReplayStorageShard 1 0
+
+
+-- | Migrate one deterministic subset of legacy sessions. Fixed shards avoid
+-- relying on a worker to enqueue its successor and keep production jobs below
+-- the stale-job threshold. Safe to retry because migrated rows stop matching.
+-- TEMPORARY: delete this function after all replay migrations are complete.
+migrateReplayStorageShard :: Int -> Int -> Int -> ATBackgroundCtx Int
+migrateReplayStorageShard requestedShardCount requestedShardIndex batchSize = do
   ctx <- Effectful.Reader.Static.ask @AuthContext
   let lim = fromIntegral (max 1 batchSize) :: Int64
+      shardCount = fromIntegral (max 1 requestedShardCount) :: Int64
+      shardIndex = fromIntegral (requestedShardIndex `mod` max 1 requestedShardCount) :: Int64
   rows :: [(UUID.UUID, Projects.ProjectId, UTCTime, V.Vector Text, V.Vector Text)] <-
     Hasql.interp
       [HI.sql|
@@ -1093,6 +1103,7 @@ migrateReplayStorage batchSize = do
           SELECT 1 FROM unnest(COALESCE(file_keys, '{}'::text[]) || COALESCE(shard_keys, '{}'::text[])) k
           WHERE k NOT LIKE project_id::text || '/rrweb/%'
         )
+          AND ((hashtextextended(session_id::text, 0) % #{shardCount}) + #{shardCount}) % #{shardCount} = #{shardIndex}
         ORDER BY last_event_at, session_id
         LIMIT #{lim}
       |]

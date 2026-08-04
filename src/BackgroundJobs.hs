@@ -153,6 +153,8 @@ data BgJobs
   | -- TEMPORARY: delete this constructor + handler after every replay_sessions
     -- key has the <project>/rrweb/<date>/ prefix and migration has been verified.
     MigrateReplayStorage Int
+  | -- TEMPORARY: delete this constructor + handler after replay migration.
+    MigrateReplayStorageShard Int Int Int -- shard count, shard index, batch size
   | ExpireReplayData
   | ExpireShareEvents
   | LogPatternPeriodicProcessing UTCTime Projects.ProjectId
@@ -587,6 +589,8 @@ processBackgroundJob authCtx bgJob =
       when (moved >= max 1 batchSize) $ do
         ctx <- Effectful.Reader.Static.ask @Config.AuthContext
         void $ liftIO $ withResource ctx.jobsPool \conn -> createJob conn "background_jobs" (MigrateReplayStorage batchSize)
+    MigrateReplayStorageShard shardCount shardIndex batchSize ->
+      void $ Replay.migrateReplayStorageShard shardCount shardIndex batchSize
     ExpireReplayData -> Replay.expireOldReplayData
     -- 48h expiry + 30d grace so "Link expired" still renders before deletion.
     ExpireShareEvents -> do
