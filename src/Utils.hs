@@ -770,7 +770,7 @@ prettyPrintCount n
 -- >>> sanitizeBackendError "This feature is not implemented: Unsupported SQL type jsonpath"
 -- "This query isn't supported on the current data source"
 -- >>> sanitizeBackendError "FATAL:  the database system is starting up"
--- "Database unavailable"
+-- "Database temporarily unavailable \8212 retrying may help"
 -- >>> sanitizeBackendError "Hasql: pool acquisition timeout"
 -- "Database temporarily unavailable — retrying may help"
 -- >>> sanitizeBackendError "ERROR: column \"foo\" does not exist"
