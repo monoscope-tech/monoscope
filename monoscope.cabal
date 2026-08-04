@@ -138,6 +138,10 @@ extra-source-files:
     static/migrations/0109_otel_metrics_date.sql
     static/migrations/0110_otel_metrics_meta_labels.sql
     static/migrations/0111_drop_legacy_metrics_meta.sql
+    static/migrations/0112_error_patterns_null_empty_trace_ids.sql
+    static/migrations/0113_replay_object_layout_migration.sql
+    static/migrations/0114_replay_object_layout_shards.sql
+    static/migrations/0115_auto_provisioned_dashboards.sql
 
 source-repository head
   type: git
@@ -604,6 +608,7 @@ test-suite integration-tests
   type: exitcode-stdio-1.0
   main-is: Main.hs
   other-modules:
+      BackgroundJobs.DashboardAutoProvisionSpec
       BackgroundJobs.DigestFlushSpec
       BackgroundJobs.ExpirySpec
       BackgroundJobs.NotificationsSpec
@@ -854,6 +859,7 @@ test-suite test-dev
       Web.I18n
       Web.MCP
       Web.Routes
+      BackgroundJobs.DashboardAutoProvisionSpec
       BackgroundJobs.DigestFlushSpec
       BackgroundJobs.ExpirySpec
       BackgroundJobs.NotificationsSpec
@@ -1150,6 +1156,7 @@ test-suite unit-tests
       BackgroundJobs.SpikeDetectionSpec
       Data.Effectful.HasqlSpec
       Data.Effectful.NotifySpec
+      Models.DashboardTemplatesSpec
       Models.Telemetry.DeterministicIdSpec
       Models.Telemetry.MetricServiceNameSpec
       Models.Telemetry.TimestampMicrosSpec
@@ -1196,17 +1203,18 @@ test-suite unit-tests
     , base
     , containers
     , data-default
+    , directory
     , effectful-core
     , extra
     , generic-lens
     , hasql
-    , lens
-    , lucid
     , hasql-pool
     , hs-opentelemetry-instrumentation-auto
     , hspec
+    , lens
     , log-base
     , log-effectful
+    , lucid
     , monoscope
     , neat-interpolation
     , relude >=1.2.0.0

@@ -11,7 +11,7 @@ widgets:
       - type: 'timeseries_stat'
         title: 'Request Rate'
         icon: list-tree
-        query: attributes.service.name=~"heroku.*" OR attributes.heroku.source != null | summarize count() by bin_auto(timestamp)
+        query: attributes.heroku.source != null | summarize count() by bin_auto(timestamp)
         unit: reqs
         eager: true
         layout: { w: 7, h: 2 }
@@ -19,14 +19,14 @@ widgets:
       - type: 'stat'
         title: 'Active Dynos'
         icon: server
-        query: name=="heroku.dyno.load" | summarize count(distinct(attributes.dyno))
+        query: attributes.heroku.source == "router" | summarize dcount(attributes.dyno)
         unit: dynos
         eager: true
         layout: { w: 5, h: 2 }
 
   - type: 'timeseries'
     title: 'Response Time (ms)'
-    query: attributes.heroku.source=="router" | summarize avg(attributes.connect + attributes.service) by bin_auto(timestamp)
+    query: attributes.heroku.source=="router" | summarize avg(attributes.service) by bin_auto(timestamp)
     unit: ms
     layout: { w: 6, h: 4 }
 
@@ -65,5 +65,5 @@ widgets:
 
   - type: 'timeseries'
     title: 'Throughput by Path'
-    query: attributes.heroku.source=="router" | summarize count() by bin_auto(timestamp), attributes.path | top 10 by count()
+    query: attributes.heroku.source=="router" | summarize count() by bin_auto(timestamp), attributes.path
     layout: { w: 6, h: 4 }

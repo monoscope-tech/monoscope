@@ -1,12 +1,12 @@
 title: OpenTelemetry Tracing
 icon: opentelemetry
 preview: /public/assets/svgs/screens/http-stats.svg
-description: Monitor distributed traces, span metrics, service dependencies, and trace analytics
+description: Distributed-trace analytics — span volume, error rates, latency percentiles, and database spans
 refresh_interval: 60s
 widgets:
   - type: group
     title: Tracing Overview
-    layout: { w: 6, h: 5 }
+    layout: { w: 12, h: 3 }
     children:
       - type: 'timeseries_stat'
         title: 'Total Spans'
@@ -14,66 +14,79 @@ widgets:
         query: kind != null | summarize count() by bin_auto(timestamp)
         unit: spans
         eager: true
-        layout: { w: 4, h: 2 }
+        layout: { w: 3, h: 2 }
 
       - type: 'stat'
         title: 'Error Rate'
         icon: bug
-        query: status.code=="ERROR" | summarize (count() / sum(count())) * 100
+        query: kind != null | summarize round(countif(status_code == "ERROR") * 100.0 / count(), 2)
         unit: '%'
         eager: true
-        layout: { w: 4, h: 2 }
+        layout: { w: 3, h: 2 }
 
       - type: 'stat'
         title: 'Services'
         icon: server
-        query: attributes.service.name != null | summarize count(distinct(attributes.service.name))
+        query: resource.service.name != null | summarize dcount(resource.service.name)
         unit: services
         eager: true
-        layout: { w: 4, h: 2 }
+        layout: { w: 3, h: 2 }
+
+      - type: 'stat'
+        title: 'Traces'
+        icon: activity
+        query: context.trace_id != null | summarize dcount(context.trace_id)
+        unit: traces
+        eager: true
+        layout: { w: 3, h: 2 }
 
   - type: 'timeseries'
-    title: 'Span Rate by Service'
-    query: attributes.service.name != null | summarize count() by bin_auto(timestamp), attributes.service.name
-    unit: spans/s
+    title: 'Spans by Service'
+    query: resource.service.name != null | summarize count() by bin_auto(timestamp), resource.service.name
+    unit: spans
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries_line'
-    title: 'Service Latency Percentiles (ms)'
+    title: 'Latency Percentiles'
     hide_subtitle: true
     summarize_by: max
-    query: kind != null | summarize percentiles(duration / 1e6, 50, 75, 90, 95, 99) by bin_auto(timestamp)
+    query: kind != null and duration != null | summarize percentiles(duration / 1000000, 50, 75, 90, 95, 99) by bin_auto(timestamp)
+    unit: ms
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'
     title: 'Span Status Distribution'
-    query: status.code != null | summarize count() by bin_auto(timestamp), status.code
+    query: status_code != null | summarize count() by bin_auto(timestamp), status_code
+    unit: spans
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'
     title: 'Error Spans by Service'
     theme: 'roma'
-    query: status.code=="ERROR" | summarize count() by bin_auto(timestamp), attributes.service.name
-    layout: { w: 6, h: 4 }
-
-  - type: 'timeseries'
-    title: 'Span Duration by Operation'
-    query: name != null | summarize avg(duration) / 1e6 by bin_auto(timestamp), name | top 10 by avg(duration)
-    unit: ms
+    query: status_code == "ERROR" | summarize count() by bin_auto(timestamp), resource.service.name
+    unit: errors
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'
     title: 'Span Kind Distribution'
     query: kind != null | summarize count() by bin_auto(timestamp), kind
+    unit: spans
     layout: { w: 6, h: 4 }
 
-  - type: 'timeseries'
-    title: 'Database Query Performance'
-    query: attributes.db.system != null | summarize avg(duration) / 1e6 by bin_auto(timestamp), attributes.db.operation, attributes.db.system
+  - type: 'timeseries_line'
+    title: 'Database Span Latency by System'
+    query: attributes.db.system.name != null and duration != null | summarize avg(duration) / 1000000 by bin_auto(timestamp), attributes.db.system.name
     unit: ms
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'
-    title: 'HTTP Request Spans'
-    query: attributes.http.method != null | summarize count() by bin_auto(timestamp), attributes.http.method, attributes.http.response.status_code
+    title: 'HTTP Spans by Method'
+    query: attributes.http.request.method != null | summarize count() by bin_auto(timestamp), attributes.http.request.method
+    unit: reqs
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'HTTP Spans by Status Code'
+    query: attributes.http.response.status_code != null | summarize count() by bin_auto(timestamp), coalesce(tostring(attributes.http.response.status_code), "unknown")
+    unit: reqs
     layout: { w: 6, h: 4 }

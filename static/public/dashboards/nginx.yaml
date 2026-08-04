@@ -1,71 +1,72 @@
-title: Nginx Web Server
+title: Nginx
 icon: nginx
 preview: /public/assets/svgs/screens/http-stats.svg
-description: Monitor Nginx performance, request handling, upstream health, and cache statistics
+description: Nginx request throughput and connection states (OpenTelemetry nginx receiver, stub_status)
 refresh_interval: 60s
+tags: [infrastructure]
+discovery_metrics:
+  - 'nginx.'
 widgets:
   - type: group
     title: Overview
-    layout: { w: 6, h: 5 }
+    layout: { w: 12, h: 3 }
     children:
       - type: 'timeseries_stat'
-        title: 'Request Rate'
+        title: 'Requests'
         icon: list-tree
-        query: attributes.service.name=="nginx" OR attributes.http.server_name=~"nginx.*" | summarize count() by bin_auto(timestamp)
-        unit: reqs/s
+        query: metrics | where metric_name == "nginx.requests" | summarize range(value) by bin_auto(timestamp)
+        unit: reqs
         eager: true
-        layout: { w: 7, h: 2 }
+        layout: { w: 3, h: 2 }
 
       - type: 'stat'
         title: 'Active Connections'
         icon: swap
-        query: name=="nginx.connections.active" | summarize avg(value)
+        query: metrics | where metric_name == "nginx.connections_current" and attributes.state == "active" | summarize avg(value)
         unit: connections
         eager: true
-        layout: { w: 5, h: 2 }
+        layout: { w: 3, h: 2 }
+
+      - type: 'stat'
+        title: 'Waiting Connections'
+        icon: clock
+        query: metrics | where metric_name == "nginx.connections_current" and attributes.state == "waiting" | summarize avg(value)
+        unit: connections
+        eager: true
+        layout: { w: 3, h: 2 }
+
+      - type: 'stat'
+        title: 'Accepted (per range)'
+        icon: activity
+        query: metrics | where metric_name == "nginx.connections_accepted" | summarize range(value)
+        unit: connections
+        eager: true
+        layout: { w: 3, h: 2 }
 
   - type: 'timeseries'
-    title: 'Requests by Status Code'
-    query: attributes.service.name=="nginx" AND attributes.http.response.status_code != null | summarize count() by bin_auto(timestamp), attributes.http.response.status_code
-    layout: { w: 6, h: 4 }
-
-  - type: 'timeseries'
-    title: 'Connection States'
-    query: name=~"nginx.connections.(accepted|handled|requests)" | summarize rate(sum(value)) by bin_auto(timestamp), name
+    title: 'Request Rate'
+    query: metrics | where metric_name == "nginx.requests" | summarize range(value) by bin_auto(timestamp)
+    unit: reqs
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries_line'
-    title: 'Request Processing Time (ms)'
+    title: 'Connections by State'
+    query: metrics | where metric_name == "nginx.connections_current" | summarize avg(value) by bin_auto(timestamp), attributes.state
+    unit: connections
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Accepted vs Handled Connections'
+    description: 'Accepted exceeding handled means connections are being dropped at capacity limits.'
+    query: metrics | where metric_name in ("nginx.connections_accepted", "nginx.connections_handled") | summarize range(value) by bin_auto(timestamp), metric_name
+    unit: connections
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries_line'
+    title: 'Access-Log Latency Percentiles (from traces)'
+    description: 'Server-span latency for nginx-fronted services (requires tracing instrumentation).'
     hide_subtitle: true
-    query: attributes.service.name=="nginx" | summarize avg(attributes.request_time * 1000) by bin_auto(timestamp)
+    summarize_by: max
+    query: kind == "server" and duration != null | summarize percentiles(duration / 1000000, 50, 90, 99) by bin_auto(timestamp)
     unit: ms
-    layout: { w: 6, h: 4 }
-
-  - type: 'timeseries'
-    title: 'Upstream Response Time (ms)'
-    query: attributes.service.name=="nginx" AND attributes.upstream_response_time != null | summarize avg(attributes.upstream_response_time * 1000) by bin_auto(timestamp), attributes.upstream_addr
-    unit: ms
-    layout: { w: 6, h: 4 }
-
-  - type: 'timeseries'
-    title: 'Error Rate'
-    theme: 'roma'
-    query: attributes.service.name=="nginx" AND attributes.http.response.status_code >= 400.0 | summarize count() by bin_auto(timestamp), attributes.http.response.status_code
-    layout: { w: 6, h: 4 }
-
-  - type: 'timeseries'
-    title: 'Cache Hit Ratio (%)'
-    query: name=~"nginx.cache.(hit|miss|bypass)" | summarize count() by bin_auto(timestamp), name | where name=="nginx.cache.hit" | summarize (count() / sum(count())) * 100
-    unit: '%'
-    layout: { w: 6, h: 4 }
-
-  - type: 'timeseries'
-    title: 'Bandwidth (MB/s)'
-    query: name=~"nginx.(bytes_sent|request_length)" | summarize rate(sum(value)) / 1048576 by bin_auto(timestamp), name
-    unit: MB/s
-    layout: { w: 6, h: 4 }
-
-  - type: 'timeseries'
-    title: 'Requests by Server Block'
-    query: attributes.service.name=="nginx" AND attributes.server_name != null | summarize count() by bin_auto(timestamp), attributes.server_name | top 10 by count()
     layout: { w: 6, h: 4 }

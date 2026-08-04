@@ -26,6 +26,8 @@ module Models.Projects.Dashboards (
   updateStarredSince,
   deleteDashboard,
   getDashboardByBaseTemplate,
+  autoProvisionedTemplates,
+  markAutoProvisioned,
 ) where
 
 import Control.Exception (try)
@@ -105,6 +107,7 @@ data Dashboard = Dashboard
   , constants :: Maybe [Constant]
   , variables :: Maybe [Variable]
   , tabs :: Maybe [Tab]
+  , discoveryMetrics :: Maybe [Text] -- Metric-name prefixes (e.g. "postgresql.") that auto-enable this template for projects emitting them
   , widgets :: [Widget.Widget]
   }
   deriving stock (Generic, Show, THS.Lift)
@@ -288,3 +291,12 @@ deleteDashboard dashId = Hasql.interpExecute [HI.sql| DELETE FROM projects.dashb
 getDashboardByBaseTemplate :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe DashboardId)
 getDashboardByBaseTemplate pid baseTemplate =
   Hasql.interpOne [HI.sql| SELECT id FROM projects.dashboards WHERE project_id = #{pid} AND base_template = #{baseTemplate} |]
+
+
+autoProvisionedTemplates :: DB es => Projects.ProjectId -> Eff es [Text]
+autoProvisionedTemplates pid = Hasql.interp [HI.sql| SELECT base_template FROM projects.auto_provisioned_dashboards WHERE project_id = #{pid} |]
+
+
+markAutoProvisioned :: DB es => Projects.ProjectId -> Text -> Eff es Int64
+markAutoProvisioned pid baseTemplate =
+  Hasql.interpExecute [HI.sql| INSERT INTO projects.auto_provisioned_dashboards (project_id, base_template) VALUES (#{pid}, #{baseTemplate}) ON CONFLICT DO NOTHING |]

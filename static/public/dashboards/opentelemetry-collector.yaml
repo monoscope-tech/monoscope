@@ -1,70 +1,98 @@
 title: OpenTelemetry Collector
 icon: opentelemetry
 preview: /public/assets/svgs/screens/http-stats.svg
-description: Monitor OTel Collector performance, pipeline metrics, receiver/exporter stats, and data flow
+description: Collector pipeline health — accepted vs failed telemetry per receiver/exporter, queue pressure, and process resources
 refresh_interval: 60s
+tags: [infrastructure]
+discovery_metrics:
+  - 'otelcol_'
 widgets:
   - type: group
-    title: Collector Overview
-    layout: { w: 6, h: 5 }
+    title: Overview
+    layout: { w: 12, h: 3 }
     children:
       - type: 'timeseries_stat'
-        title: 'Data Points/sec'
-        icon: chart-line
-        query: name=~"otelcol_receiver_accepted_(spans|metrics|logs)" | summarize rate(sum(value)) by bin_auto(timestamp)
-        unit: points/s
+        title: 'Spans Received'
+        icon: activity
+        query: metrics | where metric_name == "otelcol_receiver_accepted_spans" | summarize range(value) by bin_auto(timestamp)
+        unit: spans
         eager: true
-        layout: { w: 7, h: 2 }
+        layout: { w: 3, h: 2 }
+
+      - type: 'stat'
+        title: 'Exporter Queue Size'
+        icon: list-tree
+        query: metrics | where metric_name == "otelcol_exporter_queue_size" | summarize avg(value)
+        unit: items
+        eager: true
+        layout: { w: 3, h: 2 }
+
+      - type: 'stat'
+        title: 'Memory (RSS)'
+        icon: server
+        query: metrics | where metric_name == "otelcol_process_memory_rss" | summarize avg(value) / 1048576
+        unit: MB
+        eager: true
+        layout: { w: 3, h: 2 }
 
       - type: 'stat'
         title: 'Uptime'
         icon: clock
-        query: name=="otelcol_process_uptime" | summarize last(value) / 3600
+        query: metrics | where metric_name == "otelcol_process_uptime" | summarize max(value) / 3600
         unit: hours
         eager: true
-        layout: { w: 5, h: 2 }
+        layout: { w: 3, h: 2 }
 
   - type: 'timeseries'
-    title: 'Receiver Accepted Data'
-    query: name=~"otelcol_receiver_accepted_(spans|metrics|logs)" | summarize rate(sum(value)) by bin_auto(timestamp), name, attributes.receiver
-    unit: items/s
+    title: 'Received by Signal'
+    query: metrics | where metric_name in ("otelcol_receiver_accepted_spans", "otelcol_receiver_accepted_log_records", "otelcol_receiver_accepted_metric_points") | summarize range(value) by bin_auto(timestamp), metric_name
+    unit: items
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'
-    title: 'Exporter Sent Data'
-    query: name=~"otelcol_exporter_sent_(spans|metrics|logs)" | summarize rate(sum(value)) by bin_auto(timestamp), name, attributes.exporter
-    unit: items/s
-    layout: { w: 6, h: 4 }
-
-  - type: 'timeseries'
-    title: 'Pipeline Errors'
+    title: 'Receiver Failures & Refusals'
     theme: 'roma'
-    query: name=~"otelcol_(receiver_refused|exporter_send_failed)_(spans|metrics|logs)" | summarize sum(value) by bin_auto(timestamp), name
+    description: 'Refused = backpressure (queue full); failed = malformed or erroring data. Either means telemetry loss at the door.'
+    query: metrics | where metric_name in ("otelcol_receiver_refused_spans", "otelcol_receiver_refused_log_records", "otelcol_receiver_refused_metric_points", "otelcol_receiver_failed_spans", "otelcol_receiver_failed_log_records", "otelcol_receiver_failed_metric_points") | summarize range(value) by bin_auto(timestamp), metric_name
+    unit: items
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'
-    title: 'Memory Usage (MB)'
-    query: name=="otelcol_process_memory_rss" | summarize avg(value) / 1048576 by bin_auto(timestamp)
+    title: 'Exported by Signal'
+    query: metrics | where metric_name in ("otelcol_exporter_sent_spans", "otelcol_exporter_sent_log_records", "otelcol_exporter_sent_metric_points") | summarize range(value) by bin_auto(timestamp), metric_name
+    unit: items
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Export Failures'
+    theme: 'roma'
+    description: 'send_failed after retries = data dropped; enqueue_failed = queue overflow before sending.'
+    query: metrics | where metric_name in ("otelcol_exporter_send_failed_spans", "otelcol_exporter_send_failed_log_records", "otelcol_exporter_send_failed_metric_points", "otelcol_exporter_enqueue_failed_spans", "otelcol_exporter_enqueue_failed_log_records", "otelcol_exporter_enqueue_failed_metric_points") | summarize range(value) by bin_auto(timestamp), metric_name
+    unit: items
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries_line'
+    title: 'Queue Size vs Capacity by Exporter'
+    description: 'Queue size approaching capacity precedes enqueue failures — scale the exporter or its destination.'
+    query: metrics | where metric_name in ("otelcol_exporter_queue_size", "otelcol_exporter_queue_capacity") | summarize avg(value) by bin_auto(timestamp), metric_name, attributes.exporter
+    unit: items
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Batch Send Triggers'
+    description: 'Mostly timeout-triggered batches with small sizes means the batch processor is underfilled.'
+    query: metrics | where metric_name in ("otelcol_processor_batch_batch_size_trigger_send", "otelcol_processor_batch_timeout_trigger_send") | summarize range(value) by bin_auto(timestamp), metric_name
+    unit: batches
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries_line'
+    title: 'Process Memory'
+    query: metrics | where metric_name in ("otelcol_process_memory_rss", "otelcol_process_runtime_heap_alloc_bytes") | summarize avg(value) / 1048576 by bin_auto(timestamp), metric_name
     unit: MB
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'
-    title: 'CPU Usage (%)'
-    query: name=="otelcol_process_cpu_seconds" | summarize rate(avg(value)) * 100 by bin_auto(timestamp)
-    unit: '%'
-    layout: { w: 6, h: 4 }
-
-  - type: 'timeseries'
-    title: 'Queue Size'
-    query: name=~"otelcol_exporter_queue_size" | summarize avg(value) by bin_auto(timestamp), attributes.exporter
-    layout: { w: 6, h: 4 }
-
-  - type: 'timeseries'
-    title: 'Batch Processing'
-    query: name=~"otelcol_processor_batch_.*_send" | summarize rate(sum(value)) by bin_auto(timestamp), name
-    layout: { w: 6, h: 4 }
-
-  - type: 'timeseries'
-    title: 'gRPC Connections'
-    query: name=="otelcol_grpc_io_server_completed_rpcs" | summarize rate(sum(value)) by bin_auto(timestamp), attributes.grpc_method
+    title: 'CPU Time'
+    query: metrics | where metric_name == "otelcol_process_cpu_seconds" | summarize range(value) by bin_auto(timestamp)
+    unit: s
     layout: { w: 6, h: 4 }

@@ -1,71 +1,96 @@
 title: Docker Containers
 icon: docker
 preview: /public/assets/svgs/screens/http-stats.svg
-description: Monitor Docker container performance, resource usage, network traffic, and health status
+description: Per-container CPU, memory, network, and block I/O (OpenTelemetry docker_stats receiver)
 refresh_interval: 60s
+tags: [infrastructure]
+discovery_metrics:
+  - 'container.blockio.'
+  - 'container.cpu.usage.total'
+  - 'container.memory.percent'
 widgets:
   - type: group
     title: Overview
-    layout: { w: 6, h: 5 }
+    layout: { w: 12, h: 3 }
     children:
       - type: 'timeseries_stat'
-        title: 'Running Containers'
+        title: 'Containers Reporting'
         icon: server
-        query: name=="container.status" AND attributes.container.status=="running" | summarize count(distinct(attributes.container.id)) by bin_auto(timestamp)
+        query: metrics | where metric_name == "container.cpu.utilization" | summarize dcount(resource.container.name) by bin_auto(timestamp)
         unit: containers
         eager: true
-        layout: { w: 7, h: 2 }
+        layout: { w: 3, h: 2 }
 
       - type: 'stat'
-        title: 'Total Images'
-        icon: folders
-        query: name=="docker.images.total" | summarize last(value)
-        unit: images
+        title: 'Avg CPU'
+        icon: chart-simple
+        query: metrics | where metric_name == "container.cpu.utilization" | summarize avg(value) * 100
+        unit: '%'
         eager: true
-        layout: { w: 5, h: 2 }
+        layout: { w: 3, h: 2 }
 
-  - type: 'timeseries'
-    title: 'Container CPU Usage (%)'
-    query: name=="container.cpu.usage.total" | summarize avg(value) * 100 by bin_auto(timestamp), attributes.container.name
+      - type: 'stat'
+        title: 'Avg Memory'
+        icon: server
+        query: metrics | where metric_name == "container.memory.percent" | summarize avg(value)
+        unit: '%'
+        eager: true
+        layout: { w: 3, h: 2 }
+
+      - type: 'stat'
+        title: 'Memory Used (all containers, avg)'
+        icon: database
+        query: metrics | where metric_name == "container.memory.usage.total" | summarize avg(value) / 1048576
+        unit: MB
+        eager: true
+        layout: { w: 3, h: 2 }
+
+  - type: 'timeseries_line'
+    title: 'CPU by Container'
+    query: metrics | where metric_name == "container.cpu.utilization" | summarize avg(value) * 100 by bin_auto(timestamp), resource.container.name
     unit: '%'
     layout: { w: 6, h: 4 }
 
-  - type: 'timeseries'
-    title: 'Container Memory Usage (MB)'
-    query: name=="container.memory.usage" | summarize avg(value) / 1048576 by bin_auto(timestamp), attributes.container.name
+  - type: 'timeseries_line'
+    title: 'Memory % of Limit by Container'
+    description: 'Containers near 100% are about to be OOM-killed.'
+    query: metrics | where metric_name == "container.memory.percent" | summarize avg(value) by bin_auto(timestamp), resource.container.name
+    unit: '%'
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries_line'
+    title: 'Memory Usage by Container'
+    query: metrics | where metric_name == "container.memory.usage.total" | summarize avg(value) / 1048576 by bin_auto(timestamp), resource.container.name
     unit: MB
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'
-    title: 'Network I/O (MB/s)'
-    query: name=~"container.network.(rx|tx).bytes" | summarize rate(sum(value)) / 1048576 by bin_auto(timestamp), name, attributes.container.name
-    unit: MB/s
+    title: 'Network Received by Container'
+    query: metrics | where metric_name == "container.network.io.usage.rx_bytes" | summarize range(value) / 1048576 by bin_auto(timestamp), resource.container.name
+    unit: MB
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'
-    title: 'Disk I/O (MB/s)'
-    query: name=~"container.disk.io.(read|write).bytes" | summarize rate(sum(value)) / 1048576 by bin_auto(timestamp), name, attributes.container.name
-    unit: MB/s
+    title: 'Network Transmitted by Container'
+    query: metrics | where metric_name == "container.network.io.usage.tx_bytes" | summarize range(value) / 1048576 by bin_auto(timestamp), resource.container.name
+    unit: MB
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'
-    title: 'Container Restart Count'
+    title: 'Dropped Packets'
     theme: 'roma'
-    query: name=="container.restarts" | summarize sum(value) by bin_auto(timestamp), attributes.container.name
+    query: metrics | where metric_name in ("container.network.io.usage.rx_dropped", "container.network.io.usage.tx_dropped") | summarize range(value) by bin_auto(timestamp), metric_name
+    unit: packets
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'
-    title: 'Container States'
-    query: name=="container.status" | summarize count() by bin_auto(timestamp), attributes.container.status
+    title: 'Block I/O by Operation'
+    query: metrics | where metric_name == "container.blockio.io_service_bytes_recursive" | summarize range(value) / 1048576 by bin_auto(timestamp), attributes.operation
+    unit: MB
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'
-    title: 'Memory Limit Usage (%)'
-    query: name=="container.memory.usage" AND name=="container.memory.limit" | summarize (avg(container.memory.usage) / avg(container.memory.limit)) * 100 by bin_auto(timestamp), attributes.container.name
-    unit: '%'
-    layout: { w: 6, h: 4 }
-
-  - type: 'timeseries'
-    title: 'Container Health Status'
-    query: name=="container.health.status" | summarize count() by bin_auto(timestamp), attributes.health.status
+    title: 'CPU Time (kernel vs user)'
+    query: metrics | where metric_name in ("container.cpu.usage.kernelmode", "container.cpu.usage.usermode") | summarize range(value) / 1000000000 by bin_auto(timestamp), metric_name
+    unit: s
     layout: { w: 6, h: 4 }

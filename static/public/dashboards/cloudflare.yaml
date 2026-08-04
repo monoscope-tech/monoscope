@@ -11,7 +11,7 @@ widgets:
       - type: 'timeseries_stat'
         title: 'Total Requests'
         icon: list-tree
-        query: attributes.service.name=="cloudflare" OR attributes.http.cloudflare.ray_id != null | summarize count() by bin_auto(timestamp)
+        query: attributes.service.name=="cloudflare" or attributes.http.cloudflare.ray_id != null | summarize count() by bin_auto(timestamp)
         unit: reqs
         eager: true
         layout: { w: 7, h: 2 }
@@ -19,7 +19,7 @@ widgets:
       - type: 'stat'
         title: 'Cache Hit Rate'
         icon: chart-simple
-        query: attributes.service.name=="cloudflare" AND attributes.cache.status != null | summarize count() by attributes.cache.status | where attributes.cache.status=="HIT" | summarize (count() / sum(count())) * 100
+        query: attributes.service.name=="cloudflare" and attributes.cache.status != null | summarize round(countif(attributes.cache.status == "HIT") * 100.0 / count(), 2)
         unit: '%'
         eager: true
         layout: { w: 5, h: 2 }
@@ -56,7 +56,7 @@ widgets:
 
   - type: 'timeseries'
     title: 'Requests by Country'
-    query: attributes.service.name=="cloudflare" AND attributes.client.country != null | summarize count() by bin_auto(timestamp), attributes.client.country | top 10 by count()
+    query: attributes.service.name=="cloudflare" and attributes.client.country != null | summarize count() by bin_auto(timestamp), attributes.client.country
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'
@@ -67,5 +67,5 @@ widgets:
   - type: 'timeseries'
     title: 'Edge vs Origin Errors'
     theme: 'roma'
-    query: 'attributes.service.name=="cloudflare" AND attributes.http.response.status_code >= 500.0 | summarize count() by bin_auto(timestamp), attributes.origin.status != null ? "Origin Error" : "Edge Error"'
+    query: 'attributes.service.name=="cloudflare" and attributes.http.response.status_code >= 500 | extend error_source = case(attributes.origin.status != null, "Origin Error", "Edge Error") | summarize count() by bin_auto(timestamp), error_source'
     layout: { w: 6, h: 4 }

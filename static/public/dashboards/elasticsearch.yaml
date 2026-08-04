@@ -1,82 +1,107 @@
-title: Elasticsearch Cluster
+title: Elasticsearch
 icon: elasticsearch
 preview: /public/assets/svgs/screens/http-stats.svg
-description: Monitor Elasticsearch cluster health, indexing performance, search latency, and resource usage
+description: Cluster health, shard states, node operations, thread pools, and JVM heap (OpenTelemetry elasticsearch receiver)
 refresh_interval: 60s
+tags: [database]
+discovery_metrics:
+  - 'elasticsearch.'
 widgets:
   - type: group
     title: Cluster Overview
-    layout: { w: 6, h: 5 }
+    layout: { w: 12, h: 3 }
     children:
       - type: 'timeseries_stat'
-        title: 'Search Rate'
-        icon: chart-line
-        query: name=="elasticsearch.indices.search.query_total" | summarize rate(sum(value)) by bin_auto(timestamp)
-        unit: searches/s
+        title: 'Nodes'
+        icon: server
+        query: metrics | where metric_name == "elasticsearch.cluster.nodes" | summarize avg(value) by bin_auto(timestamp)
+        unit: nodes
         eager: true
-        layout: { w: 4, h: 2 }
+        layout: { w: 3, h: 2 }
 
       - type: 'stat'
-        title: 'Cluster Health'
-        icon: shield-check
-        query: 'name=="elasticsearch.cluster.health.status" | summarize last(value) == 0 ? "Green" : (last(value) == 1 ? "Yellow" : "Red")'
-        unit: status
-        eager: true
-        layout: { w: 4, h: 2 }
-
-      - type: 'stat'
-        title: 'Active Shards'
+        title: 'Data Nodes'
         icon: database
-        query: name=="elasticsearch.cluster.health.active_shards" | summarize sum(value)
+        query: metrics | where metric_name == "elasticsearch.cluster.data_nodes" | summarize avg(value)
+        unit: nodes
+        eager: true
+        layout: { w: 3, h: 2 }
+
+      - type: 'stat'
+        title: 'Unassigned Shards'
+        icon: alert-triangle
+        query: metrics | where metric_name == "elasticsearch.cluster.shards" and attributes.state == "unassigned" | summarize avg(value)
         unit: shards
         eager: true
-        layout: { w: 4, h: 2 }
+        layout: { w: 3, h: 2 }
 
-  - type: 'timeseries'
-    title: 'Search & Index Operations'
-    query: name=~"elasticsearch.indices.(search.query_total|indexing.index_total)" | summarize rate(sum(value)) by bin_auto(timestamp), name
-    unit: ops/s
+      - type: 'stat'
+        title: 'Pending Tasks'
+        icon: clock
+        query: metrics | where metric_name == "elasticsearch.cluster.pending_tasks" | summarize avg(value)
+        unit: tasks
+        eager: true
+        layout: { w: 3, h: 2 }
+
+  - type: 'timeseries_line'
+    title: 'Cluster Health Status'
+    description: 'The count in each status; a non-zero red/yellow series is the alarm signal.'
+    query: metrics | where metric_name == "elasticsearch.cluster.health" | summarize avg(value) by bin_auto(timestamp), attributes.status
+    unit: status
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries_line'
-    title: 'Search Latency (ms)'
-    hide_subtitle: true
-    query: name=="elasticsearch.indices.search.query_time" AND name=="elasticsearch.indices.search.query_total" | summarize (rate(sum(elasticsearch.indices.search.query_time)) / rate(sum(elasticsearch.indices.search.query_total))) by bin_auto(timestamp)
+    title: 'Shards by State'
+    query: metrics | where metric_name == "elasticsearch.cluster.shards" | summarize avg(value) by bin_auto(timestamp), attributes.state
+    unit: shards
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Operations by Type'
+    query: metrics | where metric_name == "elasticsearch.node.operations.completed" | summarize range(value) by bin_auto(timestamp), attributes.operation
+    unit: ops
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Operation Time by Type'
+    query: metrics | where metric_name == "elasticsearch.node.operations.time" | summarize range(value) by bin_auto(timestamp), attributes.operation
     unit: ms
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'
-    title: 'JVM Heap Usage (%)'
-    query: name=="elasticsearch.jvm.memory.heap.used.percent" | summarize avg(value) by bin_auto(timestamp), attributes.node
-    unit: '%'
+    title: 'Thread Pool Rejections'
+    theme: 'roma'
+    description: 'Rejected tasks mean a saturated pool — writes or searches are being turned away.'
+    query: metrics | where metric_name == "elasticsearch.node.thread_pool.tasks.finished" and attributes.state == "rejected" | summarize range(value) by bin_auto(timestamp), attributes.thread_pool_name
+    unit: tasks
     layout: { w: 6, h: 4 }
 
-  - type: 'timeseries'
-    title: 'Document Count'
-    query: name=="elasticsearch.indices.docs.count" | summarize sum(value) by bin_auto(timestamp), attributes.index
+  - type: 'timeseries_line'
+    title: 'Thread Pool Queues'
+    query: metrics | where metric_name == "elasticsearch.node.thread_pool.tasks.queued" | summarize avg(value) by bin_auto(timestamp), attributes.thread_pool_name
+    unit: tasks
     layout: { w: 6, h: 4 }
 
-  - type: 'timeseries'
-    title: 'Index Size (GB)'
-    query: name=="elasticsearch.indices.store.size" | summarize sum(value) / 1073741824 by bin_auto(timestamp), attributes.index
+  - type: 'timeseries_line'
+    title: 'JVM Heap Used vs Max'
+    query: metrics | where metric_name in ("jvm.memory.heap.used", "jvm.memory.heap.max") | summarize avg(value) / 1073741824 by bin_auto(timestamp), metric_name
     unit: GB
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'
-    title: 'Bulk Rejections'
-    theme: 'roma'
-    query: name=~"elasticsearch.thread_pool.bulk.rejected" | summarize rate(sum(value)) by bin_auto(timestamp)
-    unit: rejections/s
+    title: 'GC Time'
+    query: metrics | where metric_name == "jvm.gc.collections.elapsed" | summarize range(value) by bin_auto(timestamp), attributes.name
+    unit: ms
     layout: { w: 6, h: 4 }
 
-  - type: 'timeseries'
-    title: 'CPU Usage (%)'
-    query: name=="elasticsearch.os.cpu.percent" | summarize avg(value) by bin_auto(timestamp), attributes.node
-    unit: '%'
+  - type: 'timeseries_line'
+    title: 'Documents (live vs deleted)'
+    query: metrics | where metric_name == "elasticsearch.node.documents" | summarize avg(value) by bin_auto(timestamp), attributes.state
+    unit: docs
     layout: { w: 6, h: 4 }
 
-  - type: 'timeseries'
-    title: 'Network Traffic (MB/s)'
-    query: name=~"elasticsearch.transport.(rx|tx)_size" | summarize rate(sum(value)) / 1048576 by bin_auto(timestamp), name
-    unit: MB/s
+  - type: 'timeseries_line'
+    title: 'Disk Available per Node'
+    query: metrics | where metric_name == "elasticsearch.node.fs.disk.available" | summarize avg(value) / 1073741824 by bin_auto(timestamp), resource.elasticsearch.node.name
+    unit: GB
     layout: { w: 6, h: 4 }

@@ -67,6 +67,8 @@ module Models.Telemetry.Telemetry (
   getMetricChartListData,
   getTraceShapes,
   getMetricServiceNames,
+  getMetricNames,
+  projectsWithRecentMetrics,
   resourceServiceName,
   metricServiceNameFromResource,
   SpanEvent (..),
@@ -873,6 +875,16 @@ getMetricChartListData pid sourceM prefixM = do
 getMetricServiceNames :: DB es => Projects.ProjectId -> Eff es [Text]
 getMetricServiceNames pid =
   Hasql.interp [HI.sql| SELECT DISTINCT service_name FROM otel_metrics_meta WHERE project_id = #{unUUIDId pid}|]
+
+
+getMetricNames :: DB es => Projects.ProjectId -> Eff es [Text]
+getMetricNames pid =
+  Hasql.interp [HI.sql| SELECT DISTINCT metric_name FROM otel_metrics_meta WHERE project_id = #{unUUIDId pid}|]
+
+
+projectsWithRecentMetrics :: DB es => UTCTime -> Eff es [Projects.ProjectId]
+projectsWithRecentMetrics since =
+  Hasql.interp [HI.sql| SELECT DISTINCT project_id FROM otel_metrics_meta WHERE last_seen_at >= #{since}|]
 
 
 metricServiceNameFromResource :: Text -> AE.Value -> Text

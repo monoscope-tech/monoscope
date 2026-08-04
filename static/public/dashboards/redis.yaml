@@ -1,81 +1,126 @@
-title: Redis Cache
+title: Redis
 icon: redis
 preview: /public/assets/svgs/screens/http-stats.svg
-description: Monitor Redis performance, memory usage, command statistics, and replication health
+description: Redis health — throughput, hit rate, memory & fragmentation, evictions, clients, and persistence risk (OpenTelemetry redis receiver)
 refresh_interval: 60s
+tags: [database]
+discovery_metrics:
+  - 'redis.'
 widgets:
   - type: group
     title: Overview
-    layout: { w: 6, h: 5 }
+    layout: { w: 12, h: 3 }
     children:
       - type: 'timeseries_stat'
-        title: 'Commands/sec'
+        title: 'Ops/sec'
         icon: chart-line
-        query: name=="redis.commands.processed" | summarize rate(sum(value)) by bin_auto(timestamp)
-        unit: cmd/s
+        query: metrics | where metric_name == "redis.commands" | summarize avg(value) by bin_auto(timestamp)
+        unit: ops/s
         eager: true
-        layout: { w: 4, h: 2 }
-
-      - type: 'stat'
-        title: 'Hit Rate'
-        icon: chart-simple
-        query: name=="redis.keyspace.hits" AND name=="redis.keyspace.misses" | summarize (sum(redis.keyspace.hits) / (sum(redis.keyspace.hits) + sum(redis.keyspace.misses))) * 100
-        unit: '%'
-        eager: true
-        layout: { w: 4, h: 2 }
+        layout: { w: 3, h: 2 }
 
       - type: 'stat'
         title: 'Connected Clients'
         icon: user-plus
-        query: name=="redis.clients.connected" | summarize avg(value)
+        query: metrics | where metric_name == "redis.clients.connected" | summarize avg(value)
         unit: clients
         eager: true
-        layout: { w: 4, h: 2 }
+        layout: { w: 3, h: 2 }
+
+      - type: 'stat'
+        title: 'Memory Used'
+        icon: server
+        query: metrics | where metric_name == "redis.memory.used" | summarize avg(value) / 1048576
+        unit: MB
+        eager: true
+        layout: { w: 3, h: 2 }
+
+      - type: 'stat'
+        title: 'Fragmentation Ratio'
+        icon: chart-simple
+        description: 'RSS / used memory. Above ~1.5 means the allocator is wasting memory.'
+        query: metrics | where metric_name == "redis.memory.fragmentation_ratio" | summarize avg(value)
+        unit: ratio
+        eager: true
+        layout: { w: 3, h: 2 }
 
   - type: 'timeseries'
-    title: 'Operations per Second'
-    query: name=~"redis.commands.(get|set|del|exists)" | summarize rate(sum(value)) by bin_auto(timestamp), name
-    unit: ops/s
+    title: 'Keyspace Hits vs Misses'
+    description: 'Misses growing against hits means the working set no longer fits or TTLs are too aggressive.'
+    query: metrics | where metric_name in ("redis.keyspace.hits", "redis.keyspace.misses") | summarize range(value) by bin_auto(timestamp), metric_name
+    unit: keys
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'
-    title: 'Memory Usage (MB)'
-    query: name=~"redis.memory.(used|rss|peak)" | summarize avg(value) / 1048576 by bin_auto(timestamp), name
+    title: 'Evicted vs Expired Keys'
+    theme: 'roma'
+    description: 'Evictions mean maxmemory pressure — Redis is dropping live data.'
+    query: metrics | where metric_name in ("redis.keys.evicted", "redis.keys.expired") | summarize range(value) by bin_auto(timestamp), metric_name
+    unit: keys
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries_line'
+    title: 'Memory'
+    query: metrics | where metric_name in ("redis.memory.used", "redis.memory.rss", "redis.memory.peak") | summarize avg(value) / 1048576 by bin_auto(timestamp), metric_name
     unit: MB
     layout: { w: 6, h: 4 }
 
-  - type: 'timeseries'
-    title: 'Cache Hit/Miss Rate'
-    query: name=~"redis.keyspace.(hits|misses)" | summarize rate(sum(value)) by bin_auto(timestamp), name
-    unit: ops/s
+  - type: 'timeseries_line'
+    title: 'Clients (connected vs blocked)'
+    description: 'Blocked clients are stuck in BLPOP/WAIT — a saturation or slow-consumer signal.'
+    query: metrics | where metric_name in ("redis.clients.connected", "redis.clients.blocked") | summarize avg(value) by bin_auto(timestamp), metric_name
+    unit: clients
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'
-    title: 'Key Evictions'
-    theme: 'roma'
-    query: name=="redis.keys.evicted" | summarize rate(sum(value)) by bin_auto(timestamp)
-    unit: keys/s
+    title: 'Connections (received vs rejected)'
+    query: metrics | where metric_name in ("redis.connections.received", "redis.connections.rejected") | summarize range(value) by bin_auto(timestamp), metric_name
+    unit: connections
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'
-    title: 'Network I/O (MB/s)'
-    query: name=~"redis.net.(input|output)" | summarize rate(sum(value)) / 1048576 by bin_auto(timestamp), name
-    unit: MB/s
+    title: 'Network I/O'
+    query: metrics | where metric_name in ("redis.net.input", "redis.net.output") | summarize range(value) / 1048576 by bin_auto(timestamp), metric_name
+    unit: MB
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries_line'
+    title: 'Keys per Database'
+    query: metrics | where metric_name == "redis.db.keys" | summarize avg(value) by bin_auto(timestamp), attributes.db
+    unit: keys
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'
-    title: 'Database Keys'
-    query: name=="redis.db.keys" | summarize sum(value) by bin_auto(timestamp), attributes.db
+    title: 'CPU Time'
+    query: metrics | where metric_name == "redis.cpu.time" | summarize range(value) by bin_auto(timestamp), attributes.state
+    unit: s
     layout: { w: 6, h: 4 }
 
-  - type: 'timeseries'
-    title: 'Command Latency (μs)'
-    query: name=~"redis.command.latency.*" | summarize avg(value) by bin_auto(timestamp), name
-    unit: μs
+  - type: 'timeseries_line'
+    title: 'Unsaved Changes Since Last Save'
+    description: 'Writes at risk if the process dies before the next RDB save.'
+    query: metrics | where metric_name == "redis.rdb.changes_since_last_save" | summarize avg(value) by bin_auto(timestamp)
+    unit: changes
     layout: { w: 6, h: 4 }
 
-  - type: 'timeseries'
-    title: 'Replication Lag'
-    query: name=="redis.replication.lag" | summarize avg(value) by bin_auto(timestamp), attributes.replica
-    unit: seconds
+  - type: 'timeseries_line'
+    title: 'Last Fork Duration'
+    description: 'Long forks (RDB save / AOF rewrite) stall the event loop on large datasets.'
+    query: metrics | where metric_name == "redis.latest_fork" | summarize avg(value) / 1000 by bin_auto(timestamp)
+    unit: ms
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries_line'
+    title: 'Connected Replicas'
+    query: metrics | where metric_name == "redis.slaves.connected" | summarize avg(value) by bin_auto(timestamp)
+    unit: replicas
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries_line'
+    title: 'Command Duration from Traces'
+    description: 'Latency percentiles of redis client spans (requires tracing instrumentation).'
+    hide_subtitle: true
+    summarize_by: max
+    query: attributes.db.system.name == "redis" and duration != null | summarize percentiles(duration / 1000000, 50, 75, 90, 95, 99) by bin_auto(timestamp)
+    unit: ms
     layout: { w: 6, h: 4 }

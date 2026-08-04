@@ -1,82 +1,125 @@
-title: MySQL Database
+title: MySQL
 icon: mysql
 preview: /public/assets/svgs/screens/http-stats.svg
-description: Monitor MySQL performance, query statistics, InnoDB metrics, and replication status
+description: MySQL health — threads, InnoDB buffer pool, row operations, locks, and temp-table pressure (OpenTelemetry mysql receiver)
 refresh_interval: 60s
+tags: [database]
+discovery_metrics:
+  - 'mysql.'
 widgets:
   - type: group
     title: Overview
-    layout: { w: 6, h: 5 }
+    layout: { w: 12, h: 3 }
     children:
       - type: 'timeseries_stat'
-        title: 'Queries/sec'
-        icon: database
-        query: name=="mysql.queries" | summarize rate(sum(value)) by bin_auto(timestamp)
-        unit: qps
+        title: 'Threads Connected'
+        icon: swap
+        query: metrics | where metric_name == "mysql.threads" and attributes.kind == "connected" | summarize avg(value) by bin_auto(timestamp)
+        unit: threads
         eager: true
-        layout: { w: 4, h: 2 }
+        layout: { w: 3, h: 2 }
 
       - type: 'stat'
-        title: 'Connections'
-        icon: swap
-        query: name=="mysql.threads.connected" | summarize avg(value)
-        unit: connections
+        title: 'Threads Running'
+        icon: activity
+        query: metrics | where metric_name == "mysql.threads" and attributes.kind == "running" | summarize avg(value)
+        unit: threads
         eager: true
-        layout: { w: 4, h: 2 }
+        layout: { w: 3, h: 2 }
+
+      - type: 'stat'
+        title: 'Buffer Pool Size'
+        icon: database
+        query: metrics | where metric_name == "mysql.buffer_pool.limit" | summarize avg(value) / 1048576
+        unit: MB
+        eager: true
+        layout: { w: 3, h: 2 }
 
       - type: 'stat'
         title: 'Uptime'
         icon: clock
-        query: name=="mysql.uptime" | summarize last(value) / 3600
-        unit: hours
+        query: metrics | where metric_name == "mysql.uptime" | summarize max(value) / 86400
+        unit: days
         eager: true
-        layout: { w: 4, h: 2 }
+        layout: { w: 3, h: 2 }
 
   - type: 'timeseries'
-    title: 'Query Types'
-    query: name=~"mysql.handlers.(read.*|write|update|delete)" | summarize rate(sum(value)) by bin_auto(timestamp), name
-    unit: ops/s
-    layout: { w: 6, h: 4 }
-
-  - type: 'timeseries'
-    title: 'InnoDB Buffer Pool Usage (%)'
-    query: name=="mysql.innodb.buffer_pool.pages.data" AND name=="mysql.innodb.buffer_pool.pages.total" | summarize (sum(mysql.innodb.buffer_pool.pages.data) / sum(mysql.innodb.buffer_pool.pages.total)) * 100 by bin_auto(timestamp)
-    unit: '%'
+    title: 'Row Operations'
+    query: metrics | where metric_name == "mysql.row_operations" | summarize range(value) by bin_auto(timestamp), attributes.operation
+    unit: rows
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries_line'
-    title: 'Query Response Time (ms)'
+    title: 'Threads by Kind'
+    query: metrics | where metric_name == "mysql.threads" | summarize avg(value) by bin_auto(timestamp), attributes.kind
+    unit: threads
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Buffer Pool I/O'
+    description: 'read_requests are logical reads; reads are cache misses hitting disk. A healthy pool keeps reads near zero.'
+    query: metrics | where metric_name == "mysql.buffer_pool.operations" and attributes.operation in ("read_requests", "reads", "write_requests", "wait_free") | summarize range(value) by bin_auto(timestamp), attributes.operation
+    unit: ops
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries_line'
+    title: 'Buffer Pool Pages'
+    query: metrics | where metric_name == "mysql.buffer_pool.pages" | summarize avg(value) by bin_auto(timestamp), attributes.kind
+    unit: pages
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Table Locks (immediate vs waited)'
+    theme: 'roma'
+    description: 'Waited locks are queries blocked on table locks — a contention signal.'
+    query: metrics | where metric_name == "mysql.locks" | summarize range(value) by bin_auto(timestamp), attributes.kind
+    unit: locks
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'InnoDB Row Locks'
+    theme: 'roma'
+    query: metrics | where metric_name == "mysql.row_locks" | summarize range(value) by bin_auto(timestamp), attributes.kind
+    unit: locks
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Temporary Resources'
+    description: 'disk_tables are temp tables spilled to disk — a sort/join memory pressure signal.'
+    query: metrics | where metric_name == "mysql.tmp_resources" | summarize range(value) by bin_auto(timestamp), attributes.resource
+    unit: created
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Sorts'
+    query: metrics | where metric_name == "mysql.sorts" | summarize range(value) by bin_auto(timestamp), attributes.kind
+    unit: sorts
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Handler Reads'
+    description: 'read_rnd_next dominating read_key indicates full table scans instead of index use.'
+    query: metrics | where metric_name == "mysql.handlers" and attributes.kind in ("read_first", "read_key", "read_next", "read_rnd", "read_rnd_next") | summarize range(value) by bin_auto(timestamp), attributes.kind
+    unit: ops
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Redo Log Operations'
+    query: metrics | where metric_name == "mysql.log_operations" | summarize range(value) by bin_auto(timestamp), attributes.operation
+    unit: ops
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Opened Resources'
+    query: metrics | where metric_name == "mysql.opened_resources" | summarize range(value) by bin_auto(timestamp), attributes.kind
+    unit: opened
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries_line'
+    title: 'Query Duration from Traces'
+    description: 'Latency percentiles of mysql client spans (requires DB tracing instrumentation).'
     hide_subtitle: true
     summarize_by: max
-    query: attributes.db.system=="mysql" | summarize percentiles(attributes.db.duration / 1e3, 50, 75, 90, 95) by bin_auto(timestamp)
-    layout: { w: 6, h: 4 }
-
-  - type: 'timeseries'
-    title: 'Slow Queries'
-    theme: 'roma'
-    query: name=="mysql.slow_queries" | summarize rate(sum(value)) by bin_auto(timestamp)
-    unit: queries/s
-    layout: { w: 6, h: 4 }
-
-  - type: 'timeseries'
-    title: 'Thread Activity'
-    query: name=~"mysql.threads.(running|cached|created)" | summarize avg(value) by bin_auto(timestamp), name
-    layout: { w: 6, h: 4 }
-
-  - type: 'timeseries'
-    title: 'Table Locks'
-    query: name=~"mysql.locks.(immediate|waited)" | summarize rate(sum(value)) by bin_auto(timestamp), name
-    unit: locks/s
-    layout: { w: 6, h: 4 }
-
-  - type: 'timeseries'
-    title: 'Replication Lag'
-    query: name=="mysql.replication.seconds_behind_source" | summarize avg(value) by bin_auto(timestamp), attributes.source
-    unit: seconds
-    layout: { w: 6, h: 4 }
-
-  - type: 'timeseries'
-    title: 'InnoDB I/O (pages/s)'
-    query: name=~"mysql.innodb.pages.(read|written)" | summarize rate(sum(value)) by bin_auto(timestamp), name
-    unit: pages/s
+    query: attributes.db.system.name == "mysql" and duration != null | summarize percentiles(duration / 1000000, 50, 75, 90, 95, 99) by bin_auto(timestamp)
+    unit: ms
     layout: { w: 6, h: 4 }

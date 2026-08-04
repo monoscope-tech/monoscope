@@ -1,79 +1,119 @@
-title: Kubernetes Cluster
+title: Kubernetes
 icon: kubernetes
 preview: /public/assets/svgs/screens/http-stats.svg
-description: Monitor Kubernetes cluster health, pod status, resource usage, and deployment metrics
+description: Cluster health — pod phases, workload availability, node & pod resource usage, restarts, network, and volumes (kubeletstats + k8s_cluster receivers)
 refresh_interval: 60s
+tags: [infrastructure]
+discovery_metrics:
+  - 'k8s.'
 widgets:
   - type: group
     title: Cluster Overview
-    layout: { w: 6, h: 5 }
+    layout: { w: 12, h: 3 }
     children:
       - type: 'timeseries_stat'
-        title: 'Total Pods'
-        icon: server
-        query: name=="k8s.pod.phase" | summarize count(distinct(attributes.k8s.pod.uid)) by bin_auto(timestamp)
-        unit: pods
-        eager: true
-        layout: { w: 4, h: 2 }
-
-      - type: 'stat'
         title: 'Running Pods'
         icon: circle-play
-        query: name=="k8s.pod.phase" AND attributes.phase=="Running" | summarize count(distinct(attributes.k8s.pod.uid))
+        query: metrics | where metric_name == "k8s.pod.phase" and value == 2 | summarize dcount(resource.k8s.pod.uid) by bin_auto(timestamp)
         unit: pods
         eager: true
-        layout: { w: 4, h: 2 }
+        layout: { w: 3, h: 2 }
 
       - type: 'stat'
-        title: 'Node Count'
+        title: 'Pending Pods'
+        icon: clock
+        query: metrics | where metric_name == "k8s.pod.phase" and value == 1 | summarize dcount(resource.k8s.pod.uid)
+        unit: pods
+        eager: true
+        layout: { w: 3, h: 2 }
+
+      - type: 'stat'
+        title: 'Nodes'
         icon: server
-        query: name=="k8s.node.condition" | summarize count(distinct(attributes.k8s.node.name))
+        query: metrics | where metric_name == "k8s.node.cpu.usage" | summarize dcount(resource.k8s.node.name)
         unit: nodes
         eager: true
-        layout: { w: 4, h: 2 }
+        layout: { w: 3, h: 2 }
+
+      - type: 'stat'
+        title: 'Namespaces'
+        icon: folders
+        query: metrics | where metric_name == "k8s.pod.phase" | summarize dcount(resource.k8s.namespace.name)
+        unit: namespaces
+        eager: true
+        layout: { w: 3, h: 2 }
 
   - type: 'timeseries'
-    title: 'Pod Phase Distribution'
-    query: name=="k8s.pod.phase" | summarize count() by bin_auto(timestamp), attributes.phase
+    title: 'Pods by Phase'
+    query: metrics | where metric_name == "k8s.pod.phase" | extend phase = case(value == 1, "Pending", value == 2, "Running", value == 3, "Succeeded", value == 4, "Failed", "Unknown") | summarize dcount(resource.k8s.pod.uid) by bin_auto(timestamp), phase
+    unit: pods
     layout: { w: 6, h: 4 }
 
-  - type: 'timeseries'
-    title: 'CPU Usage by Namespace (cores)'
-    query: name=="k8s.pod.cpu.usage" | summarize sum(value) by bin_auto(timestamp), attributes.k8s.namespace.name
+  - type: 'timeseries_line'
+    title: 'Container Restarts by Namespace'
+    theme: 'roma'
+    description: 'Cumulative restart counts — a climbing line is a crash-looping workload.'
+    query: metrics | where metric_name == "k8s.container.restarts" | summarize max(value) by bin_auto(timestamp), resource.k8s.namespace.name
+    unit: restarts
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries_line'
+    title: 'Node CPU Usage'
+    query: metrics | where metric_name == "k8s.node.cpu.usage" | summarize avg(value) by bin_auto(timestamp), resource.k8s.node.name
     unit: cores
     layout: { w: 6, h: 4 }
 
-  - type: 'timeseries'
-    title: 'Memory Usage by Namespace (GB)'
-    query: name=="k8s.pod.memory.usage" | summarize sum(value) / 1073741824 by bin_auto(timestamp), attributes.k8s.namespace.name
+  - type: 'timeseries_line'
+    title: 'Node Memory (working set)'
+    query: metrics | where metric_name == "k8s.node.memory.working_set" | summarize avg(value) / 1073741824 by bin_auto(timestamp), resource.k8s.node.name
     unit: GB
     layout: { w: 6, h: 4 }
 
+  - type: 'timeseries_line'
+    title: 'Avg Pod CPU by Namespace'
+    query: metrics | where metric_name == "k8s.pod.cpu.usage" | summarize avg(value) by bin_auto(timestamp), resource.k8s.namespace.name
+    unit: cores
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries_line'
+    title: 'Avg Pod Memory by Namespace'
+    query: metrics | where metric_name == "k8s.pod.memory.working_set" | summarize avg(value) / 1048576 by bin_auto(timestamp), resource.k8s.namespace.name
+    unit: MB
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries_line'
+    title: 'Available Replicas by Deployment'
+    query: metrics | where metric_name == "k8s.deployment.available" | summarize avg(value) by bin_auto(timestamp), resource.k8s.deployment.name
+    unit: pods
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries_line'
+    title: 'Desired Replicas by Deployment'
+    query: metrics | where metric_name == "k8s.deployment.desired" | summarize avg(value) by bin_auto(timestamp), resource.k8s.deployment.name
+    unit: pods
+    layout: { w: 6, h: 4 }
+
   - type: 'timeseries'
-    title: 'Container Restart Count'
+    title: 'Pod Network I/O'
+    query: metrics | where metric_name == "k8s.pod.network.io" | summarize range(value) / 1048576 by bin_auto(timestamp), attributes.direction
+    unit: MB
+    layout: { w: 6, h: 4 }
+
+  - type: 'timeseries'
+    title: 'Pod Network Errors'
     theme: 'roma'
-    query: name=="k8s.container.restarts" | summarize sum(value) by bin_auto(timestamp), attributes.k8s.container.name, attributes.k8s.namespace.name
+    query: metrics | where metric_name == "k8s.pod.network.errors" | summarize range(value) by bin_auto(timestamp), attributes.direction
+    unit: errors
     layout: { w: 6, h: 4 }
 
-  - type: 'timeseries'
-    title: 'Network I/O (MB/s)'
-    query: name=~"k8s.pod.network.(rx|tx)" | summarize rate(sum(value)) / 1048576 by bin_auto(timestamp), name, attributes.k8s.namespace.name
-    unit: MB/s
+  - type: 'timeseries_line'
+    title: 'Node Filesystem Used'
+    query: metrics | where metric_name == "k8s.node.filesystem.usage" | summarize avg(value) / 1073741824 by bin_auto(timestamp), resource.k8s.node.name
+    unit: GB
     layout: { w: 6, h: 4 }
 
-  - type: 'timeseries'
-    title: 'Deployment Replicas'
-    query: name=="k8s.deployment.desired" | summarize avg(value) by bin_auto(timestamp), attributes.k8s.deployment.name
-    layout: { w: 6, h: 4 }
-
-  - type: 'timeseries'
-    title: 'Node CPU Utilization (%)'
-    query: name=="k8s.node.cpu.utilization" | summarize avg(value) * 100 by bin_auto(timestamp), attributes.k8s.node.name
-    unit: '%'
-    layout: { w: 6, h: 4 }
-
-  - type: 'timeseries'
-    title: 'Persistent Volume Usage (%)'
-    query: name=="k8s.volume.inodes.used" AND name=="k8s.volume.inodes" | summarize (sum(k8s.volume.inodes.used) / sum(k8s.volume.inodes)) * 100 by bin_auto(timestamp), attributes.k8s.persistentvolumeclaim.name
-    unit: '%'
+  - type: 'timeseries_line'
+    title: 'Volume Available by PVC'
+    query: metrics | where metric_name == "k8s.volume.available" | summarize avg(value) / 1073741824 by bin_auto(timestamp), resource.k8s.volume.name
+    unit: GB
     layout: { w: 6, h: 4 }

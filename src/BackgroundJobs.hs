@@ -196,6 +196,11 @@ data BgJobs
     -- silent dual-write loss ran ~9h undetected. Alerts go to the admin
     -- Discord webhook; the whole job is best-effort (never blocks ingestion).
     InfraHealthCheck UTCTime
+  | -- | Hourly: create integration dashboards (postgres, redis, k8s, …) for
+    -- projects whose ingested metrics match a template's @discovery_metrics@
+    -- prefixes. Once-ever per (project, template) via a marker table, so a
+    -- user deleting an auto-created dashboard is a respected opt-out.
+    DashboardsAutoProvision UTCTime
   | -- | Operator-triggered re-drive of the terminal parking topic
     -- (@<dlq>-parking@) back into the base DLQ so the (now-fixed) tiered
     -- replay re-attempts them. Reads up to @cap@ messages per run under a
@@ -285,6 +290,7 @@ processBackgroundJob :: Config.AuthContext -> BgJobs -> ATBackgroundCtx ()
 processBackgroundJob authCtx bgJob =
   case bgJob of
     GenerateOtelFacetsBatch pids timestamp -> generateOtelFacetsBatch pids timestamp
+    DashboardsAutoProvision scheduledTime -> autoProvisionDashboards scheduledTime
     NewAnomaly{projectId, createdAt, anomalyType, anomalyAction, targetHashes} -> newAnomalyJob projectId createdAt anomalyType anomalyAction (V.fromList targetHashes)
     InviteUserToProject userId projectId reciever projectTitle' ->
       whenJustM (Projects.userById userId) \user ->
@@ -1239,12 +1245,55 @@ runHourlyJob scheduledTime hour = do
   staleMetricsDeleted <- Hasql.interpExecute [HI.sql| DELETE FROM otel_metrics_meta WHERE last_seen_at < now() - interval '3 months' |]
   when (staleMetricsDeleted > 0) $ Log.logInfo "Cleaned up stale metrics metadata" ("deleted_count", AE.toJSON staleMetricsDeleted)
 
-  liftIO $ withResource ctx.jobsPool \conn ->
+  liftIO $ withResource ctx.jobsPool \conn -> do
     void $ createJob conn "background_jobs" BackgroundJobs.CompressReplaySessions
+    void $ createJob conn "background_jobs" $ BackgroundJobs.DashboardsAutoProvision scheduledTime
 
   checkFreeTierUsageNotifications activeProjects scheduledTime
 
   Log.logTrace "Completed hourly job scheduling for hour" ("hour", AE.toJSON hour)
+
+
+-- | Create dashboards from templates whose @discovery_metrics@ prefixes match
+-- metric names a project emitted recently. The marker table makes this
+-- once-ever per (project, template): existing manually-created dashboards are
+-- adopted (marked, not duplicated) and deletions are never re-created.
+autoProvisionDashboards :: UTCTime -> ATBackgroundCtx ()
+autoProvisionDashboards scheduledTime = do
+  templates <- filter (\t -> not $ null $ fromMaybe [] t.discoveryMetrics) <$> liftIO (Dashboards.readDashboardsFromDisk "static/public/dashboards")
+  unless (null templates) do
+    pids <- Telemetry.projectsWithRecentMetrics (addUTCTime (-3600) scheduledTime)
+    forM_ pids \pid -> do
+      metricNames <- Telemetry.getMetricNames pid
+      provisioned <- Dashboards.autoProvisionedTemplates pid
+      let matches t = maybe False (any \prefix -> any (T.isPrefixOf prefix) metricNames) t.discoveryMetrics
+          pending = [(t, file) | t <- templates, Just file <- [t.file], file `notElem` provisioned, matches t]
+      forM_ pending \(tpl, file) -> do
+        existing <- Dashboards.getDashboardByBaseTemplate pid file
+        when (isNothing existing) do
+          firstMemberM <- Hasql.interpOne [HI.sql| SELECT user_id FROM projects.project_members WHERE project_id = #{pid} AND deleted_at IS NULL ORDER BY created_at ASC LIMIT 1 |]
+          whenJust firstMemberM \(userId :: Projects.UserId) -> do
+            did <- UUIDId <$> UUID.genUUID
+            void
+              $ Dashboards.insert
+                Dashboards.DashboardVM
+                  { id = did
+                  , projectId = pid
+                  , createdAt = scheduledTime
+                  , updatedAt = scheduledTime
+                  , createdBy = userId
+                  , baseTemplate = Just file
+                  , schema = Nothing
+                  , starredSince = Nothing
+                  , homepageSince = Nothing
+                  , tags = V.fromList (fromMaybe [] tpl.tags)
+                  , title = fromMaybe file tpl.title
+                  , teams = V.empty
+                  , filePath = Nothing
+                  , fileSha = Nothing
+                  }
+            Log.logInfo "Auto-provisioned dashboard from detected metrics" (AE.object ["project_id" AE..= pid, "template" AE..= file])
+        void $ Dashboards.markAutoProvisioned pid file
 
 
 -- | For each active free-tier project, check usage and send system log + email at 80% and 100% thresholds.
