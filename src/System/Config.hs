@@ -308,6 +308,12 @@ instance Var LogLevel where
 type HostStatsKey = (Projects.ProjectId, Text, Text, Text, Text, Int)
 
 
+-- | Everything that changes the endpoints-list stats result: (project, direction tab,
+-- host, sort) and (search, page, per_page, period). Nested pairs because Hashable
+-- stops at 7-tuples. Same rationale as 'HostStatsKey'.
+type EndpointStatsKey = ((Projects.ProjectId, Text, Text, Text), (Text, Int, Int, Text))
+
+
 data AuthContext = AuthContext
   { env :: EnvConfig
   , pool :: Pool.Pool Connection
@@ -327,6 +333,8 @@ data AuthContext = AuthContext
   -- ^ api_catalog per-host traffic stats. The underlying telemetry aggregate scans a
   -- full window of spans (tens of seconds), so tab and period toggles must not re-run
   -- it; a few minutes of staleness is invisible on a rolling 24h count.
+  , endpointStatsCache :: Cache EndpointStatsKey (V.Vector Endpoints.EndpointRequestStats)
+  -- ^ endpoints-list per-endpoint traffic stats; same deal as 'hostStatsCache'.
   , projectKeyCache :: Cache Text (Maybe Projects.ProjectId)
   , extractionWorker :: ExtractionWorker.WorkerState Telemetry.OtelLogsAndSpans
   , traceSessionCache :: TraceSessionCache.TraceSessionCache
@@ -396,6 +404,7 @@ configToEnv config = do
   projectKeyCache <- liftIO $ newCache (Just $ TimeSpec (30 * 60) 0)
   logsPatternCache <- liftIO $ newCache (Just $ TimeSpec (30 * 60) 0)
   hostStatsCache <- liftIO $ newCache (Just $ TimeSpec 300 0)
+  endpointStatsCache <- liftIO $ newCache (Just $ TimeSpec 300 0)
   extractionWorker <- liftIO $ ExtractionWorker.initWorkerState config.extractionWorkerShards config.extractionQueueCapacity
   traceSessionCache <- liftIO TraceSessionCache.newTraceSessionCache
   tfCircuit <- liftIO ExtractionWorker.newCircuitBreaker
@@ -419,6 +428,7 @@ configToEnv config = do
       , projectKeyCache
       , logsPatternCache
       , hostStatsCache
+      , endpointStatsCache
       , extractionWorker
       , traceSessionCache
       , tfCircuit

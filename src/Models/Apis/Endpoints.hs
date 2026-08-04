@@ -141,10 +141,9 @@ data EndpointRequestStats = EndpointRequestStats
   deriving anyclass (HI.DecodeRow)
 
 
--- Per-(url_path, method, service, bucket) telemetry slice, aggregated in Haskell.
+-- Per-(endpoint hash, service, bucket) telemetry slice, aggregated in Haskell.
 data EndpointTelRow = EndpointTelRow
-  { urlPath :: Text
-  , method :: Maybe Text
+  { hash :: Text
   , service :: Maybe Text
   , bucketIdx :: Int
   , cnt :: Int64
@@ -214,12 +213,13 @@ endpointFiltersSql pHostM searchM archived =
 
 
 -- FIXME: Include and return a boolean flag to show if fields that have annomalies.
--- FIXME: return endpoint_hash as well.
 -- Endpoint identity comes from Postgres (@apis.*@); per-endpoint traffic stats come
 -- from the telemetry store (TimeFusion when @useTf@), which holds no @apis.*@ tables —
 -- so the two are fetched separately and joined + sorted + paginated in Haskell.
-endpointRequestStatsByProject :: (DB es, Labeled "timefusion" Hasql :> es, Time :> es) => Bool -> Projects.ProjectId -> Bool -> Maybe Text -> Maybe Text -> Maybe Text -> Int -> Int -> Text -> Text -> Eff es (V.Vector EndpointRequestStats)
-endpointRequestStatsByProject useTf pid archived pHostM sortM searchM page perPage requestType period = do
+-- 'ShellOnly' skips the telemetry aggregate entirely: the page renders skeleton stat
+-- cells and defers the (seconds-long) stats fetch, mirroring 'dependenciesAndEventsCount'.
+endpointRequestStatsByProject :: (DB es, Labeled "timefusion" Hasql :> es, Time :> es) => StatsMode -> Bool -> Projects.ProjectId -> Bool -> Maybe Text -> Maybe Text -> Maybe Text -> Int -> Int -> Text -> Text -> Eff es (V.Vector EndpointRequestStats)
+endpointRequestStatsByProject statsMode useTf pid archived pHostM sortM searchM page perPage requestType period = do
   now <- Time.currentTime
   let isOutgoing = requestType == "Outgoing"
       (start, numBuckets, width) = periodWindow period now
@@ -231,19 +231,20 @@ endpointRequestStatsByProject useTf pid archived pHostM sortM searchM page perPa
         FROM apis.endpoints enp
         JOIN apis.hosts h ON (h.project_id = enp.project_id AND h.host = enp.host AND h.outgoing = enp.outgoing)
         WHERE enp.project_id = #{pid} AND enp.outgoing = #{isOutgoing} ^{endpointFiltersSql pHostM searchM archived}|]
-  -- Endpoint hashes are stamped onto telemetry by the extraction worker. Querying
-  -- them avoids evaluating the host JSON fallback for every span in the project.
+  -- Endpoint hashes are stamped onto telemetry by the extraction worker; grouping by
+  -- the stamped hash (instead of re-deriving route/method per span, which forced the
+  -- wide JSON @attributes@ blob to be materialised per span) more than halved the
+  -- query cost on a busy host (22s → 10s). Non-endpoint hashes fall out at the join.
   let endpointHashes = V.fromList $ map (.endpointHash) metas
   tels :: [EndpointTelRow] <-
-    if V.null endpointHashes
+    if V.null endpointHashes || statsMode == ShellOnly
       then pure []
       else
         Hasql.withHasqlTimefusion useTf
           $ Hasql.interp
             [HI.sql|
               WITH filtered AS (
-                SELECT COALESCE(NULLIF(attributes->'http'->>'route', ''), attributes___url___path, '/') AS url_path,
-                       attributes___http___request___method AS method,
+                SELECT unnest(hashes) AS hash,
                        resource___service___name AS service,
                        floor((extract(epoch from timestamp) - #{startEpoch}) / #{width})::bigint AS bucket_idx,
                        timestamp
@@ -253,11 +254,11 @@ endpointRequestStatsByProject useTf pid archived pHostM sortM searchM page perPa
                   AND hashes && #{endpointHashes}::text[]
                   AND timestamp >= ^{tsLit start}
               )
-              SELECT url_path, method, service, bucket_idx, COUNT(*)::bigint AS cnt, MAX(timestamp) AS last_seen
-              FROM filtered GROUP BY url_path, method, service, bucket_idx|]
-  let telMap = Map.fromListWith (<>) [((r.urlPath, fromMaybe "" r.method), [r]) | r <- tels]
+              SELECT hash, service, bucket_idx, COUNT(*)::bigint AS cnt, MAX(timestamp) AS last_seen
+              FROM filtered GROUP BY hash, service, bucket_idx|]
+  let telMap = Map.fromListWith (<>) [(r.hash, [r]) | r <- tels]
       mk m =
-        let rs = fromMaybe [] $ Map.lookup (m.urlPath, m.method) telMap
+        let rs = fromMaybe [] $ Map.lookup m.endpointHash telMap
          in ( m
             , EndpointRequestStats
                 { endpointId = m.endpointId

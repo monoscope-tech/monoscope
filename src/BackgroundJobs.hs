@@ -2147,9 +2147,17 @@ processEagerBatch batch shard
             dbSpanIds = V.toList spanIdsV
             dbTraceIds = V.toList traceIdsV
             dbHashesJson = V.toList perRowHashesJson
-            dbHashes = V.toList $ V.map (T.intercalate "\x1f" . V.toList) perRowHashes
             dbErrorsJson = V.toList perRowErrorsJson
             dbNormPaths = V.toList normalizedPaths
+            -- Rows stamped at ingest ('stampHashesAtIngest') already carry the derived
+            -- set; re-merging them mints a duplicate row version in TimeFusion's
+            -- merge-on-read store for zero data change. Only rows whose stored hashes
+            -- miss something (pre-stamping data, cache-miss ingest, safety-net
+            -- re-drives) enter the merge — normally none, and the UPDATE is skipped.
+            uncovered = V.filter (\(sp, _, _, hs) -> not (all (`V.elem` fromMaybe V.empty sp.hashes) hs)) (V.zip4 spans spanIdsV traceIdsV perRowHashes)
+            tfSpanIds = [sid | (_, sid, _, _) <- V.toList uncovered]
+            tfTraceIds = [tid | (_, _, tid, _) <- V.toList uncovered]
+            tfHashes = [T.intercalate "\x1f" (V.toList hs) | (_, _, _, hs) <- V.toList uncovered]
             updateHashesSql =
               -- @> guard makes re-application idempotent (TF's DML coalescer
               -- contract: a failed drain retries whole groups). ARRAY(SELECT
@@ -2160,9 +2168,9 @@ processEagerBatch batch shard
                     FROM (
                       SELECT span_id, trace_id, string_to_array(hash_text, chr(31)) AS new_hashes
                       FROM (
-                        SELECT unnest(#{dbSpanIds}::text[]) AS span_id,
-                               unnest(#{dbTraceIds}::text[]) AS trace_id,
-                               unnest(#{dbHashes}::text[]) AS hash_text
+                        SELECT unnest(#{tfSpanIds}::text[]) AS span_id,
+                               unnest(#{tfTraceIds}::text[]) AS trace_id,
+                               unnest(#{tfHashes}::text[]) AS hash_text
                       ) raw
                       ORDER BY span_id, trace_id
                     ) u
@@ -2229,7 +2237,7 @@ processEagerBatch batch shard
                       AND o.processed_at IS NULL |]
         rowsUpdated <-
           if ctx.config.enableHashUpdates && batch.batchMaxTs >= hashCutoff
-            then dualExecPgTf ctx updateHashesSql <* pgOnlyExec update1Sql
+            then (if null tfSpanIds then pure 0 else dualExecPgTf ctx updateHashesSql) <* pgOnlyExec update1Sql
             else pgOnlyExec markProcessedSql
         -- The hash-only update is TF-compatible; PG retains the JSON/path enrichment.
         Log.logTrace "Eager-track UPDATE-1 complete" (AE.object ["project_id" AE..= pid.toText, "span_count" AE..= V.length spans, "rows_updated" AE..= rowsUpdated, "hash_merge_skipped" AE..= (not ctx.config.enableHashUpdates || batch.batchMaxTs < hashCutoff)])

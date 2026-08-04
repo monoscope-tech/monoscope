@@ -223,8 +223,9 @@ endpointListGetH
   -> Maybe Text
   -> Maybe Text
   -> Maybe Text
+  -> Maybe Text
   -> ATAuthCtx (RespHeaders EndpointRequestStatsVM)
-endpointListGetH pid pageM perPageM _layoutM filterTM hostM currentTabM sortM periodM _hxRequestM _hxBoostedM _hxCurrentURL loadMoreM searchM = do
+endpointListGetH pid pageM perPageM _layoutM filterTM hostM currentTabM sortM periodM _hxRequestM _hxBoostedM _hxCurrentURL loadMoreM searchM statsM = do
   (_, project, bw) <- mkPageCtx pid
   let archived = filterTM == Just "Archived"
       currentFilterTab = bool "Endpoints" "Archived" archived
@@ -237,10 +238,22 @@ endpointListGetH pid pageM perPageM _layoutM filterTM hostM currentTabM sortM pe
       currentSort = fromMaybe "-events" sortM
       period = fromMaybe "24h" periodM
       sortV = Just $ bool "events" "name" (currentSort `elem` ["-name", "+name"])
-  useTf <- (.env.enableTimefusionReads) <$> ask @AuthContext
+  appCtx <- ask @AuthContext
+  let useTf = appCtx.env.enableTimefusionReads
+      -- Same shell/deferred/memoise dance as apiCatalogH: the telemetry aggregate takes
+      -- seconds, so the first paint renders skeletons and HTMX re-fetches with stats=true.
+      -- Row-only responses (load-more, search) can't defer, so they always carry stats.
+      statsMode = if statsM == Just "true" || isJust loadMoreM || isJust searchM then Endpoints.WithStats else Endpoints.ShellOnly
+      cacheKey = ((pid, currentTab, host, currentSort), (fromMaybe "" searchM, page, perPage, period))
+      fetchStats mode = Endpoints.endpointRequestStatsByProject mode useTf pid archived hostParam sortV searchM page perPage (fromMaybe "" currentTabM) period
+      fetchStatsCached = case statsMode of
+        Endpoints.ShellOnly -> fetchStats Endpoints.ShellOnly
+        Endpoints.WithStats ->
+          liftIO (Cache.lookup appCtx.endpointStatsCache cacheKey)
+            >>= maybe (fetchStats Endpoints.WithStats >>= \fresh -> fresh <$ liftIO (Cache.insert appCtx.endpointStatsCache cacheKey fresh)) pure
   (endpointStats, totalCount) <-
     concurrently
-      (Endpoints.endpointRequestStatsByProject useTf pid archived hostParam sortV searchM page perPage (fromMaybe "" currentTabM) period)
+      fetchStatsCached
       (Endpoints.countEndpointsForHost pid isOutgoing archived hostParam searchM)
   freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
 
@@ -265,7 +278,8 @@ endpointListGetH pid pageM perPageM _layoutM filterTM hostM currentTabM sortM pe
           }
 
   currTime <- Time.currentTime
-  let endpReqVM = V.map (EnpReqStatsVM currTime period) endpointStats
+  let statsUrl = baseUrl <> [PyF.fmt|&stats=true&page={page}&per_page={perPage}|]
+      endpReqVM = V.map (EnpReqStatsVM currTime statsMode) endpointStats
       cols = endpointColumns pid baseUrl period currentTab
       endpRowId = Just \(EnpReqStatsVM _ _ enp) -> enp.endpointHash
       endpRowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"]
@@ -285,7 +299,7 @@ endpointListGetH pid pageM perPageM _layoutM filterTM hostM currentTabM sortM pe
           }
       endpointsTable =
         Table
-          { config = def{elemID = "endpointsForm", containerId = Just "endpointsListContainer", addPadding = True, renderAsTable = True, bulkActionsInHeader = Just 0, refreshOnEvent = Just ("endpointsListChanged", baseUrl)}
+          { config = def{elemID = "endpointsForm", containerId = Just "endpointsListContainer", addPadding = True, renderAsTable = True, bulkActionsInHeader = Just 0, refreshOnEvent = Just ("endpointsListChanged", statsUrl), deferredUrl = statsUrl <$ guard (statsMode == Endpoints.ShellOnly)}
           , columns = cols
           , rows = endpReqVM
           , features =
@@ -314,16 +328,15 @@ endpointListGetH pid pageM perPageM _layoutM filterTM hostM currentTabM sortM pe
       else EndpointsListPage $ PageCtx bwconf endpointsTable
 
 
-data EnpReqStatsVM = EnpReqStatsVM UTCTime Text Endpoints.EndpointRequestStats
-  deriving stock (Show)
+data EnpReqStatsVM = EnpReqStatsVM UTCTime Endpoints.StatsMode Endpoints.EndpointRequestStats
 
 
 endpointColumns :: Projects.ProjectId -> Text -> Text -> Text -> [Column EnpReqStatsVM]
 endpointColumns pid baseUrl period currentTab =
   [ col "Endpoint" (renderEndpointMainCol pid currentTab) & withAttrs [class_ "min-w-0 max-w-0 w-full"]
-  , col ("Events (" <> period <> ")") (\(EnpReqStatsVM _ _ enp) -> eventsCountCell_ enp.totalRequests) & withAttrs [class_ "w-24 max-md:hidden"]
-  , col "Last Seen" (\(EnpReqStatsVM currTime _ enp) -> lastSeenCell_ currTime enp.lastSeen) & withAttrs [class_ "w-24 max-md:hidden"]
-  , col "Activity" (\(EnpReqStatsVM _ _ enp) -> activityCell_ enp.activityBuckets) & withAttrs [class_ "w-40 max-md:hidden"] & withColHeaderExtra (periodToggle_ baseUrl "endpointsListContainer" period)
+  , col ("Events (" <> period <> ")") (\(EnpReqStatsVM _ sm enp) -> statCell_ sm $ eventsCountCell_ enp.totalRequests) & withAttrs [class_ "w-24 max-md:hidden"]
+  , col "Last Seen" (\(EnpReqStatsVM currTime sm enp) -> statCell_ sm $ lastSeenCell_ currTime enp.lastSeen) & withAttrs [class_ "w-24 max-md:hidden"]
+  , col "Activity" (\(EnpReqStatsVM _ sm enp) -> statCell_ sm $ activityCell_ enp.activityBuckets) & withAttrs [class_ "w-40 max-md:hidden"] & withColHeaderExtra (periodToggle_ baseUrl "endpointsListContainer" period)
   ]
 
 

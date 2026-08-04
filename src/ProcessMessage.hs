@@ -9,6 +9,7 @@
 module ProcessMessage (
   processMessages,
   processSpanToEntities,
+  stampHashesAtIngest,
   extractObservation,
   RequestMessage (..),
   valueToFormatStr,
@@ -45,6 +46,7 @@ import Data.HashTable.ST.Cuckoo qualified as HT
 import Data.Text qualified as T
 import Data.Time (addUTCTime, zonedTimeToUTC)
 import Data.Time.LocalTime (ZonedTime)
+import Data.UUID qualified as DUUID
 import Data.Vector qualified as V
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
@@ -54,6 +56,7 @@ import Effectful.Labeled (Labeled (..))
 import Effectful.Log (Log)
 import Effectful.Reader.Static qualified as Eff
 import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (Context (trace_state), OtelLogsAndSpans (..), generateSummary)
@@ -118,7 +121,7 @@ processMessages msgs attrs =
       Nothing -> pure (Right ())
       Just (projectCaches, paired) ->
         Metrics.timed Metrics.ingestWriteHist []
-          $ Telemetry.insertAndHandOff appCtx.hasqlTimefusionUsesPgTypes (Telemetry.writeTargetFor appCtx.env.enablePostgresTelemetryWrites appCtx.env.enableTimefusionWrites Nothing) appCtx.extractionWorker projectCaches (V.map (\(_, _, s) -> s) paired)
+          $ Telemetry.insertAndHandOff appCtx.hasqlTimefusionUsesPgTypes (Telemetry.writeTargetFor appCtx.env.enablePostgresTelemetryWrites appCtx.env.enableTimefusionWrites Nothing) appCtx.extractionWorker projectCaches (stampHashesAtIngest projectCaches $ V.map (\(_, _, s) -> s) paired)
 
     -- On success the whole batch landed on every store (no per-row poison); the
     -- only DLQ entries are the decode failures collected upstream in `poison`.
@@ -227,6 +230,25 @@ processSpanToEntities canonicalTemplates pjc projectId otelSpan dumpId =
       -- attributes.http.route and attributes.url.path so notification links and the
       -- catalog UI filter by the same template stored in apis.endpoints.
       (endpoint, V.singleton endpointHash, if isHttpSpan then Just urlPath else Nothing)
+
+
+-- | Stamp each record's hashes (endpoint identity + error fingerprints) before the
+-- insert. The extraction worker re-derives the identical set (same pure functions,
+-- same project-cache snapshot handed off with the batch) and skips its hash-merge
+-- UPDATE for covered rows — on TimeFusion's merge-on-read store that UPDATE minted
+-- a duplicate version of every ingested row, doubling every scan until compaction.
+-- Rows whose project cache is absent pass through unstamped; the worker's UPDATE
+-- path still covers them.
+stampHashesAtIngest :: HM.HashMap Projects.ProjectId Projects.ProjectCache -> V.Vector Telemetry.OtelLogsAndSpans -> V.Vector Telemetry.OtelLogsAndSpans
+stampHashesAtIngest caches = V.map \r -> fromMaybe r do
+  pid <- Projects.projectIdFromText r.project_id
+  pjc <- HM.lookup pid caches
+  let templates = HM.lookupDefault HM.empty pid templatesByPid
+      (_, spanHashes, _) = processSpanToEntities templates pjc pid r DUUID.nil
+      errHashes = V.map (\e -> "err:" <> e.hash) (Telemetry.getAllATErrors (V.singleton r))
+  pure r{hashes = Just $ spanHashes <> errHashes}
+  where
+    templatesByPid = HM.map (parseCanonicalPaths . (.canonicalPaths)) caches
 
 
 -- | Build a 'SchemaHot.ObservationInput' for the schema-learning catalog.

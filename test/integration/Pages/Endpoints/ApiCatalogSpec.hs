@@ -1,7 +1,8 @@
 module Pages.Endpoints.ApiCatalogSpec (spec) where
 
-import Data.Default (def)
+import BackgroundJobs qualified
 import Data.Aeson qualified as AE
+import Data.Default (def)
 import Data.Text qualified as T
 import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as UUID
@@ -16,10 +17,9 @@ import Pages.BodyWrapper (PageCtx (..))
 import Pages.Endpoints qualified as ApiCatalog
 import Pkg.Components.Table qualified as Table
 import Pkg.TestUtils
-import BackgroundJobs qualified
 import Relude
 import Relude.Unsafe qualified as Unsafe
-import Test.Hspec (Spec, aroundAll, sequential, describe, expectationFailure, it, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, sequential, shouldBe, shouldSatisfy)
 import Utils (toXXHash)
 
 
@@ -28,8 +28,9 @@ import Utils (toXXHash)
 -- Helper function to get endpoint stats
 getEndpointStats :: TestResources -> Maybe Text -> Maybe Text -> IO (V.Vector ApiCatalog.EnpReqStatsVM)
 getEndpointStats tr filterParam hostM = do
-  (_, resp) <- testServant tr $
-    ApiCatalog.endpointListGetH testPid Nothing Nothing Nothing filterParam hostM Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+  (_, resp) <-
+    testServant tr
+      $ ApiCatalog.endpointListGetH testPid Nothing Nothing Nothing filterParam hostM Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true")
   case resp of
     ApiCatalog.EndpointsListPage (PageCtx _ tbl) -> pure tbl.rows
     _ -> error "Unexpected response from endpointListGetH"
@@ -38,37 +39,45 @@ getEndpointStats tr filterParam hostM = do
 -- | Fetch a specific page from the endpoints handler and return rows + total.
 getEndpointsPage :: TestResources -> Text -> Int -> Int -> IO (V.Vector ApiCatalog.EnpReqStatsVM, Int)
 getEndpointsPage tr host page perPage = do
-  (_, resp) <- testServant tr $
-    ApiCatalog.endpointListGetH testPid (Just (show page)) (Just (show perPage)) Nothing Nothing (Just host) Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+  (_, resp) <-
+    testServant tr
+      $ ApiCatalog.endpointListGetH testPid (Just (show page)) (Just (show perPage)) Nothing Nothing (Just host) Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true")
   case resp of
     ApiCatalog.EndpointsListPage (PageCtx _ tbl) ->
       pure (tbl.rows, maybe 0 (.totalCount) tbl.features.pagination)
     _ -> error "Unexpected response from endpointListGetH"
 
+
 -- Helper function to verify endpoint creation
 verifyEndpointsCreated :: TestResources -> IO ()
 verifyEndpointsCreated tr = do
-  endpoints <- withPool tr.trPool $ DBT.query [sql|
+  endpoints <-
+    withPool tr.trPool
+      $ DBT.query
+        [sql|
     SELECT url_path, method, host, hash
     FROM apis.endpoints
     WHERE project_id = ?
-  |] (Only testPid) :: IO (V.Vector (Text, Text, Text, Text))
-  
+  |]
+        (Only testPid)
+      :: IO (V.Vector (Text, Text, Text, Text))
+
   V.length endpoints `shouldBe` 2
-  
+
   let endpoint1 = Unsafe.fromJust $ V.find (\(path, _, _, _) -> path == "/") endpoints
   let endpoint2 = Unsafe.fromJust $ V.find (\(path, _, _, _) -> path == "/api/v1/user/login") endpoints
-  
+
   let (_, method1, host1, hash1) = endpoint1
   let (_, method2, host2, hash2) = endpoint2
-  
+
   method1 `shouldBe` "GET"
   host1 `shouldBe` "172.31.29.11"
   hash1 `shouldBe` toXXHash (testPid.toText <> "172.31.29.11" <> "GET" <> "/")
-  
+
   method2 `shouldBe` "POST"
   host2 `shouldBe` "api.test.com"
   hash2 `shouldBe` toXXHash (testPid.toText <> "api.test.com" <> "POST" <> "/api/v1/user/login")
+
 
 -- Helper function to prepare test messages
 prepareTestMessages :: IO [(Text, ByteString)]
@@ -77,17 +86,22 @@ prepareTestMessages = do
   let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
   let reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
   let reqMsg2 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 nowTxt
-  pure $ concat $ replicate 100
-    [ ("m1", toStrict $ AE.encode reqMsg1)
-    , ("m2", toStrict $ AE.encode reqMsg2)
-    ]
+  pure
+    $ concat
+    $ replicate
+      100
+      [ ("m1", toStrict $ AE.encode reqMsg1)
+      , ("m2", toStrict $ AE.encode reqMsg2)
+      ]
+
 
 spec :: Spec
 spec = sequential $ aroundAll withTestResources do
   describe "API Catalog and Endpoints" do
     it "returns empty list when no data exists" \tr -> do
-      (_, catalogList) <- testServant tr $
-          ApiCatalog.apiCatalogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      (_, catalogList) <-
+        testServant tr
+          $ ApiCatalog.apiCatalogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       case catalogList of
         ApiCatalog.CatalogListPage (PageCtx _ tbl) ->
           length tbl.rows `shouldBe` 0
@@ -95,49 +109,67 @@ spec = sequential $ aroundAll withTestResources do
 
     it "creates endpoints from processed spans" \tr -> do
       -- First verify the demo project exists
-      projectExists <- withPool tr.trPool $ DBT.query [sql|
+      projectExists <-
+        withPool tr.trPool
+          $ DBT.query
+            [sql|
         SELECT COUNT(*)
         FROM projects.projects
         WHERE id = ?
-      |] (Only testPid) :: IO (V.Vector (Only Int))
-      
+      |]
+            (Only testPid)
+          :: IO (V.Vector (Only Int))
+
       case projectExists of
         [Only 0] -> error $ "Demo project with ID " <> show testPid <> " does not exist in database"
         _ -> pass
-      
+
       msgs <- prepareTestMessages
       processMessagesAndBackgroundJobs tr msgs
-      
+
       -- Debug: Check if any spans were inserted at all
-      allSpansCount <- withPool tr.trPool $ DBT.query [sql|
+      allSpansCount <-
+        withPool tr.trPool
+          $ DBT.query
+            [sql|
         SELECT COUNT(*)
         FROM otel_logs_and_spans
-      |] () :: IO (V.Vector (Only Int))
-      
+      |]
+            ()
+          :: IO (V.Vector (Only Int))
+
       case allSpansCount of
-        [Only totalCount] -> if totalCount == 0
-          then error "No spans at all in otel_logs_and_spans table"
-          else pass
+        [Only totalCount] ->
+          if totalCount == 0
+            then error "No spans at all in otel_logs_and_spans table"
+            else pass
         _ -> pass
-      
+
       -- Debug: Check if spans were actually inserted for our project
-      spanCount <- withPool tr.trPool $ DBT.query [sql|
+      spanCount <-
+        withPool tr.trPool
+          $ DBT.query
+            [sql|
         SELECT COUNT(*)
         FROM otel_logs_and_spans
         WHERE project_id = ? AND (name = 'monoscope.http' OR name = 'apitoolkit-http-span')
-      |] (Only testPid) :: IO (V.Vector (Only Int))
-      
+      |]
+            (Only testPid)
+          :: IO (V.Vector (Only Int))
+
       case spanCount of
-        [Only count] -> if count == 0
-          then error $ "No spans found in otel_logs_and_spans table after processing messages for project " <> show testPid
-          else pass
+        [Only count] ->
+          if count == 0
+            then error $ "No spans found in otel_logs_and_spans table after processing messages for project " <> show testPid
+            else pass
         _ -> error "Unexpected span count result"
-      
+
       verifyEndpointsCreated tr
 
     it "returns hosts list after processing messages" \tr -> do
-      (_, catalogList) <- testServant tr $
-          ApiCatalog.apiCatalogH testPid Nothing Nothing (Just "Incoming") Nothing Nothing Nothing Nothing
+      (_, catalogList) <-
+        testServant tr
+          $ ApiCatalog.apiCatalogH testPid Nothing Nothing (Just "Incoming") Nothing Nothing Nothing Nothing
       case catalogList of
         ApiCatalog.CatalogListPage (PageCtx _ tbl) ->
           length tbl.rows `shouldBe` 2
@@ -147,8 +179,9 @@ spec = sequential $ aroundAll withTestResources do
       -- Each host got 100 spans in prepareTestMessages. A regression where the
       -- query joined spans to endpoints by (url_path, method) only — the bug
       -- that produced "every host shows the same total" — is caught here.
-      (_, catalogList) <- testServant tr
-        $ ApiCatalog.apiCatalogH testPid Nothing Nothing (Just "Incoming") Nothing Nothing Nothing (Just "true")
+      (_, catalogList) <-
+        testServant tr
+          $ ApiCatalog.apiCatalogH testPid Nothing Nothing (Just "Incoming") Nothing Nothing Nothing (Just "true")
       case catalogList of
         ApiCatalog.CatalogListPage (PageCtx _ tbl) -> do
           let countOf host = sum [vm.events.eventCount | vm <- V.toList tbl.rows, vm.events.host == host]
@@ -162,10 +195,12 @@ spec = sequential $ aroundAll withTestResources do
     -- that HTMX fetches afterwards. If someone makes the first load compute stats again,
     -- eventCount becomes non-zero here and the page goes back to being unusably slow.
     it "apiCatalog_defaultLoad_rendersShellWithoutTelemetryStats" \tr -> do
-      (_, shell) <- testServant tr
-        $ ApiCatalog.apiCatalogH testPid Nothing Nothing (Just "Incoming") Nothing Nothing Nothing Nothing
-      (_, withStats) <- testServant tr
-        $ ApiCatalog.apiCatalogH testPid Nothing Nothing (Just "Incoming") Nothing Nothing Nothing (Just "true")
+      (_, shell) <-
+        testServant tr
+          $ ApiCatalog.apiCatalogH testPid Nothing Nothing (Just "Incoming") Nothing Nothing Nothing Nothing
+      (_, withStats) <-
+        testServant tr
+          $ ApiCatalog.apiCatalogH testPid Nothing Nothing (Just "Incoming") Nothing Nothing Nothing (Just "true")
       case (shell, withStats) of
         (ApiCatalog.CatalogListPage (PageCtx _ shellTbl), ApiCatalog.CatalogListPage (PageCtx _ statsTbl)) -> do
           let counts tbl = map (.events.eventCount) $ V.toList tbl.rows
@@ -181,12 +216,17 @@ spec = sequential $ aroundAll withTestResources do
 
     it "creates anomalies automatically via database triggers" \tr -> do
       -- Verify anomalies were created by triggers
-      anomaliesCount <- withPool tr.trPool $ DBT.query [sql|
+      anomaliesCount <-
+        withPool tr.trPool
+          $ DBT.query
+            [sql|
         SELECT COUNT(*)
         FROM apis.anomalies
         WHERE project_id = ?
-      |] (Only testPid) :: IO (V.Vector (Only Int))
-      
+      |]
+            (Only testPid)
+          :: IO (V.Vector (Only Int))
+
       case anomaliesCount of
         [Only count] -> count `shouldSatisfy` (> 0)
         _ -> error "Unexpected anomalies count result"
@@ -202,11 +242,16 @@ spec = sequential $ aroundAll withTestResources do
         _ -> False
 
       -- Verify issues were created
-      issuesCount <- withPool tr.trPool $ DBT.query [sql|
+      issuesCount <-
+        withPool tr.trPool
+          $ DBT.query
+            [sql|
         SELECT COUNT(*)
         FROM apis.issues
         WHERE project_id = ? AND issue_type = 'api_change'
-      |] (Only testPid) :: IO (V.Vector (Only Int))
+      |]
+            (Only testPid)
+          :: IO (V.Vector (Only Int))
 
       case issuesCount of
         [Only count] -> count `shouldBe` 2
@@ -216,15 +261,15 @@ spec = sequential $ aroundAll withTestResources do
       -- Create test spans to populate materialized view
       createTestSpans tr testPid 10
       -- _ <- withPool tr.trPool $ refreshMaterializedView "apis.endpoint_request_stats"
-      
+
       -- Test inbox filter without host
       inboxEndpoints <- getEndpointStats tr (Just "Endpoints") Nothing
       V.length inboxEndpoints `shouldBe` 2
-      
+
       -- Test inbox filter with specific host
       host1Endpoints <- getEndpointStats tr (Just "Endpoints") (Just "172.31.29.11")
       V.length host1Endpoints `shouldBe` 1
-      
+
       host2Endpoints <- getEndpointStats tr (Just "Endpoints") (Just "api.test.com")
       V.length host2Endpoints `shouldBe` 1
 
@@ -236,21 +281,29 @@ spec = sequential $ aroundAll withTestResources do
 
     it "returns active endpoints after acknowledging issues" \tr -> do
       -- Acknowledge all endpoint issues
-      _ <- withPool tr.trPool $ DBT.execute [sql|
+      _ <-
+        withPool tr.trPool
+          $ DBT.execute
+            [sql|
         UPDATE apis.issues
         SET acknowledged_at = ?, acknowledged_by = ?
         WHERE project_id = ? AND issue_type = 'api_change'
-      |] (frozenTime, Projects.UserId UUID.nil, testPid)
-      
+      |]
+            (frozenTime, Projects.UserId UUID.nil, testPid)
+
       -- Test active filter
       activeEndpoints <- getEndpointStats tr (Just "Endpoints") Nothing
       V.length activeEndpoints `shouldBe` 2
-      
+
       -- Verify endpoint details
-      let enp1 = (\(ApiCatalog.EnpReqStatsVM _ _ c) -> c) <$>
-            Unsafe.fromJust $ find (\(ApiCatalog.EnpReqStatsVM _ _ c) -> c.urlPath == "/") activeEndpoints
-      let enp2 = (\(ApiCatalog.EnpReqStatsVM _ _ c) -> c) <$>
-            Unsafe.fromJust $ find (\(ApiCatalog.EnpReqStatsVM _ _ c) -> c.urlPath == "/api/v1/user/login") activeEndpoints
+      let enp1 =
+            (\(ApiCatalog.EnpReqStatsVM _ _ c) -> c)
+              <$> Unsafe.fromJust
+              $ find (\(ApiCatalog.EnpReqStatsVM _ _ c) -> c.urlPath == "/") activeEndpoints
+      let enp2 =
+            (\(ApiCatalog.EnpReqStatsVM _ _ c) -> c)
+              <$> Unsafe.fromJust
+              $ find (\(ApiCatalog.EnpReqStatsVM _ _ c) -> c.urlPath == "/api/v1/user/login") activeEndpoints
 
       enp1.endpointHash `shouldBe` toXXHash (testPid.toText <> "172.31.29.11" <> "GET" <> "/")
       enp2.endpointHash `shouldBe` toXXHash (testPid.toText <> "api.test.com" <> "POST" <> "/api/v1/user/login")
@@ -276,7 +329,7 @@ spec = sequential $ aroundAll withTestResources do
     --   -- If we have non-endpoint issues, test the anomaly list API
     --   if V.length nonEndpointIssues > 0 then do
     --     -- Get anomalies through the API
-    --     pg <- testServant tr $ 
+    --     pg <- testServant tr $
     --       AnomalyList.anomalyListGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
     --
     --     case pg of
@@ -288,12 +341,12 @@ spec = sequential $ aroundAll withTestResources do
     --         case V.headM anomalies of
     --           Just (AnomalyList.IssueVM _ _ _ firstAnomaly) -> do
     --             let bulkFrm = AnomalyList.AnomalyBulk{anomalyId = [anomalyIdText firstAnomaly.id]}
-    --             _ <- testServant tr $ 
+    --             _ <- testServant tr $
     --               AnomalyList.anomalyBulkActionsPostH testPid "acknowlege" bulkFrm
     --             pass
     --           Nothing -> error "Expected at least one anomaly"
     --       _ -> error "Unexpected response from anomaly list"
-    --   else 
+    --   else
     --     -- Skip test if no non-endpoint issues were created
     --     pendingWith "No non-endpoint issues were created in this test run"
 
@@ -301,19 +354,24 @@ spec = sequential $ aroundAll withTestResources do
       -- First ensure endpoints are created and anomalies are generated
       msgs <- prepareTestMessages
       processMessagesAndBackgroundJobs tr msgs
-      
+
       -- Check that we have anomalies for shapes and fields too
-      anomalyTypes <- withPool tr.trPool $ DBT.query [sql|
+      anomalyTypes <-
+        withPool tr.trPool
+          $ DBT.query
+            [sql|
         SELECT DISTINCT anomaly_type::text, COUNT(*)
         FROM apis.anomalies
         WHERE project_id = ?
         GROUP BY anomaly_type
         ORDER BY anomaly_type
-      |] (Only testPid) :: IO (V.Vector (Text, Int))
-      
+      |]
+            (Only testPid)
+          :: IO (V.Vector (Text, Int))
+
       -- We should have at least endpoint, shape, field, and format anomalies
       V.length anomalyTypes `shouldSatisfy` (>= 4)
-      
+
       -- Verify we have anomalies of each expected type
       let hasType t = V.any (\(atype, _) -> atype == t) anomalyTypes
       hasType "endpoint" `shouldBe` True
@@ -328,10 +386,12 @@ spec = sequential $ aroundAll withTestResources do
               ApiCatalog.CatalogListPage (PageCtx _ tbl) ->
                 pure $ V.toList $ V.map (.events.host) tbl.rows
               _ -> expectationFailure "Expected CatalogListPage" $> []
-          bulk tr action reqType hosts = testServant tr $
-            ApiCatalog.apiCatalogBulkActionH testPid action (Just reqType) (ApiCatalog.HostBulk{itemId = hosts})
-          bulkAny tr action hosts = testServant tr $
-            ApiCatalog.apiCatalogBulkActionH testPid action Nothing (ApiCatalog.HostBulk{itemId = hosts})
+          bulk tr action reqType hosts =
+            testServant tr
+              $ ApiCatalog.apiCatalogBulkActionH testPid action (Just reqType) (ApiCatalog.HostBulk{itemId = hosts})
+          bulkAny tr action hosts =
+            testServant tr
+              $ ApiCatalog.apiCatalogBulkActionH testPid action Nothing (ApiCatalog.HostBulk{itemId = hosts})
 
       it "archives an incoming host and surfaces it under the Archived tab" \tr -> do
         _ <- bulk tr "archive" "Incoming" ["172.31.29.11"]
@@ -350,11 +410,12 @@ spec = sequential $ aroundAll withTestResources do
       it "archives an outgoing host independently of incoming" \tr -> do
         -- Seed an outgoing host directly (no endpoint, so we don't perturb
         -- endpoint-count assertions in surrounding tests).
-        let outEp = (def :: Endpoints.Endpoint)
-              { Endpoints.projectId = testPid
-              , Endpoints.host = "api.upstream.example"
-              , Endpoints.outgoing = True
-              }
+        let outEp =
+              (def :: Endpoints.Endpoint)
+                { Endpoints.projectId = testPid
+                , Endpoints.host = "api.upstream.example"
+                , Endpoints.outgoing = True
+                }
         runQueryEffect tr $ Endpoints.bulkInsertHosts (V.singleton outEp)
         _ <- bulk tr "archive" "Outgoing" ["api.upstream.example"]
         outActive <- listHosts tr "Outgoing" Nothing
@@ -388,12 +449,17 @@ spec = sequential $ aroundAll withTestResources do
 
     it "filters endpoints by request type (incoming/outgoing)" \tr -> do
       -- All our test endpoints are incoming (outgoing = false)
-      endpoints <- withPool tr.trPool $ DBT.query [sql|
+      endpoints <-
+        withPool tr.trPool
+          $ DBT.query
+            [sql|
         SELECT outgoing, COUNT(*)
         FROM apis.endpoints
         WHERE project_id = ?
         GROUP BY outgoing
-      |] (Only testPid) :: IO (V.Vector (Bool, Int))
+      |]
+            (Only testPid)
+          :: IO (V.Vector (Bool, Int))
 
       -- Verify all are incoming
       case endpoints of
@@ -451,15 +517,16 @@ spec = sequential $ aroundAll withTestResources do
         void $ DBT.execute [sql| UPDATE apis.endpoints SET created_at = ?::timestamptz - interval '2 days' WHERE project_id = ? AND host = ? AND url_path = '/old' |] (frozenTime, testPid, hostName)
         void $ DBT.execute [sql| UPDATE apis.endpoints SET created_at = ?::timestamptz - interval '1 hour' WHERE project_id = ? AND host = ? AND url_path = '/new' |] (frozenTime, testPid, hostName)
         let insertSpan (path :: Text) (offsetMins :: Int) =
-              void $ DBT.execute
-                [sql| INSERT INTO otel_logs_and_spans
+              void
+                $ DBT.execute
+                  [sql| INSERT INTO otel_logs_and_spans
                         (id, project_id, timestamp, start_time,
                          attributes___http___request___method, attributes___url___path,
                          hashes, context, kind, status_code, summary)
                       VALUES (gen_random_uuid(), ?, ?::timestamptz - make_interval(mins => ?), ?::timestamptz - make_interval(mins => ?),
                               'GET', ?, ARRAY[?], '{}'::jsonb, 'SERVER', '200', '{}') |]
-                (testPid, frozenTime, offsetMins, frozenTime, offsetMins, path, (mkEp path).hash)
+                  (testPid, frozenTime, offsetMins, frozenTime, offsetMins, path, (mkEp path).hash)
         insertSpan "/old" 5
         insertSpan "/new" 120
-      stats <- runTestBg frozenTime tr $ Endpoints.endpointRequestStatsByProject False testPid False (Just hostName) (Just "last_seen") Nothing 0 10 "Incoming" "7d"
+      stats <- runTestBg frozenTime tr $ Endpoints.endpointRequestStatsByProject Endpoints.WithStats False testPid False (Just hostName) (Just "last_seen") Nothing 0 10 "Incoming" "7d"
       map (.urlPath) (V.toList stats) `shouldBe` ["/old", "/new"]

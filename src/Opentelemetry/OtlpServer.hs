@@ -75,6 +75,7 @@ import OpenTelemetry.Trace (TracerProvider)
 import Pkg.DeriveUtils (AesonText (..), UUIDId (..), unUUIDId)
 import Pkg.ErrorMetrics (wireTypeErrorsRef)
 import Pkg.TraceSessionCache qualified as TSC
+import ProcessMessage (stampHashesAtIngest)
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService_Fields qualified as LSF
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService qualified as MS
@@ -283,7 +284,7 @@ dualWriteWithPoisonMapping
 dualWriteWithPoisonMapping appCtx target label caches perMsg = do
   let !allRecords = V.concat [rs | (_, _, rs) <- perMsg]
   stamped <- stampOrPassthrough appCtx allRecords
-  let minted = Telemetry.mintOtelLogIds stamped
+  let minted = Telemetry.mintOtelLogIds $ stampHashesAtIngest caches stamped
   res <-
     checkpoint
       (fromString $ "processList:" <> toString label <> ":bulkInsert")
@@ -1554,7 +1555,7 @@ processSignalRequest label signal receivedMsg noun countKey metadataApiKey proje
 
   unless (V.null records) do
     stamped <- stampOrPassthrough appCtx records
-    let minted = Telemetry.mintOtelLogIds stamped
+    let minted = Telemetry.mintOtelLogIds $ stampHashesAtIngest projectCaches stamped
     Telemetry.insertAndHandOff appCtx.hasqlTimefusionUsesPgTypes (Telemetry.writeTargetFor appCtx.env.enablePostgresTelemetryWrites appCtx.env.enableTimefusionWrites Nothing) appCtx.extractionWorker projectCaches minted
       >>= throwOnWriteFailure
     Log.logTrace

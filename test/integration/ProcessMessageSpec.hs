@@ -5,6 +5,10 @@ import Data.HashMap.Strict qualified as HashMap
 import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import Database.PostgreSQL.Entity.DBT (withPool)
+import Database.PostgreSQL.Entity.DBT qualified as DBT
+import Database.PostgreSQL.Simple (Only (..))
+import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
@@ -14,6 +18,7 @@ import ProcessMessage (processMessages, processSpanToEntities)
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldBe, shouldContain)
+import Utils (toXXHash)
 
 
 pid :: Projects.ProjectId
@@ -30,10 +35,31 @@ spec = around withTestResources do
       now <- getCurrentTime
       let badSpan =
             Telemetry.OtelLogsAndSpans
-              { project_id = "not-a-uuid", id = "", timestamp = now, observed_timestamp = Nothing, context = Nothing, level = Nothing
-              , severity = Nothing, body = Nothing, attributes = Nothing, resource = Nothing, hashes = Nothing, kind = Nothing
-              , status_code = Nothing, status_message = Nothing, start_time = now, end_time = Nothing, events = Nothing, links = Nothing
-              , duration = Nothing, name = Nothing, parent_id = Nothing, summary = V.empty, date = now, errors = Nothing, message_size_bytes = 0
+              { project_id = "not-a-uuid"
+              , id = ""
+              , timestamp = now
+              , observed_timestamp = Nothing
+              , context = Nothing
+              , level = Nothing
+              , severity = Nothing
+              , body = Nothing
+              , attributes = Nothing
+              , resource = Nothing
+              , hashes = Nothing
+              , kind = Nothing
+              , status_code = Nothing
+              , status_message = Nothing
+              , start_time = now
+              , end_time = Nothing
+              , events = Nothing
+              , links = Nothing
+              , duration = Nothing
+              , name = Nothing
+              , parent_id = Nothing
+              , summary = V.empty
+              , date = now
+              , errors = Nothing
+              , message_size_bytes = 0
               }
           (mEndpoint, _hashes, _) = processSpanToEntities HashMap.empty Projects.defaultProjectCache pid badSpan UUID.nil
       fmap (.projectId) mEndpoint `shouldBe` Just pid
@@ -63,6 +89,22 @@ spec = around withTestResources do
         Right (ids, _poison) -> ids `shouldBe` ["m1", "m2"]
         Left _ -> expectationFailure "processMessages returned Left WriteFailure"
 
+    -- Regression: hashes used to arrive only via the extraction worker's hash-merge
+    -- UPDATE, which minted a duplicate row version per span in TimeFusion's
+    -- merge-on-read store (2x scan cost on every dashboard query). Ingest now stamps
+    -- them before insert ('stampHashesAtIngest'), so rows must carry the endpoint
+    -- hash before any background processing runs.
+    it "stampHashesAtIngest_rowsCarryEndpointHashBeforeBackgroundProcessing" $ \tr -> do
+      currentTime <- getCurrentTime
+      let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
+          reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
+      resp <- runTestBg frozenTime tr $ processMessages [("m1", toStrict $ AE.encode reqMsg1)] HashMap.empty
+      whenLeft_ resp \_ -> expectationFailure "processMessages returned Left WriteFailure"
+      -- No drainExtractionWorker / runAllBackgroundJobs: the hash must be there already.
+      hashes <- withPool tr.trPool $ DBT.query [sql| SELECT unnest(hashes) FROM otel_logs_and_spans WHERE project_id = ? |] (Only pid) :: IO (V.Vector (Only Text))
+      let expected = toXXHash $ pid.toText <> "172.31.29.11" <> "GET" <> "/"
+      V.map fromOnly hashes `shouldBe` V.singleton expected
+
     it "We should expect 2 endpoints, albeit unacknowleged." $ \tr -> do
       currentTime <- getCurrentTime
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
@@ -78,7 +120,7 @@ spec = around withTestResources do
       logBackgroundJobsInfo tr.trLogger pendingJobs
 
       _ <- runAllBackgroundJobs frozenTime tr.trATCtx
-      endpoints <- runTestBg frozenTime tr $ Endpoints.endpointRequestStatsByProject False pid False Nothing Nothing Nothing 0 200 "Incoming" "24h"
+      endpoints <- runTestBg frozenTime tr $ Endpoints.endpointRequestStatsByProject Endpoints.WithStats False pid False Nothing Nothing Nothing 0 200 "Incoming" "24h"
       V.length endpoints `shouldBe` 2
       forM_ endpoints \enp ->
         ["/", "/api/v1/user/login", "/service/extension/backup/mboximport"] `shouldContain` [enp.urlPath]
