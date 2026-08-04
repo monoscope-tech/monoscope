@@ -3,7 +3,7 @@ module System.Server (runMonoscope, mkServer, cancelAllConcurrently) where
 import BackgroundJobs qualified
 import Colourista.IO (blueMessage)
 import Control.Concurrent (forkIO, threadDelay)
-import Control.Concurrent.Async (Async, async, cancel, mapConcurrently_, race, waitAny)
+import Control.Concurrent.Async (Async, async, cancel, mapConcurrently_, race, waitAnyCatch)
 import Control.Concurrent.STM (check)
 import Control.Exception.Safe qualified as Safe
 import Data.Aeson qualified as AE
@@ -179,7 +179,11 @@ runServer appLogger env tp = do
     liftIO
       $ sequenceA
       $ catMaybes
-      $ [ guard (not consumerOnly) $> async (runSettings warpSettings wrappedServer) -- intentionally unsupervised: Warp crash triggers waitAnyCancel → process exit
+      $ [ -- intentionally unsupervised: Warp crash triggers waitAnyCancel → process exit.
+          -- The exception is logged here because `awaitShutdown` discards fiber results,
+          -- so an unlogged Warp death is a silent crash-loop (2026-08-04 incident: healthy
+          -- replicas dropped their listener every ~10-50min with nothing in the logs).
+          guard (not consumerOnly) $> async ((runSettings warpSettings wrappedServer >> logExc "warp" "runSettings returned cleanly") `Safe.withException` \(e :: SomeException) -> logExc "warp" ("runSettings threw: " <> show e))
         , guard env.config.enablePubsubService $> async (supervise logExc "pubsub" $ Queue.pubsubService appLogger env tp env.config.requestPubsubTopics processMessages)
         , guard (not consumerOnly) $> async (supervise logExc "background-jobs" bgJobWorker)
         , guard (not consumerOnly && env.config.enableOtlpGrpcService) $> async (supervise logExc "otlp-grpc" $ OtlpServer.runServer appLogger env tp)
@@ -196,7 +200,7 @@ runServer appLogger env tp = do
   -- The hard-exit watchdog calls exitImmediately (_exit), which under ghcid
   -- (`make live-reload`) would kill the whole `cabal repl` process on every
   -- reload's interrupt-driven teardown. Only arm it in deployed envs.
-  liftIO $ awaitShutdown (env.config.environment /= Dev) asyncs
+  liftIO $ awaitShutdown (logExc "shutdown") (env.config.environment /= Dev) asyncs
 
 
 -- | Wall-clock budget for tearing every service fiber down once shutdown
@@ -233,8 +237,8 @@ hardExitDeadlineUs = 40_000_000
 -- listener — as an orphaned thread with its socket still bound. The next
 -- reload's `otlp-grpc` fiber then failed to bind port 4317 ("Address already
 -- in use") and, being wrapped in 'supervise', retried that failure forever.
-awaitShutdown :: Bool -> [Async a] -> IO ()
-awaitShutdown hardExit asyncs = do
+awaitShutdown :: (Text -> IO ()) -> Bool -> [Async a] -> IO ()
+awaitShutdown logEnd hardExit asyncs = do
   stop <- newEmptyMVar
   for_ [sigINT, sigTERM] \s -> installHandler s (Catch (void (tryPutMVar stop ()))) Nothing
   -- Arm the hard-exit watchdog the instant shutdown starts (a fiber died or a
@@ -246,7 +250,14 @@ awaitShutdown hardExit asyncs = do
   let teardown = do
         when hardExit $ void $ forkIO $ threadDelay hardExitDeadlineUs >> exitImmediately (ExitFailure 1)
         cancelAllConcurrently shutdownDeadlineUs asyncs
-  void (race (takeMVar stop) (waitAny asyncs)) `Safe.finally` teardown
+  -- Say WHY we are shutting down: signal vs a service fiber ending (and how it
+  -- ended). Fiber results are otherwise discarded, which made crashes invisible.
+  ( race (takeMVar stop) (waitAnyCatch asyncs) >>= \case
+      Left () -> logEnd "SIGINT/SIGTERM received; shutting down"
+      Right (_, Right _) -> logEnd "a service fiber exited cleanly; shutting down"
+      Right (_, Left e) -> logEnd ("a service fiber died: " <> show e <> "; shutting down")
+    )
+    `Safe.finally` teardown
 
 
 -- | Cancel every fiber CONCURRENTLY (vs async's sequential @mapM_ cancel@),
