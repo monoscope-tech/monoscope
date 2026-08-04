@@ -420,6 +420,27 @@ describe('LogList — aggregate (patterns) child pagination', () => {
 });
 
 describe('LogList — concurrent refresh vs load-more', () => {
+  test('a newer full fetch supersedes an in-flight empty initial response', async () => {
+    const el = await mountList();
+    const tx = deferredTransport();
+    el.transport = tx as any;
+
+    // The component starts a head-preloaded request, then query/time setup emits
+    // update-query before it completes. Previously the isLoading guard silently
+    // discarded this second request.
+    const initial = el.fetchData('initial-url', false, false, false);
+    const current = el.fetchData('current-url', true, false, false);
+    expect(tx.pending.map((p) => p.url)).toEqual(['initial-url', 'current-url']);
+
+    tx.settle(1, treeFromLogs(['current-1']), { hasMore: false });
+    await current;
+    tx.settle(0, [], { hasMore: false, count: 0 });
+    await initial;
+
+    expect(ids(el)).toEqual(['current-1']);
+    expect((el as any).isLoading).toBe(false);
+  });
+
   // Bug: the three loading guards are independent, so a refresh (new query) and an
   // in-flight load-more run concurrently. If the load-more resolves AFTER the
   // refresh, its older rows from the PREVIOUS query are merged into the new query's

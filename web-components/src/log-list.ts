@@ -1238,7 +1238,6 @@ export class LogList extends LitElement {
   fetchData = async (url: string, isRefresh = false, isRecentFetch = false, isLoadMore = false) => {
     if (isRecentFetch && this.isFetchingRecent) return;
     if (isLoadMore && this.isLoadingMore) return;
-    if (!isRecentFetch && !isLoadMore && this.isLoading) return;
 
     if (isRecentFetch) this.isFetchingRecent = true;
     else if (isLoadMore) this.isLoadingMore = true;
@@ -1258,7 +1257,11 @@ export class LogList extends LitElement {
 
     try {
       const { tree, meta } = await this.transport(url);
-      if ((isLoadMore || isRecentFetch) && gen !== this.fetchGeneration) return; // superseded by a refresh
+      // Query-editor and time-picker initialization can issue a newer full fetch
+      // while the head-preloaded request is still running. Full fetches therefore
+      // use latest-request-wins too: never let an obsolete empty response replace
+      // rows for the URL the charts have already adopted.
+      if (gen !== this.fetchGeneration) return;
       this.fetchError = null;
 
       // Handle results
@@ -1357,6 +1360,9 @@ export class LogList extends LitElement {
         setTimeout(() => this.updateColumnMaxWidthMap(tree.map((t) => t.data).filter(Boolean)), 100);
       }
     } catch (error) {
+      // A newer full fetch owns the UI now. Do not surface an error from the
+      // obsolete request or replace the newer request's loading state.
+      if (gen !== this.fetchGeneration) return;
       console.error(error);
       const msg = error instanceof Error ? error.message : 'Network error';
       // Show inline error when initial load fails (no data yet), toast otherwise
@@ -1371,8 +1377,8 @@ export class LogList extends LitElement {
       // unrelated recent/refresh finishes first.
       if (isRecentFetch) this.isFetchingRecent = false;
       else if (isLoadMore) this.isLoadingMore = false;
-      else this.isLoading = false;
-      this.showLoadingSpinner(false);
+      else if (gen === this.fetchGeneration) this.isLoading = false;
+      if (!isFullFetch || gen === this.fetchGeneration) this.showLoadingSpinner(false);
       this.requestUpdate();
     }
   };
