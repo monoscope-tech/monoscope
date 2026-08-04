@@ -823,10 +823,15 @@ fetchReplayShard p sessionId mkey = do
       -- session-scoped keys while their online migration is in progress.
       structuredMarker = "/rrweb/"
       scoped k =
-        (p.id.toText <> structuredMarker) `T.isPrefixOf` k
-          && ("/" <> sidText <> "/") `T.isInfixOf` k
-          || (sidText <> "/") `T.isPrefixOf` k
-          || k == sidText <> ".json"
+        (p.id.toText <> structuredMarker)
+          `T.isPrefixOf` k
+          && ("/" <> sidText <> "/")
+          `T.isInfixOf` k
+          || (sidText <> "/")
+          `T.isPrefixOf` k
+          || k
+          == sidText
+          <> ".json"
   case mkey of
     Just k | scoped k -> do
       liftIO (Minio.runMinio conn $ fetchRawObject bucket k (".gz" `T.isSuffixOf` k)) >>= \case
@@ -1100,7 +1105,7 @@ migrateReplayStorage batchSize = do
             newFiles = V.map remap oldFiles
             newShards = V.map remap oldShards
             pairs = zip (V.toList oldFiles <> V.toList oldShards) (V.toList newFiles <> V.toList newShards)
-        copyResults <- liftIO $ forM pairs $ \(oldKey, newKey) -> (oldKey, newKey,) <$> copyReplayObjectVerified conn bucket oldKey newKey
+        copyResults <- liftIO $ forM pairs $ \(oldKey, newKey) -> (oldKey,newKey,) <$> copyReplayObjectVerified conn bucket oldKey newKey
         case [(o, n, e) | (o, n, Left e) <- copyResults] of
           failures@(_ : _) -> do
             Log.logAttention "Replay storage migration: verified copy failed; DB unchanged" (HM.insert "failures" (toText $ show failures) $ sessionLogCtx pid sid)

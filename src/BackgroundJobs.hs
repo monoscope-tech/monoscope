@@ -150,9 +150,9 @@ data BgJobs
   | GitSyncPushAllDashboards Projects.ProjectId -- Push all existing dashboards to repo
   | CompressReplaySessions
   | MergeReplaySession Projects.ProjectId UUID.UUID
-  -- TEMPORARY: delete this constructor + handler after every replay_sessions
-  -- key has the <project>/rrweb/<date>/ prefix and migration has been verified.
-  | MigrateReplayStorage Int
+  | -- TEMPORARY: delete this constructor + handler after every replay_sessions
+    -- key has the <project>/rrweb/<date>/ prefix and migration has been verified.
+    MigrateReplayStorage Int
   | ExpireReplayData
   | ExpireShareEvents
   | LogPatternPeriodicProcessing UTCTime Projects.ProjectId
