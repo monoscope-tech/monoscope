@@ -150,6 +150,9 @@ data BgJobs
   | GitSyncPushAllDashboards Projects.ProjectId -- Push all existing dashboards to repo
   | CompressReplaySessions
   | MergeReplaySession Projects.ProjectId UUID.UUID
+  -- TEMPORARY: delete this constructor + handler after every replay_sessions
+  -- key has the <project>/rrweb/<date>/ prefix and migration has been verified.
+  | MigrateReplayStorage Int
   | ExpireReplayData
   | ExpireShareEvents
   | LogPatternPeriodicProcessing UTCTime Projects.ProjectId
@@ -579,6 +582,11 @@ processBackgroundJob authCtx bgJob =
     PrometheusScrapeOne cid -> scrapePrometheusTarget cid
     CompressReplaySessions -> Replay.compressAndMergeReplaySessions
     MergeReplaySession pid sid -> Replay.mergeReplaySession pid sid
+    MigrateReplayStorage batchSize -> do
+      moved <- Replay.migrateReplayStorage batchSize
+      when (moved >= max 1 batchSize) $ do
+        ctx <- Effectful.Reader.Static.ask @Config.AuthContext
+        void $ liftIO $ withResource ctx.jobsPool \conn -> createJob conn "background_jobs" (MigrateReplayStorage batchSize)
     ExpireReplayData -> Replay.expireOldReplayData
     -- 48h expiry + 30d grace so "Link expired" still renders before deletion.
     ExpireShareEvents -> do

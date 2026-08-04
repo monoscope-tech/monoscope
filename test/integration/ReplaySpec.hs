@@ -15,7 +15,7 @@ import Models.Projects.Projects qualified as Projects
 import Data.ByteString qualified as BS
 import Data.HashMap.Strict qualified as HM
 import Data.Time (UTCTime (..), addUTCTime, fromGregorian, getCurrentTime)
-import Pages.Replay (RawJson (..), ReplayManifest (..), ReplayPayload (..), ReplaySegment (..), ReplaySessionResp (..), buildReplayManifest, claimMergeLease, concatRawJsonArrays, fetchReplaySession, fetchReplayShard, firstEventTimestampRaw, mergeReplaySession, processReplayEvents, releaseMergeLease, sessionFileKeys, splitReplayPayload, stripJsonNullEscapes)
+import Pages.Replay (RawJson (..), ReplayManifest (..), ReplayPayload (..), ReplaySegment (..), ReplaySessionResp (..), buildReplayManifest, claimMergeLease, concatRawJsonArrays, fetchReplaySession, fetchReplayShard, firstEventTimestampRaw, mergeReplaySession, migratedReplayKey, processReplayEvents, releaseMergeLease, replayObjectPrefix, sessionFileKeys, splitReplayPayload, stripJsonNullEscapes)
 import System.Mem (performGC)
 import Pkg.ErrorMetrics (wireTypeErrorsRef)
 import Pkg.DeriveUtils (UUIDId (..))
@@ -59,6 +59,19 @@ decodeArrayLen bs = case AE.eitherDecodeStrict bs of
 
 spec :: Spec
 spec = around withTestResources do
+  describe "replay object layout" do
+    let at = UTCTime (fromGregorian 2026 5 8) 0
+        sid = UUID.fromWords 0 0 0 42
+        prefix = UUID.toText UUID.nil <> "/rrweb/2026-05-08/" <> UUID.toText sid <> "/"
+    it "groups keys by project, ISO date, and session" $ \_ ->
+      replayObjectPrefix pid at sid `shouldBe` prefix
+    it "maps legacy keys without changing their filename" $ \_ ->
+      migratedReplayKey pid at sid (UUID.toText sid <> "/shard-000001-10.json.gz")
+        `shouldBe` prefix <> "shard-000001-10.json.gz"
+    it "is idempotent for already structured keys" $ \_ -> do
+      let key = prefix <> "20260508T000000.json"
+      migratedReplayKey pid at sid key `shouldBe` key
+
   describe "concatRawJsonArrays" do
     it "returns empty array for no inputs" $ \_ ->
       concatRawJsonArrays [] `shouldBe` "[]"
@@ -393,6 +406,8 @@ spec = around withTestResources do
         case acked of
           Right (ids, _poison) -> ids `shouldBe` ["ack-1"]
           Left _ -> expectationFailure "processReplayEvents returned Left WriteFailure"
+        storedKeys <- runQueryEffect tr $ sessionFileKeys pid sid
+        storedKeys `shouldSatisfy` (\ks -> not (null ks) && all ((replayObjectPrefix pid frozen sid) `T.isPrefixOf`) ks)
         events <- fetchEventsFor tr sid
         -- Ingested array must come back byte-equivalent (rrweb relies on
         -- exact event objects + timestamp ordering).

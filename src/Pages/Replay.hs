@@ -1,8 +1,8 @@
-module Pages.Replay (replayPostH, ReplayPost (..), processReplayEvents, replaySessionGetH, fetchReplaySession, ReplaySessionResp (..), RawJson (..), compressAndMergeReplaySessions, mergeReplaySession, expireOldReplayData, concatRawJsonArrays, sessionFileKeys, splitReplayPayload, ReplayPayload (..), stripJsonNullEscapes, firstEventTimestampRaw, claimMergeLease, releaseMergeLease, ReplayManifest (..), ReplaySegment (..), replaySessionManifestGetH, replaySessionShardGetH, buildReplayManifest, fetchReplayShard) where
+module Pages.Replay (replayPostH, ReplayPost (..), processReplayEvents, replaySessionGetH, fetchReplaySession, ReplaySessionResp (..), RawJson (..), compressAndMergeReplaySessions, mergeReplaySession, expireOldReplayData, migrateReplayStorage, replayObjectPrefix, migratedReplayKey, concatRawJsonArrays, sessionFileKeys, splitReplayPayload, ReplayPayload (..), stripJsonNullEscapes, firstEventTimestampRaw, claimMergeLease, releaseMergeLease, ReplayManifest (..), ReplaySegment (..), replaySessionManifestGetH, replaySessionShardGetH, buildReplayManifest, fetchReplayShard) where
 
 import Codec.Compression.GZip qualified as GZip
 import Conduit (runConduit)
-import Control.Exception (throwIO, try)
+import Control.Exception (ErrorCall (..), throwIO, try)
 import Data.Aeson qualified as AE
 import Data.Aeson.Encoding qualified as AEE
 import Data.Aeson.Key qualified as AEKey
@@ -472,6 +472,23 @@ projectMinioConn envCfg p =
    in (conn, bucket)
 
 
+-- | Stable, UTC, lexicographically sortable replay namespace. ISO dates are
+-- deliberately used instead of DD-MM-YYYY so an object-store listing is also
+-- chronological.
+replayObjectPrefix :: Projects.ProjectId -> UTCTime -> UUID.UUID -> Text
+replayObjectPrefix pid at sid =
+  pid.toText <> "/rrweb/" <> toText (formatTime defaultTimeLocale "%Y-%m-%d" at) <> "/" <> UUID.toText sid <> "/"
+
+
+-- | Move any old replay key into the structured namespace while retaining its
+-- filename. Already-migrated keys are returned unchanged, making migration
+-- retries idempotent.
+migratedReplayKey :: Projects.ProjectId -> UTCTime -> UUID.UUID -> Text -> Text
+migratedReplayKey pid at sid oldKey
+  | (pid.toText <> "/rrweb/") `T.isPrefixOf` oldKey = oldKey
+  | otherwise = replayObjectPrefix pid at sid <> T.takeWhileEnd (/= '/') oldKey
+
+
 -- | Fetch every tracked key individually, tolerating per-key failures (NoSuchKey is
 -- silently skipped as a concurrent-merge artifact; transport and decode errors are
 -- logged and the key is dropped). Returns merged arrays plus a partial-failure flag
@@ -672,7 +689,7 @@ saveReplayMinio envCfg jobsPool ackId payload =
           let session = UUID.toText payload.sessionId
               (conn, bucket) = projectMinioConn envCfg p
               timeStr = toText $ formatTime defaultTimeLocale "%Y%m%dT%H%M%S%q" now
-              objKeyText = session <> "/" <> timeStr <> ".json"
+              objKeyText = replayObjectPrefix payload.projectId now payload.sessionId <> timeStr <> ".json"
               body = payload.eventsBytes
           liftIO (Minio.runMinio conn $ Minio.putObject bucket objKeyText (CC.sourceLazy (BL.fromStrict body)) (Just $ fromIntegral $ BS.length body) Minio.defaultPutObjectOptions) >>= \case
             Right _ -> do
@@ -802,9 +819,14 @@ fetchReplayShard p sessionId mkey = do
   ctx <- Effectful.Reader.Static.ask @AuthContext
   let (conn, bucket) = projectMinioConn ctx.config p
       sidText = UUID.toText sessionId
-      -- Scope to this session: shards/monolith/tail live under "<sid>/"; the
-      -- ancient single-object blob is exactly "<sid>.json". Anything else is rejected.
-      scoped k = (sidText <> "/") `T.isPrefixOf` k || k == sidText <> ".json"
+      -- Authorize against both the current structured namespace and legacy
+      -- session-scoped keys while their online migration is in progress.
+      structuredMarker = "/rrweb/"
+      scoped k =
+        (p.id.toText <> structuredMarker) `T.isPrefixOf` k
+          && ("/" <> sidText <> "/") `T.isInfixOf` k
+          || (sidText <> "/") `T.isPrefixOf` k
+          || k == sidText <> ".json"
   case mkey of
     Just k | scoped k -> do
       liftIO (Minio.runMinio conn $ fetchRawObject bucket k (".gz" `T.isSuffixOf` k)) >>= \case
@@ -887,7 +909,9 @@ mergeOneSessionByKeys pid sessionId logSuffix afterMerge =
         else do
           -- Next append index from the DB shard count (no S3 listing).
           let startIdx = 1 + foldl' max 0 (mapMaybe (fmap fst . parseShardKey) existingShards)
-          liftIO (try @MergeError $ mergeOneSession s3Conn bucket sessionId startIdx fileKeys) >>= \case
+          nowForKey <- Time.currentTime
+          let shardPrefix = replayObjectPrefix pid nowForKey sessionId
+          liftIO (try @MergeError $ mergeOneSession s3Conn bucket shardPrefix startIdx fileKeys) >>= \case
             Left merr -> do
               let ctxWithErr = withError merr logCtx
               case merr of
@@ -945,18 +969,18 @@ shardSealBytes :: Int64
 shardSealBytes = 12 * 1024 * 1024
 
 
--- | Object key for a sealed shard: `<sid>/shard-<idx>-<firstTsMs>.json.gz`. The
+-- | Object key for a sealed shard: `<prefix>/shard-<idx>-<firstTsMs>.json.gz`. The
 -- index is a collision-free append id (next = max existing + 1), NOT an ordering
 -- key — read/manifest order shards by the embedded first-event timestamp, parsed
 -- from the key without opening any blob.
 --
--- >>> shardKeyFor UUID.nil 7 1700000000000
--- "00000000-0000-0000-0000-000000000000/shard-000007-1700000000000.json.gz"
--- >>> parseShardKey (shardKeyFor UUID.nil 7 1700000000000)
+-- >>> shardKeyFor "project/rrweb/2026-05-08/session/" 7 1700000000000
+-- "project/rrweb/2026-05-08/session/shard-000007-1700000000000.json.gz"
+-- >>> parseShardKey (shardKeyFor "project/rrweb/2026-05-08/session/" 7 1700000000000)
 -- Just (7,1700000000000)
-shardKeyFor :: UUID.UUID -> Int -> Integer -> Minio.Object
-shardKeyFor sid idx firstTsMs =
-  UUID.toText sid <> "/shard-" <> T.justifyRight 6 '0' (show idx) <> "-" <> show firstTsMs <> ".json.gz"
+shardKeyFor :: Text -> Int -> Integer -> Minio.Object
+shardKeyFor prefix idx firstTsMs =
+  prefix <> "shard-" <> T.justifyRight 6 '0' (show idx) <> "-" <> show firstTsMs <> ".json.gz"
 
 
 -- | Parse a shard object key into (index, firstTsMs). `<sid>/shard-<idx>-<ts>.json.gz`;
@@ -988,8 +1012,8 @@ parseShardKey key = do
 -- on any decode/transport failure so history is never dropped; NoSuchKey is
 -- tolerated (a source already removed by a crashed prior run). `startIdx` is the
 -- next append index (from the DB shard count) so shard keys stay unique.
-mergeOneSession :: Minio.ConnectInfo -> Minio.Bucket -> UUID.UUID -> Int -> [Text] -> IO [Text]
-mergeOneSession conn bucket sessionId startIdx fileKeys = reverse <$> go startIdx (sort fileKeys) [] 0 []
+mergeOneSession :: Minio.ConnectInfo -> Minio.Bucket -> Text -> Int -> [Text] -> IO [Text]
+mergeOneSession conn bucket keyPrefix startIdx fileKeys = reverse <$> go startIdx (sort fileKeys) [] 0 []
   where
     -- buf :: [(firstTs, raw, sourceKey)] for the current shard; sealed :: sealed keys (newest first)
     go idx [] buf _ sealed = seal idx buf sealed
@@ -1010,12 +1034,101 @@ mergeOneSession conn bucket sessionId startIdx fileKeys = reverse <$> go startId
           firstTs = maybe 0 (\(ts, _, _) -> ts) (viaNonEmpty head sorted)
           !merged = concatRawJsonArrays [raw | (_, raw, _) <- sorted]
           !compressed = GZip.compress merged
-          shardKey = shardKeyFor sessionId idx (round (firstTs :: Double))
+          shardKey = shardKeyFor keyPrefix idx (round (firstTs :: Double))
       putRes <- Minio.runMinio conn $ do
         Minio.putObject bucket shardKey (CC.sourceLazy compressed) (Just (BL.length compressed)) Minio.defaultPutObjectOptions
         forM_ [k | (_, _, k) <- sorted] (Minio.removeObject bucket)
       whenLeft_ putRes (throwIO . MergePutFailed)
       pure (shardKey : sealed)
+
+
+-- | Copy one object and verify the destination byte-for-byte before returning.
+-- The source remains untouched; callers switch the DB reference first and only
+-- then remove it. This ordering makes every interruption recoverable.
+copyReplayObjectVerified :: Minio.ConnectInfo -> Minio.Bucket -> Text -> Text -> IO (Either Text ())
+copyReplayObjectVerified conn bucket oldKey newKey
+  | oldKey == newKey = pure $ Right ()
+  | otherwise = do
+      source <- Minio.runMinio conn $ fetchRawObject bucket oldKey False
+      case source of
+        Left err -> pure $ Left $ "source read failed: " <> toText (displayException err)
+        Right bytes -> do
+          putResult <- Minio.runMinio conn $ Minio.putObject bucket newKey (CC.sourceLazy bytes) (Just $ BL.length bytes) Minio.defaultPutObjectOptions
+          case putResult of
+            Left err -> pure $ Left $ "destination write failed: " <> toText (displayException err)
+            Right _ -> do
+              verified <- Minio.runMinio conn $ fetchRawObject bucket newKey False
+              pure $ case verified of
+                Left err -> Left $ "destination verification read failed: " <> toText (displayException err)
+                Right copied
+                  | copied == bytes -> Right ()
+                  | otherwise -> Left "destination bytes differ from source"
+
+
+-- | Online migration from legacy @<session>/...@ keys to
+-- @<project>/rrweb/YYYY-MM-DD/<session>/...@. Processes at most @batchSize@
+-- sessions and returns the number whose DB references were switched. Safe to
+-- run repeatedly and concurrently with ingestion: the conditional UPDATE loses
+-- the race (and retries later) if either key array changed after selection.
+-- TEMPORARY: delete this function, 'migratedReplayKey', and the background-job
+-- wiring after the query selects zero rows in every environment and old-object
+-- cleanup has been verified. Keep 'replayObjectPrefix'; it is the permanent
+-- write-path layout.
+migrateReplayStorage :: Int -> ATBackgroundCtx Int
+migrateReplayStorage batchSize = do
+  ctx <- Effectful.Reader.Static.ask @AuthContext
+  let lim = fromIntegral (max 1 batchSize) :: Int64
+  rows :: [(UUID.UUID, Projects.ProjectId, UTCTime, V.Vector Text, V.Vector Text)] <-
+    Hasql.interp
+      [HI.sql|
+        SELECT session_id, project_id, last_event_at,
+               COALESCE(file_keys, '{}'::text[]), COALESCE(shard_keys, '{}'::text[])
+        FROM projects.replay_sessions
+        WHERE EXISTS (
+          SELECT 1 FROM unnest(COALESCE(file_keys, '{}'::text[]) || COALESCE(shard_keys, '{}'::text[])) k
+          WHERE k NOT LIKE project_id::text || '/rrweb/%'
+        )
+        ORDER BY last_event_at, session_id
+        LIMIT #{lim}
+      |]
+  migrated <- forM rows $ \(sid, pid, sessionAt, oldFiles, oldShards) ->
+    Projects.projectById pid >>= \case
+      Nothing -> False <$ Log.logAttention "Replay storage migration: project missing" (sessionLogCtx pid sid)
+      Just p -> do
+        let (conn, bucket) = projectMinioConn ctx.config p
+            remap = migratedReplayKey pid sessionAt sid
+            newFiles = V.map remap oldFiles
+            newShards = V.map remap oldShards
+            pairs = zip (V.toList oldFiles <> V.toList oldShards) (V.toList newFiles <> V.toList newShards)
+        copyResults <- liftIO $ forM pairs $ \(oldKey, newKey) -> (oldKey, newKey,) <$> copyReplayObjectVerified conn bucket oldKey newKey
+        case [(o, n, e) | (o, n, Left e) <- copyResults] of
+          failures@(_ : _) -> do
+            Log.logAttention "Replay storage migration: verified copy failed; DB unchanged" (HM.insert "failures" (toText $ show failures) $ sessionLogCtx pid sid)
+            pure False
+          [] -> do
+            changed <-
+              Hasql.interpExecute
+                [HI.sql|
+                  UPDATE projects.replay_sessions
+                  SET file_keys = #{newFiles}::text[], shard_keys = #{newShards}::text[], updated_at = now()
+                  WHERE session_id = #{sid} AND project_id = #{pid}
+                    AND file_keys = #{oldFiles}::text[] AND shard_keys = #{oldShards}::text[]
+                |]
+            if changed == 0
+              then False <$ Log.logInfo "Replay storage migration: concurrent change detected; will retry" (sessionLogCtx pid sid)
+              else do
+                -- DB already points at verified copies. Deletion failure merely
+                -- leaves a duplicate and is safe to retry/clean up separately.
+                deleteResults <- liftIO $ forM [(o, n) | (o, n) <- pairs, o /= n] $ \(o, _) -> (o,) <$> Minio.runMinio conn (Minio.removeObject bucket o)
+                let deleteFailures = [(o, displayException e) | (o, Left e) <- deleteResults, not (isNoSuchKey e)]
+                unless (null deleteFailures) $ Log.logAttention "Replay storage migration: old-key cleanup incomplete" (HM.insert "failures" (toText $ show deleteFailures) $ sessionLogCtx pid sid)
+                pure True
+  let count = length $ filter id migrated
+  Log.logInfo "Replay storage migration batch complete" ("selected", length rows, "migrated", count)
+  -- OddJobs retries the batch if a verified copy failed or a concurrent writer
+  -- won the conditional UPDATE. Successful rows are already idempotently done.
+  when (count < length rows) $ liftIO $ throwIO $ ErrorCall "replay storage migration batch incomplete"
+  pure count
 
 
 -- | Advertised retention window for default-storage replay data.
