@@ -23,7 +23,8 @@ import Data.Map.Lazy qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime)
 import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime))
-import Data.Time.Zones (loadTZFromDB, utcToLocalTimeTZ)
+import Data.Time.Zones (utcTZ, utcToLocalTimeTZ)
+import Data.Time.Zones.All qualified as TZ
 import Data.Vector qualified as V
 import Effectful.Concurrent.Async (concurrently)
 import Effectful.Reader.Static (ask)
@@ -181,8 +182,9 @@ computeDurationChanges current prev = V.map compute current
 renderWeeklyEmail :: Text -> Projects.Project -> Projects.ProjectId -> Text -> UTCTime -> UTCTime -> Int -> Int -> Double -> Double -> V.Vector Issues.IssueSummary -> V.Vector (Text, Text, Text, Int64, Double, Int64, Double) -> V.Vector (Text, Int, Int) -> V.Vector (Text, Int64, Text) -> Bool -> ATAuthCtx (Text, Text)
 renderWeeklyEmail reportUrl project pid userName startTime endTime totalEvents totalErrors eventsChangePct errorsChangePct anomalies performance slowQueries topPatterns freeTierExceeded = do
   ctx <- ask @AuthContext
-  tz <- liftIO $ loadTZFromDB (toString $ if T.null project.timeZone then "UTC" else project.timeZone)
-  let reportUrl' = ctx.env.hostUrl <> reportUrl
+  let tzName = if T.null project.timeZone then "UTC" else project.timeZone
+      tz = fromMaybe utcTZ $ TZ.tzByName (encodeUtf8 tzName)
+      reportUrl' = ctx.env.hostUrl <> reportUrl
       dayStart = show $ localDay (utcToLocalTimeTZ tz startTime)
       dayEnd = show $ localDay (utcToLocalTimeTZ tz endTime)
       stmTxt = formatUTCMicros startTime
