@@ -808,7 +808,7 @@ navbar bcfg menuL =
         case bcfg.pageTitleSuffixModalId of
           Just modalId -> label_ [class_ "font-normal text-xl p-1 leading-none text-textWeak cursor-pointer hover:bg-fillWeak rounded-md", Lucid.for_ modalId, id_ "pageTitleSuffixText"] $ toHtml suffix
           Nothing -> span_ [class_ "font-normal text-xl p-1 leading-none text-textWeak", id_ "pageTitleSuffixText"] $ toHtml suffix
-      whenJust bcfg.docsLink \link -> a_ ([class_ "max-md:hidden text-iconBrand -mt-1", href_ link, Aria.label_ "Open Documentation"] <> tippyRight_ "Open Documentation") $ faSprite_ "circle-question" "regular" "w-4 h-4"
+      whenJust bcfg.docsLink \link -> a_ ([class_ "max-md:hidden text-iconBrand -mt-1", href_ link, term "preload" "false", target_ "_blank", rel_ "noopener", Aria.label_ "Open Documentation"] <> tippyRight_ "Open Documentation") $ faSprite_ "circle-question" "regular" "w-4 h-4"
     whenJust bcfg.navTabs $ div_ [class_ $ bool "" "max-md:order-last max-md:w-full max-md:pt-1" (isJust bcfg.pageActions)]
     div_ [class_ $ "flex-1 flex items-center justify-end gap-2 text-sm" <> bool " max-md:hidden" "" (isJust bcfg.pageActions)]
       $ fold bcfg.pageActions

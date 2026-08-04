@@ -25,6 +25,7 @@ module Models.Apis.LogQueries (
 )
 where
 
+import Control.Concurrent qualified as IO
 import Control.Exception.Annotated (checkpoint, try)
 import Data.Aeson qualified as AE
 import Data.Annotation (toAnnotation)
@@ -61,6 +62,7 @@ import Pkg.Parser.Stats (Section, Sources (..))
 import Relude hiding (many, some)
 import System.Logging qualified as Log
 import System.Tracing (Tracing, withSpan_)
+import UnliftIO (throwIO, tryAny)
 import Utils (listToIndexHashMap, lookupVecTextByKey, replaceAllFormats)
 import Web.HttpApiData (ToHttpApiData (..))
 
@@ -227,7 +229,10 @@ jsonArrayRows =
 -- | Check that query contains a project_id filter with the correct project ID
 -- This validates that the query has been properly prepared with the project_id substituted
 hasProjectIdFilter :: Text -> Projects.ProjectId -> Bool
-hasProjectIdFilter query pid = any (`T.isInfixOf` query) ["project_id='" <> pid.toText <> "'", "project_id = '" <> pid.toText <> "'"]
+hasProjectIdFilter query pid = any (`T.isInfixOf` query) ["project_id='" <> pidTxt <> "'", "project_id = '" <> pidTxt <> "'"]
+  where
+    pidTxt :: Text
+    pidTxt = pid.toText
 
 
 -- | Validate SQL query: must be a SELECT and must not contain any statement
@@ -280,6 +285,7 @@ selectLogTable pid queryAST queryText cursorM dateRange projectedColsByUser sour
       , ("monoscope.kql.target_spans", OA.toAttribute (fromMaybe "" targetSpansM))
       ]
       $ try @SomeException
+      $ retryLogExplorerRead
       $ checkpoint (toAnnotation ("selectLogTable", q)) do
         rows :: [AE.Value] <- Hasql.interp (rawSql q)
         pure $ jsonArrayRows rows
@@ -299,6 +305,23 @@ selectLogTable pid queryAST queryText cursorM dateRange projectedColsByUser sour
               hasOverflow = V.length logItemsV > limit
               rows = if hasOverflow then V.take limit logItemsV else logItemsV
            in Right (rows, queryComponents.toColNames, V.length rows + bool 0 1 hasOverflow)
+
+
+-- | Retries connection and pool blips, but never retries a malformed query.
+retryLogExplorerRead :: (IOE :> es, Log :> es) => Eff es a -> Eff es a
+retryLogExplorerRead = go (1 :: Int)
+  where
+    maxAttempts = 3
+    go attempt action =
+      tryAny action >>= \case
+        Right value -> pure value
+        Left err
+          | attempt < maxAttempts && Hasql.isTransientException err -> do
+              let delay = 100000 * (2 ^ (attempt - 1))
+              Log.logAttention "log-explorer.data transient query failure, retrying" $ AE.object ["attempt" AE..= attempt, "max_attempts" AE..= maxAttempts, "backoff_us" AE..= delay, "error" AE..= show @Text err]
+              liftIO $ IO.threadDelay delay
+              go (attempt + 1) action
+          | otherwise -> throwIO err
 
 
 -- | Return spans that are transitive descendants of @seedSpanIds@ within

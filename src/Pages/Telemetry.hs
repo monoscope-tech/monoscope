@@ -972,11 +972,21 @@ tracePage pid traceItem rawSpanRecords = do
       htmx.trigger('#trigger-span-' + spans[spandInd], 'click')
     }
     function initTraceCharts() {
-      var el = document.getElementById('trace-tabs');
-      if (typeof flameGraphChart === 'undefined' || !el || el.dataset.init) return;
-      el.dataset.init = '1';
-      flameGraphChart($spanJson, "$trId", $colorsJson);
-      waterFallGraphChart("$trId", $colorsJson);
+      var tabs = document.getElementById('trace-tabs');
+      var timeline = document.getElementById('flame_graph');
+      if (typeof waterFallGraphChart === 'undefined' || !tabs) return;
+      if (!tabs.dataset.waterfallInit) {
+        tabs.dataset.waterfallInit = '1';
+        waterFallGraphChart("$trId", $colorsJson);
+      }
+      if (timeline && !timeline.dataset.timelineListener) {
+        timeline.dataset.timelineListener = '1';
+        timeline.addEventListener('tab-visible', () => {
+          if (typeof flameGraphChart === 'undefined' || timeline.dataset.timelineInit) return;
+          timeline.dataset.timelineInit = '1';
+          flameGraphChart($spanJson, "$trId", $colorsJson);
+        }, {once: true});
+      }
     }
     window.openTraceDetails = function(panel) {
       if (panel.offsetWidth > 5) return;

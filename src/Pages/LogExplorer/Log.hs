@@ -703,8 +703,7 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
       freeTierStatus = fromRight def freeTierStatusE
       (queryLibRecent, queryLibSaved) = partitionQueryLib queryLib
 
-  -- Preload the data fetch from <head> so it overlaps shell render instead of
-  -- starting only after the log-list web component boots. Point it at the endpoint
+  -- Preload the data fetch before the log-list web component boots. Point it at the endpoint
   -- matching the active viz — otherwise the sessions/patterns page fires a wasted
   -- logs query that its transport never consumes (and which contends with the
   -- real aggregate fetch).
@@ -713,7 +712,6 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
         Just "patterns" -> LogQueries.Patterns
         _ -> LogQueries.Data
       preloadUrl = T.replace "\"" "%22" $ LogQueries.logExplorerUrlPath pid dataEndpoint queryM' cols' Nothing sinceM fromM toM Nothing sourceM False
-      headContent = Just $ script_ [text|window.logDataPromise = fetch("$preloadUrl", {headers: {Accept: "application/json"}, credentials: "include"}).then(r => r.json());|]
 
   let stampPng base = do
         url <- Widget.widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid base sinceM fromM toM
@@ -726,7 +724,7 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
           { pageTitle = "Explorer"
           , docsLink = Just "https://monoscope.tech/docs/dashboard/dashboard-pages/api-log-explorer/"
           , freeTierStatus = freeTierStatus
-          , headContent = headContent
+          , headContent = Nothing
           , pageActions = Just $ logExplorerActions_ currentRange
           , navTabs = Just $ logExplorerNavTabs_ pid
           }
@@ -750,6 +748,7 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
           , latencyWidget
           , queryResultCount = 0
           , parseError = parseErrorMsg
+          , preloadUrl
           }
   addRespHeaders $ LogPage $ PageCtx bwconf page
 
@@ -811,7 +810,7 @@ logExplorerDataH pid queryM' cols' cursorM' sinceM fromM toM sourceM targetSpans
         Hasql.withHasqlTimefusion authCtx.env.enableTimefusionReads
           $ LogQueries.selectLogTable pid queryAST (toQText queryAST) cursorM' (fromD, toD) addCols (parseMaybe pSource =<< sourceM) targetSpansM
       case resultE of
-        Left err -> Log.logAttention "Log explorer data query failed" (show @Text err) $> (Just (sanitizeBackendError err), emptyTable)
+        Left err -> Log.logAttention "log-explorer.data query failed" (AE.object ["project_id" AE..= pid.toText, "source" AE..= fromMaybe "spans" sourceM, "error" AE..= err]) $> (Just (sanitizeBackendError err), emptyTable)
         Right t -> pure (Nothing, t)
   -- UI always wants the trace-tree context; the API/CLI defaults off.
   lr <- buildLogResult True pid now sinceM addCols removeCols tableData
@@ -1344,6 +1343,7 @@ data ApiLogsPageData = ApiLogsPageData
   , latencyWidget :: Widget.Widget
   , queryResultCount :: Int
   , parseError :: Maybe Text
+  , preloadUrl :: Text
   }
 
 
@@ -1455,6 +1455,11 @@ traceLoadingSkeleton_ =
 
 apiLogsPage :: ApiLogsPageData -> Html ()
 apiLogsPage page = do
+  -- #main-content is the HTMX swap target; <head> is not included in a boosted
+  -- response, so the preload must live here for in-app navigation too. A trace
+  -- deep link does not display the log table, so do not contend with its fetch.
+  when (isNothing page.showTrace)
+    $ script_ $ "window.logDataPromise = fetch(\"" <> page.preloadUrl <> "\", {headers: {Accept: \"application/json\"}, credentials: \"include\"}).then(r => r.json());"
   sectionWrapper_ do
     template_ [id_ "loader-tmp"] $ loadingIndicator_ LdMD LdDots
     template_ [id_ "trace-loading-skeleton"] traceLoadingSkeleton_

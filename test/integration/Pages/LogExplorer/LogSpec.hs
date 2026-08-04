@@ -487,6 +487,19 @@ spec = around withTestResources do
       (_, sv) <- testServant tr $ Log.logSessionsH testPid Nothing fromTime Nothing toTime Nothing Nothing
       case sv of Log.SessionsView total _ _ -> total `shouldSatisfy` (>= 0)
 
+  describe "Log Explorer page shell" do
+    -- Regression: HTMX swaps only #main-content, so a preload script in <head>
+    -- was discarded when arriving from another page. The table then raced its
+    -- fallback worker fetch against chart requests and could render an empty list.
+    it "keeps the initial log-data preload inside the HTMX swap target" \tr -> do
+      (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
+          indexOf needle = T.length $ fst $ T.breakOn needle html
+      html `shouldSatisfy` T.isInfixOf "id=\"main-content\""
+      html `shouldSatisfy` T.isInfixOf "window.logDataPromise"
+      html `shouldSatisfy` T.isInfixOf "href=\"https://monoscope.tech/docs/dashboard/dashboard-pages/api-log-explorer/\" preload=\"false\""
+      indexOf "id=\"main-content\"" `shouldSatisfy` (< indexOf "window.logDataPromise")
+
   describe "Trace fullscreen loading" do
     -- Regression: opening a trace used to clear the fullscreen overlay while the
     -- request was in flight; shared trace links showed only a disconnected dots
@@ -499,6 +512,7 @@ spec = around withTestResources do
       html `shouldSatisfy` T.isInfixOf "Loading trace"
       html `shouldSatisfy` T.isInfixOf "Retry loading trace"
       html `shouldSatisfy` T.isInfixOf "send loadTrace"
+      html `shouldNotSatisfy` T.isInfixOf "window.logDataPromise"
 
   describe "Pattern expand (apiLogExpandH)" do
     -- Regression: clicking a pattern used to send the summary *template* as the
@@ -629,6 +643,7 @@ spec = around withTestResources do
           let traceHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml traceDetails
           traceHtml `shouldSatisfy` T.isInfixOf "GET /api/orders"
           traceHtml `shouldNotSatisfy` T.isInfixOf "monoscope.http"
+          traceHtml `shouldSatisfy` T.isInfixOf "timeline.addEventListener('tab-visible'"
         _ -> expectationFailure "expected trace details"
 
     it "flags ERROR-severity logs in the trace-view 'errors' column" \tr -> do
