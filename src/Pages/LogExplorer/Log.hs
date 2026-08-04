@@ -1459,7 +1459,10 @@ apiLogsPage page = do
   -- response, so the preload must live here for in-app navigation too. A trace
   -- deep link does not display the log table, so do not contend with its fetch.
   when (isNothing page.showTrace)
-    $ script_ $ "window.logDataPromise = fetch(\"" <> page.preloadUrl <> "\", {headers: {Accept: \"application/json\"}, credentials: \"include\"}).then(r => r.json());"
+    $ script_
+    $ "window.logDataPromise = fetch(\""
+    <> page.preloadUrl
+    <> "\", {headers: {Accept: \"application/json\"}, credentials: \"include\"}).then(r => r.json());"
   sectionWrapper_ do
     template_ [id_ "loader-tmp"] $ loadingIndicator_ LdMD LdDots
     template_ [id_ "trace-loading-skeleton"] traceLoadingSkeleton_
