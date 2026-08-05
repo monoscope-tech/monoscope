@@ -740,10 +740,7 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst tp sampleOverride = do
               logsQuery = case Issues.hashPrefix issue.issueType of
                 Just prefix | isLogPatternIssue -> "hashes[*]==\"" <> prefix <> issue.targetHash <> "\""
                 _ -> "kind==\"log\" AND context___trace_id==\"" <> logsTraceId <> "\""
-          let timeParams =
-                foldMap
-                  (\(key, val) -> maybe "" (\v -> "&" <> key <> "=" <> toUriStr v) (mfilter (not . T.null) val))
-                  ([("since", tp.since), ("from", tp.from), ("to", tp.to)] :: [(Text, Maybe Text)])
+          let timeParams = mconcat ["&" <> key <> "=" <> toUriStr v | (key, Just v) <- [("since", tp.since), ("from", tp.from), ("to", tp.to)], not (T.null v)]
           virtualTable pid (Just ("/p/" <> pid.toText <> "/log_explorer/data?json=true&query=" <> toUriStr logsQuery <> timeParams)) Nothing
 
       let withSessionIds = V.mapMaybe (\sr -> (`lookupValueText` "id") =<< Map.lookup "session" =<< sr.attributes) spanRecs

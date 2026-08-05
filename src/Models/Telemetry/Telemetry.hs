@@ -603,38 +603,33 @@ data MetricChartListData = MetricChartListData
   deriving anyclass (FromRow, HI.DecodeRow, NFData, ToRow)
 
 
+-- | Aggregate 'Trace' for a non-empty span batch; accessor parameters keep the
+-- full-record and overlay-projection paths on one implementation.
+mkTrace :: Text -> (a -> UTCTime) -> (a -> Maybe UTCTime) -> (a -> Maybe Text) -> NonEmpty a -> Trace
+mkTrace trId startOf endOf svcOf ne =
+  let start = minimum1 $ startOf <$> ne
+      end = maximum1 $ (\r -> fromMaybe (startOf r) (endOf r)) <$> ne
+      services = V.fromList $ ordNub $ mapMaybe svcOf (toList ne)
+      duration = floor $ diffUTCTime end start * 1000000000
+   in Trace trId start end duration (length ne) (guarded (not . V.null) services)
+
+
 -- | Fetch a trace's spans once and return both the aggregate 'Trace' and the
 -- spans, so callers rendering the waterfall don't re-query the same trace.
 getTraceDetails :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es) => Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Eff es (Maybe (Trace, [OtelLogsAndSpans]))
 getTraceDetails useTf pid trId tme now = do
   spans <- getSpanRecordsByTraceId useTf pid trId tme now
-  pure $ viaNonEmpty toTrace spans
-  where
-    toTrace ne =
-      let spans = toList ne
-          start = minimum1 $ (.start_time) <$> ne
-          end = maximum1 $ (\r -> fromMaybe r.start_time r.end_time) <$> ne
-          services = V.fromList $ ordNub $ mapMaybe spanServiceName spans
-          duration = floor $ diffUTCTime end start * 1000000000
-       in (Trace trId start end duration (length spans) $ if V.null services then Nothing else Just services, spans)
+  pure $ viaNonEmpty (\ne -> (mkTrace trId (.start_time) (.end_time) spanServiceName ne, toList ne)) spans
 
 
 -- | Trace-overlay fetch that excludes raw log payloads and other detail-only
 -- fields. Span details still use full-record lookups when explicitly opened.
+-- The aggregate covers ALL rows (nameless rows still bound the trace time range
+-- and services); only the waterfall conversion filters rows missing required ids.
 getTraceDetailsForView :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es) => Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Eff es (Maybe (Trace, V.Vector SpanRecord))
 getTraceDetailsForView useTf pid trId tme now = do
-  rows <- getTraceRowsByTraceId useTf pid trId tme now
-  -- Aggregate from ALL rows (nameless rows still bound the trace time range and
-  -- services); only the waterfall conversion filters rows missing required ids.
-  pure $ viaNonEmpty toTrace rows
-  where
-    toTrace ne =
-      let rs = toList ne
-          start = minimum1 $ (.startTime) <$> ne
-          end = maximum1 $ (\r -> fromMaybe r.startTime r.endTime) <$> ne
-          services = V.fromList $ ordNub $ mapMaybe (resourceServiceName . unAesonTextMaybe . (.resource)) rs
-          duration = floor $ diffUTCTime end start * 1000000000
-       in (Trace trId start end duration (length rs) $ if V.null services then Nothing else Just services, V.mapMaybe traceSpanRecord (V.fromList rs))
+  rows <- getTraceRowsWith selectTraceSpanRows (.spanId) (.parentSpanId) useTf pid trId tme now
+  pure $ viaNonEmpty (\ne -> (mkTrace trId (.startTime) (.endTime) (resourceServiceName . unAesonTextMaybe . (.resource)) ne, V.mapMaybe (traceSpanRecord trId) (V.fromList (toList ne)))) rows
 
 
 -- | Random-access lookup of a single row by exact (timestamp, id). The caller always
@@ -669,22 +664,25 @@ otelSpanColsSql =
           hashes, kind, status_code, status_message, COALESCE(start_time, timestamp), end_time, events, links, duration, name, parent_id, summary, timestamp AS date, errors, COALESCE(message_size_bytes, 0)|]
 
 
--- | Shared SELECT prefix for span fetchers: full column list, project + timestamp window.
+-- | Shared SELECT prefix for span fetchers: given columns, project + timestamp window.
 -- The caller appends its own trailing clause, including the leading @AND@ for any extra
 -- predicate (so an empty @predSql@ still yields valid SQL).
-selectOtelSpans :: Text -> UTCTime -> UTCTime -> HI.Sql -> HI.Sql
-selectOtelSpans pidTxt lo hi predSql =
+selectSpansWhere :: HI.Sql -> Text -> UTCTime -> UTCTime -> HI.Sql -> HI.Sql
+selectSpansWhere cols pidTxt lo hi predSql =
   [HI.sql|SELECT |]
-    <> otelSpanColsSql
+    <> cols
     <> [HI.sql| FROM otel_logs_and_spans WHERE project_id=#{pidTxt} AND timestamp BETWEEN #{lo} AND #{hi} |]
     <> predSql
+
+
+selectOtelSpans :: Text -> UTCTime -> UTCTime -> HI.Sql -> HI.Sql
+selectOtelSpans = selectSpansWhere otelSpanColsSql
 
 
 data TraceSpanRow = TraceSpanRow
   { projectIdText :: Text
   , recordId :: Text
   , timestamp :: UTCTime
-  , traceId :: Maybe Text
   , spanId :: Maybe Text
   , parentSpanId :: Maybe Text
   , spanName :: Maybe Text
@@ -700,10 +698,11 @@ data TraceSpanRow = TraceSpanRow
   deriving anyclass (HI.DecodeRow)
 
 
-traceSpanRecord :: TraceSpanRow -> Maybe SpanRecord
-traceSpanRecord row = do
+-- | The trace id is passed in rather than selected per-row: every row already
+-- matched @context___trace_id = trId@ in the WHERE clause.
+traceSpanRecord :: Text -> TraceSpanRow -> Maybe SpanRecord
+traceSpanRecord trId row = do
   projectId <- UUID.fromText row.projectIdText
-  traceIdTxt <- row.traceId
   spanIdTxt <- row.spanId
   spanNameTxt <- row.spanName
   pure
@@ -711,7 +710,7 @@ traceSpanRecord row = do
       { uSpanId = row.recordId
       , projectId
       , timestamp = row.timestamp
-      , traceId = traceIdTxt
+      , traceId = trId
       , spanId = spanIdTxt
       , parentSpanId = row.parentSpanId
       , traceState = Nothing
@@ -731,35 +730,27 @@ traceSpanRecord row = do
 
 
 selectTraceSpanRows :: Text -> UTCTime -> UTCTime -> HI.Sql -> HI.Sql
-selectTraceSpanRows pidTxt lo hi predSql =
-  [HI.sql|SELECT project_id, id::text, timestamp, context___trace_id, context___span_id, parent_id, name,
-          COALESCE(start_time, timestamp), end_time, status_message, attributes, events, resource, duration
-          FROM otel_logs_and_spans WHERE project_id=#{pidTxt} AND timestamp BETWEEN #{lo} AND #{hi} |]
-    <> predSql
+selectTraceSpanRows =
+  selectSpansWhere
+    [HI.sql|project_id, id::text, timestamp, context___span_id, parent_id, name,
+            COALESCE(start_time, timestamp), end_time, status_message, attributes, events, resource, duration|]
 
 
-getTraceRowsByTraceId :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es) => Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Eff es [TraceSpanRow]
-getTraceRowsByTraceId useTf pid trId tme now = Hasql.withHasqlTimefusion useTf do
+-- | Shared trace fetch: spans in a tight window around the reference time (3d
+-- lookback when none is given), then missing parents chased via
+-- 'resolveTraceOrphans' against a ±24h window. Parameterized by SELECT builder
+-- and id accessors so the full-record and overlay-projection row types share
+-- one implementation.
+getTraceRowsWith :: (DB es, HI.DecodeRow a, Labeled "timefusion" Hasql :> es, Log :> es) => (Text -> UTCTime -> UTCTime -> HI.Sql -> HI.Sql) -> (a -> Maybe Text) -> (a -> Maybe Text) -> Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Eff es [a]
+getTraceRowsWith select spanIdOf parentIdOf useTf pid trId tme now = Hasql.withHasqlTimefusion useTf do
   let baseT = fromMaybe now tme
       (start, end) = case tme of
         Nothing -> (addUTCTime (-(3 * 24 * 3600)) now, now)
         Just ts -> (addUTCTime (-300) ts, addUTCTime 300 ts)
       (wideStart, wideEnd) = (addUTCTime (-86400) baseT, addUTCTime 86400 baseT)
-      resolveHop ids =
-        Hasql.interp
-          $ selectTraceSpanRows
-            pid.toText
-            wideStart
-            wideEnd
-            [HI.sql| AND context___trace_id=#{trId} AND context___span_id = ANY(#{ids})|]
-  initial <-
-    Hasql.interp
-      $ selectTraceSpanRows
-        pid.toText
-        start
-        end
-        [HI.sql| AND context___trace_id=#{trId} ORDER BY start_time ASC|]
-  resolveTraceOrphans pid trId resolveHop (.spanId) (.parentSpanId) initial
+      resolveHop ids = Hasql.interp $ select pid.toText wideStart wideEnd [HI.sql| AND context___trace_id=#{trId} AND context___span_id = ANY(#{ids})|]
+  initial <- Hasql.interp $ select pid.toText start end [HI.sql| AND context___trace_id=#{trId} ORDER BY start_time ASC|]
+  resolveTraceOrphans pid trId resolveHop spanIdOf parentIdOf initial
 
 
 -- | First/recent trace_id for a (project, method, url_path). Window kept tight (7d) since
@@ -831,34 +822,14 @@ resolveTraceOrphans pid trId fetch spanIdOf parentIdOf initial = do
   pure resolved
 
 
+-- | Full-record trace fetch. Missing parents are resolved iteratively: a parent
+-- ingested outside ±5min (clock skew, late ingestion, async batch) is looked up
+-- via context___span_id within ±24h. Recovered spans may themselves have a
+-- missing parent — loop up to 'maxOrphanResolverHops'. Anything still
+-- unresolved becomes a synthetic placeholder in 'buildSpanTree' and is
+-- logged so SREs can correlate with ingestion incidents.
 getSpanRecordsByTraceId :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es) => Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Eff es [OtelLogsAndSpans]
-getSpanRecordsByTraceId useTf pid trId tme now = Hasql.withHasqlTimefusion useTf do
-  let baseT = fromMaybe now tme
-      (start, end) = case tme of
-        Nothing -> (addUTCTime (-(3 * 24 * 3600)) now, now)
-        Just ts -> (addUTCTime (-300) ts, addUTCTime 300 ts)
-      (wideStart, wideEnd) = (addUTCTime (-86400) baseT, addUTCTime 86400 baseT)
-      resolveHop ids =
-        Hasql.interp
-          $ selectOtelSpans
-            pid.toText
-            wideStart
-            wideEnd
-            [HI.sql| AND context___trace_id=#{trId} AND context___span_id = ANY(#{ids})|]
-  initial :: [OtelLogsAndSpans] <-
-    Hasql.interp
-      $ selectOtelSpans
-        pid.toText
-        start
-        end
-        [HI.sql| AND context___trace_id=#{trId} ORDER BY start_time ASC|]
-  -- Resolve missing parents iteratively: a parent ingested outside ±5min
-  -- (clock skew, late ingestion, async batch) is looked up via
-  -- context___span_id within ±24h. Recovered spans may themselves have a
-  -- missing parent — loop up to 'maxOrphanResolverHops'. Anything still
-  -- unresolved becomes a synthetic placeholder in 'buildSpanTree' and is
-  -- logged so SREs can correlate with ingestion incidents.
-  resolveTraceOrphans pid trId resolveHop (\r -> r.context >>= (.span_id)) (.parent_id) initial
+getSpanRecordsByTraceId = getTraceRowsWith selectOtelSpans (\r -> r.context >>= (.span_id)) (.parent_id)
 
 
 getSpanRecordsByTraceIds :: (DB es, Time.Time :> es) => Projects.ProjectId -> V.Vector Text -> Maybe UTCTime -> Eff es [OtelLogsAndSpans]

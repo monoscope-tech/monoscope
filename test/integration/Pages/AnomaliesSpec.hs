@@ -387,7 +387,7 @@ spec = sequential $ aroundAll withTestResources do
       byIdHtml `shouldSatisfy` (traceIdText `T.isInfixOf`)
 
       issue <- runTestBg frozenTime tr $ Issues.selectIssueById issueId
-      targetHash <- maybe (error "Expected API change issue") (pure . (.targetHash)) issue
+      let targetHash = maybe (error "Expected API change issue") (.targetHash) issue
       (_, pageByHash) <- testServant tr $ AnomalyList.anomalyDetailHashGetH testPid targetHash Nothing (Just "14D")
       let byHashHtml = TL.toStrict $ renderText $ toHtml pageByHash
       byHashHtml `shouldSatisfy` T.isInfixOf "since=14D"
