@@ -1050,10 +1050,27 @@ mergeOneSession conn bucket keyPrefix startIdx fileKeys = reverse <$> go startId
 -- | Copy one object and verify the destination byte-for-byte before returning.
 -- The source remains untouched; callers switch the DB reference first and only
 -- then remove it. This ordering makes every interruption recoverable.
+--
+-- Size-capped: the copy holds source AND verification bytes fully in memory, so
+-- a multi-GB merged session blows the RTS -M heap cap and kills the whole
+-- process — every replica in the swarm took turns dying on the same object
+-- (2026-08-05 crash-loop). Oversized objects are reported as a failure (the
+-- session stays unmigrated, visible in logs) until a streaming/server-side
+-- copy handles them.
 copyReplayObjectVerified :: Minio.ConnectInfo -> Minio.Bucket -> Text -> Text -> IO (Either Text ())
 copyReplayObjectVerified conn bucket oldKey newKey
   | oldKey == newKey = pure $ Right ()
   | otherwise = do
+      sizeCheck <- Minio.runMinio conn $ Minio.statObject bucket oldKey Minio.defaultGetObjectOptions
+      case sizeCheck of
+        Left err -> pure $ Left $ "source stat failed: " <> toText (displayException err)
+        Right info
+          | Minio.oiSize info > maxMigrateObjectBytes ->
+              pure $ Left $ "object exceeds migration size cap (" <> show (Minio.oiSize info) <> " bytes): " <> oldKey
+        _ -> copyNow
+  where
+    maxMigrateObjectBytes = 512 * 1024 * 1024
+    copyNow = do
       source <- Minio.runMinio conn $ fetchRawObject bucket oldKey False
       case source of
         Left err -> pure $ Left $ "source read failed: " <> toText (displayException err)
