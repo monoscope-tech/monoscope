@@ -16,7 +16,7 @@ import Data.OpenApi (ToSchema)
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Deriving.Aeson.Stock qualified as DAE
-import Pkg.DeriveUtils (SnakeSchema (..))
+import Pkg.Deriving (SnakeSchema (..))
 import Relude
 
 

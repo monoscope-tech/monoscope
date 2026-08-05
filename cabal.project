@@ -1,4 +1,6 @@
 packages: .
+          shared/
+          cli/
 with-compiler: ghc-9.12.2
 multi-repl: True
 write-ghc-environment-files: always

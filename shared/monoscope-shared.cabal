@@ -1,0 +1,121 @@
+cabal-version:      3.4
+name:               monoscope-shared
+version:            0.1.0.0
+license:            AGPL-3.0-only
+license-file:       ../LICENSE
+author:             Monoscope
+maintainer:         hello@monoscope.tech
+copyright:          2021-2026 Monoscope
+synopsis:           Database-free modules shared by the Monoscope server and CLI
+build-type:         Simple
+
+-- Everything here is depended on by BOTH lib:monoscope and monoscope-cli, and
+-- must stay free of postgresql-simple / hasql / librdkafka / grpc: the whole
+-- point is that `monoscope` (the CLI binary) can be installed and run without
+-- libpq or any other native library on the box. Adding a DB import here breaks
+-- that guarantee — put such code in lib:monoscope instead.
+--
+-- Hand-maintained (the root package uses hpack); add new modules to
+-- exposed-modules below.
+
+common warnings
+  ghc-options:
+    -Weverything
+    -Werror
+    -Wno-all-missed-specialisations
+    -Wno-ambiguous-fields
+    -Wno-error=deprecations
+    -Wno-error=incomplete-record-selectors
+    -Wno-error=unused-packages
+    -Wno-implicit-prelude
+    -Wno-missed-specialisations
+    -Wno-missing-deriving-strategies
+    -Wno-missing-export-lists
+    -Wno-missing-exported-signatures
+    -Wno-missing-import-lists
+    -Wno-missing-kind-signatures
+    -Wno-missing-local-signatures
+    -Wno-missing-role-annotations
+    -Wno-missing-safe-haskell-mode
+    -Wno-monomorphism-restriction
+    -Wno-orphans
+    -Wno-partial-fields
+    -Wno-prepositive-qualified-module
+    -Wno-safe
+    -Wno-type-defaults
+    -Wno-unsafe
+    -Wno-unused-matches
+    -Wno-unused-top-binds
+
+  default-language:   GHC2024
+  default-extensions:
+    AllowAmbiguousTypes
+    BlockArguments
+    DeriveAnyClass
+    DerivingVia
+    DuplicateRecordFields
+    ExtendedDefaultRules
+    MultilineStrings
+    MultiWayIf
+    NoImplicitPrelude
+    OverloadedLabels
+    OverloadedRecordDot
+    OverloadedStrings
+    PatternSynonyms
+    QuasiQuotes
+    RecordWildCards
+    TemplateHaskell
+    TypeFamilies
+    UndecidableInstances
+    ViewPatterns
+
+library
+  import:          warnings
+  hs-source-dirs:  src
+  exposed-modules:
+    Data.Effectful.Wreq
+    Models.Telemetry.Schema
+    Pages.Charts.Types
+    Pkg.CLIFormat
+    Pkg.Deriving
+    Pkg.Parser.Expr
+    Pkg.Parser.Stats
+    Web.Wire
+
+  build-depends:
+    , aeson
+    , base                  >=4.7 && <5
+    , bytestring
+    , case-insensitive
+    , containers
+    , data-default
+    , deriving-aeson
+    , directory
+    , effectful
+    , effectful-core
+    , effectful-th
+    , envy
+    , filepath
+    , generic-lens
+    , http-api-data
+    , http-client
+    , http-types
+    , lens
+    , megaparsec
+    , openapi3
+    , parser-combinators
+    , regex-tdfa
+    , relude                >=1.2.0.0
+    , scientific
+    , template-haskell
+    , text
+    , text-builder-linear
+    , casing
+    , filepath
+    , text-display
+    , time
+    , unliftio
+    , unordered-containers
+    , uuid
+    , vector
+    , wreq

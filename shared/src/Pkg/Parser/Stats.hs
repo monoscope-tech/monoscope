@@ -18,6 +18,7 @@ module Pkg.Parser.Stats (
   pExtendSection,
   pProjectSection,
   parseQuery,
+  parseQueryToAST,
   transformAST,
   pSource,
   -- Aggregation parsers
@@ -56,7 +57,7 @@ import Data.Aeson qualified as AE
 import Data.Generics.Product (typed)
 import Data.Text qualified as T
 import Data.Text.Display (Display, display, displayBuilder, displayPrec)
-import Pkg.DeriveUtils (WrappedEnumSC (..))
+import Pkg.Deriving (WrappedEnumSC (..))
 import Pkg.Parser.Expr (Expr (..), Parser, Subject (..), ToQueryText (..), Values (..), kqlTimespanToTimeBucket, pExpr, pSubject, pValues)
 import Relude hiding (GT, LT, Sum, many, some)
 import Text.Megaparsec
@@ -1050,3 +1051,15 @@ extractPercentilesInfo secs = listToMaybe $ mapMaybe pcts [agg | SummarizeComman
       Percentile subExpr pct _ -> Just (subjectExprToSQL subExpr, [pct])
       Percentiles subExpr ps _ -> Just (subjectExprToSQL subExpr, ps)
       _ -> Nothing
+
+
+-- | Parse a KQL query into its section AST, surfacing megaparsec's pretty error
+-- as @Text@. Lives here rather than in "Pkg.Parser" so the CLI can validate
+-- queries client-side without pulling in the DB-bound half of the parser.
+--
+-- >>> isRight (parseQueryToAST "severity.text==\"ERROR\"")
+-- True
+-- >>> isLeft (parseQueryToAST "severity.text ==")
+-- True
+parseQueryToAST :: Text -> Either Text [Section]
+parseQueryToAST q = first (toText . errorBundlePretty) (parse parseQuery "" (T.strip q))

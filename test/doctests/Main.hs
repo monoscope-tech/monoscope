@@ -42,7 +42,9 @@ main = do
   let filteredArgs = filter (\a -> not ("--color" `isPrefixOf` a || "--jobs" `isPrefixOf` a || "--match" `isPrefixOf` a)) args
   doctest $ filteredArgs ++
     [ "-isrc"
+    , "-ishared/src"
     , "--fast"
     , "-package monoscope"
+    , "-package monoscope-shared"
     , "-hide-package base64-bytestring"
-    ] ++ extensions ++ ["src"]
+    ] ++ extensions ++ ["src", "shared/src"]

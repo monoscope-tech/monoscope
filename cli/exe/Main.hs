@@ -1,7 +1,7 @@
 module Main (main) where
 
 import CLI.Main (cliMain)
-import Paths_monoscope qualified as Paths
+import Paths_monoscope_cli qualified as Paths
 import Relude
 
 

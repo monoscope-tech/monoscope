@@ -61,7 +61,7 @@ import Effectful
 import Effectful.Environment (Environment)
 import Effectful.Environment qualified as Env
 import Effectful.FileSystem (FileSystem)
-import Models.Apis.SchemaCatalog qualified as Fields
+import Web.Wire qualified as Wire
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Context.ThreadLocal qualified as OtelCtx
 import OpenTelemetry.Trace (SpanStatus (..), Tracer, TracerOptions (..), defaultSpanArguments, initializeGlobalTracerProvider, makeTracer, shutdownTracerProvider)
@@ -72,7 +72,7 @@ import System.Environment (setEnv)
 import System.Process (spawnProcess)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (catch, tryAny)
-import Web.Auth (DeviceCodeResponse (..), DeviceTokenResponse (..), ProjectInfo (..))
+import Web.Wire (DeviceCodeResponse (..), DeviceTokenResponse (..), ProjectInfo (..))
 
 
 -- Auth
@@ -260,9 +260,9 @@ data ServiceRow = ServiceRow {name :: Text, events :: Int}
 -- | The facets endpoint returns @{ <field>: [{value, count}, ...] }@.
 -- Pull out the @resource.service.name@ array and rename @value@→@name@,
 -- @count@→@events@ for the CLI surface. Decodes through the server's
--- 'Fields.FacetValue' record so a wire change shows up at compile time.
+-- 'Wire.FacetValue' record so a wire change shows up at compile time.
 parseServiceFacets :: AE.Value -> [ServiceRow]
-parseServiceFacets v = case AE.fromJSON @(Map Text [Fields.FacetValue]) v of
+parseServiceFacets v = case AE.fromJSON @(Map Text [Wire.FacetValue]) v of
   AE.Success m -> [ServiceRow f.value f.count | f <- fold (Map.lookup "resource.service.name" m)]
   AE.Error _ -> []
 

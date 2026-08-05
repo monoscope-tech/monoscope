@@ -13,6 +13,8 @@ module Web.ApiTypes (
   DashboardSummary (..),
   DashboardFull (..),
   DashboardYAMLDoc (..),
+  DashboardData (..),
+  RenderedWidget (..),
   WidgetPosition (..),
   -- API key types
   ApiKeyCreate (..),
@@ -67,9 +69,11 @@ import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as PM
 import Models.Projects.Projects qualified as Projects
+import Pages.Charts.Types qualified as Charts
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (JsonValueSchema (..), SnakeSchema (..), UUIDId, WrappedEnumSC (..))
 import Relude
+import Web.Wire (Paged (..))
 import Servant (FromHttpApiData)
 
 
@@ -155,6 +159,53 @@ data DashboardSummary = DashboardSummary
   deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake DashboardSummary
   deriving (ToSchema) via SnakeSchema DashboardSummary
+
+
+-- | A dashboard with every widget's data already resolved server-side, for
+-- clients that render outside the browser (the CLI's terminal dashboards, and
+-- anything else that can't run the widget JS). One request instead of one
+-- @/chart_data@ round trip per widget, and the constant/variable resolution and
+-- query defaulting stay in one place rather than being re-implemented per client.
+data DashboardData = DashboardData
+  { id :: Dashboards.DashboardId
+  , title :: Text
+  , tab :: Maybe Text
+  -- ^ Name of the tab actually rendered (Nothing for a single-tab dashboard).
+  , tabs :: [Text]
+  , since :: Maybe Text
+  , from :: Maybe Int
+  , to :: Maybe Int
+  -- ^ Resolved window in epoch milliseconds, matching the x-axis of every widget.
+  , widgets :: [RenderedWidget]
+  }
+  deriving stock (Generic, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake DashboardData
+  deriving (ToSchema) via JsonValueSchema DashboardData
+
+
+-- | One widget, flattened to what a non-browser renderer needs: what to draw,
+-- where it sits in the 12-column grid, and the data itself.
+data RenderedWidget = RenderedWidget
+  { id :: Maybe Text
+  , title :: Maybe Text
+  , subtitle :: Maybe Text
+  , wType :: Widget.WidgetType
+  , unit :: Maybe Text
+  , query :: Maybe Text
+  , layout :: Maybe Widget.Layout
+  , summarizeBy :: Maybe Widget.SummarizeBy
+  , value :: Maybe Double
+  -- ^ Scalar for stat widgets.
+  , headers :: [Text]
+  , rows :: [[Maybe Double]]
+  , textRows :: [[Text]]
+  -- ^ Populated for table/log widgets, where the columns aren't numeric.
+  , stats :: Maybe Charts.MetricsStats
+  , error :: Maybe Text
+  }
+  deriving stock (Generic, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake RenderedWidget
+  deriving (ToSchema) via JsonValueSchema RenderedWidget
 
 
 -- | Full dashboard view: summary + schema body/sha.
@@ -302,18 +353,6 @@ data BulkResult a = BulkResult
 -- =============================================================================
 -- Shared paginated envelope + lightweight user reference
 -- =============================================================================
-
-data Paged a = Paged
-  { items :: [a]
-  , totalCount :: Int
-  , page :: Int
-  , perPage :: Int
-  , hasMore :: Bool
-  }
-  deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake (Paged a)
-  deriving (ToSchema) via JsonValueSchema (Paged a)
-
 
 data UserRef = UserRef
   { id :: UUID.UUID

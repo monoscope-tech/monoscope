@@ -9,9 +9,9 @@ import Data.Semigroup (Max (Max))
 import Data.Vector qualified as V
 import Deriving.Aeson.Stock qualified as DAE
 import Language.Haskell.TH.Syntax qualified as THS
-import Pkg.DeriveUtils (SnakeSchema (..), WrappedEnumSC (..))
+import Pkg.Deriving (SnakeSchema (..), WrappedEnumSC (..))
 import Relude
-import Servant (FromHttpApiData)
+import Web.HttpApiData (FromHttpApiData)
 
 
 data MetricsStats = MetricsStats

@@ -157,19 +157,10 @@ custom-setup
 library
   exposed-modules:
       BackgroundJobs
-      CLI.Commands
-      CLI.Config
-      CLI.Core
-      CLI.Main
-      CLI.Resource
-      CLI.Table
-      CLI.UI
-      CLI.Validate
       Data.Effectful.Hasql
       Data.Effectful.LLM
       Data.Effectful.Notify
       Data.Effectful.UUID
-      Data.Effectful.Wreq
       Devel
       Models.Apis.Anomalies
       Models.Apis.Endpoints
@@ -189,7 +180,6 @@ library
       Models.Projects.ProjectApiKeys
       Models.Projects.ProjectMembers
       Models.Projects.Projects
-      Models.Telemetry.Schema
       Models.Telemetry.Telemetry
       Opentelemetry.OtlpServer
       Pages.Anomalies
@@ -199,7 +189,6 @@ library
       Pages.Bots.Utils
       Pages.Bots.Whatsapp
       Pages.Charts.Charts
-      Pages.Charts.Types
       Pages.CommandPalette
       Pages.Components
       Pages.Dashboards
@@ -216,7 +205,6 @@ library
       Pages.Share
       Pages.Telemetry
       Pkg.AI
-      Pkg.CLIFormat
       Pkg.Components.LogQueryBox
       Pkg.Components.Table
       Pkg.Components.TimePicker
@@ -230,8 +218,6 @@ library
       Pkg.Mail
       Pkg.Metrics
       Pkg.Parser
-      Pkg.Parser.Expr
-      Pkg.Parser.Stats
       Pkg.PatternMerge
       Pkg.Prometheus
       Pkg.QueryCache
@@ -416,6 +402,7 @@ library
     , minio-hs
     , mmark
     , monad-time-effectful
+    , monoscope-shared
     , mtl
     , neat-interpolation
     , network-uri
@@ -488,45 +475,6 @@ library
     , xxhash
     , yaml
     , zlib
-  default-language: GHC2024
-
-executable monoscope
-  main-is: Main.hs
-  other-modules:
-      Paths_monoscope
-  autogen-modules:
-      Paths_monoscope
-  hs-source-dirs:
-      cli/
-  default-extensions:
-      AllowAmbiguousTypes
-      BlockArguments
-      DeriveAnyClass
-      DerivingVia
-      DuplicateRecordFields
-      ExtendedDefaultRules
-      MultilineStrings
-      MultiWayIf
-      NoImplicitPrelude
-      OverloadedLabels
-      OverloadedLists
-      OverloadedRecordDot
-      OverloadedStrings
-      PackageImports
-      PatternSynonyms
-      QuasiQuotes
-      RecordWildCards
-      TemplateHaskell
-      TypeFamilies
-      UndecidableInstances
-      ViewPatterns
-  ghc-options: -fwrite-ide-info -threaded -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -Wno-ambiguous-fields -threaded
-  build-tool-depends:
-      proto-lens-protoc:proto-lens-protoc
-  build-depends:
-      base
-    , monoscope
-    , relude >=1.2.0.0
   default-language: GHC2024
 
 executable monoscope-server
@@ -602,6 +550,7 @@ test-suite doctests
     , doctest >=0.20
     , hs-opentelemetry-instrumentation-auto
     , monoscope
+    , monoscope-shared
     , relude >=1.2.0.0
   default-language: GHC2024
 
@@ -617,6 +566,7 @@ test-suite integration-tests
       CLI.CLIE2ESpec
       CLI.CLILifecycleSpec
       CLI.CLISpec
+      CLI.Harness
       Data.Effectful.HasqlGuardSpec
       EndpointDiscoverySpec
       ExtractionWorkerSpec
@@ -732,6 +682,7 @@ test-suite integration-tests
     , minio-hs
     , monad-time-effectful
     , monoscope
+    , monoscope-cli
     , odd-jobs
     , openapi3
     , pg-entity
@@ -763,19 +714,10 @@ test-suite test-dev
   main-is: Main.hs
   other-modules:
       BackgroundJobs
-      CLI.Commands
-      CLI.Config
-      CLI.Core
-      CLI.Main
-      CLI.Resource
-      CLI.Table
-      CLI.UI
-      CLI.Validate
       Data.Effectful.Hasql
       Data.Effectful.LLM
       Data.Effectful.Notify
       Data.Effectful.UUID
-      Data.Effectful.Wreq
       Devel
       Models.Apis.Anomalies
       Models.Apis.Endpoints
@@ -795,7 +737,6 @@ test-suite test-dev
       Models.Projects.ProjectApiKeys
       Models.Projects.ProjectMembers
       Models.Projects.Projects
-      Models.Telemetry.Schema
       Models.Telemetry.Telemetry
       Opentelemetry.OtlpServer
       Pages.Anomalies
@@ -805,7 +746,6 @@ test-suite test-dev
       Pages.Bots.Utils
       Pages.Bots.Whatsapp
       Pages.Charts.Charts
-      Pages.Charts.Types
       Pages.CommandPalette
       Pages.Components
       Pages.Dashboards
@@ -822,7 +762,6 @@ test-suite test-dev
       Pages.Share
       Pages.Telemetry
       Pkg.AI
-      Pkg.CLIFormat
       Pkg.Components.LogQueryBox
       Pkg.Components.Table
       Pkg.Components.TimePicker
@@ -836,8 +775,6 @@ test-suite test-dev
       Pkg.Mail
       Pkg.Metrics
       Pkg.Parser
-      Pkg.Parser.Expr
-      Pkg.Parser.Stats
       Pkg.PatternMerge
       Pkg.Prometheus
       Pkg.QueryCache
@@ -871,6 +808,7 @@ test-suite test-dev
       CLI.CLIE2ESpec
       CLI.CLILifecycleSpec
       CLI.CLISpec
+      CLI.Harness
       Data.Effectful.HasqlGuardSpec
       EndpointDiscoverySpec
       ExtractionWorkerSpec
@@ -1080,6 +1018,7 @@ test-suite test-dev
     , minio-hs
     , mmark
     , monad-time-effectful
+    , monoscope-shared
     , mtl
     , neat-interpolation
     , network-uri

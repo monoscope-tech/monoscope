@@ -17,7 +17,7 @@ import CLI.Core (printError)
 import Data.Char (isDigit)
 import Data.Text qualified as T
 import Effectful
-import Pkg.Parser (parseQueryToAST)
+import Pkg.Parser.Stats (parseQueryToAST)
 
 
 -- | Validate a relative-duration string of the form @\\d+(ms|s|m|h|d)@.

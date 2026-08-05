@@ -6,6 +6,7 @@
 -- envelopes and behaviors the skills promise.
 module CLI.CLILifecycleSpec (spec) where
 
+import CLI.Harness (runCLILifecycle)
 import Control.Concurrent (threadDelay)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM

@@ -1,4 +1,5 @@
 - base
+- monoscope-shared
 - relude >= 1.2.0.0
 - colourista
 - proto-lens

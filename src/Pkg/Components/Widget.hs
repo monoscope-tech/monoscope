@@ -1,4 +1,4 @@
-module Pkg.Components.Widget (Widget (..), WidgetDataset (..), toWidgetDataset, widget_, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChatTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH, renderTraceDataTable, renderTableWithDataAndParams, signWidgetUrl, widgetPngUrl, getSpanJson, encodeText) where
+module Pkg.Components.Widget (Widget (..), WidgetDataset (..), chartQuery, toWidgetDataset, widget_, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChatTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH, renderTraceDataTable, renderTableWithDataAndParams, signWidgetUrl, widgetPngUrl, getSpanJson, encodeText) where
 
 import Codec.Compression.GZip qualified as GZip
 import Control.Lens
@@ -208,6 +208,27 @@ data WidgetDataset = WidgetDataset
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, FromForm, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "w", DAE.CamelToSnake]] WidgetDataset
+
+
+-- | The query to chart a widget with. A widget whose KQL is only a filter has
+-- no series to plot, so we append the same default aggregation the browser
+-- renderer does (@updateChartData@ in web-components/src/widgets.ts) — one
+-- count per auto-sized time bin. Widgets that already summarize into bins are
+-- passed through untouched.
+--
+-- >>> chartQuery def{query = Just "severity==\"ERROR\""}
+-- Just "severity==\"ERROR\" | summarize count(*) by bin_auto(timestamp)"
+-- >>> chartQuery def{query = Just "summarize count(*) by bin_auto(timestamp)"}
+-- Just "summarize count(*) by bin_auto(timestamp)"
+-- >>> chartQuery def{query = Nothing}
+-- Nothing
+chartQuery :: Widget -> Maybe Text
+chartQuery w = w.query <&> \q ->
+  if hasSummarize q && hasBinning q then q else q <> " | " <> defaultAggregation
+  where
+    hasSummarize = T.isInfixOf "summarize" . T.toLower
+    hasBinning = T.isInfixOf " by bin" . T.toLower
+    defaultAggregation = "summarize count(*) by bin_auto(timestamp)"
 
 
 -- | Convert MetricsData to WidgetDataset (timestamps already in ms from queryMetrics)

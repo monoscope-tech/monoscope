@@ -17,7 +17,7 @@ import Data.Text.Display (Display, display, displayBuilder, displayParen, displa
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Vector qualified as V
-import Pkg.DeriveUtils (escapeRegex)
+import Pkg.Deriving (escapeRegex)
 import Relude hiding (GT, LT, Sum, many, some)
 import System.IO.Unsafe (unsafePerformIO)
 import Text.Megaparsec

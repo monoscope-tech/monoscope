@@ -28,6 +28,11 @@ module Pages.Dashboards (
   processEagerWidget,
   lazyWidget,
   fetchWidgetData,
+  widgetMetrics,
+  getDashAndVM,
+  findTabBySlug,
+  WidgetData,
+  resolveDashboardParams,
   dashboardBulkActionPostH,
   TabRenameForm (..),
   TabRenameRes (..),
@@ -60,6 +65,9 @@ import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, IOE, (:>))
+import Data.Effectful.Hasql qualified
+import Effectful.Concurrent (Concurrent)
+import Effectful.Labeled qualified
 import Effectful.Concurrent.Async (concurrently, pooledForConcurrently)
 import Effectful.Error.Static (Error, throwError)
 import Effectful.Log (Log)
@@ -598,7 +606,7 @@ queryRowsToText = map (map valueToText . V.toList) . V.toList
 
 
 -- Process a single dashboard variable recursively.
-processVariable :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Dashboards.Variable -> ATAuthCtx Dashboards.Variable
+processVariable :: WidgetData es => Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Dashboards.Variable -> Eff es Dashboards.Variable
 processVariable pid now (sinceStr, fromDStr, toDStr) allParams variableBase = do
   let (fromD, toD, _) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
       paramsMap = Map.fromList allParams
@@ -636,7 +644,7 @@ processVariable pid now (sinceStr, fromDStr, toDStr) allParams variableBase = do
 
 
 -- | Process all dashboard variables concurrently.
-processVariablesConcurrently :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Dashboards.Dashboard -> ATAuthCtx Dashboards.Dashboard
+processVariablesConcurrently :: WidgetData es => Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Dashboards.Dashboard -> Eff es Dashboards.Dashboard
 processVariablesConcurrently pid now timeParams allParams dash =
   forOf (#variables . _Just) dash $ flip pooledForConcurrently (processVariable pid now timeParams allParams)
 
@@ -771,7 +779,7 @@ renderQueryBudgetMicros = 4_000_000
 --
 -- Abandoning the query is safe: resource-pool destroys a connection whose borrower
 -- died, so we drop the connection rather than return a half-read one to the pool.
-withRenderBudget :: Text -> a -> ATAuthCtx a -> ATAuthCtx a
+withRenderBudget :: (IOE :> es, Log :> es) => Text -> a -> Eff es a -> Eff es a
 withRenderBudget label fallback action =
   UnliftIO.timeout renderQueryBudgetMicros action >>= \case
     Just a -> pure a
@@ -781,11 +789,11 @@ withRenderBudget label fallback action =
 
 -- | Process a single dashboard constant by executing its SQL or KQL query and populating the result.
 -- Constants are executed once and their results are made available to all widgets.
-processConstant :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Dashboards.Constant -> ATAuthCtx Dashboards.Constant
+processConstant :: forall es. WidgetData es => Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Dashboards.Constant -> Eff es Dashboards.Constant
 processConstant pid now (sinceStr, fromDStr, toDStr) allParams constantBase = do
   let (fromD, toD, _) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
       constant = Dashboards.replaceConstantVariables pid fromD toD allParams now constantBase
-      runQuery :: forall a. Text -> ATAuthCtx (Either Text a) -> (a -> [[Text]]) -> ATAuthCtx Dashboards.Constant
+      runQuery :: forall a. Text -> Eff es (Either Text a) -> (a -> [[Text]]) -> Eff es Dashboards.Constant
       runQuery label action toResult = do
         (res, duration) <- Log.timeAction action
         either
@@ -842,15 +850,36 @@ lazyWidget :: Widget.Widget -> Widget.Widget
 lazyWidget w = w & #eager .~ Nothing & #html .~ Nothing & #dataset .~ Nothing
 
 
+-- | Everything the data-fetching half of the dashboard pipeline needs. Spelled
+-- as a constraint row rather than 'ATAuthCtx' so the same code serves the HTML
+-- handlers, the PNG export and the @/api/v1@ JSON endpoint the CLI renders from
+-- (none of which have a session).
+type WidgetData es = (Concurrent :> es, DB es, Effectful.Labeled.Labeled "timefusion" Data.Effectful.Hasql.Hasql :> es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServerError :> es, IOE :> es, Log :> es, Time.Time :> es, Tracing :> es)
+
+
+-- | Run a widget's query, picking the result shape from the widget type: a
+-- scalar for stats, text columns for the row-oriented widgets, numeric series
+-- for everything that gets plotted.
+widgetMetrics :: WidgetData es => Projects.ProjectId -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> Eff es Charts.MetricsData
+widgetMetrics pid (sinceStr, fromDStr, toDStr) allParams widget =
+  Charts.queryMetrics widget.dbSource (Just dataType) (Just pid) (Widget.chartQuery widget) widget.sql sinceStr fromDStr toDStr Nothing allParams
+  where
+    dataType = case widget.wType of
+      Widget.WTStat -> Charts.DTFloat
+      Widget.WTTable -> Charts.DTText
+      Widget.WTLogs -> Charts.DTText
+      Widget.WTTraces -> Charts.DTText
+      Widget.WTTopList -> Charts.DTText
+      _ -> Charts.DTMetric
+
+
 -- | Fetch widget data based on widget type (for stat and chart widgets)
-fetchWidgetData :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServerError :> es, Log :> es, Time.Time :> es, Tracing :> es) => Projects.ProjectId -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> Eff es Widget.Widget
-fetchWidgetData pid (sinceStr, fromDStr, toDStr) allParams widget = case widget.wType of
-  Widget.WTStat -> do
-    stat <- Charts.queryMetrics widget.dbSource (Just Charts.DTFloat) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
-    pure $ widget & #dataset ?~ def{Widget.source = AE.Null, Widget.value = stat.dataFloat}
-  _ -> do
-    metricsD <- Charts.queryMetrics widget.dbSource (Just Charts.DTMetric) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
-    pure $ widget & #dataset ?~ Widget.toWidgetDataset metricsD
+fetchWidgetData :: WidgetData es => Projects.ProjectId -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> Eff es Widget.Widget
+fetchWidgetData pid timeRange allParams widget = do
+  md <- widgetMetrics pid timeRange allParams widget
+  pure $ widget & #dataset ?~ case widget.wType of
+    Widget.WTStat -> def{Widget.source = AE.Null, Widget.value = md.dataFloat}
+    _ -> Widget.toWidgetDataset md
 
 
 processEagerWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATAuthCtx Widget.Widget
@@ -2175,13 +2204,14 @@ dashboardQueryText dash =
 -- | Process dashboard constants concurrently and build extended params with constant results.
 -- Constants whose key is not referenced anywhere in @haystack@ skip their query entirely.
 processConstantsAndExtendParams
-  :: Projects.ProjectId
+  :: WidgetData es
+  => Projects.ProjectId
   -> UTCTime
   -> (Maybe Text, Maybe Text, Maybe Text)
   -> [(Text, Maybe Text)]
   -> Text
   -> [Dashboards.Constant]
-  -> ATAuthCtx ([Dashboards.Constant], [(Text, Maybe Text)])
+  -> Eff es ([Dashboards.Constant], [(Text, Maybe Text)])
 processConstantsAndExtendParams pid now timeParams allParams haystack constants =
   pooledForConcurrently constants processOne <&> \pc ->
     ( pc
@@ -2200,7 +2230,7 @@ processConstantsAndExtendParams pid now timeParams allParams haystack constants 
 
 -- | Resolve a dashboard's constants then its variables, returning the enriched
 -- dashboard and the params extended with variable defaults and constant results.
-resolveDashboardParams :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Dashboards.Dashboard -> ATAuthCtx (Dashboards.Dashboard, [(Text, Maybe Text)])
+resolveDashboardParams :: WidgetData es => Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Dashboards.Dashboard -> Eff es (Dashboards.Dashboard, [(Text, Maybe Text)])
 resolveDashboardParams pid now timeParams allParams dash = do
   (constants, params) <- processConstantsAndExtendParams pid now timeParams (addVariableDefaults allParams dash.variables) (dashboardQueryText dash) (fold dash.constants)
   dash' <- processVariablesConcurrently pid now timeParams params (dash & #constants ?~ constants)

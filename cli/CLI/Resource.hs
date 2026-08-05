@@ -42,7 +42,7 @@ import Effectful
 import Effectful.Environment (Environment)
 import Effectful.FileSystem (FileSystem, doesDirectoryExist, doesFileExist, listDirectory)
 import System.FilePath (takeExtension, (</>))
-import Web.ApiTypes (Paged (..))
+import Web.Wire (Paged (..))
 
 
 data ResourceKind

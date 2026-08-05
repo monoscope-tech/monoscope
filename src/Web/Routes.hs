@@ -46,7 +46,7 @@ import Data.OpenApi (OpenApi, SecurityDefinitions (..), SecurityScheme (..), Sec
 import Data.OpenApi qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
 import Pages.CommandPalette qualified as CommandPalette
-import Servant.OpenApi (toOpenApi)
+import Servant.OpenApi (HasOpenApi (..), toOpenApi)
 import System.Config (AuthContext (..), DeploymentEnv (..), EnvConfig (..))
 import System.Exit (ExitCode (..))
 import System.Logging qualified as Log
@@ -261,6 +261,20 @@ data ApiV1Routes mode = ApiV1Routes
           :> QPT "team_id"
           :> Get '[JSON] [ApiT.DashboardSummary]
   , dashboardGet :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> Get '[JSON] ApiT.DashboardFull
+  , -- Widget data resolved server-side, for clients that can't run the widget JS
+    -- (the CLI renders these straight into the terminal).
+    dashboardData
+      :: mode
+        :- "dashboards"
+          :> Capture "dashboard_id" Dashboards.DashboardId
+          :> "data"
+          :> QPT "tab"
+          :> QPT "widget"
+          :> QPT "since"
+          :> QPT "from"
+          :> QPT "to"
+          :> AllQueryParams
+          :> Get '[JSON] ApiT.DashboardData
   , dashboardCreate :: mode :- "dashboards" :> ReqBody '[JSON] ApiT.DashboardInput :> Post '[JSON] ApiT.DashboardFull
   , dashboardApply :: mode :- "dashboards" :> "apply" :> ReqBody '[JSON] ApiT.DashboardYAMLDoc :> Post '[JSON] ApiT.DashboardFull
   , dashboardUpdate :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> ReqBody '[JSON] ApiT.DashboardInput :> Put '[JSON] ApiT.DashboardFull
@@ -707,6 +721,7 @@ apiV1Server logger env tp pid =
     , -- Dashboards
       dashboardsList = ApiH.apiDashboardsList pid
     , dashboardGet = ApiH.apiDashboardGet pid
+    , dashboardData = ApiH.apiDashboardData pid
     , dashboardCreate = ApiH.apiDashboardCreate pid
     , dashboardApply = ApiH.apiDashboardApply pid
     , dashboardUpdate = ApiH.apiDashboardUpdate pid
@@ -1179,3 +1194,12 @@ instance HasServer api ctx => HasServer (AllQueryParams :> api) ctx where
     -> ([(Text, Maybe Text)] -> ServerT api m)
     -> ([(Text, Maybe Text)] -> ServerT api n)
   hoistServerWithContext _ pc nat s = hoistServerWithContext (Proxy :: Proxy api) pc nat . s
+
+
+-- | @AllQueryParams@ is a catch-all: it grabs whatever query string arrives, so
+-- there is nothing specific to advertise. Documenting it as the identity keeps
+-- routes that use it (currently @/dashboards/{id}/data@, which forwards
+-- @var-*@/@const-*@ dashboard variables) inside the generated OpenAPI spec
+-- instead of forcing them out of it.
+instance HasOpenApi api => HasOpenApi (AllQueryParams :> api) where
+  toOpenApi _ = toOpenApi (Proxy @api)

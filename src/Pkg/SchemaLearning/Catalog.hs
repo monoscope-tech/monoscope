@@ -71,6 +71,7 @@ import GHC.Records (HasField (getField))
 import Hasql.Interpolate qualified as HI
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Relude
+import Web.Wire (FacetValue (..))
 import Utils (toXXHash)
 
 
@@ -543,15 +544,6 @@ type ShapeId = UUIDId "shape"
 -- Facet types (re-homed from "Models.Apis.Fields"). Kept here so callers
 -- of the AI / query-editor / log-explorer stack don't need to chase the
 -- migration.
-
-data FacetValue = FacetValue
-  { value :: Text
-  , count :: Int
-  }
-  deriving stock (Eq, Generic, Show)
-  deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake FacetValue
-
 
 newtype FacetData = FacetData (HM.HashMap Text [FacetValue])
   deriving stock (Eq, Generic, Show)

@@ -59,7 +59,6 @@ module Pkg.TestUtils (
   ingestSessionEvent,
   -- CLI test helpers
   runHTTPtoServant,
-  runCLILifecycle,
   withLiveServer,
   testPid,
   -- OTLP mock data constructors
@@ -77,7 +76,6 @@ module Pkg.TestUtils (
 where
 
 import BackgroundJobs qualified
-import CLI.Main qualified as CLIMain
 import Configuration.Dotenv qualified as Dotenv
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.STM.TBQueue (isEmptyTBQueue, readTBQueue)
@@ -107,7 +105,6 @@ import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 (nextRandom)
 import Data.Vector qualified as V
-import Data.Version (makeVersion)
 import Database.PostgreSQL.Simple (ConnectInfo (..), Connection, Only (..), close, connect, connectPostgreSQL, defaultConnectInfo, execute)
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.Migration (MigrationCommand (MigrationDirectory, MigrationInitialization))
@@ -119,9 +116,7 @@ import Database.Postgres.Temp qualified as TmpPostgres
 import Effectful
 import Effectful.Concurrent (runConcurrent)
 import Effectful.Dispatch.Dynamic
-import Effectful.Environment (runEnvironment)
 import Effectful.Error.Static (Error, runErrorNoCallStack)
-import Effectful.FileSystem (runFileSystem)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (runLabeled)
 import Effectful.Log (Log)
@@ -146,7 +141,6 @@ import OddJobs.Job (Job (..))
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import OpenTelemetry.Trace (TracerProvider, getGlobalTracerProvider)
 import Opentelemetry.OtlpServer qualified as OtlpServer
-import Options.Applicative qualified as OA
 import Pages.Charts.Charts qualified as Charts
 import Pages.LogExplorer.Log qualified as Log
 import Pages.Settings qualified as Api
@@ -181,10 +175,7 @@ import System.Clock (TimeSpec (TimeSpec))
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Config qualified as Config
 import System.Directory (getFileSize, listDirectory)
-import System.Environment (setEnv, unsetEnv)
 import System.Envy (DefConfig (..), decodeWithDefaults)
-import System.Exit (ExitCode (..))
-import System.IO.Silently qualified as Silently
 import System.IO.Unsafe (unsafePerformIO)
 import System.Logging qualified as Logging
 import System.Server qualified as Server
@@ -1411,37 +1402,6 @@ runHTTPtoServant tr = interpret $ \_ -> \case
   Patch url body -> liftIO $ routeWriteRequest tr "PATCH" (extractPath url) [] (unsafeCoerce body)
   DeleteWith _opts url -> liftIO $ routeDeleteRequest tr (extractPath url)
   Delete url -> liftIO $ routeDeleteRequest tr (extractPath url)
-
-
--- | Drive the real CLI top-down in-process: the actual optparse parser, the
--- actual command pipeline, with the HTTP effect routed to handlers via
--- 'runHTTPtoServant'. Returns captured stdout plus the exit code (a command's
--- @exitFailure@ surfaces as @ExitFailure 1@; anything else as 'ExitSuccess').
--- Pass @--json@ in args for deterministic output regardless of TTY state.
-runCLILifecycle :: TestResources -> [String] -> IO (ExitCode, Text)
-runCLILifecycle tr args = do
-  -- MONOSCOPE_TEST_API_KEY lets a test inject a real project key (needed by
-  -- ingestion paths that authenticate the key, e.g. send-event → OTLP).
-  key <- fromMaybe "test-key" <$> lookupEnv "MONOSCOPE_TEST_API_KEY"
-  Safe.bracket_
-    (setEnv "MONOSCOPE_API_KEY" key >> setEnv "MONOSCOPE_PROJECT" (UUID.toString UUID.nil))
-    (unsetEnv "MONOSCOPE_API_KEY" >> unsetEnv "MONOSCOPE_PROJECT")
-    do
-      (global, cmd) <- case OA.execParserPure OA.defaultPrefs (CLIMain.parserInfo testVersion) args of
-        OA.Success r -> pure r
-        OA.Failure f -> error $ "CLI parse failure: " <> toText (fst (OA.renderFailure f "monoscope"))
-        OA.CompletionInvoked _ -> error "CLI completion invoked in test"
-      (out, res) <-
-        Silently.capture
-          $ try @ExitCode
-          $ runEff
-          $ runHTTPtoServant tr
-          $ runEnvironment
-          $ runFileSystem
-          $ CLIMain.run testVersion global cmd
-      pure (fromLeft ExitSuccess res, toText out)
-  where
-    testVersion = makeVersion [0, 0, 0]
 
 
 -- | Boot the real WAI app ('Server.mkServer') on an ephemeral port for tests

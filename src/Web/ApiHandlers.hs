@@ -24,6 +24,7 @@ module Web.ApiHandlers (
   -- Dashboards
   apiDashboardsList,
   apiDashboardGet,
+  apiDashboardData,
   apiDashboardCreate,
   apiDashboardApply,
   apiDashboardUpdate,
@@ -124,6 +125,9 @@ import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as PM
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
+import Effectful.Concurrent.Async (pooledForConcurrently)
+import Pages.Charts.Types qualified as Charts
+import Pages.Dashboards qualified as DashPage
 import Pages.LogExplorer.Log qualified as Log
 import Pkg.Components.TimePicker qualified as TP
 import Pkg.Components.Widget qualified as Widget
@@ -422,6 +426,67 @@ apiDashboardsList pid sortM teamIdM = do
 
 apiDashboardGet :: Projects.ProjectId -> Dashboards.DashboardId -> ATBaseCtx DashboardFull
 apiDashboardGet pid did = toFull <$> (ownedOr "Dashboard not found" pid =<< Dashboards.getDashboardById did)
+
+
+-- | Server-rendered dashboard data: one request returns every widget on the
+-- (optionally selected) tab with its query already run, so a non-browser client
+-- can draw the dashboard without re-implementing constant/variable resolution
+-- or firing one request per widget. This is what @monoscope dashboards render@
+-- uses to paint charts in a terminal.
+apiDashboardData :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATBaseCtx DashboardData
+apiDashboardData pid did tabM widgetM sinceM fromM toM allParams = do
+  vm <- ownedOr "Dashboard not found" pid =<< Dashboards.getDashboardById did
+  (_, dash) <- DashPage.getDashAndVM did Nothing
+  now <- Time.currentTime
+  let timeParams = (sinceM, fromM, toM)
+      allTabs = fold dash.tabs
+  (dash', params) <- DashPage.resolveDashboardParams pid now timeParams allParams dash
+  -- No `tabs:` key means the widgets live at the top level; with tabs, an
+  -- unknown --tab is a 404 rather than a silently empty render.
+  (tabName, tabWidgets) <- case (allTabs, tabM) of
+    ([], _) -> pure (Nothing, [])
+    (t : _, Nothing) -> pure (Just t.name, t.widgets)
+    (_, Just wanted) ->
+      DashPage.findTabBySlug allTabs wanted
+        & maybe (throwError err404{errBody = "Tab not found: " <> encodeUtf8 wanted}) (\(_, t) -> pure (Just t.name, t.widgets))
+  let selected = maybe (\ws -> ws) (\wid -> filter ((== Just wid) . (.id))) widgetM (dash'.widgets <> tabWidgets)
+  rendered <- pooledForConcurrently selected \w -> toRenderedWidget w <$> DashPage.widgetMetrics pid timeParams params w
+  pure
+    DashboardData
+      { id = did
+      , title = vm.title
+      , tab = tabName
+      , tabs = (.name) <$> allTabs
+      , since = sinceM
+      , from = viaNonEmpty head (mapMaybe (fst . snd) rendered)
+      , to = viaNonEmpty head (mapMaybe (snd . snd) rendered)
+      , widgets = fst <$> rendered
+      }
+
+
+-- | Flatten a widget plus its query result into the wire shape. Returns the
+-- window alongside it so the caller can report one x-axis range for the whole
+-- dashboard instead of per widget.
+toRenderedWidget :: Widget.Widget -> Charts.MetricsData -> (RenderedWidget, (Maybe Int, Maybe Int))
+toRenderedWidget w md =
+  ( RenderedWidget
+      { id = w.id
+      , title = w.title
+      , subtitle = w.subtitle
+      , wType = w.wType
+      , unit = w.unit
+      , query = w.query
+      , layout = w.layout
+      , summarizeBy = w.summarizeBy
+      , value = md.dataFloat
+      , headers = V.toList md.headers
+      , rows = V.toList (V.toList <$> md.dataset)
+      , textRows = V.toList (V.toList <$> md.dataText)
+      , stats = md.stats
+      , error = md.error
+      }
+  , (md.from, md.to)
+  )
 
 
 -- | Insert a new dashboard row from an input.

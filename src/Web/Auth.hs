@@ -28,7 +28,7 @@ import Control.Lens qualified as L
 import Control.Monad.Except qualified as T
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens (key, _String)
-import Data.Aeson.Types (FromJSON, ToJSON)
+import Data.Aeson.Types (ToJSON)
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as EHasql
 import Data.Effectful.UUID (UUIDEff, runUUID)
@@ -68,6 +68,7 @@ import Network.Wreq (FormParam ((:=)), defaults, getWith, header, post, response
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pkg.Mail (addConvertKitUser)
 import Relude hiding (ask, asks)
+import Web.Wire (DeviceCodeResponse (..), DeviceTokenResponse (..), ProjectInfo (..))
 import Servant (Header, Headers, NoContent (..), addHeader)
 import Servant qualified
 import Servant.Server (Handler, ServerError (..), err302, err401)
@@ -488,30 +489,6 @@ clientMetadataH (Just authTextB64) = do
 -- =============================================================================
 -- Device Authorization Flow (CLI login)
 -- =============================================================================
-
-data DeviceCodeResponse = DeviceCodeResponse
-  { deviceCode :: Text
-  , userCode :: Text
-  , verificationUri :: Text
-  , expiresIn :: Int
-  }
-  deriving stock (Generic, Show)
-  deriving (FromJSON, ToJSON) via DAE.Snake DeviceCodeResponse
-
-
-data ProjectInfo = ProjectInfo {id :: Text, name :: Text}
-  deriving stock (Generic, Show)
-  deriving (FromJSON, ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields] ProjectInfo
-
-
-data DeviceTokenResponse = DeviceTokenResponse
-  { sessionId :: Maybe Text
-  , projects :: Maybe [ProjectInfo]
-  , err :: Maybe Text
-  }
-  deriving stock (Generic, Show)
-  deriving (FromJSON, ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.Rename "err" "error"]] DeviceTokenResponse
-
 
 genUserCode :: IO Text
 genUserCode = do

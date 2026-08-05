@@ -166,20 +166,6 @@ executables:
           - (Relude as Prelude)
           - ''
 
-  # Thin wrapper around library's CLI.Main so tests can drive the CLI in-process.
-  monoscope:
-    main: Main.hs
-    source-dirs: cli/
-    ghc-options:
-      - -threaded
-    generated-other-modules:
-      - Paths_monoscope
-    dependencies:
-      - base
-      - monoscope
-      - name: relude
-        version: '>= 1.2.0.0'
-
 tests:
   doctests:
     main: Main.hs
@@ -193,6 +179,7 @@ tests:
     dependencies:
       - base
       - monoscope
+      - monoscope-shared
       - hs-opentelemetry-instrumentation-auto
       - doctest >= 0.20
       - relude >= 1.2.0.0
@@ -210,6 +197,7 @@ tests:
     dependencies:
       - base
       - monoscope
+      - monoscope-cli
       - these
       - hs-opentelemetry-instrumentation-auto
       - hspec

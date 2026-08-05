@@ -1,0 +1,133 @@
+cabal-version:      3.4
+name:               monoscope-cli
+version:            0.1.0.0
+license:            AGPL-3.0-only
+license-file:       ../LICENSE
+author:             Monoscope
+maintainer:         hello@monoscope.tech
+copyright:          2021-2026 Monoscope
+synopsis:           Terminal client for the Monoscope observability platform
+build-type:         Simple
+
+-- Hand-maintained (the root package uses hpack).
+--
+-- The CLI deliberately does NOT depend on lib:monoscope: that library links
+-- libpq, librdkafka, grpc, protobuf, snappy, lz4 and zstd, and a user who only
+-- wants the `monoscope` binary should not have to install any of them. What the
+-- CLI and the server genuinely share — wire types, the KQL grammar, the HTTP
+-- effect — lives in monoscope-shared, which is DB-free by construction.
+--
+-- CI (cli-release.yml) fails the build if the produced binary links libpq.
+
+common warnings
+  ghc-options:
+    -Weverything
+    -Werror
+    -Wno-all-missed-specialisations
+    -Wno-ambiguous-fields
+    -Wno-error=deprecations
+    -Wno-error=incomplete-record-selectors
+    -Wno-error=unused-packages
+    -Wno-implicit-prelude
+    -Wno-missed-specialisations
+    -Wno-missing-deriving-strategies
+    -Wno-missing-export-lists
+    -Wno-missing-exported-signatures
+    -Wno-missing-import-lists
+    -Wno-missing-kind-signatures
+    -Wno-missing-local-signatures
+    -Wno-missing-role-annotations
+    -Wno-missing-safe-haskell-mode
+    -Wno-monomorphism-restriction
+    -Wno-orphans
+    -Wno-partial-fields
+    -Wno-prepositive-qualified-module
+    -Wno-safe
+    -Wno-type-defaults
+    -Wno-unsafe
+    -Wno-unused-matches
+    -Wno-unused-top-binds
+
+  default-language:   GHC2024
+  default-extensions:
+    AllowAmbiguousTypes
+    BlockArguments
+    DeriveAnyClass
+    DerivingVia
+    DuplicateRecordFields
+    ExtendedDefaultRules
+    MultilineStrings
+    MultiWayIf
+    NoImplicitPrelude
+    OverloadedLabels
+    OverloadedRecordDot
+    OverloadedStrings
+    PatternSynonyms
+    QuasiQuotes
+    RecordWildCards
+    TemplateHaskell
+    TypeFamilies
+    UndecidableInstances
+    ViewPatterns
+
+library
+  import:          warnings
+  hs-source-dirs:  .
+  exposed-modules:
+    CLI.Chart
+    CLI.Commands
+    CLI.Config
+    CLI.Core
+    CLI.Main
+    CLI.Resource
+    CLI.Table
+    CLI.UI
+    CLI.Validate
+
+  build-depends:
+    , aeson
+    , aeson-pretty
+    , ansi-terminal
+    , base                          >=4.7 && <5
+    , brick
+    , bytestring
+    , containers
+    , deriving-aeson
+    , directory
+    , effectful
+    , effectful-core
+    , extra
+    , filepath
+    , hs-opentelemetry-api
+    , hs-opentelemetry-sdk
+    , http-client
+    , http-client-tls
+    , lens
+    , lens-aeson
+    , monoscope-shared
+    , optparse-applicative
+    , process
+    , random
+    , relude                        >=1.2.0.0
+    , scientific
+    , text
+    , time
+    , unix
+    , unliftio
+    , unordered-containers
+    , vector
+    , vty
+    , wreq
+    , yaml
+
+executable monoscope
+  import:           warnings
+  main-is:          Main.hs
+  hs-source-dirs:   exe
+  ghc-options:      -threaded -rtsopts "-with-rtsopts=-N2 -A16m"
+  other-modules:    Paths_monoscope_cli
+  autogen-modules:  Paths_monoscope_cli
+  build-depends:
+    , base
+    , monoscope-cli
+    , relude  >=1.2.0.0

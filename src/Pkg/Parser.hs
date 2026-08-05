@@ -15,7 +15,7 @@ import Pkg.Parser.Expr
 import Pkg.Parser.Stats
 import PyF (fmt)
 import Relude
-import Text.Megaparsec (errorBundlePretty, parse)
+import Text.Megaparsec (parse)
 import Utils (formatUTC)
 
 
@@ -431,10 +431,6 @@ queryASTToComponents sqlCfg sections =
       -- section); without this a metrics query built via the cfg arg alone would
       -- silently read otel_logs_and_spans.
       sqlFromQueryComponents sqlCfg qc{fromTable = qc.fromTable <|> (display <$> effectiveSource)}
-
-
-parseQueryToAST :: Text -> Either Text [Section]
-parseQueryToAST q = first (toText . errorBundlePretty) (parse parseQuery "" (T.strip q))
 
 
 defPid :: Projects.ProjectId
