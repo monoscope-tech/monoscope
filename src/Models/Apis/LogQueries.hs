@@ -631,6 +631,15 @@ fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
     $ AE.object ["project_id" AE..= pid, "skip" AE..= skip, "date_range" AE..= show dateRange, "sort_by" AE..= sortByM]
   let sortColSql = rawSql sortCol
       whereSql = rawSql fullWhere
+      firstObservedSql
+        | enableTfReads = [HI.sql|
+            FIRST_VALUE(url_path ORDER BY timestamp) FILTER (WHERE url_path IS NOT NULL AND url_path <> '') AS landing_url,
+            FIRST_VALUE(user_agent ORDER BY timestamp) FILTER (WHERE user_agent IS NOT NULL AND user_agent <> '') AS user_agent,
+            FIRST_VALUE(error_text ORDER BY timestamp) FILTER (WHERE is_error AND error_text IS NOT NULL AND error_text <> '') AS first_error|]
+        | otherwise = [HI.sql|
+            (ARRAY_AGG(url_path ORDER BY timestamp) FILTER (WHERE url_path IS NOT NULL AND url_path <> ''))[1] AS landing_url,
+            (ARRAY_AGG(user_agent ORDER BY timestamp) FILTER (WHERE user_agent IS NOT NULL AND user_agent <> ''))[1] AS user_agent,
+            (ARRAY_AGG(error_text ORDER BY timestamp) FILTER (WHERE is_error AND error_text IS NOT NULL AND error_text <> ''))[1] AS first_error|]
       q =
         [HI.sql|WITH filtered AS (
           SELECT attributes___session___id AS session_id,
@@ -661,10 +670,9 @@ fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
             COUNT(DISTINCT trace_id)::BIGINT AS trace_count,
             -- First-observed context, by timestamp. FILTER drops empties so
             -- we don't report "user landed on '' " for sessions where the
-            -- opening event has no url_path / user_agent.
-            (ARRAY_AGG(url_path ORDER BY timestamp) FILTER (WHERE url_path IS NOT NULL AND url_path <> ''))[1] AS landing_url,
-            (ARRAY_AGG(user_agent ORDER BY timestamp) FILTER (WHERE user_agent IS NOT NULL AND user_agent <> ''))[1] AS user_agent,
-            (ARRAY_AGG(error_text ORDER BY timestamp) FILTER (WHERE is_error AND error_text IS NOT NULL AND error_text <> ''))[1] AS first_error
+            -- opening event has no url_path / user_agent.|]
+          <> firstObservedSql
+          <> [HI.sql|
           FROM filtered GROUP BY session_id
         ), sess_bkt AS (
           -- One row per session, keyed to the bucket of its first event, tagged
