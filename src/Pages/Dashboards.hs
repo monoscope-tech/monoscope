@@ -116,9 +116,9 @@ import Web.FormUrlEncoded (FromForm)
 dashboardHeadContent_ :: Html ()
 dashboardHeadContent_ = do
   link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/deps/highlightjs/atom-one-dark.min.css")]
-  script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/highlight.min.js")] ("" :: Text)
-  script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/sql.min.js")] ("" :: Text)
-  script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/sql-formatter.min.js")] ("" :: Text)
+  script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/highlight.min.js"), defer_ "true"] ("" :: Text)
+  script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/sql.min.js"), defer_ "true"] ("" :: Text)
+  script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/sql-formatter.min.js"), defer_ "true"] ("" :: Text)
 
 
 folderFromPath :: Maybe Text -> Text

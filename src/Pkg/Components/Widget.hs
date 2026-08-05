@@ -632,7 +632,7 @@ renderTableShell widget headerCols tableAttrs = do
     $ div_
       [ class_ "h-full overflow-auto p-3"
       , hxGet_ $ widgetFetchUrl eagerWidget
-      , hxTrigger_ "load, update-query from:window"
+      , hxTrigger_ "intersect once, update-query from:window"
       , hxTarget_ $ "#" <> tableId
       , hxSelect_ $ "#" <> tableId
       , hxSwap_ "outerHTML"
@@ -659,7 +659,7 @@ renderStatContent widget valueM = do
     [ id_ statContentId
     , class_ $ "px-3 flex flex-col " <> bool "py-3 " "py-2 " (isTrue widget._isNested)
     , hxGet_ $ widgetFetchUrl (widget & #eager ?~ True)
-    , hxTrigger_ $ bool "load, update-query from:window" "update-query from:window" hasData
+    , hxTrigger_ $ bool "intersect once, update-query from:window" "update-query from:window" hasData
     , hxTarget_ $ "#" <> statContentId
     , hxSelect_ $ "#" <> statContentId
     , hxSwap_ "outerHTML"

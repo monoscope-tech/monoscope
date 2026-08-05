@@ -42,6 +42,7 @@ module Models.Telemetry.Telemetry (
   sdkSpanStoredName,
   spanRecordInTrace,
   getTraceDetails,
+  getTraceDetailsForView,
   getEndpointTraceId,
   getTotalMetricsCount,
   getMetricData,
@@ -618,6 +619,24 @@ getTraceDetails useTf pid trId tme now = do
        in (Trace trId start end duration (length spans) $ if V.null services then Nothing else Just services, spans)
 
 
+-- | Trace-overlay fetch that excludes raw log payloads and other detail-only
+-- fields. Span details still use full-record lookups when explicitly opened.
+getTraceDetailsForView :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es) => Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Eff es (Maybe (Trace, V.Vector SpanRecord))
+getTraceDetailsForView useTf pid trId tme now = do
+  rows <- getTraceRowsByTraceId useTf pid trId tme now
+  -- Aggregate from ALL rows (nameless rows still bound the trace time range and
+  -- services); only the waterfall conversion filters rows missing required ids.
+  pure $ viaNonEmpty toTrace rows
+  where
+    toTrace ne =
+      let rs = toList ne
+          start = minimum1 $ (.startTime) <$> ne
+          end = maximum1 $ (\r -> fromMaybe r.startTime r.endTime) <$> ne
+          services = V.fromList $ ordNub $ mapMaybe (resourceServiceName . unAesonTextMaybe . (.resource)) rs
+          duration = floor $ diffUTCTime end start * 1000000000
+       in (Trace trId start end duration (length rs) $ if V.null services then Nothing else Just services, V.mapMaybe traceSpanRecord (V.fromList rs))
+
+
 -- | Random-access lookup of a single row by exact (timestamp, id). The caller always
 -- has the precise stored timestamp (it originates from a prior query result), so we match
 -- @timestamp = ts@ rather than a window — both PG and TF store microsecond precision, which
@@ -661,6 +680,88 @@ selectOtelSpans pidTxt lo hi predSql =
     <> predSql
 
 
+data TraceSpanRow = TraceSpanRow
+  { projectIdText :: Text
+  , recordId :: Text
+  , timestamp :: UTCTime
+  , traceId :: Maybe Text
+  , spanId :: Maybe Text
+  , parentSpanId :: Maybe Text
+  , spanName :: Maybe Text
+  , startTime :: UTCTime
+  , endTime :: Maybe UTCTime
+  , statusMessage :: Maybe Text
+  , attributes :: Maybe (AesonText (Map Text AE.Value))
+  , events :: Maybe (AesonText AE.Value)
+  , resource :: Maybe (AesonText (Map Text AE.Value))
+  , duration :: Maybe Int64
+  }
+  deriving (Generic)
+  deriving anyclass (HI.DecodeRow)
+
+
+traceSpanRecord :: TraceSpanRow -> Maybe SpanRecord
+traceSpanRecord row = do
+  projectId <- UUID.fromText row.projectIdText
+  traceIdTxt <- row.traceId
+  spanIdTxt <- row.spanId
+  spanNameTxt <- row.spanName
+  pure
+    SpanRecord
+      { uSpanId = row.recordId
+      , projectId
+      , timestamp = row.timestamp
+      , traceId = traceIdTxt
+      , spanId = spanIdTxt
+      , parentSpanId = row.parentSpanId
+      , traceState = Nothing
+      , spanName = spanNameTxt
+      , startTime = row.startTime
+      , endTime = row.endTime
+      , kind = Nothing
+      , status = Nothing
+      , statusMessage = row.statusMessage
+      , attributes = unAesonTextMaybe row.attributes
+      , events = fromMaybe AE.Null $ unAesonTextMaybe row.events
+      , links = Nothing
+      , resource = unAesonTextMaybe row.resource
+      , instrumentationScope = AE.Null
+      , spanDurationNs = maybe 0 fromIntegral row.duration
+      }
+
+
+selectTraceSpanRows :: Text -> UTCTime -> UTCTime -> HI.Sql -> HI.Sql
+selectTraceSpanRows pidTxt lo hi predSql =
+  [HI.sql|SELECT project_id, id::text, timestamp, context___trace_id, context___span_id, parent_id, name,
+          COALESCE(start_time, timestamp), end_time, status_message, attributes, events, resource, duration
+          FROM otel_logs_and_spans WHERE project_id=#{pidTxt} AND timestamp BETWEEN #{lo} AND #{hi} |]
+    <> predSql
+
+
+getTraceRowsByTraceId :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es) => Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Eff es [TraceSpanRow]
+getTraceRowsByTraceId useTf pid trId tme now = Hasql.withHasqlTimefusion useTf do
+  let baseT = fromMaybe now tme
+      (start, end) = case tme of
+        Nothing -> (addUTCTime (-(3 * 24 * 3600)) now, now)
+        Just ts -> (addUTCTime (-300) ts, addUTCTime 300 ts)
+      (wideStart, wideEnd) = (addUTCTime (-86400) baseT, addUTCTime 86400 baseT)
+      resolveHop ids =
+        Hasql.interp
+          $ selectTraceSpanRows
+            pid.toText
+            wideStart
+            wideEnd
+            [HI.sql| AND context___trace_id=#{trId} AND context___span_id = ANY(#{ids})|]
+  initial <-
+    Hasql.interp
+      $ selectTraceSpanRows
+        pid.toText
+        start
+        end
+        [HI.sql| AND context___trace_id=#{trId} ORDER BY start_time ASC|]
+  resolveTraceOrphans pid trId resolveHop (.spanId) (.parentSpanId) initial
+
+
 -- | First/recent trace_id for a (project, method, url_path). Window kept tight (7d) since
 -- endpoint-anomaly issues are minutes-to-hours old; tie-broken by id for stable nav between
 -- "First" and "Recent" page loads. We UNION ALL two index-friendly subqueries (one per
@@ -702,10 +803,32 @@ maxOrphanResolverHops = 3
 
 -- | Parent_ids referenced by some span in the batch but not present (and not
 -- empty). Drives both the iterative resolver and the unresolved-orphan log.
-orphanParentIds :: [OtelLogsAndSpans] -> [Text]
-orphanParentIds rs =
-  let present = S.fromList $ mapMaybe (\r -> r.context >>= (.span_id)) rs
-   in ordNub [p | r <- rs, Just p <- [r.parent_id], not (T.null p), not (S.member p present)]
+orphanParentIdsBy :: (a -> Maybe Text) -> (a -> Maybe Text) -> [a] -> [Text]
+orphanParentIdsBy spanIdOf parentIdOf rs =
+  let present = S.fromList $ mapMaybe spanIdOf rs
+   in ordNub [p | r <- rs, Just p <- [parentIdOf r], not (T.null p), not (S.member p present)]
+
+
+resolveTraceOrphans :: (IOE :> es, Log :> es) => Projects.ProjectId -> Text -> ([Text] -> Eff es [a]) -> (a -> Maybe Text) -> (a -> Maybe Text) -> [a] -> Eff es [a]
+resolveTraceOrphans pid trId fetch spanIdOf parentIdOf initial = do
+  let missing = orphanParentIdsBy spanIdOf parentIdOf
+      go !acc !hop !ids
+        | hop >= maxOrphanResolverHops || null ids = pure acc
+        | otherwise = do
+            extras <- fetch ids
+            if null extras
+              then pure acc
+              else let acc' = acc <> extras in go acc' (hop + 1) (missing acc')
+  resolved <- go initial 0 (missing initial)
+  whenNotNull (missing resolved) \stillMissing ->
+    Log.logAttention "TRACE_ORPHAN_PARENTS_UNRESOLVED"
+      $ AE.object
+        [ "project_id" AE..= pid.toText
+        , "trace_id" AE..= trId
+        , "missing_count" AE..= length stillMissing
+        , "missing_sample" AE..= NE.take 5 stillMissing
+        ]
+  pure resolved
 
 
 getSpanRecordsByTraceId :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es) => Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Eff es [OtelLogsAndSpans]
@@ -735,23 +858,7 @@ getSpanRecordsByTraceId useTf pid trId tme now = Hasql.withHasqlTimefusion useTf
   -- missing parent — loop up to 'maxOrphanResolverHops'. Anything still
   -- unresolved becomes a synthetic placeholder in 'buildSpanTree' and is
   -- logged so SREs can correlate with ingestion incidents.
-  let go !acc !hop !ids
-        | hop >= maxOrphanResolverHops || null ids = pure acc
-        | otherwise = do
-            extras <- resolveHop ids
-            if null extras
-              then pure acc -- no progress: remaining ids are truly absent
-              else let acc' = acc <> extras in go acc' (hop + 1) (orphanParentIds acc')
-  resolved <- go initial 0 (orphanParentIds initial)
-  whenNotNull (orphanParentIds resolved) \stillMissing ->
-    Log.logAttention "TRACE_ORPHAN_PARENTS_UNRESOLVED"
-      $ AE.object
-        [ "project_id" AE..= pid.toText
-        , "trace_id" AE..= trId
-        , "missing_count" AE..= length stillMissing
-        , "missing_sample" AE..= NE.take 5 stillMissing
-        ]
-  pure resolved
+  resolveTraceOrphans pid trId resolveHop (\r -> r.context >>= (.span_id)) (.parent_id) initial
 
 
 getSpanRecordsByTraceIds :: (DB es, Time.Time :> es) => Projects.ProjectId -> V.Vector Text -> Maybe UTCTime -> Eff es [OtelLogsAndSpans]

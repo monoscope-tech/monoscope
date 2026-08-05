@@ -206,7 +206,7 @@ getErrorPatternLByHash pid eHash now =
     SELECT e.*, COALESCE(ev.occurrences, 0)::BIGINT, COALESCE(ev.user_count, 0)::BIGINT, ev.last_occurred_at
     FROM apis.error_patterns e LEFT JOIN LATERAL (
       SELECT SUM(event_count) AS occurrences, SUM(user_count) AS user_count, MAX(hour_bucket) AS last_occurred_at
-      FROM apis.error_hourly_stats WHERE error_id = e.id AND hour_bucket >= #{now}::timestamptz - INTERVAL '30 days'
+      FROM apis.error_hourly_stats WHERE project_id = e.project_id AND error_id = e.id AND hour_bucket >= #{now}::timestamptz - INTERVAL '30 days'
     ) ev ON true WHERE e.project_id = #{pid} AND e.hash = #{eHash} |]
 
 

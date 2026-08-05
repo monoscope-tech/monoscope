@@ -23,8 +23,8 @@ import Test.Hspec
 
 
 -- | A minimal stat widget. Stat is the interesting case: its renderer decides
--- whether to self-fetch from the widget's own fields rather than always emitting
--- a @load@ trigger the way the table shell does.
+-- whether to self-fetch from the widget's own fields rather than emitting a
+-- viewport trigger like the table shell does.
 statWidget :: Widget.Widget
 statWidget = def & #wType .~ Widget.WTStat & #id ?~ "w1" & #title ?~ "Requests"
 
@@ -33,9 +33,9 @@ render :: Widget.Widget -> Text
 render = toText . TL.toStrict . renderText . toHtml
 
 
--- | HTMX only fires a request on page load when @load@ is in the trigger list.
+-- | Deferred widgets fetch only after entering the viewport.
 selfFetches :: Widget.Widget -> Bool
-selfFetches = T.isInfixOf "\"load, update-query from:window\"" . render
+selfFetches = T.isInfixOf "\"intersect once, update-query from:window\"" . render
 
 
 spec :: Spec
@@ -52,9 +52,11 @@ spec = describe "lazyWidget (dashboard render-budget fallback)" do
     -- WidgetDataset has no Eq instance, so assert on the constructor.
     isNothing stripped.dataset `shouldBe` True
 
-  it "produces a widget that fetches its own data" do
-    -- The payoff: a degraded widget must come back with a spinner that resolves.
+  it "defers stat and table fetches until visible" do
+    -- The payoff: a degraded widget must come back with a spinner that resolves
+    -- once it is visible, without competing with above-fold TimeFusion queries.
     selfFetches (lazyWidget (statWidget & #eager ?~ True)) `shouldBe` True
+    selfFetches (def & #wType .~ Widget.WTTable & #id ?~ "w2") `shouldBe` True
 
   -- The trap this guards. renderStatContent reads `eager` as "data is present" and
   -- drops `load` from the trigger, so clearing html/dataset but LEAVING the flag

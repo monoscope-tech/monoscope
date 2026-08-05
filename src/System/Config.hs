@@ -248,8 +248,8 @@ instance DefConfig EnvConfig where
       , maxConcurrentJobs = 4 -- Sane default, can be increased based on CPU cores
       , showDemoProject = False -- Default to hidden
       , postmarkFromEmail = "hello@monoscope.tech"
-      , openaiModel = "gpt-5.4-mini"
-      , openaiSmallModel = "gpt-5.4-nano"
+      , openaiModel = "gpt-5.6-terra"
+      , openaiSmallModel = "gpt-5.6-luna"
       , kafkaGroupConcurrency = 4
       , enableKafkaDeadLetterService = True
       , enableOtlpGrpcService = True

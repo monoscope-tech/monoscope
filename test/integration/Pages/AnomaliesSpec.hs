@@ -381,10 +381,16 @@ spec = sequential $ aroundAll withTestResources do
                       'SERVER', '200', '{}') |]
         (testPid, frozenTime, frozenTime, traceIdText, spanIdText, traceIdText, spanIdText)
 
-      (_, pg) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid issueId Nothing Nothing
-      let html = TL.toStrict $ renderText $ toHtml pg
+      (_, pageById) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid issueId Nothing Nothing
+      let byIdHtml = TL.toStrict $ renderText $ toHtml pageById
       -- The trace id should be embedded somewhere in the rendered investigation panel.
-      html `shouldSatisfy` (traceIdText `T.isInfixOf`)
+      byIdHtml `shouldSatisfy` (traceIdText `T.isInfixOf`)
+
+      issue <- runTestBg frozenTime tr $ Issues.selectIssueById issueId
+      targetHash <- maybe (error "Expected API change issue") (pure . (.targetHash)) issue
+      (_, pageByHash) <- testServant tr $ AnomalyList.anomalyDetailHashGetH testPid targetHash Nothing (Just "14D")
+      let byHashHtml = TL.toStrict $ renderText $ toHtml pageByHash
+      byHashHtml `shouldSatisfy` T.isInfixOf "since=14D"
 
     -- Migration 0095 swapped now() → app_now() in apis.log_auto_resolve_activity
     -- so the auto-resolve activity row's created_at honours the test clock.

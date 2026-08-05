@@ -387,7 +387,7 @@ selectIssueById iid = Hasql.interpOne [HI.sql| SELECT * FROM apis.issues WHERE i
 
 
 selectIssueByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Issue)
-selectIssueByHash pid tgtHash = Hasql.interpOne [HI.sql| SELECT * FROM apis.issues WHERE project_id = #{pid} AND target_hash = #{tgtHash} |]
+selectIssueByHash pid tgtHash = Hasql.interpOne [HI.sql| SELECT * FROM apis.issues WHERE project_id = #{pid} AND target_hash = #{tgtHash} ORDER BY updated_at DESC, id DESC LIMIT 1 |]
 
 
 -- | Find most recent RuntimeException issue for a given hash (including acknowledged/archived)

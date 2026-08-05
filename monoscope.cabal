@@ -142,6 +142,7 @@ extra-source-files:
     static/migrations/0113_replay_object_layout_migration.sql
     static/migrations/0114_replay_object_layout_shards.sql
     static/migrations/0115_auto_provisioned_dashboards.sql
+    static/migrations/0116_issue_hash_lookup.sql
 
 source-repository head
   type: git
@@ -701,6 +702,7 @@ test-suite integration-tests
     , bytestring
     , cache
     , clock
+    , conduit
     , containers
     , cryptonite
     , data-default
@@ -726,6 +728,7 @@ test-suite integration-tests
     , lens-aeson
     , lucid
     , memory
+    , minio-hs
     , monad-time-effectful
     , monoscope
     , odd-jobs

@@ -317,8 +317,8 @@ traceH pid trId timestamp spanIdM nav = do
                 (targetSpan, atpSpan) = runIdentity $ LogItem.anchorSdkSpan (pure . bySpanId) (pure sdkNear) clicked
             addRespHeaders $ SpanDetails pid targetSpan atpSpan
       else do
-        traceItemM <- Telemetry.getTraceDetails useTf pid trId timestamp now
-        addRespHeaders $ maybe (TraceDetailsNotFound pid) (\(traceItem, spans) -> TraceDetails pid traceItem (V.mapMaybe Telemetry.convertOtelLogsAndSpansToSpanRecord (V.fromList spans))) traceItemM
+        traceItemM <- Telemetry.getTraceDetailsForView useTf pid trId timestamp now
+        addRespHeaders $ maybe (TraceDetailsNotFound pid) (\(traceItem, spans) -> TraceDetails pid traceItem spans) traceItemM
 
 
 -- Metrics UI components

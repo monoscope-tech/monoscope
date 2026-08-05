@@ -199,6 +199,7 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
           "This issue may have been resolved, merged, or the link may be outdated."
     Just issue -> do
       let tp = TimePicker.TimePicker (Just $ fromMaybe (defaultSinceRange issue.createdAt now) sinceM) Nothing Nothing
+          (rangeStart, rangeEnd, _) = TimePicker.parseTimeRange now tp
       errorM <- bool (pure Nothing) (ErrorPatterns.getErrorPatternLByHash pid issue.targetHash now) (issue.issueType == Issues.RuntimeException)
       canResolve <- case errorM of
         Nothing -> pure False
@@ -235,19 +236,20 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
       (trItem, spanRecs) <-
         fromMaybe (Nothing, V.empty) <$> runMaybeT do
           (tId, tTs) <- hoistMaybe mTraceRef
-          (traceItem, otelLogs) <- MaybeT $ Telemetry.getTraceDetails useTf pid tId (Just tTs) now
-          pure (Just traceItem, V.mapMaybe Telemetry.convertOtelLogsAndSpansToSpanRecord (V.fromList otelLogs))
+          (traceItem, spanRecs) <- MaybeT $ Telemetry.getTraceDetailsForView useTf pid tId (Just tTs) now
+          pure (Just traceItem, spanRecs)
       sampleOverride <-
         if issue.issueType `elem` [Issues.LogPattern, Issues.LogPatternRateChange]
           then do
             let pidTxt = pid.toText
                 patHash = "pat:" <> issue.targetHash
-                windowStart = addUTCTime (-(7 * 24 * 3600)) now
+                from = fromMaybe (addUTCTime (-3600) now) rangeStart
+                to = fromMaybe now rangeEnd
             rows :: [V.Vector Text] <-
               Hasql.interp
                 [HI.sql| SELECT summary FROM otel_logs_and_spans
                           WHERE project_id = #{pidTxt}
-                            AND timestamp BETWEEN #{windowStart} AND #{now}
+                            AND timestamp BETWEEN #{from} AND #{to}
                             AND #{patHash} = ANY(hashes)
                           ORDER BY timestamp DESC
                           LIMIT 1 |]
@@ -738,7 +740,11 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst tp sampleOverride = do
               logsQuery = case Issues.hashPrefix issue.issueType of
                 Just prefix | isLogPatternIssue -> "hashes[*]==\"" <> prefix <> issue.targetHash <> "\""
                 _ -> "kind==\"log\" AND context___trace_id==\"" <> logsTraceId <> "\""
-          virtualTable pid (Just ("/p/" <> pid.toText <> "/log_explorer/data?json=true&query=" <> toUriStr logsQuery)) Nothing
+          let timeParams =
+                foldMap
+                  (\(key, val) -> maybe "" (\v -> "&" <> key <> "=" <> toUriStr v) (mfilter (not . T.null) val))
+                  ([("since", tp.since), ("from", tp.from), ("to", tp.to)] :: [(Text, Maybe Text)])
+          virtualTable pid (Just ("/p/" <> pid.toText <> "/log_explorer/data?json=true&query=" <> toUriStr logsQuery <> timeParams)) Nothing
 
       let withSessionIds = V.mapMaybe (\sr -> (`lookupValueText` "id") =<< Map.lookup "session" =<< sr.attributes) spanRecs
       unless (V.null withSessionIds) $ div_ [class_ "surface-raised rounded-2xl overflow-hidden", id_ "replay-section"] do
