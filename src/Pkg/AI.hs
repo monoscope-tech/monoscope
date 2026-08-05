@@ -70,7 +70,6 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import NeatInterpolation (text)
 import OpenAI.V1.Chat.Completions qualified as OpenAIV1
-import OpenAI.V1.Models qualified as Models
 import OpenAI.V1.Tool qualified as OAITool
 import Pkg.Components.TimePicker (TimePicker)
 import Pkg.Components.Widget qualified as Widget
@@ -573,7 +572,8 @@ agenticSetup config userQuery model =
   Time.currentTime <&> \now ->
     ( LLM.Message LLM.System (buildSystemPrompt config now) LLM.defaultMessageData
     , LLM.Message LLM.User userQuery LLM.defaultMessageData
-    , OpenAIV1._CreateChatCompletion{OpenAIV1.model = Models.Model model, OpenAIV1.tools = Just $ V.fromList allToolDefs, OpenAIV1.messages = V.empty}
+    , let (modelName, effort) = ELLM.modelAndEffort model
+       in OpenAIV1._CreateChatCompletion{OpenAIV1.model = modelName, OpenAIV1.reasoning_effort = effort, OpenAIV1.tools = Just $ V.fromList allToolDefs, OpenAIV1.messages = V.empty}
     )
 
 

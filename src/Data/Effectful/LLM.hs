@@ -4,6 +4,7 @@ module Data.Effectful.LLM (
   callAgenticChat,
   embedDocuments,
   callOpenAIAPI,
+  modelAndEffort,
   runLLMReal,
   runLLMGolden,
 ) where
@@ -104,6 +105,28 @@ getOrCreateGoldenResponse goldenDir model prompt apiKey =
     pure (LLMResponse{llmPrompt = prompt, llmResponse = response}, response)
 
 
+-- | Split an optional reasoning-effort suffix off a model spec ("gpt-5.6-luna#low").
+-- An unrecognized suffix stays part of the model name so config typos fail loudly at the API.
+--
+-- >>> modelAndEffort "gpt-5.6-luna#high"
+-- ("gpt-5.6-luna",Just ReasoningEffort_High)
+-- >>> modelAndEffort "gpt-5.6-terra"
+-- ("gpt-5.6-terra",Nothing)
+-- >>> modelAndEffort "gpt-5.6-luna#hihg"
+-- ("gpt-5.6-luna#hihg",Nothing)
+modelAndEffort :: Text -> (Models.Model, Maybe OpenAIV1.ReasoningEffort)
+modelAndEffort spec = case T.breakOnEnd "#" spec of
+  (pre, suffix) | not (T.null pre), Just eff <- effort suffix -> (Models.Model (T.dropEnd 1 pre), Just eff)
+  _ -> (Models.Model spec, Nothing)
+  where
+    effort = \case
+      "minimal" -> Just OpenAIV1.ReasoningEffort_Minimal
+      "low" -> Just OpenAIV1.ReasoningEffort_Low
+      "medium" -> Just OpenAIV1.ReasoningEffort_Medium
+      "high" -> Just OpenAIV1.ReasoningEffort_High
+      _ -> Nothing
+
+
 -- | Actual OpenAI API call implementation
 callOpenAIAPI :: Text -> Text -> Text -> IO (Either Text Text)
 callOpenAIAPI model fullPrompt apiKey = do
@@ -118,10 +141,12 @@ callOpenAIAPI model fullPrompt apiKey = do
           { OpenAIV1.content = V.fromList [OpenAIV1.Text{OpenAIV1.text = fullPrompt}]
           , OpenAIV1.name = Nothing
           }
+      (modelName, effort) = modelAndEffort model
       params =
         OpenAIV1._CreateChatCompletion
-          { OpenAIV1.model = Models.Model model
+          { OpenAIV1.model = modelName
           , OpenAIV1.messages = V.fromList [userMessage]
+          , OpenAIV1.reasoning_effort = effort
           }
   -- Use langchain-hs to generate response
   result <- liftIO $ LLMCore.generate openAI fullPrompt (Just params)
