@@ -243,6 +243,7 @@ library
       Web.I18n
       Web.MCP
       Web.Routes
+      Web.WireSchemas
       Proto.Opentelemetry.Proto.Common.V1.Common
       Proto.Opentelemetry.Proto.Common.V1.Common_Fields
       Proto.Opentelemetry.Proto.Resource.V1.Resource
@@ -800,6 +801,7 @@ test-suite test-dev
       Web.I18n
       Web.MCP
       Web.Routes
+      Web.WireSchemas
       BackgroundJobs.DashboardAutoProvisionSpec
       BackgroundJobs.DigestFlushSpec
       BackgroundJobs.ExpirySpec

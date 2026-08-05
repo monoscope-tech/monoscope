@@ -156,6 +156,11 @@ jobs:
       - name: Run unit-tests
         run: cabal test unit-tests --ghc-options="-O0" --test-show-details=direct
 
+      # The CLI package builds without libpq, so its tests are cheap and can't
+      # be skipped for want of a database.
+      - name: Run cli-tests
+        run: cabal test monoscope-cli:cli-tests --ghc-options="-O0" --test-show-details=direct
+
       # No explicit wait: the TF service container starts at "Initialize
       # containers" (before the multi-minute build) and boots in ~1s, so it's
       # long ready by the time integration tests connect. The hasql TF pool also

@@ -12,11 +12,9 @@ module Models.Telemetry.Schema (
 
 import Data.Aeson qualified as AE
 import Data.Map qualified as Map
-import Data.OpenApi (ToSchema)
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Deriving.Aeson.Stock qualified as DAE
-import Pkg.Deriving (SnakeSchema (..))
 import Relude
 
 
@@ -28,7 +26,6 @@ data FieldInfo = FieldInfo
   }
   deriving (Eq, Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake FieldInfo
-  deriving (ToSchema) via SnakeSchema FieldInfo
 
 
 -- | A schema containing fields
@@ -37,7 +34,6 @@ newtype Schema = Schema
   }
   deriving (Eq, Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Schema
-  deriving (ToSchema) via SnakeSchema Schema
 
 
 -- | The complete telemetry schema definition

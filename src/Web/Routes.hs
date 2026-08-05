@@ -47,6 +47,7 @@ import Data.OpenApi qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
 import Pages.CommandPalette qualified as CommandPalette
 import Servant.OpenApi (HasOpenApi (..), toOpenApi)
+import Web.WireSchemas ()
 import System.Config (AuthContext (..), DeploymentEnv (..), EnvConfig (..))
 import System.Exit (ExitCode (..))
 import System.Logging qualified as Log

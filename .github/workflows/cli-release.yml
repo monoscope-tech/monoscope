@@ -1,48 +1,40 @@
 name: CLI Release
 
+# The CLI is its own package (cli/monoscope-cli.cabal) and does NOT depend on
+# lib:monoscope. That is deliberate: the server library links libpq, librdkafka,
+# grpc, protobuf, snappy, lz4 and zstd, none of which a CLI user should have to
+# install. It also means these jobs need no frontend assets, no proto codegen
+# and — on macOS — no Homebrew packages at all.
+#
+# The "no native deps" guarantee is enforced, not assumed: every job runs
+# scripts/check-cli-linkage.sh against the binary it just built.
+
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 
 env:
   LANG: C.UTF-8
+  # -split-sections lets the linker drop unreferenced code per symbol rather
+  # than per object file. Applied to our packages only: turning it on globally
+  # would invalidate the prebuilt dependency store in the deps image and turn a
+  # 10-minute release into an hour-long one.
+  CLI_GHC_OPTS: '-O2 -split-sections +RTS -A64m -n2m -RTS'
 
 jobs:
-  build-frontend:
-    name: Build Frontend Assets
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: '22'
-
-      - name: Build frontend assets
-        run: |
-          mkdir -p static/public/assets/css
-          mkdir -p static/public/assets/web-components/dist/js
-          mkdir -p static/public/assets/web-components/dist/css
-          npm ci
-          npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify
-          cd web-components
-          npm ci
-          NODE_ENV=production npx vite build --mode production --sourcemap false
-
-      - name: Upload frontend artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: frontend-assets
-          path: |
-            static/public/assets/css/tailwind.min.css
-            static/public/assets/web-components/dist
-          retention-days: 1
-
-  build-linux-x64:
-    name: Build Linux x86_64
-    needs: build-frontend
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+  build-linux:
+    name: Build Linux ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    continue-on-error: ${{ matrix.arch == 'arm64' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: blacksmith-4vcpu-ubuntu-2404
+          - arch: arm64
+            runner: blacksmith-4vcpu-ubuntu-2404-arm
     container:
       image: ghcr.io/monoscope-tech/monoscope-deps:latest
       credentials:
@@ -53,88 +45,37 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Download frontend artifacts
-        uses: actions/download-artifact@v8
-        with:
-          name: frontend-assets
-          path: static/public/assets
-
       - name: Cache dist-newstyle
         uses: actions/cache@v5
         with:
           path: dist-newstyle
-          key: cli-linux-x64-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}-${{ github.sha }}
+          key: cli-linux-${{ matrix.arch }}-${{ hashFiles('cli/*.cabal', 'shared/*.cabal', 'cabal.project*') }}-${{ github.sha }}
           restore-keys: |
-            cli-linux-x64-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}-
-            cli-linux-x64-
+            cli-linux-${{ matrix.arch }}-${{ hashFiles('cli/*.cabal', 'shared/*.cabal', 'cabal.project*') }}-
+            cli-linux-${{ matrix.arch }}-
 
       - name: Build CLI binary
-        run: cabal build exe:monoscope -j --ghc-options="-O2 +RTS -A64m -n2m -RTS"
+        run: |
+          cabal build monoscope-cli:exe:monoscope -j \
+            --ghc-options="$CLI_GHC_OPTS -optl-Wl,--gc-sections"
 
       - name: Package binary
         run: |
-          BIN=$(cabal list-bin exe:monoscope | tail -n1)
-          strip "$BIN"
+          BIN=$(cabal list-bin monoscope-cli:exe:monoscope | tail -n1)
           cp "$BIN" monoscope
-          tar czf monoscope-linux-x86_64.tar.gz monoscope
+          strip -s monoscope
+          ./scripts/check-cli-linkage.sh monoscope
+          tar czf monoscope-linux-${{ matrix.arch }}.tar.gz monoscope
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: monoscope-linux-x86_64
-          path: monoscope-linux-x86_64.tar.gz
-          retention-days: 5
-
-  build-linux-arm64:
-    name: Build Linux ARM64
-    needs: build-frontend
-    continue-on-error: true
-    runs-on: blacksmith-4vcpu-ubuntu-2404-arm
-    container:
-      image: ghcr.io/monoscope-tech/monoscope-deps:latest
-      credentials:
-        username: ${{ github.repository_owner }}
-        password: ${{ secrets.GH_TOKEN }}
-      env:
-        CABAL_DIR: /root/.cabal
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Download frontend artifacts
-        uses: actions/download-artifact@v8
-        with:
-          name: frontend-assets
-          path: static/public/assets
-
-      - name: Cache dist-newstyle
-        uses: actions/cache@v5
-        with:
-          path: dist-newstyle
-          key: cli-linux-arm64-dist-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}-${{ github.sha }}
-          restore-keys: |
-            cli-linux-arm64-dist-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}-
-            cli-linux-arm64-dist-
-
-      - name: Build CLI binary
-        run: cabal build exe:monoscope -j --ghc-options="-O2 +RTS -A64m -n2m -RTS"
-
-      - name: Package binary
-        run: |
-          BIN=$(cabal list-bin exe:monoscope | tail -n1)
-          strip "$BIN"
-          cp "$BIN" monoscope
-          tar czf monoscope-linux-arm64.tar.gz monoscope
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: monoscope-linux-arm64
-          path: monoscope-linux-arm64.tar.gz
+          name: monoscope-linux-${{ matrix.arch }}
+          path: monoscope-linux-${{ matrix.arch }}.tar.gz
           retention-days: 5
 
   build-macos:
     name: Build macOS ${{ matrix.arch }}
-    needs: build-frontend
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -147,12 +88,6 @@ jobs:
             runner: macos-15-intel
     steps:
       - uses: actions/checkout@v6
-
-      - name: Download frontend artifacts
-        uses: actions/download-artifact@v8
-        with:
-          name: frontend-assets
-          path: static/public/assets
 
       - name: Read GHC version from cabal.project
         id: ghc
@@ -168,41 +103,36 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.cabal
-          key: cli-macos-${{ matrix.arch }}-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}
+          key: cli-macos-${{ matrix.arch }}-cabal-${{ hashFiles('cli/*.cabal', 'shared/*.cabal', 'cabal.project*') }}
           restore-keys: cli-macos-${{ matrix.arch }}-cabal-
 
       - name: Cache dist-newstyle
         uses: actions/cache@v5
         with:
           path: dist-newstyle
-          key: cli-macos-${{ matrix.arch }}-dist-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}
+          key: cli-macos-${{ matrix.arch }}-dist-${{ hashFiles('cli/*.cabal', 'shared/*.cabal', 'cabal.project*') }}
           restore-keys: cli-macos-${{ matrix.arch }}-dist-
 
-      - name: Install system deps
-        run: |
-          brew install pkg-config libpq librdkafka snappy lz4 zstd grpc openssl protobuf
-          PREFIX=$(brew --prefix)
-          KEGONLY="snappy libpq librdkafka lz4 zstd openssl"
-          # Symlink keg-only libs/headers into /usr/local so configure scripts and GHC linker find them
-          sudo mkdir -p /usr/local/lib /usr/local/include
-          for f in $KEGONLY; do
-            pf="$PREFIX/opt/$f"
-            [ -d "$pf/lib" ]     && find "$pf/lib"     -maxdepth 1 \( -name "*.dylib" -o -name "*.a" \) -exec sudo ln -sf {} /usr/local/lib/ \;
-            [ -d "$pf/include" ] && sudo cp -rn "$pf/include/." /usr/local/include/ 2>/dev/null || true
-          done
-          # pkg-config paths as belt-and-suspenders
-          PKG_PATH=$(for f in $KEGONLY grpc; do echo -n "$PREFIX/opt/$f/lib/pkgconfig:"; done)
-          echo "PKG_CONFIG_PATH=${PKG_PATH%:}" >> $GITHUB_ENV
-          echo "$PREFIX/opt/libpq/bin" >> $GITHUB_PATH
-
       - name: Build CLI binary
-        run: cabal build exe:monoscope -j --ghc-options="-O2 +RTS -A64m -n2m -RTS"
+        run: |
+          cabal build monoscope-cli:exe:monoscope -j \
+            --ghc-options="$CLI_GHC_OPTS -optl-Wl,-dead_strip"
 
       - name: Package binary
         run: |
-          BIN=$(cabal list-bin exe:monoscope | tail -n1)
-          strip "$BIN"
+          BIN=$(cabal list-bin monoscope-cli:exe:monoscope | tail -n1)
           cp "$BIN" monoscope
+          strip -x monoscope
+          # GHC picks up Homebrew's zlib when it is on the runner, which would
+          # make the released binary unusable on a Mac without Homebrew. Repoint
+          # it at the system copy (macOS has always shipped one) and re-sign,
+          # since editing load commands invalidates the ad-hoc signature.
+          BREW_Z=$(otool -L monoscope | awk '/libz\..*dylib/ && !/^\/usr\/lib/ {print $1}')
+          if [ -n "$BREW_Z" ]; then
+            install_name_tool -change "$BREW_Z" /usr/lib/libz.1.dylib monoscope
+            codesign -f -s - monoscope
+          fi
+          ./scripts/check-cli-linkage.sh monoscope
           tar czf monoscope-darwin-${{ matrix.arch }}.tar.gz monoscope
 
       - name: Upload artifact
@@ -214,7 +144,8 @@ jobs:
 
   release:
     name: Create GitHub Release
-    needs: [build-linux-x64, build-linux-arm64, build-macos]
+    needs: [build-linux, build-macos]
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: write

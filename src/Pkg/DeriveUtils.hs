@@ -3,6 +3,9 @@
 -- are re-exported here, so importing this module still gets you everything.
 module Pkg.DeriveUtils (
   module Pkg.Deriving,
+  SnakeSchema (..),
+  CamelSchema (..),
+  JsonValueSchema (..),
   AesonText (..),
   BaselineState (..),
   DB,
@@ -38,7 +41,12 @@ import Data.Default (Default (..))
 import Data.Digest.XXHash (xxHash)
 import Data.Effectful.Hasql (Hasql)
 import Data.IntMap qualified as IntMap
-import Data.OpenApi (ToParamSchema (..), ToSchema (..))
+import Control.Lens ((?~))
+import Data.OpenApi (NamedSchema (..), ToParamSchema (..), ToSchema (..), enum_, genericDeclareNamedSchema, type_)
+import Data.OpenApi qualified as OpenApi
+import Data.OpenApi.Internal.Schema (GToSchema)
+import GHC.Generics (Rep)
+import Text.Casing (quietSnake)
 import Data.Text qualified as T
 import Data.Time (UTCTime, ZonedTime, utc, utcToZonedTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
@@ -264,6 +272,60 @@ instance Enum a => HI.EncodeValue (WrappedEnumInt a) where
 
 instance (Bounded a, Enum a) => HI.DecodeValue (WrappedEnumInt a) where
   decodeValue = WrappedEnumInt . fromMaybe minBound . safeToEnum <$> HI.decodeValue
+
+
+-- | OpenApi half of the shared deriving wrappers. Kept out of 'Pkg.Deriving' so
+-- the CLI does not link openapi3; everything here is server-side only.
+--
+-- The instances for 'WrappedEnumSC' are orphans for the same reason.
+instance {-# OVERLAPPABLE #-} (Bounded a, Enum a, KnownSymbol prefix, Show a, Typeable a, Typeable qualType) => ToSchema (WrappedEnumSC qualType prefix a) where
+  declareNamedSchema (_ :: proxy (WrappedEnumSC qualType prefix a)) = pure $ NamedSchema Nothing $ enumSCSchema @prefix @a
+
+
+instance (Bounded a, Enum a, KnownSymbol prefix, Show a) => ToParamSchema (WrappedEnumSC qualType prefix a) where
+  toParamSchema (_ :: proxy (WrappedEnumSC qualType prefix a)) = enumSCSchema @prefix @a
+
+
+-- | Shared string-enum OpenApi schema for a 'WrappedEnumSC'.
+enumSCSchema :: forall prefix a. (Bounded a, Enum a, KnownSymbol prefix, Show a) => OpenApi.Schema
+enumSCSchema =
+  mempty
+    & type_
+    ?~ OpenApi.OpenApiString
+      & enum_
+    ?~ [AE.String (toText $ encodeEnumSC @prefix v) | v <- [minBound @a .. maxBound @a]]
+
+
+-- | DerivingVia wrapper: produces ToSchema with snake_case field names matching DAE.Snake's ToJSON output.
+newtype SnakeSchema a = SnakeSchema a
+
+
+instance (GToSchema (Rep a), Generic a, Typeable a) => ToSchema (SnakeSchema a) where
+  declareNamedSchema _ =
+    genericDeclareNamedSchema
+      OpenApi.defaultSchemaOptions{OpenApi.fieldLabelModifier = quietSnake . fromString}
+      (Proxy @a)
+
+
+-- | DerivingVia wrapper: produces ToSchema with unmodified (camelCase) field names.
+newtype CamelSchema a = CamelSchema a
+
+
+instance (GToSchema (Rep a), Generic a, Typeable a) => ToSchema (CamelSchema a) where
+  declareNamedSchema _ = genericDeclareNamedSchema OpenApi.defaultSchemaOptions (Proxy @a)
+
+
+-- | DerivingVia wrapper: emit an unconstrained JSON value schema for types whose
+-- subtrees don't have ToSchema (escape hatch for deeply nested domain types).
+newtype JsonValueSchema a = JsonValueSchema a
+
+
+instance Typeable a => ToSchema (JsonValueSchema a) where
+  declareNamedSchema _ = declareNamedSchema (Proxy @AET.Value)
+
+
+instance ToSchema AET.Value where
+  declareNamedSchema _ = pure $ NamedSchema (Just "JSONValue") mempty
 
 
 data BaselineState = BSLearning | BSEstablished

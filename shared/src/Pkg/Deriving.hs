@@ -1,40 +1,32 @@
--- | Database-free half of 'Pkg.DeriveUtils': the @DerivingVia@ wrappers, schema
--- helpers and orphan 'Default' instances that only need aeson/openapi/text.
+-- | Database-free half of 'Pkg.DeriveUtils': the @DerivingVia@ wrappers and
+-- orphan 'Default' instances that need nothing beyond aeson and text.
 --
--- It exists so artefacts that must not link libpq — chiefly the @monoscope-cli@
--- package, which compiles a handful of shared modules straight from @src/@ —
--- can reuse the same wrappers the server uses. The postgresql-simple/hasql
--- instances for these same types live (as orphans) in 'Pkg.DeriveUtils', which
--- re-exports this module so no call site has to care about the split.
+-- It exists so the @monoscope-cli@ package can reuse the wrappers the server
+-- uses without linking what the server links. That means no postgresql-simple
+-- or hasql (those instances stay in 'Pkg.DeriveUtils', which re-exports this
+-- module so no call site has to care) and no openapi3 either — a CLI has no use
+-- for schema generation, and it is one of the larger dependencies in the tree.
+-- The @ToSchema@ instances live in 'Pkg.DeriveUtils' and 'Web.WireSchemas'.
 module Pkg.Deriving (
-  CamelSchema (..),
-  JsonValueSchema (..),
   KnownMaybeSymbol (..),
-  SnakeSchema (..),
   WrappedEnumSC (..),
   decodeEnumSC,
   encodeEnumSC,
-  enumSCSchema,
   escapeRegex,
   splitQualType,
 ) where
 
-import Control.Lens ((?~))
 import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AET
 import Data.CaseInsensitive (CI, FoldCase)
 import Data.CaseInsensitive qualified as CI (mk)
 import Data.Default (Default (..))
-import Data.OpenApi (NamedSchema (..), ToParamSchema (..), ToSchema (..), enum_, genericDeclareNamedSchema, type_)
-import Data.OpenApi qualified as OpenApi
-import Data.OpenApi.Internal.Schema (GToSchema)
 import Data.Text qualified as T
 import Data.Text.Display (Display (..))
 import Data.Text.Lazy qualified as TL
 import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import GHC.Generics (Rep)
 import GHC.TypeLits (KnownSymbol, Symbol, symbolVal)
 import Relude
 import Relude.Unsafe qualified as Unsafe
@@ -117,52 +109,6 @@ instance (KnownSymbol prefix, Read a, Show a, Typeable a, Typeable qualType) => 
   fromVar = fmap WrappedEnumSC . decodeEnumSC @prefix
 
 
--- | Shared string-enum OpenApi schema for a 'WrappedEnumSC'.
-enumSCSchema :: forall prefix a. (Bounded a, Enum a, KnownSymbol prefix, Show a) => OpenApi.Schema
-enumSCSchema =
-  mempty
-    & type_
-    ?~ OpenApi.OpenApiString
-      & enum_
-    ?~ [AE.String (toText $ encodeEnumSC @prefix v) | v <- [minBound @a .. maxBound @a]]
-
-
-instance {-# OVERLAPPABLE #-} (Bounded a, Enum a, KnownSymbol prefix, Show a, Typeable a, Typeable qualType) => ToSchema (WrappedEnumSC qualType prefix a) where
-  declareNamedSchema (_ :: proxy (WrappedEnumSC qualType prefix a)) = pure $ NamedSchema Nothing $ enumSCSchema @prefix @a
-
-
-instance (Bounded a, Enum a, KnownSymbol prefix, Show a) => ToParamSchema (WrappedEnumSC qualType prefix a) where
-  toParamSchema (_ :: proxy (WrappedEnumSC qualType prefix a)) = enumSCSchema @prefix @a
-
-
--- | DerivingVia wrapper: produces ToSchema with snake_case field names matching DAE.Snake's ToJSON output.
-newtype SnakeSchema a = SnakeSchema a
-
-
-instance (GToSchema (Rep a), Generic a, Typeable a) => ToSchema (SnakeSchema a) where
-  declareNamedSchema _ =
-    genericDeclareNamedSchema
-      OpenApi.defaultSchemaOptions{OpenApi.fieldLabelModifier = quietSnake . fromString}
-      (Proxy @a)
-
-
--- | DerivingVia wrapper: produces ToSchema with unmodified (camelCase) field names.
-newtype CamelSchema a = CamelSchema a
-
-
-instance (GToSchema (Rep a), Generic a, Typeable a) => ToSchema (CamelSchema a) where
-  declareNamedSchema _ = genericDeclareNamedSchema OpenApi.defaultSchemaOptions (Proxy @a)
-
-
--- | DerivingVia wrapper: emit an unconstrained JSON value schema for types whose
--- subtrees don't have ToSchema (escape hatch for deeply nested domain types).
-newtype JsonValueSchema a = JsonValueSchema a
-
-
-instance Typeable a => ToSchema (JsonValueSchema a) where
-  declareNamedSchema _ = declareNamedSchema (Proxy @AET.Value)
-
-
 -- | Backslash-escape POSIX-regex metacharacters so a literal substring can be
 -- embedded safely in a regex pattern.
 escapeRegex :: Text -> Text
@@ -190,10 +136,6 @@ instance Default UUID.UUID where
 instance Default AET.Value where
   def = AET.emptyObject
   {-# INLINE def #-}
-
-
-instance ToSchema AET.Value where
-  declareNamedSchema _ = pure $ NamedSchema (Just "JSONValue") mempty
 
 
 instance (Default s, FoldCase s) => Default (CI s) where

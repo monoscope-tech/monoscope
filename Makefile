@@ -64,6 +64,23 @@ kill-live-reload:
 live-reload: kill-live-reload
 	ghcid --command 'cabal repl monoscope --no-semaphore --ghc-options="-j$(NCPUS) -Wno-error=unused-imports -Wno-error=unused-top-binds" --with-compiler=$(GHC)' --test ':run Start.startApp' $(RELOAD_ASSETS) $(RELOAD_ENV) --warnings
 
+# The CLI is its own package with no libpq/librdkafka/grpc linkage — see
+# cli/monoscope-cli.cabal. Build it on its own; it does not need the server
+# library, the frontend assets or a database.
+cli-build:
+	cabal build monoscope-cli:exe:monoscope --ghc-options="-O0"
+
+# Release-shaped build: optimised, section-split, stripped, and checked for
+# native-library linkage the way cli-release.yml does it.
+cli-release-build:
+	cabal build monoscope-cli:exe:monoscope -j --ghc-options="-O2 -split-sections +RTS -A64m -n2m -RTS"
+	@BIN=$$(cabal list-bin monoscope-cli:exe:monoscope | tail -n1); \
+	cp "$$BIN" ./monoscope && strip -x ./monoscope 2>/dev/null || strip -s ./monoscope; \
+	./scripts/check-cli-linkage.sh ./monoscope
+
+cli-test:
+	cabal test monoscope-cli:cli-tests --ghc-options="-O0" --test-show-details=direct
+
 live-reload-cli:
 	ghcid --command 'cabal repl exe:monoscope --no-semaphore --ghc-options="-O0 -Wno-error=unused-imports -Wno-error=unused-top-binds" --with-compiler=$(GHC)' $(RELOAD_ENV) --warnings 2>&1 | tee build-cli.log
 

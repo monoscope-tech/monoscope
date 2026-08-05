@@ -12,10 +12,8 @@ module Web.Wire (
 ) where
 
 import Data.Aeson qualified as AE
-import Data.OpenApi (ToSchema)
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAES
-import Pkg.Deriving (JsonValueSchema)
 import Relude
 
 
@@ -29,7 +27,6 @@ data Paged a = Paged
   }
   deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAES.Snake (Paged a)
-  deriving (ToSchema) via JsonValueSchema (Paged a)
 
 
 -- | One value of a faceted field plus how often it was seen.

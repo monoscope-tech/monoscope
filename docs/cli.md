@@ -10,6 +10,8 @@ curl https://monoscope.tech/install.sh | sh
 
 Detects your platform (Linux/macOS, x86_64/arm64), downloads the latest release, verifies the SHA256 checksum, and installs `monoscope` to `~/.local/bin`.
 
+**No prerequisites.** The CLI is a single static-ish binary with no PostgreSQL, Kafka or gRPC client libraries to install first — you do not need `libpq`, `librdkafka`, `protobuf` or Homebrew. It links only what every Linux distro and macOS already ship (libc, zlib, ncurses). CI enforces this on every release with `scripts/check-cli-linkage.sh`.
+
 **Specific version:**
 
 ```bash
@@ -121,6 +123,17 @@ When more than one output flag is set, precedence is `--json` > `--yaml` > `--ta
 - `yaml` — config-friendly. Round-trips cleanly through `apply` for monitors and
   dashboards.
 
+Event-shaped commands (`events`/`logs`/`traces` `search` and `tail`) additionally
+take `--format/-f` to pick the terminal shape:
+
+| `--format` | Shape |
+|---|---|
+| `line` (default) | One event per line: time, severity, service, duration, message, trace id. What you want when scanning a stream. |
+| `table` | The bordered column table. Better when the columns matter more than the flow — aggregate queries fall back to it automatically. |
+| `logfmt` | `key=value` pairs. Greppable, and what most log shippers expect. |
+
+`--format` is ignored under `--json`/`--yaml`, where the envelope is the output.
+
 ---
 
 ## Logs & Traces
@@ -189,24 +202,46 @@ monoscope events get <event-id> --show-body
 monoscope traces get <trace-id> --tree
 ```
 
+`--tree` draws a waterfall: one row per span, indented by depth, with a bar
+showing where that span sat inside the trace's total duration and the duration
+printed on the right. Error spans are red. It answers "what actually took the
+time", which a flat list of spans can't:
+
+```
+span                                          0 → 412ms          duration
+GET /api/checkout                             ████████████████   412ms
+ grpc CartService/GetCart                     ██                 41ms
+ grpc PaymentService/Charge                     ███████████      288ms
+  SELECT payments                                     ████       121ms
+```
+
+Under `--json` you get the raw span rows instead.
+
 Options for `events get`:
 
 | Flag | Description |
 |---|---|
-| `--tree` | Render as a trace tree (only relevant for span IDs) |
+| `--tree` | Draw the trace as a waterfall (pass a trace id) |
 | `--at <timestamp>` | ISO-8601 hint for a fast point-in-time lookup (skips the 90d range scan) |
 | `--field <name>` | Project a single field out of the JSON. **Repeatable** |
 | `--show-body` | Shorthand for `--field body --field summary` |
 
 ### Live tail
 
-Stream events in real-time (polls every 2 seconds):
+Follow the event stream, `tail -f` style:
 
 ```bash
-monoscope events tail
-monoscope logs tail --service api --level error
-monoscope logs tail --grep "timeout"       # client-side substring filter
+monoscope logs tail                                  # follow everything
+monoscope logs tail --service api --level error      # narrow it down
+monoscope logs tail --grep timeout                   # message/span/service substring
+monoscope logs tail --since 15m                      # print recent history first, then follow
+monoscope logs tail --interval 10s                   # back off on a quiet project
+monoscope logs tail --format logfmt | grep -v health # pipe it somewhere
 ```
+
+Each poll asks for a window wider than the interval and drops ids already
+printed, so a row that lands in the store a moment after its timestamp still
+appears exactly once. Default cadence is 2s.
 
 ### Context window
 
@@ -254,12 +289,39 @@ monoscope metrics query 'summarize count()' --since 30m --assert '< 1000'
 
 Options: `--since` (default `1H`), `--from`, `--to`, `--assert <condition>`.
 
-### Chart (sparkline)
+### Chart
+
+`monoscope chart` draws any KQL query as a real chart in the terminal — braille
+line plots for time-binned queries, bars for categorical ones. `metrics chart`
+is an alias that goes through the same renderer.
 
 ```bash
-monoscope metrics chart 'summarize count() by bin(timestamp, 1m)' --since 2h
-monoscope metrics chart 'summarize avg(duration) by bin(timestamp, 1m)' --watch 30s
+# Time-binned queries draw a line chart with y-axis ticks and time labels
+monoscope chart 'summarize count(*) by bin_auto(timestamp)' --since 6h
+
+# One line per group, with a legend
+monoscope chart 'summarize count(*) by bin_auto(timestamp), status_code' --since 1h
+
+# Categorical results draw bars, biggest first
+monoscope chart 'summarize count(*) by resource.service.name' --type bar
+
+# A single number, with a sparkline of how it got there
+monoscope chart 'summarize p95(duration)' --type stat --since 24h
+
+# Refresh in place
+monoscope chart 'summarize count(*) by bin_auto(timestamp)' --watch 30s
 ```
+
+| Flag | Description |
+|---|---|
+| `--type line\|bar\|stat\|table` | Chart form. Inferred from the result when omitted: a leading timestamp column means `line`, otherwise `bar` |
+| `--since/--from/--to` | Time range (default `1h`) |
+| `--source spans\|metrics` | Which store to query (default: spans) |
+| `--height N` | Plot height in rows (default 14) |
+| `--watch INTERVAL` | Clear and redraw every INTERVAL |
+
+Width comes from the terminal; piping fixes it at 100 columns and drops ANSI so
+redirected output is reproducible.
 
 ---
 
@@ -338,6 +400,44 @@ monoscope dashboards widget reorder <dashboard-id> --tab overview positions.json
   "widget-id-2": { "x": 6, "y": 0, "w": 6, "h": 4 }
 }
 ```
+
+### Render a dashboard in the terminal
+
+`dashboards render` draws the whole dashboard — every widget, in its grid
+position — without a browser. The server resolves the dashboard's constants,
+variables and every widget query in one request, so what you see matches the web
+UI: widgets that sit side by side there sit side by side here, group widgets
+nest their sub-grid, and each widget uses its own renderer (line chart, bars,
+stat tile, table).
+
+```bash
+# The whole dashboard, sized to your terminal
+monoscope dashboards render <id>
+
+# A different window, refreshed in place — a wall display for an incident
+monoscope dashboards render <id> --since 24h --watch 1m
+
+# One widget, full width. Matches on widget id or on its slugified title
+monoscope dashboards render <id> --widget p95-latency
+
+# A specific tab, with a dashboard variable bound
+monoscope dashboards render <id> --tab errors --var service=checkout
+
+# The resolved data instead of the drawing (also the default when piped)
+monoscope dashboards render <id> --json | jq '.widgets[] | {title, value}'
+```
+
+| Flag | Description |
+|---|---|
+| `--tab <slug>` | Tab to render (default: the first one). `--json` output lists the available tabs |
+| `--widget <id-or-title>` | Render one widget, full width |
+| `--var key=value` | Bind a dashboard variable. **Repeatable** |
+| `--since/--from/--to` | Time range (default `1h`) |
+| `--watch INTERVAL` | Clear and redraw every INTERVAL |
+
+Under `--json` each widget carries `w_type`, `unit`, `layout`, `headers`,
+`rows` (numeric), `text_rows`, `stats`, `value` and any query `error` — which is
+the form to reason over programmatically rather than parsing the drawing.
 
 ---
 

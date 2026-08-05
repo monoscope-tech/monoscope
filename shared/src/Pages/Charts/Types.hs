@@ -4,12 +4,11 @@ module Pages.Charts.Types (MetricsData (..), MetricsStats (..), DataType (..)) w
 
 import Data.Aeson qualified as AE
 import Data.Default (Default)
-import Data.OpenApi (ToParamSchema, ToSchema)
 import Data.Semigroup (Max (Max))
 import Data.Vector qualified as V
 import Deriving.Aeson.Stock qualified as DAE
 import Language.Haskell.TH.Syntax qualified as THS
-import Pkg.Deriving (SnakeSchema (..), WrappedEnumSC (..))
+import Pkg.Deriving (WrappedEnumSC (..))
 import Relude
 import Web.HttpApiData (FromHttpApiData)
 
@@ -26,7 +25,6 @@ data MetricsStats = MetricsStats
   deriving (Generic, Show, THS.Lift)
   deriving anyclass (Default, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MetricsStats
-  deriving (ToSchema) via SnakeSchema MetricsStats
 
 
 data MetricsData = MetricsData
@@ -48,11 +46,10 @@ data MetricsData = MetricsData
   deriving (Generic, Show)
   deriving anyclass (Default, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MetricsData
-  deriving (ToSchema) via SnakeSchema MetricsData
 
 
 data DataType = DTMetric | DTJson | DTFloat | DTText
   deriving stock (Bounded, Enum, Eq, Generic, Ord, Read, Show, THS.Lift)
   deriving anyclass (NFData)
   deriving (Monoid, Semigroup) via (Max DataType)
-  deriving (AE.FromJSON, AE.ToJSON, FromHttpApiData, ToParamSchema, ToSchema) via WrappedEnumSC 'Nothing "DT" DataType
+  deriving (AE.FromJSON, AE.ToJSON, FromHttpApiData) via WrappedEnumSC 'Nothing "DT" DataType
