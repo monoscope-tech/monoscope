@@ -313,6 +313,7 @@ eventsSearchParser =
             <$> optional (option auto (long "chunk-hours" <> metavar "H" <> help "Hours per internal fetch slice for wide --since windows (default: 1; 0 = single request)"))
             <*> switch (long "no-chunk" <> internal)
         )
+    <*> formatOpt
 
 
 -- | C5: Concrete KQL examples in @--help@ — agents copy from here, so keep
@@ -354,7 +355,15 @@ eventsTailParser =
     <$> optional (strOption (long "kind" <> metavar "KIND"))
     <*> optional (strOption (long "service" <> metavar "SERVICE"))
     <*> optional (strOption (long "level" <> metavar "LEVEL"))
-    <*> optional (strOption (long "grep" <> metavar "PATTERN" <> help "Regex filter on message"))
+    <*> optional (strOption (long "grep" <> metavar "PATTERN" <> help "Only print events whose message, span name or service contains PATTERN"))
+    <*> formatOpt
+    <*> optional (strOption (long "interval" <> short 'i' <> metavar "DURATION" <> help "Poll cadence (default: 2s)"))
+    <*> optional (strOption (long "since" <> metavar "DURATION" <> help "Print this much history before following (like tail -n)"))
+
+
+-- | Shared @--format@ flag for the event-shaped commands.
+formatOpt :: Parser (Maybe Text)
+formatOpt = optional (strOption (long "format" <> short 'f' <> metavar "FORMAT" <> help "line|table|logfmt (default: line). Ignored under --json/--yaml"))
 
 
 eventsContextParser :: Parser EventsContextOpts

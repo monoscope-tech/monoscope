@@ -45,6 +45,7 @@ import Relude
 import CLI.Chart qualified as Chart
 import CLI.Config (CLIConfig (..), ConfigKey (..), allConfigKeys, configDir, configFilePath, configKeyText, parseConfigKey, removeToken, resolveConfig, saveToken, setConfigValue)
 import CLI.Dashboard qualified as Dash
+import CLI.LogView (EventRow (..), LogFormat (..), eventRows, parseLogFormat, renderEventLine, renderLogfmt, renderWaterfall)
 import CLI.Core (OutputMode (..), apiGet, apiPostUnauth, isInteractiveTTY, isJsonOutput, printDebug, printError, renderJSON, renderTable, renderWith, withAPIResult)
 import CLI.UI (inputForm, selectFromList, withSpinner)
 import CLI.Validate (validateAndNormalizeKind, validateDurationOrDie, validateQueryOrDie)
@@ -307,6 +308,9 @@ data EventsSearchOpts = EventsSearchOpts
   -- ^ Hours per transport slice when fetching wide --since windows (the CF
   -- edge 504s on multi-day single requests). Purely a transport knob — the
   -- output is always a single envelope. Defaults to 1; @0@ disables slicing.
+  , format :: Maybe Text
+  -- ^ Terminal shape: @line@ (default), @table@ or @logfmt@. Ignored under
+  -- @--json@/@--yaml@, where the envelope is the output.
   }
   deriving stock (Show)
 
@@ -330,6 +334,13 @@ data EventsTailOpts = EventsTailOpts
   , service :: Maybe Text
   , level :: Maybe Text
   , grep :: Maybe Text
+  , format :: Maybe Text
+  , interval :: Maybe Text
+  -- ^ Poll cadence (default 2s). The events store is append-only and queried
+  -- by time window, so following it is polling either way; this just lets a
+  -- quiet project back off and a busy incident tighten up.
+  , backfill :: Maybe Text
+  -- ^ Print this much history before following, like @tail -n@.
   }
   deriving stock (Show)
 
@@ -361,7 +372,7 @@ runEventsSearch cfg opts mode = do
 -- | Shared rendering tail for single and chunked searches — the output
 -- contract (exactly one envelope; @--first@/@--id-only@ slicing) lives here
 -- and only here.
-renderSearchResult :: IOE :> es => EventsSearchOpts -> OutputMode -> AE.Value -> Eff es ()
+renderSearchResult :: (Environment :> es, IOE :> es) => EventsSearchOpts -> OutputMode -> AE.Value -> Eff es ()
 renderSearchResult validatedOpts mode val = do
   let firstOnly = validatedOpts.firstOnly || validatedOpts.idOnly
       normalized = normalizeEventsResponse val validatedOpts.fields
@@ -370,11 +381,12 @@ renderSearchResult validatedOpts mode val = do
       -- one row instead of all-of-them (the JSON path used to slice and
       -- the table path didn't, leading to inconsistent output).
       valForTable = if firstOnly then takeFirst "logsData" val else val
+  fmt <- resolveFormat validatedOpts.format
   if validatedOpts.idOnly
     -- C11: --id-only short-circuits to a bare id on stdout — the natural
     -- input for "search → get" pipelines, no jq required.
     then emitFirstEventId sliced
-    else renderWith mode sliced (renderEventsTable valForTable validatedOpts.fields)
+    else renderWith mode sliced (renderEventsHuman fmt validatedOpts.fields valForTable)
 
 
 -- | Merge accumulator for 'runChunkedSearch'.
@@ -606,35 +618,47 @@ applyProjection opts v
         <> [b | opts.showBody, b <- ["body", "summary"]]
 
 
+-- | Follow the event stream. Each poll asks for a window slightly wider than
+-- the poll interval and drops ids already printed, so a row that lands in the
+-- store a moment late still shows up exactly once.
 runEventsTail :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> EventsTailOpts -> Maybe Text -> Eff es ()
 runEventsTail cfg opts kindOverride = do
   -- D2/D5: validate + normalize kind before entering the poll loop so a
   -- typo doesn't burn HTTP requests every 2 seconds.
   kindNorm <- validateAndNormalizeKind (opts.kind <|> kindOverride)
+  validateDurationOrDie "--interval" opts.interval
+  validateDurationOrDie "--since" opts.backfill
+  fmt <- resolveFormat opts.format
+  (w, color) <- chartCanvas
+  let pollMs = maybe 2000 parseDurationMs opts.interval
+      -- Overlap the window with the previous poll: the store's write path can
+      -- land a row a second or two after its timestamp, and a gapless window
+      -- would skip it forever.
+      windowSecs = max 5 ((pollMs `div` 1000) * 2)
+      q = foldFiltersIntoQuery "" (maybeToList opts.service) opts.level
+      poll since =
+        apiGet cfg "/api/v1/events" (catMaybes [guarded (not . T.null) q <&> ("query",), Just ("since", since), ("source",) <$> kindNorm])
+      emit r
+        | not (all (`T.isInfixOf` haystack) opts.grep) = pass
+        | otherwise = putTextLn $ if fmt == FmtLogfmt then renderLogfmt r else renderEventLine color w r
+        where
+          haystack = T.unwords (catMaybes [r.summary, r.spanName, r.service])
   seenRef <- newIORef (S.empty :: Set Text)
-  forever $ do
-    let q = foldFiltersIntoQuery "" (maybeToList opts.service) opts.level
-        params =
-          catMaybes
-            [ if T.null q then Nothing else Just ("query", q)
-            , Just ("since", "10s")
-            , ("source",) <$> kindNorm
-            ]
-    apiGet cfg "/api/v1/events" params >>= \case
-      Left err -> printError (show err)
-      Right bs -> case AE.eitherDecode @AE.Value bs of
-        Left err -> printError (toText err)
-        Right val -> do
-          seen <- readIORef seenRef
-          let newRows = filter ((`S.notMember` seen) . fst) (extractRowsWithId val)
-              -- Cap seen set: keep most recent half when exceeding limit
-              s = seen <> S.fromList (map fst newRows)
-          writeIORef seenRef $ if S.size s > 10000 then S.drop (S.size s `div` 2) s else s
-          forM_ newRows $ \(_, row) ->
-            when (all (`T.isInfixOf` T.intercalate " " row) opts.grep)
-              $ putTextLn
-              $ T.intercalate "  " row
-    threadDelay 2_000_000
+  let step since = do
+        poll since >>= \case
+          Left err -> printError (show err)
+          Right bs -> case AE.eitherDecode @AE.Value bs of
+            Left err -> printError (toText err)
+            Right val -> do
+              seen <- readIORef seenRef
+              let rows = reverse [r | r <- eventRows val, maybe True (`S.notMember` seen) r.eventId]
+                  seen' = seen <> S.fromList (mapMaybe (.eventId) rows)
+              -- Bound the dedup set; the oldest half can no longer be re-served
+              -- by a window this narrow.
+              writeIORef seenRef $ if S.size seen' > 10000 then S.drop (S.size seen' `div` 2) seen' else seen'
+              mapM_ emit rows
+  whenJust opts.backfill step
+  forever $ step (show windowSecs <> "s") >> threadDelay (pollMs * 1000)
 
 
 runEventsContext :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> EventsContextOpts -> Maybe Text -> OutputMode -> Eff es ()
@@ -903,6 +927,29 @@ renderEventsTable val mFields = case val of
   _ -> renderJSON val
 
 
+-- | Resolve @--format@, exiting with the accepted values on a typo rather than
+-- silently falling back.
+resolveFormat :: IOE :> es => Maybe Text -> Eff es LogFormat
+resolveFormat = maybe (pure FmtLine) (either die' pure . parseLogFormat)
+  where
+    die' e = printError e >> liftIO exitFailure
+
+
+-- | Human-facing rendering of an events envelope. The line and logfmt forms
+-- read the rows through 'CLI.LogView.eventRows'; the table form keeps the
+-- existing column layout, which is what aggregate queries want.
+renderEventsHuman :: (Environment :> es, IOE :> es) => LogFormat -> Maybe Text -> AE.Value -> Eff es ()
+renderEventsHuman fmt mFields val = case fmt of
+  FmtTable -> renderEventsTable val mFields
+  FmtLogfmt -> mapM_ (putTextLn . renderLogfmt) (eventRows val)
+  FmtLine -> do
+    (w, color) <- chartCanvas
+    let rows = eventRows val
+    -- A query that aggregates has no per-event columns to lay out; fall back to
+    -- the table rather than printing a column of blanks.
+    if null rows then renderEventsTable val mFields else mapM_ (putTextLn . renderEventLine color w) rows
+
+
 renderSummaryCell :: Text -> Text
 renderSummaryCell cell = case AE.eitherDecode @[Text] (encodeUtf8 cell) of
   Right items -> renderSummaryItems items
@@ -918,10 +965,12 @@ extractColIdxMap = \case
   _ -> mempty
 
 
-renderTraceTree :: IOE :> es => AE.Value -> Eff es ()
-renderTraceTree val = renderJSON $ case val of
-  AE.Object obj -> fromMaybe val (KM.lookup "traces" obj)
-  _ -> val
+-- | The trace as a waterfall. Under @--json@ the caller renders the envelope
+-- instead; this is only the terminal form.
+renderTraceTree :: (Environment :> es, IOE :> es) => AE.Value -> Eff es ()
+renderTraceTree val = do
+  (w, color) <- chartCanvas
+  mapM_ putTextLn (renderWaterfall color w (eventRows val))
 
 
 extractRowsWithId :: AE.Value -> [(Text, [Text])]

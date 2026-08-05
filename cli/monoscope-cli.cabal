@@ -79,6 +79,7 @@ library
     CLI.Config
     CLI.Core
     CLI.Dashboard
+    CLI.LogView
     CLI.Main
     CLI.Resource
     CLI.Table
@@ -132,3 +133,18 @@ executable monoscope
     , base
     , monoscope-cli
     , relude  >=1.2.0.0
+
+test-suite cli-tests
+  import:         warnings
+  type:           exitcode-stdio-1.0
+  main-is:        Main.hs
+  hs-source-dirs: test
+  ghc-options:    -threaded -O0
+  build-depends:
+    , aeson
+    , aeson-qq
+    , base
+    , hspec
+    , monoscope-cli
+    , relude  >=1.2.0.0
+    , text
