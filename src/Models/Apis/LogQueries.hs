@@ -632,11 +632,13 @@ fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
   let sortColSql = rawSql sortCol
       whereSql = rawSql fullWhere
       firstObservedSql
-        | enableTfReads = [HI.sql|
+        | enableTfReads =
+            [HI.sql|
             FIRST_VALUE(url_path ORDER BY timestamp) FILTER (WHERE url_path IS NOT NULL AND url_path <> '') AS landing_url,
             FIRST_VALUE(user_agent ORDER BY timestamp) FILTER (WHERE user_agent IS NOT NULL AND user_agent <> '') AS user_agent,
             FIRST_VALUE(error_text ORDER BY timestamp) FILTER (WHERE is_error AND error_text IS NOT NULL AND error_text <> '') AS first_error|]
-        | otherwise = [HI.sql|
+        | otherwise =
+            [HI.sql|
             (ARRAY_AGG(url_path ORDER BY timestamp) FILTER (WHERE url_path IS NOT NULL AND url_path <> ''))[1] AS landing_url,
             (ARRAY_AGG(user_agent ORDER BY timestamp) FILTER (WHERE user_agent IS NOT NULL AND user_agent <> ''))[1] AS user_agent,
             (ARRAY_AGG(error_text ORDER BY timestamp) FILTER (WHERE is_error AND error_text IS NOT NULL AND error_text <> ''))[1] AS first_error|]
