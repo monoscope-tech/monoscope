@@ -635,7 +635,8 @@ fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
       -- DataFusion supports array_agg + ORDER BY + FILTER) and measured fastest
       -- (PG: 0.6s vs 1.9s for a row_number window equivalent; TF: equal, 7.0s).
       -- FIRST_VALUE is a window function and errors without OVER on both.
-      firstObservedSql = [HI.sql|
+      firstObservedSql =
+        [HI.sql|
         (ARRAY_AGG(url_path ORDER BY timestamp) FILTER (WHERE url_path IS NOT NULL AND url_path <> ''))[1] AS landing_url,
         (ARRAY_AGG(user_agent ORDER BY timestamp) FILTER (WHERE user_agent IS NOT NULL AND user_agent <> ''))[1] AS user_agent,
         (ARRAY_AGG(error_text ORDER BY timestamp) FILTER (WHERE is_error AND error_text IS NOT NULL AND error_text <> ''))[1] AS first_error|]
