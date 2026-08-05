@@ -1080,11 +1080,15 @@ copyReplayObjectVerified conn bucket oldKey newKey
             Left err -> pure $ Left $ "destination write failed: " <> toText (displayException err)
             Right _ -> do
               verified <- Minio.runMinio conn $ fetchRawObject bucket newKey False
-              pure $ case verified of
-                Left err -> Left $ "destination verification read failed: " <> toText (displayException err)
-                Right copied
-                  | copied == bytes -> Right ()
-                  | otherwise -> Left "destination bytes differ from source"
+              -- The comparison MUST happen here, not in a returned thunk: callers
+              -- collect these Eithers across a whole session before scrutinising
+              -- them, and a lazy (copied == bytes) retains BOTH full bytestrings
+              -- of every object until then — the second half of the 2026-08-05
+              -- heap-overflow crash-loop (the size cap alone didn't bound a
+              -- many-object session).
+              case verified of
+                Left err -> pure $ Left $ "destination verification read failed: " <> toText (displayException err)
+                Right copied -> let !ok = copied == bytes in pure $ if ok then Right () else Left "destination bytes differ from source"
 
 
 -- | Online migration from legacy @<session>/...@ keys to
@@ -1133,7 +1137,12 @@ migrateReplayStorageShard requestedShardCount requestedShardIndex batchSize = do
             newFiles = V.map remap oldFiles
             newShards = V.map remap oldShards
             pairs = zip (V.toList oldFiles <> V.toList oldShards) (V.toList newFiles <> V.toList newShards)
-        copyResults <- liftIO $ forM pairs $ \(oldKey, newKey) -> (oldKey,newKey,) <$> copyReplayObjectVerified conn bucket oldKey newKey
+        -- Force each copy's outcome before moving on so the finished object's
+        -- bytes are collectable; deferring to the post-loop scrutiny retained
+        -- every object of the session at once.
+        copyResults <- liftIO $ forM pairs $ \(oldKey, newKey) -> do
+          !res <- copyReplayObjectVerified conn bucket oldKey newKey
+          pure (oldKey, newKey, res)
         case [(o, n, e) | (o, n, Left e) <- copyResults] of
           failures@(_ : _) -> do
             Log.logAttention "Replay storage migration: verified copy failed; DB unchanged" (HM.insert "failures" (toText $ show failures) $ sessionLogCtx pid sid)
