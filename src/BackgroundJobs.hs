@@ -1260,7 +1260,7 @@ runHourlyJob scheduledTime hour = do
 -- adopted (marked, not duplicated) and deletions are never re-created.
 autoProvisionDashboards :: UTCTime -> ATBackgroundCtx ()
 autoProvisionDashboards scheduledTime = do
-  templates <- filter (\t -> not $ null $ fromMaybe [] t.discoveryMetrics) <$> liftIO (Dashboards.readDashboardsFromDisk "static/public/dashboards")
+  templates <- filter (isJust . (.discoveryMetrics)) <$> liftIO (Dashboards.readDashboardsFromDisk "static/public/dashboards")
   unless (null templates) do
     pids <- Telemetry.projectsWithRecentMetrics (addUTCTime (-3600) scheduledTime)
     forM_ pids \pid -> do
@@ -1270,30 +1270,35 @@ autoProvisionDashboards scheduledTime = do
           pending = [(t, file) | t <- templates, Just file <- [t.file], file `notElem` provisioned, matches t]
       forM_ pending \(tpl, file) -> do
         existing <- Dashboards.getDashboardByBaseTemplate pid file
-        when (isNothing existing) do
-          firstMemberM <- Hasql.interpOne [HI.sql| SELECT user_id FROM projects.project_members WHERE project_id = #{pid} AND deleted_at IS NULL ORDER BY created_at ASC LIMIT 1 |]
-          whenJust firstMemberM \(userId :: Projects.UserId) -> do
-            did <- UUIDId <$> UUID.genUUID
-            void
-              $ Dashboards.insert
-                Dashboards.DashboardVM
-                  { id = did
-                  , projectId = pid
-                  , createdAt = scheduledTime
-                  , updatedAt = scheduledTime
-                  , createdBy = userId
-                  , baseTemplate = Just file
-                  , schema = Nothing
-                  , starredSince = Nothing
-                  , homepageSince = Nothing
-                  , tags = V.fromList (fromMaybe [] tpl.tags)
-                  , title = fromMaybe file tpl.title
-                  , teams = V.empty
-                  , filePath = Nothing
-                  , fileSha = Nothing
-                  }
-            Log.logInfo "Auto-provisioned dashboard from detected metrics" (AE.object ["project_id" AE..= pid, "template" AE..= file])
-        void $ Dashboards.markAutoProvisioned pid file
+        case existing of
+          Just _ -> void $ Dashboards.markAutoProvisioned pid file -- adopt: user already created it manually
+          Nothing -> do
+            firstMemberM <- Hasql.interpOne [HI.sql| SELECT user_id FROM projects.project_members WHERE project_id = #{pid} AND deleted_at IS NULL ORDER BY created_at ASC LIMIT 1 |]
+            case firstMemberM of
+              -- Don't mark: leave the template pending so the next hourly run retries once the project has a member.
+              Nothing -> Log.logAttention "Auto-provision skipped: project has no members" (AE.object ["project_id" AE..= pid, "template" AE..= file])
+              Just (userId :: Projects.UserId) -> do
+                did <- UUIDId <$> UUID.genUUID
+                void
+                  $ Dashboards.insert
+                    Dashboards.DashboardVM
+                      { id = did
+                      , projectId = pid
+                      , createdAt = scheduledTime
+                      , updatedAt = scheduledTime
+                      , createdBy = userId
+                      , baseTemplate = Just file
+                      , schema = Nothing
+                      , starredSince = Nothing
+                      , homepageSince = Nothing
+                      , tags = V.fromList (fromMaybe [] tpl.tags)
+                      , title = fromMaybe file tpl.title
+                      , teams = V.empty
+                      , filePath = Nothing
+                      , fileSha = Nothing
+                      }
+                void $ Dashboards.markAutoProvisioned pid file
+                Log.logInfo "Auto-provisioned dashboard from detected metrics" (AE.object ["project_id" AE..= pid, "template" AE..= file])
 
 
 -- | For each active free-tier project, check usage and send system log + email at 80% and 100% thresholds.
@@ -2105,7 +2110,7 @@ processEagerBatch batch shard
         -- Pure entity + hash derivation.
         !entityIds <- V.replicateM (V.length spans) UUID.genUUID
         let !canonicalTemplates = parseCanonicalPaths projectCache.canonicalPaths
-            !results = V.zipWith (processSpanToEntities canonicalTemplates projectCache pid) spans entityIds
+            !results = V.zipWith (\sp eid -> let (mkEp, hs, np) = processSpanToEntities canonicalTemplates projectCache pid sp in (mkEp eid, hs, np)) spans entityIds
             !(endpoints, spanHashes, normalizedPaths) = V.unzip3 results
             !observations = V.map (extractObservation canonicalTemplates) spans
             !endpointsFinal = deduplicateByHash (.hash) $ V.catMaybes endpoints

@@ -55,6 +55,6 @@ spec = describe "dashboard templates" do
       case find (\d -> d.file == Just file) templates of
         Nothing -> expectationFailure $ "missing template: " <> toString file
         Just d -> do
-          fromMaybe [] d.discoveryMetrics `shouldSatisfy` (not . null)
+          d.discoveryMetrics `shouldSatisfy` isJust
           let metricQueries = [q | w <- allWidgets d, Just q <- [w.query], "metrics" `T.isPrefixOf` T.strip q]
           metricQueries `shouldSatisfy` (not . null)

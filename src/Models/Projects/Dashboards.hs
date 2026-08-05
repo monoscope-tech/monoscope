@@ -107,7 +107,7 @@ data Dashboard = Dashboard
   , constants :: Maybe [Constant]
   , variables :: Maybe [Variable]
   , tabs :: Maybe [Tab]
-  , discoveryMetrics :: Maybe [Text] -- Metric-name prefixes (e.g. "postgresql.") that auto-enable this template for projects emitting them
+  , discoveryMetrics :: Maybe (NonEmpty Text) -- Metric-name prefixes (e.g. "postgresql.") that auto-enable this template for projects emitting them
   , widgets :: [Widget.Widget]
   }
   deriving stock (Generic, Show, THS.Lift)
