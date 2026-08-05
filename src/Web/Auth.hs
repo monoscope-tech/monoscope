@@ -62,7 +62,7 @@ import Lucid.Html5
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects (craftSessionCookie, emptySessionCookie)
 import Models.Projects.Projects qualified as Projects
-import Network.HTTP.Types (hAuthorization, hCookie)
+import Network.HTTP.Types (hAuthorization, hCookie, urlEncode)
 import Network.Wai (Request (rawPathInfo, rawQueryString, requestHeaders))
 import Network.Wreq (FormParam ((:=)), defaults, getWith, header, post, responseBody)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
@@ -322,12 +322,14 @@ loginRedirectH redirectToM = do
 -- loginH
 loginH
   :: Maybe Text
+  -> Maybe Text -- screen_hint: "signup" opens Auth0's sign-up tab (invite emails)
+  -> Maybe Text -- login_hint: pre-fills the email field
   -> ATBaseCtx
        ( Headers
            '[Header "Location" Text, Header "Set-Cookie" SetCookie]
            NoContent
        )
-loginH redirectToM = do
+loginH redirectToM screenHintM loginHintM = do
   envCfg <- asks env
   -- If basic auth is enabled, return 401 instead of redirecting to OAuth
   if envCfg.basicAuthEnabled
@@ -335,7 +337,8 @@ loginH redirectToM = do
     else do
       stateVar <- liftIO $ UUID.toText <$> UUIDV4.nextRandom
       let escapedUri = escapedQueryPartial $ envCfg.auth0Callback <> "?redirect_to=" <> fromMaybe "/" redirectToM
-      let redirectTo = envCfg.auth0Domain <> "/authorize?response_type=code&client_id=" <> envCfg.auth0ClientId <> "&redirect_uri=" <> escapedUri <> "&state=" <> stateVar <> "&scope=openid profile email"
+      let hintParam name = maybe "" (\v -> "&" <> name <> "=" <> decodeUtf8 (urlEncode True $ encodeUtf8 v))
+      let redirectTo = envCfg.auth0Domain <> "/authorize?response_type=code&client_id=" <> envCfg.auth0ClientId <> "&redirect_uri=" <> escapedUri <> "&state=" <> stateVar <> "&scope=openid profile email" <> hintParam "screen_hint" screenHintM <> hintParam "login_hint" loginHintM
       pure $ addHeader redirectTo $ addHeader emptySessionCookie NoContent
 
 

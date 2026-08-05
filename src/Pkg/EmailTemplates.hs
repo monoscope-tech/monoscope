@@ -361,7 +361,7 @@ projectNotifEmail kind userNameM projectName ctaM =
   )
   where
     (subject, message) = case kind of
-      PNInvite -> ("[···] Project Invitation", "<b>" <> fromMaybe "Someone" userNameM <> "</b> has invited you to the <b>" <> projectName <> "</b> project on Monoscope. We're excited to have you on board! All you need to do next is <a href=\"https://monoscope.tech/docs/sdks?utm_source=transac_emails\">integrate one of our SDKs</a> into your application so we can begin monitoring your API.")
+      PNInvite -> ("[···] Project Invitation", "<b>" <> fromMaybe "Someone" userNameM <> "</b> has invited you to the <b>" <> projectName <> "</b> project on Monoscope. We're excited to have you on board! Click the button below and <b>sign up using this email address</b> (or sign in with Google/GitHub if it's already linked to one) to access the project.")
       PNCreated -> ("[···] New Project Created", "You have created a new <b>" <> projectName <> "</b> project on Monoscope.")
       PNDeleted -> ("[···] Project Deleted", "You have successfully deleted the <b>" <> projectName <> "</b> project.")
 

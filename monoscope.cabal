@@ -663,6 +663,7 @@ test-suite integration-tests
       Spec
       SpecHook
       Web.ApiV1Spec
+      Web.AuthSpec
       Web.ClientMetadataSpec
   hs-source-dirs:
       test/integration
@@ -916,6 +917,7 @@ test-suite test-dev
       Spec
       SpecHook
       Web.ApiV1Spec
+      Web.AuthSpec
       Web.ClientMetadataSpec
       Proto.Opentelemetry.Proto.Common.V1.Common
       Proto.Opentelemetry.Proto.Common.V1.Common_Fields

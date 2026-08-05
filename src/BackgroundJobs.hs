@@ -83,6 +83,7 @@ import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (SeverityLevel (..), generateSummary, insertSystemLog, mkSystemLog)
 import Models.Telemetry.Telemetry qualified as Telemetry
+import Network.HTTP.Types (urlEncode)
 import Network.Wreq (defaults, getWith, header, postWith, responseBody)
 import Network.Wreq qualified as Wreq
 import OddJobs.ConfigBuilder (mkConfig)
@@ -293,8 +294,12 @@ processBackgroundJob authCtx bgJob =
     DashboardsAutoProvision scheduledTime -> autoProvisionDashboards scheduledTime
     NewAnomaly{projectId, createdAt, anomalyType, anomalyAction, targetHashes} -> newAnomalyJob projectId createdAt anomalyType anomalyAction (V.fromList targetHashes)
     InviteUserToProject userId projectId reciever projectTitle' ->
-      whenJustM (Projects.userById userId) \user ->
-        renderAndSend reciever (ET.projectInviteEmail user.firstName projectTitle' (projectUrl authCtx projectId))
+      whenJustM (Projects.userById userId) \user -> do
+        -- Invitees usually have no Auth0 identity yet: send them to /login with
+        -- signup + email hints so they land on the sign-up tab, pre-filled.
+        let enc = decodeUtf8 . urlEncode True . encodeUtf8
+            inviteUrl = authCtx.env.hostUrl <> "login?screen_hint=signup&login_hint=" <> enc reciever <> "&redirect_to=" <> enc ("/p/" <> projectId.toText)
+        renderAndSend reciever (ET.projectInviteEmail user.firstName projectTitle' inviteUrl)
     SendDiscordData userId projectId fullName stack foundUsFrom -> whenJustM (Projects.projectById projectId) \project -> do
       users <- Projects.usersByProjectId projectId
       let stackString = intercalate ", " $ map toString stack
