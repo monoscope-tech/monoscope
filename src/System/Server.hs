@@ -252,10 +252,16 @@ awaitShutdown logEnd hardExit asyncs = do
         cancelAllConcurrently shutdownDeadlineUs asyncs
   -- Say WHY we are shutting down: signal vs a service fiber ending (and how it
   -- ended). Fiber results are otherwise discarded, which made crashes invisible.
-  ( race (takeMVar stop) (waitAnyCatch asyncs) >>= \case
-      Left () -> logEnd "SIGINT/SIGTERM received; shutting down"
-      Right (_, Right _) -> logEnd "a service fiber exited cleanly; shutting down"
-      Right (_, Left e) -> logEnd ("a service fiber died: " <> show e <> "; shutting down")
+  -- tryAsync (not try): an ASYNC exception landing on this thread — e.g. a ki
+  -- background-scope child dying — is otherwise never logged, because the rethrow
+  -- races the hard-exit watchdog while the ki scope reap blocks on a wedged
+  -- librdkafka fiber, so the process dies before the RTS can print it
+  -- (2026-08-05 silent crash-loop).
+  ( Safe.tryAsync (race (takeMVar stop) (waitAnyCatch asyncs)) >>= \case
+      Left (e :: SomeException) -> logEnd ("shutdown thread killed by: " <> show e) >> Safe.throwIO e
+      Right (Left ()) -> logEnd "SIGINT/SIGTERM received; shutting down"
+      Right (Right (_, Right _)) -> logEnd "a service fiber exited cleanly; shutting down"
+      Right (Right (_, Left e)) -> logEnd ("a service fiber died: " <> show e <> "; shutting down")
     )
     `Safe.finally` teardown
 
