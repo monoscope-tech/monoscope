@@ -25,6 +25,11 @@ module CLI.Commands (
   runMetricsChart,
   MetricsQueryOpts (..),
   MetricsChartOpts (..),
+  -- Charts and dashboards in the terminal
+  runChart,
+  ChartCmdOpts (..),
+  runDashboardRender,
+  DashboardRenderOpts (..),
   -- Telemetry generation
   runTelemetryGen,
   TelemetryGenOpts (..),
@@ -32,11 +37,14 @@ module CLI.Commands (
   runSendEvent,
   SendEventOpts (..),
   parseKV,
+  parseSepKV,
 ) where
 
 import Relude
 
+import CLI.Chart qualified as Chart
 import CLI.Config (CLIConfig (..), ConfigKey (..), allConfigKeys, configDir, configFilePath, configKeyText, parseConfigKey, removeToken, resolveConfig, saveToken, setConfigValue)
+import CLI.Dashboard qualified as Dash
 import CLI.Core (OutputMode (..), apiGet, apiPostUnauth, isInteractiveTTY, isJsonOutput, printDebug, printError, renderJSON, renderTable, renderWith, withAPIResult)
 import CLI.UI (inputForm, selectFromList, withSpinner)
 import CLI.Validate (validateAndNormalizeKind, validateDurationOrDie, validateQueryOrDie)
@@ -68,7 +76,9 @@ import OpenTelemetry.Trace (SpanStatus (..), Tracer, TracerOptions (..), default
 import OpenTelemetry.Trace qualified as Trace
 import Pages.Charts.Types (MetricsData (..))
 import Pkg.CLIFormat (cleanSummaryValue, evalCond, extractInt, extractRawRows, extractRows, extractTextArray, renderSummaryItems, sparklineBar, valToText)
+import System.Console.ANSI qualified as ANSI
 import System.Environment (setEnv)
+import System.IO (hIsTerminalDevice)
 import System.Process (spawnProcess)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (catch, tryAny)
@@ -952,17 +962,125 @@ runMetricsQuery cfg opts mode = do
 
 
 runMetricsChart :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> MetricsChartOpts -> Eff es ()
-runMetricsChart cfg opts = do
+runMetricsChart cfg opts =
+  runChart cfg ChartCmdOpts{query = opts.expression, since = opts.since, from = opts.from, to = opts.to, watch = opts.watch, chartType = Nothing, source = Nothing, height = Nothing}
+
+
+-- | Ad-hoc charting of any KQL query, and the engine behind @metrics chart@.
+data ChartCmdOpts = ChartCmdOpts
+  { query :: Text
+  , since :: Maybe Text
+  , from :: Maybe Text
+  , to :: Maybe Text
+  , source :: Maybe Text
+  , chartType :: Maybe Text
+  -- ^ @line@ | @bar@ | @stat@ | @table@. Inferred from the result shape when
+  -- absent: a timestamp column charts as a line, anything else as bars.
+  , height :: Maybe Int
+  , watch :: Maybe Text
+  }
+  deriving stock (Show)
+
+
+runChart :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> ChartCmdOpts -> Eff es ()
+runChart cfg opts = do
   -- Validate --watch up front so a typo doesn't silently fall back to 5s.
   validateDurationOrDie "--watch" opts.watch
-  let run = withAPIResult cfg "/api/v1/metrics" (metricsParams opts.expression opts.since opts.from opts.to) $ \val ->
-        withMetricsData val (renderJSON val) renderSparkline
-  case opts.watch of
-    Nothing -> run
-    Just interval -> forever $ do
-      liftIO $ putStr ("\ESC[2J\ESC[H" :: String)
-      run
-      threadDelay (parseDurationMs interval * 1000)
+  validateDurationOrDie "--since" opts.since
+  let params = metricsParams opts.query opts.since opts.from opts.to <> maybe [] (\s -> [("source", s)]) opts.source
+      run = withAPIResult cfg "/api/v1/metrics" params \val ->
+        withMetricsData val (renderJSON val) (drawMetrics opts)
+  repeatEvery opts.watch run
+
+
+-- | Redraw on a timer, clearing the screen between frames. A missing interval
+-- runs the action exactly once.
+repeatEvery :: IOE :> es => Maybe Text -> Eff es () -> Eff es ()
+repeatEvery Nothing run = run
+repeatEvery (Just interval) run = forever $ do
+  liftIO $ putStr ("\ESC[2J\ESC[H" :: String)
+  run
+  threadDelay (parseDurationMs interval * 1000)
+
+
+drawMetrics :: (Environment :> es, IOE :> es) => ChartCmdOpts -> MetricsData -> Eff es ()
+drawMetrics opts md = do
+  (w, color) <- chartCanvas
+  let series = Chart.seriesFromMetrics md
+      chartOpts = Chart.defaultChartOpts{Chart.width = w, Chart.height = fromMaybe 14 opts.height, Chart.colorful = color}
+      kind = fromMaybe (if isTimeseries md then "line" else "bar") opts.chartType
+  mapM_ putTextLn case kind of
+    "stat" -> Chart.renderStat chartOpts opts.query md.dataFloat series
+    "bar" -> Chart.renderBars chartOpts (labelledRows md)
+    "table" -> []
+    _ -> Chart.renderTimeseries chartOpts series
+  when (kind == "table") $ renderMetricsTable md
+
+
+-- | A leading timestamp column is what makes a result a timeseries; the server
+-- emits it whenever the query binned by time.
+isTimeseries :: MetricsData -> Bool
+isTimeseries md = maybe False (\h -> T.toLower h `elem` ["timestamp", "created_at", "time", "bucket"]) (md.headers V.!? 0)
+
+
+-- | @(label, value)@ pairs for a bar chart: first column labels, second sizes.
+labelledRows :: MetricsData -> [(Text, Double)]
+labelledRows md =
+  [ (fromMaybe "" (r V.!? 0), fromMaybe 0 (readMaybe . toString =<< r V.!? 1))
+  | r <- V.toList md.dataText
+  ]
+
+
+-- | Width and colour for a chart: the real terminal width when we have a TTY,
+-- a fixed 100 columns when piped (so redirected output is reproducible).
+chartCanvas :: (Environment :> es, IOE :> es) => Eff es (Int, Bool)
+chartCanvas = do
+  tty <- isInteractiveTTY
+  json <- isJsonOutput
+  -- getTerminalSize talks to stdin, which raises EOF when the CLI is driven
+  -- from a script or a pipe; only ask when we already know we have a terminal.
+  szM <- ifM (liftIO (hIsTerminalDevice stdout)) (liftIO ANSI.getTerminalSize) (pure Nothing)
+  pure (maybe 100 (max 40 . snd) szM, tty && not json)
+
+
+data DashboardRenderOpts = DashboardRenderOpts
+  { dashboardId :: Text
+  , tab :: Maybe Text
+  , widget :: Maybe Text
+  , since :: Maybe Text
+  , from :: Maybe Text
+  , to :: Maybe Text
+  , vars :: [(Text, Text)]
+  -- ^ @--var key=value@ pairs, forwarded as the @var-*@ params the dashboard's
+  -- own variables read.
+  , watch :: Maybe Text
+  }
+  deriving stock (Show)
+
+
+-- | Draw a whole dashboard — every widget, in its grid position — in the
+-- terminal. Under @--json@ the resolved payload is emitted instead, which is
+-- the form an agent wants to reason over.
+runDashboardRender :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> DashboardRenderOpts -> OutputMode -> Eff es ()
+runDashboardRender cfg opts mode = do
+  validateDurationOrDie "--watch" opts.watch
+  validateDurationOrDie "--since" opts.since
+  let params =
+        catMaybes
+          [ ("tab",) <$> opts.tab
+          , ("widget",) <$> opts.widget
+          , Just ("since", fromMaybe "1h" opts.since)
+          , ("from",) <$> opts.from
+          , ("to",) <$> opts.to
+          ]
+          <> [("var-" <> k, v) | (k, v) <- opts.vars]
+  repeatEvery opts.watch $ withAPIResult cfg ("/api/v1/dashboards/" <> opts.dashboardId <> "/data") params \val ->
+    case (mode, AE.fromJSON @Dash.DashboardData val) of
+      (OutputTable, AE.Success d) -> do
+        (w, color) <- chartCanvas
+        mapM_ putTextLn (Dash.renderDashboard color w d)
+      (_, AE.Success _) -> renderJSON val
+      (_, AE.Error msg) -> printDebug ("dashboard decode failed: " <> toText msg) >> renderJSON val
 
 
 metricsParams :: Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Text)]
@@ -1088,9 +1206,23 @@ data SendEventOpts = SendEventOpts
 
 -- | Parse "KEY:VALUE" pairs for --tag / --extra flags.
 parseKV :: String -> Either String (Text, Text)
-parseKV s = case T.breakOn ":" (toText s) of
+parseKV = parseSepKV ':' "KEY:VALUE"
+
+
+-- | Split a flag argument on its first separator. Attributes use @:@ and
+-- dashboard variables use @=@; both need the same "only the first one splits"
+-- rule so a value may itself contain the separator.
+--
+-- >>> parseSepKV '=' "KEY=VALUE" "service=checkout-api"
+-- Right ("service","checkout-api")
+-- >>> parseSepKV ':' "KEY:VALUE" "url:https://x.dev/a"
+-- Right ("url","https://x.dev/a")
+-- >>> parseSepKV '=' "KEY=VALUE" "novalue"
+-- Left "expected KEY=VALUE, got: novalue"
+parseSepKV :: Char -> String -> String -> Either String (Text, Text)
+parseSepKV sep label s = case T.break (== sep) (toText s) of
   (k, rest) | not (T.null rest) -> Right (k, T.drop 1 rest)
-  _ -> Left $ "expected KEY:VALUE, got: " <> s
+  _ -> Left $ "expected " <> label <> ", got: " <> s
 
 
 runSendEvent :: IOE :> es => CLIConfig -> SendEventOpts -> Eff es ()

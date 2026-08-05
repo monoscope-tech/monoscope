@@ -29,6 +29,11 @@ module CLI.Chart (
   formatTimeLabel,
   seriesColor,
   colorize,
+  dim,
+  bold,
+  visibleWidth,
+  padTo,
+  ellipsize,
 ) where
 
 import Relude
@@ -122,11 +127,14 @@ renderTimeseries opts allSeries
     series = take (length palette) allSeries
     pts = [(x, y) | s <- series, (x, Just y) <- s.points]
     (xLo, xHi) = rangeOf (map fst pts)
-    yHi = fromMaybe (snd (rangeOf (map snd pts))) opts.yMax
+    dataHi = fromMaybe (snd (rangeOf (map snd pts))) opts.yMax
     -- Anchoring at zero is what makes two stacked widgets comparable at a
     -- glance; a floating baseline exaggerates noise into a cliff.
     yLo = min 0 (fst (rangeOf (map snd pts)))
-    ticks = niceTicks yLo yHi (max 2 (opts.height `div` 3))
+    ticks = niceTicks yLo dataHi (max 2 (opts.height `div` 3))
+    -- Stretch the axis to the topmost tick so the labelled rows land on evenly
+    -- spaced lines instead of drifting with the data's exact maximum.
+    yHi = foldl' max dataHi ticks
     labels = [formatValue opts.unit t | t <- ticks]
     gutter = foldl' max 1 (map T.length labels)
     plotW = max 8 (opts.width - gutter - 2)
@@ -409,3 +417,30 @@ clamp lo hi = max lo . min hi
 
 clampD :: Double -> Double -> Double -> Double
 clampD lo hi = max lo . min hi
+
+
+-- | Width the terminal will actually give a string: ANSI escapes are zero-width
+-- but 'T.length' counts them, so every box-drawing calculation must go through
+-- this instead.
+--
+-- >>> visibleWidth (colorize True ANSI.Red "abc")
+-- 3
+visibleWidth :: Text -> Int
+visibleWidth = T.length . stripAnsi
+
+
+stripAnsi :: Text -> Text
+stripAnsi t = case T.breakOn "\ESC[" t of
+  (before, "") -> before
+  (before, rest) -> before <> stripAnsi (T.drop 1 (T.dropWhile (/= 'm') rest))
+
+
+-- | Pad (or truncate) to an exact visible width, ANSI-safe.
+padTo :: Int -> Text -> Text
+padTo n t
+  | w <= n = t <> T.replicate (n - w) " "
+  | T.length t == w = ellipsize n t
+  -- Coloured and too wide: drop the styling rather than slice mid-escape.
+  | otherwise = ellipsize n (stripAnsi t)
+  where
+    w = visibleWidth t

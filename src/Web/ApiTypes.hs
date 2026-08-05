@@ -202,6 +202,9 @@ data RenderedWidget = RenderedWidget
   -- ^ Populated for table/log widgets, where the columns aren't numeric.
   , stats :: Maybe Charts.MetricsStats
   , error :: Maybe Text
+  , columns :: [Text]
+  , children :: [RenderedWidget]
+  -- ^ Group widgets nest a sub-grid; child layouts are relative to the parent.
   }
   deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake RenderedWidget

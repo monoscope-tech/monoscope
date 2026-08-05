@@ -136,6 +136,7 @@ import Pkg.Parser qualified as Parser
 import Pkg.SchemaLearning.Catalog qualified as Fields
 import Relude hiding (ask, id)
 import Servant (NoContent (..), ServerError (..), err400, err404)
+import Text.Slugify (slugify)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATBaseCtx)
 import Web.ApiTypes
@@ -449,8 +450,11 @@ apiDashboardData pid did tabM widgetM sinceM fromM toM allParams = do
     (_, Just wanted) ->
       DashPage.findTabBySlug allTabs wanted
         & maybe (throwError err404{errBody = "Tab not found: " <> encodeUtf8 wanted}) (\(_, t) -> pure (Just t.name, t.widgets))
-  let selected = maybe (\ws -> ws) (\wid -> filter ((== Just wid) . (.id))) widgetM (dash'.widgets <> tabWidgets)
-  rendered <- pooledForConcurrently selected \w -> toRenderedWidget w <$> DashPage.widgetMetrics pid timeParams params w
+  -- Most dashboards leave widget ids unset, so --widget also matches a
+  -- slugified title ("p95-latency"); otherwise there'd be no way to name one.
+  let matches wanted w = w.id == Just wanted || (slugify <$> w.title) == Just (slugify wanted)
+      selected = maybe (\ws -> ws) (filter . matches) widgetM (dash'.widgets <> tabWidgets)
+  rendered <- pooledForConcurrently selected (renderWidgetTree pid timeParams params)
   pure
     DashboardData
       { id = did
@@ -464,11 +468,22 @@ apiDashboardData pid did tabM widgetM sinceM fromM toM allParams = do
       }
 
 
+-- | Resolve a widget and, recursively, the sub-grid of any group widget.
+-- Widgets with no query of their own (groups, the anomalies feed) skip the
+-- round trip entirely rather than reporting a spurious query failure.
+renderWidgetTree :: Projects.ProjectId -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATBaseCtx (RenderedWidget, (Maybe Int, Maybe Int))
+renderWidgetTree pid timeParams params w = do
+  let blank = maybe True (T.null . T.strip)
+  md <- if blank w.query && blank w.sql then pure def else DashPage.widgetMetrics pid timeParams params w
+  kids <- pooledForConcurrently (fold w.children) (renderWidgetTree pid timeParams params)
+  pure $ toRenderedWidget w md (fst <$> kids)
+
+
 -- | Flatten a widget plus its query result into the wire shape. Returns the
 -- window alongside it so the caller can report one x-axis range for the whole
 -- dashboard instead of per widget.
-toRenderedWidget :: Widget.Widget -> Charts.MetricsData -> (RenderedWidget, (Maybe Int, Maybe Int))
-toRenderedWidget w md =
+toRenderedWidget :: Widget.Widget -> Charts.MetricsData -> [RenderedWidget] -> (RenderedWidget, (Maybe Int, Maybe Int))
+toRenderedWidget w md kids =
   ( RenderedWidget
       { id = w.id
       , title = w.title
@@ -484,6 +499,8 @@ toRenderedWidget w md =
       , textRows = V.toList (V.toList <$> md.dataText)
       , stats = md.stats
       , error = md.error
+      , columns = maybe [] (map (.title)) w.columns
+      , children = kids
       }
   , (md.from, md.to)
   )

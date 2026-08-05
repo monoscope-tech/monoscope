@@ -57,6 +57,7 @@ data Command
   | VersionCmd
   | TelemetryGenCmd TelemetryGenOpts
   | SendEventCmd SendEventOpts
+  | ChartCmd ChartCmdOpts
 
 
 data ProjectCommand
@@ -193,6 +194,7 @@ data DashboardsCommand
   | DashWidgetUpsert Text FilePath
   | DashWidgetDelete Text Text
   | DashWidgetsReorder Text (Maybe Text) FilePath
+  | DashRender DashboardRenderOpts
   deriving stock (Show)
 
 
@@ -243,6 +245,7 @@ commandParser =
           , command "logs" (info (EventsCmd (Just "log") <$> eventsParser <**> helper) (progDesc "Search logs"))
           , command "traces" (info (EventsCmd (Just "trace") <$> eventsParser <**> helper) (progDesc "Search traces"))
           , command "metrics" (info (MetricsCmd <$> metricsParser <**> helper) (progDesc "Query and chart metrics"))
+          , command "chart" (info (ChartCmd <$> chartParser <**> helper) (progDesc "Chart any KQL query in the terminal" <> footer chartExamples))
           , command "services" (info (ServicesCmd <$> servicesParser <**> helper) (progDesc "List services"))
           , command "config" (info (ConfigCmd <$> configParser <**> helper) (progDesc "Manage configuration"))
           , command "monitors" (info (MonitorsCmd <$> monitorsParser <**> helper) (progDesc "Manage alert monitors"))
@@ -532,7 +535,65 @@ dashboardsParser =
               (progDesc "Run bulk action over multiple dashboards")
           )
       , command "widget" (info (widgetParser <**> helper) (progDesc "Widget-level operations"))
+      , command "render" (info (DashRender <$> dashRenderParser <**> helper) (progDesc "Draw a dashboard in the terminal" <> footer dashRenderExamples))
       ]
+
+
+dashRenderParser :: Parser DashboardRenderOpts
+dashRenderParser =
+  DashboardRenderOpts
+    <$> idArg
+    <*> optional (strOption (long "tab" <> metavar "SLUG" <> help "Tab to render (default: the first one)"))
+    <*> optional (strOption (long "widget" <> metavar "ID" <> help "Render a single widget, full width"))
+    <*> optional (strOption (long "since" <> metavar "DURATION" <> help "Lookback window (default: 1h)"))
+    <*> optional (strOption (long "from" <> metavar "TIMESTAMP"))
+    <*> optional (strOption (long "to" <> metavar "TIMESTAMP"))
+    <*> many (option (eitherReader (parseSepKV '=' "KEY=VALUE")) (long "var" <> metavar "KEY=VALUE" <> help "Dashboard variable (repeatable)"))
+    <*> optional (strOption (long "watch" <> short 'w' <> metavar "INTERVAL" <> help "Redraw every INTERVAL (e.g. 30s)"))
+
+
+dashRenderExamples :: String
+dashRenderExamples =
+  intercalate
+    "\n"
+    [ "Examples:"
+    , "  monoscope dashboards render <ID>                       # whole dashboard, live layout"
+    , "  monoscope dashboards render <ID> --since 24h --watch 1m"
+    , "  monoscope dashboards render <ID> --widget p99_latency   # one widget, full width"
+    , "  monoscope dashboards render <ID> --tab errors --var service=checkout"
+    , "  monoscope dashboards render <ID> --json | jq '.widgets[].title'"
+    , ""
+    , "Widgets are drawn in their grid positions, so the terminal layout matches"
+    , "the browser. Piping (or --json) emits the resolved data instead of ANSI."
+    ]
+
+
+chartParser :: Parser ChartCmdOpts
+chartParser =
+  ChartCmdOpts
+    <$> strArgument (metavar "QUERY" <> help "KQL query, e.g. 'summarize count(*) by bin_auto(timestamp)'")
+    <*> optional (strOption (long "since" <> metavar "DURATION" <> help "Lookback window (default: 1h)"))
+    <*> optional (strOption (long "from" <> metavar "TIMESTAMP"))
+    <*> optional (strOption (long "to" <> metavar "TIMESTAMP"))
+    <*> optional (strOption (long "source" <> metavar "SOURCE" <> help "spans|metrics (default: spans)"))
+    <*> optional (strOption (long "type" <> metavar "KIND" <> help "line|bar|stat|table (default: inferred from the result)"))
+    <*> optional (option auto (long "height" <> metavar "ROWS" <> help "Plot height in rows (default: 14)"))
+    <*> optional (strOption (long "watch" <> short 'w' <> metavar "INTERVAL" <> help "Redraw every INTERVAL (e.g. 10s)"))
+
+
+chartExamples :: String
+chartExamples =
+  intercalate
+    "\n"
+    [ "Examples:"
+    , "  monoscope chart 'summarize count(*) by bin_auto(timestamp)' --since 6h"
+    , "  monoscope chart 'summarize count(*) by bin_auto(timestamp), status_code' --since 1h"
+    , "  monoscope chart 'summarize count(*) by resource.service.name' --type bar"
+    , "  monoscope chart 'summarize p95(duration) by bin_auto(timestamp)' --since 24h --watch 30s"
+    , "  monoscope chart 'summarize avg(value) by bin_auto(timestamp)' --source metrics"
+    , ""
+    , "Without --type: a query binned by time draws a line chart, anything else bars."
+    ]
 
 
 widgetParser :: Parser DashboardsCommand
@@ -920,6 +981,7 @@ run version global = \case
     DashWidgetDelete did wid ->
       Resource.withResult (apiDelete cfg ("/api/v1/dashboards/" <> did <> "/widgets/" <> wid)) renderAPIError $ \() ->
         putTextLn $ "/api/v1/dashboards/" <> did <> "/widgets/" <> wid <> " deleted"
+    DashRender ropts -> runDashboardRender cfg ropts mode
     DashWidgetsReorder did tabM path ->
       Resource.runFromFile cfg Resource.PATCH ("/api/v1/dashboards/" <> did <> "/widgets/order") (foldMap (\t -> [("tab", t)]) tabM) path mode
   ApiKeysCmd sub -> withCfgMode global $ \cfg mode -> case sub of
@@ -995,6 +1057,7 @@ run version global = \case
   VersionCmd -> putTextLn $ "monoscope " <> toText (showVersion version)
   TelemetryGenCmd opts -> withCfgMode global $ \cfg _ -> runTelemetryGen cfg opts
   SendEventCmd opts -> withCfgMode global $ \cfg _ -> runSendEvent cfg opts
+  ChartCmd opts -> withCfgMode global $ \cfg _ -> runChart cfg opts
 
 
 -- | Resolve and cache the output mode for this process. The cache (Core.hs

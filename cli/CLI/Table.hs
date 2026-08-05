@@ -40,6 +40,7 @@ import Data.Char (toUpper)
 import Data.Text qualified as T
 import Effectful
 import System.Console.ANSI qualified as ANSI
+import System.IO (hIsTerminalDevice)
 
 
 -- | What a cell means semantically. The renderer maps this to SGR codes;
@@ -266,7 +267,8 @@ sgrFor = \case
 -- TTY or when the query fails (e.g. inside tmux without a recent xterm).
 termWidth :: IO Int
 termWidth = do
-  szM <- ANSI.getTerminalSize
+  -- getTerminalSize reads stdin, which throws EOF under a pipe or a CI runner.
+  szM <- ifM (hIsTerminalDevice stdout) ANSI.getTerminalSize (pure Nothing)
   pure $ case szM of
     Just (_, w) | w > 20 -> w
     _ -> 120

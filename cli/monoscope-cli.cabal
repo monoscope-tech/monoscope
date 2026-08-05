@@ -78,6 +78,7 @@ library
     CLI.Commands
     CLI.Config
     CLI.Core
+    CLI.Dashboard
     CLI.Main
     CLI.Resource
     CLI.Table
