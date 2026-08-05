@@ -329,6 +329,7 @@ endpointListGetH pid pageM perPageM _layoutM filterTM hostM currentTabM sortM pe
 
 
 data EnpReqStatsVM = EnpReqStatsVM UTCTime Endpoints.StatsMode Endpoints.EndpointRequestStats
+  deriving stock (Show)
 
 
 endpointColumns :: Projects.ProjectId -> Text -> Text -> Text -> [Column EnpReqStatsVM]

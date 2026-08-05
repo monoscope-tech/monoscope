@@ -1,4 +1,4 @@
-module Pages.Replay (replayPostH, ReplayPost (..), processReplayEvents, replaySessionGetH, fetchReplaySession, ReplaySessionResp (..), RawJson (..), compressAndMergeReplaySessions, mergeReplaySession, expireOldReplayData, migrateReplayStorage, migrateReplayStorageShard, replayObjectPrefix, migratedReplayKey, concatRawJsonArrays, sessionFileKeys, splitReplayPayload, ReplayPayload (..), stripJsonNullEscapes, firstEventTimestampRaw, claimMergeLease, releaseMergeLease, ReplayManifest (..), ReplaySegment (..), replaySessionManifestGetH, replaySessionShardGetH, buildReplayManifest, fetchReplayShard) where
+module Pages.Replay (replayPostH, ReplayPost (..), processReplayEvents, replaySessionGetH, fetchReplaySession, ReplaySessionResp (..), RawJson (..), compressAndMergeReplaySessions, mergeReplaySession, expireOldReplayData, migrateReplayStorage, migrateReplayStorageShard, replayObjectPrefix, migratedReplayKey, concatRawJsonArrays, sessionFileKeys, splitReplayPayload, ReplayPayload (..), stripJsonNullEscapes, firstEventTimestampRaw, claimMergeLease, releaseMergeLease, ReplayManifest (..), ReplaySegment (..), replaySessionManifestGetH, replaySessionShardGetH, buildReplayManifest, fetchReplayShard, copyReplayObjectVerified, projectMinioConn) where
 
 import Codec.Compression.GZip qualified as GZip
 import Conduit (runConduit)
@@ -1056,20 +1056,20 @@ mergeOneSession conn bucket keyPrefix startIdx fileKeys = reverse <$> go startId
 -- process — every replica in the swarm took turns dying on the same object
 -- (2026-08-05 crash-loop). Oversized objects are reported as a failure (the
 -- session stays unmigrated, visible in logs) until a streaming/server-side
--- copy handles them.
-copyReplayObjectVerified :: Minio.ConnectInfo -> Minio.Bucket -> Text -> Text -> IO (Either Text ())
-copyReplayObjectVerified conn bucket oldKey newKey
+-- copy handles them. The cap is a parameter so tests can exercise the refusal
+-- without a multi-GB fixture; production passes 'maxMigrateObjectBytes'.
+copyReplayObjectVerified :: Minio.ConnectInfo -> Minio.Bucket -> Int64 -> Text -> Text -> IO (Either Text ())
+copyReplayObjectVerified conn bucket sizeCap oldKey newKey
   | oldKey == newKey = pure $ Right ()
   | otherwise = do
       sizeCheck <- Minio.runMinio conn $ Minio.statObject bucket oldKey Minio.defaultGetObjectOptions
       case sizeCheck of
         Left err -> pure $ Left $ "source stat failed: " <> toText (displayException err)
         Right info
-          | Minio.oiSize info > maxMigrateObjectBytes ->
+          | Minio.oiSize info > sizeCap ->
               pure $ Left $ "object exceeds migration size cap (" <> show (Minio.oiSize info) <> " bytes): " <> oldKey
         _ -> copyNow
   where
-    maxMigrateObjectBytes = 512 * 1024 * 1024
     copyNow = do
       source <- Minio.runMinio conn $ fetchRawObject bucket oldKey False
       case source of
@@ -1089,6 +1089,13 @@ copyReplayObjectVerified conn bucket oldKey newKey
               case verified of
                 Left err -> pure $ Left $ "destination verification read failed: " <> toText (displayException err)
                 Right copied -> let !ok = copied == bytes in pure $ if ok then Right () else Left "destination bytes differ from source"
+
+
+-- | Per-object memory bound for the replay-storage migration; the copy holds
+-- ~2x the object in memory (source + verification), so this keeps peak well
+-- under the exe's RTS -M cap.
+maxMigrateObjectBytes :: Int64
+maxMigrateObjectBytes = 512 * 1024 * 1024
 
 
 -- | Online migration from legacy @<session>/...@ keys to
@@ -1141,7 +1148,7 @@ migrateReplayStorageShard requestedShardCount requestedShardIndex batchSize = do
         -- bytes are collectable; deferring to the post-loop scrutiny retained
         -- every object of the session at once.
         copyResults <- liftIO $ forM pairs $ \(oldKey, newKey) -> do
-          !res <- copyReplayObjectVerified conn bucket oldKey newKey
+          !res <- copyReplayObjectVerified conn bucket maxMigrateObjectBytes oldKey newKey
           pure (oldKey, newKey, res)
         case [(o, n, e) | (o, n, Left e) <- copyResults] of
           failures@(_ : _) -> do

@@ -312,7 +312,7 @@ data HostTelRow = HostTelRow
 -- Postgres and is cheap; the per-host counts/sparkline scan a full window of spans and
 -- can take tens of seconds, so the page renders 'ShellOnly' first and fills in after.
 data StatsMode = ShellOnly | WithStats
-  deriving stock (Eq)
+  deriving stock (Eq, Show)
 
 
 -- | When @outgoingM@ is @Nothing@, both directions are returned (used for the

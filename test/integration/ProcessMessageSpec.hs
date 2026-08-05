@@ -61,8 +61,8 @@ spec = around withTestResources do
               , errors = Nothing
               , message_size_bytes = 0
               }
-          (mEndpoint, _hashes, _) = processSpanToEntities HashMap.empty Projects.defaultProjectCache pid badSpan UUID.nil
-      fmap (.projectId) mEndpoint `shouldBe` Just pid
+          (mkEndpoint, _hashes, _) = processSpanToEntities HashMap.empty Projects.defaultProjectCache pid badSpan
+      fmap (.projectId) (mkEndpoint UUID.nil) `shouldBe` Just pid
 
   describe "process request to db" do
     it "test processing raw request message string" $ \tr -> do

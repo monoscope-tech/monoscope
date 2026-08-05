@@ -2,8 +2,12 @@ module ReplaySpec (spec) where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEKM
+import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BL
+import Data.Conduit.Combinators qualified as CC
+import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
+import Data.Time (UTCTime (..), addUTCTime, fromGregorian, getCurrentTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
@@ -12,15 +16,14 @@ import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import GHC.Conc (getAllocationCounter, setAllocationCounter)
 import Models.Projects.Projects qualified as Projects
-import Data.ByteString qualified as BS
-import Data.HashMap.Strict qualified as HM
-import Data.Time (UTCTime (..), addUTCTime, fromGregorian, getCurrentTime)
-import Pages.Replay (RawJson (..), ReplayManifest (..), ReplayPayload (..), ReplaySegment (..), ReplaySessionResp (..), buildReplayManifest, claimMergeLease, concatRawJsonArrays, fetchReplaySession, fetchReplayShard, firstEventTimestampRaw, mergeReplaySession, migratedReplayKey, processReplayEvents, releaseMergeLease, replayObjectPrefix, sessionFileKeys, splitReplayPayload, stripJsonNullEscapes)
-import System.Mem (performGC)
-import Pkg.ErrorMetrics (wireTypeErrorsRef)
+import Network.Minio qualified as Minio
+import Pages.Replay (RawJson (..), ReplayManifest (..), ReplayPayload (..), ReplaySegment (..), ReplaySessionResp (..), buildReplayManifest, claimMergeLease, concatRawJsonArrays, copyReplayObjectVerified, fetchReplaySession, fetchReplayShard, firstEventTimestampRaw, mergeReplaySession, migratedReplayKey, processReplayEvents, projectMinioConn, releaseMergeLease, replayObjectPrefix, sessionFileKeys, splitReplayPayload, stripJsonNullEscapes)
 import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.ErrorMetrics (wireTypeErrorsRef)
 import Pkg.TestUtils
 import Relude
+import System.Config (AuthContext (..))
+import System.Mem (performGC)
 import Test.Hspec (Spec, around, describe, expectationFailure, it, pendingWith, shouldBe, shouldContain, shouldSatisfy)
 
 
@@ -30,9 +33,11 @@ pid = UUIDId UUID.nil
 
 clearReplaySessions :: TestResources -> IO ()
 clearReplaySessions tr =
-  void $ withPool tr.trPool $ DBT.execute
-    [sql| DELETE FROM projects.replay_sessions WHERE project_id = ? |]
-    (Only pid)
+  void
+    $ withPool tr.trPool
+    $ DBT.execute
+      [sql| DELETE FROM projects.replay_sessions WHERE project_id = ? |]
+      (Only pid)
 
 
 -- | Bytes allocated on the current thread while forcing the action's result to
@@ -99,14 +104,16 @@ spec = around withTestResources do
       clearReplaySessions tr
       let sid = UUID.nil
           key1 = UUID.toText sid <> "/20260101T000000.json"
-      void $ withPool tr.trPool $ DBT.execute
-        [sql|
+      void
+        $ withPool tr.trPool
+        $ DBT.execute
+          [sql|
           INSERT INTO projects.replay_sessions
             (session_id, project_id, last_event_at, event_file_count, file_keys)
           VALUES (?, ?, now(), 1, ARRAY[?]::text[])
           ON CONFLICT (session_id) DO NOTHING
         |]
-        (sid, pid, key1)
+          (sid, pid, key1)
       keys <- runQueryEffect tr $ sessionFileKeys pid sid
       keys `shouldBe` [key1]
       clearReplaySessions tr
@@ -118,14 +125,16 @@ spec = around withTestResources do
   -- duplicate jobs claim-and-skip.
   describe "merge lease (per-session serialization)" do
     let seed tr sid startedAt =
-          void $ withPool tr.trPool $ DBT.execute
-            [sql|
+          void
+            $ withPool tr.trPool
+            $ DBT.execute
+              [sql|
               INSERT INTO projects.replay_sessions
                 (session_id, project_id, last_event_at, event_file_count, merge_started_at)
               VALUES (?, ?, now(), 1, ?)
               ON CONFLICT (session_id) DO UPDATE SET merge_started_at = EXCLUDED.merge_started_at
             |]
-            (sid, pid, startedAt :: Maybe UTCTime)
+              (sid, pid, startedAt :: Maybe UTCTime)
 
     it "claims an unheld session and then refuses a concurrent claim" $ \tr -> do
       clearReplaySessions tr
@@ -159,45 +168,53 @@ spec = around withTestResources do
     it "picks up sessions older than 30 min with merged=FALSE" $ \tr -> do
       clearReplaySessions tr
       let sid = UUID.fromWords 0 0 0 1
-      void $ withPool tr.trPool $ DBT.execute
-        [sql|
+      void
+        $ withPool tr.trPool
+        $ DBT.execute
+          [sql|
           INSERT INTO projects.replay_sessions
             (session_id, project_id, last_event_at, event_file_count, merged)
           VALUES (?, ?, now() - interval '2 hours', 0, FALSE)
           ON CONFLICT (session_id) DO NOTHING
         |]
-        (sid, pid)
-      rows :: V.Vector (UUID.UUID, Int) <- withPool tr.trPool $ DBT.query
-        [sql|
+          (sid, pid)
+      rows :: V.Vector (UUID.UUID, Int) <-
+        withPool tr.trPool
+          $ DBT.query
+            [sql|
           SELECT session_id, event_file_count
           FROM projects.replay_sessions
           WHERE merged = FALSE
             AND last_event_at < now() - interval '30 minutes'
             AND project_id = ?
         |]
-        (Only pid)
+            (Only pid)
       rows `shouldSatisfy` (not . V.null)
       clearReplaySessions tr
 
     it "does not pick up recently active sessions" $ \tr -> do
       clearReplaySessions tr
       let sid = UUID.fromWords 0 0 0 2
-      void $ withPool tr.trPool $ DBT.execute
-        [sql|
+      void
+        $ withPool tr.trPool
+        $ DBT.execute
+          [sql|
           INSERT INTO projects.replay_sessions
             (session_id, project_id, last_event_at, event_file_count, merged)
           VALUES (?, ?, now(), 0, FALSE)
           ON CONFLICT (session_id) DO NOTHING
         |]
-        (sid, pid)
-      rows :: V.Vector (Only UUID.UUID) <- withPool tr.trPool $ DBT.query
-        [sql|
+          (sid, pid)
+      rows :: V.Vector (Only UUID.UUID) <-
+        withPool tr.trPool
+          $ DBT.query
+            [sql|
           SELECT session_id FROM projects.replay_sessions
           WHERE merged = FALSE
             AND last_event_at < now() - interval '30 minutes'
             AND project_id = ?
         |]
-        (Only pid)
+            (Only pid)
       rows `shouldBe` V.empty
       clearReplaySessions tr
 
@@ -206,12 +223,14 @@ spec = around withTestResources do
     -- We build payloads with `AE.encode` so we exercise whatever key order
     -- aeson emits, which is exactly what kafka consumers see in prod.
     let mkPayload events =
-          BL.toStrict $ AE.encode $ AE.object
-            [ "events" AE..= (events :: AE.Value)
-            , "sessionId" AE..= ("00000000-0000-0000-0000-000000000001" :: Text)
-            , "projectId" AE..= ("00000000-0000-0000-0000-000000000002" :: Text)
-            , "timestamp" AE..= ("2026-01-01T00:00:00Z" :: Text)
-            ]
+          BL.toStrict
+            $ AE.encode
+            $ AE.object
+              [ "events" AE..= (events :: AE.Value)
+              , "sessionId" AE..= ("00000000-0000-0000-0000-000000000001" :: Text)
+              , "projectId" AE..= ("00000000-0000-0000-0000-000000000002" :: Text)
+              , "timestamp" AE..= ("2026-01-01T00:00:00Z" :: Text)
+              ]
         roundTrip events = case splitReplayPayload (mkPayload events) of
           Left e -> error $ "splitReplayPayload failed: " <> toText e
           Right p -> AE.eitherDecodeStrict p.eventsBytes :: Either String AE.Value
@@ -227,20 +246,22 @@ spec = around withTestResources do
     -- were content, the parser bailed, the message was silently dropped,
     -- and the session ended up with zero events.
     it "round-trips events containing empty strings" $ \_ -> do
-      let event = AE.object
-            [ "type" AE..= (3 :: Int)
-            , "data" AE..= AE.object ["text" AE..= ("" :: Text), "tag" AE..= ("div" :: Text)]
-            , "timestamp" AE..= (1000 :: Int)
-            ]
+      let event =
+            AE.object
+              [ "type" AE..= (3 :: Int)
+              , "data" AE..= AE.object ["text" AE..= ("" :: Text), "tag" AE..= ("div" :: Text)]
+              , "timestamp" AE..= (1000 :: Int)
+              ]
           events = AE.toJSON ([event, event] :: [AE.Value]) :: AE.Value
       roundTrip events `shouldBe` Right events
 
     it "round-trips events with strings containing JSON-meaningful chars" $ \_ -> do
-      let event = AE.object
-            [ "type" AE..= (3 :: Int)
-            , "data" AE..= AE.object ["text" AE..= ("]],}\"hi\\there" :: Text)]
-            , "timestamp" AE..= (2000 :: Int)
-            ]
+      let event =
+            AE.object
+              [ "type" AE..= (3 :: Int)
+              , "data" AE..= AE.object ["text" AE..= ("]],}\"hi\\there" :: Text)]
+              , "timestamp" AE..= (2000 :: Int)
+              ]
           events = AE.toJSON ([event] :: [AE.Value]) :: AE.Value
       roundTrip events `shouldBe` Right events
 
@@ -263,11 +284,14 @@ spec = around withTestResources do
         Right p -> p.eventsEmpty `shouldBe` False
 
     it "fails cleanly on missing events field" $ \_ -> do
-      let payload = BL.toStrict $ AE.encode $ AE.object
-            [ "sessionId" AE..= ("00000000-0000-0000-0000-000000000001" :: Text)
-            , "projectId" AE..= ("00000000-0000-0000-0000-000000000002" :: Text)
-            , "timestamp" AE..= ("2026-01-01T00:00:00Z" :: Text)
-            ]
+      let payload =
+            BL.toStrict
+              $ AE.encode
+              $ AE.object
+                [ "sessionId" AE..= ("00000000-0000-0000-0000-000000000001" :: Text)
+                , "projectId" AE..= ("00000000-0000-0000-0000-000000000002" :: Text)
+                , "timestamp" AE..= ("2026-01-01T00:00:00Z" :: Text)
+                ]
       case splitReplayPayload payload of
         Left _ -> pure ()
         Right _ -> expectationFailure "expected splitReplayPayload to fail on missing events"
@@ -292,16 +316,18 @@ spec = around withTestResources do
     -- the fix, only genuinely-corrupt JSON should hit that counter.
     let nonexistentPid = "ffffffff-ffff-ffff-ffff-ffffffffffff" :: Text
         mkBody events =
-          BL.toStrict $ AE.encode $ AE.object
-            [ "events" AE..= (events :: AE.Value)
-            , "sessionId" AE..= ("00000000-0000-0000-0000-000000000099" :: Text)
-            , "projectId" AE..= nonexistentPid
-            , "timestamp" AE..= ("2026-05-08T00:00:00Z" :: Text)
-            ]
+          BL.toStrict
+            $ AE.encode
+            $ AE.object
+              [ "events" AE..= (events :: AE.Value)
+              , "sessionId" AE..= ("00000000-0000-0000-0000-000000000099" :: Text)
+              , "projectId" AE..= nonexistentPid
+              , "timestamp" AE..= ("2026-05-08T00:00:00Z" :: Text)
+              ]
         readCounter k = do
           (m, _) <- readIORef wireTypeErrorsRef
           pure $ maybe 0 fst $ HM.lookup k m
-        oversize = BS.replicate (101 * 1024 * 1024) 0x20  -- 101 MB of spaces, over the 100 MiB maxReplayMessageBytes cap
+        oversize = BS.replicate (101 * 1024 * 1024) 0x20 -- 101 MB of spaces, over the 100 MiB maxReplayMessageBytes cap
         evNonEmpty = AE.toJSON ([AE.object ["type" AE..= (3 :: Int), "data" AE..= AE.object ["text" AE..= ("hi" :: Text)], "timestamp" AE..= (1 :: Int)]] :: [AE.Value]) :: AE.Value
         evEmptyStr = AE.toJSON ([AE.object ["type" AE..= (3 :: Int), "data" AE..= AE.object ["text" AE..= ("" :: Text), "tag" AE..= ("" :: Text)], "timestamp" AE..= (2 :: Int)]] :: [AE.Value]) :: AE.Value
 
@@ -359,28 +385,34 @@ spec = around withTestResources do
           AE.toJSON
             ( [ AE.object ["type" AE..= (3 :: Int), "data" AE..= AE.object ["text" AE..= ("hello" :: Text)], "timestamp" AE..= (1000 :: Int)]
               , AE.object ["type" AE..= (3 :: Int), "data" AE..= AE.object ["text" AE..= ("world" :: Text)], "timestamp" AE..= (2000 :: Int)]
-              ] ::
-                [AE.Value]
-            ) :: AE.Value
+              ]
+                :: [AE.Value]
+            )
+            :: AE.Value
         -- Regression payload: the bug we just fixed silently dropped these.
         emptyStringEvents =
           AE.toJSON
             ( [ AE.object ["type" AE..= (3 :: Int), "data" AE..= AE.object ["text" AE..= ("" :: Text), "tag" AE..= ("" :: Text)], "timestamp" AE..= (3000 :: Int)]
               , AE.object ["type" AE..= (2 :: Int), "data" AE..= AE.object ["node" AE..= AE.object ["tagName" AE..= ("" :: Text)]], "timestamp" AE..= (4000 :: Int)]
-              ] ::
-                [AE.Value]
-            ) :: AE.Value
+              ]
+                :: [AE.Value]
+            )
+            :: AE.Value
         mkBody sessionId events =
-          BL.toStrict $ AE.encode $ AE.object
-            [ "events" AE..= (events :: AE.Value)
-            , "sessionId" AE..= UUID.toText sessionId
-            , "projectId" AE..= UUID.toText UUID.nil
-            , "timestamp" AE..= ("2026-05-08T00:00:00Z" :: Text)
-            ]
+          BL.toStrict
+            $ AE.encode
+            $ AE.object
+              [ "events" AE..= (events :: AE.Value)
+              , "sessionId" AE..= UUID.toText sessionId
+              , "projectId" AE..= UUID.toText UUID.nil
+              , "timestamp" AE..= ("2026-05-08T00:00:00Z" :: Text)
+              ]
         clearSessionRow tr sid =
-          void $ withPool tr.trPool $ DBT.execute
-            [sql| DELETE FROM projects.replay_sessions WHERE session_id = ? AND project_id = ? |]
-            (sid, pid)
+          void
+            $ withPool tr.trPool
+            $ DBT.execute
+              [sql| DELETE FROM projects.replay_sessions WHERE session_id = ? AND project_id = ? |]
+              (sid, pid)
         -- Pull events from the player's-API surface: same code-path as
         -- `replaySessionGetH`, sans the cookie-session machinery (which
         -- would force every test to set up a logged-in user just to read
@@ -397,6 +429,22 @@ spec = around withTestResources do
               case AE.decode (AE.encode resp) of
                 Just (AE.Object obj) | Just (AE.Array a) <- AEKM.lookup "events" obj -> pure a
                 _ -> expectationFailure "serialized response missing events array" >> pure V.empty
+
+    -- Regression (2026-08-05 crash-loop): the migration copy holds ~2x an object
+    -- in memory, so anything over the cap must be refused from statObject alone,
+    -- BEFORE any bytes load — the uncapped path heap-overflowed (-M14G) every
+    -- replica in turn on one giant merged session.
+    it "copyReplayObjectVerified_refusesObjectsOverSizeCap" $ \tr ->
+      requireMinio tr pendingWith $ do
+        project <- runQueryEffect tr (Projects.projectById pid) >>= maybe (fail "demo project missing") pure
+        let (conn, bucket) = projectMinioConn tr.trATCtx.config project
+            payload = BL.fromStrict (BS.replicate 64 120)
+        putRes <- Minio.runMinio conn $ Minio.putObject bucket "cap-test/src" (CC.sourceLazy payload) (Just 64) Minio.defaultPutObjectOptions
+        whenLeft_ putRes \e -> expectationFailure ("seed object write failed: " <> show e)
+        tooBig <- copyReplayObjectVerified conn bucket 10 "cap-test/src" "cap-test/dst-refused"
+        first (T.isInfixOf "size cap") tooBig `shouldBe` Left True
+        smallEnough <- copyReplayObjectVerified conn bucket 1024 "cap-test/src" "cap-test/dst-ok"
+        smallEnough `shouldBe` Right ()
 
     it "round-trips events posted via the kafka entry point through the player API" $ \tr ->
       requireMinio tr pendingWith $ do

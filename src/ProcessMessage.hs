@@ -46,7 +46,6 @@ import Data.HashTable.ST.Cuckoo qualified as HT
 import Data.Text qualified as T
 import Data.Time (addUTCTime, zonedTimeToUTC)
 import Data.Time.LocalTime (ZonedTime)
-import Data.UUID qualified as DUUID
 import Data.Vector qualified as V
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
@@ -181,7 +180,9 @@ httpKeyOf canonicalTemplates otelSpan =
    in HttpKey{method, host, urlPath, statusCode, isHttpSpan}
 
 
--- | Extract entities for hash-stamping. Returns @(endpoint, hashes, normalizedPath)@;
+-- | Extract entities for hash-stamping. Returns @(mkEndpoint, hashes, normalizedPath)@ —
+-- the endpoint is returned as a function of its row id so hash-only callers
+-- ('stampHashesAtIngest') never have to conjure a placeholder UUID;
 -- the normalized path (@Just@ for HTTP spans) is stamped back onto the span's
 -- @attributes.http.route@ and @attributes.url.path@ by the caller so explorer
 -- queries match the template stored in @apis.endpoints@. Schema learning flows
@@ -190,8 +191,8 @@ httpKeyOf canonicalTemplates otelSpan =
 -- The owning 'ProjectId' is threaded in already-parsed (the batch is grouped by project
 -- upstream), so we never re-parse the untyped @otelSpan.project_id@ here — that parse used
 -- to be a partial @fromJust@ that crashed the whole ingestion batch on one malformed id.
-processSpanToEntities :: HM.HashMap (Text, Text) [([Text], Text)] -> Projects.ProjectCache -> Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> UUID.UUID -> (Maybe Endpoints.Endpoint, V.Vector Text, Maybe Text)
-processSpanToEntities canonicalTemplates pjc projectId otelSpan dumpId =
+processSpanToEntities :: HM.HashMap (Text, Text) [([Text], Text)] -> Projects.ProjectCache -> Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> (UUID.UUID -> Maybe Endpoints.Endpoint, V.Vector Text, Maybe Text)
+processSpanToEntities canonicalTemplates pjc projectId otelSpan =
   let !attributes = maybeToMonoid (unAesonTextMaybe otelSpan.attributes)
       HttpKey{method, host, urlPath, statusCode, isHttpSpan} = httpKeyOf canonicalTemplates otelSpan
 
@@ -205,7 +206,7 @@ processSpanToEntities canonicalTemplates pjc projectId otelSpan dumpId =
       -- Generate endpoint hash - this uniquely identifies an API endpoint.
       !endpointHash = toXXHash $ projectId.toText <> host <> method <> urlPath
 
-      !endpoint =
+      endpoint dumpId =
         if endpointHash `elem` pjc.endpointHashes || statusCode == 404
           then Nothing
           else
@@ -244,7 +245,7 @@ stampHashesAtIngest caches = V.map \r -> fromMaybe r do
   pid <- Projects.projectIdFromText r.project_id
   pjc <- HM.lookup pid caches
   let templates = HM.lookupDefault HM.empty pid templatesByPid
-      (_, spanHashes, _) = processSpanToEntities templates pjc pid r DUUID.nil
+      (_, spanHashes, _) = processSpanToEntities templates pjc pid r
       errHashes = V.map (\e -> "err:" <> e.hash) (Telemetry.getAllATErrors (V.singleton r))
   pure r{hashes = Just $ spanHashes <> errHashes}
   where
