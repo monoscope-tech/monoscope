@@ -54,6 +54,7 @@ import CLI.Config (CLIConfig (..), ConfigKey (..), allConfigKeys, configDir, con
 import CLI.Core (OutputMode (..), apiGet, apiGetJson, apiPostUnauth, isInteractiveTTY, isJsonOutput, printDebug, printError, renderAPIError, renderJSON, renderTable, renderWith, withAPIResult)
 import CLI.Dashboard qualified as Dash
 import CLI.LogView (EventRow (..), LogFormat (..), eventRows, parseLogFormat, renderEventLine, renderLogfmt, renderWaterfall)
+import CLI.Table (termWidth)
 import CLI.UI (inputForm, selectFromList, withSpinner)
 import CLI.Validate (validateAndNormalizeKind, validateDurationOrDie, validateQueryOrDie)
 import Control.Exception (bracket)
@@ -87,9 +88,7 @@ import OpenTelemetry.Trace (SpanStatus (..), Tracer, TracerOptions (..), default
 import OpenTelemetry.Trace qualified as Trace
 import Pages.Charts.Types (MetricsData (..))
 import Pkg.CLIFormat (cleanSummaryValue, evalCond, extractInt, extractRawRows, extractRows, extractTextArray, renderSummaryItems, sparklineBar, valToText)
-import System.Console.ANSI qualified as ANSI
 import System.Environment (setEnv)
-import System.IO (hIsTerminalDevice)
 import System.Process (spawnProcess)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (catch, tryAny)
@@ -1104,10 +1103,8 @@ chartCanvas :: (Environment :> es, IOE :> es) => Eff es (Int, Bool)
 chartCanvas = do
   tty <- isInteractiveTTY
   json <- isJsonOutput
-  -- getTerminalSize talks to stdin, which raises EOF when the CLI is driven
-  -- from a script or a pipe; only ask when we already know we have a terminal.
-  szM <- ifM (liftIO (hIsTerminalDevice stdout)) (liftIO ANSI.getTerminalSize) (pure Nothing)
-  pure (maybe 100 (max 40 . snd) szM, tty && not json)
+  w <- liftIO termWidth
+  pure (max 40 w, tty && not json)
 
 
 newtype StatusOpts = StatusOpts {since :: Maybe Text}

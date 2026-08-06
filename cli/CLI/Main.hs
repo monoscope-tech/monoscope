@@ -22,6 +22,7 @@ import Effectful.Environment (Environment, runEnvironment)
 import Effectful.FileSystem (FileSystem, runFileSystem)
 import Models.Telemetry.Schema qualified as Schema
 import Options.Applicative
+import Options.Applicative.Help.Pretty (pretty, vsep)
 import System.Environment (setEnv)
 
 
@@ -229,6 +230,13 @@ globalOpts =
     <*> optional (strOption (long "project" <> short 'p' <> metavar "PID" <> help "Project UUID override"))
 
 
+-- | Multi-line examples in @--help@. Plain 'footer' reflows its string into a
+-- paragraph, which turns a list of runnable commands into an unreadable wall —
+-- so the lines are laid out explicitly and stay copy-pasteable.
+examplesFooter :: [Text] -> InfoMod a
+examplesFooter ls = footerDoc (Just (vsep (map (pretty . toString) ("" : ls))))
+
+
 versionOpt :: Version -> Parser (a -> a)
 versionOpt v =
   infoOption
@@ -247,9 +255,9 @@ commandParser =
           , command "logs" (info (EventsCmd (Just "log") <$> eventsParser <**> helper) (progDesc "Search logs"))
           , command "traces" (info (EventsCmd (Just "trace") <$> eventsParser <**> helper) (progDesc "Search traces"))
           , command "metrics" (info (MetricsCmd <$> metricsParser <**> helper) (progDesc "Query and chart metrics"))
-          , command "chart" (info (ChartCmd <$> chartParser <**> helper) (progDesc "Chart any KQL query in the terminal" <> footer chartExamples))
+          , command "chart" (info (ChartCmd <$> chartParser <**> helper) (progDesc "Chart any KQL query in the terminal" <> examplesFooter chartExamples))
           , command "status" (info (StatusCmd <$> statusParser <**> helper) (progDesc "One-screen project health: throughput, errors, open issues, alerting monitors"))
-          , command "open" (info (OpenCmd <$> openParser <**> helper) (progDesc "Open (or print) the web UI link for a resource" <> footer openExamples))
+          , command "open" (info (OpenCmd <$> openParser <**> helper) (progDesc "Open (or print) the web UI link for a resource" <> examplesFooter openExamples))
           , command "services" (info (ServicesCmd <$> servicesParser <**> helper) (progDesc "List services"))
           , command "config" (info (ConfigCmd <$> configParser <**> helper) (progDesc "Manage configuration"))
           , command "monitors" (info (MonitorsCmd <$> monitorsParser <**> helper) (progDesc "Manage alert monitors"))
@@ -264,11 +272,11 @@ commandParser =
           , command "teams" (info (TeamsCmd <$> teamsParser <**> helper) (progDesc "Manage teams"))
           , command "members" (info (MembersCmd <$> membersParser <**> helper) (progDesc "Manage project members"))
           , command "schema" (info (SchemaCmd <$> schemaParser <**> helper) (progDesc "Fetch telemetry schema"))
-          , command "facets" (info (FacetsCmd <$> facetsParser <**> helper) (progDesc "Discover popular field values (top-N per faceted field)" <> footer facetsExamples))
+          , command "facets" (info (FacetsCmd <$> facetsParser <**> helper) (progDesc "Discover popular field values (top-N per faceted field)" <> examplesFooter facetsExamples))
           , command "completion" (info (CompletionCmd <$> strArgument (metavar "SHELL" <> help "bash|zsh|fish") <**> helper) (progDesc "Emit shell completion script"))
           , command "version" (info (pure VersionCmd) (progDesc "Show CLI version"))
-          , command "telemetrygen" (info (TelemetryGenCmd <$> telemetryGenParser <**> helper) (progDesc "Generate synthetic telemetry (traces/logs/metrics)" <> footer telemetryGenExamples))
-          , command "send-event" (info (SendEventCmd <$> sendEventParser <**> helper) (progDesc "Send a real event (log/trace/error) from a script or CI" <> footer sendEventExamples))
+          , command "telemetrygen" (info (TelemetryGenCmd <$> telemetryGenParser <**> helper) (progDesc "Generate synthetic telemetry (traces/logs/metrics)" <> examplesFooter telemetryGenExamples))
+          , command "send-event" (info (SendEventCmd <$> sendEventParser <**> helper) (progDesc "Send a real event (log/trace/error) from a script or CI" <> examplesFooter sendEventExamples))
           ]
       )
 
@@ -287,7 +295,7 @@ eventsParser :: Parser EventsCommand
 eventsParser =
   subparser
     $ mconcat
-      [ command "search" (info (EvSearch <$> eventsSearchParser <**> helper) (progDesc "Search events" <> footer eventsSearchExamples))
+      [ command "search" (info (EvSearch <$> eventsSearchParser <**> helper) (progDesc "Search events" <> examplesFooter eventsSearchExamples))
       , command "get" (info (EvGet <$> eventsGetParser <**> helper) (progDesc "Get event by ID"))
       , command "tail" (info (EvTail <$> eventsTailParser <**> helper) (progDesc "Stream events"))
       , command "context" (info (EvContext <$> eventsContextParser <**> helper) (progDesc "Context around timestamp"))
@@ -322,22 +330,20 @@ eventsSearchParser =
 
 -- | C5: Concrete KQL examples in @--help@ — agents copy from here, so keep
 -- them up-to-date and runnable.
-eventsSearchExamples :: String
+eventsSearchExamples :: [Text]
 eventsSearchExamples =
-  intercalate
-    "\n"
-    [ "Examples:"
-    , "  monoscope logs search POISON_ROW_DROPPED --since 24h   # bare strings = full-text"
-    , "  monoscope events search 'severity.text==\"ERROR\"' --since 1h"
-    , "  monoscope logs search --service checkout-api --level error --limit 50"
-    , "  monoscope events search 'attributes.http.response.status_code >= 500' --since 1h"
-    , "  monoscope traces search --since 30m --first --id-only   # one trace id"
-    , "  monoscope events search '' --since 1h --cursor <CURSOR>  # next page"
-    , ""
-    , "Bare strings (no KQL operators) are searched in body+summary automatically."
-    , "KQL operators: == != > >= < <=  |  combine with: and or  |  parens for grouping"
-    , "Run `monoscope schema --search service` to discover field names."
-    ]
+  [ "Examples:"
+  , "  monoscope logs search POISON_ROW_DROPPED --since 24h   # bare strings = full-text"
+  , "  monoscope events search 'severity.text==\"ERROR\"' --since 1h"
+  , "  monoscope logs search --service checkout-api --level error --limit 50"
+  , "  monoscope events search 'attributes.http.response.status_code >= 500' --since 1h"
+  , "  monoscope traces search --since 30m --first --id-only   # one trace id"
+  , "  monoscope events search '' --since 1h --cursor <CURSOR>  # next page"
+  , ""
+  , "Bare strings (no KQL operators) are searched in body+summary automatically."
+  , "KQL operators: == != > >= < <=  |  combine with: and or  |  parens for grouping"
+  , "Run `monoscope schema --search service` to discover field names."
+  ]
 
 
 eventsGetParser :: Parser EventsGetOpts
@@ -461,21 +467,19 @@ facetsParser =
 -- | Examples shown in `monoscope facets --help`. Mirrors the discovery
 -- workflow most agents follow: dump-everything → drill-into-one-field →
 -- pipe-into-search.
-facetsExamples :: String
+facetsExamples :: [Text]
 facetsExamples =
-  intercalate
-    "\n"
-    [ "Examples:"
-    , "  monoscope facets                         # all faceted fields"
-    , "  monoscope facets resource.service.name   # values for one field"
-    , "  monoscope facets severity.text --top 5"
-    , "  monoscope facets resource.service.name | jq -r '.[\"resource.service.name\"][].value'"
-    , "  monoscope facets --since 7d              # widen the lookback"
-    , ""
-    , "Each value carries a `count`. Pop the top result into a search:"
-    , "  SVC=$(monoscope facets resource.service.name --top 1 | jq -r '.[\"resource.service.name\"][0].value')"
-    , "  monoscope events search '' --service \"$SVC\" --since 1h"
-    ]
+  [ "Examples:"
+  , "  monoscope facets                         # all faceted fields"
+  , "  monoscope facets resource.service.name   # values for one field"
+  , "  monoscope facets severity.text --top 5"
+  , "  monoscope facets resource.service.name | jq -r '.[\"resource.service.name\"][].value'"
+  , "  monoscope facets --since 7d              # widen the lookback"
+  , ""
+  , "Each value carries a `count`. Pop the top result into a search:"
+  , "  SVC=$(monoscope facets resource.service.name --top 1 | jq -r '.[\"resource.service.name\"][0].value')"
+  , "  monoscope events search '' --service \"$SVC\" --since 1h"
+  ]
 
 
 -- Plan A resource parsers
@@ -548,7 +552,7 @@ dashboardsParser =
               (progDesc "Run bulk action over multiple dashboards")
           )
       , command "widget" (info (widgetParser <**> helper) (progDesc "Widget-level operations"))
-      , command "render" (info (DashRender <$> dashRenderParser <**> helper) (progDesc "Draw a dashboard in the terminal" <> footer dashRenderExamples))
+      , command "render" (info (DashRender <$> dashRenderParser <**> helper) (progDesc "Draw a dashboard in the terminal" <> examplesFooter dashRenderExamples))
       ]
 
 
@@ -565,20 +569,18 @@ dashRenderParser =
     <*> optional (strOption (long "watch" <> short 'w' <> metavar "INTERVAL" <> help "Redraw every INTERVAL (e.g. 30s)"))
 
 
-dashRenderExamples :: String
+dashRenderExamples :: [Text]
 dashRenderExamples =
-  intercalate
-    "\n"
-    [ "Examples:"
-    , "  monoscope dashboards render <ID>                       # whole dashboard, live layout"
-    , "  monoscope dashboards render <ID> --since 24h --watch 1m"
-    , "  monoscope dashboards render <ID> --widget p99_latency   # one widget, full width"
-    , "  monoscope dashboards render <ID> --tab errors --var service=checkout"
-    , "  monoscope dashboards render <ID> --json | jq '.widgets[].title'"
-    , ""
-    , "Widgets are drawn in their grid positions, so the terminal layout matches"
-    , "the browser. Piping (or --json) emits the resolved data instead of ANSI."
-    ]
+  [ "Examples:"
+  , "  monoscope dashboards render <ID>                       # whole dashboard, live layout"
+  , "  monoscope dashboards render <ID> --since 24h --watch 1m"
+  , "  monoscope dashboards render <ID> --widget p99_latency   # one widget, full width"
+  , "  monoscope dashboards render <ID> --tab errors --var service=checkout"
+  , "  monoscope dashboards render <ID> --json | jq '.widgets[].title'"
+  , ""
+  , "Widgets are drawn in their grid positions, so the terminal layout matches"
+  , "the browser. Piping (or --json) emits the resolved data instead of ANSI."
+  ]
 
 
 statusParser :: Parser StatusOpts
@@ -594,19 +596,17 @@ openParser =
     <*> switch (long "print" <> help "Print the URL without launching a browser")
 
 
-openExamples :: String
+openExamples :: [Text]
 openExamples =
-  intercalate
-    "\n"
-    [ "Examples:"
-    , "  monoscope open trace a1b2c3d4                      # the trace waterfall, in the browser"
-    , "  monoscope open issue <issue-id>"
-    , "  monoscope open dashboard <dashboard-id>"
-    , "  monoscope open logs 'severity.text==\"ERROR\"' --since 6h"
-    , "  monoscope open project --print                     # just print the link, e.g. to paste in Slack"
-    , ""
-    , "The host comes from the server (/api/v1/me), so self-hosted installs work."
-    ]
+  [ "Examples:"
+  , "  monoscope open trace a1b2c3d4                      # the trace waterfall, in the browser"
+  , "  monoscope open issue <issue-id>"
+  , "  monoscope open dashboard <dashboard-id>"
+  , "  monoscope open logs 'severity.text==\"ERROR\"' --since 6h"
+  , "  monoscope open project --print                     # just print the link, e.g. to paste in Slack"
+  , ""
+  , "The host comes from the server (/api/v1/me), so self-hosted installs work."
+  ]
 
 
 chartParser :: Parser ChartCmdOpts
@@ -622,19 +622,17 @@ chartParser =
     <*> optional (strOption (long "watch" <> short 'w' <> metavar "INTERVAL" <> help "Redraw every INTERVAL (e.g. 10s)"))
 
 
-chartExamples :: String
+chartExamples :: [Text]
 chartExamples =
-  intercalate
-    "\n"
-    [ "Examples:"
-    , "  monoscope chart 'summarize count(*) by bin_auto(timestamp)' --since 6h"
-    , "  monoscope chart 'summarize count(*) by bin_auto(timestamp), status_code' --since 1h"
-    , "  monoscope chart 'summarize count(*) by resource.service.name' --type bar"
-    , "  monoscope chart 'summarize p95(duration) by bin_auto(timestamp)' --since 24h --watch 30s"
-    , "  monoscope chart 'summarize avg(value) by bin_auto(timestamp)' --source metrics"
-    , ""
-    , "Without --type: a query binned by time draws a line chart, anything else bars."
-    ]
+  [ "Examples:"
+  , "  monoscope chart 'summarize count(*) by bin_auto(timestamp)' --since 6h"
+  , "  monoscope chart 'summarize count(*) by bin_auto(timestamp), status_code' --since 1h"
+  , "  monoscope chart 'summarize count(*) by resource.service.name' --type bar"
+  , "  monoscope chart 'summarize p95(duration) by bin_auto(timestamp)' --since 24h --watch 30s"
+  , "  monoscope chart 'summarize avg(value) by bin_auto(timestamp)' --source metrics"
+  , ""
+  , "Without --type: a query binned by time draws a line chart, anything else bars."
+  ]
 
 
 widgetParser :: Parser DashboardsCommand
@@ -889,18 +887,16 @@ sendEventParser =
     <*> many (option (eitherReader parseKV) (long "resource" <> short 'r' <> metavar "KEY:VALUE" <> help "Resource attribute (repeatable, e.g. service.version:1.2.3)"))
 
 
-sendEventExamples :: String
+sendEventExamples :: [Text]
 sendEventExamples =
-  intercalate
-    "\n"
-    [ "Examples:"
-    , "  monoscope send-event -m \"Deploy completed\" --service api"
-    , "  monoscope send-event -m \"Payment failed\" --level error -t user.id:u_123 -t plan:pro"
-    , "  monoscope send-event -m \"Backup done\" -e duration:45s -e size:2.3GB"
-    , "  monoscope send-event -m \"Step 1 complete\" -m \"all checks passed\" --kind trace"
-    , ""
-    , "Tip: pipe into CI scripts or bash error handlers to capture events automatically."
-    ]
+  [ "Examples:"
+  , "  monoscope send-event -m \"Deploy completed\" --service api"
+  , "  monoscope send-event -m \"Payment failed\" --level error -t user.id:u_123 -t plan:pro"
+  , "  monoscope send-event -m \"Backup done\" -e duration:45s -e size:2.3GB"
+  , "  monoscope send-event -m \"Step 1 complete\" -m \"all checks passed\" --kind trace"
+  , ""
+  , "Tip: pipe into CI scripts or bash error handlers to capture events automatically."
+  ]
 
 
 telemetryGenParser :: Parser TelemetryGenOpts
@@ -913,16 +909,14 @@ telemetryGenParser =
     <*> many (option (eitherReader parseKV) (long "resource" <> short 'r' <> metavar "KEY:VALUE" <> help "Resource attribute (repeatable, e.g. service.version:1.2.3)"))
 
 
-telemetryGenExamples :: String
+telemetryGenExamples :: [Text]
 telemetryGenExamples =
-  intercalate
-    "\n"
-    [ "Examples:"
-    , "  monoscope telemetrygen --kind=trace --rate=1"
-    , "  monoscope telemetrygen --kind=trace --rate=5 --count=100 --service=my-service"
-    , ""
-    , "OTLP endpoint is derived from the configured API URL (MONOSCOPE_API_URL)."
-    ]
+  [ "Examples:"
+  , "  monoscope telemetrygen --kind=trace --rate=1"
+  , "  monoscope telemetrygen --kind=trace --rate=5 --count=100 --service=my-service"
+  , ""
+  , "OTLP endpoint is derived from the configured API URL (MONOSCOPE_API_URL)."
+  ]
 
 
 parserInfo :: Version -> ParserInfo (GlobalOpts, Command)

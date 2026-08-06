@@ -31,6 +31,9 @@ module CLI.Table (
 
   -- * Severity parser
   parseSeverity,
+
+  -- * Terminal size
+  termWidth,
 ) where
 
 import Relude
