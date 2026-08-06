@@ -91,10 +91,11 @@ test("page-chrome publishes the globals inline handlers call", async ({
   const missing = await page.evaluate(() =>
     [
       "navigatable",
-      "setCookie",
-      "getCookie",
       "filterByField",
       "viewFieldPatterns",
+      // Inline in BodyWrapper, not the bundle — the theme script needs them mid-parse.
+      "setCookie",
+      "getCookie",
     ].filter((n) => typeof (window as never as Record<string, unknown>)[n] !== "function"),
   );
   expect(

@@ -349,6 +349,29 @@ bodyWrapper bcfg child = do
           gtag('js', new Date());
           gtag('config', 'AW-11285541899');
 
+          // These two stay inline rather than moving to the bundle with the rest of the page
+          // chrome: the theme block below calls getCookie while the document is still
+          // parsing, so it can apply the saved theme before first paint. The bundle is a
+          // deferred module and does not run until parsing finishes, which would both throw
+          // here and flash the wrong theme.
+          // NB: string concatenation, not JS template literals. This block is a neat-interpolation
+          // quasi-quote, whose own dollar-brace syntax would consume them before GHC saw them.
+          function setCookie(cname, cvalue, exdays = 365) {
+            const d = new Date();
+            d.setTime(d.getTime() + (exdays * 24 * 60 * 60 * 1000));
+            document.cookie = cname + "=" + cvalue + ";expires=" + d.toUTCString() + ";path=/";
+          }
+
+          function getCookie(cname) {
+            const name = cname + "=";
+            const ca = decodeURIComponent(document.cookie).split(';');
+            for (let i = 0; i < ca.length; i++) {
+              const c = ca[i].trim();
+              if (c.startsWith(name)) return c.substring(name.length);
+            }
+            return "";
+          }
+
           function syncThemeToggles(theme) {
             ['dark-mode-toggle', 'dark-mode-toggle-navbar'].forEach(id => {
               const el = document.getElementById(id);

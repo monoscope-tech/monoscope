@@ -12,7 +12,9 @@ describe('page-chrome globals', () => {
   });
 
   test('publishes the functions inline Lucid attributes call', () => {
-    for (const fn of ['navigatable', 'setCookie', 'getCookie', 'filterByField', 'viewFieldPatterns']) {
+    // setCookie/getCookie are NOT here: they stay inline in BodyWrapper because the theme
+    // script calls getCookie mid-parse, before this deferred module runs.
+    for (const fn of ['navigatable', 'filterByField', 'viewFieldPatterns']) {
       expect(typeof (window as any)[fn], `window.${fn}`).toBe('function');
     }
   });
@@ -41,9 +43,4 @@ describe('page-chrome globals', () => {
     expect(sawTabVisible).toBe(true);
   });
 
-  test('cookies round-trip through the helpers', () => {
-    (window as any).setCookie('theme', 'dark');
-    expect((window as any).getCookie('theme')).toBe('dark');
-    expect((window as any).getCookie('nope')).toBe('');
-  });
 });

@@ -4,6 +4,8 @@
 // in the versioned bundle instead.
 //
 // The functions below are invoked from inline attributes rendered by Lucid
+// setCookie/getCookie deliberately stay inline in BodyWrapper: the theme script calls
+// getCookie mid-parse, before this deferred module runs.
 // (onpointerdown="navigatable(...)", onclick="filterByField(...)"), so they MUST be
 // published on window — a module's top-level declarations are not globals.
 
@@ -28,23 +30,7 @@
             });
         }
 
-        function setCookie(cname: string, cvalue: string, exdays = 365) {
-            const d = new Date();
-            d.setTime(d.getTime() + (exdays * 24 * 60 * 60 * 1000));
-            const expires = "expires=" + d.toUTCString();
-            document.cookie = `${cname}=${cvalue};${expires};path=/`;
-        }
 
-        function getCookie(cname: string): string {
-            const name = `${cname}=`;
-            const decodedCookie = decodeURIComponent(document.cookie);
-            const ca = decodedCookie.split(';');
-            for (let i = 0; i < ca.length; i++) {
-                let c = ca[i].trim();
-                if (c.startsWith(name)) return c.substring(name.length);
-            }
-            return "";
-        }
 
         const onReady = (fn: () => void) => document.readyState === 'loading'
   ? document.addEventListener('DOMContentLoaded', fn)
@@ -207,4 +193,4 @@ onReady(function(){
         url.searchParams.delete('aggregate_skip');
         window.location.href = url.toString();
     }
-Object.assign(window, { navigatable, setCookie, getCookie, filterByField, viewFieldPatterns });
+Object.assign(window, { navigatable, filterByField, viewFieldPatterns });
