@@ -74,10 +74,13 @@ main = hspec do
       l `shouldSatisfy` T.isInfixOf "service=checkout"
       l `shouldSatisfy` T.isInfixOf "trace=t1"
 
-    it "draws a waterfall with a row per span, children indented" do
+    it "draws a waterfall with a row per span, children indented under their parent" do
       let out = renderWaterfall False 100 (eventRows sampleEvents)
       length out `shouldBe` 3 -- header + 2 spans
-      out !!? 2 `shouldSatisfy` maybe False (" " `T.isPrefixOf`)
+      -- The child is nested via parent_id -> latency_breakdown (the span id),
+      -- not via the row UUID; keying on the wrong column loses all indentation.
+      out !!? 1 `shouldSatisfy` maybe False ("GET /cart" `T.isPrefixOf`)
+      out !!? 2 `shouldSatisfy` maybe False (" SELECT" `T.isPrefixOf`)
 
     it "still renders when a span's parent is missing from the result" do
       renderWaterfall False 80 (eventRows orphanEvent) `shouldSatisfy` ((== 2) . length)
@@ -107,22 +110,28 @@ decodeOrDie v = case AE.fromJSON v of
 
 -- | Two rows in the server's column-indexed envelope: a parent span and its
 -- failing child.
+--
+-- @id@ is the store's row UUID and @latency_breakdown@ is the OTel span id
+-- (the server's default projection aliases @context___span_id@ to that name).
+-- @parent_id@ points at the /span/ id, which is what the waterfall keys on —
+-- getting this wrong makes every span look like a root.
 sampleEvents :: AE.Value
 sampleEvents =
   [aesonQQ|{ "colIdxMap": { "id": 0, "timestamp": 1, "service": 2, "span_name": 3
                           , "duration": 4, "trace_id": 5, "parent_id": 6
-                          , "start_time_ns": 7, "errors": 8, "kind": 9 }
+                          , "start_time_ns": 7, "errors": 8, "kind": 9
+                          , "latency_breakdown": 10 }
            , "logsData":
-               [ ["s1", "2026-08-06T01:02:03.456789Z", "checkout", "GET /cart", "120000000", "t1", "", "1000000000", "false", "server"]
-               , ["s2", "2026-08-06T01:02:03.500000Z", "cart-db",  "SELECT",    "40000000",  "t1", "s1", "1040000000", "true",  "client"]
+               [ ["uuid-1", "2026-08-06T01:02:03.456789Z", "checkout", "GET /cart", "120000000", "t1", "", "1000000000", "false", "server", "aaaa000000000001"]
+               , ["uuid-2", "2026-08-06T01:02:03.500000Z", "cart-db",  "SELECT",    "40000000",  "t1", "aaaa000000000001", "1040000000", "true",  "client", "aaaa000000000002"]
                ]
            }|]
 
 
 orphanEvent :: AE.Value
 orphanEvent =
-  [aesonQQ|{ "colIdxMap": { "id": 0, "timestamp": 1, "span_name": 2, "duration": 3, "parent_id": 4, "start_time_ns": 5 }
-           , "logsData": [["s9", "2026-08-06T01:02:03Z", "orphan", "5000000", "missing-parent", "1000000000"]]
+  [aesonQQ|{ "colIdxMap": { "id": 0, "timestamp": 1, "span_name": 2, "duration": 3, "parent_id": 4, "start_time_ns": 5, "latency_breakdown": 6 }
+           , "logsData": [["uuid-9", "2026-08-06T01:02:03Z", "orphan", "5000000", "missing-parent", "1000000000", "bbbb000000000001"]]
            }|]
 
 

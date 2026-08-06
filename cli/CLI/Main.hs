@@ -357,6 +357,7 @@ eventsGetParser =
     -- is a one-flag shorthand for the common "I just want the message" case.
     <*> many (strOption (long "field" <> metavar "FIELD" <> help "Project a single field from the event JSON (repeatable)"))
     <*> switch (long "show-body" <> help "Shorthand for --field body --field summary")
+    <*> optional (strOption (long "since" <> metavar "DURATION" <> help "Window to look the id up in (default: 90d). Narrow it if the store refuses the scan"))
 
 
 eventsTailParser :: Parser EventsTailOpts

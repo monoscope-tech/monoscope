@@ -18,7 +18,7 @@ module CLI.LogView (
 
 import Relude
 
-import CLI.Chart (colorize, dim, ellipsize, formatValue, padTo, visibleWidth)
+import CLI.Chart (colorize, dim, ellipsize, formatValue, padTo, stripAnsi, visibleWidth)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.Map.Strict qualified as Map
@@ -62,6 +62,9 @@ data EventRow = EventRow
   , kind :: Maybe Text
   , durationNs :: Maybe Double
   , traceId :: Maybe Text
+  , spanId :: Maybe Text
+  -- ^ The OTel span id. Distinct from 'eventId', which is the store's row
+  -- UUID; @parentId@ points at a /span/ id, so the trace tree is keyed on this.
   , parentId :: Maybe Text
   , startNs :: Maybe Double
   , summary :: Maybe Text
@@ -76,7 +79,7 @@ data EventRow = EventRow
 -- | An event with nothing set. Only useful as a base for record updates —
 -- 'eventRows' is how a real one is built.
 emptyEventRow :: EventRow
-emptyEventRow = EventRow Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing False []
+emptyEventRow = EventRow Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing False []
 
 
 -- | Pull the rows out of an @\/api\/v1\/events@ envelope. Columns are located
@@ -97,6 +100,9 @@ eventRows = \case
             , kind = at "kind" row
             , durationNs = readMaybe . toString =<< at "duration" row
             , traceId = at "trace_id" row
+            , -- The server aliases context___span_id to latency_breakdown in its
+              -- default projection; the name is historical, the contents are the span id.
+              spanId = at "latency_breakdown" row
             , parentId = at "parent_id" row
             , startNs = readMaybe . toString =<< at "start_time_ns" row
             , summary = at "summary" row
@@ -169,11 +175,25 @@ renderLogfmt r = T.unwords [k <> "=" <> quote v | (k, Just v) <- pairs <> map (s
       , ("kind", r.kind)
       , ("span", r.spanName)
       , ("dur_ms", show . (/ 1e6) <$> r.durationNs)
-      , ("msg", renderSummaryCell <$> r.summary)
+      , -- The summary is styled for a terminal; logfmt is meant to be parsed,
+        -- so the escapes come back out.
+        ("msg", stripAnsi . renderSummaryCell <$> r.summary)
       , ("trace", r.traceId)
       , ("id", r.eventId)
       ]
-    quote v = if T.any (== ' ') v then "\"" <> v <> "\"" else v
+    -- logfmt is one record per line, so a value that contains a quote, a
+    -- backslash or a newline has to be escaped rather than emitted raw — an
+    -- unescaped log body would otherwise split one event across several lines.
+    quote v
+      | T.any (`elem` (" \"\\\n\r\t" :: [Char])) v = "\"" <> T.concatMap esc v <> "\""
+      | otherwise = v
+    esc = \case
+      '"' -> "\\\""
+      '\\' -> "\\\\"
+      '\n' -> "\\n"
+      '\r' -> "\\r"
+      '\t' -> "\\t"
+      c -> one c
 
 
 -- | Trace waterfall: one row per span, indented by depth, with a bar showing
@@ -187,7 +207,7 @@ renderWaterfall color width rows
   | null rows = ["no spans in this trace"]
   | otherwise = header : concatMap (walk 0) roots
   where
-    ids = Set.fromList (mapMaybe (.eventId) rows)
+    ids = Set.fromList (mapMaybe (.spanId) rows)
     kids p = sortOn (.startNs) [r | r <- rows, r.parentId == Just p]
     roots = sortOn (.startNs) [r | r <- rows, maybe True (`Set.notMember` ids) r.parentId]
     t0 = foldl' min (1 / 0) (mapMaybe (.startNs) rows)
@@ -197,7 +217,7 @@ renderWaterfall color width rows
     barW = max 10 (width `div` 3)
     header = dim color (padTo labelW "span" <> " " <> padTo barW ("0 → " <> formatValue "ms" (total / 1e6)) <> " duration")
     walk depth r =
-      line depth r : concatMap (walk (depth + 1)) (maybe [] kids r.eventId)
+      line depth r : concatMap (walk (depth + 1)) (maybe [] kids r.spanId)
     line depth r =
       padTo labelW (T.replicate depth " " <> ellipsize (labelW - depth) (label r))
         <> " "

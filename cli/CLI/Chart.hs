@@ -33,6 +33,7 @@ module CLI.Chart (
   dim,
   bold,
   visibleWidth,
+  stripAnsi,
   padTo,
   ellipsize,
 ) where
@@ -423,6 +424,8 @@ visibleWidth :: Text -> Int
 visibleWidth = T.length . stripAnsi
 
 
+-- | Drop every ANSI escape sequence. Needed wherever styled text has to become
+-- data again — logfmt output, width arithmetic.
 stripAnsi :: Text -> Text
 stripAnsi t = case T.breakOn "\ESC[" t of
   (before, "") -> before

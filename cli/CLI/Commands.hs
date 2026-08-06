@@ -335,6 +335,10 @@ data EventsGetOpts = EventsGetOpts
   -- JSON instead of dumping the full blob.
   , showBody :: Bool
   -- ^ shorthand for @--field body --field summary@.
+  , since :: Maybe Text
+  -- ^ Window for the id/trace lookup. Defaults to 90d so a bare id from any
+  -- time still resolves, but that is a wide scan: narrow it when you know
+  -- roughly when the event happened, or the store may refuse the query.
   }
   deriving stock (Show)
 
@@ -581,31 +585,34 @@ validateEventsOpts opts = do
 
 -- | 'events get ID' — fetch one event (or full trace tree with --tree).
 -- When --at TIMESTAMP is given, uses GET /api/v1/events/{id}/time/{ts} for an
--- O(1) timeseries point lookup. Without --at, falls back to a 90d KQL search.
+-- O(1) timeseries point lookup. Without --at, falls back to a KQL search over
+-- --since (default 90d).
 -- An unparseable --at value is rejected up front so the user gets an immediate
 -- error instead of a slow range-scan fallback that hides the typo.
 runEventsGet :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> EventsGetOpts -> OutputMode -> Eff es ()
-runEventsGet cfg opts mode = case opts.at of
-  Nothing -> rangeScan
-  Just raw -> case iso8601ParseM (toString raw) :: Maybe UTCTime of
-    Nothing -> printError "--at: invalid ISO-8601 timestamp" >> liftIO exitFailure
-    Just t
-      | T.any (`elem` ("/?#%" :: [Char])) opts.eventId ->
-          printError "event id must not contain any of '/', '?', '#', '%'" >> liftIO exitFailure
-      | otherwise -> do
-          -- Direct O(1) lookup: both id and timestamp known → single-partition query.
-          -- Returns raw OtelLogsAndSpans JSON; always rendered as JSON (table view
-          -- is not applicable for a single denormalized span record).
-          let path = "/api/v1/events/" <> opts.eventId <> "/time/" <> toText (iso8601Show t)
-          withAPIResult cfg path [] (renderJSON . applyProjection opts)
+runEventsGet cfg opts mode = do
+  validateDurationOrDie "--since" opts.since
+  case opts.at of
+    Nothing -> rangeScan
+    Just raw -> case iso8601ParseM (toString raw) :: Maybe UTCTime of
+      Nothing -> printError "--at: invalid ISO-8601 timestamp" >> liftIO exitFailure
+      Just t
+        | T.any (`elem` ("/?#%" :: [Char])) opts.eventId ->
+            printError "event id must not contain any of '/', '?', '#', '%'" >> liftIO exitFailure
+        | otherwise -> do
+            -- Direct O(1) lookup: both id and timestamp known → single-partition query.
+            -- Returns raw OtelLogsAndSpans JSON; always rendered as JSON (table view
+            -- is not applicable for a single denormalized span record).
+            let path = "/api/v1/events/" <> opts.eventId <> "/time/" <> toText (iso8601Show t)
+            withAPIResult cfg path [] (renderJSON . applyProjection opts)
   where
     rangeScan = do
-      -- Fallback: scan 90d, also match by trace_id so bare trace IDs work.
+      -- Fallback scan, also matching trace_id so bare trace IDs work.
       let eid = T.replace "\"" "\\\"" (T.replace "\\" "\\\\" opts.eventId)
           q
             | opts.showTree = "context.trace_id==\"" <> eid <> "\""
             | otherwise = "(id==\"" <> eid <> "\") or (context.trace_id==\"" <> eid <> "\")"
-          params = [("query", q), ("since", "90d")]
+          params = [("query", q), ("since", fromMaybe "90d" opts.since)] <> [("with_children", "true") | opts.showTree]
       withAPIResult cfg "/api/v1/events" params $ \val ->
         if opts.showTree
           then renderTraceTree val
