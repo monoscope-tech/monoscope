@@ -112,7 +112,6 @@ library
     , process
     , random
     , relude                        >=1.2.0.0
-    , scientific
     , text
     , time
     , unix

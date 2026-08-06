@@ -87,7 +87,7 @@ import OpenTelemetry.Context.ThreadLocal qualified as OtelCtx
 import OpenTelemetry.Trace (SpanStatus (..), Tracer, TracerOptions (..), defaultSpanArguments, initializeGlobalTracerProvider, makeTracer, shutdownTracerProvider)
 import OpenTelemetry.Trace qualified as Trace
 import Pages.Charts.Types (MetricsData (..))
-import Pkg.CLIFormat (cleanSummaryValue, evalCond, extractInt, extractRawRows, extractRows, extractTextArray, renderSummaryItems, sparklineBar, valToText)
+import Pkg.CLIFormat (cleanSummaryValue, evalCond, extractInt, extractRawRows, extractRows, extractTextArray, renderSummaryItems, valToText)
 import System.Environment (setEnv)
 import System.Process (spawnProcess)
 import UnliftIO.Concurrent (threadDelay)
@@ -985,12 +985,6 @@ renderTraceTree val = do
   mapM_ putTextLn (renderWaterfall color w (eventRows val))
 
 
-extractRowsWithId :: AE.Value -> [(Text, [Text])]
-extractRowsWithId = \case
-  AE.Object obj -> [(fromMaybe "" (listToMaybe r), r) | r <- extractRows (KM.lookup "logsData" obj)]
-  _ -> []
-
-
 -- Metrics
 
 data MetricsQueryOpts = MetricsQueryOpts
@@ -1341,13 +1335,6 @@ renderMetricsTable :: IOE :> es => MetricsData -> Eff es ()
 renderMetricsTable md@MetricsData{headers, dataText}
   | V.null headers = renderJSON md
   | otherwise = renderTable (V.toList headers) (V.toList (V.toList <$> dataText))
-
-
-renderSparkline :: IOE :> es => MetricsData -> Eff es ()
-renderSparkline MetricsData{headers, dataset} = do
-  unless (V.null headers) $ putTextLn $ T.intercalate " | " (V.toList headers)
-  forM_ dataset $ \row ->
-    putTextLn $ T.concat $ map sparklineBar (V.toList row)
 
 
 checkAssertion :: IOE :> es => MetricsData -> Text -> Eff es ()
