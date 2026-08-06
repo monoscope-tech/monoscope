@@ -37,6 +37,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AET
 import Data.Containers.ListUtils (nubOrd)
 import Data.Default (def)
+import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Foldable.WithIndex (iforM_)
 import Data.HashMap.Strict qualified as HM
@@ -46,6 +47,7 @@ import Data.Time (UTCTime, addUTCTime)
 import Data.Vector qualified as V
 import Effectful (Eff, (:>))
 import Effectful.Error.Static (Error, throwError)
+import Effectful.Labeled (Labeled)
 import Effectful.Log qualified as ELog
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
@@ -570,7 +572,7 @@ buildLogResult withChildren pid now sinceM addCols removeCols (requestVecs, colN
 -- | Standalone query function for the v1 API events endpoint. Returns a
 -- JSON-shaped 400 (@{"error": {code, message, field?, suggestion?, details?}}@)
 -- for parse/query errors instead of raw Hasql/SQL.
-queryEvents :: (DB es, ELog.Log :> es, Error Servant.ServerError :> es, Time.Time :> es, Tracing :> es) => Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Bool -> Maybe Bool -> Eff es LogResult
+queryEvents :: (DB es, ELog.Log :> es, Effectful.Reader.Static.Reader AuthContext :> es, Error Servant.ServerError :> es, Labeled "timefusion" Hasql :> es, Time.Time :> es, Tracing :> es) => Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Bool -> Maybe Bool -> Eff es LogResult
 queryEvents pid queryM sinceM fromM toM sourceM limitM withChildrenM includeAttributesM = do
   now <- Time.currentTime
   let queryInput = fromMaybe "" queryM
@@ -583,7 +585,8 @@ queryEvents pid queryM sinceM fromM toM sourceM limitM withChildrenM includeAttr
       -- trace-tree rows include synth headers + descendants.
       hasKqlLimit = any (\case TakeCommand{} -> True; _ -> False) queryAST
       queryAST' = if hasKqlLimit then queryAST else queryAST <> [TakeCommand (min defaultQueryLimit (fromMaybe 100 limitM))]
-  result <- LogQueries.selectLogTable pid queryAST' (toQText queryAST') Nothing (fromD, toD) ["attributes" | fromMaybe False includeAttributesM] (parseMaybe pSource =<< sourceM) Nothing
+  authCtx <- Effectful.Reader.Static.ask @AuthContext
+  result <- LogQueries.selectLogTable authCtx.env.enableTimefusionReads pid queryAST' (toQText queryAST') Nothing (fromD, toD) ["attributes" | fromMaybe False includeAttributesM] (parseMaybe pSource =<< sourceM) Nothing
   case result of
     Left err -> throwError $ translateQueryError err
     -- Default to exact-match (no trace expansion); UI passes True via apiLogH.
@@ -807,8 +810,7 @@ logExplorerDataH pid queryM' cols' cursorM' sinceM fromM toM sourceM targetSpans
     Left err -> Log.logInfo "Log explorer data: rejected invalid KQL query" err $> (Just "Invalid query syntax", emptyTable)
     Right queryAST -> do
       resultE <-
-        Hasql.withHasqlTimefusion authCtx.env.enableTimefusionReads
-          $ LogQueries.selectLogTable pid queryAST (toQText queryAST) cursorM' (fromD, toD) addCols (parseMaybe pSource =<< sourceM) targetSpansM
+        LogQueries.selectLogTable authCtx.env.enableTimefusionReads pid queryAST (toQText queryAST) cursorM' (fromD, toD) addCols (parseMaybe pSource =<< sourceM) targetSpansM
       case resultE of
         Left err -> Log.logAttention "log-explorer.data query failed" (AE.object ["project_id" AE..= pid.toText, "source" AE..= fromMaybe "spans" sourceM, "error" AE..= err]) $> (Just (sanitizeBackendError err), emptyTable)
         Right t -> pure (Nothing, t)

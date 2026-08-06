@@ -249,8 +249,14 @@ validateSqlQuery query =
           )
 
 
-selectLogTable :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => Projects.ProjectId -> [Section] -> Text -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector AE.Value), [Text], Int))
-selectLogTable pid queryAST queryText cursorM dateRange projectedColsByUser source targetSpansM = do
+-- | @useTimefusion@ routes the read to the TimeFusion pool, same as
+-- 'executeSecuredQuery' and 'fetchSessions'. It is a parameter rather than
+-- something the callers wrap around this function: when the routing lived at the
+-- call sites, the log-explorer page wrapped and the public @/api/v1/events@
+-- handler did not, so the API and the bots read Postgres — empty for TF-only
+-- projects — and answered every query with zero rows.
+selectLogTable :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => Bool -> Projects.ProjectId -> [Section] -> Text -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector AE.Value), [Text], Int))
+selectLogTable useTimefusion pid queryAST queryText cursorM dateRange projectedColsByUser source targetSpansM = do
   now <- Time.currentTime
   let (q, queryComponents) = queryASTToComponents ((defSqlQueryCfg pid now source targetSpansM){cursorM, dateRange, projectedColsByUser, source, targetSpansM}) queryAST
 
@@ -286,7 +292,8 @@ selectLogTable pid queryAST queryText cursorM dateRange projectedColsByUser sour
       ]
       $ try @SomeException
       $ retryLogExplorerRead
-      $ checkpoint (toAnnotation ("selectLogTable", q)) do
+      $ checkpoint (toAnnotation ("selectLogTable", q))
+      $ Hasql.withHasqlTimefusion useTimefusion do
         rows :: [AE.Value] <- Hasql.interp (rawSql q)
         pure $ jsonArrayRows rows
   pure case result of

@@ -91,7 +91,7 @@ whatsappIncomingPostH val = do
         Nothing -> case parseQueryToAST query of
           Left _ -> sendText $ botEmoji "warning" <> " Couldn't parse query. Try: 'show errors in last hour'"
           Right query' -> do
-            tableAsVecE <- LogQueries.selectLogTable project.id query' query Nothing (fromTimeM, toTimeM) [] Nothing Nothing
+            tableAsVecE <- LogQueries.selectLogTable envCfg.enableTimefusionReads project.id query' query Nothing (fromTimeM, toTimeM) [] Nothing Nothing
             sendText $ case handleTableResponse WhatsApp tableAsVecE envCfg project.id query of
               AE.Object o | Just (AE.String c) <- KEM.lookup "body" o -> c
               _ -> "Error processing query"

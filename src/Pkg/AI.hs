@@ -695,7 +695,7 @@ withArg tool k args f = maybe (pure $ toolError tool ("missing '" <> k <> "'") a
 
 
 -- | KQL tool whose raw results are never surfaced to the caller
-runKqlText :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Text -> [Text] -> ((V.Vector (V.Vector AE.Value), [Text], Int) -> Text) -> Eff es Text
+runKqlText :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Text -> [Text] -> ((V.Vector (V.Vector AE.Value), [Text], Int) -> Text) -> Eff es Text
 runKqlText config kqlQuery cols f = (.formatted) <$> runKqlWithRawData config kqlQuery cols ((,AE.Null) . f)
 
 
@@ -703,7 +703,7 @@ withTake :: Int -> Text -> Text
 withTake lim q = if "| take" `T.isInfixOf` q then q else q <> " | take " <> show lim
 
 
-executeGetFieldValues :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
+executeGetFieldValues :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
 executeGetFieldValues config args = withArg "get_field_values" "field" args \field ->
   runKqlText
     config
@@ -712,7 +712,7 @@ executeGetFieldValues config args = withArg "get_field_values" "field" args \fie
     \(results, _, _) -> "Values for '" <> field <> "': " <> formatSummarizeResults results
 
 
-executeGetServices :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Eff es Text
+executeGetServices :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Eff es Text
 executeGetServices config =
   runKqlText
     config
@@ -721,12 +721,12 @@ executeGetServices config =
     \(results, _, _) -> "Available services: " <> formatSummarizeResults results
 
 
-executeCountQuery :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
+executeCountQuery :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
 executeCountQuery config args = withArg "count_query" "query" args \kqlQuery ->
   runKqlText config kqlQuery [] \(_, _, count) -> "Query '" <> kqlQuery <> "' matches " <> show count <> " entries"
 
 
-executeSampleLogs :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
+executeSampleLogs :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
 executeSampleLogs config args = withArg "sample_logs" "query" args \kqlQuery ->
   runKqlText
     config
@@ -739,17 +739,17 @@ executeGetFacets :: AgenticConfig -> Text
 executeGetFacets config = maybe "No facet data available" formatFacetSummary config.facetContext
 
 
-runKqlWithRawData :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Text -> [Text] -> ((V.Vector (V.Vector AE.Value), [Text], Int) -> (Text, AE.Value)) -> Eff es ToolResult
+runKqlWithRawData :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Text -> [Text] -> ((V.Vector (V.Vector AE.Value), [Text], Int) -> (Text, AE.Value)) -> Eff es ToolResult
 runKqlWithRawData config kqlQuery cols formatResult = case parseQueryToAST kqlQuery of
   Left parseErr -> pure $ ToolResult ("Error: Query parse failed - " <> show parseErr) Nothing
   Right queryAST -> do
-    resultE <- selectLogTable config.projectId queryAST kqlQuery Nothing config.timeRange cols Nothing Nothing
+    resultE <- selectLogTable config.useTimefusion config.projectId queryAST kqlQuery Nothing config.timeRange cols Nothing Nothing
     pure $ case resultE of
       Left err -> ToolResult ("Error: Query execution failed - " <> err) Nothing
       Right res -> let (txt, raw) = formatResult res in ToolResult txt (Just raw)
 
 
-executeRunQuery :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es ToolResult
+executeRunQuery :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es ToolResult
 executeRunQuery config args = case getTextArg "query" args of
   Just query ->
     runKqlWithRawData config (withTake (getLimitArg "limit" config.limits.maxQueryResults config.limits.maxDisplayRows args) query) [] \(results, headers, count) ->

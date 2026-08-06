@@ -22,6 +22,7 @@ module Data.Effectful.Hasql (
 ) where
 
 import Control.Exception (throwIO)
+import Control.Exception.Annotated qualified as Ann
 import Data.HashMap.Strict qualified as HM
 import Effectful
 import Effectful.Dispatch.Dynamic (interpret, send)
@@ -96,8 +97,20 @@ isTransientHasqlError (HasqlException ue) = isTransientUsageError ue
 
 
 -- | Exported so callers stop repeating @maybe False isTransientHasqlError . fromException@.
+--
+-- Matches on @AnnotatedException HasqlException@, not @HasqlException@: every retry
+-- site here sits outside a 'Ann.checkpoint', so the exception it inspects is already
+-- wrapped and a plain 'fromException' silently returns Nothing — the retry never fires
+-- and an infra blip surfaces as a user-visible failure. The instance's second clause
+-- matches a bare 'HasqlException' too, so this subsumes both shapes.
+--
+-- >>> isTransientException (toException (HasqlException AcquisitionTimeoutUsageError))
+-- True
+--
+-- >>> isTransientException (toException (Ann.AnnotatedException [] (HasqlException AcquisitionTimeoutUsageError)))
+-- True
 isTransientException :: SomeException -> Bool
-isTransientException = maybe False isTransientHasqlError . fromException
+isTransientException = maybe False (isTransientHasqlError . Ann.exception) . fromException @(Ann.AnnotatedException HasqlException)
 
 
 -- | SQLSTATE of a failed statement, if the error carries one — the nested walk

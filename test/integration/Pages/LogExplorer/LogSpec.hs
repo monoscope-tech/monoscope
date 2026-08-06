@@ -651,7 +651,7 @@ spec = around withTestResources do
       ingestErrorLog tr apiKey "boom: db connection failed" [] frozenTime
       ingestLog tr apiKey "ordinary info line" frozenTime
       let range = (Just (addUTCTime (-60) frozenTime), Just (addUTCTime 60 frozenTime))
-      res <- runQueryEffect tr $ LogQueries.selectLogTable testPid [] "" Nothing range [] (Just SSpans) Nothing
+      res <- runQueryEffect tr $ LogQueries.selectLogTable tr.trATCtx.env.enableTimefusionReads testPid [] "" Nothing range [] (Just SSpans) Nothing
       (rows, cols, _) <- either (\e -> error ("selectLogTable failed: " <> e)) pure res
       let colIx name = Unsafe.fromJust $ V.elemIndex name (V.fromList cols)
           logRows = [r | r <- V.toList rows, (r V.!? colIx "kind") == Just (AE.String "log")]

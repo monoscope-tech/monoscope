@@ -118,7 +118,7 @@ import Effectful.Concurrent (runConcurrent)
 import Effectful.Dispatch.Dynamic
 import Effectful.Error.Static (Error, runErrorNoCallStack)
 import Effectful.Ki qualified as Ki
-import Effectful.Labeled (runLabeled)
+import Effectful.Labeled (Labeled, runLabeled)
 import Effectful.Log (Log)
 import Effectful.Reader.Static qualified
 import Effectful.Time (Time, runTime)
@@ -922,13 +922,14 @@ freshUUIDRef = newIORef (map (UUID.fromWords 0 0 0) [1 .. 1000])
 -- | Run a query effect (like Charts.queryMetrics) in test context
 -- This is for effects that return data directly (not wrapped in RespHeaders)
 -- Uses frozen time to match background job context
-runQueryEffect :: TestResources -> (forall es. (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServantS.ServerError :> es, IOE :> es, Log :> es, Time :> es, Tracing :> es) => Eff es a) -> IO a
+runQueryEffect :: TestResources -> (forall es. (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServantS.ServerError :> es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time :> es, Tracing :> es) => Eff es a) -> IO a
 runQueryEffect TestResources{..} action = do
   tp <- getGlobalTracerProvider
   withSharedLogger \logger ->
     action
       & runErrorNoCallStack @ServantS.ServerError
       & Effectful.Reader.Static.runReader trATCtx
+      & runLabeled @"timefusion" (runHasqlPool trATCtx.hasqlTimefusionPool)
       & runHasqlPoolSynced trTestClock trATCtx.hasqlPool
       & runMutableTime trTestClock
       & Logging.runLog "test" logger trATCtx.config.logLevel
