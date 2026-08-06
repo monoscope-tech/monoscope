@@ -365,6 +365,7 @@ data EventsContextOpts = EventsContextOpts
     -- For an incident agent this is the killer feature: "given a timestamp,
     -- which traces and services were impacted in this window?".
     summary :: Bool
+  , format :: Maybe Text
   }
   deriving stock (Show)
 
@@ -683,12 +684,13 @@ runEventsContext cfg opts kindOverride mode = do
           , Just ("since", fromMaybe "5m" opts.window)
           , ("source",) <$> kindNorm
           ]
+  fmt <- resolveFormat opts.format
   withAPIResult cfg "/api/v1/events" params $ \val -> do
     -- Decode once, share between normalize + summary (avoids walking
     -- @logsData@ twice on large responses).
     let enriched =
           maybe val (\d -> (if opts.summary then withTraceSummary d else Relude.id) (normalizeDecoded d Nothing)) (decodeEvents val)
-    renderWith mode enriched (renderEventsTable val Nothing)
+    renderWith mode enriched (renderEventsHuman fmt Nothing val)
 
 
 -- | C4: aggregate the events response into a per-trace summary. The result

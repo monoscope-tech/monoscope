@@ -384,6 +384,7 @@ eventsContextParser =
     <*> optional (strOption (long "kind" <> metavar "KIND"))
     <*> optional (strOption (long "window" <> metavar "DURATION" <> help "Time window (default: 5m)"))
     <*> switch (long "summary" <> help "Add per-trace summary to JSON output (trace_id, services, span_count, error_count)")
+    <*> formatOpt
 
 
 metricsParser :: Parser MetricsCommand
