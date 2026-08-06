@@ -1122,7 +1122,9 @@ runStatus cfg opts mode = do
           Left err -> def{error = Just (renderAPIError err)} <$ pass
           Right md -> pure md
   volume <- metric "summarize count(*) by bin_auto(timestamp)"
-  errors <- metric "summarize count(*) by bin_auto(timestamp) | where errors == true"
+  -- status_code, not `errors == true`: the store types `errors` as text, so a
+  -- boolean comparison fails to plan.
+  errors <- metric "status_code==\"ERROR\" | summarize count(*) by bin_auto(timestamp)"
   byService <- metric "summarize count(*) by resource.service.name | sort by count_ desc | take 8"
   issues <- either (const AE.Null) Relude.id <$> apiGetJson @_ @AE.Value cfg "/api/v1/issues" [("status", "open"), ("per_page", "5")]
   monitors <- either (const AE.Null) Relude.id <$> apiGetJson @_ @AE.Value cfg "/api/v1/monitors" []
