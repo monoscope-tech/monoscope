@@ -75,7 +75,7 @@ serviceMapPage_ pd = div_ [class_ "w-full h-full overflow-y-auto c-scroll p-4 fl
       , placeholder_ "Filter services"
       , [__|on input send service-map-filter(q: my value) to the closest <div/> then halt|]
       ]
-  serviceMapPanel_ "global-service-map" pd.graph serviceColors
+  serviceMapPanel_ pd.pid "global-service-map" pd.graph serviceColors
   where
     -- Same hash-assigned colours as the trace waterfall, so a service looks the same
     -- wherever it appears.

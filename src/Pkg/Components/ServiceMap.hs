@@ -13,6 +13,7 @@ import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Lucid
+import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.ServiceGraph (MapStats (..), NodeKind (..), ServiceEdge (..), ServiceGraph (..), ServiceNode (..))
 import Relude
 import Utils (faSprite_, prettyPrintCount)
@@ -21,8 +22,8 @@ import Utils (faSprite_, prettyPrintCount)
 -- | Render the map shell for @graph@ into a container with id @elId@. The graph travels
 -- as an embedded @application/json@ payload rather than an HTMX swap: HTMX swaps HTML,
 -- and a canvas renderer needs a model, not markup.
-serviceMapPanel_ :: Text -> ServiceGraph -> HM.HashMap Text Text -> Html ()
-serviceMapPanel_ elId graph colors = div_ [class_ "w-full flex flex-col gap-3"] do
+serviceMapPanel_ :: Projects.ProjectId -> Text -> ServiceGraph -> HM.HashMap Text Text -> Html ()
+serviceMapPanel_ pid elId graph colors = div_ [class_ "w-full flex flex-col gap-3"] do
   case graph.error of
     Just msg -> emptyState_ "triangle-exclamation" "Couldn't load the service map" msg
     Nothing
@@ -38,14 +39,51 @@ serviceMapPanel_ elId graph colors = div_ [class_ "w-full flex flex-col gap-3"] 
             [ class_ "border border-strokeWeak rounded-2xl w-full h-[520px] max-md:h-[360px] relative"
             , id_ elId
             , term "data-service-map" elId
+            , -- Base for the node menu's links; the renderer only appends the query.
+              term "data-map-base" ("/p/" <> pid.toText)
             ]
-            pass
+            $ nodeMenu_ elId
           script_ [type_ "application/json", id_ $ elId <> "-data"] $ decodeUtf8 @Text $ AE.encode graph
           script_ [type_ "application/json", id_ $ elId <> "-colors"]
             $ decodeUtf8 @Text
             $ AE.encode
             $ AE.object [AEKey.fromText k AE..= v | (k, v) <- HM.toList colors]
           dependencyTable_ graph
+
+
+-- | Click menu for a node, in the shape Datadog uses: the actions you actually want next
+-- from a service on a map. Rendered once by Lucid and reused for every node — the renderer
+-- only positions it and rewrites the hrefs, so no markup is ever built in JavaScript.
+nodeMenu_ :: Text -> Html ()
+nodeMenu_ elId =
+  div_
+    [ class_ "absolute hidden z-50 min-w-56 rounded-lg border border-strokeWeak bg-bgRaised shadow-lg py-1 text-sm"
+    , id_ $ elId <> "-menu"
+    , term "data-service-menu" ""
+    ]
+    do
+      div_ [class_ "px-3 py-1.5 font-semibold text-textStrong truncate border-b border-strokeWeak mb-1", term "data-menu-title" ""] ""
+      forM_ menuItems \(action, icon, label) ->
+        a_
+          [ class_ "flex items-center gap-2 px-3 py-1.5 text-textStrong hover:bg-fillWeak cursor-pointer"
+          , term "data-menu-action" action
+          , href_ "#"
+          ]
+          do
+            faSprite_ icon "regular" "w-3.5 h-3.5 text-iconNeutral shrink-0"
+            toHtml label
+
+
+-- | @data-menu-action@ is the contract with the renderer, which fills in the href per node.
+-- \"inspect\" has no href: it isolates the node's upstream and downstream in place.
+menuItems :: [(Text, Text, Text)]
+menuItems =
+  [ ("inspect", "arrow-right", "Inspect")
+  , ("traces", "list-tree", "View in trace search")
+  , ("logs", "file-lines", "View logs")
+  , ("metrics", "chart-line", "View metrics")
+  , ("monitors", "bell", "View monitors")
+  ]
 
 
 -- | Shape + dash carry node type, so the legend has to teach the shapes; colour alone is

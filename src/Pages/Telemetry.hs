@@ -1011,7 +1011,7 @@ tracePage pid traceItem rawSpanRecords = do
           -- global service map, scoped to this trace's spans (no extra query — the spans
           -- are already on the page).
           div_ [role_ "tabpanel", class_ "a-tab-content pt-2 hidden", id_ "service_map"] do
-            serviceMapPanel_ ("trace-service-map-" <> traceItem.traceId) traceGraph serviceColors
+            serviceMapPanel_ pid ("trace-service-map-" <> traceItem.traceId) traceGraph serviceColors
     div_ [class_ "hidden shrink-0 max-md:hidden", id_ "trace-details-resizer-wrapper"]
       $ div_ [class_ "w-3 h-full cursor-ew-resize", id_ "trace_details_resizer", role_ "separator", Aria.label_ "Resize span details"] pass
     div_
