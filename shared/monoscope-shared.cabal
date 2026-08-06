@@ -108,9 +108,8 @@ library
     , scientific
     , template-haskell
     , text
-    , text-builder-linear
     , casing
-    , filepath
+    , text-builder-linear
     , text-display
     , time
     , unliftio
