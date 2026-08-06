@@ -180,6 +180,7 @@ tests:
       - base
       - monoscope
       - monoscope-shared
+      - monoscope-cli
       - hs-opentelemetry-instrumentation-auto
       - doctest >= 0.20
       - relude >= 1.2.0.0

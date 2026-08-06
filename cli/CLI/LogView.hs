@@ -9,6 +9,7 @@ module CLI.LogView (
   LogFormat (..),
   parseLogFormat,
   EventRow (..),
+  emptyEventRow,
   eventRows,
   renderEventLine,
   renderLogfmt,
@@ -17,14 +18,13 @@ module CLI.LogView (
 
 import Relude
 
-import CLI.Chart (colorize, dim, ellipsize, formatValue, padTo)
+import CLI.Chart (colorize, dim, ellipsize, formatValue, padTo, visibleWidth)
 import Data.Aeson qualified as AE
-import Data.Aeson.Key qualified as AK
 import Data.Aeson.KeyMap qualified as KM
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
-import Pkg.CLIFormat (extractRows, renderSummaryItems)
+import Pkg.CLIFormat (extractColIdxMap, extractRows, renderSummaryCell)
 import System.Console.ANSI qualified as ANSI
 
 
@@ -73,13 +73,19 @@ data EventRow = EventRow
   deriving stock (Eq, Show)
 
 
+-- | An event with nothing set. Only useful as a base for record updates —
+-- 'eventRows' is how a real one is built.
+emptyEventRow :: EventRow
+emptyEventRow = EventRow Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing False []
+
+
 -- | Pull the rows out of an @\/api\/v1\/events@ envelope. Columns are located
 -- by name via @colIdxMap@ rather than position, so a change to the default
 -- projection can't silently shift every field one column to the left.
 eventRows :: AE.Value -> [EventRow]
 eventRows = \case
   AE.Object obj ->
-    let idx = colIdxMap (KM.lookup "colIdxMap" obj)
+    let idx = extractColIdxMap (KM.lookup "colIdxMap" obj)
         at name row = Map.lookup name idx >>= \i -> guarded (not . T.null) =<< (row !!? i)
         known = ["id", "timestamp", "trace_id", "span_name", "duration", "service", "kind", "summary", "errors", "parent_id", "start_time_ns", "latency_breakdown"]
         others = [(n, i) | (n, i) <- Map.toList idx, n `notElem` known]
@@ -94,18 +100,15 @@ eventRows = \case
             , parentId = at "parent_id" row
             , startNs = readMaybe . toString =<< at "start_time_ns" row
             , summary = at "summary" row
-            , isError = at "errors" row `elem` [Just "true", Just "t", Just "True"]
+            , -- The annotation is load-bearing: the doctest runner compiles this
+              -- module with OverloadedLists, under which a bare list literal here
+              -- is ambiguous. Lower-casing also picks up TRUE/True for free.
+              isError = maybe False ((`elem` (["true", "t"] :: [Text])) . T.toLower) (at "errors" row)
             , extras = [(n, v) | (n, i) <- others, Just v <- [guarded (not . T.null) =<< (row !!? i)]]
             }
         | row <- extractRows (KM.lookup "logsData" obj)
         ]
   _ -> []
-
-
-colIdxMap :: Maybe AE.Value -> Map Text Int
-colIdxMap = \case
-  Just (AE.Object obj) -> Map.fromList [(AK.toText k, floor n) | (k, AE.Number n) <- KM.toList obj]
-  _ -> mempty
 
 
 -- | A single event as one terminal line. Columns are fixed-width up to the
@@ -124,19 +127,9 @@ renderEventLine color width r =
       ]
     <> trailer
   where
-    msgWidth = max 20 (width - 12 - 5 - 18 - 7 - 5 - T.length (stripStyle trailer))
-    message = maybe (fromMaybe "" r.spanName) renderSummary r.summary
+    msgWidth = max 20 (width - 12 - 5 - 18 - 7 - 5 - visibleWidth trailer)
+    message = maybe (fromMaybe "" r.spanName) renderSummaryCell r.summary
     trailer = mconcat [dim color ("  " <> k <> "=" <> v) | (k, v) <- take 4 r.extras] <> maybe "" (\t -> dim color ("  trace=" <> T.take 12 t)) r.traceId
-    stripStyle = T.filter (/= '\ESC')
-
-
--- | The @summary@ column is the platform's own display form for an event
--- (@field;style⇒value@ items); reusing it keeps the CLI's message text
--- identical to the log explorer's.
-renderSummary :: Text -> Text
-renderSummary cell = case AE.eitherDecode @[Text] (encodeUtf8 cell) of
-  Right items -> renderSummaryItems items
-  Left _ -> cell
 
 
 -- | Severity badge. Spans have no severity of their own, so an error span shows
@@ -154,13 +147,20 @@ levelTag color r
 -- | @key=value@ form. Values containing spaces are quoted; nothing else is
 -- escaped, matching the logfmt convention.
 --
--- >>> renderLogfmt (EventRow (Just "e1") (Just "2026-08-06T01:02:03Z") (Just "api") Nothing (Just "log") Nothing Nothing (Just "boom now") True [])
+-- >>> :{
+-- renderLogfmt
+--   emptyEventRow
+--     { eventId = Just "e1"
+--     , timestamp = Just "2026-08-06T01:02:03Z"
+--     , service = Just "api"
+--     , kind = Just "log"
+--     , summary = Just "boom now"
+--     , isError = True
+--     }
+-- :}
 -- "ts=2026-08-06T01:02:03Z level=error service=api kind=log msg=\"boom now\" id=e1"
 renderLogfmt :: EventRow -> Text
-renderLogfmt r =
-  T.unwords
-    $ [k <> "=" <> quote v | (k, Just v) <- pairs]
-    <> [k <> "=" <> quote v | (k, v) <- r.extras]
+renderLogfmt r = T.unwords [k <> "=" <> quote v | (k, Just v) <- pairs <> map (second Just) r.extras]
   where
     pairs =
       [ ("ts", r.timestamp)
@@ -169,7 +169,7 @@ renderLogfmt r =
       , ("kind", r.kind)
       , ("span", r.spanName)
       , ("dur_ms", show . (/ 1e6) <$> r.durationNs)
-      , ("msg", renderSummary <$> r.summary)
+      , ("msg", renderSummaryCell <$> r.summary)
       , ("trace", r.traceId)
       , ("id", r.eventId)
       ]

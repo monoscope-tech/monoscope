@@ -552,6 +552,7 @@ test-suite doctests
     , doctest >=0.20
     , hs-opentelemetry-instrumentation-auto
     , monoscope
+    , monoscope-cli
     , monoscope-shared
     , relude >=1.2.0.0
   default-language: GHC2024

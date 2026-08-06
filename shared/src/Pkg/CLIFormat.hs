@@ -4,6 +4,8 @@ module Pkg.CLIFormat (
   extractTextArray,
   extractRows,
   extractRawRows,
+  extractColIdxMap,
+  renderSummaryCell,
   extractInt,
   valToText,
   evalCond,
@@ -15,6 +17,9 @@ module Pkg.CLIFormat (
 import Relude
 
 import Data.Aeson qualified as AE
+import Data.Aeson.Key qualified as AK
+import Data.Aeson.KeyMap qualified as KM
+import Data.Map.Strict qualified as Map
 import Data.Scientific (FPFormat (..), Scientific, formatScientific, isInteger)
 import Data.Text qualified as T
 import Data.Vector qualified as V
@@ -136,6 +141,36 @@ valToText v = decodeUtf8 $ AE.encode v
 -- []
 extractRows :: Maybe AE.Value -> [[Text]]
 extractRows = map (map valToText) . extractRawRows
+
+
+-- | The events envelope's @colIdxMap@: column name to its position in each row.
+-- Reading cells by name through this is what keeps a change to the server's
+-- default projection from silently shifting every field one column left.
+--
+-- >>> extractColIdxMap (Just (AE.object [("id", AE.Number 0), ("service", AE.Number 2)]))
+-- fromList [("id",0),("service",2)]
+-- >>> extractColIdxMap Nothing
+-- fromList []
+extractColIdxMap :: Maybe AE.Value -> Map Text Int
+extractColIdxMap = \case
+  -- Column indices are non-negative integers from the server; @floor@ over
+  -- @round@ documents that intent (no banker's rounding on a value that's
+  -- already integral).
+  Just (AE.Object obj) -> Map.fromList [(AK.toText k, floor n) | (k, AE.Number n) <- KM.toList obj]
+  _ -> mempty
+
+
+-- | Render a @summary@ cell — the platform's own display form for an event,
+-- a JSON array of @field;style⇒value@ items. Anything that isn't that array is
+-- passed through, so a projected column that happens to be named @summary@
+-- still shows its raw value.
+--
+-- >>> renderSummaryCell "[\"status;badge-2xx⇒200\"]"
+-- "\ESC[32m200\ESC[0m"
+-- >>> renderSummaryCell "not json"
+-- "not json"
+renderSummaryCell :: Text -> Text
+renderSummaryCell cell = either (const cell) renderSummaryItems (AE.eitherDecode @[Text] (encodeUtf8 cell))
 
 
 -- | Like 'extractRows' but preserves the original JSON values (numbers stay

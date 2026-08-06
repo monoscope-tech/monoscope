@@ -11,12 +11,13 @@
 module CLI.Chart (
   -- * Series
   Series (..),
+  seriesFrom,
   seriesFromMetrics,
+  isTimeColumn,
 
   -- * Options
   ChartOpts (..),
   defaultChartOpts,
-  ChartStyle (..),
 
   -- * Renderers
   renderTimeseries,
@@ -40,7 +41,7 @@ import Relude
 
 import Data.Bits (bit, (.|.))
 import Data.IntMap.Strict qualified as IntMap
-import Data.List (zipWith3)
+import Data.Ord (clamp)
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
@@ -59,17 +60,12 @@ data Series = Series
   deriving stock (Show)
 
 
-data ChartStyle = Line | Area | Bars
-  deriving stock (Eq, Show)
-
-
 data ChartOpts = ChartOpts
   { width :: Int
   -- ^ Total columns the chart may occupy, axis labels included.
   , height :: Int
   -- ^ Plot rows, excluding the x-axis line, x labels and legend.
   , colorful :: Bool
-  , style :: ChartStyle
   , unit :: Text
   -- ^ Appended to y-axis and legend values ("ms", "req/s", "%", …).
   , timeAxis :: Bool
@@ -87,7 +83,6 @@ defaultChartOpts =
     { width = 80
     , height = 12
     , colorful = True
-    , style = Line
     , unit = ""
     , timeAxis = True
     , showLegend = True
@@ -95,26 +90,37 @@ defaultChartOpts =
     }
 
 
--- | Split the server's @MetricsData@ into one 'Series' per non-timestamp
--- column. The first header is the bin timestamp (epoch milliseconds) whenever
--- the query used @by bin(...)@; without it points fall back to their row index
--- so a plain @summarize@ still charts.
-seriesFromMetrics :: MetricsData -> [Series]
-seriesFromMetrics md
-  | null valueCols = []
-  | otherwise = [Series h [(x, row V.!? i >>= id) | (x, row) <- rows] | (i, h) <- valueCols]
+-- | Split a result grid into one 'Series' per non-timestamp column. A leading
+-- timestamp column (present whenever the query binned by time) becomes the x
+-- axis; without one, points fall back to their row index so a plain
+-- @summarize@ still charts.
+--
+-- >>> map (.name) (seriesFrom ["timestamp", "hits", "errs"] [[Just 1000, Just 5, Just 1]])
+-- ["hits","errs"]
+-- >>> (.points) <$> viaNonEmpty head (seriesFrom ["hits"] [[Just 5], [Just 7]])
+-- Just [(0.0,Just 5.0),(1.0,Just 7.0)]
+seriesFrom :: [Text] -> [[Maybe Double]] -> [Series]
+seriesFrom headers grid = [Series h [(x, join (row !!? i)) | (x, row) <- rows] | (i, h) <- valueCols]
   where
-    headers = V.toList md.headers
-    hasTime = maybe False isTimeHeader (viaNonEmpty head headers)
+    hasTime = maybe False isTimeColumn (viaNonEmpty head headers)
     valueCols = [(i, h) | (i, h) <- zip [0 ..] headers, not (hasTime && i == 0)]
     rows =
-      [ (if hasTime then fromMaybe (fromIntegral n) (join (row V.!? 0)) else fromIntegral n, row)
-      | (n :: Int, row) <- zip [0 ..] (V.toList md.dataset)
+      [ (if hasTime then fromMaybe (fromIntegral n) (join (row !!? 0)) else fromIntegral n, row)
+      | (n :: Int, row) <- zip [0 ..] grid
       ]
 
 
-isTimeHeader :: Text -> Bool
-isTimeHeader h = T.toLower h `elem` ["timestamp", "created_at", "time", "bucket", "_timestamp"]
+seriesFromMetrics :: MetricsData -> [Series]
+seriesFromMetrics md = seriesFrom (V.toList md.headers) (V.toList (V.toList <$> md.dataset))
+
+
+-- | Does this column hold the x-axis timestamps? The one place that knows the
+-- names the server can emit for a time bin.
+--
+-- >>> map isTimeColumn ["timestamp", "Created_At", "service"]
+-- [True,True,False]
+isTimeColumn :: Text -> Bool
+isTimeColumn h = T.toLower h `elem` ["timestamp", "created_at", "time", "bucket", "_timestamp"]
 
 
 -- | Full timeseries chart: y-axis with nice ticks, braille plot area, x-axis
@@ -138,16 +144,16 @@ renderTimeseries opts allSeries
     labels = [formatValue opts.unit t | t <- ticks]
     gutter = foldl' max 1 (map T.length labels)
     plotW = max 8 (opts.width - gutter - 2)
-    canvas = foldl' (drawSeries opts.style plotW opts.height (xLo, xHi) (yLo, yHi)) mempty (zip [0 ..] series)
-    body = zipWith3 row [0 ..] (rowLabels ticks) (canvasRows opts.colorful plotW opts.height canvas)
-    row _ lbl cells = T.justifyRight gutter ' ' lbl <> dim opts.colorful " │" <> cells
+    canvas = foldl' (drawSeries plotW opts.height (xLo, xHi) (yLo, yHi)) mempty (zip [0 ..] series)
+    body = zipWith row (rowLabels ticks) (canvasRows opts.colorful plotW opts.height canvas)
+    row lbl cells = T.justifyRight gutter ' ' lbl <> dim opts.colorful " │" <> cells
     -- One label per tick, placed on the row the tick's value lands on.
     rowLabels ts =
       [ maybe "" (formatValue opts.unit) (find (\t -> tickRow t == r) ts)
       | r <- [0 .. opts.height - 1]
       ]
       where
-        tickRow t = clamp 0 (opts.height - 1) $ opts.height - 1 - round (frac yLo yHi t * fromIntegral (opts.height - 1))
+        tickRow t = clamp (0, opts.height - 1) $ opts.height - 1 - round (frac yLo yHi t * fromIntegral (opts.height - 1))
     axisLine = T.replicate gutter " " <> dim opts.colorful (" └" <> T.replicate plotW "─")
     xLabels = T.replicate (gutter + 2) " " <> dim opts.colorful (spread plotW (map fmtX [xLo, (xLo + xHi) / 2, xHi]))
     fmtX = if opts.timeAxis then formatTimeLabel (xHi - xLo) else formatValue ""
@@ -185,7 +191,7 @@ renderBars opts rows
 bar :: Int -> Double -> Text
 bar w f = T.replicate full "█" <> partial
   where
-    eighths = round (clampD 0 1 f * fromIntegral (w * 8)) :: Int
+    eighths = round (clamp (0, 1) f * fromIntegral (w * 8)) :: Int
     (full, rest) = eighths `divMod` 8
     partial = if rest == 0 then "" else one (chr (0x2590 - rest))
 
@@ -212,7 +218,7 @@ sparkline w ys
     blocks = " ▁▂▃▄▅▆▇█"
     buckets = map avg (chunkInto w ys)
     (lo, hi) = rangeOf buckets
-    level y = clamp 0 8 $ round (frac lo hi y * 8)
+    level y = clamp (0, 8) $ round (frac lo hi y * 8)
 
 
 -- Canvas ---------------------------------------------------------------------
@@ -238,22 +244,18 @@ plot w h px py sIdx
     merge (newBits, s) (oldBits, _) = (newBits .|. oldBits, s)
 
 
-drawSeries :: ChartStyle -> Int -> Int -> (Double, Double) -> (Double, Double) -> Canvas -> (Int, Series) -> Canvas
-drawSeries style w h (xLo, xHi) (yLo, yHi) c0 (sIdx, s) = case style of
-  Bars -> foldl' column c0 pixels
-  Area -> foldl' column c0 pixels
-  Line -> foldl' segment c0 (zip pixels (drop 1 pixels))
+drawSeries :: Int -> Int -> (Double, Double) -> (Double, Double) -> Canvas -> (Int, Series) -> Canvas
+drawSeries w h (xLo, xHi) (yLo, yHi) c0 (sIdx, s) = foldl' segment c0 (zip pixels (drop 1 pixels))
   where
     pixels = [(toPx xLo xHi (w * 2) x, (h * 4 - 1) - toPx yLo yHi (h * 4) y) | (x, Just y) <- s.points]
-    column c (px, py) = foldl' (\acc y -> plot w h px y sIdx acc) c [py .. h * 4 - 1]
-    -- Gaps are already absent from `pixels`, so a segment can span a hole. That
-    -- is deliberate for Line: a dropped bin shouldn't split the line visually
-    -- when the series is otherwise continuous.
+    -- Gaps are already absent from `pixels`, so a segment can span a hole: a
+    -- dropped bin shouldn't split the line when the series is otherwise
+    -- continuous.
     segment c ((x0, y0), (x1, y1)) = foldl' (\acc (x, y) -> plot w h x y sIdx acc) c (bresenham x0 y0 x1 y1)
 
 
 toPx :: Double -> Double -> Int -> Double -> Int
-toPx lo hi n v = clamp 0 (n - 1) $ round (frac lo hi v * fromIntegral (n - 1))
+toPx lo hi n v = clamp (0, n - 1) $ round (frac lo hi v * fromIntegral (n - 1))
 
 
 bresenham :: Int -> Int -> Int -> Int -> [(Int, Int)]
@@ -354,7 +356,7 @@ bold True t = toText (ANSI.setSGRCode [ANSI.SetConsoleIntensity ANSI.BoldIntensi
 frac :: Double -> Double -> Double -> Double
 frac lo hi v
   | hi - lo < 1e-12 = 0.5
-  | otherwise = clampD 0 1 ((v - lo) / (hi - lo))
+  | otherwise = clamp (0, 1) ((v - lo) / (hi - lo))
 
 
 rangeOf :: [Double] -> (Double, Double)
@@ -368,7 +370,7 @@ rangeOf (x : xs) = (foldl' min x xs, foldl' max x xs)
 -- >>> niceTicks 0 100 4
 -- [0.0,25.0,50.0,75.0,100.0]
 -- >>> niceTicks 0 7 3
--- [0.0,2.0,4.0,6.0]
+-- [0.0,2.5,5.0,7.5]
 niceTicks :: Double -> Double -> Int -> [Double]
 niceTicks lo hi n
   | hi - lo < 1e-12 = [lo]
@@ -383,11 +385,11 @@ niceTicks lo hi n
 -- | Place labels across @w@ columns: first flush left, last flush right, the
 -- rest evenly spaced. Overlapping labels are dropped rather than truncated.
 spread :: Int -> [Text] -> Text
-spread w = foldl' place (T.replicate w " ") . zip [0 :: Int ..] . \ls -> zip (positions (length ls)) ls
+spread w ls = foldl' place (T.replicate w " ") (zip (positions (length ls)) ls)
   where
     positions k = [round (fromIntegral i / fromIntegral (max 1 (k - 1)) * fromIntegral (w - 1) :: Double) | i <- [0 .. k - 1]]
-    place acc (_, (p, l)) =
-      let at = clamp 0 (max 0 (w - T.length l)) (p - if p >= w - 1 then T.length l - 1 else 0)
+    place acc (p, l) =
+      let at = clamp (0, max 0 (w - T.length l)) (p - if p >= w - 1 then T.length l - 1 else 0)
        in if T.any (/= ' ') (T.take (T.length l + 1) (T.drop at acc))
             then acc
             else T.take at acc <> l <> T.drop (at + T.length l) acc
@@ -409,14 +411,6 @@ avg xs = sum xs / fromIntegral (length xs)
 
 ellipsize :: Int -> Text -> Text
 ellipsize n t = if T.length t <= n then t else T.take (max 0 (n - 1)) t <> "…"
-
-
-clamp :: Int -> Int -> Int -> Int
-clamp lo hi = max lo . min hi
-
-
-clampD :: Double -> Double -> Double -> Double
-clampD lo hi = max lo . min hi
 
 
 -- | Width the terminal will actually give a string: ANSI escapes are zero-width

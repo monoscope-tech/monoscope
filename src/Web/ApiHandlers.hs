@@ -104,6 +104,7 @@ import Data.OpenApi (ToSchema (..))
 import Data.Text qualified as T
 import Data.Text.Display (display)
 import Data.Time (UTCTime, addUTCTime, nominalDay, zonedTimeToUTC)
+import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..), getAeson)
@@ -453,8 +454,12 @@ apiDashboardData pid did tabM widgetM sinceM fromM toM allParams = do
   -- Most dashboards leave widget ids unset, so --widget also matches a
   -- slugified title ("p95-latency"); otherwise there'd be no way to name one.
   let matches wanted w = w.id == Just wanted || (slugify <$> w.title) == Just (slugify wanted)
-      selected = maybe (\ws -> ws) (filter . matches) widgetM (dash'.widgets <> tabWidgets)
-  rendered <- pooledForConcurrently selected (renderWidgetTree pid timeParams params)
+      selected = filter (\w -> maybe True (`matches` w) widgetM) (dash'.widgets <> tabWidgets)
+  widgets <- pooledForConcurrently selected (renderWidgetTree pid timeParams params)
+  -- The window comes from the request, not from scraping a widget's result:
+  -- every widget shares it, and a dashboard with no widgets should still say
+  -- which range it was asked about.
+  let (fromT, toT, _) = TP.parseTimeRange now (TP.TimePicker sinceM fromM toM)
   pure
     DashboardData
       { id = did
@@ -462,48 +467,46 @@ apiDashboardData pid did tabM widgetM sinceM fromM toM allParams = do
       , tab = tabName
       , tabs = (.name) <$> allTabs
       , since = sinceM
-      , from = viaNonEmpty head (mapMaybe (fst . snd) rendered)
-      , to = viaNonEmpty head (mapMaybe (snd . snd) rendered)
-      , widgets = fst <$> rendered
+      , from = epochMs <$> fromT
+      , to = epochMs <$> toT
+      , widgets
       }
+  where
+    epochMs = round . (* 1000) . utcTimeToPOSIXSeconds
 
 
 -- | Resolve a widget and, recursively, the sub-grid of any group widget.
 -- Widgets with no query of their own (groups, the anomalies feed) skip the
 -- round trip entirely rather than reporting a spurious query failure.
-renderWidgetTree :: Projects.ProjectId -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATBaseCtx (RenderedWidget, (Maybe Int, Maybe Int))
+renderWidgetTree :: Projects.ProjectId -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATBaseCtx RenderedWidget
 renderWidgetTree pid timeParams params w = do
   let blank = maybe True (T.null . T.strip)
   md <- if blank w.query && blank w.sql then pure def else DashPage.widgetMetrics pid timeParams params w
   kids <- pooledForConcurrently (fold w.children) (renderWidgetTree pid timeParams params)
-  pure $ toRenderedWidget w md (fst <$> kids)
+  pure $ toRenderedWidget w md kids
 
 
--- | Flatten a widget plus its query result into the wire shape. Returns the
--- window alongside it so the caller can report one x-axis range for the whole
--- dashboard instead of per widget.
-toRenderedWidget :: Widget.Widget -> Charts.MetricsData -> [RenderedWidget] -> (RenderedWidget, (Maybe Int, Maybe Int))
+-- | Flatten a widget plus its query result into the wire shape.
+toRenderedWidget :: Widget.Widget -> Charts.MetricsData -> [RenderedWidget] -> RenderedWidget
 toRenderedWidget w md kids =
-  ( RenderedWidget
-      { id = w.id
-      , title = w.title
-      , subtitle = w.subtitle
-      , wType = w.wType
-      , unit = w.unit
-      , query = w.query
-      , layout = w.layout
-      , summarizeBy = w.summarizeBy
-      , value = md.dataFloat
-      , headers = V.toList md.headers
-      , rows = V.toList (V.toList <$> md.dataset)
-      , textRows = V.toList (V.toList <$> md.dataText)
-      , stats = md.stats
-      , error = md.error
-      , columns = maybe [] (map (.title)) w.columns
-      , children = kids
-      }
-  , (md.from, md.to)
-  )
+  RenderedWidget
+    { id = w.id
+    , title = w.title
+    , subtitle = w.subtitle
+    , wType = w.wType
+    , unit = w.unit
+    , query = w.query
+    , layout = w.layout
+    , summarizeBy = w.summarizeBy
+    , value = md.dataFloat
+    , headers = V.toList md.headers
+    , rows = V.toList (V.toList <$> md.dataset)
+    , textRows = V.toList (V.toList <$> md.dataText)
+    , stats = md.stats
+    , error = md.error
+    , columns = maybe [] (map (.title)) w.columns
+    , children = kids
+    }
 
 
 -- | Insert a new dashboard row from an input.

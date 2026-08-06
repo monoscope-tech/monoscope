@@ -1,10 +1,10 @@
--- | Unit tests for the CLI's pure renderers. Everything under test takes data
--- and returns @[Text]@, so these assert on exactly what a user would see —
--- no terminal, no server, no golden files.
+-- | Tests for the CLI's renderers that need more than one assertion or a
+-- fixture to state. Single-expression facts (formatting, link building, flag
+-- parsing) live as doctests on the functions themselves — the runner covers
+-- @cli\/CLI@ — so anything that fits on one line does not belong here.
 module Main (main) where
 
 import CLI.Chart
-import CLI.Commands (OpenTarget (..), parseOpenTarget, uiPath)
 import CLI.Dashboard qualified as Dash
 import CLI.LogView
 import Data.Aeson qualified as AE
@@ -38,11 +38,6 @@ main = hspec do
 
     it "keeps every bar row inside the width budget" do
       all ((<= 40) . visibleWidth) (renderBars opts{width = 40} [("a-very-long-service-name-here", 10), ("b", 5)]) `shouldBe` True
-
-    it "formats values with SI and duration units" do
-      map (formatValue "") [0, 12, 1234, 2_500_000] `shouldBe` ["0", "12", "1.2k", "2.5M"]
-      formatValue "ms" 1500 `shouldBe` "1.5s"
-      formatValue "%" 99.42 `shouldBe` "99.4%"
 
     it "reads a leading timestamp column as the x axis" do
       let md =
@@ -79,10 +74,6 @@ main = hspec do
       l `shouldSatisfy` T.isInfixOf "service=checkout"
       l `shouldSatisfy` T.isInfixOf "trace=t1"
 
-    it "rejects an unknown --format instead of guessing" do
-      parseLogFormat "logfmt" `shouldBe` Right FmtLogfmt
-      parseLogFormat "nope" `shouldSatisfy` isLeft
-
     it "draws a waterfall with a row per span, children indented" do
       let out = renderWaterfall False 100 (eventRows sampleEvents)
       length out `shouldBe` 3 -- header + 2 spans
@@ -90,21 +81,6 @@ main = hspec do
 
     it "still renders when a span's parent is missing from the result" do
       renderWaterfall False 80 (eventRows orphanEvent) `shouldSatisfy` ((== 2) . length)
-
-  describe "CLI.Commands (open)" do
-    it "builds deep links for each target" do
-      uiPath "PID" OpenDashboard (Just "d1") Nothing `shouldBe` "/p/PID/dashboards/d1"
-      uiPath "PID" OpenIssue (Just "i1") Nothing `shouldBe` "/p/PID/issues/i1"
-      uiPath "PID" OpenProject Nothing Nothing `shouldBe` "/p/PID"
-      uiPath "PID" OpenMonitors Nothing (Just "24h") `shouldBe` "/p/PID/monitors?since=24h"
-
-    it "percent-encodes a KQL query into the log explorer link" do
-      uiPath "PID" OpenLogs (Just "severity.text==\"ERROR\"") (Just "6h")
-        `shouldBe` "/p/PID/log_explorer?query=severity.text%3D%3D%22ERROR%22&since=6h"
-
-    it "rejects an unknown target" do
-      parseOpenTarget "trace" `shouldBe` Just OpenTrace
-      parseOpenTarget "nope" `shouldBe` Nothing
 
   describe "CLI.Dashboard" do
     it "puts side-by-side widgets on the same terminal row" do

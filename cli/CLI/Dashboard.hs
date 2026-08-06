@@ -123,7 +123,6 @@ renderBand color termW ws = stitch boxes <> [""]
     contents = [(bw, w, renderWidget color (max 1 (bw - 4)) (gridH w * rowsPerUnit) w) | (bw, w) <- zip widths ws]
     boxH = foldl' max 3 [length c | (_, _, c) <- contents]
     boxes = [box color bw boxH w c | (bw, w, c) <- contents]
-    stitch [] = []
     stitch bs = [T.intercalate " " (map (fromMaybe "" . (!!? r)) bs) | r <- [0 .. foldl' max 0 (map length bs) - 1]]
 
 
@@ -160,18 +159,15 @@ renderWidget :: Bool -> Int -> Int -> RenderedWidget -> [Text]
 renderWidget color w h widget = case widget.error of
   Just e -> [colorize color (seriesColor 6) ("query failed: " <> ellipsize (w - 14) e)]
   Nothing -> case widget.wType of
-    "stat" -> renderStat opts (fromMaybe "" widget.subtitle) widget.value series
-    "timeseries_stat" -> renderStat opts (fromMaybe "" widget.subtitle) (statValue widget) series
-    "table" -> textTable color w h widget
-    "logs" -> textTable color w h widget
-    "traces" -> textTable color w h widget
-    "top_list" -> renderBars opts (categorical widget)
-    "pie_chart" -> renderBars opts (categorical widget)
-    "distribution" -> renderBars opts (categorical widget)
     "group" -> renderGrid color w widget.children
-    -- Everything with no terminal-native form (geomaps, flamegraphs, service
-    -- maps, …) still shows its numbers rather than an empty box.
-    _ -> if null series then textTable color w h widget else renderTimeseries opts series
+    t
+      | t `elem` ["stat", "timeseries_stat"] -> renderStat opts (fromMaybe "" widget.subtitle) (statValue widget) series
+      | t `elem` ["table", "logs", "traces"] -> textTable color w h widget
+      | t `elem` ["top_list", "pie_chart", "distribution"] -> renderBars opts (categorical widget)
+      -- Everything with no terminal-native form (geomaps, flamegraphs, service
+      -- maps, …) still shows its numbers rather than an empty box.
+      | null series -> textTable color w h widget
+      | otherwise -> renderTimeseries opts series
   where
     opts =
       defaultChartOpts
@@ -181,36 +177,20 @@ renderWidget color w h widget = case widget.error of
         , unit = fromMaybe "" widget.unit
         , showLegend = h > 6
         }
-    series = widgetSeries widget
-
-
--- | Series for a widget, from the numeric grid the server returned. Mirrors
--- 'CLI.Chart.seriesFromMetrics' but reads the flattened wire rows.
-widgetSeries :: RenderedWidget -> [Series]
-widgetSeries widget
-  | null valueCols = []
-  | otherwise = [Series hdr [(x, join (row !!? i)) | (x, row) <- xs] | (i, hdr) <- valueCols]
-  where
-    hasTime = maybe False isTimeCol (viaNonEmpty head widget.headers)
-    valueCols = [(i, hdr) | (i, hdr) <- zip [0 ..] widget.headers, not (hasTime && i == 0)]
-    xs = [(if hasTime then fromMaybe (fromIntegral n) (join (row !!? 0)) else fromIntegral n, row) | (n :: Int, row) <- zip [0 ..] widget.rows]
-
-
-isTimeCol :: Text -> Bool
-isTimeCol h = T.toLower h `elem` ["timestamp", "created_at", "time", "bucket"]
+    series = seriesFrom widget.headers widget.rows
 
 
 -- | Latest non-null point of the first series — what a timeseries-backed stat
 -- widget shows as its headline number.
 statValue :: RenderedWidget -> Maybe Double
-statValue widget = widget.value <|> (viaNonEmpty last . mapMaybe snd . (.points) =<< viaNonEmpty head (widgetSeries widget))
+statValue widget = widget.value <|> (viaNonEmpty last . mapMaybe snd . (.points) =<< viaNonEmpty head (seriesFrom widget.headers widget.rows))
 
 
 -- | @(label, value)@ pairs for the bar-style widgets: the first text column
 -- labels the bar, the first numeric column sizes it.
 categorical :: RenderedWidget -> [(Text, Double)]
 categorical widget = case widget.textRows of
-  [] -> [(maybe "" show (join (row !!? 0)), fromMaybe 0 (join (row !!? 1))) | row <- widget.rows]
+  [] -> [(maybe "" (formatValue "") (join (row !!? 0)), fromMaybe 0 (join (row !!? 1))) | row <- widget.rows]
   rows -> [(fromMaybe "" (r !!? 0), fromMaybe 0 (readMaybe . toString =<< r !!? 1)) | r <- rows]
 
 

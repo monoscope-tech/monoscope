@@ -43,8 +43,10 @@ main = do
   doctest $ filteredArgs ++
     [ "-isrc"
     , "-ishared/src"
+    , "-icli"
     , "--fast"
     , "-package monoscope"
     , "-package monoscope-shared"
+    , "-package monoscope-cli"
     , "-hide-package base64-bytestring"
-    ] ++ extensions ++ ["src", "shared/src"]
+    ] ++ extensions ++ ["src", "shared/src", "cli/CLI"]

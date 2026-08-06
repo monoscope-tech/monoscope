@@ -87,7 +87,7 @@ import OpenTelemetry.Context.ThreadLocal qualified as OtelCtx
 import OpenTelemetry.Trace (SpanStatus (..), Tracer, TracerOptions (..), defaultSpanArguments, initializeGlobalTracerProvider, makeTracer, shutdownTracerProvider)
 import OpenTelemetry.Trace qualified as Trace
 import Pages.Charts.Types (MetricsData (..))
-import Pkg.CLIFormat (cleanSummaryValue, evalCond, extractInt, extractRawRows, extractRows, extractTextArray, renderSummaryItems, valToText)
+import Pkg.CLIFormat (cleanSummaryValue, evalCond, extractColIdxMap, extractInt, extractRawRows, extractRows, extractTextArray, renderSummaryCell, valToText)
 import System.Environment (setEnv)
 import System.Process (spawnProcess)
 import UnliftIO.Concurrent (threadDelay)
@@ -962,21 +962,6 @@ renderEventsHuman fmt mFields val = case fmt of
     if null rows then renderEventsTable val mFields else mapM_ (putTextLn . renderEventLine color w) rows
 
 
-renderSummaryCell :: Text -> Text
-renderSummaryCell cell = case AE.eitherDecode @[Text] (encodeUtf8 cell) of
-  Right items -> renderSummaryItems items
-  Left _ -> cell
-
-
-extractColIdxMap :: Maybe AE.Value -> Map Text Int
-extractColIdxMap = \case
-  -- Column indices are non-negative integers from the server; @floor@ over
-  -- @round@ documents that intent (no banker's rounding on a value that's
-  -- already integral).
-  Just (AE.Object obj) -> Map.fromList [(AK.toText k, floor n) | (k, AE.Number n) <- KM.toList obj]
-  _ -> mempty
-
-
 -- | The trace as a waterfall. Under @--json@ the caller renders the envelope
 -- instead; this is only the terminal form.
 renderTraceTree :: (Environment :> es, IOE :> es) => AE.Value -> Eff es ()
@@ -1070,19 +1055,13 @@ drawMetrics opts md = do
   (w, color) <- chartCanvas
   let series = Chart.seriesFromMetrics md
       chartOpts = Chart.defaultChartOpts{Chart.width = w, Chart.height = fromMaybe 14 opts.height, Chart.colorful = color}
-      kind = fromMaybe (if isTimeseries md then "line" else "bar") opts.chartType
-  mapM_ putTextLn case kind of
-    "stat" -> Chart.renderStat chartOpts opts.query md.dataFloat series
-    "bar" -> Chart.renderBars chartOpts (labelledRows md)
-    "table" -> []
-    _ -> Chart.renderTimeseries chartOpts series
-  when (kind == "table") $ renderMetricsTable md
-
-
--- | A leading timestamp column is what makes a result a timeseries; the server
--- emits it whenever the query binned by time.
-isTimeseries :: MetricsData -> Bool
-isTimeseries md = maybe False (\h -> T.toLower h `elem` ["timestamp", "created_at", "time", "bucket"]) (md.headers V.!? 0)
+      -- A leading timestamp column is what makes a result a timeseries.
+      kind = fromMaybe (if maybe False Chart.isTimeColumn (md.headers V.!? 0) then "line" else "bar") opts.chartType
+  case kind of
+    "table" -> renderMetricsTable md
+    "stat" -> mapM_ putTextLn (Chart.renderStat chartOpts opts.query md.dataFloat series)
+    "bar" -> mapM_ putTextLn (Chart.renderBars chartOpts (labelledRows md))
+    _ -> mapM_ putTextLn (Chart.renderTimeseries chartOpts series)
 
 
 -- | @(label, value)@ pairs for a bar chart: first column labels, second sizes.
@@ -1164,7 +1143,9 @@ alertingMonitors :: AE.Value -> [Text]
 alertingMonitors v =
   [ t
   | m <- v ^.. AL._Array . traverse
-  , (m ^? AL.key "alert_state" . AL._String) `elem` [Just "alerting", Just "warning"]
+  , -- Annotated because the doctest runner compiles this module with
+  -- OverloadedLists, under which a bare list literal here is ambiguous.
+  (m ^? AL.key "alert_state" . AL._String) `elem` ([Just "alerting", Just "warning"] :: [Maybe Text])
   , Just t <- [m ^? AL.key "title" . AL._String]
   ]
 
