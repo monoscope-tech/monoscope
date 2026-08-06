@@ -138,13 +138,29 @@ queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (Utils.nonEmptyT -> q
           sqlQuery
           (emptyMetricsFor now fromD toD)
           (runFetchMetrics respDataType sqlQuery now fromD toD authCtx dbSource)
-    Nothing -> do
-      -- Scalar aggregates (summarize with no `by` clause) produce a single
-      -- float row; decoding them with the default DTMetric (timestamp-first
-      -- pivot) raises a type error. Callers that don't pass data_type — the
-      -- CLI's `metrics query ... --assert` flow — get the right decoder here.
-      let respDataType' = if respDataType == DTMetric && isScalarSummarize queryAST then DTFloat else respDataType
-      convertTimestampsToMs <$> queryMetricsWithCache authCtx dbSource respDataType' pid source queryAST sqlQueryCfg (maybeToMonoid queryM) now fromD toD
+    Nothing ->
+      convertTimestampsToMs <$> queryMetricsWithCache authCtx dbSource (decoderFor respDataType queryAST) pid source queryAST sqlQueryCfg (maybeToMonoid queryM) now fromD toD
+
+
+-- | Pick the result decoder when the caller didn't. @DTMetric@ pivots on a
+-- leading timestamp column, so it only fits a query binned by time; used on
+-- anything else it fails with a column-type error rather than returning data.
+-- The browser always sends an explicit @data_type@; API and CLI callers
+-- (@monoscope chart@, @metrics query --assert@) generally don't, so infer it
+-- from the query shape:
+--
+--   * @summarize@ with no @by@      → one scalar row      → 'DTFloat'
+--   * @summarize … by bin(...)@     → a timeseries        → 'DTMetric'
+--   * anything else (@by <field>@,
+--     or no summarize at all)       → label/value rows    → 'DTText'
+--
+-- An explicit @data_type@ always wins.
+decoderFor :: DataType -> [Section] -> DataType
+decoderFor requested queryAST
+  | requested /= DTMetric = requested
+  | isScalarSummarize queryAST = DTFloat
+  | QC.hasSummarizeWithBin queryAST = DTMetric
+  | otherwise = DTText
 
 
 -- | A summarize with no @by@ clause at all — yields one scalar row.

@@ -405,6 +405,10 @@ data ProjectFull = ProjectFull
 data MeResponse = MeResponse
   { projectId :: Projects.ProjectId
   , project :: ProjectSummary
+  , hostUrl :: Text
+  -- ^ Where this deployment's web UI lives. Clients can't derive it: the API
+  -- may sit on a different hostname, and self-hosted installs put it anywhere.
+  -- @monoscope open@ builds its deep links from this.
   }
   deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MeResponse

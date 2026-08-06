@@ -89,10 +89,18 @@ buildGroupBy extCols cols
   | otherwise = let extColsMap = Map.fromList extCols in " GROUP BY " <> T.intercalate "," (map (resolveExtendedColumn extColsMap) cols)
 
 
+-- | Alias → expression for every aggregation, e.g. @count_ → count(*)::float@.
+-- Needed wherever an aggregate is projected as something other than its raw
+-- expression: @ORDER BY count_@ would then sort the projected form (text, in
+-- the categorical branch) instead of the number.
+aggregationAliases :: QueryComponents -> Map.Map Text Text
+aggregationAliases qc = Map.fromList [(alias, expr) | agg <- qc.aggregations, (expr, Just alias) <- [splitTrailingAlias agg]]
+
+
 -- | Build ORDER BY clause with fallback logic
 buildOrderBy :: QueryComponents -> Text
 buildOrderBy qc = case qc.sortFields of
-  Just fields -> "ORDER BY " <> T.intercalate ", " (map displaySortField fields)
+  Just fields -> "ORDER BY " <> T.intercalate ", " (map (displaySortFieldWith (aggregationAliases qc)) fields)
   Nothing -> case qc.finalSummarizeQuery of
     Just binInterval -> bucketOrder binInterval
     Nothing
@@ -191,9 +199,11 @@ applySummarizeByClauseToQC sqlCfg (Just (SummarizeByClause items)) qc =
       ByScalarFunc _ -> False
 
 
--- | Display a sort field for SQL generation
-displaySortField :: SortField -> Text
-displaySortField (SortField field dirM) = display field <> maybe "" ((" " <>) . display) dirM
+-- | Display a sort field for SQL generation, resolving aggregation aliases to
+-- the expressions they stand for.
+displaySortFieldWith :: Map.Map Text Text -> SortField -> Text
+displaySortFieldWith aliases (SortField field dirM) =
+  resolveExtendedColumn aliases (display field) <> maybe "" ((" " <>) . display) dirM
 
 
 ----------------------------------------------------------------------------------
@@ -356,9 +366,25 @@ sqlFromQueryComponents sqlCfg qc =
                       ORDER BY {bucketExpr} DESC {limitClause}|]
         Nothing ->
           let hasAggregationsNoGroupBy = not (null qc.aggregations) && null qc.groupByClause
-              orderCol = fromMaybe timestampCol (listToMaybe qc.groupByClause)
-              selectCols = if null qc.aggregations then qc.select else qc.aggregations
-              orderClause = if hasAggregationsNoGroupBy then "" else " ORDER BY " <> orderCol <> " DESC"
+              resolve = resolveExtendedColumn (Map.fromList qc.extendedColumns)
+              -- `summarize <agg> by <field>` with no time bin has to project the
+              -- grouping column alongside the aggregate, exactly as the binned
+              -- branch above emits (bucket, group, agg). Selecting the aggregate
+              -- alone yields a bare column of numbers with nothing saying which
+              -- group each belongs to — unreadable, and no decoder accepts it.
+              groupCols = ["COALESCE(" <> resolve c <> "::text, 'null')" | c <- qc.groupByClause]
+              -- The DTText decoder this shape is read with takes every column as
+              -- text (see Charts.decoderFor), so the aggregate is cast too —
+              -- otherwise a float4 count fails to decode and the whole query
+              -- reports as failed.
+              asText col = let (expr, aliasM) = splitTrailingAlias col in "(" <> expr <> ")::text" <> maybe "" (" AS " <>) aliasM
+              selectCols
+                | null qc.aggregations = qc.select
+                | otherwise = groupCols <> map asText qc.aggregations
+              -- buildOrderBy honours an explicit `| sort by`; hand-rolling the
+              -- clause here silently dropped it, so `summarize … by svc | sort
+              -- by count_ desc` came back alphabetical.
+              orderClause = if hasAggregationsNoGroupBy then "" else " " <> buildOrderBy qc
               limitPart = if hasAggregationsNoGroupBy then "" else limitClause
            in [fmt|SELECT {T.intercalate "," selectCols} FROM {fromTable} WHERE {buildWhere}
               {groupByClause}{orderClause} {limitPart}|]

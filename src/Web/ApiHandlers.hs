@@ -750,7 +750,8 @@ toProjectFull p emails =
 apiMe :: Projects.ProjectId -> ATBaseCtx MeResponse
 apiMe pid = do
   p <- notFoundOr "Project not found" =<< Projects.projectById pid
-  pure MeResponse{projectId = pid, project = toProjectSummary p}
+  ctx <- ask @AuthContext
+  pure MeResponse{projectId = pid, project = toProjectSummary p, hostUrl = ctx.config.hostUrl}
 
 
 apiProjectGet :: Projects.ProjectId -> ATBaseCtx ProjectFull

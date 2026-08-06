@@ -403,6 +403,7 @@ library
     , minio-hs
     , mmark
     , monad-time-effectful
+    , monoscope-cli
     , monoscope-shared
     , mtl
     , neat-interpolation
@@ -684,8 +685,10 @@ test-suite integration-tests
     , monad-time-effectful
     , monoscope
     , monoscope-cli
+    , monoscope-shared
     , odd-jobs
     , openapi3
+    , optparse-applicative
     , pg-entity
     , pg-transact
     , postgresql-simple
@@ -696,6 +699,7 @@ test-suite integration-tests
     , servant
     , servant-htmx
     , servant-server
+    , silently
     , stm
     , text
     , these
@@ -1020,6 +1024,7 @@ test-suite test-dev
     , minio-hs
     , mmark
     , monad-time-effectful
+    , monoscope-cli
     , monoscope-shared
     , mtl
     , neat-interpolation
@@ -1162,6 +1167,7 @@ test-suite unit-tests
     , log-effectful
     , lucid
     , monoscope
+    , monoscope-shared
     , neat-interpolation
     , relude >=1.2.0.0
     , text

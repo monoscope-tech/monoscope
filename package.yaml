@@ -198,6 +198,10 @@ tests:
       - base
       - monoscope
       - monoscope-cli
+      - monoscope-shared
+      # CLI.Harness drives the real CLI parser and captures its stdout.
+      - optparse-applicative
+      - silently
       - these
       - hs-opentelemetry-instrumentation-auto
       - hspec
@@ -269,6 +273,7 @@ tests:
       - -O0
     dependencies:
       - monoscope
+      - monoscope-shared
       - base # System.ServerSpec imports Control.Concurrent/Exception directly (not via relude)
       - hs-opentelemetry-instrumentation-auto
       - hspec

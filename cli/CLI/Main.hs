@@ -58,6 +58,8 @@ data Command
   | TelemetryGenCmd TelemetryGenOpts
   | SendEventCmd SendEventOpts
   | ChartCmd ChartCmdOpts
+  | StatusCmd StatusOpts
+  | OpenCmd OpenOpts
 
 
 data ProjectCommand
@@ -246,6 +248,8 @@ commandParser =
           , command "traces" (info (EventsCmd (Just "trace") <$> eventsParser <**> helper) (progDesc "Search traces"))
           , command "metrics" (info (MetricsCmd <$> metricsParser <**> helper) (progDesc "Query and chart metrics"))
           , command "chart" (info (ChartCmd <$> chartParser <**> helper) (progDesc "Chart any KQL query in the terminal" <> footer chartExamples))
+          , command "status" (info (StatusCmd <$> statusParser <**> helper) (progDesc "One-screen project health: throughput, errors, open issues, alerting monitors"))
+          , command "open" (info (OpenCmd <$> openParser <**> helper) (progDesc "Open (or print) the web UI link for a resource" <> footer openExamples))
           , command "services" (info (ServicesCmd <$> servicesParser <**> helper) (progDesc "List services"))
           , command "config" (info (ConfigCmd <$> configParser <**> helper) (progDesc "Manage configuration"))
           , command "monitors" (info (MonitorsCmd <$> monitorsParser <**> helper) (progDesc "Manage alert monitors"))
@@ -574,6 +578,34 @@ dashRenderExamples =
     , ""
     , "Widgets are drawn in their grid positions, so the terminal layout matches"
     , "the browser. Piping (or --json) emits the resolved data instead of ANSI."
+    ]
+
+
+statusParser :: Parser StatusOpts
+statusParser = StatusOpts <$> optional (strOption (long "since" <> metavar "DURATION" <> help "Window to summarise (default: 1h)"))
+
+
+openParser :: Parser OpenOpts
+openParser =
+  OpenOpts
+    <$> strArgument (metavar "TARGET" <> help "logs|trace|issue|dashboard|monitors|endpoints|project")
+    <*> optional (strArgument (metavar "ID_OR_QUERY" <> help "Trace/issue/dashboard id, or a KQL query for `logs`"))
+    <*> optional (strOption (long "since" <> metavar "DURATION" <> help "Time range to open with"))
+    <*> switch (long "print" <> help "Print the URL without launching a browser")
+
+
+openExamples :: String
+openExamples =
+  intercalate
+    "\n"
+    [ "Examples:"
+    , "  monoscope open trace a1b2c3d4                      # the trace waterfall, in the browser"
+    , "  monoscope open issue <issue-id>"
+    , "  monoscope open dashboard <dashboard-id>"
+    , "  monoscope open logs 'severity.text==\"ERROR\"' --since 6h"
+    , "  monoscope open project --print                     # just print the link, e.g. to paste in Slack"
+    , ""
+    , "The host comes from the server (/api/v1/me), so self-hosted installs work."
     ]
 
 
@@ -1067,6 +1099,8 @@ run version global = \case
   TelemetryGenCmd opts -> withCfgMode global $ \cfg _ -> runTelemetryGen cfg opts
   SendEventCmd opts -> withCfgMode global $ \cfg _ -> runSendEvent cfg opts
   ChartCmd opts -> withCfgMode global $ \cfg mode -> runChart cfg opts mode
+  StatusCmd opts -> withCfgMode global $ \cfg mode -> runStatus cfg opts mode
+  OpenCmd opts -> withCfgMode global $ \cfg _ -> runOpen cfg opts
 
 
 -- | Resolve and cache the output mode for this process. The cache (Core.hs

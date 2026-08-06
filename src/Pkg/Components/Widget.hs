@@ -216,11 +216,11 @@ data WidgetDataset = WidgetDataset
 -- count per auto-sized time bin. Widgets that already summarize into bins are
 -- passed through untouched.
 --
--- >>> chartQuery def{query = Just "severity==\"ERROR\""}
+-- >>> chartQuery (def & #query ?~ "severity==\"ERROR\"")
 -- Just "severity==\"ERROR\" | summarize count(*) by bin_auto(timestamp)"
--- >>> chartQuery def{query = Just "summarize count(*) by bin_auto(timestamp)"}
+-- >>> chartQuery (def & #query ?~ "summarize count(*) by bin_auto(timestamp)")
 -- Just "summarize count(*) by bin_auto(timestamp)"
--- >>> chartQuery def{query = Nothing}
+-- >>> chartQuery (def :: Widget)
 -- Nothing
 chartQuery :: Widget -> Maybe Text
 chartQuery w =

@@ -4,6 +4,7 @@
 module Main (main) where
 
 import CLI.Chart
+import CLI.Commands (OpenTarget (..), parseOpenTarget, uiPath)
 import CLI.Dashboard qualified as Dash
 import CLI.LogView
 import Data.Aeson qualified as AE
@@ -89,6 +90,21 @@ main = hspec do
 
     it "still renders when a span's parent is missing from the result" do
       renderWaterfall False 80 (eventRows orphanEvent) `shouldSatisfy` ((== 2) . length)
+
+  describe "CLI.Commands (open)" do
+    it "builds deep links for each target" do
+      uiPath "PID" OpenDashboard (Just "d1") Nothing `shouldBe` "/p/PID/dashboards/d1"
+      uiPath "PID" OpenIssue (Just "i1") Nothing `shouldBe` "/p/PID/issues/i1"
+      uiPath "PID" OpenProject Nothing Nothing `shouldBe` "/p/PID"
+      uiPath "PID" OpenMonitors Nothing (Just "24h") `shouldBe` "/p/PID/monitors?since=24h"
+
+    it "percent-encodes a KQL query into the log explorer link" do
+      uiPath "PID" OpenLogs (Just "severity.text==\"ERROR\"") (Just "6h")
+        `shouldBe` "/p/PID/log_explorer?query=severity.text%3D%3D%22ERROR%22&since=6h"
+
+    it "rejects an unknown target" do
+      parseOpenTarget "trace" `shouldBe` Just OpenTrace
+      parseOpenTarget "nope" `shouldBe` Nothing
 
   describe "CLI.Dashboard" do
     it "puts side-by-side widgets on the same terminal row" do

@@ -94,6 +94,7 @@ library
     , brick
     , bytestring
     , containers
+    , data-default
     , deriving-aeson
     , directory
     , effectful

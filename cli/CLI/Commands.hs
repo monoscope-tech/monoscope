@@ -30,6 +30,13 @@ module CLI.Commands (
   ChartCmdOpts (..),
   runDashboardRender,
   DashboardRenderOpts (..),
+  runOpen,
+  OpenOpts (..),
+  OpenTarget (..),
+  parseOpenTarget,
+  uiPath,
+  runStatus,
+  StatusOpts (..),
   -- Telemetry generation
   runTelemetryGen,
   TelemetryGenOpts (..),
@@ -44,17 +51,20 @@ import Relude
 
 import CLI.Chart qualified as Chart
 import CLI.Config (CLIConfig (..), ConfigKey (..), allConfigKeys, configDir, configFilePath, configKeyText, parseConfigKey, removeToken, resolveConfig, saveToken, setConfigValue)
-import CLI.Core (OutputMode (..), apiGet, apiPostUnauth, isInteractiveTTY, isJsonOutput, printDebug, printError, renderJSON, renderTable, renderWith, withAPIResult)
+import CLI.Core (OutputMode (..), apiGet, apiGetJson, apiPostUnauth, isInteractiveTTY, isJsonOutput, printDebug, printError, renderAPIError, renderJSON, renderTable, renderWith, withAPIResult)
 import CLI.Dashboard qualified as Dash
 import CLI.LogView (EventRow (..), LogFormat (..), eventRows, parseLogFormat, renderEventLine, renderLogfmt, renderWaterfall)
 import CLI.UI (inputForm, selectFromList, withSpinner)
 import CLI.Validate (validateAndNormalizeKind, validateDurationOrDie, validateQueryOrDie)
 import Control.Exception (bracket)
-import Control.Lens ((%~), (^?))
+import Control.Lens ((%~), (^..), (^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AK
 import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Lens qualified as AL
+import Data.ByteString qualified as BS
+import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
+import Data.Default (def)
 import Data.Effectful.Wreq (HTTP, runHTTPWreq)
 import Data.HashMap.Strict qualified as HM
 import Data.List.Extra (chunksOf)
@@ -70,6 +80,7 @@ import Effectful
 import Effectful.Environment (Environment)
 import Effectful.Environment qualified as Env
 import Effectful.FileSystem (FileSystem)
+import Numeric (showHex)
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Context.ThreadLocal qualified as OtelCtx
 import OpenTelemetry.Trace (SpanStatus (..), Tracer, TracerOptions (..), defaultSpanArguments, initializeGlobalTracerProvider, makeTracer, shutdownTracerProvider)
@@ -1097,6 +1108,173 @@ chartCanvas = do
   -- from a script or a pipe; only ask when we already know we have a terminal.
   szM <- ifM (liftIO (hIsTerminalDevice stdout)) (liftIO ANSI.getTerminalSize) (pure Nothing)
   pure (maybe 100 (max 40 . snd) szM, tty && not json)
+
+
+newtype StatusOpts = StatusOpts {since :: Maybe Text}
+  deriving stock (Show)
+
+
+-- | One screen answering "is anything wrong right now": throughput and error
+-- rate over the window, the noisiest services, open issues and any monitor that
+-- is currently alerting. It is the first thing you want after `ssh`-ing into a
+-- terminal, and it is four requests rather than four commands.
+runStatus :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> StatusOpts -> OutputMode -> Eff es ()
+runStatus cfg opts mode = do
+  validateDurationOrDie "--since" opts.since
+  let since = fromMaybe "1h" opts.since
+      -- One panel failing shouldn't take the overview down, but it must not
+      -- look like "nothing happened" either: the reason is reported inline.
+      metric q =
+        apiGetJson @_ @MetricsData cfg "/api/v1/metrics" (metricsParams q (Just since) Nothing Nothing) >>= \case
+          Left err -> def{error = Just (renderAPIError err)} <$ pass
+          Right md -> pure md
+  volume <- metric "summarize count(*) by bin_auto(timestamp)"
+  errors <- metric "summarize count(*) by bin_auto(timestamp) | where errors == true"
+  byService <- metric "summarize count(*) by resource.service.name | sort by count_ desc | take 8"
+  issues <- either (const AE.Null) Relude.id <$> apiGetJson @_ @AE.Value cfg "/api/v1/issues" [("status", "open"), ("per_page", "5")]
+  monitors <- either (const AE.Null) Relude.id <$> apiGetJson @_ @AE.Value cfg "/api/v1/monitors" []
+  let summary =
+        AE.object
+          [ "since" AE..= since
+          , "events" AE..= sum (mapMaybe (join . (V.!? 1)) (V.toList volume.dataset))
+          , "errors" AE..= sum (mapMaybe (join . (V.!? 1)) (V.toList errors.dataset))
+          , -- \^.. not ^?: `length` on a Maybe counts the Just, not the array.
+            "open_issues" AE..= length (issues ^.. AL.key "data" . AL._Array . traverse)
+          , "alerting_monitors" AE..= alertingMonitors monitors
+          ]
+  renderWith mode summary do
+    (w, color) <- chartCanvas
+    let chartOpts = Chart.defaultChartOpts{Chart.width = w, Chart.height = 8, Chart.colorful = color}
+        section t = putTextLn "" >> putTextLn (Chart.bold color t)
+        panel title md draw = do
+          section title
+          maybe (mapM_ putTextLn (draw md)) (\e -> putTextLn (Chart.colorize color (Chart.seriesColor 6) ("  unavailable: " <> e))) md.error
+    panel ("Events  ·  last " <> since) volume (Chart.renderTimeseries chartOpts . Chart.seriesFromMetrics)
+    panel "Errors" errors (Chart.renderTimeseries chartOpts{Chart.height = 5} . Chart.seriesFromMetrics)
+    panel "Busiest services" byService (Chart.renderBars chartOpts . labelledRows)
+    section "Open issues"
+    putTextLn $ case issues ^.. AL.key "data" . AL._Array . traverse . AL.key "title" . AL._String of
+      [] -> Chart.dim color "  none"
+      ts -> T.unlines ["  " <> Chart.ellipsize (w - 2) t | t <- take 5 ts]
+    let alerting = alertingMonitors monitors
+    section "Monitors"
+    putTextLn
+      $ if null alerting
+        then Chart.dim color "  all quiet"
+        else T.unlines ["  " <> Chart.colorize color (Chart.seriesColor 6) ("ALERTING  " <> t) | t <- alerting]
+
+
+-- | Titles of monitors currently in an alerting state.
+alertingMonitors :: AE.Value -> [Text]
+alertingMonitors v =
+  [ t
+  | m <- v ^.. AL._Array . traverse
+  , (m ^? AL.key "alert_state" . AL._String) `elem` [Just "alerting", Just "warning"]
+  , Just t <- [m ^? AL.key "title" . AL._String]
+  ]
+
+
+-- | Somewhere in the web UI worth linking to. Enumerated rather than taking a
+-- free-form path so a typo is a parse error and the URL shapes live in one
+-- place ('uiPath').
+data OpenTarget = OpenLogs | OpenTrace | OpenIssue | OpenDashboard | OpenMonitors | OpenEndpoints | OpenProject
+  deriving stock (Bounded, Enum, Eq, Show)
+
+
+-- | >>> map parseOpenTarget ["logs", "trace", "nope"]
+-- [Just OpenLogs,Just OpenTrace,Nothing]
+parseOpenTarget :: Text -> Maybe OpenTarget
+parseOpenTarget = \case
+  "logs" -> Just OpenLogs
+  "trace" -> Just OpenTrace
+  "issue" -> Just OpenIssue
+  "dashboard" -> Just OpenDashboard
+  "monitors" -> Just OpenMonitors
+  "endpoints" -> Just OpenEndpoints
+  "project" -> Just OpenProject
+  _ -> Nothing
+
+
+openTargetNames :: Text
+openTargetNames = T.intercalate "|" [t | tgt <- universe, let t = targetName tgt]
+  where
+    targetName = \case
+      OpenLogs -> "logs"
+      OpenTrace -> "trace"
+      OpenIssue -> "issue"
+      OpenDashboard -> "dashboard"
+      OpenMonitors -> "monitors"
+      OpenEndpoints -> "endpoints"
+      OpenProject -> "project"
+
+
+-- | Path (with query string) for a target, relative to the deployment's host.
+--
+-- >>> uiPath "PID" OpenDashboard (Just "d1") Nothing
+-- "/p/PID/dashboards/d1"
+-- >>> uiPath "PID" OpenTrace (Just "abc") Nothing
+-- "/p/PID/log_explorer?query=trace_id%3D%3D%22abc%22&showTrace=abc"
+-- >>> uiPath "PID" OpenLogs Nothing (Just "24h")
+-- "/p/PID/log_explorer?since=24h"
+uiPath :: Text -> OpenTarget -> Maybe Text -> Maybe Text -> Text
+uiPath pid target argM sinceM =
+  "/p/" <> pid <> case target of
+    OpenProject -> ""
+    OpenMonitors -> "/monitors" <> qs []
+    OpenEndpoints -> "/api_catalog" <> qs []
+    OpenIssue -> "/issues" <> maybe "" ("/" <>) argM
+    OpenDashboard -> "/dashboards" <> maybe "" ("/" <>) argM
+    OpenLogs -> "/log_explorer" <> qs (foldMap (\q -> [("query", q)]) argM)
+    OpenTrace -> "/log_explorer" <> qs (foldMap (\t -> [("query", "trace_id==\"" <> t <> "\""), ("showTrace", t)]) argM)
+  where
+    qs extra = case extra <> foldMap (\v -> [("since", v)]) sinceM of
+      [] -> ""
+      ps -> "?" <> T.intercalate "&" [k <> "=" <> urlEncode v | (k, v) <- ps]
+
+
+-- | Percent-encode everything outside the unreserved set. Deliberately
+-- conservative — these strings end up in a URL handed to a browser, and KQL is
+-- full of quotes, spaces and comparison operators.
+--
+-- >>> urlEncode "trace_id==\"a b\""
+-- "trace_id%3D%3D%22a%20b%22"
+urlEncode :: Text -> Text
+urlEncode = T.concatMap \c ->
+  if isAsciiUpper c || isAsciiLower c || isDigit c || c `elem` ("-_.~" :: [Char])
+    then one c
+    else T.concat ["%" <> T.justifyRight 2 '0' (T.toUpper (toText (showHex b ""))) | b <- BS.unpack (encodeUtf8 (one c :: Text))]
+
+
+data OpenOpts = OpenOpts
+  { target :: Text
+  , arg :: Maybe Text
+  , since :: Maybe Text
+  , printOnly :: Bool
+  }
+  deriving stock (Show)
+
+
+-- | Print (and, unless @--print@, launch) the web UI link for a resource. The
+-- host comes from @\/api\/v1\/me@ rather than being derived from the API URL:
+-- the two can differ, and a self-hosted install can put the UI anywhere.
+runOpen :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> OpenOpts -> Eff es ()
+runOpen cfg opts = do
+  target <-
+    parseOpenTarget opts.target `whenNothing` do
+      printError $ "unknown target '" <> opts.target <> "'; expected one of: " <> openTargetNames
+      liftIO exitFailure
+  withAPIResult cfg "/api/v1/me" [] \val -> case AE.fromJSON @MeInfo val of
+    AE.Error msg -> printError ("could not read /api/v1/me: " <> toText msg) >> liftIO exitFailure
+    AE.Success me -> do
+      let url = T.dropWhileEnd (== '/') me.hostUrl <> uiPath me.projectId target opts.arg opts.since
+      putTextLn url
+      unless opts.printOnly $ liftIO (tryOpenBrowser (toString url))
+
+
+-- | Just the fields of @/api/v1/me@ the CLI uses.
+data MeInfo = MeInfo {projectId :: Text, hostUrl :: Text}
+  deriving stock (Generic)
+  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] MeInfo
 
 
 data DashboardRenderOpts = DashboardRenderOpts

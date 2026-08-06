@@ -136,6 +136,38 @@ take `--format/-f` to pick the terminal shape:
 
 ---
 
+## Status
+
+One screen answering "is anything wrong right now" — throughput and error rate
+over the window, the busiest services, open issues, and any monitor currently
+alerting. Four requests instead of four commands:
+
+```bash
+monoscope status              # last hour
+monoscope status --since 24h
+monoscope status --json       # {since, events, errors, open_issues, alerting_monitors}
+```
+
+A panel whose query fails says so inline rather than rendering as an empty
+chart — an unavailable panel and a quiet one are not the same thing.
+
+## Open in the browser
+
+```bash
+monoscope open trace a1b2c3d4                    # the trace waterfall in the UI
+monoscope open issue <issue-id>
+monoscope open dashboard <dashboard-id>
+monoscope open logs 'severity.text=="ERROR"' --since 6h
+monoscope open monitors
+monoscope open project --print                   # print the link, don't launch
+```
+
+The host is read from the server (`/api/v1/me`), not guessed from the API URL,
+so self-hosted deployments and split API/UI hostnames both work. `--print`
+gives you a link to paste into an incident channel.
+
+---
+
 ## Logs & Traces
 
 Logs and traces share the same event storage. `logs` and `traces` are aliases for `events` with a kind filter pre-applied.

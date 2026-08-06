@@ -5,7 +5,6 @@
 module CLI.Harness (runCLILifecycle) where
 
 import CLI.Main qualified as CLIMain
-import Control.Exception.Safe qualified as Safe
 import Data.UUID qualified as UUID
 import Data.Version (makeVersion)
 import Effectful (runEff)
@@ -15,8 +14,9 @@ import Options.Applicative qualified as OA
 import Pkg.TestUtils (TestResources, runHTTPtoServant)
 import Relude
 import System.Environment (setEnv, unsetEnv)
+import System.Exit (ExitCode (..))
 import System.IO.Silently qualified as Silently
-import UnliftIO.Exception (try)
+import UnliftIO.Exception (bracket_, try)
 
 
 -- | Drive the real CLI top-down: the actual optparse parser, the actual command
@@ -29,7 +29,7 @@ runCLILifecycle tr args = do
   -- MONOSCOPE_TEST_API_KEY lets a test inject a real project key (needed by
   -- ingestion paths that authenticate the key, e.g. send-event → OTLP).
   key <- fromMaybe "test-key" <$> lookupEnv "MONOSCOPE_TEST_API_KEY"
-  Safe.bracket_
+  bracket_
     (setEnv "MONOSCOPE_API_KEY" key >> setEnv "MONOSCOPE_PROJECT" (UUID.toString UUID.nil))
     (unsetEnv "MONOSCOPE_API_KEY" >> unsetEnv "MONOSCOPE_PROJECT")
     do
