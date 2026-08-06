@@ -774,7 +774,7 @@ prettyPrintCount n
 -- >>> sanitizeBackendError "FATAL:  the database system is starting up"
 -- "Database temporarily unavailable \8212 retrying may help"
 -- >>> sanitizeBackendError "Hasql: pool acquisition timeout"
--- "Database temporarily unavailable — retrying may help"
+-- "Database temporarily unavailable \8212 retrying may help"
 -- >>> sanitizeBackendError "ERROR: column \"foo\" does not exist"
 -- "Column not found"
 -- >>> sanitizeBackendError "Schema error: No field named bar"
