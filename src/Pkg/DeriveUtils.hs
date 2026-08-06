@@ -419,11 +419,9 @@ viteAssetFile key = do
       manifest = "static" <> dir <> "manifest.json"
   TH.qAddDependentFile manifest
   chunks <- TH.runIO $ AE.eitherDecodeFileStrict' @AE.Object manifest
-  case chunks of
-    Left err -> fail $ "viteAssetFile: unreadable " <> manifest <> ": " <> err
-    Right cs -> case AET.parseMaybe (AE.withObject "chunk" (AE..: "file")) =<< KEM.lookup (fromString key) cs of
-      Nothing -> fail $ "viteAssetFile: no \"file\" for key " <> key <> " in " <> manifest
-      Just file -> TH.lift $ dir <> toString @Text file
+  either (fail . (("viteAssetFile " <> manifest <> ": ") <>)) (TH.lift . (dir <>) . toString @Text)
+    $ chunks
+    >>= AET.parseEither (\o -> o AE..: fromString key >>= (AE..: "file"))
 
 
 -- | Format a list of Floats as a PostgreSQL array literal, e.g. "{1.0,2.0,3.0}"

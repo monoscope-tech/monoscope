@@ -585,8 +585,8 @@ queryEvents pid queryM sinceM fromM toM sourceM limitM withChildrenM includeAttr
       -- trace-tree rows include synth headers + descendants.
       hasKqlLimit = any (\case TakeCommand{} -> True; _ -> False) queryAST
       queryAST' = if hasKqlLimit then queryAST else queryAST <> [TakeCommand (min defaultQueryLimit (fromMaybe 100 limitM))]
-  authCtx <- Effectful.Reader.Static.ask @AuthContext
-  result <- LogQueries.selectLogTable authCtx.env.enableTimefusionReads pid queryAST' (toQText queryAST') Nothing (fromD, toD) ["attributes" | fromMaybe False includeAttributesM] (parseMaybe pSource =<< sourceM) Nothing
+  enableTfReads <- (.env.enableTimefusionReads) <$> Effectful.Reader.Static.ask @AuthContext
+  result <- LogQueries.selectLogTable enableTfReads pid queryAST' (toQText queryAST') Nothing (fromD, toD) ["attributes" | fromMaybe False includeAttributesM] (parseMaybe pSource =<< sourceM) Nothing
   case result of
     Left err -> throwError $ translateQueryError err
     -- Default to exact-match (no trace expansion); UI passes True via apiLogH.

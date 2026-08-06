@@ -249,12 +249,9 @@ validateSqlQuery query =
           )
 
 
--- | @useTimefusion@ routes the read to the TimeFusion pool, same as
--- 'executeSecuredQuery' and 'fetchSessions'. It is a parameter rather than
--- something the callers wrap around this function: when the routing lived at the
--- call sites, the log-explorer page wrapped and the public @/api/v1/events@
--- handler did not, so the API and the bots read Postgres — empty for TF-only
--- projects — and answered every query with zero rows.
+-- | @useTimefusion@ (from @env.enableTimefusionReads@) routes the read to the TimeFusion
+-- pool, as in 'executeSecuredQuery'. It is a parameter, not a wrapper the callers apply,
+-- because callers that forgot it silently read the empty Postgres side.
 selectLogTable :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => Bool -> Projects.ProjectId -> [Section] -> Text -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector AE.Value), [Text], Int))
 selectLogTable useTimefusion pid queryAST queryText cursorM dateRange projectedColsByUser source targetSpansM = do
   now <- Time.currentTime

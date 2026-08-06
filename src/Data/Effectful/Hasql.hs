@@ -98,11 +98,9 @@ isTransientHasqlError (HasqlException ue) = isTransientUsageError ue
 
 -- | Exported so callers stop repeating @maybe False isTransientHasqlError . fromException@.
 --
--- Matches on @AnnotatedException HasqlException@, not @HasqlException@: every retry
--- site here sits outside a 'Ann.checkpoint', so the exception it inspects is already
--- wrapped and a plain 'fromException' silently returns Nothing — the retry never fires
--- and an infra blip surfaces as a user-visible failure. The instance's second clause
--- matches a bare 'HasqlException' too, so this subsumes both shapes.
+-- Matches @AnnotatedException HasqlException@: every retry site sits outside a
+-- 'Ann.checkpoint', so a plain 'fromException' returns Nothing and the retry never fires.
+-- The instance's second clause matches a bare 'HasqlException', so this covers both.
 --
 -- >>> isTransientException (toException (HasqlException AcquisitionTimeoutUsageError))
 -- True
