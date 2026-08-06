@@ -247,10 +247,21 @@ jobs:
             GIT_HASH=${{ github.sha }}
             GIT_COMMIT_DATE=${{ github.event.head_commit.timestamp || 'unknown' }}
 
+      # Pinned deliberately, not using caprover/deploy-from-github: that action
+      # does an unpinned `npm i -g caprover` at image-build time, so an upstream
+      # release lands straight in the deploy path. caprover 2.4.0 (2026-08-05)
+      # bumped commander to v12, which rejects the duplicate `-t` its own deploy
+      # command registers — every deploy crashed on startup for two days before
+      # 2.4.3 fixed it. 2.3.1 is the last version on the permissive commander and
+      # is what was deploying successfully before that. Bump it on purpose.
       - name: Deploy Image to CapRrover
-        uses: caprover/deploy-from-github@v1.2.0
-        with:
-          server: '${{ secrets.CAPTAINROVER_SERVER }}'
-          app: '${{ secrets.CAPTAINROVER_APP_NAME }}'
-          token: '${{ secrets.CAPTAINROVER_APP_TOKEN }}'
-          image: 'ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:${{ github.sha }}'
+        run: |
+          npx -y caprover@2.3.1 deploy \
+            --caproverUrl "$CAPROVER_URL" \
+            --appToken "$CAPROVER_APP_TOKEN" \
+            --appName "$CAPROVER_APP" \
+            --imageName "ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:${{ github.sha }}"
+        env:
+          CAPROVER_URL: ${{ secrets.CAPTAINROVER_SERVER }}
+          CAPROVER_APP: ${{ secrets.CAPTAINROVER_APP_NAME }}
+          CAPROVER_APP_TOKEN: ${{ secrets.CAPTAINROVER_APP_TOKEN }}

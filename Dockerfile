@@ -30,8 +30,13 @@ RUN rm -rf /var/lib/apt/lists/* || true
 
 WORKDIR /build
 
-# Copy cabal files for dependency caching
+# Copy cabal files for dependency caching. cabal.project lists shared/ and cli/
+# as packages, so their .cabal files have to be here too — cabal refuses to
+# resolve anything if a listed package location is missing, and this stage runs
+# before the source COPYs below.
 COPY *.cabal cabal.project* Setup.hs LICENSE README.md auto-instrument-config.toml ./
+COPY shared/*.cabal ./shared/
+COPY cli/*.cabal ./cli/
 
 # Production profiling (Haskell counterpart of timefusion's --features profiling):
 # prof-way build with LATE cost centres on monoscope code only — deps are built
@@ -47,6 +52,7 @@ RUN --mount=type=cache,target=/root/.cabal/store \
 # Copy source code
 COPY package.yaml ./
 COPY src ./src
+COPY shared ./shared
 COPY test ./test
 COPY app ./app
 COPY cli ./cli
