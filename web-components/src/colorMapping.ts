@@ -312,3 +312,10 @@ export function getContrastTextColor(hexColor: string): string {
 export function tailwindToHex(tailwindClass: string): string {
   return TAILWIND_TO_HEX[tailwindClass] || THEME_COLORS[0];
 }
+
+// One service → one hex, shared by waterfall, timeline and service map. The map
+// is the server-rendered getServiceColors output (Tailwind class names).
+export const resolveColor = (service: string, colorsMap: Record<string, string>): string => {
+  const tw = colorsMap[service] || getSeriesColor(service, 'service');
+  return tw.startsWith('#') ? tw : tailwindToHex(tw);
+};

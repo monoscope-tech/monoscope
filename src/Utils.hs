@@ -56,6 +56,8 @@ module Utils (
   prettyTimeShort,
   formatOffset,
   navTabAttrs,
+  explorerNavTabs_,
+  explorerTabs,
   popoverTrigger_,
   popoverPanel_,
   fieldMenuPanel_,
@@ -1441,6 +1443,32 @@ navTabAttrs =
   , hxSwap_ "morph"
   , [__|on click set my.preloadState to 'DONE'|]
   ]
+
+
+-- | The Explorer section's tab strip, shared by every page in the section so a new tab is
+-- added in one place. @active@ is the label of the current page.
+explorerNavTabs_ :: Projects.ProjectId -> Text -> Html ()
+explorerNavTabs_ pid active =
+  div_ [class_ "tabs tabs-box tabs-outline items-center", role_ "tablist"]
+    $ forM_ explorerTabs
+    $ \(label, path) ->
+      let isActive = label == active
+       in a_
+            ( [ href_ $ "/p/" <> pid.toText <> path
+              , role_ "tab"
+              , class_ $ "tab h-auto!" <> bool "" " tab-active text-textStrong" isActive
+              , term "aria-selected" (bool "false" "true" isActive)
+              ]
+                <> [term "aria-current" "page" | isActive]
+                <> navTabAttrs
+            )
+            (toHtml label)
+
+
+-- | Single source of truth for the Explorer section, used by both the tab strip and the
+-- sidebar flyout so the two can't drift.
+explorerTabs :: [(Text, Text)]
+explorerTabs = [("Events", "/log_explorer"), ("Metrics", "/metrics"), ("Service Map", "/service_map")]
 
 
 -- CSS anchor-positioned popover attrs (DaisyUI popover-target pattern), replacing focus-based `.dropdown`.

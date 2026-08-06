@@ -2,6 +2,7 @@ module Pages.Telemetry (
   -- Metrics
   metricsOverViewGetH,
   metricDetailsGetH,
+  metricServicesGetH,
   MetricsOverViewGet (..),
   metricBreakdownGetH,
   metricCardGetH,
@@ -34,6 +35,8 @@ import Lucid.Hyperscript (__)
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.ServiceGraph (serviceMapNodeCap)
+import Models.Telemetry.ServiceGraph qualified as ServiceGraph
 import Models.Telemetry.Telemetry (SpanStatus (SSError))
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
@@ -42,6 +45,7 @@ import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..))
 import Pages.Components qualified as Components
 import Pages.LogExplorer.LogItem (getRequestDetails, getServiceColor, getServiceName, spanHasErrors)
 import Pages.LogExplorer.LogItem qualified as LogItem
+import Pkg.Components.ServiceMap (serviceMapPanel_)
 import Pkg.Components.Table (Table (..))
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.TimePicker qualified as TimePicker
@@ -50,18 +54,18 @@ import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Tracing (withSpan_)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (LoadingSize (..), LoadingType (..), drawerLoadAttrs_, faSprite_, getDurationNSMS, getServiceColors, loadingIndicator_, onpointerdown_, parseTime, prettyPrintCount, utcTimeToNanoseconds)
+import Utils (LoadingSize (..), LoadingType (..), drawerLoadAttrs_, explorerNavTabs_, faSprite_, getDurationNSMS, getServiceColors, loadingIndicator_, onpointerdown_, parseTime, popoverPanel_, popoverTrigger_, prettyPrintCount, utcTimeToNanoseconds)
 
 
 data MetricsOverViewGet
   = MetricsOVDataPointMain (PageCtx (Projects.ProjectId, V.Vector Telemetry.MetricDataPoint, Map Text (Int, Int, Int)))
-  | MetricsOVChartsMain (PageCtx (Projects.ProjectId, V.Vector Telemetry.MetricChartListData, Map Text (V.Vector Text), V.Vector Telemetry.MetricChartListData, V.Vector Text, Text, Text, Int, Maybe Text))
+  | MetricsOVChartsMain (PageCtx (Projects.ProjectId, V.Vector Telemetry.MetricChartListData, Map Text (V.Vector Text), V.Vector Telemetry.MetricChartListData, Text, Text, Int, Maybe Text))
   | MetricsOVChartsPaginated (Projects.ProjectId, V.Vector Telemetry.MetricChartListData, Map Text (V.Vector Text), Text, Maybe Text)
 
 
 instance ToHtml MetricsOverViewGet where
   toHtml (MetricsOVDataPointMain (PageCtx bwconf (pid, datapoints, refCounts))) = toHtml $ PageCtx bwconf $ dataPointsPage pid datapoints refCounts
-  toHtml (MetricsOVChartsMain (PageCtx bwconf (pid, mList, labels, inactive, serviceNames, source, prefix, activeCount, nextUrl))) = toHtml $ PageCtx bwconf $ chartsPage pid mList labels inactive serviceNames source prefix activeCount nextUrl
+  toHtml (MetricsOVChartsMain (PageCtx bwconf (pid, mList, labels, inactive, source, prefix, activeCount, nextUrl))) = toHtml $ PageCtx bwconf $ chartsPage pid mList labels inactive source prefix activeCount nextUrl
   toHtml (MetricsOVChartsPaginated (pid, mList, labels, source, nextUrl)) = toHtml $ chartList pid labels source mList nextUrl
   toHtmlRaw = toHtml
 
@@ -232,9 +236,7 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM expandM la
           { prePageTitle = Just "Explorer"
           , pageTitle = "Metrics"
           , menuItem = Just "Explorer"
-          , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-outline items-center"] do
-              a_ ([href_ $ "/p/" <> pid.toText <> "/log_explorer", role_ "tab", class_ "tab h-auto! "] <> navTabAttrs) "Events"
-              a_ ([href_ $ "/p/" <> pid.toText <> "/metrics", role_ "tab", class_ "tab h-auto! tab-active text-textStrong"] <> navTabAttrs) "Metrics"
+          , navTabs = Just $ explorerNavTabs_ pid "Metrics"
           , docsLink = Just "https://monoscope.tech/docs/dashboard/dashboard-pages/metrics/"
           , pageActions = Just $ div_ [class_ "inline-flex gap-2"] do
               TimePicker.timepicker_ Nothing currentRange Nothing
@@ -249,29 +251,41 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM expandM la
       addRespHeaders $ MetricsOVDataPointMain $ PageCtx bwconf (pid, V.fromList dataPoints, refCounts)
     else do
       let cursor = fromMaybe 0 cursorM
-      allMetrics <- V.fromList <$> Telemetry.getMetricChartListData pid sourceM prefixM
-      let cutoff = addUTCTime (-(7 * 24 * 3600)) now
-          (active, inactive) = V.partition (\m -> m.lastSeen >= cutoff) allMetrics
+          cutoff = addUTCTime (-(7 * 24 * 3600)) now
           pageSize = 20
-          metricList = V.take pageSize $ V.drop cursor active
+      -- Only the requested page comes back, not the whole catalogue. The inactive tail rides
+      -- along in the same result set because it falls out of the same aggregate.
+      page <- Telemetry.getMetricCatalogPage pid sourceM prefixM cutoff pageSize cursor (cursor == 0)
+      let metricList = page.active
           params = foldMap (\(k, v) -> foldMap (("&" <> k <> "=") <>) v) ([("metric_source", sourceM), ("from", fromM), ("to", toM), ("since", sinceM), ("metric_prefix", prefixM)] :: [(Text, Maybe Text)])
           nextFetchUrl = do
-            guard $ cursor + pageSize < V.length active
+            guard $ cursor + pageSize < page.activeTotal
             pure $ "/p/" <> pid.toText <> "/metrics?tab=charts" <> params <> "&cursor=" <> show (cursor + pageSize)
       let labels = Map.fromList $ (\metric -> (metric.metricName, metric.metricLabels)) <$> V.toList metricList
       if cursor == 0
         then do
-          serviceNames <- V.fromList <$> Telemetry.getMetricServiceNames pid
           dashboards <- Dashboards.selectDashboardsSortedBy pid "updated_at"
           monitors <- Monitors.queryMonitorsAll pid
+          -- The full catalogue and the service list are only needed to render an open
+          -- drawer, so they are read inside the `forM` rather than on every page load.
           drawerM <- forM expandM \metricName -> do
             metricM <- Telemetry.getMetricData pid metricName
+            serviceNames <- V.fromList <$> Telemetry.getMetricServiceNames pid Nothing serviceOptionsLimit
+            candidates <- V.fromList <$> Telemetry.getMetricChartListData pid sourceM prefixM
             pure $ metricM <&> \metric ->
-              metricsDetailsPage pid serviceNames metric allMetrics (metricReferences metric.metricName dashboards monitors) (fromMaybe "all" sourceM) (mfilter (`elem` metric.metricLabels) labelM) currentRange
+              metricsDetailsPage pid serviceNames metric candidates (metricReferences metric.metricName dashboards monitors) (fromMaybe "all" sourceM) (mfilter (`elem` metric.metricLabels) labelM) currentRange
           let bwconf' = bwconf{globalDrawerContent = join drawerM}
-          addRespHeaders $ MetricsOVChartsMain $ PageCtx bwconf' (pid, metricList, labels, inactive, serviceNames, fromMaybe "all" sourceM, fromMaybe "all" prefixM, V.length active, nextFetchUrl)
+          addRespHeaders $ MetricsOVChartsMain $ PageCtx bwconf' (pid, metricList, labels, page.inactive, fromMaybe "all" sourceM, fromMaybe "all" prefixM, page.activeTotal, nextFetchUrl)
         else do
           addRespHeaders $ MetricsOVChartsPaginated (pid, metricList, labels, fromMaybe "all" sourceM, nextFetchUrl)
+
+
+-- | Options for the metric-source picker, searched and capped server-side.
+metricServicesGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+metricServicesGetH pid searchM currentM = do
+  void $ Projects.sessionAndProject pid
+  services <- Telemetry.getMetricServiceNames pid searchM serviceOptionsLimit
+  addRespHeaders $ serviceOptions_ (fromMaybe "all" currentM) services
 
 
 metricDetailsGetH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
@@ -354,8 +368,64 @@ filterSelect_ widthCls param ariaLbl allLabel current opts display =
       forM_ opts $ \o -> option_ ([selected_ o | o == current] ++ [value_ o]) $ display o
 
 
-chartsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricChartListData -> Map Text (V.Vector Text) -> V.Vector Telemetry.MetricChartListData -> V.Vector Text -> Text -> Text -> Int -> Maybe Text -> Html ()
-chartsPage pid metricList labels inactive sources source mFilter activeCount nextUrl = do
+-- | Service picker for the metric catalogue. A project can have thousands of services, so
+-- the list is searched server-side and capped rather than rendered up front — the options
+-- only exist once the popover is opened, and only the matching ones.
+servicePicker_ :: Projects.ProjectId -> Text -> Html ()
+servicePicker_ pid current = div_ [class_ "join-item"] do
+  button_
+    ( [ class_ "select select-sm bg-bgBase border border-strokeWeak h-10 w-36 max-md:w-1/2 shadow-none cursor-pointer hover:border-strokeStrong transition-colors focus:outline-hidden focus:ring-2 focus:ring-strokeFocus flex items-center"
+      , type_ "button"
+      , Aria.label_ "Filter by service"
+      ]
+        <> popoverTrigger_ "metric-service-picker"
+    )
+    $ span_ [class_ "truncate"]
+    $ toHtml
+    $ if current == "all" then "All Services" else current
+  div_ ([class_ "dropdown bg-bgRaised border border-strokeWeak rounded-lg shadow-lg w-72 p-0"] <> popoverPanel_ "metric-service-picker") do
+    input_
+      [ class_ "input input-sm w-full border-0 border-b border-strokeWeak rounded-none focus:outline-hidden"
+      , type_ "search"
+      , placeholder_ "Search services"
+      , Aria.label_ "Search services"
+      , hxGet_ $ "/p/" <> pid.toText <> "/metrics/services"
+      , hxTrigger_ "input changed delay:200ms, load"
+      , hxTarget_ "#metric-service-options"
+      , name_ "q"
+      ]
+    div_ [class_ "max-h-72 overflow-y-auto c-scroll", id_ "metric-service-options"] pass
+
+
+-- | Options for 'servicePicker_'. Rendered by the server so the picker ships no markup
+-- until it is opened.
+serviceOptions_ :: Text -> [Text] -> Html ()
+serviceOptions_ current services = do
+  forM_ ("all" : services) \s ->
+    button_
+      [ class_ $ "w-full text-left px-3 py-1.5 text-sm hover:bg-fillWeak cursor-pointer truncate" <> bool "" " bg-fillWeak font-medium" (s == current)
+      , type_ "button"
+      , onpointerdown_ $ "window.setQueryParamAndReload('metric_source', '" <> s <> "')"
+      ]
+      $ toHtml
+      $ if s == "all" then "All Services" else s
+  when (null services)
+    $ div_ [class_ "px-3 py-4 text-xs text-textWeak"] "No matching services."
+  -- The list is capped; say so rather than silently showing a prefix of the truth.
+  when (length services >= serviceOptionsLimit)
+    $ div_ [class_ "px-3 py-2 text-2xs text-textWeak border-t border-strokeWeak"]
+    $ toHtml
+    $ "Showing the first "
+    <> show @Text serviceOptionsLimit
+    <> " — type to narrow."
+
+
+serviceOptionsLimit :: Int
+serviceOptionsLimit = 50
+
+
+chartsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricChartListData -> Map Text (V.Vector Text) -> V.Vector Telemetry.MetricChartListData -> Text -> Text -> Int -> Maybe Text -> Html ()
+chartsPage pid metricList labels inactive source mFilter activeCount nextUrl = do
   div_ [class_ "flex flex-col gap-4 px-4 overflow-y-scroll", term "preload" "false"]
     $ do
       div_ [class_ "w-full"] do
@@ -373,7 +443,7 @@ chartsPage pid metricList labels inactive sources source mFilter activeCount nex
           div_ [class_ "flex items-center gap-2 shrink-0 max-md:w-full max-md:flex-wrap"] do
             span_ [class_ "text-xs font-medium text-textWeak"] "Scope"
             div_ [class_ "join max-md:w-full"] do
-              filterSelect_ "w-36" "metric_source" "Filter by service" "All Services" source sources toHtml
+              servicePicker_ pid source
               filterSelect_ "w-auto" "metric_prefix" "Filter by metric group" "All metric groups" mFilter metricNames (toHtml . stripTrailing)
           div_ [class_ "w-px h-6 bg-strokeWeak max-md:hidden"] pass
           label_ [class_ "input input-sm flex grow min-w-0 max-md:w-full max-md:flex-none h-10 bg-bgBase border border-strokeWeak shadow-none overflow-hidden items-center gap-2 hover:border-strokeStrong transition-colors focus-within:outline-hidden focus-within:ring-2 focus-within:ring-strokeFocus focus-within:border-strokeFocus"] do
@@ -806,6 +876,10 @@ tracePage pid traceItem rawSpanRecords = do
       serviceNames = V.fromList $ ordNub $ V.toList $ getServiceName . (.resource) <$> spanRecords
       serviceColors = getServiceColors serviceNames
       rootSpans = buildSpanTree spanRecords
+      -- rangeSeconds is 0: throughput is meaningless for a single request, so the map
+      -- reports counts and durations only. Node size comes from the duration share.
+      (traceHops, traceDurationNs) = ServiceGraph.traceEdgeSamples spanRecords
+      traceGraph = ServiceGraph.buildServiceGraph 0 serviceMapNodeCap (Just traceDurationNs) traceHops
   div_ [class_ "w-full h-full flex overflow-hidden", id_ "trace_span_container"] $ do
     div_ [class_ "flex flex-col grow min-w-0 gap-4 p-2 pb-4 overflow-y-auto overflow-x-hidden c-scroll"] $ do
       div_ [class_ "flex flex-wrap justify-between items-center gap-y-1"] do
@@ -848,6 +922,7 @@ tracePage pid traceItem rawSpanRecords = do
                 button_ [class_ "a-tab text-sm px-3 py-1.5 border-b-2 border-b-transparent whitespace-nowrap shrink-0 t-tab-active", onpointerdown_ "navigatable(this, '#water_fall', '#trace-tabs', 't-tab-active')"] "Waterfall"
                 button_ [class_ "a-tab text-sm px-3 border-b-2 border-b-transparent py-1.5 whitespace-nowrap shrink-0", onpointerdown_ "navigatable(this, '#flame_graph', '#trace-tabs', 't-tab-active')"] "Timeline"
                 button_ [class_ "a-tab text-sm px-3 border-b-2 border-b-transparent py-1.5 whitespace-nowrap shrink-0", onpointerdown_ "navigatable(this, '#span_list', '#trace-tabs', 't-tab-active')"] "Services"
+                button_ [class_ "a-tab text-sm px-3 border-b-2 border-b-transparent py-1.5 whitespace-nowrap shrink-0", onpointerdown_ "navigatable(this, '#service_map', '#trace-tabs', 't-tab-active')"] "Map"
               div_ [class_ "flex items-center gap-2 shrink-0"] do
                 stBox "Spans" (show $ length spanRecords) Nothing
                 stBox "Errors" (show $ length $ V.filter (\s -> s.status == Just SSError) spanRecords) $ Just (faSprite_ "alert-triangle" "regular" "w-3 h-3 text-iconError")
@@ -931,6 +1006,12 @@ tracePage pid traceItem rawSpanRecords = do
           div_ [role_ "tabpanel", class_ "a-tab-content pt-2 hidden", id_ "span_list"] do
             div_ [class_ "border border-strokeWeak w-full rounded-2xl min-h-[230px] overflow-x-hidden "] do
               renderSpanListTable serviceNames serviceColors spanRecords
+
+          -- How this one request moved through the system: the same graph grammar as the
+          -- global service map, scoped to this trace's spans (no extra query — the spans
+          -- are already on the page).
+          div_ [role_ "tabpanel", class_ "a-tab-content pt-2 hidden", id_ "service_map"] do
+            serviceMapPanel_ ("trace-service-map-" <> traceItem.traceId) traceGraph serviceColors
     div_ [class_ "hidden shrink-0 max-md:hidden", id_ "trace-details-resizer-wrapper"]
       $ div_ [class_ "w-3 h-full cursor-ew-resize", id_ "trace_details_resizer", role_ "separator", Aria.label_ "Resize span details"] pass
     div_
@@ -985,6 +1066,20 @@ tracePage pid traceItem rawSpanRecords = do
           if (typeof flameGraphChart === 'undefined' || timeline.dataset.timelineInit) return;
           timeline.dataset.timelineInit = '1';
           flameGraphChart($spanJson, "$trId", $colorsJson);
+        }, {once: true});
+      }
+      // ECharts renders 0x0 into a hidden panel, so the map waits for its tab.
+      var mapPanel = document.getElementById('service_map');
+      if (mapPanel && !mapPanel.dataset.mapListener) {
+        mapPanel.dataset.mapListener = '1';
+        mapPanel.addEventListener('tab-visible', () => {
+          if (typeof serviceMapChart === 'undefined' || mapPanel.dataset.mapInit) return;
+          mapPanel.dataset.mapInit = '1';
+          const el = mapPanel.querySelector('[data-service-map]');
+          if (!el) return;
+          serviceMapChart(el.id, JSON.parse(document.getElementById(el.id + '-data').textContent), {
+            colors: JSON.parse(document.getElementById(el.id + '-colors').textContent),
+          });
         }, {once: true});
       }
     }

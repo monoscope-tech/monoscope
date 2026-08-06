@@ -102,6 +102,7 @@ import Pages.Projects qualified as ListProjects
 import Pages.Projects qualified as ManageMembers
 import Pages.Replay qualified as Replay
 import Pages.Reports qualified as Reports
+import Pages.ServiceMap qualified as ServiceMap
 import Pages.Settings qualified as Settings
 import Pages.Share qualified as Share
 import Pages.Telemetry qualified as Metrics
@@ -552,6 +553,8 @@ data TelemetryRoutes' mode = TelemetryRoutes'
   , metricDetailsGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "metric_source" :> QPT "label" :> Get '[HTML] (RespHeaders (Html ()))
   , metricBreakdownGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> "breakdown" :> QPT "label" :> Get '[HTML] (RespHeaders (Html ()))
   , metricCardGetH :: mode :- "metrics" :> "card" :> Capture "metric_name" Text :> QPT "label" :> Get '[HTML] (RespHeaders (Html ()))
+  , serviceMapGetH :: mode :- "service_map" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders ServiceMap.ServiceMapGet)
+  , metricServicesGetH :: mode :- "metrics" :> "services" :> QPT "q" :> QPT "metric_source" :> Get '[HTML] (RespHeaders (Html ()))
   }
   deriving stock (Generic)
 
@@ -932,6 +935,8 @@ telemetryServer pid =
     , metricDetailsGetH = Metrics.metricDetailsGetH pid
     , metricBreakdownGetH = Metrics.metricBreakdownGetH pid
     , metricCardGetH = Metrics.metricCardGetH pid
+    , serviceMapGetH = ServiceMap.serviceMapGetH pid
+    , metricServicesGetH = Metrics.metricServicesGetH pid
     }
 
 

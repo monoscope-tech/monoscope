@@ -29,6 +29,7 @@ declare global {
     setParams: (state: Record<string, any>, load: boolean) => void;
     flameGraphChart: any;
     waterFallGraphChart: any;
+    serviceMapChart: any;
     buildCurlRequest: (event: any) => void;
     downloadJson: (event: any) => void;
     getTimeRange: () => { from: string; to: string; since: string } | undefined;

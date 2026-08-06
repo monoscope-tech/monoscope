@@ -140,6 +140,10 @@ data EnvConfig = EnvConfig
   , s3Region :: Text
   , enableReplayService :: Bool
   , enableTimefusionReads :: Bool
+  , enableServiceMapRollup :: Bool
+  -- ^ Runs the 5-minute service-dependency rollup. Off by default: the rollup is the only
+  -- place a span self-join runs against TimeFusion, which is the query shape that has
+  -- OOM-killed it before, so it gets a staged rollout rather than shipping on.
   , enableTimefusionWrites :: Bool
   , enablePostgresTelemetryWrites :: Bool
   -- ^ Dual-write to the legacy Postgres @otel_logs_and_spans@ store. Defaults

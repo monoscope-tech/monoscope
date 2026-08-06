@@ -81,6 +81,7 @@ import Models.Projects.GitSync qualified as GitHub
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.ServiceGraph qualified as ServiceGraph
 import Models.Telemetry.Telemetry (SeverityLevel (..), generateSummary, insertSystemLog, mkSystemLog)
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.HTTP.Types (urlEncode)
@@ -115,7 +116,7 @@ import Relude.Extra.Tuple (fmapToSnd)
 import System.Clock (Clock (Monotonic), diffTimeSpec, getTime, toNanoSecs)
 import System.Config qualified as Config
 import System.Logging qualified as Log
-import System.Tracing (SpanStatus (..), Tracing, addEvent, forkWithCtx, setStatus, withSpan)
+import System.Tracing (SpanStatus (..), Tracing, addEvent, forkWithCtx, setStatus, withSpan, withSpan_)
 import System.Types (ATBackgroundCtx, DB, runBackground)
 import UnliftIO.Exception (bracket, catch, throwIO, try, tryAny)
 import Utils (calculateCycleStartDate, formatUTC, formatUTCMicros, freeTierDailyMaxEvents, toXXHash)
@@ -170,6 +171,14 @@ data BgJobs
     PrometheusScrapeTick UTCTime
   | -- | Scrape a single Prometheus target; drained by workers across all pods.
     PrometheusScrapeOne PromCfg.PrometheusScrapeConfigId
+  | -- | Five-minute dispatcher: fan out one 'ServiceMapRollup' per active project for the
+    -- last closed bucket, so the expensive span self-join runs once per project per slice
+    -- instead of once per service-map page view.
+    ServiceMapRollupTick UTCTime
+  | -- | Roll one closed 5-minute bucket of one project's spans into
+    -- @service_dependency_edges@. Idempotent (upsert replaces), so re-running a bucket to
+    -- absorb late-arriving spans is safe.
+    ServiceMapRollup Projects.ProjectId UTCTime
   | MonoscopeAdminDaily
   | UsageAuditReport
   | -- | Hourly catch-up for rows the extraction worker missed. Re-drives rows
@@ -401,6 +410,7 @@ processBackgroundJob authCtx bgJob =
                 seedJobs conn currentTime 24 3600 BackgroundJobs.ProcessIssuesEnhancement
                 seedJobs conn currentTime 1440 60 (const BackgroundJobs.QueryMonitorsCheck)
                 seedJobs conn currentTime 1440 60 BackgroundJobs.PrometheusScrapeTick
+                seedJobs conn currentTime 288 300 BackgroundJobs.ServiceMapRollupTick
                 seedJobs conn currentTime 144 600 BackgroundJobs.NotificationSweepJob
                 seedJobs conn currentTime 24 3600 BackgroundJobs.NotificationDigestJob
                 seedJobs conn currentTime 24 3600 BackgroundJobs.InfraHealthCheck
@@ -593,6 +603,8 @@ processBackgroundJob authCtx bgJob =
     QueryMonitorsCheck -> checkTriggeredQueryMonitors
     PrometheusScrapeTick _ -> dispatchPrometheusScrapes authCtx
     PrometheusScrapeOne cid -> scrapePrometheusTarget cid
+    ServiceMapRollupTick t -> dispatchServiceMapRollups authCtx t
+    ServiceMapRollup pid bucket -> rollUpServiceMap authCtx pid bucket
     CompressReplaySessions -> Replay.compressAndMergeReplaySessions
     MergeReplaySession pid sid -> Replay.mergeReplaySession pid sid
     MigrateReplayStorage batchSize -> do
@@ -3515,6 +3527,45 @@ gitSyncPushAllDashboards pid = do
 -- the rest is picked up by the next tick (here or on another node).
 prometheusScrapeBatchLimit :: Int
 prometheusScrapeBatchLimit = 1000
+
+
+-- | Dispatcher (ServiceMapRollupTick). Fans out one rollup per active project for the
+-- bucket that closed 5 minutes ago — the lag absorbs normal SDK export and ingest delay,
+-- since the caller's client span and the callee's server span come from different
+-- processes and can land seconds apart.
+dispatchServiceMapRollups :: Config.AuthContext -> UTCTime -> ATBackgroundCtx ()
+dispatchServiceMapRollups authCtx scheduledTime = when authCtx.config.enableServiceMapRollup do
+  projects <- Projects.activeProjects
+  let bucket = floorTo300 (addUTCTime (-600) scheduledTime)
+  failures <- liftIO $ withResource authCtx.jobsPool \conn ->
+    lefts <$> forM projects \p ->
+      first (p.id.toText,) <$> tryAny (void $ createJob conn "background_jobs" (ServiceMapRollup p.id bucket))
+  forM_ failures \(pid, err) ->
+    Log.logAttention "Service-map rollup enqueue failed — this project's map will have a gap for this bucket" (pid, displayException err)
+
+
+-- | Worker (ServiceMapRollup). Derives one bucket's service dependency edges and upserts
+-- them. Errors are logged rather than rethrown: a rollup miss leaves a gap in one bucket of
+-- one project's map, which must not fail sibling projects' work.
+rollUpServiceMap :: Config.AuthContext -> Projects.ProjectId -> UTCTime -> ATBackgroundCtx ()
+rollUpServiceMap authCtx pid bucket = withSpan_ "service_map.rollup" [("monoscope.project.id", OA.toAttribute pid.toText)] do
+  result <- tryAny do
+    edges <- ServiceGraph.rollupServiceEdges authCtx.env.enableTimefusionReads pid bucket (addUTCTime 300 bucket)
+    ServiceGraph.upsertServiceDependencyEdges pid bucket edges
+    pure $ length edges
+  case result of
+    Left err -> Log.logAttention "Service-map rollup failed — dependency data missing for this bucket" (pid.toText, show @Text bucket, displayException err)
+    Right n -> when (n >= serviceMapEdgeLimit) $ Log.logAttention "Service-map rollup hit its edge limit — the map for this bucket is incomplete" (pid.toText, n)
+
+
+-- | Mirrors the LIMIT in 'ServiceGraph.rollupServiceEdges'; hitting it means edges were
+-- dropped, which is a silent-data-loss shape and must be reported.
+serviceMapEdgeLimit :: Int
+serviceMapEdgeLimit = 20000
+
+
+floorTo300 :: UTCTime -> UTCTime
+floorTo300 t = posixSecondsToUTCTime $ fromIntegral @Int (floor (utcTimeToPOSIXSeconds t) `div` 300 * 300)
 
 
 -- | Dispatcher (PrometheusScrapeTick). Atomically leases the due targets — 'claimDueConfigs'

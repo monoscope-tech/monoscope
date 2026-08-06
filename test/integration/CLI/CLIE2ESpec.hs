@@ -36,6 +36,7 @@ import Data.List (isInfixOf)
 import Data.Text qualified as T
 import Network.HTTP.Client (defaultManagerSettings, httpLbs, newManager, parseRequest_, requestHeaders, responseStatus)
 import Network.HTTP.Types.Status (statusCode)
+import System.Directory (doesFileExist)
 import System.Exit (ExitCode (..))
 import System.Process qualified as Proc
 import Test.Hspec
@@ -178,6 +179,23 @@ findBin :: IO FilePath
 findBin = T.unpack . T.strip . toText <$> readProcOut "cabal" ["list-bin", "exe:monoscope"]
 
 
+-- | Run @body@ with the CLI binary, skipping when it hasn't been built.
+--
+-- @cabal list-bin@ reports the path the executable /would/ live at whether or not it has
+-- been built, so spawning it blind dies with a bare @posix_spawnp: does not exist@ instead
+-- of the @[ pending ]@ this module promises for an unmet precondition. CI builds
+-- @cabal build all@, so these tests really run there; the repl-driven @make live-test-dev@
+-- loop never builds the executable, and a missing binary must read as "not built" rather
+-- than as a failing assertion.
+withCliBin :: (FilePath -> IO ()) -> IO ()
+withCliBin body = do
+  bin <- findBin
+  exists <- doesFileExist bin
+  if exists
+    then body bin
+    else pendingWith $ "CLI binary not built at " <> bin <> " — run `cabal build exe:monoscope` to enable."
+
+
 spec :: Spec
 spec = describe "CLI binary E2E (real server)" $ do
   describe "smoke" $ do
@@ -296,15 +314,13 @@ spec = describe "CLI binary E2E (real server)" $ do
   describe "auth (no real server required)" $ do
     -- Audit B11: error message used to say "mono auth login"; must say "monoscope".
     -- --table forces human output; piped stdout otherwise auto-selects the C8 JSON shape.
-    it "auth status with no credentials hints at 'monoscope auth login' (B11)" $ do
-      bin <- findBin
+    it "auth status with no credentials hints at 'monoscope auth login' (B11)" $ withCliBin $ \bin -> do
       (_, out, err) <- runMonoNoAuth bin ["--table", "auth", "status"]
       let combined = out <> err
       combined `shouldSatisfy` (\s -> "monoscope auth login" `isInfixOf` s || "Authenticated" `isInfixOf` s)
 
     -- Audit C7: agent mode must refuse interactive flows.
-    it "auth login (no token) in MONOSCOPE_AGENT_MODE exits non-zero (C7)" $ do
-      bin <- findBin
+    it "auth login (no token) in MONOSCOPE_AGENT_MODE exits non-zero (C7)" $ withCliBin $ \bin -> do
       pathEnv <- fromMaybe "" <$> lookupEnv "PATH"
       let env =
             [ ("MONOSCOPE_AGENT_MODE", "1")
@@ -318,8 +334,7 @@ spec = describe "CLI binary E2E (real server)" $ do
 
   describe "completion" $ do
     -- Audit C12: unknown shell argument should fail loudly, not silently emit bash.
-    it "completion <unknown> fails loudly (C12)" $ do
-      bin <- findBin
+    it "completion <unknown> fails loudly (C12)" $ withCliBin $ \bin -> do
       (code, _, err) <- runMonoNoAuth bin ["completion", "tcsh"]
       code `shouldNotBe` ExitSuccess
       err `shouldSatisfy` (\s -> "tcsh" `isInfixOf` s || "shell" `isInfixOf` s || "bash|zsh|fish" `isInfixOf` s)
