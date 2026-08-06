@@ -143,6 +143,7 @@ extra-source-files:
     static/migrations/0114_replay_object_layout_shards.sql
     static/migrations/0115_auto_provisioned_dashboards.sql
     static/migrations/0116_issue_hash_lookup.sql
+    static/migrations/0117_service_dependency_edges.sql
 
 source-repository head
   type: git
@@ -190,6 +191,7 @@ library
       Models.Projects.ProjectMembers
       Models.Projects.Projects
       Models.Telemetry.Schema
+      Models.Telemetry.ServiceGraph
       Models.Telemetry.Telemetry
       Opentelemetry.OtlpServer
       Pages.Anomalies
@@ -212,12 +214,14 @@ library
       Pages.Projects
       Pages.Replay
       Pages.Reports
+      Pages.ServiceMap
       Pages.Settings
       Pages.Share
       Pages.Telemetry
       Pkg.AI
       Pkg.CLIFormat
       Pkg.Components.LogQueryBox
+      Pkg.Components.ServiceMap
       Pkg.Components.Table
       Pkg.Components.TimePicker
       Pkg.Components.Widget
@@ -653,6 +657,7 @@ test-suite integration-tests
       Pages.PrometheusSpec
       Pages.QueryCacheSpec
       Pages.ReportsSpec
+      Pages.ServiceMapSpec
       Pages.ShareSpec
       Pages.TelemetrySpec
       Pkg.KafkaConsumerSpec
@@ -796,6 +801,7 @@ test-suite test-dev
       Models.Projects.ProjectMembers
       Models.Projects.Projects
       Models.Telemetry.Schema
+      Models.Telemetry.ServiceGraph
       Models.Telemetry.Telemetry
       Opentelemetry.OtlpServer
       Pages.Anomalies
@@ -818,12 +824,14 @@ test-suite test-dev
       Pages.Projects
       Pages.Replay
       Pages.Reports
+      Pages.ServiceMap
       Pages.Settings
       Pages.Share
       Pages.Telemetry
       Pkg.AI
       Pkg.CLIFormat
       Pkg.Components.LogQueryBox
+      Pkg.Components.ServiceMap
       Pkg.Components.Table
       Pkg.Components.TimePicker
       Pkg.Components.Widget
@@ -907,6 +915,7 @@ test-suite test-dev
       Pages.PrometheusSpec
       Pages.QueryCacheSpec
       Pages.ReportsSpec
+      Pages.ServiceMapSpec
       Pages.ShareSpec
       Pages.TelemetrySpec
       Pkg.KafkaConsumerSpec

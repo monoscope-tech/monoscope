@@ -1,4 +1,4 @@
-import { getSeriesColor, tailwindToHex, getContrastTextColor } from './colorMapping';
+import { getContrastTextColor, resolveColor } from './colorMapping';
 
 const getTimeBounds = (spans: { start: number; value: number }[]): { minStart: number; range: number } => {
   let minStart = Infinity, maxEnd = -Infinity;
@@ -12,11 +12,6 @@ const getTimeBounds = (spans: { start: number; value: number }[]): { minStart: n
 const SCROLL_BAR_WIDTH = 7;
 const FLAME_PAD_LEFT = 4;
 const RESIZE_EVENTS = ['resize', 'toggle-sidebar', 'loglist-resize'];
-
-const resolveColor = (service: string, colorsMap: Record<string, string>): string => {
-  const tw = colorsMap[service] || getSeriesColor(service, 'service');
-  return tw.startsWith('#') ? tw : tailwindToHex(tw);
-};
 
 // Simple debounce utility
 function debounce<T extends (...args: any[]) => any>(func: T, wait: number): T {

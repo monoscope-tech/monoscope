@@ -66,6 +66,8 @@ module Models.Telemetry.Telemetry (
   handOffBatches,
   mintOtelLogIds,
   getMetricChartListData,
+  getMetricCatalogPage,
+  MetricCatalogPage (..),
   getTraceShapes,
   getMetricServiceNames,
   getMetricNames,
@@ -211,9 +213,39 @@ data SpanStatus = SSOk | SSError | SSUnset
 
 
 data SpanKind = SKInternal | SKServer | SKClient | SKProducer | SKConsumer | SKUnspecified
-  deriving (Generic, Read, Show)
+  deriving (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON, Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "SK" SpanKind
+
+
+-- | @kind@ and @status_code@ are stored as plain text, and neither matches the
+-- 'WrappedEnumSC' snake encoding: ingest writes lower-case kinds plus @"log"@ for log
+-- records (which has no 'SpanKind' constructor), and UPPER-CASE status codes. Decoding
+-- those columns as the enums directly would make 'refineText' abort the whole query, so
+-- the columns stay 'Text' on the row types and are parsed totally here.
+parseSpanKind :: Maybe Text -> Maybe SpanKind
+parseSpanKind =
+  ( >>=
+      \case
+        "internal" -> Just SKInternal
+        "server" -> Just SKServer
+        "client" -> Just SKClient
+        "producer" -> Just SKProducer
+        "consumer" -> Just SKConsumer
+        "unspecified" -> Just SKUnspecified
+        _ -> Nothing
+  )
+
+
+parseSpanStatus :: Maybe Text -> Maybe SpanStatus
+parseSpanStatus =
+  ( >>=
+      \t -> case T.toUpper t of
+        "OK" -> Just SSOk
+        "ERROR" -> Just SSError
+        "UNSET" -> Just SSUnset
+        _ -> Nothing
+  )
 
 
 data Trace = Trace
@@ -312,8 +344,8 @@ convertOtelLogsAndSpansToSpanRecord lgSp = do
       , spanName = sName
       , startTime = lgSp.start_time
       , endTime = lgSp.end_time
-      , kind = Nothing -- USE actual span kind
-      , status = Nothing -- TODO use actual span status
+      , kind = parseSpanKind lgSp.kind
+      , status = parseSpanStatus lgSp.status_code
       , statusMessage = lgSp.status_message
       , attributes = unAesonTextMaybe lgSp.attributes
       , events = fromMaybe AE.Null (unAesonTextMaybe lgSp.events)
@@ -688,6 +720,8 @@ data TraceSpanRow = TraceSpanRow
   , spanName :: Maybe Text
   , startTime :: UTCTime
   , endTime :: Maybe UTCTime
+  , spanKind :: Maybe Text
+  , statusCode :: Maybe Text
   , statusMessage :: Maybe Text
   , attributes :: Maybe (AesonText (Map Text AE.Value))
   , events :: Maybe (AesonText AE.Value)
@@ -717,8 +751,8 @@ traceSpanRecord trId row = do
       , spanName = spanNameTxt
       , startTime = row.startTime
       , endTime = row.endTime
-      , kind = Nothing
-      , status = Nothing
+      , kind = parseSpanKind row.spanKind
+      , status = parseSpanStatus row.statusCode
       , statusMessage = row.statusMessage
       , attributes = unAesonTextMaybe row.attributes
       , events = fromMaybe AE.Null $ unAesonTextMaybe row.events
@@ -733,7 +767,7 @@ selectTraceSpanRows :: Text -> UTCTime -> UTCTime -> HI.Sql -> HI.Sql
 selectTraceSpanRows =
   selectSpansWhere
     [HI.sql|project_id, id::text, timestamp, context___span_id, parent_id, name,
-            COALESCE(start_time, timestamp), end_time, status_message, attributes, events, resource, duration|]
+            COALESCE(start_time, timestamp), end_time, kind, status_code, status_message, attributes, events, resource, duration|]
 
 
 -- | Shared trace fetch: spans in a tight window around the reference time (3d
@@ -933,26 +967,107 @@ getUsageTotals useTimefusion pid lastReported = do
   pure (eC, eB, mC, mB)
 
 
+-- | The catalogue aggregate: one row per metric name with its de-duplicated label union.
+--
+-- Label de-duplication happens BEFORE aggregation. Unnesting inside the grouped query fans
+-- every meta row out by its label count (43k rows × ~17 labels ≈ 730k) and pushes all of it
+-- through one DISTINCT aggregate; de-duplicating @(metric_name, label)@ pairs first hashes
+-- the same result out of a fraction of the work. Measured on the demo project: 640ms → 274ms
+-- for byte-identical output.
+--
+-- Shared by the full-catalogue read and the paged read so the two can never disagree about
+-- what a metric's labels are.
+metricCatalogAggSql :: Projects.ProjectId -> Maybe Text -> Maybe Text -> HI.Sql
+metricCatalogAggSql pid sourceM prefixM =
+  [HI.sql|
+      WITH pairs AS (
+        SELECT DISTINCT metric_name, label
+        FROM otel_metrics_meta LEFT JOIN LATERAL unnest(metric_labels) AS label ON TRUE
+        WHERE project_id = #{unUUIDId pid} |]
+    <> filters
+    <> [HI.sql| ),
+      labels AS (
+        SELECT metric_name, COALESCE(ARRAY_AGG(label ORDER BY label) FILTER (WHERE label IS NOT NULL), '{}'::text[]) labs
+        FROM pairs GROUP BY metric_name
+      ),
+      meta AS (
+        SELECT metric_name, MAX(metric_type) AS metric_type, MAX(metric_unit) AS metric_unit,
+               MAX(metric_description) AS metric_description, MAX(last_seen_at) AS last_seen
+        FROM otel_metrics_meta WHERE project_id = #{unUUIDId pid} |]
+    <> filters
+    <> [HI.sql| GROUP BY metric_name
+      ),
+      catalog AS (
+        SELECT m.metric_name, m.metric_type, m.metric_unit, m.metric_description, m.last_seen, labels.labs
+        FROM meta m JOIN labels USING (metric_name)
+      ) |]
+  where
+    selected = mfilter (`notElem` ["", "all"])
+    filters =
+      maybe mempty (\source -> [HI.sql| AND service_name = #{source}|]) (selected sourceM)
+        <> maybe mempty (\prefix -> let pat = prefix <> "%" in [HI.sql| AND metric_name LIKE #{pat}|]) (selected prefixM)
+
+
+-- | The whole catalogue. Only the metric-details drawer needs this: it scores every metric
+-- against the one being viewed to pick six related ones, so it genuinely can't be paged.
 getMetricChartListData :: DB es => Projects.ProjectId -> Maybe Text -> Maybe Text -> Eff es [MetricChartListData]
-getMetricChartListData pid sourceM prefixM = do
-  let selected = mfilter (`notElem` ["", "all"])
-      sourceFilter = maybe mempty (\source -> [HI.sql| AND service_name = #{source}|]) (selected sourceM)
-      prefixFilter = maybe mempty (\prefix -> let pat = prefix <> "%" in [HI.sql| AND metric_name LIKE #{pat}|]) (selected prefixM)
+getMetricChartListData pid sourceM prefixM =
+  Hasql.interp $ metricCatalogAggSql pid sourceM prefixM <> [HI.sql| SELECT * FROM catalog ORDER BY metric_name |]
+
+
+-- | One page of active metrics, the full inactive tail, and the total active count — in a
+-- single pass, because evaluating the catalogue aggregate is the expensive part and all
+-- three answers come from it.
+--
+-- The overview page renders 20 active metrics but used to read the entire catalogue to do
+-- it, then paginate in memory; on a project with 406 metrics that was the dominant cost of
+-- the slowest page in the app.
+data MetricCatalogPage = MetricCatalogPage
+  { active :: V.Vector MetricChartListData
+  , inactive :: V.Vector MetricChartListData
+  , activeTotal :: Int
+  }
+
+
+-- @withInactive@ is False for scroll-in pages: the inactive list is only rendered on the
+-- first page, so later pages must not carry it back.
+getMetricCatalogPage :: DB es => Projects.ProjectId -> Maybe Text -> Maybe Text -> UTCTime -> Int -> Int -> Bool -> Eff es MetricCatalogPage
+getMetricCatalogPage pid sourceM prefixM cutoff limit offset withInactive = do
+  rows <-
+    Hasql.interp
+      $ metricCatalogAggSql pid sourceM prefixM
+      <> [HI.sql|,
+      act AS (SELECT * FROM catalog WHERE last_seen >= #{cutoff}),
+      tot AS (SELECT COUNT(*)::int8 AS n FROM act)
+      -- The page and the inactive tail come back in one result set, tagged, rather than as
+      -- two queries that would each pay for the aggregate again.
+      SELECT metric_name, metric_type, metric_unit, metric_description, last_seen, labs, TRUE, (SELECT n FROM tot)
+      FROM (SELECT * FROM act ORDER BY metric_name LIMIT #{limit} OFFSET #{offset}) p
+      UNION ALL
+      SELECT metric_name, metric_type, metric_unit, metric_description, last_seen, labs, FALSE, (SELECT n FROM tot)
+      FROM catalog WHERE #{withInactive} AND last_seen < #{cutoff} |]
+  let rowMetric (n, ty, u, d, ls, labs, _, _) = MetricChartListData n ty u d ls labs
+      isActive (_, _, _, _, _, _, a, _) = a
+      total = case rows of
+        ((_, _, _, _, _, _, _, n) : _) -> fromIntegral @Int64 n
+        [] -> 0
+  pure
+    MetricCatalogPage
+      { active = V.fromList $ rowMetric <$> filter isActive rows
+      , inactive = V.fromList $ sortOn (.metricName) $ rowMetric <$> filter (not . isActive) rows
+      , activeTotal = total
+      }
+
+
+-- | Service names for the metric-source picker, filtered and capped server-side. A project
+-- can easily have thousands of services (2.3k on the demo project); rendering them all into
+-- a @<select>@ was ~117KB of HTML nobody scrolls through.
+getMetricServiceNames :: DB es => Projects.ProjectId -> Maybe Text -> Int -> Eff es [Text]
+getMetricServiceNames pid searchM limit =
   Hasql.interp
-    $ [HI.sql| SELECT metric_name, MAX(metric_type) as metric_type, MAX(metric_unit) as metric_unit,
-             MAX(metric_description) as metric_description, MAX(last_seen_at) as last_seen,
-             COALESCE(ARRAY_AGG(DISTINCT label) FILTER (WHERE label IS NOT NULL), '{}'::text[])
-      FROM otel_metrics_meta
-      LEFT JOIN LATERAL unnest(metric_labels) AS label ON TRUE
-      WHERE project_id = #{unUUIDId pid} |]
-    <> sourceFilter
-    <> prefixFilter
-    <> [HI.sql| GROUP BY metric_name ORDER BY metric_name |]
-
-
-getMetricServiceNames :: DB es => Projects.ProjectId -> Eff es [Text]
-getMetricServiceNames pid =
-  Hasql.interp [HI.sql| SELECT DISTINCT service_name FROM otel_metrics_meta WHERE project_id = #{unUUIDId pid}|]
+    $ [HI.sql| SELECT DISTINCT service_name FROM otel_metrics_meta WHERE project_id = #{unUUIDId pid}|]
+    <> maybe mempty (\q -> let pat = "%" <> q <> "%" in [HI.sql| AND service_name ILIKE #{pat}|]) (mfilter (not . T.null) searchM)
+    <> [HI.sql| ORDER BY service_name LIMIT #{limit}|]
 
 
 getMetricNames :: DB es => Projects.ProjectId -> Eff es [Text]

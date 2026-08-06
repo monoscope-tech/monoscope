@@ -51,6 +51,9 @@ module Pkg.TestUtils (
   ingestTrace,
   ingestTraceAt,
   ingestSpanLinked,
+  ingestSpanReq,
+  withSpanKind,
+  withSpanStatus,
   ingestMetric,
   ingestLogWithHeader,
   ingestTraceWithHeader,
@@ -83,7 +86,7 @@ import Control.Concurrent (threadDelay)
 import Control.Concurrent.STM.TBQueue (isEmptyTBQueue, readTBQueue)
 import Control.Exception (finally, throwIO, try)
 import Control.Exception.Safe qualified as Safe
-import Control.Lens ((.~), (^.))
+import Control.Lens ((.~), (^.), (^..))
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.QQ (aesonQQ)
@@ -1362,9 +1365,23 @@ ingestSessionEvent tr apiKey spanName extras isError timestamp = do
 -- be valid hex (a UUID works); a non-hex string decodes to an empty id.
 ingestSpanLinked :: TestResources -> Text -> Text -> Text -> Maybe Text -> Text -> [(Text, Text)] -> UTCTime -> IO ()
 ingestSpanLinked tr apiKey trId spanId parentM name extras ts =
-  void
-    $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider
-    $ Proto (mkSpanRequest trId spanId parentM name [] Nothing [mkAttr k v | (k, v) <- extras] (mkResource apiKey []) ts)
+  ingestSpanReq tr $ mkSpanRequest trId spanId parentM name [] Nothing [mkAttr k v | (k, v) <- extras] (mkResource apiKey []) ts
+
+
+-- | Export an already-built trace request. Span kind and status are set by composing
+-- 'withSpanKind' / 'withSpanStatus' over 'mkSpanRequest', so tests can build the
+-- client→server and producer→consumer pairs a service graph is derived from without
+-- every 'mkSpanRequest' call site growing two more positional arguments.
+ingestSpanReq :: TestResources -> TS.ExportTraceServiceRequest -> IO ()
+ingestSpanReq tr = void . OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider . Proto
+
+
+withSpanKind :: PT.Span'SpanKind -> TS.ExportTraceServiceRequest -> TS.ExportTraceServiceRequest
+withSpanKind k = TSF.resourceSpans . traverse . PTF.scopeSpans . traverse . PTF.spans . traverse . PTF.kind .~ k
+
+
+withSpanStatus :: PT.Status'StatusCode -> TS.ExportTraceServiceRequest -> TS.ExportTraceServiceRequest
+withSpanStatus c = TSF.resourceSpans . traverse . PTF.scopeSpans . traverse . PTF.spans . traverse . PTF.status .~ (defMessage & PTF.code .~ c)
 
 
 ingestMetric, ingestMetricWithHeader :: TestResources -> Text -> Text -> Double -> UTCTime -> IO ()
@@ -1653,8 +1670,14 @@ toNanos :: UTCTime -> Word64
 toNanos = round . (* 1e9) . utcTimeToPOSIXSeconds
 
 
+-- | Defaults are dropped when @extras@ carries the same key, so a test can pin a
+-- per-span @service.name@ (needed to build multi-service traces) without relying on
+-- the ingest side's duplicate-key fold order.
 mkResource :: Text -> [PC.KeyValue] -> PR.Resource
-mkResource apiKey extras = defMessage & PRF.attributes .~ ([mkAttr "service.name" "test-service", mkAttr "at-project-key" apiKey] <> extras)
+mkResource apiKey extras =
+  defMessage & PRF.attributes .~ (filter ((`notElem` (extras ^.. traverse . PCF.key)) . (^. PCF.key)) defaults <> extras)
+  where
+    defaults = [mkAttr "service.name" "test-service", mkAttr "at-project-key" apiKey]
 
 
 createOtelLogAtTime :: Text -> [Text] -> UTCTime -> LS.ExportLogsServiceRequest

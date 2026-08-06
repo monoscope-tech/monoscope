@@ -19,7 +19,7 @@ const loadScript = (src: string) => new Promise<void>((resolve, reject) => {
   document.head.append(script);
 });
 
-const ensureECharts = () => {
+export const ensureECharts = () => {
   if ((window as any).echarts) return Promise.resolve();
   if (!echartsLoad) {
     const assets = ((window as any).echartsAssetUrls as EChartsAssetUrls | undefined) ?? {
@@ -123,7 +123,7 @@ const queueChartInit = (fn: () => void, chartId?: string) => {
 };
 
 // --- Shared ResizeObserver for all charts ---
-const sharedResizeObserver = new ResizeObserver((entries) => {
+export const sharedResizeObserver = new ResizeObserver((entries) => {
   for (const entry of entries) {
     const el = entry.target as HTMLElement;
     if (el.id) queueChartResize(el.id);
@@ -154,6 +154,12 @@ const sharedThemeObserver = new MutationObserver((mutations) => {
   });
 });
 sharedThemeObserver.observe(document.body, { attributes: true, attributeFilter: ['data-theme'] });
+
+// Subscribe to the shared theme observer from other modules; returns an unsubscribe.
+export const subscribeChartTheme = (cb: ThemeCallback): (() => void) => {
+  themeCallbacks.add(cb);
+  return () => { themeCallbacks.delete(cb); };
+};
 
 // Convert any CSS color (including oklch) to hex for ECharts.
 // Modern browsers keep oklch in fillStyle, so we render a pixel and read back RGB.
@@ -471,9 +477,17 @@ type WidGetData = {
 };
 
 const chartDisposers = new Map<string, () => void>();
+const DISPOSABLE_CHARTS = '[data-chart-widget], [data-service-map]';
+
+// Registers (and takes over) teardown for a chart container id. Any previously
+// registered disposer for the id runs first, so re-rendering is idempotent.
+export const registerChartDisposer = (chartId: string, dispose: () => void) => {
+  chartDisposers.get(chartId)?.();
+  chartDisposers.set(chartId, dispose);
+};
 
 const disposeChartsIn = (root: Element) => {
-  const charts = root.matches('[data-chart-widget]') ? [root] : [...root.querySelectorAll('[data-chart-widget]')];
+  const charts = root.matches(DISPOSABLE_CHARTS) ? [root] : [...root.querySelectorAll(DISPOSABLE_CHARTS)];
   charts.forEach((chart) => chartDisposers.get((chart as HTMLElement).id)?.());
 };
 
