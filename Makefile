@@ -14,12 +14,12 @@ NCPUS := $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 PORT ?= 8080
 
 # Built bundles whose content is baked into the page at COMPILE time via
-# hashAssetFile's TH splice (see BodyWrapper). They're addDependentFile deps, so
-# having ghcid watch them makes a JS/CSS-only rebuild trigger a :reload: GHC
-# re-runs the splice, the ?v= cache-buster updates, and the browser fetches the
-# freshly-built bundle instead of a stale cached copy. Without this, a JS change
-# never bumps the hash (ghcid only watches .hs) so the old bundle keeps serving.
-RELOAD_ASSETS := --reload=static/public/assets/web-components/dist/js/index.js \
+# hashAssetFile/viteAssetFile's TH splice (see BodyWrapper). They're addDependentFile
+# deps, so having ghcid watch them makes a JS/CSS-only rebuild trigger a :reload: GHC
+# re-runs the splice, the emitted filename/?v= cache-buster updates, and the browser
+# fetches the freshly-built bundle instead of a stale cached copy. Without this, a JS
+# change never bumps the hash (ghcid only watches .hs) so the old bundle keeps serving.
+RELOAD_ASSETS := --reload=static/public/assets/web-components/dist/manifest.json \
                  --reload=static/public/assets/web-components/dist/css/index.css \
                  --reload=static/public/assets/css/tailwind.min.css
 RELOAD_ENV := --reload=.env

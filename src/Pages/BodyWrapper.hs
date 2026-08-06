@@ -14,7 +14,7 @@ import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pages.CommandPalette qualified as CommandPalette
 import Pages.Components qualified as Components
-import Pkg.DeriveUtils (hashAssetFile)
+import Pkg.DeriveUtils (hashAssetFile, viteAssetFile)
 import PyF
 import Relude hiding (ask)
 import System.Config (AuthContext (..), DeploymentEnv (Dev), EnvConfig (..))
@@ -242,7 +242,7 @@ bodyWrapper bcfg child = do
 
       -- Flag for widget initialization - set to true after web-components loads
       script_ "window.widgetDepsReady = false;"
-      script_ [type_ "module", src_ $(hashAssetFile "/public/assets/web-components/dist/js/index.js")] ("" :: Text)
+      script_ [type_ "module", src_ $(viteAssetFile "index.html")] ("" :: Text)
 
       when isProd
         $ script_

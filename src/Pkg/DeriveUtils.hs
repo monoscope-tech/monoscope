@@ -23,6 +23,7 @@ module Pkg.DeriveUtils (
   unAesonTextMaybe,
   hashAssetFile,
   hashFile,
+  viteAssetFile,
   showPGFloatArray,
   textArrayEnc,
   mkHasqlPool,
@@ -405,6 +406,24 @@ hashAssetFile path = [|$(TH.lift path) <> "?v=" <> $(hashFile path)|]
 
 hashFile :: FilePath -> TH.Q TH.Exp
 hashFile = fileHash >=> TH.lift
+
+
+-- | URL of a Vite build output, looked up by manifest key (e.g. @"index.html"@ for the
+-- entry). The emitted filename already carries a content hash, so this must NOT get a
+-- @?v=@ query on top: chunks import the entry back as a bare @./index.<hash>.js@, and a
+-- queried URL is a second module identity — the browser would evaluate the whole graph
+-- twice and every @customElements.define@ in it would throw on the second pass.
+viteAssetFile :: FilePath -> TH.Q TH.Exp
+viteAssetFile key = do
+  let dir = "/public/assets/web-components/dist/"
+      manifest = "static" <> dir <> "manifest.json"
+  TH.qAddDependentFile manifest
+  chunks <- TH.runIO $ AE.eitherDecodeFileStrict' @AE.Object manifest
+  case chunks of
+    Left err -> fail $ "viteAssetFile: unreadable " <> manifest <> ": " <> err
+    Right cs -> case AET.parseMaybe (AE.withObject "chunk" (AE..: "file")) =<< KEM.lookup (fromString key) cs of
+      Nothing -> fail $ "viteAssetFile: no \"file\" for key " <> key <> " in " <> manifest
+      Just file -> TH.lift $ dir <> toString @Text file
 
 
 -- | Format a list of Floats as a PostgreSQL array literal, e.g. "{1.0,2.0,3.0}"
