@@ -74,3 +74,31 @@ test("the module entry is hashed in its filename, not a query", async ({
     .getAttribute("src");
   expect(src).toMatch(/\/js\/index\.[A-Za-z0-9_-]+\.js$/);
 });
+
+// Page chrome (tab switching, cookies, the log-explorer field filters) lives in the bundle
+// but is invoked from inline attributes Lucid renders — onpointerdown="navigatable(...)",
+// onclick="filterByField(...)". A module's top-level declarations are not globals, so the
+// contract is the explicit Object.assign(window, …) in page-chrome.ts.
+//
+// Regression guard for a real break: when that code moved out of BodyWrapper's inline
+// <script> into the bundle, a stale dist left every one of these undefined and silently
+// broke tab switching across the app. Nothing failed at load — the errors only appear when
+// a user clicks — so asserting the globals exist is the only cheap way to catch it.
+test("page-chrome publishes the globals inline handlers call", async ({
+  page,
+}) => {
+  await page.goto(PAGES[0], { waitUntil: "networkidle" });
+  const missing = await page.evaluate(() =>
+    [
+      "navigatable",
+      "setCookie",
+      "getCookie",
+      "filterByField",
+      "viewFieldPatterns",
+    ].filter((n) => typeof (window as never as Record<string, unknown>)[n] !== "function"),
+  );
+  expect(
+    missing,
+    `not on window (stale web-components build?): ${missing.join(", ")}`,
+  ).toEqual([]);
+});
