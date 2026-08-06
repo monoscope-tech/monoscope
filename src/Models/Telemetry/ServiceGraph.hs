@@ -30,6 +30,7 @@ module Models.Telemetry.ServiceGraph (
 
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEKey
+import Data.Char (isDigit)
 import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.IntMap.Strict qualified as IntMap
@@ -401,8 +402,10 @@ rollupServiceEdges useTf pid lo hi =
         WHERE c.kind IN ('server','consumer') AND p.kind IN ('client','producer')
         UNION ALL
         SELECT p.svc, 'service',
-               CASE WHEN p.db_ns IS NOT NULL AND p.db_ns <> '' THEN 'db:' || p.db_ns
+               -- A purely numeric db.namespace is a Redis database index, not a name.
+               CASE WHEN p.db_ns IS NOT NULL AND p.db_ns <> '' AND p.db_ns !~ '^[0-9]+$' THEN 'db:' || p.db_ns
                     WHEN p.db_sys IS NOT NULL AND p.db_sys <> '' THEN 'db:' || p.db_sys
+                    WHEN p.db_ns IS NOT NULL AND p.db_ns <> '' THEN 'db:' || p.db_ns
                     WHEN p.kind = 'producer' THEN 'queue:' || COALESCE(NULLIF(LOWER(p.srv), ''), p.name)
                     ELSE 'http:' || COALESCE(NULLIF(LOWER(p.srv), ''), NULLIF(LOWER(p.peer), ''), p.name) END,
                CASE WHEN (p.db_ns IS NOT NULL AND p.db_ns <> '') OR (p.db_sys IS NOT NULL AND p.db_sys <> '') THEN 'database'
@@ -501,7 +504,7 @@ serviceGraphForRange pid lo hi = do
 -- | Name an uninstrumented dependency the way its own ecosystem would: the database or
 -- namespace it serves, the destination a message went to, else the host that was dialled.
 inferredPeer :: SpanRecord -> (Text, NodeKind)
-inferredPeer s = case (attr "db.namespace" <|> attr "db.system.name" <|> attr "db.system", attr "messaging.destination.name") of
+inferredPeer s = case (dbName, attr "messaging.destination.name") of
   (Just db, _) -> ("db:" <> db, NKDatabase)
   (Nothing, Just dest) -> ("queue:" <> dest, NKQueue)
   (Nothing, Nothing)
@@ -509,6 +512,14 @@ inferredPeer s = case (attr "db.namespace" <|> attr "db.system.name" <|> attr "d
     | otherwise -> ("http:" <> peerHost, NKExternal)
   where
     attr k = T.strip <$> (atMapText k s.attributes >>= guarded (not . T.null) . T.strip)
+    -- Redis and friends report db.namespace as the numeric database index, so a purely
+    -- numeric namespace names the node "0" — true, and useless on a map. Fall back to the
+    -- system ("redis", "postgresql") and only qualify with the namespace when it is a name.
+    dbSystem = attr "db.system.name" <|> attr "db.system"
+    dbName = case (guarded (not . T.all isDigit) =<< attr "db.namespace", dbSystem) of
+      (Just ns, _) -> Just ns
+      (Nothing, Just sys) -> Just sys
+      (Nothing, Nothing) -> attr "db.namespace"
     -- Lower-cased and port-stripped: an inferred node keyed on a raw host is a
     -- cardinality bomb, and "API:443" and "api" are the same dependency.
     peerHost =
