@@ -35,8 +35,14 @@ WORKDIR /build
 # resolve anything if a listed package location is missing, and this stage runs
 # before the source COPYs below.
 COPY *.cabal cabal.project* Setup.hs LICENSE README.md auto-instrument-config.toml ./
-COPY shared/*.cabal ./shared/
-COPY cli/*.cabal ./cli/
+
+# ...and the sources of the other two local packages. `--only-dependencies`
+# below skips the target's own package but still *builds* local packages it
+# depends on, so cabal files alone are not enough — it needs shared/src and
+# cli/ to compile. Both are small and change rarely, and the dist-newstyle /
+# cabal-store cache mounts mean invalidating this layer is cheap.
+COPY shared ./shared
+COPY cli ./cli
 
 # Production profiling (Haskell counterpart of timefusion's --features profiling):
 # prof-way build with LATE cost centres on monoscope code only — deps are built
@@ -52,10 +58,8 @@ RUN --mount=type=cache,target=/root/.cabal/store \
 # Copy source code
 COPY package.yaml ./
 COPY src ./src
-COPY shared ./shared
 COPY test ./test
 COPY app ./app
-COPY cli ./cli
 COPY proto ./proto
 
 # Build frontend assets (npm deps already installed in deps image)
