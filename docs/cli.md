@@ -10,7 +10,7 @@ curl https://monoscope.tech/install.sh | sh
 
 Detects your platform (Linux/macOS, x86_64/arm64), downloads the latest release, verifies the SHA256 checksum, and installs `monoscope` to `~/.local/bin`.
 
-**No prerequisites.** The CLI is a single static-ish binary with no PostgreSQL, Kafka or gRPC client libraries to install first — you do not need `libpq`, `librdkafka`, `protobuf` or Homebrew. It links only what every Linux distro and macOS already ship (libc, zlib, ncurses). CI enforces this on every release with `scripts/check-cli-linkage.sh`.
+**No prerequisites.** The CLI is one binary. It does not need `libpq`, `librdkafka`, `protobuf` or Homebrew — it links only libraries every Linux distro and macOS already ship (libc, zlib, ncurses). This is enforced on every release build by `scripts/check-cli-linkage.sh`, not just intended.
 
 **Specific version:**
 
@@ -723,6 +723,41 @@ For every other list command (`monitors list`, `dashboards list`, `api-keys list
 
 This normalisation happens client-side — the underlying API still returns its native shape (some endpoints emit a `Paged` envelope `{items, page, per_page, total_count, has_more}`, others a bare array). `jq '.data[] | .id'` works for every list command, regardless of which the server returned.
 
+For `dashboards render` (see [Render a dashboard in the terminal](#render-a-dashboard-in-the-terminal)):
+
+```json
+{
+  "title": "Overview",
+  "tab": "Overview",
+  "tabs": ["Overview", "Service", "Logs"],
+  "since": "1h",
+  "from": 1754438400000,
+  "to": 1754442000000,
+  "widgets": [
+    {
+      "id": "p95",
+      "title": "P95 Latency",
+      "w_type": "timeseries",
+      "unit": "ms",
+      "layout": { "x": 0, "y": 0, "w": 6, "h": 4 },
+      "headers": ["timestamp", "p95"],
+      "rows": [[1754438400000, 118.4]],
+      "text_rows": [],
+      "stats": { "min": 12.0, "max": 340.1, "mean": 118.4, "sum": 0, "count": 60, "mode": 0, "max_group_sum": 0 },
+      "value": null,
+      "error": null,
+      "children": []
+    }
+  ]
+}
+```
+
+`rows` is numeric (charts), `text_rows` is the string form (tables and log
+widgets); `value` carries the scalar for stat widgets and `children` the
+sub-grid of a group widget. A widget whose query failed reports `error` and
+empty rows rather than being dropped, so a partially broken dashboard is still
+legible.
+
 > **Migration note:** the previous shapes (`{items, total_count, ...}` for issues/endpoints/log-patterns; bare arrays for monitors/dashboards/api-keys/teams/members) are no longer emitted. Pipelines that read `.items` should switch to `.data`. The `events search` envelope (`{events, count, has_more, cursor}`) is unchanged — those commands remain on their event-specific shape because they expose `--cursor`/`--first`/`--id-only`.
 
 ## Agentic incident workflow
@@ -740,8 +775,9 @@ monoscope services list -o json | jq '.services'
 monoscope logs search --service checkout-api --level error --since 30m -o json \
   | jq '.events[] | {timestamp, summary, trace_id}'
 
-# 4. Pick a trace and pull the full tree
-monoscope traces get <trace-id> --tree
+# 4. Pick a trace and find the span that actually took the time
+monoscope traces get <trace-id> --tree \
+  | jq -r '.events[] | [.duration, .service, .span_name] | @tsv' | sort -rn | head
 
 # 5. Find similar errors via log patterns
 monoscope log-patterns list --per-page 20 -o json \
@@ -751,7 +787,12 @@ monoscope log-patterns list --per-page 20 -o json \
 monoscope events search 'attributes.http.response.status_code >= 500' --since 1h -o json \
   | jq -r '.events[] | "\(.timestamp) \(.service) \(.summary)"'
 
-# 7. Acknowledge, and keep moving
+# 7. Cross-check against what the team already watches: every widget on a
+#    dashboard, resolved in one request
+monoscope dashboards render <dashboard-id> --since 1h \
+  | jq -r '.widgets[] | select(.error) | "BROKEN \(.title): \(.error)"'
+
+# 8. Acknowledge, and keep moving
 monoscope issues ack <issue-id>
 ```
 
@@ -783,9 +824,19 @@ monoscope monitors apply .monoscope/monitors/
 
 ## Testing & regression coverage
 
-The CLI ships with three layers of tests; pick the one that matches the change you're making.
+The CLI ships with four layers of tests; pick the one that matches the change you're making.
 
-### 1. Doctests for pure helpers
+### 1. Renderer unit tests (no server, no terminal)
+
+`cli/test/Main.hs` (`make cli-test`) covers the pure renderers — `CLI.Chart`,
+`CLI.Dashboard`, `CLI.LogView`. Everything they touch is `data in → [Text] out`,
+so the assertions are on exactly what a user sees: that a chart fits its width
+budget, that an empty or flat series says so instead of drawing a broken grid,
+that ANSI-coloured text still pads to the right visible width, that side-by-side
+widgets land on the same terminal row. This suite needs no database and runs in
+milliseconds — put any new rendering logic here.
+
+### 2. Doctests for pure helpers
 
 `cli/CLI/Validate.hs` carries doctests for `validateDuration`, `validateUuid`,
 `validateKind`, and `normalizeKind`. They run as part of the lib's doctest
@@ -793,7 +844,7 @@ suite once exposed; until then they document expected behavior in-source.
 Add a doctest for any new pure helper — they are the cheapest regression
 guard you have.
 
-### 2. Binary smoke tests (no server)
+### 3. Binary smoke tests (no server)
 
 `test/integration/CLI/CLIBinarySpec.hs` runs `monoscope --help` for every
 subcommand and asserts exit code 0. This catches optparse parser
@@ -801,7 +852,7 @@ construction errors before they reach a user. **Add an entry to `helpCases`
 when you add a new `command "..."` in `cli/Main.hs`** — the test catches
 copy-paste typos in metavar / parser wiring instantly.
 
-### 3. End-to-end against a real server
+### 4. End-to-end against a real server
 
 `test/integration/CLI/CLIE2ESpec.hs` runs the actual `monoscope` binary
 against an HTTP server. This is what catches wire-format regressions
@@ -846,12 +897,16 @@ etc.) — adding a new feature? Add the regression test alongside.
 
 ### When you add a new CLI feature
 
-1. Add the parser entry in `cli/Main.hs` (the binary smoke test catches
+1. Add the parser entry in `cli/CLI/Main.hs` (the binary smoke test catches
    wiring errors automatically).
-2. Implement in `cli/CLI/Commands.hs` or `cli/CLI/Resource.hs` and any pure
-   helper goes in `cli/CLI/Validate.hs` (with doctests).
+2. Implement in `cli/CLI/Commands.hs` or `cli/CLI/Resource.hs`; pure helpers go
+   in `cli/CLI/Validate.hs` (with doctests) and rendering in `cli/CLI/Chart.hs`
+   / `CLI/LogView.hs` / `CLI/Dashboard.hs` (with a case in `cli/test/Main.hs`).
 3. Add an `it "<feature>" $ withReachableServer $ \cfg -> ...` in
    `test/integration/CLI/CLIE2ESpec.hs` that asserts the wire-level
    behaviour — the JSON envelope shape, the exit code, the error message.
 4. Run the e2e suite locally before merging if the change touches the
    request URL, the query params, or the response shape.
+5. Keep the new code free of DB imports. `monoscope-cli` depends only on
+   `monoscope-shared`, never `lib:monoscope`; `scripts/check-cli-linkage.sh`
+   fails the release build if a stray import puts libpq back in the binary.

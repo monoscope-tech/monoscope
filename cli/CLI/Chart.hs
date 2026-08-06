@@ -39,8 +39,8 @@ module CLI.Chart (
 import Relude
 
 import Data.Bits (bit, (.|.))
-import Data.List (zipWith3)
 import Data.IntMap.Strict qualified as IntMap
+import Data.List (zipWith3)
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)

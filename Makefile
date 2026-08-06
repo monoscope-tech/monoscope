@@ -67,8 +67,12 @@ live-reload: kill-live-reload
 # The CLI is its own package with no libpq/librdkafka/grpc linkage — see
 # cli/monoscope-cli.cabal. Build it on its own; it does not need the server
 # library, the frontend assets or a database.
+# NB: no --ghc-options here. monoscope-shared is shared with the ghcid session
+# in `make live-reload`; building it at a different optimisation level swaps the
+# dylib under GHCi and the next reload dies with "symbol not found in flat
+# namespace".
 cli-build:
-	cabal build monoscope-cli:exe:monoscope --ghc-options="-O0"
+	cabal build monoscope-cli:exe:monoscope
 
 # Release-shaped build: optimised, section-split, stripped, and checked for
 # native-library linkage the way cli-release.yml does it.
@@ -79,7 +83,7 @@ cli-release-build:
 	./scripts/check-cli-linkage.sh ./monoscope
 
 cli-test:
-	cabal test monoscope-cli:cli-tests --ghc-options="-O0" --test-show-details=direct
+	cabal test monoscope-cli:cli-tests --test-show-details=direct
 
 live-reload-cli:
 	ghcid --command 'cabal repl exe:monoscope --no-semaphore --ghc-options="-O0 -Wno-error=unused-imports -Wno-error=unused-top-binds" --with-compiler=$(GHC)' $(RELOAD_ENV) --warnings 2>&1 | tee build-cli.log
@@ -202,7 +206,7 @@ live-reload-doctests:
 	ghcid --command 'cabal repl lib:monoscope --no-semaphore --with-compiler=$(GHC)' --test ':! cabal test monoscope:doctests --ghc-options="-O0" --test-show-details=streaming' $(RELOAD_ENV)
 
 fmt:
-	fourmolu --mode inplace $$(find ./src/ -name '*.hs')
+	fourmolu --mode inplace $$(find ./src/ ./shared/ ./cli/ -name '*.hs')
 
 fix-imports:
 	fix-imports $$(find ./src -name '*.hs') <$$(find ./src -name '*.hs')

@@ -52,6 +52,7 @@ import Control.Lens
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEKey
 import Data.Default
+import Data.Effectful.Hasql qualified
 import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq qualified as Wreq
 import Data.Generics.Labels ()
@@ -65,11 +66,10 @@ import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, IOE, (:>))
-import Data.Effectful.Hasql qualified
 import Effectful.Concurrent (Concurrent)
-import Effectful.Labeled qualified
 import Effectful.Concurrent.Async (concurrently, pooledForConcurrently)
 import Effectful.Error.Static (Error, throwError)
+import Effectful.Labeled qualified
 import Effectful.Log (Log)
 import Effectful.Reader.Static (Reader, ask)
 import Effectful.Time qualified as Time
@@ -877,9 +877,10 @@ widgetMetrics pid (sinceStr, fromDStr, toDStr) allParams widget =
 fetchWidgetData :: WidgetData es => Projects.ProjectId -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> Eff es Widget.Widget
 fetchWidgetData pid timeRange allParams widget = do
   md <- widgetMetrics pid timeRange allParams widget
-  pure $ widget & #dataset ?~ case widget.wType of
-    Widget.WTStat -> def{Widget.source = AE.Null, Widget.value = md.dataFloat}
-    _ -> Widget.toWidgetDataset md
+  pure $ widget
+    & #dataset ?~ case widget.wType of
+      Widget.WTStat -> def{Widget.source = AE.Null, Widget.value = md.dataFloat}
+      _ -> Widget.toWidgetDataset md
 
 
 processEagerWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATAuthCtx Widget.Widget

@@ -71,8 +71,8 @@ import GHC.Records (HasField (getField))
 import Hasql.Interpolate qualified as HI
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Relude
-import Web.Wire (FacetValue (..))
 import Utils (toXXHash)
+import Web.Wire (FacetValue (..))
 
 
 -- $setup

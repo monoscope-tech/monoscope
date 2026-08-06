@@ -88,6 +88,8 @@ spec = describe "CLI binary E2E tests" do
           , ["dashboards", "widget", "upsert", "--help"]
           , ["dashboards", "widget", "delete", "--help"]
           , ["dashboards", "widget", "reorder", "--help"]
+          , ["dashboards", "render", "--help"]
+          , ["chart", "--help"]
           , ["api-keys", "deactivate", "--help"]
           , ["api-keys", "revoke", "--help"]
           , ["share-link", "--help"]

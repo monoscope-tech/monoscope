@@ -44,7 +44,9 @@ main = hspec do
       formatValue "%" 99.42 `shouldBe` "99.4%"
 
     it "reads a leading timestamp column as the x axis" do
-      let md = decodeOrDie [aesonQQ|{ "headers": ["timestamp","hits"]
+      let md =
+            decodeOrDie
+              [aesonQQ|{ "headers": ["timestamp","hits"]
                                     , "dataset": [[1000, 5], [2000, 7]]
                                     , "data_float": null, "data_json": [], "data_text": []
                                     , "rows_count": 2, "rows_per_min": null

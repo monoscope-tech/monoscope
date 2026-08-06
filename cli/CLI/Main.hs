@@ -948,7 +948,7 @@ run version global = \case
     EvContext opts -> runEventsContext cfg opts kindOverride mode
   MetricsCmd mCmd -> withCfgMode global $ \cfg mode -> case mCmd of
     MQuery opts -> runMetricsQuery cfg opts mode
-    MChart opts -> runMetricsChart cfg opts
+    MChart opts -> runMetricsChart cfg opts mode
   ServicesCmd (SList opts) -> withCfgMode global $ \cfg mode -> runServicesList cfg opts mode
   ConfigCmd CInit -> runConfigInit
   ConfigCmd (CSet opts) -> runConfigSet opts
@@ -1066,7 +1066,7 @@ run version global = \case
   VersionCmd -> putTextLn $ "monoscope " <> toText (showVersion version)
   TelemetryGenCmd opts -> withCfgMode global $ \cfg _ -> runTelemetryGen cfg opts
   SendEventCmd opts -> withCfgMode global $ \cfg _ -> runSendEvent cfg opts
-  ChartCmd opts -> withCfgMode global $ \cfg _ -> runChart cfg opts
+  ChartCmd opts -> withCfgMode global $ \cfg mode -> runChart cfg opts mode
 
 
 -- | Resolve and cache the output mode for this process. The cache (Core.hs

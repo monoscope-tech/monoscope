@@ -44,9 +44,9 @@ import Relude
 
 import CLI.Chart qualified as Chart
 import CLI.Config (CLIConfig (..), ConfigKey (..), allConfigKeys, configDir, configFilePath, configKeyText, parseConfigKey, removeToken, resolveConfig, saveToken, setConfigValue)
+import CLI.Core (OutputMode (..), apiGet, apiPostUnauth, isInteractiveTTY, isJsonOutput, printDebug, printError, renderJSON, renderTable, renderWith, withAPIResult)
 import CLI.Dashboard qualified as Dash
 import CLI.LogView (EventRow (..), LogFormat (..), eventRows, parseLogFormat, renderEventLine, renderLogfmt, renderWaterfall)
-import CLI.Core (OutputMode (..), apiGet, apiPostUnauth, isInteractiveTTY, isJsonOutput, printDebug, printError, renderJSON, renderTable, renderWith, withAPIResult)
 import CLI.UI (inputForm, selectFromList, withSpinner)
 import CLI.Validate (validateAndNormalizeKind, validateDurationOrDie, validateQueryOrDie)
 import Control.Exception (bracket)
@@ -70,7 +70,6 @@ import Effectful
 import Effectful.Environment (Environment)
 import Effectful.Environment qualified as Env
 import Effectful.FileSystem (FileSystem)
-import Web.Wire qualified as Wire
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Context.ThreadLocal qualified as OtelCtx
 import OpenTelemetry.Trace (SpanStatus (..), Tracer, TracerOptions (..), defaultSpanArguments, initializeGlobalTracerProvider, makeTracer, shutdownTracerProvider)
@@ -84,6 +83,7 @@ import System.Process (spawnProcess)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (catch, tryAny)
 import Web.Wire (DeviceCodeResponse (..), DeviceTokenResponse (..), ProjectInfo (..))
+import Web.Wire qualified as Wire
 
 
 -- Auth
@@ -1010,7 +1010,7 @@ runMetricsQuery cfg opts mode = do
       whenJust opts.assert $ checkAssertion md
 
 
-runMetricsChart :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> MetricsChartOpts -> Eff es ()
+runMetricsChart :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> MetricsChartOpts -> OutputMode -> Eff es ()
 runMetricsChart cfg opts =
   runChart cfg ChartCmdOpts{query = opts.expression, since = opts.since, from = opts.from, to = opts.to, watch = opts.watch, chartType = Nothing, source = Nothing, height = Nothing}
 
@@ -1031,14 +1031,21 @@ data ChartCmdOpts = ChartCmdOpts
   deriving stock (Show)
 
 
-runChart :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> ChartCmdOpts -> Eff es ()
-runChart cfg opts = do
+runChart :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> ChartCmdOpts -> OutputMode -> Eff es ()
+runChart cfg opts mode = do
   -- Validate --watch up front so a typo doesn't silently fall back to 5s.
   validateDurationOrDie "--watch" opts.watch
   validateDurationOrDie "--since" opts.since
   let params = metricsParams opts.query opts.since opts.from opts.to <> maybe [] (\s -> [("source", s)]) opts.source
       run = withAPIResult cfg "/api/v1/metrics" params \val ->
-        withMetricsData val (renderJSON val) (drawMetrics opts)
+        withMetricsData val (renderJSON val) \md -> do
+          renderWith mode val (drawMetrics opts md)
+          -- A failed query comes back as an empty result set with `error` set.
+          -- Reporting that as "no data in range" would be a lie — the range may
+          -- be full of data — and a script that only checked the exit code
+          -- would carry on as if the number were real. Fail in every mode; the
+          -- JSON envelope (already printed) carries the reason.
+          whenJust md.error \e -> printError ("query failed: " <> e) >> liftIO exitFailure
   repeatEvery opts.watch run
 
 

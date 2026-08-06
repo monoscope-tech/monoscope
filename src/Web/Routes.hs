@@ -47,7 +47,6 @@ import Data.OpenApi qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
 import Pages.CommandPalette qualified as CommandPalette
 import Servant.OpenApi (HasOpenApi (..), toOpenApi)
-import Web.WireSchemas ()
 import System.Config (AuthContext (..), DeploymentEnv (..), EnvConfig (..))
 import System.Exit (ExitCode (..))
 import System.Logging qualified as Log
@@ -57,6 +56,7 @@ import System.Types (ATAuthCtx, ATBaseCtx, HXRedirectDest, RespHeaders, TriggerE
 import Web.Auth (APItoolkitAuthContext, ApiKeyAuthContext, apiKeyAuthHandler, authHandler, htmlServerError)
 import Web.Auth qualified as Auth
 import Web.MCP qualified as MCP
+import Web.WireSchemas ()
 
 -- Model imports
 

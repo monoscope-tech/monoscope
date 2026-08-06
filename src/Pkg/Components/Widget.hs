@@ -223,8 +223,9 @@ data WidgetDataset = WidgetDataset
 -- >>> chartQuery def{query = Nothing}
 -- Nothing
 chartQuery :: Widget -> Maybe Text
-chartQuery w = w.query <&> \q ->
-  if hasSummarize q && hasBinning q then q else q <> " | " <> defaultAggregation
+chartQuery w =
+  w.query <&> \q ->
+    if hasSummarize q && hasBinning q then q else q <> " | " <> defaultAggregation
   where
     hasSummarize = T.isInfixOf "summarize" . T.toLower
     hasBinning = T.isInfixOf " by bin" . T.toLower

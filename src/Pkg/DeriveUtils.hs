@@ -31,6 +31,7 @@ module Pkg.DeriveUtils (
 ) where
 
 import Control.Exception (throwIO)
+import Control.Lens ((?~))
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KEM
 import Data.Aeson.Types qualified as AET
@@ -41,12 +42,9 @@ import Data.Default (Default (..))
 import Data.Digest.XXHash (xxHash)
 import Data.Effectful.Hasql (Hasql)
 import Data.IntMap qualified as IntMap
-import Control.Lens ((?~))
 import Data.OpenApi (NamedSchema (..), ToParamSchema (..), ToSchema (..), enum_, genericDeclareNamedSchema, type_)
 import Data.OpenApi qualified as OpenApi
 import Data.OpenApi.Internal.Schema (GToSchema)
-import GHC.Generics (Rep)
-import Text.Casing (quietSnake)
 import Data.Text qualified as T
 import Data.Time (UTCTime, ZonedTime, utc, utcToZonedTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
@@ -61,6 +59,7 @@ import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (ToField (..))
 import Database.PostgreSQL.Simple.Types (Query (..))
 import Effectful (IOE, type (:>))
+import GHC.Generics (Rep)
 import GHC.Records (HasField (getField))
 import GHC.TypeLits (KnownSymbol, Symbol, symbolVal)
 import Hasql.Connection.Settings qualified as HCS
@@ -76,6 +75,7 @@ import Pkg.Deriving
 import Relude
 import Relude.Extra.Enum (safeToEnum)
 import Servant (FromHttpApiData (..))
+import Text.Casing (quietSnake)
 
 
 type DB es = (Hasql :> es, IOE :> es)
@@ -549,5 +549,3 @@ rawSql = fromString . toString
 -- a WHERE clause via @<> [HI.sql| WHERE ... |]@.
 selectFrom :: forall e. Entity e => HI.Sql
 selectFrom = rawSql $ decodeUtf8 $ fromQuery (_select @e)
-
-

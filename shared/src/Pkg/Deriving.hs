@@ -30,9 +30,9 @@ import Data.Vector qualified as V
 import GHC.TypeLits (KnownSymbol, Symbol, symbolVal)
 import Relude
 import Relude.Unsafe qualified as Unsafe
-import Web.HttpApiData (FromHttpApiData (..))
 import System.Envy (Var (..))
 import Text.Casing (fromSnake, quietSnake, toPascal)
+import Web.HttpApiData (FromHttpApiData (..))
 
 
 -- | DerivingVia wrapper for snake-case-stringified enums.

@@ -84,19 +84,19 @@ eventRows = \case
         known = ["id", "timestamp", "trace_id", "span_name", "duration", "service", "kind", "summary", "errors", "parent_id", "start_time_ns", "latency_breakdown"]
         others = [(n, i) | (n, i) <- Map.toList idx, n `notElem` known]
      in [ EventRow
-        { eventId = at "id" row
-        , timestamp = at "timestamp" row
-        , service = at "service" row
-        , spanName = at "span_name" row
-        , kind = at "kind" row
-        , durationNs = readMaybe . toString =<< at "duration" row
-        , traceId = at "trace_id" row
-        , parentId = at "parent_id" row
-        , startNs = readMaybe . toString =<< at "start_time_ns" row
-        , summary = at "summary" row
-        , isError = at "errors" row `elem` [Just "true", Just "t", Just "True"]
-        , extras = [(n, v) | (n, i) <- others, Just v <- [guarded (not . T.null) =<< (row !!? i)]]
-        }
+            { eventId = at "id" row
+            , timestamp = at "timestamp" row
+            , service = at "service" row
+            , spanName = at "span_name" row
+            , kind = at "kind" row
+            , durationNs = readMaybe . toString =<< at "duration" row
+            , traceId = at "trace_id" row
+            , parentId = at "parent_id" row
+            , startNs = readMaybe . toString =<< at "start_time_ns" row
+            , summary = at "summary" row
+            , isError = at "errors" row `elem` [Just "true", Just "t", Just "True"]
+            , extras = [(n, v) | (n, i) <- others, Just v <- [guarded (not . T.null) =<< (row !!? i)]]
+            }
         | row <- extractRows (KM.lookup "logsData" obj)
         ]
   _ -> []
@@ -122,7 +122,7 @@ renderEventLine color width r =
       , dim color (padTo 7 (maybe "" (formatValue "ms" . (/ 1e6)) r.durationNs))
       , ellipsize msgWidth message
       ]
-      <> trailer
+    <> trailer
   where
     msgWidth = max 20 (width - 12 - 5 - 18 - 7 - 5 - T.length (stripStyle trailer))
     message = maybe (fromMaybe "" r.spanName) renderSummary r.summary

@@ -109,6 +109,7 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..), getAeson)
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
+import Effectful.Concurrent.Async (pooledForConcurrently)
 import Effectful.Error.Static (throwError)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
@@ -125,7 +126,6 @@ import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as PM
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
-import Effectful.Concurrent.Async (pooledForConcurrently)
 import Pages.Charts.Types qualified as Charts
 import Pages.Dashboards qualified as DashPage
 import Pages.LogExplorer.Log qualified as Log
@@ -136,9 +136,9 @@ import Pkg.Parser qualified as Parser
 import Pkg.SchemaLearning.Catalog qualified as Fields
 import Relude hiding (ask, id)
 import Servant (NoContent (..), ServerError (..), err400, err404)
-import Text.Slugify (slugify)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATBaseCtx)
+import Text.Slugify (slugify)
 import Web.ApiTypes
 import Web.FacetsFallback (facetsFallback)
 

@@ -68,7 +68,6 @@ import Network.Wreq (FormParam ((:=)), defaults, getWith, header, post, response
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pkg.Mail (addConvertKitUser)
 import Relude hiding (ask, asks)
-import Web.Wire (DeviceCodeResponse (..), DeviceTokenResponse (..), ProjectInfo (..))
 import Servant (Header, Headers, NoContent (..), addHeader)
 import Servant qualified
 import Servant.Server (Handler, ServerError (..), err302, err401)
@@ -79,6 +78,7 @@ import System.Types (ATAuthCtx, ATBaseCtx, DB, RespHeaders, addRespHeaders)
 import Utils (escapedQueryPartial)
 import Web.Cookie (Cookies, SetCookie, parseCookies)
 import Web.I18n qualified as I18n
+import Web.Wire (DeviceCodeResponse (..), DeviceTokenResponse (..), ProjectInfo (..))
 import "base64" Data.ByteString.Base64 qualified as B64
 
 

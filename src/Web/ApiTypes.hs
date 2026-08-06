@@ -73,8 +73,8 @@ import Pages.Charts.Types qualified as Charts
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (JsonValueSchema (..), SnakeSchema (..), UUIDId, WrappedEnumSC (..))
 import Relude
-import Web.Wire (Paged (..))
 import Servant (FromHttpApiData)
+import Web.Wire (Paged (..))
 
 
 -- | Phantom-tagged team id.
