@@ -49,16 +49,22 @@ module Pkg.Parser.Stats (
   extractPercentilesInfo,
   subjectExprToSQL,
   rewriteSectionsForSource,
+  collectSubjects,
+  validateFields,
+  parseQueryDiagnosed,
+  QueryError (..),
+  definedNames,
 ) where
 
 import Control.Lens (set, view)
 import Control.Monad.Combinators.Expr (Operator (..), makeExprParser)
 import Data.Aeson qualified as AE
+import Data.Char (isDigit, isSpace)
 import Data.Generics.Product (typed)
 import Data.Text qualified as T
 import Data.Text.Display (Display, display, displayBuilder, displayPrec)
 import Pkg.Deriving (WrappedEnumSC (..))
-import Pkg.Parser.Expr (Expr (..), Parser, Subject (..), ToQueryText (..), Values (..), kqlTimespanToTimeBucket, pExpr, pSubject, pValues)
+import Pkg.Parser.Expr (Expr (..), Parser, Subject (..), ToQueryText (..), Values (..), knownFieldRoot, kqlTimespanToTimeBucket, pExpr, pSubject, pValues, suggestFieldRoot)
 import Relude hiding (GT, LT, Sum, many, some)
 import Text.Megaparsec
 import Text.Megaparsec.Char (alphaNumChar, char, digitChar, hspace, space, string)
@@ -248,98 +254,119 @@ rewriteSectionsForSource (Just SMetrics) = mapSubjects \case
 rewriteSectionsForSource _ = id
 
 
--- | Apply a Subject rewrite to every Subject reachable from a Section list.
--- Hand-rolled because generic-lens 'types' overflows GHC's reduction depth on
--- this AST (Values/Expr mutual recursion). Any new Subject-bearing constructor
--- needs its case added here.
-mapSubjects :: (Subject -> Subject) -> [Section] -> [Section]
-mapSubjects f = map goSec
+-- | Effectful walk over every Subject reachable from a Section list; the
+-- single traversal 'mapSubjects' (rewrite) and 'collectSubjects' (gather)
+-- are both derived from. Hand-rolled because generic-lens 'types' overflows
+-- GHC's reduction depth on this AST (Values/Expr mutual recursion). Any new
+-- Subject-bearing constructor needs its case added here.
+traverseSubjects :: forall m. Applicative m => (Subject -> m Subject) -> [Section] -> m [Section]
+traverseSubjects f = traverse goSec
   where
     goSec = \case
-      Search e -> Search (goE e)
-      WhereClause e -> WhereClause (goE e)
-      SummarizeCommand aggs by -> SummarizeCommand (map goAgg aggs) (goBy <$> by)
-      ExtendCommand kvs -> ExtendCommand [(k, goAgg a) | (k, a) <- kvs]
-      ProjectCommand kvs -> ProjectCommand [(k, goAgg a) | (k, a) <- kvs]
-      SortCommand fs -> SortCommand [SortField (f s) d | SortField s d <- fs]
-      s@TakeCommand{} -> s
-      s@Source{} -> s
+      Search e -> Search <$> goE e
+      WhereClause e -> WhereClause <$> goE e
+      HavingClause e -> HavingClause <$> goE e
+      SummarizeCommand aggs by -> SummarizeCommand <$> traverse goAgg aggs <*> traverse goBy by
+      ExtendCommand kvs -> ExtendCommand <$> traverse (traverse goAgg) kvs
+      ProjectCommand kvs -> ProjectCommand <$> traverse (traverse goAgg) kvs
+      SortCommand fs -> SortCommand <$> traverse (\(SortField s d) -> flip SortField d <$> f s) fs
+      s@TakeCommand{} -> pure s
+      s@Source{} -> pure s
+    -- Every subject/value predicate has the same (Subject, Values) shape, so
+    -- one helper per arity covers the lot.
+    sv :: (Subject -> Values -> a) -> Subject -> Values -> m a
+    sv c s v = c <$> f s <*> goV v
+    st :: (Subject -> t -> a) -> Subject -> t -> m a
+    st c s t = flip c t <$> f s
     goE = \case
-      Eq s v -> Eq (f s) (goV v)
-      NotEq s v -> NotEq (f s) (goV v)
-      GT s v -> GT (f s) (goV v)
-      LT s v -> LT (f s) (goV v)
-      GTEq s v -> GTEq (f s) (goV v)
-      LTEq s v -> LTEq (f s) (goV v)
-      Regex s t -> Regex (f s) t
-      In s v -> In (f s) (goV v)
-      NotIn s v -> NotIn (f s) (goV v)
-      Has s v -> Has (f s) (goV v)
-      NotHas s v -> NotHas (f s) (goV v)
-      HasAny s v -> HasAny (f s) (goV v)
-      HasAll s v -> HasAll (f s) (goV v)
-      Contains s v -> Contains (f s) (goV v)
-      NotContains s v -> NotContains (f s) (goV v)
-      StartsWith s v -> StartsWith (f s) (goV v)
-      NotStartsWith s v -> NotStartsWith (f s) (goV v)
-      EndsWith s v -> EndsWith (f s) (goV v)
-      NotEndsWith s v -> NotEndsWith (f s) (goV v)
-      Matches s t -> Matches (f s) t
-      Paren e -> Paren (goE e)
-      And a b -> And (goE a) (goE b)
-      Or a b -> Or (goE a) (goE b)
-      ValEq a b -> ValEq (goV a) (goV b)
-      ValNotEq a b -> ValNotEq (goV a) (goV b)
-      ValGT a b -> ValGT (goV a) (goV b)
-      ValLT a b -> ValLT (goV a) (goV b)
-      ValGTEq a b -> ValGTEq (goV a) (goV b)
-      ValLTEq a b -> ValLTEq (goV a) (goV b)
-      BoolFunc v -> BoolFunc (goV v)
+      Eq s v -> sv Eq s v
+      NotEq s v -> sv NotEq s v
+      GT s v -> sv GT s v
+      LT s v -> sv LT s v
+      GTEq s v -> sv GTEq s v
+      LTEq s v -> sv LTEq s v
+      Regex s t -> st Regex s t
+      In s v -> sv In s v
+      NotIn s v -> sv NotIn s v
+      Has s v -> sv Has s v
+      NotHas s v -> sv NotHas s v
+      HasAny s v -> sv HasAny s v
+      HasAll s v -> sv HasAll s v
+      Contains s v -> sv Contains s v
+      NotContains s v -> sv NotContains s v
+      StartsWith s v -> sv StartsWith s v
+      NotStartsWith s v -> sv NotStartsWith s v
+      EndsWith s v -> sv EndsWith s v
+      NotEndsWith s v -> sv NotEndsWith s v
+      Matches s t -> st Matches s t
+      Paren e -> Paren <$> goE e
+      And a b -> And <$> goE a <*> goE b
+      Or a b -> Or <$> goE a <*> goE b
+      ValEq a b -> ValEq <$> goV a <*> goV b
+      ValNotEq a b -> ValNotEq <$> goV a <*> goV b
+      ValGT a b -> ValGT <$> goV a <*> goV b
+      ValLT a b -> ValLT <$> goV a <*> goV b
+      ValGTEq a b -> ValGTEq <$> goV a <*> goV b
+      ValLTEq a b -> ValLTEq <$> goV a <*> goV b
+      BoolFunc v -> BoolFunc <$> goV v
     goV = \case
-      Field s -> Field (f s)
-      List vs -> List (map goV vs)
-      ScalarFunc n args -> ScalarFunc n (map goV args)
-      v -> v
-    goSE (SubjectExpr s p) = SubjectExpr (f s) p
+      Field s -> Field <$> f s
+      List vs -> List <$> traverse goV vs
+      ScalarFunc n args -> ScalarFunc n <$> traverse goV args
+      v -> pure v
+    goSE (SubjectExpr s p) = flip SubjectExpr p <$> f s
     goScalar = \case
-      SVal v -> SVal (goV v)
-      SAgg a -> SAgg (goAgg a)
-      SArith a o b -> SArith (goScalar a) o (goScalar b)
+      SVal v -> SVal <$> goV v
+      SAgg a -> SAgg <$> goAgg a
+      SArith a o b -> SArith <$> goScalar a <*> pure o <*> goScalar b
     goAgg = \case
-      Count s t -> Count (f s) t
-      CountIf e t -> CountIf (goE e) t
-      DCount s a t -> DCount (f s) a t
-      P50 s t -> P50 (f s) t
-      P75 s t -> P75 (f s) t
-      P90 s t -> P90 (f s) t
-      P95 s t -> P95 (f s) t
-      P99 s t -> P99 (f s) t
-      P100 s t -> P100 (f s) t
-      Percentile se d t -> Percentile (goSE se) d t
-      Percentiles se ds t -> Percentiles (goSE se) ds t
-      Sum s t -> Sum (f s) t
-      Avg s t -> Avg (f s) t
-      Min s t -> Min (f s) t
-      Max s t -> Max (f s) t
-      Median s t -> Median (f s) t
-      Stdev s t -> Stdev (f s) t
-      Range s t -> Range (f s) t
-      Coalesce vs t -> Coalesce (map goV vs) t
-      Strcat vs t -> Strcat (map goV vs) t
-      Iff e a b t -> Iff (goE e) (goV a) (goV b) t
-      Case ps el t -> Case [(goE e, goV v) | (e, v) <- ps] (goV el) t
-      Round se v t -> Round (goScalar se) (goV v) t
-      ToFloat se t -> ToFloat (goScalar se) t
-      ToInt se t -> ToInt (goScalar se) t
-      ToString se t -> ToString (goScalar se) t
-      Plain s t -> Plain (f s) t
-      ArithExpr se t -> ArithExpr (goScalar se) t
-    goBy (SummarizeByClause items) = SummarizeByClause (map goItem items)
+      Count s t -> st Count s t
+      CountIf e t -> flip CountIf t <$> goE e
+      DCount s a t -> (\s' -> DCount s' a t) <$> f s
+      P50 s t -> st P50 s t
+      P75 s t -> st P75 s t
+      P90 s t -> st P90 s t
+      P95 s t -> st P95 s t
+      P99 s t -> st P99 s t
+      P100 s t -> st P100 s t
+      Percentile se d t -> (\se' -> Percentile se' d t) <$> goSE se
+      Percentiles se ds t -> (\se' -> Percentiles se' ds t) <$> goSE se
+      Sum s t -> st Sum s t
+      Avg s t -> st Avg s t
+      Min s t -> st Min s t
+      Max s t -> st Max s t
+      Median s t -> st Median s t
+      Stdev s t -> st Stdev s t
+      Range s t -> st Range s t
+      Coalesce vs t -> flip Coalesce t <$> traverse goV vs
+      Strcat vs t -> flip Strcat t <$> traverse goV vs
+      Iff e a b t -> (\e' a' b' -> Iff e' a' b' t) <$> goE e <*> goV a <*> goV b
+      Case ps el t -> (\ps' el' -> Case ps' el' t) <$> traverse (\(e, v) -> (,) <$> goE e <*> goV v) ps <*> goV el
+      Round se v t -> (\se' v' -> Round se' v' t) <$> goScalar se <*> goV v
+      ToFloat se t -> flip ToFloat t <$> goScalar se
+      ToInt se t -> flip ToInt t <$> goScalar se
+      ToString se t -> flip ToString t <$> goScalar se
+      Plain s t -> st Plain s t
+      ArithExpr se t -> flip ArithExpr t <$> goScalar se
+    goBy (SummarizeByClause items) = SummarizeByClause <$> traverse goItem items
     goItem = \case
-      BySubject s -> BySubject (f s)
-      ByBinFunc (Bin s t) -> ByBinFunc (Bin (f s) t)
-      ByBinFunc (BinAuto s) -> ByBinFunc (BinAuto (f s))
-      ByScalarFunc a -> ByScalarFunc (goAgg a)
+      BySubject s -> BySubject <$> f s
+      ByBinFunc (Bin s t) -> ByBinFunc . flip Bin t <$> f s
+      ByBinFunc (BinAuto s) -> ByBinFunc . BinAuto <$> f s
+      ByScalarFunc a -> ByScalarFunc <$> goAgg a
+
+
+-- | Apply a Subject rewrite to every Subject reachable from a Section list.
+mapSubjects :: (Subject -> Subject) -> [Section] -> [Section]
+mapSubjects f = runIdentity . traverseSubjects (Identity . f)
+
+
+-- | Every Subject a Section list references, in traversal order.
+--
+-- >>> fmap collectSubjects (parseQueryToAST "name==\"a\" | summarize count(*) by kind")
+-- Right [Subject "name" "name" [],Subject "*" "*" [],Subject "kind" "kind" []]
+collectSubjects :: [Section] -> [Subject]
+collectSubjects = getConst . traverseSubjects (\s -> Const [s])
 
 
 -- | Parse a numeric value (float or int) for percentile values
@@ -711,6 +738,9 @@ instance ToQueryText Section where
   toQText (Source source) = toQText source
   toQText (Search expr) = toQText expr
   toQText (WhereClause expr) = "where " <> toQText expr
+  -- Round-trips as the `where` the user wrote; its position after the summarize
+  -- is what made it a HAVING and is preserved by ordering.
+  toQText (HavingClause expr) = "where " <> toQText expr
   toQText (SummarizeCommand funcs byClauseM) =
     "summarize "
       <> T.intercalate "," (map toQText funcs)
@@ -743,6 +773,10 @@ data Section
   | SortCommand [SortField] -- sort by multiple fields
   | TakeCommand Int -- limit/take number of results
   | Source Sources
+  | -- | A filter written after a @summarize@. It reads the aggregated result, so
+    -- it lowers to @HAVING@ — as a @WHERE@ it would run before the aggregation
+    -- exists and reference a column the database has never heard of.
+    HavingClause Expr
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -1015,13 +1049,25 @@ parseQuery = do
 -- >>> transformAST [WhereClause (Eq (Subject "a" "a" []) (Str "1")), WhereClause (Eq (Subject "b" "b" []) (Str "2"))]
 -- [WhereClause (And (Eq (Subject "a" "a" []) (Str "1")) (Eq (Subject "b" "b" []) (Str "2")))]
 transformAST :: [Section] -> [Section]
-transformAST = reorderSections . combineWheres
+transformAST = reorderSections . combineWheres . markPostSummarizeFilters
   where
+    -- Position is meaningful only until reorderSections runs, so the after-a-
+    -- summarize filters are re-tagged first and keep their meaning thereafter.
+    markPostSummarizeFilters = go False
+      where
+        go _ [] = []
+        go seen (s : rest) = case s of
+          SummarizeCommand{} -> s : go True rest
+          Search e | seen -> HavingClause e : go seen rest
+          WhereClause e | seen -> HavingClause e : go seen rest
+          _ -> s : go seen rest
+
     -- Combine consecutive Search or WhereClause sections into single And expressions
     combineWheres :: [Section] -> [Section]
     combineWheres [] = []
     combineWheres (Search e1 : Search e2 : rest) = combineWheres (Search (And e1 e2) : rest)
     combineWheres (WhereClause e1 : WhereClause e2 : rest) = combineWheres (WhereClause (And e1 e2) : rest)
+    combineWheres (HavingClause e1 : HavingClause e2 : rest) = combineWheres (HavingClause (And e1 e2) : rest)
     combineWheres (x : rest) = x : combineWheres rest
 
     -- Canonical order (respects state dependencies), stable within each group:
@@ -1033,9 +1079,10 @@ transformAST = reorderSections . combineWheres
       WhereClause{} -> 2
       ExtendCommand{} -> 3
       SummarizeCommand{} -> 4
-      ProjectCommand{} -> 5
-      SortCommand{} -> 6
-      TakeCommand{} -> 7
+      HavingClause{} -> 5
+      ProjectCommand{} -> 6
+      SortCommand{} -> 7
+      TakeCommand{} -> 8
 
 
 instance ToQueryText [Section] where
@@ -1061,5 +1108,111 @@ extractPercentilesInfo secs = listToMaybe $ mapMaybe pcts [agg | SummarizeComman
 -- True
 -- >>> isLeft (parseQueryToAST "severity.text ==")
 -- True
+-- >>> parseQueryToAST "attribute contains \"x\""
+-- Left "Unknown field \"attribute\". Did you mean \"attributes\"?"
+-- >>> parseQueryToAST "attributes contains ddd"
+-- Left "Syntax error at column 12: unexpected 'c', expecting '|' or white space"
 parseQueryToAST :: Text -> Either Text [Section]
-parseQueryToAST q = first (toText . errorBundlePretty) (parse parseQuery "" (T.strip q))
+parseQueryToAST = first (.message) . parseQueryDiagnosed
+
+
+-- | A rejected query, positioned. The editor underlines @width@ characters from
+-- @column@ (1-based), so the same check that gates execution also draws the
+-- squiggle — there is no second, approximate implementation in the browser.
+data QueryError = QueryError {message :: Text, column :: Int, width :: Int}
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+-- | 'parseQueryToAST' with the failure position kept.
+--
+-- >>> parseQueryDiagnosed "attribute contains \"x\""
+-- Left (QueryError {message = "Unknown field \"attribute\". Did you mean \"attributes\"?", column = 1, width = 9})
+-- >>> (.column) <$> either Just (const Nothing) (parseQueryDiagnosed "kind == \"a\" and attribut contains \"x\"")
+-- Just 17
+parseQueryDiagnosed :: Text -> Either QueryError [Section]
+parseQueryDiagnosed (T.strip -> q) = do
+  ast <- first (renderParseError q) (parse parseQuery "" q)
+  case unknownField ast of
+    Nothing -> Right ast
+    Just (field, msg) ->
+      -- Point at the identifier itself; T.breakOn finds its first occurrence,
+      -- which is where a reader looks even if the name repeats later.
+      let before = fst (T.breakOn field q)
+       in Left QueryError{message = msg, column = T.length before + 1, width = T.length field}
+
+
+-- | One-line rendering of a megaparsec failure. 'errorBundlePretty' draws a
+-- multi-line caret diagram, which is unreadable in a toast, a chart overlay or
+-- the strip under the query box — the places these errors surface. Keeping the
+-- position and the unexpected/expecting pair says the same thing in one line.
+renderParseError :: Text -> ParseErrorBundle Text Void -> QueryError
+renderParseError q bundle =
+  QueryError
+    { message = "Syntax error at column " <> show col <> ": " <> detail
+    , column = col
+    , -- Underline from the failure to the end of the offending token, or one
+      -- character when it sits at the very end of the input.
+      width = max 1 (T.length (T.takeWhile (not . isSpace) (T.drop (col - 1) q)))
+    }
+  where
+    (err :| _, _) = attachSourcePos errorOffset (bundleErrors bundle) (bundlePosState bundle)
+    col = unPos (sourceColumn (snd err))
+    detail = T.intercalate ", " . filter (not . T.null) . lines . toText . parseErrorTextPretty $ fst err
+
+
+-- | Reject bare identifiers that name no column, so a typo surfaces as a
+-- pointed message at parse time instead of a raw @No field named …@ from
+-- Postgres/TimeFusion after the query has been built and shipped.
+--
+-- A query's own aggregation/extend/project outputs are exempt: they are real
+-- names downstream, and 'transformAST' hoists a post-summarize @where@ above the
+-- summarize, so position can't distinguish them from columns. Metrics queries
+-- read a different table entirely and are skipped.
+--
+-- >>> validateFields =<< parseQueryToAST "level == \"ERROR\" | summarize count() by kind | where count_ > 1"
+-- Right ()
+-- >>> validateFields =<< parseQueryToAST "kind == \"log\" | extend slow = duration | where slow > 5"
+-- Right ()
+-- >>> validateFields =<< parseQueryToAST "summarize count() by attribut"
+-- Left "Unknown field \"attribut\". Did you mean \"attributes\"?"
+--
+-- A numeric argument is a literal, not a field:
+-- >>> validateFields =<< parseQueryToAST "summarize countif(coalesce(attributes.http.response.status_code, 0) >= 500)"
+-- Right ()
+validateFields :: [Section] -> Either Text ()
+validateFields = maybe (Right ()) (Left . snd) . unknownField
+
+
+-- | The first subject naming no column, as @(identifier, message)@ — the
+-- identifier lets callers locate it in the query text.
+unknownField :: [Section] -> Maybe (Text, Text)
+unknownField sections
+  | Source SMetrics `elem` sections = Nothing
+  | otherwise = listToMaybe (mapMaybe check (collectSubjects sections))
+  where
+    -- A number written as a scalar argument (`coalesce(status_code, 0)`) parses
+    -- as a subject but names no field; it reaches SQL as the literal it is.
+    isNumericLiteral t = not (T.null t) && T.all (\c -> isDigit c || c == '.') t
+    check (Subject entire root _)
+      | isNumericLiteral root || knownFieldRoot root || root `elem` definedNames sections = Nothing
+      | otherwise = Just (entire, "Unknown field \"" <> entire <> "\"" <> maybe "" (\s -> ". Did you mean \"" <> s <> "\"?") (suggestFieldRoot root))
+
+
+-- | Result-column names a query introduces: explicit @extend@/@project@ keys
+-- plus every aggregation's alias (or 'defaultAlias' when it has none).
+--
+-- >>> definedNames <$> parseQueryToAST "summarize count(), slow = avg(duration) by kind"
+-- Right ["count_","slow"]
+definedNames :: [Section] -> [Text]
+definedNames sections =
+  [ n
+  | s <- sections
+  , n <- case s of
+      SummarizeCommand aggs _ -> map aggName aggs
+      ExtendCommand kvs -> map fst kvs
+      ProjectCommand kvs -> map fst kvs
+      _ -> []
+  ]
+  where
+    aggName agg = fromMaybe (defaultAlias agg) (view (typed @(Maybe Text)) agg)

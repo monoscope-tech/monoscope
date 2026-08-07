@@ -8,7 +8,6 @@ import Data.Default (Default (..))
 import Data.Map.Strict qualified as M
 import Data.Pool as Pool (Pool, defaultPoolConfig, newPool, setNumStripes)
 import Data.Pool qualified as Pool
-import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as TL
 import Data.Time.Calendar (fromGregorian)
@@ -465,8 +464,8 @@ getAppContext = do
 
 
 -- | Query 'information_schema.columns' for @otel_logs_and_spans@ once at
--- startup and seed 'ParserExpr.setFlattenedOtelColumns' with the dotted
--- form (@___@ → @.@). Best-effort: any exception (missing table during
+-- startup and seed 'ParserExpr.setOtelColumns' (which splits the flattened
+-- @___@ columns from the bare ones). Best-effort: any exception (missing table during
 -- migration, lost pg conn) logs a warning and falls back to the hand-coded
 -- builtin so the server still boots.
 introspectAndCacheOtelColumns :: Pool.Pool Connection -> IO ()
@@ -480,8 +479,6 @@ introspectAndCacheOtelColumns pool = do
         :: IO [PG.Only Text]
     pure [c | PG.Only c <- rows]
   case result of
-    Right cols ->
-      let dotted = S.fromList [T.replace "___" "." c | c <- cols, "___" `T.isInfixOf` c]
-       in ParserExpr.setFlattenedOtelColumns dotted
+    Right cols -> ParserExpr.setOtelColumns cols
     Left (e :: SomeException) ->
       blueMessage $ "C1: otel_logs_and_spans introspection failed, using builtin attribute set: " <> show e

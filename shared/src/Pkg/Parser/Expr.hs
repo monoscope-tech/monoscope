@@ -1,4 +1,4 @@
-module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), kqlTimespanToTimeBucket, FieldKey (..), pSquareBracketKey, pTerm, Jsonpath, LowerErr (..), lowerPred, renderJsonpath, resolveWildcardTimes, display, pDuration, pNowFunction, pAgoFunction, pValues, Parser, symbol, sc, ToQueryText (..), flattenedOtelAttributes, flattenedOtelAttributesBuiltin, setFlattenedOtelColumns, topLevelOtelColumns, transformFlattenedAttribute, outputFieldAliases, sqlStringLit) where
+module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), kqlTimespanToTimeBucket, FieldKey (..), pSquareBracketKey, pTerm, Jsonpath, LowerErr (..), lowerPred, renderJsonpath, resolveWildcardTimes, display, pDuration, pNowFunction, pAgoFunction, pValues, Parser, symbol, sc, ToQueryText (..), flattenedOtelAttributes, flattenedOtelAttributesBuiltin, setOtelColumns, topLevelOtelColumns, acceptedFieldRoots, knownFieldRoot, suggestFieldRoot, transformFlattenedAttribute, outputFieldAliases, sqlStringLit) where
 
 import Control.Monad.Combinators.Expr (
   Operator (InfixL),
@@ -7,7 +7,7 @@ import Control.Monad.Combinators.Expr (
 import Data.Aeson qualified as AE
 import Data.Aeson.Text (encodeToLazyText)
 import Data.Char (isDigit)
-import Data.List (lookup)
+import Data.List (lookup, partition)
 import Data.Map.Strict qualified as M
 import Data.Scientific (FPFormat (Fixed), Scientific, formatScientific)
 import Data.Set qualified as S
@@ -645,13 +645,16 @@ flattenedOtelColumnsRef :: IORef (Set T.Text)
 flattenedOtelColumnsRef = unsafePerformIO (newIORef flattenedOtelAttributesBuiltin)
 
 
--- | Replace the cached flattened-attribute set. Called from 'Start.hs' after
--- the introspection query against @information_schema.columns@ resolves.
--- The new set is unioned with the hand-coded fallback so unknown
--- attributes (a missing live introspection, a schema-learning gap) still
--- behave correctly.
-setFlattenedOtelColumns :: Set T.Text -> IO ()
-setFlattenedOtelColumns live = writeIORef flattenedOtelColumnsRef (live <> flattenedOtelAttributesBuiltin)
+-- | Seed both column caches from the live @information_schema.columns@ read
+-- at startup: @___@ columns become the dotted flattened-attribute set, the
+-- rest the bare-column set. Both are unioned with their hand-coded fallbacks
+-- so a missing/partial introspection still behaves.
+setOtelColumns :: [T.Text] -> IO ()
+setOtelColumns cols = do
+  writeIORef flattenedOtelColumnsRef (fromList [T.replace "___" "." c | c <- flattened] <> flattenedOtelAttributesBuiltin)
+  writeIORef bareOtelColumnsRef (fromList bare <> bareOtelColumnsBuiltin)
+  where
+    (flattened, bare) = partition (T.isInfixOf "___") cols
 
 
 -- | The runtime flattened-attribute set. Reads from the bootstrap-once
@@ -668,6 +671,123 @@ flattenedOtelAttributes = unsafePerformIO (readIORef flattenedOtelColumnsRef)
 -- ('prop_facetsAreFast') can gate them as fast-filter columns too.
 topLevelOtelColumns :: Set T.Text
 topLevelOtelColumns = fromList ["level", "name", "kind", "status_code", "status_message"]
+
+
+-- | Hand-coded fallback for the bare (dot-free) column set — the same role
+-- 'flattenedOtelAttributesBuiltin' plays for the @___@ columns. Used before
+-- 'setOtelColumns' runs, and unioned with the live set after.
+bareOtelColumnsBuiltin :: Set T.Text
+bareOtelColumnsBuiltin =
+  topLevelOtelColumns
+    <> fromList
+      [ "timestamp"
+      , "observed_timestamp"
+      , "id"
+      , "parent_id"
+      , "hashes"
+      , "severity"
+      , "body"
+      , "duration"
+      , "start_time"
+      , "end_time"
+      , "context"
+      , "events"
+      , "links"
+      , "attributes"
+      , "resource"
+      , "summary"
+      , "errors"
+      , "message_size_bytes"
+      , "updated_at"
+      , "deleted"
+      , "date"
+      , "project_id"
+      ]
+
+
+{-# NOINLINE bareOtelColumnsRef #-}
+bareOtelColumnsRef :: IORef (Set T.Text)
+bareOtelColumnsRef = unsafePerformIO (newIORef bareOtelColumnsBuiltin)
+
+
+bareOtelColumns :: Set T.Text
+bareOtelColumns = unsafePerformIO (readIORef bareOtelColumnsRef)
+{-# NOINLINE bareOtelColumns #-}
+
+
+-- | Names a KQL subject may start with: a real bare column, a SELECT alias,
+-- or the @url_path@ shim 'transformFlattenedAttribute' rewrites. Also the set
+-- @/api/v1/schema@ advertises, so the query editor validates against exactly
+-- what the parser accepts.
+acceptedFieldRoots :: Set T.Text
+acceptedFieldRoots = bareOtelColumns <> M.keysSet outputFieldAliases <> one "url_path"
+
+
+-- | Whether a subject's root names something queryable. @*@/@""@ come from
+-- @count(*)@/@count()@ and carry no field.
+--
+-- The raw @___@ column names are accepted alongside the dotted form users
+-- normally write: they are what the table actually calls those columns, they
+-- pass straight through to SQL, and saved queries do use them.
+--
+-- >>> map knownFieldRoot ["attributes", "duration", "service", "url_path", "*"]
+-- [True,True,True,True,True]
+-- >>> map knownFieldRoot ["context___trace_id", "resource___service___name"]
+-- [True,True]
+-- >>> map knownFieldRoot ["attribute", "context___nosuch"]
+-- [False,False]
+knownFieldRoot :: T.Text -> Bool
+knownFieldRoot root =
+  T.null root
+    || root
+    == "*"
+    || root
+    `S.member` acceptedFieldRoots
+    || T.replace "___" "." root
+    `S.member` flattenedOtelAttributes
+
+
+-- | Nearest known field for a typo'd one. A prefix relation catches the
+-- truncated/extended cases ("attribute" -> "attributes"); an edit distance of
+-- at most two catches the mistyped ones ("attributs", "context___trace_ix"),
+-- which the prefix rule alone silently gave up on. Still conservative: beyond
+-- that, no suggestion beats a misleading one.
+--
+-- >>> suggestFieldRoot "attribute"
+-- Just "attributes"
+-- >>> suggestFieldRoot "attributs"
+-- Just "attributes"
+-- >>> suggestFieldRoot "context___trace_ix"
+-- Just "context___trace_id"
+-- >>> suggestFieldRoot "zzz"
+-- Nothing
+suggestFieldRoot :: T.Text -> Maybe T.Text
+suggestFieldRoot root =
+  viaNonEmpty head . map snd . sortWith fst $ [(d, c) | c <- candidates, Just d <- [rank c]]
+  where
+    -- Suggest in the notation the user is already writing, so a mistyped
+    -- `context___trace_ix` is not answered with the dotted form.
+    candidates
+      | "___" `T.isInfixOf` root = map (T.replace "." "___") (toList flattenedOtelAttributes)
+      | otherwise = toList acceptedFieldRoots
+    rank c
+      | T.isPrefixOf c root || T.isPrefixOf root c = Just (0 :: Int, T.length c)
+      | d <- editDistance root c, d <= 2 = Just (d, T.length c)
+      | otherwise = Nothing
+
+
+-- | Levenshtein distance, capped implicitly by the caller's threshold. Small
+-- enough not to warrant a dependency for the one place it is used.
+--
+-- >>> map (editDistance "kind") ["kind", "kinds", "kimd", "duration"]
+-- [0,1,1,7]
+editDistance :: T.Text -> T.Text -> Int
+editDistance a b = fromMaybe 0 (viaNonEmpty last (foldl' step [0 .. T.length a] (toString b)))
+  where
+    step row@(prev : rest) c = scanl' next (prev + 1) (zip3 (toString a) row rest)
+      where
+        next left (ca, diag, up) = min (min (left + 1) (up + 1)) (if ca == c then diag else diag + 1)
+    step [] _ = []
 
 
 -- | Map user-facing output field names (SELECT aliases) to their real DB column names.

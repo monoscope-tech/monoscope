@@ -21,6 +21,7 @@ import Utils (formatUTC)
 
 data QueryComponents = QueryComponents
   { whereClause :: Maybe Text
+  , havingClause :: Maybe Text -- Post-summarize filter; aggregate aliases resolved to their expressions
   , groupByClause :: [Text]
   , fromTable :: Maybe Text
   , select :: [Text] -- project: replaces default columns
@@ -50,6 +51,7 @@ data NormalizedQuery = NormalizedQuery
   , nqDateRange :: Text -- Date range clause
   , nqProjectId :: Text
   , nqGroupBy :: Text -- "" or "GROUP BY x, y"
+  , nqHaving :: Text -- "" or "HAVING (...)"
   , nqOrderBy :: Text -- "" or "ORDER BY x DESC"
   , nqLimit :: Text -- "" or "LIMIT 500"
   , nqBinInterval :: Maybe Text
@@ -123,6 +125,24 @@ buildLimit qc = case (qc.takeLimit, qc.finalSummarizeQuery) of
 
 
 -- | Build WHERE condition from raw clause
+-- | @HAVING@ for a post-summarize filter, with aggregation aliases replaced by
+-- the expressions they name: SQL has no @HAVING count_ > 1@, only
+-- @HAVING count(*)::float > 1@. Empty when the query has no such filter, which
+-- is every query that never summarized.
+--
+-- >>> buildHaving def{havingClause = Just "count_ > 1", aggregations = ["count(*)::float AS count_"]}
+-- "HAVING ((count(*)::float) > 1)"
+-- >>> buildHaving def
+-- ""
+buildHaving :: QueryComponents -> Text
+buildHaving qc = case qc.havingClause of
+  Nothing -> ""
+  Just cond -> "HAVING (" <> foldr substitute cond aliases <> ")"
+  where
+    aliases = [(alias, expr) | agg <- qc.aggregations, (expr, Just alias) <- [splitTrailingAlias agg]]
+    substitute (alias, expr) = T.replace alias ("(" <> expr <> ")")
+
+
 buildWhereCondition :: Maybe Text -> Text
 buildWhereCondition = maybe "TRUE" \w -> if T.null w then "TRUE" else "(" <> w <> ")"
 
@@ -141,6 +161,7 @@ normalizeQuery cfg qc =
         , nqDateRange = buildDateRange cfg
         , nqProjectId = cfg.pid.toText
         , nqGroupBy = buildGroupBy qc.extendedColumns qc.groupByClause
+        , nqHaving = buildHaving qc
         , nqOrderBy = buildOrderBy qc
         , nqLimit = buildLimit qc
         , nqBinInterval = qc.finalSummarizeQuery
@@ -162,6 +183,9 @@ applySectionToComponent :: SqlQueryCfg -> QueryComponents -> Section -> QueryCom
 applySectionToComponent sqlCfg qc = \case
   Search expr -> narrow expr
   WhereClause expr -> narrow expr
+  HavingClause expr ->
+    let new = display (resolveWildcardTimes sqlCfg.currentTime expr)
+     in qc{havingClause = Just $ maybe new (\old -> old <> " AND " <> new) qc.havingClause}
   Source source -> qc{fromTable = Just $ display source}
   sec@(SummarizeCommand aggs byClauseM) ->
     applySummarizeByClauseToQC sqlCfg byClauseM qc{aggregations = qc.aggregations <> map display aggs, percentilesInfo = extractPercentilesInfo [sec]}
@@ -269,6 +293,9 @@ sqlFromQueryComponents sqlCfg qc =
 
     fromTable = nq.nqTable
     groupByClause = nq.nqGroupBy
+    -- Only ever non-empty when a summarize ran, and every summarize shape below
+    -- groups (or aggregates the whole set, where a bare HAVING is still valid).
+    havingClause = nq.nqHaving
     sortOrder = nq.nqOrderBy
     limitClause = nq.nqLimit
     whereCondition = nq.nqWhere
@@ -288,7 +315,7 @@ sqlFromQueryComponents sqlCfg qc =
         ( [fmt|WITH ranked_spans AS (SELECT *, resource->'service'->>'name' AS service_name,
                 ROW_NUMBER() OVER (PARTITION BY trace_id, resource->'service'->>'name' ORDER BY start_time) AS rn
                 FROM otel_logs_and_spans where {buildWhere}
-                {groupByClause}
+                {groupByClause} {havingClause}
                 )
                SELECT {wrap (selectClause <> ", " <> countOver)} FROM ranked_spans
                   WHERE rn = 1 {sortOrder} {limitClause} |]
@@ -307,7 +334,7 @@ sqlFromQueryComponents sqlCfg qc =
              in ( [fmt|SELECT {wrap args}
                    FROM {fromTable}
                    WHERE {buildWhere}
-                   GROUP BY {bucketExpr}
+                   GROUP BY {bucketExpr} {havingClause}
                    ORDER BY {bucketExpr} DESC
                    {limitClause} |]
                 , True
@@ -316,13 +343,13 @@ sqlFromQueryComponents sqlCfg qc =
             | not (null qc.aggregations) && not (null qc.groupByClause) ->
                 ( [fmt|SELECT {wrap (T.intercalate "," (colsNoAsClause qc.aggregations) <> ", " <> countOver)} FROM {fromTable}
                    WHERE {buildWhere}
-                   {groupByClause} {sortOrder} {limitClause} |]
+                   {groupByClause} {havingClause} {sortOrder} {limitClause} |]
                 , True
                 )
             | otherwise ->
                 ( [fmt|SELECT {wrap selectClause} FROM {fromTable}
                    WHERE {buildWhere}
-                   {groupByClause} {sortOrder} {overflowLimitClause} |]
+                   {groupByClause} {havingClause} {sortOrder} {overflowLimitClause} |]
                 , False
                 )
 
@@ -362,7 +389,7 @@ sqlFromQueryComponents sqlCfg qc =
                   bucketExpr = timeBucketExpr binInterval
                   groupByPart = if null qc.groupByClause then bucketExpr else bucketExpr <> ", " <> groupCol
                in [fmt|SELECT extract(epoch from {bucketExpr})::integer, {groupCol}, {aggCol}
-                      FROM {fromTable} WHERE {buildWhere} GROUP BY {groupByPart}
+                      FROM {fromTable} WHERE {buildWhere} GROUP BY {groupByPart} {havingClause}
                       ORDER BY {bucketExpr} DESC {limitClause}|]
         Nothing ->
           let hasAggregationsNoGroupBy = not (null qc.aggregations) && null qc.groupByClause
@@ -391,7 +418,7 @@ sqlFromQueryComponents sqlCfg qc =
               orderClause = if hasAggregationsNoGroupBy then "" else " " <> buildOrderBy qc
               limitPart = if hasAggregationsNoGroupBy then "" else limitClause
            in [fmt|SELECT {T.intercalate "," selectCols} FROM {fromTable} WHERE {buildWhere}
-              {groupByClause}{orderClause} {limitPart}|]
+              {groupByClause} {havingClause}{orderClause} {limitPart}|]
 
     -- Alert queries reuse whereCondition but drop the date range/cursor for this
     -- recency filter; without it time_bucket groups across all history and max
@@ -424,15 +451,29 @@ sqlFromQueryComponents sqlCfg qc =
 -- | Parse a monoscope query to components ready for database execution.
 --
 -- >>> let cfg = defSqlQueryCfg defPid fixedUTCTime Nothing Nothing
--- >>> let Right (q, c) = parseQueryToComponents cfg "method == \"GET\""
+-- >>> let Right (q, c) = parseQueryToComponents cfg "kind == \"server\""
 -- >>> T.isPrefixOf "SELECT jsonb_build_array(" (T.stripStart q)
 -- True
 -- >>> c.hasCountOver
 -- False
--- >>> T.isInfixOf "method = 'GET'" q
+-- >>> T.isInfixOf "kind = 'server'" q
 -- True
 --
--- >>> let Right (q2, c2) = parseQueryToComponents cfg "method == \"GET\" | summarize count(*) by bin(timestamp, 1h)"
+-- A filter after a summarize reads the aggregated rows, so it lowers to HAVING
+-- with the alias resolved — as a WHERE it referenced a column that does not
+-- exist yet and the query died at the database:
+-- >>> let Right (q5, _) = parseQueryToComponents cfg "kind == \"server\" | summarize count() by kind | where count_ > 1"
+-- >>> T.isInfixOf "HAVING ((count(*)::float) > 1)" q5
+-- True
+-- >>> T.isInfixOf "count_ > 1" q5
+-- False
+--
+-- An `extend` alias is not an aggregate, so it stays in the WHERE:
+-- >>> let Right (_, c6) = parseQueryToComponents cfg "kind == \"log\" | extend slow = duration"
+-- >>> c6.havingClause
+-- Nothing
+--
+-- >>> let Right (q2, c2) = parseQueryToComponents cfg "kind == \"server\" | summarize count(*) by bin(timestamp, 1h)"
 -- >>> c2.hasCountOver
 -- True
 -- >>> T.isInfixOf "count(*) OVER()" q2

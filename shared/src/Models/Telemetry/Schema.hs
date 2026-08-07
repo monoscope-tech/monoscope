@@ -15,6 +15,7 @@ import Data.Map qualified as Map
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Deriving.Aeson.Stock qualified as DAE
+import Pkg.Parser.Expr (acceptedFieldRoots)
 import Relude
 
 
@@ -285,12 +286,24 @@ popularOtelQueriesJson = AE.toJSON popularOtelQueries
 -- bare entry — so a new column is queryable + schema-visible without a
 -- code edit. Dotted-form 'telemetrySchema' entries that no longer match a
 -- live column are dropped (they'd give the "advertised field returns 0
--- rows" surprise). Top-level bare columns (timestamp, name, kind, level,
--- duration, body) aren't in the flattened set and are kept unconditionally.
+-- rows" surprise).
+--
+-- The bare columns and SELECT aliases the KQL parser accepts are unioned in
+-- from 'Pkg.Parser.Expr' rather than restated here: the endpoint is what the
+-- query editor validates against, so anything the parser accepts and this
+-- omits shows up as a bogus "Unknown field" squiggle on a working query.
+--
+-- >>> let advertises f = Map.member f (deriveSchema mempty).fields
+-- >>> map advertises ["summary", "errors", "message_size_bytes", "service", "span_name", "url_path"]
+-- [True,True,True,True,True,True]
+--
+-- A dotted hand-coded entry with no matching live column is still dropped:
+-- >>> map advertises ["severity.text", "attribute"]
+-- [False,False]
 deriveSchema :: Set Text -> Schema
 deriveSchema liveAttrs =
   -- union is left-biased: hand-coded entries win over the bare live ones.
-  Schema{fields = Map.filterWithKey keepHand telemetrySchema.fields `Map.union` Map.fromSet (const bareDefault) liveAttrs}
+  Schema{fields = Map.filterWithKey keepHand telemetrySchema.fields `Map.union` Map.fromSet (const bareDefault) (liveAttrs <> acceptedFieldRoots)}
   where
     bareDefault = FieldInfo "text" "" Nothing
     keepHand k _ = not ("." `T.isInfixOf` k) || k `S.member` liveAttrs
