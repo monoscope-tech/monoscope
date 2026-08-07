@@ -13,7 +13,7 @@ import Pkg.Parser (
  )
 import Pkg.Parser.Stats (Sources (..))
 import Relude
-import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, describe, it, shouldBe, shouldNotSatisfy, shouldSatisfy)
 
 
 -- Normalize text by removing newlines, carriage returns, tabs, and extra spaces
@@ -56,6 +56,19 @@ spec = do
       -- like every other path, rather than hand-rolling an uppercase one.
       let expected = """SELECT  FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((method = 'GET')) ORDER BY timestamp desc limit 500"""
       normT (fromMaybe "" c.finalSummarizeQuery) `shouldBe` normT expected
+    it "scalar summarize keeps its aggregate numeric (no ::text cast)" do
+      -- Regression: the grouped shape casts aggregates to text for the DTText
+      -- decoder, but a `by`-less summarize is read as a float. Casting it broke
+      -- `metrics query 'summarize count()' --assert` and the TF metric read.
+      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "summarize count(*)"
+      fromMaybe "" c.finalSummarizeQuery `shouldNotSatisfy` T.isInfixOf "::text"
+
+    it "grouped summarize casts to text and projects the group column" do
+      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "summarize count(*) by method"
+          sql = fromMaybe "" c.finalSummarizeQuery
+      sql `shouldSatisfy` T.isInfixOf "COALESCE(method::text, 'null')"
+      sql `shouldSatisfy` T.isInfixOf "::text"
+
     it "summarize query by time bin" do
       let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "method==\"GET\" | summarize count(*) by bin(timestamp, 1d)"
       let expected =

@@ -380,6 +380,10 @@ sqlFromQueryComponents sqlCfg qc =
               asText col = let (expr, aliasM) = splitTrailingAlias col in "(" <> expr <> ")::text" <> maybe "" (" AS " <>) aliasM
               selectCols
                 | null qc.aggregations = qc.select
+                -- No `by` at all is a *scalar* summarize, which Charts.decoderFor
+                -- reads as DTFloat — casting that to text breaks the decode. Only
+                -- the grouped shape goes through the all-text DTText decoder.
+                | null qc.groupByClause = qc.aggregations
                 | otherwise = groupCols <> map asText qc.aggregations
               -- buildOrderBy honours an explicit `| sort by`; hand-rolling the
               -- clause here silently dropped it, so `summarize … by svc | sort
