@@ -1694,7 +1694,7 @@ export class QueryEditorComponent extends LitElement {
     // Only show saved/recent/popular in field position (not when suggesting operators or values)
     const isFieldPosition =
       !this.completionItems.length ||
-      this.completionItems.some((i) => i.kindCategory === monaco.languages.CompletionItemKind.Field);
+      this.completionItems.some((i) => i.kindCategory === 'field');
 
     type SectionDef = { items: SuggestionItem[]; title: string | null };
     const sections: SectionDef[] = [...completionSubgroups];
@@ -1705,27 +1705,18 @@ export class QueryEditorComponent extends LitElement {
       if (matches.popular.length) sections.push({ items: matches.popular as SuggestionItem[], title: 'Popular Searches' });
     }
 
+    // Never leave the offsets empty: an `absolute` box with no top/left/right
+    // sits at its static position, which for this last-child-of-the-input-row is
+    // directly ON the input. It then swallows the click meant for the editor, so
+    // focus never lands and the box flickers open and shut. There is no cursor to
+    // measure until focus has landed, which is exactly when this happens.
     const position = this.editor.getPosition();
     const coords = position ? this.editor.getScrolledVisiblePosition(position) : null;
-    let positionStyle = '';
+    const positionStyle = `top: ${coords ? coords.top + 24 : 34}px; left: 10px; right: 10px;`;
 
-    if (coords) {
-      positionStyle = `top: ${coords.top + 24}px; left: 10px; right: 10px;`;
-    }
-
-    if (!sections.length) {
-      return html`
-        <div
-          class="mt-1 suggestions-dropdown absolute bg-bgRaised border border-strokeMedium shadow-lg z-10 overflow-y-auto rounded-md text-xs"
-          style="${positionStyle}"
-          id="query-suggestions"
-          role="listbox"
-          aria-label="Query suggestions"
-        >
-          <div class="px-4 py-2 text-sm text-textWeak italic">No suggestions for this field</div>
-        </div>
-      `;
-    }
+    // Nothing to offer: render nothing rather than a box announcing as much,
+    // which only covers the query the user is typing.
+    if (!sections.length) return html``;
 
     let currentIndex = 0;
     const keyboardHelp = html`

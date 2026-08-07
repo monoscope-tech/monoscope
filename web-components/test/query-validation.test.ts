@@ -362,3 +362,54 @@ describe('accessibility and state wiring', () => {
     }
   });
 });
+
+
+// Clicking the editor stopped working: the dropdown rendered `absolute` with no
+// offsets (there is no cursor to measure until focus lands), so it sat at its
+// static position — on top of the input row — and swallowed the click. Focus
+// never arrived, the blur handler closed it, focus handler reopened it: a
+// flicker, and nothing typed.
+describe('the dropdown cannot cover the input', () => {
+  const mount = async () => {
+    const el = new QueryEditorComponent();
+    document.body.appendChild(el);
+    await el.updateComplete;
+    await new Promise((r) => setTimeout(r, 0));
+    return el;
+  };
+
+  test('is always positioned when shown, even with no cursor', async () => {
+    const el = await mount();
+    try {
+      // Monaco reports no position until focus has landed; stub that state,
+      // which is precisely when the click arrives.
+      (el as any).editor.getPosition = () => null;
+      (el as any).showSuggestions = true;
+      (el as any).completionItems = [{ kind: 'completion', label: 'kind', insertText: 'kind ', kindCategory: 'field', detail: '' }];
+      await el.updateComplete;
+
+      const dropdown = el.querySelector('.suggestions-dropdown') as HTMLElement;
+      expect(dropdown).not.toBeNull();
+      // An empty style attribute is the failure: it means static positioning.
+      expect(dropdown.getAttribute('style') || '').toMatch(/top:\s*\d+px/);
+      expect(dropdown.getAttribute('style') || '').toMatch(/left:\s*10px/);
+    } finally {
+      el.remove();
+    }
+  });
+
+  test('renders nothing at all when there is nothing to suggest', async () => {
+    const el = await mount();
+    try {
+      (el as any).showSuggestions = true;
+      (el as any).completionItems = [];
+      (el as any).recentSearches = [];
+      (el as any).savedViews = [];
+      (el as any).popularSearches = [];
+      await el.updateComplete;
+      expect(el.querySelector('.suggestions-dropdown')).toBeNull();
+    } finally {
+      el.remove();
+    }
+  });
+});
