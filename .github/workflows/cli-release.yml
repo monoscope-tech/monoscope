@@ -16,11 +16,11 @@ on:
 
 env:
   LANG: C.UTF-8
-  # -split-sections lets the linker drop unreferenced code per symbol rather
-  # than per object file. Applied to our packages only: turning it on globally
-  # would invalidate the prebuilt dependency store in the deps image and turn a
-  # 10-minute release into an hour-long one.
-  CLI_GHC_OPTS: '-O2 -split-sections +RTS -A64m -n2m -RTS'
+  # Applied to our packages only: turning optimisation flags on globally would
+  # invalidate the prebuilt dependency store in the deps image and turn a
+  # 10-minute release into an hour-long one. Per-platform dead-code flags are
+  # added at the call sites below — they are not portable.
+  CLI_GHC_OPTS: '-O2 +RTS -A64m -n2m -RTS'
 
 jobs:
   build-linux:
@@ -56,8 +56,10 @@ jobs:
 
       - name: Build CLI binary
         run: |
+          # ELF: -split-sections emits one section per symbol so --gc-sections can
+          # drop them individually. Worth ~2x here (41MB vs 97MB on macOS).
           cabal build monoscope-cli:exe:monoscope -j \
-            --ghc-options="$CLI_GHC_OPTS -optl-Wl,--gc-sections"
+            --ghc-options="$CLI_GHC_OPTS -split-sections -optl-Wl,--gc-sections"
 
       - name: Package binary
         run: |
@@ -115,6 +117,10 @@ jobs:
 
       - name: Build CLI binary
         run: |
+          # No -split-sections: Mach-O already dead-strips per symbol via
+          # subsections-via-symbols, so GHC ignores the flag and warns — and
+          # -Werror turns that warning into a build failure. It only slipped
+          # through on arm64 because a warm cache skipped the reconfigure.
           cabal build monoscope-cli:exe:monoscope -j \
             --ghc-options="$CLI_GHC_OPTS -optl-Wl,-dead_strip"
 
