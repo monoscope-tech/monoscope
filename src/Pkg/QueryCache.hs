@@ -12,6 +12,7 @@ module Pkg.QueryCache (
   rewriteBinAutoToFixed,
   cleanupExpiredCache,
   slidingWindowSeconds,
+  deltaOverlapSeconds,
 ) where
 
 import Data.Char (isDigit)
@@ -22,7 +23,11 @@ import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Vector qualified as V
-import Data.Vector.Algorithms.Intro qualified as VA
+
+-- Merge, not Intro: the sort MUST be stable. 'dedupeByTimestamp' keeps the last
+-- occurrence, and the delta is appended after the cached rows, so stability is
+-- what makes "fresh data wins on an overlapping bin" true rather than arbitrary.
+import Data.Vector.Algorithms.Merge qualified as VA
 import Effectful (Eff, type (:>))
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
@@ -107,6 +112,25 @@ slidingWindowSeconds binInterval =
   let binSecs = parseBinIntervalToSeconds binInterval
       minPoints = 48
    in max 86400 (binSecs * minPoints)
+
+
+-- | How far back BEFORE the cache watermark a delta fetch re-reads.
+--
+-- A delta starting exactly at @cachedTo@ reads every bin once and never revisits
+-- it, so a single under-returned read is frozen into the chart permanently — that
+-- is what turned TimeFusion's bounded-dedup under-count (2026-08-07) into
+-- multi-minute holes users kept seeing long after the rows were readable again.
+-- Re-reading a trailing span lets 'mergeTimeseriesData' (last occurrence wins)
+-- correct those bins on the next refresh.
+--
+-- >>> deltaOverlapSeconds "30 seconds"
+-- 900
+-- >>> deltaOverlapSeconds "5 minutes"
+-- 1500
+-- >>> deltaOverlapSeconds "1 hour"
+-- 3600
+deltaOverlapSeconds :: Text -> Int
+deltaOverlapSeconds binInterval = min 3600 $ max 900 (parseBinIntervalToSeconds binInterval * 5)
 
 
 -- | Extract bin interval from summarize clause

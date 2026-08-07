@@ -938,8 +938,11 @@ runInfraHealthCheck authCtx = do
       then isolate (checkParity start end)
       else isolate (checkIngestContinuity start end)
   (kAlerts, kInfo) <- isolate (checkKafkaHealth authCtx.config)
-  let alerts = pAlerts <> kAlerts
-      info = pInfo <> kInfo
+  -- Independent of dual-write: a read bug hides stored rows, so neither parity
+  -- nor continuity can see it (2026-08-07).
+  (rAlerts, rInfo) <- isolate (checkReadConsistency start end)
+  let alerts = pAlerts <> kAlerts <> rAlerts
+      info = pInfo <> kInfo <> rInfo
   if null alerts
     then Log.logInfo "InfraHealthCheck OK" (AE.object ["window" AE..= window, "info" AE..= info])
     else do
@@ -1091,6 +1094,66 @@ checkIngestContinuity start end = do
   pure
     ( stallAlert <> dropAlerts
     , ["continuity: " <> show curTotal <> " rows vs baseline≈" <> show baseTotal <> "/h over " <> show (length rows) <> " projects"]
+    )
+
+
+-- | Read-path consistency: the same window, counted two ways, must agree.
+--
+-- 'checkIngestContinuity' is structurally blind to a read bug. Ingestion is
+-- healthy and every row is durable, so nothing fires while customers stare at
+-- holes — which is exactly how 2026-08-07 went unnoticed: TimeFusion's
+-- @bounded[timestamp]@ DedupExec trusts the parquet footer's DECLARED sort
+-- order, and footers that lied collapsed distinct rows, hiding ~349k rows
+-- across 433 minutes of the live partition.
+--
+-- A narrow timestamp RANGE selects bounded mode; the same window pinned with
+-- @date_trunc@ inside a full-day range does not (verified on prod: 94448 vs
+-- 87421 for one project-hour). They are semantically identical, so any
+-- disagreement is a wrong answer already being served to dashboards.
+checkReadConsistency :: UTCTime -> UTCTime -> ATBackgroundCtx ([Text], [Text])
+checkReadConsistency start end = do
+  let minRows = 500 :: Int64 -- ignore low-volume projects, as continuity does
+      divergePct = 2.0 :: Double -- these must match exactly; 2% is pure noise margin
+      topN = 30 :: Int64
+      dayStart = posixSecondsToUTCTime $ fromIntegral (floor (utcTimeToPOSIXSeconds start) `div` 86400 * 86400 :: Integer)
+      dayEnd = addUTCTime 86400 dayStart
+  -- Ground truth: the hour pinned by date_trunc, read through a full-day range.
+  truthRows :: [(Text, Int64)] <-
+    withHasqlTimefusion
+      True
+      ( Hasql.interp
+          [HI.sql|SELECT project_id::text, count(*)::int8 FROM otel_logs_and_spans
+             WHERE timestamp >= #{dayStart}::timestamptz AND timestamp < #{dayEnd}::timestamptz
+               AND date_trunc('hour', timestamp) = #{start}::timestamptz
+             GROUP BY project_id ORDER BY count(*) DESC LIMIT #{topN}|]
+      )
+  -- What a dashboard actually asks for: a narrow range over the same hour.
+  windowRows :: [(Text, Int64)] <-
+    withHasqlTimefusion
+      True
+      ( Hasql.interp
+          [HI.sql|SELECT project_id::text, count(*)::int8 FROM otel_logs_and_spans
+             WHERE timestamp >= #{start}::timestamptz AND timestamp < #{end}::timestamptz
+             GROUP BY project_id ORDER BY count(*) DESC LIMIT #{topN}|]
+      )
+  let windowMap = HM.fromList windowRows
+      rows = [(pid, truthN, HM.lookupDefault 0 pid windowMap) | (pid, truthN) <- truthRows]
+      hidden = sum [t - w | (_, t, w, _) <- continuityDrop divergePct minRows rows]
+      alerts =
+        [ "🔴 READ UNDER-COUNT "
+            <> pct1 pct
+            <> "% for "
+            <> pid
+            <> " (truth "
+            <> show truthN
+            <> ", dashboards see "
+            <> show winN
+            <> ") — rows ARE stored but queries hide them"
+        | (pid, truthN, winN, pct) <- continuityDrop divergePct minRows rows
+        ]
+  pure
+    ( alerts
+    , ["read-consistency: " <> show (length rows) <> " projects checked, " <> show hidden <> " rows hidden"]
     )
 
 

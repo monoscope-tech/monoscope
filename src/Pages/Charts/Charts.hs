@@ -113,12 +113,19 @@ queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (Utils.nonEmptyT -> q
   let (fromD, toD, _currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
   let mappngSQL = variablePresets pid.toText fromD toD allParams now
       mappngKQL = variablePresetsKQL pid.toText fromD toD allParams now
-  let parseQuery q = either (\err -> throwError err400{errBody = encodeUtf8 $ "Invalid query: " <> err}) pure (parseQueryToAST $ replacePlaceholders mappngKQL q)
   let source = parseMaybe pSource =<< sourceM
-  queryAST <-
-    checkpoint (toAnnotation ("queryMetrics", queryM))
-      $ parseQuery
-      $ maybeToMonoid queryM
+  -- A KQL parse/unknown-field failure is user input, not a server fault: carry it
+  -- in the payload so the widget renders its error overlay. A 400 body isn't JSON,
+  -- so the client would otherwise fall back to a generic "couldn't load this chart".
+  case parseQueryToAST $ replacePlaceholders mappngKQL $ maybeToMonoid queryM of
+    Left err -> pure (emptyMetricsFor now fromD toD){error = Just err}
+    Right queryAST -> runQueryAST authCtx dbSource respDataType pid source queryAST (maybeToMonoid queryM) querySQLM mappngSQL now fromD toD
+
+
+-- | Run a parsed chart query, either through the caller's raw SQL template or
+-- the KQL-generated query.
+runQueryAST :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => AuthContext -> Maybe Text -> DataType -> Projects.ProjectId -> Maybe Sources -> [Section] -> Text -> Maybe Text -> M.Map Text Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> Eff es MetricsData
+runQueryAST authCtx dbSource respDataType pid source queryAST queryM querySQLM mappngSQL now fromD toD = do
   let sqlQueryCfg = (defSqlQueryCfg pid now source Nothing){dateRange = (fromD, toD)}
 
   case querySQLM of
@@ -131,7 +138,7 @@ queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (Utils.nonEmptyT -> q
         <$> withChartSpan
           tbl
           ( chartSpanAttrs tbl sqlQuery respDataType pid.toText
-              <> [ ("monoscope.kql.query", OA.toAttribute (maybeToMonoid queryM))
+              <> [ ("monoscope.kql.query", OA.toAttribute queryM)
                  , ("monoscope.kql.mode", OA.toAttribute ("sql" :: Text))
                  ]
           )
@@ -139,7 +146,7 @@ queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (Utils.nonEmptyT -> q
           (emptyMetricsFor now fromD toD)
           (runFetchMetrics respDataType sqlQuery now fromD toD authCtx dbSource)
     Nothing ->
-      convertTimestampsToMs <$> queryMetricsWithCache authCtx dbSource (decoderFor respDataType queryAST) pid source queryAST sqlQueryCfg (maybeToMonoid queryM) now fromD toD
+      convertTimestampsToMs <$> queryMetricsWithCache authCtx dbSource (decoderFor respDataType queryAST) pid source queryAST sqlQueryCfg queryM now fromD toD
 
 
 -- | Pick the result decoder when the caller didn't. @DTMetric@ pivots on a
@@ -199,7 +206,9 @@ queryMetricsWithCache authCtx dbSource respDataType pid source queryAST sqlQuery
               coversRange = entry.cachedFrom <= reqFrom && entry.cachedTo >= reqTo
           refetchUnlessAdequate coversRange entry.cachedData trimmed
         QC.PartialHit entry -> do
-          let deltaFromTime = entry.cachedTo
+          -- Re-read a trailing overlap, not just [cachedTo, reqTo]: a bin read
+          -- once and never revisited freezes a bad read into the chart forever.
+          let deltaFromTime = addUTCTime (negate $ fromIntegral $ QC.deltaOverlapSeconds cacheKey.binInterval) entry.cachedTo
           let deltaSqlCfg = sqlQueryCfg{dateRange = (Just deltaFromTime, Just reqTo)}
           -- Rewrite bin_auto to fixed interval for delta fetch to match cached data
           let deltaAST = QC.rewriteBinAutoToFixed cacheKey.binInterval queryAST
