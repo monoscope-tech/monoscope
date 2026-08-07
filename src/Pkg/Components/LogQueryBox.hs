@@ -74,11 +74,11 @@ logQueryBox_ config = do
     ]
     do
       div_ [class_ "flex flex-col gap-2 items-stretch justify-center group/fltr"] do
-        -- One `query-invalid` class is the single source of the error look: the
-        -- border and the message row below both derive from it in CSS, so JS
-        -- toggles one class instead of three across two files (which had drifted
-        -- to two different border colours).
-        div_ [class_ $ "group/qbox px-1 py-0.5 flex-1 flex flex-col gap-2  bg-fillWeaker rounded-lg border border-strokeWeak [&.query-invalid]:border-strokeError-strong group-has-[.ai-search:checked]/fltr:border-2 group-has-[.ai-search:checked]/fltr:border-iconBrand group-has-[.ai-search:checked]/fltr:shadow-xs shadow-strokeBrand-weak" <> bool "" " query-invalid" (isJust config.parseError), id_ "queryBox"] do
+        -- `data-query-state` is the single source of the error look: the border
+        -- and the message row below both derive from it in CSS, so JS sets one
+        -- attribute instead of toggling classes on three elements across two
+        -- files (which had drifted to two different border colours).
+        div_ [class_ "group/qbox px-1 py-0.5 flex-1 flex flex-col gap-2  bg-fillWeaker rounded-lg border border-strokeWeak data-[query-state=error]:border-strokeError-strong group-has-[.ai-search:checked]/fltr:border-2 group-has-[.ai-search:checked]/fltr:border-iconBrand group-has-[.ai-search:checked]/fltr:shadow-xs shadow-strokeBrand-weak", id_ "queryBox", data_ "query-state" (bool "ok" "error" (isJust config.parseError))] do
           input_
             $ [ class_ "hidden ai-search"
               , type_ "checkbox"
@@ -151,7 +151,7 @@ logQueryBox_ config = do
           -- that caused it. Takes no room at all when there is no error — a
           -- permanently reserved line is a worse trade than the occasional shift.
           div_
-            [ class_ "text-xs text-textError px-2 py-0.5 rounded items-center gap-1 hidden bg-fillError-weak group-[.query-invalid]/qbox:flex"
+            [ class_ "text-xs text-textError px-2 py-0.5 rounded items-center gap-1 hidden bg-fillError-weak group-data-[query-state=error]/qbox:flex"
             , id_ "query-parse-error"
             , data_ "msg" (fromMaybe "" config.parseError)
             , Aria.live_ "polite"
@@ -607,11 +607,12 @@ queryEditorInitializationCode queryLibRecent queryLibSaved vizTypeM pid = do
       document.dispatchEvent(new CustomEvent('update-query', { bubbles: true, detail: { source: 'sessions-header-bar', timeRange: from + ' \u2192 ' + to } }));
     };
 
-    // Fill the over-time chart's axis labels and per-bar tooltips (sessions +
-    // patterns) in the browser's local timezone, so they match the table and time
-    // picker. Runs after the header HTML is injected into #page-summary-region.
-    // Reads data-bucket-start/width off the container and data-bi/data-count off
-    // each bar; the server ships no formatted times (it can't know the tz).
+    // Fill the over-time chart's per-bar tooltips (sessions + patterns) in the
+    // browser's local timezone, so they match the table and time picker. Runs
+    // after the header HTML is injected into #page-summary-region. Reads
+    // data-bucket-start/width off the container and data-bi/data-count off each
+    // bar. Axis labels are server-rendered <local-time> elements — only the
+    // tippy tooltip strings need JS (attributes can't host an element).
     window.formatSummaryChart = function(root) {
       const chart = root && root.querySelector('[data-summary-chart]');
       if (!chart) return;
@@ -634,11 +635,6 @@ queryEditorInitializationCode queryLibRecent queryLibSaved vizTypeM pid = do
         const base = bar.getAttribute('data-count') || '';
         bar.setAttribute('data-tippy-content', fmt(from) + ' \u2013 ' + fmt(from + width) + (base ? ' \u00b7 ' + base : '') + (note ? ' \u00b7 ' + note : ''));
       });
-      const wrap = chart.parentElement;
-      const a = wrap && wrap.querySelector('[data-axis-start]');
-      const b = wrap && wrap.querySelector('[data-axis-end]');
-      if (a) a.textContent = fmt(firstEpoch);
-      if (b) b.textContent = fmt(endEpoch);
     };
 
     // Swap the #page-summary-region when the viz tab change crosses the summary
@@ -674,9 +670,7 @@ queryEditorInitializationCode queryLibRecent queryLibSaved vizTypeM pid = do
       el.dataset.msg = msg;
       const m = document.getElementById('query-parse-error-msg');
       if (m) m.textContent = msg;
-      // A class, not a data attribute: this Tailwind build emits no `data-[x=y]:`
-      // variants, so a data-driven rule would have generated no CSS at all.
-      document.getElementById('queryBox')?.classList.toggle('query-invalid', !!msg);
+      document.getElementById('queryBox')?.setAttribute('data-query-state', msg ? 'error' : 'ok');
     };
     window.showQueryParseError = msg => window.__setQueryParseError(msg);
     window.clearQueryParseError = () => window.__setQueryParseError('');
