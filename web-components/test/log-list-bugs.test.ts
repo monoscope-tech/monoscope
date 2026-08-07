@@ -27,6 +27,26 @@ describe('LogList — LOWER', () => {
     expect((layout as any)._itemSize.height).toBe(28);
   });
 
+  // 2026-08-06: LogResult carries the failure as `error`; the client read
+  // `data.message` first, so every server message (e.g. the unknown-field hint)
+  // was replaced by the generic fallback in the toast and the query box stayed
+  // empty. Assert the real message reaches both.
+  test('a server query error surfaces its own message, not a generic fallback', async () => {
+    const el = await mountList({ mode: 'patterns' } as any);
+    const msg = 'Unknown field "attribute". Did you mean "attributes"?';
+    const seen: string[] = [];
+    const onParseError = (e: Event) => seen.push((e as CustomEvent).detail);
+    document.body.addEventListener('showParseError', onParseError);
+    const restore = stubFetch({ error: msg });
+    try {
+      await expect((el as any).workerFetch('u')).rejects.toThrow(msg);
+      expect(seen).toEqual([msg]);
+    } finally {
+      restore();
+      document.body.removeEventListener('showParseError', onParseError);
+    }
+  });
+
   // Lo5: patterns/sessions pagination must not stop at page 1 when the server
   // omits hasMore on a full page.
   test('aggregate fetch infers hasMore from row presence when server omits it', async () => {

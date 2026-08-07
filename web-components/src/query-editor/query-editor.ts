@@ -3,6 +3,20 @@ import { customElement, state, query } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
 import 'monaco-editor/esm/vs/editor/contrib/suggest/browser/suggestController.js';
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api';
+import {
+  AGGREGATION_COMMANDS,
+  DATA_SOURCES,
+  LOGICAL_OPERATORS,
+  OPERATOR_DETAILS,
+  STATS_FUNCTIONS,
+  SUGGESTION_OPERATORS,
+  computeSuggestions,
+  filterSuggestions,
+  wordAtCursor,
+  type SchemaAccess,
+  type Suggestion,
+  type SuggestionKind as CompletionKind,
+} from './completion';
 import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
 import { conf as yamlConf, language as yamlLanguage } from 'monaco-editor/esm/vs/basic-languages/yaml/yaml';
 import { groupBy, pick } from 'lodash';
@@ -29,7 +43,7 @@ interface CompletionItem extends BaseSuggestion {
   readonly kind: 'completion';
   label: string;
   insertText: string;
-  kindCategory: number;
+  kindCategory: CompletionKind;
   detail?: string;
   score?: number;
   originalItem?: any;
@@ -95,12 +109,6 @@ type SchemaData = {
 
 type SuggestionItem = CompletionItem | RecentSearch | SavedView | PopularSearch;
 
-interface SuggestController {
-  model?: any;
-  _model?: any;
-  widget?: any;
-}
-
 interface SchemaField {
   name: string;
   type: string;
@@ -113,28 +121,16 @@ interface SchemaField {
 const COMPARISON_OPERATORS = ['==', '!=', '>', '<', '>=', '<=', '=~'];
 const SET_OPERATORS = ['in', '!in', 'has', '!has', 'has_any', 'has_all'];
 const STRING_OPERATORS = ['contains', '!contains', 'startswith', '!startswith', 'endswith', '!endswith', 'matches'];
-const LOGICAL_OPERATORS = ['and', 'or', 'not', 'exists', '!exists'];
 const PIPE_OPERATOR = ['|'];
 
 // Combine all operators for easy access
 const ALL_OPERATORS = [...COMPARISON_OPERATORS, ...SET_OPERATORS, ...STRING_OPERATORS, ...PIPE_OPERATOR];
 
 // Operator descriptions for suggestion dropdown
-const OPERATOR_DETAILS: Record<string, string> = {
-  '==': 'equals', '!=': 'not equals', '>': 'greater than', '<': 'less than',
-  '>=': 'greater or equal', '<=': 'less or equal', '=~': 'regex match',
-  'in': 'in list', '!in': 'not in list', 'has': 'has value', '!has': 'not has',
-  'has_any': 'has any of', 'has_all': 'has all of',
-  'contains': 'contains substring', '!contains': 'not contains',
-  'startswith': 'starts with', '!startswith': 'not starts with',
-  'endswith': 'ends with', '!endswith': 'not ends with', 'matches': 'glob match',
-  'and': 'both conditions', 'or': 'either condition', 'not': 'negate', 'exists': 'field exists', '!exists': 'field missing',
-};
 
 // Common operators shown first, then advanced ones
 const COMMON_OPERATORS = ['==', '!=', '>', '<', 'contains', 'in'];
 const ADVANCED_OPERATORS = ['>=', '<=', '=~', '!in', 'has', '!has', 'has_any', 'has_all', '!contains', 'startswith', '!startswith', 'endswith', '!endswith', 'matches', ...LOGICAL_OPERATORS.filter((op) => op !== '!exists')];
-const SUGGESTION_OPERATORS = [...COMMON_OPERATORS, ...ADVANCED_OPERATORS];
 const operatorSortText = (op: string, i: number) => {
   const group = COMMON_OPERATORS.includes(op) ? '0' : '1';
   return `${group}_${String(i).padStart(3, '0')}_${op}`;
@@ -149,10 +145,7 @@ const PRIORITY_FIELDS = new Set(['status_code', 'level', 'method', 'name', 'dura
 const fieldSortText = (name: string) => PRIORITY_FIELDS.has(name) ? `0_${name}` : `1_${name}`;
 
 // Sources and keywords
-const DATA_SOURCES = ['spans', 'metrics'];
-const AGGREGATION_COMMANDS = ['stats', 'timechart'];
 const AGGREGATION_MODIFIERS = ['by', 'as', 'limit'];
-const STATS_FUNCTIONS = ['count', 'sum', 'avg', 'min', 'max', 'median', 'stdev', 'range', 'p50', 'p75', 'p90', 'p95', 'p99', 'p100'];
 
 // Combine all keywords
 const KEYWORDS = [...DATA_SOURCES, ...AGGREGATION_COMMANDS, ...AGGREGATION_MODIFIERS, ...LOGICAL_OPERATORS, ...STATS_FUNCTIONS];
@@ -258,6 +251,10 @@ class SchemaManager {
     // Clear caches when schema changes
     this.nestedCache.clear();
     this.valueCache.clear();
+    // The schema arrives lazily (fetched on first focus), so a query typed
+    // before it lands validated against an empty field set. Tell mounted
+    // editors to re-check what's already in the box.
+    document.body.dispatchEvent(new CustomEvent('schema-loaded', { detail: schema }));
   };
   getSchemaData = (schema: string) => this.schemaData[schema];
   setNestedResolver = (fn: typeof this.nestedResolver) => {
@@ -270,6 +267,12 @@ class SchemaManager {
   };
   getSchemas = () => this.schemas;
   getDefaultSchema = () => this.defaultSchema;
+  // Synchronous root-field names of the active schema — the field validator runs
+  // on every keystroke and can't await the (async, nested) resolver.
+  getFieldRoots = (): Set<string> => {
+    const fields = this.schemaData[this.defaultSchema]?.fields;
+    return new Set(Object.keys(fields || {}).map((f) => f.split('.')[0]));
+  };
   private setCacheWithLimit<K, V>(cache: Map<K, V>, key: K, value: V): void {
     if (cache.size >= MAX_CACHE_SIZE) {
       const firstKey = cache.keys().next().value;
@@ -283,7 +286,9 @@ class SchemaManager {
     const cached = this.nestedCache.get(cacheKey);
     if (cached) return cached;
     const result = await this.nestedResolver(schema, prefix);
-    this.setCacheWithLimit(this.nestedCache, cacheKey, result);
+    // An empty result means the schema hasn't arrived yet — caching it would
+    // pin "no fields" for this prefix until something else clears the cache.
+    if (result.length) this.setCacheWithLimit(this.nestedCache, cacheKey, result);
     return result;
   };
   resolveValues = async (schema: string, field: string): Promise<string[]> => {
@@ -425,322 +430,19 @@ monaco.languages.register({ id: 'yaml', extensions: ['.yaml', '.yml'], aliases: 
 monaco.languages.setMonarchTokensProvider('yaml', yamlLanguage);
 monaco.languages.setLanguageConfiguration('yaml', yamlConf);
 
-// Version counter for cancelling stale completion requests
-let completionVersion = 0;
+// Suggestions come from ./completion, called directly by the component. Monaco
+// keeps syntax highlighting only: its own completion provider and suggest widget
+// are unused, so there is exactly one list and one code path behind it.
 
-// Completion provider
-monaco.languages.registerCompletionItemProvider('aql', {
-  triggerCharacters: [' ', '|', '.', '[', ',', '"'],
-  provideCompletionItems: async (model, position) => {
-    const myVersion = ++completionVersion;
-    const text = model.getValueInRange({
-      startLineNumber: 1,
-      startColumn: 1,
-      endLineNumber: position.lineNumber,
-      endColumn: position.column,
-    });
-
-    const currentLine = model.getLineContent(position.lineNumber);
-    const segments = text.split(/\|/).map((s) => s.trim());
-    const last = segments[segments.length - 1];
-
-    const suggestions: monaco.languages.CompletionItem[] = [];
-    const tables = schemaManager.getSchemas();
-    const firstToken = text.trim().split(/\s+/)[0].toLowerCase();
-    const currentSchema = tables.includes(firstToken) ? firstToken : schemaManager.getDefaultSchema();
-
-    const createRange = (startCol = position.column, endCol = position.column) => ({
-      startLineNumber: position.lineNumber,
-      startColumn: startCol,
-      endLineNumber: position.lineNumber,
-      endColumn: endCol,
-    });
-
-    const lineText = currentLine.substring(0, position.column - 1);
-    const lastChar = lineText.charAt(lineText.length - 1);
-
-    // First priority: Check for nested fields after dot
-    // OPTIMIZATION: Only run regex if line contains a dot
-    const dotMatch = lineText.includes('.') ? (lineText.match(REGEX_PATTERNS.dotMatchEnd) || lineText.match(REGEX_PATTERNS.dotMatchPartial)) : null;
-
-    if (dotMatch) {
-      const fieldPrefix = dotMatch[1];
-      const nested = await schemaManager.resolveNested(currentSchema, fieldPrefix);
-      if (myVersion !== completionVersion) return { suggestions: [] };
-
-      nested.forEach((n) =>
-        suggestions.push({
-          label: n.name,
-          kind: monaco.languages.CompletionItemKind.Field,
-          insertText: n.type === 'object' ? `${n.name}.` : `${n.name} `,
-          range: createRange(),
-          detail: n.type,
-          documentation: n.examples?.join(', '),
-        })
-      );
-
-      return { suggestions };
-    }
-
-    // Check for operator pattern - show value suggestions
-    // OPTIMIZATION: Only run regex if line ends with space (after operator)
-    const operatorMatch = lastChar === ' ' ? lineText.match(REGEX_PATTERNS.operatorMatch) : null;
-    if (operatorMatch) {
-      const fieldName = operatorMatch[1];
-      const operator = operatorMatch[2];
-      const values = await schemaManager.resolveValues(currentSchema, fieldName);
-      if (myVersion !== completionVersion) return { suggestions: [] };
-
-      // Special handling for 'in' and '!in' operators
-      if (operator === 'in' || operator === '!in') {
-        suggestions.push({
-          label: '("...", "...")',
-          kind: monaco.languages.CompletionItemKind.Snippet,
-          detail: 'comma-separated list',
-          insertText: '("", "") ',
-          range: createRange(),
-        });
-      } else if (operator === 'has_any' || operator === 'has_all') {
-        suggestions.push({
-          label: '["...", "..."]',
-          kind: monaco.languages.CompletionItemKind.Snippet,
-          detail: 'comma-separated array',
-          insertText: '["", ""] ',
-          range: createRange(),
-        });
-      } else {
-        // Store value descriptions for the custom suggestion widget to read
-        const valueDescriptions: Record<string, string> = {};
-        values.forEach((v) => {
-          const str = String(v);
-          const pipeIdx = str.indexOf('|');
-          const value = pipeIdx > 0 ? str.substring(0, pipeIdx) : str;
-          if (pipeIdx > 0) valueDescriptions[value] = str.substring(pipeIdx + 1);
-          suggestions.push({
-            label: value,
-            kind: monaco.languages.CompletionItemKind.Value,
-            insertText: typeof value === 'string' && !value.includes('(') ? `"${value}" ` : `${value} `,
-            range: createRange(),
-          });
-        });
-        if (Object.keys(valueDescriptions).length) {
-          (schemaManager as any)._valueDescriptions = valueDescriptions;
-        }
-      }
-      return { suggestions };
-    }
-
-    // Fourth priority: Check for complete field-operator-value pattern - suggest logical operators
-    // OPTIMIZATION: Only compute lastCharTrimmed and run regex when needed
-    let afterValue = false;
-    if (lastChar === ' ') {
-      const trimmedLine = lineText.trimEnd();
-      const lastCharTrimmed = trimmedLine.charAt(trimmedLine.length - 1);
-      if (lastCharTrimmed === '"' || REGEX_PATTERNS.digitTest.test(lastCharTrimmed)) {
-        afterValue = REGEX_PATTERNS.afterQuotedValue.test(lineText) || REGEX_PATTERNS.afterNumericValue.test(lineText);
-      }
-    }
-    if (afterValue) {
-      [...LOGICAL_OPERATORS.filter((op) => op === 'and' || op === 'or'), PIPE_OPERATOR[0]].forEach((op) =>
-        suggestions.push({
-          label: op,
-          kind: monaco.languages.CompletionItemKind.Operator,
-          insertText: `${op} `,
-          range: createRange(),
-        })
-      );
-      return { suggestions };
-    }
-
-    // Fifth priority: Check for logical operators followed by space - suggest fields
-    // OPTIMIZATION: Only run regex if line ends with space
-    const logicalOperatorMatch = lastChar === ' ' ? lineText.match(REGEX_PATTERNS.logicalOperator) : null;
-    if (logicalOperatorMatch) {
-      const fields = await schemaManager.resolveNested(currentSchema, '');
-      if (myVersion !== completionVersion) return { suggestions: [] };
-      fields.forEach((f) =>
-        suggestions.push({
-          label: f.name,
-          kind: monaco.languages.CompletionItemKind.Field,
-          detail: f.type,
-          documentation: f.examples?.join(', '),
-          insertText: f.type === 'object' || f.fields ? `${f.name}.` : `${f.name} `,
-          sortText: fieldSortText(f.name),
-          range: createRange(),
-        })
-      );
-      return { suggestions };
-    }
-
-    // Check for field name followed by space
-    // OPTIMIZATION: Only run regex if line ends with space
-    const fieldSpaceMatch = lastChar === ' ' ? lineText.match(REGEX_PATTERNS.fieldSpace) : null;
-    if (fieldSpaceMatch && !logicalOperatorMatch) {
-      SUGGESTION_OPERATORS.forEach((op, i) =>
-        suggestions.push({
-          label: op,
-          kind: monaco.languages.CompletionItemKind.Operator,
-          detail: OPERATOR_DETAILS[op],
-          insertText: `${op} `,
-          sortText: operatorSortText(op, i),
-          range: createRange(),
-        })
-      );
-      return { suggestions };
-    }
-
-    // Empty or start — suggest fields first (primary use case), tables secondary
-    if (segments.length === 1 && (last === '' || !tables.some((t) => last.toLowerCase().startsWith(t)))) {
-      if (last === '' || !tables.some((t) => last.toLowerCase().trim().startsWith(t))) {
-        const defaultSchema = schemaManager.getDefaultSchema();
-        const fields = await schemaManager.resolveNested(defaultSchema, '');
-        if (myVersion !== completionVersion) return { suggestions: [] };
-        fields.forEach((f) =>
-          suggestions.push({
-            label: f.name,
-            kind: monaco.languages.CompletionItemKind.Field,
-            detail: f.type,
-            documentation: f.examples?.join(', '),
-            insertText: f.type === 'object' || f.fields ? `${f.name}.` : `${f.name} `,
-            sortText: fieldSortText(f.name),
-            range: createRange(),
-          })
-        );
-      }
-
-      // Tables after fields
-      tables
-        .filter((t) => last === '' || t.toLowerCase().startsWith(last.toLowerCase().trim()))
-        .forEach((t) =>
-          suggestions.push({
-            label: t,
-            kind: monaco.languages.CompletionItemKind.Module,
-            insertText: `${t} `,
-            sortText: `2_${t}`,
-            range: createRange(),
-          })
-        );
-      return { suggestions };
-    }
-
-    // Schema name completion
-    if (segments.length === 1 && tables.some((t) => t.startsWith(last.toLowerCase()))) {
-      tables
-        .filter((t) => t.startsWith(last.toLowerCase()))
-        .forEach((t) =>
-          suggestions.push({
-            label: t,
-            kind: monaco.languages.CompletionItemKind.Module,
-            insertText: `${t} `,
-            range: createRange(),
-          })
-        );
-      return { suggestions };
-    }
-
-    // After schema
-    if (segments.length === 1 && tables.includes(last.toLowerCase())) {
-      // Suggest aggregation commands and modifiers
-      [...AGGREGATION_COMMANDS, 'limit'].forEach((k) =>
-        suggestions.push({
-          label: k,
-          kind: monaco.languages.CompletionItemKind.Keyword,
-          insertText: `${k} `,
-          range: createRange(),
-        })
-      );
-      const fields = await schemaManager.resolveNested(currentSchema, '');
-      if (myVersion !== completionVersion) return { suggestions: [] };
-      fields.forEach((f) =>
-        suggestions.push({
-          label: f.name,
-          kind: monaco.languages.CompletionItemKind.Field,
-          insertText: f.type === 'object' || f.fields ? `${f.name}.` : `${f.name} `,
-          range: createRange(),
-        })
-      );
-      return { suggestions };
-    }
-
-    // Search segment
-    if (!REGEX_PATTERNS.statsOrTimechart.test(last)) {
-      SUGGESTION_OPERATORS.forEach((op, i) =>
-        suggestions.push({
-          label: op,
-          kind: monaco.languages.CompletionItemKind.Operator,
-          detail: OPERATOR_DETAILS[op],
-          insertText: `${op} `,
-          sortText: operatorSortText(op, i),
-          range: createRange(),
-        })
-      );
-
-      const fields = await schemaManager.resolveNested(currentSchema, '');
-      if (myVersion !== completionVersion) return { suggestions: [] };
-      fields.forEach((f) =>
-        suggestions.push({
-          label: f.name,
-          kind: monaco.languages.CompletionItemKind.Field,
-          detail: f.type,
-          documentation: f.examples?.join(', '),
-          insertText: f.type === 'object' || f.fields ? `${f.name}.` : `${f.name} `,
-          range: createRange(),
-        })
-      );
-      return { suggestions };
-    }
-
-    // Stats/timechart segment
-    if (REGEX_PATTERNS.statsOrTimechart.test(last)) {
-      // Use the STATS_FUNCTIONS constant directly
-      STATS_FUNCTIONS.forEach((fn) =>
-        suggestions.push({
-          label: fn,
-          kind: monaco.languages.CompletionItemKind.Function,
-          insertText: `${fn}(`,
-          range: createRange(),
-        })
-      );
-
-      if (REGEX_PATTERNS.byKeyword.test(last)) {
-        const fields = await schemaManager.resolveNested(currentSchema, '');
-        if (myVersion !== completionVersion) return { suggestions: [] };
-        fields.forEach((f) =>
-          suggestions.push({
-            label: f.name,
-            kind: monaco.languages.CompletionItemKind.Field,
-            insertText: f.type === 'object' || f.fields ? `${f.name}.` : `${f.name} `,
-            range: createRange(),
-          })
-        );
-      } else {
-        suggestions.push({
-          label: 'by',
-          kind: monaco.languages.CompletionItemKind.Keyword,
-          insertText: 'by ',
-          range: createRange(),
-        });
-      }
-
-      if (REGEX_PATTERNS.timechartKeyword.test(last)) {
-        ['[5m]', '[1h]'].forEach((iv) =>
-          suggestions.push({
-            label: iv,
-            kind: monaco.languages.CompletionItemKind.Value,
-            insertText: iv,
-            range: createRange(),
-          })
-        );
-      }
-      return { suggestions };
-    }
-
-    return { suggestions };
-  },
-});
-
-// Basic client-side query syntax validation
-const VALID_OPERATORS = new Set(['==', '!=', '>', '<', '>=', '<=', '=~', 'in', '!in', 'has', '!has', 'has_any', 'has_all', 'contains', '!contains', 'startswith', '!startswith', 'endswith', '!endswith']);
+// Query validation.
+//
+// The grammar lives in one place — Pkg.Parser.Stats, behind
+// /log_explorer/validate — and its verdict carries the position to underline.
+// The regex approximation that used to live here could not know what the parser
+// knows (aliases introduced by `summarize`, which roots the server accepts) and
+// produced squiggles on valid queries. What stays local is only what must be
+// instant and cannot be wrong: an unterminated quote makes every later token
+// ambiguous, so it is reported before a round trip is worth making.
 
 interface QueryError {
   message: string;
@@ -749,41 +451,37 @@ interface QueryError {
   line: number;
 }
 
-function validateQuerySyntax(query: string): QueryError | null {
-  const trimmed = query.trim();
-  if (!trimmed) return null;
-
-  // Check unclosed quotes
+export function unclosedQuote(query: string): QueryError | null {
   let inQuote = false;
   let quoteChar = '';
   let quoteStart = 0;
-  for (let i = 0; i < trimmed.length; i++) {
-    const c = trimmed[i];
+  for (let i = 0; i < query.length; i++) {
+    const c = query[i];
     if (!inQuote && (c === '"' || c === "'")) {
       inQuote = true;
       quoteChar = c;
       quoteStart = i;
-    } else if (inQuote && c === quoteChar && (i === 0 || trimmed[i - 1] !== '\\')) {
+    } else if (inQuote && c === quoteChar && query[i - 1] !== '\\') {
       inQuote = false;
     }
   }
-  if (inQuote) {
-    return { message: `Unclosed ${quoteChar === '"' ? 'double' : 'single'} quote`, startColumn: quoteStart + 1, endColumn: trimmed.length + 1, line: 1 };
-  }
-
-  // Tokenize outside quotes for operator validation
-  // Find tokens that look like operators (sequences of =, !, <, > symbols)
-  const operatorPattern = /(?<![a-zA-Z_])([=!<>~]{2,})(?![a-zA-Z_])/g;
-  let match;
-  while ((match = operatorPattern.exec(trimmed)) !== null) {
-    const op = match[1];
-    if (!VALID_OPERATORS.has(op)) {
-      return { message: `Unknown operator "${op}". Did you mean "==" or "!="?`, startColumn: match.index + 1, endColumn: match.index + op.length + 1, line: 1 };
-    }
-  }
-
-  return null;
+  return inQuote
+    ? { message: `Unclosed ${quoteChar === '"' ? 'double' : 'single'} quote`, startColumn: quoteStart + 1, endColumn: query.length + 1, line: 1 }
+    : null;
 }
+
+/** Shape of the /log_explorer/validate response. */
+export interface Verdict {
+  valid: boolean;
+  message?: string;
+  column?: number;
+  width?: number;
+}
+
+export const verdictToError = (v: Verdict): QueryError | null =>
+  v.valid || !v.message
+    ? null
+    : { message: v.message, startColumn: v.column ?? 1, endColumn: (v.column ?? 1) + (v.width ?? 1), line: 1 };
 
 @customElement('query-editor')
 export class QueryEditorComponent extends LitElement {
@@ -839,6 +537,26 @@ export class QueryEditorComponent extends LitElement {
   } | null = null;
 
   // Prevent unnecessary re-renders by checking if suggestion-related state actually changed
+  // Screen readers need the input to announce itself as a combobox and to say
+  // which option is active; Monaco owns the inner textarea, so the attributes are
+  // applied to it after each render rather than in a template.
+  private ariaState = '';
+  protected updated(): void {
+    // Monaco owns this textarea; write to it only when the announced state
+    // actually changed rather than on every render.
+    const next = `${this.showSuggestions}:${this.selectedIndex}`;
+    if (next === this.ariaState) return;
+    const input = this.editor?.getDomNode()?.querySelector('textarea');
+    if (!input) return;
+    this.ariaState = next;
+    input.setAttribute('role', 'combobox');
+    input.setAttribute('aria-expanded', String(this.showSuggestions));
+    input.setAttribute('aria-controls', 'query-suggestions');
+    input.setAttribute('aria-autocomplete', 'list');
+    if (this.showSuggestions && this.selectedIndex >= 0) input.setAttribute('aria-activedescendant', `query-suggestion-${this.selectedIndex}`);
+    else input.removeAttribute('aria-activedescendant');
+  }
+
   shouldUpdate(changedProperties: Map<string, any>): boolean {
     // Check if any of the properties that affect the suggestions dropdown changed
     const suggestionStateChanged =
@@ -859,15 +577,17 @@ export class QueryEditorComponent extends LitElement {
   }
 
   // Color-coded type badges for dropdown items, keyed by Monaco CompletionItemKind
-  private readonly KIND_BADGES: Record<number, { label: string; cls: string }> = {
-    [4 /* Field */]: { label: 'F', cls: 'text-sky-400 bg-sky-400/15 border-sky-400/30' },
-    [11 /* Operator */]: { label: 'Op', cls: 'text-amber-400 bg-amber-400/15 border-amber-400/30' },
-    [12 /* Value */]: { label: 'V', cls: 'text-emerald-400 bg-emerald-400/15 border-emerald-400/30' },
-    [8 /* Module */]: { label: 'M', cls: 'text-violet-400 bg-violet-400/15 border-violet-400/30' },
-    [17 /* Keyword */]: { label: 'K', cls: 'text-rose-400 bg-rose-400/15 border-rose-400/30' },
-    [1 /* Function */]: { label: 'fn', cls: 'text-orange-400 bg-orange-400/15 border-orange-400/30' },
-    [27 /* Snippet */]: { label: '{}', cls: 'text-teal-400 bg-teal-400/15 border-teal-400/30' },
+  private readonly KIND_BADGES: Record<CompletionKind, { label: string; cls: string }> = {
+    field: { label: 'F', cls: 'text-sky-400 bg-sky-400/15 border-sky-400/30' },
+    operator: { label: 'Op', cls: 'text-amber-400 bg-amber-400/15 border-amber-400/30' },
+    value: { label: 'V', cls: 'text-emerald-400 bg-emerald-400/15 border-emerald-400/30' },
+    table: { label: 'M', cls: 'text-violet-400 bg-violet-400/15 border-violet-400/30' },
+    keyword: { label: 'K', cls: 'text-rose-400 bg-rose-400/15 border-rose-400/30' },
+    function: { label: 'fn', cls: 'text-orange-400 bg-orange-400/15 border-orange-400/30' },
+    snippet: { label: '{}', cls: 'text-teal-400 bg-teal-400/15 border-teal-400/30' },
   };
+
+
 
   public setPopularSearches(items: { query: string; description?: string }[]): void {
     if (!items?.length) return;
@@ -898,30 +618,88 @@ export class QueryEditorComponent extends LitElement {
     }
   };
 
+  private suggestionSeq = 0;
   private triggerSuggestions = () => {
-    this.editor?.trigger('auto', 'editor.action.triggerSuggest', {});
+    this.showSuggestions = true;
+    void this.refreshSuggestions();
   };
 
-  private validateAndMark(query: string, model: monaco.editor.ITextModel): void {
-    const error = validateQuerySyntax(query);
-    const wrapper = this.querySelector(':scope > div');
+  /** Cache of verdicts by query text — retyping a query costs no round trip. */
+  private verdicts = new Map<string, Verdict>();
+  private validateSeq = 0;
+
+  /** Ask the server whether this query is valid. Errors are treated as "no verdict". */
+  private async fetchVerdict(query: string): Promise<Verdict | null> {
+    const cached = this.verdicts.get(query);
+    if (cached) return cached;
+    const pid = this.getAttribute('project-id') || (window as any).PROJECT_ID;
+    if (!pid) return null;
+    try {
+      const res = await fetch(`/p/${pid}/log_explorer/validate?query=${encodeURIComponent(query)}`, {
+        headers: { Accept: 'application/json' },
+        credentials: 'include',
+      });
+      if (!res.ok) return null;
+      const verdict: Verdict = await res.json();
+      if (this.verdicts.size > 50) this.verdicts.clear();
+      this.verdicts.set(query, verdict);
+      return verdict;
+    } catch {
+      // Offline or a failed round trip must not paint the query as invalid.
+      return null;
+    }
+  }
+
+  private showError(model: monaco.editor.ITextModel, error: QueryError | null): void {
+    monaco.editor.setModelMarkers(
+      model,
+      'query-validator',
+      error
+        ? [
+            {
+              severity: monaco.MarkerSeverity.Error,
+              message: error.message,
+              startLineNumber: error.line,
+              startColumn: error.startColumn,
+              endLineNumber: error.line,
+              endColumn: error.endColumn,
+            },
+          ]
+        : []
+    );
+    // Through the `showParseError` event — the same front door the server's
+    // HX-Trigger and log-list use — rather than the window global it forwards to.
     if (error) {
-      monaco.editor.setModelMarkers(model, 'query-validator', [{
-        severity: monaco.MarkerSeverity.Error,
-        message: error.message,
-        startLineNumber: error.line,
-        startColumn: error.startColumn,
-        endLineNumber: error.line,
-        endColumn: error.endColumn,
-      }]);
-      wrapper?.classList.add('!border-strokeError-strong');
-      (window as any).showQueryParseError?.(error.message);
+      document.body.dispatchEvent(new CustomEvent('showParseError', { detail: error.message, bubbles: true, composed: true }));
     } else {
-      monaco.editor.setModelMarkers(model, 'query-validator', []);
-      wrapper?.classList.remove('!border-strokeError-strong');
       (window as any).clearQueryParseError?.();
     }
   }
+
+  private async validateAndMark(query: string, model: monaco.editor.ITextModel): Promise<void> {
+    // Instant and never wrong: report it without waiting for a round trip.
+    const local = unclosedQuote(query);
+    if (local) return this.showError(model, local);
+
+    const seq = ++this.validateSeq;
+    const verdict = await this.fetchVerdict(query.trim());
+    // A newer keystroke already asked; its answer wins.
+    if (seq !== this.validateSeq || !this.isConnected) return;
+    if (verdict) this.showError(model, verdictToError(verdict));
+  }
+
+  // Fires a little ahead of the refetch debounce below, so the message lands
+  // before the data it explains.
+  private validateTimeout: number | null = null;
+  private validateDebounced = (queryValue: string) => {
+    if (this.validateTimeout !== null) clearTimeout(this.validateTimeout);
+    this.validateTimeout = window.setTimeout(() => {
+      this.validateTimeout = null;
+      if (!this.isConnected) return;
+      const model = this.editor?.getModel();
+      if (model) void this.validateAndMark(queryValue, model);
+    }, 400);
+  };
 
   // Debounced version - waits 300ms after user stops typing before firing
   private updateQueryTimeout: number | null = null;
@@ -979,12 +757,10 @@ export class QueryEditorComponent extends LitElement {
       );
     }
 
-    // Re-validate after update-query clears errors (setTimeout ensures it runs after event handlers)
-    setTimeout(() => {
-      if (!this.isConnected) return;
-      const model = this.editor?.getModel();
-      if (model) this.validateAndMark(queryValue, model);
-    }, 0);
+    // The update-query listeners above clear the inline message; re-assert it in
+    // the same task so the error can't blink out between the clear and a repaint.
+    const model = this.editor?.getModel();
+    if (model) void this.validateAndMark(queryValue, model);
   };
 
   async firstUpdated(): Promise<void> {
@@ -1006,6 +782,20 @@ export class QueryEditorComponent extends LitElement {
     }, { signal });
 
     window.addEventListener('resize', this.resizeHandler, { signal });
+
+    // A query restored from the URL is validated before the (lazily fetched)
+    // schema exists, so re-check once it lands — otherwise an unknown field
+    // stays unmarked until the next keystroke.
+    document.body.addEventListener(
+      'schema-loaded',
+      () => {
+        const model = this.editor?.getModel();
+        if (model) void this.validateAndMark(model.getValue(), model);
+        // Any completion list built before this point had no fields in it.
+        if (this.editor?.hasTextFocus()) this.triggerSuggestions();
+      },
+      { signal }
+    );
 
     // Set up ResizeObserver to handle container size changes
     if (this._editorContainer && window.ResizeObserver) {
@@ -1305,8 +1095,9 @@ export class QueryEditorComponent extends LitElement {
       fontLigatures: false,
       fontSize: 14,
       'semanticHighlighting.enabled': false,
-      quickSuggestions: { other: 'on', comments: 'off', strings: 'off' },
-      suggestOnTriggerCharacters: true,
+      // Completions are ours (see ./completion); Monaco contributes highlighting only.
+      quickSuggestions: false,
+      suggestOnTriggerCharacters: false,
       suggest: {
         showIcons: false,
         snippetsPreventQuickSuggestions: true,
@@ -1441,8 +1232,16 @@ export class QueryEditorComponent extends LitElement {
         // Update internal state without triggering Lit re-render
         this.currentQuery = newValue;
 
-        // Debounced URL/event update (Monaco's quickSuggestions handles triggering completions)
-        // Validation runs after debounce to avoid race with update-query clearing errors
+        // Validation is debounced, not per-keystroke: a half-typed query passes in
+        // and out of a valid shape ("attribut" -> no operator yet -> no error),
+        // so marking on every character made the message flicker and, since it
+        // sits in flow above the editor, shifted the page with it.
+        this.validateDebounced(newValue);
+
+        // Suggestions follow the cursor directly now — Monaco's own widget is off.
+        if (this.showSuggestions) void this.refreshSuggestions();
+
+        // Debounced URL/event update
         this.updateQueryDebounced(newValue);
       }),
 
@@ -1565,44 +1364,53 @@ export class QueryEditorComponent extends LitElement {
     this._placeholderElement.style.display = isEmpty ? 'block' : 'none';
   }
 
-  private updateSuggestions(aqlItems: any[] = [], isContextSpecific: boolean = false): void {
+  /** Schema reads for the completion module, backed by the shared manager. */
+  private get schemaAccess(): SchemaAccess {
+    return {
+      tables: () => schemaManager.getSchemas(),
+      defaultTable: () => schemaManager.getDefaultSchema(),
+      fields: (table, prefix) => schemaManager.resolveNested(table, prefix),
+      values: (table, field) => schemaManager.resolveValues(table, field),
+    };
+  }
+
+  /**
+   * Recompute the suggestion list for the current cursor. This is the only
+   * producer of `completionItems` — an empty result clears the list rather than
+   * leaving the previous one on screen.
+   */
+  private refreshSuggestions = async (): Promise<void> => {
     const position = this.editor?.getPosition();
     const model = this.editor?.getModel();
-    let parentPath = '';
+    if (!position || !model) return;
 
-    if (position && model) {
-      const lineText = model.getLineContent(position.lineNumber).substring(0, position.column - 1);
-      const dotMatch = lineText.includes('.') ? (lineText.match(REGEX_PATTERNS.dotMatchEnd) || lineText.match(REGEX_PATTERNS.dotMatchPartial)) : null;
-      if (dotMatch) {
-        parentPath = dotMatch[1];
-      }
-    }
+    const text = model.getValueInRange({ startLineNumber: 1, startColumn: 1, endLineNumber: position.lineNumber, endColumn: position.column });
+    // Late results from a superseded keystroke must not overwrite a newer list.
+    const seq = ++this.suggestionSeq;
+    const computed = await computeSuggestions(text, this.schemaAccess);
+    if (seq !== this.suggestionSeq || !this.isConnected) return;
 
-    this.completionItems = aqlItems
+    const parentPath = text.includes('.') ? (text.match(REGEX_PATTERNS.dotMatchEnd) || text.match(REGEX_PATTERNS.dotMatchPartial))?.[1] : undefined;
+
+    // Sort only where an explicit hint exists; everything else keeps the order the
+    // completion module produced (value examples are listed most-useful-first, and
+    // re-alphabetising them buries the common ones).
+    this.completionItems = filterSuggestions(computed, wordAtCursor(text))
+      .map((c, i) => ({ c, i }))
+      .sort((a, b) => (a.c.sortText ?? '\uffff').localeCompare(b.c.sortText ?? '\uffff') || a.i - b.i)
+      .map(({ c }) => c)
       .slice(0, 20)
-      .sort((a, b) => {
-        const sa = (a.completion || a).sortText || (a.completion || a).label || '';
-        const sb = (b.completion || b).sortText || (b.completion || b).label || '';
-        return sa.localeCompare(sb);
-      })
-      .map((item) => {
-        const completionData = item.completion || item;
-        const label = String(completionData.label || completionData.insertText || 'Unknown');
-        const valueDesc = (schemaManager as any)._valueDescriptions?.[label] || '';
-        return {
-          kind: 'completion' as const,
-          label,
-          insertText: completionData.insertText || label || '',
-          kindCategory: completionData.kind || monaco.languages.CompletionItemKind.Field,
-          detail: completionData.detail || completionData.documentation || valueDesc || '',
-          score: item.score || 2000,
-          isContextSpecific: isContextSpecific,
-          parentPath: parentPath || undefined,
-        };
-      });
+      .map((c: Suggestion) => ({
+        kind: 'completion' as const,
+        label: c.label,
+        insertText: c.insertText,
+        kindCategory: c.kind,
+        detail: c.detail || c.documentation || '',
+        parentPath,
+      }));
 
     this.selectedIndex = -1;
-  }
+  };
 
   private getTotalVisibleSuggestions(): number {
     const matches = this.getMatches();
@@ -1731,30 +1539,10 @@ export class QueryEditorComponent extends LitElement {
 
   private setupSuggestions(): void {
     if (!this.editor) return;
-
     this.editor.addCommand(monaco.KeyCode.Space | monaco.KeyMod.CtrlCmd, () => this.triggerSuggestions());
-
-    const suggestController = this.editor.getContribution('editor.contrib.suggestController') as SuggestController;
-    const model = suggestController?.model || suggestController?._model;
-
-    ['onDidSuggest', '_onDidSuggest', 'onDidTrigger'].forEach((event) => {
-      const listener = (model as any)?.[event];
-      if (listener && typeof listener === 'function') {
-        const dispose = listener((e: any) => {
-          const items = e?.suggestions || e?.completionModel?.items || e?.items || [];
-          if (items.length > 0) {
-            this.showSuggestions = true;
-            this.updateSuggestions(items, true);
-          }
-        });
-        if (dispose && typeof dispose === 'function') {
-          this.suggestionListeners.push(dispose);
-        }
-      }
-    });
   }
 
-  private getCompletionIcon(kind: number): TemplateResult {
+  private getCompletionIcon(kind: CompletionKind): TemplateResult {
     const badge = this.KIND_BADGES[kind] || { label: '?', cls: 'text-textWeak bg-fillWeak border-strokeWeak' };
     return html`<span class="inline-flex items-center justify-center w-5 h-5 rounded text-2xs font-semibold border leading-none ${badge.cls}">${badge.label}</span>`;
   }
@@ -1848,6 +1636,9 @@ export class QueryEditorComponent extends LitElement {
         @pointerdown=${(e: MouseEvent) => this.handleSuggestionClick(item, e)}
         @mouseover=${() => { if (this.selectedIndex !== itemIndex) this.selectedIndex = itemIndex; }}
         data-index="${itemIndex}"
+        id="query-suggestion-${itemIndex}"
+        role="option"
+        aria-selected="${isSelected}"
       >
         <div class="flex items-center gap-2 overflow-hidden">
           <span class="shrink-0">${icon}</span>
@@ -1860,9 +1651,9 @@ export class QueryEditorComponent extends LitElement {
 
   private splitCompletionSubgroups(items: CompletionItem[]): { items: SuggestionItem[]; title: string | null }[] {
     if (!items.length) return [];
-    const isAllOperators = items.every((i) => i.kindCategory === monaco.languages.CompletionItemKind.Operator);
-    const isAllFields = items.every((i) => i.kindCategory === monaco.languages.CompletionItemKind.Field);
-    const hasMixedTypes = !isAllOperators && !isAllFields && items.some((i) => i.kindCategory === monaco.languages.CompletionItemKind.Operator);
+    const isAllOperators = items.every((i) => i.kindCategory === 'operator');
+    const isAllFields = items.every((i) => i.kindCategory === 'field');
+    const hasMixedTypes = !isAllOperators && !isAllFields && items.some((i) => i.kindCategory === 'operator');
 
     if (isAllOperators && items.length > 6) {
       const common = items.filter((i) => COMMON_OPERATORS.includes(i.label));
@@ -1883,8 +1674,8 @@ export class QueryEditorComponent extends LitElement {
     }
 
     if (hasMixedTypes) {
-      const operators = items.filter((i) => i.kindCategory === monaco.languages.CompletionItemKind.Operator);
-      const fields = items.filter((i) => i.kindCategory !== monaco.languages.CompletionItemKind.Operator);
+      const operators = items.filter((i) => i.kindCategory === 'operator');
+      const fields = items.filter((i) => i.kindCategory !== 'operator');
       const sections: { items: SuggestionItem[]; title: string | null }[] = [];
       // Operators first when mixed — they're the more contextually relevant suggestion
       if (operators.length) sections.push({ items: operators, title: 'Operators' });
@@ -1927,6 +1718,9 @@ export class QueryEditorComponent extends LitElement {
         <div
           class="mt-1 suggestions-dropdown absolute bg-bgRaised border border-strokeMedium shadow-lg z-10 overflow-y-auto rounded-md text-xs"
           style="${positionStyle}"
+          id="query-suggestions"
+          role="listbox"
+          aria-label="Query suggestions"
         >
           <div class="px-4 py-2 text-sm text-textWeak italic">No suggestions for this field</div>
         </div>
@@ -1960,6 +1754,9 @@ export class QueryEditorComponent extends LitElement {
       <div
         class="mt-1 suggestions-dropdown absolute bg-bgRaised border border-strokeMedium shadow-lg z-50 max-h-[80dvh] overflow-y-auto rounded-md text-xs flex flex-col"
         style="${positionStyle}"
+        id="query-suggestions"
+        role="listbox"
+        aria-label="Query suggestions"
       >
         ${syntaxHint}
         <div class="overflow-y-auto flex-grow min-h-0">

@@ -327,6 +327,24 @@ tmux-live-reload:
 tmux-live-reload-cli:
 	$(call tmux_run,make live-reload-cli 2>&1 | tee build-cli.log)
 
+# The Vite watcher gets its own pane rather than the pinned build pane, which
+# tmux_run C-c's on reuse — sharing it would kill live-reload. Worth supervising:
+# when this dies the server keeps serving the last-built bundle, so server-side
+# changes appear and client-side ones silently do not.
+tmux-web-components-watch:
+	@PANE=$$(tmux show-option -wv -q @wc-pane 2>/dev/null); \
+	if [ -n "$$PANE" ] && tmux list-panes -a -F '#{pane_id}' | grep -qx "$$PANE"; then \
+		tmux send-keys -t "$$PANE" C-c; sleep 0.5; \
+		tmux send-keys -t "$$PANE" 'make web-components-watch' Enter; \
+		echo "Reusing web-components pane $$PANE"; \
+	elif [ -n "$$TMUX" ]; then \
+		PANE=$$(tmux split-window -d -v -P -F '#{pane_id}' 'make web-components-watch'); \
+		tmux set-option -w @wc-pane "$$PANE"; \
+		echo "Started web-components watcher in pane $$PANE"; \
+	else \
+		echo "Not in tmux — run 'make web-components-watch' in its own terminal"; \
+	fi
+
 e2e-install:
 	@test -x e2e/node_modules/.bin/playwright || (cd e2e && npm install && npx playwright install chromium)
 

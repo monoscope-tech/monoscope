@@ -74,7 +74,11 @@ logQueryBox_ config = do
     ]
     do
       div_ [class_ "flex flex-col gap-2 items-stretch justify-center group/fltr"] do
-        div_ [class_ "px-1 py-0.5 flex-1 flex flex-col gap-2  bg-fillWeaker rounded-lg border border-strokeWeak group-has-[.ai-search:checked]/fltr:border-2 group-has-[.ai-search:checked]/fltr:border-iconBrand group-has-[.ai-search:checked]/fltr:shadow-xs shadow-strokeBrand-weak"] do
+        -- One `query-invalid` class is the single source of the error look: the
+        -- border and the message row below both derive from it in CSS, so JS
+        -- toggles one class instead of three across two files (which had drifted
+        -- to two different border colours).
+        div_ [class_ $ "group/qbox px-1 py-0.5 flex-1 flex flex-col gap-2  bg-fillWeaker rounded-lg border border-strokeWeak [&.query-invalid]:border-strokeError-strong group-has-[.ai-search:checked]/fltr:border-2 group-has-[.ai-search:checked]/fltr:border-iconBrand group-has-[.ai-search:checked]/fltr:shadow-xs shadow-strokeBrand-weak" <> bool "" " query-invalid" (isJust config.parseError), id_ "queryBox"] do
           input_
             $ [ class_ "hidden ai-search"
               , type_ "checkbox"
@@ -142,11 +146,24 @@ logQueryBox_ config = do
                 "Submit"
             label_ [Lucid.for_ "ai-search-chkbox", class_ "cursor-pointer p-1", data_ "tippy-content" "Collapse AI search"] $ faSprite_ "arrows-minimize" "regular" "h-4 w-4 inline-block text-iconBrand"
 
+          -- Above the editor, not below it: the suggestions dropdown opens downward
+          -- over that space and hid the message while the user was typing the query
+          -- that caused it. Takes no room at all when there is no error — a
+          -- permanently reserved line is a worse trade than the occasional shift.
+          div_
+            [ class_ "text-xs text-textError px-2 py-0.5 rounded items-center gap-1 hidden bg-fillError-weak group-[.query-invalid]/qbox:flex"
+            , id_ "query-parse-error"
+            , data_ "msg" (fromMaybe "" config.parseError)
+            , Aria.live_ "polite"
+            ]
+            do
+              faSprite_ "triangle-exclamation" "regular" "h-3 w-3 shrink-0"
+              span_ [id_ "query-parse-error-msg"] $ toHtml $ fromMaybe "" config.parseError
           div_ [class_ "w-full flex flex-1 gap-2 justify-between items-stretch min-w-0 max-md:flex-wrap"] do
             div_ [id_ "queryBuilder", class_ "w-full flex-1 flex items-center min-w-0 min-h-[38px]"]
               $ termRaw
                 "query-editor"
-                ( [id_ "filterElement", class_ "w-full flex items-center min-h-[38px]", term "default-value" (fromMaybe "" config.query)]
+                ( [id_ "filterElement", class_ "w-full flex items-center min-h-[38px]", term "default-value" (fromMaybe "" config.query), term "project-id" config.pid.toText]
                     <> maybeToList (term "target-widget-preview" <$> config.targetWidgetPreview)
                     <> [term "widget-editor" "true" | isJust config.targetWidgetPreview]
                 )
@@ -177,9 +194,6 @@ logQueryBox_ config = do
               ]
               do
                 faSprite_ "magnifying-glass" "regular" "h-4 w-4 inline-block"
-      div_ [class_ $ "text-xs text-textError px-2 py-1 bg-fillError-weak rounded flex items-center gap-1" <> bool " hidden" "" (isJust config.parseError), id_ "query-parse-error"] do
-        faSprite_ "triangle-exclamation" "regular" "h-3 w-3 shrink-0"
-        span_ [id_ "query-parse-error-msg"] $ toHtml $ fromMaybe "" config.parseError
 
       div_ [class_ "flex items-between justify-between max-md:flex-wrap max-md:gap-0.5"] do
         div_ [class_ "flex items-center gap-2 max-md:gap-1 max-md:w-full"] do
@@ -651,18 +665,23 @@ queryEditorInitializationCode queryLibRecent queryLibSaved vizTypeM pid = do
 
     // Inline parse error: the markup (icon + message span) is rendered by Lucid;
     // JS only fills the text and toggles visibility.
+    // Sets one attribute; the border and the message row follow from it in CSS.
+    // A repeated set of the same message is a no-op so a refetch can't twitch the page.
     window.__setQueryParseError = function(msg) {
+      msg = msg || '';
       const el = document.getElementById('query-parse-error');
-      if (el) {
-        const m = document.getElementById('query-parse-error-msg');
-        if (m) m.textContent = msg || '';
-        el.classList.toggle('hidden', !msg);
-      }
-      document.getElementById('queryBuilder')?.classList.toggle('!border-red-500/50', !!msg);
+      if (!el || el.dataset.msg === msg) return;
+      el.dataset.msg = msg;
+      const m = document.getElementById('query-parse-error-msg');
+      if (m) m.textContent = msg;
+      // A class, not a data attribute: this Tailwind build emits no `data-[x=y]:`
+      // variants, so a data-driven rule would have generated no CSS at all.
+      document.getElementById('queryBox')?.classList.toggle('query-invalid', !!msg);
     };
     window.showQueryParseError = msg => window.__setQueryParseError(msg);
     window.clearQueryParseError = () => window.__setQueryParseError('');
-    // Clear inline error when query changes
+    // The editor re-validates right after this event and re-asserts a still-valid
+    // error, so clearing here would only flash the strip off and on.
     window.addEventListener('update-query', () => window.clearQueryParseError());
     // Listen for server-sent parse error events (via HX-Trigger header)
     document.body.addEventListener('showParseError', (e) => {

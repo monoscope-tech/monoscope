@@ -35,6 +35,7 @@ import Relude
 import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext (..), EnvConfig (..))
 import Test.Hspec
+import Utils qualified
 import "base64" Data.Base64.Types qualified as B64T
 import "base64" Data.ByteString.Base64 qualified as B64
 
@@ -159,6 +160,46 @@ spec = around withTestResources do
       V.length r.logsData `shouldBe` 3
       r.count `shouldBe` 1
 
+  -- The query editor underlines exactly what this returns, so the positions are
+  -- part of the contract, not a detail.
+  describe "Query validation endpoint" do
+    it "accepts a valid query" \tr -> do
+      v <- snd <$> testServant tr (Log.logExplorerValidateH testPid (Just "kind == \"log\""))
+      (v.valid, v.message) `shouldBe` (True, Nothing)
+
+    it "locates an unknown field so the editor can underline it" \tr -> do
+      v <- snd <$> testServant tr (Log.logExplorerValidateH testPid (Just "kind == \"a\" and attribut contains \"x\""))
+      v.valid `shouldBe` False
+      v.message `shouldBe` Just "Unknown field \"attribut\". Did you mean \"attributes\"?"
+      (v.column, v.width) `shouldBe` (Just 17, Just 8)
+
+    it "locates a syntax error" \tr -> do
+      v <- snd <$> testServant tr (Log.logExplorerValidateH testPid (Just "attributes contains ddd"))
+      v.valid `shouldBe` False
+      v.column `shouldBe` Just 12
+
+    -- 92 saved queries in production filter on the raw `___` column names. They
+    -- are what the table calls those columns and they reach SQL unchanged, so
+    -- rejecting them would have broken working saved queries.
+    it "accepts the raw ___ column names saved queries use" \tr -> do
+      v <- snd <$> testServant tr (Log.logExplorerValidateH testPid (Just "context___trace_id != null and resource___service___name == \"api\""))
+      (v.valid, v.message) `shouldBe` (True, Nothing)
+
+    it "still rejects a mistyped ___ column, and suggests in the same notation" \tr -> do
+      v <- snd <$> testServant tr (Log.logExplorerValidateH testPid (Just "context___trace_ix != null"))
+      v.valid `shouldBe` False
+      v.message `shouldSatisfy` maybe False (T.isInfixOf "context___trace_id")
+
+    it "treats an empty query as valid" \tr -> do
+      v <- snd <$> testServant tr (Log.logExplorerValidateH testPid Nothing)
+      v.valid `shouldBe` True
+
+    -- Aliases a query introduces are real names downstream; flagging them would
+    -- squiggle a working query.
+    it "accepts a filter on a summarize alias" \tr -> do
+      v <- snd <$> testServant tr (Log.logExplorerValidateH testPid (Just "level == \"ERROR\" | summarize count() by kind | where count_ > 1"))
+      v.valid `shouldBe` True
+
   describe "Data endpoint query-error handling" do
     it "returns an empty result for invalid query syntax (not a crash)" \tr -> do
       r <- fetchData tr (Just "status_code = 200") Nothing Nothing Nothing Nothing Nothing
@@ -169,6 +210,61 @@ spec = around withTestResources do
       r <- fetchData tr (Just "status_code === \"200\"") Nothing Nothing Nothing Nothing Nothing
       V.length r.logsData `shouldBe` 0
       r.count `shouldBe` 0
+
+    -- 2026-08-06: `attribute contains "…"` (singular) reached the database as a
+    -- column and came back as a raw "Schema error: No field named attribute"
+    -- logged at ATTENTION. It must be rejected before any SQL is built.
+    it "names the unknown field instead of shipping it to the database" \tr -> do
+      r <- fetchData tr (Just "attribute contains \"Red Flashlight\"") Nothing Nothing Nothing Nothing Nothing
+      r.error `shouldBe` Just "Unknown field \"attribute\". Did you mean \"attributes\"?"
+      V.length r.logsData `shouldBe` 0
+
+  -- A summarize query aimed at the rows endpoint used to reach
+  -- synthesizeOrphanHeaders, which writes log-table column indices into a row
+  -- the width of the aggregate result: `index out of bounds (7,1)`, unhandled,
+  -- connection dropped. The UI sends these to the chart endpoint, but the API,
+  -- the CLI and a hand-typed URL all land here.
+  describe "Aggregate query on the rows endpoint" do
+    it "does not crash on a summarize query" \tr -> do
+      let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
+      let reqMsg = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
+      _ <- runTestBackground frozenTime tr.trATCtx $ processMessages [("m1", toStrict $ AE.encode reqMsg)] HashMap.empty
+      let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) frozenTime
+          toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 frozenTime
+      r <- fetchData tr (Just "kind == \"server\" | summarize count(*) by kind") Nothing Nothing Nothing fromTime toTime
+      -- Whatever it returns, it must return: no exception escaping the handler.
+      r.queryResultCount `shouldSatisfy` (>= 0)
+
+    it "does not crash on a summarize binned by time" \tr -> do
+      r <- fetchData tr (Just "summarize count(*) by bin_auto(timestamp)") Nothing Nothing Nothing Nothing Nothing
+      r.queryResultCount `shouldSatisfy` (>= 0)
+
+    -- The exact shape that threw in production: log-table column indices over a
+    -- one-column aggregate row. `V.//` at index 7 of a 1-wide vector is what
+    -- `index out of bounds (7,1)` was.
+    it "leaves aggregate-shaped rows alone instead of indexing past them" \_ -> do
+      let colIdxMap = Utils.listToIndexHashMap ["id", "timestamp", "trace_id", "span_name", "duration", "service", "parent_id", "start_time_ns", "errors", "summary", "latency_breakdown", "kind"]
+          narrow = V.singleton (V.singleton (AE.Number 42))
+      Log.colsFitRows colIdxMap narrow `shouldBe` False
+      Log.buildTraceTree colIdxMap 1 narrow `shouldBe` (narrow, [])
+      Log.synthesizeOrphanHeaders colIdxMap narrow `shouldBe` V.empty
+
+  -- `| where` after a `| summarize` used to be hoisted above the aggregation, so
+  -- the SQL filtered on an alias the database had not produced yet and the query
+  -- failed outright. It belongs in HAVING.
+  describe "Filtering after a summarize" do
+    it "runs instead of failing on the alias" \tr -> do
+      let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
+          reqMsg = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
+      _ <- runTestBackground frozenTime tr.trATCtx $ processMessages (replicate 3 ("m1", toStrict $ AE.encode reqMsg)) HashMap.empty
+      let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) frozenTime
+          toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 frozenTime
+      r <- fetchData tr (Just "summarize count() by kind | where count_ > 1") Nothing Nothing Nothing fromTime toTime
+      r.error `shouldBe` Nothing
+
+    it "still rejects a filter on a name nothing defines" \tr -> do
+      r <- fetchData tr (Just "summarize count() by kind | where nosuchalias > 1") Nothing Nothing Nothing Nothing Nothing
+      r.error `shouldSatisfy` maybe False (T.isInfixOf "Unknown field")
 
   describe "Pagination" do
     it "cursor paginates correctly across multiple pages without overlap" \tr -> do

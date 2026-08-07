@@ -2,6 +2,8 @@ module Pages.LogExplorer.Log (
   apiLogH,
   logExplorerDataH,
   logExplorerSchemaH,
+  logExplorerValidateH,
+  QueryValidation (..),
   logExplorerFacetsH,
   logPatternsH,
   logSessionsH,
@@ -24,6 +26,7 @@ module Pages.LogExplorer.Log (
   TraceTreeEntry (..),
   buildTraceTree,
   synthesizeOrphanHeaders,
+  colsFitRows,
   fmtPct1,
   -- Sidebar facet definitions — exported for high-level tests.
   Facet (..),
@@ -69,7 +72,8 @@ import Pkg.Components.TimePicker qualified as Components
 import Pkg.Components.Widget (WidgetAxis (..), WidgetType (WTTimeseries, WTTimeseriesLine))
 import Pkg.Components.Widget qualified as Widget
 import Pkg.Parser (defaultQueryLimit, pSource, parseQueryToAST, toQText)
-import Pkg.Parser.Stats (Section (TakeCommand))
+import Pkg.Parser.Expr qualified as ParserExpr
+import Pkg.Parser.Stats (QueryError (..), Section (TakeCommand), parseQueryDiagnosed)
 import Pkg.SchemaLearning.Catalog (FacetData (..), FacetSummary (..), FacetValue (..))
 import Relude hiding (ask)
 import Relude.Extra.Foldable1 (maximum1, minimum1)
@@ -115,7 +119,7 @@ data TraceTreeEntry = TraceTreeEntry
   , root :: Text
   , children :: Map.Map Text [Text]
   }
-  deriving stock (Generic, Show)
+  deriving stock (Eq, Generic, Show)
   deriving (AE.ToJSON) via DAE.Snake TraceTreeEntry
   deriving (ToSchema) via SnakeSchema TraceTreeEntry
 
@@ -193,7 +197,13 @@ data SpanInfo = SpanInfo {spanId :: Text, parentId :: Maybe Text, traceIdVal :: 
 -- >>> (adj V.! 1) V.!? 3
 -- Just (Number 100.0)
 buildTraceTree :: HM.HashMap Text Int -> Int -> V.Vector (V.Vector AE.Value) -> (V.Vector (V.Vector AE.Value), [TraceTreeEntry])
-buildTraceTree colIdxMap queryResultCount rows = (adjustedRows, sortWith (Down . (.startTime)) entries)
+buildTraceTree colIdxMap queryResultCount rows
+  -- An aggregate result (`| summarize …`) is one or two columns wide while the
+  -- column map still describes the log table, so writing a span's adjusted
+  -- start/duration back at those indices threw `index out of bounds`. Such rows
+  -- carry no spans to nest: hand them back untouched.
+  | not (colsFitRows colIdxMap rows) = (rows, [])
+  | otherwise = (adjustedRows, sortWith (Down . (.startTime)) entries)
   where
     lookupIdx = flip HM.lookup colIdxMap
     valText v = (v V.!?) >=> \case AE.String t | not (T.null t) -> Just t; _ -> Nothing
@@ -287,12 +297,30 @@ buildTraceTree colIdxMap queryResultCount rows = (adjustedRows, sortWith (Down .
 -- >>> import Data.Aeson
 
 
+-- | Whether every column index addresses a real slot in the result rows.
+-- False for anything that isn't the log-table shape — an aggregate projection,
+-- most obviously — and the trace-tree machinery must then keep its hands off.
+--
+-- >>> colsFitRows (HM.fromList [("id",0),("duration",7)]) (V.singleton (V.replicate 12 AE.Null))
+-- True
+-- >>> colsFitRows (HM.fromList [("id",0),("duration",7)]) (V.singleton (V.singleton AE.Null))
+-- False
+-- >>> colsFitRows (HM.fromList [("id",0)]) V.empty
+-- False
+colsFitRows :: HM.HashMap Text Int -> V.Vector (V.Vector AE.Value) -> Bool
+colsFitRows colIdxMap rows = case V.length <$> rows V.!? 0 of
+  Nothing -> False
+  Just w -> all (< w) (HM.elems colIdxMap)
+
+
 -- | Detect query-result spans whose parent_id is missing from the result and
 -- ≥2 of them share that same parent_id. Emit one synthetic row per group whose
 -- latency_breakdown = parent_id so 'buildTraceTree' nests the orphans under
 -- it, matching the trace-breakdown waterfall's visual contract.
 synthesizeOrphanHeaders :: HM.HashMap Text Int -> V.Vector (V.Vector AE.Value) -> V.Vector (V.Vector AE.Value)
-synthesizeOrphanHeaders colIdxMap rows = V.fromList [synthRow t p ks | ((t, p), ks) <- Map.toList groups, length ks >= 2]
+synthesizeOrphanHeaders colIdxMap rows
+  | not (colsFitRows colIdxMap rows) = V.empty
+  | otherwise = V.fromList [synthRow t p ks | ((t, p), ks) <- Map.toList groups, length ks >= 2]
   where
     lookupIdx = flip HM.lookup colIdxMap
     colCount = maybe 0 V.length (rows V.!? 0)
@@ -800,7 +828,7 @@ logExplorerDataH pid queryM' cols' cursorM' sinceM fromM toM sourceM targetSpans
   -- Carry a sanitized failure message alongside the (empty) table so the client
   -- can show an error state instead of a misleading "no events" list.
   (errM, tableData) <- case parseQueryToAST (maybeToMonoid queryM') of
-    Left err -> Log.logInfo "Log explorer data: rejected invalid KQL query" err $> (Just "Invalid query syntax", emptyTable)
+    Left err -> Log.logInfo "Log explorer data: rejected invalid KQL query" err $> (Just err, emptyTable)
     Right queryAST -> do
       resultE <-
         LogQueries.selectLogTable authCtx.env.enableTimefusionReads pid queryAST (toQText queryAST) cursorM' (fromD, toD) addCols (parseMaybe pSource =<< sourceM) targetSpansM
@@ -840,12 +868,39 @@ logExplorerFacetsH pid = do
 -- so the ~365KB payload isn't inlined into (and re-encoded on) every page render.
 -- The client caches it in a window promise for the session. Facet enrichment is
 -- from in-memory summary state (cheap); the time range is ignored by getFacetSummary.
+-- | Structured verdict for the query editor. It underlines @column@..@width@ and
+-- prints @message@, so the squiggle comes from the same parser that gates
+-- execution instead of a regex approximation of the grammar.
+data QueryValidation = QueryValidation
+  { valid :: Bool
+  , message :: Maybe Text
+  , column :: Maybe Int
+  , width :: Maybe Int
+  }
+  deriving stock (Generic, Show)
+  deriving (ToSchema) via CamelSchema QueryValidation
+  deriving (AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields] QueryValidation
+
+
+-- | Validate a KQL query without running it.
+logExplorerValidateH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders QueryValidation)
+logExplorerValidateH pid queryM = do
+  _ <- Projects.sessionAndProject pid
+  addRespHeaders $ case parseQueryDiagnosed (maybeToMonoid queryM) of
+    Right _ -> QueryValidation{valid = True, message = Nothing, column = Nothing, width = Nothing}
+    Left e -> QueryValidation{valid = False, message = Just e.message, column = Just e.column, width = Just e.width}
+
+
 logExplorerSchemaH :: Projects.ProjectId -> ATAuthCtx (RespHeaders AE.Value)
 logExplorerSchemaH pid = do
   _ <- Projects.sessionAndProject pid
   now <- Time.currentTime
   facetsM <- SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" now now
-  addRespHeaders $ maybe Schema.telemetrySchemaJson (enrichSchemaWithFacets Schema.telemetrySchema . (.facetJson)) facetsM
+  -- Derived, not the hand-coded schema: the query editor validates field names
+  -- against this response, so it has to advertise everything the parser accepts
+  -- (live columns + aliases) or working queries get "Unknown field" squiggles.
+  let schema = Schema.deriveSchema ParserExpr.flattenedOtelAttributes
+  addRespHeaders $ maybe (AE.toJSON schema) (enrichSchemaWithFacets schema . (.facetJson)) facetsM
 
 
 -- | Patterns visualization data endpoint (aggregate log patterns as JSON).
@@ -1740,7 +1795,10 @@ apiLogsPage page = do
         end
         on htmx:afterSwap send checkMobileOpen to me end
         on keydown[key=='Escape' and not (the event's target matches <input, textarea, select, [contenteditable]/>) and no <[popover]:popover-open/> and no <dialog[open]/>] from window
-          if <#trace_details_container.open/> send closeDetailPanel to #trace_details_container
+          -- `the first <…/> exists`, not a bare `<…/>`: a query literal is a lazy query object
+          -- that stays truthy at zero matches, so a bare `if <sel/>` never falls through.
+          -- The trace panel has no closeDetailPanel handler either — closeTraceDetails owns it.
+          if the first <#trace_details_container.open/> exists call window.closeTraceDetails(#trace_details_container)
           otherwise if #trace_expanded_view does not match .hidden send closeTraceView to #trace_expanded_view
           otherwise send closeDetailPanel to me end
         end

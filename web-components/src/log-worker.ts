@@ -15,8 +15,10 @@ self.onmessage = async (e: MessageEvent) => {
 
     const data = await response.json();
 
+    // `error` is the only failure field LogResult carries — reading `message`
+    // first silently swallowed every server message into the generic fallback.
     if (data.error) {
-      self.postMessage({ type: 'error', error: data.message || 'Failed to fetch logs', id });
+      self.postMessage({ type: 'error', error: data.error, queryError: true, id });
       return;
     }
 

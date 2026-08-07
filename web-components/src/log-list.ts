@@ -227,14 +227,25 @@ export class LogList extends LitElement {
   }
 
   private handleWorkerMsg(e: MessageEvent) {
-    const { type, tree, meta, error, id } = e.data;
+    const { type, tree, meta, error, queryError, id } = e.data;
     const cb = this.workerCallbacks.get(id);
     if (!cb) {
       console.warn('[Worker] No callback found for message id:', id);
       return;
     }
     this.workerCallbacks.delete(id);
+    if (type !== 'success' && queryError) this.reportQueryError(error);
     type === 'success' ? cb.resolve({ tree, meta }) : cb.reject(new Error(error));
+  }
+
+  // A server-reported query error (bad field, unsupported query) belongs under
+  // the query box next to the client-side squiggles, not only in the row area.
+  // Same `showParseError` channel the server's HX-Trigger uses, so the page has
+  // one listener rather than a second global entry point. Returns the message so
+  // call sites can throw it in one expression.
+  private reportQueryError(msg: string): string {
+    document.body.dispatchEvent(new CustomEvent('showParseError', { detail: msg, bubbles: true, composed: true }));
+    return msg;
   }
 
   private async workerFetch(url: string): Promise<{ tree: any[]; meta: any }> {
@@ -253,7 +264,7 @@ export class LogList extends LitElement {
         if (!resp.ok) throw new Error(resp.status === 401 ? 'Session expired, please refresh' : `Server error (${resp.status})`);
         data = await resp.json();
       }
-      if (data.error) throw new Error(data.message || 'Server error');
+      if (data.error) throw new Error(this.reportQueryError(data.error));
       const colIdxMap = data.colIdxMap || {};
       const isSessions = this.mode === 'sessions';
       // The sessions summary is computed in the same scan as the rows and shipped
@@ -325,7 +336,7 @@ export class LogList extends LitElement {
       const data = await earlyPromise;
       // Propagate server errors instead of silently falling through to the worker —
       // otherwise the user waits 2 min for "Worker timeout" masking the real cause.
-      if (data.error) throw new Error(data.message || data.error || 'Server error');
+      if (data.error) throw new Error(this.reportQueryError(data.error));
       const { logsData, serviceColors, nextUrl, recentUrl, cols, colIdxMap, count, traces } = data;
       const tree = logsData?.length ? groupSpans(logsData, colIdxMap, this.expandedTraces, this.flipDirection, traces || []) : [];
       return {
