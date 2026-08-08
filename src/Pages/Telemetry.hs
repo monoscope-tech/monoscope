@@ -13,6 +13,7 @@ module Pages.Telemetry (
   TraceDetailsGet (..),
   tracePage,
   spanDetailAttrs_,
+  DetailLoading (..),
 ) where
 
 import Data.Aeson qualified as AE
@@ -484,15 +485,25 @@ metricDetailSwap_ :: [Attribute]
 metricDetailSwap_ = [hxTarget_ "#metric-details-content", hxSwap_ "outerMorph", hxIndicator_ "#global-data-drawer-indicator"]
 
 
+-- | Whether a span-detail request blanks the panel to a skeleton before it lands.
+-- A row click wants that feedback. The on-load preload does not: blanking hides
+-- whatever is already rendered, so a re-fired preload visibly wipes real content
+-- back to "Loading span details…" instead of updating it in place.
+data DetailLoading = ShowSkeleton | KeepCurrent
+  deriving stock (Eq, Show)
+
+
 -- | htmx wiring for loading a span into the trace details side panel.
-spanDetailAttrs_ :: Text -> Text -> UTCTime -> [Attribute]
-spanDetailAttrs_ pidT spanUuid ts =
+spanDetailAttrs_ :: DetailLoading -> Text -> Text -> UTCTime -> [Attribute]
+spanDetailAttrs_ loading pidT spanUuid ts =
   [ hxGet_ $ "/p/" <> pidT <> "/log_explorer/" <> spanUuid <> "/" <> toText (formatShow iso8601Format ts) <> "/detailed?source=spans"
   , hxTarget_ "#trace_details_content"
   , hxSwap_ "innerHTML"
-  , term "hx-on::before-request" "window.showTraceDetailsLoading(this)"
   , hxIndicator_ "#loading-span-list"
   ]
+    <> case loading of
+      ShowSkeleton -> [term "hx-on::before-request" "window.showTraceDetailsLoading(this)"]
+      KeepCurrent -> []
 
 
 -- | Shared WTTimeseriesLine widget for a metric. @mTitle@/@mId@/@mExpandBtn@
@@ -1236,7 +1247,7 @@ spanTable records =
             ( [ id_ $ "sp-list-" <> spanRecord.spanId
               , class_ "span-filterble font-medium"
               ]
-                <> spanDetailAttrs_ (UUID.toText spanRecord.projectId) spanRecord.uSpanId spanRecord.timestamp
+                <> spanDetailAttrs_ ShowSkeleton (UUID.toText spanRecord.projectId) spanRecord.uSpanId spanRecord.timestamp
             )
             $ do
               td_ $ Components.localTimeFmt_ "MMM dd yyyy HH:mm:ss.SSS" spanRecord.timestamp
@@ -1362,7 +1373,7 @@ buildSpanTree_ pid sp level scol = do
                  then [title_ ("Upstream parent span " <> sp.spanRecord.spanId <> " was never reported by the service. Showing an inferred placeholder.")]
                  else
                    [__|on click remove .bg-fillBrand-weak from .waterfall-active then add .bg-fillBrand-weak .waterfall-active to me|]
-                     : spanDetailAttrs_ pid.toText (UUID.toText sp.spanRecord.uSpanId) sp.spanRecord.timestamp
+                     : spanDetailAttrs_ ShowSkeleton pid.toText (UUID.toText sp.spanRecord.uSpanId) sp.spanRecord.timestamp
              )
       )
       do

@@ -290,10 +290,11 @@ expandedItemView pid item aptSp selectedTabM = do
     actionRow = do
       when isHttp do
         -- Curl text is assembled server-side (attrs + captured bodies are already
-        -- in hand); the button only copies it, via the shared Copy behavior.
-        let curlCls = "curl-cmd-" <> item.id
-        button_ [class_ "action-btn", term "_" [text|install Copy(content:.${curlCls})|]] $ actionBtnBody "copy" "Copy as curl"
-        pre_ [class_ $ curlCls <> " hidden"] $ toHtml curlCommand
+        -- in hand); the button only copies it, via the shared Copy behavior. The source
+        -- is the adjacent <pre> — `next <pre/>` rather than a per-item class, so nothing
+        -- has to mint a unique selector and the two stay coupled by position.
+        button_ [class_ "action-btn", [__|install Copy(content: next <pre/>)|]] $ actionBtnBody "copy" "Copy as curl"
+        pre_ [class_ "hidden"] $ toHtml curlCommand
       whenJust (item.context >>= (.trace_id) >>= guarded (not . T.null)) \trId ->
         -- The trace overlay's loadTrace handler owns skeleton, fetch, and fullscreen
         -- (see apiLogsPage.traceOverlay); this button only sends the event + URL state.

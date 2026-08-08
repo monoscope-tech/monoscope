@@ -674,6 +674,10 @@ spec = around withTestResources do
       -- (checked radio + group-has), so no per-tab hx-get round trips.
       initialHtml `shouldSatisfy` T.isInfixOf "m-raw-content"
       initialHtml `shouldNotSatisfy` T.isInfixOf "/detailed?tab="
+      -- Eager panels trade a round trip for payload, and this panel is the surface that
+      -- once froze the browser at ~685KB. Bound it so a per-leaf regression (menus, inline
+      -- utility strings) can't compound silently across all seven tabs.
+      T.length initialHtml `shouldSatisfy` (< 60_000)
 
       let expectNotFound store item' = case item' of
             LogItem.ItemDetailedNotFound _ -> pass

@@ -79,7 +79,7 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), colorChip_, compactTimeAgo, emptyState_, metadataChip_, periodToggle_, resizer_, sparkline_)
 import Pages.LogExplorer.Log (virtualTable)
-import Pages.Telemetry (spanDetailAttrs_, tracePage)
+import Pages.Telemetry (DetailLoading (KeepCurrent), spanDetailAttrs_, tracePage)
 import Pkg.AI qualified as AI
 import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features (..), FilterMenu (..), FilterOption (..), Pagination (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableRows (..), ZeroState (..), col, withAttrs, withColHeaderExtra)
 import Pkg.Components.TimePicker qualified as TimePicker
@@ -695,14 +695,23 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst tp sampleOverride = do
         [ class_ "surface-raised rounded-2xl overflow-hidden group/inv"
         , id_ "error-details-container"
         , makeAttribute "tabindex" "-1"
-        , -- `the first <…/> exists`, not a bare `<…/>`: a query literal evaluates to a lazy
+        , -- Same contract as the log explorer's #apiLogsPage: senders `send toggleFullscreen`
+          -- to the container, which is the only receiver and owns the state flip.
+          -- `the first <…/> exists`, not a bare `<…/>`: a query literal evaluates to a lazy
           -- query object that is truthy even when it matches nothing, so `if <sel/>` never
           -- falls through to the fullscreen branch.
-          [__|on keydown[key is 'Escape'] from window
+          [__|on toggleFullscreen(active)
+                default active to (I do not match .investigation-fullscreen)
+                if active add .investigation-fullscreen to me
+                otherwise remove .investigation-fullscreen from me
+                end
+                call window.scrollTo({top:0})
+              end
+              on keydown[key is 'Escape'] from window
                 if the first <#trace_details_container.open/> exists
-                  call window.closeTraceDetails(#trace_details_container)
+                  send closeDetailPanel to #trace_details_container
                 otherwise if I match .investigation-fullscreen
-                  remove .investigation-fullscreen from me then call window.scrollTo({top:0})
+                  send toggleFullscreen(active: false) to me
                 end|]
         ]
         do
@@ -718,8 +727,10 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst tp sampleOverride = do
               span_ [class_ "mx-3 w-px h-4 bg-strokeWeak max-md:mx-2"] pass
               forM_ [("#span-content" :: Text, "Trace" :: Text, not isLogPatternIssue), ("#log-content" :: Text, "Logs" :: Text, isLogPatternIssue)] tabBtn
               span_ [class_ "mx-2 w-px h-4 bg-strokeWeak max-md:mx-1"] pass
-              -- Icon state is CSS-driven off the container's fullscreen class; the click handler only toggles it.
-              button_ [class_ "p-1.5 rounded hover:bg-fillWeaker cursor-pointer transition-colors max-md:hidden", Aria.label_ "Toggle fullscreen", term "data-tippy-content" "Expand · Esc to exit", [__|on click toggle .investigation-fullscreen on #error-details-container then call window.scrollTo({top:0})|]] do
+              -- Icon state is CSS-driven off the container's fullscreen class; the click only
+              -- sends the event. tippy, not daisyUI: the card is `overflow-hidden`, which clips
+              -- daisyUI's ::before bubble (see the tooltip rules in page-chrome.ts).
+              button_ [class_ "p-1.5 rounded hover:bg-fillWeaker cursor-pointer transition-colors max-md:hidden", Aria.label_ "Toggle fullscreen", term "data-tippy-content" "Expand · Esc to exit", [__|on click send toggleFullscreen to #error-details-container|]] do
                 faSprite_ "expand" "regular" "w-3 h-3 text-textWeak group-[.investigation-fullscreen]/inv:hidden"
                 faSprite_ "compress" "regular" "w-3 h-3 text-textWeak hidden group-[.investigation-fullscreen]/inv:block"
           div_ [class_ "max-md:p-1 p-2 w-full overflow-x-hidden investigation-content"] do
@@ -738,7 +749,9 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst tp sampleOverride = do
                 -- auto-opening it would bury the page behind span details on load.
                 -- `load`, not `intersect`: this marker sits below the full-height trace pane, so it
                 -- never enters the viewport and an intersect trigger would leave the panel empty.
-                div_ (spanDetailAttrs_ pid.toText sr.uSpanId sr.timestamp <> [hxTrigger_ "load[window.innerWidth>=768]", term "hx-sync" "this:replace"]) pass
+                -- KeepCurrent: the panel opens when content lands rather than flashing a skeleton,
+                -- so a re-fired preload can't wipe rendered details back to a loader.
+                div_ (spanDetailAttrs_ KeepCurrent pid.toText sr.uSpanId sr.timestamp <> [hxTrigger_ "load[window.innerWidth>=768]", term "hx-sync" "this:replace"]) pass
 
           div_ [id_ "log-content", class_ $ bool "hidden " "" isLogPatternIssue <> "err-tab-content flex flex-col lg:flex-row w-full lg:h-[70vh]"] do
             let logsTraceId = fromMaybe "" $ asum [errM >>= (.base.recentTraceId), (.traceId) <$> tr]
@@ -1730,8 +1743,8 @@ issueToggleButton_ :: Projects.ProjectId -> Issues.IssueId -> Bool -> Text -> (T
 issueToggleButton_ pid aid active icon labels actions paths offCls onCls = do
   let pick = bool fst snd active
   a_
-    [ class_ $ "btn btn-sm gap-1.5 " <> bool offCls onCls active
-    , term "data-tippy-content" $ T.toLower (pick actions) <> " issue"
+    [ class_ $ "btn btn-sm gap-1.5 tooltip tooltip-bottom " <> bool offCls onCls active
+    , data_ "tip" $ T.toLower (pick actions) <> " issue"
     , Aria.label_ $ pick actions <> " issue"
     , term "hx-preload" "false"
     , hxGet_ $ "/p/" <> pid.toText <> "/issues/" <> Issues.issueIdText aid <> pick paths

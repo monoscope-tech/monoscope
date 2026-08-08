@@ -1781,8 +1781,7 @@ apiLogsPage page = do
         on keydown[key=='Escape' and not (the event's target matches <input, textarea, select, [contenteditable]/>) and no <[popover]:popover-open/> and no <dialog[open]/>] from window
           -- `the first <…/> exists`, not a bare `<…/>`: a query literal is a lazy query object
           -- that stays truthy at zero matches, so a bare `if <sel/>` never falls through.
-          -- The trace panel has no closeDetailPanel handler either — closeTraceDetails owns it.
-          if the first <#trace_details_container.open/> exists call window.closeTraceDetails(#trace_details_container)
+          if the first <#trace_details_container.open/> exists send closeDetailPanel to #trace_details_container
           otherwise if #trace_expanded_view does not match .hidden send closeTraceView to #trace_expanded_view
           otherwise send closeDetailPanel to me end
         end

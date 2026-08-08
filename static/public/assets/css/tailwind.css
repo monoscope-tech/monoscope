@@ -2053,25 +2053,15 @@ code, pre, .code, .monospace {
      utility strings per leaf was measurable latency on every row click. Same reason
      the rest of this tree component is styled here. */
   .log-item-field-parent {
-    display: block;
-    position: relative;
+    @apply block relative;
   }
 
   .log-item-field-anchor {
-    display: block;
-    width: 100%;
-    text-align: left;
-    cursor: pointer;
-    padding-left: calc(var(--spacing) * 6);
-  }
-
-  .log-item-field-anchor:hover {
-    background-color: var(--color-fillBrand-weak);
+    @apply block w-full pl-6 text-left cursor-pointer hover:bg-fillBrand-weak;
   }
 
   .log-item-field-value {
-    color: var(--color-textBrand);
-    margin-left: calc(var(--spacing) * 2.5);
+    @apply ml-2.5 text-textBrand;
   }
 
   /* ======= CODEMIRROR */
