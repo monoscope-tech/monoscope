@@ -237,7 +237,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
     whenJust dash.tabs \tabs -> do
       -- Build query string from current params (excluding internal keys and expand param)
       let queryStr = queryStringFrom $ filter (\(k, _) -> k `notElem` [activeTabSlugKey, "expand"]) allParams
-      div_ [role_ "tablist", class_ "tabs tabs-box tabs-outline max-md:flex-nowrap max-md:overflow-x-auto max-md:scrollbar-none max-md:[mask-image:linear-gradient(to_right,black_85%,transparent)]", id_ "dashboard-tabs-container", term "hx-preload" "mouseover"] do
+      div_ [role_ "tablist", class_ "tabs tabs-box tabs-outline max-md:flex-nowrap max-md:overflow-x-auto max-md:scrollbar-none max-md:[mask-image:linear-gradient(to_right,black_85%,transparent)]", id_ "dashboard-tabs-container", term "hx-preload:inherited" "mouseover"] do
         forM_ (zip [0 ..] tabs) \(idx, tab) -> do
           let tabUrl = "/p/" <> pidText <> "/dashboards/" <> dashIdText <> "/tab/" <> slugify tab.name <> queryStr
           a_

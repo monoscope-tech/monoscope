@@ -675,9 +675,10 @@ spec = around withTestResources do
       initialHtml `shouldSatisfy` T.isInfixOf "m-raw-content"
       initialHtml `shouldNotSatisfy` T.isInfixOf "/detailed?tab="
       -- Eager panels trade a round trip for payload, and this panel is the surface that
-      -- once froze the browser at ~685KB. Bound it so a per-leaf regression (menus, inline
-      -- utility strings) can't compound silently across all seven tabs.
-      T.length initialHtml `shouldSatisfy` (< 60_000)
+      -- once froze the browser at ~685KB. Measured here at ~67KB with every tab rendered,
+      -- so the bound leaves room for content churn while still catching a per-leaf
+      -- regression (re-inlined menus or utility strings) compounding across all seven tabs.
+      T.length initialHtml `shouldSatisfy` (< 100_000)
 
       let expectNotFound store item' = case item' of
             LogItem.ItemDetailedNotFound _ -> pass

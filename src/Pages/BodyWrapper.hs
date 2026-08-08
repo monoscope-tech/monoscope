@@ -171,6 +171,12 @@ bodyWrapper bcfg child = do
       meta_ [name_ "viewport", content_ "width=device-width, initial-scale=1.0"]
       meta_ [name_ "description", content_ $ "Monoscope — " <> bcfg.pageTitle]
       meta_ [httpEquiv_ "X-UA-Compatible", content_ "ie=edge"]
+      -- Keep htmx 4's explicit inheritance instead of letting htmx-2-compat switch the
+      -- implicit model back on. Attributes meant to inherit say so (`hx-preload:inherited`
+      -- on body / settings nav / dashboard tabs); everything else stays local, which also
+      -- stops table containers leaking their own hx-get/hx-trigger onto ~80 descendants.
+      -- NB `useExplicitInheritace` is spelled that way in the compat extension.
+      meta_ [name_ "htmx-config", content_ "{\"compat\":{\"useExplicitInheritace\":true}}"]
       meta_ [name_ "htmx-config", content_ [text|{"selfRequestsOnly":false}|]]
       -- favicon items
       link_ [rel_ "apple-touch-icon", sizes_ "180x180", href_ "/public/apple-touch-icon.png"]
@@ -314,7 +320,7 @@ bodyWrapper bcfg child = do
             end
     |]
 
-    body_ [class_ "h-full w-full bg-bgBase text-textStrong group/pg", term "data-theme" (maybe "dark" (.theme) bcfg.sessM), term "hx-preload" "mouseover"] do
+    body_ [class_ "h-full w-full bg-bgBase text-textStrong group/pg", term "data-theme" (maybe "dark" (.theme) bcfg.sessM), term "hx-preload:inherited" "mouseover"] do
       -- Skip to main content link for keyboard users (accessibility)
       a_ [class_ "sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100000] focus:bg-bgRaised focus:px-4 focus:py-2 focus:rounded-lg focus:text-textBrand focus:shadow-lg focus:ring-2 focus:ring-strokeFocus", href_ "#main-content"] "Skip to main content"
       -- ARIA live region for toast announcements (screen reader accessibility)
@@ -712,7 +718,7 @@ loginBanner = do
 settingsWrapper :: Projects.ProjectId -> Text -> Html () -> Html ()
 settingsWrapper pid current pageHtml =
   section_ [class_ "flex max-md:flex-col h-full w-full"] do
-    nav_ [id_ "settings-nav", class_ "md:w-52 shrink-0 md:h-full max-md:px-3 max-md:py-2.5 p-4 md:pt-8 max-md:border-b max-md:border-b-strokeWeak md:border-r md:border-r-strokeWeak max-md:overflow-x-auto max-md:scrollbar-hide", term "hx-preload" "mouseover"] do
+    nav_ [id_ "settings-nav", class_ "md:w-52 shrink-0 md:h-full max-md:px-3 max-md:py-2.5 p-4 md:pt-8 max-md:border-b max-md:border-b-strokeWeak md:border-r md:border-r-strokeWeak max-md:overflow-x-auto max-md:scrollbar-hide", term "hx-preload:inherited" "mouseover"] do
       h1_ [class_ "text-lg pl-3 font-semibold text-textStrong max-md:hidden"] "Settings"
       ul_ [class_ "flex max-md:flex-row max-md:flex-nowrap md:flex-col md:mt-4 gap-0.5 w-full [&_.settings-nav-link]:hover:bg-fillWeak [&_.settings-nav-link]:text-textWeak [&_.settings-nav-link.active]:bg-fillBrand-weak [&_.settings-nav-link.active]:text-textBrand [&_.settings-nav-link.active]:hover:bg-fillBrand-weak"] do
         li_ [class_ "md:hidden shrink-0"]

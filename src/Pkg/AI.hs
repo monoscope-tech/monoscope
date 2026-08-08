@@ -575,7 +575,7 @@ agenticSetup config userQuery model =
     , LLM.Message LLM.User userQuery LLM.defaultMessageData
     , let (modelName, effort) = ELLM.modelAndEffort model
        in -- /v1/chat/completions rejects function tools with reasoning_effort other than "none"
-          OpenAIV1._CreateChatCompletion{OpenAIV1.model = modelName, OpenAIV1.reasoning_effort = effort, OpenAIV1.tools = Just $ V.fromList allToolDefs, OpenAIV1.messages = V.empty}
+          OpenAIV1._CreateChatCompletion{OpenAIV1.model = modelName, OpenAIV1.reasoning_effort = effort $> OpenAIV1.ReasoningEffort_None, OpenAIV1.tools = Just $ V.fromList allToolDefs, OpenAIV1.messages = V.empty}
     )
 
 

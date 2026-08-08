@@ -428,7 +428,7 @@ serviceOptionsLimit = 50
 
 chartsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricChartListData -> Map Text (V.Vector Text) -> V.Vector Telemetry.MetricChartListData -> Text -> Text -> Int -> Maybe Text -> Html ()
 chartsPage pid metricList labels inactive source mFilter activeCount nextUrl = do
-  div_ [class_ "flex flex-col gap-4 px-4 overflow-y-scroll", term "hx-preload" "false"]
+  div_ [class_ "flex flex-col gap-4 px-4 overflow-y-scroll", term "hx-preload:inherited" "false"]
     $ do
       div_ [class_ "w-full"] do
         div_ [class_ "w-full flex flex-wrap gap-3 max-md:gap-2 items-center min-h-10 py-2 border-b border-strokeWeak"] do
