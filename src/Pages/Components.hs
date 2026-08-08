@@ -112,10 +112,11 @@ drawer_ drawerId startOpen urlM content trigger = div_ [class_ "drawer drawer-en
       div_
         [ id_ $ drawerId <> "-content"
         , class_ "pb-4 px-8 h-full flex flex-col gap-8"
-        , hxSwap_ "innerHTML"
         , term "hx-on::after:swap" "window.evalScriptsFromContent(this)"
         ]
-        $ div_ (maybe [] (\url -> [hxGet_ url, hxTrigger_ "intersect once"]) urlM)
+        -- hx-swap sits on the requester rather than being inherited from the wrapper:
+        -- htmx 4 resolves inheritance explicitly, so a parent's value no longer reaches here.
+        $ div_ (maybe [] (\url -> [hxGet_ url, hxTrigger_ "intersect once", hxSwap_ "innerHTML"]) urlM)
         $ fromMaybe (loadingIndicator_ LdMD LdDots) content
       div_ [id_ $ drawerId <> "-indicator", class_ "htmx-indicator absolute inset-0 z-10 w-full box-border bg-bgRaised px-8"] drawerLoadingSkeleton_
 

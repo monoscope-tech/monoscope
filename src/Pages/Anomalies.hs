@@ -793,12 +793,14 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst tp sampleOverride = do
       [ type_ "checkbox"
       , id_ "ai-panel-toggle"
       , class_ "hidden"
-      , [__|init set my.checked to (localStorage.getItem('ai-panel-open') == 'true')
-              if my.checked trigger load-chat on #ai-response-container end
+      , -- The event name must be quoted: hyperscript tokenizes the `-` in a bare
+        -- `load-chat` as minus, which failed to parse and left the panel never loading.
+        [__|init set my.checked to (localStorage.getItem('ai-panel-open') == 'true')
+              if my.checked trigger 'load-chat' on #ai-response-container end
             end
             on change
               call localStorage.setItem('ai-panel-open', my.checked)
-              if my.checked trigger load-chat on #ai-response-container end
+              if my.checked trigger 'load-chat' on #ai-response-container end
             end|]
       ]
     label_ [Lucid.for_ "ai-panel-toggle", class_ "absolute right-0 top-3 z-10 flex items-center gap-1.5 bg-fillBrand-strong text-white px-2 py-2.5 rounded-l-lg cursor-pointer shadow-md hover:opacity-90 transition-opacity group-has-[#ai-panel-toggle:checked]/ai:hidden", Aria.label_ "Open AI Assistant"] do
