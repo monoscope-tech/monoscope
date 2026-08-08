@@ -408,6 +408,15 @@ projectsWithSpansInRange useTf lo hi =
 --
 -- @kind IN (…)@ rather than an OR-of-equalities: TimeFusion's Utf8View OR predicate returns
 -- wrong rows, and @kind@ is raw-indexed so @IN@ routes through the index.
+--
+-- Every column @sp@ projects is aliased, including the ones whose base name would do. @sp@
+-- is self-joined, and DataFusion cannot resolve @c.kind@\/@p.kind@ when both sides carry the
+-- unqualified base-table name — the whole query fails to plan with \"Ambiguous reference to
+-- unqualified field kind\". Renaming to @knd@\/@stc@\/@dur@\/@nm@ is what makes the qualifiers
+-- bind. Do not \"tidy\" an alias away.
+--
+-- @ORDER BY COUNT(*)@ rather than the ordinal @ORDER BY 6@ for the same reason: DataFusion
+-- rejects an ordinal that points at an aggregate.
 rollupServiceEdges :: (DB es, Labeled "timefusion" Hasql :> es) => Bool -> Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [RollupEdge]
 rollupServiceEdges useTf pid lo hi =
   fmap sliceRowsToEdges
@@ -416,7 +425,7 @@ rollupServiceEdges useTf pid lo hi =
       [HI.sql|
       WITH sp AS (
         SELECT context___trace_id tid, context___span_id sid, parent_id par,
-               COALESCE(resource___service___name, 'unknown') svc, kind, status_code, duration, name,
+               COALESCE(resource___service___name, 'unknown') svc, kind knd, status_code stc, duration dur, name nm,
                attributes___db___system___name db_sys, attributes___db___namespace db_ns,
                attributes___server___address srv, attributes___network___peer___address peer
         FROM otel_logs_and_spans
@@ -424,27 +433,27 @@ rollupServiceEdges useTf pid lo hi =
           AND kind IN ('server','client','producer','consumer')
       ),
       hops AS (
-        SELECT p.svc src, 'service' src_kind, c.svc tgt, 'service' tgt_kind, c.status_code st, c.duration dur
+        SELECT p.svc src, 'service' src_kind, c.svc tgt, 'service' tgt_kind, c.stc st, c.dur dur
         FROM sp c JOIN sp p ON c.tid = p.tid AND c.par = p.sid
-        WHERE c.kind IN ('server','consumer') AND p.kind IN ('client','producer')
+        WHERE c.knd IN ('server','consumer') AND p.knd IN ('client','producer')
         UNION ALL
         SELECT p.svc, 'service',
                -- A purely numeric db.namespace is a Redis database index, not a name.
                CASE WHEN p.db_ns IS NOT NULL AND p.db_ns <> '' AND p.db_ns !~ '^[0-9]+$' THEN 'db:' || p.db_ns
                     WHEN p.db_sys IS NOT NULL AND p.db_sys <> '' THEN 'db:' || p.db_sys
                     WHEN p.db_ns IS NOT NULL AND p.db_ns <> '' THEN 'db:' || p.db_ns
-                    WHEN p.kind = 'producer' THEN 'queue:' || COALESCE(NULLIF(LOWER(p.srv), ''), p.name)
-                    ELSE 'http:' || COALESCE(NULLIF(LOWER(p.srv), ''), NULLIF(LOWER(p.peer), ''), p.name) END,
+                    WHEN p.knd = 'producer' THEN 'queue:' || COALESCE(NULLIF(LOWER(p.srv), ''), p.nm)
+                    ELSE 'http:' || COALESCE(NULLIF(LOWER(p.srv), ''), NULLIF(LOWER(p.peer), ''), p.nm) END,
                CASE WHEN (p.db_ns IS NOT NULL AND p.db_ns <> '') OR (p.db_sys IS NOT NULL AND p.db_sys <> '') THEN 'database'
-                    WHEN p.kind = 'producer' THEN 'queue' ELSE 'external' END,
-               p.status_code, p.duration
+                    WHEN p.knd = 'producer' THEN 'queue' ELSE 'external' END,
+               p.stc, p.dur
         FROM sp p
-        WHERE p.kind IN ('client','producer')
-          AND NOT EXISTS (SELECT 1 FROM sp c WHERE c.tid = p.tid AND c.par = p.sid AND c.kind IN ('server','consumer'))
+        WHERE p.knd IN ('client','producer')
+          AND NOT EXISTS (SELECT 1 FROM sp c WHERE c.tid = p.tid AND c.par = p.sid AND c.knd IN ('server','consumer'))
         UNION ALL
-        SELECT '', 'entry', c.svc, 'service', c.status_code, c.duration
+        SELECT '', 'entry', c.svc, 'service', c.stc, c.dur
         FROM sp c
-        WHERE c.kind IN ('server','consumer')
+        WHERE c.knd IN ('server','consumer')
           AND (c.par IS NULL OR c.par = '' OR NOT EXISTS (SELECT 1 FROM sp p WHERE p.tid = c.tid AND p.sid = c.par))
       )
       SELECT src, src_kind, tgt, tgt_kind, bkt,
@@ -457,7 +466,7 @@ rollupServiceEdges useTf pid lo hi =
         FROM hops
       ) b
       GROUP BY src, src_kind, tgt, tgt_kind, bkt
-      ORDER BY 6 DESC
+      ORDER BY COUNT(*) DESC
       LIMIT 20000|]
 
 
