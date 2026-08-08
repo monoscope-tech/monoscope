@@ -177,7 +177,6 @@ bodyWrapper bcfg child = do
       -- stops table containers leaking their own hx-get/hx-trigger onto ~80 descendants.
       -- NB `useExplicitInheritace` is spelled that way in the compat extension.
       meta_ [name_ "htmx-config", content_ "{\"compat\":{\"useExplicitInheritace\":true}}"]
-      meta_ [name_ "htmx-config", content_ [text|{"selfRequestsOnly":false}|]]
       -- favicon items
       link_ [rel_ "apple-touch-icon", sizes_ "180x180", href_ "/public/apple-touch-icon.png"]
       link_ [rel_ "icon", type_ "image/png", sizes_ "32x32", href_ "/public/favicon-32x32.png"]
@@ -226,15 +225,16 @@ bodyWrapper bcfg child = do
         deferScript
         [ $(hashAssetFile "/public/assets/deps/htmx/htmx-4.0.0-beta6.min.js")
         , -- Must load immediately after htmx: restores implicit attribute inheritance
-          -- (v4 requires `:inherited` otherwise), 4xx/5xx no-swap, and the htmx 2 event
-          -- names (htmx:afterSwap, htmx:configRequest, ...) this app is written against.
+          -- (v4 requires `:inherited` otherwise) and 4xx/5xx no-swap. The app's own
+          -- listeners use v4 event names directly, so the shim's legacy-name replay is
+          -- only load-bearing for third-party code (hyperscript binds the legacy load event).
           $(hashAssetFile "/public/assets/deps/htmx/htmx-2-compat.js")
         , $(hashAssetFile "/public/assets/deps/htmx/hx-preload-4.js")
         , $(hashAssetFile "/public/assets/js/main.js")
         , -- Dropped with the htmx 4 upgrade: multi-swap and response-targets had no
           -- users (no `multi:` swaps, no hx-target-4xx/5xx) and no v4 port; idiomorph
           -- is superseded by built-in outerMorph; preload.js and json-enc-2.js call the
-          -- removed htmx.defineExtension (v4 preload ships above; json-enc and
+          -- removed defineExtension API (v4 preload ships above; json-enc and
           -- forward-page-params are re-registered in main.ts via registerExtension).
           $(hashAssetFile "/public/assets/js/thirdparty/_hyperscript_web0_9_93.min.js")
         , $(hashAssetFile "/public/assets/deps/tagify/tagify.min.js")
@@ -547,7 +547,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
       -- Collapsed: search icon
       button_ ([class_ "group-has-[#sidenav-toggle:checked]/pg:hidden flex items-center justify-center p-2 rounded-lg border border-strokeWeak hover:border-strokeStrong hover:bg-fillWeak text-textWeak cursor-pointer transition-colors", searchScript, Aria.label_ "Search"] <> tippyRight_ "Search (\x2318K)") do
         faSprite_ "magnifying-glass" "regular" "w-4 h-4"
-    nav_ [id_ "main-sidenav", class_ "mt-2 flex flex-col gap-1 text-textWeak [&_.main-nav-link.active]:bg-fillBrand-weak [&_.main-nav-link.active]:text-textStrong [&_.main-nav-link.active]:font-medium [&_.main-nav-link.active]:border-l-strokeBrand-strong [&_.main-nav-link.active]:border-y-transparent [&_.main-nav-link.active]:border-r-transparent [&_.main-nav-link.active_.nav-icon]:text-textBrand", [__|on click set #mobile-nav-toggle.checked to false end on htmx:pushedIntoHistory from window or popstate from window settle then set p to window.location.pathname then for link in .main-nav-link set h to link.getAttribute('href') set extra to (link.getAttribute('data-match') or '') set matched to (p is h or p.startsWith(h + '/')) if not matched and extra is not '' for m in extra.split(' ') if m is not '' and (p is m or p.startsWith(m + '/')) set matched to true end end end if matched add .active to link else remove .active from link end end|]] do
+    nav_ [id_ "main-sidenav", class_ "mt-2 flex flex-col gap-1 text-textWeak [&_.main-nav-link.active]:bg-fillBrand-weak [&_.main-nav-link.active]:text-textStrong [&_.main-nav-link.active]:font-medium [&_.main-nav-link.active]:border-l-strokeBrand-strong [&_.main-nav-link.active]:border-y-transparent [&_.main-nav-link.active]:border-r-transparent [&_.main-nav-link.active_.nav-icon]:text-textBrand", [__|on click set #mobile-nav-toggle.checked to false end on htmx:after:history:push from window or popstate from window settle then set p to window.location.pathname then for link in .main-nav-link set h to link.getAttribute('href') set extra to (link.getAttribute('data-match') or '') set matched to (p is h or p.startsWith(h + '/')) if not matched and extra is not '' for m in extra.split(' ') if m is not '' and (p is m or p.startsWith(m + '/')) set matched to true end end end if matched add .active to link else remove .active from link end end|]] do
       let pidTxt = project.id.toText
           flyoutLink (linkText, link) =
             a_ ([href_ link, class_ "flex gap-2.5 items-center px-3 py-2 text-sm text-textWeak hover:bg-fillWeak hover:text-textStrong whitespace-nowrap"] <> navTabAttrs)

@@ -36,4 +36,4 @@ const loadComponents = () => components.forEach(([selector, load]) => {
 });
 
 loadComponents();
-document.addEventListener('htmx:afterSettle', loadComponents);
+document.addEventListener('htmx:after:swap', loadComponents);

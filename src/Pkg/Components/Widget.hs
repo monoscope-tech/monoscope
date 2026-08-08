@@ -547,13 +547,13 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "le
               , hxTrigger_ "click"
               , hxSwap_ "none"
               , [__| on click call (the closest <[popover]/>).hidePopover()
-                     on htmx:beforeSwap
-                        set event.detail.shouldSwap to false then
+                     on htmx:before:swap
+                        call event.preventDefault() then
                         set widgetData to JSON.parse(event.detail.ctx.response.headers.get('X-Widget-JSON')) then
                         set gridEl to me.closest('.grid-stack') then
                         set layout to widgetData.layout or {w: 3, h: 3} then
                         make a <template/> called tpl then
-                        set tpl.innerHTML to event.detail.serverResponse then
+                        set tpl.innerHTML to event.detail.ctx.text then
                         set widgetEl to tpl.content.firstElementChild then
                         set newId to widgetEl.id then
                         call gridEl.gridstack.addWidget(widgetEl, {w: layout.w, h: layout.h}) then

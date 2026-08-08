@@ -484,7 +484,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
         waitForGridStack();
 
         // Re-initialize grids after htmx settles new tab content
-        document.body.addEventListener('htmx:afterSettle', function(e) {
+        document.body.addEventListener('htmx:after:swap', function(e) {
           if (e.detail.target && e.detail.target.id === 'dashboard-tabs-content') {
             initializeGrids();
             window.interpolateVarTemplates();
@@ -1205,18 +1205,18 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
     , hxTrigger_ "submit"
     , term
         "_"
-        [text| on htmx:beforeRequest 
+        [text| on htmx:before:request 
             set widgetJSON.title to #{'${widgetTitleInputId}'}.value then 
             if not widgetJSON.id
               gridStackInstance.removeWidget('#add_a_widget_label', true, false)
             end
-           on htmx:beforeSwap 
-            set event.detail.shouldSwap to false then
+           on htmx:before:swap 
+            call event.preventDefault() then
             set #${drawerStateCheckbox}.checked to false then
             if @data-formMode == "edit"
-              call gridStackInstance.update(#{'${sourceWid}_widgetEl'}, {content: event.detail.serverResponse})
+              call gridStackInstance.update(#{'${sourceWid}_widgetEl'}, {content: event.detail.ctx.text})
             else
-              call gridStackInstance.addWidget({w: 3, h: 3, content: event.detail.serverResponse})
+              call gridStackInstance.addWidget({w: 3, h: 3, content: event.detail.ctx.text})
             end
         |]
     ]
@@ -1358,7 +1358,7 @@ widgetAlertConfig_ _pid paymentPlan alertFormId alertEndpoint chartTargetId widg
     , hxTrigger_ "submit"
     , hxVals_ "js:{teams: window.getTagValues('#teamHandlesInput')}"
     , class_ "flex flex-col gap-3 hidden group-has-[.alert-enable:checked]/walert:flex"
-    , [__|on htmx:afterRequest if event.detail.successful set my value to '' then call me.reset() end|]
+    , [__|on htmx:after:request if event.detail.ctx.response.status < 400 set my value to '' then call me.reset() end|]
     ]
     do
       input_ [type_ "hidden", name_ "widgetId", value_ widgetId]
@@ -1662,7 +1662,7 @@ dashboardsGet_ dg = do
                         [ class_ "cursor-pointer hover:bg-fillWeak tap-target"
                         , hxPost_ $ "/p/" <> dg.projectId.toText <> "/dashboards/" <> dash.id.toText <> "/widgets/" <> widgetId <> "/duplicate?source_dashboard_id=" <> sourceDashId.toText
                         , hxSwap_ "none"
-                        , [__| on htmx:afterRequest set #dashboards-modal.checked to false |]
+                        , [__| on htmx:after:request set #dashboards-modal.checked to false |]
                         ]
                       Nothing -> [class_ "group/row"]
                   , Table.bulkActions =

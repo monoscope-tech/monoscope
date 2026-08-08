@@ -503,7 +503,7 @@ const disposeChartsIn = (root: Element) => {
 // htmx 4's beforeSwap detail has no `target` (htmx 2 did), and the compat shim re-fires
 // the old event name with the new payload — so read the swap target defensively and fall
 // back to the element the event was dispatched on.
-document.addEventListener('htmx:beforeSwap', (event) => {
+document.addEventListener('htmx:before:swap', (event) => {
   const e = event as CustomEvent<any>;
   const target = e.detail?.target ?? e.detail?.ctx?.target ?? (e.target instanceof Element ? e.target : null);
   if (target instanceof Element) disposeChartsIn(target);

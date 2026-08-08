@@ -102,7 +102,7 @@ paletteShell_ pid = do
     , class_ "cmd-palette-backdrop hidden fixed inset-0 flex flex-col items-center pt-[15vh] bg-black/40"
     , style_ "z-index:99999"
     , [__|on click if event.target is me add .hidden to me end
-          on htmx:beforeRequest from <body/> add .hidden to me end|]
+          on htmx:before:request from <body/> add .hidden to me end|]
     ]
     do
       -- Header

@@ -37,7 +37,6 @@
   : fn();
 
 onReady(function(){
-          // htmx.config.useTemplateFragments = true
           // Tooltip warmth tracking - skip delay when moving between tooltips
           let tooltipWarmTimeout: ReturnType<typeof setTimeout>;
           let isTooltipWarm = false;
@@ -119,10 +118,10 @@ onReady(function(){
           window.addEventListener('beforeunload', () => { clearTimeout(tooltipWarmTimeout); destroyTip(); });
           // A swap can remove the tooltip's reference element; drop the instance with it
           // so the detached node and its popper aren't retained until the next hover.
-          document.body.addEventListener('htmx:beforeSwap', () => { clearTimeout(tooltipWarmTimeout); destroyTip(); });
+          document.body.addEventListener('htmx:before:swap', () => { clearTimeout(tooltipWarmTimeout); destroyTip(); });
 
           // Animate stat values on HTMX content swap for delightful updates
-          document.body.addEventListener('htmx:afterSwap', (e: any) => {
+          document.body.addEventListener('htmx:after:swap', (e: any) => {
             e.target.querySelectorAll('.stat-value[data-value]').forEach((el: HTMLElement) => {
               const newVal = parseFloat(el.dataset.value!);
               if (!isNaN(newVal) && typeof (window as any).animateStatValue === 'function') {
@@ -132,21 +131,21 @@ onReady(function(){
           });
 
           // Add aria-busy during HTMX requests for screen reader feedback
-          document.body.addEventListener('htmx:beforeRequest', (e: any) => {
+          document.body.addEventListener('htmx:before:request', (e: any) => {
             e.target.setAttribute('aria-busy', 'true');
           });
-          document.body.addEventListener('htmx:afterRequest', (e: any) => {
+          document.body.addEventListener('htmx:after:request', (e: any) => {
             e.target.removeAttribute('aria-busy');
           });
 
           // Progress bar for HTMX requests
           const progressBar = document.getElementById('htmx-progress');
           if (progressBar) {
-            document.body.addEventListener('htmx:beforeRequest', () => {
+            document.body.addEventListener('htmx:before:request', () => {
               progressBar.classList.remove('htmx-settling');
               progressBar.classList.add('htmx-request');
             });
-            document.body.addEventListener('htmx:afterRequest', () => {
+            document.body.addEventListener('htmx:after:request', () => {
               progressBar.classList.remove('htmx-request');
               progressBar.classList.add('htmx-settling');
             });
