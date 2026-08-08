@@ -197,6 +197,20 @@ describe('the editor asks the server and marks the answer', () => {
       el.remove();
     }
   });
+
+  // The placeholder covers the whole editor while the query is empty. If it
+  // takes pointer events, the click that should focus Monaco lands on a
+  // non-focusable div instead and the box never accepts a keystroke.
+  test('the empty-query placeholder does not swallow the click that focuses the editor', async () => {
+    stubVerdicts({ valid: true });
+    const el = await mount();
+    try {
+      const overlay = el.querySelector('.placeholder-overlay')!;
+      expect(overlay.className).toContain('pointer-events-none');
+    } finally {
+      el.remove();
+    }
+  });
 });
 
 // The dropdown used to mirror Monaco's suggest controller through private APIs

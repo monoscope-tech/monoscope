@@ -715,6 +715,13 @@ renderChart widget = do
         , id_ $ chartId <> "_bordered"
         ]
         do
+          -- Failure banner: one line at the top of the card, above the content,
+          -- rather than a centred overlay printed over the chart it describes.
+          -- widgets.ts fills the message and unhides it.
+          div_ [id_ $ chartId <> "_error", class_ "hidden shrink-0 rounded-t-2xl border-b border-strokeError-weak bg-fillError-weak px-2.5 py-1"]
+            $ div_ [class_ "flex items-center gap-1.5 text-xs text-textError"] do
+              Utils.faSprite_ "circle-exclamation" "solid" "w-3 h-3 shrink-0"
+              span_ [class_ "truncate", id_ $ chartId <> "_errorMsg"] ""
           whenJust ((,) <$> widget.groupByOptions <*> widget.groupByUrl) \(options, url) ->
             let selectedLabel = fromMaybe "All values" $ guarded (/= "all") =<< widget.groupBySelected
              in div_ [class_ "flex shrink-0 justify-end px-2 pt-2"]

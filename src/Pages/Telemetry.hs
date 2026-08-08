@@ -502,7 +502,8 @@ spanDetailAttrs_ loading pidT spanUuid ts =
   , hxIndicator_ "#loading-span-list"
   ]
     <> case loading of
-      ShowSkeleton -> [term "hx-on::before-request" "window.showTraceDetailsLoading(this)"]
+      ShowSkeleton -> [term "hx-on::before:request" "window.showTraceDetailsLoading(this)"]
+      -- Nothing extra: the panel opens from #trace_details_content's own after:settle hook.
       KeepCurrent -> []
 
 
@@ -1046,7 +1047,9 @@ tracePage pid traceItem rawSpanRecords = do
       ]
       do
         traceDetailsLoading_
-        div_ [id_ "trace_details_content", term "hx-on::after-swap" "window.traceDetailsLoaded(this)"] pass
+        -- `after:settle`, not `after:swap`: htmx fires its swap events on the requesting
+        -- element, and only the settle pair reaches the swap target — which is this element.
+        div_ [id_ "trace_details_content", term "hx-on::after:settle" "window.traceDetailsLoaded(this)"] pass
 
   -- Use skew-adjusted SpanMin from the span tree so flame/timeline matches the waterfall.
   let flattenTrees = concatMap (\t -> t.spanRecord : flattenTrees t.children)

@@ -194,26 +194,33 @@ export const getChartStyles = () => {
   };
 };
 
-const showNoDataOverlay = (chartId: string, message?: string, variant: 'empty' | 'error' = 'empty') => {
+// A failed widget states so on one line at the top of its own card — the banner
+// Widget.hs renders — rather than painting the message over the chart it is
+// describing, which left both unreadable. Whatever the chart last drew stays
+// visible underneath, which is usually the context you want while reading why
+// the refresh failed. Only the legitimately-empty range keeps a centred overlay.
+export const showChartError = (chartId: string, message: string) => {
+  const msg = $(`${chartId}_errorMsg`);
+  if (!msg) return;
+  msg.textContent = message;
+  msg.title = message; // the banner truncates; the full text lives in the tooltip
+  $(`${chartId}_error`)?.classList.remove('hidden');
+};
+
+const hideChartError = (chartId: string) => $(`${chartId}_error`)?.classList.add('hidden');
+
+const showNoDataOverlay = (chartId: string, message?: string) => {
   const el = $(`${chartId}`);
-  if (!el) return;
-  const parent = el.parentElement;
+  const parent = el?.parentElement;
   if (!parent) return;
   let overlay = parent.querySelector('.chart-no-data') as HTMLElement;
-  const msg = message || 'No data for the selected time range';
   if (!overlay) {
     overlay = document.createElement('div');
     overlay.className = 'chart-no-data absolute inset-0 flex items-center justify-center z-10 pointer-events-none';
     parent.style.position = 'relative';
     parent.appendChild(overlay);
   }
-  if (variant === 'error') {
-    // Distinct from "no data": error triangle + textError tone so users can tell
-    // a failed widget from a legitimately empty time range.
-    overlay.innerHTML = `<div class="text-center text-textError"><svg class="w-6 h-6 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"/></svg><p class="text-sm font-medium">${msg}</p><p class="mt-1 text-xs text-textWeak">Try refreshing or changing the time range.</p></div>`;
-  } else {
-    overlay.innerHTML = `<div class="text-center text-textWeak"><svg class="w-6 h-6 mx-auto mb-2 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 13h4l3-8 4 16 3-8h4"/></svg><p class="text-sm">${msg}</p></div>`;
-  }
+  overlay.innerHTML = `<div class="text-center text-textWeak"><svg class="w-6 h-6 mx-auto mb-2 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 13h4l3-8 4 16 3-8h4"/></svg><p class="text-sm">${message || 'No data for the selected time range'}</p></div>`;
   overlay.classList.remove('hidden');
 };
 
@@ -376,10 +383,11 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
     const { from, to, headers, dataset, rows_per_min, stats, error } = await limitedFetch(`/chart_data?${params}`).then((res) => res.json());
     if (isStale()) return; // a newer fetch already won; don't overwrite its state
     if (error) {
-      // Server-reported SQL failure: show distinct error overlay (not the generic
-      // "no data" one) so the user can distinguish a broken widget from an empty range.
+      // Server-reported SQL failure: the error banner, not the "no data" overlay,
+      // so the user can distinguish a broken widget from an empty range.
       chart.hideLoading();
-      showNoDataOverlay(chartId, error, 'error');
+      hideNoDataOverlay(chartId);
+      showChartError(chartId, error);
       setStatValue(widgetData, null); // clear the stat spinner; failed ≠ loading
       return;
     }
@@ -409,6 +417,7 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
     setStatValue(widgetData, stats, from, to);
 
     chart.hideLoading();
+    hideChartError(chartId); // this refresh succeeded; clear the previous failure
     if (!dataset || dataset.length === 0) {
       showNoDataOverlay(chartId);
     } else {
@@ -427,7 +436,7 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
     console.error('Failed to fetch new data:', e);
     chart.hideLoading();
     if (!isStale()) {
-      showNoDataOverlay(chartId, "Couldn't load this chart", 'error');
+      showChartError(chartId, "Couldn't load this chart. Try refreshing or changing the time range.");
       setStatValue(widgetData, null); // clear the stat spinner on fetch failure
     }
   } finally {

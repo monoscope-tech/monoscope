@@ -1783,8 +1783,7 @@ export class QueryEditorComponent extends LitElement {
         <div class="relative overflow-x-hidden w-full flex-1">
           <div id="editor-container" class="w-full"></div>
           <div
-            class="placeholder-overlay absolute top-0 left-0 right-0 bottom-0 pointer-events-auto z-[1] text-textWeak text-sm leading-[18px] pt-1.5 pl-0 hidden cursor-text"
-            @pointerdown=${() => this.editor?.focus()}
+            class="placeholder-overlay absolute top-0 left-0 right-0 bottom-0 pointer-events-none z-[1] text-textWeak text-sm leading-[18px] pt-1.5 pl-0 hidden cursor-text"
           >
             <span class="opacity-60">level == "ERROR"</span>
             <span class="mx-1 opacity-30">·</span>

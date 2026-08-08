@@ -113,7 +113,7 @@ drawer_ drawerId startOpen urlM content trigger = div_ [class_ "drawer drawer-en
         [ id_ $ drawerId <> "-content"
         , class_ "pb-4 px-8 h-full flex flex-col gap-8"
         , hxSwap_ "innerHTML"
-        , term "hx-on::after-swap" "window.evalScriptsFromContent(this)"
+        , term "hx-on::after:swap" "window.evalScriptsFromContent(this)"
         ]
         $ div_ (maybe [] (\url -> [hxGet_ url, hxTrigger_ "intersect once"]) urlM)
         $ fromMaybe (loadingIndicator_ LdMD LdDots) content

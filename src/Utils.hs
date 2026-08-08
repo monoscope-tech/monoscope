@@ -1498,7 +1498,7 @@ drawerLoadAttrs_ url =
   , hxTarget_ "#global-data-drawer-content"
   , hxSwap_ "innerHTML"
   , hxIndicator_ "#global-data-drawer-indicator"
-  , term "hx-on::before-request" "document.querySelector('#global-data-drawer').checked = true"
+  , term "hx-on::before:request" "document.querySelector('#global-data-drawer').checked = true"
   ]
 
 

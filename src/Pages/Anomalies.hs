@@ -1348,7 +1348,9 @@ anomalyAIChatBody_ pid issueId = do
     , class_ "flex-1 overflow-y-auto flex flex-col px-3"
     , hxGet_ $ baseUrl <> "/ai_chat/history"
     , hxTrigger_ "load-chat once"
-    , term "hx-on::after-swap" "window.evalScriptsFromContent && window.evalScriptsFromContent(event.detail.elt === this ? this : this.lastElementChild); this.lastElementChild?.scrollIntoView({behavior: 'smooth', block: 'start'})"
+    , -- htmx 4's native event detail carries no `elt` (the compat shim backfills it only on
+      -- the legacy aliases), so branch on the swap target via `event.target` instead.
+      term "hx-on::after:swap" "window.evalScriptsFromContent && window.evalScriptsFromContent(event.target === this ? this : this.lastElementChild); this.lastElementChild?.scrollIntoView({behavior: 'smooth', block: 'start'})"
     ]
     ""
   div_ [class_ "shrink-0 border-t border-strokeWeak p-3 flex flex-col gap-2"] do
@@ -1357,7 +1359,7 @@ anomalyAIChatBody_ pid issueId = do
       , hxTarget_ "#ai-response-container"
       , hxSwap_ "beforeend"
       , hxIndicator_ "#ai-chat-loader"
-      , term "hx-on::after-request" "this.reset()"
+      , term "hx-on::after:request" "this.reset()"
       ]
       $ div_ [class_ "flex items-center gap-2 bg-fillWeaker rounded-lg px-3 py-2 has-[:focus]:ring-1 has-[:focus]:ring-strokeBrand-weak transition-shadow"] do
         input_
