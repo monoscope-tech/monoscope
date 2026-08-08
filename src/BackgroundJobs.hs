@@ -3592,17 +3592,23 @@ prometheusScrapeBatchLimit :: Int
 prometheusScrapeBatchLimit = 1000
 
 
--- | Dispatcher (ServiceMapRollupTick). Fans out one rollup per active project for the
--- bucket that closed 5 minutes ago — the lag absorbs normal SDK export and ingest delay,
--- since the caller's client span and the callee's server span come from different
--- processes and can land seconds apart.
+-- | Dispatcher (ServiceMapRollupTick). Fans out one rollup per /project that sent a span
+-- this slice/ for the bucket that closed 5 minutes ago — the lag absorbs normal SDK export
+-- and ingest delay, since the caller's client span and the callee's server span come from
+-- different processes and can land seconds apart.
+--
+-- The fan-out is driven by 'projectsWithSpansInRange', not by every active project. Both
+-- lists produce the same rollup rows — a project with no spans has no edges — but the
+-- blind version pays a full self-join per project to discover that, and the great majority
+-- of projects are idle at any given tick. One discovery scan replaces that entirely.
 dispatchServiceMapRollups :: Config.AuthContext -> UTCTime -> ATBackgroundCtx ()
 dispatchServiceMapRollups authCtx scheduledTime = when authCtx.config.enableServiceMapRollup do
-  projects <- Projects.activeProjects
   let bucket = floorTo300 (addUTCTime (-600) scheduledTime)
+  projects <- ServiceGraph.projectsWithSpansInRange authCtx.env.enableTimefusionReads bucket (addUTCTime 300 bucket)
+  Log.logInfo "Service-map rollup fan-out" $ AE.object ["bucket" AE..= bucket, "projects" AE..= length projects]
   failures <- liftIO $ withResource authCtx.jobsPool \conn ->
-    lefts <$> forM projects \p ->
-      first (p.id.toText,) <$> tryAny (void $ createJob conn "background_jobs" (ServiceMapRollup p.id bucket))
+    lefts <$> forM projects \pid ->
+      first (pid.toText,) <$> tryAny (void $ createJob conn "background_jobs" (ServiceMapRollup pid bucket))
   forM_ failures \(pid, err) ->
     Log.logAttention "Service-map rollup enqueue failed — this project's map will have a gap for this bucket" (pid, displayException err)
 
