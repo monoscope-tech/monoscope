@@ -60,7 +60,7 @@ logQueryBox_ config = do
     , hxSwap_ "outerHTML"
     , hxSelect_ "#queryLibraryContent"
     , hxPushUrl_ "false"
-    , [__|on htmx:afterRequest set #saveQueryMdl.dataset.pendingQuery to null|]
+    , [__|on htmx:after:request set #saveQueryMdl.dataset.pendingQuery to null|]
     ]
     do
       strong_ "Name your query"
@@ -116,8 +116,8 @@ logQueryBox_ config = do
                      if my.value.trim().length > 0 
                        then halt then trigger htmx:trigger 
                      end
-                   on htmx:afterRequest
-                     if event.detail.successful
+                   on htmx:after:request
+                     if event.detail.ctx.response.status < 400
                        then
                          call JSON.parse(event.detail.ctx.text) set :result to it
                          if :result.time_range then call window.updateTimePicker(:result.time_range) end

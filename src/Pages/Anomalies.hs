@@ -771,7 +771,7 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst tp sampleOverride = do
                 add .opacity-0 .pointer-events-none to #resizer-details_width-wrapper
                 call updateUrlState('details_width', '', 'delete')
               end
-              on htmx:afterSwap if event.target is me
+              on htmx:after:swap if event.target is me
                 set my *width to ''
                 remove .opacity-0 .pointer-events-none from #resizer-details_width-wrapper
                 if window.innerWidth < 1024 call me.scrollIntoView({behavior:'smooth', block:'start'}) end
@@ -1591,7 +1591,7 @@ highlightJsHead_ = do
     }
     function highlightSnippets(root) { root.querySelectorAll('code:not(.hljs)').forEach(el => hljs.highlightElement(el)); }
     document.addEventListener('DOMContentLoaded', () => { setHljsTheme(); highlightSnippets(document); });
-    document.addEventListener('htmx:afterSettle', e => highlightSnippets(e.detail.elt));
+    document.addEventListener('htmx:after:swap', e => highlightSnippets(e.detail.elt));
     """
 
 

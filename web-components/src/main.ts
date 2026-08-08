@@ -453,4 +453,4 @@ initAllTagifyInputs();
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => { initAllTagifyInputs(); (window as any).interpolateVarTemplates(); });
 }
-document.addEventListener('htmx:afterSettle', (e: any) => { initAllTagifyInputs(e.detail?.elt || document); (window as any).interpolateVarTemplates(); syncFacetCheckboxes(e.detail?.elt || document); });
+document.addEventListener('htmx:after:swap', (e: any) => { initAllTagifyInputs(e.detail?.elt || document); (window as any).interpolateVarTemplates(); syncFacetCheckboxes(e.detail?.elt || document); });

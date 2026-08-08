@@ -677,7 +677,7 @@ integrationsPage pid apikey =
         }
 
         // Re-highlight after HTMX swaps content
-        document.body.addEventListener('htmx:afterSwap', function(event) {
+        document.body.addEventListener('htmx:after:swap', function(event) {
           // Only highlight content in the integration documentation area
           const target = event.detail.target;
           if (target && (target.id.startsWith('fw-content-') || target.classList.contains('lang-guide'))) {

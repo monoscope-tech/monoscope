@@ -502,7 +502,7 @@ integrationsBody IntegrationsConfig{..} = do
 
 -- | Fired after a "send test alert" form submits, so any `testSent from:body`-listening panel refreshes.
 testSentAttr_ :: Attribute
-testSentAttr_ = [__| on htmx:afterRequest from closest <form/> trigger testSent on body |]
+testSentAttr_ = [__| on htmx:after:request from closest <form/> trigger testSent on body |]
 
 
 -- | Shared htmx target/select/swap for actions that re-render the integrations panel.

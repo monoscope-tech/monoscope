@@ -466,7 +466,7 @@ renderFacets :: FacetSummary -> Html ()
 renderFacets facetSummary = do
   let (FacetData facetMap) = facetSummary.facetJson
   -- Checkbox↔query sync lives in web-components/src/main.ts (syncFacetCheckboxes),
-  -- wired to `update-query` + `htmx:afterSettle` so swapped-in facets re-sync.
+  -- wired to `update-query` + `htmx:after:swap` so swapped-in facets re-sync.
   forM_ (universe :: [FacetGroup]) \g ->
     renderFacetSection (facetGroupLabel g) (Map.findWithDefault [] g facetsByGroup) facetMap (g /= FGCommon)
   where
@@ -1434,7 +1434,7 @@ virtualTable pid initialFetchUrl modeM = do
 -- morph optimises 4% of the interaction — and idiomorph mutates nodes in place, so
 -- hyperscript never processes `install FieldMenuDelegate` on morphed-in content and the
 -- field context menu silently stops opening. Revisit only with an explicit
--- `_hyperscript.processNode` on htmx:afterSwap (see the LogItemMenuable behavior, which
+-- `_hyperscript.processNode` on htmx:after:swap (see the LogItemMenuable behavior, which
 -- already has to do this by hand).
 lazyLoad_ :: Text -> Text -> Text -> [Attribute] -> Html ()
 lazyLoad_ target url trigger extra =
@@ -1722,10 +1722,10 @@ apiLogsPage page = do
                     add .hidden to me then send toggleFullscreen(mode: 'trace', active: false) to #apiLogsPage
                     call updateUrlState('showTrace', '', 'delete')
                   end
-                  on htmx:afterSwap[#apiLogsPage's @data-fullscreen is 'details'] from me
+                  on htmx:after:swap[#apiLogsPage's @data-fullscreen is 'details'] from me
                     send toggleFullscreen(mode: 'trace', active: true) to #apiLogsPage
                   end
-                  on htmx:responseError from me
+                  on htmx:response:error from me
                     remove .hidden from #trace-load-error
                   end
                   on loadTrace(url)
@@ -1777,7 +1777,7 @@ apiLogsPage page = do
             end
           end
         end
-        on htmx:afterSwap send checkMobileOpen to me end
+        on htmx:after:swap send checkMobileOpen to me end
         on keydown[key=='Escape' and not (the event's target matches <input, textarea, select, [contenteditable]/>) and no <[popover]:popover-open/> and no <dialog[open]/>] from window
           -- `the first <…/> exists`, not a bare `<…/>`: a query literal is a lazy query object
           -- that stays truthy at zero matches, so a bare `if <sel/>` never falls through.
@@ -1945,7 +1945,7 @@ alertConfigurationForm_ project alertM teams = do
         , hxVals_ "js:{query:getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, source: params().source || 'spans', vizType: getVizType(), teams: window.getTagValues('#alert-form-teams')}"
         , hxSwap_ "none"
         , class_ "flex flex-col gap-3"
-        , [__|on htmx:afterRequest[detail.successful] set my value to '' then call me.reset()|]
+        , [__|on htmx:after:request[detail.ctx.response.status < 400] set my value to '' then call me.reset()|]
         ]
         do
           input_ [type_ "hidden", name_ "alertId", value_ $ maybe "" ((.id.toText)) alertM]

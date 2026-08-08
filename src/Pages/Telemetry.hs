@@ -681,7 +681,7 @@ metricsDetailsPage pid sources metric candidates (dashboards, monitors) source s
       , hxGet_ $ metricDetailUrl pid metric.metricName source selected
       , hxTrigger_ "update-query from:window"
       , term "hx-ext" "forward-page-params"
-      , [__|on htmx:afterSwap if event.target is me call window.evalScriptsFromContent(me) end end|]
+      , [__|on htmx:after:swap if event.target is me call window.evalScriptsFromContent(me) end end|]
       ]
         <> metricDetailSwap_
     )
