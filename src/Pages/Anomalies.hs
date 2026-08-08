@@ -79,7 +79,7 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), colorChip_, compactTimeAgo, emptyState_, metadataChip_, periodToggle_, resizer_, sparkline_)
 import Pages.LogExplorer.Log (virtualTable)
-import Pages.Telemetry (tracePage)
+import Pages.Telemetry (spanDetailAttrs_, tracePage)
 import Pkg.AI qualified as AI
 import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features (..), FilterMenu (..), FilterOption (..), Pagination (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableRows (..), ZeroState (..), col, withAttrs, withColHeaderExtra)
 import Pkg.Components.TimePicker qualified as TimePicker
@@ -689,59 +689,82 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst tp sampleOverride = do
                     "This endpoint started receiving traffic. Inspect the originating request in Investigation below to see headers, body, and call site."
             activityPanel_ pid issueId "lg:w-80 shrink-0" spanRecs
       let isLogPatternIssue = issue.issueType `elem` [Issues.LogPattern, Issues.LogPatternRateChange]
-      div_ [class_ "surface-raised rounded-2xl overflow-hidden group/inv", id_ "error-details-container", makeAttribute "tabindex" "-1", [__|on keydown[key is 'Escape'] if I match .investigation-fullscreen remove .investigation-fullscreen from me then call window.scrollTo({top:0})|]] do
-        div_ [class_ "max-md:px-3 px-4 border-b border-strokeWeak flex max-md:flex-col md:items-center md:justify-between"] do
-          div_ [class_ "flex items-center gap-2 max-md:py-1.5"] do
-            faSprite_ "magnifying-glass-chart" "regular" "w-3.5 h-3.5 text-textWeak"
-            h3_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Investigation"
-            -- Icon state is CSS-driven off the container's fullscreen class; the click handler only toggles it.
-            button_ [class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer transition-colors max-md:hidden", Aria.label_ "Toggle fullscreen", [__|on click toggle .investigation-fullscreen on #error-details-container then call window.scrollTo({top:0})|]] do
-              faSprite_ "expand" "regular" "w-3 h-3 text-textWeak group-[.investigation-fullscreen]/inv:hidden"
-              faSprite_ "compress" "regular" "w-3 h-3 text-textWeak hidden group-[.investigation-fullscreen]/inv:block"
-          div_ [class_ "flex items-center max-md:overflow-x-auto max-md:-mx-4 max-md:px-4 max-md:pb-1.5"] do
-            let aUrl = "/p/" <> pid.toText <> "/issues/" <> issueId
-                navLink (href, isActive, tooltip, lbl) = a_ [href_ href, class_ $ bool "text-textWeak hover:text-textStrong" "text-textBrand font-medium" isActive <> " text-xs py-2.5 max-md:px-2 px-3 cursor-pointer transition-colors", term "data-tippy-content" tooltip] $ toHtml lbl
-                tabBtn (target, lbl, isActive) = button_ [class_ $ "text-xs py-2.5 max-md:px-2 px-3 cursor-pointer err-tab font-medium" <> bool "" " t-tab-active" isActive, onclick_ $ "navigatable(this, '" <> target <> "', '#error-details-container', 't-tab-active', 'err')"] $ toHtml lbl
-            forM_ [(aUrl <> "?first_occurrence=true", isFirst, "Show first trace the error occured" :: Text, "First" :: Text), (aUrl, not isFirst, "Show recent trace the error occured" :: Text, "Recent" :: Text)] navLink
-            span_ [class_ "mx-3 w-px h-4 bg-strokeWeak max-md:mx-2"] pass
-            forM_ [("#span-content" :: Text, "Trace" :: Text, not isLogPatternIssue), ("#log-content" :: Text, "Logs" :: Text, isLogPatternIssue)] tabBtn
-        div_ [class_ "max-md:p-1 p-2 w-full overflow-x-hidden investigation-content"] do
-          div_ [class_ $ bool "" "hidden " isLogPatternIssue <> "flex flex-col lg:flex-row w-full err-tab-content", id_ "span-content"] do
-            div_ [id_ "trace_container", class_ "grow-1 lg:max-w-[80%] lg:w-1/2 lg:min-w-[20%] shrink-1"]
-              $ maybe
-                ( div_ [class_ "flex items-center justify-center h-48"]
-                    $ emptyState_ def{icon = Just "inbox-full", size = ESCompact} "No trace data available for this issue." ""
-                )
-                (\t -> tracePage pid t spanRecs)
-                tr
+      -- Escape closes the open span panel before it exits fullscreen — the panel's close
+      -- button advertises "Close · Esc", and the same precedence as the log explorer's shell.
+      div_
+        [ class_ "surface-raised rounded-2xl overflow-hidden group/inv"
+        , id_ "error-details-container"
+        , makeAttribute "tabindex" "-1"
+        , -- `the first <…/> exists`, not a bare `<…/>`: a query literal evaluates to a lazy
+          -- query object that is truthy even when it matches nothing, so `if <sel/>` never
+          -- falls through to the fullscreen branch.
+          [__|on keydown[key is 'Escape'] from window
+                if the first <#trace_details_container.open/> exists
+                  call window.closeTraceDetails(#trace_details_container)
+                otherwise if I match .investigation-fullscreen
+                  remove .investigation-fullscreen from me then call window.scrollTo({top:0})
+                end|]
+        ]
+        do
+          div_ [class_ "max-md:px-3 px-4 border-b border-strokeWeak flex max-md:flex-col md:items-center md:justify-between"] do
+            div_ [class_ "flex items-center gap-2 max-md:py-1.5"] do
+              faSprite_ "magnifying-glass-chart" "regular" "w-3.5 h-3.5 text-textWeak"
+              h3_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Investigation"
+            div_ [class_ "flex items-center max-md:overflow-x-auto max-md:-mx-4 max-md:px-4 max-md:pb-1.5"] do
+              let aUrl = "/p/" <> pid.toText <> "/issues/" <> issueId
+                  navLink (href, isActive, tooltip, lbl) = a_ [href_ href, class_ $ bool "text-textWeak hover:text-textStrong" "text-textBrand font-medium" isActive <> " text-xs py-2.5 max-md:px-2 px-3 cursor-pointer transition-colors", term "data-tippy-content" tooltip] $ toHtml lbl
+                  tabBtn (target, lbl, isActive) = button_ [class_ $ "text-xs py-2.5 max-md:px-2 px-3 cursor-pointer err-tab font-medium" <> bool "" " t-tab-active" isActive, onclick_ $ "navigatable(this, '" <> target <> "', '#error-details-container', 't-tab-active', 'err')"] $ toHtml lbl
+              forM_ [(aUrl <> "?first_occurrence=true", isFirst, "Show first trace the error occured" :: Text, "First" :: Text), (aUrl, not isFirst, "Show recent trace the error occured" :: Text, "Recent" :: Text)] navLink
+              span_ [class_ "mx-3 w-px h-4 bg-strokeWeak max-md:mx-2"] pass
+              forM_ [("#span-content" :: Text, "Trace" :: Text, not isLogPatternIssue), ("#log-content" :: Text, "Logs" :: Text, isLogPatternIssue)] tabBtn
+              span_ [class_ "mx-2 w-px h-4 bg-strokeWeak max-md:mx-1"] pass
+              -- Icon state is CSS-driven off the container's fullscreen class; the click handler only toggles it.
+              button_ [class_ "p-1.5 rounded hover:bg-fillWeaker cursor-pointer transition-colors max-md:hidden", Aria.label_ "Toggle fullscreen", term "data-tippy-content" "Expand · Esc to exit", [__|on click toggle .investigation-fullscreen on #error-details-container then call window.scrollTo({top:0})|]] do
+                faSprite_ "expand" "regular" "w-3 h-3 text-textWeak group-[.investigation-fullscreen]/inv:hidden"
+                faSprite_ "compress" "regular" "w-3 h-3 text-textWeak hidden group-[.investigation-fullscreen]/inv:block"
+          div_ [class_ "max-md:p-1 p-2 w-full overflow-x-hidden investigation-content"] do
+            -- The trace ships its own details panel (#trace_details_container), so this tab renders
+            -- no second one — clicking a span replaces the open panel instead of stacking another.
+            div_ [class_ $ bool "" "hidden " isLogPatternIssue <> "w-full lg:h-[70vh] err-tab-content", id_ "span-content"] do
+              div_ [id_ "trace_container", class_ "w-full h-full min-w-0"]
+                $ maybe
+                  ( div_ [class_ "flex items-center justify-center h-48"]
+                      $ emptyState_ def{icon = Just "inbox-full", size = ESCompact} "No trace data available for this issue." ""
+                  )
+                  (\t -> tracePage pid t spanRecs)
+                  tr
+              whenJust (spanRecs V.!? 0) \sr ->
+                -- Desktop only: on mobile the trace panel is a full-screen overlay, so
+                -- auto-opening it would bury the page behind span details on load.
+                -- `load`, not `intersect`: this marker sits below the full-height trace pane, so it
+                -- never enters the viewport and an intersect trigger would leave the panel empty.
+                div_ (spanDetailAttrs_ pid.toText sr.uSpanId sr.timestamp <> [hxTrigger_ "load[window.innerWidth>=768]", term "hx-sync" "this:replace"]) pass
+
+          div_ [id_ "log-content", class_ $ bool "hidden " "" isLogPatternIssue <> "err-tab-content flex flex-col lg:flex-row w-full lg:h-[70vh]"] do
+            let logsTraceId = fromMaybe "" $ asum [errM >>= (.base.recentTraceId), (.traceId) <$> tr]
+                logsQuery = case Issues.hashPrefix issue.issueType of
+                  Just prefix | isLogPatternIssue -> "hashes[*]==\"" <> prefix <> issue.targetHash <> "\""
+                  _ -> "kind==\"log\" AND context___trace_id==\"" <> logsTraceId <> "\""
+            let timeParams = mconcat ["&" <> key <> "=" <> toUriStr v | (key, Just v) <- [("since", tp.since), ("from", tp.from), ("to", tp.to)], not (T.null v)]
+            div_ [class_ "grow-1 min-w-0 h-full"]
+              $ virtualTable pid (Just ("/p/" <> pid.toText <> "/log_explorer/data?json=true&query=" <> toUriStr logsQuery <> timeParams)) Nothing
             div_ [class_ "transition-opacity duration-200 mx-1 hidden lg:block", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
             div_
-              [ class_ "grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden max-h-[500px] lg:w-1/2 w-c-scroll overflow-y-auto investigation-details"
+              [ class_ "details-panel grow-0 relative shrink-0 h-full overflow-y-auto overflow-x-hidden c-scroll lg:w-1/2 investigation-details"
               , id_ "log_details_container"
-              , term "hx-on::after-swap" "if(window.innerWidth<1024)this.scrollIntoView({behavior:'smooth',block:'start'})"
               , [__|on closeDetailPanel
-                  set my *width to '0px'
-                  remove .bg-fillBrand-strong from <.item-row.bg-fillBrand-strong/>
-                  add .opacity-0 .pointer-events-none to #resizer-details_width-wrapper
-                  call updateUrlState('details_width', '', 'delete')
-                end
-                on htmx:afterSwap if event.target is me
-                  set my *width to ''
-                  remove .opacity-0 .pointer-events-none from #resizer-details_width-wrapper
-                end|]
+                set my *width to '0px'
+                remove .bg-fillBrand-strong from <.item-row.bg-fillBrand-strong/>
+                add .opacity-0 .pointer-events-none to #resizer-details_width-wrapper
+                call updateUrlState('details_width', '', 'delete')
+              end
+              on htmx:afterSwap if event.target is me
+                set my *width to ''
+                remove .opacity-0 .pointer-events-none from #resizer-details_width-wrapper
+                if window.innerWidth < 1024 call me.scrollIntoView({behavior:'smooth', block:'start'}) end
+              end|]
               ]
-              do
-                htmxOverlayIndicator_ "details_indicator"
-                whenJust (spanRecs V.!? 0) \sr ->
-                  div_ [hxGet_ $ "/p/" <> pid.toText <> "/log_explorer/" <> sr.uSpanId <> "/" <> formatUTC sr.timestamp <> "/detailed", hxTarget_ "#log_details_container", hxSwap_ "innerHtml", hxTrigger_ "intersect once", hxIndicator_ "#details_indicator", term "hx-sync" "this:replace"] pass
-
-        div_ [id_ "log-content", class_ $ bool "hidden " "" isLogPatternIssue <> "err-tab-content"] do
-          let logsTraceId = fromMaybe "" $ asum [errM >>= (.base.recentTraceId), (.traceId) <$> tr]
-              logsQuery = case Issues.hashPrefix issue.issueType of
-                Just prefix | isLogPatternIssue -> "hashes[*]==\"" <> prefix <> issue.targetHash <> "\""
-                _ -> "kind==\"log\" AND context___trace_id==\"" <> logsTraceId <> "\""
-          let timeParams = mconcat ["&" <> key <> "=" <> toUriStr v | (key, Just v) <- [("since", tp.since), ("from", tp.from), ("to", tp.to)], not (T.null v)]
-          virtualTable pid (Just ("/p/" <> pid.toText <> "/log_explorer/data?json=true&query=" <> toUriStr logsQuery <> timeParams)) Nothing
+              $ htmxOverlayIndicator_ "details_indicator"
 
       let withSessionIds = V.mapMaybe (\sr -> (`lookupValueText` "id") =<< Map.lookup "session" =<< sr.attributes) spanRecs
       unless (V.null withSessionIds) $ div_ [class_ "surface-raised rounded-2xl overflow-hidden", id_ "replay-section"] do
@@ -1710,7 +1733,7 @@ issueToggleButton_ pid aid active icon labels actions paths offCls onCls = do
     [ class_ $ "btn btn-sm gap-1.5 " <> bool offCls onCls active
     , term "data-tippy-content" $ T.toLower (pick actions) <> " issue"
     , Aria.label_ $ pick actions <> " issue"
-    , term "preload" "false"
+    , term "hx-preload" "false"
     , hxGet_ $ "/p/" <> pid.toText <> "/issues/" <> Issues.issueIdText aid <> pick paths
     , hxSwap_ "outerHTML"
     ]

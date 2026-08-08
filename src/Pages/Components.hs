@@ -489,8 +489,8 @@ tabPanel_ visCls elemId = div_ [class_ $ "hidden " <> visCls, id_ elemId]
 
 -- A tab content panel holding a JSON tree; the common shape behind most tab bodies. @visCls@
 -- is the literal group-has class — see 'tabPanel_'.
-jsonTab_ :: Text -> Text -> Text -> AE.Value -> Maybe Text -> Html ()
-jsonTab_ visCls elemId name val filt = tabPanel_ visCls elemId $ jsonValueToHtmlTree name val filt
+jsonTab_ :: Text -> Text -> AE.Value -> Maybe Text -> Html ()
+jsonTab_ visCls elemId val filt = tabPanel_ visCls elemId $ jsonValueToHtmlTree val filt
 
 
 drawerLoadingSkeleton_ :: Html ()

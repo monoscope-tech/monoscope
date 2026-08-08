@@ -62,17 +62,17 @@ kill-live-reload:
 	fi
 
 live-reload: kill-live-reload
-	ghcid --command 'cabal repl monoscope --no-semaphore --ghc-options="-j$(NCPUS) -Wno-error=unused-imports -Wno-error=unused-top-binds" --with-compiler=$(GHC)' --test ':run Start.startApp' $(RELOAD_ASSETS) $(RELOAD_ENV) --warnings
+	ghcid --command 'cabal repl monoscope --no-semaphore --ghc-options="-j$(NCPUS) -O0 -Wno-error=unused-imports -Wno-error=unused-top-binds" --with-compiler=$(GHC)' --test ':run Start.startApp' $(RELOAD_ASSETS) $(RELOAD_ENV) --warnings
 
 # The CLI is its own package with no libpq/librdkafka/grpc linkage — see
 # cli/monoscope-cli.cabal. Build it on its own; it does not need the server
 # library, the frontend assets or a database.
-# NB: no --ghc-options here. monoscope-shared is shared with the ghcid session
-# in `make live-reload`; building it at a different optimisation level swaps the
-# dylib under GHCi and the next reload dies with "symbol not found in flat
-# namespace".
+# NB: -O0 here must match live-reload and live-test-dev. monoscope-shared is
+# shared with those ghcid sessions; building it at a different optimisation level
+# swaps the dylib under GHCi and the next reload dies with "symbol not found in
+# flat namespace".
 cli-build:
-	cabal build monoscope-cli:exe:monoscope
+	cabal build monoscope-cli:exe:monoscope --ghc-options="-O0"
 
 # Release-shaped build: optimised, section-split, stripped, and checked for
 # native-library linkage the way cli-release.yml does it.

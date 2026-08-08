@@ -670,8 +670,10 @@ spec = around withTestResources do
         TelemetryPage.SpanDetails _ _ _ -> expectationFailure "expected trace details, got span details"
         TelemetryPage.TraceDetailsNotFound _ -> expectationFailure "expected TimeFusion trace details"
       let initialHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml item
-      initialHtml `shouldSatisfy` T.isInfixOf "trace-details-content"
-      initialHtml `shouldNotSatisfy` T.isInfixOf "m-raw-content"
+      -- All tab panels render in the one response; switching is pure CSS
+      -- (checked radio + group-has), so no per-tab hx-get round trips.
+      initialHtml `shouldSatisfy` T.isInfixOf "m-raw-content"
+      initialHtml `shouldNotSatisfy` T.isInfixOf "/detailed?tab="
 
       let expectNotFound store item' = case item' of
             LogItem.ItemDetailedNotFound _ -> pass
@@ -719,6 +721,12 @@ spec = around withTestResources do
       assertAnchored rootItem
       let rootHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml rootItem
       rootHtml `shouldSatisfy` T.isInfixOf "apple"
+      -- Copy-as-curl is assembled server-side from the HTTP attributes.
+      rootHtml `shouldSatisfy` T.isInfixOf "curl -X GET"
+
+      -- An unknown ?tab= deep link clamps to a real tab (a checked radio must exist).
+      (_, bogusTab) <- testServant tr $ LogItem.expandAPIlogItemH testPid rootId rootTs Nothing (Just "tab-nonexistent")
+      LT.toStrict (Lucid.renderText (Lucid.toHtml bogusTab)) `shouldSatisfy` T.isInfixOf "checked"
 
       -- Clicking the SDK span: panel anchors on the parent request, bodies intact.
       (_, sdkItem) <- testServant tr $ LogItem.expandAPIlogItemH testPid sdkId sdkTs Nothing (Just "tab-req")

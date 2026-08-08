@@ -1,9 +1,12 @@
 module Pages.Bots.AgenticSpec (spec) where
 
+import Control.Lens ((^?))
 import Data.Aeson qualified as AE
+import Data.Aeson.Lens (key, _Array)
 import Data.Default (def)
 import Data.Text qualified as T
 import Effectful qualified as Eff
+import Effectful.Time qualified as Time
 import Pages.Bots.BotTestHelpers (assertJsonGolden, getOpenAIKey, getOpenAIModel)
 import Pages.Bots.SeedTestData (cleanupTelemetryData, seedTelemetryData)
 import Pages.Bots.Utils (processAIQuery)
@@ -72,6 +75,14 @@ spec = around withTestResources do
             isJust parsed.explanation `shouldBe` True
             null parsed.widgets `shouldBe` True
           Left err -> expectationFailure $ "Parse failed: " <> toString err
+
+      -- gpt-5.6-luna rejects function tools + reasoning_effort on /v1/chat/completions (400);
+      -- tool-bearing params must downgrade a configured effort to "none"
+      it "agenticSetup_toolsWithEffort_sendsEffortNone" \_ -> do
+        (_, _, params) <- Eff.runEff $ Time.runTime $ AI.agenticSetup (AI.defaultAgenticConfig testPid) "any query" "gpt-5.6-luna#high"
+        let body = AE.toJSON params
+        isJust (body ^? key "tools" . _Array) `shouldBe` True
+        (body ^? key "reasoning_effort") `shouldBe` Just (AE.String "none")
 
     describe "Live API calls (uses golden files)" do
       it "processes error trend query and saves golden response" \tr -> do

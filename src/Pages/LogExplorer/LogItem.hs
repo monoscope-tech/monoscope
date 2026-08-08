@@ -13,6 +13,7 @@ module Pages.LogExplorer.LogItem (
 
 import Control.Lens (filtered, has, (^..), (^?), _Just)
 import Data.Aeson qualified as AE
+import Data.Aeson.Key qualified as AEKey
 import Data.Aeson.KeyMap qualified as KEM
 import Data.Aeson.Lens (key, _Array, _String)
 import Data.Default (def)
@@ -133,10 +134,11 @@ data ApiItemDetailed
   | ItemDetailedNotFound Text
 
 
--- | Dismissing the panel: the trace overlay owns it via the global handler, the log-explorer
--- shell via the event contract — both are wired on every close affordance.
+-- | Dismissing the panel: every close affordance sends @closeDetailPanel@ to the
+-- enclosing @.details-panel@; each shell (log-explorer, anomalies, trace view) owns
+-- its handler on that container.
 closeDetailAttrs :: [Attribute]
-closeDetailAttrs = [onclick_ "window.closeTraceDetails(this)", [__|on click send closeDetailPanel to closest <.details-panel/>|]]
+closeDetailAttrs = [[__|on click send closeDetailPanel to closest <.details-panel/>|]]
 
 
 instance ToHtml ApiItemDetailed where
@@ -154,19 +156,22 @@ instance ToHtml ApiItemDetailed where
   toHtmlRaw = toHtml
 
 
+-- | Filterable pill for one field: @val@ is the raw field value (the badge owns
+-- the \"label: value\" display), so the filter menu's data-field-value never has
+-- to be re-parsed out of display text.
 spanBadge :: Projects.ProjectId -> Text -> Text -> Text -> Html ()
-spanBadge pid path val fieldKey =
+spanBadge pid path val label =
   div_
     [ class_ "relative min-w-0"
     , term "data-field-path" path
-    , term "data-field-value" $ "\"" <> T.strip (T.takeWhileEnd (/= ':') val) <> "\""
+    , term "data-field-value" $ "\"" <> val <> "\""
     ]
     $ button_
       [ class_ "relative cursor-pointer flex gap-2 items-center text-textStrong bg-fillWeaker border border-strokeWeak text-xs rounded-lg whitespace-nowrap px-2 py-1 max-w-64"
-      , term "data-tippy-content" $ fieldKey <> ": " <> val
+      , term "data-tippy-content" $ label <> ": " <> val
       , [__|install LogItemMenuable|]
       ]
-      (span_ [class_ "truncate"] $ toHtml val)
+      (span_ [class_ "truncate"] $ toHtml $ label <> ": " <> val)
 
 
 -- | One detail tab. @panel@ carries its own literal @group-has-[.MARKER:checked]/dtab:block@
@@ -192,9 +197,9 @@ expandedItemView pid item aptSp selectedTabM = do
       dateTime (if isLog then item.timestamp else item.start_time) Nothing
       div_ [class_ "flex gap-1 items-center"] do
         button_
-          [ class_ "fs-details-toggle cursor-pointer rounded-md p-1 hover:bg-fillWeak transition-colors hidden md:[#apiLogsPage_&]:block [#trace_details_container_&]:hidden!"
+          [ class_ "fs-details-toggle cursor-pointer rounded-md p-1 hover:bg-fillWeak transition-colors hidden md:[#apiLogsPage_&]:block [#trace_details_container_&]:hidden! tooltip tooltip-bottom"
           , Aria.label_ "Toggle fullscreen"
-          , term "data-tippy-content" "Expand panel"
+          , data_ "tip" "Expand panel"
           , term "data-share-hide" "1"
           , [__|on click send toggleFullscreen(mode: 'details') to #apiLogsPage|]
           ]
@@ -202,9 +207,9 @@ expandedItemView pid item aptSp selectedTabM = do
             faSprite_ "expand" "regular" "w-3.5 h-3.5 text-iconNeutral [#apiLogsPage[data-fullscreen=details]_&]:hidden!"
             faSprite_ "compress" "regular" "hidden! w-3.5 h-3.5 text-iconNeutral [#apiLogsPage[data-fullscreen=details]_&]:block!"
         button_
-          ( [ class_ "cursor-pointer detail-close-btn rounded-md p-1 hover:bg-fillWeak transition-colors"
+          ( [ class_ "cursor-pointer detail-close-btn rounded-md p-1 hover:bg-fillWeak transition-colors tooltip tooltip-left"
             , Aria.label_ "Close item details"
-            , term "data-tippy-content" "Close · Esc"
+            , data_ "tip" "Close · Esc"
             ]
               <> closeDetailAttrs
           )
@@ -216,23 +221,56 @@ expandedItemView pid item aptSp selectedTabM = do
     headerBlock
     div_ [class_ "w-full mt-3 group/dtab"] do
       div_ [class_ "flex", [__|on click halt the event's bubbling|]] do
-        traverse_ lazyDetailTab_ tabs
+        traverse_ detailTabRadio_ tabs
         div_ [class_ "w-full border-b-2 border-b-strokeWeak"] pass
-      div_ [class_ "mt-2 py-1 text-textWeak", id_ "trace-details-content"] $ traverse_ (.panel) activeTabs
+      -- All panels render once; the checked radio + group-has classes pick the
+      -- visible one, so tab switches are pure CSS (no round trip, no re-query).
+      div_ [class_ "mt-2 py-1 text-textWeak"] $ traverse_ (.panel) tabs
   where
     isLog = item.kind == Just "log"
     isAlert = item.kind == Just "alert"
     isHttp = not isLog && isHttpSpan item
     createdAt = formatUTC item.timestamp
+    pidTxt = pid.toText
     dgrp = "dtab-" <> item.id
-    detailUrl = "/p/" <> pid.toText <> "/log_explorer/" <> item.id <> "/" <> createdAt <> "/detailed"
-    activeMarker = fromMaybe (case tabs of [] -> "tab-raw"; t : _ -> t.marker) selectedTabM
-    activeTabs = filter ((== activeMarker) . (.marker)) tabs
-    lazyDetailTab_ t = label_ [class_ $ "cursor-pointer border-b-2 border-b-strokeWeak px-4 py-1.5 text-sm has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-strokeBrand-strong has-[:focus-visible]:rounded-sm has-[:checked]:font-bold has-[:checked]:border-strokeBrand-strong has-[:checked]:text-textBrand " <> t.cls] do
-      input_ $ [type_ "radio", name_ dgrp, class_ $ "sr-only " <> t.marker, hxGet_ (detailUrl <> "?tab=" <> t.marker), hxTarget_ "#trace-details-content", hxSelect_ "#trace-details-content", hxSwap_ "outerHTML", hxTrigger_ "change"] <> [checked_ | t.marker == activeMarker]
+    -- Clamp the ?tab= deep link to a marker that actually exists — an unknown
+    -- value would check no radio and leave every panel hidden.
+    firstMarker = case tabs of [] -> "tab-raw"; t : _ -> t.marker
+    activeMarker = maybe firstMarker (.marker) $ selectedTabM >>= \s -> find ((== s) . (.marker)) tabs
+    detailTabRadio_ t = label_ [class_ $ "cursor-pointer border-b-2 border-b-strokeWeak px-4 py-1.5 text-sm has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-strokeBrand-strong has-[:focus-visible]:rounded-sm has-[:checked]:font-bold has-[:checked]:border-strokeBrand-strong has-[:checked]:text-textBrand " <> t.cls] do
+      input_ $ [type_ "radio", name_ dgrp, class_ $ "sr-only " <> t.marker] <> [checked_ | t.marker == activeMarker]
       t.label
     events = fromMaybe AE.Null (unAesonTextMaybe item.events)
     spanErrors = if isLog then [] else getSpanErrors events
+
+    -- Best-effort curl reconstruction from the span's HTTP attributes and any
+    -- captured request body (SDK-span fallback included via aptSp).
+    curlCommand =
+      let cSp = fromMaybe item aptSp
+          attrsM = unAesonTextMaybe cSp.attributes
+          att k = atMapText k attrsM >>= guarded (not . T.null)
+          method = fromMaybe "GET" (att "http.request.method")
+          path = maybe "/" (\(_, _, u, _) -> u) (getRequestDetails attrsM)
+          host = asum (map att ["server.address", "http.host", "net.host.name"])
+          target = fromMaybe path $ att "url.full" <|> ((\h -> "https://" <> h <> path) <$> host)
+          hdrVal = \case
+            AE.String s -> s
+            AE.Array xs -> T.intercalate ", " [s | AE.String s <- toList xs]
+            v -> decodeUtf8 (AE.encode v)
+          headers = case attrsM >>= Map.lookup "http" >>= (^? key "request" . key "header") of
+            Just (AE.Object km) -> [(AEKey.toText k, hdrVal v) | (k, v) <- KEM.toList km]
+            _ -> []
+          bodyTxtM = case unAesonTextMaybe cSp.body >>= (^? key "request_body") of
+            Just (AE.String s) -> guarded (not . T.null) s
+            Just v | v /= AE.Null -> Just (decodeUtf8 (AE.encode v))
+            _ -> Nothing
+          esc = T.replace "'" "'\\''"
+       in T.intercalate
+            " \\\n  "
+            ( ["curl -X " <> method <> " '" <> esc target <> "'"]
+                <> ["-H '" <> esc (k <> ": " <> v) <> "'" | (k, v) <- headers]
+                <> ["-d '" <> esc b <> "'" | b <- maybeToList bodyTxtM]
+            )
 
     -- Summary pills (or alert title) + timestamp + close, then the span-id pill and action row.
     headerBlock = div_ [class_ "detail-header-block flex flex-col gap-1.5 bg-fillWeaker py-2.5 px-3"] do
@@ -243,28 +281,29 @@ expandedItemView pid item aptSp selectedTabM = do
         else div_ [class_ "min-w-0"] $ renderSummaryElements (summaryForDetailView (Telemetry.generateSummary item))
       -- span_id isn't carried by generateSummary; keep one pill so its filter-menu stays reachable.
       whenJust (item.context >>= (.span_id) >>= guarded (not . T.null)) \v ->
-        div_ [class_ "flex gap-2 flex-wrap min-w-0"] $ spanBadge pid "context.span_id" ("Span ID: " <> v) "Span ID"
+        div_ [class_ "flex gap-2 flex-wrap min-w-0"] $ spanBadge pid "context.span_id" v "Span ID"
       div_ [class_ "flex flex-wrap gap-2 items-center"] actionRow
 
     actionBtnBody :: Text -> Text -> Html ()
     actionBtnBody icon lbl = faSprite_ icon "regular" "w-3 h-3" >> toHtml lbl
 
     actionRow = do
-      when isHttp
-        $ button_ [class_ "action-btn", onclick_ "window.buildCurlRequest(event)", term "data-reqjson" (decodeUtf8 $ AE.encode item)]
-        $ actionBtnBody "copy" "Copy as curl"
+      when isHttp do
+        -- Curl text is assembled server-side (attrs + captured bodies are already
+        -- in hand); the button only copies it, via the shared Copy behavior.
+        let curlCls = "curl-cmd-" <> item.id
+        button_ [class_ "action-btn", term "_" [text|install Copy(content:.${curlCls})|]] $ actionBtnBody "copy" "Copy as curl"
+        pre_ [class_ $ curlCls <> " hidden"] $ toHtml curlCommand
       whenJust (item.context >>= (.trace_id) >>= guarded (not . T.null)) \trId ->
+        -- The trace overlay's loadTrace handler owns skeleton, fetch, and fullscreen
+        -- (see apiLogsPage.traceOverlay); this button only sends the event + URL state.
         button_
           [ class_ "action-btn"
           , term "data-share-hide" "1"
-          , hxGet_ $ "/p/" <> pid.toText <> "/traces/" <> trId <> "/?timestamp=" <> createdAt
-          , hxTarget_ "#trace_expanded_view"
-          , hxSwap_ "innerHTML"
-          , term "hx-on::after-swap" "window.evalScriptsFromContent(htmx.find('#trace_expanded_view'))"
           , term
               "_"
-              [text|on click remove .hidden from #trace_expanded_view
-                     then call updateUrlState('showTrace', "$trId/?timestamp=$createdAt")|]
+              [text|on click send loadTrace(url: '/p/${pidTxt}/traces/${trId}/?timestamp=${createdAt}') to #trace_expanded_view
+                     then call updateUrlState('showTrace', "${trId}/?timestamp=${createdAt}")|]
           ]
           (actionBtnBody "cross-hair" "View trace")
       when isAlert
@@ -281,7 +320,7 @@ expandedItemView pid item aptSp selectedTabM = do
             "tab-body"
             ""
             "Body"
-            (whenJust item.body \b -> jsonTab_ "group-has-[.tab-body:checked]/dtab:block" "body-content" "body" (AE.toJSON b) Nothing)
+            (whenJust item.body \b -> jsonTab_ "group-has-[.tab-body:checked]/dtab:block" "body-content" (AE.toJSON b) Nothing)
         , tab isHttp "tab-req" "" "Request" reqPanel
         , tab (not isAlert) "tab-att" "" "Attributes" attPanel
         , tab
@@ -289,7 +328,7 @@ expandedItemView pid item aptSp selectedTabM = do
             "tab-meta"
             ""
             "Process"
-            (jsonTab_ "group-has-[.tab-meta:checked]/dtab:block" "meta-content" "meta" (maybe (AE.object []) (AE.Object . KEM.fromMapText) (unAesonTextMaybe item.resource)) (Just "resource"))
+            (jsonTab_ "group-has-[.tab-meta:checked]/dtab:block" "meta-content" (maybe (AE.object []) (AE.Object . KEM.fromMapText) (unAesonTextMaybe item.resource)) (Just "resource"))
         , tab
             (not isLog && not (null spanErrors))
             "tab-errors"
@@ -301,14 +340,14 @@ expandedItemView pid item aptSp selectedTabM = do
             "tab-logs"
             "flex items-center gap-1"
             (badge "Logs" "badge badge-ghost badge-sm" (maybe 0 length (events ^? _Array)))
-            (jsonTab_ "group-has-[.tab-logs:checked]/dtab:block" "logs-content" "events" events Nothing)
-        , tab True "tab-raw" "whitespace-nowrap" "Raw data" (jsonTab_ "group-has-[.tab-raw:checked]/dtab:block" "m-raw-content" "raw" (AE.toJSON item) Nothing)
+            (jsonTab_ "group-has-[.tab-logs:checked]/dtab:block" "logs-content" events Nothing)
+        , tab True "tab-raw" "whitespace-nowrap" "Raw data" (jsonTab_ "group-has-[.tab-raw:checked]/dtab:block" "m-raw-content" (AE.toJSON item) Nothing)
         ]
       where
         tab shown m c l p = DetailTab m c l p <$ guard shown
         badge l c n = toHtml @Text l >> div_ [class_ c] (show n)
         attPanel = tabPanel_ "group-has-[.tab-att:checked]/dtab:block" "att-content" $ case unAesonTextMaybe item.attributes of
-          Just m | not (null m) -> jsonValueToHtmlTree "att" (AE.Object $ KEM.fromMapText m) $ Just "attributes"
+          Just m | not (null m) -> jsonValueToHtmlTree (AE.Object $ KEM.fromMapText m) $ Just "attributes"
           _ -> div_ [class_ "text-sm text-textWeak italic py-4"] "No custom attributes on this entry"
         reqPanel = tabPanel_ "group-has-[.tab-req:checked]/dtab:block" "request-content" $ div_ [id_ "http-content-container", class_ "group/htab flex flex-col gap-3 mt-2"] do
           let cSp = fromMaybe item aptSp
@@ -334,15 +373,15 @@ expandedItemView pid item aptSp selectedTabM = do
               httpTab_ ("htab-" <> item.id) m (m == defaultTab) l
           div_ []
             $ forM_
-              ( [ ("group-has-[.htab-raw:checked]/htab:block", "raw_content", "reqdetails", AE.toJSON cSp, Nothing)
-                , ("group-has-[.htab-req:checked]/htab:block", "req_content", "reqbody", bodyField "request_body", Just "body.request_body")
-                , ("group-has-[.htab-res:checked]/htab:block", "res_content", "resbody", bodyField "response_body", Just "body.response_body")
-                , ("group-has-[.htab-hed:checked]/htab:block", "hed_content", "headers", AE.object ["request_headers" AE..= hp ["request", "header"], "response_headers" AE..= hp ["response", "header"]], Nothing)
-                , ("group-has-[.htab-par:checked]/htab:block", "par_content", "params", AE.object ["query_params" AE..= hp ["request", "query_params"], "path_params" AE..= hp ["request", "path_params"]], Nothing)
+              ( [ ("group-has-[.htab-raw:checked]/htab:block", "raw_content", AE.toJSON cSp, Nothing)
+                , ("group-has-[.htab-req:checked]/htab:block", "req_content", bodyField "request_body", Just "body.request_body")
+                , ("group-has-[.htab-res:checked]/htab:block", "res_content", bodyField "response_body", Just "body.response_body")
+                , ("group-has-[.htab-hed:checked]/htab:block", "hed_content", AE.object ["request_headers" AE..= hp ["request", "header"], "response_headers" AE..= hp ["response", "header"]], Nothing)
+                , ("group-has-[.htab-par:checked]/htab:block", "par_content", AE.object ["query_params" AE..= hp ["request", "query_params"], "path_params" AE..= hp ["request", "path_params"]], Nothing)
                 ]
-                  :: [(Text, Text, Text, AE.Value, Maybe Text)]
+                  :: [(Text, Text, AE.Value, Maybe Text)]
               )
-              \(visCls, eid, nm, val, filt) -> jsonTab_ visCls eid nm val filt
+              \(visCls, eid, val, filt) -> jsonTab_ visCls eid val filt
 
 
 renderErrors :: [AE.Value] -> Html ()

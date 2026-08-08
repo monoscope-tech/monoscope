@@ -218,14 +218,19 @@ bodyWrapper bcfg child = do
 
       mapM_
         deferScript
-        [ "https://cdn.jsdelivr.net/npm/htmx.org@2.0.8/dist/htmx.min.js"
+        [ $(hashAssetFile "/public/assets/deps/htmx/htmx-4.0.0-beta6.min.js")
+        , -- Must load immediately after htmx: restores implicit attribute inheritance
+          -- (v4 requires `:inherited` otherwise), 4xx/5xx no-swap, and the htmx 2 event
+          -- names (htmx:afterSwap, htmx:configRequest, ...) this app is written against.
+          $(hashAssetFile "/public/assets/deps/htmx/htmx-2-compat.js")
+        , $(hashAssetFile "/public/assets/deps/htmx/hx-preload-4.js")
         , $(hashAssetFile "/public/assets/js/main.js")
-        , $(hashAssetFile "/public/assets/deps/htmx/multi-swap.js")
-        , $(hashAssetFile "/public/assets/deps/htmx/preload.js")
-        , $(hashAssetFile "/public/assets/deps/htmx/json-enc-2.js")
-        , $(hashAssetFile "/public/assets/deps/htmx/response-targets.js")
-        , $(hashAssetFile "/public/assets/deps/htmx/idiomorph-ext.min.js")
-        , $(hashAssetFile "/public/assets/js/thirdparty/_hyperscript_web0_9_93.min.js")
+        , -- Dropped with the htmx 4 upgrade: multi-swap and response-targets had no
+          -- users (no `multi:` swaps, no hx-target-4xx/5xx) and no v4 port; idiomorph
+          -- is superseded by built-in outerMorph; preload.js and json-enc-2.js call the
+          -- removed htmx.defineExtension (v4 preload ships above; json-enc and
+          -- forward-page-params are re-registered in main.ts via registerExtension).
+          $(hashAssetFile "/public/assets/js/thirdparty/_hyperscript_web0_9_93.min.js")
         , $(hashAssetFile "/public/assets/deps/tagify/tagify.min.js")
         , $(hashAssetFile "/public/assets/js/thirdparty/notyf3.min.js")
         ]
@@ -279,6 +284,25 @@ bodyWrapper bcfg child = do
               end
             end
           end
+          -- Delegated variant for JSON trees: ONE listener on the tree container serves every
+          -- field row (a per-leaf menu/listener froze the browser once enough detail panels
+          -- had been opened). Clones the same #log-item-context-menu-tmpl into the clicked
+          -- .log-item-field-parent, whose data-field-path/value the menu items read via closest.
+          behavior FieldMenuDelegate
+            on click
+              set anchor to event.target.closest('.log-item-field-parent')
+              if no anchor or anchor matches .with-context-menu then
+                remove <.log-item-cloned-menu /> then remove .with-context-menu from <.with-context-menu />
+                exit
+              end
+              remove <.log-item-cloned-menu /> then remove .with-context-menu from <.with-context-menu /> then
+              get #log-item-context-menu-tmpl.innerHTML then put it at the end of anchor then add .with-context-menu to anchor then
+              set menu to anchor.querySelector('.log-item-cloned-menu') then
+              call _hyperscript.processNode(menu) then call htmx.process(menu) then
+              for el in <.ctx-key/> in menu set el's textContent to (anchor's @data-field-path or 'field') end then
+              for el in <.ctx-val/> in menu set el's textContent to (anchor's @data-field-value or 'value') end
+            end
+          end
           behavior Copy(content)
                on click if 'clipboard' in window.navigator then
                     call navigator.clipboard.writeText(content's innerText)
@@ -290,7 +314,7 @@ bodyWrapper bcfg child = do
             end
     |]
 
-    body_ [class_ "h-full w-full bg-bgBase text-textStrong group/pg", term "data-theme" (maybe "dark" (.theme) bcfg.sessM), term "hx-ext" "multi-swap,preload,response-targets,morph", term "preload" "mouseover"] do
+    body_ [class_ "h-full w-full bg-bgBase text-textStrong group/pg", term "data-theme" (maybe "dark" (.theme) bcfg.sessM), term "hx-preload" "mouseover"] do
       -- Skip to main content link for keyboard users (accessibility)
       a_ [class_ "sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100000] focus:bg-bgRaised focus:px-4 focus:py-2 focus:rounded-lg focus:text-textBrand focus:shadow-lg focus:ring-2 focus:ring-strokeFocus", href_ "#main-content"] "Skip to main content"
       -- ARIA live region for toast announcements (screen reader accessibility)
@@ -636,7 +660,7 @@ navbar bcfg menuL =
         case bcfg.pageTitleSuffixModalId of
           Just modalId -> label_ [class_ "font-normal text-xl p-1 leading-none text-textWeak cursor-pointer hover:bg-fillWeak rounded-md", Lucid.for_ modalId, id_ "pageTitleSuffixText"] $ toHtml suffix
           Nothing -> span_ [class_ "font-normal text-xl p-1 leading-none text-textWeak", id_ "pageTitleSuffixText"] $ toHtml suffix
-      whenJust bcfg.docsLink \link -> a_ ([class_ "max-md:hidden text-iconBrand -mt-1", href_ link, term "preload" "false", target_ "_blank", rel_ "noopener", Aria.label_ "Open Documentation"] <> tippyRight_ "Open Documentation") $ faSprite_ "circle-question" "regular" "w-4 h-4"
+      whenJust bcfg.docsLink \link -> a_ ([class_ "max-md:hidden text-iconBrand -mt-1", href_ link, term "hx-preload" "false", target_ "_blank", rel_ "noopener", Aria.label_ "Open Documentation"] <> tippyRight_ "Open Documentation") $ faSprite_ "circle-question" "regular" "w-4 h-4"
     whenJust bcfg.navTabs $ div_ [class_ $ bool "" "max-md:order-last max-md:w-full max-md:pt-1" (isJust bcfg.pageActions)]
     div_ [class_ $ "flex-1 flex items-center justify-end gap-2 text-sm" <> bool " max-md:hidden" "" (isJust bcfg.pageActions)]
       $ fold bcfg.pageActions
@@ -688,7 +712,7 @@ loginBanner = do
 settingsWrapper :: Projects.ProjectId -> Text -> Html () -> Html ()
 settingsWrapper pid current pageHtml =
   section_ [class_ "flex max-md:flex-col h-full w-full"] do
-    nav_ [id_ "settings-nav", class_ "md:w-52 shrink-0 md:h-full max-md:px-3 max-md:py-2.5 p-4 md:pt-8 max-md:border-b max-md:border-b-strokeWeak md:border-r md:border-r-strokeWeak max-md:overflow-x-auto max-md:scrollbar-hide", term "preload" "mouseover"] do
+    nav_ [id_ "settings-nav", class_ "md:w-52 shrink-0 md:h-full max-md:px-3 max-md:py-2.5 p-4 md:pt-8 max-md:border-b max-md:border-b-strokeWeak md:border-r md:border-r-strokeWeak max-md:overflow-x-auto max-md:scrollbar-hide", term "hx-preload" "mouseover"] do
       h1_ [class_ "text-lg pl-3 font-semibold text-textStrong max-md:hidden"] "Settings"
       ul_ [class_ "flex max-md:flex-row max-md:flex-nowrap md:flex-col md:mt-4 gap-0.5 w-full [&_.settings-nav-link]:hover:bg-fillWeak [&_.settings-nav-link]:text-textWeak [&_.settings-nav-link.active]:bg-fillBrand-weak [&_.settings-nav-link.active]:text-textBrand [&_.settings-nav-link.active]:hover:bg-fillBrand-weak"] do
         li_ [class_ "md:hidden shrink-0"]
@@ -741,8 +765,8 @@ renderNavBottomItem curr (iconName, linkText, link) =
         , hxGet_ link
         , hxTarget_ settingsContentTarget
         , hxSelect_ settingsContentTarget
-        , term "hx-select-oob" "#settings-nav:morph"
-        , hxSwap_ "morph"
+        , term "hx-select-oob" "#settings-nav:outerMorph"
+        , hxSwap_ "outerMorph"
         , hxPushUrl_ "true"
         , hxIndicator_ ("#" <> settingsLoadingId)
         , [__|on click set my.preloadState to 'DONE'|]

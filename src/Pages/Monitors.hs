@@ -534,7 +534,7 @@ renderNameCol item = do
       si = statusInfo item.currentStatus
       isActive = item.status == "Active"
       inlineBtn tip icon hxAction extraAttrs =
-        button_ ([type_ "button", term "data-tippy-content" tip, class_ "cursor-pointer hover:text-textBrand transition-colors tap-target", hxSwap_ "none", hxAction] <> extraAttrs)
+        button_ ([type_ "button", data_ "tip" tip, class_ "cursor-pointer hover:text-textBrand transition-colors tap-target tooltip tooltip-top", hxSwap_ "none", hxAction] <> extraAttrs)
           $ faSprite_ icon "regular" "h-3.5 w-3.5"
       actionBtns = do
         inlineBtn (bool "Activate" "Deactivate" isActive) (bool "play" "pause" isActive) (hxPost_ $ alertBase <> "/toggle_active") []
@@ -546,12 +546,12 @@ renderNameCol item = do
         inlineBtn "Delete" "trash" (hxDelete_ alertBase) [hxConfirm_ "Are you sure you want to delete this monitor?"]
   div_ [class_ "flex flex-col gap-1 py-0.5"] do
     div_ [class_ "flex items-center gap-2"] do
-      span_ [class_ $ "inline-block w-2 h-2 rounded-full shrink-0 " <> si.dotColor <> bool "" " alert-dot" (item.currentStatus == Monitors.MSAlerting), term "data-tippy-content" $ bool "Inactive" "Active" isActive] ""
+      span_ [class_ $ "inline-block w-2 h-2 rounded-full shrink-0 tooltip tooltip-right " <> si.dotColor <> bool "" " alert-dot" (item.currentStatus == Monitors.MSAlerting), data_ "tip" $ bool "Inactive" "Active" isActive] ""
       a_ ([href_ $ base <> "/" <> item.monitorId <> "/overview", class_ "text-sm font-medium text-textStrong hover:text-textBrand transition-colors truncate"] <> navTabAttrs) $ toHtml $ bool item.title "(Untitled)" (T.null item.title)
       when (item.currentStatus /= Monitors.MSNormal) $ statusBadge_ False si.statusLabel
       whenJust item.mutedUntil \until' ->
         let muteLabel = mutedLabel item.now until'
-         in span_ [class_ "badge badge-sm badge-ghost gap-1 shrink-0", term "data-tippy-content" muteLabel] do
+         in span_ [class_ "badge badge-sm badge-ghost gap-1 shrink-0 tooltip tooltip-top", data_ "tip" muteLabel] do
               faSprite_ "bell-slash" "regular" "h-3 w-3"
               toHtml muteLabel
       div_ [class_ "flex gap-1 items-center shrink-0 opacity-0 max-md:hidden group-hover/row:opacity-100 has-[:focus-within]:opacity-100 transition-opacity"] actionBtns
@@ -750,18 +750,18 @@ unifiedMonitorOverviewH pid monitorId = do
               { pageActions = Just $ div_ [class_ "flex items-center gap-2"] do
                   div_ [class_ "max-md:hidden flex items-center gap-2"] do
                     case alert.mutedUntil of
-                      Just _ -> button_ [class_ "btn btn-sm btn-ghost border border-strokeWeak", term "aria-label" "Unmute", term "data-tippy-content" "Resume notifications for this monitor", hxPost_ $ muteBase <> "/unmute"] do
+                      Just _ -> button_ [class_ "btn btn-sm btn-ghost border border-strokeWeak tooltip tooltip-bottom", term "aria-label" "Unmute", data_ "tip" "Resume notifications for this monitor", hxPost_ $ muteBase <> "/unmute"] do
                         faSprite_ "bell" "regular" "h-4 w-4"
                         "Unmute"
                       Nothing -> muteDropdown_ ("mute-btn-pop-" <> alert.id.toText) (muteBase <> "/mute") \popId ->
-                        button_ [type_ "button", class_ "btn btn-sm btn-ghost border border-strokeWeak", term "aria-label" "Mute", term "data-tippy-content" "Silence notifications for a period", term "popovertarget" popId, style_ $ "anchor-name: --anchor-" <> popId] do
+                        button_ [type_ "button", class_ "btn btn-sm btn-ghost border border-strokeWeak tooltip tooltip-bottom", term "aria-label" "Mute", data_ "tip" "Silence notifications for a period", term "popovertarget" popId, style_ $ "anchor-name: --anchor-" <> popId] do
                           faSprite_ "bell-slash" "regular" "h-4 w-4"
                           span_ [class_ "max-md:hidden"] "Mute"
                     when needsResolve
-                      $ button_ [class_ "btn btn-sm btn-ghost border border-strokeWeak", term "aria-label" "Resolve", term "data-tippy-content" "Mark as resolved and reset status to normal", hxPost_ $ muteBase <> "/resolve"] do
+                      $ button_ [class_ "btn btn-sm btn-ghost border border-strokeWeak tooltip tooltip-bottom", term "aria-label" "Resolve", data_ "tip" "Mark as resolved and reset status to normal", hxPost_ $ muteBase <> "/resolve"] do
                         faSprite_ "check" "regular" "h-4 w-4"
                         "Resolve"
-                    button_ [class_ "btn btn-sm btn-ghost border border-strokeWeak", term "aria-label" deactLabel, term "data-tippy-content" $ bool "Pause this monitor — it won't evaluate or alert" "Re-enable this monitor to resume evaluations" isInactive, hxPost_ $ muteBase <> "/toggle_active"] do
+                    button_ [class_ "btn btn-sm btn-ghost border border-strokeWeak tooltip tooltip-bottom", term "aria-label" deactLabel, data_ "tip" $ bool "Pause this monitor — it won't evaluate or alert" "Re-enable this monitor to resume evaluations" isInactive, hxPost_ $ muteBase <> "/toggle_active"] do
                       faSprite_ deactIcon "regular" "h-4 w-4"
                       toHtml deactLabel
                     div_ [class_ "w-px bg-strokeWeak h-5 mx-0.5"] mempty

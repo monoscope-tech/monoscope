@@ -42,10 +42,35 @@ onReady(function(){
           let tooltipWarmTimeout: ReturnType<typeof setTimeout>;
           let isTooltipWarm = false;
 
+          // Tooltips are daisyUI (`class="tooltip tooltip-<pos>" data-tip="…"`, pure CSS,
+          // zero listeners) wherever it renders correctly. `data-tippy-content` is the
+          // fallback for the three cases daisyUI structurally cannot serve, because its
+          // bubble is a ::before on the element itself:
+          //   1. `<input>` and other replaced elements have no ::before.
+          //   2. `truncate`/`line-clamp` sets overflow:hidden, which clips the element's
+          //      own bubble — and "show me the value that's cut off" is why the tooltip
+          //      is there in the first place.
+          //   3. Narrow/short scroll containers (facets sidebar, virtual log list) clip
+          //      an absolutely-positioned bubble; tippy's popper escapes to document.body.
+          // Prefer daisyUI; reach for this only when one of those applies.
+          //
+          // At most ONE live tippy instance page-wide. Instances are never garbage:
+          // each costs ~19 listeners on its reference plus a popper node that outlives
+          // the element, so the old keep-one-per-element scheme grew without bound as
+          // users swept the log list (500 hovers = +9.5k listeners, +500 popper nodes).
+          // Only one tooltip is ever visible, so destroying the previous is free.
+          let liveTip: any = null;
+          const destroyTip = () => {
+            if (!liveTip) return;
+            try { liveTip.destroy(); } catch { /* already torn down with its element */ }
+            liveTip = null;
+          };
+
           // Event delegation for tooltips - single listener, no querySelectorAll per afterSettle
           document.body.addEventListener('mouseover', function(e: Event) {
             const element = (e.target as Element)?.closest?.('[data-tippy-content]') as (HTMLElement & { _tippy?: unknown }) | null;
             if (!element || element._tippy) return;
+            destroyTip();
 
             const content = element.getAttribute('data-tippy-content') || '';
             const isMultiline = content.length > 80 || content.includes('\n');
@@ -86,12 +111,15 @@ onReady(function(){
                 }],
               },
             });
+            liveTip = instance;
             instance.show();
           });
 
           // Clear tooltip warmth timeout on page unload and HTMX navigation to prevent memory leak
-          window.addEventListener('beforeunload', () => clearTimeout(tooltipWarmTimeout));
-          document.body.addEventListener('htmx:beforeSwap', () => clearTimeout(tooltipWarmTimeout));
+          window.addEventListener('beforeunload', () => { clearTimeout(tooltipWarmTimeout); destroyTip(); });
+          // A swap can remove the tooltip's reference element; drop the instance with it
+          // so the detached node and its popper aren't retained until the next hover.
+          document.body.addEventListener('htmx:beforeSwap', () => { clearTimeout(tooltipWarmTimeout); destroyTip(); });
 
           // Animate stat values on HTMX content swap for delightful updates
           document.body.addEventListener('htmx:afterSwap', (e: any) => {

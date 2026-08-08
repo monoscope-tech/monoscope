@@ -12,6 +12,7 @@ module Pages.Telemetry (
   traceH,
   TraceDetailsGet (..),
   tracePage,
+  spanDetailAttrs_,
 ) where
 
 import Data.Aeson qualified as AE
@@ -426,7 +427,7 @@ serviceOptionsLimit = 50
 
 chartsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricChartListData -> Map Text (V.Vector Text) -> V.Vector Telemetry.MetricChartListData -> Text -> Text -> Int -> Maybe Text -> Html ()
 chartsPage pid metricList labels inactive source mFilter activeCount nextUrl = do
-  div_ [class_ "flex flex-col gap-4 px-4 overflow-y-scroll", term "preload" "false"]
+  div_ [class_ "flex flex-col gap-4 px-4 overflow-y-scroll", term "hx-preload" "false"]
     $ do
       div_ [class_ "w-full"] do
         div_ [class_ "w-full flex flex-wrap gap-3 max-md:gap-2 items-center min-h-10 py-2 border-b border-strokeWeak"] do
@@ -480,7 +481,7 @@ metricExpandUrl pid metricName source labelM = "/p/" <> pid.toText <> "/metrics?
 
 -- | htmx wiring shared by every control that re-renders the metric details drawer.
 metricDetailSwap_ :: [Attribute]
-metricDetailSwap_ = [hxTarget_ "#metric-details-content", hxSwap_ "morph", hxIndicator_ "#global-data-drawer-indicator"]
+metricDetailSwap_ = [hxTarget_ "#metric-details-content", hxSwap_ "outerMorph", hxIndicator_ "#global-data-drawer-indicator"]
 
 
 -- | htmx wiring for loading a span into the trace details side panel.
@@ -896,20 +897,20 @@ tracePage pid traceItem rawSpanRecords = do
           Components.dateTime traceItem.traceStartTime (Just traceItem.traceEndTime)
           div_ [class_ "flex gap-1 items-center"] do
             button_
-              [ class_ "fs-trace-toggle cursor-pointer rounded-md p-1 hover:bg-fillWeak transition-colors hidden md:[#apiLogsPage_&]:block"
+              [ class_ "fs-trace-toggle cursor-pointer rounded-md p-1 hover:bg-fillWeak transition-colors hidden md:[#apiLogsPage_&]:block tooltip tooltip-bottom"
               , term "data-share-hide" ""
               , term "aria-label" "Toggle fullscreen"
-              , term "data-tippy-content" "Expand trace"
+              , data_ "tip" "Expand trace"
               , [__|on click send toggleFullscreen(mode: 'trace') to #apiLogsPage|]
               ]
               do
                 faSprite_ "expand" "regular" "w-3.5 h-3.5 text-iconNeutral [#apiLogsPage[data-fullscreen=trace]_&]:hidden!"
                 faSprite_ "compress" "regular" "hidden! w-3.5 h-3.5 text-iconNeutral [#apiLogsPage[data-fullscreen=trace]_&]:block!"
             button_
-              [ class_ "cursor-pointer rounded-md p-1 hover:bg-fillWeak transition-colors hidden [#apiLogsPage_&]:block"
+              [ class_ "cursor-pointer rounded-md p-1 hover:bg-fillWeak transition-colors hidden [#apiLogsPage_&]:block tooltip tooltip-left"
               , term "data-share-hide" ""
               , term "aria-label" "Close details"
-              , term "data-tippy-content" "Close"
+              , data_ "tip" "Close"
               , [__|on click send closeDetailPanel to #log_details_container|]
               ]
               $ faSprite_ "xmark" "regular" "w-3.5 h-3.5 text-iconNeutral"
@@ -1012,12 +1013,25 @@ tracePage pid traceItem rawSpanRecords = do
           -- are already on the page).
           div_ [role_ "tabpanel", class_ "a-tab-content pt-2 hidden", id_ "service_map"] do
             serviceMapPanel_ pid ("trace-service-map-" <> traceItem.traceId) traceGraph serviceColors
+    -- Same grip affordance as resizer_ (border + centred dots, brand-coloured on hover):
+    -- the drag target was invisible without it, so the panel read as unresizable.
     div_ [class_ "hidden shrink-0 max-md:hidden", id_ "trace-details-resizer-wrapper"]
-      $ div_ [class_ "w-3 h-full cursor-ew-resize", id_ "trace_details_resizer", role_ "separator", Aria.label_ "Resize span details"] pass
+      $ div_
+        [ class_ "group relative w-3 h-full flex items-center justify-center cursor-ew-resize overflow-visible select-none touch-none"
+        , id_ "trace_details_resizer"
+        , role_ "separator"
+        , Aria.label_ "Resize span details"
+        ]
+      $ div_ [class_ "h-full border-l border-strokeWeak group-hover:border-strokeBrand-strong"]
+      $ div_ [class_ "absolute left-1/2 top-1/2 z-10 -translate-x-1/2 leading-none py-1 -translate-y-1/2 bg-bgBase rounded-sm border border-strokeBrand-weak group-hover:border-strokeBrand-strong text-iconNeutral group-hover:text-iconBrand"]
+      $ faSprite_ "grip-dots-vertical" "regular" "w-4 h-5"
     div_
       [ class_ "details-panel shrink-0 h-full overflow-hidden overflow-y-auto c-scroll bg-bgBase border-l border-strokeWeak max-md:fixed max-md:inset-0 max-md:z-50"
       , id_ "trace_details_container"
       , style_ "width:0"
+      , -- Close buttons in the shared detail view send closeDetailPanel to their
+        -- .details-panel; in the trace view that's this container.
+        [__|on closeDetailPanel call window.closeTraceDetails(me)|]
       ]
       do
         traceDetailsLoading_

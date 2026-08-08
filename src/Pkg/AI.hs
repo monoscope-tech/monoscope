@@ -29,6 +29,7 @@ module Pkg.AI (
   ToolLimits (..),
 
   -- * Agentic Query Execution
+  agenticSetup,
   runAgenticQuery,
   runAgenticChatWithHistory,
   defaultAgenticConfig,
@@ -573,7 +574,8 @@ agenticSetup config userQuery model =
     ( LLM.Message LLM.System (buildSystemPrompt config now) LLM.defaultMessageData
     , LLM.Message LLM.User userQuery LLM.defaultMessageData
     , let (modelName, effort) = ELLM.modelAndEffort model
-       in OpenAIV1._CreateChatCompletion{OpenAIV1.model = modelName, OpenAIV1.reasoning_effort = effort, OpenAIV1.tools = Just $ V.fromList allToolDefs, OpenAIV1.messages = V.empty}
+       in -- /v1/chat/completions rejects function tools with reasoning_effort other than "none"
+          OpenAIV1._CreateChatCompletion{OpenAIV1.model = modelName, OpenAIV1.reasoning_effort = effort, OpenAIV1.tools = Just $ V.fromList allToolDefs, OpenAIV1.messages = V.empty}
     )
 
 

@@ -377,19 +377,19 @@ apiKeyColumns pid =
         span_ [class_ "min-w-0 group-has-[:checked]:hidden"] $ toHtml $ T.take 8 apiKey.keyPrefix <> T.replicate 20 "*"
         span_ [class_ "min-w-0 hidden group-has-[:checked]:inline"] $ toHtml apiKey.keyPrefix
         div_ [class_ "flex items-center gap-1.5 shrink-0 ml-auto"] do
-          label_ [Lucid.for_ revealId, class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer group-has-[:checked]:hidden", term "data-tippy-content" "Show key"]
+          label_ [Lucid.for_ revealId, class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer group-has-[:checked]:hidden tooltip tooltip-left", data_ "tip" "Show key"]
             $ faSprite_ "eye" "regular" "h-3.5 w-3.5 text-iconNeutral"
-          label_ [Lucid.for_ revealId, class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer hidden group-has-[:checked]:block", term "data-tippy-content" "Hide key"]
+          label_ [Lucid.for_ revealId, class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer hidden group-has-[:checked]:block tooltip tooltip-left", data_ "tip" "Hide key"]
             $ faSprite_ "eye" "regular" "h-3.5 w-3.5 text-iconNeutral"
           button_
-            [ class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer"
+            [ class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer tooltip tooltip-left"
             , type_ "button"
             , term "data-key" apiKey.keyPrefix
             , [__| on click if 'clipboard' in window.navigator then
                             call navigator.clipboard.writeText(my @data-key)
                             send successToast(value:['API Key has been copied to the Clipboard']) to <body/>
                           end |]
-            , term "data-tippy-content" "Copy key"
+            , data_ "tip" "Copy key"
             ]
             $ faSprite_ "clipboard-copy" "regular" "h-3.5 w-3.5 text-iconNeutral"
           let (hoverCls, hxMethod, tip, icon, iconCls) =
@@ -398,11 +398,11 @@ apiKeyColumns pid =
                   else ("hover:bg-fillSuccess-weak", hxPatch_, "Activate key", "circle-check", "text-iconSuccess")
               confirmMsg = "Are you sure you want to " <> (if apiKey.active then "revoke " else "activate ") <> apiKey.title <> " API Key?"
           button_
-            [ class_ $ "p-1 rounded cursor-pointer " <> hoverCls
+            [ class_ $ "p-1 rounded cursor-pointer tooltip tooltip-left " <> hoverCls
             , hxMethod $ "/p/" <> pid.toText <> "/apis/" <> apiKey.id.toText
             , hxConfirm_ confirmMsg
             , hxTarget_ settingsContentTarget
-            , term "data-tippy-content" tip
+            , data_ "tip" tip
             ]
             $ faSprite_ icon "regular"
             $ "h-3.5 w-3.5 "

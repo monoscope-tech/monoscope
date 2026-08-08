@@ -83,13 +83,13 @@ import System.Types
 import Text.Megaparsec (parseMaybe)
 import Utils (FieldAction (..), FieldMenuCtx (..), LoadingSize (..), LoadingType (..), checkFreeTierStatus, explorerNavTabs_, faSprite_, fieldContextMenuItems_, fieldMenuPanel_, getDurationNSMS, getServiceColors, htmxOverlayIndicator_, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecTextByKey, methodFillColor, nonEmptyT, popoverTrigger_, prettyPrintCount, sanitizeBackendError, serviceFillColor, statusFillColorText)
 
-import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
+import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.UUID qualified as UUID
 import Models.Apis.Monitors (MonitorAlertConfig (..))
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.ProjectMembers qualified as ManageMembers
-import Pages.Components (FieldCfg (..), FieldSize (..), formField_, resizer_)
+import Pages.Components (FieldCfg (..), FieldSize (..), formField_, localTimeFmt_, resizer_)
 import Pages.Monitors qualified as AlertUI
 import Pkg.AI qualified as AI
 
@@ -470,23 +470,17 @@ renderFacets facetSummary = do
   forM_ (universe :: [FacetGroup]) \g ->
     renderFacetSection (facetGroupLabel g) (Map.findWithDefault [] g facetsByGroup) facetMap (g /= FGCommon)
   where
-    collapsible_ :: [Attribute] -> Text -> Bool -> [Attribute] -> Html () -> Html () -> Html ()
-    collapsible_ wrapAttrs toggleId open labelAttrs header body =
-      -- No `contain` here: it would become the containing block for the fixed-position
-      -- field-action popover (top layer), trapping it inside this section's overflow clip.
-      div_ (wrapAttrs <> [class_ " block "]) do
-        input_ $ [type_ "checkbox", class_ "hidden peer", id_ toggleId] <> [checked_ | open]
-        label_
-          ( labelAttrs
-              <> [ class_ " cursor-pointer peer-checked:[&_.chev]:rotate-0 "
-                 , role_ "button"
-                 , Lucid.for_ toggleId
-                 , Aria.expanded_ (T.toLower $ show open)
-                 , [__|live set @aria-expanded to (the previous <input/>'s checked)|]
-                 ]
-          )
-          header
-        div_ [class_ "h-0 overflow-hidden peer-checked:h-auto transition-[height] ease-out duration-200"] body
+    -- Native <details>/<summary>: open state, toggling, and screen-reader
+    -- announcement come for free — no checkbox, label wiring, or ARIA sync. The
+    -- chevron un-rotates via the [&[open]>summary_.chev] variant (scoped to the
+    -- direct summary so nested facet chevrons don't inherit it).
+    -- No `contain` here: it would become the containing block for the fixed-position
+    -- field-action popover (top layer), trapping it inside this section's overflow clip.
+    collapsible_ :: [Attribute] -> Bool -> [Attribute] -> Html () -> Html () -> Html ()
+    collapsible_ wrapAttrs open summaryAttrs header body =
+      details_ (wrapAttrs <> [class_ " block [&[open]>summary_.chev]:rotate-0 "] <> [open_ "" | open]) do
+        summary_ (summaryAttrs <> [class_ " cursor-pointer list-none [&::-webkit-details-marker]:hidden "]) header
+        body
 
     chev_ :: Text -> Html ()
     chev_ size = faSprite_ "chevron-down" "regular" $ "chev shrink-0 transition-transform -rotate-90 " <> size
@@ -495,7 +489,6 @@ renderFacets facetSummary = do
     renderFacetSection sectionName fs facetMap collapsed =
       collapsible_
         [class_ "facet-section-group"]
-        ("toggle-" <> slugify sectionName)
         (not collapsed)
         [class_ "p-2 bg-fillWeak rounded-lg flex gap-2 items-center"]
         (chev_ "w-3 h-3" >> span_ [class_ "font-medium text-sm"] (toHtml sectionName))
@@ -522,14 +515,14 @@ renderFacets facetSummary = do
                   span_ [class_ "facet-count text-xs text-textWeak shrink-0 tabular-nums"] $ toHtml $ prettyPrintCount count
           collapsible_
             [class_ "facet-section border-t border-strokeWeak"]
-            ("facet-toggle-" <> f.path)
             open
             [class_ "flex items-center justify-between hover:bg-fillWeak rounded"]
             do
               div_
                 [class_ "p-2 flex items-center gap-2 flex-1"]
                 (chev_ "w-2.5 h-2.5" >> span_ [class_ "text-sm", term "data-tippy-content" f.path] (toHtml f.label))
-              div_ [class_ "inline-block"] do
+              -- Bubble-halt so the ⋮ popover (and its menu items) don't toggle the <details>.
+              div_ [class_ "inline-block", [__|on click halt the event's bubbling|]] do
                 button_ ([type_ "button", class_ "cursor-pointer p-2 hover:bg-fillWeak rounded", Aria.label_ "Facet options"] <> popoverTrigger_ (slugify f.path))
                   $ faSprite_ "ellipsis-vertical" "regular" "w-3 h-3"
                 -- Opens below the ⋮, extending right over the log list (top-layer popover),
@@ -1116,11 +1109,12 @@ summaryBarRects_ norm c e = do
 
 -- | Over-time chart card shared by the sessions/patterns headers. Bars carry a
 -- @data-bi@ bucket index and a @data-count@ base tooltip; @bucketStartEpoch@ and
--- @bucketWidthSec@ ride on the container. @window.formatSummaryChart@ (run after
--- the header is injected) fills the axis labels and per-bar time-range tooltips in
--- the browser's local timezone, so they match the table/time-picker.
-summaryChartCard_ :: Text -> Maybe Text -> Int -> Int -> [Html ()] -> Html ()
-summaryChartCard_ title noteM bucketStartEpoch bucketWidthSec barEls =
+-- @bucketWidthSec@ ride on the container. Axis labels are server-rendered
+-- @<local-time>@ elements (the element reformats into the viewer's zone);
+-- @window.formatSummaryChart@ only fills the per-bar time-range tooltips.
+-- @axisM@ is the populated window's (start, end) epoch range.
+summaryChartCard_ :: Text -> Maybe Text -> Int -> Int -> Maybe (Int, Int) -> [Html ()] -> Html ()
+summaryChartCard_ title noteM bucketStartEpoch bucketWidthSec axisM barEls =
   div_ [class_ "surface-raised rounded-2xl px-3 py-2"] do
     div_ [class_ "flex items-center justify-between mb-1"] do
       span_ [class_ "text-xs text-textWeak"] $ toHtml title
@@ -1132,9 +1126,10 @@ summaryChartCard_ title noteM bucketStartEpoch bucketWidthSec barEls =
       then div_ [class_ "h-12 flex items-center justify-center text-xs text-textWeak"] "No data in range"
       else do
         div_ ([class_ "flex items-end gap-[2px] h-12", data_ "summary-chart" "", data_ "bucket-start" (T.show bucketStartEpoch), data_ "bucket-width" (T.show bucketWidthSec)] <> maybe [] (\n -> [data_ "note" n]) noteM) $ sequence_ barEls
-        div_ [class_ "flex justify-between text-2xs text-textWeak mt-1 tabular-nums"] do
-          span_ [data_ "axis-start" ""] ""
-          span_ [data_ "axis-end" ""] ""
+        whenJust axisM \(axisStart, axisEnd) -> do
+          let fmt = if axisEnd - axisStart >= 86400 then "MMM d, HH:mm" else "HH:mm"
+              lt = localTimeFmt_ fmt . posixSecondsToUTCTime . fromIntegral
+          div_ [class_ "flex justify-between text-2xs text-textWeak mt-1 tabular-nums"] (lt axisStart >> lt axisEnd)
 
 
 -- | Summary header for the patterns viz — parity with 'sessionsHeader_'. KPIs and
@@ -1199,7 +1194,7 @@ patternsHeader_ rowsV totalPatterns baseHourEpoch = do
     -- resolves to a single full-width bar. Rather than hide the trend, the note
     -- rides on the container and the client appends it to the lone bar's tooltip
     -- so a hover explains why it's one bar (see formatSummaryChart).
-    summaryChartCard_ "Volume over time" (Just "bucketed hourly \x2014 widen the range for a fuller trend") baseHourEpoch 3600 barEls
+    summaryChartCard_ "Volume over time" (Just "bucketed hourly \x2014 widen the range for a fuller trend") baseHourEpoch 3600 ((\(lo, hi) -> (baseHourEpoch + lo * 3600, baseHourEpoch + (hi + 1) * 3600)) <$> window) barEls
 
 
 sessionsHeader_ :: LogQueries.SessionSummary -> Html ()
@@ -1213,6 +1208,7 @@ sessionsHeader_ summ = do
       bars = zip3 [0 :: Int ..] summ.clean summ.errored
       norm = barNorm summ.clean summ.errored
       bucketFrom i = summ.bucketStartEpoch + i * summ.bucketWidthSec
+      axisM = guard (not (null bars)) $> (summ.bucketStartEpoch, summ.bucketStartEpoch + length bars * summ.bucketWidthSec)
       -- The onclick filters the table to the bucket; window.__sessionsBucketFilter
       -- is defined once in queryEditorInitializationCode so this header stays
       -- script-free and can be injected via innerHTML. Axis labels + time-range
@@ -1242,7 +1238,7 @@ sessionsHeader_ summ = do
 
   div_ [class_ "mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full flex flex-col gap-2"] do
     div_ [class_ "grid grid-cols-6 max-md:grid-cols-3 gap-2"] $ forM_ kpis kpiCard_
-    summaryChartCard_ "Sessions over time" Nothing summ.bucketStartEpoch summ.bucketWidthSec barEls
+    summaryChartCard_ "Sessions over time" Nothing summ.bucketStartEpoch summ.bucketWidthSec axisM barEls
 
 
 newtype LogsGet = LogPage (PageCtx ApiLogsPageData)
@@ -1434,6 +1430,12 @@ virtualTable pid initialFetchUrl modeM = do
 
 -- | Inner div that lazily HTMX-loads @url@ into @#target@ once @trigger@ fires.
 -- Shared by the details and alert-form side panels; @extra@ carries per-panel bits.
+-- Deliberately innerHTML, not morph. Measured: the swap is ~7ms of a ~200ms click, so
+-- morph optimises 4% of the interaction — and idiomorph mutates nodes in place, so
+-- hyperscript never processes `install FieldMenuDelegate` on morphed-in content and the
+-- field context menu silently stops opening. Revisit only with an explicit
+-- `_hyperscript.processNode` on htmx:afterSwap (see the LogItemMenuable behavior, which
+-- already has to do this by hand).
 lazyLoad_ :: Text -> Text -> Text -> [Attribute] -> Html ()
 lazyLoad_ target url trigger extra =
   div_ ([hxGet_ url, hxTarget_ ("#" <> target), hxSwap_ "innerHTML", hxTrigger_ trigger, term "hx-sync" "this:replace"] <> extra) pass
@@ -1508,6 +1510,9 @@ apiLogsPage page = do
   -- #main-content is the HTMX swap target; <head> is not included in a boosted
   -- response, so the preload must live here for in-app navigation too. A trace
   -- deep link does not display the log table, so do not contend with its fetch.
+  -- Deliberately a script, not <link rel=preload as=fetch>: the log-list fetches
+  -- with Accept: application/json + credentials, which won't match the preload
+  -- cache's request and would double-fetch.
   when (isNothing page.showTrace)
     $ script_
     $ "window.logDataPromise = fetch(\""
@@ -1518,7 +1523,6 @@ apiLogsPage page = do
     template_ [id_ "trace-loading-skeleton"] traceLoadingSkeleton_
     div_ [class_ "fixed z-[9999] hidden right-0 w-max h-max border border-strokeWeak rounded top-32 bg-bgBase shadow-2xl", id_ "sessionPlayerWrapper"] do
       termRaw "session-replay" [id_ "sessionReplay", class_ "shrink-1 flex flex-col", term "projectId" page.pid.toText, term "containerId" "sessionPlayerWrapper"] ("" :: Text)
-    shareLogModal
     queryControlsSection
     facetsAndLogListSection
   where
@@ -1541,49 +1545,29 @@ apiLogsPage page = do
       trailing
 
     -- data-fullscreen=details|trace drives layout via tailwind.css; single-valued so
-    -- "at most one fullscreen mode" holds by construction.
+    -- "at most one fullscreen mode" holds by construction. Several elements (detail
+    -- panel, trace overlay, close handlers) `send toggleFullscreen(mode: …) to
+    -- #apiLogsPage`, but this element is the only receiver — so the handler lives on it.
     sectionWrapper_ =
       section_
         [ class_ "mx-auto pt-2 max-md:px-2 px-4 gap-3.5 max-md:gap-2 w-full flex flex-col h-full overflow-y-hidden overflow-x-hidden pb-2 group/pg"
         , id_ "apiLogsPage"
         , [__|on toggleFullscreen(mode, active)
-              default active to (my @data-fullscreen is not mode) then
-              if active
-                set my @data-fullscreen to mode
-                call updateUrlState('fullscreen', mode)
-              otherwise if my @data-fullscreen is mode
-                remove @data-fullscreen from me
-                call updateUrlState('fullscreen', '', 'delete')
+                default active to (my @data-fullscreen is not mode)
+                if active
+                  set my @data-fullscreen to mode
+                  call updateUrlState('fullscreen', mode)
+                otherwise if my @data-fullscreen is mode
+                  remove @data-fullscreen from me
+                  call updateUrlState('fullscreen', '', 'delete')
+                end
+                send resize to window
               end
-              send resize to window
-            end
-            init
-              set fs to params().fullscreen
-              if fs is 'details' or fs is 'trace' send toggleFullscreen(mode: fs, active: true) to me end
-            end|]
+              init
+                set fs to params().fullscreen
+                if fs is 'details' or fs is 'trace' send toggleFullscreen(mode: fs, active: true) to me end
+              end|]
         ]
-
-    shareLogModal =
-      div_
-        [ class_ "fixed hidden right-0 top-0 justify-end left-0 bottom-0 w-full bg-black bg-opacity-5 z-50"
-        , [__|on click remove .show-log-modal from #expand-log-modal|]
-        , id_ "expand-log-modal"
-        ]
-        do
-          div_ [class_ "relative ml-auto w-full"] do
-            div_ [class_ "flex justify-end  w-full p-4 "]
-              $ button_ [class_ "cursor-pointer", Aria.label_ "Close log details", [__|on click add .hidden to #expand-log-modal|]]
-              $ faSprite_ "xmark" "regular" "h-8"
-            form_
-              [ hxPost_ $ "/p/" <> page.pid.toText <> "/share/"
-              , hxSwap_ "innerHTML"
-              , hxTarget_ "#copy_share_link"
-              , id_ "share_log_form"
-              ]
-              do
-                input_ [type_ "hidden", value_ "1 hour", name_ "expiresIn", id_ "expire_input"]
-                input_ [type_ "hidden", value_ "", name_ "reqId", id_ "req_id_input"]
-                input_ [type_ "hidden", value_ "", name_ "reqCreatedAt", id_ "req_created_at_input"]
 
     -- Query box, mobile filter toggle, and the chart/session summary strip.
     queryControlsSection = div_ [class_ "w-full", id_ "log_explorer_controls"] do
@@ -1647,11 +1631,11 @@ apiLogsPage page = do
             [ placeholder_ "Search filters..."
             , class_ "rounded-lg pl-10 pr-3 py-1.5 border border-strokeStrong w-full"
             , term "data-filterParent" "facets-container"
-            , [__| on keyup
+            , [__| on keyup debounced at 200ms
                     if the event's key is 'Escape'
                       set my value to '' then trigger keyup
                     else
-                      show <div.facet-section-group, div.facet-section, div.facet-value/> in #{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()
+                      show <details.facet-section-group, details.facet-section, .facet-value/> in #{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()
                   |]
             ]
         -- Facet values (~680KB) are lazy-loaded via HTMX on first intersect so

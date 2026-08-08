@@ -1,14 +1,9 @@
-(window as any).htmx.defineExtension('debug', {
-  onEvent: function (name: string, evt: any) {
-    if (console.debug) {
-      console.debug(name, evt);
-    } else if (console) {
-      console.log('DEBUG:', name, evt);
-    } else {
-      throw new Error('NO CONSOLE SUPPORTED');
-    }
-  },
-});
+// htmx 4 replaced defineExtension({onEvent}) with registerExtension(name, hooks), where
+// each hook is named after the event (htmx_config_request) and receives (elt, detail).
+// Registration is global — v4 dropped hx-ext as the activation mechanism — so each hook
+// gates itself on the hx-ext marker attribute the call sites already carry.
+const htmx4 = (window as any).htmx;
+const optedIn = (elt: Element | null | undefined, ext: string) => !!elt?.closest?.(`[hx-ext~="${ext}"]`);
 
 // Helper to get dashboard constants from data attribute
 const getDashboardConstants = (el?: Element | null): Record<string, string> => {
@@ -23,68 +18,51 @@ const getDashboardConstants = (el?: Element | null): Record<string, string> => {
 (window as any).getDashboardConstants = getDashboardConstants;
 
 // HTMX extension to forward current page query parameters and dashboard constants to GET/POST requests
-(window as any).htmx.defineExtension('forward-page-params', {
-  onEvent: function (name: string, evt: any) {
-    if (name === 'htmx:configRequest') {
-      // Process GET and POST requests (add params to URL query string)
-      if (evt.detail.verb === 'get' || evt.detail.verb === 'post') {
-        const url = new URL(evt.detail.path, window.location.origin);
-        const currentParams = new URLSearchParams(window.location.search);
+htmx4.registerExtension('forward-page-params', {
+  htmx_config_request: function (elt: Element, detail: any) {
+    if (!optedIn(elt, 'forward-page-params')) return;
+    const req = detail.request ?? detail;
+    const method = String(req.method ?? detail.verb ?? 'get').toLowerCase();
+    if (method !== 'get' && method !== 'post') return;
+    const raw = req.action ?? detail.path;
+    if (!raw) return;
+    const url = new URL(raw, window.location.origin);
 
-        // Forward URL params first (they take precedence)
-        currentParams.forEach((value: string, key: string) => {
-          if (!url.searchParams.has(key)) {
-            url.searchParams.set(key, value);
-          }
-        });
+    // Forward URL params first (they take precedence)
+    new URLSearchParams(window.location.search).forEach((value, key) => {
+      if (!url.searchParams.has(key)) url.searchParams.set(key, value);
+    });
+    // Dashboard constants are the fallback (only if not already in the URL)
+    Object.entries(getDashboardConstants(elt)).forEach(([key, value]) => {
+      if (!url.searchParams.has(key)) url.searchParams.set(key, value);
+    });
 
-        // Add dashboard constants as fallback (only if not in URL)
-        const constants = getDashboardConstants(evt.detail.elt);
-        Object.entries(constants).forEach(([key, value]) => {
-          if (!url.searchParams.has(key)) {
-            url.searchParams.set(key, value);
-          }
-        });
-
-        // Update the path with merged parameters
-        evt.detail.path = url.pathname + url.search;
-      }
-    }
-    return true;
+    const merged = url.origin === window.location.origin ? url.pathname + url.search : url.href;
+    if (req.action !== undefined) req.action = merged;
+    else detail.path = merged;
   },
 });
 
-// Attach functions to the window object
-window.buildCurlRequest = function (event: any) {
-  const { request_headers, request_body, method, host, raw_url } = JSON.parse(event.currentTarget?.dataset.reqjson);
-  let curlCommand = `curl -X ${method} https://${host}${raw_url} \\\n `;
-
-  const curlHeaders =
-    typeof request_headers === 'object'
-      ? Object.entries(request_headers)
-          .map(([key, value]) => `-H "${key} ${value}" \\\n`)
-          .join('')
-      : '';
-  curlCommand += curlHeaders;
-
-  const reqBody =
-    method.toLowerCase() !== 'get'
-      ? typeof request_body === 'object'
-        ? ` -d '${JSON.stringify(request_body)}' \\\n`
-        : `-data-raw "${request_body}"  \\\n`
-      : '';
-  if (reqBody) curlCommand += reqBody;
-
-  navigator.clipboard.writeText(curlCommand).then(() => {
-    document.querySelector('body')!.dispatchEvent(
-      new CustomEvent('successToast', {
-        detail: { value: ['Curl command copied'] },
-        bubbles: true,
-        composed: true,
-      })
-    );
-  });
-};
+// htmx 4 has no json-enc extension and its hx-encoding only selects multipart vs
+// urlencoded, so the JSON body encoding the API endpoints expect is ported here.
+htmx4.registerExtension('json-enc', {
+  htmx_config_request: function (elt: Element, detail: any) {
+    if (!optedIn(elt, 'json-enc')) return;
+    const req = detail.request ?? detail;
+    const body = req.body ?? detail.parameters;
+    if (!body) return;
+    const obj: Record<string, unknown> = body instanceof URLSearchParams || body instanceof FormData
+      ? Object.fromEntries((body as any).entries())
+      : (body as Record<string, unknown>);
+    const headers = req.headers ?? detail.headers;
+    if (headers) {
+      if (typeof headers.set === 'function') headers.set('Content-Type', 'application/json');
+      else headers['Content-Type'] = 'application/json';
+    }
+    if (req.body !== undefined) req.body = JSON.stringify(obj);
+    else detail.parameters = JSON.stringify(obj);
+  },
+});
 
 window.setQueryParamAndReload = (key: string, value: string) => {
   const url = new URL(window.location.href);
@@ -103,7 +81,7 @@ window.setQueryParamAndReload = (key: string, value: string) => {
 
 window.downloadJson = function (event: any) {
   event.stopPropagation();
-  const json = event.currentTarget.dataset.reqjson;
+  const json = event.currentTarget.closest('.json-tree-container')?.dataset.reqjson ?? event.currentTarget.dataset.reqjson;
   var blob = new Blob([json], { type: 'application/json' });
   var a = document.createElement('a');
   a.href = URL.createObjectURL(blob);

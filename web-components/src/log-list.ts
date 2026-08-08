@@ -1496,6 +1496,9 @@ export class LogList extends LitElement {
     const [rdId, rdCreatedAt, source] = targetInfo;
     const url = `/p/${pid}/log_explorer/${rdId}/${rdCreatedAt}/detailed?source=${source}`;
     updateUrlState('target_event', `${rdId}/${rdCreatedAt}/detailed?source=${source}`);
+    // innerHTML, not morph: measured, the swap is ~7ms of a ~200ms click, and idiomorph's
+    // in-place mutation means hyperscript never installs FieldMenuDelegate on the new
+    // content, which silently kills the field context menu.
     (window as any).htmx.ajax('GET', url, { target: '#log_details_container', swap: 'innerHTML', indicator: '#details_indicator' });
   };
 

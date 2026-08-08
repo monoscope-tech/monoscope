@@ -122,7 +122,6 @@ import Text.MMark qualified as MMark
 import Text.Printf (printf)
 import Text.Regex.TDFA ((=~))
 import Text.Show
-import Text.Slugify (slugify)
 import "base64" Data.ByteString.Base64 qualified as B64
 
 
@@ -295,7 +294,7 @@ truncateMiddle n t
 -- the symbol id (e.g. "bucket"). When adding a new icon, you must add its
 -- <symbol> to the corresponding sprite file — it will not render otherwise.
 faSprite_ :: Monad m => Text -> Text -> Text -> HtmlT m ()
-faSprite_ mIcon faType classes = svg_ [class_ $ "inline-block icon " <> classes] $ Svg.use_ [href_ $ "/public/assets/svgs/fa-sprites/" <> faType <> ".svg?v=" <> fileHash <> "#" <> mIcon]
+faSprite_ mIcon faType classes = svg_ [class_ $ "icon " <> classes] $ Svg.use_ [href_ $ "/public/assets/svgs/fa-sprites/" <> faType <> ".svg?v=" <> fileHash <> "#" <> mIcon]
   where
     fileHash = case faType of
       "solid" -> $(hashFile "/public/assets/svgs/fa-sprites/solid.svg")
@@ -379,52 +378,55 @@ b64ToJson b64Text =
   fromRight (AE.object []) $ AE.eitherDecodeStrict $ fromRight "{}" $ B64.decodeBase64Untyped $ encodeUtf8 b64Text
 
 
--- | @scope@ must be unique per call site on a page: the popover ids/anchor-names
--- are derived from it, and the log-item detail renders several trees whose paths
--- overlap (e.g. the raw-data tab re-renders resource/attributes). Duplicate ids
--- would make native popovertarget resolve to the first match and break the menu.
-jsonValueToHtmlTree :: Text -> AE.Value -> Maybe Text -> Html ()
-jsonValueToHtmlTree scope val pathM = do
-  div_ [class_ "p-2 rounded-lg bg-fillWeaker border w-full json-tree-container monospace text-sm leading-6"] do
-    div_ [class_ "w-full flex items-center gap-4 text-xs mb-2"] do
-      -- One toggle button: collapse state (checked = collapsed) is bulk-written to every
-      -- node's .tree-toggle; the label reflects the next action. Imperative by nature (CSS
-      -- can't write another element's checked state), so hyperscript is the right tool.
-      when hasChildren $ button_
-        [ class_ "flex items-center gap-1 cursor-pointer"
-        , [__|on click
-               set me.collapsed to not me.collapsed
-               for it in <.tree-toggle/> in closest .json-tree-container set the checked of it to me.collapsed end
-               if me.collapsed put 'Expand all' into the first <span/> in me
-               else put 'Collapse all' into the first <span/> in me
-             |]
-        ]
-        do
-          span_ [class_ "underline"] "Collapse all"
-          faSprite_ "expand" "regular" "w-2 h-2"
+-- | Leaves carry only data attributes; the field menu is the shared
+-- #log-item-context-menu-tmpl, cloned on demand by the single delegated
+-- FieldMenuDelegate listener on the container (BodyWrapper). Rendering a static
+-- menu per leaf put thousands of nodes and hundreds of listeners into every
+-- detail panel, which accumulated into a browser freeze across repeated opens.
+jsonValueToHtmlTree :: AE.Value -> Maybe Text -> Html ()
+jsonValueToHtmlTree val pathM = do
+  div_
+    [ class_ "p-2 rounded-lg bg-fillWeaker border w-full json-tree-container monospace text-sm leading-6"
+    , term "data-reqjson" json
+    , [__|install FieldMenuDelegate|]
+    ]
+    do
+      div_ [class_ "w-full flex items-center gap-4 text-xs mb-2"] do
+        -- One toggle button: collapse state (checked = collapsed) is bulk-written to every
+        -- node's .tree-toggle — imperative by nature (CSS can't write another element's
+        -- checked state). The label is CSS: both spans render, .collapsed picks one.
+        when hasChildren $ button_
+          [ class_ "group/coll flex items-center gap-1 cursor-pointer"
+          , [__|on click
+                 toggle .collapsed on me
+                 for it in <.tree-toggle/> in closest .json-tree-container set the checked of it to (I match .collapsed) end|]
+          ]
+          do
+            span_ [class_ "underline group-[.collapsed]/coll:hidden"] "Collapse all"
+            span_ [class_ "underline hidden group-[.collapsed]/coll:inline"] "Expand all"
+            faSprite_ "expand" "regular" "w-2 h-2"
 
-      let json = decodeUtf8 $ AE.encode $ AE.toJSON val
-      button_
-        [ class_ "flex items-center gap-1 cursor-pointer"
-        , [__|on click
-                call navigator.clipboard.writeText(my @data-reqjson)
-                send successToast(value:['Json copied to clipboard']) to <body/>|]
-        , term "data-reqjson" json
-        ]
-        do
-          span_ [class_ "underline"] "Copy json"
-          faSprite_ "copy" "regular" "w-2 h-2"
+        -- The JSON payload lives once on the container; both buttons read it from there.
+        button_
+          [ class_ "flex items-center gap-1 cursor-pointer"
+          , [__|on click
+                  call navigator.clipboard.writeText(the @data-reqjson of the closest <.json-tree-container/>)
+                  send successToast(value:['Json copied to clipboard']) to <body/>|]
+          ]
+          do
+            span_ [class_ "underline"] "Copy json"
+            faSprite_ "copy" "regular" "w-2 h-2"
 
-      button_
-        [ class_ "flex items-center gap-1 cursor-pointer"
-        , onclick_ "window.downloadJson(event)"
-        , term "data-reqjson" json
-        ]
-        do
-          span_ [class_ "underline"] "Download json"
-          faSprite_ "download-f" "regular" "w-2 h-2"
-    jsonValueToHtmlTree' (fromMaybe "" pathM, "", val)
+        button_
+          [ class_ "flex items-center gap-1 cursor-pointer"
+          , onclick_ "window.downloadJson(event)"
+          ]
+          do
+            span_ [class_ "underline"] "Download json"
+            faSprite_ "download-f" "regular" "w-2 h-2"
+      jsonValueToHtmlTree' (fromMaybe "" pathM, "", val)
   where
+    json = decodeUtf8 $ AE.encode $ AE.toJSON val
     hasChildren = case val of AE.Object o -> not (AEKM.null o); AE.Array a -> not (V.null a); _ -> False
     jsonValueToHtmlTree' :: (Text, Text, AE.Value) -> Html ()
     jsonValueToHtmlTree' (path, key, AE.Object v) = renderParentType "{" "}" key (length v) (AEKM.toAscList v & mapM_ (\(kk, vv) -> jsonValueToHtmlTree' (path <> "." <> key, AEK.toText kk, vv)))
@@ -432,25 +434,24 @@ jsonValueToHtmlTree scope val pathM = do
     jsonValueToHtmlTree' (path, key, value) = do
       let fullFieldPath = if T.isSuffixOf "[*]" path then path else path <> "." <> key
       let fullFieldPath' = fromMaybe fullFieldPath $ T.stripPrefix ".." fullFieldPath
-      let fieldPopId = "log-field-" <> scope <> "-" <> slugify fullFieldPath'
       let dfPath = replaceNumbers $ if isJust pathM then T.replace ".." "." fullFieldPath' else fullFieldPath'
           dfVal = unwrapJsonPrimValue False value
+      -- Styling for these three is in tailwind.css, not inline: a panel emits hundreds of
+      -- leaves and server render time is ~2ms per KB of HTML, so the repeated utility
+      -- strings were per-click latency. (The old inline `hover:bg-fillBrandWeak` was also
+      -- a no-op — no such token; the CSS rule uses --color-fillBrand-weak.)
       div_
-        [ class_ "log-item-field-parent block"
+        [ class_ "log-item-field-parent"
         , term "data-field-path" dfPath
         , term "data-field-value" dfVal
         ]
-        do
-          button_
-            ([type_ "button", class_ "block w-full text-left hover:bg-fillBrandWeak cursor-pointer pl-6 log-item-field-anchor"] <> popoverTrigger_ fieldPopId)
-            do
-              unless (T.null key) do
-                span_ $ toHtml key
-                span_ [class_ "text-textBrand"] ":"
-              span_ [class_ "text-textBrand ml-2.5 log-item-field-value", term "data-field-path" fullFieldPath'] $ toHtml dfVal
-
-          ul_ ([class_ "dropdown log-item-context-menu menu p-2 shadow-lg bg-bgRaised rounded-box border border-strokeWeak w-96 max-w-[92vw]"] <> fieldMenuPanel_ fieldPopId)
-            $ fieldContextMenuItems_ (StaticField dfPath (Just dfVal)) fieldMenuActions
+        $ button_
+          [type_ "button", class_ "log-item-field-anchor"]
+          do
+            unless (T.null key) do
+              span_ $ toHtml key
+              span_ [class_ "text-textBrand"] ":"
+            span_ [class_ "log-item-field-value", term "data-field-path" fullFieldPath'] $ toHtml dfVal
 
     renderParentType :: Text -> Text -> Text -> Int -> Html () -> Html ()
     -- Collapse state is a hidden checkbox toggled by the label (no JS): CSS collapses the
@@ -1439,8 +1440,8 @@ navTabAttrs =
   [ hxBoost_ "true"
   , hxTarget_ "#main-content"
   , hxSelect_ "#main-content"
-  , term "hx-select-oob" "#main-sidenav:morph,#main-navbar:morph"
-  , hxSwap_ "morph"
+  , term "hx-select-oob" "#main-sidenav:outerMorph,#main-navbar:outerMorph"
+  , hxSwap_ "outerMorph"
   , [__|on click set my.preloadState to 'DONE'|]
   ]
 

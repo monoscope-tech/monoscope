@@ -114,12 +114,15 @@ getOrCreateGoldenResponse goldenDir model prompt apiKey =
 -- ("gpt-5.6-terra",Nothing)
 -- >>> modelAndEffort "gpt-5.6-luna#hihg"
 -- ("gpt-5.6-luna#hihg",Nothing)
+-- >>> modelAndEffort "gpt-5.6-luna#none"
+-- ("gpt-5.6-luna",Just ReasoningEffort_None)
 modelAndEffort :: Text -> (Models.Model, Maybe OpenAIV1.ReasoningEffort)
 modelAndEffort spec = case T.breakOnEnd "#" spec of
   (pre, suffix) | not (T.null pre), Just eff <- effort suffix -> (Models.Model (T.dropEnd 1 pre), Just eff)
   _ -> (Models.Model spec, Nothing)
   where
     effort = \case
+      "none" -> Just OpenAIV1.ReasoningEffort_None
       "minimal" -> Just OpenAIV1.ReasoningEffort_Minimal
       "low" -> Just OpenAIV1.ReasoningEffort_Low
       "medium" -> Just OpenAIV1.ReasoningEffort_Medium

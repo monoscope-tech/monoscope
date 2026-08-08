@@ -119,7 +119,7 @@ logQueryBox_ config = do
                    on htmx:afterRequest
                      if event.detail.successful
                        then
-                         call JSON.parse(event.detail.xhr.responseText) set :result to it
+                         call JSON.parse(event.detail.ctx.text) set :result to it
                          if :result.time_range then call window.updateTimePicker(:result.time_range) end
                          if :result.query then call #filterElement.handleAddQuery(:result.query, true) then set #ai-search-chkbox.checked to false
                          else if :result.time_range then trigger submit on #log_explorer_form end
@@ -130,7 +130,7 @@ logQueryBox_ config = do
                              call window.handleVisualizationUpdate(vizType, widgetId)
                          end
                      else
-                       if event.detail.xhr.responseText and event.detail.xhr.responseText.includes('INVALID_QUERY_ERROR')
+                       if event.detail.ctx.text and event.detail.ctx.text.includes('INVALID_QUERY_ERROR')
                          then
                            send errorToast(value:['Could not generate a query. Try being more specific, e.g. "show errors from payment-service in the last 2 hours"']) to <body/>
                        end

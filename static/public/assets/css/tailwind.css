@@ -1227,6 +1227,14 @@ body, :host {
     border-color: var(--color-strokeWeak, currentColor);
   }
 
+  /* faSprite_'s default display. It lives in `base` (not on the element as an
+     `inline-block` utility) so a display utility passed by the caller — `hidden`,
+     `block`, `flex` — actually wins; utilities that lose to a same-element
+     `inline-block` are why sprite icons ignored `hidden`. */
+  svg.icon {
+    display: inline-block;
+  }
+
   /* Hairline borders for retina displays */
   :root {
     --border-hairline: 1px;
@@ -1634,7 +1642,8 @@ code, pre, .code, .monospace {
     height: 100%;
     flex: 1;
   }
-  .investigation-fullscreen #log_details_container {
+  .investigation-fullscreen #log_details_container,
+  .investigation-fullscreen #trace_details_container {
     max-height: calc(100vh - 120px) !important;
   }
 
@@ -2037,6 +2046,32 @@ code, pre, .code, .monospace {
 
   .btn {
     @apply justify-center items-center leading-none;
+  }
+
+  /* JSON-tree leaf styling lives here, not inline: a detail panel emits hundreds of
+     leaves and the server spends ~2ms per KB of HTML it renders, so repeating these
+     utility strings per leaf was measurable latency on every row click. Same reason
+     the rest of this tree component is styled here. */
+  .log-item-field-parent {
+    display: block;
+    position: relative;
+  }
+
+  .log-item-field-anchor {
+    display: block;
+    width: 100%;
+    text-align: left;
+    cursor: pointer;
+    padding-left: calc(var(--spacing) * 6);
+  }
+
+  .log-item-field-anchor:hover {
+    background-color: var(--color-fillBrand-weak);
+  }
+
+  .log-item-field-value {
+    color: var(--color-textBrand);
+    margin-left: calc(var(--spacing) * 2.5);
   }
 
   /* ======= CODEMIRROR */
@@ -2524,8 +2559,8 @@ table td a[href]:not(.btn):not([data-no-preview]) { --tooltip-z: 100; --tooltip-
   }
 }
 
-/* Log-explorer fullscreen modes, toggled by the toggleFullscreen hyperscript on #apiLogsPage
-   (Log.hs) via its data-fullscreen attribute (details|trace). details: side panel takes over
+/* Log-explorer fullscreen modes, toggled by the `on toggleFullscreen` hyperscript handler
+   on #apiLogsPage (Log.hs) via its data-fullscreen attribute (details|trace). details: side panel takes over
    the whole browser viewport via position:fixed (escaping the facets/loglist row so it also
    covers the query box and charts above); trace: the trace overlay covers the whole viewport
    too. The expand/compress icons swap via Tailwind arbitrary-variant classes on the svgs
