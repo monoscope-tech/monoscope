@@ -78,7 +78,7 @@ logQueryBox_ config = do
         -- and the message row below both derive from it in CSS, so JS sets one
         -- attribute instead of toggling classes on three elements across two
         -- files (which had drifted to two different border colours).
-        div_ [class_ "group/qbox px-1 py-0.5 flex-1 flex flex-col gap-2  bg-fillWeaker rounded-lg border border-strokeWeak data-[query-state=error]:border-strokeError-strong group-has-[.ai-search:checked]/fltr:border-2 group-has-[.ai-search:checked]/fltr:border-iconBrand group-has-[.ai-search:checked]/fltr:shadow-xs shadow-strokeBrand-weak", id_ "queryBox", data_ "query-state" (bool "ok" "error" (isJust config.parseError))] do
+        div_ [class_ "group/qbox px-1 py-0.5 flex-1 flex flex-col gap-1 bg-fillWeaker rounded-lg border border-strokeWeak data-[query-state=error]:border-strokeError-strong group-has-[.ai-search:checked]/fltr:border-2 group-has-[.ai-search:checked]/fltr:border-iconBrand group-has-[.ai-search:checked]/fltr:shadow-xs shadow-strokeBrand-weak", id_ "queryBox", data_ "query-state" (bool "ok" "error" (isJust config.parseError))] do
           input_
             $ [ class_ "hidden ai-search"
               , type_ "checkbox"
