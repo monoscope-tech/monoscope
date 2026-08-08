@@ -23,6 +23,7 @@ module Models.Telemetry.ServiceGraph (
   emptyServiceGraph,
   serviceMapNodeCap,
   RollupEdge (..),
+  projectsWithSpansInRange,
   rollupServiceEdges,
   upsertServiceDependencyEdges,
   serviceGraphForRange,
@@ -45,7 +46,7 @@ import Effectful.Labeled (Labeled)
 import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (SpanKind (..), SpanRecord (..), SpanStatus (..), atMapText)
-import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), WrappedEnumSC (..))
+import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), WrappedEnumSC (..), idFromText)
 import Relude
 
 
@@ -373,6 +374,32 @@ sliceRowsToEdges rows =
         [ ((r.src, r.srcKind, r.tgt, r.tgtKind), HopAgg r.n r.errs (LatencyHist $ one (fromIntegral r.latBucket, r.n)) r.durNs)
         | r <- rows
         ]
+
+
+-- | Which projects sent a span this slice that could form an edge. The dispatcher fans the
+-- rollup out over this rather than over every active project: the self-join costs the same
+-- scan whether or not the project has traffic, and the overwhelming majority of projects
+-- have none, so fanning out blindly spends ~all of the budget proving there is nothing to
+-- do. One scan answers for every project at once.
+--
+-- Deliberately the same store, window and @kind@ filter as 'rollupServiceEdges' — this is
+-- that query's @FROM@ clause with the per-project predicate lifted out, so a project is on
+-- this list exactly when the rollup would have found rows for it. A project that drops off
+-- mid-window still gets its bucket; one that has never sent a span never gets a job.
+--
+-- Rows with an unparseable @project_id@ are dropped rather than failing the tick: the span
+-- store's column is text, and one malformed value must not cost every other project its
+-- bucket.
+projectsWithSpansInRange :: (DB es, Labeled "timefusion" Hasql :> es) => Bool -> UTCTime -> UTCTime -> Eff es [Projects.ProjectId]
+projectsWithSpansInRange useTf lo hi =
+  fmap (mapMaybe (idFromText @"project"))
+    $ Hasql.withHasqlTimefusion useTf
+    $ Hasql.interp
+      [HI.sql|
+      SELECT DISTINCT project_id
+      FROM otel_logs_and_spans
+      WHERE timestamp >= #{lo} AND timestamp < #{hi}
+        AND kind IN ('server','client','producer','consumer')|]
 
 
 -- | Derive one closed time slice's edges straight from the span table. This is the only

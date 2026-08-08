@@ -8,7 +8,7 @@ import Data.UUID qualified as UUID
 import Data.UUID.V4 (nextRandom)
 import Data.Vector qualified as V
 import Lucid qualified
-import Models.Telemetry.ServiceGraph (MapStats (..), NodeKind (..), ServiceEdge (..), ServiceGraph (..), ServiceNode (..), rollupServiceEdges, serviceGraphForRange, upsertServiceDependencyEdges)
+import Models.Telemetry.ServiceGraph (MapStats (..), NodeKind (..), ServiceEdge (..), ServiceGraph (..), ServiceNode (..), projectsWithSpansInRange, rollupServiceEdges, serviceGraphForRange, upsertServiceDependencyEdges)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.ServiceMap qualified as ServiceMap
 import Pages.Telemetry qualified as Trace
@@ -110,6 +110,20 @@ spec = around withTestResources do
       second' <- rollAndRead tr frozenTime
       [e.stats.requests | e <- V.toList second'.edges] `shouldBe` [e.stats.requests | e <- V.toList first'.edges]
       V.length second'.edges `shouldBe` V.length first'.edges
+
+    -- The dispatcher fans out over this list, so anything it over-reports is a self-join
+    -- run against a project with nothing to join. An active project that sent no span this
+    -- bucket must not appear — that is the whole point of discovering rather than fanning
+    -- out over projects.activeProjects, which returned all 1726 of them in production.
+    it "projectDiscovery_listsOnlyProjectsThatSentSpansInTheBucket" \tr -> do
+      apiKey <- createTestAPIKey tr testPid "service-map-discovery-key"
+      ingestFixture tr apiKey frozenTime
+      (inBucket, idleBucket) <- runTestBg frozenTime tr do
+        (,)
+          <$> projectsWithSpansInRange False (addUTCTime (-300) frozenTime) (addUTCTime 300 frozenTime)
+          <*> projectsWithSpansInRange False (addUTCTime (-86400) frozenTime) (addUTCTime (-86100) frozenTime)
+      inBucket `shouldBe` [testPid]
+      idleBucket `shouldBe` [] -- testPid is active, but silent in this window
 
     it "rollup_excludesSpansOutsideTheRange" \tr -> do
       apiKey <- createTestAPIKey tr testPid "service-map-range-key"
