@@ -529,6 +529,7 @@ function render(
       source: String(index.get(e.source)), target: String(index.get(e.target)),
       sourceKey: e.source, targetKey: e.target,
       value: e.stats.requests, back: back.has(edgeKey(e.source, e.target)),
+      rps: `${e.stats.throughput_per_sec < 10 ? e.stats.throughput_per_sec.toFixed(2) : fmtNum(Math.round(e.stats.throughput_per_sec))} req/s`,
       inferred: byKey.get(e.target)!.inferred, errorRate: e.stats.error_rate,
       tip: statsTip(`${byKey.get(e.source)!.label || 'entry'} → ${byKey.get(e.target)!.label}`, e.stats,
         healthColor(e.stats.error_rate, s, resolveColor(e.source, colors))),
@@ -605,7 +606,15 @@ function render(
             barBad: { width: 3, height: 13, backgroundColor: s.errorColor, borderRadius: 2 },
           },
         },
-        edgeLabel: { show: false, fontSize: 10, color: s.textColor, formatter: (p: any) => p.data?.tip ?? '' },
+        // Throughput is written on the hop only while its path is lit, which is where Datadog
+        // puts it: unconditionally labelling 53 edges would bury the map it annotates.
+        edgeLabel: {
+          // Shown for every edge, but the formatter returns empty for any hop that is not on
+          // the lit path — a per-link `label` override does not take on a graph series.
+          show: true, fontSize: 10, color: s.tooltipTextColor, backgroundColor: s.tooltipBg,
+          padding: [1, 4], borderRadius: 3,
+          formatter: (p: any) => (onPath.has(edgeKey(p.data?.sourceKey, p.data?.targetKey)) ? p.data?.rps ?? '' : ''),
+        },
         lineStyle: { color: s.textColor, width: 1.5, opacity: 0.3, curveness: 0.06 },
         // Hover highlights a path; it does not black out the map. `focus:'adjacency'` only
         // ever styled the hovered *item* and blurred everything else to near-invisible, which
