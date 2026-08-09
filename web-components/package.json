@@ -4,7 +4,7 @@
   "description": "Monaco editor with Monoscope Query Language (MQL) support",
   "scripts": {
     "dev": "vite",
-    "watch": "vite build --watch",
+    "watch": "vite build --watch --mode development",
     "build": "vite build",
     "build-with-types": "tsc && vite build",
     "preview": "vite preview",
