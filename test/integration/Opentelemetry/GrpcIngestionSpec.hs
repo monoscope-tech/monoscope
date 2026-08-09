@@ -70,7 +70,7 @@ parseNumArray = mapMaybe (readMaybe . toString) . filter (not . T.null) . T.spli
 queryLogs :: TestResources -> Maybe Text -> IO Log.LogResult
 queryLogs tr queryM = do
   let (timeFrom, timeTo) = testTimeRange
-  snd <$> toServantResponse tr (Log.logExplorerDataH pid queryM Nothing Nothing Nothing (Just timeFrom) (Just timeTo) Nothing Nothing)
+  snd <$> toServantResponse tr (Log.logExplorerDataH pid queryM Nothing Nothing Nothing Nothing (Just timeFrom) (Just timeTo) Nothing Nothing)
 
 
 -- | Helper to query the sessions viz endpoint (returns SessionsView).

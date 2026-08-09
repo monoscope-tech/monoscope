@@ -52,7 +52,7 @@ nextCursor t = addUTCTime (-0.001) <$> iso8601ParseM (toString t)
 -- log-list web component actually fetches, and return the raw LogResult so the
 -- assertions inspect the payload structurally, as before.
 fetchData :: TestResources -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> IO Log.LogResult
-fetchData tr q cols cur since from to = snd <$> testServant tr (Log.logExplorerDataH testPid q cols cur since from to Nothing Nothing)
+fetchData tr q cols cur since from to = snd <$> testServant tr (Log.logExplorerDataH testPid q cols cur Nothing since from to Nothing Nothing)
 
 
 spec :: Spec
@@ -659,10 +659,11 @@ spec = around withTestResources do
             LogItem.ItemDetailedNotFound msg -> expectationFailure $ "expected record, got not-found: " <> toString msg
             LogItem.SpanItemExpanded _ (rec :: Telemetry.OtelLogsAndSpans) _ _ -> rec.name `shouldBe` Just spanName
             LogItem.LogItemExpanded _ rec _ -> rec.name `shouldBe` Just spanName
+            LogItem.DetailTabExpanded _ rec _ _ _ -> rec.name `shouldBe` Just spanName
 
       let ctx = tr.trATCtx
           withTfReads b = tr{trATCtx = ctx{env = ctx.env{enableTimefusionReads = b}}}
-      (_, item) <- testServant (withTfReads True) $ LogItem.expandAPIlogItemH testPid rid ts Nothing Nothing
+      (_, item) <- testServant (withTfReads True) $ LogItem.expandAPIlogItemH testPid rid ts Nothing Nothing Nothing False
       expectFound item
       (_, traceDetails) <- testServant (withTfReads True) $ TelemetryPage.traceH testPid traceIdTxt (Just ts) Nothing Nothing
       case traceDetails of
@@ -670,26 +671,26 @@ spec = around withTestResources do
         TelemetryPage.SpanDetails _ _ _ -> expectationFailure "expected trace details, got span details"
         TelemetryPage.TraceDetailsNotFound _ -> expectationFailure "expected TimeFusion trace details"
       let initialHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml item
-      -- All tab panels render in the one response; switching is pure CSS
-      -- (checked radio + group-has), so no per-tab hx-get round trips.
-      initialHtml `shouldSatisfy` T.isInfixOf "m-raw-content"
-      initialHtml `shouldNotSatisfy` T.isInfixOf "/detailed?tab="
-      -- Eager panels trade a round trip for payload, and this panel is the surface that
-      -- once froze the browser at ~685KB. Measured here at ~67KB with every tab rendered,
-      -- so the bound leaves room for content churn while still catching a per-leaf
-      -- regression (re-inlined menus or utility strings) compounding across all seven tabs.
-      T.length initialHtml `shouldSatisfy` (< 100_000)
+      -- Only the selected panel renders; hidden tabs fetch their panel on first reveal.
+      initialHtml `shouldNotSatisfy` T.isInfixOf "m-raw-content"
+      initialHtml `shouldSatisfy` T.isInfixOf "intersect once"
+      initialHtml `shouldSatisfy` T.isInfixOf "/detailed?tab=tab-raw&amp;partial=true"
+      T.length initialHtml `shouldSatisfy` (< 50_000)
+      (_, rawTab) <- testServant (withTfReads True) $ LogItem.expandAPIlogItemH testPid rid ts Nothing (Just "tab-raw") Nothing True
+      let rawHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml rawTab
+      rawHtml `shouldSatisfy` T.isInfixOf "m-raw-content"
+      rawHtml `shouldNotSatisfy` T.isInfixOf "intersect once"
 
       let expectNotFound store item' = case item' of
             LogItem.ItemDetailedNotFound _ -> pass
             _ -> expectationFailure $ store <> ": off-by-1s timestamp unexpectedly matched (window not removed)"
-      (_, miss) <- testServant (withTfReads True) $ LogItem.expandAPIlogItemH testPid rid (addUTCTime 1 ts) Nothing Nothing
+      (_, miss) <- testServant (withTfReads True) $ LogItem.expandAPIlogItemH testPid rid (addUTCTime 1 ts) Nothing Nothing Nothing False
       expectNotFound "TF" miss
 
       void $ withPool tr.trPool $ DBT.execute [sql| UPDATE otel_logs_and_spans SET hashes = NULL WHERE id = ? |] (Only rid)
-      (_, item2) <- testServant (withTfReads False) $ LogItem.expandAPIlogItemH testPid rid ts Nothing Nothing
+      (_, item2) <- testServant (withTfReads False) $ LogItem.expandAPIlogItemH testPid rid ts Nothing Nothing Nothing False
       expectFound item2
-      (_, miss2) <- testServant (withTfReads False) $ LogItem.expandAPIlogItemH testPid rid (addUTCTime 1 ts) Nothing Nothing
+      (_, miss2) <- testServant (withTfReads False) $ LogItem.expandAPIlogItemH testPid rid (addUTCTime 1 ts) Nothing Nothing Nothing False
       expectNotFound "PG" miss2
 
     -- Regression: the SDK payload span ("monoscope.http") confused users — the
@@ -722,19 +723,25 @@ spec = around withTestResources do
             _ -> expectationFailure "expected SpanItemExpanded anchored on the request span"
 
       -- Clicking the request span: bodies borrowed from the nested SDK span.
-      (_, rootItem) <- testServant tr $ LogItem.expandAPIlogItemH testPid rootId rootTs Nothing (Just "tab-req")
+      (_, rootItem) <- testServant tr $ LogItem.expandAPIlogItemH testPid rootId rootTs Nothing (Just "tab-req") Nothing False
       assertAnchored rootItem
       let rootHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml rootItem
-      rootHtml `shouldSatisfy` T.isInfixOf "apple"
+      rootHtml `shouldSatisfy` T.isInfixOf "subtab=htab-req"
+      rootHtml `shouldNotSatisfy` T.isInfixOf "apple"
       -- Copy-as-curl is assembled server-side from the HTTP attributes.
       rootHtml `shouldSatisfy` T.isInfixOf "curl -X GET"
+      (_, reqBodyTab) <- testServant tr $ LogItem.expandAPIlogItemH testPid rootId rootTs Nothing (Just "tab-req") (Just "htab-req") True
+      let reqBodyHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml reqBodyTab
+      reqBodyHtml `shouldSatisfy` T.isInfixOf "req_content"
+      reqBodyHtml `shouldSatisfy` T.isInfixOf "apple"
+      reqBodyHtml `shouldNotSatisfy` T.isInfixOf "intersect once"
 
       -- An unknown ?tab= deep link clamps to a real tab (a checked radio must exist).
-      (_, bogusTab) <- testServant tr $ LogItem.expandAPIlogItemH testPid rootId rootTs Nothing (Just "tab-nonexistent")
+      (_, bogusTab) <- testServant tr $ LogItem.expandAPIlogItemH testPid rootId rootTs Nothing (Just "tab-nonexistent") Nothing False
       LT.toStrict (Lucid.renderText (Lucid.toHtml bogusTab)) `shouldSatisfy` T.isInfixOf "checked"
 
       -- Clicking the SDK span: panel anchors on the parent request, bodies intact.
-      (_, sdkItem) <- testServant tr $ LogItem.expandAPIlogItemH testPid sdkId sdkTs Nothing (Just "tab-req")
+      (_, sdkItem) <- testServant tr $ LogItem.expandAPIlogItemH testPid sdkId sdkTs Nothing (Just "tab-req") Nothing False
       assertAnchored sdkItem
 
       -- Waterfall keyboard-nav onto the SDK span also anchors on the parent request.

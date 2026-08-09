@@ -33,7 +33,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (atMapText)
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
-import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), dateTime, emptyState_, httpTab_, jsonTab_, tabPanel_)
+import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), dateTime, emptyState_, httpTab_, tabPanel_)
 import Pkg.DeriveUtils (unAesonTextMaybe)
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
@@ -78,15 +78,16 @@ spanHasErrors :: Telemetry.SpanRecord -> Bool
 spanHasErrors = not . null . getSpanErrors . (.events)
 
 
-expandAPIlogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders ApiItemDetailed)
-expandAPIlogItemH pid rdId timestamp _ tabM = withSpan_ "log-explorer.detail" [] do
+expandAPIlogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Bool -> ATAuthCtx (RespHeaders ApiItemDetailed)
+expandAPIlogItemH pid rdId timestamp _ tabM subtabM partial = withSpan_ "log-explorer.detail" [] do
   _ <- Projects.sessionAndProject pid
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   let tf = Hasql.withHasqlTimefusion authCtx.env.enableTimefusionReads
+      renderItem item aptSpan full = addRespHeaders $ if partial then DetailTabExpanded pid item aptSpan (fromMaybe "tab-raw" tabM) subtabM else full
   tf (Telemetry.otelRecordByProjectAndId pid timestamp rdId) >>= \case
     Nothing -> addRespHeaders $ ItemDetailedNotFound "Record not found"
     Just record
-      | record.kind == Just "log" -> addRespHeaders $ LogItemExpanded pid record tabM
+      | record.kind == Just "log" -> renderItem record Nothing (LogItemExpanded pid record tabM)
       | otherwise -> do
           let fetchIn window match = maybe (pure Nothing) (\trId -> tf $ Telemetry.spanRecordInTrace pid trId window match) (record.context >>= (.trace_id) >>= guarded (not . T.null))
           (anchor, sdkSpan) <-
@@ -94,7 +95,7 @@ expandAPIlogItemH pid rdId timestamp _ tabM = withSpan_ "log-explorer.detail" []
               (fetchIn (addUTCTime (-300) record.timestamp, addUTCTime 1 record.timestamp) . Telemetry.SpanBySpanId)
               (fetchIn (addUTCTime (-1) record.start_time, addUTCTime 1 (spanEndOrCap record)) (Telemetry.SpanByName Telemetry.sdkSpanStoredName))
               record
-          addRespHeaders $ SpanItemExpanded pid anchor sdkSpan tabM
+          renderItem anchor sdkSpan (SpanItemExpanded pid anchor sdkSpan tabM)
 
 
 -- | Upper bound of a span's time window when end_time is missing (open span): cap at +300s.
@@ -131,6 +132,7 @@ anchorSdkSpan lookupParent lookupSdk record
 data ApiItemDetailed
   = SpanItemExpanded Projects.ProjectId Telemetry.OtelLogsAndSpans (Maybe Telemetry.OtelLogsAndSpans) (Maybe Text)
   | LogItemExpanded Projects.ProjectId Telemetry.OtelLogsAndSpans (Maybe Text)
+  | DetailTabExpanded Projects.ProjectId Telemetry.OtelLogsAndSpans (Maybe Telemetry.OtelLogsAndSpans) Text (Maybe Text)
   | ItemDetailedNotFound Text
 
 
@@ -144,6 +146,15 @@ closeDetailAttrs = [[__|on click send closeDetailPanel to closest <.details-pane
 instance ToHtml ApiItemDetailed where
   toHtml (SpanItemExpanded pid spn aptSpan tabM) = toHtml $ expandedItemView pid spn aptSpan tabM
   toHtml (LogItemExpanded pid req tabM) = toHtml $ expandedItemView pid req Nothing tabM
+  toHtml (DetailTabExpanded pid item aptSpan marker subtabM) =
+    toHtml
+      $ whenJust
+        ( case subtabM of
+            Just subtab | marker == "tab-req" -> find ((== subtab) . (.marker)) (snd $ httpDetailTabs item aptSpan)
+            Just _ -> Nothing
+            Nothing -> find ((== marker) . (.marker)) (detailTabs pid item aptSpan)
+        )
+        renderDetailPanel
   toHtml (ItemDetailedNotFound message) =
     toHtml $ emptyState_ def{icon = Just "circle-exclamation", action = ESCustom closeBtn} "Record not found" message
     where
@@ -174,10 +185,50 @@ spanBadge pid path val label =
       (span_ [class_ "truncate"] $ toHtml $ label <> ": " <> val)
 
 
--- | One detail tab. @panel@ carries its own literal @group-has-[.MARKER:checked]/dtab:block@
--- class — Tailwind only compiles class strings that appear verbatim in source, so this must
--- never be built from @marker@ at runtime. Default-active tab is the first shown (not a field).
-data DetailTab = DetailTab {marker :: Text, cls :: Text, label :: Html (), panel :: Html ()}
+-- | One detail tab. @panelClass@ carries its own literal
+-- @group-has-[.MARKER:checked]/dtab:block@ class so Tailwind can see it.
+data DetailTab = DetailTab
+  { marker :: Text
+  , cls :: Text
+  , label :: Html ()
+  , panelClass :: Text
+  , panelId :: Text
+  , content :: Html ()
+  }
+
+
+renderDetailPanel :: DetailTab -> Html ()
+renderDetailPanel tab = tabPanel_ tab.panelClass tab.panelId tab.content
+
+
+lazyPanel :: Text -> DetailTab -> Html ()
+lazyPanel url tab =
+  div_
+    [ class_ $ "hidden " <> tab.panelClass
+    , id_ tab.panelId
+    , hxGet_ url
+    , hxTrigger_ "intersect once"
+    , hxTarget_ "this"
+    , hxSwap_ "outerHTML"
+    , term "hx-sync" "this:replace"
+    , Aria.busy_ "true"
+    ]
+    $ div_ [class_ "flex justify-center py-8", role_ "status", Aria.label_ "Loading details"]
+    $ loadingIndicator_ LdSM LdDots
+
+
+lazyDetailPanel :: Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> DetailTab -> Html ()
+lazyDetailPanel pid item tab =
+  lazyPanel
+    ("/p/" <> pid.toText <> "/log_explorer/" <> item.id <> "/" <> formatUTC item.timestamp <> "/detailed?tab=" <> tab.marker <> "&partial=true")
+    tab
+
+
+lazyHttpPanel :: Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> DetailTab -> Html ()
+lazyHttpPanel pid item tab =
+  lazyPanel
+    ("/p/" <> pid.toText <> "/log_explorer/" <> item.id <> "/" <> formatUTC item.timestamp <> "/detailed?tab=tab-req&subtab=" <> tab.marker <> "&partial=true")
+    tab
 
 
 -- Unified view for both logs and spans
@@ -223,9 +274,10 @@ expandedItemView pid item aptSp selectedTabM = do
       div_ [class_ "flex", [__|on click halt the event's bubbling|]] do
         traverse_ detailTabRadio_ tabs
         div_ [class_ "w-full border-b-2 border-b-strokeWeak"] pass
-      -- All panels render once; the checked radio + group-has classes pick the
-      -- visible one, so tab switches are pure CSS (no round trip, no re-query).
-      div_ [class_ "mt-2 py-1 text-textWeak"] $ traverse_ (.panel) tabs
+      -- The selected panel renders now; hidden placeholders fetch and replace
+      -- themselves when their radio makes them visible for the first time.
+      div_ [class_ "mt-2 py-1 text-textWeak"]
+        $ traverse_ (\tab -> if tab.marker == activeMarker then renderDetailPanel tab else lazyDetailPanel pid item tab) tabs
   where
     isLog = item.kind == Just "log"
     isAlert = item.kind == Just "alert"
@@ -240,8 +292,7 @@ expandedItemView pid item aptSp selectedTabM = do
     detailTabRadio_ t = label_ [class_ $ "cursor-pointer border-b-2 border-b-strokeWeak px-4 py-1.5 text-sm has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-strokeBrand-strong has-[:focus-visible]:rounded-sm has-[:checked]:font-bold has-[:checked]:border-strokeBrand-strong has-[:checked]:text-textBrand " <> t.cls] do
       input_ $ [type_ "radio", name_ dgrp, class_ $ "sr-only " <> t.marker] <> [checked_ | t.marker == activeMarker]
       t.label
-    events = fromMaybe AE.Null (unAesonTextMaybe item.events)
-    spanErrors = if isLog then [] else getSpanErrors events
+    tabs = detailTabs pid item aptSp
 
     -- Best-effort curl reconstruction from the span's HTTP attributes and any
     -- captured request body (SDK-span fallback included via aptSp).
@@ -313,76 +364,94 @@ expandedItemView pid item aptSp selectedTabM = do
       button_ [class_ "action-btn", term "data-share-hide" "1", hxPost_ ("/p/" <> pid.toText <> "/share/" <> item.id <> "/" <> createdAt <> "?event_type=" <> (if isLog then "log" else "span")), hxSwap_ "innerHTML", hxTarget_ "#copy_share_link"]
         $ actionBtnBody "link-simple" "Share link"
 
-    -- The tab set as data: [shown?] marker, extra button class, label, panel (with its literal vis class).
+
+detailTabs :: Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> Maybe Telemetry.OtelLogsAndSpans -> [DetailTab]
+detailTabs pid item aptSp =
+  catMaybes
+    [ tab
+        ((isLog || isAlert) && isJust item.body)
+        "tab-body"
+        ""
+        "Body"
+        "group-has-[.tab-body:checked]/dtab:block"
+        "body-content"
+        (whenJust item.body \b -> jsonValueToHtmlTree (AE.toJSON b) Nothing)
+    , tab isHttp "tab-req" "" "Request" "group-has-[.tab-req:checked]/dtab:block" "request-content" (renderHttpDetails pid item aptSp)
+    , tab (not isAlert) "tab-att" "" "Attributes" "group-has-[.tab-att:checked]/dtab:block" "att-content" attContent
+    , tab
+        True
+        "tab-meta"
+        ""
+        "Process"
+        "group-has-[.tab-meta:checked]/dtab:block"
+        "meta-content"
+        (jsonValueToHtmlTree (maybe (AE.object []) (AE.Object . KEM.fromMapText) (unAesonTextMaybe item.resource)) (Just "resource"))
+    , tab
+        (not isLog && not (null spanErrors))
+        "tab-errors"
+        "flex items-center gap-1"
+        (badge "Errors" "badge badge-error badge-sm" (length spanErrors))
+        "group-has-[.tab-errors:checked]/dtab:block w-full whitespace-wrap"
+        "errors-content"
+        (renderErrors spanErrors)
+    , tab
+        (not isLog)
+        "tab-logs"
+        "flex items-center gap-1"
+        (badge "Logs" "badge badge-ghost badge-sm" (maybe 0 length (events ^? _Array)))
+        "group-has-[.tab-logs:checked]/dtab:block"
+        "logs-content"
+        (jsonValueToHtmlTree events Nothing)
+    , tab True "tab-raw" "whitespace-nowrap" "Raw data" "group-has-[.tab-raw:checked]/dtab:block" "m-raw-content" (jsonValueToHtmlTree (AE.toJSON item) Nothing)
+    ]
+  where
+    isLog = item.kind == Just "log"
+    isAlert = item.kind == Just "alert"
+    isHttp = not isLog && isHttpSpan item
+    events = fromMaybe AE.Null (unAesonTextMaybe item.events)
+    spanErrors = if isLog then [] else getSpanErrors events
+    tab shown marker cls label panelClass panelId content = DetailTab{marker, cls, label, panelClass, panelId, content} <$ guard shown
+    badge label cls count = toHtml @Text label >> div_ [class_ cls] (show count)
+    attContent = case unAesonTextMaybe item.attributes of
+      Just m | not (null m) -> jsonValueToHtmlTree (AE.Object $ KEM.fromMapText m) $ Just "attributes"
+      _ -> div_ [class_ "text-sm text-textWeak italic py-4"] "No custom attributes on this entry"
+
+
+renderHttpDetails :: Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> Maybe Telemetry.OtelLogsAndSpans -> Html ()
+renderHttpDetails pid item aptSp = div_ [id_ "http-content-container", class_ "group/htab flex flex-col gap-3 mt-2"] do
+  let (activeMarker, tabs) = httpDetailTabs item aptSp
+  div_ [class_ "bg-fillWeaker w-max rounded-lg border border-strokeWeak justify-start items-start inline-flex"]
+    $ div_ [class_ "justify-start items-start flex text-sm"]
+    $ forM_ tabs \tab -> httpTab_ ("htab-" <> item.id) tab.marker (tab.marker == activeMarker) tab.label
+  div_ [] $ forM_ tabs \tab -> if tab.marker == activeMarker then renderDetailPanel tab else lazyHttpPanel pid item tab
+
+
+httpDetailTabs :: Telemetry.OtelLogsAndSpans -> Maybe Telemetry.OtelLogsAndSpans -> (Text, [DetailTab])
+httpDetailTabs item aptSp = (activeMarker, tabs)
+  where
+    cSp = fromMaybe item aptSp
+    bodyField k = fromMaybe (AE.object []) $ unAesonTextMaybe cSp.body >>= (^? key k)
+    httpAttrs = fromMaybe AE.Null $ unAesonTextMaybe cSp.attributes >>= Map.lookup "http"
+    hp ks = fromMaybe AE.Null $ foldlM (\v k -> v ^? key k) httpAttrs ks
+    notEmpty v = v `notElem` ([AE.Null, AE.object [], AE.Array mempty, AE.String ""] :: [AE.Value])
     tabs =
-      catMaybes
-        [ tab
-            ((isLog || isAlert) && isJust item.body)
-            "tab-body"
-            ""
-            "Body"
-            (whenJust item.body \b -> jsonTab_ "group-has-[.tab-body:checked]/dtab:block" "body-content" (AE.toJSON b) Nothing)
-        , tab isHttp "tab-req" "" "Request" reqPanel
-        , tab (not isAlert) "tab-att" "" "Attributes" attPanel
-        , tab
-            True
-            "tab-meta"
-            ""
-            "Process"
-            (jsonTab_ "group-has-[.tab-meta:checked]/dtab:block" "meta-content" (maybe (AE.object []) (AE.Object . KEM.fromMapText) (unAesonTextMaybe item.resource)) (Just "resource"))
-        , tab
-            (not isLog && not (null spanErrors))
-            "tab-errors"
-            "flex items-center gap-1"
-            (badge "Errors" "badge badge-error badge-sm" (length spanErrors))
-            (tabPanel_ "group-has-[.tab-errors:checked]/dtab:block w-full whitespace-wrap" "errors-content" (renderErrors spanErrors))
-        , tab
-            (not isLog)
-            "tab-logs"
-            "flex items-center gap-1"
-            (badge "Logs" "badge badge-ghost badge-sm" (maybe 0 length (events ^? _Array)))
-            (jsonTab_ "group-has-[.tab-logs:checked]/dtab:block" "logs-content" events Nothing)
-        , tab True "tab-raw" "whitespace-nowrap" "Raw data" (jsonTab_ "group-has-[.tab-raw:checked]/dtab:block" "m-raw-content" (AE.toJSON item) Nothing)
-        ]
-      where
-        tab shown m c l p = DetailTab m c l p <$ guard shown
-        badge l c n = toHtml @Text l >> div_ [class_ c] (show n)
-        attPanel = tabPanel_ "group-has-[.tab-att:checked]/dtab:block" "att-content" $ case unAesonTextMaybe item.attributes of
-          Just m | not (null m) -> jsonValueToHtmlTree (AE.Object $ KEM.fromMapText m) $ Just "attributes"
-          _ -> div_ [class_ "text-sm text-textWeak italic py-4"] "No custom attributes on this entry"
-        reqPanel = tabPanel_ "group-has-[.tab-req:checked]/dtab:block" "request-content" $ div_ [id_ "http-content-container", class_ "group/htab flex flex-col gap-3 mt-2"] do
-          let cSp = fromMaybe item aptSp
-              bodyField k = fromMaybe (AE.object []) $ unAesonTextMaybe cSp.body >>= (^? key k)
-              httpAttrs = fromMaybe AE.Null $ unAesonTextMaybe cSp.attributes >>= Map.lookup "http"
-              hp ks = fromMaybe AE.Null $ foldlM (\v k -> v ^? key k) httpAttrs ks
-              notEmpty v = v `notElem` ([AE.Null, AE.object [], AE.Array mempty, AE.String ""] :: [AE.Value])
-              -- Default to the first sub-tab that has content (Request Details always does).
-              defaultTab =
-                maybe "htab-raw" fst
-                  $ find
-                    snd
-                    ( [ ("htab-res", notEmpty (bodyField "response_body"))
-                      , ("htab-req", notEmpty (bodyField "request_body"))
-                      , ("htab-hed", any (notEmpty . hp) [["request", "header"], ["response", "header"]])
-                      , ("htab-par", any (notEmpty . hp) [["request", "query_params"], ["request", "path_params"]])
-                      ]
-                        :: [(Text, Bool)]
-                    )
-          div_ [class_ "bg-fillWeaker w-max rounded-lg border border-strokeWeak justify-start items-start inline-flex"]
-            $ div_ [class_ "justify-start items-start flex text-sm"]
-            $ forM_ ([("htab-res", "Res Body"), ("htab-req", "Req Body"), ("htab-hed", "Headers"), ("htab-par", "Params"), ("htab-raw", "Request Details")] :: [(Text, Html ())]) \(m, l) ->
-              httpTab_ ("htab-" <> item.id) m (m == defaultTab) l
-          div_ []
-            $ forM_
-              ( [ ("group-has-[.htab-raw:checked]/htab:block", "raw_content", AE.toJSON cSp, Nothing)
-                , ("group-has-[.htab-req:checked]/htab:block", "req_content", bodyField "request_body", Just "body.request_body")
-                , ("group-has-[.htab-res:checked]/htab:block", "res_content", bodyField "response_body", Just "body.response_body")
-                , ("group-has-[.htab-hed:checked]/htab:block", "hed_content", AE.object ["request_headers" AE..= hp ["request", "header"], "response_headers" AE..= hp ["response", "header"]], Nothing)
-                , ("group-has-[.htab-par:checked]/htab:block", "par_content", AE.object ["query_params" AE..= hp ["request", "query_params"], "path_params" AE..= hp ["request", "path_params"]], Nothing)
-                ]
-                  :: [(Text, Text, AE.Value, Maybe Text)]
-              )
-              \(visCls, eid, val, filt) -> jsonTab_ visCls eid val filt
+      [ DetailTab "htab-res" "" "Res Body" "group-has-[.htab-res:checked]/htab:block" "res_content" (jsonValueToHtmlTree (bodyField "response_body") $ Just "body.response_body")
+      , DetailTab "htab-req" "" "Req Body" "group-has-[.htab-req:checked]/htab:block" "req_content" (jsonValueToHtmlTree (bodyField "request_body") $ Just "body.request_body")
+      , DetailTab "htab-hed" "" "Headers" "group-has-[.htab-hed:checked]/htab:block" "hed_content" (jsonValueToHtmlTree (AE.object ["request_headers" AE..= hp ["request", "header"], "response_headers" AE..= hp ["response", "header"]]) Nothing)
+      , DetailTab "htab-par" "" "Params" "group-has-[.htab-par:checked]/htab:block" "par_content" (jsonValueToHtmlTree (AE.object ["query_params" AE..= hp ["request", "query_params"], "path_params" AE..= hp ["request", "path_params"]]) Nothing)
+      , DetailTab "htab-raw" "" "Request Details" "group-has-[.htab-raw:checked]/htab:block" "raw_content" (jsonValueToHtmlTree (AE.toJSON cSp) Nothing)
+      ]
+    activeMarker =
+      maybe "htab-raw" fst
+        $ find
+          snd
+          ( [ ("htab-res", notEmpty $ bodyField "response_body")
+            , ("htab-req", notEmpty $ bodyField "request_body")
+            , ("htab-hed", any (notEmpty . hp) [["request", "header"], ["response", "header"]])
+            , ("htab-par", any (notEmpty . hp) [["request", "query_params"], ["request", "path_params"]])
+            ]
+              :: [(Text, Bool)]
+          )
 
 
 renderErrors :: [AE.Value] -> Html ()

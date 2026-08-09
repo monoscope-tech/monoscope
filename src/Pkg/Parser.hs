@@ -1,5 +1,5 @@
 -- Parser implemented with help and code from: https://markkarpov.com/tutorial/megaparsec.html
-module Pkg.Parser (queryASTToComponents, parseQueryToComponents, getProcessedColumns, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, SqlQueryCfg (..), QueryComponents (..), NormalizedQuery (..), normalizeQuery, buildDateRange, buildGroupBy, buildOrderBy, buildLimit, buildWhereCondition, listToColNames, colsNoAsClause, defaultSelectSqlQuery, pSource, parseQueryToAST, ToQueryText (..), calculateAutoBinWidth, replacePlaceholders, variablePresets, variablePresetsKQL, constantToSQLList, constantToKQLList, defaultQueryLimit) where
+module Pkg.Parser (queryASTToComponents, parseQueryToComponents, getProcessedColumns, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, PageDirection (..), PageCursor (..), SqlQueryCfg (..), QueryComponents (..), NormalizedQuery (..), normalizeQuery, buildDateRange, buildGroupBy, buildOrderBy, buildLimit, buildWhereCondition, listToColNames, colsNoAsClause, defaultSelectSqlQuery, pSource, parseQueryToAST, ToQueryText (..), calculateAutoBinWidth, replacePlaceholders, variablePresets, variablePresetsKQL, constantToSQLList, constantToKQLList, defaultQueryLimit) where
 
 import Control.Error (hush)
 import Data.Char (isAlphaNum)
@@ -11,12 +11,14 @@ import Data.Time.Clock (UTCTime (..), addUTCTime, diffUTCTime, secondsToDiffTime
 import Data.Time.Format.ISO8601 (iso8601Show)
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
+import Pkg.Deriving (WrappedEnumSC (..))
 import Pkg.Parser.Expr
 import Pkg.Parser.Stats
 import PyF (fmt)
 import Relude
 import Text.Megaparsec (parse)
 import Utils (formatUTC)
+import Web.HttpApiData (FromHttpApiData)
 
 
 data QueryComponents = QueryComponents
@@ -76,12 +78,14 @@ buildDateRange cfg =
   let fmtTime = toText . iso8601Show
       between a b = timestampCol <> " BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime b <> "'"
    in case (cfg.dateRange, cfg.cursorM) of
-        ((Just a, _), Just cursor) -> between a cursor
-        ((Nothing, Just _), Just cursor) -> timestampCol <> " <= '" <> fmtTime cursor <> "'"
+        ((Just a, _), Just (PageCursor PageOlder cursor)) -> between a cursor
+        ((Nothing, _), Just (PageCursor PageOlder cursor)) -> timestampCol <> " <= '" <> fmtTime cursor <> "'"
+        ((_, Just b), Just (PageCursor PageNewer cursor)) -> between cursor b
+        ((_, Nothing), Just (PageCursor PageNewer cursor)) -> timestampCol <> " >= '" <> fmtTime cursor <> "'"
         ((Just a, Just b), Nothing) -> between a b
         ((Just a, Nothing), Nothing) -> timestampCol <> " >= '" <> fmtTime a <> "'"
         ((Nothing, Just b), Nothing) -> timestampCol <> " <= '" <> fmtTime b <> "'"
-        ((Nothing, Nothing), _) -> ""
+        ((Nothing, Nothing), Nothing) -> ""
 
 
 -- | Build GROUP BY clause with resolved extended columns
@@ -162,7 +166,7 @@ normalizeQuery cfg qc =
         , nqProjectId = cfg.pid.toText
         , nqGroupBy = buildGroupBy qc.extendedColumns qc.groupByClause
         , nqHaving = buildHaving qc
-        , nqOrderBy = buildOrderBy qc
+        , nqOrderBy = case cfg.cursorM of Just (PageCursor PageNewer _) -> "ORDER BY " <> timestampCol <> " asc"; _ -> buildOrderBy qc
         , nqLimit = buildLimit qc
         , nqBinInterval = qc.finalSummarizeQuery
         , nqPercentiles = qc.percentilesInfo
@@ -232,11 +236,20 @@ displaySortFieldWith aliases (SortField field dirM) =
 
 ----------------------------------------------------------------------------------
 
+data PageDirection = PageOlder | PageNewer
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving (FromHttpApiData) via WrappedEnumSC 'Nothing "Page" PageDirection
+
+
+data PageCursor = PageCursor PageDirection UTCTime
+  deriving stock (Eq, Generic, Show)
+
+
 data SqlQueryCfg = SqlQueryCfg
   { pid :: Projects.ProjectId
   , presetRollup :: Maybe Text
   , dateRange :: (Maybe UTCTime, Maybe UTCTime)
-  , cursorM :: Maybe UTCTime
+  , cursorM :: Maybe PageCursor
   , projectedColsByUser :: [Text] -- cols selected explicitly by user
   , currentTime :: UTCTime
   , defaultSelect :: [Text]

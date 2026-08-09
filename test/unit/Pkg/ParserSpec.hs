@@ -2,9 +2,13 @@ module Pkg.ParserSpec (spec) where
 
 import Data.Either.Extra (fromRight')
 import Data.Text qualified as T
+import Data.Time (addUTCTime)
 import NeatInterpolation (text)
 import Pkg.Parser (
+  PageCursor (..),
+  PageDirection (..),
   QueryComponents (finalSummarizeQuery, percentilesInfo),
+  SqlQueryCfg (..),
   defPid,
   defSqlQueryCfg,
   fixedUTCTime,
@@ -36,6 +40,13 @@ spec = do
             [text|
       SELECT jsonb_build_array(id,to_char(timestamp at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),context___trace_id,name,duration,resource___service___name,parent_id,CAST(EXTRACT(EPOCH FROM (start_time)) * 1000000000 AS BIGINT),COALESCE(errors is not null OR (kind = 'log' AND (lower(level) = 'error' OR severity___severity_number >= 17 OR status_code = 'ERROR')), false),to_jsonb(summary),context___span_id,kind) FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((timestamp >= NOW() - INTERVAL '7 days')) ORDER BY timestamp desc limit 501|]
       normT query `shouldBe` normT expected
+
+    it "newer pagination scans forward from its cursor and returns the adjacent page" do
+      let cfg = (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing){cursorM = Just (PageCursor PageNewer fixedUTCTime), dateRange = (Nothing, Just $ addUTCTime 60 fixedUTCTime)}
+          (query, _) = fromRight' $ parseQueryToComponents cfg "level == \"ERROR\""
+      query `shouldSatisfy` T.isInfixOf "timestamp BETWEEN"
+      query `shouldSatisfy` T.isInfixOf "ORDER BY timestamp asc"
+      query `shouldNotSatisfy` T.isInfixOf "ORDER BY timestamp desc"
 
     it "query with now() time function" do
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "timestamp == now()"

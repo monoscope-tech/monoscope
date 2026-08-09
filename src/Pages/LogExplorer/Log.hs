@@ -71,7 +71,7 @@ import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), enrichSchemaWithFacet
 import Pkg.Components.TimePicker qualified as Components
 import Pkg.Components.Widget (WidgetAxis (..), WidgetType (WTTimeseries, WTTimeseriesLine))
 import Pkg.Components.Widget qualified as Widget
-import Pkg.Parser (defaultQueryLimit, pSource, parseQueryToAST, toQText)
+import Pkg.Parser (PageCursor (..), PageDirection (..), defaultQueryLimit, pSource, parseQueryToAST, toQText)
 import Pkg.Parser.Expr qualified as ParserExpr
 import Pkg.Parser.Stats (QueryError (..), Section (TakeCommand), parseQueryDiagnosed)
 import Pkg.SchemaLearning.Catalog (FacetData (..), FacetSummary (..), FacetValue (..))
@@ -811,12 +811,13 @@ logDataEnv pid sinceM fromM toM = do
 
 -- | Log-row data endpoint. The log-list web component fetches this; the shell
 -- (apiLogH) renders only chrome. Returns the trace-tree-expanded 'LogResult'.
-logExplorerDataH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogResult)
-logExplorerDataH pid queryM' cols' cursorM' sinceM fromM toM sourceM targetSpansM = withSpan_ "log-explorer.data" [] do
+logExplorerDataH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe PageDirection -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogResult)
+logExplorerDataH pid queryM' cols' cursorM' directionM sinceM fromM toM sourceM targetSpansM = withSpan_ "log-explorer.data" [] do
   (authCtx, now, fromD, toD) <- logDataEnv pid sinceM fromM toM
   -- `cols` is a delta over server defaults: bare tokens add columns, `-`-prefixed tokens hide defaults.
   let (removeToks, addCols) = L.partition ("-" `T.isPrefixOf`) $ filter (not . T.null) $ T.splitOn "," (fromMaybe "" cols')
       removeCols = map (T.drop 1) removeToks
+      cursor = PageCursor (fromMaybe PageOlder directionM) <$> cursorM'
       emptyTable = (V.empty, ["timestamp", "summary", "duration"], 0)
   -- Carry a sanitized failure message alongside the (empty) table so the client
   -- can show an error state instead of a misleading "no events" list.
@@ -824,7 +825,7 @@ logExplorerDataH pid queryM' cols' cursorM' sinceM fromM toM sourceM targetSpans
     Left err -> Log.logInfo "Log explorer data: rejected invalid KQL query" err $> (Just err, emptyTable)
     Right queryAST -> do
       resultE <-
-        LogQueries.selectLogTable authCtx.env.enableTimefusionReads pid queryAST (toQText queryAST) cursorM' (fromD, toD) addCols (parseMaybe pSource =<< sourceM) targetSpansM
+        LogQueries.selectLogTable authCtx.env.enableTimefusionReads pid queryAST (toQText queryAST) cursor (fromD, toD) addCols (parseMaybe pSource =<< sourceM) targetSpansM
       case resultE of
         Left err -> Log.logAttention "log-explorer.data query failed" (AE.object ["project_id" AE..= pid.toText, "source" AE..= fromMaybe "spans" sourceM, "error" AE..= err]) $> (Just (sanitizeBackendError err), emptyTable)
         Right t -> pure (Nothing, t)

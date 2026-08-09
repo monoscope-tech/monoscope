@@ -252,10 +252,11 @@ validateSqlQuery query =
 -- | @useTimefusion@ (from @env.enableTimefusionReads@) routes the read to the TimeFusion
 -- pool, as in 'executeSecuredQuery'. It is a parameter, not a wrapper the callers apply,
 -- because callers that forgot it silently read the empty Postgres side.
-selectLogTable :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => Bool -> Projects.ProjectId -> [Section] -> Text -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector AE.Value), [Text], Int))
+selectLogTable :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => Bool -> Projects.ProjectId -> [Section] -> Text -> Maybe PageCursor -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector AE.Value), [Text], Int))
 selectLogTable useTimefusion pid queryAST queryText cursorM dateRange projectedColsByUser source targetSpansM = do
   now <- Time.currentTime
   let (q, queryComponents) = queryASTToComponents ((defSqlQueryCfg pid now source targetSpansM){cursorM, dateRange, projectedColsByUser, source, targetSpansM}) queryAST
+      canonicalOrder = case cursorM of Just (PageCursor PageNewer _) -> V.reverse; _ -> identity
 
   Log.logTrace
     "Query Debug Info"
@@ -301,13 +302,14 @@ selectLogTable useTimefusion pid queryAST queryText cursorM dateRange projectedC
                 firstRow <- logItemsV V.!? 0
                 AE.Number n <- firstRow V.!? (V.length firstRow - 1)
                 pure $ round n
-           in Right (V.map (\v -> V.take (V.length v - 1) v) logItemsV, queryComponents.toColNames, count)
+           in Right (canonicalOrder $ V.map (\v -> V.take (V.length v - 1) v) logItemsV, queryComponents.toColNames, count)
       -- No count(*) OVER(): the overflow row detects hasMore, signalled by
       -- returning count > rows length.
       | otherwise ->
           let limit = fromMaybe defaultQueryLimit queryComponents.takeLimit
               hasOverflow = V.length logItemsV > limit
-              rows = if hasOverflow then V.take limit logItemsV else logItemsV
+              page = if hasOverflow then V.take limit logItemsV else logItemsV
+              rows = canonicalOrder page
            in Right (rows, queryComponents.toColNames, V.length rows + bool 0 1 hasOverflow)
 
 

@@ -1464,7 +1464,7 @@ routeRequest tr path params
   | "/log_explorer" `T.isPrefixOf` path = do
       (_, pg) <-
         testServant tr
-          $ Log.logExplorerDataH testPid query Nothing Nothing since from to source Nothing
+          $ Log.logExplorerDataH testPid query Nothing Nothing Nothing since from to source Nothing
       pure $ mockResponse $ AE.encode pg
   | "/chart_data" `T.isPrefixOf` path = do
       result <-

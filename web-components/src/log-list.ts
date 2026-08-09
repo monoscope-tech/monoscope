@@ -71,6 +71,9 @@ const noopRef: RefOrCallback = () => {};
 
 // Special item types for virtual list
 type VirtualListItem = EventLine | { type: 'fetchRecent' } | { type: 'loadMore' } | { type: 'aggregateChildren'; parentKey: string };
+type ScrollAnchor = { id: string; offset: number };
+
+const MAX_RETAINED_ROWS = 5000;
 
 // FlowLayout starts at 100px until it observes rows. Log rows are 28px, so the
 // initial estimate inflated the virtual scroll range roughly 3.5×.
@@ -78,6 +81,9 @@ export class DenseRowFlowLayout extends FlowLayout {
   constructor(...args: ConstructorParameters<typeof FlowLayout>) {
     super(...args);
     this._itemSize.height = 28;
+    // The 1000px default renders ~36 offscreen rows per side. Dense fixed-height
+    // rows need only a short runway, keeping style/paint work near the viewport.
+    this._overhang = 200;
   }
 }
 
@@ -104,6 +110,7 @@ export class LogList extends LitElement {
   @state() private logsColumns: string[] = [];
   @state() private wrapLines: boolean = false;
   @state() private hasMore: boolean = true;
+  @state() private hasNewer: boolean = false;
   @state() private expandTimeRange: boolean = true;
   @state() private loadedCount: number = 0;
   @state() private totalCount: number = 0;
@@ -145,6 +152,7 @@ export class LogList extends LitElement {
   private lineChart: any = null;
   private initChartsTimer: ReturnType<typeof setTimeout> | null = null;
   private _loadMoreObserver: IntersectionObserver | null = null;
+  private _loadNewerObserver: IntersectionObserver | null = null;
   private updateBatchTimer: NodeJS.Timeout | null = null;
   private pendingUpdates: Set<string> = new Set();
   private handleMouseUp: (() => void) | null = null;
@@ -471,22 +479,17 @@ export class LogList extends LitElement {
     const url = new URL(window.location.href);
     url.searchParams.set('json', 'true');
 
-    // Lower bound = newest loaded row + 10ms (skip it). null when empty.
-    const from = this.edgeCursor(newestRowTimestamp, 10);
-    if (from != null) {
-      url.searchParams.set('from', from);
-      // Recompute the lower bound from the newest loaded row; drop cursor/since.
-      // Keep `to`: on a bounded historical range, live-tail must stay within it
-      // rather than silently pulling rows newer than the user's upper bound.
-      url.searchParams.delete('cursor');
+    // Forward cursor = newest retained row + 10ms (skip the inclusive boundary).
+    // The server scans ascending for this request, then returns canonical newest-first rows.
+    const cursor = this.edgeCursor(newestRowTimestamp, 10);
+    if (cursor != null) {
+      url.searchParams.set('cursor', cursor);
+      url.searchParams.set('direction', 'newer');
+      url.searchParams.delete('from');
       url.searchParams.delete('since');
-      // Edge case: once the newest loaded row reaches the upper bound, `from`
-      // (newest+10ms) lands at/after `to`, so every tick fetches an empty
-      // [from,to] window — the live banner would hang forever with no rows and
-      // no error. Stop live-tail instead of polling a guaranteed-empty range.
       const to = url.searchParams.get('to');
       const toMs = to ? Date.parse(to) : NaN;
-      if (!isNaN(toMs) && Date.parse(from) >= toMs) this.stopLiveStream('Reached the end of the selected time range — live tail paused.');
+      if (!isNaN(toMs) && Date.parse(cursor) >= toMs) this.stopLiveStream('Reached the end of the selected time range — live tail paused.');
     }
 
     url.pathname = this.dataSubPath();
@@ -537,6 +540,7 @@ export class LogList extends LitElement {
     const url = new URL(baseUrl, window.location.origin + window.location.pathname);
     url.searchParams.set('json', 'true');
     url.searchParams.set('cursor', cursor); // preserves from/to/since filters already on the base URL
+    url.searchParams.set('direction', 'older');
 
     url.pathname = this.dataSubPath();
     return url.toString();
@@ -849,6 +853,10 @@ export class LogList extends LitElement {
     if (this._loadMoreObserver) {
       this._loadMoreObserver.disconnect();
       this._loadMoreObserver = null;
+    }
+    if (this._loadNewerObserver) {
+      this._loadNewerObserver.disconnect();
+      this._loadNewerObserver = null;
     }
     if (this.updateBatchTimer) {
       clearTimeout(this.updateBatchTimer);
@@ -1277,11 +1285,11 @@ export class LogList extends LitElement {
 
       // Handle results
       if (tree.length === 0) {
-        // An empty load-more page means we've hit the end of older data: stop
-        // paginating even if the server still reports hasMore, otherwise the
-        // load-more sentinel keeps re-firing and refetches (and, pre-dedup,
-        // re-appends) the same window. Initial/refresh fetches keep trusting meta.
-        this.hasMore = isLoadMore ? false : meta.hasMore || false;
+        // An empty pagination page exhausts that edge. Initial/refresh fetches
+        // keep trusting meta; a quiet live-tail tick simply stays at the newest edge.
+        if (isLoadMore) this.hasMore = false;
+        else if (isRecentFetch) this.hasNewer = false;
+        else this.hasMore = meta.hasMore || false;
         // A quiet live-tail tick (no new rows) isn't "history exhausted" — don't flash
         // the "Show earlier events" button on every empty 5s recent fetch.
         if (!isRecentFetch) this.expandTimeRange = !this.hasMore;
@@ -1292,6 +1300,7 @@ export class LogList extends LitElement {
           this.spanListTree = [];
           this.seenIds.clear();
           this.loadedCount = 0;
+          this.hasNewer = false;
           if (meta.count !== undefined) this.totalCount = meta.count;
           this.updateVisibleItems();
           this.updateRowCountDisplay();
@@ -1312,20 +1321,26 @@ export class LogList extends LitElement {
       // would silently undo a user's hideColumn / reorder on every tick.
       if (isFullFetch) this.logsColumns = meta.cols;
       this.colIdxMap = meta.colIdxMap;
-      // Cache server traces for re-render (expand/collapse, flip direction)
-      // Cap at 5000 entries to prevent unbounded growth during pagination
-      if ((isLoadMore || isRecentFetch) && meta.traces?.length) {
-        this.cachedServerTraces = [...this.cachedServerTraces, ...meta.traces].slice(-5000);
-      } else if (meta.traces) {
-        this.cachedServerTraces = meta.traces;
+      // Cache one adjacency entry per trace for expand/collapse and direction flips.
+      // Inclusive cursor pages repeat the boundary trace; keeping those duplicates
+      // made every rebuild emit duplicate rows and retain duplicate metadata.
+      if (meta.traces) {
+        const traces = new Map<string, ServerTraceEntry>();
+        const source = isLoadMore || isRecentFetch ? [...this.cachedServerTraces, ...meta.traces] : meta.traces;
+        source.forEach((trace: ServerTraceEntry) => {
+          traces.delete(trace.trace_id);
+          traces.set(trace.trace_id, trace);
+        });
+        this.cachedServerTraces = [...traces.values()];
       }
 
       if (isRefresh) {
         // New query/filter/time-range: drop inline-expanded aggregate children so
         // they don't render stale rows from the previous query under a surviving key.
         this.expandedAggregates = {};
-        this.spanListTree = tree;
-        this.seenIds = new Set(tree.map((r) => r.id));
+        this.hasNewer = false;
+        this.spanListTree = dedupeById(tree);
+        this.seenIds = new Set(this.spanListTree.map((r) => r.id));
         this.updateVisibleItems();
         if (tree.length > 0) {
           requestAnimationFrame(() => {
@@ -1346,13 +1361,17 @@ export class LogList extends LitElement {
           if (shouldBufferRecent(this.isLiveStreaming, scrollTop, scrolledToBottom, this.flipDirection)) {
             this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree, isRecentFetch);
           } else {
+            const anchor = this.captureScrollAnchor();
             this.spanListTree = this.mergeIntoTree(tree, isRecentFetch);
             this.updateVisibleItems();
+            if (anchor) void this.restoreScrollAnchor(anchor);
           }
         }
       } else {
+        const anchor = this.captureScrollAnchor();
         this.spanListTree = this.mergeIntoTree(tree, isRecentFetch);
         this.updateVisibleItems();
+        if (anchor) void this.restoreScrollAnchor(anchor);
       }
       // Count what's actually visible. queryResultCount over-counts because the
       // dedup-dropped boundary row is re-reported on every paginated page.
@@ -1524,18 +1543,72 @@ export class LogList extends LitElement {
         : [...current, ...newData];
   }
 
-  // Buffer accumulation ("N new" pill) — small bounded list, full dedupe is fine.
+  // Buffer accumulation ("N new" pill) is bounded too: a user can leave live
+  // tail paused for hours while inspecting an older row.
   private addWithFlipDirection(current: any[], newData: any[], isRecentFetch: boolean) {
-    return dedupeById(this.orderMerge(current, newData, isRecentFetch));
+    const merged = dedupeById(this.orderMerge(current, newData, isRecentFetch));
+    return this.flipDirection ? merged.slice(-MAX_RETAINED_ROWS) : merged.slice(0, MAX_RETAINED_ROWS);
   }
 
   // Merge a freshly fetched page into spanListTree, dropping ids already present
   // (boundary row recurs across inclusive-cursor pages) using the persistent
   // seenIds set so the cost is O(page), not O(whole tree).
   private mergeIntoTree(newData: EventLine[], isRecentFetch: boolean) {
-    const fresh = newData.filter((r) => !this.seenIds.has(r.id));
-    fresh.forEach((r) => this.seenIds.add(r.id));
-    return this.orderMerge(this.spanListTree, fresh, isRecentFetch);
+    const fresh = newData.filter((r) => {
+      if (this.seenIds.has(r.id)) return false;
+      this.seenIds.add(r.id);
+      return true;
+    });
+    const merged = this.orderMerge(this.spanListTree, fresh, isRecentFetch);
+    if (this.mode !== 'logs' || merged.length <= MAX_RETAINED_ROWS) return merged;
+
+    // Evict from the edge opposite the fetch. Move the cut past a trace boundary
+    // so a root and its children are never split across retained/evicted state.
+    const dropStart = this.flipDirection === isRecentFetch;
+    const boundedCut = dropStart ? merged.length - MAX_RETAINED_ROWS : MAX_RETAINED_ROWS;
+    let cut = boundedCut;
+    if (dropStart) {
+      while (cut < merged.length && cut > 0 && merged[cut].traceId === merged[cut - 1].traceId) cut++;
+    } else {
+      while (cut > 0 && cut < merged.length && merged[cut].traceId === merged[cut - 1].traceId) cut--;
+    }
+    // A single trace can exceed the entire window. Preserve a useful hard-bounded
+    // prefix/suffix rather than moving the trace-aware cut to an empty edge.
+    if (cut === 0 || cut === merged.length) cut = boundedCut;
+    const kept = dropStart ? merged.slice(cut) : merged.slice(0, cut);
+    const dropped = dropStart ? merged.slice(0, cut) : merged.slice(cut);
+    dropped.forEach((r) => this.seenIds.delete(r.id));
+
+    const retainedIds = new Set(kept.map((r) => r.id));
+    const retainedTraces = new Set(kept.map((r) => r.traceId));
+    this.cachedServerTraces = this.cachedServerTraces.filter((t) => retainedTraces.has(t.trace_id));
+    this.expandedTraces = Object.fromEntries(Object.entries(this.expandedTraces).filter(([id]) => retainedTraces.has(id)));
+    this.loadingSessions = Object.fromEntries(Object.entries(this.loadingSessions).filter(([id]) => retainedIds.has(id)));
+    if (isRecentFetch) this.hasMore = true;
+    else this.hasNewer = true;
+    return kept;
+  }
+
+  private captureScrollAnchor(): ScrollAnchor | null {
+    const container = this.logsContainer;
+    if (!container || this.mode !== 'logs') return null;
+    const top = container.getBoundingClientRect().top;
+    const row = [...container.querySelectorAll<HTMLElement>('[data-row-id]')].find((el) => el.getBoundingClientRect().bottom > top);
+    return row ? { id: row.dataset.rowId!, offset: row.getBoundingClientRect().top - top } : null;
+  }
+
+  private async restoreScrollAnchor(anchor: ScrollAnchor) {
+    await this.updateComplete;
+    const index = this.virtualListItems.findIndex((item) => 'id' in item && item.id === anchor.id);
+    const virtualizer = this.querySelector('lit-virtualizer');
+    if (index < 0 || !virtualizer) return;
+    virtualizer.scrollToIndex(index, 'start');
+    await virtualizer.layoutComplete;
+    requestAnimationFrame(() => {
+      const container = this.logsContainer;
+      const row = [...(container?.querySelectorAll<HTMLElement>('[data-row-id]') || [])].find((el) => el.dataset.rowId === anchor.id);
+      if (container && row) container.scrollTop += row.getBoundingClientRect().top - container.getBoundingClientRect().top - anchor.offset;
+    });
   }
 
   handleRecentClick() {
@@ -1706,15 +1779,17 @@ export class LogList extends LitElement {
           table-layout: fixed;
         }
 
+        /* The virtualizer keeps an offscreen runway for smooth scrolling. Let the
+           browser skip style/layout/paint work for those rows without promoting
+           the entire growing scroll surface to a compositor layer. */
+        lit-virtualizer > tr {
+          content-visibility: auto;
+          contain-intrinsic-block-size: auto 28px;
+        }
+
         /* Prevent clicks on closed popovers */
         [popover]:not(:popover-open) {
           pointer-events: none;
-        }
-
-        /* Optimize virtualizer container */
-        lit-virtualizer {
-          will-change: transform;
-          contain: strict;
         }
 
         /* Column width styles - dynamically generated for all known columns */
@@ -1733,7 +1808,7 @@ export class LogList extends LitElement {
       <div
         ${ref(this.containerRef)}
         class=${clsx(
-          'relative group-hash-full shrink-1 min-w-0 pb-32 m-0 surface-raised rounded-t-2xl w-full h-full c-scroll overflow-y-auto will-change-scroll contain-strict',
+          'relative group-hash-full shrink-1 min-w-0 pb-32 m-0 surface-raised rounded-t-2xl w-full h-full c-scroll overflow-y-auto contain-strict',
           isInitialLoading && 'overflow-hidden'
         )}
         id="logs_list_container_inner"
@@ -2426,6 +2501,25 @@ export class LogList extends LitElement {
     // Aggregate views (patterns) don't support live streaming or loading newer events
     if (this.isAggregate) return html`<tr></tr>`;
 
+    const fetchRecentRef = createRef<HTMLTableRowElement>();
+    if (this.hasNewer) {
+      requestAnimationFrame(() => {
+        if (!fetchRecentRef.value || this.isFetchingRecent || this.isLoading) return;
+        const observer = new IntersectionObserver(
+          ([entry]) => {
+            if (entry.isIntersecting && !this.isFetchingRecent && !this.isLoading) {
+              this.fetchData(this.buildRecentFetchUrl(), false, true);
+              observer.disconnect();
+            }
+          },
+          { root: this.logsContainer, rootMargin: '100px', threshold: 0.1 }
+        );
+        observer.observe(fetchRecentRef.value);
+        this._loadNewerObserver?.disconnect();
+        this._loadNewerObserver = observer;
+      });
+    }
+
     return this.createLoadingRow(
       'recent-logs',
       this.isLiveStreaming ? html`<span class="font-normal no-underline text-textWeak">Live streaming latest data...</span>` : 'Load newer events',
@@ -2433,7 +2527,8 @@ export class LogList extends LitElement {
       () => {
         if (this.isLiveStreaming) return;
         this.fetchData(this.buildRecentFetchUrl(), false, true);
-      }
+      },
+      fetchRecentRef
     );
   };
 
@@ -2578,8 +2673,8 @@ export class LogList extends LitElement {
             </td>`
         : nothing;
       const rowHtml = ov
-        ? html`<div role="row" class=${rowClass} style=${rowStyle} @click=${rowClick}>${cells}${latencyCell}</div>`
-        : html`<tr class=${rowClass} style=${rowStyle} @click=${rowClick}>
+        ? html`<div role="row" data-row-id=${rowData.id} class=${rowClass} style=${rowStyle} @click=${rowClick}>${cells}${latencyCell}</div>`
+        : html`<tr data-row-id=${rowData.id} class=${rowClass} style=${rowStyle} @click=${rowClick}>
             ${cells}${latencyCell}
           </tr>`;
       return rowHtml;

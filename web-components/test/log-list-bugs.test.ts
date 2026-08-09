@@ -20,11 +20,21 @@ describe('LogList — LOWER', () => {
     expect(Object.keys((el as any).columnMaxWidthMap).sort()).toEqual(['a', 'c']);
   });
 
-  // Regression: FlowLayout defaults to 100px before its first measurement, but
-  // logs are fixed at 28px. The inflated estimate caused oversized scroll gaps.
-  test('virtualizer starts with the dense log-row height', () => {
+  // The virtualizer grows with every page; will-change promoted that entire scroll
+  // surface to a compositor layer (multi-gigapixel at high DPR).
+  test('virtualizer does not force compositing for its entire growing scroll surface', async () => {
+    const el = await mountList();
+    expect(el.querySelector('style')?.textContent).not.toMatch(/lit-virtualizer\s*{[^}]*will-change:/);
+    expect(el.querySelector('style')?.textContent).toMatch(/lit-virtualizer > tr\s*{[^}]*content-visibility:\s*auto/);
+    expect(el.innerHTML).not.toContain('will-change-scroll');
+  });
+
+  // FlowLayout defaults to 100px before its first measurement, but logs are fixed
+  // at 28px. The inflated estimate caused oversized scroll gaps.
+  test('virtualizer starts with the dense log-row height and bounded overhang', () => {
     const layout = new DenseRowFlowLayout(() => {}, {});
     expect((layout as any)._itemSize.height).toBe(28);
+    expect((layout as any)._overhang).toBe(200);
   });
 
   // 2026-08-06: LogResult carries the failure as `error`; the client read
@@ -92,6 +102,15 @@ describe('LogList — MED correctness', () => {
   // Dedup must hold across many overlapping pages (inclusive-cursor boundary row
   // recurs each page) now that the merge filters via a persistent seenIds set
   // instead of re-deduping the whole tree.
+  test('a page containing duplicate rows retains each id once', async () => {
+    const el = await mountList();
+    el.transport = serverTransport(logPage(['1', '1', '2']), logPage(['3', '3', '4']));
+    await el.fetchData('init', false, false, false);
+    expect(ids(el)).toEqual(['1', '2']);
+    await el.fetchData('refresh', true, false, false);
+    expect(ids(el)).toEqual(['3', '4']);
+  });
+
   test('paginated overlapping pages dedupe to a unique, ordered tree', async () => {
     const el = await mountList();
     el.transport = serverTransport(
@@ -103,6 +122,64 @@ describe('LogList — MED correctness', () => {
     await el.fetchData('lm1', false, false, true);
     await el.fetchData('lm2', false, false, true);
     expect(ids(el)).toEqual(['1', '2', '3', '4', '5', '6']);
+    expect((el as any).cachedServerTraces.map((t: any) => t.trace_id)).toEqual(['1', '2', '3', '4', '5', '6']);
+  });
+
+  test('pagination bounds retained rows and reopens the evicted edge', async () => {
+    const el = await mountList();
+    const initial = Array.from({ length: 5000 }, (_, i) => row(`r${i}`));
+    (el as any).spanListTree = initial;
+    (el as any).seenIds = new Set(initial.map((r) => r.id));
+
+    (el as any).spanListTree = (el as any).mergeIntoTree([row('older')], false);
+    expect(ids(el)).toHaveLength(5000);
+    expect(ids(el)[0]).toBe('r1');
+    expect((el as any).hasNewer).toBe(true);
+    expect((el as any).seenIds.has('r0')).toBe(false);
+
+    (el as any).spanListTree = (el as any).mergeIntoTree([row('r0')], true);
+    expect(ids(el)).toHaveLength(5000);
+    expect(ids(el)[0]).toBe('r0');
+    expect(ids(el)).not.toContain('older');
+    expect((el as any).hasMore).toBe(true);
+  });
+
+  test('window trimming restores the visible row by stable id', async () => {
+    const el = await mountList();
+    const initial = Array.from({ length: 5000 }, (_, i) => row(`r${i}`));
+    (el as any).spanListTree = initial;
+    (el as any).seenIds = new Set(initial.map((r) => r.id));
+    const anchor = { id: 'r4990', offset: 7 };
+    vi.spyOn(el as any, 'captureScrollAnchor').mockReturnValue(anchor);
+    const restore = vi.spyOn(el as any, 'restoreScrollAnchor').mockResolvedValue(undefined);
+    el.transport = async () => ({ tree: [row('older')], meta: { hasMore: true, colIdxMap: { id: 0 }, traces: [] } });
+
+    await el.fetchData('older', false, false, true);
+
+    expect(ids(el)).toContain(anchor.id);
+    expect(restore).toHaveBeenCalledWith(anchor);
+  });
+
+  test('an oversized trace cannot collapse the retained window to zero rows', async () => {
+    const el = await mountList();
+    const traceRows = Array.from({ length: 5000 }, (_, i) => ({ ...row(`t${i}`), traceId: 'oversized-trace' }));
+    (el as any).spanListTree = traceRows;
+    (el as any).seenIds = new Set(traceRows.map((r) => r.id));
+
+    (el as any).spanListTree = (el as any).mergeIntoTree([{ ...row('tail'), traceId: 'oversized-trace' }], false);
+    expect(ids(el)).toHaveLength(5000);
+    expect(ids(el)[0]).toBe('t1');
+  });
+
+  test('newer pagination uses an adjacent forward cursor', async () => {
+    const el = await mountList();
+    window.history.replaceState({}, '', '/log_explorer?since=1H&query=x');
+    el.transport = serverTransport(logPage([['middle', '2026-06-01T00:00:00.000Z']]));
+    await el.fetchData('init', false, false, false);
+    const url = new URL((el as any).buildRecentFetchUrl(), 'http://localhost');
+    expect(url.searchParams.get('direction')).toBe('newer');
+    expect(url.searchParams.get('cursor')).toBe('2026-06-01T00:00:00.010Z');
+    expect(url.searchParams.has('from')).toBe(false);
   });
 
   // A refresh must reset the dedup state, else an id seen by the previous query
@@ -213,17 +290,18 @@ describe('LogList — MED correctness', () => {
     await el.fetchData('/log_explorer?to=2026-06-01T00%3A00%3A00.000Z&query=x&json=true', false, false, false);
     const url = new URL((el as any).buildRecentFetchUrl(), 'http://localhost');
     expect(url.searchParams.get('to')).toBe('2026-06-01T00:00:00.000Z');
-    expect(url.searchParams.has('cursor')).toBe(false);
+    expect(url.searchParams.get('cursor')).toBe('2026-05-01T00:00:00.010Z');
+    expect(url.searchParams.get('direction')).toBe('newer');
   });
 
-  // buildRecentFetchUrl must apply the ns/µs/ms tolerance too (it used raw new Date()).
-  test('buildRecentFetchUrl tolerates a nanosecond-epoch timestamp (no year-55000 from)', async () => {
+  // buildRecentFetchUrl must apply the ns/µs/ms tolerance to its forward cursor.
+  test('buildRecentFetchUrl tolerates a nanosecond-epoch timestamp (no year-55000 cursor)', async () => {
     const el = await mountList();
     window.history.replaceState({}, '', '/log_explorer?query=x');
     el.transport = serverTransport(logPage([['1', 1700000000000000000]])); // ns ≈ Nov 2023
     await el.fetchData('/log_explorer?query=x&json=true', false, false, false);
     const url = new URL((el as any).buildRecentFetchUrl(), 'http://localhost');
-    expect(new Date(url.searchParams.get('from')!).getUTCFullYear()).toBe(2023);
+    expect(new Date(url.searchParams.get('cursor')!).getUTCFullYear()).toBe(2023);
   });
 
   // expandTimeRangeUrl ("Show earlier events") had the same raw-String(ns) cursor bug.
