@@ -29,7 +29,15 @@ css-start:
 post-css:
 	./node_modules/.bin/tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css
 
-web-components-watch:
+kill-web-components-watch:
+	@PIDS=$$(pgrep -f '$(CURDIR)/web-components/node_modules/.bin/[v]ite build --watch' 2>/dev/null || true); \
+	for PID in $$PIDS; do \
+		PGID=$$(ps -o pgid= -p $$PID 2>/dev/null | tr -d ' '); \
+		[ -n "$$PGID" ] && echo "Stopping stale web-components watcher process group $$PGID" && kill -TERM -$$PGID 2>/dev/null || true; \
+	done; \
+	[ -z "$$PIDS" ] || sleep 1
+
+web-components-watch: kill-web-components-watch
 	cd web-components && npm run watch 2>&1 | tee ../web-components.log
 run:
 	cabal run
@@ -357,4 +365,4 @@ test-e2e-real: e2e-install
 test-e2e-ui: e2e-install
 	cd e2e && npx playwright test --ui
 
-.PHONY: all test fmt lint fix-lint live-reload kill-live-reload live-reload-cli live-reload-doctests live-test-dev build-chart-cli build-chart-cli-linux tmux-live-reload tmux-live-reload-cli tmux-pin-here tmux-unpin web-components-watch e2e-install test-e2e test-e2e-real test-e2e-ui gen-proto sync-otel-proto update-otel-proto minio-local timefusion-start timefusion-stop test-integration-tf
+.PHONY: all test fmt lint fix-lint live-reload kill-live-reload live-reload-cli live-reload-doctests live-test-dev build-chart-cli build-chart-cli-linux tmux-live-reload tmux-live-reload-cli tmux-pin-here tmux-unpin kill-web-components-watch web-components-watch e2e-install test-e2e test-e2e-real test-e2e-ui gen-proto sync-otel-proto update-otel-proto minio-local timefusion-start timefusion-stop test-integration-tf
