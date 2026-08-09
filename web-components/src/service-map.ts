@@ -358,8 +358,11 @@ const KIND_TAG: Record<NodeKind, string> = {
  */
 const richSafe = (t: string) => t.replace(/[{}|]/g, '');
 
-export function cardLabel(n: ServiceNode): string {
+export function cardLabel(n: ServiceNode, hasServiceColor = false): string {
   const tag = KIND_TAG[n.kind];
+  // A chip carries the service's own colour, which is otherwise absent from the map now
+  // that borders belong to health — leaving the "Service colors" legend describing nothing.
+  const swatch = hasServiceColor ? '{svc| } ' : '';
   // A fold already names its size ("15 more dependencies"); a ×15 badge repeats it.
   const count = n.member_count && !n.key.startsWith('rest:') ? `  ×${n.member_count}` : '';
   const rps = n.stats.throughput_per_sec < 10
@@ -367,7 +370,7 @@ export function cardLabel(n: ServiceNode): string {
     : fmtNum(Math.round(n.stats.throughput_per_sec));
   const errStyle = n.stats.error_rate >= ERR_FAILING ? 'bad' : n.stats.error_rate >= ERR_ELEVATED ? 'warn' : 'muted';
   return [
-    `${tag ? `{tag|${tag}} ` : ''}{name|${richSafe(n.label || 'Entry point')}${count}}`,
+    `${swatch}${tag ? `{tag|${tag}} ` : ''}{name|${richSafe(n.label || 'Entry point')}${count}}`,
     `{${errStyle}|${(n.stats.error_rate * 100).toFixed(2)}% errors}`,
     n.duration_share != null
       ? `{muted|${(n.duration_share * 100).toFixed(1)}% of trace time}`
@@ -516,7 +519,7 @@ function render(
       // NB: not `label` — echarts owns data[i].label and rewrites it into a label config
       // object, which is why the formatter rendered "[object Object]".
       id: String(i), name: n.key || '(entry)', key: n.key, displayName: n.label, kind: n.kind,
-      group: n.member_count ?? 0, card: cardLabel(n),
+      group: n.member_count ?? 0, card: cardLabel(n, !n.inferred && !!colors[n.key]), svcColor: !n.inferred && colors[n.key] ? resolveColor(n.key, colors) : null,
       value: n.stats.requests, tip: statsTip(n.label || 'entry', n.stats, ringColor(n, s, colors), groupTip(n)),
       x: coords.get(n.key)!.x, y: coords.get(n.key)!.y, fixed: true,
       symbol: 'rect', symbolSize: [CARD_W, CARD_H],
@@ -589,6 +592,7 @@ function render(
           width: CARD_W - 22, color: s.tooltipTextColor,
           formatter: (p: any) => p.data?.card ?? '',
           rich: {
+            svc: { width: 3, height: 11, borderRadius: 2, backgroundColor: 'transparent' },
             tag: { fontSize: 9, color: s.textColor, fontWeight: 'bold' as const, padding: [0, 0, 0, 0] },
             name: { fontSize: 12, color: s.tooltipTextColor, fontWeight: 600 as const },
             muted: { fontSize: 11, color: s.textColor },
@@ -628,7 +632,10 @@ function render(
                 // rect draws a black L, which reads as a rendering fault rather than depth.
                 ...(n.group ? { shadowColor: s.tooltipBorderColor, shadowBlur: 6, shadowOffsetX: 3, shadowOffsetY: 3 } : {}),
               },
-              label: { opacity: dim(n.key) },
+              label: {
+                opacity: dim(n.key),
+                ...(n.svcColor ? { rich: { svc: { backgroundColor: n.svcColor, width: 3, height: 11, borderRadius: 2 } } } : {}),
+              },
             };
           }),
           ...view.pads,
