@@ -1609,7 +1609,12 @@ export class LogList extends LitElement {
     const virtualizer = this.querySelector('lit-virtualizer');
     if (index < 0 || !virtualizer) return;
     virtualizer.element(index)?.scrollIntoView({ block: 'start' });
-    await virtualizer.layoutComplete;
+    try {
+      await virtualizer.layoutComplete;
+    } catch (error) {
+      if (this.isConnected) throw error;
+      return;
+    }
     requestAnimationFrame(() => {
       const container = this.logsContainer;
       const row = [...(container?.querySelectorAll<HTMLElement>('[data-row-id]') || [])].find((el) => el.dataset.rowId === anchor.id);
@@ -1783,14 +1788,6 @@ export class LogList extends LitElement {
         /* Fixed table layout for performance */
         table {
           table-layout: fixed;
-        }
-
-        /* The virtualizer keeps an offscreen runway for smooth scrolling. Let the
-           browser skip style/layout/paint work for those rows without promoting
-           the entire growing scroll surface to a compositor layer. */
-        lit-virtualizer > tr {
-          content-visibility: auto;
-          contain-intrinsic-block-size: auto 28px;
         }
 
         /* Prevent clicks on closed popovers */

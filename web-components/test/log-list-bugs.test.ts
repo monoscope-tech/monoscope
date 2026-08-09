@@ -20,12 +20,12 @@ describe('LogList — LOWER', () => {
     expect(Object.keys((el as any).columnMaxWidthMap).sort()).toEqual(['a', 'c']);
   });
 
-  // The virtualizer grows with every page; will-change promoted that entire scroll
-  // surface to a compositor layer (multi-gigapixel at high DPR).
-  test('virtualizer does not force compositing for its entire growing scroll surface', async () => {
+  // The virtualizer already bounds the DOM; forcing its scroll surface into a
+  // compositor layer or deferring paint on its small row runway causes blank flashes.
+  test('virtualizer does not force compositing or defer visible row paint', async () => {
     const el = await mountList();
     expect(el.querySelector('style')?.textContent).not.toMatch(/lit-virtualizer\s*{[^}]*will-change:/);
-    expect(el.querySelector('style')?.textContent).toMatch(/lit-virtualizer > tr\s*{[^}]*content-visibility:\s*auto/);
+    expect(el.querySelector('style')?.textContent).not.toMatch(/lit-virtualizer > tr\s*{[^}]*content-visibility:/);
     expect(el.innerHTML).not.toContain('will-change-scroll');
   });
 
