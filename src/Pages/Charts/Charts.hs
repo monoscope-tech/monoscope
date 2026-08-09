@@ -103,6 +103,23 @@ sourceTable = \case
   _ -> "otel_logs_and_spans"
 
 
+-- | Select the storage semantics used by both SQL generation and execution.
+-- Keeping this decision in one helper prevents PostgreSQL queries from being
+-- generated with TimeFusion-only functions while still targeting the PG pool.
+--
+-- >>> usesTimefusionBackend False Nothing
+-- False
+-- >>> usesTimefusionBackend True (Just "postgres")
+-- False
+-- >>> usesTimefusionBackend False (Just "timefusion")
+-- True
+usesTimefusionBackend :: Bool -> Maybe Text -> Bool
+usesTimefusionBackend enableTimefusionReads = \case
+  Just "postgres" -> False
+  Just "timefusion" -> True
+  _ -> enableTimefusionReads
+
+
 queryMetrics :: (DB es, Effectful.Error.Static.Error ServerError :> es, Effectful.Reader.Static.Reader AuthContext :> es, Log :> es, Time.Time :> es, Tracing :> es) => M Text -> M DataType -> M Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> [(Text, Maybe Text)] -> Eff es MetricsData
 queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (Utils.nonEmptyT -> queryM) (Utils.nonEmptyT -> querySQLM) (Utils.nonEmptyT -> sinceM) (Utils.nonEmptyT -> fromM) (Utils.nonEmptyT -> toM) (Utils.nonEmptyT -> sourceM) allParams = do
   authCtx <- Effectful.Reader.Static.ask @AuthContext
@@ -126,7 +143,11 @@ queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (Utils.nonEmptyT -> q
 -- the KQL-generated query.
 runQueryAST :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => AuthContext -> Maybe Text -> DataType -> Projects.ProjectId -> Maybe Sources -> [Section] -> Text -> Maybe Text -> M.Map Text Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> Eff es MetricsData
 runQueryAST authCtx dbSource respDataType pid source queryAST queryM querySQLM mappngSQL now fromD toD = do
-  let sqlQueryCfg = (defSqlQueryCfg pid now source Nothing){dateRange = (fromD, toD)}
+  let sqlQueryCfg =
+        (defSqlQueryCfg pid now source Nothing)
+          { dateRange = (fromD, toD)
+          , metricJsonAsVariant = usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource
+          }
 
   case querySQLM of
     Just querySQL -> do
@@ -347,7 +368,7 @@ fetchMetricsData respDataType sqlQuery now fromD toD authCtx dbSource = do
   let pool = case dbSource of
         Just "postgres" -> authCtx.pool
         Just "timefusion" -> authCtx.timefusionPgPool
-        _ -> if authCtx.env.enableTimefusionReads then authCtx.timefusionPgPool else authCtx.pool
+        _ -> if usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource then authCtx.timefusionPgPool else authCtx.pool
   let baseMetricsData = emptyMetricsFor now fromD toD
   let runQ :: FromRow r => IO [r]
       runQ = withResource pool \conn -> query_ conn (Query $ encodeUtf8 sqlQuery)

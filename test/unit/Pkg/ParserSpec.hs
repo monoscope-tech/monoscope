@@ -5,6 +5,7 @@ import Data.Text qualified as T
 import NeatInterpolation (text)
 import Pkg.Parser (
   QueryComponents (finalSummarizeQuery, percentilesInfo),
+  SqlQueryCfg (metricJsonAsVariant),
   defPid,
   defSqlQueryCfg,
   fixedUTCTime,
@@ -117,17 +118,26 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', c
       SELECT jsonb_build_array(extract(epoch from time_bucket('6 hours', timestamp))::integer, count(*)::float, count(*) OVER()) FROM otel_metrics WHERE project_id='00000000-0000-0000-0000-000000000000' and ((metric_name = 'app_recommendations_counter')) GROUP BY time_bucket('6 hours', timestamp) ORDER BY time_bucket('6 hours', timestamp) DESC |]
       normT query `shouldBe` normT expected
 
-    it "metrics source uses flattened service and HTTP dimensions" do
+    it "PostgreSQL metrics source uses native JSONB dimensions" do
       let cfg = defSqlQueryCfg defPid fixedUTCTime (Just SMetrics) Nothing
-      let (serviceQuery, _) = fromRight' $ parseQueryToComponents cfg "| where service == \"accounting\" and metric_name == \"k8s.container.cpu_request\""
+          components query = fromRight' $ parseQueryToComponents cfg ("metrics | " <> query)
+      let (serviceQuery, _) = components "where service == \"accounting\" and metric_name == \"k8s.container.cpu_request\""
       serviceQuery `shouldSatisfy` T.isInfixOf "resource___service___name = 'accounting'"
-      let (attributeQuery, _) = fromRight' $ parseQueryToComponents cfg "| where attributes.system.device == \"disk0\""
-      attributeQuery `shouldSatisfy` T.isInfixOf "variant_to_json(attributes)->'system'->>'device' = 'disk0'"
-      let (resourceQuery, _) = fromRight' $ parseQueryToComponents cfg "| where resource.host.name == \"node-1\""
-      resourceQuery `shouldSatisfy` T.isInfixOf "variant_to_json(resource)->'host'->>'name' = 'node-1'"
+      let (attributeQuery, _) = components "where attributes.system.device == \"disk0\""
+      attributeQuery `shouldSatisfy` T.isInfixOf "attributes->'system'->>'device' = 'disk0'"
+      let (resourceQuery, _) = components "where resource.host.name == \"node-1\""
+      resourceQuery `shouldSatisfy` T.isInfixOf "resource->'host'->>'name' = 'node-1'"
       -- Grouping dimensions live on the chart query (finalSummarizeQuery), not the
       -- flat data query; assert the flattened resource path reaches its GROUP BY.
-      let (_, groupComps) = fromRight' $ parseQueryToComponents cfg "| summarize avg(value) by bin_auto(timestamp), resource.host.name"
+      let (_, groupComps) = components "summarize avg(value) by bin_auto(timestamp), resource.host.name"
+      fromMaybe "" groupComps.finalSummarizeQuery `shouldSatisfy` T.isInfixOf "GROUP BY time_bucket('6 hours', timestamp), COALESCE(resource->'host'->>'name'::text, 'null')"
+
+    it "TimeFusion metrics source converts variant dimensions to JSON" do
+      let cfg = (defSqlQueryCfg defPid fixedUTCTime (Just SMetrics) Nothing){metricJsonAsVariant = True}
+          components query = fromRight' $ parseQueryToComponents cfg ("metrics | " <> query)
+      let (attributeQuery, _) = components "where attributes.system.device == \"disk0\""
+      attributeQuery `shouldSatisfy` T.isInfixOf "variant_to_json(attributes)->'system'->>'device' = 'disk0'"
+      let (_, groupComps) = components "summarize avg(value) by bin_auto(timestamp), resource.host.name"
       fromMaybe "" groupComps.finalSummarizeQuery `shouldSatisfy` T.isInfixOf "GROUP BY time_bucket('6 hours', timestamp), COALESCE(variant_to_json(resource)->'host'->>'name'::text, 'null')"
 
     it "spans source leaves service filter as a flat column" do

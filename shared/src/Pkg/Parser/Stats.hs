@@ -246,12 +246,14 @@ data Sources = SSpans | SMetrics
 
 -- | TimeFusion stores metric JSON columns as variants, so metric queries wrap
 -- them in @variant_to_json@ before KQL's JSON-path operators are applied.
-rewriteSectionsForSource :: Maybe Sources -> [Section] -> [Section]
-rewriteSectionsForSource (Just SMetrics) = mapSubjects \case
+-- PostgreSQL stores the same columns as native @jsonb@ and must not use that
+-- TimeFusion-only function.
+rewriteSectionsForSource :: Bool -> Maybe Sources -> [Section] -> [Section]
+rewriteSectionsForSource True (Just SMetrics) = mapSubjects \case
   Subject entire "attributes" keys -> Subject entire "variant_to_json(attributes)" keys
   Subject entire "resource" keys -> Subject entire "variant_to_json(resource)" keys
   subject -> subject
-rewriteSectionsForSource _ = id
+rewriteSectionsForSource _ _ = id
 
 
 -- | Effectful walk over every Subject reachable from a Section list; the

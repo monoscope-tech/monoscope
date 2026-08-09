@@ -241,6 +241,7 @@ data SqlQueryCfg = SqlQueryCfg
   , currentTime :: UTCTime
   , defaultSelect :: [Text]
   , source :: Maybe Sources
+  , metricJsonAsVariant :: Bool
   , targetSpansM :: Maybe Text
   , -- Time window (minutes) the alert query should look back over.
     -- Monitors pass max(60, 2 * checkIntervalMins) so buckets aren't missed.
@@ -497,7 +498,7 @@ parseQueryToComponents sqlCfg = fmap (queryASTToComponents sqlCfg) . parseQueryT
 queryASTToComponents :: SqlQueryCfg -> [Section] -> (Text, QueryComponents)
 queryASTToComponents sqlCfg sections =
   let effectiveSource = sqlCfg.source <|> listToMaybe [s | Source s <- sections]
-      qc = sectionsToComponents sqlCfg $ rewriteSectionsForSource effectiveSource sections
+      qc = sectionsToComponents sqlCfg $ rewriteSectionsForSource sqlCfg.metricJsonAsVariant effectiveSource sections
    in -- The FROM table follows the effective source (cfg or an explicit `source`
       -- section); without this a metrics query built via the cfg arg alone would
       -- silently read otel_logs_and_spans.
@@ -542,6 +543,7 @@ defSqlQueryCfg pid currentTime source spanT =
     , cursorM = Nothing
     , dateRange = (Nothing, Nothing)
     , source = source
+    , metricJsonAsVariant = False
     , targetSpansM = spanT
     , projectedColsByUser = []
     , currentTime
