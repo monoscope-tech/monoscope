@@ -22,7 +22,7 @@ import Pkg.Components.TimePicker qualified as TimePicker
 import Relude
 import System.Config (AuthContext)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (explorerNavTabs_, faSprite_, getServiceColors, parseTime)
+import Utils (explorerNavTabs_, faSprite_, getServiceColors, nonEmptyT, parseTime)
 
 
 newtype ServiceMapGet = ServiceMapPage (PageCtx ServiceMapPageData)
@@ -31,6 +31,7 @@ newtype ServiceMapGet = ServiceMapPage (PageCtx ServiceMapPageData)
 data ServiceMapPageData = ServiceMapPageData
   { pid :: Projects.ProjectId
   , graph :: ServiceGraph
+  , env :: Maybe Text
   }
 
 
@@ -39,13 +40,14 @@ instance ToHtml ServiceMapGet where
   toHtmlRaw = toHtml
 
 
-serviceMapGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders ServiceMapGet)
-serviceMapGetH pid fromM toM sinceM = do
+serviceMapGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders ServiceMapGet)
+serviceMapGetH pid fromM toM sinceM envM = do
   (_, _, bw) <- mkPageCtx pid
   _ <- Reader.ask @AuthContext
   now <- Time.currentTime
   let (from, to, currentRange) = parseTime fromM toM sinceM now
-  graph <- serviceGraphForRange pid (fromMaybe (addUTCTime (-86400) now) from) (fromMaybe now to)
+  -- An empty ?env= is "all environments", so clearing the facet is a link like any other.
+  graph <- serviceGraphForRange pid (nonEmptyT envM) (fromMaybe (addUTCTime (-86400) now) from) (fromMaybe now to)
   let bwconf =
         bw
           { prePageTitle = Just "Explorer"
@@ -56,7 +58,7 @@ serviceMapGetH pid fromM toM sinceM = do
               TimePicker.timepicker_ Nothing currentRange Nothing
               TimePicker.refreshButton_
           }
-  addRespHeaders $ ServiceMapPage $ PageCtx bwconf $ ServiceMapPageData pid graph
+  addRespHeaders $ ServiceMapPage $ PageCtx bwconf $ ServiceMapPageData pid graph (nonEmptyT envM)
 
 
 serviceMapPage_ :: ServiceMapPageData -> Html ()
@@ -75,7 +77,7 @@ serviceMapPage_ pd = div_ [class_ "w-full h-full overflow-y-auto c-scroll p-4 fl
       , placeholder_ "Filter services"
       , [__|on input send "service-map-filter"(q: my value) to the closest <div/> then halt|]
       ]
-  serviceMapPanel_ pd.pid "global-service-map" pd.graph serviceColors
+  serviceMapPanel_ pd.pid "global-service-map" pd.graph serviceColors pd.env
   where
     -- Same hash-assigned colours as the trace waterfall, so a service looks the same
     -- wherever it appears.

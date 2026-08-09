@@ -1024,7 +1024,7 @@ tracePage pid traceItem rawSpanRecords = do
           -- global service map, scoped to this trace's spans (no extra query — the spans
           -- are already on the page).
           div_ [role_ "tabpanel", class_ "a-tab-content pt-2 hidden", id_ "service_map"] do
-            serviceMapPanel_ pid ("trace-service-map-" <> traceItem.traceId) traceGraph serviceColors
+            serviceMapPanel_ pid ("trace-service-map-" <> traceItem.traceId) traceGraph serviceColors Nothing
     -- Same grip affordance as resizer_ (border + centred dots, brand-coloured on hover):
     -- the drag target was invisible without it, so the panel read as unresizable.
     div_ [class_ "hidden shrink-0 max-md:hidden", id_ "trace-details-resizer-wrapper"]

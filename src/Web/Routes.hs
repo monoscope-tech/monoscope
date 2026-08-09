@@ -556,7 +556,7 @@ data TelemetryRoutes' mode = TelemetryRoutes'
   , metricDetailsGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "metric_source" :> QPT "label" :> Get '[HTML] (RespHeaders (Html ()))
   , metricBreakdownGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> "breakdown" :> QPT "label" :> Get '[HTML] (RespHeaders (Html ()))
   , metricCardGetH :: mode :- "metrics" :> "card" :> Capture "metric_name" Text :> QPT "label" :> Get '[HTML] (RespHeaders (Html ()))
-  , serviceMapGetH :: mode :- "service_map" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders ServiceMap.ServiceMapGet)
+  , serviceMapGetH :: mode :- "service_map" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "env" :> Get '[HTML] (RespHeaders ServiceMap.ServiceMapGet)
   , metricServicesGetH :: mode :- "metrics" :> "services" :> QPT "q" :> QPT "metric_source" :> Get '[HTML] (RespHeaders (Html ()))
   }
   deriving stock (Generic)

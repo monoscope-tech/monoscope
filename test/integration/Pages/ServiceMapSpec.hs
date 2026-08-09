@@ -45,7 +45,7 @@ rollAndRead :: TestResources -> UTCTime -> IO ServiceGraph
 rollAndRead tr ts = runTestBg ts tr do
   edges <- rollupServiceEdges False testPid (addUTCTime (-300) ts) (addUTCTime 300 ts)
   upsertServiceDependencyEdges testPid ts edges
-  serviceGraphForRange testPid (addUTCTime (-600) ts) (addUTCTime 600 ts)
+  serviceGraphForRange testPid Nothing (addUTCTime (-600) ts) (addUTCTime 600 ts)
 
 
 -- | Assert every needle is present, naming the ones that are not. A bare
@@ -140,11 +140,28 @@ spec = around withTestResources do
       V.length (drawnNodes graph) `shouldBe` 21 -- api + all 20, nothing folded
       V.toList (V.filter (isJust . (.memberCount)) graph.nodes) `shouldBe` []
 
+    -- The Env facet is a rollup dimension, so it has to survive the round trip through
+    -- storage: written per hop, offered as the facet's options, and honoured as a filter.
+    it "serviceGraphForRange_filtersByEnvironmentAndReportsTheOptions" \tr -> do
+      apiKey <- createTestAPIKey tr testPid "service-map-env-key"
+      ingestFixture tr apiKey frozenTime
+      g <- runTestBg frozenTime tr do
+        edges <- rollupServiceEdges False testPid (addUTCTime (-300) frozenTime) (addUTCTime 300 frozenTime)
+        upsertServiceDependencyEdges testPid frozenTime edges
+        serviceGraphForRange testPid Nothing (addUTCTime (-600) frozenTime) (addUTCTime 600 frozenTime)
+      -- The fixture's spans carry no deployment environment, so there is nothing to offer:
+      -- an empty facet is the signal to hide the control, not to show one with no choices.
+      V.toList g.environments `shouldBe` []
+      -- And an env that nothing reported filters the map down to nothing rather than
+      -- silently falling back to "all", which would show prod traffic under a staging label.
+      scoped <- runTestBg frozenTime tr $ serviceGraphForRange testPid (Just "staging") (addUTCTime (-600) frozenTime) (addUTCTime 600 frozenTime)
+      V.toList scoped.edges `shouldBe` []
+
     -- An empty project must produce an empty graph with no error. The `error` field exists
     -- precisely so a failed query can't masquerade as "you have no services"; this pins the
     -- other side of that contract.
     it "emptyProject_producesEmptyGraphWithoutError" \tr -> do
-      g <- runTestBg frozenTime tr $ serviceGraphForRange testPid (addUTCTime (-600) frozenTime) frozenTime
+      g <- runTestBg frozenTime tr $ serviceGraphForRange testPid Nothing (addUTCTime (-600) frozenTime) frozenTime
       V.toList g.nodes `shouldBe` []
       V.toList g.edges `shouldBe` []
       g.error `shouldBe` Nothing
@@ -230,7 +247,7 @@ spec = around withTestResources do
       -- Rolled buckets are always in the past (the dispatcher lags 10 minutes), and the read
       -- range is half-open, so advance the clock rather than querying a bucket at exactly now.
       setTestTime tr.trTestClock (addUTCTime 600 frozenTime)
-      (_, page) <- testServant tr $ ServiceMap.serviceMapGetH testPid Nothing Nothing (Just "1H")
+      (_, page) <- testServant tr $ ServiceMap.serviceMapGetH testPid Nothing Nothing (Just "1H") Nothing
       let ServiceMap.ServiceMapPage (PageCtx conf pd) = page
           html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
       conf.pageTitle `shouldBe` "Service Map"
@@ -252,7 +269,7 @@ spec = around withTestResources do
       html `shouldContainAll` ["Events", "Metrics", "Service Map"]
 
     it "serviceMapFilter_quotesHyphenatedEventNameForHyperscript" \tr -> do
-      (_, page) <- testServant tr $ ServiceMap.serviceMapGetH testPid Nothing Nothing (Just "1H")
+      (_, page) <- testServant tr $ ServiceMap.serviceMapGetH testPid Nothing Nothing (Just "1H") Nothing
       let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
       html `shouldContainAll` ["send &quot;service-map-filter&quot;(q: my value)"]
 
