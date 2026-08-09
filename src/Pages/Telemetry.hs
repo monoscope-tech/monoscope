@@ -892,7 +892,7 @@ tracePage pid traceItem rawSpanRecords = do
       -- rangeSeconds is 0: throughput is meaningless for a single request, so the map
       -- reports counts and durations only. Node size comes from the duration share.
       (traceHops, traceDurationNs) = ServiceGraph.traceEdgeSamples spanRecords
-      traceGraph = ServiceGraph.buildServiceGraph 0 serviceMapNodeCap (Just traceDurationNs) traceHops
+      traceGraph = ServiceGraph.buildServiceGraph 0 serviceMapNodeCap ServiceGraph.CollapseOff (Just traceDurationNs) traceHops
   div_ [class_ "w-full h-full flex overflow-hidden", id_ "trace_span_container"] $ do
     div_ [class_ "flex flex-col grow min-w-0 gap-4 p-2 pb-4 overflow-y-auto overflow-x-hidden c-scroll"] $ do
       div_ [class_ "flex flex-wrap justify-between items-center gap-y-1"] do

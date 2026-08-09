@@ -61,6 +61,23 @@ describe('visibleGraph', () => {
     expect(v.edges).toHaveLength(4);
   });
 
+  it('nests: a head that is itself folded only appears once its parent opens', () => {
+    // The long-tail fold can swallow a domain head, so heads have parents too.
+    const nested = [
+      n('api'), n('rest:api', 2),
+      n('grp:http:shop.com', 3, 'rest:api'), n('db:redis', null, 'rest:api'),
+      n('http:a.shop.com', null, 'grp:http:shop.com'), n('http:b.shop.com', null, 'grp:http:shop.com'),
+    ];
+    const es = [e('api', 'rest:api'), e('api', 'grp:http:shop.com'), e('api', 'db:redis'), e('api', 'http:a.shop.com')];
+
+    expect(visibleGraph(nested, es, new Set()).nodes.map(x => x.key)).toEqual(['api', 'rest:api']);
+    expect(visibleGraph(nested, es, new Set(['rest:api'])).nodes.map(x => x.key))
+      .toEqual(['api', 'grp:http:shop.com', 'db:redis']);
+    // Opening the inner head as well swaps it for its own members, one level deeper.
+    expect(visibleGraph(nested, es, new Set(['rest:api', 'grp:http:shop.com'])).nodes.map(x => x.key))
+      .toEqual(['api', 'db:redis', 'http:a.shop.com', 'http:b.shop.com']);
+  });
+
   it('expanding an unknown group changes nothing', () => {
     expect(visibleGraph(nodes, edges, new Set(['grp:http:nope.com']))).toEqual(visibleGraph(nodes, edges, new Set()));
   });

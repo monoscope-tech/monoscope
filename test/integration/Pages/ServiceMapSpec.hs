@@ -8,7 +8,7 @@ import Data.UUID qualified as UUID
 import Data.UUID.V4 (nextRandom)
 import Data.Vector qualified as V
 import Lucid qualified
-import Models.Telemetry.ServiceGraph (EdgeSample (..), MapStats (..), NodeKind (..), ServiceEdge (..), ServiceGraph (..), ServiceNode (..), buildServiceGraph, projectsWithSpansInRange, rollupServiceEdges, serviceGraphForRange, serviceMapNodeCap, singletonLatency, upsertServiceDependencyEdges)
+import Models.Telemetry.ServiceGraph (Collapse (..), EdgeSample (..), MapStats (..), NodeKind (..), ServiceEdge (..), ServiceGraph (..), ServiceNode (..), buildServiceGraph, drawnEdges, drawnNodes, projectsWithSpansInRange, rollupServiceEdges, serviceGraphForRange, serviceMapFanout, serviceMapNodeCap, singletonLatency, upsertServiceDependencyEdges)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.ServiceMap qualified as ServiceMap
 import Pages.Telemetry qualified as Trace
@@ -86,7 +86,7 @@ spec = around withTestResources do
     it "buildServiceGraph_collapsesPerTenantFanOutButNotLoneOrNamedPeers" \_ -> do
       let tenants = ["http:t" <> show n <> ".myshopify.com" | n <- [1 :: Int .. 3]]
           graph =
-            buildServiceGraph 60 serviceMapNodeCap Nothing
+            buildServiceGraph 60 serviceMapNodeCap serviceMapFanout Nothing
               $ [hop t NKExternal 100 | t <- tenants]
               <> [hop "http:api.paystack.co" NKExternal 50, hop "db:redis" NKDatabase 900]
 
@@ -106,10 +106,39 @@ spec = around withTestResources do
     -- The cap counts what the map draws, so a collapsed group costs one slot however many
     -- peers it holds. Before grouping, 150 tenants exhausted the whole budget.
     it "buildServiceGraph_capsDrawnNodesNotGroupMembers" \_ -> do
-      let graph = buildServiceGraph 60 3 Nothing [hop ("http:t" <> show n <> ".myshopify.com") NKExternal 1 | n <- [1 :: Int .. 40]]
+      let graph = buildServiceGraph 60 3 serviceMapFanout Nothing [hop ("http:t" <> show n <> ".myshopify.com") NKExternal 1 | n <- [1 :: Int .. 40]]
       (nodeBy graph "grp:http:myshopify.com" <&> (.memberCount)) `shouldBe` Just (Just 40)
       graph.truncated `shouldBe` False
       length (V.filter (isNothing . (.groupKey)) graph.nodes) `shouldBe` 2 -- api + the one head
+
+    -- Domain grouping cannot help here: every peer is a different merchant's own domain,
+    -- which is what a real shipping-API project actually looks like. Only a volume-ranked
+    -- fold bounds that, and bounding it is what lets the map carry per-node detail at all.
+    it "buildServiceGraph_foldsTheUnrelatedLongTailUnderItsBusiestCaller" \_ -> do
+      let peers = [(n, "http:merchant" <> show n <> ".com") | n <- [1 :: Int .. 20]]
+          graph = buildServiceGraph 60 serviceMapNodeCap (CollapseTo 5) Nothing [hop p NKExternal (fromIntegral (100 - n)) | (n, p) <- peers]
+          drawn = drawnNodes graph
+
+      -- The five busiest stay named; the remaining fifteen become one node that says so.
+      map (.label) (V.toList drawn) `shouldContain` ["15 more dependencies"]
+      (nodeBy graph "rest:api" <&> \n -> (n.memberCount, n.stats.requests))
+        `shouldBe` Just (Just 15, sum [fromIntegral (100 - n) | (n, _) <- drop 5 peers])
+      -- api + 5 named + 1 fold. The other 15 ride along for expansion but are not drawn.
+      V.length drawn `shouldBe` 7
+      V.length graph.nodes `shouldBe` 22
+
+      -- The counts the page prints must describe the picture, not the payload. Counting the
+      -- folded members here is what made the header claim "234 services" for a map of 150.
+      V.length (drawnEdges graph) `shouldBe` 6
+      map (.label) (V.toList (V.filter (\n -> n.memberCount == Just 15) drawn)) `shouldBe` ["15 more dependencies"]
+
+    -- A trace map is one request's path; folding two of its five hops into "3 more" would
+    -- hide exactly what the reader opened it to see.
+    it "buildServiceGraph_neverCollapsesATraceMap" \_ -> do
+      let peers = ["http:merchant" <> show n <> ".com" | n <- [1 :: Int .. 20]]
+          graph = buildServiceGraph 0 serviceMapNodeCap CollapseOff (Just 1_000_000) [hop p NKExternal 1 | p <- peers]
+      V.length (drawnNodes graph) `shouldBe` 21 -- api + all 20, nothing folded
+      V.toList (V.filter (isJust . (.memberCount)) graph.nodes) `shouldBe` []
 
     -- An empty project must produce an empty graph with no error. The `error` field exists
     -- precisely so a failed query can't masquerade as "you have no services"; this pins the

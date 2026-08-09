@@ -14,7 +14,7 @@ import Data.Text qualified as T
 import Data.Vector qualified as V
 import Lucid
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.ServiceGraph (MapStats (..), NodeKind (..), ServiceEdge (..), ServiceGraph (..), ServiceNode (..))
+import Models.Telemetry.ServiceGraph (MapStats (..), NodeKind (..), ServiceEdge (..), ServiceGraph (..), ServiceNode (..), drawnEdges, drawnNodes)
 import Relude
 import Utils (faSprite_, prettyPrintCount)
 
@@ -33,7 +33,10 @@ serviceMapPanel_ pid elId graph colors = div_ [class_ "w-full flex flex-col gap-
             $ div_ [class_ "flex items-center gap-2 text-xs text-textWeak px-1"]
             $ do
               faSprite_ "circle-info" "regular" "w-3.5 h-3.5 text-iconNeutral"
-              toHtml $ "Showing the " <> show (V.length graph.nodes) <> " busiest services; quieter ones are hidden."
+              toHtml
+                $ "Showing the "
+                <> show (V.length (drawnNodes graph))
+                <> " busiest dependencies. Quieter ones are folded away — search to find a specific one."
           serviceMapLegend_ graph colors
           div_
             [ class_ "border border-strokeWeak rounded-2xl w-full h-[520px] max-md:h-[360px] relative"
@@ -132,13 +135,13 @@ dependencyTable_ :: ServiceGraph -> Html ()
 dependencyTable_ graph = details_ [class_ "group border border-strokeWeak rounded-2xl overflow-hidden"] do
   summary_ [class_ "flex items-center gap-2 px-3 py-2 text-sm text-textStrong cursor-pointer select-none"] do
     faSprite_ "chevron-right" "regular" "w-3 h-3 text-iconNeutral transition-transform group-open:rotate-90"
-    toHtml $ "Dependencies (" <> show (V.length graph.edges) <> ")"
+    toHtml $ "Dependencies (" <> show (V.length (drawnEdges graph)) <> ")"
   div_ [class_ "overflow-x-auto"] $ table_ [class_ "w-full text-xs"] do
     thead_ [class_ "text-textWeak border-b border-strokeWeak"]
       $ tr_
       $ forM_ ["Caller", "Callee", "Requests", "Errors", "p95"]
       $ \h -> th_ [class_ "text-left font-medium px-3 py-1.5 whitespace-nowrap"] h
-    tbody_ $ forM_ (sortOn (\e -> Down e.stats.requests) $ V.toList graph.edges) \e -> tr_ [class_ "border-b border-strokeWeak last:border-0"] do
+    tbody_ $ forM_ (sortOn (\e -> Down e.stats.requests) $ V.toList (drawnEdges graph)) \e -> tr_ [class_ "border-b border-strokeWeak last:border-0"] do
       td_ [class_ "px-3 py-1.5 whitespace-nowrap"] $ toHtml $ nodeDisplay graph e.source
       td_ [class_ "px-3 py-1.5 whitespace-nowrap"] $ toHtml $ nodeDisplay graph e.target
       td_ [class_ "px-3 py-1.5 tabular-nums"] $ toHtml $ prettyPrintCount $ fromIntegral e.stats.requests
@@ -152,7 +155,9 @@ dependencyTable_ graph = details_ [class_ "group border border-strokeWeak rounde
 nodeDisplay :: ServiceGraph -> Text -> Text
 nodeDisplay graph k
   | T.null k = "Entry point"
-  | otherwise = maybe k (.label) $ V.find (\n -> n.key == k) graph.nodes
+  | otherwise = maybe k describe $ V.find (\n -> n.key == k) graph.nodes
+  where
+    describe n = n.label <> maybe "" (\c -> " (" <> show c <> " endpoints)") n.memberCount
 
 
 pct :: Double -> Text

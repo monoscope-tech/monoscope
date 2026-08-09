@@ -14,9 +14,10 @@ export type NodeKind = 'entry' | 'service' | 'database' | 'queue' | 'external' |
 export type ServiceNode = {
   key: string; label: string; kind: NodeKind; inferred: boolean;
   duration_share: number | null; stats: MapStats;
-  // Set by the server's grouping pass; at most one is ever non-null.
-  member_count: number | null;  // collapsed group head, holding this many peers
-  group_key: string | null;     // member of that collapsed group
+  // Set by the server's collapse passes. Both can be set at once: a domain head that is
+  // itself in the long tail is a head *and* a member, which is what makes expansion nest.
+  member_count: number | null;  // collapsed head, standing in for this many peers
+  group_key: string | null;     // member of that collapsed head
 };
 export type ServiceEdge = { source: string; target: string; stats: MapStats };
 export type ServiceGraph = {
@@ -44,9 +45,10 @@ const SUBCOL_GAP = X_GAP * 0.45;
  * appear if you expanded them. This picks the set actually drawn, so expansion is a
  * re-layout of already-loaded data rather than a fetch.
  *
- * A head disappears when expanded and its members take its place, which is why the
- * collapse affordance lives in the overlay chip stack and not on a node that no longer
- * exists. Pure, so every expansion permutation is testable without a DOM.
+ * A head disappears when expanded and its members take its place. Heads nest — expanding
+ * "225 more dependencies" can reveal a "myshopify.com x71" head that expands again — so the
+ * two conditions are independent: a node shows when its parent is open, and hides when it
+ * is itself open. Pure, so every expansion permutation is testable without a DOM.
  */
 export function visibleGraph<
   N extends { key: string; member_count: number | null; group_key: string | null },
@@ -57,7 +59,7 @@ export function visibleGraph<
   expanded: ReadonlySet<string>,
 ): { nodes: N[]; edges: E[] } {
   const shown = nodes.filter(n =>
-    n.group_key === null ? !(n.member_count && expanded.has(n.key)) : expanded.has(n.group_key));
+    (n.group_key === null || expanded.has(n.group_key)) && !(n.member_count && expanded.has(n.key)));
   const keys = new Set(shown.map(n => n.key));
   return { nodes: shown, edges: edges.filter(e => keys.has(e.source) && keys.has(e.target)) };
 }
@@ -281,6 +283,15 @@ export const statsTip = (title: string, st: MapStats, ring: string, extra = ''):
   + `<div><b>${(st.error_rate * 100).toFixed(2)}</b><span style="opacity:.65"> %</span></div></div>`
   + `</div>`;
 
+// Health thresholds. "error_rate > 0" is not a health signal on an aggregate view: across
+// hundreds of third-party integrations essentially everything has had one error in an hour,
+// so flagging that paints the whole map red and hides the dependency that is actually down.
+// Three steps, the way Datadog grades a service.
+export const ERR_ELEVATED = 0.01;
+export const ERR_FAILING = 0.05;
+export const healthColor = (rate: number, st: ReturnType<typeof getChartStyles>, ok: string): string =>
+  rate >= ERR_FAILING ? st.errorColor : rate >= ERR_ELEVATED ? st.warningColor : ok;
+
 // The ring is the node's whole identity: red when it is actually failing, the service's
 // own colour otherwise (neutral for inferred peers, which have no service colour).
 // Health first — a failing dependency must not be hidden behind a pretty hash colour.
@@ -289,11 +300,7 @@ const ringColor = (
   st: ReturnType<typeof getChartStyles>,
   colors: Record<string, string> | undefined,
 ): string =>
-  n.stats.error_rate > 0
-    ? st.errorColor
-    : n.inferred
-      ? st.tooltipBorderColor
-      : resolveColor(n.key, colors ?? {});
+  healthColor(n.stats.error_rate, st, n.inferred ? st.tooltipBorderColor : resolveColor(n.key, colors ?? {}));
 
 // --- rendering ---------------------------------------------------------------
 const KIND_SYMBOL: Record<NodeKind, string> = {
@@ -438,10 +445,10 @@ function render(
       value: e.stats.requests, back: back.has(edgeKey(e.source, e.target)),
       inferred: byKey.get(e.target)!.inferred, errorRate: e.stats.error_rate,
       tip: statsTip(`${byKey.get(e.source)!.label || 'entry'} → ${byKey.get(e.target)!.label}`, e.stats,
-        e.stats.error_rate > 0 ? s.errorColor : resolveColor(e.source, colors)),
+        healthColor(e.stats.error_rate, s, resolveColor(e.source, colors))),
     }));
     // Failing edges paint last so they sit on top of the healthy bundle instead of under it.
-    linkData.sort((a, b) => Number(a.errorRate > 0) - Number(b.errorRate > 0));
+    linkData.sort((a, b) => a.errorRate - b.errorRate);
 
     return { nodes, edges, nodeData, linkData, pads, reach };
   };
@@ -451,7 +458,7 @@ function render(
   // failure the map exists to surface. Say how many are erroring, in words.
   function groupTip(n: ServiceNode): string {
     if (!n.member_count) return n.duration_share != null ? `<div>${(n.duration_share * 100).toFixed(1)}% of trace time</div>` : '';
-    const bad = (members.get(n.key) ?? []).filter(m => m.stats.error_rate > 0).length;
+    const bad = (members.get(n.key) ?? []).filter(m => m.stats.error_rate >= ERR_ELEVATED).length;
     return `<div style="opacity:.65">${n.member_count} endpoints${bad ? ` · ${bad} returning errors` : ''}</div>`;
   }
 
@@ -478,7 +485,10 @@ function render(
         // Arrowheads are noise once the bundle is dense; direction still reads left-to-right
         // from the layering, and hovering an edge brings its own emphasis.
         edgeSymbol: dense ? ['none', 'none'] : ['none', 'arrow'], edgeSymbolSize: [0, 7],
-        autoCurveness: true,
+        // autoCurveness spreads edges that share a *pair*; in a fan every edge has a
+        // different target, so it only bent 200 straight lines into sweeping arcs that
+        // crossed the whole canvas. A small fixed curveness is what the fan actually wants.
+        autoCurveness: false,
         label: {
           show: true, position: 'right', distance: 7, fontSize: 11, color: s.textColor,
           formatter: (p: any) => (p.data?.group ? `${p.data.displayName}  ×${p.data.group}` : p.data?.displayName ?? ''),
@@ -502,7 +512,7 @@ function render(
                 opacity: dim(n.key),
                 borderType: st.inferred ? 'dashed' : 'solid',
                 borderColor: ringColor(st, s, colors),
-                borderWidth: st.stats.error_rate > 0 ? 3 : 2.5,
+                borderWidth: st.stats.error_rate >= ERR_ELEVATED ? 3 : 2.5,
                 // A collapsed group is drawn as a stacked ring: "more than one" read
                 // pre-attentively from shape, without spending a colour on it.
                 ...(n.group ? { shadowColor: ringColor(st, s, colors), shadowBlur: 0, shadowOffsetX: 3, shadowOffsetY: 3 } : {}),
@@ -520,10 +530,10 @@ function render(
             width: Math.max(1, Math.min(3, 1 + Math.log2(1 + l.value) / 2)),
             // Neutral until it matters. Colouring by source is meaningless in a fan-out —
             // every edge shares one source — and it drowns the red that does mean something.
-            color: l.errorRate > 0.01 ? s.errorColor : s.textColor,
+            color: healthColor(l.errorRate, s, s.textColor),
             type: l.inferred ? 'dashed' : 'solid',
             curveness: l.back ? 0.2 : undefined,
-            opacity: lit.litEdges.has(edgeKey(l.sourceKey, l.targetKey)) ? (l.errorRate > 0.01 ? 0.85 : 0.3) : 0.06,
+            opacity: lit.litEdges.has(edgeKey(l.sourceKey, l.targetKey)) ? (l.errorRate >= ERR_ELEVATED ? 0.85 : 0.3) : 0.06,
           },
         })),
       }],

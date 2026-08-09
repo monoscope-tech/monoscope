@@ -19,8 +19,12 @@ module Models.Telemetry.ServiceGraph (
   singletonLatency,
   latencyPercentile,
   buildServiceGraph,
+  Collapse (..),
+  serviceMapFanout,
   traceEdgeSamples,
   emptyServiceGraph,
+  drawnNodes,
+  drawnEdges,
   serviceMapNodeCap,
   RollupEdge (..),
   projectsWithSpansInRange,
@@ -35,7 +39,6 @@ import Data.Char (isDigit)
 import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.IntMap.Strict qualified as IntMap
-import Data.List (partition)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as S
 import Data.Text qualified as T
@@ -189,6 +192,20 @@ data ServiceGraph = ServiceGraph
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake ServiceGraph
 
 
+-- | What the map actually draws. Collapsed members ride in the payload so the client can
+-- expand without a refetch, but they are not on the canvas — counting them in "N services",
+-- or listing them in the dependency table beside their own group's row, double-counts the
+-- same traffic. Every count the UI shows goes through these.
+drawnNodes :: ServiceGraph -> V.Vector ServiceNode
+drawnNodes g = V.filter (isNothing . (.groupKey)) g.nodes
+
+
+drawnEdges :: ServiceGraph -> V.Vector ServiceEdge
+drawnEdges g = V.filter (\e -> e.source `S.member` ks && e.target `S.member` ks) g.edges
+  where
+    ks = S.fromList [n.key | n <- V.toList (drawnNodes g)]
+
+
 emptyServiceGraph :: Double -> ServiceGraph
 emptyServiceGraph rangeSecs = ServiceGraph V.empty V.empty rangeSecs False Nothing
 
@@ -199,6 +216,33 @@ emptyServiceGraph rangeSecs = ServiceGraph V.empty V.empty rangeSecs False Nothi
 -- grouping buys real coverage rather than just a tidier picture.
 serviceMapNodeCap :: Int
 serviceMapNodeCap = 150
+
+
+-- | Whether a map collapses its dependencies at all, and how many peers it keeps drawn
+-- before folding the rest away. The trace map passes 'CollapseOff': a single request's path
+-- is the whole point there, and folding two of its five hops into "3 more" would hide the
+-- thing the reader came to see.
+data Collapse = CollapseOff | CollapseTo !Int
+  deriving stock (Eq, Show)
+
+
+-- | How many uninstrumented peers the global map draws before folding the remainder.
+-- Datadog shows a bounded map and puts the rest behind a click; past a dozen or so the
+-- reader is scanning, not reading.
+serviceMapFanout :: Collapse
+serviceMapFanout = CollapseTo 12
+
+
+-- | Turn candidate @(member, head)@ pairs into a lookup that only collapses a head with at
+-- least two members: a group of one is not a group, it is a peer wearing a badge.
+collapseMap :: [(Text, Text)] -> Text -> Maybe Text
+collapseMap assocs = \k -> do
+  g <- Map.lookup k m
+  guard $ Map.findWithDefault (0 :: Int) g sizes > 1
+  pure g
+  where
+    m = Map.fromList assocs
+    sizes = Map.fromListWith (+) [(g, 1) | (_, g) <- assocs]
 
 
 -- | Members of collapsed groups travel with their head so the client can expand a group
@@ -281,8 +325,8 @@ data EdgeSample = EdgeSample
 -- Node stats come from inbound edges because an edge's latency is the /callee's/ duration
 -- — what that service took to serve the call — so a node's latency is just the merge of
 -- what its callers observed, with no second measurement to keep in sync.
-buildServiceGraph :: Double -> Int -> Maybe Int64 -> [EdgeSample] -> ServiceGraph
-buildServiceGraph rangeSecs nodeCap totalDurationM samples =
+buildServiceGraph :: Double -> Int -> Collapse -> Maybe Int64 -> [EdgeSample] -> ServiceGraph
+buildServiceGraph rangeSecs nodeCap collapse totalDurationM samples =
   ServiceGraph
     { nodes = V.fromList (topNodes <> memberNodes)
     , edges = V.fromList keptEdges
@@ -298,61 +342,82 @@ buildServiceGraph rangeSecs nodeCap totalDurationM samples =
     nodeKinds = Map.fromListWith min $ concat [[s.source, s.target] | s <- samples]
     kindOf k = Map.findWithDefault NKUnknown k nodeKinds
     inbound = Map.fromListWith (<>) [(fst s.target, aggOf s) | s <- samples]
-    -- Entry-only and leaf nodes still need a row, with zeroed stats.
-    nodeStats = [(key, Map.findWithDefault mempty key inbound) | key <- Map.keys nodeKinds]
+    aggFor k = Map.findWithDefault mempty k inbound
 
-    -- A group of one is not a group: a lone peer renders as itself rather than hiding
-    -- behind a "×1" badge on a domain it is the only member of.
-    candidates = Map.fromList [(k, g) | (k, _) <- nodeStats, Just g <- [groupKeyOf (kindOf k) k]]
-    groupSizes = Map.fromListWith (+) [(g, 1 :: Int) | g <- Map.elems candidates]
-    groupOf k = do
-      g <- Map.lookup k candidates
-      guard $ Map.findWithDefault 0 g groupSizes > 1
-      pure g
+    -- Collapse level 1 — peers sharing a registrable domain, e.g. 71 tenant subdomains.
+    collapsing = collapse /= CollapseOff
+    fanoutCap = case collapse of CollapseOff -> maxBound; CollapseTo n -> n
+    domainOf k = guard collapsing >> collapseMap [(x, g) | x <- Map.keys nodeKinds, Just g <- [groupKeyOf (kindOf x) x]] k
 
-    (grouped, ungrouped) = partition (isJust . groupOf . fst) nodeStats
-    groupHeads = Map.toList $ Map.fromListWith (\(a, k) (b, k') -> (a <> b, min k k')) [(g, (a, kindOf k)) | (k, a) <- grouped, Just g <- [groupOf k]]
+    -- Collapse level 2 — the long tail. A domain fold cannot merge hundreds of *unrelated*
+    -- customer domains (one per merchant), and those are exactly what fills a real map: a
+    -- handful of peers carry the traffic and the remainder are a fraction of a percent each.
+    -- Keep the busiest, fold the rest under the caller that reaches them, and let the table
+    -- carry the full list. This is the bound that makes the map finite for any topology.
+    canon1 k = fromMaybe k (domainOf k)
+    canonKind = Map.fromListWith min [(canon1 k, kindOf k) | k <- Map.keys nodeKinds]
+    canonAgg = Map.fromListWith (<>) [(canon1 k, aggFor k) | k <- Map.keys nodeKinds]
+    tailKeys =
+      drop fanoutCap
+        $ map fst
+        $ sortOn
+          (\(_, a) -> Down a.reqs)
+          [kv | kv@(k, _) <- Map.toList canonAgg, inferredKind (Map.findWithDefault NKUnknown k canonKind)]
+    -- A peer with several callers folds under its busiest, so the fold never invents a
+    -- caller relationship that was not observed.
+    busiestCaller =
+      Map.fromListWith
+        (\a b -> if fst a >= fst b then a else b)
+        [(canon1 (fst s.target), (s.requests, canon1 (fst s.source))) | s <- samples]
+    tailOf = collapseMap [(k, "rest:" <> src) | k <- tailKeys, Just (_, src) <- [Map.lookup k busiestCaller]]
 
-    -- The cap ranks what the map draws: ungrouped nodes and group heads compete on equal
-    -- footing, so 150 slots now cover a whole per-tenant fan-out instead of 150 tenants.
-    topLevel =
-      sortOn (\(_, a, _) -> Down a.reqs)
-        $ [(k, a, Nothing) | (k, a) <- ungrouped]
-        <> [(g, a, Just (kind, Map.findWithDefault 0 g groupSizes)) | (g, (a, kind)) <- groupHeads]
-    keptTop = take nodeCap topLevel
-    keptGroups = S.fromList [g | (g, _, Just _) <- keptTop]
+    -- One parent link per node. Depth is at most two (raw peer -> domain head -> tail head),
+    -- and the renderer expands one level per click, so a tail head opens into domain heads
+    -- that open into their own members.
+    parentOf k = domainOf k <|> tailOf k
+    rootOf k = maybe k rootOf (parentOf k)
 
-    topNodes =
-      [ mkNode key agg (maybe (kindOf key) fst headM) (snd <$> headM) Nothing
-      | (key, agg, headM) <- keptTop
-      ]
-    memberNodes =
-      [ mkNode key agg (kindOf key) Nothing (groupOf key)
-      | (key, agg) <- take serviceMapMemberCap $ sortOn (\(_, a) -> Down a.reqs) grouped
-      , any (`S.member` keptGroups) (groupOf key)
-      ]
+    allKeys = ordNub $ Map.keys nodeKinds <> mapMaybe parentOf (Map.keys nodeKinds) <> mapMaybe tailOf (Map.keys canonAgg)
+    childrenOf = Map.fromListWith (<>) [(g, [k]) | k <- allKeys, Just g <- [parentOf k]]
+    childrenAt k = Map.findWithDefault [] k childrenOf
+    -- A head has no hops of its own; its numbers are exactly the sum of what it stands for.
+    aggAt k = case childrenAt k of [] -> aggFor k; ks -> foldMap aggAt ks
+    kindAt k = case childrenAt k of [] -> kindOf k; (x : xs) -> foldl' min (kindAt x) (map kindAt xs)
 
-    mkNode key agg kind memberCount groupKey =
+    -- The cap ranks what the map actually draws; collapsed members ride along under it.
+    topLevel = sortOn (\(_, a) -> Down a.reqs) [(k, aggAt k) | k <- allKeys, isNothing (parentOf k)]
+    keptRoots = S.fromList $ map fst $ take nodeCap topLevel
+    keptTop = [(k, a) | (k, a) <- take nodeCap topLevel]
+    keptMembers =
+      take serviceMapMemberCap
+        $ sortOn
+          (\(_, a) -> Down a.reqs)
+          [(k, aggAt k) | k <- allKeys, isJust (parentOf k), rootOf k `S.member` keptRoots]
+
+    topNodes = [mkNode k a | (k, a) <- keptTop]
+    memberNodes = [mkNode k a | (k, a) <- keptMembers]
+
+    mkNode key agg =
       ServiceNode
         { key
-        , label = nodeLabel key
-        , kind
-        , inferred = inferredKind kind
+        , label = maybe (nodeLabel key) (const $ show (length (childrenAt key)) <> " more dependencies") (T.stripPrefix "rest:" key)
+        , kind = kindAt key
+        , inferred = inferredKind (kindAt key)
         , durationShare = (\total -> if total > 0 then Just (fromIntegral agg.durNs / fromIntegral total) else Nothing) =<< totalDurationM
         , stats = statsOf agg
-        , memberCount
-        , groupKey
+        , memberCount = case childrenAt key of [] -> Nothing; ks -> Just (length ks)
+        , groupKey = parentOf key
         }
 
-    -- Both levels travel: collapsed edges join canonical endpoints, and the raw member
-    -- edges ride along so expanding a group needs no second request. A member edge is
-    -- recognisable client-side because its endpoint node carries a @group_key@.
-    canonical k = fromMaybe k (groupOf k)
+    -- Every level travels: an edge is emitted for each depth both endpoints can be lifted
+    -- to, so whatever is expanded, the edges between the visible nodes are already present
+    -- and expanding costs no second request.
+    climb k = fromMaybe k (parentOf k)
     visible = S.fromList [n.key | n <- topNodes <> memberNodes]
     edgesBy f = Map.fromListWith (<>) [((f (fst s.source), f (fst s.target)), aggOf s) | s <- samples]
     keptEdges =
       [ ServiceEdge source target (statsOf agg)
-      | ((source, target), agg) <- Map.toList $ Map.union (edgesBy id) (edgesBy canonical)
+      | ((source, target), agg) <- Map.toList $ Map.unions [edgesBy f | f <- [id, climb, climb . climb]]
       , source `S.member` visible
       , target `S.member` visible
       ]
@@ -649,7 +714,7 @@ serviceGraphForRange pid lo hi = do
         [ EdgeSample (sk, parseNodeKind skk) (tk, parseNodeKind tkk) r e (histFromObject h) d
         | (sk, skk, tk, tkk, r, e, d, AesonText h) <- rows
         ]
-  pure $ buildServiceGraph rangeSecs serviceMapNodeCap Nothing samples
+  pure $ buildServiceGraph rangeSecs serviceMapNodeCap serviceMapFanout Nothing samples
 
 
 -- | Name an uninstrumented dependency the way its own ecosystem would: the database or

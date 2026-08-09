@@ -15,7 +15,7 @@ import Effectful.Time qualified as Time
 import Lucid
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.ServiceGraph (ServiceGraph (..), ServiceNode (..), serviceGraphForRange)
+import Models.Telemetry.ServiceGraph (ServiceGraph (..), ServiceNode (..), drawnEdges, drawnNodes, serviceGraphForRange)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx)
 import Pkg.Components.ServiceMap (serviceMapPanel_)
 import Pkg.Components.TimePicker qualified as TimePicker
@@ -64,9 +64,9 @@ serviceMapPage_ pd = div_ [class_ "w-full h-full overflow-y-auto c-scroll p-4 fl
   div_ [class_ "flex items-center gap-2 text-xs text-textWeak"] do
     faSprite_ "diagram-project" "regular" "w-3.5 h-3.5 text-iconNeutral"
     toHtml
-      $ show (V.length pd.graph.nodes)
+      $ show (V.length (drawnNodes pd.graph))
       <> " services · "
-      <> show (V.length pd.graph.edges)
+      <> show (V.length (drawnEdges pd.graph))
       <> " dependencies"
     -- Search dims rather than removes, so a filtered view never silently severs a path.
     input_
