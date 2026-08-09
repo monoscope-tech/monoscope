@@ -769,6 +769,8 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
   let atAuthCtx =
         AuthContext
           envConfig
+          Nothing
+          Nothing
           pool
           pool
           pool

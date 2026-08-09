@@ -1,6 +1,6 @@
 cabal-version: 2.2
 
--- This file has been generated from package.yaml by hpack version 0.38.1.
+-- This file has been generated from package.yaml by hpack version 0.39.5.
 --
 -- see: https://github.com/sol/hpack
 
@@ -144,6 +144,7 @@ extra-source-files:
     static/migrations/0115_auto_provisioned_dashboards.sql
     static/migrations/0116_issue_hash_lookup.sql
     static/migrations/0117_service_dependency_edges.sql
+    static/migrations/0118_generic_oidc.sql
 
 source-repository head
   type: git
@@ -246,6 +247,7 @@ library
       Web.FacetsFallback
       Web.I18n
       Web.MCP
+      Web.OIDC
       Web.Routes
       Web.WireSchemas
       Proto.Opentelemetry.Proto.Common.V1.Common
@@ -660,6 +662,7 @@ test-suite integration-tests
     , base64
     , bytestring
     , cache
+    , case-insensitive
     , clock
     , conduit
     , containers
@@ -813,6 +816,7 @@ test-suite test-dev
       Web.FacetsFallback
       Web.I18n
       Web.MCP
+      Web.OIDC
       Web.Routes
       Web.WireSchemas
       BackgroundJobs.DashboardAutoProvisionSpec
@@ -1130,6 +1134,7 @@ test-suite unit-tests
       Spec
       System.ServerSpec
       Web.ApiHandlersSpec
+      Web.OIDCSpec
   hs-source-dirs:
       test/unit
   default-extensions:

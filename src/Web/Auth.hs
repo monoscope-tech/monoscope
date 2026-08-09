@@ -78,6 +78,7 @@ import System.Types (ATAuthCtx, ATBaseCtx, DB, RespHeaders, addRespHeaders)
 import Utils (escapedQueryPartial)
 import Web.Cookie (Cookies, SetCookie, parseCookies)
 import Web.I18n qualified as I18n
+import Web.OIDC qualified as OIDC
 import Web.Wire (DeviceCodeResponse (..), DeviceTokenResponse (..), ProjectInfo (..))
 import "base64" Data.ByteString.Base64 qualified as B64
 
@@ -290,11 +291,23 @@ apiKeyAuthHandler logger env = mkAuthHandler \req -> do
               _ -> T.throwError err401{errBody = "Invalid API key"}
 
 
-logoutH :: ATBaseCtx (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
-logoutH = do
-  envCfg <- asks env
-  let redirectTo = envCfg.auth0Domain <> "/v2/logout?client_id=" <> envCfg.auth0ClientId <> "&returnTo=" <> envCfg.auth0LogoutRedirect
-  pure $ addHeader redirectTo $ addHeader Projects.emptySessionCookie NoContent
+logoutH :: Maybe Text -> ATBaseCtx (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie, Header "Set-Cookie" SetCookie] NoContent)
+logoutH cookieHeaderM = do
+  appCtx <- ask @AuthContext
+  whenJust (sessionIdFromCookieHeader cookieHeaderM) Projects.deleteSession
+  let envCfg = appCtx.config
+      redirectTo = case (envCfg.oidcEnabled, appCtx.oidcSettings, appCtx.oidcDiscovery) of
+        (True, Just settings, Just discovery) ->
+          case discovery.endSessionEndpoint of
+            Just endpoint ->
+              endpoint
+                <> "?post_logout_redirect_uri="
+                <> queryEscape settings.logoutRedirect
+                <> "&client_id="
+                <> queryEscape settings.clientId
+            Nothing -> settings.logoutRedirect
+        _ -> envCfg.auth0Domain <> "/v2/logout?client_id=" <> envCfg.auth0ClientId <> "&returnTo=" <> envCfg.auth0LogoutRedirect
+  pure $ addHeader redirectTo $ addHeader Projects.emptySessionCookie $ addHeader OIDC.expiredStateCookie NoContent
 
 
 -- | Persist the user-selected language as a long-lived cookie, then bounce
@@ -331,16 +344,28 @@ loginH
            NoContent
        )
 loginH redirectToM screenHintM loginHintM = do
-  envCfg <- asks env
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
   -- If basic auth is enabled, return 401 instead of redirecting to OAuth
   if envCfg.basicAuthEnabled
     then throwError $ err401{errHeaders = [("WWW-Authenticate", "Basic realm=\"Monoscope\"")]}
-    else do
-      stateVar <- liftIO $ UUID.toText <$> UUIDV4.nextRandom
-      let escapedUri = escapedQueryPartial $ envCfg.auth0Callback <> "?redirect_to=" <> fromMaybe "/" redirectToM
-      let hintParam name = maybe "" (\v -> "&" <> name <> "=" <> decodeUtf8 (urlEncode True $ encodeUtf8 v))
-      let redirectTo = envCfg.auth0Domain <> "/authorize?response_type=code&client_id=" <> envCfg.auth0ClientId <> "&redirect_uri=" <> escapedUri <> "&state=" <> stateVar <> "&scope=openid profile email" <> hintParam "screen_hint" screenHintM <> hintParam "login_hint" loginHintM
-      pure $ addHeader redirectTo $ addHeader emptySessionCookie NoContent
+    else
+      if envCfg.oidcEnabled
+        then case (appCtx.oidcSettings, appCtx.oidcDiscovery) of
+          (Just settings, Just discovery) -> do
+            (oauthState, nonce, verifier) <- liftIO OIDC.generatePKCE
+            let redirectTo = OIDC.sanitizeRedirectTo redirectToM
+            inserted <- OIDC.insertPendingAuth oauthState nonce verifier redirectTo
+            unless inserted $ throwError Servant.err500
+            let location = OIDC.authorizationURL settings discovery oauthState nonce (OIDC.pkceChallenge verifier)
+            pure $ addHeader location $ addHeader (OIDC.pendingStateCookie oauthState) NoContent
+          _ -> throwError Servant.err500
+        else do
+          stateVar <- liftIO $ UUID.toText <$> UUIDV4.nextRandom
+          let escapedUri = escapedQueryPartial $ envCfg.auth0Callback <> "?redirect_to=" <> fromMaybe "/" redirectToM
+          let hintParam name = maybe "" (\v -> "&" <> name <> "=" <> decodeUtf8 (urlEncode True $ encodeUtf8 v))
+          let redirectTo = envCfg.auth0Domain <> "/authorize?response_type=code&client_id=" <> envCfg.auth0ClientId <> "&redirect_uri=" <> escapedUri <> "&state=" <> stateVar <> "&scope=openid profile email" <> hintParam "screen_hint" screenHintM <> hintParam "login_hint" loginHintM
+          pure $ addHeader redirectTo $ addHeader emptySessionCookie NoContent
 
 
 -- authCallbackH will accept a request with code and state, and use that code to queery auth- for an auth token, and then for user info
@@ -350,13 +375,25 @@ authCallbackH
   :: Maybe Text
   -> Maybe Text -- state variable from auth0
   -> Maybe Text
+  -> Maybe Text -- Cookie header
   -> ATBaseCtx
        ( Headers
-           '[Header "Location" Text, Header "Set-Cookie" SetCookie]
+           '[Header "Location" Text, Header "Set-Cookie" SetCookie, Header "Set-Cookie" SetCookie]
            (Html ())
        )
-authCallbackH codeM _ redirectToM = do
+authCallbackH codeM stateM redirectToM cookieHeaderM = do
   envCfg <- ask @AuthContext
+  if envCfg.config.oidcEnabled
+    then oidcAuthCallbackH envCfg codeM stateM cookieHeaderM
+    else auth0CallbackH envCfg codeM redirectToM
+
+
+auth0CallbackH
+  :: AuthContext
+  -> Maybe Text
+  -> Maybe Text
+  -> ATBaseCtx (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie, Header "Set-Cookie" SetCookie] (Html ()))
+auth0CallbackH envCfg codeM redirectToM = do
   pool <- asks pool
   resp <- runExceptT do
     code <- hoistEither $ note "invalid code " codeM
@@ -386,12 +423,78 @@ authCallbackH codeM _ redirectToM = do
       $ addHeader (fromMaybe "/" redirectToM)
       $ addHeader
         (craftSessionCookie persistentSessId True)
+      $ addHeader
+        OIDC.expiredStateCookie
         do
           html_ do
             head_ do
               meta_ [httpEquiv_ "refresh", content_ "1;url=/"]
             body_ do
               a_ [href_ $ fromMaybe "/" redirectToM] "Continue to APIToolkit"
+
+
+oidcAuthCallbackH
+  :: AuthContext
+  -> Maybe Text
+  -> Maybe Text
+  -> Maybe Text
+  -> ATBaseCtx (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie, Header "Set-Cookie" SetCookie] (Html ()))
+oidcAuthCallbackH appCtx codeM stateM cookieHeaderM = do
+  result <- runExceptT do
+    settings <- hoistEither $ maybeToRight OIDC.TokenClaimsFailure appCtx.oidcSettings
+    discovery <- hoistEither $ maybeToRight OIDC.DiscoveryResponseFailure appCtx.oidcDiscovery
+    code <- hoistEither $ maybeToRight OIDC.TokenResponseFailure codeM
+    oauthState <- hoistEither $ maybeToRight OIDC.TokenClaimsFailure stateM
+    cookieState <- hoistEither $ maybeToRight OIDC.TokenClaimsFailure $ oidcStateFromCookieHeader cookieHeaderM
+    unless (OIDC.statesMatch oauthState cookieState) $ T.throwError OIDC.TokenClaimsFailure
+    pending <- lift (OIDC.consumePendingAuth oauthState) >>= hoistEither . maybeToRight OIDC.TokenClaimsFailure
+    tokens <- liftIO (OIDC.exchangeCodeIO settings discovery code pending.codeVerifier) >>= hoistEither
+    now <- lift currentTime
+    tokenClaims <- liftIO (OIDC.validateIDTokenIO settings discovery now pending.nonce tokens.idToken) >>= hoistEither
+    userInfo <- liftIO (OIDC.fetchUserInfoIO discovery tokens.accessToken) >>= hoistEither
+    identityClaims <- hoistEither $ OIDC.mergeIdentityClaims tokenClaims userInfo
+    candidate <- traverse (lift . Projects.createUser identityClaims.givenName identityClaims.familyName identityClaims.picture) identityClaims.email
+    user <- liftIO (OIDC.resolveOrProvisionIdentityIO appCtx.pool settings identityClaims candidate) >>= hoistEither
+    unless user.active $ T.throwError OIDC.IdentityResolutionFailure
+    lift $ whenJust (sessionIdFromCookieHeader cookieHeaderM) Projects.deleteSession
+    sessionId <- lift Projects.newPersistentSessionId
+    lift $ Projects.insertSession sessionId user.id (Projects.SessionData Map.empty)
+    pure (sessionId, pending.redirectTo)
+  case result of
+    Left failure -> do
+      Logging.logAttention "OIDC authentication failed" (show @Text failure)
+      pure
+        $ addHeader "/login?authentication_failed"
+        $ addHeader Projects.emptySessionCookie
+        $ addHeader OIDC.expiredStateCookie
+        $ authContinueHtml "/login?authentication_failed"
+    Right (persistentSessId, redirectTo) ->
+      pure
+        $ addHeader redirectTo
+        $ addHeader (craftSessionCookie persistentSessId True)
+        $ addHeader OIDC.expiredStateCookie
+        $ authContinueHtml redirectTo
+
+
+authContinueHtml :: Text -> Html ()
+authContinueHtml redirectTo = html_ do
+  head_ $ meta_ [httpEquiv_ "refresh", content_ $ "1;url=" <> redirectTo]
+  body_ $ a_ [href_ redirectTo] "Continue to Monoscope"
+
+
+oidcStateFromCookieHeader :: Maybe Text -> Maybe Text
+oidcStateFromCookieHeader cookieHeaderM =
+  decodeUtf8 <$> (L.lookup "monoscope_oidc_state" . parseCookies . encodeUtf8 =<< cookieHeaderM)
+
+
+sessionIdFromCookieHeader :: Maybe Text -> Maybe Projects.PersistentSessionId
+sessionIdFromCookieHeader cookieHeaderM = do
+  raw <- L.lookup "monoscope_session" . parseCookies . encodeUtf8 =<< cookieHeaderM
+  Projects.PersistentSessionId <$> UUID.fromASCIIBytes raw
+
+
+queryEscape :: Text -> Text
+queryEscape = decodeUtf8 . urlEncode True . encodeUtf8
 
 
 authorizeUserAndPersist :: (DB es, HTTP :> es, Time :> es, UUIDEff :> es) => Maybe Text -> Text -> Text -> Text -> Text -> Eff es Projects.PersistentSessionId
