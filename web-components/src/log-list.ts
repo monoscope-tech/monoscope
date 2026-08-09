@@ -124,7 +124,6 @@ export class LogList extends LitElement {
   @state() private fetchedNew: boolean = false;
   @state() private visibleItems: EventLine[] = [];
   @state() private virtualListItems: VirtualListItem[] = [];
-  @state() private virtualizerGeneration = 0;
   // Inline-expand state keyed by aggregate row key (session_id or pattern_hash).
   @state() private expandedAggregates: Record<
     string,
@@ -1255,7 +1254,7 @@ export class LogList extends LitElement {
     }
   }
 
-  fetchData = async (url: string, isRefresh = false, isRecentFetch = false, isLoadMore = false) => {
+  fetchData = async (url: string, isRefresh = false, isRecentFetch = false, isLoadMore = false, revealRecent = false) => {
     if (isRecentFetch && this.isFetchingRecent) return;
     if (isLoadMore && this.isLoadingMore) return;
 
@@ -1363,19 +1362,16 @@ export class LogList extends LitElement {
           if (shouldBufferRecent(this.isLiveStreaming, scrollTop, scrolledToBottom, this.flipDirection)) {
             this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree, isRecentFetch);
           } else {
-            const anchor = this.captureScrollAnchor();
-            const generation = this.virtualizerGeneration;
+            const anchor = revealRecent ? null : this.captureScrollAnchor();
             this.spanListTree = this.mergeIntoTree(tree, isRecentFetch);
-            if (generation !== this.virtualizerGeneration) container.scrollTop = 0;
             this.updateVisibleItems();
             if (anchor) void this.restoreScrollAnchor(anchor);
+            else if (revealRecent) requestAnimationFrame(() => (container.scrollTop = this.flipDirection ? container.scrollHeight : 0));
           }
         }
       } else {
         const anchor = this.captureScrollAnchor() ?? loadMoreAnchor;
-        const generation = this.virtualizerGeneration;
         this.spanListTree = this.mergeIntoTree(tree, isRecentFetch);
-        if (generation !== this.virtualizerGeneration && this.logsContainer) this.logsContainer.scrollTop = 0;
         this.updateVisibleItems();
         if (anchor) void this.restoreScrollAnchor(anchor);
       }
@@ -1592,7 +1588,6 @@ export class LogList extends LitElement {
     this.loadingSessions = Object.fromEntries(Object.entries(this.loadingSessions).filter(([id]) => retainedIds.has(id)));
     if (isRecentFetch) this.hasMore = true;
     else this.hasNewer = true;
-    this.virtualizerGeneration++;
     return kept;
   }
 
@@ -1612,19 +1607,13 @@ export class LogList extends LitElement {
     await this.updateComplete;
     const index = this.virtualListItems.findIndex((item) => 'id' in item && item.id === anchor.id);
     const virtualizer = this.querySelector('lit-virtualizer');
-    const container = this.logsContainer;
-    if (index < 0 || !virtualizer || !container) return;
-
-    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-    await virtualizer.layoutComplete;
-    const row = virtualizer.element(index);
-    if (row) row.scrollIntoView({ block: 'start' });
-    else container.scrollTop = index * (virtualizer.scrollHeight / this.virtualListItems.length || 28);
-    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    if (index < 0 || !virtualizer) return;
+    virtualizer.element(index)?.scrollIntoView({ block: 'start' });
     await virtualizer.layoutComplete;
     requestAnimationFrame(() => {
-      const renderedRow = virtualizer.element(index);
-      if (renderedRow) container.scrollTop += renderedRow.getBoundingClientRect().top - container.getBoundingClientRect().top - anchor.offset;
+      const container = this.logsContainer;
+      const row = [...(container?.querySelectorAll<HTMLElement>('[data-row-id]') || [])].find((el) => el.dataset.rowId === anchor.id);
+      if (container && row) container.scrollTop += row.getBoundingClientRect().top - container.getBoundingClientRect().top - anchor.offset;
     });
   }
 
@@ -1898,7 +1887,7 @@ export class LogList extends LitElement {
             : html`
                 <tbody class="min-w-0 text-xs">
                   ${keyed(
-                    `${this.isAggregate || this.wrapLines ? 'measured' : 'dense'}-${this.virtualizerGeneration}`,
+                    this.isAggregate || this.wrapLines ? 'measured' : 'dense',
                     html`<lit-virtualizer
                       .items=${this.virtualListItems}
                       .renderItem=${this.renderVirtualItem}
@@ -2525,7 +2514,7 @@ export class LogList extends LitElement {
         const observer = new IntersectionObserver(
           ([entry]) => {
             if (entry.isIntersecting && !this.isFetchingRecent && !this.isLoading) {
-              this.fetchData(this.buildRecentFetchUrl(), false, true);
+              this.fetchData(this.buildRecentFetchUrl(), false, true, false, true);
               observer.disconnect();
             }
           },
@@ -2543,7 +2532,7 @@ export class LogList extends LitElement {
       this.isFetchingRecent,
       () => {
         if (this.isLiveStreaming) return;
-        this.fetchData(this.buildRecentFetchUrl(), false, true);
+        this.fetchData(this.buildRecentFetchUrl(), false, true, false, true);
       },
       fetchRecentRef
     );
