@@ -1,11 +1,42 @@
-import { describe, it, expect } from 'vitest';
-import { breakCycles, layerGraph, orderLayers, assignCoords, layoutGraph, filterSelection, type Edge } from '../src/service-map';
+import { describe, it, expect, vi } from 'vitest';
+import { breakCycles, layerGraph, orderLayers, assignCoords, layoutGraph, filterSelection, hydrateServiceMaps, statsTip, type Edge } from '../src/service-map';
 
 const e = (source: string, target: string): Edge => ({ source, target });
 const snapshot = (keys: string[], edges: Edge[]) => {
   const { coords, back } = layoutGraph(keys, edges);
   return JSON.stringify({ coords: [...coords], back: [...back].sort() });
 };
+
+describe('hydrateServiceMaps', () => {
+  it('hydrates each server-rendered map once from its embedded payload', () => {
+    const graph = { nodes: [], edges: [], range_seconds: 3600, truncated: false, error: null };
+    const colors = { gateway: 'bg-blue-400' };
+    document.body.innerHTML = `
+      <div id="global-service-map" data-service-map></div>
+      <script id="global-service-map-data" type="application/json">${JSON.stringify(graph)}</script>
+      <script id="global-service-map-colors" type="application/json">${JSON.stringify(colors)}</script>
+    `;
+    const render = vi.fn();
+
+    hydrateServiceMaps(document, render);
+    hydrateServiceMaps(document, render);
+
+    expect(render).toHaveBeenCalledOnce();
+    expect(render).toHaveBeenCalledWith('global-service-map', graph, { colors });
+  });
+});
+
+describe('statsTip', () => {
+  const stats = { requests: 1, errors: 0, error_rate: 0, p50_ns: 1, p95_ns: 1, p99_ns: 1, throughput_per_sec: 1 };
+
+  it('uses a dark foreground on a light service color', () => {
+    expect(statsTip('currency', stats, '#facc15')).toContain('background:#facc15;color:#493e12');
+  });
+
+  it('uses a light foreground on a dark status color', () => {
+    expect(statsTip('failed', stats, '#111827')).toContain('background:#111827;color:#d4dcec');
+  });
+});
 
 describe('breakCycles', () => {
   it('leaves a DAG untouched', () => {

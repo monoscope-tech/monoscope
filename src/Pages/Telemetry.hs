@@ -1096,20 +1096,6 @@ tracePage pid traceItem rawSpanRecords = do
           flameGraphChart($spanJson, "$trId", $colorsJson);
         }, {once: true});
       }
-      // ECharts renders 0x0 into a hidden panel, so the map waits for its tab.
-      var mapPanel = document.getElementById('service_map');
-      if (mapPanel && !mapPanel.dataset.mapListener) {
-        mapPanel.dataset.mapListener = '1';
-        mapPanel.addEventListener('tab-visible', () => {
-          if (typeof serviceMapChart === 'undefined' || mapPanel.dataset.mapInit) return;
-          mapPanel.dataset.mapInit = '1';
-          const el = mapPanel.querySelector('[data-service-map]');
-          if (!el) return;
-          serviceMapChart(el.id, JSON.parse(document.getElementById(el.id + '-data').textContent), {
-            colors: JSON.parse(document.getElementById(el.id + '-colors').textContent),
-          });
-        }, {once: true});
-      }
     }
     window.openTraceDetails = function(panel) {
       if (panel.offsetWidth > 5) return;

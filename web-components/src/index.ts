@@ -22,8 +22,7 @@ const components: Array<[string, () => Promise<unknown>]> = [
     await import('./yaml-editor');
   }],
   ['session-replay', () => import('./session-replay')],
-  // Publishes window.serviceMapChart for the trace page's inline initTraceCharts.
-  ['[data-service-map]', () => import('./service-map')],
+  ['[data-service-map]', () => import('./service-map').then(m => m.hydrateServiceMaps())],
 ];
 
 // The trace page's inline initTraceCharts can call this before the lazy module

@@ -73,7 +73,7 @@ serviceMapPage_ pd = div_ [class_ "w-full h-full overflow-y-auto c-scroll p-4 fl
       [ type_ "search"
       , class_ "ml-auto input input-sm border border-strokeWeak bg-fillWeaker rounded-lg w-56 max-md:w-32"
       , placeholder_ "Filter services"
-      , [__|on input send service-map-filter(q: my value) to the closest <div/> then halt|]
+      , [__|on input send "service-map-filter"(q: my value) to the closest <div/> then halt|]
       ]
   serviceMapPanel_ pd.pid "global-service-map" pd.graph serviceColors
   where

@@ -34,7 +34,7 @@ serviceMapPanel_ pid elId graph colors = div_ [class_ "w-full flex flex-col gap-
             $ do
               faSprite_ "circle-info" "regular" "w-3.5 h-3.5 text-iconNeutral"
               toHtml $ "Showing the " <> show (V.length graph.nodes) <> " busiest services; quieter ones are hidden."
-          serviceMapLegend_ graph
+          serviceMapLegend_ graph colors
           div_
             [ class_ "border border-strokeWeak rounded-2xl w-full h-[520px] max-md:h-[360px] relative"
             , id_ elId
@@ -88,15 +88,23 @@ menuItems =
 
 -- | Shape + dash carry node type, so the legend has to teach the shapes; colour alone is
 -- never the only signal.
-serviceMapLegend_ :: ServiceGraph -> Html ()
-serviceMapLegend_ graph =
+serviceMapLegend_ :: ServiceGraph -> HM.HashMap Text Text -> Html ()
+serviceMapLegend_ graph colors = div_ [class_ "flex flex-col gap-2"] do
   div_ [class_ "flex flex-wrap items-center gap-x-4 gap-y-1 px-1 text-xs text-textWeak"]
     $ forM_ present
     $ \k -> div_ [class_ "flex items-center gap-1.5"] do
       faSprite_ (kindIcon k) "regular" "w-3 h-3 text-iconNeutral"
       span_ [] $ toHtml $ kindLabel k
+  unless (null services) $ div_ [class_ "flex items-start gap-3 px-1 text-xs text-textWeak"] do
+    span_ [class_ "shrink-0 font-medium"] "Service colors"
+    ul_ [class_ "flex flex-wrap max-md:flex-nowrap gap-x-3 gap-y-1 max-md:overflow-x-auto c-scroll", term "aria-label" "Service colors"]
+      $ forM_ services
+      $ \service -> li_ [class_ "flex items-center gap-1.5 shrink-0", term "data-service-color" service] do
+        div_ [class_ $ "w-2.5 h-2.5 rounded-full shrink-0 " <> HM.findWithDefault "bg-fillNeutral-strong" service colors] pass
+        span_ [class_ "truncate max-w-40"] $ toHtml service
   where
     present = ordNub [n.kind | n <- V.toList graph.nodes]
+    services = ordNub [n.label | n <- V.toList graph.nodes, n.kind == NKService, not n.inferred, not (T.null n.label)]
 
 
 kindIcon :: NodeKind -> Text

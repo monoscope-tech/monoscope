@@ -65,6 +65,10 @@ edgePairs g = L.sort [(e.source, e.target) | e <- V.toList g.edges]
 spec :: Spec
 spec = around withTestResources do
   describe "service map" do
+    it "serviceMapLegend_iconsExistInRegularSprite" \_ -> do
+      sprite <- readFileText "static/public/assets/svgs/fa-sprites/regular.svg"
+      sprite `shouldContainAll` ["id=\"diagram-project\"", "id=\"arrow-right-to-bracket\""]
+
     -- An empty project must produce an empty graph with no error. The `error` field exists
     -- precisely so a failed query can't masquerade as "you have no services"; this pins the
     -- other side of that contract.
@@ -124,7 +128,6 @@ spec = around withTestResources do
           <*> projectsWithSpansInRange False (addUTCTime (-86400) frozenTime) (addUTCTime (-86100) frozenTime)
       inBucket `shouldBe` [testPid]
       idleBucket `shouldBe` [] -- testPid is active, but silent in this window
-
     it "rollup_excludesSpansOutsideTheRange" \tr -> do
       apiKey <- createTestAPIKey tr testPid "service-map-range-key"
       ingestFixture tr apiKey (addUTCTime (-86400) frozenTime)
@@ -174,7 +177,13 @@ spec = around withTestResources do
       html `shouldContainAll` ["Entry point", "gateway", "checkout", "orders", "orders.v1", "Dependencies (4)"]
       -- The canvas hydrates from the embedded payload rather than an extra round trip.
       html `shouldContainAll` ["data-service-map", "global-service-map-data", "global-service-map-colors"]
+      html `shouldContainAll` ["aria-label=\"Service colors\"", "data-service-color=\"gateway\"", "data-service-color=\"checkout\""]
       html `shouldContainAll` ["Events", "Metrics", "Service Map"]
+
+    it "serviceMapFilter_quotesHyphenatedEventNameForHyperscript" \tr -> do
+      (_, page) <- testServant tr $ ServiceMap.serviceMapGetH testPid Nothing Nothing (Just "1H")
+      let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
+      html `shouldContainAll` ["send &quot;service-map-filter&quot;(q: my value)"]
 
     -- The trace-level map: same grammar, scoped to one request. It is derived from spans
     -- already on the page (no extra query), so the whole contract is "load the trace and the
