@@ -148,7 +148,7 @@ simpleAggSQL fn sub = fn <> "((" <> display sub <> ")::float)"
 
 -- | Timescale Toolkit-compatible bounded percentile aggregate.
 percentileSQL :: Double -> Text -> Text
-percentileSQL pct sub = "approx_percentile(" <> show pct <> ", percentile_agg(CAST(" <> sub <> " AS DOUBLE PRECISION)))::float"
+percentileSQL pct sub = "COALESCE(approx_percentile(" <> show pct <> ", percentile_agg(CAST(" <> sub <> " AS DOUBLE PRECISION))), 0)::float"
 
 
 -- | Convert AggFunction to SQL without the AS alias (for use inside other expressions)

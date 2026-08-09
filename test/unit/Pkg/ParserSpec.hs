@@ -149,9 +149,9 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', c
       let result = parseQueryToAST "| summarize percentile(duration, 95) by bin(timestamp, 1h)"
       isRight result `shouldBe` True
 
-    it "lowers p95 to the portable bounded-percentile aggregate" do
+    it "lowers p95 to a portable aggregate and coalesces empty buckets" do
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize p95(duration) by bin(timestamp, 1h)"
-      query `shouldSatisfy` T.isInfixOf "approx_percentile(0.95, percentile_agg(CAST(duration AS DOUBLE PRECISION)))"
+      query `shouldSatisfy` T.isInfixOf "COALESCE(approx_percentile(0.95, percentile_agg(CAST(duration AS DOUBLE PRECISION))), 0)::float"
 
     it "parses percentiles(duration, 50, 75, 90, 95) via full query" do
       let result = parseQueryToAST "| summarize percentiles(duration, 50, 75, 90, 95) by bin(timestamp, 1h)"
@@ -190,7 +190,7 @@ WITH bucket_digests AS (SELECT extract(epoch from time_bucket('1 hours', timesta
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "resource.service.name == \"cart\" | where duration != null | summarize percentiles(duration, 50, 90) by bin(timestamp, 1h)"
       let expected =
             [text|
-SELECT jsonb_build_array(extract(epoch from time_bucket('1 hours', timestamp))::integer, approx_percentile(0.5, percentile_agg(CAST(duration AS DOUBLE PRECISION)))::float, count(*) OVER()) FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((resource___service___name = 'cart' AND duration IS NOT NULL)) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
+SELECT jsonb_build_array(extract(epoch from time_bucket('1 hours', timestamp))::integer, COALESCE(approx_percentile(0.5, percentile_agg(CAST(duration AS DOUBLE PRECISION))), 0)::float, count(*) OVER()) FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((resource___service___name = 'cart' AND duration IS NOT NULL)) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
             |]
       normT query `shouldBe` normT expected
 
