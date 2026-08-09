@@ -34,11 +34,17 @@ export type Point = { x: number; y: number };
 // file as binary, which silently costs every diff and review on it.
 export const edgeKey = (source: string, target: string): string => `${source}\u0000${target}`;
 
-const X_GAP = 190;
-const Y_GAP = 96;
-// A layer wider than the canvas wraps into sub-columns rather than growing one infinite
-// column; 0.45 keeps the wrapped pair visibly one layer rather than reading as two.
-const SUBCOL_GAP = X_GAP * 0.45;
+// Card geometry. Datadog's node is a card carrying four facts, not a dot carrying one:
+// name, error rate, latency and throughput are all readable without hovering anything.
+// Volume is no longer encoded as node size — the req/s line says it in numbers, which is
+// both more precise and what lets every card be the same size.
+const CARD_W = 176;
+const CARD_H = 78;
+export const X_GAP = CARD_W + 68;
+export const Y_GAP = CARD_H + 28;
+// A wrapped layer's sub-columns have to clear a whole card plus a gutter; anything less
+// and the wrap overlaps the very cards it was meant to make room for.
+const SUBCOL_GAP = CARD_W + 24;
 
 /**
  * The payload carries both levels: collapsed group heads plus the members that would
@@ -181,13 +187,18 @@ export function assignCoords(layers: string[][], opts: LayoutOpts = {}): Map<str
   const pitch = opts.rowPitch ?? Y_GAP;
   const maxRows = Math.max(1, opts.maxRows ?? Infinity);
   const coords = new Map<string, Point>();
-  layers.forEach((l, li) => {
+  // The cursor advances by how wide each layer actually got, not by a fixed step. Placing
+  // layer n at `n * X_GAP` assumes every layer is one column wide, so a wrapped layer's
+  // second column lands inside the *next* layer's lane and the two collide.
+  let x = 0;
+  for (const l of layers) {
     const rows = Math.min(l.length, maxRows);
     l.forEach((k, i) => coords.set(k, {
-      x: li * X_GAP + Math.floor(i / rows) * SUBCOL_GAP,
+      x: x + Math.floor(i / rows) * SUBCOL_GAP,
       y: ((i % rows) - (rows - 1) / 2) * pitch,
     }));
-  });
+    x += (Math.ceil(l.length / rows) - 1) * SUBCOL_GAP + X_GAP;
+  }
   return coords;
 }
 
@@ -303,10 +314,40 @@ const ringColor = (
   healthColor(n.stats.error_rate, st, n.inferred ? st.tooltipBorderColor : resolveColor(n.key, colors ?? {}));
 
 // --- rendering ---------------------------------------------------------------
-const KIND_SYMBOL: Record<NodeKind, string> = {
-  entry: 'pin', service: 'circle', database: 'diamond',
-  queue: 'roundRect', external: 'triangle', unknown: 'circle',
+
+// Kind as a short tag rather than a glyph: canvas has no access to our sprite sheet, and
+// unicode symbols render at the mercy of whatever font the OS substitutes. Text always
+// renders, and it doubles as the non-colour signal for what a node is.
+const KIND_TAG: Record<NodeKind, string> = {
+  entry: 'ENTRY', service: '', database: 'DB', queue: 'QUEUE', external: 'EXT', unknown: '',
 };
+
+/**
+ * The four facts, as echarts rich-text lines. Built here rather than in `paint` so the
+ * string is computed once per layout instead of once per re-style, and so it is a pure
+ * function of the node — the tooltip and the card can never disagree about a number.
+ */
+const richSafe = (t: string) => t.replace(/[{}|]/g, '');
+
+export function cardLabel(n: ServiceNode): string {
+  const tag = KIND_TAG[n.kind];
+  // A fold already names its size ("15 more dependencies"); a ×15 badge repeats it.
+  const count = n.member_count && !n.key.startsWith('rest:') ? `  ×${n.member_count}` : '';
+  const rps = n.stats.throughput_per_sec < 10
+    ? n.stats.throughput_per_sec.toFixed(2)
+    : fmtNum(Math.round(n.stats.throughput_per_sec));
+  const errStyle = n.stats.error_rate >= ERR_FAILING ? 'bad' : n.stats.error_rate >= ERR_ELEVATED ? 'warn' : 'muted';
+  return [
+    `${tag ? `{tag|${tag}} ` : ''}{name|${richSafe(n.label || 'Entry point')}${count}}`,
+    `{${errStyle}|${(n.stats.error_rate * 100).toFixed(2)}% errors}`,
+    n.duration_share != null
+      ? `{muted|${(n.duration_share * 100).toFixed(1)}% of trace time}`
+      : `{muted|${fmtDur(n.stats.p95_ns)} p95}`,
+    // Health rides beside the throughput chip as a filled block: Datadog's card carries the
+    // grade as its own mark, not only as the colour of some text.
+    `{rps|${rps} req/s}  {${errStyle === 'muted' ? 'barOk' : errStyle === 'warn' ? 'barWarn' : 'barBad'}| }`,
+  ].join('\n');
+}
 
 // layout:'none' fits the supplied coordinate extent to the box, so a 1-2 node
 // graph would be blown up to fill the canvas. Invisible corner nodes pin a
@@ -371,6 +412,9 @@ function render(
   opts: { colors?: Record<string, string>; onNodeClick?: (key: string) => void },
 ): void {
   const echarts = (window as any).echarts;
+  // `el` is the scrolling viewport; the chart lives on the canvas inside it, which is sized
+  // to the graph rather than to the window.
+  const canvas = el.querySelector<HTMLElement>('[data-map-canvas]') ?? el;
   registerChartDisposer(containerId, () => {}); // tear down whatever was rendered here before
   const controller = new AbortController();
   const signal = controller.signal;
@@ -391,8 +435,8 @@ function render(
   const members = new Map<string, ServiceNode[]>();
   for (const n of allNodes) if (n.group_key) members.set(n.group_key, [...(members.get(n.group_key) ?? []), n]);
 
-  echarts.getInstanceByDom(el)?.dispose();
-  const chart = echarts.init(el);
+  echarts.getInstanceByDom(canvas)?.dispose();
+  const chart = echarts.init(canvas);
 
   const expanded = new Set<string>();
   let isolated: Set<string> | null = null;
@@ -407,13 +451,8 @@ function render(
     const index = new Map(keys.map((k, i) => [k, i]));
     const edges = candidates.filter(e => index.has(e.source) && index.has(e.target));
 
-    const maxReq = Math.max(1, ...nodes.map(n => n.stats.requests));
-    const share = (n: ServiceNode) => n.duration_share ?? n.stats.requests / maxReq;
-    const sizeOf = (n: ServiceNode) => Math.min(64, 26 + 24 * Math.sqrt(Math.max(0, Math.min(1, share(n)))));
-    const maxSymbol = Math.max(26, ...nodes.map(sizeOf));
-
     const box = el.getBoundingClientRect();
-    const { coords, back } = layoutGraph(keys, edges, widest => fitRows(box.height, widest, maxSymbol));
+    const { coords, back } = layoutGraph(keys, edges, widest => fitRows(box.height, widest, CARD_H));
 
     // Transitive isolation sets — echarts' focus:'adjacency' is 1-hop only.
     const reach: Reach = { up: new Map(), down: new Map() };
@@ -422,10 +461,20 @@ function render(
 
     const xs = [...coords.values()].map(p => p.x), ys = [...coords.values()].map(p => p.y);
     const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
-    // Only a floor, never the container width: padding the virtual extent out to the box
-    // is what parked a small graph in the left quarter of an otherwise empty canvas.
-    const halfW = Math.max(MIN_W, Math.max(...xs) - Math.min(...xs)) / 2;
-    const halfH = Math.max(MIN_H, Math.max(...ys) - Math.min(...ys)) / 2;
+    // `layout:'none'` fits the supplied coordinates to the container, uniformly on both axes,
+    // so a graph that is merely *wide* gets shrunk vertically too and the pixel floor computed
+    // above is silently undone — 86-unit rows arrived 40px apart and overlapped. Rather than
+    // fight the fit with zoom arithmetic, grow the container to the graph: extent and box are
+    // then the same rectangle, the fit is 1:1 by construction, and anything past the window is
+    // reached by scrolling, the way Datadog's map is.
+    const extentW = Math.max(MIN_W, Math.max(...xs) - Math.min(...xs) + CARD_W);
+    const extentH = Math.max(MIN_H, Math.max(...ys) - Math.min(...ys) + CARD_H);
+    canvas.style.width = `${Math.max(el.clientWidth, Math.ceil(extentW) + 80)}px`;
+    canvas.style.height = `${Math.max(el.clientHeight, Math.ceil(extentH) + 64)}px`;
+    if (canvas !== el) { canvas.style.position = 'relative'; canvas.style.inset = 'auto'; }
+    chart.resize();
+    const halfW = extentW / 2;
+    const halfH = extentH / 2;
     const pads = [{ x: cx - halfW, y: cy - halfH }, { x: cx + halfW, y: cy + halfH }]
       .map((p, i) => ({ ...p, id: `__pad${i}`, name: `__pad${i}`, fixed: true, symbol: 'none', symbolSize: 0, silent: true, label: { show: false }, tooltip: { show: false } }));
 
@@ -433,10 +482,10 @@ function render(
       // NB: not `label` — echarts owns data[i].label and rewrites it into a label config
       // object, which is why the formatter rendered "[object Object]".
       id: String(i), name: n.key || '(entry)', key: n.key, displayName: n.label, kind: n.kind,
-      group: n.member_count ?? 0,
+      group: n.member_count ?? 0, card: cardLabel(n),
       value: n.stats.requests, tip: statsTip(n.label || 'entry', n.stats, ringColor(n, s, colors), groupTip(n)),
       x: coords.get(n.key)!.x, y: coords.get(n.key)!.y, fixed: true,
-      symbol: KIND_SYMBOL[n.kind] ?? 'circle', symbolSize: sizeOf(n),
+      symbol: 'rect', symbolSize: [CARD_W, CARD_H],
     }));
 
     const linkData = edges.map(e => ({
@@ -481,7 +530,7 @@ function render(
       },
       series: [{
         type: 'graph', layout: 'none', left: 40, right: 40, top: 32, bottom: 32,
-        roam: true, scaleLimit: { min: 0.35, max: 4 }, draggable: true, cursor: 'pointer',
+        roam: false, draggable: false, cursor: 'pointer',
         // Arrowheads are noise once the bundle is dense; direction still reads left-to-right
         // from the layering, and hovering an edge brings its own emphasis.
         edgeSymbol: dense ? ['none', 'none'] : ['none', 'arrow'], edgeSymbolSize: [0, 7],
@@ -489,16 +538,29 @@ function render(
         // different target, so it only bent 200 straight lines into sweeping arcs that
         // crossed the whole canvas. A small fixed curveness is what the fan actually wants.
         autoCurveness: false,
+        // The rect is the card and the label is its contents, centred inside it. Anchoring
+        // the label to the rect's top pushed the text out below its own card, and a graph
+        // series will not render a label at all for a node whose symbol is 'none'.
         label: {
-          show: true, position: 'right', distance: 7, fontSize: 11, color: s.textColor,
-          formatter: (p: any) => (p.data?.group ? `${p.data.displayName}  ×${p.data.group}` : p.data?.displayName ?? ''),
+          show: true, position: 'inside', align: 'left', lineHeight: 15,
+          width: CARD_W - 22, color: s.tooltipTextColor,
+          formatter: (p: any) => p.data?.card ?? '',
+          rich: {
+            tag: { fontSize: 9, color: s.textColor, fontWeight: 'bold' as const, padding: [0, 0, 0, 0] },
+            name: { fontSize: 12, color: s.tooltipTextColor, fontWeight: 600 as const },
+            muted: { fontSize: 11, color: s.textColor },
+            warn: { fontSize: 11, color: s.warningColor },
+            bad: { fontSize: 11, color: s.errorColor, fontWeight: 600 as const },
+            // The throughput chip, the one number Datadog gives a filled background.
+            rps: { fontSize: 11, color: s.tooltipTextColor, backgroundColor: s.chartBg, padding: [2, 5], borderRadius: 3 },
+            barOk: { width: 3, height: 13, backgroundColor: s.tooltipBorderColor, borderRadius: 2 },
+            barWarn: { width: 3, height: 13, backgroundColor: s.warningColor, borderRadius: 2 },
+            barBad: { width: 3, height: 13, backgroundColor: s.errorColor, borderRadius: 2 },
+          },
         },
-        // Labels that collide are dropped rather than overprinted — 150 right-hand labels
-        // stacked into a grey mass is unreadable in a way that "some labels hidden" is not.
-        labelLayout: { hideOverlap: true },
         edgeLabel: { show: false, fontSize: 10, color: s.textColor, formatter: (p: any) => p.data?.tip ?? '' },
         lineStyle: { color: s.textColor, width: 1.5, opacity: 0.3, curveness: 0.06 },
-        emphasis: { focus: 'adjacency', scale: 1.08, lineStyle: { width: 3, opacity: 1 }, label: { fontWeight: 'bold' } },
+        emphasis: { focus: 'adjacency', scale: false, lineStyle: { width: 3, opacity: 1 } },
         blur: { itemStyle: { opacity: 0.14 }, lineStyle: { opacity: 0.06 }, label: { opacity: 0.14 } },
         data: [
           ...view.nodeData.map(n => {
@@ -506,16 +568,18 @@ function render(
             return {
               ...n,
               itemStyle: {
-                // Hollow, like Datadog: the ring carries health and the hole keeps a dense
-                // graph readable, so size (requests) stays the only filled signal.
-                color: 'transparent',
+                color: s.tooltipBg,
                 opacity: dim(n.key),
+                borderRadius: 5,
+                // Neutral by default. A border is a weak channel and health has first claim
+                // on it; the service colour identifies the node on its name line instead.
+                borderColor: st.stats.error_rate >= ERR_ELEVATED ? ringColor(st, s, colors) : s.tooltipBorderColor,
+                borderWidth: st.stats.error_rate >= ERR_ELEVATED ? 2 : 1,
                 borderType: st.inferred ? 'dashed' : 'solid',
-                borderColor: ringColor(st, s, colors),
-                borderWidth: st.stats.error_rate >= ERR_ELEVATED ? 3 : 2.5,
-                // A collapsed group is drawn as a stacked ring: "more than one" read
-                // pre-attentively from shape, without spending a colour on it.
-                ...(n.group ? { shadowColor: ringColor(st, s, colors), shadowBlur: 0, shadowOffsetX: 3, shadowOffsetY: 3 } : {}),
+                // A collapsed head is a stacked card: "more than one" read from shape alone. A
+                // blurred shadow, not an offset slab — offsetting a hard edge under a bordered
+                // rect draws a black L, which reads as a rendering fault rather than depth.
+                ...(n.group ? { shadowColor: s.tooltipBorderColor, shadowBlur: 6, shadowOffsetX: 3, shadowOffsetY: 3 } : {}),
               },
               label: { opacity: dim(n.key) },
             };

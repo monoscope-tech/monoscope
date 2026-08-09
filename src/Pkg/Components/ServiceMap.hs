@@ -38,14 +38,19 @@ serviceMapPanel_ pid elId graph colors = div_ [class_ "w-full flex flex-col gap-
                 <> show (V.length (drawnNodes graph))
                 <> " busiest dependencies. Quieter ones are folded away — search to find a specific one."
           serviceMapLegend_ graph colors
+          -- The viewport scrolls; the canvas inside it is sized to the graph. Fitting a big
+          -- graph into a fixed box is what shrinks cards until they overlap, so the map is
+          -- allowed to be bigger than its window and you pan to the rest.
           div_
-            [ class_ "border border-strokeWeak rounded-2xl w-full h-[520px] max-md:h-[360px] relative"
+            [ class_ "border border-strokeWeak rounded-2xl w-full h-[620px] max-md:h-[420px] relative overflow-auto c-scroll"
             , id_ elId
             , term "data-service-map" elId
             , -- Base for the node menu's links; the renderer only appends the query.
               term "data-map-base" ("/p/" <> pid.toText)
             ]
-            $ nodeMenu_ elId
+            do
+              div_ [class_ "absolute inset-0", term "data-map-canvas" ""] pass
+              nodeMenu_ elId
           script_ [type_ "application/json", id_ $ elId <> "-data"] $ decodeUtf8 @Text $ AE.encode graph
           script_ [type_ "application/json", id_ $ elId <> "-colors"]
             $ decodeUtf8 @Text
@@ -89,16 +94,21 @@ menuItems =
   ]
 
 
--- | Shape + dash carry node type, so the legend has to teach the shapes; colour alone is
--- never the only signal.
+-- | The card says what a node /is/ (its DB\/EXT\/QUEUE tag) and how it is doing (its
+-- numbers). What a card cannot say for itself is the two encodings carried by its border,
+-- so those are what the legend teaches — plus the health scale, because a threshold is a
+-- promise about what red means and a reader is entitled to know where it sits.
 serviceMapLegend_ :: ServiceGraph -> HM.HashMap Text Text -> Html ()
 serviceMapLegend_ graph colors = div_ [class_ "flex flex-col gap-2"] do
-  div_ [class_ "flex flex-wrap items-center gap-x-4 gap-y-1 px-1 text-xs text-textWeak"]
-    $ forM_ present
-    $ \k -> div_ [class_ "flex items-center gap-1.5"] do
-      faSprite_ (kindIcon k) "regular" "w-3 h-3 text-iconNeutral"
-      span_ [] $ toHtml $ kindLabel k
-  unless (null services) $ div_ [class_ "flex items-start gap-3 px-1 text-xs text-textWeak"] do
+  div_ [class_ "flex flex-wrap items-center gap-x-4 gap-y-1 px-1 text-xs text-textWeak"] do
+    forM_ borderLegend \(cls, label) -> div_ [class_ "flex items-center gap-1.5"] do
+      div_ [class_ $ "w-4 h-2.5 rounded-sm shrink-0 " <> cls] pass
+      span_ [] $ toHtml label
+    forM_ healthLegend \(cls, label) -> div_ [class_ "flex items-center gap-1.5"] do
+      div_ [class_ $ "w-2.5 h-2.5 rounded-full shrink-0 " <> cls] pass
+      span_ [] $ toHtml label
+  -- One swatch is not a colour key, it is a lone label pretending to be one.
+  when (length services > 1) $ div_ [class_ "flex items-start gap-3 px-1 text-xs text-textWeak"] do
     span_ [class_ "shrink-0 font-medium"] "Service colors"
     ul_ [class_ "flex flex-wrap max-md:flex-nowrap gap-x-3 gap-y-1 max-md:overflow-x-auto c-scroll", term "aria-label" "Service colors"]
       $ forM_ services
@@ -106,28 +116,17 @@ serviceMapLegend_ graph colors = div_ [class_ "flex flex-col gap-2"] do
         div_ [class_ $ "w-2.5 h-2.5 rounded-full shrink-0 " <> HM.findWithDefault "bg-fillNeutral-strong" service colors] pass
         span_ [class_ "truncate max-w-40"] $ toHtml service
   where
-    present = ordNub [n.kind | n <- V.toList graph.nodes]
+    borderLegend :: [(Text, Text)]
+    borderLegend =
+      [ ("border border-strokeStrong", "Instrumented service")
+      , ("border border-dashed border-strokeStrong", "Uninstrumented dependency")
+      ]
+    healthLegend :: [(Text, Text)]
+    healthLegend =
+      [ ("bg-fillWarning-strong", "Elevated errors (1%+)")
+      , ("bg-fillError-strong", "Failing (5%+)")
+      ]
     services = ordNub [n.label | n <- V.toList graph.nodes, n.kind == NKService, not n.inferred, not (T.null n.label)]
-
-
-kindIcon :: NodeKind -> Text
-kindIcon = \case
-  NKEntry -> "arrow-right-to-bracket"
-  NKService -> "circle"
-  NKDatabase -> "database"
-  NKQueue -> "layer-group"
-  NKExternal -> "cloud"
-  NKUnknown -> "circle-question"
-
-
-kindLabel :: NodeKind -> Text
-kindLabel = \case
-  NKEntry -> "Entry point"
-  NKService -> "Service"
-  NKDatabase -> "Database"
-  NKQueue -> "Queue"
-  NKExternal -> "External"
-  NKUnknown -> "Unknown"
 
 
 -- | The no-JS, screen-reader and small-screen representation of the same graph.

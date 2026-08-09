@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { breakCycles, layerGraph, orderLayers, assignCoords, layoutGraph, filterSelection, hydrateServiceMaps, statsTip, visibleGraph, fitRows, edgeKey, type Edge } from '../src/service-map';
+import { breakCycles, layerGraph, orderLayers, assignCoords, layoutGraph, filterSelection, hydrateServiceMaps, statsTip, visibleGraph, fitRows, edgeKey, cardLabel, X_GAP, Y_GAP, type Edge } from '../src/service-map';
 
 const e = (source: string, target: string): Edge => ({ source, target });
 const snapshot = (keys: string[], edges: Edge[]) => {
@@ -35,6 +35,45 @@ describe('statsTip', () => {
 
   it('uses a light foreground on a dark status color', () => {
     expect(statsTip('failed', stats, '#111827')).toContain('background:#111827;color:#d4dcec');
+  });
+});
+
+describe('cardLabel', () => {
+  const node = (over: Partial<Parameters<typeof cardLabel>[0]> = {}) => ({
+    key: 'api.paystack.co', label: 'api.paystack.co', kind: 'external' as const, inferred: true,
+    duration_share: null, member_count: null, group_key: null,
+    stats: { requests: 4500, errors: 0, error_rate: 0, p50_ns: 1e8, p95_ns: 1.48e9, p99_ns: 2e9, throughput_per_sec: 1.25 },
+    ...over,
+  });
+
+  it('carries all four facts, so the map answers without a hover', () => {
+    const card = cardLabel(node());
+    expect(card).toContain('{name|api.paystack.co}');
+    expect(card).toContain('0.00% errors');
+    expect(card).toContain('1.48s p95');
+    expect(card).toContain('1.25 req/s');
+    expect(card).toContain('{tag|EXT}');
+  });
+
+  it('grades the error line in three steps rather than flagging any error at all', () => {
+    const rate = (r: number) => cardLabel(node({ stats: { ...node().stats, error_rate: r } })).split('\n')[1];
+    expect(rate(0.001)).toContain('{muted|');  // one error in an hour is not an incident
+    expect(rate(0.02)).toContain('{warn|');
+    expect(rate(0.2)).toContain('{bad|');
+  });
+
+  it('names a collapsed head for what it stands for', () => {
+    expect(cardLabel(node({ label: 'myshopify.com', member_count: 71 }))).toContain('myshopify.com  ×71');
+  });
+
+  it('strips rich-text metacharacters so a hostname cannot break the card', () => {
+    expect(cardLabel(node({ label: 'we{ird}|host' }))).toContain('{name|weirdhost}');
+  });
+
+  it('shows trace-time share instead of p95 on a trace map', () => {
+    const card = cardLabel(node({ duration_share: 0.42 }));
+    expect(card).toContain('42.0% of trace time');
+    expect(card).not.toContain('p95');
   });
 });
 
@@ -85,7 +124,7 @@ describe('visibleGraph', () => {
 
 describe('fitRows', () => {
   it('keeps generous spacing while the layer fits', () => {
-    expect(fitRows(520, 4, 64)).toMatchObject({ rowPitch: 96 });
+    expect(fitRows(520, 4, 64)).toMatchObject({ rowPitch: Y_GAP });
   });
 
   it('never spaces rows closer than the symbols are wide', () => {
@@ -111,6 +150,16 @@ describe('assignCoords', () => {
     expect(coords.get('e')!.x).toBeGreaterThan(coords.get('c')!.x);
     // Whatever the wrapping, no two nodes ever share a point.
     expect(new Set([...coords.values()].map(p => `${p.x},${p.y}`)).size).toBe(5);
+  });
+
+  it('advances the next layer past a wrapped layer, not into it', () => {
+    // The collision this pins: layer 0 wraps to two columns, so layer 1 must start clear of
+    // both. Placing layer n at n * X_GAP put the wrapped column 44px from the next layer's
+    // cards, which are 176px wide.
+    const coords = assignCoords([['a', 'b', 'c'], ['z']], { rowPitch: 10, maxRows: 2 });
+    const wrapped = coords.get('c')!.x;
+    expect(wrapped).toBeGreaterThan(0);
+    expect(coords.get('z')!.x).toBeGreaterThanOrEqual(wrapped + X_GAP);
   });
 
   it('leaves an unwrapped layer centred on zero', () => {
@@ -158,8 +207,8 @@ describe('assignCoords', () => {
   it('spaces layers on x and centres each layer on y', () => {
     const coords = assignCoords([['a'], ['b', 'c']]);
     expect(coords.get('a')).toEqual({ x: 0, y: 0 });
-    expect(coords.get('b')).toEqual({ x: 190, y: -48 });
-    expect(coords.get('c')).toEqual({ x: 190, y: 48 });
+    expect(coords.get('b')).toEqual({ x: X_GAP, y: -Y_GAP / 2 });
+    expect(coords.get('c')).toEqual({ x: X_GAP, y: Y_GAP / 2 });
   });
 });
 
@@ -175,15 +224,15 @@ describe('layoutGraph', () => {
     expect(coords.get('a')!.x).toBe(0);
     expect(coords.get('x')!.x).toBe(0);
     expect(coords.get('a')!.y).not.toBe(coords.get('x')!.y);
-    expect(coords.get('b')!.x).toBe(190);
-    expect(coords.get('y')!.x).toBe(190);
+    expect(coords.get('b')!.x).toBe(X_GAP);
+    expect(coords.get('y')!.x).toBe(X_GAP);
   });
 
   it('lays out a wide fan-out symmetrically about the root', () => {
     const leaves = Array.from({ length: 9 }, (_, i) => `leaf${i}`);
     const { coords } = layoutGraph(['root', ...leaves], leaves.map(l => e('root', l)));
     const ys = leaves.map(l => coords.get(l)!.y);
-    expect(new Set(leaves.map(l => coords.get(l)!.x))).toEqual(new Set([190]));
+    expect(new Set(leaves.map(l => coords.get(l)!.x))).toEqual(new Set([X_GAP]));
     expect(new Set(ys).size).toBe(9);
     expect(ys.reduce((a, b) => a + b, 0)).toBeCloseTo(0);
   });

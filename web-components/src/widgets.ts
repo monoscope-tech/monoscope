@@ -185,7 +185,10 @@ export const getChartStyles = () => {
     textColor: get('--color-textWeak'),
     tooltipBg: get('--color-bgRaised'),
     tooltipTextColor: get('--color-textStrong'),
-    tooltipBorderColor: get('--color-borderWeak'),
+    // --color-borderWeak has never existed; the token is strokeWeak. The empty string
+    // this returned made echarts fall back to its own palette, which is why bordered chart
+    // marks came out in rotating chart colours instead of the neutral stroke.
+    tooltipBorderColor: get('--color-strokeWeak'),
     chartBg: get('--color-chartBg'),
     chartMask: get('--color-chartMask'),
     errorColor: get('--color-textError'),
