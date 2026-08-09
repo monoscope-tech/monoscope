@@ -470,6 +470,7 @@ function render(
   const expanded = new Set<string>();
   let isolated: Set<string> | null = null;
   let scope: string | null = null;
+  let hovered: string | null = null;
   let query = '';
 
   // Everything geometry-dependent is derived, because expanding a group changes which
@@ -546,13 +547,22 @@ function render(
 
   let view = derive();
 
-  const paint = () => {
+  // `structural` false is a restyle of the same nodes and links — used for hover, where a
+  // notMerge pass would rebuild the series and take the tooltip down with it on every move.
+  const paint = (structural = true) => {
     const s = getChartStyles();
     // One selection pass drives both dimming sources, so search and click-isolation
     // can never disagree about a node's opacity.
     const lit = filterSelection(view.nodes, view.edges, query, isolated);
     const dim = (k: string) => (lit.litNodes.has(k) ? 1 : 0.12);
     const dense = view.edges.length > 60;
+    // The lit path: the hovered card and every hop touching it, drawn in the accent so a
+    // glance answers "where does this service's traffic actually go".
+    const onPath = new Set<string>();
+    const pathEnds = new Set<string>();
+    if (hovered) for (const e of view.edges) {
+      if (e.source === hovered || e.target === hovered) { onPath.add(edgeKey(e.source, e.target)); pathEnds.add(e.source); pathEnds.add(e.target); }
+    }
     chart.setOption({
       animation: false,
       backgroundColor: 'transparent',
@@ -593,8 +603,11 @@ function render(
         },
         edgeLabel: { show: false, fontSize: 10, color: s.textColor, formatter: (p: any) => p.data?.tip ?? '' },
         lineStyle: { color: s.textColor, width: 1.5, opacity: 0.3, curveness: 0.06 },
-        emphasis: { focus: 'adjacency', scale: false, lineStyle: { width: 3, opacity: 1 } },
-        blur: { itemStyle: { opacity: 0.14 }, lineStyle: { opacity: 0.06 }, label: { opacity: 0.14 } },
+        // Hover highlights a path; it does not black out the map. `focus:'adjacency'` only
+        // ever styled the hovered *item* and blurred everything else to near-invisible, which
+        // is the opposite of what this view is for — you hover a service to compare it with
+        // its neighbours. The path is drawn below from `hovered` instead, and nothing dims.
+        emphasis: { disabled: true },
         data: [
           ...view.nodeData.map(n => {
             const st = byKey.get(n.key)!;
@@ -606,8 +619,9 @@ function render(
                 borderRadius: 5,
                 // Neutral by default. A border is a weak channel and health has first claim
                 // on it; the service colour identifies the node on its name line instead.
-                borderColor: st.stats.error_rate >= ERR_ELEVATED ? ringColor(st, s, colors) : s.tooltipBorderColor,
-                borderWidth: st.stats.error_rate >= ERR_ELEVATED ? 2 : 1,
+                borderColor: pathEnds.has(n.key) ? s.brandColor
+                  : st.stats.error_rate >= ERR_ELEVATED ? ringColor(st, s, colors) : s.tooltipBorderColor,
+                borderWidth: pathEnds.has(n.key) || st.stats.error_rate >= ERR_ELEVATED ? 2 : 1,
                 borderType: st.inferred ? 'dashed' : 'solid',
                 // A collapsed head is a stacked card: "more than one" read from shape alone. A
                 // blurred shadow, not an offset slab — offsetting a hard edge under a bordered
@@ -624,17 +638,21 @@ function render(
           lineStyle: {
             // Capped at 3: at close row pitch a 6px edge is wider than the gap between the
             // rows it runs between, which is how 150 edges fused into one object.
-            width: Math.max(1, Math.min(3, 1 + Math.log2(1 + l.value) / 2)),
+            width: onPath.has(edgeKey(l.sourceKey, l.targetKey)) ? 3 : Math.max(1, Math.min(3, 1 + Math.log2(1 + l.value) / 2)),
             // Neutral until it matters. Colouring by source is meaningless in a fan-out —
             // every edge shares one source — and it drowns the red that does mean something.
-            color: healthColor(l.errorRate, s, s.textColor),
+            color: onPath.has(edgeKey(l.sourceKey, l.targetKey)) ? s.brandColor : healthColor(l.errorRate, s, s.textColor),
             type: l.inferred ? 'dashed' : 'solid',
             curveness: l.back ? 0.2 : undefined,
-            opacity: lit.litEdges.has(edgeKey(l.sourceKey, l.targetKey)) ? (l.errorRate >= ERR_ELEVATED ? 0.85 : 0.3) : 0.06,
+            opacity: onPath.has(edgeKey(l.sourceKey, l.targetKey)) ? 1
+              : lit.litEdges.has(edgeKey(l.sourceKey, l.targetKey)) ? (l.errorRate >= ERR_ELEVATED ? 0.85 : 0.3) : 0.06,
           },
+          // Per-link emphasis, because a link's own `lineStyle` outranks the series-level
+          // emphasis: without this the hovered path stayed the same hairline grey as the rest
+          // and hovering told you nothing about where the traffic goes.
         })),
       }],
-    }, { notMerge: true, lazyUpdate: false });
+    }, { notMerge: structural, lazyUpdate: false });
   };
   paint();
 
@@ -703,6 +721,10 @@ function render(
     // gains a size, and a superseded render that keeps its listeners keeps repainting its own
     // stale selection over the live chart.
   }, { signal });
+
+  const setHover = (key: string | null) => { if (hovered !== key) { hovered = key; paint(false); } };
+  chart.on('mouseover', (p: any) => { if (p.dataType === 'node' && p.data?.key !== undefined) setHover(p.data.key as string); });
+  chart.on('mouseout', (p: any) => { if (p.dataType === 'node') setHover(null); });
 
   chart.on('click', (p: any) => {
     if (p.dataType !== 'node' || p.data?.key === undefined) return;
