@@ -146,7 +146,10 @@ runQueryAST authCtx dbSource respDataType pid source queryAST queryM querySQLM m
           (emptyMetricsFor now fromD toD)
           (runFetchMetrics respDataType sqlQuery now fromD toD authCtx dbSource)
     Nothing ->
-      convertTimestampsToMs <$> queryMetricsWithCache authCtx dbSource (decoderFor respDataType queryAST) pid source queryAST sqlQueryCfg queryM now fromD toD
+      let actualDataType = decoderFor respDataType queryAST
+       in convertTimestampsToMs
+            . coerceBinnedScalar respDataType actualDataType
+            <$> queryMetricsWithCache authCtx dbSource actualDataType pid source queryAST sqlQueryCfg queryM now fromD toD
 
 
 -- | Pick the result decoder when the caller didn't. @DTMetric@ pivots on a
@@ -161,13 +164,40 @@ runQueryAST authCtx dbSource respDataType pid source queryAST queryM querySQLM m
 --   * anything else (@by <field>@,
 --     or no summarize at all)       → label/value rows    → 'DTText'
 --
--- An explicit @data_type@ always wins.
+-- A scalar request for a binned query is the one exception to the explicit
+-- type rule. Stat widgets can carry the same binned KQL as a chart; decoding
+-- that three-column result as one float fails before the widget can select its
+-- latest value. Decode the actual series shape, then 'coerceBinnedScalar'
+-- extracts the newest point for the scalar response.
 decoderFor :: DataType -> [Section] -> DataType
 decoderFor requested queryAST
+  | requested == DTFloat && QC.hasSummarizeWithBin queryAST = DTMetric
   | requested /= DTMetric = requested
   | isScalarSummarize queryAST = DTFloat
   | QC.hasSummarizeWithBin queryAST = DTMetric
   | otherwise = DTText
+
+
+-- | Return the newest value when a scalar widget supplied binned KQL.
+-- The metric decoder pivots rows to @[timestamp, series…]@ and sorts them by
+-- timestamp ascending, so the last cell in the last row is the newest
+-- aggregate value.
+--
+-- >>> let md = def{dataset = V.fromList [V.fromList [Just 10, Just 7], V.fromList [Just 20, Just 42]]}
+-- >>> (coerceBinnedScalar DTFloat DTMetric md).dataFloat
+-- Just 42.0
+-- >>> (coerceBinnedScalar DTMetric DTMetric md).dataFloat
+-- Nothing
+coerceBinnedScalar :: DataType -> DataType -> MetricsData -> MetricsData
+coerceBinnedScalar requested actual md
+  | requested == DTFloat && actual == DTMetric = md{dataFloat = latestMetricValue}
+  | otherwise = md
+  where
+    latestMetricValue = do
+      guard $ not (V.null md.dataset)
+      let row = V.last md.dataset
+      guard $ not (V.null row)
+      row V.! (V.length row - 1)
 
 
 -- | A summarize with no @by@ clause at all — yields one scalar row.

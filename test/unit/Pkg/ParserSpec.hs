@@ -141,7 +141,7 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', c
 
     it "lowers p95 to the portable bounded-percentile aggregate" do
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize p95(duration) by bin(timestamp, 1h)"
-      query `shouldSatisfy` T.isInfixOf "approx_percentile(0.95, percentile_agg(CAST(duration AS DOUBLE)))"
+      query `shouldSatisfy` T.isInfixOf "approx_percentile(0.95, percentile_agg(CAST(duration AS DOUBLE PRECISION)))"
 
     it "parses percentiles(duration, 50, 75, 90, 95) via full query" do
       let result = parseQueryToAST "| summarize percentiles(duration, 50, 75, 90, 95) by bin(timestamp, 1h)"
@@ -172,7 +172,7 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', c
       let sql = fromMaybe "" c.finalSummarizeQuery
       let expected =
             [text|
-WITH bucket_digests AS (SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer AS timeB, percentile_agg(CAST(duration AS DOUBLE)) AS digest FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY timeB HAVING COUNT(*) > 0) SELECT b.timeB, q.quantile, COALESCE(approx_percentile(q.percentile, b.digest), 0)::float AS value FROM bucket_digests b CROSS JOIN (VALUES (0.5, 'p50'), (0.9, 'p90')) AS q(percentile, quantile) ORDER BY b.timeB DESC, q.quantile
+WITH bucket_digests AS (SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer AS timeB, percentile_agg(CAST(duration AS DOUBLE PRECISION)) AS digest FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY timeB HAVING COUNT(*) > 0) SELECT b.timeB, q.quantile, COALESCE(approx_percentile(q.percentile, b.digest), 0)::float AS value FROM bucket_digests b CROSS JOIN (VALUES (0.5, 'p50'), (0.9, 'p90')) AS q(percentile, quantile) ORDER BY b.timeB DESC, q.quantile
             |]
       normT sql `shouldBe` normT expected
 
@@ -180,7 +180,7 @@ WITH bucket_digests AS (SELECT extract(epoch from time_bucket('1 hours', timesta
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "resource.service.name == \"cart\" | where duration != null | summarize percentiles(duration, 50, 90) by bin(timestamp, 1h)"
       let expected =
             [text|
-SELECT jsonb_build_array(extract(epoch from time_bucket('1 hours', timestamp))::integer, approx_percentile(0.5, percentile_agg(CAST(duration AS DOUBLE)))::float, count(*) OVER()) FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((resource___service___name = 'cart' AND duration IS NOT NULL)) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
+SELECT jsonb_build_array(extract(epoch from time_bucket('1 hours', timestamp))::integer, approx_percentile(0.5, percentile_agg(CAST(duration AS DOUBLE PRECISION)))::float, count(*) OVER()) FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((resource___service___name = 'cart' AND duration IS NOT NULL)) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
             |]
       normT query `shouldBe` normT expected
 

@@ -369,7 +369,7 @@ sqlFromQueryComponents sqlCfg qc =
                       | p <- pcts
                       ]
                in [fmt|WITH bucket_digests AS (SELECT extract(epoch from {bucketExpr})::integer AS timeB,
-                    percentile_agg(CAST({fieldExpr} AS DOUBLE)) AS digest
+                    percentile_agg(CAST({fieldExpr} AS DOUBLE PRECISION)) AS digest
                   FROM {fromTable}
                   WHERE {buildWhere}
                   GROUP BY timeB
