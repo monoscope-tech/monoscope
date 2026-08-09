@@ -130,8 +130,10 @@ describe('LogList — MED correctness', () => {
     const initial = Array.from({ length: 5000 }, (_, i) => row(`r${i}`));
     (el as any).spanListTree = initial;
     (el as any).seenIds = new Set(initial.map((r) => r.id));
+    expect((el as any).virtualizerGeneration).toBe(0);
 
     (el as any).spanListTree = (el as any).mergeIntoTree([row('older')], false);
+    expect((el as any).virtualizerGeneration).toBe(1);
     expect(ids(el)).toHaveLength(5000);
     expect(ids(el)[0]).toBe('r1');
     expect((el as any).hasNewer).toBe(true);

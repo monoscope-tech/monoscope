@@ -124,6 +124,7 @@ export class LogList extends LitElement {
   @state() private fetchedNew: boolean = false;
   @state() private visibleItems: EventLine[] = [];
   @state() private virtualListItems: VirtualListItem[] = [];
+  @state() private virtualizerGeneration = 0;
   // Inline-expand state keyed by aggregate row key (session_id or pattern_hash).
   @state() private expandedAggregates: Record<
     string,
@@ -1363,14 +1364,18 @@ export class LogList extends LitElement {
             this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree, isRecentFetch);
           } else {
             const anchor = this.captureScrollAnchor();
+            const generation = this.virtualizerGeneration;
             this.spanListTree = this.mergeIntoTree(tree, isRecentFetch);
+            if (generation !== this.virtualizerGeneration) container.scrollTop = 0;
             this.updateVisibleItems();
             if (anchor) void this.restoreScrollAnchor(anchor);
           }
         }
       } else {
         const anchor = this.captureScrollAnchor() ?? loadMoreAnchor;
+        const generation = this.virtualizerGeneration;
         this.spanListTree = this.mergeIntoTree(tree, isRecentFetch);
+        if (generation !== this.virtualizerGeneration && this.logsContainer) this.logsContainer.scrollTop = 0;
         this.updateVisibleItems();
         if (anchor) void this.restoreScrollAnchor(anchor);
       }
@@ -1587,6 +1592,7 @@ export class LogList extends LitElement {
     this.loadingSessions = Object.fromEntries(Object.entries(this.loadingSessions).filter(([id]) => retainedIds.has(id)));
     if (isRecentFetch) this.hasMore = true;
     else this.hasNewer = true;
+    this.virtualizerGeneration++;
     return kept;
   }
 
@@ -1606,13 +1612,19 @@ export class LogList extends LitElement {
     await this.updateComplete;
     const index = this.virtualListItems.findIndex((item) => 'id' in item && item.id === anchor.id);
     const virtualizer = this.querySelector('lit-virtualizer');
-    if (index < 0 || !virtualizer) return;
-    virtualizer.scrollToIndex(index, 'start');
+    const container = this.logsContainer;
+    if (index < 0 || !virtualizer || !container) return;
+
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    await virtualizer.layoutComplete;
+    const row = virtualizer.element(index);
+    if (row) row.scrollIntoView({ block: 'start' });
+    else container.scrollTop = index * (virtualizer.scrollHeight / this.virtualListItems.length || 28);
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     await virtualizer.layoutComplete;
     requestAnimationFrame(() => {
-      const container = this.logsContainer;
-      const row = [...(container?.querySelectorAll<HTMLElement>('[data-row-id]') || [])].find((el) => el.dataset.rowId === anchor.id);
-      if (container && row) container.scrollTop += row.getBoundingClientRect().top - container.getBoundingClientRect().top - anchor.offset;
+      const renderedRow = virtualizer.element(index);
+      if (renderedRow) container.scrollTop += renderedRow.getBoundingClientRect().top - container.getBoundingClientRect().top - anchor.offset;
     });
   }
 
@@ -1886,7 +1898,7 @@ export class LogList extends LitElement {
             : html`
                 <tbody class="min-w-0 text-xs">
                   ${keyed(
-                    this.isAggregate || this.wrapLines ? 'measured' : 'dense',
+                    `${this.isAggregate || this.wrapLines ? 'measured' : 'dense'}-${this.virtualizerGeneration}`,
                     html`<lit-virtualizer
                       .items=${this.virtualListItems}
                       .renderItem=${this.renderVirtualItem}
