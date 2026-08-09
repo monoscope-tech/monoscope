@@ -23,7 +23,7 @@ import Utils (faSprite_, prettyPrintCount)
 -- as an embedded @application/json@ payload rather than an HTMX swap: HTMX swaps HTML,
 -- and a canvas renderer needs a model, not markup.
 serviceMapPanel_ :: Projects.ProjectId -> Text -> ServiceGraph -> HM.HashMap Text Text -> Html ()
-serviceMapPanel_ pid elId graph colors = div_ [class_ "w-full flex flex-col gap-3"] do
+serviceMapPanel_ pid elId graph colors = div_ [class_ "w-full flex flex-col gap-3 relative"] do
   case graph.error of
     Just msg -> emptyState_ "triangle-exclamation" "Couldn't load the service map" msg
     Nothing
@@ -38,6 +38,7 @@ serviceMapPanel_ pid elId graph colors = div_ [class_ "w-full flex flex-col gap-
                 <> show (V.length (drawnNodes graph))
                 <> " busiest dependencies. Quieter ones are folded away — search to find a specific one."
           serviceMapLegend_ graph colors
+          scopeChip_
           -- The viewport scrolls; the canvas inside it is sized to the graph. Fitting a big
           -- graph into a fixed box is what shrinks cards until they overlap, so the map is
           -- allowed to be bigger than its window and you pan to the rest.
@@ -48,15 +49,35 @@ serviceMapPanel_ pid elId graph colors = div_ [class_ "w-full flex flex-col gap-
             , -- Base for the node menu's links; the renderer only appends the query.
               term "data-map-base" ("/p/" <> pid.toText)
             ]
-            do
-              div_ [class_ "absolute inset-0", term "data-map-canvas" ""] pass
-              nodeMenu_ elId
+            $ div_ [class_ "absolute inset-0", term "data-map-canvas" ""] pass
+          -- Outside the scrolling viewport: an absolutely positioned menu inside a scroll
+          -- container is clipped by it the moment the node is near an edge.
+          nodeMenu_ elId
           script_ [type_ "application/json", id_ $ elId <> "-data"] $ decodeUtf8 @Text $ AE.encode graph
           script_ [type_ "application/json", id_ $ elId <> "-colors"]
             $ decodeUtf8 @Text
             $ AE.encode
             $ AE.object [AEKey.fromText k AE..= v | (k, v) <- HM.toList colors]
           dependencyTable_ graph
+
+
+-- | The active scope, in the shape Datadog puts above its flow map: a dismissable chip
+-- saying which service the map is currently answering for. Rendered once and toggled by the
+-- renderer, which only writes text into it — the markup is Lucid's, as always.
+scopeChip_ :: Html ()
+scopeChip_ =
+  div_ [class_ "hidden items-center gap-2 px-1 text-xs", term "data-map-scope" ""] do
+    span_ [class_ "inline-flex items-center gap-1.5 rounded-md border border-strokeWeak bg-fillWeak px-2 py-1"] do
+      span_ [class_ "text-textWeak"] "Service:"
+      span_ [class_ "font-medium text-textStrong truncate max-w-64", term "data-scope-label" ""] ""
+      button_
+        [ class_ "text-textWeak hover:text-textStrong cursor-pointer"
+        , term "data-scope-clear" ""
+        , type_ "button"
+        , term "aria-label" "Clear service scope"
+        ]
+        "×"
+    span_ [class_ "text-textWeak", term "data-scope-count" ""] ""
 
 
 -- | Click menu for a node, in the shape Datadog uses: the actions you actually want next
@@ -83,10 +104,12 @@ nodeMenu_ elId =
 
 
 -- | @data-menu-action@ is the contract with the renderer, which fills in the href per node.
--- \"inspect\" has no href: it isolates the node's upstream and downstream in place.
+-- \"inspect\" and \"focus\" have no href: the first isolates the node's upstream and
+-- downstream in place, the second scopes the whole map to it and re-lays it out.
 menuItems :: [(Text, Text, Text)]
 menuItems =
-  [ ("inspect", "arrow-right", "Inspect")
+  [ ("focus", "diagram-project", "Focus on this service")
+  , ("inspect", "arrow-right", "Inspect")
   , ("traces", "list-tree", "View in trace search")
   , ("logs", "file-lines", "View logs")
   , ("metrics", "chart-line", "View metrics")

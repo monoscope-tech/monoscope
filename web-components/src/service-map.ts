@@ -71,6 +71,35 @@ export function visibleGraph<
 }
 
 /**
+ * Everything reachable from `key` in either direction, plus `key` itself: the connected
+ * slice of the system that one service actually participates in.
+ *
+ * This is what a service scope means on a map served from a rollup. We cannot answer an
+ * arbitrary predicate the way Datadog's query bar does — the rollup has no env or tag
+ * dimension — but "this service and what it touches" is pure graph traversal, needs no
+ * schema, and is the scope people reach for during an incident anyway.
+ */
+export function scopeTo<N extends { key: string }, E extends Edge>(
+  nodes: N[],
+  edges: E[],
+  key: string | null,
+): { nodes: N[]; edges: E[] } {
+  if (!key || !nodes.some(n => n.key === key)) return { nodes, edges };
+  const up = new Map<string, string[]>(), down = new Map<string, string[]>();
+  for (const e of edges) {
+    down.set(e.source, [...(down.get(e.source) ?? []), e.target]);
+    up.set(e.target, [...(up.get(e.target) ?? []), e.source]);
+  }
+  const walk = (adj: Map<string, string[]>) => {
+    const seen = new Set([key]), stack = [key];
+    while (stack.length) for (const n of adj.get(stack.pop()!) ?? []) if (!seen.has(n)) { seen.add(n); stack.push(n); }
+    return seen;
+  };
+  const keep = new Set([...walk(up), ...walk(down)]);
+  return { nodes: nodes.filter(n => keep.has(n.key)), edges: edges.filter(e => keep.has(e.source) && keep.has(e.target)) };
+}
+
+/**
  * DFS gray-set cycle break. Returns the acyclic edge subset plus the back-edges
  * removed (drawn later as curved edges, so no information is lost). Node and
  * edge input order fully determines the result.
@@ -440,13 +469,17 @@ function render(
 
   const expanded = new Set<string>();
   let isolated: Set<string> | null = null;
+  let scope: string | null = null;
   let query = '';
 
   // Everything geometry-dependent is derived, because expanding a group changes which
   // nodes exist and therefore the whole layout. `paint` only re-styles; `derive` re-places.
   const derive = () => {
     const s = getChartStyles();
-    const { nodes, edges: candidates } = visibleGraph(allNodes, graph.edges, expanded);
+    // Scope first, then collapse: expanding a group inside a scope should not drag the
+    // rest of the system back onto the canvas.
+    const scoped = scopeTo(allNodes, graph.edges, scope);
+    const { nodes, edges: candidates } = visibleGraph(scoped.nodes, scoped.edges, expanded);
     const keys = nodes.map(n => n.key);
     const index = new Map(keys.map((k, i) => [k, i]));
     const edges = candidates.filter(e => index.has(e.source) && index.has(e.target));
@@ -610,19 +643,24 @@ function render(
 
   // The menu markup is rendered once by Lucid inside the container; we only position it and
   // point its links at this node. Building menu HTML here would put a second renderer in JS.
-  const menu = el.querySelector<HTMLElement>('[data-service-menu]');
+  const panel = el.parentElement ?? el;
+  const menu = panel.querySelector<HTMLElement>('[data-service-menu]');
   const pid = el.dataset.mapBase ?? '';
   const hideMenu = () => menu?.classList.add('hidden');
 
+  // Which node the menu is open for lives on the menu element, not in a closure: the menu is
+  // one shared DOM node, while `render` can run more than once (a hidden container re-renders
+  // when it gets a size), and each run's listener would otherwise read its own stale copy.
   const showMenu = (key: string, label: string, inferred: boolean, x: number, y: number) => {
     if (!menu) return;
+    menu.dataset.nodeKey = key;
     const title = menu.querySelector<HTMLElement>('[data-menu-title]');
     if (title) title.textContent = label;
     // An inferred peer has no telemetry of its own, so the only honest action is Inspect.
     const q = encodeURIComponent(`resource.service.name=="${key}"`);
     for (const a of menu.querySelectorAll<HTMLAnchorElement>('[data-menu-action]')) {
       const action = a.dataset.menuAction!;
-      const hide = inferred && action !== 'inspect';
+      const hide = inferred && action !== 'inspect' && action !== 'focus';
       a.classList.toggle('hidden', hide);
       a.href =
         action === 'traces' ? `${pid}/log_explorer?query=${q}&viz_type=traces`
@@ -636,11 +674,35 @@ function render(
     menu.classList.remove('hidden');
   };
 
+  // The chip markup is Lucid's; the renderer only writes text into it and toggles it.
+  const chip = panel.querySelector<HTMLElement>('[data-map-scope]');
+  const setScope = (key: string | null) => {
+    scope = key;
+    expanded.clear();
+    isolated = null;
+    if (chip) {
+      const node = key ? byKey.get(key) : undefined;
+      chip.classList.toggle('hidden', !node);
+      chip.classList.toggle('flex', !!node);
+      const label = chip.querySelector<HTMLElement>('[data-scope-label]');
+      if (label && node) label.textContent = node.label || 'Entry point';
+    }
+    rebuild();
+    const count = chip?.querySelector<HTMLElement>('[data-scope-count]');
+    if (count) count.textContent = key ? `Showing ${view.nodes.length} services from traces through this service.` : '';
+  };
+  chip?.querySelector('[data-scope-clear]')?.addEventListener('click', () => setScope(null), { signal });
+
   menu?.addEventListener('click', e => {
     const a = (e.target as HTMLElement).closest<HTMLAnchorElement>('[data-menu-action]');
-    if (a?.dataset.menuAction === 'inspect') e.preventDefault();
+    const action = a?.dataset.menuAction;
+    if (action === 'inspect' || action === 'focus') e.preventDefault();
+    if (action === 'focus' && menu?.dataset.nodeKey) setScope(menu.dataset.nodeKey);
     hideMenu();
-  });
+    // `signal`, like every other listener here: `render` runs again whenever the container
+    // gains a size, and a superseded render that keeps its listeners keeps repainting its own
+    // stale selection over the live chart.
+  }, { signal });
 
   chart.on('click', (p: any) => {
     if (p.dataType !== 'node' || p.data?.key === undefined) return;
@@ -650,7 +712,7 @@ function render(
     if (p.data.group) { expanded.add(key); isolated = null; hideMenu(); rebuild(); return; }
     isolated = new Set([...reachableFrom(key, view.reach.up), ...reachableFrom(key, view.reach.down)]);
     paint();
-    const box = el.getBoundingClientRect();
+    const box = panel.getBoundingClientRect();
     showMenu(key, p.data.displayName || 'entry', !!byKey.get(key)?.inferred,
       p.event.event.clientX - box.left, p.event.event.clientY - box.top);
     opts.onNodeClick?.(key);

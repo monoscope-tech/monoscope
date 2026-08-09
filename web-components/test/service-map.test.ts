@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { breakCycles, layerGraph, orderLayers, assignCoords, layoutGraph, filterSelection, hydrateServiceMaps, statsTip, visibleGraph, fitRows, edgeKey, cardLabel, X_GAP, Y_GAP, type Edge } from '../src/service-map';
+import { breakCycles, layerGraph, orderLayers, assignCoords, layoutGraph, filterSelection, hydrateServiceMaps, statsTip, visibleGraph, fitRows, edgeKey, cardLabel, scopeTo, X_GAP, Y_GAP, type Edge } from '../src/service-map';
 
 const e = (source: string, target: string): Edge => ({ source, target });
 const snapshot = (keys: string[], edges: Edge[]) => {
@@ -35,6 +35,23 @@ describe('statsTip', () => {
 
   it('uses a light foreground on a dark status color', () => {
     expect(statsTip('failed', stats, '#111827')).toContain('background:#111827;color:#d4dcec');
+  });
+});
+
+describe('scopeTo', () => {
+  // gateway -> checkout -> db, and an unrelated worker -> queue alongside it.
+  const nodes = ['gateway', 'checkout', 'db', 'worker', 'queue'].map(key => ({ key }));
+  const edges = [e('gateway', 'checkout'), e('checkout', 'db'), e('worker', 'queue')];
+
+  it('keeps the whole chain a service participates in, upstream and down', () => {
+    const v = scopeTo(nodes, edges, 'checkout');
+    expect(v.nodes.map(n => n.key)).toEqual(['gateway', 'checkout', 'db']);
+    expect(v.edges).toEqual([e('gateway', 'checkout'), e('checkout', 'db')]);
+  });
+
+  it('is a no-op for no scope or a scope that is not on the map', () => {
+    expect(scopeTo(nodes, edges, null).nodes).toHaveLength(5);
+    expect(scopeTo(nodes, edges, 'gone').nodes).toHaveLength(5);
   });
 });
 
