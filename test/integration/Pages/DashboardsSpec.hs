@@ -2,6 +2,7 @@ module Pages.DashboardsSpec (spec) where
 
 import Data.Default (def)
 import Data.Text qualified as T
+import Effectful.Concurrent (runConcurrent)
 import Data.Text.Lazy qualified as TL
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -11,10 +12,12 @@ import Models.Projects.Dashboards qualified as DashboardModel
 import Models.Projects.ProjectMembers (TeamVM (..))
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
+import Pages.Charts.Types (MetricsData (..))
 import Pages.Dashboards (DashboardFilters (..))
 import Pages.Dashboards qualified as Dashboards
 import Pages.Projects (TeamForm (..))
 import Pages.Projects qualified as ManageMembers
+import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
@@ -87,6 +90,21 @@ spec = sequential $ aroundAll withTestResources do
       overview `shouldSatisfy` isJust
       show overview `shouldNotContain` "telemetry.metrics"
       show overview `shouldNotContain` "metric_value"
+
+    -- Regression: every widget went through the chart query shaper, which appended
+    -- `| summarize count(*) by bin_auto(timestamp)` to a stat's scalar query. The
+    -- resulting three-column series hit the one-slot DTFloat decoder
+    -- ("mismatch between number of columns to convert and number in target type")
+    -- and every stat on the overview dashboard rendered an error overlay.
+    it "statWidget_scalarSummarize_isNotBinnedIntoASeries" \tr -> do
+      apiKey <- createTestAPIKey tr testPid "stat-widget-key"
+      ingestTrace tr apiKey "GET /api/stat-widget" frozenTime
+      let statWidget q = (def :: Widget.Widget){Widget.wType = Widget.WTStat, Widget.query = Just q}
+      -- a scalar summarize, and a filter-only stat that has to grow one
+      for_ ["name != null | summarize dcount(name)", "name != null"] \q -> do
+        md <- runQueryEffect tr $ runConcurrent $ Dashboards.widgetMetrics testPid (Just "24h", Nothing, Nothing) [] (statWidget q)
+        (md.error :: Maybe Text) `shouldBe` Nothing
+        (md.dataFloat :: Maybe Double) `shouldSatisfy` (> Just 0)
 
     it "Should create a dashboard" \tr -> do
       (_, pg) <- testServant tr do

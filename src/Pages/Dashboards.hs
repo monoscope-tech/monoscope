@@ -857,20 +857,13 @@ lazyWidget w = w & #eager .~ Nothing & #html .~ Nothing & #dataset .~ Nothing
 type WidgetData es = (Concurrent :> es, DB es, Effectful.Labeled.Labeled "timefusion" Data.Effectful.Hasql.Hasql :> es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServerError :> es, IOE :> es, Log :> es, Time.Time :> es, Tracing :> es)
 
 
--- | Run a widget's query, picking the result shape from the widget type: a
--- scalar for stats, text columns for the row-oriented widgets, numeric series
--- for everything that gets plotted.
+-- | Run a widget's query in the shape its type decodes — 'Widget.chartQuery'
+-- picks both together.
 widgetMetrics :: WidgetData es => Projects.ProjectId -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> Eff es Charts.MetricsData
 widgetMetrics pid (sinceStr, fromDStr, toDStr) allParams widget =
-  Charts.queryMetrics widget.dbSource (Just dataType) (Just pid) (Widget.chartQuery widget) widget.sql sinceStr fromDStr toDStr Nothing allParams
+  Charts.queryMetrics widget.dbSource (Just dataType) (Just pid) query widget.sql sinceStr fromDStr toDStr Nothing allParams
   where
-    dataType = case widget.wType of
-      Widget.WTStat -> Charts.DTFloat
-      Widget.WTTable -> Charts.DTText
-      Widget.WTLogs -> Charts.DTText
-      Widget.WTTraces -> Charts.DTText
-      Widget.WTTopList -> Charts.DTText
-      _ -> Charts.DTMetric
+    (query, dataType) = Widget.chartQuery widget
 
 
 -- | Fetch widget data based on widget type (for stat and chart widgets)

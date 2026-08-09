@@ -1258,6 +1258,7 @@ export class LogList extends LitElement {
     if (isRecentFetch && this.isFetchingRecent) return;
     if (isLoadMore && this.isLoadingMore) return;
 
+    const loadMoreAnchor = isLoadMore ? this.captureScrollAnchor() : null;
     if (isRecentFetch) this.isFetchingRecent = true;
     else if (isLoadMore) this.isLoadingMore = true;
     else this.isLoading = true;
@@ -1368,7 +1369,7 @@ export class LogList extends LitElement {
           }
         }
       } else {
-        const anchor = this.captureScrollAnchor();
+        const anchor = this.captureScrollAnchor() ?? loadMoreAnchor;
         this.spanListTree = this.mergeIntoTree(tree, isRecentFetch);
         this.updateVisibleItems();
         if (anchor) void this.restoreScrollAnchor(anchor);
@@ -1594,7 +1595,11 @@ export class LogList extends LitElement {
     if (!container || this.mode !== 'logs') return null;
     const top = container.getBoundingClientRect().top;
     const row = [...container.querySelectorAll<HTMLElement>('[data-row-id]')].find((el) => el.getBoundingClientRect().bottom > top);
-    return row ? { id: row.dataset.rowId!, offset: row.getBoundingClientRect().top - top } : null;
+    if (row) return { id: row.dataset.rowId!, offset: row.getBoundingClientRect().top - top };
+
+    const range = this.lastVisibilityRange;
+    const item = range && this.virtualListItems.slice(range.first, range.last + 1).find((entry) => 'id' in entry);
+    return item ? { id: item.id, offset: 0 } : null;
   }
 
   private async restoreScrollAnchor(anchor: ScrollAnchor) {

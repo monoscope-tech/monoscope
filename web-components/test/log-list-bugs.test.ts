@@ -144,20 +144,35 @@ describe('LogList — MED correctness', () => {
     expect((el as any).hasMore).toBe(true);
   });
 
-  test('window trimming restores the visible row by stable id', async () => {
+  test('window trimming captures and restores the visible row before loading', async () => {
     const el = await mountList();
     const initial = Array.from({ length: 5000 }, (_, i) => row(`r${i}`));
     (el as any).spanListTree = initial;
     (el as any).seenIds = new Set(initial.map((r) => r.id));
     const anchor = { id: 'r4990', offset: 7 };
-    vi.spyOn(el as any, 'captureScrollAnchor').mockReturnValue(anchor);
+    const capture = vi.spyOn(el as any, 'captureScrollAnchor').mockReturnValueOnce(anchor).mockReturnValue(null);
     const restore = vi.spyOn(el as any, 'restoreScrollAnchor').mockResolvedValue(undefined);
-    el.transport = async () => ({ tree: [row('older')], meta: { hasMore: true, colIdxMap: { id: 0 }, traces: [] } });
+    const transport = deferredTransport();
+    el.transport = transport;
 
-    await el.fetchData('older', false, false, true);
+    const request = el.fetchData('older', false, false, true);
+    expect(capture).toHaveBeenCalledOnce();
+    transport.settle(0, [row('older')]);
+    await request;
 
     expect(ids(el)).toContain(anchor.id);
     expect(restore).toHaveBeenCalledWith(anchor);
+  });
+
+  test('scroll anchoring falls back to the virtualizer range while rows are recycling', async () => {
+    const el = await mountList();
+    Object.defineProperty(el, 'logsContainer', {
+      value: { getBoundingClientRect: () => ({ top: 0 }), querySelectorAll: () => [] },
+    });
+    (el as any).virtualListItems = [{ type: 'fetchRecent' }, row('visible'), { type: 'loadMore' }];
+    (el as any).lastVisibilityRange = { first: 1, last: 2 };
+
+    expect((el as any).captureScrollAnchor()).toEqual({ id: 'visible', offset: 0 });
   });
 
   test('an oversized trace cannot collapse the retained window to zero rows', async () => {
