@@ -18,6 +18,7 @@ module Web.OIDC (
   statesMatch,
   pendingStateCookie,
   expiredStateCookie,
+  appendQueryParameters,
   authorizationURL,
   insertPendingAuth,
   consumePendingAuth,
@@ -26,6 +27,7 @@ module Web.OIDC (
   validateIDTokenIO,
   validateClaims,
   mergeIdentityClaims,
+  verifiedAutoRegistrationEmail,
   resolveOrProvisionIdentityIO,
 ) where
 
@@ -37,6 +39,7 @@ import Data.Aeson qualified as AE
 import Data.Base64.Types qualified as B64
 import Data.ByteArray qualified as BA
 import Data.ByteString qualified as BS
+import Data.CaseInsensitive qualified as CI
 import Data.Effectful.Hasql qualified as EHasql
 import Data.Int (Int64)
 import Data.Pool qualified as Pool
@@ -87,7 +90,7 @@ data Discovery = Discovery
   { issuer :: Text
   , authorizationEndpoint :: Text
   , tokenEndpoint :: Text
-  , userinfoEndpoint :: Text
+  , userinfoEndpoint :: Maybe Text
   , jwksUri :: Text
   , endSessionEndpoint :: Maybe Text
   , codeChallengeMethodsSupported :: Maybe [Text]
@@ -107,7 +110,7 @@ instance AE.FromJSON Discovery where
       <*> o
       AE..: "token_endpoint"
       <*> o
-      AE..: "userinfo_endpoint"
+      AE..:? "userinfo_endpoint"
       <*> o
       AE..: "jwks_uri"
       <*> o
@@ -336,14 +339,14 @@ validateDiscovery requireHttps settings discovery = do
     (uncurry $ validateAbsoluteUrl requireHttps)
     ( [ ("authorization_endpoint", discovery.authorizationEndpoint)
       , ("token_endpoint", discovery.tokenEndpoint)
-      , ("userinfo_endpoint", discovery.userinfoEndpoint)
       , ("jwks_uri", discovery.jwksUri)
       ]
         :: [(Text, Text)]
     )
+  traverse_ (validateAbsoluteUrl requireHttps "userinfo_endpoint") discovery.userinfoEndpoint
   traverse_ (validateAbsoluteUrl requireHttps "end_session_endpoint") discovery.endSessionEndpoint
-  unless (maybe False ("S256" `elem`) discovery.codeChallengeMethodsSupported)
-    $ Left "OIDC provider does not advertise PKCE S256"
+  whenJust discovery.codeChallengeMethodsSupported \methods ->
+    unless ("S256" `elem` methods) $ Left "OIDC provider explicitly excludes PKCE S256"
   whenJust discovery.tokenEndpointAuthMethodsSupported \methods ->
     unless ("client_secret_basic" `elem` methods) $ Left "OIDC provider does not advertise client_secret_basic"
   unless
@@ -436,22 +439,31 @@ queryEscape :: Text -> Text
 queryEscape = decodeUtf8 . urlEncode True . encodeUtf8
 
 
+appendQueryParameters :: Text -> [(Text, Text)] -> Text
+appendQueryParameters endpoint [] = endpoint
+appendQueryParameters endpoint parameters =
+  endpoint <> separator <> T.intercalate "&" (fmap renderParameter parameters)
+  where
+    separator
+      | T.isSuffixOf "?" endpoint || T.isSuffixOf "&" endpoint = ""
+      | "?" `T.isInfixOf` endpoint = "&"
+      | otherwise = "?"
+    renderParameter (name, value) = queryEscape name <> "=" <> queryEscape value
+
+
 authorizationURL :: Settings -> Discovery -> Text -> Text -> Text -> Text
 authorizationURL settings discovery oauthState nonce challenge =
-  discovery.authorizationEndpoint
-    <> "?response_type=code&client_id="
-    <> queryEscape settings.clientId
-    <> "&redirect_uri="
-    <> queryEscape settings.callbackUrl
-    <> "&scope="
-    <> queryEscape (T.intercalate " " settings.scopes)
-    <> "&state="
-    <> queryEscape oauthState
-    <> "&nonce="
-    <> queryEscape nonce
-    <> "&code_challenge="
-    <> queryEscape challenge
-    <> "&code_challenge_method=S256"
+  appendQueryParameters
+    discovery.authorizationEndpoint
+    [ ("response_type", "code")
+    , ("client_id", settings.clientId)
+    , ("redirect_uri", settings.callbackUrl)
+    , ("scope", T.intercalate " " settings.scopes)
+    , ("state", oauthState)
+    , ("nonce", nonce)
+    , ("code_challenge", challenge)
+    , ("code_challenge_method", "S256")
+    ]
 insertPendingAuth :: DB es => Text -> Text -> Text -> Text -> Eff es Bool
 insertPendingAuth oauthState nonce verifier redirectTo =
   (== Just (1 :: Int64))
@@ -509,29 +521,31 @@ exchangeCodeIO settings discovery code verifier = do
     oauthBasicValue = urlEncode True . encodeUtf8
 
 
-fetchUserInfoIO :: Discovery -> Text -> IO (Either Failure UserInfoClaims)
-fetchUserInfoIO discovery accessToken = do
-  let opts = boundedOptions & Wreq.header "Authorization" .~ ["Bearer " <> encodeUtf8 accessToken]
-  result <- Safe.try $ Wreq.getWith opts (toString discovery.userinfoEndpoint)
-  pure case result of
-    Left (_ :: SomeException) -> Left UserInfoNetworkFailure
-    Right response
-      | not (statusIsSuccessful $ response ^. Wreq.responseStatus) -> Left UserInfoResponseFailure
-      | otherwise -> first (const UserInfoResponseFailure) $ AE.eitherDecode (response ^. Wreq.responseBody)
+fetchUserInfoIO :: Discovery -> Text -> IO (Either Failure (Maybe UserInfoClaims))
+fetchUserInfoIO discovery accessToken = case discovery.userinfoEndpoint of
+  Nothing -> pure $ Right Nothing
+  Just userinfoEndpoint -> do
+    let opts = boundedOptions & Wreq.header "Authorization" .~ ["Bearer " <> encodeUtf8 accessToken]
+    result <- Safe.try $ Wreq.getWith opts (toString userinfoEndpoint)
+    pure case result of
+      Left (_ :: SomeException) -> Left UserInfoNetworkFailure
+      Right response
+        | not (statusIsSuccessful $ response ^. Wreq.responseStatus) -> Left UserInfoResponseFailure
+        | otherwise -> Just <$> first (const UserInfoResponseFailure) (AE.eitherDecode $ response ^. Wreq.responseBody)
 
 
 data UntrustedHeader = UntrustedHeader
   { algorithm :: Text
-  , keyId :: Text
+  , keyId :: Maybe Text
   }
 
 
 instance AE.FromJSON UntrustedHeader where
-  parseJSON = AE.withObject "JWS header" \o -> UntrustedHeader <$> o AE..: "alg" <*> o AE..: "kid"
+  parseJSON = AE.withObject "JWS header" \o -> UntrustedHeader <$> o AE..: "alg" <*> o AE..:? "kid"
 
 
 data JwkEntry = JwkEntry
-  { keyId :: Text
+  { keyId :: Maybe Text
   , keyUse :: Maybe Text
   , keyOperations :: Maybe [Text]
   , algorithm :: Maybe Text
@@ -546,7 +560,7 @@ instance AE.FromJSON JwkEntry where
       ( \o ->
           JwkEntry
             <$> o
-            AE..: "kid"
+            AE..:? "kid"
             <*> o
             AE..:? "use"
             <*> o
@@ -565,7 +579,7 @@ instance AE.FromJSON JwkSet where
   parseJSON = AE.withObject "JWK set" \o -> JwkSet <$> o AE..: "keys"
 
 
-parseJwsAlgorithm :: Settings -> ByteString -> Either Failure (JwsAlg, Text)
+parseJwsAlgorithm :: Settings -> ByteString -> Either Failure (JwsAlg, Maybe Text)
 parseJwsAlgorithm settings token = do
   headerPart <- case BS.split 46 token of
     [headerPart, _, _] -> Right headerPart
@@ -574,7 +588,7 @@ parseJwsAlgorithm settings token = do
   UntrustedHeader{algorithm, keyId} <- first (const TokenHeaderFailure) $ AE.eitherDecodeStrict headerBytes
   algorithm' <- maybeToRight TokenAlgorithmFailure $ parseAlgorithm algorithm
   unless (algorithm' `elem` settings.allowedAlgorithms) $ Left TokenAlgorithmFailure
-  when (T.null keyId) $ Left TokenKeyFailure
+  when (maybe False T.null keyId) $ Left TokenKeyFailure
   pure (algorithm', keyId)
 
 
@@ -610,7 +624,7 @@ validateIDTokenIO settings discovery now expectedNonce tokenText = runExceptT do
   let matchingKeys =
         [ entry.key
         | entry <- entries
-        , entry.keyId == keyId
+        , maybe True (\kid -> entry.keyId == Just kid) keyId
         , maybe True (== "sig") entry.keyUse
         , maybe True ("verify" `elem`) entry.keyOperations
         , maybe True (== renderJwsAlgorithm algorithm) entry.algorithm
@@ -643,12 +657,13 @@ validateClaims settings now expectedNonce claims = do
   pure claims
 
 
-mergeIdentityClaims :: IDTokenClaims -> UserInfoClaims -> Either Failure IdentityClaims
-mergeIdentityClaims tokenClaims userInfo = do
-  when (T.null userInfo.subject || userInfo.subject /= tokenClaims.subject) $ Left UserInfoSubjectFailure
+mergeIdentityClaims :: IDTokenClaims -> Maybe UserInfoClaims -> Either Failure IdentityClaims
+mergeIdentityClaims tokenClaims userInfoM = do
+  traverse_ validateUserInfo userInfoM
   -- Treat email and email_verified as one claim pair. Mixing the signed
   -- ID-token email with userinfo's verification bit could mark a different
   -- address as verified.
+  let userInfo = fromMaybe emptyUserInfo userInfoM
   let (selectedEmail, selectedEmailVerified) = case tokenClaims.email of
         Just email -> (Just email, tokenClaims.emailVerified)
         Nothing -> (userInfo.email, userInfo.emailVerified)
@@ -661,6 +676,16 @@ mergeIdentityClaims tokenClaims userInfo = do
       , familyName = fromMaybe "" $ tokenClaims.familyName <|> userInfo.familyName
       , picture = fromMaybe "" $ tokenClaims.picture <|> userInfo.picture
       }
+  where
+    validateUserInfo userInfo =
+      when (T.null userInfo.subject || userInfo.subject /= tokenClaims.subject) $ Left UserInfoSubjectFailure
+    emptyUserInfo = UserInfoClaims tokenClaims.subject Nothing Nothing Nothing Nothing Nothing
+
+
+verifiedAutoRegistrationEmail :: Settings -> IdentityClaims -> Maybe Text
+verifiedAutoRegistrationEmail settings identityClaims
+  | settings.autoRegister && identityClaims.emailVerified == Just True = identityClaims.email
+  | otherwise = Nothing
 
 
 data IdentityAbort = IdentityAbort
@@ -704,17 +729,17 @@ resolveOrProvisionIdentityIO pool settings identityClaims candidateUserM = do
           _ -> pure Nothing
         case linked of
           Just user -> pure user
-          Nothing
-            | not settings.autoRegister -> Safe.throwIO IdentityAbort
-            | otherwise -> case candidateUserM of
-                Nothing -> Safe.throwIO IdentityAbort
-                Just candidateUser -> do
-                  created :: [PG.Only Projects.UserId] <- PG.query connection "INSERT INTO users.users (id, created_at, updated_at, deleted_at, active, first_name, last_name, display_image_url, email, phone_number, is_sudo) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (email) DO NOTHING RETURNING id" candidateUser
-                  case created of
-                    [PG.Only (_ :: Projects.UserId)] -> do
-                      inserted <- insertIdentity connection settings.issuer identityClaims.subject candidateUser
-                      if inserted then pure candidateUser else Safe.throwIO IdentityAbort
-                    _ -> Safe.throwIO IdentityAbort
+          Nothing ->
+            case (verifiedAutoRegistrationEmail settings identityClaims, candidateUserM) of
+              (Just verifiedEmail, Just candidateUser)
+                | candidateUser.email == CI.mk verifiedEmail -> do
+                    created :: [PG.Only Projects.UserId] <- PG.query connection "INSERT INTO users.users (id, created_at, updated_at, deleted_at, active, first_name, last_name, display_image_url, email, phone_number, is_sudo) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (email) DO NOTHING RETURNING id" candidateUser
+                    case created of
+                      [PG.Only (_ :: Projects.UserId)] -> do
+                        inserted <- insertIdentity connection settings.issuer identityClaims.subject candidateUser
+                        if inserted then pure candidateUser else Safe.throwIO IdentityAbort
+                      _ -> Safe.throwIO IdentityAbort
+              _ -> Safe.throwIO IdentityAbort
   case outcome of
     Right user -> pure $ Right user
     Left (_ :: SomeException) -> do

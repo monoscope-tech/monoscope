@@ -33,7 +33,7 @@ validDiscovery =
     { issuer = "https://identity.example.com"
     , authorizationEndpoint = "https://identity.example.com/authorize"
     , tokenEndpoint = "https://identity.example.com/token"
-    , userinfoEndpoint = "https://identity.example.com/userinfo"
+    , userinfoEndpoint = Just "https://identity.example.com/userinfo"
     , jwksUri = "https://identity.example.com/jwks"
     , endSessionEndpoint = Just "https://identity.example.com/logout"
     , codeChallengeMethodsSupported = Just ["S256"]
@@ -127,13 +127,17 @@ spec = do
     it "accepts pinned issuer, PKCE S256, client_secret_basic, and an allowed signing algorithm" do
       validateDiscovery True validSettings validDiscovery `shouldBe` Right validDiscovery
 
+    it "allows a provider without a UserInfo endpoint" do
+      let discovery = validDiscovery{userinfoEndpoint = Nothing}
+      validateDiscovery True validSettings discovery `shouldBe` Right discovery
+
     it "rejects issuer mismatch" do
       validateDiscovery True validSettings validDiscovery{issuer = "https://other.example.com"}
         `shouldSatisfy` (not . isSuccess)
 
-    it "requires advertised PKCE S256" do
+    it "allows omitted PKCE metadata but rejects an explicit list without S256" do
       validateDiscovery True validSettings validDiscovery{codeChallengeMethodsSupported = Nothing}
-        `shouldSatisfy` (not . isSuccess)
+        `shouldSatisfy` isSuccess
       validateDiscovery True validSettings validDiscovery{codeChallengeMethodsSupported = Just ["plain"]}
         `shouldSatisfy` (not . isSuccess)
 
@@ -196,6 +200,17 @@ spec = do
         , "code_challenge_method=S256"
         ]
 
+    it "preserves fixed provider query parameters" do
+      let discovery = validDiscovery{authorizationEndpoint = "https://identity.example.com/authorize?tenant=acme"}
+          url = authorizationURL validSettings discovery "state-value" "nonce-value" "challenge-value"
+      url `shouldSatisfy` T.isPrefixOf "https://identity.example.com/authorize?tenant=acme&response_type=code"
+
+  describe "appendQueryParameters" do
+    it "uses the correct separator for empty and existing queries" do
+      appendQueryParameters "https://identity.example.com/logout" [] `shouldBe` "https://identity.example.com/logout"
+      appendQueryParameters "https://identity.example.com/logout" [("client_id", "client")] `shouldBe` "https://identity.example.com/logout?client_id=client"
+      appendQueryParameters "https://identity.example.com/logout?tenant=acme" [("client_id", "client")] `shouldBe` "https://identity.example.com/logout?tenant=acme&client_id=client"
+
   describe "token responses" do
     it "requires an OAuth Bearer token type" do
       let decode body = isSuccess (AE.eitherDecode @TokenResponse $ encodeUtf8 body)
@@ -230,24 +245,51 @@ spec = do
   describe "mergeIdentityClaims" do
     let userInfo = UserInfoClaims "subject-1" (Just "userinfo@example.com") (Just True) (Just "Info") (Just "User") Nothing
     it "requires UserInfo sub to match the signed ID token" do
-      mergeIdentityClaims validClaims (UserInfoClaims "other-subject" userInfo.email userInfo.emailVerified userInfo.givenName userInfo.familyName userInfo.picture)
+      mergeIdentityClaims validClaims (Just $ UserInfoClaims "other-subject" userInfo.email userInfo.emailVerified userInfo.givenName userInfo.familyName userInfo.picture)
         `shouldSatisfy` (not . isSuccess)
 
     it "keeps signed ID-token claims ahead of UserInfo" do
       let token = mkClaims validClaims.issuer validClaims.subject validClaims.audience validClaims.authorizedParty validClaims.expiresAt validClaims.notBefore validClaims.issuedAt validClaims.nonce (Just "signed@example.com") (Just False) (Just "Signed")
-      merged <- either (error . show) pure $ mergeIdentityClaims token userInfo
+      merged <- either (error . show) pure $ mergeIdentityClaims token (Just userInfo)
       merged.email `shouldBe` Just "signed@example.com"
       merged.emailVerified `shouldBe` Just False
       merged.givenName `shouldBe` "Signed"
 
     it "does not borrow UserInfo verification for an ID-token email" do
       let token = mkClaims validClaims.issuer validClaims.subject validClaims.audience validClaims.authorizedParty validClaims.expiresAt validClaims.notBefore validClaims.issuedAt validClaims.nonce (Just "signed@example.com") Nothing validClaims.givenName
-      merged <- either (error . show) pure $ mergeIdentityClaims token userInfo
+      merged <- either (error . show) pure $ mergeIdentityClaims token (Just userInfo)
       merged.email `shouldBe` Just "signed@example.com"
       merged.emailVerified `shouldBe` Nothing
 
     it "uses the UserInfo email and verification as a pair when the ID token omits email" do
       let token = mkClaims validClaims.issuer validClaims.subject validClaims.audience validClaims.authorizedParty validClaims.expiresAt validClaims.notBefore validClaims.issuedAt validClaims.nonce Nothing Nothing validClaims.givenName
-      merged <- either (error . show) pure $ mergeIdentityClaims token userInfo
+      merged <- either (error . show) pure $ mergeIdentityClaims token (Just userInfo)
       merged.email `shouldBe` Just "userinfo@example.com"
       merged.emailVerified `shouldBe` Just True
+
+    it "uses signed ID-token claims when UserInfo is unavailable" do
+      merged <- either (error . show) pure $ mergeIdentityClaims validClaims Nothing
+      merged.subject `shouldBe` validClaims.subject
+      merged.email `shouldBe` validClaims.email
+
+  describe "verifiedAutoRegistrationEmail" do
+    let settings =
+          either error id
+            $ validateSettings
+              True
+              "https://identity.example.com"
+              ""
+              "monoscope"
+              "secret"
+              "https://monoscope.example.com/auth_callback"
+              "https://monoscope.example.com/"
+              "openid profile email"
+              "RS256"
+              "disabled"
+              True
+        claims verified = IdentityClaims "subject" (Just "victim@example.com") verified "Test" "User" ""
+    it "allows only explicitly verified emails when auto-registration is enabled" do
+      verifiedAutoRegistrationEmail settings (claims $ Just True) `shouldBe` Just "victim@example.com"
+      verifiedAutoRegistrationEmail settings (claims $ Just False) `shouldBe` Nothing
+      verifiedAutoRegistrationEmail settings (claims Nothing) `shouldBe` Nothing
+      verifiedAutoRegistrationEmail validSettings (claims $ Just True) `shouldBe` Nothing

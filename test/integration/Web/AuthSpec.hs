@@ -82,6 +82,21 @@ spec = aroundAll withTestResources do
       secondResult <- OIDC.resolveOrProvisionIdentityIO tr.trPool settings secondSubject Nothing
       secondResult `shouldSatisfy` isIdentityResolutionFailure
 
+    it "rejects unverified and missing verification claims during auto-registration" \tr -> do
+      let email = "unverified-auto-registration@example.com"
+          settings = oidcSettingsForAutoRegistration "https://identity-auto-registration.test" "disabled" True
+          claims subject verified = OIDC.IdentityClaims subject (Just email) verified "Test" "User" ""
+      candidateResult <-
+        runTestEffect tr.trPool tr.trATCtx.hasqlPool tr.trLogger tr.trTracerProvider
+          $ Projects.createUser "Test" "User" "" email
+      candidate <- case candidateResult of
+        Right user -> pure user
+        Left _ -> fail "could not construct OIDC auto-registration candidate"
+      unverifiedResult <- OIDC.resolveOrProvisionIdentityIO tr.trPool settings (claims "unverified-auto-subject" $ Just False) (Just candidate)
+      unverifiedResult `shouldSatisfy` isIdentityResolutionFailure
+      missingVerificationResult <- OIDC.resolveOrProvisionIdentityIO tr.trPool settings (claims "missing-verification-auto-subject" Nothing) (Just candidate)
+      missingVerificationResult `shouldSatisfy` isIdentityResolutionFailure
+
 
 isIdentityResolutionFailure :: Either OIDC.Failure Projects.User -> Bool
 isIdentityResolutionFailure = \case
@@ -94,7 +109,11 @@ oidcSettings = oidcSettingsFor "https://identity.test"
 
 
 oidcSettingsFor :: Text -> Text -> OIDC.Settings
-oidcSettingsFor issuer linkMode =
+oidcSettingsFor issuer linkMode = oidcSettingsForAutoRegistration issuer linkMode False
+
+
+oidcSettingsForAutoRegistration :: Text -> Text -> Bool -> OIDC.Settings
+oidcSettingsForAutoRegistration issuer linkMode autoRegister =
   either error id
     $ OIDC.validateSettings
       True
@@ -107,4 +126,4 @@ oidcSettingsFor issuer linkMode =
       "openid profile email"
       "RS256"
       linkMode
-      False
+      autoRegister

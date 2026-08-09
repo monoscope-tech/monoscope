@@ -300,11 +300,11 @@ logoutH cookieHeaderM = do
         (True, Just settings, Just discovery) ->
           case discovery.endSessionEndpoint of
             Just endpoint ->
-              endpoint
-                <> "?post_logout_redirect_uri="
-                <> queryEscape settings.logoutRedirect
-                <> "&client_id="
-                <> queryEscape settings.clientId
+              OIDC.appendQueryParameters
+                endpoint
+                [ ("post_logout_redirect_uri", settings.logoutRedirect)
+                , ("client_id", settings.clientId)
+                ]
             Nothing -> settings.logoutRedirect
         _ -> envCfg.auth0Domain <> "/v2/logout?client_id=" <> envCfg.auth0ClientId <> "&returnTo=" <> envCfg.auth0LogoutRedirect
   pure $ addHeader redirectTo $ addHeader Projects.emptySessionCookie $ addHeader OIDC.expiredStateCookie NoContent
@@ -453,7 +453,10 @@ oidcAuthCallbackH appCtx codeM stateM cookieHeaderM = do
     tokenClaims <- liftIO (OIDC.validateIDTokenIO settings discovery now pending.nonce tokens.idToken) >>= hoistEither
     userInfo <- liftIO (OIDC.fetchUserInfoIO discovery tokens.accessToken) >>= hoistEither
     identityClaims <- hoistEither $ OIDC.mergeIdentityClaims tokenClaims userInfo
-    candidate <- traverse (lift . Projects.createUser identityClaims.givenName identityClaims.familyName identityClaims.picture) identityClaims.email
+    candidate <-
+      traverse
+        (lift . Projects.createUser identityClaims.givenName identityClaims.familyName identityClaims.picture)
+        (OIDC.verifiedAutoRegistrationEmail settings identityClaims)
     user <- liftIO (OIDC.resolveOrProvisionIdentityIO appCtx.pool settings identityClaims candidate) >>= hoistEither
     unless user.active $ T.throwError OIDC.IdentityResolutionFailure
     lift $ whenJust (sessionIdFromCookieHeader cookieHeaderM) Projects.deleteSession

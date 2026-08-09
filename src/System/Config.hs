@@ -387,6 +387,8 @@ instance Default DeploymentEnv where
 
 configToEnv :: IOE :> es => EnvConfig -> Eff es AuthContext
 configToEnv config = do
+  when (config.oidcEnabled && config.basicAuthEnabled)
+    $ Relude.error "invalid authentication configuration: OIDC_ENABLED and BASIC_AUTH_ENABLED cannot both be True"
   (oidcSettings, oidcDiscovery) <-
     if config.oidcEnabled
       then do

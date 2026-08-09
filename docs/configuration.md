@@ -77,17 +77,25 @@ Code with PKCE S256 and `client_secret_basic`.
 | `OIDC_SCOPES` | Space- or comma-separated scopes; must contain `openid` | `openid profile email` |
 | `OIDC_ALLOWED_ALGORITHMS` | Explicit asymmetric ID-token algorithms | `RS256` |
 | `OIDC_EXISTING_USER_LINK_MODE` | `disabled` or `verified_email` linking | `disabled` |
-| `OIDC_AUTO_REGISTER` | Create active regular users without memberships | `False` |
+| `OIDC_AUTO_REGISTER` | Create active regular users from provider-verified emails, without memberships | `False` |
 
 `verified_email` links an unlinked identity to exactly one existing local user
 only when the provider explicitly reports `email_verified=true`. OIDC claims
 never grant sudo, project, team, or administrator access. Auto-registered users
-require an email claim and start without project or team memberships. A safe
-migration from Basic Auth is
-to set `verified_email` for the first login of an existing user whose local email
+require an explicit `email_verified=true` claim and start without project or
+team memberships. Missing or false verification fails closed, preventing an
+unverified address from becoming authoritative for later email invitations. A
+safe migration from Basic Auth is to set `verified_email` for the first login of
+an existing user whose local email
 already matches the provider's verified email, confirm that the identity is
 linked, then return the mode to `disabled`. Keep auto-registration disabled
 unless new regular, unprivileged accounts are intentional.
+
+Basic Auth and generic OIDC are mutually exclusive. Startup fails if both
+`BASIC_AUTH_ENABLED` and `OIDC_ENABLED` are `True`, avoiding inconsistent login,
+callback, and logout behavior. UserInfo is optional when the provider includes
+sufficient signed claims in the ID token; when UserInfo is available, its `sub`
+must exactly match the signed ID-token subject.
 
 ```env
 BASIC_AUTH_ENABLED=False
