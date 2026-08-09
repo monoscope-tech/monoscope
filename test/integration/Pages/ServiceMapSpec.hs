@@ -8,7 +8,7 @@ import Data.UUID qualified as UUID
 import Data.UUID.V4 (nextRandom)
 import Data.Vector qualified as V
 import Lucid qualified
-import Models.Telemetry.ServiceGraph (MapStats (..), NodeKind (..), ServiceEdge (..), ServiceGraph (..), ServiceNode (..), projectsWithSpansInRange, rollupServiceEdges, serviceGraphForRange, upsertServiceDependencyEdges)
+import Models.Telemetry.ServiceGraph (EdgeSample (..), MapStats (..), NodeKind (..), ServiceEdge (..), ServiceGraph (..), ServiceNode (..), buildServiceGraph, projectsWithSpansInRange, rollupServiceEdges, serviceGraphForRange, serviceMapNodeCap, singletonLatency, upsertServiceDependencyEdges)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.ServiceMap qualified as ServiceMap
 import Pages.Telemetry qualified as Trace
@@ -62,12 +62,54 @@ edgePairs :: ServiceGraph -> [(Text, Text)]
 edgePairs g = L.sort [(e.source, e.target) | e <- V.toList g.edges]
 
 
+-- | One hop from @api@ into an uninstrumented peer, for exercising the grouping fold
+-- without paying for OTLP ingestion of a few hundred tenant subdomains.
+hop :: Text -> NodeKind -> Int64 -> EdgeSample
+hop target kind reqs = EdgeSample ("api", NKService) (target, kind) reqs 0 (singletonLatency 1_000_000) 0
+
+
+nodeBy :: ServiceGraph -> Text -> Maybe ServiceNode
+nodeBy g k = V.find (\n -> n.key == k) g.nodes
+
+
 spec :: Spec
 spec = around withTestResources do
   describe "service map" do
     it "serviceMapLegend_iconsExistInRegularSprite" \_ -> do
       sprite <- readFileText "static/public/assets/svgs/fa-sprites/regular.svg"
       sprite `shouldContainAll` ["id=\"diagram-project\"", "id=\"arrow-right-to-bracket\""]
+
+    -- The bug this guards: a project whose one instrumented service fans out to hundreds of
+    -- per-tenant hostnames rendered every hostname as its own node, which the layered layout
+    -- then crushed into an unreadable column. Peers on a shared registrable domain collapse
+    -- into one head, and both levels travel so the client can expand without a refetch.
+    it "buildServiceGraph_collapsesPerTenantFanOutButNotLoneOrNamedPeers" \_ -> do
+      let tenants = ["http:t" <> show n <> ".myshopify.com" | n <- [1 :: Int .. 3]]
+          graph =
+            buildServiceGraph 60 serviceMapNodeCap Nothing
+              $ [hop t NKExternal 100 | t <- tenants]
+              <> [hop "http:api.paystack.co" NKExternal 50, hop "db:redis" NKDatabase 900]
+
+      -- The head stands in for its members, is labelled by the domain, and counts them.
+      (nodeBy graph "grp:http:myshopify.com" <&> \n -> (n.label, n.memberCount, n.stats.requests))
+        `shouldBe` Just ("myshopify.com", Just 3, 300)
+      -- Members ride along, tagged, so expanding is a re-layout rather than a second query.
+      map (.groupKey) (mapMaybe (nodeBy graph) tenants) `shouldBe` replicate 3 (Just "grp:http:myshopify.com")
+      -- A group of one is not a group: a lone peer stays itself rather than becoming "×1",
+      -- and a database is named by its system already, so it never groups.
+      map (\k -> nodeBy graph k <&> \n -> (n.memberCount, n.groupKey)) ["http:api.paystack.co", "db:redis"]
+        `shouldBe` [Just (Nothing, Nothing), Just (Nothing, Nothing)]
+      -- Both levels of edge are present; the renderer picks by expansion state.
+      edgePairs graph
+        `shouldBe` L.sort ([("api", t) | t <- tenants] <> [("api", "grp:http:myshopify.com"), ("api", "http:api.paystack.co"), ("api", "db:redis")])
+
+    -- The cap counts what the map draws, so a collapsed group costs one slot however many
+    -- peers it holds. Before grouping, 150 tenants exhausted the whole budget.
+    it "buildServiceGraph_capsDrawnNodesNotGroupMembers" \_ -> do
+      let graph = buildServiceGraph 60 3 Nothing [hop ("http:t" <> show n <> ".myshopify.com") NKExternal 1 | n <- [1 :: Int .. 40]]
+      (nodeBy graph "grp:http:myshopify.com" <&> (.memberCount)) `shouldBe` Just (Just 40)
+      graph.truncated `shouldBe` False
+      length (V.filter (isNothing . (.groupKey)) graph.nodes) `shouldBe` 2 -- api + the one head
 
     -- An empty project must produce an empty graph with no error. The `error` field exists
     -- precisely so a failed query can't masquerade as "you have no services"; this pins the

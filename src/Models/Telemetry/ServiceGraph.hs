@@ -35,6 +35,7 @@ import Data.Char (isDigit)
 import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.IntMap.Strict qualified as IntMap
+import Data.List (partition)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as S
 import Data.Text qualified as T
@@ -150,6 +151,12 @@ data ServiceNode = ServiceNode
   -- ^ Trace map only: this service's share of the trace's total span time, which is what
   -- sizes its node. Nothing on the global map, where volume sizes nodes instead.
   , stats :: !MapStats
+  , memberCount :: !(Maybe Int)
+  -- ^ @Just n@ (n >= 2) on a collapsed group head; 'Nothing' otherwise.
+  , groupKey :: !(Maybe Text)
+  -- ^ @Just g@ on a member of collapsed group @g@; 'Nothing' otherwise. At most one of
+  -- this and 'memberCount' is ever set — both are assigned at the single construction
+  -- site in 'buildServiceGraph', so a "head that is also a member" never exists.
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (NFData)
@@ -187,9 +194,69 @@ emptyServiceGraph rangeSecs = ServiceGraph V.empty V.empty rangeSecs False Nothi
 
 
 -- | Beyond this a layered graph stops being readable and starts being a hairball, so the
--- busiest nodes are kept and 'truncated' tells the UI to say so.
+-- busiest nodes are kept and 'truncated' tells the UI to say so. The cap counts what the
+-- map actually /draws/ — a collapsed group is one node however many peers it holds — so
+-- grouping buys real coverage rather than just a tidier picture.
 serviceMapNodeCap :: Int
 serviceMapNodeCap = 150
+
+
+-- | Members of collapsed groups travel with their head so the client can expand a group
+-- without a second request. Bounded, because a per-tenant fan-out is exactly the shape
+-- that would otherwise put tens of thousands of nodes on the wire.
+serviceMapMemberCap :: Int
+serviceMapMemberCap = 8 * serviceMapNodeCap
+
+
+-- | Which collapsed group an uninstrumented peer belongs to, if any.
+--
+-- Only host-shaped peers group. Databases are named by their system ("postgresql",
+-- "redis") and so have low cardinality by construction; third-party hosts are the
+-- cardinality bomb — one node per tenant subdomain is what turns a map into a hairbrush.
+groupKeyOf :: NodeKind -> Text -> Maybe Text
+groupKeyOf kind key
+  | kind /= NKExternal && kind /= NKQueue = Nothing
+  | (prefix, rest) <- T.breakOn ":" key
+  , Just host <- T.stripPrefix ":" rest =
+      (\dom -> "grp:" <> prefix <> ":" <> dom) <$> registrableDomain host
+  | otherwise = Nothing
+
+
+-- | eTLD+1: @xyz.myshopify.com@ and @abc.myshopify.com@ both become @myshopify.com@.
+--
+-- A curated multi-part suffix list rather than the full public suffix list — 30 KB of
+-- data to make a label prettier is not a trade worth making, and a miss is benign: two
+-- peers that could have merged simply stay separate.
+--
+-- >>> registrableDomain "xyz.myshopify.com"
+-- Just "myshopify.com"
+-- >>> registrableDomain "api.fezdelivery.co"
+-- Just "fezdelivery.co"
+-- >>> registrableDomain "shop.example.co.uk"
+-- Just "example.co.uk"
+-- >>> registrableDomain "redis"
+-- Nothing
+-- >>> registrableDomain "10.0.0.7"
+-- Nothing
+registrableDomain :: Text -> Maybe Text
+registrableDomain host
+  | length labels < 2 = Nothing
+  | all (T.all isDigit) labels = Nothing -- an IP literal is not a domain, and never groups
+  | length labels > 2 && lastNJoined 2 `S.member` multiPartSuffixes = Just $ lastNJoined 3
+  | otherwise = Just $ lastNJoined 2
+  where
+    labels = T.splitOn "." host
+    lastNJoined n = T.intercalate "." $ drop (length labels - n) labels
+
+
+-- | Two-label public suffixes common enough to matter for our customers. Not exhaustive
+-- by design; see 'registrableDomain'.
+multiPartSuffixes :: S.Set Text
+multiPartSuffixes =
+  S.fromList
+    $ ["co." <> c | c <- ["uk", "za", "nz", "jp", "kr", "in", "il", "ke", "id", "th"]]
+    <> ["com." <> c | c <- ["au", "br", "mx", "ar", "cn", "hk", "sg", "tr", "ng", "gh", "eg", "pk", "my", "ph", "vn", "tw", "ua", "pl", "co", "pe", "ve", "ec"]]
+    <> ["org.uk", "ac.uk", "gov.uk", "net.au", "org.au", "ne.jp", "or.jp"]
 
 
 -- | One observed hop. The rollup emits these pre-aggregated per bucket; the trace fold
@@ -217,37 +284,79 @@ data EdgeSample = EdgeSample
 buildServiceGraph :: Double -> Int -> Maybe Int64 -> [EdgeSample] -> ServiceGraph
 buildServiceGraph rangeSecs nodeCap totalDurationM samples =
   ServiceGraph
-    { nodes = V.fromList keptNodes
-    , edges = V.fromList [e | e <- allEdges, e.source `S.member` keptKeys, e.target `S.member` keptKeys]
+    { nodes = V.fromList (topNodes <> memberNodes)
+    , edges = V.fromList keptEdges
     , rangeSeconds = rangeSecs
-    , truncated = length nodeStats > nodeCap
+    , truncated = length topLevel > nodeCap
     , error = Nothing
     }
   where
     aggOf s = HopAgg s.requests s.errors s.latency s.targetDurationNs
-    merged = Map.fromListWith (<>) [((s.source, s.target), aggOf s) | s <- samples]
-    allEdges = [ServiceEdge (fst src) (fst tgt) (statsOf agg) | ((src, tgt), agg) <- Map.toList merged]
 
     -- A node's kind is whatever the hops say it is; a service seen both as a caller and
     -- as an inferred peer is a service (NKService sorts before the inferred kinds).
     nodeKinds = Map.fromListWith min $ concat [[s.source, s.target] | s <- samples]
+    kindOf k = Map.findWithDefault NKUnknown k nodeKinds
     inbound = Map.fromListWith (<>) [(fst s.target, aggOf s) | s <- samples]
     -- Entry-only and leaf nodes still need a row, with zeroed stats.
     nodeStats = [(key, Map.findWithDefault mempty key inbound) | key <- Map.keys nodeKinds]
 
-    keptNodes =
-      [ ServiceNode
-          { key
-          , label = nodeLabel key
-          , kind
-          , inferred = inferredKind kind
-          , durationShare = (\total -> if total > 0 then Just (fromIntegral agg.durNs / fromIntegral total) else Nothing) =<< totalDurationM
-          , stats = statsOf agg
-          }
-      | (key, agg) <- take nodeCap $ sortOn (\(_, a) -> Down a.reqs) nodeStats
-      , let kind = Map.findWithDefault NKUnknown key nodeKinds
+    -- A group of one is not a group: a lone peer renders as itself rather than hiding
+    -- behind a "×1" badge on a domain it is the only member of.
+    candidates = Map.fromList [(k, g) | (k, _) <- nodeStats, Just g <- [groupKeyOf (kindOf k) k]]
+    groupSizes = Map.fromListWith (+) [(g, 1 :: Int) | g <- Map.elems candidates]
+    groupOf k = do
+      g <- Map.lookup k candidates
+      guard $ Map.findWithDefault 0 g groupSizes > 1
+      pure g
+
+    (grouped, ungrouped) = partition (isJust . groupOf . fst) nodeStats
+    groupHeads = Map.toList $ Map.fromListWith (\(a, k) (b, k') -> (a <> b, min k k')) [(g, (a, kindOf k)) | (k, a) <- grouped, Just g <- [groupOf k]]
+
+    -- The cap ranks what the map draws: ungrouped nodes and group heads compete on equal
+    -- footing, so 150 slots now cover a whole per-tenant fan-out instead of 150 tenants.
+    topLevel =
+      sortOn (\(_, a, _) -> Down a.reqs)
+        $ [(k, a, Nothing) | (k, a) <- ungrouped]
+        <> [(g, a, Just (kind, Map.findWithDefault 0 g groupSizes)) | (g, (a, kind)) <- groupHeads]
+    keptTop = take nodeCap topLevel
+    keptGroups = S.fromList [g | (g, _, Just _) <- keptTop]
+
+    topNodes =
+      [ mkNode key agg (maybe (kindOf key) fst headM) (snd <$> headM) Nothing
+      | (key, agg, headM) <- keptTop
       ]
-    keptKeys = S.fromList [n.key | n <- keptNodes]
+    memberNodes =
+      [ mkNode key agg (kindOf key) Nothing (groupOf key)
+      | (key, agg) <- take serviceMapMemberCap $ sortOn (\(_, a) -> Down a.reqs) grouped
+      , any (`S.member` keptGroups) (groupOf key)
+      ]
+
+    mkNode key agg kind memberCount groupKey =
+      ServiceNode
+        { key
+        , label = nodeLabel key
+        , kind
+        , inferred = inferredKind kind
+        , durationShare = (\total -> if total > 0 then Just (fromIntegral agg.durNs / fromIntegral total) else Nothing) =<< totalDurationM
+        , stats = statsOf agg
+        , memberCount
+        , groupKey
+        }
+
+    -- Both levels travel: collapsed edges join canonical endpoints, and the raw member
+    -- edges ride along so expanding a group needs no second request. A member edge is
+    -- recognisable client-side because its endpoint node carries a @group_key@.
+    canonical k = fromMaybe k (groupOf k)
+    visible = S.fromList [n.key | n <- topNodes <> memberNodes]
+    edgesBy f = Map.fromListWith (<>) [((f (fst s.source), f (fst s.target)), aggOf s) | s <- samples]
+    keptEdges =
+      [ ServiceEdge source target (statsOf agg)
+      | ((source, target), agg) <- Map.toList $ Map.union (edgesBy id) (edgesBy canonical)
+      , source `S.member` visible
+      , target `S.member` visible
+      ]
+
     statsOf agg = mkStats rangeSecs agg.reqs agg.errs agg.hist
 
 
@@ -264,9 +373,15 @@ instance Monoid HopAgg where
 
 
 -- | Inferred dependency keys carry their type as a prefix so two different systems can't
--- collide on a bare host name; the label drops it again for display.
+-- collide on a bare host name, and a collapsed group prepends @grp:@ so a head can't
+-- collide with the member that shares its domain. The label drops both again for display.
+--
+-- >>> nodeLabel "grp:http:myshopify.com"
+-- "myshopify.com"
+-- >>> nodeLabel "db:postgresql"
+-- "postgresql"
 nodeLabel :: Text -> Text
-nodeLabel k = fromMaybe k $ listToMaybe [v | p <- ["db:", "queue:", "http:"], Just v <- [T.stripPrefix p k]]
+nodeLabel k = maybe k nodeLabel $ listToMaybe [v | p <- ["grp:", "db:", "queue:", "http:"], Just v <- [T.stripPrefix p k]]
 
 
 -- | Derive one trace's hops from its spans. Pure, so the trace map costs no extra query:

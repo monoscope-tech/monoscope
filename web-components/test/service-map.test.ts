@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { breakCycles, layerGraph, orderLayers, assignCoords, layoutGraph, filterSelection, hydrateServiceMaps, statsTip, type Edge } from '../src/service-map';
+import { breakCycles, layerGraph, orderLayers, assignCoords, layoutGraph, filterSelection, hydrateServiceMaps, statsTip, visibleGraph, fitRows, edgeKey, type Edge } from '../src/service-map';
 
 const e = (source: string, target: string): Edge => ({ source, target });
 const snapshot = (keys: string[], edges: Edge[]) => {
@@ -35,6 +35,70 @@ describe('statsTip', () => {
 
   it('uses a light foreground on a dark status color', () => {
     expect(statsTip('failed', stats, '#111827')).toContain('background:#111827;color:#d4dcec');
+  });
+});
+
+describe('visibleGraph', () => {
+  // One collapsed head (×3) plus its members, and one ungrouped peer alongside.
+  const n = (key: string, member_count: number | null = null, group_key: string | null = null) => ({ key, member_count, group_key });
+  const nodes = [
+    n('api'), n('grp:http:shop.com', 3), n('http:a.shop.com', null, 'grp:http:shop.com'),
+    n('http:b.shop.com', null, 'grp:http:shop.com'), n('http:c.shop.com', null, 'grp:http:shop.com'), n('db:redis'),
+  ];
+  const edges = [e('api', 'grp:http:shop.com'), e('api', 'http:a.shop.com'), e('api', 'http:b.shop.com'), e('api', 'http:c.shop.com'), e('api', 'db:redis')];
+
+  it('draws heads and hides their members while collapsed', () => {
+    const v = visibleGraph(nodes, edges, new Set());
+    expect(v.nodes.map(x => x.key)).toEqual(['api', 'grp:http:shop.com', 'db:redis']);
+    // The member edges travel in the payload but must not be drawn on top of the collapsed edge.
+    expect(v.edges).toEqual([e('api', 'grp:http:shop.com'), e('api', 'db:redis')]);
+  });
+
+  it('swaps a head for its members when expanded, leaving other groups collapsed', () => {
+    const v = visibleGraph(nodes, edges, new Set(['grp:http:shop.com']));
+    expect(v.nodes.map(x => x.key)).toEqual(['api', 'http:a.shop.com', 'http:b.shop.com', 'http:c.shop.com', 'db:redis']);
+    expect(v.edges).not.toContainEqual(e('api', 'grp:http:shop.com'));
+    expect(v.edges).toHaveLength(4);
+  });
+
+  it('expanding an unknown group changes nothing', () => {
+    expect(visibleGraph(nodes, edges, new Set(['grp:http:nope.com']))).toEqual(visibleGraph(nodes, edges, new Set()));
+  });
+});
+
+describe('fitRows', () => {
+  it('keeps generous spacing while the layer fits', () => {
+    expect(fitRows(520, 4, 64)).toMatchObject({ rowPitch: 96 });
+  });
+
+  it('never spaces rows closer than the symbols are wide', () => {
+    // The regression: 149 rows in a 520px box used to fit-to-extent down to ~3px apart.
+    const { rowPitch, maxRows } = fitRows(520, 149, 64);
+    expect(rowPitch).toBeGreaterThanOrEqual(64 + 8);
+    expect(maxRows).toBeLessThan(149); // so the rest wraps instead of being crushed
+  });
+
+  it('still yields one usable row for a canvas smaller than a node', () => {
+    expect(fitRows(20, 10, 64).maxRows).toBe(1);
+  });
+});
+
+describe('assignCoords', () => {
+  it('wraps a layer past maxRows into offset sub-columns', () => {
+    const coords = assignCoords([['a', 'b', 'c', 'd', 'e']], { rowPitch: 10, maxRows: 2 });
+    // Two rows per sub-column: a,b | c,d | e — each sub-column shifted right, not down.
+    expect(coords.get('a')).toEqual({ x: 0, y: -5 });
+    expect(coords.get('b')).toEqual({ x: 0, y: 5 });
+    expect(coords.get('c')!.x).toBeGreaterThan(0);
+    expect(coords.get('c')!.y).toBe(-5);
+    expect(coords.get('e')!.x).toBeGreaterThan(coords.get('c')!.x);
+    // Whatever the wrapping, no two nodes ever share a point.
+    expect(new Set([...coords.values()].map(p => `${p.x},${p.y}`)).size).toBe(5);
+  });
+
+  it('leaves an unwrapped layer centred on zero', () => {
+    const coords = assignCoords([['a', 'b', 'c']], { rowPitch: 10 });
+    expect([...coords.values()].map(p => p.y)).toEqual([-10, 0, 10]);
   });
 });
 
@@ -176,7 +240,7 @@ describe('filterSelection', () => {
     const { litNodes, litEdges } = filterSelection(nodes, edges, 'CHECK');
     expect([...litNodes]).toEqual(['checkout']);
     // Both edges touching checkout stay lit so the path is never severed.
-    expect([...litEdges].sort()).toEqual(['checkout db:orders', 'gateway checkout']);
+    expect([...litEdges].sort()).toEqual([edgeKey('checkout', 'db:orders'), edgeKey('gateway', 'checkout')]);
   });
 
   it('matches on label, not on the inferred key prefix', () => {
@@ -195,12 +259,12 @@ describe('filterSelection', () => {
     // Isolation alone: auth and its edge go dark.
     const iso = filterSelection(nodes, edges, '', isolated);
     expect([...iso.litNodes].sort()).toEqual(['checkout', 'db:orders', 'gateway']);
-    expect([...iso.litEdges].sort()).toEqual(['checkout db:orders', 'gateway checkout']);
+    expect([...iso.litEdges].sort()).toEqual([edgeKey('checkout', 'db:orders'), edgeKey('gateway', 'checkout')]);
 
     // Adding a query narrows further; it never resurrects the isolated-out node.
     const both = filterSelection(nodes, edges, 'gateway', isolated);
     expect([...both.litNodes]).toEqual(['gateway']);
-    expect([...both.litEdges]).toEqual(['gateway checkout']);
+    expect([...both.litEdges]).toEqual([edgeKey('gateway', 'checkout')]);
 
     // A query that only matches an isolated-out node lights nothing.
     expect(filterSelection(nodes, edges, 'auth', isolated).litNodes.size).toBe(0);
