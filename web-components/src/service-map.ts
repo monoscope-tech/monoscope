@@ -40,11 +40,13 @@ export const edgeKey = (source: string, target: string): string => `${source}\u0
 // both more precise and what lets every card be the same size.
 const CARD_W = 176;
 const CARD_H = 78;
-export const X_GAP = CARD_W + 68;
-export const Y_GAP = CARD_H + 28;
-// A wrapped layer's sub-columns have to clear a whole card plus a gutter; anything less
-// and the wrap overlaps the very cards it was meant to make room for.
-const SUBCOL_GAP = CARD_W + 24;
+// Flow runs top-to-bottom, the way Datadog's request flow map reads: entry points on the
+// first row, each hop a row further down. COL_GAP separates siblings across a row, LAYER_GAP
+// separates one hop from the next, and a row too wide for the canvas wraps onto a sub-row —
+// which must clear a whole card, or the wrap overlaps what it was making room for.
+export const COL_GAP = CARD_W + 24;
+export const LAYER_GAP = CARD_H + 62;
+const SUBROW_GAP = CARD_H + 18;
 
 /**
  * The payload carries both levels: collapsed group heads plus the members that would
@@ -197,36 +199,31 @@ export function orderLayers(layer: Map<string, number>, edges: Edge[], sweeps = 
 }
 
 export type LayoutOpts = {
-  /** Vertical distance between node centres. The renderer floors this at symbol + 8 so a
-   *  dense layer can never be squeezed below the point where rings overlap. */
-  rowPitch?: number;
-  /** Rows a layer may use before it wraps into a second sub-column. */
-  maxRows?: number;
+  /** Cards a row may hold before it wraps onto a sub-row. */
+  maxCols?: number;
 };
 
 /**
- * `x = layer * 190` (plus a sub-column offset when the layer wrapped),
- * `y = (row - (rows-1)/2) * pitch`.
+ * `y = hop depth` (plus a sub-row offset when the row wrapped), `x` centred on the row.
  *
- * Wrapping is what keeps a fan-out finite: 149 peers in one layer used to mean a 14,000px
- * virtual column that fit-to-extent then crushed to ~3px per row. Wrapped at the number of
- * rows the canvas can actually show, the same layer stays at full pitch and grows sideways.
+ * Wrapping is what keeps a fan-out finite: 149 peers on one row would otherwise be a
+ * 26,000px-wide row that fit-to-extent then crushed into overlapping cards. Wrapped at the
+ * number of cards the canvas can actually show, the row keeps full spacing and grows down.
  */
 export function assignCoords(layers: string[][], opts: LayoutOpts = {}): Map<string, Point> {
-  const pitch = opts.rowPitch ?? Y_GAP;
-  const maxRows = Math.max(1, opts.maxRows ?? Infinity);
+  const maxCols = Math.max(1, opts.maxCols ?? Infinity);
   const coords = new Map<string, Point>();
-  // The cursor advances by how wide each layer actually got, not by a fixed step. Placing
-  // layer n at `n * X_GAP` assumes every layer is one column wide, so a wrapped layer's
-  // second column lands inside the *next* layer's lane and the two collide.
-  let x = 0;
+  // The cursor advances by how *tall* each row actually got, not by a fixed step. Placing
+  // layer n at `n * LAYER_GAP` assumes every row is one line deep, so a wrapped row's second
+  // line lands inside the next hop's lane and the two collide.
+  let y = 0;
   for (const l of layers) {
-    const rows = Math.min(l.length, maxRows);
+    const cols = Math.min(l.length, maxCols);
     l.forEach((k, i) => coords.set(k, {
-      x: x + Math.floor(i / rows) * SUBCOL_GAP,
-      y: ((i % rows) - (rows - 1) / 2) * pitch,
+      x: ((i % cols) - (cols - 1) / 2) * COL_GAP,
+      y: y + Math.floor(i / cols) * SUBROW_GAP,
     }));
-    x += (Math.ceil(l.length / rows) - 1) * SUBCOL_GAP + X_GAP;
+    y += (Math.ceil(l.length / cols) - 1) * SUBROW_GAP + LAYER_GAP;
   }
   return coords;
 }
@@ -265,9 +262,9 @@ export function filterSelection(
 export function layoutGraph(
   keys: string[],
   edges: Edge[],
-  // Given the widest layer's row count, decide pitch and wrapping. A callback rather than a
-  // value because only the layering knows how wide the graph got, and running the pipeline
-  // twice to find out would be a second copy of it.
+  // Given the widest row's card count, decide wrapping. A callback rather than a value
+  // because only the layering knows how wide the graph got, and running the pipeline twice
+  // to find out would be a second copy of it.
   fit: LayoutOpts | ((widestLayer: number) => LayoutOpts) = {},
 ): { coords: Map<string, Point>; back: Set<string> } {
   const { acyclic, back } = breakCycles(keys, edges);
@@ -277,22 +274,15 @@ export function layoutGraph(
 }
 
 /**
- * Row pitch and row budget for a canvas `height` px tall holding a widest layer of `rows`
- * nodes whose largest symbol is `maxSymbol` px across.
+ * How many cards a row may hold on a canvas `width` px across.
  *
- * Spacing stays generous while the layer fits, tightens to rings-just-touching when it
- * doesn't, and never goes below that — past the floor the layer wraps instead. That is
- * what turns the old failure mode (149 rows crushed to ~3px apart in a 520px box) into a
- * graph that grows sideways and stays readable.
+ * Cards never shrink to fit: past this count a row wraps onto a sub-row instead, so a wide
+ * fan-out grows downward and stays legible rather than being squeezed into overlap.
  */
-export function fitRows(height: number, rows: number, maxSymbol: number): { rowPitch: number; maxRows: number } {
-  const floor = maxSymbol + 8;
-  const usable = Math.max(0, height - 64);
-  const roomy = Math.floor(usable / Y_GAP) + 1;
-  return rows <= roomy
-    ? { rowPitch: Y_GAP, maxRows: roomy }
-    : { rowPitch: floor, maxRows: Math.max(1, Math.floor(usable / floor) + 1) };
+export function fitCols(width: number, cardW: number): { maxCols: number } {
+  return { maxCols: Math.max(1, Math.floor(Math.max(0, width - 80) / (cardW + 24))) };
 }
+
 
 // --- formatting --------------------------------------------------------------
 const fmtDur = (ns: number): string => {
@@ -344,12 +334,28 @@ const ringColor = (
 
 // --- rendering ---------------------------------------------------------------
 
-// Kind as a short tag rather than a glyph: canvas has no access to our sprite sheet, and
-// unicode symbols render at the mercy of whatever font the OS substitutes. Text always
-// renders, and it doubles as the non-colour signal for what a node is.
-const KIND_TAG: Record<NodeKind, string> = {
-  entry: 'ENTRY', service: '', database: 'DB', queue: 'QUEUE', external: 'EXT', unknown: '',
+// Kind as an icon, the way Datadog marks a node — drawn from inline SVG data URIs rather
+// than our sprite sheet (canvas cannot reach it) or a unicode glyph (rendered at the mercy
+// of whatever font the OS substitutes). Monochrome, so the icon never competes with health.
+const icon = (path: string, stroke = true) =>
+  'data:image/svg+xml;utf8,' + encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="${stroke ? 'none' : '#64748b'}"`
+    + ` stroke="#64748b" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${path}</svg>`);
+
+const KIND_ICON: Record<NodeKind, string> = {
+  // service: a hexagon, the shape Datadog uses for an instrumented service
+  service: icon('<path d="M8 1.6 13.6 4.8v6.4L8 14.4 2.4 11.2V4.8z"/>'),
+  // database: a cylinder
+  database: icon('<ellipse cx="8" cy="4" rx="5" ry="2"/><path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4"/>'),
+  // queue: stacked layers
+  queue: icon('<path d="M8 2 14 5 8 8 2 5z"/><path d="M2 8.5 8 11.5 14 8.5"/>'),
+  // external: a cloud
+  external: icon('<path d="M4.5 12h7a2.8 2.8 0 0 0 .3-5.6A4 4 0 0 0 4.2 7 2.5 2.5 0 0 0 4.5 12z"/>'),
+  // entry: traffic arriving from outside
+  entry: icon('<path d="M2 8h9"/><path d="M8 5l3 3-3 3"/><path d="M13 2v12"/>'),
+  unknown: icon('<circle cx="8" cy="8" r="6"/><path d="M8 11v.01M8 9c0-1.5 1.5-1.5 1.5-3A1.5 1.5 0 0 0 6.5 6"/>'),
 };
+
 
 /**
  * The four facts, as echarts rich-text lines. Built here rather than in `paint` so the
@@ -359,7 +365,6 @@ const KIND_TAG: Record<NodeKind, string> = {
 const richSafe = (t: string) => t.replace(/[{}|]/g, '');
 
 export function cardLabel(n: ServiceNode, hasServiceColor = false): string {
-  const tag = KIND_TAG[n.kind];
   // A chip carries the service's own colour, which is otherwise absent from the map now
   // that borders belong to health — leaving the "Service colors" legend describing nothing.
   const swatch = hasServiceColor ? '{svc| } ' : '';
@@ -370,7 +375,7 @@ export function cardLabel(n: ServiceNode, hasServiceColor = false): string {
     : fmtNum(Math.round(n.stats.throughput_per_sec));
   const errStyle = n.stats.error_rate >= ERR_FAILING ? 'bad' : n.stats.error_rate >= ERR_ELEVATED ? 'warn' : 'muted';
   return [
-    `${swatch}${tag ? `{tag|${tag}} ` : ''}{name|${richSafe(n.label || 'Entry point')}${count}}`,
+    `${swatch}{icon|} {name|${richSafe(n.label || 'Entry point')}${count}}`,
     `{${errStyle}|${(n.stats.error_rate * 100).toFixed(2)}% errors}`,
     n.duration_share != null
       ? `{muted|${(n.duration_share * 100).toFixed(1)}% of trace time}`
@@ -384,8 +389,8 @@ export function cardLabel(n: ServiceNode, hasServiceColor = false): string {
 // layout:'none' fits the supplied coordinate extent to the box, so a 1-2 node
 // graph would be blown up to fill the canvas. Invisible corner nodes pin a
 // minimum virtual extent (3 layers × 4 rows).
-const MIN_W = 2 * X_GAP;
-const MIN_H = 3 * Y_GAP;
+const MIN_W = 2 * COL_GAP;
+const MIN_H = 2 * LAYER_GAP;
 
 type Reach = { up: Map<string, string[]>; down: Map<string, string[]> };
 
@@ -489,7 +494,7 @@ function render(
     const edges = candidates.filter(e => index.has(e.source) && index.has(e.target));
 
     const box = el.getBoundingClientRect();
-    const { coords, back } = layoutGraph(keys, edges, widest => fitRows(box.height, widest, CARD_H));
+    const { coords, back } = layoutGraph(keys, edges, () => fitCols(box.width, CARD_W));
 
     // Transitive isolation sets — echarts' focus:'adjacency' is 1-hop only.
     const reach: Reach = { up: new Map(), down: new Map() };
@@ -519,7 +524,8 @@ function render(
       // NB: not `label` — echarts owns data[i].label and rewrites it into a label config
       // object, which is why the formatter rendered "[object Object]".
       id: String(i), name: n.key || '(entry)', key: n.key, displayName: n.label, kind: n.kind,
-      group: n.member_count ?? 0, card: cardLabel(n, !n.inferred && !!colors[n.key]), svcColor: !n.inferred && colors[n.key] ? resolveColor(n.key, colors) : null,
+      group: n.member_count ?? 0, card: cardLabel(n, !n.inferred && !!colors[n.key]),
+      kindIcon: KIND_ICON[n.kind] ?? KIND_ICON.unknown, svcColor: !n.inferred && colors[n.key] ? resolveColor(n.key, colors) : null,
       value: n.stats.requests, tip: statsTip(n.label || 'entry', n.stats, ringColor(n, s, colors), groupTip(n)),
       x: coords.get(n.key)!.x, y: coords.get(n.key)!.y, fixed: true,
       symbol: 'rect', symbolSize: [CARD_W, CARD_H],
@@ -594,7 +600,7 @@ function render(
           formatter: (p: any) => p.data?.card ?? '',
           rich: {
             svc: { width: 3, height: 11, borderRadius: 2, backgroundColor: 'transparent' },
-            tag: { fontSize: 9, color: s.textColor, fontWeight: 'bold' as const, padding: [0, 0, 0, 0] },
+            icon: { width: 13, height: 13 },
             name: { fontSize: 12, color: s.tooltipTextColor, fontWeight: 600 as const },
             muted: { fontSize: 11, color: s.textColor },
             warn: { fontSize: 11, color: s.warningColor },
@@ -643,7 +649,10 @@ function render(
               },
               label: {
                 opacity: dim(n.key),
-                ...(n.svcColor ? { rich: { svc: { backgroundColor: n.svcColor, width: 3, height: 11, borderRadius: 2 } } } : {}),
+                rich: {
+                  icon: { backgroundColor: { image: n.kindIcon }, width: 13, height: 13 },
+                  ...(n.svcColor ? { svc: { backgroundColor: n.svcColor, width: 3, height: 11, borderRadius: 2 } } : {}),
+                },
               },
             };
           }),

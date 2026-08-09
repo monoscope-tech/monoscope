@@ -43,7 +43,7 @@ serviceMapPanel_ pid elId graph colors = div_ [class_ "w-full flex flex-col gap-
           -- graph into a fixed box is what shrinks cards until they overlap, so the map is
           -- allowed to be bigger than its window and you pan to the rest.
           div_
-            [ class_ "border border-strokeWeak rounded-2xl w-full h-[620px] max-md:h-[420px] relative overflow-auto c-scroll"
+            [ class_ "border border-strokeWeak rounded-2xl w-full h-[720px] max-md:h-[460px] relative overflow-auto c-scroll"
             , id_ elId
             , term "data-service-map" elId
             , -- Base for the node menu's links; the renderer only appends the query.

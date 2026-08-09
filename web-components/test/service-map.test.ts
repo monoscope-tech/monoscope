@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { breakCycles, layerGraph, orderLayers, assignCoords, layoutGraph, filterSelection, hydrateServiceMaps, statsTip, visibleGraph, fitRows, edgeKey, cardLabel, scopeTo, X_GAP, Y_GAP, type Edge } from '../src/service-map';
+import { breakCycles, layerGraph, orderLayers, assignCoords, layoutGraph, filterSelection, hydrateServiceMaps, statsTip, visibleGraph, fitCols, edgeKey, cardLabel, scopeTo, COL_GAP, LAYER_GAP, type Edge } from '../src/service-map';
 
 const e = (source: string, target: string): Edge => ({ source, target });
 const snapshot = (keys: string[], edges: Edge[]) => {
@@ -69,7 +69,7 @@ describe('cardLabel', () => {
     expect(card).toContain('0.00% errors');
     expect(card).toContain('1.48s p95');
     expect(card).toContain('1.25 req/s');
-    expect(card).toContain('{tag|EXT}');
+    expect(card).toContain('{icon|}');
   });
 
   it('grades the error line in three steps rather than flagging any error at all', () => {
@@ -139,49 +139,40 @@ describe('visibleGraph', () => {
   });
 });
 
-describe('fitRows', () => {
-  it('keeps generous spacing while the layer fits', () => {
-    expect(fitRows(520, 4, 64)).toMatchObject({ rowPitch: Y_GAP });
+describe('fitCols', () => {
+  it('fits as many cards across as the canvas can hold', () => {
+    expect(fitCols(1800, 176).maxCols).toBe(8);
   });
 
-  it('never spaces rows closer than the symbols are wide', () => {
-    // The regression: 149 rows in a 520px box used to fit-to-extent down to ~3px apart.
-    const { rowPitch, maxRows } = fitRows(520, 149, 64);
-    expect(rowPitch).toBeGreaterThanOrEqual(64 + 8);
-    expect(maxRows).toBeLessThan(149); // so the rest wraps instead of being crushed
-  });
-
-  it('still yields one usable row for a canvas smaller than a node', () => {
-    expect(fitRows(20, 10, 64).maxRows).toBe(1);
+  it('never returns zero columns, however narrow the canvas', () => {
+    expect(fitCols(60, 176).maxCols).toBe(1);
   });
 });
 
 describe('assignCoords', () => {
-  it('wraps a layer past maxRows into offset sub-columns', () => {
-    const coords = assignCoords([['a', 'b', 'c', 'd', 'e']], { rowPitch: 10, maxRows: 2 });
-    // Two rows per sub-column: a,b | c,d | e — each sub-column shifted right, not down.
-    expect(coords.get('a')).toEqual({ x: 0, y: -5 });
-    expect(coords.get('b')).toEqual({ x: 0, y: 5 });
-    expect(coords.get('c')!.x).toBeGreaterThan(0);
-    expect(coords.get('c')!.y).toBe(-5);
-    expect(coords.get('e')!.x).toBeGreaterThan(coords.get('c')!.x);
-    // Whatever the wrapping, no two nodes ever share a point.
+  it('wraps a row past maxCols onto a sub-row, not off the side', () => {
+    const coords = assignCoords([['a', 'b', 'c', 'd', 'e']], { maxCols: 2 });
+    // Two per row: a,b | c,d | e — each wrap moves down, never further across.
+    expect(coords.get('a')).toEqual({ x: -COL_GAP / 2, y: 0 });
+    expect(coords.get('b')).toEqual({ x: COL_GAP / 2, y: 0 });
+    expect(coords.get('c')!.y).toBeGreaterThan(0);
+    expect(coords.get('c')!.x).toBe(-COL_GAP / 2);
+    expect(coords.get('e')!.y).toBeGreaterThan(coords.get('c')!.y);
+    // Whatever the wrapping, no two cards ever share a point.
     expect(new Set([...coords.values()].map(p => `${p.x},${p.y}`)).size).toBe(5);
   });
 
-  it('advances the next layer past a wrapped layer, not into it', () => {
-    // The collision this pins: layer 0 wraps to two columns, so layer 1 must start clear of
-    // both. Placing layer n at n * X_GAP put the wrapped column 44px from the next layer's
-    // cards, which are 176px wide.
-    const coords = assignCoords([['a', 'b', 'c'], ['z']], { rowPitch: 10, maxRows: 2 });
-    const wrapped = coords.get('c')!.x;
-    expect(wrapped).toBeGreaterThan(0);
-    expect(coords.get('z')!.x).toBeGreaterThanOrEqual(wrapped + X_GAP);
+  it('advances the next hop past a wrapped row, not into it', () => {
+    // The collision this pins: row 0 wraps onto two lines, so hop 1 must clear both.
+    const coords = assignCoords([['a', 'b', 'c'], ['z']], { maxCols: 2 });
+    expect(coords.get('z')!.y).toBeGreaterThanOrEqual(coords.get('c')!.y + LAYER_GAP);
   });
 
-  it('leaves an unwrapped layer centred on zero', () => {
-    const coords = assignCoords([['a', 'b', 'c']], { rowPitch: 10 });
-    expect([...coords.values()].map(p => p.y)).toEqual([-10, 0, 10]);
+  it('centres each row on x and steps hops down the page', () => {
+    const coords = assignCoords([['a'], ['b', 'c']]);
+    expect(coords.get('a')).toEqual({ x: 0, y: 0 });
+    expect(coords.get('b')).toEqual({ x: -COL_GAP / 2, y: LAYER_GAP });
+    expect(coords.get('c')).toEqual({ x: COL_GAP / 2, y: LAYER_GAP });
   });
 });
 
@@ -220,15 +211,6 @@ describe('layerGraph', () => {
   });
 });
 
-describe('assignCoords', () => {
-  it('spaces layers on x and centres each layer on y', () => {
-    const coords = assignCoords([['a'], ['b', 'c']]);
-    expect(coords.get('a')).toEqual({ x: 0, y: 0 });
-    expect(coords.get('b')).toEqual({ x: X_GAP, y: -Y_GAP / 2 });
-    expect(coords.get('c')).toEqual({ x: X_GAP, y: Y_GAP / 2 });
-  });
-});
-
 describe('layoutGraph', () => {
   it('places a single node at the origin with no back-edges', () => {
     const { coords, back } = layoutGraph(['solo'], []);
@@ -236,22 +218,23 @@ describe('layoutGraph', () => {
     expect(back.size).toBe(0);
   });
 
-  it('lays out disconnected components without overlapping rows', () => {
+  it('lays out disconnected components without overlapping cards', () => {
     const { coords } = layoutGraph(['a', 'b', 'x', 'y'], [e('a', 'b'), e('x', 'y')]);
-    expect(coords.get('a')!.x).toBe(0);
-    expect(coords.get('x')!.x).toBe(0);
-    expect(coords.get('a')!.y).not.toBe(coords.get('x')!.y);
-    expect(coords.get('b')!.x).toBe(X_GAP);
-    expect(coords.get('y')!.x).toBe(X_GAP);
+    // Both roots share the first row; both their callees share the second.
+    expect(coords.get('a')!.y).toBe(0);
+    expect(coords.get('x')!.y).toBe(0);
+    expect(coords.get('a')!.x).not.toBe(coords.get('x')!.x);
+    expect(coords.get('b')!.y).toBe(LAYER_GAP);
+    expect(coords.get('y')!.y).toBe(LAYER_GAP);
   });
 
   it('lays out a wide fan-out symmetrically about the root', () => {
     const leaves = Array.from({ length: 9 }, (_, i) => `leaf${i}`);
     const { coords } = layoutGraph(['root', ...leaves], leaves.map(l => e('root', l)));
-    const ys = leaves.map(l => coords.get(l)!.y);
-    expect(new Set(leaves.map(l => coords.get(l)!.x))).toEqual(new Set([X_GAP]));
-    expect(new Set(ys).size).toBe(9);
-    expect(ys.reduce((a, b) => a + b, 0)).toBeCloseTo(0);
+    const xs = leaves.map(l => coords.get(l)!.x);
+    expect(new Set(leaves.map(l => coords.get(l)!.y))).toEqual(new Set([LAYER_GAP]));
+    expect(new Set(xs).size).toBe(9);
+    expect(xs.reduce((a, b) => a + b, 0)).toBeCloseTo(0);
   });
 
   it('is deterministic — two runs are byte-identical', () => {
