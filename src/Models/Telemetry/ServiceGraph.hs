@@ -57,6 +57,7 @@ import Relude
 -- | What a node in the graph /is/. A sum type rather than @inferred :: Bool@ plus
 -- @isDatabase :: Bool@ so the renderer's shape/style dispatch is exhaustive and an
 -- "inferred entry-point database" cannot be constructed.
+--
 -- The derived 'Ord' is load-bearing: 'buildServiceGraph' folds a collapsed head's kind with
 -- @min@ over its children, seeded with the head's own (absent, hence 'NKUnknown') kind. That
 -- is only correct while 'NKUnknown' remains the maximum, so a constructor appended after it
