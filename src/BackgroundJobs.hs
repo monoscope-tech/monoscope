@@ -176,7 +176,7 @@ data BgJobs
     -- instead of once per service-map page view.
     ServiceMapRollupTick UTCTime
   | -- | Roll one closed 5-minute bucket of one project's spans into
-    -- @service_dependency_edges@. Idempotent (upsert replaces), so re-running a bucket to
+    -- @service_dependency_edges_env@. Idempotent (upsert replaces), so re-running a bucket to
     -- absorb late-arriving spans is safe.
     ServiceMapRollup Projects.ProjectId UTCTime
   | MonoscopeAdminDaily

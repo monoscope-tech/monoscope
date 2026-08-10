@@ -481,7 +481,13 @@ async function render(
       card.querySelector('[data-node-latency]')!.textContent =
         n.duration_share != null ? `${(n.duration_share * 100).toFixed(1)}% of trace` : `${fmtDur(n.stats.p95_ns)} latency`;
       card.querySelector('[data-node-rps]')!.textContent = `${fmtRps(n.stats.throughput_per_sec)} req/s`;
-      card.title = n.label || 'Entry point';
+      // A collapsed head's stats are the *sum* of its members, so one endpoint failing
+      // outright inside forty healthy ones is a ~2% aggregate — invisible, and exactly the
+      // failure this map exists to catch. The head says how many of its members are unwell.
+      const bad = (members.get(n.key) ?? []).filter(m => m.stats.error_rate >= ERR_ELEVATED).length;
+      card.title = n.member_count
+        ? `${n.label} · ${n.member_count} endpoints${bad ? ` · ${bad} returning errors` : ''}`
+        : n.label || 'Entry point';
       layer.appendChild(card);
       cards.set(n.key, card);
     }

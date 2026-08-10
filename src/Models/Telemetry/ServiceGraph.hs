@@ -57,8 +57,15 @@ import Relude
 -- | What a node in the graph /is/. A sum type rather than @inferred :: Bool@ plus
 -- @isDatabase :: Bool@ so the renderer's shape/style dispatch is exhaustive and an
 -- "inferred entry-point database" cannot be constructed.
+-- The derived 'Ord' is load-bearing: 'buildServiceGraph' folds a collapsed head's kind with
+-- @min@ over its children, seeded with the head's own (absent, hence 'NKUnknown') kind. That
+-- is only correct while 'NKUnknown' remains the maximum, so a constructor appended after it
+-- would silently give every head the wrong kind.
+--
+-- >>> maximum [minBound .. maxBound :: NodeKind]
+-- NKUnknown
 data NodeKind = NKEntry | NKService | NKDatabase | NKQueue | NKExternal | NKUnknown
-  deriving stock (Eq, Generic, Ord, Read, Show)
+  deriving stock (Bounded, Enum, Eq, Generic, Ord, Read, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON, HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "NK" NodeKind
 
@@ -155,11 +162,14 @@ data ServiceNode = ServiceNode
   -- sizes its node. Nothing on the global map, where volume sizes nodes instead.
   , stats :: !MapStats
   , memberCount :: !(Maybe Int)
-  -- ^ @Just n@ (n >= 2) on a collapsed group head; 'Nothing' otherwise.
+  -- ^ @Just n@ (n >= 2) on a collapsed head, standing in for n peers.
   , groupKey :: !(Maybe Text)
-  -- ^ @Just g@ on a member of collapsed group @g@; 'Nothing' otherwise. At most one of
-  -- this and 'memberCount' is ever set — both are assigned at the single construction
-  -- site in 'buildServiceGraph', so a "head that is also a member" never exists.
+  -- ^ @Just g@ when this node is hidden inside collapsed head @g@.
+  --
+  -- All four combinations of these two are reachable, and the fourth is the one that makes
+  -- expansion nest: a domain head that itself falls into the long tail is a head /and/ a
+  -- member. Standalone, head, member, head-of-members — a sum type over the pair would be
+  -- isomorphic to it and buy no safety, so the pair stays and this comment is the contract.
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (NFData)
@@ -239,6 +249,21 @@ serviceMapFanout = CollapseTo 12
 
 -- | Turn candidate @(member, head)@ pairs into a lookup that only collapses a head with at
 -- least two members: a group of one is not a group, it is a peer wearing a badge.
+-- | The rollup's @env@ column is NOT NULL because it belongs to the primary key, so "no
+-- environment reported" is stored as the empty string. That is a storage detail and it stops
+-- here: above this boundary absence is 'Nothing', and nothing downstream has to know that ''
+-- means anything in particular.
+--
+-- >>> (envFromColumn "prod", envFromColumn "")
+-- (Just "prod",Nothing)
+envFromColumn :: Text -> Maybe Text
+envFromColumn = guarded (not . T.null)
+
+
+envToColumn :: Maybe Text -> Text
+envToColumn = fromMaybe ""
+
+
 collapseMap :: [(Text, Text)] -> Text -> Maybe Text
 collapseMap assocs = \k -> do
   g <- Map.lookup k m
@@ -350,7 +375,6 @@ buildServiceGraph rangeSecs nodeCap collapse totalDurationM samples =
     aggFor k = Map.findWithDefault mempty k inbound
 
     collapsing = collapse /= CollapseOff
-    fanoutCap = case collapse of CollapseOff -> maxBound; CollapseTo n -> n
 
     -- Collapse level 1 — peers sharing a registrable domain, e.g. 71 tenant subdomains.
     -- Bound as a value, not as a function of the key. Written as `domainOf k = collapseMap
@@ -370,7 +394,7 @@ buildServiceGraph rangeSecs nodeCap collapse totalDurationM samples =
     canonKind = Map.fromListWith min [(canon1 k, kindOf k) | k <- Map.keys nodeKinds]
     canonAgg = Map.fromListWith (<>) [(canon1 k, aggFor k) | k <- Map.keys nodeKinds]
     tailKeys =
-      drop fanoutCap
+      (case collapse of CollapseOff -> const []; CollapseTo n -> drop n)
         $ map fst
         $ sortOn
           (\(_, a) -> Down a.reqs)
@@ -389,7 +413,11 @@ buildServiceGraph rangeSecs nodeCap collapse totalDurationM samples =
     parentOf k = domainOf k <|> tailOf k
     rootOf k = maybe k rootOf (parentOf k)
 
-    allKeys = ordNub $ Map.keys nodeKinds <> mapMaybe parentOf (Map.keys nodeKinds) <> mapMaybe tailOf (Map.keys canonAgg)
+    -- The synthesised tail heads, as a set rather than a "rest:" prefix test: which kind of
+    -- node a key denotes is structure, and re-reading it out of the string downstream is how
+    -- that structure goes stale.
+    restHeads = S.fromList $ mapMaybe tailOf (Map.keys canonAgg)
+    allKeys = ordNub $ Map.keys nodeKinds <> mapMaybe parentOf (Map.keys nodeKinds) <> S.toList restHeads
     childrenOf = Map.fromListWith (<>) [(g, [k]) | k <- allKeys, Just g <- [parentOf k]]
     childrenAt k = Map.findWithDefault [] k childrenOf
     -- A head has no hops of its own; its numbers are exactly the sum of what it stands for.
@@ -412,7 +440,7 @@ buildServiceGraph rangeSecs nodeCap collapse totalDurationM samples =
     mkNode key agg =
       ServiceNode
         { key
-        , label = bool (nodeLabel key) (show (length (childrenAt key)) <> " more dependencies") ("rest:" `T.isPrefixOf` key)
+        , label = bool (nodeLabel key) (show (length (childrenAt key)) <> " more dependencies") (key `S.member` restHeads)
         , kind = kindAt key
         , inferred = inferredKind (kindAt key)
         , durationShare = (\total -> if total > 0 then Just (fromIntegral agg.durNs / fromIntegral total) else Nothing) =<< totalDurationM
@@ -514,9 +542,9 @@ traceEdgeSamples spans = (entryEdges <> serviceEdges <> inferredEdges, totalDura
 -- | One rolled-up edge for a single bucket. Kinds travel with the keys so the read path
 -- rebuilds node shapes without re-deriving them.
 data RollupEdge = RollupEdge
-  { env :: !Text
-  -- ^ Deployment environment of the /caller/, '' when the span carried none. Part of the
-  -- hop's identity: prod and staging calling the same dependency are different edges.
+  { env :: !(Maybe Text)
+  -- ^ Deployment environment of the /caller/. Part of the hop's identity: prod and staging
+  -- calling the same dependency are different edges.
   , sourceKey :: !Text
   , sourceKind :: !NodeKind
   , targetKey :: !Text
@@ -567,7 +595,7 @@ sliceRowsToEdges rows =
     grouped =
       Map.fromListWith
         (<>)
-        [ ((r.env, r.src, r.srcKind, r.tgt, r.tgtKind), HopAgg r.n r.errs (LatencyHist $ one (fromIntegral r.latBucket, r.n)) r.durNs)
+        [ ((envFromColumn r.env, r.src, r.srcKind, r.tgt, r.tgtKind), HopAgg r.n r.errs (LatencyHist $ one (fromIntegral r.latBucket, r.n)) r.durNs)
         | r <- rows
         ]
 
@@ -700,7 +728,7 @@ upsertServiceDependencyEdges pid bucket es =
                   lat_hist = EXCLUDED.lat_hist,
                   updated_at = now()|]
   where
-    envs = V.fromList $ (.env) <$> es
+    envs = V.fromList $ envToColumn . (.env) <$> es
     srcs = V.fromList $ (.sourceKey) <$> es
     srcKinds = V.fromList $ kindText . (.sourceKind) <$> es
     tgts = V.fromList $ (.targetKey) <$> es
@@ -756,7 +784,7 @@ serviceGraphForRange pid envM lo hi = do
           SELECT 1 FROM apis.service_dependency_edges_env e
           WHERE e.project_id = old.project_id AND e.bucket = old.bucket)|]
   let rangeSecs = realToFrac (diffUTCTime hi lo)
-      keep ev = maybe True (== ev) envM
+      keep ev = maybe True ((== envFromColumn ev) . Just) envM
       samples =
         [ EdgeSample (sk, parseNodeKind skk) (tk, parseNodeKind tkk) r e (histFromObject h) d
         | (ev, sk, skk, tk, tkk, r, e, d, AesonText h) <- rows
@@ -765,7 +793,7 @@ serviceGraphForRange pid envM lo hi = do
       -- Every environment in the range, not just the selected one: a facet that hid the
       -- options you are not currently on would be a dead end. '' is unlabelled traffic and
       -- is not offered as a choice.
-      seen = ordNub [ev | (ev, _, _, _, _, _, _, _, _) <- rows, not (T.null ev)]
+      seen = ordNub [e | (ev, _, _, _, _, _, _, _, _) <- rows, Just e <- [envFromColumn ev]]
       graph = buildServiceGraph rangeSecs serviceMapNodeCap serviceMapFanout Nothing samples
   pure graph{environments = V.fromList (sort seen)}
 

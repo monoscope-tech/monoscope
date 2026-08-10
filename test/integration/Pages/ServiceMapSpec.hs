@@ -162,6 +162,25 @@ spec = around withTestResources do
       V.length (drawnNodes graph) `shouldBe` 21 -- api + all 20, nothing folded
       V.toList (V.filter (isJust . (.memberCount)) graph.nodes) `shouldBe` []
 
+    -- The state that a stale haddock claimed could not exist: a domain head that itself
+    -- falls into the long tail is a head *and* a member. It is what makes expansion nest —
+    -- "N more dependencies" opens into "myshopify.com x3", which opens into its own members
+    -- — and nothing pinned it, which is how the wrong invariant survived in the type.
+    it "buildServiceGraph_aDomainHeadInTheTailIsBothHeadAndMember" \_ -> do
+      let tenants = ["http:t" <> show n <> ".myshopify.com" | n <- [1 :: Int .. 3]]
+          loud = ["http:loud" <> show n <> ".example" <> show n <> ".com" | n <- [1 :: Int .. 4]]
+          graph =
+            buildServiceGraph 60 serviceMapNodeCap (CollapseTo 2) Nothing
+              $ [hop t NKExternal 1 | t <- tenants]
+              <> [hop l NKExternal 5000 | l <- loud]
+
+      -- The quiet domain group is outranked by the loud singletons, so it folds into the
+      -- tail while still standing in for its own three members.
+      (nodeBy graph "grp:http:myshopify.com" <&> \n -> (n.memberCount, isJust n.groupKey))
+        `shouldBe` Just (Just 3, True)
+      -- And its members still point at it, not at the tail head above it.
+      map (.groupKey) (mapMaybe (nodeBy graph) tenants) `shouldBe` replicate 3 (Just "grp:http:myshopify.com")
+
     -- A regression guard with a stopwatch, because the bug it pins had no wrong output —
     -- only a cost. `domainOf` was written as a function of the key, so the collapse map was
     -- rebuilt on every lookup: quadratic in node count, and a 221-node project spent seconds
