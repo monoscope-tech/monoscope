@@ -3,7 +3,7 @@ module Pages.ServiceMapSpec (spec) where
 import Data.List qualified as L
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as LT
-import Data.Time (UTCTime, addUTCTime)
+import Data.Time (UTCTime, addUTCTime, diffUTCTime, getCurrentTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 (nextRandom)
 import Data.Vector qualified as V
@@ -160,6 +160,21 @@ spec = around withTestResources do
           graph = buildServiceGraph 0 serviceMapNodeCap CollapseOff (Just 1_000_000) [hop p NKExternal 1 | p <- peers]
       V.length (drawnNodes graph) `shouldBe` 21 -- api + all 20, nothing folded
       V.toList (V.filter (isJust . (.memberCount)) graph.nodes) `shouldBe` []
+
+    -- A regression guard with a stopwatch, because the bug it pins had no wrong output —
+    -- only a cost. `domainOf` was written as a function of the key, so the collapse map was
+    -- rebuilt on every lookup: quadratic in node count, and a 221-node project spent seconds
+    -- in the fold. 400 nodes finishes in milliseconds when it is bound as a value, and takes
+    -- long enough to be unmissable when it is not.
+    it "buildServiceGraph_foldsALargeGraphWithoutQuadraticBlowup" \_ -> do
+      let peers = [(n, "http:merchant" <> show n <> ".example" <> show (n `mod` 40) <> ".com") | n <- [1 :: Int .. 400]]
+          samples = [hop p NKExternal (fromIntegral n) | (n, p) <- peers]
+      start <- getCurrentTime
+      let graph = buildServiceGraph 60 serviceMapNodeCap serviceMapFanout Nothing samples
+      V.length graph.nodes `seq` pass
+      elapsed <- flip diffUTCTime start <$> getCurrentTime
+      V.length (drawnNodes graph) `shouldSatisfy` (> 0)
+      elapsed `shouldSatisfy` (< 2.0)
 
     -- The Env facet is a rollup dimension, so it has to survive the whole round trip: read
     -- off the span's resource, grouped into the rollup, offered as the facet's options,

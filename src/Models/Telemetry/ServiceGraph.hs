@@ -352,7 +352,13 @@ buildServiceGraph rangeSecs nodeCap collapse totalDurationM samples =
     -- Collapse level 1 — peers sharing a registrable domain, e.g. 71 tenant subdomains.
     collapsing = collapse /= CollapseOff
     fanoutCap = case collapse of CollapseOff -> maxBound; CollapseTo n -> n
-    domainOf k = guard collapsing >> collapseMap [(x, g) | x <- Map.keys nodeKinds, Just g <- [groupKeyOf (kindOf x) x]] k
+    -- Bound as a value, not as a function of the key. Written as `domainOf k = collapseMap
+    -- [...] k` the association list and both of its Maps are rebuilt on *every lookup*, and
+    -- this is called once per node from canon1, parentOf, rootOf and climb — which is how a
+    -- 31-service map came to spend a second in the graph fold.
+    domainOf
+      | collapsing = collapseMap [(x, g) | x <- Map.keys nodeKinds, Just g <- [groupKeyOf (kindOf x) x]]
+      | otherwise = const Nothing
 
     -- Collapse level 2 — the long tail. A domain fold cannot merge hundreds of *unrelated*
     -- customer domains (one per merchant), and those are exactly what fills a real map: a
