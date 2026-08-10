@@ -22,8 +22,8 @@ import Utils (faSprite_, prettyPrintCount)
 -- | Render the map shell for @graph@ into a container with id @elId@. The graph travels
 -- as an embedded @application/json@ payload rather than an HTMX swap: HTMX swaps HTML,
 -- and a canvas renderer needs a model, not markup.
-serviceMapPanel_ :: Projects.ProjectId -> Text -> ServiceGraph -> HM.HashMap Text Text -> Html ()
-serviceMapPanel_ pid elId graph colors = div_ [class_ "w-full flex flex-col gap-3 relative"] do
+serviceMapPanel_ :: Projects.ProjectId -> Text -> ServiceGraph -> HM.HashMap Text Text -> Maybe Text -> Html ()
+serviceMapPanel_ pid elId graph colors selectedEnv = div_ [class_ "w-full flex flex-col gap-3 relative"] do
   case graph.error of
     Just msg -> emptyState_ "triangle-exclamation" "Couldn't load the service map" msg
     Nothing
@@ -38,6 +38,7 @@ serviceMapPanel_ pid elId graph colors = div_ [class_ "w-full flex flex-col gap-
                 <> show (V.length (drawnNodes graph))
                 <> " busiest dependencies. Quieter ones are folded away — search to find a specific one."
           serviceMapLegend_ graph colors
+          envFacet_ pid graph selectedEnv
           scopeChip_
           -- The viewport scrolls; the canvas inside it is sized to the graph. Fitting a big
           -- graph into a fixed box is what shrinks cards until they overlap, so the map is
@@ -59,6 +60,27 @@ serviceMapPanel_ pid elId graph colors = div_ [class_ "w-full flex flex-col gap-
             $ AE.encode
             $ AE.object [AEKey.fromText k AE..= v | (k, v) <- HM.toList colors]
           dependencyTable_ graph
+
+
+-- | The Env facet, in the shape Datadog puts beside its flow map. Server-side, because the
+-- environment is a rollup dimension rather than something the payload can be filtered down
+-- to: picking one is a new query, so it is a link and it survives a reload and a share.
+--
+-- Hidden entirely when nothing in range reports an environment — a facet with no choices in
+-- it is furniture, not a control.
+envFacet_ :: Projects.ProjectId -> ServiceGraph -> Maybe Text -> Html ()
+envFacet_ pid graph selected =
+  unless (V.null graph.environments) $ div_ [class_ "flex flex-wrap items-center gap-1.5 px-1 text-xs"] do
+    span_ [class_ "text-textWeak font-medium mr-0.5"] "Env"
+    forM_ (Nothing : (Just <$> V.toList graph.environments)) \opt ->
+      a_
+        [ class_
+            $ "rounded-md border px-2 py-0.5 "
+            <> bool "border-strokeWeak text-textWeak hover:bg-fillWeak" "border-strokeBrand-strong bg-fillBrand-weak text-textStrong font-medium" (opt == selected)
+        , href_ $ "/p/" <> pid.toText <> "/service_map" <> maybe "" ("?env=" <>) opt
+        ]
+        $ toHtml
+        $ fromMaybe "All" opt
 
 
 -- | The active scope, in the shape Datadog puts above its flow map: a dismissable chip

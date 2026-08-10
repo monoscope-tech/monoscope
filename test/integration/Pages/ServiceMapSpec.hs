@@ -40,12 +40,33 @@ ingestFixture tr apiKey ts = do
   span' qSid (Just coSid) "publish" PT.Span'SPAN_KIND_PRODUCER (svc "checkout") [mkAttr "server.address" "orders.v1"]
 
 
+-- | The same shape as 'ingestFixture' but split across two deployment environments, so the
+-- Env facet has something real to group, offer and filter on.
+ingestEnvFixture :: TestResources -> Text -> UTCTime -> IO ()
+ingestEnvFixture tr apiKey ts = do
+  let hexId = T.replace "-" "" . UUID.toText <$> nextRandom
+  let svc s env = mkResource apiKey [mkAttr "service.name" s, mkAttr "deployment.environment.name" env]
+      span' trId sid parent name kind resource attrs =
+        ingestSpanReq tr $ withSpanKind kind $ mkSpanRequest trId sid parent name [] Nothing attrs resource ts
+  -- prod: gateway -> checkout -> postgres
+  (t1, gw, gwc, co, db) <- (,,,,) <$> hexId <*> hexId <*> hexId <*> hexId <*> hexId
+  span' t1 gw Nothing "GET /checkout" PT.Span'SPAN_KIND_SERVER (svc "gateway" "prod") []
+  span' t1 gwc (Just gw) "POST checkout" PT.Span'SPAN_KIND_CLIENT (svc "gateway" "prod") []
+  span' t1 co (Just gwc) "POST /checkout" PT.Span'SPAN_KIND_SERVER (svc "checkout" "prod") []
+  span' t1 db (Just co) "pg.query" PT.Span'SPAN_KIND_CLIENT (svc "checkout" "prod") [mkAttr "db.system.name" "postgresql"]
+  -- staging: the same two services, one hop, nothing downstream
+  (t2, gw2, gwc2, co2) <- (,,,) <$> hexId <*> hexId <*> hexId <*> hexId
+  span' t2 gw2 Nothing "GET /checkout" PT.Span'SPAN_KIND_SERVER (svc "gateway" "staging") []
+  span' t2 gwc2 (Just gw2) "POST checkout" PT.Span'SPAN_KIND_CLIENT (svc "gateway" "staging") []
+  span' t2 co2 (Just gwc2) "POST /checkout" PT.Span'SPAN_KIND_SERVER (svc "checkout" "staging") []
+
+
 -- | Roll the fixture's bucket and read the graph back, exactly as the page does.
 rollAndRead :: TestResources -> UTCTime -> IO ServiceGraph
 rollAndRead tr ts = runTestBg ts tr do
   edges <- rollupServiceEdges False testPid (addUTCTime (-300) ts) (addUTCTime 300 ts)
   upsertServiceDependencyEdges testPid ts edges
-  serviceGraphForRange testPid (addUTCTime (-600) ts) (addUTCTime 600 ts)
+  serviceGraphForRange testPid Nothing (addUTCTime (-600) ts) (addUTCTime 600 ts)
 
 
 -- | Assert every needle is present, naming the ones that are not. A bare
@@ -140,11 +161,41 @@ spec = around withTestResources do
       V.length (drawnNodes graph) `shouldBe` 21 -- api + all 20, nothing folded
       V.toList (V.filter (isJust . (.memberCount)) graph.nodes) `shouldBe` []
 
+    -- The Env facet is a rollup dimension, so it has to survive the whole round trip: read
+    -- off the span's resource, grouped into the rollup, offered as the facet's options,
+    -- honoured as a filter, and finally rendered as a control on the page.
+    it "serviceMap_environmentFacetRoundTripsFromSpanToRenderedControl" \tr -> do
+      apiKey <- createTestAPIKey tr testPid "service-map-env-key"
+      ingestEnvFixture tr apiKey frozenTime
+      g <- runTestBg frozenTime tr do
+        edges <- rollupServiceEdges False testPid (addUTCTime (-300) frozenTime) (addUTCTime 300 frozenTime)
+        upsertServiceDependencyEdges testPid frozenTime edges
+        serviceGraphForRange testPid Nothing (addUTCTime (-600) frozenTime) (addUTCTime 600 frozenTime)
+
+      -- Both environments are offered, sorted, however many hops each contributed.
+      V.toList g.environments `shouldBe` ["prod", "staging"]
+
+      -- Selecting one keeps only its hops. staging has the single gateway->checkout call.
+      prod <- runTestBg frozenTime tr $ serviceGraphForRange testPid (Just "prod") (addUTCTime (-600) frozenTime) (addUTCTime 600 frozenTime)
+      staging <- runTestBg frozenTime tr $ serviceGraphForRange testPid (Just "staging") (addUTCTime (-600) frozenTime) (addUTCTime 600 frozenTime)
+      map fst (edgePairs staging) `shouldNotContain` ["checkout"] -- no db/queue hops in staging
+      length (edgePairs prod) `shouldSatisfy` (> length (edgePairs staging))
+
+      -- An environment nothing reported yields an empty map rather than silently falling
+      -- back to "all", which would show prod traffic under someone else's label.
+      none <- runTestBg frozenTime tr $ serviceGraphForRange testPid (Just "qa") (addUTCTime (-600) frozenTime) (addUTCTime 600 frozenTime)
+      V.toList none.edges `shouldBe` []
+
+      -- And the control itself renders, with an option per environment plus "All".
+      (_, page) <- testServant tr $ ServiceMap.serviceMapGetH testPid Nothing Nothing (Just "1H") (Just "prod")
+      let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
+      html `shouldContainAll` ["?env=prod", "?env=staging", ">All<"]
+
     -- An empty project must produce an empty graph with no error. The `error` field exists
     -- precisely so a failed query can't masquerade as "you have no services"; this pins the
     -- other side of that contract.
     it "emptyProject_producesEmptyGraphWithoutError" \tr -> do
-      g <- runTestBg frozenTime tr $ serviceGraphForRange testPid (addUTCTime (-600) frozenTime) frozenTime
+      g <- runTestBg frozenTime tr $ serviceGraphForRange testPid Nothing (addUTCTime (-600) frozenTime) frozenTime
       V.toList g.nodes `shouldBe` []
       V.toList g.edges `shouldBe` []
       g.error `shouldBe` Nothing
@@ -230,7 +281,7 @@ spec = around withTestResources do
       -- Rolled buckets are always in the past (the dispatcher lags 10 minutes), and the read
       -- range is half-open, so advance the clock rather than querying a bucket at exactly now.
       setTestTime tr.trTestClock (addUTCTime 600 frozenTime)
-      (_, page) <- testServant tr $ ServiceMap.serviceMapGetH testPid Nothing Nothing (Just "1H")
+      (_, page) <- testServant tr $ ServiceMap.serviceMapGetH testPid Nothing Nothing (Just "1H") Nothing
       let ServiceMap.ServiceMapPage (PageCtx conf pd) = page
           html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
       conf.pageTitle `shouldBe` "Service Map"
@@ -252,7 +303,7 @@ spec = around withTestResources do
       html `shouldContainAll` ["Events", "Metrics", "Service Map"]
 
     it "serviceMapFilter_quotesHyphenatedEventNameForHyperscript" \tr -> do
-      (_, page) <- testServant tr $ ServiceMap.serviceMapGetH testPid Nothing Nothing (Just "1H")
+      (_, page) <- testServant tr $ ServiceMap.serviceMapGetH testPid Nothing Nothing (Just "1H") Nothing
       let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
       html `shouldContainAll` ["send &quot;service-map-filter&quot;(q: my value)"]
 
