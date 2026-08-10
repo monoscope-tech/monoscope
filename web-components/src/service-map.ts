@@ -318,6 +318,37 @@ export type ServiceMapHandle = {
 };
 
 export const FILTER_EVENT = 'service-map-filter';
+
+/**
+ * Interop for the Lucid-side filter input. Hyperscript parses an event name as an
+ * identifier path, so `send service-map-filter(...)` is a parse error that costs the whole
+ * attribute — the input calls this instead, and the wire event name stays dashed like every
+ * other custom event. `id` scopes the filter when a page holds more than one map.
+ */
+export const serviceMapFilter = (q: string, id?: string): void => {
+  document.dispatchEvent(new CustomEvent(FILTER_EVENT, { detail: { q, id } }));
+};
+(window as any).serviceMapFilter = serviceMapFilter;
+
+/**
+ * Where a node-menu action goes. Spans and logs are one table and one surface here (`pSource`
+ * knows only `spans` and `metrics`), so the two explorer entries differ by KIND rather than by
+ * destination — and both use a viz type that exists. `viz_type=traces` did not: an unknown viz
+ * type falls through to the default, which is why "View in trace search" silently landed on the
+ * plain log list, indistinguishable from "View logs".
+ */
+export const menuHref = (base: string, action: string, key: string): string => {
+  const explorer = (kind: string) =>
+    `${base}/log_explorer?query=${encodeURIComponent(`resource.service.name=="${key}" AND ${kind}`)}&viz_type=logs`;
+  switch (action) {
+    case 'traces': return explorer('kind!="log"');
+    case 'logs': return explorer('kind=="log"');
+    case 'metrics': return `${base}/metrics?metric_source=${encodeURIComponent(key)}`;
+    case 'monitors': return `${base}/monitors`;
+    default: return '#';
+  }
+};
+
 const handles = new Map<string, ServiceMapHandle>();
 export const getServiceMapHandle = (containerId: string): ServiceMapHandle | undefined => handles.get(containerId);
 
@@ -449,6 +480,15 @@ async function render(
   // --- painting ----------------------------------------------------------------
   const pos = new Map<string, Point>();
 
+  // Decoration hooks are optional by construction. `querySelector(...)!` erases at runtime,
+  // so one hook missing from the template — a drifted template, or a cached bundle served
+  // against a newer one — threw mid-buildCards and left the whole map blank. A missing hook
+  // must cost that one detail and nothing else.
+  const withHook = (root: ParentNode, sel: string, f: (e: HTMLElement) => void) => {
+    const e = root.querySelector<HTMLElement>(sel);
+    if (e) f(e);
+  };
+
   const styleNode = (n: ServiceNode, card: HTMLElement, lit: boolean, onPath: boolean) => {
     const s = getChartStyles();
     const failing = n.stats.error_rate >= ERR_FAILING;
@@ -462,28 +502,27 @@ async function render(
     card.style.borderStyle = n.inferred ? 'dashed' : 'solid';
     // The right-edge bar is health and only health — green/amber/red, the way Datadog grades
     // a service. Service identity moved to the icon, which is where it does not compete.
-    const health = card.querySelector<HTMLElement>('[data-node-health]')!;
-    health.style.background = failing ? s.errorColor : elevated ? s.warningColor : s.successColor;
-    const icon = card.querySelector<HTMLElement>('[data-node-icon]')!;
-    icon.style.color = !n.inferred && colors[n.key] ? resolveColor(n.key, colors) : '';
-    const err = card.querySelector<HTMLElement>('[data-node-errors]')!;
-    err.style.color = failing ? s.errorColor : elevated ? s.warningColor : '';
+    withHook(card, '[data-node-health]', h => (h.style.background = failing ? s.errorColor : elevated ? s.warningColor : s.successColor));
+    withHook(card, '[data-node-icon]', i => (i.style.color = !n.inferred && colors[n.key] ? resolveColor(n.key, colors) : ''));
+    withHook(card, '[data-node-errors]', e => (e.style.color = failing ? s.errorColor : elevated ? s.warningColor : ''));
   };
 
   const buildCards = () => {
     layer.textContent = '';
     cards = new Map();
+    const proto = tpl.content.firstElementChild;
+    if (!proto) return;
     for (const n of drawn.nodes) {
-      const card = tpl.content.firstElementChild!.cloneNode(true) as HTMLElement;
+      const card = proto.cloneNode(true) as HTMLElement;
       card.dataset.key = n.key;
-      card.querySelector('[data-node-icon]')!.innerHTML = KIND_ICON[n.kind] ?? KIND_ICON.unknown;
-      card.querySelector('[data-node-name]')!.textContent = n.label || 'Entry point';
-      const count = card.querySelector<HTMLElement>('[data-node-count]')!;
-      if (n.member_count && !n.key.startsWith('rest:')) { count.textContent = `×${n.member_count}`; count.classList.remove('hidden'); }
-      card.querySelector('[data-node-errors]')!.textContent = `${(n.stats.error_rate * 100).toFixed(2)}% errors`;
-      card.querySelector('[data-node-latency]')!.textContent =
-        n.duration_share != null ? `${(n.duration_share * 100).toFixed(1)}% of trace` : `${fmtDur(n.stats.p95_ns)} latency`;
-      card.querySelector('[data-node-rps]')!.textContent = `${fmtRps(n.stats.throughput_per_sec)} req/s`;
+      withHook(card, '[data-node-icon]', i => (i.innerHTML = KIND_ICON[n.kind] ?? KIND_ICON.unknown));
+      withHook(card, '[data-node-name]', e => (e.textContent = n.label || 'Entry point'));
+      if (n.member_count && !n.key.startsWith('rest:'))
+        withHook(card, '[data-node-count]', c => { c.textContent = `×${n.member_count}`; c.classList.remove('hidden'); });
+      withHook(card, '[data-node-errors]', e => (e.textContent = `${(n.stats.error_rate * 100).toFixed(2)}% errors`));
+      withHook(card, '[data-node-latency]', e => (e.textContent =
+        n.duration_share != null ? `${(n.duration_share * 100).toFixed(1)}% of trace` : `${fmtDur(n.stats.p95_ns)} latency`));
+      withHook(card, '[data-node-rps]', e => (e.textContent = `${fmtRps(n.stats.throughput_per_sec)} req/s`));
       // A collapsed head's stats are the *sum* of its members, so one endpoint failing
       // outright inside forty healthy ones is a ~2% aggregate — invisible, and exactly the
       // failure this map exists to catch. The head says how many of its members are unwell.
@@ -578,16 +617,10 @@ async function render(
     menu.dataset.nodeKey = key;
     const title = menu.querySelector<HTMLElement>('[data-menu-title]');
     if (title) title.textContent = label;
-    const q = encodeURIComponent(`resource.service.name=="${key}"`);
     for (const a of menu.querySelectorAll<HTMLAnchorElement>('[data-menu-action]')) {
       const action = a.dataset.menuAction!;
       a.classList.toggle('hidden', inferred && action !== 'inspect' && action !== 'focus');
-      a.href =
-        action === 'traces' ? `${pid}/log_explorer?query=${q}&viz_type=traces`
-        : action === 'logs' ? `${pid}/log_explorer?query=${q}`
-        : action === 'metrics' ? `${pid}/metrics?metric_source=${encodeURIComponent(key)}`
-        : action === 'monitors' ? `${pid}/monitors`
-        : '#';
+      a.href = menuHref(pid, action, key);
     }
     menu.style.left = `${x}px`;
     menu.style.top = `${y}px`;

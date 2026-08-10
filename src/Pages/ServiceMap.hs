@@ -75,7 +75,9 @@ serviceMapPage_ pd = div_ [class_ "w-full h-full overflow-y-auto c-scroll p-4 fl
       [ type_ "search"
       , class_ "ml-auto input input-sm border border-strokeWeak bg-fillWeaker rounded-lg w-56 max-md:w-32"
       , placeholder_ "Filter services"
-      , [__|on input send "service-map-filter"(q: my value) to the closest <div/> then halt|]
+      , -- `call`, not `send`: hyperscript parses an event name as an identifier path, so a
+        -- dashed custom-event name is a parse error and the whole attribute is dropped.
+        [__|on input call window.serviceMapFilter(me.value) then halt|]
       ]
   serviceMapPanel_ pd.pid "global-service-map" pd.graph serviceColors pd.env
   where

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { breakCycles, layoutGraph, filterSelection, hydrateServiceMaps, visibleGraph, edgeKey, edgePath, scopeTo, CARD_W, CARD_H, type Edge } from '../src/service-map';
+import { breakCycles, layoutGraph, filterSelection, hydrateServiceMaps, visibleGraph, edgeKey, edgePath, scopeTo, menuHref, serviceMapFilter, FILTER_EVENT, CARD_W, CARD_H, type Edge } from '../src/service-map';
 
 const e = (source: string, target: string): Edge => ({ source, target });
 const snapshot = async (keys: string[], edges: Edge[]) => {
@@ -248,5 +248,49 @@ describe('filterSelection', () => {
     const a = filterSelection(nodes, edges, 'a');
     const b = filterSelection([...nodes].reverse(), edges, 'a');
     expect([...a.litNodes].sort()).toEqual([...b.litNodes].sort());
+  });
+});
+
+describe('serviceMapFilter', () => {
+  it('dispatches the dashed wire event the renderer listens for', () => {
+    // The Lucid input reaches this through hyperscript `call`, not `send`: hyperscript parses
+    // an event name as an identifier path, so `send service-map-filter(...)` was a parse
+    // error that dropped the whole attribute (and, in prod, the filter with it).
+    const seen: any[] = [];
+    const onFilter = (ev: Event) => seen.push((ev as CustomEvent).detail);
+    document.addEventListener(FILTER_EVENT, onFilter);
+    try {
+      serviceMapFilter('checkout');
+      serviceMapFilter('db', 'trace-map');
+    } finally {
+      document.removeEventListener(FILTER_EVENT, onFilter);
+    }
+    expect(seen).toEqual([{ q: 'checkout', id: undefined }, { q: 'db', id: 'trace-map' }]);
+  });
+});
+
+describe('menuHref', () => {
+  const base = '/p/proj';
+  const query = (href: string) => decodeURIComponent(new URL(href, 'https://x').searchParams.get('query') ?? '');
+
+  it('splits the two explorer entries by kind instead of sending both to the same view', () => {
+    const traces = menuHref(base, 'traces', 'checkout');
+    const logs = menuHref(base, 'logs', 'checkout');
+    expect(query(traces)).toBe('resource.service.name=="checkout" AND kind!="log"');
+    expect(query(logs)).toBe('resource.service.name=="checkout" AND kind=="log"');
+    expect(traces).not.toBe(logs);
+  });
+
+  it('only ever asks for a viz type that exists', () => {
+    // visTypes is logs | timeseries | timeseries_line | patterns | sessions; `traces` is not
+    // one, and an unknown value falls through to the default instead of erroring.
+    for (const action of ['traces', 'logs'])
+      expect(new URL(menuHref(base, action, 'svc'), 'https://x').searchParams.get('viz_type')).toBe('logs');
+  });
+
+  it('routes the non-explorer actions and refuses to invent a link for the rest', () => {
+    expect(menuHref(base, 'metrics', 'a/b')).toBe('/p/proj/metrics?metric_source=a%2Fb');
+    expect(menuHref(base, 'monitors', 'svc')).toBe('/p/proj/monitors');
+    for (const action of ['inspect', 'focus', 'nonsense']) expect(menuHref(base, action, 'svc')).toBe('#');
   });
 });

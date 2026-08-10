@@ -25,10 +25,12 @@ const components: Array<[string, () => Promise<unknown>]> = [
   ['[data-service-map]', () => import('./service-map').then(m => m.hydrateServiceMaps())],
 ];
 
-// The trace page's inline initTraceCharts can call this before the lazy module
-// has loaded, so forward through a shim; service-map.ts replaces it on load.
+// The trace page's inline initTraceCharts and the map's filter input can call these before
+// the lazy module has loaded, so forward through shims; service-map.ts replaces them on load.
 (window as any).serviceMapChart = (...args: unknown[]) =>
   void import('./service-map').then(m => (m.serviceMapChart as (...a: any[]) => void)(...args));
+(window as any).serviceMapFilter = (...args: unknown[]) =>
+  void import('./service-map').then(m => (m.serviceMapFilter as (...a: any[]) => void)(...args));
 
 const loadComponents = () => components.forEach(([selector, load]) => {
   if (document.querySelector(selector)) void load();
