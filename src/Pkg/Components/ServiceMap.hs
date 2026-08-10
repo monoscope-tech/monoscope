@@ -209,13 +209,22 @@ menuItems =
 -- promise about what red means and a reader is entitled to know where it sits.
 serviceMapLegend_ :: ServiceGraph -> HM.HashMap Text Text -> Html ()
 serviceMapLegend_ graph colors = div_ [class_ "flex flex-col gap-2"] do
+  -- Written out rather than folded over a list of class strings: Tailwind's scanner has to
+  -- see each set of classes as a literal at the element that wears them, and a reader should
+  -- not have to jump to a `where` clause to learn what a swatch looks like.
   div_ [class_ "flex flex-wrap items-center gap-x-4 gap-y-1 px-1 text-xs text-textWeak"] do
-    forM_ borderLegend \(cls, label) -> div_ [class_ "flex items-center gap-1.5"] do
-      div_ [class_ $ "w-4 h-2.5 rounded-sm shrink-0 " <> cls] pass
-      span_ [] $ toHtml label
-    forM_ healthLegend \(cls, label) -> div_ [class_ "flex items-center gap-1.5"] do
-      div_ [class_ $ "w-2.5 h-2.5 rounded-full shrink-0 " <> cls] pass
-      span_ [] $ toHtml label
+    div_ [class_ "flex items-center gap-1.5"] do
+      div_ [class_ "w-4 h-2.5 rounded-sm shrink-0 border border-strokeStrong"] pass
+      span_ [] "Instrumented service"
+    div_ [class_ "flex items-center gap-1.5"] do
+      div_ [class_ "w-4 h-2.5 rounded-sm shrink-0 border border-dashed border-strokeStrong"] pass
+      span_ [] "Uninstrumented dependency"
+    div_ [class_ "flex items-center gap-1.5"] do
+      div_ [class_ "w-2.5 h-2.5 rounded-full shrink-0 bg-fillWarning-strong"] pass
+      span_ [] "Elevated errors (1%+)"
+    div_ [class_ "flex items-center gap-1.5"] do
+      div_ [class_ "w-2.5 h-2.5 rounded-full shrink-0 bg-fillError-strong"] pass
+      span_ [] "Failing (5%+)"
   -- One swatch is not a colour key, it is a lone label pretending to be one.
   when (length services > 1) $ div_ [class_ "flex items-start gap-3 px-1 text-xs text-textWeak"] do
     span_ [class_ "shrink-0 font-medium"] "Service colors"
@@ -225,16 +234,6 @@ serviceMapLegend_ graph colors = div_ [class_ "flex flex-col gap-2"] do
         div_ [class_ $ "w-2.5 h-2.5 rounded-full shrink-0 " <> HM.findWithDefault "bg-fillNeutral-strong" service colors] pass
         span_ [class_ "truncate max-w-40"] $ toHtml service
   where
-    borderLegend :: [(Text, Text)]
-    borderLegend =
-      [ ("border border-strokeStrong", "Instrumented service")
-      , ("border border-dashed border-strokeStrong", "Uninstrumented dependency")
-      ]
-    healthLegend :: [(Text, Text)]
-    healthLegend =
-      [ ("bg-fillWarning-strong", "Elevated errors (1%+)")
-      , ("bg-fillError-strong", "Failing (5%+)")
-      ]
     services = ordNub [n.label | n <- V.toList graph.nodes, n.kind == NKService, not n.inferred, not (T.null n.label)]
 
 

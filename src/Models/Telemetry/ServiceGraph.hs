@@ -349,9 +349,10 @@ buildServiceGraph rangeSecs nodeCap collapse totalDurationM samples =
     inbound = Map.fromListWith (<>) [(fst s.target, aggOf s) | s <- samples]
     aggFor k = Map.findWithDefault mempty k inbound
 
-    -- Collapse level 1 — peers sharing a registrable domain, e.g. 71 tenant subdomains.
     collapsing = collapse /= CollapseOff
     fanoutCap = case collapse of CollapseOff -> maxBound; CollapseTo n -> n
+
+    -- Collapse level 1 — peers sharing a registrable domain, e.g. 71 tenant subdomains.
     -- Bound as a value, not as a function of the key. Written as `domainOf k = collapseMap
     -- [...] k` the association list and both of its Maps are rebuilt on *every lookup*, and
     -- this is called once per node from canon1, parentOf, rootOf and climb — which is how a
@@ -393,12 +394,12 @@ buildServiceGraph rangeSecs nodeCap collapse totalDurationM samples =
     childrenAt k = Map.findWithDefault [] k childrenOf
     -- A head has no hops of its own; its numbers are exactly the sum of what it stands for.
     aggAt k = case childrenAt k of [] -> aggFor k; ks -> foldMap aggAt ks
-    kindAt k = case childrenAt k of [] -> kindOf k; (x : xs) -> foldl' min (kindAt x) (map kindAt xs)
+    kindAt k = foldr (min . kindAt) (kindOf k) (childrenAt k)
 
     -- The cap ranks what the map actually draws; collapsed members ride along under it.
     topLevel = sortOn (\(_, a) -> Down a.reqs) [(k, aggAt k) | k <- allKeys, isNothing (parentOf k)]
-    keptRoots = S.fromList $ map fst $ take nodeCap topLevel
-    keptTop = [(k, a) | (k, a) <- take nodeCap topLevel]
+    keptTop = take nodeCap topLevel
+    keptRoots = S.fromList (map fst keptTop)
     keptMembers =
       take serviceMapMemberCap
         $ sortOn
@@ -411,12 +412,12 @@ buildServiceGraph rangeSecs nodeCap collapse totalDurationM samples =
     mkNode key agg =
       ServiceNode
         { key
-        , label = maybe (nodeLabel key) (const $ show (length (childrenAt key)) <> " more dependencies") (T.stripPrefix "rest:" key)
+        , label = bool (nodeLabel key) (show (length (childrenAt key)) <> " more dependencies") ("rest:" `T.isPrefixOf` key)
         , kind = kindAt key
         , inferred = inferredKind (kindAt key)
         , durationShare = (\total -> if total > 0 then Just (fromIntegral agg.durNs / fromIntegral total) else Nothing) =<< totalDurationM
         , stats = statsOf agg
-        , memberCount = case childrenAt key of [] -> Nothing; ks -> Just (length ks)
+        , memberCount = viaNonEmpty length (childrenAt key)
         , groupKey = parentOf key
         }
 
@@ -676,18 +677,14 @@ rollupServiceEdges useTf pid lo hi =
 
 -- | Replace-on-conflict so re-rolling a bucket (the hourly catch-up pass, or a DLQ replay
 -- landing late) is idempotent rather than double-counting.
--- | Writes both rollups: the env-dimensioned table the map now reads, and the original, which
--- the currently-deployed code still writes and which the read path falls back to for buckets
--- rolled before this shipped. Dropping the original is the contract half of expand/contract,
--- once every bucket in retention has an env-dimensioned counterpart.
+-- | Writes the env-dimensioned rollup only. The original table is no longer written: nothing
+-- else writes it once this is deployed, and the read path already prefers this table per
+-- bucket and falls back to the original for buckets rolled before it existed. Dropping the
+-- original outright is the contract half of expand/contract, once a full retention window
+-- has rolled through and the fallback has nothing left to serve.
 upsertServiceDependencyEdges :: DB es => Projects.ProjectId -> UTCTime -> [RollupEdge] -> Eff es ()
 upsertServiceDependencyEdges _ _ [] = pass
-upsertServiceDependencyEdges pid bucket es = upsertEnvEdges pid bucket es >> upsertLegacyEdges pid bucket es
-
-
-upsertEnvEdges :: DB es => Projects.ProjectId -> UTCTime -> [RollupEdge] -> Eff es ()
-upsertEnvEdges _ _ [] = pass
-upsertEnvEdges pid bucket es =
+upsertServiceDependencyEdges pid bucket es =
   Hasql.interpExecute_
     [HI.sql|
     INSERT INTO apis.service_dependency_edges_env
@@ -712,43 +709,6 @@ upsertEnvEdges pid bucket es =
     errsV = V.fromList $ (.errorCount) <$> es
     durs = V.fromList $ (.sumDurationNs) <$> es
     hists = V.fromList $ decodeUtf8 @Text . AE.encode . histObject . (.latHist) <$> es
-
-
--- | The original, environment-blind rollup, still written so the deployed code and a rollback
--- keep working. Environments are summed away first: two of them in one bucket would otherwise
--- be two rows with the same six-column key in one statement, which Postgres rejects outright
--- with "ON CONFLICT DO UPDATE command cannot affect row a second time".
-upsertLegacyEdges :: DB es => Projects.ProjectId -> UTCTime -> [RollupEdge] -> Eff es ()
-upsertLegacyEdges _ _ [] = pass
-upsertLegacyEdges pid bucket es =
-  Hasql.interpExecute_
-    [HI.sql|
-    INSERT INTO apis.service_dependency_edges
-      (project_id, bucket, source_key, source_kind, target_key, target_kind,
-       req_count, error_count, sum_duration_ns, lat_hist)
-    SELECT #{pid.unUUIDId}, #{bucket}, s, sk, t, tk, r, e, d, h::jsonb
-    FROM unnest(#{srcs}::text[], #{srcKinds}::text[], #{tgts}::text[], #{tgtKinds}::text[],
-                #{reqs}::int8[], #{errsV}::int8[], #{durs}::int8[], #{hists}::text[])
-         AS u(s, sk, t, tk, r, e, d, h)
-    ON CONFLICT (project_id, bucket, source_key, source_kind, target_key, target_kind)
-    DO UPDATE SET req_count = EXCLUDED.req_count, error_count = EXCLUDED.error_count,
-                  sum_duration_ns = EXCLUDED.sum_duration_ns,
-                  lat_hist = EXCLUDED.lat_hist,
-                  updated_at = now()|]
-  where
-    folded =
-      Map.toList
-        $ Map.fromListWith
-          (<>)
-          [((e.sourceKey, e.sourceKind, e.targetKey, e.targetKind), HopAgg e.reqCount e.errorCount e.latHist e.sumDurationNs) | e <- es]
-    srcs = V.fromList [k1 | ((k1, _, _, _), _) <- folded]
-    srcKinds = V.fromList [kindText k | ((_, k, _, _), _) <- folded]
-    tgts = V.fromList [k | ((_, _, k, _), _) <- folded]
-    tgtKinds = V.fromList [kindText k | ((_, _, _, k), _) <- folded]
-    reqs = V.fromList [a.reqs | (_, a) <- folded]
-    errsV = V.fromList [a.errs | (_, a) <- folded]
-    durs = V.fromList [a.durNs | (_, a) <- folded]
-    hists = V.fromList [decodeUtf8 @Text $ AE.encode $ histObject a.hist | (_, a) <- folded]
 
 
 histObject :: LatencyHist -> AE.Value

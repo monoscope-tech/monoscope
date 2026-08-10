@@ -1,5 +1,6 @@
 module Pages.ServiceMapSpec (spec) where
 
+import Control.Exception (evaluate)
 import Data.List qualified as L
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as LT
@@ -171,7 +172,7 @@ spec = around withTestResources do
           samples = [hop p NKExternal (fromIntegral n) | (n, p) <- peers]
       start <- getCurrentTime
       let graph = buildServiceGraph 60 serviceMapNodeCap serviceMapFanout Nothing samples
-      V.length graph.nodes `seq` pass
+      _ <- evaluate (V.length graph.nodes)
       elapsed <- flip diffUTCTime start <$> getCurrentTime
       V.length (drawnNodes graph) `shouldSatisfy` (> 0)
       elapsed `shouldSatisfy` (< 2.0)
