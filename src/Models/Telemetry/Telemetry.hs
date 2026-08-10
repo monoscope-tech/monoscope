@@ -84,6 +84,8 @@ module Models.Telemetry.Telemetry (
   mkSystemLog,
   insertSystemLog,
   generateSummary,
+  identityFields,
+  rowIdentity,
   otelSpanColsSql,
   roundUTCToMicros,
 )
@@ -2188,6 +2190,59 @@ generateSummary otel =
     _ -> generateSpanSummary otel
 
 
+-- | Who a telemetry row is *about*: the session it belonged to, the user it was served for,
+-- and the tenant it was scoped to. One list, shared by the log-item detail panel and the
+-- \"User & Session\" facet group, so a field that is displayable is also filterable.
+--
+-- OpenTelemetry standardises @session.*@, @user.*@ and @enduser.*@. It has no tenant
+-- convention at all, so the tenant keys here are ones we choose to recognise — which is
+-- exactly why they belong in one list rather than being spelled out per call site.
+identityFields :: [(T.Text, T.Text)]
+identityFields =
+  [ ("session.id", "Session ID")
+  , ("session.previous.id", "Previous Session ID")
+  , ("user.id", "User ID")
+  , ("user.email", "User Email")
+  , ("user.name", "Username")
+  , ("user.full_name", "Full Name")
+  , ("user.hash", "User Hash")
+  , ("enduser.id", "End-user ID")
+  , ("enduser.role", "End-user Role")
+  , ("enduser.scope", "End-user Scope")
+  , ("tenant.id", "Tenant ID")
+  , ("tenant.name", "Tenant")
+  , ("organization.id", "Organization ID")
+  , ("org.id", "Org ID")
+  , ("account.id", "Account ID")
+  , ("workspace.id", "Workspace ID")
+  , ("customer.id", "Customer ID")
+  ]
+
+
+-- | The identity fields an attribute map actually carries, as @(key, label, value)@ in
+-- 'identityFields' order.
+--
+-- >>> let flat ps = Just (Map.fromList [(k, AE.String v) | (k, v) <- ps])
+-- >>> rowIdentity (flat [("user.email","a@b.c"), ("http.route","/x"), ("tenant.id","acme")])
+-- [("user.email","User Email","a@b.c"),("tenant.id","Tenant ID","acme")]
+--
+-- Nested spelling resolves too, since 'atMapText' descends. A blank value counts as
+-- absent — an SDK that stamps @user.id: ""@ on every anonymous request would otherwise
+-- fill the panel with empty rows:
+--
+-- >>> rowIdentity (Just (Map.fromList [("user", AE.object ["id" AE..= ("u1" :: T.Text), "email" AE..= ("" :: T.Text)])]))
+-- [("user.id","User ID","u1")]
+--
+-- >>> rowIdentity Nothing
+-- []
+rowIdentity :: Maybe (Map T.Text AE.Value) -> [(T.Text, T.Text, T.Text)]
+rowIdentity attrsM =
+  [ (k, label, v)
+  | (k, label) <- identityFields
+  , v <- maybeToList $ atMapText k attrsM >>= guarded (not . T.null)
+  ]
+
+
 -- Shared summary-element helpers (used by both log and span summarizers).
 tag :: T.Text -> T.Text -> T.Text -> T.Text
 tag n s v = n <> ";" <> s <> "⇒" <> v
@@ -2429,9 +2484,17 @@ generateSpanSummary otel =
         , spanNameFallback
         , errorStatus "badge-error"
         , tag "attributes" "text-textWeak" . encTrunc 500 <$> mfilter (not . Map.null) attrsM
-        , tag "session" "right-badge-neutral" <$> atMapText "session.id" attrsM
-        , tag "user email" "right-badge-neutral" <$> atMapText "user.email" attrsM <|> tag "user name" "right-badge-neutral" <$> atMapText "user.id" attrsM
+        , -- A row has space for *who*, not for the whole identity: the full session/user/
+          -- tenant set is the detail panel's job ('rowIdentity'). What a row must not do is
+          -- lie — `user.id` used to be emitted here labelled "user name", and only when
+          -- `user.email` happened to be absent, which is how a reader concludes the user id
+          -- is missing entirely. All three are emitted truthfully now; the renderer folds
+          -- them into one identity badge (email, else name, else id) so the row keeps its
+          -- single pill.
+          tag "session" "right-badge-neutral" <$> atMapText "session.id" attrsM
+        , tag "user email" "right-badge-neutral" <$> atMapText "user.email" attrsM
         , tag "user name" "right-badge-neutral" <$> (atMapText "user.full_name" attrsM <|> atMapText "user.name" attrsM)
+        , tag "user id" "right-badge-neutral" <$> atMapText "user.id" attrsM
         , errorStatus "right-badge-error"
         , dbBadge <$> dbSys
         , (atMapInt "http.response.body.size" attrsM <|> atMapInt "http.response_content_length" attrsM) >>= \n -> guard (n > 0) $> tag "size" "right-badge-neutral" (humanBytes n)

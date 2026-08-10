@@ -64,6 +64,7 @@ import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
+import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
 import Numeric (showFFloat)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, pageActions, pageTitle)
@@ -438,12 +439,6 @@ facetDefs =
       , Facet "resource.telemetry.sdk.language" "SDK Language" FGResource nc
       , Facet "resource.telemetry.sdk.name" "SDK Name" FGResource nc
       , Facet "resource.telemetry.sdk.version" "SDK Version" FGResource nc
-      , -- User & Session
-        Facet "attributes.session.id" "Session ID" FGUserSession nc
-      , Facet "attributes.user.id" "User ID" FGUserSession nc
-      , Facet "attributes.user.email" "User Email" FGUserSession nc
-      , Facet "attributes.user.name" "Username" FGUserSession nc
-      , Facet "attributes.user.full_name" "Full Name" FGUserSession nc
       , -- Database
         Facet "attributes.db.system.name" "Database System" FGDatabase nc
       , Facet "attributes.db.collection.name" "Collection Name" FGDatabase nc
@@ -453,6 +448,16 @@ facetDefs =
         Facet "attributes.exception.type" "Exception Type" FGErrors (const "bg-fillError-strong")
       , Facet "attributes.exception.message" "Exception Message" FGErrors nc
       ]
+        -- User & Session, derived from 'Telemetry.identityFields' so a field the log-item
+        -- detail panel shows is a field you can facet on — the two lists had already drifted
+        -- apart once. Restricted to promoted columns because a facet counts distinct values
+        -- across the range, which needs a column and not a probe into the Variant blob; the
+        -- tenant keys stay filterable through a pill's menu, they just aren't faceted.
+        <> [ Facet path label FGUserSession nc
+           | (k, label) <- Telemetry.identityFields
+           , let path = "attributes." <> k
+           , S.member path ParserExpr.flattenedOtelAttributes
+           ]
 
 
 -- | 'facetDefs' bucketed by 'FacetGroup', built once at module load time.

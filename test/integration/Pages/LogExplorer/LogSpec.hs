@@ -693,6 +693,45 @@ spec = around withTestResources do
       (_, miss2) <- testServant (withTfReads False) $ LogItem.expandAPIlogItemH testPid rid (addUTCTime 1 ts) Nothing Nothing Nothing False
       expectNotFound "PG" miss2
 
+    -- Regression: the panel used to surface one identifier — `user.email`, or `user.id`
+    -- mislabelled "user name" when email was absent — so tenant id, user id and the rest
+    -- were reachable only by opening the Attributes JSON tree. Readers concluded we only
+    -- knew their email.
+    it "shows every session, user and tenant field the span carries, each as a filter pill" \tr -> do
+      apiKey <- createTestAPIKey tr testPid "identity-key"
+      let hexId = T.replace "-" "" . UUID.toText <$> nextRandom
+      (trId, sid) <- (,) <$> hexId <*> hexId
+      ingestSpanLinked
+        tr
+        apiKey
+        trId
+        sid
+        Nothing
+        "GET /api/invoices"
+        [ ("http.request.method", "GET")
+        , ("session.id", "sess-9f2")
+        , ("user.id", "usr-4471")
+        , ("user.email", "ada@example.com")
+        , ("tenant.id", "acme-eu")
+        , ("workspace.id", "ws-12")
+        ]
+        frozenTime
+      rows <-
+        withPool tr.trPool
+          $ DBT.query
+            [sql| SELECT id, timestamp FROM otel_logs_and_spans WHERE project_id = ? AND context___trace_id = ? |]
+            (testPid, trId)
+          :: IO (V.Vector (UUID.UUID, UTCTime))
+      (rid, ts) <- maybe (error "ingested span missing") pure (rows V.!? 0)
+      (_, item) <- testServant tr $ LogItem.expandAPIlogItemH testPid rid ts Nothing Nothing Nothing False
+      let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml item
+      for_ ([("Session ID", "sess-9f2"), ("User ID", "usr-4471"), ("User Email", "ada@example.com"), ("Tenant ID", "acme-eu"), ("Workspace ID", "ws-12")] :: [(Text, Text)]) \(label, value) -> do
+        html `shouldSatisfy` T.isInfixOf (label <> ": " <> value)
+        -- Each is a filter pill, so "everything from this tenant" is one click away.
+        html `shouldSatisfy` T.isInfixOf ("data-field-value=\"&quot;" <> value <> "&quot;\"")
+      -- A key the span does not carry contributes no row.
+      html `shouldNotSatisfy` T.isInfixOf "Org ID"
+
     -- Regression: the SDK payload span ("monoscope.http") confused users — the
     -- parent request's panel showed empty body tabs (the merge only fired when
     -- http.request.method was absent, which auto-instrumented spans always have),

@@ -63,7 +63,7 @@ import Relude
 -- is only correct while 'NKUnknown' remains the maximum, so a constructor appended after it
 -- would silently give every head the wrong kind.
 --
--- >>> maximum [minBound .. maxBound :: NodeKind]
+-- >>> maxBound :: NodeKind
 -- NKUnknown
 data NodeKind = NKEntry | NKService | NKDatabase | NKQueue | NKExternal | NKUnknown
   deriving stock (Bounded, Enum, Eq, Generic, Ord, Read, Show)

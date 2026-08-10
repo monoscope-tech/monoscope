@@ -2197,6 +2197,7 @@ export class LogList extends LitElement {
           // Use optimized parsing for right-aligned badges
           let userEmail = '',
             userName = '',
+            userId = '',
             userBadgeStyle = '';
           for (let i = 0; i < summaryArr.length; i++) {
             const element = summaryArr[i];
@@ -2227,14 +2228,21 @@ export class LogList extends LitElement {
             } else if (field === 'user name') {
               userName = value;
               if (!userBadgeStyle) userBadgeStyle = badgeStyle;
+            } else if (field === 'user id') {
+              userId = value;
+              if (!userBadgeStyle) userBadgeStyle = badgeStyle;
             } else {
               rightAlignedBadges.push(renderBadge(`cbadge-sm ${badgeStyle} bg-opacity-100`, value));
             }
           }
-          if (userEmail || userName) {
-            const full = userEmail || userName;
+          // One identity pill per row, whichever identifiers the span carries. The server
+          // emits email, name and id under their own labels; folding them here keeps the row
+          // to a single badge while the tooltip still names every identifier, and the full
+          // session/user/tenant set lives in the detail panel.
+          if (userEmail || userName || userId) {
+            const full = userEmail || userName || userId;
             const display = full.length > 20 ? full.substring(0, 18) + '…' : full;
-            const tip = [userName, userEmail].filter(Boolean).join(' — ');
+            const tip = [userName, userEmail, userId && `id ${userId}`].filter(Boolean).join(' — ');
             rightAlignedBadges.push(renderBadge(`cbadge-sm ${userBadgeStyle} bg-opacity-100`, display, tip));
           }
 

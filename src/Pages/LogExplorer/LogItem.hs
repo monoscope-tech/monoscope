@@ -282,6 +282,7 @@ expandedItemView pid item aptSp selectedTabM = do
     isLog = item.kind == Just "log"
     isAlert = item.kind == Just "alert"
     isHttp = not isLog && isHttpSpan item
+    identityRows = Telemetry.rowIdentity (unAesonTextMaybe item.attributes)
     createdAt = formatUTC item.timestamp
     pidTxt = pid.toText
     dgrp = "dtab-" <> item.id
@@ -333,6 +334,12 @@ expandedItemView pid item aptSp selectedTabM = do
       -- span_id isn't carried by generateSummary; keep one pill so its filter-menu stays reachable.
       whenJust (item.context >>= (.span_id) >>= guarded (not . T.null)) \v ->
         div_ [class_ "flex gap-2 flex-wrap min-w-0"] $ spanBadge pid "context.span_id" v "Span ID"
+      -- Who the request was for, in full. The summary row above can only afford one
+      -- identifier, so tenant id, user id and the rest used to be reachable only by opening
+      -- the Attributes JSON tree — which is why readers concluded we only knew their email.
+      -- Every field is a filter pill, so "everything from this tenant" is one click away.
+      unless (null identityRows) $ div_ [class_ "flex gap-2 flex-wrap min-w-0"] $ forM_ identityRows \(k, label, v) ->
+        spanBadge pid ("attributes." <> k) v label
       div_ [class_ "flex flex-wrap gap-2 items-center"] actionRow
 
     actionBtnBody :: Text -> Text -> Html ()
