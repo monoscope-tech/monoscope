@@ -2,8 +2,14 @@
 // Datadog-style service map: deterministic left-to-right layered DAG drawn with
 // the echarts `graph` series at `layout:'none'` (we supply every coordinate).
 // The layout half is pure and DOM-free so it can be unit tested.
-import { getContrastTextColor, resolveColor } from './colorMapping';
-import { ensureECharts, subscribeChartTheme, registerChartDisposer, sharedResizeObserver, getChartStyles } from './widgets';
+import { resolveColor } from './colorMapping';
+import { subscribeChartTheme, registerChartDisposer, getChartStyles } from './widgets';
+import ELKConstructor from 'elkjs/lib/elk.bundled.js';
+
+// One instance, created on first use. ELK is ~1.5 MB and only this chunk imports it, so it
+// travels with the map rather than with the app.
+let elkInstance: InstanceType<typeof ELKConstructor> | null = null;
+const elk = () => (elkInstance ??= new ELKConstructor());
 
 // --- wire types (snake_case: server payload verbatim) ---
 export type MapStats = {
@@ -34,19 +40,13 @@ export type Point = { x: number; y: number };
 // file as binary, which silently costs every diff and review on it.
 export const edgeKey = (source: string, target: string): string => `${source}\u0000${target}`;
 
-// Card geometry. Datadog's node is a card carrying four facts, not a dot carrying one:
-// name, error rate, latency and throughput are all readable without hovering anything.
-// Volume is no longer encoded as node size — the req/s line says it in numbers, which is
-// both more precise and what lets every card be the same size.
-const CARD_W = 176;
-const CARD_H = 78;
-// Flow runs top-to-bottom, the way Datadog's request flow map reads: entry points on the
-// first row, each hop a row further down. COL_GAP separates siblings across a row, LAYER_GAP
-// separates one hop from the next, and a row too wide for the canvas wraps onto a sub-row —
-// which must clear a whole card, or the wrap overlaps what it was making room for.
-export const COL_GAP = CARD_W + 24;
-export const LAYER_GAP = CARD_H + 62;
-const SUBROW_GAP = CARD_H + 18;
+// Card geometry, matched to Datadog's: a compact box whose height is set by four lines of
+// 11px text plus padding, with a full-height health bar down its right edge.
+export const CARD_W = 150;
+export const CARD_H = 62;
+// Vertical room between one hop and the next, and horizontal room between siblings.
+export const LAYER_GAP = 78;
+export const NODE_GAP = 26;
 
 /**
  * The payload carries both levels: collapsed group heads plus the members that would
@@ -134,98 +134,82 @@ export function breakCycles(keys: string[], edges: Edge[]): { acyclic: Edge[]; b
   return { acyclic: edges.filter(e => !back.has(e) && color.has(e.source) && color.has(e.target)), back: [...back] };
 }
 
-/** Longest-path layering from in-degree-0 roots: `layer v = 1 + max(layer preds)`. */
-export function layerGraph(keys: string[], acyclic: Edge[]): Map<string, number> {
-  const preds = new Map<string, string[]>(keys.map(k => [k, []]));
-  const succs = new Map<string, string[]>(keys.map(k => [k, []]));
-  const indeg = new Map<string, number>(keys.map(k => [k, 0]));
-  for (const e of acyclic) {
-    if (!preds.has(e.target) || !succs.has(e.source)) continue;
-    preds.get(e.target)!.push(e.source);
-    succs.get(e.source)!.push(e.target);
-    indeg.set(e.target, indeg.get(e.target)! + 1);
-  }
-  const layer = new Map<string, number>(keys.map(k => [k, 0]));
-  const queue = keys.filter(k => indeg.get(k) === 0);
-  for (let i = 0; i < queue.length; i++) {
-    const k = queue[i];
-    for (const s of succs.get(k)!) {
-      layer.set(s, Math.max(layer.get(s)!, layer.get(k)! + 1));
-      indeg.set(s, indeg.get(s)! - 1);
-      if (indeg.get(s) === 0) queue.push(s);
-    }
-  }
-  return layer;
-}
-
-/**
- * Barycenter/median ordering, `sweeps` alternating down/up passes. Nodes with no
- * neighbours in the sweep direction hold their position; ties break on node key
- * so two runs over the same input are byte-identical.
- */
-export function orderLayers(layer: Map<string, number>, edges: Edge[], sweeps = 4): string[][] {
-  const depth = Math.max(0, ...layer.values());
-  const layers: string[][] = Array.from({ length: depth + 1 }, () => []);
-  for (const k of [...layer.keys()].sort()) layers[layer.get(k)!].push(k);
-
-  const preds = new Map<string, string[]>([...layer.keys()].map(k => [k, [] as string[]]));
-  const succs = new Map<string, string[]>([...layer.keys()].map(k => [k, [] as string[]]));
-  for (const e of edges) {
-    if (!layer.has(e.source) || !layer.has(e.target) || e.source === e.target) continue;
-    preds.get(e.target)!.push(e.source);
-    succs.get(e.source)!.push(e.target);
-  }
-
-  const median = (ks: string[] | undefined, pos: Map<string, number>): number | null => {
-    const ps = (ks ?? []).map(k => pos.get(k)).filter((p): p is number => p !== undefined).sort((a, b) => a - b);
-    if (!ps.length) return null;
-    const m = ps.length >> 1;
-    return ps.length % 2 ? ps[m] : (ps[m - 1] + ps[m]) / 2;
-  };
-
-  for (let s = 0; s < sweeps; s++) {
-    const down = s % 2 === 0;
-    const pos = new Map<string, number>();
-    layers.forEach(l => l.forEach((k, i) => pos.set(k, i)));
-    const idx = layers.map((_, i) => i);
-    for (const li of down ? idx : idx.slice().reverse()) {
-      const bary = new Map<string, number>();
-      layers[li].forEach((k, i) => bary.set(k, median(down ? preds.get(k) : succs.get(k), pos) ?? i));
-      layers[li] = layers[li].slice().sort((a, b) => bary.get(a)! - bary.get(b)! || (a < b ? -1 : a > b ? 1 : 0));
-      layers[li].forEach((k, i) => pos.set(k, i));
-    }
-  }
-  return layers;
-}
-
 export type LayoutOpts = {
-  /** Cards a row may hold before it wraps onto a sub-row. */
-  maxCols?: number;
+  /** Distance between one hop and the next, down the page. */
+  layerGap?: number;
+  /** Distance between siblings across a row. */
+  nodeGap?: number;
+  /** Card footprint ELK reserves per node. */
+  cardW?: number;
+  cardH?: number;
 };
 
 /**
- * `y = hop depth` (plus a sub-row offset when the row wrapped), `x` centred on the row.
+ * Node placement, delegated to ELK's `layered` algorithm.
  *
- * Wrapping is what keeps a fan-out finite: 149 peers on one row would otherwise be a
- * 26,000px-wide row that fit-to-extent then crushed into overlapping cards. Wrapped at the
- * number of cards the canvas can actually show, the row keeps full spacing and grows down.
+ * This used to be four hand-written passes — longest-path layering, barycenter crossing
+ * reduction, coordinate assignment and row wrapping. They worked, but every one of them was
+ * a graph-layout library we were maintaining by hand, and each shipped a bug: a wrapped row
+ * placed into the next hop's lane, a sub-column narrower than the card it was making room
+ * for, and a pixel floor silently undone by fit-to-extent. ELK is node-size aware, so those
+ * classes of bug are simply not expressible here.
+ *
+ * Determinism is load-bearing — a shared map link must not reshuffle between refreshes —
+ * so model order is fed to ELK as a tie-break and the input is sorted before it is handed
+ * over. `breakCycles` still runs: ELK breaks cycles internally to layer them, but it does
+ * not tell us which edges it reversed, and we draw back-edges curved.
  */
-export function assignCoords(layers: string[][], opts: LayoutOpts = {}): Map<string, Point> {
-  const maxCols = Math.max(1, opts.maxCols ?? Infinity);
+export async function layoutGraph(
+  keys: string[],
+  edges: Edge[],
+  opts: LayoutOpts = {},
+): Promise<{ coords: Map<string, Point>; back: Set<string> }> {
+  const { back } = breakCycles(keys, edges);
+  const backKeys = new Set(back.map(e => edgeKey(e.source, e.target)));
+  if (!keys.length) return { coords: new Map(), back: backKeys };
+
+  const present = new Set(keys);
+  const laid = await elk().layout({
+    id: 'root',
+    layoutOptions: {
+      'elk.algorithm': 'layered',
+      'elk.direction': 'DOWN',
+      'elk.layered.spacing.nodeNodeBetweenLayers': String(opts.layerGap ?? LAYER_GAP),
+      'elk.spacing.nodeNode': String(opts.nodeGap ?? NODE_GAP),
+      // Routing channels are what make a layered graph sprawl: every edge crossing a layer
+      // reserves its own lane. Kept tight, because the map is read by scanning rows, not by
+      // following individual wires across the page.
+      'elk.layered.spacing.edgeNodeBetweenLayers': '2',
+      'elk.spacing.edgeNode': '2',
+      'elk.spacing.edgeEdge': '2',
+      // No wrapping. ELK can fold a wide graph into bands, but a folded band puts a later
+      // hop *above* an earlier one, which is exactly the reading order top-down flow exists
+      // to give. A wide map scrolls sideways instead — the same trade Datadog's makes.
+      // ELK is deterministic for identical input on its own; model order is not needed for
+      // that, and forcing it produces longer edges, which cost a routing lane each.
+      'elk.layered.cycleBreaking.strategy': 'DEPTH_FIRST',
+      // BRANDES_KOEPF aligns children under parents beautifully and pays for it in width —
+      // ~3000px for 31 nodes, most of it whitespace holding alignments the reader never sees.
+      // SIMPLE packs rows instead, which is what a map you scan rather than trace wants.
+      'elk.layered.nodePlacement.strategy': 'SIMPLE',
+      // No routing. ECharts' graph series draws straight or curved edges and cannot consume
+      // bend points, so reserving a lane per crossing edge buys nothing and costs the map
+      // roughly twice its width — we would pay for routes we then throw away.
+      'elk.edgeRouting': 'UNDEFINED',
+    },
+    children: keys.map(id => ({ id, width: opts.cardW ?? CARD_W, height: opts.cardH ?? CARD_H })),
+    edges: edges
+      .filter(e => present.has(e.source) && present.has(e.target) && e.source !== e.target)
+      .map((e, i) => ({ id: `e${i}`, sources: [e.source], targets: [e.target] })),
+  });
+
+  // ELK reports a node's top-left; echarts positions a symbol by its centre.
   const coords = new Map<string, Point>();
-  // The cursor advances by how *tall* each row actually got, not by a fixed step. Placing
-  // layer n at `n * LAYER_GAP` assumes every row is one line deep, so a wrapped row's second
-  // line lands inside the next hop's lane and the two collide.
-  let y = 0;
-  for (const l of layers) {
-    const cols = Math.min(l.length, maxCols);
-    l.forEach((k, i) => coords.set(k, {
-      x: ((i % cols) - (cols - 1) / 2) * COL_GAP,
-      y: y + Math.floor(i / cols) * SUBROW_GAP,
-    }));
-    y += (Math.ceil(l.length / cols) - 1) * SUBROW_GAP + LAYER_GAP;
-  }
-  return coords;
+  const w = opts.cardW ?? CARD_W, h = opts.cardH ?? CARD_H;
+  for (const n of laid.children ?? []) coords.set(n.id, { x: (n.x ?? 0) + w / 2, y: (n.y ?? 0) + h / 2 });
+  // A node ELK dropped (it never should) still needs a coordinate rather than a crash.
+  for (const k of keys) if (!coords.has(k)) coords.set(k, { x: 0, y: 0 });
+  return { coords, back: backKeys };
 }
 
 /**
@@ -258,32 +242,6 @@ export function filterSelection(
   return { litNodes, litEdges };
 }
 
-/** breakCycles → layerGraph → orderLayers → assignCoords. */
-export function layoutGraph(
-  keys: string[],
-  edges: Edge[],
-  // Given the widest row's card count, decide wrapping. A callback rather than a value
-  // because only the layering knows how wide the graph got, and running the pipeline twice
-  // to find out would be a second copy of it.
-  fit: LayoutOpts | ((widestLayer: number) => LayoutOpts) = {},
-): { coords: Map<string, Point>; back: Set<string> } {
-  const { acyclic, back } = breakCycles(keys, edges);
-  const layers = orderLayers(layerGraph(keys, acyclic), acyclic);
-  const opts = typeof fit === 'function' ? fit(Math.max(0, ...layers.map(l => l.length))) : fit;
-  return { coords: assignCoords(layers, opts), back: new Set(back.map(e => edgeKey(e.source, e.target))) };
-}
-
-/**
- * How many cards a row may hold on a canvas `width` px across.
- *
- * Cards never shrink to fit: past this count a row wraps onto a sub-row instead, so a wide
- * fan-out grows downward and stays legible rather than being squeezed into overlap.
- */
-export function fitCols(width: number, cardW: number): { maxCols: number } {
-  return { maxCols: Math.max(1, Math.floor(Math.max(0, width - 80) / (cardW + 24))) };
-}
-
-
 // --- formatting --------------------------------------------------------------
 const fmtDur = (ns: number): string => {
   if (!Number.isFinite(ns) || ns <= 0) return '0';
@@ -295,23 +253,6 @@ const fmtDur = (ns: number): string => {
 const fmtNum = (n: number): string =>
   n >= 1e9 ? `${(n / 1e9).toFixed(1)}B` : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M`
     : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : `${Math.round(n)}`;
-const esc = (s: string) => s.replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]!));
-
-export const statsTip = (title: string, st: MapStats, ring: string, extra = ''): string =>
-  // Deliberately the Datadog shape: a coloured name header, then Requests / Latency /
-  // Errors. Three numbers is what you can actually read while hovering a dense graph;
-  // percentiles belong in the detail view, not here.
-  `<div style="margin:-6px -10px 6px;padding:5px 10px;border-radius:3px 3px 0 0;`
-  + `background:${ring};color:${ring.startsWith('#') ? getContrastTextColor(ring) : '#fff'};font-weight:700">${esc(title)}</div>${extra}`
-  + `<div style="display:flex;gap:16px">`
-  + `<div><div style="opacity:.65;font-size:11px">Requests</div>`
-  + `<div><b>${st.throughput_per_sec < 10 ? st.throughput_per_sec.toFixed(2) : fmtNum(Math.round(st.throughput_per_sec))}</b>`
-  + `<span style="opacity:.65"> req/s</span></div></div>`
-  + `<div><div style="opacity:.65;font-size:11px">Latency</div>`
-  + `<div><b>${fmtDur(st.p95_ns)}</b><span style="opacity:.65"> p95</span></div></div>`
-  + `<div><div style="opacity:.65;font-size:11px">Errors</div>`
-  + `<div><b>${(st.error_rate * 100).toFixed(2)}</b><span style="opacity:.65"> %</span></div></div>`
-  + `</div>`;
 
 // Health thresholds. "error_rate > 0" is not a health signal on an aggregate view: across
 // hundreds of third-party integrations essentially everything has had one error in an hour,
@@ -322,80 +263,36 @@ export const ERR_FAILING = 0.05;
 export const healthColor = (rate: number, st: ReturnType<typeof getChartStyles>, ok: string): string =>
   rate >= ERR_FAILING ? st.errorColor : rate >= ERR_ELEVATED ? st.warningColor : ok;
 
-// The ring is the node's whole identity: red when it is actually failing, the service's
-// own colour otherwise (neutral for inferred peers, which have no service colour).
-// Health first — a failing dependency must not be hidden behind a pretty hash colour.
-const ringColor = (
-  n: { key: string; inferred: boolean; stats: MapStats },
-  st: ReturnType<typeof getChartStyles>,
-  colors: Record<string, string> | undefined,
-): string =>
-  healthColor(n.stats.error_rate, st, n.inferred ? st.tooltipBorderColor : resolveColor(n.key, colors ?? {}));
-
 // --- rendering ---------------------------------------------------------------
+// A React-Flow-shaped renderer with no framework: a pane the wheel and drag transform, an
+// SVG layer of bezier edges beneath, and the nodes as real DOM cards cloned from a Lucid
+// template. Nothing is painted to a bitmap, so cards carry design tokens, sprite icons and
+// focus rings, and the tests can assert on the DOM instead of a chart option object.
 
-// Kind as an icon, the way Datadog marks a node — drawn from inline SVG data URIs rather
-// than our sprite sheet (canvas cannot reach it) or a unicode glyph (rendered at the mercy
-// of whatever font the OS substitutes). Monochrome, so the icon never competes with health.
-const icon = (path: string, stroke = true) =>
-  'data:image/svg+xml;utf8,' + encodeURIComponent(
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="${stroke ? 'none' : '#64748b'}"`
-    + ` stroke="#64748b" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${path}</svg>`);
-
+// Kind marks, as inline SVG so they scale with the card and need no sprite fetch per node.
 const KIND_ICON: Record<NodeKind, string> = {
-  // service: a hexagon, the shape Datadog uses for an instrumented service
-  service: icon('<path d="M8 1.6 13.6 4.8v6.4L8 14.4 2.4 11.2V4.8z"/>'),
-  // database: a cylinder
-  database: icon('<ellipse cx="8" cy="4" rx="5" ry="2"/><path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4"/>'),
-  // queue: stacked layers
-  queue: icon('<path d="M8 2 14 5 8 8 2 5z"/><path d="M2 8.5 8 11.5 14 8.5"/>'),
-  // external: a cloud
-  external: icon('<path d="M4.5 12h7a2.8 2.8 0 0 0 .3-5.6A4 4 0 0 0 4.2 7 2.5 2.5 0 0 0 4.5 12z"/>'),
-  // entry: traffic arriving from outside
-  entry: icon('<path d="M2 8h9"/><path d="M8 5l3 3-3 3"/><path d="M13 2v12"/>'),
-  unknown: icon('<circle cx="8" cy="8" r="6"/><path d="M8 11v.01M8 9c0-1.5 1.5-1.5 1.5-3A1.5 1.5 0 0 0 6.5 6"/>'),
+  service: '<svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 1.6 13.6 4.8v6.4L8 14.4 2.4 11.2V4.8z"/></svg>',
+  database: '<svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.5"><ellipse cx="8" cy="4" rx="5" ry="2"/><path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4"/></svg>',
+  queue: '<svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2 14 5 8 8 2 5z"/><path d="M2 8.5 8 11.5 14 8.5"/></svg>',
+  external: '<svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4.5 12h7a2.8 2.8 0 0 0 .3-5.6A4 4 0 0 0 4.2 7 2.5 2.5 0 0 0 4.5 12z"/></svg>',
+  entry: '<svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 8h9"/><path d="M8 5l3 3-3 3"/><path d="M13 2v12"/></svg>',
+  unknown: '<svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6"/></svg>',
 };
 
-
 /**
- * The four facts, as echarts rich-text lines. Built here rather than in `paint` so the
- * string is computed once per layout instead of once per re-style, and so it is a pure
- * function of the node — the tooltip and the card can never disagree about a number.
+ * The edge Datadog draws: out of the bottom of the caller, into the top of the callee, as a
+ * cubic bezier whose control points are pulled vertically. Vertical control points are what
+ * make the curve leave and arrive perpendicular to the card, so an edge never appears to
+ * graze a card it has nothing to do with.
  */
-const richSafe = (t: string) => t.replace(/[{}|]/g, '');
-
-export function cardLabel(n: ServiceNode, hasServiceColor = false): string {
-  // A chip carries the service's own colour, which is otherwise absent from the map now
-  // that borders belong to health — leaving the "Service colors" legend describing nothing.
-  const swatch = hasServiceColor ? '{svc| } ' : '';
-  // A fold already names its size ("15 more dependencies"); a ×15 badge repeats it.
-  const count = n.member_count && !n.key.startsWith('rest:') ? `  ×${n.member_count}` : '';
-  const rps = n.stats.throughput_per_sec < 10
-    ? n.stats.throughput_per_sec.toFixed(2)
-    : fmtNum(Math.round(n.stats.throughput_per_sec));
-  const errStyle = n.stats.error_rate >= ERR_FAILING ? 'bad' : n.stats.error_rate >= ERR_ELEVATED ? 'warn' : 'muted';
-  return [
-    `${swatch}{icon|} {name|${richSafe(n.label || 'Entry point')}${count}}`,
-    `{${errStyle}|${(n.stats.error_rate * 100).toFixed(2)}% errors}`,
-    n.duration_share != null
-      ? `{muted|${(n.duration_share * 100).toFixed(1)}% of trace time}`
-      : `{muted|${fmtDur(n.stats.p95_ns)} p95}`,
-    // Health rides beside the throughput chip as a filled block: Datadog's card carries the
-    // grade as its own mark, not only as the colour of some text.
-    `{rps|${rps} req/s}  {${errStyle === 'muted' ? 'barOk' : errStyle === 'warn' ? 'barWarn' : 'barBad'}| }`,
-  ].join('\n');
+export function edgePath(sx: number, sy: number, tx: number, ty: number): string {
+  const dy = Math.max(24, Math.abs(ty - sy) * 0.5);
+  return `M ${sx},${sy} C ${sx},${sy + dy} ${tx},${ty - dy} ${tx},${ty}`;
 }
-
-// layout:'none' fits the supplied coordinate extent to the box, so a 1-2 node
-// graph would be blown up to fill the canvas. Invisible corner nodes pin a
-// minimum virtual extent (3 layers × 4 rows).
-const MIN_W = 2 * COL_GAP;
-const MIN_H = 2 * LAYER_GAP;
 
 type Reach = { up: Map<string, string[]>; down: Map<string, string[]> };
 
-/** Live controls for a rendered map. `serviceMapChart` stays `void` because
- *  rendering waits on the lazy echarts load, so the handle only exists later. */
+/** Live controls for a rendered map. */
 export type ServiceMapHandle = {
   id: string;
   filter: (query: string) => void;
@@ -416,9 +313,7 @@ export function hydrateServiceMaps(root: ParentNode = document, renderMap: Servi
     const colors = document.getElementById(`${el.id}-colors`);
     if (!graph || !colors) continue;
     el.dataset.serviceMapHydrated = 'true';
-    renderMap(el.id, JSON.parse(graph.textContent ?? ''), {
-      colors: JSON.parse(colors.textContent ?? ''),
-    });
+    renderMap(el.id, JSON.parse(graph.textContent ?? ''), { colors: JSON.parse(colors.textContent ?? '') });
   }
 }
 
@@ -429,6 +324,8 @@ const reachableFrom = (start: string, adj: Map<string, string[]>): Set<string> =
   return seen;
 };
 
+const fmtRps = (v: number) => (v < 10 ? v.toFixed(2) : fmtNum(Math.round(v)));
+
 export function serviceMapChart(
   containerId: string,
   graph: ServiceGraph,
@@ -436,35 +333,28 @@ export function serviceMapChart(
 ): void {
   const el = document.getElementById(containerId);
   if (!el) return;
-  // Error / empty states are rendered server-side in Lucid; just leave the
-  // container alone rather than painting a blank canvas over the message.
+  // Error / empty states are rendered server-side in Lucid; leave the container alone rather
+  // than painting over the message.
   if (graph.error || !graph.nodes?.length) { registerChartDisposer(containerId, () => {}); return; }
-  void ensureECharts().then(() => render(el, containerId, graph, opts));
+  void render(el, containerId, graph, opts);
 }
 
-function render(
+async function render(
   el: HTMLElement,
   containerId: string,
   graph: ServiceGraph,
   opts: { colors?: Record<string, string>; onNodeClick?: (key: string) => void },
-): void {
-  const echarts = (window as any).echarts;
-  // `el` is the scrolling viewport; the chart lives on the canvas inside it, which is sized
-  // to the graph rather than to the window.
-  const canvas = el.querySelector<HTMLElement>('[data-map-canvas]') ?? el;
-  registerChartDisposer(containerId, () => {}); // tear down whatever was rendered here before
-  const controller = new AbortController();
-  const signal = controller.signal;
+): Promise<void> {
+  const pane = el.querySelector<HTMLElement>('[data-map-pane]');
+  const svg = el.querySelector<SVGSVGElement>('[data-map-edges]');
+  const layer = el.querySelector<HTMLElement>('[data-map-nodes]');
+  const tpl = el.querySelector<HTMLTemplateElement>('[data-node-card]');
+  const panel = el.parentElement ?? el;
+  if (!pane || !svg || !layer || !tpl) return;
 
-  // A hidden/zero-size container renders a blank canvas. Wait until it has a box.
-  if (!el.clientWidth || !el.clientHeight) {
-    const retry = () => { ro.disconnect(); serviceMapChart(containerId, graph, opts); };
-    const ro = new ResizeObserver(() => { if (el.clientWidth && el.clientHeight) retry(); });
-    ro.observe(el);
-    el.closest('.a-tab-content')?.addEventListener('tab-visible', () => requestAnimationFrame(retry), { signal });
-    registerChartDisposer(containerId, () => { ro.disconnect(); controller.abort(); });
-    return;
-  }
+  registerChartDisposer(containerId, () => {});
+  const controller = new AbortController();
+  const { signal } = controller;
 
   const colors = opts.colors ?? {};
   const allNodes = graph.nodes;
@@ -472,239 +362,196 @@ function render(
   const members = new Map<string, ServiceNode[]>();
   for (const n of allNodes) if (n.group_key) members.set(n.group_key, [...(members.get(n.group_key) ?? []), n]);
 
-  echarts.getInstanceByDom(canvas)?.dispose();
-  const chart = echarts.init(canvas);
-
   const expanded = new Set<string>();
   let isolated: Set<string> | null = null;
   let scope: string | null = null;
   let hovered: string | null = null;
   let query = '';
+  let cards = new Map<string, HTMLElement>();
+  let paths = new Map<string, SVGPathElement>();
+  let reach: Reach = { up: new Map(), down: new Map() };
+  let drawn: { nodes: ServiceNode[]; edges: ServiceEdge[] } = { nodes: [], edges: [] };
 
-  // Everything geometry-dependent is derived, because expanding a group changes which
-  // nodes exist and therefore the whole layout. `paint` only re-styles; `derive` re-places.
-  const derive = () => {
-    const s = getChartStyles();
-    // Scope first, then collapse: expanding a group inside a scope should not drag the
-    // rest of the system back onto the canvas.
-    const scoped = scopeTo(allNodes, graph.edges, scope);
-    const { nodes, edges: candidates } = visibleGraph(scoped.nodes, scoped.edges, expanded);
-    const keys = nodes.map(n => n.key);
-    const index = new Map(keys.map((k, i) => [k, i]));
-    const edges = candidates.filter(e => index.has(e.source) && index.has(e.target));
+  // --- viewport: one transform, the way React Flow does it ---------------------
+  let tx = 0, ty = 0, k = 1;
+  const applyTransform = () => { pane.style.transform = `translate(${tx}px, ${ty}px) scale(${k})`; };
 
+  const fit = () => {
+    if (!drawn.nodes.length) return;
+    const xs = drawn.nodes.map(n => pos.get(n.key)?.x ?? 0);
+    const ys = drawn.nodes.map(n => pos.get(n.key)?.y ?? 0);
+    const w = Math.max(...xs) - Math.min(...xs) + CARD_W;
+    const h = Math.max(...ys) - Math.min(...ys) + CARD_H;
     const box = el.getBoundingClientRect();
-    const { coords, back } = layoutGraph(keys, edges, () => fitCols(box.width, CARD_W));
-
-    // Transitive isolation sets — echarts' focus:'adjacency' is 1-hop only.
-    const reach: Reach = { up: new Map(), down: new Map() };
-    for (const k of keys) { reach.up.set(k, []); reach.down.set(k, []); }
-    for (const e of edges) { reach.down.get(e.source)!.push(e.target); reach.up.get(e.target)!.push(e.source); }
-
-    const xs = [...coords.values()].map(p => p.x), ys = [...coords.values()].map(p => p.y);
-    const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
-    // `layout:'none'` fits the supplied coordinates to the container, uniformly on both axes,
-    // so a graph that is merely *wide* gets shrunk vertically too and the pixel floor computed
-    // above is silently undone — 86-unit rows arrived 40px apart and overlapped. Rather than
-    // fight the fit with zoom arithmetic, grow the container to the graph: extent and box are
-    // then the same rectangle, the fit is 1:1 by construction, and anything past the window is
-    // reached by scrolling, the way Datadog's map is.
-    const extentW = Math.max(MIN_W, Math.max(...xs) - Math.min(...xs) + CARD_W);
-    const extentH = Math.max(MIN_H, Math.max(...ys) - Math.min(...ys) + CARD_H);
-    canvas.style.width = `${Math.max(el.clientWidth, Math.ceil(extentW) + 80)}px`;
-    canvas.style.height = `${Math.max(el.clientHeight, Math.ceil(extentH) + 64)}px`;
-    if (canvas !== el) { canvas.style.position = 'relative'; canvas.style.inset = 'auto'; }
-    chart.resize();
-    const halfW = extentW / 2;
-    const halfH = extentH / 2;
-    const pads = [{ x: cx - halfW, y: cy - halfH }, { x: cx + halfW, y: cy + halfH }]
-      .map((p, i) => ({ ...p, id: `__pad${i}`, name: `__pad${i}`, fixed: true, symbol: 'none', symbolSize: 0, silent: true, label: { show: false }, tooltip: { show: false } }));
-
-    const nodeData = nodes.map((n, i) => ({
-      // NB: not `label` — echarts owns data[i].label and rewrites it into a label config
-      // object, which is why the formatter rendered "[object Object]".
-      id: String(i), name: n.key || '(entry)', key: n.key, displayName: n.label, kind: n.kind,
-      group: n.member_count ?? 0, card: cardLabel(n, !n.inferred && !!colors[n.key]),
-      kindIcon: KIND_ICON[n.kind] ?? KIND_ICON.unknown, svcColor: !n.inferred && colors[n.key] ? resolveColor(n.key, colors) : null,
-      value: n.stats.requests, tip: statsTip(n.label || 'entry', n.stats, ringColor(n, s, colors), groupTip(n)),
-      x: coords.get(n.key)!.x, y: coords.get(n.key)!.y, fixed: true,
-      symbol: 'rect', symbolSize: [CARD_W, CARD_H],
-    }));
-
-    const linkData = edges.map(e => ({
-      source: String(index.get(e.source)), target: String(index.get(e.target)),
-      sourceKey: e.source, targetKey: e.target,
-      value: e.stats.requests, back: back.has(edgeKey(e.source, e.target)),
-      rps: `${e.stats.throughput_per_sec < 10 ? e.stats.throughput_per_sec.toFixed(2) : fmtNum(Math.round(e.stats.throughput_per_sec))} req/s`,
-      inferred: byKey.get(e.target)!.inferred, errorRate: e.stats.error_rate,
-      tip: statsTip(`${byKey.get(e.source)!.label || 'entry'} → ${byKey.get(e.target)!.label}`, e.stats,
-        healthColor(e.stats.error_rate, s, resolveColor(e.source, colors))),
-    }));
-    // Failing edges paint last so they sit on top of the healthy bundle instead of under it.
-    linkData.sort((a, b) => a.errorRate - b.errorRate);
-
-    return { nodes, edges, nodeData, linkData, pads, reach };
+    k = Math.min(1, (box.width - 48) / w, (box.height - 48) / h);
+    tx = (box.width - w * k) / 2 - Math.min(...xs) * k;
+    ty = (box.height - h * k) / 2 - Math.min(...ys) * k;
+    applyTransform();
   };
 
-  // A collapsed group must never hide a failing member behind a healthy-looking average:
-  // one endpoint at 100% inside 42 healthy ones is ~2% aggregate, which is exactly the
-  // failure the map exists to surface. Say how many are erroring, in words.
-  function groupTip(n: ServiceNode): string {
-    if (!n.member_count) return n.duration_share != null ? `<div>${(n.duration_share * 100).toFixed(1)}% of trace time</div>` : '';
-    const bad = (members.get(n.key) ?? []).filter(m => m.stats.error_rate >= ERR_ELEVATED).length;
-    return `<div style="opacity:.65">${n.member_count} endpoints${bad ? ` · ${bad} returning errors` : ''}</div>`;
-  }
+  const zoomAt = (factor: number, cx: number, cy: number) => {
+    const next = Math.min(2.5, Math.max(0.15, k * factor));
+    // Keep the point under the cursor fixed, which is what makes wheel-zoom feel anchored
+    // rather than teleporting.
+    tx = cx - (cx - tx) * (next / k);
+    ty = cy - (cy - ty) * (next / k);
+    k = next;
+    applyTransform();
+  };
 
-  let view = derive();
+  el.addEventListener('wheel', e => {
+    e.preventDefault();
+    const box = el.getBoundingClientRect();
+    zoomAt(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX - box.left, e.clientY - box.top);
+  }, { passive: false, signal });
 
-  // `structural` false is a restyle of the same nodes and links — used for hover, where a
-  // notMerge pass would rebuild the series and take the tooltip down with it on every move.
-  const paint = (structural = true) => {
+  let drag: { x: number; y: number; tx: number; ty: number } | null = null;
+  el.addEventListener('pointerdown', e => {
+    if ((e.target as HTMLElement).closest('[data-node], [data-map-zoom]')) return;
+    drag = { x: e.clientX, y: e.clientY, tx, ty };
+    el.setPointerCapture(e.pointerId);
+    el.style.cursor = 'grabbing';
+  }, { signal });
+  el.addEventListener('pointermove', e => {
+    if (!drag) return;
+    tx = drag.tx + (e.clientX - drag.x);
+    ty = drag.ty + (e.clientY - drag.y);
+    applyTransform();
+  }, { signal });
+  for (const ev of ['pointerup', 'pointercancel'] as const)
+    el.addEventListener(ev, () => { drag = null; el.style.cursor = ''; }, { signal });
+
+  for (const btn of el.querySelectorAll<HTMLElement>('[data-map-zoom]'))
+    btn.addEventListener('click', () => {
+      const box = el.getBoundingClientRect();
+      const a = btn.dataset.mapZoom;
+      if (a === 'fit') fit();
+      else zoomAt(a === 'zoom-in' ? 1.25 : 1 / 1.25, box.width / 2, box.height / 2);
+    }, { signal });
+
+  // --- painting ----------------------------------------------------------------
+  const pos = new Map<string, Point>();
+
+  const styleNode = (n: ServiceNode, card: HTMLElement, lit: boolean, onPath: boolean) => {
     const s = getChartStyles();
-    // One selection pass drives both dimming sources, so search and click-isolation
-    // can never disagree about a node's opacity.
-    const lit = filterSelection(view.nodes, view.edges, query, isolated);
-    const dim = (k: string) => (lit.litNodes.has(k) ? 1 : 0.12);
-    const dense = view.edges.length > 60;
-    // The lit path: the hovered card and every hop touching it, drawn in the accent so a
-    // glance answers "where does this service's traffic actually go".
+    const failing = n.stats.error_rate >= ERR_FAILING;
+    const elevated = n.stats.error_rate >= ERR_ELEVATED;
+    card.style.opacity = lit ? '1' : '0.25';
+    card.style.borderColor = onPath ? s.brandColor : failing ? s.errorColor : elevated ? s.warningColor : s.tooltipBorderColor;
+    card.style.borderWidth = onPath || elevated ? '2px' : '1px';
+    card.style.borderStyle = n.inferred ? 'dashed' : 'solid';
+    const health = card.querySelector<HTMLElement>('[data-node-health]')!;
+    health.style.background = failing ? s.errorColor : elevated ? s.warningColor : (!n.inferred && colors[n.key] ? resolveColor(n.key, colors) : s.tooltipBorderColor);
+    const err = card.querySelector<HTMLElement>('[data-node-errors]')!;
+    err.style.color = failing ? s.errorColor : elevated ? s.warningColor : '';
+  };
+
+  const buildCards = () => {
+    layer.textContent = '';
+    cards = new Map();
+    for (const n of drawn.nodes) {
+      const card = tpl.content.firstElementChild!.cloneNode(true) as HTMLElement;
+      card.dataset.key = n.key;
+      card.querySelector('[data-node-icon]')!.innerHTML = KIND_ICON[n.kind] ?? KIND_ICON.unknown;
+      card.querySelector('[data-node-name]')!.textContent = n.label || 'Entry point';
+      const count = card.querySelector<HTMLElement>('[data-node-count]')!;
+      if (n.member_count && !n.key.startsWith('rest:')) { count.textContent = `×${n.member_count}`; count.classList.remove('hidden'); }
+      card.querySelector('[data-node-errors]')!.textContent = `${(n.stats.error_rate * 100).toFixed(2)}% errors`;
+      card.querySelector('[data-node-latency]')!.textContent =
+        n.duration_share != null ? `${(n.duration_share * 100).toFixed(1)}% of trace` : `${fmtDur(n.stats.p95_ns)} latency`;
+      card.querySelector('[data-node-rps]')!.textContent = `${fmtRps(n.stats.throughput_per_sec)} req/s`;
+      card.title = n.label || 'Entry point';
+      layer.appendChild(card);
+      cards.set(n.key, card);
+    }
+  };
+
+  const place = () => {
+    for (const [key, card] of cards) {
+      const p = pos.get(key);
+      if (p) card.style.transform = `translate(${p.x}px, ${p.y}px)`;
+    }
+  };
+
+  const buildEdges = () => {
+    svg.querySelectorAll('path[data-edge]').forEach(p => p.remove());
+    paths = new Map();
+    for (const e of drawn.edges) {
+      const a = pos.get(e.source), b = pos.get(e.target);
+      if (!a || !b) continue;
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('data-edge', '');
+      path.setAttribute('fill', 'none');
+      path.setAttribute('d', edgePath(a.x + CARD_W / 2, a.y + CARD_H, b.x + CARD_W / 2, b.y));
+      svg.appendChild(path);
+      paths.set(edgeKey(e.source, e.target), path);
+    }
+  };
+
+  const paint = () => {
+    const s = getChartStyles();
+    const lit = filterSelection(drawn.nodes, drawn.edges, query, isolated);
     const onPath = new Set<string>();
     const pathEnds = new Set<string>();
-    if (hovered) for (const e of view.edges) {
+    if (hovered) for (const e of drawn.edges) {
       if (e.source === hovered || e.target === hovered) { onPath.add(edgeKey(e.source, e.target)); pathEnds.add(e.source); pathEnds.add(e.target); }
     }
-    chart.setOption({
-      animation: false,
-      backgroundColor: 'transparent',
-      tooltip: {
-        trigger: 'item', appendToBody: true, backgroundColor: s.tooltipBg,
-        borderColor: s.tooltipBorderColor, borderWidth: 1, textStyle: { color: s.tooltipTextColor, fontSize: 11 },
-        formatter: (p: any) => p.data?.tip ?? '',
-      },
-      series: [{
-        type: 'graph', layout: 'none', left: 40, right: 40, top: 32, bottom: 32,
-        roam: false, draggable: false, cursor: 'pointer',
-        // Arrowheads are noise once the bundle is dense; direction still reads left-to-right
-        // from the layering, and hovering an edge brings its own emphasis.
-        edgeSymbol: dense ? ['none', 'none'] : ['none', 'arrow'], edgeSymbolSize: [0, 7],
-        // autoCurveness spreads edges that share a *pair*; in a fan every edge has a
-        // different target, so it only bent 200 straight lines into sweeping arcs that
-        // crossed the whole canvas. A small fixed curveness is what the fan actually wants.
-        autoCurveness: false,
-        // The rect is the card and the label is its contents, centred inside it. Anchoring
-        // the label to the rect's top pushed the text out below its own card, and a graph
-        // series will not render a label at all for a node whose symbol is 'none'.
-        label: {
-          show: true, position: 'inside', align: 'left', lineHeight: 15,
-          width: CARD_W - 22, color: s.tooltipTextColor,
-          formatter: (p: any) => p.data?.card ?? '',
-          rich: {
-            svc: { width: 3, height: 11, borderRadius: 2, backgroundColor: 'transparent' },
-            icon: { width: 13, height: 13 },
-            name: { fontSize: 12, color: s.tooltipTextColor, fontWeight: 600 as const },
-            muted: { fontSize: 11, color: s.textColor },
-            warn: { fontSize: 11, color: s.warningColor },
-            bad: { fontSize: 11, color: s.errorColor, fontWeight: 600 as const },
-            // The throughput chip, the one number Datadog gives a filled background.
-            rps: { fontSize: 11, color: s.tooltipTextColor, backgroundColor: s.chartBg, padding: [2, 5], borderRadius: 3 },
-            barOk: { width: 3, height: 13, backgroundColor: s.tooltipBorderColor, borderRadius: 2 },
-            barWarn: { width: 3, height: 13, backgroundColor: s.warningColor, borderRadius: 2 },
-            barBad: { width: 3, height: 13, backgroundColor: s.errorColor, borderRadius: 2 },
-          },
-        },
-        // Throughput is written on the hop only while its path is lit, which is where Datadog
-        // puts it: unconditionally labelling 53 edges would bury the map it annotates.
-        edgeLabel: {
-          // Shown for every edge, but the formatter returns empty for any hop that is not on
-          // the lit path — a per-link `label` override does not take on a graph series.
-          show: true, fontSize: 10, color: s.tooltipTextColor, backgroundColor: s.tooltipBg,
-          padding: [1, 4], borderRadius: 3,
-          formatter: (p: any) => (onPath.has(edgeKey(p.data?.sourceKey, p.data?.targetKey)) ? p.data?.rps ?? '' : ''),
-        },
-        lineStyle: { color: s.textColor, width: 1.5, opacity: 0.3, curveness: 0.06 },
-        // Hover highlights a path; it does not black out the map. `focus:'adjacency'` only
-        // ever styled the hovered *item* and blurred everything else to near-invisible, which
-        // is the opposite of what this view is for — you hover a service to compare it with
-        // its neighbours. The path is drawn below from `hovered` instead, and nothing dims.
-        emphasis: { disabled: true },
-        data: [
-          ...view.nodeData.map(n => {
-            const st = byKey.get(n.key)!;
-            return {
-              ...n,
-              itemStyle: {
-                color: s.tooltipBg,
-                opacity: dim(n.key),
-                borderRadius: 5,
-                // Neutral by default. A border is a weak channel and health has first claim
-                // on it; the service colour identifies the node on its name line instead.
-                borderColor: pathEnds.has(n.key) ? s.brandColor
-                  : st.stats.error_rate >= ERR_ELEVATED ? ringColor(st, s, colors) : s.tooltipBorderColor,
-                borderWidth: pathEnds.has(n.key) || st.stats.error_rate >= ERR_ELEVATED ? 2 : 1,
-                borderType: st.inferred ? 'dashed' : 'solid',
-                // A collapsed head is a stacked card: "more than one" read from shape alone. A
-                // blurred shadow, not an offset slab — offsetting a hard edge under a bordered
-                // rect draws a black L, which reads as a rendering fault rather than depth.
-                ...(n.group ? { shadowColor: s.tooltipBorderColor, shadowBlur: 6, shadowOffsetX: 3, shadowOffsetY: 3 } : {}),
-              },
-              label: {
-                opacity: dim(n.key),
-                rich: {
-                  icon: { backgroundColor: { image: n.kindIcon }, width: 13, height: 13 },
-                  ...(n.svcColor ? { svc: { backgroundColor: n.svcColor, width: 3, height: 11, borderRadius: 2 } } : {}),
-                },
-              },
-            };
-          }),
-          ...view.pads,
-        ],
-        links: view.linkData.map(l => ({
-          ...l,
-          lineStyle: {
-            // Capped at 3: at close row pitch a 6px edge is wider than the gap between the
-            // rows it runs between, which is how 150 edges fused into one object.
-            width: onPath.has(edgeKey(l.sourceKey, l.targetKey)) ? 3 : Math.max(1, Math.min(3, 1 + Math.log2(1 + l.value) / 2)),
-            // Neutral until it matters. Colouring by source is meaningless in a fan-out —
-            // every edge shares one source — and it drowns the red that does mean something.
-            color: onPath.has(edgeKey(l.sourceKey, l.targetKey)) ? s.brandColor : healthColor(l.errorRate, s, s.textColor),
-            type: l.inferred ? 'dashed' : 'solid',
-            curveness: l.back ? 0.2 : undefined,
-            opacity: onPath.has(edgeKey(l.sourceKey, l.targetKey)) ? 1
-              : lit.litEdges.has(edgeKey(l.sourceKey, l.targetKey)) ? (l.errorRate >= ERR_ELEVATED ? 0.85 : 0.3) : 0.06,
-          },
-          // Per-link emphasis, because a link's own `lineStyle` outranks the series-level
-          // emphasis: without this the hovered path stayed the same hairline grey as the rest
-          // and hovering told you nothing about where the traffic goes.
-        })),
-      }],
-    }, { notMerge: structural, lazyUpdate: false });
+    for (const n of drawn.nodes) {
+      const card = cards.get(n.key);
+      if (card) styleNode(n, card, lit.litNodes.has(n.key), pathEnds.has(n.key));
+    }
+    for (const e of drawn.edges) {
+      const key = edgeKey(e.source, e.target);
+      const path = paths.get(key);
+      if (!path) continue;
+      const hot = onPath.has(key);
+      const failing = e.stats.error_rate >= ERR_FAILING;
+      path.setAttribute('stroke', hot ? s.brandColor : failing ? s.errorColor : e.stats.error_rate >= ERR_ELEVATED ? s.warningColor : s.tooltipBorderColor);
+      path.setAttribute('stroke-width', hot ? '2' : '1.25');
+      path.setAttribute('stroke-dasharray', byKey.get(e.target)?.inferred ? '4 3' : '');
+      path.setAttribute('opacity', String(hot ? 1 : lit.litEdges.has(key) ? 0.75 : 0.12));
+      path.setAttribute('marker-end', `url(#${containerId}-arrow)`);
+    }
   };
-  paint();
 
-  // Expanding a group replaces it with its members, so the geometry is rebuilt, not restyled.
-  const rebuild = () => { view = derive(); paint(); };
+  const rebuild = async () => {
+    const scoped = scopeTo(allNodes, graph.edges, scope);
+    const vis = visibleGraph(scoped.nodes, scoped.edges, expanded);
+    drawn = { nodes: vis.nodes, edges: vis.edges };
+    const keys = drawn.nodes.map(n => n.key);
+    const { coords } = await layoutGraph(keys, drawn.edges, { layerGap: LAYER_GAP, nodeGap: NODE_GAP, cardW: CARD_W, cardH: CARD_H });
+    pos.clear();
+    // ELK reports centres; the DOM positions a card by its top-left.
+    for (const [key, p] of coords) pos.set(key, { x: p.x - CARD_W / 2, y: p.y - CARD_H / 2 });
 
-  // The menu markup is rendered once by Lucid inside the container; we only position it and
-  // point its links at this node. Building menu HTML here would put a second renderer in JS.
-  const panel = el.parentElement ?? el;
+    reach = { up: new Map(), down: new Map() };
+    for (const key of keys) { reach.up.set(key, []); reach.down.set(key, []); }
+    for (const e of drawn.edges) { reach.down.get(e.source)?.push(e.target); reach.up.get(e.target)?.push(e.source); }
+
+    buildCards();
+    place();
+    buildEdges();
+    paint();
+  };
+
+  await rebuild();
+  fit();
+
+  // --- interaction --------------------------------------------------------------
   const menu = panel.querySelector<HTMLElement>('[data-service-menu]');
+  const chip = panel.querySelector<HTMLElement>('[data-map-scope]');
   const pid = el.dataset.mapBase ?? '';
   const hideMenu = () => menu?.classList.add('hidden');
 
-  // Which node the menu is open for lives on the menu element, not in a closure: the menu is
-  // one shared DOM node, while `render` can run more than once (a hidden container re-renders
-  // when it gets a size), and each run's listener would otherwise read its own stale copy.
   const showMenu = (key: string, label: string, inferred: boolean, x: number, y: number) => {
     if (!menu) return;
     menu.dataset.nodeKey = key;
     const title = menu.querySelector<HTMLElement>('[data-menu-title]');
     if (title) title.textContent = label;
-    // An inferred peer has no telemetry of its own, so the only honest action is Inspect.
     const q = encodeURIComponent(`resource.service.name=="${key}"`);
     for (const a of menu.querySelectorAll<HTMLAnchorElement>('[data-menu-action]')) {
       const action = a.dataset.menuAction!;
-      const hide = inferred && action !== 'inspect' && action !== 'focus';
-      a.classList.toggle('hidden', hide);
+      a.classList.toggle('hidden', inferred && action !== 'inspect' && action !== 'focus');
       a.href =
         action === 'traces' ? `${pid}/log_explorer?query=${q}&viz_type=traces`
         : action === 'logs' ? `${pid}/log_explorer?query=${q}`
@@ -717,8 +564,6 @@ function render(
     menu.classList.remove('hidden');
   };
 
-  // The chip markup is Lucid's; the renderer only writes text into it and toggles it.
-  const chip = panel.querySelector<HTMLElement>('[data-map-scope]');
   const setScope = (key: string | null) => {
     scope = key;
     expanded.clear();
@@ -730,9 +575,11 @@ function render(
       const label = chip.querySelector<HTMLElement>('[data-scope-label]');
       if (label && node) label.textContent = node.label || 'Entry point';
     }
-    rebuild();
-    const count = chip?.querySelector<HTMLElement>('[data-scope-count]');
-    if (count) count.textContent = key ? `Showing ${view.nodes.length} services from traces through this service.` : '';
+    void rebuild().then(() => {
+      fit();
+      const count = chip?.querySelector<HTMLElement>('[data-scope-count]');
+      if (count) count.textContent = key ? `Showing ${drawn.nodes.length} services from traces through this service.` : '';
+    });
   };
   chip?.querySelector('[data-scope-clear]')?.addEventListener('click', () => setScope(null), { signal });
 
@@ -740,49 +587,48 @@ function render(
     const a = (e.target as HTMLElement).closest<HTMLAnchorElement>('[data-menu-action]');
     const action = a?.dataset.menuAction;
     if (action === 'inspect' || action === 'focus') e.preventDefault();
-    if (action === 'focus' && menu?.dataset.nodeKey) setScope(menu.dataset.nodeKey);
+    if (action === 'focus' && menu.dataset.nodeKey) setScope(menu.dataset.nodeKey);
     hideMenu();
-    // `signal`, like every other listener here: `render` runs again whenever the container
-    // gains a size, and a superseded render that keeps its listeners keeps repainting its own
-    // stale selection over the live chart.
   }, { signal });
 
-  const setHover = (key: string | null) => { if (hovered !== key) { hovered = key; paint(false); } };
-  chart.on('mouseover', (p: any) => { if (p.dataType === 'node' && p.data?.key !== undefined) setHover(p.data.key as string); });
-  chart.on('mouseout', (p: any) => { if (p.dataType === 'node') setHover(null); });
-
-  chart.on('click', (p: any) => {
-    if (p.dataType !== 'node' || p.data?.key === undefined) return;
-    const key = p.data.key as string;
-    // A collapsed group's only honest action is "show me what is in it": the per-service
-    // menu items cannot be scoped to a set of endpoints.
-    if (p.data.group) { expanded.add(key); isolated = null; hideMenu(); rebuild(); return; }
-    isolated = new Set([...reachableFrom(key, view.reach.up), ...reachableFrom(key, view.reach.down)]);
+  // Delegated: cards are rebuilt on every layout, so per-card listeners would leak.
+  layer.addEventListener('click', e => {
+    const card = (e.target as HTMLElement).closest<HTMLElement>('[data-node]');
+    const key = card?.dataset.key;
+    if (!key) return;
+    const node = byKey.get(key);
+    if (node?.member_count) { expanded.add(key); isolated = null; hideMenu(); void rebuild().then(fit); return; }
+    isolated = new Set([...reachableFrom(key, reach.up), ...reachableFrom(key, reach.down)]);
     paint();
     const box = panel.getBoundingClientRect();
-    showMenu(key, p.data.displayName || 'entry', !!byKey.get(key)?.inferred,
-      p.event.event.clientX - box.left, p.event.event.clientY - box.top);
+    showMenu(key, node?.label || 'Entry point', !!node?.inferred, e.clientX - box.left, e.clientY - box.top);
     opts.onNodeClick?.(key);
-  });
-  // Clicking the background, or Escape, is the one gesture that returns the map to its
-  // default view: focus cleared and every expanded group collapsed again.
+  }, { signal });
+
+  const setHover = (key: string | null) => { if (hovered !== key) { hovered = key; paint(); } };
+  layer.addEventListener('pointerover', e => setHover((e.target as HTMLElement).closest<HTMLElement>('[data-node]')?.dataset.key ?? null), { signal });
+  layer.addEventListener('pointerout', e => {
+    if (!(e.relatedTarget as HTMLElement | null)?.closest?.('[data-node]')) setHover(null);
+  }, { signal });
+  // Keyboard reaches the same path highlight, which is the whole point of DOM nodes.
+  layer.addEventListener('focusin', e => setHover((e.target as HTMLElement).closest<HTMLElement>('[data-node]')?.dataset.key ?? null), { signal });
+
   const resetView = () => {
     hideMenu();
     const wasExpanded = expanded.size > 0;
     expanded.clear();
     isolated = null;
-    if (wasExpanded) rebuild(); else paint();
+    if (wasExpanded) void rebuild().then(fit); else paint();
   };
-  chart.getZr().on('click', (e: any) => { if (!e.target) resetView(); });
-  document.addEventListener('keydown', e => {
-    if (e.key === 'Escape' && (isolated || expanded.size)) resetView();
-  }, { signal });
+  el.addEventListener('click', e => { if (!(e.target as HTMLElement).closest('[data-node], [data-map-zoom]')) resetView(); }, { signal });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && (isolated || expanded.size)) resetView(); }, { signal });
 
   const unsubscribeTheme = subscribeChartTheme(() => paint());
-  // The row budget is a function of the box height, so a resize re-fits, not just rescales.
-  const resize = () => { if (!chart.isDisposed()) { chart.resize(); rebuild(); } };
-  ['resize', 'toggle-sidebar', 'loglist-resize'].forEach(ev => window.addEventListener(ev, resize, { signal }));
-  sharedResizeObserver.observe(el);
+  ['resize', 'toggle-sidebar', 'loglist-resize'].forEach(ev => window.addEventListener(ev, fit, { signal }));
+  // Its own observer, not the shared chart one: that batcher resolves each element through
+  // `window.echarts`, which this page no longer loads at all.
+  const ro = new ResizeObserver(() => fit());
+  ro.observe(el);
 
   const handle: ServiceMapHandle = {
     id: containerId,
@@ -793,9 +639,6 @@ function render(
   handles.set(containerId, handle);
   (el as any).__serviceMap = handle;
 
-  // The search input is a sibling-descendant, not an ancestor, so the bubbling
-  // `service-map-filter` event never reaches the map container — listen on
-  // document instead. `detail.id`, when present, addresses one specific map.
   document.addEventListener(FILTER_EVENT, (ev: Event) => {
     const d = (ev as CustomEvent<{ q?: string; id?: string }>).detail ?? {};
     if (d.id && d.id !== containerId) return;
@@ -805,10 +648,9 @@ function render(
   registerChartDisposer(containerId, () => {
     controller.abort();
     unsubscribeTheme();
-    sharedResizeObserver.unobserve(el);
+    ro.disconnect();
     handles.delete(containerId);
     delete (el as any).__serviceMap;
-    if (!chart.isDisposed()) chart.dispose();
   });
 }
 

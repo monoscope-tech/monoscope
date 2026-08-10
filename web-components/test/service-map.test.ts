@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
-import { breakCycles, layerGraph, orderLayers, assignCoords, layoutGraph, filterSelection, hydrateServiceMaps, statsTip, visibleGraph, fitCols, edgeKey, cardLabel, scopeTo, COL_GAP, LAYER_GAP, type Edge } from '../src/service-map';
+import { breakCycles, layoutGraph, filterSelection, hydrateServiceMaps, visibleGraph, edgeKey, edgePath, scopeTo, CARD_W, CARD_H, type Edge } from '../src/service-map';
 
 const e = (source: string, target: string): Edge => ({ source, target });
-const snapshot = (keys: string[], edges: Edge[]) => {
-  const { coords, back } = layoutGraph(keys, edges);
+const snapshot = async (keys: string[], edges: Edge[]) => {
+  const { coords, back } = await layoutGraph(keys, edges);
   return JSON.stringify({ coords: [...coords], back: [...back].sort() });
 };
 
@@ -26,18 +26,6 @@ describe('hydrateServiceMaps', () => {
   });
 });
 
-describe('statsTip', () => {
-  const stats = { requests: 1, errors: 0, error_rate: 0, p50_ns: 1, p95_ns: 1, p99_ns: 1, throughput_per_sec: 1 };
-
-  it('uses a dark foreground on a light service color', () => {
-    expect(statsTip('currency', stats, '#facc15')).toContain('background:#facc15;color:#493e12');
-  });
-
-  it('uses a light foreground on a dark status color', () => {
-    expect(statsTip('failed', stats, '#111827')).toContain('background:#111827;color:#d4dcec');
-  });
-});
-
 describe('scopeTo', () => {
   // gateway -> checkout -> db, and an unrelated worker -> queue alongside it.
   const nodes = ['gateway', 'checkout', 'db', 'worker', 'queue'].map(key => ({ key }));
@@ -55,42 +43,22 @@ describe('scopeTo', () => {
   });
 });
 
-describe('cardLabel', () => {
-  const node = (over: Partial<Parameters<typeof cardLabel>[0]> = {}) => ({
-    key: 'api.paystack.co', label: 'api.paystack.co', kind: 'external' as const, inferred: true,
-    duration_share: null, member_count: null, group_key: null,
-    stats: { requests: 4500, errors: 0, error_rate: 0, p50_ns: 1e8, p95_ns: 1.48e9, p99_ns: 2e9, throughput_per_sec: 1.25 },
-    ...over,
+describe('edgePath', () => {
+  it('leaves the caller downward and arrives at the callee from above', () => {
+    // Vertical control points are what make an edge meet a card square-on rather than
+    // grazing past it, which is how Datadog's read as "into this box".
+    const d = edgePath(100, 60, 300, 200);
+    expect(d).toMatch(/^M 100,60 C 100,\d+ 300,\d+ 300,200$/);
+    const [, c1y, c2y] = d.match(/C 100,(\d+) 300,(\d+)/)!.map(Number);
+    expect(c1y).toBeGreaterThan(60);
+    expect(c2y).toBeLessThan(200);
   });
 
-  it('carries all four facts, so the map answers without a hover', () => {
-    const card = cardLabel(node());
-    expect(card).toContain('{name|api.paystack.co}');
-    expect(card).toContain('0.00% errors');
-    expect(card).toContain('1.48s p95');
-    expect(card).toContain('1.25 req/s');
-    expect(card).toContain('{icon|}');
-  });
-
-  it('grades the error line in three steps rather than flagging any error at all', () => {
-    const rate = (r: number) => cardLabel(node({ stats: { ...node().stats, error_rate: r } })).split('\n')[1];
-    expect(rate(0.001)).toContain('{muted|');  // one error in an hour is not an incident
-    expect(rate(0.02)).toContain('{warn|');
-    expect(rate(0.2)).toContain('{bad|');
-  });
-
-  it('names a collapsed head for what it stands for', () => {
-    expect(cardLabel(node({ label: 'myshopify.com', member_count: 71 }))).toContain('myshopify.com  ×71');
-  });
-
-  it('strips rich-text metacharacters so a hostname cannot break the card', () => {
-    expect(cardLabel(node({ label: 'we{ird}|host' }))).toContain('{name|weirdhost}');
-  });
-
-  it('shows trace-time share instead of p95 on a trace map', () => {
-    const card = cardLabel(node({ duration_share: 0.42 }));
-    expect(card).toContain('42.0% of trace time');
-    expect(card).not.toContain('p95');
+  it('keeps a usable curve even when the two cards are almost level', () => {
+    // A flat cubic would collapse into a straight line through whatever sits between them.
+    const d = edgePath(0, 100, 400, 104);
+    const [, c1y] = d.match(/C 0,(\d+)/)!.map(Number);
+    expect(c1y - 100).toBeGreaterThanOrEqual(24);
   });
 });
 
@@ -139,43 +107,6 @@ describe('visibleGraph', () => {
   });
 });
 
-describe('fitCols', () => {
-  it('fits as many cards across as the canvas can hold', () => {
-    expect(fitCols(1800, 176).maxCols).toBe(8);
-  });
-
-  it('never returns zero columns, however narrow the canvas', () => {
-    expect(fitCols(60, 176).maxCols).toBe(1);
-  });
-});
-
-describe('assignCoords', () => {
-  it('wraps a row past maxCols onto a sub-row, not off the side', () => {
-    const coords = assignCoords([['a', 'b', 'c', 'd', 'e']], { maxCols: 2 });
-    // Two per row: a,b | c,d | e — each wrap moves down, never further across.
-    expect(coords.get('a')).toEqual({ x: -COL_GAP / 2, y: 0 });
-    expect(coords.get('b')).toEqual({ x: COL_GAP / 2, y: 0 });
-    expect(coords.get('c')!.y).toBeGreaterThan(0);
-    expect(coords.get('c')!.x).toBe(-COL_GAP / 2);
-    expect(coords.get('e')!.y).toBeGreaterThan(coords.get('c')!.y);
-    // Whatever the wrapping, no two cards ever share a point.
-    expect(new Set([...coords.values()].map(p => `${p.x},${p.y}`)).size).toBe(5);
-  });
-
-  it('advances the next hop past a wrapped row, not into it', () => {
-    // The collision this pins: row 0 wraps onto two lines, so hop 1 must clear both.
-    const coords = assignCoords([['a', 'b', 'c'], ['z']], { maxCols: 2 });
-    expect(coords.get('z')!.y).toBeGreaterThanOrEqual(coords.get('c')!.y + LAYER_GAP);
-  });
-
-  it('centres each row on x and steps hops down the page', () => {
-    const coords = assignCoords([['a'], ['b', 'c']]);
-    expect(coords.get('a')).toEqual({ x: 0, y: 0 });
-    expect(coords.get('b')).toEqual({ x: -COL_GAP / 2, y: LAYER_GAP });
-    expect(coords.get('c')).toEqual({ x: COL_GAP / 2, y: LAYER_GAP });
-  });
-});
-
 describe('breakCycles', () => {
   it('leaves a DAG untouched', () => {
     const edges = [e('a', 'b'), e('b', 'c'), e('a', 'c')];
@@ -195,91 +126,55 @@ describe('breakCycles', () => {
   });
 });
 
-describe('layerGraph', () => {
-  it('uses the longest path, not the first one found', () => {
-    // a→d directly, and a→b→c→d: d must land on layer 3, not 1.
-    const layer = layerGraph(['a', 'b', 'c', 'd'], [e('a', 'd'), e('a', 'b'), e('b', 'c'), e('c', 'd')]);
-    expect([...layer]).toEqual([['a', 0], ['b', 1], ['c', 2], ['d', 3]]);
-  });
-
-  it('layers each disconnected component from its own root', () => {
-    const layer = layerGraph(['a', 'b', 'x', 'y'], [e('a', 'b'), e('x', 'y')]);
-    expect(layer.get('a')).toBe(0);
-    expect(layer.get('x')).toBe(0);
-    expect(layer.get('b')).toBe(1);
-    expect(layer.get('y')).toBe(1);
-  });
-});
-
 describe('layoutGraph', () => {
-  it('places a single node at the origin with no back-edges', () => {
-    const { coords, back } = layoutGraph(['solo'], []);
-    expect(coords.get('solo')).toEqual({ x: 0, y: 0 });
+  it('places a lone node and reports no back-edges', async () => {
+    const { coords, back } = await layoutGraph(['solo'], []);
+    expect(coords.get('solo')).toBeDefined();
     expect(back.size).toBe(0);
   });
 
-  it('lays out disconnected components without overlapping cards', () => {
-    const { coords } = layoutGraph(['a', 'b', 'x', 'y'], [e('a', 'b'), e('x', 'y')]);
-    // Both roots share the first row; both their callees share the second.
-    expect(coords.get('a')!.y).toBe(0);
-    expect(coords.get('x')!.y).toBe(0);
-    expect(coords.get('a')!.x).not.toBe(coords.get('x')!.x);
-    expect(coords.get('b')!.y).toBe(LAYER_GAP);
-    expect(coords.get('y')!.y).toBe(LAYER_GAP);
+  it('puts every callee on a later row than its caller', async () => {
+    const { coords } = await layoutGraph(['a', 'b', 'x', 'y'], [e('a', 'b'), e('x', 'y')]);
+    expect(coords.get('b')!.y).toBeGreaterThan(coords.get('a')!.y);
+    expect(coords.get('y')!.y).toBeGreaterThan(coords.get('x')!.y);
+    // Disconnected roots share the first row rather than stacking.
+    expect(coords.get('a')!.y).toBe(coords.get('x')!.y);
   });
 
-  it('lays out a wide fan-out symmetrically about the root', () => {
-    const leaves = Array.from({ length: 9 }, (_, i) => `leaf${i}`);
-    const { coords } = layoutGraph(['root', ...leaves], leaves.map(l => e('root', l)));
-    const xs = leaves.map(l => coords.get(l)!.x);
-    expect(new Set(leaves.map(l => coords.get(l)!.y))).toEqual(new Set([LAYER_GAP]));
-    expect(new Set(xs).size).toBe(9);
-    expect(xs.reduce((a, b) => a + b, 0)).toBeCloseTo(0);
+  it('never overlaps two cards, however wide the fan-out', async () => {
+    const leaves = Array.from({ length: 12 }, (_, i) => `leaf${i}`);
+    const { coords } = await layoutGraph(['root', ...leaves], leaves.map(l => e('root', l)));
+    const boxes = [...coords.values()];
+    for (let i = 0; i < boxes.length; i++)
+      for (let j = i + 1; j < boxes.length; j++) {
+        const overlap = Math.abs(boxes[i].x - boxes[j].x) < CARD_W && Math.abs(boxes[i].y - boxes[j].y) < CARD_H;
+        expect(overlap).toBe(false);
+      }
   });
 
-  it('is deterministic — two runs are byte-identical', () => {
+  it('is deterministic — two runs are byte-identical', async () => {
+    // A shared map link must not reshuffle between refreshes, so ELK's tie-breaks are
+    // pinned to model order. This is the assertion that guards that.
     const keys = ['gateway', 'checkout', 'auth', 'db:orders', 'queue:orders.v1', 'redis'];
     const edges = [
       e('gateway', 'checkout'), e('gateway', 'auth'), e('checkout', 'db:orders'),
       e('checkout', 'queue:orders.v1'), e('auth', 'redis'), e('checkout', 'auth'),
       e('redis', 'gateway'), // back-edge
     ];
-    expect(snapshot(keys, edges)).toBe(snapshot(keys, edges));
+    expect(await snapshot(keys, edges)).toBe(await snapshot(keys, edges));
   });
 
-  it('after layering every edge points forward except the recorded back-edges', () => {
-    const keys = ['a', 'b', 'c', 'd', 'e'];
-    const edges = [e('a', 'b'), e('b', 'c'), e('c', 'd'), e('d', 'b'), e('a', 'e'), e('e', 'd')];
-    const { acyclic, back } = breakCycles(keys, edges);
-    const layer = layerGraph(keys, acyclic);
-    const backSet = new Set(back.map(b => `${b.source} ${b.target}`));
-
-    expect(backSet.size).toBeGreaterThan(0);
-    for (const edge of edges) {
-      const forward = layer.get(edge.target)! > layer.get(edge.source)!;
-      expect(forward || backSet.has(`${edge.source} ${edge.target}`)).toBe(true);
-    }
-  });
-});
-
-describe('orderLayers', () => {
-  it('sorts a layer by the median of its predecessors, tie-breaking on key', () => {
-    // Layer 1 seeded alphabetically as [p, q]; p follows the lower-placed parent
-    // (a) and q follows (b), so barycenters keep them in that order.
-    const keys = ['a', 'b', 'p', 'q'];
-    const edges = [e('a', 'p'), e('b', 'q')];
-    const layers = orderLayers(layerGraph(keys, edges), edges);
-    expect(layers[0]).toEqual(['a', 'b']);
-    expect(layers[1]).toEqual(['p', 'q']);
+  it('still records back-edges, which ELK breaks internally but does not report', async () => {
+    const keys = ['a', 'b', 'c'];
+    const { back } = await layoutGraph(keys, [e('a', 'b'), e('b', 'c'), e('c', 'a')]);
+    expect(back.has(edgeKey('c', 'a'))).toBe(true);
+    expect(back.size).toBe(1);
   });
 
-  it('reduces crossings on a swapped bipartite layer', () => {
-    const keys = ['a', 'b', 'x', 'y'];
-    const edges = [e('a', 'y'), e('b', 'x')];
-    const layers = orderLayers(layerGraph(keys, edges), edges);
-    const pos = (k: string) => layers[1].indexOf(k);
-    // 'y' hangs off 'a' (first in layer 0) so it must be ordered before 'x'.
-    expect(pos('y')).toBeLessThan(pos('x'));
+  it('lays out a node whose key contains characters ELK ids must survive', async () => {
+    const keys = ['grp:http:my-shop.com', 'db:orders', ''];
+    const { coords } = await layoutGraph(keys, [e('', 'db:orders'), e('db:orders', 'grp:http:my-shop.com')]);
+    expect([...coords.keys()].sort()).toEqual(keys.slice().sort());
   });
 });
 

@@ -526,7 +526,9 @@ const processResizeQueue = () => {
   resizeQueue.forEach((chartId) => {
     const chartEl = $(chartId);
     if (chartEl) {
-      const chart = (window as any).echarts.getInstanceByDom(chartEl);
+      // A page may observe an element without ever loading echarts — the service map is DOM,
+      // not canvas — and a missing global must not throw for every other chart in the queue.
+      const chart = (window as any).echarts?.getInstanceByDom(chartEl);
       if (chart && !chart.isDisposed()) {
         chart.resize();
       }

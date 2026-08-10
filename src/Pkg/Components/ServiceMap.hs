@@ -40,17 +40,38 @@ serviceMapPanel_ pid elId graph colors selectedEnv = div_ [class_ "w-full flex f
           serviceMapLegend_ graph colors
           envFacet_ pid graph selectedEnv
           scopeChip_
-          -- The viewport scrolls; the canvas inside it is sized to the graph. Fitting a big
-          -- graph into a fixed box is what shrinks cards until they overlap, so the map is
-          -- allowed to be bigger than its window and you pan to the rest.
+          -- A React-Flow-shaped canvas, without React: a clipping viewport, one pane that the
+          -- renderer translates and scales, an SVG layer for the edges, and the nodes as real
+          -- DOM cards above it. Nothing here is drawn to a bitmap, so the cards are styled by
+          -- our own tokens, carry sprite icons, and are focusable — none of which a canvas
+          -- node can be.
           div_
-            [ class_ "border border-strokeWeak rounded-2xl w-full h-[720px] max-md:h-[460px] relative overflow-auto c-scroll"
+            [ class_ "border border-strokeWeak rounded-2xl w-full h-[720px] max-md:h-[460px] relative overflow-hidden touch-none select-none"
             , id_ elId
             , term "data-service-map" elId
             , -- Base for the node menu's links; the renderer only appends the query.
               term "data-map-base" ("/p/" <> pid.toText)
             ]
-            $ div_ [class_ "absolute inset-0", term "data-map-canvas" ""] pass
+            do
+              div_ [class_ "absolute inset-0 origin-top-left", term "data-map-pane" ""] do
+                svg_ [class_ "absolute overflow-visible pointer-events-none", term "data-map-edges" "", term "width" "1", term "height" "1"]
+                  -- Lucid has no SVG element vocabulary; `term` names them directly. One shared
+                  -- marker definition rather than an arrow per edge.
+                  $ term "defs"
+                  $ term
+                    "marker"
+                    [ id_ $ elId <> "-arrow"
+                    , term "viewBox" "0 0 10 10"
+                    , term "refX" "8"
+                    , term "refY" "5"
+                    , term "markerWidth" "5"
+                    , term "markerHeight" "5"
+                    , term "orient" "auto"
+                    ]
+                  $ term "path" [term "d" "M 0 1 L 9 5 L 0 9 z", term "fill" "context-stroke"] (mempty :: Html ())
+                div_ [class_ "absolute inset-0", term "data-map-nodes" ""] pass
+              zoomControls_
+              nodeCardTemplate_
           -- Outside the scrolling viewport: an absolutely positioned menu inside a scroll
           -- container is clipped by it the moment the node is near an edge.
           nodeMenu_ elId
@@ -100,6 +121,49 @@ scopeChip_ =
         ]
         "×"
     span_ [class_ "text-textWeak", term "data-scope-count" ""] ""
+
+
+-- | Zoom affordances. `roam` used to be on with nothing to say so — the canvas panned and
+-- zoomed and no one could tell. Real buttons also give the gesture a keyboard equivalent.
+zoomControls_ :: Html ()
+zoomControls_ =
+  div_ [class_ "absolute bottom-3 right-3 z-20 flex flex-col rounded-lg border border-strokeWeak bg-bgRaised shadow-sm overflow-hidden"]
+    $ forM_ ([("zoom-in", "plus", "Zoom in"), ("zoom-out", "minus", "Zoom out"), ("fit", "expand", "Fit to view")] :: [(Text, Text, Text)])
+    $ \(action, icon, label) ->
+      button_
+        [ class_ "p-1.5 hover:bg-fillWeak cursor-pointer border-b border-strokeWeak last:border-0"
+        , type_ "button"
+        , term "data-map-zoom" action
+        , term "aria-label" label
+        , title_ label
+        ]
+        $ faSprite_ icon "regular" "w-3.5 h-3.5 text-iconNeutral"
+
+
+-- | The node card, authored once here and cloned per drawn node by the renderer. A template
+-- rather than a card per node in the payload: a project at the cap carries 150 drawn nodes and
+-- up to 1200 collapsed members, and rendering all of them to hide most would be ten thousand
+-- elements the reader never sees. Cloning Lucid-authored markup is not building HTML in JS.
+nodeCardTemplate_ :: Html ()
+nodeCardTemplate_ =
+  template_ [term "data-node-card" ""] $ do
+    div_
+      [ class_ "absolute flex w-[150px] overflow-hidden rounded-[3px] border bg-bgRaised text-[11px] leading-[15px] cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-strokeBrand-strong"
+      , term "data-node" ""
+      , tabindex_ "0"
+      ]
+      do
+        div_ [class_ "min-w-0 flex-1 px-2 py-1.5"] do
+          div_ [class_ "flex items-center gap-1"] do
+            span_ [class_ "shrink-0 text-iconNeutral", term "data-node-icon" ""] pass
+            span_ [class_ "truncate font-semibold text-textStrong", term "data-node-name" ""] pass
+            span_ [class_ "shrink-0 tabular-nums text-textWeak hidden", term "data-node-count" ""] pass
+          div_ [class_ "text-textWeak", term "data-node-errors" ""] pass
+          div_ [class_ "text-textWeak", term "data-node-latency" ""] pass
+          span_ [class_ "mt-0.5 inline-block rounded-[2px] bg-fillWeak px-1 py-px tabular-nums text-textStrong", term "data-node-rps" ""] pass
+        -- The health bar runs the full height of the card at its right edge, which is where
+        -- Datadog puts it and why it reads without being looked at.
+        span_ [class_ "w-[4px] shrink-0", term "data-node-health" ""] pass
 
 
 -- | Click menu for a node, in the shape Datadog uses: the actions you actually want next
