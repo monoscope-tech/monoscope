@@ -1,4 +1,4 @@
-module Pages.Components (drawer_, drawerLoadingSkeleton_, emptyState_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), resizer_, detailTab_, httpTab_, tabPanel_, jsonTab_, dateTime, localTime_, localTimeFmt_, paymentPlanPicker, navBar, modal_, modalCloseButton_, primaryButton_, headerRow_, headerRowPad_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_, sparkline_, periodToggle_, abbreviateUnit, compactTimeAgo) where
+module Pages.Components (drawer_, drawerLoadingSkeleton_, emptyState_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), resizer_, detailTab_, httpTab_, tabPanel_, jsonTab_, dateTime, localTime_, localTimeFmt_, paymentPlanPicker, navBar, modal_, modalCloseButton_, primaryButton_, headerRow_, headerRowPad_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_, sparkline_, periodToggle_, abbreviateUnit, compactTimeAgo, stackTrace_) where
 
 import Data.Aeson qualified as AE
 import Data.Default (Default (..))
@@ -13,9 +13,10 @@ import Lucid.Htmx (hxGet_, hxPost_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, h
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
+import Pkg.StackTrace qualified as StackTrace
 import PyF qualified
 import Relude
-import Utils (LoadingSize (..), LoadingType (..), deleteParam, faSprite_, jsonValueToHtmlTree, loadingIndicator_)
+import Utils (LoadingSize (..), LoadingType (..), deleteParam, faSprite_, jsonValueToHtmlTree, loadingIndicator_, toUriStr)
 
 
 data EmptyStateSize = ESFull | ESCompact
@@ -884,3 +885,63 @@ sparkline_ buckets
       | n >= 1000000 = toText [PyF.fmt|{fromIntegral @Int @Double n / 1000000:.1f}M|]
       | n >= 1000 = toText [PyF.fmt|{fromIntegral @Int @Double n / 1000:.1f}K|]
       | otherwise = show n
+
+
+-- | A stack trace as frames rather than a blob.
+--
+-- Rendering the raw string in a @\<pre\>@ is what this replaces: it told a reader nothing the
+-- string didn't already say, and it left nothing for the panel to hang a source snippet on.
+-- Each frame is a native @\<details\>@ — the disclosure, its open state, and the screen-reader
+-- announcement all come for free, and it survives an HTMX morph because there is no JS state
+-- to lose.
+--
+-- The first in-app frame is open by default, which is Sentry's default and the right one
+-- during an incident: the top of a stack is usually five frames of framework before anything
+-- you wrote. @snippetUrl@ is asked for a frame's surrounding source only when that frame is
+-- actually opened, because resolving it is a network call the error panel must not block on.
+stackTrace_ :: Projects.ProjectId -> Maybe Text -> Text -> Html ()
+stackTrace_ pid svcM stack = case StackTrace.parseStackTrace stack of
+  [] -> pass
+  frames ->
+    let firstInApp = fst <$> find (StackTrace.isInApp . snd) (zip [0 :: Int ..] frames)
+     in div_ [class_ "flex flex-col rounded-md border border-strokeWeak bg-bgBase overflow-hidden"]
+          $ forM_ (zip [0 :: Int ..] frames) \(i, f) -> frame_ (Just i == firstInApp) (snippetUrl f) f
+  where
+    -- 'Nothing' for a frame we could not place — the panel then says "no source linked"
+    -- rather than firing a request that can only fail.
+    snippetUrl f = do
+      path <- f.file
+      n <- f.line
+      pure $ "/p/" <> pid.toText <> "/code_context?file=" <> toUriStr path <> "&line=" <> show n <> foldMap (("&service=" <>) . toUriStr) svcM
+    -- Signature pins the block to `Html ()`. Without it Lucid's `Term` leaves each element
+    -- polymorphic in its result, and the summary inside the details reads as a discarded
+    -- value under -Wunused-do-bind.
+    frame_ :: Bool -> Maybe Text -> StackTrace.Frame -> Html ()
+    frame_ open urlM f = case f.file of
+      -- A line we could not resolve to a file keeps its text verbatim and gets no
+      -- disclosure: there is nothing behind it to disclose, and a details with an empty
+      -- panel is a control that lies about having more to show.
+      Nothing -> div_ [class_ "px-3 py-1 font-mono text-2xs text-textWeak whitespace-pre-wrap break-words border-b border-strokeWeak last:border-0"] $ toHtml f.raw
+      Just path ->
+        details_ ([class_ "group/fr border-b border-strokeWeak last:border-0"] <> [open_ "" | open]) do
+          summary_ [class_ "flex items-center gap-2 px-3 py-1.5 cursor-pointer select-none hover:bg-fillWeaker text-xs"] do
+            faSprite_ "chevron-right" "regular" "w-3 h-3 shrink-0 text-iconNeutral transition-transform group-open/fr:rotate-90"
+            span_ [class_ $ "font-mono truncate " <> bool "text-textWeak" "text-textStrong font-medium" (StackTrace.isInApp f)] $ toHtml path
+            whenJust f.line \n -> span_ [class_ "font-mono tabular-nums text-textWeak shrink-0"] $ toHtml @Text (":" <> show n)
+            whenJust f.function \fn -> span_ [class_ "text-textWeak truncate max-md:hidden"] $ toHtml ("in " <> fn)
+            -- In-app is a heuristic over the path, so it is labelled rather than encoded
+            -- only in weight: a reader has to be able to tell it apart from emphasis.
+            when (StackTrace.isInApp f) $ span_ [class_ "ml-auto shrink-0 rounded-sm border border-strokeWeak px-1 text-2xs text-textWeak"] $ toHtml @Text "in app"
+          case urlM of
+            Nothing -> div_ [class_ "px-3 pb-2 pl-8 text-2xs text-textWeak italic"] "No source linked for this file."
+            Just url ->
+              div_
+                [ class_ "px-3 pb-2"
+                , hxGet_ url
+                , -- `intersect once`, not `load`: the panel holds every frame, and fetching
+                  -- thirty blobs from the SCM API to show one is how a rate limit is spent.
+                  hxTrigger_ "intersect once"
+                , hxTarget_ "this"
+                , hxSwap_ "innerHTML"
+                ]
+                $ div_ [class_ "pl-5 py-1 text-2xs text-textWeak"] "Loading source…"

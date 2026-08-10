@@ -3422,17 +3422,6 @@ endpointTemplateDiscovery pid = do
     $ Log.logInfo "Cleaned up merged endpoints" ("project_id", pid.toText, "merged_count", length mergedPairs)
 
 
--- | Get access token for GitHub sync (either PAT or GitHub App installation token)
-getGitSyncToken :: (IOE :> es, W.HTTP :> es) => Config.EnvConfig -> GitSync.GitHubSync -> Eff es (Either Text Text)
-getGitSyncToken config sync = case (sync.installationId, sync.accessToken) of
-  (Just instId, _) ->
-    GitHub.getInstallationToken config.githubAppId config.githubAppPrivateKey instId <&> \case
-      Left err -> Left $ "Failed to get installation token: " <> err
-      Right tok -> Right tok.token
-  (_, Just token) -> pure $ Right token
-  (Nothing, Nothing) -> pure $ Left "No authentication method configured"
-
-
 -- | Sync dashboards from GitHub repo to Monoscope
 gitSyncFromRepo :: Projects.ProjectId -> ATBackgroundCtx ()
 gitSyncFromRepo pid = do
@@ -3444,7 +3433,7 @@ gitSyncFromRepo pid = do
     Nothing -> Log.logAttention "No GitHub sync configured for project" pid
     Just sync | not sync.syncEnabled -> Log.logInfo "GitHub sync disabled for project" pid
     Just sync -> W.runHTTPWreq do
-      tokenResult <- getGitSyncToken ctx.config sync
+      tokenResult <- GitSync.gitSyncToken ctx.config.githubAppId ctx.config.githubAppPrivateKey sync
       case tokenResult of
         Left err -> Log.logAttention "Failed to get GitHub token" (pid, err)
         Right token -> do
@@ -3541,7 +3530,7 @@ gitSyncPushDashboard pid dashId = do
     (_, Nothing) -> Log.logAttention "Dashboard not found for git push" dashId
     (_, Just dash) | isNothing dash.schema -> Log.logInfo "Skipping git push for template-based dashboard" dashId
     (Just sync, Just dash) -> W.runHTTPWreq do
-      tokenResult <- getGitSyncToken ctx.config sync
+      tokenResult <- GitSync.gitSyncToken ctx.config.githubAppId ctx.config.githubAppPrivateKey sync
       case tokenResult of
         Left err -> Log.logAttention "Failed to get GitHub token" (pid, err)
         Right token -> pushDashboardToGit token sync pid dash ("Update dashboard: " <> dash.title)
@@ -3576,7 +3565,7 @@ gitSyncPushAllDashboards pid = do
     Nothing -> Log.logAttention "No GitHub sync configured for project" pid
     Just sync | not sync.syncEnabled -> Log.logInfo "GitHub sync disabled, skipping push" pid
     Just sync -> W.runHTTPWreq do
-      tokenResult <- getGitSyncToken ctx.config sync
+      tokenResult <- GitSync.gitSyncToken ctx.config.githubAppId ctx.config.githubAppPrivateKey sync
       case tokenResult of
         Left err -> Log.logAttention "Failed to get GitHub token" (pid, err)
         Right token -> do

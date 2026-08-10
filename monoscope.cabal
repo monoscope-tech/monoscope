@@ -144,6 +144,12 @@ extra-source-files:
     static/migrations/0115_auto_provisioned_dashboards.sql
     static/migrations/0116_issue_hash_lookup.sql
     static/migrations/0117_service_dependency_edges.sql
+    static/migrations/0118_service_dependency_edges_env.sql
+    static/migrations/0119_endpoint_dashboard_sql_source.sql
+    static/migrations/0120_repair_dashboard_sql_source.sql
+    static/migrations/0121_log_patterns_unclassified_recent_index.sql
+    static/migrations/0122_otel_deployment_environment.sql
+    static/migrations/0123_code_mappings.sql
 
 source-repository head
   type: git
@@ -176,6 +182,7 @@ library
       Models.Apis.PrometheusScrapeConfigs
       Models.Apis.SchemaCatalog
       Models.Apis.ShareEvents
+      Models.Projects.CodeContext
       Models.Projects.Dashboards
       Models.Projects.GitSync
       Models.Projects.ProjectApiKeys
@@ -191,6 +198,7 @@ library
       Pages.Bots.Utils
       Pages.Bots.Whatsapp
       Pages.Charts.Charts
+      Pages.CodeContext
       Pages.CommandPalette
       Pages.Components
       Pages.Dashboards
@@ -229,6 +237,7 @@ library
       Pkg.SchemaLearning.Catalog
       Pkg.SchemaLearning.Hot
       Pkg.SchemaLearning.Worker
+      Pkg.StackTrace
       Pkg.TestClock
       Pkg.TestUtils
       Pkg.TraceSessionCache
@@ -596,6 +605,7 @@ test-suite integration-tests
       Pages.Bots.WhatsappSpec
       Pages.Bots.WorkflowsSpec
       Pages.BusinessFlowsSpec
+      Pages.CodeContextSpec
       Pages.DashboardsSpec
       Pages.Endpoints.ApiCatalogSpec
       Pages.ErrorPatternsSpec
@@ -743,6 +753,7 @@ test-suite test-dev
       Models.Apis.PrometheusScrapeConfigs
       Models.Apis.SchemaCatalog
       Models.Apis.ShareEvents
+      Models.Projects.CodeContext
       Models.Projects.Dashboards
       Models.Projects.GitSync
       Models.Projects.ProjectApiKeys
@@ -758,6 +769,7 @@ test-suite test-dev
       Pages.Bots.Utils
       Pages.Bots.Whatsapp
       Pages.Charts.Charts
+      Pages.CodeContext
       Pages.CommandPalette
       Pages.Components
       Pages.Dashboards
@@ -796,6 +808,7 @@ test-suite test-dev
       Pkg.SchemaLearning.Catalog
       Pkg.SchemaLearning.Hot
       Pkg.SchemaLearning.Worker
+      Pkg.StackTrace
       Pkg.TestClock
       Pkg.TestUtils
       Pkg.TraceSessionCache
@@ -846,6 +859,7 @@ test-suite test-dev
       Pages.Bots.WhatsappSpec
       Pages.Bots.WorkflowsSpec
       Pages.BusinessFlowsSpec
+      Pages.CodeContextSpec
       Pages.DashboardsSpec
       Pages.Endpoints.ApiCatalogSpec
       Pages.ErrorPatternsSpec

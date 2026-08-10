@@ -27,6 +27,7 @@ module Models.Projects.GitSync (
   getDashboardsPath,
   detectDefaultBranch,
   -- GitHub App integration
+  gitSyncToken,
   generateAppJWT,
   getInstallationToken,
   listInstallationRepos,
@@ -263,6 +264,21 @@ fetchFileContent token sync path = do
   pure $ result >>= \resp -> case resp ^. W.responseBody . key "content" . _String of
     "" -> Left "No content field"
     b64Content -> B64.decodeBase64Untyped $ encodeUtf8 $ T.filter (/= '\n') b64Content
+
+
+-- | The credential to read or write this project's repo with: an App installation token when
+-- the App is installed, else the stored PAT. Lives here rather than beside its first caller
+-- because every GitHub call in the app needs it, and a second copy would be a second place to
+-- get the App-before-PAT precedence wrong. Takes the app id and key rather than the whole
+-- 'System.Config.EnvConfig' so this module stays a leaf of the config graph.
+gitSyncToken :: (IOE :> es, W.HTTP :> es) => Text -> Text -> GitHubSync -> Eff es (Either Text Text)
+gitSyncToken appId privateKeyB64 sync = case (sync.installationId, sync.accessToken) of
+  (Just instId, _) ->
+    getInstallationToken appId privateKeyB64 instId <&> \case
+      Left err -> Left $ "Failed to get installation token: " <> err
+      Right tok -> Right tok.token
+  (_, Just token) -> pure $ Right token
+  (Nothing, Nothing) -> pure $ Left "No authentication method configured"
 
 
 -- | Push a file to GitHub. Returns (fileSha, treeSha) on success.

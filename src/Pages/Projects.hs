@@ -492,6 +492,7 @@ integrationsBody IntegrationsConfig{..} = do
       div_ [class_ "divide-y divide-strokeWeak rounded-xl border border-strokeWeak"] do
         settingsNavLink_ ("/p/" <> pid <> "/byob_s3") "bucket" "S3 Bucket" "Connect your own S3-compatible storage"
         settingsNavLink_ ("/p/" <> pid <> "/settings/git-sync") "github" "GitHub Sync" "Sync dashboards to a GitHub repository"
+        settingsNavLink_ ("/p/" <> pid <> "/settings/code-mappings") "file-lines" "Source Code" "Show the failing line's source in stack traces"
 
     -- Test History
     div_ [class_ "pt-6 border-t border-strokeWeak space-y-2"] do

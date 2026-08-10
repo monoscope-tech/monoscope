@@ -98,16 +98,53 @@ A "Source code" settings page: pick a repo from the existing GitHub App installa
 mappings, and a "test a path" box that shows what a given frame path resolves to. Reuses the
 GitSync install flow wholesale — no second OAuth app.
 
-## Plan
+## What shipped
 
-1. `Pkg.StackTrace` + doctests per family.
-2. Migration: `projects.code_mappings`.
-3. `Models.Projects.CodeContext` — CRUD + `resolveFrame`, with the cache.
-4. Frame-list renderer, shared by `LogItem.renderErrors` and the `RuntimeException` issue
-   view (one renderer, both call sites — no fork).
-5. HTMX endpoint for a single frame's snippet.
-6. Settings page + mapping editor.
-7. Integration test with a golden GitHub response (`tests/golden/`, `UPDATE_GOLDEN=true`).
+1. **`Pkg.StackTrace`** — `parseStackTrace` (JS/Node, Python, Java/Kotlin, Ruby, Go, PHP),
+   `frameFromAttributes` for the OTel `code.*` shortcut, and `isInApp`. Total and
+   lossy-nowhere: an unrecognised line survives as a `Frame` carrying its text, so
+   recognising a frame is an upgrade and never a filter. 16 doctests, one per shape plus the
+   clamping and fallback cases.
+   The JS and Java parsers merged into one `atFrame`: they are one grammar (an `at`, an
+   optional qualified name, a parenthesised or bare location), and written separately the
+   first already answered for the second — a dead second parser.
+2. **Migration 0123** — `projects.code_mappings`, several per project, matched
+   longest-prefix-first.
+3. **`Models.Projects.CodeContext`** — CRUD, `resolveRepoPath` (doctested, including that an
+   unclaimed frame resolves to *nothing* rather than being guessed at from the repo root),
+   `sliceAround`, and `fetchSnippet`.
+4. **`Pages.Components.stackTrace_`** — the frame list, replacing the `<pre>` blob. Native
+   `<details>` per frame (tier 2 on the escalation ladder: disclosure, open state and the
+   screen-reader announcement come free, and it survives an HTMX morph). First in-app frame
+   open by default.
+5. **`GET /p/:pid/code_context`** — one frame's source, fetched on `intersect once` so a
+   thirty-frame trace does not spend a rate limit to show one snippet. The failing line is
+   marked by background *and* a gutter caret, never colour alone.
+6. **Settings → Source Code** — mapping editor over the existing GitHub App installation.
+
+`gitSyncToken` moved from `BackgroundJobs` into `GitSync`, where both callers can reach it,
+rather than being copied.
+
+### Deviations
+
+- **`Pages.CodeContext` is a separate module** from `Pages.LogExplorer.LogItem`. The model
+  reaches GitHub via `GitSync` → `Dashboards` → `Pkg.Components.Widget` → `LogItem`, so the
+  handler living next to the renderer was a module cycle. `stackTrace_` only ever builds the
+  URL, so nothing on the rendering side knows the handler exists.
+- **The issue view (`Pages.Anomalies`) still renders its own `<pre>`.** `RuntimeException`
+  issues carry a synthesised stack (see `haskell_backtraces_unavailable`), a different shape
+  from a span's `exception.stacktrace`; pointing the same renderer at it without checking
+  what those strings actually look like would be guessing. Left as follow-up.
+- **No cache yet.** `fetchSnippet` hits the GitHub API per frame opened. `intersect once`
+  plus one-frame-open-by-default keeps that at roughly one call per error viewed, but a hot
+  issue viewed repeatedly will re-fetch. Add a `Pkg.QueryCache` layer keyed on
+  `(repo, branch, path)` before this is on by default for large projects.
+
+## Still out of scope
+
+Source-map/debug-file upload and symbolication (Sentry mechanism 2) — a separate subsystem
+(artifact storage, debug-id indexing, a CLI uploader) needed only for minified or compiled
+frames. `fetchSnippet` is the seam it plugs into.
 
 ## Explicitly out of scope for this pass
 

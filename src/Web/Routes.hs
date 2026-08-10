@@ -82,6 +82,7 @@ import "cryptohash-md5" Crypto.Hash.MD5 qualified as MD5
 
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Issues qualified as Issues
+import Models.Projects.CodeContext qualified as CodeContext
 import Pages.Anomalies qualified as AnomalyList
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Bots.Discord qualified as Discord
@@ -89,6 +90,7 @@ import Pages.Bots.Slack qualified as Slack
 import Pages.Bots.Utils qualified as BotUtils
 import Pages.Bots.Whatsapp qualified as Whatsapp
 import Pages.Charts.Charts qualified as Charts
+import Pages.CodeContext qualified as PageCodeContext
 import Pages.Dashboards qualified as Dashboards
 import Pages.Endpoints qualified as ApiCatalog
 import Pages.GitSync qualified as GitSync
@@ -467,6 +469,9 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , gitSyncSettings :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Get '[HTML] (RespHeaders (Html ()))
   , gitSyncSettingsPost :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> ReqBody '[FormUrlEncoded] GitSync.GitSyncForm :> Post '[HTML] (RespHeaders (Html ()))
   , gitSyncSettingsDelete :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Delete '[HTML] (RespHeaders (Html ()))
+  , codeMappingsSettings :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> Get '[HTML] (RespHeaders (Html ()))
+  , codeMappingsPost :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> ReqBody '[FormUrlEncoded] PageCodeContext.CodeMappingForm :> Post '[HTML] (RespHeaders (Html ()))
+  , codeMappingsDelete :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> Capture "id" CodeContext.CodeMappingId :> Delete '[HTML] (RespHeaders (Html ()))
   , prometheusSettingsGet :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> Get '[HTML] (RespHeaders Settings.PrometheusGet)
   , prometheusSettingsPost :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> ReqBody '[FormUrlEncoded] Settings.PrometheusForm :> Post '[HTML] (RespHeaders Settings.PrometheusMut)
   , prometheusSettingsTest :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> "test" :> ReqBody '[FormUrlEncoded] Settings.PrometheusForm :> Post '[HTML] (RespHeaders (Html ()))
@@ -513,6 +518,10 @@ data LogExplorerRoutes' mode = LogExplorerRoutes'
   , logExplorerItemDetailedGet :: mode :- "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" UTCTime :> "detailed" :> QPT "source" :> QPT "tab" :> QPT "subtab" :> QueryFlag "partial" :> Get '[HTML] (RespHeaders LogItem.ApiItemDetailed)
   , logExplorerExpandGet :: mode :- "log_explorer" :> "expand" :> QPT "kind" :> QPT "key" :> QPI "skip" :> QPT "query" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[JSON] (RespHeaders AE.Value)
   , aiSearchPost :: mode :- "log_explorer" :> "ai_search" :> ReqBody '[JSON] AE.Value :> Post '[JSON] (RespHeaders AE.Value)
+  , -- Source around one stack frame. Its own endpoint rather than part of the detail panel
+    -- because resolving it is a call out to the SCM API: a thirty-frame trace must not make
+    -- the error panel wait on thirty round trips it may never need.
+    codeContextGet :: mode :- "code_context" :> QPT "file" :> QPI "line" :> QPT "service" :> Get '[HTML] (RespHeaders (Html ()))
   }
   deriving stock (Generic)
 
@@ -857,6 +866,9 @@ cookieProtectedServer =
     , gitSyncSettings = GitSync.gitSyncSettingsGetH
     , gitSyncSettingsPost = GitSync.gitSyncSettingsPostH
     , gitSyncSettingsDelete = GitSync.gitSyncSettingsDeleteH
+    , codeMappingsSettings = PageCodeContext.codeMappingsGetH
+    , codeMappingsPost = PageCodeContext.codeMappingsPostH
+    , codeMappingsDelete = PageCodeContext.codeMappingsDeleteH
     , prometheusSettingsGet = Settings.prometheusGetH
     , prometheusSettingsPost = Settings.prometheusPostH
     , prometheusSettingsTest = Settings.prometheusTestH
@@ -904,6 +916,7 @@ logExplorerServer pid =
     , logExplorerItemDetailedGet = LogItem.expandAPIlogItemH pid
     , logExplorerExpandGet = Log.apiLogExpandH pid
     , aiSearchPost = Log.aiSearchH pid
+    , codeContextGet = PageCodeContext.codeContextH pid
     }
 
 
