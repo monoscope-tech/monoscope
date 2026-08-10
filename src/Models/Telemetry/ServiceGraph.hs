@@ -186,10 +186,6 @@ data ServiceGraph = ServiceGraph
   , error :: !(Maybe Text)
   -- ^ Sanitized backend-failure message. A failed query must render an error state, never
   -- an empty graph that reads as "you have no services".
-  , environments :: !(V.Vector Text)
-  -- ^ Every deployment environment reported in this range, whichever one is selected — the
-  -- Env facet's options. Empty when nothing reports an environment at all, which is the
-  -- signal to hide the facet rather than show one with no choices in it.
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (NFData)
@@ -211,7 +207,7 @@ drawnEdges g = V.filter (\e -> e.source `S.member` ks && e.target `S.member` ks)
 
 
 emptyServiceGraph :: Double -> ServiceGraph
-emptyServiceGraph rangeSecs = ServiceGraph V.empty V.empty rangeSecs False Nothing V.empty
+emptyServiceGraph rangeSecs = ServiceGraph V.empty V.empty rangeSecs False Nothing
 
 
 -- | Beyond this a layered graph stops being readable and starts being a hairball, so the
@@ -337,7 +333,6 @@ buildServiceGraph rangeSecs nodeCap collapse totalDurationM samples =
     , rangeSeconds = rangeSecs
     , truncated = length topLevel > nodeCap
     , error = Nothing
-    , environments = V.empty
     }
   where
     aggOf s = HopAgg s.requests s.errors s.latency s.targetDurationNs
@@ -507,10 +502,7 @@ traceEdgeSamples spans = (entryEdges <> serviceEdges <> inferredEdges, totalDura
 -- | One rolled-up edge for a single bucket. Kinds travel with the keys so the read path
 -- rebuilds node shapes without re-deriving them.
 data RollupEdge = RollupEdge
-  { env :: !Text
-  -- ^ Deployment environment of the /caller/, '' when the span carried none. Part of the
-  -- hop's identity: prod and staging calling the same dependency are different edges.
-  , sourceKey :: !Text
+  { sourceKey :: !Text
   , sourceKind :: !NodeKind
   , targetKey :: !Text
   , targetKind :: !NodeKind
@@ -527,8 +519,7 @@ data RollupEdge = RollupEdge
 -- Postgres and DataFusion both plan the same way — no JSON construction, no array_agg of
 -- ragged arrays.
 data SliceRow = SliceRow
-  { env :: !Text
-  , src :: !Text
+  { src :: !Text
   , srcKind :: !Text
   , tgt :: !Text
   , tgtKind :: !Text
@@ -553,14 +544,14 @@ parseNodeKind = \case
 
 sliceRowsToEdges :: [SliceRow] -> [RollupEdge]
 sliceRowsToEdges rows =
-  [ RollupEdge ev sk (parseNodeKind skk) tk (parseNodeKind tkk) agg.reqs agg.errs agg.durNs agg.hist
-  | ((ev, sk, skk, tk, tkk), agg) <- Map.toList grouped
+  [ RollupEdge sk (parseNodeKind skk) tk (parseNodeKind tkk) agg.reqs agg.errs agg.durNs agg.hist
+  | ((sk, skk, tk, tkk), agg) <- Map.toList grouped
   ]
   where
     grouped =
       Map.fromListWith
         (<>)
-        [ ((r.env, r.src, r.srcKind, r.tgt, r.tgtKind), HopAgg r.n r.errs (LatencyHist $ one (fromIntegral r.latBucket, r.n)) r.durNs)
+        [ ((r.src, r.srcKind, r.tgt, r.tgtKind), HopAgg r.n r.errs (LatencyHist $ one (fromIntegral r.latBucket, r.n)) r.durNs)
         | r <- rows
         ]
 
@@ -614,9 +605,7 @@ rollupServiceEdges useTf pid lo hi =
       [HI.sql|
       WITH sp AS (
         SELECT context___trace_id tid, context___span_id sid, parent_id par,
-               COALESCE(resource___service___name, 'unknown') svc,
-               COALESCE(resource___deployment___environment___name, '') env,
-               kind knd, status_code stc, duration dur, name nm,
+               COALESCE(resource___service___name, 'unknown') svc, kind knd, status_code stc, duration dur, name nm,
                attributes___db___system___name db_sys, attributes___db___namespace db_ns,
                attributes___server___address srv, attributes___network___peer___address peer
         FROM otel_logs_and_spans
@@ -624,11 +613,11 @@ rollupServiceEdges useTf pid lo hi =
           AND kind IN ('server','client','producer','consumer')
       ),
       hops AS (
-        SELECT p.env env, p.svc src, 'service' src_kind, c.svc tgt, 'service' tgt_kind, c.stc st, c.dur dur
+        SELECT p.svc src, 'service' src_kind, c.svc tgt, 'service' tgt_kind, c.stc st, c.dur dur
         FROM sp c JOIN sp p ON c.tid = p.tid AND c.par = p.sid
         WHERE c.knd IN ('server','consumer') AND p.knd IN ('client','producer')
         UNION ALL
-        SELECT p.env, p.svc, 'service',
+        SELECT p.svc, 'service',
                -- A purely numeric db.namespace is a Redis database index, not a name.
                CASE WHEN p.db_ns IS NOT NULL AND p.db_ns <> '' AND p.db_ns !~ '^[0-9]+$' THEN 'db:' || p.db_ns
                     WHEN p.db_sys IS NOT NULL AND p.db_sys <> '' THEN 'db:' || p.db_sys
@@ -642,21 +631,21 @@ rollupServiceEdges useTf pid lo hi =
         WHERE p.knd IN ('client','producer')
           AND NOT EXISTS (SELECT 1 FROM sp c WHERE c.tid = p.tid AND c.par = p.sid AND c.knd IN ('server','consumer'))
         UNION ALL
-        SELECT c.env, '', 'entry', c.svc, 'service', c.stc, c.dur
+        SELECT '', 'entry', c.svc, 'service', c.stc, c.dur
         FROM sp c
         WHERE c.knd IN ('server','consumer')
           AND (c.par IS NULL OR c.par = '' OR NOT EXISTS (SELECT 1 FROM sp p WHERE p.tid = c.tid AND p.sid = c.par))
       )
-      SELECT env, src, src_kind, tgt, tgt_kind, bkt,
+      SELECT src, src_kind, tgt, tgt_kind, bkt,
              COUNT(*)::int8,
              COUNT(*) FILTER (WHERE st = 'ERROR')::int8,
              COALESCE(SUM(dur), 0)::int8
       FROM (
-        SELECT env, src, src_kind, tgt, tgt_kind, st, dur,
+        SELECT src, src_kind, tgt, tgt_kind, st, dur,
                CAST(FLOOR(4 * LOG(2, GREATEST(COALESCE(dur, 0) / 1000, 1))) AS int8) bkt
         FROM hops
       ) b
-      GROUP BY env, src, src_kind, tgt, tgt_kind, bkt
+      GROUP BY src, src_kind, tgt, tgt_kind, bkt
       ORDER BY COUNT(*) DESC
       LIMIT 20000|]
 
@@ -669,19 +658,18 @@ upsertServiceDependencyEdges pid bucket es =
   Hasql.interpExecute_
     [HI.sql|
     INSERT INTO apis.service_dependency_edges
-      (project_id, bucket, env, source_key, source_kind, target_key, target_kind,
+      (project_id, bucket, source_key, source_kind, target_key, target_kind,
        req_count, error_count, sum_duration_ns, lat_hist)
-    SELECT #{pid.unUUIDId}, #{bucket}, ev, s, sk, t, tk, r, e, d, h::jsonb
-    FROM unnest(#{envs}::text[], #{srcs}::text[], #{srcKinds}::text[], #{tgts}::text[], #{tgtKinds}::text[],
+    SELECT #{pid.unUUIDId}, #{bucket}, s, sk, t, tk, r, e, d, h::jsonb
+    FROM unnest(#{srcs}::text[], #{srcKinds}::text[], #{tgts}::text[], #{tgtKinds}::text[],
                 #{reqs}::int8[], #{errsV}::int8[], #{durs}::int8[], #{hists}::text[])
-         AS u(ev, s, sk, t, tk, r, e, d, h)
-    ON CONFLICT (project_id, bucket, env, source_key, source_kind, target_key, target_kind)
+         AS u(s, sk, t, tk, r, e, d, h)
+    ON CONFLICT (project_id, bucket, source_key, source_kind, target_key, target_kind)
     DO UPDATE SET req_count = EXCLUDED.req_count, error_count = EXCLUDED.error_count,
                   sum_duration_ns = EXCLUDED.sum_duration_ns,
                   lat_hist = EXCLUDED.lat_hist,
                   updated_at = now()|]
   where
-    envs = V.fromList $ (.env) <$> es
     srcs = V.fromList $ (.sourceKey) <$> es
     srcKinds = V.fromList $ kindText . (.sourceKind) <$> es
     tgts = V.fromList $ (.targetKey) <$> es
@@ -712,30 +700,21 @@ kindText = \case
 
 -- | Read the rollup for a range and fold it into a graph. Cheap: a day is a few thousand
 -- narrow Postgres rows, merged in memory.
--- | @envM@ scopes the map to one deployment environment, the way Datadog's Env facet does.
--- 'Nothing' means every environment; the facet's own values come back on the graph so the
--- UI lists exactly the environments this project has actually reported in this range.
-serviceGraphForRange :: DB es => Projects.ProjectId -> Maybe Text -> UTCTime -> UTCTime -> Eff es ServiceGraph
-serviceGraphForRange pid envM lo hi = do
+serviceGraphForRange :: DB es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es ServiceGraph
+serviceGraphForRange pid lo hi = do
   rows <-
     Hasql.interp
       [HI.sql|
-      SELECT env, source_key, source_kind, target_key, target_kind,
+      SELECT source_key, source_kind, target_key, target_kind,
              req_count, error_count, sum_duration_ns, lat_hist
       FROM apis.service_dependency_edges
       WHERE project_id = #{pid.unUUIDId} AND bucket >= #{lo} AND bucket < #{hi}|]
   let rangeSecs = realToFrac (diffUTCTime hi lo)
-      keep ev = maybe True (== ev) envM
       samples =
         [ EdgeSample (sk, parseNodeKind skk) (tk, parseNodeKind tkk) r e (histFromObject h) d
-        | (ev, sk, skk, tk, tkk, r, e, d, AesonText h) <- rows
-        , keep ev
+        | (sk, skk, tk, tkk, r, e, d, AesonText h) <- rows
         ]
-      -- Every environment in the range, not just the selected one: a facet that hid the
-      -- options you are not currently on would be a dead end.
-      seen = ordNub [ev | (ev, _, _, _, _, _, _, _, _) <- rows, not (T.null ev)]
-      graph = buildServiceGraph rangeSecs serviceMapNodeCap serviceMapFanout Nothing samples
-  pure graph{environments = V.fromList (sort seen)}
+  pure $ buildServiceGraph rangeSecs serviceMapNodeCap serviceMapFanout Nothing samples
 
 
 -- | Name an uninstrumented dependency the way its own ecosystem would: the database or
