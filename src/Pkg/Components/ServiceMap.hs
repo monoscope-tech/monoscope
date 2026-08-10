@@ -46,7 +46,7 @@ serviceMapPanel_ pid elId graph colors selectedEnv = div_ [class_ "w-full flex f
           -- our own tokens, carry sprite icons, and are focusable — none of which a canvas
           -- node can be.
           div_
-            [ class_ "border border-strokeWeak rounded-2xl w-full h-[720px] max-md:h-[460px] relative overflow-hidden touch-none select-none"
+            [ class_ "border border-strokeStrong rounded-2xl w-full h-[720px] max-md:h-[460px] relative overflow-hidden touch-none select-none"
             , id_ elId
             , term "data-service-map" elId
             , -- Base for the node menu's links; the renderer only appends the query.
@@ -239,7 +239,7 @@ serviceMapLegend_ graph colors = div_ [class_ "flex flex-col gap-2"] do
 
 -- | The no-JS, screen-reader and small-screen representation of the same graph.
 dependencyTable_ :: ServiceGraph -> Html ()
-dependencyTable_ graph = details_ [class_ "group border border-strokeWeak rounded-2xl overflow-hidden"] do
+dependencyTable_ graph = details_ [class_ "group border border-strokeStrong rounded-2xl overflow-hidden"] do
   summary_ [class_ "flex items-center gap-2 px-3 py-2 text-sm text-textStrong cursor-pointer select-none"] do
     faSprite_ "chevron-right" "regular" "w-3 h-3 text-iconNeutral transition-transform group-open:rotate-90"
     toHtml $ "Dependencies (" <> show (V.length (drawnEdges graph)) <> ")"
@@ -281,7 +281,7 @@ prettyDuration ns
 
 emptyState_ :: Text -> Text -> Text -> Html ()
 emptyState_ icon title body =
-  div_ [class_ "border border-strokeWeak rounded-2xl w-full min-h-[260px] flex flex-col items-center justify-center gap-2 text-center px-6"] do
+  div_ [class_ "border border-strokeStrong rounded-2xl w-full min-h-[260px] flex flex-col items-center justify-center gap-2 text-center px-6"] do
     faSprite_ icon "regular" "w-5 h-5 text-iconNeutral"
     span_ [class_ "text-sm text-textStrong font-medium"] $ toHtml title
     span_ [class_ "text-xs text-textWeak max-w-md"] $ toHtml body

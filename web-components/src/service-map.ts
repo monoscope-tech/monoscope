@@ -454,8 +454,11 @@ async function render(
     const failing = n.stats.error_rate >= ERR_FAILING;
     const elevated = n.stats.error_rate >= ERR_ELEVATED;
     card.style.opacity = lit ? '1' : '0.25';
-    card.style.borderColor = onPath ? s.brandColor : failing ? s.errorColor : elevated ? s.warningColor : s.tooltipBorderColor;
-    card.style.borderWidth = onPath || elevated ? '2px' : '1px';
+    // A resting node borrows strokeStrong, not the tooltip hairline: at map zoom a
+    // strokeWeak edge all but disappears, and the card has to read as an object before
+    // its border colour can say anything about health.
+    card.style.borderColor = onPath ? s.brandColor : failing ? s.errorColor : elevated ? s.warningColor : s.strokeStrong;
+    card.style.borderWidth = onPath || elevated ? '2.5px' : '1.5px';
     card.style.borderStyle = n.inferred ? 'dashed' : 'solid';
     // The right-edge bar is health and only health — green/amber/red, the way Datadog grades
     // a service. Service identity moved to the icon, which is where it does not compete.
