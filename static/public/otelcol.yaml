@@ -68,57 +68,68 @@ processors:
   #   - never overwrite a value the SDK set deliberately (uses `insert` merge,
   #     and gates every set on the destination being unset)
   #   - the raw body is always recoverable via attributes["log.original"]
-  #   - parse failures are silent (error_mode: ignore) — Tier 2 still sees the
-  #     untouched body
+  #   - parse failures are silent (error_mode: silent) — customer log bodies
+  #     are arbitrary and truncated/malformed JSON is normal, not operator-
+  #     actionable. `ignore` would log a warn *per record*. Tier 2 still sees
+  #     the untouched body.
+  #
+  # Paths are context-qualified (`log.body`, not `body`). The implicit form
+  # still works but the collector rewrites it at startup and logs every
+  # statement it touched; it is slated for removal upstream.
   transform/tier1:
-    error_mode: ignore
+    error_mode: silent
     log_statements:
       - context: log
         statements:
           # Preserve raw body before any mutation. String-bodied logs only;
           # already-structured (map) bodies are passed through untouched.
-          - set(attributes["log.original"], body) where IsString(body) and attributes["log.original"] == nil
+          - set(log.attributes["log.original"], log.body) where IsString(log.body) and log.attributes["log.original"] == nil
 
           # Whole-body JSON. Only objects (`{...}`) — arrays and scalars are
-          # not log records. `insert` guarantees we don't clobber SDK attrs.
-          - set(cache["parsed"], ParseJSON(body)) where IsString(body) and IsMatch(body, "^\\s*\\{")
-          - merge_maps(attributes, cache["parsed"], "insert") where cache["parsed"] != nil
+          # not log records. The closing-brace guard skips bodies truncated by
+          # an upstream logger, which would otherwise fail deep inside
+          # ParseJSON after scanning the whole (often multi-KB) string.
+          # `insert` guarantees we don't clobber SDK attrs.
+          - set(log.cache["parsed"], ParseJSON(log.body)) where IsString(log.body) and IsMatch(log.body, "^\\s*\\{") and IsMatch(log.body, "\\}\\s*$")
+          - merge_maps(log.attributes, log.cache["parsed"], "insert") where log.cache["parsed"] != nil
 
-          # Whole-body logfmt. Skip if JSON already parsed, and require at
-          # least one `key=value` pair at the start so we don't false-match
-          # on free-form prose.
-          - set(cache["parsed"], ParseKeyValue(body, "=", " ")) where cache["parsed"] == nil and IsString(body) and IsMatch(body, "^[A-Za-z0-9_.-]+=\\S")
-          - merge_maps(attributes, cache["parsed"], "insert") where cache["parsed"] != nil
+          # Whole-body logfmt. Skip if JSON already parsed, require at least
+          # one `key=value` pair at the start so we don't false-match on
+          # free-form prose, and exclude anything JSON-shaped — embedded
+          # `key="{...}"` payloads match the logfmt prefix but split into
+          # thousands of failing pairs.
+          - set(log.cache["parsed"], ParseKeyValue(log.body, "=", " ")) where log.cache["parsed"] == nil and IsString(log.body) and IsMatch(log.body, "^[A-Za-z0-9_.-]+=\\S") and not IsMatch(log.body, "^\\s*[\\{\\[]")
+          - merge_maps(log.attributes, log.cache["parsed"], "insert") where log.cache["parsed"] != nil
 
           # Severity text — pull from the usual aliases when the SDK didn't
           # set the dedicated severity_text field.
-          - set(severity_text, String(attributes["level"]))     where severity_text == "" and attributes["level"] != nil
-          - set(severity_text, String(attributes["severity"]))  where severity_text == "" and attributes["severity"] != nil
-          - set(severity_text, String(attributes["log.level"])) where severity_text == "" and attributes["log.level"] != nil
+          - set(log.severity_text, String(log.attributes["level"]))     where log.severity_text == "" and log.attributes["level"] != nil
+          - set(log.severity_text, String(log.attributes["severity"]))  where log.severity_text == "" and log.attributes["severity"] != nil
+          - set(log.severity_text, String(log.attributes["log.level"])) where log.severity_text == "" and log.attributes["log.level"] != nil
 
           # Severity number. Only fill when SDK left it UNSPECIFIED (0).
           # Anchored prefix match so "informational" → INFO, "errno" → ERROR.
-          - set(severity_number, SEVERITY_NUMBER_TRACE) where severity_number == 0 and IsMatch(severity_text, "(?i)^trace")
-          - set(severity_number, SEVERITY_NUMBER_DEBUG) where severity_number == 0 and IsMatch(severity_text, "(?i)^(debug|dbg)")
-          - set(severity_number, SEVERITY_NUMBER_INFO)  where severity_number == 0 and IsMatch(severity_text, "(?i)^(info|inf|notice)")
-          - set(severity_number, SEVERITY_NUMBER_WARN)  where severity_number == 0 and IsMatch(severity_text, "(?i)^(warn|warning)")
-          - set(severity_number, SEVERITY_NUMBER_ERROR) where severity_number == 0 and IsMatch(severity_text, "(?i)^(err|error|severe)")
-          - set(severity_number, SEVERITY_NUMBER_FATAL) where severity_number == 0 and IsMatch(severity_text, "(?i)^(fatal|crit|critical|emerg|panic|alert)")
+          - set(log.severity_number, SEVERITY_NUMBER_TRACE) where log.severity_number == 0 and IsMatch(log.severity_text, "(?i)^trace")
+          - set(log.severity_number, SEVERITY_NUMBER_DEBUG) where log.severity_number == 0 and IsMatch(log.severity_text, "(?i)^(debug|dbg)")
+          - set(log.severity_number, SEVERITY_NUMBER_INFO)  where log.severity_number == 0 and IsMatch(log.severity_text, "(?i)^(info|inf|notice)")
+          - set(log.severity_number, SEVERITY_NUMBER_WARN)  where log.severity_number == 0 and IsMatch(log.severity_text, "(?i)^(warn|warning)")
+          - set(log.severity_number, SEVERITY_NUMBER_ERROR) where log.severity_number == 0 and IsMatch(log.severity_text, "(?i)^(err|error|severe)")
+          - set(log.severity_number, SEVERITY_NUMBER_FATAL) where log.severity_number == 0 and IsMatch(log.severity_text, "(?i)^(fatal|crit|critical|emerg|panic|alert)")
 
           # Timestamp extraction — only when SDK didn't set `time`. We probe
           # the common attribute names, then try RFC3339 / RFC3339Nano /
           # `YYYY-MM-DD HH:MM:SS`. Time() returns the zero value on miss, so
           # successive attempts are safe.
-          - set(cache["ts"], attributes["timestamp"])  where time_unix_nano == 0 and attributes["timestamp"] != nil
-          - set(cache["ts"], attributes["@timestamp"]) where time_unix_nano == 0 and cache["ts"] == nil and attributes["@timestamp"] != nil
-          - set(cache["ts"], attributes["ts"])         where time_unix_nano == 0 and cache["ts"] == nil and attributes["ts"] != nil
-          - set(cache["ts"], attributes["time"])       where time_unix_nano == 0 and cache["ts"] == nil and attributes["time"] != nil
-          - set(time, Time(cache["ts"], "%Y-%m-%dT%H:%M:%S.%fZ")) where cache["ts"] != nil and time_unix_nano == 0
-          - set(time, Time(cache["ts"], "%Y-%m-%dT%H:%M:%SZ"))    where cache["ts"] != nil and time_unix_nano == 0
-          - set(time, Time(cache["ts"], "%Y-%m-%d %H:%M:%S"))     where cache["ts"] != nil and time_unix_nano == 0
+          - set(log.cache["ts"], log.attributes["timestamp"])  where log.time_unix_nano == 0 and log.attributes["timestamp"] != nil
+          - set(log.cache["ts"], log.attributes["@timestamp"]) where log.time_unix_nano == 0 and log.cache["ts"] == nil and log.attributes["@timestamp"] != nil
+          - set(log.cache["ts"], log.attributes["ts"])         where log.time_unix_nano == 0 and log.cache["ts"] == nil and log.attributes["ts"] != nil
+          - set(log.cache["ts"], log.attributes["time"])       where log.time_unix_nano == 0 and log.cache["ts"] == nil and log.attributes["time"] != nil
+          - set(log.time, Time(log.cache["ts"], "%Y-%m-%dT%H:%M:%S.%fZ")) where log.cache["ts"] != nil and log.time_unix_nano == 0
+          - set(log.time, Time(log.cache["ts"], "%Y-%m-%dT%H:%M:%SZ"))    where log.cache["ts"] != nil and log.time_unix_nano == 0
+          - set(log.time, Time(log.cache["ts"], "%Y-%m-%d %H:%M:%S"))     where log.cache["ts"] != nil and log.time_unix_nano == 0
           # Sanity guard: parsed timestamps more than 24h from observed_time
           # mean a bad client clock or wrong format — fall back to observed.
-          - set(time_unix_nano, observed_time_unix_nano) where time_unix_nano != 0 and (time_unix_nano - observed_time_unix_nano > 86400000000000 or observed_time_unix_nano - time_unix_nano > 86400000000000)
+          - set(log.time_unix_nano, log.observed_time_unix_nano) where log.time_unix_nano != 0 and (log.time_unix_nano - log.observed_time_unix_nano > 86400000000000 or log.observed_time_unix_nano - log.time_unix_nano > 86400000000000)
 
           # Promote a "message-ish" field to body. Body is the canonical OTel
           # field for the log line's text; we want the human-readable string
@@ -133,27 +144,27 @@ processors:
           # extractMessageFromLog. These ten must stay a *prefix* of
           # Utils.messageKeys (priority order matters); enforced by
           # test/collector/check-drift.sh.
-          - set(body, attributes["msg"]) where body == attributes["log.original"] and IsString(attributes["msg"])
-          - set(body, attributes["message"]) where body == attributes["log.original"] and IsString(attributes["message"])
-          - set(body, attributes["@message"]) where body == attributes["log.original"] and IsString(attributes["@message"])
-          - set(body, attributes["@m"]) where body == attributes["log.original"] and IsString(attributes["@m"])
-          - set(body, attributes["short_message"]) where body == attributes["log.original"] and IsString(attributes["short_message"])
-          - set(body, attributes["full_message"]) where body == attributes["log.original"] and IsString(attributes["full_message"])
-          - set(body, attributes["raw_message"]) where body == attributes["log.original"] and IsString(attributes["raw_message"])
-          - set(body, attributes["original_message"]) where body == attributes["log.original"] and IsString(attributes["original_message"])
-          - set(body, attributes["event"]) where body == attributes["log.original"] and IsString(attributes["event"])
-          - set(body, attributes["text"]) where body == attributes["log.original"] and IsString(attributes["text"])
+          - set(log.body, log.attributes["msg"]) where log.body == log.attributes["log.original"] and IsString(log.attributes["msg"])
+          - set(log.body, log.attributes["message"]) where log.body == log.attributes["log.original"] and IsString(log.attributes["message"])
+          - set(log.body, log.attributes["@message"]) where log.body == log.attributes["log.original"] and IsString(log.attributes["@message"])
+          - set(log.body, log.attributes["@m"]) where log.body == log.attributes["log.original"] and IsString(log.attributes["@m"])
+          - set(log.body, log.attributes["short_message"]) where log.body == log.attributes["log.original"] and IsString(log.attributes["short_message"])
+          - set(log.body, log.attributes["full_message"]) where log.body == log.attributes["log.original"] and IsString(log.attributes["full_message"])
+          - set(log.body, log.attributes["raw_message"]) where log.body == log.attributes["log.original"] and IsString(log.attributes["raw_message"])
+          - set(log.body, log.attributes["original_message"]) where log.body == log.attributes["log.original"] and IsString(log.attributes["original_message"])
+          - set(log.body, log.attributes["event"]) where log.body == log.attributes["log.original"] and IsString(log.attributes["event"])
+          - set(log.body, log.attributes["text"]) where log.body == log.attributes["log.original"] and IsString(log.attributes["text"])
 
           # Drop the keys we promoted into first-class fields. Keeps the
           # attribute set tight and avoids double-display in the UI.
-          - delete_key(attributes, "level")
-          - delete_key(attributes, "severity")
-          - delete_key(attributes, "log.level")
-          - delete_key(attributes, "timestamp")
-          - delete_key(attributes, "@timestamp")
-          - delete_key(attributes, "ts")
-          - delete_key(attributes, "msg")
-          - delete_key(attributes, "message")
+          - delete_key(log.attributes, "level")
+          - delete_key(log.attributes, "severity")
+          - delete_key(log.attributes, "log.level")
+          - delete_key(log.attributes, "timestamp")
+          - delete_key(log.attributes, "@timestamp")
+          - delete_key(log.attributes, "ts")
+          - delete_key(log.attributes, "msg")
+          - delete_key(log.attributes, "message")
 
 exporters:
   debug:

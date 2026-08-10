@@ -17,7 +17,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 # Keys from otelcol.yaml — every `set(body, attributes["KEY"])` line in order.
-yaml_keys=$(grep -oE 'set\(body, attributes\["[^"]+"\]\)' static/public/otelcol.yaml \
+yaml_keys=$(grep -oE 'set\(log\.body, log\.attributes\["[^"]+"\]\)' static/public/otelcol.yaml \
             | sed -E 's/.*"([^"]+)".*/\1/')
 
 # Keys from src/Utils.hs — the messageKeys list, in source order.
