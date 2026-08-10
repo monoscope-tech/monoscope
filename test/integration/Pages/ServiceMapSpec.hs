@@ -186,7 +186,10 @@ spec = around withTestResources do
       none <- runTestBg frozenTime tr $ serviceGraphForRange testPid (Just "qa") (addUTCTime (-600) frozenTime) (addUTCTime 600 frozenTime)
       V.toList none.edges `shouldBe` []
 
-      -- And the control itself renders, with an option per environment plus "All".
+      -- And the control itself renders, with an option per environment plus "All". The clock
+      -- advances first for the same reason the page test does it: the handler's 1H window is
+      -- relative to now, and a bucket sitting exactly at now falls outside a half-open range.
+      setTestTime tr.trTestClock (addUTCTime 600 frozenTime)
       (_, page) <- testServant tr $ ServiceMap.serviceMapGetH testPid Nothing Nothing (Just "1H") (Just "prod")
       let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
       html `shouldContainAll` ["?env=prod", "?env=staging", ">All<"]
