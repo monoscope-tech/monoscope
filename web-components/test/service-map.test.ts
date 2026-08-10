@@ -44,21 +44,34 @@ describe('scopeTo', () => {
 });
 
 describe('edgePath', () => {
-  it('leaves the caller downward and arrives at the callee from above', () => {
-    // Vertical control points are what make an edge meet a card square-on rather than
-    // grazing past it, which is how Datadog's read as "into this box".
+  it('runs down, across at the mid-level, then down again', () => {
+    // Datadog's edges are plumbing, not curves: shared horizontal lanes are what let a
+    // reader tell which box an edge belongs to in a dense row.
     const d = edgePath(100, 60, 300, 200);
-    expect(d).toMatch(/^M 100,60 C 100,\d+ 300,\d+ 300,200$/);
-    const [, c1y, c2y] = d.match(/C 100,(\d+) 300,(\d+)/)!.map(Number);
-    expect(c1y).toBeGreaterThan(60);
-    expect(c2y).toBeLessThan(200);
+    expect(d.startsWith('M 100,60')).toBe(true);
+    expect(d.endsWith('L 300,200')).toBe(true);
+    // The horizontal run sits at the midpoint between the two cards.
+    expect(d).toContain('130');
+    expect(d).toMatch(/Q 100,130|Q 300,130/);
   });
 
-  it('keeps a usable curve even when the two cards are almost level', () => {
-    // A flat cubic would collapse into a straight line through whatever sits between them.
-    const d = edgePath(0, 100, 400, 104);
-    const [, c1y] = d.match(/C 0,(\d+)/)!.map(Number);
-    expect(c1y - 100).toBeGreaterThanOrEqual(24);
+  it('collapses to a straight line when the cards are vertically aligned', () => {
+    expect(edgePath(200, 50, 200, 150)).toBe('M 200,50 L 200,150');
+  });
+
+  it('shrinks its corner radius rather than overshooting a short hop', () => {
+    // A 10px corner on a 6px drop would double back on itself.
+    const d = edgePath(0, 100, 4, 106);
+    const nums = [...d.matchAll(/-?\d+(?:\.\d+)?/g)].map(m => Number(m[0]));
+    expect(Math.max(...nums)).toBeLessThanOrEqual(106);
+    expect(Math.min(...nums)).toBeGreaterThanOrEqual(0);
+  });
+
+  it('turns the correct way for a callee to the left', () => {
+    const right = edgePath(0, 0, 200, 100);
+    const left = edgePath(200, 0, 0, 100);
+    expect(right).toContain('Q 0,50 10,50');
+    expect(left).toContain('Q 200,50 190,50');
   });
 });
 

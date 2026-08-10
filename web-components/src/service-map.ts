@@ -280,14 +280,31 @@ const KIND_ICON: Record<NodeKind, string> = {
 };
 
 /**
- * The edge Datadog draws: out of the bottom of the caller, into the top of the callee, as a
- * cubic bezier whose control points are pulled vertically. Vertical control points are what
- * make the curve leave and arrive perpendicular to the card, so an edge never appears to
- * graze a card it has nothing to do with.
+ * The edge Datadog draws: down out of the caller, across at a shared mid-level, then down
+ * into the callee — orthogonal segments with rounded corners, not a curve.
+ *
+ * The difference is not decorative. A bezier between two distant cards bows sideways through
+ * whatever sits between them, so the eye cannot tell which box an edge belongs to in a dense
+ * row. Orthogonal runs share a lane, meet cards square-on, and read as plumbing.
+ *
+ * Corners are quarter-circles whose radius collapses as the run shortens, so a near-vertical
+ * hop degrades to a straight line instead of overshooting its own corner.
  */
-export function edgePath(sx: number, sy: number, tx: number, ty: number): string {
-  const dy = Math.max(24, Math.abs(ty - sy) * 0.5);
-  return `M ${sx},${sy} C ${sx},${sy + dy} ${tx},${ty - dy} ${tx},${ty}`;
+export function edgePath(sx: number, sy: number, tx: number, ty: number, radius = 10): string {
+  const dx = tx - sx;
+  const dy = ty - sy;
+  if (Math.abs(dx) < 1) return `M ${sx},${sy} L ${tx},${ty}`;
+  const midY = sy + dy / 2;
+  const r = Math.max(0, Math.min(radius, Math.abs(dx) / 2, Math.abs(dy) / 2));
+  const dir = dx > 0 ? 1 : -1;
+  return [
+    `M ${sx},${sy}`,
+    `L ${sx},${midY - r}`,
+    `Q ${sx},${midY} ${sx + dir * r},${midY}`,
+    `L ${tx - dir * r},${midY}`,
+    `Q ${tx},${midY} ${tx},${midY + r}`,
+    `L ${tx},${ty}`,
+  ].join(' ');
 }
 
 type Reach = { up: Map<string, string[]>; down: Map<string, string[]> };
