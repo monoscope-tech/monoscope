@@ -21,7 +21,8 @@ processors:
     timeout: 5s
   memory_limiter:
     check_interval: 1s
-    limit_percentage: 75
+    limit_mib: 1400
+    spike_limit_mib: 300
   groupbytrace:
     wait_duration: 5s
     num_traces: 1000
