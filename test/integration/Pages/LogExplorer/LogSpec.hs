@@ -94,6 +94,32 @@ spec = around withTestResources do
       -- The stamped URLs must target the data endpoint, not the page shell.
       r.nextUrl `shouldSatisfy` T.isInfixOf "/log_explorer/data"
 
+    -- `deployment.environment.name` is promoted to a column (migration 0122) precisely so
+    -- the app-wide selector can scope every query by it. The selection rides on the session
+    -- (read from the `env` cookie at auth time), so this drives it the way the picker does.
+    it "scopes results to the selected deployment environment, and to all of them by default" \tr -> do
+      apiKey <- createTestAPIKey tr testPid "env-scope-key"
+      let hexId = T.replace "-" "" . UUID.toText <$> nextRandom
+          ingestIn env name = do
+            (trId, sid) <- (,) <$> hexId <*> hexId
+            ingestSpanReq tr $ mkSpanRequest trId sid Nothing name [] Nothing [] (mkResource apiKey [mkAttr "deployment.environment.name" env]) frozenTime
+      ingestIn "prod" "GET /env/prod"
+      ingestIn "staging" "GET /env/staging"
+
+      let range = (Just (addUTCTime (-60) frozenTime), Just (addUTCTime 60 frozenTime))
+          namesFor envM = do
+            res <- runQueryEffect tr $ LogQueries.selectLogTable tr.trATCtx.env.enableTimefusionReads testPid [] "" Nothing range [] (Just SSpans) Nothing envM
+            (rows, cols, _) <- either (\e -> error ("selectLogTable failed: " <> e)) pure res
+            let idx = fromMaybe (error "span_name not projected") $ V.elemIndex "span_name" (V.fromList cols)
+            pure $ sort [n | r <- V.toList rows, Just (AE.String n) <- [r V.!? idx], "GET /env/" `T.isPrefixOf` n]
+
+      namesFor Nothing `shouldReturn` ["GET /env/prod", "GET /env/staging"]
+      namesFor (Just "prod") `shouldReturn` ["GET /env/prod"]
+      namesFor (Just "staging") `shouldReturn` ["GET /env/staging"]
+      -- An environment nothing reports is empty, not unfiltered — the difference between
+      -- "no data here" and "here is everything" is the whole point of the control.
+      namesFor (Just "does-not-exist") `shouldReturn` []
+
     it "should handle query filters correctly" \tr -> do
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
       let reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
@@ -806,7 +832,7 @@ spec = around withTestResources do
       ingestErrorLog tr apiKey "boom: db connection failed" [] frozenTime
       ingestLog tr apiKey "ordinary info line" frozenTime
       let range = (Just (addUTCTime (-60) frozenTime), Just (addUTCTime 60 frozenTime))
-      res <- runQueryEffect tr $ LogQueries.selectLogTable tr.trATCtx.env.enableTimefusionReads testPid [] "" Nothing range [] (Just SSpans) Nothing
+      res <- runQueryEffect tr $ LogQueries.selectLogTable tr.trATCtx.env.enableTimefusionReads testPid [] "" Nothing range [] (Just SSpans) Nothing Nothing
       (rows, cols, _) <- either (\e -> error ("selectLogTable failed: " <> e)) pure res
       let colIx name = Unsafe.fromJust $ V.elemIndex name (V.fromList cols)
           logRows = [r | r <- V.toList rows, (r V.!? colIx "kind") == Just (AE.String "log")]

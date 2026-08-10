@@ -255,10 +255,10 @@ validateSqlQuery query =
 -- | @useTimefusion@ (from @env.enableTimefusionReads@) routes the read to the TimeFusion
 -- pool, as in 'executeSecuredQuery'. It is a parameter, not a wrapper the callers apply,
 -- because callers that forgot it silently read the empty Postgres side.
-selectLogTable :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => Bool -> Projects.ProjectId -> [Section] -> Text -> Maybe PageCursor -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector AE.Value), [Text], Int))
-selectLogTable useTimefusion pid queryAST queryText cursorM dateRange projectedColsByUser source targetSpansM = do
+selectLogTable :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => Bool -> Projects.ProjectId -> [Section] -> Text -> Maybe PageCursor -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector AE.Value), [Text], Int))
+selectLogTable useTimefusion pid queryAST queryText cursorM dateRange projectedColsByUser source targetSpansM environment = do
   now <- Time.currentTime
-  let (q, queryComponents) = queryASTToComponents ((defSqlQueryCfg pid now source targetSpansM){cursorM, dateRange, projectedColsByUser, source, targetSpansM}) queryAST
+  let (q, queryComponents) = queryASTToComponents ((defSqlQueryCfg pid now source targetSpansM){cursorM, dateRange, projectedColsByUser, source, targetSpansM, environment}) queryAST
       canonicalOrder = case cursorM of Just (PageCursor PageNewer _) -> V.reverse; _ -> identity
 
   Log.logTrace
@@ -489,25 +489,31 @@ data RawSessionRow = RawSessionRow
 -- embeds `whereClause` into its own SQL must scope it here — otherwise a
 -- non-empty user filter silently bypasses project isolation.
 --
--- >>> scopedWhere "p1" Nothing ""
+-- >>> scopedWhere "p1" Nothing "" ""
 -- "project_id='p1'"
--- >>> scopedWhere "p1" (Just "") ""
+-- >>> scopedWhere "p1" (Just "") "" ""
 -- "project_id='p1'"
--- >>> scopedWhere "p1" (Just "level='error'") "timestamp > now()"
+-- >>> scopedWhere "p1" (Just "level='error'") "timestamp > now()" ""
 -- "project_id='p1' AND (level='error') AND timestamp > now()"
-scopedWhere :: Text -> Maybe Text -> Text -> Text
-scopedWhere pidTxt mUser dateClause =
-  T.intercalate " AND " $ ("project_id='" <> pidTxt <> "'") : filter (not . T.null) [foldMap (\w -> if T.null w then "" else "(" <> w <> ")") mUser, dateClause]
+--
+-- The environment predicate is a scope like the project and the date range, so it joins them
+-- rather than the user's clause — a query the reader typed must stay recognisable in the SQL:
+--
+-- >>> scopedWhere "p1" (Just "level='error'") "" "env = 'prod'"
+-- "project_id='p1' AND (level='error') AND env = 'prod'"
+scopedWhere :: Text -> Maybe Text -> Text -> Text -> Text
+scopedWhere pidTxt mUser dateClause envClause =
+  T.intercalate " AND " $ ("project_id='" <> pidTxt <> "'") : filter (not . T.null) [foldMap (\w -> if T.null w then "" else "(" <> w <> ")") mUser, dateClause, envClause]
 
 
 -- | Parse @queryAST@ against a fresh 'defSqlQueryCfg' and build its scoped WHERE
 -- clause in one step. Shared by 'fetchLogPatterns', 'fetchSessions', and
 -- 'fetchEventExamples', which all otherwise repeat this three-line dance.
-scopedQueryWhere :: Projects.ProjectId -> UTCTime -> Maybe Sources -> (Maybe UTCTime, Maybe UTCTime) -> [Section] -> Text
-scopedQueryWhere pid now source dateRange queryAST =
-  let sqlCfg = (defSqlQueryCfg pid now source Nothing){dateRange}
+scopedQueryWhere :: Projects.ProjectId -> UTCTime -> Maybe Sources -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Text -> [Section] -> Text
+scopedQueryWhere pid now source dateRange environment queryAST =
+  let sqlCfg = (defSqlQueryCfg pid now source Nothing){dateRange, environment}
       (_, qc) = queryASTToComponents sqlCfg queryAST
-   in scopedWhere pid.toText qc.whereClause (buildDateRange sqlCfg)
+   in scopedWhere pid.toText qc.whereClause (buildDateRange sqlCfg) (buildEnvFilter sqlCfg)
 
 
 -- | One row of the precomputed patterns query in 'fetchLogPatterns' (persisted
@@ -537,12 +543,13 @@ fetchLogPatterns
   -> (Maybe UTCTime, Maybe UTCTime)
   -> Maybe Sources
   -> Maybe Text
+  -> Maybe Text
   -> Int
   -> Eff es (Int, [PatternRow])
-fetchLogPatterns enableTfReads pid queryAST dateRange sourceM targetM skip = do
+fetchLogPatterns enableTfReads pid queryAST dateRange sourceM targetM environment skip = do
   now <- Time.currentTime
   let pidTxt = pid.toText
-      fullWhere = scopedQueryWhere pid now sourceM dateRange queryAST
+      fullWhere = scopedQueryWhere pid now sourceM dateRange environment queryAST
       target = fromMaybe "summary" targetM
   Log.logTrace "fetchLogPatterns: start"
     $ AE.object
@@ -628,7 +635,7 @@ fetchLogPatterns enableTfReads pid queryAST dateRange sourceM targetM skip = do
 fetchSessions :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Bool -> Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Text -> Int -> Eff es (SessionSummary, Int, [SessionRow])
 fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
   now <- Time.currentTime
-  let fullWhere = scopedQueryWhere pid now (Just SSpans) dateRange queryAST
+  let fullWhere = scopedQueryWhere pid now (Just SSpans) dateRange Nothing queryAST
       bucketW = bucketWidthSecs dateRange now
       sortCol = case sortByM of
         Just "duration" -> "duration_ns" :: Text
@@ -830,7 +837,7 @@ fetchEventExamples
   -> Eff es (V.Vector (V.Vector AE.Value), [Text])
 fetchEventExamples enableTfReads pid queryAST dateRange expandKind skip limitN = do
   now <- Time.currentTime
-  let fullWhereSql = rawSql $ scopedQueryWhere pid now (Just SSpans) dateRange queryAST
+  let fullWhereSql = rawSql $ scopedQueryWhere pid now (Just SSpans) dateRange Nothing queryAST
       expandFilter = case expandKind of
         ExpandSession sid -> [HI.sql| AND attributes___session___id = #{sid}|]
         -- Prefer tag match: the key is a comma-joined list of pat:<hash> tags

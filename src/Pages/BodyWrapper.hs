@@ -2,14 +2,17 @@ module Pages.BodyWrapper (bodyWrapper, BWConfig (..), PageCtx (..), mkPageCtx, w
 
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default, def)
+import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
 import Data.Tuple.Extra (fst3, uncurry3)
 import Data.Vector qualified as V
 import Effectful.Reader.Static qualified as EffReader
+import Effectful.Time qualified as Time
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx (hxGet_, hxIndicator_, hxPost_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
+import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pages.CommandPalette qualified as CommandPalette
@@ -30,7 +33,16 @@ mkPageCtx :: Projects.ProjectId -> ATAuthCtx (Projects.Session, Projects.Project
 mkPageCtx pid = do
   (sess, project) <- Projects.sessionAndProject pid
   appCtx <- EffReader.ask @AuthContext
-  pure (sess, project, def{sessM = Just sess, currProject = Just project, config = appCtx.config})
+  now <- Time.currentTime
+  -- One indexed row read of the learned facet values — the same summary the Log Explorer
+  -- sidebar renders, so the picker offers exactly the environments this project has
+  -- reported. getFacetSummary ignores the time range.
+  facetsM <- SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" now now
+  let envOptions = maybe V.empty (envValues . (.facetJson)) facetsM
+  pure (sess, project, def{sessM = Just sess, currProject = Just project, config = appCtx.config, envOptions})
+  where
+    envValues (SchemaCatalog.FacetData m) =
+      V.fromList $ sort [v.value | v <- HM.findWithDefault [] "resource.deployment.environment.name" m, not (T.null v.value)]
 
 
 -- | Build a full page response: bootstraps page ctx, lets the caller tweak
@@ -155,6 +167,10 @@ data BWConfig = BWConfig
   , headContent :: Maybe (Html ()) -- Optional HTML content to include in the head
   , globalDrawerContent :: Maybe (Html ())
   , config :: EnvConfig -- Environment configuration for telemetry
+  , envOptions :: V.Vector Text
+  -- ^ Deployment environments this project has actually reported, for the app-wide picker.
+  -- Seeded by 'mkPageCtx' from the learned facet values, so it is the same set the Log
+  -- Explorer's facet sidebar offers and it costs one indexed row read.
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default)
@@ -682,8 +698,52 @@ navbar bcfg menuL =
           Nothing -> span_ [class_ "font-normal text-xl p-1 leading-none text-textWeak", id_ "pageTitleSuffixText"] $ toHtml suffix
       whenJust bcfg.docsLink \link -> a_ ([class_ "max-md:hidden text-iconBrand -mt-1", href_ link, term "hx-preload" "false", target_ "_blank", rel_ "noopener", Aria.label_ "Open Documentation"] <> tippyRight_ "Open Documentation") $ faSprite_ "circle-question" "regular" "w-4 h-4"
     whenJust bcfg.navTabs $ div_ [class_ $ bool "" "max-md:order-last max-md:w-full max-md:pt-1" (isJust bcfg.pageActions)]
-    div_ [class_ $ "flex-1 flex items-center justify-end gap-2 text-sm" <> bool " max-md:hidden" "" (isJust bcfg.pageActions)]
-      $ fold bcfg.pageActions
+    div_ [class_ $ "flex-1 flex items-center justify-end gap-2 text-sm" <> bool " max-md:hidden" "" (isJust bcfg.pageActions)] do
+      envPicker_ (bcfg.sessM >>= (.environment)) bcfg.envOptions
+      fold bcfg.pageActions
+
+
+-- | The app-wide environment selector, in the shape Datadog puts in its top bar: pick prod
+-- or staging once and every telemetry surface stays scoped to it until you change it.
+--
+-- The selection is a cookie, not a query parameter. It has to survive navigation to pages
+-- that never declared an @?env=@ parameter — which is all of them — so a link-based control
+-- would need the parameter threaded through every route to be sticky at all. The cost is
+-- that a shared link does not carry the environment; the query it links to does.
+--
+-- Hidden entirely when the project has never reported an environment: a picker whose only
+-- option is "All" is furniture, not a control.
+envPicker_ :: Maybe Text -> V.Vector Text -> Html ()
+envPicker_ selected options =
+  unless (V.null options) $ div_ [class_ "relative"] do
+    button_
+      ( [ class_ "inline-flex items-center gap-1.5 rounded-lg border border-strokeWeak px-2 py-1 hover:bg-fillWeak cursor-pointer"
+        , type_ "button"
+        , Aria.label_ "Deployment environment"
+        , term "data-tippy-content" "Scope every page to one deployment environment"
+        ]
+          <> popoverTrigger_ "env-picker"
+      )
+      do
+        faSprite_ "layer-group" "regular" "w-3.5 h-3.5 text-iconNeutral"
+        span_ [class_ "font-medium"] $ toHtml $ fromMaybe "All envs" selected
+        faSprite_ "chevron-down" "regular" "w-3 h-3 text-iconNeutral"
+    ul_ (popoverPanel_ "env-picker" <> [class_ "dropdown menu flex flex-col bg-bgBase border border-strokeWeak w-56 p-1 text-sm rounded-lg shadow"])
+      -- Nothing is "all environments" and is always offered: an environment that has gone
+      -- quiet must not be able to strand a reader in a view with no data and no way out.
+      $ forM_ (Nothing : (Just <$> V.toList options)) \opt -> do
+        let cookieVal = fromMaybe "" opt
+        li_
+          $ button_
+            [ class_ $ "w-full text-left cursor-pointer rounded-md px-2 py-1 hover:bg-fillWeak " <> bool "" "font-semibold text-textBrand" (opt == selected)
+            , type_ "button"
+            , term "aria-pressed" (bool "false" "true" (opt == selected))
+            , -- A cookie write plus a reload: genuinely imperative, and the whole point is
+              -- that it applies to the server-rendered query on the *next* request.
+              term "_" [text|on click set document.cookie to 'env=${cookieVal};path=/;max-age=31536000;samesite=lax' then call location.reload()|]
+            ]
+          $ toHtml
+          $ fromMaybe "All environments" opt
 
 
 globalTemplates_ :: Html ()

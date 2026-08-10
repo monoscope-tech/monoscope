@@ -745,7 +745,7 @@ runKqlWithRawData :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.T
 runKqlWithRawData config kqlQuery cols formatResult = case parseQueryToAST kqlQuery of
   Left parseErr -> pure $ ToolResult ("Error: Query parse failed - " <> show parseErr) Nothing
   Right queryAST -> do
-    resultE <- selectLogTable config.useTimefusion config.projectId queryAST kqlQuery Nothing config.timeRange cols Nothing Nothing
+    resultE <- selectLogTable config.useTimefusion config.projectId queryAST kqlQuery Nothing config.timeRange cols Nothing Nothing Nothing
     pure $ case resultE of
       Left err -> ToolResult ("Error: Query execution failed - " <> err) Nothing
       Right res -> let (txt, raw) = formatResult res in ToolResult txt (Just raw)

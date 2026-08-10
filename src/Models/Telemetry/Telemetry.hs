@@ -1764,6 +1764,11 @@ otelColumns =
       , resourceText "resource___service___version" "service.version"
       , resourceText "resource___service___instance___id" "service.instance.id"
       , resourceText "resource___service___namespace" "service.namespace"
+      , -- The dimension the app-wide environment selector scopes by. Promoted rather than
+        -- read out of the `resource` Variant because "prod only" has to be a column
+        -- predicate on every telemetry query, not a blob probe. otel_metrics has carried the
+        -- same column since migration 0108.
+        resourceText "resource___deployment___environment___name" "deployment.environment.name"
       , resourceText "resource___telemetry___sdk___language" "telemetry.sdk.language"
       , resourceText "resource___telemetry___sdk___name" "telemetry.sdk.name"
       , resourceText "resource___telemetry___sdk___version" "telemetry.sdk.version"
@@ -1830,8 +1835,12 @@ data Context = Context
 -- Field count is pinned via doctest so any add/remove fails CI unless
 -- 'otelSpanColsSql' + 'otelColumns' are touched in the same change:
 --
+-- (A promoted @resource___*@\/@attributes___*@ column bumps this count without adding a
+-- record field: those are write-side projections of the @resource@\/@attributes@ blobs and
+-- are queried by KQL, never read back through 'otelSpanColsSql'.)
+--
 -- >>> length otelColumns
--- 89
+-- 90
 data OtelLogsAndSpans = OtelLogsAndSpans
   { project_id :: Text
   , id :: Text -- UUID
