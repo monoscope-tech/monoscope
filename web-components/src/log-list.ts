@@ -88,6 +88,35 @@ export class DenseRowFlowLayout extends FlowLayout {
   }
 }
 
+/**
+ * The dimension the latency bar attributes time to. `service` answers "which service ate the
+ * request"; `kind` answers "was this my code or something it called". Both are projected on
+ * every row already, so neither costs a query.
+ */
+export type LatencyDim = 'service' | 'kind';
+
+/**
+ * jsdom in this setup provides no `localStorage` at all, and a browser in private mode can
+ * throw on access. A reading preference falling back to its default is the correct outcome;
+ * it must never be the thing that stops the list from mounting.
+ */
+const latencyDimPref = {
+  read: (): LatencyDim => {
+    try {
+      return localStorage.getItem('latencyDim') === 'kind' ? 'kind' : 'service';
+    } catch {
+      return 'service';
+    }
+  },
+  write: (dim: LatencyDim) => {
+    try {
+      localStorage.setItem('latencyDim', dim);
+    } catch {
+      /* preference simply does not persist */
+    }
+  },
+};
+
 @customElement('log-list')
 export class LogList extends LitElement {
   @property({ type: String }) projectId: string = '';
@@ -131,6 +160,10 @@ export class LogList extends LitElement {
     { rows: any[][]; cols: string[]; colIdxMap: ColIdxMap; hasMore: boolean; loading: boolean; skip: number; eventLines?: EventLine[] }
   > = {};
   @state() private fixedColumnWidths: Record<string, number> = {};
+  // Which dimension the latency bar attributes time to. Persisted like the other column
+  // preferences, because "am I looking at services or at span kinds" is a reading mode a
+  // user settles into rather than a per-page choice.
+  @state() private latencyDim: LatencyDim = latencyDimPref.read();
 
   // Refs for DOM elements
   @query('#logs_list_container_inner') private logsContainer?: HTMLElement;
@@ -1431,6 +1464,14 @@ export class LogList extends LitElement {
     delete this.columnMaxWidthMap[column]; // don't leak a stale width for a removed column
     this.requestUpdate();
   }
+  setLatencyDim(dim: LatencyDim) {
+    this.latencyDim = dim;
+    latencyDimPref.write(dim);
+    // Every cached bar is keyed on the old dimension; the cache check reads `dim`, so the
+    // rows repaint on the next render without a refetch.
+    this.requestUpdate();
+  }
+
   handleColumnsChanged(e: { detail: string[] }) {
     const next = e.detail;
     const nextSet = new Set(next);
@@ -2179,16 +2220,28 @@ export class LogList extends LitElement {
       case 'latency_breakdown':
         // Cache rendered latency breakdown
         const currentWidth = this.columnMaxWidthMap['latency_breakdown'] || this.fixedColumnWidths['latency_breakdown'] || 120;
-        if (!rowData._latencyCache || rowData._latencyCache.width !== currentWidth || rowData._latencyCache.expanded !== expanded) {
-          const { traceStart, traceEnd, startNs, duration, childrenTimeSpans } = rowData;
-          const color = isSyntheticRow
-            ? 'bg-transparent border border-dashed border-strokeWeak'
-            : this.serviceColors[lookupVecValue<string>(dataArr, colIdxMap, 'span_name')] || 'bg-slate-400';
-          const chil = childrenTimeSpans.map(({ startNs, duration, data }: { startNs: number; duration: number; data: any }) => ({
-            startNs: startNs - traceStart,
-            duration,
-            color: this.serviceColors[lookupVecValue<string>(data, colIdxMap, 'span_name')] || 'bg-slate-400',
-          }));
+        if (
+          !rowData._latencyCache ||
+          rowData._latencyCache.width !== currentWidth ||
+          rowData._latencyCache.expanded !== expanded ||
+          rowData._latencyCache.dim !== this.latencyDim
+        ) {
+          const { traceStart, startNs, duration, childrenTimeSpans } = rowData;
+          // Colour keyed on the chosen dimension, not on `span_name`. Keying on the span name
+          // made this a per-operation palette wearing the name "service colors": two spans in
+          // one service got two colours, the same operation in two services got one, and any
+          // name missing the palette fell back to grey.
+          const dimOf = (arr: any) => lookupVecValue<string>(arr, colIdxMap, this.latencyDim) || '';
+          const colorOf = (value: string) =>
+            this.latencyDim === 'kind'
+              ? KIND_COLORS[value] ?? 'bg-fillStrong'
+              : this.serviceColors[value] || 'bg-fillStrong';
+          const color = isSyntheticRow ? 'bg-transparent border border-dashed border-strokeWeak' : colorOf(dimOf(dataArr));
+          const chil = childrenTimeSpans.map(({ startNs, duration, data }: { startNs: number; duration: number; data: any }) => {
+            const label = dimOf(data) || 'unknown';
+            return { startNs, duration, label, color: colorOf(label) };
+          });
+          const segments = latencySegments({ startNs, duration }, chil);
 
           // Extract right-aligned badges from summary array
           const summaryArr = this.parseSummaryData(dataArr);
@@ -2264,14 +2317,10 @@ export class LogList extends LitElement {
               <div class="flex justify-end items-center gap-1 text-textWeak pl-1 rounded-lg bg-bgBase" style="min-width:${currentWidth}px">
                 ${rightAlignedBadges}
                 ${spanLatencyBreakdown({
-                  start: startNs - traceStart,
-                  depth,
-                  duration,
-                  traceEnd,
                   color,
-                  children: chil,
+                  segments,
+                  title: latencyTitle(this.latencyDim, { startNs, duration, traceStart }, segments),
                   barWidth: currentWidth - 12,
-                  expanded,
                 })}
                 <span class="w-1"></span>
               </div>
@@ -2282,6 +2331,7 @@ export class LogList extends LitElement {
             content: latencyHtml,
             width: currentWidth,
             expanded: expanded,
+            dim: this.latencyDim,
           };
         }
         return rowData._latencyCache.content;
@@ -2737,6 +2787,19 @@ export class LogList extends LitElement {
           <li class="px-1 cursor-pointer hover:bg-fillWeak">
             <button class="cursor-pointer py-0.5" @pointerdown=${() => this.moveColumn(column, 1)}>Move column right</button>
           </li>
+          ${column === 'latency_breakdown'
+            ? (['service', 'kind'] as LatencyDim[]).map(
+                dim => html`<li class="px-1 cursor-pointer hover:bg-fillWeak">
+                  <button
+                    class="cursor-pointer py-0.5"
+                    aria-pressed=${this.latencyDim === dim}
+                    @pointerdown=${() => this.setLatencyDim(dim)}
+                  >
+                    ${this.latencyDim === dim ? '✓ ' : ''}Break down by ${dim}
+                  </button>
+                </li>`
+              )
+            : nothing}
         </ul>
         <div
           @pointerdown=${(event: any) => {
@@ -3131,71 +3194,105 @@ function renderCopyIdChip(fullId: string) {
   </button>`;
 }
 
-function spanLatencyBreakdown({
-  start,
-  duration,
-  traceEnd,
-  depth,
-  color,
-  children,
-  barWidth,
-  expanded,
-}: {
-  start: number;
-  duration: number;
-  traceEnd: number;
-  depth: number;
-  color: string;
-  barWidth: number;
-  children: (ChildrenForLatency & { color: string })[];
-  expanded?: boolean;
-}) {
-  const width = (duration / traceEnd) * barWidth;
-  const left = (start / traceEnd) * barWidth;
+/**
+ * Kind colours carry meaning rather than identity, so they are fixed rather than hashed:
+ * work we ran ourselves reads as one family, work we waited on as another.
+ */
+const KIND_COLORS: Record<string, string> = {
+  server: 'bg-fillBrand-strong',
+  internal: 'bg-fillInformation-strong',
+  client: 'bg-fillWarning-strong',
+  producer: 'bg-fillWarning-strong',
+  consumer: 'bg-fillSuccess-strong',
+  log: 'bg-fillStrong',
+};
 
-  // Enhanced base visualization with subtle gradient
-  const baseVisualization = html`
-    <div class="flex h-5 relative bg-fillWeak overflow-x-hidden rounded-sm" style=${`width:${barWidth}px`}>
-      <div
-        class=${`h-full absolute top-0 rounded-sm ${depth === 0 || children.length === 0 ? color : ''}`}
-        style=${`width:${width}px; left:${left}px; background-image: linear-gradient(to right, transparent, rgba(255,255,255,0.1), transparent)`}
-      ></div>
-      ${children.map((child) => {
-        const cWidth = (child.duration / traceEnd) * barWidth;
-        const cLeft = (child.startNs / traceEnd) * barWidth;
-        return html`<div class=${`h-full absolute top-0 rounded-sm ${child.color}`} style=${`width:${cWidth}px; left:${cLeft}px`}></div>`;
-      })}
-    </div>
-  `;
+export type LatencySegment = { leftPct: number; widthPct: number; color: string; label: string; ns: number };
 
-  // For child spans (depth > 0) OR expanded root spans, add the frame overlay
-  if (depth > 0 || (depth === 0 && expanded)) {
-    return html`<div class="-mt-1 shrink-0">
-      <div class="flex h-5 relative" style=${`width:${barWidth}px`}>
-        ${baseVisualization}
-
-        <!-- Enhanced overlay frame elements with glow effect -->
-        <!-- Full width boundary markers at the start and end -->
-        <div
-          class="absolute top-0 h-full border-l-2 border-strokeBrand-strong pointer-events-none"
-          style="left:0; box-shadow: 0 0 4px var(--color-strokeBrand-weak)"
-        ></div>
-        <div
-          class="absolute top-0 h-full border-r-2 border-strokeBrand-strong pointer-events-none"
-          style=${`left:${barWidth - 2}px; box-shadow: 0 0 4px var(--color-strokeBrand-weak)`}
-        ></div>
-
-        <!-- Horizontal line representing the full timeline -->
-        <div
-          class="absolute top-1/2 -translate-y-1/2 h-[1px] bg-strokeBrand-strong pointer-events-none"
-          style=${`width:${barWidth}px; left:0; box-shadow: 0 0 2px var(--color-strokeBrand-weak)`}
-        ></div>
-      </div>
-    </div>`;
+/**
+ * A row's direct children, laid out inside the row's OWN duration.
+ *
+ * The bar used to sit on the trace-wide axis, which is why child rows were unreadable: a 3ms
+ * child inside a 2s trace is a sub-pixel sliver, and the "frame" drawn around it marked the
+ * bar's own bounds — three decorative lines restating the bar. Here the row is the axis, so
+ * every row gets the full width and the gaps between its children are its self time. Trace
+ * position moves to the tooltip, which costs no pixels.
+ *
+ * Children are clamped to the row's window: a child whose clock skewed outside its parent
+ * must not paint outside the bar, and a child that ends after its parent is still time the
+ * parent waited on.
+ */
+export function latencySegments(
+  row: { startNs: number; duration: number },
+  children: { startNs: number; duration: number; label: string; color: string }[]
+): LatencySegment[] {
+  if (!(row.duration > 0)) return [];
+  const rowEnd = row.startNs + row.duration;
+  const segments: LatencySegment[] = [];
+  for (const c of children) {
+    // Interval intersection, not an offset clamp: a child whose clock skewed it entirely
+    // outside its parent contributes nothing to the parent's window, and must not be pinned
+    // to the start of the bar as though it happened there.
+    const from = Math.max(row.startNs, c.startNs);
+    const to = Math.min(rowEnd, c.startNs + Math.max(0, c.duration));
+    if (to <= from) continue;
+    segments.push({
+      leftPct: ((from - row.startNs) / row.duration) * 100,
+      widthPct: ((to - from) / row.duration) * 100,
+      color: c.color,
+      label: c.label,
+      ns: to - from,
+    });
   }
+  return segments;
+}
 
-  // For root spans that are not expanded, return just the base visualization
-  return html`<div class="-mt-1 shrink-0">${baseVisualization}</div>`;
+/** Human-readable nanoseconds, matching the duration badge's vocabulary. */
+export const fmtNs = (ns: number): string =>
+  ns >= 1e9 ? `${(ns / 1e9).toFixed(2)}s` : ns >= 1e6 ? `${Math.round(ns / 1e6)}ms` : ns >= 1e3 ? `${Math.round(ns / 1e3)}\u00b5s` : `${Math.round(ns)}ns`;
+
+/**
+ * What the bar is saying, in words — for the tooltip and for the screen reader, neither of
+ * which can read a colour. Carries the trace offset the bar no longer encodes positionally.
+ */
+export function latencyTitle(dim: LatencyDim, row: { startNs: number; duration: number; traceStart: number }, segments: LatencySegment[]): string {
+  const byLabel = new Map<string, number>();
+  for (const s of segments) byLabel.set(s.label, (byLabel.get(s.label) ?? 0) + s.ns);
+  const accounted = segments.reduce((a, s) => a + s.ns, 0);
+  const self = Math.max(0, row.duration - accounted);
+  const parts = [...byLabel.entries()].sort((a, b) => b[1] - a[1]).map(([label, ns]) => `${label} ${fmtNs(ns)}`);
+  return [
+    `${fmtNs(row.duration)} total`,
+    `+${fmtNs(Math.max(0, row.startNs - row.traceStart))} into the trace`,
+    `self ${fmtNs(self)}`,
+    ...(parts.length ? [`by ${dim}: ${parts.join(', ')}`] : []),
+  ].join(' \u00b7 ');
+}
+
+function spanLatencyBreakdown({
+  color,
+  segments,
+  title,
+  barWidth,
+}: {
+  color: string;
+  segments: LatencySegment[];
+  title: string;
+  barWidth: number;
+}) {
+  // The track IS the row's self time — children paint over it, so a gap between two children
+  // is time the row spent on its own rather than an absence of information.
+  return html`<div class="-mt-1 shrink-0" title=${title} aria-label=${title}>
+    <div class=${`flex h-5 relative overflow-hidden rounded-sm ${color}`} style=${`width:${barWidth}px`}>
+      ${segments.map(
+        s =>
+          html`<div
+            class=${`h-full absolute top-0 ${s.color}`}
+            style=${`left:${s.leftPct}%; width:${Math.max(s.widthPct, 0.5)}%`}
+          ></div>`
+      )}
+    </div>
+  </div>`;
 }
 
 // Fallback column set used only when logsColumns hasn't loaded yet, so the

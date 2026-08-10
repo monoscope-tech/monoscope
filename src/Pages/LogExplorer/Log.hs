@@ -571,7 +571,13 @@ buildLogResult withChildren pid now sinceM addCols removeCols (requestVecs, colN
       requestVecsAug = synthRows <> requestVecs
       rawLogsData = requestVecsAug <> V.fromList childSpansList
       cols = nubOrd $ curateCols addCols removeCols colNames
-      colors = getServiceColors $ V.mapMaybe (colOf "span_name") rawLogsData
+      -- Keyed on the service, which is what the name has always claimed. Keying on
+      -- `span_name` made this a per-*operation* palette: two spans in one service got two
+      -- colours and the same operation in two services got one, so the latency column's
+      -- colour carried no service signal at all — and every row whose operation missed the
+      -- palette fell back to grey. Same hash as the trace waterfall and the service map, so
+      -- a service looks the same wherever it appears.
+      colors = getServiceColors $ V.mapMaybe (colOf "service") rawLogsData
       queryResultCount = V.length requestVecsAug
       (logsData, traces) = buildTraceTree colIdxMap queryResultCount rawLogsData
   pure

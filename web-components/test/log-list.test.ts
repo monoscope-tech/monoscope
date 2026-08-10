@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach } from 'vitest';
 import { render } from 'lit';
 import { dedupeById } from '../src/log-list-utils';
-import { LogList } from '../src/log-list';
+import { LogList, latencySegments, latencyTitle } from '../src/log-list';
 import { row, fakeTransport, ids, mountList } from './log-list-harness';
 
 describe('dedupeById', () => {
@@ -153,5 +153,68 @@ describe('LogList toggleColumnOnTable (URL delta)', () => {
     setShown(['id', 'route']); // route shown, service hidden, duration hidden
     expect(el.toggleColumnOnTable('duration')).toBe(true);
     expect(cols()).toBe('route,-service,duration');
+  });
+});
+
+describe('latencySegments', () => {
+  // The row is the axis, not the trace. On the trace-wide axis a 3ms child inside a 2s trace
+  // was a sub-pixel sliver, which is why child rows were unreadable.
+  const row = { startNs: 1_000, duration: 1_000 };
+  const child = (startNs: number, duration: number, label = 'db') => ({ startNs, duration, label, color: `bg-${label}` });
+
+  test('places children as a percentage of the row, not of the trace', () => {
+    expect(latencySegments(row, [child(1_250, 500)])).toEqual([
+      { leftPct: 25, widthPct: 50, color: 'bg-db', label: 'db', ns: 500 },
+    ]);
+  });
+
+  test('gaps between children are the row self time, so segments never sum past the row', () => {
+    const segs = latencySegments(row, [child(1_000, 200, 'db'), child(1_600, 300, 'cache')]);
+    const accounted = segs.reduce((a, s) => a + s.ns, 0);
+    expect(accounted).toBe(500);
+    expect(row.duration - accounted).toBe(500); // self
+    expect(segs.every((s) => s.leftPct + s.widthPct <= 100)).toBe(true);
+  });
+
+  test('intersects with the row window rather than clamping an offset', () => {
+    // Clock skew and a child outliving its parent are both real. A child that ended before
+    // its parent began contributes nothing — pinning it to the start of the bar would claim
+    // time the parent never spent — while a child that overruns is still time it waited on.
+    const segs = latencySegments(row, [child(500, 300), child(1_900, 5_000, 'slow')]);
+    expect(segs).toEqual([{ leftPct: 90, widthPct: 10, color: 'bg-slow', label: 'slow', ns: 100 }]);
+  });
+
+  test('a child overlapping the row start is measured from the row start', () => {
+    expect(latencySegments(row, [child(900, 300)])).toEqual([
+      { leftPct: 0, widthPct: 20, color: 'bg-db', label: 'db', ns: 200 },
+    ]);
+  });
+
+  test('drops children with no measurable width, and a zero-duration row has no bar to draw', () => {
+    expect(latencySegments(row, [child(1_400, 0), child(1_400, -5)])).toEqual([]);
+    expect(latencySegments({ startNs: 0, duration: 0 }, [child(0, 10)])).toEqual([]);
+  });
+});
+
+describe('latencyTitle', () => {
+  test('says in words what the colours say, including the trace offset the bar no longer encodes', () => {
+    const title = latencyTitle(
+      'service',
+      { startNs: 1_500_000, duration: 2_000_000, traceStart: 500_000 },
+      [
+        { leftPct: 0, widthPct: 25, color: 'x', label: 'postgres', ns: 500_000 },
+        { leftPct: 30, widthPct: 10, color: 'y', label: 'redis', ns: 200_000 },
+      ]
+    );
+    expect(title).toContain('2ms total');
+    expect(title).toContain('+1ms into the trace');
+    expect(title).toContain('self 1ms');
+    // Biggest contributor first — that is the one worth reading.
+    expect(title).toContain('by service: postgres 500µs, redis 200µs');
+  });
+
+  test('a leaf span is all self time and names no dimension', () => {
+    const title = latencyTitle('kind', { startNs: 0, duration: 3_000_000, traceStart: 0 }, []);
+    expect(title).toBe('3ms total · +0ns into the trace · self 3ms');
   });
 });

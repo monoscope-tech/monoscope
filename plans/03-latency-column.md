@@ -44,34 +44,43 @@ a reader of a child row is actually making. Drops the frame overlay entirely.
 **C. Dimension is a user choice.** A small control in the column header: *by service* /
 *by kind* / *timeline*. Persisted like the other log-list column prefs.
 
-**Chosen: B + C, with A folded in.** The composition bar is what makes the root row
-answerable at a glance ("62% of this request was in `postgres`"), the parent-relative axis
-is what makes a child row answerable, and the dimension switch is cheap once the breakdown
-is computed from a named field rather than hardcoded to `span_name`.
+**Chosen: B + C, with A folded in — and B simplified to one rule for every row.**
+
+Rather than two geometries (composition at depth 0, timeline below it), *the row is the
+axis*. Every row's bar is exactly its own duration; its **direct** children are laid out
+inside it at their real offsets, coloured by the chosen dimension; the gaps between them
+are its self time. That is one rule, it reads the same at every depth, and it makes a root
+row answerable ("most of this request is one `postgres` block two thirds of the way in")
+without a second mental model for children.
+
+Two things fall out of it:
+
+- The frame overlay goes. It marked the bar's own bounds — three decorative lines
+  restating the bar.
+- Trace position is no longer encoded in the bar's geometry, because that is exactly what
+  made small children invisible. It moves into the title/`aria-label`
+  (`+1.2ms into the trace`), which costs no pixels and, unlike a colour, is readable by a
+  screen reader. The trace waterfall remains where trace-relative geometry belongs.
 
 `kind` is already projected on every row, so *by kind* (server / client / internal /
 producer / consumer / log) needs no new query work — and it is the one breakdown that
-answers "is this my code or my dependencies?".
+answers "is this my code or my dependencies?". Its colours are fixed rather than hashed,
+because they mean something; service colours stay hashed, because they only identify.
 
-## Plan
+## What shipped
 
-1. Extract the breakdown from `spanLatencyBreakdown`'s parameters into a
-   `breakdownOf(row, dimension)` that returns `{label, colour, ns}[]`, keyed on a named
-   column (`service` | `kind` | none). Both the row's own span and `childrenTimeSpans`
-   feed it.
-2. Server: build `serviceColors` from the `service` column, not `span_name`
-   (`Log.hs:569`). Keep the payload key — it is the contract with the renderer and it will
-   finally be true to its name.
-3. Root rows render the stacked composition bar with a "self" remainder segment
-   (duration minus accounted children) so the segments always sum to the whole.
-4. Child rows render on the parent window; delete the frame overlay.
-5. Duration text in the cell, right-aligned, tabular-nums — the number the column has never
-   shown.
-6. Header control for the dimension, persisted with the existing column prefs.
-7. Vitest: composition segments sum to the row duration; switching dimension re-partitions
-   the same total; a child row's bar is parent-relative.
-
-## Note
-
-Steps 1–5 are the user-visible fix. Step 6 is the part to drop first if the column-pref
-plumbing turns out to be expensive — *by service* is the right default either way.
+1. `latencySegments(row, children)` — pure, exported, tested. Interval **intersection**
+   against the row window, not an offset clamp: a child whose clock skewed it entirely
+   before its parent contributes nothing, rather than being pinned to the start of the bar
+   as though it happened there.
+2. `latencyTitle(dim, row, segments)` — the tooltip and `aria-label`: total, trace offset,
+   self time, and the per-label split ordered by contribution.
+3. Server: `serviceColors` built from the `service` column, not `span_name`
+   (`Log.hs:569`). The payload key is unchanged — it is the contract with the renderer, and
+   it is finally true to its name.
+4. Dimension switch in the latency column's existing header dropdown, persisted to
+   `localStorage` (guarded — jsdom has no `localStorage`, and a reading preference must
+   never be what stops the list from mounting).
+5. Duration text was **not** added: `generateSummary` already emits a `duration`
+   right-badge that renders in this very cell, so the number the column "never showed" was
+   already there.

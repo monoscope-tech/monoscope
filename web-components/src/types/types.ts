@@ -111,7 +111,7 @@ export type EventLine = {
   children: number;
   childrenTimeSpans: ChildrenForLatency[];
   _summaryCache?: { content: any; wrapLines: boolean };
-  _latencyCache?: { content: any; width: number; expanded: boolean };
+  _latencyCache?: { content: any; width: number; expanded: boolean; dim: string };
 } & Omit<APTEvent, 'children'>;
 
 export interface ServerTraceEntry {
