@@ -289,7 +289,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
               , data_ "tagify-whitelist" whitelist
               , data_ "tagify-enforce-whitelist" ""
               , data_ "tagify-text-prop" "name"
-              , data_ "tagify-query-sql" $ maybeToMonoid var.sql
+              , data_ "tagify-query-sql" $ maybeToMonoid $ (.statement) <$> var.sql
               , data_ "tagify-query" $ maybeToMonoid var.query
               , data_ "tagify-reload-on-change" $ maybe "false" (T.toLower . show) var.reloadOnChange
               , value_ $ maybeToMonoid var.value
@@ -2192,7 +2192,7 @@ dashboardQueryText dash =
   T.concat $ concatMap widgetText (dash.widgets <> foldMap (.widgets) (fold dash.tabs)) <> foldMap varText (fold dash.variables)
   where
     widgetText w = catMaybes [w.query, w.sql] <> concatMap widgetText (fold w.children)
-    varText v = catMaybes [v.sql, v.query]
+    varText v = catMaybes [(.statement) <$> v.sql, v.query]
 
 
 -- | Process dashboard constants concurrently and build extended params with constant results.

@@ -66,7 +66,7 @@ import Langchain.LLM.Core qualified as LLM
 import Langchain.Memory.Core (BaseMemory (..))
 import Langchain.Memory.TokenBufferMemory (TokenBufferMemory (..))
 import Models.Apis.Issues qualified as Issues
-import Models.Apis.LogQueries (executeSecuredQuery, selectLogTable)
+import Models.Apis.LogQueries (SecuredSql (..), SqlSource (..), executeSecuredQuery, selectLogTable)
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import NeatInterpolation (text)
@@ -763,7 +763,7 @@ executeRunQuery config args = case getTextArg "query" args of
 
 executeSqlQuery :: (DB es, Labeled "timefusion" Hasql :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
 executeSqlQuery config args = withArg "run_sql_query" "query" args \query ->
-  executeSecuredQuery config.useTimefusion config.projectId query (getLimitArg "limit" config.limits.maxQueryResults config.limits.maxDisplayRows args)
+  executeSecuredQuery config.useTimefusion config.projectId (SecuredSql SqlTimefusion query) (getLimitArg "limit" config.limits.maxQueryResults config.limits.maxDisplayRows args)
     <&> either
       (\err -> "SQL Error: " <> err <> "\nNote: KQL queries (run_query) are preferred when possible.")
       (\results -> formatQueryResults config.limits.maxDisplayRows results (V.length results))

@@ -6,6 +6,8 @@ module Models.Apis.LogQueries (
   SessionRow (..),
   SessionSummary (..),
   normalizeUrlPath,
+  SqlSource (..),
+  SecuredSql (..),
   selectLogTable,
   executeSecuredQuery,
   LogEndpoint (..),
@@ -31,7 +33,7 @@ import Data.Aeson qualified as AE
 import Data.Annotation (toAnnotation)
 import Data.Char (isDigit)
 import Data.Default
-import Data.Effectful.Hasql (Hasql)
+import Data.Effectful.Hasql (Hasql, SecuredSql (..), SqlSource (..))
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
 import Data.Set qualified as S
@@ -200,17 +202,18 @@ logExplorerUrlPath pid endpoint q cols cursor since fromV toV layout source rece
 -- (one jsonb array per row, in projection order).
 -- SECURITY: validates the query for dangerous patterns and verifies a
 -- project_id filter is present (the caller substitutes {{project_id}}).
--- @useTimefusion@ routes the read to the TimeFusion pool when TF reads are on,
--- mirroring the widget/chart path ('Charts.fetchMetricsData'). Without it,
--- dashboard constant/variable queries hit Postgres and silently return empty
--- for TF-only projects even though the widgets (which do route to TF) show data.
-executeSecuredQuery :: (DB es, Labeled "timefusion" Hasql :> es) => Bool -> Projects.ProjectId -> Text -> Int -> Eff es (Either Text (V.Vector (V.Vector AE.Value)))
-executeSecuredQuery useTimefusion pid userQuery limit
+-- The source is parsed at the dashboard/tool boundary instead of inferred from SQL
+-- text; @useTimefusion@ is only the deployment-level telemetry-read switch.
+executeSecuredQuery :: (DB es, Labeled "timefusion" Hasql :> es) => Bool -> Projects.ProjectId -> SecuredSql -> Int -> Eff es (Either Text (V.Vector (V.Vector AE.Value)))
+executeSecuredQuery useTimefusion pid (SecuredSql source userQuery) limit
   | not (validateSqlQuery userQuery) = pure $ Left "Query contains disallowed operations"
   | not (hasProjectIdFilter userQuery pid) = pure $ Left "Query must filter by project_id"
   | otherwise = do
       let wrapped = rawSql ("SELECT jsonb_build_array(sub.*) FROM (" <> userQuery <> ") sub") <> [HI.sql| LIMIT #{limit}|]
-      resultE <- try @Hasql.HasqlException $ Hasql.withHasqlTimefusion useTimefusion do
+          routeToTimefusion = case source of
+            SqlPostgres -> False
+            SqlTimefusion -> useTimefusion
+      resultE <- try @Hasql.HasqlException $ Hasql.withHasqlTimefusion routeToTimefusion do
         rows :: [AE.Value] <- Hasql.interp wrapped
         pure $ jsonArrayRows rows
       pure $ first (\e -> "Query execution failed: " <> toText (displayException e)) resultE
