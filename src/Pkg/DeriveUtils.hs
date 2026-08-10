@@ -22,7 +22,9 @@ module Pkg.DeriveUtils (
   unAesonText,
   unAesonTextMaybe,
   hashAssetFile,
-  hashFile,
+  hashedAssetPath,
+  stripAssetHash,
+  assetHash,
   viteAssetFile,
   showPGFloatArray,
   textArrayEnc,
@@ -39,6 +41,7 @@ import Data.Aeson.Types qualified as AET
 import Data.ByteString qualified as BS
 import Data.CaseInsensitive (CI)
 import Data.CaseInsensitive qualified as CI (mk, original)
+import Data.Char (isHexDigit)
 import Data.Default (Default (..))
 import Data.Digest.XXHash (xxHash)
 import Data.Effectful.Hasql (Hasql)
@@ -390,22 +393,66 @@ connectPostgreSQL connstr = do
       throwIO $ PGI.fatalError msg
 
 
+-- | The 8-digit content hash 'hashAssetFile' embeds in an asset's URL. Zero-padded
+-- so 'stripAssetHash' can recognise it unambiguously.
+--
+-- >>> assetHash "hello"
+-- "fb0077f9"
+-- >>> assetHash "2"  -- padded, so the segment is always 8 wide
+-- "0c436334"
+assetHash :: LByteString -> Text
+assetHash = T.justifyRight 8 '0' . toText . flip showHex "" . xxHash
+
+
 -- | Content hash of the file under @static@, registered as a recompilation dependency.
 fileHash :: FilePath -> TH.Q String
 fileHash path = do
   let fp = "static" <> path
   TH.qAddDependentFile fp
-  content <- TH.runIO $ readFileLBS fp
-  pure $ showHex (xxHash content) ""
+  toString . assetHash <$> TH.runIO (readFileLBS fp)
 
 
--- adds a version hash to file paths, to force cache invalidation when a new version appears
+-- | URL of a static asset with its content hash embedded in the __path__.
+--
+-- The hash must live in the path, not in a @?v=@ query: CDNs key on the path, so
+-- during a rolling deploy a request for the new URL can be answered by an old
+-- replica — which ignores the query and streams the stale file off disk — poisoning
+-- the cache for the whole (year-long) max-age. Distinct paths can't collide that way.
+-- 'System.Server.hashedAssetMiddleware' maps the name back to the file on disk.
 hashAssetFile :: FilePath -> TH.Q TH.Exp
-hashAssetFile path = [|$(TH.lift path) <> "?v=" <> $(hashFile path)|]
+hashAssetFile path = fileHash path >>= TH.lift . hashedAssetPath path
 
 
-hashFile :: FilePath -> TH.Q TH.Exp
-hashFile = fileHash >=> TH.lift
+-- | Insert a content hash before the final extension.
+--
+-- >>> hashedAssetPath "/public/assets/js/main.js" "2c58501e"
+-- "/public/assets/js/main.2c58501e.js"
+-- >>> hashedAssetPath "/public/assets/no-extension" "2c58501e"
+-- "/public/assets/no-extension"
+--
+-- >>> stripAssetHash (toText (hashedAssetPath "public/assets/js/main.js" "2c58501e"))
+-- Just ("public/assets/js/main.js","2c58501e")
+hashedAssetPath :: FilePath -> String -> FilePath
+hashedAssetPath path h = case T.breakOnEnd "." (toText path) of
+  (stem, ext) | not (T.null stem), not (T.any (== '/') ext) -> toString $ stem <> toText h <> "." <> ext
+  _ -> path
+
+
+-- | Inverse of 'hashedAssetPath': split a hashed URL back into the path on disk and
+-- the hash it claims that file has.
+--
+-- >>> stripAssetHash "public/assets/js/main.2c58501e.js"
+-- Just ("public/assets/js/main.js","2c58501e")
+-- >>> stripAssetHash "public/assets/js/main.js"
+-- Nothing
+-- >>> stripAssetHash "public/assets/deps/htmx/htmx-4.0.0-beta6.min.js"
+-- Nothing
+stripAssetHash :: Text -> Maybe (Text, Text)
+stripAssetHash p = do
+  let (stemDot, ext) = T.breakOnEnd "." p
+  (prefix, h) <- T.breakOnEnd "." <$> T.stripSuffix "." stemDot
+  guard $ T.length h == 8 && T.all isHexDigit h && not (T.null prefix)
+  pure (prefix <> ext, h)
 
 
 -- | URL of a Vite build output, looked up by manifest key (e.g. @"index.html"@ for the

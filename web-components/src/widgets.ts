@@ -3,12 +3,12 @@ import { getSeriesColor } from './colorMapping';
 import { beginChartFetch } from './chart-fetch-seq';
 import { isNearChartViewport } from './chart-initialization';
 import { formatNumber, convertToNanoseconds, formatDuration, statScalar, formatStatValue } from './stat-value';
+import { echartsUrls } from './assets';
 const INITIAL_FETCH_INTERVAL = 5000;
 const $ = (id: string) => document.getElementById(id);
 const params = () => ({ ...Object.fromEntries(new URLSearchParams(location.search)) });
 
 // --- ECharts loads only once a chart enters the viewport ---
-type EChartsAssetUrls = { echarts: string; theme: string };
 let echartsLoad: Promise<void> | undefined;
 
 const loadScript = (src: string) => new Promise<void>((resolve, reject) => {
@@ -22,10 +22,7 @@ const loadScript = (src: string) => new Promise<void>((resolve, reject) => {
 export const ensureECharts = () => {
   if ((window as any).echarts) return Promise.resolve();
   if (!echartsLoad) {
-    const assets = ((window as any).echartsAssetUrls as EChartsAssetUrls | undefined) ?? {
-      echarts: '/public/assets/deps/echarts/echarts.min.js',
-      theme: '/public/assets/roma-echarts.js',
-    };
+    const assets = echartsUrls();
     echartsLoad = loadScript(assets.echarts).then(() => loadScript(assets.theme));
   }
   return echartsLoad;

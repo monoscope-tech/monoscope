@@ -251,6 +251,20 @@ bodyWrapper bcfg child = do
 
       when (isProd && bcfg.config.enableBrowserMonitoring) $ script_ [src_ "https://unpkg.com/@monoscopetech/browser@0.11.6/dist/monoscope.min.js"] ("" :: Text)
 
+      -- Hashed URLs for assets the TS bundle references by path (see web-components/src/assets.ts).
+      -- Those references can't carry a compile-time hash of their own, and /public/assets/* is
+      -- served with a year-long max-age — an un-versioned sprite URL would pin returning users
+      -- to a sprite sheet that predates every icon added since.
+      let echartsURL = $(hashAssetFile "/public/assets/deps/echarts/echarts.min.js") :: Text
+          echartsThemeURL = $(hashAssetFile "/public/assets/roma-echarts.js") :: Text
+          spriteSolidURL = $(hashAssetFile "/public/assets/svgs/fa-sprites/solid.svg") :: Text
+          spriteRegularURL = $(hashAssetFile "/public/assets/svgs/fa-sprites/regular.svg") :: Text
+      script_
+        [text|window.assetUrls = {
+          echarts: "${echartsURL}", echartsTheme: "${echartsThemeURL}",
+          spriteSolid: "${spriteSolidURL}", spriteRegular: "${spriteRegularURL}"
+        };|]
+
       -- Flag for widget initialization - set to true after web-components loads
       script_ "window.widgetDepsReady = false;"
       script_ [type_ "module", src_ $(viteAssetFile "index.html")] ("" :: Text)

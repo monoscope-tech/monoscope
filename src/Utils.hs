@@ -115,7 +115,7 @@ import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
 import Network.URI (escapeURIString, isUnescapedInURI)
 import Numeric (showHex)
-import Pkg.DeriveUtils (hashFile)
+import Pkg.DeriveUtils (hashAssetFile)
 import Relude hiding (notElem, show)
 import Servant hiding ((:>))
 import Text.MMark qualified as MMark
@@ -294,11 +294,11 @@ truncateMiddle n t
 -- the symbol id (e.g. "bucket"). When adding a new icon, you must add its
 -- <symbol> to the corresponding sprite file — it will not render otherwise.
 faSprite_ :: Monad m => Text -> Text -> Text -> HtmlT m ()
-faSprite_ mIcon faType classes = svg_ [class_ $ "icon " <> classes] $ Svg.use_ [href_ $ "/public/assets/svgs/fa-sprites/" <> faType <> ".svg?v=" <> fileHash <> "#" <> mIcon]
+faSprite_ mIcon faType classes = svg_ [class_ $ "icon " <> classes] $ Svg.use_ [href_ $ sprite <> "#" <> mIcon]
   where
-    fileHash = case faType of
-      "solid" -> $(hashFile "/public/assets/svgs/fa-sprites/solid.svg")
-      _ -> $(hashFile "/public/assets/svgs/fa-sprites/regular.svg")
+    sprite = case faType of
+      "solid" -> $(hashAssetFile "/public/assets/svgs/fa-sprites/solid.svg")
+      _ -> $(hashAssetFile "/public/assets/svgs/fa-sprites/regular.svg")
 
 
 -- | Type-safe loading indicator size

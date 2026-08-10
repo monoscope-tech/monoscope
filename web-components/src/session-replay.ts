@@ -3,10 +3,7 @@ import { customElement, property, query, state } from 'lit/decorators.js';
 import { EventType, eventWithTime } from '@rrweb/types';
 import { ConsoleEvent } from './types/types';
 import { Replayer } from '@rrweb/replay';
-
-export function faSprite_(iconName: string, kind: string, classes: string): TemplateResult {
-  return html`<svg class="${classes}"><use href="/public/assets/svgs/fa-sprites/${kind}.svg#${iconName}"></use></svg>`;
-}
+import { faSprite_ } from './assets';
 const MS_10 = 10000;
 const MS_30 = 30000;
 // Speed presets, shared between keyboard shortcuts and the speed dropdown so

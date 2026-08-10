@@ -1,6 +1,7 @@
 import { LitElement, html, css, TemplateResult } from 'lit';
 import { customElement, state, query } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
+import { spriteUrl } from '../assets';
 import 'monaco-editor/esm/vs/editor/contrib/suggest/browser/suggestController.js';
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api';
 import {
@@ -1797,7 +1798,7 @@ export class QueryEditorComponent extends LitElement {
             for="ai-search-chkbox"
           >
             <svg class="inline-block icon h-4 w-4 text-iconBrand ">
-              <use href="/public/assets/svgs/fa-sprites/regular.svg#sparkles"></use>
+              <use href="${spriteUrl('regular')}#sparkles"></use>
             </svg>
             AI search
           </label>

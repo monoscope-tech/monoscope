@@ -10,6 +10,7 @@ import { includes, startsWith, map, forEach, compact, chunk, chain, lt } from 'l
 // Import worker as URL instead of worker instance
 import LogWorkerUrl from './log-worker?worker&url';
 import { groupSpans } from './log-worker-functions';
+import { spriteUrl } from './assets';
 import clsx from 'clsx';
 import {
   formatTimestamp,
@@ -764,8 +765,7 @@ export class LogList extends LitElement {
       spinner = document.createElement('span');
       spinner.id = spinnerId;
       spinner.className = 'ml-2 inline-block';
-      spinner.innerHTML =
-        '<svg class="inline-block icon w-4 h-4 animate-spin text-textBrand"><use href="/public/assets/svgs/fa-sprites/regular.svg?v=ecf9d105#spinner"></use></svg>';
+      spinner.innerHTML = `<svg class="inline-block icon w-4 h-4 animate-spin text-textBrand"><use href="${spriteUrl('regular')}#spinner"></use></svg>`;
       countElement.parentElement?.appendChild(spinner);
     } else if (!show && spinner) {
       // Remove spinner
