@@ -1,5 +1,6 @@
 module Pages.DashboardsSpec (spec) where
 
+import "cryptonite" Crypto.Hash qualified as Crypto
 import Data.Default (def)
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as TL
@@ -91,6 +92,12 @@ spec = sequential $ aroundAll withTestResources do
       overview `shouldSatisfy` isJust
       show overview `shouldNotContain` "telemetry.metrics"
       show overview `shouldNotContain` "metric_value"
+
+    it "dashboard SQL source migrations remain byte-for-byte immutable" \_ -> do
+      migration0119 <- readFileBS "static/migrations/0119_endpoint_dashboard_sql_source.sql"
+      migration0120 <- readFileBS "static/migrations/0120_repair_dashboard_sql_source.sql"
+      show (Crypto.hash migration0119 :: Crypto.Digest Crypto.MD5) `shouldBe` ("27fc8228a167e579b4b7124893921372" :: Text)
+      show (Crypto.hash migration0120 :: Crypto.Digest Crypto.MD5) `shouldBe` ("19ac1c6651e59fb3860366eec198201f" :: Text)
 
     it "endpoint dashboard SQL source, not query text, selects Postgres" \tr -> do
       endpointDashboard <- DashboardModel.readDashboardFile "static/public/dashboards" "endpoint-stats.yaml"
