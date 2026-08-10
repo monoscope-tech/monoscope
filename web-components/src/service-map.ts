@@ -440,8 +440,12 @@ async function render(
     card.style.borderColor = onPath ? s.brandColor : failing ? s.errorColor : elevated ? s.warningColor : s.tooltipBorderColor;
     card.style.borderWidth = onPath || elevated ? '2px' : '1px';
     card.style.borderStyle = n.inferred ? 'dashed' : 'solid';
+    // The right-edge bar is health and only health — green/amber/red, the way Datadog grades
+    // a service. Service identity moved to the icon, which is where it does not compete.
     const health = card.querySelector<HTMLElement>('[data-node-health]')!;
-    health.style.background = failing ? s.errorColor : elevated ? s.warningColor : (!n.inferred && colors[n.key] ? resolveColor(n.key, colors) : s.tooltipBorderColor);
+    health.style.background = failing ? s.errorColor : elevated ? s.warningColor : s.successColor;
+    const icon = card.querySelector<HTMLElement>('[data-node-icon]')!;
+    icon.style.color = !n.inferred && colors[n.key] ? resolveColor(n.key, colors) : '';
     const err = card.querySelector<HTMLElement>('[data-node-errors]')!;
     err.style.color = failing ? s.errorColor : elevated ? s.warningColor : '';
   };
@@ -506,10 +510,10 @@ async function render(
       if (!path) continue;
       const hot = onPath.has(key);
       const failing = e.stats.error_rate >= ERR_FAILING;
-      path.setAttribute('stroke', hot ? s.brandColor : failing ? s.errorColor : e.stats.error_rate >= ERR_ELEVATED ? s.warningColor : s.tooltipBorderColor);
+      path.setAttribute('stroke', hot ? s.brandColor : failing ? s.errorColor : e.stats.error_rate >= ERR_ELEVATED ? s.warningColor : s.strokeStrong);
       path.setAttribute('stroke-width', hot ? '2' : '1.25');
       path.setAttribute('stroke-dasharray', byKey.get(e.target)?.inferred ? '4 3' : '');
-      path.setAttribute('opacity', String(hot ? 1 : lit.litEdges.has(key) ? 0.75 : 0.12));
+      path.setAttribute('opacity', String(hot ? 1 : lit.litEdges.has(key) ? 0.45 : 0.08));
       path.setAttribute('marker-end', `url(#${containerId}-arrow)`);
     }
   };

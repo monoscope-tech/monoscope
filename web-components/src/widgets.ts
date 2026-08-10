@@ -193,6 +193,8 @@ export const getChartStyles = () => {
     chartMask: get('--color-chartMask'),
     errorColor: get('--color-textError'),
     warningColor: get('--color-textWarning'),
+    successColor: get('--color-fillSuccess-strong'),
+    strokeStrong: get('--color-strokeStrong'),
     brandColor: get('--color-fillBrand-strong'),
   };
 };
