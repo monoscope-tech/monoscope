@@ -56,16 +56,16 @@ spec = do
       normT query `shouldBe` normT expected
 
     it "basic query eq query" do
-      let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "method==\"GET\""
+      let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "name==\"GET\""
       let expected =
             [text|
-      SELECT jsonb_build_array(id,to_char(timestamp at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),context___trace_id,name,duration,resource___service___name,parent_id,CAST(EXTRACT(EPOCH FROM (start_time)) * 1000000000 AS BIGINT),COALESCE(errors is not null OR (kind = 'log' AND (lower(level) = 'error' OR severity___severity_number >= 17 OR status_code = 'ERROR')), false),to_jsonb(summary),context___span_id,kind) FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((method = 'GET')) ORDER BY timestamp desc limit 501|]
+      SELECT jsonb_build_array(id,to_char(timestamp at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),context___trace_id,name,duration,resource___service___name,parent_id,CAST(EXTRACT(EPOCH FROM (start_time)) * 1000000000 AS BIGINT),COALESCE(errors is not null OR (kind = 'log' AND (lower(level) = 'error' OR severity___severity_number >= 17 OR status_code = 'ERROR')), false),to_jsonb(summary),context___span_id,kind) FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((name = 'GET')) ORDER BY timestamp desc limit 501|]
       normT query `shouldBe` normT expected
     it "summarize query query" do
-      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "method==\"GET\""
+      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "name==\"GET\""
       -- Lowercase `desc`: this branch now builds its ORDER BY with buildOrderBy
       -- like every other path, rather than hand-rolling an uppercase one.
-      let expected = """SELECT  FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((method = 'GET')) ORDER BY timestamp desc limit 500"""
+      let expected = """SELECT  FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((name = 'GET')) ORDER BY timestamp desc limit 500"""
       normT (fromMaybe "" c.finalSummarizeQuery) `shouldBe` normT expected
     it "scalar summarize keeps its aggregate numeric (no ::text cast)" do
       -- Regression: the grouped shape casts aggregates to text for the DTText
@@ -75,36 +75,36 @@ spec = do
       fromMaybe "" c.finalSummarizeQuery `shouldNotSatisfy` T.isInfixOf "::text"
 
     it "grouped summarize casts to text and projects the group column" do
-      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "summarize count(*) by method"
+      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "summarize count(*) by name"
           sql = fromMaybe "" c.finalSummarizeQuery
-      sql `shouldSatisfy` T.isInfixOf "COALESCE(method::text, 'null')"
+      sql `shouldSatisfy` T.isInfixOf "COALESCE(name::text, 'null')"
       sql `shouldSatisfy` T.isInfixOf "::text"
 
     it "summarize query by time bin" do
-      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "method==\"GET\" | summarize count(*) by bin(timestamp, 1d)"
+      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "name==\"GET\" | summarize count(*) by bin(timestamp, 1d)"
       let expected =
             [text|
-SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', count(*)::float AS count_ FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((method = 'GET')) GROUP BY time_bucket('1 days', timestamp) ORDER BY time_bucket('1 days', timestamp) DESC
+SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', count(*)::float AS count_ FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((name = 'GET')) GROUP BY time_bucket('1 days', timestamp) ORDER BY time_bucket('1 days', timestamp) DESC
       |]
       normT (fromMaybe "" c.finalSummarizeQuery) `shouldBe` normT expected
     it "summarize with bin()" do
-      let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "method==\"GET\" | summarize sum(attributes.client) by attributes.client, bin(timestamp, 60)"
+      let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "name==\"GET\" | summarize sum(attributes.client) by attributes.client, bin(timestamp, 60)"
       let expected =
             [text|
-      SELECT jsonb_build_array(extract(epoch from time_bucket('5 minutes', timestamp))::integer, sum((attributes->>'client')::float), count(*) OVER()) FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((method = 'GET')) GROUP BY time_bucket('5 minutes', timestamp) ORDER BY time_bucket('5 minutes', timestamp) DESC |]
+      SELECT jsonb_build_array(extract(epoch from time_bucket('5 minutes', timestamp))::integer, sum((attributes->>'client')::float), count(*) OVER()) FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((name = 'GET')) GROUP BY time_bucket('5 minutes', timestamp) ORDER BY time_bucket('5 minutes', timestamp) DESC |]
       normT query `shouldBe` normT expected
     it "summarize with named aggregation" do
-      let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "timestamp >= ago(7d) | summarize TotalCount = count() by Computer"
-      -- ORDER BY uses GROUP BY column (Computer) since timestamp is not in GROUP BY
+      let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "timestamp >= ago(7d) | summarize TotalCount = count() by kind"
+      -- ORDER BY uses GROUP BY column (kind) since timestamp is not in GROUP BY
       let expected =
             [text|
-      SELECT jsonb_build_array(count(*)::float, count(*) OVER()) FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((timestamp >= NOW() - INTERVAL '7 days')) GROUP BY Computer ORDER BY Computer desc limit 500 |]
+      SELECT jsonb_build_array(count(*)::float, count(*) OVER()) FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((timestamp >= NOW() - INTERVAL '7 days')) GROUP BY kind ORDER BY kind desc limit 500 |]
       normT query `shouldBe` normT expected
     it "summarize with sort by and take" do
-      let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "method==\"GET\" | summarize sum(attributes.client) by attributes.client, bin(timestamp, 60) | sort by parent_id asc | take 1000"
+      let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "name==\"GET\" | summarize sum(attributes.client) by attributes.client, bin(timestamp, 60) | sort by parent_id asc | take 1000"
       let expected =
             [text|
-      SELECT jsonb_build_array(extract(epoch from time_bucket('5 minutes', timestamp))::integer, sum((attributes->>'client')::float), count(*) OVER()) FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((method = 'GET')) GROUP BY time_bucket('5 minutes', timestamp) ORDER BY time_bucket('5 minutes', timestamp) DESC limit 1000 |]
+      SELECT jsonb_build_array(extract(epoch from time_bucket('5 minutes', timestamp))::integer, sum((attributes->>'client')::float), count(*) OVER()) FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((name = 'GET')) GROUP BY time_bucket('5 minutes', timestamp) ORDER BY time_bucket('5 minutes', timestamp) DESC limit 1000 |]
       normT query `shouldBe` normT expected
 
     it "summarize with bin_auto()" do
@@ -134,12 +134,12 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', c
       serviceQuery `shouldSatisfy` T.isInfixOf "resource___service___name = 'accounting'"
       let (attributeQuery, _) = fromRight' $ parseQueryToComponents cfg "| where attributes.system.device == \"disk0\""
       attributeQuery `shouldSatisfy` T.isInfixOf "variant_to_json(attributes)->'system'->>'device' = 'disk0'"
-      let (resourceQuery, _) = fromRight' $ parseQueryToComponents cfg "| where resource.host.name == \"node-1\""
-      resourceQuery `shouldSatisfy` T.isInfixOf "variant_to_json(resource)->'host'->>'name' = 'node-1'"
+      let (resourceQuery, _) = fromRight' $ parseQueryToComponents cfg "| where resource.kind.name == \"node-1\""
+      resourceQuery `shouldSatisfy` T.isInfixOf "variant_to_json(resource)->'kind'->>'name' = 'node-1'"
       -- Grouping dimensions live on the chart query (finalSummarizeQuery), not the
       -- flat data query; assert the flattened resource path reaches its GROUP BY.
-      let (_, groupComps) = fromRight' $ parseQueryToComponents cfg "| summarize avg(value) by bin_auto(timestamp), resource.host.name"
-      fromMaybe "" groupComps.finalSummarizeQuery `shouldSatisfy` T.isInfixOf "GROUP BY time_bucket('6 hours', timestamp), COALESCE(variant_to_json(resource)->'host'->>'name'::text, 'null')"
+      let (_, groupComps) = fromRight' $ parseQueryToComponents cfg "| summarize avg(value) by bin_auto(timestamp), resource.kind.name"
+      fromMaybe "" groupComps.finalSummarizeQuery `shouldSatisfy` T.isInfixOf "GROUP BY time_bucket('6 hours', timestamp), COALESCE(variant_to_json(resource)->'kind'->>'name'::text, 'null')"
 
     it "spans source leaves service filter as a flat column" do
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| where service == \"accounting\""
@@ -215,7 +215,7 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
 
   describe "dcount parsing" do
     it "parses dcount with simple field" do
-      let result = parseQueryToAST "| summarize dcount(user_id) by bin_auto(timestamp)"
+      let result = parseQueryToAST "| summarize dcount(attributes.user.id) by bin_auto(timestamp)"
       isRight result `shouldBe` True
 
     it "parses dcount with dotted field path" do
@@ -224,15 +224,15 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
 
     it "parses dcount with optional accuracy parameter" do
       -- Microsoft KQL: dcount(expr [, accuracy]) where accuracy is 0-4
-      let result = parseQueryToAST "| summarize dcount(user_id, 2) by bin_auto(timestamp)"
+      let result = parseQueryToAST "| summarize dcount(attributes.user.id, 2) by bin_auto(timestamp)"
       isRight result `shouldBe` True
 
     it "generates COUNT DISTINCT SQL for dcount" do
-      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize dcount(user_id) by bin(timestamp, 1h)"
+      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize dcount(attributes.user.id) by bin(timestamp, 1h)"
       let sql = fromMaybe "" c.finalSummarizeQuery
       let expected =
             [text|
-SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', COUNT(DISTINCT user_id)::float AS dcount_user_id FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
+SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', COUNT(DISTINCT attributes___user___id)::float AS dcount_attributes_user_id FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
             |]
       normT sql `shouldBe` normT expected
 
@@ -247,39 +247,39 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
 
   describe "coalesce parsing" do
     it "parses coalesce with two arguments" do
-      let result = parseQueryToAST "| summarize coalesce(method, \"unknown\") by bin_auto(timestamp)"
+      let result = parseQueryToAST "| summarize coalesce(name, \"unknown\") by bin_auto(timestamp)"
       isRight result `shouldBe` True
 
     it "parses coalesce with multiple arguments (variadic)" do
       -- Microsoft KQL: coalesce(arg, arg_2, [arg_3,...]) - up to 64 args
-      let result = parseQueryToAST "| summarize coalesce(field1, field2, \"default\") by bin_auto(timestamp)"
+      let result = parseQueryToAST "| summarize coalesce(name, kind, \"default\") by bin_auto(timestamp)"
       isRight result `shouldBe` True
 
     it "generates COALESCE SQL" do
-      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize coalesce(method, \"unknown\") by bin(timestamp, 1h)"
+      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize coalesce(name, \"unknown\") by bin(timestamp, 1h)"
       let sql = fromMaybe "" c.finalSummarizeQuery
       let expected =
             [text|
-SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', COALESCE(method, 'unknown') AS coalesce_ FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
+SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', COALESCE(name, 'unknown') AS coalesce_ FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
             |]
       normT sql `shouldBe` normT expected
 
   describe "strcat parsing" do
     it "parses strcat with multiple arguments" do
       -- Microsoft KQL: strcat(argument1, argument2 [, argument3 ... ])
-      let result = parseQueryToAST "| summarize strcat(method, \" \", url_path) by bin_auto(timestamp)"
+      let result = parseQueryToAST "| summarize strcat(name, \" \", url_path) by bin_auto(timestamp)"
       isRight result `shouldBe` True
 
     it "parses strcat with variadic arguments" do
-      let result = parseQueryToAST "| summarize strcat(service, \":\", operation, \"@\", host) by bin_auto(timestamp)"
+      let result = parseQueryToAST "| summarize strcat(service, \":\", name, \"@\", kind) by bin_auto(timestamp)"
       isRight result `shouldBe` True
 
     it "generates CONCAT SQL for strcat" do
-      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize strcat(method, \" \", url_path) by bin(timestamp, 1h)"
+      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize strcat(name, \" \", url_path) by bin(timestamp, 1h)"
       let sql = fromMaybe "" c.finalSummarizeQuery
       let expected =
             [text|
-SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', CONCAT(method, ' ', url_path) AS strcat_ FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
+SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', CONCAT(name, ' ', url_path) AS strcat_ FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
             |]
       normT sql `shouldBe` normT expected
 
@@ -290,7 +290,7 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
       isRight result `shouldBe` True
 
     it "parses iff with field references" do
-      let result = parseQueryToAST "| summarize iff(duration > 1000, slow_count, fast_count) by bin_auto(timestamp)"
+      let result = parseQueryToAST "| summarize iff(duration > 1000, start_time, end_time) by bin_auto(timestamp)"
       isRight result `shouldBe` True
 
     it "generates CASE WHEN SQL for iff" do
@@ -305,25 +305,25 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
   describe "case parsing" do
     it "parses case with literal values" do
       -- Microsoft KQL: case(predicate_1, then_1, [predicate_2, then_2, ...] else)
-      let result = parseQueryToAST "| summarize case(status >= 500, \"5xx\", status >= 400, \"4xx\", \"ok\") by bin_auto(timestamp)"
+      let result = parseQueryToAST "| summarize case(attributes.http.response.status_code >= 500, \"5xx\", attributes.http.response.status_code >= 400, \"4xx\", \"ok\") by bin_auto(timestamp)"
       isRight result `shouldBe` True
 
     it "parses case with field references" do
-      let result = parseQueryToAST "| summarize case(status >= 500, error_val, status >= 400, warning_val, success_val) by bin_auto(timestamp)"
+      let result = parseQueryToAST "| summarize case(attributes.http.response.status_code >= 500, name, attributes.http.response.status_code >= 400, kind, level) by bin_auto(timestamp)"
       isRight result `shouldBe` True
 
     it "generates multi-branch CASE SQL" do
-      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize case(status >= 500, \"5xx\", status >= 400, \"4xx\", \"ok\") by bin(timestamp, 1h)"
+      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize case(attributes.http.response.status_code >= 500, \"5xx\", attributes.http.response.status_code >= 400, \"4xx\", \"ok\") by bin(timestamp, 1h)"
       let sql = fromMaybe "" c.finalSummarizeQuery
       let expected =
             [text|
-SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', CASE WHEN status >= 500 THEN '5xx' WHEN status >= 400 THEN '4xx' ELSE 'ok' END AS case_ FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
+SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', CASE WHEN attributes___http___response___status_code >= 500 THEN '5xx' WHEN attributes___http___response___status_code >= 400 THEN '4xx' ELSE 'ok' END AS case_ FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
             |]
       normT sql `shouldBe` normT expected
 
   describe "combined aggregations" do
     it "parses multiple aggregations including countif and dcount" do
-      let result = parseQueryToAST "| summarize count(), countif(status_code == \"ERROR\"), dcount(user_id) by bin_auto(timestamp)"
+      let result = parseQueryToAST "| summarize count(), countif(status_code == \"ERROR\"), dcount(attributes.user.id) by bin_auto(timestamp)"
       isRight result `shouldBe` True
 
     it "parses aggregation with named alias" do
@@ -336,28 +336,28 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
 
   describe "edge cases and validation" do
     it "rejects dcount with accuracy > 4" do
-      parseQueryToAST "| summarize dcount(user_id, 5) by bin_auto(timestamp)" `shouldFailWith` "1:31: |1 | | summarize dcount(user_id, 5) by bin_auto(timestamp) | ^dcount accuracy must be 0-4 per KQL spec"
+      parseQueryToAST "| summarize dcount(attributes.user.id, 5) by bin_auto(timestamp)" `shouldFailWith` "Syntax error at column 42: dcount accuracy must be 0-4 per KQL spec"
 
     it "rejects coalesce with single argument" do
-      parseQueryToAST "| summarize coalesce(x) by bin_auto(timestamp)" `shouldFailWith` "1:24: |1 | | summarize coalesce(x) by bin_auto(timestamp) | ^coalesce requires at least 2 arguments"
+      parseQueryToAST "| summarize coalesce(x) by bin_auto(timestamp)" `shouldFailWith` "Syntax error at column 24: coalesce requires at least 2 arguments"
 
     it "accepts dcount with accuracy 0-4" do
-      let result0 = parseQueryToAST "| summarize dcount(user_id, 0) by bin_auto(timestamp)"
-      let result4 = parseQueryToAST "| summarize dcount(user_id, 4) by bin_auto(timestamp)"
+      let result0 = parseQueryToAST "| summarize dcount(attributes.user.id, 0) by bin_auto(timestamp)"
+      let result4 = parseQueryToAST "| summarize dcount(attributes.user.id, 4) by bin_auto(timestamp)"
       isRight result0 `shouldBe` True
       isRight result4 `shouldBe` True
 
     it "parses coalesce with multiple arguments" do
-      let result = parseQueryToAST "| summarize coalesce(field1, field2, field3, \"default\") by bin_auto(timestamp)"
+      let result = parseQueryToAST "| summarize coalesce(name, kind, level, \"default\") by bin_auto(timestamp)"
       isRight result `shouldBe` True
 
     it "parses strcat with multiple arguments" do
-      let result = parseQueryToAST "| summarize strcat(service, \":\", operation, \"@\", host, \"/\", endpoint) by bin_auto(timestamp)"
+      let result = parseQueryToAST "| summarize strcat(service, \":\", name, \"@\", kind, \"/\", level) by bin_auto(timestamp)"
       isRight result `shouldBe` True
 
     it "parses nested function calls" do
       -- Test iff with strcat in then clause
-      let result = parseQueryToAST "| summarize iff(status >= 500, \"error\", \"ok\") by bin_auto(timestamp)"
+      let result = parseQueryToAST "| summarize iff(attributes.http.response.status_code >= 500, \"error\", \"ok\") by bin_auto(timestamp)"
       isRight result `shouldBe` True
 
     it "parses dotted field paths in scalar contexts" do
@@ -365,7 +365,7 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
       isRight result `shouldBe` True
 
     it "parses complex case with multiple branches" do
-      let result = parseQueryToAST "| summarize case(status >= 500, \"5xx\", status >= 400, \"4xx\", status >= 300, \"3xx\", \"ok\") by bin_auto(timestamp)"
+      let result = parseQueryToAST "| summarize case(attributes.http.response.status_code >= 500, \"5xx\", attributes.http.response.status_code >= 400, \"4xx\", attributes.http.response.status_code >= 300, \"3xx\", \"ok\") by bin_auto(timestamp)"
       isRight result `shouldBe` True
 
   describe "round parsing" do
@@ -374,7 +374,7 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
       isRight result `shouldBe` True
 
     it "rejects round with non-numeric decimals" do
-      parseQueryToAST "| summarize round(duration, \"two\") by bin_auto(timestamp)" `shouldFailWith` "1:34: |1 | | summarize round(duration, \"two\") by bin_auto(timestamp) | ^round() decimals must be numeric"
+      parseQueryToAST "| summarize round(duration, \"two\") by bin_auto(timestamp)" `shouldFailWith` "Syntax error at column 34: round() decimals must be numeric"
 
     it "generates ROUND SQL" do
       let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize round(duration, 2) by bin(timestamp, 1h)"
@@ -384,11 +384,11 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
 
   describe "type casting functions" do
     it "parses tofloat" do
-      let result = parseQueryToAST "| summarize tofloat(count_val) by bin_auto(timestamp)"
+      let result = parseQueryToAST "| summarize tofloat(duration) by bin_auto(timestamp)"
       isRight result `shouldBe` True
 
     it "parses todouble (alias for tofloat)" do
-      let result = parseQueryToAST "| summarize todouble(count_val) by bin_auto(timestamp)"
+      let result = parseQueryToAST "| summarize todouble(duration) by bin_auto(timestamp)"
       isRight result `shouldBe` True
 
     it "parses toint" do
@@ -404,10 +404,10 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
       isRight result `shouldBe` True
 
     it "generates proper SQL for tofloat" do
-      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize tofloat(count_val) by bin(timestamp, 1h)"
+      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize tofloat(duration) by bin(timestamp, 1h)"
       let sql = fromMaybe "" c.finalSummarizeQuery
       -- tofloat produces ::float which is correct for numeric aggregation
-      normT sql `shouldBe` normT "SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', (count_val)::float AS tofloat_ FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC"
+      normT sql `shouldBe` normT "SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', (duration)::float AS tofloat_ FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC"
 
     it "generates proper SQL for toint" do
       let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize toint(duration) by bin(timestamp, 1h)"
@@ -423,18 +423,18 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
 
   describe "extend operator" do
     it "parses extend with single column" do
-      let result = parseQueryToAST "| extend error_cat = case(status >= 500, \"5xx\", \"ok\")"
+      let result = parseQueryToAST "| extend error_cat = case(attributes.http.response.status_code >= 500, \"5xx\", \"ok\")"
       isRight result `shouldBe` True
 
     it "parses extend with multiple columns" do
-      let result = parseQueryToAST "| extend cat = case(status >= 500, \"5xx\", \"ok\"), formatted = tostring(status)"
+      let result = parseQueryToAST "| extend cat = case(attributes.http.response.status_code >= 500, \"5xx\", \"ok\"), formatted = tostring(attributes.http.response.status_code)"
       isRight result `shouldBe` True
 
     it "generates SQL for extend with case" do
-      let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| extend error_cat = case(status >= 500, \"5xx\", \"ok\")"
+      let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| extend error_cat = case(attributes.http.response.status_code >= 500, \"5xx\", \"ok\")"
       let expected =
             [text|
-      SELECT jsonb_build_array(id,to_char(timestamp at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),context___trace_id,name,duration,resource___service___name,parent_id,CAST(EXTRACT(EPOCH FROM (start_time)) * 1000000000 AS BIGINT),COALESCE(errors is not null OR (kind = 'log' AND (lower(level) = 'error' OR severity___severity_number >= 17 OR status_code = 'ERROR')), false),to_jsonb(summary),context___span_id,kind,CASE WHEN status >= 500 THEN '5xx' ELSE 'ok' END) FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) ORDER BY timestamp desc limit 501
+      SELECT jsonb_build_array(id,to_char(timestamp at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),context___trace_id,name,duration,resource___service___name,parent_id,CAST(EXTRACT(EPOCH FROM (start_time)) * 1000000000 AS BIGINT),COALESCE(errors is not null OR (kind = 'log' AND (lower(level) = 'error' OR severity___severity_number >= 17 OR status_code = 'ERROR')), false),to_jsonb(summary),context___span_id,kind,CASE WHEN attributes___http___response___status_code >= 500 THEN '5xx' ELSE 'ok' END) FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) ORDER BY timestamp desc limit 501
             |]
       normT query `shouldBe` normT expected
 
@@ -452,19 +452,19 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
       isRight result `shouldBe` True
 
     it "rejects project with no columns" do
-      parseQueryToAST "| project" `shouldFailWith` "1:3: |1 | | project | ^unexpected 'p'expecting end of input or white space"
+      parseQueryToAST "| project" `shouldFailWith` "Syntax error at column 3: unexpected 'p', expecting end of input or white space"
 
   describe "nested aggregations" do
     it "parses round with nested countif" do
-      let result = parseQueryToAST "| summarize round(countif(status >= 400), 2) by bin_auto(timestamp)"
+      let result = parseQueryToAST "| summarize round(countif(attributes.http.response.status_code >= 400), 2) by bin_auto(timestamp)"
       isRight result `shouldBe` True
 
     it "generates SQL for round with nested countif" do
-      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize round(countif(status >= 400), 2) by bin(timestamp, 1h)"
+      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize round(countif(attributes.http.response.status_code >= 400), 2) by bin(timestamp, 1h)"
       let sql = fromMaybe "" c.finalSummarizeQuery
       let expected =
             [text|
-SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', ROUND((COUNT(*) FILTER (WHERE status >= 400)::float)::numeric, 2)::float AS round_ FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
+SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', ROUND((COUNT(*) FILTER (WHERE attributes___http___response___status_code >= 400)::float)::numeric, 2)::float AS round_ FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
             |]
       normT sql `shouldBe` normT expected
 
@@ -491,10 +491,10 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
       normT sql `shouldBe` normT expected
 
     it "generates SQL for extend with nested round(countif)" do
-      let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| extend error_rate = round(countif(status >= 400), 3)"
+      let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| extend error_rate = round(countif(attributes.http.response.status_code >= 400), 3)"
       let expected =
             [text|
-      SELECT jsonb_build_array(id,to_char(timestamp at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),context___trace_id,name,duration,resource___service___name,parent_id,CAST(EXTRACT(EPOCH FROM (start_time)) * 1000000000 AS BIGINT),COALESCE(errors is not null OR (kind = 'log' AND (lower(level) = 'error' OR severity___severity_number >= 17 OR status_code = 'ERROR')), false),to_jsonb(summary),context___span_id,kind,ROUND((COUNT(*) FILTER (WHERE status >= 400)::float)::numeric, 3)::float) FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) ORDER BY timestamp desc limit 501
+      SELECT jsonb_build_array(id,to_char(timestamp at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),context___trace_id,name,duration,resource___service___name,parent_id,CAST(EXTRACT(EPOCH FROM (start_time)) * 1000000000 AS BIGINT),COALESCE(errors is not null OR (kind = 'log' AND (lower(level) = 'error' OR severity___severity_number >= 17 OR status_code = 'ERROR')), false),to_jsonb(summary),context___span_id,kind,ROUND((COUNT(*) FILTER (WHERE attributes___http___response___status_code >= 400)::float)::numeric, 3)::float) FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) ORDER BY timestamp desc limit 501
             |]
       normT query `shouldBe` normT expected
 
@@ -507,15 +507,15 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
       normT query `shouldBe` normT expected
 
     it "parses named nested aggregation in summarize" do
-      let result = parseQueryToAST "| summarize error_pct = round(countif(status >= 500), 2) by bin(timestamp, 1h)"
+      let result = parseQueryToAST "| summarize error_pct = round(countif(attributes.http.response.status_code >= 500), 2) by bin(timestamp, 1h)"
       isRight result `shouldBe` True
 
     it "generates SQL for named nested aggregation" do
-      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize error_pct = round(countif(status >= 500), 2) by bin(timestamp, 1h)"
+      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize error_pct = round(countif(attributes.http.response.status_code >= 500), 2) by bin(timestamp, 1h)"
       let sql = fromMaybe "" c.finalSummarizeQuery
       let expected =
             [text|
-      SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', ROUND((COUNT(*) FILTER (WHERE status >= 500)::float)::numeric, 2)::float AS error_pct FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
+      SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', ROUND((COUNT(*) FILTER (WHERE attributes___http___response___status_code >= 500)::float)::numeric, 2)::float AS error_pct FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
             |]
       normT sql `shouldBe` normT expected
 
@@ -530,10 +530,10 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
 
   describe "round validation" do
     it "rejects decimals > 15" do
-      parseQueryToAST "| summarize round(duration, 16) by bin_auto(timestamp)" `shouldFailWith` "1:31: |1 | | summarize round(duration, 16) by bin_auto(timestamp) | ^round() decimals must be 0-15 per PostgreSQL limit"
+      parseQueryToAST "| summarize round(duration, 16) by bin_auto(timestamp)" `shouldFailWith` "Syntax error at column 31: round() decimals must be 0-15 per PostgreSQL limit"
 
     it "rejects negative decimals" do
-      parseQueryToAST "| summarize round(duration, -1) by bin_auto(timestamp)" `shouldFailWith` "1:31: |1 | | summarize round(duration, -1) by bin_auto(timestamp) | ^round() decimals must be 0-15 per PostgreSQL limit"
+      parseQueryToAST "| summarize round(duration, -1) by bin_auto(timestamp)" `shouldFailWith` "Syntax error at column 31: round() decimals must be 0-15 per PostgreSQL limit"
 
     it "accepts valid decimals range" do
       let result = parseQueryToAST "| summarize round(duration, 0) by bin_auto(timestamp)"
@@ -547,7 +547,7 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
       isRight result `shouldBe` True
 
     it "sanitizes dots in summarize named aggregations" do
-      let result = parseQueryToAST "| summarize total.count = count() by status"
+      let result = parseQueryToAST "| summarize total.count = count() by attributes.http.response.status_code"
       isRight result `shouldBe` True
 
   describe "scalar functions in filter expressions" do
@@ -572,7 +572,7 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
       normT query `shouldBe` normT expected
 
     it "parses isnull as standalone expression" do
-      let result = parseQueryToAST "isnull(error_message)"
+      let result = parseQueryToAST "isnull(status_message)"
       isRight result `shouldBe` True
 
     it "parses isnotnull in combined expression" do
@@ -580,10 +580,10 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
       isRight result `shouldBe` True
 
     it "generates SQL for isnull" do
-      let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "isnull(error_message)"
+      let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "isnull(status_message)"
       let expected =
             [text|
-      SELECT jsonb_build_array(id,to_char(timestamp at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),context___trace_id,name,duration,resource___service___name,parent_id,CAST(EXTRACT(EPOCH FROM (start_time)) * 1000000000 AS BIGINT),COALESCE(errors is not null OR (kind = 'log' AND (lower(level) = 'error' OR severity___severity_number >= 17 OR status_code = 'ERROR')), false),to_jsonb(summary),context___span_id,kind) FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((error_message IS NULL)) ORDER BY timestamp desc limit 501
+      SELECT jsonb_build_array(id,to_char(timestamp at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),context___trace_id,name,duration,resource___service___name,parent_id,CAST(EXTRACT(EPOCH FROM (start_time)) * 1000000000 AS BIGINT),COALESCE(errors is not null OR (kind = 'log' AND (lower(level) = 'error' OR severity___severity_number >= 17 OR status_code = 'ERROR')), false),to_jsonb(summary),context___span_id,kind) FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((status_message IS NULL)) ORDER BY timestamp desc limit 501
             |]
       normT query `shouldBe` normT expected
 
@@ -621,7 +621,7 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
 
   describe "edge case handling" do
     it "handles large numbers (PostgreSQL handles overflow)" do
-      let result = parseQueryToAST "| where count == 2147483647"
+      let result = parseQueryToAST "| where duration == 2147483647"
       isRight result `shouldBe` True
 
     it "handles division by zero literal (parser allows, PostgreSQL returns NULL/Infinity)" do

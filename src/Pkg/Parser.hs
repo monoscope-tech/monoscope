@@ -535,8 +535,13 @@ sqlFromQueryComponents sqlCfg qc =
 -- >>> let Right (_, c4) = parseQueryToComponents cfg "errors[*].error_type =~ /^ab.*c/"
 -- >>> c4.whereClause
 -- Just "(jsonb_path_exists(to_jsonb(errors), '$[*].\"error_type\" ? (@ like_regex \"^ab.*c\" flag \"i\")'::jsonpath))"
+--
+-- Field validation is told the cfg's source for the same reason 'queryASTToComponents'
+-- resolves the FROM table from it: a metrics query can arrive with its source in the
+-- request rather than in the query text, and validating those fields against
+-- @otel_logs_and_spans@ rejects the metrics table's own columns.
 parseQueryToComponents :: SqlQueryCfg -> Text -> Either Text (Text, QueryComponents)
-parseQueryToComponents sqlCfg = fmap (queryASTToComponents sqlCfg) . parseQueryToAST
+parseQueryToComponents sqlCfg = fmap (queryASTToComponents sqlCfg) . first (.message) . parseQueryDiagnosed sqlCfg.source
 
 
 queryASTToComponents :: SqlQueryCfg -> [Section] -> (Text, QueryComponents)
