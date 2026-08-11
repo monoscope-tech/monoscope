@@ -25,6 +25,35 @@ Companion to [README.md](README.md) (the overnight batch) and
 
 ## P1 — the measurement everything else waits on
 
+### First read (2026-08-11, ~20 min after deploy — NOT the real one)
+
+| counter | value |
+|---|---|
+| `dedup_eligible` | 412 |
+| `dedup_skipped` | 2 (0.5%) |
+| `dedup_denied_never_certified` | 396 (**100%** of certification denials) |
+| `dedup_denied_fp_moved` | **0** |
+| `dedup_denied_no_window` / `_unresolved` / `_disabled` | 0 / 10 / 4 |
+| `cert_granted_total` | **0** |
+
+Only 1360 scans total, so this is a young process and **not** the ≥24h reading. Two things
+are worth noting anyway:
+
+1. **It contradicts the prediction this plan wrote down.** The doc expected `fp_moved` to
+   dominate — partitions being written to continuously, nothing to recover, *stop*. So far
+   `fp_moved` is flat zero and `never_certified` is 100%. If that holds, the prize is real and
+   the exit criteria say proceed rather than stop.
+2. **`cert_granted_total = 0` is the thing to explain.** The sweep has certified nothing at all
+   in this lifetime — so partitions are not being certified-then-invalidated, they are simply
+   never certified. That is either "the process is 20 minutes old and the confirming pass
+   hasn't come round yet", or something still blocking certification that the sweep fix did not
+   cover. Distinguishing those is the next real question.
+   (`dedup_skipped = 2` with zero grants is consistent with the two skips coming from
+   certifications *loaded off disk* — i.e. persistence working — but at n=2 that is a guess.)
+
+- [ ] **Re-read after ≥24h with no TF deploy** and confirm or kill the above. If
+      `cert_granted_total` is still 0 after a day, the sweep is not certifying in production at
+      all and that — not persistence — is the whole problem.
 - [ ] **Read Phase 0.** After **≥24h with no TF deploy**:
       ```sql
       SELECT key, value FROM timefusion_stats WHERE component='scan' AND key LIKE 'dedup_denied%';
