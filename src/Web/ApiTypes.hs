@@ -507,6 +507,8 @@ data IssueApiSummary = IssueApiSummary
   , affectedRequests :: Int
   , affectedClients :: Int
   , acknowledged :: Bool
+  , acknowledgedUntil :: Maybe UTCTime
+  -- ^ End of the acknowledgement window; far-future when acknowledged indefinitely.
   , archived :: Bool
   , createdAt :: UTCTime
   , updatedAt :: UTCTime

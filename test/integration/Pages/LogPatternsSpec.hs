@@ -646,8 +646,9 @@ spec = sequential $ aroundAll withTestResources do
       ack2 <- readAckAt "ack-clock-2"
       ack2 `shouldBe` [PGS.Only (Just (addUTCTime (25 * 3600) frozenTime))]
 
-    -- Acks on rate-change issues open a 24h cooldown anchored to the test clock.
-    it "13. acknowledgeIssue opens 24h cooldown that expires on test clock" \tr -> do
+    -- An acknowledgement silences re-firing for exactly the window it was given
+    -- — and an indefinite one keeps silencing after a timed one would have gone.
+    it "13. acknowledgement silences its target for exactly its window" \tr -> do
       runTestBg frozenTime tr pass
       iid <- (UUIDId :: UUID.UUID -> Issues.IssueId) <$> UUID.nextRandom
       let uid = (Servant.getResponse tr.trSessAndHeader).user.id
@@ -662,27 +663,25 @@ spec = sequential $ aroundAll withTestResources do
                         false, 1, 1, '{}'::jsonb, ?, ?) |]
           (iid, pid, targetHash, targetHash, frozenTime, frozenTime)
 
-      runTestBg frozenTime tr $ Issues.acknowledgeIssue iid uid
-      let readCooldown = withResource tr.trPool \conn ->
-            PGS.query conn
-              [sql| SELECT cooldown_until FROM apis.issues WHERE id = ? |]
-              (PGS.Only iid) :: IO [PGS.Only (Maybe UTCTime)]
-      cd1 <- readCooldown
-      cd1 `shouldBe` [PGS.Only (Just (addUTCTime (24 * 3600) frozenTime))]
+      let ackFor w = runTestBg frozenTime tr $ void $ Issues.setAckState pid [iid] $ Just Issues.AckSet{at = frozenTime, by = Just uid, window = w}
+          silenced = runHasqlEffect tr $ Issues.isSilenced pid targetHash Issues.LogPatternRateChange =<< Time.currentTime
+      ackFor (Issues.AckFor $ 24 * 60)
+      ackUntil1 <- withResource tr.trPool \conn ->
+        PGS.query conn [sql| SELECT acknowledged_until FROM apis.issues WHERE id = ? |] (PGS.Only iid) :: IO [PGS.Only (Maybe UTCTime)]
+      ackUntil1 `shouldBe` [PGS.Only (Just (addUTCTime (24 * 3600) frozenTime))]
 
-      -- 12h in: cooldown still active relative to test clock
+      -- 12h in: still silenced relative to the test clock
       advanceHours tr 12
-      stillCooling <- runHasqlEffect tr
-        $ Issues.isInCooldown pid targetHash Issues.LogPatternRateChange
-        =<< Time.currentTime
-      stillCooling `shouldBe` True
+      silenced >>= (`shouldBe` True)
 
-      -- +13h more (total +25h): cooldown expired
+      -- +13h more (total +25h): the window lapsed, the signal can fire again
       advanceHours tr 13
-      expired <- runHasqlEffect tr
-        $ Issues.isInCooldown pid targetHash Issues.LogPatternRateChange
-        =<< Time.currentTime
-      expired `shouldBe` False
+      silenced >>= (`shouldBe` False)
+
+      -- An indefinite ack outlives what a 24h one would have covered.
+      ackFor Issues.AckIndefinite
+      advanceHours tr 25
+      silenced >>= (`shouldBe` True)
 
     -- pruneStalePatterns deletes only acked patterns past staleDays cutoff.
     it "14. pruneStaleLogPatterns deletes acked patterns past 30 days" \tr -> do

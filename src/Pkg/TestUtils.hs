@@ -30,6 +30,7 @@ module Pkg.TestUtils (
   effToServantHandlerTest,
   runQueryEffect,
   runHasqlEffect,
+  ackIssue,
   frozenTime,
   -- Mutable test clock — advance time within a single spec to exercise
   -- time-dependent behaviour without re-creating the AuthContext / pool.
@@ -125,9 +126,11 @@ import Effectful.Labeled (Labeled, runLabeled)
 import Effectful.Log (Log)
 import Effectful.Reader.Static qualified
 import Effectful.Time (Time, runTime)
+import Effectful.Time qualified as EffTime
 import Log qualified
 import Log.Data (showLogMessage)
 import Log.Logger (mkBulkLogger)
+import Models.Apis.Issues qualified as Issues
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
@@ -942,6 +945,14 @@ runQueryEffect TestResources{..} action = do
 
 
 -- | Hasql twin of `runQueryEffect`.
+-- | Acknowledge one issue indefinitely at the current (test) clock — the shape
+-- specs need when they only want an issue out of the Inbox and silenced.
+ackIssue :: (DB es, Time :> es) => Projects.ProjectId -> Projects.UserId -> Issues.IssueId -> Eff es ()
+ackIssue pid uid iid = do
+  now <- EffTime.currentTime
+  void $ Issues.setAckState pid [iid] $ Just Issues.AckSet{at = now, by = Just uid, window = Issues.AckIndefinite}
+
+
 runHasqlEffect :: TestResources -> (forall es. (Effectful.Reader.Static.Reader AuthContext :> es, Error ServantS.ServerError :> es, Hasql :> es, IOE :> es, Time :> es) => Eff es a) -> IO a
 runHasqlEffect TestResources{..} action = do
   action
@@ -1537,7 +1548,7 @@ routeWriteRequest tr verb path params body
 routeApiV1Write :: TestResources -> Text -> Text -> [(Text, Text)] -> LBS.ByteString -> IO (Response LBS.ByteString)
 routeApiV1Write tr verb rest params body = case (verb, T.splitOn "/" rest) of
   ("POST", ["issues", iid, "ack"]) ->
-    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiIssueAck testPid (parseUUIDId iid))
+    mockResponse . AE.encode <$> runAsBase tr (ApiH.apiIssueAck testPid (parseUUIDId iid) (pInt "duration_minutes" params))
   ("POST", ["issues", iid, "unack"]) ->
     mockResponse . AE.encode <$> runAsBase tr (ApiH.apiIssueUnack testPid (parseUUIDId iid))
   ("POST", ["issues", iid, "archive"]) ->

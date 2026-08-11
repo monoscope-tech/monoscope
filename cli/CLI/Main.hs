@@ -72,11 +72,11 @@ data ProjectCommand
 data IssuesCommand
   = IssueList {status, issueType, service :: Maybe Text, page, perPage :: Maybe Int}
   | IssueGet Text
-  | IssueAck Text
+  | IssueAck Text (Maybe Int)
   | IssueUnack Text
   | IssueArchive Text
   | IssueUnarchive Text
-  | IssueBulk Text [Text]
+  | IssueBulk Text [Text] (Maybe Int)
   deriving stock (Show)
 
 
@@ -755,14 +755,14 @@ issuesParser =
               (progDesc "List issues")
           )
       , command "get" (info (IssueGet <$> idArg <**> helper) (progDesc "Get issue by ID"))
-      , command "ack" (info (IssueAck <$> idArg <**> helper) (progDesc "Acknowledge issue"))
+      , command "ack" (info (IssueAck <$> idArg <*> optional (option auto (long "for" <> metavar "MINUTES" <> help "Pause notifications for N minutes (default: until it regresses)")) <**> helper) (progDesc "Acknowledge issue \x2014 pauses its notifications"))
       , command "unack" (info (IssueUnack <$> idArg <**> helper) (progDesc "Un-acknowledge issue"))
       , command "archive" (info (IssueArchive <$> idArg <**> helper) (progDesc "Archive issue"))
       , command "unarchive" (info (IssueUnarchive <$> idArg <**> helper) (progDesc "Unarchive issue"))
       , command
           "bulk"
           ( info
-              (IssueBulk <$> strArgument (metavar "ACTION" <> help "acknowledge|unack|archive|unarchive") <*> idsOpt <**> helper)
+              (IssueBulk <$> strArgument (metavar "ACTION" <> help "acknowledge|unack|archive|unarchive") <*> idsOpt <*> optional (option auto (long "for" <> metavar "MINUTES" <> help "For acknowledge: pause notifications for N minutes")) <**> helper)
               (progDesc "Bulk acknowledge/archive issues")
           )
       ]
@@ -1046,12 +1046,12 @@ run version global = \case
     IssueList{..} ->
       Resource.runList cfg Resource.Issues (catMaybes [("status",) <$> status, ("type",) <$> issueType, ("service",) <$> service] <> pageParams page perPage) mode
     IssueGet i -> Resource.runGet cfg Resource.Issues i mode
-    IssueAck i -> Resource.runLifecycle cfg Resource.Issues i "ack" [] mode
+    IssueAck i minsM -> Resource.runLifecycle cfg Resource.Issues i "ack" (foldMap (\m -> [("duration_minutes", show m)]) minsM) mode
     IssueUnack i -> Resource.runLifecycle cfg Resource.Issues i "unack" [] mode
     IssueArchive i -> Resource.runLifecycle cfg Resource.Issues i "archive" [] mode
     IssueUnarchive i -> Resource.runLifecycle cfg Resource.Issues i "unarchive" [] mode
-    IssueBulk act ids ->
-      Resource.writeJson cfg Resource.POST "/api/v1/issues/bulk" [] (AE.object ["action" AE..= act, "ids" AE..= ids]) mode
+    IssueBulk act ids minsM ->
+      Resource.writeJson cfg Resource.POST "/api/v1/issues/bulk" [] (AE.object ["action" AE..= act, "ids" AE..= ids, "duration_minutes" AE..= minsM]) mode
   EndpointsCmd sub -> withCfgMode global $ \cfg mode -> case sub of
     EndList{..} ->
       Resource.runList cfg Resource.Endpoints (catMaybes [("search",) <$> search, ("outgoing",) . bool "false" "true" <$> outgoing] <> pageParams page perPage) mode

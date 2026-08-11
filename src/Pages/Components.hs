@@ -1,10 +1,10 @@
-module Pages.Components (drawer_, drawerLoadingSkeleton_, emptyState_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), resizer_, detailTab_, httpTab_, tabPanel_, jsonTab_, dateTime, localTime_, localTimeFmt_, paymentPlanPicker, navBar, modal_, modalCloseButton_, primaryButton_, headerRow_, headerRowPad_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_, sparkline_, periodToggle_, abbreviateUnit, compactTimeAgo, stackTrace_) where
+module Pages.Components (drawer_, drawerLoadingSkeleton_, emptyState_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), resizer_, detailTab_, httpTab_, tabPanel_, jsonTab_, dateTime, localTime_, localTimeFmt_, paymentPlanPicker, navBar, modal_, modalCloseButton_, primaryButton_, headerRow_, headerRowPad_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_, sparkline_, periodToggle_, abbreviateUnit, compactTimeAgo, stackTrace_, durationMenu_, durationQuery, untilLabel) where
 
 import Data.Aeson qualified as AE
 import Data.Default (Default (..))
 import Data.List (lookup)
 import Data.Text qualified as T
-import Data.Time (UTCTime, defaultTimeLocale, formatTime)
+import Data.Time (UTCTime, defaultTimeLocale, diffUTCTime, formatTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Lucid
 import Lucid.Aria qualified as Aria
@@ -799,6 +799,58 @@ abbreviateUnit w = fromMaybe w $ lookup w [("hours", "hrs"), ("hour", "hr"), ("m
 -- | Compact time ago display (e.g., "23 hrs ago" instead of "23 hours ago")
 compactTimeAgo :: Text -> Text
 compactTimeAgo = unwords . map abbreviateUnit . words
+
+
+-- | Popover offering silence durations plus an indefinite option — the shared
+-- vocabulary behind monitor mute and issue acknowledge, so "for how long?" is
+-- answered the same way everywhere. @req@ turns the chosen duration in minutes
+-- (empty for indefinite) into the htmx attributes that submit it, leaving each
+-- caller its own verb and swap semantics.
+durationMenu_ :: Text -> Text -> (Text -> [Attribute]) -> (Text -> Html ()) -> Html ()
+durationMenu_ popId heading req trigger = div_ [class_ "inline-block"] do
+  trigger popId
+  -- The options read as bare durations ("4 hours") once focus lands inside, so
+  -- the heading has to be the group's accessible name, not just visible text.
+  div_ [id_ popId, term "popover" "auto", role_ "group", Aria.label_ heading, class_ "dropdown dropdown-start menu bg-bgRaised p-1 text-sm border border-strokeWeak z-50 min-w-36 rounded-md shadow-lg mt-1", style_ $ "position-try: flip-block; position-anchor: --anchor-" <> popId] do
+    span_ [class_ "px-3 py-1 text-xs font-medium text-textWeak", Aria.hidden_ "true"] $ toHtml heading
+    forM_ @[] @_ @(Int, Text) [(60, "1 hour"), (240, "4 hours"), (480, "8 hours"), (1440, "1 day"), (4320, "3 days"), (10080, "1 week")] \(mins, label) ->
+      button_ ([type_ "button", class_ itemCls] <> req (show mins)) $ toHtml label
+    button_ ([type_ "button", class_ $ itemCls <> " border-t border-strokeWeak"] <> req "") "Indefinitely"
+  where
+    itemCls = "px-3 py-1.5 text-sm text-left hover:bg-fillWeaker rounded cursor-pointer w-full"
+
+
+-- | Query suffix for a 'durationMenu_' choice: @?param=minutes@, or nothing at
+-- all for the indefinite option (absent duration means "no end").
+--
+-- >>> durationQuery "duration" "240"
+-- "?duration=240"
+-- >>> durationQuery "duration" ""
+-- ""
+durationQuery :: Text -> Text -> Text
+durationQuery param q = if T.null q then "" else "?" <> param <> "=" <> q
+
+
+-- | Human label for a silence window. Anything more than a year out is the
+-- indefinite sentinel; anything already past reads as expired rather than
+-- rounding up to a misleading "1m left".
+--
+-- >>> let t0 = read "2026-01-01 00:00:00 UTC"
+-- >>> untilLabel "Muted" t0 (read "2026-01-01 04:00:00 UTC")
+-- "Muted \183 4h left"
+-- >>> untilLabel "Ack'd" t0 (read "2126-01-01 00:00:00 UTC")
+-- "Ack'd indefinitely"
+-- >>> untilLabel "Ack'd" t0 (read "2025-12-31 23:00:00 UTC")
+-- "Ack'd \183 expired"
+untilLabel :: Text -> UTCTime -> UTCTime -> Text
+untilLabel what now until'
+  | diffMins <= 0 = what <> " \xb7 expired"
+  | diffMins > 525600 = what <> " indefinitely"
+  | diffMins >= 1440 = what <> " \xb7 " <> show (diffMins `div` 1440) <> "d left"
+  | diffMins >= 60 = what <> " \xb7 " <> show (diffMins `div` 60) <> "h left"
+  | otherwise = what <> " \xb7 " <> show (max 1 diffMins) <> "m left"
+  where
+    diffMins = round (diffUTCTime until' now / 60) :: Int
 
 
 periodToggle_ :: Text -> Text -> Text -> Html ()

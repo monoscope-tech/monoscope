@@ -504,14 +504,26 @@ monoscope issues list --status acknowledged        # open | acknowledged | archi
 monoscope issues list --type runtime_exception     # filter by issue type
 monoscope issues list --service checkout-api       # filter by service
 monoscope issues get <id>
-monoscope issues ack <id>
+monoscope issues ack <id>                          # pause notifications until it regresses
+monoscope issues ack <id> --for 240                # ...or for 240 minutes, then back to the Inbox
 monoscope issues unack <id>
 monoscope issues archive <id>
 monoscope issues unarchive <id>
 
 # Bulk: acknowledge, unack, archive, unarchive
 monoscope issues bulk acknowledge --ids id1,id2,id3
+monoscope issues bulk acknowledge --ids id1,id2 --for 1440
 ```
+
+**Lifecycle.** An issue is in exactly one of three states:
+
+| State | What it means | Notifications |
+| --- | --- | --- |
+| Open (Inbox) | Needs triage. | Yes |
+| Acknowledged | Someone owns it, for the window you chose. Returns to the Inbox when the window ends or the issue regresses. | Paused |
+| Archived | Not actionable. Stays hidden until you unarchive it. | Never |
+
+Acknowledging is the only way to silence an issue: there is no separate mute.
 
 ---
 

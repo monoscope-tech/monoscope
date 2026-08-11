@@ -1,6 +1,6 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl, sameSegmentCount) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl, sameSegmentCount) where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
@@ -1593,6 +1593,7 @@ runDueNotifications pid hashesM = do
 -- safety net against the old 60-min orphan hole.
 runNotificationSweep :: UTCTime -> ATBackgroundCtx ()
 runNotificationSweep _scheduledTime = do
+  expireLapsedAcks
   projects :: [Projects.ProjectId] <-
     HI.getOneColumn
       <<$>> Hasql.interp
@@ -1612,6 +1613,19 @@ runNotificationSweep _scheduledTime = do
         |]
   Log.logInfo "NotificationSweepJob: candidate projects" (AE.object ["count" AE..= length projects])
   forM_ projects sweepErrorSubscriptions
+
+
+-- | Return timed acknowledgements whose window has closed to the Inbox. The
+-- notification paths already stop honouring a lapsed ack on their own, so this
+-- only clears the columns and records the transition — but without it a timed
+-- ack would still *look* acknowledged forever, which is the ambiguity the whole
+-- ack window exists to remove.
+expireLapsedAcks :: ATBackgroundCtx ()
+expireLapsedAcks = do
+  expired <- Issues.expireAcks =<< Time.currentTime
+  unless (null expired) do
+    forM_ expired \iid -> Issues.logIssueActivity iid Issues.IEAckExpired Nothing Nothing
+    Log.logInfo "issue_acks_expired" (AE.object ["count" AE..= length expired])
 
 
 -- | Flush the digest queue once per hour. Groups pending rows by project and
@@ -1700,7 +1714,8 @@ claimDueErrorNotifications pid mHashes now =
             SELECT DISTINCT ON (e.id)
                    e.id, e.error_data, e.state, i.id AS issue_id, i.title,
                    e.slack_thread_ts, e.discord_message_id, e.occurrences_1h,
-                   e.created_at, e.last_notified_at
+                   e.created_at, e.last_notified_at,
+                   i.acknowledged_until, i.archived_at
             FROM apis.error_patterns e
             JOIN apis.issues i ON i.project_id = e.project_id AND i.target_hash = e.hash
             WHERE e.project_id = #{pid}
@@ -1734,6 +1749,11 @@ claimDueErrorNotifications pid mHashes now =
           SET last_notified_at = #{now}, updated_at = #{now}
           FROM candidates c
           WHERE e.id = c.id
+            -- The issue the alert points at is acknowledged or archived: the user
+            -- has already told us to stop. Filtered here rather than inside
+            -- `candidates` so DISTINCT ON still picks the newest issue per pattern.
+            AND c.archived_at IS NULL
+            AND (c.acknowledged_until IS NULL OR c.acknowledged_until <= #{now}::timestamptz)
             AND e.last_notified_at IS NOT DISTINCT FROM c.last_notified_at
             -- Idempotency: same tick re-run shouldn't rewrite the row.
             AND e.last_notified_at IS DISTINCT FROM #{now}::timestamptz
@@ -1855,8 +1875,13 @@ enqueueDigest pid errorPatternId issueId reason title =
 
 -- | Atomically claim the notification slot for an issue. Returns True if the
 -- UPDATE updated a row (caller must dispatch), False if another worker or an
--- earlier tick in the cooldown window already notified — caller must skip.
+-- earlier tick in the dedup window already notified — caller must skip.
 -- Mirrors the claim pattern used for error-pattern re-notifications.
+--
+-- A live acknowledgement or an archive blocks the claim outright: that is what
+-- acknowledging an issue means. An ack whose window has lapsed does not block,
+-- so notifications resume the moment it expires rather than waiting on the
+-- ack-expiry sweep.
 claimIssueNotification :: Issues.IssueId -> UTCTime -> Int -> ATBackgroundCtx Bool
 claimIssueNotification iid now cooldownHours =
   isJust <$> (Hasql.interpOne q :: ATBackgroundCtx (Maybe Int))
@@ -1865,6 +1890,8 @@ claimIssueNotification iid now cooldownHours =
       [HI.sql|
         UPDATE apis.issues SET last_notified_at = #{now}
         WHERE id = #{iid}
+          AND archived_at IS NULL
+          AND (acknowledged_until IS NULL OR acknowledged_until <= #{now}::timestamptz)
           AND (last_notified_at IS NULL
                OR last_notified_at < #{now}::timestamptz - make_interval(hours => #{cooldownHours}::int))
         RETURNING 1::bigint
@@ -1948,7 +1975,7 @@ processProjectErrors pid errors now = do
                 firstSeenTextM = Just $ firstSeenLine now atErr.when
                 alert = RuntimeErrorAlert{issueId = issue.id.toText, issueTitle = issue.title, errorData = atErr, runtimeAlertType = NewRuntimeError, chartUrl = chartUrlM, occurrenceText = Nothing, firstSeenText = firstSeenTextM, ongoingFor = Nothing}
                 (subj, html) = ET.runtimeErrorsEmail project.title issueUrl [atErr] chartUrlM Nothing Nothing
-            (slackTs, discordMsgId, dispatched) <- notifyIssue issue project users Issues.rateChangeCooldownHours "runtime_exception" alert issueUrl subj html
+            (slackTs, discordMsgId, dispatched) <- notifyIssue issue project users Issues.issueNotifyDedupHours "runtime_exception" alert issueUrl subj html
             -- Persist thread IDs + stamp error_patterns.last_notified_at so later
             -- escalation/regression sweeps thread under this alert instead of
             -- firing fresh. 'apis.issues.last_notified_at' gates re-notification
@@ -3107,15 +3134,16 @@ processAPIChangeAnomalies pid targetHashes = do
     -- issue commits to being notified — so two concurrent NewAnomaly jobs
     -- can't both pass a read-then-write check and double-send. Each row is
     -- claimed at most once per 30-min window (last_notified_at) and respects
-    -- any explicit cooldown_until set by the UI / LLM enhancement step.
+    -- any live acknowledgement set from the UI.
     claimedIds :: V.Vector Issues.IssueId <-
       Hasql.interp
         [HI.sql|
           UPDATE apis.issues
           SET last_notified_at = #{now}
           WHERE id = ANY(#{candidateIssueIds}::uuid[])
+            AND archived_at IS NULL
             AND (last_notified_at IS NULL OR last_notified_at < #{now}::timestamptz - INTERVAL '30 minutes')
-            AND (cooldown_until IS NULL OR cooldown_until <= #{now}::timestamptz)
+            AND (acknowledged_until IS NULL OR acknowledged_until <= #{now}::timestamptz)
           RETURNING id
         |]
     let claimedSet = HashSet.fromList (V.toList claimedIds)
@@ -3975,8 +4003,8 @@ isAlertableLogLevel = \case
 --   3. Persistence gate: first detection writes a pending marker on the
 --      pattern; only a matching second detection within the TTL fires an
 --      issue. A run with no anomaly clears any stale pending marker.
---   4. Post-ack cooldown: if the latest acked issue for the same target_hash
---      has cooldown_until > now, skip firing (user already told us to hush).
+--   4. Acknowledgement: if a live ack covers the same target_hash, skip firing
+--      (the user already told us to hush, and for how long).
 detectLogPatternSpikes :: Projects.ProjectId -> UTCTime -> Config.AuthContext -> ATBackgroundCtx ()
 detectLogPatternSpikes pid scheduledTime authCtx = do
   Log.logTrace "Detecting log pattern spikes" pid
@@ -4016,9 +4044,9 @@ detectLogPatternSpikes pid scheduledTime authCtx = do
     LogPatterns.setPendingAnomaly lp.patternId dir scheduledTime
   unless (V.null clears) $ LogPatterns.clearPendingAnomalies clears
 
-  -- Step 4: cooldown filter, then insert.
+  -- Step 4: acknowledgement filter, then insert.
   firesAllowed <- flip filterM fires \(lp, _) ->
-    not <$> Issues.isInCooldown pid lp.patternHash Issues.LogPatternRateChange scheduledTime
+    not <$> Issues.isSilenced pid lp.patternHash Issues.LogPatternRateChange scheduledTime
 
   projectM <- Projects.projectById pid
   users <- Projects.usersByProjectId pid
@@ -4032,7 +4060,7 @@ detectLogPatternSpikes pid scheduledTime authCtx = do
           changePct = if sr.mean > 0 then (sr.currentRate - sr.mean) / sr.mean * 100 else 0
           alert = LogPatternRateChangeAlert{issueUrl, patternText = lpRate.logPattern, sampleMessage = Nothing, logLevel = lpRate.logLevel, serviceName = lpRate.serviceName, direction = sr.direction, currentRate = sr.currentRate, baselineMean = sr.mean, changePercent = changePct, isError = lpRate.isError}
           (subj, html) = ET.logPatternRateChangeEmail project.title issueUrl lpRate.logPattern lpRate.logLevel lpRate.serviceName dir sr.currentRate sr.mean changePct
-      void $ notifyIssue issue project users Issues.rateChangeCooldownHours "log_pattern_rate_change" alert issueUrl subj html
+      void $ notifyIssue issue project users Issues.issueNotifyDedupHours "log_pattern_rate_change" alert issueUrl subj html
     pure issue.id
 
   -- Clear the pending markers for anything we just fired; a new detection

@@ -188,13 +188,16 @@ where
 -- | Acknowledge issues by id and cascade to anomalies referenced via @issue_data.anomaly_hashes@.
 -- Returned target_hashes are passed to 'acknowlegeCascade' by the caller for an additional
 -- LIKE-prefix sweep on the legacy hash space.
-acknowledgeAnomalies :: (DB es, Time :> es) => Projects.UserId -> V.Vector Text -> Eff es [Text]
-acknowledgeAnomalies uid issueIds
+-- @until'@ is the end of the acknowledgement window (see @Issues.ackUntil@); it
+-- is what actually silences notifications, so it must be stamped everywhere
+-- @acknowledged_at@ is.
+acknowledgeAnomalies :: (DB es, Time :> es) => Projects.UserId -> UTCTime -> V.Vector Text -> Eff es [Text]
+acknowledgeAnomalies uid until' issueIds
   | V.null issueIds = pure []
   | otherwise = do
       now <- Time.currentTime
       Hasql.interp
-        [HI.sql| UPDATE apis.issues SET acknowledged_by=#{uid}, acknowledged_at=#{now}
+        [HI.sql| UPDATE apis.issues SET acknowledged_by=#{uid}, acknowledged_at=#{now}, acknowledged_until=#{until'}
                  WHERE id=ANY(#{issueIds}::uuid[]) RETURNING target_hash |]
         <* Hasql.interpExecute_
           [HI.sql| WITH related AS (
@@ -205,13 +208,13 @@ acknowledgeAnomalies uid issueIds
                    WHERE a.target_hash IN (SELECT h FROM related) |]
 
 
-acknowlegeCascade :: (DB es, Time :> es) => Projects.UserId -> V.Vector Text -> Eff es Int64
-acknowlegeCascade uid targets
+acknowlegeCascade :: (DB es, Time :> es) => Projects.UserId -> UTCTime -> V.Vector Text -> Eff es Int64
+acknowlegeCascade uid until' targets
   | V.null targets = pure 0
   | otherwise = do
       now <- Time.currentTime
       let hashes = (<> "%") <$> targets
-      Hasql.interpExecute_ [HI.sql| UPDATE apis.issues SET acknowledged_by = #{uid}, acknowledged_at = #{now} WHERE target_hash LIKE ANY(#{hashes}) |]
+      Hasql.interpExecute_ [HI.sql| UPDATE apis.issues SET acknowledged_by = #{uid}, acknowledged_at = #{now}, acknowledged_until = #{until'} WHERE target_hash LIKE ANY(#{hashes}) |]
       Hasql.interpExecute [HI.sql| UPDATE apis.anomalies SET acknowledged_by = #{uid}, acknowledged_at = #{now} WHERE target_hash LIKE ANY(#{hashes}) |]
 
 
