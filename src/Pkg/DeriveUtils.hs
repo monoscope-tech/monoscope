@@ -21,7 +21,8 @@ module Pkg.DeriveUtils (
   idFromText,
   unAesonText,
   unAesonTextMaybe,
-  hashAssetFile,
+  assetUrl,
+  staticAssetHashes,
   hashedAssetPath,
   stripAssetHash,
   assetHash,
@@ -45,6 +46,7 @@ import Data.Char (isHexDigit)
 import Data.Default (Default (..))
 import Data.Digest.XXHash (xxHash)
 import Data.Effectful.Hasql (Hasql)
+import Data.HashMap.Strict qualified as HM
 import Data.IntMap qualified as IntMap
 import Data.OpenApi (NamedSchema (..), ToParamSchema (..), ToSchema (..), enum_, genericDeclareNamedSchema, type_)
 import Data.OpenApi qualified as OpenApi
@@ -79,6 +81,8 @@ import Pkg.Deriving
 import Relude
 import Relude.Extra.Enum (safeToEnum)
 import Servant (FromHttpApiData (..))
+import System.Directory (doesDirectoryExist, listDirectory)
+import System.IO.Unsafe (unsafePerformIO)
 import Text.Casing (quietSnake)
 
 
@@ -393,8 +397,8 @@ connectPostgreSQL connstr = do
       throwIO $ PGI.fatalError msg
 
 
--- | The 8-digit content hash 'hashAssetFile' embeds in an asset's URL. Zero-padded
--- so 'stripAssetHash' can recognise it unambiguously.
+-- | The 8-digit content hash an asset's URL embeds. Zero-padded so 'stripAssetHash'
+-- can recognise it unambiguously.
 --
 -- >>> assetHash "hello"
 -- "fb0077f9"
@@ -404,12 +408,31 @@ assetHash :: LByteString -> Text
 assetHash = T.justifyRight 8 '0' . toText . flip showHex "" . xxHash
 
 
--- | Content hash of the file under @static@, registered as a recompilation dependency.
-fileHash :: FilePath -> TH.Q String
-fileHash path = do
-  let fp = "static" <> path
-  TH.qAddDependentFile fp
-  toString . assetHash <$> TH.runIO (readFileLBS fp)
+-- | Content hash of every file under @static@, keyed by URL path
+-- (@"public/assets/js/main.js" -> "2c58501e"@). Read once, on first use: the image is
+-- immutable in prod, and in dev ghcid restarts the server when an asset changes.
+--
+-- This is deliberately the /only/ source of asset hashes. 'assetUrl' renders from it and
+-- 'System.Server.hashedAssetMiddleware' verifies against it, so the URL a page emits and
+-- the URL the server accepts cannot disagree. They used to: the URL carried a hash baked
+-- in by Template Haskell at compile time while the check read disk at boot, so any asset
+-- rebuilt after the last compile — a CSS rebuild, @make fa-add@, a Vite build — failed
+-- the check, and the check fails closed. Every page loaded without its stylesheet.
+--
+-- A CAF rather than an effect because the readers are pure Lucid renderers ('faSprite_'
+-- is @Monad m => HtmlT m ()@); this is the same process-lifetime constant TH used to
+-- inline, read at boot instead of at compile time.
+staticAssetHashes :: HashMap Text Text
+staticAssetHashes = unsafePerformIO $ HM.fromList <$> walk ""
+  where
+    onDisk rel = "static/" <> toString rel
+    walk rel =
+      listDirectory (onDisk rel) >>= foldMapM \name -> do
+        let child = rel <> toText name
+        doesDirectoryExist (onDisk child) >>= \case
+          True -> walk $ child <> "/"
+          False -> one . (child,) . assetHash <$> readFileLBS (onDisk child)
+{-# NOINLINE staticAssetHashes #-}
 
 
 -- | URL of a static asset with its content hash embedded in the __path__.
@@ -419,8 +442,11 @@ fileHash path = do
 -- replica — which ignores the query and streams the stale file off disk — poisoning
 -- the cache for the whole (year-long) max-age. Distinct paths can't collide that way.
 -- 'System.Server.hashedAssetMiddleware' maps the name back to the file on disk.
-hashAssetFile :: FilePath -> TH.Q TH.Exp
-hashAssetFile path = fileHash path >>= TH.lift . hashedAssetPath path
+--
+-- An asset that isn't under @static@ keeps its plain path: the middleware passes unhashed
+-- URLs through, so a missing file costs cache-busting rather than the whole response.
+assetUrl :: Text -> Text
+assetUrl path = maybe path (hashedAssetPath path) $ HM.lookup (T.dropWhile (== '/') path) staticAssetHashes
 
 
 -- | Insert a content hash before the final extension.
@@ -430,11 +456,11 @@ hashAssetFile path = fileHash path >>= TH.lift . hashedAssetPath path
 -- >>> hashedAssetPath "/public/assets/no-extension" "2c58501e"
 -- "/public/assets/no-extension"
 --
--- >>> stripAssetHash (toText (hashedAssetPath "public/assets/js/main.js" "2c58501e"))
+-- >>> stripAssetHash (hashedAssetPath "public/assets/js/main.js" "2c58501e")
 -- Just ("public/assets/js/main.js","2c58501e")
-hashedAssetPath :: FilePath -> String -> FilePath
-hashedAssetPath path h = case T.breakOnEnd "." (toText path) of
-  (stem, ext) | not (T.null stem), not (T.any (== '/') ext) -> toString $ stem <> toText h <> "." <> ext
+hashedAssetPath :: Text -> Text -> Text
+hashedAssetPath path h = case T.breakOnEnd "." path of
+  (stem, ext) | not (T.null stem), not (T.any (== '/') ext) -> stem <> h <> "." <> ext
   _ -> path
 
 

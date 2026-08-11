@@ -273,18 +273,18 @@ describe('menuHref', () => {
   const base = '/p/proj';
   const query = (href: string) => decodeURIComponent(new URL(href, 'https://x').searchParams.get('query') ?? '');
 
-  it('splits the two explorer entries by kind instead of sending both to the same view', () => {
-    const traces = menuHref(base, 'traces', 'checkout');
+  it('shows all events or only logs for the selected service', () => {
+    const events = menuHref(base, 'events', 'checkout');
     const logs = menuHref(base, 'logs', 'checkout');
-    expect(query(traces)).toBe('resource.service.name=="checkout" AND kind!="log"');
+    expect(query(events)).toBe('resource.service.name=="checkout"');
     expect(query(logs)).toBe('resource.service.name=="checkout" AND kind=="log"');
-    expect(traces).not.toBe(logs);
+    expect(events).not.toBe(logs);
   });
 
   it('only ever asks for a viz type that exists', () => {
     // visTypes is logs | timeseries | timeseries_line | patterns | sessions; `traces` is not
     // one, and an unknown value falls through to the default instead of erroring.
-    for (const action of ['traces', 'logs'])
+    for (const action of ['events', 'logs'])
       expect(new URL(menuHref(base, action, 'svc'), 'https://x').searchParams.get('viz_type')).toBe('logs');
   });
 

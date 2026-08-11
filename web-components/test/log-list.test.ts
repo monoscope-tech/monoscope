@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach } from 'vitest';
 import { render } from 'lit';
 import { dedupeById } from '../src/log-list-utils';
-import { LogList, latencySegments, latencyTitle } from '../src/log-list';
+import { LogList, latencyBar, latencySegments, latencyTitle } from '../src/log-list';
 import { row, fakeTransport, ids, mountList } from './log-list-harness';
 
 describe('dedupeById', () => {
@@ -193,6 +193,48 @@ describe('latencySegments', () => {
   test('drops children with no measurable width, and a zero-duration row has no bar to draw', () => {
     expect(latencySegments(row, [child(1_400, 0), child(1_400, -5)])).toEqual([]);
     expect(latencySegments({ startNs: 0, duration: 0 }, [child(0, 10)])).toEqual([]);
+  });
+});
+
+describe('latencyBar', () => {
+  // Expanding a trace is what makes the column a waterfall again: the child rows only mean
+  // something as a breakdown of the one request, which needs a shared axis.
+  const row = { startNs: 1_500, duration: 500, traceStart: 1_000, traceEnd: 2_000, label: 'api', color: 'bg-api' };
+  const child = (startNs: number, duration: number, label = 'db') => ({ startNs, duration, label, color: `bg-${label}` });
+
+  test('expanded rows lay their own span on the trace axis, framed by the trace bounds', () => {
+    const { track, segments, frame } = latencyBar(true, row, [child(1_600, 200)]);
+    expect(track).toBe('bg-fillWeak'); // the track is the trace, not the row
+    expect(frame).toBe(true); // |---[]---| : without it a short span is just a small block
+    expect(segments).toEqual([
+      { leftPct: 25, widthPct: 25, color: 'bg-api', label: 'api', ns: 500 },
+      { leftPct: 30, widthPct: 10, color: 'bg-db', label: 'db', ns: 200 },
+    ]);
+  });
+
+  test('a collapsed row is its own axis: full-width track, children inside it', () => {
+    const { track, segments, frame } = latencyBar(false, row, [child(1_600, 200)]);
+    expect(track).toBe('bg-api');
+    // No frame: the bar already fills the range, so the rule would restate its own bounds.
+    expect(frame).toBe(false);
+    expect(segments).toEqual([{ leftPct: 20, widthPct: 40, color: 'bg-db', label: 'db', ns: 200 }]);
+  });
+
+  test('falls back to the row axis when the trace has no measurable span', () => {
+    expect(latencyBar(true, { ...row, traceEnd: 0 }, []).track).toBe('bg-api');
+  });
+
+  test('a log has no duration but still gets a mark at its place in the trace', () => {
+    // Dropping it — which the accounting pass does, correctly, since it costs no time — is
+    // how a row reads as "ignores its timing and sits at the beginning".
+    const [own] = latencyBar(true, { ...row, duration: 0 }, []).segments;
+    expect(own).toEqual({ leftPct: 25, widthPct: 0, color: 'bg-api', label: 'api', ns: 0 });
+  });
+
+  test('a row past the axis end pins to it rather than escaping the bar', () => {
+    // The axis is sized by spans, so a log seconds after the last span lands outside it.
+    const [own] = latencyBar(true, { ...row, startNs: 9_000, duration: 0 }, []).segments;
+    expect(own.leftPct).toBe(100);
   });
 });
 

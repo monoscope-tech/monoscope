@@ -1,4 +1,4 @@
-module System.Server (runMonoscope, mkServer, cancelAllConcurrently) where
+module System.Server (runMonoscope, mkServer, cancelAllConcurrently, hashedAssetMiddleware) where
 
 import BackgroundJobs qualified
 import Colourista.IO (blueMessage)
@@ -30,7 +30,7 @@ import OpenTelemetry.Instrumentation.Wai (newOpenTelemetryWaiMiddleware)
 import OpenTelemetry.Trace (TracerProvider)
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.Replay (processReplayEvents)
-import Pkg.DeriveUtils (assetHash, stripAssetHash)
+import Pkg.DeriveUtils (staticAssetHashes, stripAssetHash)
 import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Pkg.Queue qualified as Queue
 import ProcessMessage (processMessages)
@@ -44,7 +44,6 @@ import System.Config (
   EnvConfig (..),
   getAppContext,
  )
-import System.Directory (doesDirectoryExist, listDirectory)
 import System.Exit (ExitCode (ExitFailure))
 import System.Logging qualified as Logging
 import System.Posix.Process (exitImmediately)
@@ -70,23 +69,8 @@ runMonoscope tp =
       withLogger \l -> runServer l env{backgroundScope = Just backgroundScope} tp
 
 
--- | Content hash of every file under @static@, keyed by URL path
--- (@"public/assets/js/main.js" -> "2c58501e"@). Built once at boot; the image is
--- immutable in prod, and in dev ghcid restarts the server whenever an asset changes.
-staticAssetHashes :: IO (HashMap Text Text)
-staticAssetHashes = HM.fromList <$> go ""
-  where
-    abs_ rel = "static/" <> toString rel
-    go rel =
-      listDirectory (abs_ rel) >>= foldMapM \name -> do
-        let child = rel <> toText name
-        doesDirectoryExist (abs_ child) >>= \case
-          True -> go $ child <> "/"
-          False -> one . (child,) . assetHash <$> readFileLBS (abs_ child)
-
-
--- | Serve @…/main.2c58501e.js@ from @…/main.js@ on disk — the read side of
--- 'hashAssetFile'.
+-- | Serve @…/main.2c58501e.js@ from @…/main.js@ on disk — the read side of 'assetUrl',
+-- against the same 'staticAssetHashes' the URL was rendered from.
 --
 -- The hash is verified rather than merely stripped. During a rolling deploy a request
 -- for the new build's URL can land on a replica still holding the old file; answering
@@ -94,11 +78,11 @@ staticAssetHashes = HM.fromList <$> go ""
 -- replica that doesn't have the requested build must 404 instead. Paths that exist
 -- verbatim — Vite's own hashed output, and the unhashed URLs the TS bundle falls back
 -- to — are passed straight through.
-hashedAssetMiddleware :: HashMap Text Text -> Middleware
-hashedAssetMiddleware hashes app req respond
-  | not ("public/" `T.isPrefixOf` path) || HM.member path hashes = app req respond
+hashedAssetMiddleware :: Middleware
+hashedAssetMiddleware app req respond
+  | not ("public/" `T.isPrefixOf` path) || HM.member path staticAssetHashes = app req respond
   | Just (onDisk, claimed) <- stripAssetHash path =
-      if HM.lookup onDisk hashes == Just claimed
+      if HM.lookup onDisk staticAssetHashes == Just claimed
         then app req{pathInfo = T.splitOn "/" onDisk, rawPathInfo = encodeUtf8 $ "/" <> onDisk} respond
         else respond $ responseLBS status404 [] ""
   | otherwise = app req respond
@@ -156,7 +140,6 @@ runServer appLogger env tp = do
           , corsMaxAge = Just 86400
           }
   otelWaiMw <- liftIO newOpenTelemetryWaiMiddleware
-  assetHashes <- liftIO staticAssetHashes
   let wrappedServer =
         optionsMiddleware
           . cors (const $ Just corsPolicy)
@@ -164,7 +147,7 @@ runServer appLogger env tp = do
           . gzip compressionSettings
           . otelWaiMw
           -- . loggingMiddleware
-          . hashedAssetMiddleware assetHashes
+          . hashedAssetMiddleware
           $ server
   let bgJobWorker = BackgroundJobs.jobsWorkerInit appLogger env tp
       effectiveReplayBatch =

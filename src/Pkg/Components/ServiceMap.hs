@@ -193,15 +193,14 @@ nodeMenu_ elId =
 -- \"inspect\" and \"focus\" have no href: the first isolates the node's upstream and
 -- downstream in place, the second scopes the whole map to it and re-lays it out.
 --
--- \"traces\" and \"logs\" land on the same explorer — spans and logs are one surface here —
--- and differ only by the kind filter the renderer builds, so the labels have to say which
--- half of the service's telemetry you are asking for, not which product you are opening.
+-- \"events\" and \"logs\" land on the same explorer. Events includes a service's spans and
+-- logs; the logs action adds the kind filter.
 menuItems :: [(Text, Text, Text)]
 menuItems =
   [ ("focus", "diagram-project", "Focus on this service")
   , ("inspect", "arrow-right", "Inspect")
-  , ("traces", "list-tree", "View spans")
-  , ("logs", "file-lines", "View logs")
+  , ("events", "list-tree", "View events (spans & logs)")
+  , ("logs", "file-lines", "View logs only")
   , ("metrics", "chart-line", "View metrics")
   , ("monitors", "bell", "View monitors")
   ]

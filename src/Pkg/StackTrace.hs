@@ -10,9 +10,9 @@
 -- becomes a 'Frame' carrying only its text, so the rendered trace is always the whole trace.
 -- Recognising a frame is an upgrade (it gets a file, a line, a source snippet), never a
 -- filter.
-module Pkg.StackTrace (Frame (..), parseStackTrace, frameFromAttributes, framesFor, isInApp) where
+module Pkg.StackTrace (Frame (..), parseStackTrace, frameFromAttributes, framesFor, isInApp, revisionFor, looksLikeSha) where
 
-import Data.Char (isDigit)
+import Data.Char (isDigit, isHexDigit)
 import Data.Text qualified as T
 import Relude
 
@@ -236,3 +236,37 @@ framesFor :: (Text -> Maybe Text) -> Text -> [Frame]
 framesFor attr stack = case parseStackTrace stack of
   [] -> maybeToList (frameFromAttributes attr)
   fs -> fs
+
+
+-- | The revision the telemetry says it was built from, if it says at all.
+--
+-- Datadog's precedence, which is the order of the key list below: the service version when
+-- it is a commit sha, then the OTel @vcs.*@ convention, then the older @git.commit.sha@.
+-- A caller with no answer here reads the
+-- mapping's branch, which is today's source rather than the deploy that threw — right often
+-- enough to be worth showing, wrong exactly when someone is debugging an old release.
+--
+-- >>> let attrs kvs k = viaNonEmpty head [v | (k', v) <- kvs, k' == k]
+-- >>> revisionFor (attrs [("service.version", "1c0ffee")])
+-- Just "1c0ffee"
+--
+-- A semver release is a version, not a revision — resolving it as a git ref fetches whatever
+-- a tag of that name happens to point at, or nothing:
+--
+-- >>> revisionFor (attrs [("service.version", "v2.3.1"), ("git.commit.sha", "0123456789abcdef0123456789abcdef01234567")])
+-- Just "0123456789abcdef0123456789abcdef01234567"
+--
+-- >>> revisionFor (attrs [("vcs.repository.ref.revision", "abc1234"), ("git.commit.sha", "def5678")])
+-- Just "abc1234"
+-- >>> revisionFor (attrs [("service.version", "v2.3.1")])
+-- Nothing
+revisionFor :: (Text -> Maybe Text) -> Maybe Text
+revisionFor attr = asum [attr k >>= guarded looksLikeSha | k <- ["service.version", "vcs.repository.ref.revision", "git.commit.sha"]]
+
+
+-- | An abbreviated-or-full git object name: hex, and long enough not to be a version string.
+--
+-- >>> map looksLikeSha ["1c0ffee", "0123456789abcdef0123456789abcdef01234567", "v2.3.1", "abc", "1.2.3"]
+-- [True,True,False,False,False]
+looksLikeSha :: Text -> Bool
+looksLikeSha t = T.length t >= 7 && T.length t <= 40 && T.all isHexDigit t

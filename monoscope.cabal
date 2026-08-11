@@ -1186,6 +1186,7 @@ test-suite unit-tests
     , hasql-pool
     , hs-opentelemetry-instrumentation-auto
     , hspec
+    , http-types
     , lens
     , log-base
     , log-effectful
@@ -1199,6 +1200,7 @@ test-suite unit-tests
     , uuid
     , uuid-quasi
     , vector
+    , wai
   default-language: GHC2024
 
 benchmark utils-bench

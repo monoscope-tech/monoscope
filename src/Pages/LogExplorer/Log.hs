@@ -197,6 +197,22 @@ data SpanInfo = SpanInfo {spanId :: Text, parentId :: Maybe Text, traceIdVal :: 
 -- Just 100
 -- >>> (adj V.! 1) V.!? 3
 -- Just (Number 100.0)
+--
+-- A late point event does not stretch the axis. The span runs 100..1100; a log at 50000
+-- belongs to the trace but has no extent, and letting it set the window shrank every span
+-- in the latency column to a sliver at the left edge:
+--
+-- >>> let mk i par ns d k = V.fromList [AE.String i, AE.String "t1", maybe AE.Null AE.String par, AE.Number ns, AE.Number d, AE.String i, AE.String k, AE.Null, AE.String "2025-01-01T00:00:00Z"]
+-- >>> let (_, rw) = LL.buildTraceTree colIdxS 1 (V.fromList [mk "p" Nothing 100 1000 "span", mk "l" (Just "p") 50000 0 "log"])
+-- >>> fmap (\e -> (e.startTime, e.duration)) (viaNonEmpty head rw)
+-- Just (100,1000)
+--
+-- With nothing but point events there is no span to size the window by, so it keeps the
+-- full extent rather than collapsing to zero:
+--
+-- >>> let (_, rp) = LL.buildTraceTree colIdxS 1 (V.fromList [mk "l1" Nothing 100 0 "log", mk "l2" (Just "l1") 900 0 "log"])
+-- >>> fmap (.duration) (viaNonEmpty head rp)
+-- Just 800
 buildTraceTree :: HM.HashMap Text Int -> Int -> V.Vector (V.Vector AE.Value) -> (V.Vector (V.Vector AE.Value), [TraceTreeEntry])
 buildTraceTree colIdxMap queryResultCount rows
   -- An aggregate result (`| summarize …`) is one or two columns wide while the
@@ -286,8 +302,18 @@ buildTraceTree colIdxMap queryResultCount rows
                   st' = (min minS adjStart, max maxE adjEnd, (si.rowIdx, adjStart, adjDur) : adjs, treeAcc')
                   st'' = go adjStart adjEnd kids st'
                in go pStart pEnd xs st''
-          (minStart, maxEnd, adjustments', subtreeChildren) =
+          (fullStart, fullEnd, adjustments', subtreeChildren) =
             go root'.startNs rootEnd rootKids (root'.startNs, rootEnd, [rootAdj], initAcc)
+          -- Only rows that lasted set the window. A point event carries a time but no
+          -- extent, and one log emitted seconds later under the same trace used to define
+          -- the axis for every span in it: a 71ms trace whose tail log lands at +3.4s
+          -- became a 3452ms axis, crushing every real span into the first 2% of the
+          -- latency column. Logs still render — the client clamps them into the window —
+          -- they just no longer stretch it. A trace of nothing but point events keeps the
+          -- full extent, since there is no span to size it by.
+          (minStart, maxEnd) = case nonEmpty [(s, s + d) | (_, s, d) <- adjustments', d > 0] of
+            Just lasting -> (minimum1 $ fmap fst lasting, maximum1 $ fmap snd lasting)
+            Nothing -> (fullStart, fullEnd)
        in (TraceTreeEntry tid minStart (maxEnd - minStart) tst root'.spanId subtreeChildren, adjustments')
 
 

@@ -521,7 +521,7 @@ data LogExplorerRoutes' mode = LogExplorerRoutes'
   , -- Source around one stack frame. Its own endpoint rather than part of the detail panel
     -- because resolving it is a call out to the SCM API: a thirty-frame trace must not make
     -- the error panel wait on thirty round trips it may never need.
-    codeContextGet :: mode :- "code_context" :> QPT "file" :> QPI "line" :> QPT "service" :> Get '[HTML] (RespHeaders (Html ()))
+    codeContextGet :: mode :- "code_context" :> QPT "file" :> QPI "line" :> QPT "service" :> QPT "revision" :> Get '[HTML] (RespHeaders (Html ()))
   }
   deriving stock (Generic)
 

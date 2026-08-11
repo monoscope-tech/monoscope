@@ -899,8 +899,8 @@ sparkline_ buckets
 -- during an incident: the top of a stack is usually five frames of framework before anything
 -- you wrote. @snippetUrl@ is asked for a frame's surrounding source only when that frame is
 -- actually opened, because resolving it is a network call the error panel must not block on.
-stackTrace_ :: Projects.ProjectId -> Maybe Text -> (Text -> Maybe Text) -> Text -> Html ()
-stackTrace_ pid svcM attr stack = case StackTrace.framesFor attr stack of
+stackTrace_ :: Projects.ProjectId -> Maybe Text -> (Text -> Maybe Text) -> (Text -> Maybe Text) -> Text -> Html ()
+stackTrace_ pid svcM attr resAttr stack = case StackTrace.framesFor attr stack of
   [] -> pass
   frames ->
     let firstInApp = fst <$> find (StackTrace.isInApp . snd) (zip [0 :: Int ..] frames)
@@ -912,7 +912,17 @@ stackTrace_ pid svcM attr stack = case StackTrace.framesFor attr stack of
     snippetUrl f = do
       path <- f.file
       n <- f.line
-      pure $ "/p/" <> pid.toText <> "/code_context?file=" <> toUriStr path <> "&line=" <> show n <> foldMap (("&service=" <>) . toUriStr) svcM
+      pure
+        $ "/p/"
+        <> pid.toText
+        <> "/code_context?file="
+        <> toUriStr path
+        <> "&line="
+        <> show n
+        <> foldMap (("&service=" <>) . toUriStr) svcM
+        -- The revision the span reported, so the snippet is the source that threw rather
+        -- than the source as it is now.
+        <> foldMap (("&revision=" <>) . toUriStr) (StackTrace.revisionFor resAttr)
     -- Signature pins the block to `Html ()`. Without it Lucid's `Term` leaves each element
     -- polymorphic in its result, and the summary inside the details reads as a discarded
     -- value under -Wunused-do-bind.

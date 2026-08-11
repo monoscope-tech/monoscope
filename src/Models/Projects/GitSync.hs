@@ -18,6 +18,17 @@ module Models.Projects.GitSync (
   fetchGitTree,
   fetchFileContent,
   pushFileToGit,
+  RepoRef (..),
+  GitCreds (..),
+  mkGitCreds,
+  syncRepoRef,
+  syncCreds,
+  GitHubCredential (..),
+  GitHubCredentialId,
+  credentialCreds,
+  getGitHubCredentials,
+  getGitHubCredential,
+  upsertGitHubCredential,
   buildSyncPlan,
   dashboardToYaml,
   yamlToDashboard,
@@ -27,7 +38,7 @@ module Models.Projects.GitSync (
   getDashboardsPath,
   detectDefaultBranch,
   -- GitHub App integration
-  gitSyncToken,
+  githubToken,
   generateAppJWT,
   getInstallationToken,
   listInstallationRepos,
@@ -46,6 +57,7 @@ import Data.Default (Default (..), def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Wreq qualified as W
 import Data.Generics.Labels ()
+import Data.Generics.Product.Fields qualified as GL
 import Data.Map.Strict qualified as M
 import Data.Text qualified as T
 import Data.Time (UTCTime)
@@ -85,6 +97,9 @@ import "memory" Data.ByteArray qualified as BA
 
 
 type GitHubSyncId = UUIDId "github_sync"
+
+
+type GitHubCredentialId = UUIDId "github_credential"
 
 
 data GitHubSync = GitHubSync
@@ -145,12 +160,106 @@ decryptToken encKey encryptedB64 =
     $ B64.decodeBase64Untyped (encodeUtf8 encryptedB64)
 
 
--- | Decrypt a GitHubSync's access token if present. Returns Left with error if decryption fails.
--- For GitHub App installations (no accessToken), returns the sync unchanged.
-decryptSync :: ByteString -> GitHubSync -> Either Text GitHubSync
-decryptSync encKey sync = case sync.accessToken of
-  Nothing -> Right sync -- GitHub App installation, no token to decrypt
-  Just token -> decryptToken encKey token <&> \decrypted -> sync & #accessToken ?~ decrypted
+-- | Decrypt a row's stored PAT in place. A row with no token is a GitHub App installation
+-- and comes back unchanged. Generic over the row so a sync and a credential — which hold
+-- the token for the same reason — do not each need their own copy of this.
+-- @field'@ rather than the @#accessToken@ label: the label's instance cannot be discharged
+-- against a row type that is still a variable here.
+decryptAccessToken :: GL.HasField' "accessToken" a (Maybe Text) => ByteString -> a -> Either Text a
+decryptAccessToken encKey row = case row ^. GL.field' @"accessToken" of
+  Nothing -> Right row
+  Just token -> decryptToken encKey token <&> \plain -> row & GL.field' @"accessToken" ?~ plain
+
+
+-- | Drop a row whose PAT would not decrypt, rather than returning it with the ciphertext
+-- still in place — that ciphertext would be sent to GitHub as a password.
+decryptedOr :: (IOE :> es, Log :> es) => Text -> ProjectId -> Either Text a -> Eff es (Maybe a)
+decryptedOr what pid = either (\err -> logWarn ("GitHub " <> what <> " token decryption failed") (pid, err) $> Nothing) (pure . Just)
+
+
+-- | Which repo, at which revision. A 'GitHubSync' denotes one and so does a code mapping;
+-- the API calls take this rather than either record, so "read a file from GitHub" has one
+-- implementation instead of one per caller that happens to hold a different type.
+data RepoRef = RepoRef {owner :: Text, repo :: Text, ref :: Text}
+  deriving stock (Eq, Generic, Show)
+
+
+-- | How to authenticate against an account. The App installation covers every repo in the
+-- account, which is why this is separable from 'RepoRef' at all.
+--
+-- Two constructors rather than two nullable fields: the rows these come from are
+-- @CHECK (installation_id IS NOT NULL OR access_token IS NOT NULL)@, so "neither" cannot
+-- reach us and a token function should not have an arm claiming it can. The App wins over a
+-- PAT when a row somehow carries both, and 'mkGitCreds' is the one place that decides so.
+data GitCreds = AppInstallation Int64 | PersonalToken Text
+  deriving stock (Eq, Generic, Show)
+
+
+-- | Parse the two nullable auth columns into the two states they actually denote.
+--
+-- >>> mkGitCreds (Just 42) (Just "ghp_x")
+-- Just (AppInstallation 42)
+-- >>> mkGitCreds Nothing (Just "ghp_x")
+-- Just (PersonalToken "ghp_x")
+-- >>> mkGitCreds Nothing Nothing
+-- Nothing
+mkGitCreds :: Maybe Int64 -> Maybe Text -> Maybe GitCreds
+mkGitCreds instId token = AppInstallation <$> instId <|> PersonalToken <$> token
+
+
+syncRepoRef :: GitHubSync -> RepoRef
+syncRepoRef s = RepoRef s.owner s.repo s.branch
+
+
+syncCreds :: GitHubSync -> Maybe GitCreds
+syncCreds s = mkGitCreds s.installationId s.accessToken
+
+
+-- | A grant to read an account's repositories, held per project.
+--
+-- Separate from 'GitHubSync' because they answer different questions: a sync row is /the/
+-- repo monoscope keeps its own YAML in (one per project), while a project's services live in
+-- as many repos as they like. See migration 0124.
+data GitHubCredential = GitHubCredential
+  { id :: GitHubCredentialId
+  , projectId :: ProjectId
+  , account :: Text
+  -- ^ The org or user login the installation covers.
+  , installationId :: Maybe Int64
+  , accessToken :: Maybe Text
+  , createdAt :: UTCTime
+  , updatedAt :: UTCTime
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (FromRow, HI.DecodeRow, NFData, ToRow)
+  deriving (Entity) via (GenericEntity '[Schema "projects", TableName "github_credentials", PrimaryKey "id", FieldModifiers '[CamelToSnake]] GitHubCredential)
+
+
+credentialCreds :: GitHubCredential -> Maybe GitCreds
+credentialCreds c = mkGitCreds c.installationId c.accessToken
+
+
+getGitHubCredentials :: DB es => ProjectId -> Eff es [GitHubCredential]
+getGitHubCredentials pid = Hasql.interp (selectFrom @GitHubCredential <> [HI.sql| WHERE project_id = #{pid} ORDER BY account |])
+
+
+-- | One credential, with its PAT decrypted.
+getGitHubCredential :: (DB es, Log :> es) => ByteString -> ProjectId -> GitHubCredentialId -> Eff es (Maybe GitHubCredential)
+getGitHubCredential encKey pid cid =
+  Hasql.interp (selectFrom @GitHubCredential <> [HI.sql| WHERE project_id = #{pid} AND id = #{cid} |])
+    >>= maybe (pure Nothing) (decryptedOr "credential" pid . decryptAccessToken encKey)
+
+
+-- | Record a grant for an account, or update the one already held for it. Idempotent because
+-- the same installation arriving twice is the same grant, not a second one.
+upsertGitHubCredential :: DB es => ByteString -> ProjectId -> Text -> Maybe Int64 -> Maybe Text -> Eff es (Maybe GitHubCredential)
+upsertGitHubCredential encKey pid account instId token =
+  Hasql.interp
+    [HI.sql| INSERT INTO projects.github_credentials (project_id, account, installation_id, access_token)
+             VALUES (#{pid}, #{account}, #{instId}, #{encryptToken encKey <$> token})
+             ON CONFLICT (project_id, account)
+             DO UPDATE SET installation_id = EXCLUDED.installation_id, access_token = COALESCE(EXCLUDED.access_token, projects.github_credentials.access_token), updated_at = now()
+             RETURNING * |]
 
 
 -- DB Operations
@@ -162,8 +271,7 @@ getGitHubSync pid =
 
 getGitHubSyncDecrypted :: (DB es, Log :> es) => ByteString -> ProjectId -> Eff es (Maybe GitHubSync)
 getGitHubSyncDecrypted encKey pid =
-  getGitHubSync pid
-    >>= maybe (pure Nothing) (either (\err -> logWarn "GitHub sync token decryption failed" (pid, err) $> Nothing) (pure . Just) . decryptSync encKey)
+  getGitHubSync pid >>= maybe (pure Nothing) (decryptedOr "sync" pid . decryptAccessToken encKey)
 
 
 getGitHubSyncByRepo :: DB es => Text -> Text -> Eff es (Maybe GitHubSync)
@@ -242,9 +350,9 @@ updateDashboardGitInfo did path fsha = do
 
 
 -- GitHub API Operations
-fetchGitTree :: (IOE :> es, W.HTTP :> es) => Text -> GitHubSync -> Eff es (Either Text (Text, [TreeEntry]))
-fetchGitTree token sync = do
-  let url = "https://api.github.com/repos/" <> sync.owner <> "/" <> sync.repo <> "/git/trees/" <> sync.branch <> "?recursive=1"
+fetchGitTree :: (IOE :> es, W.HTTP :> es) => Text -> RepoRef -> Eff es (Either Text (Text, [TreeEntry]))
+fetchGitTree token r = do
+  let url = "https://api.github.com/repos/" <> r.owner <> "/" <> r.repo <> "/git/trees/" <> r.ref <> "?recursive=1"
   result <- try $ W.getWith (githubOpts token) (toString url)
   pure $ case result of
     Left (HttpExceptionRequest _ (StatusCodeException resp _)) | statusCode (responseStatus resp) == 404 -> Right ("", []) -- Empty repo = empty tree
@@ -257,9 +365,12 @@ fetchGitTree token sync = do
             _ -> Left $ "Invalid tree response: " <> decodeUtf8 body
 
 
-fetchFileContent :: (IOE :> es, W.HTTP :> es) => Text -> GitHubSync -> Text -> Eff es (Either Text ByteString)
-fetchFileContent token sync path = do
-  let url = "https://api.github.com/repos/" <> sync.owner <> "/" <> sync.repo <> "/contents/" <> path <> "?ref=" <> sync.branch
+-- | The blob at @path@ in @r.ref@ — a branch name or a commit sha, since the contents API
+-- takes either. Reading at the sha the telemetry reported is the difference between the
+-- source that threw and the source as it is today.
+fetchFileContent :: (IOE :> es, W.HTTP :> es) => Text -> RepoRef -> Text -> Eff es (Either Text ByteString)
+fetchFileContent token r path = do
+  let url = "https://api.github.com/repos/" <> r.owner <> "/" <> r.repo <> "/contents/" <> path <> "?ref=" <> r.ref
   result <- tryHttp $ W.getWith (githubOpts token) (toString url)
   pure $ result >>= \resp -> case resp ^. W.responseBody . key "content" . _String of
     "" -> Left "No content field"
@@ -271,25 +382,24 @@ fetchFileContent token sync path = do
 -- because every GitHub call in the app needs it, and a second copy would be a second place to
 -- get the App-before-PAT precedence wrong. Takes the app id and key rather than the whole
 -- 'System.Config.EnvConfig' so this module stays a leaf of the config graph.
-gitSyncToken :: (IOE :> es, W.HTTP :> es) => Text -> Text -> GitHubSync -> Eff es (Either Text Text)
-gitSyncToken appId privateKeyB64 sync = case (sync.installationId, sync.accessToken) of
-  (Just instId, _) ->
+githubToken :: (IOE :> es, W.HTTP :> es) => Text -> Text -> GitCreds -> Eff es (Either Text Text)
+githubToken appId privateKeyB64 = \case
+  AppInstallation instId ->
     getInstallationToken appId privateKeyB64 instId <&> \case
       Left err -> Left $ "Failed to get installation token: " <> err
       Right tok -> Right tok.token
-  (_, Just token) -> pure $ Right token
-  (Nothing, Nothing) -> pure $ Left "No authentication method configured"
+  PersonalToken token -> pure $ Right token
 
 
 -- | Push a file to GitHub. Returns (fileSha, treeSha) on success.
-pushFileToGit :: (IOE :> es, W.HTTP :> es) => Text -> GitHubSync -> Text -> ByteString -> Maybe Text -> Text -> Eff es (Either Text (Text, Text))
-pushFileToGit token sync path content existingSha message = do
-  let url = "https://api.github.com/repos/" <> sync.owner <> "/" <> sync.repo <> "/contents/" <> path
+pushFileToGit :: (IOE :> es, W.HTTP :> es) => Text -> RepoRef -> Text -> ByteString -> Maybe Text -> Text -> Eff es (Either Text (Text, Text))
+pushFileToGit token r path content existingSha message = do
+  let url = "https://api.github.com/repos/" <> r.owner <> "/" <> r.repo <> "/contents/" <> path
       payload =
         AE.object
           $ [ "message" AE..= message
             , "content" AE..= extractBase64 (B64.encodeBase64 content)
-            , "branch" AE..= sync.branch
+            , "branch" AE..= r.ref
             ]
           <> maybeToList (("sha" AE..=) <$> existingSha)
   result <- tryHttp $ W.putWith (githubOpts token) (toString url) payload

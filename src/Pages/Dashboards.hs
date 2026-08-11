@@ -101,7 +101,7 @@ import Pkg.Components.Table (BulkAction (..), Table (..))
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (UUIDId (..), hashAssetFile)
+import Pkg.DeriveUtils (UUIDId (..), assetUrl)
 import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), constantToKQLList, constantToSQLList, defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToComponents, presetRollup)
 import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Relude hiding (ask)
@@ -123,10 +123,10 @@ import Web.FormUrlEncoded (FromForm)
 -- | Head content for dashboard pages - loads highlight.js and sql-formatter for SQL preview
 dashboardHeadContent_ :: Html ()
 dashboardHeadContent_ = do
-  link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/deps/highlightjs/atom-one-dark.min.css")]
-  script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/highlight.min.js"), defer_ "true"] ("" :: Text)
-  script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/sql.min.js"), defer_ "true"] ("" :: Text)
-  script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/sql-formatter.min.js"), defer_ "true"] ("" :: Text)
+  link_ [rel_ "stylesheet", href_ (assetUrl "/public/assets/deps/highlightjs/atom-one-dark.min.css")]
+  script_ [src_ (assetUrl "/public/assets/deps/highlightjs/highlight.min.js"), defer_ "true"] ("" :: Text)
+  script_ [src_ (assetUrl "/public/assets/deps/highlightjs/sql.min.js"), defer_ "true"] ("" :: Text)
+  script_ [src_ (assetUrl "/public/assets/deps/highlightjs/sql-formatter.min.js"), defer_ "true"] ("" :: Text)
 
 
 folderFromPath :: Maybe Text -> Text

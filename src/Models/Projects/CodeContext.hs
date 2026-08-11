@@ -28,7 +28,8 @@ import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Effectful (Eff, (:>))
 import Effectful.Log (Log)
 import Hasql.Interpolate qualified as HI
-import Models.Projects.GitSync (GitHubSync (..), GitHubSyncId, fetchFileContent, getGitHubSyncDecrypted, gitSyncToken)
+import Models.Projects.GitSync (GitHubCredentialId, credentialCreds, fetchFileContent, getGitHubCredential, githubToken)
+import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.Projects (ProjectId)
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude
@@ -39,12 +40,21 @@ import System.Types (DB)
 type CodeMappingId = UUIDId "CodeMapping"
 
 
--- | How a stack-frame path becomes a path inside a repository. See migration 0123 for why
--- there are several per project rather than one root.
+-- | How a stack-frame path becomes a path inside a repository, and which repository that is.
+--
+-- Several per project rather than one root, because a project monitors several services and
+-- they do not share a repo. The repo is named here rather than referenced through the
+-- config-sync row: an App installation already reaches every repo in its account, so adding
+-- the tenth service repo costs a mapping, not an integration. See migration 0124.
 data CodeMapping = CodeMapping
   { id :: CodeMappingId
   , projectId :: ProjectId
-  , githubSyncId :: GitHubSyncId
+  , credentialId :: GitHubCredentialId
+  -- ^ The grant to read this repo with.
+  , owner :: Text
+  , repo :: Text
+  , ref :: Text
+  -- ^ Branch or sha to read when the telemetry does not report its own revision.
   , service :: Maybe Text
   -- ^ 'Nothing' matches any service, which is the common case.
   , pathPrefix :: Text
@@ -60,9 +70,9 @@ data CodeMapping = CodeMapping
 
 
 -- | The catch-all mapping: every frame, repo root, any service. Also what a test or doctest
--- overrides one field of, rather than spelling out eight.
+-- overrides one field of, rather than spelling out eleven.
 instance Default CodeMapping where
-  def = CodeMapping (UUIDId UUID.nil) (UUIDId UUID.nil) (UUIDId UUID.nil) Nothing "" "" epoch epoch
+  def = CodeMapping (UUIDId UUID.nil) (UUIDId UUID.nil) (UUIDId UUID.nil) "" "" "main" Nothing "" "" epoch epoch
     where
       epoch = UTCTime (fromGregorian 1970 1 1) 0
 
@@ -79,16 +89,16 @@ data Snippet = Snippet
 
 
 getCodeMappings :: DB es => ProjectId -> Eff es [CodeMapping]
-getCodeMappings pid = Hasql.interp [HI.sql|SELECT id, project_id, github_sync_id, service, path_prefix, source_root, created_at, updated_at FROM projects.code_mappings WHERE project_id = #{pid.unUUIDId} ORDER BY length(path_prefix) DESC|]
+getCodeMappings pid = Hasql.interp [HI.sql|SELECT id, project_id, credential_id, owner, repo, ref, service, path_prefix, source_root, created_at, updated_at FROM projects.code_mappings WHERE project_id = #{pid.unUUIDId} ORDER BY length(path_prefix) DESC|]
 
 
-insertCodeMapping :: DB es => ProjectId -> GitHubSyncId -> Maybe Text -> Text -> Text -> Eff es ()
-insertCodeMapping pid syncId svc prefix root =
+insertCodeMapping :: DB es => ProjectId -> GitHubCredentialId -> GitSync.RepoRef -> Maybe Text -> Text -> Text -> Eff es ()
+insertCodeMapping pid credId r svc prefix root =
   Hasql.interpExecute_
-    [HI.sql|INSERT INTO projects.code_mappings (project_id, github_sync_id, service, path_prefix, source_root)
-            VALUES (#{pid.unUUIDId}, #{syncId.unUUIDId}, #{svc}, #{prefix}, #{root})
+    [HI.sql|INSERT INTO projects.code_mappings (project_id, credential_id, owner, repo, ref, service, path_prefix, source_root)
+            VALUES (#{pid.unUUIDId}, #{credId.unUUIDId}, #{r.owner}, #{r.repo}, #{r.ref}, #{svc}, #{prefix}, #{root})
             ON CONFLICT (project_id, service, path_prefix)
-            DO UPDATE SET github_sync_id = EXCLUDED.github_sync_id, source_root = EXCLUDED.source_root, updated_at = now()|]
+            DO UPDATE SET credential_id = EXCLUDED.credential_id, owner = EXCLUDED.owner, repo = EXCLUDED.repo, ref = EXCLUDED.ref, source_root = EXCLUDED.source_root, updated_at = now()|]
 
 
 deleteCodeMapping :: DB es => ProjectId -> CodeMappingId -> Eff es ()
@@ -146,25 +156,29 @@ resolveRepoPath mappings svc path = do
 -- clamped to the file.
 --
 -- >>> sliceAround 2 3 ["a", "b", "c", "d", "e", "f", "g"]
--- Snippet {path = "", startLine = 1, focusLine = 3, body = ["a","b","c","d","e"]}
+-- Just (Snippet {path = "", startLine = 1, focusLine = 3, body = ["a","b","c","d","e"]})
 --
 -- Clamps at both ends rather than shifting the window, so the focus line stays where the
 -- gutter says it is:
 --
 -- >>> sliceAround 2 1 ["a", "b", "c", "d"]
--- Snippet {path = "", startLine = 1, focusLine = 1, body = ["a","b","c"]}
+-- Just (Snippet {path = "", startLine = 1, focusLine = 1, body = ["a","b","c"]})
 -- >>> sliceAround 2 4 ["a", "b", "c", "d"]
--- Snippet {path = "", startLine = 2, focusLine = 4, body = ["b","c","d"]}
+-- Just (Snippet {path = "", startLine = 2, focusLine = 4, body = ["b","c","d"]})
 --
--- A line number outside the file yields no snippet — a build whose line numbers do not match
--- the checked-out revision must say so, not render an arbitrary window as the failure:
+-- A line number outside the file yields 'Nothing' — a build whose line numbers do not match
+-- the checked-out revision must say so, not render an arbitrary window as the failure. It is
+-- absence rather than an empty 'Snippet' so no caller has to know that @null body@ is how
+-- this function reports failure:
 --
 -- >>> sliceAround 2 99 ["a", "b"]
--- Snippet {path = "", startLine = 0, focusLine = 99, body = []}
-sliceAround :: Int -> Int -> [Text] -> Snippet
+-- Nothing
+-- >>> sliceAround 2 0 ["a", "b"]
+-- Nothing
+sliceAround :: Int -> Int -> [Text] -> Maybe Snippet
 sliceAround ctx focus ls
-  | focus < 1 || focus > length ls = Snippet "" 0 focus []
-  | otherwise = Snippet "" start focus (take (stop - start + 1) (drop (start - 1) ls))
+  | focus < 1 || focus > length ls = Nothing
+  | otherwise = Just $ Snippet "" start focus (take (stop - start + 1) (drop (start - 1) ls))
   where
     start = max 1 (focus - ctx)
     stop = min (length ls) (focus + ctx)
@@ -181,21 +195,28 @@ fetchSnippet
   => Config.EnvConfig
   -> ProjectId
   -> Maybe Text
+  -> Maybe Text
+  -- ^ The revision the telemetry reported, if it reported one. Wins over the mapping's ref:
+  -- the snippet must be the source that threw, not the source as it is now.
   -> Text
   -> Int
   -> Eff es (Either Text Snippet)
-fetchSnippet cfg pid svc path lineNo = do
-  mappings <- getCodeMappings pid
-  case resolveRepoPath mappings svc path of
-    Nothing -> pure $ Left "No code mapping covers this path."
-    Just (cm, repoPath) ->
-      getGitHubSyncDecrypted (encodeUtf8 cfg.apiKeyEncryptionSecretKey) pid >>= \case
-        Just sync
-          | sync.id == cm.githubSyncId ->
-              gitSyncToken cfg.githubAppId cfg.githubAppPrivateKey sync >>= \case
-                Left err -> pure $ Left err
-                Right token ->
-                  fetchFileContent token sync repoPath <&> \case
-                    Left err -> Left $ "Could not read " <> repoPath <> ": " <> err
-                    Right blob -> Right (sliceAround 5 lineNo (lines (decodeUtf8 blob))){path = repoPath}
-        _ -> pure $ Left "The repository this mapping points at is no longer linked."
+fetchSnippet cfg pid svc revM path lineNo = runExceptT do
+  mappings <- lift $ getCodeMappings pid
+  (cm, repoPath) <- hoistEither $ maybeToRight "No code mapping covers this path." $ resolveRepoPath mappings svc path
+  let repoRef = GitSync.RepoRef cm.owner cm.repo (fromMaybe cm.ref revM)
+  cred <-
+    ExceptT
+      $ maybeToRight "The GitHub credential this mapping uses is no longer configured."
+      <$> getGitHubCredential (encodeUtf8 cfg.apiKeyEncryptionSecretKey) pid cm.credentialId
+  creds <- hoistEither $ maybeToRight "That GitHub credential has neither an installation nor a token." $ credentialCreds cred
+  token <- ExceptT $ githubToken cfg.githubAppId cfg.githubAppPrivateKey creds
+  blob <-
+    ExceptT
+      $ first (\err -> "Could not read " <> cm.owner <> "/" <> cm.repo <> "/" <> repoPath <> " at " <> repoRef.ref <> ": " <> err)
+      <$> fetchFileContent token repoRef repoPath
+  snippet <-
+    hoistEither
+      $ maybeToRight ("Line " <> show lineNo <> " is past the end of " <> repoPath <> " at " <> repoRef.ref <> " — the build that threw is probably not this revision.")
+      $ sliceAround 5 lineNo (lines (decodeUtf8 blob))
+  pure snippet{path = repoPath}

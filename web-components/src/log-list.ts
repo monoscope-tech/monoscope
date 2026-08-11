@@ -2226,7 +2226,7 @@ export class LogList extends LitElement {
           rowData._latencyCache.expanded !== expanded ||
           rowData._latencyCache.dim !== this.latencyDim
         ) {
-          const { traceStart, startNs, duration, childrenTimeSpans } = rowData;
+          const { traceStart, traceEnd, startNs, duration, childrenTimeSpans } = rowData;
           // Colour keyed on the chosen dimension, not on `span_name`. Keying on the span name
           // made this a per-operation palette wearing the name "service colors": two spans in
           // one service got two colours, the same operation in two services got one, and any
@@ -2241,7 +2241,13 @@ export class LogList extends LitElement {
             const label = dimOf(data) || 'unknown';
             return { startNs, duration, label, color: colorOf(label) };
           });
-          const segments = latencySegments({ startNs, duration }, chil);
+          // The title always describes the row itself, whichever axis the bar is drawn on.
+          const ownSegments = latencySegments({ startNs, duration }, chil);
+          const { track, segments, frame } = latencyBar(
+            !!expanded,
+            { startNs, duration, traceStart, traceEnd, label: dimOf(dataArr) || 'unknown', color },
+            chil
+          );
 
           // Extract right-aligned badges from summary array
           const summaryArr = this.parseSummaryData(dataArr);
@@ -2317,9 +2323,10 @@ export class LogList extends LitElement {
               <div class="flex justify-end items-center gap-1 text-textWeak pl-1 rounded-lg bg-bgBase" style="min-width:${currentWidth}px">
                 ${rightAlignedBadges}
                 ${spanLatencyBreakdown({
-                  color,
+                  track,
                   segments,
-                  title: latencyTitle(this.latencyDim, { startNs, duration, traceStart }, segments),
+                  frame,
+                  title: latencyTitle(this.latencyDim, { startNs, duration, traceStart }, ownSegments),
                   barWidth: currentWidth - 12,
                 })}
                 <span class="w-1"></span>
@@ -3210,17 +3217,12 @@ const KIND_COLORS: Record<string, string> = {
 export type LatencySegment = { leftPct: number; widthPct: number; color: string; label: string; ns: number };
 
 /**
- * A row's direct children, laid out inside the row's OWN duration.
+ * Children laid out inside a window, as a percentage of it.
  *
- * The bar used to sit on the trace-wide axis, which is why child rows were unreadable: a 3ms
- * child inside a 2s trace is a sub-pixel sliver, and the "frame" drawn around it marked the
- * bar's own bounds — three decorative lines restating the bar. Here the row is the axis, so
- * every row gets the full width and the gaps between its children are its self time. Trace
- * position moves to the tooltip, which costs no pixels.
- *
- * Children are clamped to the row's window: a child whose clock skewed outside its parent
- * must not paint outside the bar, and a child that ends after its parent is still time the
- * parent waited on.
+ * The window is the row's own duration for a collapsed row and the whole trace for an
+ * expanded one — see `latencyBar`. Children are intersected with the window: a child whose
+ * clock skewed outside it must not paint outside the bar, and a child that ends after its
+ * parent is still time the parent waited on.
  */
 export function latencySegments(
   row: { startNs: number; duration: number },
@@ -3247,6 +3249,49 @@ export function latencySegments(
   return segments;
 }
 
+/**
+ * The bar for one row: which track it sits on, and what paints over it.
+ *
+ * Expanding a trace turns the column back into a waterfall, which is the whole point of
+ * expanding it — the child rows are a breakdown of one request, and a breakdown needs a
+ * shared axis, so every row of an expanded trace draws its own span positioned in the trace
+ * with the trace as the empty track. A collapsed row has no siblings to line up with, so it
+ * stays its own axis: full-width track (its self time) with its direct children inside it.
+ *
+ * `frame` is the |---[]---| rule the trace axis needs and the row axis doesn't: it marks
+ * where the trace begins and ends, which is what makes a short span read as short and
+ * placed rather than just small. On the row axis the bar already fills that range, so the
+ * same three lines would only restate the bar's own bounds.
+ */
+export function latencyBar(
+  expanded: boolean,
+  row: { startNs: number; duration: number; traceStart: number; traceEnd: number; label: string; color: string },
+  children: { startNs: number; duration: number; label: string; color: string }[]
+): { track: string; segments: LatencySegment[]; frame: boolean } {
+  if (!(expanded && row.traceEnd > 0)) return { track: row.color, segments: latencySegments(row, children), frame: false };
+  const axis = { startNs: row.traceStart, duration: row.traceEnd };
+  return { track: 'bg-fillWeak', segments: [rowMarker(axis, row), ...latencySegments(axis, children)], frame: true };
+}
+
+/**
+ * The row's own span as a mark on the trace axis.
+ *
+ * Unlike `latencySegments` this never drops the row. A log has a place in the trace but no
+ * extent, and a row the axis no longer covers — the axis is sized by spans, so a log seconds
+ * after the last one sits past its end — still happened. A row that renders nothing at all is
+ * how "everything ignores its timing and stays at the beginning" reads. Position is clamped
+ * into the window, so a late log pins to the end rather than escaping the bar.
+ */
+function rowMarker(
+  axis: { startNs: number; duration: number },
+  row: { startNs: number; duration: number; label: string; color: string }
+): LatencySegment {
+  const pct = (ns: number) => Math.min(100, Math.max(0, ((ns - axis.startNs) / axis.duration) * 100));
+  const leftPct = pct(row.startNs);
+  const ns = Math.max(0, row.duration);
+  return { leftPct, widthPct: pct(row.startNs + ns) - leftPct, color: row.color, label: row.label, ns };
+}
+
 /** Human-readable nanoseconds, matching the duration badge's vocabulary. */
 export const fmtNs = (ns: number): string =>
   ns >= 1e9 ? `${(ns / 1e9).toFixed(2)}s` : ns >= 1e6 ? `${Math.round(ns / 1e6)}ms` : ns >= 1e3 ? `${Math.round(ns / 1e3)}\u00b5s` : `${Math.round(ns)}ns`;
@@ -3270,27 +3315,44 @@ export function latencyTitle(dim: LatencyDim, row: { startNs: number; duration: 
 }
 
 function spanLatencyBreakdown({
-  color,
+  track,
   segments,
   title,
   barWidth,
+  frame,
 }: {
-  color: string;
+  track: string;
   segments: LatencySegment[];
   title: string;
   barWidth: number;
+  frame: boolean;
 }) {
-  // The track IS the row's self time — children paint over it, so a gap between two children
-  // is time the row spent on its own rather than an absence of information.
+  // On the row axis the track IS the row's self time, so a gap between two children is time
+  // the row spent on its own rather than an absence of information; on the trace axis it is
+  // the rest of the trace, and the row's own span is the first segment painted on it.
+  //
+  // The floor is 3px rather than a percentage: a percentage floor of a short span is still
+  // sub-pixel on a 120px column, which renders as nothing at all. Pushing left back by the
+  // floored width keeps a mark at the far end inside the bar instead of clipped away.
+  const minPct = (3 / Math.max(barWidth, 1)) * 100;
   return html`<div class="-mt-1 shrink-0" title=${title} aria-label=${title}>
-    <div class=${`flex h-5 relative overflow-hidden rounded-sm ${color}`} style=${`width:${barWidth}px`}>
-      ${segments.map(
-        s =>
-          html`<div
-            class=${`h-full absolute top-0 ${s.color}`}
-            style=${`left:${s.leftPct}%; width:${Math.max(s.widthPct, 0.5)}%`}
-          ></div>`
-      )}
+    <div class=${`flex h-5 relative rounded-sm overflow-hidden ${track}`} style=${`width:${barWidth}px`}>
+      ${segments.map(s => {
+        const width = Math.max(s.widthPct, minPct);
+        return html`<div
+          class=${`h-full absolute top-0 rounded-sm ${s.color}`}
+          style=${`left:${Math.min(s.leftPct, 100 - width)}%; width:${width}%`}
+        ></div>`;
+      })}
+      <!-- |---[]---| : the trace's own start and end, and the timeline between them. Without it
+           a span two thirds of the way into a trace is just a small block somewhere. -->
+      ${frame
+        ? html`<div class="absolute inset-0 pointer-events-none">
+            <div class="absolute top-0 left-0 h-full border-l-2 border-strokeBrand-strong shadow-[0_0_4px_var(--color-strokeBrand-weak)]"></div>
+            <div class="absolute top-0 right-0 h-full border-r-2 border-strokeBrand-strong shadow-[0_0_4px_var(--color-strokeBrand-weak)]"></div>
+            <div class="absolute top-1/2 -translate-y-1/2 left-0 w-full h-px bg-strokeBrand-strong shadow-[0_0_2px_var(--color-strokeBrand-weak)]"></div>
+          </div>`
+        : nothing}
     </div>
   </div>`;
 }

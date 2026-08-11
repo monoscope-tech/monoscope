@@ -331,17 +331,15 @@ export const serviceMapFilter = (q: string, id?: string): void => {
 (window as any).serviceMapFilter = serviceMapFilter;
 
 /**
- * Where a node-menu action goes. Spans and logs are one table and one surface here (`pSource`
- * knows only `spans` and `metrics`), so the two explorer entries differ by KIND rather than by
- * destination — and both use a viz type that exists. `viz_type=traces` did not: an unknown viz
- * type falls through to the default, which is why "View in trace search" silently landed on the
- * plain log list, indistinguishable from "View logs".
+ * Where a node-menu action goes. Spans and logs are one explorer surface (`pSource` knows only
+ * `spans` and `metrics`); events needs no kind filter, while logs does. Both use a viz type that
+ * exists. `viz_type=traces` did not: an unknown type falls through to the default.
  */
 export const menuHref = (base: string, action: string, key: string): string => {
-  const explorer = (kind: string) =>
-    `${base}/log_explorer?query=${encodeURIComponent(`resource.service.name=="${key}" AND ${kind}`)}&viz_type=logs`;
+  const explorer = (kind?: string) =>
+    `${base}/log_explorer?query=${encodeURIComponent(`resource.service.name=="${key}"${kind ? ` AND ${kind}` : ''}`)}&viz_type=logs`;
   switch (action) {
-    case 'traces': return explorer('kind!="log"');
+    case 'events': return explorer();
     case 'logs': return explorer('kind=="log"');
     case 'metrics': return `${base}/metrics?metric_source=${encodeURIComponent(key)}`;
     case 'monitors': return `${base}/monitors`;

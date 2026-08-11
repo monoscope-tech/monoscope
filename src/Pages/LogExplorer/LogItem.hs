@@ -401,7 +401,7 @@ detailTabs pid item aptSp =
         (badge "Errors" "badge badge-error badge-sm" (length spanErrors))
         "group-has-[.tab-errors:checked]/dtab:block w-full whitespace-wrap"
         "errors-content"
-        (renderErrors pid (Telemetry.spanServiceName item) (\k -> atMapText k (unAesonTextMaybe item.attributes)) spanErrors)
+        (renderErrors pid (Telemetry.spanServiceName item) (\k -> atMapText k (unAesonTextMaybe item.attributes)) (\k -> atMapText k (unAesonTextMaybe item.resource)) spanErrors)
     , tab
         (not isLog)
         "tab-logs"
@@ -462,8 +462,12 @@ httpDetailTabs item aptSp = (activeMarker, tabs)
           )
 
 
-renderErrors :: Projects.ProjectId -> Maybe Text -> (Text -> Maybe Text) -> [AE.Value] -> Html ()
-renderErrors pid svcM attr errs =
+-- | @attr@ reads the span's attributes (where @code.*@ lives) and @resAttr@ its resource
+-- (where @service.version@ and the @vcs.*@\/@git.*@ revision keys live). Two lookups rather
+-- than one because they are two different columns: passing the span map for both is what
+-- made 'StackTrace.revisionFor' answer 'Nothing' for every span it was ever given.
+renderErrors :: Projects.ProjectId -> Maybe Text -> (Text -> Maybe Text) -> (Text -> Maybe Text) -> [AE.Value] -> Html ()
+renderErrors pid svcM attr resAttr errs =
   div_ [class_ "flex flex-col mt-4 gap-3 w-full"] $ ifor_ errs \idx err ->
     div_ [class_ "w-full border border-strokeError-strong/40 rounded-lg overflow-hidden bg-fillError-weak/30"] do
       let (tye, message, stacktrace) = getErrorDetails err
@@ -491,7 +495,7 @@ renderErrors pid svcM attr errs =
           faSprite_ "chevron-right" "regular" "w-3 h-3 transition-transform group-open/st:rotate-90"
           "Stack trace"
           span_ [class_ "text-2xs text-textWeak/70"] $ toHtml @Text $ "(" <> show (length frames) <> " frames)"
-        div_ [class_ "px-3 pb-3 max-h-96 overflow-auto c-scroll"] $ stackTrace_ pid svcM attr stacktrace
+        div_ [class_ "px-3 pb-3 max-h-96 overflow-auto c-scroll"] $ stackTrace_ pid svcM attr resAttr stacktrace
   where
     getErrorDetails :: AE.Value -> (Text, Text, Text)
     getErrorDetails ae = (fld "type", fld "message", fld "stacktrace")

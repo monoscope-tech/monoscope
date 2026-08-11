@@ -115,7 +115,7 @@ import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
 import Network.URI (escapeURIString, isUnescapedInURI)
 import Numeric (showHex)
-import Pkg.DeriveUtils (hashAssetFile)
+import Pkg.DeriveUtils (assetUrl)
 import Relude hiding (notElem, show)
 import Servant hiding ((:>))
 import Text.MMark qualified as MMark
@@ -296,9 +296,14 @@ truncateMiddle n t
 faSprite_ :: Monad m => Text -> Text -> Text -> HtmlT m ()
 faSprite_ mIcon faType classes = svg_ [class_ $ "icon " <> classes] $ Svg.use_ [href_ $ sprite <> "#" <> mIcon]
   where
-    sprite = case faType of
-      "solid" -> $(hashAssetFile "/public/assets/svgs/fa-sprites/solid.svg")
-      _ -> $(hashAssetFile "/public/assets/svgs/fa-sprites/regular.svg")
+    -- Top-level, so the hash lookup happens once per process rather than per icon —
+    -- a page renders thousands of these.
+    sprite = if faType == "solid" then spriteSolidUrl else spriteRegularUrl
+
+
+spriteSolidUrl, spriteRegularUrl :: Text
+spriteSolidUrl = assetUrl "/public/assets/svgs/fa-sprites/solid.svg"
+spriteRegularUrl = assetUrl "/public/assets/svgs/fa-sprites/regular.svg"
 
 
 -- | Type-safe loading indicator size

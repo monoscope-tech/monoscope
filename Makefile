@@ -176,6 +176,10 @@ test-unit:
 test-doctests:
 	cabal test doctests -j --ghc-options="-O0" --test-show-details=direct
 
+# USE_EXTERNAL_DB=true is load-bearing on every target below that touches the DB: it selects
+# the TimescaleDB container. Drop it and the harness boots tmp-postgres from the homebrew
+# postgres on PATH, which has no timescaledb_toolkit — migration 0001 fails and EVERY example
+# dies in setup with SomePostgreSqlException, looking for all the world like a broken change.
 test-integration:
 	LOG_LEVEL=attention USE_EXTERNAL_DB=true cabal test integration-tests -j --ghc-options="-O0" --test-show-details=direct --test-options='--color --jobs=$(NCPUS)'
 

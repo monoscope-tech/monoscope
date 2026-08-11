@@ -84,3 +84,13 @@ because they mean something; service colours stay hashed, because they only iden
 5. Duration text was **not** added: `generateSummary` already emits a `duration`
    right-badge that renders in this very cell, so the number the column "never showed" was
    already there.
+
+## Correction (2026-08-11)
+
+"The row is the axis" was applied to *every* row, which flattened the trace breakdown an
+expanded row is there to show: child rows lost their position and the `|---[]---|` frame,
+so the rows no longer read as one request. Restored, scoped by expansion state
+(`latencyBar`): an expanded trace puts every one of its rows back on the **trace** axis,
+with the frame marking the trace bounds — a short span must read as short *and placed*.
+A collapsed row keeps the row-relative composition, which is what fixed the sub-pixel
+sliver: it has no siblings to line up with, so the trace axis buys it nothing.

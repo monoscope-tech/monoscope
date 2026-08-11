@@ -68,6 +68,16 @@ Pure, total, and doctested per family — this is exactly the isolated-pure-func
 doctests are for. Unparseable lines survive as `Frame`s with no file/line so the rendered
 trace never loses text.
 
+> **Superseded (2026-08-11).** `github_sync_id` below was wrong: that table is
+> `UNIQUE (project_id)` and holds the repo monoscope syncs its *own* YAML with, so hanging
+> mappings off it made every repo but that one unreachable — and `fetchSnippet` rejected any
+> mapping not pointing at it. A project's services live in as many repos as they like, and
+> that is a different question from where its config lives. Migration 0124 splits them:
+> `projects.github_credentials` (many per project, one per GitHub account, holding the App
+> installation — which already reaches every repo in that account) authorises a mapping that
+> names `owner/repo/ref` itself. Adding the tenth service repo now costs a mapping, not an
+> integration. `github_sync` is untouched.
+
 ### Layer 2 — Resolution
 
 `Models.Projects.CodeContext`: a **code mapping** per project —
@@ -135,6 +145,13 @@ rather than being copied.
   issues carry a synthesised stack (see `haskell_backtraces_unavailable`), a different shape
   from a span's `exception.stacktrace`; pointing the same renderer at it without checking
   what those strings actually look like would be guessing. Left as follow-up.
+- **Resolution step 1 (SDK-attached snippet) is not implemented.** `Frame` carries
+  `raw`/`function`/`file`/`line` only, so a frame never arrives with source already on it and
+  every resolvable frame costs a fetch. Nothing in the OTel exception conventions populates
+  it today; revisit if an SDK starts attaching context lines.
+- **No "test a path" box in settings.** The mapping editor lists and adds mappings; there is
+  no control that takes a frame path and shows what it resolves to. `resolveRepoPath` is
+  pure and doctested, so this is a renderer away — it just did not ship in this pass.
 - **No cache yet.** `fetchSnippet` hits the GitHub API per frame opened. `intersect once`
   plus one-frame-open-by-default keeps that at roughly one call per error viewed, but a hot
   issue viewed repeatedly will re-fetch. Add a `Pkg.QueryCache` layer keyed on

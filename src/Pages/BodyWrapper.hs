@@ -17,7 +17,7 @@ import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pages.CommandPalette qualified as CommandPalette
 import Pages.Components qualified as Components
-import Pkg.DeriveUtils (hashAssetFile, viteAssetFile)
+import Pkg.DeriveUtils (assetUrl, viteAssetFile)
 import PyF
 import Relude hiding (ask)
 import System.Config (AuthContext (..), DeploymentEnv (Dev), EnvConfig (..))
@@ -209,7 +209,7 @@ bodyWrapper bcfg child = do
       link_ [rel_ "dns-prefetch", href_ "https://unpkg.com"]
 
       -- Preload critical CSS
-      link_ [rel_ "preload", href_ $(hashAssetFile "/public/assets/css/tailwind.min.css"), term "as" "style"]
+      link_ [rel_ "preload", href_ (assetUrl "/public/assets/css/tailwind.min.css"), term "as" "style"]
 
       -- View Transitions API (Chrome 111+, graceful fallback for others)
       meta_ [name_ "view-transition", content_ "same-origin"]
@@ -226,43 +226,43 @@ bodyWrapper bcfg child = do
       let css href = link_ [rel_ "stylesheet", type_ "text/css", href_ href]
           deferScript src = script_ [src_ src, defer_ "true"] ("" :: Text)
       mapM_ css
-        $ [ $(hashAssetFile "/public/assets/css/thirdparty/notyf3.min.css")
-          , $(hashAssetFile "/public/assets/css/thirdparty/tagify.min.css")
+        $ [ assetUrl "/public/assets/css/thirdparty/notyf3.min.css"
+          , assetUrl "/public/assets/css/thirdparty/tagify.min.css"
           ]
-        <> [$(hashAssetFile "/public/assets/deps/gridstack/gridstack.min.css") | bcfg.needsGridStack]
-        <> [ $(hashAssetFile "/public/assets/css/thirdparty/rrweb.css")
-           , $(hashAssetFile "/public/assets/css/tailwind.min.css")
-           , $(hashAssetFile "/public/assets/web-components/dist/css/index.css")
+        <> [assetUrl "/public/assets/deps/gridstack/gridstack.min.css" | bcfg.needsGridStack]
+        <> [ assetUrl "/public/assets/css/thirdparty/rrweb.css"
+           , assetUrl "/public/assets/css/tailwind.min.css"
+           , assetUrl "/public/assets/web-components/dist/css/index.css"
            ]
 
       fold bcfg.headContent
 
       mapM_
         deferScript
-        [ $(hashAssetFile "/public/assets/deps/htmx/htmx-4.0.0-beta6.min.js")
+        [ assetUrl "/public/assets/deps/htmx/htmx-4.0.0-beta6.min.js"
         , -- Must load immediately after htmx: restores implicit attribute inheritance
           -- (v4 requires `:inherited` otherwise) and 4xx/5xx no-swap. The app's own
           -- listeners use v4 event names directly, so the shim's legacy-name replay is
           -- only load-bearing for third-party code (hyperscript binds the legacy load event).
-          $(hashAssetFile "/public/assets/deps/htmx/htmx-2-compat.js")
-        , $(hashAssetFile "/public/assets/deps/htmx/hx-preload-4.js")
-        , $(hashAssetFile "/public/assets/js/main.js")
+          assetUrl "/public/assets/deps/htmx/htmx-2-compat.js"
+        , assetUrl "/public/assets/deps/htmx/hx-preload-4.js"
+        , assetUrl "/public/assets/js/main.js"
         , -- Dropped with the htmx 4 upgrade: multi-swap and response-targets had no
           -- users (no `multi:` swaps, no hx-target-4xx/5xx) and no v4 port; idiomorph
           -- is superseded by built-in outerMorph; preload.js and json-enc-2.js call the
           -- removed defineExtension API (v4 preload ships above; json-enc and
           -- forward-page-params are re-registered in main.ts via registerExtension).
-          $(hashAssetFile "/public/assets/js/thirdparty/_hyperscript_web0_9_93.min.js")
-        , $(hashAssetFile "/public/assets/deps/tagify/tagify.min.js")
-        , $(hashAssetFile "/public/assets/js/thirdparty/notyf3.min.js")
+          assetUrl "/public/assets/js/thirdparty/_hyperscript_web0_9_93.min.js"
+        , assetUrl "/public/assets/deps/tagify/tagify.min.js"
+        , assetUrl "/public/assets/js/thirdparty/notyf3.min.js"
         ]
-      script_ [src_ $(hashAssetFile "/public/assets/deps/lit/lit-html.js"), type_ "module", defer_ "true"] ("" :: Text)
+      script_ [src_ (assetUrl "/public/assets/deps/lit/lit-html.js"), type_ "module", defer_ "true"] ("" :: Text)
       mapM_ deferScript
-        $ [$(hashAssetFile "/public/assets/deps/gridstack/gridstack-all.js") | bcfg.needsGridStack]
-        <> [ $(hashAssetFile "/public/assets/deps/easepick/bundle.min.js")
-           , $(hashAssetFile "/public/assets/js/thirdparty/luxon.min.js")
-           , $(hashAssetFile "/public/assets/js/thirdparty/popper2_11_4.min.js")
-           , $(hashAssetFile "/public/assets/js/thirdparty/tippy6_3_7.umd.min.js")
+        $ [assetUrl "/public/assets/deps/gridstack/gridstack-all.js" | bcfg.needsGridStack]
+        <> [ assetUrl "/public/assets/deps/easepick/bundle.min.js"
+           , assetUrl "/public/assets/js/thirdparty/luxon.min.js"
+           , assetUrl "/public/assets/js/thirdparty/popper2_11_4.min.js"
+           , assetUrl "/public/assets/js/thirdparty/tippy6_3_7.umd.min.js"
            ]
 
       when (isProd && bcfg.config.enableBrowserMonitoring) $ script_ [src_ "https://unpkg.com/@monoscopetech/browser@0.11.6/dist/monoscope.min.js"] ("" :: Text)
@@ -271,10 +271,10 @@ bodyWrapper bcfg child = do
       -- Those references can't carry a compile-time hash of their own, and /public/assets/* is
       -- served with a year-long max-age — an un-versioned sprite URL would pin returning users
       -- to a sprite sheet that predates every icon added since.
-      let echartsURL = $(hashAssetFile "/public/assets/deps/echarts/echarts.min.js") :: Text
-          echartsThemeURL = $(hashAssetFile "/public/assets/roma-echarts.js") :: Text
-          spriteSolidURL = $(hashAssetFile "/public/assets/svgs/fa-sprites/solid.svg") :: Text
-          spriteRegularURL = $(hashAssetFile "/public/assets/svgs/fa-sprites/regular.svg") :: Text
+      let echartsURL = assetUrl "/public/assets/deps/echarts/echarts.min.js" :: Text
+          echartsThemeURL = assetUrl "/public/assets/roma-echarts.js" :: Text
+          spriteSolidURL = assetUrl "/public/assets/svgs/fa-sprites/solid.svg" :: Text
+          spriteRegularURL = assetUrl "/public/assets/svgs/fa-sprites/regular.svg" :: Text
       script_
         [text|window.assetUrls = {
           echarts: "${echartsURL}", echartsTheme: "${echartsThemeURL}",
@@ -293,7 +293,7 @@ bodyWrapper bcfg child = do
         twq('config','om5gt');
         |]
 
-      let swURI = $(hashAssetFile "/public/sw.js")
+      let swURI = assetUrl "/public/sw.js"
       script_
         [text|
         if("serviceWorker" in navigator) {
