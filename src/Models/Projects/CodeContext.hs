@@ -17,6 +17,7 @@ module Models.Projects.CodeContext (
   fetchSnippet,
 ) where
 
+import Data.Default (Default (..))
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Wreq qualified as W
 import Data.Text qualified as T
@@ -58,6 +59,14 @@ data CodeMapping = CodeMapping
   deriving (Entity) via (GenericEntity '[Schema "projects", TableName "code_mappings", PrimaryKey "id", FieldModifiers '[CamelToSnake]] CodeMapping)
 
 
+-- | The catch-all mapping: every frame, repo root, any service. Also what a test or doctest
+-- overrides one field of, rather than spelling out eight.
+instance Default CodeMapping where
+  def = CodeMapping (UUIDId UUID.nil) (UUIDId UUID.nil) (UUIDId UUID.nil) Nothing "" "" epoch epoch
+    where
+      epoch = UTCTime (fromGregorian 1970 1 1) 0
+
+
 -- | A window of source around the failing line. @startLine@ is the 1-based line number of
 -- the first entry in @body@, so the renderer can number the gutter without recomputing it.
 data Snippet = Snippet
@@ -92,8 +101,7 @@ deleteCodeMapping pid mid = Hasql.interpExecute_ [HI.sql|DELETE FROM projects.co
 -- arrive in. A mapping bound to a service only answers for that service; an unbound mapping
 -- answers for any.
 --
--- >>> let epoch = UTCTime (fromGregorian 2020 1 1) 0
--- >>> let m svc prefix root = CodeMapping{id = UUIDId UUID.nil, projectId = UUIDId UUID.nil, githubSyncId = UUIDId UUID.nil, service = svc, pathPrefix = prefix, sourceRoot = root, createdAt = epoch, updatedAt = epoch}
+-- >>> let m svc prefix root = def{service = svc, pathPrefix = prefix, sourceRoot = root} :: CodeMapping
 -- >>> let ms = [m Nothing "/srv/app/" "", m (Just "billing") "/srv/app/vendor/" "third_party/"]
 --
 -- >>> snd <$> resolveRepoPath ms (Just "checkout") "/srv/app/services/checkout.py"
