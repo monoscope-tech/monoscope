@@ -1,6 +1,6 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl, sameSegmentCount) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl, sameSegmentCount) where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
@@ -1589,8 +1589,9 @@ runDueNotifications pid hashesM = do
 
 
 -- | Every 10 min: sweep projects that have any eligible error-pattern
--- notifications (still within the 24h ceiling) and dispatch them. Primary
--- safety net against the old 60-min orphan hole.
+-- notifications and dispatch them. Primary safety net against the old 60-min
+-- orphan hole. Automatic eligibility keeps a 24h ceiling so the sweep can't
+-- alert on ancient rows; an explicit subscription is exempt from it.
 runNotificationSweep :: UTCTime -> ATBackgroundCtx ()
 runNotificationSweep _scheduledTime = do
   expireLapsedAcks
@@ -1603,12 +1604,20 @@ runNotificationSweep _scheduledTime = do
           JOIN projects.projects p ON p.id = e.project_id
           WHERE p.error_alerts
             AND e.state <> 'resolved'
-            AND e.created_at >= now() - interval '24 hours'
             AND (
-              e.last_notified_at IS NULL
-              OR e.subscribed = TRUE
-              OR (e.state = 'regressed' AND (e.last_notified_at IS NULL OR e.last_notified_at < e.regressed_at))
-              OR (e.state IN ('new','escalating','ongoing') AND e.last_notified_at IS NOT NULL)
+              -- An explicit "Notify every N" subscription has no expiry: the 24h
+              -- ceiling below is a bound on *automatic* eligibility, and applying
+              -- it to subscriptions meant a quiet project stopped being swept the
+              -- day after its error first appeared.
+              e.subscribed = TRUE
+              OR (
+                e.created_at >= now() - interval '24 hours'
+                AND (
+                  e.last_notified_at IS NULL
+                  OR (e.state = 'regressed' AND (e.last_notified_at IS NULL OR e.last_notified_at < e.regressed_at))
+                  OR (e.state IN ('new','escalating','ongoing') AND e.last_notified_at IS NOT NULL)
+                )
+              )
             )
         |]
   Log.logInfo "NotificationSweepJob: candidate projects" (AE.object ["count" AE..= length projects])

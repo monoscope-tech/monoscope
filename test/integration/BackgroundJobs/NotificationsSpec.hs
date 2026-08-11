@@ -169,3 +169,30 @@ spec = around withTestResources do
                 FROM apis.issues i WHERE i.id = ? |]
           (PGS.Only issueId) :: IO [(Bool, Bool)]
       back `shouldBe` [(True, True)]
+
+    -- "Notify every N" silently stopped working once its error pattern was a day
+    -- old: the sweep's project selection bounded *every* row by created_at, so a
+    -- project with nothing fresh never got picked up and the cadence died. It
+    -- only appeared to work because the post-ingestion inline path has no such
+    -- bound — i.e. for as long as the error kept re-occurring.
+    it "5. An explicit subscription is still swept after its error ages past 24h" \tr -> do
+      seedSlackChannel tr
+      apiKey <- createTestAPIKey tr pid "notif-subscribed-key"
+      ingestTraceWithException tr apiKey "GET /old-sub" "StaleError" "still here" "at f (/a.js:1:1)" (addUTCTime (-600) frozenTime)
+      drainExtractionWorker tr
+      void $ runAllBackgroundJobs frozenTime tr.trATCtx
+
+      -- created_at is compared against SQL now() by the project-selection query,
+      -- so age it on the real clock; the cadence itself is compared against the
+      -- app clock, so last_notified_at is an hour back on frozenTime.
+      withResource tr.trPool \conn ->
+        void $ PGS.execute conn
+          [sql| UPDATE apis.error_patterns
+                SET created_at = now() - interval '3 days', subscribed = TRUE,
+                    notify_every_minutes = 30, last_notified_at = ?
+                WHERE project_id = ? |]
+          (addUTCTime (-3600) frozenTime, pid)
+
+      (notifs, _) <- runTestBackgroundWithNotifications frozenTime tr.trLogger tr.trATCtx
+        $ BackgroundJobs.runNotificationSweep frozenTime
+      notifs `shouldSatisfy` (not . null)
