@@ -104,6 +104,7 @@ import Data.HashMap.Strict qualified as HM
 import Data.List.Extra (chunksOf, lookup)
 import Data.List.NonEmpty qualified as NE
 import Data.Map qualified as Map
+import Data.Scientific qualified as Sci
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (Display)
@@ -156,10 +157,28 @@ getNestedValue ks@(k : rest) m =
 
 
 -- | Render a JSON leaf as Text (strings scrubbed of NULs, numbers shown).
+--
+-- Integral numbers render as plain digits. @show \@Scientific@ would emit
+-- @formatScientific Generic@, which appends @.0@ and flips to exponent form
+-- above 7 digits — so a numeric @user.id@ of 806885555 landed in
+-- @attributes___user___id@ as @8.06885555e8@, breaking both the UI label and
+-- any @attributes.user.id == "806885555"@ filter against the column.
+-- Non-integral (and out-of-Int64) values keep the old rendering.
+--
+-- Exercised through the exported 'atMapText', the path the flattened columns take.
+--
+-- >>> import "monoscope" Models.Telemetry.Telemetry qualified as T
+-- >>> import Data.Aeson qualified as AE
+-- >>> import Data.Map qualified as Map
+-- >>> let at v = T.atMapText "user.id" (Just (Map.singleton "user.id" v))
+-- >>> map at [AE.Number 806885555, AE.Number 7950488, AE.Number 0, AE.Number (-42)]
+-- [Just "806885555",Just "7950488",Just "0",Just "-42"]
+-- >>> map at [AE.Number 1.5, AE.Number 1e100, AE.String "abc", AE.Null]
+-- [Just "1.5",Just "1.0e100",Just "abc",Nothing]
 valText :: AE.Value -> Maybe Text
 valText = \case
   AE.String t -> Just $ scrubNulText t
-  AE.Number n -> Just $ show n
+  AE.Number n -> Just $ maybe (show n) show (Sci.toBoundedInteger n :: Maybe Int64)
   _ -> Nothing
 
 
