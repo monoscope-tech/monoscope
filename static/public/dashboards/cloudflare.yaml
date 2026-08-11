@@ -50,7 +50,7 @@ widgets:
 
   - type: 'timeseries'
     title: 'Bandwidth Usage (GB)'
-    query: attributes.service.name=="cloudflare" AND name=="cloudflare.edge.response.bytes" | summarize sum(value) / 1073741824 by bin_auto(timestamp)
+    query: metrics | where metric_name=="cloudflare.edge.response.bytes" | summarize sum(value) / 1073741824 by bin_auto(timestamp)
     unit: GB
     layout: { w: 6, h: 4 }
 
