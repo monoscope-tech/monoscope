@@ -4,6 +4,7 @@ import { html, svg, TemplateResult } from 'lit';
 import { minBy, maxBy } from 'lodash';
 import { ColIdxMap, EventLine } from './types/types';
 import { AnsiUp } from 'ansi-up';
+import { faSprite_ as faSprite } from './assets';
 // Configuration objects
 export const COLUMN_WIDTHS = {
   status: 'w-[12ch] shrink-0',
@@ -151,8 +152,7 @@ export const getErrorClassification = (reqVec: any[], colIdxMap: ColIdxMap) => {
 };
 
 // Template helper functions
-export const faSprite = (iconName: string, kind: string, classes: string): TemplateResult =>
-  html`<svg class="${classes}" fill="currentColor"><use href="/public/assets/svgs/fa-sprites/${kind}.svg#${iconName}"></use></svg>`;
+export { faSprite };
 
 export const renderBadge = (classes: string, title: string, tooltip?: string): TemplateResult =>
   html`<span

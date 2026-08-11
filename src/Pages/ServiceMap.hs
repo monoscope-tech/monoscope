@@ -15,14 +15,14 @@ import Effectful.Time qualified as Time
 import Lucid
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.ServiceGraph (ServiceGraph (..), ServiceNode (..), serviceGraphForRange)
+import Models.Telemetry.ServiceGraph (ServiceGraph (..), ServiceNode (..), drawnEdges, drawnNodes, serviceGraphForRange)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx)
 import Pkg.Components.ServiceMap (serviceMapPanel_)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Relude
 import System.Config (AuthContext)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (explorerNavTabs_, faSprite_, getServiceColors, parseTime)
+import Utils (explorerNavTabs_, faSprite_, getServiceColors, nonEmptyT, parseTime)
 
 
 newtype ServiceMapGet = ServiceMapPage (PageCtx ServiceMapPageData)
@@ -31,6 +31,7 @@ newtype ServiceMapGet = ServiceMapPage (PageCtx ServiceMapPageData)
 data ServiceMapPageData = ServiceMapPageData
   { pid :: Projects.ProjectId
   , graph :: ServiceGraph
+  , env :: Maybe Text
   }
 
 
@@ -39,13 +40,14 @@ instance ToHtml ServiceMapGet where
   toHtmlRaw = toHtml
 
 
-serviceMapGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders ServiceMapGet)
-serviceMapGetH pid fromM toM sinceM = do
+serviceMapGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders ServiceMapGet)
+serviceMapGetH pid fromM toM sinceM envM = do
   (_, _, bw) <- mkPageCtx pid
   _ <- Reader.ask @AuthContext
   now <- Time.currentTime
   let (from, to, currentRange) = parseTime fromM toM sinceM now
-  graph <- serviceGraphForRange pid (fromMaybe (addUTCTime (-86400) now) from) (fromMaybe now to)
+  -- An empty ?env= is "all environments", so clearing the facet is a link like any other.
+  graph <- serviceGraphForRange pid (nonEmptyT envM) (fromMaybe (addUTCTime (-86400) now) from) (fromMaybe now to)
   let bwconf =
         bw
           { prePageTitle = Just "Explorer"
@@ -56,7 +58,7 @@ serviceMapGetH pid fromM toM sinceM = do
               TimePicker.timepicker_ Nothing currentRange Nothing
               TimePicker.refreshButton_
           }
-  addRespHeaders $ ServiceMapPage $ PageCtx bwconf $ ServiceMapPageData pid graph
+  addRespHeaders $ ServiceMapPage $ PageCtx bwconf $ ServiceMapPageData pid graph (nonEmptyT envM)
 
 
 serviceMapPage_ :: ServiceMapPageData -> Html ()
@@ -64,18 +66,20 @@ serviceMapPage_ pd = div_ [class_ "w-full h-full overflow-y-auto c-scroll p-4 fl
   div_ [class_ "flex items-center gap-2 text-xs text-textWeak"] do
     faSprite_ "diagram-project" "regular" "w-3.5 h-3.5 text-iconNeutral"
     toHtml
-      $ show (V.length pd.graph.nodes)
+      $ show (V.length (drawnNodes pd.graph))
       <> " services · "
-      <> show (V.length pd.graph.edges)
+      <> show (V.length (drawnEdges pd.graph))
       <> " dependencies"
     -- Search dims rather than removes, so a filtered view never silently severs a path.
     input_
       [ type_ "search"
       , class_ "ml-auto input input-sm border border-strokeWeak bg-fillWeaker rounded-lg w-56 max-md:w-32"
       , placeholder_ "Filter services"
-      , [__|on input send service-map-filter(q: my value) to the closest <div/> then halt|]
+      , -- `call`, not `send`: hyperscript parses an event name as an identifier path, so a
+        -- dashed custom-event name is a parse error and the whole attribute is dropped.
+        [__|on input call window.serviceMapFilter(me.value) then halt|]
       ]
-  serviceMapPanel_ pd.pid "global-service-map" pd.graph serviceColors
+  serviceMapPanel_ pd.pid "global-service-map" pd.graph serviceColors pd.env
   where
     -- Same hash-assigned colours as the trace waterfall, so a service looks the same
     -- wherever it appears.

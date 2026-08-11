@@ -70,7 +70,7 @@ parseNumArray = mapMaybe (readMaybe . toString) . filter (not . T.null) . T.spli
 queryLogs :: TestResources -> Maybe Text -> IO Log.LogResult
 queryLogs tr queryM = do
   let (timeFrom, timeTo) = testTimeRange
-  snd <$> toServantResponse tr (Log.logExplorerDataH pid queryM Nothing Nothing Nothing (Just timeFrom) (Just timeTo) Nothing Nothing)
+  snd <$> toServantResponse tr (Log.logExplorerDataH pid queryM Nothing Nothing Nothing Nothing (Just timeFrom) (Just timeTo) Nothing Nothing)
 
 
 -- | Helper to query the sessions viz endpoint (returns SessionsView).
@@ -742,6 +742,34 @@ spec = sequential $ aroundAll withTestResources do
               -- isError predicate (status_code='ERROR') populates first_error from status_message.
               s.firstError `shouldSatisfy` \case Just t -> t /= ""; Nothing -> False
             Nothing -> expectationFailure "session ctx-sess not found"
+      -- Backends on SDKs without setSession (legacy apitoolkit-express) emit
+      -- user identity but never session.id, which left the Sessions tab empty
+      -- for them. Sessions must fall back to the user key, and the expand path
+      -- must resolve that same derived key.
+      it "Test 11.11: sessions fall back to user identity when session.id is absent" $ \tr -> do
+        key <- createTestAPIKey tr pid "sessions-derived-key"
+        let attrs = [("user.id", "derived-u1"), ("user.email", "derived@example.com")]
+        forM_ ([1 .. 2] :: [Int]) $ \i -> ingestSessionEvent tr key ("GET /derived/" <> show i) attrs False frozenTime
+        ingestSessionEvent tr key "GET /derived/boom" attrs True frozenTime
+        void $ runAllBackgroundJobs frozenTime tr.trATCtx
+        result <- queryLogsViz tr (Just "attributes.user.email == \"derived@example.com\"") "sessions"
+        case result of
+          Log.SessionsView total rows _ -> do
+            total `shouldBe` 1
+            case V.find (\s -> s.sessionId == "derived-u1") rows of
+              Just s -> do
+                s.eventCount `shouldBe` 3
+                s.errorCount `shouldBe` 1
+                s.userEmail `shouldBe` Just "derived@example.com"
+              Nothing -> expectationFailure "derived session derived-u1 not found"
+        let (timeFrom, timeTo) = testTimeRange
+        (_, expandResult) <-
+          toServantResponse tr
+            $ Log.apiLogExpandH pid (Just "session") (Just "derived-u1") Nothing Nothing Nothing (Just timeFrom) (Just timeTo)
+        let rows = case expandResult of
+              AE.Object o -> fromMaybe [] $ AE.decode @[AE.Value] . AE.encode =<< KM.lookup (fromText "rows") o
+              _ -> []
+        length rows `shouldSatisfy` (>= 1)
       -- Mirrors Test 11.8 for the replay path: replaySessionGetH must scope
       -- sessionMetadata by project_id, otherwise identity from another project's
       -- session row leaks into the replay header for an unrelated viewer.

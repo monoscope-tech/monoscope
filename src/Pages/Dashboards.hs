@@ -101,7 +101,7 @@ import Pkg.Components.Table (BulkAction (..), Table (..))
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (UUIDId (..), hashAssetFile)
+import Pkg.DeriveUtils (UUIDId (..), assetUrl)
 import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), constantToKQLList, constantToSQLList, defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToComponents, presetRollup)
 import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Relude hiding (ask)
@@ -123,10 +123,10 @@ import Web.FormUrlEncoded (FromForm)
 -- | Head content for dashboard pages - loads highlight.js and sql-formatter for SQL preview
 dashboardHeadContent_ :: Html ()
 dashboardHeadContent_ = do
-  link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/deps/highlightjs/atom-one-dark.min.css")]
-  script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/highlight.min.js"), defer_ "true"] ("" :: Text)
-  script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/sql.min.js"), defer_ "true"] ("" :: Text)
-  script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/sql-formatter.min.js"), defer_ "true"] ("" :: Text)
+  link_ [rel_ "stylesheet", href_ (assetUrl "/public/assets/deps/highlightjs/atom-one-dark.min.css")]
+  script_ [src_ (assetUrl "/public/assets/deps/highlightjs/highlight.min.js"), defer_ "true"] ("" :: Text)
+  script_ [src_ (assetUrl "/public/assets/deps/highlightjs/sql.min.js"), defer_ "true"] ("" :: Text)
+  script_ [src_ (assetUrl "/public/assets/deps/highlightjs/sql-formatter.min.js"), defer_ "true"] ("" :: Text)
 
 
 folderFromPath :: Maybe Text -> Text
@@ -289,7 +289,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
               , data_ "tagify-whitelist" whitelist
               , data_ "tagify-enforce-whitelist" ""
               , data_ "tagify-text-prop" "name"
-              , data_ "tagify-query-sql" $ maybeToMonoid var.sql
+              , data_ "tagify-query-sql" $ maybeToMonoid $ (.statement) <$> var.sql
               , data_ "tagify-query" $ maybeToMonoid var.query
               , data_ "tagify-reload-on-change" $ maybe "false" (T.toLower . show) var.reloadOnChange
               , value_ $ maybeToMonoid var.value
@@ -857,20 +857,13 @@ lazyWidget w = w & #eager .~ Nothing & #html .~ Nothing & #dataset .~ Nothing
 type WidgetData es = (Concurrent :> es, DB es, Effectful.Labeled.Labeled "timefusion" Data.Effectful.Hasql.Hasql :> es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServerError :> es, IOE :> es, Log :> es, Time.Time :> es, Tracing :> es)
 
 
--- | Run a widget's query, picking the result shape from the widget type: a
--- scalar for stats, text columns for the row-oriented widgets, numeric series
--- for everything that gets plotted.
+-- | Run a widget's query in the shape its type decodes — 'Widget.chartQuery'
+-- picks both together.
 widgetMetrics :: WidgetData es => Projects.ProjectId -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> Eff es Charts.MetricsData
 widgetMetrics pid (sinceStr, fromDStr, toDStr) allParams widget =
-  Charts.queryMetrics widget.dbSource (Just dataType) (Just pid) (Widget.chartQuery widget) widget.sql sinceStr fromDStr toDStr Nothing allParams
+  Charts.queryMetrics widget.dbSource (Just dataType) (Just pid) query widget.sql sinceStr fromDStr toDStr Nothing allParams
   where
-    dataType = case widget.wType of
-      Widget.WTStat -> Charts.DTFloat
-      Widget.WTTable -> Charts.DTText
-      Widget.WTLogs -> Charts.DTText
-      Widget.WTTraces -> Charts.DTText
-      Widget.WTTopList -> Charts.DTText
-      _ -> Charts.DTMetric
+    (query, dataType) = Widget.chartQuery widget
 
 
 -- | Fetch widget data based on widget type (for stat and chart widgets)
@@ -2199,7 +2192,7 @@ dashboardQueryText dash =
   T.concat $ concatMap widgetText (dash.widgets <> foldMap (.widgets) (fold dash.tabs)) <> foldMap varText (fold dash.variables)
   where
     widgetText w = catMaybes [w.query, w.sql] <> concatMap widgetText (fold w.children)
-    varText v = catMaybes [v.sql, v.query]
+    varText v = catMaybes [(.statement) <$> v.sql, v.query]
 
 
 -- | Process dashboard constants concurrently and build extended params with constant results.

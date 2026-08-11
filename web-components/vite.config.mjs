@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   base: '/public/assets/web-components/dist/',
   server: {
     port: 3000,
@@ -36,7 +36,9 @@ export default defineConfig({
   build: {
     target: 'esnext',
     outDir: '../static/public/assets/web-components/dist',
-    emptyOutDir: true,
+    // Watch mode keeps the previous hashed chunks alive until ghcid recompiles
+    // the manifest splice; production builds still start from a clean directory.
+    emptyOutDir: mode !== 'development',
     assetsDir: 'assets',
     // The entry filename carries its own content hash (see entryFileNames below), so
     // the server needs the manifest to know which file to reference.
@@ -68,4 +70,4 @@ export default defineConfig({
       },
     },
   },
-});
+}));

@@ -2,19 +2,22 @@ module Pages.BodyWrapper (bodyWrapper, BWConfig (..), PageCtx (..), mkPageCtx, w
 
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default, def)
+import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
 import Data.Tuple.Extra (fst3, uncurry3)
 import Data.Vector qualified as V
 import Effectful.Reader.Static qualified as EffReader
+import Effectful.Time qualified as Time
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx (hxGet_, hxIndicator_, hxPost_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
+import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pages.CommandPalette qualified as CommandPalette
 import Pages.Components qualified as Components
-import Pkg.DeriveUtils (hashAssetFile, viteAssetFile)
+import Pkg.DeriveUtils (assetUrl, viteAssetFile)
 import PyF
 import Relude hiding (ask)
 import System.Config (AuthContext (..), DeploymentEnv (Dev), EnvConfig (..))
@@ -30,7 +33,16 @@ mkPageCtx :: Projects.ProjectId -> ATAuthCtx (Projects.Session, Projects.Project
 mkPageCtx pid = do
   (sess, project) <- Projects.sessionAndProject pid
   appCtx <- EffReader.ask @AuthContext
-  pure (sess, project, def{sessM = Just sess, currProject = Just project, config = appCtx.config})
+  now <- Time.currentTime
+  -- One indexed row read of the learned facet values — the same summary the Log Explorer
+  -- sidebar renders, so the picker offers exactly the environments this project has
+  -- reported. getFacetSummary ignores the time range.
+  facetsM <- SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" now now
+  let envOptions = maybe V.empty (envValues . (.facetJson)) facetsM
+  pure (sess, project, def{sessM = Just sess, currProject = Just project, config = appCtx.config, envOptions})
+  where
+    envValues (SchemaCatalog.FacetData m) =
+      V.fromList $ sort [v.value | v <- HM.findWithDefault [] "resource.deployment.environment.name" m, not (T.null v.value)]
 
 
 -- | Build a full page response: bootstraps page ctx, lets the caller tweak
@@ -155,6 +167,10 @@ data BWConfig = BWConfig
   , headContent :: Maybe (Html ()) -- Optional HTML content to include in the head
   , globalDrawerContent :: Maybe (Html ())
   , config :: EnvConfig -- Environment configuration for telemetry
+  , envOptions :: V.Vector Text
+  -- ^ Deployment environments this project has actually reported, for the app-wide picker.
+  -- Seeded by 'mkPageCtx' from the learned facet values, so it is the same set the Log
+  -- Explorer's facet sidebar offers and it costs one indexed row read.
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default)
@@ -193,7 +209,7 @@ bodyWrapper bcfg child = do
       link_ [rel_ "dns-prefetch", href_ "https://unpkg.com"]
 
       -- Preload critical CSS
-      link_ [rel_ "preload", href_ $(hashAssetFile "/public/assets/css/tailwind.min.css"), term "as" "style"]
+      link_ [rel_ "preload", href_ (assetUrl "/public/assets/css/tailwind.min.css"), term "as" "style"]
 
       -- View Transitions API (Chrome 111+, graceful fallback for others)
       meta_ [name_ "view-transition", content_ "same-origin"]
@@ -210,46 +226,60 @@ bodyWrapper bcfg child = do
       let css href = link_ [rel_ "stylesheet", type_ "text/css", href_ href]
           deferScript src = script_ [src_ src, defer_ "true"] ("" :: Text)
       mapM_ css
-        $ [ $(hashAssetFile "/public/assets/css/thirdparty/notyf3.min.css")
-          , $(hashAssetFile "/public/assets/css/thirdparty/tagify.min.css")
+        $ [ assetUrl "/public/assets/css/thirdparty/notyf3.min.css"
+          , assetUrl "/public/assets/css/thirdparty/tagify.min.css"
           ]
-        <> [$(hashAssetFile "/public/assets/deps/gridstack/gridstack.min.css") | bcfg.needsGridStack]
-        <> [ $(hashAssetFile "/public/assets/css/thirdparty/rrweb.css")
-           , $(hashAssetFile "/public/assets/css/tailwind.min.css")
-           , $(hashAssetFile "/public/assets/web-components/dist/css/index.css")
+        <> [assetUrl "/public/assets/deps/gridstack/gridstack.min.css" | bcfg.needsGridStack]
+        <> [ assetUrl "/public/assets/css/thirdparty/rrweb.css"
+           , assetUrl "/public/assets/css/tailwind.min.css"
+           , assetUrl "/public/assets/web-components/dist/css/index.css"
            ]
 
       fold bcfg.headContent
 
       mapM_
         deferScript
-        [ $(hashAssetFile "/public/assets/deps/htmx/htmx-4.0.0-beta6.min.js")
+        [ assetUrl "/public/assets/deps/htmx/htmx-4.0.0-beta6.min.js"
         , -- Must load immediately after htmx: restores implicit attribute inheritance
           -- (v4 requires `:inherited` otherwise) and 4xx/5xx no-swap. The app's own
           -- listeners use v4 event names directly, so the shim's legacy-name replay is
           -- only load-bearing for third-party code (hyperscript binds the legacy load event).
-          $(hashAssetFile "/public/assets/deps/htmx/htmx-2-compat.js")
-        , $(hashAssetFile "/public/assets/deps/htmx/hx-preload-4.js")
-        , $(hashAssetFile "/public/assets/js/main.js")
+          assetUrl "/public/assets/deps/htmx/htmx-2-compat.js"
+        , assetUrl "/public/assets/deps/htmx/hx-preload-4.js"
+        , assetUrl "/public/assets/js/main.js"
         , -- Dropped with the htmx 4 upgrade: multi-swap and response-targets had no
           -- users (no `multi:` swaps, no hx-target-4xx/5xx) and no v4 port; idiomorph
           -- is superseded by built-in outerMorph; preload.js and json-enc-2.js call the
           -- removed defineExtension API (v4 preload ships above; json-enc and
           -- forward-page-params are re-registered in main.ts via registerExtension).
-          $(hashAssetFile "/public/assets/js/thirdparty/_hyperscript_web0_9_93.min.js")
-        , $(hashAssetFile "/public/assets/deps/tagify/tagify.min.js")
-        , $(hashAssetFile "/public/assets/js/thirdparty/notyf3.min.js")
+          assetUrl "/public/assets/js/thirdparty/_hyperscript_web0_9_93.min.js"
+        , assetUrl "/public/assets/deps/tagify/tagify.min.js"
+        , assetUrl "/public/assets/js/thirdparty/notyf3.min.js"
         ]
-      script_ [src_ $(hashAssetFile "/public/assets/deps/lit/lit-html.js"), type_ "module", defer_ "true"] ("" :: Text)
+      script_ [src_ (assetUrl "/public/assets/deps/lit/lit-html.js"), type_ "module", defer_ "true"] ("" :: Text)
       mapM_ deferScript
-        $ [$(hashAssetFile "/public/assets/deps/gridstack/gridstack-all.js") | bcfg.needsGridStack]
-        <> [ $(hashAssetFile "/public/assets/deps/easepick/bundle.min.js")
-           , $(hashAssetFile "/public/assets/js/thirdparty/luxon.min.js")
-           , $(hashAssetFile "/public/assets/js/thirdparty/popper2_11_4.min.js")
-           , $(hashAssetFile "/public/assets/js/thirdparty/tippy6_3_7.umd.min.js")
+        $ [assetUrl "/public/assets/deps/gridstack/gridstack-all.js" | bcfg.needsGridStack]
+        <> [ assetUrl "/public/assets/deps/easepick/bundle.min.js"
+           , assetUrl "/public/assets/js/thirdparty/luxon.min.js"
+           , assetUrl "/public/assets/js/thirdparty/popper2_11_4.min.js"
+           , assetUrl "/public/assets/js/thirdparty/tippy6_3_7.umd.min.js"
            ]
 
       when (isProd && bcfg.config.enableBrowserMonitoring) $ script_ [src_ "https://unpkg.com/@monoscopetech/browser@0.11.6/dist/monoscope.min.js"] ("" :: Text)
+
+      -- Hashed URLs for assets the TS bundle references by path (see web-components/src/assets.ts).
+      -- Those references can't carry a compile-time hash of their own, and /public/assets/* is
+      -- served with a year-long max-age — an un-versioned sprite URL would pin returning users
+      -- to a sprite sheet that predates every icon added since.
+      let echartsURL = assetUrl "/public/assets/deps/echarts/echarts.min.js" :: Text
+          echartsThemeURL = assetUrl "/public/assets/roma-echarts.js" :: Text
+          spriteSolidURL = assetUrl "/public/assets/svgs/fa-sprites/solid.svg" :: Text
+          spriteRegularURL = assetUrl "/public/assets/svgs/fa-sprites/regular.svg" :: Text
+      script_
+        [text|window.assetUrls = {
+          echarts: "${echartsURL}", echartsTheme: "${echartsThemeURL}",
+          spriteSolid: "${spriteSolidURL}", spriteRegular: "${spriteRegularURL}"
+        };|]
 
       -- Flag for widget initialization - set to true after web-components loads
       script_ "window.widgetDepsReady = false;"
@@ -263,7 +293,7 @@ bodyWrapper bcfg child = do
         twq('config','om5gt');
         |]
 
-      let swURI = $(hashAssetFile "/public/sw.js")
+      let swURI = assetUrl "/public/sw.js"
       script_
         [text|
         if("serviceWorker" in navigator) {
@@ -668,8 +698,52 @@ navbar bcfg menuL =
           Nothing -> span_ [class_ "font-normal text-xl p-1 leading-none text-textWeak", id_ "pageTitleSuffixText"] $ toHtml suffix
       whenJust bcfg.docsLink \link -> a_ ([class_ "max-md:hidden text-iconBrand -mt-1", href_ link, term "hx-preload" "false", target_ "_blank", rel_ "noopener", Aria.label_ "Open Documentation"] <> tippyRight_ "Open Documentation") $ faSprite_ "circle-question" "regular" "w-4 h-4"
     whenJust bcfg.navTabs $ div_ [class_ $ bool "" "max-md:order-last max-md:w-full max-md:pt-1" (isJust bcfg.pageActions)]
-    div_ [class_ $ "flex-1 flex items-center justify-end gap-2 text-sm" <> bool " max-md:hidden" "" (isJust bcfg.pageActions)]
-      $ fold bcfg.pageActions
+    div_ [class_ $ "flex-1 flex items-center justify-end gap-2 text-sm" <> bool " max-md:hidden" "" (isJust bcfg.pageActions)] do
+      envPicker_ (bcfg.sessM >>= (.environment)) bcfg.envOptions
+      fold bcfg.pageActions
+
+
+-- | The app-wide environment selector, in the shape Datadog puts in its top bar: pick prod
+-- or staging once and every telemetry surface stays scoped to it until you change it.
+--
+-- The selection is a cookie, not a query parameter. It has to survive navigation to pages
+-- that never declared an @?env=@ parameter — which is all of them — so a link-based control
+-- would need the parameter threaded through every route to be sticky at all. The cost is
+-- that a shared link does not carry the environment; the query it links to does.
+--
+-- Hidden entirely when the project has never reported an environment: a picker whose only
+-- option is "All" is furniture, not a control.
+envPicker_ :: Maybe Text -> V.Vector Text -> Html ()
+envPicker_ selected options =
+  unless (V.null options) $ div_ [class_ "relative"] do
+    button_
+      ( [ class_ "inline-flex items-center gap-1.5 rounded-lg border border-strokeWeak px-2 py-1 hover:bg-fillWeak cursor-pointer"
+        , type_ "button"
+        , Aria.label_ "Deployment environment"
+        , term "data-tippy-content" "Scope every page to one deployment environment"
+        ]
+          <> popoverTrigger_ "env-picker"
+      )
+      do
+        faSprite_ "layer-group" "regular" "w-3.5 h-3.5 text-iconNeutral"
+        span_ [class_ "font-medium"] $ toHtml $ fromMaybe "All envs" selected
+        faSprite_ "chevron-down" "regular" "w-3 h-3 text-iconNeutral"
+    ul_ (popoverPanel_ "env-picker" <> [class_ "dropdown menu flex flex-col bg-bgBase border border-strokeWeak w-56 p-1 text-sm rounded-lg shadow"])
+      -- Nothing is "all environments" and is always offered: an environment that has gone
+      -- quiet must not be able to strand a reader in a view with no data and no way out.
+      $ forM_ (Nothing : (Just <$> V.toList options)) \opt -> do
+        let cookieVal = fromMaybe "" opt
+        li_
+          $ button_
+            [ class_ $ "w-full text-left cursor-pointer rounded-md px-2 py-1 hover:bg-fillWeak " <> bool "" "font-semibold text-textBrand" (opt == selected)
+            , type_ "button"
+            , term "aria-pressed" (bool "false" "true" (opt == selected))
+            , -- A cookie write plus a reload: genuinely imperative, and the whole point is
+              -- that it applies to the server-rendered query on the *next* request.
+              term "_" [text|on click set document.cookie to 'env=${cookieVal};path=/;max-age=31536000;samesite=lax' then call location.reload()|]
+            ]
+          $ toHtml
+          $ fromMaybe "All environments" opt
 
 
 globalTemplates_ :: Html ()

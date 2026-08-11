@@ -9,7 +9,9 @@ variables:
     multi: false
     help_text: Domain
     type: query
-    sql: select distinct host from apis.endpoints where project_id='{{project_id}}' limit 500
+    sql:
+      source: postgres
+      statement: select distinct host from apis.endpoints where project_id='{{project_id}}' limit 500
 
   - key: endpointHash
     title: Endpoint
@@ -18,7 +20,9 @@ variables:
     help_text: Current filtered endpoint
     reload_on_change: true
     type: query
-    sql: select hash::text, method || ' ' || url_path from apis.endpoints where project_id='{{project_id}}' and host='{{var-host}}' limit 500
+    sql:
+      source: postgres
+      statement: select hash::text, method || ' ' || url_path from apis.endpoints where project_id='{{project_id}}' and host='{{var-host}}' limit 500
 
 widgets: []
 

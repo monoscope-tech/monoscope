@@ -70,13 +70,17 @@ RUN npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/publi
   cd web-components && NODE_ENV=production npx vite build --mode production --sourcemap false && \
   cd .. && workbox generateSW config/workbox-config.js
 
-# Build Haskell executable (dist-newstyle persisted via BuildKit cache mount)
+# Build Haskell executable (dist-newstyle persisted via BuildKit cache mount).
+# The binary is located with `cabal list-bin`, not `find … | head -1`: dist-newstyle is a
+# persistent cache mount, so find's arbitrary ordering can pick a binary left by an earlier
+# build — one compiled against a different static/ tree, which then serves pages referencing
+# Vite chunks that aren't in the image (silent 404s for every web component).
 RUN --mount=type=cache,target=/root/.cabal/store \
     --mount=type=cache,target=/build/dist-newstyle \
     (command -v hpack >/dev/null && hpack || echo "hpack not installed, using committed monoscope.cabal") && \
     cabal build exe:monoscope-server -j --semaphore --ghc-options="+RTS -A64m -n2m -RTS" && \
     mkdir -p /build/dist && \
-    find dist-newstyle -name monoscope-server -type f -executable | head -1 | xargs -I {} cp {} /build/dist/
+    cp "$(cabal list-bin exe:monoscope-server)" /build/dist/
 
 # Final runtime image
 FROM debian:12-slim

@@ -115,7 +115,7 @@ import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
 import Network.URI (escapeURIString, isUnescapedInURI)
 import Numeric (showHex)
-import Pkg.DeriveUtils (hashFile)
+import Pkg.DeriveUtils (assetUrl)
 import Relude hiding (notElem, show)
 import Servant hiding ((:>))
 import Text.MMark qualified as MMark
@@ -294,11 +294,16 @@ truncateMiddle n t
 -- the symbol id (e.g. "bucket"). When adding a new icon, you must add its
 -- <symbol> to the corresponding sprite file — it will not render otherwise.
 faSprite_ :: Monad m => Text -> Text -> Text -> HtmlT m ()
-faSprite_ mIcon faType classes = svg_ [class_ $ "icon " <> classes] $ Svg.use_ [href_ $ "/public/assets/svgs/fa-sprites/" <> faType <> ".svg?v=" <> fileHash <> "#" <> mIcon]
+faSprite_ mIcon faType classes = svg_ [class_ $ "icon " <> classes] $ Svg.use_ [href_ $ sprite <> "#" <> mIcon]
   where
-    fileHash = case faType of
-      "solid" -> $(hashFile "/public/assets/svgs/fa-sprites/solid.svg")
-      _ -> $(hashFile "/public/assets/svgs/fa-sprites/regular.svg")
+    -- Top-level, so the hash lookup happens once per process rather than per icon —
+    -- a page renders thousands of these.
+    sprite = if faType == "solid" then spriteSolidUrl else spriteRegularUrl
+
+
+spriteSolidUrl, spriteRegularUrl :: Text
+spriteSolidUrl = assetUrl "/public/assets/svgs/fa-sprites/solid.svg"
+spriteRegularUrl = assetUrl "/public/assets/svgs/fa-sprites/regular.svg"
 
 
 -- | Type-safe loading indicator size
@@ -1705,12 +1710,15 @@ renderSummaryElements els =
 
 -- | Adapt a summary vector for the log-item detail header:
 --   1. drop list-row noise (raw JSON dumps of attributes/resource, redundant protocol);
---   2. strip the `right-` alignment prefix (ml-auto right-alignment is meaningless in a wrapping header);
---   3. dedupe by (field, value) so `status ERROR` doesn't appear twice (left-side + right-side).
+--   2. drop the row's abbreviated identity — the panel renders the full session\/user\/tenant
+--      set from 'Models.Telemetry.Telemetry.rowIdentity' just below, and showing the one
+--      identifier the row could afford next to all of them reads as a contradiction;
+--   3. strip the `right-` alignment prefix (ml-auto right-alignment is meaningless in a wrapping header);
+--   4. dedupe by (field, value) so `status ERROR` doesn't appear twice (left-side + right-side).
 summaryForDetailView :: V.Vector Text -> V.Vector Text
 summaryForDetailView = V.fromList . ordNubOn key . V.toList . V.mapMaybe step
   where
-    skip el = any (`T.isPrefixOf` el) ["attributes;text-textWeak⇒", "resource;text-textWeak⇒", "protocol;"]
+    skip el = any (`T.isPrefixOf` el) ["attributes;text-textWeak⇒", "resource;text-textWeak⇒", "protocol;", "session;", "user email;", "user name;", "user id;"]
     step el
       | skip el = Nothing
       | otherwise = Just $ case parseSummaryEl el of

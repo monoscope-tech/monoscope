@@ -84,6 +84,8 @@ module Models.Telemetry.Telemetry (
   mkSystemLog,
   insertSystemLog,
   generateSummary,
+  identityFields,
+  rowIdentity,
   otelSpanColsSql,
   roundUTCToMicros,
 )
@@ -102,6 +104,7 @@ import Data.HashMap.Strict qualified as HM
 import Data.List.Extra (chunksOf, lookup)
 import Data.List.NonEmpty qualified as NE
 import Data.Map qualified as Map
+import Data.Scientific qualified as Sci
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (Display)
@@ -154,10 +157,28 @@ getNestedValue ks@(k : rest) m =
 
 
 -- | Render a JSON leaf as Text (strings scrubbed of NULs, numbers shown).
+--
+-- Integral numbers render as plain digits. @show \@Scientific@ would emit
+-- @formatScientific Generic@, which appends @.0@ and flips to exponent form
+-- above 7 digits — so a numeric @user.id@ of 806885555 landed in
+-- @attributes___user___id@ as @8.06885555e8@, breaking both the UI label and
+-- any @attributes.user.id == "806885555"@ filter against the column.
+-- Non-integral (and out-of-Int64) values keep the old rendering.
+--
+-- Exercised through the exported 'atMapText', the path the flattened columns take.
+--
+-- >>> import "monoscope" Models.Telemetry.Telemetry qualified as T
+-- >>> import Data.Aeson qualified as AE
+-- >>> import Data.Map qualified as Map
+-- >>> let at v = T.atMapText "user.id" (Just (Map.singleton "user.id" v))
+-- >>> map at [AE.Number 806885555, AE.Number 7950488, AE.Number 0, AE.Number (-42)]
+-- [Just "806885555",Just "7950488",Just "0",Just "-42"]
+-- >>> map at [AE.Number 1.5, AE.Number 1e100, AE.String "abc", AE.Null]
+-- [Just "1.5",Just "1.0e100",Just "abc",Nothing]
 valText :: AE.Value -> Maybe Text
 valText = \case
   AE.String t -> Just $ scrubNulText t
-  AE.Number n -> Just $ show n
+  AE.Number n -> Just $ maybe (show n) show (Sci.toBoundedInteger n :: Maybe Int64)
   _ -> Nothing
 
 
@@ -1762,6 +1783,11 @@ otelColumns =
       , resourceText "resource___service___version" "service.version"
       , resourceText "resource___service___instance___id" "service.instance.id"
       , resourceText "resource___service___namespace" "service.namespace"
+      , -- The dimension the app-wide environment selector scopes by. Promoted rather than
+        -- read out of the `resource` Variant because "prod only" has to be a column
+        -- predicate on every telemetry query, not a blob probe. otel_metrics has carried the
+        -- same column since migration 0108.
+        resourceText "resource___deployment___environment___name" "deployment.environment.name"
       , resourceText "resource___telemetry___sdk___language" "telemetry.sdk.language"
       , resourceText "resource___telemetry___sdk___name" "telemetry.sdk.name"
       , resourceText "resource___telemetry___sdk___version" "telemetry.sdk.version"
@@ -1828,8 +1854,12 @@ data Context = Context
 -- Field count is pinned via doctest so any add/remove fails CI unless
 -- 'otelSpanColsSql' + 'otelColumns' are touched in the same change:
 --
+-- (A promoted @resource___*@\/@attributes___*@ column bumps this count without adding a
+-- record field: those are write-side projections of the @resource@\/@attributes@ blobs and
+-- are queried by KQL, never read back through 'otelSpanColsSql'.)
+--
 -- >>> length otelColumns
--- 89
+-- 90
 data OtelLogsAndSpans = OtelLogsAndSpans
   { project_id :: Text
   , id :: Text -- UUID
@@ -2188,6 +2218,59 @@ generateSummary otel =
     _ -> generateSpanSummary otel
 
 
+-- | Who a telemetry row is *about*: the session it belonged to, the user it was served for,
+-- and the tenant it was scoped to. One list, shared by the log-item detail panel and the
+-- \"User & Session\" facet group, so a field that is displayable is also filterable.
+--
+-- OpenTelemetry standardises @session.*@, @user.*@ and @enduser.*@. It has no tenant
+-- convention at all, so the tenant keys here are ones we choose to recognise — which is
+-- exactly why they belong in one list rather than being spelled out per call site.
+identityFields :: [(T.Text, T.Text)]
+identityFields =
+  [ ("session.id", "Session ID")
+  , ("session.previous.id", "Previous Session ID")
+  , ("user.id", "User ID")
+  , ("user.email", "User Email")
+  , ("user.name", "Username")
+  , ("user.full_name", "Full Name")
+  , ("user.hash", "User Hash")
+  , ("enduser.id", "End-user ID")
+  , ("enduser.role", "End-user Role")
+  , ("enduser.scope", "End-user Scope")
+  , ("tenant.id", "Tenant ID")
+  , ("tenant.name", "Tenant")
+  , ("organization.id", "Organization ID")
+  , ("org.id", "Org ID")
+  , ("account.id", "Account ID")
+  , ("workspace.id", "Workspace ID")
+  , ("customer.id", "Customer ID")
+  ]
+
+
+-- | The identity fields an attribute map actually carries, as @(key, label, value)@ in
+-- 'identityFields' order.
+--
+-- >>> let flat ps = Just (Map.fromList [(k, AE.String v) | (k, v) <- ps])
+-- >>> rowIdentity (flat [("user.email","a@b.c"), ("http.route","/x"), ("tenant.id","acme")])
+-- [("user.email","User Email","a@b.c"),("tenant.id","Tenant ID","acme")]
+--
+-- Nested spelling resolves too, since 'atMapText' descends. A blank value counts as
+-- absent — an SDK that stamps @user.id: ""@ on every anonymous request would otherwise
+-- fill the panel with empty rows:
+--
+-- >>> rowIdentity (Just (Map.fromList [("user", AE.object ["id" AE..= ("u1" :: T.Text), "email" AE..= ("" :: T.Text)])]))
+-- [("user.id","User ID","u1")]
+--
+-- >>> rowIdentity Nothing
+-- []
+rowIdentity :: Maybe (Map T.Text AE.Value) -> [(T.Text, T.Text, T.Text)]
+rowIdentity attrsM =
+  [ (k, label, v)
+  | (k, label) <- identityFields
+  , v <- maybeToList $ atMapText k attrsM >>= guarded (not . T.null)
+  ]
+
+
 -- Shared summary-element helpers (used by both log and span summarizers).
 tag :: T.Text -> T.Text -> T.Text -> T.Text
 tag n s v = n <> ";" <> s <> "⇒" <> v
@@ -2429,9 +2512,17 @@ generateSpanSummary otel =
         , spanNameFallback
         , errorStatus "badge-error"
         , tag "attributes" "text-textWeak" . encTrunc 500 <$> mfilter (not . Map.null) attrsM
-        , tag "session" "right-badge-neutral" <$> atMapText "session.id" attrsM
-        , tag "user email" "right-badge-neutral" <$> atMapText "user.email" attrsM <|> tag "user name" "right-badge-neutral" <$> atMapText "user.id" attrsM
+        , -- A row has space for *who*, not for the whole identity: the full session/user/
+          -- tenant set is the detail panel's job ('rowIdentity'). What a row must not do is
+          -- lie — `user.id` used to be emitted here labelled "user name", and only when
+          -- `user.email` happened to be absent, which is how a reader concludes the user id
+          -- is missing entirely. All three are emitted truthfully now; the renderer folds
+          -- them into one identity badge (email, else name, else id) so the row keeps its
+          -- single pill.
+          tag "session" "right-badge-neutral" <$> atMapText "session.id" attrsM
+        , tag "user email" "right-badge-neutral" <$> atMapText "user.email" attrsM
         , tag "user name" "right-badge-neutral" <$> (atMapText "user.full_name" attrsM <|> atMapText "user.name" attrsM)
+        , tag "user id" "right-badge-neutral" <$> atMapText "user.id" attrsM
         , errorStatus "right-badge-error"
         , dbBadge <$> dbSys
         , (atMapInt "http.response.body.size" attrsM <|> atMapInt "http.response_content_length" attrsM) >>= \n -> guard (n > 0) $> tag "size" "right-badge-neutral" (humanBytes n)

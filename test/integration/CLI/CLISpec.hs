@@ -116,7 +116,7 @@ spec = around withTestResources do
 
       (_, pg) <-
         testServant tr $
-          Log.logExplorerDataH testPid Nothing Nothing Nothing Nothing (Just $ timeAt (-3600)) (Just $ timeAt 3600) Nothing Nothing
+          Log.logExplorerDataH testPid Nothing Nothing Nothing Nothing Nothing (Just $ timeAt (-3600)) (Just $ timeAt 3600) Nothing Nothing
       checkJsonValue (AE.toJSON pg) $ \obj ->
         shouldHaveKeys obj ["cols", "logsData", "count", "serviceColors", "hasMore"]
 

@@ -1,4 +1,4 @@
-module System.Server (runMonoscope, mkServer, cancelAllConcurrently) where
+module System.Server (runMonoscope, mkServer, cancelAllConcurrently, hashedAssetMiddleware) where
 
 import BackgroundJobs qualified
 import Colourista.IO (blueMessage)
@@ -7,6 +7,7 @@ import Control.Concurrent.Async (Async, async, cancel, mapConcurrently_, race, w
 import Control.Concurrent.STM (check)
 import Control.Exception.Safe qualified as Safe
 import Data.Aeson qualified as AE
+import Data.HashMap.Strict qualified as HM
 import Data.Pool as Pool (destroyAllResources)
 import Data.Text qualified as T
 import Data.Time.Clock qualified
@@ -19,7 +20,7 @@ import Effectful.Time (runTime)
 import GHC.Profiling (startHeapProfTimer, startProfTimer, stopHeapProfTimer, stopProfTimer)
 import Log (LogLevel (..), runLogT)
 import Log qualified as LogBase
-import Network.HTTP.Types (methodGet, methodHead, status200, status500)
+import Network.HTTP.Types (methodGet, methodHead, status200, status404, status500)
 import Network.Wai
 import Network.Wai.Handler.Warp (defaultSettings, runSettings, setGracefulShutdownTimeout, setOnException, setOnExceptionResponse, setPort)
 import Network.Wai.Log qualified as WaiLog
@@ -29,6 +30,7 @@ import OpenTelemetry.Instrumentation.Wai (newOpenTelemetryWaiMiddleware)
 import OpenTelemetry.Trace (TracerProvider)
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.Replay (processReplayEvents)
+import Pkg.DeriveUtils (staticAssetHashes, stripAssetHash)
 import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Pkg.Queue qualified as Queue
 import ProcessMessage (processMessages)
@@ -65,6 +67,27 @@ runMonoscope tp =
       -- App-lifetime scope for fire-and-forget handler work (Slack/Twilio). The scope
       -- lives until shutdown, then ki reaps any still-running background fibers.
       withLogger \l -> runServer l env{backgroundScope = Just backgroundScope} tp
+
+
+-- | Serve @…/main.2c58501e.js@ from @…/main.js@ on disk — the read side of 'assetUrl',
+-- against the same 'staticAssetHashes' the URL was rendered from.
+--
+-- The hash is verified rather than merely stripped. During a rolling deploy a request
+-- for the new build's URL can land on a replica still holding the old file; answering
+-- it with those bytes is what poisons the CDN for the whole (year-long) max-age, so a
+-- replica that doesn't have the requested build must 404 instead. Paths that exist
+-- verbatim — Vite's own hashed output, and the unhashed URLs the TS bundle falls back
+-- to — are passed straight through.
+hashedAssetMiddleware :: Middleware
+hashedAssetMiddleware app req respond
+  | not ("public/" `T.isPrefixOf` path) || HM.member path staticAssetHashes = app req respond
+  | Just (onDisk, claimed) <- stripAssetHash path =
+      if HM.lookup onDisk staticAssetHashes == Just claimed
+        then app req{pathInfo = T.splitOn "/" onDisk, rawPathInfo = encodeUtf8 $ "/" <> onDisk} respond
+        else respond $ responseLBS status404 [] ""
+  | otherwise = app req respond
+  where
+    path = T.intercalate "/" req.pathInfo
 
 
 optionsMiddleware :: Middleware
@@ -124,6 +147,7 @@ runServer appLogger env tp = do
           . gzip compressionSettings
           . otelWaiMw
           -- . loggingMiddleware
+          . hashedAssetMiddleware
           $ server
   let bgJobWorker = BackgroundJobs.jobsWorkerInit appLogger env tp
       effectiveReplayBatch =
