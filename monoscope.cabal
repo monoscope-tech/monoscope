@@ -150,6 +150,8 @@ extra-source-files:
     static/migrations/0121_log_patterns_unclassified_recent_index.sql
     static/migrations/0122_otel_deployment_environment.sql
     static/migrations/0123_code_mappings.sql
+    static/migrations/0124_github_credentials.sql
+    static/migrations/0125_generic_oidc.sql
 
 source-repository head
   type: git
@@ -255,6 +257,7 @@ library
       Web.FacetsFallback
       Web.I18n
       Web.MCP
+      Web.OIDC
       Web.Routes
       Web.WireSchemas
       Proto.Opentelemetry.Proto.Common.V1.Common
@@ -670,6 +673,7 @@ test-suite integration-tests
     , base64
     , bytestring
     , cache
+    , case-insensitive
     , clock
     , conduit
     , containers
@@ -826,6 +830,7 @@ test-suite test-dev
       Web.FacetsFallback
       Web.I18n
       Web.MCP
+      Web.OIDC
       Web.Routes
       Web.WireSchemas
       BackgroundJobs.DashboardAutoProvisionSpec
@@ -1144,6 +1149,7 @@ test-suite unit-tests
       Spec
       System.ServerSpec
       Web.ApiHandlersSpec
+      Web.OIDCSpec
   hs-source-dirs:
       test/unit
   default-extensions:

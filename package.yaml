@@ -238,6 +238,7 @@ tests:
       - http-client
       - unliftio
       - bytestring
+      - case-insensitive
       - containers
       - text
       - cryptonite

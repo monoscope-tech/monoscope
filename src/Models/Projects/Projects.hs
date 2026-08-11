@@ -94,6 +94,7 @@ module Models.Projects.Projects (
   emptySessionCookie,
   getSession,
   insertSession,
+  deleteSession,
   getPersistentSession,
   newPersistentSessionId,
   -- Audit Log
@@ -1078,6 +1079,10 @@ insertSession :: DB es => PersistentSessionId -> UserId -> SessionData -> Eff es
 insertSession psId uid sd = EHasql.interpExecute_ [HI.sql| insert into users.persistent_sessions(id, user_id, session_data) VALUES (#{psId}, #{uid}, #{sd}) |]
 
 
+deleteSession :: DB es => PersistentSessionId -> Eff es ()
+deleteSession psId = EHasql.interpExecute_ [HI.sql| DELETE FROM users.persistent_sessions WHERE id = #{psId} |]
+
+
 getPersistentSession :: DB es => PersistentSessionId -> Eff es (Maybe PersistentSession)
 getPersistentSession sessionId =
   EHasql.interpOne
@@ -1113,6 +1118,10 @@ emptySessionCookie =
   defaultSetCookie
     { setCookieName = "monoscope_session"
     , setCookieValue = ""
+    , setCookiePath = Just "/"
+    , setCookieHttpOnly = True
+    , setCookieSameSite = Just sameSiteLax
+    , setCookieSecure = True
     , setCookieMaxAge = Just 0
     }
 

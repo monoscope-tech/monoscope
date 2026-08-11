@@ -31,8 +31,10 @@ import Pkg.TraceSessionCache qualified as TraceSessionCache
 import Relude
 import System.Clock (TimeSpec (TimeSpec))
 import System.Directory (getDirectoryContents)
+
 import System.Envy (DefConfig (..), FromEnv (..), Var (..), decodeWithDefaults, fromVar, toVar)
 import System.Logging qualified as Logging
+import Web.OIDC qualified as OIDC
 import "base64" Data.ByteString.Base64 qualified as B64
 import "cryptohash-md5" Crypto.Hash.MD5 qualified as MD5
 
@@ -53,6 +55,16 @@ data EnvConfig = EnvConfig
   , auth0Domain :: Text
   , auth0LogoutRedirect :: Text
   , auth0Callback :: Text
+  , oidcEnabled :: Bool
+  , oidcIssuer :: Text
+  , oidcDiscoveryUrl :: Text
+  , oidcClientId :: Text
+  , oidcCallbackUrl :: Text
+  , oidcLogoutRedirect :: Text
+  , oidcScopes :: Text
+  , oidcAllowedAlgorithms :: Text
+  , oidcExistingUserLinkMode :: Text
+  , oidcAutoRegister :: Bool
   , testEmail :: Maybe Text
   , testPhoneNumber :: Maybe Text
   , apiKeyEncryptionSecretKey :: Text
@@ -246,6 +258,11 @@ instance DefConfig EnvConfig where
       , replayBatchSize = 0 -- 0 = derive at runtime as messagesPerPubsubPullBatch `div` 2
       , loggingDestination = Logging.StdOut
       , logLevel = LogInfo -- Default to Info level
+      , oidcEnabled = False
+      , oidcScopes = "openid profile email"
+      , oidcAllowedAlgorithms = "RS256"
+      , oidcExistingUserLinkMode = "disabled"
+      , oidcAutoRegister = False
       , smtpPort = 465
       , smtpTls = True
       , maxConcurrentJobs = 4 -- Sane default, can be increased based on CPU cores
@@ -319,6 +336,8 @@ type EndpointStatsKey = ((Projects.ProjectId, Text, Text, Text), (Text, Int, Int
 
 data AuthContext = AuthContext
   { env :: EnvConfig
+  , oidcSettings :: Maybe OIDC.Settings
+  , oidcDiscovery :: Maybe OIDC.Discovery
   , pool :: Pool.Pool Connection
   , jobsPool :: Pool.Pool Connection
   , timefusionPgPool :: Pool.Pool Connection
@@ -368,6 +387,31 @@ instance Default DeploymentEnv where
 
 configToEnv :: IOE :> es => EnvConfig -> Eff es AuthContext
 configToEnv config = do
+  when (config.oidcEnabled && config.basicAuthEnabled)
+    $ Relude.error "invalid authentication configuration: OIDC_ENABLED and BASIC_AUTH_ENABLED cannot both be True"
+  (oidcSettings, oidcDiscovery) <-
+    if config.oidcEnabled
+      then do
+        oidcClientSecret <- liftIO $ maybe "" toText <$> lookupEnv "OIDC_CLIENT_SECRET"
+        let requireHttps = config.environment /= Dev
+            settingsResult =
+              OIDC.validateSettings
+                requireHttps
+                config.oidcIssuer
+                config.oidcDiscoveryUrl
+                config.oidcClientId
+                oidcClientSecret
+                config.oidcCallbackUrl
+                config.oidcLogoutRedirect
+                config.oidcScopes
+                config.oidcAllowedAlgorithms
+                config.oidcExistingUserLinkMode
+                config.oidcAutoRegister
+        settings <- either (Relude.error . ("invalid OIDC configuration: " <>)) pure settingsResult
+        discoveryResult <- liftIO $ OIDC.fetchDiscoveryIO requireHttps settings
+        discovery <- either (Relude.error . ("OIDC discovery failed during startup at stage: " <>) . show) pure discoveryResult
+        pure (Just settings, Just discovery)
+      else pure (Nothing, Nothing)
   let createPgConnIO = PG.connectPostgreSQL $ DeriveUtils.addKeepaliveParams $ encodeUtf8 config.databaseUrl
       -- Raise TimescaleDB DML decompression limit for UPDATE queries on compressed hypertables
       tfParams =
@@ -419,7 +463,9 @@ configToEnv config = do
   liftIO $ introspectAndCacheOtelColumns pool
   pure
     AuthContext
-      { pool
+      { oidcSettings
+      , oidcDiscovery
+      , pool
       , jobsPool
       , timefusionPgPool
       , hasqlPool
