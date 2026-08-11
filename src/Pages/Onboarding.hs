@@ -45,7 +45,7 @@ import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx)
 import Pages.Components
-import Pkg.DeriveUtils (hashAssetFile)
+import Pkg.DeriveUtils (assetUrl)
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, HXRedirectDest, RespHeaders, TriggerEvents, XWidgetJSON, addErrorToast, addRespHeaders, redirectCS)
@@ -619,19 +619,19 @@ integrationsPage pid apikey =
         , ".ai-menu-item.copied svg:first-child{display:none}"
         ]
 
-    link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/deps/highlightjs/atom-one-dark.min.css")]
-    script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/highlight.min.js")] ("" :: Text)
-    script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/javascript.min.js")] ("" :: Text)
-    script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/python.min.js")] ("" :: Text)
-    script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/go.min.js")] ("" :: Text)
-    script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/java.min.js")] ("" :: Text)
-    script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/csharp.min.js")] ("" :: Text)
-    script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/php.min.js")] ("" :: Text)
-    script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/elixir.min.js")] ("" :: Text)
-    script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/bash.min.js")] ("" :: Text)
-    script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/shell.min.js")] ("" :: Text)
-    script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/yaml.min.js")] ("" :: Text)
-    script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/json.min.js")] ("" :: Text)
+    link_ [rel_ "stylesheet", href_ (assetUrl "/public/assets/deps/highlightjs/atom-one-dark.min.css")]
+    script_ [src_ (assetUrl "/public/assets/deps/highlightjs/highlight.min.js")] ("" :: Text)
+    script_ [src_ (assetUrl "/public/assets/deps/highlightjs/javascript.min.js")] ("" :: Text)
+    script_ [src_ (assetUrl "/public/assets/deps/highlightjs/python.min.js")] ("" :: Text)
+    script_ [src_ (assetUrl "/public/assets/deps/highlightjs/go.min.js")] ("" :: Text)
+    script_ [src_ (assetUrl "/public/assets/deps/highlightjs/java.min.js")] ("" :: Text)
+    script_ [src_ (assetUrl "/public/assets/deps/highlightjs/csharp.min.js")] ("" :: Text)
+    script_ [src_ (assetUrl "/public/assets/deps/highlightjs/php.min.js")] ("" :: Text)
+    script_ [src_ (assetUrl "/public/assets/deps/highlightjs/elixir.min.js")] ("" :: Text)
+    script_ [src_ (assetUrl "/public/assets/deps/highlightjs/bash.min.js")] ("" :: Text)
+    script_ [src_ (assetUrl "/public/assets/deps/highlightjs/shell.min.js")] ("" :: Text)
+    script_ [src_ (assetUrl "/public/assets/deps/highlightjs/yaml.min.js")] ("" :: Text)
+    script_ [src_ (assetUrl "/public/assets/deps/highlightjs/json.min.js")] ("" :: Text)
 
     script_
       [text|

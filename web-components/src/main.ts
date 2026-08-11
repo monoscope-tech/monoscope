@@ -1,9 +1,17 @@
-// htmx 4 replaced defineExtension({onEvent}) with registerExtension(name, hooks), where
-// each hook is named after the event (htmx_config_request) and receives (elt, detail).
-// Registration is global — v4 dropped hx-ext as the activation mechanism — so each hook
-// gates itself on the hx-ext marker attribute the call sites already carry.
+// htmx 4 replaced defineExtension({onEvent}) with registerExtension(name, hooks), where each
+// hook is named after its event with ':' → '_' (htmx:config:request → htmx_config_request) and
+// is called as (elt, detail). Every request-lifecycle detail is `{ctx}` — the mutable request
+// lives at `detail.ctx.request`, NOT `detail.request`; reading the wrong one silently no-ops.
+// Registration is global — v4 dropped hx-ext as the activation mechanism — so each hook gates
+// itself on the hx-ext marker attribute the call sites already carry.
 const htmx4 = (window as any).htmx;
-const optedIn = (elt: Element | null | undefined, ext: string) => !!elt?.closest?.(`[hx-ext~="${ext}"]`);
+// Lucid renders every htmx attribute in the `data-` form and call sites comma-separate
+// multiple extensions, so neither a bare `hx-ext` nor a `~=` token match would do.
+const optedIn = (elt: Element | null | undefined, ext: string) => {
+  const host = elt?.closest?.('[hx-ext],[data-hx-ext]');
+  const val = host?.getAttribute('hx-ext') ?? host?.getAttribute('data-hx-ext') ?? '';
+  return val.split(/[\s,]+/).includes(ext);
+};
 
 // Helper to get dashboard constants from data attribute
 const getDashboardConstants = (el?: Element | null): Record<string, string> => {
@@ -21,12 +29,10 @@ const getDashboardConstants = (el?: Element | null): Record<string, string> => {
 htmx4.registerExtension('forward-page-params', {
   htmx_config_request: function (elt: Element, detail: any) {
     if (!optedIn(elt, 'forward-page-params')) return;
-    const req = detail.request ?? detail;
-    const method = String(req.method ?? detail.verb ?? 'get').toLowerCase();
+    const req = detail.ctx.request;
+    const method = String(req.method ?? 'get').toLowerCase();
     if (method !== 'get' && method !== 'post') return;
-    const raw = req.action ?? detail.path;
-    if (!raw) return;
-    const url = new URL(raw, window.location.origin);
+    const url = new URL(req.action, window.location.origin);
 
     // Forward URL params first (they take precedence)
     new URLSearchParams(window.location.search).forEach((value, key) => {
@@ -37,30 +43,30 @@ htmx4.registerExtension('forward-page-params', {
       if (!url.searchParams.has(key)) url.searchParams.set(key, value);
     });
 
-    const merged = url.origin === window.location.origin ? url.pathname + url.search : url.href;
-    if (req.action !== undefined) req.action = merged;
-    else detail.path = merged;
+    req.action = url.origin === window.location.origin ? url.pathname + url.search : url.href;
   },
 });
 
-// htmx 4 has no json-enc extension and its hx-encoding only selects multipart vs
-// urlencoded, so the JSON body encoding the API endpoints expect is ported here.
+// htmx 4 has no json-enc extension and its hx-encoding only chooses multipart vs urlencoded,
+// so the JSON body these endpoints expect is ported here. It must hook before:request, not
+// config:request: after config:request htmx unconditionally does
+// `request.body = new URLSearchParams(request.body)` for anything not multipart, which would
+// re-parse a JSON string into one garbage form field.
 htmx4.registerExtension('json-enc', {
-  htmx_config_request: function (elt: Element, detail: any) {
+  htmx_before_request: function (elt: Element, detail: any) {
     if (!optedIn(elt, 'json-enc')) return;
-    const req = detail.request ?? detail;
-    const body = req.body ?? detail.parameters;
-    if (!body) return;
-    const obj: Record<string, unknown> = body instanceof URLSearchParams || body instanceof FormData
-      ? Object.fromEntries((body as any).entries())
-      : (body as Record<string, unknown>);
-    const headers = req.headers ?? detail.headers;
-    if (headers) {
-      if (typeof headers.set === 'function') headers.set('Content-Type', 'application/json');
-      else headers['Content-Type'] = 'application/json';
-    }
-    if (req.body !== undefined) req.body = JSON.stringify(obj);
-    else detail.parameters = JSON.stringify(obj);
+    const req = detail.ctx.request;
+    if (!(req.body instanceof URLSearchParams || req.body instanceof FormData)) return;
+    // htmx flattens hx-vals into the FormData body with `set()`, which stringifies objects and
+    // arrays to "[object Object]" — so the nested payloads (`js:{...widgetJSON}`, `{teams: [...]}`)
+    // must be recovered from ctx.vals, where htmx keeps them unflattened, and overlaid on the form.
+    req.body = JSON.stringify({ ...Object.fromEntries((req.body as any).entries()), ...(detail.ctx.vals ?? {}) });
+    req.headers['Content-Type'] = 'application/json';
+    // htmx 4 hardcodes `Accept: text/html`, which Servant rejects with 406 on a `Post '[JSON]`
+    // route — and it checks Accept before Content-Type, so that 406 masks the body encoding
+    // entirely. json-enc call sites are mixed (ai_search is JSON, /widget and manage_teams are
+    // HTML), so prefer JSON and keep HTML acceptable at a lower quality.
+    req.headers['Accept'] = 'application/json, text/html;q=0.9';
   },
 });
 

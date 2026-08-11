@@ -1,14 +1,15 @@
 module Pages.ServiceMapSpec (spec) where
 
+import Control.Exception (evaluate)
 import Data.List qualified as L
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as LT
-import Data.Time (UTCTime, addUTCTime)
+import Data.Time (UTCTime, addUTCTime, diffUTCTime, getCurrentTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 (nextRandom)
 import Data.Vector qualified as V
 import Lucid qualified
-import Models.Telemetry.ServiceGraph (MapStats (..), NodeKind (..), ServiceEdge (..), ServiceGraph (..), ServiceNode (..), projectsWithSpansInRange, rollupServiceEdges, serviceGraphForRange, upsertServiceDependencyEdges)
+import Models.Telemetry.ServiceGraph (Collapse (..), EdgeSample (..), MapStats (..), NodeKind (..), ServiceEdge (..), ServiceGraph (..), ServiceNode (..), buildServiceGraph, drawnEdges, drawnNodes, projectsWithSpansInRange, rollupServiceEdges, serviceGraphForRange, serviceMapFanout, serviceMapNodeCap, singletonLatency, upsertServiceDependencyEdges)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.ServiceMap qualified as ServiceMap
 import Pages.Telemetry qualified as Trace
@@ -40,12 +41,33 @@ ingestFixture tr apiKey ts = do
   span' qSid (Just coSid) "publish" PT.Span'SPAN_KIND_PRODUCER (svc "checkout") [mkAttr "server.address" "orders.v1"]
 
 
+-- | The same shape as 'ingestFixture' but split across two deployment environments, so the
+-- Env facet has something real to group, offer and filter on.
+ingestEnvFixture :: TestResources -> Text -> UTCTime -> IO ()
+ingestEnvFixture tr apiKey ts = do
+  let hexId = T.replace "-" "" . UUID.toText <$> nextRandom
+  let svc s env = mkResource apiKey [mkAttr "service.name" s, mkAttr "deployment.environment.name" env]
+      span' trId sid parent name kind resource attrs =
+        ingestSpanReq tr $ withSpanKind kind $ mkSpanRequest trId sid parent name [] Nothing attrs resource ts
+  -- prod: gateway -> checkout -> postgres
+  (t1, gw, gwc, co, db) <- (,,,,) <$> hexId <*> hexId <*> hexId <*> hexId <*> hexId
+  span' t1 gw Nothing "GET /checkout" PT.Span'SPAN_KIND_SERVER (svc "gateway" "prod") []
+  span' t1 gwc (Just gw) "POST checkout" PT.Span'SPAN_KIND_CLIENT (svc "gateway" "prod") []
+  span' t1 co (Just gwc) "POST /checkout" PT.Span'SPAN_KIND_SERVER (svc "checkout" "prod") []
+  span' t1 db (Just co) "pg.query" PT.Span'SPAN_KIND_CLIENT (svc "checkout" "prod") [mkAttr "db.system.name" "postgresql"]
+  -- staging: the same two services, one hop, nothing downstream
+  (t2, gw2, gwc2, co2) <- (,,,) <$> hexId <*> hexId <*> hexId <*> hexId
+  span' t2 gw2 Nothing "GET /checkout" PT.Span'SPAN_KIND_SERVER (svc "gateway" "staging") []
+  span' t2 gwc2 (Just gw2) "POST checkout" PT.Span'SPAN_KIND_CLIENT (svc "gateway" "staging") []
+  span' t2 co2 (Just gwc2) "POST /checkout" PT.Span'SPAN_KIND_SERVER (svc "checkout" "staging") []
+
+
 -- | Roll the fixture's bucket and read the graph back, exactly as the page does.
 rollAndRead :: TestResources -> UTCTime -> IO ServiceGraph
 rollAndRead tr ts = runTestBg ts tr do
   edges <- rollupServiceEdges False testPid (addUTCTime (-300) ts) (addUTCTime 300 ts)
   upsertServiceDependencyEdges testPid ts edges
-  serviceGraphForRange testPid (addUTCTime (-600) ts) (addUTCTime 600 ts)
+  serviceGraphForRange testPid Nothing (addUTCTime (-600) ts) (addUTCTime 600 ts)
 
 
 -- | Assert every needle is present, naming the ones that are not. A bare
@@ -62,14 +84,156 @@ edgePairs :: ServiceGraph -> [(Text, Text)]
 edgePairs g = L.sort [(e.source, e.target) | e <- V.toList g.edges]
 
 
+-- | One hop from @api@ into an uninstrumented peer, for exercising the grouping fold
+-- without paying for OTLP ingestion of a few hundred tenant subdomains.
+hop :: Text -> NodeKind -> Int64 -> EdgeSample
+hop target kind reqs = EdgeSample ("api", NKService) (target, kind) reqs 0 (singletonLatency 1_000_000) 0
+
+
+nodeBy :: ServiceGraph -> Text -> Maybe ServiceNode
+nodeBy g k = V.find (\n -> n.key == k) g.nodes
+
+
 spec :: Spec
 spec = around withTestResources do
   describe "service map" do
+    it "serviceMapLegend_iconsExistInRegularSprite" \_ -> do
+      sprite <- readFileText "static/public/assets/svgs/fa-sprites/regular.svg"
+      sprite `shouldContainAll` ["id=\"diagram-project\"", "id=\"arrow-right-to-bracket\""]
+
+    -- The bug this guards: a project whose one instrumented service fans out to hundreds of
+    -- per-tenant hostnames rendered every hostname as its own node, which the layered layout
+    -- then crushed into an unreadable column. Peers on a shared registrable domain collapse
+    -- into one head, and both levels travel so the client can expand without a refetch.
+    it "buildServiceGraph_collapsesPerTenantFanOutButNotLoneOrNamedPeers" \_ -> do
+      let tenants = ["http:t" <> show n <> ".myshopify.com" | n <- [1 :: Int .. 3]]
+          graph =
+            buildServiceGraph 60 serviceMapNodeCap serviceMapFanout Nothing
+              $ [hop t NKExternal 100 | t <- tenants]
+              <> [hop "http:api.paystack.co" NKExternal 50, hop "db:redis" NKDatabase 900]
+
+      -- The head stands in for its members, is labelled by the domain, and counts them.
+      (nodeBy graph "grp:http:myshopify.com" <&> \n -> (n.label, n.memberCount, n.stats.requests))
+        `shouldBe` Just ("myshopify.com", Just 3, 300)
+      -- Members ride along, tagged, so expanding is a re-layout rather than a second query.
+      map (.groupKey) (mapMaybe (nodeBy graph) tenants) `shouldBe` replicate 3 (Just "grp:http:myshopify.com")
+      -- A group of one is not a group: a lone peer stays itself rather than becoming "×1",
+      -- and a database is named by its system already, so it never groups.
+      map (\k -> nodeBy graph k <&> \n -> (n.memberCount, n.groupKey)) ["http:api.paystack.co", "db:redis"]
+        `shouldBe` [Just (Nothing, Nothing), Just (Nothing, Nothing)]
+      -- Both levels of edge are present; the renderer picks by expansion state.
+      edgePairs graph
+        `shouldBe` L.sort ([("api", t) | t <- tenants] <> [("api", "grp:http:myshopify.com"), ("api", "http:api.paystack.co"), ("api", "db:redis")])
+
+    -- The cap counts what the map draws, so a collapsed group costs one slot however many
+    -- peers it holds. Before grouping, 150 tenants exhausted the whole budget.
+    it "buildServiceGraph_capsDrawnNodesNotGroupMembers" \_ -> do
+      let graph = buildServiceGraph 60 3 serviceMapFanout Nothing [hop ("http:t" <> show n <> ".myshopify.com") NKExternal 1 | n <- [1 :: Int .. 40]]
+      (nodeBy graph "grp:http:myshopify.com" <&> (.memberCount)) `shouldBe` Just (Just 40)
+      graph.truncated `shouldBe` False
+      length (V.filter (isNothing . (.groupKey)) graph.nodes) `shouldBe` 2 -- api + the one head
+
+    -- Domain grouping cannot help here: every peer is a different merchant's own domain,
+    -- which is what a real shipping-API project actually looks like. Only a volume-ranked
+    -- fold bounds that, and bounding it is what lets the map carry per-node detail at all.
+    it "buildServiceGraph_foldsTheUnrelatedLongTailUnderItsBusiestCaller" \_ -> do
+      let peers = [(n, "http:merchant" <> show n <> ".com") | n <- [1 :: Int .. 20]]
+          graph = buildServiceGraph 60 serviceMapNodeCap (CollapseTo 5) Nothing [hop p NKExternal (fromIntegral (100 - n)) | (n, p) <- peers]
+          drawn = drawnNodes graph
+
+      -- The five busiest stay named; the remaining fifteen become one node that says so.
+      map (.label) (V.toList drawn) `shouldContain` ["15 more dependencies"]
+      (nodeBy graph "rest:api" <&> \n -> (n.memberCount, n.stats.requests))
+        `shouldBe` Just (Just 15, sum [fromIntegral (100 - n) | (n, _) <- drop 5 peers])
+      -- api + 5 named + 1 fold. The other 15 ride along for expansion but are not drawn.
+      V.length drawn `shouldBe` 7
+      V.length graph.nodes `shouldBe` 22
+
+      -- The counts the page prints must describe the picture, not the payload. Counting the
+      -- folded members here is what made the header claim "234 services" for a map of 150.
+      V.length (drawnEdges graph) `shouldBe` 6
+      map (.label) (V.toList (V.filter (\n -> n.memberCount == Just 15) drawn)) `shouldBe` ["15 more dependencies"]
+
+    -- A trace map is one request's path; folding two of its five hops into "3 more" would
+    -- hide exactly what the reader opened it to see.
+    it "buildServiceGraph_neverCollapsesATraceMap" \_ -> do
+      let peers = ["http:merchant" <> show n <> ".com" | n <- [1 :: Int .. 20]]
+          graph = buildServiceGraph 0 serviceMapNodeCap CollapseOff (Just 1_000_000) [hop p NKExternal 1 | p <- peers]
+      V.length (drawnNodes graph) `shouldBe` 21 -- api + all 20, nothing folded
+      V.toList (V.filter (isJust . (.memberCount)) graph.nodes) `shouldBe` []
+
+    -- The state that a stale haddock claimed could not exist: a domain head that itself
+    -- falls into the long tail is a head *and* a member. It is what makes expansion nest —
+    -- "N more dependencies" opens into "myshopify.com x3", which opens into its own members
+    -- — and nothing pinned it, which is how the wrong invariant survived in the type.
+    it "buildServiceGraph_aDomainHeadInTheTailIsBothHeadAndMember" \_ -> do
+      let tenants = ["http:t" <> show n <> ".myshopify.com" | n <- [1 :: Int .. 3]]
+          loud = ["http:loud" <> show n <> ".example" <> show n <> ".com" | n <- [1 :: Int .. 4]]
+          graph =
+            buildServiceGraph 60 serviceMapNodeCap (CollapseTo 2) Nothing
+              $ [hop t NKExternal 1 | t <- tenants]
+              <> [hop l NKExternal 5000 | l <- loud]
+
+      -- The quiet domain group is outranked by the loud singletons, so it folds into the
+      -- tail while still standing in for its own three members.
+      (nodeBy graph "grp:http:myshopify.com" <&> \n -> (n.memberCount, isJust n.groupKey))
+        `shouldBe` Just (Just 3, True)
+      -- And its members still point at it, not at the tail head above it.
+      map (.groupKey) (mapMaybe (nodeBy graph) tenants) `shouldBe` replicate 3 (Just "grp:http:myshopify.com")
+
+    -- A regression guard with a stopwatch, because the bug it pins had no wrong output —
+    -- only a cost. `domainOf` was written as a function of the key, so the collapse map was
+    -- rebuilt on every lookup: quadratic in node count, and a 221-node project spent seconds
+    -- in the fold. 400 nodes finishes in milliseconds when it is bound as a value, and takes
+    -- long enough to be unmissable when it is not.
+    it "buildServiceGraph_foldsALargeGraphWithoutQuadraticBlowup" \_ -> do
+      let peers = [(n, "http:merchant" <> show n <> ".example" <> show (n `mod` 40) <> ".com") | n <- [1 :: Int .. 400]]
+          samples = [hop p NKExternal (fromIntegral n) | (n, p) <- peers]
+      start <- getCurrentTime
+      let graph = buildServiceGraph 60 serviceMapNodeCap serviceMapFanout Nothing samples
+      _ <- evaluate (V.length graph.nodes)
+      elapsed <- flip diffUTCTime start <$> getCurrentTime
+      V.length (drawnNodes graph) `shouldSatisfy` (> 0)
+      elapsed `shouldSatisfy` (< 2.0)
+
+    -- The Env facet is a rollup dimension, so it has to survive the whole round trip: read
+    -- off the span's resource, grouped into the rollup, offered as the facet's options,
+    -- honoured as a filter, and finally rendered as a control on the page.
+    it "serviceMap_environmentFacetRoundTripsFromSpanToRenderedControl" \tr -> do
+      apiKey <- createTestAPIKey tr testPid "service-map-env-key"
+      ingestEnvFixture tr apiKey frozenTime
+      g <- runTestBg frozenTime tr do
+        edges <- rollupServiceEdges False testPid (addUTCTime (-300) frozenTime) (addUTCTime 300 frozenTime)
+        upsertServiceDependencyEdges testPid frozenTime edges
+        serviceGraphForRange testPid Nothing (addUTCTime (-600) frozenTime) (addUTCTime 600 frozenTime)
+
+      -- Both environments are offered, sorted, however many hops each contributed.
+      V.toList g.environments `shouldBe` ["prod", "staging"]
+
+      -- Selecting one keeps only its hops. staging has the single gateway->checkout call.
+      prod <- runTestBg frozenTime tr $ serviceGraphForRange testPid (Just "prod") (addUTCTime (-600) frozenTime) (addUTCTime 600 frozenTime)
+      staging <- runTestBg frozenTime tr $ serviceGraphForRange testPid (Just "staging") (addUTCTime (-600) frozenTime) (addUTCTime 600 frozenTime)
+      map fst (edgePairs staging) `shouldNotContain` ["checkout"] -- no db/queue hops in staging
+      length (edgePairs prod) `shouldSatisfy` (> length (edgePairs staging))
+
+      -- An environment nothing reported yields an empty map rather than silently falling
+      -- back to "all", which would show prod traffic under someone else's label.
+      none <- runTestBg frozenTime tr $ serviceGraphForRange testPid (Just "qa") (addUTCTime (-600) frozenTime) (addUTCTime 600 frozenTime)
+      V.toList none.edges `shouldBe` []
+
+      -- And the control itself renders, with an option per environment plus "All". The clock
+      -- advances first for the same reason the page test does it: the handler's 1H window is
+      -- relative to now, and a bucket sitting exactly at now falls outside a half-open range.
+      setTestTime tr.trTestClock (addUTCTime 600 frozenTime)
+      (_, page) <- testServant tr $ ServiceMap.serviceMapGetH testPid Nothing Nothing (Just "1H") (Just "prod")
+      let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
+      html `shouldContainAll` ["?env=prod", "?env=staging", ">All<"]
+
     -- An empty project must produce an empty graph with no error. The `error` field exists
     -- precisely so a failed query can't masquerade as "you have no services"; this pins the
     -- other side of that contract.
     it "emptyProject_producesEmptyGraphWithoutError" \tr -> do
-      g <- runTestBg frozenTime tr $ serviceGraphForRange testPid (addUTCTime (-600) frozenTime) frozenTime
+      g <- runTestBg frozenTime tr $ serviceGraphForRange testPid Nothing (addUTCTime (-600) frozenTime) frozenTime
       V.toList g.nodes `shouldBe` []
       V.toList g.edges `shouldBe` []
       g.error `shouldBe` Nothing
@@ -124,7 +288,6 @@ spec = around withTestResources do
           <*> projectsWithSpansInRange False (addUTCTime (-86400) frozenTime) (addUTCTime (-86100) frozenTime)
       inBucket `shouldBe` [testPid]
       idleBucket `shouldBe` [] -- testPid is active, but silent in this window
-
     it "rollup_excludesSpansOutsideTheRange" \tr -> do
       apiKey <- createTestAPIKey tr testPid "service-map-range-key"
       ingestFixture tr apiKey (addUTCTime (-86400) frozenTime)
@@ -156,7 +319,7 @@ spec = around withTestResources do
       -- Rolled buckets are always in the past (the dispatcher lags 10 minutes), and the read
       -- range is half-open, so advance the clock rather than querying a bucket at exactly now.
       setTestTime tr.trTestClock (addUTCTime 600 frozenTime)
-      (_, page) <- testServant tr $ ServiceMap.serviceMapGetH testPid Nothing Nothing (Just "1H")
+      (_, page) <- testServant tr $ ServiceMap.serviceMapGetH testPid Nothing Nothing (Just "1H") Nothing
       let ServiceMap.ServiceMapPage (PageCtx conf pd) = page
           html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
       conf.pageTitle `shouldBe` "Service Map"
@@ -174,7 +337,13 @@ spec = around withTestResources do
       html `shouldContainAll` ["Entry point", "gateway", "checkout", "orders", "orders.v1", "Dependencies (4)"]
       -- The canvas hydrates from the embedded payload rather than an extra round trip.
       html `shouldContainAll` ["data-service-map", "global-service-map-data", "global-service-map-colors"]
+      html `shouldContainAll` ["aria-label=\"Service colors\"", "data-service-color=\"gateway\"", "data-service-color=\"checkout\""]
       html `shouldContainAll` ["Events", "Metrics", "Service Map"]
+
+    it "serviceMapFilter_quotesHyphenatedEventNameForHyperscript" \tr -> do
+      (_, page) <- testServant tr $ ServiceMap.serviceMapGetH testPid Nothing Nothing (Just "1H") Nothing
+      let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
+      html `shouldContainAll` ["send &quot;service-map-filter&quot;(q: my value)"]
 
     -- The trace-level map: same grammar, scoped to one request. It is derived from spans
     -- already on the page (no extra query), so the whole contract is "load the trace and the

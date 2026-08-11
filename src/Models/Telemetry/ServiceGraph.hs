@@ -19,8 +19,12 @@ module Models.Telemetry.ServiceGraph (
   singletonLatency,
   latencyPercentile,
   buildServiceGraph,
+  Collapse (..),
+  serviceMapFanout,
   traceEdgeSamples,
   emptyServiceGraph,
+  drawnNodes,
+  drawnEdges,
   serviceMapNodeCap,
   RollupEdge (..),
   projectsWithSpansInRange,
@@ -53,8 +57,16 @@ import Relude
 -- | What a node in the graph /is/. A sum type rather than @inferred :: Bool@ plus
 -- @isDatabase :: Bool@ so the renderer's shape/style dispatch is exhaustive and an
 -- "inferred entry-point database" cannot be constructed.
+--
+-- The derived 'Ord' is load-bearing: 'buildServiceGraph' folds a collapsed head's kind with
+-- @min@ over its children, seeded with the head's own (absent, hence 'NKUnknown') kind. That
+-- is only correct while 'NKUnknown' remains the maximum, so a constructor appended after it
+-- would silently give every head the wrong kind.
+--
+-- >>> maxBound :: NodeKind
+-- NKUnknown
 data NodeKind = NKEntry | NKService | NKDatabase | NKQueue | NKExternal | NKUnknown
-  deriving stock (Eq, Generic, Ord, Read, Show)
+  deriving stock (Bounded, Enum, Eq, Generic, Ord, Read, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON, HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "NK" NodeKind
 
@@ -150,6 +162,15 @@ data ServiceNode = ServiceNode
   -- ^ Trace map only: this service's share of the trace's total span time, which is what
   -- sizes its node. Nothing on the global map, where volume sizes nodes instead.
   , stats :: !MapStats
+  , memberCount :: !(Maybe Int)
+  -- ^ @Just n@ (n >= 2) on a collapsed head, standing in for n peers.
+  , groupKey :: !(Maybe Text)
+  -- ^ @Just g@ when this node is hidden inside collapsed head @g@.
+  --
+  -- All four combinations of these two are reachable, and the fourth is the one that makes
+  -- expansion nest: a domain head that itself falls into the long tail is a head /and/ a
+  -- member. Standalone, head, member, head-of-members — a sum type over the pair would be
+  -- isomorphic to it and buy no safety, so the pair stays and this comment is the contract.
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (NFData)
@@ -176,20 +197,140 @@ data ServiceGraph = ServiceGraph
   , error :: !(Maybe Text)
   -- ^ Sanitized backend-failure message. A failed query must render an error state, never
   -- an empty graph that reads as "you have no services".
+  , environments :: !(V.Vector Text)
+  -- ^ Every deployment environment reported in this range, whichever one is selected — the
+  -- Env facet's options. Empty when nothing reports an environment at all, which is the
+  -- signal to hide the facet rather than show one with no choices in it.
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake ServiceGraph
 
 
+-- | What the map actually draws. Collapsed members ride in the payload so the client can
+-- expand without a refetch, but they are not on the canvas — counting them in "N services",
+-- or listing them in the dependency table beside their own group's row, double-counts the
+-- same traffic. Every count the UI shows goes through these.
+drawnNodes :: ServiceGraph -> V.Vector ServiceNode
+drawnNodes g = V.filter (isNothing . (.groupKey)) g.nodes
+
+
+drawnEdges :: ServiceGraph -> V.Vector ServiceEdge
+drawnEdges g = V.filter (\e -> e.source `S.member` ks && e.target `S.member` ks) g.edges
+  where
+    ks = S.fromList [n.key | n <- V.toList (drawnNodes g)]
+
+
 emptyServiceGraph :: Double -> ServiceGraph
-emptyServiceGraph rangeSecs = ServiceGraph V.empty V.empty rangeSecs False Nothing
+emptyServiceGraph rangeSecs = ServiceGraph V.empty V.empty rangeSecs False Nothing V.empty
 
 
 -- | Beyond this a layered graph stops being readable and starts being a hairball, so the
--- busiest nodes are kept and 'truncated' tells the UI to say so.
+-- busiest nodes are kept and 'truncated' tells the UI to say so. The cap counts what the
+-- map actually /draws/ — a collapsed group is one node however many peers it holds — so
+-- grouping buys real coverage rather than just a tidier picture.
 serviceMapNodeCap :: Int
 serviceMapNodeCap = 150
+
+
+-- | Whether a map collapses its dependencies at all, and how many peers it keeps drawn
+-- before folding the rest away. The trace map passes 'CollapseOff': a single request's path
+-- is the whole point there, and folding two of its five hops into "3 more" would hide the
+-- thing the reader came to see.
+data Collapse = CollapseOff | CollapseTo !Int
+  deriving stock (Eq, Show)
+
+
+-- | How many uninstrumented peers the global map draws before folding the remainder.
+-- Datadog shows a bounded map and puts the rest behind a click; past a dozen or so the
+-- reader is scanning, not reading.
+serviceMapFanout :: Collapse
+serviceMapFanout = CollapseTo 12
+
+
+-- | Turn candidate @(member, head)@ pairs into a lookup that only collapses a head with at
+-- least two members: a group of one is not a group, it is a peer wearing a badge.
+-- | The rollup's @env@ column is NOT NULL because it belongs to the primary key, so "no
+-- environment reported" is stored as the empty string. That is a storage detail and it stops
+-- here: above this boundary absence is 'Nothing', and nothing downstream has to know that ''
+-- means anything in particular.
+--
+-- >>> (envFromColumn "prod", envFromColumn "")
+-- (Just "prod",Nothing)
+envFromColumn :: Text -> Maybe Text
+envFromColumn = guarded (not . T.null)
+
+
+envToColumn :: Maybe Text -> Text
+envToColumn = fromMaybe ""
+
+
+collapseMap :: [(Text, Text)] -> Text -> Maybe Text
+collapseMap assocs = \k -> do
+  g <- Map.lookup k m
+  guard $ Map.findWithDefault (0 :: Int) g sizes > 1
+  pure g
+  where
+    m = Map.fromList assocs
+    sizes = Map.fromListWith (+) [(g, 1) | (_, g) <- assocs]
+
+
+-- | Members of collapsed groups travel with their head so the client can expand a group
+-- without a second request. Bounded, because a per-tenant fan-out is exactly the shape
+-- that would otherwise put tens of thousands of nodes on the wire.
+serviceMapMemberCap :: Int
+serviceMapMemberCap = 8 * serviceMapNodeCap
+
+
+-- | Which collapsed group an uninstrumented peer belongs to, if any.
+--
+-- Only host-shaped peers group. Databases are named by their system ("postgresql",
+-- "redis") and so have low cardinality by construction; third-party hosts are the
+-- cardinality bomb — one node per tenant subdomain is what turns a map into a hairbrush.
+groupKeyOf :: NodeKind -> Text -> Maybe Text
+groupKeyOf kind key
+  | kind /= NKExternal && kind /= NKQueue = Nothing
+  | (prefix, rest) <- T.breakOn ":" key
+  , Just host <- T.stripPrefix ":" rest =
+      (\dom -> "grp:" <> prefix <> ":" <> dom) <$> registrableDomain host
+  | otherwise = Nothing
+
+
+-- | eTLD+1: @xyz.myshopify.com@ and @abc.myshopify.com@ both become @myshopify.com@.
+--
+-- A curated multi-part suffix list rather than the full public suffix list — 30 KB of
+-- data to make a label prettier is not a trade worth making, and a miss is benign: two
+-- peers that could have merged simply stay separate.
+--
+-- >>> registrableDomain "xyz.myshopify.com"
+-- Just "myshopify.com"
+-- >>> registrableDomain "api.fezdelivery.co"
+-- Just "fezdelivery.co"
+-- >>> registrableDomain "shop.example.co.uk"
+-- Just "example.co.uk"
+-- >>> registrableDomain "redis"
+-- Nothing
+-- >>> registrableDomain "10.0.0.7"
+-- Nothing
+registrableDomain :: Text -> Maybe Text
+registrableDomain host
+  | length labels < 2 = Nothing
+  | all (T.all isDigit) labels = Nothing -- an IP literal is not a domain, and never groups
+  | length labels > 2 && lastNJoined 2 `S.member` multiPartSuffixes = Just $ lastNJoined 3
+  | otherwise = Just $ lastNJoined 2
+  where
+    labels = T.splitOn "." host
+    lastNJoined n = T.intercalate "." $ drop (length labels - n) labels
+
+
+-- | Two-label public suffixes common enough to matter for our customers. Not exhaustive
+-- by design; see 'registrableDomain'.
+multiPartSuffixes :: S.Set Text
+multiPartSuffixes =
+  S.fromList
+    $ ["co." <> c | c <- ["uk", "za", "nz", "jp", "kr", "in", "il", "ke", "id", "th"]]
+    <> ["com." <> c | c <- ["au", "br", "mx", "ar", "cn", "hk", "sg", "tr", "ng", "gh", "eg", "pk", "my", "ph", "vn", "tw", "ua", "pl", "co", "pe", "ve", "ec"]]
+    <> ["org.uk", "ac.uk", "gov.uk", "net.au", "org.au", "ne.jp", "or.jp"]
 
 
 -- | One observed hop. The rollup emits these pre-aggregated per bucket; the trace fold
@@ -214,40 +355,114 @@ data EdgeSample = EdgeSample
 -- Node stats come from inbound edges because an edge's latency is the /callee's/ duration
 -- — what that service took to serve the call — so a node's latency is just the merge of
 -- what its callers observed, with no second measurement to keep in sync.
-buildServiceGraph :: Double -> Int -> Maybe Int64 -> [EdgeSample] -> ServiceGraph
-buildServiceGraph rangeSecs nodeCap totalDurationM samples =
+buildServiceGraph :: Double -> Int -> Collapse -> Maybe Int64 -> [EdgeSample] -> ServiceGraph
+buildServiceGraph rangeSecs nodeCap collapse totalDurationM samples =
   ServiceGraph
-    { nodes = V.fromList keptNodes
-    , edges = V.fromList [e | e <- allEdges, e.source `S.member` keptKeys, e.target `S.member` keptKeys]
+    { nodes = V.fromList (topNodes <> memberNodes)
+    , edges = V.fromList keptEdges
     , rangeSeconds = rangeSecs
-    , truncated = length nodeStats > nodeCap
+    , truncated = length topLevel > nodeCap
     , error = Nothing
+    , environments = V.empty
     }
   where
     aggOf s = HopAgg s.requests s.errors s.latency s.targetDurationNs
-    merged = Map.fromListWith (<>) [((s.source, s.target), aggOf s) | s <- samples]
-    allEdges = [ServiceEdge (fst src) (fst tgt) (statsOf agg) | ((src, tgt), agg) <- Map.toList merged]
 
     -- A node's kind is whatever the hops say it is; a service seen both as a caller and
     -- as an inferred peer is a service (NKService sorts before the inferred kinds).
     nodeKinds = Map.fromListWith min $ concat [[s.source, s.target] | s <- samples]
+    kindOf k = Map.findWithDefault NKUnknown k nodeKinds
     inbound = Map.fromListWith (<>) [(fst s.target, aggOf s) | s <- samples]
-    -- Entry-only and leaf nodes still need a row, with zeroed stats.
-    nodeStats = [(key, Map.findWithDefault mempty key inbound) | key <- Map.keys nodeKinds]
+    aggFor k = Map.findWithDefault mempty k inbound
 
-    keptNodes =
-      [ ServiceNode
-          { key
-          , label = nodeLabel key
-          , kind
-          , inferred = inferredKind kind
-          , durationShare = (\total -> if total > 0 then Just (fromIntegral agg.durNs / fromIntegral total) else Nothing) =<< totalDurationM
-          , stats = statsOf agg
-          }
-      | (key, agg) <- take nodeCap $ sortOn (\(_, a) -> Down a.reqs) nodeStats
-      , let kind = Map.findWithDefault NKUnknown key nodeKinds
+    collapsing = collapse /= CollapseOff
+
+    -- Collapse level 1 — peers sharing a registrable domain, e.g. 71 tenant subdomains.
+    -- Bound as a value, not as a function of the key. Written as `domainOf k = collapseMap
+    -- [...] k` the association list and both of its Maps are rebuilt on *every lookup*, and
+    -- this is called once per node from canon1, parentOf, rootOf and climb — which is how a
+    -- 31-service map came to spend a second in the graph fold.
+    domainOf
+      | collapsing = collapseMap [(x, g) | x <- Map.keys nodeKinds, Just g <- [groupKeyOf (kindOf x) x]]
+      | otherwise = const Nothing
+
+    -- Collapse level 2 — the long tail. A domain fold cannot merge hundreds of *unrelated*
+    -- customer domains (one per merchant), and those are exactly what fills a real map: a
+    -- handful of peers carry the traffic and the remainder are a fraction of a percent each.
+    -- Keep the busiest, fold the rest under the caller that reaches them, and let the table
+    -- carry the full list. This is the bound that makes the map finite for any topology.
+    canon1 k = fromMaybe k (domainOf k)
+    canonKind = Map.fromListWith min [(canon1 k, kindOf k) | k <- Map.keys nodeKinds]
+    canonAgg = Map.fromListWith (<>) [(canon1 k, aggFor k) | k <- Map.keys nodeKinds]
+    tailKeys =
+      (case collapse of CollapseOff -> const []; CollapseTo n -> drop n)
+        $ map fst
+        $ sortOn
+          (\(_, a) -> Down a.reqs)
+          [kv | kv@(k, _) <- Map.toList canonAgg, inferredKind (Map.findWithDefault NKUnknown k canonKind)]
+    -- A peer with several callers folds under its busiest, so the fold never invents a
+    -- caller relationship that was not observed.
+    busiestCaller =
+      Map.fromListWith
+        (\a b -> if fst a >= fst b then a else b)
+        [(canon1 (fst s.target), (s.requests, canon1 (fst s.source))) | s <- samples]
+    tailOf = collapseMap [(k, "rest:" <> src) | k <- tailKeys, Just (_, src) <- [Map.lookup k busiestCaller]]
+
+    -- One parent link per node. Depth is at most two (raw peer -> domain head -> tail head),
+    -- and the renderer expands one level per click, so a tail head opens into domain heads
+    -- that open into their own members.
+    parentOf k = domainOf k <|> tailOf k
+    rootOf k = maybe k rootOf (parentOf k)
+
+    -- The synthesised tail heads, as a set rather than a "rest:" prefix test: which kind of
+    -- node a key denotes is structure, and re-reading it out of the string downstream is how
+    -- that structure goes stale.
+    restHeads = S.fromList $ mapMaybe tailOf (Map.keys canonAgg)
+    allKeys = ordNub $ Map.keys nodeKinds <> mapMaybe parentOf (Map.keys nodeKinds) <> S.toList restHeads
+    childrenOf = Map.fromListWith (<>) [(g, [k]) | k <- allKeys, Just g <- [parentOf k]]
+    childrenAt k = Map.findWithDefault [] k childrenOf
+    -- A head has no hops of its own; its numbers are exactly the sum of what it stands for.
+    aggAt k = case childrenAt k of [] -> aggFor k; ks -> foldMap aggAt ks
+    kindAt k = foldr (min . kindAt) (kindOf k) (childrenAt k)
+
+    -- The cap ranks what the map actually draws; collapsed members ride along under it.
+    topLevel = sortOn (\(_, a) -> Down a.reqs) [(k, aggAt k) | k <- allKeys, isNothing (parentOf k)]
+    keptTop = take nodeCap topLevel
+    keptRoots = S.fromList (map fst keptTop)
+    keptMembers =
+      take serviceMapMemberCap
+        $ sortOn
+          (\(_, a) -> Down a.reqs)
+          [(k, aggAt k) | k <- allKeys, isJust (parentOf k), rootOf k `S.member` keptRoots]
+
+    topNodes = [mkNode k a | (k, a) <- keptTop]
+    memberNodes = [mkNode k a | (k, a) <- keptMembers]
+
+    mkNode key agg =
+      ServiceNode
+        { key
+        , label = bool (nodeLabel key) (show (length (childrenAt key)) <> " more dependencies") (key `S.member` restHeads)
+        , kind = kindAt key
+        , inferred = inferredKind (kindAt key)
+        , durationShare = (\total -> if total > 0 then Just (fromIntegral agg.durNs / fromIntegral total) else Nothing) =<< totalDurationM
+        , stats = statsOf agg
+        , memberCount = viaNonEmpty length (childrenAt key)
+        , groupKey = parentOf key
+        }
+
+    -- Every level travels: an edge is emitted for each depth both endpoints can be lifted
+    -- to, so whatever is expanded, the edges between the visible nodes are already present
+    -- and expanding costs no second request.
+    climb k = fromMaybe k (parentOf k)
+    visible = S.fromList [n.key | n <- topNodes <> memberNodes]
+    edgesBy f = Map.fromListWith (<>) [((f (fst s.source), f (fst s.target)), aggOf s) | s <- samples]
+    keptEdges =
+      [ ServiceEdge source target (statsOf agg)
+      | ((source, target), agg) <- Map.toList $ Map.unions [edgesBy f | f <- [id, climb, climb . climb]]
+      , source `S.member` visible
+      , target `S.member` visible
       ]
-    keptKeys = S.fromList [n.key | n <- keptNodes]
+
     statsOf agg = mkStats rangeSecs agg.reqs agg.errs agg.hist
 
 
@@ -264,9 +479,15 @@ instance Monoid HopAgg where
 
 
 -- | Inferred dependency keys carry their type as a prefix so two different systems can't
--- collide on a bare host name; the label drops it again for display.
+-- collide on a bare host name, and a collapsed group prepends @grp:@ so a head can't
+-- collide with the member that shares its domain. The label drops both again for display.
+--
+-- >>> nodeLabel "grp:http:myshopify.com"
+-- "myshopify.com"
+-- >>> nodeLabel "db:postgresql"
+-- "postgresql"
 nodeLabel :: Text -> Text
-nodeLabel k = fromMaybe k $ listToMaybe [v | p <- ["db:", "queue:", "http:"], Just v <- [T.stripPrefix p k]]
+nodeLabel k = maybe k nodeLabel $ listToMaybe [v | p <- ["grp:", "db:", "queue:", "http:"], Just v <- [T.stripPrefix p k]]
 
 
 -- | Derive one trace's hops from its spans. Pure, so the trace map costs no extra query:
@@ -322,7 +543,10 @@ traceEdgeSamples spans = (entryEdges <> serviceEdges <> inferredEdges, totalDura
 -- | One rolled-up edge for a single bucket. Kinds travel with the keys so the read path
 -- rebuilds node shapes without re-deriving them.
 data RollupEdge = RollupEdge
-  { sourceKey :: !Text
+  { env :: !(Maybe Text)
+  -- ^ Deployment environment of the /caller/. Part of the hop's identity: prod and staging
+  -- calling the same dependency are different edges.
+  , sourceKey :: !Text
   , sourceKind :: !NodeKind
   , targetKey :: !Text
   , targetKind :: !NodeKind
@@ -339,7 +563,8 @@ data RollupEdge = RollupEdge
 -- Postgres and DataFusion both plan the same way — no JSON construction, no array_agg of
 -- ragged arrays.
 data SliceRow = SliceRow
-  { src :: !Text
+  { env :: !Text
+  , src :: !Text
   , srcKind :: !Text
   , tgt :: !Text
   , tgtKind :: !Text
@@ -364,14 +589,14 @@ parseNodeKind = \case
 
 sliceRowsToEdges :: [SliceRow] -> [RollupEdge]
 sliceRowsToEdges rows =
-  [ RollupEdge sk (parseNodeKind skk) tk (parseNodeKind tkk) agg.reqs agg.errs agg.durNs agg.hist
-  | ((sk, skk, tk, tkk), agg) <- Map.toList grouped
+  [ RollupEdge ev sk (parseNodeKind skk) tk (parseNodeKind tkk) agg.reqs agg.errs agg.durNs agg.hist
+  | ((ev, sk, skk, tk, tkk), agg) <- Map.toList grouped
   ]
   where
     grouped =
       Map.fromListWith
         (<>)
-        [ ((r.src, r.srcKind, r.tgt, r.tgtKind), HopAgg r.n r.errs (LatencyHist $ one (fromIntegral r.latBucket, r.n)) r.durNs)
+        [ ((envFromColumn r.env, r.src, r.srcKind, r.tgt, r.tgtKind), HopAgg r.n r.errs (LatencyHist $ one (fromIntegral r.latBucket, r.n)) r.durNs)
         | r <- rows
         ]
 
@@ -425,7 +650,16 @@ rollupServiceEdges useTf pid lo hi =
       [HI.sql|
       WITH sp AS (
         SELECT context___trace_id tid, context___span_id sid, parent_id par,
-               COALESCE(resource___service___name, 'unknown') svc, kind knd, status_code stc, duration dur, name nm,
+               COALESCE(resource___service___name, 'unknown') svc,
+               -- `resource` is nested JSON, not dot-keyed: resource->>'deployment.environment.name'
+               -- silently yields NULL. The precedence mirrors ProcessMessage's own lookup, so a
+               -- span's environment means the same thing here as everywhere else. Verified against
+               -- both Postgres and TimeFusion; there is no flat column for this in either.
+               COALESCE(resource->'deployment'->'environment'->>'name',
+                        resource->'deployment'->>'environment',
+                        resource->'service'->>'namespace',
+                        resource->'k8s'->'namespace'->>'name', '') env,
+               kind knd, status_code stc, duration dur, name nm,
                attributes___db___system___name db_sys, attributes___db___namespace db_ns,
                attributes___server___address srv, attributes___network___peer___address peer
         FROM otel_logs_and_spans
@@ -433,11 +667,11 @@ rollupServiceEdges useTf pid lo hi =
           AND kind IN ('server','client','producer','consumer')
       ),
       hops AS (
-        SELECT p.svc src, 'service' src_kind, c.svc tgt, 'service' tgt_kind, c.stc st, c.dur dur
+        SELECT p.env env, p.svc src, 'service' src_kind, c.svc tgt, 'service' tgt_kind, c.stc st, c.dur dur
         FROM sp c JOIN sp p ON c.tid = p.tid AND c.par = p.sid
         WHERE c.knd IN ('server','consumer') AND p.knd IN ('client','producer')
         UNION ALL
-        SELECT p.svc, 'service',
+        SELECT p.env, p.svc, 'service',
                -- A purely numeric db.namespace is a Redis database index, not a name.
                CASE WHEN p.db_ns IS NOT NULL AND p.db_ns <> '' AND p.db_ns !~ '^[0-9]+$' THEN 'db:' || p.db_ns
                     WHEN p.db_sys IS NOT NULL AND p.db_sys <> '' THEN 'db:' || p.db_sys
@@ -451,45 +685,51 @@ rollupServiceEdges useTf pid lo hi =
         WHERE p.knd IN ('client','producer')
           AND NOT EXISTS (SELECT 1 FROM sp c WHERE c.tid = p.tid AND c.par = p.sid AND c.knd IN ('server','consumer'))
         UNION ALL
-        SELECT '', 'entry', c.svc, 'service', c.stc, c.dur
+        SELECT c.env, '', 'entry', c.svc, 'service', c.stc, c.dur
         FROM sp c
         WHERE c.knd IN ('server','consumer')
           AND (c.par IS NULL OR c.par = '' OR NOT EXISTS (SELECT 1 FROM sp p WHERE p.tid = c.tid AND p.sid = c.par))
       )
-      SELECT src, src_kind, tgt, tgt_kind, bkt,
+      SELECT env, src, src_kind, tgt, tgt_kind, bkt,
              COUNT(*)::int8,
              COUNT(*) FILTER (WHERE st = 'ERROR')::int8,
              COALESCE(SUM(dur), 0)::int8
       FROM (
-        SELECT src, src_kind, tgt, tgt_kind, st, dur,
+        SELECT env, src, src_kind, tgt, tgt_kind, st, dur,
                CAST(FLOOR(4 * LOG(2, GREATEST(COALESCE(dur, 0) / 1000, 1))) AS int8) bkt
         FROM hops
       ) b
-      GROUP BY src, src_kind, tgt, tgt_kind, bkt
+      GROUP BY env, src, src_kind, tgt, tgt_kind, bkt
       ORDER BY COUNT(*) DESC
       LIMIT 20000|]
 
 
 -- | Replace-on-conflict so re-rolling a bucket (the hourly catch-up pass, or a DLQ replay
 -- landing late) is idempotent rather than double-counting.
+-- | Writes the env-dimensioned rollup only. The original table is no longer written: nothing
+-- else writes it once this is deployed, and the read path already prefers this table per
+-- bucket and falls back to the original for buckets rolled before it existed. Dropping the
+-- original outright is the contract half of expand/contract, once a full retention window
+-- has rolled through and the fallback has nothing left to serve.
 upsertServiceDependencyEdges :: DB es => Projects.ProjectId -> UTCTime -> [RollupEdge] -> Eff es ()
 upsertServiceDependencyEdges _ _ [] = pass
 upsertServiceDependencyEdges pid bucket es =
   Hasql.interpExecute_
     [HI.sql|
-    INSERT INTO apis.service_dependency_edges
-      (project_id, bucket, source_key, source_kind, target_key, target_kind,
+    INSERT INTO apis.service_dependency_edges_env
+      (project_id, bucket, env, source_key, source_kind, target_key, target_kind,
        req_count, error_count, sum_duration_ns, lat_hist)
-    SELECT #{pid.unUUIDId}, #{bucket}, s, sk, t, tk, r, e, d, h::jsonb
-    FROM unnest(#{srcs}::text[], #{srcKinds}::text[], #{tgts}::text[], #{tgtKinds}::text[],
+    SELECT #{pid.unUUIDId}, #{bucket}, ev, s, sk, t, tk, r, e, d, h::jsonb
+    FROM unnest(#{envs}::text[], #{srcs}::text[], #{srcKinds}::text[], #{tgts}::text[], #{tgtKinds}::text[],
                 #{reqs}::int8[], #{errsV}::int8[], #{durs}::int8[], #{hists}::text[])
-         AS u(s, sk, t, tk, r, e, d, h)
-    ON CONFLICT (project_id, bucket, source_key, source_kind, target_key, target_kind)
+         AS u(ev, s, sk, t, tk, r, e, d, h)
+    ON CONFLICT (project_id, bucket, env, source_key, source_kind, target_key, target_kind)
     DO UPDATE SET req_count = EXCLUDED.req_count, error_count = EXCLUDED.error_count,
                   sum_duration_ns = EXCLUDED.sum_duration_ns,
                   lat_hist = EXCLUDED.lat_hist,
                   updated_at = now()|]
   where
+    envs = V.fromList $ envToColumn . (.env) <$> es
     srcs = V.fromList $ (.sourceKey) <$> es
     srcKinds = V.fromList $ kindText . (.sourceKind) <$> es
     tgts = V.fromList $ (.targetKey) <$> es
@@ -520,21 +760,43 @@ kindText = \case
 
 -- | Read the rollup for a range and fold it into a graph. Cheap: a day is a few thousand
 -- narrow Postgres rows, merged in memory.
-serviceGraphForRange :: DB es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es ServiceGraph
-serviceGraphForRange pid lo hi = do
+-- | @envM@ scopes the map to one deployment environment, the way Datadog's Env facet does.
+-- 'Nothing' means every environment; the facet's own values come back on the graph so the
+-- UI lists exactly the environments this project has actually reported in this range.
+serviceGraphForRange :: DB es => Projects.ProjectId -> Maybe Text -> UTCTime -> UTCTime -> Eff es ServiceGraph
+serviceGraphForRange pid envM lo hi = do
+  -- Buckets rolled before the env-dimensioned table existed only live in the original, so the
+  -- read prefers the new table per bucket and falls back to the old one for the rest. Without
+  -- the per-bucket split the two would double-count every hop they both hold; without the
+  -- fallback the map would be empty until a full retention window had rolled through.
   rows <-
     Hasql.interp
       [HI.sql|
-      SELECT source_key, source_kind, target_key, target_kind,
+      SELECT env, source_key, source_kind, target_key, target_kind,
              req_count, error_count, sum_duration_ns, lat_hist
-      FROM apis.service_dependency_edges
-      WHERE project_id = #{pid.unUUIDId} AND bucket >= #{lo} AND bucket < #{hi}|]
+      FROM apis.service_dependency_edges_env
+      WHERE project_id = #{pid.unUUIDId} AND bucket >= #{lo} AND bucket < #{hi}
+      UNION ALL
+      SELECT '', source_key, source_kind, target_key, target_kind,
+             req_count, error_count, sum_duration_ns, lat_hist
+      FROM apis.service_dependency_edges old
+      WHERE project_id = #{pid.unUUIDId} AND bucket >= #{lo} AND bucket < #{hi}
+        AND NOT EXISTS (
+          SELECT 1 FROM apis.service_dependency_edges_env e
+          WHERE e.project_id = old.project_id AND e.bucket = old.bucket)|]
   let rangeSecs = realToFrac (diffUTCTime hi lo)
+      keep ev = maybe True ((== envFromColumn ev) . Just) envM
       samples =
         [ EdgeSample (sk, parseNodeKind skk) (tk, parseNodeKind tkk) r e (histFromObject h) d
-        | (sk, skk, tk, tkk, r, e, d, AesonText h) <- rows
+        | (ev, sk, skk, tk, tkk, r, e, d, AesonText h) <- rows
+        , keep ev
         ]
-  pure $ buildServiceGraph rangeSecs serviceMapNodeCap Nothing samples
+      -- Every environment in the range, not just the selected one: a facet that hid the
+      -- options you are not currently on would be a dead end. '' is unlabelled traffic and
+      -- is not offered as a choice.
+      seen = ordNub [e | (ev, _, _, _, _, _, _, _, _) <- rows, Just e <- [envFromColumn ev]]
+      graph = buildServiceGraph rangeSecs serviceMapNodeCap serviceMapFanout Nothing samples
+  pure graph{environments = V.fromList (sort seen)}
 
 
 -- | Name an uninstrumented dependency the way its own ecosystem would: the database or

@@ -1,0 +1,33 @@
+-- getLogPatternTextsByService (Models/Apis/LogPatterns.hs) runs
+--   SELECT LEFT(log_pattern, 2000), last_seen_at FROM apis.log_patterns
+--   WHERE project_id = ? AND source_field = ? AND service_name = ?
+--     AND canonical_id IS NULL
+--   ORDER BY last_seen_at DESC NULLS LAST LIMIT 5000
+-- and was the single most expensive statement in prod: 334k calls, 507ms mean,
+-- 47 HOURS of cumulative exec time, and 145 TB of shared_blks_hit — ~434 MB of
+-- buffers touched PER CALL (~53k blocks, vs 39 for the 1.2-billion-call INSERT
+-- next to it). It alone drove ~655 MiB/s of buffer traffic.
+--
+-- Why it was so bad: the only usable index was idx_log_patterns_service
+-- (project_id, service_name) — no source_field, and nothing supporting the
+-- ORDER BY. So Postgres index-scanned every row for the project/service (the
+-- largest group is 1.83M rows), heap-fetched each to test source_field and
+-- canonical_id, sorted the survivors by last_seen_at, then took 5000.
+-- canonical_id IS NULL filters NOTHING today (3,980,129 of 3,980,129 rows), so
+-- it removes no work while still forcing the heap visit.
+--
+-- This index matches the predicate and carries the sort order, so the planner
+-- walks it in last_seen_at order for the exact group and stops at the LIMIT.
+-- log_pattern is deliberately NOT included: it is up to 2000 chars and would
+-- bloat the index far more than 5000 heap fetches cost.
+--
+-- The partial WHERE is kept even though it currently matches every row: when
+-- canonical classification starts populating canonical_id the index shrinks on
+-- its own. (Note idx_lp_canonical, WHERE canonical_id IS NOT NULL, is 8 kB —
+-- nothing has ever populated that column.)
+--
+-- Created CONCURRENTLY in prod on 2026-08-10; this migration makes dev/staging
+-- match (cf. 0083, same pattern).
+CREATE INDEX IF NOT EXISTS idx_lp_unclassified_recent
+  ON apis.log_patterns (project_id, source_field, service_name, last_seen_at DESC NULLS LAST)
+  WHERE canonical_id IS NULL;

@@ -3,12 +3,12 @@ import { getSeriesColor } from './colorMapping';
 import { beginChartFetch } from './chart-fetch-seq';
 import { isNearChartViewport } from './chart-initialization';
 import { formatNumber, convertToNanoseconds, formatDuration, statScalar, formatStatValue } from './stat-value';
+import { echartsUrls } from './assets';
 const INITIAL_FETCH_INTERVAL = 5000;
 const $ = (id: string) => document.getElementById(id);
 const params = () => ({ ...Object.fromEntries(new URLSearchParams(location.search)) });
 
 // --- ECharts loads only once a chart enters the viewport ---
-type EChartsAssetUrls = { echarts: string; theme: string };
 let echartsLoad: Promise<void> | undefined;
 
 const loadScript = (src: string) => new Promise<void>((resolve, reject) => {
@@ -22,10 +22,7 @@ const loadScript = (src: string) => new Promise<void>((resolve, reject) => {
 export const ensureECharts = () => {
   if ((window as any).echarts) return Promise.resolve();
   if (!echartsLoad) {
-    const assets = ((window as any).echartsAssetUrls as EChartsAssetUrls | undefined) ?? {
-      echarts: '/public/assets/deps/echarts/echarts.min.js',
-      theme: '/public/assets/roma-echarts.js',
-    };
+    const assets = echartsUrls();
     echartsLoad = loadScript(assets.echarts).then(() => loadScript(assets.theme));
   }
   return echartsLoad;
@@ -185,11 +182,16 @@ export const getChartStyles = () => {
     textColor: get('--color-textWeak'),
     tooltipBg: get('--color-bgRaised'),
     tooltipTextColor: get('--color-textStrong'),
-    tooltipBorderColor: get('--color-borderWeak'),
+    // --color-borderWeak has never existed; the token is strokeWeak. The empty string
+    // this returned made echarts fall back to its own palette, which is why bordered chart
+    // marks came out in rotating chart colours instead of the neutral stroke.
+    tooltipBorderColor: get('--color-strokeWeak'),
     chartBg: get('--color-chartBg'),
     chartMask: get('--color-chartMask'),
     errorColor: get('--color-textError'),
     warningColor: get('--color-textWarning'),
+    successColor: get('--color-fillSuccess-strong'),
+    strokeStrong: get('--color-strokeStrong'),
     brandColor: get('--color-fillBrand-strong'),
   };
 };
@@ -523,7 +525,9 @@ const processResizeQueue = () => {
   resizeQueue.forEach((chartId) => {
     const chartEl = $(chartId);
     if (chartEl) {
-      const chart = (window as any).echarts.getInstanceByDom(chartEl);
+      // A page may observe an element without ever loading echarts — the service map is DOM,
+      // not canvas — and a missing global must not throw for every other chart in the queue.
+      const chart = (window as any).echarts?.getInstanceByDom(chartEl);
       if (chart && !chart.isDisposed()) {
         chart.resize();
       }

@@ -1113,7 +1113,7 @@ extractPercentilesInfo secs = listToMaybe $ mapMaybe pcts [agg | SummarizeComman
 -- >>> parseQueryToAST "attributes contains ddd"
 -- Left "Syntax error at column 12: unexpected 'c', expecting '|' or white space"
 parseQueryToAST :: Text -> Either Text [Section]
-parseQueryToAST = first (.message) . parseQueryDiagnosed
+parseQueryToAST = first (.message) . parseQueryDiagnosed Nothing
 
 
 -- | A rejected query, positioned. The editor underlines @width@ characters from
@@ -1126,14 +1126,26 @@ data QueryError = QueryError {message :: Text, column :: Int, width :: Int}
 
 -- | 'parseQueryToAST' with the failure position kept.
 --
--- >>> parseQueryDiagnosed "attribute contains \"x\""
+-- The first argument is the source the /caller/ has already decided on — the
+-- @source=metrics@ the Metrics page requests. A metrics query reads a different
+-- table, so its fields must not be checked against @otel_logs_and_spans@; the query
+-- text says so when it opens with @metrics |@, but when the source arrives out of
+-- band there is nothing in the text to notice, and @metric_name@ (a real column
+-- there, absent here) came back as @Unknown field \"metric_name\"@:
+--
+-- >>> isRight (parseQueryDiagnosed (Just SMetrics) "| where metric_name == \"k8s.container.cpu_request\"")
+-- True
+-- >>> isLeft (parseQueryDiagnosed Nothing "| where metric_name == \"k8s.container.cpu_request\"")
+-- True
+--
+-- >>> parseQueryDiagnosed Nothing "attribute contains \"x\""
 -- Left (QueryError {message = "Unknown field \"attribute\". Did you mean \"attributes\"?", column = 1, width = 9})
--- >>> (.column) <$> either Just (const Nothing) (parseQueryDiagnosed "kind == \"a\" and attribut contains \"x\"")
+-- >>> (.column) <$> either Just (const Nothing) (parseQueryDiagnosed Nothing "kind == \"a\" and attribut contains \"x\"")
 -- Just 17
-parseQueryDiagnosed :: Text -> Either QueryError [Section]
-parseQueryDiagnosed (T.strip -> q) = do
+parseQueryDiagnosed :: Maybe Sources -> Text -> Either QueryError [Section]
+parseQueryDiagnosed srcM (T.strip -> q) = do
   ast <- first (renderParseError q) (parse parseQuery "" q)
-  case unknownField ast of
+  case unknownField (maybe ast ((: ast) . Source) srcM) of
     Nothing -> Right ast
     Just (field, msg) ->
       -- Point at the identifier itself; T.breakOn finds its first occurrence,

@@ -1141,6 +1141,12 @@ data Session = Session
   -- ^ User-selected UI language, read from the @lang@ cookie at auth time
   -- and threaded down to templates so 'Web.I18n.t' calls can render the
   -- right language without extra context plumbing.
+  , environment :: Maybe Text
+  -- ^ The selected deployment environment (@prod@, @staging@, …), read from the @env@
+  -- cookie at auth time so the choice is sticky across pages, reloads and tabs — the way
+  -- Datadog's Env selector behaves. 'Nothing' is every environment, and it is the default:
+  -- rows predating the promoted column report no environment, so choosing one for the user
+  -- would silently hide their history.
   }
   deriving stock (Generic, Show)
 

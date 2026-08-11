@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach } from 'vitest';
 import { render } from 'lit';
 import { dedupeById } from '../src/log-list-utils';
-import { LogList } from '../src/log-list';
+import { LogList, latencyBar, latencySegments, latencyTitle } from '../src/log-list';
 import { row, fakeTransport, ids, mountList } from './log-list-harness';
 
 describe('dedupeById', () => {
@@ -153,5 +153,110 @@ describe('LogList toggleColumnOnTable (URL delta)', () => {
     setShown(['id', 'route']); // route shown, service hidden, duration hidden
     expect(el.toggleColumnOnTable('duration')).toBe(true);
     expect(cols()).toBe('route,-service,duration');
+  });
+});
+
+describe('latencySegments', () => {
+  // The row is the axis, not the trace. On the trace-wide axis a 3ms child inside a 2s trace
+  // was a sub-pixel sliver, which is why child rows were unreadable.
+  const row = { startNs: 1_000, duration: 1_000 };
+  const child = (startNs: number, duration: number, label = 'db') => ({ startNs, duration, label, color: `bg-${label}` });
+
+  test('places children as a percentage of the row, not of the trace', () => {
+    expect(latencySegments(row, [child(1_250, 500)])).toEqual([
+      { leftPct: 25, widthPct: 50, color: 'bg-db', label: 'db', ns: 500 },
+    ]);
+  });
+
+  test('gaps between children are the row self time, so segments never sum past the row', () => {
+    const segs = latencySegments(row, [child(1_000, 200, 'db'), child(1_600, 300, 'cache')]);
+    const accounted = segs.reduce((a, s) => a + s.ns, 0);
+    expect(accounted).toBe(500);
+    expect(row.duration - accounted).toBe(500); // self
+    expect(segs.every((s) => s.leftPct + s.widthPct <= 100)).toBe(true);
+  });
+
+  test('intersects with the row window rather than clamping an offset', () => {
+    // Clock skew and a child outliving its parent are both real. A child that ended before
+    // its parent began contributes nothing — pinning it to the start of the bar would claim
+    // time the parent never spent — while a child that overruns is still time it waited on.
+    const segs = latencySegments(row, [child(500, 300), child(1_900, 5_000, 'slow')]);
+    expect(segs).toEqual([{ leftPct: 90, widthPct: 10, color: 'bg-slow', label: 'slow', ns: 100 }]);
+  });
+
+  test('a child overlapping the row start is measured from the row start', () => {
+    expect(latencySegments(row, [child(900, 300)])).toEqual([
+      { leftPct: 0, widthPct: 20, color: 'bg-db', label: 'db', ns: 200 },
+    ]);
+  });
+
+  test('drops children with no measurable width, and a zero-duration row has no bar to draw', () => {
+    expect(latencySegments(row, [child(1_400, 0), child(1_400, -5)])).toEqual([]);
+    expect(latencySegments({ startNs: 0, duration: 0 }, [child(0, 10)])).toEqual([]);
+  });
+});
+
+describe('latencyBar', () => {
+  // Expanding a trace is what makes the column a waterfall again: the child rows only mean
+  // something as a breakdown of the one request, which needs a shared axis.
+  const row = { startNs: 1_500, duration: 500, traceStart: 1_000, traceEnd: 2_000, label: 'api', color: 'bg-api' };
+  const child = (startNs: number, duration: number, label = 'db') => ({ startNs, duration, label, color: `bg-${label}` });
+
+  test('expanded rows lay their own span on the trace axis, framed by the trace bounds', () => {
+    const { track, segments, frame } = latencyBar(true, row, [child(1_600, 200)]);
+    expect(track).toBe('bg-fillWeak'); // the track is the trace, not the row
+    expect(frame).toBe(true); // |---[]---| : without it a short span is just a small block
+    expect(segments).toEqual([
+      { leftPct: 25, widthPct: 25, color: 'bg-api', label: 'api', ns: 500 },
+      { leftPct: 30, widthPct: 10, color: 'bg-db', label: 'db', ns: 200 },
+    ]);
+  });
+
+  test('a collapsed row is its own axis: full-width track, children inside it', () => {
+    const { track, segments, frame } = latencyBar(false, row, [child(1_600, 200)]);
+    expect(track).toBe('bg-api');
+    // No frame: the bar already fills the range, so the rule would restate its own bounds.
+    expect(frame).toBe(false);
+    expect(segments).toEqual([{ leftPct: 20, widthPct: 40, color: 'bg-db', label: 'db', ns: 200 }]);
+  });
+
+  test('falls back to the row axis when the trace has no measurable span', () => {
+    expect(latencyBar(true, { ...row, traceEnd: 0 }, []).track).toBe('bg-api');
+  });
+
+  test('a log has no duration but still gets a mark at its place in the trace', () => {
+    // Dropping it — which the accounting pass does, correctly, since it costs no time — is
+    // how a row reads as "ignores its timing and sits at the beginning".
+    const [own] = latencyBar(true, { ...row, duration: 0 }, []).segments;
+    expect(own).toEqual({ leftPct: 25, widthPct: 0, color: 'bg-api', label: 'api', ns: 0 });
+  });
+
+  test('a row past the axis end pins to it rather than escaping the bar', () => {
+    // The axis is sized by spans, so a log seconds after the last span lands outside it.
+    const [own] = latencyBar(true, { ...row, startNs: 9_000, duration: 0 }, []).segments;
+    expect(own.leftPct).toBe(100);
+  });
+});
+
+describe('latencyTitle', () => {
+  test('says in words what the colours say, including the trace offset the bar no longer encodes', () => {
+    const title = latencyTitle(
+      'service',
+      { startNs: 1_500_000, duration: 2_000_000, traceStart: 500_000 },
+      [
+        { leftPct: 0, widthPct: 25, color: 'x', label: 'postgres', ns: 500_000 },
+        { leftPct: 30, widthPct: 10, color: 'y', label: 'redis', ns: 200_000 },
+      ]
+    );
+    expect(title).toContain('2ms total');
+    expect(title).toContain('+1ms into the trace');
+    expect(title).toContain('self 1ms');
+    // Biggest contributor first — that is the one worth reading.
+    expect(title).toContain('by service: postgres 500µs, redis 200µs');
+  });
+
+  test('a leaf span is all self time and names no dimension', () => {
+    const title = latencyTitle('kind', { startNs: 0, duration: 3_000_000, traceStart: 0 }, []);
+    expect(title).toBe('3ms total · +0ns into the trace · self 3ms');
   });
 });

@@ -35,8 +35,14 @@ WORKDIR /build
 # Fix cabal state to a known path so GHA containers (which override HOME) can find it
 ENV CABAL_DIR=/root/.cabal
 
-# Copy only files needed for dependency resolution
+# Copy only files needed for dependency resolution. cabal.project lists shared/ and
+# cli/ as packages, so their .cabal files must be present or `cabal configure` fails
+# with "The package location 'shared/' does not exist" — which is what silently broke
+# every deps-image build (and therefore every deploy) after the CLI package split.
+# Only the .cabal files, so a source edit doesn't invalidate the dependency layer.
 COPY *.cabal cabal.project* Setup.hs LICENSE ./
+COPY shared/*.cabal ./shared/
+COPY cli/*.cabal ./cli/
 
 # Update cabal index and build all dependencies (including test deps).
 # profiling: True pre-builds the prof way of every dep (no cost centres) so the

@@ -1,0 +1,76 @@
+diff --git a/src/database.rs b/src/database.rs
+index e017d2f..ebf8b85 100644
+--- a/src/database.rs
++++ b/src/database.rs
+@@ -14893,17 +14893,34 @@ impl TableProvider for ProjectRoutingTable {
+             if let Some(f) = tantivy_id_filter.clone() {
+                 delta_only_filters.push(f);
+             }
+-            // Skip is only sound when no output-projection restore is needed
+-            // (an augmented projection minus DedupExec would leak key columns).
++            // Skip is sound whenever no dedup-KEY column was augmented in; the marker
++            // that may have been is stripped by `filter_tombstones` below.
+             let delta_table = self.database.resolve_table(&project_id, &self.table_name).await?;
+             let table = delta_table.read().await;
+             // Same guard for the dedup gate and the scan: the fingerprint
+             // verdict applies to exactly the snapshot being read.
+             // `pre_skip_dedup` already decided this above the projection; re-check
+             // against the RESOLVED table so the fingerprint verdict applies to the
+-            // exact snapshot being read, and keep the `output_projection` guard —
+-            // when the skip was granted no augmentation happened, so it is None.
+-            let skip_dedup = pre_skip_dedup && output_projection.is_none() && self.dedup_skip_allowed(&table, &project_id, query_time_range, &dedup_keys);
++            // exact snapshot being read.
++            //
++            // The `output_projection.is_none()` conjunct that used to sit here was meant
++            // to read "no dedup-key columns were augmented in, so skipping cannot leak
++            // them". It does not say that. `output_projection` also turns `Some` when the
++            // TOMBSTONE marker alone is augmented — and on a table declaring both keys and
++            // a tombstone (otel_logs_and_spans declares both) that is every query which
++            // projects neither. Those queries had their skip revoked while `pre_skip_dedup`
++            // had already left the keys out of the scan, so the DedupExec the revocation
++            // asked for could not be built:
++            //
++            //     Internal error: DedupExec key `id` not in input schema
++            //
++            // which is what took the service-map rollup down from 2026-08-09 to 08-11.
++            //
++            // The conjunct is also redundant: `augment` is empty exactly when
++            // `pre_skip_dedup` holds, so a granted skip never augments a key column in the
++            // first place, and the marker it does augment is stripped below by
++            // `filter_tombstones(.., tombstone_keep)`. Nothing leaks.
++            let skip_dedup = pre_skip_dedup && self.dedup_skip_allowed(&table, &project_id, query_time_range, &dedup_keys);
+             if skip_dedup {
+                 tag_shape(&|s| s.skip_dedup = true);
+                 // The window is sweep-certified: exactly one row per key, and it
+@@ -15029,9 +15046,26 @@ impl TableProvider for ProjectRoutingTable {
+             // Same guard for the dedup gate and the scan (see branch above).
+             // `pre_skip_dedup` already decided this above the projection; re-check
+             // against the RESOLVED table so the fingerprint verdict applies to the
+-            // exact snapshot being read, and keep the `output_projection` guard —
+-            // when the skip was granted no augmentation happened, so it is None.
+-            let skip_dedup = pre_skip_dedup && output_projection.is_none() && self.dedup_skip_allowed(&table, &project_id, query_time_range, &dedup_keys);
++            // exact snapshot being read.
++            //
++            // The `output_projection.is_none()` conjunct that used to sit here was meant
++            // to read "no dedup-key columns were augmented in, so skipping cannot leak
++            // them". It does not say that. `output_projection` also turns `Some` when the
++            // TOMBSTONE marker alone is augmented — and on a table declaring both keys and
++            // a tombstone (otel_logs_and_spans declares both) that is every query which
++            // projects neither. Those queries had their skip revoked while `pre_skip_dedup`
++            // had already left the keys out of the scan, so the DedupExec the revocation
++            // asked for could not be built:
++            //
++            //     Internal error: DedupExec key `id` not in input schema
++            //
++            // which is what took the service-map rollup down from 2026-08-09 to 08-11.
++            //
++            // The conjunct is also redundant: `augment` is empty exactly when
++            // `pre_skip_dedup` holds, so a granted skip never augments a key column in the
++            // first place, and the marker it does augment is stripped below by
++            // `filter_tombstones(.., tombstone_keep)`. Nothing leaks.
++            let skip_dedup = pre_skip_dedup && self.dedup_skip_allowed(&table, &project_id, query_time_range, &dedup_keys);
+             if skip_dedup {
+                 tag_shape(&|s| s.skip_dedup = true);
+             }
+tests/suite/dedup_compaction_test.rs --- Rust
+1465 1465     Ok(())1466 1466 }.... 1467 .... 1468 /// Regression, prod 2026-08-09 → 08-11: the service-map rollup's 5-minute.... 1469 /// dispatcher failed for two days with.... 1470 ///.... 1471 ///     Internal error: DedupExec key `id` not in input schema.... 1472 ///.... 1473 /// A query that projects NEITHER a dedup key NOR the tombstone marker makes the.... 1474 /// scan augment the marker in on its own. That alone turns `output_projection`.... 1475 /// `Some`, which the skip gate used to read as "dedup keys were augmented in" and.... 1476 /// revoke the skip — while `pre_skip_dedup` had already left the keys out of the.... 1477 /// scan. The revoked skip then asked for a DedupExec that could not be built..... 1478 ///.... 1479 /// Asserts the shape rather than the plan: the query must answer, and answer with.... 1480 /// the winning version and no leaked key columns..... 1481 #[serial].... 1482 #[tokio::test].... 1483 async fn a_projection_without_keys_or_tombstone_still_answers_on_a_swept_partition() -> Result<()> {.... 1484     let mut cfg = (*TestConfigBuilder::new("dedup_skip_marker_only").with_buffer_mode(BufferMode::Enabled).build()).clone();.... 1485     cfg.maintenance.timefusion_read_dedup_skip_swept = true;.... 1486     let db = Arc::new(Database::with_config(Arc::new(cfg)).await?);.... 1487     let project_id = format!("proj_{}", &uuid::Uuid::new_v4().to_string()[..8]);.... 1488     let ts = (chrono::Utc::now().date_naive() - chrono::Duration::days(1)).and_hms_opt(12, 0, 0).unwrap().and_utc().timestamp_micros();.... 1489 .... 1490     let row = |name: &str| -> Result<_> { json_to_batch(vec![test_span_ts("marker_only_key", name, &project_id, ts)]) };.... 1491     db.insert_records_batch(&project_id, "otel_logs_and_spans", vec![row("original")?], true, None).await?;.... 1492     db.insert_records_batch(&project_id, "otel_logs_and_spans", vec![row("updated")?], true, None).await?;.... 1493 .... 1494     let table_ref = db.unified_tables().read().await.get("otel_logs_and_spans").expect("table created").clone();.... 1495     db.dedup_today_partitions(&table_ref, "otel_logs_and_spans", "otel_logs_and_spans").await?;.... 1496 .... 1497     // Warm the fast-resolve cache the way a live process is warm: `pre_skip_dedup`.... 1498     // reads it, and the bug only appears once it hits..... 1499     let _ = db.query_delta_only(&format!(.... 1500         "SELECT id FROM otel_logs_and_spans WHERE project_id = '{project_id}' AND timestamp >= to_timestamp_micros({ts})".... 1501     )).... 1502     .await?;.... 1503 .... 1504     // `name` is neither a dedup key (timestamp, id) nor the tombstone marker..... 1505     let sql = format!(.... 1506         "SELECT name FROM otel_logs_and_spans WHERE project_id = '{project_id}' \.... 1507          AND timestamp >= to_timestamp_micros({ts}) AND timestamp <= to_timestamp_micros({ts})".... 1508     );.... 1509     let batches = db.query_delta_only(&sql).await?;.... 1510 .... 1511     for b in &batches {.... 1512         assert_eq!(b.num_columns(), 1, "only `name` was selected; a dedup key or the tombstone marker leaked through");.... 1513     }.... 1514     let rows: Vec<String> = batches.... 1515         .iter().... 1516         .flat_map(|b| {.... 1517             let col = datafusion::arrow::compute::kernels::cast::cast(b.column(0), &datafusion::arrow::datatypes::DataType::Utf8).expect("cast to Utf8");.... 1518             let col = col.as_string::<i32>();.... 1519             (0..b.num_rows()).map(|i| col.value(i).to_string()).collect::<Vec<_>>().... 1520         }).... 1521         .collect();.... 1522     assert_eq!(rows, vec!["updated".to_string()], "one winning row, whether the skip was granted or revoked");.... 1523     Ok(()).... 1524 }1467 1525 1468 1526 /// A predicate on a version-MUTABLE column, pushed into the Delta leg because1469 1527 /// the window is sweep-certified. This is the half of the swept-partition work

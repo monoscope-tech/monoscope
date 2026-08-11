@@ -104,37 +104,24 @@ logQueryBox_ config = do
               , required_ "required"
               , name_ "input"
               , hxPost_ $ "/p/" <> config.pid.toText <> "/log_explorer/ai_search"
-              , hxTrigger_ "input[this.value.trim().length > 0] changed delay:1s"
+              , -- `htmx:trigger` is not special-cased by htmx; it only fires a request because
+                -- it is listed here. Enter and the Submit button both dispatch it to skip the debounce.
+                hxTrigger_ "input[this.value.trim().length > 0] changed delay:1s, htmx:trigger"
               , hxSwap_ "none"
               , hxExt_ "json-enc"
               , hxVals_ "js:{timezone: Intl.DateTimeFormat().resolvedOptions().timeZone}"
               , term "hx-validate" "false"
               , hxIndicator_ "#ai-search-loader"
               , data_ "container-id" (fromMaybe "visualization-widget-container" config.targetWidgetPreview)
-              , [__|on keydown[key=='Escape'] set #ai-search-chkbox.checked to false
-                   on keydown[key=='Enter'] 
-                     if my.value.trim().length > 0 
-                       then halt then trigger htmx:trigger 
+              , -- The response fans out to three JS subsystems (time picker, query editor,
+                -- viz tabs), so the routing lives in one named function beside them rather
+                -- than as a branch tree here — see window.applyAiSearchResult.
+                [__|on keydown[key=='Escape'] set #ai-search-chkbox.checked to false
+                   on keydown[key=='Enter']
+                     if my.value.trim().length > 0
+                       then halt then trigger htmx:trigger
                      end
-                   on htmx:after:request
-                     if event.detail.ctx.response.status < 400
-                       then
-                         call JSON.parse(event.detail.ctx.text) set :result to it
-                         if :result.time_range then call window.updateTimePicker(:result.time_range) end
-                         if :result.query then call #filterElement.handleAddQuery(:result.query, true) then set #ai-search-chkbox.checked to false
-                         else if :result.time_range then trigger submit on #log_explorer_form end
-                         if :result.visualization_type
-                           then
-                             set vizType to :result.visualization_type
-                             set widgetId to (@data-container-id or 'visualization-widget-container')
-                             call window.handleVisualizationUpdate(vizType, widgetId)
-                         end
-                     else
-                       if event.detail.ctx.text and event.detail.ctx.text.includes('INVALID_QUERY_ERROR')
-                         then
-                           send errorToast(value:['Could not generate a query. Try being more specific, e.g. "show errors from payment-service in the last 2 hours"']) to <body/>
-                       end
-                     end|]
+                   on htmx:after:request call window.applyAiSearchResult(event, me)|]
               ]
             span_ [class_ "htmx-indicator", id_ "ai-search-loader"] $ faSprite_ "spinner" "regular" "w-4 h-4 animate-spin"
             a_
@@ -390,7 +377,7 @@ hidePopoverJS = "document.getElementById('queryLibraryPopover')?.hidePopover()"
 
 
 applyQueryJS :: Text -> Text
-applyQueryJS q = "document.getElementById('ai-search-chkbox').checked=false; document.getElementById('filterElement')?.handleAddQuery(" <> decodeUtf8 (AE.encode q) <> ", true)"
+applyQueryJS q = "window.applyQuery(" <> decodeUtf8 (AE.encode q) <> ")"
 
 
 popularQueries :: [(Text, Text, Maybe Text)]
@@ -565,6 +552,41 @@ queryEditorInitializationCode queryLibRecent queryLibSaved vizTypeM pid = do
         window.widgetJSON.type = vizType;
         document.getElementById(widgetId || 'visualization-widget-container').dispatchEvent(new Event('update-widget'));
       });
+    };
+
+    // Single owner for "apply this query to the editor". The query library closes AI search
+    // on the way out (picking a saved query ends the AI interaction), but an AI response
+    // keeps the panel and its prompt on screen so the phrasing can be refined and re-run —
+    // collapsing it there reads as the app having thrown the question away.
+    window.applyQuery = function(q, replace = true, closeAiSearch = true) {
+      const chk = document.getElementById('ai-search-chkbox');
+      if (chk && closeAiSearch) chk.checked = false;
+      document.getElementById('filterElement')?.handleAddQuery(q, replace);
+    };
+
+    // Routes one /ai_search response into the subsystems it can touch. Lives here, not
+    // inline on the input, because every arm is a call into a JS global defined above —
+    // the element keeps a one-expression hook and this stays readable and testable.
+    window.applyAiSearchResult = function(evt, el) {
+      const ctx = evt.detail && evt.detail.ctx;
+      const text = (ctx && ctx.text) || '';
+      if (!ctx || !(ctx.response && ctx.response.status < 400)) {
+        if (text.includes('INVALID_QUERY_ERROR')) {
+          document.body.dispatchEvent(new CustomEvent('errorToast', { bubbles: true,
+            detail: { value: ['Could not generate a query. Try being more specific, e.g. "show errors from payment-service in the last 2 hours"'] } }));
+        }
+        return;
+      }
+      let result;
+      try { result = JSON.parse(text); } catch (e) { return; }
+      if (result.time_range) window.updateTimePicker(result.time_range);
+      if (result.query) window.applyQuery(result.query, true, false);
+      // Native dispatch, not htmx.trigger: both listeners (log-list.ts, widgets.ts) are
+      // plain addEventListener('submit'), so this needs no htmx API surface.
+      else if (result.time_range) document.getElementById('log_explorer_form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      if (result.visualization_type) {
+        window.handleVisualizationUpdate(result.visualization_type, el.dataset.containerId || 'visualization-widget-container');
+      }
     };
 
     // Immediate init instead of DOMContentLoaded (which never re-fires on HTMX morph).

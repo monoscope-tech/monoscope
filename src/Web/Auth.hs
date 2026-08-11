@@ -127,7 +127,7 @@ authHandler logger env =
               requestID <- liftIO $ getRequestID req
               -- Use a fixed email for basic auth users
               sessId <- authorizeUserAndPersist Nothing "Basic" "Auth" "" (username <> "@basic-auth.local")
-              sessionByID (Just sessId) requestID isSidebarClosed theme lang Nothing env.config.basicAuthEnabled
+              sessionByID (Just sessId) requestID isSidebarClosed theme lang (envFromCookie $ getCookies req) Nothing env.config.basicAuthEnabled
             Nothing -> do
               -- When basic auth is enabled, check if we have a valid cookie session
               -- If not, we should require basic auth instead of redirecting to Auth0
@@ -159,11 +159,11 @@ authHandler logger env =
       let theme = themeFromCookie cookies
       let lang = I18n.languageFromCookies cookies
       requestID <- liftIO $ getRequestID req
-      sessionByID mbPersistentSessionId requestID isSidebarClosed theme lang (Just $ getRequestUrl req) basicAuthEnabledFlag
+      sessionByID mbPersistentSessionId requestID isSidebarClosed theme lang (envFromCookie cookies) (Just $ getRequestUrl req) basicAuthEnabledFlag
 
 
-sessionByID :: (DB es, Error ServerError :> es, HTTP :> es, Time :> es, UUIDEff :> es) => Maybe Projects.PersistentSessionId -> Text -> Bool -> Text -> I18n.Language -> Maybe ByteString -> Bool -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Projects.Session)
-sessionByID mbPersistentSessionId requestID isSidebarClosed theme lang url basicAuthEnabled = do
+sessionByID :: (DB es, Error ServerError :> es, HTTP :> es, Time :> es, UUIDEff :> es) => Maybe Projects.PersistentSessionId -> Text -> Bool -> Text -> I18n.Language -> Maybe Text -> Maybe ByteString -> Bool -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Projects.Session)
+sessionByID mbPersistentSessionId requestID isSidebarClosed theme lang environment url basicAuthEnabled = do
   mbPersistentSession <- join <$> mapM Projects.getPersistentSession mbPersistentSessionId
   let mUser = mbPersistentSession <&> (.user.getUser)
   (user, sessionId, persistentSession) <- case (mUser, mbPersistentSession) of
@@ -215,6 +215,16 @@ sidebarClosedFromCookie cookies = case L.lookup "isSidebarClosed" cookies of
   Just "true" -> True
   Just _ -> False
   Nothing -> False
+
+
+-- | The sticky environment selection. Empty is normalised to 'Nothing' so clearing the
+-- picker ("All environments") and never having chosen one are the same state — otherwise an
+-- empty cookie would filter every query to rows whose environment is literally @""@.
+envFromCookie :: Cookies -> Maybe Text
+envFromCookie cookies = do
+  raw <- L.lookup "env" cookies
+  guard (raw /= "")
+  pure (decodeUtf8 raw)
 
 
 themeFromCookie :: Cookies -> Text

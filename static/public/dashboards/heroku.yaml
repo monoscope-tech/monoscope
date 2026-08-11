@@ -32,7 +32,7 @@ widgets:
 
   - type: 'timeseries'
     title: 'Memory Usage by Dyno (MB)'
-    query: name=="heroku.dyno.memory" | summarize avg(value) by bin_auto(timestamp), attributes.dyno
+    query: metrics | where metric_name=="heroku.dyno.memory" | summarize avg(value) by bin_auto(timestamp), attributes.dyno
     unit: MB
     layout: { w: 6, h: 4 }
 
@@ -49,7 +49,7 @@ widgets:
 
   - type: 'timeseries'
     title: 'Database Connection Pool'
-    query: name=="heroku.postgres.connections" | summarize avg(value) by bin_auto(timestamp), attributes.pool_type
+    query: metrics | where metric_name=="heroku.postgres.connections" | summarize avg(value) by bin_auto(timestamp), attributes.pool_type
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'

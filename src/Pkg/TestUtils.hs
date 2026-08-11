@@ -467,7 +467,7 @@ testSessionHeader pool hpool = do
 
   tp <- liftIO getGlobalTracerProvider
   logger <- liftIO $ Log.mkLogger "test" (const pass)
-  runTestEffect pool hpool logger tp (Auth.sessionByID (Just pSessId) "requestID" True "light" I18n.En Nothing False)
+  runTestEffect pool hpool logger tp (Auth.sessionByID (Just pSessId) "requestID" True "light" I18n.En Nothing Nothing False)
     & liftIO
     <&> fromRightShow
 
@@ -479,7 +479,7 @@ refreshSession pool hpool sessionHeaders = do
       pSessId = session.sessionId
   tp <- liftIO getGlobalTracerProvider
   logger <- liftIO $ Log.mkLogger "test" (const pass)
-  runTestEffect pool hpool logger tp (Auth.sessionByID (Just pSessId) "requestID" session.isSidebarClosed session.theme session.lang Nothing False)
+  runTestEffect pool hpool logger tp (Auth.sessionByID (Just pSessId) "requestID" session.isSidebarClosed session.theme session.lang session.environment Nothing False)
     & liftIO
     <&> fromRightShow
 
@@ -1466,7 +1466,7 @@ routeRequest tr path params
   | "/log_explorer" `T.isPrefixOf` path = do
       (_, pg) <-
         testServant tr
-          $ Log.logExplorerDataH testPid query Nothing Nothing since from to source Nothing
+          $ Log.logExplorerDataH testPid query Nothing Nothing Nothing since from to source Nothing
       pure $ mockResponse $ AE.encode pg
   | "/chart_data" `T.isPrefixOf` path = do
       result <-

@@ -6,6 +6,8 @@ module Models.Projects.Dashboards (
   readDashboardsFromDisk,
   Variable (..),
   VariableType (..),
+  SqlSource (..),
+  SecuredSql (..),
   Tab (..),
   Constant (..),
   getDashboardById,
@@ -34,6 +36,7 @@ import Control.Exception (try)
 import Control.Lens
 import Data.Aeson qualified as AE
 import Data.Default
+import Data.Effectful.Hasql (SecuredSql (..), SqlSource (..))
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq (HTTP)
@@ -131,7 +134,7 @@ data Variable = Variable
   , reloadOnChange :: Maybe Bool
   , helpText :: Maybe Text
   , _vType :: VariableType
-  , sql :: Maybe Text
+  , sql :: Maybe SecuredSql
   , facetField :: Maybe Text -- Populate options from the precomputed facet catalog (bare field path, e.g. "db.system.name") instead of a live DISTINCT scan; falls back to sql when absent.
   , query :: Maybe Text
   , options :: Maybe [[Text]]
@@ -149,7 +152,7 @@ data Variable = Variable
 -- reference using {{const-<key>}} (e.g., in IN clauses).
 data Constant = Constant
   { key :: Text -- The name used to reference this constant, e.g., "top_resources"
-  , sql :: Maybe Text -- SQL query to execute
+  , sql :: Maybe SecuredSql -- SQL query and its owning store
   , query :: Maybe Text -- KQL query to execute (alternative to sql)
   , description :: Maybe Text -- Optional description
   , result :: Maybe [[Text]] -- Populated with query results after execution
@@ -214,13 +217,13 @@ readDashboardEndpoint uri = do
 
 
 replaceQueryVariables :: Projects.ProjectId -> Maybe UTCTime -> Maybe UTCTime -> [(Text, Maybe Text)] -> UTCTime -> Variable -> Variable
-replaceQueryVariables pid mf mt allParams currentTime v = v & #sql . _Just %~ replace & #query . _Just %~ replace
+replaceQueryVariables pid mf mt allParams currentTime v = v & #sql . _Just . #statement %~ replace & #query . _Just %~ replace
   where
     replace = replacePlaceholders (variablePresets pid.toText mf mt allParams currentTime)
 
 
 replaceConstantVariables :: Projects.ProjectId -> Maybe UTCTime -> Maybe UTCTime -> [(Text, Maybe Text)] -> UTCTime -> Constant -> Constant
-replaceConstantVariables pid mf mt allParams currentTime c = c & #sql . _Just %~ replace & #query . _Just %~ replace
+replaceConstantVariables pid mf mt allParams currentTime c = c & #sql . _Just . #statement %~ replace & #query . _Just %~ replace
   where
     replace = replacePlaceholders (variablePresets pid.toText mf mt allParams currentTime)
 

@@ -1,11 +1,124 @@
-import { describe, it, expect } from 'vitest';
-import { breakCycles, layerGraph, orderLayers, assignCoords, layoutGraph, filterSelection, type Edge } from '../src/service-map';
+import { describe, it, expect, vi } from 'vitest';
+import { breakCycles, layoutGraph, filterSelection, hydrateServiceMaps, visibleGraph, edgeKey, edgePath, scopeTo, menuHref, serviceMapFilter, FILTER_EVENT, CARD_W, CARD_H, type Edge } from '../src/service-map';
 
 const e = (source: string, target: string): Edge => ({ source, target });
-const snapshot = (keys: string[], edges: Edge[]) => {
-  const { coords, back } = layoutGraph(keys, edges);
+const snapshot = async (keys: string[], edges: Edge[]) => {
+  const { coords, back } = await layoutGraph(keys, edges);
   return JSON.stringify({ coords: [...coords], back: [...back].sort() });
 };
+
+describe('hydrateServiceMaps', () => {
+  it('hydrates each server-rendered map once from its embedded payload', () => {
+    const graph = { nodes: [], edges: [], range_seconds: 3600, truncated: false, error: null };
+    const colors = { gateway: 'bg-blue-400' };
+    document.body.innerHTML = `
+      <div id="global-service-map" data-service-map></div>
+      <script id="global-service-map-data" type="application/json">${JSON.stringify(graph)}</script>
+      <script id="global-service-map-colors" type="application/json">${JSON.stringify(colors)}</script>
+    `;
+    const render = vi.fn();
+
+    hydrateServiceMaps(document, render);
+    hydrateServiceMaps(document, render);
+
+    expect(render).toHaveBeenCalledOnce();
+    expect(render).toHaveBeenCalledWith('global-service-map', graph, { colors });
+  });
+});
+
+describe('scopeTo', () => {
+  // gateway -> checkout -> db, and an unrelated worker -> queue alongside it.
+  const nodes = ['gateway', 'checkout', 'db', 'worker', 'queue'].map(key => ({ key }));
+  const edges = [e('gateway', 'checkout'), e('checkout', 'db'), e('worker', 'queue')];
+
+  it('keeps the whole chain a service participates in, upstream and down', () => {
+    const v = scopeTo(nodes, edges, 'checkout');
+    expect(v.nodes.map(n => n.key)).toEqual(['gateway', 'checkout', 'db']);
+    expect(v.edges).toEqual([e('gateway', 'checkout'), e('checkout', 'db')]);
+  });
+
+  it('is a no-op for no scope or a scope that is not on the map', () => {
+    expect(scopeTo(nodes, edges, null).nodes).toHaveLength(5);
+    expect(scopeTo(nodes, edges, 'gone').nodes).toHaveLength(5);
+  });
+});
+
+describe('edgePath', () => {
+  it('runs down, across at the mid-level, then down again', () => {
+    // Datadog's edges are plumbing, not curves: shared horizontal lanes are what let a
+    // reader tell which box an edge belongs to in a dense row.
+    const d = edgePath(100, 60, 300, 200);
+    expect(d.startsWith('M 100,60')).toBe(true);
+    expect(d.endsWith('L 300,200')).toBe(true);
+    // The horizontal run sits at the midpoint between the two cards.
+    expect(d).toContain('130');
+    expect(d).toMatch(/Q 100,130|Q 300,130/);
+  });
+
+  it('collapses to a straight line when the cards are vertically aligned', () => {
+    expect(edgePath(200, 50, 200, 150)).toBe('M 200,50 L 200,150');
+  });
+
+  it('shrinks its corner radius rather than overshooting a short hop', () => {
+    // A 10px corner on a 6px drop would double back on itself.
+    const d = edgePath(0, 100, 4, 106);
+    const nums = [...d.matchAll(/-?\d+(?:\.\d+)?/g)].map(m => Number(m[0]));
+    expect(Math.max(...nums)).toBeLessThanOrEqual(106);
+    expect(Math.min(...nums)).toBeGreaterThanOrEqual(0);
+  });
+
+  it('turns the correct way for a callee to the left', () => {
+    const right = edgePath(0, 0, 200, 100);
+    const left = edgePath(200, 0, 0, 100);
+    expect(right).toContain('Q 0,50 10,50');
+    expect(left).toContain('Q 200,50 190,50');
+  });
+});
+
+describe('visibleGraph', () => {
+  // One collapsed head (×3) plus its members, and one ungrouped peer alongside.
+  const n = (key: string, member_count: number | null = null, group_key: string | null = null) => ({ key, member_count, group_key });
+  const nodes = [
+    n('api'), n('grp:http:shop.com', 3), n('http:a.shop.com', null, 'grp:http:shop.com'),
+    n('http:b.shop.com', null, 'grp:http:shop.com'), n('http:c.shop.com', null, 'grp:http:shop.com'), n('db:redis'),
+  ];
+  const edges = [e('api', 'grp:http:shop.com'), e('api', 'http:a.shop.com'), e('api', 'http:b.shop.com'), e('api', 'http:c.shop.com'), e('api', 'db:redis')];
+
+  it('draws heads and hides their members while collapsed', () => {
+    const v = visibleGraph(nodes, edges, new Set());
+    expect(v.nodes.map(x => x.key)).toEqual(['api', 'grp:http:shop.com', 'db:redis']);
+    // The member edges travel in the payload but must not be drawn on top of the collapsed edge.
+    expect(v.edges).toEqual([e('api', 'grp:http:shop.com'), e('api', 'db:redis')]);
+  });
+
+  it('swaps a head for its members when expanded, leaving other groups collapsed', () => {
+    const v = visibleGraph(nodes, edges, new Set(['grp:http:shop.com']));
+    expect(v.nodes.map(x => x.key)).toEqual(['api', 'http:a.shop.com', 'http:b.shop.com', 'http:c.shop.com', 'db:redis']);
+    expect(v.edges).not.toContainEqual(e('api', 'grp:http:shop.com'));
+    expect(v.edges).toHaveLength(4);
+  });
+
+  it('nests: a head that is itself folded only appears once its parent opens', () => {
+    // The long-tail fold can swallow a domain head, so heads have parents too.
+    const nested = [
+      n('api'), n('rest:api', 2),
+      n('grp:http:shop.com', 3, 'rest:api'), n('db:redis', null, 'rest:api'),
+      n('http:a.shop.com', null, 'grp:http:shop.com'), n('http:b.shop.com', null, 'grp:http:shop.com'),
+    ];
+    const es = [e('api', 'rest:api'), e('api', 'grp:http:shop.com'), e('api', 'db:redis'), e('api', 'http:a.shop.com')];
+
+    expect(visibleGraph(nested, es, new Set()).nodes.map(x => x.key)).toEqual(['api', 'rest:api']);
+    expect(visibleGraph(nested, es, new Set(['rest:api'])).nodes.map(x => x.key))
+      .toEqual(['api', 'grp:http:shop.com', 'db:redis']);
+    // Opening the inner head as well swaps it for its own members, one level deeper.
+    expect(visibleGraph(nested, es, new Set(['rest:api', 'grp:http:shop.com'])).nodes.map(x => x.key))
+      .toEqual(['api', 'db:redis', 'http:a.shop.com', 'http:b.shop.com']);
+  });
+
+  it('expanding an unknown group changes nothing', () => {
+    expect(visibleGraph(nodes, edges, new Set(['grp:http:nope.com']))).toEqual(visibleGraph(nodes, edges, new Set()));
+  });
+});
 
 describe('breakCycles', () => {
   it('leaves a DAG untouched', () => {
@@ -26,99 +139,55 @@ describe('breakCycles', () => {
   });
 });
 
-describe('layerGraph', () => {
-  it('uses the longest path, not the first one found', () => {
-    // a→d directly, and a→b→c→d: d must land on layer 3, not 1.
-    const layer = layerGraph(['a', 'b', 'c', 'd'], [e('a', 'd'), e('a', 'b'), e('b', 'c'), e('c', 'd')]);
-    expect([...layer]).toEqual([['a', 0], ['b', 1], ['c', 2], ['d', 3]]);
-  });
-
-  it('layers each disconnected component from its own root', () => {
-    const layer = layerGraph(['a', 'b', 'x', 'y'], [e('a', 'b'), e('x', 'y')]);
-    expect(layer.get('a')).toBe(0);
-    expect(layer.get('x')).toBe(0);
-    expect(layer.get('b')).toBe(1);
-    expect(layer.get('y')).toBe(1);
-  });
-});
-
-describe('assignCoords', () => {
-  it('spaces layers on x and centres each layer on y', () => {
-    const coords = assignCoords([['a'], ['b', 'c']]);
-    expect(coords.get('a')).toEqual({ x: 0, y: 0 });
-    expect(coords.get('b')).toEqual({ x: 190, y: -48 });
-    expect(coords.get('c')).toEqual({ x: 190, y: 48 });
-  });
-});
-
 describe('layoutGraph', () => {
-  it('places a single node at the origin with no back-edges', () => {
-    const { coords, back } = layoutGraph(['solo'], []);
-    expect(coords.get('solo')).toEqual({ x: 0, y: 0 });
+  it('places a lone node and reports no back-edges', async () => {
+    const { coords, back } = await layoutGraph(['solo'], []);
+    expect(coords.get('solo')).toBeDefined();
     expect(back.size).toBe(0);
   });
 
-  it('lays out disconnected components without overlapping rows', () => {
-    const { coords } = layoutGraph(['a', 'b', 'x', 'y'], [e('a', 'b'), e('x', 'y')]);
-    expect(coords.get('a')!.x).toBe(0);
-    expect(coords.get('x')!.x).toBe(0);
-    expect(coords.get('a')!.y).not.toBe(coords.get('x')!.y);
-    expect(coords.get('b')!.x).toBe(190);
-    expect(coords.get('y')!.x).toBe(190);
+  it('puts every callee on a later row than its caller', async () => {
+    const { coords } = await layoutGraph(['a', 'b', 'x', 'y'], [e('a', 'b'), e('x', 'y')]);
+    expect(coords.get('b')!.y).toBeGreaterThan(coords.get('a')!.y);
+    expect(coords.get('y')!.y).toBeGreaterThan(coords.get('x')!.y);
+    // Disconnected roots share the first row rather than stacking.
+    expect(coords.get('a')!.y).toBe(coords.get('x')!.y);
   });
 
-  it('lays out a wide fan-out symmetrically about the root', () => {
-    const leaves = Array.from({ length: 9 }, (_, i) => `leaf${i}`);
-    const { coords } = layoutGraph(['root', ...leaves], leaves.map(l => e('root', l)));
-    const ys = leaves.map(l => coords.get(l)!.y);
-    expect(new Set(leaves.map(l => coords.get(l)!.x))).toEqual(new Set([190]));
-    expect(new Set(ys).size).toBe(9);
-    expect(ys.reduce((a, b) => a + b, 0)).toBeCloseTo(0);
+  it('never overlaps two cards, however wide the fan-out', async () => {
+    const leaves = Array.from({ length: 12 }, (_, i) => `leaf${i}`);
+    const { coords } = await layoutGraph(['root', ...leaves], leaves.map(l => e('root', l)));
+    const boxes = [...coords.values()];
+    for (let i = 0; i < boxes.length; i++)
+      for (let j = i + 1; j < boxes.length; j++) {
+        const overlap = Math.abs(boxes[i].x - boxes[j].x) < CARD_W && Math.abs(boxes[i].y - boxes[j].y) < CARD_H;
+        expect(overlap).toBe(false);
+      }
   });
 
-  it('is deterministic — two runs are byte-identical', () => {
+  it('is deterministic — two runs are byte-identical', async () => {
+    // A shared map link must not reshuffle between refreshes, so ELK's tie-breaks are
+    // pinned to model order. This is the assertion that guards that.
     const keys = ['gateway', 'checkout', 'auth', 'db:orders', 'queue:orders.v1', 'redis'];
     const edges = [
       e('gateway', 'checkout'), e('gateway', 'auth'), e('checkout', 'db:orders'),
       e('checkout', 'queue:orders.v1'), e('auth', 'redis'), e('checkout', 'auth'),
       e('redis', 'gateway'), // back-edge
     ];
-    expect(snapshot(keys, edges)).toBe(snapshot(keys, edges));
+    expect(await snapshot(keys, edges)).toBe(await snapshot(keys, edges));
   });
 
-  it('after layering every edge points forward except the recorded back-edges', () => {
-    const keys = ['a', 'b', 'c', 'd', 'e'];
-    const edges = [e('a', 'b'), e('b', 'c'), e('c', 'd'), e('d', 'b'), e('a', 'e'), e('e', 'd')];
-    const { acyclic, back } = breakCycles(keys, edges);
-    const layer = layerGraph(keys, acyclic);
-    const backSet = new Set(back.map(b => `${b.source} ${b.target}`));
-
-    expect(backSet.size).toBeGreaterThan(0);
-    for (const edge of edges) {
-      const forward = layer.get(edge.target)! > layer.get(edge.source)!;
-      expect(forward || backSet.has(`${edge.source} ${edge.target}`)).toBe(true);
-    }
-  });
-});
-
-describe('orderLayers', () => {
-  it('sorts a layer by the median of its predecessors, tie-breaking on key', () => {
-    // Layer 1 seeded alphabetically as [p, q]; p follows the lower-placed parent
-    // (a) and q follows (b), so barycenters keep them in that order.
-    const keys = ['a', 'b', 'p', 'q'];
-    const edges = [e('a', 'p'), e('b', 'q')];
-    const layers = orderLayers(layerGraph(keys, edges), edges);
-    expect(layers[0]).toEqual(['a', 'b']);
-    expect(layers[1]).toEqual(['p', 'q']);
+  it('still records back-edges, which ELK breaks internally but does not report', async () => {
+    const keys = ['a', 'b', 'c'];
+    const { back } = await layoutGraph(keys, [e('a', 'b'), e('b', 'c'), e('c', 'a')]);
+    expect(back.has(edgeKey('c', 'a'))).toBe(true);
+    expect(back.size).toBe(1);
   });
 
-  it('reduces crossings on a swapped bipartite layer', () => {
-    const keys = ['a', 'b', 'x', 'y'];
-    const edges = [e('a', 'y'), e('b', 'x')];
-    const layers = orderLayers(layerGraph(keys, edges), edges);
-    const pos = (k: string) => layers[1].indexOf(k);
-    // 'y' hangs off 'a' (first in layer 0) so it must be ordered before 'x'.
-    expect(pos('y')).toBeLessThan(pos('x'));
+  it('lays out a node whose key contains characters ELK ids must survive', async () => {
+    const keys = ['grp:http:my-shop.com', 'db:orders', ''];
+    const { coords } = await layoutGraph(keys, [e('', 'db:orders'), e('db:orders', 'grp:http:my-shop.com')]);
+    expect([...coords.keys()].sort()).toEqual(keys.slice().sort());
   });
 });
 
@@ -145,7 +214,7 @@ describe('filterSelection', () => {
     const { litNodes, litEdges } = filterSelection(nodes, edges, 'CHECK');
     expect([...litNodes]).toEqual(['checkout']);
     // Both edges touching checkout stay lit so the path is never severed.
-    expect([...litEdges].sort()).toEqual(['checkout db:orders', 'gateway checkout']);
+    expect([...litEdges].sort()).toEqual([edgeKey('checkout', 'db:orders'), edgeKey('gateway', 'checkout')]);
   });
 
   it('matches on label, not on the inferred key prefix', () => {
@@ -164,12 +233,12 @@ describe('filterSelection', () => {
     // Isolation alone: auth and its edge go dark.
     const iso = filterSelection(nodes, edges, '', isolated);
     expect([...iso.litNodes].sort()).toEqual(['checkout', 'db:orders', 'gateway']);
-    expect([...iso.litEdges].sort()).toEqual(['checkout db:orders', 'gateway checkout']);
+    expect([...iso.litEdges].sort()).toEqual([edgeKey('checkout', 'db:orders'), edgeKey('gateway', 'checkout')]);
 
     // Adding a query narrows further; it never resurrects the isolated-out node.
     const both = filterSelection(nodes, edges, 'gateway', isolated);
     expect([...both.litNodes]).toEqual(['gateway']);
-    expect([...both.litEdges]).toEqual(['gateway checkout']);
+    expect([...both.litEdges]).toEqual([edgeKey('gateway', 'checkout')]);
 
     // A query that only matches an isolated-out node lights nothing.
     expect(filterSelection(nodes, edges, 'auth', isolated).litNodes.size).toBe(0);
@@ -179,5 +248,49 @@ describe('filterSelection', () => {
     const a = filterSelection(nodes, edges, 'a');
     const b = filterSelection([...nodes].reverse(), edges, 'a');
     expect([...a.litNodes].sort()).toEqual([...b.litNodes].sort());
+  });
+});
+
+describe('serviceMapFilter', () => {
+  it('dispatches the dashed wire event the renderer listens for', () => {
+    // The Lucid input reaches this through hyperscript `call`, not `send`: hyperscript parses
+    // an event name as an identifier path, so `send service-map-filter(...)` was a parse
+    // error that dropped the whole attribute (and, in prod, the filter with it).
+    const seen: any[] = [];
+    const onFilter = (ev: Event) => seen.push((ev as CustomEvent).detail);
+    document.addEventListener(FILTER_EVENT, onFilter);
+    try {
+      serviceMapFilter('checkout');
+      serviceMapFilter('db', 'trace-map');
+    } finally {
+      document.removeEventListener(FILTER_EVENT, onFilter);
+    }
+    expect(seen).toEqual([{ q: 'checkout', id: undefined }, { q: 'db', id: 'trace-map' }]);
+  });
+});
+
+describe('menuHref', () => {
+  const base = '/p/proj';
+  const query = (href: string) => decodeURIComponent(new URL(href, 'https://x').searchParams.get('query') ?? '');
+
+  it('shows all events or only logs for the selected service', () => {
+    const events = menuHref(base, 'events', 'checkout');
+    const logs = menuHref(base, 'logs', 'checkout');
+    expect(query(events)).toBe('resource.service.name=="checkout"');
+    expect(query(logs)).toBe('resource.service.name=="checkout" AND kind=="log"');
+    expect(events).not.toBe(logs);
+  });
+
+  it('only ever asks for a viz type that exists', () => {
+    // visTypes is logs | timeseries | timeseries_line | patterns | sessions; `traces` is not
+    // one, and an unknown value falls through to the default instead of erroring.
+    for (const action of ['events', 'logs'])
+      expect(new URL(menuHref(base, action, 'svc'), 'https://x').searchParams.get('viz_type')).toBe('logs');
+  });
+
+  it('routes the non-explorer actions and refuses to invent a link for the rest', () => {
+    expect(menuHref(base, 'metrics', 'a/b')).toBe('/p/proj/metrics?metric_source=a%2Fb');
+    expect(menuHref(base, 'monitors', 'svc')).toBe('/p/proj/monitors');
+    for (const action of ['inspect', 'focus', 'nonsense']) expect(menuHref(base, action, 'svc')).toBe('#');
   });
 });

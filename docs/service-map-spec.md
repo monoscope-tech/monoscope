@@ -62,6 +62,30 @@ Deliberately **not** built, contrary to sections below:
 
 ### Non-goals (v1, explicitly)
 
+- **The Env facet is blocked on deploy coordination, not on effort.** Datadog's flow map is
+  scoped by a query and its `Env:` chip is the part we cannot answer: `service_dependency_edges`
+  has no environment dimension. Three findings from the attempt, so the next one does not repeat
+  it:
+
+  1. `resource___deployment___environment___name` **does not exist** on `otel_logs_and_spans` in
+     either store. Postgres declares nine `resource___*` columns (migration 0002) and TimeFusion's
+     schema was checked directly — neither has it. The reference in `Telemetry.hs` is a different
+     table. A rollup query selecting it fails, taking every rollup test with it.
+  2. The environment *is* reachable, from the nested `resource` JSON, on both stores:
+     `resource->'deployment'->'environment'->>'name'`, falling back through
+     `resource->'deployment'->>'environment'`, `resource->'service'->>'namespace'` and
+     `resource->'k8s'->'namespace'->>'name'` — the same precedence `ProcessMessage` already uses.
+     Verified against production TimeFusion; the demo data resolves to `otel-demo` via
+     `service.namespace`. The JSON is nested, not dot-keyed: `resource->>'deployment.environment.name'`
+     silently returns NULL rather than erroring.
+  3. Storing it is the hard part. `env` has to join the rollup's primary key, because prod and
+     staging calling the same dependency are different hops and a shared key silently overwrites
+     one with the other. But Postgres infers `ON CONFLICT` from a *complete* unique index, so a
+     7-column key cannot coexist with the deployed 6-column conflict target: changing the key
+     while the old code runs stops the rollup writing entirely. **Ship the migration and the code
+     in the same deploy, or not at all.** Adding `env` outside the key is prod-safe and wrong —
+     it reports one environment's traffic under another's label.
+
 - **No arbitrary KQL filtering of the global map.** The global map is scoped by time only (plus
   client-side node-name search). Rationale in §5: the global map is served from a rollup, and a
   rollup cannot answer an arbitrary predicate. Datadog ships the same split — Service Map
@@ -73,6 +97,11 @@ Deliberately **not** built, contrary to sections below:
   does not provide; `emphasis.focus:'adjacency'` already carries the signal).
 - No node grouping by team/namespace, no minimap, no `<other>` fan-out folding — deferred to v2
   behind measured need (§10).
+
+  **Status (v2):** fan-out folding shipped. Peers on a shared registrable domain collapse into
+  one head, and the unrelated long tail folds under its busiest caller as "N more dependencies".
+  Both reuse one head/member shape, so heads nest and the renderer has a single concept to
+  expand. Grouping by team/namespace and the minimap remain deferred.
 - No new signal at ingest time. No ingest-time edge pairing (rejected, §5).
 - No SLO-grade percentiles: the map's p95/p99 come from a log-scale histogram (~19% error) and must
   link out to Events for exact numbers.

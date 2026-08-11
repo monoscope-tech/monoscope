@@ -302,6 +302,9 @@ tests:
       - hasql
       - hasql-pool
       - directory # DashboardTemplatesSpec lists the templates dir
+      # System.ServerSpec drives hashedAssetMiddleware with a bare Request
+      - wai
+      - http-types
   # test-dev: lib + integration tests as ONE GHCi target (Jade's cabal test-dev trick).
   # Use via `make live-test-dev`. Library deps come from hpack-includes/lib-deps.yaml
   # (shared with `library`); integration-only extras listed inline. Not run by `make test` / CI.

@@ -210,26 +210,43 @@ data WidgetDataset = WidgetDataset
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "w", DAE.CamelToSnake]] WidgetDataset
 
 
--- | The query to chart a widget with. A widget whose KQL is only a filter has
--- no series to plot, so we append the same default aggregation the browser
--- renderer does (@updateChartData@ in web-components/src/widgets.ts) — one
--- count per auto-sized time bin. Widgets that already summarize into bins are
--- passed through untouched.
+-- | The query to run for a widget, paired with the row shape it decodes into.
+-- The two have to be chosen together: each decoder accepts exactly one column
+-- count, so shaping the query without picking the matching 'Charts.DataType'
+-- (or vice versa) fails the whole widget with a column-count mismatch.
+--
+--   * plotted widgets need a series, so a widget whose KQL is only a filter
+--     gets the same default aggregation the browser renderer applies
+--     (@updateChartData@ in web-components/src/widgets.ts) — one count per
+--     auto-sized time bin;
+--   * a stat reads one scalar, so it only needs an aggregation when the query
+--     has none; binning it would yield a three-column series;
+--   * row-oriented widgets project their own columns and are passed through.
 --
 -- >>> chartQuery (def & #query ?~ "severity==\"ERROR\"")
--- Just "severity==\"ERROR\" | summarize count(*) by bin_auto(timestamp)"
+-- (Just "severity==\"ERROR\" | summarize count(*) by bin_auto(timestamp)",DTMetric)
 -- >>> chartQuery (def & #query ?~ "summarize count(*) by bin_auto(timestamp)")
--- Just "summarize count(*) by bin_auto(timestamp)"
+-- (Just "summarize count(*) by bin_auto(timestamp)",DTMetric)
+-- >>> chartQuery (def & #wType .~ WTStat & #query ?~ "kind == \"server\"")
+-- (Just "kind == \"server\" | summarize count(*)",DTFloat)
+-- >>> chartQuery (def & #wType .~ WTStat & #query ?~ "name != null | summarize dcount(name)")
+-- (Just "name != null | summarize dcount(name)",DTFloat)
+-- >>> chartQuery (def & #wType .~ WTTable & #query ?~ "summarize count(*) by service")
+-- (Just "summarize count(*) by service",DTText)
 -- >>> chartQuery (def :: Widget)
--- Nothing
-chartQuery :: Widget -> Maybe Text
-chartQuery w =
-  w.query <&> \q ->
-    if hasSummarize q && hasBinning q then q else q <> " | " <> defaultAggregation
+-- (Nothing,DTMetric)
+chartQuery :: Widget -> (Maybe Text, Charts.DataType)
+chartQuery w = case w.wType of
+  WTStat -> (w.query <&> \q -> if hasSummarize q then q else q <> " | summarize count(*)", Charts.DTFloat)
+  WTLogs -> asIs
+  WTTable -> asIs
+  WTTopList -> asIs
+  WTTraces -> asIs
+  _ -> (w.query <&> \q -> if hasSummarize q && hasBinning q then q else q <> " | summarize count(*) by bin_auto(timestamp)", Charts.DTMetric)
   where
+    asIs = (w.query, Charts.DTText)
     hasSummarize = T.isInfixOf "summarize" . T.toLower
     hasBinning = T.isInfixOf " by bin" . T.toLower
-    defaultAggregation = "summarize count(*) by bin_auto(timestamp)"
 
 
 -- | Convert MetricsData to WidgetDataset (timestamps already in ms from queryMetrics)
@@ -545,20 +562,17 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "le
               , data_ "tippy-content" "Create a copy of this widget"
               , hxPost_ ("/p/" <> projectIdText widget <> "/dashboards/" <> dashId <> "/widgets/" <> wId <> "/duplicate")
               , hxTrigger_ "click"
-              , hxSwap_ "none"
-              , [__| on click call (the closest <[popover]/>).hidePopover()
-                     on htmx:before:swap
-                        call event.preventDefault() then
-                        set widgetData to JSON.parse(event.detail.ctx.response.headers.get('X-Widget-JSON')) then
-                        set gridEl to me.closest('.grid-stack') then
-                        set layout to widgetData.layout or {w: 3, h: 3} then
-                        make a <template/> called tpl then
-                        set tpl.innerHTML to event.detail.ctx.text then
-                        set widgetEl to tpl.content.firstElementChild then
-                        set newId to widgetEl.id then
-                        call gridEl.gridstack.addWidget(widgetEl, {w: layout.w, h: layout.h}) then
-                        set addedEl to document.getElementById(newId) then
-                        js(addedEl) htmx.process(addedEl); _hyperscript.processNode(addedEl); window.evalScriptsFromContent(addedEl) end
+              , hxTarget_ "closest .grid-stack"
+              , hxSwap_ "beforeend"
+              , -- htmx appends the rendered widget and processes it (scripts, hx-*, and
+                -- hyperscript, which hooks htmx:load itself); only the grid adoption is
+                -- left to do. No size is passed: makeWidget reads the gs-w/gs-h the
+                -- widget already renders, and addWidget's options are dropped since v11.
+                -- after:swap, not after:request — under htmx 4 afterRequest fires before
+                -- the swap, when the new element is not yet in the DOM.
+                [__|on click call (the closest <[popover]/>).hidePopover()
+                    on htmx:after:swap
+                       set g to the closest <.grid-stack/> then call g.gridstack.makeWidget(g.lastElementChild)
                  |]
               ]
               "Duplicate widget"

@@ -442,7 +442,7 @@ dispatchAIResponse botType envCfg pid userQuestion resp sendResponse buildChartC
         Nothing -> case parseQueryToAST query of
           Left _ -> sendResponse $ formatBotError botType (QueryParseError query)
           Right query' -> do
-            tableAsVecE <- LogQueries.selectLogTable envCfg.enableTimefusionReads pid query' query Nothing (fromTimeM, toTimeM) [] Nothing Nothing
+            tableAsVecE <- LogQueries.selectLogTable envCfg.enableTimefusionReads pid query' query Nothing (fromTimeM, toTimeM) [] Nothing Nothing Nothing
             sendResponse $ handleTableResponse botType tableAsVecE envCfg pid query
   case resp.query of
     Just _ -> handleWidget >> whenJust resp.explanation (sendResponse . formatTextResponse botType)

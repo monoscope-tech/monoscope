@@ -10,6 +10,7 @@ import { includes, startsWith, map, forEach, compact, chunk, chain, lt } from 'l
 // Import worker as URL instead of worker instance
 import LogWorkerUrl from './log-worker?worker&url';
 import { groupSpans } from './log-worker-functions';
+import { spriteUrl } from './assets';
 import clsx from 'clsx';
 import {
   formatTimestamp,
@@ -71,6 +72,9 @@ const noopRef: RefOrCallback = () => {};
 
 // Special item types for virtual list
 type VirtualListItem = EventLine | { type: 'fetchRecent' } | { type: 'loadMore' } | { type: 'aggregateChildren'; parentKey: string };
+type ScrollAnchor = { id: string; offset: number };
+
+const MAX_RETAINED_ROWS = 5000;
 
 // FlowLayout starts at 100px until it observes rows. Log rows are 28px, so the
 // initial estimate inflated the virtual scroll range roughly 3.5×.
@@ -78,8 +82,40 @@ export class DenseRowFlowLayout extends FlowLayout {
   constructor(...args: ConstructorParameters<typeof FlowLayout>) {
     super(...args);
     this._itemSize.height = 28;
+    // The 1000px default renders ~36 offscreen rows per side. Dense fixed-height
+    // rows need only a short runway, keeping style/paint work near the viewport.
+    this._overhang = 200;
   }
 }
+
+/**
+ * The dimension the latency bar attributes time to. `service` answers "which service ate the
+ * request"; `kind` answers "was this my code or something it called". Both are projected on
+ * every row already, so neither costs a query.
+ */
+export type LatencyDim = 'service' | 'kind';
+
+/**
+ * jsdom in this setup provides no `localStorage` at all, and a browser in private mode can
+ * throw on access. A reading preference falling back to its default is the correct outcome;
+ * it must never be the thing that stops the list from mounting.
+ */
+const latencyDimPref = {
+  read: (): LatencyDim => {
+    try {
+      return localStorage.getItem('latencyDim') === 'kind' ? 'kind' : 'service';
+    } catch {
+      return 'service';
+    }
+  },
+  write: (dim: LatencyDim) => {
+    try {
+      localStorage.setItem('latencyDim', dim);
+    } catch {
+      /* preference simply does not persist */
+    }
+  },
+};
 
 @customElement('log-list')
 export class LogList extends LitElement {
@@ -104,6 +140,7 @@ export class LogList extends LitElement {
   @state() private logsColumns: string[] = [];
   @state() private wrapLines: boolean = false;
   @state() private hasMore: boolean = true;
+  @state() private hasNewer: boolean = false;
   @state() private expandTimeRange: boolean = true;
   @state() private loadedCount: number = 0;
   @state() private totalCount: number = 0;
@@ -123,6 +160,10 @@ export class LogList extends LitElement {
     { rows: any[][]; cols: string[]; colIdxMap: ColIdxMap; hasMore: boolean; loading: boolean; skip: number; eventLines?: EventLine[] }
   > = {};
   @state() private fixedColumnWidths: Record<string, number> = {};
+  // Which dimension the latency bar attributes time to. Persisted like the other column
+  // preferences, because "am I looking at services or at span kinds" is a reading mode a
+  // user settles into rather than a per-page choice.
+  @state() private latencyDim: LatencyDim = latencyDimPref.read();
 
   // Refs for DOM elements
   @query('#logs_list_container_inner') private logsContainer?: HTMLElement;
@@ -145,6 +186,7 @@ export class LogList extends LitElement {
   private lineChart: any = null;
   private initChartsTimer: ReturnType<typeof setTimeout> | null = null;
   private _loadMoreObserver: IntersectionObserver | null = null;
+  private _loadNewerObserver: IntersectionObserver | null = null;
   private updateBatchTimer: NodeJS.Timeout | null = null;
   private pendingUpdates: Set<string> = new Set();
   private handleMouseUp: (() => void) | null = null;
@@ -471,22 +513,17 @@ export class LogList extends LitElement {
     const url = new URL(window.location.href);
     url.searchParams.set('json', 'true');
 
-    // Lower bound = newest loaded row + 10ms (skip it). null when empty.
-    const from = this.edgeCursor(newestRowTimestamp, 10);
-    if (from != null) {
-      url.searchParams.set('from', from);
-      // Recompute the lower bound from the newest loaded row; drop cursor/since.
-      // Keep `to`: on a bounded historical range, live-tail must stay within it
-      // rather than silently pulling rows newer than the user's upper bound.
-      url.searchParams.delete('cursor');
+    // Forward cursor = newest retained row + 10ms (skip the inclusive boundary).
+    // The server scans ascending for this request, then returns canonical newest-first rows.
+    const cursor = this.edgeCursor(newestRowTimestamp, 10);
+    if (cursor != null) {
+      url.searchParams.set('cursor', cursor);
+      url.searchParams.set('direction', 'newer');
+      url.searchParams.delete('from');
       url.searchParams.delete('since');
-      // Edge case: once the newest loaded row reaches the upper bound, `from`
-      // (newest+10ms) lands at/after `to`, so every tick fetches an empty
-      // [from,to] window — the live banner would hang forever with no rows and
-      // no error. Stop live-tail instead of polling a guaranteed-empty range.
       const to = url.searchParams.get('to');
       const toMs = to ? Date.parse(to) : NaN;
-      if (!isNaN(toMs) && Date.parse(from) >= toMs) this.stopLiveStream('Reached the end of the selected time range — live tail paused.');
+      if (!isNaN(toMs) && Date.parse(cursor) >= toMs) this.stopLiveStream('Reached the end of the selected time range — live tail paused.');
     }
 
     url.pathname = this.dataSubPath();
@@ -537,6 +574,7 @@ export class LogList extends LitElement {
     const url = new URL(baseUrl, window.location.origin + window.location.pathname);
     url.searchParams.set('json', 'true');
     url.searchParams.set('cursor', cursor); // preserves from/to/since filters already on the base URL
+    url.searchParams.set('direction', 'older');
 
     url.pathname = this.dataSubPath();
     return url.toString();
@@ -760,8 +798,7 @@ export class LogList extends LitElement {
       spinner = document.createElement('span');
       spinner.id = spinnerId;
       spinner.className = 'ml-2 inline-block';
-      spinner.innerHTML =
-        '<svg class="inline-block icon w-4 h-4 animate-spin text-textBrand"><use href="/public/assets/svgs/fa-sprites/regular.svg?v=ecf9d105#spinner"></use></svg>';
+      spinner.innerHTML = `<svg class="inline-block icon w-4 h-4 animate-spin text-textBrand"><use href="${spriteUrl('regular')}#spinner"></use></svg>`;
       countElement.parentElement?.appendChild(spinner);
     } else if (!show && spinner) {
       // Remove spinner
@@ -849,6 +886,10 @@ export class LogList extends LitElement {
     if (this._loadMoreObserver) {
       this._loadMoreObserver.disconnect();
       this._loadMoreObserver = null;
+    }
+    if (this._loadNewerObserver) {
+      this._loadNewerObserver.disconnect();
+      this._loadNewerObserver = null;
     }
     if (this.updateBatchTimer) {
       clearTimeout(this.updateBatchTimer);
@@ -1246,10 +1287,11 @@ export class LogList extends LitElement {
     }
   }
 
-  fetchData = async (url: string, isRefresh = false, isRecentFetch = false, isLoadMore = false) => {
+  fetchData = async (url: string, isRefresh = false, isRecentFetch = false, isLoadMore = false, revealRecent = false) => {
     if (isRecentFetch && this.isFetchingRecent) return;
     if (isLoadMore && this.isLoadingMore) return;
 
+    const loadMoreAnchor = isLoadMore ? this.captureScrollAnchor() : null;
     if (isRecentFetch) this.isFetchingRecent = true;
     else if (isLoadMore) this.isLoadingMore = true;
     else this.isLoading = true;
@@ -1277,11 +1319,11 @@ export class LogList extends LitElement {
 
       // Handle results
       if (tree.length === 0) {
-        // An empty load-more page means we've hit the end of older data: stop
-        // paginating even if the server still reports hasMore, otherwise the
-        // load-more sentinel keeps re-firing and refetches (and, pre-dedup,
-        // re-appends) the same window. Initial/refresh fetches keep trusting meta.
-        this.hasMore = isLoadMore ? false : meta.hasMore || false;
+        // An empty pagination page exhausts that edge. Initial/refresh fetches
+        // keep trusting meta; a quiet live-tail tick simply stays at the newest edge.
+        if (isLoadMore) this.hasMore = false;
+        else if (isRecentFetch) this.hasNewer = false;
+        else this.hasMore = meta.hasMore || false;
         // A quiet live-tail tick (no new rows) isn't "history exhausted" — don't flash
         // the "Show earlier events" button on every empty 5s recent fetch.
         if (!isRecentFetch) this.expandTimeRange = !this.hasMore;
@@ -1292,6 +1334,7 @@ export class LogList extends LitElement {
           this.spanListTree = [];
           this.seenIds.clear();
           this.loadedCount = 0;
+          this.hasNewer = false;
           if (meta.count !== undefined) this.totalCount = meta.count;
           this.updateVisibleItems();
           this.updateRowCountDisplay();
@@ -1312,20 +1355,26 @@ export class LogList extends LitElement {
       // would silently undo a user's hideColumn / reorder on every tick.
       if (isFullFetch) this.logsColumns = meta.cols;
       this.colIdxMap = meta.colIdxMap;
-      // Cache server traces for re-render (expand/collapse, flip direction)
-      // Cap at 5000 entries to prevent unbounded growth during pagination
-      if ((isLoadMore || isRecentFetch) && meta.traces?.length) {
-        this.cachedServerTraces = [...this.cachedServerTraces, ...meta.traces].slice(-5000);
-      } else if (meta.traces) {
-        this.cachedServerTraces = meta.traces;
+      // Cache one adjacency entry per trace for expand/collapse and direction flips.
+      // Inclusive cursor pages repeat the boundary trace; keeping those duplicates
+      // made every rebuild emit duplicate rows and retain duplicate metadata.
+      if (meta.traces) {
+        const traces = new Map<string, ServerTraceEntry>();
+        const source = isLoadMore || isRecentFetch ? [...this.cachedServerTraces, ...meta.traces] : meta.traces;
+        source.forEach((trace: ServerTraceEntry) => {
+          traces.delete(trace.trace_id);
+          traces.set(trace.trace_id, trace);
+        });
+        this.cachedServerTraces = [...traces.values()];
       }
 
       if (isRefresh) {
         // New query/filter/time-range: drop inline-expanded aggregate children so
         // they don't render stale rows from the previous query under a surviving key.
         this.expandedAggregates = {};
-        this.spanListTree = tree;
-        this.seenIds = new Set(tree.map((r) => r.id));
+        this.hasNewer = false;
+        this.spanListTree = dedupeById(tree);
+        this.seenIds = new Set(this.spanListTree.map((r) => r.id));
         this.updateVisibleItems();
         if (tree.length > 0) {
           requestAnimationFrame(() => {
@@ -1346,13 +1395,18 @@ export class LogList extends LitElement {
           if (shouldBufferRecent(this.isLiveStreaming, scrollTop, scrolledToBottom, this.flipDirection)) {
             this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree, isRecentFetch);
           } else {
+            const anchor = revealRecent ? null : this.captureScrollAnchor();
             this.spanListTree = this.mergeIntoTree(tree, isRecentFetch);
             this.updateVisibleItems();
+            if (anchor) void this.restoreScrollAnchor(anchor);
+            else if (revealRecent) requestAnimationFrame(() => (container.scrollTop = this.flipDirection ? container.scrollHeight : 0));
           }
         }
       } else {
+        const anchor = this.captureScrollAnchor() ?? loadMoreAnchor;
         this.spanListTree = this.mergeIntoTree(tree, isRecentFetch);
         this.updateVisibleItems();
+        if (anchor) void this.restoreScrollAnchor(anchor);
       }
       // Count what's actually visible. queryResultCount over-counts because the
       // dedup-dropped boundary row is re-reported on every paginated page.
@@ -1410,6 +1464,14 @@ export class LogList extends LitElement {
     delete this.columnMaxWidthMap[column]; // don't leak a stale width for a removed column
     this.requestUpdate();
   }
+  setLatencyDim(dim: LatencyDim) {
+    this.latencyDim = dim;
+    latencyDimPref.write(dim);
+    // Every cached bar is keyed on the old dimension; the cache check reads `dim`, so the
+    // rows repaint on the next render without a refetch.
+    this.requestUpdate();
+  }
+
   handleColumnsChanged(e: { detail: string[] }) {
     const next = e.detail;
     const nextSet = new Set(next);
@@ -1524,18 +1586,81 @@ export class LogList extends LitElement {
         : [...current, ...newData];
   }
 
-  // Buffer accumulation ("N new" pill) — small bounded list, full dedupe is fine.
+  // Buffer accumulation ("N new" pill) is bounded too: a user can leave live
+  // tail paused for hours while inspecting an older row.
   private addWithFlipDirection(current: any[], newData: any[], isRecentFetch: boolean) {
-    return dedupeById(this.orderMerge(current, newData, isRecentFetch));
+    const merged = dedupeById(this.orderMerge(current, newData, isRecentFetch));
+    return this.flipDirection ? merged.slice(-MAX_RETAINED_ROWS) : merged.slice(0, MAX_RETAINED_ROWS);
   }
 
   // Merge a freshly fetched page into spanListTree, dropping ids already present
   // (boundary row recurs across inclusive-cursor pages) using the persistent
   // seenIds set so the cost is O(page), not O(whole tree).
   private mergeIntoTree(newData: EventLine[], isRecentFetch: boolean) {
-    const fresh = newData.filter((r) => !this.seenIds.has(r.id));
-    fresh.forEach((r) => this.seenIds.add(r.id));
-    return this.orderMerge(this.spanListTree, fresh, isRecentFetch);
+    const fresh = newData.filter((r) => {
+      if (this.seenIds.has(r.id)) return false;
+      this.seenIds.add(r.id);
+      return true;
+    });
+    const merged = this.orderMerge(this.spanListTree, fresh, isRecentFetch);
+    if (this.mode !== 'logs' || merged.length <= MAX_RETAINED_ROWS) return merged;
+
+    // Evict from the edge opposite the fetch. Move the cut past a trace boundary
+    // so a root and its children are never split across retained/evicted state.
+    const dropStart = this.flipDirection === isRecentFetch;
+    const boundedCut = dropStart ? merged.length - MAX_RETAINED_ROWS : MAX_RETAINED_ROWS;
+    let cut = boundedCut;
+    if (dropStart) {
+      while (cut < merged.length && cut > 0 && merged[cut].traceId === merged[cut - 1].traceId) cut++;
+    } else {
+      while (cut > 0 && cut < merged.length && merged[cut].traceId === merged[cut - 1].traceId) cut--;
+    }
+    // A single trace can exceed the entire window. Preserve a useful hard-bounded
+    // prefix/suffix rather than moving the trace-aware cut to an empty edge.
+    if (cut === 0 || cut === merged.length) cut = boundedCut;
+    const kept = dropStart ? merged.slice(cut) : merged.slice(0, cut);
+    const dropped = dropStart ? merged.slice(0, cut) : merged.slice(cut);
+    dropped.forEach((r) => this.seenIds.delete(r.id));
+
+    const retainedIds = new Set(kept.map((r) => r.id));
+    const retainedTraces = new Set(kept.map((r) => r.traceId));
+    this.cachedServerTraces = this.cachedServerTraces.filter((t) => retainedTraces.has(t.trace_id));
+    this.expandedTraces = Object.fromEntries(Object.entries(this.expandedTraces).filter(([id]) => retainedTraces.has(id)));
+    this.loadingSessions = Object.fromEntries(Object.entries(this.loadingSessions).filter(([id]) => retainedIds.has(id)));
+    if (isRecentFetch) this.hasMore = true;
+    else this.hasNewer = true;
+    return kept;
+  }
+
+  private captureScrollAnchor(): ScrollAnchor | null {
+    const container = this.logsContainer;
+    if (!container || this.mode !== 'logs') return null;
+    const top = container.getBoundingClientRect().top;
+    const row = [...container.querySelectorAll<HTMLElement>('[data-row-id]')].find((el) => el.getBoundingClientRect().bottom > top);
+    if (row) return { id: row.dataset.rowId!, offset: row.getBoundingClientRect().top - top };
+
+    const range = this.lastVisibilityRange;
+    const item = range && this.virtualListItems.slice(range.first, range.last + 1).find((entry) => 'id' in entry);
+    return item ? { id: item.id, offset: 0 } : null;
+  }
+
+  private async restoreScrollAnchor(anchor: ScrollAnchor) {
+    await this.updateComplete;
+    const index = this.virtualListItems.findIndex((item) => 'id' in item && item.id === anchor.id);
+    const virtualizer = this.querySelector('lit-virtualizer');
+    if (index < 0 || !virtualizer) return;
+    virtualizer.element(index)?.scrollIntoView({ block: 'start' });
+    try {
+      await virtualizer.layoutComplete;
+    } catch (error) {
+      if (this.isConnected) throw error;
+      return;
+    }
+    requestAnimationFrame(() => {
+      const container = this.logsContainer;
+      const row = [...(container?.querySelectorAll<HTMLElement>('[data-row-id]') || [])].find((el) => el.dataset.rowId === anchor.id);
+      if (container && row) container.scrollTop += row.getBoundingClientRect().top - container.getBoundingClientRect().top - anchor.offset;
+    });
   }
 
   handleRecentClick() {
@@ -1711,12 +1836,6 @@ export class LogList extends LitElement {
           pointer-events: none;
         }
 
-        /* Optimize virtualizer container */
-        lit-virtualizer {
-          will-change: transform;
-          contain: strict;
-        }
-
         /* Column width styles - dynamically generated for all known columns */
         ${unsafeHTML(
           [...new Set([...this.logsColumns, ...Object.keys(this.columnMaxWidthMap)])]
@@ -1733,7 +1852,7 @@ export class LogList extends LitElement {
       <div
         ${ref(this.containerRef)}
         class=${clsx(
-          'relative group-hash-full shrink-1 min-w-0 pb-32 m-0 surface-raised rounded-t-2xl w-full h-full c-scroll overflow-y-auto will-change-scroll contain-strict',
+          'relative group-hash-full shrink-1 min-w-0 pb-32 m-0 surface-raised rounded-t-2xl w-full h-full c-scroll overflow-y-auto contain-strict',
           isInitialLoading && 'overflow-hidden'
         )}
         id="logs_list_container_inner"
@@ -2101,16 +2220,34 @@ export class LogList extends LitElement {
       case 'latency_breakdown':
         // Cache rendered latency breakdown
         const currentWidth = this.columnMaxWidthMap['latency_breakdown'] || this.fixedColumnWidths['latency_breakdown'] || 120;
-        if (!rowData._latencyCache || rowData._latencyCache.width !== currentWidth || rowData._latencyCache.expanded !== expanded) {
+        if (
+          !rowData._latencyCache ||
+          rowData._latencyCache.width !== currentWidth ||
+          rowData._latencyCache.expanded !== expanded ||
+          rowData._latencyCache.dim !== this.latencyDim
+        ) {
           const { traceStart, traceEnd, startNs, duration, childrenTimeSpans } = rowData;
-          const color = isSyntheticRow
-            ? 'bg-transparent border border-dashed border-strokeWeak'
-            : this.serviceColors[lookupVecValue<string>(dataArr, colIdxMap, 'span_name')] || 'bg-slate-400';
-          const chil = childrenTimeSpans.map(({ startNs, duration, data }: { startNs: number; duration: number; data: any }) => ({
-            startNs: startNs - traceStart,
-            duration,
-            color: this.serviceColors[lookupVecValue<string>(data, colIdxMap, 'span_name')] || 'bg-slate-400',
-          }));
+          // Colour keyed on the chosen dimension, not on `span_name`. Keying on the span name
+          // made this a per-operation palette wearing the name "service colors": two spans in
+          // one service got two colours, the same operation in two services got one, and any
+          // name missing the palette fell back to grey.
+          const dimOf = (arr: any) => lookupVecValue<string>(arr, colIdxMap, this.latencyDim) || '';
+          const colorOf = (value: string) =>
+            this.latencyDim === 'kind'
+              ? KIND_COLORS[value] ?? 'bg-fillStrong'
+              : this.serviceColors[value] || 'bg-fillStrong';
+          const color = isSyntheticRow ? 'bg-transparent border border-dashed border-strokeWeak' : colorOf(dimOf(dataArr));
+          const chil = childrenTimeSpans.map(({ startNs, duration, data }: { startNs: number; duration: number; data: any }) => {
+            const label = dimOf(data) || 'unknown';
+            return { startNs, duration, label, color: colorOf(label) };
+          });
+          // The title always describes the row itself, whichever axis the bar is drawn on.
+          const ownSegments = latencySegments({ startNs, duration }, chil);
+          const { track, segments, frame } = latencyBar(
+            !!expanded,
+            { startNs, duration, traceStart, traceEnd, label: dimOf(dataArr) || 'unknown', color },
+            chil
+          );
 
           // Extract right-aligned badges from summary array
           const summaryArr = this.parseSummaryData(dataArr);
@@ -2119,6 +2256,7 @@ export class LogList extends LitElement {
           // Use optimized parsing for right-aligned badges
           let userEmail = '',
             userName = '',
+            userId = '',
             userBadgeStyle = '';
           for (let i = 0; i < summaryArr.length; i++) {
             const element = summaryArr[i];
@@ -2149,14 +2287,21 @@ export class LogList extends LitElement {
             } else if (field === 'user name') {
               userName = value;
               if (!userBadgeStyle) userBadgeStyle = badgeStyle;
+            } else if (field === 'user id') {
+              userId = value;
+              if (!userBadgeStyle) userBadgeStyle = badgeStyle;
             } else {
               rightAlignedBadges.push(renderBadge(`cbadge-sm ${badgeStyle} bg-opacity-100`, value));
             }
           }
-          if (userEmail || userName) {
-            const full = userEmail || userName;
+          // One identity pill per row, whichever identifiers the span carries. The server
+          // emits email, name and id under their own labels; folding them here keeps the row
+          // to a single badge while the tooltip still names every identifier, and the full
+          // session/user/tenant set lives in the detail panel.
+          if (userEmail || userName || userId) {
+            const full = userEmail || userName || userId;
             const display = full.length > 20 ? full.substring(0, 18) + '…' : full;
-            const tip = [userName, userEmail].filter(Boolean).join(' — ');
+            const tip = [userName, userEmail, userId && `id ${userId}`].filter(Boolean).join(' — ');
             rightAlignedBadges.push(renderBadge(`cbadge-sm ${userBadgeStyle} bg-opacity-100`, display, tip));
           }
 
@@ -2178,14 +2323,11 @@ export class LogList extends LitElement {
               <div class="flex justify-end items-center gap-1 text-textWeak pl-1 rounded-lg bg-bgBase" style="min-width:${currentWidth}px">
                 ${rightAlignedBadges}
                 ${spanLatencyBreakdown({
-                  start: startNs - traceStart,
-                  depth,
-                  duration,
-                  traceEnd,
-                  color,
-                  children: chil,
+                  track,
+                  segments,
+                  frame,
+                  title: latencyTitle(this.latencyDim, { startNs, duration, traceStart }, ownSegments),
                   barWidth: currentWidth - 12,
-                  expanded,
                 })}
                 <span class="w-1"></span>
               </div>
@@ -2196,6 +2338,7 @@ export class LogList extends LitElement {
             content: latencyHtml,
             width: currentWidth,
             expanded: expanded,
+            dim: this.latencyDim,
           };
         }
         return rowData._latencyCache.content;
@@ -2426,14 +2569,34 @@ export class LogList extends LitElement {
     // Aggregate views (patterns) don't support live streaming or loading newer events
     if (this.isAggregate) return html`<tr></tr>`;
 
+    const fetchRecentRef = createRef<HTMLTableRowElement>();
+    if (this.hasNewer) {
+      requestAnimationFrame(() => {
+        if (!fetchRecentRef.value || this.isFetchingRecent || this.isLoading) return;
+        const observer = new IntersectionObserver(
+          ([entry]) => {
+            if (entry.isIntersecting && !this.isFetchingRecent && !this.isLoading) {
+              this.fetchData(this.buildRecentFetchUrl(), false, true, false, true);
+              observer.disconnect();
+            }
+          },
+          { root: this.logsContainer, rootMargin: '100px', threshold: 0.1 }
+        );
+        observer.observe(fetchRecentRef.value);
+        this._loadNewerObserver?.disconnect();
+        this._loadNewerObserver = observer;
+      });
+    }
+
     return this.createLoadingRow(
       'recent-logs',
       this.isLiveStreaming ? html`<span class="font-normal no-underline text-textWeak">Live streaming latest data...</span>` : 'Load newer events',
       this.isFetchingRecent,
       () => {
         if (this.isLiveStreaming) return;
-        this.fetchData(this.buildRecentFetchUrl(), false, true);
-      }
+        this.fetchData(this.buildRecentFetchUrl(), false, true, false, true);
+      },
+      fetchRecentRef
     );
   };
 
@@ -2578,8 +2741,8 @@ export class LogList extends LitElement {
             </td>`
         : nothing;
       const rowHtml = ov
-        ? html`<div role="row" class=${rowClass} style=${rowStyle} @click=${rowClick}>${cells}${latencyCell}</div>`
-        : html`<tr class=${rowClass} style=${rowStyle} @click=${rowClick}>
+        ? html`<div role="row" data-row-id=${rowData.id} class=${rowClass} style=${rowStyle} @click=${rowClick}>${cells}${latencyCell}</div>`
+        : html`<tr data-row-id=${rowData.id} class=${rowClass} style=${rowStyle} @click=${rowClick}>
             ${cells}${latencyCell}
           </tr>`;
       return rowHtml;
@@ -2631,6 +2794,19 @@ export class LogList extends LitElement {
           <li class="px-1 cursor-pointer hover:bg-fillWeak">
             <button class="cursor-pointer py-0.5" @pointerdown=${() => this.moveColumn(column, 1)}>Move column right</button>
           </li>
+          ${column === 'latency_breakdown'
+            ? (['service', 'kind'] as LatencyDim[]).map(
+                dim => html`<li class="px-1 cursor-pointer hover:bg-fillWeak">
+                  <button
+                    class="cursor-pointer py-0.5"
+                    aria-pressed=${this.latencyDim === dim}
+                    @pointerdown=${() => this.setLatencyDim(dim)}
+                  >
+                    ${this.latencyDim === dim ? '✓ ' : ''}Break down by ${dim}
+                  </button>
+                </li>`
+              )
+            : nothing}
         </ul>
         <div
           @pointerdown=${(event: any) => {
@@ -3025,71 +3201,160 @@ function renderCopyIdChip(fullId: string) {
   </button>`;
 }
 
-function spanLatencyBreakdown({
-  start,
-  duration,
-  traceEnd,
-  depth,
-  color,
-  children,
-  barWidth,
-  expanded,
-}: {
-  start: number;
-  duration: number;
-  traceEnd: number;
-  depth: number;
-  color: string;
-  barWidth: number;
-  children: (ChildrenForLatency & { color: string })[];
-  expanded?: boolean;
-}) {
-  const width = (duration / traceEnd) * barWidth;
-  const left = (start / traceEnd) * barWidth;
+/**
+ * Kind colours carry meaning rather than identity, so they are fixed rather than hashed:
+ * work we ran ourselves reads as one family, work we waited on as another.
+ */
+const KIND_COLORS: Record<string, string> = {
+  server: 'bg-fillBrand-strong',
+  internal: 'bg-fillInformation-strong',
+  client: 'bg-fillWarning-strong',
+  producer: 'bg-fillWarning-strong',
+  consumer: 'bg-fillSuccess-strong',
+  log: 'bg-fillStrong',
+};
 
-  // Enhanced base visualization with subtle gradient
-  const baseVisualization = html`
-    <div class="flex h-5 relative bg-fillWeak overflow-x-hidden rounded-sm" style=${`width:${barWidth}px`}>
-      <div
-        class=${`h-full absolute top-0 rounded-sm ${depth === 0 || children.length === 0 ? color : ''}`}
-        style=${`width:${width}px; left:${left}px; background-image: linear-gradient(to right, transparent, rgba(255,255,255,0.1), transparent)`}
-      ></div>
-      ${children.map((child) => {
-        const cWidth = (child.duration / traceEnd) * barWidth;
-        const cLeft = (child.startNs / traceEnd) * barWidth;
-        return html`<div class=${`h-full absolute top-0 rounded-sm ${child.color}`} style=${`width:${cWidth}px; left:${cLeft}px`}></div>`;
-      })}
-    </div>
-  `;
+export type LatencySegment = { leftPct: number; widthPct: number; color: string; label: string; ns: number };
 
-  // For child spans (depth > 0) OR expanded root spans, add the frame overlay
-  if (depth > 0 || (depth === 0 && expanded)) {
-    return html`<div class="-mt-1 shrink-0">
-      <div class="flex h-5 relative" style=${`width:${barWidth}px`}>
-        ${baseVisualization}
-
-        <!-- Enhanced overlay frame elements with glow effect -->
-        <!-- Full width boundary markers at the start and end -->
-        <div
-          class="absolute top-0 h-full border-l-2 border-strokeBrand-strong pointer-events-none"
-          style="left:0; box-shadow: 0 0 4px var(--color-strokeBrand-weak)"
-        ></div>
-        <div
-          class="absolute top-0 h-full border-r-2 border-strokeBrand-strong pointer-events-none"
-          style=${`left:${barWidth - 2}px; box-shadow: 0 0 4px var(--color-strokeBrand-weak)`}
-        ></div>
-
-        <!-- Horizontal line representing the full timeline -->
-        <div
-          class="absolute top-1/2 -translate-y-1/2 h-[1px] bg-strokeBrand-strong pointer-events-none"
-          style=${`width:${barWidth}px; left:0; box-shadow: 0 0 2px var(--color-strokeBrand-weak)`}
-        ></div>
-      </div>
-    </div>`;
+/**
+ * Children laid out inside a window, as a percentage of it.
+ *
+ * The window is the row's own duration for a collapsed row and the whole trace for an
+ * expanded one — see `latencyBar`. Children are intersected with the window: a child whose
+ * clock skewed outside it must not paint outside the bar, and a child that ends after its
+ * parent is still time the parent waited on.
+ */
+export function latencySegments(
+  row: { startNs: number; duration: number },
+  children: { startNs: number; duration: number; label: string; color: string }[]
+): LatencySegment[] {
+  if (!(row.duration > 0)) return [];
+  const rowEnd = row.startNs + row.duration;
+  const segments: LatencySegment[] = [];
+  for (const c of children) {
+    // Interval intersection, not an offset clamp: a child whose clock skewed it entirely
+    // outside its parent contributes nothing to the parent's window, and must not be pinned
+    // to the start of the bar as though it happened there.
+    const from = Math.max(row.startNs, c.startNs);
+    const to = Math.min(rowEnd, c.startNs + Math.max(0, c.duration));
+    if (to <= from) continue;
+    segments.push({
+      leftPct: ((from - row.startNs) / row.duration) * 100,
+      widthPct: ((to - from) / row.duration) * 100,
+      color: c.color,
+      label: c.label,
+      ns: to - from,
+    });
   }
+  return segments;
+}
 
-  // For root spans that are not expanded, return just the base visualization
-  return html`<div class="-mt-1 shrink-0">${baseVisualization}</div>`;
+/**
+ * The bar for one row: which track it sits on, and what paints over it.
+ *
+ * Expanding a trace turns the column back into a waterfall, which is the whole point of
+ * expanding it — the child rows are a breakdown of one request, and a breakdown needs a
+ * shared axis, so every row of an expanded trace draws its own span positioned in the trace
+ * with the trace as the empty track. A collapsed row has no siblings to line up with, so it
+ * stays its own axis: full-width track (its self time) with its direct children inside it.
+ *
+ * `frame` is the |---[]---| rule the trace axis needs and the row axis doesn't: it marks
+ * where the trace begins and ends, which is what makes a short span read as short and
+ * placed rather than just small. On the row axis the bar already fills that range, so the
+ * same three lines would only restate the bar's own bounds.
+ */
+export function latencyBar(
+  expanded: boolean,
+  row: { startNs: number; duration: number; traceStart: number; traceEnd: number; label: string; color: string },
+  children: { startNs: number; duration: number; label: string; color: string }[]
+): { track: string; segments: LatencySegment[]; frame: boolean } {
+  if (!(expanded && row.traceEnd > 0)) return { track: row.color, segments: latencySegments(row, children), frame: false };
+  const axis = { startNs: row.traceStart, duration: row.traceEnd };
+  return { track: 'bg-fillWeak', segments: [rowMarker(axis, row), ...latencySegments(axis, children)], frame: true };
+}
+
+/**
+ * The row's own span as a mark on the trace axis.
+ *
+ * Unlike `latencySegments` this never drops the row. A log has a place in the trace but no
+ * extent, and a row the axis no longer covers — the axis is sized by spans, so a log seconds
+ * after the last one sits past its end — still happened. A row that renders nothing at all is
+ * how "everything ignores its timing and stays at the beginning" reads. Position is clamped
+ * into the window, so a late log pins to the end rather than escaping the bar.
+ */
+function rowMarker(
+  axis: { startNs: number; duration: number },
+  row: { startNs: number; duration: number; label: string; color: string }
+): LatencySegment {
+  const pct = (ns: number) => Math.min(100, Math.max(0, ((ns - axis.startNs) / axis.duration) * 100));
+  const leftPct = pct(row.startNs);
+  const ns = Math.max(0, row.duration);
+  return { leftPct, widthPct: pct(row.startNs + ns) - leftPct, color: row.color, label: row.label, ns };
+}
+
+/** Human-readable nanoseconds, matching the duration badge's vocabulary. */
+export const fmtNs = (ns: number): string =>
+  ns >= 1e9 ? `${(ns / 1e9).toFixed(2)}s` : ns >= 1e6 ? `${Math.round(ns / 1e6)}ms` : ns >= 1e3 ? `${Math.round(ns / 1e3)}\u00b5s` : `${Math.round(ns)}ns`;
+
+/**
+ * What the bar is saying, in words — for the tooltip and for the screen reader, neither of
+ * which can read a colour. Carries the trace offset the bar no longer encodes positionally.
+ */
+export function latencyTitle(dim: LatencyDim, row: { startNs: number; duration: number; traceStart: number }, segments: LatencySegment[]): string {
+  const byLabel = new Map<string, number>();
+  for (const s of segments) byLabel.set(s.label, (byLabel.get(s.label) ?? 0) + s.ns);
+  const accounted = segments.reduce((a, s) => a + s.ns, 0);
+  const self = Math.max(0, row.duration - accounted);
+  const parts = [...byLabel.entries()].sort((a, b) => b[1] - a[1]).map(([label, ns]) => `${label} ${fmtNs(ns)}`);
+  return [
+    `${fmtNs(row.duration)} total`,
+    `+${fmtNs(Math.max(0, row.startNs - row.traceStart))} into the trace`,
+    `self ${fmtNs(self)}`,
+    ...(parts.length ? [`by ${dim}: ${parts.join(', ')}`] : []),
+  ].join(' \u00b7 ');
+}
+
+function spanLatencyBreakdown({
+  track,
+  segments,
+  title,
+  barWidth,
+  frame,
+}: {
+  track: string;
+  segments: LatencySegment[];
+  title: string;
+  barWidth: number;
+  frame: boolean;
+}) {
+  // On the row axis the track IS the row's self time, so a gap between two children is time
+  // the row spent on its own rather than an absence of information; on the trace axis it is
+  // the rest of the trace, and the row's own span is the first segment painted on it.
+  //
+  // The floor is 3px rather than a percentage: a percentage floor of a short span is still
+  // sub-pixel on a 120px column, which renders as nothing at all. Pushing left back by the
+  // floored width keeps a mark at the far end inside the bar instead of clipped away.
+  const minPct = (3 / Math.max(barWidth, 1)) * 100;
+  return html`<div class="-mt-1 shrink-0" title=${title} aria-label=${title}>
+    <div class=${`flex h-5 relative rounded-sm overflow-hidden ${track}`} style=${`width:${barWidth}px`}>
+      ${segments.map(s => {
+        const width = Math.max(s.widthPct, minPct);
+        return html`<div
+          class=${`h-full absolute top-0 rounded-sm ${s.color}`}
+          style=${`left:${Math.min(s.leftPct, 100 - width)}%; width:${width}%`}
+        ></div>`;
+      })}
+      <!-- |---[]---| : the trace's own start and end, and the timeline between them. Without it
+           a span two thirds of the way into a trace is just a small block somewhere. -->
+      ${frame
+        ? html`<div class="absolute inset-0 pointer-events-none">
+            <div class="absolute top-0 left-0 h-full border-l-2 border-strokeBrand-strong shadow-[0_0_4px_var(--color-strokeBrand-weak)]"></div>
+            <div class="absolute top-0 right-0 h-full border-r-2 border-strokeBrand-strong shadow-[0_0_4px_var(--color-strokeBrand-weak)]"></div>
+            <div class="absolute top-1/2 -translate-y-1/2 left-0 w-full h-px bg-strokeBrand-strong shadow-[0_0_2px_var(--color-strokeBrand-weak)]"></div>
+          </div>`
+        : nothing}
+    </div>
+  </div>`;
 }
 
 // Fallback column set used only when logsColumns hasn't loaded yet, so the
