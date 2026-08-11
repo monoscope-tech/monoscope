@@ -10,10 +10,9 @@
 -- becomes a 'Frame' carrying only its text, so the rendered trace is always the whole trace.
 -- Recognising a frame is an upgrade (it gets a file, a line, a source snippet), never a
 -- filter.
-module Pkg.StackTrace (Frame (..), parseStackTrace, frameFromAttributes, isInApp) where
+module Pkg.StackTrace (Frame (..), parseStackTrace, frameFromAttributes, framesFor, isInApp) where
 
 import Data.Char (isDigit)
-import Data.Map qualified as Map
 import Data.Text qualified as T
 import Relude
 
@@ -196,19 +195,44 @@ nonBlank = guarded (not . T.null) . T.strip
 -- is the same shortcut Sentry takes with SDK-attached source context: the most reliable
 -- answer is the one the process itself reported.
 --
--- >>> frameFromAttributes (Map.fromList [("code.file.path", "app/checkout.py"), ("code.line.number", "88"), ("code.function.name", "charge")])
+-- Takes a lookup rather than a map so it stays independent of however the caller stores
+-- attributes — the span's attribute map is nested @Value@s, not @Text@.
+--
+-- >>> let attrs ps k = viaNonEmpty head [v | (k', v) <- ps, k' == k]
+-- >>> frameFromAttributes (attrs [("code.file.path", "app/checkout.py"), ("code.line.number", "88"), ("code.function.name", "charge")])
 -- Just (Frame {raw = "app/checkout.py:88 in charge", function = Just "charge", file = Just "app/checkout.py", line = Just 88})
 --
 -- A path with no line is still a frame — it just cannot anchor a snippet:
 --
--- >>> (.line) <$> frameFromAttributes (Map.fromList [("code.file.path", "app/checkout.py")])
+-- >>> (.line) <$> frameFromAttributes (attrs [("code.file.path", "app/checkout.py")])
 -- Just Nothing
 --
--- >>> frameFromAttributes (Map.fromList [("code.line.number", "88")])
+-- >>> frameFromAttributes (attrs [("code.line.number", "88")])
 -- Nothing
-frameFromAttributes :: Map Text Text -> Maybe Frame
-frameFromAttributes attrs = do
-  path <- nonBlank =<< Map.lookup "code.file.path" attrs
-  let ln = readMaybe . toString =<< Map.lookup "code.line.number" attrs
-      fn = nonBlank =<< Map.lookup "code.function.name" attrs
+frameFromAttributes :: (Text -> Maybe Text) -> Maybe Frame
+frameFromAttributes attr = do
+  path <- nonBlank =<< attr "code.file.path"
+  let ln = readMaybe . toString =<< attr "code.line.number"
+      fn = nonBlank =<< attr "code.function.name"
   pure Frame{raw = path <> maybe "" ((":" <>) . show) ln <> maybe "" (" in " <>) fn, function = fn, file = Just path, line = ln}
+
+
+-- | The frames to show for an exception: the printed stack if there is one, else the single
+-- frame the OTel @code.*@ conventions already gave us.
+--
+-- One function so the renderer and its caller cannot disagree about whether there is
+-- anything to render — a \"Stack trace (0 frames)\" disclosure that opens onto nothing is
+-- exactly the sort of drift two separate checks produce.
+--
+-- >>> map (.line) $ framesFor (const Nothing) "  File \"a.py\", line 3, in f"
+-- [Just 3]
+--
+-- >>> map (.file) $ framesFor (\k -> viaNonEmpty head ["a.py" | k == "code.file.path"]) ""
+-- [Just "a.py"]
+--
+-- >>> framesFor (const Nothing) ""
+-- []
+framesFor :: (Text -> Maybe Text) -> Text -> [Frame]
+framesFor attr stack = case parseStackTrace stack of
+  [] -> maybeToList (frameFromAttributes attr)
+  fs -> fs

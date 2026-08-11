@@ -899,8 +899,8 @@ sparkline_ buckets
 -- during an incident: the top of a stack is usually five frames of framework before anything
 -- you wrote. @snippetUrl@ is asked for a frame's surrounding source only when that frame is
 -- actually opened, because resolving it is a network call the error panel must not block on.
-stackTrace_ :: Projects.ProjectId -> Maybe Text -> Text -> Html ()
-stackTrace_ pid svcM stack = case StackTrace.parseStackTrace stack of
+stackTrace_ :: Projects.ProjectId -> Maybe Text -> (Text -> Maybe Text) -> Text -> Html ()
+stackTrace_ pid svcM attr stack = case StackTrace.framesFor attr stack of
   [] -> pass
   frames ->
     let firstInApp = fst <$> find (StackTrace.isInApp . snd) (zip [0 :: Int ..] frames)

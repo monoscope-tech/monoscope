@@ -401,7 +401,7 @@ detailTabs pid item aptSp =
         (badge "Errors" "badge badge-error badge-sm" (length spanErrors))
         "group-has-[.tab-errors:checked]/dtab:block w-full whitespace-wrap"
         "errors-content"
-        (renderErrors pid (Telemetry.spanServiceName item) spanErrors)
+        (renderErrors pid (Telemetry.spanServiceName item) (\k -> atMapText k (unAesonTextMaybe item.attributes)) spanErrors)
     , tab
         (not isLog)
         "tab-logs"
@@ -462,8 +462,8 @@ httpDetailTabs item aptSp = (activeMarker, tabs)
           )
 
 
-renderErrors :: Projects.ProjectId -> Maybe Text -> [AE.Value] -> Html ()
-renderErrors pid svcM errs =
+renderErrors :: Projects.ProjectId -> Maybe Text -> (Text -> Maybe Text) -> [AE.Value] -> Html ()
+renderErrors pid svcM attr errs =
   div_ [class_ "flex flex-col mt-4 gap-3 w-full"] $ ifor_ errs \idx err ->
     div_ [class_ "w-full border border-strokeError-strong/40 rounded-lg overflow-hidden bg-fillError-weak/30"] do
       let (tye, message, stacktrace) = getErrorDetails err
@@ -485,12 +485,13 @@ renderErrors pid svcM errs =
             (faSprite_ "copy" "regular" "w-3 h-3" >> "Copy")
       unless (T.null message)
         $ pre_ [class_ $ copyId <> " text-xs font-mono whitespace-pre-wrap break-words text-textStrong px-3 py-2.5 leading-relaxed"] (toHtml message)
-      unless (T.null stacktrace) $ details_ ([class_ "group/st border-t border-strokeError-strong/30"] <> [open_ "" | idx == 0]) do
+      let frames = StackTrace.framesFor attr stacktrace
+      unless (null frames) $ details_ ([class_ "group/st border-t border-strokeError-strong/30"] <> [open_ "" | idx == 0]) do
         summary_ [class_ "cursor-pointer select-none flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-textWeak hover:text-textStrong"] do
           faSprite_ "chevron-right" "regular" "w-3 h-3 transition-transform group-open/st:rotate-90"
           "Stack trace"
-          span_ [class_ "text-2xs text-textWeak/70"] $ toHtml @Text $ "(" <> show (length (StackTrace.parseStackTrace stacktrace)) <> " frames)"
-        div_ [class_ "px-3 pb-3 max-h-96 overflow-auto c-scroll"] $ stackTrace_ pid svcM stacktrace
+          span_ [class_ "text-2xs text-textWeak/70"] $ toHtml @Text $ "(" <> show (length frames) <> " frames)"
+        div_ [class_ "px-3 pb-3 max-h-96 overflow-auto c-scroll"] $ stackTrace_ pid svcM attr stacktrace
   where
     getErrorDetails :: AE.Value -> (Text, Text, Text)
     getErrorDetails ae = (fld "type", fld "message", fld "stacktrace")
