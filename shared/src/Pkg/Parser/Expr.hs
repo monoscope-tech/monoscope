@@ -580,53 +580,83 @@ subjectHasWildcard (Subject _ _ keys) = any (\case ArrayWildcard _ -> True; _ ->
 
 -- | Hand-coded fallback for the flattened OTel attribute set. Used at
 -- bootstrap and by any code that runs before 'setFlattenedOtelColumns'
--- (unit tests, scripts). The runtime set is read via
+-- (unit tests, the CLI, scripts). The runtime set is read via
 -- 'flattenedOtelAttributes' which prefers whatever was populated from the
 -- live introspection of @otel_logs_and_spans@.
+--
+-- This mirrors the @___@ columns the migrations create, so keep it in step when a
+-- migration adds one: a name missing here is rejected wherever there is no database
+-- to introspect (@monoscope validate@ turned away @attributes.error.type@ for exactly
+-- that reason), and a name here that no column backs is worse — it passes validation
+-- and then fails at the database, which is the failure validation exists to prevent.
 flattenedOtelAttributesBuiltin :: Set T.Text
 flattenedOtelAttributesBuiltin =
   fromList
-    [ "attributes.http.request.method"
-    , "attributes.http.request.method_original"
-    , "attributes.http.response.status_code"
-    , "attributes.http.request.resend_count"
+    [ "attributes.client.address"
+    , "attributes.client.port"
+    , "attributes.code.file.path"
+    , "attributes.code.function.name"
+    , "attributes.code.line.number"
+    , "attributes.code.number"
+    , "attributes.code.stacktrace"
+    , "attributes.db.collection.name"
+    , "attributes.db.namespace"
+    , "attributes.db.operation.batch.size"
+    , "attributes.db.operation.name"
+    , "attributes.db.query.summary"
+    , "attributes.db.query.text"
+    , "attributes.db.response.status_code"
+    , "attributes.db.system.name"
+    , "attributes.error.type"
+    , "attributes.exception.message"
+    , "attributes.exception.stacktrace"
+    , "attributes.exception.type"
     , "attributes.http.request.body.size"
+    , "attributes.http.request.method"
+    , "attributes.http.request.method_original"
+    , "attributes.http.request.resend_count"
+    , "attributes.http.response.status_code"
+    , "attributes.log__record.original"
+    , "attributes.log__record.uid"
+    , "attributes.network.local__address"
+    , "attributes.network.local__port"
+    , "attributes.network.peer.address"
+    , "attributes.network.peer__port"
+    , "attributes.network.protocol.name"
+    , "attributes.network.protocol.version"
+    , "attributes.network.transport"
+    , "attributes.network.type"
+    , "attributes.server.address"
+    , "attributes.server.port"
+    , "attributes.session.id"
+    , "attributes.session.previous.id"
     , "attributes.url.fragment"
     , "attributes.url.full"
     , "attributes.url.path"
     , "attributes.url.query"
     , "attributes.url.scheme"
+    , "attributes.user.email"
+    , "attributes.user.full_name"
+    , "attributes.user.hash"
+    , "attributes.user.id"
+    , "attributes.user.name"
     , "attributes.user_agent.original"
-    , "attributes.db.system.name"
-    , "attributes.db.collection.name"
-    , "attributes.db.namespace"
-    , "attributes.db.operation.name"
-    , "attributes.db.operation.batch.size"
-    , "attributes.db.query.summary"
-    , "attributes.db.query.text"
-    , "context.trace_id"
-    , "context.span_id"
-    , "context.trace_state"
-    , "context.trace_flags"
     , "context.is_remote"
-    , "resource.service.name"
-    , "resource.service.version"
+    , "context.span_id"
+    , "context.trace_flags"
+    , "context.trace_id"
+    , "context.trace_state"
+    , "resource.deployment.environment.name"
     , "resource.service.instance.id"
+    , "resource.service.name"
     , "resource.service.namespace"
+    , "resource.service.version"
     , "resource.telemetry.sdk.language"
     , "resource.telemetry.sdk.name"
     , "resource.telemetry.sdk.version"
-    , "attributes.session.id"
-    , "attributes.user.id"
-    , "attributes.user.email"
-    , "attributes.user.name"
-    , "attributes.user.full_name"
-    , "attributes.exception.type"
-    , "attributes.exception.message"
-    , "attributes.exception.stacktrace"
-    , "attributes.exception.escaped"
-    , "severity.severity_text"
+    , "resource.user_agent.original"
     , "severity.severity_number"
+    , "severity.severity_text"
     ]
 
 
@@ -698,8 +728,7 @@ bareOtelColumnsBuiltin =
       , "summary"
       , "errors"
       , "message_size_bytes"
-      , "updated_at"
-      , "deleted"
+      , "processed_at"
       , "date"
       , "project_id"
       ]
@@ -807,12 +836,21 @@ editDistance a b = fromMaybe 0 (viaNonEmpty last (foldl' step [0 .. T.length a] 
 -- "name"
 -- >>> outputFieldAliases M.! "service"
 -- "resource___service___name"
+--
+-- @method@ earns its place the same way: it is the name the product itself writes —
+-- the shipped @http-stats@/@kitchensink@ dashboards and the apitoolkit-era saved
+-- queries all filter on a bare @method@ — and once field validation started rejecting
+-- roots that name no column, those widgets stopped rendering.
+--
+-- >>> outputFieldAliases M.! "method"
+-- "attributes___http___request___method"
 outputFieldAliases :: M.Map T.Text T.Text
 outputFieldAliases =
   M.fromList
     [ ("span_name", "name")
     , ("service", "resource___service___name")
     , ("trace_id", "context___trace_id")
+    , ("method", "attributes___http___request___method")
     ]
 
 

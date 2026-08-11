@@ -94,6 +94,32 @@ spec = around withTestResources do
       -- The stamped URLs must target the data endpoint, not the page shell.
       r.nextUrl `shouldSatisfy` T.isInfixOf "/log_explorer/data"
 
+    -- `deployment.environment.name` is promoted to a column (migration 0122) precisely so
+    -- the app-wide selector can scope every query by it. The selection rides on the session
+    -- (read from the `env` cookie at auth time), so this drives it the way the picker does.
+    it "scopes results to the selected deployment environment, and to all of them by default" \tr -> do
+      apiKey <- createTestAPIKey tr testPid "env-scope-key"
+      let hexId = T.replace "-" "" . UUID.toText <$> nextRandom
+          ingestIn env name = do
+            (trId, sid) <- (,) <$> hexId <*> hexId
+            ingestSpanReq tr $ mkSpanRequest trId sid Nothing name [] Nothing [] (mkResource apiKey [mkAttr "deployment.environment.name" env]) frozenTime
+      ingestIn "prod" "GET /env/prod"
+      ingestIn "staging" "GET /env/staging"
+
+      let range = (Just (addUTCTime (-60) frozenTime), Just (addUTCTime 60 frozenTime))
+          namesFor envM = do
+            res <- runQueryEffect tr $ LogQueries.selectLogTable tr.trATCtx.env.enableTimefusionReads testPid [] "" Nothing range [] (Just SSpans) Nothing envM
+            (rows, cols, _) <- either (\e -> error ("selectLogTable failed: " <> e)) pure res
+            let idx = fromMaybe (error "span_name not projected") $ V.elemIndex "span_name" (V.fromList cols)
+            pure $ sort [n | r <- V.toList rows, Just (AE.String n) <- [r V.!? idx], "GET /env/" `T.isPrefixOf` n]
+
+      namesFor Nothing `shouldReturn` ["GET /env/prod", "GET /env/staging"]
+      namesFor (Just "prod") `shouldReturn` ["GET /env/prod"]
+      namesFor (Just "staging") `shouldReturn` ["GET /env/staging"]
+      -- An environment nothing reports is empty, not unfiltered — the difference between
+      -- "no data here" and "here is everything" is the whole point of the control.
+      namesFor (Just "does-not-exist") `shouldReturn` []
+
     it "should handle query filters correctly" \tr -> do
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
       let reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
@@ -693,6 +719,45 @@ spec = around withTestResources do
       (_, miss2) <- testServant (withTfReads False) $ LogItem.expandAPIlogItemH testPid rid (addUTCTime 1 ts) Nothing Nothing Nothing False
       expectNotFound "PG" miss2
 
+    -- Regression: the panel used to surface one identifier — `user.email`, or `user.id`
+    -- mislabelled "user name" when email was absent — so tenant id, user id and the rest
+    -- were reachable only by opening the Attributes JSON tree. Readers concluded we only
+    -- knew their email.
+    it "shows every session, user and tenant field the span carries, each as a filter pill" \tr -> do
+      apiKey <- createTestAPIKey tr testPid "identity-key"
+      let hexId = T.replace "-" "" . UUID.toText <$> nextRandom
+      (trId, sid) <- (,) <$> hexId <*> hexId
+      ingestSpanLinked
+        tr
+        apiKey
+        trId
+        sid
+        Nothing
+        "GET /api/invoices"
+        [ ("http.request.method", "GET")
+        , ("session.id", "sess-9f2")
+        , ("user.id", "usr-4471")
+        , ("user.email", "ada@example.com")
+        , ("tenant.id", "acme-eu")
+        , ("workspace.id", "ws-12")
+        ]
+        frozenTime
+      rows <-
+        withPool tr.trPool
+          $ DBT.query
+            [sql| SELECT id, timestamp FROM otel_logs_and_spans WHERE project_id = ? AND context___trace_id = ? |]
+            (testPid, trId)
+          :: IO (V.Vector (UUID.UUID, UTCTime))
+      (rid, ts) <- maybe (error "ingested span missing") pure (rows V.!? 0)
+      (_, item) <- testServant tr $ LogItem.expandAPIlogItemH testPid rid ts Nothing Nothing Nothing False
+      let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml item
+      for_ ([("Session ID", "sess-9f2"), ("User ID", "usr-4471"), ("User Email", "ada@example.com"), ("Tenant ID", "acme-eu"), ("Workspace ID", "ws-12")] :: [(Text, Text)]) \(label, value) -> do
+        html `shouldSatisfy` T.isInfixOf (label <> ": " <> value)
+        -- Each is a filter pill, so "everything from this tenant" is one click away.
+        html `shouldSatisfy` T.isInfixOf ("data-field-value=\"&quot;" <> value <> "&quot;\"")
+      -- A key the span does not carry contributes no row.
+      html `shouldNotSatisfy` T.isInfixOf "Org ID"
+
     -- Regression: the SDK payload span ("monoscope.http") confused users — the
     -- parent request's panel showed empty body tabs (the merge only fired when
     -- http.request.method was absent, which auto-instrumented spans always have),
@@ -767,7 +832,7 @@ spec = around withTestResources do
       ingestErrorLog tr apiKey "boom: db connection failed" [] frozenTime
       ingestLog tr apiKey "ordinary info line" frozenTime
       let range = (Just (addUTCTime (-60) frozenTime), Just (addUTCTime 60 frozenTime))
-      res <- runQueryEffect tr $ LogQueries.selectLogTable tr.trATCtx.env.enableTimefusionReads testPid [] "" Nothing range [] (Just SSpans) Nothing
+      res <- runQueryEffect tr $ LogQueries.selectLogTable tr.trATCtx.env.enableTimefusionReads testPid [] "" Nothing range [] (Just SSpans) Nothing Nothing
       (rows, cols, _) <- either (\e -> error ("selectLogTable failed: " <> e)) pure res
       let colIx name = Unsafe.fromJust $ V.elemIndex name (V.fromList cols)
           logRows = [r | r <- V.toList rows, (r V.!? colIx "kind") == Just (AE.String "log")]

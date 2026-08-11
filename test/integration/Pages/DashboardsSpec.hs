@@ -1,12 +1,14 @@
 module Pages.DashboardsSpec (spec) where
 
+import "cryptonite" Crypto.Hash qualified as Crypto
 import Data.Default (def)
 import Data.Text qualified as T
-import Effectful.Concurrent (runConcurrent)
 import Data.Text.Lazy qualified as TL
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import Effectful.Concurrent (runConcurrent)
 import Lucid (renderText, toHtml)
+import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Dashboards (DashboardVM (..))
 import Models.Projects.Dashboards qualified as DashboardModel
 import Models.Projects.ProjectMembers (TeamVM (..))
@@ -18,12 +20,12 @@ import Pages.Dashboards qualified as Dashboards
 import Pages.Projects (TeamForm (..))
 import Pages.Projects qualified as ManageMembers
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.DeriveUtils (UUIDId (..), mkHasqlPool)
 import Pkg.TestUtils
 import Relude
 import Relude.Unsafe qualified as Unsafe
+import System.Config (AuthContext (..))
 import Test.Hspec
-
 
 
 filters :: Dashboards.DashboardFilters
@@ -90,6 +92,21 @@ spec = sequential $ aroundAll withTestResources do
       overview `shouldSatisfy` isJust
       show overview `shouldNotContain` "telemetry.metrics"
       show overview `shouldNotContain` "metric_value"
+
+    it "dashboard SQL source migrations remain byte-for-byte immutable" \_ -> do
+      migration0119 <- readFileBS "static/migrations/0119_endpoint_dashboard_sql_source.sql"
+      migration0120 <- readFileBS "static/migrations/0120_repair_dashboard_sql_source.sql"
+      show (Crypto.hash migration0119 :: Crypto.Digest Crypto.MD5) `shouldBe` ("27fc8228a167e579b4b7124893921372" :: Text)
+      show (Crypto.hash migration0120 :: Crypto.Digest Crypto.MD5) `shouldBe` ("19ac1c6651e59fb3860366eec198201f" :: Text)
+
+    it "endpoint dashboard SQL source, not query text, selects Postgres" \tr -> do
+      endpointDashboard <- DashboardModel.readDashboardFile "static/public/dashboards" "endpoint-stats.yaml"
+      map (fmap (.source) . (.sql)) (fold $ endpointDashboard >>= (.variables)) `shouldBe` [Just LogQueries.SqlPostgres, Just LogQueries.SqlPostgres]
+      noApisPool <- mkHasqlPool 1 (tr.trConnStr <> " dbname=postgres")
+      let tr' = tr{trATCtx = tr.trATCtx{hasqlTimefusionPool = noApisPool}}
+          query = "SELECT COUNT(*)::bigint FROM apis.endpoints WHERE project_id='" <> testPid.toText <> "' AND 'otel_logs_and_spans' = 'otel_logs_and_spans'"
+      result <- runQueryEffect tr' $ LogQueries.executeSecuredQuery True testPid (LogQueries.SecuredSql LogQueries.SqlPostgres query) 1
+      result `shouldSatisfy` isRight
 
     -- Regression: every widget went through the chart query shaper, which appended
     -- `| summarize count(*) by bin_auto(timestamp)` to a stat's scalar query. The

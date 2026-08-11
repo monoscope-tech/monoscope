@@ -33,8 +33,9 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (atMapText)
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
-import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), dateTime, emptyState_, httpTab_, tabPanel_)
+import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), dateTime, emptyState_, httpTab_, stackTrace_, tabPanel_)
 import Pkg.DeriveUtils (unAesonTextMaybe)
+import Pkg.StackTrace qualified as StackTrace
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Tracing (withSpan_)
@@ -282,6 +283,7 @@ expandedItemView pid item aptSp selectedTabM = do
     isLog = item.kind == Just "log"
     isAlert = item.kind == Just "alert"
     isHttp = not isLog && isHttpSpan item
+    identityRows = Telemetry.rowIdentity (unAesonTextMaybe item.attributes)
     createdAt = formatUTC item.timestamp
     pidTxt = pid.toText
     dgrp = "dtab-" <> item.id
@@ -333,6 +335,12 @@ expandedItemView pid item aptSp selectedTabM = do
       -- span_id isn't carried by generateSummary; keep one pill so its filter-menu stays reachable.
       whenJust (item.context >>= (.span_id) >>= guarded (not . T.null)) \v ->
         div_ [class_ "flex gap-2 flex-wrap min-w-0"] $ spanBadge pid "context.span_id" v "Span ID"
+      -- Who the request was for, in full. The summary row above can only afford one
+      -- identifier, so tenant id, user id and the rest used to be reachable only by opening
+      -- the Attributes JSON tree — which is why readers concluded we only knew their email.
+      -- Every field is a filter pill, so "everything from this tenant" is one click away.
+      unless (null identityRows) $ div_ [class_ "flex gap-2 flex-wrap min-w-0"] $ forM_ identityRows \(k, label, v) ->
+        spanBadge pid ("attributes." <> k) v label
       div_ [class_ "flex flex-wrap gap-2 items-center"] actionRow
 
     actionBtnBody :: Text -> Text -> Html ()
@@ -393,7 +401,7 @@ detailTabs pid item aptSp =
         (badge "Errors" "badge badge-error badge-sm" (length spanErrors))
         "group-has-[.tab-errors:checked]/dtab:block w-full whitespace-wrap"
         "errors-content"
-        (renderErrors spanErrors)
+        (renderErrors pid (Telemetry.spanServiceName item) (\k -> atMapText k (unAesonTextMaybe item.attributes)) (\k -> atMapText k (unAesonTextMaybe item.resource)) spanErrors)
     , tab
         (not isLog)
         "tab-logs"
@@ -454,8 +462,12 @@ httpDetailTabs item aptSp = (activeMarker, tabs)
           )
 
 
-renderErrors :: [AE.Value] -> Html ()
-renderErrors errs =
+-- | @attr@ reads the span's attributes (where @code.*@ lives) and @resAttr@ its resource
+-- (where @service.version@ and the @vcs.*@\/@git.*@ revision keys live). Two lookups rather
+-- than one because they are two different columns: passing the span map for both is what
+-- made 'StackTrace.revisionFor' answer 'Nothing' for every span it was ever given.
+renderErrors :: Projects.ProjectId -> Maybe Text -> (Text -> Maybe Text) -> (Text -> Maybe Text) -> [AE.Value] -> Html ()
+renderErrors pid svcM attr resAttr errs =
   div_ [class_ "flex flex-col mt-4 gap-3 w-full"] $ ifor_ errs \idx err ->
     div_ [class_ "w-full border border-strokeError-strong/40 rounded-lg overflow-hidden bg-fillError-weak/30"] do
       let (tye, message, stacktrace) = getErrorDetails err
@@ -477,14 +489,13 @@ renderErrors errs =
             (faSprite_ "copy" "regular" "w-3 h-3" >> "Copy")
       unless (T.null message)
         $ pre_ [class_ $ copyId <> " text-xs font-mono whitespace-pre-wrap break-words text-textStrong px-3 py-2.5 leading-relaxed"] (toHtml message)
-      unless (T.null stacktrace) $ details_ [class_ "group/st border-t border-strokeError-strong/30"] do
+      let frames = StackTrace.framesFor attr stacktrace
+      unless (null frames) $ details_ ([class_ "group/st border-t border-strokeError-strong/30"] <> [open_ "" | idx == 0]) do
         summary_ [class_ "cursor-pointer select-none flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-textWeak hover:text-textStrong"] do
           faSprite_ "chevron-right" "regular" "w-3 h-3 transition-transform group-open/st:rotate-90"
           "Stack trace"
-          span_ [class_ "text-2xs text-textWeak/70"] $ toHtml @Text $ "(" <> show (length (lines stacktrace)) <> " frames)"
-        div_ [class_ "px-3 pb-3"]
-          $ pre_ [class_ "text-xs font-mono whitespace-pre text-textWeak bg-bgBase border border-strokeWeak rounded-md p-3 max-h-72 overflow-auto leading-snug"]
-          $ toHtml stacktrace
+          span_ [class_ "text-2xs text-textWeak/70"] $ toHtml @Text $ "(" <> show (length frames) <> " frames)"
+        div_ [class_ "px-3 pb-3 max-h-96 overflow-auto c-scroll"] $ stackTrace_ pid svcM attr resAttr stacktrace
   where
     getErrorDetails :: AE.Value -> (Text, Text, Text)
     getErrorDetails ae = (fld "type", fld "message", fld "stacktrace")

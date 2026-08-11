@@ -9,17 +9,19 @@ refresh_interval: 60s
 constants:
   - key: top_resources
     description: Top 20 resources by request count for the current time range
-    sql: |
-      SELECT name
-      FROM otel_logs_and_spans
-      WHERE project_id='{{project_id}}'
-        AND name IS NOT NULL
-        AND kind = 'server'
-        AND ('{{var-resource}}' = '' OR name = '{{var-resource}}')
-        {{time_filter}}
-      GROUP BY name
-      ORDER BY COUNT(*) DESC
-      LIMIT 20
+    sql:
+      source: timefusion
+      statement: |
+        SELECT name
+        FROM otel_logs_and_spans
+        WHERE project_id='{{project_id}}'
+          AND name IS NOT NULL
+          AND kind = 'server'
+          AND ('{{var-resource}}' = '' OR name = '{{var-resource}}')
+          {{time_filter}}
+        GROUP BY name
+        ORDER BY COUNT(*) DESC
+        LIMIT 20
 
 variables:
   - key: service
@@ -27,13 +29,15 @@ variables:
     type: query
     reload_on_change: true
     facet_field: service.name
-    sql: |
-      SELECT DISTINCT resource___service___name
-      FROM otel_logs_and_spans 
-      WHERE project_id='{{project_id}}' 
-        AND resource___service___name IS NOT NULL 
-        {{time_filter}}
-      LIMIT 100
+    sql:
+      source: timefusion
+      statement: |
+        SELECT DISTINCT resource___service___name
+        FROM otel_logs_and_spans
+        WHERE project_id='{{project_id}}'
+          AND resource___service___name IS NOT NULL
+          {{time_filter}}
+        LIMIT 100
     default: ''
     multi: false
 
@@ -41,16 +45,18 @@ variables:
     title: Resource/Operation
     type: query
     reload_on_change: true
-    sql: |
-      SELECT DISTINCT 
-        name as value,
-        name as label
-      FROM otel_logs_and_spans
-      WHERE project_id='{{project_id}}'
-        AND resource___service___name = '{{var-service}}'
-        AND name IS NOT NULL
-        {{time_filter}}
-      LIMIT 500
+    sql:
+      source: timefusion
+      statement: |
+        SELECT DISTINCT
+          name as value,
+          name as label
+        FROM otel_logs_and_spans
+        WHERE project_id='{{project_id}}'
+          AND resource___service___name = '{{var-service}}'
+          AND name IS NOT NULL
+          {{time_filter}}
+        LIMIT 500
     default: ''
     multi: false
     depends_on: service
@@ -60,13 +66,15 @@ variables:
     type: query
     reload_on_change: true
     facet_field: db.system.name
-    sql: |
-      SELECT DISTINCT attributes___db___system___name
-      FROM otel_logs_and_spans
-      WHERE project_id='{{project_id}}'
-        AND attributes___db___system___name IS NOT NULL
-        {{time_filter}}
-      LIMIT 50
+    sql:
+      source: timefusion
+      statement: |
+        SELECT DISTINCT attributes___db___system___name
+        FROM otel_logs_and_spans
+        WHERE project_id='{{project_id}}'
+          AND attributes___db___system___name IS NOT NULL
+          {{time_filter}}
+        LIMIT 50
     default: ''
     multi: false
 

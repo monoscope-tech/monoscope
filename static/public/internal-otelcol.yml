@@ -126,11 +126,11 @@ processors:
         statements:
           # Try multiple sources for service.name in order of preference
           # 1. First try attributes["service.name"] if already set by attributes processor
-          - set(resource.attributes["service.name"], attributes["service.name"]) where attributes["service.name"] != nil
+          - set(resource.attributes["service.name"], log.attributes["service.name"]) where log.attributes["service.name"] != nil
           # 2. Try nested attrs structure first (most common in your logs)
-          - set(resource.attributes["service.name"], attributes["attrs"]["com.docker.swarm.service.name"]) where resource.attributes["service.name"] == nil and attributes["attrs"]["com.docker.swarm.service.name"] != nil
+          - set(resource.attributes["service.name"], log.attributes["attrs"]["com.docker.swarm.service.name"]) where resource.attributes["service.name"] == nil and log.attributes["attrs"]["com.docker.swarm.service.name"] != nil
           # 3. Try direct swarm service name attribute
-          - set(resource.attributes["service.name"], attributes["com.docker.swarm.service.name"]) where resource.attributes["service.name"] == nil and attributes["com.docker.swarm.service.name"] != nil
+          - set(resource.attributes["service.name"], log.attributes["com.docker.swarm.service.name"]) where resource.attributes["service.name"] == nil and log.attributes["com.docker.swarm.service.name"] != nil
           # 3. Try container labels with swarm service name
           - set(resource.attributes["service.name"], resource.attributes["container.labels.com.docker.swarm.service.name"]) where resource.attributes["service.name"] == nil and resource.attributes["container.labels.com.docker.swarm.service.name"] != nil
           # 4. Try app-name label
@@ -142,7 +142,7 @@ processors:
           # 7. Fall back to container name
           - set(resource.attributes["service.name"], resource.attributes["container.name"]) where resource.attributes["service.name"] == nil and resource.attributes["container.name"] != nil
           # 8. Copy deployment.environment to resource if it exists
-          - set(resource.attributes["deployment.environment"], attributes["deployment.environment"]) where attributes["deployment.environment"] != nil
+          - set(resource.attributes["deployment.environment"], log.attributes["deployment.environment"]) where log.attributes["deployment.environment"] != nil
 
   # Optional: Add more Docker Swarm specific attributes
   attributes/swarm:

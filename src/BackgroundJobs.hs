@@ -117,7 +117,7 @@ import System.Clock (Clock (Monotonic), diffTimeSpec, getTime, toNanoSecs)
 import System.Config qualified as Config
 import System.Logging qualified as Log
 import System.Tracing (SpanStatus (..), Tracing, addEvent, forkWithCtx, setStatus, withSpan, withSpan_)
-import System.Types (ATBackgroundCtx, DB, runBackground)
+import System.Types (ATBackgroundCtx, ATBackgroundEffects, DB, runBackground)
 import UnliftIO.Exception (bracket, catch, throwIO, try, tryAny)
 import Utils (calculateCycleStartDate, formatUTC, formatUTCMicros, freeTierDailyMaxEvents, toXXHash)
 
@@ -176,7 +176,7 @@ data BgJobs
     -- instead of once per service-map page view.
     ServiceMapRollupTick UTCTime
   | -- | Roll one closed 5-minute bucket of one project's spans into
-    -- @service_dependency_edges@. Idempotent (upsert replaces), so re-running a bucket to
+    -- @service_dependency_edges_env@. Idempotent (upsert replaces), so re-running a bucket to
     -- absorb late-arriving spans is safe.
     ServiceMapRollup Projects.ProjectId UTCTime
   | MonoscopeAdminDaily
@@ -3422,64 +3422,62 @@ endpointTemplateDiscovery pid = do
     $ Log.logInfo "Cleaned up merged endpoints" ("project_id", pid.toText, "merged_count", length mergedPairs)
 
 
--- | Get access token for GitHub sync (either PAT or GitHub App installation token)
-getGitSyncToken :: (IOE :> es, W.HTTP :> es) => Config.EnvConfig -> GitSync.GitHubSync -> Eff es (Either Text Text)
-getGitSyncToken config sync = case (sync.installationId, sync.accessToken) of
-  (Just instId, _) ->
-    GitHub.getInstallationToken config.githubAppId config.githubAppPrivateKey instId <&> \case
-      Left err -> Left $ "Failed to get installation token: " <> err
-      Right tok -> Right tok.token
-  (_, Just token) -> pure $ Right token
-  (Nothing, Nothing) -> pure $ Left "No authentication method configured"
+-- | Run @k@ with a project's sync config and a live GitHub token, or log why it cannot.
+--
+-- Every git-sync job needs the same four things to go right before it can do any work —
+-- a configured sync, sync still enabled, a decryptable token, an accepted token — and each
+-- of them fails in a way an operator has to be told about. Written once so a job that
+-- silently does nothing is impossible to introduce by copying the preamble and dropping an
+-- arm.
+withGitHubSync :: Projects.ProjectId -> (Text -> GitSync.GitHubSync -> Eff (W.HTTP ': ATBackgroundEffects) ()) -> ATBackgroundCtx ()
+withGitHubSync pid k = do
+  ctx <- ask @Config.AuthContext
+  GitSync.getGitHubSyncDecrypted (encodeUtf8 ctx.config.apiKeyEncryptionSecretKey) pid >>= \case
+    Nothing -> Log.logAttention "No GitHub sync configured for project" pid
+    Just sync | not sync.syncEnabled -> Log.logInfo "GitHub sync disabled for project" pid
+    Just sync -> case GitSync.syncCreds sync of
+      Nothing -> Log.logAttention "GitHub sync row carries neither an installation nor a token" pid
+      Just creds ->
+        W.runHTTPWreq $ GitSync.githubToken ctx.config.githubAppId ctx.config.githubAppPrivateKey creds >>= \case
+          Left err -> Log.logAttention "Failed to get GitHub token" (pid, err)
+          Right token -> k token sync
 
 
 -- | Sync dashboards from GitHub repo to Monoscope
 gitSyncFromRepo :: Projects.ProjectId -> ATBackgroundCtx ()
 gitSyncFromRepo pid = do
   Log.logInfo "Starting GitHub sync for project" pid
-  ctx <- ask @Config.AuthContext
-  let encKey = encodeUtf8 ctx.config.apiKeyEncryptionSecretKey
-  syncM <- GitSync.getGitHubSyncDecrypted encKey pid
-  case syncM of
-    Nothing -> Log.logAttention "No GitHub sync configured for project" pid
-    Just sync | not sync.syncEnabled -> Log.logInfo "GitHub sync disabled for project" pid
-    Just sync -> W.runHTTPWreq do
-      tokenResult <- getGitSyncToken ctx.config sync
-      case tokenResult of
-        Left err -> Log.logAttention "Failed to get GitHub token" (pid, err)
-        Right token -> do
-          treeResult <- GitSync.fetchGitTree token sync
-          case treeResult of
-            Left err -> Log.logAttention "Failed to fetch git tree" (pid, err)
-            Right (treeSha, entries)
-              | sync.lastTreeSha == Just treeSha -> Log.logInfo "Tree unchanged, skipping sync" (pid, treeSha)
-              | otherwise -> do
-                  dbState <- GitSync.getDashboardGitState pid
-                  allTeams <- ProjectMembers.getTeamsVM pid
-                  let teamMap = Map.fromList [(t.handle, t.id) | t <- allTeams]
-                      prefix = GitSync.getDashboardsPath sync
-                      actions = GitSync.buildSyncPlan prefix entries dbState
-                      creates = [a | a@GitSync.SyncCreate{} <- actions]
-                      updates = [a | a@GitSync.SyncUpdate{} <- actions]
-                      deletes = [(path, dashId) | GitSync.SyncDelete path dashId <- actions]
-                  Log.logInfo "Git sync plan" ("creates" :: Text, length creates, "updates" :: Text, length updates, "deletes" :: Text, length deletes)
-                  -- Fetch file contents in parallel for creates and updates
-                  let fetchActions = creates <> updates
-                  Ki.scoped \scope -> do
-                    forM_ fetchActions $ forkWithCtx scope . processGitSyncAction pid token sync teamMap
-                    Ki.atomically $ Ki.awaitAll scope
-                  -- Process deletes (no HTTP needed)
-                  forM_ deletes \(path, dashId) -> do
-                    _ <- Dashboards.deleteDashboard dashId
-                    Log.logInfo "Deleted dashboard (removed from git)" (path, dashId)
-                  _ <- GitSync.updateLastTreeSha sync.id treeSha
-                  Log.logInfo "Completed GitHub sync for project" pid
+  withGitHubSync pid \token sync ->
+    GitSync.fetchGitTree token (GitSync.syncRepoRef sync) >>= \case
+      Left err -> Log.logAttention "Failed to fetch git tree" (pid, err)
+      Right (treeSha, entries)
+        | sync.lastTreeSha == Just treeSha -> Log.logInfo "Tree unchanged, skipping sync" (pid, treeSha)
+        | otherwise -> do
+            dbState <- GitSync.getDashboardGitState pid
+            allTeams <- ProjectMembers.getTeamsVM pid
+            let teamMap = Map.fromList [(t.handle, t.id) | t <- allTeams]
+                prefix = GitSync.getDashboardsPath sync
+                actions = GitSync.buildSyncPlan prefix entries dbState
+                creates = [a | a@GitSync.SyncCreate{} <- actions]
+                updates = [a | a@GitSync.SyncUpdate{} <- actions]
+                deletes = [(path, dashId) | GitSync.SyncDelete path dashId <- actions]
+            Log.logInfo "Git sync plan" ("creates" :: Text, length creates, "updates" :: Text, length updates, "deletes" :: Text, length deletes)
+            -- Fetch file contents in parallel for creates and updates
+            Ki.scoped \scope -> do
+              forM_ (creates <> updates) $ forkWithCtx scope . processGitSyncAction pid token sync teamMap
+              Ki.atomically $ Ki.awaitAll scope
+            -- Process deletes (no HTTP needed)
+            forM_ deletes \(path, dashId) -> do
+              _ <- Dashboards.deleteDashboard dashId
+              Log.logInfo "Deleted dashboard (removed from git)" (path, dashId)
+            _ <- GitSync.updateLastTreeSha sync.id treeSha
+            Log.logInfo "Completed GitHub sync for project" pid
 
 
 processGitSyncAction :: (DB es, Log :> es, Time.Time :> es, W.HTTP :> es) => Projects.ProjectId -> Text -> GitSync.GitHubSync -> Map.Map Text UUID.UUID -> GitSync.SyncAction -> Eff es ()
 processGitSyncAction pid token sync teamMap = \case
   GitSync.SyncCreate path sha ->
-    fetchAndParseDashboard token sync path >>= either (Log.logAttention "Failed to sync dashboard from git" . (path,)) \schema -> do
+    fetchAndParseDashboard token (GitSync.syncRepoRef sync) path >>= either (Log.logAttention "Failed to sync dashboard from git" . (path,)) \schema -> do
       now <- Time.currentTime
       dashId <- UUIDId <$> liftIO UUIDV4.nextRandom
       let prefix = GitSync.getDashboardsPath sync
@@ -3505,7 +3503,7 @@ processGitSyncAction pid token sync teamMap = \case
       _ <- Dashboards.insert dashboard
       Log.logInfo "Created dashboard from git" (relativePath, dashId)
   GitSync.SyncUpdate path sha dashId ->
-    fetchAndParseDashboard token sync path >>= either (Log.logAttention "Failed to sync dashboard from git" . (path,)) \schema -> do
+    fetchAndParseDashboard token (GitSync.syncRepoRef sync) path >>= either (Log.logAttention "Failed to sync dashboard from git" . (path,)) \schema -> do
       now <- Time.currentTime
       let prefix = GitSync.getDashboardsPath sync
           relativePath = fromMaybe path $ T.stripPrefix prefix path
@@ -3522,8 +3520,8 @@ processGitSyncAction pid token sync teamMap = \case
   GitSync.SyncDelete{} -> pass -- Handled separately
 
 
-fetchAndParseDashboard :: (IOE :> es, W.HTTP :> es) => Text -> GitSync.GitHubSync -> Text -> Eff es (Either Text Dashboards.Dashboard)
-fetchAndParseDashboard token sync path = GitSync.fetchFileContent token sync path <&> (>>= GitSync.yamlToDashboard)
+fetchAndParseDashboard :: (IOE :> es, W.HTTP :> es) => Text -> GitSync.RepoRef -> Text -> Eff es (Either Text Dashboards.Dashboard)
+fetchAndParseDashboard token repoRef path = GitSync.fetchFileContent token repoRef path <&> (>>= GitSync.yamlToDashboard)
 
 
 -- | Push a dashboard change to GitHub
@@ -3531,20 +3529,10 @@ fetchAndParseDashboard token sync path = GitSync.fetchFileContent token sync pat
 gitSyncPushDashboard :: Projects.ProjectId -> Dashboards.DashboardId -> ATBackgroundCtx ()
 gitSyncPushDashboard pid dashId = do
   Log.logInfo "Pushing dashboard to GitHub" (pid, dashId)
-  ctx <- ask @Config.AuthContext
-  let encKey = encodeUtf8 ctx.config.apiKeyEncryptionSecretKey
-  syncM <- GitSync.getGitHubSyncDecrypted encKey pid
-  dashM <- Dashboards.getDashboardById dashId
-  case (syncM, dashM) of
-    (Nothing, _) -> Log.logAttention "No GitHub sync configured for project" pid
-    (Just sync, _) | not sync.syncEnabled -> Log.logInfo "GitHub sync disabled, skipping push" pid
-    (_, Nothing) -> Log.logAttention "Dashboard not found for git push" dashId
-    (_, Just dash) | isNothing dash.schema -> Log.logInfo "Skipping git push for template-based dashboard" dashId
-    (Just sync, Just dash) -> W.runHTTPWreq do
-      tokenResult <- getGitSyncToken ctx.config sync
-      case tokenResult of
-        Left err -> Log.logAttention "Failed to get GitHub token" (pid, err)
-        Right token -> pushDashboardToGit token sync pid dash ("Update dashboard: " <> dash.title)
+  Dashboards.getDashboardById dashId >>= \case
+    Nothing -> Log.logAttention "Dashboard not found for git push" dashId
+    Just dash | isNothing dash.schema -> Log.logInfo "Skipping git push for template-based dashboard" dashId
+    Just dash -> withGitHubSync pid \token sync -> pushDashboardToGit token sync pid dash ("Update dashboard: " <> dash.title)
 
 
 -- | Render one dashboard to YAML, push it to the repo and record the new shas.
@@ -3556,7 +3544,7 @@ pushDashboardToGit token sync pid dash message = do
       -- Strip any accidental prefix from DB path to ensure we don't get dashboards/dashboards/...
       rawPath = fromMaybe (GitSync.titleToFilePath dash.title) dash.filePath
       relativePath = fromMaybe rawPath $ T.stripPrefix "dashboards/" rawPath <|> T.stripPrefix prefix rawPath
-  GitSync.pushFileToGit token sync (prefix <> relativePath) (GitSync.dashboardToYaml schema) dash.fileSha message >>= \case
+  GitSync.pushFileToGit token (GitSync.syncRepoRef sync) (prefix <> relativePath) (GitSync.dashboardToYaml schema) dash.fileSha message >>= \case
     Left err -> Log.logAttention "Failed to push dashboard to git" (dash.id, err)
     Right (fileSha, treeSha) -> do
       void $ GitSync.updateDashboardGitInfo dash.id relativePath fileSha
@@ -3569,21 +3557,11 @@ pushDashboardToGit token sync pid dash message = do
 gitSyncPushAllDashboards :: Projects.ProjectId -> ATBackgroundCtx ()
 gitSyncPushAllDashboards pid = do
   Log.logInfo "Pushing all dashboards to GitHub" pid
-  ctx <- ask @Config.AuthContext
-  let encKey = encodeUtf8 ctx.config.apiKeyEncryptionSecretKey
-  syncM <- GitSync.getGitHubSyncDecrypted encKey pid
-  case syncM of
-    Nothing -> Log.logAttention "No GitHub sync configured for project" pid
-    Just sync | not sync.syncEnabled -> Log.logInfo "GitHub sync disabled, skipping push" pid
-    Just sync -> W.runHTTPWreq do
-      tokenResult <- getGitSyncToken ctx.config sync
-      case tokenResult of
-        Left err -> Log.logAttention "Failed to get GitHub token" (pid, err)
-        Right token -> do
-          syncableDashboards <- filter (isJust . (.schema)) <$> Dashboards.selectDashboardsSortedBy pid "updated_at"
-          Log.logInfo "Found dashboards to push" (pid, length syncableDashboards)
-          forM_ syncableDashboards \dash -> pushDashboardToGit token sync pid dash ("Sync dashboard: " <> dash.title)
-          Log.logInfo "Finished pushing all dashboards" pid
+  withGitHubSync pid \token sync -> do
+    syncableDashboards <- filter (isJust . (.schema)) <$> Dashboards.selectDashboardsSortedBy pid "updated_at"
+    Log.logInfo "Found dashboards to push" (pid, length syncableDashboards)
+    forM_ syncableDashboards \dash -> pushDashboardToGit token sync pid dash ("Sync dashboard: " <> dash.title)
+    Log.logInfo "Finished pushing all dashboards" pid
 
 
 -- | How many due targets a single dispatcher tick fans out. Bounds the per-tick burst;

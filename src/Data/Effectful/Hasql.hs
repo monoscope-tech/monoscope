@@ -1,7 +1,11 @@
+{-# LANGUAGE NoFieldSelectors #-}
+
 -- | Effectful effect for hasql database sessions.
 module Data.Effectful.Hasql (
   Hasql (..),
   HasqlException (..),
+  SqlSource (..),
+  SecuredSql (..),
   isTransientHasqlError,
   isTransientException,
   isDeadlockError,
@@ -23,7 +27,10 @@ module Data.Effectful.Hasql (
 
 import Control.Exception (throwIO)
 import Control.Exception.Annotated qualified as Ann
+import Data.Aeson qualified as AE
 import Data.HashMap.Strict qualified as HM
+import Deriving.Aeson qualified as DAE
+import Deriving.Aeson.Stock qualified as DAE
 import Effectful
 import Effectful.Dispatch.Dynamic (interpret, send)
 import Effectful.Labeled (Labeled, labeled)
@@ -34,10 +41,26 @@ import Hasql.Session (Session)
 import Hasql.Statement (Statement)
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
+import Language.Haskell.TH.Syntax qualified as THS
 import OpenTelemetry.Attributes (Attribute)
 import OpenTelemetry.Instrumentation.Hasql (TracedPool)
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Relude
+
+
+data SqlSource = SqlPostgres | SqlTimefusion
+  deriving stock (Eq, Generic, Read, Show, THS.Lift)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "Sql", DAE.CamelToSnake]] SqlSource
+
+
+data SecuredSql = SecuredSql
+  { source :: SqlSource
+  , statement :: Text
+  }
+  deriving stock (Eq, Generic, Show, THS.Lift)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake SecuredSql
 
 
 data Hasql :: Effect where

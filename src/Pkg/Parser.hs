@@ -1,5 +1,5 @@
 -- Parser implemented with help and code from: https://markkarpov.com/tutorial/megaparsec.html
-module Pkg.Parser (queryASTToComponents, parseQueryToComponents, getProcessedColumns, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, PageDirection (..), PageCursor (..), SqlQueryCfg (..), QueryComponents (..), NormalizedQuery (..), normalizeQuery, buildDateRange, buildGroupBy, buildOrderBy, buildLimit, buildWhereCondition, listToColNames, colsNoAsClause, defaultSelectSqlQuery, pSource, parseQueryToAST, ToQueryText (..), calculateAutoBinWidth, replacePlaceholders, variablePresets, variablePresetsKQL, constantToSQLList, constantToKQLList, defaultQueryLimit) where
+module Pkg.Parser (queryASTToComponents, parseQueryToComponents, getProcessedColumns, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, PageDirection (..), PageCursor (..), SqlQueryCfg (..), QueryComponents (..), NormalizedQuery (..), normalizeQuery, buildDateRange, buildGroupBy, buildOrderBy, buildLimit, buildWhereCondition, buildEnvFilter, listToColNames, colsNoAsClause, defaultSelectSqlQuery, pSource, parseQueryToAST, ToQueryText (..), calculateAutoBinWidth, replacePlaceholders, variablePresets, variablePresetsKQL, constantToSQLList, constantToKQLList, defaultQueryLimit) where
 
 import Control.Error (hush)
 import Data.Char (isAlphaNum)
@@ -52,6 +52,7 @@ data NormalizedQuery = NormalizedQuery
   , nqWhere :: Text -- "TRUE" or "(conditions)"
   , nqDateRange :: Text -- Date range clause
   , nqProjectId :: Text
+  , nqEnvironment :: Text -- "" or the deployment-environment predicate
   , nqGroupBy :: Text -- "" or "GROUP BY x, y"
   , nqHaving :: Text -- "" or "HAVING (...)"
   , nqOrderBy :: Text -- "" or "ORDER BY x DESC"
@@ -151,6 +152,28 @@ buildWhereCondition :: Maybe Text -> Text
 buildWhereCondition = maybe "TRUE" \w -> if T.null w then "TRUE" else "(" <> w <> ")"
 
 
+-- | The environment predicate, or @""@ when no environment is selected.
+--
+-- A column predicate rather than an injection into the user's KQL: the query box must keep
+-- showing what the user typed, and this has to apply to the summarize and alert shapes too.
+-- Rows predating the promoted column carry NULL here, so a selection genuinely excludes
+-- them — which is why the picker treats "all environments" as the default rather than
+-- picking one for the user.
+--
+-- >>> buildEnvFilter (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing)
+-- ""
+--
+-- >>> buildEnvFilter (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing){environment = Just "prod"}
+-- "resource___deployment___environment___name = 'prod'"
+--
+-- Values reach this from a cookie and a query param, so they are escaped, not trusted:
+--
+-- >>> buildEnvFilter (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing){environment = Just "o'brien"}
+-- "resource___deployment___environment___name = 'o''brien'"
+buildEnvFilter :: SqlQueryCfg -> Text
+buildEnvFilter cfg = maybe "" (\e -> "resource___deployment___environment___name = " <> sqlStringLit e) cfg.environment
+
+
 -- | Normalize QueryComponents into NormalizedQuery for SQL generation
 normalizeQuery :: SqlQueryCfg -> QueryComponents -> NormalizedQuery
 normalizeQuery cfg qc =
@@ -164,6 +187,7 @@ normalizeQuery cfg qc =
         , nqWhere = buildWhereCondition qc.whereClause
         , nqDateRange = buildDateRange cfg
         , nqProjectId = cfg.pid.toText
+        , nqEnvironment = buildEnvFilter cfg
         , nqGroupBy = buildGroupBy qc.extendedColumns qc.groupByClause
         , nqHaving = buildHaving qc
         , nqOrderBy = case cfg.cursorM of Just (PageCursor PageNewer _) -> "ORDER BY " <> timestampCol <> " asc"; _ -> buildOrderBy qc
@@ -258,6 +282,10 @@ data SqlQueryCfg = SqlQueryCfg
   , -- Time window (minutes) the alert query should look back over.
     -- Monitors pass max(60, 2 * checkIntervalMins) so buckets aren't missed.
     alertLookbackMins :: Int
+  , -- The app-wide environment selection (prod/staging/…). Applied as a column predicate on
+    -- every generated query rather than spliced into the user's KQL, so the query box keeps
+    -- showing what the user typed. 'Nothing' is every environment.
+    environment :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default)
@@ -314,7 +342,7 @@ sqlFromQueryComponents sqlCfg qc =
     whereCondition = nq.nqWhere
 
     -- Build complete WHERE clause for data queries
-    buildWhere = T.intercalate " and " $ filter (not . T.null) ["project_id='" <> nq.nqProjectId <> "'", nq.nqDateRange, "(" <> whereCondition <> ")"]
+    buildWhere = T.intercalate " and " $ filter (not . T.null) ["project_id='" <> nq.nqProjectId <> "'", nq.nqDateRange, nq.nqEnvironment, "(" <> whereCondition <> ")"]
 
     -- count(*) OVER() goes inside the array as the LAST element when
     -- hasCountOver = True; 'selectLogTable' peels it back off via dropLast.
@@ -437,6 +465,10 @@ sqlFromQueryComponents sqlCfg qc =
     -- recency filter; without it time_bucket groups across all history and max
     -- returns the all-time peak bucket.
     alertTimeFilter = timestampCol <> " >= NOW() - INTERVAL '" <> show sqlCfg.alertLookbackMins <> " minutes'"
+    -- The alert query is built by hand rather than through 'buildWhere', so the environment
+    -- has to be spliced here too — a monitor scoped to staging that silently alerts on prod
+    -- is worse than one that never fires.
+    alertEnvFilter = if T.null nq.nqEnvironment then "" else "AND " <> nq.nqEnvironment
     -- With a bin function the alert reads only the most recent bucket's value.
     alertTail = case qc.finalSummarizeQuery of
       Just binInterval -> let e = timeBucketExpr binInterval in "GROUP BY " <> e <> " ORDER BY " <> e <> " DESC LIMIT 1"
@@ -445,7 +477,7 @@ sqlFromQueryComponents sqlCfg qc =
     alertQuery =
       [fmt|
           SELECT GREATEST( count(*)::float8) FROM {fromTable}
-          WHERE project_id='{sqlCfg.pid.toText}' AND {alertTimeFilter} AND ({whereCondition})
+          WHERE project_id='{sqlCfg.pid.toText}' AND {alertTimeFilter} {alertEnvFilter} AND ({whereCondition})
           {alertTail}
         |]
    in
@@ -503,8 +535,13 @@ sqlFromQueryComponents sqlCfg qc =
 -- >>> let Right (_, c4) = parseQueryToComponents cfg "errors[*].error_type =~ /^ab.*c/"
 -- >>> c4.whereClause
 -- Just "(jsonb_path_exists(to_jsonb(errors), '$[*].\"error_type\" ? (@ like_regex \"^ab.*c\" flag \"i\")'::jsonpath))"
+--
+-- Field validation is told the cfg's source for the same reason 'queryASTToComponents'
+-- resolves the FROM table from it: a metrics query can arrive with its source in the
+-- request rather than in the query text, and validating those fields against
+-- @otel_logs_and_spans@ rejects the metrics table's own columns.
 parseQueryToComponents :: SqlQueryCfg -> Text -> Either Text (Text, QueryComponents)
-parseQueryToComponents sqlCfg = fmap (queryASTToComponents sqlCfg) . parseQueryToAST
+parseQueryToComponents sqlCfg = fmap (queryASTToComponents sqlCfg) . first (.message) . parseQueryDiagnosed sqlCfg.source
 
 
 queryASTToComponents :: SqlQueryCfg -> [Section] -> (Text, QueryComponents)
@@ -560,6 +597,7 @@ defSqlQueryCfg pid currentTime source spanT =
     , currentTime
     , defaultSelect = defaultSelectSqlQuery source
     , alertLookbackMins = 60
+    , environment = Nothing
     }
 
 

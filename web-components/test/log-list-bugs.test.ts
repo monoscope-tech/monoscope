@@ -20,12 +20,12 @@ describe('LogList — LOWER', () => {
     expect(Object.keys((el as any).columnMaxWidthMap).sort()).toEqual(['a', 'c']);
   });
 
-  // The virtualizer grows with every page; will-change promoted that entire scroll
-  // surface to a compositor layer (multi-gigapixel at high DPR).
-  test('virtualizer does not force compositing for its entire growing scroll surface', async () => {
+  // The virtualizer already bounds the DOM; forcing its scroll surface into a
+  // compositor layer or deferring paint on its small row runway causes blank flashes.
+  test('virtualizer does not force compositing or defer visible row paint', async () => {
     const el = await mountList();
     expect(el.querySelector('style')?.textContent).not.toMatch(/lit-virtualizer\s*{[^}]*will-change:/);
-    expect(el.querySelector('style')?.textContent).toMatch(/lit-virtualizer > tr\s*{[^}]*content-visibility:\s*auto/);
+    expect(el.querySelector('style')?.textContent).not.toMatch(/lit-virtualizer > tr\s*{[^}]*content-visibility:/);
     expect(el.innerHTML).not.toContain('will-change-scroll');
   });
 
@@ -130,10 +130,8 @@ describe('LogList — MED correctness', () => {
     const initial = Array.from({ length: 5000 }, (_, i) => row(`r${i}`));
     (el as any).spanListTree = initial;
     (el as any).seenIds = new Set(initial.map((r) => r.id));
-    expect((el as any).virtualizerGeneration).toBe(0);
 
     (el as any).spanListTree = (el as any).mergeIntoTree([row('older')], false);
-    expect((el as any).virtualizerGeneration).toBe(1);
     expect(ids(el)).toHaveLength(5000);
     expect(ids(el)[0]).toBe('r1');
     expect((el as any).hasNewer).toBe(true);
@@ -177,6 +175,29 @@ describe('LogList — MED correctness', () => {
     expect((el as any).captureScrollAnchor()).toEqual({ id: 'visible', offset: 0 });
   });
 
+  test('anchor restoration pins through the virtualizer proxy and adjusts the rendered row', async () => {
+    const el = await mountList();
+    const scrollIntoView = vi.fn();
+    const renderedRow = { dataset: { rowId: 'visible' }, getBoundingClientRect: () => ({ top: 12 }) };
+    const container = {
+      scrollTop: 0,
+      getBoundingClientRect: () => ({ top: 0 }),
+      querySelectorAll: () => [renderedRow],
+    };
+    Object.defineProperty(el, 'logsContainer', { value: container });
+    (el as any).virtualListItems = [row('visible')];
+    vi.spyOn(el, 'querySelector').mockReturnValue({
+      element: () => ({ scrollIntoView }),
+      layoutComplete: Promise.resolve(),
+    } as any);
+
+    await (el as any).restoreScrollAnchor({ id: 'visible', offset: 2 });
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'start' });
+    expect(container.scrollTop).toBe(10);
+  });
+
   test('an oversized trace cannot collapse the retained window to zero rows', async () => {
     const el = await mountList();
     const traceRows = Array.from({ length: 5000 }, (_, i) => ({ ...row(`t${i}`), traceId: 'oversized-trace' }));
@@ -186,6 +207,25 @@ describe('LogList — MED correctness', () => {
     (el as any).spanListTree = (el as any).mergeIntoTree([{ ...row('tail'), traceId: 'oversized-trace' }], false);
     expect(ids(el)).toHaveLength(5000);
     expect(ids(el)[0]).toBe('t1');
+  });
+
+  test('explicit load newer reveals the fetched rows instead of preserving the old anchor', async () => {
+    const el = await mountList();
+    (el as any).spanListTree = [row('old')];
+    (el as any).seenIds = new Set(['old']);
+    (el as any).updateVisibleItems();
+    const container = { scrollTop: 100, clientHeight: 100, scrollHeight: 1000 };
+    Object.defineProperty(el, 'logsContainer', { value: container });
+    vi.spyOn(el as any, 'captureScrollAnchor').mockReturnValue({ id: 'old', offset: 0 });
+    const restore = vi.spyOn(el as any, 'restoreScrollAnchor').mockResolvedValue(undefined);
+    el.transport = serverTransport(logPage(['new']));
+
+    await (el as any).fetchData('newer', false, true, false, true);
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+
+    expect(ids(el)[0]).toBe('new');
+    expect(container.scrollTop).toBe(0);
+    expect(restore).not.toHaveBeenCalled();
   });
 
   test('newer pagination uses an adjacent forward cursor', async () => {

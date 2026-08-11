@@ -64,6 +64,7 @@ import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
+import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
 import Numeric (showFFloat)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, pageActions, pageTitle)
@@ -196,6 +197,22 @@ data SpanInfo = SpanInfo {spanId :: Text, parentId :: Maybe Text, traceIdVal :: 
 -- Just 100
 -- >>> (adj V.! 1) V.!? 3
 -- Just (Number 100.0)
+--
+-- A late point event does not stretch the axis. The span runs 100..1100; a log at 50000
+-- belongs to the trace but has no extent, and letting it set the window shrank every span
+-- in the latency column to a sliver at the left edge:
+--
+-- >>> let mk i par ns d k = V.fromList [AE.String i, AE.String "t1", maybe AE.Null AE.String par, AE.Number ns, AE.Number d, AE.String i, AE.String k, AE.Null, AE.String "2025-01-01T00:00:00Z"]
+-- >>> let (_, rw) = LL.buildTraceTree colIdxS 1 (V.fromList [mk "p" Nothing 100 1000 "span", mk "l" (Just "p") 50000 0 "log"])
+-- >>> fmap (\e -> (e.startTime, e.duration)) (viaNonEmpty head rw)
+-- Just (100,1000)
+--
+-- With nothing but point events there is no span to size the window by, so it keeps the
+-- full extent rather than collapsing to zero:
+--
+-- >>> let (_, rp) = LL.buildTraceTree colIdxS 1 (V.fromList [mk "l1" Nothing 100 0 "log", mk "l2" (Just "l1") 900 0 "log"])
+-- >>> fmap (.duration) (viaNonEmpty head rp)
+-- Just 800
 buildTraceTree :: HM.HashMap Text Int -> Int -> V.Vector (V.Vector AE.Value) -> (V.Vector (V.Vector AE.Value), [TraceTreeEntry])
 buildTraceTree colIdxMap queryResultCount rows
   -- An aggregate result (`| summarize …`) is one or two columns wide while the
@@ -285,8 +302,18 @@ buildTraceTree colIdxMap queryResultCount rows
                   st' = (min minS adjStart, max maxE adjEnd, (si.rowIdx, adjStart, adjDur) : adjs, treeAcc')
                   st'' = go adjStart adjEnd kids st'
                in go pStart pEnd xs st''
-          (minStart, maxEnd, adjustments', subtreeChildren) =
+          (fullStart, fullEnd, adjustments', subtreeChildren) =
             go root'.startNs rootEnd rootKids (root'.startNs, rootEnd, [rootAdj], initAcc)
+          -- Only rows that lasted set the window. A point event carries a time but no
+          -- extent, and one log emitted seconds later under the same trace used to define
+          -- the axis for every span in it: a 71ms trace whose tail log lands at +3.4s
+          -- became a 3452ms axis, crushing every real span into the first 2% of the
+          -- latency column. Logs still render — the client clamps them into the window —
+          -- they just no longer stretch it. A trace of nothing but point events keeps the
+          -- full extent, since there is no span to size it by.
+          (minStart, maxEnd) = case nonEmpty [(s, s + d) | (_, s, d) <- adjustments', d > 0] of
+            Just lasting -> (minimum1 $ fmap fst lasting, maximum1 $ fmap snd lasting)
+            Nothing -> (fullStart, fullEnd)
        in (TraceTreeEntry tid minStart (maxEnd - minStart) tst root'.spanId subtreeChildren, adjustments')
 
 
@@ -438,12 +465,6 @@ facetDefs =
       , Facet "resource.telemetry.sdk.language" "SDK Language" FGResource nc
       , Facet "resource.telemetry.sdk.name" "SDK Name" FGResource nc
       , Facet "resource.telemetry.sdk.version" "SDK Version" FGResource nc
-      , -- User & Session
-        Facet "attributes.session.id" "Session ID" FGUserSession nc
-      , Facet "attributes.user.id" "User ID" FGUserSession nc
-      , Facet "attributes.user.email" "User Email" FGUserSession nc
-      , Facet "attributes.user.name" "Username" FGUserSession nc
-      , Facet "attributes.user.full_name" "Full Name" FGUserSession nc
       , -- Database
         Facet "attributes.db.system.name" "Database System" FGDatabase nc
       , Facet "attributes.db.collection.name" "Collection Name" FGDatabase nc
@@ -453,6 +474,16 @@ facetDefs =
         Facet "attributes.exception.type" "Exception Type" FGErrors (const "bg-fillError-strong")
       , Facet "attributes.exception.message" "Exception Message" FGErrors nc
       ]
+        -- User & Session, derived from 'Telemetry.identityFields' so a field the log-item
+        -- detail panel shows is a field you can facet on — the two lists had already drifted
+        -- apart once. Restricted to promoted columns because a facet counts distinct values
+        -- across the range, which needs a column and not a probe into the Variant blob; the
+        -- tenant keys stay filterable through a pill's menu, they just aren't faceted.
+        <> [ Facet path label FGUserSession nc
+           | (k, label) <- Telemetry.identityFields
+           , let path = "attributes." <> k
+           , S.member path ParserExpr.flattenedOtelAttributes
+           ]
 
 
 -- | 'facetDefs' bucketed by 'FacetGroup', built once at module load time.
@@ -566,7 +597,13 @@ buildLogResult withChildren pid now sinceM addCols removeCols (requestVecs, colN
       requestVecsAug = synthRows <> requestVecs
       rawLogsData = requestVecsAug <> V.fromList childSpansList
       cols = nubOrd $ curateCols addCols removeCols colNames
-      colors = getServiceColors $ V.mapMaybe (colOf "span_name") rawLogsData
+      -- Keyed on the service, which is what the name has always claimed. Keying on
+      -- `span_name` made this a per-*operation* palette: two spans in one service got two
+      -- colours and the same operation in two services got one, so the latency column's
+      -- colour carried no service signal at all — and every row whose operation missed the
+      -- palette fell back to grey. Same hash as the trace waterfall and the service map, so
+      -- a service looks the same wherever it appears.
+      colors = getServiceColors $ V.mapMaybe (colOf "service") rawLogsData
       queryResultCount = V.length requestVecsAug
       (logsData, traces) = buildTraceTree colIdxMap queryResultCount rawLogsData
   pure
@@ -607,7 +644,7 @@ queryEvents pid queryM sinceM fromM toM sourceM limitM withChildrenM includeAttr
       hasKqlLimit = any (\case TakeCommand{} -> True; _ -> False) queryAST
       queryAST' = if hasKqlLimit then queryAST else queryAST <> [TakeCommand (min defaultQueryLimit (fromMaybe 100 limitM))]
   enableTfReads <- (.env.enableTimefusionReads) <$> Effectful.Reader.Static.ask @AuthContext
-  result <- LogQueries.selectLogTable enableTfReads pid queryAST' (toQText queryAST') Nothing (fromD, toD) ["attributes" | fromMaybe False includeAttributesM] (parseMaybe pSource =<< sourceM) Nothing
+  result <- LogQueries.selectLogTable enableTfReads pid queryAST' (toQText queryAST') Nothing (fromD, toD) ["attributes" | fromMaybe False includeAttributesM] (parseMaybe pSource =<< sourceM) Nothing Nothing
   case result of
     Left err -> throwError $ translateQueryError err
     -- Default to exact-match (no trace expansion); UI passes True via apiLogH.
@@ -800,20 +837,24 @@ logExplorerActions_ currentRange = div_ [class_ "flex gap-2 max-md:gap-1 items-c
 
 -- | Shared prologue for the log-data endpoints: auth-gate the request, grab the
 -- app config + clock, and resolve the time range once.
-logDataEnv :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (AuthContext, UTCTime, Maybe UTCTime, Maybe UTCTime)
+-- | The sticky deployment-environment selection travels with the session (it is read from
+-- the @env@ cookie at auth time), so every data endpoint that already resolves the session
+-- gets it here rather than declaring a query parameter it would have to be handed on every
+-- link in the app.
+logDataEnv :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (AuthContext, UTCTime, Maybe UTCTime, Maybe UTCTime, Maybe Text)
 logDataEnv pid sinceM fromM toM = do
-  _ <- Projects.sessionAndProject pid
+  (sess, _) <- Projects.sessionAndProject pid
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   now <- Time.currentTime
   let (fromD, toD, _) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
-  pure (authCtx, now, fromD, toD)
+  pure (authCtx, now, fromD, toD, sess.environment)
 
 
 -- | Log-row data endpoint. The log-list web component fetches this; the shell
 -- (apiLogH) renders only chrome. Returns the trace-tree-expanded 'LogResult'.
 logExplorerDataH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe PageDirection -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogResult)
 logExplorerDataH pid queryM' cols' cursorM' directionM sinceM fromM toM sourceM targetSpansM = withSpan_ "log-explorer.data" [] do
-  (authCtx, now, fromD, toD) <- logDataEnv pid sinceM fromM toM
+  (authCtx, now, fromD, toD, envM) <- logDataEnv pid sinceM fromM toM
   -- `cols` is a delta over server defaults: bare tokens add columns, `-`-prefixed tokens hide defaults.
   let (removeToks, addCols) = L.partition ("-" `T.isPrefixOf`) $ filter (not . T.null) $ T.splitOn "," (fromMaybe "" cols')
       removeCols = map (T.drop 1) removeToks
@@ -825,7 +866,7 @@ logExplorerDataH pid queryM' cols' cursorM' directionM sinceM fromM toM sourceM 
     Left err -> Log.logInfo "Log explorer data: rejected invalid KQL query" err $> (Just err, emptyTable)
     Right queryAST -> do
       resultE <-
-        LogQueries.selectLogTable authCtx.env.enableTimefusionReads pid queryAST (toQText queryAST) cursor (fromD, toD) addCols (parseMaybe pSource =<< sourceM) targetSpansM
+        LogQueries.selectLogTable authCtx.env.enableTimefusionReads pid queryAST (toQText queryAST) cursor (fromD, toD) addCols (parseMaybe pSource =<< sourceM) targetSpansM envM
       case resultE of
         Left err -> Log.logAttention "log-explorer.data query failed" (AE.object ["project_id" AE..= pid.toText, "source" AE..= fromMaybe "spans" sourceM, "error" AE..= err]) $> (Just (sanitizeBackendError err), emptyTable)
         Right t -> pure (Nothing, t)
@@ -880,7 +921,10 @@ data QueryValidation = QueryValidation
 logExplorerValidateH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders QueryValidation)
 logExplorerValidateH pid queryM = do
   _ <- Projects.sessionAndProject pid
-  addRespHeaders $ case parseQueryDiagnosed (maybeToMonoid queryM) of
+  -- No source: the editor posts only the query text, so a metrics query typed on the
+  -- Metrics page is still squiggled against the spans columns even though running it
+  -- now works. Fixing that needs the source in the request, client side included.
+  addRespHeaders $ case parseQueryDiagnosed Nothing (maybeToMonoid queryM) of
     Right _ -> QueryValidation{valid = True, message = Nothing, column = Nothing, width = Nothing}
     Left e -> QueryValidation{valid = False, message = Just e.message, column = Just e.column, width = Just e.width}
 
@@ -900,21 +944,21 @@ logExplorerSchemaH pid = do
 -- | Patterns visualization data endpoint (aggregate log patterns as JSON).
 logPatternsH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> ATAuthCtx (RespHeaders PatternsView)
 logPatternsH pid queryM' sinceM fromM toM sourceM pTargetM skipM = do
-  (authCtx, now, fromD, toD) <- logDataEnv pid sinceM fromM toM
+  (authCtx, now, fromD, toD, envM) <- logDataEnv pid sinceM fromM toM
   -- Start (epoch seconds) of the earliest of the 24 hourly volume slots, so the
   -- client can map bar i to the clock hour @baseHourEpoch + i*3600@ (see buildHourlyBuckets).
   let baseHourEpoch = (floor (utcTimeToPOSIXSeconds now) `div` 3600 - 23) * 3600 :: Int
   case parseQueryToAST (maybeToMonoid queryM') of
     Left err -> Log.logInfo "Log explorer patterns: rejected invalid KQL query" err >> addRespHeaders (PatternsView 0 V.empty False 0)
     Right queryAST -> do
-      (total, rows) <- LogQueries.fetchLogPatterns authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) (parseMaybe pSource =<< sourceM) pTargetM (fromMaybe 0 skipM)
+      (total, rows) <- LogQueries.fetchLogPatterns authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) (parseMaybe pSource =<< sourceM) pTargetM envM (fromMaybe 0 skipM)
       addRespHeaders $ PatternsView total (V.fromList rows) (fromMaybe 0 skipM == 0) baseHourEpoch
 
 
 -- | Sessions visualization data endpoint (aggregate sessions as JSON).
 logSessionsH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> ATAuthCtx (RespHeaders SessionsView)
 logSessionsH pid queryM' sinceM fromM toM skipM sortByM = do
-  (authCtx, _, fromD, toD) <- logDataEnv pid sinceM fromM toM
+  (authCtx, _, fromD, toD, _) <- logDataEnv pid sinceM fromM toM
   case parseQueryToAST (maybeToMonoid queryM') of
     Left err -> Log.logInfo "Log explorer sessions: rejected invalid KQL query" err >> addRespHeaders (SessionsView 0 V.empty Nothing)
     Right queryAST -> do
@@ -1809,7 +1853,7 @@ apiLogsPage page = do
 -- (@kind=pattern@), plus a @hasMore@ flag for pagination.
 apiLogExpandH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders AE.Value)
 apiLogExpandH pid kindM keyM skipM queryM sinceM fromM toM = do
-  (authCtx, _, fromD, toD) <- logDataEnv pid sinceM fromM toM
+  (authCtx, _, fromD, toD, _) <- logDataEnv pid sinceM fromM toM
   let key = maybeToMonoid keyM
   when (T.null key) $ throwError Servant.err400{Servant.errBody = "Missing key"}
   -- Sessions render a trace tree (hence the child-span fetch and larger page);

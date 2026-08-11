@@ -892,7 +892,7 @@ tracePage pid traceItem rawSpanRecords = do
       -- rangeSeconds is 0: throughput is meaningless for a single request, so the map
       -- reports counts and durations only. Node size comes from the duration share.
       (traceHops, traceDurationNs) = ServiceGraph.traceEdgeSamples spanRecords
-      traceGraph = ServiceGraph.buildServiceGraph 0 serviceMapNodeCap (Just traceDurationNs) traceHops
+      traceGraph = ServiceGraph.buildServiceGraph 0 serviceMapNodeCap ServiceGraph.CollapseOff (Just traceDurationNs) traceHops
   div_ [class_ "w-full h-full flex overflow-hidden", id_ "trace_span_container"] $ do
     div_ [class_ "flex flex-col grow min-w-0 gap-4 p-2 pb-4 overflow-y-auto overflow-x-hidden c-scroll"] $ do
       div_ [class_ "flex flex-wrap justify-between items-center gap-y-1"] do
@@ -1024,7 +1024,7 @@ tracePage pid traceItem rawSpanRecords = do
           -- global service map, scoped to this trace's spans (no extra query — the spans
           -- are already on the page).
           div_ [role_ "tabpanel", class_ "a-tab-content pt-2 hidden", id_ "service_map"] do
-            serviceMapPanel_ pid ("trace-service-map-" <> traceItem.traceId) traceGraph serviceColors
+            serviceMapPanel_ pid ("trace-service-map-" <> traceItem.traceId) traceGraph serviceColors Nothing
     -- Same grip affordance as resizer_ (border + centred dots, brand-coloured on hover):
     -- the drag target was invisible without it, so the panel read as unresizable.
     div_ [class_ "hidden shrink-0 max-md:hidden", id_ "trace-details-resizer-wrapper"]
@@ -1094,20 +1094,6 @@ tracePage pid traceItem rawSpanRecords = do
           if (typeof flameGraphChart === 'undefined' || timeline.dataset.timelineInit) return;
           timeline.dataset.timelineInit = '1';
           flameGraphChart($spanJson, "$trId", $colorsJson);
-        }, {once: true});
-      }
-      // ECharts renders 0x0 into a hidden panel, so the map waits for its tab.
-      var mapPanel = document.getElementById('service_map');
-      if (mapPanel && !mapPanel.dataset.mapListener) {
-        mapPanel.dataset.mapListener = '1';
-        mapPanel.addEventListener('tab-visible', () => {
-          if (typeof serviceMapChart === 'undefined' || mapPanel.dataset.mapInit) return;
-          mapPanel.dataset.mapInit = '1';
-          const el = mapPanel.querySelector('[data-service-map]');
-          if (!el) return;
-          serviceMapChart(el.id, JSON.parse(document.getElementById(el.id + '-data').textContent), {
-            colors: JSON.parse(document.getElementById(el.id + '-colors').textContent),
-          });
         }, {once: true});
       }
     }
