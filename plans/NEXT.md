@@ -51,9 +51,39 @@ are worth noting anyway:
    (`dedup_skipped = 2` with zero grants is consistent with the two skips coming from
    certifications *loaded off disk* — i.e. persistence working — but at n=2 that is a guess.)
 
-- [ ] **Re-read after ≥24h with no TF deploy** and confirm or kill the above. If
-      `cert_granted_total` is still 0 after a day, the sweep is not certifying in production at
-      all and that — not persistence — is the whole problem.
+### Second read, ~15 min later (a DIFFERENT process — TF restarted in between)
+
+`dedup_skipped` fell 2 → 1 while `total` rose 1360 → 2196; counters are monotonic within a
+lifetime, so that is a restart, not a decline. Which is itself the finding that Phase 0 keeps
+running into: **TF redeploys often enough that a clean 24h window has to be arranged, not
+waited for.**
+
+| counter | value |
+|---|---|
+| `dedup_eligible` | 652 |
+| `dedup_skipped` | 1 (0.2%) |
+| `dedup_denied_never_certified` | 625 |
+| `dedup_denied_fp_moved` | **0** |
+| `cert_granted_total` | **4** |
+| `cert_dwell_total` | **0** |
+
+**This reframes the problem, and away from what Phase 1 built.** Certification *does* happen —
+4 grants in a young process — and `cert_dwell_total = 0` says not one of them has been
+invalidated yet. Nothing is dying, so there is nothing for *survival* to save. What is missing
+is **coverage**: the sweep certifies a handful of partitions while queries touch hundreds, and
+625 denials are partitions it simply never reached.
+
+If that holds over a full day, the lever is **which partitions get swept** —
+`timefusion_dedup_lookback_days`, the sweep's per-tick budget, and whether the partitions
+queries actually hit are inside its scope at all — not persisting verdicts that are not
+expiring. Persistence and the confirming-pass fix are still correct and still cheap; they just
+may not be where the 99.5% is.
+
+- [ ] **Re-read after ≥24h with no TF deploy** and confirm or kill the above. The two numbers
+      that decide it: `cert_granted_total` (is the sweep covering a meaningful share?) and
+      `cert_dwell_total` vs `dedup_denied_fp_moved` (is anything expiring at all?). If dwell
+      stays near zero while `never_certified` stays huge, close out the survival plan and open
+      a coverage one.
 - [ ] **Read Phase 0.** After **≥24h with no TF deploy**:
       ```sql
       SELECT key, value FROM timefusion_stats WHERE component='scan' AND key LIKE 'dedup_denied%';
