@@ -625,8 +625,17 @@ fetchLogPatterns enableTfReads pid queryAST dateRange sourceM targetM environmen
       | otherwise = Nothing
 
 
+-- | Session identity for the Sessions viz, shared by 'fetchSessions' and the
+-- row-expand filter in 'fetchEventExamples' so a listed session is always
+-- expandable. Backend SDKs without @setSession@ (e.g. legacy apitoolkit-express)
+-- never emit @session.id@, so we fall back to user identity: those projects get
+-- one derived session per user per selected window instead of an empty tab.
+sessionKeyExpr :: Text
+sessionKeyExpr = "COALESCE(NULLIF(attributes___session___id, ''), NULLIF(attributes___user___id, ''), NULLIF(attributes___user___email, ''))"
+
+
 -- | Fetch session-aggregated rows for the Sessions visualization tab.
--- Rows are keyed by attributes___session___id; user identity is taken as the
+-- Rows are keyed by 'sessionKeyExpr'; user identity is taken as the
 -- MAX non-null value within the session (stable for a given user). Pagination
 -- happens before the hourly bucket/service joins so join cost tracks page size.
 -- The session-level summary (header KPIs + over-time buckets) is computed in the
@@ -658,7 +667,9 @@ fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
         (ARRAY_AGG(error_text ORDER BY timestamp) FILTER (WHERE is_error AND error_text IS NOT NULL AND error_text <> ''))[1] AS first_error|]
       q =
         [HI.sql|WITH filtered AS (
-          SELECT attributes___session___id AS session_id,
+          SELECT |]
+          <> rawSql sessionKeyExpr
+          <> [HI.sql| AS session_id,
             attributes___user___id AS user_id,
             attributes___user___email AS user_email,
             COALESCE(NULLIF(attributes___user___full_name, ''), NULLIF(attributes___user___name, '')) AS user_name,
@@ -673,8 +684,9 @@ fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
           FROM otel_logs_and_spans
           WHERE |]
           <> whereSql
-          <> [HI.sql|
-            AND attributes___session___id IS NOT NULL AND attributes___session___id <> ''
+          <> [HI.sql| AND |]
+          <> rawSql sessionKeyExpr
+          <> [HI.sql| IS NOT NULL
         ), agg AS (
           SELECT session_id,
             MAX(user_id) AS user_id, MAX(user_email) AS user_email, MAX(user_name) AS user_name,
@@ -839,7 +851,7 @@ fetchEventExamples enableTfReads pid queryAST dateRange expandKind skip limitN =
   now <- Time.currentTime
   let fullWhereSql = rawSql $ scopedQueryWhere pid now (Just SSpans) dateRange Nothing queryAST
       expandFilter = case expandKind of
-        ExpandSession sid -> [HI.sql| AND attributes___session___id = #{sid}|]
+        ExpandSession sid -> [HI.sql| AND |] <> rawSql sessionKeyExpr <> [HI.sql| = #{sid}|]
         -- Prefer tag match: the key is a comma-joined list of pat:<hash> tags
         -- (see PatternRow.hashes) which the drain-flush stamps onto each row's
         -- `hashes` column. Fall back to a summary ILIKE only for on-the-fly
