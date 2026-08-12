@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach } from 'vitest';
 import { render } from 'lit';
 import { dedupeById } from '../src/log-list-utils';
-import { LogList, exclusiveSegments, latencyBar, latencySegments, latencyTitle } from '../src/log-list';
+import { LogList, exclusiveSegments, latencyBar, latencySegments, latencyTitle, latencyTooltip, spanLatencyBreakdown } from '../src/log-list';
 import { row, fakeTransport, ids, mountList } from './log-list-harness';
 
 describe('dedupeById', () => {
@@ -272,6 +272,80 @@ describe('latencyBar', () => {
     // The axis is sized by spans, so a log seconds after the last span lands outside it.
     const [own] = latencyBar(true, { ...row, startNs: 9_000, duration: 0 }, []).segments;
     expect(own.leftPct).toBe(100);
+  });
+});
+
+describe('latencyTooltip', () => {
+  // The card replaces a native `title=`, which could only say the numbers. Its job is to tie
+  // each number to the swatch colour the bar is painted in.
+  const seg = (label: string, ns: number, leftPct: number) => ({ leftPct, widthPct: ns / 100, color: `bg-${label}`, label, ns });
+  const row = { duration: 1_000, startNs: 1_500, traceStart: 1_000, color: 'bg-api' };
+  const card = (segments: any[], r = row) => {
+    const host = document.createElement('div');
+    render(latencyTooltip(r, segments), host);
+    return host;
+  };
+  const lines = (host: HTMLElement) =>
+    [...host.querySelectorAll('.latency-card-body > div')].slice(1).map((d) => d.textContent!.replace(/\s+/g, ' ').trim());
+
+  test('each service carries its own swatch, so the card explains the colours in the bar', () => {
+    const host = card([seg('postgres', 500, 0), seg('redis', 100, 60)]);
+    expect([...host.querySelectorAll('.latency-card-body span[class*="rounded-xs"]')].map((s) => s.className)).toEqual(
+      expect.arrayContaining([expect.stringContaining('bg-postgres'), expect.stringContaining('bg-redis'), expect.stringContaining('bg-api')])
+    );
+  });
+
+  test('rows are sorted by time and include self, so the parts visibly sum to the whole', () => {
+    // 500 postgres + 100 redis + 400 self = the row's 1000. Omitting self would make the
+    // listed parts look like they should add up when they don't.
+    expect(lines(card([seg('postgres', 500, 0), seg('redis', 100, 60)]))).toEqual(['postgres 500ns 50%', 'self 400ns 40%', 'redis 100ns 10%']);
+  });
+
+  test('the same service in two places is one row, not two', () => {
+    expect(lines(card([seg('db', 200, 0), seg('db', 300, 50)]))).toEqual(['db 500ns 50%', 'self 500ns 50%']);
+  });
+
+  test('caps the list and says how much it left out rather than silently truncating', () => {
+    const many = ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((l, i) => seg(l, 100, i * 10));
+    const host = card(many);
+    expect(lines(host)).toHaveLength(7); // 6 services + the "+n more" line
+    expect(host.textContent).toContain('+2 more'); // 7 services + self = 8 rows, 6 shown
+  });
+
+  test('a row that spent all its time itself still reads as a breakdown', () => {
+    expect(lines(card([]))).toEqual(['self 1µs 100%']);
+  });
+
+});
+
+describe('spanLatencyBreakdown wrapper', () => {
+  // The card is a top-layer popover because the row's `contain: paint` clips everything else,
+  // and it opens with no script at all. Both halves of that are attribute contracts: lose
+  // `interestfor`/`popover` and it never opens; lose `anchor-name`/`position-anchor` and it
+  // opens somewhere unrelated to the bar it describes.
+  const wrap = (card: { id: string; body: any } | null) => {
+    const host = document.createElement('div');
+    render(spanLatencyBreakdown({ track: 'bg-api', segments: [], title: '1.2s total', card, barWidth: 108, frame: false }), host);
+    return host;
+  };
+
+  test('a row with a breakdown gets a button wired to its own popover, anchored to its own bar', () => {
+    const host = wrap({ id: 'lat-abc', body: latencyTooltip({ duration: 1_000, startNs: 0, traceStart: 0, color: 'bg-api' }, []) });
+    const btn = host.querySelector('button')!;
+    const pop = host.querySelector('[popover]')!;
+    expect(btn.getAttribute('interestfor')).toBe('lat-abc');
+    expect(pop.id).toBe('lat-abc'); // interestfor resolves by id — a mismatch silently never opens
+    expect(btn.getAttribute('style')).toContain('anchor-name:--lat-abc');
+    expect(pop.getAttribute('style')).toContain('position-anchor:--lat-abc');
+    expect(pop.getAttribute('popover')).toBe('hint');
+    expect(pop.getAttribute('aria-hidden')).toBe('true'); // the button's aria-label says it instead
+  });
+
+  test('a row with nothing to break down is not a control: no popover, no tab stop', () => {
+    const host = wrap(null);
+    expect(host.querySelector('button')).toBeNull();
+    expect(host.querySelector('[popover]')).toBeNull();
+    expect(host.querySelector('[role="img"]')!.getAttribute('aria-label')).toBe('1.2s total');
   });
 });
 

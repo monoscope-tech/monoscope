@@ -2482,6 +2482,11 @@ export class LogList extends LitElement {
             content: latencyHtml,
             width: currentWidth,
             expanded: expanded,
+                  // The id is both an element id and half of a `--dashed-ident` anchor name, so
+                  // it has to survive as a CSS identifier — span ids are hex but log ids are not.
+                  card: ownSegments.length
+                    ? { id: `lat-${String(rowData.id ?? '').replace(/[^\w-]/g, '_')}`, body: latencyTooltip({ startNs, duration, traceStart, color }, ownSegments) }
+                    : null,
             dim: this.latencyDim,
           };
         }
@@ -3509,7 +3514,50 @@ export function latencyTitle(dim: LatencyDim, row: { startNs: number; duration: 
   ].join(' \u00b7 ');
 }
 
-function spanLatencyBreakdown({
+/**
+ * The bar in words and numbers, as a hover card rather than a native `title`.
+ *
+ * `title=` could only ever be one flat string: it names services without connecting them to
+ * the colours in the bar it is describing, waits about a second before appearing, can't be
+ * reached from the keyboard, and can't be styled. This is the same data with the swatch beside
+ * each name, which is what makes the colour legible — the mapping is stable (services are
+ * coloured by a hash of their name), so reading it once here teaches it everywhere.
+ *
+ * Only called where there is a breakdown to show. A log has no duration and a childless span
+ * has nothing under it, so their card could only restate the duration the row already prints —
+ * and on a log-only view that was every row answering "0ns total, no service breakdown".
+ */
+export function latencyTooltip(row: { duration: number; startNs: number; traceStart: number; color: string }, segments: LatencySegment[]) {
+  const byLabel = new Map<string, { ns: number; color: string }>();
+  for (const s of segments) {
+    const at = byLabel.get(s.label) ?? { ns: 0, color: s.color };
+    byLabel.set(s.label, { ns: at.ns + s.ns, color: at.color });
+  }
+  const self = Math.max(0, row.duration - segments.reduce((a, s) => a + s.ns, 0));
+  // Self time is a row like any other: "40% of this request was spent here, not downstream"
+  // is the same kind of answer as "50% was postgres", and hiding it makes the parts look
+  // like they should sum to the total when they don't.
+  const rows = [...byLabel.entries()].map(([label, v]) => ({ label, ...v })).concat(self > 0 ? [{ label: 'self', ns: self, color: row.color }] : []);
+  rows.sort((a, b) => b.ns - a.ns);
+  const pct = (ns: number) => (row.duration > 0 ? Math.round((ns / row.duration) * 100) : 0);
+  return html`<div class="latency-card-body text-left text-textStrong font-normal">
+    <div class="flex items-baseline justify-between gap-3 pb-1 mb-1 border-b border-strokeWeak">
+      <span class="font-medium">${fmtNs(row.duration)} total</span>
+      <span class="text-textWeak">+${fmtNs(Math.max(0, row.startNs - row.traceStart))} into trace</span>
+    </div>
+    ${rows.slice(0, 6).map(
+      r => html`<div class="flex items-center gap-2 whitespace-nowrap leading-5">
+        <span class=${`w-2 h-2 rounded-xs shrink-0 ${r.color}`}></span>
+        <span class="grow truncate max-w-[16ch]">${r.label}</span>
+        <span class="tabular-nums text-textWeak">${fmtNs(r.ns)}</span>
+        <span class="tabular-nums text-textWeak w-9 text-right">${pct(r.ns)}%</span>
+      </div>`
+    )}
+    ${rows.length > 6 ? html`<div class="text-textWeak pt-0.5">+${rows.length - 6} more</div>` : nothing}
+  </div>`;
+}
+
+export function spanLatencyBreakdown({
   track,
   segments,
   title,
@@ -3531,6 +3579,7 @@ function spanLatencyBreakdown({
   // floored width keeps a mark at the far end inside the bar instead of clipped away.
   const minPct = (3 / Math.max(barWidth, 1)) * 100;
   return html`<div class="-mt-1 shrink-0" title=${title} aria-label=${title}>
+  card: { id: string; body: TemplateResult } | null;
     <div class=${`flex h-5 relative rounded-sm overflow-hidden ${track}`} style=${`width:${barWidth}px`}>
       ${segments.map(s => {
         const width = Math.max(s.widthPct, minPct);
@@ -3560,6 +3609,34 @@ const skeletonColumns = (columns: string[]) => (columns.length ? columns : SKELE
 
 // A skeleton cell mirrors the real column layout by name (col-id is the narrow
 // stripe, latency_breakdown is sticky-right) so header pills line up over rows.
+
+  // The card lives in the top layer, because nothing else escapes the row. Rows carry
+  // `contain: layout style paint` for the virtualiser, and paint containment is a hard clip
+  // boundary — an absolutely positioned card was snipped to the height of its own row, which
+  // left only the header line visible. `popover` is the one placement the clip cannot reach.
+  //
+  // `interestfor` opens it on hover *and* on keyboard focus with no script, and the popover
+  // dismisses on Escape, which a CSS tooltip cannot do. Anchor positioning ties it back to the
+  // bar it describes: the card is no longer a descendant, so the anchor name carries the
+  // relationship the DOM no longer does. Left of the bar, since the latency column is last.
+  //
+  // No card means no button: a bar with nothing to break down is not a control, and making
+  // every row's bar focusable would put one tab stop per visible row before anything after
+  // the table. `aria-label` carries the flat sentence either way — a screen reader should not
+  // have to walk a grid to hear what the bar says.
+  if (!card) return html`<div class="-mt-1 shrink-0" role="img" aria-label=${title}>${bar}</div>`;
+  return html`
+    <button
+      type="button"
+      interestfor=${card.id}
+      style=${`anchor-name:--${card.id}`}
+      class="-mt-1 shrink-0 block p-0 m-0 border-0 bg-transparent cursor-default rounded-sm"
+      aria-label=${title}
+    >
+      ${bar}
+    </button>
+    <div popover="hint" id=${card.id} style=${`position-anchor:--${card.id}`} class="latency-card" aria-hidden="true">${card.body}</div>
+  `;
 const skeletonCell = (column: string) => {
   const isId = column === 'id';
   const isLatency = column === 'latency_breakdown';

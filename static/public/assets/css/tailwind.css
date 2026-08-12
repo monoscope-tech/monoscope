@@ -1208,6 +1208,58 @@ body, :host {
     box-shadow: var(--shadow-xs);
     padding-top: 1rem;
   }
+
+  /*
+    Log explorer latency bar hover card.
+
+    It lives in the top layer, because nothing else escapes the row: rows carry
+    `contain: layout style paint` for the virtualiser, and paint containment is a hard clip
+    boundary — an absolutely positioned card was snipped to the height of its own row, leaving
+    only its header line visible. A popover is the one placement that clip cannot reach, and it
+    dismisses on Escape, which a CSS-only tooltip cannot do.
+
+    Opened by `interestfor` on the bar (hover and keyboard focus, no script). Anchor positioning
+    carries the relationship the DOM no longer does — `inline-start` alone spans the block axis,
+    so the card centres on its bar and is free to extend past it; naming the block axis `center`
+    would confine it to the bar's own 20px, which every card overflows.
+  */
+  .latency-card {
+    position: fixed;
+    position-area: inline-start;
+    inset: auto;
+    margin: 0 0.5rem 0 0;
+    width: max-content;
+    max-width: 20rem;
+    padding: 0.5rem 0.625rem;
+    /* A strong border, not a weak one: this floats over the rows it describes rather than
+       sitting among them, so it needs an edge that reads as a separate surface. */
+    border: 1px solid var(--color-strokeStrong);
+    border-radius: var(--radius-field);
+    background-color: var(--color-bgRaised);
+    box-shadow: var(--shadow-lg);
+    font-size: 0.875rem;
+    line-height: 1.25;
+    overflow: visible;
+    /* Long enough not to fire while the pointer crosses the column on its way elsewhere,
+       short enough to feel like a tooltip when you stop on a row. */
+    interest-delay-start: 0.2s;
+    interest-delay-end: 0.1s;
+  }
+  /* Top-layer entry needs the discrete properties to be transitionable, or the card snaps in. */
+  @supports (transition-behavior: allow-discrete) {
+    .latency-card {
+      opacity: 0;
+      transition: opacity 0.12s ease-out, overlay 0.12s allow-discrete, display 0.12s allow-discrete;
+    }
+    .latency-card:popover-open {
+      opacity: 1;
+    }
+    @starting-style {
+      .latency-card:popover-open {
+        opacity: 0;
+      }
+    }
+  }
 }
 
 /*
