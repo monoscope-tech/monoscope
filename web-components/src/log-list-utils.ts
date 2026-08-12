@@ -250,17 +250,32 @@ export const dedupeById = <T extends { id: string | null | undefined }>(items: T
   });
 };
 
+// Whether the viewport is parked at the edge new rows arrive at. Newest-first (non-flip)
+// they enter at the top; oldest-first (flip) at the bottom.
+//
+// One predicate, three decisions, and they have to agree: whether to buffer a batch, whether
+// to flush the buffer again, and whether to anchor the scroll while inserting. Parked at the
+// edge, the row under the user's eye is the one being pushed down on purpose — anchoring
+// there scrolls the previous top row back into view every tick, a visible bounce that also
+// hides the rows just streamed in. Two spellings of "at the edge" would disagree somewhere,
+// and that somewhere is a live tail that either strands or bounces.
+//
+// The 2px is rounding, not a UX threshold: fractional scrollTop from a trackpad, browser
+// zoom or an anchor restore leaves values like 0.5, and a bare `> 0` reads that as "the user
+// has scrolled away" forever after. That is what stranded live tail — the pill counted up
+// while the list, visibly at the top, never took another row.
+export const atInsertionEdge = (scrollTop: number, scrolledToBottom: boolean, flipDirection: boolean): boolean =>
+  flipDirection ? scrolledToBottom : scrollTop <= 2;
+
 // Whether a live-stream batch should be buffered ("N new" pill) instead of inserted
-// immediately. Buffer whenever the user has scrolled away from the edge new rows
-// appear at — any scroll-off (>0), not an arbitrary 30px, so reading position
-// never jumps under them. Newest-first (non-flip): rows enter at top → buffer if
-// scrollTop>0. Oldest-first (flip): rows enter at bottom → buffer unless at bottom.
+// immediately. Buffer whenever the user has scrolled away from that edge, so their reading
+// position never jumps under them.
 export const shouldBufferRecent = (
   isLiveStreaming: boolean,
   scrollTop: number,
   scrolledToBottom: boolean,
   flipDirection: boolean,
-): boolean => isLiveStreaming && (flipDirection ? !scrolledToBottom : scrollTop > 0);
+): boolean => isLiveStreaming && !atInsertionEdge(scrollTop, scrolledToBottom, flipDirection);
 
 // Pagination cursor (ISO) from a row timestamp ± offset. Tolerates ISO strings and
 // numeric epochs in ns/µs/ms — `new Date(epochNs)` otherwise reads ns as ms and

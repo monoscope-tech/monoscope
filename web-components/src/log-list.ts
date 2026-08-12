@@ -35,6 +35,7 @@ import {
   generateId,
   dedupeById,
   shouldBufferRecent,
+  atInsertionEdge,
   oldestRowTimestamp,
   newestRowTimestamp,
   renderSparkline,
@@ -600,7 +601,7 @@ export class LogList extends LitElement {
       // what shouldBufferRecent decided), so the row under the user's eye is the one being
       // pushed down on purpose. Anchoring would scroll the previous top row back into view
       // every tick — a visible bounce that also hides the rows just streamed in.
-      const anchor = container && !this.atNewRowEdge(scrollTop, scrolledToBottom) ? this.captureScrollAnchor() : null;
+      const anchor = container && !atInsertionEdge(scrollTop, scrolledToBottom, this.flipDirection) ? this.captureScrollAnchor() : null;
       this.spanListTree = this.mergeIntoTree(tree, true);
       this.updateVisibleItems();
       if (anchor) void this.restoreScrollAnchor(anchor);
@@ -1520,7 +1521,7 @@ export class LogList extends LitElement {
           if (shouldBufferRecent(this.isLiveStreaming, scrollTop, scrolledToBottom, this.flipDirection)) {
             this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree, isRecentFetch);
           } else {
-            const anchor = revealRecent || this.atNewRowEdge(scrollTop, scrolledToBottom) ? null : this.captureScrollAnchor();
+            const anchor = revealRecent || atInsertionEdge(scrollTop, scrolledToBottom, this.flipDirection) ? null : this.captureScrollAnchor();
             this.spanListTree = this.mergeIntoTree(tree, isRecentFetch);
             this.updateVisibleItems();
             if (anchor) void this.restoreScrollAnchor(anchor);
@@ -1760,11 +1761,6 @@ export class LogList extends LitElement {
     return kept;
   }
 
-  // At the edge new rows are inserted at — top for newest-first, bottom when flipped.
-  private atNewRowEdge(scrollTop: number, scrolledToBottom: boolean): boolean {
-    return this.flipDirection ? scrolledToBottom : scrollTop <= 0;
-  }
-
   private captureScrollAnchor(): ScrollAnchor | null {
     const container = this.logsContainer;
     if (!container || this.mode !== 'logs') return null;
@@ -1804,6 +1800,15 @@ export class LogList extends LitElement {
     this.handleRecentConcatenation();
   }
 
+  // Flush the live-tail buffer if the viewport is parked at the edge new rows arrive at.
+  // Public so the visibility handler and any future scroll source share one rule.
+  resumeLiveTailAtEdge() {
+    const container = this.logsContainer;
+    if (!container || !this.isLiveStreaming || this.recentDataToBeAdded.length === 0) return;
+    const scrolledToBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 1;
+    if (atInsertionEdge(container.scrollTop, scrolledToBottom, this.flipDirection)) this.handleRecentConcatenation();
+  }
+
   handleRecentConcatenation() {
     if (this.recentDataToBeAdded.length === 0) return;
     this.spanListTree = this.mergeIntoTree(this.recentDataToBeAdded, true);
@@ -1832,6 +1837,12 @@ export class LogList extends LitElement {
     this.scrollEndTimer = setTimeout(() => {
       this.isScrolling = false;
     }, 50);
+
+    // Scrolling back to where new rows arrive resumes the live tail. Buffering exists so a
+    // batch never yanks the viewport out from under someone reading mid-list; back at the
+    // edge there is nothing to protect, and without this the only way out of the buffer was
+    // to click the pill — so it counted up indefinitely while the list sat still.
+    this.resumeLiveTailAtEdge();
 
     // Debounced chart update (runs at most every 100ms)
     this.debouncedUpdateChartMarkArea();
@@ -2471,6 +2482,11 @@ export class LogList extends LitElement {
                   segments,
                   frame,
                   title: latencyTitle(this.latencyDim, { startNs, duration, traceStart }, ownSegments),
+                  // The id is both an element id and half of a `--dashed-ident` anchor name, so
+                  // it has to survive as a CSS identifier — span ids are hex but log ids are not.
+                  card: ownSegments.length
+                    ? { id: `lat-${String(rowData.id ?? '').replace(/[^\w-]/g, '_')}`, body: latencyTooltip({ startNs, duration, traceStart, color }, ownSegments) }
+                    : null,
                   barWidth: currentWidth - 12,
                 })}
                 <span class="w-1"></span>
@@ -2482,11 +2498,6 @@ export class LogList extends LitElement {
             content: latencyHtml,
             width: currentWidth,
             expanded: expanded,
-                  // The id is both an element id and half of a `--dashed-ident` anchor name, so
-                  // it has to survive as a CSS identifier — span ids are hex but log ids are not.
-                  card: ownSegments.length
-                    ? { id: `lat-${String(rowData.id ?? '').replace(/[^\w-]/g, '_')}`, body: latencyTooltip({ startNs, duration, traceStart, color }, ownSegments) }
-                    : null,
             dim: this.latencyDim,
           };
         }
@@ -3561,12 +3572,14 @@ export function spanLatencyBreakdown({
   track,
   segments,
   title,
+  card,
   barWidth,
   frame,
 }: {
   track: string;
   segments: LatencySegment[];
   title: string;
+  card: { id: string; body: TemplateResult } | null;
   barWidth: number;
   frame: boolean;
 }) {
@@ -3578,9 +3591,7 @@ export function spanLatencyBreakdown({
   // sub-pixel on a 120px column, which renders as nothing at all. Pushing left back by the
   // floored width keeps a mark at the far end inside the bar instead of clipped away.
   const minPct = (3 / Math.max(barWidth, 1)) * 100;
-  return html`<div class="-mt-1 shrink-0" title=${title} aria-label=${title}>
-  card: { id: string; body: TemplateResult } | null;
-    <div class=${`flex h-5 relative rounded-sm overflow-hidden ${track}`} style=${`width:${barWidth}px`}>
+  const bar = html`<div class=${`flex h-5 relative rounded-sm overflow-hidden ${track}`} style=${`width:${barWidth}px`}>
       ${segments.map(s => {
         const width = Math.max(s.widthPct, minPct);
         return html`<div
@@ -3597,18 +3608,7 @@ export function spanLatencyBreakdown({
             <div class="absolute top-1/2 -translate-y-1/2 left-0 w-full h-px bg-strokeBrand-strong shadow-[0_0_2px_var(--color-strokeBrand-weak)]"></div>
           </div>`
         : nothing}
-    </div>
   </div>`;
-}
-
-// Fallback column set used only when logsColumns hasn't loaded yet, so the
-// skeleton still resembles the real table (narrow id stripe → fields → latency).
-const SKELETON_FALLBACK_COLUMNS = ['id', 'timestamp', 'service', 'summary', 'latency_breakdown'];
-
-const skeletonColumns = (columns: string[]) => (columns.length ? columns : SKELETON_FALLBACK_COLUMNS);
-
-// A skeleton cell mirrors the real column layout by name (col-id is the narrow
-// stripe, latency_breakdown is sticky-right) so header pills line up over rows.
 
   // The card lives in the top layer, because nothing else escapes the row. Rows carry
   // `contain: layout style paint` for the virtualiser, and paint containment is a hard clip
@@ -3637,6 +3637,16 @@ const skeletonColumns = (columns: string[]) => (columns.length ? columns : SKELE
     </button>
     <div popover="hint" id=${card.id} style=${`position-anchor:--${card.id}`} class="latency-card" aria-hidden="true">${card.body}</div>
   `;
+}
+
+// Fallback column set used only when logsColumns hasn't loaded yet, so the
+// skeleton still resembles the real table (narrow id stripe → fields → latency).
+const SKELETON_FALLBACK_COLUMNS = ['id', 'timestamp', 'service', 'summary', 'latency_breakdown'];
+
+const skeletonColumns = (columns: string[]) => (columns.length ? columns : SKELETON_FALLBACK_COLUMNS);
+
+// A skeleton cell mirrors the real column layout by name (col-id is the narrow
+// stripe, latency_breakdown is sticky-right) so header pills line up over rows.
 const skeletonCell = (column: string) => {
   const isId = column === 'id';
   const isLatency = column === 'latency_breakdown';

@@ -1,7 +1,7 @@
 import { describe, test, expect, vi } from 'vitest';
 import { row, serverTransport, serverTransportFlipped, logPage, treeFromLogs, COLS, deferredTransport, stubFetch, ids, mountList, fakeLiveTransport } from './log-list-harness';
 import { DenseRowFlowLayout, virtualItemKey } from '../src/log-list';
-import { shouldBufferRecent, cursorFromTimestamp } from '../src/log-list-utils';
+import { shouldBufferRecent, atInsertionEdge, cursorFromTimestamp } from '../src/log-list-utils';
 
 describe('LogList — LOWER', () => {
   // Lo2: a resized-then-hidden column must not retain its width (which would
@@ -529,6 +529,79 @@ describe('LogList — lifecycle cleanup (no leaks across disconnect / remount)',
     el.remove();
     expect((el as any).workerCallbacks.size).toBe(0);
     expect(rejected).toBe(false);
+  });
+
+  // Bug: live tail stranded — the "N new" pill counted past 200 while the list, visibly at
+  // the top, never took another row. A fractional scrollTop (trackpad, zoom, anchor restore)
+  // read as "scrolled away" under a bare `> 0`, and nothing ever put it back.
+  test('a sub-pixel scroll offset is still the top, not a scroll-off', () => {
+    expect(atInsertionEdge(0.5, false, false)).toBe(true);
+    expect(shouldBufferRecent(true, 0.5, false, false)).toBe(false); // inserts, does not strand
+    expect(atInsertionEdge(10, false, false)).toBe(false); // a real scroll still buffers
+  });
+});
+
+describe('LogList — live tail resumes when scrolled back to the edge', () => {
+  // The buffer exists so a batch never yanks the viewport mid-read. Back at the edge there is
+  // nothing to protect, so it must flush on its own — clicking the pill was the only exit.
+  // The scroll position is stubbed rather than scrolled: under jsdom every height is 0, so a
+  // real container reads as "pinned to the bottom" and the two directions can't be told apart.
+  // Newest-first (flipDirection false) is the case in the report — rows enter at the top.
+  const withBuffer = async (scrollTop: number, over: Partial<Record<string, unknown>> = {}) => {
+    const el = await mountList();
+    Object.assign(el as any, { isLiveStreaming: true, flipDirection: false, recentDataToBeAdded: [row('n1'), row('n2')], ...over });
+    Object.defineProperty(el, 'logsContainer', { configurable: true, get: () => ({ scrollTop, clientHeight: 500, scrollHeight: 5000 }) });
+    return el;
+  };
+
+  test('flushes the buffer once the viewport is back at the insertion edge', async () => {
+    const el = await withBuffer(0);
+    (el as any).resumeLiveTailAtEdge();
+    expect((el as any).recentDataToBeAdded).toHaveLength(0);
+    expect(ids(el)).toEqual(expect.arrayContaining(['n1', 'n2']));
+  });
+
+  test('a sub-pixel offset counts as the edge, so live tail is never stranded 1px down', async () => {
+    const el = await withBuffer(0.5);
+    (el as any).resumeLiveTailAtEdge();
+    expect((el as any).recentDataToBeAdded).toHaveLength(0);
+  });
+
+  // One rule decides three things — buffer, flush, and whether to anchor the scroll. A second
+  // spelling of "at the edge" (there was briefly a private `atNewRowEdge` using `<= 0` beside
+  // the shared `<= 2`) makes them disagree in the gap: the batch inserts because it is at the
+  // edge, then anchors because it isn't, scrolling the old top row back over the rows just
+  // streamed in. Inserting at the edge must never capture an anchor.
+  // Both insertion paths, because they decide separately: a recent fetch and an SSE push.
+  test('inserting at a sub-pixel offset does not anchor the scroll (no bounce)', async () => {
+    const el = await withBuffer(0.5, { recentDataToBeAdded: [] });
+    const capture = vi.spyOn(el as any, 'captureScrollAnchor');
+
+    el.transport = serverTransport(logPage(['n1', 'n2']));
+    await el.fetchData('recent', false, true, false);
+    expect(capture).not.toHaveBeenCalled();
+
+    (el as any).colIdxMap = COLS;
+    (el as any).handleLiveRows([
+      {
+        shape: 'table',
+        cols: { timestamp: '2026-06-01T00:00:00.000Z', latency_breakdown: 'p1', trace_id: 'p1', parent_id: '', kind: 'log', id: 'p1', duration: 0, start_time_ns: Date.parse('2026-06-01T00:00:00.000Z') * 1e6 },
+      },
+    ]);
+    expect(capture).not.toHaveBeenCalled();
+    expect(ids(el)).toContain('p1'); // and the pushed row actually landed
+  });
+
+  test('holds the buffer while the reader is scrolled away', async () => {
+    const el = await withBuffer(400);
+    (el as any).resumeLiveTailAtEdge();
+    expect((el as any).recentDataToBeAdded).toHaveLength(2);
+  });
+
+  test('does nothing when live tail is off — a paused stream keeps its pill', async () => {
+    const el = await withBuffer(0, { isLiveStreaming: false });
+    (el as any).resumeLiveTailAtEdge();
+    expect((el as any).recentDataToBeAdded).toHaveLength(2);
   });
 });
 
