@@ -619,7 +619,9 @@ spec = around withTestResources do
           indexOf needle = T.length $ fst $ T.breakOn needle html
       html `shouldSatisfy` T.isInfixOf "id=\"main-content\""
       html `shouldSatisfy` T.isInfixOf "window.logDataPromise"
-      html `shouldSatisfy` T.isInfixOf "href=\"https://monoscope.tech/docs/dashboard/dashboard-pages/api-log-explorer/\" preload=\"false\""
+      -- htmx 4 (6de99be) renamed the attribute `preload` -> `hx-preload`; this
+      -- assertion kept the old spelling and so stopped checking anything real.
+      html `shouldSatisfy` T.isInfixOf "href=\"https://monoscope.tech/docs/dashboard/dashboard-pages/api-log-explorer/\" hx-preload=\"false\""
       indexOf "id=\"main-content\"" `shouldSatisfy` (< indexOf "window.logDataPromise")
 
   describe "Trace fullscreen loading" do
