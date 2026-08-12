@@ -14,6 +14,7 @@ module Pkg.Git (
   -- * Hosts
   GitHost (..),
   hostSlug,
+  parseHostSlug,
   hostLabel,
   hostOriginRule,
   OriginRule (..),

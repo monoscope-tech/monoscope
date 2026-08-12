@@ -50,7 +50,7 @@ codeContextH pid fileM lineM svcM revM = do
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   case (nonBlank fileM, lineM) of
     (Just path, Just n) ->
-      W.runHTTPWreq (CodeContext.fetchSnippet authCtx.config pid svcM (nonBlank revM) path n)
+      W.runHTTPWreq (CodeContext.fetchSnippet authCtx.codeBlobCache authCtx.config pid svcM (nonBlank revM) path n)
         >>= addRespHeaders
         . either reason_ snippet_
     _ -> addRespHeaders $ note_ "This frame has no file and line to look up." Nothing

@@ -29,6 +29,8 @@ import Network.Wreq qualified as Wreq
 import Pages.GitSync (GitSyncForm (..))
 import Pkg.Git qualified as Git
 import System.Config (AuthContext (..), EnvConfig (..))
+import Effectful (runEff)
+import Data.Effectful.Wreq qualified as W
 import Data.ByteString.Base16 qualified as B16
 import Data.ByteArray qualified as BA
 import "cryptonite" Crypto.Hash.Algorithms (SHA256)
@@ -246,6 +248,7 @@ spec :: Spec
 -- Uses aroundAll + beforeAll (shared resource across examples), so it can't use the
 -- per-test isolation the rest of the suite relies on for parallelism. Run sequentially.
 spec = sequential do
+  liveSmokeSpec
   -- Layer 1: Unit/Integration tests (no external deps)
   aroundAll withTestResources do
     describe "GitHub Sync Settings" do
@@ -625,3 +628,77 @@ spec = sequential do
             BS.isInfixOf "Original" content `shouldBe` True
 
 
+
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- Live smoke test — any host, opt-in
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- | Coordinates for a real repository on a real host, from the environment.
+--
+-- Deliberately host-agnostic where the GitHub E2E block above is not: the thing that needs
+-- proving against a live vendor is that "Pkg.Git" speaks its dialect, and that is the same
+-- five operations everywhere. Set @GIT_SMOKE_HOST@ (github|gitlab|bitbucket|gitea),
+-- @GIT_SMOKE_TOKEN@, @GIT_SMOKE_OWNER@, @GIT_SMOKE_REPO@, optionally @GIT_SMOKE_ORIGIN@ (the
+-- server URL, required for Gitea) and @GIT_SMOKE_BRANCH@ (default @main@).
+data SmokeConfig = SmokeConfig
+  { conn :: Git.GitConn
+  , repoRef :: Git.RepoRef
+  }
+
+
+loadSmokeConfig :: IO (Maybe SmokeConfig)
+loadSmokeConfig = do
+  hostM <- (>>= Git.parseHostSlug . toText) <$> lookupEnv "GIT_SMOKE_HOST"
+  tokenM <- fmap toText <$> lookupEnv "GIT_SMOKE_TOKEN"
+  ownerM <- fmap toText <$> lookupEnv "GIT_SMOKE_OWNER"
+  repoM <- fmap toText <$> lookupEnv "GIT_SMOKE_REPO"
+  origin <- fmap toText <$> lookupEnv "GIT_SMOKE_ORIGIN"
+  branch <- maybe "main" toText <$> lookupEnv "GIT_SMOKE_BRANCH"
+  pure do
+    host <- hostM
+    token <- tokenM
+    owner <- ownerM
+    repo' <- repoM
+    c <- rightToMaybe $ Git.mkGitConn host origin token
+    pure $ SmokeConfig c (Git.RepoRef owner repo' branch)
+
+
+-- | One pass over every operation the sync path uses, against the real host.
+--
+-- This is the check the mock contract tests cannot make: that the URLs we build are URLs the
+-- vendor recognises, and that its actual response shape decodes. It writes one file into the
+-- configured repository under @monoscope-smoke\/@ and reads it back — so point it at a
+-- scratch repository, not a real one.
+--
+-- **Never run in CI as written**: it needs a token with write access to a real repository.
+liveSmokeSpec :: Spec
+liveSmokeSpec = do
+  cfgM <- runIO loadSmokeConfig
+  case cfgM of
+    Nothing ->
+      describe "Live git host smoke test"
+        $ it "SKIPPED - set GIT_SMOKE_HOST, GIT_SMOKE_TOKEN, GIT_SMOKE_OWNER, GIT_SMOKE_REPO to enable" pending
+    Just cfg -> describe ("Live git host smoke test (" <> toString (Git.hostLabel cfg.conn.host) <> ")") do
+      it "lists repositories" do
+        r <- runEff $ W.runHTTPWreq $ Git.listRepos cfg.conn
+        r `shouldSatisfy` isRight
+
+      it "reports a default branch" do
+        b <- runEff $ W.runHTTPWreq $ Git.defaultBranchOf cfg.conn cfg.repoRef
+        b `shouldSatisfy` not . T.null
+
+      it "round-trips a write, a listing and a read at the sha it reported" do
+        let path = "monoscope-smoke/probe.yaml"
+            body = "title: monoscope smoke probe\n"
+        (sha, _rev) <- runEff (W.runHTTPWreq $ Git.pushFile cfg.conn cfg.repoRef path body Nothing "monoscope smoke test") >>= either (fail . toString) pure
+
+        -- The sha we recorded must be the one a fresh listing reports, or `buildSyncPlan`
+        -- will see a phantom change on the very next pull.
+        (_, entries) <- runEff (W.runHTTPWreq $ Git.fetchTree cfg.conn cfg.repoRef "monoscope-smoke/") >>= either (fail . toString) pure
+        find ((== path) . (.path)) entries `shouldSatisfy` \case
+          Just e -> e.sha == Just sha
+          Nothing -> False
+
+        readBack <- runEff (W.runHTTPWreq $ Git.fetchFile cfg.conn cfg.repoRef path) >>= either (fail . toString) pure
+        readBack `shouldBe` body

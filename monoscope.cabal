@@ -478,6 +478,7 @@ library
     , time
     , time-manager
     , tmp-postgres
+    , transformers
     , typed-process
     , tz
     , unix
@@ -735,6 +736,7 @@ test-suite integration-tests
     , text-display
     , these
     , time
+    , transformers
     , unliftio
     , unordered-containers
     , uuid
@@ -1120,6 +1122,7 @@ test-suite test-dev
     , time
     , time-manager
     , tmp-postgres
+    , transformers
     , typed-process
     , tz
     , unix
@@ -1157,6 +1160,7 @@ test-suite unit-tests
       Models.Telemetry.MetricServiceNameSpec
       Models.Telemetry.TimestampMicrosSpec
       Pkg.DrainSpec
+      Pkg.GitSpec
       Pkg.Parser.ExprSpec
       Pkg.ParserSpec
       Pkg.QueryCacheSpec
@@ -1207,6 +1211,7 @@ test-suite unit-tests
     , hasql-pool
     , hs-opentelemetry-instrumentation-auto
     , hspec
+    , http-client
     , http-types
     , lens
     , log-base

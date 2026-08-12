@@ -3501,32 +3501,37 @@ gitSyncFromRepo :: Projects.ProjectId -> ATBackgroundCtx ()
 gitSyncFromRepo pid = do
   Log.logInfo "Starting git sync for project" pid
   withGitSync pid \conn sync ->
-    -- Scoped to the dashboards folder: it is all this job reads, it lets GitLab and Bitbucket
-    -- filter server-side, and on Bitbucket it is what bounds the per-file sha backfill.
-    Git.fetchTree conn (GitSync.syncRepoRef sync) (GitSync.getDashboardsPath sync) >>= \case
-      Left err -> Log.logAttention "Failed to list repository" (pid, Git.hostSlug sync.host, err)
-      Right (revision, entries)
-        | sync.lastRevision == Just revision -> Log.logInfo "Revision unchanged, skipping sync" (pid, revision)
-        | otherwise -> do
-            dbState <- GitSync.getDashboardGitState pid
-            allTeams <- ProjectMembers.getTeamsVM pid
-            let teamMap = Map.fromList [(t.handle, t.id) | t <- allTeams]
-                prefix = GitSync.getDashboardsPath sync
-                actions = GitSync.buildSyncPlan prefix entries dbState
-                creates = [a | a@GitSync.SyncCreate{} <- actions]
-                updates = [a | a@GitSync.SyncUpdate{} <- actions]
-                deletes = [(path, dashId) | GitSync.SyncDelete path dashId <- actions]
-            Log.logInfo "Git sync plan" ("creates" :: Text, length creates, "updates" :: Text, length updates, "deletes" :: Text, length deletes)
-            -- Fetch file contents in parallel for creates and updates
-            Ki.scoped \scope -> do
-              forM_ (creates <> updates) $ forkWithCtx scope . processGitSyncAction pid conn sync teamMap
-              Ki.atomically $ Ki.awaitAll scope
-            -- Process deletes (no HTTP needed)
-            forM_ deletes \(path, dashId) -> do
-              _ <- Dashboards.deleteDashboard dashId
-              Log.logInfo "Deleted dashboard (removed from git)" (path, dashId)
-            _ <- GitSync.updateLastRevision sync.id revision
-            Log.logInfo "Completed git sync for project" pid
+    Metrics.timed Metrics.gitSyncHist [("host", OA.toAttribute $ Git.hostSlug sync.host)]
+      $
+      -- Scoped to the dashboards folder: it is all this job reads, it lets GitLab and Bitbucket
+      -- filter server-side, and on Bitbucket it is what bounds the per-file sha backfill.
+      Git.fetchTree conn (GitSync.syncRepoRef sync) (GitSync.getDashboardsPath sync)
+      >>= \case
+        Left err -> do
+          Metrics.bump Metrics.gitApiErrors [("host", OA.toAttribute $ Git.hostSlug sync.host), ("operation", OA.toAttribute ("fetch_tree" :: Text))]
+          Log.logAttention "Failed to list repository" (pid, Git.hostSlug sync.host, err)
+        Right (revision, entries)
+          | sync.lastRevision == Just revision -> Log.logInfo "Revision unchanged, skipping sync" (pid, revision)
+          | otherwise -> do
+              dbState <- GitSync.getDashboardGitState pid
+              allTeams <- ProjectMembers.getTeamsVM pid
+              let teamMap = Map.fromList [(t.handle, t.id) | t <- allTeams]
+                  prefix = GitSync.getDashboardsPath sync
+                  actions = GitSync.buildSyncPlan prefix entries dbState
+                  creates = [a | a@GitSync.SyncCreate{} <- actions]
+                  updates = [a | a@GitSync.SyncUpdate{} <- actions]
+                  deletes = [(path, dashId) | GitSync.SyncDelete path dashId <- actions]
+              Log.logInfo "Git sync plan" ("creates" :: Text, length creates, "updates" :: Text, length updates, "deletes" :: Text, length deletes)
+              -- Fetch file contents in parallel for creates and updates
+              Ki.scoped \scope -> do
+                forM_ (creates <> updates) $ forkWithCtx scope . processGitSyncAction pid conn sync teamMap
+                Ki.atomically $ Ki.awaitAll scope
+              -- Process deletes (no HTTP needed)
+              forM_ deletes \(path, dashId) -> do
+                _ <- Dashboards.deleteDashboard dashId
+                Log.logInfo "Deleted dashboard (removed from git)" (path, dashId)
+              _ <- GitSync.updateLastRevision sync.id revision
+              Log.logInfo "Completed git sync for project" pid
 
 
 processGitSyncAction :: (DB es, Log :> es, Time.Time :> es, W.HTTP :> es) => Projects.ProjectId -> Git.GitConn -> GitSync.GitHubSync -> Map.Map Text UUID.UUID -> GitSync.SyncAction -> Eff es ()

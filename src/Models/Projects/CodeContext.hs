@@ -20,6 +20,8 @@ module Models.Projects.CodeContext (
   fetchSnippet,
 ) where
 
+import Data.Cache (Cache)
+import Data.Cache qualified as Cache
 import Data.Default (Default (..))
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Wreq qualified as W
@@ -275,7 +277,13 @@ sliceAround ctx focus ls
 -- already configured.
 fetchSnippet
   :: (DB es, Log :> es, W.HTTP :> es)
-  => Config.EnvConfig
+  => Cache Config.CodeBlobKey ByteString
+  -- ^ Blob cache. One git-host API call per frame opened without it, and a hot issue viewed
+  -- repeatedly re-fetches every time; a rate-limit stall then presents as the panel silently
+  -- not filling in. Cached on the blob fetch alone, so the mapping lookup, the credential
+  -- decrypt and the token exchange still run — a revoked credential fails on the next view,
+  -- not 15 minutes later.
+  -> Config.EnvConfig
   -> ProjectId
   -> Maybe Text
   -> Maybe Text
@@ -284,7 +292,7 @@ fetchSnippet
   -> Text
   -> Int
   -> Eff es (Either SnippetError Snippet)
-fetchSnippet cfg pid svc revM path lineNo = runExceptT do
+fetchSnippet blobCache cfg pid svc revM path lineNo = runExceptT do
   mappings <- lift $ getCodeMappings pid
   (cm, repoPath) <- hoistEither $ maybeToRight (NoMapping path) $ resolveRepoPath mappings svc path
   let repoRef = GitSync.RepoRef cm.owner cm.repo (fromMaybe cm.ref revM)
@@ -293,6 +301,15 @@ fetchSnippet cfg pid svc revM path lineNo = runExceptT do
   creds <- hoistEither $ maybeToRight CredentialGone $ credentialCreds cred
   token <- ExceptT $ first (ReadFailed located) <$> githubToken cfg.githubAppId cfg.githubAppPrivateKey creds
   conn <- hoistEither $ first (ReadFailed located) $ credentialConn cred token
-  blob <- ExceptT $ first (ReadFailed located) <$> Git.fetchFile conn repoRef repoPath
+  let blobKey = (cm.owner, cm.repo, repoRef.ref, repoPath)
+  cached <- liftIO $ Cache.lookup blobCache blobKey
+  blob <- case cached of
+    Just b -> pure b
+    Nothing -> do
+      -- Only a success is stored: caching a failure would keep a transient 502 or a
+      -- just-revoked token on screen for the whole TTL.
+      b <- ExceptT $ first (ReadFailed located) <$> Git.fetchFile conn repoRef repoPath
+      liftIO $ Cache.insert blobCache blobKey b
+      pure b
   (\s -> s{path = repoPath})
     <$> hoistEither (maybeToRight (LineOutOfRange repoPath lineNo repoRef.ref) $ sliceAround 5 lineNo (lines (decodeUtf8 blob)))
