@@ -32,6 +32,7 @@ import Network.Wai.Handler.Warp (defaultSettings, runSettings, setGracefulShutdo
 import Network.Wai.Log qualified as WaiLog
 import Network.Wai.Middleware.Cors
 import Network.Wai.Middleware.Gzip (GzipFiles (..), GzipSettings (..), defaultGzipSettings, gzip)
+import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Instrumentation.Wai (newOpenTelemetryWaiMiddleware)
 import OpenTelemetry.Trace (TracerProvider)
 import Opentelemetry.OtlpServer qualified as OtlpServer
@@ -39,6 +40,7 @@ import Pages.Replay (processReplayEvents)
 import Pkg.DeriveUtils (staticAssetHashes, stripAssetHash)
 import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Pkg.LiveTail qualified as LiveTail
+import Pkg.Metrics qualified as Metrics
 import Pkg.Queue qualified as Queue
 import ProcessMessage (processMessages)
 import Relude
@@ -152,6 +154,8 @@ liveTailCacheRefresher appLogger env tp =
     rows <- runBackground appLogger env tp (LiveTail.activeSubscriptions LiveTail.maxCached)
     now <- getCurrentTime
     bad <- LiveTail.refreshSubCache env.liveTail.cache now rows
+    Metrics.recordMs Metrics.liveTailCacheLoaded (fromIntegral (length rows)) []
+    Metrics.count Metrics.liveTailCacheRejected (length bad) []
     unless (null bad) do
       -- The log is for us; the notice is for the person staring at a tail that will never
       -- produce another row. Without it the only symptom is silence, which reads as "nothing
@@ -171,6 +175,7 @@ liveTailRelayFlusher :: LogBase.Logger -> AuthContext -> TracerProvider -> IO ()
 liveTailRelayFlusher appLogger env tp =
   liveTailFiber appLogger "relay flush" LiveTail.relayPollMs do
     (pending, lost) <- LiveTail.takeRelayBuffer env.liveTail.relayBuffer
+    Metrics.count Metrics.liveTailRelayDropped lost []
     -- Overflow means the writer fell behind ingest; the rows are gone either way, but going
     -- quietly is what makes it undiagnosable.
     when (lost > 0)
@@ -258,6 +263,10 @@ liveTailConsumer appLogger env topic = do
 reportSkew :: LogBase.Logger -> IORef (Int, Int) -> IORef UTCTime -> IO ()
 reportSkew appLogger skewed lastReport = everyN 60 lastReport do
   (vers, bad) <- atomicModifyIORef' skewed ((0, 0),)
+  -- Shared by the Kafka consumer and the relay poller, so both transports report a skew the
+  -- same way. `reason` is bounded to these two values.
+  Metrics.count Metrics.liveTailDecodeFailed vers [("reason", OA.toAttribute ("skew" :: Text))]
+  Metrics.count Metrics.liveTailDecodeFailed bad [("reason", OA.toAttribute ("undecodable" :: Text))]
   when (vers > 0 || bad > 0)
     $ liveTailLog
       appLogger

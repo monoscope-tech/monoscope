@@ -26,6 +26,7 @@ import OpenTelemetry.Attributes qualified as OA
 import Pages.Charts.Types (DataType (..), MetricsData (..), MetricsStats (..))
 import Pkg.Components.TimePicker qualified as Components
 import Pkg.DeriveUtils (DB)
+import Pkg.Metrics qualified as Metrics
 import Pkg.Parser (QueryComponents (finalSummarizeQuery, whereClause), SqlQueryCfg (..), defSqlQueryCfg, pSource, queryASTToComponents, replacePlaceholders, variablePresets, variablePresetsKQL)
 import Pkg.Parser.Stats (QueryError (..), Section (..), Sources (..), parseQueryDiagnosed)
 import Pkg.QueryCache qualified as QC
@@ -308,7 +309,9 @@ withChartSpan tbl attrs sqlQuery fallback action =
     -- sanitizeBackendError covers both Postgres ("column \"x\" does not exist") and
     -- TimeFusion's wrapped form; the raw error stays on the span + log line.
     let userMsg = Utils.sanitizeBackendError . toText $ displayException e
-    -- TODO(otel-metrics): widget_sql_error{project_id, error_class=userMsg}
+    -- Unlabelled on purpose — project id and the sanitised error text are both unbounded, and
+    -- both are already on the span and the log line below. See 'Metrics.widgetSqlErrors'.
+    Metrics.count Metrics.widgetSqlErrors 1 []
     Log.logAttention
       "widget SQL execution failed; rendering error overlay"
       (AE.object ["error" AE..= show @Text e, "sql" AE..= unwords (words sqlQuery), "error_message" AE..= userMsg])

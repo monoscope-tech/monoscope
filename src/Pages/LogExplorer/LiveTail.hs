@@ -37,6 +37,7 @@ import Network.HTTP.Media qualified as M
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx)
 import Pkg.DeriveUtils (idFromText)
 import Pkg.LiveTail qualified as LT
+import Pkg.Metrics qualified as Metrics
 import Relude
 import Servant qualified
 import Servant.API (Accept (..), Headers, MimeRender (..), addHeader)
@@ -251,20 +252,29 @@ liveTailStreamH pid rawSid = do
 -- the terminal step is what stops an abandoned connection leaking its queue for the lifetime
 -- of the pod, and it runs whether the client disconnected or the stream ended on its own.
 streamFrom :: LT.Subscription -> LT.Conn -> IO () -> Servant.SourceIO Builder
-streamFrom sub conn detach = SourceT \k -> k start `finally` detach
+streamFrom sub conn detach = SourceT \k -> do
+  -- The drop count on the connection is cumulative — that is what the browser needs, since it
+  -- renders a total. A counter needs the opposite, so the last reported value is held here and
+  -- only the delta is added; feeding the running total to 'Metrics.count' would count every
+  -- drop again on every batch.
+  reported <- newIORef (0 :: Int)
+  k (start reported) `finally` detach
   where
-    start =
+    start reported =
       Yield
         (sseFrame "ready" (AE.object ["subscription_id" AE..= sub.id.toText, "expires_at" AE..= sub.expiresAt]))
-        loop
+        (loop reported)
 
     -- Waking on a timeout rather than blocking outright is what lets an idle tail emit a
     -- heartbeat. A tail on a quiet service is the normal case, and a proxy that has seen no
     -- bytes will close the connection — without this, "idle" and "dead" look the same to
     -- every hop between here and the browser.
-    loop = Effect do
-      LT.takeBatchWithin heartbeatMicros conn <&> \case
-        Nothing -> Yield (sseComment "keep-alive") loop
+    loop reported = Effect do
+      batchM <- LT.takeBatchWithin heartbeatMicros conn
+      whenJust batchM \(_, dropped) ->
+        atomicModifyIORef' reported (dropped,) >>= \was -> Metrics.count Metrics.liveTailBrowserDropped (dropped - was) []
+      pure case batchM of
+        Nothing -> Yield (sseComment "keep-alive") (loop reported)
         Just (batch, dropped) -> do
           -- Notices ride the row queue because that is the only path addressed to this
           -- connection, but they are not rows and must not reach the table renderer.
@@ -274,17 +284,17 @@ streamFrom sub conn detach = SourceT \k -> k start `finally` detach
           -- a frame called @error@ arrives at the client's @onerror@ handler, which retries.
           -- The one event that means "retrying will not help" would have been the one event
           -- guaranteed to trigger a retry.
-          foldr (\m -> Yield (sseFrame "notice" (AE.object ["message" AE..= m]))) (rowsThen rows dropped) notices
+          foldr (\m -> Yield (sseFrame "notice" (AE.object ["message" AE..= m]))) (rowsThen reported rows dropped) notices
 
     -- A batch of only notices must not yield an empty @log@ frame: the client appends what it
     -- receives, and an empty append is a re-render for nothing.
-    rowsThen rows dropped
+    rowsThen reported rows dropped
       | null rows = continue
       | otherwise = Yield (sseFrame "log" (AE.toJSON rows)) continue
       where
         -- Cumulative, so re-sending it alongside every batch is harmless: the browser renders
         -- a total ("4,812 dropped — narrow your filter"), not a delta.
-        continue = if dropped > 0 then Yield (sseFrame "dropped" (AE.object ["count" AE..= dropped])) loop else loop
+        continue = if dropped > 0 then Yield (sseFrame "dropped" (AE.object ["count" AE..= dropped])) (loop reported) else loop reported
 
     asNotice = \case
       LT.Notice msg -> Left msg

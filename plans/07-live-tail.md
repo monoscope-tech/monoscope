@@ -56,7 +56,7 @@ Use explicit SSE event names:
 | `ready` | Subscription ID and lease expiry time. | Done |
 | `log` | One bounded Live Tail row. | Done |
 | `dropped` | Cumulative records dropped by this browser connection. | Done |
-| `error` | A recoverable stream error code and safe message. | **Not implemented.** The server never emits an `error` frame. The client has an `error` *state*, but it is inferred from a failed registration POST or `EventSource.onerror` — i.e. from transport failure, not from anything the server chose to say. |
+| `notice` | A recoverable stream error, as a safe message. | **Done**, but renamed from `error`. EventSource dispatches on the frame's event name, and `error` is already its own transport-failure event — a frame called `error` arrives at the client's `onerror` handler, which *retries*. The one event meaning "retrying will not help" would have been the one event guaranteed to trigger a retry. Carried as a `Notice` row over the same addressed transport, so it reaches the pod actually holding the connection; sent today when a stored filter stops compiling. |
 
 Do not put credentials, internal errors, or KQL parser details in SSE error events.
 
@@ -369,8 +369,8 @@ or disconnect and miss records until resume.
    are on master; there is no configuration left to deploy, and no dark-deploy switch. Steps 4
    and 7 below are void for the same reason: there is no feature flag to stage a rollout with,
    and no operator-set limits to tighten.
-3. **Not done.** Verify cache, Kafka, lease, and drop metrics in staging — blocked on the metric
-   set, which is blocked on the OTel metrics API.
+3. **Not done, but no longer blocked** — the metric set landed (step 11); this is now just the
+   act of looking at them in staging.
 4. ~~Enable the feature for internal projects only.~~ **Void** — no flag; ships on for everyone.
 5. **Not done.** Load-test many subscriptions against high-volume projects.
 6. **Not done.** Verify that ingest latency and write success do not change materially.
@@ -676,10 +676,9 @@ Ordered by what would actually catch a defect:
 
 ### Blocked or needs production
 
-11. **The metric set** in the Observability section — blocked on the OTel metrics API
-    (`TODO(otel-metrics)` elsewhere in the tree). `PublishStats` counts
-    evaluated/matched/failed/publish-failed today, but nothing exports them, which is also what
-    makes rollout step 3 (verify metrics in staging) impossible.
+11. ~~**The metric set**~~ **Done** — declared in `Pkg.Metrics`, recorded where the counts
+    happen. The "blocked on the OTel metrics API" claim was stale: the API had already landed
+    in the pinned `hs-opentelemetry` commit, and `Pkg.Metrics` was already using it.
 12. **Load test** against many subscriptions on high-volume projects (rollout step 5).
 13. **Ingest-latency and write-success comparison** (rollout step 6). The ingest hook is live in
     every deployment because the feature ships on, so this is the measurement that matters most.

@@ -102,6 +102,7 @@ import Pkg.EmailTemplates qualified as ET
 import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Pkg.Git qualified as Git
 import Pkg.Mail (NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendDiscordAlertWith, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendSlackAlertWith, sendSlackMessage, sendWhatsAppAlert)
+import Pkg.Metrics qualified as Metrics
 import Pkg.Parser
 import Pkg.PatternMerge qualified as PatternMerge
 import Pkg.QueryCache qualified as QueryCache
@@ -2420,7 +2421,8 @@ processEagerBatch batch shard
         -- The hash-only update is TF-compatible; PG retains the JSON/path enrichment.
         Log.logTrace "Eager-track UPDATE-1 complete" (AE.object ["project_id" AE..= pid.toText, "span_count" AE..= V.length spans, "rows_updated" AE..= rowsUpdated, "hash_merge_skipped" AE..= (not ctx.config.enableHashUpdates || batch.batchMaxTs < hashCutoff)])
 
-        -- TODO(otel-metrics): emit counters for batches_processed, spans_processed here.
+        Metrics.count Metrics.ingestBatchesProcessed 1 []
+        Metrics.count Metrics.ingestSpansProcessed (V.length spans) []
         -- Drain-track hand-off: buffer spans for pattern tagging (T.copy to unpin).
         let bufferedSpans :: [(Text, ExtractionWorker.BufferedSpan)]
             bufferedSpans = V.toList $ V.zipWith3 buildBuffered spans spanIdsV traceIdsV
@@ -2711,15 +2713,18 @@ flushDrainTask shard task
         when (ctx.config.enableHashUpdates && maxTs >= hashCutoff)
           $ void
           $ dualExecPgTf ctx update2Sql
-      -- TODO(otel-metrics): emit counters for drain_flushes_completed, spans_flushed, patterns_persisted.
+      Metrics.count Metrics.drainFlushesCompleted 1 []
+      Metrics.count Metrics.drainSpansFlushed (length task.spans) []
+      Metrics.count Metrics.drainPatternsPersisted (length ups) []
       Log.logTrace "Drain-flush complete" (AE.object ["project_id" AE..= pid.toText, "service" AE..= svcName, "span_count" AE..= length task.spans, "pattern_count" AE..= length ups])
 
 
 -- | Age-flush timer fiber. Every 10 s: (1) evict age-stale buffers,
 -- (2) enforce global maxBufferedSpans by force-flushing the largest buffer,
 -- (3) LRU-evict drainTrees entries older than 1 hour or exceeding maxDrainTrees.
--- TODO(otel-metrics): periodically export batches_processed, spans_processed,
--- dropped_batches, dropped_flush_tasks, drain_flushes_completed as OTel counters.
+-- Counters for batches/spans processed, dropped batches and drain flushes are emitted at the
+-- points they happen (see "Pkg.Metrics"), not exported on this timer — a periodic re-export of
+-- a running total would double-count against instruments that are already cumulative.
 runDrainAgeFlushTimer :: Logger -> Config.AuthContext -> IO ()
 runDrainAgeFlushTimer logger ctx = forever $ do
   threadDelay 10_000_000 -- 10 s

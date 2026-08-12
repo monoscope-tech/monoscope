@@ -75,6 +75,7 @@ import OpenTelemetry.Trace (TracerProvider)
 import Pkg.DeriveUtils (AesonText (..), UUIDId (..), unUUIDId)
 import Pkg.ErrorMetrics (wireTypeErrorsRef)
 import Pkg.LiveTail qualified as LiveTail
+import Pkg.Metrics qualified as Metrics
 import Pkg.TraceSessionCache qualified as TSC
 import ProcessMessage (stampHashesAtIngest)
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
@@ -309,6 +310,15 @@ dualWriteWithPoisonMapping appCtx target label caches perMsg = do
 fanOutToLiveTail :: (IOE :> es, Log :> es) => AuthContext -> V.Vector Telemetry.OtelLogsAndSpans -> Eff es ()
 fanOutToLiveTail appCtx recs = do
   stats <- fold <$> traverse publishOne (HM.toList byProject)
+  -- Metrics before logs: these are rates, and the log lines below fire only on the failure
+  -- paths. Attributed by transport only — see the cardinality note in "Pkg.Metrics".
+  let transport = [("transport", OA.toAttribute (case appCtx.liveTail.transport of LiveTail.KafkaTopic _ -> "kafka" :: Text; LiveTail.PostgresRelay -> "relay"))]
+  Metrics.count Metrics.liveTailEvaluated (getSum stats.evaluated) transport
+  Metrics.count Metrics.liveTailMatched (getSum stats.matched) transport
+  Metrics.count Metrics.liveTailFilterErrors (getSum stats.failed) transport
+  Metrics.count Metrics.liveTailPublishFailed (getSum stats.publishFailed) transport
+  Metrics.count Metrics.liveTailOversized (getSum stats.oversized) transport
+  Metrics.count Metrics.liveTailSkipped (getSum stats.skipped) transport
   -- Aggregate, not per row: these fail for every row in a batch, so per-row logging would be a
   -- flood proportional to ingest volume rather than a diagnostic.
   when (getSum stats.failed > 0)
