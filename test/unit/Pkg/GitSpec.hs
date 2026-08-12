@@ -19,7 +19,7 @@ import Effectful
 import Effectful.Dispatch.Dynamic (interpret)
 -- The Response *constructor* is only exported from the .Internal module; the public one
 -- exports the type and its field selectors alone.
-import Network.HTTP.Client.Internal (Response (..), ResponseClose (..), createCookieJar, defaultRequest)
+import Network.HTTP.Client.Internal (HttpException (..), HttpExceptionContent (..), Response (..), ResponseClose (..), createCookieJar, defaultRequest)
 import Network.HTTP.Types.Status (Status (..))
 import Network.HTTP.Types.Version (http11)
 import Pkg.Git
@@ -270,3 +270,26 @@ spec = do
       -- A GitConn in an exception or a log line must not leak the credential; Sensitive is
       -- what makes that structural rather than a review comment.
       show (Sensitive @Text "glpat-secret") `shouldBe` ("<redacted>" :: String)
+
+  describe "throttling and non-2xx statuses" do
+    -- The canned interpreter above returns a status but never *throws*, whereas wreq raises
+    -- `StatusCodeException` on any non-2xx. So the existing "reports a non-2xx as an error"
+    -- example actually passes on a JSON decode failure of the `{}` fallback body, and the
+    -- status-reporting path — the one a live vendor exercises — had no coverage at all.
+    -- These drive `formatHttpError` directly, which is what `get_` funnels every host error
+    -- through, so they cover it without changing the interpreter's semantics.
+    it "names the status a host rejected us with, so a 429 is not read as an empty repository" \_ -> do
+      -- 429 is the one that matters operationally: rate limiting is indistinguishable from
+      -- "the repository is empty" if the status is dropped, and on the sync path an empty
+      -- listing means "delete every dashboard".
+      let rejected code = formatHttpError (HttpExceptionRequest defaultRequest (StatusCodeException (mkResponse code "" $> ()) ""))
+      rejected 429 `shouldBe` "HTTP 429"
+      rejected 403 `shouldBe` "HTTP 403" -- GitHub rate-limits as 403 with a header, not 429
+      rejected 404 `shouldBe` "HTTP 404"
+      rejected 500 `shouldBe` "HTTP 500"
+
+    it "describes a transport failure instead of pretending it was a status" \_ -> do
+      -- A connection reset has no status code; reporting it as one would send a reader
+      -- looking for a permissions problem that does not exist.
+      formatHttpError (HttpExceptionRequest defaultRequest ResponseTimeout) `shouldSatisfy` T.isInfixOf "request failed"
+      formatHttpError (InvalidUrlException "http://[" "bad host") `shouldSatisfy` T.isInfixOf "invalid URL"
