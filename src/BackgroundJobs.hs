@@ -1761,6 +1761,13 @@ claimDueErrorNotifications pid mHashes now =
             -- The issue the alert points at is acknowledged or archived: the user
             -- has already told us to stop. Filtered here rather than inside
             -- `candidates` so DISTINCT ON still picks the newest issue per pattern.
+            --
+            -- Note this also silences an explicit "Notify every N" subscription on
+            -- the same issue. Acknowledging is the later and more specific
+            -- instruction, and a silence that leaks one channel is not a silence.
+            -- To let a subscription outrank an ack instead ("I'm on it, but keep
+            -- reminding me"), add `e.subscribed OR` to the front of the ack
+            -- predicate below — that is the whole change.
             AND c.archived_at IS NULL
             AND (c.acknowledged_until IS NULL OR c.acknowledged_until <= #{now}::timestamptz)
             AND e.last_notified_at IS NOT DISTINCT FROM c.last_notified_at

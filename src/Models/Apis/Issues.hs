@@ -318,9 +318,12 @@ data Issue = Issue
   , seqNum :: Int
   , parentHash :: Maybe Text
   , isFramework :: Bool
-  , -- DB columns added after the original 0007 schema. Order matches attnum
-    -- (cooldown_until from 0075, last_notified_at from 0085) so generic
-    -- 'DecodeRow' against @SELECT *@ resolves them in the right slots.
+  , -- Columns added after the original 0007 schema (cooldown_until 0075,
+    -- last_notified_at 0085, acknowledged_until 0125). Field order no longer has
+    -- to track attnum: every read goes through 'selectFrom' @Issue, which emits
+    -- the column list from these fields. Read this row with @SELECT *@ and the
+    -- next @ADD COLUMN@ breaks decoding on any binary that hasn't been redeployed
+    -- yet — a 500 on issue reads for the length of a rolling deploy.
     cooldownUntil :: Maybe ZonedTime
   , lastNotifiedAt :: Maybe ZonedTime
   , acknowledgedUntil :: Maybe ZonedTime
@@ -390,17 +393,17 @@ DO UPDATE SET
 
 -- | Select issue by ID
 selectIssueById :: DB es => IssueId -> Eff es (Maybe Issue)
-selectIssueById iid = Hasql.interpOne [HI.sql| SELECT * FROM apis.issues WHERE id = #{iid} |]
+selectIssueById iid = Hasql.interpOne (selectFrom @Issue <> [HI.sql| WHERE id = #{iid} |])
 
 
 selectIssueByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Issue)
-selectIssueByHash pid tgtHash = Hasql.interpOne [HI.sql| SELECT * FROM apis.issues WHERE project_id = #{pid} AND target_hash = #{tgtHash} ORDER BY updated_at DESC, id DESC LIMIT 1 |]
+selectIssueByHash pid tgtHash = Hasql.interpOne (selectFrom @Issue <> [HI.sql| WHERE project_id = #{pid} AND target_hash = #{tgtHash} ORDER BY updated_at DESC, id DESC LIMIT 1 |])
 
 
 -- | Find most recent RuntimeException issue for a given hash (including acknowledged/archived)
 selectLatestIssueByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Issue)
 selectLatestIssueByHash pid tgtHash =
-  Hasql.interpOne [HI.sql| SELECT * FROM apis.issues WHERE project_id = #{pid} AND target_hash = #{tgtHash} AND issue_type = #{RuntimeException}::apis.issue_type ORDER BY created_at DESC LIMIT 1 |]
+  Hasql.interpOne (selectFrom @Issue <> [HI.sql| WHERE project_id = #{pid} AND target_hash = #{tgtHash} AND issue_type = #{RuntimeException}::apis.issue_type ORDER BY created_at DESC LIMIT 1 |])
 
 
 -- | Bump updated_at and occurrence count; @extra@ appends further SET clauses
@@ -522,7 +525,7 @@ selectIssues pid isAcknowledged isArchived limit offset timeRangeM sortM period 
 -- | Find open issue for endpoint
 findOpenIssueForEndpoint :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Issue)
 findOpenIssueForEndpoint pid tgtHash =
-  Hasql.interpOne [HI.sql| SELECT * FROM apis.issues WHERE project_id = #{pid} AND issue_type = #{ApiChange}::apis.issue_type AND target_hash = #{tgtHash} AND acknowledged_at IS NULL AND archived_at IS NULL LIMIT 1 |]
+  Hasql.interpOne (selectFrom @Issue <> [HI.sql| WHERE project_id = #{pid} AND issue_type = #{ApiChange}::apis.issue_type AND target_hash = #{tgtHash} AND acknowledged_at IS NULL AND archived_at IS NULL LIMIT 1 |])
 
 
 -- | Update issue with new anomaly data
