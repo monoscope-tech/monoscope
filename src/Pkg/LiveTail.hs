@@ -31,10 +31,21 @@ module Pkg.LiveTail (
   -- * Subscriptions
   Subscription (..),
   SubscriptionId,
+  Scope (..),
+  scopeFor,
+  scopeToText,
+  scopeFromRow,
   NewSubscription (..),
   RegisterError (..),
   registerErrorMessage,
   maxQueryLength,
+  kafkaTopicName,
+  cacheRefreshSecs,
+  leaseSecs,
+  queueCapacity,
+  maxPerUser,
+  maxPerProject,
+  maxCached,
   compileQuery,
   effectiveFilter,
 
@@ -46,6 +57,7 @@ module Pkg.LiveTail (
   countActiveForProject,
   renewLease,
   deleteSubscription,
+  deleteSubscriptionIO,
   reapExpiredSubscriptions,
 
   -- * Ingest side
@@ -58,7 +70,11 @@ module Pkg.LiveTail (
 
   -- * Wire format
   LiveEnvelope (..),
+  EnvelopeResult (..),
+  decodeEnvelope,
+  envelopeFromValue,
   LiveRow (..),
+  LogRowFields (..),
   envelopeVersion,
   maxRowFieldChars,
   toLiveRow,
@@ -76,16 +92,29 @@ module Pkg.LiveTail (
   -- * Transport
   Transport (..),
   transportFor,
+  relayPublish,
+  relayDrain,
+  relayWatermark,
+  relayReap,
 
   -- * Runtime
   Runtime (..),
+  RelayBuffer (..),
+  newRelayBuffer,
+  bufferForRelay,
+  takeRelayBuffer,
+  hubIsEmpty,
+  relayBufferDepth,
+  relayPollMs,
+  relayRetentionSecs,
   PublishStats (..),
   publishMatches,
 ) where
 
-import Control.Concurrent.STM (TBQueue, check, flushTBQueue, isFullTBQueue, newTBQueueIO, orElse, readTBQueue, registerDelay, writeTBQueue)
+import Control.Concurrent.STM (TBQueue, check, flushTBQueue, isFullTBQueue, newTBQueueIO, orElse, readTBQueue, registerDelay, swapTVar, writeTBQueue)
 import Control.Exception.Safe qualified as Safe
 import Data.Aeson qualified as AE
+import Data.Aeson.Types qualified as AET
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
@@ -93,9 +122,11 @@ import Data.Time (UTCTime)
 import Data.Vector qualified as V
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
+import GHC.Generics (Generically (..))
 import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
+import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..))
 import Pkg.Parser.Eval (EvalError, Resolver, evalExpr, filterExpr, resolveIn)
 import Pkg.Parser.Expr (Expr, FieldKey (..), Subject (..))
@@ -114,29 +145,99 @@ import System.IO.Unsafe (unsafePerformIO)
 type SubscriptionId = UUIDId "live_tail_subscription"
 
 
+-- | Which signals a subscription watches, and — structurally — whether it is gated by a
+-- service.
+--
+-- The two live surfaces bound their volume differently, and encoding that as a sum rather than
+-- a @Bool@ plus a @Maybe Text@ is what stops the wrong combination existing at all. Live Tail
+-- /cannot/ be constructed without a service; the Events tab has no service to give, and no
+-- amount of handler code can accidentally drop the gate from the one that needs it.
+data Scope
+  = -- | Live Tail: one service, logs only. The service is the bound.
+    LogsOnly Text
+  | -- | The Events tab's live toggle: every signal, no service gate. Bounded instead by the
+    -- per-connection queue — a tail matching more than a browser can take drops the oldest
+    -- rows and reports the count, rather than being refused up front.
+    AllSignals
+  deriving stock (Eq, Generic, Show)
+
+
+-- | Storage form. Kept narrow deliberately: the column is a discriminator, not a place to
+-- smuggle more state.
+scopeToText :: Scope -> (Text, Maybe Text)
+scopeToText = \case
+  LogsOnly svc -> ("logs_only", Just svc)
+  AllSignals -> ("all_signals", Nothing)
+
+
+-- | Rebuild a 'Scope' from its stored parts. A @logs_only@ row with no service is corrupt —
+-- the schema cannot express "gated by nothing" — so it fails rather than silently widening
+-- into a tail across every service.
+--
+-- >>> scopeFromRow "logs_only" (Just "checkout")
+-- Just (LogsOnly "checkout")
+-- >>> scopeFromRow "logs_only" Nothing
+-- Nothing
+-- >>> scopeFromRow "all_signals" Nothing
+-- Just AllSignals
+scopeFromRow :: Text -> Maybe Text -> Maybe Scope
+scopeFromRow "logs_only" (Just svc) = Just (LogsOnly svc)
+scopeFromRow "all_signals" _ = Just AllSignals
+scopeFromRow _ _ = Nothing
+
+
 -- | A lease, as stored. @expiresAt@ is authoritative — see the migration for why.
 data Subscription = Subscription
   { id :: SubscriptionId
   , projectId :: Projects.ProjectId
   , userId :: Projects.UserId
-  , service :: Text
+  , scope :: Scope
   , environment :: Maybe Text
   , query :: Text
+  , columns :: [Text]
+  -- ^ The column names the browser is rendering, sent at registration.
+  --
+  -- The server cannot derive these: a query's @finalColumns@ may hold SQL expressions that
+  -- only the database can evaluate. But the browser already knows its own column order, so it
+  -- says so, and each name is resolved against the in-memory record by mapping @___@ back to
+  -- @.@ — which covers @context___trace_id@, @resource___service___name@,
+  -- @attributes___http___request___method@ and the plain columns alike. Anything that only
+  -- SQL could have computed resolves to null in the live row and is filled in when the
+  -- durable read replaces it.
   , expiresAt :: UTCTime
   }
   deriving stock (Generic, Show)
-  deriving anyclass (HI.DecodeRow)
 
 
 -- | What a browser asked for, after the handler authenticated it. Project and user are never
 -- read from the request body, so they are not fields here.
+--
+-- @service@ is optional at the wire level and required by 'LogsOnly' at the type level; the
+-- handler is what turns one into the other, and refuses when it cannot.
 data NewSubscription = NewSubscription
-  { service :: Text
+  { service :: Maybe Text
   , environment :: Maybe Text
   , query :: Maybe Text
+  , allSignals :: Maybe Bool
+  -- ^ Set by the Events tab. Absent or false means Live Tail's logs-only, service-gated form.
+  , columns :: Maybe [Text]
   }
   deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake NewSubscription
+
+
+-- | Resolve the browser's requested scope, enforcing the gate that 'LogsOnly' requires.
+--
+-- >>> scopeFor (NewSubscription (Just "checkout") Nothing Nothing Nothing Nothing)
+-- Right (LogsOnly "checkout")
+-- >>> scopeFor (NewSubscription Nothing Nothing Nothing Nothing Nothing)
+-- Left ServiceRequired
+-- >>> scopeFor (NewSubscription Nothing Nothing Nothing (Just True) Nothing)
+-- Right AllSignals
+scopeFor :: NewSubscription -> Either RegisterError Scope
+scopeFor ns
+  | ns.allSignals == Just True = Right AllSignals
+  | otherwise = maybe (Left ServiceRequired) (Right . LogsOnly) (mfilter (not . T.null) (T.strip <$> ns.service))
 
 
 -- | Why a registration was refused. Typed rather than stringly so the handler maps each case
@@ -171,6 +272,80 @@ maxQueryLength :: Int
 maxQueryLength = 4000
 
 
+-- ---------------------------------------------------------------------------------------
+-- Tuning
+-- ---------------------------------------------------------------------------------------
+
+-- These were environment variables. They are constants now, because none of them is a
+-- deployment decision: they are the shape of the feature, and an operator asked to choose a
+-- lease length or a queue depth is being handed a question they have no way to answer. What a
+-- deployment does vary — whether Kafka exists — is read from the broker list it already had.
+
+-- | Kafka side-topic name. Create it with short retention; nothing here is replayable.
+kafkaTopicName :: Text
+kafkaTopicName = "live_tail"
+
+
+-- | How often an ingest pod reloads unexpired subscriptions, and so also the worst-case delay
+-- before a newly started tail begins matching.
+cacheRefreshSecs :: Int
+cacheRefreshSecs = 2
+
+
+-- | Lease length. An open tab renews at a third of this; anything that stops renewing stops
+-- matching within one period.
+leaseSecs :: Int
+leaseSecs = 45
+
+
+-- | Rows buffered per browser connection before the oldest is dropped.
+queueCapacity :: Natural
+queueCapacity = 500
+
+
+-- | Active tails per user, and per project. Courtesy bounds on open tabs — see
+-- 'insertSubscription' for why they are approximate under concurrency.
+maxPerUser, maxPerProject :: Int
+maxPerUser = 3
+maxPerProject = 20
+
+
+-- | Hard cap on subscriptions one ingest pod will hold, independent of the per-user and
+-- per-project bounds: those limit new registrations, this limits the pod even when the table
+-- already holds more rows than a later, tighter limit would allow.
+maxCached :: Int
+maxCached = 500
+
+
+-- | How often a web pod drains the relay table. Only runs while that pod holds at least one
+-- SSE connection, so a pod nobody is tailing through costs nothing.
+relayPollMs :: Int
+relayPollMs = 250
+
+
+-- | How long a relayed row survives. Long enough to cover a poll plus a slow pod, short enough
+-- that the table never becomes storage.
+relayRetentionSecs :: Int
+relayRetentionSecs = 30
+
+
+-- | Cap on the column list a browser may register.
+--
+-- The list is client-supplied and drives a per-row traversal on the ingest path, so it is
+-- untrusted input on the hottest code in the system. A real Events table shows tens of
+-- columns; anything beyond this is a client bug or an attempt to make ingest do unbounded
+-- work per record.
+maxColumns :: Int
+maxColumns = 128
+
+
+-- | Bound the registered column list. Truncates rather than refuses: an over-long list is
+-- almost certainly a client bug, and dropping the tail still renders a usable table while
+-- keeping the per-row cost bounded.
+clampColumns :: [Text] -> [Text]
+clampColumns = take maxColumns . filter (not . T.null)
+
+
 -- | Parse and validate a user's filter text, rejecting anything Live Tail cannot stream.
 --
 -- Returns the AST rather than a matcher because ingest pods rebuild the compiled form on every
@@ -179,12 +354,33 @@ maxQueryLength = 4000
 --
 -- >>> compileQuery "level == \"error\"" & isRight
 -- True
+--
+-- Every pipeline command needs a result /set/, which a stream has none of. All of these parse
+-- and validate cleanly — the only thing separating them from a filter is that their answer
+-- cannot exist for a single row:
+--
 -- >>> compileQuery "level == \"error\" | summarize count() by kind"
 -- Left NotAFilter
+-- >>> compileQuery "level == \"error\" | take 10"
+-- Left NotAFilter
+-- >>> compileQuery "level == \"error\" | sort by timestamp"
+-- Left NotAFilter
+-- >>> compileQuery "level == \"error\" | project name = name"
+-- Left NotAFilter
+-- >>> compileQuery "level == \"error\" | extend slow = duration"
+-- Left NotAFilter
+--
+-- A piped @where@ narrows rather than replaces — replacing would quietly widen the tail:
+--
+-- >>> compileQuery "level == \"error\" | where duration > 10" & isRight
+-- True
+--
 -- >>> compileQuery "nonexistent_field == 1" & isLeft
 -- True
 -- >>> compileQuery "   "
 -- Right Nothing
+-- >>> compileQuery (mconcat (replicate 500 "level == \"error\" and ")) & isLeft
+-- True
 compileQuery :: Text -> Either RegisterError (Maybe Expr)
 compileQuery raw
   | T.length raw > maxQueryLength = Left (QueryTooLong (T.length raw))
@@ -211,10 +407,16 @@ data CompiledSub = CompiledSub
 -- reach those predicates could tail another team's traffic.
 effectiveFilter :: CompiledSub -> AE.Value -> Either EvalError Bool
 effectiveFilter cs row
-  | not (matches serviceSubject cs.sub.service) = Right False
+  | not serviceOk = Right False
   | not (maybe True (matches envSubject) cs.sub.environment) = Right False
   | otherwise = maybe (Right True) (evalExpr resolver) cs.userFilter
   where
+    -- 'AllSignals' has no service predicate to apply — that is the whole difference between
+    -- the two surfaces, and it lives here rather than in a nullable field the caller might
+    -- forget to check.
+    serviceOk = case cs.sub.scope of
+      LogsOnly svc -> matches serviceSubject svc
+      AllSignals -> True
     resolver :: Resolver
     resolver = resolveIn row
     matches subj expected = expected `elem` map asText (resolver subj)
@@ -238,12 +440,19 @@ envSubject = Subject "resource.deployment.environment.name" "resource" [FieldKey
 -- it. Failing closed matters: a broken filter that matched everything would stream a user rows
 -- from services they never selected.
 matchesFor :: [CompiledSub] -> Telemetry.OtelLogsAndSpans -> ([CompiledSub], [EvalError])
-matchesFor subs rec
-  | rec.kind /= Just "log" = ([], [])
-  | otherwise = partitionEithers (mapMaybe decide subs)
+matchesFor subs rec = partitionEithers (mapMaybe decide subs)
   where
     row = AE.toJSON rec
-    decide cs = case effectiveFilter cs row of
+    isLog = rec.kind == Just "log"
+    -- The logs-only restriction is per subscription, not per batch: one project can have a
+    -- Live Tail and an Events tail open at once, and the same span must reach the second while
+    -- never reaching the first. Matched exhaustively rather than by guard + `otherwise`, so a
+    -- third Scope inherits neither answer silently — it fails to compile until decided.
+    decide cs = case cs.sub.scope of
+      LogsOnly _ -> if isLog then verdict cs else Nothing
+      AllSignals -> verdict cs
+
+    verdict cs = case effectiveFilter cs row of
       Right True -> Just (Left cs)
       Right False -> Nothing
       Left e -> Just (Right e)
@@ -254,16 +463,48 @@ matchesFor subs rec
 -- ---------------------------------------------------------------------------------------
 
 -- | Insert a lease. The caller has already authenticated the user and enforced the limits.
-insertSubscription :: DB es => Projects.ProjectId -> Projects.UserId -> NewSubscription -> UTCTime -> Eff es SubscriptionId
-insertSubscription pid uid ns expiresAt =
-  Hasql.interp
+-- | Insert a lease, but only if both limits still hold.
+--
+-- One statement rather than count-check-insert across three round trips, which is what the
+-- plan asked for and what the first version did not do: between a separate @count@ and its
+-- @INSERT@, any number of other registrations can land, so the caps were advisory at best.
+--
+-- 'Nothing' means a limit was hit and nothing was written. The caller re-reads the counts only
+-- then, purely to say /which/ limit — a slightly stale number in an error message costs
+-- nothing, and keeps the success path to a single query.
+--
+-- __Honest bound:__ under @READ COMMITTED@ two registrations racing each other still cannot
+-- see each other's uncommitted row, so the cap is "about N", not exactly N. That is deliberate
+-- rather than overlooked: these limits are a courtesy bound on one user's tabs, and paying for
+-- exactness (advisory locks, or @SERIALIZABLE@ with retries) on a registration path is not
+-- worth it. The bound that actually protects the fleet is 'liveTailMaxCached', which is a
+-- @LIMIT@ on the ingest side and cannot be raced at all.
+insertSubscription
+  :: DB es
+  => Projects.ProjectId
+  -> Projects.UserId
+  -> NewSubscription
+  -> Scope
+  -> Int
+  -- ^ max active per user
+  -> Int
+  -- ^ max active per project
+  -> UTCTime
+  -> Eff es (Maybe SubscriptionId)
+insertSubscription pid uid ns scope perUser perProject expiresAt =
+  Hasql.interpOne
     [HI.sql|
-      INSERT INTO projects.live_tail_subscriptions (project_id, user_id, service, environment, query, expires_at)
-      VALUES (#{pid}, #{uid}, #{ns.service}, #{ns.environment}, #{fromMaybe "" ns.query}, #{expiresAt})
+      INSERT INTO projects.live_tail_subscriptions (project_id, user_id, scope, service, environment, query, columns, expires_at)
+      SELECT #{pid}, #{uid}, #{scopeText}, #{svc}, #{ns.environment}, #{fromMaybe "" ns.query}, #{cols}, #{expiresAt}
+      WHERE (SELECT count(*) FROM projects.live_tail_subscriptions
+             WHERE project_id = #{pid} AND user_id = #{uid} AND expires_at > now()) < #{perUser}
+        AND (SELECT count(*) FROM projects.live_tail_subscriptions
+             WHERE project_id = #{pid} AND expires_at > now()) < #{perProject}
       RETURNING id
     |]
-    <&> maybe (error "insertSubscription: RETURNING produced no row") Relude.id
-    . listToMaybe
+  where
+    (scopeText, svc) = scopeToText scope
+    cols = V.fromList (clampColumns (fromMaybe [] ns.columns))
 
 
 -- | Every unexpired subscription, for the ingest cache refresh.
@@ -272,14 +513,29 @@ insertSubscription pid uid ns expiresAt =
 -- unbounded state; the caller logs when the bound bites.
 activeSubscriptions :: DB es => Int -> Eff es [Subscription]
 activeSubscriptions limit =
-  Hasql.interp
-    [HI.sql|
-      SELECT id, project_id, user_id, service, environment, query, expires_at
-      FROM projects.live_tail_subscriptions
-      WHERE expires_at > now()
-      ORDER BY created_at
-      LIMIT #{limit}
-    |]
+  mapMaybe fromRow
+    <$> Hasql.interp
+      [HI.sql|
+        SELECT id, project_id, user_id, scope, service, environment, query, columns, expires_at
+        FROM projects.live_tail_subscriptions
+        WHERE expires_at > now()
+        ORDER BY created_at
+        LIMIT #{limit}
+      |]
+
+
+-- | The stored row, before 'Scope' is reassembled from its discriminator and service.
+type SubRow = (SubscriptionId, Projects.ProjectId, Projects.UserId, Text, Maybe Text, Maybe Text, Text, V.Vector Text, UTCTime)
+
+
+-- | Rebuild a 'Subscription', dropping any row whose scope cannot be reconstructed.
+--
+-- Dropping rather than defaulting: the only way this fails is a @logs_only@ row with no
+-- service, and the safe reading of a missing gate is "do not match", never "match everything".
+fromRow :: SubRow -> Maybe Subscription
+fromRow (sid, pid, uid, scopeText, svc, environment, query, columns, expiresAt) = do
+  scope <- scopeFromRow scopeText svc
+  pure Subscription{id = sid, projectId = pid, userId = uid, scope, environment, query, columns = V.toList columns, expiresAt}
 
 
 -- | One unexpired subscription, scoped to its owner. Every stream and delete route goes
@@ -287,9 +543,10 @@ activeSubscriptions limit =
 activeSubscriptionFor :: DB es => Projects.ProjectId -> Projects.UserId -> SubscriptionId -> Eff es (Maybe Subscription)
 activeSubscriptionFor pid uid sid =
   listToMaybe
+    . mapMaybe fromRow
     <$> Hasql.interp
       [HI.sql|
-        SELECT id, project_id, user_id, service, environment, query, expires_at
+        SELECT id, project_id, user_id, scope, service, environment, query, columns, expires_at
         FROM projects.live_tail_subscriptions
         WHERE id = #{sid} AND project_id = #{pid} AND user_id = #{uid} AND expires_at > now()
       |]
@@ -333,6 +590,77 @@ deleteSubscription pid uid sid =
     [HI.sql| DELETE FROM projects.live_tail_subscriptions WHERE id = #{sid} AND project_id = #{pid} AND user_id = #{uid} |]
 
 
+-- ---------------------------------------------------------------------------------------
+-- Relay transport
+-- ---------------------------------------------------------------------------------------
+
+-- | Hand matched rows to the relay table. Batched: a burst is one insert, not one per row.
+relayPublish :: DB es => [LiveEnvelope] -> Eff es ()
+relayPublish [] = pass
+relayPublish envs =
+  Hasql.interp
+    [HI.sql|
+      INSERT INTO projects.live_tail_events (subscription_id, payload)
+      SELECT * FROM unnest(#{V.fromList (map (.subscriptionId) envs)}, #{V.fromList (map (AesonText . AE.toJSON) envs)})
+    |]
+
+
+-- | Everything written after @lastSeen@, with the new watermark.
+--
+-- Ordered by the sequence rather than by time so a clock skew between writers cannot make the
+-- consumer skip rows, and bounded so one slow poll cannot pull an unbounded batch into memory.
+relayDrain :: DB es => Int64 -> Eff es ([EnvelopeResult], Int64)
+relayDrain lastSeen = do
+  rows :: [(Int64, AesonText AE.Value)] <-
+    Hasql.interp
+      [HI.sql|
+        SELECT id, payload FROM projects.live_tail_events
+        WHERE id > #{lastSeen} ORDER BY id LIMIT 500
+      |]
+  -- Every row goes through the same version check the Kafka path uses, so a rolling-deploy
+  -- skew is reported as a skew on both transports rather than looking like corruption on one
+  -- of them. The watermark advances past undecodable rows so they are not retried forever.
+  let decoded = map (\(_, AesonText v) -> envelopeFromValue v) rows
+      watermark = maybe lastSeen fst (viaNonEmpty Relude.last rows)
+  pure (decoded, watermark)
+
+
+-- | Where a pod starts reading: the current end of the table.
+--
+-- Latest, not earliest — the same choice the Kafka consumer makes and for the same reason. A
+-- row written before this pod had a connection open is a row already missed; replaying it
+-- would show a "live" tail rows from minutes ago.
+relayWatermark :: DB es => Eff es Int64
+relayWatermark = fromMaybe 0 . listToMaybe <$> Hasql.interp [HI.sql| SELECT coalesce(max(id), 0) FROM projects.live_tail_events |]
+
+
+-- | Drop relayed rows past their usefulness. Unlike the subscription reaper this one is
+-- load-bearing: without it the table grows for as long as anyone is tailing.
+relayReap :: DB es => Eff es ()
+relayReap =
+  Hasql.interp
+    [HI.sql| DELETE FROM projects.live_tail_events WHERE created_at < now() - make_interval(secs => #{relayRetentionSecs}) |]
+
+
+-- | Delete a subscription from raw 'IO', for the one caller that has no effect stack: the SSE
+-- streaming body.
+--
+-- The server observes a dropped connection the instant the response body fails, which is
+-- strictly better information than waiting out the lease. Without this, a browser that crashed
+-- (or slept, or lost the network) keeps ingest matching and publishing for its full lease —
+-- rows nobody will ever read, produced to Kafka or inserted into the relay.
+--
+-- Safe against reconnects: the client registers a /new/ subscription when it reconnects (see
+-- `LiveStream.start`, which stops before it starts), so the id torn down here is always one
+-- nothing will come back to.
+deleteSubscriptionIO :: OHasql.TracedPool -> Projects.ProjectId -> Projects.UserId -> SubscriptionId -> IO ()
+deleteSubscriptionIO hpool pid uid sid =
+  Safe.handleAny (const pass)
+    $ runEff
+    $ Hasql.runHasqlPool hpool
+    $ deleteSubscription pid uid sid
+
+
 -- | Reclaim space only. Expiry — not this — is what makes a subscription inactive, so running
 -- it late, or not at all, changes nothing a user can observe.
 reapExpiredSubscriptions :: DB es => Eff es ()
@@ -358,6 +686,12 @@ data SubCache = SubCache
 
 newSubCache :: MonadIO m => m SubCache
 newSubCache = SubCache <$> newIORef HM.empty <*> newIORef Nothing
+
+
+-- | Depth of the relay write buffer. One tick's worth of a busy tail; past this the oldest
+-- rows are dropped, which is the same bargain the browser queue makes.
+relayBufferDepth :: Natural
+relayBufferDepth = 4096
 
 
 -- | Parse stored filters and group by project, dropping rows that no longer compile.
@@ -389,8 +723,13 @@ refreshSubCache cache now rows = do
 -- | Bumped whenever 'LiveRow' changes shape. Ingest and web pods roll separately, so a
 -- consumer will briefly see envelopes from the other version and must be able to say so
 -- rather than mis-decode them.
+--
+-- 2: 'LiveRow' became a tagged sum ('LogRow' \/ 'TableRow') when the Events tab joined the
+-- push path. A v1 payload is a bare log record with no @shape@ discriminator, so it cannot be
+-- read as a v2 row at all — which is exactly why 'decodeEnvelope' reads this field before it
+-- looks at the row.
 envelopeVersion :: Int
-envelopeVersion = 1
+envelopeVersion = 2
 
 
 -- | Per-field character cap. A single log carrying a megabyte stack trace must not be able to
@@ -402,7 +741,7 @@ maxRowFieldChars = 8000
 -- | One log, reduced to what the Live Tail list renders. Deliberately not the whole
 -- 'Telemetry.OtelLogsAndSpans': the browser opens the full record from the durable store when
 -- the user expands a row, by which time the write has long landed.
-data LiveRow = LiveRow
+data LogRowFields = LogRowFields
   { id :: Text
   , timestamp :: UTCTime
   , level :: Maybe Text
@@ -414,7 +753,38 @@ data LiveRow = LiveRow
   , truncated :: Bool
   }
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake LiveRow
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake LogRowFields
+
+
+-- | One matched record, shaped for whichever surface asked for it.
+--
+-- Two shapes rather than one because the two surfaces render genuinely different things, and
+-- collapsing them would mean the Live Tail list carrying columns it never shows while the
+-- Events table hunts for fields inside a fixed projection. The 'Scope' that selected the
+-- subscription is what selects the shape, so they cannot be mismatched.
+data LiveRow
+  = -- | Live Tail's fixed, compact projection.
+    LogRow LogRowFields
+  | -- | The Events table: column name → value, for exactly the columns the browser said it
+    -- was rendering. A name the in-memory record cannot answer is absent rather than guessed,
+    -- and the client leaves that cell empty until the durable read fills it.
+    TableRow (Map Text AE.Value)
+  deriving stock (Generic, Show)
+
+
+-- Tagged so a consumer can tell the two apart without inferring it from the payload's shape.
+instance AE.ToJSON LiveRow where
+  toJSON = \case
+    LogRow f -> AE.object ["shape" AE..= ("log" :: Text), "log" AE..= f]
+    TableRow cols -> AE.object ["shape" AE..= ("table" :: Text), "cols" AE..= cols]
+
+
+instance AE.FromJSON LiveRow where
+  parseJSON = AE.withObject "LiveRow" \o ->
+    o AE..: "shape" >>= \case
+      ("log" :: Text) -> LogRow <$> o AE..: "log"
+      "table" -> TableRow <$> o AE..: "cols"
+      other -> fail ("unknown live row shape: " <> toString other)
 
 
 -- | What crosses Kafka: one matched row addressed to one subscription.
@@ -427,10 +797,91 @@ data LiveEnvelope = LiveEnvelope
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake LiveEnvelope
 
 
--- | Project a record down to the streamed row, truncating anything unbounded.
-toLiveRow :: Telemetry.OtelLogsAndSpans -> LiveRow
-toLiveRow r =
-  LiveRow
+-- | What reading a message off the side-topic produced.
+--
+-- Three outcomes rather than @Maybe@, because they call for three different responses and
+-- collapsing them is what made the previous version dangerous: a version skew during a rolling
+-- deploy and a genuinely corrupt payload both arrived as "failed to decode" and were both
+-- dropped in silence.
+data EnvelopeResult
+  = -- | Current version, decoded.
+    Delivered LiveEnvelope
+  | -- | A pod on the other side of a rolling deploy wrote this. Expected, transient, and
+    -- someone else's to deliver — but counted, because a version that never stops appearing
+    -- is a deploy that never finished.
+    VersionMismatch Int
+  | -- | Neither ours nor a version we recognise. Always worth a human's attention.
+    Undecodable Text
+  deriving stock (Show)
+
+
+-- | Read a side-topic message, checking the version /before/ the row.
+--
+-- The order is the whole point. 'LiveRow' is a tagged sum, so a payload from an older
+-- 'envelopeVersion' fails inside the row parser — if the envelope were decoded in one step,
+-- that failure would surface as "corrupt" and the version field written precisely to explain
+-- it would never be read.
+--
+-- >>> decodeEnvelope "{\"v\":1,\"subscription_id\":\"x\",\"row\":{}}"
+-- VersionMismatch 1
+-- >>> decodeEnvelope "not json"
+-- Undecodable "not a live-tail envelope"
+decodeEnvelope :: ByteString -> EnvelopeResult
+decodeEnvelope = maybe (Undecodable "not a live-tail envelope") envelopeFromValue . AE.decodeStrict'
+
+
+-- | The version-before-row rule, on an already-parsed value.
+--
+-- Shared with the relay so both transports answer a skew the same way. When this existed only
+-- inside 'decodeEnvelope', the relay quietly grew its own @parseMaybe@ and lost the check
+-- entirely — the version field was written on every row and read on none of them.
+envelopeFromValue :: AE.Value -> EnvelopeResult
+envelopeFromValue value = case AET.parseMaybe (AE.withObject "LiveEnvelope" (AE..: "v")) value of
+  Nothing -> Undecodable "not a live-tail envelope"
+  Just v
+    | v /= envelopeVersion -> VersionMismatch v
+    | otherwise -> either (Undecodable . toText) Delivered (AET.parseEither AE.parseJSON value)
+
+
+-- | Project a record into the shape this subscription's surface renders.
+toLiveRow :: Scope -> [Text] -> Telemetry.OtelLogsAndSpans -> LiveRow
+toLiveRow scope cols r = case scope of
+  LogsOnly _ -> LogRow (toLogRowFields r)
+  AllSignals -> TableRow (toTableCols cols r)
+
+
+-- | Resolve each column the browser is rendering against the in-memory record.
+--
+-- Column names arrive in the query layer's spelling, where a nested path is flattened with
+-- @___@ (@resource___service___name@). Mapping that back to @.@ and reusing the filter
+-- evaluator's resolver means one traversal rule serves both matching and projection, so a
+-- field that filters correctly also renders correctly.
+--
+-- Columns SQL would have computed (aggregates, expressions) resolve to nothing and are simply
+-- omitted; the row carries what it can prove and the durable read supplies the rest.
+toTableCols :: [Text] -> Telemetry.OtelLogsAndSpans -> Map Text AE.Value
+toTableCols cols r = fromList [(c, v) | c <- cols, Just v <- [resolveCol c]]
+  where
+    json = AE.toJSON r
+    resolveCol c = case resolveIn json (dottedSubject (T.replace "___" "." c)) of
+      [] -> Nothing
+      v : _ -> Just (truncateValue v)
+    truncateValue = \case
+      AE.String t | T.length t > maxRowFieldChars -> AE.String (T.take maxRowFieldChars t)
+      v -> v
+
+
+-- | A 'Subject' for a dotted path, built directly rather than parsed — these come from a
+-- column list the server already validated, not from user text.
+dottedSubject :: Text -> Subject
+dottedSubject path = case T.splitOn "." path of
+  root : rest -> Subject path root (map FieldKey rest)
+  [] -> Subject path path []
+
+
+toLogRowFields :: Telemetry.OtelLogsAndSpans -> LogRowFields
+toLogRowFields r =
+  LogRowFields
     { id = r.id
     , timestamp = r.timestamp
     , level = r.level
@@ -515,6 +966,52 @@ counter = unsafePerformIO (newTVarIO 0)
 {-# NOINLINE counter #-}
 
 
+-- | Queue a matched row for the relay writer. Never blocks: on a full buffer the oldest row
+-- is discarded, because a slow database must cost a tail its rows and never cost ingestion its
+-- latency.
+-- | Matched rows waiting to be written to the relay table, and what overflow has cost.
+--
+-- The counter is not decoration. Every other drop in this feature is counted — the per-browser
+-- queue reports its own, publish failures land in 'PublishStats' — and a relay buffer
+-- overflowing under load was the one place rows disappeared with no signal anywhere.
+data RelayBuffer = RelayBuffer
+  { queue :: TBQueue LiveEnvelope
+  , dropped :: TVar Int
+  }
+  deriving stock (Generic)
+
+
+newRelayBuffer :: MonadIO m => m RelayBuffer
+newRelayBuffer = RelayBuffer <$> liftIO (newTBQueueIO relayBufferDepth) <*> newTVarIO 0
+
+
+-- | Queue a matched row for the relay writer. Never blocks: on a full buffer the oldest row is
+-- discarded and counted, because a slow database must cost a tail its rows and never cost
+-- ingestion its latency.
+bufferForRelay :: RelayBuffer -> LiveEnvelope -> IO ()
+bufferForRelay rb e = atomically do
+  full <- isFullTBQueue rb.queue
+  when full do
+    void (readTBQueue rb.queue)
+    modifyTVar' rb.dropped (+ 1)
+  writeTBQueue rb.queue e
+
+
+-- | Everything buffered since the last call, with the number of rows overflow discarded in
+-- that window. Both are reset by the read, so the caller reports a window rather than a total.
+takeRelayBuffer :: MonadIO m => RelayBuffer -> m ([LiveEnvelope], Int)
+takeRelayBuffer rb = atomically do
+  pending <- flushTBQueue rb.queue
+  lost <- swapTVar rb.dropped 0
+  pure (pending, lost)
+
+
+-- | Whether this pod has any live connection at all. The relay poller checks it first so a pod
+-- nobody is tailing through never queries.
+hubIsEmpty :: MonadIO m => Hub -> m Bool
+hubIsEmpty = fmap HM.null . readTVarIO
+
+
 -- | Hand a row to every local connection watching this subscription, dropping the oldest row
 -- from any queue that is full.
 --
@@ -565,68 +1062,38 @@ batchSTM conn = do
 
 -- | How a matched row reaches the web pod holding the browser's connection.
 --
--- Exactly one applies to a deployment, chosen by 'transportFor'. There is no "both": a
--- single process publishing to Kafka /and/ its own hub would deliver every row twice.
+-- There is no "unavailable" case and no in-process option, and both absences are deliberate.
+--
+-- Kafka is the queue this system is built around, but it is optional infrastructure — dev,
+-- docker-compose and self-hosted installs routinely run without it. Postgres is not optional,
+-- so it is the floor: Live Tail works with no new dependency anywhere, and Kafka is an
+-- optimisation for fleets that already run it.
+--
+-- The in-process hub is gone because choosing it requires knowing whether ingest and HTTP are
+-- the same process, and no process can tell — a web pod cannot see whether separate
+-- @CONSUMER_ONLY@ pods exist. Picking it on the available evidence (no brokers) was silently
+-- wrong for every split deployment without Kafka. Guessing was the bug.
 data Transport
-  = -- | Ingest and HTTP in one process. Correct for dev, docker-compose and single-container
-    -- self-hosting; silently wrong for anything else, which is why 'transportFor' will not
-    -- pick it for a split deployment.
-    LocalHub
-  | -- | The named side-topic. The only transport that works when ingest and web are separate
-    -- pods.
+  = -- | The side-topic, when brokers are configured. Cheaper than the relay under load and the
+    -- natural fit for a fleet already running Kafka for ingest.
     KafkaTopic Text
-  | -- | Nothing can deliver, so nothing should be accepted. Registration is refused and the
-    -- UI says the feature is unavailable rather than opening a stream that stays empty
-    -- forever — an accepted subscription that can never produce a row is the one outcome
-    -- that looks like a product bug from every angle.
-    Unavailable Text
+  | -- | The @live_tail_events@ relay table. Works everywhere, including single-process.
+    PostgresRelay
   deriving stock (Eq, Show)
 
 
--- | Pick the transport from configuration.
+-- | Pick the transport. The only input is whether Kafka is reachable.
 --
--- The deciding signal is __whether Kafka brokers are configured at all__, deliberately not
--- @enableKafkaService@. That flag is per-process: in a split deployment the web pods run with
--- it off and the ingest pods with it on, so reading it would have each side pick a different
--- transport — web pods serving from a local hub nobody publishes to while ingest publishes to
--- a topic nobody consumes. Subscriptions would register, rows would flow, and the tail would
--- stay empty forever. Broker configuration is the one input both roles share.
---
--- >>> transportFor True True "live_tail"
+-- >>> transportFor ["broker:9092"]
 -- KafkaTopic "live_tail"
---
--- No brokers means nothing to publish through, so everything is in one process and the local
--- hub is both available and correct — the configured topic is simply irrelevant there.
---
--- >>> transportFor True False "live_tail"
--- LocalHub
--- >>> transportFor True False ""
--- LocalHub
---
--- Brokers but no topic is the case worth naming: ingest and web may well be separate, and the
--- local hub would accept subscriptions on a web pod that ingest can never feed.
---
--- >>> transportFor True True ""
--- Unavailable "Live Tail needs LIVE_TAIL_TOPIC set when Kafka is configured."
--- >>> transportFor False True "live_tail"
--- Unavailable "Live Tail is turned off for this deployment."
---
--- A single process /with/ brokers configured round-trips its own rows through Kafka rather
--- than short-cutting to the hub. That is a little wasteful and entirely correct: it publishes
--- and consumes under its own group, and it keeps this decision independent of process role.
-transportFor
-  :: Bool
-  -- ^ 'System.Config.enableLiveTail'
-  -> Bool
-  -- ^ are any 'System.Config.kafkaBrokers' configured?
-  -> Text
-  -- ^ 'System.Config.liveTailTopic'
-  -> Transport
-transportFor enabled hasBrokers topic
-  | not enabled = Unavailable "Live Tail is turned off for this deployment."
-  | not hasBrokers = LocalHub
-  | not (T.null topic) = KafkaTopic topic
-  | otherwise = Unavailable "Live Tail needs LIVE_TAIL_TOPIC set when Kafka is configured."
+-- >>> transportFor []
+-- PostgresRelay
+-- >>> transportFor [""]
+-- PostgresRelay
+transportFor :: [Text] -> Transport
+transportFor brokers
+  | all T.null brokers = PostgresRelay
+  | otherwise = KafkaTopic kafkaTopicName
 
 
 -- ---------------------------------------------------------------------------------------
@@ -643,6 +1110,7 @@ data Runtime = Runtime
   { transport :: Transport
   , cache :: SubCache
   , hub :: Hub
+  , relayBuffer :: RelayBuffer
   , emit :: LiveEnvelope -> IO ()
   }
   deriving stock (Generic)
@@ -650,30 +1118,21 @@ data Runtime = Runtime
 
 -- | What one batch did, for metrics. Counted rather than logged: these are rates, and a
 -- per-row log on the ingestion path is a cost, not a diagnostic.
+-- Fields are 'Sum' so the monoid derives: summing counters is exactly what 'Generically'
+-- gives for a product of monoids, and a hand-written instance is four more places to forget a
+-- field when one is added.
 data PublishStats = PublishStats
-  { evaluated :: !Int
-  , matched :: !Int
-  , failed :: !Int
+  { evaluated :: !(Sum Int)
+  , matched :: !(Sum Int)
+  , failed :: !(Sum Int)
   -- ^ Rows whose filter could not be decided. Treated as non-matches.
-  , publishFailed :: !Int
+  , publishFailed :: !(Sum Int)
   -- ^ Matched rows the transport refused. Counted rather than thrown, because a broker that
   -- is down must not fail a telemetry write — but a silently swallowed exception would make
   -- "nobody is tailing" and "delivery is broken" indistinguishable.
   }
   deriving stock (Generic, Show)
-
-
-instance Semigroup PublishStats where
-  a <> b =
-    PublishStats
-      (a.evaluated + b.evaluated)
-      (a.matched + b.matched)
-      (a.failed + b.failed)
-      (a.publishFailed + b.publishFailed)
-
-
-instance Monoid PublishStats where
-  mempty = PublishStats 0 0 0 0
+  deriving (Monoid, Semigroup) via Generically PublishStats
 
 
 -- | Match one project's freshly-decoded records against its active tails and emit what hits.
@@ -694,11 +1153,10 @@ publishMatches rt pid records = do
   where
     step subs acc rec = do
       let (hits, errs) = matchesFor subs rec
-      sent <-
-        if null hits
-          then pure 0
-          else do
-            let liveRow = toLiveRow rec
-            getSum . fold <$> forM hits \cs ->
-              Safe.handleAny (const (pure (Sum 0))) (Sum 1 <$ rt.emit (LiveEnvelope envelopeVersion cs.sub.id liveRow))
-      pure (acc <> PublishStats 1 (length hits) (length errs) (length hits - sent))
+      sent <- foldMapM emitOne hits
+      pure (acc <> PublishStats 1 (Sum (length hits)) (Sum (length errs)) (Sum (length hits) - sent))
+      where
+        emitOne cs =
+          Safe.handleAny (const (pure (Sum 0)))
+            $ Sum 1
+            <$ rt.emit (LiveEnvelope envelopeVersion cs.sub.id (toLiveRow cs.sub.scope cs.sub.columns rec))

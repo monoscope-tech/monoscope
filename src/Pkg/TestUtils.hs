@@ -770,7 +770,8 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
   -- registers a subscription and ingests a batch sees the row without a broker.
   liveTailHub <- LiveTail.newHub
   liveTailCache <- LiveTail.newSubCache
-  let liveTail = LiveTail.Runtime{transport = LiveTail.LocalHub, cache = liveTailCache, hub = liveTailHub, emit = LiveTail.deliver liveTailHub}
+  liveTailBuffer <- LiveTail.newRelayBuffer
+  let liveTail = LiveTail.Runtime{transport = LiveTail.PostgresRelay, cache = liveTailCache, hub = liveTailHub, relayBuffer = liveTailBuffer, emit = LiveTail.deliver liveTailHub}
 
   let atAuthCtx =
         AuthContext

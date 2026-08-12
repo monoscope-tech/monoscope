@@ -452,3 +452,168 @@ Recorded against the numbered implementation sequence above.
   the HTTP routes, cross-project access rejection on all three routes, and every browser test.
 - **The metric set** in the Observability section (step 11 above).
 - **Kafka topic creation and the rollout steps** are operational work, untouched here.
+
+---
+
+## Extension: the Events tab's live toggle (2026-08-12)
+
+Events already had a live mode: a 5s `setInterval` re-running the cursor query against
+TimeFusion. It is now served by the same push path as Live Tail.
+
+### Why polling could not be made fast
+
+The first proposal was to keep the query as the source of truth and use SSE only as a *nudge*
+— push "something matched", let the browser fetch. That is wrong twice over:
+
+1. **The nudge necessarily precedes the data.** A row waits for its ingest batch to fill
+   before `bulkInsertOtelLogsAndSpansTF` runs at all, and the hook that would fire the nudge
+   sits *before* that write. The fetch would run against a row that is not yet queryable.
+2. **It trades one push for a full query.** Planning plus a scan over the memory buffer and
+   Delta, once per nudge. On a busy project that is worse than the 5s poll it replaces.
+
+Write-visibility latency is a floor no polling interval can get under. The only way beneath it
+is to read the record before it is written — which is what the push path already does.
+
+### What changed
+
+- **`Scope` replaces the bare `service` field.** `LogsOnly Text | AllSignals`. The service gate
+  is now structural: Live Tail cannot be constructed without a service, and Events has no place
+  to put one. This is the invariant that was previously a `NOT NULL` plus a handler check —
+  a combination the second surface would have had to lie to.
+- **Migration 0126** adds `scope` and `columns`, drops `NOT NULL` on `service`, and adds a
+  CHECK that `logs_only` still requires one. Verified against a scratch DB: a gate-less
+  `logs_only` row is rejected, `all_signals` is accepted.
+- **`LiveRow` becomes a sum.** `LogRow` keeps Live Tail's fixed projection; `TableRow` carries
+  column name → value for exactly the columns the browser said it was rendering. The `Scope`
+  that selected the subscription selects the shape, so they cannot be mismatched.
+- **Column projection.** The server cannot derive the column list — a query's `finalColumns`
+  may hold SQL expressions only the database can evaluate — so the browser sends its own, and
+  ingest resolves each name by mapping `___` back to `.` and reusing the filter evaluator's
+  resolver. One traversal rule serves both matching and projection, so a field that filters
+  correctly also renders correctly. Columns only SQL could compute are omitted, and the cell
+  stays empty until the durable read fills it.
+- **`live-stream.ts`** extracts the register/stream/renew/backoff/cleanup lifecycle, now shared
+  by both surfaces rather than duplicated.
+- **Pushed rows merge through `groupSpans` + `mergeIntoTree`**, the same path a recent fetch
+  uses, so trace grouping, the new-row highlight and scroll anchoring stay identical between
+  pushed and fetched rows.
+
+### Consequences accepted deliberately
+
+- **Live rows are provisional.** They are matched pre-write, so a row whose TimeFusion write
+  later fails would appear and then vanish on the next durable read. Live Tail already accepted
+  this; Events now does too.
+- **Live mode may drop rows under load** (confirmed acceptable, 2026-08-12). Events has no
+  service gate to bound it up front, so it is bounded by the per-connection queue instead:
+  drop-oldest with a cumulative count surfaced as "N dropped — narrow your query". The
+  alternative — an unbounded buffer — is an out-of-memory crash with extra steps.
+
+### Test coverage
+
+Kept deliberately thin: each test pins a distinct failure mode rather than re-covering paths
+already exercised elsewhere. The row's journey through grouping, dedup and scroll anchoring is
+the *same* code a fetch takes and is covered by the pagination tests, so only the boundary
+where pushed rows enter it is tested.
+
+- `test/integration/LiveTailSpec.hs` — scope invariants both ways, spans reaching Events but
+  never a logs-only tail, cross-service matching, the `___` column projection, omission of
+  unresolvable columns, the Kafka envelope round-tripping in both row shapes, and hub routing
+  delivering to the named subscription and no other.
+- `web-components/test/live-stream.test.ts` — the shared lifecycle (register, stream, drop
+  count, stop), the two refusal paths (server message surfaced verbatim; an expired lease
+  stopping rather than silently reconnecting into a gap), and the push→render boundary.
+
+Two bugs were found by writing these, both of which would have shipped:
+
+1. **Pushed rows never rendered.** `groupSpans` keys the tree off trace adjacency, not off the
+   row array, and pushed rows were passed an empty `traces` list — so it returned an empty tree
+   every time. A fetch receives adjacency from the server; a pushed row arrives alone, so the
+   client now synthesises the same minimal entry a standalone record would have had. The
+   feature would have looked completely inert with nothing in the logs to explain it.
+2. **`handleLiveRows` dropped rows when `logsContainer` was null.** The container decides where
+   a row goes, never whether it arrives — and unlike a fetch there is no cursor to re-request a
+   dropped push with.
+
+### Closed since (2026-08-12)
+
+- **SQL-vs-evaluator conformance** — `test/integration/EvalConformanceSpec.hs`. Fifteen cases,
+  each run *both ways against one row*: the evaluator over the decoded record, and the SQL
+  `Display Expr` emits over that row in Postgres. The row is seeded into both the flattened
+  columns the SQL reads and the JSON blobs the evaluator resolves through, since seeding only
+  one would make every case agree for the wrong reason. A non-vacuity guard asserts both sides
+  actually decided — at least one True, at least one False, no Left — because fifteen matching
+  parse failures would otherwise pass while proving nothing. All fifteen agree, including the
+  three most at risk: `has` as substring, absent-vs-JSON-null equivalence, and numeric coercion
+  through the flattened column.
+- **Cross-project / cross-user rejection** — one test rather than three. Stream, renew and
+  delete all resolve through `activeSubscriptionFor`, so testing that `WHERE` clause tests all
+  three; asserting per route would assert the same clause three times.
+- **Limit enforcement** — this was a real defect, not just a missing test. The plan required
+  the limits be enforced atomically; the code counted, checked, then inserted across three
+  round trips. Now one conditional `INSERT … SELECT … WHERE (count) < N`, with the counts
+  re-read only on failure to name which cap was hit. Residual, stated honestly: under
+  `READ COMMITTED` two racing registrations cannot see each other's uncommitted row, so the cap
+  is "about N". Deliberate — these bound one user's browser tabs, while the cap that protects
+  the fleet (`liveTailMaxCached`) is a `LIMIT` on the ingest side that cannot be raced.
+
+### Still open
+
+- The metric set in the Observability section (blocked on the OTel metrics API).
+- No test runs against a live broker — the Kafka path is covered at its two ends (the envelope
+  encoding and hub routing) rather than through a real topic. The round trip was verified once
+  by hand with `rpk`, which is not a regression guard.
+- Load test and ingest-latency check (need production traffic).
+
+
+---
+
+## Revision: no configuration, and no Kafka requirement (2026-08-12)
+
+Two changes supersede the Configuration and Transport-selection sections above, and the
+deviation notes that discussed `ENABLE_LIVE_TAIL` / `LIVE_TAIL_TOPIC` / `Unavailable` /
+`LocalHub`. **Those names no longer exist** — read this section instead.
+
+### Every environment variable is gone
+
+All eight `LIVE_TAIL_*` vars were deleted and are now constants in `Pkg.LiveTail`
+(`leaseSecs`, `queueCapacity`, `maxPerUser`, `maxPerProject`, `maxCached`,
+`cacheRefreshSecs`, `relayPollMs`, `relayRetentionSecs`, `kafkaTopicName`).
+
+The test for keeping one was: does a deployment genuinely need a different answer? None did.
+They are the shape of the feature, and an operator asked to choose a lease length or a queue
+depth has no way to answer better than the code. The single thing that does vary between
+deployments — whether Kafka exists — is read from `kafkaBrokers`, which is already configured
+for ingest.
+
+### Kafka is an optimisation, not a requirement
+
+`Transport` is now `KafkaTopic Text | PostgresRelay`. There is no `Unavailable` and no
+`LocalHub`.
+
+Kafka is the queue this system is built around, but it is *optional infrastructure*: dev boxes,
+docker-compose and self-hosted installs run without it, and a feature that quietly does nothing
+there does not work. Postgres is not optional, so it is the floor — Live Tail works everywhere
+with **no new dependency**, on the `projects.live_tail_events` relay table (migration 0127,
+UNLOGGED, reaped at `relayRetentionSecs`).
+
+`LocalHub` was removed because choosing it required knowing whether ingest and HTTP share a
+process, and **no process can tell** — a web pod cannot see whether `CONSUMER_ONLY` pods exist.
+Picking it on the available evidence (no brokers) was silently wrong for every split deployment
+without Kafka. The guess was the bug; the relay is what made removing it possible.
+
+Cost discipline on the relay, so it is safe on the ingest path:
+
+- `emit` only buffers into a bounded queue; a fiber batch-inserts on a tick. The ingest path
+  never waits on Postgres.
+- Buffer full drops the oldest **and counts it**, surfaced by the flusher — the same rule the
+  per-browser queue follows.
+- A pod with no open SSE connection skips the poll query entirely.
+- Both transports decode through `envelopeFromValue`, so a rolling-deploy version skew is
+  reported as a skew on either path rather than looking like corruption on one of them.
+
+### Lifecycle
+
+Navigating away deletes the subscription (`keepalive` DELETE), and the SSE handler *also*
+deletes it on teardown — the server learns a connection died the moment the response body
+fails, which beats waiting out the lease for a crashed or slept tab. Matching therefore stops
+within one cache refresh (~2s) rather than one lease (~45s), on both transports.

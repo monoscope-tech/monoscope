@@ -10,7 +10,7 @@ import Data.Aeson qualified as AE
 import Data.HashMap.Strict qualified as HM
 import Data.Pool as Pool (destroyAllResources)
 import Data.Text qualified as T
-import Data.Time.Clock (getCurrentTime)
+import Data.Time.Clock (NominalDiffTime, UTCTime, diffUTCTime, getCurrentTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
@@ -76,6 +76,38 @@ runMonoscope tp =
       withLogger \l -> runServer l envWithLiveTail{backgroundScope = Just backgroundScope} tp
 
 
+-- | One log shape for every Live Tail fiber.
+--
+-- Seven call sites wrote this by hand; the source name and level are decisions that should be
+-- made once, not re-typed per fiber where they can quietly diverge.
+liveTailLog :: LogBase.Logger -> Text -> AE.Value -> IO ()
+liveTailLog lg msg = runLogT "live-tail" lg LogInfo . LogBase.logAttention msg
+
+
+-- | A supervised Live Tail fiber: run @act@ on a tick, forever, surviving any exception.
+--
+-- The catch is the point. These fibers sit beside ingestion, and one that dies on a transient
+-- database blip takes a feature down silently until the next deploy. Expressing "never exits"
+-- once means it cannot be forgotten in the next fiber someone adds.
+liveTailFiber :: LogBase.Logger -> Text -> Int -> IO () -> IO ()
+liveTailFiber lg what intervalMs act =
+  forever $ do
+    Safe.handleAny (\(e :: SomeException) -> liveTailLog lg ("live_tail: " <> what <> " failed") (AE.object ["error" AE..= show @Text e])) act
+    threadDelay (intervalMs * 1000)
+
+
+-- | Run @act@ at most once per @interval@, tracked by @ref@.
+--
+-- Extracted from two hand-rolled copies. The hazard it removes is specific: forgetting the
+-- reset write turns a throttle into a busy loop, and nothing about the symptom points at the
+-- missing line.
+everyN :: NominalDiffTime -> IORef UTCTime -> IO () -> IO ()
+everyN interval ref act = do
+  now <- getCurrentTime
+  prev <- readIORef ref
+  when (diffUTCTime now prev >= interval) (writeIORef ref now >> act)
+
+
 -- | Point Live Tail's @emit@ at the transport this deployment actually has.
 --
 -- 'System.Config.configToEnv' wires the local hub, which is right for a single process and
@@ -100,7 +132,11 @@ withLiveTailTransport env = case env.liveTail.transport of
                 , KProd.prHeaders = mempty
                 }
     pure env{liveTail = env.liveTail{LiveTail.emit = emit}}
-  _ -> pure env
+  LiveTail.PostgresRelay ->
+    -- One insert per matched row would put a round trip on the ingest hot path, so the relay
+    -- emit only buffers; `liveTailRelayFlusher` drains the buffer on a tick. A full buffer
+    -- drops rather than blocks, for the same reason the per-browser queue does.
+    pure env{liveTail = env.liveTail{LiveTail.emit = LiveTail.bufferForRelay env.liveTail.relayBuffer}}
 
 
 -- | Reload the ingest pod's subscription cache, forever.
@@ -110,22 +146,63 @@ withLiveTailTransport env = case env.liveTail.transport of
 -- "tails keep working until their lease would have lapsed anyway", while an emptied one would
 -- black out every live tail in the fleet on a single transient query error.
 liveTailCacheRefresher :: LogBase.Logger -> AuthContext -> TracerProvider -> IO ()
-liveTailCacheRefresher appLogger env tp = forever do
-  Safe.handleAny (\e -> runLogT "live-tail" appLogger LogInfo $ LogBase.logAttention "live_tail: subscription cache refresh failed; serving previous contents" (AE.object ["error" AE..= show @Text e])) do
-    rows <- runBackground appLogger env tp (LiveTail.activeSubscriptions env.config.liveTailMaxCached)
+liveTailCacheRefresher appLogger env tp =
+  liveTailFiber appLogger "subscription cache refresh" (LiveTail.cacheRefreshSecs * 1000) do
+    rows <- runBackground appLogger env tp (LiveTail.activeSubscriptions LiveTail.maxCached)
     now <- getCurrentTime
     bad <- LiveTail.refreshSubCache env.liveTail.cache now rows
     unless (null bad)
-      $ runLogT "live-tail" appLogger LogInfo
-      $ LogBase.logAttention
-        "live_tail: stored filters no longer compile; those subscriptions will not match"
-        (AE.object ["count" AE..= length bad])
-    when (length rows >= env.config.liveTailMaxCached)
-      $ runLogT "live-tail" appLogger LogInfo
-      $ LogBase.logAttention
-        "live_tail: subscription cache hit its cap; some tails are not being matched"
-        (AE.object ["cap" AE..= env.config.liveTailMaxCached])
-  threadDelay (max 1 env.config.liveTailCacheRefreshSecs * 1_000_000)
+      $ liveTailLog appLogger "live_tail: stored filters no longer compile; those subscriptions will not match" (AE.object ["count" AE..= length bad])
+    when (length rows >= LiveTail.maxCached)
+      $ liveTailLog appLogger "live_tail: subscription cache hit its cap; some tails are not being matched" (AE.object ["cap" AE..= LiveTail.maxCached])
+
+
+-- | Drain the buffered relay rows into Postgres, and sweep expired ones.
+--
+-- Runs on ingest pods. Batched on a tick rather than written per row: the alternative is a
+-- database round trip inside the ingestion path, which is the one thing Live Tail is not
+-- allowed to cost.
+liveTailRelayFlusher :: LogBase.Logger -> AuthContext -> TracerProvider -> IO ()
+liveTailRelayFlusher appLogger env tp =
+  liveTailFiber appLogger "relay flush" LiveTail.relayPollMs do
+    (pending, lost) <- LiveTail.takeRelayBuffer env.liveTail.relayBuffer
+    -- Overflow means the writer fell behind ingest; the rows are gone either way, but going
+    -- quietly is what makes it undiagnosable.
+    when (lost > 0)
+      $ liveTailLog appLogger "live_tail: relay buffer overflowed; those tails are missing rows" (AE.object ["dropped" AE..= lost])
+    -- Guarded so an idle pod does not pay for an effect-stack setup every tick.
+    unless (null pending) $ runBackground appLogger env tp (LiveTail.relayPublish pending)
+
+
+-- | Poll the relay for rows addressed to this pod's connections.
+--
+-- Starts at the current end of the table, matching the Kafka consumer's @Latest@: a row
+-- written before this pod held a connection is a row already missed, and replaying it would
+-- show a "live" tail rows from minutes ago. Skips the query entirely while no connection is
+-- open, so a pod nobody is tailing through costs nothing.
+liveTailRelayPoller :: LogBase.Logger -> AuthContext -> TracerProvider -> IO ()
+liveTailRelayPoller appLogger env tp = do
+  watermark <- newIORef =<< runBackground appLogger env tp LiveTail.relayWatermark
+  lastReap <- newIORef =<< getCurrentTime
+  skewed <- newIORef (0 :: Int, 0 :: Int)
+  lastReport <- newIORef =<< getCurrentTime
+  liveTailFiber appLogger "relay poll" LiveTail.relayPollMs do
+    idle <- LiveTail.hubIsEmpty env.liveTail.hub
+    unless idle do
+      seen <- readIORef watermark
+      (results, next) <- runBackground appLogger env tp (LiveTail.relayDrain seen)
+      writeIORef watermark next
+      -- Same three-way handling as the Kafka consumer: a version skew is expected mid-deploy
+      -- and someone else's to deliver, an undecodable row never is, and both are counted
+      -- rather than silently skipped.
+      for_ results \case
+        LiveTail.Delivered e -> LiveTail.deliver env.liveTail.hub e
+        LiveTail.VersionMismatch _ -> modifyIORef' skewed (first (+ 1))
+        LiveTail.Undecodable _ -> modifyIORef' skewed (second (+ 1))
+    reportSkew appLogger skewed lastReport
+    -- Any pod may reap; the delete is idempotent and bounded by age.
+    everyN (fromIntegral LiveTail.relayRetentionSecs) lastReap
+      $ runBackground appLogger env tp LiveTail.relayReap
 
 
 -- | Fan the side-topic into this pod's hub.
@@ -149,17 +226,38 @@ liveTailConsumer appLogger env topic = do
           <> foldMap (uncurry KC.extraProp) (Queue.kafkaSaslExtraProps env.config)
       sub = KC.topics [KT.TopicName topic] <> KC.offsetReset KC.Latest
   Safe.bracket (KC.newConsumer props sub) (either (const pass) (void . KC.closeConsumer)) \case
-    Left e -> runLogT "live-tail" appLogger LogInfo $ LogBase.logAttention "live_tail: consumer failed to start" (AE.object ["error" AE..= show @Text e])
-    Right c -> forever do
-      KC.pollMessage c (KT.Timeout 1000) >>= \case
-        Left _ -> pass -- timeout or transient: the next poll retries
-        Right rec -> forM_ (KC.crValue rec) \raw ->
-          case AE.eitherDecodeStrict' raw of
-            Right e | e.v == LiveTail.envelopeVersion -> LiveTail.deliver env.liveTail.hub e
-            -- A version we do not understand is a rolling deploy, not corruption. Dropping it
-            -- silently is correct; the pod running the other version is delivering it.
-            Right _ -> pass
-            Left _ -> pass
+    Left e -> liveTailLog appLogger "live_tail: consumer failed to start" (AE.object ["error" AE..= show @Text e])
+    Right c -> do
+      -- Skew and corruption are counted, not logged per message: both fail for *every* message
+      -- while they last, so a per-message line would be a flood proportional to ingest volume.
+      -- The summary is what a human can act on — and silence here is what would turn a
+      -- half-finished rolling deploy into an unexplained fleet-wide empty tail.
+      skewed <- newIORef (0 :: Int, 0 :: Int) -- (version-mismatched, undecodable)
+      lastReport <- newIORef =<< getCurrentTime
+      forever do
+        KC.pollMessage c (KT.Timeout 1000) >>= \case
+          Left _ -> pass -- timeout or transient: the next poll retries
+          Right rec -> forM_ (KC.crValue rec) \raw ->
+            case LiveTail.decodeEnvelope raw of
+              LiveTail.Delivered e -> LiveTail.deliver env.liveTail.hub e
+              LiveTail.VersionMismatch _ -> modifyIORef' skewed (first (+ 1))
+              LiveTail.Undecodable _ -> modifyIORef' skewed (second (+ 1))
+        reportSkew appLogger skewed lastReport
+
+
+-- | Surface accumulated live-tail decode failures once a minute, then reset.
+--
+-- A version mismatch is expected mid-deploy and resolves itself; one that persists means a pod
+-- is stuck on an old build and its users' tails are silently empty. Undecodable messages are
+-- never expected at all.
+reportSkew :: LogBase.Logger -> IORef (Int, Int) -> IORef UTCTime -> IO ()
+reportSkew appLogger skewed lastReport = everyN 60 lastReport do
+  (vers, bad) <- atomicModifyIORef' skewed ((0, 0),)
+  when (vers > 0 || bad > 0)
+    $ liveTailLog
+      appLogger
+      "live_tail: side-topic messages dropped; those tails are missing rows"
+      (AE.object ["version_mismatched" AE..= vers, "undecodable" AE..= bad, "envelope_version" AE..= LiveTail.envelopeVersion])
 
 
 -- | Serve @…/main.2c58501e.js@ from @…/main.js@ on disk — the read side of 'assetUrl',
@@ -277,8 +375,8 @@ runServer appLogger env tp = do
   -- subscription cache wherever telemetry is processed; delivery needs the side-topic
   -- consumer wherever a browser can connect.
       liveTailIngests = env.config.enableKafkaService || env.config.enablePubsubService || env.config.enableOtlpGrpcService
-      liveTailKafkaTopic = case env.liveTail.transport of LiveTail.KafkaTopic t -> Just t; _ -> Nothing
-      liveTailUsable = case env.liveTail.transport of LiveTail.Unavailable _ -> False; _ -> True
+      liveTailKafkaTopic = case env.liveTail.transport of LiveTail.KafkaTopic t -> Just t; LiveTail.PostgresRelay -> Nothing
+      liveTailRelay = env.liveTail.transport == LiveTail.PostgresRelay
   -- Always accept hand-offs: every ingesting instance (incl. CONSUMER_ONLY) feeds its extraction worker.
   liftIO $ atomically $ writeTVar env.extractionWorker.acceptingBatches True
   -- Runtime profiling switch: SIGUSR2 toggles both the CPU sampling windows
@@ -318,7 +416,11 @@ runServer appLogger env tp = do
         , guard env.config.enableReplayService $> async (supervise logExc "kafka-replay" $ Queue.kafkaService appLogger env tp Queue.KafkaPrimary "replay" env.config.rrwebDeadLetterTopic env.config.rrwebTopics effectiveReplayBatch processReplayEvents)
         , guard (rtsIsProfiled /= 0) $> async (supervise logExc "cpu-profiler" $ cpuProfileCycler profilingOn)
         , -- Matching happens wherever telemetry lands, so the cache follows ingest, not HTTP.
-          guard (liveTailUsable && liveTailIngests) $> async (supervise logExc "live-tail-cache" $ liveTailCacheRefresher appLogger env tp)
+          guard liveTailIngests $> async (supervise logExc "live-tail-cache" $ liveTailCacheRefresher appLogger env tp)
+        , -- Relay writer follows ingest; relay reader follows HTTP. Both are no-ops on the
+          -- Kafka transport, which carries the rows itself.
+          guard (liveTailRelay && liveTailIngests) $> async (supervise logExc "live-tail-relay-write" $ liveTailRelayFlusher appLogger env tp)
+        , guard (liveTailRelay && not consumerOnly) $> async (supervise logExc "live-tail-relay-read" $ liveTailRelayPoller appLogger env tp)
         , -- Delivery happens wherever the browser lands, so the consumer follows HTTP. Kafka
           -- transport only: with the local hub, publish and deliver are already the same
           -- process and a consumer would deliver a second copy of every row.

@@ -25,7 +25,6 @@ import Control.Exception.Safe (finally)
 import Data.Aeson qualified as AE
 import Data.ByteString.Builder (Builder, byteString, toLazyByteString)
 import Data.ByteString.Lazy qualified as LBS
-import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful.Error.Static qualified as Error
@@ -41,9 +40,9 @@ import Relude
 import Servant qualified
 import Servant.API (Accept (..), MimeRender (..))
 import Servant.Types.SourceT (SourceT (..), StepT (..))
-import System.Config (AuthContext (..), EnvConfig (..))
+import System.Config (AuthContext (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (explorerNavTabs_, faSprite_)
+import Utils (explorerNavTabs_)
 
 
 -- ---------------------------------------------------------------------------------------
@@ -107,18 +106,18 @@ liveTailRegisterH :: Projects.ProjectId -> LT.NewSubscription -> ATAuthCtx (Resp
 liveTailRegisterH pid body = do
   sess <- Projects.getSession
   appCtx <- Reader.ask @AuthContext
-  case appCtx.liveTail.transport of
-    LT.Unavailable why -> Error.throwError (jsonError Servant.err503 why)
-    _ -> pass
-  when (T.null (T.strip body.service)) $ refuse LT.ServiceRequired
+  -- The service gate lives in 'LT.Scope': Live Tail cannot be constructed without a service,
+  -- and the Events tab has none to give. Resolving it first means the gate is enforced before
+  -- anything expensive runs, and by the type rather than by a check a later edit could drop.
+  scope <- either refuse pure (LT.scopeFor body)
   whenLeft_ (LT.compileQuery (fromMaybe "" body.query)) refuse
-  perUser <- LT.countActiveForUser pid sess.user.id
-  when (perUser >= appCtx.config.liveTailMaxPerUser) $ refuse (LT.TooManySubscriptionsForUser perUser)
-  perProject <- LT.countActiveForProject pid
-  when (perProject >= appCtx.config.liveTailMaxPerProject) $ refuse (LT.TooManySubscriptionsForProject perProject)
   now <- Time.currentTime
-  let expiresAt = addUTCTime (fromIntegral appCtx.config.liveTailLeaseSecs) now
-  sid <- LT.insertSubscription pid sess.user.id body expiresAt
+  let expiresAt = addUTCTime (fromIntegral LT.leaseSecs) now
+  -- The limits are checked inside the INSERT, not before it: a separate count would leave a
+  -- window for other registrations to land between the check and the write.
+  sid <-
+    LT.insertSubscription pid sess.user.id body scope LT.maxPerUser LT.maxPerProject expiresAt
+      >>= (`whenNothing` (refuse =<< limitHit pid sess.user.id appCtx))
   addRespHeaders
     RegisterResponse
       { subscriptionId = sid.toText
@@ -126,11 +125,22 @@ liveTailRegisterH pid body = do
       , expiresAt
       }
   where
+    refuse :: LT.RegisterError -> ATAuthCtx a
     refuse e = Error.throwError (jsonError (status e) (LT.registerErrorMessage e))
     status = \case
       LT.TooManySubscriptionsForUser _ -> Servant.err409
       LT.TooManySubscriptionsForProject _ -> Servant.err409
       _ -> Servant.err400
+
+
+-- | Which cap refused the insert. Read only on the failure path — the numbers are for the
+-- message, so slight staleness costs nothing and the success path stays one query.
+limitHit :: Projects.ProjectId -> Projects.UserId -> AuthContext -> ATAuthCtx LT.RegisterError
+limitHit pid uid appCtx = do
+  perUser <- LT.countActiveForUser pid uid
+  if perUser >= LT.maxPerUser
+    then pure (LT.TooManySubscriptionsForUser perUser)
+    else LT.TooManySubscriptionsForProject <$> LT.countActiveForProject pid
 
 
 jsonError :: Servant.ServerError -> Text -> Servant.ServerError
@@ -164,7 +174,7 @@ liveTailRenewH pid rawSid = do
     maybe (Error.throwError (jsonError Servant.err404 "This live tail has expired. Start a new one.")) pure
       =<< LT.activeSubscriptionFor pid sess.user.id sid
   now <- Time.currentTime
-  let expiresAt = addUTCTime (fromIntegral appCtx.config.liveTailLeaseSecs) now
+  let expiresAt = addUTCTime (fromIntegral LT.leaseSecs) now
   renewed <- LT.renewLease sid expiresAt
   maybe
     (Error.throwError (jsonError Servant.err404 "This live tail has expired. Start a new one."))
@@ -201,9 +211,15 @@ liveTailStreamH pid rawSid = do
   sub <-
     maybe (Error.throwError (jsonError Servant.err404 "This live tail has expired. Start a new one.")) pure
       =<< LT.activeSubscriptionFor pid sess.user.id sid
-  conn <- LT.newConn (fromIntegral (max 1 appCtx.config.liveTailQueueCapacity))
+  conn <- LT.newConn LT.queueCapacity
   detach <- LT.attachConn appCtx.liveTail.hub sid conn
-  pure (streamFrom sub conn detach)
+  -- Teardown drops the lease as well as the local queue. The server learns a browser is gone
+  -- the moment the response body fails, which beats waiting out the lease: without this, a
+  -- crashed or slept tab leaves ingest matching and publishing rows nobody will read for the
+  -- full lease period. Safe against reconnects — the client registers a new subscription when
+  -- it reconnects, so this id is always one nothing returns to.
+  let release = detach >> LT.deleteSubscriptionIO appCtx.hasqlPool pid sess.user.id sid
+  pure (streamFrom sub conn release)
 
 
 -- | The response body: @ready@, then a @log@ frame per batch, forever.
@@ -244,9 +260,6 @@ newtype LiveTailGet = LiveTailPage (PageCtx LiveTailPageData)
 
 data LiveTailPageData = LiveTailPageData
   { pid :: Projects.ProjectId
-  , unavailable :: Maybe Text
-  -- ^ Why the tail cannot run, when it cannot. Shown instead of the controls, because a
-  -- start button that can only ever fail is worse than an explanation.
   , leaseSecs :: Int
   }
 
@@ -273,25 +286,19 @@ liveTailGetH pid = do
       bwconf
       LiveTailPageData
         { pid
-        , unavailable = case appCtx.liveTail.transport of LT.Unavailable why -> Just why; _ -> Nothing
-        , leaseSecs = appCtx.config.liveTailLeaseSecs
+        , leaseSecs = LT.leaseSecs
         }
 
 
 liveTailPage_ :: LiveTailPageData -> Html ()
-liveTailPage_ pd = case pd.unavailable of
-  Just why -> div_ [class_ "w-full h-full flex items-center justify-center p-8"] do
-    div_ [class_ "max-w-md flex flex-col items-center gap-3 text-center"] do
-      faSprite_ "signal-stream" "regular" "w-8 h-8 text-iconNeutral"
-      h2_ [class_ "text-base font-medium text-textStrong"] "Live Tail is unavailable"
-      p_ [class_ "text-sm text-textWeak"] (toHtml why)
-  Nothing ->
-    -- All interaction lives in the web component: it owns the EventSource, the row buffer and
-    -- the reconnect state machine, none of which the server can hold on the client's behalf.
-    term
-      "live-tail"
-      [ class_ "w-full h-full"
-      , term "data-project-id" pd.pid.toText
-      , term "data-lease-secs" (show pd.leaseSecs)
-      ]
-      mempty
+liveTailPage_ pd =
+  -- All interaction lives in the web component: it owns the EventSource, the row buffer and
+  -- the reconnect state machine, none of which the server can hold on the client's behalf.
+  -- There is no unavailable state to render — every deployment has a working transport.
+  term
+    "live-tail"
+    [ class_ "w-full h-full"
+    , term "data-project-id" pd.pid.toText
+    , term "data-lease-secs" (show pd.leaseSecs)
+    ]
+    mempty

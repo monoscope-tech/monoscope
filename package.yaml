@@ -208,6 +208,8 @@ tests:
       - hspec
       - relude >= 1.2.0.0
       - aeson
+      # EvalConformanceSpec renders an Expr to SQL via its Display instance.
+      - text-display
       - hasql
       - hasql-interpolate
       - hasql-pool

@@ -161,35 +161,6 @@ data EnvConfig = EnvConfig
   -- consumer group. Failures requeue to the DLQ tail with a bumped
   -- attempt-count header — messages loop until they succeed or an engineer
   -- prunes them manually.
-  , enableLiveTail :: Bool
-  -- ^ Live Tail: match logs on the ingest pod and stream them to the browser over SSE.
-  --
-  -- On by default. This flag is consent, not capability: 'LiveTail.transportFor' still has to
-  -- find a transport that can actually deliver, so a split ingest\/web deployment with no
-  -- 'liveTailTopic' resolves to @Unavailable@ and the tab says why, rather than accepting
-  -- subscriptions it could never feed. Set to False to hide the feature outright.
-  , liveTailTopic :: Text
-  -- ^ Kafka side-topic carrying already-matched rows, keyed by subscription id. Short
-  -- retention: nothing here is replayable and a reconnecting browser never rewinds.
-  --
-  -- Only consulted when 'kafkaBrokers' is non-empty — a deployment with no brokers uses the
-  -- in-process hub and ignores this entirely, so the default being non-empty costs dev
-  -- nothing. Clearing it while brokers are configured disables Live Tail rather than silently
-  -- falling back to a hub the ingest pod cannot reach.
-  , liveTailCacheRefreshSecs :: Int
-  -- ^ How often an ingest pod reloads unexpired subscriptions. Also the worst-case delay
-  -- between starting a tail and the first row arriving.
-  , liveTailLeaseSecs :: Int
-  -- ^ Lease length. An open SSE connection renews at a third of this; anything that stops
-  -- renewing (browser crash, pod kill, closed laptop) stops matching within one period.
-  , liveTailQueueCapacity :: Int
-  -- ^ Rows buffered per browser connection before the oldest is dropped.
-  , liveTailMaxPerUser :: Int
-  , liveTailMaxPerProject :: Int
-  , liveTailMaxCached :: Int
-  -- ^ Hard cap on subscriptions one ingest pod will hold, independent of the per-user and
-  -- per-project limits — those bound new registrations, this bounds the pod even when the
-  -- table already holds more rows than a later, tighter limit would allow.
   , enableFreetier :: Bool
   , enableBrowserMonitoring :: Bool
   , enableSessionReplay :: Bool
@@ -286,14 +257,6 @@ instance DefConfig EnvConfig where
       , kafkaGroupConcurrency = 4
       , enableKafkaDeadLetterService = True
       , enableOtlpGrpcService = True
-      , enableLiveTail = True
-      , liveTailTopic = "live_tail"
-      , liveTailCacheRefreshSecs = 2
-      , liveTailLeaseSecs = 45
-      , liveTailQueueCapacity = 500
-      , liveTailMaxPerUser = 3
-      , liveTailMaxPerProject = 20
-      , liveTailMaxCached = 500
       , enablePostgresTelemetryWrites = True
       , extractionWorkerShards = 4
       , extractionQueueCapacity = 64
@@ -463,9 +426,17 @@ configToEnv config = do
     hub <- LiveTail.newHub
     -- Brokers, not 'enableKafkaService': that flag differs between web and ingest pods in a
     -- split deployment, so reading it would have the two roles pick different transports.
-    let hasBrokers = not (all T.null config.kafkaBrokers)
-        transport = LiveTail.transportFor config.enableLiveTail hasBrokers config.liveTailTopic
-    pure LiveTail.Runtime{transport, cache, hub, emit = LiveTail.deliver hub}
+    -- Everything else Live Tail needs is a constant in "Pkg.LiveTail" — none of it is a
+    -- deployment decision, and an operator asked to pick a lease length has no way to answer.
+    relayBuffer <- LiveTail.newRelayBuffer
+    pure
+      LiveTail.Runtime
+        { transport = LiveTail.transportFor config.kafkaBrokers
+        , cache
+        , hub
+        , relayBuffer
+        , emit = LiveTail.deliver hub
+        }
   -- Seed the parser whitelist + /api/v1/schema handler from a live
   -- introspection of @otel_logs_and_spans@. Non-fatal: a missing table
   -- during partial migration falls back to 'flattenedOtelAttributesBuiltin'

@@ -152,6 +152,7 @@ extra-source-files:
     static/migrations/0123_code_mappings.sql
     static/migrations/0124_github_credentials.sql
     static/migrations/0125_live_tail_subscriptions.sql
+    static/migrations/0126_live_tail_scope.sql
 
 source-repository head
   type: git
@@ -590,6 +591,7 @@ test-suite integration-tests
       CLI.Harness
       Data.Effectful.HasqlGuardSpec
       EndpointDiscoverySpec
+      EvalConformanceSpec
       ExtractionWorkerSpec
       FacetsSpec
       Lifecycle.LogPatternIncidentSpec
@@ -724,6 +726,7 @@ test-suite integration-tests
     , silently
     , stm
     , text
+    , text-display
     , these
     , time
     , unliftio
@@ -847,6 +850,7 @@ test-suite test-dev
       CLI.Harness
       Data.Effectful.HasqlGuardSpec
       EndpointDiscoverySpec
+      EvalConformanceSpec
       ExtractionWorkerSpec
       FacetsSpec
       Lifecycle.LogPatternIncidentSpec

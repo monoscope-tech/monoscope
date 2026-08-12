@@ -6,6 +6,7 @@ import { customElement, state, query, property } from 'lit/decorators.js';
 import { ref, createRef, RefOrCallback } from 'lit/directives/ref.js';
 import { APTEvent, ChildrenForLatency, ColIdxMap, EventLine, ServerTraceEntry, Trace, TraceDataMap } from './types/types';
 import debounce from 'lodash/debounce';
+import { LiveStream, tableRowToArray, traceEntriesFor } from './live-stream';
 import { includes, startsWith, map, forEach, compact, chunk, chain, lt } from 'lodash';
 // Import worker as URL instead of worker instance
 import LogWorkerUrl from './log-worker?worker&url';
@@ -181,7 +182,17 @@ export class LogList extends LitElement {
   private serviceColors: Record<string, string> = {};
   private columnMaxWidthMap: ColIdxMap = {};
   private recentFetchUrl: string = '';
-  private liveStreamInterval: NodeJS.Timeout | null = null;
+  // Live mode is a server push, not a poll. Polling could never be fast here: a row has to
+  // clear its ingest batch and land in TimeFusion before a query can return it, so the
+  // interval was bounded below by write-visibility latency no matter how short it got. The
+  // push path matches on the ingest pod *before* the write, which is the only way to beat it.
+  //
+  // The consequence, accepted deliberately: pushed rows are provisional. A row whose write
+  // later fails would show here and vanish on the next durable read. And under load the
+  // server drops the oldest queued rows rather than buffering without bound — Events has no
+  // service gate to bound it up front, so it is bounded here instead, with a visible count.
+  private liveStream: LiveStream | null = null;
+  @state() private liveDropped = 0;
   private barChart: any = null;
   private lineChart: any = null;
   private initChartsTimer: ReturnType<typeof setTimeout> | null = null;
@@ -218,8 +229,7 @@ export class LogList extends LitElement {
   private handleLiveToggle = (e: Event) => {
     if ((e.target as HTMLInputElement).checked) {
       this.isLiveStreaming = true;
-      if (!this.liveStreamInterval)
-        this.liveStreamInterval = setInterval(() => this.fetchData(this.buildRecentFetchUrl(), false, true), 5000);
+      if (!this.liveStream?.isRunning) void this.startLiveStream();
     } else {
       this.stopLiveStream();
     }
@@ -228,16 +238,18 @@ export class LogList extends LitElement {
   // Tear down live-tail polling and reflect it in the toggle; optional toast when
   // stopped automatically (e.g. the live window reached the range's upper bound).
   private stopLiveStream(message?: string) {
-    if (this.liveStreamInterval) clearInterval(this.liveStreamInterval);
-    this.liveStreamInterval = null;
+    this.liveStream?.stop();
+    this.liveStream = null;
     this.isLiveStreaming = false;
     if (this.liveBtn) this.liveBtn.checked = false;
     if (message) this.showErrorToast(message);
     this.requestUpdate();
   }
   private handlePageHide = () => {
-    if (this.liveStreamInterval) clearInterval(this.liveStreamInterval);
-    this.liveStreamInterval = null;
+    // Drops the lease too, so a closed tab stops matching on the ingest pods rather than
+    // waiting out its expiry.
+    this.liveStream?.stop();
+    this.liveStream = null;
   };
   private isCalculatingWidths: boolean = false;
   private lastVisibilityRange: { first: number; last: number } | null = null;
@@ -506,6 +518,80 @@ export class LogList extends LitElement {
       p.delete('viz_type');
       return `${window.location.origin}${this.dataSubPath()}?${p.toString()}`;
     }
+  }
+
+  /**
+   * Open the push stream for the query currently in the box.
+   *
+   * The subscription carries this table's column list because the server cannot derive it —
+   * a query's final columns may be SQL expressions only the database can evaluate — so ingest
+   * resolves each name it can against the in-memory record and omits the rest.
+   */
+  private async startLiveStream() {
+    const url = new URL(window.location.href);
+    this.liveDropped = 0;
+    this.liveStream = new LiveStream({
+      projectId: this.projectId,
+      leaseSecs: 45,
+      body: () => ({
+        // No service gate on Events: it streams whatever the query says, bounded by the
+        // server's per-connection queue rather than refused up front.
+        all_signals: true,
+        query: url.searchParams.get('query') || null,
+        columns: Object.keys(this.colIdxMap ?? {}),
+      }),
+      onRows: rows => this.handleLiveRows(rows),
+      onDropped: total => {
+        this.liveDropped = total;
+        this.requestUpdate();
+      },
+      onState: (state, detail) => {
+        if (state === 'expired' || state === 'error') this.stopLiveStream(detail);
+      },
+    });
+    await this.liveStream.start();
+  }
+
+  /**
+   * Merge pushed rows through the same path a recent fetch uses.
+   *
+   * Reusing `groupSpans` and `mergeIntoTree` is what keeps trace grouping, the new-row
+   * highlight and the scroll-anchoring identical between pushed and fetched rows — a second
+   * merge path would drift from this one on the first change to either.
+   */
+  private handleLiveRows(rows: unknown[]) {
+    if (!rows.length || !this.colIdxMap) return;
+    const positional = rows
+      .map((r: any) => (r?.shape === 'table' ? tableRowToArray(r.cols ?? {}, this.colIdxMap as any) : null))
+      .filter((r): r is unknown[] => r !== null);
+    if (!positional.length) return;
+
+    // Trace adjacency has to be synthesised: a fetch receives it from the server, but a pushed
+    // row arrives alone, and groupSpans keys the tree off adjacency rather than off the rows.
+    const traces = traceEntriesFor(positional as any, this.colIdxMap as any);
+    const tree = groupSpans(positional as any, this.colIdxMap, this.expandedTraces, this.flipDirection, traces as any);
+    if (!tree.length) return;
+    tree.forEach(t => (t.isNew = true));
+    this.fetchedNew = true;
+
+    // The container decides *where* the row goes, never *whether* it arrives. Returning early
+    // when it is missing (before first paint, or while the list is detached) would drop pushed
+    // rows on the floor — and unlike a fetch, there is no cursor to re-request them with.
+    const container = this.logsContainer;
+    const scrollTop = container?.scrollTop ?? 0;
+    const scrolledToBottom = container ? scrollTop + container.clientHeight >= container.scrollHeight - 1 : true;
+    if (scrolledToBottom) this.shouldScrollToBottom = true;
+    // Same rule as a recent fetch: a user who has scrolled away gets a "N new" pill rather
+    // than having the viewport yanked out from under them mid-read.
+    if (container && shouldBufferRecent(this.isLiveStreaming, scrollTop, scrolledToBottom, this.flipDirection)) {
+      this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree, true);
+    } else {
+      const anchor = container ? this.captureScrollAnchor() : null;
+      this.spanListTree = this.mergeIntoTree(tree, true);
+      this.updateVisibleItems();
+      if (anchor) void this.restoreScrollAnchor(anchor);
+    }
+    this.requestUpdate();
   }
 
   private buildRecentFetchUrl(): string {
@@ -833,9 +919,9 @@ export class LogList extends LitElement {
 
   updated(changedProperties: Map<string, any>) {
     // Stop live streaming when switching to an aggregate view
-    if (changedProperties.has('mode') && this.isAggregate && this.liveStreamInterval) {
-      clearInterval(this.liveStreamInterval);
-      this.liveStreamInterval = null; // else handleLiveToggle's !interval guard skips restart on switch-back
+    if (changedProperties.has('mode') && this.isAggregate && this.liveStream) {
+      this.liveStream.stop();
+      this.liveStream = null; // else handleLiveToggle's isRunning guard skips restart on switch-back
       this.isLiveStreaming = false;
     }
 
@@ -895,9 +981,9 @@ export class LogList extends LitElement {
       clearTimeout(this.updateBatchTimer);
       this.updateBatchTimer = null;
     }
-    if (this.liveStreamInterval) {
-      clearInterval(this.liveStreamInterval);
-      this.liveStreamInterval = null;
+    if (this.liveStream) {
+      this.liveStream.stop();
+      this.liveStream = null;
     }
     if (this.scrollEndTimer) {
       clearTimeout(this.scrollEndTimer);
@@ -1858,6 +1944,16 @@ export class LogList extends LitElement {
         id="logs_list_container_inner"
         style="min-height: 500px; overflow-anchor: none;"
       >
+        ${this.liveDropped > 0
+          ? html`<div class="sticky top-0 z-50 flex justify-center" role="status" aria-live="polite">
+              <span
+                class="cbadge-sm badge-neutral bg-fillWarning-strong text-textInverse-strong shadow rounded-lg text-sm"
+                title="Live mode drops the oldest events when they arrive faster than the browser can take them. Narrow the query to see every event."
+              >
+                ${this.liveDropped.toLocaleString()} dropped — narrow your query
+              </span>
+            </div>`
+          : nothing}
         ${!isAggregate && this.recentDataToBeAdded.length > 0 && !this.flipDirection
           ? html` <div class="sticky top-[30px] z-50 flex justify-center" role="status" aria-live="polite">
               <button

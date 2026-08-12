@@ -304,24 +304,22 @@ dualWriteWithPoisonMapping appCtx target label caches perMsg = do
 -- | Hand each project's records to its active Live Tail subscriptions.
 --
 -- Grouped by project because 'LiveTail.publishMatches' looks subscriptions up per project, and
--- a batch routinely carries several tenants. Skipped entirely when the transport cannot
--- deliver, so a deployment with Live Tail off pays nothing beyond this guard.
+-- a batch routinely carries several tenants. There is no transport check: every deployment has
+-- a working one, and a project nobody is tailing already costs a single lookup.
 fanOutToLiveTail :: (IOE :> es, Log :> es) => AuthContext -> V.Vector Telemetry.OtelLogsAndSpans -> Eff es ()
-fanOutToLiveTail appCtx recs = case appCtx.liveTail.transport of
-  LiveTail.Unavailable _ -> pass
-  _ -> do
-    stats <- fold <$> traverse publishOne (HM.toList byProject)
-    -- Aggregate, not per row: these fail for every row in a batch, so per-row logging would
-    -- be a flood proportional to ingest volume rather than a diagnostic.
-    when (stats.failed > 0)
-      $ Log.logAttention
-        "live_tail: filters could not be evaluated; rows treated as non-matching"
-        (AE.object ["failed" AE..= stats.failed, "evaluated" AE..= stats.evaluated])
-    -- A matched row the transport refused is a row a human is waiting for and will never see.
-    when (stats.publishFailed > 0)
-      $ Log.logAttention
-        "live_tail: matched rows could not be published; those tails are missing logs"
-        (AE.object ["publish_failed" AE..= stats.publishFailed, "matched" AE..= stats.matched])
+fanOutToLiveTail appCtx recs = do
+  stats <- fold <$> traverse publishOne (HM.toList byProject)
+  -- Aggregate, not per row: these fail for every row in a batch, so per-row logging would be a
+  -- flood proportional to ingest volume rather than a diagnostic.
+  when (getSum stats.failed > 0)
+    $ Log.logAttention
+      "live_tail: filters could not be evaluated; rows treated as non-matching"
+      (AE.object ["failed" AE..= getSum stats.failed, "evaluated" AE..= getSum stats.evaluated])
+  -- A matched row the transport refused is a row a human is waiting for and will never see.
+  when (getSum stats.publishFailed > 0)
+    $ Log.logAttention
+      "live_tail: matched rows could not be published; those tails are missing logs"
+      (AE.object ["publish_failed" AE..= getSum stats.publishFailed, "matched" AE..= getSum stats.matched])
   where
     byProject = HM.fromListWith (<>) [(pid, V.singleton r) | r <- V.toList recs, Just pid <- [Projects.projectIdFromText r.project_id]]
     publishOne (pid, rs) = LiveTail.publishMatches appCtx.liveTail pid rs
