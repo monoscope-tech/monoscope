@@ -954,7 +954,9 @@ notificationsTestPostH pid TestForm{..} = do
 
 notificationsTestHistoryGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders NotificationTestHistoryGet)
 notificationsTestHistoryGetH pid = do
-  tests <- Hasql.interp [HI.sql|SELECT * FROM apis.notification_test_history WHERE project_id = #{pid} ORDER BY created_at DESC LIMIT 20|]
+  -- Columns spelled out (not @SELECT *@) so an ADD COLUMN can't shift TestHistory's
+  -- positional decode; the list matches its field order.
+  tests <- Hasql.interp [HI.sql|SELECT id, project_id, issue_type, channel, target, status, error, created_at FROM apis.notification_test_history WHERE project_id = #{pid} ORDER BY created_at DESC LIMIT 20|]
   addRespHeaders $ NotificationTestHistoryGet tests
 
 

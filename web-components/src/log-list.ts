@@ -198,6 +198,7 @@ export class LogList extends LitElement {
   private initChartsTimer: ReturnType<typeof setTimeout> | null = null;
   private _loadMoreObserver: IntersectionObserver | null = null;
   private _loadNewerObserver: IntersectionObserver | null = null;
+  private _visibilityObserver: IntersectionObserver | null = null;
   private updateBatchTimer: NodeJS.Timeout | null = null;
   private pendingUpdates: Set<string> = new Set();
   private handleMouseUp: (() => void) | null = null;
@@ -821,8 +822,24 @@ export class LogList extends LitElement {
 
     // Project ID is now passed as a property from the server
 
-    // Fetch initial data from the JSON endpoint
-    this.fetchInitialData();
+    // Fetch initial data from the JSON endpoint. Embedded lists (issue-page tabs,
+    // dashboards) mount inside panels that are display:none until their tab is opened, so
+    // fetching on connect spends a full query on a panel the user may never look at — on the
+    // issue page that was the single biggest cost of the page load. Defer those to first
+    // visibility; the log explorer itself (no initialFetchUrl) stays eager.
+    // IntersectionObserver fires on the next frame for already-visible elements, so the
+    // visible case costs a frame rather than a branch that has to guess at layout.
+    if (this.initialFetchUrl) {
+      this._visibilityObserver = new IntersectionObserver((entries) => {
+        if (!entries.some((e) => e.isIntersecting)) return;
+        this._visibilityObserver?.disconnect();
+        this._visibilityObserver = null;
+        this.fetchInitialData();
+      });
+      this._visibilityObserver.observe(this);
+    } else {
+      this.fetchInitialData();
+    }
   }
 
   private initializeFixedColumnWidths() {
@@ -976,6 +993,10 @@ export class LogList extends LitElement {
     if (this._loadNewerObserver) {
       this._loadNewerObserver.disconnect();
       this._loadNewerObserver = null;
+    }
+    if (this._visibilityObserver) {
+      this._visibilityObserver.disconnect();
+      this._visibilityObserver = null;
     }
     if (this.updateBatchTimer) {
       clearTimeout(this.updateBatchTimer);

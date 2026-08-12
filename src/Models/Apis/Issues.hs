@@ -1206,7 +1206,7 @@ addReport (r :: Report) =
 
 
 getReportById :: DB es => ReportId -> Eff es (Maybe Report)
-getReportById rid = Hasql.interpOne [HI.sql| SELECT * FROM apis.reports WHERE id = #{rid} |]
+getReportById rid = Hasql.interpOne (selectFrom @Report <> [HI.sql| WHERE id = #{rid} |])
 
 
 reportHistoryByProject :: DB es => Projects.ProjectId -> Int -> Eff es [ReportListItem]
@@ -1216,7 +1216,7 @@ reportHistoryByProject pid page = do
 
 
 getLatestReportByType :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Report)
-getLatestReportByType pid rType = Hasql.interpOne [HI.sql| SELECT * FROM apis.reports WHERE project_id = #{pid} AND report_type = #{rType} ORDER BY created_at DESC LIMIT 1 |]
+getLatestReportByType pid rType = Hasql.interpOne (selectFrom @Report <> [HI.sql| WHERE project_id = #{pid} AND report_type = #{rType} ORDER BY created_at DESC LIMIT 1 |])
 
 
 createErrorSpikeIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> ErrorPatterns.ErrorPatternWithCurrentRate -> Double -> Double -> Double -> Eff es Issue
