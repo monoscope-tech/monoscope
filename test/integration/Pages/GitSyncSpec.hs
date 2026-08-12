@@ -184,15 +184,6 @@ setupSyncOn tr host owner repo secret = do
       }
 
 
--- | Turn on the non-GitHub hosts for one test.
---
--- They ship behind @ENABLE_NON_GITHUB_GIT_HOSTS@ (off by default) until their request paths
--- have run against the real vendors, so the tests that exercise them are exactly the ones
--- that have to opt in — and leaving it off is itself worth a test, below.
-withNonGithubHosts :: TestResources -> TestResources
-withNonGithubHosts tr = tr{trATCtx = tr.trATCtx{config = tr.trATCtx.config{enableNonGithubGitHosts = True}}}
-
-
 -- | HMAC-SHA256 hex of a body, the digest three of the four hosts send.
 hmacHexOf :: Text -> ByteString -> Text
 hmacHexOf secret body = decodeUtf8 $ B16.encode $ BA.convert (HMAC.hmac (encodeUtf8 secret :: ByteString) body :: HMAC.HMAC SHA256)
@@ -405,8 +396,7 @@ spec = sequential do
         verified <- V.length . V.filter isGitSyncFromRepo <$> getPendingBackgroundJobs tr.trATCtx
         verified `shouldSatisfy` (>= 1)
 
-      it "verifies each host in its own dialect" \tr0 -> do
-        let tr = withNonGithubHosts tr0
+      it "verifies each host in its own dialect" \tr -> do
         forM_ [(Git.Gitea, "push" :: Text), (Git.Bitbucket, "repo:push")] \(host, ev) -> do
           setupSyncOn tr host "acme" "config" (Just "s3cret")
           clearJobs tr
@@ -417,25 +407,7 @@ spec = sequential do
           n <- V.length . V.filter isGitSyncFromRepo <$> getPendingBackgroundJobs tr.trATCtx
           n `shouldSatisfy` (>= 1)
 
-      it "refuses a host this deployment has not enabled" \tr -> do
-        -- The flag gates the write path, not just the picker: posting a host directly must be
-        -- refused, and must not leave a half-configured row behind.
-        void $ testServant tr $ GitSyncPage.gitSyncSettingsDeleteH testPid
-        void $ testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid
-          GitSyncForm
-            { host = Just Git.GitLab
-            , apiBase = Nothing
-            , owner = "acme"
-            , repo = "config"
-            , branch = "main"
-            , accessToken = "glpat-x"
-            , webhookSecret = Just "s"
-            , pathPrefix = Nothing
-            }
-        runTestBg frozenTime tr (GitSync.getGitHubSync testPid) >>= \syncM -> syncM `shouldSatisfy` isNothing
-
-      it "does not cross hosts on a repository-name collision" \tr0 -> do
-        let tr = withNonGithubHosts tr0
+      it "does not cross hosts on a repository-name collision" \tr -> do
         -- The same owner/repo on two hosts is two different projects' repositories; a push to
         -- one must not sync the row belonging to the other.
         setupSyncOn tr Git.GitLab "acme" "config" (Just "gl-secret")

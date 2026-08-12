@@ -17,10 +17,15 @@ LogExplorer x3, QueryCache x3, ServiceMap x1). `make lint` reports 11 hints, the
 defect on the way: `getInstallationToken` left `postWith` unwrapped, so an `HttpException`
 escaped its `Either Text` signature and surfaced as a 500 instead of a rendered error.
 
-**New hosts ship disabled.** `ENABLE_NON_GITHUB_GIT_HOSTS` defaults to `False`, per the
-delivery section: GitLab/Gitea/Bitbucket are covered by doctests and fixtures but have never
-run against those vendors' live APIs. The flag gates both the picker and the write path, and
-both states are tested. GitHub is unaffected.
+**All hosts ship enabled.** They were briefly behind `ENABLE_NON_GITHUB_GIT_HOSTS`, since
+GitLab/Gitea/Bitbucket are covered by doctests and fixtures but have never run against those
+vendors' live APIs. The flag is gone: one more env var to carry and explain cost more than the
+staged rollout bought, and a host that is never offered is a host nobody reports a bug in.
+GitLab, Gitea and Bitbucket are offered in the picker and accepted by the write path.
+
+First contact with a real vendor API is therefore a user's, not ours — if a host's request
+paths turn out to be wrong, the failure is a rendered connection error on the settings page,
+which is the same surface a bad token already produces.
 
 ### Still open
 

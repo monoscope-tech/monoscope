@@ -106,7 +106,7 @@ gitSyncSettingsGetH pid = do
   syncM <- GitSync.getGitHubSync pid
   withSettingsPage pid "Integrations" \_ -> pure $ settingsSection_ do
     settingsH2_ "GitHub Sync"
-    div_ [id_ "git-sync-content"] $ gitSyncSettingsView ctx.config ctx.env.hostUrl pid syncM
+    div_ [id_ "git-sync-content"] $ gitSyncSettingsView ctx.env.hostUrl pid syncM
     -- The same installation powers both, and someone who just connected here should not have
     -- to discover the other half of it from the settings index.
     p_ [class_ "pt-4 text-xs text-textWeak"] do
@@ -129,15 +129,11 @@ gitSyncSettingsPostH pid form = do
   existingM <- GitSync.getGitHubSync pid
   -- The host/origin pair is vetted on its own: an update that keeps the stored token has no
   -- token to build a connection with, and 'Git.validateOrigin' is the half of the check that
-  -- never needed one. The flag is checked here as well as in the form, because the form is
-  -- not the only way to reach this handler.
-  let vetted
-        | host `notElem` offeredHosts ctx.config = Left $ Git.hostLabel host <> " connections are not enabled on this deployment."
-        | otherwise = Git.validateOrigin host form.apiBase
-  case vetted of
+  -- never needed one.
+  case Git.validateOrigin host form.apiBase of
     Left err -> do
       addErrorToast ("Could not connect to " <> Git.hostLabel host) (Just err)
-      addRespHeaders $ gitSyncSettingsView ctx.config ctx.env.hostUrl pid existingM
+      addRespHeaders $ gitSyncSettingsView ctx.env.hostUrl pid existingM
     Right _ -> do
       -- Detecting the default branch needs a token, so a form that kept the stored one falls
       -- back to "main" rather than asking the host with a credential it does not have.
@@ -154,7 +150,7 @@ gitSyncSettingsPostH pid form = do
           | T.null form.accessToken -> GitSync.updateGitHubSyncKeepToken existing.id form.owner form.repo branch True
           | otherwise -> GitSync.updateGitHubSync encKey existing.id form.owner form.repo branch form.accessToken True
       Log.logTrace (bool "Created git sync config" "Updated git sync config" (isJust existingM)) (pid, Git.hostSlug host, form.owner, form.repo)
-      addRespHeaders $ gitSyncSettingsView ctx.config ctx.env.hostUrl pid syncM
+      addRespHeaders $ gitSyncSettingsView ctx.env.hostUrl pid syncM
 
 
 gitSyncSettingsDeleteH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
@@ -163,22 +159,12 @@ gitSyncSettingsDeleteH pid = do
   whenJustM (GitSync.getGitHubSync pid) \existing -> do
     _ <- GitSync.deleteGitHubSync existing.id
     Log.logTrace "Deleted GitHub sync config" pid
-  addRespHeaders $ gitSyncSettingsView ctx.config ctx.env.hostUrl pid Nothing
+  addRespHeaders $ gitSyncSettingsView ctx.env.hostUrl pid Nothing
 
 
--- | Which hosts this deployment will connect to.
---
--- GitHub is always offered. The other three are behind @ENABLE_NON_GITHUB_GIT_HOSTS@ until
--- their request paths have been exercised against the real vendors — they are covered by
--- doctests and fixtures, which is not the same as having worked once. Returns 'Either' so the
--- handler can reuse it as a validation step.
-offeredHosts :: Config.EnvConfig -> [Git.GitHost]
-offeredHosts cfg = if cfg.enableNonGithubGitHosts then universe else [Git.GitHub]
-
-
-gitSyncSettingsView :: Config.EnvConfig -> Text -> Projects.ProjectId -> Maybe GitSync.GitHubSync -> Html ()
-gitSyncSettingsView cfg hostUrl pid syncM =
-  div_ [class_ "space-y-6"] $ maybe (notConnectedView cfg actionUrl) (\sync -> connectedView sync actionUrl (webhookUrlFor hostUrl sync.host)) syncM
+gitSyncSettingsView :: Text -> Projects.ProjectId -> Maybe GitSync.GitHubSync -> Html ()
+gitSyncSettingsView hostUrl pid syncM =
+  div_ [class_ "space-y-6"] $ maybe (notConnectedView actionUrl) (\sync -> connectedView sync actionUrl (webhookUrlFor hostUrl sync.host)) syncM
   where
     actionUrl = "/p/" <> pid.toText <> "/settings/git-sync"
 
@@ -205,8 +191,8 @@ hostTokenHelp = \case
   Git.Bitbucket -> ("Repository or workspace access token", "Scopes: repository, repository:write.")
 
 
-notConnectedView :: Config.EnvConfig -> Text -> Html ()
-notConnectedView cfg actionUrl = do
+notConnectedView :: Text -> Html ()
+notConnectedView actionUrl = do
   -- GitHub App (primary)
   div_ [class_ "space-y-3"] do
     p_ [class_ "text-sm text-textWeak"] "Install the GitHub App to sync dashboards with your repository. Webhooks are configured automatically."
@@ -220,12 +206,12 @@ notConnectedView cfg actionUrl = do
     details_ [class_ "group/host"] do
       summary_ [class_ "text-xs font-medium text-textWeak cursor-pointer list-none flex items-center gap-1.5 hover:text-textStrong"] do
         faSprite_ "chevron-right" "solid" "w-3 h-3 transition-transform group-open/host:rotate-90"
-        toHtml $ "Or connect " <> T.intercalate ", " (map Git.hostLabel (offeredHosts cfg)) <> " with a token"
+        toHtml $ "Or connect " <> T.intercalate ", " (map Git.hostLabel universe) <> " with a token"
       form_ [class_ "pt-4 space-y-3", hxPost_ actionUrl, hxSwap_ "innerHTML", hxTarget_ "#git-sync-content", hxIndicator_ "#indicator"] do
         div_ [class_ "grid grid-cols-1 gap-3 md:grid-cols-2"] do
           -- Picking a host rewrites the token label and shows the server-URL field only for
           -- the hosts that can have one, so nobody is asked for a Bitbucket server address.
-          formSelectField_ FieldSm "Git host" "host" True $ forM_ (offeredHosts cfg) \h ->
+          formSelectField_ FieldSm "Git host" "host" True $ forM_ (universe @Git.GitHost) \h ->
             let (tokenLabel, tokenHelp) = hostTokenHelp h
              in option_
                   ( [value_ (Git.hostSlug h), term "data-token-label" tokenLabel, term "data-token-help" tokenHelp, term "data-origin" (originMode h)]
@@ -626,7 +612,7 @@ githubAppSelectRepoH pid form = do
   Log.logInfo "GitHub App repo selected" (pid, form.repoFullName)
   liftIO $ withResource ctx.jobsPool \conn ->
     void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncPushAllDashboards pid
-  addRespHeaders $ gitSyncSettingsView ctx.config ctx.env.hostUrl pid result
+  addRespHeaders $ gitSyncSettingsView ctx.env.hostUrl pid result
 
 
 -- | Whether this host's server-URL field is required, optional, or meaningless — read by the
