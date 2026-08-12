@@ -26,8 +26,8 @@ import OpenTelemetry.Attributes qualified as OA
 import Pages.Charts.Types (DataType (..), MetricsData (..), MetricsStats (..))
 import Pkg.Components.TimePicker qualified as Components
 import Pkg.DeriveUtils (DB)
-import Pkg.Parser (QueryComponents (finalSummarizeQuery, whereClause), SqlQueryCfg (..), defSqlQueryCfg, pSource, parseQueryToAST, queryASTToComponents, replacePlaceholders, variablePresets, variablePresetsKQL)
-import Pkg.Parser.Stats (Section (..), Sources (..))
+import Pkg.Parser (QueryComponents (finalSummarizeQuery, whereClause), SqlQueryCfg (..), defSqlQueryCfg, pSource, queryASTToComponents, replacePlaceholders, variablePresets, variablePresetsKQL)
+import Pkg.Parser.Stats (QueryError (..), Section (..), Sources (..), parseQueryDiagnosed)
 import Pkg.QueryCache qualified as QC
 import Relude
 import Servant.Server (ServerError (errBody), err400)
@@ -117,7 +117,10 @@ queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (Utils.nonEmptyT -> q
   -- A KQL parse/unknown-field failure is user input, not a server fault: carry it
   -- in the payload so the widget renders its error overlay. A 400 body isn't JSON,
   -- so the client would otherwise fall back to a generic "couldn't load this chart".
-  case parseQueryToAST $ replacePlaceholders mappngKQL $ maybeToMonoid queryM of
+  -- Validated against `source`, not blind: a widget can carry `source=metrics` in the
+  -- request rather than in the query text, and checking those fields against
+  -- otel_logs_and_spans rejects the metrics table's own columns (`metric_name`, `value`).
+  case first (.message) $ parseQueryDiagnosed source $ replacePlaceholders mappngKQL $ maybeToMonoid queryM of
     Left err -> pure (emptyMetricsFor now fromD toD){error = Just err}
     Right queryAST -> runQueryAST authCtx dbSource respDataType pid source queryAST (maybeToMonoid queryM) querySQLM mappngSQL now fromD toD
 

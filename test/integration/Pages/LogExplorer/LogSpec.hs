@@ -700,7 +700,12 @@ spec = around withTestResources do
         TelemetryPage.TraceDetailsNotFound _ -> expectationFailure "expected TimeFusion trace details"
       let initialHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml item
       -- Only the selected panel renders; hidden tabs fetch their panel on first reveal.
-      initialHtml `shouldNotSatisfy` T.isInfixOf "m-raw-content"
+      -- The placeholder div still carries the panel id — `hx-swap: outerHTML` has to have
+      -- something to target, so asserting the id was *absent* contradicted the lazy-panel
+      -- design and only passed before those panels became lazy. What proves laziness is the
+      -- loader in its place, plus the deferred fetch asserted below.
+      initialHtml `shouldSatisfy` T.isInfixOf "id=\"m-raw-content\""
+      initialHtml `shouldSatisfy` T.isInfixOf "aria-busy=\"true\""
       initialHtml `shouldSatisfy` T.isInfixOf "intersect once"
       initialHtml `shouldSatisfy` T.isInfixOf "/detailed?tab=tab-raw&amp;partial=true"
       T.length initialHtml `shouldSatisfy` (< 50_000)
@@ -794,9 +799,13 @@ spec = around withTestResources do
       assertAnchored rootItem
       let rootHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml rootItem
       rootHtml `shouldSatisfy` T.isInfixOf "subtab=htab-req"
-      rootHtml `shouldNotSatisfy` T.isInfixOf "apple"
       -- Copy-as-curl is assembled server-side from the HTTP attributes.
       rootHtml `shouldSatisfy` T.isInfixOf "curl -X GET"
+      -- The body panel is fetched on reveal, so curl holds the only inlined copy of the
+      -- body. This used to assert the body text appeared nowhere on the page, which stopped
+      -- being true the moment curl started carrying it — one occurrence still proves the
+      -- panel didn't inline a second.
+      T.count "apple" rootHtml `shouldBe` 1
       (_, reqBodyTab) <- testServant tr $ LogItem.expandAPIlogItemH testPid rootId rootTs Nothing (Just "tab-req") (Just "htab-req") True
       let reqBodyHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml reqBodyTab
       reqBodyHtml `shouldSatisfy` T.isInfixOf "req_content"
