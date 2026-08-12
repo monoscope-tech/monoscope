@@ -151,10 +151,6 @@ logQueryBox_ config = do
               $ termRaw
                 "query-editor"
                 ( [id_ "filterElement", class_ "w-full flex items-center min-h-[38px]", term "default-value" (fromMaybe "" config.query), term "project-id" config.pid.toText]
-                    -- The editor validates against the server, which needs the same source the
-                    -- query will run under: metrics live in another table, so without this the
-                    -- Metrics page squiggles `metric_name` on a query it then runs happily.
-                    <> maybeToList (term "query-source" <$> config.source)
                     <> maybeToList (term "target-widget-preview" <$> config.targetWidgetPreview)
                     <> [term "widget-editor" "true" | isJust config.targetWidgetPreview]
                 )

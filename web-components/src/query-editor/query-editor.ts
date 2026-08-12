@@ -636,12 +636,7 @@ export class QueryEditorComponent extends LitElement {
     const pid = this.getAttribute('project-id') || (window as any).PROJECT_ID;
     if (!pid) return null;
     try {
-      // The source decides which table's columns exist, so the verdict has to be asked for
-      // under the same one the query runs against — otherwise the Metrics page underlines
-      // `metric_name`, a real column there, on a query the server accepts.
-      const source = this.getAttribute('query-source');
-      const url = `/p/${pid}/log_explorer/validate?query=${encodeURIComponent(query)}${source ? `&source=${encodeURIComponent(source)}` : ''}`;
-      const res = await fetch(url, {
+      const res = await fetch(`/p/${pid}/log_explorer/validate?query=${encodeURIComponent(query)}`, {
         headers: { Accept: 'application/json' },
         credentials: 'include',
       });

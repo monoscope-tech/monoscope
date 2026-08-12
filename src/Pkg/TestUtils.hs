@@ -725,6 +725,7 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
   logsPatternCache <- newCache (Just $ TimeSpec (30 * 60) 0) -- Cache for log patterns, 30 minutes TTL
   hostStatsCache <- newCache (Just $ TimeSpec 300 0)
   endpointStatsCache <- newCache (Just $ TimeSpec 300 0)
+  codeBlobCache <- newCache (Just $ TimeSpec (15 * 60) 0)
   tp <- getGlobalTracerProvider
   -- Parallel hasql pools sharing the same test DB. When TIMEFUSION_PG_TEST_URL
   -- is set, point the labeled "timefusion" pool at that instance so the
@@ -792,6 +793,7 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
           logsPatternCache
           hostStatsCache
           endpointStatsCache
+          codeBlobCache
           projectKeyCache
           extractionWorker
           traceSessionCache

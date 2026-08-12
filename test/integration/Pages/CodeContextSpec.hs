@@ -1,6 +1,15 @@
 module Pages.CodeContextSpec (spec) where
 
+import Data.Base64.Types (extractBase64)
+import Data.ByteString.Base64 qualified as B64
+import Data.ByteString.Lazy qualified as LBS
+import Data.Effectful.Wreq qualified as W
 import Data.Text qualified as T
+import Effectful (Eff, IOE, (:>))
+import Effectful.Dispatch.Dynamic (interpret)
+import Network.HTTP.Client.Internal (Response (..), ResponseClose (..), createCookieJar, defaultRequest)
+import Network.HTTP.Types.Status (Status (..))
+import Network.HTTP.Types.Version (http11)
 import Data.Text.Lazy qualified as LT
 import Lucid qualified
 import Models.Projects.CodeContext qualified as CodeContext
@@ -47,9 +56,75 @@ revisionWiringSpec = describe "stack frame source URL" do
     urlFor [] [("service.version", "v2.3.1")] `shouldNotSatisfy` T.isInfixOf "revision="
 
 
+-- | Count outbound requests while serving one canned file body.
+--
+-- A PAT credential means no installation-token exchange, so every request the interpreter sees
+-- is the blob fetch itself and the count is the thing under test with nothing subtracted.
+-- Spelled out rather than wildcarded: every constructor returns the same response type, but
+-- GADT refinement only happens on an explicit match. Writes fail loudly — reading a snippet
+-- is a GET, and a mutation reaching here means the call path changed shape.
+runCountingHTTP :: IOE :> es => IORef Int -> LBS.ByteString -> Eff (W.HTTP ': es) a -> Eff es a
+runCountingHTTP calls body = interpret \_ -> \case
+  W.Get _ -> served
+  W.GetWith _ _ -> served
+  W.Delete _ -> served
+  W.DeleteWith _ _ -> served
+  W.Post{} -> wrote "POST"
+  W.PostWith{} -> wrote "POST"
+  W.Put{} -> wrote "PUT"
+  W.PutWith{} -> wrote "PUT"
+  W.Patch{} -> wrote "PATCH"
+  W.PatchWith{} -> wrote "PATCH"
+  where
+    wrote :: Text -> a
+    wrote verb = error $ "fetchSnippet must not " <> verb <> " — the snippet path is read-only"
+    served = do
+      liftIO $ modifyIORef' calls (+ 1)
+      pure
+        Response
+          { responseStatus = Status 200 "OK"
+          , responseVersion = http11
+          , responseHeaders = []
+          , responseBody = body
+          , responseCookieJar = createCookieJar []
+          , responseClose' = ResponseClose pass
+          , responseOriginalRequest = defaultRequest
+          , responseEarlyHints = []
+          }
+
+
+-- | One git-host API call per frame opened is the shape that makes a hot issue a rate-limit
+-- stall — and a rate-limited fetch presents as the panel silently not filling in, which reads
+-- as "this feature does not work" rather than as a quota. The cache is keyed on
+-- @(owner, repo, ref, path)@, so the second view of the same frame must not leave the process.
+snippetCacheSpec :: Spec
+snippetCacheSpec = around withTestResources do
+  describe "Frame source caching" do
+    it "fetches a blob once however many frames ask for it" \tr -> do
+      let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
+      _ <- runQueryEffect tr $ GitSync.insertGitHubSync encKey testPid Git.GitHub Nothing "acme" "checkout-service" "main" "ghp_test" Nothing ""
+      _ <- testServant tr $ PageCodeContext.codeMappingsPostH testPid (PageCodeContext.CodeMappingForm (Just "checkout-service") (Just "main") (Just "checkout") Nothing (Just "/srv/app/") (Just ""))
+
+      calls <- newIORef (0 :: Int)
+      -- GitHub's contents API answers base64; four lines so both line numbers below are in range.
+      let contents = encodeUtf8 @Text @LBS.ByteString $ "{\"content\":\"" <> extractBase64 (B64.encodeBase64 "one\ntwo\nthree\nfour\n") <> "\"}"
+          fetch n = runQueryEffect tr $ runCountingHTTP calls contents $ CodeContext.fetchSnippet tr.trATCtx.codeBlobCache tr.trATCtx.config testPid (Just "checkout") Nothing "/srv/app/checkout.py" n
+
+      first_ <- fetch 2
+      readIORef calls >>= \c -> c `shouldBe` 1
+      -- A DIFFERENT line in the same file: the cache is per blob, not per snippet, so the
+      -- second frame of one stack trace must be free.
+      second_ <- fetch 3
+      readIORef calls >>= \c -> c `shouldBe` 1
+      fmap (.focusLine) first_ `shouldBe` Right 2
+      fmap (.focusLine) second_ `shouldBe` Right 3
+      fmap (.body) second_ `shouldBe` Right ["one", "two", "three", "four"]
+
+
 spec :: Spec
 spec = do
   revisionWiringSpec
+  snippetCacheSpec
   around withTestResources do
     describe "Source code settings (code mappings)" do
       -- Without a credential there is nothing to read repos through, so the page must point at

@@ -1,4 +1,4 @@
-module System.Config (EnvConfig (..), AuthContext (..), getAppContext, configToEnv, DeploymentEnv (..)) where
+module System.Config (EnvConfig (..), AuthContext (..), CodeBlobKey, getAppContext, configToEnv, DeploymentEnv (..)) where
 
 import Colourista.IO (blueMessage)
 import Control.Exception.Safe qualified as Safe
@@ -318,6 +318,13 @@ type HostStatsKey = (Projects.ProjectId, Text, Text, Text, Text, Int)
 type EndpointStatsKey = ((Projects.ProjectId, Text, Text, Text), (Text, Int, Int, Text))
 
 
+-- | Identifies a source blob: @(owner, repo, ref, path)@. Deliberately NOT project-scoped —
+-- the same public repo linked by two projects is the same bytes, and the credential that
+-- fetched it is not part of the file's identity. Access is still checked per request before
+-- a lookup happens; this caches the fetch, never the authorization.
+type CodeBlobKey = (Text, Text, Text, Text)
+
+
 data AuthContext = AuthContext
   { env :: EnvConfig
   , pool :: Pool.Pool Connection
@@ -339,6 +346,11 @@ data AuthContext = AuthContext
   -- it; a few minutes of staleness is invisible on a rolling 24h count.
   , endpointStatsCache :: Cache EndpointStatsKey (V.Vector Endpoints.EndpointRequestStats)
   -- ^ endpoints-list per-endpoint traffic stats; same deal as 'hostStatsCache'.
+  , codeBlobCache :: Cache CodeBlobKey ByteString
+  -- ^ Source blobs for stack-trace code context, keyed @(owner, repo, ref, path)@. One git-host
+  -- API call per frame opened otherwise, and a hot issue viewed repeatedly re-fetches every
+  -- time — a rate-limit stall then presents as the panel silently not filling in. Only
+  -- successful fetches are stored, so a 404 or a revoked token is never cached.
   , projectKeyCache :: Cache Text (Maybe Projects.ProjectId)
   , extractionWorker :: ExtractionWorker.WorkerState Telemetry.OtelLogsAndSpans
   , traceSessionCache :: TraceSessionCache.TraceSessionCache
@@ -413,6 +425,11 @@ configToEnv config = do
   logsPatternCache <- liftIO $ newCache (Just $ TimeSpec (30 * 60) 0)
   hostStatsCache <- liftIO $ newCache (Just $ TimeSpec 300 0)
   endpointStatsCache <- liftIO $ newCache (Just $ TimeSpec 300 0)
+  -- 15 min: a mutable ref (a branch name) must not pin a stale blob for long, and the value
+  -- here is collapsing the burst of frames opened while reading ONE issue, not long-term
+  -- storage. A commit-sha ref is immutable and would tolerate far longer, but the key cannot
+  -- tell the two apart, so the shorter bound wins.
+  codeBlobCache <- liftIO $ newCache (Just $ TimeSpec (15 * 60) 0)
   extractionWorker <- liftIO $ ExtractionWorker.initWorkerState config.extractionWorkerShards config.extractionQueueCapacity
   traceSessionCache <- liftIO TraceSessionCache.newTraceSessionCache
   tfCircuit <- liftIO ExtractionWorker.newCircuitBreaker
@@ -457,6 +474,7 @@ configToEnv config = do
       , logsPatternCache
       , hostStatsCache
       , endpointStatsCache
+      , codeBlobCache
       , extractionWorker
       , traceSessionCache
       , tfCircuit
