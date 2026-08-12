@@ -131,6 +131,7 @@ export type Trace = {
   trace_start_time: Date | null;
 };
 
-export type ChildrenForLatency = { startNs: number; duration: number; data: any[] };
+/** A descendant of a row, for its latency bar. `depth` is relative to that row: 1 = direct child. */
+export type ChildrenForLatency = { startNs: number; duration: number; data: any[]; depth: number };
 
 export type ConsoleEvent = eventWithTime & pluginEvent<{ level: 'error' | 'warn' | 'info'; trace: string[]; payload: string[] }>;

@@ -2237,12 +2237,14 @@ export class LogList extends LitElement {
               ? KIND_COLORS[value] ?? 'bg-fillStrong'
               : this.serviceColors[value] || 'bg-fillStrong';
           const color = isSyntheticRow ? 'bg-transparent border border-dashed border-strokeWeak' : colorOf(dimOf(dataArr));
-          const chil = childrenTimeSpans.map(({ startNs, duration, data }: { startNs: number; duration: number; data: any }) => {
+          const chil = childrenTimeSpans.map(({ startNs, duration, data, depth }: ChildrenForLatency) => {
             const label = dimOf(data) || 'unknown';
-            return { startNs, duration, label, color: colorOf(label) };
+            return { startNs, duration, depth, label, color: colorOf(label) };
           });
-          // The title always describes the row itself, whichever axis the bar is drawn on.
-          const ownSegments = latencySegments({ startNs, duration }, chil);
+          // The title always describes the row itself, whichever axis the bar is drawn on, and
+          // always exclusively — nested spans would otherwise bill the same time to every
+          // ancestor's service and make the parts sum past the total.
+          const ownSegments = exclusiveSegments({ startNs, duration }, chil);
           const { track, segments, frame } = latencyBar(
             !!expanded,
             { startNs, duration, traceStart, traceEnd, label: dimOf(dataArr) || 'unknown', color },
@@ -3249,14 +3251,64 @@ export function latencySegments(
   return segments;
 }
 
+type Descendant = { startNs: number; duration: number; label: string; color: string; depth?: number };
+
+/**
+ * Where a row's time actually went, attributed exclusively.
+ *
+ * `latencySegments` paints each descendant in its own right, so nested spans overlap and the
+ * same nanosecond is claimed by every ancestor of the span that spent it. For a summary that
+ * is wrong twice over: the colours stack (the deepest, most specific span is painted under its
+ * parents rather than over them) and the totals sum past the row. Here each instant belongs to
+ * exactly one span — the deepest one covering it, i.e. the service actually doing the work
+ * rather than the one waiting on it — and the leftovers are the row's own self time, which the
+ * track shows through. Segments come out disjoint, ordered, and merged across equal neighbours,
+ * so `latencyTitle` can sum them per label and get real per-service time.
+ */
+export function exclusiveSegments(row: { startNs: number; duration: number }, descendants: Descendant[]): LatencySegment[] {
+  if (!(row.duration > 0)) return [];
+  const rowEnd = row.startNs + row.duration;
+  const spans = descendants
+    .map(d => ({ from: Math.max(row.startNs, d.startNs), to: Math.min(rowEnd, d.startNs + Math.max(0, d.duration)), d }))
+    .filter(s => s.to > s.from)
+    .sort((a, b) => a.from - b.from);
+  if (!spans.length) return [];
+
+  const bounds = [...new Set(spans.flatMap(s => [s.from, s.to]))].sort((a, b) => a - b);
+  const parts: { from: number; to: number; label: string; color: string }[] = [];
+  let next = 0;
+  let active: typeof spans = [];
+  for (let i = 0; i < bounds.length - 1; i++) {
+    const [from, to] = [bounds[i], bounds[i + 1]];
+    while (next < spans.length && spans[next].from <= from) active.push(spans[next++]);
+    active = active.filter(s => s.to > from);
+    let win: (typeof spans)[number] | undefined;
+    for (const s of active) if (!win || (s.d.depth ?? 1) > (win.d.depth ?? 1)) win = s;
+    if (!win) continue;
+    const prev = parts[parts.length - 1];
+    if (prev && prev.to === from && prev.label === win.d.label && prev.color === win.d.color) prev.to = to;
+    else parts.push({ from, to, label: win.d.label, color: win.d.color });
+  }
+  return parts.map(p => ({
+    leftPct: ((p.from - row.startNs) / row.duration) * 100,
+    widthPct: ((p.to - p.from) / row.duration) * 100,
+    color: p.color,
+    label: p.label,
+    ns: p.to - p.from,
+  }));
+}
+
 /**
  * The bar for one row: which track it sits on, and what paints over it.
  *
  * Expanding a trace turns the column back into a waterfall, which is the whole point of
  * expanding it — the child rows are a breakdown of one request, and a breakdown needs a
  * shared axis, so every row of an expanded trace draws its own span positioned in the trace
- * with the trace as the empty track. A collapsed row has no siblings to line up with, so it
- * stays its own axis: full-width track (its self time) with its direct children inside it.
+ * with the trace as the empty track — and only its direct children inside it, since every
+ * deeper span is drawn by its own row just below. A collapsed row has no siblings to line up
+ * with and no rows below to defer to, so it stays its own axis: full-width track (its self
+ * time) under an exclusive breakdown of the whole subtree, which is the only place the time
+ * spent in each service is visible at all.
  *
  * `frame` is the |---[]---| rule the trace axis needs and the row axis doesn't: it marks
  * where the trace begins and ends, which is what makes a short span read as short and
@@ -3266,11 +3318,12 @@ export function latencySegments(
 export function latencyBar(
   expanded: boolean,
   row: { startNs: number; duration: number; traceStart: number; traceEnd: number; label: string; color: string },
-  children: { startNs: number; duration: number; label: string; color: string }[]
+  descendants: Descendant[]
 ): { track: string; segments: LatencySegment[]; frame: boolean } {
-  if (!(expanded && row.traceEnd > 0)) return { track: row.color, segments: latencySegments(row, children), frame: false };
+  if (!(expanded && row.traceEnd > 0)) return { track: row.color, segments: exclusiveSegments(row, descendants), frame: false };
   const axis = { startNs: row.traceStart, duration: row.traceEnd };
-  return { track: 'bg-fillWeak', segments: [rowMarker(axis, row), ...latencySegments(axis, children)], frame: true };
+  const direct = descendants.filter(c => (c.depth ?? 1) === 1);
+  return { track: 'bg-fillWeak', segments: [rowMarker(axis, row), ...latencySegments(axis, direct)], frame: true };
 }
 
 /**

@@ -3,6 +3,7 @@ type ColIdxMap = Record<string, number>;
 type APTEvent = any;
 type EventLine = any;
 type Trace = any;
+type ChildrenForLatency = { startNs: number; duration: number; data: any[]; depth: number };
 type ServerTraceEntry = { trace_id: string; start_time: number; duration: number; trace_start_time: string | null; root: string; children: Record<string, string[]> };
 
 // Inline generateId to avoid importing log-list-utils (which has DOM dependencies)
@@ -86,9 +87,15 @@ export function flattenSpanTree(traceArr: Trace[], expandedTraces: Record<string
     depth = 0,
     isLastChild = false,
     hasSiblingsArr: boolean[] = []
-  ): [number, boolean] {
+  ): [number, boolean, ChildrenForLatency[]] {
     let childrenCount = span.children.length;
     let childErrors = false;
+    // The whole subtree, not just the direct children: a collapsed row's bar is a summary of
+    // where its request spent time, and the service that spent it is usually a grandchild —
+    // an API span whose only child is another span of the same service reads as one colour
+    // when only one level is available. `depth` is relative to this row, so the waterfall (which
+    // draws every descendant as its own row) can still ask for just the first level.
+    const subtree: ChildrenForLatency[] = [];
 
     const spanInfo: EventLine = {
       depth,
@@ -104,11 +111,7 @@ export function flattenSpanTree(traceArr: Trace[], expandedTraces: Record<string
       siblingsArr: hasSiblingsArr,
       ...span,
       children: childrenCount,
-      childrenTimeSpans: span.children.map((child) => ({
-        startNs: child.startNs,
-        duration: child.duration,
-        data: child.data,
-      })),
+      childrenTimeSpans: subtree,
     };
     result.push(spanInfo);
     const hasSibling = span.children.length > 1;
@@ -116,13 +119,24 @@ export function flattenSpanTree(traceArr: Trace[], expandedTraces: Record<string
       childErrors = child.hasErrors || childErrors;
       const lastChild = index === span.children.length - 1;
       const newSiblingsArr = hasSibling && !lastChild ? [...hasSiblingsArr, true] : [...hasSiblingsArr, false];
-      const [count, errors] = traverse(child, traceId, [...parentIds, span.id], traceStart, traceEnd, depth + 1, lastChild, newSiblingsArr);
+      const [count, errors, childSubtree] = traverse(
+        child,
+        traceId,
+        [...parentIds, span.id],
+        traceStart,
+        traceEnd,
+        depth + 1,
+        lastChild,
+        newSiblingsArr
+      );
       childrenCount += count;
       childErrors = childErrors || errors;
+      subtree.push({ startNs: child.startNs, duration: child.duration, data: child.data, depth: 1 });
+      for (const d of childSubtree) subtree.push({ ...d, depth: d.depth + 1 });
     });
     spanInfo.children = childrenCount;
     spanInfo.childErrors = childErrors;
-    return [childrenCount, childErrors];
+    return [childrenCount, childErrors, subtree];
   }
 
   traceArr.forEach((trace) => {

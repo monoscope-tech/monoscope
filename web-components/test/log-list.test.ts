@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach } from 'vitest';
 import { render } from 'lit';
 import { dedupeById } from '../src/log-list-utils';
-import { LogList, latencyBar, latencySegments, latencyTitle } from '../src/log-list';
+import { LogList, exclusiveSegments, latencyBar, latencySegments, latencyTitle } from '../src/log-list';
 import { row, fakeTransport, ids, mountList } from './log-list-harness';
 
 describe('dedupeById', () => {
@@ -193,6 +193,43 @@ describe('latencySegments', () => {
   test('drops children with no measurable width, and a zero-duration row has no bar to draw', () => {
     expect(latencySegments(row, [child(1_400, 0), child(1_400, -5)])).toEqual([]);
     expect(latencySegments({ startNs: 0, duration: 0 }, [child(0, 10)])).toEqual([]);
+  });
+});
+
+describe('exclusiveSegments', () => {
+  const row = { startNs: 1_000, duration: 1_000 };
+  const span = (startNs: number, duration: number, depth: number, label: string) => ({ startNs, duration, depth, label, color: `bg-${label}` });
+
+  test('the deepest span covering an instant owns it, so a grandchild is not hidden under its parent', () => {
+    // The bug: `api → svc → db` where api and svc are the same service painted one flat
+    // colour, and the db time the row was actually waiting on was invisible.
+    const segs = exclusiveSegments(row, [span(1_100, 800, 1, 'svc'), span(1_200, 500, 2, 'db')]);
+    expect(segs).toEqual([
+      { leftPct: 10, widthPct: 10, color: 'bg-svc', label: 'svc', ns: 100 },
+      { leftPct: 20, widthPct: 50, color: 'bg-db', label: 'db', ns: 500 },
+      { leftPct: 70, widthPct: 20, color: 'bg-svc', label: 'svc', ns: 200 },
+    ]);
+  });
+
+  test('segments are disjoint and never bill the same time twice, so the parts sum to the whole', () => {
+    const segs = exclusiveSegments(row, [span(1_000, 1_000, 1, 'svc'), span(1_100, 200, 2, 'db'), span(1_500, 300, 2, 'db')]);
+    expect(segs.reduce((a, s) => a + s.ns, 0)).toBe(1_000); // the child fills the row: no self time
+    expect(segs.every((s, i) => i === 0 || s.leftPct >= segs[i - 1].leftPct + segs[i - 1].widthPct)).toBe(true);
+    // The tooltip sums per label off these, so exclusivity is what makes "db 500ns" true.
+    expect(segs.filter(s => s.label === 'db').reduce((a, s) => a + s.ns, 0)).toBe(500);
+  });
+
+  test('adjacent runs of the same service merge into one segment', () => {
+    expect(exclusiveSegments(row, [span(1_000, 200, 1, 'db'), span(1_200, 300, 1, 'db')])).toEqual([
+      { leftPct: 0, widthPct: 50, color: 'bg-db', label: 'db', ns: 500 },
+    ]);
+  });
+
+  test('clips to the row window and drops what falls outside it', () => {
+    expect(exclusiveSegments(row, [span(500, 300, 1, 'early'), span(1_900, 5_000, 1, 'slow')])).toEqual([
+      { leftPct: 90, widthPct: 10, color: 'bg-slow', label: 'slow', ns: 100 },
+    ]);
+    expect(exclusiveSegments({ startNs: 0, duration: 0 }, [span(0, 10, 1, 'db')])).toEqual([]);
   });
 });
 
