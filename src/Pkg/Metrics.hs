@@ -8,6 +8,10 @@
 module Pkg.Metrics (
   ingestDecodeHist,
   ingestWriteHist,
+  gitApiErrors,
+  gitWebhookRejections,
+  gitSyncHist,
+  bump,
   recordMs,
   timed,
 ) where
@@ -17,6 +21,7 @@ import Effectful.Exception (bracket)
 import GHC.Clock (getMonotonicTime)
 import OpenTelemetry.Attributes (Attribute, Attributes, emptyAttributes, unsafeAttributesFromListIgnoringLimits)
 import OpenTelemetry.Metric.Core (
+  Counter (..),
   Histogram (..),
   Meter (..),
   defaultAdvisoryParameters,
@@ -48,6 +53,43 @@ ingestWriteHist =
   unsafePerformIO
     $ meterCreateHistogram monoscopeMeter "monoscope.ingest.write.duration" (Just "ms") Nothing defaultAdvisoryParameters
 {-# NOINLINE ingestWriteHist #-}
+
+
+-- | Failed calls to a git host's REST API, by @host@ and @operation@.
+--
+-- Both dimensions are closed sets (four hosts, six operations), which is the whole reason
+-- they are metric labels: the thing you actually want when a sync stops working is "GitLab
+-- tree reads started failing at 03:10", and that is an aggregate. The error *text* is
+-- unbounded and stays on the log line, never here.
+gitApiErrors :: Counter Int64
+gitApiErrors =
+  unsafePerformIO
+    $ meterCreateCounterInt64 monoscopeMeter "monoscope.git.api.errors" Nothing (Just "Failed git host API calls") defaultAdvisoryParameters
+{-# NOINLINE gitApiErrors #-}
+
+
+-- | Webhook deliveries refused, by @host@ and @reason@.
+--
+-- A rising count here is either a misconfigured secret or someone probing the endpoint, and
+-- the two are told apart by the reason label — which is a fixed vocabulary, not the message.
+gitWebhookRejections :: Counter Int64
+gitWebhookRejections =
+  unsafePerformIO
+    $ meterCreateCounterInt64 monoscopeMeter "monoscope.git.webhook.rejected" Nothing (Just "Webhook deliveries that failed verification") defaultAdvisoryParameters
+{-# NOINLINE gitWebhookRejections #-}
+
+
+-- | Wall-time of one dashboard sync pull, by @host@.
+gitSyncHist :: Histogram
+gitSyncHist =
+  unsafePerformIO
+    $ meterCreateHistogram monoscopeMeter "monoscope.git.sync.duration" (Just "ms") Nothing defaultAdvisoryParameters
+{-# NOINLINE gitSyncHist #-}
+
+
+-- | Add one to a counter. Attributes must be bounded-cardinality; see 'gitApiErrors'.
+bump :: MonadIO m => Counter Int64 -> [(Text, Attribute)] -> m ()
+bump c attrs = liftIO $ counterAdd c 1 (toAttrs attrs)
 
 
 recordMs :: MonadIO m => Histogram -> Double -> [(Text, Attribute)] -> m ()

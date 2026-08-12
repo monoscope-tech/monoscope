@@ -27,23 +27,67 @@ First contact with a real vendor API is therefore a user's, not ours — if a ho
 paths turn out to be wrong, the failure is a rendered connection error on the settings page,
 which is the same surface a bad token already produces.
 
+### Closed since
+
+- **Mock-server HTTP contract tests** — `test/unit/Pkg/GitSpec.hs`, 15 examples, no network and
+  no database. Fixtures are **captured from the live public APIs** (2026-08-12), not
+  hand-written: a fixture I invented would only prove the decoder agrees with my memory of the
+  vendor, which is the one thing that cannot be trusted here. The capture commands are in the
+  file so they can be refreshed. A canned-response interpreter serves trimmed real vendor payloads and records
+  every outbound request, so each example asserts on both directions: the exact URL each host
+  is asked for, that GitHub/Gitea base64 decodes while GitLab/Bitbucket are raw, that the blob
+  sha is read from `sha` on one host and `id` on another, that GitLab creates with POST and
+  updates with PUT, that a sha is computed locally where the host returns none, that pagination
+  follows every page, that exceeding the page limit is an error rather than a short list, that
+  a host-declared truncation is refused, and that a non-2xx or malformed body is an error
+  rather than an empty repository. Writing these caught two bugs in the harness itself, both of
+  which had been quietly asserting the wrong thing.
+- **Metrics** — `Pkg.Metrics` gained `gitApiErrors` and `gitWebhookRejections` (counters) and
+  `gitSyncHist` (histogram). Wired into the tree-read failure path, the webhook rejection path,
+  and around the sync pull. All dimensions are closed sets (`host`, `operation`, `reason`);
+  error *text* stays on the log line, never on a label. Note the OTel metrics API is already
+  available here — `CLAUDE.md`'s "once `hs-opentelemetry-api` gains metrics support" note is
+  stale, and `Pkg.Metrics` has been recording ingestion histograms for a while.
+- **Live smoke test** — `liveSmokeSpec` in `test/integration/Pages/GitSyncSpec.hs`, gated on
+  `GIT_SMOKE_HOST` / `GIT_SMOKE_TOKEN` / `GIT_SMOKE_OWNER` / `GIT_SMOKE_REPO` (plus
+  `GIT_SMOKE_ORIGIN`, required for Gitea, and `GIT_SMOKE_BRANCH`). Host-agnostic where the
+  GitHub E2E block is not, because the thing needing proof against a live vendor is that
+  `Pkg.Git` speaks its dialect, and that is the same five operations everywhere. It lists
+  repositories, reports a default branch, then writes a file and checks that the sha it
+  recorded is the sha a fresh listing reports — the property that decides whether the next pull
+  sees a phantom change. **Not run**: it needs write-capable tokens on three hosts. It writes
+  into `monoscope-smoke/`, so point it at a scratch repository.
+
+- **Decoders verified against live vendor responses.** Every field each decoder reads was
+  checked against the real public APIs of all four hosts. Findings:
+  - GitLab tree entries carry the git object hash as `id` and have no `sha` key at all.
+  - Gitea returns git's own tree object, byte-shape identical to GitHub's (plus `mode`), which
+    is why one decoder serves both — now proven rather than assumed.
+  - Bitbucket `src` entries carry only `path`, `type` (`commit_file`/`commit_directory`) and
+    `size`. The `commit.hash` on each entry **equals the head commit** for every entry, so it
+    is the commit that was listed and not the one that last touched the file. This is the
+    empirical confirmation that the sha-backfill in `fetchTree` was necessary rather than
+    defensive.
+  - Bitbucket repository metadata is `full_name` / `is_private` / `mainbranch.name`, as decoded.
+
 ### Still open
 
-- **Mock-server HTTP contract tests** (pagination, redirects, rate limits, malformed JSON,
-  non-2xx, page-limit failure) — not written. This is the main gap and the reason the flag is
-  off.
-- **Live smoke test per host** — needs accounts and tokens on three hosts.
-- **Metrics** (delivery step 4: API errors, webhook verification failures, pagination limits,
-  sync duration, labelled by host) — not added.
-- **`0126_git_rename_compat_views.sql` is scaffolding.** It re-exposes `projects.github_sync`
-  and `projects.github_credentials` as auto-updatable views so a release still running the old
-  code keeps working across the rename. Drop it once no instance runs pre-0125 code.
-- **Migration number collision.** Prod's `schema_migrations` already contains a
-  `0125_issue_ack_window.sql` from another branch that is not in this repo's history. Both are
-  applied and the runner keys on filename, so nothing is broken — but master will end up with
-  two `0125_*` files when that branch merges. Renumbering ours is **not** safe: it is already
-  recorded in prod under this name, and re-running it would fail on the already-performed
-  `ALTER TABLE ... RENAME`.
+- **Running the write path against a live host.** Reads are now verified against all four real
+  APIs; `pushFile` is not, because writing needs a credential. `liveSmokeSpec` covers it and is
+  one env-var set away. This is the last thing between the flag and being on by default.
+- **Dropping `0126_git_rename_compat_views.sql`.** Written and reviewed, sitting at
+  `static/migrations-pending/0127_drop_git_rename_compat_views.sql`. It is in a sibling
+  directory rather than `static/migrations/` because the runner applies everything in the
+  migrations directory at start-up: writing it into place now would drop the views out from
+  under the currently-deployed build — exactly how GitHub sync broke during the 0125 work. The
+  file carries its own precondition and the one-line `git mv` that activates it, so this is a
+  scheduled step rather than something to re-derive later.
+
+  Note when renumbering: prod already carries **two** `0125_*` migrations
+  (`0125_git_hosts.sql` and `0125_issue_ack_window.sql`, the latter from a parallel branch that
+  has since landed in the tree). Check `SELECT filename FROM schema_migrations ORDER BY filename DESC`
+  before picking a number. Ours must not be renumbered — it is already recorded in prod under
+  its current name, and re-running it would fail on the already-performed `ALTER TABLE … RENAME`.
 
 
 ## What exists today

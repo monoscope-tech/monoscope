@@ -105,6 +105,7 @@
 - text
 - text-display
 - text-builder-linear
+- transformers
 - typed-process
 - unliftio
 - time

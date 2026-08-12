@@ -29,10 +29,12 @@ import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import OddJobs.Job (createJob)
+import OpenTelemetry.Attributes qualified as Otel
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper, withSettingsPage)
 import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), confirmModal_, connectionBadge_, formField_, formSelectField_, headerRow_, iconBadgeLg_, iconBadge_, primaryButton_, sectionLabel_, settingsH2_, settingsSection_)
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Git qualified as Git
+import Pkg.Metrics qualified as Metrics
 import Relude hiding (ask)
 import System.Config qualified as Config
 import System.Logging qualified as Log
@@ -86,7 +88,11 @@ gitWebhookPostH host req = case Git.parseWebhookRepo host req.body of
     GitSync.getGitSyncByRepo host ownerName repoName >>= \case
       Nothing -> statusResp "ignored" <$ Log.logTrace "Git webhook for untracked repo" (Git.hostSlug host, fullName)
       Just sync -> case Git.verifyWebhook host sync.webhookSecret req of
-        Left err -> errResp err <$ Log.logAttention "Git webhook signature validation failed" (Git.hostSlug host, fullName, err)
+        Left err -> do
+          -- The reason is a fixed vocabulary so it can be a metric label; the full message
+          -- stays on the log line, where unbounded text belongs.
+          Metrics.bump Metrics.gitWebhookRejections [("host", Otel.toAttribute $ Git.hostSlug host), ("reason", Otel.toAttribute $ rejectionReason err)]
+          errResp err <$ Log.logAttention "Git webhook signature validation failed" (Git.hostSlug host, fullName, err)
         Right () -> do
           -- Only reachable for a GitHub row created before secrets were required; every new
           -- connection stores one, so this is a migration artefact worth seeing in the log.
@@ -167,6 +173,17 @@ gitSyncSettingsView hostUrl pid syncM =
   div_ [class_ "space-y-6"] $ maybe (notConnectedView actionUrl) (\sync -> connectedView sync actionUrl (webhookUrlFor hostUrl sync.host)) syncM
   where
     actionUrl = "/p/" <> pid.toText <> "/settings/git-sync"
+
+
+-- | Collapse a verification failure into one of a handful of labels.
+--
+-- Bounded on purpose: this becomes a metric dimension, and 'Git.verifyWebhook' can only fail
+-- in these ways.
+rejectionReason :: Text -> Text
+rejectionReason err
+  | "not provided" `T.isInfixOf` err = "missing"
+  | "base64" `T.isInfixOf` err = "malformed_secret"
+  | otherwise = "invalid"
 
 
 -- | Where a host should send its pushes.
