@@ -49,7 +49,14 @@ jobs:
     name: Build and Test
     needs: frontend
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    timeout-minutes: 30
+    # 30 was under budget and the job was silently truncating: on 2026-08-11 the
+    # integration suite got 19 seconds before the wall, and the run before that
+    # lost the doctests. Whichever step the wall lands on is a function of cache
+    # luck, not of what changed. Measured floor with a warm cache: ~1.5m containers
+    # + 5.5m hpack + 16m build + 6m doctests, i.e. 30m before the integration
+    # suite starts. Now that `deploy` gates on this job, truncation blocks the
+    # deploy rather than silently waving it through.
+    timeout-minutes: 60
     container:
       image: ghcr.io/monoscope-tech/monoscope-deps:latest
       credentials:
@@ -200,10 +207,12 @@ jobs:
           fi
           echo "ALL SHARDS GREEN"
 
-  build-and-deploy:
-    name: Build and Deploy Docker Image
+  # Building and pushing the image is harmless whatever the tests say — nothing
+  # runs it until `deploy` says so — so it stays parallel with the test job and
+  # off the critical path. Only the CapRover call is gated.
+  build-image:
+    name: Build and Push Docker Image
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    if: always()
     permissions:
       contents: 'read'
       id-token: 'write'
@@ -247,6 +256,17 @@ jobs:
             GIT_HASH=${{ github.sha }}
             GIT_COMMIT_DATE=${{ github.event.head_commit.timestamp || 'unknown' }}
 
+  # The gate. `needs` is what enforces it: a failed, cancelled, or timed-out
+  # test job leaves this skipped, and the image sits in the registry unused.
+  # Do NOT add `if: always()` here — that is exactly what let untested builds
+  # reach prod for months.
+  deploy:
+    name: Deploy to CapRover
+    needs: [build-image, build-and-test]
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
       # Pinned deliberately, not using caprover/deploy-from-github: that action
       # does an unpinned `npm i -g caprover` at image-build time, so an upstream
       # release lands straight in the deploy path. caprover 2.4.0 (2026-08-05)
