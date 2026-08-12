@@ -67,6 +67,8 @@
 - hashable
 - hashtables
 - http-api-data
+# Live Tail's SSE content type needs the media-type combinators to write its Accept instance.
+- http-media
 - lens
 - lens-aeson
 - lucid >= 2.9.12.1

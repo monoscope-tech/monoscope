@@ -74,6 +74,7 @@ import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
 import Pkg.DeriveUtils (AesonText (..), UUIDId (..), unUUIDId)
 import Pkg.ErrorMetrics (wireTypeErrorsRef)
+import Pkg.LiveTail qualified as LiveTail
 import Pkg.TraceSessionCache qualified as TSC
 import ProcessMessage (stampHashesAtIngest)
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
@@ -285,6 +286,11 @@ dualWriteWithPoisonMapping appCtx target label caches perMsg = do
   let !allRecords = V.concat [rs | (_, _, rs) <- perMsg]
   stamped <- stampOrPassthrough appCtx allRecords
   let minted = Telemetry.mintOtelLogIds $ stampHashesAtIngest caches stamped
+  -- Live Tail, before the durable write: the whole point is that a browser sees the log
+  -- sooner than a query could return it. Runs after minting so the streamed row carries the
+  -- same id the stored row will, and so "open the full record" resolves once the write lands.
+  -- Bounded and total by construction — see 'LiveTail.publishMatches'.
+  fanOutToLiveTail appCtx minted
   res <-
     checkpoint
       (fromString $ "processList:" <> toString label <> ":bulkInsert")
@@ -293,6 +299,32 @@ dualWriteWithPoisonMapping appCtx target label caches perMsg = do
   -- side contributes no PoisonMsgs; decode-failure PoisonMsgs are produced by
   -- the caller before this point.
   pure (res $> [])
+
+
+-- | Hand each project's records to its active Live Tail subscriptions.
+--
+-- Grouped by project because 'LiveTail.publishMatches' looks subscriptions up per project, and
+-- a batch routinely carries several tenants. Skipped entirely when the transport cannot
+-- deliver, so a deployment with Live Tail off pays nothing beyond this guard.
+fanOutToLiveTail :: (IOE :> es, Log :> es) => AuthContext -> V.Vector Telemetry.OtelLogsAndSpans -> Eff es ()
+fanOutToLiveTail appCtx recs = case appCtx.liveTail.transport of
+  LiveTail.Unavailable _ -> pass
+  _ -> do
+    stats <- fold <$> traverse publishOne (HM.toList byProject)
+    -- Aggregate, not per row: these fail for every row in a batch, so per-row logging would
+    -- be a flood proportional to ingest volume rather than a diagnostic.
+    when (stats.failed > 0)
+      $ Log.logAttention
+        "live_tail: filters could not be evaluated; rows treated as non-matching"
+        (AE.object ["failed" AE..= stats.failed, "evaluated" AE..= stats.evaluated])
+    -- A matched row the transport refused is a row a human is waiting for and will never see.
+    when (stats.publishFailed > 0)
+      $ Log.logAttention
+        "live_tail: matched rows could not be published; those tails are missing logs"
+        (AE.object ["publish_failed" AE..= stats.publishFailed, "matched" AE..= stats.matched])
+  where
+    byProject = HM.fromListWith (<>) [(pid, V.singleton r) | r <- V.toList recs, Just pid <- [Projects.projectIdFromText r.project_id]]
+    publishOne (pid, rs) = LiveTail.publishMatches appCtx.liveTail pid rs
 
 
 -- | Fail a gRPC handler with a status code and message.

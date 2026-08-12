@@ -150,6 +150,8 @@ extra-source-files:
     static/migrations/0121_log_patterns_unclassified_recent_index.sql
     static/migrations/0122_otel_deployment_environment.sql
     static/migrations/0123_code_mappings.sql
+    static/migrations/0124_github_credentials.sql
+    static/migrations/0125_live_tail_subscriptions.sql
 
 source-repository head
   type: git
@@ -204,6 +206,7 @@ library
       Pages.Dashboards
       Pages.Endpoints
       Pages.GitSync
+      Pages.LogExplorer.LiveTail
       Pages.LogExplorer.Log
       Pages.LogExplorer.LogItem
       Pages.Monitors
@@ -227,6 +230,7 @@ library
       Pkg.ErrorFingerprint
       Pkg.ErrorMetrics
       Pkg.ExtractionWorker
+      Pkg.LiveTail
       Pkg.Mail
       Pkg.Metrics
       Pkg.Parser
@@ -392,6 +396,7 @@ library
     , http-api-data
     , http-client
     , http-client-tls
+    , http-media
     , http-types
     , hw-kafka-client
     , indexed-traversable
@@ -588,6 +593,7 @@ test-suite integration-tests
       ExtractionWorkerSpec
       FacetsSpec
       Lifecycle.LogPatternIncidentSpec
+      LiveTailSpec
       MonitoringSpec
       Opentelemetry.GrpcIngestionSpec
       Opentelemetry.OtlpServerSpec
@@ -775,6 +781,7 @@ test-suite test-dev
       Pages.Dashboards
       Pages.Endpoints
       Pages.GitSync
+      Pages.LogExplorer.LiveTail
       Pages.LogExplorer.Log
       Pages.LogExplorer.LogItem
       Pages.Monitors
@@ -798,6 +805,7 @@ test-suite test-dev
       Pkg.ErrorFingerprint
       Pkg.ErrorMetrics
       Pkg.ExtractionWorker
+      Pkg.LiveTail
       Pkg.Mail
       Pkg.Metrics
       Pkg.Parser
@@ -842,6 +850,7 @@ test-suite test-dev
       ExtractionWorkerSpec
       FacetsSpec
       Lifecycle.LogPatternIncidentSpec
+      LiveTailSpec
       MonitoringSpec
       Opentelemetry.GrpcIngestionSpec
       Opentelemetry.OtlpServerSpec
@@ -1024,6 +1033,7 @@ test-suite test-dev
     , http-api-data
     , http-client
     , http-client-tls
+    , http-media
     , http-types
     , hw-kafka-client
     , indexed-traversable

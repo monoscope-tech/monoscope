@@ -149,6 +149,7 @@ import Pages.LogExplorer.Log qualified as Log
 import Pages.Settings qualified as Api
 import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), mkHasqlPool)
 import Pkg.ExtractionWorker qualified as ExtractionWorker
+import Pkg.LiveTail qualified as LiveTail
 import Pkg.SchemaLearning.Worker qualified as SchemaWorker
 import Pkg.TestClock (TestClock, advanceTime, getTestTime, newTestClock, runHasqlPoolSynced, runMutableTime, setTestTime)
 import Pkg.TraceSessionCache qualified as TSC
@@ -765,6 +766,11 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
   traceSessionCache <- TSC.newTraceSessionCache
   tfCircuit <- ExtractionWorker.newCircuitBreaker
   metricCatalogBuffer <- Telemetry.newMetricCatalogBuffer
+  -- Tests are a single process, so the local hub is the honest transport: a test that
+  -- registers a subscription and ingests a batch sees the row without a broker.
+  liveTailHub <- LiveTail.newHub
+  liveTailCache <- LiveTail.newSubCache
+  let liveTail = LiveTail.Runtime{transport = LiveTail.LocalHub, cache = liveTailCache, hub = liveTailHub, emit = LiveTail.deliver liveTailHub}
 
   let atAuthCtx =
         AuthContext
@@ -787,6 +793,7 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
           traceSessionCache
           tfCircuit
           metricCatalogBuffer
+          liveTail
           ( envConfig
               { -- Override to ensure test database is used (never production DB from .env)
                 databaseUrl = "test-db-connection-from-pool"

@@ -21,6 +21,7 @@ const components: Array<[string, () => Promise<unknown>]> = [
     await import('./query-editor/query-editor');
     await import('./yaml-editor');
   }],
+  ['live-tail', () => import('./live-tail')],
   ['session-replay', () => import('./session-replay')],
   ['[data-service-map]', () => import('./service-map').then(m => m.hydrateServiceMaps())],
 ];

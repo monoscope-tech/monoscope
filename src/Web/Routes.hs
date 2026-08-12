@@ -4,6 +4,7 @@ module Web.Routes (server, genAuthServerContext, KeepPrefixExp, widgetPngGetH, A
 import Control.Lens
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
+import Data.ByteString.Builder (Builder)
 import Data.Default (def)
 import Data.List qualified as L
 import Data.Map qualified as Map
@@ -94,6 +95,7 @@ import Pages.CodeContext qualified as PageCodeContext
 import Pages.Dashboards qualified as Dashboards
 import Pages.Endpoints qualified as ApiCatalog
 import Pages.GitSync qualified as GitSync
+import Pages.LogExplorer.LiveTail qualified as LiveTail
 import Pages.LogExplorer.Log qualified as Log
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Monitors qualified as Alerts
@@ -113,6 +115,7 @@ import Pages.Telemetry qualified as Trace
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.Widget qualified as Widget
 import Pkg.EmailTemplates qualified as ET
+import Pkg.LiveTail qualified as LT
 import Web.ApiHandlers qualified as ApiH
 import Web.ApiTypes qualified as ApiT
 
@@ -518,6 +521,13 @@ data LogExplorerRoutes' mode = LogExplorerRoutes'
   , logExplorerItemDetailedGet :: mode :- "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" UTCTime :> "detailed" :> QPT "source" :> QPT "tab" :> QPT "subtab" :> QueryFlag "partial" :> Get '[HTML] (RespHeaders LogItem.ApiItemDetailed)
   , logExplorerExpandGet :: mode :- "log_explorer" :> "expand" :> QPT "kind" :> QPT "key" :> QPI "skip" :> QPT "query" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[JSON] (RespHeaders AE.Value)
   , aiSearchPost :: mode :- "log_explorer" :> "ai_search" :> ReqBody '[JSON] AE.Value :> Post '[JSON] (RespHeaders AE.Value)
+  , liveTailGet :: mode :- "live_tail" :> Get '[HTML] (RespHeaders LiveTail.LiveTailGet)
+  , liveTailRegisterPost :: mode :- "live_tail" :> "subscriptions" :> ReqBody '[JSON] LT.NewSubscription :> Post '[JSON] (RespHeaders LiveTail.RegisterResponse)
+  , -- Streams for as long as the browser holds it open, so it is the one route here that is
+    -- not a plain request/response — see 'LiveTail.EventStream'.
+    liveTailStreamGet :: mode :- "live_tail" :> "subscriptions" :> Capture "subscriptionId" Text :> "stream" :> StreamGet NoFraming LiveTail.EventStream (SourceIO Builder)
+  , liveTailRenewPost :: mode :- "live_tail" :> "subscriptions" :> Capture "subscriptionId" Text :> "renew" :> Post '[JSON] (RespHeaders AE.Value)
+  , liveTailDelete :: mode :- "live_tail" :> "subscriptions" :> Capture "subscriptionId" Text :> Delete '[JSON] (RespHeaders AE.Value)
   , -- Source around one stack frame. Its own endpoint rather than part of the detail panel
     -- because resolving it is a call out to the SCM API: a thirty-frame trace must not make
     -- the error panel wait on thirty round trips it may never need.
@@ -917,6 +927,11 @@ logExplorerServer pid =
     , logExplorerExpandGet = Log.apiLogExpandH pid
     , aiSearchPost = Log.aiSearchH pid
     , codeContextGet = PageCodeContext.codeContextH pid
+    , liveTailGet = LiveTail.liveTailGetH pid
+    , liveTailRegisterPost = LiveTail.liveTailRegisterH pid
+    , liveTailStreamGet = LiveTail.liveTailStreamH pid
+    , liveTailRenewPost = LiveTail.liveTailRenewH pid
+    , liveTailDelete = LiveTail.liveTailDeleteH pid
     }
 
 

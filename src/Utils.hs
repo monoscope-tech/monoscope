@@ -1473,8 +1473,10 @@ explorerNavTabs_ pid active =
 
 -- | Single source of truth for the Explorer section, used by both the tab strip and the
 -- sidebar flyout so the two can't drift.
+-- Live Tail leads the strip but Events remains the section's landing route: arriving at
+-- Explorer should answer "what happened", and watching a stream is a thing you opt into.
 explorerTabs :: [(Text, Text)]
-explorerTabs = [("Events", "/log_explorer"), ("Metrics", "/metrics"), ("Service Map", "/service_map")]
+explorerTabs = [("Live Tail", "/live_tail"), ("Events", "/log_explorer"), ("Metrics", "/metrics"), ("Service Map", "/service_map")]
 
 
 -- CSS anchor-positioned popover attrs (DaisyUI popover-target pattern), replacing focus-based `.dropdown`.

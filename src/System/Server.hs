@@ -10,7 +10,9 @@ import Data.Aeson qualified as AE
 import Data.HashMap.Strict qualified as HM
 import Data.Pool as Pool (destroyAllResources)
 import Data.Text qualified as T
-import Data.Time.Clock qualified
+import Data.Time.Clock (getCurrentTime)
+import Data.UUID qualified as UUID
+import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
 import Effectful
 import Effectful.Concurrent (runConcurrent)
@@ -18,6 +20,9 @@ import Effectful.Fail (runFailIO)
 import Effectful.Ki qualified as Ki
 import Effectful.Time (runTime)
 import GHC.Profiling (startHeapProfTimer, startProfTimer, stopHeapProfTimer, stopProfTimer)
+import Kafka.Consumer qualified as KC
+import Kafka.Producer qualified as KProd
+import Kafka.Types qualified as KT
 import Log (LogLevel (..), runLogT)
 import Log qualified as LogBase
 import Network.HTTP.Types (methodGet, methodHead, status200, status404, status500)
@@ -32,6 +37,7 @@ import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.Replay (processReplayEvents)
 import Pkg.DeriveUtils (staticAssetHashes, stripAssetHash)
 import Pkg.ExtractionWorker qualified as ExtractionWorker
+import Pkg.LiveTail qualified as LiveTail
 import Pkg.Queue qualified as Queue
 import ProcessMessage (processMessages)
 import Relude
@@ -39,7 +45,7 @@ import Servant (FromHttpApiData (..))
 import Servant qualified
 import Servant.Server.Generic (genericServeTWithContext)
 import System.Config (
-  AuthContext (backgroundScope, config, extractionWorker, jobsPool, pool, timefusionPgPool),
+  AuthContext (backgroundScope, config, extractionWorker, jobsPool, liveTail, pool, timefusionPgPool),
   DeploymentEnv (Dev),
   EnvConfig (..),
   getAppContext,
@@ -66,7 +72,94 @@ runMonoscope tp =
       let withLogger = Logging.makeLogger env.config.loggingDestination
       -- App-lifetime scope for fire-and-forget handler work (Slack/Twilio). The scope
       -- lives until shutdown, then ki reaps any still-running background fibers.
-      withLogger \l -> runServer l env{backgroundScope = Just backgroundScope} tp
+      envWithLiveTail <- liftIO (withLiveTailTransport env)
+      withLogger \l -> runServer l envWithLiveTail{backgroundScope = Just backgroundScope} tp
+
+
+-- | Point Live Tail's @emit@ at the transport this deployment actually has.
+--
+-- 'System.Config.configToEnv' wires the local hub, which is right for a single process and
+-- wrong the moment ingest and web are separate pods. Rebinding here rather than there is what
+-- keeps a context built outside the server (tests, CLI, jobs) working without a broker.
+withLiveTailTransport :: AuthContext -> IO AuthContext
+withLiveTailTransport env = case env.liveTail.transport of
+  LiveTail.KafkaTopic topic -> do
+    producer <- Queue.getOrInitKafkaProducer env.config
+    let emit e =
+          void
+            $ KProd.produceMessage
+              producer
+              KProd.ProducerRecord
+                { KProd.prTopic = KT.TopicName topic
+                , -- Keyed by subscription so one tail's rows keep their order within a
+                  -- partition. Ordering across subscriptions is meaningless — they are
+                  -- separate screens.
+                  KProd.prKey = Just (encodeUtf8 e.subscriptionId.toText)
+                , KProd.prPartition = KProd.UnassignedPartition
+                , KProd.prValue = Just (toStrict (AE.encode e))
+                , KProd.prHeaders = mempty
+                }
+    pure env{liveTail = env.liveTail{LiveTail.emit = emit}}
+  _ -> pure env
+
+
+-- | Reload the ingest pod's subscription cache, forever.
+--
+-- Runs wherever telemetry is processed. A failed refresh keeps the previous contents rather
+-- than clearing them: subscriptions carry their own expiry, so a stale cache degrades to
+-- "tails keep working until their lease would have lapsed anyway", while an emptied one would
+-- black out every live tail in the fleet on a single transient query error.
+liveTailCacheRefresher :: LogBase.Logger -> AuthContext -> TracerProvider -> IO ()
+liveTailCacheRefresher appLogger env tp = forever do
+  Safe.handleAny (\e -> runLogT "live-tail" appLogger LogInfo $ LogBase.logAttention "live_tail: subscription cache refresh failed; serving previous contents" (AE.object ["error" AE..= show @Text e])) do
+    rows <- runBackground appLogger env tp (LiveTail.activeSubscriptions env.config.liveTailMaxCached)
+    now <- getCurrentTime
+    bad <- LiveTail.refreshSubCache env.liveTail.cache now rows
+    unless (null bad)
+      $ runLogT "live-tail" appLogger LogInfo
+      $ LogBase.logAttention
+        "live_tail: stored filters no longer compile; those subscriptions will not match"
+        (AE.object ["count" AE..= length bad])
+    when (length rows >= env.config.liveTailMaxCached)
+      $ runLogT "live-tail" appLogger LogInfo
+      $ LogBase.logAttention
+        "live_tail: subscription cache hit its cap; some tails are not being matched"
+        (AE.object ["cap" AE..= env.config.liveTailMaxCached])
+  threadDelay (max 1 env.config.liveTailCacheRefreshSecs * 1_000_000)
+
+
+-- | Fan the side-topic into this pod's hub.
+--
+-- Every web pod needs every message, because a load balancer may put any browser's SSE
+-- connection on any pod — hence a consumer group unique to this process rather than a shared
+-- one, which would instead split the partitions between pods and deliver each row to exactly
+-- one of them (the wrong pod, most of the time).
+--
+-- Starts at the latest offset and never commits: there is nothing here worth resuming. A row
+-- a browser was not connected to receive is a row it has already missed, and replaying it on
+-- reconnect would show a "live" tail rows from minutes ago.
+liveTailConsumer :: LogBase.Logger -> AuthContext -> Text -> IO ()
+liveTailConsumer appLogger env topic = do
+  nonce <- T.take 8 . UUID.toText <$> UUID.nextRandom
+  let props =
+        KC.brokersList (map KC.BrokerAddress env.config.kafkaBrokers)
+          <> KC.groupId (KC.ConsumerGroupId ("mono_live_tail_" <> nonce))
+          <> KC.clientId (KC.ClientId ("mono-live-tail-" <> nonce))
+          <> KC.noAutoCommit
+          <> foldMap (uncurry KC.extraProp) (Queue.kafkaSaslExtraProps env.config)
+      sub = KC.topics [KT.TopicName topic] <> KC.offsetReset KC.Latest
+  Safe.bracket (KC.newConsumer props sub) (either (const pass) (void . KC.closeConsumer)) \case
+    Left e -> runLogT "live-tail" appLogger LogInfo $ LogBase.logAttention "live_tail: consumer failed to start" (AE.object ["error" AE..= show @Text e])
+    Right c -> forever do
+      KC.pollMessage c (KT.Timeout 1000) >>= \case
+        Left _ -> pass -- timeout or transient: the next poll retries
+        Right rec -> forM_ (KC.crValue rec) \raw ->
+          case AE.eitherDecodeStrict' raw of
+            Right e | e.v == LiveTail.envelopeVersion -> LiveTail.deliver env.liveTail.hub e
+            -- A version we do not understand is a rolling deploy, not corruption. Dropping it
+            -- silently is correct; the pod running the other version is delivering it.
+            Right _ -> pass
+            Left _ -> pass
 
 
 -- | Serve @…/main.2c58501e.js@ from @…/main.js@ on disk — the read side of 'assetUrl',
@@ -180,6 +273,12 @@ runServer appLogger env tp = do
         , fiber "session-backfill" $ BackgroundJobs.runSessionBackfillTimer appLogger env tp
         ]
   let consumerOnly = env.config.consumerOnly -- CONSUMER_ONLY: queue consumers + schema-learning workers; skip Warp/gRPC/odd-jobs/global-timers
+  -- Live Tail splits across two roles, and one process can hold both. Matching needs the
+  -- subscription cache wherever telemetry is processed; delivery needs the side-topic
+  -- consumer wherever a browser can connect.
+      liveTailIngests = env.config.enableKafkaService || env.config.enablePubsubService || env.config.enableOtlpGrpcService
+      liveTailKafkaTopic = case env.liveTail.transport of LiveTail.KafkaTopic t -> Just t; _ -> Nothing
+      liveTailUsable = case env.liveTail.transport of LiveTail.Unavailable _ -> False; _ -> True
   -- Always accept hand-offs: every ingesting instance (incl. CONSUMER_ONLY) feeds its extraction worker.
   liftIO $ atomically $ writeTVar env.extractionWorker.acceptingBatches True
   -- Runtime profiling switch: SIGUSR2 toggles both the CPU sampling windows
@@ -218,6 +317,16 @@ runServer appLogger env tp = do
           guard (env.config.enableKafkaService && env.config.enableKafkaDeadLetterService && not (T.null env.config.kafkaDeadLetterTopic)) $> async (supervise logExc "kafka-dlq" $ Queue.kafkaService appLogger env tp Queue.KafkaDlqReplay "dlq" env.config.kafkaDeadLetterTopic (map fst (Queue.retryTiers env.config.kafkaDeadLetterTopic)) 1000 OtlpServer.processList)
         , guard env.config.enableReplayService $> async (supervise logExc "kafka-replay" $ Queue.kafkaService appLogger env tp Queue.KafkaPrimary "replay" env.config.rrwebDeadLetterTopic env.config.rrwebTopics effectiveReplayBatch processReplayEvents)
         , guard (rtsIsProfiled /= 0) $> async (supervise logExc "cpu-profiler" $ cpuProfileCycler profilingOn)
+        , -- Matching happens wherever telemetry lands, so the cache follows ingest, not HTTP.
+          guard (liveTailUsable && liveTailIngests) $> async (supervise logExc "live-tail-cache" $ liveTailCacheRefresher appLogger env tp)
+        , -- Delivery happens wherever the browser lands, so the consumer follows HTTP. Kafka
+          -- transport only: with the local hub, publish and deliver are already the same
+          -- process and a consumer would deliver a second copy of every row.
+          [ async (supervise logExc "live-tail-consumer" $ liveTailConsumer appLogger env t)
+          | not consumerOnly
+          , Just t <- [liveTailKafkaTopic]
+          ]
+            & listToMaybe
         ]
       <> fmap Just schemaFibers
       <> (if consumerOnly then [] else fmap Just jobFibers)
@@ -317,7 +426,7 @@ shutdownMonoscope env =
     atomically $ writeTVar env.extractionWorker.acceptingBatches False
     awaitDrained env.extractionWorker 500_000 10
     -- Phase B: force-flush drain buffers so buffered spans get pattern-tagged.
-    now <- Data.Time.Clock.getCurrentTime
+    now <- getCurrentTime
     ExtractionWorker.forceFlushAllBuffers env.extractionWorker now
     awaitDrained env.extractionWorker 500_000 5
     Queue.closeSharedKafkaProducer

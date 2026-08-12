@@ -78,6 +78,7 @@ library
     Pages.Charts.Types
     Pkg.CLIFormat
     Pkg.Deriving
+    Pkg.Parser.Eval
     Pkg.Parser.Expr
     Pkg.Parser.Stats
     Web.Wire
