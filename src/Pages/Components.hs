@@ -835,12 +835,13 @@ durationQuery param q = if T.null q then "" else "?" <> param <> "=" <> q
 -- indefinite sentinel; anything already past reads as expired rather than
 -- rounding up to a misleading "1m left".
 --
--- >>> let t0 = read "2026-01-01 00:00:00 UTC"
--- >>> untilLabel "Muted" t0 (read "2026-01-01 04:00:00 UTC")
+-- >>> import Data.Time (UTCTime (..), fromGregorian)
+-- >>> let t0 = UTCTime (fromGregorian 2026 1 1) 0
+-- >>> untilLabel "Muted" t0 (UTCTime (fromGregorian 2026 1 1) (4 * 3600))
 -- "Muted \183 4h left"
--- >>> untilLabel "Ack'd" t0 (read "2126-01-01 00:00:00 UTC")
+-- >>> untilLabel "Ack'd" t0 (UTCTime (fromGregorian 2126 1 1) 0)
 -- "Ack'd indefinitely"
--- >>> untilLabel "Ack'd" t0 (read "2025-12-31 23:00:00 UTC")
+-- >>> untilLabel "Ack'd" t0 (UTCTime (fromGregorian 2025 12 31) (23 * 3600))
 -- "Ack'd \183 expired"
 untilLabel :: Text -> UTCTime -> UTCTime -> Text
 untilLabel what now until'

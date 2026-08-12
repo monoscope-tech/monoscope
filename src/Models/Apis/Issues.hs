@@ -586,9 +586,10 @@ indefiniteUntil = UTCTime (ModifiedJulianDay 100000) 0
 
 -- | End instant of an acknowledgement window opened at @now@.
 --
--- >>> ackUntil (read "2026-01-01 00:00:00 UTC") (AckFor 90)
+-- >>> import Data.Time (UTCTime (..), fromGregorian)
+-- >>> ackUntil (UTCTime (fromGregorian 2026 1 1) 0) (AckFor 90)
 -- 2026-01-01 01:30:00 UTC
--- >>> ackUntil (read "2026-01-01 00:00:00 UTC") AckIndefinite == indefiniteUntil
+-- >>> ackUntil (UTCTime (fromGregorian 2026 1 1) 0) AckIndefinite == indefiniteUntil
 -- True
 ackUntil :: UTCTime -> AckWindow -> UTCTime
 ackUntil now = \case
