@@ -1520,7 +1520,7 @@ anomalyListGetH pid _layoutM filterTM sortM timeFilter pageM perPageM loadM _end
           , menuItem = Just "Issues"
           , freeTierStatus = freeTierStatus
           , headContent = Just highlightJsHead_
-          , navTabs = Just do
+          , navTabs = Just $ div_ [class_ "flex items-center gap-1.5"] do
               toHtml
                 $ TabFilter
                   { current = currentFilterTab
@@ -1535,7 +1535,8 @@ anomalyListGetH pid _layoutM filterTM sortM timeFilter pageM perPageM loadM _end
               -- Each tab differs only in how long the silence lasts and whether
               -- the issue can come back; saying so is what stops "acknowledged"
               -- from being a mystery.
-              p_ [class_ "text-xs text-textWeak mt-1 max-lg:hidden"] $ toHtml $ tabBlurb currentFilterTab
+              span_ [class_ "tooltip tooltip-bottom", data_ "tip" (tabBlurb currentFilterTab)]
+                $ faSprite_ "circle-info" "regular" "h-4 w-4 text-iconNeutral"
           }
   addRespHeaders
     $ if loadM == Just "true"
