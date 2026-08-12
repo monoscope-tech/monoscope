@@ -1,6 +1,6 @@
 import { describe, test, expect, vi, afterEach } from 'vitest';
 import { LiveStream, tableRowToArray } from '../src/live-stream';
-import { mountList, COLS, ids, row } from './log-list-harness';
+import { mountList, COLS, ids, row, fakeLiveTransport } from './log-list-harness';
 
 // Live mode is a server push, not a poll — polling could never beat TimeFusion's
 // write-visibility latency, since a row has to clear its ingest batch and land before any
@@ -11,39 +11,14 @@ import { mountList, COLS, ids, row } from './log-list-harness';
 // anchoring is the *same* `groupSpans`/`mergeIntoTree` path a fetch uses and is covered by the
 // pagination tests; the only new risk is the boundary where pushed rows enter it.
 
-// Minimal EventSource stand-in: records listeners so a test can push server frames.
-class FakeEventSource {
-  static last: FakeEventSource | null = null;
-  listeners: Record<string, ((e: any) => void)[]> = {};
-  onerror: (() => void) | null = null;
-  closed = false;
-  constructor(public url: string) {
-    FakeEventSource.last = this;
-  }
-  addEventListener(type: string, fn: (e: any) => void) {
-    (this.listeners[type] ??= []).push(fn);
-  }
-  close() {
-    this.closed = true;
-  }
-  emit(type: string, data: unknown) {
-    for (const fn of this.listeners[type] ?? []) fn({ data: JSON.stringify(data) });
-  }
-}
-
-const withFakes = (registerBody: any, status = 200) => {
-  const calls: { url: string; method?: string }[] = [];
-  (globalThis as any).EventSource = FakeEventSource;
-  (globalThis as any).fetch = async (url: string, init?: any) => {
-    calls.push({ url, method: init?.method });
-    return { ok: status < 400, status, json: async () => registerBody };
-  };
-  return calls;
-};
+// The registration endpoint + EventSource stand-in lives in the harness, so these tests and
+// the component-level ones observe live connections through the same seam.
+let live: ReturnType<typeof fakeLiveTransport>;
+const withFakes = (registerBody: any, status = 200) => (live = fakeLiveTransport(registerBody, status)).calls;
 
 afterEach(() => {
   vi.useRealTimers();
-  FakeEventSource.last = null;
+  live?.restore();
 });
 
 describe('LiveStream lifecycle', () => {
@@ -62,19 +37,19 @@ describe('LiveStream lifecycle', () => {
     });
     await s.start();
 
-    FakeEventSource.last!.emit('ready', {});
+    live.last!.emit('ready', {});
     expect(state).toBe('live');
 
-    FakeEventSource.last!.emit('log', [{ shape: 'table', cols: { kind: 'log' } }]);
+    live.last!.emit('log', [{ shape: 'table', cols: { kind: 'log' } }]);
     expect(rows).toHaveLength(1);
 
     // Dropping under load is expected for Events — it has no service gate — so the count
     // reaching the UI is the thing that must not silently break.
-    FakeEventSource.last!.emit('dropped', { count: 42 });
+    live.last!.emit('dropped', { count: 42 });
     expect(dropped).toBe(42);
 
     s.stop();
-    expect(FakeEventSource.last!.closed).toBe(true);
+    expect(live.openCount()).toBe(0);
   });
 
   test('surfaces the server refusal instead of a generic message', async () => {
@@ -113,7 +88,7 @@ describe('LiveStream lifecycle', () => {
       },
     });
     await s.start();
-    FakeEventSource.last!.emit('notice', { message: "This live tail's filter is no longer valid." });
+    live.last!.emit('notice', { message: "This live tail's filter is no longer valid." });
     expect(state).toBe('error');
     expect(detail).toContain('no longer valid');
     expect(s.isRunning).toBe(false);
@@ -133,9 +108,9 @@ describe('LiveStream lifecycle', () => {
       onState: st => seen.push(st),
     });
     await s.start();
-    FakeEventSource.last!.emit('ready', {});
+    live.last!.emit('ready', {});
     // A transport failure is a blip: it must reconnect, not surface as a permanent error.
-    FakeEventSource.last!.onerror!();
+    live.last!.onerror!();
     expect(seen).toEqual(['connecting', 'live', 'reconnecting']);
     s.stop();
   });
@@ -152,7 +127,7 @@ describe('LiveStream lifecycle', () => {
       onState: st => (state = st),
     });
     await s.start();
-    withFakes({}, 404); // the renew call now 404s
+    live.respond({}, 404); // the renew call now 404s
     await s.renew();
     expect(state).toBe('expired');
     expect(s.isRunning).toBe(false);

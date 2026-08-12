@@ -1,5 +1,5 @@
 import { describe, test, expect, vi } from 'vitest';
-import { row, serverTransport, serverTransportFlipped, logPage, treeFromLogs, COLS, deferredTransport, stubFetch, ids, mountList } from './log-list-harness';
+import { row, serverTransport, serverTransportFlipped, logPage, treeFromLogs, COLS, deferredTransport, stubFetch, ids, mountList, fakeLiveTransport } from './log-list-harness';
 import { DenseRowFlowLayout, virtualItemKey } from '../src/log-list';
 import { shouldBufferRecent, cursorFromTimestamp } from '../src/log-list-utils';
 
@@ -256,8 +256,9 @@ describe('LogList — MED correctness', () => {
     window.history.replaceState({}, '', '/log_explorer?to=2026-06-01T00%3A00%3A00.000Z&query=x');
     el.transport = serverTransport(logPage([['1', '2026-06-01T00:00:00.000Z']])); // newest loaded row is AT `to`
     await el.fetchData('/log_explorer?to=2026-06-01T00%3A00%3A00.000Z&query=x&json=true', false, false, false);
+    const live = fakeLiveTransport();
     (el as any).isLiveStreaming = true;
-    (el as any).liveStreamInterval = setInterval(() => {}, 1e7);
+    await (el as any).startLiveStream();
     const btn = document.createElement('input');
     btn.type = 'checkbox';
     btn.checked = true;
@@ -268,11 +269,12 @@ describe('LogList — MED correctness', () => {
     try {
       (el as any).buildRecentFetchUrl();
       expect((el as any).isLiveStreaming).toBe(false);
-      expect((el as any).liveStreamInterval).toBeNull();
+      expect(live.openCount()).toBe(0); // the connection is closed, not just the flag flipped
       expect(btn.checked).toBe(false);
       expect(toast).toMatch(/end of the selected time range/);
     } finally {
       document.body.removeEventListener('errorToast', onToast);
+      live.restore();
     }
   });
 
@@ -303,11 +305,6 @@ describe('LogList — MED correctness', () => {
     el.transport = serverTransport({ logsData: [rootRow, childRow], colIdxMap: COLS, traces });
     await el.fetchData(`/log_explorer?to=${encodeURIComponent(to)}&query=x&json=true`, false, false, false);
     (el as any).isLiveStreaming = true;
-    (el as any).liveStreamInterval = setInterval(() => {}, 1e7);
-    const btn = document.createElement('input');
-    btn.type = 'checkbox';
-    btn.checked = true;
-    (el as any).liveBtn = btn;
     (el as any).buildRecentFetchUrl();
     expect((el as any).isLiveStreaming).toBe(false); // newest=child → from=child+10ms ≥ to → stops
   });
@@ -382,16 +379,29 @@ describe('LogList — MED correctness', () => {
     expect((el as any).expandTimeRange).toBe(false);
   });
 
-  // Switching to an aggregate view must null the interval, not just clear it — else
-  // handleLiveToggle's `!liveStreamInterval` guard skips setInterval on switch-back.
-  test('mode-switch to aggregate nulls liveStreamInterval (re-enable works later)', async () => {
+  // Switching to an aggregate view must null the stream, not just stop it — else
+  // handleLiveToggle's `!liveStream?.isRunning` guard is fine but the stale object lingers,
+  // and a switch-back re-enables against a connection that is already gone.
+  test('mode-switch to aggregate closes the live stream (re-enable works later)', async () => {
     const el = await mountList();
-    (el as any).liveStreamInterval = setInterval(() => {}, 1e7);
-    (el as any).isLiveStreaming = true;
-    (el as any).mode = 'patterns';
-    (el as any).updated(new Map([['mode', 'logs']]));
-    expect((el as any).liveStreamInterval).toBeNull();
-    expect((el as any).isLiveStreaming).toBe(false);
+    const live = fakeLiveTransport();
+    try {
+      (el as any).isLiveStreaming = true;
+      await (el as any).startLiveStream();
+      expect(live.openCount()).toBe(1);
+
+      (el as any).mode = 'patterns';
+      (el as any).updated(new Map([['mode', 'logs']]));
+      expect((el as any).liveStream).toBeNull();
+      expect((el as any).isLiveStreaming).toBe(false);
+      expect(live.openCount()).toBe(0);
+
+      (el as any).mode = 'logs';
+      await (el as any).startLiveStream();
+      expect(live.openCount()).toBe(1);
+    } finally {
+      live.restore();
+    }
   });
 });
 
@@ -481,33 +491,31 @@ describe('LogList — lifecycle cleanup (no leaks across disconnect / remount)',
   // CONSTRUCTOR and never removed → after an HTMX-morph remount, the old
   // (disconnected) instance's closure still fires on the shared global checkbox,
   // stacking orphaned 5s setInterval polling loops.
-  test('live-stream listener + interval do not leak across disconnect/remount', async () => {
+  test('live-stream listener + connection do not leak across disconnect/remount', async () => {
     const btn = document.createElement('input');
     btn.type = 'checkbox'; btn.id = 'streamLiveData';
     document.body.appendChild(btn);
-    const intervals = new Set<any>();
-    const realSet = globalThis.setInterval, realClear = globalThis.clearInterval;
-    (globalThis as any).setInterval = (fn: any) => { const id = realSet(fn, 1e7); intervals.add(id); return id; };
-    (globalThis as any).clearInterval = (id: any) => { intervals.delete(id); realClear(id); };
-    const toggle = (on: boolean) => { btn.checked = on; btn.dispatchEvent(new Event('change')); };
+    const live = fakeLiveTransport();
+    // The toggle is a shared global checkbox, so a leaked listener shows up as a second
+    // connection opening for a component that is no longer on the page.
+    const toggle = async (on: boolean) => { btn.checked = on; btn.dispatchEvent(new Event('change')); await Promise.resolve(); await Promise.resolve(); };
     try {
       const a = await mountList();
-      toggle(true);
-      expect(intervals.size).toBe(1);     // A polling
-      a.remove();                          // disconnect A
-      expect(intervals.size).toBe(0);      // its interval cleared
+      await toggle(true);
+      expect(live.openCount()).toBe(1);     // A streaming
+      a.remove();                            // disconnect A
+      expect(live.openCount()).toBe(0);      // its connection closed
 
-      toggle(false); toggle(true);         // A's orphaned listener must NOT restart polling
-      expect(intervals.size).toBe(0);
+      await toggle(false); await toggle(true); // A's orphaned listener must NOT reconnect
+      expect(live.openCount()).toBe(0);
 
       const b = await mountList();
-      toggle(true);
-      expect(intervals.size).toBe(1);      // exactly one (B) — not stacked with A
+      await toggle(true);
+      expect(live.openCount()).toBe(1);      // exactly one (B) — not stacked with A
       b.remove();
-      expect(intervals.size).toBe(0);
+      expect(live.openCount()).toBe(0);
     } finally {
-      (globalThis as any).setInterval = realSet;
-      (globalThis as any).clearInterval = realClear;
+      live.restore();
       btn.remove();
     }
   });
