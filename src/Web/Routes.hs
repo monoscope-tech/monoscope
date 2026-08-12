@@ -113,6 +113,7 @@ import Pages.Telemetry qualified as Trace
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.Widget qualified as Widget
 import Pkg.EmailTemplates qualified as ET
+import Pkg.Git qualified as Git
 import Web.ApiHandlers qualified as ApiH
 import Web.ApiTypes qualified as ApiT
 
@@ -393,7 +394,27 @@ data Routes mode = Routes
   , clientMetadata :: mode :- "api" :> "client_metadata" :> Header "Authorization" Text :> Get '[JSON] Auth.ClientMetadata
   , lemonWebhook :: mode :- "webhook" :> "lemon-squeezy" :> Header "X-Signature" Text :> ReqBody '[RawJSON] BS.ByteString :> Post '[HTML] (Html ())
   , stripeWebhook :: mode :- "webhook" :> "stripe" :> Header "Stripe-Signature" Text :> ReqBody '[RawJSON] BS.ByteString :> Post '[HTML] (Html ())
-  , githubWebhook :: mode :- "webhook" :> "github" :> Header "X-Hub-Signature-256" Text :> Header "X-GitHub-Event" Text :> ReqBody '[RawJSON] BS.ByteString :> Post '[JSON] AE.Value
+  , -- Kept at its original path so hooks configured before multi-host support keep delivering.
+    githubWebhook :: mode :- "webhook" :> "github" :> Header "X-Hub-Signature-256" Text :> Header "X-GitHub-Event" Text :> ReqBody '[RawJSON] BS.ByteString :> Post '[JSON] AE.Value
+  , -- One route per host. The host is in the path rather than sniffed from the headers because
+    -- it decides which signature scheme to verify with, and that must not be attacker-chosen.
+    -- Every host's signature and event headers are captured; each arm reads only its own.
+    gitWebhook
+      :: mode
+        :- "webhook"
+          :> "git"
+          :> Capture "host" Git.GitHost
+          :> Header "X-Hub-Signature" Text -- Bitbucket
+          :> Header "X-Gitea-Signature" Text
+          :> Header "webhook-signature" Text -- GitLab 19.1+
+          :> Header "X-Gitlab-Token" Text -- GitLab, pre-19.1
+          :> Header "webhook-id" Text
+          :> Header "webhook-timestamp" Text
+          :> Header "X-Gitea-Event" Text
+          :> Header "X-Gitlab-Event" Text
+          :> Header "X-Event-Key" Text -- Bitbucket
+          :> ReqBody '[RawJSON] BS.ByteString
+          :> Post '[JSON] AE.Value
   , chartsDataShot :: mode :- "chart_data_shot" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> AllQueryParams :> Get '[JSON] Charts.MetricsData
   , avatarGet :: mode :- "api" :> "avatar" :> Capture "user_id" Projects.UserId :> Get '[OctetStream] (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
   , widgetPngGet :: mode :- "p" :> ProjectId :> "widget.png" :> QPT "widgetJSON" :> QPT "widgetZ" :> QPT "since" :> QPT "from" :> QPT "to" :> QueryParam "width" Int :> QueryParam "height" Int :> QPT "sig" :> AllQueryParams :> Get '[OctetStream] (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
@@ -469,7 +490,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , gitSyncSettings :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Get '[HTML] (RespHeaders (Html ()))
   , gitSyncSettingsPost :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> ReqBody '[FormUrlEncoded] GitSync.GitSyncForm :> Post '[HTML] (RespHeaders (Html ()))
   , gitSyncSettingsDelete :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Delete '[HTML] (RespHeaders (Html ()))
-  , codeMappingsSettings :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> Get '[HTML] (RespHeaders (Html ()))
+  , codeMappingsSettings :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> QueryParam "sample" Text :> Get '[HTML] (RespHeaders (Html ()))
   , codeMappingsPost :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> ReqBody '[FormUrlEncoded] PageCodeContext.CodeMappingForm :> Post '[HTML] (RespHeaders (Html ()))
   , codeMappingsDelete :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> Capture "id" CodeContext.CodeMappingId :> Delete '[HTML] (RespHeaders (Html ()))
   , prometheusSettingsGet :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> Get '[HTML] (RespHeaders Settings.PrometheusGet)
@@ -479,7 +500,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , prometheusSettingsToggle :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> Capture "cfgID" PromCfg.PrometheusScrapeConfigId :> Patch '[HTML] (RespHeaders Settings.PrometheusMut)
   , prometheusSettingsDelete :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> Capture "cfgID" PromCfg.PrometheusScrapeConfigId :> Delete '[HTML] (RespHeaders Settings.PrometheusMut)
   , -- GitHub App routes
-    githubAppInstall :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> "install" :> Get '[HTML] (RespHeaders (Html ()))
+    githubAppInstall :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> "install" :> QueryParam "to" Text :> Get '[HTML] (RespHeaders (Html ()))
   , githubAppCallback :: mode :- "github" :> "callback" :> QueryParam "installation_id" Int64 :> QueryParam "setup_action" Text :> QueryParam "state" Text :> Get '[HTML] (RespHeaders (Html ()))
   , githubAppRepos :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> "repos" :> QueryParam "installationId" Int64 :> Get '[HTML] (RespHeaders (Html ()))
   , githubAppSelectRepo :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> "select" :> ReqBody '[FormUrlEncoded] GitSync.RepoSelectForm :> Post '[HTML] (RespHeaders (Html ()))
@@ -670,7 +691,18 @@ server logger env tp otlpTraces otlpLogs =
     , clientMetadata = Auth.clientMetadataH
     , lemonWebhook = Settings.webhookPostH
     , stripeWebhook = Settings.stripeWebhookPostH
-    , githubWebhook = GitSync.githubWebhookPostH
+    , githubWebhook = \sigM eventM body -> GitSync.gitWebhookPostH Git.GitHub (Git.WebhookReq eventM sigM Nothing Nothing Nothing body)
+    , gitWebhook = \host bbSig giteaSig glSig glToken glId glTs giteaEvent glEvent bbEvent body ->
+        GitSync.gitWebhookPostH
+          host
+          Git.WebhookReq
+            { event = asum [giteaEvent, glEvent, bbEvent]
+            , signature = asum [giteaSig, glSig, bbSig]
+            , gitlabToken = glToken
+            , gitlabWebhookId = glId
+            , gitlabTimestamp = glTs
+            , body = body
+            }
     , chartsDataShot = Charts.queryMetrics Nothing
     , avatarGet = avatarGetH
     , widgetPngGet = widgetPngGetH

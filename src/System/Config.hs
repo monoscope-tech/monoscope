@@ -143,6 +143,11 @@ data EnvConfig = EnvConfig
   -- ^ Runs the 5-minute service-dependency rollup. Off by default: the rollup is the only
   -- place a span self-join runs against TimeFusion, which is the query shape that has
   -- OOM-killed it before, so it gets a staged rollout rather than shipping on.
+  , enableNonGithubGitHosts :: Bool
+  -- ^ Offers GitLab, Gitea and Bitbucket as git-integration hosts. Off by default: the
+  -- per-host URL building and JSON decoding are covered by doctests and fixtures but have
+  -- never run against those vendors' live APIs, so they get a deliberate opt-in rather than
+  -- shipping on. GitHub is unaffected by this flag. See @plans\/07-git-hosts.md@.
   , enableTimefusionWrites :: Bool
   , enablePostgresTelemetryWrites :: Bool
   -- ^ Dual-write to the legacy Postgres @otel_logs_and_spans@ store. Defaults

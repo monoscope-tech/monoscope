@@ -26,7 +26,13 @@ import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Client (HttpException)
 import Network.Wreq qualified as Wreq
-import Pages.GitSync (GitHubOwner (..), GitHubRepo (..), GitHubWebhookPayload (..), GitSyncForm (..))
+import Pages.GitSync (GitSyncForm (..))
+import Pkg.Git qualified as Git
+import System.Config (AuthContext (..), EnvConfig (..))
+import Data.ByteString.Base16 qualified as B16
+import Data.ByteArray qualified as BA
+import "cryptonite" Crypto.Hash.Algorithms (SHA256)
+import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 import Pages.GitSync qualified as GitSyncPage
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
@@ -149,13 +155,48 @@ ghCleanupDashboards cfg = do
 setupSync :: TestResources -> GitHubTestConfig -> Maybe Text -> IO ()
 setupSync tr cfg prefixM = do
   let form = GitSyncForm
-        { owner = cfg.owner
+        { host = Just Git.GitHub
+        , apiBase = Nothing
+        , owner = cfg.owner
         , repo = cfg.repo
         , branch = cfg.branch
         , accessToken = cfg.pat
+        , webhookSecret = Nothing
         , pathPrefix = prefixM
         }
   void $ testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid form
+
+-- | Connect a sync row on a given host, so a webhook test has a row to resolve against.
+setupSyncOn :: TestResources -> Git.GitHost -> Text -> Text -> Maybe Text -> IO ()
+setupSyncOn tr host owner repo secret = do
+  -- One sync row per project, so each host under test replaces the last.
+  void $ testServant tr $ GitSyncPage.gitSyncSettingsDeleteH testPid
+  void $ testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid
+    GitSyncForm
+      { host = Just host
+      , apiBase = if host == Git.Gitea then Just "https://git.example.com" else Nothing
+      , owner = owner
+      , repo = repo
+      , branch = "main"
+      , accessToken = "tok"
+      , webhookSecret = secret
+      , pathPrefix = Nothing
+      }
+
+
+-- | Turn on the non-GitHub hosts for one test.
+--
+-- They ship behind @ENABLE_NON_GITHUB_GIT_HOSTS@ (off by default) until their request paths
+-- have run against the real vendors, so the tests that exercise them are exactly the ones
+-- that have to opt in — and leaving it off is itself worth a test, below.
+withNonGithubHosts :: TestResources -> TestResources
+withNonGithubHosts tr = tr{trATCtx = tr.trATCtx{config = tr.trATCtx.config{enableNonGithubGitHosts = True}}}
+
+
+-- | HMAC-SHA256 hex of a body, the digest three of the four hosts send.
+hmacHexOf :: Text -> ByteString -> Text
+hmacHexOf secret body = decodeUtf8 $ B16.encode $ BA.convert (HMAC.hmac (encodeUtf8 secret :: ByteString) body :: HMAC.HMAC SHA256)
+
 
 clearJobs :: TestResources -> IO ()
 clearJobs tr = liftIO $ withResource tr.trPool \conn -> do
@@ -218,7 +259,7 @@ spec = sequential do
   aroundAll withTestResources do
     describe "GitHub Sync Settings" do
       it "creates sync config with PAT" \tr -> do
-        let form = GitSyncForm{owner = "test-owner", repo = "test-repo", branch = "main", accessToken = "ghp_test", pathPrefix = Nothing}
+        let form = GitSyncForm{host = Just Git.GitHub, apiBase = Nothing, owner = "test-owner", repo = "test-repo", branch = "main", accessToken = "ghp_test", webhookSecret = Just "s3cret", pathPrefix = Nothing}
         void $ testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid form
         syncM <- runTestBg frozenTime tr $ GitSync.getGitHubSync testPid
         syncM `shouldSatisfy` isJust
@@ -226,7 +267,7 @@ spec = sequential do
         (sync.owner, sync.repo, sync.branch, sync.syncEnabled) `shouldBe` ("test-owner", "test-repo", "main", True)
 
       it "updates sync config" \tr -> do
-        let form = GitSyncForm{owner = "updated", repo = "updated-repo", branch = "dev", accessToken = "ghp_new", pathPrefix = Nothing}
+        let form = GitSyncForm{host = Just Git.GitHub, apiBase = Nothing, owner = "updated", repo = "updated-repo", branch = "dev", accessToken = "ghp_new", webhookSecret = Just "s3cret", pathPrefix = Nothing}
         void $ testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid form
         syncM <- runTestBg frozenTime tr $ GitSync.getGitHubSync testPid
         (fromJust syncM).owner `shouldBe` "updated"
@@ -238,13 +279,13 @@ spec = sequential do
 
     describe "Sync Plan Building" do
       it "creates for new files" \_ -> do
-        let entries = [GitSync.TreeEntry "dashboards/new.yaml" "blob" "sha1" (Just 100), GitSync.TreeEntry "dashboards/other.yaml" "blob" "sha2" (Just 100)]
+        let entries = [GitSync.TreeEntry "dashboards/new.yaml" True (Just "sha1") (Just 100), GitSync.TreeEntry "dashboards/other.yaml" True (Just "sha2") (Just 100)]
             plan = GitSync.buildSyncPlan "dashboards/" entries M.empty
         length [() | GitSync.SyncCreate{} <- plan] `shouldBe` 2
 
       it "updates for changed SHAs" \_ -> do
         let did = UUIDId [uuid|11111111-1111-1111-1111-111111111111|]
-            entries = [GitSync.TreeEntry "dashboards/x.yaml" "blob" "newsha" (Just 100)]
+            entries = [GitSync.TreeEntry "dashboards/x.yaml" True (Just "newsha") (Just 100)]
             plan = GitSync.buildSyncPlan "dashboards/" entries (one ("x.yaml", (did, "oldsha")))
         length [() | GitSync.SyncUpdate{} <- plan] `shouldBe` 1
 
@@ -254,17 +295,17 @@ spec = sequential do
         length [() | GitSync.SyncDelete{} <- plan] `shouldBe` 1
 
       it "ignores non-dashboard files" \_ -> do
-        let entries = [GitSync.TreeEntry "src/main.hs" "blob" "s1" Nothing, GitSync.TreeEntry "dashboards/ok.yaml" "blob" "s2" Nothing]
+        let entries = [GitSync.TreeEntry "src/main.hs" True (Just "s1") Nothing, GitSync.TreeEntry "dashboards/ok.yaml" True (Just "s2") Nothing]
             plan = GitSync.buildSyncPlan "dashboards/" entries M.empty
         length plan `shouldBe` 1
 
       it "supports .yml extension" \_ -> do
-        let entries = [GitSync.TreeEntry "dashboards/test.yml" "blob" "sha" Nothing]
+        let entries = [GitSync.TreeEntry "dashboards/test.yml" True (Just "sha") Nothing]
             plan = GitSync.buildSyncPlan "dashboards/" entries M.empty
         length plan `shouldBe` 1
 
       it "respects path prefix" \_ -> do
-        let entries = [GitSync.TreeEntry "app/dashboards/x.yaml" "blob" "sha" Nothing, GitSync.TreeEntry "dashboards/y.yaml" "blob" "sha2" Nothing]
+        let entries = [GitSync.TreeEntry "app/dashboards/x.yaml" True (Just "sha") Nothing, GitSync.TreeEntry "dashboards/y.yaml" True (Just "sha2") Nothing]
             plan = GitSync.buildSyncPlan "app/dashboards/" entries M.empty
         length plan `shouldBe` 1
         case plan of [GitSync.SyncCreate p _] -> p `shouldBe` "app/dashboards/x.yaml"; _ -> fail "wrong"
@@ -338,31 +379,83 @@ spec = sequential do
         V.length (V.filter isGitSyncPush jobs) `shouldBe` 0
 
     describe "Webhook Handler" do
-      it "queues sync on push event" \tr -> do
-        setupSync tr GitHubTestConfig{pat = "fake", owner = "webhook-owner", repo = "webhook-repo", branch = "main"} Nothing
-        clearJobs tr
-        let payload = GitHubWebhookPayload
-              { ref = Just "refs/heads/main"
-              , repository = Just $ GitHubRepo "webhook-owner/webhook-repo" "webhook-repo" (GitHubOwner "webhook-owner" Nothing)
-              , pusher = Nothing, commits = Nothing
-              }
-        _ <- toBaseServantResponse tr $ GitSyncPage.githubWebhookPostH Nothing (Just "push") (toStrict $ AE.encode payload)
-        jobs <- getPendingBackgroundJobs tr.trATCtx
-        V.length (V.filter isGitSyncFromRepo jobs) `shouldSatisfy` (>= 1)
+      -- One body, signed the way each host signs it. The point of these is not the JSON — it
+      -- is that a delivery only queues work when its signature checks out against the secret
+      -- stored on the row, and that the host in the route has to match the row's host.
+      let pushBody owner repo = toStrict $ AE.encode $ AE.object ["repository" AE..= AE.object ["full_name" AE..= (owner <> "/" <> repo :: Text)]]
+          req _host ev sig body = Git.WebhookReq{event = Just ev, signature = sig, gitlabToken = Nothing, gitlabWebhookId = Nothing, gitlabTimestamp = Nothing, body = body}
 
-      it "ignores non-push events" \tr -> do
+      it "queues sync only when the signature verifies" \tr -> do
+        setupSyncOn tr Git.GitHub "webhook-owner" "webhook-repo" (Just "s3cret")
         clearJobs tr
-        let payload = GitHubWebhookPayload{ref = Nothing, repository = Just $ GitHubRepo "o/r" "r" (GitHubOwner "o" Nothing), pusher = Nothing, commits = Nothing}
-        _ <- toBaseServantResponse tr $ GitSyncPage.githubWebhookPostH Nothing (Just "ping") (toStrict $ AE.encode payload)
-        jobs <- getPendingBackgroundJobs tr.trATCtx
-        V.length (V.filter isGitSyncFromRepo jobs) `shouldBe` 0
+        let body = pushBody "webhook-owner" "webhook-repo"
+            signed = "sha256=" <> hmacHexOf "s3cret" body
 
-      it "ignores untracked repos" \tr -> do
+        -- Forged: right shape, wrong secret. Must not enqueue anything.
+        _ <- toBaseServantResponse tr $ GitSyncPage.gitWebhookPostH Git.GitHub (req Git.GitHub "push" (Just "sha256=deadbeef") body)
+        forged <- V.length . V.filter isGitSyncFromRepo <$> getPendingBackgroundJobs tr.trATCtx
+        forged `shouldBe` 0
+
+        -- Missing entirely: a row that holds a secret asked to be checked.
+        _ <- toBaseServantResponse tr $ GitSyncPage.gitWebhookPostH Git.GitHub (req Git.GitHub "push" Nothing body)
+        unsigned <- V.length . V.filter isGitSyncFromRepo <$> getPendingBackgroundJobs tr.trATCtx
+        unsigned `shouldBe` 0
+
+        _ <- toBaseServantResponse tr $ GitSyncPage.gitWebhookPostH Git.GitHub (req Git.GitHub "push" (Just signed) body)
+        verified <- V.length . V.filter isGitSyncFromRepo <$> getPendingBackgroundJobs tr.trATCtx
+        verified `shouldSatisfy` (>= 1)
+
+      it "verifies each host in its own dialect" \tr0 -> do
+        let tr = withNonGithubHosts tr0
+        forM_ [(Git.Gitea, "push" :: Text), (Git.Bitbucket, "repo:push")] \(host, ev) -> do
+          setupSyncOn tr host "acme" "config" (Just "s3cret")
+          clearJobs tr
+          let body = pushBody "acme" "config"
+              -- Gitea sends the bare hex digest; Bitbucket prefixes it like GitHub does.
+              sig = (if host == Git.Bitbucket then "sha256=" else "") <> hmacHexOf "s3cret" body
+          _ <- toBaseServantResponse tr $ GitSyncPage.gitWebhookPostH host (req host ev (Just sig) body)
+          n <- V.length . V.filter isGitSyncFromRepo <$> getPendingBackgroundJobs tr.trATCtx
+          n `shouldSatisfy` (>= 1)
+
+      it "refuses a host this deployment has not enabled" \tr -> do
+        -- The flag gates the write path, not just the picker: posting a host directly must be
+        -- refused, and must not leave a half-configured row behind.
+        void $ testServant tr $ GitSyncPage.gitSyncSettingsDeleteH testPid
+        void $ testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid
+          GitSyncForm
+            { host = Just Git.GitLab
+            , apiBase = Nothing
+            , owner = "acme"
+            , repo = "config"
+            , branch = "main"
+            , accessToken = "glpat-x"
+            , webhookSecret = Just "s"
+            , pathPrefix = Nothing
+            }
+        runTestBg frozenTime tr (GitSync.getGitHubSync testPid) >>= \syncM -> syncM `shouldSatisfy` isNothing
+
+      it "does not cross hosts on a repository-name collision" \tr0 -> do
+        let tr = withNonGithubHosts tr0
+        -- The same owner/repo on two hosts is two different projects' repositories; a push to
+        -- one must not sync the row belonging to the other.
+        setupSyncOn tr Git.GitLab "acme" "config" (Just "gl-secret")
         clearJobs tr
-        let payload = GitHubWebhookPayload{ref = Just "refs/heads/main", repository = Just $ GitHubRepo "unknown/repo" "repo" (GitHubOwner "unknown" Nothing), pusher = Nothing, commits = Nothing}
-        _ <- toBaseServantResponse tr $ GitSyncPage.githubWebhookPostH Nothing (Just "push") (toStrict $ AE.encode payload)
-        jobs <- getPendingBackgroundJobs tr.trATCtx
-        V.length (V.filter isGitSyncFromRepo jobs) `shouldBe` 0
+        let body = pushBody "acme" "config"
+        -- Delivered on the Gitea route, signed with Gitea's scheme, but only a GitLab row
+        -- exists: nothing should match.
+        _ <- toBaseServantResponse tr $ GitSyncPage.gitWebhookPostH Git.Gitea (req Git.Gitea "push" (Just $ hmacHexOf "gl-secret" body) body)
+        n <- V.length . V.filter isGitSyncFromRepo <$> getPendingBackgroundJobs tr.trATCtx
+        n `shouldBe` 0
+
+      it "ignores non-push events and untracked repos" \tr -> do
+        setupSyncOn tr Git.GitHub "webhook-owner" "webhook-repo" (Just "s3cret")
+        clearJobs tr
+        let body = pushBody "webhook-owner" "webhook-repo"
+        _ <- toBaseServantResponse tr $ GitSyncPage.gitWebhookPostH Git.GitHub (req Git.GitHub "ping" (Just $ "sha256=" <> hmacHexOf "s3cret" body) body)
+        let other = pushBody "unknown" "repo"
+        _ <- toBaseServantResponse tr $ GitSyncPage.gitWebhookPostH Git.GitHub (req Git.GitHub "push" (Just $ "sha256=" <> hmacHexOf "s3cret" other) other)
+        n <- V.length . V.filter isGitSyncFromRepo <$> getPendingBackgroundJobs tr.trATCtx
+        n `shouldBe` 0
 
   -- Layer 2: E2E tests with real GitHub API
   configM <- runIO loadTestConfig

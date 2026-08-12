@@ -150,6 +150,8 @@ extra-source-files:
     static/migrations/0121_log_patterns_unclassified_recent_index.sql
     static/migrations/0122_otel_deployment_environment.sql
     static/migrations/0123_code_mappings.sql
+    static/migrations/0124_github_credentials.sql
+    static/migrations/0125_git_hosts.sql
 
 source-repository head
   type: git
@@ -227,6 +229,7 @@ library
       Pkg.ErrorFingerprint
       Pkg.ErrorMetrics
       Pkg.ExtractionWorker
+      Pkg.Git
       Pkg.Mail
       Pkg.Metrics
       Pkg.Parser
@@ -798,6 +801,7 @@ test-suite test-dev
       Pkg.ErrorFingerprint
       Pkg.ErrorMetrics
       Pkg.ExtractionWorker
+      Pkg.Git
       Pkg.Mail
       Pkg.Metrics
       Pkg.Parser

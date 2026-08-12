@@ -9,10 +9,13 @@ module Models.Projects.CodeContext (
   CodeMapping (..),
   CodeMappingId,
   Snippet (..),
+  SnippetError (..),
+  snippetErrorMessage,
   getCodeMappings,
   insertCodeMapping,
   deleteCodeMapping,
   resolveRepoPath,
+  deriveMapping,
   sliceAround,
   fetchSnippet,
 ) where
@@ -28,10 +31,11 @@ import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Effectful (Eff, (:>))
 import Effectful.Log (Log)
 import Hasql.Interpolate qualified as HI
-import Models.Projects.GitSync (GitHubCredentialId, credentialCreds, fetchFileContent, getGitHubCredential, githubToken)
+import Models.Projects.GitSync (GitHubCredentialId, credentialConn, credentialCreds, getGitHubCredential, githubToken)
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.Projects (ProjectId)
 import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.Git qualified as Git
 import Relude
 import System.Config qualified as Config
 import System.Types (DB)
@@ -75,6 +79,36 @@ instance Default CodeMapping where
   def = CodeMapping (UUIDId UUID.nil) (UUIDId UUID.nil) (UUIDId UUID.nil) "" "" "main" Nothing "" "" epoch epoch
     where
       epoch = UTCTime (fromGregorian 1970 1 1) 0
+
+
+-- | Why a frame has no source to show.
+--
+-- Typed rather than a sentence, because the renderer acts on the reason: 'NoMapping' is the
+-- one the reader can fix from where they are standing, and it carries the path to fix it
+-- with. Matching that case out of prose is how a copy edit silently removes a control.
+data SnippetError
+  = NoMapping Text
+  | -- | The mapping's grant was deleted out from under it.
+    CredentialGone
+  | -- | Reaching GitHub failed: repo\/path\/ref, and what went wrong.
+    ReadFailed Text Text
+  | -- | The line is past the end of the file at that revision — almost always a build\/source mismatch.
+    LineOutOfRange Text Int Text
+  deriving stock (Eq, Generic, Show)
+
+
+-- | The reason as a line of prose for the frame panel.
+--
+-- >>> snippetErrorMessage (NoMapping "/srv/app/checkout.py")
+-- "No linked repository covers /srv/app/checkout.py."
+-- >>> snippetErrorMessage (LineOutOfRange "src/checkout.py" 900 "main")
+-- "Line 900 is past the end of src/checkout.py at main \8212 the build that threw is probably not this revision."
+snippetErrorMessage :: SnippetError -> Text
+snippetErrorMessage = \case
+  NoMapping path -> "No linked repository covers " <> path <> "."
+  CredentialGone -> "The GitHub credential this repository was linked with is no longer configured."
+  ReadFailed what err -> "Could not read " <> what <> ": " <> err
+  LineOutOfRange path n ref -> "Line " <> show n <> " is past the end of " <> path <> " at " <> ref <> " — the build that threw is probably not this revision."
 
 
 -- | A window of source around the failing line. @startLine@ is the 1-based line number of
@@ -138,18 +172,66 @@ deleteCodeMapping pid mid = Hasql.interpExecute_ [HI.sql|DELETE FROM projects.co
 -- Just "src/app/main.go"
 resolveRepoPath :: [CodeMapping] -> Maybe Text -> Text -> Maybe (CodeMapping, Text)
 resolveRepoPath mappings svc path = do
-  (cm, rest) <- viaNonEmpty head $ sortOn (negate . T.length . (.pathPrefix) . fst) candidates
-  pure (cm, joinPath cm.sourceRoot rest)
+  (cm, rest) <- listToMaybe $ sortOn (Down . T.length . (.pathPrefix) . fst) candidates
+  let root = T.dropWhileEnd (== '/') cm.sourceRoot
+  pure (cm, if T.null root then rest else root <> "/" <> rest)
   where
     candidates =
       [ (cm, rest)
       | cm <- mappings
-      , maybe True (\s -> Just s == svc) cm.service
+      , maybe True ((== svc) . Just) cm.service
       , Just rest <- [T.stripPrefix cm.pathPrefix path]
       ]
-    joinPath root rest
-      | T.null (T.dropWhileEnd (== '/') root) = rest
-      | otherwise = T.dropWhileEnd (== '/') root <> "/" <> rest
+
+
+-- | The inverse of 'resolveRepoPath': given the repo's files and one real stack-frame path,
+-- work out the @(pathPrefix, sourceRoot)@ that would map the second onto the first, and the
+-- repo file it matched.
+--
+-- Nobody knows offhand that their container mounts the app at @\/srv\/app@ and that the repo
+-- keeps it under @src\/@ — but everybody can paste a line out of a stack trace they are
+-- looking at. So the two cryptic fields are derived from an example and confirmed by naming
+-- the file we found, rather than typed in and discovered to be wrong later.
+--
+-- >>> let tree = ["README.md", "src/services/checkout.py", "src/main.py"]
+-- >>> deriveMapping tree "/srv/app/services/checkout.py"
+-- Just ("/srv/app/","src","src/services/checkout.py")
+--
+-- The longest matching run of trailing segments wins, so a basename that appears twice in the
+-- repo resolves to the one whose directory also lines up:
+--
+-- >>> deriveMapping ["a/util.go", "pkg/db/util.go"] "/build/db/util.go"
+-- Just ("/build/","pkg","pkg/db/util.go")
+--
+-- Frames that are already repo-relative derive the catch-all mapping — empty prefix, repo
+-- root — which is exactly the mapping they need:
+--
+-- >>> deriveMapping ["app/main.go"] "app/main.go"
+-- Just ("","","app/main.go")
+--
+-- Windows separators are normalised, since the frame comes from whatever printed it:
+--
+-- >>> deriveMapping ["src/App.cs"] "C:\\build\\src\\App.cs"
+-- Just ("C:/build/","","src/App.cs")
+--
+-- A path no file in the repo could be is 'Nothing' rather than a guess — a mapping derived
+-- from a mismatch would silently render the wrong file as the failing code:
+--
+-- >>> deriveMapping ["src/main.py"] "/usr/lib/python3.11/json/decoder.py"
+-- Nothing
+-- >>> deriveMapping [] "app/main.go"
+-- Nothing
+deriveMapping :: [Text] -> Text -> Maybe (Text, Text, Text)
+deriveMapping tree frame = do
+  (k, repoPath) <- listToMaybe $ sortOn (bimap Down T.length) candidates
+  let prefix = dropTail k frameRev
+  pure (if T.null prefix then "" else prefix <> "/", dropTail k (segsRev repoPath), repoPath)
+  where
+    segsRev = reverse . T.splitOn "/"
+    frameRev = segsRev (T.replace "\\" "/" frame)
+    -- takes reversed segments, so dropping the matched tail is a plain 'drop'
+    dropTail n = T.intercalate "/" . reverse . drop n
+    candidates = [(k, p) | p <- tree, let k = length $ takeWhile identity $ zipWith (==) frameRev (segsRev p), k > 0]
 
 
 -- | The window of source to show around a line: the failing line plus @ctx@ either side,
@@ -177,11 +259,12 @@ resolveRepoPath mappings svc path = do
 -- Nothing
 sliceAround :: Int -> Int -> [Text] -> Maybe Snippet
 sliceAround ctx focus ls
-  | focus < 1 || focus > length ls = Nothing
+  | focus < 1 || focus > n = Nothing
   | otherwise = Just $ Snippet "" start focus (take (stop - start + 1) (drop (start - 1) ls))
   where
+    n = length ls
     start = max 1 (focus - ctx)
-    stop = min (length ls) (focus + ctx)
+    stop = min n (focus + ctx)
 
 
 -- | Fetch the source around @(file, line)@ for a project, or say why not.
@@ -200,23 +283,16 @@ fetchSnippet
   -- the snippet must be the source that threw, not the source as it is now.
   -> Text
   -> Int
-  -> Eff es (Either Text Snippet)
+  -> Eff es (Either SnippetError Snippet)
 fetchSnippet cfg pid svc revM path lineNo = runExceptT do
   mappings <- lift $ getCodeMappings pid
-  (cm, repoPath) <- hoistEither $ maybeToRight "No code mapping covers this path." $ resolveRepoPath mappings svc path
+  (cm, repoPath) <- hoistEither $ maybeToRight (NoMapping path) $ resolveRepoPath mappings svc path
   let repoRef = GitSync.RepoRef cm.owner cm.repo (fromMaybe cm.ref revM)
-  cred <-
-    ExceptT
-      $ maybeToRight "The GitHub credential this mapping uses is no longer configured."
-      <$> getGitHubCredential (encodeUtf8 cfg.apiKeyEncryptionSecretKey) pid cm.credentialId
-  creds <- hoistEither $ maybeToRight "That GitHub credential has neither an installation nor a token." $ credentialCreds cred
-  token <- ExceptT $ githubToken cfg.githubAppId cfg.githubAppPrivateKey creds
-  blob <-
-    ExceptT
-      $ first (\err -> "Could not read " <> cm.owner <> "/" <> cm.repo <> "/" <> repoPath <> " at " <> repoRef.ref <> ": " <> err)
-      <$> fetchFileContent token repoRef repoPath
-  snippet <-
-    hoistEither
-      $ maybeToRight ("Line " <> show lineNo <> " is past the end of " <> repoPath <> " at " <> repoRef.ref <> " — the build that threw is probably not this revision.")
-      $ sliceAround 5 lineNo (lines (decodeUtf8 blob))
-  pure snippet{path = repoPath}
+      located = cm.owner <> "/" <> cm.repo <> "/" <> repoPath <> " at " <> repoRef.ref
+  cred <- ExceptT $ maybeToRight CredentialGone <$> getGitHubCredential (encodeUtf8 cfg.apiKeyEncryptionSecretKey) pid cm.credentialId
+  creds <- hoistEither $ maybeToRight CredentialGone $ credentialCreds cred
+  token <- ExceptT $ first (ReadFailed located) <$> githubToken cfg.githubAppId cfg.githubAppPrivateKey creds
+  conn <- hoistEither $ first (ReadFailed located) $ credentialConn cred token
+  blob <- ExceptT $ first (ReadFailed located) <$> Git.fetchFile conn repoRef repoPath
+  (\s -> s{path = repoPath})
+    <$> hoistEither (maybeToRight (LineOutOfRange repoPath lineNo repoRef.ref) $ sliceAround 5 lineNo (lines (decodeUtf8 blob)))

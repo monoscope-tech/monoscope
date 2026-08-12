@@ -100,6 +100,7 @@ import Pkg.DeriveUtils (BaselineState (..), UUIDId (..), rawSql)
 import Pkg.Drain qualified as Drain
 import Pkg.EmailTemplates qualified as ET
 import Pkg.ExtractionWorker qualified as ExtractionWorker
+import Pkg.Git qualified as Git
 import Pkg.Mail (NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendDiscordAlertWith, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendSlackAlertWith, sendSlackMessage, sendWhatsAppAlert)
 import Pkg.Parser
 import Pkg.PatternMerge qualified as PatternMerge
@@ -3466,36 +3467,41 @@ endpointTemplateDiscovery pid = do
     $ Log.logInfo "Cleaned up merged endpoints" ("project_id", pid.toText, "merged_count", length mergedPairs)
 
 
--- | Run @k@ with a project's sync config and a live GitHub token, or log why it cannot.
+-- | Run @k@ with a project's sync config and a live connection to its host, or log why it
+-- cannot.
 --
--- Every git-sync job needs the same four things to go right before it can do any work —
--- a configured sync, sync still enabled, a decryptable token, an accepted token — and each
--- of them fails in a way an operator has to be told about. Written once so a job that
--- silently does nothing is impossible to introduce by copying the preamble and dropping an
--- arm.
-withGitHubSync :: Projects.ProjectId -> (Text -> GitSync.GitHubSync -> Eff (W.HTTP ': ATBackgroundEffects) ()) -> ATBackgroundCtx ()
-withGitHubSync pid k = do
+-- Every git-sync job needs the same five things to go right before it can do any work —
+-- a configured sync, sync still enabled, a decryptable token, an accepted token, and a host
+-- it can actually address — and each of them fails in a way an operator has to be told about.
+-- Written once so a job that silently does nothing is impossible to introduce by copying the
+-- preamble and dropping an arm.
+withGitSync :: Projects.ProjectId -> (Git.GitConn -> GitSync.GitHubSync -> Eff (W.HTTP ': ATBackgroundEffects) ()) -> ATBackgroundCtx ()
+withGitSync pid k = do
   ctx <- ask @Config.AuthContext
   GitSync.getGitHubSyncDecrypted (encodeUtf8 ctx.config.apiKeyEncryptionSecretKey) pid >>= \case
-    Nothing -> Log.logAttention "No GitHub sync configured for project" pid
-    Just sync | not sync.syncEnabled -> Log.logInfo "GitHub sync disabled for project" pid
+    Nothing -> Log.logAttention "No git sync configured for project" pid
+    Just sync | not sync.syncEnabled -> Log.logInfo "Git sync disabled for project" pid
     Just sync -> case GitSync.syncCreds sync of
-      Nothing -> Log.logAttention "GitHub sync row carries neither an installation nor a token" pid
+      Nothing -> Log.logAttention "Git sync row carries neither an installation nor a token" (pid, Git.hostSlug sync.host)
       Just creds ->
         W.runHTTPWreq $ GitSync.githubToken ctx.config.githubAppId ctx.config.githubAppPrivateKey creds >>= \case
-          Left err -> Log.logAttention "Failed to get GitHub token" (pid, err)
-          Right token -> k token sync
+          Left err -> Log.logAttention "Failed to get git host token" (pid, Git.hostSlug sync.host, err)
+          Right token -> case GitSync.syncConn sync token of
+            Left err -> Log.logAttention "Git sync row does not describe a reachable host" (pid, Git.hostSlug sync.host, err)
+            Right conn -> k conn sync
 
 
--- | Sync dashboards from GitHub repo to Monoscope
+-- | Sync dashboards from the linked repository into Monoscope.
 gitSyncFromRepo :: Projects.ProjectId -> ATBackgroundCtx ()
 gitSyncFromRepo pid = do
-  Log.logInfo "Starting GitHub sync for project" pid
-  withGitHubSync pid \token sync ->
-    GitSync.fetchGitTree token (GitSync.syncRepoRef sync) >>= \case
-      Left err -> Log.logAttention "Failed to fetch git tree" (pid, err)
-      Right (treeSha, entries)
-        | sync.lastTreeSha == Just treeSha -> Log.logInfo "Tree unchanged, skipping sync" (pid, treeSha)
+  Log.logInfo "Starting git sync for project" pid
+  withGitSync pid \conn sync ->
+    -- Scoped to the dashboards folder: it is all this job reads, it lets GitLab and Bitbucket
+    -- filter server-side, and on Bitbucket it is what bounds the per-file sha backfill.
+    Git.fetchTree conn (GitSync.syncRepoRef sync) (GitSync.getDashboardsPath sync) >>= \case
+      Left err -> Log.logAttention "Failed to list repository" (pid, Git.hostSlug sync.host, err)
+      Right (revision, entries)
+        | sync.lastRevision == Just revision -> Log.logInfo "Revision unchanged, skipping sync" (pid, revision)
         | otherwise -> do
             dbState <- GitSync.getDashboardGitState pid
             allTeams <- ProjectMembers.getTeamsVM pid
@@ -3508,20 +3514,20 @@ gitSyncFromRepo pid = do
             Log.logInfo "Git sync plan" ("creates" :: Text, length creates, "updates" :: Text, length updates, "deletes" :: Text, length deletes)
             -- Fetch file contents in parallel for creates and updates
             Ki.scoped \scope -> do
-              forM_ (creates <> updates) $ forkWithCtx scope . processGitSyncAction pid token sync teamMap
+              forM_ (creates <> updates) $ forkWithCtx scope . processGitSyncAction pid conn sync teamMap
               Ki.atomically $ Ki.awaitAll scope
             -- Process deletes (no HTTP needed)
             forM_ deletes \(path, dashId) -> do
               _ <- Dashboards.deleteDashboard dashId
               Log.logInfo "Deleted dashboard (removed from git)" (path, dashId)
-            _ <- GitSync.updateLastTreeSha sync.id treeSha
-            Log.logInfo "Completed GitHub sync for project" pid
+            _ <- GitSync.updateLastRevision sync.id revision
+            Log.logInfo "Completed git sync for project" pid
 
 
-processGitSyncAction :: (DB es, Log :> es, Time.Time :> es, W.HTTP :> es) => Projects.ProjectId -> Text -> GitSync.GitHubSync -> Map.Map Text UUID.UUID -> GitSync.SyncAction -> Eff es ()
-processGitSyncAction pid token sync teamMap = \case
+processGitSyncAction :: (DB es, Log :> es, Time.Time :> es, W.HTTP :> es) => Projects.ProjectId -> Git.GitConn -> GitSync.GitHubSync -> Map.Map Text UUID.UUID -> GitSync.SyncAction -> Eff es ()
+processGitSyncAction pid conn sync teamMap = \case
   GitSync.SyncCreate path sha ->
-    fetchAndParseDashboard token (GitSync.syncRepoRef sync) path >>= either (Log.logAttention "Failed to sync dashboard from git" . (path,)) \schema -> do
+    fetchAndParseDashboard conn (GitSync.syncRepoRef sync) path >>= either (Log.logAttention "Failed to sync dashboard from git" . (path,)) \schema -> do
       now <- Time.currentTime
       dashId <- UUIDId <$> liftIO UUIDV4.nextRandom
       let prefix = GitSync.getDashboardsPath sync
@@ -3547,7 +3553,7 @@ processGitSyncAction pid token sync teamMap = \case
       _ <- Dashboards.insert dashboard
       Log.logInfo "Created dashboard from git" (relativePath, dashId)
   GitSync.SyncUpdate path sha dashId ->
-    fetchAndParseDashboard token (GitSync.syncRepoRef sync) path >>= either (Log.logAttention "Failed to sync dashboard from git" . (path,)) \schema -> do
+    fetchAndParseDashboard conn (GitSync.syncRepoRef sync) path >>= either (Log.logAttention "Failed to sync dashboard from git" . (path,)) \schema -> do
       now <- Time.currentTime
       let prefix = GitSync.getDashboardsPath sync
           relativePath = fromMaybe path $ T.stripPrefix prefix path
@@ -3564,35 +3570,35 @@ processGitSyncAction pid token sync teamMap = \case
   GitSync.SyncDelete{} -> pass -- Handled separately
 
 
-fetchAndParseDashboard :: (IOE :> es, W.HTTP :> es) => Text -> GitSync.RepoRef -> Text -> Eff es (Either Text Dashboards.Dashboard)
-fetchAndParseDashboard token repoRef path = GitSync.fetchFileContent token repoRef path <&> (>>= GitSync.yamlToDashboard)
+fetchAndParseDashboard :: (IOE :> es, W.HTTP :> es) => Git.GitConn -> GitSync.RepoRef -> Text -> Eff es (Either Text Dashboards.Dashboard)
+fetchAndParseDashboard conn repoRef path = Git.fetchFile conn repoRef path <&> (>>= GitSync.yamlToDashboard)
 
 
 -- | Push a dashboard change to GitHub
 -- Skips template-based dashboards (schema = Nothing) since they have no custom content to sync.
 gitSyncPushDashboard :: Projects.ProjectId -> Dashboards.DashboardId -> ATBackgroundCtx ()
 gitSyncPushDashboard pid dashId = do
-  Log.logInfo "Pushing dashboard to GitHub" (pid, dashId)
+  Log.logInfo "Pushing dashboard to git host" (pid, dashId)
   Dashboards.getDashboardById dashId >>= \case
     Nothing -> Log.logAttention "Dashboard not found for git push" dashId
     Just dash | isNothing dash.schema -> Log.logInfo "Skipping git push for template-based dashboard" dashId
-    Just dash -> withGitHubSync pid \token sync -> pushDashboardToGit token sync pid dash ("Update dashboard: " <> dash.title)
+    Just dash -> withGitSync pid \conn sync -> pushDashboardToGit conn sync pid dash ("Update dashboard: " <> dash.title)
 
 
 -- | Render one dashboard to YAML, push it to the repo and record the new shas.
-pushDashboardToGit :: (DB es, Log :> es, Time.Time :> es, W.HTTP :> es) => Text -> GitSync.GitHubSync -> Projects.ProjectId -> Dashboards.DashboardVM -> Text -> Eff es ()
-pushDashboardToGit token sync pid dash message = do
+pushDashboardToGit :: (DB es, Log :> es, Time.Time :> es, W.HTTP :> es) => Git.GitConn -> GitSync.GitHubSync -> Projects.ProjectId -> Dashboards.DashboardVM -> Text -> Eff es ()
+pushDashboardToGit conn sync pid dash message = do
   teams <- ProjectMembers.getTeamsById pid dash.teams
   let schema = GitSync.buildSchemaWithMeta dash.schema dash.title (V.toList dash.tags) (map (.handle) teams)
       prefix = GitSync.getDashboardsPath sync
       -- Strip any accidental prefix from DB path to ensure we don't get dashboards/dashboards/...
       rawPath = fromMaybe (GitSync.titleToFilePath dash.title) dash.filePath
       relativePath = fromMaybe rawPath $ T.stripPrefix "dashboards/" rawPath <|> T.stripPrefix prefix rawPath
-  GitSync.pushFileToGit token (GitSync.syncRepoRef sync) (prefix <> relativePath) (GitSync.dashboardToYaml schema) dash.fileSha message >>= \case
+  Git.pushFile conn (GitSync.syncRepoRef sync) (prefix <> relativePath) (GitSync.dashboardToYaml schema) dash.fileSha message >>= \case
     Left err -> Log.logAttention "Failed to push dashboard to git" (dash.id, err)
-    Right (fileSha, treeSha) -> do
+    Right (fileSha, revision) -> do
       void $ GitSync.updateDashboardGitInfo dash.id relativePath fileSha
-      void $ GitSync.updateLastTreeSha sync.id treeSha
+      void $ GitSync.updateLastRevision sync.id revision
       Log.logInfo "Successfully pushed dashboard to git" (dash.id, fileSha)
 
 
@@ -3600,11 +3606,11 @@ pushDashboardToGit token sync pid dash message = do
 -- Skips template-based dashboards (schema = Nothing) since they have no custom content to sync.
 gitSyncPushAllDashboards :: Projects.ProjectId -> ATBackgroundCtx ()
 gitSyncPushAllDashboards pid = do
-  Log.logInfo "Pushing all dashboards to GitHub" pid
-  withGitHubSync pid \token sync -> do
+  Log.logInfo "Pushing all dashboards to git host" pid
+  withGitSync pid \conn sync -> do
     syncableDashboards <- filter (isJust . (.schema)) <$> Dashboards.selectDashboardsSortedBy pid "updated_at"
     Log.logInfo "Found dashboards to push" (pid, length syncableDashboards)
-    forM_ syncableDashboards \dash -> pushDashboardToGit token sync pid dash ("Sync dashboard: " <> dash.title)
+    forM_ syncableDashboards \dash -> pushDashboardToGit conn sync pid dash ("Sync dashboard: " <> dash.title)
     Log.logInfo "Finished pushing all dashboards" pid
 
 
