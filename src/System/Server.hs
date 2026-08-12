@@ -59,7 +59,8 @@ import System.Posix.Process (exitImmediately)
 import System.Posix.Signals (Handler (Catch), installHandler, sigINT, sigTERM, sigUSR2)
 import System.TimeManager (TimeoutThread)
 import System.Timeout (timeout)
-import System.Types (effToServantHandler, runBackground)
+import System.Tracing (withSpan_)
+import System.Types (ATBackgroundCtx, effToServantHandler, runBackground)
 import Web.Auth qualified as Auth
 import Web.Routes qualified as Routes
 
@@ -97,6 +98,25 @@ liveTailFiber lg what intervalMs act =
   forever $ do
     Safe.handleAny (\(e :: SomeException) -> liveTailLog lg ("live_tail: " <> what <> " failed") (AE.object ["error" AE..= show @Text e])) act
     threadDelay (intervalMs * 1000)
+
+
+-- | Record a Live Tail event inside its own span, so the counter carries an exemplar.
+--
+-- Metrics recorded outside a span get no trace link — silently, since nothing fails and the
+-- counter still moves. 'runBackground' interprets the 'Tracing' effect but does not open a
+-- span, so every fiber-side counter was landing without one: the chart would show a spike with
+-- nothing to click through to.
+--
+-- Called only on ticks that have something to record, never per tick. The relay poller runs
+-- four times a second and the cache refresher every two — a span each would be hundreds of
+-- thousands of empty spans per pod per day, which is a cost we would be paying to describe
+-- nothing happening. The events these wrap (overflow, rejected filters, decode failures) are
+-- rare, so the baseline is zero and the exemplar exists exactly when someone wants to drill.
+--
+-- Levels are deliberately excluded. 'Metrics.liveTailCacheLoaded' records every tick and needs
+-- no exemplar: nobody drills from "500 subscriptions loaded" into a trace.
+liveTailEvent :: LogBase.Logger -> AuthContext -> TracerProvider -> Text -> ATBackgroundCtx () -> IO ()
+liveTailEvent lg env tp name act = runBackground lg env tp (withSpan_ name [] act)
 
 
 -- | Run @act@ at most once per @interval@, tracked by @ref@.
@@ -154,13 +174,15 @@ liveTailCacheRefresher appLogger env tp =
     rows <- runBackground appLogger env tp (LiveTail.activeSubscriptions LiveTail.maxCached)
     now <- getCurrentTime
     bad <- LiveTail.refreshSubCache env.liveTail.cache now rows
+    -- A level, not an event: recorded every tick and outside a span on purpose.
     Metrics.recordMs Metrics.liveTailCacheLoaded (fromIntegral (length rows)) []
-    Metrics.count Metrics.liveTailCacheRejected (length bad) []
     unless (null bad) do
       -- The log is for us; the notice is for the person staring at a tail that will never
       -- produce another row. Without it the only symptom is silence, which reads as "nothing
       -- is happening" rather than "this stopped working".
-      LiveTail.noticeBrokenFilters env.liveTail bad
+      liveTailEvent appLogger env tp "live_tail.filters_rejected" do
+        Metrics.count Metrics.liveTailCacheRejected (length bad) []
+        LiveTail.noticeBrokenFilters env.liveTail bad
       liveTailLog appLogger "live_tail: stored filters no longer compile; those subscriptions will not match" (AE.object ["count" AE..= length bad])
     when (length rows >= LiveTail.maxCached)
       $ liveTailLog appLogger "live_tail: subscription cache hit its cap; some tails are not being matched" (AE.object ["cap" AE..= LiveTail.maxCached])
@@ -175,11 +197,11 @@ liveTailRelayFlusher :: LogBase.Logger -> AuthContext -> TracerProvider -> IO ()
 liveTailRelayFlusher appLogger env tp =
   liveTailFiber appLogger "relay flush" LiveTail.relayPollMs do
     (pending, lost) <- LiveTail.takeRelayBuffer env.liveTail.relayBuffer
-    Metrics.count Metrics.liveTailRelayDropped lost []
     -- Overflow means the writer fell behind ingest; the rows are gone either way, but going
     -- quietly is what makes it undiagnosable.
-    when (lost > 0)
-      $ liveTailLog appLogger "live_tail: relay buffer overflowed; those tails are missing rows" (AE.object ["dropped" AE..= lost])
+    when (lost > 0) do
+      liveTailEvent appLogger env tp "live_tail.relay_overflow" $ Metrics.count Metrics.liveTailRelayDropped lost []
+      liveTailLog appLogger "live_tail: relay buffer overflowed; those tails are missing rows" (AE.object ["dropped" AE..= lost])
     -- Guarded so an idle pod does not pay for an effect-stack setup every tick.
     unless (null pending) $ runBackground appLogger env tp (LiveTail.relayPublish pending)
 
@@ -209,7 +231,7 @@ liveTailRelayPoller appLogger env tp = do
         LiveTail.Delivered e -> LiveTail.deliver env.liveTail.hub e
         LiveTail.VersionMismatch _ -> modifyIORef' skewed (first (+ 1))
         LiveTail.Undecodable _ -> modifyIORef' skewed (second (+ 1))
-    reportSkew appLogger skewed lastReport
+    reportSkew appLogger env tp skewed lastReport
     -- Any pod may reap; the delete is idempotent and bounded by age.
     everyN (fromIntegral LiveTail.relayRetentionSecs) lastReap
       $ runBackground appLogger env tp LiveTail.relayReap
@@ -225,8 +247,8 @@ liveTailRelayPoller appLogger env tp = do
 -- Starts at the latest offset and never commits: there is nothing here worth resuming. A row
 -- a browser was not connected to receive is a row it has already missed, and replaying it on
 -- reconnect would show a "live" tail rows from minutes ago.
-liveTailConsumer :: LogBase.Logger -> AuthContext -> Text -> IO ()
-liveTailConsumer appLogger env topic = do
+liveTailConsumer :: LogBase.Logger -> AuthContext -> TracerProvider -> Text -> IO ()
+liveTailConsumer appLogger env tp topic = do
   nonce <- T.take 8 . UUID.toText <$> UUID.nextRandom
   let props =
         KC.brokersList (map KC.BrokerAddress env.config.kafkaBrokers)
@@ -252,7 +274,7 @@ liveTailConsumer appLogger env topic = do
               LiveTail.Delivered e -> LiveTail.deliver env.liveTail.hub e
               LiveTail.VersionMismatch _ -> modifyIORef' skewed (first (+ 1))
               LiveTail.Undecodable _ -> modifyIORef' skewed (second (+ 1))
-        reportSkew appLogger skewed lastReport
+        reportSkew appLogger env tp skewed lastReport
 
 
 -- | Surface accumulated live-tail decode failures once a minute, then reset.
@@ -260,15 +282,16 @@ liveTailConsumer appLogger env topic = do
 -- A version mismatch is expected mid-deploy and resolves itself; one that persists means a pod
 -- is stuck on an old build and its users' tails are silently empty. Undecodable messages are
 -- never expected at all.
-reportSkew :: LogBase.Logger -> IORef (Int, Int) -> IORef UTCTime -> IO ()
-reportSkew appLogger skewed lastReport = everyN 60 lastReport do
+reportSkew :: LogBase.Logger -> AuthContext -> TracerProvider -> IORef (Int, Int) -> IORef UTCTime -> IO ()
+reportSkew appLogger env tp skewed lastReport = everyN 60 lastReport do
   (vers, bad) <- atomicModifyIORef' skewed ((0, 0),)
-  -- Shared by the Kafka consumer and the relay poller, so both transports report a skew the
-  -- same way. `reason` is bounded to these two values.
-  Metrics.count Metrics.liveTailDecodeFailed vers [("reason", OA.toAttribute ("skew" :: Text))]
-  Metrics.count Metrics.liveTailDecodeFailed bad [("reason", OA.toAttribute ("undecodable" :: Text))]
-  when (vers > 0 || bad > 0)
-    $ liveTailLog
+  when (vers > 0 || bad > 0) do
+    -- Shared by the Kafka consumer and the relay poller, so both transports report a skew the
+    -- same way. `reason` is bounded to these two values.
+    liveTailEvent appLogger env tp "live_tail.decode_failed" do
+      Metrics.count Metrics.liveTailDecodeFailed vers [("reason", OA.toAttribute ("skew" :: Text))]
+      Metrics.count Metrics.liveTailDecodeFailed bad [("reason", OA.toAttribute ("undecodable" :: Text))]
+    liveTailLog
       appLogger
       "live_tail: side-topic messages dropped; those tails are missing rows"
       (AE.object ["version_mismatched" AE..= vers, "undecodable" AE..= bad, "envelope_version" AE..= LiveTail.envelopeVersion])
@@ -457,7 +480,7 @@ runServer appLogger env tp = do
         , -- Delivery happens wherever the browser lands, so the consumer follows HTTP. Kafka
           -- transport only: with the local hub, publish and deliver are already the same
           -- process and a consumer would deliver a second copy of every row.
-          [ async (supervise logExc "live-tail-consumer" $ liveTailConsumer appLogger env t)
+          [ async (supervise logExc "live-tail-consumer" $ liveTailConsumer appLogger env tp t)
           | not consumerOnly
           , Just t <- [liveTailKafkaTopic]
           ]
