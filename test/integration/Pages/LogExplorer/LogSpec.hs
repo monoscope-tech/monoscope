@@ -190,40 +190,50 @@ spec = around withTestResources do
   -- part of the contract, not a detail.
   describe "Query validation endpoint" do
     it "accepts a valid query" \tr -> do
-      v <- snd <$> testServant tr (Log.logExplorerValidateH testPid (Just "kind == \"log\""))
+      v <- snd <$> testServant tr (Log.logExplorerValidateH testPid (Just "kind == \"log\"") Nothing)
       (v.valid, v.message) `shouldBe` (True, Nothing)
 
     it "locates an unknown field so the editor can underline it" \tr -> do
-      v <- snd <$> testServant tr (Log.logExplorerValidateH testPid (Just "kind == \"a\" and attribut contains \"x\""))
+      v <- snd <$> testServant tr (Log.logExplorerValidateH testPid (Just "kind == \"a\" and attribut contains \"x\"") Nothing)
       v.valid `shouldBe` False
       v.message `shouldBe` Just "Unknown field \"attribut\". Did you mean \"attributes\"?"
       (v.column, v.width) `shouldBe` (Just 17, Just 8)
 
     it "locates a syntax error" \tr -> do
-      v <- snd <$> testServant tr (Log.logExplorerValidateH testPid (Just "attributes contains ddd"))
+      v <- snd <$> testServant tr (Log.logExplorerValidateH testPid (Just "attributes contains ddd") Nothing)
       v.valid `shouldBe` False
       v.column `shouldBe` Just 12
+
+    -- The editor underlines whatever this says, so a verdict reached under the wrong table
+    -- is a squiggle on a query the server runs happily. `metric_name` is a real column on
+    -- the metrics table and no column at all on otel_logs_and_spans.
+    it "judges a metrics query against the metrics table, not the spans one" \tr -> do
+      let q = Just "metric_name == \"redis.commands\" | summarize avg(value) by bin_auto(timestamp)"
+      metrics <- snd <$> testServant tr (Log.logExplorerValidateH testPid q (Just "metrics"))
+      (metrics.valid, metrics.message) `shouldBe` (True, Nothing)
+      spans <- snd <$> testServant tr (Log.logExplorerValidateH testPid q Nothing)
+      spans.valid `shouldBe` False
 
     -- 92 saved queries in production filter on the raw `___` column names. They
     -- are what the table calls those columns and they reach SQL unchanged, so
     -- rejecting them would have broken working saved queries.
     it "accepts the raw ___ column names saved queries use" \tr -> do
-      v <- snd <$> testServant tr (Log.logExplorerValidateH testPid (Just "context___trace_id != null and resource___service___name == \"api\""))
+      v <- snd <$> testServant tr (Log.logExplorerValidateH testPid (Just "context___trace_id != null and resource___service___name == \"api\"") Nothing)
       (v.valid, v.message) `shouldBe` (True, Nothing)
 
     it "still rejects a mistyped ___ column, and suggests in the same notation" \tr -> do
-      v <- snd <$> testServant tr (Log.logExplorerValidateH testPid (Just "context___trace_ix != null"))
+      v <- snd <$> testServant tr (Log.logExplorerValidateH testPid (Just "context___trace_ix != null") Nothing)
       v.valid `shouldBe` False
       v.message `shouldSatisfy` maybe False (T.isInfixOf "context___trace_id")
 
     it "treats an empty query as valid" \tr -> do
-      v <- snd <$> testServant tr (Log.logExplorerValidateH testPid Nothing)
+      v <- snd <$> testServant tr (Log.logExplorerValidateH testPid Nothing Nothing)
       v.valid `shouldBe` True
 
     -- Aliases a query introduces are real names downstream; flagging them would
     -- squiggle a working query.
     it "accepts a filter on a summarize alias" \tr -> do
-      v <- snd <$> testServant tr (Log.logExplorerValidateH testPid (Just "level == \"ERROR\" | summarize count() by kind | where count_ > 1"))
+      v <- snd <$> testServant tr (Log.logExplorerValidateH testPid (Just "level == \"ERROR\" | summarize count() by kind | where count_ > 1") Nothing)
       v.valid `shouldBe` True
 
   describe "Data endpoint query-error handling" do
