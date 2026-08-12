@@ -213,11 +213,11 @@ insertUser u = EHasql.interpExecute_ [HI.sql| INSERT INTO users.users (id, creat
 
 
 userById :: DB es => UserId -> Eff es (Maybe User)
-userById uid = EHasql.interpOne [HI.sql| SELECT * FROM users.users WHERE id = #{uid} |]
+userById uid = EHasql.interpOne (selectFrom @User <> [HI.sql| WHERE id = #{uid} |])
 
 
 userByEmail :: DB es => Text -> Eff es (Maybe User)
-userByEmail email = EHasql.interpOne [HI.sql| SELECT * FROM users.users WHERE email = #{email} |]
+userByEmail email = EHasql.interpOne (selectFrom @User <> [HI.sql| WHERE email = #{email} |])
 
 
 userIdByEmail :: DB es => Text -> Eff es (Maybe UserId)

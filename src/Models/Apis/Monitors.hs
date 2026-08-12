@@ -35,6 +35,7 @@ import Data.Time.Calendar (Day (..))
 import Data.Time.Clock (UTCTime (..), addUTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple.FromField (FromField (..))
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (ToField (..))
@@ -45,7 +46,7 @@ import Effectful.Time qualified as Time
 import GHC.Records (HasField (getField))
 import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (SnakeSchema (..), WrappedEnumSC (..))
+import Pkg.DeriveUtils (SnakeSchema (..), WrappedEnumSC (..), selectFrom)
 import Relude
 import Servant (FromHttpApiData)
 import System.Types (DB)
@@ -128,6 +129,10 @@ data QueryMonitor = QueryMonitor
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, HI.DecodeRow, NFData)
+  -- DecodeRow is positional, so reads must project through 'selectFrom' @QueryMonitor
+  -- (this Entity's field list) rather than @SELECT *@ — otherwise the next ADD COLUMN
+  -- shifts every field one slot and breaks decoding until the binary is redeployed.
+  deriving (Entity) via (GenericEntity '[Schema "monitors", TableName "query_monitors", PrimaryKey "id", FieldModifiers '[CamelToSnake]] QueryMonitor)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake QueryMonitor
   deriving (ToSchema) via SnakeSchema QueryMonitor
 
@@ -167,7 +172,7 @@ queryMonitorUpsert qm =
 
 
 queryMonitorById :: DB es => QueryMonitorId -> Eff es (Maybe QueryMonitor)
-queryMonitorById mid = Hasql.interpOne [HI.sql| SELECT * FROM monitors.query_monitors WHERE id = #{mid} |]
+queryMonitorById mid = Hasql.interpOne (selectFrom @QueryMonitor <> [HI.sql| WHERE id = #{mid} |])
 
 
 monitorToggleActiveById :: (DB es, Time :> es) => QueryMonitorId -> Eff es Int64
@@ -222,18 +227,18 @@ monitorSoftDeleteByIds ids =
 
 
 queryMonitorsAll :: DB es => Projects.ProjectId -> Eff es [QueryMonitor]
-queryMonitorsAll pid = Hasql.interp [HI.sql| SELECT * FROM monitors.query_monitors WHERE project_id = #{pid} AND deleted_at IS NULL |]
+queryMonitorsAll pid = Hasql.interp (selectFrom @QueryMonitor <> [HI.sql| WHERE project_id = #{pid} AND deleted_at IS NULL |])
 
 
 -- | Natural-key lookup for monitors-as-code apply (title is the analogue of
 -- dashboards' file_path). Oldest wins if titles ever collide.
 queryMonitorByTitle :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe QueryMonitor)
 queryMonitorByTitle pid title =
-  Hasql.interpOne [HI.sql| SELECT * FROM monitors.query_monitors WHERE project_id = #{pid} AND alert_config->>'title' = #{title} AND deleted_at IS NULL ORDER BY created_at LIMIT 1 |]
+  Hasql.interpOne (selectFrom @QueryMonitor <> [HI.sql| WHERE project_id = #{pid} AND alert_config->>'title' = #{title} AND deleted_at IS NULL ORDER BY created_at LIMIT 1 |])
 
 
 getAlertsByTeamHandle :: DB es => Projects.ProjectId -> UUID.UUID -> Eff es [QueryMonitor]
-getAlertsByTeamHandle pid teamId = Hasql.interp [HI.sql| SELECT * FROM monitors.query_monitors WHERE project_id = #{pid} AND #{teamId} = ANY(teams) AND deleted_at IS NULL |]
+getAlertsByTeamHandle pid teamId = Hasql.interp (selectFrom @QueryMonitor <> [HI.sql| WHERE project_id = #{pid} AND #{teamId} = ANY(teams) AND deleted_at IS NULL |])
 
 
 monitorRemoveTeam :: DB es => Projects.ProjectId -> QueryMonitorId -> UUID.UUID -> Eff es Int64
@@ -247,7 +252,7 @@ monitorRemoveTeam pid monitorId teamId =
 
 
 getActiveQueryMonitors :: DB es => Eff es [QueryMonitor]
-getActiveQueryMonitors = Hasql.interp [HI.sql| SELECT * FROM monitors.query_monitors WHERE deactivated_at IS NULL AND deleted_at IS NULL AND log_query_as_sql IS NOT NULL AND log_query_as_sql != '' |]
+getActiveQueryMonitors = Hasql.interp (selectFrom @QueryMonitor <> [HI.sql| WHERE deactivated_at IS NULL AND deleted_at IS NULL AND log_query_as_sql IS NOT NULL AND log_query_as_sql != '' |])
 
 
 updateLastEvaluatedAt :: DB es => QueryMonitorId -> UTCTime -> Eff es Int64
@@ -255,7 +260,7 @@ updateLastEvaluatedAt qmId time = Hasql.interpExecute [HI.sql|UPDATE monitors.qu
 
 
 queryMonitorByWidgetId :: DB es => Text -> Eff es (Maybe QueryMonitor)
-queryMonitorByWidgetId wId = Hasql.interpOne [HI.sql| SELECT * FROM monitors.query_monitors WHERE widget_id = #{wId} AND deleted_at IS NULL |]
+queryMonitorByWidgetId wId = Hasql.interpOne (selectFrom @QueryMonitor <> [HI.sql| WHERE widget_id = #{wId} AND deleted_at IS NULL |])
 
 
 deleteMonitorsByWidgetIds :: DB es => [Text] -> Eff es Int64

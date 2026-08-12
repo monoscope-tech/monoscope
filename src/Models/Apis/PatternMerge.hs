@@ -28,7 +28,7 @@ import Hasql.Interpolate qualified as HI
 import Models.Apis.ErrorPatterns (ErrorPattern, ErrorPatternId)
 import Models.Apis.LogPatterns (LogPattern, LogPatternId)
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (showPGFloatArray)
+import Pkg.DeriveUtils (selectFrom, showPGFloatArray)
 import Pkg.PatternMerge (embeddingTextForError)
 import Relude
 import System.Types (DB)
@@ -86,7 +86,7 @@ unmergeErrorPattern pid =
 
 getErrorPatternGroupMembers :: DB es => ErrorPatternId -> Eff es [ErrorPattern]
 getErrorPatternGroupMembers eid =
-  Hasql.interp [HI.sql| SELECT * FROM apis.error_patterns WHERE canonical_id = #{eid} ORDER BY updated_at DESC |]
+  Hasql.interp (selectFrom @ErrorPattern <> [HI.sql| WHERE canonical_id = #{eid} ORDER BY updated_at DESC |])
 
 
 fetchErrorTexts :: DB es => [ErrorPatternId] -> Eff es (Map ErrorPatternId Text)
@@ -144,7 +144,7 @@ unmergeLogPattern lid =
 
 getLogPatternGroupMembers :: DB es => LogPatternId -> Eff es [LogPattern]
 getLogPatternGroupMembers lid =
-  Hasql.interp [HI.sql| SELECT * FROM apis.log_patterns WHERE canonical_id = #{lid} ORDER BY last_seen_at DESC |]
+  Hasql.interp (selectFrom @LogPattern <> [HI.sql| WHERE canonical_id = #{lid} ORDER BY last_seen_at DESC |])
 
 
 fetchLogTexts :: DB es => [LogPatternId] -> Eff es (Map LogPatternId Text)

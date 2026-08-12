@@ -55,7 +55,7 @@ import Effectful (Eff)
 import Hasql.Interpolate qualified as HI
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (BaselineState (..), DB, WrappedEnumSC (..))
+import Pkg.DeriveUtils (BaselineState (..), DB, WrappedEnumSC (..), selectFrom)
 import Pkg.ErrorFingerprint qualified as EF
 import Relude hiding (id)
 import Utils (truncateHour)
@@ -188,23 +188,27 @@ data ATError = ATError
 -- | Get error patterns for a project with optional state filter (excludes merged patterns)
 getErrorPatterns :: DB es => Projects.ProjectId -> Maybe ErrorState -> Int -> Int -> Eff es [ErrorPattern]
 getErrorPatterns pid mstate limit offset =
-  Hasql.interp [HI.sql| SELECT * FROM apis.error_patterns WHERE project_id = #{pid} AND (#{mstate} IS NULL OR state = #{mstate}) AND canonical_id IS NULL ORDER BY updated_at DESC LIMIT #{limit} OFFSET #{offset} |]
+  Hasql.interp (selectFrom @ErrorPattern <> [HI.sql| WHERE project_id = #{pid} AND (#{mstate} IS NULL OR state = #{mstate}) AND canonical_id IS NULL ORDER BY updated_at DESC LIMIT #{limit} OFFSET #{offset} |])
 
 
 getErrorPatternById :: DB es => ErrorPatternId -> Eff es (Maybe ErrorPattern)
-getErrorPatternById eid = Hasql.interpOne [HI.sql| SELECT * FROM apis.error_patterns WHERE id = #{eid} |]
+getErrorPatternById eid = Hasql.interpOne (selectFrom @ErrorPattern <> [HI.sql| WHERE id = #{eid} |])
 
 
 getErrorPatternByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe ErrorPattern)
-getErrorPatternByHash pid eHash = Hasql.interpOne [HI.sql| SELECT * FROM apis.error_patterns WHERE project_id = #{pid} AND hash = #{eHash} |]
+getErrorPatternByHash pid eHash = Hasql.interpOne (selectFrom @ErrorPattern <> [HI.sql| WHERE project_id = #{pid} AND hash = #{eHash} |])
 
 
 getErrorPatternLByHash :: DB es => Projects.ProjectId -> Text -> UTCTime -> Eff es (Maybe ErrorPatternL)
 getErrorPatternLByHash pid eHash now =
+  -- @e@ is the entity's explicit column list, not the table: @e.*@ then expands to exactly
+  -- ErrorPattern's fields, so an ADD COLUMN can't shift the aggregates out of their slots.
   Hasql.interpOne
-    [HI.sql|
+    $ [HI.sql|
     SELECT e.*, COALESCE(ev.occurrences, 0)::BIGINT, COALESCE(ev.user_count, 0)::BIGINT, ev.last_occurred_at
-    FROM apis.error_patterns e LEFT JOIN LATERAL (
+    FROM (|]
+    <> selectFrom @ErrorPattern
+    <> [HI.sql|) e LEFT JOIN LATERAL (
       SELECT SUM(event_count) AS occurrences, SUM(user_count) AS user_count, MAX(hour_bucket) AS last_occurred_at
       FROM apis.error_hourly_stats WHERE project_id = e.project_id AND error_id = e.id AND hour_bucket >= #{now}::timestamptz - INTERVAL '30 days'
     ) ev ON true WHERE e.project_id = #{pid} AND e.hash = #{eHash} |]
