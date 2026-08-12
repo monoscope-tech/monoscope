@@ -549,7 +549,7 @@ data LogExplorerRoutes' mode = LogExplorerRoutes'
   , liveTailRegisterPost :: mode :- "live_tail" :> "subscriptions" :> ReqBody '[JSON] LT.NewSubscription :> Post '[JSON] (RespHeaders LiveTail.RegisterResponse)
   , -- Streams for as long as the browser holds it open, so it is the one route here that is
     -- not a plain request/response — see 'LiveTail.EventStream'.
-    liveTailStreamGet :: mode :- "live_tail" :> "subscriptions" :> Capture "subscriptionId" Text :> "stream" :> StreamGet NoFraming LiveTail.EventStream (SourceIO Builder)
+    liveTailStreamGet :: mode :- "live_tail" :> "subscriptions" :> Capture "subscriptionId" Text :> "stream" :> StreamGet NoFraming LiveTail.EventStream (LiveTail.SseHeaders (SourceIO Builder))
   , liveTailRenewPost :: mode :- "live_tail" :> "subscriptions" :> Capture "subscriptionId" Text :> "renew" :> Post '[JSON] (RespHeaders AE.Value)
   , liveTailDelete :: mode :- "live_tail" :> "subscriptions" :> Capture "subscriptionId" Text :> Delete '[JSON] (RespHeaders AE.Value)
   , -- Source around one stack frame. Its own endpoint rather than part of the detail panel

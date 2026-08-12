@@ -16,6 +16,7 @@
 module LiveTailSpec (spec) where
 
 import Control.Concurrent.STM (isEmptyTBQueue)
+import Control.Exception.Safe qualified as Safe
 import Data.Aeson qualified as AE
 import Data.HashMap.Strict qualified as HM
 import Data.Map.Strict qualified as Map
@@ -23,12 +24,14 @@ import Data.Text qualified as T
 import Data.Time (addUTCTime, getCurrentTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import Ki qualified
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Pkg.DeriveUtils (AesonText (..), UUIDId (..))
 import Pkg.LiveTail qualified as LT
-import Pkg.TestUtils (TestResources, frozenTime, runHasqlEffect, withTestResources)
+import Pkg.TestUtils (TestResources (..), createTestAPIKey, frozenTime, ingestLog, runHasqlEffect, withTestResources)
 import Relude
+import System.Config (AuthContext (hasqlPool, liveTail))
 import Test.Hspec (Spec, around, describe, it, shouldBe, shouldContain, shouldReturn, shouldSatisfy)
 
 
@@ -187,6 +190,82 @@ spec = do
         [LT.TableRow m] -> Map.member "count_" m `shouldBe` False
         _ -> fail "expected exactly one TableRow"
 
+  describe "LiveTail degradation" do
+    -- Live Tail is a convenience feature living inside the ingestion path, which is not one.
+    -- Each of these is a way it is allowed to fail; none of them may fail a telemetry write,
+    -- and none of them may fail silently.
+    it "survives a transport that throws, and counts what it could not publish" do
+      -- The single most important property in the feature: a broker that is down must cost a
+      -- tail its rows and cost ingestion nothing. Verified by construction until now, which is
+      -- another way of saying nothing stopped an edit from letting the exception through.
+      let sub = mkSub 60 "checkout" Nothing ""
+      hub <- LT.newHub
+      cache <- LT.newSubCache
+      _ <- LT.refreshSubCache cache frozenTime [sub]
+      buf <- LT.newRelayBuffer
+      let rt = LT.Runtime{transport = LT.PostgresRelay, cache, hub, relayBuffer = buf, emit = \_ -> Safe.throwString "broker is down"}
+      stats <- LT.publishMatches rt pid (V.fromList [logRecord "checkout" "prod" "info" "a", logRecord "checkout" "prod" "info" "b"])
+      getSum stats.matched `shouldBe` 2
+      getSum stats.publishFailed `shouldBe` 2
+
+    it "drops a row too large for the wire instead of handing it over, and says so" do
+      -- The per-field cap bounds one value; it does not bound their sum, and the broker
+      -- measures the sum. A wide Events row over records with large attributes reaches it.
+      let cols = ["attributes___k" <> show n | n <- [0 :: Int .. 127]]
+          sub = mkSubScoped 61 LT.AllSignals cols Nothing ""
+      (conn, rt) <- fixture [sub]
+      stats <- LT.publishMatches rt pid (V.fromList [wideRecord "checkout" "prod"])
+      getSum stats.matched `shouldBe` 1
+      getSum stats.oversized `shouldBe` 1
+      -- Dropped before the transport, so this is not a publish failure and the queue is empty.
+      getSum stats.publishFailed `shouldBe` 0
+      atomically (isEmptyTBQueue conn.queue) `shouldReturn` True
+
+    it "stops evaluating once the batch budget is spent, and reports the remainder" do
+      -- Fifty subscriptions makes the budget bite at a thousand records, which is what lets
+      -- this assert the real path rather than the arithmetic (doctested on affordableRecords).
+      let subs = [mkSub (70 + fromIntegral n) ("svc" <> show n) Nothing "" | n <- [0 :: Int .. 49]]
+          affordable = LT.affordableRecords (length subs)
+      hub <- LT.newHub
+      rt <- runtimeWith hub subs
+      -- Records match nothing, so this measures evaluation alone rather than delivery.
+      stats <- LT.publishMatches rt pid (V.fromList (replicate (affordable + 5) (logRecord "untailed" "prod" "info" "x")))
+      getSum stats.evaluated `shouldBe` affordable
+      getSum stats.skipped `shouldBe` 5
+
+    it "tells the browser its filter stopped compiling instead of going quiet" do
+      -- The tail is dead the moment the cache rejects it, and every symptom looks like "no
+      -- rows match" — which during an incident reads as "nothing is wrong".
+      let bad = mkSub 80 "checkout" Nothing "level == \"error\" | summarize count()"
+          (_, rejected) = LT.compileSubs [bad]
+      hub <- LT.newHub
+      conn <- LT.newConn 10
+      _ <- LT.attachConn hub bad.id conn
+      -- The cache holds nothing: this subscription is precisely the one that failed to compile.
+      rt <- runtimeWith hub []
+      LT.noticeBrokenFilters rt rejected
+      (rows, _) <- LT.takeBatch conn
+      rows `shouldSatisfy` \case
+        [LT.Notice msg] -> "no longer valid" `T.isInfixOf` msg
+        _ -> False
+
+    it "gives a reconnecting browser nothing that arrived while it was away" do
+      -- At-most-once, stated as a test: the lease survives a reconnect but the queue does not,
+      -- and a "live" tail replaying rows from a minute ago would be lying about what it shows.
+      let sub = mkSub 90 "checkout" Nothing ""
+      hub <- LT.newHub
+      firstConn <- LT.newConn 100
+      detach <- LT.attachConn hub sub.id firstConn
+      rt <- runtimeWith hub [sub]
+      _ <- LT.publishMatches rt pid (V.fromList [logRecord "checkout" "prod" "info" "while connected"])
+      detach
+      _ <- LT.publishMatches rt pid (V.fromList [logRecord "checkout" "prod" "info" "during the gap"])
+      secondConn <- LT.newConn 100
+      _ <- LT.attachConn hub sub.id secondConn
+      _ <- LT.publishMatches rt pid (V.fromList [logRecord "checkout" "prod" "info" "after reconnect"])
+      (rows, _) <- LT.takeBatch secondConn
+      map logBody rows `shouldBe` ["after reconnect"]
+
   describe "LiveTail Kafka envelope" do
     it "survives the round trip that crosses the side-topic, for both row shapes" do
       -- What actually goes over Kafka is this encoding, so a shape that cannot decode is a
@@ -284,6 +363,77 @@ spec = do
       length pending `shouldBe` fromIntegral LT.relayBufferDepth
       lost `shouldBe` 5
 
+    it "directOtlpIngest_reachesLiveTail_notOnlyTheQueuePath" \tr -> do
+      -- Regression, and the one that made Live Tail look broken rather than subtly wrong.
+      --
+      -- The ingest hook lived only in 'dualWriteWithPoisonMapping' — the path telemetry takes
+      -- when it arrives via Kafka or Pub/Sub. Records arriving over OTLP directly (gRPC on
+      -- 4317, or OTLP/HTTP) go through 'processSignalRequest' and write straight to the store.
+      -- That path had no hook, so in any deployment without a queue in front — every dev box,
+      -- docker-compose and self-hosted install, and any prod pod taking OTLP directly — a tail
+      -- registered fine, said @live@, held its SSE connection, and matched nothing ever.
+      --
+      -- Driven through 'ingestLog', which is 'logsServiceExport': the real gRPC entry point,
+      -- not a re-implementation of it. AllSignals so the assertion is "a row arrived at all"
+      -- rather than a claim about the fixture's service name.
+      let sub = mkSubScoped 100 LT.AllSignals [] Nothing ""
+      conn <- LT.newConn 10
+      _ <- LT.attachConn tr.trATCtx.liveTail.hub sub.id conn
+      _ <- LT.refreshSubCache tr.trATCtx.liveTail.cache frozenTime [sub]
+      key <- createTestAPIKey tr pid "live-tail-direct-ingest"
+      ingestLog tr key "a log that arrived without a queue" frozenTime
+      -- Bounded wait, not 'takeBatch': with the hook missing this must fail, not hang forever
+      -- on a queue nothing will ever write to.
+      delivered <- LT.takeBatchWithin 2_000_000 conn
+      fmap (length . fst) delivered `shouldBe` Just 1
+
+    it "countActive_int8Decoder_doesNotThrow" \tr -> do
+      -- Regression. These were `count(*)::int` — int4 — while the Haskell `Int` decoder expects
+      -- int8, so every call threw UnexpectedColumnType. They run only when an insert has
+      -- already been refused, purely to name *which* cap was hit, so the sole symptom was that
+      -- "you have too many live tails open" reached the user as a 500. Nothing covered the
+      -- failure path of a failure path until the concurrent-cap test below tripped over it.
+      future <- addUTCTime 300 <$> getCurrentTime
+      _ <- runHasqlEffect tr $ LT.insertSubscription pid ownerId (newSub "checkout") (LT.LogsOnly "checkout") 99 99 future
+      perUser <- runHasqlEffect tr $ LT.countActiveForUser pid ownerId
+      perProject <- runHasqlEffect tr $ LT.countActiveForProject pid
+      perUser `shouldSatisfy` (>= 1)
+      perProject `shouldSatisfy` (>= perUser)
+
+    it "refuses a concurrent burst against a cap that is already met" \tr -> do
+      -- What this proves, precisely: the cap is evaluated by the INSERT itself, so eight
+      -- simultaneous registrations all see the committed rows and all lose. A count-then-insert
+      -- would pass this too — the window it opens is between *its own* count and write.
+      --
+      -- What it deliberately does not assert: that a burst against an *empty* cap settles at
+      -- exactly N. It cannot, and a test claiming otherwise would be flaky by construction —
+      -- under READ COMMITTED none of eight racers sees another's uncommitted row, so all eight
+      -- may legitimately succeed. That is the documented "about N" bound (see
+      -- 'insertSubscription'), and these caps bound one user's browser tabs. The cap that
+      -- protects the fleet is 'maxCached', a LIMIT on the ingest side that cannot be raced.
+      future <- addUTCTime 300 <$> getCurrentTime
+      _ <- runHasqlEffect tr $ LT.insertSubscription pid ownerId (newSub "checkout") (LT.LogsOnly "checkout") 99 99 future
+      -- Whatever this user already has, committed, is the cap — so the cap is met exactly.
+      atCap <- runHasqlEffect tr $ LT.countActiveForUser pid ownerId
+      let register = runHasqlEffect tr $ LT.insertSubscription pid ownerId (newSub "checkout") (LT.LogsOnly "checkout") atCap 99 future
+      results <- Ki.scoped \scope -> replicateM 8 (Ki.fork scope register) >>= atomically . traverse Ki.await
+      filter isJust results `shouldBe` []
+
+    it "drops the lease when the stream tears down, rather than waiting it out" \tr -> do
+      -- The SSE handler deletes on teardown *as well as* the browser deleting on unload,
+      -- because the server learns a connection died the moment the response body fails. Without
+      -- it a crashed or slept tab leaves ingest matching and publishing rows nobody will read
+      -- for the full lease — this is what makes that ~2s instead of ~45s.
+      future <- addUTCTime 300 <$> getCurrentTime
+      sid <-
+        runHasqlEffect tr (LT.insertSubscription pid ownerId (newSub "checkout") (LT.LogsOnly "checkout") 9 9 future)
+          >>= maybe (fail "insert produced no id") pure
+      LT.deleteSubscriptionIO tr.trATCtx.hasqlPool pid ownerId sid
+      gone <- runHasqlEffect tr $ LT.activeSubscriptionFor pid ownerId sid
+      gone `shouldSatisfy` isNothing
+      -- Idempotent: teardown and the browser's own DELETE race by design.
+      LT.deleteSubscriptionIO tr.trATCtx.hasqlPool pid ownerId sid
+
     it "stops matching once the lease lapses, with no explicit delete" \tr -> do
       -- Expiry, not DELETE, is what deactivates a subscription: every failure that matters
       -- (crashed tab, killed pod, sleeping laptop) loses the DELETE.
@@ -326,6 +476,7 @@ logBody :: LT.LiveRow -> Text
 logBody = \case
   LT.LogRow f -> f.body
   LT.TableRow _ -> error "expected a LogRow from a logs-only subscription"
+  LT.Notice msg -> error ("expected a row, got a notice: " <> msg)
 
 
 -- ---------------------------------------------------------------------------------------
@@ -380,6 +531,16 @@ httpLogRecord service env method =
   (logRecord service env "info" "req")
     { Telemetry.attributes =
         Just (AesonText (Map.fromList [("http", AE.object ["request" AE..= AE.object ["method" AE..= method]])]))
+    }
+
+
+-- | 128 attributes at the per-field cap: each value is individually legal, and their sum is
+-- past what a broker will accept. The shape the envelope cap exists for.
+wideRecord :: Text -> Text -> Telemetry.OtelLogsAndSpans
+wideRecord service env =
+  (logRecord service env "info" "wide")
+    { Telemetry.attributes =
+        Just (AesonText (Map.fromList [("k" <> show n, AE.String (T.replicate LT.maxRowFieldChars "x")) | n <- [0 :: Int .. 127]]))
     }
 
 

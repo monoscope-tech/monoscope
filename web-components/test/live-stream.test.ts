@@ -94,6 +94,52 @@ describe('LiveStream lifecycle', () => {
     expect(s.isRunning).toBe(false);
   });
 
+  test('a server notice stops the stream instead of retrying a permanent fault', async () => {
+    // The server's own voice, distinct from a transport blip. It arrives as `notice` rather
+    // than `error` precisely so it does NOT land on EventSource's built-in error handler —
+    // which retries, and retrying a filter that no longer compiles is an infinite loop that
+    // looks to the user exactly like a quiet service.
+    withFakes({ subscription_id: 's1', stream_url: '/stream/s1' });
+    let state = '';
+    let detail = '';
+    const s = new LiveStream({
+      projectId: 'p1',
+      leaseSecs: 45,
+      body: () => ({}),
+      onRows: () => {},
+      onState: (st, d) => {
+        state = st;
+        detail = d ?? '';
+      },
+    });
+    await s.start();
+    FakeEventSource.last!.emit('notice', { message: "This live tail's filter is no longer valid." });
+    expect(state).toBe('error');
+    expect(detail).toContain('no longer valid');
+    expect(s.isRunning).toBe(false);
+  });
+
+  test('reports connecting, live and reconnecting as the connection moves through them', async () => {
+    // The states are the only thing telling an on-call engineer whether an empty tail means
+    // "nothing is happening" or "you are not connected". A silent transition is a lie.
+    vi.useFakeTimers();
+    withFakes({ subscription_id: 's1', stream_url: '/stream/s1' });
+    const seen: string[] = [];
+    const s = new LiveStream({
+      projectId: 'p1',
+      leaseSecs: 45,
+      body: () => ({}),
+      onRows: () => {},
+      onState: st => seen.push(st),
+    });
+    await s.start();
+    FakeEventSource.last!.emit('ready', {});
+    // A transport failure is a blip: it must reconnect, not surface as a permanent error.
+    FakeEventSource.last!.onerror!();
+    expect(seen).toEqual(['connecting', 'live', 'reconnecting']);
+    s.stop();
+  });
+
   test('an expired lease stops the stream rather than reconnecting into a gap', async () => {
     // Reconnecting would look like an unbroken stream while rows were in fact missed.
     withFakes({ subscription_id: 's1', stream_url: '/stream/s1' });

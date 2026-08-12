@@ -65,6 +65,7 @@ module Pkg.LiveTail (
   CompiledSub (..),
   newSubCache,
   refreshSubCache,
+  noticeBrokenFilters,
   compileSubs,
   matchesFor,
 
@@ -77,6 +78,9 @@ module Pkg.LiveTail (
   LogRowFields (..),
   envelopeVersion,
   maxRowFieldChars,
+  maxEnvelopeBytes,
+  maxEvalsPerBatch,
+  affordableRecords,
   toLiveRow,
 
   -- * Web-pod side
@@ -115,6 +119,7 @@ import Control.Concurrent.STM (TBQueue, check, flushTBQueue, isFullTBQueue, newT
 import Control.Exception.Safe qualified as Safe
 import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AET
+import Data.ByteString.Lazy qualified as LBS
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
@@ -552,12 +557,19 @@ activeSubscriptionFor pid uid sid =
       |]
 
 
+-- | How many active subscriptions this user, and this project, currently hold.
+--
+-- @::int8@, not @::int@. @count(*)@ is already @int8@ and the Haskell 'Int' decoder expects
+-- @int8@; narrowing to @int4@ in SQL made every call throw @UnexpectedColumnType@. These are
+-- read only on the registration failure path — to say /which/ cap refused an insert — so the
+-- one thing the bug broke was the error message explaining a hit limit, and it broke it into a
+-- 500. Nothing exercised that path until the concurrent-cap test did.
 countActiveForUser :: DB es => Projects.ProjectId -> Projects.UserId -> Eff es Int
 countActiveForUser pid uid =
   fromMaybe 0
     . listToMaybe
     <$> Hasql.interp
-      [HI.sql| SELECT count(*)::int FROM projects.live_tail_subscriptions WHERE project_id = #{pid} AND user_id = #{uid} AND expires_at > now() |]
+      [HI.sql| SELECT count(*)::int8 FROM projects.live_tail_subscriptions WHERE project_id = #{pid} AND user_id = #{uid} AND expires_at > now() |]
 
 
 countActiveForProject :: DB es => Projects.ProjectId -> Eff es Int
@@ -565,7 +577,7 @@ countActiveForProject pid =
   fromMaybe 0
     . listToMaybe
     <$> Hasql.interp
-      [HI.sql| SELECT count(*)::int FROM projects.live_tail_subscriptions WHERE project_id = #{pid} AND expires_at > now() |]
+      [HI.sql| SELECT count(*)::int8 FROM projects.live_tail_subscriptions WHERE project_id = #{pid} AND expires_at > now() |]
 
 
 -- | Push the lease out. Returns the new expiry, or 'Nothing' if the lease had already lapsed —
@@ -716,6 +728,22 @@ refreshSubCache cache now rows = do
   pure bad
 
 
+-- | Tell the browsers behind these subscriptions that their tail is dead.
+--
+-- Sent every refresh while the subscription still exists rather than once on the transition.
+-- That is deliberate and it is what keeps this stateless: a browser that opens a stream
+-- /after/ the filter broke gets told within one refresh, without the cache having to remember
+-- who it has already warned. It is self-limiting because a told browser stops and deletes its
+-- subscription, and one small message every 'cacheRefreshSecs' per broken tail is not traffic
+-- worth the bookkeeping to avoid.
+--
+-- Failure is swallowed like every other emit on this path: a notice that a tail is broken must
+-- not be the thing that breaks ingestion.
+noticeBrokenFilters :: MonadIO m => Runtime -> [(SubscriptionId, RegisterError)] -> m ()
+noticeBrokenFilters rt bad = liftIO $ Safe.handleAny (const pass) $ forM_ bad \(sid, err) ->
+  rt.emit (LiveEnvelope envelopeVersion sid (Notice ("This live tail's filter is no longer valid: " <> registerErrorMessage err <> " Start a new one.")))
+
+
 -- ---------------------------------------------------------------------------------------
 -- Wire format
 -- ---------------------------------------------------------------------------------------
@@ -728,14 +756,74 @@ refreshSubCache cache now rows = do
 -- push path. A v1 payload is a bare log record with no @shape@ discriminator, so it cannot be
 -- read as a v2 row at all — which is exactly why 'decodeEnvelope' reads this field before it
 -- looks at the row.
+--
+-- 3: 'Notice' joined the sum. Strictly this is additive — a v3 pod emits byte-identical
+-- @log@ and @table@ rows — so it is tempting to leave the version alone and let the rare
+-- notice fall out as @Undecodable@ on an old consumer. That is the trade this field exists to
+-- refuse: "the shape changed" and "the payload is corrupt" would once again arrive as the same
+-- signal. The cost of bumping is one rolling-deploy window in which tails go dark, and they go
+-- dark in that window anyway because the web pods holding the connections are restarting.
 envelopeVersion :: Int
-envelopeVersion = 2
+envelopeVersion = 3
 
 
 -- | Per-field character cap. A single log carrying a megabyte stack trace must not be able to
 -- exceed the broker's message limit or stall a browser; the row says when it truncated.
 maxRowFieldChars :: Int
 maxRowFieldChars = 8000
+
+
+-- | Whole-envelope byte cap, checked after serialization.
+--
+-- 'maxRowFieldChars' bounds one field; it does not bound their sum, and the sum is what the
+-- broker measures. An Events row may carry up to 'maxColumns' columns, so the worst case is
+-- @128 * 8000@ — comfortably past Kafka's default @max.message.bytes@ of 1 MiB. That is a
+-- reachable shape, not a theoretical one: a wide table over records with large attributes.
+--
+-- Below the broker default with room for the framing the producer adds. A row past it is
+-- dropped and counted rather than truncated: truncating an already-serialized envelope would
+-- produce something that is no longer JSON, and there is no honest way to shorten a row after
+-- the fact without deciding which of the user's chosen columns to discard.
+maxEnvelopeBytes :: Int
+maxEnvelopeBytes = 900_000
+
+
+-- | Ceiling on filter evaluations in one 'publishMatches' call.
+--
+-- The other limits bound the /factors/ — query length, regex length, subscriptions per project
+-- — but nothing bounded their product against batch size, and that product is the work done
+-- inside the ingestion path. This is the circuit breaker for the case the factor bounds were
+-- individually fine and the multiplication was not.
+--
+-- Work, not time: a deadline would make ingest behaviour depend on how loaded the box is, so
+-- the same batch could match different rows on two pods. A count is deterministic, and being
+-- able to reason about "which rows did this tail see" matters more here than squeezing the
+-- last record out of a hot batch.
+--
+-- Set well above normal traffic — twenty subscriptions over a thousand-record batch is 20k —
+-- so it bites only when something is already pathological.
+maxEvalsPerBatch :: Int
+maxEvalsPerBatch = 50_000
+
+
+-- | How many records of a batch this many subscriptions can afford to evaluate.
+--
+-- Spending the budget up front rather than checking per record keeps the branch off the hot
+-- path, and — more importantly — makes the degradation uniform: fewer records evaluated
+-- against /all/ subscriptions, rather than all records against some of them. The second would
+-- silently switch particular tails off while their neighbours kept running.
+--
+-- The floor of one is what stops a pathological subscription count from disabling matching
+-- outright; making no progress is worse than making a little.
+--
+-- >>> map affordableRecords [1, 20, 500]
+-- [50000,2500,100]
+-- >>> affordableRecords 10000000
+-- 1
+-- >>> affordableRecords 0
+-- 50000
+affordableRecords :: Int -> Int
+affordableRecords nsubs = max 1 (maxEvalsPerBatch `div` max 1 nsubs)
 
 
 -- | One log, reduced to what the Live Tail list renders. Deliberately not the whole
@@ -769,14 +857,29 @@ data LiveRow
     -- was rendering. A name the in-memory record cannot answer is absent rather than guessed,
     -- and the client leaves that cell empty until the durable read fills it.
     TableRow (Map Text AE.Value)
+  | -- | Not a row: something the server needs to tell this one browser, delivered down the
+    -- same addressed path so it lands on the pod actually holding the connection.
+    --
+    -- The alternative was for the server to have no way to speak. A subscription whose stored
+    -- filter stops compiling across a deploy is dropped from the cache and never matches
+    -- again — and the tab goes on saying @live@ forever, indistinguishable from a filter that
+    -- happens to match nothing. That is the worst failure this feature has, because the user's
+    -- reasonable conclusion is "nothing is happening".
+    --
+    -- Message text only, no code: there is exactly one condition today, and inventing an enum
+    -- for a set of one is a shape to maintain rather than information to carry. The text is
+    -- written by the server for a human and never contains parser internals — see
+    -- 'registerErrorMessage'.
+    Notice Text
   deriving stock (Generic, Show)
 
 
--- Tagged so a consumer can tell the two apart without inferring it from the payload's shape.
+-- Tagged so a consumer can tell them apart without inferring it from the payload's shape.
 instance AE.ToJSON LiveRow where
   toJSON = \case
     LogRow f -> AE.object ["shape" AE..= ("log" :: Text), "log" AE..= f]
     TableRow cols -> AE.object ["shape" AE..= ("table" :: Text), "cols" AE..= cols]
+    Notice msg -> AE.object ["shape" AE..= ("notice" :: Text), "message" AE..= msg]
 
 
 instance AE.FromJSON LiveRow where
@@ -784,6 +887,7 @@ instance AE.FromJSON LiveRow where
     o AE..: "shape" >>= \case
       ("log" :: Text) -> LogRow <$> o AE..: "log"
       "table" -> TableRow <$> o AE..: "cols"
+      "notice" -> Notice <$> o AE..: "message"
       other -> fail ("unknown live row shape: " <> toString other)
 
 
@@ -1130,6 +1234,15 @@ data PublishStats = PublishStats
   -- ^ Matched rows the transport refused. Counted rather than thrown, because a broker that
   -- is down must not fail a telemetry write — but a silently swallowed exception would make
   -- "nobody is tailing" and "delivery is broken" indistinguishable.
+  , oversized :: !(Sum Int)
+  -- ^ Matched rows that serialized past 'maxEnvelopeBytes' and were dropped. Distinct from
+  -- 'publishFailed': the transport was fine, we declined to hand it something it would have
+  -- rejected. A tail that shows nothing because every row is too wide looks exactly like a
+  -- filter that matches nothing, and this is the only thing that tells them apart.
+  , skipped :: !(Sum Int)
+  -- ^ Records left unevaluated because the batch hit 'maxEvalsPerBatch'. These are not
+  -- non-matches — they were never asked. A tail silently going lossy under load is the
+  -- failure this counter exists to make visible.
   }
   deriving stock (Generic, Show)
   deriving (Monoid, Semigroup) via Generically PublishStats
@@ -1149,14 +1262,23 @@ publishMatches rt pid records = do
   subs <- HM.lookupDefault [] pid <$> readIORef rt.cache.subs
   if null subs
     then pure mempty
-    else liftIO $ foldlM (step subs) mempty records
+    else do
+      let affordable = affordableRecords (length subs)
+      liftIO
+        $ (<> PublishStats 0 0 0 0 0 (Sum (max 0 (V.length records - affordable))))
+        <$> foldlM (step subs) mempty (V.take affordable records)
   where
     step subs acc rec = do
       let (hits, errs) = matchesFor subs rec
-      sent <- foldMapM emitOne hits
-      pure (acc <> PublishStats 1 (Sum (length hits)) (Sum (length errs)) (Sum (length hits) - sent))
+      (sent, tooBig) <- foldMapM emitOne hits
+      pure (acc <> PublishStats 1 (Sum (length hits)) (Sum (length errs)) (Sum (length hits) - sent - tooBig) tooBig 0)
       where
         emitOne cs =
-          Safe.handleAny (const (pure (Sum 0)))
-            $ Sum 1
-            <$ rt.emit (LiveEnvelope envelopeVersion cs.sub.id (toLiveRow cs.sub.scope cs.sub.columns rec))
+          let env = LiveEnvelope envelopeVersion cs.sub.id (toLiveRow cs.sub.scope cs.sub.columns rec)
+           in -- Measured here rather than inside the transport so both transports get the
+              -- same answer, and so the drop is attributed to the row instead of surfacing as
+              -- a broker error. Costs one extra encode, on matched rows only — post-filter
+              -- traffic is small by construction, which is the whole premise of the side topic.
+              if LBS.length (AE.encode env) > fromIntegral maxEnvelopeBytes
+                then pure (Sum 0, Sum 1)
+                else Safe.handleAny (const (pure (Sum 0, Sum 0))) ((Sum 1, Sum 0) <$ rt.emit env)

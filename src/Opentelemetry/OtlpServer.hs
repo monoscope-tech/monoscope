@@ -320,6 +320,16 @@ fanOutToLiveTail appCtx recs = do
     $ Log.logAttention
       "live_tail: matched rows could not be published; those tails are missing logs"
       (AE.object ["publish_failed" AE..= getSum stats.publishFailed, "matched" AE..= getSum stats.matched])
+  -- Both of these are rows dropped on purpose, which is exactly why they have to be said out
+  -- loud: to the user they are indistinguishable from a filter that matched nothing.
+  when (getSum stats.oversized > 0)
+    $ Log.logAttention
+      "live_tail: matched rows exceeded the envelope size cap and were dropped"
+      (AE.object ["oversized" AE..= getSum stats.oversized, "cap_bytes" AE..= LiveTail.maxEnvelopeBytes])
+  when (getSum stats.skipped > 0)
+    $ Log.logAttention
+      "live_tail: batch hit the evaluation budget; trailing records were not matched"
+      (AE.object ["skipped" AE..= getSum stats.skipped, "budget" AE..= LiveTail.maxEvalsPerBatch])
   where
     byProject = HM.fromListWith (<>) [(pid, V.singleton r) | r <- V.toList recs, Just pid <- [Projects.projectIdFromText r.project_id]]
     publishOne (pid, rs) = LiveTail.publishMatches appCtx.liveTail pid rs
@@ -1586,6 +1596,16 @@ processSignalRequest label signal receivedMsg noun countKey metadataApiKey proje
   unless (V.null records) do
     stamped <- stampOrPassthrough appCtx records
     let minted = Telemetry.mintOtelLogIds $ stampHashesAtIngest projectCaches stamped
+    -- Live Tail, before the durable write — the same hook 'dualWriteWithPoisonMapping' has,
+    -- for the same reason. This is the /direct/ path: OTLP over gRPC on 4317 and OTLP over
+    -- HTTP, neither of which passes through Kafka or Pub/Sub. It is the only path a
+    -- deployment without a queue has, and it is what most self-hosted and dev installs use.
+    --
+    -- Missing here, Live Tail was structurally dead in exactly those deployments: it accepted
+    -- subscriptions, refreshed its cache, held the SSE connection open and reported @live@ —
+    -- and no record was ever offered to a filter, because every record arrived through the one
+    -- ingest path with no hook in it.
+    fanOutToLiveTail appCtx minted
     Telemetry.insertAndHandOff appCtx.hasqlTimefusionUsesPgTypes (Telemetry.writeTargetFor appCtx.env.enablePostgresTelemetryWrites appCtx.env.enableTimefusionWrites Nothing) appCtx.extractionWorker projectCaches minted
       >>= throwOnWriteFailure
     Log.logTrace

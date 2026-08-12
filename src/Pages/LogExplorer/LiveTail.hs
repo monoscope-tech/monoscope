@@ -11,6 +11,7 @@
 -- the queue this handler drains.
 module Pages.LogExplorer.LiveTail (
   EventStream,
+  SseHeaders,
   liveTailGetH,
   liveTailRegisterH,
   liveTailStreamH,
@@ -38,7 +39,7 @@ import Pkg.DeriveUtils (idFromText)
 import Pkg.LiveTail qualified as LT
 import Relude
 import Servant qualified
-import Servant.API (Accept (..), MimeRender (..))
+import Servant.API (Accept (..), Headers, MimeRender (..), addHeader)
 import Servant.Types.SourceT (SourceT (..), StepT (..))
 import System.Config (AuthContext (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
@@ -63,6 +64,28 @@ instance Accept EventStream where
 
 instance MimeRender EventStream Builder where
   mimeRender _ = toLazyByteString
+
+
+-- | The headers that decide whether an SSE response actually streams.
+--
+-- Every hop between this handler and the browser would rather buffer than forward: a CDN caches
+-- it, nginx holds it in a proxy buffer, a "helpful" transforming proxy re-chunks it. The result
+-- is the failure that looks like nothing at all — the tab says @live@, the connection is open,
+-- and rows arrive in a clump minutes later or never.
+--
+-- @no-transform@ is the half people forget: @no-cache@ alone still permits an intermediary to
+-- re-encode the body, which is what re-introduces buffering. @X-Accel-Buffering@ is nginx's
+-- (and several ingress controllers') opt-out, ignored harmlessly everywhere else.
+--
+-- Heartbeats every ten seconds mask most of this, which is precisely why it went unnoticed:
+-- they keep the connection alive but do nothing about a hop that batches what it forwards.
+-- See also the @text/event-stream@ exclusion in "System.Server"'s gzip settings — compression
+-- is the one buffering hop headers cannot talk us out of.
+type SseHeaders =
+  Headers
+    '[ Servant.Header "Cache-Control" Text
+     , Servant.Header "X-Accel-Buffering" Text
+     ]
 
 
 -- | One SSE frame.
@@ -203,7 +226,7 @@ liveTailDeleteH pid rawSid = do
 -- follows runs in plain 'IO', outside the effect stack, so it touches nothing but the queue
 -- captured here — the lease is renewed over a separate route by the browser, precisely so this
 -- body never needs a database.
-liveTailStreamH :: Projects.ProjectId -> Text -> ATAuthCtx (Servant.SourceIO Builder)
+liveTailStreamH :: Projects.ProjectId -> Text -> ATAuthCtx (SseHeaders (Servant.SourceIO Builder))
 liveTailStreamH pid rawSid = do
   sess <- Projects.getSession
   appCtx <- Reader.ask @AuthContext
@@ -219,7 +242,7 @@ liveTailStreamH pid rawSid = do
   -- full lease period. Safe against reconnects — the client registers a new subscription when
   -- it reconnects, so this id is always one nothing returns to.
   let release = detach >> LT.deleteSubscriptionIO appCtx.hasqlPool pid sess.user.id sid
-  pure (streamFrom sub conn release)
+  pure $ addHeader "no-cache, no-transform" $ addHeader "no" $ streamFrom sub conn release
 
 
 -- | The response body: @ready@, then a @log@ frame per batch, forever.
@@ -242,11 +265,30 @@ streamFrom sub conn detach = SourceT \k -> k start `finally` detach
     loop = Effect do
       LT.takeBatchWithin heartbeatMicros conn <&> \case
         Nothing -> Yield (sseComment "keep-alive") loop
-        Just (rows, dropped) ->
-          Yield (sseFrame "log" (AE.toJSON rows))
-            -- Cumulative, so re-sending it alongside every batch is harmless: the browser
-            -- renders a total ("4,812 dropped — narrow your filter"), not a delta.
-            $ if dropped > 0 then Yield (sseFrame "dropped" (AE.object ["count" AE..= dropped])) loop else loop
+        Just (batch, dropped) -> do
+          -- Notices ride the row queue because that is the only path addressed to this
+          -- connection, but they are not rows and must not reach the table renderer.
+          let (notices, rows) = partitionEithers (map asNotice batch)
+          -- @notice@, not @error@ as the plan named it. EventSource dispatches on the frame's
+          -- event name, and @error@ is already the name of its own transport-failure event —
+          -- a frame called @error@ arrives at the client's @onerror@ handler, which retries.
+          -- The one event that means "retrying will not help" would have been the one event
+          -- guaranteed to trigger a retry.
+          foldr (\m -> Yield (sseFrame "notice" (AE.object ["message" AE..= m]))) (rowsThen rows dropped) notices
+
+    -- A batch of only notices must not yield an empty @log@ frame: the client appends what it
+    -- receives, and an empty append is a re-render for nothing.
+    rowsThen rows dropped
+      | null rows = continue
+      | otherwise = Yield (sseFrame "log" (AE.toJSON rows)) continue
+      where
+        -- Cumulative, so re-sending it alongside every batch is harmless: the browser renders
+        -- a total ("4,812 dropped — narrow your filter"), not a delta.
+        continue = if dropped > 0 then Yield (sseFrame "dropped" (AE.object ["count" AE..= dropped])) loop else loop
+
+    asNotice = \case
+      LT.Notice msg -> Left msg
+      row -> Right row
 
     heartbeatMicros = 10_000_000
 

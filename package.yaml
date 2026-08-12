@@ -210,6 +210,9 @@ tests:
       - aeson
       # EvalConformanceSpec renders an Expr to SQL via its Display instance.
       - text-display
+      # LiveTailSpec races registrations through a ki scope, and fakes a broker that throws.
+      - ki
+      - safe-exceptions
       - hasql
       - hasql-interpolate
       - hasql-pool

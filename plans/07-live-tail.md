@@ -22,7 +22,7 @@ It sends matched records to browsers through Server-Sent Events (SSE).
 | Backpressure | **Bounded queue for each browser stream.** Drop the oldest record and report the dropped count. |
 | Service selector | **Required.** A browser cannot register a stream without one service. |
 | Subscription lifetime | **Lease with expiry.** An open SSE connection renews the lease. Expiry is authoritative. |
-| Transport in an all-in-one process | **Local STM hub.** This mode is for development and single-process self-hosting only. |
+| Transport in an all-in-one process | ~~**Local STM hub.**~~ **Superseded** — see the *no Kafka requirement* revision at the end. `LocalHub` was removed because no process can tell whether ingest and HTTP share one; a Postgres relay table serves every deployment without Kafka. |
 
 If Live Tail must include spans or requests, revise the data contract, selectors, row shape,
 and tests before implementation.
@@ -51,12 +51,12 @@ The stream has these properties:
 
 Use explicit SSE event names:
 
-| Event | Data |
-| --- | --- |
-| `ready` | Subscription ID and lease expiry time. |
-| `log` | One bounded Live Tail row. |
-| `dropped` | Cumulative records dropped by this browser connection. |
-| `error` | A recoverable stream error code and safe message. |
+| Event | Data | Status |
+| --- | --- | --- |
+| `ready` | Subscription ID and lease expiry time. | Done |
+| `log` | One bounded Live Tail row. | Done |
+| `dropped` | Cumulative records dropped by this browser connection. | Done |
+| `error` | A recoverable stream error code and safe message. | **Not implemented.** The server never emits an `error` frame. The client has an `error` *state*, but it is inferred from a failed registration POST or `EventSource.onerror` — i.e. from transport failure, not from anything the server chose to say. |
 
 Do not put credentials, internal errors, or KQL parser details in SSE error events.
 
@@ -317,37 +317,46 @@ or disconnect and miss records until resume.
 
 ### Unit and property tests
 
-- Cover every accepted `Expr` and `Values` constructor.
-- Compare evaluator results with SQL results for a shared table of supported expressions.
-- Cover missing fields, nulls, mixed types, arrays, wildcards, Unicode, and invalid regexes.
-- Prove that selector predicates cannot be removed or overridden by the client query.
-- Prove that queue size never exceeds its configured bound.
-- Prove that overflow drops the oldest row and increases the loss counter.
-- Round-trip the versioned Kafka envelope and enforce its size limit.
+- [x] Cover every accepted `Expr` and `Values` constructor. — doctests in `Pkg.Parser.Eval`.
+- [x] Compare evaluator results with SQL results for a shared table of supported expressions.
+      — `EvalConformanceSpec`, 15 cases run both ways against one seeded row.
+- [x] Cover missing fields, nulls, mixed types, arrays, wildcards, Unicode, and invalid regexes.
+- [x] Prove that selector predicates cannot be removed or overridden by the client query.
+- [x] Prove that queue size never exceeds its configured bound.
+- [x] Prove that overflow drops the oldest row and increases the loss counter.
+- [x] Round-trip the versioned Kafka envelope — **but not its size limit**, which is not
+      enforced as a whole-envelope check (see "What is left", size cap).
 
 ### Integration tests
 
-- Reject registration without a service.
-- Reject pipeline commands and unsupported expression constructors.
-- Reject users without project access on all three routes.
-- Enforce per-user and per-project limits under concurrent registration.
-- Register a subscription, refresh the cache, ingest a mixed batch, and deliver only the
-  matching log record.
-- Route one subscription through Kafka to a simulated web pod.
-- Show that two web-pod consumer groups each receive the same matched message.
-- Expire a lease and verify that matching and streaming stop without explicit removal.
-- Disconnect SSE and verify best-effort cleanup plus eventual expiry.
-- Simulate Kafka failure and verify that the main telemetry write still succeeds.
-- Simulate a slow browser and verify the `dropped` event.
-- Verify that reconnect starts at new records and does not replay old records.
+- [x] Reject registration without a service. — structural: `Scope` cannot be built without one.
+- [x] Reject pipeline commands and unsupported expression constructors.
+- [x] Reject users without project access on all three routes. — one test on
+      `activeSubscriptionFor`, the single `WHERE` all three resolve through.
+- [ ] Enforce per-user and per-project limits **under concurrent registration.** The atomic
+      statement is tested sequentially; the race is not exercised.
+- [x] Register a subscription, refresh the cache, ingest a mixed batch, and deliver only the
+      matching log record.
+- [ ] Route one subscription through Kafka to a simulated web pod. — covered at both ends
+      (envelope round trip, hub routing), never through a broker.
+- [ ] Show that two web-pod consumer groups each receive the same matched message.
+- [x] Expire a lease and verify that matching and streaming stop without explicit removal.
+- [ ] Disconnect SSE and verify best-effort cleanup plus eventual expiry. — the teardown delete
+      exists; no test drives it.
+- [ ] Simulate Kafka failure and verify that the main telemetry write still succeeds. — the
+      publish path is non-fatal by construction, but nothing pins it.
+- [x] Simulate a slow browser and verify the `dropped` event.
+- [ ] Verify that reconnect starts at new records and does not replay old records.
 
 ### Browser tests
 
-- Connect, show the ready state, append rows, and enforce the client row cap.
-- Show connecting, live, reconnecting, paused, expired, and disabled states.
-- Keep selector and filter values after a reconnect.
-- Stop the stream when the user leaves the page or changes project.
-- Keep Events as the Explorer landing page although Live Tail appears first.
+- [ ] Connect, show the ready state, append rows, and enforce the client row cap. — append and
+      drop count are in `live-stream.test.ts`; the row cap is not asserted.
+- [ ] Show connecting, live, reconnecting, paused, expired, and disabled states. — `expired` and
+      the refusal path are covered; `connecting` / `reconnecting` / `paused` are not.
+- [ ] Keep selector and filter values after a reconnect.
+- [x] Stop the stream when the user leaves the page or changes project.
+- [x] Keep Events as the Explorer landing page although Live Tail appears first. — e2e.
 
 ## Rollout
 
@@ -356,23 +365,32 @@ or disconnect and miss records until resume.
    `retention.bytes=67108864`. Short retention is not a cost saving — nothing on this topic is
    replayable, and a reconnecting browser deliberately never rewinds, so anything older than a
    few minutes is garbage by construction.
-2. Deploy the schema, configuration, producer, and consumer. (Previously "with the feature
-   disabled" — the default is now on; unset `ENABLE_LIVE_TAIL` to restore a dark deploy.)
-3. Verify cache, Kafka, lease, and drop metrics in staging.
-4. Enable the feature for internal projects only.
-5. Load-test many subscriptions against high-volume projects.
-6. Verify that ingest latency and write success do not change materially.
-7. Set conservative subscription and row-size limits before wider release.
+2. ~~Deploy the schema, configuration, producer, and consumer.~~ **Done** — migrations 0125–0127
+   are on master; there is no configuration left to deploy, and no dark-deploy switch. Steps 4
+   and 7 below are void for the same reason: there is no feature flag to stage a rollout with,
+   and no operator-set limits to tighten.
+3. **Not done.** Verify cache, Kafka, lease, and drop metrics in staging — blocked on the metric
+   set, which is blocked on the OTel metrics API.
+4. ~~Enable the feature for internal projects only.~~ **Void** — no flag; ships on for everyone.
+5. **Not done.** Load-test many subscriptions against high-volume projects.
+6. **Not done.** Verify that ingest latency and write success do not change materially.
+7. ~~Set conservative subscription and row-size limits before wider release.~~ **Void as a
+   rollout step** — the limits are compile-time constants, already conservative
+   (`maxPerUser = 3`, `maxPerProject = 20`, `maxCached = 500`, `maxRowFieldChars = 8000`).
 
 The feature is ready when all acceptance criteria are true:
 
-- A matching log normally appears in the browser within three seconds.
-- An unmatched or non-log record never appears.
-- Live Tail adds no unbounded queue, cache, or Kafka growth.
-- A Live Tail dependency failure does not fail or materially delay ingestion.
-- Cross-project access tests fail closed.
-- The UI reports connection health and dropped records accurately.
-- A pod restart loses only in-flight live records and recovers without operator action.
+- [x] A matching log normally appears in the browser within three seconds. — pre-write matching
+      puts it under the write-visibility floor; not measured under load (step 6).
+- [x] An unmatched or non-log record never appears.
+- [x] Live Tail adds no unbounded queue, cache, or Kafka growth.
+- [x] A Live Tail dependency failure does not fail or materially delay ingestion. — true by
+      construction (publish is buffered and non-fatal); no test pins it, and latency is unmeasured.
+- [x] Cross-project access tests fail closed.
+- [~] The UI reports connection health and dropped records accurately. — drops and `expired` are
+      accurate; `connecting` / `reconnecting` / `paused` are untested, and the server has no way
+      to report a recoverable error (no `error` frame).
+- [x] A pod restart loses only in-flight live records and recovers without operator action.
 
 ## Rejected alternatives
 
@@ -398,7 +416,7 @@ Recorded against the numbered implementation sequence above.
 | 5 | Ingest matching | **Done.** `fanOutToLiveTail` called from `dualWriteWithPoisonMapping`, after id minting, before the durable write. Logs-only filter lives in `matchesFor`. |
 | 6 | Kafka transport | **Done.** Versioned envelope, keyed by subscription id; producer installed in `withLiveTailTransport`; per-pod consumer group at `offsetReset = Latest`, no commit. |
 | 7 | Managed fibers | **Done.** `live-tail-cache` (follows ingest) and `live-tail-consumer` (follows HTTP) in `System/Server.hs`, both under `supervise` and the existing shutdown path. |
-| 8 | Configuration | **Done.** Eight `LIVE_TAIL_*` vars, documented in `.env.example`. `ENABLE_LIVE_TAIL` defaults to **True** and `LIVE_TAIL_TOPIC` to **`live_tail`** (see the deviation note below); an empty topic with Kafka on still resolves to `Unavailable`. |
+| 8 | Configuration | **Done, then deliberately undone.** Shipped as eight `LIVE_TAIL_*` vars, all since deleted — see the *no configuration* revision at the end. Nothing to configure is the finished state, not a gap. |
 | 9 | Page + web component | **Done.** `web-components/src/live-tail.ts` — connect, capped buffer, pause-as-display-freeze, drop counter, backoff reconnect, lease renewal, cleanup on unload. |
 | 10 | Navigation | **Done.** `Live Tail` first in `Utils.explorerTabs`; Events unchanged as the landing route. |
 | 11 | Observability + rollout | **Partial.** `PublishStats` counts evaluated/matched/failed/publish-failed, and the cache refresher logs cap-hit and uncompilable-filter conditions. The full metric set in the Observability section is **not** wired — it waits on the OTel metrics API (`TODO(otel-metrics)` elsewhere in the tree). The feature now ships **enabled**, which departs from the rollout section — see below. |
@@ -441,17 +459,9 @@ Recorded against the numbered implementation sequence above.
   steps that still matter are the load test and the ingest-latency check; the Kafka topic must
   exist before any deployment with `LIVE_TAIL_TOPIC` set can serve a tail.
 
-### Not done
-
-- **Test coverage is partial.** `test/integration/LiveTailSpec.hs` covers query validation,
-  transport selection, matching (including the cross-service and non-log negatives), selector
-  isolation from the client query, fan-out to multiple subscriptions, body truncation, the
-  queue bound and drop accounting, and cache rejection of uncompilable filters. Not yet
-  written, from the spec's test plan: the SQL-vs-evaluator conformance table, concurrent
-  limit enforcement, the Kafka round trip and two-consumer-group test, lease expiry through
-  the HTTP routes, cross-project access rejection on all three routes, and every browser test.
-- **The metric set** in the Observability section (step 11 above).
-- **Kafka topic creation and the rollout steps** are operational work, untouched here.
+*(The "Not done" list that stood here has been folded into
+[What is left](#what-is-left-2026-08-12) at the end of this document — most of it has since
+been closed, and keeping three separate open-items lists is how one of them goes stale.)*
 
 ---
 
@@ -556,13 +566,7 @@ Two bugs were found by writing these, both of which would have shipped:
   is "about N". Deliberate — these bound one user's browser tabs, while the cap that protects
   the fleet (`liveTailMaxCached`) is a `LIMIT` on the ingest side that cannot be raced.
 
-### Still open
-
-- The metric set in the Observability section (blocked on the OTel metrics API).
-- No test runs against a live broker — the Kafka path is covered at its two ends (the envelope
-  encoding and hub routing) rather than through a real topic. The round trip was verified once
-  by hand with `rpk`, which is not a regression guard.
-- Load test and ingest-latency check (need production traffic).
+*(Also folded into [What is left](#what-is-left-2026-08-12).)*
 
 
 ---
@@ -617,3 +621,72 @@ Navigating away deletes the subscription (`keepalive` DELETE), and the SSE handl
 deletes it on teardown — the server learns a connection died the moment the response body
 fails, which beats waiting out the lease for a crashed or slept tab. Matching therefore stops
 within one cache refresh (~2s) rather than one lease (~45s), on both transports.
+
+---
+
+## What is left (2026-08-12)
+
+Everything above is marked. This is the single list of open work; the earlier "Not done" and
+"Still open" blocks now point here. Nothing on this list blocks the feature — it is shipped and
+working on master — so each item says what it actually costs to leave undone.
+
+### Gaps in the shipped code
+
+1. **No `error` SSE frame.** The stream contract specifies one; the server never sends it. The
+   client's `error` state comes only from a failed registration POST or `EventSource.onerror`,
+   so every server-side condition that is recoverable-but-worth-saying (a filter that stopped
+   compiling, a transport that went away under an open connection) currently reaches the user
+   as either silence or a generic transport error. Small to add; the client already has the
+   state to render it.
+
+2. **The SSE response sets no anti-buffering headers.** The plan requires headers that disable
+   caching and proxy buffering; only `Content-Type` is set. Heartbeats every 10s are what has
+   been keeping connections open, which works against most proxies but is a weaker guarantee
+   than `Cache-Control: no-cache` + `X-Accel-Buffering: no`. This is the most likely cause of a
+   future "works locally, dead behind the ingress" report.
+
+3. **Size is capped per field, not per envelope.** `maxRowFieldChars = 8000` truncates
+   individual values, but nothing measures the serialized envelope, so the plan's "if a record
+   still exceeds the limit, drop it and increment a metric" does not exist. A row with very many
+   large attributes can still assemble an oversized message; Kafka would reject it at produce
+   time (logged, non-fatal), and the relay would simply store it.
+
+4. **No evaluation budget per ingest batch.** The plan lists "evaluation time or work per ingest
+   batch" as a hard limit. Query and regex length are capped (4000 / 512), and `maxCached = 500`
+   bounds the subscription count, so the product of the two is bounded — but there is no
+   circuit breaker if that bound is still too slow for a hot project.
+
+### Missing tests
+
+Ordered by what would actually catch a defect:
+
+5. **Ingest survives a Kafka failure.** Non-fatal by construction, never pinned. This is the one
+   acceptance criterion whose violation is a production incident rather than a broken feature.
+6. **Kafka round trip through a real broker**, and **two consumer groups both receiving**.
+   Covered at both ends today (envelope encoding, hub routing); the middle was verified once by
+   hand with `rpk`, which is not a regression guard.
+7. **SSE disconnect cleanup.** The teardown delete exists and is the reason matching stops in
+   ~2s instead of ~45s; nothing drives it in a test.
+8. **Reconnect does not replay.** An at-most-once guarantee with no test.
+9. **Concurrent limit enforcement.** The atomic statement is tested sequentially. Given the
+   documented "about N" residual under `READ COMMITTED`, a concurrency test would mostly pin
+   that the cap is approximately, not exactly, enforced.
+10. **Browser states** `connecting` / `reconnecting` / `paused`, the client row cap, and
+    selector persistence across a reconnect.
+
+### Blocked or needs production
+
+11. **The metric set** in the Observability section — blocked on the OTel metrics API
+    (`TODO(otel-metrics)` elsewhere in the tree). `PublishStats` counts
+    evaluated/matched/failed/publish-failed today, but nothing exports them, which is also what
+    makes rollout step 3 (verify metrics in staging) impossible.
+12. **Load test** against many subscriptions on high-volume projects (rollout step 5).
+13. **Ingest-latency and write-success comparison** (rollout step 6). The ingest hook is live in
+    every deployment because the feature ships on, so this is the measurement that matters most.
+
+### Void, not outstanding
+
+- Feature-flag rollout staging (steps 4 and 7) — there is no flag and no operator-set limits.
+- "Validate related values at startup" from the Configuration section — there is no
+  configuration to validate. The one remaining input, `kafkaBrokers`, selects a transport that
+  works either way.

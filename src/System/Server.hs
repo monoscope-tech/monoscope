@@ -7,6 +7,7 @@ import Control.Concurrent.Async (Async, async, cancel, mapConcurrently_, race, w
 import Control.Concurrent.STM (check)
 import Control.Exception.Safe qualified as Safe
 import Data.Aeson qualified as AE
+import Data.ByteString.Char8 qualified as BS
 import Data.HashMap.Strict qualified as HM
 import Data.Pool as Pool (destroyAllResources)
 import Data.Text qualified as T
@@ -151,8 +152,12 @@ liveTailCacheRefresher appLogger env tp =
     rows <- runBackground appLogger env tp (LiveTail.activeSubscriptions LiveTail.maxCached)
     now <- getCurrentTime
     bad <- LiveTail.refreshSubCache env.liveTail.cache now rows
-    unless (null bad)
-      $ liveTailLog appLogger "live_tail: stored filters no longer compile; those subscriptions will not match" (AE.object ["count" AE..= length bad])
+    unless (null bad) do
+      -- The log is for us; the notice is for the person staring at a tail that will never
+      -- produce another row. Without it the only symptom is silence, which reads as "nothing
+      -- is happening" rather than "this stopped working".
+      LiveTail.noticeBrokenFilters env.liveTail bad
+      liveTailLog appLogger "live_tail: stored filters no longer compile; those subscriptions will not match" (AE.object ["count" AE..= length bad])
     when (length rows >= LiveTail.maxCached)
       $ liveTailLog appLogger "live_tail: subscription cache hit its cap; some tails are not being matched" (AE.object ["cap" AE..= LiveTail.maxCached])
 
@@ -320,6 +325,13 @@ runServer appLogger env tp = do
         defaultGzipSettings
           { gzipFiles = GzipCompress
           , gzipSizeThreshold = 860 -- Compress responses larger than 860 bytes
+          , -- Never compress an SSE stream. The size threshold alone would hold the first 860
+            -- bytes of a Live Tail response waiting to decide, and a compressor sitting on a
+            -- connection whose whole purpose is to deliver a row the instant it exists is the
+            -- one buffering hop no response header can opt out of.
+            -- Prefix, not equality: a later edit that appends a charset to the content type
+            -- would otherwise silently switch compression back on.
+            gzipCheckMime = \mime -> not ("text/event-stream" `BS.isPrefixOf` mime) && defaultGzipSettings.gzipCheckMime mime
           }
 
   let corsPolicy =
@@ -374,7 +386,16 @@ runServer appLogger env tp = do
   -- Live Tail splits across two roles, and one process can hold both. Matching needs the
   -- subscription cache wherever telemetry is processed; delivery needs the side-topic
   -- consumer wherever a browser can connect.
-      liveTailIngests = env.config.enableKafkaService || env.config.enablePubsubService || env.config.enableOtlpGrpcService
+  --
+  -- The cache and the relay writer are deliberately __unconditional__. They used to be gated
+  -- on @enableKafkaService || enablePubsubService || enableOtlpGrpcService@, which is a guess
+  -- at "does this process ingest?" — and it is wrong for OTLP-over-HTTP, which arrives on the
+  -- ordinary web listener with none of those flags set. A pod that ingests without a refreshed
+  -- cache matches every record against an empty subscription list, so the tail reports @live@
+  -- and stays empty forever. This is the same lesson as 'LiveTail.Transport': the failure was
+  -- never the cost of running the fiber, it was inferring the topology. An idle cache refresh
+  -- is one indexed query every 'cacheRefreshSecs' returning nothing, and the relay flusher on
+  -- an empty buffer does no work at all.
       liveTailKafkaTopic = case env.liveTail.transport of LiveTail.KafkaTopic t -> Just t; LiveTail.PostgresRelay -> Nothing
       liveTailRelay = env.liveTail.transport == LiveTail.PostgresRelay
   -- Always accept hand-offs: every ingesting instance (incl. CONSUMER_ONLY) feeds its extraction worker.
@@ -415,12 +436,15 @@ runServer appLogger env tp = do
           guard (env.config.enableKafkaService && env.config.enableKafkaDeadLetterService && not (T.null env.config.kafkaDeadLetterTopic)) $> async (supervise logExc "kafka-dlq" $ Queue.kafkaService appLogger env tp Queue.KafkaDlqReplay "dlq" env.config.kafkaDeadLetterTopic (map fst (Queue.retryTiers env.config.kafkaDeadLetterTopic)) 1000 OtlpServer.processList)
         , guard env.config.enableReplayService $> async (supervise logExc "kafka-replay" $ Queue.kafkaService appLogger env tp Queue.KafkaPrimary "replay" env.config.rrwebDeadLetterTopic env.config.rrwebTopics effectiveReplayBatch processReplayEvents)
         , guard (rtsIsProfiled /= 0) $> async (supervise logExc "cpu-profiler" $ cpuProfileCycler profilingOn)
-        , -- Matching happens wherever telemetry lands, so the cache follows ingest, not HTTP.
-          guard liveTailIngests $> async (supervise logExc "live-tail-cache" $ liveTailCacheRefresher appLogger env tp)
-        , -- Relay writer follows ingest; relay reader follows HTTP. Both are no-ops on the
-          -- Kafka transport, which carries the rows itself.
-          guard (liveTailRelay && liveTailIngests) $> async (supervise logExc "live-tail-relay-write" $ liveTailRelayFlusher appLogger env tp)
-        , guard (liveTailRelay && not consumerOnly) $> async (supervise logExc "live-tail-relay-read" $ liveTailRelayPoller appLogger env tp)
+        , -- Matching happens wherever telemetry lands, and every process is a place telemetry
+          -- can land — OTLP/HTTP needs no ingest flag at all. Unconditional beats guessing.
+          Just $ async (supervise logExc "live-tail-cache" $ liveTailCacheRefresher appLogger env tp)
+        , -- Relay writer follows ingest, reader follows HTTP; both are no-ops on the Kafka
+          -- transport, which carries the rows itself. Neither is gated on a role: the writer
+          -- flushes an empty buffer for free, and the reader skips its query outright while
+          -- this pod's hub has no connections ('hubIsEmpty').
+          guard liveTailRelay $> async (supervise logExc "live-tail-relay-write" $ liveTailRelayFlusher appLogger env tp)
+        , guard liveTailRelay $> async (supervise logExc "live-tail-relay-read" $ liveTailRelayPoller appLogger env tp)
         , -- Delivery happens wherever the browser lands, so the consumer follows HTTP. Kafka
           -- transport only: with the local hub, publish and deliver are already the same
           -- process and a consumer would deliver a second copy of every row.

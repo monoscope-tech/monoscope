@@ -97,6 +97,25 @@ export class LiveStream {
       }
     });
 
+    // The server's own voice, as opposed to `onerror` below which is the transport's. Reaching
+    // here means the tail is broken in a way retrying cannot fix — a stored filter that no
+    // longer compiles — so we stop rather than reconnect into a stream that will stay empty.
+    // Silence is the one thing we must not answer with: it reads as "nothing is happening".
+    //
+    // Named `notice`, not `error`, and that is not cosmetic: EventSource dispatches a frame's
+    // `event:` name directly, so `event: error` would land on `onerror` below — the transport's
+    // handler — and a permanent server-side fault would be treated as a blip and retried.
+    source.addEventListener('notice', e => {
+      let msg = 'This live tail stopped working. Start a new one.';
+      try {
+        msg = JSON.parse((e as MessageEvent).data).message || msg;
+      } catch {
+        /* keep the fallback */
+      }
+      this.stop();
+      this.opts.onState('error', msg);
+    });
+
     source.addEventListener('dropped', e => {
       try {
         this.opts.onDropped?.(JSON.parse((e as MessageEvent).data).count ?? 0);
