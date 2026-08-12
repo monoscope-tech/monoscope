@@ -183,16 +183,41 @@ test-doctests:
 test-integration:
 	LOG_LEVEL=attention USE_EXTERNAL_DB=true cabal test integration-tests -j --ghc-options="-O0" --test-show-details=direct --test-options='--color --jobs=$(NCPUS)'
 
-# TimeFusion bring-up for integration tests. Delegates to the timefusion repo.
-# Override TIMEFUSION_DIR if your checkout lives elsewhere.
+# TimeFusion bring-up for integration tests. Runs the real thing natively
+# (`cargo run --release` in the timefusion checkout) plus a local MinIO for its
+# object store — no Docker. Override TIMEFUSION_DIR if your checkout is elsewhere.
+#
+# Without this, specs that need TF (`withTfReads True`, the dual-write leg) fail
+# locally while passing in CI, which is how a real regression can hide behind a
+# failure that looks environmental.
 TIMEFUSION_DIR ?= ../timefusion
 TIMEFUSION_PG_TEST_URL ?= postgresql://postgres:postgres@localhost:12345/postgres
 
+# NB: CI's service container sets TIMEFUSION_BUFFER_FLUSH_IMMEDIATELY, but no
+# such variable exists in TimeFusion — its BufferConfig (envy-derived) exposes
+# TIMEFUSION_FLUSH_INTERVAL_SECS (default 60) and TIMEFUSION_FLUSH_DWELL_SECS.
+# Don't copy that setting here expecting it to do something; if a spec turns out
+# to race the flush, set the real knobs.
 timefusion-start:
 	$(MAKE) -C $(TIMEFUSION_DIR) tf-start
+	@echo "TimeFusion on $(TIMEFUSION_PG_TEST_URL) — logs: /tmp/timefusion.log"
 
 timefusion-stop:
 	$(MAKE) -C $(TIMEFUSION_DIR) tf-stop
+
+# Is TF actually up? Cheaper than reading a confusing test failure.
+timefusion-status:
+	@nc -z 127.0.0.1 9000 && echo "minio      UP   :9000" || echo "minio      DOWN :9000"
+	@nc -z 127.0.0.1 12345 && echo "timefusion UP   :12345" || echo "timefusion DOWN :12345  (make timefusion-start)"
+
+# The inner loop with a real TimeFusion behind it: same watcher as live-test-dev,
+# but TIMEFUSION_PG_TEST_URL set so TestUtils flips tfEnabled on. Start TF first
+# (`make timefusion-start`); this does not manage its lifecycle, so the watcher
+# survives you restarting TF and vice versa.
+live-test-dev-tf:
+	TIMEFUSION_PG_TEST_URL=$(TIMEFUSION_PG_TEST_URL) USE_EXTERNAL_DB=true LOG_LEVEL=attention \
+	ghcid --command 'cabal repl monoscope:test:test-dev --no-semaphore --ghc-options="-j$(NCPUS) -fobject-code -osuf dyn_o -hisuf dyn_hi -O0" --with-compiler=$(GHC)' \
+		--test ':main $(if $(TEST_MATCH),--match $(TEST_MATCH))' $(RELOAD_ENV) --warnings 2>&1 | tee build-test-dev.log
 
 # Run integration tests against a real TimeFusion (started + stopped automatically).
 test-integration-tf: timefusion-start
@@ -357,6 +382,22 @@ tmux-web-components-watch:
 		echo "Not in tmux — run 'make web-components-watch' in its own terminal"; \
 	fi
 
+# TimeFusion in its own tmux pane. `timefusion-start` backgrounds the server with
+# nohup, which is enough for an interactive shell but not for anything that reaps
+# its process group (agent harnesses, CI wrappers) — the server dies seconds after
+# binding. A pane outlives the command that created it.
+tmux-timefusion:
+	@PANE=$$(tmux show-option -wv -q @tf-pane 2>/dev/null); \
+	if [ -n "$$PANE" ] && tmux list-panes -a -F '#{pane_id}' | grep -qx "$$PANE"; then \
+		echo "Reusing timefusion pane $$PANE"; \
+	elif [ -n "$$TMUX" ]; then \
+		PANE=$$(tmux split-window -d -v -P -F '#{pane_id}' 'make timefusion-start; exec $$SHELL'); \
+		tmux set-option -w @tf-pane "$$PANE"; \
+		echo "Started timefusion in pane $$PANE — make timefusion-status to check"; \
+	else \
+		echo "Not in tmux — run 'make timefusion-start' in its own terminal"; \
+	fi
+
 e2e-install:
 	@test -x e2e/node_modules/.bin/playwright || (cd e2e && npm install && npx playwright install chromium)
 
@@ -369,4 +410,4 @@ test-e2e-real: e2e-install
 test-e2e-ui: e2e-install
 	cd e2e && npx playwright test --ui
 
-.PHONY: all test fmt lint fix-lint live-reload kill-live-reload live-reload-cli live-reload-doctests live-test-dev build-chart-cli build-chart-cli-linux tmux-live-reload tmux-live-reload-cli tmux-pin-here tmux-unpin kill-web-components-watch web-components-watch e2e-install test-e2e test-e2e-real test-e2e-ui gen-proto sync-otel-proto update-otel-proto minio-local timefusion-start timefusion-stop test-integration-tf
+.PHONY: all test fmt lint fix-lint live-reload kill-live-reload live-reload-cli live-reload-doctests live-test-dev build-chart-cli build-chart-cli-linux tmux-live-reload tmux-live-reload-cli tmux-pin-here tmux-unpin kill-web-components-watch web-components-watch e2e-install test-e2e test-e2e-real test-e2e-ui gen-proto sync-otel-proto update-otel-proto minio-local timefusion-start timefusion-stop timefusion-status tmux-timefusion live-test-dev-tf test-integration-tf
