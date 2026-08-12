@@ -34,8 +34,6 @@ import Relude
 import System.Types (DB)
 
 
--- Error pattern operations
-
 getUnembeddedErrorPatterns :: DB es => Projects.ProjectId -> Eff es [(ErrorPatternId, Text, Text)]
 getUnembeddedErrorPatterns pid =
   Hasql.interp
@@ -46,12 +44,13 @@ getUnembeddedErrorPatterns pid =
 
 updateErrorEmbeddings :: DB es => [(ErrorPatternId, [Float])] -> Eff es Int64
 updateErrorEmbeddings [] = pure 0
-updateErrorEmbeddings pairs = do
-  let (ids, embs) = unzip $ map (second showPGFloatArray) pairs
+updateErrorEmbeddings pairs =
   Hasql.interpExecute
     [HI.sql| UPDATE apis.error_patterns SET embedding = u.emb::float4[], embedding_at = NOW()
         FROM ROWS FROM (unnest(#{ids}::uuid[]), unnest(#{embs}::text[])) AS u(id, emb)
         WHERE apis.error_patterns.id = u.id |]
+  where
+    (ids, embs) = second (map showPGFloatArray) $ unzip pairs
 
 
 getCanonicalErrorPatterns :: DB es => Projects.ProjectId -> Eff es [(ErrorPatternId, [Float])]
@@ -97,8 +96,6 @@ fetchErrorTexts ids =
     <$> Hasql.interp [HI.sql| SELECT id, error_type, message FROM apis.error_patterns WHERE id = ANY(#{ids}) |]
 
 
--- Log pattern operations
-
 getUnembeddedLogPatterns :: DB es => Projects.ProjectId -> Eff es [(LogPatternId, Text)]
 getUnembeddedLogPatterns pid =
   Hasql.interp
@@ -109,12 +106,13 @@ getUnembeddedLogPatterns pid =
 
 updateLogEmbeddings :: DB es => [(LogPatternId, [Float])] -> Eff es Int64
 updateLogEmbeddings [] = pure 0
-updateLogEmbeddings pairs = do
-  let (ids, embs) = unzip $ map (second showPGFloatArray) pairs
+updateLogEmbeddings pairs =
   Hasql.interpExecute
     [HI.sql| UPDATE apis.log_patterns SET embedding = u.emb::float4[], embedding_at = NOW()
         FROM ROWS FROM (unnest(#{ids}::bigint[]), unnest(#{embs}::text[])) AS u(id, emb)
         WHERE apis.log_patterns.id = u.id |]
+  where
+    (ids, embs) = second (map showPGFloatArray) $ unzip pairs
 
 
 getCanonicalLogPatterns :: DB es => Projects.ProjectId -> Eff es [(LogPatternId, [Float])]

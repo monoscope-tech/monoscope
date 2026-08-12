@@ -1816,7 +1816,7 @@ dispatchDueErrorNotifications ctx pid now dueErrors =
                     humanDuration now sub.createdAt
                       <$ guard (isJust sub.lastNotifiedAt && sub.errorState /= ErrorPatterns.ESRegressed)
               chartUrlM <- errorTrendChartUrl ctx pid sub.errorData.hash (formatUTC fromTime) (formatUTC now)
-              let alert = RuntimeErrorAlert{issueId = Issues.issueIdText sub.issueId, issueTitle = sub.issueTitle, errorData = sub.errorData, runtimeAlertType = alertType, chartUrl = chartUrlM, occurrenceText = occTextM, firstSeenText = firstSeenTextM, ongoingFor = ongoingForM}
+              let alert = RuntimeErrorAlert{issueId = sub.issueId.toText, issueTitle = sub.issueTitle, errorData = sub.errorData, runtimeAlertType = alertType, chartUrl = chartUrlM, occurrenceText = occTextM, firstSeenText = firstSeenTextM, ongoingFor = ongoingForM}
                   ~(subj, html) = case alertType of
                     EscalatingErrors -> ET.escalatingErrorsEmail project.title errorsUrl [sub.errorData] chartUrlM occTextM ongoingForM
                     RegressedErrors -> ET.regressedErrorsEmail project.title errorsUrl [sub.errorData] chartUrlM occTextM ongoingForM
@@ -2002,10 +2002,10 @@ processProjectErrors pid errors now = do
             when dispatched
               $ void
               $ ErrorPatterns.updateErrorPatternThreadIds ErrorPatterns.StampNotifiedAt err.id slackTs discordMsgId now
-      forM_ newOrRegressed \(errorHash, errState) -> do
+      forM_ newOrRegressed \(errorHash, outcome) -> do
         errM <- ErrorPatterns.getErrorPatternByHash pid errorHash
         whenJust errM \err ->
-          if errState == "regressed"
+          if outcome == ErrorPatterns.UORegressed
             then do
               existingM <- Issues.selectLatestIssueByHash pid errorHash
               maybe
@@ -3091,11 +3091,11 @@ processAPIChangeAnomalies pid targetHashes = do
       -- All endpoint_* fields on an anomaly come from the same joined apis.endpoints
       -- row, so they always co-vary. Matching the create path (Issues.createAPIChangeIssue),
       -- we take anomaly[0]'s fields rather than searching for the first non-null per column.
-      let firstAnom = V.head anomalies
-          allNewFields = V.concatMap (.shapeNewUniqueFields) anomalies
-          allDeletedFields = V.concatMap (.shapeDeletedFields) anomalies
-          allModifiedFields = V.concatMap (.shapeUpdatedFieldFormats) anomalies
-          hasNewEndpoint = V.any ((== Anomalies.ATEndpoint) . (.anomalyType)) anomalies
+      let firstAnom = head anomalies
+          allNewFields = foldMap (.shapeNewUniqueFields) anomalies
+          allDeletedFields = foldMap (.shapeDeletedFields) anomalies
+          allModifiedFields = foldMap (.shapeUpdatedFieldFormats) anomalies
+          hasNewEndpoint = any ((== Anomalies.ATEndpoint) . (.anomalyType)) anomalies
           hasChanges = hasNewEndpoint || not (V.null allNewFields && V.null allDeletedFields && V.null allModifiedFields)
       case existingIssueM of
         Just existingIssue -> do
@@ -3105,7 +3105,7 @@ processAPIChangeAnomalies pid targetHashes = do
                     { endpointMethod = fromMaybe "UNKNOWN" firstAnom.endpointMethod
                     , endpointPath = fromMaybe "/" firstAnom.endpointUrlPath
                     , endpointHost = fromMaybe "Unknown" firstAnom.endpointHost
-                    , anomalyHashes = V.map (.targetHash) anomalies
+                    , anomalyHashes = V.fromList $ toList $ fmap (.targetHash) anomalies
                     , shapeChanges = V.empty
                     , formatChanges = V.empty
                     , newFields = allNewFields
@@ -3185,13 +3185,15 @@ processAPIChangeAnomalies pid targetHashes = do
 
 
 -- | Group anomalies by endpoint hash
-groupAnomaliesByEndpointHash :: V.Vector Anomalies.AnomalyVM -> [(Text, V.Vector Anomalies.AnomalyVM)]
+-- | Groups are non-empty by construction ('groupBy' never yields an empty run),
+-- so the invariant travels in the type instead of a @V.head@ downstream.
+groupAnomaliesByEndpointHash :: V.Vector Anomalies.AnomalyVM -> [(Text, NonEmpty Anomalies.AnomalyVM)]
 groupAnomaliesByEndpointHash anomalies =
   let getEndpointHash a = case a.anomalyType of
         Anomalies.ATEndpoint -> a.targetHash
         _ -> T.take 8 a.targetHash
       grouped = groupBy ((==) `on` getEndpointHash) $ sortOn getEndpointHash $ V.toList anomalies
-   in mapMaybe (\grp -> (,V.fromList grp) . getEndpointHash <$> viaNonEmpty head grp) grouped
+   in mapMaybe (fmap (\grp -> (getEndpointHash (head grp), grp)) . nonEmpty) grouped
 
 
 -- | Process issues enhancement job - finds issues that need LLM enhancement

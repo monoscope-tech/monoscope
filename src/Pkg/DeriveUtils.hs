@@ -150,6 +150,11 @@ instance KnownSymbol name => ToSchema (UUIDId name) where declareNamedSchema _ =
 instance ToParamSchema (UUIDId name) where toParamSchema _ = toParamSchema (Proxy @UUID.UUID)
 
 
+-- Case-insensitive text is documented as plain text; lives here so every model
+-- carrying a 'CI Text' field gets the schema without redeclaring the orphan.
+instance ToSchema (CI Text) where declareNamedSchema _ = declareNamedSchema (Proxy @Text)
+
+
 instance HasField "toText" (UUIDId name) Text where
   getField = UUID.toText . unUUIDId
 

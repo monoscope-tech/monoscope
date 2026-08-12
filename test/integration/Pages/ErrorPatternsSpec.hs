@@ -152,7 +152,7 @@ spec = sequential $ aroundAll withTestResources do
           fmap (.parentHash) after `shouldBe` Just pat.parentHash
 
           -- Resolve, then re-upsert with mutated values → regression path refreshes them
-          void $ runTestBg frozenTime tr $ ErrorPatterns.resolveErrorPattern pat.id frozenTime
+          void $ runTestBg frozenTime tr $ ErrorPatterns.updateErrorPatternState pat.id ErrorPatterns.ESResolved frozenTime
           void $ runTestBg frozenTime tr $ ErrorPatterns.batchUpsertErrorPatterns pid (V.singleton modified) frozenTime
           afterRegress <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
           fmap (.message) afterRegress `shouldBe` Just "MUTATED message — should not stick"
@@ -165,7 +165,7 @@ spec = sequential $ aroundAll withTestResources do
       case patterns of
         [] -> expectationFailure "no patterns"
         (pat : _) -> do
-          void $ runTestBg frozenTime tr $ ErrorPatterns.resolveErrorPattern pat.id frozenTime
+          void $ runTestBg frozenTime tr $ ErrorPatterns.updateErrorPatternState pat.id ErrorPatterns.ESResolved frozenTime
           resolvedPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
           fmap (.state) resolvedPat `shouldBe` Just ESResolved
 
@@ -361,7 +361,7 @@ spec = sequential $ aroundAll withTestResources do
       let estM = find (\r -> r.baselineState == BSEstablished && r.state /= ESResolved) errRates
       case estM of
         Just errRate -> do
-          void $ runTestBg frozenTime tr $ ErrorPatterns.resolveErrorPattern errRate.errorId frozenTime
+          void $ runTestBg frozenTime tr $ ErrorPatterns.updateErrorPatternState errRate.errorId ErrorPatterns.ESResolved frozenTime
           -- Re-ingest to regress
           apiKey <- createTestAPIKey tr pid "regress-spike-key"
           ingestTraceWithException tr apiKey "GET /regress-spike" errRate.errorType errRate.message errRate.stacktrace (addUTCTime 9000 frozenTime)
