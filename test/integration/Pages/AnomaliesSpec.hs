@@ -59,12 +59,15 @@ spec = sequential $ aroundAll withTestResources do
           length tbl.rows `shouldBe` 0
         _ -> error "Unexpected response"
 
+    -- Preloading a lifecycle action would fire it on hover. Assert the invariant
+    -- rather than a count, so adding a duration option can't silently arm one.
     it "does not preload issue acknowledge or archive actions" \_ -> do
       issueId <- UUIDId <$> UUID.nextRandom
       let html = TL.toStrict $ renderText $ do
-            AnomalyList.anomalyAcknowledgeButton testPid issueId False ""
+            AnomalyList.anomalyAcknowledgeButton testPid issueId frozenTime Nothing
             AnomalyList.anomalyArchiveButton testPid issueId False
-      T.count "preload=\"false\"" html `shouldBe` 2
+      T.count "hx-get=" html `shouldSatisfy` (> 2) -- ack, its duration options, archive
+      T.count "preload=\"false\"" html `shouldBe` T.count "hx-get=" html
 
     it "should create endpoint anomalies (not visible in anomaly list)" \tr -> do
       currentTime <- getCurrentTime
@@ -126,7 +129,7 @@ spec = sequential $ aroundAll withTestResources do
 
       -- Acknowledge the endpoint anomaly directly using Issues module
       let sess = Servant.getResponse tr.trSessAndHeader
-      runTestBg frozenTime tr $ Issues.acknowledgeIssue issueId sess.user.id
+      runTestBg frozenTime tr $ ackIssue testPid sess.user.id issueId
 
       -- Verify it was acknowledged
       acknowledgedIssue <- runTestBg frozenTime tr $ Issues.selectIssueById issueId
@@ -199,7 +202,7 @@ spec = sequential $ aroundAll withTestResources do
         Just (Only issueId) -> do
           -- Acknowledge directly using Issues module
           let sess = Servant.getResponse tr.trSessAndHeader
-          runTestBg frozenTime tr $ Issues.acknowledgeIssue issueId sess.user.id
+          runTestBg frozenTime tr $ ackIssue testPid sess.user.id issueId
         Nothing -> error "No API change issue found"
 
       -- Now send a message with different format
@@ -250,7 +253,7 @@ spec = sequential $ aroundAll withTestResources do
         void $ PGS.execute conn [sql| UPDATE apis.issues    SET acknowledged_at=NULL, acknowledged_by=NULL WHERE id=? |] (Only issueId)
         void $ PGS.execute conn [sql| UPDATE apis.anomalies SET acknowledged_at=NULL, acknowledged_by=NULL WHERE project_id=? |] (Only testPid)
 
-      _ <- testServant tr $ AnomalyList.anomalyBulkActionsPostH testPid "acknowledge" AnomalyList.AnomalyBulk{itemId = [issueIdText]}
+      _ <- testServant tr $ AnomalyList.anomalyBulkActionsPostH testPid "acknowledge" Nothing AnomalyList.AnomalyBulk{itemId = [issueIdText]}
 
       -- Issue must be acknowledged.
       ackedIssues <- withResource tr.trPool \conn -> PGS.query conn
@@ -283,7 +286,7 @@ spec = sequential $ aroundAll withTestResources do
         void $ PGS.execute conn [sql| UPDATE apis.issues    SET archived_at=NULL WHERE id=? |] (Only issueId)
         void $ PGS.execute conn [sql| UPDATE apis.anomalies SET archived_at=NULL WHERE project_id=? |] (Only testPid)
 
-      _ <- testServant tr $ AnomalyList.anomalyBulkActionsPostH testPid "archive" AnomalyList.AnomalyBulk{itemId = [issueIdText]}
+      _ <- testServant tr $ AnomalyList.anomalyBulkActionsPostH testPid "archive" Nothing AnomalyList.AnomalyBulk{itemId = [issueIdText]}
 
       archivedIssues <- withResource tr.trPool \conn -> PGS.query conn
         [sql| SELECT id FROM apis.issues WHERE id=? AND archived_at IS NOT NULL |] (Only issueId) :: IO [Only Issues.IssueId]
@@ -323,7 +326,7 @@ spec = sequential $ aroundAll withTestResources do
                 VALUES (?, ?) ON CONFLICT DO NOTHING |]
           (testPid, prefix <> ":anom")
 
-      void $ runTestBg frozenTime tr $ Anomalies.acknowlegeCascade sess.user.id (V.singleton prefix)
+      void $ runTestBg frozenTime tr $ Anomalies.acknowlegeCascade sess.user.id Issues.indefiniteUntil (V.singleton prefix)
 
       ackedIssue <- withResource tr.trPool \conn -> PGS.query conn
         [sql| SELECT id FROM apis.issues WHERE id=? AND acknowledged_at IS NOT NULL |] (Only iid) :: IO [Only Issues.IssueId]

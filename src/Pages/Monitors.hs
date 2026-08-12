@@ -33,7 +33,7 @@ import Data.Either.Extra (fromRight')
 import Data.List (partition)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Data.Time (UTCTime, diffUTCTime)
+import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
@@ -56,7 +56,7 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as Slack
 import Pages.Bots.Utils (Channel (channelId, channelName))
-import Pages.Components (FieldCfg (..), FieldSize (..), PanelCfg (..), formCheckbox_, formField_, formSelectField_, metadataChip_, panel_, tagInput_)
+import Pages.Components (FieldCfg (..), FieldSize (..), PanelCfg (..), durationMenu_, durationQuery, formCheckbox_, formField_, formSelectField_, metadataChip_, panel_, tagInput_, untilLabel)
 import Pages.Projects (TBulkActionForm (..))
 import Pkg.Components.Table (BulkAction (..), Config (..), Features (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableRows (..), ZeroState (..), col, withAttrs)
 import Pkg.Components.TimePicker qualified as TimePicker
@@ -540,7 +540,7 @@ renderNameCol item = do
         inlineBtn (bool "Activate" "Deactivate" isActive) (bool "play" "pause" isActive) (hxPost_ $ alertBase <> "/toggle_active") []
         if isJust item.mutedUntil
           then inlineBtn "Unmute" "bell" (hxPost_ $ alertBase <> "/unmute") []
-          else muteDropdown_ ("mute-pop-" <> item.monitorId) (alertBase <> "/mute") \popId ->
+          else durationMenu_ ("mute-pop-" <> item.monitorId) "Mute for…" (\q -> [hxPost_ $ alertBase <> "/mute" <> durationQuery "duration" q, hxSwap_ "none"]) \popId ->
             inlineBtn "Mute" "bell-slash" (term "popovertarget" popId) [style_ $ "anchor-name: --anchor-" <> popId]
         when (item.currentStatus /= Monitors.MSNormal) $ inlineBtn "Resolve" "check" (hxPost_ $ alertBase <> "/resolve") []
         inlineBtn "Delete" "trash" (hxDelete_ alertBase) [hxConfirm_ "Are you sure you want to delete this monitor?"]
@@ -550,7 +550,7 @@ renderNameCol item = do
       a_ ([href_ $ base <> "/" <> item.monitorId <> "/overview", class_ "text-sm font-medium text-textStrong hover:text-textBrand transition-colors truncate"] <> navTabAttrs) $ toHtml $ bool item.title "(Untitled)" (T.null item.title)
       when (item.currentStatus /= Monitors.MSNormal) $ statusBadge_ False si.statusLabel
       whenJust item.mutedUntil \until' ->
-        let muteLabel = mutedLabel item.now until'
+        let muteLabel = untilLabel "Muted" item.now until'
          in span_ [class_ "badge badge-sm badge-ghost gap-1 shrink-0 tooltip tooltip-top", data_ "tip" muteLabel] do
               faSprite_ "bell-slash" "regular" "h-3 w-3"
               toHtml muteLabel
@@ -568,26 +568,6 @@ renderNameCol item = do
           span_ [class_ "tabular-nums text-iconError bg-fillError-weak rounded-full px-1.5 py-px text-2xs"] $ toHtml $ formatWithCommas item.details.alertThreshold <> " " <> item.details.triggerDirection
         forM_ item.teamBadges \(_, handle) -> span_ [class_ "badge badge-sm badge-neutral"] $ toHtml handle
       div_ [class_ "flex gap-1 items-center shrink-0"] actionBtns
-
-
-muteDropdown_ :: Text -> Text -> (Text -> Html ()) -> Html ()
-muteDropdown_ popId muteUrl triggerBtn = div_ [class_ "inline-block"] do
-  triggerBtn popId
-  div_ [id_ popId, term "popover" "auto", class_ "dropdown dropdown-start menu bg-bgRaised p-1 text-sm border border-strokeWeak z-50 min-w-36 rounded-md shadow-lg mt-1", style_ $ "position-try: flip-block; position-anchor: --anchor-" <> popId] do
-    span_ [class_ "px-3 py-1 text-xs font-medium text-textWeak"] "Mute for..."
-    forM_ @[] @_ @(Int, Text) [(60, "1 hour"), (240, "4 hours"), (480, "8 hours"), (1440, "1 day"), (10080, "1 week")] \(mins, label) ->
-      button_ [type_ "button", class_ "px-3 py-1.5 text-sm text-left hover:bg-fillWeaker rounded cursor-pointer w-full", hxPost_ $ muteUrl <> "?duration=" <> show mins, hxSwap_ "none"] $ toHtml label
-    button_ [type_ "button", class_ "px-3 py-1.5 text-sm text-left hover:bg-fillWeaker rounded cursor-pointer w-full border-t border-strokeWeak", hxPost_ muteUrl, hxSwap_ "none"] "Indefinitely"
-
-
-mutedLabel :: UTCTime -> UTCTime -> Text
-mutedLabel now until'
-  | diffMins > 525600 = "Muted indefinitely"
-  | diffMins >= 1440 = "Muted \xb7 " <> show (diffMins `div` 1440) <> "d left"
-  | diffMins >= 60 = "Muted \xb7 " <> show (diffMins `div` 60) <> "h left"
-  | otherwise = "Muted \xb7 " <> show (max 1 diffMins) <> "m left"
-  where
-    diffMins = round (diffUTCTime until' now / 60) :: Int
 
 
 data StatusInfo = StatusInfo {dotColor :: Text, statusLabel :: Text, rank :: Int, textColor :: Text}
@@ -753,7 +733,7 @@ unifiedMonitorOverviewH pid monitorId = do
                       Just _ -> button_ [class_ "btn btn-sm btn-ghost border border-strokeWeak tooltip tooltip-bottom", term "aria-label" "Unmute", data_ "tip" "Resume notifications for this monitor", hxPost_ $ muteBase <> "/unmute"] do
                         faSprite_ "bell" "regular" "h-4 w-4"
                         "Unmute"
-                      Nothing -> muteDropdown_ ("mute-btn-pop-" <> alert.id.toText) (muteBase <> "/mute") \popId ->
+                      Nothing -> durationMenu_ ("mute-btn-pop-" <> alert.id.toText) "Mute for\x2026" (\q -> [hxPost_ $ muteBase <> "/mute" <> durationQuery "duration" q, hxSwap_ "none"]) \popId ->
                         button_ [type_ "button", class_ "btn btn-sm btn-ghost border border-strokeWeak tooltip tooltip-bottom", term "aria-label" "Mute", data_ "tip" "Silence notifications for a period", term "popovertarget" popId, style_ $ "anchor-name: --anchor-" <> popId] do
                           faSprite_ "bell-slash" "regular" "h-4 w-4"
                           span_ [class_ "max-md:hidden"] "Mute"
@@ -802,7 +782,7 @@ unifiedOverviewPage pid alert currTime teams slackDataM discordDataM = do
       whenJust (mfilter (> currTime) alert.mutedUntil) \until' ->
         span_ [class_ "badge badge-sm badge-warning gap-1"] do
           faSprite_ "bell-slash" "regular" "h-3 w-3"
-          toHtml $ mutedLabel currTime until'
+          toHtml $ untilLabel "Muted" currTime until'
 
     div_ [class_ "flex max-md:flex-col gap-6 max-md:gap-3 border-t border-strokeWeak pt-4"] do
       div_ [class_ "md:hidden"] $ alertSidebar_ displayName alert currTime

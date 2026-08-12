@@ -275,7 +275,7 @@ spec = sequential $ aroundAll withTestResources do
 
       -- Acknowledge existing issues so ON CONFLICT doesn't deduplicate the new spike issue
       (issues, _) <- runTestBg frozenTime tr $ Issues.selectIssues pid (Just False) Nothing 100 0 Nothing Nothing "24h" [] []
-      forM_ issues \issue -> runTestBg frozenTime tr $ Issues.acknowledgeIssue issue.base.id sess.user.id
+      forM_ issues \issue -> runTestBg frozenTime tr $ ackIssue pid sess.user.id issue.base.id
 
       -- Find an established pattern with stddev > 0
       errRates' <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternsWithCurrentRates pid frozenTime
@@ -340,7 +340,7 @@ spec = sequential $ aroundAll withTestResources do
           -- Acknowledge existing RuntimeException issues to avoid ON CONFLICT dedup
           let sess = Servant.getResponse tr.trSessAndHeader
           (issues, _) <- runTestBg frozenTime tr $ Issues.selectIssues pid (Just False) Nothing 100 0 Nothing Nothing "24h" [] []
-          forM_ issues \issue -> runTestBg frozenTime tr $ Issues.acknowledgeIssue issue.base.id sess.user.id
+          forM_ issues \issue -> runTestBg frozenTime tr $ ackIssue pid sess.user.id issue.base.id
 
           -- Insert a massive spike (200, well above mean=100 + minAbsoluteDelta=50)
           let spikeTime = addUTCTime 7200 frozenTime
@@ -381,7 +381,7 @@ spec = sequential $ aroundAll withTestResources do
           -- Acknowledge existing issues to avoid ON CONFLICT dedup
           let sess = Servant.getResponse tr.trSessAndHeader
           (issues, _) <- runTestBg frozenTime tr $ Issues.selectIssues pid (Just False) Nothing 100 0 Nothing Nothing "24h" [] []
-          forM_ issues \issue -> runTestBg frozenTime tr $ Issues.acknowledgeIssue issue.base.id sess.user.id
+          forM_ issues \issue -> runTestBg frozenTime tr $ ackIssue pid sess.user.id issue.base.id
 
           issuesBefore <- countIssues tr Issues.RuntimeException
           runTestBg spikeTime tr $ BackgroundJobs.detectErrorSpikes pid
@@ -412,7 +412,7 @@ spec = sequential $ aroundAll withTestResources do
           -- Acknowledge existing issues to avoid ON CONFLICT dedup
           let sess = Servant.getResponse tr.trSessAndHeader
           (issues, _) <- runTestBg frozenTime tr $ Issues.selectIssues pid (Just False) Nothing 100 0 Nothing Nothing "24h" [] []
-          forM_ issues \issue -> runTestBg frozenTime tr $ Issues.acknowledgeIssue issue.base.id sess.user.id
+          forM_ issues \issue -> runTestBg frozenTime tr $ ackIssue pid sess.user.id issue.base.id
           -- Spike both patterns in the same hour bucket
           let concurrentTime = addUTCTime 14400 frozenTime
           forM_ [r1, r2] \r -> do

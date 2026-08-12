@@ -151,8 +151,12 @@ extra-source-files:
     static/migrations/0122_otel_deployment_environment.sql
     static/migrations/0123_code_mappings.sql
     static/migrations/0124_github_credentials.sql
+    static/migrations/0125_git_hosts.sql
+    static/migrations/0125_issue_ack_window.sql
     static/migrations/0125_live_tail_subscriptions.sql
+    static/migrations/0126_git_rename_compat_views.sql
     static/migrations/0126_live_tail_scope.sql
+    static/migrations/0127_live_tail_events.sql
 
 source-repository head
   type: git
@@ -231,6 +235,7 @@ library
       Pkg.ErrorFingerprint
       Pkg.ErrorMetrics
       Pkg.ExtractionWorker
+      Pkg.Git
       Pkg.LiveTail
       Pkg.Mail
       Pkg.Metrics
@@ -808,6 +813,7 @@ test-suite test-dev
       Pkg.ErrorFingerprint
       Pkg.ErrorMetrics
       Pkg.ExtractionWorker
+      Pkg.Git
       Pkg.LiveTail
       Pkg.Mail
       Pkg.Metrics

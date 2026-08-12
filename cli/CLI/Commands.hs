@@ -573,7 +573,12 @@ emitFirstEventId v =
 validateEventsOpts :: IOE :> es => EventsSearchOpts -> Eff es EventsSearchOpts
 validateEventsOpts opts = do
   validateDurationOrDie "--since" opts.since
-  validateQueryOrDie opts.query
+  -- Validate the text that will actually be sent. 'buildSearchParams' rewrites a
+  -- bare term into a body/summary full-text predicate, so validating the raw
+  -- term instead asks the parser to resolve it as a column: once field
+  -- validation landed, `monoscope logs search POISON_ROW_DROPPED` started dying
+  -- with `Unknown field "POISON_ROW_DROPPED"` before the rewrite ever ran.
+  validateQueryOrDie (rewriteBareQuery (T.strip opts.query))
   kindNorm <- validateAndNormalizeKind opts.kind
   -- DuplicateRecordFields makes record-update on @kind@ ambiguous
   -- (also a field on EventsTailOpts/EventsContextOpts) — bind to a typed let
@@ -844,6 +849,16 @@ foldFiltersIntoQuery query services mLevel
 -- "errors > 0"
 -- >>> rewriteBareQuery "context.trace_id==\"abc\""
 -- "context.trace_id==\"abc\""
+--
+-- The rewritten form is what 'validateEventsOpts' checks and what goes on the
+-- wire, so it has to parse. Validating the bare term instead asks the parser to
+-- resolve it as a column, which is how `logs search POISON_ROW_DROPPED` broke.
+--
+-- >>> import Pkg.Parser.Stats (parseQueryToAST)
+-- >>> isRight (parseQueryToAST (rewriteBareQuery "POISON_ROW_DROPPED"))
+-- True
+-- >>> isRight (parseQueryToAST (rewriteBareQuery "some phrase here"))
+-- True
 rewriteBareQuery :: Text -> Text
 rewriteBareQuery t
   | T.null t = t

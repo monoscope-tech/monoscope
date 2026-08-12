@@ -1,6 +1,6 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl, sameSegmentCount) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..), errorTrendChartUrl, sameSegmentCount) where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
@@ -100,6 +100,7 @@ import Pkg.DeriveUtils (BaselineState (..), UUIDId (..), rawSql)
 import Pkg.Drain qualified as Drain
 import Pkg.EmailTemplates qualified as ET
 import Pkg.ExtractionWorker qualified as ExtractionWorker
+import Pkg.Git qualified as Git
 import Pkg.Mail (NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendDiscordAlertWith, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendSlackAlertWith, sendSlackMessage, sendWhatsAppAlert)
 import Pkg.Parser
 import Pkg.PatternMerge qualified as PatternMerge
@@ -1589,10 +1590,12 @@ runDueNotifications pid hashesM = do
 
 
 -- | Every 10 min: sweep projects that have any eligible error-pattern
--- notifications (still within the 24h ceiling) and dispatch them. Primary
--- safety net against the old 60-min orphan hole.
+-- notifications and dispatch them. Primary safety net against the old 60-min
+-- orphan hole. Automatic eligibility keeps a 24h ceiling so the sweep can't
+-- alert on ancient rows; an explicit subscription is exempt from it.
 runNotificationSweep :: UTCTime -> ATBackgroundCtx ()
 runNotificationSweep _scheduledTime = do
+  expireLapsedAcks
   projects :: [Projects.ProjectId] <-
     HI.getOneColumn
       <<$>> Hasql.interp
@@ -1602,16 +1605,37 @@ runNotificationSweep _scheduledTime = do
           JOIN projects.projects p ON p.id = e.project_id
           WHERE p.error_alerts
             AND e.state <> 'resolved'
-            AND e.created_at >= now() - interval '24 hours'
             AND (
-              e.last_notified_at IS NULL
-              OR e.subscribed = TRUE
-              OR (e.state = 'regressed' AND (e.last_notified_at IS NULL OR e.last_notified_at < e.regressed_at))
-              OR (e.state IN ('new','escalating','ongoing') AND e.last_notified_at IS NOT NULL)
+              -- An explicit "Notify every N" subscription has no expiry: the 24h
+              -- ceiling below is a bound on *automatic* eligibility, and applying
+              -- it to subscriptions meant a quiet project stopped being swept the
+              -- day after its error first appeared.
+              e.subscribed = TRUE
+              OR (
+                e.created_at >= now() - interval '24 hours'
+                AND (
+                  e.last_notified_at IS NULL
+                  OR (e.state = 'regressed' AND (e.last_notified_at IS NULL OR e.last_notified_at < e.regressed_at))
+                  OR (e.state IN ('new','escalating','ongoing') AND e.last_notified_at IS NOT NULL)
+                )
+              )
             )
         |]
   Log.logInfo "NotificationSweepJob: candidate projects" (AE.object ["count" AE..= length projects])
   forM_ projects sweepErrorSubscriptions
+
+
+-- | Return timed acknowledgements whose window has closed to the Inbox. The
+-- notification paths already stop honouring a lapsed ack on their own, so this
+-- only clears the columns and records the transition — but without it a timed
+-- ack would still *look* acknowledged forever, which is the ambiguity the whole
+-- ack window exists to remove.
+expireLapsedAcks :: ATBackgroundCtx ()
+expireLapsedAcks = do
+  expired <- Issues.expireAcks =<< Time.currentTime
+  unless (null expired) do
+    forM_ expired \iid -> Issues.logIssueActivity iid Issues.IEAckExpired Nothing Nothing
+    Log.logInfo "issue_acks_expired" (AE.object ["count" AE..= length expired])
 
 
 -- | Flush the digest queue once per hour. Groups pending rows by project and
@@ -1700,7 +1724,8 @@ claimDueErrorNotifications pid mHashes now =
             SELECT DISTINCT ON (e.id)
                    e.id, e.error_data, e.state, i.id AS issue_id, i.title,
                    e.slack_thread_ts, e.discord_message_id, e.occurrences_1h,
-                   e.created_at, e.last_notified_at
+                   e.created_at, e.last_notified_at,
+                   i.acknowledged_until, i.archived_at
             FROM apis.error_patterns e
             JOIN apis.issues i ON i.project_id = e.project_id AND i.target_hash = e.hash
             WHERE e.project_id = #{pid}
@@ -1734,6 +1759,18 @@ claimDueErrorNotifications pid mHashes now =
           SET last_notified_at = #{now}, updated_at = #{now}
           FROM candidates c
           WHERE e.id = c.id
+            -- The issue the alert points at is acknowledged or archived: the user
+            -- has already told us to stop. Filtered here rather than inside
+            -- `candidates` so DISTINCT ON still picks the newest issue per pattern.
+            --
+            -- Note this also silences an explicit "Notify every N" subscription on
+            -- the same issue. Acknowledging is the later and more specific
+            -- instruction, and a silence that leaks one channel is not a silence.
+            -- To let a subscription outrank an ack instead ("I'm on it, but keep
+            -- reminding me"), add `e.subscribed OR` to the front of the ack
+            -- predicate below — that is the whole change.
+            AND c.archived_at IS NULL
+            AND (c.acknowledged_until IS NULL OR c.acknowledged_until <= #{now}::timestamptz)
             AND e.last_notified_at IS NOT DISTINCT FROM c.last_notified_at
             -- Idempotency: same tick re-run shouldn't rewrite the row.
             AND e.last_notified_at IS DISTINCT FROM #{now}::timestamptz
@@ -1855,8 +1892,13 @@ enqueueDigest pid errorPatternId issueId reason title =
 
 -- | Atomically claim the notification slot for an issue. Returns True if the
 -- UPDATE updated a row (caller must dispatch), False if another worker or an
--- earlier tick in the cooldown window already notified — caller must skip.
+-- earlier tick in the dedup window already notified — caller must skip.
 -- Mirrors the claim pattern used for error-pattern re-notifications.
+--
+-- A live acknowledgement or an archive blocks the claim outright: that is what
+-- acknowledging an issue means. An ack whose window has lapsed does not block,
+-- so notifications resume the moment it expires rather than waiting on the
+-- ack-expiry sweep.
 claimIssueNotification :: Issues.IssueId -> UTCTime -> Int -> ATBackgroundCtx Bool
 claimIssueNotification iid now cooldownHours =
   isJust <$> (Hasql.interpOne q :: ATBackgroundCtx (Maybe Int))
@@ -1865,6 +1907,8 @@ claimIssueNotification iid now cooldownHours =
       [HI.sql|
         UPDATE apis.issues SET last_notified_at = #{now}
         WHERE id = #{iid}
+          AND archived_at IS NULL
+          AND (acknowledged_until IS NULL OR acknowledged_until <= #{now}::timestamptz)
           AND (last_notified_at IS NULL
                OR last_notified_at < #{now}::timestamptz - make_interval(hours => #{cooldownHours}::int))
         RETURNING 1::bigint
@@ -1948,7 +1992,7 @@ processProjectErrors pid errors now = do
                 firstSeenTextM = Just $ firstSeenLine now atErr.when
                 alert = RuntimeErrorAlert{issueId = issue.id.toText, issueTitle = issue.title, errorData = atErr, runtimeAlertType = NewRuntimeError, chartUrl = chartUrlM, occurrenceText = Nothing, firstSeenText = firstSeenTextM, ongoingFor = Nothing}
                 (subj, html) = ET.runtimeErrorsEmail project.title issueUrl [atErr] chartUrlM Nothing Nothing
-            (slackTs, discordMsgId, dispatched) <- notifyIssue issue project users Issues.rateChangeCooldownHours "runtime_exception" alert issueUrl subj html
+            (slackTs, discordMsgId, dispatched) <- notifyIssue issue project users Issues.issueNotifyDedupHours "runtime_exception" alert issueUrl subj html
             -- Persist thread IDs + stamp error_patterns.last_notified_at so later
             -- escalation/regression sweeps thread under this alert instead of
             -- firing fresh. 'apis.issues.last_notified_at' gates re-notification
@@ -3107,15 +3151,16 @@ processAPIChangeAnomalies pid targetHashes = do
     -- issue commits to being notified — so two concurrent NewAnomaly jobs
     -- can't both pass a read-then-write check and double-send. Each row is
     -- claimed at most once per 30-min window (last_notified_at) and respects
-    -- any explicit cooldown_until set by the UI / LLM enhancement step.
+    -- any live acknowledgement set from the UI.
     claimedIds :: V.Vector Issues.IssueId <-
       Hasql.interp
         [HI.sql|
           UPDATE apis.issues
           SET last_notified_at = #{now}
           WHERE id = ANY(#{candidateIssueIds}::uuid[])
+            AND archived_at IS NULL
             AND (last_notified_at IS NULL OR last_notified_at < #{now}::timestamptz - INTERVAL '30 minutes')
-            AND (cooldown_until IS NULL OR cooldown_until <= #{now}::timestamptz)
+            AND (acknowledged_until IS NULL OR acknowledged_until <= #{now}::timestamptz)
           RETURNING id
         |]
     let claimedSet = HashSet.fromList (V.toList claimedIds)
@@ -3422,36 +3467,41 @@ endpointTemplateDiscovery pid = do
     $ Log.logInfo "Cleaned up merged endpoints" ("project_id", pid.toText, "merged_count", length mergedPairs)
 
 
--- | Run @k@ with a project's sync config and a live GitHub token, or log why it cannot.
+-- | Run @k@ with a project's sync config and a live connection to its host, or log why it
+-- cannot.
 --
--- Every git-sync job needs the same four things to go right before it can do any work —
--- a configured sync, sync still enabled, a decryptable token, an accepted token — and each
--- of them fails in a way an operator has to be told about. Written once so a job that
--- silently does nothing is impossible to introduce by copying the preamble and dropping an
--- arm.
-withGitHubSync :: Projects.ProjectId -> (Text -> GitSync.GitHubSync -> Eff (W.HTTP ': ATBackgroundEffects) ()) -> ATBackgroundCtx ()
-withGitHubSync pid k = do
+-- Every git-sync job needs the same five things to go right before it can do any work —
+-- a configured sync, sync still enabled, a decryptable token, an accepted token, and a host
+-- it can actually address — and each of them fails in a way an operator has to be told about.
+-- Written once so a job that silently does nothing is impossible to introduce by copying the
+-- preamble and dropping an arm.
+withGitSync :: Projects.ProjectId -> (Git.GitConn -> GitSync.GitHubSync -> Eff (W.HTTP ': ATBackgroundEffects) ()) -> ATBackgroundCtx ()
+withGitSync pid k = do
   ctx <- ask @Config.AuthContext
   GitSync.getGitHubSyncDecrypted (encodeUtf8 ctx.config.apiKeyEncryptionSecretKey) pid >>= \case
-    Nothing -> Log.logAttention "No GitHub sync configured for project" pid
-    Just sync | not sync.syncEnabled -> Log.logInfo "GitHub sync disabled for project" pid
+    Nothing -> Log.logAttention "No git sync configured for project" pid
+    Just sync | not sync.syncEnabled -> Log.logInfo "Git sync disabled for project" pid
     Just sync -> case GitSync.syncCreds sync of
-      Nothing -> Log.logAttention "GitHub sync row carries neither an installation nor a token" pid
+      Nothing -> Log.logAttention "Git sync row carries neither an installation nor a token" (pid, Git.hostSlug sync.host)
       Just creds ->
         W.runHTTPWreq $ GitSync.githubToken ctx.config.githubAppId ctx.config.githubAppPrivateKey creds >>= \case
-          Left err -> Log.logAttention "Failed to get GitHub token" (pid, err)
-          Right token -> k token sync
+          Left err -> Log.logAttention "Failed to get git host token" (pid, Git.hostSlug sync.host, err)
+          Right token -> case GitSync.syncConn sync token of
+            Left err -> Log.logAttention "Git sync row does not describe a reachable host" (pid, Git.hostSlug sync.host, err)
+            Right conn -> k conn sync
 
 
--- | Sync dashboards from GitHub repo to Monoscope
+-- | Sync dashboards from the linked repository into Monoscope.
 gitSyncFromRepo :: Projects.ProjectId -> ATBackgroundCtx ()
 gitSyncFromRepo pid = do
-  Log.logInfo "Starting GitHub sync for project" pid
-  withGitHubSync pid \token sync ->
-    GitSync.fetchGitTree token (GitSync.syncRepoRef sync) >>= \case
-      Left err -> Log.logAttention "Failed to fetch git tree" (pid, err)
-      Right (treeSha, entries)
-        | sync.lastTreeSha == Just treeSha -> Log.logInfo "Tree unchanged, skipping sync" (pid, treeSha)
+  Log.logInfo "Starting git sync for project" pid
+  withGitSync pid \conn sync ->
+    -- Scoped to the dashboards folder: it is all this job reads, it lets GitLab and Bitbucket
+    -- filter server-side, and on Bitbucket it is what bounds the per-file sha backfill.
+    Git.fetchTree conn (GitSync.syncRepoRef sync) (GitSync.getDashboardsPath sync) >>= \case
+      Left err -> Log.logAttention "Failed to list repository" (pid, Git.hostSlug sync.host, err)
+      Right (revision, entries)
+        | sync.lastRevision == Just revision -> Log.logInfo "Revision unchanged, skipping sync" (pid, revision)
         | otherwise -> do
             dbState <- GitSync.getDashboardGitState pid
             allTeams <- ProjectMembers.getTeamsVM pid
@@ -3464,20 +3514,20 @@ gitSyncFromRepo pid = do
             Log.logInfo "Git sync plan" ("creates" :: Text, length creates, "updates" :: Text, length updates, "deletes" :: Text, length deletes)
             -- Fetch file contents in parallel for creates and updates
             Ki.scoped \scope -> do
-              forM_ (creates <> updates) $ forkWithCtx scope . processGitSyncAction pid token sync teamMap
+              forM_ (creates <> updates) $ forkWithCtx scope . processGitSyncAction pid conn sync teamMap
               Ki.atomically $ Ki.awaitAll scope
             -- Process deletes (no HTTP needed)
             forM_ deletes \(path, dashId) -> do
               _ <- Dashboards.deleteDashboard dashId
               Log.logInfo "Deleted dashboard (removed from git)" (path, dashId)
-            _ <- GitSync.updateLastTreeSha sync.id treeSha
-            Log.logInfo "Completed GitHub sync for project" pid
+            _ <- GitSync.updateLastRevision sync.id revision
+            Log.logInfo "Completed git sync for project" pid
 
 
-processGitSyncAction :: (DB es, Log :> es, Time.Time :> es, W.HTTP :> es) => Projects.ProjectId -> Text -> GitSync.GitHubSync -> Map.Map Text UUID.UUID -> GitSync.SyncAction -> Eff es ()
-processGitSyncAction pid token sync teamMap = \case
+processGitSyncAction :: (DB es, Log :> es, Time.Time :> es, W.HTTP :> es) => Projects.ProjectId -> Git.GitConn -> GitSync.GitHubSync -> Map.Map Text UUID.UUID -> GitSync.SyncAction -> Eff es ()
+processGitSyncAction pid conn sync teamMap = \case
   GitSync.SyncCreate path sha ->
-    fetchAndParseDashboard token (GitSync.syncRepoRef sync) path >>= either (Log.logAttention "Failed to sync dashboard from git" . (path,)) \schema -> do
+    fetchAndParseDashboard conn (GitSync.syncRepoRef sync) path >>= either (Log.logAttention "Failed to sync dashboard from git" . (path,)) \schema -> do
       now <- Time.currentTime
       dashId <- UUIDId <$> liftIO UUIDV4.nextRandom
       let prefix = GitSync.getDashboardsPath sync
@@ -3503,7 +3553,7 @@ processGitSyncAction pid token sync teamMap = \case
       _ <- Dashboards.insert dashboard
       Log.logInfo "Created dashboard from git" (relativePath, dashId)
   GitSync.SyncUpdate path sha dashId ->
-    fetchAndParseDashboard token (GitSync.syncRepoRef sync) path >>= either (Log.logAttention "Failed to sync dashboard from git" . (path,)) \schema -> do
+    fetchAndParseDashboard conn (GitSync.syncRepoRef sync) path >>= either (Log.logAttention "Failed to sync dashboard from git" . (path,)) \schema -> do
       now <- Time.currentTime
       let prefix = GitSync.getDashboardsPath sync
           relativePath = fromMaybe path $ T.stripPrefix prefix path
@@ -3520,35 +3570,35 @@ processGitSyncAction pid token sync teamMap = \case
   GitSync.SyncDelete{} -> pass -- Handled separately
 
 
-fetchAndParseDashboard :: (IOE :> es, W.HTTP :> es) => Text -> GitSync.RepoRef -> Text -> Eff es (Either Text Dashboards.Dashboard)
-fetchAndParseDashboard token repoRef path = GitSync.fetchFileContent token repoRef path <&> (>>= GitSync.yamlToDashboard)
+fetchAndParseDashboard :: (IOE :> es, W.HTTP :> es) => Git.GitConn -> GitSync.RepoRef -> Text -> Eff es (Either Text Dashboards.Dashboard)
+fetchAndParseDashboard conn repoRef path = Git.fetchFile conn repoRef path <&> (>>= GitSync.yamlToDashboard)
 
 
 -- | Push a dashboard change to GitHub
 -- Skips template-based dashboards (schema = Nothing) since they have no custom content to sync.
 gitSyncPushDashboard :: Projects.ProjectId -> Dashboards.DashboardId -> ATBackgroundCtx ()
 gitSyncPushDashboard pid dashId = do
-  Log.logInfo "Pushing dashboard to GitHub" (pid, dashId)
+  Log.logInfo "Pushing dashboard to git host" (pid, dashId)
   Dashboards.getDashboardById dashId >>= \case
     Nothing -> Log.logAttention "Dashboard not found for git push" dashId
     Just dash | isNothing dash.schema -> Log.logInfo "Skipping git push for template-based dashboard" dashId
-    Just dash -> withGitHubSync pid \token sync -> pushDashboardToGit token sync pid dash ("Update dashboard: " <> dash.title)
+    Just dash -> withGitSync pid \conn sync -> pushDashboardToGit conn sync pid dash ("Update dashboard: " <> dash.title)
 
 
 -- | Render one dashboard to YAML, push it to the repo and record the new shas.
-pushDashboardToGit :: (DB es, Log :> es, Time.Time :> es, W.HTTP :> es) => Text -> GitSync.GitHubSync -> Projects.ProjectId -> Dashboards.DashboardVM -> Text -> Eff es ()
-pushDashboardToGit token sync pid dash message = do
+pushDashboardToGit :: (DB es, Log :> es, Time.Time :> es, W.HTTP :> es) => Git.GitConn -> GitSync.GitHubSync -> Projects.ProjectId -> Dashboards.DashboardVM -> Text -> Eff es ()
+pushDashboardToGit conn sync pid dash message = do
   teams <- ProjectMembers.getTeamsById pid dash.teams
   let schema = GitSync.buildSchemaWithMeta dash.schema dash.title (V.toList dash.tags) (map (.handle) teams)
       prefix = GitSync.getDashboardsPath sync
       -- Strip any accidental prefix from DB path to ensure we don't get dashboards/dashboards/...
       rawPath = fromMaybe (GitSync.titleToFilePath dash.title) dash.filePath
       relativePath = fromMaybe rawPath $ T.stripPrefix "dashboards/" rawPath <|> T.stripPrefix prefix rawPath
-  GitSync.pushFileToGit token (GitSync.syncRepoRef sync) (prefix <> relativePath) (GitSync.dashboardToYaml schema) dash.fileSha message >>= \case
+  Git.pushFile conn (GitSync.syncRepoRef sync) (prefix <> relativePath) (GitSync.dashboardToYaml schema) dash.fileSha message >>= \case
     Left err -> Log.logAttention "Failed to push dashboard to git" (dash.id, err)
-    Right (fileSha, treeSha) -> do
+    Right (fileSha, revision) -> do
       void $ GitSync.updateDashboardGitInfo dash.id relativePath fileSha
-      void $ GitSync.updateLastTreeSha sync.id treeSha
+      void $ GitSync.updateLastRevision sync.id revision
       Log.logInfo "Successfully pushed dashboard to git" (dash.id, fileSha)
 
 
@@ -3556,11 +3606,11 @@ pushDashboardToGit token sync pid dash message = do
 -- Skips template-based dashboards (schema = Nothing) since they have no custom content to sync.
 gitSyncPushAllDashboards :: Projects.ProjectId -> ATBackgroundCtx ()
 gitSyncPushAllDashboards pid = do
-  Log.logInfo "Pushing all dashboards to GitHub" pid
-  withGitHubSync pid \token sync -> do
+  Log.logInfo "Pushing all dashboards to git host" pid
+  withGitSync pid \conn sync -> do
     syncableDashboards <- filter (isJust . (.schema)) <$> Dashboards.selectDashboardsSortedBy pid "updated_at"
     Log.logInfo "Found dashboards to push" (pid, length syncableDashboards)
-    forM_ syncableDashboards \dash -> pushDashboardToGit token sync pid dash ("Sync dashboard: " <> dash.title)
+    forM_ syncableDashboards \dash -> pushDashboardToGit conn sync pid dash ("Sync dashboard: " <> dash.title)
     Log.logInfo "Finished pushing all dashboards" pid
 
 
@@ -3975,8 +4025,8 @@ isAlertableLogLevel = \case
 --   3. Persistence gate: first detection writes a pending marker on the
 --      pattern; only a matching second detection within the TTL fires an
 --      issue. A run with no anomaly clears any stale pending marker.
---   4. Post-ack cooldown: if the latest acked issue for the same target_hash
---      has cooldown_until > now, skip firing (user already told us to hush).
+--   4. Acknowledgement: if a live ack covers the same target_hash, skip firing
+--      (the user already told us to hush, and for how long).
 detectLogPatternSpikes :: Projects.ProjectId -> UTCTime -> Config.AuthContext -> ATBackgroundCtx ()
 detectLogPatternSpikes pid scheduledTime authCtx = do
   Log.logTrace "Detecting log pattern spikes" pid
@@ -4016,9 +4066,9 @@ detectLogPatternSpikes pid scheduledTime authCtx = do
     LogPatterns.setPendingAnomaly lp.patternId dir scheduledTime
   unless (V.null clears) $ LogPatterns.clearPendingAnomalies clears
 
-  -- Step 4: cooldown filter, then insert.
+  -- Step 4: acknowledgement filter, then insert.
   firesAllowed <- flip filterM fires \(lp, _) ->
-    not <$> Issues.isInCooldown pid lp.patternHash Issues.LogPatternRateChange scheduledTime
+    not <$> Issues.isSilenced pid lp.patternHash Issues.LogPatternRateChange scheduledTime
 
   projectM <- Projects.projectById pid
   users <- Projects.usersByProjectId pid
@@ -4032,7 +4082,7 @@ detectLogPatternSpikes pid scheduledTime authCtx = do
           changePct = if sr.mean > 0 then (sr.currentRate - sr.mean) / sr.mean * 100 else 0
           alert = LogPatternRateChangeAlert{issueUrl, patternText = lpRate.logPattern, sampleMessage = Nothing, logLevel = lpRate.logLevel, serviceName = lpRate.serviceName, direction = sr.direction, currentRate = sr.currentRate, baselineMean = sr.mean, changePercent = changePct, isError = lpRate.isError}
           (subj, html) = ET.logPatternRateChangeEmail project.title issueUrl lpRate.logPattern lpRate.logLevel lpRate.serviceName dir sr.currentRate sr.mean changePct
-      void $ notifyIssue issue project users Issues.rateChangeCooldownHours "log_pattern_rate_change" alert issueUrl subj html
+      void $ notifyIssue issue project users Issues.issueNotifyDedupHours "log_pattern_rate_change" alert issueUrl subj html
     pure issue.id
 
   -- Clear the pending markers for anything we just fired; a new detection

@@ -32,6 +32,10 @@ module Pkg.DeriveUtils (
   mkHasqlPool,
   rawSql,
   selectFrom,
+  -- Text-backed enum helpers, for types whose stored spelling is not the snake-cased
+  -- constructor (see 'Pkg.Git.GitHost') and so cannot use 'WrappedEnumSC'.
+  enumFromField,
+  refineText,
 ) where
 
 import Control.Exception (throwIO)

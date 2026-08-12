@@ -202,6 +202,41 @@ USE_EXTERNAL_DB=true cabal test integration-tests -j --ghc-options="-O0 -j8" --t
 tail -f tests.log
 ```
 
+### Integration Tests Against a Real TimeFusion
+
+Specs that read through TimeFusion (`withTfReads True`) and the dual-write TF leg
+only do their job when TimeFusion is actually reachable. Otherwise they fail on
+your machine and pass in CI, and a real regression is easy to mistake for a
+missing service.
+
+TimeFusion runs natively from the sibling checkout — no Docker. `timefusion-start`
+also brings up a local MinIO for its object store.
+
+```bash
+make timefusion-start     # cargo run --release in ../timefusion, plus MinIO
+make timefusion-status    # minio :9000 / timefusion :12345, up or down
+make live-test-dev-tf     # the live-test-dev watcher with TF wired in
+make timefusion-stop
+```
+
+| | |
+| --- | --- |
+| PGWire | `postgresql://postgres:postgres@localhost:12345/postgres` |
+| MinIO | `:9000` (console `:9001`), `minioadmin`/`minioadmin` |
+| Logs | `/tmp/timefusion.log` |
+| Checkout | `TIMEFUSION_DIR`, default `../timefusion` |
+
+The first start compiles TimeFusion in release mode and takes several minutes;
+after that it is instant.
+
+If a spec ever races TimeFusion's flush, the knobs are
+`TIMEFUSION_FLUSH_INTERVAL_SECS` (default 60) and `TIMEFUSION_FLUSH_DWELL_SECS`.
+Note that CI's service container sets `TIMEFUSION_BUFFER_FLUSH_IMMEDIATELY`,
+which TimeFusion does not read — don't copy it expecting an effect.
+
+`Pkg.TestUtils` turns the TF leg on from the presence of `TIMEFUSION_PG_TEST_URL`,
+so plain `make live-test-dev` still runs the Postgres-only path.
+
 ### Running Specific Tests
 
 ```bash

@@ -24,7 +24,7 @@ pid = UUIDId UUID.nil
 spec :: Spec
 spec = around withTestResources do
   describe "Log Pattern Incident Lifecycle" do
-    it "ingest -> baseline -> spike -> notify -> ack (24h cooldown) -> re-spike suppressed -> expire -> re-spike fires" \tr -> do
+    it "ingest -> baseline -> spike -> notify -> ack for 24h -> re-spike suppressed -> ack expires -> re-spike fires" \tr -> do
       runTestBg frozenTime tr pass
 
       let patHash = "incident-lifecycle-hash" :: Text
@@ -56,10 +56,11 @@ spec = around withTestResources do
           (pid, patHash) :: IO [Only Issues.IssueId]
       let issueId = case issues1 of (Only iid : _) -> iid; _ -> error "no issue fired on initial spike"
 
-      -- 3. Acknowledge -> opens 24h cooldown
-      runTestBgNoReset tr $ Issues.acknowledgeIssue issueId uid
+      -- 3. Acknowledge for 24h -> silenced for exactly that window
+      tAck <- getTestTime tr.trTestClock
+      runTestBgNoReset tr $ void $ Issues.setAckState pid [issueId] $ Just Issues.AckSet{at = tAck, by = Just uid, window = Issues.AckFor (24 * 60)}
 
-      -- 4. +12h: seed fresh spike in the new hour; cooldown should suppress
+      -- 4. +12h: seed fresh spike in the new hour; the ack should suppress it
       advanceHours tr 12
       t12 <- getTestTime tr.trTestClock
       void $ runTestBgNoReset tr $ LogPatterns.upsertHourlyStat pid srcField patHash t12 600
@@ -68,7 +69,7 @@ spec = around withTestResources do
       countAfter12 <- countOpenIssues tr patHash
       countAfter12 `shouldBe` 0
 
-      -- 5. +25h since ack: cooldown expired, new spike fires
+      -- 5. +25h since ack: the window lapsed, a new spike fires again
       advanceHours tr 13
       t25 <- getTestTime tr.trTestClock
       void $ runTestBgNoReset tr $ LogPatterns.upsertHourlyStat pid srcField patHash t25 600
