@@ -138,6 +138,7 @@ import Hasql.Statement (Statement)
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), WrappedEnum (..), WrappedEnumSC (..), encodeEnumSC, idFromText, unAesonTextMaybe)
+import Pkg.ErrorFingerprint qualified as EF
 import Pkg.ExtractionWorker qualified as EW
 import Pkg.Metrics qualified as Metrics
 import Relude hiding (ask)
@@ -1986,7 +1987,7 @@ atErrorFrom spanObj typ msg stack =
       serviceName = resourceServiceName resc
       -- Empty (not "unknown") keeps hash inputs stable when runtime detection fails.
       rt = fromMaybe "" tech
-      hashes = ErrorPatterns.computeErrorHashes spanObj.project_id serviceName spanObj.name rt typ msg stack
+      hashes = EF.computeErrorHashes spanObj.project_id serviceName spanObj.name rt typ msg stack
    in ErrorPatterns.ATError
         { projectId = UUIDId <$> UUID.fromText spanObj.project_id
         , when = spanObj.timestamp
@@ -1997,7 +1998,7 @@ atErrorFrom spanObj typ msg stack =
         , stackTrace = stack
         , hash = hashes.narrow
         , parentHash = Just hashes.broad
-        , isFramework = ErrorPatterns.isFrameworkTransportError typ (ErrorPatterns.normalizeMessage msg)
+        , isFramework = EF.isFrameworkTransportError typ (EF.normalizeMessage msg)
         , technology = Nothing
         , serviceName = serviceName
         , requestMethod = method

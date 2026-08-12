@@ -18,7 +18,6 @@ module Models.Apis.Monitors (
   monitorRemoveTeam,
   getActiveQueryMonitors,
   updateLastEvaluatedAt,
-  -- Widget alert functions
   queryMonitorByWidgetId,
   deleteMonitorsByWidgetIds,
   WidgetAlertStatus (..),
@@ -27,7 +26,7 @@ module Models.Apis.Monitors (
 
 import Data.Aeson qualified as AE
 import Data.CaseInsensitive qualified as CI
-import Data.Default (Default (..))
+import Data.Default (Default)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.OpenApi (ToParamSchema (..), ToSchema (..))
 import Data.Text.Display (Display)
@@ -36,9 +35,9 @@ import Data.Time.Clock (UTCTime (..), addUTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
-import Database.PostgreSQL.Simple.FromField (FromField (..))
+import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
-import Database.PostgreSQL.Simple.ToField (ToField (..))
+import Database.PostgreSQL.Simple.ToField (ToField)
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, type (:>))
 import Effectful.Time (Time)
@@ -72,9 +71,6 @@ instance HI.DecodeRow MonitorStatus where
   decodeRow = HI.getOneColumn <$> HI.decodeRow
 
 
-instance ToSchema (CI.CI Text) where declareNamedSchema _ = declareNamedSchema (Proxy @Text)
-
-
 data MonitorAlertConfig = MonitorAlertConfig
   { title :: Text
   , severity :: Text
@@ -86,13 +82,9 @@ data MonitorAlertConfig = MonitorAlertConfig
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, NFData)
-  deriving (FromField, ToField) via Aeson MonitorAlertConfig
+  deriving (FromField, HI.DecodeValue, HI.EncodeValue, ToField) via Aeson MonitorAlertConfig
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MonitorAlertConfig
   deriving (ToSchema) via SnakeSchema MonitorAlertConfig
-
-
-deriving via Aeson MonitorAlertConfig instance HI.DecodeValue MonitorAlertConfig
-deriving via Aeson MonitorAlertConfig instance HI.EncodeValue MonitorAlertConfig
 
 
 data QueryMonitor = QueryMonitor
@@ -129,9 +121,8 @@ data QueryMonitor = QueryMonitor
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, HI.DecodeRow, NFData)
-  -- DecodeRow is positional, so reads must project through 'selectFrom' @QueryMonitor
-  -- (this Entity's field list) rather than @SELECT *@ — otherwise the next ADD COLUMN
-  -- shifts every field one slot and breaks decoding until the binary is redeployed.
+  -- DecodeRow is positional, so every read must project via 'selectFrom' @QueryMonitor
+  -- (the Entity instance below), never @SELECT *@ — column order there is attnum order.
   deriving (Entity) via (GenericEntity '[Schema "monitors", TableName "query_monitors", PrimaryKey "id", FieldModifiers '[CamelToSnake]] QueryMonitor)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake QueryMonitor
   deriving (ToSchema) via SnakeSchema QueryMonitor
@@ -187,15 +178,10 @@ monitorToggleActiveById mid = do
         where id=#{mid}|]
 
 
--- | Shared shape for the "stamp a single timestamptz column, guarded by IS NULL" updates
--- (deactivate / soft-delete). Each caller supplies the column-specific SQL given @now@.
-setTimestampColByIds :: (DB es, Time :> es) => (UTCTime -> HI.Sql) -> Eff es Int64
-setTimestampColByIds mkSql = Time.currentTime >>= Hasql.interpExecute . mkSql
-
-
 monitorDeactivateByIds :: (DB es, Time :> es) => [QueryMonitorId] -> Eff es Int64
 monitorDeactivateByIds ids =
-  setTimestampColByIds \now -> [HI.sql| UPDATE monitors.query_monitors SET deactivated_at = #{now} WHERE id = ANY(#{ids}::uuid[]) AND deactivated_at IS NULL |]
+  Time.currentTime >>= \now ->
+    Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET deactivated_at = #{now} WHERE id = ANY(#{ids}::uuid[]) AND deactivated_at IS NULL |]
 
 
 monitorReactivateByIds :: DB es => [QueryMonitorId] -> Eff es Int64
@@ -223,7 +209,8 @@ monitorResolveByIds ids =
 
 monitorSoftDeleteByIds :: (DB es, Time :> es) => [QueryMonitorId] -> Eff es Int64
 monitorSoftDeleteByIds ids =
-  setTimestampColByIds \now -> [HI.sql| UPDATE monitors.query_monitors SET deleted_at = #{now} WHERE id = ANY(#{ids}::uuid[]) AND deleted_at IS NULL |]
+  Time.currentTime >>= \now ->
+    Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET deleted_at = #{now} WHERE id = ANY(#{ids}::uuid[]) AND deleted_at IS NULL |]
 
 
 queryMonitorsAll :: DB es => Projects.ProjectId -> Eff es [QueryMonitor]

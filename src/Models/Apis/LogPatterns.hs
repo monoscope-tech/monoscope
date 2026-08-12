@@ -18,23 +18,18 @@ module Models.Apis.LogPatterns (
   upsertLogPattern,
   upsertLogPatternBatch,
   updateBaselineBatch,
-  -- Hourly stats
   upsertHourlyStat,
   upsertHourlyStatBatch,
   BatchPatternStats (..),
   getBatchPatternStats,
-  -- Pattern with current rate for spike detection
   LogPatternWithRate (..),
   getPatternsWithCurrentRates,
   setPendingAnomaly,
   clearPendingAnomalies,
   getLogPatternsByIds,
-  -- Field labels
   knownPatternFields,
   sourceFieldLabel,
-  -- Volume check
   getTotalEventCount,
-  -- Pruning
   pruneStalePatterns,
   pruneOldHourlyStats,
   autoAcknowledgeStaleNewPatterns,
@@ -51,7 +46,6 @@ import Data.Text.Display (Display)
 import Data.Time (UTCTime, ZonedTime)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
-import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Deriving.Aeson.Stock qualified as DAE
@@ -122,7 +116,7 @@ data LogPattern = LogPattern
   , isError :: Bool
   }
   deriving stock (Generic, Show)
-  deriving anyclass (FromRow, HI.DecodeRow, NFData, ToRow)
+  deriving anyclass (HI.DecodeRow, NFData)
   deriving
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "log_patterns", PrimaryKey "id", FieldModifiers '[CamelToSnake]] LogPattern)
@@ -142,7 +136,6 @@ data UpsertPattern = UpsertPattern
   , isError :: Bool
   }
   deriving stock (Generic)
-  deriving anyclass (HI.EncodeRow, ToRow)
 
 
 -- | Get all log patterns for a project (excludes merged patterns)
@@ -161,7 +154,7 @@ getLogPatternTexts pid sourceField = Hasql.interp [HI.sql| SELECT LEFT(log_patte
 getLogPatternTextsByService :: DB es => Projects.ProjectId -> Text -> Text -> Eff es ([Text], Maybe UTCTime)
 getLogPatternTextsByService pid sourceField svcName = do
   rows :: [(Text, Maybe UTCTime)] <- Hasql.interp [HI.sql| SELECT LEFT(log_pattern, 2000), last_seen_at FROM apis.log_patterns WHERE project_id = #{pid} AND source_field = #{sourceField} AND service_name = #{svcName} AND canonical_id IS NULL ORDER BY last_seen_at DESC NULLS LAST LIMIT 5000|]
-  pure (fst <$> rows, asum (snd <$> rows)) -- ordered DESC NULLS LAST, so the first non-null is the max
+  pure $ second asum $ unzip rows -- ordered DESC NULLS LAST, so the first non-null is the max
 
 
 -- | Get log pattern by unique key (project_id, source_field, pattern_hash)
@@ -322,7 +315,7 @@ data BatchPatternStats = BatchPatternStats
   , totalEvents :: Int64
   }
   deriving stock (Generic, Show)
-  deriving anyclass (FromRow, HI.DecodeRow)
+  deriving anyclass (HI.DecodeRow)
 
 
 getBatchPatternStats :: DB es => Projects.ProjectId -> UTCTime -> Int -> Eff es [BatchPatternStats]
@@ -374,7 +367,7 @@ data LogPatternWithRate = LogPatternWithRate
   , isError :: Bool
   }
   deriving stock (Generic, Show)
-  deriving anyclass (FromRow, HI.DecodeRow)
+  deriving anyclass (HI.DecodeRow)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake LogPatternWithRate
 
 

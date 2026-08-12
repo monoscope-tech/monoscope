@@ -65,7 +65,6 @@ module Models.Apis.Issues (
   SpikeResult (..),
 
   -- * Utilities
-  issueIdText,
   parseIssueType,
   hashPrefix,
   defaultRecommendedAction,
@@ -86,7 +85,7 @@ module Models.Apis.Issues (
 
   -- * Thread ID Helpers
   slackThreadToConversationId,
-  discordThreadToConversationId,
+  textToConversationId,
 
   -- * Activity Log
   IssueEvent (..),
@@ -141,17 +140,13 @@ import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.LogPatterns (RateChangeDirection (..))
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), idToText, rawSql, selectFrom)
+import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), rawSql, selectFrom)
 import Relude hiding (id)
 import Servant (FromHttpApiData (..), ServerError, err500, errBody)
 import System.Types (DB)
 
 
 type IssueId = UUIDId "issue"
-
-
-issueIdText :: IssueId -> Text
-issueIdText = idToText
 
 
 -- | Issue types
@@ -532,11 +527,10 @@ findOpenIssueForEndpoint pid tgtHash =
 updateIssueWithNewAnomaly :: (DB es, Time :> es) => IssueId -> APIChangeData -> Eff es ()
 updateIssueWithNewAnomaly issueId newData = do
   now <- Time.currentTime
-  let jdata = Aeson newData
   Hasql.interpExecute_
     [HI.sql|
       UPDATE apis.issues SET
-        issue_data = issue_data || #{jdata}::jsonb,
+        issue_data = issue_data || #{Aeson newData}::jsonb,
         affected_requests = affected_requests + 1,
         updated_at = #{now}
       WHERE id = #{issueId} |]
@@ -714,20 +708,20 @@ selectIssuesByFilters pid isAck isArch tyM svcM limit offset = do
 
 
 -- | Create API Change issue from anomalies
-createAPIChangeIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Text -> V.Vector Anomalies.AnomalyVM -> Eff es Issue
+createAPIChangeIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Text -> NonEmpty Anomalies.AnomalyVM -> Eff es Issue
 createAPIChangeIssue projectId endpointHash anomalies = do
-  let firstAnomaly = V.head anomalies
+  let firstAnomaly = head anomalies
       apiChangeData =
         APIChangeData
           { endpointMethod = fromMaybe "UNKNOWN" firstAnomaly.endpointMethod
           , endpointPath = fromMaybe "/" firstAnomaly.endpointUrlPath
           , endpointHost = fromMaybe "Unknown" firstAnomaly.endpointHost
-          , anomalyHashes = V.map (.targetHash) anomalies
+          , anomalyHashes = V.fromList $ toList $ fmap (.targetHash) anomalies
           , shapeChanges = V.empty
           , formatChanges = V.empty
-          , newFields = V.concatMap (.shapeNewUniqueFields) anomalies
-          , deletedFields = V.concatMap (.shapeDeletedFields) anomalies
-          , modifiedFields = V.concatMap (.shapeUpdatedFieldFormats) anomalies
+          , newFields = foldMap (.shapeNewUniqueFields) anomalies
+          , deletedFields = foldMap (.shapeDeletedFields) anomalies
+          , modifiedFields = foldMap (.shapeUpdatedFieldFormats) anomalies
           }
       breakingChanges = V.length apiChangeData.deletedFields + V.length apiChangeData.modifiedFields
       isCritical = breakingChanges > 0
@@ -742,7 +736,7 @@ createAPIChangeIssue projectId endpointHash anomalies = do
       , critical = isCritical
       , severity = if isCritical then Critical else Warning
       , title =
-          if V.any ((== Anomalies.ATEndpoint) . (.anomalyType)) anomalies
+          if any ((== Anomalies.ATEndpoint) . (.anomalyType)) anomalies
             then "New endpoint detected: " <> apiChangeData.endpointMethod <> " " <> apiChangeData.endpointPath <> " on " <> apiChangeData.endpointHost
             else "API structure has changed"
       , recommendedAction = defaultRecommendedAction
@@ -830,22 +824,19 @@ data AIChatMessage = AIChatMessage
 getOrCreateConversation :: (DB es, Error ServerError :> es, Time :> es) => Projects.ProjectId -> UUIDId "conversation" -> ConversationType -> AE.Value -> Eff es AIConversation
 getOrCreateConversation pid convId convType ctx = do
   now <- Time.currentTime
-  let ctxJ = Aeson ctx
   Hasql.interpOne
     [HI.sql| INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type, context)
-              VALUES (#{pid}, #{convId}, #{convType}, #{ctxJ}) ON CONFLICT (project_id, conversation_id) DO UPDATE SET updated_at = #{now}
+              VALUES (#{pid}, #{convId}, #{convType}, #{Aeson ctx}) ON CONFLICT (project_id, conversation_id) DO UPDATE SET updated_at = #{now}
               RETURNING id, project_id, conversation_id, conversation_type, context, created_at, updated_at |]
     >>= (`whenNothing` throwError err500{errBody = "getOrCreateConversation: RETURNING clause must return a row"})
 
 
 -- | Insert a new chat message
 insertChatMessage :: DB es => Projects.ProjectId -> UUIDId "conversation" -> ChatRole -> Text -> Maybe AE.Value -> Maybe AE.Value -> Eff es ()
-insertChatMessage pid convId chatRole chatContent widgetsM metadataM = do
-  let widgetsJ = Aeson <$> widgetsM
-      metaJ = Aeson <$> metadataM
+insertChatMessage pid convId chatRole chatContent widgetsM metadataM =
   Hasql.interpExecute_
     [HI.sql| INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content, widgets, metadata)
-            VALUES (#{pid}, #{convId}, #{chatRole}, #{chatContent}, #{widgetsJ}, #{metaJ}) |]
+            VALUES (#{pid}, #{convId}, #{chatRole}, #{chatContent}, #{Aeson <$> widgetsM}, #{Aeson <$> metadataM}) |]
 
 
 -- | Select chat history for a conversation (oldest first)
@@ -866,10 +857,6 @@ textToConversationId = UUIDId . UUID5.generateNamed UUID5.namespaceOID . BS.unpa
 
 slackThreadToConversationId :: Text -> Text -> UUIDId "conversation"
 slackThreadToConversationId cid ts = textToConversationId (cid <> ":" <> ts)
-
-
-discordThreadToConversationId :: Text -> UUIDId "conversation"
-discordThreadToConversationId = textToConversationId
 
 
 chatMigrationLockKey :: UUIDId "conversation" -> Int64
@@ -958,17 +945,15 @@ createLogPatternRateChangeIssue projectId lp sr = do
 -- "api: GET /users 500"
 sanitizeLogPatternTitle :: Text -> Maybe Text -> Maybe Text -> Text
 sanitizeLogPatternTitle raw sampleM serviceM =
-  let replacements =
-        [(m, " ") | m <- [";neutral⇒", ";badge-error⇒", ";badge-warning⇒", ";badge-info⇒", ";badge-success⇒"]]
+  let stripped =
+        unwords
+          $ words
+          $ foldl' (flip $ uncurry T.replace) raw
+          $ [(m, " ") | m <- [";neutral⇒", ";badge-error⇒", ";badge-warning⇒", ";badge-info⇒", ";badge-success⇒"]]
           <> [(p, "") | p <- ["{integer}", "{uuid}", "{float}", "{*}", "{hex}"]]
-      stripped = unwords $ words $ foldl' (\t (a, b) -> T.replace a b t) raw replacements
       -- printable-ASCII ratio > 0.7, as integer arithmetic
       usable = not (T.null stripped) && 10 * T.length (T.filter (\c -> isPrint c && isAscii c) stripped) > 7 * T.length stripped
-      fallback = case (serviceM, sampleM) of
-        (Just svc, Just s) -> svc <> ": " <> T.take 80 s
-        (_, Just s) -> s
-        (Just svc, _) -> svc
-        _ -> "log event"
+      fallback = fromMaybe "log event" $ ((\svc s -> svc <> ": " <> T.take 80 s) <$> serviceM <*> sampleM) <|> sampleM <|> serviceM
    in T.take 100 $ if usable then stripped else fallback
 
 
@@ -1150,10 +1135,9 @@ data IssueActivity = IssueActivity
 logIssueActivity :: (DB es, Time :> es) => IssueId -> IssueEvent -> Maybe Projects.UserId -> Maybe AE.Value -> Eff es ()
 logIssueActivity issueId event createdBy metadataM = do
   now <- Time.currentTime
-  let metaJ = Aeson <$> metadataM
   Hasql.interpExecute_
     [HI.sql| INSERT INTO apis.issue_activity_log (issue_id, event, created_by, metadata, created_at)
-    SELECT #{issueId}, #{event}, #{createdBy}, #{metaJ}, #{now}
+    SELECT #{issueId}, #{event}, #{createdBy}, #{Aeson <$> metadataM}, #{now}
     WHERE EXISTS (SELECT 1 FROM apis.issues WHERE id = #{issueId}) |]
 
 
@@ -1210,9 +1194,8 @@ getReportById rid = Hasql.interpOne (selectFrom @Report <> [HI.sql| WHERE id = #
 
 
 reportHistoryByProject :: DB es => Projects.ProjectId -> Int -> Eff es [ReportListItem]
-reportHistoryByProject pid page = do
-  let off = page * 20
-  Hasql.interp [HI.sql| SELECT id, created_at, project_id, report_type FROM apis.reports WHERE project_id = #{pid} ORDER BY created_at DESC LIMIT 20 OFFSET #{off} |]
+reportHistoryByProject pid page =
+  Hasql.interp (selectFrom @ReportListItem <> [HI.sql| WHERE project_id = #{pid} ORDER BY created_at DESC LIMIT 20 OFFSET #{page * 20} |])
 
 
 getLatestReportByType :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Report)
@@ -1226,8 +1209,8 @@ createErrorSpikeIssue projectId errRate currentRate baselineMean zScore =
         projectId
         errRate
         (round currentRate)
-        (const $ "Error Spike: " <> errRate.errorType <> " (" <> show (round increasePercent :: Int) <> "% increase)")
-        ("Error rate has spiked " <> show (round zScore :: Int) <> " standard deviations above baseline. Current: " <> show (round currentRate :: Int) <> "/hr, Baseline: " <> show (round baselineMean :: Int) <> "/hr. Investigate recent deployments or changes.")
+        (const $ "Error Spike: " <> errRate.errorType <> " (" <> showPct increasePercent <> " increase)")
+        ("Error rate has spiked " <> show (round zScore :: Int) <> " standard deviations above baseline. Current: " <> showRate currentRate <> ", Baseline: " <> showRate baselineMean <> ". Investigate recent deployments or changes.")
 
 
 -- | Create a new issue for an error pattern.
