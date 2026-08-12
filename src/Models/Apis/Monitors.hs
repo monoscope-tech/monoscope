@@ -179,8 +179,9 @@ monitorToggleActiveById mid = do
 
 
 monitorDeactivateByIds :: (DB es, Time :> es) => [QueryMonitorId] -> Eff es Int64
-monitorDeactivateByIds ids = Time.currentTime >>= \now ->
-  Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET deactivated_at = #{now} WHERE id = ANY(#{ids}::uuid[]) AND deactivated_at IS NULL |]
+monitorDeactivateByIds ids =
+  Time.currentTime >>= \now ->
+    Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET deactivated_at = #{now} WHERE id = ANY(#{ids}::uuid[]) AND deactivated_at IS NULL |]
 
 
 monitorReactivateByIds :: DB es => [QueryMonitorId] -> Eff es Int64
@@ -207,8 +208,9 @@ monitorResolveByIds ids =
 
 
 monitorSoftDeleteByIds :: (DB es, Time :> es) => [QueryMonitorId] -> Eff es Int64
-monitorSoftDeleteByIds ids = Time.currentTime >>= \now ->
-  Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET deleted_at = #{now} WHERE id = ANY(#{ids}::uuid[]) AND deleted_at IS NULL |]
+monitorSoftDeleteByIds ids =
+  Time.currentTime >>= \now ->
+    Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET deleted_at = #{now} WHERE id = ANY(#{ids}::uuid[]) AND deleted_at IS NULL |]
 
 
 queryMonitorsAll :: DB es => Projects.ProjectId -> Eff es [QueryMonitor]

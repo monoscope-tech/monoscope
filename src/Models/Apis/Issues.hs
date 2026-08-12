@@ -946,7 +946,9 @@ createLogPatternRateChangeIssue projectId lp sr = do
 sanitizeLogPatternTitle :: Text -> Maybe Text -> Maybe Text -> Text
 sanitizeLogPatternTitle raw sampleM serviceM =
   let stripped =
-        unwords $ words $ foldl' (flip $ uncurry T.replace) raw
+        unwords
+          $ words
+          $ foldl' (flip $ uncurry T.replace) raw
           $ [(m, " ") | m <- [";neutral⇒", ";badge-error⇒", ";badge-warning⇒", ";badge-info⇒", ";badge-success⇒"]]
           <> [(p, "") | p <- ["{integer}", "{uuid}", "{float}", "{*}", "{hex}"]]
       -- printable-ASCII ratio > 0.7, as integer arithmetic

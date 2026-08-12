@@ -725,8 +725,8 @@ getDailyUsageBreakdown pid start =
 -- only producer in the codebase.
 newtype ChunkQuantity = ChunkQuantity {chunkQuantityInt :: Int}
   deriving stock (Eq, Generic)
-  deriving anyclass (HI.DecodeRow)
   deriving newtype (FromField, HI.DecodeValue, HI.EncodeValue, NFData, Show, ToField)
+  deriving anyclass (HI.DecodeRow)
 
 
 -- | >>> mkChunkQuantity 0
