@@ -395,6 +395,31 @@ spec = sequential $ aroundAll withTestResources do
       let byHashHtml = TL.toStrict $ renderText $ toHtml pageByHash
       byHashHtml `shouldSatisfy` T.isInfixOf "since=14D"
 
+    -- Regression: an issue that never captured a trace id used to render the logs tab as
+    -- `context___trace_id==""`, a predicate that filters nothing — so the tab fetched the
+    -- project's entire retention window (~6s / 550KB of unrelated logs, on ~24% of issues).
+    -- With no trace to pin to it must scope to the issue's service over a bounded window.
+    it "issue detail with no trace id scopes the logs tab to service and a bounded window" \tr -> do
+      noTraceHash <- T.take 8 . DataUUID.toText <$> UUID.nextRandom
+      issueId <- withResource tr.trPool \conn ->
+        -- INSERT ... RETURNING always yields the row, but `head` is partial and
+        -- -Werror=x-partial rejects it; an empty result should say so, not crash later.
+        maybe (fail "INSERT ... RETURNING id returned no row") (pure . fromOnly)
+          . listToMaybe
+          =<< PGS.query
+            conn
+            [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, service, created_at, updated_at)
+                  VALUES (?, 'runtime_exception', 'no-trace issue', ?, 'checkout', ?, ?) RETURNING id |]
+            (testPid, noTraceHash, frozenTime, frozenTime)
+      (_, page) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid (UUIDId issueId) Nothing Nothing
+      let html = TL.toStrict $ renderText $ toHtml page
+      html `shouldSatisfy` not . T.isInfixOf "context___trace_id%3D%3D%22%22"
+      html `shouldSatisfy` T.isInfixOf "service%3D%3D%22checkout%22"
+      -- Lucid escapes the attribute, so the separators render as &amp; — assert on both
+      -- ends of the window: an unbounded fallback would carry neither.
+      html `shouldSatisfy` T.isInfixOf "&amp;from="
+      html `shouldSatisfy` T.isInfixOf "&amp;to="
+
     -- Migration 0095 swapped now() → app_now() in apis.log_auto_resolve_activity
     -- so the auto-resolve activity row's created_at honours the test clock.
     it "auto_resolved activity record uses app_now() (migration 0095)" \tr -> do

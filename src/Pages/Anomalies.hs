@@ -795,13 +795,23 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst tp sampleOverride = do
                 div_ (spanDetailAttrs_ KeepCurrent pid.toText sr.uSpanId sr.timestamp <> [hxTrigger_ "load[window.innerWidth>=768]", term "hx-sync" "this:replace"]) pass
 
           div_ [id_ "log-content", class_ $ bool "hidden " "" isLogPatternIssue <> "err-tab-content flex flex-col lg:flex-row w-full lg:h-[70vh]"] do
-            let logsTraceId = fromMaybe "" $ asum [errM >>= (.base.recentTraceId), (.traceId) <$> tr]
-                logsQuery = case Issues.hashPrefix issue.issueType of
-                  Just prefix | isLogPatternIssue -> "hashes[*]==\"" <> prefix <> issue.targetHash <> "\""
-                  _ -> "kind==\"log\" AND context___trace_id==\"" <> logsTraceId <> "\""
-            let timeParams = mconcat ["&" <> key <> "=" <> toUriStr v | (key, Just v) <- [("since", tp.since), ("from", tp.from), ("to", tp.to)], not (T.null v)]
+            let pickerParams = mconcat ["&" <> key <> "=" <> toUriStr v | (key, Just v) <- [("since", tp.since), ("from", tp.from), ("to", tp.to)], not (T.null v)]
+                isoT t = toUriStr $ toText $ formatTime defaultTimeLocale "%FT%TZ" t
+                lastSeen = zonedTimeToUTC $ maybe issue.createdAt (.base.updatedAt) errM
+                (logsQuery, logsParams) = case (Issues.hashPrefix issue.issueType, asum [errM >>= (.base.recentTraceId), (.traceId) <$> tr]) of
+                  (Just prefix, _) | isLogPatternIssue -> ("hashes[*]==\"" <> prefix <> issue.targetHash <> "\"", pickerParams)
+                  (_, Just tId) -> ("kind==\"log\" AND context___trace_id==\"" <> tId <> "\"", pickerParams)
+                  -- ~24% of error patterns never captured a trace id (log records carry no trace
+                  -- context; spans always do). The old empty-string fallback rendered
+                  -- @context___trace_id==""@, which filters nothing — the tab dumped the project's
+                  -- entire retention window (6s / 550KB of unrelated logs). With no trace to pin
+                  -- to, scope to the issue's service over +/-5min around when it was last seen.
+                  _ ->
+                    ( "kind==\"log\"" <> foldMap (\s -> " AND service==\"" <> s <> "\"") issue.service
+                    , "&from=" <> isoT (addUTCTime (-300) lastSeen) <> "&to=" <> isoT (addUTCTime 300 lastSeen)
+                    )
             div_ [class_ "grow-1 min-w-0 h-full"]
-              $ virtualTable pid (Just ("/p/" <> pid.toText <> "/log_explorer/data?json=true&query=" <> toUriStr logsQuery <> timeParams)) Nothing
+              $ virtualTable pid (Just ("/p/" <> pid.toText <> "/log_explorer/data?json=true&query=" <> toUriStr logsQuery <> logsParams)) Nothing
             div_ [class_ "transition-opacity duration-200 mx-1 hidden lg:block", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
             div_
               [ class_ "details-panel grow-0 relative shrink-0 h-full overflow-y-auto overflow-x-hidden c-scroll lg:w-1/2 investigation-details"
