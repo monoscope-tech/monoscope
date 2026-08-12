@@ -1,6 +1,6 @@
 import { describe, test, expect, vi } from 'vitest';
 import { row, serverTransport, serverTransportFlipped, logPage, treeFromLogs, COLS, deferredTransport, stubFetch, ids, mountList } from './log-list-harness';
-import { DenseRowFlowLayout } from '../src/log-list';
+import { DenseRowFlowLayout, virtualItemKey } from '../src/log-list';
 import { shouldBufferRecent, cursorFromTimestamp } from '../src/log-list-utils';
 
 describe('LogList — LOWER', () => {
@@ -619,6 +619,35 @@ describe('LogList — concurrent refresh vs load-more', () => {
 
     // Must show ONLY query B's rows — A's older page must not be appended.
     expect(ids(el)).toEqual(['b1', 'b2']);
+  });
+
+
+  // The "N new" pill is a promise about what clicking it does. It counted every buffered
+  // EventLine — including collapsed trace children, which never become rows, and rows already
+  // merged in, which mergeIntoTree drops — so it advertised "72 new" and inserted a fraction.
+  test('the "N new" pill counts exactly the rows it inserts', async () => {
+    const el = await mountList();
+    (el as any).spanListTree = [row('onscreen')];
+    (el as any).seenIds = new Set(['onscreen']);
+    (el as any).updateVisibleItems();
+    const collapsedChild = { ...row('child'), depth: 1, show: false, traceId: 'root' };
+
+    (el as any).recentDataToBeAdded = (el as any).addWithFlipDirection([], [row('onscreen'), row('root'), collapsedChild], true);
+
+    const promised = (el as any).recentCount;
+    const before = (el as any).visibleItems.length;
+    (el as any).handleRecentConcatenation();
+
+    expect(promised).toBe(1);
+    expect((el as any).visibleItems.length - before).toBe(promised);
+  });
+
+  // A row carries a `type` of its own ('log' | 'span'), so keying on `'type' in item` would
+  // give every event the same key — the virtualizer would recycle rows onto the wrong data.
+  test('virtual rows are keyed by identity, not by list position', async () => {
+    expect(virtualItemKey(row('abc'))).toBe('abc');
+    expect(virtualItemKey({ type: 'loadMore' })).toBe('loadMore');
+    expect(virtualItemKey({ type: 'aggregateChildren', parentKey: 'k' })).toBe('aggregateChildren:k');
   });
 
   test('finishing one fetch kind does not clear another kind\'s in-flight guard', async () => {

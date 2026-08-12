@@ -1,6 +1,6 @@
 import { describe, test, expect, vi, afterEach } from 'vitest';
 import { LiveStream, tableRowToArray } from '../src/live-stream';
-import { mountList, COLS } from './log-list-harness';
+import { mountList, COLS, ids, row } from './log-list-harness';
 
 // Live mode is a server push, not a poll — polling could never beat TimeFusion's
 // write-visibility latency, since a row has to clear its ingest batch and land before any
@@ -188,6 +188,29 @@ describe('pushed Events rows', () => {
     // the row was accepted rather than dropped at the boundary.
     const after = (el as any).spanListTree.length + (el as any).recentDataToBeAdded.length;
     expect(after).toBeGreaterThan(before);
+  });
+
+  test('rows arriving while the list sits at the newest edge do not re-anchor the viewport', async () => {
+    // At the top, the row under the user's eye is the one being pushed down on purpose.
+    // Anchoring there scrolled the previous top row back into view on every tick — the list
+    // visibly bounced, and the rows just streamed in were pushed out of sight.
+    const el = await mountList();
+    (el as any).colIdxMap = COLS;
+    (el as any).isLiveStreaming = true;
+    (el as any).spanListTree = [row('already-read')];
+    (el as any).seenIds = new Set(['already-read']);
+    (el as any).updateVisibleItems();
+    Object.defineProperty(el, 'logsContainer', {
+      value: { scrollTop: 0, clientHeight: 100, scrollHeight: 1000, getBoundingClientRect: () => ({ top: 0 }), querySelectorAll: () => [] },
+    });
+    const restore = vi.spyOn(el as any, 'restoreScrollAnchor').mockResolvedValue(undefined);
+
+    (el as any).handleLiveRows([
+      { shape: 'table', cols: { id: 'live-1', trace_id: 'live-1', kind: 'log', timestamp: new Date().toISOString(), latency_breakdown: 'live-1' } },
+    ]);
+
+    expect(ids(el)).toContain('live-1');
+    expect(restore).not.toHaveBeenCalled();
   });
 
   test('ignores a row shape it does not understand', async () => {

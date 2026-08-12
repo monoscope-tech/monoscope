@@ -75,6 +75,15 @@ const noopRef: RefOrCallback = () => {};
 type VirtualListItem = EventLine | { type: 'fetchRecent' } | { type: 'loadMore' } | { type: 'aggregateChildren'; parentKey: string };
 type ScrollAnchor = { id: string; offset: number };
 
+/**
+ * Identity of a virtual row. Without it the virtualizer keys rows by index, so a live-tail
+ * batch prepended at the top re-renders every visible row's cells — the whole list repaints
+ * and re-measures on each tick instead of the existing rows simply moving down.
+ */
+// `'id' in item` and not `'type' in item`: an EventLine carries a `type` of its own ('log' | 'span').
+export const virtualItemKey = (item: VirtualListItem) =>
+  'id' in item ? item.id : item.type === 'aggregateChildren' ? `aggregateChildren:${item.parentKey}` : item.type;
+
 const MAX_RETAINED_ROWS = 5000;
 
 // FlowLayout starts at 100px until it observes rows. Log rows are 28px, so the
@@ -587,7 +596,11 @@ export class LogList extends LitElement {
     if (container && shouldBufferRecent(this.isLiveStreaming, scrollTop, scrolledToBottom, this.flipDirection)) {
       this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree, true);
     } else {
-      const anchor = container ? this.captureScrollAnchor() : null;
+      // Reaching here means the viewport is parked at the edge the rows arrive at (that is
+      // what shouldBufferRecent decided), so the row under the user's eye is the one being
+      // pushed down on purpose. Anchoring would scroll the previous top row back into view
+      // every tick — a visible bounce that also hides the rows just streamed in.
+      const anchor = container && !this.atNewRowEdge(scrollTop, scrolledToBottom) ? this.captureScrollAnchor() : null;
       this.spanListTree = this.mergeIntoTree(tree, true);
       this.updateVisibleItems();
       if (anchor) void this.restoreScrollAnchor(anchor);
@@ -1071,15 +1084,20 @@ export class LogList extends LitElement {
     return groupSpans(logs, this.colIdxMap, this.expandedTraces, this.flipDirection, this.cachedServerTraces);
   }
 
+  // Rows of a tree that the list actually renders: in tree view a collapsed trace contributes
+  // its root only. The buffer holds whole traces, so counting it raw promised a "72 new" that
+  // inserted a fraction of that many rows.
+  private renderableRows(tree: EventLine[]): EventLine[] {
+    return !this.isAggregate && (this.view === 'tree' || this.mode === 'sessions') ? tree.filter((e) => e.show) : tree;
+  }
+
+  // Count behind the "N new" pill — what clicking it will actually put on screen.
+  private get recentCount(): number {
+    return this.renderableRows(this.recentDataToBeAdded).length;
+  }
+
   private updateVisibleItems() {
-    let items: EventLine[];
-    if (this.isAggregate) {
-      items = this.spanListTree;
-    } else if (this.view === 'tree' || this.mode === 'sessions') {
-      items = this.spanListTree.filter((e) => e.show);
-    } else {
-      items = this.spanListTree;
-    }
+    const items = this.renderableRows(this.spanListTree);
     this.visibleItems = items;
 
     // Build virtual list with special items
@@ -1502,7 +1520,7 @@ export class LogList extends LitElement {
           if (shouldBufferRecent(this.isLiveStreaming, scrollTop, scrolledToBottom, this.flipDirection)) {
             this.recentDataToBeAdded = this.addWithFlipDirection(this.recentDataToBeAdded, tree, isRecentFetch);
           } else {
-            const anchor = revealRecent ? null : this.captureScrollAnchor();
+            const anchor = revealRecent || this.atNewRowEdge(scrollTop, scrolledToBottom) ? null : this.captureScrollAnchor();
             this.spanListTree = this.mergeIntoTree(tree, isRecentFetch);
             this.updateVisibleItems();
             if (anchor) void this.restoreScrollAnchor(anchor);
@@ -1696,7 +1714,10 @@ export class LogList extends LitElement {
   // Buffer accumulation ("N new" pill) is bounded too: a user can leave live
   // tail paused for hours while inspecting an older row.
   private addWithFlipDirection(current: any[], newData: any[], isRecentFetch: boolean) {
-    const merged = dedupeById(this.orderMerge(current, newData, isRecentFetch));
+    // Drop rows already on screen here rather than at merge time: mergeIntoTree filters them
+    // anyway, so buffering them only inflates the "N new" pill above what it will insert.
+    const fresh = newData.filter((r) => !this.seenIds.has(r.id));
+    const merged = dedupeById(this.orderMerge(current, fresh, isRecentFetch));
     return this.flipDirection ? merged.slice(-MAX_RETAINED_ROWS) : merged.slice(0, MAX_RETAINED_ROWS);
   }
 
@@ -1737,6 +1758,11 @@ export class LogList extends LitElement {
     if (isRecentFetch) this.hasMore = true;
     else this.hasNewer = true;
     return kept;
+  }
+
+  // At the edge new rows are inserted at — top for newest-first, bottom when flipped.
+  private atNewRowEdge(scrollTop: number, scrolledToBottom: boolean): boolean {
+    return this.flipDirection ? scrolledToBottom : scrollTop <= 0;
   }
 
   private captureScrollAnchor(): ScrollAnchor | null {
@@ -1975,14 +2001,14 @@ export class LogList extends LitElement {
               </span>
             </div>`
           : nothing}
-        ${!isAggregate && this.recentDataToBeAdded.length > 0 && !this.flipDirection
+        ${!isAggregate && this.recentCount > 0 && !this.flipDirection
           ? html` <div class="sticky top-[30px] z-50 flex justify-center" role="status" aria-live="polite">
               <button
                 class="cbadge-sm badge-neutral cursor-pointer bg-fillBrand-strong text-textInverse-strong shadow rounded-lg text-sm"
                 @pointerdown=${this.handleRecentClick}
-                aria-label="${this.recentDataToBeAdded.length} new events, click to load"
+                aria-label="${this.recentCount} new events, click to load"
               >
-                ${this.recentDataToBeAdded.length} new
+                ${this.recentCount} new
               </button>
             </div>`
           : nothing}
@@ -2045,6 +2071,7 @@ export class LogList extends LitElement {
                     this.isAggregate || this.wrapLines ? 'measured' : 'dense',
                     html`<lit-virtualizer
                       .items=${this.virtualListItems}
+                      .keyFunction=${virtualItemKey}
                       .renderItem=${this.renderVirtualItem}
                       @visibilityChanged=${this.handleVisibilityChange}
                       .layout=${this.isAggregate || this.wrapLines ? {} : { type: DenseRowFlowLayout }}
@@ -2069,17 +2096,15 @@ export class LogList extends LitElement {
                   this.handleRecentConcatenation();
                 }}
                 data-tip="Scroll to bottom"
-                aria-label=${this.recentDataToBeAdded.length > 0
-                  ? `Scroll to bottom (${this.recentDataToBeAdded.length} new events)`
-                  : 'Scroll to bottom'}
+                aria-label=${this.recentCount > 0 ? `Scroll to bottom (${this.recentCount} new events)` : 'Scroll to bottom'}
                 class=${clsx(
                   'absolute tooltip tooltip-left right-8 bottom-2 group z-50 text-textInverse-strong flex justify-center items-center rounded-full shadow-lg h-10 w-10 transition-all duration-300 hover:shadow-xl hover:scale-110',
-                  this.recentDataToBeAdded.length > 0
+                  this.recentCount > 0
                     ? 'bg-gradient-to-br from-fillBrand-strong to-fillBrand-weak animate-pulse'
                     : 'bg-gradient-to-br from-fillStrong to-fillWeak'
                 )}
               >
-                ${this.recentDataToBeAdded.length > 0
+                ${this.recentCount > 0
                   ? html`<span class="absolute inset-0 rounded-full bg-fillBrand-strong opacity-30 blur animate-ping"></span>`
                   : nothing}
                 <span class="relative">
