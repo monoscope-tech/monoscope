@@ -3264,19 +3264,21 @@ export class LogList extends LitElement {
       <div class="results-toolbar w-full flex items-center justify-end px-2 gap-3 min-w-0">
         ${serviceTimes.length
           ? html`<div class="service-time-region flex-1 min-w-0 flex items-center justify-end overflow-hidden text-xs text-textWeak">
-              <div
-                class="service-time-items flex items-center justify-end gap-4 min-w-0 overflow-hidden"
-                role="list"
-                aria-label="Time by ${dimensionLabel} across these results"
-              >
-                ${serviceTimes.slice(0, 3).map(serviceItem)}
+              <div class="service-time-items flex items-center justify-end gap-4 min-w-0 overflow-hidden">
+                <!-- The +N trigger has to stay inside .service-time-items so the <880px rule
+                     hides it along with the chips, but a role="list" may only contain its
+                     listitems. display:contents gives the list a valid subtree while leaving
+                     every chip a direct child of the same flex row. -->
+                <div style="display: contents" role="list" aria-label="Time by ${dimensionLabel} across these results">
+                  ${serviceTimes.slice(0, 3).map(serviceItem)}
+                </div>
                 ${moreServiceCount
                   ? html`<button
                       type="button"
                       class="service-time-trigger shrink-0 text-textWeak hover:text-textStrong active:text-textStrong underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-fillBrand-strong rounded-sm transition-colors duration-150 cursor-pointer "
                       popovertarget=${this.serviceTimePopoverId}
                       aria-haspopup="dialog"
-                      aria-label="Show time breakdown for ${serviceTimes.length} ${dimensionPlural}"
+                      aria-label="${moreServiceLabel} — show time breakdown for ${serviceTimes.length} ${dimensionPlural}"
                       style="anchor-name: --service-time-trigger"
                     >
                       ${moreServiceLabel}
@@ -3288,9 +3290,10 @@ export class LogList extends LitElement {
                 class="service-time-trigger service-time-summary hidden items-center shrink-0 text-textWeak hover:text-textStrong active:text-textStrong underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-fillBrand-strong rounded-sm transition-colors duration-150"
                 popovertarget=${this.serviceTimePopoverId}
                 aria-haspopup="dialog"
-                aria-label="Show time breakdown for ${serviceTimes.length} ${dimensionPlural}"
                 style="anchor-name: --service-time-trigger"
               >
+                <!-- No aria-label: the visible text is already a good name, and overriding it
+                     with different wording put the two out of sync (WCAG 2.5.3). -->
                 Time by ${dimensionLabel} · ${serviceTimes.length}
               </button>
               <div

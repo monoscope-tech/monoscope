@@ -202,11 +202,11 @@ bodyWrapper bcfg child = do
       meta_ [name_ "msapplication-TileColor", content_ "#da532c"]
       meta_ [name_ "theme-color", content_ "#ffffff"]
 
-      -- Resource hints for faster loading
-      link_ [rel_ "preconnect", href_ "https://www.gravatar.com"]
-      link_ [rel_ "preconnect", href_ "https://ui-avatars.com"]
-      link_ [rel_ "dns-prefetch", href_ "https://cdn.jsdelivr.net"]
-      link_ [rel_ "dns-prefetch", href_ "https://unpkg.com"]
+      -- Resource hints. Avatars are served from /api/avatar (same origin) and easepick's
+      -- CSS is self-hosted now, so only the origins actually contacted are listed — an
+      -- unused preconnect costs a real connection the browser then throws away.
+      when (isProd && bcfg.config.enableBrowserMonitoring)
+        $ link_ [rel_ "preconnect", href_ "https://unpkg.com"]
 
       -- Preload critical CSS
       link_ [rel_ "preload", href_ (assetUrl "/public/assets/css/tailwind.min.css"), term "as" "style"]
@@ -224,14 +224,22 @@ bodyWrapper bcfg child = do
         """
 
       let css href = link_ [rel_ "stylesheet", type_ "text/css", href_ href]
+          -- Toasts, tag inputs and the session replayer are all post-interaction UI whose
+          -- JS is itself deferred — nothing they style exists at first paint, so blocking
+          -- the render on them cost ~85ms each for no visible benefit. Fetch at normal
+          -- priority, promote to a real stylesheet on arrival.
+          deferredCss href =
+            link_ [rel_ "preload", term "as" "style", href_ href, onload_ "this.onload=null;this.rel='stylesheet'"]
           deferScript src = script_ [src_ src, defer_ "true"] ("" :: Text)
+      mapM_
+        deferredCss
+        [ assetUrl "/public/assets/css/thirdparty/notyf3.min.css"
+        , assetUrl "/public/assets/css/thirdparty/tagify.min.css"
+        , assetUrl "/public/assets/css/thirdparty/rrweb.css"
+        ]
       mapM_ css
-        $ [ assetUrl "/public/assets/css/thirdparty/notyf3.min.css"
-          , assetUrl "/public/assets/css/thirdparty/tagify.min.css"
-          ]
-        <> [assetUrl "/public/assets/deps/gridstack/gridstack.min.css" | bcfg.needsGridStack]
-        <> [ assetUrl "/public/assets/css/thirdparty/rrweb.css"
-           , assetUrl "/public/assets/css/tailwind.min.css"
+        $ [assetUrl "/public/assets/deps/gridstack/gridstack.min.css" | bcfg.needsGridStack]
+        <> [ assetUrl "/public/assets/css/tailwind.min.css"
            , assetUrl "/public/assets/web-components/dist/css/index.css"
            ]
 
@@ -589,7 +597,14 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
                 extraMatch = [term "data-match" ("/p/" <> pidTxt <> "/endpoints") | "/api_catalog" `T.isSuffixOf` mUrl]
             (if hasFlyout then div_ [class_ "relative group/flyout"] else id) do
               a_
-                ( [href_ mUrl, class_ $ "main-nav-link relative group-has-[#sidenav-toggle:checked]/pg:px-4 gap-3 py-2 flex no-wrap shrink-0 justify-center group-has-[#sidenav-toggle:checked]/pg:justify-start items-center rounded-lg overflow-x-hidden overflow-y-hidden hover:bg-fillWeak hover:text-textStrong transition-colors duration-100" <> activeCls]
+                ( -- The visible label is display:none while the rail is collapsed, which
+                  -- takes it out of the accessibility tree too — without this the whole
+                  -- sidenav is a column of unnamed links. Same string, so it never
+                  -- disagrees with the label shown when expanded.
+                  [ href_ mUrl
+                  , Aria.label_ mTitle
+                  , class_ $ "main-nav-link relative group-has-[#sidenav-toggle:checked]/pg:px-4 gap-3 py-2 flex no-wrap shrink-0 justify-center group-has-[#sidenav-toggle:checked]/pg:justify-start items-center rounded-lg overflow-x-hidden overflow-y-hidden hover:bg-fillWeak hover:text-textStrong transition-colors duration-100" <> activeCls
+                  ]
                     <> extraMatch
                     <> if hasFlyout then [] else tippyRight_ mTitle <> navTabAttrs
                 )
@@ -610,6 +625,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
       a_
         ( [ href_ "https://monoscope.tech/docs/"
           , target_ "blank"
+          , Aria.label_ "Docs"
           , class_ "main-nav-link relative group-has-[#sidenav-toggle:checked]/pg:px-4 gap-3 py-2 flex no-wrap shrink-0 justify-center group-has-[#sidenav-toggle:checked]/pg:justify-start items-center rounded-lg overflow-x-hidden overflow-y-hidden hover:bg-fillWeak hover:text-textStrong transition-colors duration-100"
           ]
             <> tippyRight_ "Docs"

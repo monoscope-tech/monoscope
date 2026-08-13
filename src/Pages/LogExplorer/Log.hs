@@ -530,7 +530,9 @@ renderFacets facetSummary = do
               (visibleValues, hiddenValues) = splitAt 5 values
               hiddenCount = length hiddenValues
               renderFacetValue (FacetValue val count) =
-                label_ [class_ "facet-item flex items-center justify-between py-0.5 max-md:py-1.5 px-1 hover:bg-fillWeak rounded cursor-pointer will-change-[background-color]"] do
+                -- py-1, not py-0.5: with a 16px checkbox the tighter padding made the row a
+                -- 20px pointer target, under the 24px WCAG 2.5.8 minimum.
+                label_ [class_ "facet-item flex items-center justify-between py-1 max-md:py-1.5 px-1 hover:bg-fillWeak rounded cursor-pointer will-change-[background-color]"] do
                   div_ [class_ "flex items-center gap-2 min-w-0 flex-1"] do
                     input_
                       [ type_ "checkbox"

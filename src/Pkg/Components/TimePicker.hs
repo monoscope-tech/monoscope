@@ -17,6 +17,7 @@ import Lucid.Aria qualified as Aria
 import Lucid.Base (termRaw)
 import Lucid.Hyperscript (__)
 import NeatInterpolation (text)
+import Pkg.DeriveUtils (assetUrl)
 import Relude hiding (some)
 import Text.Megaparsec (Parsec, parse, some)
 import Text.Megaparsec.Char (letterChar, space)
@@ -179,6 +180,9 @@ timepicker_ submitForm currentRange targetIdM = do
 
         -- updateTimePicker already set the params; the formless case just reloads
         let submitAction = submitVia "window.setParams({}, true)"
+            -- Self-hosted: easepick injects this into the picker's shadow root, so a
+            -- jsdelivr blip left the date picker unstyled on an otherwise-working page.
+            easepickCss = assetUrl "/public/assets/css/thirdparty/easepick.min.css"
         script_
           [text|
       (function() {
@@ -200,7 +204,7 @@ timepicker_ submitForm currentRange targetIdM = do
           if (window["$targetPr-picker"]) return;
           window["$targetPr-picker"] = new easepick.create({
             element: '#$targetPr-startTime',
-            css: ['https://cdn.jsdelivr.net/npm/@easepick/bundle@1.2.0/dist/index.css'],
+            css: ['${easepickCss}'],
             inline: true,
             plugins: ['RangePlugin', 'TimePlugin'],
             autoApply: false,

@@ -776,6 +776,10 @@ renderChart widget = do
                 widgetUnit = maybeToMonoid widget.unit
                 alertThresholdJS = maybe "null" show widget.alertThreshold
                 warningThresholdJS = maybe "null" show widget.warningThreshold
+                -- Mirrors chartWidget's `!opt.dataset.source` test: a widget with eager
+                -- server data never calls /chart_data, so prefetching one would be a
+                -- wasted request. See prefetchChartData in web-components/src/widgets.ts.
+                willFetchJS = if maybe True ((== AE.Null) . (.source)) widget.dataset then "true" else "false" :: Text
             script_
               [type_ "text/javascript"]
               [text|
@@ -800,6 +804,11 @@ renderChart widget = do
                   alertThreshold: ${alertThresholdJS},
                   warningThreshold: ${warningThresholdJS}
                 };
+
+                // Start the data request during HTML parse rather than after echarts,
+                // the stagger queue and chart construction (~2.2s later on the log
+                // explorer). widgets.ts drains this and swaps in a live prefetcher.
+                if (${willFetchJS}) (window.__chartPrefetch = window.__chartPrefetch || []).push(config);
 
                 function parseAndInit() {
                   const echartOpt = JSON.parse(config.echartOpt, (key, value) => {

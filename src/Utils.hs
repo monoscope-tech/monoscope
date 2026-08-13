@@ -275,8 +275,11 @@ fieldContextMenuItems_ ctx = traverse_ \case
     -- (min-w-0) and truncates instead of widening the menu / scrolling it.
     -- @tip@ (full key/value) becomes a native `title` tooltip so the truncated text
     -- is recoverable on hover.
+    -- button, not a href-less <a>: these are actions, and an anchor without href is
+    -- neither focusable nor Enter-activatable, so the whole field menu was
+    -- mouse-only. type=button because the log explorer menu lives inside a form.
     menuItem_ icon labelHtml tip action =
-      li_ $ a_ ([class_ "flex gap-2 items-center flex-nowrap w-full", action] <> [term "title" tip | not (T.null tip)]) do
+      li_ $ button_ ([type_ "button", class_ "flex gap-2 items-center flex-nowrap w-full", action] <> [term "title" tip | not (T.null tip)]) do
         faSprite_ icon "regular" "w-4 h-4 text-iconNeutral shrink-0"
         span_ [class_ "truncate min-w-0"] labelHtml
 

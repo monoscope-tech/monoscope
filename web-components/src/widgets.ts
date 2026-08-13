@@ -332,10 +332,78 @@ const setStatValue = (widgetData: WidGetData, stats: any, from?: number, to?: nu
   value.classList.remove('hidden');
 };
 
+// The /chart_data URL for a widget. Shared by the initial prefetch and every later
+// refetch, so the two can't drift — the prefetch is only honoured when the URL it was
+// issued against still matches (see takePrefetched).
+const chartDataUrl = ({ query, querySQL, pid }: WidGetData): string => {
+  const params = new URLSearchParams(window.location.search);
+  params.set('pid', pid);
+
+  // Add dashboard constants (from data-constants attribute)
+  const constants = (window as any).getDashboardConstants?.() || {};
+  Object.entries(constants).forEach(([key, value]) => {
+    if (!params.has(key)) params.set(key, value as string);
+  });
+
+  // Default query to use when no query is provided
+  const DEFAULT_QUERY = 'summarize count(*) by bin_auto(timestamp)';
+
+  if (!query || query === 'null' || query === '') {
+    params.set('query', DEFAULT_QUERY);
+  } else {
+    // Only append the default summarization when the query doesn't already bin —
+    // otherwise preserve it exactly, so grouping by fields like 'kind' keeps working.
+    const hasSummarize = /summarize\s+/i.test(query);
+    const hasBinning = /\s+by\s+bin/i.test(query) || /\s+by\s+.*\(.*\)/i.test(query);
+    params.set('query', !hasSummarize || !hasBinning ? query + ' | ' + DEFAULT_QUERY : query);
+  }
+
+  if (querySQL && querySQL !== 'null') params.set('query_sql', querySQL);
+
+  return `/chart_data?${params}`;
+};
+
+// A widget's first request used to wait on echarts loading, the stagger queue, chart
+// construction and an IntersectionObserver — on the log explorer that put it ~2.8s into
+// the page. Nothing about the request depends on any of that, so it starts as soon as this
+// module evaluates and the chart picks up the in-flight promise when it's ready.
+const chartDataPrefetch = new Map<string, { url: string; response: Promise<any> }>();
+
+const prefetchChartData = (widgetData: WidGetData) => {
+  const { chartId } = widgetData;
+  if (!chartId || chartDataPrefetch.has(chartId)) return;
+  // Same viewport gate as queueChartInit. Off-screen widgets deliberately don't fetch
+  // until scrolled to, so prefetching every one would turn a 40-widget dashboard into
+  // 40 requests on load. Absent element (not yet in the DOM) counts as near.
+  const el = $(chartId);
+  if (el && !isNearChartViewport(el.getBoundingClientRect(), window.innerHeight)) return;
+  const url = chartDataUrl(widgetData);
+  // A failed prefetch resolves to null so the consumer falls back to a live fetch and
+  // surfaces the real error, rather than inheriting a rejection nobody is awaiting yet.
+  const response = limitedFetch(url)
+    .then(res => res.json())
+    .catch(() => null);
+  chartDataPrefetch.set(chartId, { url, response });
+};
+
+// Single-use, and only for the URL it was issued against: if the query changed between
+// prefetch and first render, the stale body must not be adopted.
+const takePrefetched = async (chartId: string, url: string): Promise<any> => {
+  const entry = chartDataPrefetch.get(chartId);
+  if (!entry) return null;
+  chartDataPrefetch.delete(chartId);
+  return entry.url === url ? await entry.response : null;
+};
+
+// Widget.hs pushes configs during HTML parse. Flush whatever landed before this module
+// evaluated, then keep prefetching on push so htmx-swapped widgets get the same head start.
+((window as any).__chartPrefetch as WidGetData[] | undefined)?.forEach(prefetchChartData);
+(window as any).__chartPrefetch = { push: prefetchChartData };
+
 const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widgetData: WidGetData) => {
   if (!shouldFetch) return;
 
-  const { query, querySQL, pid, chartId } = widgetData;
+  const { chartId } = widgetData;
   const isStale = beginChartFetch(chartId);
   // Batch DOM updates before fetch
   requestAnimationFrame(() => {
@@ -347,42 +415,9 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
   });
 
   try {
-    const params = new URLSearchParams(window.location.search);
-    params.set('pid', pid);
-
-    // Add dashboard constants (from data-constants attribute)
-    const constants = (window as any).getDashboardConstants?.() || {};
-    Object.entries(constants).forEach(([key, value]) => {
-      if (!params.has(key)) params.set(key, value as string);
-    });
-
-    // Default query to use when no query is provided
-    const DEFAULT_QUERY = 'summarize count(*) by bin_auto(timestamp)';
-
-    // Handle query parameter
-    if (!query || query === 'null' || query === '') {
-      // If query is empty or null, use the default query
-      params.set('query', DEFAULT_QUERY);
-    } else {
-      // Check if query contains any summarize clause with binning
-      const hasSummarize = /summarize\s+/i.test(query);
-      const hasBinning = /\s+by\s+bin/i.test(query) || /\s+by\s+.*\(.*\)/i.test(query);
-
-      // If no summarize clause or no binning in the query, add default summarization
-      if (!hasSummarize || !hasBinning) {
-        params.set('query', query + ' | ' + DEFAULT_QUERY);
-      } else {
-        // Ensure we preserve the original query exactly as written
-        // This ensures grouping by fields like 'kind' works correctly
-        params.set('query', query);
-      }
-    }
-
-    if (querySQL && querySQL !== 'null') {
-      params.set('query_sql', querySQL);
-    }
-
-    const { from, to, headers, dataset, rows_per_min, stats, error } = await limitedFetch(`/chart_data?${params}`).then((res) => res.json());
+    const url = chartDataUrl(widgetData);
+    const { from, to, headers, dataset, rows_per_min, stats, error } =
+      (await takePrefetched(chartId, url)) ?? (await limitedFetch(url).then((res) => res.json()));
     if (isStale()) return; // a newer fetch already won; don't overwrite its state
     if (error) {
       // Server-reported SQL failure: the error banner, not the "no data" overlay,

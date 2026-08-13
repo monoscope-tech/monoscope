@@ -498,7 +498,14 @@ export const verdictToError = (v: Verdict): QueryError | null =>
 
 @customElement('query-editor')
 export class QueryEditorComponent extends LitElement {
-  protected createRenderRoot = () => this;
+  // Light DOM, so the markup picks up the page's Tailwind classes. Lit *appends* its
+  // parts to the render root instead of clearing it, so the server-rendered skeleton
+  // (queryEditorSkeleton_ in LogQueryBox.hs, shown while Monaco loads on idle) has to be
+  // dropped here — otherwise it stays on screen beside the real editor.
+  protected createRenderRoot = () => {
+    this.replaceChildren();
+    return this;
+  };
 
   @query('#editor-container') private _editorContainer!: HTMLElement;
   @query('.placeholder-overlay') private _placeholderElement!: HTMLElement;
@@ -529,6 +536,12 @@ export class QueryEditorComponent extends LitElement {
     this.adjustEditorHeight();
     this.refreshLayoutThrottled();
   };
+  // Called by the deferred loader in index.ts once Monaco lands, so a click that
+  // arrived while the module was still in flight still ends with a focused editor.
+  focusEditor(): void {
+    void this.updateComplete.then(() => this.editor?.focus());
+  }
+
   private keydownHandler = (e: KeyboardEvent) => {
     if (e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey) {
       const target = e.target as HTMLElement;

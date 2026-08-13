@@ -54,9 +54,15 @@
     <script type="module" src="/src/index.ts"></script>
     <script type="module">
       document.addEventListener('DOMContentLoaded', async () => {
-        const { initializeDefaultSchema } = await import('/src/query-editor/query-editor-config.ts');
-        // Get a reference to the editor component
+        // Vite bundles this inline script into the production entry chunk, so it runs on every
+        // app page too. Bail before importing anything when the harness editor is absent: the
+        // import below reaches query-editor.ts and used to pull all ~1MB of Monaco at
+        // DOMContentLoaded, defeating the deferred load in src/index.ts. The app calls
+        // initializeDefaultSchema() from that deferred path instead.
         const editor = document.getElementById('kusto-editor');
+        if (!editor) return;
+
+        const { initializeDefaultSchema } = await import('/src/query-editor/query-editor-config.ts');
 
         // Wait for the component to be fully initialized
         setTimeout(() => {

@@ -83,18 +83,28 @@ logQueryBox_ config = do
             $ [ class_ "hidden ai-search"
               , type_ "checkbox"
               , id_ "ai-search-chkbox"
-              , [__|on change if me.checked then call #ai-search-input.focus() end
-                  on keydown[key=='Space' and shiftKey] from document set my.checked to true
+              , -- Every path that opens or collapses AI search routes through `change`, so
+                -- the preference below is written once here instead of at four call sites.
+                [__|on change
+                    call localStorage.setItem('aiSearchExpanded', my.checked)
+                    if me.checked then call #ai-search-input.focus() end
+                  on keydown[key=='Space' and shiftKey] from document set my.checked to true then send change to me
                   on keydown[key=='?' and not ctrlKey and not metaKey and not altKey] from document
                     if event.target.tagName is not 'INPUT' and event.target.tagName is not 'TEXTAREA' and event.target.contentEditable is not 'true'
                       set my.checked to true
                       set #ai-search-input.value to ''
-                      call #ai-search-input.focus()
+                      send change to me
                       halt
                     end
                   |]
               ]
             <> [checked_ | isJust config.targetWidgetPreview || noActiveQuery]
+          -- Whether AI search or the KQL bar leads is a per-user preference, so it lives in
+          -- localStorage and overrides the `noActiveQuery` default above. Applied by a
+          -- synchronous script rather than a hyperscript `init` so the AI panel never flashes
+          -- open before _hyperscript loads. Widget preview always forces AI, so it opts out.
+          whenNothing_ config.targetWidgetPreview
+            $ script_ "{const p=localStorage.getItem('aiSearchExpanded'),c=document.getElementById('ai-search-chkbox');if(p!==null&&c)c.checked=p==='true';}"
           div_ [class_ "w-full gap-2 items-center px-2 hidden group-has-[.ai-search:checked]/fltr:flex"] do
             span_ [class_ "text-2xs font-semibold text-textBrand bg-fillBrand-weak px-1.5 py-0.5 rounded shrink-0"] "AI"
             input_
@@ -116,7 +126,7 @@ logQueryBox_ config = do
               , -- The response fans out to three JS subsystems (time picker, query editor,
                 -- viz tabs), so the routing lives in one named function beside them rather
                 -- than as a branch tree here — see window.applyAiSearchResult.
-                [__|on keydown[key=='Escape'] set #ai-search-chkbox.checked to false
+                [__|on keydown[key=='Escape'] set #ai-search-chkbox.checked to false then send change to #ai-search-chkbox
                    on keydown[key=='Enter']
                      if my.value.trim().length > 0
                        then halt then trigger htmx:trigger
@@ -148,7 +158,7 @@ logQueryBox_ config = do
               span_ [id_ "query-parse-error-msg"] $ toHtml $ fromMaybe "" config.parseError
           div_ [class_ "w-full flex flex-1 gap-2 justify-between items-stretch min-w-0 max-md:flex-wrap"] do
             div_ [id_ "queryBuilder", class_ "w-full flex-1 flex items-center min-w-0 min-h-[38px]"]
-              $ termRaw
+              $ term
                 "query-editor"
                 ( [id_ "filterElement", class_ "w-full flex items-center min-h-[38px]", term "default-value" (fromMaybe "" config.query), term "project-id" config.pid.toText]
                     -- The editor validates against the server, which needs the same source the
@@ -158,7 +168,7 @@ logQueryBox_ config = do
                     <> maybeToList (term "target-widget-preview" <$> config.targetWidgetPreview)
                     <> [term "widget-editor" "true" | isJust config.targetWidgetPreview]
                 )
-                ("" :: Text)
+                (queryEditorSkeleton_ config.query)
 
             whenNothing_ config.targetWidgetPreview $ do
               div_ [class_ "gap-[2px] flex items-center max-md:hidden"] do
@@ -315,6 +325,30 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
         -- Emojis only in widget mode, not in the log explorer
         when (isJust widgetContainerId) $ span_ [class_ "text-iconNeutral leading-none"] $ toHtml emoji
         span_ $ toHtml label
+
+
+-- | Static stand-in rendered as a child of @\<query-editor\>@. Monaco is loaded on idle
+-- rather than during first paint (see @deferredComponents@ in web-components/src/index.ts),
+-- and the element is empty until then — without this the search bar is a blank gap for the
+-- first second of every page load. Mirrors the component's own render() shell so the upgrade
+-- is not a visible jump; Lit clears these children on first render (the component renders
+-- into its light DOM), so nothing here needs to be interactive.
+queryEditorSkeleton_ :: Maybe Text -> Html ()
+queryEditorSkeleton_ query =
+  div_ [class_ "relative w-full h-full pl-2 flex border rounded-md border-strokeStrong"] do
+    div_ [class_ "relative overflow-x-hidden w-full flex-1"]
+      $ div_ [class_ "w-full text-sm leading-[18px] pt-2 truncate font-mono"]
+      $ case query of
+        Just q | not (T.null q) -> toHtml q
+        -- No opacity dimming on top of the token: at 14px that lands under the contrast
+        -- floor in dark mode, and this is a stand-in nobody should have to squint at.
+        _ -> span_ [class_ "text-textWeak"] "level == \"ERROR\""
+    div_ [class_ "p-1"]
+      -- Same group-has variant as the real pill, or the skeleton shows an AI-search
+      -- button for the pre-upgrade moment on a page loaded with AI search already on.
+      $ span_ [class_ "px-3 py-0.5 h-full inline-flex gap-2 items-center border border-strokeBrand-strong text-textBrand rounded-sm group-has-[.ai-search:checked]/fltr:hidden"] do
+        faSprite_ "sparkles" "regular" "inline-block icon h-4 w-4 text-iconBrand"
+        "AI search"
 
 
 -- | Shared dropdown content for the query library (Popular + Saved + Recent tabs)
@@ -481,7 +515,9 @@ popularSearchChips_ queryLibSaved queryLibRecent showChips =
           forM_ (take 3 popularQueries) \(q, l, _) ->
             button_
               [ type_ "button"
-              , class_ "px-2 py-0.5 rounded-md bg-fillWeaker border border-strokeWeak hover:border-strokeBrand-weak hover:bg-fillBrand-weak text-textWeak hover:text-textBrand cursor-pointer transition-colors"
+              , -- py-1, not py-0.5: these chips were 22px tall, under the 24px WCAG 2.5.8
+                -- minimum pointer target.
+                class_ "px-2 py-1 rounded-md bg-fillWeaker border border-strokeWeak hover:border-strokeBrand-weak hover:bg-fillBrand-weak text-textWeak hover:text-textBrand cursor-pointer transition-colors"
               , onclick_ $ applyQueryJS q
               ]
               $ toHtml l
