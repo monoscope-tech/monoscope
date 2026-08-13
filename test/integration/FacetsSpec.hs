@@ -70,11 +70,12 @@ clearAll tr pids = withPool tr.trPool $ do
   exec [sql| DELETE FROM apis.schema_catalog WHERE project_id = ANY(?::uuid[]) |] (Only arr)
   exec [sql| DELETE FROM apis.schema_summary WHERE project_id = ANY(?::uuid[]) |] (Only arr)
   exec [sql| DELETE FROM apis.anomalies WHERE project_id = ANY(?::uuid[]) |] (Only arr)
-  -- Template cleanup is intentionally omitted here: deleting orphan
-  -- templates would race with other specs whose catalog rows still
-  -- reference them. The dead-template GC is a daily job in production
-  -- and isn't load-bearing for these tests.
 
+
+-- Template cleanup is intentionally omitted here: deleting orphan
+-- templates would race with other specs whose catalog rows still
+-- reference them. The dead-template GC is a daily job in production
+-- and isn't load-bearing for these tests.
 
 -- | Build a realistic 'OtelLogsAndSpans' row. Callers override attributes,
 -- resource, and top-level columns; everything else is a sensible default.
@@ -188,8 +189,9 @@ seedSummary tr p = do
 
 
 spec :: Spec
-spec = around withTestResources $
-  describe "Facets" $ do
+spec = around withTestResources
+  $ describe "Facets"
+  $ do
     describe "Layer B — handler-shape contract" $ do
       it "getFacetSummary surfaces dotted keys with section prefixes" $ \tr -> do
         clearAll tr [pid]
@@ -348,3 +350,18 @@ spec = around withTestResources $
           (\f -> S.member f.path PE.flattenedOtelAttributes || S.member f.path PE.topLevelOtelColumns)
           LogPage.facetDefs
           `shouldBe` True
+
+      it "renders More and Less as peer-controlled label states" $ \_ -> do
+        let values = [Catalog.FacetValue ("service-" <> show n) 1 | n <- [1 .. 6 :: Int]]
+            summary =
+              Catalog.FacetSummary
+                { id = UUID.nil
+                , projectId = pid.toText
+                , tableName = "otel_logs_and_spans"
+                , facetJson = Catalog.FacetData $ HM.singleton "resource.service.name" values
+                }
+            html = toText $ renderText (LogPage.renderFacets summary)
+        T.isInfixOf "peer-checked/more:[&amp;_.more-label]:hidden" html `shouldBe` True
+        T.isInfixOf "peer-checked/more:[&amp;_.less-label]:inline" html `shouldBe` True
+        T.isInfixOf "<span class=\"more-label\">+ More (1)</span>" html `shouldBe` True
+        T.isInfixOf "<span class=\"less-label hidden\">- Less (1)</span>" html `shouldBe` True

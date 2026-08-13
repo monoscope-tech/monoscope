@@ -566,9 +566,9 @@ renderFacets facetSummary = do
                 else forM_ visibleValues renderFacetValue
               when (hiddenCount > 0) do
                 input_ [type_ "checkbox", class_ "hidden peer/more", id_ $ "more-" <> f.path]
-                label_ [class_ "text-textBrand text-xs px-1 py-0.5 cursor-pointer hover:underline", Lucid.for_ $ "more-" <> f.path] do
-                  span_ [class_ "peer-checked/more:hidden"] $ toHtml $ "+ More (" <> prettyPrintCount hiddenCount <> ")"
-                  span_ [class_ "hidden peer-checked/more:inline"] $ toHtml $ "- Less (" <> prettyPrintCount hiddenCount <> ")"
+                label_ [class_ "text-textBrand text-xs px-1 py-0.5 cursor-pointer hover:underline peer-checked/more:[&_.more-label]:hidden peer-checked/more:[&_.less-label]:inline", Lucid.for_ $ "more-" <> f.path] do
+                  span_ [class_ "more-label"] $ toHtml $ "+ More (" <> prettyPrintCount hiddenCount <> ")"
+                  span_ [class_ "less-label hidden"] $ toHtml $ "- Less (" <> prettyPrintCount hiddenCount <> ")"
                 div_ [class_ "hidden peer-checked/more:block space-y-1"] $ forM_ hiddenValues renderFacetValue
 
 
