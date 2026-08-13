@@ -224,7 +224,7 @@ discordInteractionsH rawBody signatureM timestampM = do
             . either (\err -> AE.object ["content" AE..= err]) (\(report, eventsUrl, errorsUrl) -> formatReportForDiscord report discordData.projectId envCfg eventsUrl errorsUrl)
         GeneralQueryIntent -> case interaction.channel of
           Just DiscordThreadChannel{type_ = 11, id = threadId} -> do
-            let convId = Issues.discordThreadToConversationId threadId
+            let convId = Issues.textToConversationId threadId
             _ <- Issues.getOrCreateConversation discordData.projectId convId Issues.CTDiscordThread (AE.object ["channel_id" AE..= interaction.channel_id, "guild_id" AE..= interaction.guild_id])
             existingHistory <- Issues.selectChatHistory convId
             -- Advisory lock: only one interaction seeds the thread's history.

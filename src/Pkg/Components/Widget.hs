@@ -1096,7 +1096,7 @@ renderTableWithDataAndParams widget dataRows params = do
           let firstColValue = memptyIfFalse (not $ null columns) (getRowValue 0 row)
               rowValue = maybe firstColValue (T.replace "{{row.resource_name}}" firstColValue) (widget.onRowClick >>= (.value))
           tr_
-            [ class_ $ "hover cursor-pointer" <> memptyIfFalse (Just rowValue == currentVar) " bg-fillBrand/20 border-l-4 border-borderBrand"
+            [ class_ $ "hover cursor-pointer" <> memptyIfFalse (Just rowValue == currentVar) " bg-fillBrand/20 border-l-4 border-strokeBrand-strong"
             , data_ "row" $ encodeText $ AE.object [(K.fromText col.field, AE.String $ getRowValue idx row) | (col, idx) <- zip columns [0 ..]]
             ]
             $ ifor_ columns \idx col ->

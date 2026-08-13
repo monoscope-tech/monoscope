@@ -17,7 +17,7 @@ import Pkg.Parser (dateRange, defSqlQueryCfg, parseQueryToAST)
 import Pkg.QueryCache qualified as QC
 import Pkg.TestUtils
 import Relude
-import Test.Hspec (Spec, around, describe, it, shouldBe, shouldReturn, shouldSatisfy)
+import Test.Hspec (Spec, around, describe, it, pendingWith, shouldBe, shouldReturn, shouldSatisfy)
 import Text.Read (read)
 
 
@@ -72,6 +72,30 @@ seedCache tr q (t0, t1, t2) = do
       seed = def{Charts.dataset = V.singleton (V.fromList [Just seedTs, Just 5]), Charts.headers = V.fromList ["timestamp", "count"], Charts.rowsCount = 1}
   runQueryEffect tr $ QC.updateCache key (t0, t1) seed q
   pure key
+
+
+-- | Why the three backend-failure guards are disabled.
+--
+-- They need a query that parses but fails in the database. @totally_made_up_column@
+-- was exactly that until field validation landed (e7ad369): unknown fields are now
+-- rejected at parse time, so the query never reaches the backend and 'seedCache'
+-- dies in 'parseQueryToAST'. @summarize avg(name)@ was tried as a replacement and
+-- succeeds, with and without rows in range.
+--
+-- They are marked pending rather than rewritten against the parse-time path,
+-- because they guard a real incident — a failed delta advancing @cached_to@ past
+-- data that was never fetched, leaving a permanent hole — and a green test that
+-- exercises a different path would hide that. The likely route back is the
+-- raw-SQL override (5th argument of 'Charts.queryMetrics'), which reaches the
+-- backend without the parser; the work is making 'QC.generateCacheKey' agree
+-- between the seed and the read.
+noBackendFailureFixture :: String
+noBackendFailureFixture = "no fixture reaches the backend: unknown fields are rejected at parse time (see note in QueryCacheSpec)"
+
+
+-- | Rejected by the parser before any SQL is built.
+unparseableQuery :: Text
+unparseableQuery = "totally_made_up_column == \"x\" | summarize count(*) by bin_auto(timestamp)"
 
 
 -- Compare two MetricsData for equivalence including stats
@@ -174,13 +198,14 @@ spec = around withTestResources do
   -- legitimately empty time range. The response must now carry an explicit
   -- `error` field, and the request must not crash the page.
   describe "Widget SQL failures" do
-    it "non-existent column surfaces a sanitized error instead of empty data" $ \tr -> do
+    it "an unknown field surfaces the parser's message instead of empty data" $ \tr -> do
       clearAllTestData tr
-      -- Reference a column that does not exist on otel_logs_and_spans.
-      let q = "totally_made_up_column == \"x\" | summarize count(*) by bin_auto(timestamp)"
-      result <- queryMetrics tr q (timeAt (-1800)) (timeAt 1800)
-      result.error `shouldBe` Just "Column not found"
+      result <- queryMetrics tr unparseableQuery (timeAt (-1800)) (timeAt 1800)
+      result.error `shouldBe` Just "Unknown field \"totally_made_up_column\""
       V.length result.dataset `shouldBe` 0
+
+    it "a backend SQL failure surfaces a sanitized error instead of empty data" $ \_ ->
+      pendingWith noBackendFailureFixture
 
   -- Regression: a partial-hit delta fetch that fails (timeout / TF planning
   -- error / dropped conn) used to still advance `cached_to` to the requested
@@ -189,26 +214,11 @@ spec = around withTestResources do
   -- wider ranges (a separate bin_interval cache entry) looked fine. The
   -- watermark must never advance past data we actually fetched.
   describe "partial-hit watermark" do
-    it "does not advance cached_to when the delta fetch errors" $ \tr -> do
-      clearAllTestData tr
-      -- Seed covers [t0, t1]; the bad-column query makes the delta over (t1, t2] error.
-      let q = "totally_made_up_column == \"x\" | summarize count(*) by bin_auto(timestamp)"
-          times@(_, t1, _) = (addUTCTime (-1800) baseTime, baseTime, addUTCTime 1800 baseTime)
-      key <- seedCache tr q times
-      result <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just q) Nothing Nothing (Just (timeAt (-1800))) (Just (timeAt 1800)) Nothing []
-      -- A failed delta serves the (stale) cached rows rather than dropping them...
-      V.length result.dataset `shouldBe` 1
-      -- ...and must NOT advance the watermark, so the gap is retried next refresh.
-      cachedToFor tr key `shouldReturn` Just t1
+    it "does not advance cached_to when the delta fetch errors" $ \_ ->
+      pendingWith noBackendFailureFixture
 
-    it "does not populate cache when a cache-miss fetch errors" $ \tr -> do
-      clearAllTestData tr
-      let q = "totally_made_up_column == \"x\" | summarize count(*) by bin_auto(timestamp)"
-      sections <- either (fail . toString) pure (parseQueryToAST q)
-      let cfg = (defSqlQueryCfg pid baseTime Nothing Nothing){dateRange = (Just (addUTCTime (-1800) baseTime), Just (addUTCTime 1800 baseTime))}
-          key = QC.generateCacheKey pid Nothing sections cfg
-      _ <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just q) Nothing Nothing (Just (timeAt (-1800))) (Just (timeAt 1800)) Nothing []
-      cachedToFor tr key `shouldReturn` Nothing
+    it "does not populate cache when a cache-miss fetch errors" $ \_ ->
+      pendingWith noBackendFailureFixture
 
     -- Counterpart to the guard above: a delta that *succeeds* but legitimately
     -- returns no rows is not a failure, so the watermark must still advance.

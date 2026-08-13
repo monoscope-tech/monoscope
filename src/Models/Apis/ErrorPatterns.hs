@@ -13,7 +13,7 @@ module Models.Apis.ErrorPatterns (
   updateErrorPatternState,
   getErrorPatternLByHash,
   bulkCalculateAndUpdateBaselines,
-  resolveErrorPattern,
+  UpsertOutcome (..),
   batchUpsertErrorPatterns,
   upsertErrorPatternHourlyStats,
   updateErrorPatternSubscription,
@@ -26,15 +26,6 @@ module Models.Apis.ErrorPatterns (
   ErrorPatternWithCurrentRate (..),
   getErrorPatternsWithCurrentRates,
   findCanonicalMatch,
-  -- Error Fingerprinting (re-exported from Pkg.ErrorFingerprint)
-  EF.StackFrame (..),
-  EF.ErrorHashes (..),
-  EF.parseStackTrace,
-  EF.normalizeStackTrace,
-  EF.normalizeMessage,
-  EF.computeErrorFingerprint,
-  EF.computeErrorHashes,
-  EF.isFrameworkTransportError,
 )
 where
 
@@ -55,8 +46,7 @@ import Effectful (Eff)
 import Hasql.Interpolate qualified as HI
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (BaselineState (..), DB, WrappedEnumSC (..))
-import Pkg.ErrorFingerprint qualified as EF
+import Pkg.DeriveUtils (BaselineState (..), DB, WrappedEnumSC (..), selectFrom)
 import Relude hiding (id)
 import Utils (truncateHour)
 
@@ -136,7 +126,7 @@ data ErrorPattern = ErrorPattern
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake ErrorPattern
 
 
--- error pattern aggregated with number of occurrences and affected users
+-- | Error pattern aggregated with number of occurrences and affected users.
 data ErrorPatternL = ErrorPatternL
   { base :: ErrorPattern
   , occurrences :: Int
@@ -188,23 +178,27 @@ data ATError = ATError
 -- | Get error patterns for a project with optional state filter (excludes merged patterns)
 getErrorPatterns :: DB es => Projects.ProjectId -> Maybe ErrorState -> Int -> Int -> Eff es [ErrorPattern]
 getErrorPatterns pid mstate limit offset =
-  Hasql.interp [HI.sql| SELECT * FROM apis.error_patterns WHERE project_id = #{pid} AND (#{mstate} IS NULL OR state = #{mstate}) AND canonical_id IS NULL ORDER BY updated_at DESC LIMIT #{limit} OFFSET #{offset} |]
+  Hasql.interp (selectFrom @ErrorPattern <> [HI.sql| WHERE project_id = #{pid} AND (#{mstate} IS NULL OR state = #{mstate}) AND canonical_id IS NULL ORDER BY updated_at DESC LIMIT #{limit} OFFSET #{offset} |])
 
 
 getErrorPatternById :: DB es => ErrorPatternId -> Eff es (Maybe ErrorPattern)
-getErrorPatternById eid = Hasql.interpOne [HI.sql| SELECT * FROM apis.error_patterns WHERE id = #{eid} |]
+getErrorPatternById eid = Hasql.interpOne (selectFrom @ErrorPattern <> [HI.sql| WHERE id = #{eid} |])
 
 
 getErrorPatternByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe ErrorPattern)
-getErrorPatternByHash pid eHash = Hasql.interpOne [HI.sql| SELECT * FROM apis.error_patterns WHERE project_id = #{pid} AND hash = #{eHash} |]
+getErrorPatternByHash pid eHash = Hasql.interpOne (selectFrom @ErrorPattern <> [HI.sql| WHERE project_id = #{pid} AND hash = #{eHash} |])
 
 
 getErrorPatternLByHash :: DB es => Projects.ProjectId -> Text -> UTCTime -> Eff es (Maybe ErrorPatternL)
 getErrorPatternLByHash pid eHash now =
+  -- @e@ is the entity's explicit column list, not the table: @e.*@ then expands to exactly
+  -- ErrorPattern's fields, so an ADD COLUMN can't shift the aggregates out of their slots.
   Hasql.interpOne
-    [HI.sql|
+    $ [HI.sql|
     SELECT e.*, COALESCE(ev.occurrences, 0)::BIGINT, COALESCE(ev.user_count, 0)::BIGINT, ev.last_occurred_at
-    FROM apis.error_patterns e LEFT JOIN LATERAL (
+    FROM (|]
+    <> selectFrom @ErrorPattern
+    <> [HI.sql|) e LEFT JOIN LATERAL (
       SELECT SUM(event_count) AS occurrences, SUM(user_count) AS user_count, MAX(hour_bucket) AS last_occurred_at
       FROM apis.error_hourly_stats WHERE project_id = e.project_id AND error_id = e.id AND hour_bucket >= #{now}::timestamptz - INTERVAL '30 days'
     ) ev ON true WHERE e.project_id = #{pid} AND e.hash = #{eHash} |]
@@ -271,14 +265,17 @@ updateOccurrenceCountsBatch pids now =
     |]
 
 
+-- | Move a pattern to a new state. Transitioning to 'ESResolved' also stamps @resolved_at@.
 updateErrorPatternState :: DB es => ErrorPatternId -> ErrorState -> UTCTime -> Eff es Int64
 updateErrorPatternState eid newState now =
-  Hasql.interpExecute [HI.sql| UPDATE apis.error_patterns SET state = #{newState}, updated_at = #{now} WHERE id = #{eid} |]
-
-
-resolveErrorPattern :: DB es => ErrorPatternId -> UTCTime -> Eff es Int64
-resolveErrorPattern eid now =
-  Hasql.interpExecute [HI.sql| UPDATE apis.error_patterns SET state = 'resolved', resolved_at = #{now}, updated_at = #{now} WHERE id = #{eid} |]
+  Hasql.interpExecute
+    [HI.sql|
+        UPDATE apis.error_patterns SET
+          state = #{newState},
+          resolved_at = CASE WHEN #{newState}::text = 'resolved' THEN #{now}::timestamptz ELSE resolved_at END,
+          updated_at = #{now}
+        WHERE id = #{eid}
+      |]
 
 
 setErrorPatternAssignee :: DB es => ErrorPatternId -> Maybe Projects.UserId -> UTCTime -> Eff es Int64
@@ -426,13 +423,19 @@ findCanonicalMatch pid service eType msg =
         ORDER BY created_at ASC LIMIT 1 |]
 
 
+-- | What an upsert did to a single pattern row.
+data UpsertOutcome = UOInserted | UORegressed | UOUnchanged
+  deriving stock (Eq, Generic, Read, Show)
+  deriving (HI.DecodeValue) via WrappedEnumSC 'Nothing "UO" UpsertOutcome
+
+
 -- | Batch upsert error patterns using unnest arrays (single round-trip instead of N+1)
 -- Groups by hash to avoid "ON CONFLICT DO UPDATE cannot affect row a second time" errors.
--- Returns hashes with their state for newly inserted ('new') or regressed patterns.
-batchUpsertErrorPatterns :: DB es => Projects.ProjectId -> V.Vector ATError -> UTCTime -> Eff es [(Text, Text)]
+-- Returns hashes with their outcome, restricted to newly inserted or regressed patterns.
+batchUpsertErrorPatterns :: DB es => Projects.ProjectId -> V.Vector ATError -> UTCTime -> Eff es [(Text, UpsertOutcome)]
 batchUpsertErrorPatterns _pid errors _now | V.null errors = pure []
 batchUpsertErrorPatterns pid errors now =
-  filter ((`elem` ["new", "regressed"]) . snd)
+  filter ((/= UOUnchanged) . snd)
     <$> Hasql.interp
       [HI.sql| INSERT INTO apis.error_patterns (
             project_id, error_type, message, stacktrace, hash, parent_hash, is_framework,
@@ -477,13 +480,14 @@ batchUpsertErrorPatterns pid errors now =
                                     THEN apis.error_patterns.regression_count + 1
                                     ELSE apis.error_patterns.regression_count END
           RETURNING hash, CASE
-            WHEN xmax = 0 THEN 'new'
+            WHEN xmax = 0 THEN 'inserted'
             WHEN state = 'regressed' AND regressed_at = #{now} THEN 'regressed'
             ELSE 'unchanged' END::text |]
   where
-    -- Group by hash: keep last occurrence + sum count (avoids ON CONFLICT duplicate-row error)
+    -- Group by hash: keep last occurrence + sum count (avoids ON CONFLICT duplicate-row error).
+    -- The bang keeps the running count forced: a hot hash otherwise accumulates one thunk per occurrence.
     (errs, counts) =
-      V.unzip $ V.fromList $ HM.elems $ V.foldl' (\m e -> HM.insertWith (\(a, n) (_, k) -> (a, n + k)) e.hash (e, 1 :: Int) m) HM.empty errors
+      V.unzip $ V.fromList $ HM.elems $ HM.fromListWith (\(a, n) (_, !k) -> (a, n + k)) [(e.hash, (e, 1 :: Int)) | e <- V.toList errors]
     errorTypes = V.map (.errorType) errs
     messages = V.map (.message) errs
     stacktraces = V.map (.stackTrace) errs

@@ -65,8 +65,6 @@ module Models.Projects.Projects (
   getDailyUsageBreakdown,
   -- Usage report submissions (chunked provider submissions)
   UsageSubmission (..),
-  SubmissionOutcome (..),
-  submissionOutcome,
   ChunkQuantity,
   mkChunkQuantity,
   chunkQuantityInt,
@@ -122,7 +120,6 @@ import Database.PostgreSQL.Simple.Newtypes
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
-import Effectful.Error.Static (throwError)
 import Effectful.Error.Static qualified as EffError
 import Effectful.Reader.Static qualified as EffReader
 import Effectful.Time (Time, currentTime, runTime)
@@ -213,11 +210,11 @@ insertUser u = EHasql.interpExecute_ [HI.sql| INSERT INTO users.users (id, creat
 
 
 userById :: DB es => UserId -> Eff es (Maybe User)
-userById uid = EHasql.interpOne [HI.sql| SELECT * FROM users.users WHERE id = #{uid} |]
+userById uid = EHasql.interpOne (selectFrom @User <> [HI.sql| WHERE id = #{uid} |])
 
 
 userByEmail :: DB es => Text -> Eff es (Maybe User)
-userByEmail email = EHasql.interpOne [HI.sql| SELECT * FROM users.users WHERE email = #{email} |]
+userByEmail email = EHasql.interpOne (selectFrom @User <> [HI.sql| WHERE email = #{email} |])
 
 
 userIdByEmail :: DB es => Text -> Eff es (Maybe UserId)
@@ -537,10 +534,11 @@ updateProjectBilling pid paymentPlan subId firstSubItemId orderId =
 
 
 updateProjectReportNotif :: DB es => ProjectId -> Text -> Eff es Int64
-updateProjectReportNotif pid report_type =
-  if report_type == "daily"
-    then EHasql.interpExecute [HI.sql| UPDATE projects.projects SET daily_notif=(not daily_notif) WHERE id=#{pid};|]
-    else EHasql.interpExecute [HI.sql| UPDATE projects.projects SET weekly_notif=(not weekly_notif) WHERE id=#{pid};|]
+updateProjectReportNotif pid reportType =
+  EHasql.interpExecute
+    if reportType == "daily"
+      then [HI.sql| UPDATE projects.projects SET daily_notif=(not daily_notif) WHERE id=#{pid};|]
+      else [HI.sql| UPDATE projects.projects SET weekly_notif=(not weekly_notif) WHERE id=#{pid};|]
 
 
 deleteProject :: (DB es, Time :> es) => ProjectId -> Eff es Int64
@@ -728,12 +726,7 @@ getDailyUsageBreakdown pid start =
 newtype ChunkQuantity = ChunkQuantity {chunkQuantityInt :: Int}
   deriving stock (Eq, Generic)
   deriving newtype (FromField, HI.DecodeValue, HI.EncodeValue, NFData, Show, ToField)
-
-
--- DecodeRow's role is nominal so newtype coercion doesn't deduce it; one-liner
--- mirrors the Int instance in Pkg.DeriveUtils.
-instance HI.DecodeRow ChunkQuantity where
-  decodeRow = HI.getOneColumn <$> HI.decodeRow
+  deriving anyclass (HI.DecodeRow)
 
 
 -- | >>> mkChunkQuantity 0
@@ -747,22 +740,12 @@ instance HI.DecodeRow ChunkQuantity where
 -- >>> mkChunkQuantity 900001
 -- Nothing
 mkChunkQuantity :: Int -> Maybe ChunkQuantity
-mkChunkQuantity n
-  | n > 0 && n <= 900_000 = Just (ChunkQuantity n)
-  | otherwise = Nothing
+mkChunkQuantity = fmap ChunkQuantity . guarded (\n -> n > 0 && n <= chunkCap)
 
 
--- | State of a submission chunk. Collapses (status, submitted_at, last_error)
--- into one type so illegal combinations ("submitted" with a last_error,
--- "failed" without one) are unrepresentable. The DB CHECK constraints on
--- projects.usage_report_submissions enforce the same invariant at the write
--- boundary; this type guarantees it at the read boundary.
-data SubmissionOutcome
-  = Pending
-  | Submitted !UTCTime
-  | Failed !Text
-  deriving stock (Eq, Generic, Show)
-  deriving anyclass (NFData)
+-- | Largest quantity a single billing-provider usage record may carry (Lemon Squeezy limit).
+chunkCap :: Int
+chunkCap = 900_000
 
 
 -- | Per-chunk record of a usage submission to a billing provider. One window
@@ -785,16 +768,6 @@ data UsageSubmission = UsageSubmission
   deriving anyclass (HI.DecodeRow, NFData)
 
 
--- | Collapse the raw (status, submitted_at, last_error) triple into a
--- 'SubmissionOutcome'. Safe because DB CHECK constraints (migration 0084)
--- guarantee the triples that can reach us.
-submissionOutcome :: UsageSubmission -> SubmissionOutcome
-submissionOutcome s = case (s.status, s.submittedAt, s.lastError) of
-  ("submitted", Just t, _) -> Submitted t
-  ("failed", _, Just e) -> Failed e
-  _ -> Pending
-
-
 -- | >>> splitUsageIntoChunks 0
 -- []
 -- >>> splitUsageIntoChunks 500
@@ -808,12 +781,9 @@ submissionOutcome s = case (s.status, s.submittedAt, s.lastError) of
 -- >>> splitUsageIntoChunks 2700001
 -- [900000,900000,900000,1]
 splitUsageIntoChunks :: Int -> [ChunkQuantity]
-splitUsageIntoChunks total
-  | total <= 0 = []
-  | otherwise =
-      let cap = 900_000 :: Int
-          (fulls, rem_) = total `divMod` cap
-       in replicate fulls (ChunkQuantity cap) <> [ChunkQuantity rem_ | rem_ > 0]
+splitUsageIntoChunks total = mapMaybe mkChunkQuantity $ replicate fulls chunkCap <> [rem_]
+  where
+    (fulls, rem_) = max 0 total `divMod` chunkCap
 
 
 pendingUsageSubmissions :: DB es => ProjectId -> Eff es [UsageSubmission]
@@ -844,7 +814,7 @@ recordUsageWindow
   :: (DB es, UUIDEff :> es)
   => ProjectId -> UTCTime -> UTCTime -> UsageTotals -> [ChunkQuantity] -> Eff es ()
 recordUsageWindow pid wStart wEnd totals chunks = do
-  chunkIds <- replicateM (length chunks) genUUID
+  chunkRows <- forM chunks \c -> (,c) <$> genUUID
   let exec :: HI.Sql -> Tx.Transaction ()
       exec s = void $ Tx.statement () (HI.interp True s :: Statement () HI.RowsAffected)
       -- total_requests historically = events + metrics (drives splitUsageIntoChunks
@@ -859,7 +829,7 @@ recordUsageWindow pid wStart wEnd totals chunks = do
       exec
         [HI.sql| INSERT INTO apis.daily_usage (project_id, total_requests, total_metrics, total_event_bytes, total_metric_bytes, window_start, window_end)
                        VALUES (#{pid}, #{totalUsage}, #{totals.metrics}, #{totals.eventBytes}, #{totals.metricBytes}, #{wStart}, #{wEnd}) |]
-      for_ (zip chunkIds chunks) \(cid, ChunkQuantity qty) ->
+      for_ chunkRows \(cid, ChunkQuantity qty) ->
         exec
           [HI.sql| INSERT INTO projects.usage_report_submissions (id, project_id, window_start, window_end, quantity)
                       VALUES (#{cid}, #{pid}, #{wStart}, #{wEnd}, #{qty}) |]
@@ -886,10 +856,10 @@ markUsageSubmissionFailed sid err =
 
 
 -- Keep sub_id/order_id/first_sub_item_id intact on downgrade so resume/payment_success can re-upgrade without a new checkout.
-downgradeToFree :: DB es => Int -> Int -> Int -> Eff es Int64
+downgradeToFree :: DB es => Int -> Eff es Int64
 -- @projects.projects.order_id@ is TEXT but callers (LemonSqueezy webhooks) pass a
 -- numeric id; cast the bind parameter so PG doesn't reject @text = bigint@.
-downgradeToFree orderId _subId _subItemId = EHasql.interpExecute [HI.sql|UPDATE projects.projects SET payment_plan = 'Free' WHERE order_id = #{orderId}::text|]
+downgradeToFree orderId = EHasql.interpExecute [HI.sql|UPDATE projects.projects SET payment_plan = 'Free' WHERE order_id = #{orderId}::text|]
 
 
 -- Match on sub_id when available (stable across plan/order changes), else fall back to order_id.
@@ -1148,7 +1118,7 @@ sessionAndProject
   -> Eff es (Session, Project)
 sessionAndProject pid = do
   sess <- getSession
-  let redirect = throwError $ err302{errHeaders = [("Location", "/?missingProjectPermission")]}
+  let redirect = EffError.throwError $ err302{errHeaders = [("Location", "/?missingProjectPermission")]}
       fetch = projectById pid >>= maybe redirect (pure . (sess,))
   case V.find ((== pid) . (.id)) sess.persistentSession.projects.getProjects of
     -- Onboarding projects in the session cache are stale; re-read them.
@@ -1185,9 +1155,8 @@ data AuditEvent
 
 
 logAudit :: DB es => ProjectId -> AuditEvent -> Maybe UserId -> Maybe Text -> Maybe AE.Value -> Eff es ()
-logAudit pid event actorId actorEmail metadataM = do
-  let metaJson = HI.AsJsonb <$> metadataM
-  EHasql.interpExecute_ [HI.sql| INSERT INTO projects.audit_log (project_id, event, actor_id, actor_email, metadata) VALUES (#{pid}, #{event}, #{actorId}, #{actorEmail}, #{metaJson}) |]
+logAudit pid event actorId actorEmail metadataM =
+  EHasql.interpExecute_ [HI.sql| INSERT INTO projects.audit_log (project_id, event, actor_id, actor_email, metadata) VALUES (#{pid}, #{event}, #{actorId}, #{actorEmail}, #{HI.AsJsonb <$> metadataM}) |]
 
 
 logAuditS :: DB es => ProjectId -> AuditEvent -> Session -> Maybe AE.Value -> Eff es ()

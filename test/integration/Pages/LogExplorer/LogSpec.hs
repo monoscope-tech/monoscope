@@ -190,40 +190,50 @@ spec = around withTestResources do
   -- part of the contract, not a detail.
   describe "Query validation endpoint" do
     it "accepts a valid query" \tr -> do
-      v <- snd <$> testServant tr (Log.logExplorerValidateH testPid (Just "kind == \"log\""))
+      v <- snd <$> testServant tr (Log.logExplorerValidateH testPid (Just "kind == \"log\"") Nothing)
       (v.valid, v.message) `shouldBe` (True, Nothing)
 
     it "locates an unknown field so the editor can underline it" \tr -> do
-      v <- snd <$> testServant tr (Log.logExplorerValidateH testPid (Just "kind == \"a\" and attribut contains \"x\""))
+      v <- snd <$> testServant tr (Log.logExplorerValidateH testPid (Just "kind == \"a\" and attribut contains \"x\"") Nothing)
       v.valid `shouldBe` False
       v.message `shouldBe` Just "Unknown field \"attribut\". Did you mean \"attributes\"?"
       (v.column, v.width) `shouldBe` (Just 17, Just 8)
 
     it "locates a syntax error" \tr -> do
-      v <- snd <$> testServant tr (Log.logExplorerValidateH testPid (Just "attributes contains ddd"))
+      v <- snd <$> testServant tr (Log.logExplorerValidateH testPid (Just "attributes contains ddd") Nothing)
       v.valid `shouldBe` False
       v.column `shouldBe` Just 12
+
+    -- The editor underlines whatever this says, so a verdict reached under the wrong table
+    -- is a squiggle on a query the server runs happily. `metric_name` is a real column on
+    -- the metrics table and no column at all on otel_logs_and_spans.
+    it "judges a metrics query against the metrics table, not the spans one" \tr -> do
+      let q = Just "metric_name == \"redis.commands\" | summarize avg(value) by bin_auto(timestamp)"
+      metrics <- snd <$> testServant tr (Log.logExplorerValidateH testPid q (Just "metrics"))
+      (metrics.valid, metrics.message) `shouldBe` (True, Nothing)
+      spans <- snd <$> testServant tr (Log.logExplorerValidateH testPid q Nothing)
+      spans.valid `shouldBe` False
 
     -- 92 saved queries in production filter on the raw `___` column names. They
     -- are what the table calls those columns and they reach SQL unchanged, so
     -- rejecting them would have broken working saved queries.
     it "accepts the raw ___ column names saved queries use" \tr -> do
-      v <- snd <$> testServant tr (Log.logExplorerValidateH testPid (Just "context___trace_id != null and resource___service___name == \"api\""))
+      v <- snd <$> testServant tr (Log.logExplorerValidateH testPid (Just "context___trace_id != null and resource___service___name == \"api\"") Nothing)
       (v.valid, v.message) `shouldBe` (True, Nothing)
 
     it "still rejects a mistyped ___ column, and suggests in the same notation" \tr -> do
-      v <- snd <$> testServant tr (Log.logExplorerValidateH testPid (Just "context___trace_ix != null"))
+      v <- snd <$> testServant tr (Log.logExplorerValidateH testPid (Just "context___trace_ix != null") Nothing)
       v.valid `shouldBe` False
       v.message `shouldSatisfy` maybe False (T.isInfixOf "context___trace_id")
 
     it "treats an empty query as valid" \tr -> do
-      v <- snd <$> testServant tr (Log.logExplorerValidateH testPid Nothing)
+      v <- snd <$> testServant tr (Log.logExplorerValidateH testPid Nothing Nothing)
       v.valid `shouldBe` True
 
     -- Aliases a query introduces are real names downstream; flagging them would
     -- squiggle a working query.
     it "accepts a filter on a summarize alias" \tr -> do
-      v <- snd <$> testServant tr (Log.logExplorerValidateH testPid (Just "level == \"ERROR\" | summarize count() by kind | where count_ > 1"))
+      v <- snd <$> testServant tr (Log.logExplorerValidateH testPid (Just "level == \"ERROR\" | summarize count() by kind | where count_ > 1") Nothing)
       v.valid `shouldBe` True
 
   describe "Data endpoint query-error handling" do
@@ -619,7 +629,9 @@ spec = around withTestResources do
           indexOf needle = T.length $ fst $ T.breakOn needle html
       html `shouldSatisfy` T.isInfixOf "id=\"main-content\""
       html `shouldSatisfy` T.isInfixOf "window.logDataPromise"
-      html `shouldSatisfy` T.isInfixOf "href=\"https://monoscope.tech/docs/dashboard/dashboard-pages/api-log-explorer/\" preload=\"false\""
+      -- htmx 4 (6de99be) renamed the attribute `preload` -> `hx-preload`; this
+      -- assertion kept the old spelling and so stopped checking anything real.
+      html `shouldSatisfy` T.isInfixOf "href=\"https://monoscope.tech/docs/dashboard/dashboard-pages/api-log-explorer/\" hx-preload=\"false\""
       indexOf "id=\"main-content\"" `shouldSatisfy` (< indexOf "window.logDataPromise")
 
   describe "Trace fullscreen loading" do
@@ -698,7 +710,12 @@ spec = around withTestResources do
         TelemetryPage.TraceDetailsNotFound _ -> expectationFailure "expected TimeFusion trace details"
       let initialHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml item
       -- Only the selected panel renders; hidden tabs fetch their panel on first reveal.
-      initialHtml `shouldNotSatisfy` T.isInfixOf "m-raw-content"
+      -- The placeholder div still carries the panel id — `hx-swap: outerHTML` has to have
+      -- something to target, so asserting the id was *absent* contradicted the lazy-panel
+      -- design and only passed before those panels became lazy. What proves laziness is the
+      -- loader in its place, plus the deferred fetch asserted below.
+      initialHtml `shouldSatisfy` T.isInfixOf "id=\"m-raw-content\""
+      initialHtml `shouldSatisfy` T.isInfixOf "aria-busy=\"true\""
       initialHtml `shouldSatisfy` T.isInfixOf "intersect once"
       initialHtml `shouldSatisfy` T.isInfixOf "/detailed?tab=tab-raw&amp;partial=true"
       T.length initialHtml `shouldSatisfy` (< 50_000)
@@ -792,9 +809,13 @@ spec = around withTestResources do
       assertAnchored rootItem
       let rootHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml rootItem
       rootHtml `shouldSatisfy` T.isInfixOf "subtab=htab-req"
-      rootHtml `shouldNotSatisfy` T.isInfixOf "apple"
       -- Copy-as-curl is assembled server-side from the HTTP attributes.
       rootHtml `shouldSatisfy` T.isInfixOf "curl -X GET"
+      -- The body panel is fetched on reveal, so curl holds the only inlined copy of the
+      -- body. This used to assert the body text appeared nowhere on the page, which stopped
+      -- being true the moment curl started carrying it — one occurrence still proves the
+      -- panel didn't inline a second.
+      T.count "apple" rootHtml `shouldBe` 1
       (_, reqBodyTab) <- testServant tr $ LogItem.expandAPIlogItemH testPid rootId rootTs Nothing (Just "tab-req") (Just "htab-req") True
       let reqBodyHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml reqBodyTab
       reqBodyHtml `shouldSatisfy` T.isInfixOf "req_content"

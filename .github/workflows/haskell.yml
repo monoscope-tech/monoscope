@@ -49,7 +49,14 @@ jobs:
     name: Build and Test
     needs: frontend
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    timeout-minutes: 30
+    # 30 was under budget and the job was silently truncating: on 2026-08-11 the
+    # integration suite got 19 seconds before the wall, and the run before that
+    # lost the doctests. Whichever step the wall lands on is a function of cache
+    # luck, not of what changed. Measured floor with a warm cache: ~1.5m containers
+    # + 5.5m hpack + 16m build + 6m doctests, i.e. 30m before the integration
+    # suite starts. Now that `deploy` gates on this job, truncation blocks the
+    # deploy rather than silently waving it through.
+    timeout-minutes: 60
     container:
       image: ghcr.io/monoscope-tech/monoscope-deps:latest
       credentials:
@@ -195,15 +202,37 @@ jobs:
           # for "error:" too — the app logs error: lines at LOG_LEVEL=warn on passing runs.
           if [ "$green" -ne 4 ] || grep -qE "[1-9][0-9]* failures?|Interrupted" build-shard-*.log; then
             echo "SHARDED RUN FAILED ($green/4 green):"
-            for f in build-shard-*.log; do grep -qE "examples?, 0 failures" "$f" || { echo "### $f"; tail -40 "$f"; }; done
+            for f in build-shard-*.log; do
+              grep -qE "examples?, 0 failures" "$f" && continue
+              echo "### $f"
+              # The whole Failures section, not a fixed tail. hspec spends ~8 lines per
+              # failure, so `tail -40` stopped after the first one and the rest of the
+              # names existed only inside the runner — leaving a red gate no one could
+              # diagnose without pushing a commit to re-print it.
+              sed -n '/^Failures:/,$p' "$f"
+              # A shard killed before hspec's summary has no Failures section to print.
+              grep -q '^Failures:' "$f" || tail -60 "$f"
+            done
             exit 1
           fi
           echo "ALL SHARDS GREEN"
 
-  build-and-deploy:
-    name: Build and Deploy Docker Image
+      # The step above prints the failures; this keeps the surrounding output (setup,
+      # per-example progress, the app's own logs) for anything the summary can't explain.
+      - name: Upload integration shard logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: integration-shard-logs
+          path: build-shard-*.log
+          retention-days: 14
+
+  # Building and pushing the image is harmless whatever the tests say — nothing
+  # runs it until `deploy` says so — so it stays parallel with the test job and
+  # off the critical path. Only the CapRover call is gated.
+  build-image:
+    name: Build and Push Docker Image
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    if: always()
     permissions:
       contents: 'read'
       id-token: 'write'
@@ -247,6 +276,17 @@ jobs:
             GIT_HASH=${{ github.sha }}
             GIT_COMMIT_DATE=${{ github.event.head_commit.timestamp || 'unknown' }}
 
+  # The gate. `needs` is what enforces it: a failed, cancelled, or timed-out
+  # test job leaves this skipped, and the image sits in the registry unused.
+  # Do NOT add `if: always()` here — that is exactly what let untested builds
+  # reach prod for months.
+  deploy:
+    name: Deploy to CapRover
+    needs: [build-image, build-and-test]
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
       # Pinned deliberately, not using caprover/deploy-from-github: that action
       # does an unpinned `npm i -g caprover` at image-build time, so an upstream
       # release lands straight in the deploy path. caprover 2.4.0 (2026-08-05)

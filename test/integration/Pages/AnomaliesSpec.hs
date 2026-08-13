@@ -1,24 +1,21 @@
-{-# LANGUAGE PackageImports #-}
-
 module Pages.AnomaliesSpec (spec) where
 
 import BackgroundJobs qualified
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.Effectful.Hasql qualified as EHasql
+import Data.Pool (withResource)
 import Data.Text qualified as T
+import Data.Text.Lazy qualified as TL
 import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime)
-import Hasql.Interpolate qualified as HI
 import Data.UUID qualified as DataUUID
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
-import Lucid (renderText, toHtml)
-import Data.Text.Lazy qualified as TL
-import Pkg.DeriveUtils (UUIDId (..))
-import Data.Pool (withResource)
 import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Hasql.Interpolate qualified as HI
+import Lucid (ToHtml, renderText, toHtml)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Projects (Session (..))
@@ -26,22 +23,12 @@ import Models.Projects.Projects qualified as Projects
 import Pages.Anomalies qualified as AnomalyList
 import Pages.BodyWrapper (PageCtx (..))
 import Pkg.Components.Table qualified as Table
+import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Servant qualified
-import Test.Hspec (Spec, aroundAll, sequential, describe, it, shouldBe, shouldSatisfy)
-
-
-
--- Helper function to get anomalies from API
-getAnomalies :: TestResources -> IO (V.Vector AnomalyList.IssueVM)
-getAnomalies tr = do
-  (_, pg) <- testServant tr $
-    AnomalyList.anomalyListGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing [] [] Nothing Nothing
-  case pg of
-    AnomalyList.ALPage (PageCtx _ tbl) -> pure tbl.rows
-    _ -> error "Unexpected response from anomaly list"
+import Test.Hspec (Spec, aroundAll, describe, it, sequential, shouldBe, shouldSatisfy)
 
 
 spec :: Spec
@@ -51,190 +38,99 @@ spec :: Spec
 spec = sequential $ aroundAll withTestResources do
   describe "Check Anomaly List" do
     it "should return an empty list" \tr -> do
-      (_, pg) <-
-        testServant tr $ AnomalyList.anomalyListGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing [] [] Nothing Nothing
+      rows <- listAnomalies tr Nothing
+      length rows `shouldBe` 0
 
-      case pg of
-        AnomalyList.ALPage (PageCtx _ tbl) -> do
-          length tbl.rows `shouldBe` 0
-        _ -> error "Unexpected response"
-
+    -- Preloading a lifecycle action would fire it on hover. Assert the invariant
+    -- rather than a count, so adding a duration option can't silently arm one.
     it "does not preload issue acknowledge or archive actions" \_ -> do
       issueId <- UUIDId <$> UUID.nextRandom
-      let html = TL.toStrict $ renderText $ do
-            AnomalyList.anomalyAcknowledgeButton testPid issueId False ""
+      let html = TL.toStrict $ renderText do
+            AnomalyList.anomalyAcknowledgeButton testPid issueId frozenTime Nothing
             AnomalyList.anomalyArchiveButton testPid issueId False
-      T.count "preload=\"false\"" html `shouldBe` 2
+      T.count "hx-get=" html `shouldSatisfy` (> 2) -- ack, its duration options, archive
+      T.count "preload=\"false\"" html `shouldBe` T.count "hx-get=" html
 
     it "should create endpoint anomalies (not visible in anomaly list)" \tr -> do
-      currentTime <- getCurrentTime
-      let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
-      let reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
-      let msgs =
-            [ ("m1", toStrict $ AE.encode reqMsg1)
-            , ("m2", toStrict $ AE.encode reqMsg1) -- same message
-            , ("m3", toStrict $ AE.encode reqMsg1) -- same message
-            , ("m4", toStrict $ AE.encode reqMsg1) -- same message
-            ]
+      nowTxt <- nowText
+      let reqMsg1 = encMsg $ testRequestMsgs.reqMsg1 nowTxt
+      -- same message four times
+      processMessagesAndBackgroundJobs tr [(k, reqMsg1) | k <- ["m1", "m2", "m3", "m4"]]
 
-      processMessagesAndBackgroundJobs tr msgs
+      countQ tr [sql| SELECT COUNT(*)::INT FROM apis.endpoints WHERE project_id=? |] (Only testPid)
+        >>= (`shouldBe` 1)
 
-      -- Check that endpoint was created in database
-      endpoints <- withResource tr.trPool \conn -> PGS.query conn [sql|
-        SELECT hash FROM apis.endpoints WHERE project_id = ?
-      |] (Only testPid) :: IO [Only Text]
-      length endpoints `shouldBe` 1
-
-      -- Check what background jobs were created and run only NewAnomaly jobs
-      pendingJobs <- getPendingBackgroundJobs tr.trATCtx
-      logBackgroundJobsInfo tr.trLogger pendingJobs
-
-      -- Run only NewAnomaly jobs (which create issues from anomalies)
-      _ <- runBackgroundJobsWhere frozenTime tr.trATCtx $ \case
+      -- NewAnomaly jobs are what create issues from anomalies
+      runAnomalyJobs tr \case
         BackgroundJobs.NewAnomaly{} -> True
         _ -> False
       createTestSpans tr testPid 10
 
-      -- Check that API change issue was created for the endpoint
-      apiChangeIssues <- withResource tr.trPool \conn -> PGS.query conn [sql|
-        SELECT id FROM apis.issues WHERE project_id = ? AND issue_type = 'api_change'
-      |] (Only testPid) :: IO [Only Issues.IssueId]
-      length apiChangeIssues `shouldBe` 1
-      
-      -- Anomaly list should show the API change issue
-      anomalies <- getAnomalies tr
+      apiChangeIssueIds tr >>= \issues -> length issues `shouldBe` 1
       -- API change issues are visible in the anomaly list
-      length anomalies `shouldBe` 1 -- Should see the API change issue
+      anomalies <- listAnomalies tr Nothing
+      length anomalies `shouldBe` 1
 
     it "should acknowledge endpoint anomaly" \tr -> do
-      -- Find the API change issue for the endpoint
-      apiChangeIssues <- withResource tr.trPool \conn -> PGS.query conn [sql|
-        SELECT id FROM apis.issues WHERE project_id = ? AND issue_type = 'api_change'
-      |] (Only testPid) :: IO [Only Issues.IssueId]
-      length apiChangeIssues `shouldBe` 1
-      issueId <- case apiChangeIssues of
-        (Only iid) : _ -> pure iid
-        [] -> error "Expected at least one API change issue"
+      issues <- apiChangeIssueIds tr
+      length issues `shouldBe` 1
+      issueId <- maybe (fail "Expected at least one API change issue") pure $ listToMaybe issues
 
-      -- Get and run shape/field anomaly jobs
-      pendingJobs2 <- getPendingBackgroundJobs tr.trATCtx
-      logBackgroundJobsInfo tr.trLogger pendingJobs2
-
-      _ <- runBackgroundJobsWhere frozenTime tr.trATCtx $ \case
-        BackgroundJobs.NewAnomaly{anomalyType = aType} -> aType == "shape" || aType == "field"
-        _ -> False
+      runAnomalyJobs tr shapeOrField
 
       -- Acknowledge the endpoint anomaly directly using Issues module
       let sess = Servant.getResponse tr.trSessAndHeader
-      runTestBg frozenTime tr $ Issues.acknowledgeIssue issueId sess.user.id
+      runTestBg frozenTime tr $ ackIssue testPid sess.user.id issueId
 
-      -- Verify it was acknowledged
       acknowledgedIssue <- runTestBg frozenTime tr $ Issues.selectIssueById issueId
-      case acknowledgedIssue of
-        Just issue -> isJust issue.acknowledgedAt `shouldBe` True
-        Nothing -> error "Issue not found after acknowledgment"
+      maybe (error "Issue not found after acknowledgment") (isJust . (.acknowledgedAt)) acknowledgedIssue `shouldBe` True
 
       -- After acknowledging, the issue should appear in the Acknowledged filter
-      (_, pg) <- testServant tr $
-        AnomalyList.anomalyListGetH testPid Nothing (Just "Acknowledged") Nothing Nothing Nothing Nothing Nothing Nothing Nothing [] [] Nothing Nothing
-      case pg of
-        AnomalyList.ALPage (PageCtx _ tbl) -> do
-          let acknowledgedApiChangeIssues = V.filter (isApiChangeSingleRow Issues.ApiChange) tbl.rows
-          V.length acknowledgedApiChangeIssues `shouldSatisfy` (> 0)
-        _ -> error "Unexpected response"
+      acked <- listAnomalies tr (Just "Acknowledged")
+      length (V.filter isApiChange acked) `shouldSatisfy` (> 0)
 
     it "should detect new shape anomaly after processing new messages" \tr -> do
-      currentTime <- getCurrentTime
-      let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
-      let reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
-      let reqMsg2 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 nowTxt
-      let reqMsg3 = Unsafe.fromJust $ convert $ msg3 nowTxt -- Same endpoint, different shape
-      let msgs =
-            [ ("m1", toStrict $ AE.encode reqMsg1)
-            , ("m2", toStrict $ AE.encode reqMsg2)
-            , ("m3", toStrict $ AE.encode reqMsg3)
-            , ("m4", toStrict $ AE.encode reqMsg2)
-            ]
-
-      processMessagesAndBackgroundJobs tr msgs
+      nowTxt <- nowText
+      let reqMsg2 = encMsg $ testRequestMsgs.reqMsg2 nowTxt
+      processMessagesAndBackgroundJobs
+        tr
+        [ ("m1", encMsg $ testRequestMsgs.reqMsg1 nowTxt)
+        , ("m2", reqMsg2)
+        , ("m3", encMsg $ msgWithBody shapeBody nowTxt) -- same endpoint, different shape
+        , ("m4", reqMsg2)
+        ]
       createTestSpans tr testPid 10
 
-      -- Get pending jobs and run only NewAnomaly jobs for shapes and fields
-      pendingJobs3 <- getPendingBackgroundJobs tr.trATCtx
-      logBackgroundJobsInfo tr.trLogger pendingJobs3
+      runAnomalyJobs tr shapeOrField
 
-      _ <- runBackgroundJobsWhere frozenTime tr.trATCtx $ \case
-        BackgroundJobs.NewAnomaly{anomalyType = aType} -> aType == "shape" || aType == "field"
-        _ -> False
-
-      -- Verify issues exist in the database (they may be acknowledged from previous test)
-      apiChangeIssues <- withResource tr.trPool \conn -> PGS.query conn [sql|
-        SELECT id, endpoint_hash FROM apis.issues WHERE project_id = ? AND issue_type = 'api_change'
-      |] (Only testPid) :: IO [(Issues.IssueId, Text)]
-
-      -- There should be at least one API change issue in the database
-      length apiChangeIssues `shouldSatisfy` (>= 1)
+      -- Issues exist in the database (they may be acknowledged from previous test)
+      apiChangeIssueIds tr >>= \issues -> length issues `shouldSatisfy` (>= 1)
 
     it "should detect new format anomaly" \tr -> do
-      currentTime <- getCurrentTime
-      let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
+      nowTxt <- nowText
+      runAnomalyJobs tr shapeOrField
 
-      -- Get and run shape/field anomaly jobs
-      pendingJobs4 <- getPendingBackgroundJobs tr.trATCtx
-      logBackgroundJobsInfo tr.trLogger pendingJobs4
+      apiChangeIssueIds tr >>= \issues -> length issues `shouldSatisfy` (>= 1)
+      issueId <- pickApiChangeIssue tr
+      let sess = Servant.getResponse tr.trSessAndHeader
+      runTestBg frozenTime tr $ ackIssue testPid sess.user.id issueId
 
-      _ <- runBackgroundJobsWhere frozenTime tr.trATCtx $ \case
-        BackgroundJobs.NewAnomaly{anomalyType = aType} -> aType == "shape" || aType == "field"
-        _ -> False
-
-      -- Find and acknowledge the API change issues
-      apiChangeIssuesForAck <- withResource tr.trPool \conn -> PGS.query conn [sql|
-        SELECT id FROM apis.issues WHERE project_id = ? AND issue_type = 'api_change'
-      |] (Only testPid) :: IO [Only Issues.IssueId]
-
-      length apiChangeIssuesForAck `shouldSatisfy` (>= 1)
-
-      -- Acknowledge the first API change issue
-      case listToMaybe apiChangeIssuesForAck of
-        Just (Only issueId) -> do
-          -- Acknowledge directly using Issues module
-          let sess = Servant.getResponse tr.trSessAndHeader
-          runTestBg frozenTime tr $ Issues.acknowledgeIssue issueId sess.user.id
-        Nothing -> error "No API change issue found"
-
-      -- Now send a message with different format
-      let reqMsg4 = Unsafe.fromJust $ convert $ msg4 nowTxt
-      let msgs = [("m4", toStrict $ AE.encode reqMsg4)]
-      processMessagesAndBackgroundJobs tr msgs
-
-      -- Get and run format anomaly jobs
-      pendingJobs5 <- getPendingBackgroundJobs tr.trATCtx
-      logBackgroundJobsInfo tr.trLogger pendingJobs5
-
-      _ <- runBackgroundJobsWhere frozenTime tr.trATCtx $ \case
+      -- Now send a message with a different format
+      processMessagesAndBackgroundJobs tr [("m4", encMsg $ msgWithBody formatBody nowTxt)]
+      runAnomalyJobs tr \case
         BackgroundJobs.NewAnomaly{anomalyType = "format"} -> True
         _ -> False
 
-      -- Get updated anomaly list
-      anomalies <- getAnomalies tr
-      let formatApiChangeIssues = V.filter (isApiChangeSingleRow Issues.ApiChange) anomalies
-
       -- In the new Issues system, format anomalies are part of API changes
-      length formatApiChangeIssues `shouldSatisfy` (>= 1)
+      anomalies <- listAnomalies tr Nothing
+      length (V.filter isApiChange anomalies) `shouldSatisfy` (>= 1)
       length anomalies `shouldSatisfy` (> 0)
 
     it "should get acknowledged anomalies" \tr -> do
-      (_, pg) <- testServant tr $
-        AnomalyList.anomalyListGetH testPid Nothing (Just "Acknowledged") Nothing Nothing Nothing Nothing Nothing Nothing Nothing [] [] Nothing Nothing
-      case pg of
-        AnomalyList.ALPage (PageCtx _ tbl) -> do
-          -- Acknowledged anomalies should include API changes
-          let acknowledgedApiChangeIssues = V.filter (isApiChangeSingleRow Issues.ApiChange) tbl.rows
-
-          -- We acknowledged at least one API change issue in the previous test
-          length acknowledgedApiChangeIssues `shouldSatisfy` (>= 1)
-          length tbl.rows `shouldSatisfy` (> 0)
-        _ -> error "Unexpected response"
+      rows <- listAnomalies tr (Just "Acknowledged")
+      -- We acknowledged at least one API change issue in the previous test
+      length (V.filter isApiChange rows) `shouldSatisfy` (>= 1)
+      length rows `shouldSatisfy` (> 0)
 
     -- Regression: posting via the bulk handler used the wrong form field name
     -- (`anomalyId` instead of `itemId`) so selected ids were silently dropped and
@@ -243,33 +139,18 @@ spec = sequential $ aroundAll withTestResources do
     -- handler so both bugs are caught together.
     it "bulk acknowledge cascades from issues to underlying anomalies" \tr -> do
       issueId <- pickApiChangeIssue tr
-      let issueIdText = DataUUID.toText issueId.unUUIDId
 
       -- Reset state — earlier tests in this describe block may have acknowledged it.
       withResource tr.trPool \conn -> do
         void $ PGS.execute conn [sql| UPDATE apis.issues    SET acknowledged_at=NULL, acknowledged_by=NULL WHERE id=? |] (Only issueId)
         void $ PGS.execute conn [sql| UPDATE apis.anomalies SET acknowledged_at=NULL, acknowledged_by=NULL WHERE project_id=? |] (Only testPid)
 
-      _ <- testServant tr $ AnomalyList.anomalyBulkActionsPostH testPid "acknowledge" AnomalyList.AnomalyBulk{itemId = [issueIdText]}
+      _ <- testServant tr $ AnomalyList.anomalyBulkActionsPostH testPid "acknowledge" Nothing AnomalyList.AnomalyBulk{itemId = [DataUUID.toText issueId.unUUIDId]}
 
-      -- Issue must be acknowledged.
-      ackedIssues <- withResource tr.trPool \conn -> PGS.query conn
-        [sql| SELECT id FROM apis.issues WHERE id=? AND acknowledged_at IS NOT NULL |] (Only issueId) :: IO [Only Issues.IssueId]
-      length ackedIssues `shouldBe` 1
-
+      countQ tr [sql| SELECT COUNT(*)::INT FROM apis.issues WHERE id=? AND acknowledged_at IS NOT NULL |] (Only issueId)
+        >>= (`shouldBe` 1)
       -- Cascade: every anomaly referenced via issue_data->'anomaly_hashes' must be acknowledged.
-      cascadedCount <- withResource tr.trPool \conn -> do
-        [Only n] <- PGS.query conn
-          [sql| WITH related AS (
-                  SELECT jsonb_array_elements_text(COALESCE(issue_data->'anomaly_hashes','[]'::jsonb)) AS h
-                  FROM apis.issues WHERE id=?
-                )
-                SELECT COUNT(*)::INT FROM apis.anomalies a
-                WHERE a.project_id=? AND a.target_hash IN (SELECT h FROM related)
-                  AND a.acknowledged_at IS NULL |]
-          (issueId, testPid) :: IO [Only Int]
-        pure n
-      cascadedCount `shouldBe` 0
+      fst <$> cascadePending tr issueId >>= (`shouldBe` 0)
 
     -- Regression: archive path posted to apis.anomalies by issue id (which is
     -- never an anomaly id), so the cascade silently no-op'd and acknowledged_at
@@ -277,30 +158,16 @@ spec = sequential $ aroundAll withTestResources do
     -- issue_data.anomaly_hashes; this test asserts both halves fire.
     it "bulk archive cascades to anomalies referenced by issue_data.anomaly_hashes" \tr -> do
       issueId <- pickApiChangeIssue tr
-      let issueIdText = DataUUID.toText issueId.unUUIDId
 
       withResource tr.trPool \conn -> do
         void $ PGS.execute conn [sql| UPDATE apis.issues    SET archived_at=NULL WHERE id=? |] (Only issueId)
         void $ PGS.execute conn [sql| UPDATE apis.anomalies SET archived_at=NULL WHERE project_id=? |] (Only testPid)
 
-      _ <- testServant tr $ AnomalyList.anomalyBulkActionsPostH testPid "archive" AnomalyList.AnomalyBulk{itemId = [issueIdText]}
+      _ <- testServant tr $ AnomalyList.anomalyBulkActionsPostH testPid "archive" Nothing AnomalyList.AnomalyBulk{itemId = [DataUUID.toText issueId.unUUIDId]}
 
-      archivedIssues <- withResource tr.trPool \conn -> PGS.query conn
-        [sql| SELECT id FROM apis.issues WHERE id=? AND archived_at IS NOT NULL |] (Only issueId) :: IO [Only Issues.IssueId]
-      length archivedIssues `shouldBe` 1
-
-      pendingCascade <- withResource tr.trPool \conn -> do
-        [Only n] <- PGS.query conn
-          [sql| WITH related AS (
-                  SELECT jsonb_array_elements_text(COALESCE(issue_data->'anomaly_hashes','[]'::jsonb)) AS h
-                  FROM apis.issues WHERE id=?
-                )
-                SELECT COUNT(*)::INT FROM apis.anomalies a
-                WHERE a.project_id=? AND a.target_hash IN (SELECT h FROM related)
-                  AND a.archived_at IS NULL |]
-          (issueId, testPid) :: IO [Only Int]
-        pure n
-      pendingCascade `shouldBe` 0
+      countQ tr [sql| SELECT COUNT(*)::INT FROM apis.issues WHERE id=? AND archived_at IS NOT NULL |] (Only issueId)
+        >>= (`shouldBe` 1)
+      snd <$> cascadePending tr issueId >>= (`shouldBe` 0)
 
     -- Regression: the issues UPDATE in acknowlegeCascade used target_hash=ANY() with
     -- %-suffixed prefixes, so the legacy-hash sweep never matched any issue row.
@@ -308,7 +175,7 @@ spec = sequential $ aroundAll withTestResources do
       runTestBg frozenTime tr pass
       let sess = Servant.getResponse tr.trSessAndHeader
           prefix = "casc-legacy-001" :: Text
-      iid <- (UUIDId :: DataUUID.UUID -> Issues.IssueId) <$> UUID.nextRandom
+      iid <- UUIDId <$> UUID.nextRandom
       withResource tr.trPool \conn -> do
         void $ PGS.execute conn
           [sql| INSERT INTO apis.issues
@@ -323,18 +190,15 @@ spec = sequential $ aroundAll withTestResources do
                 VALUES (?, ?) ON CONFLICT DO NOTHING |]
           (testPid, prefix <> ":anom")
 
-      void $ runTestBg frozenTime tr $ Anomalies.acknowlegeCascade sess.user.id (V.singleton prefix)
+      void $ runTestBg frozenTime tr $ Anomalies.acknowlegeCascade sess.user.id Issues.indefiniteUntil (V.singleton prefix)
 
-      ackedIssue <- withResource tr.trPool \conn -> PGS.query conn
-        [sql| SELECT id FROM apis.issues WHERE id=? AND acknowledged_at IS NOT NULL |] (Only iid) :: IO [Only Issues.IssueId]
-      length ackedIssue `shouldBe` 1
-      ackedAnoms <- withResource tr.trPool \conn -> do
-        [Only n] <- PGS.query conn
-          [sql| SELECT COUNT(*)::INT FROM apis.anomalies
-                WHERE project_id=? AND target_hash=? AND acknowledged_at IS NOT NULL |]
-          (testPid, prefix <> ":anom") :: IO [Only Int]
-        pure n
-      ackedAnoms `shouldBe` 1
+      countQ tr [sql| SELECT COUNT(*)::INT FROM apis.issues WHERE id=? AND acknowledged_at IS NOT NULL |] (Only iid)
+        >>= (`shouldBe` 1)
+      countQ tr
+        [sql| SELECT COUNT(*)::INT FROM apis.anomalies
+              WHERE project_id=? AND target_hash=? AND acknowledged_at IS NOT NULL |]
+        (testPid, prefix <> ":anom")
+        >>= (`shouldBe` 1)
 
     -- Regression: createAPIChangeIssue hard-coded a string that differed from
     -- defaultRecommendedAction, so the detail page's "not yet LLM-enhanced" check
@@ -342,21 +206,17 @@ spec = sequential $ aroundAll withTestResources do
     it "api_change issues carry defaultRecommendedAction" \tr -> do
       -- Seed through the real pipeline when running in isolation; the file's
       -- earlier tests normally created the api_change issue already.
-      existing <- withResource tr.trPool \conn -> PGS.query conn
-        [sql| SELECT id FROM apis.issues WHERE project_id=? AND issue_type='api_change' |]
-        (Only testPid) :: IO [Only Issues.IssueId]
+      existing <- apiChangeIssueIds tr
       when (null existing) do
-        currentTime <- getCurrentTime
-        let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
-            reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
-        processMessagesAndBackgroundJobs tr [("m1", toStrict $ AE.encode reqMsg1)]
-        void $ runBackgroundJobsWhere frozenTime tr.trATCtx \case
+        nowTxt <- nowText
+        processMessagesAndBackgroundJobs tr [("m1", encMsg $ testRequestMsgs.reqMsg1 nowTxt)]
+        runAnomalyJobs tr \case
           BackgroundJobs.NewAnomaly{} -> True
           _ -> False
       ras <- withResource tr.trPool \conn -> PGS.query conn
         [sql| SELECT DISTINCT recommended_action FROM apis.issues WHERE project_id=? AND issue_type='api_change' |]
         (Only testPid) :: IO [Only Text]
-      map (\(Only t) -> t) ras `shouldBe` [Issues.defaultRecommendedAction]
+      map fromOnly ras `shouldBe` [Issues.defaultRecommendedAction]
 
     -- Regression: the ApiChange detail page used to render an empty Investigation
     -- panel because hashPrefix returned Nothing for ApiChange and there was no
@@ -369,7 +229,7 @@ spec = sequential $ aroundAll withTestResources do
       withResource tr.trPool \conn ->
         void $ PGS.execute conn [sql| UPDATE apis.issues SET archived_at=NULL WHERE id=? |] (Only issueId)
       traceIdText <- DataUUID.toText <$> UUID.nextRandom
-      spanIdText  <- DataUUID.toText <$> UUID.nextRandom
+      spanIdText <- DataUUID.toText <$> UUID.nextRandom
       withResource tr.trPool \conn -> void $ PGS.execute conn
         [sql| INSERT INTO otel_logs_and_spans
                 (id, project_id, timestamp, start_time,
@@ -382,22 +242,45 @@ spec = sequential $ aroundAll withTestResources do
         (testPid, frozenTime, frozenTime, traceIdText, spanIdText, traceIdText, spanIdText)
 
       (_, pageById) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid issueId Nothing Nothing
-      let byIdHtml = TL.toStrict $ renderText $ toHtml pageById
       -- The trace id should be embedded somewhere in the rendered investigation panel.
-      byIdHtml `shouldSatisfy` (traceIdText `T.isInfixOf`)
+      renderPage pageById `shouldSatisfy` (traceIdText `T.isInfixOf`)
 
       issue <- runTestBg frozenTime tr $ Issues.selectIssueById issueId
       let targetHash = maybe (error "Expected API change issue") (.targetHash) issue
       (_, pageByHash) <- testServant tr $ AnomalyList.anomalyDetailHashGetH testPid targetHash Nothing (Just "14D")
-      let byHashHtml = TL.toStrict $ renderText $ toHtml pageByHash
-      byHashHtml `shouldSatisfy` T.isInfixOf "since=14D"
+      renderPage pageByHash `shouldSatisfy` T.isInfixOf "since=14D"
+
+    -- Regression: an issue that never captured a trace id used to render the logs tab as
+    -- `context___trace_id==""`, a predicate that filters nothing — so the tab fetched the
+    -- project's entire retention window (~6s / 550KB of unrelated logs, on ~24% of issues).
+    -- With no trace to pin to it must scope to the issue's service over a bounded window.
+    it "issue detail with no trace id scopes the logs tab to service and a bounded window" \tr -> do
+      noTraceHash <- T.take 8 . DataUUID.toText <$> UUID.nextRandom
+      issueId <- withResource tr.trPool \conn ->
+        -- INSERT ... RETURNING always yields the row, but `head` is partial and
+        -- -Werror=x-partial rejects it; an empty result should say so, not crash later.
+        maybe (fail "INSERT ... RETURNING id returned no row") (pure . fromOnly)
+          . listToMaybe
+          =<< PGS.query
+            conn
+            [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, service, created_at, updated_at)
+                  VALUES (?, 'runtime_exception', 'no-trace issue', ?, 'checkout', ?, ?) RETURNING id |]
+            (testPid, noTraceHash, frozenTime, frozenTime)
+      (_, page) <- testServant tr $ AnomalyList.anomalyDetailGetH testPid (UUIDId issueId) Nothing Nothing
+      let html = renderPage page
+      html `shouldSatisfy` not . T.isInfixOf "context___trace_id%3D%3D%22%22"
+      html `shouldSatisfy` T.isInfixOf "service%3D%3D%22checkout%22"
+      -- Lucid escapes the attribute, so the separators render as &amp; — assert on both
+      -- ends of the window: an unbounded fallback would carry neither.
+      html `shouldSatisfy` T.isInfixOf "&amp;from="
+      html `shouldSatisfy` T.isInfixOf "&amp;to="
 
     -- Migration 0095 swapped now() → app_now() in apis.log_auto_resolve_activity
     -- so the auto-resolve activity row's created_at honours the test clock.
     it "auto_resolved activity record uses app_now() (migration 0095)" \tr -> do
       runTestBg frozenTime tr pass
       let errHash = "test-095-auto-resolve-hash" :: Text
-          issueId = (UUIDId :: DataUUID.UUID -> Issues.IssueId) (Unsafe.fromJust $ DataUUID.fromText "00000000-0000-0000-0000-000000000095")
+          issueId = UUIDId $ Unsafe.fromJust $ DataUUID.fromText "00000000-0000-0000-0000-000000000095"
       withResource tr.trPool \conn -> do
         void $ PGS.execute conn
           [sql| INSERT INTO apis.error_patterns
@@ -436,7 +319,7 @@ spec = sequential $ aroundAll withTestResources do
     -- after the test clock advances past created_at, the issue must drop out.
     it "selectIssues 24h period respects test clock" \tr -> do
       runTestBg frozenTime tr pass
-      iid <- (UUIDId :: DataUUID.UUID -> Issues.IssueId) <$> UUID.nextRandom
+      iid <- UUIDId <$> UUID.nextRandom
       let tgt = "selectIssues-24h-target" :: Text
       withResource tr.trPool \conn ->
         void $ PGS.execute conn
@@ -458,30 +341,94 @@ spec = sequential $ aroundAll withTestResources do
       advanceHours tr 2
       (after, _) <- runHasqlEffect tr
         $ Issues.selectIssues testPid Nothing Nothing 100 0 Nothing Nothing "24h" [] []
-      case find (\r -> r.base.id == iid) after of
-        Just row -> V.sum row.activityBuckets `shouldBe` 0
-        Nothing -> pure () -- also acceptable: filtered out entirely
+      whenJust (find (\r -> r.base.id == iid) after) \row ->
+        V.sum row.activityBuckets `shouldBe` 0 -- absent entirely is also acceptable
 
 
-isApiChangeSingleRow :: Issues.IssueType -> AnomalyList.IssueVM -> Bool
-isApiChangeSingleRow ty (AnomalyList.IssueVM _ _ _ c) = c.base.issueType == ty
+isApiChange :: AnomalyList.IssueVM -> Bool
+isApiChange (AnomalyList.IssueVM _ _ _ c) = c.base.issueType == Issues.ApiChange
+
+
+nowText :: IO Text
+nowText = toText . formatTime defaultTimeLocale "%FT%T%QZ" <$> getCurrentTime
+
+
+encMsg :: AE.Value -> ByteString
+encMsg = toStrict . AE.encode . Unsafe.fromJust . convert
+
+
+listAnomalies :: TestResources -> Maybe Text -> IO (V.Vector AnomalyList.IssueVM)
+listAnomalies tr filterT = do
+  (_, pg) <- testServant tr $ AnomalyList.anomalyListGetH testPid Nothing filterT Nothing Nothing Nothing Nothing Nothing Nothing Nothing [] [] Nothing Nothing
+  case pg of
+    AnomalyList.ALPage (PageCtx _ tbl) -> pure tbl.rows
+    _ -> error "Unexpected response from anomaly list"
+
+
+renderPage :: ToHtml a => a -> Text
+renderPage = TL.toStrict . renderText . toHtml
+
+
+countQ :: PGS.ToRow q => TestResources -> PGS.Query -> q -> IO Int
+countQ tr q args = withResource tr.trPool \conn ->
+  maybe (fail "count query returned no row") (pure . fromOnly) . listToMaybe =<< PGS.query conn q args
+
+
+-- | Anomalies referenced by the issue's @issue_data.anomaly_hashes@ that are still
+-- (un-acknowledged, un-archived) — both cascade halves in one round trip.
+cascadePending :: TestResources -> Issues.IssueId -> IO (Int, Int)
+cascadePending tr issueId = withResource tr.trPool \conn ->
+  maybe (fail "cascade count returned no row") pure . listToMaybe
+    =<< PGS.query conn
+      [sql| WITH related AS (
+              SELECT jsonb_array_elements_text(COALESCE(issue_data->'anomaly_hashes','[]'::jsonb)) AS h
+              FROM apis.issues WHERE id=?
+            )
+            SELECT (COUNT(*) FILTER (WHERE a.acknowledged_at IS NULL))::INT
+                 , (COUNT(*) FILTER (WHERE a.archived_at IS NULL))::INT
+            FROM apis.anomalies a
+            WHERE a.project_id=? AND a.target_hash IN (SELECT h FROM related) |]
+      (issueId, testPid)
+
+
+apiChangeIssueIds :: TestResources -> IO [Issues.IssueId]
+apiChangeIssueIds tr = map fromOnly <$> withResource tr.trPool \conn -> PGS.query conn
+  [sql| SELECT id FROM apis.issues WHERE project_id=? AND issue_type='api_change' ORDER BY created_at |]
+  (Only testPid)
 
 
 -- | Pull the first ApiChange issue id created by earlier tests. Fails the test
 -- with a useful message if the seed step (test 2) didn't run or left no issues.
 pickApiChangeIssue :: TestResources -> IO Issues.IssueId
-pickApiChangeIssue tr = do
-  rows <- withResource tr.trPool \conn -> PGS.query conn
-    [sql| SELECT id FROM apis.issues WHERE project_id=? AND issue_type='api_change' ORDER BY created_at LIMIT 1 |]
-    (Only testPid) :: IO [Only Issues.IssueId]
-  case rows of
-    Only iid : _ -> pure iid
-    [] -> error "pickApiChangeIssue: no ApiChange issue seeded — earlier tests in this spec must run first"
+pickApiChangeIssue tr =
+  maybe (error "pickApiChangeIssue: no ApiChange issue seeded — earlier tests in this spec must run first") pure
+    . listToMaybe
+    =<< apiChangeIssueIds tr
 
 
--- Same endpoint as msg1 but with different request body shape, to test shape anomaly detection
-msg3 :: Text -> AE.Value
-msg3 timestamp =
+-- | Dump the pending queue (diagnostics on failure), then run the matching jobs.
+runAnomalyJobs :: TestResources -> (BackgroundJobs.BgJobs -> Bool) -> IO ()
+runAnomalyJobs tr p = do
+  getPendingBackgroundJobs tr.trATCtx >>= logBackgroundJobsInfo tr.trLogger
+  void $ runBackgroundJobsWhere frozenTime tr.trATCtx p
+
+
+shapeOrField :: BackgroundJobs.BgJobs -> Bool
+shapeOrField = \case
+  BackgroundJobs.NewAnomaly{anomalyType = t} -> t `elem` ["shape", "field"]
+  _ -> False
+
+
+-- Base64 request bodies for the msg1 endpoint: a different body shape (shape anomaly)
+-- and a username typed as a number instead of a string (format anomaly).
+shapeBody, formatBody :: Text
+shapeBody = "eyJwYXNzd29yZCI6IltDTElFTlRfUkVEQUNURURdIiwidXNlcm5hbWUiOiJhZG1pbkBncm92ZXBheS5jby51ayJ9"
+formatBody = "eyJwYXNzd29yZCI6IltDTElFTlRfUkVEQUNURURdIiwidXNlcm5hbWUiOjJ9"
+
+
+-- Same endpoint as msg1, with a caller-supplied request body.
+msgWithBody :: Text -> Text -> AE.Value
+msgWithBody body timestamp =
   [aesonQQ|{"duration":476434,
             "host":"172.31.29.11",
             "method":"GET",
@@ -489,33 +436,7 @@ msg3 timestamp =
             "project_id":"00000000-0000-0000-0000-000000000000",
             "proto_minor":1,
             "proto_major":1,"query_params":{},
-            "raw_url":"/","referer":"","request_body":"eyJwYXNzd29yZCI6IltDTElFTlRfUkVEQUNURURdIiwidXNlcm5hbWUiOiJhZG1pbkBncm92ZXBheS5jby51ayJ9",
-            "request_headers":{
-              "connection":["upgrade"],"host":["172.31.29.11"],
-              "x-real-ip":["172.31.81.1"],"x-forwarded-for":["172.31.81.1"],
-              "user-agent":["ELB-HealthChecker/2.0"],"accept-encoding":["gzip, compressed"]},
-              "response_body":"V2VsY29tZSB0byBSZXRhaWxsb29w","response_headers":{"x-powered-by":["Express"],
-              "vary":["Origin"],"access-control-allow-credentials":["true"],"content-type":["text/html; charset=utf-8"],
-              "content-length":["21"],"etag":["W/\"15-2rFUmgZR2gmQik/+S8kDb7KSIZk\""]
-            },
-            "sdk_type":"JsExpress",
-            "status_code":200,
-            "timestamp": #{timestamp},
-            "url_path":"/","errors":[],"tags":[]}
-      |]
-
-
--- Test format detection
-msg4 :: Text -> AE.Value
-msg4 timestamp =
-  [aesonQQ|{"duration":476434,
-            "host":"172.31.29.11",
-            "method":"GET",
-            "path_params":{},
-            "project_id":"00000000-0000-0000-0000-000000000000",
-            "proto_minor":1,
-            "proto_major":1,"query_params":{},
-            "raw_url":"/","referer":"","request_body":"eyJwYXNzd29yZCI6IltDTElFTlRfUkVEQUNURURdIiwidXNlcm5hbWUiOjJ9",
+            "raw_url":"/","referer":"","request_body": #{body},
             "request_headers":{
               "connection":["upgrade"],"host":["172.31.29.11"],
               "x-real-ip":["172.31.81.1"],"x-forwarded-for":["172.31.81.1"],

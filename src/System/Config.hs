@@ -1,4 +1,4 @@
-module System.Config (EnvConfig (..), AuthContext (..), getAppContext, configToEnv, DeploymentEnv (..)) where
+module System.Config (EnvConfig (..), AuthContext (..), CodeBlobKey, getAppContext, configToEnv, DeploymentEnv (..)) where
 
 import Colourista.IO (blueMessage)
 import Control.Exception.Safe qualified as Safe
@@ -26,6 +26,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Pkg.DeriveUtils qualified as DeriveUtils
 import Pkg.ExtractionWorker qualified as ExtractionWorker
+import Pkg.LiveTail qualified as LiveTail
 import Pkg.Parser.Expr qualified as ParserExpr
 import Pkg.TraceSessionCache qualified as TraceSessionCache
 import Relude
@@ -317,6 +318,13 @@ type HostStatsKey = (Projects.ProjectId, Text, Text, Text, Text, Int)
 type EndpointStatsKey = ((Projects.ProjectId, Text, Text, Text), (Text, Int, Int, Text))
 
 
+-- | Identifies a source blob: @(owner, repo, ref, path)@. Deliberately NOT project-scoped —
+-- the same public repo linked by two projects is the same bytes, and the credential that
+-- fetched it is not part of the file's identity. Access is still checked per request before
+-- a lookup happens; this caches the fetch, never the authorization.
+type CodeBlobKey = (Text, Text, Text, Text)
+
+
 data AuthContext = AuthContext
   { env :: EnvConfig
   , pool :: Pool.Pool Connection
@@ -338,11 +346,20 @@ data AuthContext = AuthContext
   -- it; a few minutes of staleness is invisible on a rolling 24h count.
   , endpointStatsCache :: Cache EndpointStatsKey (V.Vector Endpoints.EndpointRequestStats)
   -- ^ endpoints-list per-endpoint traffic stats; same deal as 'hostStatsCache'.
+  , codeBlobCache :: Cache CodeBlobKey ByteString
+  -- ^ Source blobs for stack-trace code context, keyed @(owner, repo, ref, path)@. One git-host
+  -- API call per frame opened otherwise, and a hot issue viewed repeatedly re-fetches every
+  -- time — a rate-limit stall then presents as the panel silently not filling in. Only
+  -- successful fetches are stored, so a 404 or a revoked token is never cached.
   , projectKeyCache :: Cache Text (Maybe Projects.ProjectId)
   , extractionWorker :: ExtractionWorker.WorkerState Telemetry.OtelLogsAndSpans
   , traceSessionCache :: TraceSessionCache.TraceSessionCache
   , tfCircuit :: ExtractionWorker.CircuitBreaker
   , metricCatalogBuffer :: Telemetry.MetricCatalogBuffer
+  , liveTail :: LiveTail.Runtime
+  -- ^ Live Tail's subscription cache, local hub and emit callback. Assembled at startup
+  -- because the emit callback depends on the chosen transport, which depends on config that
+  -- is only complete here.
   , config :: EnvConfig
   , -- App-lifetime ki scope for fire-and-forget work that must outlive the request
     -- (Slack/Twilio handlers ACK fast, then process in the background). Nothing in
@@ -408,10 +425,35 @@ configToEnv config = do
   logsPatternCache <- liftIO $ newCache (Just $ TimeSpec (30 * 60) 0)
   hostStatsCache <- liftIO $ newCache (Just $ TimeSpec 300 0)
   endpointStatsCache <- liftIO $ newCache (Just $ TimeSpec 300 0)
+  -- 15 min: a mutable ref (a branch name) must not pin a stale blob for long, and the value
+  -- here is collapsing the burst of frames opened while reading ONE issue, not long-term
+  -- storage. A commit-sha ref is immutable and would tolerate far longer, but the key cannot
+  -- tell the two apart, so the shorter bound wins.
+  codeBlobCache <- liftIO $ newCache (Just $ TimeSpec (15 * 60) 0)
   extractionWorker <- liftIO $ ExtractionWorker.initWorkerState config.extractionWorkerShards config.extractionQueueCapacity
   traceSessionCache <- liftIO TraceSessionCache.newTraceSessionCache
   tfCircuit <- liftIO ExtractionWorker.newCircuitBreaker
   metricCatalogBuffer <- liftIO Telemetry.newMetricCatalogBuffer
+  -- The emit callback is the local hub by default. Server startup replaces it with the Kafka
+  -- producer when the deployment is split; wiring it here means a context built outside the
+  -- server (tests, CLI, jobs) still has a working single-process Live Tail rather than a
+  -- partially-initialised field.
+  liveTail <- liftIO do
+    cache <- LiveTail.newSubCache
+    hub <- LiveTail.newHub
+    -- Brokers, not 'enableKafkaService': that flag differs between web and ingest pods in a
+    -- split deployment, so reading it would have the two roles pick different transports.
+    -- Everything else Live Tail needs is a constant in "Pkg.LiveTail" — none of it is a
+    -- deployment decision, and an operator asked to pick a lease length has no way to answer.
+    relayBuffer <- LiveTail.newRelayBuffer
+    pure
+      LiveTail.Runtime
+        { transport = LiveTail.transportFor config.kafkaBrokers
+        , cache
+        , hub
+        , relayBuffer
+        , emit = LiveTail.deliver hub
+        }
   -- Seed the parser whitelist + /api/v1/schema handler from a live
   -- introspection of @otel_logs_and_spans@. Non-fatal: a missing table
   -- during partial migration falls back to 'flattenedOtelAttributesBuiltin'
@@ -432,10 +474,12 @@ configToEnv config = do
       , logsPatternCache
       , hostStatsCache
       , endpointStatsCache
+      , codeBlobCache
       , extractionWorker
       , traceSessionCache
       , tfCircuit
       , metricCatalogBuffer
+      , liveTail
       , config
       , backgroundScope = Nothing
       }

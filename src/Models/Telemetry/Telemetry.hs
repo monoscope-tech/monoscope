@@ -138,7 +138,9 @@ import Hasql.Statement (Statement)
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), WrappedEnum (..), WrappedEnumSC (..), encodeEnumSC, idFromText, unAesonTextMaybe)
+import Pkg.ErrorFingerprint qualified as EF
 import Pkg.ExtractionWorker qualified as EW
+import Pkg.Metrics qualified as Metrics
 import Relude hiding (ask)
 import Relude.Extra.Foldable1 (maximum1, minimum1)
 import System.IO (hPutStrLn)
@@ -1530,8 +1532,11 @@ handOffBatches worker caches records = do
                   , batchMaxTs = maximum1 timestamps
                   }
           ok <- atomically (EW.submitBatch worker batch)
-          -- TODO(otel-metrics): emit a counter for dropped batches when submitBatch fails.
-          unless ok $ atomicModifyIORef' worker.droppedBatches \n -> (n + 1, ())
+          -- A refused batch is written and queryable but never enriched, so nothing downstream
+          -- looks wrong — the counter is the only place it surfaces.
+          unless ok do
+            Metrics.count Metrics.extractionBatchesDropped 1 []
+            atomicModifyIORef' worker.droppedBatches \n -> (n + 1, ())
 
 
 -- | Bulk-insert the whole batch in ONE column-oriented statement:
@@ -1982,7 +1987,7 @@ atErrorFrom spanObj typ msg stack =
       serviceName = resourceServiceName resc
       -- Empty (not "unknown") keeps hash inputs stable when runtime detection fails.
       rt = fromMaybe "" tech
-      hashes = ErrorPatterns.computeErrorHashes spanObj.project_id serviceName spanObj.name rt typ msg stack
+      hashes = EF.computeErrorHashes spanObj.project_id serviceName spanObj.name rt typ msg stack
    in ErrorPatterns.ATError
         { projectId = UUIDId <$> UUID.fromText spanObj.project_id
         , when = spanObj.timestamp
@@ -1993,7 +1998,7 @@ atErrorFrom spanObj typ msg stack =
         , stackTrace = stack
         , hash = hashes.narrow
         , parentHash = Just hashes.broad
-        , isFramework = ErrorPatterns.isFrameworkTransportError typ (ErrorPatterns.normalizeMessage msg)
+        , isFramework = EF.isFrameworkTransportError typ (EF.normalizeMessage msg)
         , technology = Nothing
         , serviceName = serviceName
         , requestMethod = method

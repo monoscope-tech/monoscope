@@ -40,16 +40,20 @@ module Models.Apis.Issues (
   updateIssueWithNewAnomaly,
   updateIssueEnhancement,
   updateIssueCriticality,
-  acknowledgeIssue,
-  isInCooldown,
+  AckWindow (..),
+  AckSet (..),
+  ackUntil,
+  indefiniteUntil,
+  isSilenced,
   setAckState,
+  expireAcks,
   setArchiveState,
   autoArchiveStaleDiscoveryIssues,
   selectIssueByHash,
   selectLatestIssueByHash,
   reopenIssue,
   bumpIssueUpdatedAt,
-  rateChangeCooldownHours,
+  issueNotifyDedupHours,
 
   -- * Conversion Functions
   createAPIChangeIssue,
@@ -61,7 +65,6 @@ module Models.Apis.Issues (
   SpikeResult (..),
 
   -- * Utilities
-  issueIdText,
   parseIssueType,
   hashPrefix,
   defaultRecommendedAction,
@@ -82,7 +85,7 @@ module Models.Apis.Issues (
 
   -- * Thread ID Helpers
   slackThreadToConversationId,
-  discordThreadToConversationId,
+  textToConversationId,
 
   -- * Activity Log
   IssueEvent (..),
@@ -114,7 +117,7 @@ import Data.Hashable (hash)
 import Data.OpenApi (ToSchema)
 import Data.Text qualified as T
 import Data.Text.Display (Display, display)
-import Data.Time (UTCTime (..), addDays, addUTCTime)
+import Data.Time (Day (ModifiedJulianDay), UTCTime (..), addDays, addUTCTime)
 import Data.Time.LocalTime (ZonedTime, utc, utcToZonedTime, zonedTimeToUTC)
 import Data.UUID.V5 qualified as UUID5
 import Data.Vector qualified as V
@@ -137,17 +140,13 @@ import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.LogPatterns (RateChangeDirection (..))
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), idToText, rawSql, selectFrom)
+import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), rawSql, selectFrom)
 import Relude hiding (id)
 import Servant (FromHttpApiData (..), ServerError, err500, errBody)
 import System.Types (DB)
 
 
 type IssueId = UUIDId "issue"
-
-
-issueIdText :: IssueId -> Text
-issueIdText = idToText
 
 
 -- | Issue types
@@ -314,11 +313,17 @@ data Issue = Issue
   , seqNum :: Int
   , parentHash :: Maybe Text
   , isFramework :: Bool
-  , -- DB columns added after the original 0007 schema. Order matches attnum
-    -- (cooldown_until from 0075, last_notified_at from 0085) so generic
-    -- 'DecodeRow' against @SELECT *@ resolves them in the right slots.
+  , -- Columns added after the original 0007 schema (cooldown_until 0075,
+    -- last_notified_at 0085, acknowledged_until 0125). Field order no longer has
+    -- to track attnum: every read goes through 'selectFrom' @Issue, which emits
+    -- the column list from these fields. Read this row with @SELECT *@ and the
+    -- next @ADD COLUMN@ breaks decoding on any binary that hasn't been redeployed
+    -- yet — a 500 on issue reads for the length of a rolling deploy.
     cooldownUntil :: Maybe ZonedTime
   , lastNotifiedAt :: Maybe ZonedTime
+  , acknowledgedUntil :: Maybe ZonedTime
+  -- ^ End of the acknowledgement window (0125). Always set alongside
+  -- @acknowledged_at@; 'indefiniteUntil' for an indefinite ack.
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, HI.DecodeRow, NFData)
@@ -326,7 +331,7 @@ data Issue = Issue
 
 
 -- | Issue with aggregated event data (for list views).
--- Columns 1-28 must match Issue's field declaration order (Generic DecodeRow).
+-- The leading columns must match Issue's field declaration order (Generic DecodeRow).
 data IssueL = IssueL
   { base :: Issue
   , eventCount :: Int
@@ -383,17 +388,17 @@ DO UPDATE SET
 
 -- | Select issue by ID
 selectIssueById :: DB es => IssueId -> Eff es (Maybe Issue)
-selectIssueById iid = Hasql.interpOne [HI.sql| SELECT * FROM apis.issues WHERE id = #{iid} |]
+selectIssueById iid = Hasql.interpOne (selectFrom @Issue <> [HI.sql| WHERE id = #{iid} |])
 
 
 selectIssueByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Issue)
-selectIssueByHash pid tgtHash = Hasql.interpOne [HI.sql| SELECT * FROM apis.issues WHERE project_id = #{pid} AND target_hash = #{tgtHash} ORDER BY updated_at DESC, id DESC LIMIT 1 |]
+selectIssueByHash pid tgtHash = Hasql.interpOne (selectFrom @Issue <> [HI.sql| WHERE project_id = #{pid} AND target_hash = #{tgtHash} ORDER BY updated_at DESC, id DESC LIMIT 1 |])
 
 
 -- | Find most recent RuntimeException issue for a given hash (including acknowledged/archived)
 selectLatestIssueByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Issue)
 selectLatestIssueByHash pid tgtHash =
-  Hasql.interpOne [HI.sql| SELECT * FROM apis.issues WHERE project_id = #{pid} AND target_hash = #{tgtHash} AND issue_type = #{RuntimeException}::apis.issue_type ORDER BY created_at DESC LIMIT 1 |]
+  Hasql.interpOne (selectFrom @Issue <> [HI.sql| WHERE project_id = #{pid} AND target_hash = #{tgtHash} AND issue_type = #{RuntimeException}::apis.issue_type ORDER BY created_at DESC LIMIT 1 |])
 
 
 -- | Bump updated_at and occurrence count; @extra@ appends further SET clauses
@@ -410,7 +415,7 @@ touchIssue extra issueId = do
 
 -- | Reopen a previously acknowledged/archived issue (clear ack/archive, bump occurrence count)
 reopenIssue :: (DB es, Time :> es) => IssueId -> Eff es ()
-reopenIssue = touchIssue [HI.sql|, acknowledged_at = NULL, acknowledged_by = NULL, archived_at = NULL|]
+reopenIssue = touchIssue [HI.sql|, acknowledged_at = NULL, acknowledged_by = NULL, acknowledged_until = NULL, archived_at = NULL|]
 
 
 -- | Bump updated_at and occurrence count without clearing ack/archive (for already-open issues)
@@ -455,13 +460,13 @@ selectIssues pid isAcknowledged isArchived limit offset timeRangeM sortM period 
       [HI.sql|
         SELECT i.id, i.created_at, i.updated_at, i.project_id, i.issue_type,
           i.endpoint_hash, i.acknowledged_at, i.acknowledged_by, i.archived_at, i.title, i.service, i.critical,
-          -- Columns 1-28 must match Issue's field declaration order so Generic decodeRow lines up.
+          -- The leading columns must match Issue's field declaration order so Generic decodeRow lines up.
           -- Prefer stored severity (e.g. 'low' for silent drops); fall back to critical flag.
           COALESCE(NULLIF(i.severity, ''), CASE WHEN i.critical THEN 'critical' ELSE 'info' END),
           i.affected_requests::bigint, i.affected_clients::bigint, NULL::double precision,
           i.recommended_action, i.migration_complexity, i.issue_data, i.request_payloads, i.response_payloads,
           NULL::timestamp with time zone, NULL::bigint,
-          i.target_hash, NULL::text, i.seq_num::bigint, i.parent_hash, i.is_framework, i.cooldown_until, i.last_notified_at,
+          i.target_hash, NULL::text, i.seq_num::bigint, i.parent_hash, i.is_framework, i.cooldown_until, i.last_notified_at, i.acknowledged_until,
           CASE
             WHEN i.issue_type = 'runtime_exception' THEN COALESCE(err_ev.cnt, 0)
             WHEN i.issue_type IN ('log_pattern', 'log_pattern_rate_change') THEN COALESCE(lp_ev.cnt, 0)
@@ -499,7 +504,7 @@ selectIssues pid isAcknowledged isArchived limit offset timeRangeM sortM period 
         ) lp_ev ON i.issue_type IN ('log_pattern', 'log_pattern_rate_change')
         LEFT JOIN LATERAL (
           SELECT a.event FROM apis.issue_activity_log a
-          WHERE a.issue_id = i.id AND a.event IN ('resolved', 'auto_resolved', 'reopened', 'regressed', 'escalated')
+          WHERE a.issue_id = i.id AND a.event IN ('resolved', 'auto_resolved', 'reopened', 'regressed', 'escalated', 'ack_expired')
           ORDER BY a.created_at DESC LIMIT 1
         ) lat ON TRUE
         WHERE i.project_id = #{pid} ^{iFilters}
@@ -515,18 +520,17 @@ selectIssues pid isAcknowledged isArchived limit offset timeRangeM sortM period 
 -- | Find open issue for endpoint
 findOpenIssueForEndpoint :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Issue)
 findOpenIssueForEndpoint pid tgtHash =
-  Hasql.interpOne [HI.sql| SELECT * FROM apis.issues WHERE project_id = #{pid} AND issue_type = #{ApiChange}::apis.issue_type AND target_hash = #{tgtHash} AND acknowledged_at IS NULL AND archived_at IS NULL LIMIT 1 |]
+  Hasql.interpOne (selectFrom @Issue <> [HI.sql| WHERE project_id = #{pid} AND issue_type = #{ApiChange}::apis.issue_type AND target_hash = #{tgtHash} AND acknowledged_at IS NULL AND archived_at IS NULL LIMIT 1 |])
 
 
 -- | Update issue with new anomaly data
 updateIssueWithNewAnomaly :: (DB es, Time :> es) => IssueId -> APIChangeData -> Eff es ()
 updateIssueWithNewAnomaly issueId newData = do
   now <- Time.currentTime
-  let jdata = Aeson newData
   Hasql.interpExecute_
     [HI.sql|
       UPDATE apis.issues SET
-        issue_data = issue_data || #{jdata}::jsonb,
+        issue_data = issue_data || #{Aeson newData}::jsonb,
         affected_requests = affected_requests + 1,
         updated_at = #{now}
       WHERE id = #{issueId} |]
@@ -551,58 +555,82 @@ updateIssueCriticality issueId isCritical sev =
       UPDATE apis.issues SET critical = #{isCritical}, severity = #{sev} WHERE id = #{issueId} |]
 
 
--- How long an acknowledgment suppresses re-firing for rate-change issues.
--- Kept short so genuinely persistent regressions still resurface, but long
--- enough that a ack during an incident is not immediately undone.
-rateChangeCooldownHours :: Int
-rateChangeCooldownHours = 24
+-- | Dedup window for repeat notifications about the *same* issue. Distinct from
+-- an acknowledgement, which is the user telling us to stop entirely.
+issueNotifyDedupHours :: Int
+issueNotifyDedupHours = 24
 
 
--- | Acknowledge issue. For rate-change issues the ack also opens a 24h cooldown
--- that the detector consults before firing again for the same (project,
--- target_hash) — prevents the "ack'd issue re-fires on the next detection run"
--- pattern that was making the Inbox unusable.
-acknowledgeIssue :: (DB es, Time :> es) => IssueId -> Projects.UserId -> Eff es ()
-acknowledgeIssue issueId userId = do
-  now <- Time.currentTime
-  let hrs = rateChangeCooldownHours
-  Hasql.interpExecute_
-    [HI.sql|
-      UPDATE apis.issues SET
-        acknowledged_at = #{now},
-        acknowledged_by = #{userId},
-        cooldown_until = CASE WHEN issue_type = 'log_pattern_rate_change'
-                              THEN #{now}::timestamptz + (INTERVAL '1 hour' * #{hrs})
-                              ELSE cooldown_until END
-      WHERE id = #{issueId} |]
+-- | How long an acknowledgement silences an issue.
+--
+-- @AckIndefinite@ silences until the issue regresses or someone un-acks it;
+-- @AckFor n@ silences for @n@ minutes, after which 'expireAcks' returns the
+-- issue to the Inbox and notifications resume. There is deliberately no third
+-- "acked but still notifying" state — that ambiguity is what this replaces.
+data AckWindow = AckIndefinite | AckFor Int
+  deriving stock (Eq, Show)
 
 
--- | Set ack/unack on a batch of issues. Pass @Just now@ to ack (records @acknowledged_by@);
--- pass @Nothing@ to unack (clears both timestamp and actor). Rate-change acks
--- also set a 24h cooldown; unacks clear it.
-setAckState :: DB es => Projects.ProjectId -> [IssueId] -> Maybe UTCTime -> Maybe Projects.UserId -> Eff es Int64
-setAckState pid iids mTs mUid
+-- | Far-future sentinel standing in for "no end". Matches the value monitors use
+-- for an indefinite mute, and stays inside 'UTCTime' (Postgres @infinity@ has no
+-- Haskell decoding).
+indefiniteUntil :: UTCTime
+indefiniteUntil = UTCTime (ModifiedJulianDay 100000) 0
+
+
+-- | End instant of an acknowledgement window opened at @now@.
+--
+-- >>> import Data.Time (UTCTime (..), fromGregorian)
+-- >>> ackUntil (UTCTime (fromGregorian 2026 1 1) 0) (AckFor 90)
+-- 2026-01-01 01:30:00 UTC
+-- >>> ackUntil (UTCTime (fromGregorian 2026 1 1) 0) AckIndefinite == indefiniteUntil
+-- True
+ackUntil :: UTCTime -> AckWindow -> UTCTime
+ackUntil now = \case
+  AckIndefinite -> indefiniteUntil
+  AckFor mins -> addUTCTime (fromIntegral mins * 60) now
+
+
+-- | What an acknowledgement records: when, by whom, and until when.
+data AckSet = AckSet {at :: UTCTime, by :: Maybe Projects.UserId, window :: AckWindow}
+
+
+-- | Acknowledge (@Just@) or un-acknowledge (@Nothing@) a batch of issues.
+-- Acknowledging stamps the actor and the end of the silence window; un-acking
+-- clears all three columns so the issue is back in the Inbox and notifiable.
+setAckState :: DB es => Projects.ProjectId -> [IssueId] -> Maybe AckSet -> Eff es Int64
+setAckState pid iids ackM
   | null iids = pure 0
   | otherwise =
-      let hrs = rateChangeCooldownHours
-       in Hasql.interpExecute
-            [HI.sql|
-              UPDATE apis.issues
-              SET acknowledged_at = #{mTs},
-                  acknowledged_by = #{mUid},
-                  updated_at = COALESCE(#{mTs}, updated_at),
-                  cooldown_until = CASE
-                    WHEN #{mTs}::timestamptz IS NULL THEN NULL
-                    WHEN issue_type = 'log_pattern_rate_change'
-                      THEN #{mTs}::timestamptz + (INTERVAL '1 hour' * #{hrs})
-                    ELSE cooldown_until END
-              WHERE project_id = #{pid} AND id = ANY(#{iids}::uuid[]) |]
+      Hasql.interpExecute
+        [HI.sql|
+          UPDATE apis.issues
+          SET acknowledged_at = #{(.at) <$> ackM},
+              acknowledged_by = #{ackM >>= (.by)},
+              acknowledged_until = #{(\a -> ackUntil a.at a.window) <$> ackM},
+              updated_at = COALESCE(#{(.at) <$> ackM}, updated_at)
+          WHERE project_id = #{pid} AND id = ANY(#{iids}::uuid[]) |]
 
 
--- | True if an acknowledged issue for this (project, target, type) is still
--- within its cooldown window. The detector uses this to suppress re-firing.
-isInCooldown :: DB es => Projects.ProjectId -> Text -> IssueType -> UTCTime -> Eff es Bool
-isInCooldown pid tgt ty now =
+-- | Clear acknowledgements whose window has closed, returning the affected ids so
+-- the caller can log 'IEAckExpired'. Nothing else clears a timed ack, so this is
+-- what stops one from silently rotting out of sight forever.
+expireAcks :: DB es => UTCTime -> Eff es [IssueId]
+expireAcks now =
+  HI.getOneColumn
+    <<$>> Hasql.interp
+      [HI.sql|
+        UPDATE apis.issues
+        SET acknowledged_at = NULL, acknowledged_by = NULL, acknowledged_until = NULL
+        WHERE acknowledged_at IS NOT NULL AND archived_at IS NULL AND acknowledged_until <= #{now}
+        RETURNING id |]
+
+
+-- | True if a live acknowledgement for this (project, target, type) is still
+-- silencing the signal. Detectors consult this before firing a fresh issue: an
+-- ack means "don't tell me about this again", not merely "hide the old row".
+isSilenced :: DB es => Projects.ProjectId -> Text -> IssueType -> UTCTime -> Eff es Bool
+isSilenced pid tgt ty now =
   isJust @Int64
     <$> Hasql.interpOne
       [HI.sql|
@@ -610,8 +638,7 @@ isInCooldown pid tgt ty now =
         WHERE project_id = #{pid}
           AND target_hash = #{tgt}
           AND issue_type = #{ty}::apis.issue_type
-          AND cooldown_until IS NOT NULL
-          AND cooldown_until > #{now}
+          AND acknowledged_until > #{now}
         LIMIT 1 |]
 
 
@@ -681,20 +708,20 @@ selectIssuesByFilters pid isAck isArch tyM svcM limit offset = do
 
 
 -- | Create API Change issue from anomalies
-createAPIChangeIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Text -> V.Vector Anomalies.AnomalyVM -> Eff es Issue
+createAPIChangeIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Text -> NonEmpty Anomalies.AnomalyVM -> Eff es Issue
 createAPIChangeIssue projectId endpointHash anomalies = do
-  let firstAnomaly = V.head anomalies
+  let firstAnomaly = head anomalies
       apiChangeData =
         APIChangeData
           { endpointMethod = fromMaybe "UNKNOWN" firstAnomaly.endpointMethod
           , endpointPath = fromMaybe "/" firstAnomaly.endpointUrlPath
           , endpointHost = fromMaybe "Unknown" firstAnomaly.endpointHost
-          , anomalyHashes = V.map (.targetHash) anomalies
+          , anomalyHashes = V.fromList $ toList $ fmap (.targetHash) anomalies
           , shapeChanges = V.empty
           , formatChanges = V.empty
-          , newFields = V.concatMap (.shapeNewUniqueFields) anomalies
-          , deletedFields = V.concatMap (.shapeDeletedFields) anomalies
-          , modifiedFields = V.concatMap (.shapeUpdatedFieldFormats) anomalies
+          , newFields = foldMap (.shapeNewUniqueFields) anomalies
+          , deletedFields = foldMap (.shapeDeletedFields) anomalies
+          , modifiedFields = foldMap (.shapeUpdatedFieldFormats) anomalies
           }
       breakingChanges = V.length apiChangeData.deletedFields + V.length apiChangeData.modifiedFields
       isCritical = breakingChanges > 0
@@ -709,7 +736,7 @@ createAPIChangeIssue projectId endpointHash anomalies = do
       , critical = isCritical
       , severity = if isCritical then Critical else Warning
       , title =
-          if V.any ((== Anomalies.ATEndpoint) . (.anomalyType)) anomalies
+          if any ((== Anomalies.ATEndpoint) . (.anomalyType)) anomalies
             then "New endpoint detected: " <> apiChangeData.endpointMethod <> " " <> apiChangeData.endpointPath <> " on " <> apiChangeData.endpointHost
             else "API structure has changed"
       , recommendedAction = defaultRecommendedAction
@@ -797,22 +824,19 @@ data AIChatMessage = AIChatMessage
 getOrCreateConversation :: (DB es, Error ServerError :> es, Time :> es) => Projects.ProjectId -> UUIDId "conversation" -> ConversationType -> AE.Value -> Eff es AIConversation
 getOrCreateConversation pid convId convType ctx = do
   now <- Time.currentTime
-  let ctxJ = Aeson ctx
   Hasql.interpOne
     [HI.sql| INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type, context)
-              VALUES (#{pid}, #{convId}, #{convType}, #{ctxJ}) ON CONFLICT (project_id, conversation_id) DO UPDATE SET updated_at = #{now}
+              VALUES (#{pid}, #{convId}, #{convType}, #{Aeson ctx}) ON CONFLICT (project_id, conversation_id) DO UPDATE SET updated_at = #{now}
               RETURNING id, project_id, conversation_id, conversation_type, context, created_at, updated_at |]
     >>= (`whenNothing` throwError err500{errBody = "getOrCreateConversation: RETURNING clause must return a row"})
 
 
 -- | Insert a new chat message
 insertChatMessage :: DB es => Projects.ProjectId -> UUIDId "conversation" -> ChatRole -> Text -> Maybe AE.Value -> Maybe AE.Value -> Eff es ()
-insertChatMessage pid convId chatRole chatContent widgetsM metadataM = do
-  let widgetsJ = Aeson <$> widgetsM
-      metaJ = Aeson <$> metadataM
+insertChatMessage pid convId chatRole chatContent widgetsM metadataM =
   Hasql.interpExecute_
     [HI.sql| INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content, widgets, metadata)
-            VALUES (#{pid}, #{convId}, #{chatRole}, #{chatContent}, #{widgetsJ}, #{metaJ}) |]
+            VALUES (#{pid}, #{convId}, #{chatRole}, #{chatContent}, #{Aeson <$> widgetsM}, #{Aeson <$> metadataM}) |]
 
 
 -- | Select chat history for a conversation (oldest first)
@@ -833,10 +857,6 @@ textToConversationId = UUIDId . UUID5.generateNamed UUID5.namespaceOID . BS.unpa
 
 slackThreadToConversationId :: Text -> Text -> UUIDId "conversation"
 slackThreadToConversationId cid ts = textToConversationId (cid <> ":" <> ts)
-
-
-discordThreadToConversationId :: Text -> UUIDId "conversation"
-discordThreadToConversationId = textToConversationId
 
 
 chatMigrationLockKey :: UUIDId "conversation" -> Int64
@@ -925,17 +945,15 @@ createLogPatternRateChangeIssue projectId lp sr = do
 -- "api: GET /users 500"
 sanitizeLogPatternTitle :: Text -> Maybe Text -> Maybe Text -> Text
 sanitizeLogPatternTitle raw sampleM serviceM =
-  let replacements =
-        [(m, " ") | m <- [";neutral⇒", ";badge-error⇒", ";badge-warning⇒", ";badge-info⇒", ";badge-success⇒"]]
+  let stripped =
+        unwords
+          $ words
+          $ foldl' (flip $ uncurry T.replace) raw
+          $ [(m, " ") | m <- [";neutral⇒", ";badge-error⇒", ";badge-warning⇒", ";badge-info⇒", ";badge-success⇒"]]
           <> [(p, "") | p <- ["{integer}", "{uuid}", "{float}", "{*}", "{hex}"]]
-      stripped = unwords $ words $ foldl' (\t (a, b) -> T.replace a b t) raw replacements
       -- printable-ASCII ratio > 0.7, as integer arithmetic
       usable = not (T.null stripped) && 10 * T.length (T.filter (\c -> isPrint c && isAscii c) stripped) > 7 * T.length stripped
-      fallback = case (serviceM, sampleM) of
-        (Just svc, Just s) -> svc <> ": " <> T.take 80 s
-        (_, Just s) -> s
-        (Just svc, _) -> svc
-        _ -> "log event"
+      fallback = fromMaybe "log event" $ ((\svc s -> svc <> ": " <> T.take 80 s) <$> serviceM <*> sampleM) <|> sampleM <|> serviceM
    in T.take 100 $ if usable then stripped else fallback
 
 
@@ -1077,6 +1095,7 @@ mkIssue opts = do
       , seqNum = 0 -- Auto-assigned by DB trigger
       , cooldownUntil = Nothing
       , lastNotifiedAt = Nothing
+      , acknowledgedUntil = Nothing
       }
 
 
@@ -1095,6 +1114,7 @@ data IssueEvent
   | IEUnassigned
   | IEAutoResolved
   | IEEscalated
+  | IEAckExpired
   deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField, ToSchema) via WrappedEnumSC 'Nothing "IE" IssueEvent
@@ -1115,10 +1135,9 @@ data IssueActivity = IssueActivity
 logIssueActivity :: (DB es, Time :> es) => IssueId -> IssueEvent -> Maybe Projects.UserId -> Maybe AE.Value -> Eff es ()
 logIssueActivity issueId event createdBy metadataM = do
   now <- Time.currentTime
-  let metaJ = Aeson <$> metadataM
   Hasql.interpExecute_
     [HI.sql| INSERT INTO apis.issue_activity_log (issue_id, event, created_by, metadata, created_at)
-    SELECT #{issueId}, #{event}, #{createdBy}, #{metaJ}, #{now}
+    SELECT #{issueId}, #{event}, #{createdBy}, #{Aeson <$> metadataM}, #{now}
     WHERE EXISTS (SELECT 1 FROM apis.issues WHERE id = #{issueId}) |]
 
 
@@ -1171,17 +1190,16 @@ addReport (r :: Report) =
 
 
 getReportById :: DB es => ReportId -> Eff es (Maybe Report)
-getReportById rid = Hasql.interpOne [HI.sql| SELECT * FROM apis.reports WHERE id = #{rid} |]
+getReportById rid = Hasql.interpOne (selectFrom @Report <> [HI.sql| WHERE id = #{rid} |])
 
 
 reportHistoryByProject :: DB es => Projects.ProjectId -> Int -> Eff es [ReportListItem]
-reportHistoryByProject pid page = do
-  let off = page * 20
-  Hasql.interp [HI.sql| SELECT id, created_at, project_id, report_type FROM apis.reports WHERE project_id = #{pid} ORDER BY created_at DESC LIMIT 20 OFFSET #{off} |]
+reportHistoryByProject pid page =
+  Hasql.interp (selectFrom @ReportListItem <> [HI.sql| WHERE project_id = #{pid} ORDER BY created_at DESC LIMIT 20 OFFSET #{page * 20} |])
 
 
 getLatestReportByType :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Report)
-getLatestReportByType pid rType = Hasql.interpOne [HI.sql| SELECT * FROM apis.reports WHERE project_id = #{pid} AND report_type = #{rType} ORDER BY created_at DESC LIMIT 1 |]
+getLatestReportByType pid rType = Hasql.interpOne (selectFrom @Report <> [HI.sql| WHERE project_id = #{pid} AND report_type = #{rType} ORDER BY created_at DESC LIMIT 1 |])
 
 
 createErrorSpikeIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> ErrorPatterns.ErrorPatternWithCurrentRate -> Double -> Double -> Double -> Eff es Issue
@@ -1191,8 +1209,8 @@ createErrorSpikeIssue projectId errRate currentRate baselineMean zScore =
         projectId
         errRate
         (round currentRate)
-        (const $ "Error Spike: " <> errRate.errorType <> " (" <> show (round increasePercent :: Int) <> "% increase)")
-        ("Error rate has spiked " <> show (round zScore :: Int) <> " standard deviations above baseline. Current: " <> show (round currentRate :: Int) <> "/hr, Baseline: " <> show (round baselineMean :: Int) <> "/hr. Investigate recent deployments or changes.")
+        (const $ "Error Spike: " <> errRate.errorType <> " (" <> showPct increasePercent <> " increase)")
+        ("Error rate has spiked " <> show (round zScore :: Int) <> " standard deviations above baseline. Current: " <> showRate currentRate <> ", Baseline: " <> showRate baselineMean <> ". Investigate recent deployments or changes.")
 
 
 -- | Create a new issue for an error pattern.

@@ -208,6 +208,11 @@ tests:
       - hspec
       - relude >= 1.2.0.0
       - aeson
+      # EvalConformanceSpec renders an Expr to SQL via its Display instance.
+      - text-display
+      # LiveTailSpec races registrations through a ki scope, and fakes a broker that throws.
+      - ki
+      - safe-exceptions
       - hasql
       - hasql-interpolate
       - hasql-pool
@@ -263,6 +268,8 @@ tests:
       - kafka-effectful
       - conduit
       - minio-hs
+      # Pages.GitSyncSpec pulls Effectful's transformers-typed internals
+      - transformers
   unit-tests:
     main: Main.hs
     source-dirs: test/unit
@@ -290,6 +297,8 @@ tests:
       - text
       - uuid
       - uuid-quasi
+      # Pkg.GitSpec serves canned vendor responses to the HTTP effect
+      - http-client
       - neat-interpolation
       - aeson-qq
       - extra

@@ -918,13 +918,13 @@ data QueryValidation = QueryValidation
 
 
 -- | Validate a KQL query without running it.
-logExplorerValidateH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders QueryValidation)
-logExplorerValidateH pid queryM = do
+logExplorerValidateH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders QueryValidation)
+logExplorerValidateH pid queryM sourceM = do
   _ <- Projects.sessionAndProject pid
-  -- No source: the editor posts only the query text, so a metrics query typed on the
-  -- Metrics page is still squiggled against the spans columns even though running it
-  -- now works. Fixing that needs the source in the request, client side included.
-  addRespHeaders $ case parseQueryDiagnosed Nothing (maybeToMonoid queryM) of
+  -- Same source the query will run under, so the squiggle and the execution agree about
+  -- which table's columns exist. Without it a metrics query is marked invalid on a page
+  -- that runs it happily.
+  addRespHeaders $ case parseQueryDiagnosed (parseMaybe pSource =<< sourceM) (maybeToMonoid queryM) of
     Right _ -> QueryValidation{valid = True, message = Nothing, column = Nothing, width = Nothing}
     Left e -> QueryValidation{valid = False, message = Just e.message, column = Just e.column, width = Just e.width}
 

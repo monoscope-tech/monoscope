@@ -128,6 +128,60 @@ export const mountList = async (props: Partial<LogList> = {}) => {
   return el;
 };
 
+// ── Live push transport ──────────────────────────────────────────────────────
+// Stand-in for the SSE seam: a stubbed registration endpoint plus an EventSource that
+// records whether it is still open. Live tail is a server push, so "is this tab watching?"
+// is answered by open connections, not by timers — tests assert on `openCount()`.
+export const fakeLiveTransport = (registerBody: any = { subscription_id: 's1', stream_url: '/stream/s1' }, status = 200) => {
+  const sources: FakeEventSource[] = [];
+  const calls: { url: string; method?: string }[] = [];
+  class FakeEventSource {
+    listeners: Record<string, ((e: any) => void)[]> = {};
+    onerror: (() => void) | null = null;
+    closed = false;
+    constructor(public url: string) {
+      sources.push(this);
+    }
+    addEventListener(type: string, fn: (e: any) => void) {
+      (this.listeners[type] ??= []).push(fn);
+    }
+    close() {
+      this.closed = true;
+    }
+    emit(type: string, data: unknown) {
+      for (const fn of this.listeners[type] ?? []) fn({ data: JSON.stringify(data) });
+    }
+  }
+  const orig = { fetch: globalThis.fetch, EventSource: (globalThis as any).EventSource };
+  const install = () => {
+    (globalThis as any).EventSource = FakeEventSource;
+    (globalThis as any).fetch = async (url: string, init?: any) => {
+      calls.push({ url, method: init?.method });
+      return { ok: status < 400, status, json: async () => registerBody };
+    };
+  };
+  install();
+  return {
+    calls,
+    sources,
+    get last() {
+      return sources.at(-1) ?? null;
+    },
+    openCount: () => sources.filter((s) => !s.closed).length,
+    // Change what the registration/renew endpoint answers mid-test (e.g. a lease that 404s).
+    respond: (body: any, code = 200) => {
+      registerBody = body;
+      status = code;
+      install();
+    },
+    restore: () => {
+      (globalThis as any).fetch = orig.fetch;
+      (globalThis as any).EventSource = orig.EventSource;
+      sources.length = 0;
+    },
+  };
+};
+
 // Stub global fetch with a queue of JSON bodies (for paths that bypass transport,
 // e.g. aggregate-children expand). Returns a restore fn.
 export const stubFetch = (...bodies: any[]) => {
