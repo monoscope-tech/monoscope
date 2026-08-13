@@ -42,6 +42,7 @@ import Data.Time (UTCTime, addUTCTime, diffUTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.Time.Format
 import Data.Time.Format.ISO8601 (iso8601Show)
+import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
@@ -434,6 +435,9 @@ data SessionRow = SessionRow
   , landingUrl :: Maybe Text
   , userAgent :: Maybe Text
   , firstError :: Maybe Text
+  , hasReplay :: Bool
+  -- ^ Whether a screen recording exists for this session (a
+  -- @projects.replay_sessions@ row). The Replay action is hidden without one.
   }
   deriving stock (Generic, Show)
 
@@ -754,6 +758,16 @@ fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
           <> [HI.sql| DESC NULLS LAST|]
   rawRows :: [RawSessionRow] <- Hasql.withHasqlTimefusion enableTfReads $ Hasql.interp q
   Log.logTrace "fetchSessions: query done" $ AE.object ["rows" AE..= length rawRows]
+  -- Which of this page's sessions actually have a screen recording. Lives in
+  -- Postgres (projects.replay_sessions), never in telemetry, so it's a second
+  -- lookup over the page's ids only. Non-UUID session keys (sessions derived
+  -- from user id/email) can never have a recording, so they're not even asked for.
+  replayedIds :: [UUID.UUID] <- case mapMaybe (UUID.fromText . (.sessionId)) rawRows of
+    [] -> pure []
+    sids -> Hasql.interp [HI.sql| SELECT session_id FROM projects.replay_sessions WHERE project_id = #{pid} AND session_id = ANY(#{sids}::uuid[]) |]
+  -- Keyed on the parsed UUID, not its text: an SDK that emits an uppercase id
+  -- round-trips through UUID.toText as lowercase and would never match itself.
+  let replayed = S.fromList replayedIds
   let allBuckets = concatMap (\r -> map fromIntegral $ V.toList r.bis) rawRows
       range = bucketRange allBuckets
       -- Densify the header's over-time buckets across the full picker range so
@@ -800,6 +814,7 @@ fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
           , landingUrl = r.landingUrl
           , userAgent = r.userAgent
           , firstError = r.firstError
+          , hasReplay = maybe False (`S.member` replayed) (UUID.fromText r.sessionId)
           }
   pure (summary, total, map toRowWithVolume rawRows)
 

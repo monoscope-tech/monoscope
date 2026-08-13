@@ -44,7 +44,7 @@ import Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields qualified as PMF
 import Proto.Opentelemetry.Proto.Resource.V1.Resource_Fields qualified as PRF
 import Relude
 import System.Config (AuthContext (metricCatalogBuffer))
-import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, sequential, shouldBe, shouldContain, shouldNotContain, shouldSatisfy, shouldThrow)
+import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, sequential, shouldBe, shouldContain, shouldNotContain, shouldNotSatisfy, shouldSatisfy, shouldThrow)
 
 
 pid :: Projects.ProjectId
@@ -627,6 +627,37 @@ spec = sequential $ aroundAll withTestResources do
         length rows `shouldSatisfy` (>= 3)
         cols `shouldContain` ["timestamp"]
         hasMore `shouldBe` False
+
+      -- Regression: the Replay action rendered on every session row, including
+      -- sessions the SDK never recorded a screen for — clicking it opened a
+      -- player that could only say "no recorded events". The action is driven by
+      -- the `session` summary tag, now emitted only when a replay row exists.
+      it "Test 11.4b: Replay action is emitted only for sessions with a recording" $ \tr -> do
+        key <- createTestAPIKey tr pid "sessions-replay-key"
+        recorded <- UUIDV4.nextRandom
+        plain <- UUIDV4.nextRandom
+        -- Emitted uppercase: the match is on the parsed UUID, so a case the SDK
+        -- chose must not decide whether the Replay action appears.
+        shouty <- UUIDV4.nextRandom
+        ingestSessionEvent tr key "GET /recorded" [("session.id", UUID.toText recorded)] False frozenTime
+        ingestSessionEvent tr key "GET /plain" [("session.id", UUID.toText plain)] False frozenTime
+        ingestSessionEvent tr key "GET /shouty" [("session.id", T.toUpper (UUID.toText shouty))] False frozenTime
+        void
+          $ withPool tr.trPool
+          $ DBT.executeMany [sql| INSERT INTO projects.replay_sessions (session_id, project_id) VALUES (?, ?) |] [(recorded, pid), (shouty, pid)]
+        void $ runAllBackgroundJobs frozenTime tr.trATCtx
+        view <- queryLogsViz tr Nothing "sessions"
+        case view of
+          Log.SessionsView _ sessionRows _ -> do
+            let replayOf sid = (.hasReplay) <$> V.find (\s -> T.toLower s.sessionId == UUID.toText sid) sessionRows
+            replayOf recorded `shouldBe` Just True
+            replayOf plain `shouldBe` Just False
+            replayOf shouty `shouldBe` Just True
+        -- ... and the payload the client renders the button from follows suit.
+        let j = decodeUtf8 (AE.encode view) :: Text
+            sessionTag sid = "session;right-neutral\8658" <> UUID.toText sid
+        j `shouldSatisfy` T.isInfixOf (sessionTag recorded)
+        j `shouldNotSatisfy` T.isInfixOf (sessionTag plain)
 
       it "Test 11.5: expand endpoint rejects missing key with 400" $ \tr -> do
         let (timeFrom, timeTo) = testTimeRange

@@ -1383,9 +1383,11 @@ instance AE.ToJSON SessionsView where
             ]
         where
           -- Full session id (not truncated): the client feeds it into /replay_session/{id}, a Servant UUID capture.
+          -- The tag is what renders the Replay action, so it's emitted only for
+          -- sessions that actually have a recording.
           summaryParts =
             catMaybes
-              [ Just $ tag "session" "right-neutral" s.sessionId
+              [ tag "session" "right-neutral" s.sessionId <$ guard s.hasReplay
               , Just $ field "user" (LogQueries.sessionUserDisplay s.userEmail s.userName s.userId)
               , field "url" <$> mfilter (not . T.null) s.landingUrl
               , field "device" <$> mfilter (not . T.null) s.userAgent
