@@ -1029,7 +1029,8 @@ lookupAlert = maybe (pure Nothing) (Monitors.queryMonitorById . Monitors.QueryMo
 logChartWidget :: Projects.ProjectId -> Widget.Widget
 logChartWidget pid =
   (def :: Widget.Widget)
-    { Widget.wType = WTTimeseries
+    { Widget.id = Just "log-explorer-all-traces"
+    , Widget.wType = WTTimeseries
     , Widget.query = Just "summarize count(*) by bin_auto(timestamp), coalesce(status_code, level)"
     , Widget.unit = Just "rows"
     , Widget.title = Just "All traces"

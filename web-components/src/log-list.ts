@@ -155,6 +155,7 @@ export class LogList extends LitElement {
   @state() private expandTimeRange: boolean = true;
   @state() private loadedCount: number = 0;
   @state() private totalCount: number = 0;
+  @state() private hasChartCount: boolean = false;
   @state() private totalPatterns: number = 0;
   @state() private totalSessions: number = 0;
   @state() private isLiveStreaming: boolean = false;
@@ -821,6 +822,7 @@ export class LogList extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
+    window.addEventListener('chart-updated', this.handleChartCountUpdate);
     this.initWorker();
     this.setupEventListeners();
     // Initialize empty state
@@ -894,14 +896,22 @@ export class LogList extends LitElement {
       countText = `${formatLargeCount(this.totalSessions)} sessions`;
       suffixText = this.totalCount ? ` (${formatLargeCount(this.totalCount)} events)` : '';
     } else {
-      countText = formatLargeCount(this.loadedCount);
-      suffixText = this.loadedCount < this.totalCount ? ` of ${formatLargeCount(this.totalCount)} rows` : ' rows';
+      countText = formatLargeCount(this.hasChartCount ? this.totalCount : this.loadedCount);
+      suffixText = !this.hasChartCount && this.hasMore ? '+ rows' : ' rows';
     }
     countEl.textContent = countText;
     if (suffixEl) suffixEl.textContent = suffixText;
     if (mobileCount) mobileCount.textContent = countText;
     if (mobileSuffix) mobileSuffix.textContent = suffixText;
   }
+
+  private handleChartCountUpdate = (event: Event) => {
+    const { chartId, total } = (event as CustomEvent<{ chartId?: string; total?: number }>).detail ?? {};
+    if (this.mode !== 'logs' || chartId !== 'log-explorer-all-traces' || typeof total !== 'number' || !Number.isFinite(total)) return;
+    this.totalCount = total;
+    this.hasChartCount = true;
+    this.updateRowCountDisplay();
+  };
 
   private showLoadingSpinner(show: boolean) {
     // Find or create the spinner element next to row count
@@ -1041,6 +1051,7 @@ export class LogList extends LitElement {
     this.liveBtn?.removeEventListener('change', this.handleLiveToggle);
     this.liveBtn = null;
     window.removeEventListener('pagehide', this.handlePageHide);
+    window.removeEventListener('chart-updated', this.handleChartCountUpdate);
 
     // Clean up chart event handlers
     if (this.barChart) {
@@ -1432,6 +1443,10 @@ export class LogList extends LitElement {
     // (from the OLD query) get merged into the NEW query's results.
     if (isFullFetch) this.fetchGeneration++;
     const gen = this.fetchGeneration;
+
+    if (isFullFetch) {
+      this.hasChartCount = false;
+    }
 
     this.showLoadingSpinner(true);
 

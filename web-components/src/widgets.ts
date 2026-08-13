@@ -433,7 +433,7 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
         dataZoomSelectActive: true,
       });
     }
-    window.dispatchEvent(new CustomEvent('chart-updated', { detail: { chartId } }));
+    window.dispatchEvent(new CustomEvent('chart-updated', { detail: { chartId, total: sumTimeseriesValues(dataset) } }));
   } catch (e) {
     console.error('Failed to fetch new data:', e);
     chart.hideLoading();
@@ -451,6 +451,21 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
       if (borderedItem) borderedItem.classList.remove('spotlight-border');
     });
   }
+};
+
+// A chart-data timeseries is [timestamp, seriesA, seriesB, ...]. Summing every
+// numeric series cell gives the event total already fetched for the chart,
+// without issuing a second count query from Log Explorer.
+export const sumTimeseriesValues = (dataset: unknown): number | null => {
+  if (!Array.isArray(dataset)) return null;
+  let total = 0;
+  for (const row of dataset) {
+    if (!Array.isArray(row)) continue;
+    for (const value of row.slice(1)) {
+      if (typeof value === 'number' && Number.isFinite(value)) total += value;
+    }
+  }
+  return total;
 };
 
 declare global {
